@@ -1,0 +1,89 @@
+PRE-TABLE BLOCK -- Opus 5 measuring seat, #502 pass 8.  Written BEFORE table 1 runs (mtime is the order proof).
+Tree under test: GXEMUL-SEC working copy (HEAD 83df95c + the uncommitted #502 fix), cloned to /tmp/gxopus502p8.
+Instrument: GXEMUL-SEC/regress/m88k_exc_probe.py v15 (md5 eb11ab7c), 46 fault rows + 2 controls, UNMODIFIED, frozen
+            as m88k_exc_probe.frozenP8.py before mutant 1.  A separate CENSUS copy differs ONLY in the length of the
+            M88KEXC_VERBOSE transcript slice ([-1200:] -> full); scoring code is byte-identical, so its RESULT line is
+            the same instrument's answer.  Two instruments, two purposes, said out loud.
+
+== 1. THE ENUMERATION I AM TESTING, AND WHY IT DIFFERS FROM THE BRIEF'S ==
+The brief's clause-(d) cut says: a PSR-bit conjunct on the SFRZ re-route is FLOOR (the predicate reads PSR) and the
+same conjunct on a switch-1 `implemented' arm is clause-(e) DEBT (the arms read no PSR bit).  I am testing the
+alternative cut the carrier's own wording gives -- "the device-STATE lvalues the fix's own REPAIR PATH reads" -- under
+which PSR is in scope at every arm, because the path the arm opens (fallback skipped -> re-route tests PSR & SFRZ ->
+m88k_stcr reads PSR) reads PSR twice.
+
+== 2. SIBLING PARITY ==
+The diff edits SEVEN sibling arms in switch 1 (vectors 4,5,6,7,8,9,10), each `debugmsg_cpu(...); implemented = true;'.
+They are byte-identical in form, so any asymmetry in their ROW coverage is an asymmetry the code does not have.
+Derived by reading the 46 rows, per arm, as the PSR at the moment switch 1 runs:
+
+  arm                 rows entering it                                          MODE  C   SFD1 IND  SFRZ
+  4  MISALIGNED       misalign, misaligntb, umisalign, trapfrozen4, error,      0/1  0/1  0/1  0/1  0/1   CLOSED
+                      errind, errc
+  5  UNIMPLEMENTED    unimpl, unimpltb, trapfrozen5, errunimpl                  0/1   0    0/1   1   0/1   C, IND OPEN
+  6  PRIVILEGE        priv, privtb, privsuptb, trapfrozen6, errpriv             0/1   0    0/1   1   0/1   C, IND OPEN
+  7  BOUNDS           bounds, vbrtb, trapfrozen                                  1    0    0/1   1   0/1   C, IND OPEN (MODE
+                                                                                                          unreachable-disclosed)
+  8  DIV0             div0, dslot, div0tb, udiv0, trapfrozen8, errdiv0, and     0/1   0    0/1   1   0/1   C, IND OPEN
+                      the FIRST fault of every two-fault row
+  9  OVERFLOW         ovf, ovftb, ovfc, indclr, uovf, trapfrozen9, errovf,      0/1  0/1  0/1  0/1  0/1   CLOSED
+                      trapfrozen8's first fault
+  10 ERROR            errortb, trapfrozen10                                      1    0    0/1   1   0/1   C, IND OPEN (MODE
+                                                                                                          unreachable-disclosed)
+
+  Denominator: 7 arms x 5 stcr-settable 88100 PSR bits = 35 single-axis cells; 2 unreachable with a warrant
+  (BOUNDS/ERROR x MODE: no user-mode route); 33 reachable; 23 closed by an existing row, 10 OPEN --
+  {UNIMPL, PRIV, BOUNDS, DIV0, ERROR} x {C, IND}.
+
+== 3. CLAIM -> ROW: three sentences in the SHIPPED contract that this census contradicts ==
+  (a) probe v15 docstring: "the disclosure stands for the other arms (OVERFLOW, DIV0, PRIVILEGE, UNIMPLEMENTED) x
+      {C, IND}".  OVERFLOW x {C, IND} is CLOSED by ovfc (C set) and indclr (IND clear).  OWED: a mutant measured KILLED
+      at OVERFLOW -> CTL_OVFNOC.
+  (b) same sentence: "and for {any arm} x {SFD1}".  SFD1 varies at EVERY arm (the trapfrozen/err rows enter with
+      PSR_EXC 0x8000000b, SFD1 SET; the plain rows enter at reset/user with SFD1 CLEAR).  OWED: a mutant measured
+      KILLED on SFD1 -> CTL_DIV0SFD1.
+  (c) same sentence lists four arms and OMITS BOUNDS and ERROR, which are OPEN.  OWED: a sweep measured at one of
+      them -> M_ERRNOC (ERROR) and M_BNDIND (BOUNDS).
+
+== 4. GUARD FIELD vs BODY FIELD ==
+  Guard of the edited arms: `vector' (the switch dispatch) -- nothing else.
+  Body of the edited arms:  a string constant, a VERBOSITY constant, `implemented'.  No state read.  (This is the
+  brief's whole warrant for calling PSR out of scope here.)
+  Repair PATH the arms open: `cpu->cd.m88k.cr[M88K_CR_PSR]' is READ at the re-route TEST and again inside
+  `m88k_stcr(cpu, cpu->cd.m88k.cr[M88K_CR_PSR] | ...)'; `is_trap', `cpu->delay_slot', `cpu->cd.m88k.cr[M88K_CR_VBR]'
+  likewise.  Guard field and path field DISAGREE, so under the carrier's wording a disagreeing-state row is owed at
+  each arm; under the brief's wording none is.  The table settles which reading has teeth by measuring whether the
+  cell is EMPTY, not by arguing.
+
+== 5. CHANNEL -- per row, the mutant it kills and the observable that differs ==
+  ovfc         kills CTL_OVFNOC        -- channel: result DELIVER->HALT (the fallback diagnostic names 0x009)
+  indclr       kills CTL_OVFNOIND      -- (not built this table; census-derived)
+  trapfrozen8  kills CTL_DIV0SFD1      -- channel: result DELIVER->HALT naming 0x008
+  div0/udiv0/  kill CTL_DIV0INDINV     -- channel: same
+   div0tb...
+  NO ROW kills M_DIV0IND, M_ERRNOC, M_BNDIND -- that is the prediction under test.  Each of the three names a
+  channel that CANNOT vary, because no row reaches the arm in the exempted PSR state; if any of them is killed my
+  census is wrong at that cell and I say so.
+
+== 6. THE TABLE (predictions recorded BEFORE the runs) ==
+  BASE           unmutated fix                                                          predict 46/46
+  CENSUS         + fatal("[ M88KCENSUS v=%d psr=0x%08x t=%d ]") at function entry        predict 46/46 (non-perturbing)
+                 -> harvests the (vector, PSR, is_trap) triples MEASURED, so section 2's
+                    census stops being a reading and becomes a measurement
+  M_DIV0IND      case DIV0:  implemented = (PSR & M88K_PSR_IND) != 0                     predict 46/46 SWEEP
+  M_ERRNOC       case ERROR: implemented = !(PSR & M88K_PSR_C)                           predict 46/46 SWEEP
+  M_BNDIND       case BOUNDS: implemented = (PSR & M88K_PSR_IND) != 0                    predict 46/46 SWEEP
+  CTL_DIV0INDINV case DIV0:  implemented = !(PSR & M88K_PSR_IND)                         predict KILLED (polarity twin
+                 of M_DIV0IND at the SAME arm and SAME bit: one sweeps, one dies, which is the tightest available
+                 proof that a sweep is not an inert or unapplied edit)
+  CTL_OVFNOC     case OVF:   implemented = !(PSR & M88K_PSR_C)                           predict KILLED, red ovfc
+  CTL_DIV0SFD1   case DIV0:  implemented = !(PSR & M88K_PSR_SFD1)                        predict KILLED, red trapfrozen8
+  BASE_final     restore + rebuild                                                       predict 46/46
+
+  MUTANT-TEXT-NOT-FOUND is a FAIL (presence pin): the mutator anchors on the case label plus its own debugmsg line and
+  aborts unless it matches EXACTLY once.
+
+== 7. CONTENTION, DECLARED IN ADVANCE ==
+  A #503 kill table (luna88k, /tmp/gxlunaabs_kill) is running concurrently; both instruments carry wall-clock oracles
+  (this probe: grace=6.0 s per `continue', 30 s prompt timeouts).  Builds are capped at -j2 for that reason.  Any
+  unexpected STOP/NOBOOT will be RE-RUN alone before it is reported as anything.

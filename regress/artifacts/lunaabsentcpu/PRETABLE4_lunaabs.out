@@ -1,0 +1,25 @@
+PRETABLE block -- lunaabsentcpu (#503) pass-3 repair part 2, probe v5 (md5 78e84316; sessions A, A2, B, B2, B3, C, C2, C3, C4, D, E), written
+BEFORE table 4 runs.  2026-09-06 ~11:00.  Corrections go to PRETABLE4_lunaabs.correction.out; this file's mtime is the order proof.
+DIFF UNDER THE TABLE (on top of v4): session E pends ALL FOUR slots and requires all four arrivals (rows cpu3 deliver, cpu2 deliver,
+  cpu1 deliver4, cpu0 deliver4; `others idle' is gone -- every cpu is meant to enter); session C4 (`-n 2': MASK1 bit 30 + SIO TX_IE ->
+  cpu 1 enters, row sio5 deliver1).  No product change.
+WHY (kimi, pass 3, landed after v4 was cut): (i) `irqActive[cpu & 1]' at the four latch sites -- every multi-pending session pended slots of
+  DIFFERENT parity ({0,1} in C2; {2,3} in v4's E), so a same-parity pair was never pending together and the parity alias was invisible;
+  with all four pending, pairs {0,2} and {1,3} share one latch and the second of each pair is dropped.  (ii) device-line delivery to a
+  non-zero slot was unprobed (B2 delivers line 5 to slot 0 only).
+SIBLING PARITY: every slot 0..3 now has a delivery row under a four-pending machine (E) and its own single-pending row (B, C, v4's E);
+  slots 0 and 1 have device-line delivery rows (B2, C4).
+GUARD FIELD vs BODY FIELD: the disagreeing state built -- two slots of the same parity pending with irqActive[] indexed by parity.
+CHANNEL per new row (mutant -> observable):
+  cpu0 deliver4 / cpu2 deliver   M_IRQACTIVEP1 (`irqActive[cpu & 1]')  one of {0,2} never enters (STOP naming the set) vs all four enter
+  cpu1 deliver4 / cpu3 deliver   the same mutant on the {1,3} pair
+  sio5 deliver1                  M_MASK30 / M_SWONLY on slot 1 (already killed by B2 on slot 0; this row pins the non-zero slot) -- and any
+                                 slot-1-specific alias of the device-line path (none enumerated; the row is an accept-side sibling)
+  the 22 earlier mutants are re-run on v5 for the record.
+PREDICTED TABLE: BASE PASS with 34 rows (32 + cpu0 deliver4, cpu1 deliver4, sio5 deliver1, minus others idle = 34; read the count from
+  BASE.out); M_IRQACTIVEP1 red on two of the four E rows (which two depends on arrival order -- the FIRST of each parity pair wins the latch);
+  M_IRQACTIVE0 now red on three E rows plus both deliver; M_SKIP2 red on cpu2 deliver; M_AND1 red on cpu2/cpu3 deliver; M_MIN2 red on
+  cpu2/cpu3 deliver; M_NULLAB and M_NOREASSERT stay green.
+UNCERTAIN, stated: four simultaneous arrivals on -n 4 need up to four park-and-continue rounds of 15 s; if the machine's scheduling starves a
+  cpu the row reads STOP on BASE -- that would be a mis-cut row, not the fix, and is examined before the table is called clean.
+CHANNEL-LINE CHECK: knowable at writing time -- each is a vector-entry-vs-none difference derivable from the mutant's edit.

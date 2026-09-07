@@ -414,6 +414,36 @@ here.** The hole is in this file, not in the count. Filed, not lost.)*
 hundreds of KB, with `done_reason: "length"` and `eval_count: 65536`. **It spends its entire
 output budget on hidden reasoning and never emits an answer.**
 
+> ### *** THAT SIGNATURE IS ONE INSTANCE OF THE CLASS, NOT THE CLASS. A BURN CARRYING
+> ### `done_reason: "stop"` AND A **NULL** `eval_count` WAS MEASURED 2026-09-06 ON glm. ***
+>
+> 130,056 bytes, `response` EMPTY, `thinking` 124,789 characters -- and `done_reason` is the
+> value a HEALTHY seat returns. So the two fields the paragraph above offers as the signature
+> both read normal, and only the empty `response` is diagnostic.
+>
+> **THE TOOL WAS ALREADY RIGHT AND ONLY THIS FILE WAS WRONG**, which is why nothing was built:
+> `seat_verdicts.py` does not test `done_reason == "length"`. It tests for an empty `response`
+> FIRST and uses `done_reason` only to decide what to do next -- on `"length"` the answer is
+> gone, on `"stop"` the model FINISHED and the answer may be sitting in `thinking` behind a
+> channel marker, so it looks. It looked here, found no marker, and reported SEAT DOWN rather
+> than recovering an answer that did not exist. *A checker that had been written from this
+> paragraph's signature would have scored a 130 KB burn as a healthy seat.*
+>
+> **THE RULE: an empty `response` is the diagnostic; `done_reason` decides the DISPOSITION, not
+> the detection.** `"length"` = the budget ran out and the answer is lost; `"stop"` = the model
+> finished, so read `thinking` for a channel-marked block before declaring the seat down.
+>
+> **AND READ THE THINKING EVEN WHEN THERE IS NO MARKER.** glm's burn carried a real challenge to
+> the round's packet -- an unevidenced universal claim about the CPU model -- which was checked
+> in one grep and turned out true-but-unsupported. *An answer that was written and never read is
+> an UNREAD REVIEW, and this project has three times found real defects in one.* The burn costs
+> the VERDICT, not necessarily the finding.
+>
+> *This file's own exemplar rule, landing on this file again: a rule minted from ONE instance
+> carries that instance's shape as if it were the class. The instruction survived contact; the
+> signature did not.*
+
+
 It is none of the other four classes: no quota text (not a WALL), nothing echoed (not the
 echo-only shape), the daemon served it for minutes (not a REFUSED CONNECTION), and the other
 cloud seats answer normally in the same firing (not the shared-transport outage).
@@ -1589,6 +1619,19 @@ ATTACHED** — the adjudicating seat said so about the main loop's own call, and
 > already come back CLEAN.** The round's own probe header carried the governing sentence before
 > three of the four were found.
 >
+> > #### *** "EACH ESCAPED A CLEAN TABLE" IS FALSE OF `> 408`.  Corrected 2026-09-06 from the
+> > #### retro re-check (batch 8b), verified against the artifacts before this edit. ***
+> >
+> > `regress/artifacts/gdromexitsix/killtable_20260828/M2_gt408.raw` -- TABLE 1, the 13-row instrument
+> > -- reads `TOCLEN_RESULT=10/13`: the `> 408` mutant was KILLED from the first table and never escaped
+> > anything (11/15 in table 2, 13/19 in table 4).  The clean-table escape of that shape was the EARLY
+> > RETURN, `break;` -> `return;`: 13/13 on the 13-row table, then `M7_return.raw` 17/19 once `bad cnt`
+> > and `bad event` were rowed.  Exempt-zero (`M8` 18/19), `< 408` (`M9` 18/19) and the latch collapse
+> > (`M10` 18/19) stand as written.  **The rule above is untouched -- a row reading a DECLINE channel is
+> > what caught every one of them -- and the exemplar's count is what was wrong.**  A wrong exemplar in
+> > the paragraph that mints a check gets reused as the check's warrant, which is why it is corrected
+> > here rather than left to the CHANGELOG (`#489`'s block carries the same correction).
+>
 > **THE COST WAS NOT MISSING KNOWLEDGE.  IT WAS KNOWLEDGE LIVING WHERE NOBODY CONSULTS IT AT
 > ROW-WRITING TIME** -- this file's trigger-versus-memory finding, again.
 >
@@ -1847,7 +1890,28 @@ ATTACHED** — the adjudicating seat said so about the main loop's own call, and
 > > LOOKING IN THE TREE RATHER THAN REASONING -- which is the instruction below working. ***
 > >
 > > **1 DELETE  ·  2 DECLINE (silent)  ·  3 DECLINE + BOUNDED (LATCHED) ANNOUNCE  ·
-> > 4 ACCEPT  ·  5 FAULT  ·  6 BACKED ACCEPT**
+> > 4 ACCEPT  ·  5 FAULT  ·  6 BACKED ACCEPT  ·  7 IMPLEMENT**
+>
+> > ### *** GROWN A THIRD TIME, 2026-09-06, AND AGAIN BY A SEAT THAT WENT LOOKING IN THE TREE. ***
+> >
+> > * **7 IMPLEMENT** -- write the code.  **All six members above presume the access is a REFUSAL DECISION**,
+> >   and that presumption fails for an UNIMPLEMENTED PATH.  `dev_lca.c`'s `lca_interrupt_assert` and
+> >   `lca_interrupt_deassert` are bare `fatal("...TODO"); exit(1)` with **no guard at all**: there is no value
+> >   being refused and nothing to decline, accept or fault.  In the codex seat's words, *"declining an
+> >   interrupt leaves the machine incomplete."*  The tell that member 7 is the right one is a site with NO
+> >   PREDICATE -- a whole path stubbed out, rather than a guard rejecting a value.
+> >
+> > *** AND THE SAME PASS FOUND THAT **MEMBER 5 IS NOT UNIVERSALLY AVAILABLE**, which no earlier statement of
+> > this set said. ***  FAULT works because `memory_rw.c` dispatches an exception on a failed device access --
+> > **for MIPS and M88K.  There is no Alpha equivalent.**  So `dev_unreadable.c`, which `machine_sgi.c`
+> > installs ten times, does not transfer to an Alpha machine at all, and a round reaching for FAULT there owes
+> > Alpha exception delivery first.
+> >
+> > > **BEFORE CHOOSING A MEMBER, CHECK IT IS AVAILABLE ON THIS CPU.**  The set is a menu of dispositions, not
+> > > a menu of things every machine can do -- and the option-set rule's own advice (grep the fork for the
+> > > idiom) finds the idiom without telling you whether the machinery under it exists on your target.  That is
+> > > the warrant-transfer rule one level down: a precedent real elsewhere in the tree is not thereby
+> > > transferable.
 > >
 > > * **4 ACCEPT** -- the model ALREADY computes the right value and then discards it.  Delete
 > >   the kill, keep the value, NO latch: there is no event to announce, and a bounded announce
@@ -2044,6 +2108,20 @@ ATTACHED** — the adjudicating seat said so about the main loop's own call, and
 > invariant**. The decline arrived with the opposite signature -- a measured delta (`+2`, which
 > escapes even `mask9 rt` today, reddens `safe 4` once the decline pins the refusal column) and a
 > transferred in-tree warrant. **"Cannot hurt" is not a licence; it is how dead guards accrete.**
+>
+> > #### *** THE `+2 reddens safe 4` DELTA WAS NEITHER MEASURED NOR TRUE.  Corrected 2026-09-06 from
+> > #### the retro re-check (batch 9), verified against the probe and the artifacts before this edit. ***
+> >
+> > `regress/asic_badaddr_probe.py`'s `safe 4` row is SURVIVE-ONLY -- `row("safe 4", "survived" if alive
+> > else "died", "survived", ...)` -- so it cannot redden under a decline: the guarded and the unguarded
+> > code both survive, which is exactly the CHANNEL-line vacuity this file names two sections up.
+> > Under a `+2` translation with the decline in place NO shipped row reds (`safe 4` and `safe 8` are
+> > survive-only; `alias`/`crossarr` read back `+0x10`, which `+2` does not move; nothing touches
+> > `+0x34`); only `-1` reds an existing row (`asic ok`).  And `+2` was never run: the only translation
+> > artifact under `regress/artifacts/asic463/` is `table5_13rows/probe_Mplus1.raw`, and the probe's own
+> > contract says "ONLY +/-1 IS MEASURED".  **The addition-licence rule is untouched; the decline's
+> > "measured delta" was a PREDICTION written in the measured column** -- the frozen-number class -- and
+> > the `+2` translation is an undischarged de-escalation obligation, filed as `asicplus2row`.
 
 > ### *** PROVISIONAL ADJUDICATION -- adopted 2026-08-25, MINTED BY THE ADJUDICATOR AGAINST
 > ### ITSELF after it issued a final-sounding ruling on 8 of 9 mandated seats. ***

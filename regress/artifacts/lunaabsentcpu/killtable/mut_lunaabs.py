@@ -1,0 +1,51 @@
+import io, sys
+#  Apply ONE named mutant to <tree>/src/devices/dev_luna88k.c (the FIXED #503 source).  Every mutant asserts its find-text
+#  exactly once (MUTANT-TEXT-NOT-FOUND is a FAIL, never a silent no-op -- a presence pin on the fix's own lines).
+#  Usage: python3 mut_lunaabs.py <tree> <mutant>
+tree, mut = sys.argv[1], sys.argv[2]
+p = tree + "/src/devices/dev_luna88k.c"
+s = io.open(p, encoding="utf-8").read()
+def rep(old, new, count=1):
+    global s
+    n = s.count(old)
+    assert n == count, ("MUTANT-TEXT-NOT-FOUND", mut, old[:60], n)
+    s = s.replace(old, new)
+LOOP = "\tfor (cpu = 0; cpu < d->ncpus; cpu++) {\t\t/*  #503  */\n"
+LOOP_MAX = "\tfor (cpu = 0; cpu < MAX_CPUS; cpu++) {\t\t/* %s: the pre-#503 walk */\n"
+ASSIGN = "\td->ncpus = devinit->machine->ncpus;\n"
+ASSERT = "\t\t                INTERRUPT_ASSERT(d->cpu_irq[cpu]);\n"
+DEASSERT = "\t\t                INTERRUPT_DEASSERT(d->cpu_irq[cpu]);\n"
+MASK_CALL = "\t\t\td->interrupt_enable[cpunr] = idata;\n\t\t\treassert_interrupts(d);\n"
+SOFT_CALL = "\t\t\td->software_interrupt_status[cpunr] = 0;\n\t\t}\n\n\t\treassert_interrupts(d);\n\t\tbreak;\n"
+if mut == "M_REVERT":            # floor (b): the walk back to MAX_CPUS (the assignment stays, unused)
+    rep(LOOP, LOOP_MAX % mut)
+elif mut == "M_OFFBY1":          # `<=': one slot past the connected ones
+    rep(LOOP, "\tfor (cpu = 0; cpu <= d->ncpus; cpu++) {\t\t/* M_OFFBY1 */\n")
+elif mut == "M_NOASSIGN":        # the bound never assigned: 0 after the memset -> the loop never runs (slot 0 never asserts)
+    rep(ASSIGN, "\t/* M_NOASSIGN */\n")
+elif mut == "M_HARD1":           # clause (d): the bound hardcoded -- every 1-cpu row green; only the -n 2 delivery row sees it
+    rep(ASSIGN, "\td->ncpus = 1;\t/* M_HARD1 */\n")
+elif mut == "M_SKIP1":           # the walk unbounded but slot 1 skipped: 1-cpu rows green; -n 2 delivery to cpu 1 lost
+    rep(LOOP, LOOP_MAX % mut + "\t\tif (cpu == 1) continue;\t/* M_SKIP1 */\n")
+elif mut == "M_NULLA":           # an ASSERT-only NULL guard instead of the bound: irqActive[1] is set, the DEASSERT walk dies
+    rep(LOOP, LOOP_MAX % mut)
+    rep(ASSERT, "\t\t                if (d->cpu_irq[cpu].interrupt_assert)\t/* M_NULLA */\n\t\t                    INTERRUPT_ASSERT(d->cpu_irq[cpu]);\n")
+elif mut == "M_NULLAB":          # a BOTH-sided NULL guard instead of the bound: EXPECTED EQUIVALENT on every reachable configuration
+    rep(LOOP, LOOP_MAX % mut)
+    rep(ASSERT, "\t\t                if (d->cpu_irq[cpu].interrupt_assert)\t/* M_NULLAB */\n\t\t                    INTERRUPT_ASSERT(d->cpu_irq[cpu]);\n")
+    rep(DEASSERT, "\t\t                if (d->cpu_irq[cpu].interrupt_deassert)\t/* M_NULLAB */\n\t\t                    INTERRUPT_DEASSERT(d->cpu_irq[cpu]);\n")
+elif mut == "M_LATCH":           # decline the absent slot ONCE, then walk it (a latch-then-deliver shape)
+    rep(LOOP, LOOP_MAX % mut + "\t\tif (cpu >= d->ncpus) { static int latched; if (!latched) { latched = 1; continue; } }\t/* M_LATCH */\n")
+elif mut == "M_GUARDASSERT":     # the bound applied to the ASSERT call only (inside the branch); the DEASSERT walk still reaches NULL
+    rep(LOOP, LOOP_MAX % mut)
+    rep(ASSERT, "\t\t                if (cpu < d->ncpus)\t/* M_GUARDASSERT */\n\t\t                    INTERRUPT_ASSERT(d->cpu_irq[cpu]);\n")
+elif mut == "M_CALLGUARD":       # the Fable-F4 alternative: bound the reassert CALL in the two store arms, walk untouched
+    rep(LOOP, LOOP_MAX % mut)
+    rep(MASK_CALL, "\t\t\td->interrupt_enable[cpunr] = idata;\n\t\t\tif (cpunr < d->ncpus)\t/* M_CALLGUARD */\n\t\t\t\treassert_interrupts(d);\n")
+    rep(SOFT_CALL, "\t\t\td->software_interrupt_status[cpunr] = 0;\n\t\t}\n\n\t\tif (cpunr < d->ncpus)\t/* M_CALLGUARD */\n\t\t\treassert_interrupts(d);\n\t\tbreak;\n")
+elif mut == "M_NOREASSERT":      # the SOFT arm no longer reasserts (disclosed debt: the clock's own reassert carries delivery)
+    rep(SOFT_CALL, "\t\t\td->software_interrupt_status[cpunr] = 0;\n\t\t}\n\n\t\t/* M_NOREASSERT */\n\t\tbreak;\n")
+else:
+    raise SystemExit("unknown mutant " + mut)
+io.open(p, "w", encoding="utf-8", newline="\n").write(s)
+print("applied", mut)

@@ -1,0 +1,20 @@
+I'll start from the repo state and the shipped composite, then check the (d) enumeration against the actual walk and probe rather than the packet's summary.Git from this seat is blocked, so I’ll read the walk, DEVINIT, probe, and table artifacts directly.HEAD still has the unbounded walk; I’ll verify the composite from the killtable2 baseline and probe v3, then hunt slot-set holes.M_NOREASSERT may have mutated the clear path, not the store. Checking the SOFT arm and whether skip-slot-2 is the real hole.**ONE MORE REPAIR: M_SKIP2 (`if (cpu == 2) continue` inside the bounded walk) — predicted 27/27, measurement owed.** Provisional on Opus 5 / Fable 5.
+
+The bound `cpu < d->ncpus` (anchor `static void reassert_interrupts`, baseline `/*  #503  */`) admits slot set {0,1,2,3}. Extra conjunct `&& cpu != k` is the canonical (d) qualification of that predicate (`if (X)` → `if (X && Y)`). The table already has k=1 (`M_SKIP1`, 23/25, `cpu1 deliver`+`both deliver` STOP). k=0 dies on B/B2; k=3 dies on `cpu3 deliver`. **k=2 has no delivery row.**
+
+Keep the bound, skip only 2:
+
+```c
+for (cpu = 0; cpu < d->ncpus; cpu++) {		/*  #503  */
+    if (cpu == 2) continue;			/* M_SKIP2 */
+```
+
+ncpus∈{1,2}: `cpu==2` never runs. ncpus=4: slot 3 still delivers; `others idle` stays green (cpu 2 was never pending). mask2/mask3 are 1-cpu storage readbacks, not a walk of slot 2. **Predicted 27/27.** Not measured here (no clone build from this seat). The row that should kill it: `-n 3` (or `-n 4`) MASK2+SOFT_INT2, `cpu2 deliver` STOP — sibling of C and E, and the far bound of the untested `ncpus >= 3` connect (DEVINIT, next to the `>= 2` / `>= 4` arms the fix comment says share this number).
+
+PRETABLE2’s excuse is the CHANNEL miss: “slot 2 is pinned only by `others idle`” / “a delivery row for slot 2 is not owed.” `others idle` cannot go red under this mutant. Two consecutive passes already opened this axis (unconnected slots, then ncpus∈{1,2}); pass 2 closed the *last* slot and left the interior cell empty — the `#499` empty-cell shape.
+
+Denominator for this pass: bound qualifications `cpu != k` for k∈{0,1,2,3} (1 of 4 open); plus the tabled forms (revert / `<=` / no-assign / hard-1 / clamp-2 / ASSERT-only / latch / call-guard / MASK30 / SWONLY / AND1 / irqActive[0]). ncpus==3 as a special-case constant is clause (e), not this hole. M_NULLAB / M_NOREASSERT stay disclosed (27/27 in killtable2/).
+
+**Q2 — of the nine, session E’s coverage claim is the wrong one.** Adding `four cpus` / `cpu3 deliver` / `others idle` is right (M_AND1 25/27, M_MIN2 26/27; log has `cpu3 deliver` BADREGS not the packet’s STOP — cpu3 stayed at PARK). Treating that as class closure of {slot}×{pending}, and writing that slot 2 is not owed, is what left M_SKIP2 unrowed. The other eight hold: B2/C2 match their kills; capture-below-exit is a no-op on ncpus∈{1,2,3,4} (and does **not** make the bound `<= MAX_CPUS` without the exit — delete the exit at either site and `d->ncpus=5` walks `cpu_irq[4]`); M_NULLAB/M_NOREASSERT are measured equivalents/debt; `lunadefaultstop` and `lunaabsentmaskdecl` should be filed. **es438 “close” is a second records miss, not the floor miss:** the row is already `state: closed` (`cf4b083`); D4/E2 are MASK1 + latch granularity on MASK0/MASK1 (`luna_intmask_probe.py`, “the site has FOUR”); mask2/mask3 annotate that closed row, they do not close it.
+
+Else. Ledger witness `probe:regress/luna_absentcpu_probe.py` at closure is still owed (pass-2 grok). Product walk-bound is still option (a) and still right.

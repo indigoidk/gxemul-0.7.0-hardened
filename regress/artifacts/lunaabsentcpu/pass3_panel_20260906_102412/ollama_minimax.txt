@@ -1,0 +1,17 @@
+VERDICT: ONE MORE REPAIR — clean-sweep mutant exists in the (d) enumeration; the probe has a gap. (Denominator for the gap: no row of the 27 observes a SW interrupt's IRQ-line state across a second walk while SW remains pending and the latch is set.)
+
+**The clean sweep (REASONED).** In `reassert_interrupts`, change:
+```c
+if (d->software_interrupt_status[cpu]) status |= (1 << 26);
+```
+to:
+```c
+if (d->software_interrupt_status[cpu] && !d->irqActive[cpu]) status |= (1 << 26);
+```
+This is squarely in the (d) joint-cell enumeration (`{pending: sw} × {irqActive: 1}`). On the first walk the latch is 0, so the bit is set, `status & enable` is true, `INTERRUPT_ASSERT` fires, the cpu enters VBR+8 — every delivery row (slot0/sio5/both/cpu1/cpu3) passes. On any subsequent walk while `software_interrupt_status[cpu]` is still 1 and no device line is pending (the steady state for every probed session once the cpu is parked at `br .` with IND set), the bit is suppressed, `status & enable` is 0, the else branch runs, `irqActive[cpu]` is still 1 from the first walk, `INTERRUPT_DEASSERT` is called, `irqActive[cpu] = 0`. The IRQ line is now low while SW is still pending. The probe never observes this: handlers are `br .` with IND set and never `rte`, so the falling edge is invisible. Session D (control, no SW store) does not catch it because with the mutant SW-suppresses-only-when-latch-set, and session D's MASK1-only state never latches. No row in the 27 catches it. (REASONED — not measured; the operational rule forbids the gate.)
+
+**The wrong disposition.** The capture move. Minimax's finding was that with the capture above the `ncpus > 4` exit, "that exit had become load-bearing for the walk's bound." Moving the capture *below* the exit does not change that dependency: `d->ncpus = devinit->machine->ncpus` is bounded only by the exit above it; remove the exit and `d->ncpus` can be any of 1..256 against `cpu_irq[MAX_CPUS]` (MAX_CPUS = 4). The in-diff comment "the bound is <= MAX_CPUS by construction, not by that exit" is the load-bearing claim and is false — the construction relies on the exit. The move is a code-organization no-op for the bound's safety. (The code is correct as long as the exit stays; the disposition's *rationale* is wrong.)
+
+The other eight check out as stated: B2/C2/E catch the mutants they claim; M_NULLAB is equivalent on every reachable configuration (unconnected slots are unreachable from the walk); M_NOREASSERT is a plausible debt because the clock calls `luna88k_interrupt_assert` (runs the walk) and the probe's 15 s wait dwarfs a timer tick; lunadefaultstop / lunaabsentmaskdecl / es438 are correctly filed or closed by the readback rows and session E.
+
+**What the next repair needs.** A row that exercises the case the probe misses: arm MASK + SW, let the walk run a second time (e.g., by a second MASK store that does not change enable, or by a device-line pulse), and observe that the cpu at VBR+8 is *not* spuriously deasserted — or simpler, a row that checks `d->cpu_irq[cpu].interrupt_assert` is called every walk iteration while SW is pending, not just the first. The current probe cannot make that observation free-running; the repair is a probe-side addition, not a fix change.

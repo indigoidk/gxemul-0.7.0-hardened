@@ -266,6 +266,31 @@ doing precisely what the transport preamble asks.**  Score it as a BRIEF DEFECT.
 > ask *"what does a seat with no filesystem do with this line?"*  The answer is always
 > "nothing", and that is the whole rule.
 
+## §C3 — *** AND FOR THE SEATS THAT *CAN* READ FILES: CITE A FROZEN COPY, NEVER THE WORKING FILE. ***
+## Minted 2026-09-06 from a measured incident, and the seat that caught it was the one it happened to.
+
+§C2 is about the four seats with no filesystem.  This is the mirror defect, and it bites the FIVE that do have one.
+
+**MEASURED, 2026-09-06.**  A pass-4 brief described a **34-row** detector and quoted a diff against it, citing the
+working path `_scratchpad/<row>/<probe>.py`.  The repair for that same pass edited that file to **37 rows at
+14:31**.  The measuring seat began reading at **14:34**.  So the packet asked about one artifact and the seat was
+pointed at a different one, three minutes newer, **with nothing anywhere saying the file had moved**.
+
+> **A BRIEF CITES A PATH UNDER THE ROUND'S `regress/artifacts/<row>/` DIRECTORY, FROZEN AT THE VERSION UNDER
+> REVIEW.  Never a `_scratchpad/` working file, and never a path a repair is about to touch.**
+
+**Why this is not covered by the rules already here.**  The frozen-copy rule exists for KILL DRIVERS (a shell
+script edited under itself corrupts mid-run) and for PROBES UNDER A COMPARISON (two runs owe one instrument).
+Both protect a RUN.  This protects a READER, and the failure looks nothing like the other two: nothing crashes,
+no score moves, and the seat returns a fluent, internally consistent answer about the wrong artifact.
+
+**The cheap check, at send time:** every path in the packet that a seat is invited to OPEN must be under
+`regress/artifacts/`.  If it starts with `_scratchpad/`, freeze it first — `cp -p` beside the brief — and cite
+the copy.
+
+*The seat recovered here only because it independently measured on the frozen version as well as the live one and
+said which was which.  That is a good seat, not a good process.*
+
 ## §D — INLINE THE FULL ENCLOSING FUNCTION IF ANY EDIT IS PROPOSED OR EVALUATED
 
 Every exit path, and the common tail included.  *A proposed edit is a SKETCH until it has been
@@ -296,6 +321,40 @@ buffer.  When every reader makes the same mistake, suspect the brief.*
 > switch, which then announced a TODO about **a write that never happened**.  One row, one
 > `goto`, and the difference between a decline and a decline that lies.*
 
+
+## §C4 — *** A TOTAL IS NOT CHECKABLE.  ENUMERATE ITS MEMBERS WHERE YOU STATE IT. ***
+## Minted 2026-09-06 from FIVE brief defects found in a single day, by four different seats.
+
+§C2 says inline the artifact for the seats that cannot read files.  §C3 says cite a frozen copy for the ones that
+can.  This is the third of the family and it caught more defects in one day than either: **a packet may not assert a
+COUNT whose members it does not show.**
+
+**MEASURED, 2026-09-06.  Five packets of mine, five seats, zero code defects, five defects in my own briefs -- and
+every one is the same shape:**
+
+| the total I wrote | what the seat could not do |
+|---|---|
+| *"of the SIX dispositions, which is wrong?"* (five described) | answer as posed -- the sixth was never in the packet |
+| *"the overflow arm, where no other row sets the bit"* | tell that two existing rows already close that arm's other cells, so it read as the one-cell closure the previous pass had just condemned |
+| three new rows listed together, one closing a different site | count cells without double-counting -- it got 41 against a denominator of 40 |
+| *"minus 2 unreachable = 40"* | check a subtraction whose subtrahend is unnamed |
+| *"which of N dispositions is wrong"*, N not derivable from the artifacts | know which N |
+
+> **STATE THE MEMBERS BESIDE THE NUMBER.  If a claim is "six", list the six.  If it is "minus two", name the two and
+> give the warrant.  If rows close different SITES, say which closes which.**
+
+**Why this is not pedantry, and the evidence is in the table above:** every one of those seats reasoned CORRECTLY from
+what the packet said and reached a wrong conclusion, or could reach none.  Two of them labelled the step honestly as
+an inference rather than a reading, exactly as the transport preamble asks.  **The packet manufactured the error, and
+a seat that ratifies a bare total has told you nothing.**
+
+**The cheap check at send time:** grep your own packet for a number word -- *six, every, all, none, minus N* -- and
+for each, ask whether a reader with only this packet could list the members.  If not, list them.  It costs a clause
+and it converts a ratification into a test, which is the same reason §A's premise-audit opener works.
+
+*Note the shape it shares with this project's oldest counting rule: a COUNT written into a durable record names its
+deriver.  This is that rule aimed at packets instead of records -- and packets are read once, by seats that cannot
+go and check, which is why it bit five times in a day and the records rule did not.*
 
 ## §E — THE FIXED QUESTION SET (ask all three; add round-specific ones after)
 

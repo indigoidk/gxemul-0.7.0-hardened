@@ -493,7 +493,21 @@ def main():
                      else "*** SEAT DOWN -- transport/model error ***")
             down += 1
         elif is_walled:
-            state, walled = "*** WALLED ***", walled + 1
+            #  *** A WALL IS A MOMENT, AND THE FILE UNDER IT IS NOT NECESSARILY EMPTY. ***
+            #  Measured 2026-09-06: codex walled MID-ANSWER on the #502 pass-9 panel with 302 KB
+            #  at 98% novelty -- it had read the fork, RUN a script, and printed the very census
+            #  that a later pass spent a whole panel deriving.  It was filed as a dead seat because
+            #  the label said WALLED and nobody read the two columns beside it.  A routine codex
+            #  wall is ~8 KB at ~8% novel (echoed brief + notice) and genuinely has nothing in it.
+            #  Both printed the SAME four words, so the label decided what happened next.
+            #  The numbers were always here; only the STATE STRING was silent.
+            if ratio >= 0.40 and len(t) >= 20000:
+                state = ("*** WALLED MID-ANSWER -- %d KB at %.0f%% novel BEFORE the wall: "
+                         "READ THE BODY, the verdict is missing but the WORK is not ***"
+                         % (len(t) // 1024, ratio * 100))
+            else:
+                state = "*** WALLED -- echo + notice, nothing to read ***"
+            walled += 1
         elif not novel:
             state, absent = "ECHO ONLY -- no answer", absent + 1
         elif v:

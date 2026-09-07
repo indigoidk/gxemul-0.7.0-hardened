@@ -1,0 +1,30 @@
+PRETABLE block -- lunaabsentcpu (#503) pass-3 repair, probe v4 (sessions A, A2, B, B2, B3, C, C2, C3, D, E), written BEFORE table 3 runs.
+2026-09-06 ~10:40.  Corrections, if any, go to PRETABLE3_lunaabs.correction.out -- this file's mtime is the order proof.
+DIFF UNDER THE TABLE: (1) the fix comment's wording ("<= MAX_CPUS by construction" -> "the exit above guarantees the value before it is
+  stored; delete that exit and a 5-cpu machine would walk cpu_irq[4]" -- grok, pass 3); the code is unchanged.  (2) probe v4: session B3
+  (reenter / noreenter / redeliver -- the SECOND walk after a delivery), session C3 (noreenter1 -- slot 1's deassert on -n 2), session E now
+  pends slots 2 AND 3 (cpu2 deliver, cpu3 deliver, others idle); docstring + contract.
+WHY -- the pass-3 panel (deepseek, minimax, grok, kimi answered; codex REFUSED a third time; glm BURNED; Opus/Fable walled):
+  * deepseek: the DEASSERT side of the walk was unobserved (a slot-0 alias on the deassert test sweeps) -> C3 noreenter1.
+  * minimax: `software_interrupt_status[cpu] && !irqActive[cpu]' sweeps -- the second walk deasserts a still-pending IPI -> B3 reenter.
+  * the v3 contract itself disclosed "a connected slot's DEASSERT and the irqActive = 0 clear" -> B3 noreenter / redeliver close them.
+  * grok, kimi: session E pended only slot 3, so `if (cpu == 2) continue;' sweeps -- the interior cell of the slot axis (the #499
+    empty-cell shape; PRETABLE2's "slot 2 is not owed" was the CHANNEL miss) -> E pends slot 2 too.
+SIBLING PARITY: every slot 0..3 now has a delivery row (B/B2, C, E, E); slots 0 and 1 have a post-clear deassert row (B3, C3); the
+  {irqActive = 1} hemisphere has its three cells (still pending -> stays asserted; cleared -> deasserts; cleared then re-pended -> re-asserts).
+CLAIM -> ROW: each new contract sentence names its row.
+GUARD FIELD vs BODY FIELD: the disagreeing states built: {irqActive=1, sw pending} (reenter), {irqActive=1, nothing pending} (noreenter,
+  noreenter1), {irqActive stuck=1, sw pending again} (redeliver), {slot 2 pending} (cpu2 deliver).
+CHANNEL per new row (mutant -> observable):
+  reenter        M_SWLATCH (sw bit only while the latch is clear)   re-entry at VBR+8 after a second walk vs no re-entry (STOP)
+  noreenter      M_NODEASSERT (the DEASSERT call dropped)           no re-entry within 6 s vs a spurious re-entry (BADREGS)
+  redeliver      M_NOCLEAR (`irqActive[cpu] = 0' dropped)           a second SOFT_INT0 store is delivered vs never (STOP)
+  noreenter1     M_DEASSERT0 (deassert tests irqActive[0])          on -n 2, slot 1's deassert is skipped -> cpu 1 re-enters (BADREGS) vs none
+  cpu2 deliver   M_SKIP2 (`if (cpu == 2) continue;')                cpu 2 enters VBR+8 vs never (STOP)
+  the sixteen table-2 mutants are re-run on v4 for the record (rows added can change scores -- #462's lesson).
+PREDICTED TABLE: BASE PASS with 32 rows (27 + reenter, noreenter, redeliver, noreenter1, cpu2 deliver; read the count from BASE.out); each
+  new mutant red on exactly the row(s) named; M_NODEASSERT may ALSO red noreenter1 (the same dropped call on slot 1); M_NULLAB and
+  M_NOREASSERT stay green.  UNCERTAIN, stated: M_SWLATCH's reenter depends on the second walk running while the IPI is still pending --
+  the MASK0 rewrite forces the walk, so the channel should hold; if reenter reds on BASE the row is mis-cut, not the fix.
+HEAD WITNESS with v4: /tmp/gxopus501p4 -> PRE_FIX_SYMPTOM at soft1 and siofirst as before (the new sessions run after A/A2).
+CHANNEL-LINE CHECK: knowable at writing time -- each is a vector-entry-vs-none difference derivable from the mutant's edit.

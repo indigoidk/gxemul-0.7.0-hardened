@@ -1,0 +1,53 @@
+**VERDICT: CLAIM 1 HOLDS (READ from packet). CLAIMS 2 AND 3 CANNOT BE SETTLED FROM THE PACKET -- they require facts not inlined (the #484 diff for Claim 2; the regression-file contents for Claim 3).**
+
+I cannot identify a *wrong* claim from the packet alone. Claim 1 is derivable and consistent; Claims 2 and 3 are unverifiable here.
+
+---
+
+### Claim 1 -- the width census (derivable)
+
+The OLD comment, which the diff leaves in place (only the trailing summary changes), states the read logic as:
+
+> "The reads above take one byte, two if `len >= 2`, four only if `len == 4`"
+
+Reading "only if" in its standard one-way sense ("if four are popped then len==4"; contrapositive: len!=4 implies not four), the three clauses partition widths 1..8 as follows:
+
+| Width (len) | Bytes popped | Control path |
+|---:|---:|---|
+| 1 | **1** | default branch (len < 2) |
+| 2 | **2** | `len >= 2`, len != 4 |
+| 3 | **2** | `len >= 2`, len != 4 |
+| 4 | **4** | `len == 4` |
+| 5 | **2** | `len >= 2`, len != 4 |
+| 6 | **2** | `len >= 2`, len != 4 |
+| 7 | **2** | `len >= 2`, len != 4 |
+| 8 | **2** | `len >= 2`, len != 4 |
+
+Equivalently: `pop = 1 + (1 if len >= 2 else 0) + (2 if len == 4 else 0)`.
+
+This matches the new comment's `1, 2, 2, 4, 2, 2, 2, 2` exactly. The OLD summary "1 or 2" for a 3- or 8-byte access was a sloppy collapse that dropped the `len==4` carve-out from the reader's mind; the new comment is the precise restatement. **READ.**
+
+### Claim 2 -- the ring predicate after #484
+
+The new comment asserts that #484 "sacrifices one slot, so `head == tail` now means EMPTY". This is a *historical* claim about a prior commit whose diff is not in the packet.
+
+- **Settling fact (single):** the diff of #484, OR the current ring-buffer definition (capacity, head/tail advance, full-test) in the post-#484 source. If #484 added a separate `count` field rather than sacrificing a slot, then "head == tail means EMPTY" can still be true but for a *different* reason than the comment states, and the comment's reasoning ("sacrifices one slot") would be wrong even if the conclusion were right.
+- **Logical note (REASONED):** the conclusion "head == tail unambiguously means EMPTY" is the standard invariant of a one-slot-sacrificed ring, and is internally consistent with the comment's reasoning. But the brief explicitly warns that a correction carries more authority than the error it replaces; an unverifiable historical premise is exactly the kind of place a fresh wrong record gets cemented. **NOT SETTLED.**
+
+### Claim 3 -- detector rows depending on the old wording
+
+The brief names four touched regression files (`diff_wdc_identify.c`, `wdc_flood_probe.py`, `gate_offline.sh`, `diff_diskimage_geom.c`) but inlines none of their contents. Whether any row's oracle pins the OLD "1 or 2" wording (or, less likely, the old unsoundness claim about `wdcringambig`) cannot be determined from the packet.
+
+- **Settling fact (single):** the contents of those four files, specifically any row whose expected value embeds the literal text "1 or 2", or whose pass condition references `wdcringambig` behaving unsoundly. **NOT SETTLED.**
+
+---
+
+### On the "assume at least one is wrong" directive
+
+I will not manufacture a defect to satisfy it. Claim 1 checks out against the packet's own description; Claims 2 and 3 are *not checkable here*, which is a different status from "wrong". If forced to rank risk, **Claim 2 is the most likely site of a fresh wrong record**, precisely because its truth rides on a single un-inlined historical fact (#484's mechanism) -- but identifying it as *actually* wrong requires that fact, which the packet withholds.
+
+### What I would ask the file-reading seat for, in one line each
+
+1. Confirm the derived eight values against `wdc_get_inbuf` and the `DEVICE_ACCESS(wdc)` data-register arm -- specifically that `len==5,6,7,8` paths pop 2, not 4.
+2. Show the #484 diff (or the current ring's full-test) -- does it really sacrifice a slot, or distinguish full/empty some other way?
+3. Grep the four regression files for `1 or 2` and for `wdcringambig`; flag any oracle that pins the pre-correction wording.

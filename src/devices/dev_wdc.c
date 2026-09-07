@@ -1139,7 +1139,18 @@ DEVICE_ACCESS(wdc)
 				    asked for. The reads above take one byte,
 				    two if len >= 2, four only if len == 4 --
 				    so a 3- or 8-byte access consumes 2 (widths
-				    1..8 pop 1, 2, 2, 4, 2, 2, 2, 2; "1 or 2" until 2026-09-05)
+				    1..8 ATTEMPT 1, 2, 2, 4, 2, 2, 2, 2 pops --
+				    those are CALL counts, and the pops succeed
+				    only while bytes remain: wdc_get_inbuf()
+				    returns (uint64_t) -1 on an empty ring
+				    WITHOUT advancing the tail, so with q bytes
+				    queued a width-w access pops min(q, calls).
+				    "1 or 2" until 2026-09-05; the unqualified
+				    pop counts until 2026-09-06, when a pass-2
+				    seat read the helper instead of this
+				    comment.  NOTE `consumed' below is computed
+				    from `len' alone and so counts ATTEMPTS
+				    too -- row wdcconsumedattempts)
 				    while `len` says 3 or 8. Subtracting the
 				    requested length let atapi_len step PAST
 				    zero, which its `== 0` test then never

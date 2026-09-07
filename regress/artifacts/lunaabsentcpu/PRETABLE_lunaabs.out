@@ -1,0 +1,56 @@
+PRETABLE block -- lunaabsentcpu (#503), written BEFORE table 1 runs (mtime is the order proof).  2026-09-06 ~09:40.
+Detector: _scratchpad/lunaabs/luna_absentcpu_probe.py v2 (sessions A, A2, B, C, D; rows below).  Fix under test: option (a) ALONE
+(pass-1 ruling) -- dev_luna88k.c gains `int ncpus` (= devinit->machine->ncpus, set in DEVINIT after the memset) and
+reassert_interrupts() walks `cpu < d->ncpus` instead of MAX_CPUS.  Baseline for this table = SEC's dev_luna88k.c + fix_lunaabs.py,
+RE-DERIVED from SEC inside the scratch clone at table start and after every mutant (never a backup); SEC itself does not carry #503
+yet because #502 is uncommitted and shares the record files -- stated here so the divergence between clone and SEC is by design.
+
+SIBLING PARITY: the two store arms that call reassert_interrupts (INT_ST_MASKn, SOFT_INTn) both index by address with no ncpus
+  bound; the fix bounds the WALK (one site) rather than the two calls -- the Fable-F4 alternative (M_CALLGUARD) is built to show the
+  detector cannot tell two correct fixes apart (expected EQUIVALENT, disclosed).  The clock's own reassert is a third caller of the
+  walk (M_NOREASSERT: disclosed debt -- the SOFT arm's reassert is redundant while the tick reasserts).
+CLAIM -> ROW: the ledger note's "cpu 1 asserting" accept channel = row `cpu1 deliver' (session C, -n 2); the "two ordinary stores kill
+  the emulator" witness = rows mask1 / soft1 (session A, 1 cpu) reading HALT on HEAD.
+GUARD FIELD vs BODY FIELD: the new predicate reads d->ncpus; the body reads d->cpu_irq[cpu] (and irqActive[]).  They disagree when
+  ncpus != the number of connected cpu_irq slots -- M_NOASSIGN (0), M_HARD1 (1 on a 2-cpu machine), M_OFFBY1 (one past).  The -n 2
+  rows build the state where they must agree at 2.
+CHANNEL per row (the mutant it kills -> the observable that differs):
+  live / devsig / live2      controls: RAM readback; INT_ST_MASK0 readback 0x00fc0000 after a 0xfc000000 store (device signature)
+  slot0                      M_NOASSIGN, M_SKIP1(no: slot 0 still walked) -> SOFT_INT0 readback 1; with the walk never running the
+                             stored 1 still reads back -- so slot0 is a VALUE row; delivery is session B's job
+  mask1                      M_REVERT, M_OFFBY1, M_GUARDASSERT, M_NULLA -> HALT (host SIGSEGV on the unconnected slot's DEASSERT/ASSERT
+                             walk) vs OK (readback 0x00fc0000)
+  soft1                      same mutants -> HALT vs OK (readback 1)
+  sio5 / sio5clr / siofirst  M_LATCH (a latch-then-deliver: the SECOND absent-slot walk dies) -> HALT on the second store vs OK
+  mask2 / mask3              M_OFFBY1 cannot see these (slots 2,3 never walked at ncpus=1); they pin that MASK2/3 stores are still
+                             ACCEPTED as stores (value rows), i.e. the fix declines nothing
+  slot0 deliver / shadow (B) M_NOASSIGN (ncpus 0: loop never runs, no IPI delivered -> STOP after 15 s) vs pc == VBR+8
+  two cpus / cpu1 setup (C)  controls for the -n 2 machine
+  mask1 land / survive (C)   value + survival on 2 cpus (a fix that declines slot 1 would red mask1 land)
+  cpu1 deliver / shadow (C)  M_HARD1 (ncpus hardcoded 1), M_SKIP1 (slot 1 skipped) -> cpu 1 never enters its vector (STOP) vs
+                             pc1 == VBR+8; cpu0 parked pins that it was cpu 1, not cpu 0
+  nodeliver ctl (D)          negative control: no SOFT store -> no entry in 8 s (a detector that counts any entry as delivery reds here)
+EXPECTED EQUIVALENT (disclosed, not kills): M_NULLAB (both-sided NULL guard -- correct on every reachable configuration), M_CALLGUARD
+  (the alternative correct fix).  A kill on either is a MIS-BUILT mutant or a row testing the wrong thing -- examine before calling it.
+PREDICTED TABLE: BASE PASS (all rows OK); M_REVERT/M_OFFBY1/M_GUARDASSERT/M_NULLA red on mask1+soft1 (HALT); M_NOASSIGN red on
+  slot0 deliver (+ cpu1 deliver); M_HARD1 and M_SKIP1 red on cpu1 deliver only (single-killer cells, stated); M_LATCH red on the second
+  absent-slot store (sio5 or siofirst); M_NOREASSERT: the SOFT-arm reassert removed -- delivery still arrives via the clock's reassert
+  (predicted GREEN = the disclosed debt; if it reds, the tick does NOT carry it and the debt is a kill).
+CHANNEL-LINE CHECK: every channel above is HALT-vs-OK, STOP-vs-pc, or a readback value -- knowable at writing time.
+HEAD WITNESS with this instrument: /tmp/gxopus501p4 (dev_luna88k.c == HEAD) -> expected LUNA_ABSENTCPU_WITNESS=PRE_FIX_SYMPTOM
+  (mask1, soft1 HALT); recorded as regress/artifacts/lunaabsentcpu/probe_v2_head.out.
+
+CORRECTION appended 2026-09-06 09:46, after the table (original left in place).  Measured (killtable/, BASE 22/22 PASS before and after):
+ * the HALT rows are soft1 and siofirst -- NOT mask1: a MASK1 store with nothing pending walks slot 1 harmlessly (irqActive[1] is 0, no
+   ASSERT/DEASSERT call is made); the first store that DELIVERS to slot 1 is the killer.  M_REVERT / M_OFFBY1 / M_LATCH 15/17 (soft1,
+   siofirst HALT), M_NULLA and M_GUARDASSERT 16/17 (soft1 HALT), M_NOASSIGN 17/19 (slot0 deliver, cpu1 deliver), M_HARD1 and M_SKIP1
+   19/20 (cpu1 deliver only -- the single-killer cells as predicted), M_NULLAB 22/22 (EQUIVALENT as predicted), M_NOREASSERT 22/22
+   (the disclosed debt confirmed: the clock's reassert carries delivery).
+ * M_CALLGUARD -- the pass-1 "F4 alternative" (bound the reassert CALLS in the two store arms, walk untouched) -- was predicted
+   EQUIVALENT and is KILLED 16/18: sio5 and siofirst HALT.  The SIO device's TX_IE store reaches the walk through a THIRD caller
+   (the SIO interrupt line -> luna88k reassert), which the call-site guard does not cover.  So the alternative is NOT a correct fix,
+   and the row that shows it is the sio5 row the pass-1 Fable seat made mandatory.  The pass-1 ruling "option (a) ALONE" stands with a
+   measured warrant.
+ * HEAD with the final instrument (/tmp/gxopus501p4, dev_luna88k.c == HEAD): 15/17 PRE_FIX_SYMPTOM -- soft1 and siofirst HALT, HOST DIED
+   (signal 11) -- probe_v2_head.out.  The denominator drops from 22 to 17 when the host dies mid-session A (the remaining rows of that
+   session cannot run); the RESULT line therefore reads 15/17 rather than 15/22 -- stated so the two numbers are not read as a row loss.

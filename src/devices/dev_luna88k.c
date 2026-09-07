@@ -87,6 +87,14 @@
 
 
 struct luna88k_data {
+	/*  #503 (lunaabsentcpu): the number of CPUs actually INTERRUPT_CONNECTed at
+	    DEVINIT.  Slots at or above this index were never connected, so their
+	    cpu_irq[].interrupt_assert/deassert pointers are the memset's NULL.  The
+	    walk bound and the connect predicate carry the same VALUE -- not one
+	    shared field: the connect predicates read machine->ncpus directly while
+	    the walk reads this snapshot.  The equality holds because nothing in
+	    this fork mutates the count after device init (pass 2, codex).  */
+	int		ncpus;
 	struct interrupt cpu_irq[MAX_CPUS];
 	int		irqActive[MAX_CPUS];
 	uint32_t	interrupt_enable[MAX_CPUS];
@@ -167,7 +175,7 @@ static void reassert_interrupts(struct luna88k_data *d)
 {
 	int cpu;
 
-	for (cpu = 0; cpu < MAX_CPUS; cpu++) {
+	for (cpu = 0; cpu < d->ncpus; cpu++) {		/*  #503  */
 		// printf("cpu%i: status = 0x%08x, enable = 0x%08x\n",
 		//	cpu, d->interrupt_status, d->interrupt_enable[0]);
 
@@ -1037,6 +1045,31 @@ DEVINIT(luna88k)
 		printf("LUNA 88K can't have more than 4 CPUs.\n");
 		exit(1);
 	}
+
+	/*  #503 (lunaabsentcpu): bound reassert_interrupts() to the slots connected
+	    above.  It walked all MAX_CPUS and called the NULL interrupt_assert of an
+	    unpopulated slot: on the default one-cpu machine a guest store of
+	    0xfc000000 to INT_ST_MASK1 followed by a store to SOFT_INT1 (or any device
+	    line whose bit that mask enables) killed the emulator with SIGSEGV --
+	    measured, regress/luna_absentcpu_probe.py.  Captured below the `ncpus > 4'
+	    exit above -- but note what that does and does not buy, because the
+	    pass-2 revision was made on a claim codex then refuted: RELOCATING THE
+	    CAPTURE DOES NOT REMOVE THE DEPENDENCE ON THAT EXIT.  Above or below, the
+	    assignment supplies the same bound whenever execution reaches the walk,
+	    since the walk is downstream of the exit either way; both placements rely
+	    on initialization rejecting excessive counts.  A clamp to MAX_CPUS is
+	    what would make the walk independent of them, and the addition licence
+	    refuses one without a measured delta -- no accepted configuration fails.
+	    TWO exits bound the value, not one: machine_luna88k.c carries its own
+	    `ncpus > 4' guard AFTER its device_add, so deleting the exit above lets
+	    DEVINIT capture 5 and the MACHINE layer ends the run before any guest
+	    instruction -- measured both ways at -n 5.  Deleting BOTH is what would
+	    walk cpu_irq[4].  The
+	    absent slots' MASK/SOFT registers stay guest-writable storage with
+	    readback (a board-model question, row lunaabsentmaskdecl).  Pre-existing
+	    upstream (the HACK comment's per-count connects and this walk are the
+	    0.7.0 import).  */
+	d->ncpus = devinit->machine->ncpus;
 
 	add_cmmu_for_cpu(devinit, 0, CMMU_I0, CMMU_D0);
 	add_cmmu_for_cpu(devinit, 1, CMMU_I1, CMMU_D1);

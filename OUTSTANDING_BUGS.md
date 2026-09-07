@@ -18,6 +18,98 @@
 > why. Rounds 60–65 (#295–#300) cleared the entire floating-point feasibility queue;
 > what follows is what they left, plus what they found on the way.
 >
+> ### OPEN -- filed 2026-09-05 from round #502's pass 2: the m88k delay-slot shadow arm is the manual's WRONG pipeline
+> ### stage, now reachable by ordinary faults; plus three LOW residuals of the same function
+>
+> **`m88kdslotshadow`** (MEDIUM) -- `cpu_m88k.c` `m88k_exception()`, anchor `Perhaps something like this could work`: for a precise
+> fault in the delay slot of a taken `br.n` the else-arm sets SNIP = slot+4, SFIP = target; MC88100 UM 6.2 :2093-2104 (the pointer definitions; Table 6-3 itself says only that the shadows copy XIP/NIP/FIP) say
+> the shadows copy NIP = target, FIP = target+4, and `X(rte)` then executes the SNIP instruction before jumping to SFIP -- so the
+> guest executes the instruction the taken branch skipped (or the target twice).  Pre-existing; #502 made it reachable by ordinary
+> compiled code and its `dslot` row pins the arm AS IMPLEMENTED (labelled; re-pin first when this lands).  The fork's own
+> DATA_ACCESS delay-slot arm has the manual's shape.  kimi dissents (the else-arm matches 6.4.3.1.2/.3) -- the handler-return row
+> settles it by measurement.  Found by the Fable review seat, codex and grok independently.
+>
+> **`m88kexcfrozendmt`** (LOW) -- the DMT/DMD/DMA zeroing sits OUTSIDE the `update_shadow_regs` guard, so a trap taken while frozen
+> clears exception-time registers UM 6.5.5 says it leaves untouched (codex, kimi).  **`m88kexchwtraps`** (LOW) -- a supervisor
+> `tb1` naming vector 0/1/2/3 reaches the hardware-event tail arms (vector 0 stops the cpu; 1 rewinds SNIP so `rte` re-executes
+> the trap; 2 zeroes SNIP/SFIP; 3 copies a stale DMT) -- the pass-1 record said the vector-0 half was filed as `m88kexcresetkill`;
+> it was not, until this row.  **`m88kexcdebt`** (LOW, harness) -- #502's disclosed coverage debt: the post-delivery `delay_slot`
+> else-branch, vectors 0..3 unrowed, and the `implemented = is_trap`-at-BOUNDS equivalence (re-run when `m88ktbnd` lands).
+>
+> **`m88kexctaildefault`** (LOW, design-option record) -- D4 of #502, named by the pass-1 panel and NOT adopted: make the tail
+> `default:` deliver every vector below 128 instead of stopping the cpu.  **`m88ktbnd`** (LOW) -- `tbnd` is disassembly-only (no
+> `X(tbnd)` handler), so no INSTRUCTION raises BOUNDS_CHECK_VIOLATION (7); only a supervisor tb0/tb1/tcnd naming 7 reaches it,
+> which is why `implemented = is_trap` at BOUNDS is EQUIVALENT today (re-run M_TRAPONLY when tbnd lands).  **`m88kmxmkill`** (LOW)
+> -- a supervisor `stcr` (or `rte`) writing PSR with MXM set stops the cpu (`m88k_stcr`, case M88K_CR_PSR): the graceful-halt class
+> of #502, one bit wide.  **`m88ksfrzfatal`** (LOW, floodclass instance) -- the SFRZ re-route's `fatal("[ SFRZ already set in PSR
+> => ERROR ]")` is unlatched and guest-drivable (supervisor-only: any non-trap fault inside a handler); pre-existing, reachable by
+> five more classes since #502 -- MISALIGNED, UNIMPLEMENTED, PRIVILEGE, DIV0, OVERFLOW; BOUNDS and ERROR have only trap raise routes, which the
+> `if (!is_trap)` branch holding the `fatal()` excludes (pass-4 Fable seat; count corrected by codex, pass 5 -- this said seven).  All four filed 2026-09-06; the first three were CITED by #502's pass-1 record
+> before they existed (kimi, grok, adjudication pass) and had no block here until the pass-4 Fable seat applied the bug-file sync
+> rule ("every OPEN ledger row must be findable in OUTSTANDING_BUGS.md").
+>
+> ### OPEN -- filed 2026-09-06 (retrospective batch 12, re-fired standalone): the MIPS floating-point substitution path and
+> ### the architecture may disagree about WHEN a result counts as too small -- and the source argues the opposite of the reviewer
+>
+> **`mipstiny`** (LOW, unresolved DISAGREEMENT rather than a defect) -- `cpu_mips_coproc.c`, anchor `fpu_subst_tiny`.  The
+> reviewing seat says the architecture judges tininess AFTER rounding **with an unrestricted exponent range**, and that the
+> function wrongly equates that with the destination word coming out subnormal.  Its discriminating input is
+> `0x1.fffffep-127` through `cvt.s.d` under round-to-nearest with the flush control set and both traps disabled: exactly 24
+> significant bits, so rounding at unbounded exponent leaves it tiny, while the subnormal encoding has fewer significand bits
+> and rounds it UP to the smallest normal -- so the model substitutes nothing where the seat says a substitution is required.
+> **The function's own comment argues the other way** (anchor `Classification is done on the ENCODED word`), stating that
+> classifying on the encoded word IS tininess after rounding and naming the same boundary case as its justification.  So the
+> two readings turn on ONE question -- is the rounding that decides tininess done at unbounded exponent, or in the destination
+> encoding? -- and that is settled by the manual, not by either party's confidence.  **Filed as a disagreement because the
+> source carries a reasoned counter-position and nobody has measured either.**
+>
+> What the seat also established, and it holds whichever way the main question goes: the guest write that enables the flush
+> control is accepted, the operand is normal in double precision so the operand-denormal trap does not intercept it, the
+> destination-register difference would be observable -- and **no operating system in the tree sets that control bit**
+> (OpenBSD 2.2's arc/pmax `machdep.c` zeroes the whole control word at `setregs`).  It declined to call that unreachable,
+> which is the right shape.  It also refuted the cheap cross-check: the SuperH model's denormal policy rests on different
+> rules that merely agree on the tested inputs (`sh7750_hardware.txt`, anchor `6.7.1 Rounding Mode and Underflow Flag`).
+> **OWED**: the manual sentence itself, quoted with its anchor, by a seat that has not already taken a side.  If the seat is
+> right this is a real conformance divergence on a sliver; if the source is right, the batch-12 record needs a line saying so,
+> because an uncorrected claim gets reused.
+>
+> ### OPEN -- filed 2026-09-06 (retrospective batch 9): the `+2' translation of the Dreamcast ASIC register index is an
+> ### enumerated total escape of the #463 detector, and the warrant that said otherwise was never measured
+>
+> **`asicplus2row`** (MEDIUM, detector tier) -- `r = ((relative_addr / 4) + 2) & 3` in `dev_dreamcast_asic.c` is predicted 14/14 against
+> `regress/asic_badaddr_probe.py` as it stands (re-enumerated row by row in the batch-9 adjudication: `safe 4`/`safe 8` are SURVIVE-ONLY;
+> `alias`/`crossarr`/`alias2` read back `+0x10`, which `+2` does not move; `mask9 rt` round-trips `mask_9[0]`; the tick anchor never fires
+> because no row STORES at an offset `+2` sends to `mask_9[3]`).  The #463 close-out cited `+2 -> safe 4` as a MEASURED anchor of the
+> `asicindexcase` warrant; the only translation artifact is `regress/artifacts/asic463/table5_13rows/probe_Mplus1.raw` and the probe's own
+> contract says only +/-1 is measured, so the leg was a prediction written in the measured column -- and a false one.  By the probe's own
+> de-escalation membership test (`mask9 rt` comment: apply the translation to the pre-fix code, the old `exit(1)` fires on the first legal
+> access) `+2` qualifies exactly as `+1` did, so an accept-side row is OWED: `mask9b rt` (store 0xb2 at +0x34, read back -- under `+2` it
+> lands on `mask_9[3]`, which is `asserted_13` by layout and tick-zeroed), optionally `mask9a rt` at +0x30; then the contract claims the
+> mod-4 translation group.  Witness owed `harness:` (HEAD 15/15, +2 14/15 with the new row alone red, the 13 existing mutants re-measured,
+> PRETABLE first).  Records corrected in place: CLAUDE.md + tools/CLAUDE.md (2026-09-06); the CHANGELOG close-out and the ledger
+> `asicindexcase`/`asicdecline` notes follow in the batch-9 records round.  Filed by the retro adjudication (GPT-6 Astra finding,
+> Fable 5.1 confirming and extending).
+>
+> ### OPEN -- filed 2026-09-05 (retrospective batch 7): dev_luna88k.c delivers an interrupt to a CPU that
+> ### does not exist -- two ordinary guest stores on the one-cpu luna-88k kill the emulator process (MEASURED)
+>
+> **`lunaabsentcpu`** (HIGH) -- `reassert_interrupts()` (anchor `static void reassert_interrupts`) walks all `MAX_CPUS` slots
+> and calls `INTERRUPT_ASSERT(d->cpu_irq[cpu])` -- a direct call through the struct's function pointer -- but DEVINIT connects
+> `cpu_irq[1..3]` only when `ncpus >= 2/3/4` and zeroes the device, so the pointer is NULL for every absent slot.  The
+> INT_ST_MASK0-3 store arm accepts `cpunr` 0..3 without an `ncpus` check.  On the default one-cpu machine, `st 0xfc000000 ->
+> 0x65000004` (arm slot 1) then `st 1 -> 0x69000004` (SOFT_INT1: slot 1 pending, synchronous reassert) dies with SIGSEGV and no
+> diagnostic.  Witness (rung 3, committed unmodified `-e luna-88k`, cold debugger, HEAD binary): connected-slot control survives,
+> the arming store alone survives, the SOFT_INT1 store kills the host -- `regress/artifacts/lunaabsentcpu/`.  Pre-existing
+> upstream; #438 de-fatalised the low-bits guard in the SAME arm.  Its probe's D4 row stores 0x84000100 to MASK1 (bits 31, 26, 8 --
+> bit 26 SET, so slot 1 is ARMED for the rest of that session); it could not see this only because a cold debugger has nothing
+> pending and the probe never stores SOFT_INT1 (an earlier draft of this sentence said 'bit 26 clear' -- corrected by the batch-7
+> adjudication).  Any device interrupt after the arming store also kills the host on a running guest (the clock, line 6 -> bit 31).
+> Option set -- batch-7 adjudication RULING: (a) ALONE, bound the loop to `d->ncpus` captured at DEVINIT (the house idiom of
+> `dev_mp.c` and this file's own RESET_CPU_ALL arm); declining stores to absent slots is an unsourced board-model claim that
+> would red two shipped es438 rows -- filed as the question `lunaabsentmaskdecl`.  Accept row owed on `-n 2` with a CPU-side
+> channel (cpu 1's irq_asserted / vector entry), not survival; MASK2/MASK3 readback rows (`es438cells`) ride along.
+> Predicted from the source by GPT-6 Astra (batch 7), measured by the main loop the same evening; Fable adjudication in flight.
+>
 > ### OPEN -- filed 2026-09-05: two guest-visible ATAPI defects in dev_wdc.c that the wdc rounds left
 > ### standing (retrospective batch 3a), plus seven LOW harness/coverage rows
 >
@@ -45,7 +137,8 @@
 > **`m88kexcdeliver`** (HIGH) -- `cpu_m88k.c`, anchor `vector < M88K_EXCEPTION_USER_TRAPS_START && !implemented`:
 > only RESET / INTERRUPT / INSTRUCTION_ACCESS / DATA_ACCESS set `implemented = true`; PRIVILEGE_VIOLATION,
 > ILLEGAL_INTEGER_DIVIDE, INTEGER_OVERFLOW, MISALIGNED_ACCESS and UNIMPLEMENTED_OPCODE (plus BOUNDS_CHECK and ERROR, which
-> have no raise site today) print a VERBOSITY_ERROR and fall to a fallback that sets `running = false` on EVERY guest CPU
+> have no literal-constant raise site but ARE reached by a supervisor `tb0/tb1/tcnd` naming the vector -- MEASURED on #502's
+> pass 1; this sentence said 'no raise site today' until then) print a VERBOSITY_ERROR and fall to a fallback that sets `running = false` on EVERY guest CPU
 > -- a graceful machine halt, where real hardware delivers VBR + 8*vector and OpenBSD turns it into a signal.
 > Pre-existing upstream (the fallback's `git log -L` is the 0.7.0 import only); surfaced by the GPT-6 Astra retrospective
 > review of #380 and adjudicated by Fable 5.1.  Disposition DELIVER (`implemented = true`, through the existing common
@@ -14925,3 +15018,140 @@ unmade filings now name their rows), `diff_diskimage_geom.c` ('never resizes'), 
 r3 control stated-not-enforced; single-step header), `dev_wdc.c` (the full/empty comment stale since #484; '1 or 2'), and
 this file's #341 entry ('1 or 2').  Legacy numbers (#407's 133) left as written and annotated: the score-claim rule is
 forward-only from 2026-08-23.  Brief defect recorded: the adjudication brief's '0x23ff differs' premise was a misreading.
+
+---
+
+## 2026-09-06 — #502 `m88kexcdeliver` pass 9/10: the SER axis closed, and one cell filed
+
+*** `m88kexcrrtrapmode` -- FILED AS DEBT, ADJUDICATED TO **FLOOR**, REPAIRED IN-ROUND THE SAME EVENING (L2, probe v19, 57 -> 59 rows).  The filing below is preserved because a filing that was overturned is part of the record. ***
+
+Two seats on the pass-11 panel overturned it, from two independent precedents in this round's own records, both verified by opening the artifact: **grok** found that `PRETABLE12` had already graded this *exact* inner `if` as L2 -- its disposition line reads "L2, in-round" -- when the sibling IND mutant swept 46/46, so IND, C and SER at this site shipped as floor and grading the remaining two bits as debt would retroactively un-grade them.  **kimi's verdict line said DEBT and its body said FLOOR**, reaching the same place by a different route: the pass-5/pass-7 `!is_trap || vector == <class>` mutants condition on a field the guarded body does not test either, and those were repaired in-round.  My generating-set reading loses on its own terms -- it would have made those vector rows debt too.  **grok also corrected the reachability composition**: `trapfrozen128` is a *supervisor* trap naming a user vector, not a user-mode trap, and `errpriv`'s handler never reaches a trap at all; the working construction needs `r3 = 0x11`, because bit 0 must be set or the `tb1` is a nop and the row is silently inert.  Rows `trapfrozenuser` (MODE) and `trapfrozensfd1` (SFD1) added.
+
+**TABLE 15 MEASURED IT, and both mutants swept the shipped 57-row detector CLEAN** -- `M_RRTRAPMODE` and
+`M_RRTRAPSFD1` score 57/57 each on the frozen pre-repair instrument, so the repair was necessary rather than
+decorative.  On the shipped 59-row instrument they score 58/59 and 57/59; the polarity control reds fifteen
+rows.  BASE 59/59 opening and closing; scratch clone clean against SEC, no sentinel left.
+
+*One prediction missed, and it is a finding about my own rows.*  `M_RRTRAPSFD1` was predicted to red
+`trapfrozensfd1` alone and reddened `trapfrozenuser` too, because **`PSR_FRZUSER` (`0x00000003`) clears MODE
+*and SFD1*** -- the constant's comment listed only MODE, an L4 corrected in v20: a comment that lists SOME of
+the bits a constant clears reads like a complete decode and is not one.  Both cells are closed regardless, and
+the polarity control **proves** the MODE closure rather than asserting it: it reddened every MODE-set trap row
+and left `trapfrozenuser` alone.  Honest cost, stated rather than glossed: **`trapfrozensfd1` has zero measured
+delta against its own enumerated mutant** -- delete it and `M_RRTRAPSFD1` is still caught at 58/58.  Its warrant
+is single-axis attribution, because a row varying two bits cannot say which one fired.
+
+*This is the FOURTH time this chain has closed an axis at some cells and called the rest something else -- and it happened inside the census written to end that pattern.*
+
+--- the original filing ---
+
+**`m88kexcrrtrapmode` (was LOW).**  At the m88k SFRZ re-route's **TRAP side**, all fourteen trap rows carry `MODE=1` and
+`SFD1=1`, so a widened inner guard — `if (!is_trap || !(PSR & M88K_PSR_MODE))` — escapes the shipped 57-row detector.
+**DERIVED from the cell census, not measured**, and said so.  The cell is REACHABLE and both halves already exist in the
+probe separately: a frozen handler can drop to user mode (`errpriv`/`errunimpl`, via `PSR_FRZUSER`) and a user trap at a
+vector ≥ 128 is a genuine trap (`trapfrozen128`).  No row combines them.  The `SFD1` cell is the same shape via
+`PSR_FRZSUP`, which `errdiv0` already builds.  **Debt, not a floor breach, by the carrier's own bound**: the floor asks
+for the partitions the guarded body itself tests, and that body tests `is_trap` and the outer `PSR & SFRZ`, both
+polarities of both rowed.  MODE at the trap side is a single-axis marginal against an lvalue the body does not test
+there — clause (e).  Mutant owed to the next free measuring seat.
+
+**Closed by measurement, not argument.**  Pass 9 found pass 8's "class closure" had closed the serial-mode bit at ONE arm
+of seven while the contract claimed the axis — the third time this chain reproduced, inside a repair, the defect it was
+repairing.  v17 closes it at all seven; table 14 measured all three predicted sweeps at **54/54 on the frozen v16
+instrument**, each killed on v17 by its own row.  Gate 11 re-pinned to 57/57 and re-run: PASS, 105 checks.
+
+**A DERIVER NOW SHIPS WHERE A COUNT USED TO** — `regress/artifacts/m88kexcdeliver/derive_cells.py`, output
+`CELLCENSUS.out`.  It enumerates the {arm × settable-bit} cells from the probe's own row table and prints the GRID rather
+than the total, because a per-cell breakdown is checkable and a total is not.  It reproduces the kimi seat's figure (v16
+closes **34 of 40**, v17 **40 of 40**) and grok's independent by-named-row census cell for cell, and it re-derives pass
+9's finding without being told it.
+
+**Two wrong numbers in my own pass-10 packet, both found by the kimi seat** (corrected in
+`brief_m88kexc_p10.CORRECTION.md`): the control's frozen-v16 score read `23/41`, which is its score on the **v10**
+instrument — 41 could not be a v16 denominator at all, so the DENOMINATOR was the tell for the third table running and I
+did not check it.  And "the previously-closed 23" was sourced from nothing; **I had used that same unsourced 23 an hour
+earlier to refute minimax's arithmetic, so that refutation was wrong** and minimax's instinct that the numbers did not
+add up was right while its own count was not.
+
+**Seat note.**  glm was DOWN on a thinking burn carrying `done_reason: "stop"` and a null `eval_count`, where the
+carrier's documented signature is `"length"` with 65536 — **the class is real and the carrier's description of it is
+incomplete**.  `seat_verdicts.py` called it correctly regardless, and refused to recover an answer that was not there.
+Its thinking was still read and its one challenge checked: its only readers in the whole m88k model are the
+assignment itself, `cpu->name` and the PID register -- the exception path is not among them -- so the
+packet's claim was true and unsupported where it was made.
+
+---
+
+## 2026-09-06 — `83df95c` pass 2: the review that commit never got, and what it found
+
+**`wdcconsumedattempts` (MEDIUM).**  In `dev_wdc.c`'s ATAPI accounting arm,
+`int consumed = len == 4 ? 4 : (len >= 2 ? 2 : 1);` is computed **from `len` alone** — it counts the helper
+CALLS the arm makes, not the pops that succeeded.  `wdc_get_inbuf()` returns `(uint64_t) -1` on an empty ring
+and returns **before advancing the tail** (verified by reading: the early return sits three lines above the
+advance), so with `q` bytes queued a width-`w` access pops `min(q, calls)`.  When the ring under-runs
+mid-access, `consumed` over-counts and `atapi_len` is decremented by more than the guest received.
+
+*** That is the exact defect `#341` exists to fix, quoted three lines above the expression: *"the count
+reported has to be the count that happened."* ***  `#341` replaced `len` with this expression, which is right
+whenever the ring holds enough bytes and wrong in precisely the residual case the same round was reasoning
+about.  **DERIVED, NOT MEASURED** — no witness shows a guest reaching an under-run mid-access on the ATAPI
+path, and the over-read is already announced by the `warned_inbuf_overread` latch, so the silent-corruption
+claim is unproven.  A round owes the rung-3 attempt.  *Worse observable, unanalysed: the arm accumulates with
+`odata += (wdc_get_inbuf(d) << 8)`, so a failed pop folds the sentinel's bits into the value the guest reads,
+not only into the count.*
+
+**Corrected in place (L4), product comment.**  The census shipped by `83df95c` stated the eight pop counts
+unconditionally; they are **call counts** and hold only while bytes remain.  Now qualified, with the mechanism
+and the `consumed` caveat named.  *Two seats derived the same expression and neither noticed it counts
+attempts — the seat that went to the helper found it.*
+
+**And a nuance that makes the original round's claim weaker, from the kimi seat:** the wording `83df95c`
+replaced — *"a 3- or 8-byte access consumes 1 or 2"* — was **vague, not false**.  The true value is 2, and 2 is
+a member of the set `{1, 2}`.  So the shipped trailing note reads as a correction of a falsehood when it is
+really the sharpening of an imprecise sentence.
+
+**Claim settled that nobody else could reach:** the ring predicate after `#484` **holds** — `N = 512*513`, the
+`(head+1)%N == tail` guard refuses the store, both producers respect it, occupancy stays in `0..N-1`, so full
+and empty are distinguishable and `head == tail` means empty.  **No detector row depends on the old wording**,
+checked across all four files the commit touched.
+
+---
+
+## 2026-09-06 — filed from the Codex passes (five briefs, five substantive answers)
+
+**`irqassertedunread` (LOW — filed HIGH off one grep, de-escalated the same hour by the pass it was filed
+pending).**  Six CPU families set `cpu->cd.<arch>.irq_asserted`; exactly three are consumed (arm, m88k, ppc).
+**alpha, i960 and riscv have no reader anywhere**, and there is no alternate delivery mechanism.  But the three
+are not alike: **i960 and riscv are DEAD SCAFFOLDING** — neither executes a second instruction (i960's switch is
+only `default: goto bad;`; riscv implements compressed NOP/ADDI and sends the 32-bit branch to `bad`) — so there
+is no guest to miss an interrupt and the disposition is scaffold cleanup.  **alpha is a genuine hole at the
+CPU/PAL level**: `kentry` is stored with no reader and `PAL_OSF1_rti` is named but unimplemented, so removing
+`lcabadval`'s two interrupt exits leaves *both* forwarding and delivery unfinished.  *Corrected my census:
+`cpu_dyntrans.c` also delivers MIPS and SH interrupts through differently-named state, invisible to a
+single-identifier grep — the correlate-not-the-class shape.*  Source-derived, no guest boot run.
+
+**`lunancpus3` (LOW).**  `luna_absentcpu_probe.py` boots only `-n 1`, `-n 2` and `-n 4` — all powers of two — so
+any `ncpus`-dependent fold that is the identity there is invisible to every row.  **kimi NAMED this family on
+pass 5 before a member existed**; a member is now MEASURED: `cpu < (d->ncpus & -d->ncpus)` scores **37/37, a
+total escape** (`killtable6_codexpred/`).  Disposition unchanged and disclosed: clause-(e) debt, not a clause-(d)
+breach — the bit-trick does not *read* like the same check, and every single-token weakening of that bound is
+rowed and dies.  **Closure is one `-n 3` session and closes the whole family**; check first that `-n 3` boots the
+committed rig.
+
+**`m88ksfd1row` (LOW — a RULE QUESTION for the 2026-09-09 adjudication, not a defect).**  Does the ADDITION
+LICENCE authorise a detector row with **zero measured delta** whose benefit is telling you *which* axis fired?
+`#502`'s `trapfrozensfd1` is redundant against its own mutant (58/58 without it), and codex ruled the attribution
+warrant does not transfer — the anchor rule repairs *self-comparing* oracles, and row demand is bounded "per
+enumerated mutant, never per attribution need".  **Kept pending adjudication on the same seat's own next
+paragraph**: removing it leaves SFD1 coverage resting on `PSR_FRZUSER`, shared with `errpriv`/`errunimpl`, where
+changing `0x03` to `0x0b` preserves their routes and silently deletes the only SFD1-clear stimulus — and BASE
+would not notice.  Deferring costs nothing: v21 is records-only, so table 15's scores still describe the shipped
+59-row instrument.
+
+**`briefforcedwrong` (LOW — a template rule question).**  `BRIEF_TEMPLATE`'s closing *"WHICH IS WRONG?  Assume at
+least one is"* is itself an unsupported assumption when the premises are sound — named by the codex seat after
+answering a brief whose three premises all held.  The device earns its place (it has found four wrong premises in
+one brief, and three more tonight), but as worded it instructs a seat to assume a defect exists, so a seat with
+sound premises must invent one or push back.  **Pushing back is the right answer and the template does not invite
+it.**  Proposed: keep the question, add *"or say NONE and name the forcing assumption as the defect"*.  Held
+rather than applied — the template is what every brief starts from.

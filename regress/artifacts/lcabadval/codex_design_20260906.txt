@@ -1,0 +1,21 @@
+**SEVERITY ORDER: ISA interrupt implementation first, provisionally; firmware execution order is unproved. / PREMISE 3 IS WRONG: `W_BASE0` accepts two values.**
+
+| Class | Disposition I would take |
+|---|---|
+| **INTERRUPT STUB — 2** | **IMPLEMENT** forwarding and CPU interrupt delivery. The six options need this seventh member: declining an interrupt leaves the machine incomplete. The callbacks terminate unconditionally, but [ISA masks and state changes gate their invocation](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/bus_isa.c:52). Moreover, Alpha’s callbacks merely set `irq_asserted`; the [execution loop never consumes that Alpha flag](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c:206). Removing the exits alone cannot complete this path. |
+| **BUS — 1** | **Implement Type-1 decoding, then ACCEPT through `bus_pci`**, including its existing absent-device handling. `ioc_conf & 1` selects configuration-cycle type; it is not the decoded bus number. Simply deleting this exit leaves `dev` uninitialized. |
+| **RANGE — 1** | **DECLINE + LATCHED ANNOUNCE** for unsupported transfers, with initialized read results and no forwarded side effects, pending correct sparse-lane handling. `ofs` is at most three, so this guard cannot fire for four- or eight-byte accesses. Changing `>` mechanically is not a design. |
+| **VALUE — 6** | **ACCEPT documented register fields using existing backing**, with a latched announcement for missing DMA/TLB effects; mask or decline unsupported bits according to register semantics. Every guarded assignment already occurs **before** its check. No invented backing is needed, but readback alone does not implement translation. |
+| **CATCH-ALL — 1** | Split documented registers, including `STAT0/STAT1`, from genuine holes. Implement the former; use **FAULT** for confirmed holes only with Alpha exception delivery implemented. **DECLINE + LATCHED ANNOUNCE** is an explicitly incomplete interim disposition. |
+
+I checked the fork’s [latched-decline](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:574), [register-backing](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:1441), and [unreadable](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_unreadable.c:41) idioms. The last does **not** transfer automatically: [failed device accesses dispatch exceptions for MIPS/M88K here, with no Alpha equivalent](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:603).
+
+The premise audit is:
+
+- **1 holds:** twelve textual occurrences, eleven outside comments.
+- **2’s removal is real; its “usable precedent” conclusion is wrong.** [The fallback](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:127) aliases “no selected device” to device zero. Today only device seven is installed, so zero happens to be empty. Explicit absence handling avoids a latent alias when zero is populated.
+- **3’s class counts hold, its singleton claim does not:** [`W_BASE0`](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:237) accepts `0` and `0x300800000`; only three window guards accept one value.
+- **4 holds as one machine-setup consumer, specifically AlphaBook 1.** I found no dedicated boot rig. “Never exercised” does not follow; a [generic constructor sweep exists](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gate_asan_sweep.sh:339), without proving coverage of these branches.
+- **5 is an unsupported restriction:** guest kernel stores use the same MMIO path, and interrupt callbacks arise from device events.
+
+Source establishes connected interrupt paths and conditional MMIO paths for the other nine sites. It establishes **no particular SRM/NetBSD execution of any terminating site**. Thus the interrupt pair deserves implementation priority, but firmware reachability and failure frequency remain unmeasured.

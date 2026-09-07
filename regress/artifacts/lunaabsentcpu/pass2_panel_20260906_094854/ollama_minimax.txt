@@ -1,0 +1,42 @@
+VERDICT: SHIP (with one robustness note below; no correctness defect in the diff as stated).
+
+---
+
+**Q1 — The diff: right and complete?**
+Right: yes. The walk `for (cpu = 0; cpu < MAX_CPUS; cpu++)` calling `INTERRUPT_ASSERT(d->cpu_irq[cpu])` / `INTERRUPT_DEASSERT(d->cpu_irq[cpu])` through NULL pointers on slots 1–3 when `ncpus < 2/3/4` is the stated mechanism, and bounding the loop to `d->ncpus` (the count of actually-CONNECTed slots) eliminates the only route by which the walk reaches an unpopulated slot. All three callers enumerated (the two store arms, the SIO line, the clock tick) go through the same `reassert_interrupts(d)`; bounding the walk bounds all of them. M_CALLGUARD in the table confirms the call-site form is insufficient because the SIO/clock route bypasses the store arms — this is the load-bearing reason option (a) is the right member of the six-membered set, not a warrant preference.
+
+Complete modulo one robustness point: `d->ncpus = devinit->machine->ncpus` is placed BEFORE the `ncpus > 4` exit. The packet asserts the exit "ends the process at init time" (settled premise 3) and the diff comment leans on that. Pre-fix, the walk was `cpu < MAX_CPUS`, so an `ncpus==5` configuration could not buffer-overflow regardless of the exit; post-fix, `d->ncpus==5` would make the walk read `interrupt_enable[4]` / `irqActive[4]` / `cpu_irq[4]` / `software_interrupt_status[4]` — all out of bounds. The exit is now load-bearing for correctness, where before it was a sanity check. Fable's pass-1 recommendation (clamp, or move the capture after the exit) was not taken. **NOT CHECKABLE FROM PACKET:** whether the exit is `exit(1)` / fatal-return or a warning that continues. The brief's wording ("ends the process at init time") and the diff comment both assert the former; if true, the diff is fine. If the exit is ever softened, the fix regresses to a buffer overrun. **Single fact that would settle it:** the body of the `ncpus > 4` arm in DEVINIT (one grep). A two-line clamp (`d->ncpus = n < MAX_CPUS ? n : MAX_CPUS;`) would make this concern go away at zero behavioral cost.
+
+The store arms are intentionally untouched (MASK1–3 / SOFT_INT1–3 stay guest-writable storage with readback); pass-1 ruling is consistent with the lunaabsentmaskdecl follow-up. mask1/mask2/mask3 readback rows exercise this.
+
+**Q2 — A clean-sweep mutant in the (d) enumeration?**
+The (d) set is the predicate `cpu < d->ncpus` plus the five fields the body reads; joint cells are {slot 0..3} × {pending ∈ {sw, device-line}} × {irqActive ∈ {0, 1}}. The eleven mutants in the table cover:
+- predicate: M_REVERT (unbounded), M_OFFBY1 (`<=`), M_HARD1 (literal 1), M_NOASSIGN (0), M_SKIP1 (slot 1 specifically) — five predicate shapes.
+- fields: M_NULLA / M_GUARDASSERT (cpu_irq unguarded on DEASSERT), M_NULLAB (both sides, disclosed equivalent), M_LATCH (decline-then-deliver), M_NOREASSERT (drop reassert in SOFT arm, disclosed debt), M_CALLGUARD (bound at call site instead of walk).
+- cell coverage: soft1 hits {slot 1, sw, irqActive=0} ASSERT and {slot 1, no-pending, irqActive=1} DEASSERT on the readback; sio5 / siofirst hit {slot 1, device-line, irqActive=0}; slot0 deliver / cpu1 deliver hit {connected slot, sw, irqActive=0→1}; nodeliver ctl hits {connected slot, no-pending, irqActive=0} (must not deliver).
+
+One cell is not directly exercised by name: {slot 1, device-line, irqActive=1} DEASSERT (i.e., a device line asserted then deasserted while slot 1's irqActive is already 1, on a 1-cpu machine). sio5clr is the closest — it does `RESET_TX_IP` then `WR1 <- 0` with `ld MASK1 = 0x00fc0000`, which forces the line back to level 0 with slot 1 still armed. Pre-fix this would DEASSERT through NULL (M_NULLA's killing row); post-fix the walk skips slot 1. The row exists; the cell is covered. **CLOSE.** I do not see a clean-sweep mutant the detector fails to catch within the reachable configuration space (ncpus ∈ {1, 2}).
+
+**Q3 — CHANGELOG block contents beyond the table:**
+The block must carry, at minimum:
+1. The defect and the fix in one paragraph (cites #503, file, loop bound, capture site).
+2. The witness numbers **with the denominator note**: `15/17 PRE_FIX_SYMPTOM` on HEAD, rows `soft1` and `siofirst` HALT; denominator drops from 22 because host death mid-session prevents later rows in that session from running.
+3. **The M_CALLGUARD finding** — pass-1 alternative (F4, bound the reassert CALL in the two store arms) **measured wrong** at 16/18 with `sio5` and `siofirst` HALT, because the device-line route to `reassert_interrupts` bypasses the store arms. This is the reason the walk bound, not a call-site guard, is the fix.
+4. **Prediction corrections**: killing rows are `soft1` and `siofirst`, not `mask1` (a MASK1 store with nothing pending walks slot 1 without calling anything); M_CALLGUARD was predicted equivalent and was killed.
+5. The two disclosures: M_NULLAB (both-sided NULL guard) is EQUIVALENT on every reachable configuration — warrant-based choice, not a defect; M_NOREASSERT (drop the SOFT arm's reassert) PASSes because the clock's own reassert carries delivery — disclosed debt, not fixed here.
+6. The follow-up pointer to `lunaabsentmaskdecl` (absent slots' MASK/SOFT register semantics — storage with readback, as upstream).
+7. The `ncpus > 4` dependency (init-time exit bounds `d->ncpus`).
+
+**Q4 — Which disposition is wrong?**
+None of the seven. The fix-as-diffed is correct given the exit; the 22-row detector is wired with the right gate predicate (pin `LUNAABS_DONE`, `LUNA_ABSENTCPU_WITNESS=PASS`, `LUNAABS_RESULT=22/22`, named rows OK); M_NULLAB and M_NOREASSERT are correctly classified as disclosed equivalent / disclosed debt; M_CALLGUARD is correctly recorded as a pass-1 proposal refuted by measurement (sio5 is exactly the row pass 1 made mandatory, and it kills the alternative); `lunadefaultstop` and `es438cells` are unrelated; `lunaabsentmaskdecl` is the right follow-up filing for the absent-slots register semantics. The M_CALLGUARD row in the table is the strongest evidence that option (a) is the unique correct fix, not one of several.
+
+---
+
+**Other notes (under a page):**
+
+- **Settled from packet:** walk logic (diff makes it unambiguous), store-arm address indexing (premise 4), DEVINIT connect predicate (premise 3, the HACK comment), delivery-only-free-running (premise 5), INTERRUPT_ASSERT shape (premise 2), the 11-mutant table readings, the session structure, the gate wiring.
+- **NOT CHECKABLE FROM PACKET:** (i) the body of the `ncpus > 4` arm — single grep settles it; (ii) the md5 of the frozen detector — trust the brief; (iii) the exact diffs of the 11 mutants — trust the table readings; (iv) whether `devinit->machine` is NULL-checked upstream — pre-existing, not introduced.
+- **Author's self-correction credit:** the #438 probe miss (bit 26 clear vs. set at 0x84000100) is acknowledged; the new probe disassembles every planted word before stepping. No similar misreading is present in this packet — the `0xfc000000` constant is bits 26..31 set, which is what the brief claims, and the walk's `1 << (line + 25)` for lines 1..6 giving bits 26..31 is consistent.
+- **No measured defects in the diff as stated.** The single robustness gap (ncpus > 4 making the post-fix walk strictly less safe than the pre-fix walk) is worth a one-line clamp if the panel is paranoid about the exit; otherwise it ships as-is.
+
+VERDICT: **SHIP.**

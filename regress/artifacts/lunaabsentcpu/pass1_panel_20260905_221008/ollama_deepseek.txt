@@ -1,0 +1,26 @@
+VERDICT: PROCEED-WITH-(a) as minimal; HOLD on (b)/(d) until guest readback of absent MASK/SOFT registers is settled.
+
+Q1 PREMISE AUDIT  
+- READ: loop walks `MAX_CPUS` (4); `INTERRUPT_ASSERT` is a direct call through a function pointer with no NULL check; DEVINIT connects only `cpu_irq[0]` on a 1‑cpu machine; store arms compute `cpunr` from address and never compare to `ncpus`; `RESET_CPU_ALL` bounds by `ncpus`; common tail returns 1 after read/write.  
+- REASONED: The premise “`interrupt_status` is machine‑wide, software interrupts are per‑slot” is internally inconsistent with the stated line mapping. The brief says device lines 1..6 map to bits 26..31, and software interrupts OR `(1 << 26)`. That makes bit 26 both shared line 1 and per‑CPU software. If line 1 is a real device line, the two sources collide; if line 1 is not used, the mapping is wrong. Single fact to settle: what is line 1, and is `luna88k_interrupt_assert` ever called with line 1?  
+- Default cpu count = 1: READ from witness (segfault implies `cpu_irq[1]` NULL, so `ncpus < 2`), but the exact default in `emul.c` is not independently checkable from this packet.  
+- Anything else connecting `cpu_irq[1..3]`: not checkable from packet; need grep of tree.
+
+Q2 SMALLEST EDIT  
+- Smallest edit that closes the witness: (a) bound the loop to `d->ncpus` captured at DEVINIT.  
+- It still leaves a wrong readback: a store to absent MASK1 lands and reads back `0x00fc0000`. The existing row `mask1` stays green, but under a correct absent‑slot model that readback should be 0. So `mask1` is the row that stays green while being semantically wrong.
+
+Q3 OPTION SET AND CHOICE  
+- Option set is complete as listed; no missing member obvious from the packet.  
+- (d) is the most robust, but its (b) component changes guest‑visible readback for absent slots. Whether OpenBSD/luna88k reads MASK1..3 on a uniprocessor is not settled in the packet. If it does, (b) could break boot. Therefore (a) alone is the minimal safe fix for this round; (d) should be filed as follow‑up pending the guest readback fact. The batch‑7 ruling to reject (b) for now is consistent with this uncertainty.
+
+Q4 ACCEPT SIDE  
+- Cannot settle from packet how to configure 2 CPUs (`-n 2`? machine description support?). Single fact needed: does the luna88k machine description accept `ncpus=2` and does DEVINIT then connect `cpu_irq[1]`?  
+- A cold‑debugger row can observe readback of MASK1 bits 31..29 (`highestCurrentStatus`) after a SOFT_INT1 store; that shows the pending status but does not prove delivery to cpu 1’s interrupt controller. To observe delivery, need a debugger command that shows cpu 1’s `irq_asserted` or pending interrupt state; not inlined. The proposed accept row is therefore insufficient as a delivery witness; a free‑running shape or additional debugger command is required.
+
+Q5 SEVERITY  
+- HIGH is justified. Two ordinary guest stores cause SIGSEGV in the emulator process; reachability is by any guest code, not a specific driver. No downgrade reason from the packet.
+
+Q6 OTHER  
+- The `default:` arm’s `cpu->running = 0; return 0` for unimplemented addresses is a separate graceful‑stop class. Not checkable from packet whether it is already filed; need ledger grep.  
+- The bit 26 overlap noted in Q1 is a potential separate issue worth filing if line 1 is a real device line.

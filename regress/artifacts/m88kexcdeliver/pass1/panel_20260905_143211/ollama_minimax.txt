@@ -1,0 +1,71 @@
+VERDICT: Brief is largely sound on the core defect (D2 halts via the tail `default:`, D1 needs both `implemented = true` and a tail arm to deliver, encodings and vector arithmetic check out, the probe's three HALT rows are consistent with the fallback). **One real gap that the brief itself flags but does not close: the INTEGER_OVERFLOW contract** is conditioned on, not cited — and one smaller confusion in the SFD1 explanation. Everything else below is either settled or honestly named as not checkable from the packet.
+
+---
+
+**Defect 1 (the one that matters): INTEGER_OVERFLOW manual section is not extracted.** [REASONED from packet structure]
+
+The brief inlines verbatim manual text for MISALIGNED (6.5.2, $20), UNIMPLEMENTED_OPCODE (6.5.3, $28), PRIVILEGE_VIOLATION (6.5.4, $30), and ILLEGAL_INTEGER_DIVIDE (6.8.3). For INTEGER_OVERFLOW (6.6, $48) it explicitly says: *"not re-extracted here -- a file-reading seat should grep it; PACKET-FED seats: treat 'SXIP = the add/sub instruction, SNIP = next' as a premise to CONDITION on, not to assume."*
+
+D1 then applies **the same `break`-only arm to INTEGER_OVERFLOW as to the other four** — i.e., SNIP = pc + 4 | V, no adjustment. For the four cited exceptions the manual supports this: destination unchanged, SXIP = faulting, rte at SNIP = next. For INTEGER_OVERFLOW the brief has no manual citation. If INTEGER_OVERFLOW is architecturally a *trap* (destination NOT written, but the handler may want to re-execute the faulting instruction, e.g. to retry in software), then SNIP = pc + 4 would silently skip past the faulting add/sub and any handler that intended to emulate would be wrong. If it is a *fault* (operation suppressed, continue past), D1 is correct.
+
+The single fact that would settle it: the text of MC88100 manual section 6.6 (Integer Overflow, offset $48) — specifically whether the destination register is written and what SNIP should point to on rte. The `#if 0` doubt in the code is for ILLEGAL_INTEGER_DIVIDE only; INTEGER_OVERFLOW has no in-code author doubt to anchor on. **This is a real audit gap, not a nit** — it changes whether one of the five arms in D1 is correct.
+
+---
+
+**Defect 2 (confusion, not a bug): the SFD1-div0 routing claim.** [REASONED]
+
+The brief says: *"PSR at reset is `M88K_PSR_MODE | M88K_PSR_IND` ... FPU ENABLED (SFD1 clear) -- so `divu` by zero reaches ILLEGAL_INTEGER_DIVIDE, not SFU1."*
+
+Integer divide-by-zero routing to ILLEGAL_INTEGER_DIVIDE should not depend on SFD1 (SFD1 disables the FPU; `divu` is an integer instruction). The empirical result in the probe (div0 → vector 8, message "ILLEGAL_INTEGER_DIVIDE") is correct, so the routing works in the fork as it stands. But the causal explanation — "SFD1 clear, therefore not SFU1" — implies that SFD1 set would route divu to SFU1, which would be an independent fork bug. The brief doesn't assert that; it just notes the reset state. A cleaner phrasing: "SFD1 is clear at reset (and anyway, divu by zero is ILLEGAL_INTEGER_DIVIDE regardless of SFD1)." This is a writing defect, not a defect in the fix.
+
+---
+
+**Defect 3 (probe design gap, disclosed): the control rows' stop mechanism.** [REASONED]
+
+For `live` and `attrib`, no exception fires, so the breakpoint at `8*vector` is never reached. The probe description says `breakpoint add <8*vector>, continue, then reg` — but with no fault and no other breakpoint, `continue` would run forever (the program is `addu; divu; br .` and `br .` loops). The output shows pc=0x10008 (the `br .` target), so something stops it — either a second breakpoint at pc+4, a step limit, or a timeout. The brief does not specify this. It does not affect the bug analysis, but it is an under-specified piece of the detector and a file-reading seat should confirm the control-row stop is deterministic and not a timeout race.
+
+---
+
+**Defect 4 (mutant detectability, partially hand-waved): M_SNIPX and M_VEC4.** [REASONED]
+
+- **M_SNIPX** (SNIP = pc | V): the brief says "the div0 row loops -- observable as the breakpoint hit with SNIP == SXIP." But if SNIP = pc, rte returns to the divide, it re-faults, the breakpoint at `8*vector` hits again, and the cycle repeats. A single breakpoint hit with SNIP == SXIP looks identical to a correct delivery that happens to land at the same place. The probe would need either (a) a hit-count bound, (b) a wall-clock timeout, or (c) a check that the machine does not re-enter the handler within N steps. The brief gestures at this but does not specify the mechanism. Same gap as Defect 3.
+
+- **M_VEC4** (`+ 4 * vector`): if the breakpoint is planted at `4*vector` and delivery puts pc at `8*vector`, the breakpoint never hits. The brief says "breakpoint not hit, pc mismatch" — but the probe must still stop to observe pc. Again, needs a step/timeout bound, or the probe plants the breakpoint at the *expected* delivery address and a second one at `4*vector` and asserts the former fires and the latter does not. Under-specified.
+
+These do not invalidate the fix; they mean the kill table as written is aspirational until the probe's stop and assert mechanics are pinned down.
+
+---
+
+**Defect 5 (honestly out of scope, named so it isn't lost): option-set completeness and `is_trap`.** [REASONED]
+
+- **Q-D1b/c** (BOUNDS_CHECK, ERROR) and the precedent question (how MIPS `mips_cpu_exception`, SH `sh_exception`, ARM, PPC in the same tree treat a recognised-but-unmodelled class) cannot be answered from the packet. The brief names this. The single fact that would settle Q-D1b/c: the grep result for `implemented = true` patterns in the other CPU cores' exception functions. A file-reading seat should run that.
+
+- **`is_trap` for the five.** The signature is `m88k_exception(cpu, vector, is_trap)`. The probe tests the single-exception case (SFRZ clear at entry), so the `!is_trap && SFRZ set → re-route to ERROR` branch is not exercised. If any of the five is called with `is_trap = true` from a raise site, the SFRZ-already-set branch behaves differently (`update_shadow_regs = false`, no ERROR re-route). The brief does not state what the raise sites pass for `is_trap`. For the four precise exceptions called from the integer pipeline, `is_trap = false` is the safe default, but this is a premise the brief does not assert. A file-reading seat should grep the call sites: `grep -n 'm88k_exception(' src/cpus/cpu_m88k*.c` and check the third argument.
+
+---
+
+**Items checked and clean:**
+
+- Vector offset arithmetic: 8*4=0x20, 8*5=0x28, 8*6=0x30, 8*8=0x40, 8*9=0x48 — all match the manual offsets inlined and the probe's `8*vector` breakpoint arithmetic. [REASONED]
+- Encodings: `divu r2,r3,r0` = `0xf4000000 | (2<<21) | (3<<16) | (0x68<<8) | 0` = `0xf4436800` ✓; `add r2,r3,r4` = `0xf4437004` ✓; `or r0,r0,r0` calibration = `0xf4005800` ✓. The sub-op field position (bits 8..15) is consistent across all three. [REASONED]
+- Two-site requirement: setting only `implemented = true` lands in the tail `default:` → `cpu->running = false` (single CPU on testm88k = halt, message "internal error"). Setting only the tail arm without `implemented = true` lands in the fallback `if (... && !implemented)` → all CPUs `running = false` (halt, message "unimplemented"). Both sites are necessary. [READ from inlined code]
+- `live` quotient: `0x60 / 0x10 = 6` ✓. [REASONED]
+- `attrib` quotient: 1 means `r3 == r4 != 0` for the same `divu`; the brief says "non-zero divisor" without naming the values, but any `r3 == r4 != 0` works and the probe output `r2=1` is consistent. [REASONED]
+- The rte-at-SNIP contract (manual 8983-8985, inlined verbatim) is settled and matches the common path's `SNIP = pc + 4 | V`. [READ]
+- Probe output for the three measured fault rows (div0, ovf, misalign) is consistent with the fallback: `halted=True stopped=True`, pc at the faulting instruction, r2 unchanged, message "unimplemented". [READ]
+- Probe output for the two controls (live, attrib) is consistent with the faulting instruction completing and falling into `br .`: pc=0x10008, r2=quotient. [READ]
+
+---
+
+**Not checkable from the packet (named, per the rules):**
+
+- The exact text of MC88100 manual section 6.6 (INTEGER_OVERFLOW) — single fact that would settle whether D1's INTEGER_OVERFLOW arm is correct or needs `SNIP -= 4`.
+- The `is_trap` value passed at each raise site for the five — single fact: the third argument in each `m88k_exception(...)` call.
+- The other CPU cores' treatment of unmodelled classes (MIPS/SH/ARM/PPC) — single fact: the analogous `implemented = true` / fallback pattern in those files.
+- Whether OpenBSD/luna88k's `m88100_trap` reads SSBR, fcr2/fcr4/fcr5 — single fact: the trap handler source (not on disk per the brief). The brief conditions on this and names it as a follow-up.
+- The exact `stcr`/`ldcr` encodings for the proposed PRIV/UNIMPLEMENTED probe rows — single fact: the decoder's `case 0x20` group.
+- Whether translation caches in the fork are mode-tagged (matters for the "clear MODE by `stcr`, then fault" route for the PRIV/UNIMPLEMENTED rows).
+
+---
+
+**Bottom line:** the brief's central claim — that the five trap-like classes halt today and D1 delivers them with a two-site edit — is supported by the inlined code, the inlined probe output, and the inlined manual text for four of the five. The fifth (INTEGER_OVERFLOW) is the one place where the brief asks the reader to trust an analogy it did not cite, and that is the single defect a reviewer should insist be closed before the fix lands.

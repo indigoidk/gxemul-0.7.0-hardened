@@ -1,0 +1,2363 @@
+Reading additional input from stdin...
+OpenAI Codex v0.153.4
+--------
+workdir: C:\DocumentNoSnc\CC\GXEMUL
+model: gpt-6-astra
+provider: openai
+approval: never
+sandbox: read-only
+reasoning effort: max
+reasoning summaries: none
+session id: 01a076e5-204d-71b0-84a3-8eabd06c93f4
+--------
+user
+# PASS 4 -- `m88kexcdeliver` (#502): the closing pass on the ADJUDICATION-PASS REPAIR (probe v4).  Tree `GXEMUL-SEC/src/`, HEAD `83df95c` + the uncommitted round.  2026-09-06, ~08:45.  SHORT BY DESIGN: one diff, one table, one question.
+
+## CONTEXT AND VOCABULARY
+An ordinary correctness review of an open-source machine emulator's CPU model (GXemul 0.7.0, hardened fork): the MC88100
+exception-delivery path in `cpu_m88k.c` and its detector `regress/m88k_exc_probe.py`.  The "guest" is the operating system
+inside the emulator.  Plain engineering vocabulary.  **If you cannot read files that is expected -- every fact is inlined; name
+any premise you cannot settle rather than guessing.**  Tree under review: `GXEMUL-SEC/src/` (three pristine-2021 copies under the
+project root are NOT this fork).  **VERDICT LINE FIRST.**  Cite by grep anchor.
+
+## WHY A FOURTH PASS, AND WHY IT IS THE LAST UNLESS IT FINDS A BREACH
+The repair-chain rule: a repair made in response to a pass owes its own pass, scoped to THAT diff, and the chain closes on the
+first VALID pass that finds zero floor breaches surviving adjudication -- with the denominator stated.  Pass 3 (the adjudication
+pass, `pass3_panel_20260905_220902/`: codex, kimi, grok, deepseek, minimax answered; glm burned; the two Anthropic Agent seats died
+on a session limit and answer HERE instead) ruled on F1..F24 and found TWO more detector gaps plus records defects.  This pass
+reviews ONLY the repair for those two gaps.  Product code is UNCHANGED since 16:16 yesterday (comment-only edits at 23:00,
+verified by a non-comment diff; `build/` rebuilt, 22/22 -> 23/23 on it).
+
+## THE PASS-3 RULINGS, APPLIED (each a QUESTION if you can check it)
+* grok CLOSE, kimi CLOSE; codex / deepseek / minimax ONE MORE REPAIR.  What they found, and what changed:
+  1. **IND never started clear** (grok, codex): every row's pre-fault PSR (0x80000002 / 0x00000002 / 0x90000002) already had
+     IND set, so dropping `| M88K_PSR_IND` from the exception-path PSR write was a 22/22 escape -- the carry shape (F6) again.
+     REPAIR: row `indclr` -- `stcr r5,cr1` with r5 = 0x80000000 (MODE only, IND CLEAR) then the overflowing add; wants PSR
+     0x8000000b and EPSR 0x80000000.  Mutant M_NOIND (`| M88K_PSR_IND` -> `| 0`).
+  2. **HALT was a diagnostic classification, not a verified stopped state** (codex): `halted` was `"unimplemented" in tr and
+     "vector=" in tr` -- a fallback that keeps its message and drops the stop would classify as HALT, and ANY vector's diagnostic
+     qualified (on HEAD, `sfu1h` "passed" at pc=0x10004 because the FIRST divu halted).  REPAIR: `halted` now requires the
+     diagnostic AND the machine-stopped observation; an expected-HALT row (resid50, sfu1h) must see ITS vector named
+     (0x032 / 0x072); sfu1h additionally requires pc == 0x40 (the first delivery happened) else BADREGS stage1.  Mutant
+     M_NOSTOP (the fallback's `running = false` loop body -> `(void) j;`).
+  3. **The LEVEL channel proves the ERROR/WARNING regression, not exact INFO** (codex: INFO and DEBUG are both silent at the
+     post-startup WARNING floor) -> contract reworded.  4. **sfu1h's channel restated** (kimi, grok): the nested SFU1 halts at
+     the FALLBACK, which runs before the SFRZ re-route; with the fallback off it is RE-ROUTED TO ERROR (0x50), not delivered to
+     0x390 -- the row pins "SFU1 inside a handler still halts", not "SFU1 is not delivered to its vector".  5. **M_TAILOFF is
+     EQUIVALENT for every vector** (deepseek, codex, kimi: `< MISALIGNED` still admits 0..3; the seven arms are bare breaks) --
+     the Opus pass-2 attribution was wrong; the debt is "vectors 0..3 unrowed", carried by m88kexcdebt with that wording.
+     6. **Census** (grok, codex): 11 of 128 low vectors BYPASS the fallback (0..10), 10 are DELIVERED (1..10), vector 0 still
+     stops every CPU in the RESET tail arm, 117 halt at the fallback, 118 stop overall.  7. **Three rows this round CITED were
+     never FILED** -- `m88kexctaildefault`, `m88ktbnd`, `m88kmxmkill` (kimi, grok) -> filed as documented-only LOW rows.
+     8. Gate comment 2/22 -> 3/22 (kimi, grok, codex).  9. PRETABLE's pre-pass-2 "LEVEL unobservable" / "M_DSLOT = else-arm SFIP
+     wrong" sentences -> dated correction appended, originals left in place.  10. Table-1 tally: 11 killed + 2 survivors, not
+     "12 killed" (codex).  11. minimax: the seven table-1 shapes table 3 carried forward by construction are RE-MEASURED on v4.
+* D1 (the delay-slot else-arm): every pass-3 seat that ruled rules with Fable/codex/grok against kimi (grok: "kimi's 6.4.3.1.2
+  quote is FIP while the BRANCH is in XIP -- one stage early"; kimi itself: "rule for Fable/codex/grok; kimi's dissent is refuted
+  from the primary source").  FILED m88kdslotshadow MEDIUM with the dissent verbatim; the dslot row pins the arm AS IMPLEMENTED and
+  says so (grok: "labelled + filed is the oracle-correction rule deferred to the round that will edit that arm"; minimax wanted a
+  visible banner -- the row table carries one).
+
+## THE REPAIR DIFF (probe v3 -> v4; `regress/m88k_exc_probe.py`, md5 0d5c0f33), VERBATIM WHERE IT MATTERS
+```python
+PSR_INDCLR = 0x80000000                          # MODE only, IND CLEAR: the indclr row's pre-fault PSR
+    ("indclr",   [STCR_R5_CR1, ADD_R2_R3_R4],   {"r3": 0x7fffffff, "r4": 1, "r5": PSR_INDCLR}, V_OVF, 0x10008, PSR_INDCLR, None),
+EXPECT_VECTOR = {"resid50": 0x032, "sfu1h": 0x072}   # the vector the fallback diagnostic must NAME for an expected-HALT row
+    diag = re.search(r"unimplemented[^\r\n]*vector=0x([0-9a-f]+)", tr)
+    halted = diag is not None and ("machines stopped" in tr or "stopped" in tr)
+    if halted and name in EXPECT_VECTOR and int(diag.group(1), 16) != EXPECT_VECTOR[name]:
+        halted = False                              # halted on some OTHER vector: not the row's answer
+    if halted:
+        res["result"] = "HALT"
+        if name == "sfu1h" and pc != 8 * V_DIV0:
+            res["result"] = "BADREGS"; res["bad"] = ["stage1"]   # halted before the handler ran (the pre-fix shape)
+```
+(indclr wants the default PSR_EXC 0x8000000b; `PSR_WANT` is unchanged.)  Gate 11 pins `M88KEXC_RESULT=23/23` and adds a named
+indclr pin (`psr=0x8000000b .*epsr=0x80000000`).
+
+## TABLE 4, MEASURED (`killtable4/`, frozen v4 md5 0d5c0f33, clone re-baselined from SEC and rebuilt, BASE 23/23 before and after,
+clone clean, no sentinel; 08:01-08:11)
+      M_NOIND        22/23  killed: indclr bad=psr                 M_NOSTOP     21/23  killed: resid50 STOP, sfu1h STOP
+      M_NOSHADOW      3/23  killed (20 rows bad=sxip,snip,sfip)     M_SNIPX       3/23  killed (20 rows bad=snip,sfip)
+      M_NOEPSR        2/23  killed                                  M_VEC4        1/23  killed (22 rows STOP; resid50 the 1)
+      M_NOMODE       19/23  killed: priv privtb unimpl udiv0 (the four user-mode rows -- as pass 1 predicted)
+      M_NOSFRZ        2/23  killed                                  M_CARRYCLR   22/23  killed: ovfc bad=psr
+      M_LEVEL         3/23  killed (20 rows bad=level)              M_DELIVERALL 21/23  killed: resid50 sfu1h
+      M_TAILRETURN    2/23  killed (table 4b, `killtable4b/`: its find-text had moved with the 23:00 comment edit, so table 4's
+                     driver skipped it as MUTANT-TEXT-NOT-FOUND; repaired and re-measured 08:21-08:23, BASE 23/23 both ends)
+HEAD with the final instrument: **2/23** (`probe_v4_head.out`): usertb DELIVER (pre-existing user vector) and resid50 HALT (HEAD halts
+on vector 0x032 exactly as expected) are the 2; sfu1h now reads STOP on HEAD because the first divu halts on vector 0x008, not 0x072
+-- the hardened classifier refusing to call that a pass is repair 2 working.  The fix on the rebuilt `build/`: **23/23**
+(`probe_v4_fix_final.out`).
+
+## THE ONE QUESTION
+**Does any floor breach survive in the v4 detector?**  The denominator claimed closed: `implemented` per class x route
+(M_ISTRAP 17/22 in table 3; BOUNDS/ERROR trap-only by construction, M_TRAPONLY equivalent, disclosed); the fallback predicate
+(M_REVERT 3/22, M_DELIVERALL 21/23) and its STOP (M_NOSTOP 21/23); the tail labels (M_NAIVE 3/22) and guard bound (M_TAILLE
+21/22); {SFRZ} x {is_trap} four cells (error, errortb, trapfrozen; M_SFRZTRAP 21/22, M_ERRORDROP 21/22); VBR (M_NOVBR 21/22);
+the PSR write's four bits -- SFRZ (M_NOSFRZ), IND (M_NOIND), SFD1 (the exact compare; every pre-fault PSR has SFD1 CLEAR, so a
+dropped `| SFD1` gives 0x80000003 != 0x8000000b -> bad=psr on every row: is that right?), MODE (M_NOMODE, user rows) -- and carry
+(M_CARRYCLR); EPSR (M_NOEPSR 2/23; M_EPSRAFTER 0/10 on pass 2); the shadow update (M_NOSHADOW, M_SNIPX, M_DSLOT, M_SFIPNOTGT,
+M_DSLOTSWAP); the level (M_LEVEL).  Disclosed, not closed: M_DELAYALWAYS, vectors 0..3 unrowed, DMT under a frozen trap
+(m88kexcfrozendmt), SSBR, fcr2/4/5, first-exception SFU1 (m88kexcsfu1), the dslot ARCHITECTURAL values (m88kdslotshadow),
+exact INFO (only "not ERROR/WARNING" is pinned).  **Name a cell in that enumeration with no row, or a body-tested lvalue the
+enumeration omits, or say CLOSE with your own denominator.**  One ask-again is already spent (pass 2); this pass is the repair's
+own review, not a new hunt -- but if while verifying you find something ELSE, say so.
+
+VERDICT LINE FIRST (CLOSE THE CHAIN / ONE MORE REPAIR: <which> / DO NOT SHIP), then the two repairs each UPHOLD/OVERTURN/REFINE with
+a reason, then the SFD1 question, then anything else.  Keep it under a page: a packet-fed seat that spends its budget re-deriving
+the whole round burns out (glm did, twice).
+
+
+## OPERATIONAL RULE FOR EVERY SEAT (appended by panel.sh, not by the author)
+
+**Do not run `run.sh`, any `gate_*.sh`, or the battery.** Every measurement you need is
+inlined above. A gate takes minutes -- longer than your response budget -- and a second
+concurrent invocation corrupts the operator run in progress, because the gates share one
+log directory. A seat that runs a gate produces no review AND may invalidate someone
+else s. Building and running a single detector or mutant in your own temp directory is
+fine and encouraged; driving the harness is not.
+
+If you want a measurement that is not inlined, NAME IT and say why. Naming it is worth
+far more to this panel than a timeout.
+codex
+I’ll check the two repairs and the SFD1 comparison in `GXEMUL-SEC/src/`, using the supplied measurements. I won’t run the gates or battery.
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "Get-Location
+rg --files -g AGENTS.md -g cpu_m88k.c -g m88k_exc_probe.py -g '*m88k*' -g '*killtable4*' -g '*probe_v4*'" in C:\DocumentNoSnc\CC\GXEMUL
+ succeeded in 502ms:
+
+src\include\thirdparty\m88k_psl.h
+src\include\thirdparty\m88k_dmt.h
+src\include\cpu_m88k.h
+src\cpus\memory_m88k.c
+src\cpus\generate_m88k_loadstore.c
+src\cpus\generate_m88k_bcnd.c
+src\cpus\cpu_m88k_instr_loadstore.c
+src\cpus\cpu_m88k_instr.c
+src\cpus\cpu_m88k.c
+build\src\include\thirdparty\m88k_psl.h
+build\src\include\thirdparty\m88k_dmt.h
+est\src\include\thirdparty\m88k_psl.h
+est\src\include\thirdparty\m88k_dmt.h
+build\src\include\cpu_m88k.h
+est\src\include\cpu_m88k.h
+build-asan\src\include\thirdparty\m88k_psl.h
+build-asan\src\include\thirdparty\m88k_dmt.h
+build-asan\src\include\cpu_m88k.h
+build\src\cpus\tmp_m88k_tail.c
+build\src\cpus\tmp_m88k_loadstore.c
+build\src\cpus\tmp_m88k_head.c
+build\src\cpus\tmp_m88k_bcnd.c
+build\src\cpus\memory_m88k.o
+build\src\cpus\memory_m88k.c
+build\src\cpus\generate_m88k_loadstore.c
+build\src\cpus\generate_m88k_loadstore
+build\src\cpus\generate_m88k_bcnd.c
+build\src\cpus\generate_m88k_bcnd
+build\src\cpus\cpu_m88k_instr_loadstore.c
+build\src\cpus\cpu_m88k_instr.c
+build\src\cpus\cpu_m88k.o
+build\src\cpus\cpu_m88k.c
+est\src\cpus\tmp_m88k_tail.c
+est\src\cpus\tmp_m88k_loadstore.c
+est\src\cpus\tmp_m88k_head.c
+est\src\cpus\tmp_m88k_bcnd.c
+est\src\cpus\memory_m88k.c
+est\src\cpus\generate_m88k_loadstore.c
+est\src\cpus\generate_m88k_loadstore
+est\src\cpus\generate_m88k_bcnd.c
+est\src\cpus\generate_m88k_bcnd
+est\src\cpus\cpu_m88k_instr_loadstore.c
+est\src\cpus\cpu_m88k_instr.c
+est\src\cpus\cpu_m88k.c
+build-asan\src\cpus\tmp_m88k_tail.c
+build-asan\src\cpus\tmp_m88k_loadstore.c
+build-asan\src\cpus\tmp_m88k_head.c
+build-asan\src\cpus\tmp_m88k_bcnd.c
+build-asan\src\cpus\memory_m88k.o
+build-asan\src\cpus\memory_m88k.c
+build-asan\src\cpus\generate_m88k_loadstore.c
+build-asan\src\cpus\generate_m88k_loadstore
+build-asan\src\cpus\generate_m88k_bcnd.c
+build-asan\src\cpus\generate_m88k_bcnd
+build-asan\src\cpus\cpu_m88k_instr_loadstore.c
+build-asan\src\cpus\cpu_m88k_instr.c
+build-asan\src\cpus\cpu_m88k.o
+build-asan\src\cpus\cpu_m88k.c
+GXEMUL-SEC\regress\m88k_rounding_probe.py
+GXEMUL-SEC\regress\m88k_idle_probe.py
+GXEMUL-SEC\regress\m88k_exc_probe.py
+GXEMUL-SEC\regress\gate_m88k_rounding.sh
+GXEMUL-SEC\src\include\thirdparty\m88k_psl.h
+GXEMUL-SEC\src\include\thirdparty\m88k_dmt.h
+GXEMUL-SEC\src\cpus\tmp_m88k_tail.c
+GXEMUL-SEC\src\cpus\tmp_m88k_loadstore.c
+GXEMUL-SEC\src\cpus\tmp_m88k_head.c
+GXEMUL-SEC\src\cpus\tmp_m88k_bcnd.c
+GXEMUL-SEC\src\cpus\memory_m88k.o
+GXEMUL-SEC\src\cpus\memory_m88k.c
+GXEMUL-SEC\src\cpus\generate_m88k_loadstore.c
+GXEMUL-SEC\src\cpus\generate_m88k_loadstore
+GXEMUL-SEC\src\cpus\generate_m88k_bcnd.c
+GXEMUL-SEC\src\cpus\generate_m88k_bcnd
+GXEMUL-SEC\src\cpus\cpu_m88k_instr_loadstore.c
+GXEMUL-SEC\src\cpus\cpu_m88k_instr.c
+GXEMUL-SEC\src\cpus\cpu_m88k.o
+GXEMUL-SEC\src\cpus\cpu_m88k.c
+GXEMUL-SEC\src\include\cpu_m88k.h
+GXEMUL-SEC\regress\artifacts\m88kexcdeliver\probe_v4_head.out
+GXEMUL-SEC\regress\artifacts\m88kexcdeliver\probe_v4_fix_final.out
+GXEMUL-SEC\regress\artifacts\m88kexcdeliver\PRETABLE_m88kexc.out
+GXEMUL-SEC\regress\artifacts\m88kexcdeliver\killtable2\m88k_exc_probe.frozen2.py
+GXEMUL-SEC\regress\artifacts\m88kexcdeliver\killtable\m88k_exc_probe.frozen.py
+GXEMUL-SEC\regress\artifacts\m88kexcdeliver\brief_m88kexc_p2.md
+GXEMUL-SEC\regress\artifacts\m88kexcdeliver\brief_m88kexc_adj.md
+GXEMUL-SEC\regress\artifacts\m88kexcdeliver\pass1\brief_m88kexc_p1_v2.md
+GXEMUL-SEC\regress\artifacts\m88kexcdeliver\pass1\brief_m88kexc_p1.md
+GXEMUL-SEC\regress\artifacts\m88kexcdeliver\killtable4\m88k_exc_probe.frozen4.py
+GXEMUL-SEC\regress\artifacts\m88kexcdeliver\killtable3\m88k_exc_probe.frozen3.py
+_archive\audit-results-20260625_223818\test\functional_smoke\root-native_loader_m88k_aout.log
+_archive\audit-results-20260625_223818\test\functional_smoke\root-asanubsan_loader_m88k_aout.log
+_archive\audit-results-20260625_223818\test\functional_smoke\root-asanubsan_cpu_random_testm88k.log
+_archive\audit-results-20260625_223818\test\functional_smoke\est-native_loader_m88k_aout.log
+_archive\audit-results-20260625_223818\test\functional_smoke\est-debug_loader_m88k_aout.log
+_archive\audit-results-20260625_223818\test\functional_smoke\est-asanubsan_loader_m88k_aout.log
+_archive\audit-results-20260625_223818\test\functional_smoke\est-asanubsan_cpu_random_testm88k.log
+_archive\audit-results-20260625_223818\test\functional_smoke\cpu_blobs\root-asanubsan_testm88k.bin
+_archive\audit-results-20260625_223818\test\functional_smoke\cpu_blobs\est-asanubsan_testm88k.bin
+_archive\audit-results-20260625_223818\analysis\clang-tidy\root\src__cpus__memory_m88k.c.log
+_archive\audit-results-20260625_223818\analysis\clang-tidy\root\src__cpus__generate_m88k_loadstore.c.log
+_archive\audit-results-20260625_223818\analysis\clang-tidy\root\src__cpus__generate_m88k_bcnd.c.log
+_archive\audit-results-20260625_223818\analysis\clang-tidy\root\src__cpus__cpu_m88k_instr_loadstore.c.log
+_archive\audit-results-20260625_223818\analysis\clang-tidy\root\src__cpus__cpu_m88k_instr.c.log
+_archive\audit-results-20260625_223818\analysis\clang-tidy\root\src__cpus__cpu_m88k.c.log
+_archive\audit-results-20260625_223818\analysis\clang-tidy\est\src__cpus__memory_m88k.c.log
+_archive\audit-results-20260625_223818\analysis\clang-tidy\est\src__cpus__generate_m88k_loadstore.c.log
+_archive\audit-results-20260625_223818\analysis\clang-tidy\est\src__cpus__generate_m88k_bcnd.c.log
+_archive\audit-results-20260625_223818\analysis\clang-tidy\est\src__cpus__cpu_m88k_instr_loadstore.c.log
+_archive\audit-results-20260625_223818\analysis\clang-tidy\est\src__cpus__cpu_m88k_instr.c.log
+_archive\audit-results-20260625_223818\analysis\clang-tidy\est\src__cpus__cpu_m88k.c.log
+_archive\audit-results-20260625_220447\test\native_loader_m88k.log
+_archive\audit-results-20260625_220447\test\loader_smoke\native_m88k_aout.log
+_archive\audit-results-20260625_220447\test\loader_smoke\asanubsan_m88k_aout.log
+_archive\audit-results-20260625_232453\test\coverage\est-coverage_cpu_testm88k_005.log
+_archive\audit-results-20260625_232453\test\coverage\est-coverage_cpu_testm88k_004.log
+_archive\audit-results-20260625_232453\test\coverage\est-coverage_cpu_testm88k_003.log
+_archive\audit-results-20260625_232453\test\coverage\est-coverage_cpu_testm88k_002.log
+_archive\audit-results-20260625_232453\test\coverage\est-coverage_cpu_testm88k_001.log
+_archive\audit-results-20260625_232453\test\coverage\est-coverage_cpu_testm88k_000.log
+_archive\audit-results-20260625_232453\test\coverage\root-coverage_cpu_testm88k_015.log
+_archive\audit-results-20260625_232453\test\coverage\root-coverage_cpu_testm88k_014.log
+_archive\audit-results-20260625_232453\test\coverage\root-coverage_cpu_testm88k_013.log
+_archive\audit-results-20260625_232453\test\coverage\root-coverage_cpu_testm88k_012.log
+_archive\audit-results-20260625_232453\test\coverage\root-coverage_cpu_testm88k_011.log
+_archive\audit-results-20260625_232453\test\coverage\root-coverage_cpu_testm88k_010.log
+_archive\audit-results-20260625_232453\test\coverage\root-coverage_cpu_testm88k_009.log
+_archive\audit-results-20260625_232453\test\coverage\root-coverage_cpu_testm88k_008.log
+_archive\audit-results-20260625_232453\test\coverage\root-coverage_cpu_testm88k_007.log
+_archive\audit-results-20260625_232453\test\coverage\root-coverage_cpu_testm88k_006.log
+_archive\audit-results-20260625_232453\test\coverage\root-coverage_cpu_testm88k_005.log
+_archive\audit-results-20260625_232453\test\coverage\root-coverage_cpu_testm88k_004.log
+_archive\audit-results-20260625_232453\test\coverage\root-coverage_cpu_testm88k_003.log
+_archive\audit-results-20260625_232453\test\coverage\root-coverage_cpu_testm88k_002.log
+_archive\audit-results-20260625_232453\test\coverage\root-coverage_cpu_testm88k_001.log
+_archive\audit-results-20260625_232453\test\coverage\root-coverage_cpu_testm88k_000.log
+_archive\audit-results-20260625_232453\test\coverage\est-coverage_cpu_testm88k_015.log
+_archive\audit-results-20260625_232453\test\coverage\est-coverage_cpu_testm88k_014.log
+_archive\audit-results-20260625_232453\test\coverage\est-coverage_cpu_testm88k_013.log
+_archive\audit-results-20260625_232453\test\coverage\est-coverage_cpu_testm88k_012.log
+_archive\audit-results-20260625_232453\test\coverage\est-coverage_cpu_testm88k_011.log
+_archive\audit-results-20260625_232453\test\coverage\est-coverage_cpu_testm88k_010.log
+_archive\audit-results-20260625_232453\test\coverage\est-coverage_cpu_testm88k_009.log
+_archive\audit-results-20260625_232453\test\coverage\est-coverage_cpu_testm88k_008.log
+_archive\audit-results-20260625_232453\test\coverage\est-coverage_cpu_testm88k_007.log
+_archive\audit-results-20260625_232453\test\coverage\est-coverage_cpu_testm88k_006.log
+_archive\audit-results-20260625_232453\test\coverage\cpu_blobs\est_testm88k_013.bin
+_archive\audit-results-20260625_232453\test\coverage\cpu_blobs\est_testm88k_012.bin
+_archive\audit-results-20260625_232453\test\coverage\cpu_blobs\est_testm88k_011.bin
+_archive\audit-results-20260625_232453\test\coverage\cpu_blobs\est_testm88k_010.bin
+_archive\audit-results-20260625_232453\test\coverage\cpu_blobs\est_testm88k_009.bin
+_archive\audit-results-20260625_232453\test\coverage\cpu_blobs\est_testm88k_008.bin
+_archive\audit-results-20260625_232453\test\coverage\cpu_blobs\est_testm88k_007.bin
+_archive\audit-results-20260625_232453\test\coverage\cpu_blobs\est_testm88k_006.bin
+_archive\audit-results-20260625_232453\test\coverage\cpu_blobs\est_testm88k_005.bin
+_archive\audit-results-20260625_232453\test\coverage\cpu_blobs\est_testm88k_004.bin
+_archive\audit-results-20260625_232453\test\coverage\cpu_blobs\est_testm88k_003.bin
+_archive\audit-results-20260625_232453\test\coverage\cpu_blobs\est_testm88k_002.bin
+_archive\audit-results-20260625_232453\test\coverage\cpu_blobs\est_testm88k_001.bin
+_archive\audit-results-20260625_232453\test\coverage\cpu_blobs\est_testm88k_000.bin
+_archive\audit-results-20260625_232453\test\coverage\cpu_blobs\root_testm88k_015.bin
+_archive\audit-results-20260625_232453\test\coverage\cpu_blobs\root_testm88k_014.bin
+_archive\audit-results-20260625_232453\test\coverage\cpu_blobs\root_testm88k_013.bin
+_archive\audit-results-20260625_232453\test\coverage\cpu_blobs\root_testm88k_012.bin
+_archive\audit-results-20260625_232453\test\coverage\cpu_blobs\root_testm88k_011.bin
+_archive\audit-results-20260625_232453\test\coverage\cpu_blobs\root_testm88k_010.bin
+_archive\audit-results-20260625_232453\test\coverage\cpu_blobs\root_testm88k_009.bin
+_archive\audit-results-20260625_232453\test\coverage\cpu_blobs\root_testm88k_008.bin
+_archive\audit-results-20260625_232453\test\coverage\cpu_blobs\root_testm88k_007.bin
+_archive\audit-results-20260625_232453\test\coverage\cpu_blobs\root_testm88k_006.bin
+_archive\audit-results-20260625_232453\test\coverage\cpu_blobs\root_testm88k_005.bin
+_archive\audit-results-20260625_232453\test\coverage\cpu_blobs\root_testm88k_004.bin
+_archive\audit-results-20260625_232453\test\coverage\cpu_blobs\root_testm88k_003.bin
+_archive\audit-results-20260625_232453\test\coverage\cpu_blobs\root_testm88k_002.bin
+_archive\audit-results-20260625_232453\test\coverage\cpu_blobs\root_testm88k_001.bin
+_archive\audit-results-20260625_232453\test\coverage\cpu_blobs\root_testm88k_000.bin
+_archive\audit-results-20260625_232453\test\coverage\cpu_blobs\est_testm88k_015.bin
+_archive\audit-results-20260625_232453\test\coverage\cpu_blobs\est_testm88k_014.bin
+_scratchpad\m88kexc\probe_v4_head.out
+_scratchpad\m88kexc\probe_v4_fix_final.out
+_scratchpad\m88kexc\PRETABLE_m88kexc.out
+_scratchpad\brief_m88k.md
+_scratchpad\m88kexc\m88k_exc_probe_v2.py
+_scratchpad\m88kexc\m88k_exc_probe_v1.py
+_scratchpad\m88kexc\m88k_exc_probe.v4.frozen.py
+_scratchpad\m88kexc\m88k_exc_probe.v3.frozen.py
+_scratchpad\m88kexc\m88k_exc_probe.py
+_scratchpad\m88kexc\killtable4b\m88k_exc_probe.frozen4.py
+_scratchpad\m88kexc\killtable4\m88k_exc_probe.frozen4.py
+_scratchpad\m88kexc\killtable3\m88k_exc_probe.frozen3.py
+_scratchpad\m88kexc\killtable2\m88k_exc_probe.frozen2.py
+_scratchpad\m88kexc\killtable\m88k_exc_probe.frozen.py
+_scratchpad\m88kexc\brief_m88kexc_p4.md
+_scratchpad\m88kexc\brief_m88kexc_p2.md
+_scratchpad\m88kexc\brief_m88kexc_p1_v2.md
+_scratchpad\m88kexc\brief_m88kexc_p1.md
+_scratchpad\m88kexc\brief_m88kexc_adj.md
+_scratchpad\seat500_p9\tree\src\include\thirdparty\m88k_psl.h
+_scratchpad\seat500_p9\tree\src\include\thirdparty\m88k_dmt.h
+_scratchpad\seat500_p9\tree\src\include\cpu_m88k.h
+_scratchpad\seat500_p9\tree\src\cpus\tmp_m88k_tail.c
+_scratchpad\seat500_p9\tree\src\cpus\tmp_m88k_loadstore.c
+_scratchpad\seat500_p9\tree\src\cpus\tmp_m88k_head.c
+_scratchpad\seat500_p9\tree\src\cpus\tmp_m88k_bcnd.c
+_scratchpad\seat500_p9\tree\src\cpus\memory_m88k.o
+_scratchpad\seat500_p9\tree\src\cpus\memory_m88k.c
+_scratchpad\seat500_p9\tree\src\cpus\generate_m88k_loadstore.c
+_scratchpad\seat500_p9\tree\src\cpus\generate_m88k_loadstore
+_scratchpad\seat500_p9\tree\src\cpus\generate_m88k_bcnd.c
+_scratchpad\seat500_p9\tree\src\cpus\generate_m88k_bcnd
+_scratchpad\seat500_p9\tree\src\cpus\cpu_m88k_instr_loadstore.c
+_scratchpad\seat500_p9\tree\src\cpus\cpu_m88k_instr.c
+_scratchpad\seat500_p9\tree\src\cpus\cpu_m88k.o
+_scratchpad\seat500_p9\tree\src\cpus\cpu_m88k.c
+_scratchpad\probe_m88k_trnc.py
+_scratchpad\probe_m88k_rm.py
+_scratchpad\probe_m88k_int.py
+_scratchpad\panel_20260830_214609\kimi_q1\build_mutant\src\include\thirdparty\m88k_psl.h
+_scratchpad\panel_20260830_214609\kimi_q1\build_mutant\src\include\thirdparty\m88k_dmt.h
+_scratchpad\panel_20260830_214609\kimi_q1\build_mutant\src\include\cpu_m88k.h
+_scratchpad\panel_20260830_214609\kimi_q1\build_mutant\src\cpus\tmp_m88k_tail.c
+_scratchpad\panel_20260830_214609\kimi_q1\build_mutant\src\cpus\tmp_m88k_loadstore.c
+_scratchpad\panel_20260830_214609\kimi_q1\build_mutant\src\cpus\tmp_m88k_head.c
+_scratchpad\panel_20260830_214609\kimi_q1\build_mutant\src\cpus\tmp_m88k_bcnd.c
+_scratchpad\panel_20260830_214609\kimi_q1\build_mutant\src\cpus\memory_m88k.o
+_scratchpad\panel_20260830_214609\kimi_q1\build_mutant\src\cpus\memory_m88k.c
+_scratchpad\panel_20260830_214609\kimi_q1\build_mutant\src\cpus\generate_m88k_loadstore.c
+_scratchpad\panel_20260830_214609\kimi_q1\build_mutant\src\cpus\generate_m88k_loadstore
+_scratchpad\panel_20260830_214609\kimi_q1\build_mutant\src\cpus\generate_m88k_bcnd.c
+_scratchpad\panel_20260830_214609\kimi_q1\build_mutant\src\cpus\generate_m88k_bcnd
+_scratchpad\panel_20260830_214609\kimi_q1\build_mutant\src\cpus\cpu_m88k_instr_loadstore.c
+_scratchpad\panel_20260830_214609\kimi_q1\build_mutant\src\cpus\cpu_m88k_instr.c
+_scratchpad\panel_20260830_214609\kimi_q1\build_mutant\src\cpus\cpu_m88k.o
+_scratchpad\panel_20260830_214609\kimi_q1\build_mutant\src\cpus\cpu_m88k.c
+_guest-src-openbsd22\sys\arch\mvme88k\machine\va-m88k.h
+_guest-src-openbsd22\sys\arch\mvme88k\include\va-m88k.h
+_archive\audit-results-20260625_203645\builds\orig-asan\src\include\thirdparty\m88k_psl.h
+_archive\audit-results-20260625_203645\builds\orig-asan\src\include\thirdparty\m88k_dmt.h
+_archive\audit-results-20260625_203645\builds\orig-asan\src\include\cpu_m88k.h
+_archive\audit-results-20260625_203645\builds\orig-asan\src\cpus\tmp_m88k_tail.c
+_archive\audit-results-20260625_203645\builds\orig-asan\src\cpus\tmp_m88k_loadstore.c
+_archive\audit-results-20260625_203645\builds\orig-asan\src\cpus\tmp_m88k_head.c
+_archive\audit-results-20260625_203645\builds\orig-asan\src\cpus\tmp_m88k_bcnd.c
+_archive\audit-results-20260625_203645\builds\orig-asan\src\cpus\memory_m88k.c
+_archive\audit-results-20260625_203645\builds\orig-asan\src\cpus\generate_m88k_loadstore.c
+_archive\audit-results-20260625_203645\builds\orig-asan\src\cpus\generate_m88k_loadstore
+_archive\audit-results-20260625_203645\builds\orig-asan\src\cpus\generate_m88k_bcnd.c
+_archive\audit-results-20260625_203645\builds\orig-asan\src\cpus\generate_m88k_bcnd
+_archive\audit-results-20260625_203645\builds\orig-asan\src\cpus\cpu_m88k_instr_loadstore.c
+_archive\audit-results-20260625_203645\builds\orig-asan\src\cpus\cpu_m88k_instr.c
+_archive\audit-results-20260625_203645\builds\orig-asan\src\cpus\cpu_m88k.c
+_archive\audit-results-20260625_203645\builds\est-asanonly\src\include\thirdparty\m88k_psl.h
+_archive\audit-results-20260625_203645\builds\est-asanonly\src\include\thirdparty\m88k_dmt.h
+_archive\audit-results-20260625_203645\builds\est-asanonly\src\include\cpu_m88k.h
+_archive\audit-results-20260625_203645\builds\est-asanonly\src\cpus\tmp_m88k_tail.c
+_archive\audit-results-20260625_203645\builds\est-asanonly\src\cpus\tmp_m88k_loadstore.c
+_archive\audit-results-20260625_203645\builds\est-asanonly\src\cpus\tmp_m88k_head.c
+_archive\audit-results-20260625_203645\builds\est-asanonly\src\cpus\tmp_m88k_bcnd.c
+_archive\audit-results-20260625_203645\builds\est-asanonly\src\cpus\memory_m88k.c
+_archive\audit-results-20260625_203645\builds\est-asanonly\src\cpus\generate_m88k_loadstore.c
+_archive\audit-results-20260625_203645\builds\est-asanonly\src\cpus\generate_m88k_loadstore
+_archive\audit-results-20260625_203645\builds\est-asanonly\src\cpus\generate_m88k_bcnd.c
+_archive\audit-results-20260625_203645\builds\est-asanonly\src\cpus\generate_m88k_bcnd
+_archive\audit-results-20260625_203645\builds\est-asanonly\src\cpus\cpu_m88k_instr_loadstore.c
+_archive\audit-results-20260625_203645\builds\est-asanonly\src\cpus\cpu_m88k_instr.c
+_archive\audit-results-20260625_203645\builds\est-asanonly\src\cpus\cpu_m88k.c
+_guest-src-openbsd22\gnu\usr.bin\gas\opcode\m88k.h
+_guest-src-openbsd22\gnu\usr.bin\gas\config\tc-m88k.h
+_guest-src-openbsd22\gnu\usr.bin\gas\config\tc-m88k.c
+_guest-src-openbsd22\gnu\usr.bin\binutils\opcodes\m88k-dis.c
+_guest-src-openbsd22\gnu\usr.bin\binutils\ld\scripttempl\m88kbcs.sc
+_guest-src-openbsd22\gnu\usr.bin\binutils\ld\emultempl\m88kbcs.em
+_guest-src-openbsd22\gnu\usr.bin\binutils\ld\emulparams\m88kbcs.sh
+_guest-src-openbsd22\gnu\usr.bin\binutils\include\opcode\m88k.h
+_guest-src-openbsd22\gnu\usr.bin\binutils\include\coff\m88k.h
+_guest-src-openbsd22\gnu\usr.bin\binutils\bfd\m88kmach3.c
+_guest-src-openbsd22\gnu\usr.bin\binutils\bfd\hosts\m88kmach3.h
+_guest-src-openbsd22\gnu\usr.bin\binutils\bfd\elf32-m88k.c
+_guest-src-openbsd22\gnu\usr.bin\binutils\bfd\coff-m88k.c
+_guest-src-openbsd22\gnu\usr.bin\gcc\ginclude\va-m88k.h
+_guest-src-openbsd22\gnu\usr.bin\binutils\bfd\cpu-m88k.c
+_guest-src-openbsd22\gnu\usr.bin\binutils\gas\config\tc-m88k.h
+_guest-src-openbsd22\gnu\usr.bin\binutils\gas\config\tc-m88k.c
+_guest-src-openbsd22\gnu\usr.bin\binutils\gas\config\m88kcoff.mt
+_guest-src-openbsd22\gnu\usr.bin\binutils\gas\config\m88k-opcode.h
+_guest-src-openbsd22\gnu\usr.bin\binutils\gdb\m88k-nat.c
+_guest-src-openbsd22\gnu\usr.bin\binutils\gdb\config\m88k\xm-m88k.h
+_guest-src-openbsd22\gnu\usr.bin\binutils\gdb\config\m88k\tm-m88k.h
+_guest-src-openbsd22\gnu\usr.bin\binutils\gdb\config\m88k\nm-m88k.h
+_guest-src-openbsd22\gnu\usr.bin\binutils\gdb\config\m88k\m88k.mt
+_guest-src-openbsd22\gnu\usr.bin\binutils\gdb\config\m88k\m88k.mh
+_guest-src-openbsd22\gnu\usr.bin\binutils\gdb\m88k-tdep.c
+_guest-src-openbsd22\gnu\usr.bin\gcc\config\m88k\xm-m88k.h
+_guest-src-openbsd22\gnu\usr.bin\gcc\config\m88k\t-m88k-gas
+_guest-src-openbsd22\gnu\usr.bin\gcc\config\m88k\t-m88k
+_guest-src-openbsd22\gnu\usr.bin\gcc\config\m88k\m88k.md
+_guest-src-openbsd22\gnu\usr.bin\gcc\config\m88k\m88k.h
+_guest-src-openbsd22\gnu\usr.bin\gcc\config\m88k\m88k.c
+_guest-src-openbsd22\gnu\usr.bin\gcc\config\m88k\m88k-move.sh
+_guest-src-openbsd22\gnu\usr.bin\gcc\config\m88k\m88k-coff.h
+_guest-src-openbsd22\gnu\usr.bin\gcc\config\m88k\m88k-aout.h
+Path                      
+----                      
+C:\DocumentNoSnc\CC\GXEMUL
+
+
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "Get-Content -LiteralPath regress/m88k_exc_probe.py
+rg -n -C 5 'm88k_exception|implemented|M88K_PSR_SFD1|running = false|M88K_EXCEPTION_MISALIGNED' src/cpus/cpu_m88k.c" in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'git rev-parse --short HEAD
+git diff --no-index -- regress/artifacts/m88kexcdeliver/killtable3/m88k_exc_probe.frozen3.py regress/m88k_exc_probe.py
+Get-FileHash -Algorithm MD5 -LiteralPath regress/m88k_exc_probe.py
+Get-Content -LiteralPath regress/artifacts/m88kexcdeliver/probe_v4_head.out,regress/artifacts/m88kexcdeliver/probe_v4_fix_final.out' in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$reviewPaths = @('"'C:\\AGENTS.md','C:\\DocumentNoSnc\\AGENTS.md','C:\\DocumentNoSnc\\CC\\AGENTS.md','C:\\DocumentNoSnc\\CC\\GXEMUL\\AGENTS.md','C:\\DocumentNoSnc\\CC\\GXEMUL\\GXEMUL-SEC\\AGENTS.md')
+foreach ("'$reviewPath in $reviewPaths) { if (Test-Path -LiteralPath $reviewPath) { Write-Output $reviewPath; Get-Content -LiteralPath $reviewPath } }
+rg --files --hidden -g AGENTS.md GXEMUL-SEC/regress GXEMUL-SEC/src' in C:\DocumentNoSnc\CC\GXEMUL
+ exited 1 in 273ms:
+ succeeded in 360ms:
+#!/usr/bin/env python3
+"""m88kexcdeliver -- rung-3 witness AND detector: does the m88k exception core DELIVER a trap-like
+exception (vector entry reached, shadow registers right, machine still running), or stop the machine?
+
+`cpu_m88k.c`'s exception switch marks only RESET / INTERRUPT / INSTRUCTION_ACCESS / DATA_ACCESS
+`implemented`; every other vector below M88K_EXCEPTION_USER_TRAPS_START falls to a fallback that
+prints `unimplemented vector=0x%03x` and sets `running = false` on EVERY guest CPU.  The vector-
+specific tail switch then has a `default:` that stops THIS cpu with `internal error` -- so a fix
+needs BOTH `implemented = true` AND a tail arm (the naive one-site fix was MEASURED to halt, pass 1).
+Real hardware delivers VBR + 8*vector (MC88100 UM Table 6-1, mc88100.txt:8524-8538) and the guest OS
+turns it into a signal; rte resumes at SNIP (:8983-8985), the destination register is unchanged
+(6.6 :9305-9308; 6.8.3 :10300-10305).
+
+Cold-debugger probe on the COMMITTED `testm88k` machine (no machine or device edits).  Per row: a
+guest program at 0x10000 planted with `put w` (liveness marker `addu r9,r0,r10` first), registers
+seeded with `rN=`, a `br .` (c0000000) planted at every vector entry so a delivered exception spins
+rather than executing zeros, `breakpoint add <8*vector>`, `continue`, then `reg` and `reg 0,0`.
+
+  row        program (after the marker at 0x10000)                 raise                     entry
+  div0       divu r2,r3,r0            f4436800                    ILLEGAL_INTEGER_DIVIDE 8  0x40
+  ovf        add  r2,r3,r4 (7fffffff+1) f4437004                  INTEGER_OVERFLOW 9        0x48
+  misalign   ld   r2,r3,0 (r3 odd)    14430000 (major opcode 5)   MISALIGNED_ACCESS 4       0x20
+  bounds     tb1  0,r3,7 (r3=1)       f003d807  supervisor trap   BOUNDS_CHECK 7            0x38
+  priv       stcr r3,cr1 (r3=0x2: MODE clear) 80038023; ldcr r2,cr1 80404020   PRIVILEGE 6  0x30
+  privtb     stcr r3,cr1; tb1 0,r4,8 (f004d808) in user mode      PRIVILEGE 6               0x30
+  unimpl     stcr r3,cr1; prom_call f400fc92 in user mode         UNIMPLEMENTED_OPCODE 5    0x28
+  error      div0 whose handler at 0x40 is a misaligned ld: the 2nd fault with SFRZ set re-routes
+             to ERROR 10                                                                    0x50
+  dslot      br.n +16 (c4000004) with divu r2,r3,r0 in its delay slot -> the else-arm of the
+             delay-slot branch (SNIP = pc+4 = 0x1000c, SFIP = delay_target = 0x10014 -- two
+             DIFFERENT numbers; with br.n +8 both were 0x1000e and the SFIP channel was vacuous)  ILLEGAL_INTEGER_DIVIDE 0x40
+             *** THIS ROW PINS THE ELSE-ARM AS IMPLEMENTED, NOT AS THE MANUAL'S CONTRACT.  Table 6-3 (shadows copy
+             XIP/NIP/FIP: for a fault in the delay slot of a taken br.n, NIP = target, FIP = target+4) and X(rte)'s
+             `fip != nip + 4' arm say the else-arm returns WRONG (codex, grok, pass 2: the fallthrough executes
+             before the target).  Pre-existing, out of this diff's scope, filed as m88kdslotshadow; when that round
+             lands this row is RE-PINNED FIRST (oracle-correction rule: re-pin, measure HEAD red, then fix). ***
+  errortb    tb1  0,r3,10 (r3=1)      f003d80a  supervisor trap naming ERROR (10) directly -- the
+             only route to switch 1's ERROR arm (the double-fault route enters at the re-route AFTER
+             switch 1, so it cannot see that arm: M_ERRORDROP escaped the error row 9/9, table 1)  0x50
+  misaligntb/unimpltb/div0tb/ovftb   tb1 0,r3,{4,5,8,9} (f003d804/05/08/09), supervisor: the TRAP
+             ROUTE into switch 1 for the four classes whose other rows arrive by instruction --
+             `if (!is_trap) implemented = true' escapes those rows (grok, deepseek, pass 2)  0x20/0x28/0x40/0x48
+  vbrtb      stcr r5,cr7 (800580e5, r5=0x2000) then tb1 0,r3,7: the vector table RELOCATED -> entry
+             0x2038, not 0x38.  Every other row runs with VBR == 0, so `pc = 8*vector' (VBR dropped)
+             was a 10/10 escape (Opus, pass 2).  The one ANCHORED row: it alone reds if the table moves.  0x2038
+  trapfrozen div0 whose handler at 0x40 is tb1 0,r3,7 (r3=0x11): a TRAP with SFRZ already set is NOT
+             re-routed to ERROR (UM :8633-8636, 6.10 :10613-10614) -- it delivers to 0x38 with the
+             shadows still frozen.  `if (!is_trap)' -> `if (true)' was a 10/10 escape (Opus, pass 2)  0x38
+  privsuptb  tb1 0,r3,6 (f003d806) in SUPERVISOR mode: the trap route into PRIVILEGE_VIOLATION.  privtb is
+             NOT that route -- the user-mode filter in X(tb0) raises PRIVILEGE with is_trap == 0, so
+             `implemented = !is_trap' on the PRIVILEGE arm left priv AND privtb green (codex, glm: pass 2)  0x30
+  usertb     tb1 0,r3,128 (f003d880): the first USER trap vector, delivered by the pre-existing code to
+             0x400.  Pins the tail switch's `< USER_TRAPS_START' guard: `<=' sends 128 into the tail
+             default and stops the cpu (codex's one-character escape, pass 2)                       0x400
+  resid50    tb1 0,r3,50 (f003d832): a residual vector.  EXPECTED RESULT = HALT (the fallback, by design).
+             Negative control: the shipped form must NOT deliver it (rejected D4 would)             (0x190)
+  sfu1h      div0 whose handler at 0x40 is a LEGAL divu r6,r5,r4: with SFD1 set the divide raises
+             SFU1_PRECISE (114), which halts at the FALLBACK (it runs before the SFRZ re-route).  EXPECTED
+             RESULT = HALT naming vector 0x072, with pc == 0x40 (the first delivery happened -- on HEAD the
+             first divu halts and this row reads BADREGS stage1).  With the fallback off (M_DELIVERALL) the
+             nested SFU1 is RE-ROUTED TO ERROR (0x50), not delivered to 0x390: the row reds as STOP.  So it
+             pins 'SFU1 inside a handler still halts', NOT 'SFU1 is not delivered to its vector' -- the
+             first-exception SFU1 route is row m88kexcsfu1's (grok, kimi, pass 3)                    (0x390)
+  udiv0      stcr r3,cr1 (r3=0x2: user mode) then divu r2,r3,r0: the fallback comment's own sentence,
+             'one user-mode divu by zero ended the emulation', measured literally; also pins that user mode
+             with SFD1 CLEAR yields vector 8, not SFU1 (the m88kexcsfu1 boundary)              ILLEGAL_INTEGER_DIVIDE 0x40
+  indclr     stcr r5,cr1 (r5=0x80000000: MODE only, IND CLEAR) then add 7fffffff+1: the exception path must
+             SET IND (PSR 0x8000000b from 0x80000000; EPSR 0x80000000).  Every other row's pre-fault PSR already
+             has IND, so `| M88K_PSR_IND' was unobservable -- the carry shape again (grok, codex, pass 3)     0x48
+  ovfc       stcr r5,cr1 (80058025, r5=0x90000002: C set) then add 7fffffff+1: the carry bit must
+             SURVIVE the exception path (UM 6.6) -> PSR 0x9000000b, EPSR 0x90000002.  Every other
+             row's pre-fault C is 0, so PSR == 0x8000000b pinned 'C not set', never 'C unchanged'  0x48
+  live       divu r2,r3,r4  (r3=0x60, r4=0x10) -> r2 = 6           none      LIVENESS control
+  attrib     divu r2,r3,r4  (r3=0x10, r4=0x10) -> r2 = 1           none      ATTRIBUTION control
+  selftest   no program: `reg 0,0` at reset must parse PSR == 0x80000002 (the CR parse works)
+
+RESULT per fault row (the classifier tests the STOP channel before pc, deliberately: the naive fix
+sets pc = entry and THEN stops, so pc alone cannot tell it from delivery):
+  HALT       `unimplemented vector=` printed AND the machine stopped (both observed, pass 3); an
+             expected-HALT row (resid50, sfu1h) must also see ITS vector named in the diagnostic
+  TAILHALT   `internal error` printed and the machine stopped (the naive fix's shape)
+  STOP       the machine stopped for another reason (e.g. a wrong vector base landed in zeros)
+  BADREGS    the entry breakpoint fired but a shadow-register/PSR/destination assert failed, or
+             (bad=level) the transcript carried an `exception <CLASS>' line: the class printed at ERROR
+             level, which the fork's default WARNING verbosity shows and INFO does not (kills M_LEVEL)
+  (rows resid50 and sfu1h EXPECT HALT: the fallback stopping the machine is the correct answer there)
+  DELIVER    entry breakpoint fired, machine running, and every assert holds:
+             pc == entry, SXIP == fault_pc|V, SNIP, SFIP, PSR == 0x8000000b (SFRZ|IND|SFD1|MODE),
+             EPSR == the pre-fault PSR (0x80000002 supervisor rows; 0x00000002 user-mode rows),
+             r2 unchanged (0xdeadbeef)
+  NOSTART    the liveness marker never ran
+Controls print DONE (r2 == the expected quotient, machine running) or a failure word.
+
+Output: one `M88KEXC_ROW=<name> RESULT=<word> ...` line per row, `M88KEXC_RESULT=<delivered>/<fault rows>`,
+`M88KEXC_SELFTEST=OK|FAIL`, `M88KEXC_DONE`.  Set M88KEXC_VERBOSE=1 for transcripts.
+
+CONTRACT (clause e): catches a class returned to the fallback (HALT) by either route (instruction rows
+and the *tb trap rows); a class reaching the tail default (TAILHALT); a wrong vector SCALING (M_VEC4,
+M_VEC7: STOP) and a DROPPED vector base (vbrtb: STOP); a stale SXIP/SNIP/SFIP; a wrong PSR, including a
+cleared carry (ovfc); a dropped IND (indclr); the debugmsg LEVEL regression to ERROR/WARNING (bad=level on any
+delivered row: those print at the post-startup WARNING floor, INFO and DEBUG do not -- so exact INFO is NOT pinned,
+only 'not ERROR/WARNING' -- M_LEVEL; codex, pass 3); a skipped EPSR save; a skipped supervisor switch (the user-mode rows: EPSR MODE
+clear vs PSR MODE set); a wrong return address; the delay-slot else-arm's SFIP source (dslot, +16
+geometry); a trap re-routed to ERROR while frozen (trapfrozen); a written destination.  Does NOT catch:
+fcr2/fcr4/fcr5; scoreboard (SSBR) bits; DMT contents; the post-delivery
+`cpu->delay_slot' write on the NON-delay path (M_DELAYALWAYS: needs a second UNFROZEN exception -- filed);
+vectors 0..3's tail arms (no row: M_TAILOFF -- filed); vectors 11..113 and 116..127 (fallback halts by
+design); SFU1 (114/115, row m88kexcsfu1); `implemented = is_trap' on BOUNDS/ERROR (EQUIVALENT today: no
+instruction raises 7 or 10 -- becomes live when tbnd lands, row m88ktbnd).
+"""
+import os, pty, re, select, struct, sys, time
+
+BIN = sys.argv[1] if len(sys.argv) > 1 else "/tmp/gxsec-build/gxemul"
+CODE = 0x10000
+DATA = 0x20000
+XIP_V = 0x2
+PSR_RESET = 0x80000002          # MODE | IND (cpu_m88k.c: cr[PSR] = M88K_PSR_MODE | M88K_PSR_IND)
+PSR_EXC = 0x8000000b            # MODE | SFD1 | IND | SFRZ after the common path
+PSR_USER = 0x00000002           # IND only: what the user-mode rows write via stcr
+
+def tri(sub, d, s1, s2):
+    return 0xf4000000 | (d << 21) | (s1 << 16) | (sub << 8) | s2
+
+MARK = tri(0x60, 9, 0, 10)                       # addu r9,r0,r10  -> r9 = 0x12345678 (liveness)
+SELF = 0xc0000000                                # br . (disp 0)
+DIVU_R2_R3_R0 = tri(0x68, 2, 3, 0)               # f4436800
+DIVU_R2_R3_R4 = tri(0x68, 2, 3, 4)               # f4436804
+DIVU_R6_R5_R4 = tri(0x68, 6, 5, 4)               # f4c56804 -- a LEGAL divide inside a handler: SFD1 is set there, so X(divu) raises
+                                                 #   SFU1_PRECISE (114) before it looks at the divisor -> the fallback must still HALT
+ADD_R2_R3_R4 = tri(0x70, 2, 3, 4)                # f4437004
+LD_R2_R3_0 = 0x14000000 | (2 << 21) | (3 << 16)  # 14430000 (major opcode 5, ld)
+TB1_0_R3_7 = 0xf003d807                          # tb1 0,r3,7   (computed vector 7, supervisor)
+TB1_0_R4_8 = 0xf004d808                          # tb1 0,r4,8
+TB1_0_R3_10 = 0xf003d80a
+TB1_0_R3_4 = 0xf003d804                          # tb1 0,r3,4   -- a supervisor trap naming MISALIGNED_ACCESS (4) directly
+TB1_0_R3_5 = 0xf003d805                          # tb1 0,r3,5   -- naming UNIMPLEMENTED_OPCODE (5)
+TB1_0_R3_8 = 0xf003d808                          # tb1 0,r3,8   -- naming ILLEGAL_INTEGER_DIVIDE (8)
+TB1_0_R3_9 = 0xf003d809                          # tb1 0,r3,9   -- naming INTEGER_OVERFLOW (9)
+TB1_0_R3_6 = 0xf003d806                          # tb1 0,r3,6   -- naming PRIVILEGE_VIOLATION (6): the user-mode tb1 filter raises
+                                                 #   PRIVILEGE with is_trap == 0 (cpu_m88k_instr.c X(tb0)), so privtb is NOT the trap route
+TB1_0_R3_128 = 0xf003d880                        # tb1 0,r3,128 -- the first USER trap vector: delivered by the pre-existing code (entry 0x400)
+TB1_0_R3_50 = 0xf003d832                         # tb1 0,r3,50  -- a RESIDUAL vector (11..113): must still HALT (negative control vs D4)
+#  The four *tb rows are the TRAP ROUTE into switch 1 for the classes whose other rows arrive by INSTRUCTION
+#  (is_trap == 0).  Pass-2 seats (grok, deepseek, independently) predicted `if (!is_trap) implemented = true;'
+#  escapes the instruction rows for MISALIGNED/UNIMPL/DIV0/OVF; these rows are the ones that redden it (M_ISTRAP).
+                         # tb1 0,r3,10  (a supervisor trap naming vector 10 = ERROR directly)
+STCR_R3_CR1 = 0x80038023                         # stcr r3,cr1 (PSR)
+STCR_R5_CR1 = 0x80058025                         # stcr r5,cr1 (PSR)  -- same format: 0x80000000 | S1<<16 | 0x8000 | CR<<5 | S1
+STCR_R5_CR7 = 0x800580e5                         # stcr r5,cr7 (VBR)
+PSR_CARRY = 0x90000002                           # MODE | C | IND: the ovfc row's pre-fault PSR (C = bit 28, UM 6.6 'carry bit unchanged')
+PSR_INDCLR = 0x80000000                          # MODE only, IND CLEAR: the indclr row's pre-fault PSR -- every other row starts with IND
+                                                 #   already set, so `| M88K_PSR_IND' in the exception-path PSR write was unobservable (grok, codex, pass 3)
+VBR_TEST = 0x2000                                # the vbrtb row relocates the vector table here (OpenBSD relocates its own)
+LDCR_R2_CR1 = 0x80404020                         # ldcr r2,cr1
+PROM_CALL = 0xf400fc92                           # M88K_PROM_INSTR
+BR_N_PLUS8 = 0xc4000002
+BR_N_PLUS16 = 0xc4000004                         # br.n +16: delay_target (slot+8) != slot_pc+4, so SNIP and SFIP are DIFFERENT numbers                          # br.n +2 words
+
+V_MISALIGN, V_UNIMPL, V_PRIV, V_BOUNDS, V_DIV0, V_OVF, V_ERROR = 4, 5, 6, 7, 8, 9, 10
+V_SFU1 = 114
+V_USER0 = 128
+V_RESID = 50
+VECTORS = (V_MISALIGN, V_UNIMPL, V_PRIV, V_BOUNDS, V_DIV0, V_OVF, V_ERROR, V_SFU1, V_USER0, V_RESID)
+
+# name, program words after MARK, regs, vector, fault_pc, epsr, handler words at the div0 entry (None = br .)
+ROWS = [
+    ("div0",     [DIVU_R2_R3_R0],               {"r3": 0x10},                    V_DIV0,     0x10004, PSR_RESET, None),
+    ("ovf",      [ADD_R2_R3_R4],                {"r3": 0x7fffffff, "r4": 1},     V_OVF,      0x10004, PSR_RESET, None),
+    ("misalign", [LD_R2_R3_0],                  {"r3": DATA + 1},                V_MISALIGN, 0x10004, PSR_RESET, None),
+    ("bounds",   [TB1_0_R3_7],                  {"r3": 1},                       V_BOUNDS,   0x10004, PSR_RESET, None),
+    ("priv",     [STCR_R3_CR1, LDCR_R2_CR1],    {"r3": PSR_USER},                V_PRIV,     0x10008, PSR_USER,  None),
+    ("privtb",   [STCR_R3_CR1, TB1_0_R4_8],     {"r3": PSR_USER, "r4": 1},       V_PRIV,     0x10008, PSR_USER,  None),
+    ("unimpl",   [STCR_R3_CR1, PROM_CALL],      {"r3": PSR_USER},                V_UNIMPL,   0x10008, PSR_USER,  None),
+    ("error",    [DIVU_R2_R3_R0],               {"r3": 0x10, "r5": DATA + 1},    V_ERROR,    0x10004, PSR_RESET,
+                 [0x14000000 | (6 << 21) | (5 << 16)]),       # handler at 0x40: ld r6,r5,0 with r5 odd -> 2nd fault
+    ("dslot",    [BR_N_PLUS16, DIVU_R2_R3_R0],  {"r3": 0x10},                    V_DIV0,     0x10008, PSR_RESET, None),
+    ("errortb",  [TB1_0_R3_10],                 {"r3": 1},                       V_ERROR,    0x10004, PSR_RESET, None),
+    ("misaligntb", [TB1_0_R3_4],                {"r3": 1},                       V_MISALIGN, 0x10004, PSR_RESET, None),
+    ("unimpltb", [TB1_0_R3_5],                  {"r3": 1},                       V_UNIMPL,   0x10004, PSR_RESET, None),
+    ("div0tb",   [TB1_0_R3_8],                  {"r3": 1},                       V_DIV0,     0x10004, PSR_RESET, None),
+    ("ovftb",    [TB1_0_R3_9],                  {"r3": 1},                       V_OVF,      0x10004, PSR_RESET, None),
+    ("vbrtb",    [STCR_R5_CR7, TB1_0_R3_7],     {"r3": 1, "r5": VBR_TEST},       V_BOUNDS,   0x10008, PSR_RESET, None),
+    ("trapfrozen", [DIVU_R2_R3_R0],             {"r3": 0x11},                    V_BOUNDS,   0x10004, PSR_RESET,
+                 [TB1_0_R3_7]),                               # handler at 0x40: tb1 0,r3,7 with SFRZ set -> a TRAP is not re-routed to ERROR
+    ("ovfc",     [STCR_R5_CR1, ADD_R2_R3_R4],   {"r3": 0x7fffffff, "r4": 1, "r5": PSR_CARRY}, V_OVF, 0x10008, PSR_CARRY, None),
+    ("indclr",   [STCR_R5_CR1, ADD_R2_R3_R4],   {"r3": 0x7fffffff, "r4": 1, "r5": PSR_INDCLR}, V_OVF, 0x10008, PSR_INDCLR, None),
+    ("privsuptb", [TB1_0_R3_6],                 {"r3": 1},                       V_PRIV,     0x10004, PSR_RESET, None),
+    ("udiv0",    [STCR_R3_CR1, DIVU_R2_R3_R0],  {"r3": PSR_USER},                V_DIV0,     0x10008, PSR_USER,  None),
+    ("usertb",   [TB1_0_R3_128],                {"r3": 1},                       V_USER0,    0x10004, PSR_RESET, None),
+    ("resid50",  [TB1_0_R3_50],                 {"r3": 1},                       V_RESID,    0x10004, PSR_RESET, None),
+    ("sfu1h",    [DIVU_R2_R3_R0],               {"r3": 0x10, "r5": 0x60, "r4": 0x10}, V_SFU1, 0x10004, PSR_RESET,
+                 [DIVU_R6_R5_R4]),                             # handler at 0x40: a legal divu with SFD1 set -> SFU1 (114) -> fallback HALT
+    ("live",     [DIVU_R2_R3_R4],               {"r3": 0x60, "r4": 0x10},        None,       None,    None,      None),
+    ("attrib",   [DIVU_R2_R3_R4],               {"r3": 0x10, "r4": 0x10},        None,       None,    None,      None),
+]
+EXPECT_R2 = {"live": 6, "attrib": 1}
+VBR_OF = {"vbrtb": VBR_TEST}                     # rows that relocate the vector table; every other row runs with VBR == 0
+#  NEGATIVE CONTROLS: rows whose CORRECT result is the fallback HALT.  They pin the boundary the diff keeps on purpose --
+#  vectors 11..113/116..127 and SFU1 (114/115) still stop the machine -- and separate the shipped D1 form from the rejected
+#  D4 (tail-default-delivers) and from delivering SFU1 (row m88kexcsfu1).  A mutant that delivers them turns these rows RED.
+EXPECT_RESULT = {"resid50": "HALT", "sfu1h": "HALT"}
+PSR_WANT = {"ovfc": 0x9000000b}                  # MODE | C | SFD1 | IND | SFRZ: carry PRESERVED through the exception path
+#  indclr wants the default PSR_EXC (0x8000000b): IND was CLEAR before the fault and must be SET by the exception path;
+#  EPSR keeps the pre-fault 0x80000000.  A write that drops `| M88K_PSR_IND' leaves 0x80000009 -> bad=psr.
+EXPECT_VECTOR = {"resid50": 0x032, "sfu1h": 0x072}   # the vector the fallback diagnostic must NAME for an expected-HALT row
+
+class Sess:
+    def __init__(self):
+        stub = "/tmp/gx_m88k_exc_%d.bin" % os.getpid()
+        with open(stub, "wb") as f:
+            f.write(struct.pack(">I", 0xf4005800))          # or r0,r0,r0 so the machine constructs
+        self.pid, self.fd = pty.fork()
+        if self.pid == 0:
+            os.execvp(BIN, [BIN, "-V", "-E", "testm88k", "-M", "64", "0x10000:%s" % stub])
+            os._exit(127)
+        self.buf = ""
+    def rd(self, t=0.4):
+        r, _, _ = select.select([self.fd], [], [], t)
+        if self.fd not in r:
+            return True
+        try:
+            d = os.read(self.fd, 65536)
+        except OSError:
+            return False
+        if not d:
+            return False
+        self.buf += d.decode("latin1", "replace")
+        return True
+    def wait_prompt(self, mark, timeout=30):
+        t = time.time()
+        while time.time() - t < timeout:
+            if not self.rd():
+                return False
+            if len(self.buf) > mark and self.buf[mark:].rstrip().endswith("GXemul>"):
+                return True
+        return False
+    def send(self, sx, timeout=30):
+        mark = len(self.buf)
+        b = (sx + "\n").encode("latin1"); n = 0
+        while n < len(b):
+            n += os.write(self.fd, b[n:])
+        self.wait_prompt(mark, timeout)
+        return mark
+    def cr(self, name):
+        m = self.send("reg 0,0")
+        mm = re.search(r"(?<![A-Z])%s=0x([0-9a-f]{8})" % name, self.buf[m:])
+        return int(mm.group(1), 16) if mm else None
+    def gpr(self, n):
+        m = self.send("reg")
+        mm = re.search(r"r%-2d\s*=\s*0x([0-9a-f]{8})" % n, self.buf[m:])
+        return int(mm.group(1), 16) if mm else None
+    def pc(self):
+        m = self.send("reg")
+        mm = re.search(r"pc\s*=\s*0x([0-9a-f]{8})", self.buf[m:])
+        return int(mm.group(1), 16) if mm else None
+    def close(self):
+        try:
+            os.write(self.fd, b"quit\n"); time.sleep(0.3); os.kill(self.pid, 9); os.waitpid(self.pid, 0)
+        except Exception:
+            pass
+
+def fmt(v):
+    return ("0x%08x" % v) if isinstance(v, int) else str(v)
+
+def run_row(name, prog, regs, vector, fault_pc, epsr_exp, handler, grace=6.0):
+    s = Sess()
+    if not s.wait_prompt(0, 60):
+        s.close(); return dict(result="NOBOOT")
+    vbr = VBR_OF.get(name, 0)
+    entry = (vbr + 8 * vector) if vector is not None else None
+    words = [MARK] + prog + [SELF]
+    for i, w in enumerate(words):
+        s.send("put w 0x%x, 0x%08x" % (CODE + 4 * i, w))
+    for base in sorted({0, vbr}):                       # every entry spins unless a handler is planted (both tables if relocated)
+        for v in VECTORS:
+            s.send("put w 0x%x, 0x%08x" % (base + 8 * v, SELF))
+    if entry is not None:
+        s.send("put w 0x%x, 0x%08x" % (entry, SELF))
+    if handler:
+        for i, w in enumerate(handler):
+            s.send("put w 0x%x, 0x%08x" % (8 * V_DIV0 + 4 * i, w))
+        s.send("put w 0x%x, 0x%08x" % (8 * V_DIV0 + 4 * len(handler), SELF))
+    s.send("put w 0x%x, 0x%08x" % (DATA, 0x0badf00d))
+    for r, v in regs.items():
+        s.send("%s=0x%x" % (r, v))
+    s.send("r10=0x12345678"); s.send("r2=0xdeadbeef")
+    if vector is not None:
+        s.send("breakpoint add 0x%x" % entry)
+    s.send("pc=0x%x" % CODE)
+    mark = len(s.buf)
+    os.write(s.fd, b"continue\n")
+    t = time.time()
+    while time.time() - t < grace:
+        s.rd(0.3)
+        if s.buf[mark:].rstrip().endswith("GXemul>"):
+            break
+    if not s.buf[mark:].rstrip().endswith("GXemul>"):
+        os.write(s.fd, b"\x03"); s.wait_prompt(len(s.buf), 15)
+    tr = s.buf[mark:]
+    #  HALT is the fallback's diagnostic AND the machine-stopped observation (codex, pass 3: a mutant that keeps the
+    #  message and drops the stop would otherwise classify as HALT); an expected-HALT row must also see ITS vector named.
+    diag = re.search(r"unimplemented[^\r\n]*vector=0x([0-9a-f]+)", tr)
+    halted = diag is not None and ("machines stopped" in tr or "stopped" in tr)
+    if halted and name in EXPECT_VECTOR and int(diag.group(1), 16) != EXPECT_VECTOR[name]:
+        halted = False                              # halted on some OTHER vector: not the row's answer
+    #  LEVEL channel (Fable review seat, pass 2): main.c lowers every subsystem to WARNING after startup, so a
+    #  free-running `continue' prints an ERROR-level `[ exception <CLASS>: ]' line and stays silent at INFO.  A
+    #  delivered row that carries the line has the pre-fix level (M_LEVEL) -- #261's opt-in break-on-ERROR would
+    #  then stop the emulator into the debugger on a user process's divide by zero.
+    levelmsg = re.search(r"exception (MISALIGNED_ACCESS|UNIMPLEMENTED_OPCODE|PRIVILEGE_VIOLATION|"
+                         r"BOUNDS_CHECK_VIOLATION|ILLEGAL_INTEGER_DIVIDE|INTEGER_OVERFLOW|ERROR)", tr) is not None
+    tailhalt = "internal error" in tr
+    stopped = "machines stopped" in tr
+    pc = s.pc(); r2 = s.gpr(2); r9 = s.gpr(9)
+    sxip, snip, sfip, psr, epsr = s.cr("SXIP"), s.cr("SNIP"), s.cr("SFIP"), s.cr("PSR"), s.cr("EPSR")
+    s.close()
+    started = (r9 == 0x12345678)
+    res = dict(pc=pc, sxip=sxip, snip=snip, sfip=sfip, psr=psr, epsr=epsr, r2=r2, transcript=tr)
+    if not started:
+        res["result"] = "NOSTART"; return res
+    if vector is None:
+        ok = (not stopped) and r2 == EXPECT_R2[name]
+        res["result"] = "DONE" if ok else ("STOP" if stopped else "BADREGS"); return res
+    if halted:
+        res["result"] = "HALT"
+        if name == "sfu1h" and pc != 8 * V_DIV0:
+            res["result"] = "BADREGS"; res["bad"] = ["stage1"]   # halted before the handler ran (the pre-fix shape)
+    elif tailhalt:
+        res["result"] = "TAILHALT"
+    elif stopped:
+        res["result"] = "STOP"
+    elif pc != entry:
+        res["result"] = "STOP"          # ran past its grace without the entry breakpoint firing
+    else:
+        want = dict(sxip=(fault_pc | XIP_V), psr=PSR_WANT.get(name, PSR_EXC), epsr=epsr_exp, r2=0xdeadbeef)
+        if name in ("error", "trapfrozen"):
+            # the second fault runs with SFRZ set: the shadows stay FROZEN at the first fault's values.  For
+            # `trapfrozen' the second fault is a TRAP, which the manual (:8633-8636, 6.10 :10613-10614) exempts from
+            # the ERROR re-route: it must deliver to ITS OWN vector (0x38), shadows still frozen.  M_SFRZTRAP sends it to 0x50.
+            want.update(sxip=(0x10004 | XIP_V), snip=(0x10008 | XIP_V), sfip=(0x1000c | XIP_V), epsr=PSR_RESET)
+        elif name == "dslot":
+            # the else-arm of the delay-slot branch: SNIP = (pc + 4) | V, SFIP = delay_target | V.  br.n +16 puts
+            # delay_target at 0x10014 while slot_pc+4 is 0x1000c, so the two channels are DIFFERENT numbers (with
+            # br.n +8 they were both 0x1000e and M_SFIPNOTGT / M_DSLOTSWAP escaped 10/10 -- Opus, pass 2).
+            want.update(snip=((fault_pc + 4) | XIP_V), sfip=((CODE + 4 + 16) | XIP_V))
+            assert want["snip"] != want["sfip"], "dslot geometry collapsed: SNIP and SFIP would be one number"
+        else:
+            want.update(snip=((fault_pc + 4) | XIP_V), sfip=((fault_pc + 8) | XIP_V))
+        bad = [k for k, v in want.items() if res.get(k) != v]
+        if levelmsg:
+            bad.append("level")
+        res["result"] = "DELIVER" if not bad else "BADREGS"
+        res["bad"] = bad
+    return res
+
+def selftest():
+    s = Sess()
+    ok = s.wait_prompt(0, 60)
+    psr = s.cr("PSR") if ok else None
+    s.close()
+    return psr == PSR_RESET, psr
+
+def main():
+    ok, psr = selftest()
+    print("M88KEXC_SELFTEST=%s psr_at_reset=%s (want 0x80000002)" % ("OK" if ok else "FAIL", fmt(psr)), flush=True)
+    delivered = 0; total = 0; controls_bad = []
+    for name, prog, regs, vector, fault_pc, epsr_exp, handler in ROWS:
+        res = run_row(name, prog, regs, vector, fault_pc, epsr_exp, handler)
+        print("M88KEXC_ROW=%-9s RESULT=%-8s pc=%s sxip=%s snip=%s sfip=%s psr=%s epsr=%s r2=%s%s" % (
+            name, res.get("result"), fmt(res.get("pc")), fmt(res.get("sxip")), fmt(res.get("snip")),
+            fmt(res.get("sfip")), fmt(res.get("psr")), fmt(res.get("epsr")), fmt(res.get("r2")),
+            (" bad=" + ",".join(res["bad"])) if res.get("bad") else ""), flush=True)
+        if vector is not None:
+            total += 1
+            if res.get("result") == EXPECT_RESULT.get(name, "DELIVER"):
+                delivered += 1
+        elif res.get("result") != "DONE":
+            controls_bad.append(name)
+        if os.environ.get("M88KEXC_VERBOSE"):
+            print("---- transcript ----"); print(res.get("transcript", "")[-1200:]); print("--------------------")
+    print("M88KEXC_RESULT=%d/%d" % (delivered, total), flush=True)
+    if controls_bad:
+        print("M88KEXC_CONTROLS=BAD %s" % ",".join(controls_bad), flush=True)
+    print("M88KEXC_DONE", flush=True)
+    #  exit status: the gate can rely on it (a row printing a failure word while the process exits 0 was a pass-2 finding)
+    sys.exit(0 if (ok and delivered == total and not controls_bad) else 1)
+
+if __name__ == "__main__":
+    main()
+27- *
+28- *  Motorola M881x0 CPU emulation.
+29- *
+30- *  M88100: Disassembly of (almost?) everything, and execution of most
+31- *          instructions. Exception handling and virtual memory has also
+32: *          been implemented. Exceptions while in delay slots may not work
+33- *          fully yet, though.
+34- *
+35- *  M88110: Not yet. 
+36- */
+37-
+--
+463-		 */
+464-		if (retval & DMT_VALID && !(retval & DMT_WRITE)) {
+465-			if (DMT_DREGBITS(retval) == M88K_ZERO_REG) {
+466-				debugmsg_cpu(cpu, SUBSYS_CPU, "m88k", VERBOSITY_ERROR,
+467-				    "ldcr: DMT DREG = zero? Internal error.");
+468:				cpu->running = false;
+469-				return;
+470-			}
+471-		}
+472-		if (!!(cpu->cd.m88k.cr[M88K_CR_PSR] & M88K_PSR_BO)
+473-		    != !!(retval & DMT_BO) && retval & DMT_VALID) {
+474-			debugmsg_cpu(cpu, SUBSYS_CPU, "m88k", VERBOSITY_ERROR,
+475-			    "ldcr: DMT byte order not same as CPUs?");
+476:			cpu->running = false;
+477-			return;
+478-		}
+479-
+480-		break;
+481-
+--
+488-		 *  should always be zero.
+489-		 */
+490-		if (retval & 3) {
+491-			debugmsg_cpu(cpu, SUBSYS_CPU, "m88k", VERBOSITY_ERROR,
+492-			    "ldcr: DMAx not word-aligned? Internal error.");
+493:			cpu->running = false;
+494-			return;
+495-		}
+496-
+497-		break;
+498-
+499-	default:debugmsg_cpu(cpu, SUBSYS_CPU, "m88k", VERBOSITY_ERROR,
+500-		    "ldcr: UNIMPLEMENTED cr = 0x%02x (%s)\n",
+501-		    cr, m88k_cr_name(cpu, cr));
+502:		cpu->running = false;
+503-		return;
+504-	}
+505-
+506-	*r32ptr = retval;
+507-}
+--
+526-		    && (value & M88K_PSR_BO))) {
+527-			debugmsg_cpu(cpu, SUBSYS_CPU, "m88k", VERBOSITY_ERROR,
+528-			    "stcr: TODO: attempt to change endianness by flipping"
+529-			    " the endianness bit in the PSR. How should this"
+530-			    " be handled? Aborting.");
+531:			cpu->running = false;
+532-			return;
+533-		}
+534-
+535-		if (!rte && old & M88K_PSR_MODE && !(value & M88K_PSR_MODE))
+536-			debugmsg_cpu(cpu, SUBSYS_CPU, "m88k", VERBOSITY_WARNING,
+--
+540-			    "manual! Continuing anyway.");
+541-
+542-		if (value & M88K_PSR_MXM) {
+543-			debugmsg_cpu(cpu, SUBSYS_CPU, "m88k", VERBOSITY_ERROR,
+544-			    "stcr: TODO: MXM support");
+545:			cpu->running = false;
+546-			return;
+547-		}
+548-
+549-		if ((old & M88K_PSR_MODE) != (value & M88K_PSR_MODE))
+550-			cpu->invalidate_translation_caches(
+--
+595-		break;
+596-
+597-	default:debugmsg_cpu(cpu, SUBSYS_CPU, "m88k", VERBOSITY_ERROR,
+598-		    "stcr: UNIMPLEMENTED cr = 0x%02x (%s)",
+599-		    cr, m88k_cr_name(cpu, cr));
+600:		cpu->running = false;
+601-		return;
+602-	}
+603-}
+604-
+605-
+--
+680-		debug("not valid ]\n");
+681-}
+682-
+683-
+684-/*
+685: *  m88k_exception():
+686- *
+687- *  Cause an exception.
+688- */
+689:void m88k_exception(struct cpu *cpu, int vector, int is_trap)
+690-{
+691-	bool update_shadow_regs = true;
+692:	bool implemented = false;
+693-
+694-	// TODO: Use a const char * instead or something like that, inside the switch...
+695-
+696-	switch (vector) {
+697-
+698-	case M88K_EXCEPTION_RESET:
+699-		debugmsg_cpu(cpu, SUBSYS_EXCEPTION, "RESET", VERBOSITY_INFO, "");
+700:		implemented = true;
+701-		break;
+702-
+703-	case M88K_EXCEPTION_INTERRUPT:
+704-		debugmsg_cpu(cpu, SUBSYS_EXCEPTION, "INTERRUPT", VERBOSITY_INFO, "");
+705:		implemented = true;
+706-		break;
+707-
+708-	case M88K_EXCEPTION_INSTRUCTION_ACCESS:
+709-		debugmsg_cpu(cpu, SUBSYS_EXCEPTION, "INSTRUCTION_ACCESS", VERBOSITY_INFO, "");
+710:		implemented = true;
+711-		break;
+712-
+713-	case M88K_EXCEPTION_DATA_ACCESS:
+714-		debugmsg_cpu(cpu, SUBSYS_EXCEPTION, "DATA_ACCESS", VERBOSITY_INFO, "");
+715:		implemented = true;
+716-		break;
+717-
+718:	case M88K_EXCEPTION_MISALIGNED_ACCESS:
+719-		debugmsg_cpu(cpu, SUBSYS_EXCEPTION, "MISALIGNED_ACCESS", VERBOSITY_INFO, "");
+720:		implemented = true;	/*  m88kexcdeliver  */
+721-		break;
+722-
+723-	case M88K_EXCEPTION_UNIMPLEMENTED_OPCODE:
+724-		debugmsg_cpu(cpu, SUBSYS_EXCEPTION, "UNIMPLEMENTED_OPCODE", VERBOSITY_INFO, "");
+725:		implemented = true;	/*  m88kexcdeliver  */
+726-		break;
+727-
+728-	case M88K_EXCEPTION_PRIVILEGE_VIOLATION:
+729-		debugmsg_cpu(cpu, SUBSYS_EXCEPTION, "PRIVILEGE_VIOLATION", VERBOSITY_INFO, "");
+730:		implemented = true;	/*  m88kexcdeliver  */
+731-		break;
+732-
+733-	case M88K_EXCEPTION_BOUNDS_CHECK_VIOLATION:
+734-		debugmsg_cpu(cpu, SUBSYS_EXCEPTION, "BOUNDS_CHECK_VIOLATION", VERBOSITY_INFO, "");
+735:		implemented = true;	/*  m88kexcdeliver  */
+736-		break;
+737-
+738-	case M88K_EXCEPTION_ILLEGAL_INTEGER_DIVIDE:
+739-		debugmsg_cpu(cpu, SUBSYS_EXCEPTION, "ILLEGAL_INTEGER_DIVIDE", VERBOSITY_INFO, "");
+740:		implemented = true;	/*  m88kexcdeliver  */
+741-		break;
+742-
+743-	case M88K_EXCEPTION_INTEGER_OVERFLOW:
+744-		debugmsg_cpu(cpu, SUBSYS_EXCEPTION, "INTEGER_OVERFLOW", VERBOSITY_INFO, "");
+745:		implemented = true;	/*  m88kexcdeliver  */
+746-		break;
+747-
+748-	case M88K_EXCEPTION_ERROR:
+749-		debugmsg_cpu(cpu, SUBSYS_EXCEPTION, "ERROR", VERBOSITY_INFO, "");
+750:		implemented = true;	/*  m88kexcdeliver  */
+751-		break;
+752-
+753-	case M88K_EXCEPTION_SFU1_PRECISE:
+754-		debugmsg_cpu(cpu, SUBSYS_EXCEPTION, "SFU1_PRECISE", VERBOSITY_ERROR, "");
+755-		break;
+--
+794-	 *  with the two SFU1 ones), which no literal-constant raise site names
+795-	 *  but a supervisor tb0/tb1/tcnd can name directly (row
+796-	 *  m88kexctaildefault; the probe's resid50/sfu1h rows pin that they
+797-	 *  STILL halt).
+798-	 */
+799:	if (vector < M88K_EXCEPTION_USER_TRAPS_START && !implemented) {
+800:		debugmsg_cpu(cpu, SUBSYS_EXCEPTION, "unimplemented",
+801-		    VERBOSITY_ERROR, "vector=0x%03x pc=0x%08x",
+802-			vector,
+803-			(int)cpu->pc);
+804-		for (int j = 0; j < cpu->machine->ncpus; ++j)
+805:			cpu->machine->cpus[j]->running = false;
+806-		m88k_pc_to_pointers(cpu);
+807-		return;
+808-	}
+809-
+810-	/*  Stuff common for all exceptions:  */
+--
+825-	}
+826-
+827-	m88k_stcr(cpu, cpu->cd.m88k.cr[M88K_CR_PSR]
+828-	    | M88K_PSR_SFRZ	/*  Freeze shadow registers,          */
+829-	    | M88K_PSR_IND	/*  disable interrupts,               */
+830:	    | M88K_PSR_SFD1	/*  disable the floating point unit,  */
+831-	    | M88K_PSR_MODE,	/*  and switch to supervisor mode.    */
+832-	    M88K_CR_PSR, 0);
+833-
+834-	if (update_shadow_regs) {
+835-		cpu->cd.m88k.cr[M88K_CR_SSBR] = 0;
+--
+881-	/*  Vector-specific handling:  */
+882-	if (vector < M88K_EXCEPTION_USER_TRAPS_START) {
+883-		switch (vector) {
+884-
+885-		case M88K_EXCEPTION_RESET:
+886:			fatal("[ m88k_exception: reset ]\n");
+887-			for (int j = 0; j < cpu->machine->ncpus; ++j)
+888:				cpu->machine->cpus[j]->running = false;
+889-			break;
+890-
+891-		case M88K_EXCEPTION_INTERRUPT:
+892-			/*  When returning with rte, we want to re-  */
+893-			/*  execute the interrupted instruction:  */
+--
+918-			cpu->cd.m88k.cr[M88K_CR_DMA2] = 0;
+919-			m88k_memory_transaction_debug_dump(cpu, 0);
+920-			m88k_memory_transaction_debug_dump(cpu, 1);
+921-			break;
+922-
+923:		case M88K_EXCEPTION_MISALIGNED_ACCESS:
+924-		case M88K_EXCEPTION_UNIMPLEMENTED_OPCODE:
+925-		case M88K_EXCEPTION_PRIVILEGE_VIOLATION:
+926-		case M88K_EXCEPTION_BOUNDS_CHECK_VIOLATION:
+927-		case M88K_EXCEPTION_ILLEGAL_INTEGER_DIVIDE:
+928-		case M88K_EXCEPTION_INTEGER_OVERFLOW:
+--
+966-			break;
+967-#endif
+968-
+969-		default:debugmsg_cpu(cpu, SUBSYS_EXCEPTION, "m88k",
+970-			    VERBOSITY_ERROR, "internal error");
+971:			cpu->running = false;
+972-		}
+973-	}
+974-
+975-	m88k_pc_to_pointers(cpu);
+976-}
+--
+1348-			case 0x8: debug("maxneg"); break;
+1349-			case 0xc: debug("lt0"); break;
+1350-			case 0xd: debug("ne0"); break;
+1351-			case 0xe: debug("le0"); break;
+1352-			/*
+1353:			 *  #323: these read "unimplemented_N" until now, which
+1354-			 *  was true while the decoder had no handler for them
+1355-			 *  and stopped the emulator on one. Both instructions
+1356-			 *  take the condition as a MASK over four classes, so
+1357:			 *  every value is implemented -- #307 did tcnd and
+1358-			 *  #323 does bcnd -- and the ones outside the nine
+1359-			 *  named combinations simply have no assembler
+1360-			 *  mnemonic. The disassembly shows the mask rather
+1361-			 *  than claiming the instruction does not work.
+1362-			 */
+--
+1455-			case 0x8: debug("maxneg"); break;
+1456-			case 0xc: debug("lt0"); break;
+1457-			case 0xd: debug("ne0"); break;
+1458-			case 0xe: debug("le0"); break;
+1459-			/*
+1460:			 *  #323: these read "unimplemented_N" until now, which
+1461-			 *  was true while the decoder had no handler for them
+1462-			 *  and stopped the emulator on one. Both instructions
+1463-			 *  take the condition as a MASK over four classes, so
+1464:			 *  every value is implemented -- #307 did tcnd and
+1465-			 *  #323 does bcnd -- and the ones outside the nine
+1466-			 *  named combinations simply have no assembler
+1467-			 *  mnemonic. The disassembly shows the mask rather
+1468-			 *  than claiming the instruction does not work.
+1469-			 */
+
+ succeeded in 468ms:
+83df95c
+diff --git a/regress/artifacts/m88kexcdeliver/killtable3/m88k_exc_probe.frozen3.py b/regress/m88k_exc_probe.py
+index a33b403..a3e7e94 100644
+--- a/regress/artifacts/m88kexcdeliver/killtable3/m88k_exc_probe.frozen3.py
++++ b/regress/m88k_exc_probe.py
+@@ -55,11 +55,18 @@ rather than executing zeros, `breakpoint add <8*vector>`, `continue`, then `reg`
+   resid50    tb1 0,r3,50 (f003d832): a residual vector.  EXPECTED RESULT = HALT (the fallback, by design).
+              Negative control: the shipped form must NOT deliver it (rejected D4 would)             (0x190)
+   sfu1h      div0 whose handler at 0x40 is a LEGAL divu r6,r5,r4: with SFD1 set the divide raises
+-             SFU1_PRECISE (114).  EXPECTED RESULT = HALT: this round does not deliver SFU1 (row
+-             m88kexcsfu1); a mutant that does turns this row red                                   (0x390)
++             SFU1_PRECISE (114), which halts at the FALLBACK (it runs before the SFRZ re-route).  EXPECTED
++             RESULT = HALT naming vector 0x072, with pc == 0x40 (the first delivery happened -- on HEAD the
++             first divu halts and this row reads BADREGS stage1).  With the fallback off (M_DELIVERALL) the
++             nested SFU1 is RE-ROUTED TO ERROR (0x50), not delivered to 0x390: the row reds as STOP.  So it
++             pins 'SFU1 inside a handler still halts', NOT 'SFU1 is not delivered to its vector' -- the
++             first-exception SFU1 route is row m88kexcsfu1's (grok, kimi, pass 3)                    (0x390)
+   udiv0      stcr r3,cr1 (r3=0x2: user mode) then divu r2,r3,r0: the fallback comment's own sentence,
+              'one user-mode divu by zero ended the emulation', measured literally; also pins that user mode
+              with SFD1 CLEAR yields vector 8, not SFU1 (the m88kexcsfu1 boundary)              ILLEGAL_INTEGER_DIVIDE 0x40
++  indclr     stcr r5,cr1 (r5=0x80000000: MODE only, IND CLEAR) then add 7fffffff+1: the exception path must
++             SET IND (PSR 0x8000000b from 0x80000000; EPSR 0x80000000).  Every other row's pre-fault PSR already
++             has IND, so `| M88K_PSR_IND' was unobservable -- the carry shape again (grok, codex, pass 3)     0x48
+   ovfc       stcr r5,cr1 (80058025, r5=0x90000002: C set) then add 7fffffff+1: the carry bit must
+              SURVIVE the exception path (UM 6.6) -> PSR 0x9000000b, EPSR 0x90000002.  Every other
+              row's pre-fault C is 0, so PSR == 0x8000000b pinned 'C not set', never 'C unchanged'  0x48
+@@ -69,7 +76,8 @@ rather than executing zeros, `breakpoint add <8*vector>`, `continue`, then `reg`
+ 
+ RESULT per fault row (the classifier tests the STOP channel before pc, deliberately: the naive fix
+ sets pc = entry and THEN stops, so pc alone cannot tell it from delivery):
+-  HALT       `unimplemented vector=` printed and the machine stopped (pre-fix)
++  HALT       `unimplemented vector=` printed AND the machine stopped (both observed, pass 3); an
++             expected-HALT row (resid50, sfu1h) must also see ITS vector named in the diagnostic
+   TAILHALT   `internal error` printed and the machine stopped (the naive fix's shape)
+   STOP       the machine stopped for another reason (e.g. a wrong vector base landed in zeros)
+   BADREGS    the entry breakpoint fired but a shadow-register/PSR/destination assert failed, or
+@@ -89,8 +97,9 @@ Output: one `M88KEXC_ROW=<name> RESULT=<word> ...` line per row, `M88KEXC_RESULT
+ CONTRACT (clause e): catches a class returned to the fallback (HALT) by either route (instruction rows
+ and the *tb trap rows); a class reaching the tail default (TAILHALT); a wrong vector SCALING (M_VEC4,
+ M_VEC7: STOP) and a DROPPED vector base (vbrtb: STOP); a stale SXIP/SNIP/SFIP; a wrong PSR, including a
+-cleared carry (ovfc); the debugmsg LEVEL (bad=level on any delivered row: ERROR prints at default verbosity, INFO
+-does not -- M_LEVEL); a skipped EPSR save; a skipped supervisor switch (the user-mode rows: EPSR MODE
++cleared carry (ovfc); a dropped IND (indclr); the debugmsg LEVEL regression to ERROR/WARNING (bad=level on any
++delivered row: those print at the post-startup WARNING floor, INFO and DEBUG do not -- so exact INFO is NOT pinned,
++only 'not ERROR/WARNING' -- M_LEVEL; codex, pass 3); a skipped EPSR save; a skipped supervisor switch (the user-mode rows: EPSR MODE
+ clear vs PSR MODE set); a wrong return address; the delay-slot else-arm's SFIP source (dslot, +16
+ geometry); a trap re-routed to ERROR while frozen (trapfrozen); a written destination.  Does NOT catch:
+ fcr2/fcr4/fcr5; scoreboard (SSBR) bits; DMT contents; the post-delivery
+@@ -139,6 +148,8 @@ STCR_R3_CR1 = 0x80038023                         # stcr r3,cr1 (PSR)
+ STCR_R5_CR1 = 0x80058025                         # stcr r5,cr1 (PSR)  -- same format: 0x80000000 | S1<<16 | 0x8000 | CR<<5 | S1
+ STCR_R5_CR7 = 0x800580e5                         # stcr r5,cr7 (VBR)
+ PSR_CARRY = 0x90000002                           # MODE | C | IND: the ovfc row's pre-fault PSR (C = bit 28, UM 6.6 'carry bit unchanged')
++PSR_INDCLR = 0x80000000                          # MODE only, IND CLEAR: the indclr row's pre-fault PSR -- every other row starts with IND
++                                                 #   already set, so `| M88K_PSR_IND' in the exception-path PSR write was unobservable (grok, codex, pass 3)
+ VBR_TEST = 0x2000                                # the vbrtb row relocates the vector table here (OpenBSD relocates its own)
+ LDCR_R2_CR1 = 0x80404020                         # ldcr r2,cr1
+ PROM_CALL = 0xf400fc92                           # M88K_PROM_INSTR
+@@ -172,6 +183,7 @@ ROWS = [
+     ("trapfrozen", [DIVU_R2_R3_R0],             {"r3": 0x11},                    V_BOUNDS,   0x10004, PSR_RESET,
+                  [TB1_0_R3_7]),                               # handler at 0x40: tb1 0,r3,7 with SFRZ set -> a TRAP is not re-routed to ERROR
+     ("ovfc",     [STCR_R5_CR1, ADD_R2_R3_R4],   {"r3": 0x7fffffff, "r4": 1, "r5": PSR_CARRY}, V_OVF, 0x10008, PSR_CARRY, None),
++    ("indclr",   [STCR_R5_CR1, ADD_R2_R3_R4],   {"r3": 0x7fffffff, "r4": 1, "r5": PSR_INDCLR}, V_OVF, 0x10008, PSR_INDCLR, None),
+     ("privsuptb", [TB1_0_R3_6],                 {"r3": 1},                       V_PRIV,     0x10004, PSR_RESET, None),
+     ("udiv0",    [STCR_R3_CR1, DIVU_R2_R3_R0],  {"r3": PSR_USER},                V_DIV0,     0x10008, PSR_USER,  None),
+     ("usertb",   [TB1_0_R3_128],                {"r3": 1},                       V_USER0,    0x10004, PSR_RESET, None),
+@@ -188,6 +200,9 @@ VBR_OF = {"vbrtb": VBR_TEST}                     # rows that relocate the vector
+ #  D4 (tail-default-delivers) and from delivering SFU1 (row m88kexcsfu1).  A mutant that delivers them turns these rows RED.
+ EXPECT_RESULT = {"resid50": "HALT", "sfu1h": "HALT"}
+ PSR_WANT = {"ovfc": 0x9000000b}                  # MODE | C | SFD1 | IND | SFRZ: carry PRESERVED through the exception path
++#  indclr wants the default PSR_EXC (0x8000000b): IND was CLEAR before the fault and must be SET by the exception path;
++#  EPSR keeps the pre-fault 0x80000000.  A write that drops `| M88K_PSR_IND' leaves 0x80000009 -> bad=psr.
++EXPECT_VECTOR = {"resid50": 0x032, "sfu1h": 0x072}   # the vector the fallback diagnostic must NAME for an expected-HALT row
+ 
+ class Sess:
+     def __init__(self):
+@@ -282,7 +297,12 @@ def run_row(name, prog, regs, vector, fault_pc, epsr_exp, handler, grace=6.0):
+     if not s.buf[mark:].rstrip().endswith("GXemul>"):
+         os.write(s.fd, b"\x03"); s.wait_prompt(len(s.buf), 15)
+     tr = s.buf[mark:]
+-    halted = ("unimplemented" in tr and "vector=" in tr)
++    #  HALT is the fallback's diagnostic AND the machine-stopped observation (codex, pass 3: a mutant that keeps the
++    #  message and drops the stop would otherwise classify as HALT); an expected-HALT row must also see ITS vector named.
++    diag = re.search(r"unimplemented[^\r\n]*vector=0x([0-9a-f]+)", tr)
++    halted = diag is not None and ("machines stopped" in tr or "stopped" in tr)
++    if halted and name in EXPECT_VECTOR and int(diag.group(1), 16) != EXPECT_VECTOR[name]:
++        halted = False                              # halted on some OTHER vector: not the row's answer
+     #  LEVEL channel (Fable review seat, pass 2): main.c lowers every subsystem to WARNING after startup, so a
+     #  free-running `continue' prints an ERROR-level `[ exception <CLASS>: ]' line and stays silent at INFO.  A
+     #  delivered row that carries the line has the pre-fix level (M_LEVEL) -- #261's opt-in break-on-ERROR would
+@@ -303,6 +323,8 @@ def run_row(name, prog, regs, vector, fault_pc, epsr_exp, handler, grace=6.0):
+         res["result"] = "DONE" if ok else ("STOP" if stopped else "BADREGS"); return res
+     if halted:
+         res["result"] = "HALT"
++        if name == "sfu1h" and pc != 8 * V_DIV0:
++            res["result"] = "BADREGS"; res["bad"] = ["stage1"]   # halted before the handler ran (the pre-fix shape)
+     elif tailhalt:
+         res["result"] = "TAILHALT"
+     elif stopped:
+
+Algorithm       Hash                                                                   Path                            
+---------       ----                                                                   ----                            
+MD5             0D5C0F33CA10110B7A7F6612D52F60C1                                       C:\DocumentNoSnc\CC\GXEMUL\GX...
+M88KEXC_SELFTEST=OK psr_at_reset=0x80000002 (want 0x80000002)
+M88KEXC_ROW=div0      RESULT=HALT     pc=0x00010004 sxip=0x00000000 snip=0x00000000 sfip=0x00000000 psr=0x80000002 epsr=0x00000000 r2=0xdeadbeef
+M88KEXC_ROW=ovf       RESULT=HALT     pc=0x00010004 sxip=0x00000000 snip=0x00000000 sfip=0x00000000 psr=0x80000002 epsr=0x00000000 r2=0xdeadbeef
+M88KEXC_ROW=misalign  RESULT=HALT     pc=0x00010004 sxip=0x00000000 snip=0x00000000 sfip=0x00000000 psr=0x80000002 epsr=0x00000000 r2=0xdeadbeef
+M88KEXC_ROW=bounds    RESULT=HALT     pc=0x00010004 sxip=0x00000000 snip=0x00000000 sfip=0x00000000 psr=0x80000002 epsr=0x00000000 r2=0xdeadbeef
+M88KEXC_ROW=priv      RESULT=HALT     pc=0x00010008 sxip=0x00000000 snip=0x00000000 sfip=0x00000000 psr=0x00000002 epsr=0x00000000 r2=0xdeadbeef
+M88KEXC_ROW=privtb    RESULT=HALT     pc=0x00010008 sxip=0x00000000 snip=0x00000000 sfip=0x00000000 psr=0x00000002 epsr=0x00000000 r2=0xdeadbeef
+M88KEXC_ROW=unimpl    RESULT=HALT     pc=0x00010008 sxip=0x00000000 snip=0x00000000 sfip=0x00000000 psr=0x00000002 epsr=0x00000000 r2=0xdeadbeef
+M88KEXC_ROW=error     RESULT=HALT     pc=0x00010004 sxip=0x00000000 snip=0x00000000 sfip=0x00000000 psr=0x80000002 epsr=0x00000000 r2=0xdeadbeef
+M88KEXC_ROW=dslot     RESULT=HALT     pc=0x00010014 sxip=0x00000000 snip=0x00000000 sfip=0x00000000 psr=0x80000002 epsr=0x00000000 r2=0xdeadbeef
+M88KEXC_ROW=errortb   RESULT=HALT     pc=0x00010004 sxip=0x00000000 snip=0x00000000 sfip=0x00000000 psr=0x80000002 epsr=0x00000000 r2=0xdeadbeef
+M88KEXC_ROW=misaligntb RESULT=HALT     pc=0x00010004 sxip=0x00000000 snip=0x00000000 sfip=0x00000000 psr=0x80000002 epsr=0x00000000 r2=0xdeadbeef
+M88KEXC_ROW=unimpltb  RESULT=HALT     pc=0x00010004 sxip=0x00000000 snip=0x00000000 sfip=0x00000000 psr=0x80000002 epsr=0x00000000 r2=0xdeadbeef
+M88KEXC_ROW=div0tb    RESULT=HALT     pc=0x00010004 sxip=0x00000000 snip=0x00000000 sfip=0x00000000 psr=0x80000002 epsr=0x00000000 r2=0xdeadbeef
+M88KEXC_ROW=ovftb     RESULT=HALT     pc=0x00010004 sxip=0x00000000 snip=0x00000000 sfip=0x00000000 psr=0x80000002 epsr=0x00000000 r2=0xdeadbeef
+M88KEXC_ROW=vbrtb     RESULT=HALT     pc=0x00010008 sxip=0x00000000 snip=0x00000000 sfip=0x00000000 psr=0x80000002 epsr=0x00000000 r2=0xdeadbeef
+M88KEXC_ROW=trapfrozen RESULT=HALT     pc=0x00010004 sxip=0x00000000 snip=0x00000000 sfip=0x00000000 psr=0x80000002 epsr=0x00000000 r2=0xdeadbeef
+M88KEXC_ROW=ovfc      RESULT=HALT     pc=0x00010008 sxip=0x00000000 snip=0x00000000 sfip=0x00000000 psr=0x90000002 epsr=0x00000000 r2=0xdeadbeef
+M88KEXC_ROW=indclr    RESULT=HALT     pc=0x00010008 sxip=0x00000000 snip=0x00000000 sfip=0x00000000 psr=0x80000000 epsr=0x00000000 r2=0xdeadbeef
+M88KEXC_ROW=privsuptb RESULT=HALT     pc=0x00010004 sxip=0x00000000 snip=0x00000000 sfip=0x00000000 psr=0x80000002 epsr=0x00000000 r2=0xdeadbeef
+M88KEXC_ROW=udiv0     RESULT=HALT     pc=0x00010008 sxip=0x00000000 snip=0x00000000 sfip=0x00000000 psr=0x00000002 epsr=0x00000000 r2=0xdeadbeef
+M88KEXC_ROW=usertb    RESULT=DELIVER  pc=0x00000400 sxip=0x00010006 snip=0x0001000a sfip=0x0001000e psr=0x8000000b epsr=0x80000002 r2=0xdeadbeef
+M88KEXC_ROW=resid50   RESULT=HALT     pc=0x00010004 sxip=0x00000000 snip=0x00000000 sfip=0x00000000 psr=0x80000002 epsr=0x00000000 r2=0xdeadbeef
+M88KEXC_ROW=sfu1h     RESULT=STOP     pc=0x00010004 sxip=0x00000000 snip=0x00000000 sfip=0x00000000 psr=0x80000002 epsr=0x00000000 r2=0xdeadbeef
+M88KEXC_ROW=live      RESULT=DONE     pc=0x00010008 sxip=0x00000000 snip=0x00000000 sfip=0x00000000 psr=0x80000002 epsr=0x00000000 r2=0x00000006
+M88KEXC_ROW=attrib    RESULT=DONE     pc=0x00010008 sxip=0x00000000 snip=0x00000000 sfip=0x00000000 psr=0x80000002 epsr=0x00000000 r2=0x00000001
+M88KEXC_RESULT=2/23
+M88KEXC_DONE
+M88KEXC_SELFTEST=OK psr_at_reset=0x80000002 (want 0x80000002)
+M88KEXC_ROW=div0      RESULT=DELIVER  pc=0x00000040 sxip=0x00010006 snip=0x0001000a sfip=0x0001000e psr=0x8000000b epsr=0x80000002 r2=0xdeadbeef
+M88KEXC_ROW=ovf       RESULT=DELIVER  pc=0x00000048 sxip=0x00010006 snip=0x0001000a sfip=0x0001000e psr=0x8000000b epsr=0x80000002 r2=0xdeadbeef
+M88KEXC_ROW=misalign  RESULT=DELIVER  pc=0x00000020 sxip=0x00010006 snip=0x0001000a sfip=0x0001000e psr=0x8000000b epsr=0x80000002 r2=0xdeadbeef
+M88KEXC_ROW=bounds    RESULT=DELIVER  pc=0x00000038 sxip=0x00010006 snip=0x0001000a sfip=0x0001000e psr=0x8000000b epsr=0x80000002 r2=0xdeadbeef
+M88KEXC_ROW=priv      RESULT=DELIVER  pc=0x00000030 sxip=0x0001000a snip=0x0001000e sfip=0x00010012 psr=0x8000000b epsr=0x00000002 r2=0xdeadbeef
+M88KEXC_ROW=privtb    RESULT=DELIVER  pc=0x00000030 sxip=0x0001000a snip=0x0001000e sfip=0x00010012 psr=0x8000000b epsr=0x00000002 r2=0xdeadbeef
+M88KEXC_ROW=unimpl    RESULT=DELIVER  pc=0x00000028 sxip=0x0001000a snip=0x0001000e sfip=0x00010012 psr=0x8000000b epsr=0x00000002 r2=0xdeadbeef
+M88KEXC_ROW=error     RESULT=DELIVER  pc=0x00000050 sxip=0x00010006 snip=0x0001000a sfip=0x0001000e psr=0x8000000b epsr=0x80000002 r2=0xdeadbeef
+M88KEXC_ROW=dslot     RESULT=DELIVER  pc=0x00000040 sxip=0x0001000a snip=0x0001000e sfip=0x00010016 psr=0x8000000b epsr=0x80000002 r2=0xdeadbeef
+M88KEXC_ROW=errortb   RESULT=DELIVER  pc=0x00000050 sxip=0x00010006 snip=0x0001000a sfip=0x0001000e psr=0x8000000b epsr=0x80000002 r2=0xdeadbeef
+M88KEXC_ROW=misaligntb RESULT=DELIVER  pc=0x00000020 sxip=0x00010006 snip=0x0001000a sfip=0x0001000e psr=0x8000000b epsr=0x80000002 r2=0xdeadbeef
+M88KEXC_ROW=unimpltb  RESULT=DELIVER  pc=0x00000028 sxip=0x00010006 snip=0x0001000a sfip=0x0001000e psr=0x8000000b epsr=0x80000002 r2=0xdeadbeef
+M88KEXC_ROW=div0tb    RESULT=DELIVER  pc=0x00000040 sxip=0x00010006 snip=0x0001000a sfip=0x0001000e psr=0x8000000b epsr=0x80000002 r2=0xdeadbeef
+M88KEXC_ROW=ovftb     RESULT=DELIVER  pc=0x00000048 sxip=0x00010006 snip=0x0001000a sfip=0x0001000e psr=0x8000000b epsr=0x80000002 r2=0xdeadbeef
+M88KEXC_ROW=vbrtb     RESULT=DELIVER  pc=0x00002038 sxip=0x0001000a snip=0x0001000e sfip=0x00010012 psr=0x8000000b epsr=0x80000002 r2=0xdeadbeef
+M88KEXC_ROW=trapfrozen RESULT=DELIVER  pc=0x00000038 sxip=0x00010006 snip=0x0001000a sfip=0x0001000e psr=0x8000000b epsr=0x80000002 r2=0xdeadbeef
+M88KEXC_ROW=ovfc      RESULT=DELIVER  pc=0x00000048 sxip=0x0001000a snip=0x0001000e sfip=0x00010012 psr=0x9000000b epsr=0x90000002 r2=0xdeadbeef
+M88KEXC_ROW=indclr    RESULT=DELIVER  pc=0x00000048 sxip=0x0001000a snip=0x0001000e sfip=0x00010012 psr=0x8000000b epsr=0x80000000 r2=0xdeadbeef
+M88KEXC_ROW=privsuptb RESULT=DELIVER  pc=0x00000030 sxip=0x00010006 snip=0x0001000a sfip=0x0001000e psr=0x8000000b epsr=0x80000002 r2=0xdeadbeef
+M88KEXC_ROW=udiv0     RESULT=DELIVER  pc=0x00000040 sxip=0x0001000a snip=0x0001000e sfip=0x00010012 psr=0x8000000b epsr=0x00000002 r2=0xdeadbeef
+M88KEXC_ROW=usertb    RESULT=DELIVER  pc=0x00000400 sxip=0x00010006 snip=0x0001000a sfip=0x0001000e psr=0x8000000b epsr=0x80000002 r2=0xdeadbeef
+M88KEXC_ROW=resid50   RESULT=HALT     pc=0x00010004 sxip=0x00000000 snip=0x00000000 sfip=0x00000000 psr=0x80000002 epsr=0x00000000 r2=0xdeadbeef
+M88KEXC_ROW=sfu1h     RESULT=HALT     pc=0x00000040 sxip=0x00010006 snip=0x0001000a sfip=0x0001000e psr=0x8000000b epsr=0x80000002 r2=0xdeadbeef
+M88KEXC_ROW=live      RESULT=DONE     pc=0x00010008 sxip=0x00000000 snip=0x00000000 sfip=0x00000000 psr=0x80000002 epsr=0x00000000 r2=0x00000006
+M88KEXC_ROW=attrib    RESULT=DONE     pc=0x00010008 sxip=0x00000000 snip=0x00000000 sfip=0x00000000 psr=0x80000002 epsr=0x00000000 r2=0x00000001
+M88KEXC_RESULT=23/23
+M88KEXC_DONE
+
+
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "Get-Content -LiteralPath regress/m88k_exc_probe.py | Select-Object -Skip 205 -First 190
+Get-Content -LiteralPath src/cpus/cpu_m88k.c | Select-Object -Skip 605 -First 375
+rg -n 'M88K_PSR_(SFD1|IND|SFRZ|MODE)' src/include/cpu_m88k.h src/include/thirdparty/m88k_psl.h" in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n -C 4 'machines stopped|stopped|All CPUs|all CPUs' src/main src/debugger src/core
+rg --files regress/artifacts/m88kexcdeliver/killtable4
+rg -n 'M88KEXC|indclr|3/22' regress/run.sh
+rg -n 'PSR_INDCLR|EXPECT_VECTOR|halted =|stage1|PSR_WANT|cr.get\\(\"psr\"|r2 "'!='"' regress/m88k_exc_probe.py" in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+ succeeded in 212ms:
+rg: src/main: The system cannot find the file specified. (os error 2)
+src/core\emul.c-736-
+src/core\emul.c-737-	if (m->byte_order_override != NO_BYTE_ORDER_OVERRIDE)
+src/core\emul.c-738-		cpu->byte_order = m->byte_order_override;
+src/core\emul.c-739-
+src/core\emul.c:740:	/*  Same byte order and entrypoint for all CPUs:  */
+src/core\emul.c-741-	for (i=0; i<m->ncpus; i++)
+src/core\emul.c-742-		if (i != m->bootstrap_cpu) {
+src/core\emul.c-743-			m->cpus[i]->byte_order = cpu->byte_order;
+src/core\emul.c-744-			m->cpus[i]->pc = cpu->pc;
+--
+src/core\emul.c-746-
+src/core\emul.c-747-	/*  Startup the bootstrap CPU:  */
+src/core\emul.c-748-	cpu->running = true;
+src/core\emul.c-749-
+src/core\emul.c:750:	/*  ... or pause all CPUs, if start_paused is set:  */
+src/core\emul.c-751-	if (m->start_paused) {
+src/core\emul.c-752-		for (i=0; i<m->ncpus; i++)
+src/core\emul.c-753-			m->cpus[i]->running = false;
+src/core\emul.c-754-	}
+--
+src/core\emul.c-958-
+src/core\emul.c-959-	signal(SIGINT, debugger_activate);
+src/core\emul.c-960-	signal(SIGCONT, console_sigcont);
+src/core\emul.c-961-
+src/core\emul.c:962:	/*  Initialize all CPUs in all machines:  */
+src/core\emul.c-963-	for (int j = 0; j < emul->n_machines; j++)
+src/core\emul.c-964-		cpu_run_init(emul->machines[j]);
+src/core\emul.c-965-
+src/core\emul.c-966-	/*  TODO: Generalize:  */
+--
+src/core\emul.c-1050-		emul_executing = false;
+src/core\emul.c-1051-
+src/core\emul.c-1052-		if (!any_machine_still_running) {
+src/core\emul.c-1053-			if (debugger_enter_at_end_of_run) {
+src/core\emul.c:1054:				debugmsg(SUBSYS_EMUL, NULL, VERBOSITY_WARNING, "All machines stopped.");
+src/core\emul.c-1055-				debugger_reset();
+src/core\emul.c-1056-				single_step = true;
+src/core\emul.c-1057-			} else {
+src/core\emul.c-1058-				break;
+--
+src/core\emul.c-1063-
+src/core\emul.c-1064-	/*  Stop any running timers:  */
+src/core\emul.c-1065-	timer_stop();
+src/core\emul.c-1066-
+src/core\emul.c:1067:	/*  Deinitialize all CPUs in all machines:  */
+src/core\emul.c-1068-	for (int j = 0; j <emul->n_machines; j++)
+src/core\emul.c-1069-		cpu_run_deinit(emul->machines[j]);
+src/core\emul.c-1070-
+src/core\emul.c-1071-	console_deinit_main();
+--
+src/debugger\debugger.c-261-	}
+src/debugger\debugger.c-262-
+src/debugger\debugger.c-263-	/*
+src/debugger\debugger.c-264-	 *  If the PC has changed, then release any breakpoint we were
+src/debugger\debugger.c:265:	 *  currently stopped at.
+src/debugger\debugger.c-266-	 *
+src/debugger\debugger.c-267-	 *  TODO: multiple cpus?
+src/debugger\debugger.c-268-	 */
+src/debugger\debugger.c-269-	if (old_pc != m->cpus[0]->pc)
+--
+src/debugger\debugger.c-520-				    " <%s>", pc_symbol);
+src/debugger\debugger.c-521-
+src/debugger\debugger.c-522-			if (!cpu->running)
+src/debugger\debugger.c-523-				snprintf(info + strlen(info), sizeof(info) - strlen(info),
+src/debugger\debugger.c:524:				    ", stopped");
+src/debugger\debugger.c-525-
+src/debugger\debugger.c-526-			debugmsg_cpu(cpu, SUBSYS_CPU, "", VERBOSITY_INFO, "%s", info);
+src/debugger\debugger.c-527-
+src/debugger\debugger.c-528-			/*  #248: also show breakpoint hit counts.  */
+--
+src/core\memory.c-313- *
+src/core\memory.c-314- *  Update a device' dyntrans data pointer.
+src/core\memory.c-315- *
+src/core\memory.c-316- *  SUPER-IMPORTANT NOTE: Anyone who changes a dyntrans data pointer while
+src/core\memory.c:317: *  things are running also needs to invalidate all CPUs' address translation
+src/core\memory.c-318- *  caches!  Otherwise, these may contain old pointers to the old data.
+src/core\memory.c-319- */
+src/core\memory.c-320-void memory_device_update_data(struct memory *mem, void *extra,
+src/core\memory.c-321-	unsigned char *data)
+--
+src/core\memory.c-347- *  guest-controlled out-of-bounds host access (CRITICAL). This is latent in
+src/core\memory.c-348- *  pristine upstream GXemul too.
+src/core\memory.c-349- *
+src/core\memory.c-350- *  SUPER-IMPORTANT NOTE: like memory_device_update_data(), the caller must
+src/core\memory.c:351: *  invalidate all CPUs' address translation caches afterwards, otherwise
+src/core\memory.c-352- *  stale fast-path host pointers derived from the old length may survive.
+src/core\memory.c-353- */
+src/core\memory.c-354-void memory_device_update_length(struct memory *mem, void *extra,
+src/core\memory.c-355-	uint64_t newlength)
+--
+src/core\memory.c-642-		    symbol ? symbol : "",
+src/core\memory.c-643-		    symbol ? ">" : "");
+src/core\memory.c-644-
+src/core\memory.c-645-	if (cpu->machine->halt_on_nonexistant_memaccess) {
+src/core\memory.c:646:		// Halt all CPUs, even though the bad memory access was on
+src/core\memory.c-647-		// just one of them.
+src/core\memory.c-648-		for (int i = 0; i < cpu->machine->ncpus; ++i)
+src/core\memory.c-649-			cpu->machine->cpus[i]->running = 0;
+src/core\memory.c-650-
+regress/artifacts/m88kexcdeliver/killtable4\M_VEC4.out
+regress/artifacts/m88kexcdeliver/killtable4\M_SNIPX.out
+regress/artifacts/m88kexcdeliver/killtable4\M_NOSTOP.out
+regress/artifacts/m88kexcdeliver/killtable4\M_NOSHADOW.out
+regress/artifacts/m88kexcdeliver/killtable4\M_NOSFRZ.out
+regress/artifacts/m88kexcdeliver/killtable4\M_NOMODE.out
+regress/artifacts/m88kexcdeliver/killtable4\M_NOIND.out
+regress/artifacts/m88kexcdeliver/killtable4\M_NOEPSR.out
+regress/artifacts/m88kexcdeliver/killtable4\M_LEVEL.out
+regress/artifacts/m88kexcdeliver/killtable4\M_DELIVERALL.out
+regress/artifacts/m88kexcdeliver/killtable4\M_CARRYCLR.out
+regress/artifacts/m88kexcdeliver/killtable4\m88k_exc_probe.frozen4.py
+regress/artifacts/m88kexcdeliver/killtable4\BASE_final.out
+regress/artifacts/m88kexcdeliver/killtable4\BASE.out
+60:             first divu halts and this row reads BADREGS stage1).  With the fallback off (M_DELIVERALL) the
+151:PSR_INDCLR = 0x80000000                          # MODE only, IND CLEAR: the indclr row's pre-fault PSR -- every other row starts with IND
+186:    ("indclr",   [STCR_R5_CR1, ADD_R2_R3_R4],   {"r3": 0x7fffffff, "r4": 1, "r5": PSR_INDCLR}, V_OVF, 0x10008, PSR_INDCLR, None),
+202:PSR_WANT = {"ovfc": 0x9000000b}                  # MODE | C | SFD1 | IND | SFRZ: carry PRESERVED through the exception path
+205:EXPECT_VECTOR = {"resid50": 0x032, "sfu1h": 0x072}   # the vector the fallback diagnostic must NAME for an expected-HALT row
+303:    halted = diag is not None and ("machines stopped" in tr or "stopped" in tr)
+304:    if halted and name in EXPECT_VECTOR and int(diag.group(1), 16) != EXPECT_VECTOR[name]:
+305:        halted = False                              # halted on some OTHER vector: not the row's answer
+327:            res["result"] = "BADREGS"; res["bad"] = ["stage1"]   # halted before the handler ran (the pre-fix shape)
+335:        want = dict(sxip=(fault_pc | XIP_V), psr=PSR_WANT.get(name, PSR_EXC), epsr=epsr_exp, r2=0xdeadbeef)
+
+ succeeded in 336ms:
+
+class Sess:
+    def __init__(self):
+        stub = "/tmp/gx_m88k_exc_%d.bin" % os.getpid()
+        with open(stub, "wb") as f:
+            f.write(struct.pack(">I", 0xf4005800))          # or r0,r0,r0 so the machine constructs
+        self.pid, self.fd = pty.fork()
+        if self.pid == 0:
+            os.execvp(BIN, [BIN, "-V", "-E", "testm88k", "-M", "64", "0x10000:%s" % stub])
+            os._exit(127)
+        self.buf = ""
+    def rd(self, t=0.4):
+        r, _, _ = select.select([self.fd], [], [], t)
+        if self.fd not in r:
+            return True
+        try:
+            d = os.read(self.fd, 65536)
+        except OSError:
+            return False
+        if not d:
+            return False
+        self.buf += d.decode("latin1", "replace")
+        return True
+    def wait_prompt(self, mark, timeout=30):
+        t = time.time()
+        while time.time() - t < timeout:
+            if not self.rd():
+                return False
+            if len(self.buf) > mark and self.buf[mark:].rstrip().endswith("GXemul>"):
+                return True
+        return False
+    def send(self, sx, timeout=30):
+        mark = len(self.buf)
+        b = (sx + "\n").encode("latin1"); n = 0
+        while n < len(b):
+            n += os.write(self.fd, b[n:])
+        self.wait_prompt(mark, timeout)
+        return mark
+    def cr(self, name):
+        m = self.send("reg 0,0")
+        mm = re.search(r"(?<![A-Z])%s=0x([0-9a-f]{8})" % name, self.buf[m:])
+        return int(mm.group(1), 16) if mm else None
+    def gpr(self, n):
+        m = self.send("reg")
+        mm = re.search(r"r%-2d\s*=\s*0x([0-9a-f]{8})" % n, self.buf[m:])
+        return int(mm.group(1), 16) if mm else None
+    def pc(self):
+        m = self.send("reg")
+        mm = re.search(r"pc\s*=\s*0x([0-9a-f]{8})", self.buf[m:])
+        return int(mm.group(1), 16) if mm else None
+    def close(self):
+        try:
+            os.write(self.fd, b"quit\n"); time.sleep(0.3); os.kill(self.pid, 9); os.waitpid(self.pid, 0)
+        except Exception:
+            pass
+
+def fmt(v):
+    return ("0x%08x" % v) if isinstance(v, int) else str(v)
+
+def run_row(name, prog, regs, vector, fault_pc, epsr_exp, handler, grace=6.0):
+    s = Sess()
+    if not s.wait_prompt(0, 60):
+        s.close(); return dict(result="NOBOOT")
+    vbr = VBR_OF.get(name, 0)
+    entry = (vbr + 8 * vector) if vector is not None else None
+    words = [MARK] + prog + [SELF]
+    for i, w in enumerate(words):
+        s.send("put w 0x%x, 0x%08x" % (CODE + 4 * i, w))
+    for base in sorted({0, vbr}):                       # every entry spins unless a handler is planted (both tables if relocated)
+        for v in VECTORS:
+            s.send("put w 0x%x, 0x%08x" % (base + 8 * v, SELF))
+    if entry is not None:
+        s.send("put w 0x%x, 0x%08x" % (entry, SELF))
+    if handler:
+        for i, w in enumerate(handler):
+            s.send("put w 0x%x, 0x%08x" % (8 * V_DIV0 + 4 * i, w))
+        s.send("put w 0x%x, 0x%08x" % (8 * V_DIV0 + 4 * len(handler), SELF))
+    s.send("put w 0x%x, 0x%08x" % (DATA, 0x0badf00d))
+    for r, v in regs.items():
+        s.send("%s=0x%x" % (r, v))
+    s.send("r10=0x12345678"); s.send("r2=0xdeadbeef")
+    if vector is not None:
+        s.send("breakpoint add 0x%x" % entry)
+    s.send("pc=0x%x" % CODE)
+    mark = len(s.buf)
+    os.write(s.fd, b"continue\n")
+    t = time.time()
+    while time.time() - t < grace:
+        s.rd(0.3)
+        if s.buf[mark:].rstrip().endswith("GXemul>"):
+            break
+    if not s.buf[mark:].rstrip().endswith("GXemul>"):
+        os.write(s.fd, b"\x03"); s.wait_prompt(len(s.buf), 15)
+    tr = s.buf[mark:]
+    #  HALT is the fallback's diagnostic AND the machine-stopped observation (codex, pass 3: a mutant that keeps the
+    #  message and drops the stop would otherwise classify as HALT); an expected-HALT row must also see ITS vector named.
+    diag = re.search(r"unimplemented[^\r\n]*vector=0x([0-9a-f]+)", tr)
+    halted = diag is not None and ("machines stopped" in tr or "stopped" in tr)
+    if halted and name in EXPECT_VECTOR and int(diag.group(1), 16) != EXPECT_VECTOR[name]:
+        halted = False                              # halted on some OTHER vector: not the row's answer
+    #  LEVEL channel (Fable review seat, pass 2): main.c lowers every subsystem to WARNING after startup, so a
+    #  free-running `continue' prints an ERROR-level `[ exception <CLASS>: ]' line and stays silent at INFO.  A
+    #  delivered row that carries the line has the pre-fix level (M_LEVEL) -- #261's opt-in break-on-ERROR would
+    #  then stop the emulator into the debugger on a user process's divide by zero.
+    levelmsg = re.search(r"exception (MISALIGNED_ACCESS|UNIMPLEMENTED_OPCODE|PRIVILEGE_VIOLATION|"
+                         r"BOUNDS_CHECK_VIOLATION|ILLEGAL_INTEGER_DIVIDE|INTEGER_OVERFLOW|ERROR)", tr) is not None
+    tailhalt = "internal error" in tr
+    stopped = "machines stopped" in tr
+    pc = s.pc(); r2 = s.gpr(2); r9 = s.gpr(9)
+    sxip, snip, sfip, psr, epsr = s.cr("SXIP"), s.cr("SNIP"), s.cr("SFIP"), s.cr("PSR"), s.cr("EPSR")
+    s.close()
+    started = (r9 == 0x12345678)
+    res = dict(pc=pc, sxip=sxip, snip=snip, sfip=sfip, psr=psr, epsr=epsr, r2=r2, transcript=tr)
+    if not started:
+        res["result"] = "NOSTART"; return res
+    if vector is None:
+        ok = (not stopped) and r2 == EXPECT_R2[name]
+        res["result"] = "DONE" if ok else ("STOP" if stopped else "BADREGS"); return res
+    if halted:
+        res["result"] = "HALT"
+        if name == "sfu1h" and pc != 8 * V_DIV0:
+            res["result"] = "BADREGS"; res["bad"] = ["stage1"]   # halted before the handler ran (the pre-fix shape)
+    elif tailhalt:
+        res["result"] = "TAILHALT"
+    elif stopped:
+        res["result"] = "STOP"
+    elif pc != entry:
+        res["result"] = "STOP"          # ran past its grace without the entry breakpoint firing
+    else:
+        want = dict(sxip=(fault_pc | XIP_V), psr=PSR_WANT.get(name, PSR_EXC), epsr=epsr_exp, r2=0xdeadbeef)
+        if name in ("error", "trapfrozen"):
+            # the second fault runs with SFRZ set: the shadows stay FROZEN at the first fault's values.  For
+            # `trapfrozen' the second fault is a TRAP, which the manual (:8633-8636, 6.10 :10613-10614) exempts from
+            # the ERROR re-route: it must deliver to ITS OWN vector (0x38), shadows still frozen.  M_SFRZTRAP sends it to 0x50.
+            want.update(sxip=(0x10004 | XIP_V), snip=(0x10008 | XIP_V), sfip=(0x1000c | XIP_V), epsr=PSR_RESET)
+        elif name == "dslot":
+            # the else-arm of the delay-slot branch: SNIP = (pc + 4) | V, SFIP = delay_target | V.  br.n +16 puts
+            # delay_target at 0x10014 while slot_pc+4 is 0x1000c, so the two channels are DIFFERENT numbers (with
+            # br.n +8 they were both 0x1000e and M_SFIPNOTGT / M_DSLOTSWAP escaped 10/10 -- Opus, pass 2).
+            want.update(snip=((fault_pc + 4) | XIP_V), sfip=((CODE + 4 + 16) | XIP_V))
+            assert want["snip"] != want["sfip"], "dslot geometry collapsed: SNIP and SFIP would be one number"
+        else:
+            want.update(snip=((fault_pc + 4) | XIP_V), sfip=((fault_pc + 8) | XIP_V))
+        bad = [k for k, v in want.items() if res.get(k) != v]
+        if levelmsg:
+            bad.append("level")
+        res["result"] = "DELIVER" if not bad else "BADREGS"
+        res["bad"] = bad
+    return res
+
+def selftest():
+    s = Sess()
+    ok = s.wait_prompt(0, 60)
+    psr = s.cr("PSR") if ok else None
+    s.close()
+    return psr == PSR_RESET, psr
+
+def main():
+    ok, psr = selftest()
+    print("M88KEXC_SELFTEST=%s psr_at_reset=%s (want 0x80000002)" % ("OK" if ok else "FAIL", fmt(psr)), flush=True)
+    delivered = 0; total = 0; controls_bad = []
+    for name, prog, regs, vector, fault_pc, epsr_exp, handler in ROWS:
+        res = run_row(name, prog, regs, vector, fault_pc, epsr_exp, handler)
+        print("M88KEXC_ROW=%-9s RESULT=%-8s pc=%s sxip=%s snip=%s sfip=%s psr=%s epsr=%s r2=%s%s" % (
+            name, res.get("result"), fmt(res.get("pc")), fmt(res.get("sxip")), fmt(res.get("snip")),
+            fmt(res.get("sfip")), fmt(res.get("psr")), fmt(res.get("epsr")), fmt(res.get("r2")),
+            (" bad=" + ",".join(res["bad"])) if res.get("bad") else ""), flush=True)
+        if vector is not None:
+            total += 1
+            if res.get("result") == EXPECT_RESULT.get(name, "DELIVER"):
+                delivered += 1
+        elif res.get("result") != "DONE":
+            controls_bad.append(name)
+        if os.environ.get("M88KEXC_VERBOSE"):
+            print("---- transcript ----"); print(res.get("transcript", "")[-1200:]); print("--------------------")
+    print("M88KEXC_RESULT=%d/%d" % (delivered, total), flush=True)
+    if controls_bad:
+        print("M88KEXC_CONTROLS=BAD %s" % ",".join(controls_bad), flush=True)
+    print("M88KEXC_DONE", flush=True)
+    #  exit status: the gate can rely on it (a row printing a failure word while the process exits 0 was a pass-2 finding)
+    sys.exit(0 if (ok and delivered == total and not controls_bad) else 1)
+
+if __name__ == "__main__":
+    main()
+/*
+ *  m88k_fstcr():
+ *
+ *  Write to a floating-point control register.
+ */
+void m88k_fstcr(struct cpu *cpu, uint32_t value, int fcr)
+{
+	switch (fcr) {
+
+	case 63:
+		/*  #298: the FPCR's RM field (bits 15:14) is now decoded by
+		    the single-precision result stores, so a guest calling
+		    fpsetround() -- which writes exactly this field -- is
+		    doing something IMPLEMENTED, and warning "UNIMPLEMENTED"
+		    for it would be dishonest (a panel seat's finding, same
+		    class as #270). Warn only for bits outside RM, which
+		    really are ignored.  */
+		if ((value & ~(uint32_t)M88K_FPCR_RM_MASK) == 0)
+			break;
+
+		// fall through
+
+	case 0:
+	case 62:
+		// Don't warn for writes with the value zero for these, for now.
+		if (value == 0)
+			break;
+
+		// fall through
+
+	default:debugmsg_cpu(cpu, SUBSYS_CPU, "m88k", VERBOSITY_WARNING,
+		    "WARNING: fstcr: write 0x%08x to UNIMPLEMENTED fcr = 0x%02x (%s)",
+		    value, fcr, m88k_fcr_name(cpu, fcr));
+	}
+
+	cpu->cd.m88k.fcr[fcr] = value;
+}
+
+
+/*
+ *  m88k_memory_transaction_debug_dump():
+ *
+ *  Debug dump of the memory transaction registers of a cpu.
+ */
+static void m88k_memory_transaction_debug_dump(struct cpu *cpu, int n)
+{
+	uint32_t dmt = cpu->cd.m88k.dmt[n];
+
+	debug("[ DMT%i: ", n);
+	if (dmt & DMT_VALID) {
+		if (dmt & DMT_BO)
+			debug("Little-Endian, ");
+		else
+			debug("Big-Endian, ");
+		if (dmt & DMT_DAS)
+			debug("Supervisor, ");
+		else
+			debug("User, ");
+		if (dmt & DMT_DOUB1)
+			debug("DOUB1, ");
+		if (dmt & DMT_LOCKBAR)
+			debug("LOCKBAR, ");
+		if (dmt & DMT_WRITE)
+			debug("store, ");
+		else {
+			debug("load.%c(r%i), ",
+			    dmt & DMT_SIGNED? 's' : 'u',
+			    DMT_DREGBITS(dmt));
+		}
+		debug("bytebits=0x%x ]\n", DMT_ENBITS(dmt));
+
+		debug("[ DMD%i: 0x%08" PRIx32"; ", n, cpu->cd.m88k.dmd[n]);
+		debug("DMA%i: 0x%08" PRIx32" ]\n", n, cpu->cd.m88k.dma[n]);
+	} else
+		debug("not valid ]\n");
+}
+
+
+/*
+ *  m88k_exception():
+ *
+ *  Cause an exception.
+ */
+void m88k_exception(struct cpu *cpu, int vector, int is_trap)
+{
+	bool update_shadow_regs = true;
+	bool implemented = false;
+
+	// TODO: Use a const char * instead or something like that, inside the switch...
+
+	switch (vector) {
+
+	case M88K_EXCEPTION_RESET:
+		debugmsg_cpu(cpu, SUBSYS_EXCEPTION, "RESET", VERBOSITY_INFO, "");
+		implemented = true;
+		break;
+
+	case M88K_EXCEPTION_INTERRUPT:
+		debugmsg_cpu(cpu, SUBSYS_EXCEPTION, "INTERRUPT", VERBOSITY_INFO, "");
+		implemented = true;
+		break;
+
+	case M88K_EXCEPTION_INSTRUCTION_ACCESS:
+		debugmsg_cpu(cpu, SUBSYS_EXCEPTION, "INSTRUCTION_ACCESS", VERBOSITY_INFO, "");
+		implemented = true;
+		break;
+
+	case M88K_EXCEPTION_DATA_ACCESS:
+		debugmsg_cpu(cpu, SUBSYS_EXCEPTION, "DATA_ACCESS", VERBOSITY_INFO, "");
+		implemented = true;
+		break;
+
+	case M88K_EXCEPTION_MISALIGNED_ACCESS:
+		debugmsg_cpu(cpu, SUBSYS_EXCEPTION, "MISALIGNED_ACCESS", VERBOSITY_INFO, "");
+		implemented = true;	/*  m88kexcdeliver  */
+		break;
+
+	case M88K_EXCEPTION_UNIMPLEMENTED_OPCODE:
+		debugmsg_cpu(cpu, SUBSYS_EXCEPTION, "UNIMPLEMENTED_OPCODE", VERBOSITY_INFO, "");
+		implemented = true;	/*  m88kexcdeliver  */
+		break;
+
+	case M88K_EXCEPTION_PRIVILEGE_VIOLATION:
+		debugmsg_cpu(cpu, SUBSYS_EXCEPTION, "PRIVILEGE_VIOLATION", VERBOSITY_INFO, "");
+		implemented = true;	/*  m88kexcdeliver  */
+		break;
+
+	case M88K_EXCEPTION_BOUNDS_CHECK_VIOLATION:
+		debugmsg_cpu(cpu, SUBSYS_EXCEPTION, "BOUNDS_CHECK_VIOLATION", VERBOSITY_INFO, "");
+		implemented = true;	/*  m88kexcdeliver  */
+		break;
+
+	case M88K_EXCEPTION_ILLEGAL_INTEGER_DIVIDE:
+		debugmsg_cpu(cpu, SUBSYS_EXCEPTION, "ILLEGAL_INTEGER_DIVIDE", VERBOSITY_INFO, "");
+		implemented = true;	/*  m88kexcdeliver  */
+		break;
+
+	case M88K_EXCEPTION_INTEGER_OVERFLOW:
+		debugmsg_cpu(cpu, SUBSYS_EXCEPTION, "INTEGER_OVERFLOW", VERBOSITY_INFO, "");
+		implemented = true;	/*  m88kexcdeliver  */
+		break;
+
+	case M88K_EXCEPTION_ERROR:
+		debugmsg_cpu(cpu, SUBSYS_EXCEPTION, "ERROR", VERBOSITY_INFO, "");
+		implemented = true;	/*  m88kexcdeliver  */
+		break;
+
+	case M88K_EXCEPTION_SFU1_PRECISE:
+		debugmsg_cpu(cpu, SUBSYS_EXCEPTION, "SFU1_PRECISE", VERBOSITY_ERROR, "");
+		break;
+
+	case M88K_EXCEPTION_SFU1_IMPRECISE:
+		debugmsg_cpu(cpu, SUBSYS_EXCEPTION, "SFU1_IMPRECISE", VERBOSITY_ERROR, "");
+		break;
+
+	case 0x80:	/*  up to OpenBSD 5.2  */
+	case 0x1c2:	/*  from OpenBSD 5.3 and forward...  */
+		debugmsg_cpu(cpu, SUBSYS_EXCEPTION, "syscall", VERBOSITY_INFO,
+		    "r13=%i", cpu->cd.m88k.r[13]);
+#if 0
+		fatal("[ syscall %i(", cpu->cd.m88k.r[13]);
+		m88k_cpu_functioncall_trace(cpu, 8);
+		fatal(") ]\n");
+#endif
+		break;
+
+	case MVMEPROM_VECTOR:
+		debugmsg_cpu(cpu, SUBSYS_EXCEPTION, "MVMEPROM_VECTOR", VERBOSITY_INFO, "");
+		break;
+
+	default:
+		debugmsg_cpu(cpu, SUBSYS_EXCEPTION, "unknown vector",
+		    vector < M88K_EXCEPTION_USER_TRAPS_START ? VERBOSITY_ERROR
+		    : VERBOSITY_INFO, "0x%03x", vector);
+	}
+
+	/*
+	 *  m88kexcdeliver (2026-09-05): the seven trap-like classes above are
+	 *  DELIVERED (VBR + 8*vector, SXIP = the faulting instruction, SNIP = the
+	 *  next one, destination register unchanged -- MC88100 UM 6.4.3/6.5/6.6/
+	 *  6.8.3), like the four this fallback never covered.  Before, any of them
+	 *  stopped EVERY guest CPU here: one divu by zero, in either mode, ended
+	 *  the emulation (measured: regress/m88k_exc_probe.py rows div0/udiv0).
+	 *  Pre-existing upstream code (this fallback is the 0.7.0 import),
+	 *  surfaced by the 2026-09-05 retrospective of #380.  What still lands
+	 *  here, by design: SFU1_PRECISE/IMPRECISE (114/115; row m88kexcsfu1 --
+	 *  faithful delivery needs the rest of the SFU1 exception state, which
+	 *  the fork does not write) and vectors 11..113/116..127 (117 vectors
+	 *  with the two SFU1 ones), which no literal-constant raise site names
+	 *  but a supervisor tb0/tb1/tcnd can name directly (row
+	 *  m88kexctaildefault; the probe's resid50/sfu1h rows pin that they
+	 *  STILL halt).
+	 */
+	if (vector < M88K_EXCEPTION_USER_TRAPS_START && !implemented) {
+		debugmsg_cpu(cpu, SUBSYS_EXCEPTION, "unimplemented",
+		    VERBOSITY_ERROR, "vector=0x%03x pc=0x%08x",
+			vector,
+			(int)cpu->pc);
+		for (int j = 0; j < cpu->machine->ncpus; ++j)
+			cpu->machine->cpus[j]->running = false;
+		m88k_pc_to_pointers(cpu);
+		return;
+	}
+
+	/*  Stuff common for all exceptions:  */
+	if (cpu->cd.m88k.cr[M88K_CR_PSR] & M88K_PSR_SFRZ) {
+		/*
+		 *  Non-trap exceptions when the shadow freeze bit is already
+		 *  set result in an Error exception:
+		 */
+		if (!is_trap) {
+			vector = M88K_EXCEPTION_ERROR;
+			fatal("[ SFRZ already set in PSR => ERROR ]\n");
+		}
+
+		update_shadow_regs = false;
+	} else {
+		/*  Freeze shadow registers, and save the PSR:  */
+		cpu->cd.m88k.cr[M88K_CR_EPSR] = cpu->cd.m88k.cr[M88K_CR_PSR];
+	}
+
+	m88k_stcr(cpu, cpu->cd.m88k.cr[M88K_CR_PSR]
+	    | M88K_PSR_SFRZ	/*  Freeze shadow registers,          */
+	    | M88K_PSR_IND	/*  disable interrupts,               */
+	    | M88K_PSR_SFD1	/*  disable the floating point unit,  */
+	    | M88K_PSR_MODE,	/*  and switch to supervisor mode.    */
+	    M88K_CR_PSR, 0);
+
+	if (update_shadow_regs) {
+		cpu->cd.m88k.cr[M88K_CR_SSBR] = 0;
+
+		cpu->cd.m88k.cr[M88K_CR_SXIP] = cpu->pc | M88K_XIP_V;
+
+		/*  SNIP is the address to return to, when executing rte:  */
+		if (cpu->delay_slot) {
+			if (vector == M88K_EXCEPTION_DATA_ACCESS) {
+				cpu->cd.m88k.cr[M88K_CR_SNIP] = cpu->cd.m88k.delay_target | M88K_NIP_V;
+				cpu->cd.m88k.cr[M88K_CR_SFIP] = cpu->cd.m88k.cr[M88K_CR_SNIP]+4;
+			} else if (vector == M88K_EXCEPTION_INSTRUCTION_ACCESS) {
+				/*  If we are in a delay slot, then pc is
+				    something like 0xc6000 here (not 0xc5ffc).  */
+				cpu->cd.m88k.cr[M88K_CR_SNIP] = cpu->cd.m88k.delay_target | M88K_NIP_V;
+				cpu->cd.m88k.cr[M88K_CR_SFIP] = 0;
+			} else {
+				/*  Perhaps something like this could work:  */
+				cpu->cd.m88k.cr[M88K_CR_SNIP] = (cpu->pc + 4) | M88K_NIP_V;
+				cpu->cd.m88k.cr[M88K_CR_SFIP] = cpu->cd.m88k.delay_target | M88K_NIP_V;
+			}
+		} else {
+			cpu->cd.m88k.cr[M88K_CR_SNIP] = (cpu->pc + 4) | M88K_NIP_V;
+			cpu->cd.m88k.cr[M88K_CR_SFIP] = cpu->cd.m88k.cr[M88K_CR_SNIP]+4;
+		}
+
+		if (vector == M88K_EXCEPTION_INSTRUCTION_ACCESS)
+			cpu->cd.m88k.cr[M88K_CR_SXIP] |= M88K_XIP_E;
+	}
+
+	cpu->pc = cpu->cd.m88k.cr[M88K_CR_VBR] + 8 * vector;
+
+	if (cpu->delay_slot)
+		cpu->delay_slot = EXCEPTION_IN_DELAY_SLOT;
+	else
+		cpu->delay_slot = NOT_DELAYED;
+
+	/*  Default to no memory transactions:  */
+	cpu->cd.m88k.cr[M88K_CR_DMT0] = 0;
+	cpu->cd.m88k.cr[M88K_CR_DMD0] = 0;
+	cpu->cd.m88k.cr[M88K_CR_DMA0] = 0;
+	cpu->cd.m88k.cr[M88K_CR_DMT1] = 0;
+	cpu->cd.m88k.cr[M88K_CR_DMD1] = 0;
+	cpu->cd.m88k.cr[M88K_CR_DMA1] = 0;
+	cpu->cd.m88k.cr[M88K_CR_DMT2] = 0;
+	cpu->cd.m88k.cr[M88K_CR_DMD2] = 0;
+	cpu->cd.m88k.cr[M88K_CR_DMA2] = 0;
+
+	/*  Vector-specific handling:  */
+	if (vector < M88K_EXCEPTION_USER_TRAPS_START) {
+		switch (vector) {
+
+		case M88K_EXCEPTION_RESET:
+			fatal("[ m88k_exception: reset ]\n");
+			for (int j = 0; j < cpu->machine->ncpus; ++j)
+				cpu->machine->cpus[j]->running = false;
+			break;
+
+		case M88K_EXCEPTION_INTERRUPT:
+			/*  When returning with rte, we want to re-  */
+			/*  execute the interrupted instruction:  */
+			cpu->cd.m88k.cr[M88K_CR_SNIP] -= 4;
+			cpu->cd.m88k.cr[M88K_CR_SFIP] -= 4;
+			break;
+
+		case M88K_EXCEPTION_INSTRUCTION_ACCESS:
+			/*  When returning with rte, we want to re-  */
+			/*  execute the instruction in SXIP, not SNIP/SFIP,  */
+			/*  (unless the exception was in a delay-slot):  */
+			if (!(cpu->delay_slot & EXCEPTION_IN_DELAY_SLOT)) {
+				cpu->cd.m88k.cr[M88K_CR_SNIP] = 0;
+				cpu->cd.m88k.cr[M88K_CR_SFIP] = 0;
+			}
+			break;
+
+		case M88K_EXCEPTION_DATA_ACCESS:
+			/*  Update the memory transaction registers:  */
+			cpu->cd.m88k.cr[M88K_CR_DMT0] = cpu->cd.m88k.dmt[0];
+			cpu->cd.m88k.cr[M88K_CR_DMD0] = cpu->cd.m88k.dmd[0];
+			cpu->cd.m88k.cr[M88K_CR_DMA0] = cpu->cd.m88k.dma[0];
+			cpu->cd.m88k.cr[M88K_CR_DMT1] = cpu->cd.m88k.dmt[1];
+			cpu->cd.m88k.cr[M88K_CR_DMD1] = cpu->cd.m88k.dmd[1];
+			cpu->cd.m88k.cr[M88K_CR_DMA1] = cpu->cd.m88k.dma[1];
+			cpu->cd.m88k.cr[M88K_CR_DMT2] = 0;
+			cpu->cd.m88k.cr[M88K_CR_DMD2] = 0;
+			cpu->cd.m88k.cr[M88K_CR_DMA2] = 0;
+			m88k_memory_transaction_debug_dump(cpu, 0);
+			m88k_memory_transaction_debug_dump(cpu, 1);
+			break;
+
+		case M88K_EXCEPTION_MISALIGNED_ACCESS:
+		case M88K_EXCEPTION_UNIMPLEMENTED_OPCODE:
+		case M88K_EXCEPTION_PRIVILEGE_VIOLATION:
+		case M88K_EXCEPTION_BOUNDS_CHECK_VIOLATION:
+		case M88K_EXCEPTION_ILLEGAL_INTEGER_DIVIDE:
+		case M88K_EXCEPTION_INTEGER_OVERFLOW:
+		case M88K_EXCEPTION_ERROR:
+			/*  m88kexcdeliver: OUTSIDE A DELAY SLOT the common path above
+			    is already the architectural contract for these -- SXIP =
+			    the faulting instruction, SNIP = the next one, SFIP = SNIP+4,
+			    and rte resumes at SNIP (UM 6.4.3.1.4: "the processor
+			    hardware does not use the SXIP on return from an exception"),
+			    so the upstream doubt that sat here in an #if 0 ("should the
+			    PC be backed up one step?") is answered NO: 6.5.x/6.8.3 say
+			    the destination register is unchanged (6.6: and the carry
+			    bit, for the overflow case), and a handler that wants
+			    re-execution arranges SNIP/SFIP itself.  INSIDE a delay slot
+			    the else-arm above ("Perhaps something like this could
+			    work") is upstream's guess and the manual disagrees (Table
+			    6-3: NIP = the branch target, FIP = target+4) -- pre-existing,
+			    now reachable by ordinary faults, row m88kdslotshadow.
+			    Without these labels the classes reached the default: below,
+			    which stops the cpu -- the one-site fix was measured to do
+			    exactly that; with them, nothing below 128 reaches that
+			    default any more (it is unreachable code kept as the
+			    tripwire for an eighth class).  ERROR arrives here by TWO
+			    routes: the SFRZ re-route above (a fault inside a handler,
+			    shadows deliberately frozen at the FIRST fault's values --
+			    SXIP then names that first fault, not this one) and a
+			    supervisor tb0/tb1/tcnd naming vector 10 directly (shadows
+			    updated normally).  Not modelled, disclosed: scoreboard
+			    capture (the shadow-update path writes SSBR = 0; a frozen
+			    SSBR keeps its old value) and fcr2/fcr4/fcr5 for the divide.  */
+			break;
+
+#if 0
+		// TODO: Read up more about SFU1 exceptions and how the
+		// control registers look when they happen.
+		case M88K_EXCEPTION_SFU1_PRECISE:
+			cpu->cd.m88k.cr[M88K_CR_SNIP] = 0; //?
+			cpu->cd.m88k.cr[M88K_CR_SFIP] = 0;
+			//cpu->cd.m88k.cr[M88K_CR_SNIP] -= 4;
+			//cpu->cd.m88k.cr[M88K_CR_SFIP] -= 4;
+			break;
+#endif
+
+		default:debugmsg_cpu(cpu, SUBSYS_EXCEPTION, "m88k",
+			    VERBOSITY_ERROR, "internal error");
+			cpu->running = false;
+		}
+	}
+
+	m88k_pc_to_pointers(cpu);
+}
+
+
+/*
+ *  m88k_cpu_disassemble_instr():
+src/include/thirdparty/m88k_psl.h:70:#define M88K_PSR_MODE	0x80000000	/* supervisor/user mode */
+src/include/thirdparty/m88k_psl.h:79:#define M88K_PSR_SFD1	0x00000008	/* SFU1 (FPU) disable */
+src/include/thirdparty/m88k_psl.h:81:#define M88K_PSR_IND	0x00000002	/* interrupt disable */
+src/include/thirdparty/m88k_psl.h:82:#define M88K_PSR_SFRZ	0x00000001	/* shadow freeze */
+
+codex
+The local probe matches md5 `0d5c0f33`, and both repairs match the diff. SFD1 is observable in the exact PSR comparison, though “bad=psr on every row” needs narrowing: the HALT rows bypass that comparison. I’m checking the stop-message source and final coverage count.
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n 'M88KEXC_RESULT|M88KEXC_ROW=(indclr|resid50|sfu1h)' regress/artifacts/m88kexcdeliver/killtable4/*.out
+rg -n -C 3 'stopped' src/debugger/debugger.c
+rg -n -C 3 'any_machine_still_running' src/core/emul.c
+rg --files -g '*m88kexcdeliver*' -g '*debt*' -g '*STATUS*' -g '*AUDIT*' -g '*INDEX*' -g '*report*' -g '*gate*' regress | Select-Object -First 75
+rg -n --glob '*.sh' 'M88KEXC_RESULT=23/23|indclr|3/22' regress" in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n 'm88kmxmkill|m88kexcfrozendmt|m88kexcdebt|m88kdslotshadow' -g '*.md' -g '*.tsv' -g '*.csv' -g '*.json' -g '*.html' -g '"'!regress/artifacts/**'"' . | Select-Object -First 60
+Get-Content -LiteralPath src/machines/machine_testm88k.c | Select-Object -First 150
+Get-Content -LiteralPath src/cpus/cpu_m88k.c | Select-Object -Skip 398 -First 80" in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+ succeeded in 360ms:
+rg: regress/artifacts/m88kexcdeliver/killtable4/*.out: IO error for operation on regress/artifacts/m88kexcdeliver/killtable4/*.out: The filename, directory name, or volume label syntax is incorrect. (os error 123)
+262-
+263-	/*
+264-	 *  If the PC has changed, then release any breakpoint we were
+265:	 *  currently stopped at.
+266-	 *
+267-	 *  TODO: multiple cpus?
+268-	 */
+--
+521-
+522-			if (!cpu->running)
+523-				snprintf(info + strlen(info), sizeof(info) - strlen(info),
+524:				    ", stopped");
+525-
+526-			debugmsg_cpu(cpu, SUBSYS_CPU, "", VERBOSITY_INFO, "%s", info);
+527-
+1043-
+1044-		emul_executing = true;
+1045-
+1046:		bool any_machine_still_running = false;
+1047-		for (int i = 0; i < emul->n_machines; i++)
+1048:			any_machine_still_running |= machine_run(emul->machines[i]);
+1049-
+1050-		emul_executing = false;
+1051-
+1052:		if (!any_machine_still_running) {
+1053-			if (debugger_enter_at_end_of_run) {
+1054-				debugmsg(SUBSYS_EMUL, NULL, VERBOSITY_WARNING, "All machines stopped.");
+1055-				debugger_reset();
+regress\gate_upstream.sh
+regress\gate_sh_rounding.sh
+regress\gate_ppc_halt.sh
+regress\gate_ppc.sh
+regress\gate_offline.sh
+regress\gate_mips_rounding.sh
+regress\gate_mips_folds.sh
+regress\gate_mips.sh
+regress\gate_m88k_rounding.sh
+regress\gate_hygiene.sh
+regress\gate_crossfamily.sh
+regress\gate_build.sh
+regress\gate_asan_sweep.sh
+regress\gate_arm.sh
+regress\gate_ab.sh
+regress\artifacts\widthkillclass\witness_20260830\agy_report.out
+regress\artifacts\diskimagesign\cascade_20260829\gate_mips.log
+regress\artifacts\diskimagesign\cascade_20260829\gate_build.log
+regress\artifacts\batteryreds\tgate_20260829\gate_sh_rounding.log
+regress\artifacts\wdccallsite\killtable_20260827\gatename480.py
+regress\artifacts\wdcaltctrl\killtable_20260827\gatealt2.py
+regress\artifacts\wdcaltctrl\killtable_20260827\gatealt.py
+regress\artifacts\wdcaltoffset\killtable_20260830\wslpropagate.sh
+regress\artifacts\wdcaltoffset\killtable_20260830\propagate494.sh
+regress\artifacts\pcc2widthkills\pass9_seats_20260904\opus\gate_names.txt
+regress\artifacts\pcc2widthkills\pass9_seats_20260904\opus\audit_gate.py
+regress\artifacts\pcc2widthkills\pass7_seats_20260904\opus\gatecheck.py
+regress\artifacts\sgireunmapped\killtable_20260831\repin2\gate_arm.patch
+regress\artifacts\sgireunmapped\killtable_20260831\port\installed_gatecwd.log
+regress\artifacts\pcc2widthkills\pass4_seats_20260903\fable\gate_names.txt
+regress\artifacts\pcc2defaultkill\pass4_seats\opus_logs\gatecheck.py
+regress\artifacts\sgireunmapped\killtable_20260831\pass4\gate_arm_pass4_50rows.log
+regress\artifacts\sgireunmapped\killtable_20260831\pass4\gate_arm_pass4.log
+regress\artifacts\pcc2defaultkill\killtable4_20260905\gate14_501d.log
+regress\artifacts\pcc2defaultkill\killtable4_20260905\gate14_501c.log
+regress\artifacts\gdromdefault_461\gate461.out
+regress\artifacts\pcc2defaultkill\killtable_20260905\gate14_501_FAIL_rowformat.log
+regress\artifacts\pcc2defaultkill\killtable_20260905\gate14_501.log
+regress\artifacts\pcc2widthkills\killtable2_20260903\gate14_p9.log
+regress\artifacts\pcc2widthkills\killtable2_20260903\gate14_p8.log
+regress\artifacts\pcc2widthkills\killtable2_20260903\gate14_p7.log
+regress\artifacts\pcc2widthkills\killtable2_20260903\gate14_p6.log
+regress\artifacts\pcc2widthkills\killtable2_20260903\gate14_p5.log
+regress\artifacts\pcc2widthkills\killtable2_20260903\gate14_p4.log
+regress\artifacts\pcc2widthkills\killtable2_20260903\gate14_p3.log
+regress\artifacts\pcc2widthkills\killtable2_20260903\gate14_p13.log
+regress\artifacts\pcc2widthkills\killtable2_20260903\gate14_p12.log
+regress\artifacts\pcc2widthkills\killtable2_20260903\gate14_p11.log
+regress\artifacts\pcc2widthkills\killtable2_20260903\gate14_p10.log
+regress\artifacts\pcc2defaultkill\killtable3_20260905\gate14_501b.log
+regress\gate_m88k_rounding.sh:319:#  BOTH a rung-3 WITNESS (0/9 -> 0/10 -> 3/22 on HEAD 83df95c: every trap-like class stopped
+regress\gate_m88k_rounding.sh:325:#  The pins are NAMED so that deleting a row is visible: `M88KEXC_RESULT=23/23' pins the
+regress\gate_m88k_rounding.sh:342:          "$(grep -c 'M88KEXC_RESULT=23/23' "$EXCLOG")" "1"
+regress\gate_m88k_rounding.sh:343:    check "m88k exc: IND set by the exception path from a pre-fault PSR with IND clear (indclr)" \
+regress\gate_m88k_rounding.sh:344:          "$(grep -cE '^M88KEXC_ROW=indclr +RESULT=DELIVER .*psr=0x8000000b .*epsr=0x80000000' "$EXCLOG")" "1"
+
+ succeeded in 808ms:
+.\CHANGELOG.md:67:catch (disclosed, `m88kexcdebt`): the post-delivery `cpu->delay_slot` else-branch (M_DELAYALWAYS 10/10, `opus_p2_logs/`), vectors 0..3's
+.\CHANGELOG.md:78:ordinary faults by this round, out of scope by the reopening rule: FILED `m88kdslotshadow` MEDIUM with the dissent verbatim; the row is
+.\CHANGELOG.md:121:were never FILED -- `m88kexctaildefault` (D4 not adopted), `m88ktbnd` and `m88kmxmkill` from pass 1 -- filed now as
+.\CHANGELOG.md:131:`m88kdslotshadow` MEDIUM (above); `m88kexcfrozendmt` LOW (the DMT/DMD/DMA zeroing sits outside the `update_shadow_regs` guard, so a
+.\CHANGELOG.md:134:not, until now); `m88kexcdebt` LOW (the disclosed coverage debt above).  Earlier from this campaign: `m88kexcsfu1`, `m88kexctaildefault`,
+.\OUTSTANDING_BUGS.md:24:> **`m88kdslotshadow`** (MEDIUM) -- `cpu_m88k.c` `m88k_exception()`, anchor `Perhaps something like this could work`: for a precise
+.\OUTSTANDING_BUGS.md:32:> **`m88kexcfrozendmt`** (LOW) -- the DMT/DMD/DMA zeroing sits OUTSIDE the `update_shadow_regs` guard, so a trap taken while frozen
+.\OUTSTANDING_BUGS.md:36:> it was not, until this row.  **`m88kexcdebt`** (LOW, harness) -- #502's disclosed coverage debt: the post-delivery `delay_slot`
+.\tools\pipeline\ledger.json:28747:   "note": "DEFECT, HIGH.  cpu_m88k.c, anchor `vector < M88K_EXCEPTION_USER_TRAPS_START && !implemented': only RESET/INTERRUPT/INSTRUCTION_ACCESS/DATA_ACCESS set `implemented = true'; nine other switch cases print a VERBOSITY_ERROR and break, so the fallback sets running=false on every CPU and returns (emul.c then breaks the main loop: a GRACEFUL guest-drivable machine halt, not an abort).  Pre-existing upstream (`git log -L' on the fallback returns only the 0.7.0 import); exposed by the #380 review, NOT introduced by #323/#380.  Reachable classes by raise site (deriver: grep -o 'm88k_exception(cpu, *M88K_EXCEPTION_[A-Z0-9_]+' src/cpus/cpu_m88k*.c | sort | uniq -c): PRIVILEGE_VIOLATION 10 (ldcr/stcr/xcr/rte/ld.usr/st.usr/tb0/tb1/tcnd in user mode), ILLEGAL_INTEGER_DIVIDE 4 (divu/div by zero, any mode), INTEGER_OVERFLOW 3 (add/sub, any mode), MISALIGNED_ACCESS 1, UNIMPLEMENTED_OPCODE 1 (prom_call in user mode); BOUNDS_CHECK and ERROR have no LITERAL-CONSTANT raise site -- but a supervisor tb0/tb1/tcnd names any 9-bit vector directly (`m88k_exception(cpu, ic->arg[2], 1)'), so both ARE reachable today (MEASURED on pass 1: supervisor `tb1 0,r3,7' halts HEAD; an earlier wording here said 'NO raise site today (latent)' -- corrected by #502's pass 1).  ERROR is additionally reached by the SFRZ re-route when a handler faults.  Vector offsets verified against Table 6-1 (mc88100.txt:8524-8538): PRIVILEGE 0x30, ILLEGAL_DIVIDE 0x40, OVERFLOW 0x48, MISALIGNED 0x20.  DISPOSITION: DELIVER (not a device-style decline -- the guest OS has handlers for these): `implemented = true' for the five, flowing through the existing common path (SFRZ, EPSR, SXIP/SNIP/SFIP shadow, supervisor switch, pc = VBR + 8*vector); MISALIGNED already fills DMT in the load/store template.  WITNESS OWED AT RUNG 3 BEFORE ANY EDIT: cold-debugger probe on committed testm88k or luna-88k (exemplars regress/m88k_idle_probe.py, m88k_rounding_probe.py): supervisor `divu r2,r3,r0', VBR into RAM, breakpoint at VBR+0x40, free-run -- pre-fix `unimplemented vector=0x008' and the machine stops; post-fix PC == VBR+0x40, SXIP = faulting instruction | XIP_V, PSR shadow frozen, machine running; plus a LIVENESS control (an already-delivered vector) and an ATTRIBUTION control (the same instruction on a non-faulting operand does not vector).  Split from m88kexcsfu1 (one fix design per round).  Ranked at the top of the live-defect tier, just below the exit(1)-abort class (this one stops gracefully).  Provenance: retrospective re-check (owner directive 2026-09-04) batch 2 -- GPT-6 Astra (codex, max effort) read-only review, adjudicated by Fable 5.1; artifacts regress/artifacts/retro_20260905/batch2_m88k/ (astra_batch2.txt, fable_adj_batch2.md).  The other seven panel seats were DELIBERATELY NOT FIRED on the retrospective (owner scope); the fix round runs the full nine-seat panel.  ROUND #502 (2026-09-05): SEVEN classes delivered (the five plus BOUNDS and ERROR), at BOTH sites (switch-1 `implemented' AND a tail `case' -- the one-site form was MEASURED to stop the cpu at the tail default).  Detector regress/m88k_exc_probe.py v3 (22 fault rows + 2 controls; rows resid50/sfu1h EXPECT HALT as negative controls) wired into gate 11; HEAD 0/9 -> 0/10 -> 3/22 (the two HALT controls + the pre-existing user vector 128), fix 9/9 -> 10/10 -> 22/22.  Three kill tables + the Opus pass-2 table under regress/artifacts/m88kexcdeliver/: table 1 exposed M_ERRORDROP (repaired: errortb), the Opus pass-2 table exposed M_NOVBR / M_SFRZTRAP / M_SFIPNOTGT / M_DSLOTSWAP (all 10/10; repaired: vbrtb, trapfrozen, dslot br.n +16), pass-2 seats exposed the trap-route blindness (repaired: misaligntb/unimpltb/div0tb/ovftb/privsuptb), the carry half of F14 (ovfc), the LEVEL channel (Fable: INFO vs ERROR IS observable at default verbosity), the `<=' tail-guard bound (usertb) and the missing negative controls (kimi: resid50, sfu1h); table 3 killed every one of those mutants; M_TRAPONLY EQUIVALENT (disclosed, m88kexcdebt).  Filed from the round: m88kdslotshadow MEDIUM, m88kexcfrozendmt LOW, m88kexchwtraps LOW, m88kexcdebt LOW.",
+.\tools\pipeline\ledger.json:28778:     "text": "ADJUDICATION PASS landed (pass3_panel_20260905_220902): codex, kimi, grok, deepseek, minimax answered; glm BURNED again; Opus and Fable Agent seats DIED on an Anthropic session limit (429) and are re-fired on pass 4; agy not fired.  grok/kimi CLOSE; codex/deepseek/minimax ONE MORE REPAIR -> v4: row indclr (IND never started clear -- the carry shape again), HALT classifier requires the stopped state + the named vector (+ pc == 0x40 for sfu1h), LEVEL contract narrowed to the ERROR/WARNING regression, sfu1h's channel restated (nested SFU1 halts at the fallback; with it off, re-routed to ERROR); mutants M_NOIND, M_NOSTOP; table 4 re-measures the carried-forward table-1 shapes.  Records: census (11 bypass / 10 delivered / vector 0 RESET-stop / 117 fallback), table-1 tally 11+2, M_TAILOFF equivalent, gate 2/22->3/22, PRETABLE correction appended, three phantom rows filed (m88kexctaildefault, m88ktbnd, m88kmxmkill)."
+.\tools\pipeline\ledger.json:28952:   "id": "m88kdslotshadow",
+.\tools\pipeline\ledger.json:28953:   "title": "m88kdslotshadow  cpu_m88k.c: for a precise fault in the delay slot of a taken br.n the else-arm sets SNIP = slot+4, SFIP = target (upstream's 'Perhaps something like this could work'); the MC88100 UM says the shadows copy NIP = target, FIP = target+4 -- rte then executes slot+4 (skipped by the branch) before the target, or the target twice when target == slot+4",
+.\tools\pipeline\ledger.json:28965:   "id": "m88kexcfrozendmt",
+.\tools\pipeline\ledger.json:28966:   "title": "m88kexcfrozendmt  cpu_m88k.c m88k_exception(): the common path zeroes DMT0-2/DMD0-2/DMA0-2 (`Default to no memory transactions') OUTSIDE the update_shadow_regs guard, so a TRAP taken while shadowing is frozen clears the exception-time registers the manual says it leaves untouched",
+.\tools\pipeline\ledger.json:28991:   "id": "m88kexcdebt",
+.\tools\pipeline\ledger.json:28992:   "title": "m88kexcdebt  #502's detector: disclosed clause-(e) coverage debt -- M_DELAYALWAYS (the post-delivery `cpu->delay_slot' else-branch is unpinned; needs a second UNFROZEN exception in one session), no rows for vectors 0..3's tail arms (see m88kexchwtraps; M_TAILOFF itself is EQUIVALENT for every vector), and the M_TRAPONLY / M_ISTRAPBOUNDS equivalence warrant (`implemented = is_trap' at BOUNDS is EQUIVALENT while no instruction raises vector 7 -- re-run when m88ktbnd lands)",
+.\tools\pipeline\ledger.json:29030:   "id": "m88kmxmkill",
+.\tools\pipeline\ledger.json:29031:   "title": "m88kmxmkill  cpu_m88k.c: writing PSR with the MXM (misaligned-access enable) bit set -- by stcr or by rte -- stops the cpu (`m88k_stcr' case M88K_CR_PSR); a supervisor guest reaches it with one instruction",
+Get-Content : Cannot find path 'src/machines/machine_testm88k.c' because it does not exist.
+At line:3 char:1
++ Get-Content -LiteralPath src/machines/machine_testm88k.c | Select-Obj ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : ObjectNotFound: (src/machines/machine_testm88k.c:String) [Get-Content], ItemNotFoundExce 
+   ption
+    + FullyQualifiedErrorId : PathNotFound,Microsoft.PowerShell.Commands.GetContentCommand
+ 
+
+			if (i == cmmu->patc_update_index)
+				printf(" <--");
+			printf("\n");
+		}
+	}
+}
+
+
+/*
+ *  m88k_irq_interrupt_assert():
+ *  m88k_irq_interrupt_deassert():
+ */
+void m88k_irq_interrupt_assert(struct interrupt *interrupt)
+{
+	struct cpu *cpu = (struct cpu *) interrupt->extra;
+	cpu->cd.m88k.irq_asserted = 1;
+}
+void m88k_irq_interrupt_deassert(struct interrupt *interrupt)
+{
+	struct cpu *cpu = (struct cpu *) interrupt->extra;
+	cpu->cd.m88k.irq_asserted = 0;
+}
+
+
+/*
+ *  m88k_ldcr():
+ *
+ *  Read from a control register. Store the resulting value in a register
+ *  (pointed to by r32ptr).
+ */
+void m88k_ldcr(struct cpu *cpu, uint32_t *r32ptr, int cr)
+{
+	uint32_t retval = cpu->cd.m88k.cr[cr];
+
+	switch (cr) {
+
+	case M88K_CR_PID:
+	case M88K_CR_PSR:
+	case M88K_CR_EPSR:
+	case M88K_CR_SSBR:
+	case M88K_CR_SXIP:
+	case M88K_CR_SNIP:
+	case M88K_CR_SFIP:
+	case M88K_CR_VBR:
+	case M88K_CR_DMD0:
+	case M88K_CR_DMD1:
+	case M88K_CR_DMD2:
+	case M88K_CR_SR0:
+	case M88K_CR_SR1:
+	case M88K_CR_SR2:
+	case M88K_CR_SR3:
+		break;
+
+	case M88K_CR_DMT0:
+	case M88K_CR_DMT1:
+	case M88K_CR_DMT2:
+		/*
+		 *  Catch some possible internal errors in the emulator:
+		 *
+		 *  For valid memory Load transactions, the Destination Register
+		 *  should not be zero.
+		 *
+		 *  The Byte Order bit should be the same as the CPU's.
+		 */
+		if (retval & DMT_VALID && !(retval & DMT_WRITE)) {
+			if (DMT_DREGBITS(retval) == M88K_ZERO_REG) {
+				debugmsg_cpu(cpu, SUBSYS_CPU, "m88k", VERBOSITY_ERROR,
+				    "ldcr: DMT DREG = zero? Internal error.");
+				cpu->running = false;
+				return;
+			}
+		}
+		if (!!(cpu->cd.m88k.cr[M88K_CR_PSR] & M88K_PSR_BO)
+		    != !!(retval & DMT_BO) && retval & DMT_VALID) {
+			debugmsg_cpu(cpu, SUBSYS_CPU, "m88k", VERBOSITY_ERROR,
+			    "ldcr: DMT byte order not same as CPUs?");
+			cpu->running = false;
+			return;
+		}
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n -g '*.out' 'M88KEXC_RESULT|M88KEXC_ROW=(indclr|resid50|sfu1h)' regress/artifacts/m88kexcdeliver/killtable4
+rg -n 'M88KEXC_RESULT|MUTANT' ../_scratchpad/m88kexc/killtable4b -g '*.out' -g '*.txt'
+rg -n 'M88K_PSR_SFD1|PSR_WANT|want = dict|bad =|M88KEXC_RESULT|BODY|body|floor|denominator' regress/m88k_exc_probe.py regress/artifacts/m88kexcdeliver/brief_m88kexc_adj.md
+Get-Content -LiteralPath regress/gate_m88k_rounding.sh | Select-Object -Skip 315 -First 65" in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n -C 3 'testm88k|ncpus' src/machines/machine_test.cc src/machines/machine_test.c
+rg -n -C 4 'M88K_CR_PSR|M88K_PSR_MXM' src/cpus/cpu_m88k.c | Select-Object -Skip 110 -First 60
+rg -n 'BODY|body|floor|denominator' regress/artifacts/m88kexcdeliver/brief_m88kexc_p2.md ../_scratchpad/m88kexc/brief_m88kexc_p4.md" in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+ succeeded in 249ms:
+rg: src/machines/machine_test.cc: The system cannot find the file specified. (os error 2)
+src/machines/machine_test.c-258-}
+src/machines/machine_test.c-259-
+src/machines/machine_test.c-260-
+src/machines/machine_test.c:261:MACHINE_SETUP(testm88k)
+src/machines/machine_test.c-262-{
+src/machines/machine_test.c-263-	machine->machine_name = strdup("M88K test machine");
+src/machines/machine_test.c-264-
+--
+src/machines/machine_test.c-272-}
+src/machines/machine_test.c-273-
+src/machines/machine_test.c-274-
+src/machines/machine_test.c:275:MACHINE_DEFAULT_CPU(testm88k)
+src/machines/machine_test.c-276-{
+src/machines/machine_test.c-277-	machine->cpu_name = strdup("88110");
+src/machines/machine_test.c-278-}
+--
+src/machines/machine_test.c-287-}
+src/machines/machine_test.c-288-
+src/machines/machine_test.c-289-
+src/machines/machine_test.c:290:MACHINE_REGISTER(testm88k)
+src/machines/machine_test.c-291-{
+src/machines/machine_test.c:292:	MR_DEFAULT(testm88k, "Test-machine for M88K",
+src/machines/machine_test.c-293-	    MACHINE_TESTM88K);
+src/machines/machine_test.c-294-
+src/machines/machine_test.c:295:	machine_entry_add_alias(me, "testm88k");
+src/machines/machine_test.c-296-}
+src/machines/machine_test.c-297-
+src/machines/machine_test.c-298-
+../_scratchpad/m88kexc/brief_m88kexc_p4.md:12:first VALID pass that finds zero floor breaches surviving adjudication -- with the denominator stated.  Pass 3 (the adjudication
+../_scratchpad/m88kexc/brief_m88kexc_p4.md:29:     M_NOSTOP (the fallback's `running = false` loop body -> `(void) j;`).
+../_scratchpad/m88kexc/brief_m88kexc_p4.md:31:     post-startup WARNING floor) -> contract reworded.  4. **sfu1h's channel restated** (kimi, grok): the nested SFU1 halts at
+../_scratchpad/m88kexc/brief_m88kexc_p4.md:81:**Does any floor breach survive in the v4 detector?**  The denominator claimed closed: `implemented` per class x route
+../_scratchpad/m88kexc/brief_m88kexc_p4.md:90:exact INFO (only "not ERROR/WARNING" is pinned).  **Name a cell in that enumeration with no row, or a body-tested lvalue the
+../_scratchpad/m88kexc/brief_m88kexc_p4.md:91:enumeration omits, or say CLOSE with your own denominator.**  One ask-again is already spent (pass 2); this pass is the repair's
+
+ succeeded in 297ms:
+regress/artifacts/m88kexcdeliver/killtable4\BASE_final.out:19:M88KEXC_ROW=indclr    RESULT=DELIVER  pc=0x00000048 sxip=0x0001000a snip=0x0001000e sfip=0x00010012 psr=0x8000000b epsr=0x80000000 r2=0xdeadbeef
+regress/artifacts/m88kexcdeliver/killtable4\BASE_final.out:23:M88KEXC_ROW=resid50   RESULT=HALT     pc=0x00010004 sxip=0x00000000 snip=0x00000000 sfip=0x00000000 psr=0x80000002 epsr=0x00000000 r2=0xdeadbeef
+regress/artifacts/m88kexcdeliver/killtable4\BASE_final.out:24:M88KEXC_ROW=sfu1h     RESULT=HALT     pc=0x00000040 sxip=0x00010006 snip=0x0001000a sfip=0x0001000e psr=0x8000000b epsr=0x80000002 r2=0xdeadbeef
+regress/artifacts/m88kexcdeliver/killtable4\BASE_final.out:27:M88KEXC_RESULT=23/23
+regress/artifacts/m88kexcdeliver/killtable4\M_DELIVERALL.out:19:M88KEXC_ROW=indclr    RESULT=DELIVER  pc=0x00000048 sxip=0x0001000a snip=0x0001000e sfip=0x00010012 psr=0x8000000b epsr=0x80000000 r2=0xdeadbeef
+regress/artifacts/m88kexcdeliver/killtable4\M_DELIVERALL.out:23:M88KEXC_ROW=resid50   RESULT=TAILHALT pc=0x00000190 sxip=0x00010006 snip=0x0001000a sfip=0x0001000e psr=0x8000000b epsr=0x80000002 r2=0xdeadbeef
+regress/artifacts/m88kexcdeliver/killtable4\M_DELIVERALL.out:24:M88KEXC_ROW=sfu1h     RESULT=STOP     pc=0x00000050 sxip=0x00010006 snip=0x0001000a sfip=0x0001000e psr=0x8000000b epsr=0x80000002 r2=0xdeadbeef
+regress/artifacts/m88kexcdeliver/killtable4\M_DELIVERALL.out:27:M88KEXC_RESULT=21/23
+regress/artifacts/m88kexcdeliver/killtable4\BASE.out:19:M88KEXC_ROW=indclr    RESULT=DELIVER  pc=0x00000048 sxip=0x0001000a snip=0x0001000e sfip=0x00010012 psr=0x8000000b epsr=0x80000000 r2=0xdeadbeef
+regress/artifacts/m88kexcdeliver/killtable4\BASE.out:23:M88KEXC_ROW=resid50   RESULT=HALT     pc=0x00010004 sxip=0x00000000 snip=0x00000000 sfip=0x00000000 psr=0x80000002 epsr=0x00000000 r2=0xdeadbeef
+regress/artifacts/m88kexcdeliver/killtable4\BASE.out:24:M88KEXC_ROW=sfu1h     RESULT=HALT     pc=0x00000040 sxip=0x00010006 snip=0x0001000a sfip=0x0001000e psr=0x8000000b epsr=0x80000002 r2=0xdeadbeef
+regress/artifacts/m88kexcdeliver/killtable4\BASE.out:27:M88KEXC_RESULT=23/23
+regress/artifacts/m88kexcdeliver/killtable4\M_CARRYCLR.out:19:M88KEXC_ROW=indclr    RESULT=DELIVER  pc=0x00000048 sxip=0x0001000a snip=0x0001000e sfip=0x00010012 psr=0x8000000b epsr=0x80000000 r2=0xdeadbeef
+regress/artifacts/m88kexcdeliver/killtable4\M_CARRYCLR.out:23:M88KEXC_ROW=resid50   RESULT=HALT     pc=0x00010004 sxip=0x00000000 snip=0x00000000 sfip=0x00000000 psr=0x80000002 epsr=0x00000000 r2=0xdeadbeef
+regress/artifacts/m88kexcdeliver/killtable4\M_CARRYCLR.out:24:M88KEXC_ROW=sfu1h     RESULT=HALT     pc=0x00000040 sxip=0x00010006 snip=0x0001000a sfip=0x0001000e psr=0x8000000b epsr=0x80000002 r2=0xdeadbeef
+regress/artifacts/m88kexcdeliver/killtable4\M_CARRYCLR.out:27:M88KEXC_RESULT=22/23
+regress/artifacts/m88kexcdeliver/killtable4\M_NOSFRZ.out:19:M88KEXC_ROW=indclr    RESULT=BADREGS  pc=0x00000048 sxip=0x0001000a snip=0x0001000e sfip=0x00010012 psr=0x8000000a epsr=0x80000000 r2=0xdeadbeef bad=psr
+regress/artifacts/m88kexcdeliver/killtable4\M_NOSFRZ.out:23:M88KEXC_ROW=resid50   RESULT=HALT     pc=0x00010004 sxip=0x00000000 snip=0x00000000 sfip=0x00000000 psr=0x80000002 epsr=0x00000000 r2=0xdeadbeef
+regress/artifacts/m88kexcdeliver/killtable4\M_NOSFRZ.out:24:M88KEXC_ROW=sfu1h     RESULT=HALT     pc=0x00000040 sxip=0x00010006 snip=0x0001000a sfip=0x0001000e psr=0x8000000a epsr=0x80000002 r2=0xdeadbeef
+regress/artifacts/m88kexcdeliver/killtable4\M_NOSFRZ.out:27:M88KEXC_RESULT=2/23
+regress/artifacts/m88kexcdeliver/killtable4\M_NOSHADOW.out:19:M88KEXC_ROW=indclr    RESULT=BADREGS  pc=0x00000048 sxip=0x00000000 snip=0x00000000 sfip=0x00000000 psr=0x8000000b epsr=0x80000000 r2=0xdeadbeef bad=sxip,snip,sfip
+regress/artifacts/m88kexcdeliver/killtable4\M_NOSHADOW.out:23:M88KEXC_ROW=resid50   RESULT=HALT     pc=0x00010004 sxip=0x00000000 snip=0x00000000 sfip=0x00000000 psr=0x80000002 epsr=0x00000000 r2=0xdeadbeef
+regress/artifacts/m88kexcdeliver/killtable4\M_NOSHADOW.out:24:M88KEXC_ROW=sfu1h     RESULT=HALT     pc=0x00000040 sxip=0x00000000 snip=0x00000000 sfip=0x00000000 psr=0x8000000b epsr=0x80000002 r2=0xdeadbeef
+regress/artifacts/m88kexcdeliver/killtable4\M_NOSHADOW.out:27:M88KEXC_RESULT=3/23
+regress/artifacts/m88kexcdeliver/killtable4\M_SNIPX.out:19:M88KEXC_ROW=indclr    RESULT=BADREGS  pc=0x00000048 sxip=0x0001000a snip=0x0001000a sfip=0x0001000e psr=0x8000000b epsr=0x80000000 r2=0xdeadbeef bad=snip,sfip
+regress/artifacts/m88kexcdeliver/killtable4\M_SNIPX.out:23:M88KEXC_ROW=resid50   RESULT=HALT     pc=0x00010004 sxip=0x00000000 snip=0x00000000 sfip=0x00000000 psr=0x80000002 epsr=0x00000000 r2=0xdeadbeef
+regress/artifacts/m88kexcdeliver/killtable4\M_SNIPX.out:24:M88KEXC_ROW=sfu1h     RESULT=HALT     pc=0x00000040 sxip=0x00010006 snip=0x00010006 sfip=0x0001000a psr=0x8000000b epsr=0x80000002 r2=0xdeadbeef
+regress/artifacts/m88kexcdeliver/killtable4\M_SNIPX.out:27:M88KEXC_RESULT=3/23
+regress/artifacts/m88kexcdeliver/killtable4\M_LEVEL.out:19:M88KEXC_ROW=indclr    RESULT=BADREGS  pc=0x00000048 sxip=0x0001000a snip=0x0001000e sfip=0x00010012 psr=0x8000000b epsr=0x80000000 r2=0xdeadbeef bad=level
+regress/artifacts/m88kexcdeliver/killtable4\M_LEVEL.out:23:M88KEXC_ROW=resid50   RESULT=HALT     pc=0x00010004 sxip=0x00000000 snip=0x00000000 sfip=0x00000000 psr=0x80000002 epsr=0x00000000 r2=0xdeadbeef
+regress/artifacts/m88kexcdeliver/killtable4\M_LEVEL.out:24:M88KEXC_ROW=sfu1h     RESULT=HALT     pc=0x00000040 sxip=0x00010006 snip=0x0001000a sfip=0x0001000e psr=0x8000000b epsr=0x80000002 r2=0xdeadbeef
+regress/artifacts/m88kexcdeliver/killtable4\M_LEVEL.out:27:M88KEXC_RESULT=3/23
+regress/artifacts/m88kexcdeliver/killtable4\M_NOIND.out:19:M88KEXC_ROW=indclr    RESULT=BADREGS  pc=0x00000048 sxip=0x0001000a snip=0x0001000e sfip=0x00010012 psr=0x80000009 epsr=0x80000000 r2=0xdeadbeef bad=psr
+regress/artifacts/m88kexcdeliver/killtable4\M_NOIND.out:23:M88KEXC_ROW=resid50   RESULT=HALT     pc=0x00010004 sxip=0x00000000 snip=0x00000000 sfip=0x00000000 psr=0x80000002 epsr=0x00000000 r2=0xdeadbeef
+regress/artifacts/m88kexcdeliver/killtable4\M_NOIND.out:24:M88KEXC_ROW=sfu1h     RESULT=HALT     pc=0x00000040 sxip=0x00010006 snip=0x0001000a sfip=0x0001000e psr=0x8000000b epsr=0x80000002 r2=0xdeadbeef
+regress/artifacts/m88kexcdeliver/killtable4\M_NOIND.out:27:M88KEXC_RESULT=22/23
+regress/artifacts/m88kexcdeliver/killtable4\M_NOEPSR.out:19:M88KEXC_ROW=indclr    RESULT=BADREGS  pc=0x00000048 sxip=0x0001000a snip=0x0001000e sfip=0x00010012 psr=0x8000000b epsr=0x00000000 r2=0xdeadbeef bad=epsr
+regress/artifacts/m88kexcdeliver/killtable4\M_NOEPSR.out:23:M88KEXC_ROW=resid50   RESULT=HALT     pc=0x00010004 sxip=0x00000000 snip=0x00000000 sfip=0x00000000 psr=0x80000002 epsr=0x00000000 r2=0xdeadbeef
+regress/artifacts/m88kexcdeliver/killtable4\M_NOEPSR.out:24:M88KEXC_ROW=sfu1h     RESULT=HALT     pc=0x00000040 sxip=0x00010006 snip=0x0001000a sfip=0x0001000e psr=0x8000000b epsr=0x00000000 r2=0xdeadbeef
+regress/artifacts/m88kexcdeliver/killtable4\M_NOEPSR.out:27:M88KEXC_RESULT=2/23
+regress/artifacts/m88kexcdeliver/killtable4\M_NOMODE.out:19:M88KEXC_ROW=indclr    RESULT=DELIVER  pc=0x00000048 sxip=0x0001000a snip=0x0001000e sfip=0x00010012 psr=0x8000000b epsr=0x80000000 r2=0xdeadbeef
+regress/artifacts/m88kexcdeliver/killtable4\M_NOMODE.out:23:M88KEXC_ROW=resid50   RESULT=HALT     pc=0x00010004 sxip=0x00000000 snip=0x00000000 sfip=0x00000000 psr=0x80000002 epsr=0x00000000 r2=0xdeadbeef
+regress/artifacts/m88kexcdeliver/killtable4\M_NOMODE.out:24:M88KEXC_ROW=sfu1h     RESULT=HALT     pc=0x00000040 sxip=0x00010006 snip=0x0001000a sfip=0x0001000e psr=0x8000000b epsr=0x80000002 r2=0xdeadbeef
+regress/artifacts/m88kexcdeliver/killtable4\M_NOMODE.out:27:M88KEXC_RESULT=19/23
+regress/artifacts/m88kexcdeliver/killtable4\M_NOSTOP.out:19:M88KEXC_ROW=indclr    RESULT=DELIVER  pc=0x00000048 sxip=0x0001000a snip=0x0001000e sfip=0x00010012 psr=0x8000000b epsr=0x80000000 r2=0xdeadbeef
+regress/artifacts/m88kexcdeliver/killtable4\M_NOSTOP.out:23:M88KEXC_ROW=resid50   RESULT=STOP     pc=0x00010004 sxip=0x00000000 snip=0x00000000 sfip=0x00000000 psr=0x80000002 epsr=0x00000000 r2=0xdeadbeef
+regress/artifacts/m88kexcdeliver/killtable4\M_NOSTOP.out:24:M88KEXC_ROW=sfu1h     RESULT=STOP     pc=0x00000040 sxip=0x00010006 snip=0x0001000a sfip=0x0001000e psr=0x8000000b epsr=0x80000002 r2=0xdeadbeef
+regress/artifacts/m88kexcdeliver/killtable4\M_NOSTOP.out:27:M88KEXC_RESULT=21/23
+regress/artifacts/m88kexcdeliver/killtable4\M_VEC4.out:19:M88KEXC_ROW=indclr    RESULT=STOP     pc=0x00000024 sxip=0x0001000a snip=0x0001000e sfip=0x00010012 psr=0x8000000b epsr=0x80000000 r2=0xdeadbeef
+regress/artifacts/m88kexcdeliver/killtable4\M_VEC4.out:23:M88KEXC_ROW=resid50   RESULT=HALT     pc=0x00010004 sxip=0x00000000 snip=0x00000000 sfip=0x00000000 psr=0x80000002 epsr=0x00000000 r2=0xdeadbeef
+regress/artifacts/m88kexcdeliver/killtable4\M_VEC4.out:24:M88KEXC_ROW=sfu1h     RESULT=STOP     pc=0x00000020 sxip=0x00010006 snip=0x0001000a sfip=0x0001000e psr=0x8000000b epsr=0x80000002 r2=0xdeadbeef
+regress/artifacts/m88kexcdeliver/killtable4\M_VEC4.out:27:M88KEXC_RESULT=1/23
+../_scratchpad/m88kexc/killtable4b\M_TAILRETURN.out:27:M88KEXC_RESULT=2/23
+../_scratchpad/m88kexc/killtable4b\BASE_final.out:27:M88KEXC_RESULT=23/23
+../_scratchpad/m88kexc/killtable4b\BASE.out:27:M88KEXC_RESULT=23/23
+regress/m88k_exc_probe.py:94:Output: one `M88KEXC_ROW=<name> RESULT=<word> ...` line per row, `M88KEXC_RESULT=<delivered>/<fault rows>`,
+regress/m88k_exc_probe.py:101:delivered row: those print at the post-startup WARNING floor, INFO and DEBUG do not -- so exact INFO is NOT pinned,
+regress/m88k_exc_probe.py:202:PSR_WANT = {"ovfc": 0x9000000b}                  # MODE | C | SFD1 | IND | SFRZ: carry PRESERVED through the exception path
+regress/m88k_exc_probe.py:335:        want = dict(sxip=(fault_pc | XIP_V), psr=PSR_WANT.get(name, PSR_EXC), epsr=epsr_exp, r2=0xdeadbeef)
+regress/m88k_exc_probe.py:349:        bad = [k for k, v in want.items() if res.get(k) != v]
+regress/m88k_exc_probe.py:366:    delivered = 0; total = 0; controls_bad = []
+regress/m88k_exc_probe.py:381:    print("M88KEXC_RESULT=%d/%d" % (delivered, total), flush=True)
+regress/artifacts/m88kexcdeliver/brief_m88kexc_adj.md:21:REPAIR is right, not only that the finding was.  This pass is also the REPAIR's pass 2 (the v3 probe is new floor-bound material):
+regress/artifacts/m88kexcdeliver/brief_m88kexc_adj.md:22:the chain closes on the first VALID pass finding zero floor breaches -- so state your denominator: which cells / mutant shapes you
+regress/artifacts/m88kexcdeliver/brief_m88kexc_adj.md:55:  probe exits non-zero on any failure.  Gate 11 pins `M88KEXC_RESULT=22/22`, the two controls, resid50/sfu1h HALT, vbrtb at 0x2038,
+regress/artifacts/m88kexcdeliver/brief_m88kexc_adj.md:151:* The repair (v3 probe, 12 new rows) is NEW floor-bound material and this pass is its pass 2.  Denominator I claim for the chain
+regress/artifacts/m88kexcdeliver/brief_m88kexc_adj.md:158:  cell in that enumeration with no row, or a body-tested lvalue I left out of the enumeration?
+#  ---------------------------------------------------------------------------
+#  m88kexcdeliver (2026-09-05): the exception-DELIVERY detector, wired here for the same
+#  reason as the #438 probe above -- this gate already owns the m88k binary.  The probe is
+#  BOTH a rung-3 WITNESS (0/9 -> 0/10 -> 3/22 on HEAD 83df95c: every trap-like class stopped
+#  the machine; the 3 are the two rows whose CORRECT answer is HALT plus the pre-existing user
+#  vector 128 -- probe10_head.out / probe_v3_head.out) and the DETECTOR (23 fault rows + 2
+#  controls, three kill tables: killtable/, killtable2/, killtable3/ under
+#  regress/artifacts/m88kexcdeliver/; table 4 = killtable4/, the v4 rows).  Only the detector half runs here.
+#
+#  The pins are NAMED so that deleting a row is visible: `M88KEXC_RESULT=23/23' pins the
+#  denominator (a row that stops running shrinks it); resid50 and sfu1h are the two rows
+#  whose CORRECT answer is HALT -- they separate the shipped fix from a form that delivers
+#  every vector (the rejected D4) or SFU1 (row m88kexcsfu1); vbrtb is the one ANCHORED row
+#  (VBR relocated to 0x2000: it alone reds if the vector base stops being read).
+EXCLOG=$LOGDIR/m88k_exc.log
+python3 m88k_exc_probe.py "$PMAX" > "$EXCLOG" 2>&1 || true
+grep -E "^M88KEXC_(ROW|RESULT|SELFTEST|CONTROLS)" "$EXCLOG" | cut -c1-110 | sed 's/^/       /'
+
+if ! grep -q "M88KEXC_DONE" "$EXCLOG"; then
+    note "m88k exception-delivery probe produced no completion sentinel; last lines follow"
+    tail -5 "$EXCLOG" | sed 's/^/       /'
+    check "m88k exc: probe completed" "no" "yes"
+else
+    check "m88k exc: CR parse self-test (PSR at reset == 0x80000002)" \
+          "$(grep -c 'M88KEXC_SELFTEST=OK' "$EXCLOG")" "1"
+    check "m88k exc: 23 fault rows, all as expected (the denominator is the pin)" \
+          "$(grep -c 'M88KEXC_RESULT=23/23' "$EXCLOG")" "1"
+    check "m88k exc: IND set by the exception path from a pre-fault PSR with IND clear (indclr)" \
+          "$(grep -cE '^M88KEXC_ROW=indclr +RESULT=DELIVER .*psr=0x8000000b .*epsr=0x80000000' "$EXCLOG")" "1"
+    check "m88k exc: the two liveness/attribution controls computed their quotients" \
+          "$(grep -cE '^M88KEXC_ROW=(live|attrib) +RESULT=DONE' "$EXCLOG")" "2"
+    check "m88k exc: a residual vector (50) still HALTS at the fallback (negative control vs D4)" \
+          "$(grep -cE '^M88KEXC_ROW=resid50 +RESULT=HALT' "$EXCLOG")" "1"
+    check "m88k exc: SFU1 inside a handler still HALTS (the m88kexcsfu1 boundary)" \
+          "$(grep -cE '^M88KEXC_ROW=sfu1h +RESULT=HALT' "$EXCLOG")" "1"
+    check "m88k exc: the anchored row (VBR relocated) delivered at 0x2038" \
+          "$(grep -cE '^M88KEXC_ROW=vbrtb +RESULT=DELIVER +pc=0x00002038' "$EXCLOG")" "1"
+    check "m88k exc: a trap while frozen delivers to its own vector, not ERROR" \
+          "$(grep -cE '^M88KEXC_ROW=trapfrozen +RESULT=DELIVER +pc=0x00000038' "$EXCLOG")" "1"
+    check "m88k exc: carry survives the exception path (PSR 0x9000000b)" \
+          "$(grep -cE '^M88KEXC_ROW=ovfc +RESULT=DELIVER .*psr=0x9000000b' "$EXCLOG")" "1"
+    check "m88k exc: no row carried the pre-fix ERROR-level line (bad=level)" \
+          "$(grep -c 'bad=.*level' "$EXCLOG")" "0"
+fi
+
+gate_end
+
+codex
+**CLOSE THE CHAIN — zero surviving floor breaches in the stated detector scope.**
+
+- **Repair 1 — UPHOLD.** `indclr` makes IND-setting observable: EPSR must retain `0x80000000`, while PSR must become `0x8000000b`. Dropping IND produces `0x80000009`, rejected by the exact comparison. The recorded `M_NOIND` result, **22/23 with indclr bad=psr**, confirms this. Grep anchors in [the probe](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/m88k_exc_probe.py): `PSR_INDCLR`, `want = dict`, `bad =`.
+
+- **Repair 2 — UPHOLD.** HALT now requires a diagnostic plus stopped-state evidence, the expected vector, and—for `sfu1h`—PC `0x40`. The stop messages derive from runtime state: anchors `All machines stopped.` in [emul.c](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/core/emul.c) and `if (!cpu->running)` preceding `", stopped"` in [debugger.c](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/debugger/debugger.c). `M_NOSTOP` **21/23**, with both negative controls failing, confirms the repaired distinction. Probe anchors: `EXPECT_VECTOR`, `halted =`, `stage1`.
+
+**SFD1 — sufficient coverage; refine “every row.”** The 21 expected-DELIVER rows compare PSR exactly. Without SFD1, ordinary rows yield `0x80000003` versus `0x8000000b`; `ovfc` yields `0x90000003` versus `0x9000000b`. The two expected-HALT rows bypass that comparison: `resid50` remains valid, while `sfu1h` loses the intended nested SFU1 halt. Thus SFD1 is observable, but “bad=psr on every row” is incorrect. Anchors: `PSR_WANT`, `if halted:`, `want = dict`.
+
+My denominator is the stated reachable class × route cells, fallback predicate and stop, tail labels/bound, four SFRZ × is_trap cells, VBR/scaling, four PSR bits plus carry, EPSR, implemented shadow behavior, and ERROR/WARNING visibility. These have **23 fault rows: 21 DELIVER + 2 HALT**, with **12/12 table-4/4b shapes killed**. The disclosed debts remain excluded. Destination `r2` preservation can also be named; it is already checked by `r2=0xdeadbeef`.
+
+One records nit: the probe’s `sfu1h` description still says HEAD produces `BADREGS stage1`; it actually produces **STOP**, because vector rejection happens first. This does not weaken detection.
+
+Local HEAD and probe hash matched the packet. Measurements were read from artifacts; no gates or battery were run.
+tokens used
+72,495
+**CLOSE THE CHAIN — zero surviving floor breaches in the stated detector scope.**
+
+- **Repair 1 — UPHOLD.** `indclr` makes IND-setting observable: EPSR must retain `0x80000000`, while PSR must become `0x8000000b`. Dropping IND produces `0x80000009`, rejected by the exact comparison. The recorded `M_NOIND` result, **22/23 with indclr bad=psr**, confirms this. Grep anchors in [the probe](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/m88k_exc_probe.py): `PSR_INDCLR`, `want = dict`, `bad =`.
+
+- **Repair 2 — UPHOLD.** HALT now requires a diagnostic plus stopped-state evidence, the expected vector, and—for `sfu1h`—PC `0x40`. The stop messages derive from runtime state: anchors `All machines stopped.` in [emul.c](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/core/emul.c) and `if (!cpu->running)` preceding `", stopped"` in [debugger.c](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/debugger/debugger.c). `M_NOSTOP` **21/23**, with both negative controls failing, confirms the repaired distinction. Probe anchors: `EXPECT_VECTOR`, `halted =`, `stage1`.
+
+**SFD1 — sufficient coverage; refine “every row.”** The 21 expected-DELIVER rows compare PSR exactly. Without SFD1, ordinary rows yield `0x80000003` versus `0x8000000b`; `ovfc` yields `0x90000003` versus `0x9000000b`. The two expected-HALT rows bypass that comparison: `resid50` remains valid, while `sfu1h` loses the intended nested SFU1 halt. Thus SFD1 is observable, but “bad=psr on every row” is incorrect. Anchors: `PSR_WANT`, `if halted:`, `want = dict`.
+
+My denominator is the stated reachable class × route cells, fallback predicate and stop, tail labels/bound, four SFRZ × is_trap cells, VBR/scaling, four PSR bits plus carry, EPSR, implemented shadow behavior, and ERROR/WARNING visibility. These have **23 fault rows: 21 DELIVER + 2 HALT**, with **12/12 table-4/4b shapes killed**. The disclosed debts remain excluded. Destination `r2` preservation can also be named; it is already checked by `r2=0xdeadbeef`.
+
+One records nit: the probe’s `sfu1h` description still says HEAD produces `BADREGS stage1`; it actually produces **STOP**, because vector rejection happens first. This does not weaken detection.
+
+Local HEAD and probe hash matched the packet. Measurements were read from artifacts; no gates or battery were run.

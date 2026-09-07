@@ -1,3 +1,597 @@
+# Round #503 lunaabsentcpu -- the LUNA-88K interrupt controller called an absent CPU's NULL handler: a store to an interrupt mask on the DEFAULT one-CPU machine terminated the simulator; the walk is now bounded to the slots DEVINIT connected, with a 37-row rung-3 detector
+
+`src/devices/dev_luna88k.c`.  `reassert_interrupts()` walked `for (cpu = 0; cpu < MAX_CPUS; cpu++)` and called
+`d->cpu_irq[cpu].interrupt_assert(...)`.  **DEVINIT only `INTERRUPT_CONNECT`s the slots the machine actually has**,
+and `luna88k_data` is allocated zeroed, so an unpopulated slot's function pointer is the memset's NULL.  On the
+DEFAULT one-CPU machine a guest store of `0xfc000000` to `INT_ST_MASK1`, followed by a store to `SOFT_INT1` or to
+any device line that mask enables, follows a null function pointer and the process dies.  **Pre-existing upstream**:
+the HACK comment's per-count connects and this walk are both the 0.7.0 import.
+
+**WITNESS, rung 3** -- a real guest instruction through real address decode on an UNMODIFIED in-tree machine
+description, `regress/luna_absentcpu_probe.py`.  It carries both mandated controls: a LIVENESS control (a known
+value returns through the same decode) and a DEVICE-SIGNATURE control (the observed value could only have come from
+this device).  Symptom on the pre-fix committed build, clean after, same script.
+
+**THE FIX** captures `devinit->machine->ncpus` into `d->ncpus` and bounds the walk to it, so **the walk bound and
+the connect predicate are the same number by construction** rather than by coincidence.  Three hunks, no behaviour
+change for any populated slot.
+
+**THE PASS-2 REVISION, and why it is not "cannot hurt".**  Pass 1's form captured `ncpus` ABOVE the `> 4` exit.
+The Fable pass-1 seat asked for the capture to move below it or for a clamp; the minimax pass-2 seat supplied the
+reason that makes it more than tidiness -- **with the capture above the exit, that exit became LOAD-BEARING for the
+walk's bound**, where pre-fix the walk was bounded by `MAX_CPUS` whatever `ncpus` was.  The revision removes a
+dependency the fix itself had introduced.  Per the repair-chain rule, that revision owes its own pass; brief written
+(`brief_lunaabs_p6.md`), panel owed.
+
+*** A RECORD CORRECTION THAT OVERTURNS A CORRECTION, and the displaced wording was CLOSER TO RIGHT. ***
+The capture comment ended *"(delete that exit and a 5-cpu machine would walk `cpu_irq[4]`)"*.  **Measured FALSE by
+the Opus seat**: `machine_luna88k.c` carries a SECOND `ncpus > 4` guard AFTER its `device_add`, so deleting the
+device's exit lets DEVINIT capture 5 and the MACHINE layer ends the run before any guest instruction -- measured
+both ways at `-n 5`; base prints the device's message, the mutant prints the machine's, both exit 1, **neither
+walks**.  Deleting BOTH exits is what would walk `cpu_irq[4]`.
+**And the sharper half: the pass-3 refutation that produced that wording was itself wrong.**  kimi and grok had
+overturned the pass-2 phrasing *"<= MAX_CPUS by construction, not by that exit"* -- but **both seats read only the
+device file and neither saw the machine-layer guard**, so the wording they displaced was closer to the truth than
+the correction that replaced it.  Corrected in place in the shipped comment, and said plainly here rather than
+silently superseded.  *A correction carries more authority than the error it replaces, which is why it earns a
+second reading and not less of one -- the third instance of that class in this project.*
+
+**THE DETECTOR** -- `regress/luna_absentcpu_probe.py`, 37 rows, five kill tables.  `killtable5` on the shipped
+instrument: **BASE 37/37**, and every one of the twenty-six distinct mutants is KILLED -- `M_NOASSIGN` 19/33,
+`M_HARD1` and `M_ENX1` 26/35 and 26/33, `M_OFFBY1` 26/29, `M_EN0`/`M_ENSH1` 30/35, `M_CALLGUARD` 31/33,
+`M_GUARDASSERT` 31/32, `M_NULLA` 31/32, `M_LATCH`/`M_REVERT` 30/32, down to `M_DEASSERT0` and `M_NOCLEAR` at 36/37.
+**One mutant does not die and that is a RESULT, not a gap**: `M_NULLAB` scores 37/37, and its warrant was corrected
+during the round -- the empty-name stub path it edits is **dead code**, so the mutant is EQUIVALENT rather than an
+escape.  Recorded with its warrant, per the rule that a mutant which will not die has exactly three explanations and
+silently re-aiming it picks one without measuring which.
+**Five mutants were additionally CROSS-SCORED on the frozen v5 instrument** (`*_on_v5.out`), which is what makes the
+v6 rows' contribution a measurement rather than a claim: `M_ENP1` and `M_SWP1` are 34/34 -- clean sweeps of v5 --
+and 35/37 on v6, so those rows are the reason they die at all.
+
+**TREES.**  `dev_luna88k.c` is a SHARED file -- the divergence set was DERIVED (`tools/est_divergence.txt`, six
+paths) and does not contain it -- so the fix landed byte-identically in all five copies.  **Two-part clearance RUN,
+not asserted**, on every tree that has a binary: `build` (pmax), `/tmp/gxsec-build` (arc) and `build-asan` all
+report PART1 CLEAN / PART2 FRESH after a rebuild; **`est/` is a SOURCE tree and its part 2 is N/A, stated rather
+than left blank** -- an unrun check and an inapplicable one must not render the same.  The build script takes the
+binary's own freshness as the oracle rather than `make`'s exit status, which has been observed reporting 0 on a
+failed build.
+
+*** PASS 2 (the repair-chain pass this REVISION owed) REFUTED THE REVISION'S OWN RATIONALE. ***  The pass-1
+form captured `ncpus` above the `> 4` exit; the pass-2 revision moved it below, on the argument that this
+removes a dependency the fix had introduced.  **It does not** (codex, GPT-6 Astra at max).  Above or below, the
+assignment supplies the same bound whenever execution reaches the walk, because the walk is downstream of the
+exit either way -- with the capture above, a 5-cpu machine stores 5 and the exit ends the process before any
+walk; with it below, the exit fires before the store.  **Neither reaches the walk, and both placements rely
+equally on initialization rejecting excessive counts.**  A CLAMP to `MAX_CPUS` is what would buy independence,
+and the addition licence refuses one without a measured delta -- the seat found no failure in any accepted
+configuration.  **Disposition: KEEP the relocation, CORRECT the claim (L4, in-round).**  A second precision fix
+in the same comment: the walk bound and the connect predicate carry the same VALUE, not one shared field -- the
+predicates still read `machine->ncpus` while the walk reads the snapshot.  The same seat confirmed the snapshot
+is stable in this fork (counts assigned during configuration, CPUs created before devices, no later mutation or
+CPU-add path), which is the premise the brief had deliberately left as a question.
+
+**AND IT PREDICTED TWO SURVIVORS, BOTH SINCE MEASURED AT 37/37** (`killtable6_codexpred/`, BASE 37/37 opening
+and closing, clone clean, no sentinel):
+
+| mutant | score | disposition |
+|---|---|---|
+| `cpu < (d->ncpus & -d->ncpus)` -- the lowest set bit | **37/37 TOTAL ESCAPE** | disclosed clause-(e) debt |
+| `software_interrupt_status[cpu] & 1` | **37/37 TOTAL ESCAPE** | disclosed clause-(e) debt |
+
+*** BOTH ARE MEMBERS OF FAMILIES THIS PROBE HAD ALREADY DISCLOSED, WHICH IS CLAUSE (e) WORKING RATHER THAN A
+FLOOR BREACH. ***  The `& 1` mutant is the `== 1` cell opus5 disclosed on pass 4 -- the body tests
+NONZERO-ness and never partitions the nonzero class, and every SOFT value any session writes is 1, so any
+predicate true of 1 preserves every observation.  Two spellings, one cell.  The lowest-set-bit mutant is the
+`ncpus`-dependent fold **kimi NAMED on pass 5 before any member existed**, writing that such a fold "is the
+IDENTITY at every count this probe boots -- 1, 2 and 4 -- and folds only at `-n 3', which no session boots".
+It is identity at 1, 2 and 4 and under-walks only at 3, exactly as predicted.  **The pass-5 disposition stands:
+disclosed debt, not clause (d)** -- `(d->ncpus & -d->ncpus)` does not READ like the same check, which is clause
+(d)'s own test, and every single-token weakening of that bound IS rowed and DOES die (`M_OFFBY1`, `M_REVERT`,
+`M_HARD1`, `M_SKIP1`).  Contract upgraded from NAMED to MEASURED in probe v8 (docstring-only, proved by
+comparing executable structure with docstrings stripped against the frozen v7 the table ran).  Closure is one
+`-n 3` session and would close the whole family; filed as `lunancpus3` rather than taken in-round, because the
+round's scope is the walk bound and a new session is new apparatus with its own load sensitivity.
+
+**FILED, not fixed.**  `lunaabsentmaskdecl`: the absent slots' MASK and SOFT registers remain guest-writable
+storage with readback.  This fix bounds the WALK and takes none of the six de-fatalisation dispositions for the
+REGISTERS -- a board-model question rather than a crash, and the pass-6 brief asks explicitly whether it should have
+been in-round.  `lunadefaultstop`: the default-machine stop path, raised in the same passes.
+
+# Round #502 m88kexcdeliver -- the MC88100 model stopped EVERY guest CPU for seven trap-like exception classes; now it delivers them (VBR + 8*vector, shadows and PSR per the manual), and a 22-row detector pins the delivery
+
+**2026-09-05.  HIGH.  `src/cpus/cpu_m88k.c` (`m88k_exception()`, 63+/12-), new `regress/m88k_exc_probe.py`, `regress/gate_m88k_rounding.sh` (gate 11).**
+Artifacts: `regress/artifacts/m88kexcdeliver/` (both pass briefs, the pass-1 and pass-2 panel answers, the Opus and Fable pass-2 answers,
+`PRETABLE_m88kexc.out`, three kill tables, the Opus pass-2 table, every probe output named below).
+
+## The defect
+
+`m88k_exception()` marked only RESET / INTERRUPT / INSTRUCTION_ACCESS / DATA_ACCESS `implemented`; MISALIGNED_ACCESS (4),
+UNIMPLEMENTED_OPCODE (5), PRIVILEGE_VIOLATION (6), BOUNDS_CHECK_VIOLATION (7), ILLEGAL_INTEGER_DIVIDE (8), INTEGER_OVERFLOW (9) and
+ERROR (10) printed a VERBOSITY_ERROR line and fell to the fallback `vector < M88K_EXCEPTION_USER_TRAPS_START && !implemented`, which
+sets `running = false` on EVERY guest CPU: one `divu` by zero, in either mode, ended the emulation.  Real hardware delivers
+VBR + 8*vector and the guest OS turns it into a signal.  Pre-existing upstream (the fallback is the 0.7.0 import; `git log -L`
+returns only that commit); surfaced by the 2026-09-05 retrospective re-check of #380 (batch 2: GPT-6 Astra read-only, Fable 5.1
+adjudicating).  Reachability, MEASURED rather than derived: the instruction raise sites (PRIVILEGE 10 literal sites, ILLEGAL_DIVIDE 4,
+OVERFLOW 3, MISALIGNED 1, UNIMPLEMENTED 1) AND a supervisor `tb0/tb1/tcnd`, whose 9-bit field names any vector directly
+(`m88k_exception(cpu, ic->arg[2], 1)`), so BOUNDS (7) and ERROR (10) -- which the filing called "latent, no raise site" -- ARE
+reachable today (pass 1, Opus: supervisor `tb1 0,r3,7` halted HEAD).  The filing's sentence is corrected in place (ledger, OPEN LIST).
+
+## Witness (rung 3) and fix
+
+`regress/m88k_exc_probe.py`: cold-debugger rows on the COMMITTED, UNMODIFIED `testm88k` machine -- a guest program planted with `put w`,
+registers seeded, `br .` at every vector entry, `breakpoint add <entry>`, `continue`, then `reg` / `reg 0,0`.  HEAD `83df95c`:
+**0/9** (`probe2_head.out`), **0/10** (`probe10_head.out`), **3/22** with the final instrument (`probe_v3_head.out`: the 3 are the two
+rows whose CORRECT answer is HALT and the pre-existing user vector 128); every trap-like class printed `unimplemented vector=` and the
+machine stopped.  The fix: **9/9 -> 10/10 -> 22/22** (`probe2_fix.out`, `probe_v3_fix.out`, `probe_v3_fix_final.out` on the
+rebuilt tree).
+
+The fix is D1 of the six-member set -- DELIVER, at BOTH sites: `implemented = true` (at VERBOSITY_INFO, the level of the four
+already-delivered classes) in the first switch, and a bare `case ... break` for the seven in the tail switch.  **The one-site form was
+MEASURED (pass 1, Opus) to halt at the tail `default:` ("internal error") with pc/SXIP/PSR already correct -- only the
+machine-still-running bit distinguished it from delivery**, which is why every fault row asserts the STOP channel before pc.  SFU1
+(114/115) stays at the fallback by design (row `m88kexcsfu1`); vectors 11..113 and 116..127 (117 with the two SFU1 ones) stay at the
+fallback and the detector's negative-control rows pin that they STILL halt.  D4 (make the tail default deliver everything) was named
+by the pass-1 panel and not adopted -- bigger blast radius -- filed `m88kexctaildefault`.  Structural consequence, stated in the
+comment: with `implemented` = {0..10} and tail labels for {0..10}, the tail `default:` is now UNREACHABLE for vectors < 128; it is
+kept as the tripwire for an eighth class.
+
+## The detector, and the four times it was found wanting before it shipped
+
+v1 (9 rows) shipped with the fix build at 16:16.  What each pass found, and what changed -- every score names its log:
+
+| found by | escape (score on the probe of the time) | repair |
+|---|---|---|
+| table 1 (`killtable/`, 13 mutants, 9 rows) | `M_ERRORDROP` **9/9**: switch 1's ERROR arm is reached ONLY by a trap naming 10 (the re-route enters AFTER switch 1) | row `errortb` (tb1 naming 10); table 2 (`killtable2/`): M_ERRORDROP 9/10, M_ERRORTAIL 8/10, M_REVERT1 9/10 |
+| Opus pass 2 (`opus_p2_logs/`, 15 mutants) | `M_NOVBR` (`pc = 8*vector`) **10/10** -- no row set VBR; `M_SFRZTRAP` (`if (!is_trap)` -> `if (true)`) **10/10** -- the (SFRZ set, trap) cell empty; `M_SFIPNOTGT` / `M_DSLOTSWAP` **10/10** -- dslot's SNIP and SFIP were ONE number (0x1000e) | rows `vbrtb` (VBR 0x2000, entry 0x2038 -- the one ANCHORED row), `trapfrozen` (div0 handler = tb1 naming 7 with SFRZ set -> 0x38, shadows frozen); dslot geometry `br.n +16` (SFIP 0x10016 != SNIP 0x1000e) |
+| grok, deepseek, glm (independently); codex for PRIVILEGE | `if (!is_trap) implemented = true;` escapes every instruction-route row (privtb is NOT the trap route: X(tb0)'s user-mode filter raises PRIVILEGE with is_trap 0) | rows `misaligntb unimpltb div0tb ovftb privsuptb` |
+| Opus, codex, kimi, Fable (four seats) | pass-1 F14 was wrong: the exact PSR compare pinned carry only at its pre-fault value 0 -- "unchanged" was unobservable | row `ovfc` (PSR C set before the overflowing add -> 0x9000000b) |
+| Fable review seat | "no row can observe the level" was FALSE: `main.c` lowers every subsystem to WARNING after startup, so an ERROR-level `[ exception <CLASS>: ]` line prints in a free-running transcript and INFO does not | the LEVEL channel on every DELIVER row (`bad=level`) |
+| codex | tail guard `<` -> `<=` sends user vector 128 into the tail default | row `usertb` (tb1 naming 128 -> 0x400) |
+| kimi | no NEGATIVE-CONTROL rows: the probe could not tell D1 from the rejected D4 or from delivering SFU1 | rows `resid50` (tb1 naming 50: EXPECT HALT) and `sfu1h` (div0 handler = a legal divu with SFD1 set -> SFU1 -> EXPECT HALT) |
+| Fable 9b, codex | "one user-mode divu by zero" was derived (div0 is supervisor) | row `udiv0` |
+
+**Table 3** (`killtable3/`, v3 probe frozen md5 `28302f55`, 22 fault rows + 2 controls, BASE 22/22 before and after, clone
+`cmp`-clean and sentinel-free at both ends): M_ISTRAP 17/22 (the five trap rows), M_NOVBR 21/22 (vbrtb STOP), M_SFRZTRAP 21/22
+(trapfrozen STOP), M_SFIPNOTGT 21/22 and M_DSLOTSWAP 21/22 (dslot), M_CARRYCLR 21/22 (ovfc psr), M_LEVEL 3/22 (19 rows bad=level),
+M_DELIVERALL 20/22 (resid50 TAILHALT, sfu1h STOP), M_TAILLE 21/22 (usertb TAILHALT), M_REVERT 3/22, M_ERRORDROP 21/22, M_DSLOT 21/22,
+M_NAIVE 3/22; **M_TRAPONLY 22/22 EQUIVALENT** (`implemented = is_trap` at BOUNDS: no instruction raises 7 today -- disclosed with its
+warrant, `m88ktbnd` re-runs it).  Table 1's own tally, for the record: thirteen mutants, ELEVEN killed and TWO survivors (M_LEVEL,
+then thought unobservable, and M_ERRORDROP) -- an earlier session note said "12 of 13 killed" (codex, adjudication pass).  The 3/22 floor of M_REVERT/M_NAIVE/M_LEVEL is the two HALT-expected controls plus usertb, which the
+fallback never touched.  The probe now exits non-zero on any failure (codex: it used to print failures and exit 0); gate 11 pins
+`M88KEXC_RESULT=29/29` (22/22 when this sentence was first written; 23/23 after pass 3; 29/29 after pass 5), both controls, the two
+HALT rows, vbrtb at 0x2038, trapfrozen at 0x38, ovfc's PSR, indclr's PSR/EPSR, the two user-mode closure rows, the four frozen-handler
+rows at 0x50, and no `bad=level`.
+
+Contract (clause e), in the probe header: catches a class returned to the fallback by either route, a class reaching the tail default,
+wrong scaling AND a dropped VBR, stale shadows, a wrong PSR including a cleared carry, the LEVEL, a skipped EPSR save, a skipped
+supervisor switch, the delay-slot else-arm's SFIP source, a trap re-routed to ERROR while frozen, a written destination.  Does NOT
+catch (disclosed, `m88kexcdebt`): the post-delivery `cpu->delay_slot` else-branch (M_DELAYALWAYS 10/10, `opus_p2_logs/`), vectors 0..3's
+tail arms (M_TAILOFF 10/10 -- and, as three adjudication-pass seats showed by enumeration, that mutant is EQUIVALENT for EVERY
+vector: `< MISALIGNED` still admits 0..3 and the seven arms are bare breaks, so the DEBT is 'vectors 0..3 unrowed', not that
+mutant; the Opus pass-2 description was a misattribution), fcr2/fcr4/fcr5, SSBR, DMT contents, the residual vectors (by design), SFU1 (row m88kexcsfu1), the
+BOUNDS/ERROR trap-only equivalence.
+
+**The dslot row pins the else-arm AS IMPLEMENTED, and says so.**  Three seats (Fable review, codex, grok) read the manual's pointer
+definitions (`mc88100.txt:2097-2104`, Table 6-3, `X(rte)`) as saying the fork's `SNIP = slot+4, SFIP = target` is one pipeline stage
+early -- the guest then executes the instruction the taken branch skipped, or the target twice.  Table 1's M_DSLOT "kill" produced the
+MANUAL's value (0x10012) and the pre-table block called it "else-arm SFIP wrong" -- a wrong record, corrected here: M_DSLOT is a
+CHANGE detector, not a correctness oracle.  kimi dissents (the else-arm matches 6.4.3.1.2/.3).  Pre-existing, made reachable by
+ordinary faults by this round, out of scope by the reopening rule: FILED `m88kdslotshadow` MEDIUM with the dissent verbatim; the row is
+re-pinned FIRST when that round lands (oracle-correction order).  The fix's comment says "OUTSIDE A DELAY SLOT the common path is the
+contract" and names the row.
+
+## Pass records (seats by name; a seat that did not answer is a SEAT FAILURE, never agreement)
+
+**Pass 1** (`panel_20260905_143211`, brief in `pass1/`): Opus 5 (MEASURED the one-site form and BOUNDS reachability), kimi 3, grok
+4.6, deepseek, minimax answered.  **codex GPT-6 Astra REFUSED twice** (content filter: 466 KB reasoning then the refusal, then a
+0-byte second attempt); **glm-5.3 BURNED** (0-byte response, 117 KB thinking; a three-question mini packet then answered);
+**Fable 5.1 WALLED** (session limit) and was re-fired at pass 2; agy DELIBERATELY NOT FIRED (reserved for measurement).  Sixteen
+dispositions were made from that panel; three were wrong (F14 carry; F6's "119 residual vectors" is the five-class count -- seven
+classes leave 117; F15's Figure 6-4 is the rte flow, the recognition diagram is Figure 6-3 and §6.10's prose is the better warrant).
+The "8 of 128" census in the pass-1 disposition text was wrong too, and so was this block's first correction of it ("11
+delivered"): after this round 11 of the 128 low vectors BYPASS the fallback (0..10), of which 10 are DELIVERED (1..10) and
+vector 0 still stops every CPU in the RESET tail arm; 117 halt at the fallback (11..113, 114/115, 116..127); 118 stop overall
+(grok and codex, adjudication pass -- codex enumerated all 512 vectors x four SFRZ/trap states).  kimi and Fable could not
+find the "8 of 128" phrase in any file because it lived only in the main loop's dispositions.
+
+**Pass 2** (`panel_20260905_212630`, brief `brief_m88kexc_p2.md`): codex (364 KB), kimi (207 KB), grok, deepseek, minimax, Opus
+(measuring), Fable (review) answered; glm BURNED then answered the mini packet `ollama_glm_mini.txt`; agy DELIBERATELY NOT FIRED.
+Every seat: the DIFF is right; the DETECTOR needed repairs.  Two comment sentences in the diff were false and are corrected before this
+commit: "ERROR arrives here from the SFRZ re-route with the shadows deliberately frozen" (six seats: `errortb` is a second route with
+the shadows updated, and for the re-route SXIP names the FIRST fault) and "6.8.3 and 6.6 say the destination register (and carry bit)
+are unchanged" (6.8.3 says nothing about carry).  Also reworded: "SSBR stays 0" (the zero is written only on the shadow-update path;
+a frozen SSBR keeps its value -- codex), "the FP exception registers the fork does not write" (the SFU1 raise sites DO write FPECR;
+what the fork does not write is the rest -- kimi).  The house-idiom sentence in the pass-1 brief ("MIPS/PPC/ARM cores deliver
+everything they recognise") was wrong for ARM: `arm_exception` exits on RESET and on an unrecognised number; the honest form is "MIPS
+and PPC deliver unconditionally; SH and ARM exit only on RESET-class or unrecognised numbers" (Fable).
+
+**Adjudication pass** (`brief_m88kexc_adj.md`, F1..F24 / D1..D3; `pass3_panel_20260905_220902/`): codex, kimi, grok, deepseek,
+minimax answered; glm BURNED again (0-byte response, 120 KB thinking); the Opus and Fable Agent seats DIED on an Anthropic session
+limit (429, reset 02:10) mid-answer -- the fourth failure class, both Anthropic seats behind one service -- and were re-fired the
+next morning on the repair (pass 4, below); agy DELIBERATELY NOT FIRED.  Verdicts: grok and kimi CLOSE THE CHAIN; codex, deepseek,
+minimax ONE MORE REPAIR.  What the pass found and what changed: (i) IND -- every row's pre-fault PSR already had IND set, so
+dropping `| M88K_PSR_IND` was a 22/22 escape, the carry shape again (grok, codex) -> row `indclr` (pre-fault PSR 0x80000000)
+and mutant M_NOIND; (ii) HALT was a DIAGNOSTIC classification, not a verified stopped state -- a fallback that keeps its message
+and drops the stop would classify as HALT, and any vector's diagnostic qualified (codex: on HEAD `sfu1h` passed at pc=0x10004
+because the FIRST divu halted) -> the classifier now requires the stopped observation AND, for the expected-HALT rows, the named
+vector, and sfu1h additionally requires pc == 0x40 (the first delivery happened); mutant M_NOSTOP; (iii) the LEVEL channel proves
+the ERROR/WARNING regression, not exact INFO (INFO and DEBUG are both silent at the post-startup WARNING floor) -- contract
+reworded (codex); (iv) sfu1h's nested SFU1 halts at the FALLBACK, which runs before the SFRZ re-route; with the fallback off it is
+RE-ROUTED TO ERROR, not delivered to 0x390 -- so the row pins 'SFU1 inside a handler still halts', not 'SFU1 is not delivered'
+(kimi, grok); (v) M_TAILOFF is equivalent for every vector (above); (vi) the census (above); (vii) three rows this round CITED
+were never FILED -- `m88kexctaildefault` (D4 not adopted), `m88ktbnd` and `m88kmxmkill` from pass 1 -- filed now as
+documented-only LOW rows rather than cited as if they existed (kimi, grok); (viii) the gate comment said HEAD scored 2/22 where
+`probe_v3_head.out` says 3/22 (kimi, grok, codex); (ix) PRETABLE_m88kexc.out still carried the pre-pass-2 'LEVEL unobservable'
+and 'M_DSLOT = else-arm SFIP wrong' sentences -- a dated correction is appended, the original left in place (codex).  Table 4
+(`killtable4/`, v4 probe, 23 fault rows) measures M_NOIND and M_NOSTOP and re-measures the seven table-1 shapes that table 3 had
+carried forward by construction (minimax: a carried-forward kill is a claim until the new instrument re-scores it).  minimax also
+asked that the dslot pin carry a visible WRONG-ORACLE-AS-IMPLEMENTED banner -- it does (the probe's row table).
+
+**Pass 4** (`brief_m88kexc_p4.md`, the closing pass on the v4 repair; `pass4_panel_20260906_082521/`, `opus_p4_logs/`, `fable_p4.md`):
+all eight fired seats answered (codex, kimi, grok, glm, deepseek, minimax, Opus, Fable; agy DELIBERATELY NOT FIRED).  Six said CLOSE
+THE CHAIN (minimax's ONE MORE rested on SFD1 being bit 1 -- `m88k_psl.h` defines it 0x08, so that reading is answered by the tree).
+**The two measuring/flagship seats each produced a real 23/23 sweep on v4**, and the chain therefore did NOT close on pass 4: Opus
+built `M_OVFSUPONLY` (`implemented = (PSR & MODE) != 0` at the OVERFLOW arm) -- a user-mode overflow halts the emulator again and no
+row noticed, because the {class} x {PSR.MODE at fault} joint cell was rowed only for DIV0/PRIVILEGE/UNIMPLEMENTED; and both seats
+scored `M_SFRZMIS` (`if (!is_trap)` -> `if (!is_trap && vector == MISALIGNED)`) 23/23, because `error` was the only frozen non-trap
+row and its second fault is a misaligned load.  Fable ruled the second an L2 floor breach ({SFRZ set, non-trap} x {class} is a
+body-tested joint cell of two predicates dominating the diff's tail labels) and the first clause-(e) debt; Opus ruled the reverse;
+**both classes were closed in ONE diff** (the repair-chain amendment: when consecutive passes find one class, close the class, not the
+cell).  Probe v5 (29 fault rows + 2 controls, shipped md5 `96ab47a0`; the frozen table copy `c83b1f38` differs by five docstring
+lines): `umisalign`, `uovf` (user-mode MISALIGNED / OVERFLOW; BOUNDS and ERROR have no user route -- a user tb1 naming them raises
+PRIVILEGE, `privtb`), and `errovf`, `errdiv0`, `errpriv`, `errunimpl` (a frozen handler faulting OVERFLOW; DIV0 after clearing SFD1 --
+with SFD1 set the same divu is `sfu1h`'s SFU1; PRIVILEGE and UNIMPLEMENTED after dropping to user mode with SFRZ kept), each
+expecting ERROR at 0x50 with the first fault's frozen shadows; the classifier keeps ONE stop observation (glm and Fable: the
+`or "stopped" in tr` disjunct had made the exact term dead code).  **Table 5** (`killtable5/`, `PRETABLE5_m88kexc.out` written at 08:47
+before it, BASE 29/29 before and after, clone `cmp`-clean and sentinel-free): M_OVFSUPONLY 28/29 (uovf), M_MISSUPONLY 28/29
+(umisalign), M_SFRZMIS 25/29 (the four err* rows), M_SFRZNOOVF / M_SFRZNODIV0 / M_SFRZNOPRIV / M_SFRZNOUNIMPL 28/29 each -- one row
+apiece, the single-killer cells the pre-table block named -- and M_NOSFD1 1/29 (27 rows bad=psr 0x80000003 and sfu1h STOP: its
+handler's divu executes instead of raising SFU1; resid50 is the survivor, a HALT row that never compares PSR).  Every mutant killed
+by exactly the rows PRETABLE5 predicted.  HEAD with the final instrument: **2/29** (`probe_v5_head.out`: usertb DELIVER and resid50
+HALT; every other class HALTs); the fix 29/29 (`probe_v5_fix_final.out`).  Records from the pass, all applied: the three LOW rows
+filed by (vii) -- and `m88ksfrzfatal`, a separate filing from this pass (grok: (vii) named three, not four) -- had no
+OUTSTANDING_BUGS block (Fable; `check_bugfile_sync` now passes with them); this block's own 'earlier from this
+campaign' list contradicted (vii) (corrected in place); the product comment attributed the delay-slot shadow values to Table 6-3 --
+Table 6-3 says only that the shadows copy XIP/NIP/FIP, the values come from UM 6.2's pointer definitions (mc88100.txt:2093-2104)
+(Fable; comment and probe docstring corrected); '(shadows updated normally)' for a tb1 naming vector 10 is true only UNFROZEN --
+inside a handler it takes the is_trap exemption with frozen shadows (codex F15, Fable; corrected); the gate comment named
+killtable4/ but not 4b/ (corrected); the probe's sfu1h description said HEAD reads BADREGS stage1 where it reads STOP (codex;
+corrected); kimi: the enumeration's 'DMT under a frozen trap' is the `m88kexcfrozendmt` defect while the contract's 'DMT contents'
+is the disclosure -- both stand, they name different things.  Filed: `m88ksfrzfatal` LOW (the re-route's unlatched
+`fatal("[ SFRZ already set in PSR => ERROR ]")`, guest-drivable from supervisor mode -- Fable).  The comment corrections were
+propagated to est/build/build-asan/WSL and the three build trees rebuilt (`rebuild_fix2.log`: part 1 CLEAN, part 2 FRESH, x3).
+
+**Pass 5** (`brief_m88kexc_p5.md`, the closing pass on the v5 repair; `pass5_panel_20260906_090810/`, `agy_p5/`, `kimi_p5/`): the two
+Anthropic Agent seats DIED at 09:15 on an Anthropic session limit (HTTP 429, resets 12:50pm America/Chicago) before answering -- SEAT
+FAILURES, the shared-service class for the third time this round -- so agy was FIRED AS THE MEASURING SEAT (the role the owner reserved it
+for) and the main loop adjudicated (the documented fallback).  Every closure below is PROVISIONAL on that roster gap until the two seats are
+re-fired.  Seven seats answered.  **The pass did not close: three seats found three DIFFERENT floor cells, two of them by measurement.**
+(i) deepseek and glm (packet-fed, independently): the fallback window `vector < 128` was pinned only in its interior (resid50 at 50, sfu1h at
+114) and just outside (usertb at 128), so shrinking the bound to any N in (114, 128) escaped by construction -- the accept-row-at-the-LAST-
+slot rule (sgireunmapped) reappearing at a vector window; agy built `vector < 127` and scored it **29/29** on v5 (`agy_p5/M_FALLBACK127.out`)
+together with five more mutants (M_FALLBACK_NO_BOUND 28/29, M_SFRZ_EPSR_SWAP 23/29, M_SFRZ_TRAP_UPDATE 28/29, M_TAIL_ERROR_DROP 23/29,
+M_TAIL_BOUNDS_DROP 26/29).  (ii) codex: `{SFRZ set, is_trap} x {class}` -- the frozen-TRAP hemisphere of the re-route's joint space -- was
+rowed only for class 7 (trapfrozen), so `if (!is_trap || vector == <class>)` re-routed one frozen trap to ERROR unseen; kimi, reviewing
+independently and MEASURING in its own WSL clone, built the same mutant for class 4 (`M_SFRZTBMIS`, **29/29** on v5, `kimi_p5/`) and named the
+class-8 sibling's harness problem (a handler at 0x40 masks a frozen trap that delivers to 0x40).  (iii) kimi, measured: `M_FBSUPONLY` -- the
+fallback predicate conditioned on MODE -- **29/29** on v5, because every fallback-reaching row was supervisor and the only user-mode route to
+the fallback is SFU1 through the mode-blind SFD1 gate; graded disclosure-adjacent by the seat and closed anyway on the M_OVFSUPONLY precedent.
+grok and minimax said CLOSE (minimax graded the fallback-threshold class equivalent by construction -- wrong: the fallback RETURNS, so its
+predicate dominates the tail labels the diff added and its constant is a body-tested partition of `vector`; one row kills the shrink).
+grok named three records, all applied: the gate check title still said 23 fault rows beside a 29/29 pin; OUTSTANDING_BUGS attributed the
+delay-slot shadow values to Table 6-3; this block folded `m88ksfrzfatal` into (vii)'s count of three.  codex corrected `m88ksfrzfatal`'s own
+count: FIVE more classes reach the re-route's `fatal()` since #502, not seven -- BOUNDS and ERROR are trap-only and the `fatal()` sits in the
+`!is_trap` branch (bug file and ledger title corrected).  deepseek's answer carried no VERDICT token (panel.sh scored it CHECK): a format miss,
+not a failure.
+
+**The pass-6 repair -- three classes, ONE diff** (the repair-chain amendment: close the class, not the cell): probe v6 adds `resid127`
+(the far bound); v7 adds `trapfrozen4/5/6/8/9` and a harness field `handler_at` (only trapfrozen8 uses it: its first fault is OVF with the
+handler planted at 0x48, so the frozen trap naming DIV0 has a free 0x40 to be observed at; class 10 is observationally identical under both
+arms -- its own vector IS the re-route target -- and is disclosed); v8 adds `usfu1` (user mode with SFD1 set, a legal divu -> SFU1 -> the
+fallback HALTs naming 0x072).  **Table 6** (`killtable6/`, frozen v6 md5 abfdf813; every mutant ALSO scored on the frozen v5 instrument so the
+escape is a measurement): M_FALLBACK127 29/29 on v5 -> 29/30 (resid127 TAILHALT: 127 delivered to 0x3f8 and the tail default stops the cpu);
+M_FALLBACK51 28/29 on v5 (sfu1h saw it -- so the unpinned interval was (114, 128), not (50, 128) as PRETABLE6 first said; glm's "[115,128]"
+named it -- the shrink VALUES being 115..127, 128 the bound itself: deepseek, pass 6) -> 28/30; M_FALLBACKLE 28/29 -> 29/30 (usertb, the outside-bound control).  **Table 7** (`killtable7/`, frozen v7 md5 b6eecc25):
+M_SFRZTRAP4/5/6/8/9 each 30/30 on v6 -> 34/35 on v7, killed by exactly its own row; M_SFRZTRAP (`if (true)`) 29/35.  BASE 35/35 before and
+after; the `handler_at` extension left every old row byte-identical in behaviour.  HEAD with v7: **3/35** (usertb DELIVER, resid50 and
+resid127 HALT -- the fallback exists on HEAD).  Records from the pass: PRETABLE6 and PRETABLE7 each had a dated correction APPENDED to the
+same file after the table, which refreshed the mtime the block's order proof rests on -- stated here; corrections go to separate files from
+now on; the driver logs of tables 6 and 7 print `RED resid127 HALT` under every mutant, a stale expectation table in the driver's LISTING
+(`killtable7/DRIVER_RED_LISTING_NOTE.txt`), not the probe -- the M88KEXC_RESULT lines are the scores.  **Table 8** (`killtable8/`, frozen
+v8 md5 e550e3fe = the shipped probe; PRETABLE8 written before and untouched since): M_FBSUPONLY 35/35 on v7 -> 35/36 on v8 (usfu1 TAILHALT:
+the user-mode SFU1 is delivered to 0x390 and the #if 0'd SFU1 tail arm falls to the default); M_SFRZTRAP4 -- kimi's M_SFRZTBMIS -- 34/35 ->
+35/36 (trapfrozen4).  BASE 36/36 before and after.  HEAD with the final instrument: **4/36** (`probe_v8_head.out`: usertb DELIVER; resid50,
+resid127 and usfu1 HALT -- the fallback exists on HEAD); the fix 36/36 (`probe_v8_fix_final.out`).  Gate 11 pins 36/36, the four HALT rows,
+the six frozen-trap rows and the earlier pins.
+
+**Pass 6** (`brief_m88kexc_p6.md`, the closing pass on the three-cell repair; `pass6_panel_20260906_102851/`): codex, deepseek, minimax,
+grok, kimi answered; glm BURNED (0-byte response, ~126 KB thinking); Opus 5 and Fable 5 still walled; agy DELIBERATELY NOT FIRED.  minimax and
+grok said CLOSE; deepseek's ONE MORE (vectors 0..3's switch-1 arms unrowed) is the disclosed hardware-event class and stays disclosed
+(m88kexchwtraps); **codex and kimi each found real cells, and the pass did NOT close.**  codex: switch 1's ERROR arm is a predicate of its own
+-- a frozen tb1 naming 10 enters switch 1 AS ERROR (the err* rows enter under their original classes and become ERROR only after the
+fallback), so `implemented = !(PSR & SFRZ)` there (M_ERRORFRZOFF) was invisible; and **a gate regression of this round's own making**: the
+three check lines added that morning carried a LITERAL backslash-n between arguments (a heredoc-to-python escape cooked one level short), so
+`check()` would have compared the wrong pair and all three would have FAILED on correct output -- repaired before any gate ran.  kimi: the
+{fallback predicate} x {PSR bit} CLASS -- pass 5 had closed only the MODE cell; `&& (PSR & IND)` and `&& !(PSR & C)` still swept because every
+fallback-reaching row had IND set and C clear; the window's NEAR bound (`vector >= 12 &&`, no row named 11..49); no frozen USER trap rowed
+(`!is_trap || vector >= 128`); and **the class-10 "observationally identical" disclosure was FALSE for the composite** -- the re-route arm prints
+`[ SFRZ already set in PSR => ERROR ]` (a plain print in this fork) and the exempt arm does not, into the very transcript the probe reads.  grok's
+L4s: the gate's HEAD narration said 3 rows where v8 read 4/36 (fixed), and the working tree's gate ran ahead of the shipped probe mid-repair
+(correct observation; they ship together).  deepseek's second point taken: glm's "[115,128]" is off by one at the top -- the shrink VALUES
+are 115..127 (wording corrected here and in the probe).
+
+**The pass-7 repair -- five cells, one diff, class closures written into the contract** (tables 9 and 10 merged; table 9 never ran):
+probe v9 added `trapfrozen10`; v10 adds `resid11` (the near bound), `resid50ind` and `resid50c` (the fallback with IND clear / C set -- with
+usfu1 and sfu1h every settable PSR bit now has both sides at the fallback; MXM and BO cannot be set by `stcr` without stopping the cpu,
+disclosed), `trapfrozen128` (a frozen USER trap exempted like any trap), and the **refatal channel**: the five err* rows must SEE the re-route's
+diagnostic and the eight trapfrozen* rows must NOT -- the channel that tells the exemption arm from the re-route arm when both land on 0x50.
+**Table 10** (`killtable10/`, frozen v10 md5 ee2c78c2 = the shipped probe; PRETABLE10 written before and untouched; every mutant ALSO scored on
+the frozen v8 instrument): M_ERRORFRZOFF 36/36 -> 40/41 (trapfrozen10 HALT); M_SFRZTRAP10 (`!is_trap || vector == ERROR`) 36/36 -> 40/41
+(trapfrozen10 bad=refatal -- the disclosure refuted by measurement); M_FB_LO 36/36 -> 40/41 (resid11 TAILHALT); M_FBIND 36/36 -> 40/41
+(resid50ind TAILHALT); M_FBNOC 36/36 -> 40/41 (resid50c TAILHALT); M_SFRZTRAPUSER 36/36 -> 40/41 (trapfrozen128 STOP).  Six escapes of the
+shipped-before-this-repair probe, each measured, each killed by exactly the row PRETABLE10 named.  BASE 41/41 before and after.  HEAD with the
+final instrument: **7/41** (`probe_v10_head.out`: usertb DELIVER; resid50, resid127, resid11, resid50ind, resid50c and usfu1 HALT -- the fallback
+exists on HEAD; every other class HALTs; sfu1h STOP).  The fix 41/41 (`probe_v10_fix_final.out`).  Gate 11 pins 41/41, the seven HALT rows,
+the eight frozen-trap rows, the two user-mode rows, the four frozen-handler rows and `bad=refatal` absent.  **Pass 7** (the closing pass on
+this repair; `pass7_panel_20260906_113427/`): codex, kimi, grok ONE MORE REPAIR; deepseek, minimax CLOSE; glm BURNED (second consecutive
+burn on this campaign's packets); Opus 5 and Fable 5 WALLED (the Anthropic session limit until 12:50pm America/Chicago -- seat failures,
+not agreement; re-fired as pass 8); agy deliberately not fired.  The three findings, each a cell of a class this chain had already opened:
+**codex** -- switch 1 has TEN deliverable labels (4..10, 128, 0x1c2 = 450 the OpenBSD >= 5.3 syscall vector, MVMEPROM_VECTOR = 496) and the
+frozen-trap rows covered eight; `!is_trap || vector == 0x1c2` / `|| vector == MVMEPROM_VECTOR` on the re-route sweep -> rows `trapfrozen450`
+(entry 0xe10), `trapfrozen496` (0xf80).  **kimi** -- the exemption's FAR edge: `trapfrozen128` pinned 128 only and `!is_trap || vector >=
+129` sweeps; tb1's field is 9 bits, so 511 is the last nameable trap -> `trapfrozen511` (0xff8), the last-slot rule again.  Its claim that
+`case ERROR: implemented = (PSR & SFRZ)` sweeps was REFUTED by existing rows (errortb and bounds enter those arms unfrozen) and measured
+anyway; the {switch-1 arm} x {PSR bit} surface is clause-(e) debt because the `implemented` arms read no PSR bit -- disclosed, one
+representative measured; a stale trailing comment on REFATAL_EXPECT removed (L4).  **grok** -- the RE-ROUTE x {IND, C}: the re-route
+predicate READS PSR, so a PSR-bit conjunct THERE is a narrowing on a body-read lvalue (clause (d), unlike the switch-1 arms), and every
+SFRZ-set row had reached it with IND set and C clear -> rows `errind` (a frozen handler that clears IND then faults MISALIGNED) and `errc` (C
+set); vector 11 is `M88K_EXCEPTION_NMI` -- the resid11 pin stands, the name recorded.
+**The pass-7 repair (probe v11 -> v14, 46 fault rows).**  **Table 11** (`killtable11/`; PRETABLE11 11:49 + addendum 2 11:55 + addendum 3
+12:16, all before the 12:17 start and untouched since; frozen v14 md5 99eb9c00; every mutant ALSO scored on the frozen v10 instrument):
+M_SFRZTRAP450 41/41 -> 45/46 (trapfrozen450 STOP); M_SFRZTRAP496 41/41 -> 45/46 (trapfrozen496 STOP); M_SFRZTRAPHI (`>= 129`) 41/41 -> 43/46
+(trapfrozen450/496/511 STOP); M_ERRORFRZON **40/41** -> 45/46 (errortb HALT on both -- kimi's sweep claim refuted by MEASUREMENT, as the
+existing rows predicted); M_MISNOC 41/41 -> 45/46 (**errc HALT**: the disclosed {MISALIGNED} x {C} representative is KILLED as a side effect
+of the re-route rows -- the disclosure narrowed to the other arms x {C, IND} and {any arm} x {SFD1}, probe v15 docstring); M_RRIND 41/41 ->
+45/46 (errind STOP); M_RRNOC 41/41 -> 45/46 (errc STOP).  Six measured sweeps of the shipped-before-this-repair v10, each killed by exactly
+the row the PRETABLE named; BASE 46/46 before and after; clone `cmp`-clean, sentinel clear.  **A MIS-CUT ROW, caught by the driver's own
+BASE gate** (`killtable11_attempt1_v13/`): v13's `errc` wanted PSR 0x8000000b after delivery, and exception entry ORs MODE|SFRZ|IND|SFD1
+leaving C alone (mc88100 manual: `the shadow freeze, SFD1, and IND bits of the PSR are set`), so the C-set handler row keeps C -- BASE read
+45/46 `bad=psr` before any mutant and the driver aborted; `PSR_WANT["errc"] = 0x9000000b` (v14), no product code touched, no mutant
+re-aimed (a mutant-that-will-not-die case 3 in its BASE form; addendum 3 records it).  HEAD with the final instrument: **7/46**
+(`probe_v14_head.out`: usertb DELIVER; resid50, resid127, resid11, resid50ind, resid50c, usfu1 HALT; every other class HALTs; sfu1h STOP).
+The fix on the rebuilt build/: **46/46** (`probe_v14_fix_final.out`).  **Shipped probe = v15 (md5 eb11ab7c): identical to the frozen v14
+outside the module docstring (AST-compared), the docstring change being the M_MISNOC narrowing above.**  Gate 11 pins 46/46, the six
+frozen-handler rows at 0x50, the eleven frozen-trap rows, the seven HALT rows, `bad=refatal` and `bad=level` absent.  **Pass 8** (the
+closing pass on this repair; `pass8_panel_20260906_150800/`): **it was not a closing pass, and four seats said so in three
+different ways.**  codex NO-GO; grok ONE MORE REPAIR naming the same class independently; kimi GO-WITH-CHANGES reporting
+`killable-and-undisclosed survivors: ZERO'; opus5 ONE MORE REPAIR **with three clean sweeps MEASURED**.  The three Ollama cloud seats
+were down on an account-level weekly quota (the seat file said only `429'; the response BODY carried the reason, and
+`panel_ollama.py` now surfaces it, controlled both ways against the live wall).  fable5 walled until the 9th; agy reserved.
+**THE PANEL SPLIT WAS SETTLED BY MEASUREMENT, TWICE.**  Table 12 (`killtable12/`, PRETABLE12 15:58:33 before the 16:00:48 BASE,
+frozen instrument = the SHIPPED probe, which also closes the records gap kimi named): `if (!is_trap || !(PSR & IND))` and
+`|| (PSR & C)` on the re-route's TRAP side each scored **46/46 -- total sweeps** -- while the polarity twin
+`|| (PSR & IND)` scored 35/46, reddening exactly the eleven frozen-trap rows on both channels the pre-table block named.
+The twin is what makes the sweeps evidence: same edit, one token, so the find-text lands and the probe can see the site.
+And opus5's own table had already measured the same class at the SWITCH-1 ARMS -- M_DIV0IND, M_ERRNOC and M_BNDIND each
+46/46, with three twins red (23/46, 45/46, 45/46) -- from a MEASURED census (a `fatal()` at function entry harvested from
+the probe's own transcripts, 43 distinct triples, the census build itself scoring 46/46 so it does not perturb what it counts):
+**7 arms x 5 stcr-settable 88100 PSR bits = 35 cells, 2 unreachable with a warrant, 23 closed, TEN OPEN.**
+**Why kimi's enumeration missed it is visible in its own wording** -- it wrote the re-route family as `{label trap x 11}`.
+The eleven cover eleven LABELS in ONE status state; every one arrives with PSR 0x8000000b.  Counting labels is not covering
+the axis.  **And M_DIV0IND is not a detector-only concern: a guest divide-by-zero taken with INTERRUPTS ENABLED stopped every
+emulated CPU, and interrupts-enabled is the normal state of running kernel and user code** -- every DIV0 row in the probe
+entered from reset or from inside a frozen handler, so the instrument's whole population sat in the abnormal state for that bit.
+**THE REPAIR IS A CLASS CLOSURE, NOT A CELL (probe v16, md5 dbb05b18, 54 fault rows + 2 controls).**  Three consecutive passes
+found one class at three sites -- the fallback predicate (pass 6), the re-route's non-trap side (pass 7), the re-route's trap
+side and the switch-1 arms (pass 8) -- so the class-closure amendment applies and the space is closed in ONE diff: five rows
+(`unimpltbc`, `privtbc`, `boundstbc`, `div0tbc`, `errortbc`) at PSR 0x90000000, since one value closes both open cells at an
+arm because the open cells are always (C never set) and (IND never clear); and three trap-side rows (`trapfrozenind`,
+`trapfrozenc`, `trapfrozenser`).  All eight DELIVER on the fix at the first run -- no mis-cut row this time.
+**TABLE 13** (`killtable13/`, PRETABLE13 16:23:49 before the 16:25:05 BASE): **all six mutants died, each on exactly the row
+written for it** -- M_DIV0IND 53/54 (div0tbc), M_ERRNOC 53/54 (errortbc), M_BNDIND 52/54 (boundstbc + trapfrozenind, whose
+trap names the bounds vector), M_UNIMPLC 53/54 (unimpltbc), M_PRIVIND 53/54 (privtbc), M_RRTRAPSER 53/54 (trapfrozenser).
+**Three of those six had never been built by anyone**: two were cells the census named open and stopped at, so the closure
+covered them on a prediction, and this is that prediction's measurement.  HEAD `83df95c` with the 54-row instrument: **7/54**
+(`probe_v16_head.out`); the rebuilt build/: **54/54** (`probe_v16_fix_final.out`).  BASE 54/54 before and after; clone
+`cmp`-clean, no sentinel.
+**THE DRIVER PRINTED TWO NUMBERS FROM THE WRONG FILES, and it is recorded beside the table** (`killtable13/
+DRIVER_STALE_CITATION_NOTE.txt`).  Derived from table 12's by substitution, it WRITES the HEAD and final runs to the v16
+filenames and GREPS the v11 ones, which still exist from 12:32 -- so it printed 7/46 and 46/46, real numbers of the wrong
+artifact.  **The DENOMINATOR caught it**: a 54-row probe cannot report 46, while the numerators agreed at 7 and would have
+passed a reader's eye.  A driver derived by substitution can write one file and read another, and the read succeeds precisely
+because this project preserves the previous round's artifacts.
+**THREE RECORD ERRORS FIXED IN THE SAME DIFF**, each verified by reading first: the trailing comment v12 claimed to REMOVE was
+only COPIED, so the file carried it twice (found independently by codex, kimi and opus5); the contract named OVERFLOW as
+uncovered when `ovfc` and `indclr` both fault at that arm, claimed `{any arm} x {SFD1}` when that is closed at all seven, and
+OMITTED BOUNDS and ERROR, which were open; and `EVERY deliverable switch-1 label` was literally false, since 0..3 are
+deliverable and unrowed.  **Also corrected: the probe's contract had disclosed SER as an 88110-only bit**, copying the vendored
+header's `/* 88110 serial mode */`; `_scratchpad/mc88100.txt` (anchor `SER - Serial Mode`) says *"This bit is set by software
+as appropriate"* in the **MC88100** manual, and `m88k_stcr` stores it verbatim -- so the cell was real, and `trapfrozenser`
+now holds it.  Gate 11 pins 54/54, the five arm rows at their entries, that each of the five keeps its carry bit, the fourteen
+frozen-trap rows, the six err rows and `bad=refatal` absent; every pin was re-run against the real log rather than assumed.
+**Pass 9** found that pass 8's "class closure" had closed the SERIAL-MODE bit at **ONE arm of seven** while the
+contract claimed the axis -- the third time in this chain that a repair reproduced, inside itself, the class of defect it
+was repairing.  `trapfrozenser` enters switch 1 as BOUNDS, so `{BOUNDS} x {SER}` was closed as a side effect and the other
+six arms, the fallback and the non-trap re-route were not.  **grok also corrected the DENOMINATOR**: SIX stcr-settable
+bits, not five (eight architectural less BO and MXM, which the store path refuses), so 7 arms x 6 = 42 cells less the 2
+MODE-unreachable = **40**, where pass 8 had claimed 35.  The two unreachable cells were confirmed unreachable rather than
+merely unrowed, with a warrant and an EXPIRY: no instruction raises 7 or 10, a user `tb1` naming a vector below 128 raises
+PRIVILEGE with `is_trap == 0`, and the re-route writes ERROR *after* switch 1 -- and that warrant lapses when `X(tbnd)`
+lands (row `m88ktbnd`).
+
+**v17 closes the axis** with no new sessions: `PSR_SUPCNOIND` gains SER so the five existing `*tbc` rows close their arms'
+SER cells alongside C and IND, plus `ovftbser` (the OVERFLOW arm), `resid50ser` (the fallback) and `errser` (the non-trap
+re-route, which closes `{MISALIGNED} x {SER}` at the same time because its second fault lands there).  **Table 14 measured
+all three of grok's predicted sweeps, which it had named by reading and explicitly not built**: the DIV0-arm conjunct, the
+fallback conjunct and the re-route conjunct each scored **54/54 -- a clean sweep of the instrument pass 9 reviewed** -- and
+each died on v17 to its own row (`div0tbc` HALT, `resid50ser` TAILHALT, `errser` STOP at pc=0x20).  Polarity-twin control
+27/54 -> 30/57, reddening 27 rows on both.  BASE 57/57 before and after; scratch clone, no sentinel left.
+
+**Pass 10 closed the chain** (grok: CLOSE THE CHAIN, 0 of 40 open), and the two dissents were answered by CENSUS rather
+than by argument.  `regress/artifacts/m88kexcdeliver/derive_cells.py` enumerates the cells mechanically from the probe's
+own row table and prints the GRID rather than the total, **because a per-cell breakdown is checkable and a total is not**:
+v16 closes 34 of 40, v17 closes 40 of 40, and v16's ONLY closed SER cell is at BOUNDS -- which reproduces pass 9's finding
+from the row table without being told it.  It agrees with grok's independent by-named-row census cell for cell, including
+which two cells are unreachable.  minimax (ONE MORE REPAIR: `resid50ser`'s blurb claims an axis while the row closes one
+cell) and deepseek (ONE MORE REPAIR: `ovftbser` closes one arm) were each right about their row and wrong about the
+consequence: the fallback's other five bits are held by `usfu1`, `resid50c`, `resid50ind` and `sfu1h`, and the OVERFLOW
+arm's other cells by `ovfc` and `indclr`.  **The claim is true of the ROW SET and false of any single row** -- and both
+seats reached that suspicion honestly, because the packet described each new row by the cell it closes and never said what
+held its neighbours.
+
+*** TWO WRONG NUMBERS IN THE PASS-10 PACKET, BOTH MINE, BOTH FOUND BY THE KIMI SEAT, CORRECTED IN
+`regress/artifacts/m88kexcdeliver/brief_m88kexc_p10.CORRECTION.md`. ***  The control's frozen-v16 cell read `23/41`; the
+artifacts say `27/54`, and `23/41` is that mutant's score on the **v10** instrument -- a number taken from the wrong column.
+**41 could not be a v16 denominator at all**, so the DENOMINATOR was the tell for the third table running and I did not
+check it.  Worse, "the previously-closed 23" was derivable from nothing: kimi said so, derived 34 of 40 instead, and the
+deriver written since confirms kimi exactly.  **That unsourced 23 had already done damage** -- an hour earlier I used it to
+refute minimax's arithmetic (`17 + 23 = 40`), so that refutation was wrong and minimax's instinct that the numbers did not
+add up was right while its own count was not.  *This is the third consecutive human-readable summary in this chain to be
+wrong while the measurements under it were right, which is why the deriver ships and the number does not.*
+
+**SEATS.**  grok, kimi, minimax and deepseek answered.  **glm was DOWN -- a thinking burn, and a VARIANT the carrier's
+signature does not describe**: 130,056 bytes with an EMPTY `response` and 124,789 characters of `thinking`, carrying
+`done_reason: "stop"` and a null `eval_count` where the documented signature is `"length"` with 65536.  `seat_verdicts.py`
+called it correctly anyway -- it discriminates on `done_reason` and, for `stop`, looks for a channel-marked response block
+in the thinking, found none, and reported SEAT DOWN rather than falsely recovering an answer.  **Its thinking was still
+read**, because an answer written and never read is an unread review: glm challenged the packet's claim that nothing in the
+model reads the CPU type outside the name and an identity register as an unevidenced universal.  CHECKED in one grep --
+its only readers in the whole m88k model are the assignment itself, `cpu->name`, and the PID
+register -- the exception path is not among them -- so **the claim
+is true and the criticism is still right**: it was unsupported where it was made.  **codex was WALLED** (usage limit,
+re-fired once at 20:20 per the walled-seat rule, identical wall, resets 21:25 -- it names its own reset time).  **agy was
+DELIBERATELY NOT FIRED** (reserved for measurement).  **opus5 and fable5 were HELD** for the 9th, when the adjudication hat
+returns; a held seat is not a failed one, and this row's closing judgement belongs to the adjudicator rather than to the
+author of the repair being judged.
+
+**Gate 11 re-pinned for v17/v18 and re-run: PASS, 105 checks, exit 0**, on a `build/` tree whose two-part clearance was RUN
+rather than asserted (part 1 clean, part 2 fresh, no sentinel).  The pins that moved: `M88KEXC_RESULT=57/57`; the six
+arm rows at their entries with `psr=0xb000000b`, which reds if `PSR_SUPCNOIND` ever loses SER again; the SER axis at its
+two non-arm sites; the fallback's four PSR-bit rows; and the seven `err*` re-route rows.  Log preserved as
+`gate11_v17_repin.out`.
+
+*** THAT FILING WAS OVERTURNED THE SAME EVENING, AND THE PANEL FIRED ON IT IS WHAT OVERTURNED IT. ***  Two
+seats ruled the cell a FLOOR breach rather than clause-(e) debt, on two independent precedents from this round's
+OWN records, both verified by opening the artifact before acting:
+
+* **grok** -- `PRETABLE12` had already graded this EXACT inner `if` as **L2**; its disposition line reads
+  *"L2, in-round"*, written when the sibling `!is_trap || !(PSR & IND)` mutant swept 46/46.  IND, C and SER at
+  this site were then repaired in-round as floor (`trapfrozenind`/`c`/`ser`).  **Grading the remaining two bits at
+  the same site as debt would be inconsistent, and would retroactively un-grade three rows this campaign shipped
+  as floor.**
+* **kimi** -- *its VERDICT LINE said DEBT and its BODY said FLOOR*, reaching grok's conclusion from a different
+  precedent: the pass-5 and pass-7 mutants `!is_trap || vector == <class>` condition on `vector`, which the
+  guarded body does not test either, and those were repaired in-round.  **The carrier's own rule earned its keep
+  here -- read the BODY of any seat whose verdict merely agrees** -- and stopping at the verdict line would have
+  cost the finding.
+* **minimax** voted DEBT and flagged it "defensible but contested"; outvoted BY ARGUMENT, not by count.  It is
+  packet-fed and could not read either precedent, and its caution was itself correct.
+
+My generating-set reading loses on its own terms, which kimi showed: **it would also have made the vector rows
+debt**, and the round shipped those as floor.  That letter was written for idata bits of a device write; here PSR
+is the GUARD's operand and the value the body writes is `vector = ERROR`.  **grok also corrected the reachability
+composition**: `trapfrozen128` is a SUPERVISOR trap NAMING a user vector, not a user-mode trap, and `errpriv`'s
+handler does stcr-then-ldcr, which raises PRIVILEGE with `is_trap == 0` and never reaches a trap at all -- and the
+working construction needs **`r3 = 0x11`**, because bit 0 must be SET or the `tb1` is a nop and the row is
+silently inert.
+
+**REPAIRED IN-ROUND (L2), v19: two rows, 57 -> 59.**  `trapfrozenuser` (a frozen handler drops to user mode, then
+traps at vector 128 -- >= `USER_TRAPS_START` so the fallback does not claim it, and `X(tb1)` checks privilege only
+for `vector < 128`) and `trapfrozensfd1` (`PSR_FRZSUP`, the cheap twin of `trapfrozenind`).
+
+**TABLE 15 MEASURED IT, and three of four predictions written before the first build were exact:**
+
+| mutant | on v19 (shipped) | on frozen v17 (pre-repair) |
+|---|---|---|
+| `M_RRTRAPMODE` `!is_trap \|\| !(PSR & MODE)` | 58/59, one row: `trapfrozenuser` | **57/57 -- CLEAN SWEEP** |
+| `M_RRTRAPSFD1` `!is_trap \|\| !(PSR & SFD1)` | 57/59, two rows | **57/57 -- CLEAN SWEEP** |
+| `CTL_RRTRAPINV` `\|\| (PSR & MODE)` (control) | 44/59, fifteen rows | -- |
+
+**Both mutants swept the shipped 57-row detector clean, so the repair was necessary and not decorative.**  BASE
+59/59 opening and closing; scratch clone, clean against SEC, no sentinel left.  Every score re-derived by DIFFING
+each result against `BASE.out` rather than trusting the driver's echo -- table 13's driver read a stale file and
+table 14's echo attributed rows to the wrong mutant, and both were caught by arithmetic that could not hold.
+
+*** THE ONE PREDICTION MISS IS A FINDING ABOUT MY OWN ROWS, AND THE CONTROL IS WHAT MADE IT LEGIBLE. ***
+`M_RRTRAPSFD1` was predicted 58/59 (killed by `trapfrozensfd1` alone) and measured 57/59, reddening
+`trapfrozenuser` too.  Cause: **`PSR_FRZUSER` is `0x00000003`, which clears MODE *and SFD1***, so `trapfrozenuser`
+is a JOINT row varying two bits, not the single-axis MODE row I described.  **The constant's own comment listed
+only MODE and never mentioned SFD1** -- an L4 that fed the wrong prediction, corrected in v20: *a constant's
+comment that lists SOME of the bits it clears reads like a complete decode and is not one.*
+
+**Both cells are closed regardless, and the polarity control PROVES the MODE closure rather than asserting it:**
+`CTL_RRTRAPINV` reddened fifteen trap rows -- every one with MODE set, `trapfrozensfd1` included -- and left
+`trapfrozenuser` alone.  That is exactly the discrimination the row exists to provide.
+
+**AND THE HONEST COST, stated rather than glossed:** `trapfrozensfd1` has **ZERO measured delta against its own
+enumerated mutant** -- delete it and `M_RRTRAPSFD1` is still caught, by `trapfrozenuser`, at 58/58.  Under the
+addition licence *"it cannot hurt"* is not a warrant, so the row needs a real one: it is the SINGLE-AXIS
+discriminator, because a row varying two bits cannot say which one fired.  A future edit that opens SFD1 while
+leaving MODE closed reds `trapfrozensfd1` and nothing else.  That is the anchor rule's principle one level down.
+
+*** THIS IS THE FOURTH TIME THIS CHAIN HAS CLOSED AN AXIS AT SOME CELLS AND CALLED THE REST SOMETHING ELSE -- AND
+IT HAPPENED INSIDE THE CENSUS WRITTEN TO END THAT PATTERN. ***  Passes 6, 7, 8 and 9 each found a repair that
+reproduced the defect it repaired; the cell census was built to make the whole space visible at once, and the
+filing written from it closed three cells at a site and filed the other two under a different heading.  **The
+class-closure amendment says the closing pass VERIFIES THE ENUMERATION rather than hunting cells** -- and the
+enumeration is what the panel checked.
+
+*** PASS 12 CLOSED THE CHAIN, AND RULED AGAINST THIS ROUND ON THE ONE DISPOSITION IT HAD FLAGGED AS WEAKEST.
+*** (codex, GPT-6 Astra at max.)  **Zero floor breaches**, with the denominator re-derived independently from
+the shipped rows and the fork source rather than taken from the packet: **56 of 56 reachable bit-cells closed**
+-- 40 at the dispatch arms (7 arms x 6 bits less MODE at BOUNDS/ERROR), 6 at the fallback, 5 at the non-trap
+re-route and 5 at the trap exemption, SFRZ being invariant inside the frozen sites.  The sweep covered both
+polarities of bit-conditioned `implemented`, bit conjuncts on the fallback and non-trap re-route, and
+`!is_trap || bit-test` on the trap side.  It also verified independently that v19 and the shipped v20 have
+identical executable ASTs.  **That is the stop condition satisfied properly: not a bare zero, but a zero WITH
+ITS DENOMINATOR and an enumeration of what was swept.**
+
+**THE RULING AGAINST US:** this round kept `trapfrozensfd1`, whose measured delta against its own mutant is
+ZERO, arguing the anchor rule's principle transfers -- a row varying two bits cannot say which fired.  **The
+warrant does not transfer**, and the refutation cites this project's own carrier: the anchor rule repairs an
+oracle that compares a path with ITSELF, which is not the situation here since the joint row already checks
+concrete vector and register expectations; and row demand is bounded *"per enumerated mutant, never per
+attribution need"*.  Removing the row loses none of the 56 cells and none of table 15's kills.
+
+**THE ROW IS KEPT PENDING ADJUDICATION, on the same seat's own next paragraph.**  After removal, SFD1 coverage
+rests entirely on `trapfrozenuser`, whose `PSR_FRZUSER` (`0x03`) is SHARED with `errpriv` and `errunimpl` --
+so changing it to `0x0b` would preserve THEIR routes while silently deleting the only SFD1-clear stimulus, and
+**BASE alone would not notice**.  Remove-or-keep is a RULE QUESTION about what the addition licence authorises
+when redundancy buys a failure signature, and the carrier sends rule questions to the flagship seat at the next
+round boundary.  **Filed as `m88ksfd1row` with the question written out, held for the 2026-09-09
+adjudication.**  Deferring costs nothing measured: v21 is records-only (executable structure identical to the
+frozen v19 that table 15 ran), so the table's scores still describe the shipped 59-row instrument and no
+re-table is owed either way.  Independent of the ruling: any edit to `PSR_FRZUSER` owes a re-check of the
+pre-trap bit values and a repeat of both named mutant measurements, and that obligation is now written beside
+the constant.
+
+**Gate 11 re-pinned to 59/59** (the six arm rows at `psr=0xb000000b`, the SER axis at its two non-arm sites, the
+trapfrozen family at 16, the seven `err*` rows) **and the #503 detector wired in beside it.**
+
+**glm was DOWN on a thinking burn for the SECOND consecutive brief on this row** -- 137,415 bytes, empty
+`response`.  Two burns on two successive packets is a pattern, and the carrier's own finding is that burns track
+BRIEF COMPLEXITY rather than seat health, so the remedy is to split the next packet-fed brief rather than write
+the seat off.  **codex was WALLED** (usage limit, resets 21:25; its file is the echoed brief plus the notice, 8%
+novel -- the shape a size check scores as the panel's second-best answer).  **agy DELIBERATELY NOT FIRED**
+(reserved for measurement); **opus5 and fable5 HELD** for the 9th.
+
+## Filed from the round
+
+`m88kdslotshadow` MEDIUM (above); `m88kexcfrozendmt` LOW (the DMT/DMD/DMA zeroing sits outside the `update_shadow_regs` guard, so a
+trap taken while frozen clears registers UM 6.5.5 says it leaves alone -- codex, kimi); `m88kexchwtraps` LOW (a supervisor tb1
+naming 0/1/2/3 reaches the hardware-event tail arms -- the pass-1 record said the vector-0 half was filed as `m88kexcresetkill`; it was
+not, until now); `m88kexcdebt` LOW (the disclosed coverage debt above); `m88kexctaildefault`, `m88ktbnd`, `m88kmxmkill` LOW (item (vii) above -- filed by THIS round, 2026-09-06; this line listed the first among the "earlier" rows until the pass-4 Fable seat read it against (vii)).  Earlier from this campaign: `m88kexcsfu1`,
+`m88kbcndm6`, `m88kidledup`.
+
+## Two-part clearance and what was NOT done
+
+`build/`, `build-asan/` and WSL `/tmp/gxsec-build` rebuilt after the last (comment-only) edit; each `cmp`s clean against SEC and each
+binary is newer than its source (`rebuild_*.log`, then `rebuild_fix2.log` after the pass-4 comment corrections; the final probe on the
+rebuilt `build/gxemul` is 29/29, `probe_v5_fix_final.out` -- 22/22 `probe_v3_fix_final.out` and 23/23 `probe_v4_fix_final.out` before it);
+`est/` is a source tree, part 2 N/A, part 1 clean.  No gate or battery was run during the round (a panel or a table was live
+throughout); gate 11 runs at the next battery.  No boot witness: every claim about OpenBSD/luna88k behaviour is from the source and the
+manual.  The unrelated uncommitted edit to `regress/sgi_de_primop_probe.py` is NOT in this commit.
+
 # Retrospective re-check, batch 3a (dev_wdc.c #337..#464) -- seven wdc commits re-read by GPT-6 Astra at max effort and adjudicated by Fable 5.1: every fix HOLDS; two guest-visible defects the rounds left standing (MEDIUM), one known-unfiled defect and six harness rows filed, two merges, twenty in-place record corrections
 
 **2026-09-05.  Records only; comment-only source corrections (`dev_wdc.c`).**  Batch 3a = `052982a` (#337), `c941fe3` (#341),
@@ -4828,7 +5422,8 @@ corrupts silently under load.
 **`shipped.diff` was rewritten IN PLACE after the table consumed it** -- the
 immutable-artifact rule's exact shape, committed by this round.  The as-run bytes
 survived only as a staged git blob and were recovered from it; both versions now sit in
-`wdcaddtoinbufbound/killtable_20260830/` with `PROVENANCE.txt` naming which run consumed which, and the
+`wdcaddtoinbufbound/killtable_20260830/` with `wdcaddtoinbufbound/killtable_20260830/PROVENANCE.txt` naming
+which run consumed which, and the
 comment-only claim was CHECKED rather than asserted (three code lines each, identical).
 
 **Two files in that directory were written by a SEAT, not by this loop** -- an

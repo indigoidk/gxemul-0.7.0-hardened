@@ -1,0 +1,287 @@
+kimi version 0.36.0
+• Let me look at the actual file to verify the claims. The task: review comment-only diff in GXEMUL-SEC/src/devices/dev_wdc.c. Need to check:
+
+  1. Width census: for access widths 1..8, bytes popped = 1,2,2,4,2,2,2,2.
+  2. Ring predicate: #484 sacrifices one slot so head==tail means EMPTY.
+  3. Detector rows in regress files depending on old wording.
+
+  Let me read the relevant code.
+
+• I'll examine the actual code to verify both claims independently.
+
+• Let me focus on the tree under review: GXEMUL-SEC/src/devices/dev_wdc.c. Read the relevant sections: wdc_get_inbuf, ring struct definition, DEVICE_ACCESS(wdc) data-register arm.
+
+• Now let me read the relevant sections of the file under review.
+
+• Now read the key regions: lines 178-260 (addtoinbuf), 280-320 (get_inbuf), and 1090-1160 (DEVICE_ACCESS data register arm).Now I need the DEVICE_ACCESS(wdc) data register read arm — around lines 1090-1160. Let me read that region.I need the DEVICE_ACCESS(wdc) data-register read arm around line 1106. Let me read lines 1000-1250.Now I have the data-register read arm. Let me derive the width census from the code:
+
+  ```c
+  case wd_data:   /*  0: data  */
+      if (writeflag == MEM_READ) {
+          odata = wdc_get_inbuf(d);              // 1st pop, unconditional
+
+          if (cpu->byte_order == EMUL_LITTLE_ENDIAN) {
+              if (len >= 2)
+                  odata += (wdc_get_inbuf(d) << 8);   // 2nd pop if len >= 2
+              if (len == 4) {
+                  odata += (wdc_get_inbuf(d) << 16);  // 3rd, 4th pop if len == 4
+                  odata += (wdc_get_inbuf(d) << 24);
+              }
+          } else {
+              if (len >= 2)
+                  odata = (odata << 8) + wdc_get_inbuf(d);
+              if (len == 4) {
+                  odata = (odata << 8) + wdc_get_inbuf(d);
+                  odata = (odata << 8) + wdc_get_inbuf(d);
+              }
+          }
+  ```
+
+  Pops as a function of len: 1 + (len >= 2 ? 1 : 0) + (len == 4 ? 2 : 0).
+
+  So:
+  - len=1: 1 + 0 + 0 = 1 ✓
+  - len=2: 1 + 1 + 0 = 2 ✓
+  - len=3: 1 + 1 + 0 = 2 ✓ (len >= 2 true, len == 4 false)
+  - len=4: 1 + 1 + 2 = 4 ✓
+  - len=5: 1 + 1 + 0 = 2 ✓
+  - len=6: 1 + 1 + 0 = 2 ✓
+  - len=7: 1 + 1 + 0 = 2 ✓
+  - len=8: 1 + 1 + 0 = 2 ✓
+
+  So the census 1,2,2,4,2,2,2,2 checks out — claim 1 holds, under both endianness branches (identical pop count; only assembly order differs).
+
+  But wait — one caveat: `len` here. `len` is the DEVICE_ACCESS parameter. Is `len` guaranteed to be in 1..8? memory_rw... typically len ∈ {1,2,4,8} for native accesses, but a guest with unaligned/multi-byte... In GXemul DEVICE_ACCESS, len can be any of 1..8 in principle. The comment covers widths 1..8 — matches.
+
+  Claim 1: HOLDS.
+
+  Claim 2: ring predicate. #484's producer guard: `if ((d->inbuf_head + 1) % WDC_INBUF_SIZE == d->inbuf_tail)` → refuse. So after any push, head != tail. That makes head==tail mean empty for states reached via wdc_addtoinbuf.
+
+  But: are there other writers of head/tail that could produce head==tail with data pending?
+
+  Writers:
+  1. `wdc_addtoinbuf` — guarded, never makes head==tail after a store.
+  2. `wdc_new_command_reset` — sets head=tail=0, empty. Fine.
+  3. `wdc__read` bulk arm — `d->inbuf_head += 512 * to_read; if (head == SIZE) head = 0;` — guarded by `512*to_read > (tail - head - 1 + SIZE) % SIZE` refuse. That guard ensures the advance leaves at least one slot: 512*to_read <= (tail - head - 1) mod SIZE, so new head = head + 512*to_read (mod SIZE) with head + n <= ... Let's check: if head + 512*to_read <= SIZE then head_new = head + 512*to_read possibly == SIZE → wrapped to 0. Could head_new == tail with data pending? The guard: 512*to_read <= (tail - head - 1 + SIZE) % SIZE. If head_new == tail, then the number of bytes written ≡ (tail - head) mod SIZE. Since 512*to_read <= (tail-head-1) mod SIZE, and both 512*to_read and RHS < SIZE... if tail > head: RHS = tail-head-1, and bytes ≤ tail-head-1 < tail-head, so head_new = head+bytes < tail, strictly. If tail <= head: RHS = tail-head-1+SIZE; head_new = head + bytes ≤ head + (tail-head-1+SIZE) = tail - 1 + SIZE, i.e., head_new mod SIZE ≤ tail - 1, again strictly before tail mod SIZE. So the bulk arm can't land head==tail with data pending either. Good.
+  4. The drain at line ~1756: `d->inbuf_tail = (d->inbuf_tail + 512*count) % WDC_INBUF_SIZE;` — consumer; can make tail == head by draining everything, which is exactly EMPTY. Fine.
+  5. wdc_get_inbuf tail advance — consumer, can empty the ring. Fine.
+  6. Line 831: reset. Fine.
+
+  Also `d->inbuf_head == WDC_INBUF_SIZE → 0` normalization in the bulk arm: fine.
+
+  Hmm, but one more consideration: the initial state — devinit sets inbuf = zeroed_alloc; head/tail... struct wdc_data is presumably zeroed (malloc zeroed?). Line 831 covers reset. devinit — let me check line ~1985 area. d is allocated with zeroed_alloc probably. head=tail=0 initially, empty. OK.
+
+  So under #484, can the ring reach head==tail with data pending? Producer refuses at one-slot-left. Consumers only shrink occupancy. The bulk refill arm is guarded with the -1 sacrificed slot. So no: head==tail ⇒ empty. Claim 2 holds... 
+
+  Wait, but let me be careful about the exact wording: "BEFORE #484 this predicate was unsound after an overrun, because a FULL ring was indistinguishable from an empty one; #484 sacrifices one slot, so head == tail now means EMPTY."
+
+  The predicate in question is `d->inbuf_head == d->inbuf_tail` in wdc_get_inbuf, used to detect over-read (empty ring). Before #484, a full ring (head wrapped all the way around to tail) would be misread as empty. True for the old producer (which had no guard pre-#484? Let me check what pre-#484 looked like. The comment says #484 added the refuse-before-store guard, and deleted a post-hoc check. Actually there was a "#464 POST-HOC check" that tested head==tail after advance — that's #464's, deleted by #484. Before #484, wdc_addtoinbuf had a post-hoc check after the advance... which fired when head walked onto tail (full), warned, but... what did it do? It apparently was just a check (fatal + latch?) without preventing the state. Actually the deleted comment said the corrupting store "is the next one and is silent" — hmm, that was the old comment that was four-times-false.
+
+  Anyway, the current claim is about semantics at HEAD: #484 sacrifices one slot ⇒ head==tail means EMPTY. Verified against writers: yes.
+
+  One subtlety: `wdc__read`'s bulk path bypasses wdc_addtoinbuf — but it has its own occupancy guard with the sacrificed slot, verified above. So no path makes head==tail with pending data.
+
+  Hmm, but wait — is there any path where head is advanced WITHOUT the guard? Line 534-536 is the only other head writer besides addtoinbuf and reset. Verified guarded. So claim 2 holds.
+
+  Now question 3: detector rows in regress/diff_wdc_identify.c, regress/wdc_flood_probe.py, regress/gate_offline.sh, regress/diff_diskimage_geom.c — do any oracles depend on the OLD wording being true? I.e., does any detector row depend on (a) "3- or 8-byte access consumes 1 or 2" (old wording said "1 or 2" — which was wrong; actually consumes 2 in both cases), or (b) "head==tail ambiguous after overrun"?
+
+  Old wording claim (a): "a 3- or 8-byte access consumes 1 or 2" — actually it's 2 in both cases (len>=2 pops a second byte; len!=4 pops no more). "1 or 2" was wrong: for len=3 or 8 it's always 2, never 1. The correction says "consumes 2 (widths 1..8 pop 1,2,2,4,2,2,2,2; '1 or 2' until 2026-09-05)".
+
+  Now let me grep the regress files for oracles keyed on width census or on ring ambiguity / overread.
+
+  Let me look at the four regress files.
+
+• I have the read arm and the ring writers. Now let me check the four regress files for detector rows whose oracles key on the corrected wording.
+
+• Let me look at specific rows that might depend on the old wording:
+
+  1. The width census old wording: "a 3- or 8-byte access consumes 1 or 2" — actually always 2. Rows: `row_odd_width` (line 1244) — uses 2-byte read of 1 remaining, expects consumed 2. There's also something around line 1118: "exactly three bytes queued: the fourth pop hits an empty ring". And rows about the drain with bad-len widths.
+
+  2. Ring predicate: R-rows around 4809-5057. Line 5041: "landing head ON tail -- the exact ambiguity this round removed". R6: "one short of full must ALL land", R1: "full ring: pointer occupancy == WDC_INBUF_SIZE - 1" — these pin the NEW semantics (head==tail means empty), which is consistent with the corrected comment. So they'd break if the old wording were true — i.e., they depend on the new wording, not the old. Good.
+
+  The question: is there any detector row whose oracle depends on the OLD wording being TRUE? Old wording A: "3- or 8-byte access consumes 1 or 2". If a row asserted that a 3-byte or 8-byte read pops 1 byte sometimes... Let me check rows that use len==8 or len==3 reads on the data register.
+
+  Let me look at row_odd_width and the section around line 1100-1120 and also the wdcoddstep section (1071-1080).These rows all assume the NEW semantics (consumed = 2 for 2-byte read, consumed = 4 for 4-byte read, etc.) and ring semantics of #484. They don't depend on the old wording being true.
+
+  But wait — the old wording said a 3- or 8-byte access "consumes 1 or 2". Is there any row that issues a 3-byte or 8-byte READ of the data register and asserts a pop count consistent with "1 or 2"? Actually the truth is "2" for both. "1 or 2" as a claim: "consumes 1 or 2" — under the true behavior, 3-byte pops 2, 8-byte pops 2. So the set {1,2} technically contains the true value 2! The old wording was vague but arguably not strictly false — "consumes 1 or 2" — for 3-byte it consumes 2, which is "1 or 2". Hmm, the old wording is ambiguous but the value 2 is in "1 or 2". The real inaccuracy: it says "consumes 1 or 2 while len says 3 or 8" — fine, the defect reasoning holds either way. The new wording is sharper: "consumes 2 (widths 1..8 pop 1,2,2,4,2,2,2,2...)".
+
+  Wait — actually, is the old wording wrong at all? "a 3- or 8-byte access consumes 1 or 2" — if we read it as "consumes 1 or 2 bytes depending on...", it's true that it consumes 2 (which is one of {1,2}). Hmm, but the panel frames the old wording as the "previous wrong record". The new wording pins exact per-width values. Whether old was strictly false is not our question — our question is whether the NEW census is right. Verified: pops = 1 + (len>=2) + 2*(len==4) → 1,2,2,4,2,2,2,2. ✓ Matches.
+
+  Now the ring predicate claim. Rows R1-R9 at 4809-5057. Line 5041: "landing head ON tail -- the exact ambiguity this round removed". R1: occupancy == WDC_INBUF_SIZE-1 at full. R6: one short of full all land. These all assume the new semantics — consistent with the new comment.
+
+  Is there any row whose oracle depends on the OLD ring wording ("after an overrun this predicate is unsound, full indistinguishable from empty")? That would be a row that drives an overrun and asserts that head==tail is ambiguous... Rows R1-R9 assert the opposite (unambiguous), i.e., they pin the NEW behavior — they'd fail on the old code, which is what a detector wants. So no row depends on the old wording being true.
+
+  But wait — the third question mentions four files: diff_wdc_identify.c, wdc_flood_probe.py, gate_offline.sh, diff_diskimage_geom.c. Let me check wdc_flood_probe.py for any oracle depending on the old wording — e.g., counting "reading too much" lines, or checking overread behavior. The old wording in hunk 1 was inside wdc_get_inbuf's comment about the over-read path. wdc_flood_probe.py probably counts flood lines. The corrected sentence doesn't change behavior, so a flood-count oracle is unaffected. But maybe there's a row that asserts something about the ring being ambiguous after overrun?
+
+  Let me check wdc_flood_probe.py and gate_offline.sh and diff_diskimage_geom.c.
+
+• These detector rows all pin the new semantics, not the old wording. Now the other three regress files.
+
+• Interesting. `wdc_flood_probe.py` lines 49-51 contain: "`:145`/`:160` sit on a ring that uses head==tail for BOTH empty and full with no disambiguator, and whose two BULK paths never compare the pointers at all. Filed as `wdcringambig`."
+
+  That's the OLD wording, inside the probe's own comment block! Let me read wdc_flood_probe.py around lines 40-130 to see whether that's just a comment or an oracle dependency. The question is whether any detector ROW's oracle depends on the old wording. The `overread -1` row asserts that the over-read returns 0xffffffff and doesn't corrupt the ring — that pins current behavior, fine under both wordings? Actually wait: the overread -1 row predates #484? Let me check whether it depends on the OLD ring semantics.
+
+  Actually let me read the file sections carefully.The flood probe's "NOT CLAIMED" section (lines 49-52) still says the ring "uses head==tail for BOTH empty and full with no disambiguator, and whose two BULK paths never compare the pointers at all. Filed as `wdcringambig`." That's the OLD wording sitting in a detector file's contract — but it's a comment, and it explicitly disclaims ring health ("no row here says otherwise"). So the probe doesn't have an oracle depending on old ring semantics; but its comment is stale. However the question is about detector ROWS whose ORACLE depends on old wording.
+
+  Note line 105-120: the `overrun x2` row — re-aimed by #486 at the guest data port. It asserts latched count 1. Doesn't depend on ring ambiguity.
+
+  Let me check the `overread -1` row (line 434-444) — it asserts the over-read returns 0xffffffff and the tail doesn't advance. That's consistent with current code and both wordings.
+
+  Now diff_diskimage_geom.c — geometry, unlikely related to these two comments, but let me check quickly. Also need to double-check the remainder of wdc_flood_probe.py rows (lines 400-745) and diff_diskimage_geom.c for width/ring oracles.
+
+  Let me also verify claim 2 fully — check all writers to inbuf_head/inbuf_tail:
+  - wdc_addtoinbuf: guarded (refuse if (head+1)%SIZE == tail) → head != tail after store. ✓
+  - wdc__read bulk arm: guarded by occupancy bound with -1. ✓ (verified algebraically above)
+  - wdc_new_command_reset: head=tail=0, empty. ✓
+  - devinit: let me check line ~1985 for initialization.
+  - wdc_get_inbuf: consumer, advances tail; if ring empties, head==tail with nothing pending. ✓
+  - drain at 1756-1759: consumer advances tail by 512*count. Can it advance PAST head? The guard at 1743-1748 requires inbuf_len > 0 && inbuf_len % (512*count) == 0, so it drains an exact multiple; tail lands exactly ON head when fully drained → empty. ✓
+  - CDB dispatch at 1636: pops inbuf_len bytes via wdc_get_inbuf. Consumer. ✓
+
+  So under #484, head==tail ⟺ empty (given producers never reach full-by-equality). One more check: the initial state in devinit. And also confirm there's no other head writer. From the grep: head writers at 256 (addtoinbuf), 534-536 (bulk), 831 (reset). Tail writers at 306 (get_inbuf), 831 (reset), 1758 (drain). That's all.
+
+  Wait, also line 514's guard: `512 * to_read > (d->inbuf_tail - d->inbuf_head - 1 + WDC_INBUF_SIZE) % WDC_INBUF_SIZE` → refuse (break). So admitted only if 512*to_read <= (tail - head - 1 + SIZE) % SIZE. The linear write requires head + 512*to_read <= SIZE. After: head_new = head + 512*to_read, or 0 if == SIZE. Could head_new == tail while bytes were written (512*to_read > 0)?
+
+  Case A: tail > head. Then RHS = tail - head - 1. head_new = head + n where n <= tail - head - 1 < tail - head, so head_new < tail strictly, and head_new <= head + tail - head - 1 = tail - 1. Also head_new could hit SIZE? head + n <= head + tail - head - 1 = tail - 1 < SIZE. So no wrap, head_new < tail. ✓ Not equal.
+
+  Case B: tail <= head. RHS = tail - head - 1 + SIZE. head_new = head + n ≤ head + tail - head - 1 + SIZE = tail + SIZE - 1. If head + n <= SIZE, no wrap: head_new ∈ (head, SIZE], head_new > head >= tail so head_new != tail unless... head_new > head >= tail means head_new > tail (if head >= tail and head_new > head). If head == tail and n=0? n = 512*to_read > 0 always (to_read >= 1). So head_new > tail. If head + n > SIZE... wait the linear branch requires head + n <= SIZE; else it goes through wdc_addtoinbuf per byte, which is guarded. Hmm, but careful: the else branch (line 537-541) pushes byte-by-byte through wdc_addtoinbuf after passing the occupancy guard. Each push refuses at one-slot-left. Since total n <= free-1, all land. Fine.
+
+  If head + n == SIZE exactly → head_new = 0. Could 0 == tail? That requires tail == 0, but we're in case tail <= head; if tail == 0, then RHS = 0 - head - 1 + SIZE = SIZE - head - 1, and n <= SIZE - head - 1 < SIZE - head, so head + n < SIZE, contradiction with == SIZE. So head_new = 0 implies tail != 0. ✓ Not equal.
+
+  Good — the bulk arm cannot produce head==tail with pending data either. So claim 2 holds: after #484, head==tail is unambiguously EMPTY. And "before #484... a FULL ring was indistinguishable from an empty one" — was that true? Before #484, was there a path to full (head walks onto tail)? The pre-#484 addtoinbuf had no refuse guard; it stored then advanced, so pushing SIZE bytes lapped head onto tail with the ring full. And per the #464-era code there was a post-hoc check (which warned but left the state ambiguous — and per the comment, it was deleted by #484). Also the bulk arm pre-#484 had no occupancy guard (the comment says the test below was a buffer bound only). So yes, pre-#484 head==tail could mean full. Claim 2's historical half holds too.
+
+  Now the eight-value census. From the read arm:
+
+  ```
+  odata = wdc_get_inbuf(d);               // pop 1, unconditional
+  if (len >= 2) pop 2nd
+  if (len == 4) pops 3rd and 4th
+  ```
+
+  pops(len) = 1 + [len>=2] + 2·[len==4]:
+  - 1→1, 2→2, 3→2, 4→4, 5→2, 6→2, 7→2, 8→2. Exactly the claimed 1,2,2,4,2,2,2,2. ✓ Both endianness branches identical in count. And the accounting expression `consumed = len == 4 ? 4 : (len >= 2 ? 2 : 1)` matches pops exactly.
+
+  Also note: the old wording "consumes 1 or 2" — under the true census, a 3-byte access consumes 2 and an 8-byte consumes 2. "1 or 2" is technically a superset that includes the true value 2, so the old sentence wasn't strictly false for those two widths — but as a census it implied variability that doesn't exist. The new one is exact and correct.
+
+  Hmm wait, but actually let me double check: is there a scenario where len==3 read pops only 1? No — `len >= 2` is true for 3, so 2nd pop happens. Always 2. OK.
+
+  Now, one more check on claim 1: the comment says "widths 1..8 pop 1, 2, 2, 4, 2, 2, 2, 2". len in DEVICE_ACCESS is the access len. Can len be 3, 5, 6, 7? In GXemul, memory accesses can be arbitrary lengths 1..8 (e.g., unaligned). The census covers all. ✓
+
+  Now the third question: detector rows depending on OLD wording being true.
+
+  Candidates:
+  1. wdc_flood_probe.py lines 49-52: the "NOT CLAIMED" bullet still asserts the ring "uses head==tail for BOTH empty and full with no disambiguator, and whose two BULK paths never compare the pointers at all." This is stale text — at HEAD, #484 added the disambiguator (sacrificed slot) and one bulk path (wdc__read) DOES compare the pointers (line 514). So the probe's contract comment is now false. But is it an ORACLE? No — it's a "NOT CLAIMED" disclaimer; no row asserts ring health or ambiguity. The rows it contains (overread x2, overread -1) assert latch count and -1 return / tail-not-advance, which hold under both old and new wording. So the stale wording there doesn't pin a wrong thing — it under-claims coverage, which is conservative. Worth naming as a stale comment but not an oracle inversion.
+
+  2. Row "overread -1" (wdc_flood_probe.py:434-444): asserts 0xffffffff returned on overread and tail not advanced. Consistent with current code regardless of the comment correction.
+
+  3. diff_wdc_identify.c rows R1-R9, row_odd_width, etc.: all pin the NEW semantics. R1 asserts occupancy == WDC_INBUF_SIZE-1 at "full" — depends on #484 semantics, consistent with new comment. Line 5041's comment mentions "landing head ON tail -- the exact ambiguity this round removed" — consistent.
+
+  Wait — actually let me reconsider. Question 3 asks: is there any detector row whose oracle depends on the OLD wording being TRUE? Let me look for a row that would go red BECAUSE the new wording is true... no wait — the product diff is comment-only, so behavior didn't change; rows can't change behavior. The question is whether a row's oracle was written against a sentence that has now been corrected — i.e., a row that pins the old, wrong claim. E.g., a row asserting that a 3-byte read pops 1 byte ("1 or 2"), or a row asserting head==tail ambiguity after overrun.
+
+  Let me search diff_wdc_identify.c for rows doing len==3 or len==8 READS and asserting pop counts. Line 1767: "no-push: a len-3 write pushes ZERO bytes" — that's the WRITE side width switch (cases 4,2,1; default pushes nothing). Line 3252: "an 8-byte store: the width switch rejects it". Those are WRITE-side. The corrected comment concerns the READ side pop census. Write-side: let me check the write arm at lines ~1478-1520: switch (len) case 4: 4 pushes; case 2: 2 pushes; case 1: 1 push; default (3,5,6,7,8): NO pushes (no default arm). So write-side pushes for widths 1..8: 1,2,0,4,0,0,0,0. Not the comment's subject.
+
+  Any read-side width rows? row_odd_width uses len==2. row_odd_step/midwalk/multichunk use len==4. The `wdcflood` probe's r16/r32 rows are on NON-data registers (WD_SECCNT). Hmm.
+
+  Let me grep diff_wdc_identify.c for "len, 3" or ", 3, MEM_READ" or ", 8, MEM_READ" data reads.
+
+  Also, I should double check the `overrun x2` row's arithmetic at line 648: "Post-#484 the producer refuses at head == 262,655, so push 262,656 is the first" — consistent with new semantics.
+
+  Let me also check diff_diskimage_geom.c briefly for wdc content. And read the rest of wdc_flood_probe.py (lines 400-745) to see the row definitions.
+
+• Let me check the remaining probe rows and the geom detector, plus search for any row asserting read-side pop counts for odd widths.
+
+• `diff_diskimage_geom.c` is pure geometry — nothing about the ring or the read-path census. No oracle depends on the old wording there.
+
+  `wdc_flood_probe.py`: rows assert latch counts (1 then 0), the -1 overread return, and value oracles. None asserts a width-pop census or ring ambiguity. The `overread -1` row depends on `wdc_get_inbuf` returning -1 without tail advance on empty — true under both old and new wording.
+
+  BUT: the flood probe's contract comment at lines 49-52 still says the ring "uses head==tail for BOTH empty and full with no disambiguator, and whose two BULK paths never compare the pointers at all." That is precisely the sentence the product hunk-1 correction declares stale ("stale wording corrected 2026-09-05") — and the SAME commit that fixed the product comment touched `wdc_flood_probe.py` but left this instance standing. It's not an oracle, it's a disclaimer — but it is now a FALSE disclaimer in a detector file: at HEAD, head==tail has a disambiguator (#484's sacrificed slot) and one bulk path (wdc__read's guard at "512 * to_read > (tail - head - 1 + SIZE) % SIZE") DOES compare the pointers. So the third question's answer: no ORACLE depends on the old wording, but the flood probe's contract paragraph is a stale copy of the very sentence corrected in the product, and it survives in the same commit's own touched file. Hmm — wait. The commit touched wdc_flood_probe.py. Did it update this paragraph? Line 468 mentions "this comment said 'any period N > 1' until the 2026-09-05 retrospective review -- wdcfloodprobe" — so the same-day retrospective did touch this file and fixed a different sentence, while leaving the ring-ambiguity one. That's the finding for Q3: not an oracle, but a wrong record in a detector file that was open in the editor that day.
+
+  Hmm, but is it really wrong? "`:145`/`:160` sit on a ring that uses head==tail for BOTH empty and full with no disambiguator" — false at HEAD post-#484. "whose two BULK paths never compare the pointers at all" — also false post-#484: wdc__read's occupancy guard at line 514 compares (tail - head - 1) mod SIZE. Both clauses are the old world. And "THE RING INVARIANT IS UNTOUCHED" — false post-#484; the ring invariant was exactly what #484 established.
+
+  Wait — but when was this written vs #484? The probe is the wdcflood (#464) detector. #484 fixed the ring afterward. If this paragraph was written at #464 time and never updated, it's stale. The file's own bullet at line 105-120 acknowledges the ring repair ("#484's ring repair changes how many overrun EVENTS occur..."), so the file knows about #484 — and still carries the pre-#484 ring description at lines 49-52. That's an internal contradiction within the same file: line 49 says "no disambiguator," line 110-116 discusses #484's ring repair. So yes, stale sentence.
+
+  Now, does any detector ROW depend on the old wording? The question demands: "is there any detector row in those files whose oracle depends on the OLD wording being true?" Let me think about each:
+
+  1. `overread -1` row: asserts second empty read returns 0xffffffff. Under the old wording ("predicate unsound after overrun, full indistinguishable from empty"), the same row... the row only reads an EMPTY ring, so it doesn't discriminate. Its oracle doesn't depend on ring-ambiguity either way. Fine.
+
+  2. Width rows in diff_wdc_identify.c (odd_step, midwalk, odd_width, multichunk): all assert `consumed = len==4 ? 4 : (len>=2 ? 2 : 1)` behavior with len ∈ {2,4} — consistent with the NEW census (and with the code). No row exercises len==3 or len==8 READS on wd_data, so no row pins the old "1 or 2" wording. Actually — interesting: the new census asserts specific values for widths 3,5,6,7,8 (all pop 2), and NO detector row covers a 3- or 8-byte data READ. The comment at gate_offline 1240 even warns "A detector whose rows all use one access width cannot see a fix narrowed to that width". The rows use 2 and 4. Widths 3,5,6,7,8 read-side are unrowed. That's coverage debt, not an oracle depending on old wording.
+
+  3. The R-rows (R1-R9) in diff_wdc_identify.c: they pin the NEW ring semantics (occupancy SIZE-1 at full, DRQ still set, etc.). They depend on the NEW wording being true — which is the correct direction for a detector.
+
+  4. gate_offline.sh: greps for row labels in the log ("R1 full ring: pointer occupancy", "width: a 2-byte read of 1 remaining", etc.) — presence checks, not oracles on the old wording.
+
+  5. diff_diskimage_geom.c: unrelated (geometry parser).
+
+  So: no detector ROW's oracle depends on the old wording. Claim (iii) — "a comment-only product diff needs no detector change" — as a claim about oracle validity, holds... but the panel says "Assume at least one is wrong." Hmm. Let me re-examine claims (i) and (ii) harder. Maybe I mis-derived something.
+
+  Claim (i): the census. Let me re-read the read arm very carefully.
+
+  ```c
+  case wd_data:	/*  0: data  */
+      if (writeflag == MEM_READ) {
+          odata = wdc_get_inbuf(d);
+          if (cpu->byte_order == EMUL_LITTLE_ENDIAN) {
+              if (len >= 2)
+                  odata += (wdc_get_inbuf(d) << 8);
+              if (len == 4) {
+                  odata += (wdc_get_inbuf(d) << 16);
+                  odata += (wdc_get_inbuf(d) << 24);
+              }
+          } else { ... same counts ... }
+  ```
+
+  pops = 1 + (len>=2 ? 1:0) + (len==4 ? 2:0).
+
+  len=1: 1. len=2: 2. len=3: 2. len=4: 4. len=5: 2. len=6: 2. len=7: 2. len=8: 2.
+
+  → 1,2,2,4,2,2,2,2. Matches the comment exactly. And "a 3- or 8-byte access consumes 2" ✓.
+
+  Hmm wait — but hold on. Is `len` for the DEVICE_ACCESS the raw guest access width? There's `relative_addr /= d->addr_mult;` but len isn't scaled. For a read, there's no `if (len != 1 && !warned_nonbyte_read)` guard before the pops? Let me check the read-side width check placement... In the MEM_WRITE branch there's a width check for non-wd_data registers. For reads... let me look at the code after the data arm — where does warned_nonbyte_read live? Let me check the tail of the switch. Actually from the grep earlier, line ~1093 is the write-side guard. The read-side non-8-bit guard is somewhere in the common tail. Does the read arm pop before any width check? Doesn't matter for the census — the pops are as written regardless of the warning.
+
+  But wait — there's a subtlety: `wdc_get_inbuf` on an EMPTY ring does NOT advance tail (returns -1). So "pops" in the sense of "bytes consumed from the ring" — for widths where the ring has fewer bytes than pops attempted, actual tail advances are fewer. The comment says "the reads above take one byte, two if len >= 2, four only if len == 4" — the census is about the number of wdc_get_inbuf CALLS, which equal tail advances only when the ring is non-empty at each call. On an empty ring, calls still happen (returning -1), so "consumes N bytes" holds when the ring has data. The original defect context (atapi_len accounting) had data in the ring. Fine — the census as a statement about the code's pop count per access width is exact. ✓ Claim (i) holds.
+
+  Claim (ii): ring predicate. "#484 sacrifices one slot, so head == tail now means EMPTY." Verified all writers:
+  - addtoinbuf: refuses when (head+1)%SIZE == tail → head==tail unreachable via producer with data pending.
+  - wdc__read bulk: guarded with the -1; algebra shows head_new != tail after any admitted refill with n>0. ✓
+  - reset: both zeroed (empty). ✓
+  - consumers only decrease occupancy. ✓
+
+  BUT — wait. Is there a path where head==tail with data pending via the BULK arm's wrap normalization? `if (d->inbuf_head == WDC_INBUF_SIZE) d->inbuf_head = 0;` — covered above: head+n==SIZE requires tail != 0. ✓
+
+  What about the initial state and `devinit`? Let me check line 1985 area — `d->inbuf = zeroed_alloc(WDC_INBUF_SIZE)`; d itself presumably zeroed so head=tail=0. Empty. ✓
+
+  Hmm, so claim (ii) holds too... but the panel says assume at least one is wrong. The three claims are:
+  (i) the eight-value width census — TRUE.
+  (ii) head==tail means empty after #484 — TRUE (as a product statement).
+  (iii) that a comment-only product diff needs no detector change — this is where it bites. Strictly, no ORACLE inverts. But the flood probe's contract (lines 49-52) still asserts the pre-#484 ring description as its "NOT CLAIMED" basis. That bullet is a false sentence in a detector file, and it's the exact sentence the product hunk corrected — the commit fixed the wording in dev_wdc.c but left the same stale wording in wdc_flood_probe.py, a file the SAME commit touched (line 468 carries a "2026-09-05 retrospective review" correction). So claim (iii) as stated — "no detector change needed" — is defensible for oracles but false for the detector files' own records: one file needed the same wording correction and didn't get it.
+
+  Hmm, wait. Let me be careful: is lines 49-52 really stale, or does it describe a deliberately preserved historical filing? "Filed as `wdcringambig`" — and wdcringambig is the artifact dir for the ring ambiguity round (#484). The bullet says "THE RING INVARIANT IS UNTOUCHED" — meaning by #464's latch round. In context at #464-time it was accurate. Post-#484 it's false. The file elsewhere (lines 105-120) discusses #484 explicitly, so the file has been edited after #484 and this paragraph wasn't updated. It even says in the bullet at line 105: "That the ring is HEALTHY at the two ring sites -- see `wdcringambig`" — that's the NOT-CLAIMED bullet which is still fine as a disclaimer (the probe indeed doesn't claim ring health). But the REASON given ("head==tail for BOTH empty and full with no disambiguator, bulk paths never compare the pointers") is now factually wrong twice.
+
+  So my answer: both product claims hold; the wrong one is (iii) — not because any oracle inverts, but because wdc_flood_probe.py's contract paragraph at "ring-buffer HEALTH" still rests the disclaimer on the pre-#484 ring description that this same commit corrected in the product, and it was within the commit's own touched set. If the panel's "at least one is wrong" demands an oracle inversion, I don't find one — and I should say so plainly rather than invent one. But the question as phrased: "is there any detector row in those files whose oracle depends on the OLD wording being true?" — answer: no row; but a detector file's load-bearing contract comment does carry the old wording. Claim (iii) is the one that's wrong, narrowly: the diff did need a detector-file touch (a comment one), in the very file it already touched.
+
+  Actually, let me double-check the flood probe lines 49-52 vs. what #484 did once more, to be fair. "whose two BULK paths never compare the pointers at all" — the two bulk paths are wdc__read's linear refill and the sector-drain (line 1756: `b = d->inbuf + d->inbuf_tail; tail += 512*count`). Post-#484, wdc__read DOES compare the pointers (the occupancy guard at line 514). The drain compares inbuf_len-based guards. So the sentence is false at HEAD. ✓ Stale.
+
+  Also check: does anything else in the four files quote "1 or 2" or the pop census? Let me grep for "1 or 2" and "1, 2, 2, 4" across regress. And also check diff_wdc_identify.c for any row doing a len==8 data read. Let me also verify the "overread -1" row's rationale against the new ring semantics — the row reads an EMPTY ring (fresh session, no command), so head==tail==0, returns -1 twice, tail never advances. Under the new wording, still true. Fine.
+
+  One more check: the second hunk's claim "The reads above take one byte, two if len >= 2, four only if len == 4" — that's pre-existing text, retained, and it's TRUE (calls, not bytes consumed on empty ring — but as a description of the pop sequence it's exact). The new parenthetical "widths 1..8 pop 1, 2, 2, 4, 2, 2, 2, 2" ✓ derived.
+
+  Let me do the final greps to make sure I didn't miss a detector row asserting something width-census related.
+
+• Two quick checks remain: whether any row in `diff_wdc_identify.c` exercises an odd-width data read, and whether any file still quotes the old wording as an oracle.
+
+• Confirmed:
+  - No detector row issues a 3/5/6/7/8-byte data READ (second grep: no matches).
+  - `wdc_flood_probe.py:49-52` still carries the pre-#484 ring description ("uses head==tail for BOTH empty and full with no disambiguator, and whose two BULK paths never compare the pointers at all ... THE RING INVARIANT IS UNTOUCHED") — the exact sentence the product hunk corrected, stale in a detector file the same commit touched (the file has a 2026-09-05 retrospective correction at line 468 and discusses #484 at lines 105-120, so it was edited post-#484 and this paragraph was left).
+  - The old product wording survives in `regress/artifacts/wdcchunking/killtable_20260827/dev_wdc.c.PREFIX` (a frozen artifact — fine, it's a prefix snapshot, that's its job).
+  - The retro batch file confirms the census derivation (1,2,2,4,2,2,2,2) independently.
+
+  Now, also OUTSTANDING_BUGS.md mention: "Wrong in two places: the dev_wdc.c #341 comment and `OUTSTANDING_BUGS.md` at `#341: dev_wdc's ATAPI read`." The commit fixed the dev_wdc.c one; did it fix OUTSTANDING_BUGS.md? The commit touched only the four regress files + dev_wdc.c per the brief. Let me check if OUTSTANDING_BUGS.md still has the "1 or 2" wording. That's within scope-ish ("what the commit did NOT do"). Let me grep quickly.OUTSTANDING_BUGS.md was corrected (line 2559 shows the corrected wording). So the records sweep covered the product file and OUTSTANDING_BUGS.md — but NOT wdc_flood_probe.py lines 49-52, which still says the ring "uses head==tail for BOTH empty and full with no disambiguator, and whose two BULK paths never compare the pointers at all. ... THE RING INVARIANT IS UNTOUCHED". That is the exact sentence corrected in product hunk 1, still standing in a file the same commit touched.
+
+  Now assemble the verdict.
+
+  Claim (i) — width census: DERIVED from code, holds.
+  - Control expressions: unconditional first pop `odata = wdc_get_inbuf(d)`; second under `if (len >= 2)`; third+fourth under `if (len == 4)`. pops(len) = 1 + (len>=2) + 2·(len==4) → 1,2,2,4,2,2,2,2 for len=1..8. Both endianness branches have identical pop counts (only assembly differs). Matches the comment exactly. And `consumed = len == 4 ? 4 : (len >= 2 ? 2 : 1)` agrees.
+  - One refinement worth stating: the census counts wdc_get_inbuf CALLS per access; on an empty ring the calls return -1 without advancing tail, so "bytes consumed from the ring" can be less than the call count when the ring under-runs mid-access. The comment says "pop", which is the call count — accurate for the accounting context (ring holds the data). Not a falsity; note it as a scoping qualifier.
+
+  Claim (ii) — ring predicate: holds. Enumerated ALL writers of the two pointers:
+  - Producers: wdc_addtoinbuf (guard `(head+1)%SIZE == tail` → refuse; after store, head != tail always); wdc__read linear bulk arm (occupancy guard `512*to_read > (tail

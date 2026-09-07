@@ -1,0 +1,45 @@
+VERDICT: PASS-WITH-RESERVATIONS — the diff is correct in principle (probe2_fix.out shows 9/9 DELIVER with the asserted SXIP/SNIP/SFIP/PSR/EPSR/r2 values for all nine fault rows; kill table 1 confirms the additions are necessary and table 2 closes the one escape), but **four premises in the diff's comments and one probe-row description cannot be settled from the packet** and should be checked by a file-reading seat before records ship.
+
+---
+
+**Claims**
+
+1. **The diff's mechanical effect is exactly what it claims.** `implemented = true` added to seven arms in switch 1; demote the level to INFO; replace the `#if 0` ILLEGAL_INTEGER_DIVIDE TODO arm in the tail switch with seven bare `case …:` labels that fall through to a shared `break`. READ from the diff verbatim.
+
+2. **The common path is the architectural contract for these seven.** For each row the probe asserts and the fix build produces SXIP = fault_pc|2, SNIP = fault_pc+4|2, SFIP = SNIP+4 (non-dslot) or delay_target|2 (dslot), PSR = 0x8000000b, EPSR = 0x80000002 (supervisor) or 0x00000002 (user-mode), pc = 8*vector, r2 = 0xdeadbeef. READ from the measured values in the brief. The common path is unmodified by the diff, so the diff inherits a correct common path rather than creating one.
+
+3. **Reachability accounting is consistent.** 5 literal-constant classes (MISALIGNED 1, UNIMPLEMENTED 1, PRIVILEGE 10, DIVZERO 4, OVERFLOW 3), 1 trap-reachable (BOUNDS_CHECK 7 via supervisor `tb1`), 1 SFRZ-reachable (ERROR 10) = 7. READ. The "census correction" the question-5 records owe is real: a literal-grep deriver would see only the 5 (or 6 if it counted SFU1_PRECISE 58) and miss BOUNDS_CHECK and ERROR.
+
+4. **Vector arithmetic for the seven.** Misalign 0x20→4, Unimpl 0x28→5, Priv 0x30→6, Bounds 0x38→7, Div0 0x40→8, Ovf 0x48→9, Error 0x50→10. So the seven occupy vectors 4..10 contiguously. READ from the probe destinations.
+
+5. **Tail-comment claims about rte / SXIP / SNIP / carry.** Per UM 6.4.3.1.4 (quoted in the comment), 6.8.3 (`:10300-10305`), 6.6 (`:9305-9308`), and the probe's SNIP/SFIP/PSR values, the comment is correct: SXIP holds the faulting instruction for the handler's inspection, rte resumes at SNIP, the destination register and carry bit are unchanged by the common path, and a handler that wants re-execution copies SXIP into SNIP itself. The upstream `#if 0` TODO ("should the PC be backed up one step?") is correctly answered NO. READ.
+
+6. **"ERROR arrives here from the SFRZ re-route above with the shadows deliberately frozen (update_shadow_regs false)."** The mechanism is described correctly (SFRZ re-route raises M88K_EXCEPTION_ERROR with frozen shadows, the probe asserts the frozen SXIP/SNIP/SFIP values from the first fault). **NOT CHECKABLE FROM PACKET** that this matches the manual. F15 explicitly asks the reader to grep `ERROR EXCEPTION` and Figure 6-4 in `mc88100.txt`. If Figure 6-4 says shadows ARE updated when SFRZ=1, the fork is architecturally wrong and the probe is asserting the wrong thing (it would still pass because it asserts what the fork does, not what the manual says). Single fact that settles it: the Figure 6-4 SFRZ=1 branch in `mc88100.txt`.
+
+7. **Fallback comment residual "vectors 11..113/116..127".** The list excludes vectors 114 and 115, which implies SFU1_PRECISE/IMPRECISE = 114/115. **NOT CHECKABLE FROM PACKET.** The arithmetic works: 4 original (presumed 0..3) + 7 new (4..10) + 2 SFU1 (114..115) = 13 implemented; 128 − 13 = 115 residual = 103 (11..113) + 12 (116..127). Single fact that settles it: the numeric values of `M88K_EXCEPTION_SFU1_PRECISE` / `_IMPRECISE` (grep the enum in the relevant header).
+
+8. **Fallback comment "nothing raises [11..113/116..127] by name".** The brief asserts this; I cannot grep to confirm. Single fact that settles it: `grep -nE 'M88K_EXCEPTION_[A-Z_]+\b' src/cpus/*.c | awk -F'M88K_EXCEPTION_' '{print $2}' | awk '{print $1}' | sort -u` and confirm the only named vectors are the original 4 + the seven + SFU1_PRECISE (and possibly SFU1_IMPRECISE).
+
+9. **The "8-of-128 figure" in question 5.** Unclear what it refers to. The actual post-diff count of correctly-delivered vectors is 4 original + 7 new = **11**, or 13 if SFU1 counts as implemented-but-incomplete. **8 matches neither.** Possibilities: a stale ledger line that should be corrected to 11/13; a count of something narrower (e.g., "synchronous traps with a destination register hazard" = some subset of 8); a transcription error for "7 of 128 new". NOT CHECKABLE FROM PACKET — needs the CHANGELOG/ledger text.
+
+10. **The ovf row's instruction form.** The brief writes "ovf (add r2,r3,r4 7fffffff+1 -> 0x48)" but F11 says "register-form sub/add.co undecoded (`goto bad` halt)". Register-form `add.co r2,r3,r4` would `goto bad`, not raise INTEGER_OVERFLOW. So either (a) the probe actually uses immediate-form `add.co r2,r3,simm` (simm chosen so r3+simm overflows), or (b) immediate-form `addi.co`, or (c) the probe is on one of the other 3 literal-constant raise sites (per F11 the only known ones are immediate `sub.co` / `add.co` / `mul` etc.). The probe passes, so something works — but the brief's "add r2,r3,r4" wording is inconsistent with F11 and should be clarified in the records. REASONED from the inconsistency between the probe description and F11.
+
+11. **Dslot description wording.** The brief writes "dslot … the else-arm: SNIP = pc+4, SFIP = delay_target" but the kill table says M_DSLOT (else-arm SFIP wrong) kills 8/9 with the **dslot row surviving** — i.e., the else-arm is the NON-dslot path (default SFIP = SNIP+4) and the if-arm is the dslot path (explicit SNIP/SFIP). The probe description's "else-arm" is therefore a brief-side typo / non-standard terminology; the actual dslot arm is the if-arm. REASONED — internal inconsistency in the packet, not a diff defect.
+
+12. **Smallest edit that breaks the diff and still passes an 11-row probe.** Remove `implemented = true` from any one of the seven switch-1 arms (equivalently: drop the matching tail label). That row HALTs (switch-1 path) or TAILHALTs (tail-label-dropped path); the other 8 still DELIVER; controls and selftest still pass. **The row that stays green is: any of the other six, plus `live`, `attrib`, `selftest`.** REASONED — direct analog of M_REVERT1 (which does exactly this for BOUNDS_CHECK and gets 8/9 survive).
+
+13. **What else the main loop expects to survive.** M_LEVEL (9/9 SURVIVED, disclosed — no row keys on the level) and the M_ERRORDROP path **only because** the `errortb` row pins the trap-naming-10 route into switch 1's ERROR arm; without `errortb`, M_ERRORDROP escapes 9/9 (table 1) and is closed only by the L1 errortb addition (table 2: 9/10 survive). No other survivor is expected. REASONED.
+
+14. **Dispositions.** Of the sixteen (F1–F16, D1), none is obviously wrong to me as stated. F15 is explicitly open ("CHECK"); F11 is filed as LOW rows (out of scope for this diff). The Opus/grok D1 disagreement is correctly ruled for Opus by measurement (both BOUNDS_CHECK and ERROR are reachable today; the SH precedent groups by architectural category, not by raise mechanism). REASONED.
+
+15. **What the panel may have missed.** (a) The fallback comment's residual list silently depends on SFU1 vector numbers — if SFU1 is at, say, 8/9 instead of 114/115, the residual would be 11..127 minus 4..10 (i.e., the comment is wrong by construction, not by oversight). (b) F15's Figure 6-4 check is the one item where a wrong manual reading would leave the probe green and the diff architecturally incorrect — the probe asserts what the fork does, not what the manual says. (c) The "8-of-128 figure" is the kind of stale number that propagates into CHANGELOGs; without seeing the source it's impossible to say whether it needs correcting or scrapping. (d) The `add r2,r3,r4` vs F11 inconsistency means the probe's ovf row is documented ambiguously — anyone reproducing it from the brief alone would write the wrong instruction. REASONED.
+
+---
+
+**Single facts a file-reading seat should produce (in priority order)**
+
+1. `grep -n 'ERROR EXCEPTION' _scratchpad/mc88100.txt` and read Figure 6-4 — settles claim 6 (the only claim where a probe-green diff could still be architecturally wrong).
+2. The numeric values of `M88K_EXCEPTION_SFU1_PRECISE` / `_IMPRECISE` — settles claim 7.
+3. `grep -nE 'M88K_EXCEPTION_[A-Z_0-9]+\b' src/cpus/*.c | awk …` — settles claim 8.
+4. The current CHANGELOG/ledger "8-of-128" sentence in context — settles claim 9.
+5. The actual ovf probe instruction encoding (`add.co r2,r3,simm`? `addi.co`? something else?) — settles claim 10.

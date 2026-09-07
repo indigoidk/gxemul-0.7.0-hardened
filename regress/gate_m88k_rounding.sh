@@ -313,4 +313,105 @@ else
           "$(grep -cE '^  (C|D|E)[0-9].* (FAIL|MISMATCH)' "$LUNALOG")" "0"
 fi
 
+#  ---------------------------------------------------------------------------
+#  m88kexcdeliver (2026-09-05): the exception-DELIVERY detector, wired here for the same
+#  reason as the #438 probe above -- this gate already owns the m88k binary.  The probe is
+#  BOTH a rung-3 WITNESS (0/9 -> 0/10 -> 3/22 -> 2/23 -> 2/29 -> 3/30 -> 3/35 -> 4/36 -> 7/41 -> 7/46 (probe_v14_head.out) on HEAD 83df95c as the instrument
+#  grew: every trap-like class stopped the machine.  With the final instrument the 7 are resid50, resid127,
+#  resid11, resid50ind, resid50c and usfu1, whose CORRECT answer is HALT, and the pre-existing user vector 128 (usertb); sfu1h reads STOP
+#  on HEAD because the FIRST divu halts on vector 0x008, not its own 0x072 -- probe10_head.out /
+#  probe_v3_head.out .. probe_v11_head.out) and the DETECTOR (59 fault rows + 2
+#  controls; kill tables killtable/, killtable2/, killtable3/, killtable4/ + killtable4b/
+#  (M_TAILRETURN), killtable5/ (the {class} x {MODE} and {SFRZ set, non-trap} x {class} closures), killtable6/ (the fallback far bound, resid127), killtable7/ (the frozen-TRAP rows per class), killtable8/ (the fallback in user mode, usfu1), killtable10/ (the frozen ERROR trap, the near bound, the fallback PSR-bit cells, the frozen user trap, the refatal channel; table 9 was folded into it), killtable11/ (the frozen traps naming the 0x1c2, MVMEPROM and 511 labels; the ERROR-arm-frozen and MISALIGNED-C representatives; the re-route x {IND, C} cells, errind/errc), killtable12/ (the re-route TRAP side x {IND, C}: both swept 46/46 before the rows existed), killtable13/ (the six previously-sweeping mutants, all killed), killtable14/ (grok's three predicted SER sweeps -- each 54/54 on the frozen v16 instrument and killed on v17 by its own row)
+#  under regress/artifacts/m88kexcdeliver/).  Only the detector half runs here.
+#
+#  The pins are NAMED so that deleting a row is visible: `M88KEXC_RESULT=59/59' pins the
+#  denominator (a row that stops running shrinks it); resid50 and sfu1h are the two rows
+#  whose CORRECT answer is HALT -- they separate the shipped fix from a form that delivers
+#  every vector (the rejected D4) or SFU1 (row m88kexcsfu1); vbrtb is the one ANCHORED row
+#  (VBR relocated to 0x2000: it alone reds if the vector base stops being read).
+EXCLOG=$LOGDIR/m88k_exc.log
+python3 m88k_exc_probe.py "$PMAX" > "$EXCLOG" 2>&1 || true
+grep -E "^M88KEXC_(ROW|RESULT|SELFTEST|CONTROLS)" "$EXCLOG" | cut -c1-110 | sed 's/^/       /'
+
+if ! grep -q "M88KEXC_DONE" "$EXCLOG"; then
+    note "m88k exception-delivery probe produced no completion sentinel; last lines follow"
+    tail -5 "$EXCLOG" | sed 's/^/       /'
+    check "m88k exc: probe completed" "no" "yes"
+else
+    check "m88k exc: CR parse self-test (PSR at reset == 0x80000002)" \
+          "$(grep -c 'M88KEXC_SELFTEST=OK' "$EXCLOG")" "1"
+    check "m88k exc: 59 fault rows, all as expected (the denominator is the pin)" \
+          "$(grep -c 'M88KEXC_RESULT=59/59' "$EXCLOG")" "1"
+    check "m88k exc: IND set by the exception path from a pre-fault PSR with IND clear (indclr)" \
+          "$(grep -cE '^M88KEXC_ROW=indclr +RESULT=DELIVER .*psr=0x8000000b .*epsr=0x80000000' "$EXCLOG")" "1"
+    check "m88k exc: user-mode MISALIGNED and OVERFLOW deliver (umisalign 0x20, uovf 0x48 -- the {class} x {MODE} closure)" \
+          "$(grep -cE '^M88KEXC_ROW=(umisalign +RESULT=DELIVER +pc=0x00000020|uovf +RESULT=DELIVER +pc=0x00000048) .*psr=0x8000000b .*epsr=0x00000002' "$EXCLOG")" "2"
+    check "m88k exc: a frozen handler's non-trap fault of every class re-routes to ERROR (errovf errdiv0 errpriv errunimpl at 0x50)" \
+          "$(grep -cE '^M88KEXC_ROW=err(ovf|div0|priv|unimpl|ind|c|ser) +RESULT=DELIVER +pc=0x00000050' "$EXCLOG")" "7"
+    check "m88k exc: the two liveness/attribution controls computed their quotients" \
+          "$(grep -cE '^M88KEXC_ROW=(live|attrib) +RESULT=DONE' "$EXCLOG")" "2"
+    check "m88k exc: a residual vector (50) still HALTS at the fallback (negative control vs D4)" \
+          "$(grep -cE '^M88KEXC_ROW=resid50 +RESULT=HALT' "$EXCLOG")" "1"
+    check "m88k exc: resid127 (tb1 naming 127, the fallback window's FAR bound) still HALTs -- a shrunk bound delivers it instead" \
+          "$(grep -cE '^M88KEXC_ROW=resid127 +RESULT=HALT' "$EXCLOG")" "1"
+    check "m88k exc: a user-mode SFU1 still reaches the fallback (usfu1 HALT naming 0x072 -- the fallback predicate in user mode)" \
+          "$(grep -cE '^M88KEXC_ROW=usfu1 +RESULT=HALT' "$EXCLOG")" "1"
+    check "m88k exc: a frozen TRAP naming any class is delivered to its OWN vector, shadows frozen: every switch-1 label a trap can name -- and, since v16, with the TRAP side of the re-route varied by PSR bit as well (ind, c, ser), because eleven labels in ONE status state cover eleven labels and not the axis" \
+          "$(grep -cE '^M88KEXC_ROW=trapfrozen(4|5|6|8|9|10|128|450|496|511|ind|c|ser|user|sfd1)? +RESULT=DELIVER ' "$EXCLOG")" "16"
+    check "m88k exc: the {switch-1 arm} x {C, IND, SER} closure -- SIX unfrozen traps with C and SER set and IND clear are DELIVERED, not swept.  v16 rowed C/IND at five arms and closed SER at ONE (grok, pass 9: an axis claimed from a single cell); v17 ORs SER into the value those five share and adds ovftbser for the sixth arm" \
+          "$(grep -cE '^M88KEXC_ROW=(unimpltbc|privtbc|boundstbc|div0tbc|errortbc|ovftbser) +RESULT=DELIVER +pc=0x000000(28|30|38|40|48|50) ' "$EXCLOG")" "6"
+    check "m88k exc: and each of those six keeps BOTH the carry and the serial-mode bit through exception entry (psr=0xb000000b) -- the pin that reds if PSR_SUPCNOIND ever loses SER again" \
+          "$(grep -cE '^M88KEXC_ROW=(unimpltbc|privtbc|boundstbc|div0tbc|errortbc|ovftbser) .*psr=0xb000000b ' "$EXCLOG")" "6"
+    check "m88k exc: the SER axis at its two NON-arm sites -- the fallback predicate (resid50ser HALT) and the non-trap re-route (errser at 0x50).  Each swept the whole v16 instrument 54/54 before its row existed (killtable14/)" \
+          "$(grep -cE '^M88KEXC_ROW=(resid50ser +RESULT=HALT|errser +RESULT=DELIVER +pc=0x00000050)' "$EXCLOG")" "2"
+    check "m88k exc: the fallback window's NEAR bound and its PSR-bit cells still HALT (resid11; resid50 with IND clear; with C set; with SER set -- SIX settable bits vary at the fallback, and resid50ser is what made that claim true)" \
+          "$(grep -cE '^M88KEXC_ROW=(resid11|resid50ind|resid50c|resid50ser) +RESULT=HALT' "$EXCLOG")" "4"
+    check "m88k exc: no row carried the re-route's diagnostic where the trap exemption should hold, or lacked it where the re-route fired (bad=refatal)" \
+          "$(grep -c 'bad=.*refatal' "$EXCLOG")" "0"
+    check "m88k exc: SFU1 inside a handler still HALTS (the m88kexcsfu1 boundary)" \
+          "$(grep -cE '^M88KEXC_ROW=sfu1h +RESULT=HALT' "$EXCLOG")" "1"
+    check "m88k exc: the anchored row (VBR relocated) delivered at 0x2038" \
+          "$(grep -cE '^M88KEXC_ROW=vbrtb +RESULT=DELIVER +pc=0x00002038' "$EXCLOG")" "1"
+    check "m88k exc: a trap while frozen delivers to its own vector, not ERROR" \
+          "$(grep -cE '^M88KEXC_ROW=trapfrozen +RESULT=DELIVER +pc=0x00000038' "$EXCLOG")" "1"
+    check "m88k exc: carry survives the exception path (PSR 0x9000000b)" \
+          "$(grep -cE '^M88KEXC_ROW=ovfc +RESULT=DELIVER .*psr=0x9000000b' "$EXCLOG")" "1"
+    check "m88k exc: no row carried the pre-fix ERROR-level line (bad=level)" \
+          "$(grep -c 'bad=.*level' "$EXCLOG")" "0"
+fi
+
+#  ---- #503 lunaabsentcpu: the LUNA-88K interrupt controller's per-CPU walk.
+#
+#  reassert_interrupts() walked all MAX_CPUS and called the NULL interrupt_assert of a slot DEVINIT never
+#  connected, so on the DEFAULT one-cpu machine a guest store to an interrupt mask followed by a store to a
+#  soft-interrupt register followed a null function pointer and ended the process.  This probe is BOTH the
+#  rung-3 WITNESS (it shows the symptom on the pre-fix build and goes green after, same script) and the
+#  DETECTOR.  Kill tables under regress/artifacts/lunaabsentcpu/: killtable/ .. killtable5/, the last on
+#  this 37-row instrument -- BASE 37/37, all twenty-six distinct mutants killed, and M_NULLAB EQUIVALENT
+#  (the empty-name stub path it edits is dead code, warrant recorded with the row).
+#
+#  THE PINS ARE STRUCTURAL ON PURPOSE.  The 37 rows reuse names across sessions -- `slot0' three times,
+#  `cpu1' four -- so a per-name `grep -c' would count a population nobody intended.  The denominator, the
+#  witness verdict and the two mandated controls are each unambiguous, and the denominator is what reds if
+#  a row stops running.
+LUNALOG=$LOGDIR/luna_absentcpu.log
+python3 luna_absentcpu_probe.py "$PMAX" "$IMAGES" > "$LUNALOG" 2>&1 || true
+grep -E "^(LUNAABS_|LUNA_ABSENTCPU_)" "$LUNALOG" | cut -c1-110 | sed 's/^/       /'
+
+if ! grep -q "LUNAABS_DONE" "$LUNALOG"; then
+    note "luna88k absent-cpu probe produced no completion sentinel; last lines follow"
+    tail -5 "$LUNALOG" | sed 's/^/       /'
+    check "luna absentcpu: probe completed" "no" "yes"
+else
+    check "luna absentcpu: 37 rows, all OK (the denominator is the pin -- a row that stops running shrinks it)" \
+          "$(grep -c 'LUNAABS_RESULT=37/37' "$LUNALOG")" "1"
+    check "luna absentcpu: the rung-3 witness verdict is PASS (PRE_FIX_SYMPTOM means the fix is gone; FAIL means a row broke)" \
+          "$(grep -c '^LUNA_ABSENTCPU_WITNESS=PASS' "$LUNALOG")" "1"
+    check "luna absentcpu: both mandated controls green -- liveness (a known value returns through the same decode) and device signature (the value could only have come from this device)" \
+          "$(grep -cE '^LUNAABS_ROW=(live|devsig) +RESULT=OK' "$LUNALOG")" "2"
+    check "luna absentcpu: no row reported a halted machine (the pre-fix symptom is the process ending mid-row)" \
+          "$(grep -cE '^LUNAABS_ROW=[^ ]+ +RESULT=(HALT|NOSTART)' "$LUNALOG")" "0"
+fi
+
 gate_end

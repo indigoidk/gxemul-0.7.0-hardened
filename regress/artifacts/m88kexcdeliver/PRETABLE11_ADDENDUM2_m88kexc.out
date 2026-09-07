@@ -1,0 +1,33 @@
+PRETABLE11 ADDENDUM 2 -- written 2026-09-06 ~12:0x, BEFORE table 11 runs (table 4 of lunaabsentcpu still holds the CPU), as a SEPARATE
+file so PRETABLE11's own mtime stays the proof of order.  Source: grok's pass-7 answer (ONE MORE REPAIR), read in full.
+
+THE CLASS.  The SFRZ re-route predicate READS PSR (`if (cpu->cd.m88k.cr[M88K_CR_PSR] & M88K_PSR_SFRZ)`), so a PSR-bit conjunct THERE is a
+narrowing on a body-read lvalue -- clause (d) floor -- unlike the switch-1 `implemented' arms, which read no PSR bit (v12 disclosed those
+as clause (e) with M_MISNOC measured).  Every SFRZ-set row reached the re-route with IND SET and C CLEAR: the first delivery leaves PSR =
+0x8000000b, and the handler-stcr rows write 0x80000003 / 0x00000003.  So `(PSR & SFRZ) && (PSR & IND)' and `(PSR & SFRZ) && !(PSR & C)'
+are predicted 41/41 on v10 and 44/44 on v12: a total escape of the shipped composite.  MODE and SFD1 already vary at the re-route (errpriv
+MODE clear; errdiv0 SFD1 clear), so the open cells are exactly IND and C.  MXM / BO cannot be set by stcr without stopping the cpu; the
+88110-only bits are 88100 here -- disclosed.
+
+ROWS (dual to resid50ind / resid50c at the fallback):
+  errind  first fault div0; handler = stcr r4,cr1 (r4 = 0x80000009: MODE|SFD1|SFRZ, IND CLEAR) then `ld r6,r5,0' with r5 = DATA+1 (odd).
+          Fix: MISALIGNED with SFRZ set -> re-route -> ERROR at 0x50, shadows frozen (sxip 0x10004|V), refatal line PRESENT.
+          Under M_RRIND: IND clear -> no re-route -> MISALIGNED delivered to 0x20 with the shadows frozen and NO refatal line ->
+          the row reds on RESULT (breakpoint at 0x50 never reached; STOP) -- the channel is the entry pc, with refatal as the second channel.
+  errc    same shape, r4 = 0x9000000b (C|MODE|SFD1|IND|SFRZ).  Under M_RRNOC: C set -> no re-route -> delivered to 0x20 -> STOP.
+  Both rows use STCR_R4_CR1 = 0x80048024 (encoding checked against STCR_R5_CR1 = 0x80058025: S1 field 4 at bits 16..20 and 0..4).
+
+MUTANTS (exact edits, on the re-route's inner condition `\t\tif (!is_trap) {'):
+  M_RRIND   `if (!is_trap && (cpu->cd.m88k.cr[M88K_CR_PSR] & M88K_PSR_IND)) {'   predicted: v10 41/41, v12 44/44, v13 45/46 (errind STOP)
+  M_RRNOC   `if (!is_trap && !(cpu->cd.m88k.cr[M88K_CR_PSR] & M88K_PSR_C)) {'    predicted: v10 41/41, v12 44/44, v13 45/46 (errc STOP)
+  (grok also named the OUTER form `if ((PSR & SFRZ) && (PSR & IND))'; inner and outer differ only in whether update_shadow_regs is cleared
+  for the IND-clear case -- under the outer form the shadows would be UNFROZEN too, an additional red on sxip -- so the INNER form is the
+  quieter mutant and is the one built, per the least-observable-form rule.)
+
+CHANNEL check (the fourth pre-table check): for each new row the observable that differs under its mutant is the ENTRY PC (0x50 vs 0x20),
+observed as the breakpoint at 0x50 not being reached, plus the refatal line; both vary.  Not vacuous by construction.
+
+Table 11 now runs SEVEN mutants (M_SFRZTRAP450 M_SFRZTRAP496 M_SFRZTRAPHI M_ERRORFRZON M_MISNOC M_RRIND M_RRNOC), WANT=46/46, frozen v13
+md5 4192b7da; each also scored on the frozen v10 instrument so the sweeps are measurements.  The driver's expected-HALT dict is unchanged
+(errind/errc are DELIVER rows).  Gate pins pre-set to 46/46, err(...|ind|c) count 6, trapfrozen(...|511)? count 11 -- the HEAD figure in the
+gate's witness comment is updated only after the HEAD run in the table.

@@ -1,0 +1,69 @@
+PRETABLE -- m88kexcdeliver, written 2026-09-05 16:2x BEFORE table 1 (mtime is the order proof).  Fix under test: the
+uncommitted diff to GXEMUL-SEC/src/cpus/cpu_m88k.c (47+/12-): seven trap-like classes become `implemented = true` at
+VERBOSITY_INFO in the first switch AND gain `case ... break` arms in the tail switch.  Detector: _scratchpad/m88kexc/
+m88k_exc_probe.py (v2, 9 fault rows + 2 controls + selftest), measured 0/9 on HEAD 83df95c (probe2_head.out) and 9/9 on
+the fix build (probe2_fix.out, build/gxemul 16:16:27).
+
+SIBLING PARITY.  The seven new arms are byte-identical siblings (implemented=true + INFO; a shared `break`).  The one
+asymmetric member is ERROR: it is reached only by the SFRZ re-route inside the common path, with update_shadow_regs false,
+so its shadows are FROZEN at the first fault's values -- rowed as `error` with the frozen expectations (SXIP/SNIP/SFIP of the
+FIRST fault, EPSR = the pre-first-fault PSR).  BOUNDS_CHECK has no named raise site; it is reached by a supervisor trap
+naming vector 7 -- rowed as `bounds` (tb1 0,r3,7).  The four pre-existing implemented classes are NOT touched by the diff.
+
+CLAIM -> ROW.  Added comment sentences that assert an observable:
+  "SXIP = the faulting instruction"                     -> every fault row asserts sxip == fault_pc | V
+  "SNIP = the next one, rte resumes at SNIP"            -> every fault row asserts snip == fault_pc + 4 | V (dslot: pc+4 of the slot)
+  "destination register (and carry bit) unchanged"     -> r2 == 0xdeadbeef on every fault row; the carry bit is PSR bit 28,
+                                                          pinned by the exact PSR compare (0x8000000b)
+  "one user-mode divu by zero ended the emulation"      -> div0 HALT on HEAD (witness) -- and the user-mode rows (priv, privtb,
+                                                          unimpl) deliver from PSR.MODE clear (EPSR == 0x00000002)
+  "without these labels the classes reached the default" -> M_NAIVE must print TAILHALT (the one-site form)
+  "ERROR arrives with the shadows deliberately frozen"  -> the `error` row's frozen expectations
+  "SFU1 stays at the fallback" / "vectors 11..127"      -> NO ROW (disclosed: rows m88kexcsfu1, m88kexctaildefault)
+  "not modelled: scoreboard, fcr2/4/5"                  -> NO ROW (disclosed in the contract)
+
+GUARD FIELD vs BODY FIELD.  The guard is the `implemented` flag (set per case in switch 1) and the tail switch's case labels;
+the body reads `vector` only.  Both are set at the same sites (the diff edits them together); no third state exists.  The
+one operand a mutant can swap is the LEVEL argument (INFO vs ERROR) -- not observable by any row: DISCLOSED (M_LEVEL).
+
+CHANNEL, per row: the mutant it kills and the observable that differs under it.
+  div0/ovf/misalign/bounds  M_REVERT (implemented dropped per class) -> RESULT HALT (the `unimplemented` line + machine stopped)
+                            M_NAIVE (tail labels dropped)            -> RESULT TAILHALT (`internal error` + stopped)
+                            M_VEC4 (+4*vector)                       -> RESULT STOP (entry breakpoint never fires; pc != entry)
+                            M_NOSHADOW (skip the shadow update)      -> BADREGS: sxip/snip/sfip stale (0)
+                            M_NOSFRZ (drop SFRZ from the PSR write)  -> BADREGS: psr 0x8000000a
+                            M_SNIPX (SNIP = pc | V)                  -> BADREGS: snip == sxip
+                            M_TAILRETURN (break -> return)           -> STOP or BADREGS (measure: pointers not refreshed)
+  priv/privtb/unimpl        M_NOMODE (drop MODE from the PSR write)  -> BADREGS: psr lacks 0x80000000 (only observable from user
+                            mode: the supervisor rows OR MODE onto an already-set bit -- measured pass 1)
+                            M_NOEPSR (skip the EPSR save)            -> BADREGS: epsr != 0x00000002
+  error                     M_ERRORDROP (ERROR left unimplemented)   -> RESULT HALT on this row only (the first fault still
+                            delivers; the second one hits the fallback)
+  dslot                     M_DSLOT (else-arm SFIP wrong)            -> BADREGS: sfip != delay_target | V
+  live/attrib               controls: DONE on every build (they must NOT vary; a mutant that breaks them is a wrong mutant)
+  selftest                  the CR parse: PSR at reset == 0x80000002 on every build (apparatus, not a kill row)
+Every named channel varies under its mutant BY CONSTRUCTION (the row reads the very register the mutant leaves wrong), except
+M_TAILRETURN whose channel is predicted, not derived -- it is the one line this block asks the table to CHECK.
+
+VACUOUS-BY-CONSTRUCTION CHECK.  No row asserts survival at a refusal-effect site: every fault row's oracle is the entry
+breakpoint plus register values, and the controls assert a computed quotient.  The machine-still-running bit is asserted
+before pc so the naive fix cannot masquerade as delivery (measured pass 1: pc/SXIP/PSR are byte-identical under the naive
+form; only the stop channel differs).
+
+TABLE PLAN (scratch clone /tmp/gxm88kexc_kill = cp -a of build/ AFTER the fix build; baseline = the fix; frozen probe copy):
+  BASE (fix) 9/9 asserted first; then M_REVERT (all seven), M_REVERT1 (BOUNDS only), M_NAIVE, M_VEC4, M_NOSHADOW, M_NOSFRZ,
+  M_SNIPX, M_NOMODE, M_NOEPSR, M_TAILRETURN, M_ERRORDROP, M_LEVEL (expected to SURVIVE: disclosed).  Sentinel per mutant,
+  restore from SEC (never from a backup), cmp + rebuild before the sentinel is cleared.
+
+
+==== CORRECTION APPENDED 2026-09-06 (adjudication pass, codex): two sentences above were overtaken and are left in place ====
+  'The one operand a mutant can swap is the LEVEL argument (INFO vs ERROR) -- not observable by any row: DISCLOSED (M_LEVEL).'
+     -> FALSE as of pass 2 (Fable): the post-startup verbosity floor is WARNING, so an ERROR-level line prints in the free-running
+        transcript and INFO does not.  v3 rows carry the LEVEL channel; table 3 M_LEVEL 3/22 (19 rows bad=level).
+  'M_DSLOT (else-arm SFIP wrong) -> BADREGS: sfip != delay_target | V'
+     -> M_DSLOT changes the else-arm's SFIP to SNIP+4 and the row reds on it -- a CHANGE detector, not a correctness oracle: SNIP+4
+        (0x10012 with the +8 geometry) is the value the MANUAL predicts for that row (pass 2: Fable, codex, grok; kimi dissents);
+        filed m88kdslotshadow.  The row now uses br.n +16 so SNIP and SFIP are different numbers.
+  Rows added after this block was written (v3/v4): misaligntb unimpltb div0tb ovftb privsuptb vbrtb trapfrozen ovfc udiv0 usertb
+  resid50 sfu1h indclr -- their CHANNEL lines live in the probe's row table (regress/m88k_exc_probe.py header), written before
+  tables 3 and 4 ran (the frozen copies' mtimes are the order proof: v3 21:54, v4 08:00).

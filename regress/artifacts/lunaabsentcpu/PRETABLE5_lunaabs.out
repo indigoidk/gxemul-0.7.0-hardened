@@ -1,0 +1,71 @@
+PRETABLE block -- lunaabsentcpu (#503) pass-4 repair, probe v6 (md5 3be01e9d; sessions A, A2, B, B2, B3, C, C2, C3, C4, D, E, E2),
+written BEFORE table 5 runs.  2026-09-06 ~12:45.  Corrections go to PRETABLE5_lunaabs.correction.out; this file's mtime is the order proof.
+
+THE FINDING BEING REPAIRED (pass 4; kimi and grok INDEPENDENTLY, on the same packet).  The walk's per-cpu READS can be aliased and
+probe v5 cannot see it:
+    uint32_t enable = d->interrupt_enable[cpu];      ->  d->interrupt_enable[cpu & 1]      (M_ENP1)
+    if (d->software_interrupt_status[cpu])           ->  d->software_interrupt_status[cpu & 1]  (M_SWP1)
+Both PREDICTED 34/34 on v5 -- a total escape -- by both seats, and NEITHER had been run when the prediction was made.  Reason: v5's
+session E writes the SAME mask bit (bit 26) and the same SOFT_INTn value on ALL FOUR slots, so a parity alias on a READ still finds a
+correctly-set partner; the parity alias v5 DOES kill (M_IRQACTIVEP1, measured 32/34 in table 4) is on a WRITE, which the first arrival
+of each pair consumes.  Every other multi-slot session pends slots whose alias target agrees, or a lone slot 1 (identity under `& 1').
+The v4->v5 rewrite REPLACED the session that had the discriminating configuration (v4's E: slots 2 and 3 pending, 0 and 1 IDLE) instead
+of adding beside it -- so the repair for one cell of this class deleted the coverage of another.
+
+GRADE: clause (d) floor breach (an operand swap drawn from a field the guarded body READS, on the predicate that dominates the walk's
+body).  L2 -- repaired in-round.  Not debt.
+
+THE REPAIR IS A CLASS CLOSURE, NOT A CELL.  Passes 3 and 4 both found breaches of the {slot} x {per-cpu array} alias class, so by the
+class-closure amendment the repair enumerates the whole space from the function's own inputs and closes it in ONE diff.  The walk
+touches four per-cpu arrays; a configuration in which every one of them has a DISAGREEING alias target closes all of them at once:
+
+    array                          alias forms       killed by, after this diff
+    interrupt_enable[cpu]          [cpu & 1], [0]    session E2 (NEW): 2->0 and 3->1 are both IDLE
+    software_interrupt_status[cpu] [cpu & 1], [0]    session E2 (NEW)
+    irqActive[cpu]                 [cpu & 1], [0]    session E (M_IRQACTIVEP1 32/34, M_IRQACTIVE0 29/34, table 4)
+    cpu_irq[cpu]                   [cpu & 1]         session E (M_AND1 32/34, table 4)
+
+DIFF UNDER THE TABLE (on top of v5, three rows added, none removed -- v5's session E is KEPT):
+  session E2 (`-n 4', FREE-RUNNING): MASK2 + SOFT_INT2 and MASK3 + SOFT_INT3 only; MASK0/MASK1 left at their boot value.  Rows
+  `cpu3 deliver23', `cpu2 deliver23' (both cpus must enter VBR+8) and `others idle23' (cpus 0 and 1 must NOT).  This is v4's session E
+  restored verbatim in shape, with the row names suffixed so the v5 all-four rows keep theirs.  No product change.
+
+SIBLING PARITY: every slot 0..3 now has (i) a single-pending delivery row, (ii) a delivery row under a four-pending machine (E), and
+(iii) for slots 2 and 3, a delivery row under a machine where their alias targets are IDLE (E2).  Slots 0 and 1 need no E2 row: their
+alias targets under `& 1' and `[0]' are themselves.
+
+GUARD FIELD vs BODY FIELD: the disagreeing state is built explicitly -- two slots pending whose `& 1' and `[0]' targets are unpended.
+
+CHANNEL per new row (mutant -> observable): cpu3 deliver23 and cpu2 deliver23 red under M_ENP1 / M_SWP1 / M_EN0 / M_SW0 as a
+VECTOR-ENTRY difference (the cpu never reaches VBR+8, reported STOP with its pc), which is the same channel every other delivery row
+uses and cannot be vacuous by construction: under the fix both cpus enter, under each mutant neither does.  `others idle23' is an
+accept-side sibling and reds only on a mutant that delivers to an unpended slot.
+
+PREDICTED TABLE (37 rows: v5's 34 + 3):
+  BASE           PASS 37/37 (read the count from BASE.out, do not trust this line)
+  M_ENP1         35/37 -- cpu3 deliver23, cpu2 deliver23 STOP.  ON THE FROZEN v5 INSTRUMENT: 34/34, a TOTAL ESCAPE (the prediction
+                 under test; the driver scores each of the four new mutants on v5 as well, so the escape is measured, not asserted)
+  M_SWP1         35/37 -- the same two rows; on v5: 34/34
+  M_EN0          expected RED on more rows than M_ENP1 (slot 1's enable also collapses onto slot 0): at least cpu1 deliver,
+                 both deliver, noreenter1, sio5 deliver1, cpu1 deliver4, cpu3/cpu2 deliver23.  On v5: NOT a sweep (C4 kills it) --
+                 stated so the driver's own numbers can refute it
+  M_SW0          similar to M_EN0 but only for software-interrupt delivery: sio5 rows are unaffected (a device line does not go
+                 through software_interrupt_status).  On v5: NOT a sweep
+  the 22 table-4 mutants  re-run on v6 for the record; each expected to keep its table-4 red rows and to be unchanged in kind.
+                 M_IRQACTIVEP1 additionally may red the E2 rows (its latch alias also collapses {2,0} and {3,1}) -- if it does NOT,
+                 that is a fact about arrival order, not a defect, and is recorded rather than explained away.
+  M_NULLAB       37/37 -- EQUIVALENT, as in tables 1-4 (the both-sided NULL guard; recorded with its warrant, not a breach)
+
+UNCERTAIN, STATED: session E2 boots `-n 4' and waits up to 15 s twice.  If the host is loaded (a concurrent build or panel seat) a cpu
+can miss its window and the row reads STOP on BASE -- that is a MIS-CUT ROW / load artefact, not the fix, and BASE is re-run alone
+before the table is called clean.  Table 4 ran 22 mutants with the same shape and had no such flake, so this is a caution, not a fear.
+
+THE OTHER ALIAS FORMS ARE MEASURED, NOT DISCLOSED.  A first draft of this block disclosed `cpu ^ 1' as an escape "because 2->3 and
+3->2 are both pending in E2".  That is true of E2 and false of the detector: session C4 arms slot 1 ONLY (MASK1 bit 30, MASK0 at its
+boot value), so under `enable[cpu ^ 1]' cpu 1 reads slot 0's enable, which is 0, and `sio5 deliver1' reds.  `cpu >> 1' maps 2->1 and
+3->1, and slot 1 is IDLE in E2, so E2 reds.  Both are therefore BUILT (M_ENX1, M_ENSH1) rather than written down as debt -- a predicted
+escape is a measurement owed, and so is a predicted kill.
+  M_ENX1         predicted RED on sio5 deliver1 (C4); NOT expected to red the E2 rows
+  M_ENSH1        predicted RED on cpu2 deliver23 / cpu3 deliver23 (E2) and on cpu1 rows wherever slot 0 disagrees with slot 1
+Remaining disclosed for this array family: aliases that are not a function of `cpu' alone (an index taken from another field), and the
+`interrupt_status' read, which is machine-wide and has no per-cpu index to alias.

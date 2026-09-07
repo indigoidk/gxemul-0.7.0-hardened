@@ -1,0 +1,1239 @@
+kimi version 0.36.0
+• Let me understand what's being asked here. This is a PASS-1 DESIGN BRIEF review for a defect in GXemul's `dev_luna88k.c` — the `lunaabsentcpu` issue. The tree under review is `GXEMUL-SEC/src/` at HEAD `83df95c`. I'm asked to act as a panel seat:
+
+  1. **VERDICT LINE FIRST** (PROCEED-WITH-(x) / HOLD / the premise that is wrong)
+  2. Then Q1-Q6
+  3. Then anything else
+
+  Key instructions:
+  - Check premises, not just derivations. Don't simply ratify.
+  - Read the project's records narrowly (grep anchors, a few lines of context; never whole CHANGELOG blocks or the ledger).
+  - Cite by grep anchor, not line number.
+  - Enumerate arithmetic claims rather than reasoning about them.
+  - Don't run `run.sh`, any `gate_*.sh`, or the battery. Building/running a single detector or mutant in my own temp dir is fine.
+  - If I can't read files, every fact needed is inlined — name any premise I cannot settle.
+
+  Let me plan my verification approach. The brief makes many checkable claims about `GXEMUL-SEC/src/devices/dev_luna88k.c`:
+
+  1. `reassert_interrupts()` loops `for (cpu = 0; cpu < MAX_CPUS; cpu++)` with `MAX_CPUS 4`.
+  2. `INTERRUPT_ASSERT` macro in `src/include/interrupt.h` is a direct call with no NULL check.
+  3. `DEVINIT(luna88k)` connects only cpu_irq[0] plus conditionally 1..3 based on `ncpus >= 2/3/4`.
+  4. Default `m->ncpus = 1` in emul.c.
+  5. Store arms: `case INT_ST_MASK0:` with `cpunr = (addr - INT_ST_MASK0) / 4;`, #438 low-bits latch, unconditional `d->interrupt_enable[cpunr] = idata; reassert_interrupts(d);`.
+  6. `case SOFT_INT0:` arm as inlined.
+  7. `case RESET_CPU_ALL:` bounds by ncpus.
+  8. Common tail: `if (writeflag == MEM_READ) memory_writemax64(...); return 1;`.
+  9. House idiom: `dev_mp.c` anchor `which_cpu >= cpu->machine->ncpus`, `dev_bebox.c` anchor `i >= machine->ncpus`, `add_cmmu_for_cpu` guard.
+  10. `(once)` latch spelling count: 25 on 2026-08-31.
+  11. `grep -n 'struct machine' src/devices/dev_luna88k.c` — no machine pointer in the struct.
+  12. `grep -rn 'noop.*interrupt\|dummy.*interrupt' src/` — no noop interrupt helper.
+  13. `git log -1 -- src/devices/dev_luna88k.c` -> cf4b083.
+  14. `grep -c lunaabsentcpu CHANGELOG.md` -> 0.
+  15. `ls regress/luna*` -> only `luna_intmask_probe.py`.
+  16. The struct `luna88k_data` fields.
+
+  Also the arithmetic claims to enumerate:
+  - Slot indices: INT_ST_MASK0..3 = 0x65000000/04/08/0c → cpunr 0..3. Address decode: `(addr - 0x65000000)/4`. But WAIT — the switch is `switch (addr)`, and the case labels are the full addresses 0x65000000 etc. So only exact addresses hit the arm. cpunr can only be 0,1,2,3. That's fine. But what about the claim that a guest store address can only produce cpunr 0..3 — since the switch matches exact addresses, yes. But wait — is the switch on `addr` masked somehow? Need to check how `addr` is computed in DEVICE_ACCESS. Often it's `relative_addr` or something. Let me check.
+
+  - Bit positions: lines 1..6 → bits 26..31 via `1 << (line + 25)`. Enumerate: line 1 → bit 26, line 2 → 27, line 3 → 28, line 4 → 29, line 5 → 30, line 6 → 31. Clock is line 6 → bit 31; sio line 5 → bit 30. Check against machine description or dev code where `luna88k_interrupt_assert` is called with line numbers.
+
+  - The probe D4 row claim: 0x84000100 stored to INT_ST_MASK1 — bits 31, 26, and 8. Enumerate: 0x84000100 = 1000 0100 0000 0000 0000 0001 0000 0000. Bit 31 (0x80000000) set, bit 26 (0x04000000) set, bit 8 (0x00000100) set. Yes: 0x84 = 1000 0100 at bits 31..24, so bit 31 and bit 26. And 0x00000100 = bit 8. Correct.
+
+  - The readback claim: mask1 row stored 0xfc000000, ld back = 0x00fc0000 (>>8). Check: `odata = currentMask >> 8` → 0xfc000000 >> 8 = 0x00fc0000. Yes. And `odata |= highestCurrentStatus << 29`. With bit 26 set in both mask and (if software_interrupt_status set) status... in the mask1-alone row, no pending status, so highestCurrentStatus = 0, readback = 0x00fc0000. Matches.
+
+  - The SOFT_INT1 store → reassert → slot 1: status = machine-wide interrupt_status (say 0) | (1<<26) because software_interrupt_status[1] = 1. enable = interrupt_enable[1] = 0xfc000000 (bit 26 set). status & enable = bit 26 → assert → INTERRUPT_ASSERT(d->cpu_irq[1]) → NULL function pointer call → SIGSEGV. Correct mechanism.
+
+  Wait — one subtlety: after the mask1 row stored 0xfc000000 to MASK1, then the soft1 row stores 1 to SOFT_INT1. In reassert, for cpu 1: status = interrupt_status (0 in cold debugger) | (1<<26) = 0x04000000. enable = 0xfc000000. 0x04000000 & 0xfc000000 ≠ 0 → assert on NULL pointer. Yes.
+
+  Also the corollary: after arming MASK1 with bit 31 (e.g. the D4 probe row 0x84000100 sets bits 31 and 26 — wait, 0x84000100 has bit 31 set and bit 26 set), the next device interrupt of any kind kills the host. Hmm, bit 31 corresponds to line 6 (clock). Actually the claim: "the clock is line 6 -> bit 31; sio line 5 -> bit 30". So if MASK1 has bits 31+26 set (from 0x84000100), then when the clock ticks and asserts line 6 → interrupt_status |= bit 31 → status & enable for slot 1 → INTERRUPT_ASSERT(NULL). Yes.
+
+  Now, my job as a panel seat: verify premises against the actual tree `GXEMUL-SEC/src/`. The working directory is `C:\DocumentNoSnc\CC\GXEMUL` and there's a `GXEMUL-SEC/` subdirectory with `src/`. So the tree under review is at `GXEMUL-SEC/src/`.
+
+  Let me check the key premises with grep anchors. I should:
+
+  1. `git -C GXEMUL-SEC log -1 -- src/devices/dev_luna88k.c` → expect cf4b083.
+  2. `grep -c lunaabsentcpu GXEMUL-SEC/CHANGELOG.md` → expect 0.
+  3. `ls GXEMUL-SEC/regress/luna*` → expect only luna_intmask_probe.py. Note: brief says probe ships as `regress/luna_absentcpu_probe.py` — future tense. Also mentions `regress/artifacts/lunaabsentcpu/...` may exist.
+  4. Read `GXEMUL-SEC/src/devices/dev_luna88k.c` — the whole file probably ~1000+ lines. I should grep for anchors: `static void reassert_interrupts`, `MAX_CPUS`, `INTERRUPT_CONNECT`, `case INT_ST_MASK0:`, `case SOFT_INT0:`, `case RESET_CPU_ALL:`, `struct machine`, `add_cmmu_for_cpu`, `intmask_lowbits_reported`.
+  5. `src/include/interrupt.h` — INTERRUPT_ASSERT macro.
+  6. `emul.c` — `m->ncpus = 1;` or `ncpus = 1` default.
+  7. `dev_mp.c` — `which_cpu >= cpu->machine->ncpus`.
+  8. `dev_bebox.c` — `i >= machine->ncpus`.
+  9. `(once)` count in src/devices/*.c.
+  10. `grep -rn 'noop.*interrupt\|dummy.*interrupt' src/`.
+  11. Check whether anything else connects `cpu_irq[1..3]` — search machine description file for luna88k (`machines/machine_luna88k.c` or in `doc`?). Also check `testmachine`? The machine setup is probably in `src/machines/machine_luna88k.c`. Check how interrupts paths are given (`devinit->interrupt_path`).
+  12. Check `-n 2` handling: does emul allow `-n 2` for luna-88k? Check `machine_luna88k.c` for ncpus handling or restrictions. Actually the default machine setup might just use `machine->ncpus` cpus. Check `cpu_new` loops. Also check whether luna88k machine setup caps ncpus.
+  13. Check OpenBSD guest source `_guest-src-openbsd22/` for luna88k — likely absent (OpenBSD 2.2 predates luna88k port which came ~2004, OpenBSD 3.x). Should verify absence: grep for luna88k in `_guest-src-openbsd22/`.
+  14. Check the readback semantics for the accept side: `highestCurrentStatus` scans bits 26..31 of `interrupt_status & currentMask` — wait, the brief says "highestCurrentStatus scans bits 26..31 of `interrupt_status & currentMask`" via loop `for (i = 1; i <= 6; ++i) { m = 1 << (25+i); if (status & m) highestCurrentStatus = i; }`. So bits 26..31 map to i=1..6, and odata |= i << 29. So the readback top bits 31..29 encode the highest pending line number (1..6), NOT the raw bits. Note: software interrupt bit 26 is included in the scan only if `interrupt_status` has it — but software_interrupt_status is OR'd into `status` only in reassert_interrupts, not in the read path. In the read path, `status = d->interrupt_status & currentMask` — does NOT include software_interrupt_status! So a pending soft interrupt does NOT show in MASK readback bits 31..29. Interesting — that's a channel consideration for Q4: reading MASK1 after SOFT_INT1 store shows... currentMask >> 8 plus possibly line bits from machine-wide interrupt_status. The software bit is not visible in readback. So for the accept-side row under `-n 2`, the observable channel for delivery would need to be something else — e.g., `irqActive`, or cpu 1's pending state. The brief says: "a `-n 2` ACCEPT row whose channel is cpu 1 ASSERTING (irq_asserted or the vector entry), not survival".
+
+  Hmm — how can a cold-debugger probe observe "cpu 1 asserting"? Possibly via the debugger: GXemul's debugger has `device` dump commands or the interrupt line state. Or via `irq_asserted` field in `struct interrupt` — is there a debugger command to inspect? Maybe the probe can use the emulator's debugger `dump` or the `machine` command. Actually in GXemul there is a `debug` subsystem; the probe in the brief talks about planted instructions st/ld through real decode. To observe cpu 1's pending state, maybe read the on-board register? The readback of SOFT_INT1 returns software_interrupt_status[1] and clears it — that shows the store landed, not the delivery. Hmm, but delivery under option (a): on 2-cpu, INTERRUPT_ASSERT(d->cpu_irq[1]) sets the connected interrupt's asserted flag — which on a cpu is `cpu->irq_asserted` or similar. In GXemul, m88k cpu interrupt assert sets `cpu->irq_asserted++` maybe. A debugger command like `debug` or stepping cpu 1 and observing it take the interrupt... A simpler channel: under `-n 2`, store MASK1 = 0xfc000000, SOFT_INT1 = 1, then let cpu 1 execute — it should take the interrupt (exception vector). A cold-debugger row could single-step cpu 1 and observe PC jumps to the vector. But does the rig image's cpu 1 have valid state? With `cpus[1]` created, its PC starts at the same entry? Hmm.
+
+  Alternatively the channel "irq_asserted or the vector entry" could be observed via the debugger's `irq` command? I'm not sure GXemul 0.7.0 has such a command. Let me check the debugger commands in `src/debugger/`.
+
+  Actually, for my pass-1 review I don't need to fully design the accept row; I need to answer Q1-Q6 with verified premises and name what I can't settle.
+
+  Let me also check the witness artifacts exist: `regress/artifacts/lunaabsentcpu/luna_absentcpu_probe.asrun.py` and witness log. And `_scratchpad/lunaabs/luna_absentcpu_probe.py`. Note: `_scratchpad` here — which one? The project root has `_scratchpad/` and `GXEMUL-SEC/_scratchpad/`. The brief says `_scratchpad/lunaabs/...` — probably under GXEMUL-SEC. Check both.
+
+  Also verify: HEAD `83df95c`, last commit on dev_luna88k.c is cf4b083 2026-08-19 #438.
+
+  Also the claim about `struct luna88k_data` fields: `interrupt_enable[MAX_CPUS]`, `software_interrupt_status[MAX_CPUS]`, `irqActive[MAX_CPUS]`, `cpu_irq[MAX_CPUS]`, `interrupt_status`, `intmask_lowbits_reported[MAX_CPUS]`. Check the struct definition for a `machine` pointer (CHECK premise: none today).
+
+  Also: does `DEVICE_ACCESS(luna88k)` switch on `addr` — full address or relative? In GXemul, `DEVICE_ACCESS` gives `relative_addr`. The case labels would then be offsets like `INT_ST_MASK0` defined as 0x00000000? Wait the brief says INT_ST_MASK0..3 = 0x65000000/04/08/0c. Hmm, if the device is mapped at 0x65000000 and the switch is on `relative_addr`, then case labels would be 0x00/04/08/0c. But brief says the case labels are the absolute values. Need to check how `addr` is derived in this device. The file may compute `addr = physical base + relative_addr` or the device might be registered with `DEVICE_ACCESS` using the full address. Let me look at the code. Actually in many GXemul devices, they do `uint64_t addr = relative_addr + base;`? Hmm, let me just read the file.
+
+  Also check `case INT_ST_MASK0:` arm write: the #438 latch `intmask_lowbits_reported`. And confirm `reassert_interrupts(d)` called unconditionally on write.
+
+  Also verify the RESET_CPU_ALL arm bounds by `cpu->machine->ncpus`.
+
+  Also `dev_luna88k.c`'s `add_cmmu_for_cpu` guard `if (cpunr >= devinit->machine->ncpus) return;`.
+
+  Let me also check the machine description for luna-88k: `src/machines/machine_luna88k.c` — interrupt paths: `machine[0].cpu[0]`? devinit->interrupt_path for the luna88k device — how is the device added? Something like `device_add(machine, "luna88k addr=0x65000000 irq=machine[0].cpu[0]")`? And how do the six device lines call `luna88k_interrupt_assert`? The lines 1..6 → bits 26..31: check `luna88k_interrupt_assert(struct interrupt *interrupt)` → `int line = interrupt->line; d->interrupt_status |= (1 << (line + 25));` — and where are those lines registered? E.g. `INTERRUPT_CONNECT("machine[0].luna88k[6]", ...)` for the clock? Check machine_luna88k.c for the clock/sio interrupt routing. The claim: clock is line 6, sio line 5. Check.
+
+  Also Q1 asks: "Is the default cpu count one, and does the m88k rig boot with it? Does anything else in the tree connect cpu_irq[1..3]?" — check machine_luna88k.c and any other place referencing `luna88k` interrupt slots. Also `emul.c` for `n_cpus` parsing (`-n`).
+
+  Q2: smallest edit that closes the witness but leaves a guest-reachable death or wrong readback. E.g., bounding reassert's loop by `d->ncpus` closes W1 but leaves: stores to MASK1..3 still land and read back as if a CPU existed (option a residual). Or: a NULL check in the macro/loop that skips assert but sets irqActive=1 — loses the interrupt if later connected (but no hotplug exists, so...). Or bounding only the SOFT_INT arm. Name the row that stays green: e.g. under "bound the loop at literal 2", rows mask2/soft2, mask3/soft3 stay... wait, on a 1-cpu machine with bound `< 2`, slot 1 is bounded ok but slots 2,3 still walk to NULL → mask2/soft2 rows stay RED... hmm, actually with bound `< 2`, cpu = 0,1 — slot 1 has NULL cpu_irq → still dies on soft1! Wait no: M_BOUND2 bounds at literal 2 — on a 1-cpu machine, slots 2..3 not walked, but slot 1 still walked and cpu_irq[1] is NULL → soft1 row still red (dies). So M_BOUND2 is killed by soft1 itself? Hmm — the detector plan says mask2/soft2/mask3/soft3 kill "a fix that bounds at `< 2`". Wait, bound at `< 2` on a 1-cpu machine still walks cpu 0 and 1; cpu_irq[1] NULL → death on soft1. So the real fix shape for M_BOUND2 would be... hmm, actually maybe the intended mutant is "bound at literal 2" means it treats ncpus as 2 always — on a 1-cpu machine, soft1 still dies (row soft1 red), and soft2/soft3 would survive only because loop stops before... no wait, `cpu < 2` walks cpu 0 and 1. soft2 would survive (slot 2 never walked) — but the death on soft1 already kills. The detector rows each run in separate sessions presumably. So M_BOUND2: soft1 red (dies), soft2 green?? no wait — for mutant-killing purposes, a row is "killed" if it goes red on the mutant. soft2 staying green on M_BOUND2... but soft1 red kills the mutant anyway. The point of mask2/soft2/mask3/soft3 rows: kill a fix that bounds at `< 2`... hmm, maybe they mean a fix bound at literal 2 where the machine has... I think the panel brief means: with a literal bound of 2, on a 1-cpu machine soft1 still dies — so soft1 kills it; and if someone "fixed" by bounding `< 1`?? I'm overthinking; my job is to check channels and name rows whose channel cannot vary.
+
+  Let me think about M_NULLCHECK: `if (d->cpu_irq[cpu].interrupt_assert != NULL)` skip assert but still set irqActive[cpu] = 1. On 1-cpu: soft1 → no assert, irqActive[1]=1, survives. Then... "the interrupt is then LOST for a later connect" — no later connect exists. Does any row see the difference vs option (a)? Under M_NULLCHECK, irqActive[1] becomes 1 with software_interrupt_status[1] still 1; a subsequent store MASK1=0 → status&enable=0 → irqActive[1] is 1 → INTERRUPT_DEASSERT(d->cpu_irq[1]) → NULL call → death! Oh interesting: M_NULLCHECK defers the death to the deassert path when the mask is cleared while pending. Is there a row that does arm-then-disarm on an absent slot? The current row set doesn't include "mask1 clear after soft1". Under option (a) (bound loop), that sequence is harmless. So M_NULLCHECK is NOT distinguished by the planned rows — need a new row: store MASK1 bit26, SOFT_INT1, then store MASK1=0 → under M_NULLCHECK the deassert path calls NULL → dies; under (a) survives. That's a "name any row whose channel cannot vary" / mutant-gap finding. Wait, but actually check: after SOFT_INT1 store, software_interrupt_status[1]=1 persists. Then MASK1=0 store: reassert walks; for slot 1: status = interrupt_status | bit26 (sw pending) = 0x04000000; enable = 0 → status & enable = 0 → else branch: if (irqActive[1]) → yes (1) → INTERRUPT_DEASSERT(NULL) → SIGSEGV. Yes! So M_NULLCHECK is observable with an arm→disarm row. Good finding for Q2/detector completeness. Actually wait — is that right? Under M_NULLCHECK as described: "a `!= NULL` check that skips the assert but still sets irqActive". So the assert branch becomes `if (!d->irqActive[cpu]) { if (ptr != NULL) INTERRUPT_ASSERT(...); } d->irqActive[cpu] = 1;`. Then deassert branch: `if (d->irqActive[cpu]) INTERRUPT_DEASSERT(...)` — unchanged, no NULL check → dies on disarm. If the mutant also NULL-checked the deassert, then irqActive toggles with no delivery — indistinguishable from (a) on a 1-cpu machine except... readback: identical. So a full-NULL-check mutant (skip both) is observationally equivalent to (a) on 1 cpu, and on 2 cpu... under `-n 2` both deliver. Difference appears only with hotplug (nonexistent). So such a mutant is equivalent — fine, not a real concern; but then why prefer (a)? The warrant for (a) over NULL-check: house idiom? Actually the NULL check "guards the symptom" per the adjudication; (a) bounds the domain. Both close the witness. Hmm, the adjudication chose (a). Q3 asks to check that ruling.
+
+  Now the readback question under (b) decline: on 1-cpu, MASK1 store declined → readback returns 0 (`odata = currentMask >> 8` = 0). Today (pre-fix), MASK1 readback after store returns 0x00fc0000. The D4/E2 rows of es438 (`luna_intmask_probe.py`) — E2 row? The brief says option (b) "reddens the shipped es438 rows D4/E2". So the shipped #438 probe has rows D4 (store 0x84000100 to MASK1, expect stored-as-is readback) and E2 (probably similar for another slot or SOFT?). Under (b), D4's expected readback 0x00840001? Let me compute: 0x84000100 >> 8 = 0x00840001. Plus highestCurrentStatus<<29 = 0 → 0x00840001. Under (b) decline, readback = 0. So D4 reddens. Hence (b) rejected for this round and filed as `lunaabsentmaskdecl`. OK.
+
+  So the adjudication ruling: (a) alone — bound the loop to `d->ncpus` captured at DEVINIT. (b) rejected (changes guest-visible readback, reddens shipped rows). (c) fabricates plumbing. (d) = (a)+(b) — inherits (b)'s problems. (e) rejected by construction. So PROCEED-WITH-(a) is the ruling to check.
+
+  My verdict: I need to check the ruling. Is (a) alone sound? Under (a): loop walks cpu < d->ncpus (stored at DEVINIT). On 1-cpu: slots 1..3 never walked → no NULL call. Stores still land and read back as today (D4/E2 stay green). On 2-cpu: slots 0..1 walked, delivery to cpu 1 works → accept side preserved. Slots 2..3 on a 2-cpu machine: not walked → same protection. Good.
+
+  Residual risks under (a): another walk over MAX_CPUS added later (future edit) — Q3 asks about that. Also `irqActive[]` for absent slots stays 0 forever; readback unchanged. Also: is there any OTHER caller of reassert or other code path that indexes cpu_irq[]? Check: `luna88k_interrupt_assert/deassert` (the six-line handlers) — they call reassert_interrupts too presumably. Any other place using d->cpu_irq[?] with a guest-derived index? Grep for `cpu_irq[`.
+
+  Also check: are there other guests of MAX_CPUS loops in the file? grep `MAX_CPUS`.
+
+  Also the premise "interrupt_status is machine-wide (one field)" — check struct and assert/deassert handlers.
+
+  Now Q4 accept side: how to configure 2 cpus for luna-88k. Check machine_luna88k.c / emul.c `-n` option. In GXemul, `-n 2` sets ncpus. Does the luna88k machine setup honor it? The DEVINIT connects cpu 1 if ncpus >= 2, so presumably yes. Does the rig image boot with 2 cpus? Unknown — OpenBSD/luna88k 2.2-era? Actually the rig boots some OpenBSD. The accept row needs only the cold debugger: configure `-n 2 -e luna-88k`, plant st to MASK1 and SOFT_INT1 via cpu 0, observe cpu 1's pending. Channel options: (1) debugger inspection of cpu 1 state — does GXemul debugger have a command to show interrupt pending? There's `debug` command... In GXemul 0.7.0 debugger commands include: `breakpoint`, `continue`, `dump`, `emul`, `help`, `step`, `reg`, `device`, `machine`, `pause`, `print`, `quit`, `trace`... The `reg` command shows registers of current cpu; is there a way to switch cpu? Maybe `cpu N`? Not sure. `irq_asserted` is a field in `struct cpu` (m88k: `cpu->irq_asserted`?). For m88k, interrupt assert sets `cpu->irq_asserted = 1`? Let me check `cpu_m88k.c` / interrupt handling: in GXemul, `cpu_interrupt()` sets `cpu->irq_asserted = 1` (for most archs). The debugger `machine` command might print irq_asserted. Or single-step cpu 1: with interrupts asserted, the next instruction boundary takes the exception → PC = vector (0x200-ish? m88k vector base + 8*?). For m88k, interrupt vector offset is 2 (VBR + 0x10?). If cpu 1 is halted/not running... Actually in an emul with 2 cpus, both cpus run round-robin. In the debugger, `step` steps... all cpus? or current? In GXemul, single-step steps one instruction per cpu? I recall `step` steps all cpus one instruction each in `emul`? Not sure. This is a measurement-seat question; the brief reserves agy (Opus) for building and running. I should name what's checkable from the tree: e.g., whether m88k interrupt delivery sets a guest-visible flag; whether the debugger can show it. I can grep `irq_asserted` in src/cpus/cpu_m88k.c and the debugger `reg`/`machine` output.
+
+  Alternatively, a simpler synchronous channel for the accept row: the readback of MASK1 bits 31..29 (highestCurrentStatus) reflects `interrupt_status & currentMask` — machine-wide lines only, not software. So after SOFT_INT1 on 2-cpu, readback of MASK1 doesn't show bit 26 (software) — because read path doesn't OR software_interrupt_status. Wait, actually, hmm: does the read path show line-6 clock pending if armed? In cold debugger, host timers stopped → no clock. So the only software channel is SOFT_INT1 readback (returns 1, clears) — shows the store landed regardless of delivery. So cold-debugger observation of DELIVERY to cpu 1 needs cpu-state inspection. If the debugger can't show it, the accept row's channel could be: under `-n 2`, the sequence MASK1=0xfc000000 + SOFT_INT1=1 + single-step → cpu 1 takes the interrupt → its PC changes to the vector. The probe already plants/steps instructions; it could read cpu 1's PC via debugger `reg` on cpu 1... The GXemul debugger: does `reg` take a cpu argument? Let me check `src/debugger/debugger_cmds` or commands file. I'll grep.
+
+  Actually — wait. In GXemul, when running with the debugger (`-i`? no...). The probe harness they built ("cold debugger") presumably uses `gxemul -V`? Hmm, "cold-debugger session" — probably running gxemul with `--debugger`? There's a debugger single-step mode. The probe plants words in RAM (via debugger `write`? or via guest st?). It says "real st/ld guest instructions through real address decode -- each planted word disassembled by the emulator and its text checked before it was stepped". So the probe writes an `st` instruction into RAM (via debugger memory write or via the binary?), sets PC, steps. OK. For cpu 1 observation: the debugger's `reg` command in 0.7.0: `reg [cpu_nr]`? Let me check. In GXemul 0.6.x debugger there's `cpuid`? Hmm. Let me grep the debugger source for "cpu" commands. There's a `pause` command, `step [n]`. Also `machine` command prints machine info incl. cpus? Let me check.
+
+  Also check m88k interrupt delivery: `m88k_cpu_interrupt` asserts → sets `cpu->irq_asserted`? and in `m88k_run_instr` or `cpu_run`, if `irq_asserted` and PSR allows → exception. In debugger stepping, exceptions are taken too. cpu 1's initial state: PC = entry of kernel? All cpus start at same PC (the kernel entry). cpu 1 would run the kernel's AP startup... OpenBSD 2.2 luna88k?? The rig image — what OpenBSD version? "_guest-src-openbsd22" is OpenBSD 2.2 (1997) — luna88k port didn't exist until OpenBSD 3.6 era (2004) for luna88k? Actually OpenBSD/luna88k first released in 3.6? Hmm, the brief says "the project's m88k rig" boots OpenBSD/luna88k. The guest src is 2.2 "probably no luna88k". So the rig image is some other OpenBSD. Whatever.
+
+  For Q4 I mainly need: how to get 2 cpus (`-n 2`), whether machine_luna88k honors it, and what a cold-debugger row can observe. I'll check the tree and name the rest as measurement-seat work.
+
+  Also there's the `-n` option: check `emul.c`/`main.c` for `-n`. And check whether luna-88k setup caps ncpus (e.g., `if (machine->ncpus > 4) fatal`). Check machine_luna88k.c.
+
+  Q5 severity: HIGH. Precedent anchors: `pcc2defaultkill`, `m88kexcdeliver` — check ledger? The brief says `grep -o '"id": "luna[a-z0-9]*"' tools/pipeline/ledger.json` — wait, `tools/pipeline/ledger.json` — path relative to GXEMUL-SEC? The project root has `pipeline/ledger.json`. Hmm, brief says `tools/pipeline/ledger.json`. Let me check both. Actually the operational rule says never read whole ledger; grep anchors only. For Q6, check if `lunadefaultkill`-like id is filed: grep `"id": "luna` in the ledger. And in CHANGELOG grep `luna`.
+
+  Q6: the `default:` arm graceful stop — is it filed? grep ledger for luna ids, grep CHANGELOG for `default` luna entries. The brief's grep command: `grep -o '"id": "luna[a-z0-9]*"' tools/pipeline/ledger.json`.
+
+  Also check the witness artifacts exist to confirm measurement claims: `regress/artifacts/lunaabsentcpu/witness_head_20260905_2130.out` under GXEMUL-SEC presumably. And `_scratchpad/lunaabs/luna_absentcpu_probe.py` — check `GXEMUL-SEC/_scratchpad/lunaabs/`.
+
+  Let me also verify the probe's D4 claim: `luna_intmask_probe.py` D4 row stores 0x84000100 to INT_ST_MASK1. Grep the shipped probe.
+
+  Also the claim "default ONE cpu" for `-e luna-88k` and "the rig boots with the default" — check the rig script `gxemul_pmax_rig/`? No, m88k rig — maybe `gxemul_arc_rig`? ARC is mips. The luna88k rig: `_images/liveimage-luna88k-raw-20250518.img`. There might be a boot script. Check for a script referencing luna-88k. Not critical; the premise "default ncpus=1" is checkable in emul.c.
+
+  Now, plan the actual tool usage. This is a review task — read-only, lots of greps and reads. I could do it myself or delegate. Given the size, I'll do it myself with parallel greps/reads — the checks are targeted (grep anchors), not a wide exploration. Actually, there are many checks; but each is quick. Let me be efficient: start with a batch of greps in parallel.
+
+  Batch 1 (verify headline premises in GXEMUL-SEC):
+  - Bash: `git -C GXEMUL-SEC log -1 --format='%h %ad %s' -- src/devices/dev_luna88k.c` and `git -C GXEMUL-SEC log -1 --format='%h' HEAD`? HEAD claimed 83df95c.
+  - Grep: `reassert_interrupts` in GXEMUL-SEC/src/devices/dev_luna88k.c (content, -n).
+  - Grep: `MAX_CPUS` same file.
+  - Read: the file around those anchors.
+  - Grep: `INTERRUPT_ASSERT` in GXEMUL-SEC/src/include/interrupt.h.
+  - Grep: `ncpus = 1` in GXEMUL-SEC/src/core/emul.c (or wherever).
+  - ls regress/luna* and regress/artifacts/lunaabsentcpu/.
+
+  Let me first locate the tree: `GXEMUL-SEC/src/devices/dev_luna88k.c`. The working dir listing shows `GXEMUL-SEC/` with `src/`. Good.
+
+  I must be careful: there are pristine copies at `./src/` and `_archive/audit-results-*/builds/`. Use only `GXEMUL-SEC/`.
+
+  Also CHANGELOG.md — brief says `grep -c lunaabsentcpu CHANGELOG.md` → 0. Which CHANGELOG? GXEMUL-SEC/CHANGELOG.md presumably (est/CHANGELOG.md exists too; but tree under review is GXEMUL-SEC). I'll grep GXEMUL-SEC/CHANGELOG.md.
+
+  Note the operational rule: don't run gates/battery. Fine — I'm only reading.
+
+  One more check for Q1: "Does anything else in the tree connect cpu_irq[1..3]?" — grep `cpu_irq` in dev_luna88k.c; also machine description `machine[0].cpu[1]` string occurrences; also check whether `INTERRUPT_CONNECT` with luna88k slots appears elsewhere (e.g., machine_luna88k.c adds the device with irq path). Check `src/machines/machine_luna88k.c` for how the device is attached and what interrupt_path is passed, plus the six line connections (`luna88k[6]` etc.).
+
+  Also check `struct luna88k_data` definition for fields and absence of machine pointer: grep `struct luna88k_data` and read it. Also `grep -n 'struct machine' src/devices/dev_luna88k.c` — brief says CHECK (implies no match, i.e., no machine pointer). Actually `DEVINIT` uses `devinit->machine` — that's a different `struct machine *` usage via devinit param. The grep would still hit `devinit->machine->ncpus` lines! The brief's CHECK is about whether the *struct luna88k_data* has a machine pointer — `grep -n 'struct machine'` would match `devinit->machine->ncpus` occurrences. Hmm, so the premise "the struct has no machine pointer today" needs reading the struct definition, not just that grep. I'll read the struct.
+
+  Also confirm `reassert_interrupts` receives only `d` — yes from inlined code.
+
+  For option (a) shape: store `d->ncpus = devinit->machine->ncpus` at DEVINIT — check DEVINIT has access (yes, `devinit->machine->ncpus` used there for the HACK connects).
+
+  Now, does `devinit->machine->ncpus` at DEVINIT time reflect final ncpus? Devices are init'd after machine setup — ncpus known. Fine.
+
+  Also potential subtlety: `emul.c` may allow `-n` > MAX_CPUS? If user passes `-n 8`, DEVINIT connects only slots 0..3 (guards >= 2/3/4), but ncpus = 8 → option (a) loop `cpu < d->ncpus` would walk slots 4..7 → out-of-bounds on `cpu_irq[MAX_CPUS]` arrays! WAIT. That's a real enumerarion finding! If (a) stores raw ncpus and loops `cpu < d->ncpus`, then `-n 8` (if allowed) walks beyond MAX_CPUS=4 → OOB read of d->interrupt_enable[4..7], d->cpu_irq[4..7] — heap OOB → worse than the original bug potentially. So (a) must bound by `MIN(d->ncpus, MAX_CPUS)`. Check: does the luna88k machine cap ncpus at 4? Check machine_luna88k.c or emul.c for a cap. GXemul generally allows any `-n`? Let me check. If the machine setup doesn't cap, then the (a) implementation must be `for (cpu = 0; cpu < d->ncpus && cpu < MAX_CPUS; cpu++)` or clamp at DEVINIT. The brief's option (a) says "walk `cpu < d->ncpus` (or `cpu < MAX_CPUS && d->cpu_irq[cpu].interrupt_assert != NULL`)". The first variant alone is unsafe if ncpus can exceed 4. MUST CHECK: does anything cap `-n` for luna-88k? This is exactly the kind of premise-checking the panel wants. Let me grep for ncpus cap in machine_luna88k.c and emul.
+
+  Actually also the DEVINIT HACK connect: `if (ncpus >= 2) CONNECT("machine[0].cpu[1]", ...)`. With `-n 8`, cpus 1..3 connected, 4..7 exist but unconnected — and option (a) with raw ncpus=8 walks slots 4..7 → OOB. So yes, (a) needs `MIN(ncpus, MAX_CPUS)`. I'll flag this as a required refinement to the ruling — possibly a HOLD-amendment or "PROCEED-WITH-(a) AS AMENDED". Let me check the tree for the cap.
+
+  In GXemul 0.7.0, `emul.c`: `emul_new` sets `n_cpus = 1`? and `-n` parsed in main.c: `opts->ncpus`? Then machine init: `for (i = 0; i < machine->ncpus; i++) cpu_new(...)`. Is there a sanity cap? I recall `if (machine->ncpus < 1) ...`. Some machines print "warning: this machine doesn't support SMP". Let me check machine_luna88k.c for ncpus handling.
+
+  Let me now also consider Q3's "Is (a) alone enough, given a future edit could add another walk over MAX_CPUS?" — (a) protects only reassert; a future writer of interrupt_enable[] (e.g., a new arm) would still store per-slot arrays sized MAX_CPUS — fine; a future walk would need the same bound. Defense-in-depth would prefer ALSO bounding cpunr at the arms (b-lite without readback change: decline the reassert... no). Actually (b) changes readback; a "bound cpunr for the *reassert side effects* but store anyway" hybrid = (a) effectively. The cleanest in-idiom answer: (a) with MIN clamp, because it matches `RESET_CPU_ALL`'s own precedent in the same file (bounded by ncpus) and `add_cmmu_for_cpu`'s guard, keeps readback identical (no es438 regression), and needs no new plumbing.
+
+  Alternatively the NULL-check variant (`cpu < MAX_CPUS && interrupt_assert != NULL`) is also safe against `-n 8` and against unconnected-but-in-range slots, and needs no struct change. But the adjudication said "a NULL check guards the symptom". Hmm — actually the second form of (a) IS a NULL check bound. The adjudication picked "bound the loop to d->ncpus captured at DEVINIT". I'll weigh: stored-ncpus has a stale-risk (none — ncpus fixed after init) and the OOB risk if unclamped. The `interrupt_assert != NULL` variant is self-maintaining (any future connect automatically extends the walk) and cannot OOB. Its downside: treats "unconnected" as the authority rather than "configured", and if a future edit connects a slot to something non-cpu... fine. Honestly both defensible; the ruling chose stored ncpus. My verdict can be PROCEED-WITH-(a) with the MIN(MAX_CPUS) amendment, noting the alternative.
+
+  Wait — actually, let me reconsider: is `d->ncpus` even needed? `reassert_interrupts` is called from DEVICE_ACCESS which has `cpu` (the accessing cpu) → `cpu->machine->ncpus` reachable? DEVICE_ACCESS signature includes `struct cpu *cpu`. But reassert is also called from `luna88k_interrupt_assert/deassert` — the line handlers — which receive `struct interrupt *interrupt`, from which `interrupt->extra` = d presumably; no cpu there. So storing ncpus in d is the simple route. OK.
+
+  Now let me also double-check the arithmetic in the brief:
+
+  1. "lines 1..6 -> bits 26..31": `1 << (line + 25)`: line1→bit26 ✓, line6→bit31 ✓.
+  2. "the clock is line 6 -> bit 31; sio line 5 -> bit 30" — check machine_luna88k.c for the connections. On real LUNA-88K, intsr bits: clock is... whatever the code says.
+  3. D4 row 0x84000100 → bits 31, 26, 8: 0x84000100 = binary: 0x80000000 (bit31) + 0x04000000 (bit26) + 0x00000100 (bit8) ✓. "bit 26 is SET and slot 1 stays ARMED" — enable=0x84000100, and status gets bit26 set only when software_interrupt_status[1] ≠ 0. Probe never stores SOFT_INT1 → no death. But ALSO bit 31 set → clock line (machine-wide) → when clock ticks, interrupt_status bit31 set → slot1 status&enable ≠ 0 → NULL assert → death "on a running guest" ✓ (in cold debugger, host timers stopped → no clock → survives) ✓.
+  4. devsig row: st 0xfc000000 → MASK0; ld back = 0x00fc0000: read path odata = 0xfc000000>>8 = 0x00fc0000; highestCurrentStatus: interrupt_status=0 → 0 → odata stays ✓.
+  5. slot0 row: MASK0=0xfc000000, SOFT_INT0=1 → slot0: status = 0|bit26; enable bit26 set → assert cpu_irq[0] — connected → survives; ld SOFT_INT0 = 1 (read clears) ✓. But wait — after the SOFT_INT0 read clears software_interrupt_status[0], reassert runs again → status bit26 gone → deassert cpu0 ✓ fine.
+  6. soft1 row: MASK1=0xfc000000 (from mask1 row earlier in same session) + SOFT_INT1=1 → slot1 assert NULL → SIGSEGV ✓.
+  7. RESET_CPU_ALL 0x6d000010 — check.
+  8. INT_ST_MASK regs at 0x65000000, SOFT_INT at 0x69000000 — check #defines in file.
+
+  Also: "the four labels INT_ST_MASK0..3 ... share one arm" and "cpunr is 0..3 from the ADDRESS, never compared with ncpus" ✓ from inlined code. But — is the switch on the absolute address? If the device is registered at base 0x65000000 with a length spanning 0x65000000..0x6d0000xx?? That can't be one device mapping (gap between 0x65... and 0x69...). Maybe the device is mapped at 0x65000000 with length 0x8000000+? Or `addr` is computed as base+offset where the switch labels are absolute. Need to read the DEVINIT registration: `memory_device_register(..., base?, len?)`. If len covers 0x65000000..0x6d000010, that's 128MB — unlikely. More likely the device computes `addr = dev_luna88k_base + relative_addr`? Hmm, but then SOFT_INT at 0x69000000 implies the mapping spans 0x65000000..0x6d000010 = 0x8000010 bytes ≈ 128 MiB. Possible: GXemul device mappings can be large. Let me read DEVINIT. Actually maybe multiple registrations or the base is 0 and addr is absolute. Check.
+
+  Also `case INT_ST_MASK0:` — with `switch (addr)` where addr is absolute uint64. cpunr = (addr - INT_ST_MASK0)/4 ✓ 0..3.
+
+  Also the read path's `highestCurrentStatus << 29`: bits 31..29 hold line number 1..6 (3 bits, max 7 ✓ 6 fits).
+
+  Also memory_writemax64 in the tail for reads ✓.
+
+  Now Q2: "THE SMALLEST EDIT that closes the witness and still leaves a guest-reachable death or a wrong readback — name the row you expect to stay green." Interpretation: describe a plausible-but-insufficient minimal fix and say which detector row still catches the residual. Examples:
+  - Smallest edit: guard only the SOFT_INT arm (`if (cpunr >= ncpus) break`-ish) — closes W1 (soft1) but leaves the MASK1+clock corollary kill (timer row) — but timer row is deemed not reachable in cold debugger... then the residual death is real on a running guest but the row that stays green... hmm the question: "name the row you expect to stay green" — meaning which planned row would (wrongly) stay green i.e. fail to catch this insufficient fix? If the fix bounds only SOFT_INT arm by ncpus: rows: soft1 green (fixed), mask rows green (stores land), but the clock corollary (mask1 armed bit31 + clock tick) still kills — and the detector's `timer1` row is likely NOT cold-debugger-reachable → no row sees it → that row (timer1) is the one whose channel can't vary. So the answer: the smallest edit that closes W1 but leaves the corollary is "bound only the SOFT_INT arm"; the row that stays green is timer1 (or rather: no row catches it; timer1 was designed to but is unreachable in a cold debugger — needs a synchronous shared line). Can we find a synchronous shared line? A machine-wide line assertable synchronously from the debugger: e.g., writing an SIO register that raises its interrupt? The sio (line 5) — a guest store to the serial port that sets its interrupt pending synchronously? In many UART models, writing THR triggers TX interrupt immediately or after a delay. If dev_zs/sio asserts synchronously within the access handler, then a cold-debugger row could: arm MASK1 with bit30 (sio line) then store to the sio tx register → line asserts → reassert → slot1 NULL assert → death. That would make timer1 reachable via sio instead of clock. Which chip does luna88k use for sio? Check machine_luna88k.c: probably z8530 (Zilog SCC) — dev_z8530.c. Does a TX write assert interrupt synchronously? Check dev_z8530 for interrupt assert on write. Hmm, this is getting deep; I can name it as a candidate and let the measuring seat test. The brief explicitly asks: "say so or find a synchronous shared line". I can grep quickly.
+
+  Actually, simpler synchronous shared line: is there a "software-controllable" machine-wide line? The six lines: what are they? Check where `machine[0].luna88k[N]` interrupts get connected/consumed in machine_luna88k.c. Likely: 1..6 = sio?, clock, scsi, ether, ... The brief says clock=6, sio=5. If sio TX-empty interrupt asserts synchronously on reset/write, then arm MASK1 bit30 + trigger sio = synchronous kill row. Let me check dev for the sio used (luna88k uses Zilog z85C30? or NEC uPD7201?). dev_z8530.c exists in GXemul? I think there's dev_zs.c. Check machine_luna88k.c.
+
+  Let me now also handle the "Read the project's own records NARROWLY" instruction: grep anchors in CHANGELOG (e.g., `grep -n 'cf4b083\|#438' GXEMUL-SEC/CHANGELOG.md` limited lines), ledger grep for luna ids only.
+
+  And Q6: check ledger luna ids: `grep -o '"id": "luna[a-z0-9]*"' GXEMUL-SEC/tools/pipeline/ledger.json` — need correct path. Let me find ledger.json under GXEMUL-SEC.
+
+  Also confirm probe file existence: `GXEMUL-SEC/regress/luna_intmask_probe.py` and read its D4/E2 rows to confirm the claim (0x84000100 → MASK1; E2 row?). The brief says D4 row stores to MASK1. E2 maybe SOFT_INT? Check.
+
+  Also "regress/artifacts/lunaabsentcpu/" — check existence of witness log + asrun probe; read the witness log to confirm the RESULT lines match the brief (HALT on soft1, 4/5).
+
+  OK. Also Q1 sub-question: "does the m88k rig boot with it [default one cpu]?" — find the rig script: maybe `harness/` scripts or `gxemul_*_rig/`. Grep for `luna-88k` in scripts to see the boot command line (does it pass `-n`?). The liveimage luna88k img exists in `_images/`. Maybe a script like `boot_luna*.sh`. Grep.
+
+  Let me start executing. Batch of parallel calls:
+
+  1. Bash: `cd GXEMUL-SEC && git log -1 --format='%h %ad %s' -- src/devices/dev_luna88k.c && git log -1 --format='%h %ad %s' && git status --porcelain | head -5` — wait, avoid cd persistence issues; use `git -C GXEMUL-SEC`.
+  2. Grep `reassert_interrupts|MAX_CPUS` in GXEMUL-SEC/src/devices/dev_luna88k.c (content).
+  3. Grep anchors in interrupt.h.
+  4. Glob for regress/luna* and artifacts.
+  5. Grep `ncpus` in emul.c — need path: GXEMUL-SEC/src/core/emul.c? Let me glob first. Actually grep `ncpus = 1` in GXEMUL-SEC/src.
+
+  Let me fire the first batch now. I'll keep batches parallel and independent.
+
+  Also: I should check `ls GXEMUL-SEC` for CHANGELOG.md, regress/, tools/pipeline/ledger.json paths.
+
+  Let me write the first batch:
+
+  - Bash: `git -C GXEMUL-SEC log -1 --format='%h %ci %s' -- src/devices/dev_luna88k.c; git -C GXEMUL-SEC rev-parse --short HEAD; git -C GXEMUL-SEC status --porcelain -- src/devices/dev_luna88k.c src/include/interrupt.h | cat`
+  - Grep: pattern `reassert_interrupts|MAX_CPUS|cpu_irq|interrupt_enable|software_interrupt_status|irqActive|intmask_lowbits_reported` path GXEMUL-SEC/src/devices/dev_luna88k.c output content -n, head_limit 80.
+  - Grep: `INTERRUPT_ASSERT|INTERRUPT_DEASSERT|INTERRUPT_CONNECT` path GXEMUL-SEC/src/include/interrupt.h content.
+  - Bash: `ls GXEMUL-SEC/regress/ | grep -i luna; ls GXEMUL-SEC/regress/artifacts/lunaabsentcpu/ 2>/dev/null; ls GXEMUL-SEC/_scratchpad/lunaabs/ 2>/dev/null`
+  - Grep: `ncpus` in GXEMUL-SEC/src/core (files_with_matches) — or grep `ncpus = 1` in GXEMUL-SEC/src.
+
+  Then follow-ups: read dev_luna88k.c struct + DEVINIT + the arms; machine_luna88k.c; dev_mp.c anchor; dev_bebox.c anchor; emul ncpus default + -n parse + caps; debugger commands for observing cpu1; ledger luna ids; CHANGELOG #438 lines; probe D4/E2 rows; witness log; openbsd22 luna88k absence.
+
+  This is a lot of targeted checks — manageable directly. Let me go.
+
+  Actually, given the number of independent verifications, I could delegate chunks to explore agents. But the instructions emphasize targeted grep anchors; doing it myself keeps citations precise. I'll do it myself with parallel batches — maybe 4-6 batches. That's fine.
+
+  Batch 1 now.
+
+• I'll work this as a premise-audit seat: verify every inlined claim against `GXEMUL-SEC/src/` directly, then answer Q1–Q6. Starting with the headline anchors.cf4b083 2026-08-19 20:45:25 -0500 #438 exitsweep: a guest store to INT_ST_MASK0-3 ended the emulator process
+83df95c
+
+
+• My grep call had a bad `type` param. Redo with path.
+
+• HEAD and the #438 commit check out. Now the code anchors:
+
+• Anchors confirmed: loop at 170 walks MAX_CPUS; macro at interrupt.h:74 is a raw call. Now read the key regions of dev_luna88k.c: struct (around 82-100), reassert + line handlers (160-215), the MASK/SOFT arms (810-900), DEVINIT (960-1010), and check `struct machine` usage, RESET_CPU_ALL, add_cmmu_for_cpu, the switch addr base, registration. Let me read several windows in parallel.The inlined code matches verbatim. Struct has no `machine` pointer (fields: cpu_irq, irqActive, interrupt_enable, interrupt_status, software_interrupt_status, intmask_lowbits_reported, timer stuff, sio, rom/ram) — confirmed, no `struct machine *` member. `interrupt_status` is a single machine-wide field ✓. `luna88k_interrupt_assert/deassert` set/clear `1 << (line + 25)` and call reassert ✓.
+
+  Now check: the addr base (how `addr` is derived in DEVICE_ACCESS), DEVINIT block, `add_cmmu_for_cpu`, and the `default:` arm tail. Also whether DEVICE_ACCESS switch uses absolute addr. Read around the top of DEVICE_ACCESS and the DEVINIT.Major findings confirmed and one big one for the option-(a) ruling:
+
+  1. **DEVINIT caps ncpus at 4**: lines 1036-1039 — `if (devinit->machine->ncpus > 4) { printf("LUNA 88K can't have more than 4 CPUs.\n"); exit(1); }`. So `-n 8` is impossible on luna-88k — the machine exits at DEVINIT. That removes my OOB concern for option (a) raw `d->ncpus` bound: ncpus ≤ 4 = MAX_CPUS always on this machine. Good — I must still note the clamp is load-bearing: option (a)'s safety depends on this DEVINIT guard. If someone ever raises the cap, (a) as stated (`cpu < d->ncpus` with stored raw ncpus) walks OOB. So recommend storing `d->ncpus = devinit->machine->ncpus` (which is ≤ 4 by the guard) — safe today; a comment or MIN() is belt-and-braces. Also note ordering: the `ncpus > 4` check happens AFTER INTERRUPT_CONNECT for slots 1..3 — but with ncpus > 4, connects for 1..3 succeed (cpus exist), then exit(1). No issue.
+
+  2. **Connection block verbatim confirmed** (990-998). Six shared lines registered at 1000-1014 named `<path>.luna88k.1..6` with `templ.line = i`. Timer connects to line 6 (1017-1018) → bit 31 ✓ ("clock is line 6 -> bit 31" ✓). SIO connects to line 5 (1030-1031) → bit 30 ✓. LE (ethernet) line 4, SCSI (mb89352) line 3.
+
+  3. **add_cmmu_for_cpu guard** confirmed at 931.
+
+  4. **RESET_CPU_ALL** confirmed at 896-899 bounded by ncpus ✓.
+
+  5. **default arm** at 901-917: debugmsg then `cpu->running = 0; return 0;` ✓ separate class.
+
+  6. **Common tail** 919-922 ✓.
+
+  7. **Switch on `addr`** at 614 — need to see how addr is derived (DEVICE_ACCESS start). The case labels are absolute addresses (0x3ffffff0, PROM_ADDR 0x41000000...). So the device maps LUNA88K_REGISTERS_BASE = 0x3ffffff0 to BMAP_START... wait: `memory_device_register(..., LUNA88K_REGISTERS_BASE /* 0x3ffffff0 */, LUNA88K_REGISTERS_LENGTH /* BMAP_START - 0x3ffffff0 */ ...)`. Hmm — that means the registered base is 0x3ffffff0 and the length covers up to BMAP_START. What's BMAP_START? Probably 0xf4000000 or similar (from luna88k_board.h). And inside DEVICE_ACCESS, `addr` must be computed as `relative_addr + LUNA88K_REGISTERS_BASE`? Let me check the top of dev_luna88k_access. The switch on absolute addr with base 0x3ffffff0: INT_ST_MASK0 = 0x65000000 absolute. So somewhere `addr = relative_addr + 0x3ffffff0`? Hmm wait — if the device is registered at base 0x3ffffff0 with length (BMAP_START - 0x3ffffff0), then a guest access to physical 0x65000000 gives relative_addr = 0x65000000 - 0x3ffffff0 = 0x25000010. The code must add the base back. Let me read the DEVICE_ACCESS header (~line 520-560).
+
+  Also confirm where the OBIO_CLOCK arms are — line 793-803: `case OBIO_CLOCK0..3` at 0x63000000..0c — note these ALSO do `cpunr = (addr - OBIO_CLOCK0)/4` but only use `cpunr == 0` for decrementing pending_timer_interrupts — no per-cpu indexing hazard there.
+
+  Now remaining checks:
+  - DEVICE_ACCESS header: how addr is formed; the `relative_addr` handling. Read ~500-560.
+  - emul.c default ncpus = 1 and -n parsing.
+  - machine_luna88k.c: device_add("luna88k ...") and interrupt_path; confirm nothing else connects cpu_irq[1..3]; confirm `-e luna-88k` exists.
+  - dev_mp.c / dev_bebox.c idiom anchors.
+  - `(once)` count in src/devices/*.c.
+  - noop/dummy interrupt grep.
+  - regress/luna* listing; probe D4/E2 rows; witness artifacts.
+  - CHANGELOG grep lunaabsentcpu = 0; ledger luna ids.
+  - `_guest-src-openbsd22` luna88k absence.
+  - Debugger: how to observe cpu 1's irq pending (for Q4). Check debugger commands for cpu switch / reg.
+  - m88k interrupt assert path: what sets pending on the cpu (cpu_interrupt in cpu_m88k.c) — sets `cpu->irq_asserted`? For observability.
+  - Does anything in the tree pass `-n` for luna88k rig? Find rig boot script.
+  - Check the witness log to confirm measured claims (4/5, HALT on soft1, signal 11).
+
+  Also: the brief says the probe copy as run is `regress/artifacts/lunaabsentcpu/luna_absentcpu_probe.asrun.py` — check existence.
+
+  Also: "es438 rows D4/E2" — read luna_intmask_probe.py rows D4, E2 to confirm D4 stores 0x84000100 to MASK1 and leaves bit 26 armed.
+
+  Let me batch these.Confirmed: `addr = relative_addr + LUNA88K_REGISTERS_BASE` (line 550) — so cpunr from absolute addr 0..3 ✓ (switch matches only exact case labels, so cpunr can only be 0..3 — the domain enumeration the brief asked for: the producer of cpunr is `(addr - INT_ST_MASK0)/4` where addr ∈ {0x65000000, 04, 08, 0c} exactly, because the switch matches only those four values; cpunr ∈ {0,1,2,3}. Same for SOFT_INT. So cpunr is bounded; the unbounded thing is the reassert loop over MAX_CPUS vs connected slots.)
+
+  Machine setup: `device_add(machine, "luna88k")` — no explicit irq path → devinit->interrupt_path default. Line 103: `if (machine->ncpus > 4)` — a cap in machine_luna88k.c too. Let me read that region (lines 49-160) to see the ncpus cap and what happens — and line 113 loop creating cpus? Actually cpus are created by emul/machine generic code before machine_setup? In GXemul, machine_setup is called after cpus are created? Let me look at machine_luna88k.c:49-160 fully.
+
+  Also need emul.c default ncpus.
+
+• `addr = relative_addr + LUNA88K_REGISTERS_BASE` confirmed (dev_luna88k.c:550). Now the machine setup's ncpus handling and the emul default:
+
+• Confirmed:
+  - machine_luna88k.c:103-106: `if (machine->ncpus > 4) fatal(...)` — the machine-level cap (this one is a fatal, plus the DEVINIT printf+exit). So ncpus ≤ 4 guaranteed TWICE. Option (a)'s stored `d->ncpus` cannot exceed MAX_CPUS. My earlier OOB worry is closed by the tree: the cap exists at machine setup AND at DEVINIT. 
+  - machine_luna88k.c:113-114: all ncpus unpaused.
+  - emul.c:490: `m->ncpus = 1;` default ✓.
+  - `-e luna-88k` subtype exists ✓.
+
+  Next batch:
+  1. `-n` option parsing (does the CLI accept -n 2): grep in main.c / emul.c for 'n' option. 
+  2. Does anything else connect cpu_irq[1..3]? grep `cpu_irq` whole src tree; grep `luna88k.1` etc. Only dev_luna88k.c uses cpu_irq (the grep above showed only this file lines). Let me grep `cpu_irq` across GXEMUL-SEC/src to be sure.
+  3. dev_mp.c idiom anchor: `which_cpu >= cpu->machine->ncpus`.
+  4. dev_bebox.c anchor: `i >= machine->ncpus`.
+  5. `(once)` count.
+  6. noop/dummy interrupt grep.
+  7. regress listing + artifacts.
+  8. CHANGELOG grep.
+  9. ledger luna ids.
+  10. openbsd22 luna88k grep.
+  11. m88k cpu interrupt assert mechanism (for Q4 observability): grep cpu_m88k.c for irq_asserted / interrupt handling.
+  12. debugger commands for observing cpu1: grep debugger_cmds for "cpu" command.33
+---
+---
+GXEMUL-SEC/src/devices/dev_bebox.c:70:	struct interrupt	cpu_irq[2];
+GXEMUL-SEC/src/devices/dev_bebox.c:90:		INTERRUPT_ASSERT(d->cpu_irq[0]);
+GXEMUL-SEC/src/devices/dev_bebox.c:92:		INTERRUPT_ASSERT(d->cpu_irq[1]);
+GXEMUL-SEC/src/devices/dev_bebox.c:100:		INTERRUPT_DEASSERT(d->cpu_irq[0]);
+GXEMUL-SEC/src/devices/dev_bebox.c:102:		INTERRUPT_DEASSERT(d->cpu_irq[1]);
+---
+luna_intmask_probe.py
+---
+luna_absentcpu_probe.asrun.py
+witness_head_20260905_2130.out
+---
+0
+Results:
+  - dev_mp.c:96 ✓ idiom anchor exists.
+  - dev_bebox.c:210 ✓.
+  - `(once)` count today: 33 (brief said 25 on 2026-08-31 — count has grown, but the spelling claim is about the idiom, fine; the house latch spelling `(once)` exists. Note the delta: 25 → 33.)
+  - No noop/dummy interrupt helper ✓ (empty).
+  - cpu_irq[] elsewhere: only dev_bebox.c (its own, with [2] slots, connected unconditionally? bebox is a 2-cpu concept; lines 90-102 assert both — but that's guarded by bebox's own init fatal at line 210 for missing cpus. Different device, fine).
+  - regress/luna*: only luna_intmask_probe.py ✓ (the exit code 1 is from the final grep -c returning 0 matches → grep exits 1; that's the expected 0 count for lunaabsentcpu in CHANGELOG ✓).
+  - artifacts exist: luna_absentcpu_probe.asrun.py + witness_head_20260905_2130.out ✓.
+
+  Now read the witness log to confirm measured claims, and read the D4/E2 rows of luna_intmask_probe.py. Also check the ledger luna ids, openbsd22 luna88k presence, m88k interrupt delivery observability, debugger cpu observation, and where the rig boot script is (does it pass -n?). Also `-n` CLI option.201:print("D1 GUARDED WRITE #1 -- 0x84000100 (INT_SLAVE_MASK prefix + bit 8):")
+202:send("r4=0x84000100")
+233:print("D4 A SECOND CASE LABEL -- INT_ST_MASK1 at 0x65000004; the site has FOUR:")
+235:send("r4=0x84000100")
+237:    bail("HOST DIED on INT_ST_MASK1 -- the fix did not cover every case label.",
+241:check("D4 readback from INT_ST_MASK1 -- independent of MASK0", r4(), 0x00840001, 0x00ffffff)
+260:#     per-DEVICE-INSTANCE latch (V1)  -> 1  (the D4 write to MASK1 is demoted)
+265:check("E2 LATCH (text-coupled, see comment) -- first-hit markers across 4 hits/2 regs",
+===LEDGER===
+GXEMUL-SEC/tools/pipeline/ledger.json
+===O22===
+_guest-src-openbsd22/gnu/usr.bin/gcc/ChangeLog.3
+_guest-src-openbsd22/gnu/usr.bin/gcc/config/m88k/luna.h
+_guest-src-openbsd22/gnu/usr.bin/gcc/config/m88k/xm-m88k.h
+===NOPT===
+423:		case 'n':
+Witness log matches the brief verbatim (4/5, HALT on soft1, signal 11).
+
+  The es438 probe: D4 row stores 0x84000100 to INT_ST_MASK1 (line 233-235) and checks readback 0x00840001 masked 0x00ffffff (line 241). Confirm the brief's arithmetic: 0x84000100 >> 8 = 0x00840001 ✓. And D4 leaves MASK1 armed with bits 31+26 (0x84000100 has bit 31 and bit 26 set) ✓ — "slot 1 stays ARMED for the rest of that session. It could not see this defect only because a cold debugger has nothing pending and the probe never stores SOFT_INT1." ✓ consistent: with bits 31+26 armed in enable[1], any machine-wide line 6 (bit 31) assert or software_interrupt_status[1] → status&enable → NULL call. The clock is a host-timer — in a cold debugger, timers are... the brief claims single-stepping stops host timers. Plausible (timer framework advances on emulated time). I can note it as consistent with timer_add usage.
+
+  Ledger path: GXEMUL-SEC/tools/pipeline/ledger.json ✓ exists.
+
+  OpenBSD 2.2 guest src: `grep -ril luna88k` found only gcc config files (gnu/usr.bin/gcc/config/m88k/luna.h etc.) — no kernel arch/luna88k. So no OpenBSD 2.2 luna88k kernel source on disk ✓ (the port didn't exist in 2.2; only GCC target fragments). So "What OpenBSD does with MASK1..3 on uniprocessor" cannot be settled from `_guest-src-openbsd22/` — say so. I can double check for `sys/arch/luna88k` absence.
+
+  `-n` option exists in main.c:423 `case 'n':`. Let me see what it does (ncpus parse).
+
+  Now Q4 observability: m88k interrupt delivery. Check cpu_m88k.c for the interrupt assert handler — what happens when d->cpu_irq[1] asserts to cpu 1: the interrupt path "machine[0].cpu[1]" connects to the cpu's interrupt handler — likely `cpu_interrupt()` in cpu.c, which sets `cpu->irq_asserted = 1`? Let me check src/cpus/cpu_m88k.c / cpu.c for interrupt_assert handler. And how a cold-debugger row could observe: does the debugger have a command to show a cpu's state / switch cpus? Check src/debugger/debugger_cmds.c for "cpu" and "reg".
+
+  Also check: what does the luna88k probe harness use to drive the debugger — read a bit of the asrun probe header to understand channel capabilities (it already does r4=... sets, planting, stepping; maybe it can read cpu registers of cpu 1? The m88k debugger `reg` command shows current cpu?).
+
+  Let me also grep the m88k cpu interrupt code.			m->physical_ram_in_mb = (uint32_t)
+			    parse_int_option('M', optarg, 1, 1048576);
+			machine_specific_options_used = true;
+			break;
+		case 'N':
+			m->show_nr_of_instructions = 1;
+			machine_specific_options_used = true;
+			break;
+		case 'n':
+			/*  atoi() accepted negative counts, which later
+			    feed malloc()/memset() size calculations.  */
+			m->ncpus = (int)
+			    parse_int_option('n', optarg, 1, 256);
+			machine_specific_options_used = true;
+			break;
+		case 'O':
+			m->force_netboot = 1;
+			machine_specific_options_used = true;
+			break;
+		case 'o':
+			CHECK_ALLOCATION(m->boot_string_argument = strdup(optarg));
+===M88KIRQ===
+GXEMUL-SEC/src/cpus/cpu_m88k.c:67:void m88k_irq_interrupt_assert(struct interrupt *interrupt);
+GXEMUL-SEC/src/cpus/cpu_m88k.c:172:		templ.interrupt_assert = m88k_irq_interrupt_assert;
+GXEMUL-SEC/src/cpus/cpu_m88k.c:409: *  m88k_irq_interrupt_assert():
+GXEMUL-SEC/src/cpus/cpu_m88k.c:412:void m88k_irq_interrupt_assert(struct interrupt *interrupt)
+GXEMUL-SEC/src/cpus/cpu_m88k.c:415:	cpu->cd.m88k.irq_asserted = 1;
+GXEMUL-SEC/src/cpus/cpu_m88k.c:420:	cpu->cd.m88k.irq_asserted = 0;
+Excellent findings:
+
+  1. `-n` parsing: `m->ncpus = parse_int_option('n', optarg, 1, 256)` — range 1..256, so `-n 2` works for luna-88k; `-n 5..256` hits the machine's fatal cap. Good for Q4: `-n 2 -e luna-88k` is the accept-side configuration. 
+
+  2. m88k interrupt delivery: `m88k_irq_interrupt_assert()` sets `cpu->cd.m88k.irq_asserted = 1` (cpu_m88k.c:412-415). So the delivery channel is observable IF the debugger can show another cpu's state. The debugger `reg` command takes `[cpuid][,c]` — debugger_cmds.c:2079! So `reg 1` shows cpu 1's registers. But does `reg` show irq_asserted? Probably not — it shows GPRs/PC/PSR. Let me check debugger_cmd_reg to see what it prints for m88k — does it include irq_asserted? Let me check `m88k_cpu_dumpinfo` or the reg printing.
+
+  Actually, even simpler observable: with cpu 1's irq_asserted set and PSR allowing interrupts, the next step of cpu 1 takes the interrupt exception → PC jumps to the vector (VBR + 0x10 for vector 2? m88k interrupt vector offset = 2 → VBR + 2*8 = VBR+0x10). A cold-debugger row: `reg 1` before and after a step → PC change to vector. But wait: in the debugger, does `step` step all cpus or just cpu 0? In GXemul, `step` runs the emulation loop for N instructions total across... In GXemul's debugger, single-step steps ALL cpus? Let me check `debugger_cmd_step`. Also machine_luna88k unpauses all cpus (line 113-114), so cpu 1 runs too. cpu 1's PSR at reset: interrupts disabled? m88k reset PSR has... the probe would need cpu 1's PSR to allow interrupts (PSR.INT? actually 88100 PSR bit... interrupt disable). Hmm, at reset PSR typically disables interrupts. The kernel sets it. In a cold debugger without booting, cpu 1's PSR may have interrupts disabled → irq_asserted stays 1 (latched) but no exception taken. Then the observable channel is `irq_asserted` itself — need a debugger command that shows it. Let me check what `reg` prints and whether there's an `irq` dump. Check debugger_cmd_reg and m88k dumpinfo.
+
+  Alternatively the probe harness might already read emulator internals via the debugger's `machine` command (debugger_cmd_machine prints machine details — maybe including per-cpu irq state?). Let me check what debugger_cmd_machine prints.
+
+  Let me look at these quickly. Also check `cpu->cd.m88k.irq_asserted` usage in the run loop (cpu_m88k.c:420 clears it → in the exception-taken path). Read around 405-440 of cpu_m88k.c.
+
+• `-n` takes 1..256, so `-n 2` is valid for luna-88k, and delivery sets `cpu->cd.m88k.irq_asserted = 1`. Now what a debugger session can actually observe of that:}
+
+
+/*
+ *  m88k_irq_interrupt_assert():
+ *  m88k_irq_interrupt_deassert():
+ */
+void m88k_irq_interrupt_assert(struct interrupt *interrupt)
+{
+	struct cpu *cpu = (struct cpu *) interrupt->extra;
+	cpu->cd.m88k.irq_asserted = 1;
+}
+void m88k_irq_interrupt_deassert(struct interrupt *interrupt)
+{
+	struct cpu *cpu = (struct cpu *) interrupt->extra;
+	cpu->cd.m88k.irq_asserted = 0;
+}
+
+
+/*
+ *  m88k_ldcr():
+ *
+ *  Read from a control register. Store the resulting value in a register
+ *  (pointed to by r32ptr).
+ */
+void m88k_ldcr(struct cpu *cpu, uint32_t *r32ptr, int cr)
+{
+	uint32_t retval = cpu->cd.m88k.cr[cr];
+
+	switch (cr) {
+
+	case M88K_CR_PID:
+	case M88K_CR_PSR:
+	case M88K_CR_EPSR:
+	case M88K_CR_SSBR:
+	case M88K_CR_SXIP:
+	case M88K_CR_SNIP:
+	case M88K_CR_SFIP:
+	case M88K_CR_VBR:
+	case M88K_CR_DMD0:
+	case M88K_CR_DMD1:
+===REGCMD===
+1642: *  debugger_cmd_reg():
+1644:static void debugger_cmd_reg(struct machine *m, char *args)
+2079:	{ "reg", "[cpuid][,c]", 0, debugger_cmd_reg,
+
+
+• Let me check `m88k_cpu_dumpinfo` (does it print irq_asserted?) and `debugger_cmd_reg` (what it shows per cpu). Also where irq_asserted is consumed in the run loop (to know if a stepped cpu 1 with PSR interrupts-enabled takes the exception — for the accept-row channel). Then remaining checks: ledger luna ids (Q6), probe harness capabilities, `#438` CHANGELOG anchor, and whether `reg` shows irq_asserted. *  m88k_cpu_dumpinfo():
+ */
+void m88k_cpu_dumpinfo(struct cpu *cpu, bool verbose)
+{
+	debugmsg(SUBSYS_MACHINE, "cpu", VERBOSITY_INFO,
+	    "%s (%s-endian)",
+	    cpu->name,
+	    cpu->byte_order == EMUL_BIG_ENDIAN? "Big" : "Little");
+}
+
+
+/*
+ *  m88k_cpu_list_available_types():
+ *
+ *  Print a list of available M88K CPU types.
+ */
+void m88k_cpu_list_available_types(void)
+{
+	int i, j;
+	struct m88k_cpu_type_def tdefs[] = M88K_CPU_TYPE_DEFS;
+
+	i = 0;
+	while (tdefs[i].name != NULL) {
+===DUMPREG_M88K===
+67:void m88k_irq_interrupt_assert(struct interrupt *interrupt);
+68:void m88k_irq_interrupt_deassert(struct interrupt *interrupt);
+172:		templ.interrupt_assert = m88k_irq_interrupt_assert;
+173:		templ.interrupt_deassert = m88k_irq_interrupt_deassert;
+409: *  m88k_irq_interrupt_assert():
+410: *  m88k_irq_interrupt_deassert():
+412:void m88k_irq_interrupt_assert(struct interrupt *interrupt)
+415:	cpu->cd.m88k.irq_asserted = 1;
+417:void m88k_irq_interrupt_deassert(struct interrupt *interrupt)
+420:	cpu->cd.m88k.irq_asserted = 0;
+===REGCMD_BODY===
+ *  debugger_cmd_reg():
+ */
+static void debugger_cmd_reg(struct machine *m, char *args)
+{
+	int cpuid = debugger_cur_cpu, coprocnr = -1;
+	int gprs, coprocs;
+	char *p;
+
+	/*  [cpuid][,c]  */
+	if (args[0] != '\0') {
+		if (args[0] != ',') {
+			cpuid = strtoull(args, NULL, 0);
+			if (cpuid < 0 || cpuid >= m->ncpus) {
+				printf("cpu%i doesn't exist.\n", cpuid);
+				return;
+			}
+		}
+		p = strchr(args, ',');
+		if (p != NULL) {
+			coprocnr = atoi(p + 1);
+			if (coprocnr < 0 || coprocnr >= 4) {
+				printf("Invalid coprocessor number.\n");
+				return;
+			}
+		}
+	}
+
+	gprs = (coprocnr == -1)? 1 : 0;
+	coprocs = (coprocnr == -1)? 0x0 : (1 << coprocnr);
+
+	cpu_register_dump(m, m->cpus[cpuid], gprs, coprocs);
+}
+
+
+/*
+ *  debugger_cmd_step():
+ *
+ *  With no argument (or a number n), single-step 1 (or n) instruction(s).
+ *
+ *  With the argument "call" (which may be abbreviated), single-step until
+ *  the next function call or function return is traced, with function
+ *  call trace output ("trace") implicitly turned on while stepping.
+ */
+static void debugger_cmd_step(struct machine *m, char *args)
+{
+	int n = 1;
+
+	if (args[0] != '\0' && !isdigit((int)args[0])) {
+		size_t wordlen = 0;
+		while (args[wordlen] != '\0' && args[wordlen] != ' ')
+			wordlen ++;
+
+		if (strncasecmp(args, "call", wordlen) == 0 &&
+		    args[wordlen] == '\0') {
+			int i;
+
+			/*  Single-step until a function call or return is
+			    traced. Function call trace is implicitly turned
+			    on while stepping (this takes effect immediately,
+"id": "lunaabsentcpu"
+"id": "lunafuse"
+===CLOG438===
+11369:The `sh4_val_first` latch idiom that #438, #441, #443, #447 and #449 all use does not
+17375:## R11 (#438) — a guest store to INT_ST_MASK ended the emulator, and the new witness rule caught its own first round
+Findings:
+
+  1. `reg [cpuid][,c]` — dumps GPRs/coprocs of any cpu via `cpu_register_dump`. Does m88k's register dump show irq_asserted? `m88k_cpu_dumpinfo` doesn't. Need to check `m88k_cpu_register_dump` — does it print control regs incl. PSR? Probably r0-r31 + some cr. `irq_asserted` is internal state, unlikely printed. So the clean cold-debugger channel for accept-side delivery: step and watch cpu 1's PC — but only if cpu 1's PSR has interrupts enabled AND stepping steps all cpus. Let me check: where is irq_asserted consumed? It's set at 415, cleared at 420 (deassert). Where is it READ? grep showed only lines 67,68,172,173,409-420 — irq_asserted is never read anywhere else in cpu_m88k.c?! Let me grep the whole src for irq_asserted reads in m88k context. If nothing reads `cpu->cd.m88k.irq_asserted`, then... the m88k interrupt never actually gets delivered to execution?? That would be a bigger finding — but wait, maybe it's read in cpu_m88k_run or the instr execution via a macro from a header. Let me grep wider: `irq_asserted` across src/cpus and include.
+
+  Actually the grep above was `grep -n 'irq'` on cpu_m88k.c — it showed only those lines. So within cpu_m88k.c, irq_asserted is written but never read! Check include files: maybe `cpu_m88k.h` has a macro, or m88k_instr... Let me grep the whole tree for `irq_asserted` (m88k).
+
+  Hmm — wait. In GXemul 0.7.0's new CPU framework, interrupt delivery for m88k might be in `cpu_m88k_instr.c` or via `M88K_INTERRUPT` defines. Let me grep `irq_asserted` in src/.
+
+  2. Ledger: `lunaabsentcpu` IS already in the ledger! `"id": "lunaabsentcpu"` — the brief said `grep -c lunaabsentcpu CHANGELOG.md` -> 0 (not shipped in changelog) but Q6 asks about the ledger: the id exists in the ledger. Hmm — the brief's section 0 used CHANGELOG + regress listing as "not shipped" evidence. The ledger containing the id means the round is at least filed/staged in the pipeline (the brief itself is part of the pipeline — fable_queue etc.). Is that a contradiction? The brief says "grep -o ... lists the luna rows" for Q6 (checking whether the default-arm issue is filed). The ledger has `lunaabsentcpu` and `lunafuse` only — no `luna*` id for the `default:` arm graceful-stop class. So for Q6: the default-arm class is NOT filed under a luna id. And `lunaabsentcpu` being in the ledger is expected (this very round), not "already shipped" — CHANGELOG has no entry and no fix commit exists (HEAD is 83df95c, dev_luna88k.c last touched by cf4b083). Let me double-check the ledger entry's status field for lunaabsentcpu — read just that entry narrowly.
+
+  3. CHANGELOG: #438 is R11 at line 17375 ✓ consistent with "not this round".
+
+  Now let me: (a) check irq_asserted reads tree-wide; (b) read ledger lunaabsentcpu entry status; (c) check the probe harness for how it drives the debugger (read the asrun probe header ~60 lines) to understand what channels exist (it used `send("r4=0x84000100")`-style commands — assignment to registers! That's the harness's own command set. It plants words and steps. If the harness can set r4 on cpu 0, can it read cpu 1? The debugger's `reg 1` prints to stdout — the harness parses stdout presumably. And can it step cpu 1? `step` steps... need to check: in GXemul 0.7.0 debugger, `step` steps ALL cpus? Let me check how many instructions get executed — `debugger_cmd_step` → `debugger_n_instructions_left_before_exit = n`? and the main loop runs all cpus round-robin. So stepping n executes n total instructions machine-wide? Or per cpu? Look at where debugger steps: it sets a count and calls emul_run? For accept-row purposes: after arming, step enough that cpu 1 executes at least one instruction with PSR interrupts... but PSR at reset disables interrupts? For m88k, reset PSR = 0? 88100 PSR bit 1 (?) — let me not go too deep. The accept-row channel question: what can a cold-debugger row observe of delivery to cpu 1?
+
+  Observables:
+  - `reg 1` → cpu 1's GPRs (r1..r31) and maybe PC. If we plant in cpu 1's path... cpu 1 executes from same entry point; its PC advances as it steps. If irq_asserted=1 and PSR allows, cpu 1 takes the exception: PC → VBR+offset, visible in `reg 1` (does m88k reg dump include PC? cpu_register_dump with gprs=1 prints PC too usually — "cpu_register_dump(m, cpu, gprs, coprocs)" — for m88k it prints r0..r31 and pc? Let me check m88k_cpu_register_dump quickly).
+  - Or: does anything print irq_asserted? No.
+
+  Also: is irq_asserted even consumed (exception taken) in the m88k run loop? If not, the accept channel "vector entry" doesn't exist and the only observable is... nothing guest-visible? That would be significant: check where m88k takes interrupts. grep `irq_asserted` src/.
+
+• The ledger already contains a `lunaabsentcpu` id — I need its status field, plus whether `irq_asserted` is ever *consumed* (matters for the accept-row channel):GXEMUL-SEC/src/cpus/cpu_dyntrans.c:212:		if (cpu->cd.m88k.irq_asserted &&
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c:382:		    || (cpu->cd.m88k.irq_asserted && !(cpu->cd.m88k.cr[M88K_CR_PSR] & M88K_PSR_IND))
+GXEMUL-SEC/src/cpus/cpu_m88k.c:415:	cpu->cd.m88k.irq_asserted = 1;
+GXEMUL-SEC/src/cpus/cpu_m88k.c:420:	cpu->cd.m88k.irq_asserted = 0;
+GXEMUL-SEC/src/include/cpu_m88k.h:265:	int			irq_asserted;
+===ALLM88K===
+GXEMUL-SEC/src/cpus/cpu_alpha.c
+GXEMUL-SEC/src/cpus/cpu_arm.c
+GXEMUL-SEC/src/cpus/cpu_dyntrans.c
+GXEMUL-SEC/src/cpus/cpu_i960.c
+GXEMUL-SEC/src/cpus/cpu_m88k.c
+GXEMUL-SEC/src/cpus/cpu_ppc.c
+GXEMUL-SEC/src/cpus/cpu_riscv.c
+GXEMUL-SEC/src/devices/dev_asc.c
+GXEMUL-SEC/src/devices/dev_footbridge.c
+GXEMUL-SEC/src/devices/dev_le.c
+===LEDGERENTRY===
+Traceback (most recent call last):
+  File "<string>", line 3, in <module>
+  File "C:\Users\User00\AppData\Local\Programs\Python\Python312\Lib\json\__init__.py", line 293, in load
+    return loads(fp.read(),
+                 ^^^^^^^^^
+  File "C:\Users\User00\AppData\Local\Programs\Python\Python312\Lib\encodings\cp1252.py", line 23, in decode
+    return codecs.charmap_decode(input,self.errors,decoding_table)[0]
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+UnicodeDecodeError: 'charmap' codec can't decode byte 0x8f in position 11232: character maps to <undefined>
+
+
+• irq_asserted IS consumed: cpu_dyntrans.c:212 and :382 — the m88k dyntrans loop checks `cpu->cd.m88k.irq_asserted && !(PSR & M88K_PSR_IND)` → takes the interrupt exception. So delivery → exception requires PSR.IND clear. On a cold cpu 1 at reset, what's PSR? m88k reset sets PSR to... need not dig; the accept row can set cpu 1's PSR via debugger register assignment if the harness supports `stcr`/reg writes, or observe `irq_asserted` via... it's not printed. Hmm.
+
+  But wait — the dyntrans loop is only used when running with dyntrans; the debugger's single-step path — does it go through cpu_dyntrans.c? In GXemul 0.7.0, m88k is dyntrans-only (there's no m88k_interpret? there might be `m88k_run_instr`?). The check at cpu_dyntrans.c:382 is in the main dispatch loop — with the debugger, `step` eventually calls cpu->run_instr or the dyntrans loop for one instruction, and the interrupt check at 382 happens per-instruction-boundary. So a stepped cpu 1 with irq_asserted=1 and PSR.IND=0 takes the exception → PC=VBR+... visible via `reg 1`.
+
+  Ledger JSON read failed on encoding (cp1252). Retry with encoding='utf-8' and errors='replace' — read narrowly.
+
+  Also check what m88k register dump prints (does `reg 1` show PC?). m88k_cpu_register_dump. And confirm the exception vector for m88k interrupt: vector 2 → VBR + 2*8 = VBR+0x10. Let me check the exception code path (cpu_dyntrans.c:382 region → m88k_exception(..., M88K_EXCEPTION_INTERRUPT?)). Quick look.
+
+• `irq_asserted` is consumed in the dyntrans dispatch loop (cpu_dyntrans.c:382, gated on PSR.IND) — so a stepped cpu 1 with interrupts enabled takes the exception visibly. Ledger read needs UTF-8:{"id": "lunafuse", "title": "lunafuse  dev_luna88k fuse ROM: the word-write arm stores, the byte-write arm drops the write behind an unlatched fatal()", "state": "held", "commits": "", "hold": "Its blocker today was a records line, now discharged by this row existing.", "closure": {"by": "", "badge": "", "note": ""}, "entries": [{"seat": "opus5", "phase": "assess", "d": "\u2713", "date": "2026-08-20", "note": "*** THE LEDGER ROW es438's FIX WAS SUPPOSED TO CREATE AND DID NOT. ***  Filed in OUTSTANDING_BUGS.md:4250 on 2026-08-19 but never given a ledger row, so it is invisible to gen_dashboard.py and check_stage_panels.py -- both read ledger.json only. It and #437 are the only two OUTSTANDING
+{"id": "lunaabsentcpu", "title": "lunaabsentcpu  dev_luna88k.c reassert_interrupts() calls the NULL interrupt callback of an UNCONFIGURED cpu slot: on the default one-cpu luna-88k two ordinary guest word stores (INT_ST_MASK1 then SOFT_INT1) kill the emulator process with SIGSEGV -- MEASURED, rung 3", "sev": "high", "state": "open", "opened": "2026-09-05", "commits": "", "witness": "none", "hold_question": null, "note": "DEFECT, HIGH -- MEASURED (rung 3).  dev_luna88k.c: reassert_interrupts() (anchor `static void reassert_interrupts') walks `for (cpu = 0; cpu < MAX_CPUS; cpu++)' and calls INTERRUPT_ASSERT(d->cpu_irq[cpu]) -- interrupt.h expands that to a direct call through `.interrupt_assert
+===VECT===
+			cpu->n_translated_instrs += 120;
+			if (cpu->n_translated_instrs >= N_SAFE_DYNTRANS_LIMIT)
+				break;
+		}
+	}
+
+	if (cpu->wants_to_idle) {
+		cpu->n_translated_instrs -= N_DYNTRANS_IDLE_BREAK;
+
+		// TODO: More arch specific interrupt checks
+		if (false
+#ifdef DYNTRANS_M88K
+		    || (cpu->cd.m88k.irq_asserted && !(cpu->cd.m88k.cr[M88K_CR_PSR] & M88K_PSR_IND))
+#endif
+		    ) {
+			debugmsg_cpu(cpu, SUBSYS_CPU, "idle", VERBOSITY_DEBUG, "not idling; exception");
+			cpu->wants_to_idle = false;
+		}
+
+		cpu->has_been_idling = true;
+	}
+
+	n_instrs += cpu->n_translated_instrs;
+
+	/*  Synchronize the program counter:  */
+	low_pc = ((size_t)cpu->cd.DYNTRANS_ARCH.next_ic - (size_t)
+
+
+• The ledger entry: `"id": "lunaabsentcpu", "state": "open", "opened": "2026-09-05", "commits": ""` — so this round is FILED but NOT shipped. Consistent with section 0's "NOT shipped" (CHANGELOG 0, no probe in regress/, no commits). Good — no contradiction; the ledger row is this round's own filing.
+
+  cpu_dyntrans.c:382 shows the idle-wakeup check. Where's the actual exception delivery? Line 212 was the other hit. Let me look at 205-225. Actually, for the accept-row channel I have enough: delivery sets irq_asserted; consumption happens in the dyntrans loop gated on PSR.IND; observable via PC change after stepping cpu 1 (needs PSR.IND=0). What is cpu 1's PSR at reset on this machine? All cpus start running the kernel simultaneously (machine_luna88k.c:113). At cold-debugger time (no boot), PSR is whatever cpu_new set — probably PSR with interrupts disabled (reset value has IND set? On 88100, reset PSR = big-endian, supervisor, interrupts disabled — M88K_PSR_IND set). So a cold-debugger accept row would need to clear PSR.IND on cpu 1 — can the harness write control registers? The probe harness used `r4=0x...` assignments (GPR writes). Can it do `stcr`? The harness plants instructions — it could plant an `stcr` to PSR on cpu 1... but stepping cpu 1 specifically: does `step` step all cpus or just current? debugger_cmd_step — let me check how it drives. Also `reg 1` shows GPRs; does m88k register dump include PC/PSR? Let me check m88k_cpu_register_dump.
+
+  Actually — the witness probe already has a working mechanism on cpu 0. For cpu 1 the harness needs: (1) observe cpu 1's PC (reg 1 — need to confirm it prints PC), (2) make cpu 1 execute with PSR.IND=0. Simplest: harness sets cpu1 PSR via... hmm, does the debugger have a command to write control registers? The harness's `r4=...` syntax is presumably the debugger's register-assignment feature (debugger allows `regname=value`?). Let me check how the probe drives the debugger — read the asrun probe's command helpers. And check m88k_cpu_register_dump for PC/PSR visibility.
+
+  Also for Q2/Q3 I still want: the `timer1` reachability — is there a synchronous machine-wide line triggerable from a guest store in the cold debugger? Candidates: sio (line 5) — reassert_serial_interrupt: does a guest store to the SIO registers synchronously assert? Look at `reassert_serial_interrupt` and the OBIO_SIO arm. If a guest write to an SIO register causes `INTERRUPT_ASSERT(d->sio_irq)` synchronously (e.g., TX empty interrupt when enabling TX), then arm MASK1 with bit 30 + write SIO reg → line 5 asserts → luna88k_interrupt_assert sets bit 30 → reassert → slot1 NULL call → synchronous death in cold debugger. That would make the corollary row reachable without the host timer. Let me check reassert_serial_interrupt and the SIO write arm.
+
+• Ledger: `lunaabsentcpu` state=open, opened 2026-09-05, commits empty — filed, not shipped. Now the synchronous-line question (can a guest store assert a machine-wide line synchronously, making the corollary row cold-debugger-reachable?):220:static void reassert_serial_interrupt(struct luna88k_data* d)
+541:	reassert_serial_interrupt(d);
+732:				reassert_serial_interrupt(d);
+788:			reassert_serial_interrupt(d);
+===
+static void reassert_serial_interrupt(struct luna88k_data* d)
+{
+	int assertSerial = 0;
+	int port;
+
+	for (port = 0; port <= 1; port++) {
+		if ((d->obio_sio_wr[port][SCC_WR1] & SCC_WR1_RXI_ALL_CHAR) ||
+		    (d->obio_sio_wr[port][SCC_WR1] & SCC_WR1_RXI_FIRST_CHAR)) {
+			if (anything_in_sio_queue(d, port))
+				assertSerial = 1;
+		}
+
+		if (d->obio_sio_wr[port][SCC_WR1] & SCC_WR1_TX_IE &&
+		    d->sio_tx_pending[port])
+			assertSerial = 1;
+	}
+
+	if (assertSerial)
+		INTERRUPT_ASSERT(d->sio_irq);
+	else
+		INTERRUPT_DEASSERT(d->sio_irq);
+}
+===SIOARM===
+694:	case OBIO_SIO + 0:	/*  0x51000000: data channel 0 */
+695:	case OBIO_SIO + 4:	/*  0x51000004: cmd channel 0 */
+696:	case OBIO_SIO + 8:	/*  0x51000008: data channel 1 */
+697:	case OBIO_SIO + 0xc:	/*  0x5100000c: cmd channel 1 */
+698:		sio_devnr = ((addr - OBIO_SIO) / 8) & 1;
+700:		if ((addr - OBIO_SIO) & 4) {
+
+
+• `reassert_serial_interrupt` is called synchronously from the SIO register arm (lines 732, 788 — inside DEVICE_ACCESS) and asserts `d->sio_irq` (line 5 → machine-wide bit 30) when, e.g., TX_IE is set and `sio_tx_pending[port]` — is `sio_tx_pending` set synchronously on a guest data write? Line 732 context: the SIO arm. A guest sequence: write SIO cmd reg WR1 = TX_IE, then write data channel → sets sio_tx_pending → reassert_serial_interrupt → INTERRUPT_ASSERT(sio_irq) → luna88k_interrupt_assert(line 5) → interrupt_status |= bit30 → reassert_interrupts → slot 1 (if armed with bit 30) → NULL call → death. ALL SYNCHRONOUS, all from guest stores, no host timer. Let me confirm sio_tx_pending is set on guest data write: read the SIO arm 694-790.
+
+• The SIO arm calls `reassert_serial_interrupt` synchronously. Checking whether a guest data write sets `sio_tx_pending` synchronously — that would make the shared-line corollary cold-debugger-reachable without the host timer:
+
+• Confirmed: a guest store to the SIO cmd channel setting WR1.TX_IE (line 729-730: when TX_IE newly set, `sio_tx_pending = 1`) → line 732 `reassert_serial_interrupt(d)` → since TX_IE && tx_pending → `INTERRUPT_ASSERT(d->sio_irq)` → line 5 → `luna88k_interrupt_assert` → `interrupt_status |= 1 << (5+25)` = bit 30 → `reassert_interrupts` → if MASK1 armed with bit 30 → slot 1 NULL assert → death. **Fully synchronous, guest-store-driven, cold-debugger-reachable.** So the `timer1` row CAN be built as a `sio1` row: arm MASK1 with bit 30, then two byte/word stores to the SIO cmd channel (set regno→WR1... actually the sequence: write cmd = WR1 select (idata = 1 → regno=1), then write cmd = 0x02? SCC_WR1_TX_IE value — from sccreg.h; whatever), and the line asserts synchronously. This answers the brief's open "timer1 (reachable in a cold debugger? ... probably NOT; say so or find a synchronous shared line)" — I found one: the SIO TX-IE path. (Caveat: console_putchar on data writes for port 0; but we only need the cmd-channel write. Also OBIO_SIO accesses — len? byte or word? The probe uses word stores; idata & 7 for regno works with any len.)
+
+  Wait — one check: does the SIO cmd write path require `len == 1`? The arm at 694 doesn't check len — fine, word store works, idata low byte used.
+
+  So Q2/Q5 detector-plan note: timer1 → replace with sio-line row: st WR1=TX_IE via cmd channel after arming MASK1 bit 30 → synchronous death pre-fix, silent survival post-fix. This is a concrete, checkable contribution.
+
+  Now the remaining verification bits:
+
+  1. m88k register dump — does `reg 1` show PC (for the accept-side channel)? Check m88k_cpu_register_dump.
+  2. How does the probe harness drive the debugger (what commands)? Read the asrun probe briefly — its send() primitives. To assess whether `reg 1` output is parseable and whether stepping steps all cpus.
+  3. Check debugger_cmd_step: does `step` step all cpus (round-robin) or just current cpu?
+  4. `_guest-src-openbsd22` — confirm no `sys/arch/luna88k` (the gcc hits are just toolchain target files).
+  5. The claim "default ONE cpu" + rig boots with default — find the luna88k rig/boot script used by the project (there might be one in gxemul_pmax_rig or harness/). grep for 'luna-88k' in scripts.
+  6. `highestCurrentStatus` readback — the accept-side readback channel claim (bits 31..29 show pending line regardless of delivery). Already verified in code: read path uses machine-wide interrupt_status & currentMask, independent of slot connection. So under `-n 2`, a MASK1 readback after asserting a shared line shows the pending level even without delivery — that's a delivery-independent channel, NOT proof of delivery. The brief already flags this ("not survival; channel must be cpu 1 ASSERTING"). My finding: the readback channel cannot distinguish delivery; the only delivery-proving channels are (i) cpu 1 taking the exception (PC→vector, needs PSR.IND=0 on cpu 1 and stepping), or (ii) irq_asserted — not exposed by any debugger command (m88k dumpinfo doesn't print it). So Q4's honest answer: cold-debugger CAN observe delivery, via `reg 1` PC after stepping, provided the probe can clear PSR.IND on cpu 1 (plant stcr? or the debugger's register-write syntax if it covers control regs — check the harness/debugger assignment capability).
+
+  Let me check items 1-4 in one batch.260: *  m88k_cpu_register_dump():
+267:void m88k_cpu_register_dump(struct cpu *cpu, int gprs, int coprocs)
+void m88k_cpu_register_dump(struct cpu *cpu, int gprs, int coprocs)
+{
+	char *symbol;
+	uint64_t offset;
+	int i, x = cpu->cpu_id;
+
+	if (gprs) {
+		symbol = get_symbol_name(&cpu->machine->symbol_context,
+		    cpu->pc, &offset);
+		debug("cpu%i:  pc  = 0x%08" PRIx32, x, (uint32_t)cpu->pc);
+		debug("  <%s>\n", symbol != NULL? symbol : " no symbol ");
+
+		for (i=0; i<N_M88K_REGS; i++) {
+			if ((i % 4) == 0)
+				debug("cpu%i:", x);
+			if (i == 0)
+				debug("                  ");
+			else
+				debug("  r%-2i = 0x%08" PRIx32,
+				    i, cpu->cd.m88k.r[i]);
+			if ((i % 4) == 3)
+				debug("\n");
+		}
+	}
+
+	if (coprocs & 1) {
+		int n_control_regs = 32;
+
+		/*  Hm. Is this really MVME197 specific? TODO  */
+		if (cpu->machine->machine_subtype == MACHINE_MVME88K_197)
+			n_control_regs = 64;
+===STEP===
+1:static void debugger_cmd_step(struct machine *m, char *args)
+3:	int n = 1;
+6:		size_t wordlen = 0;
+14:			/*  Single-step until a function call or return is
+16:			    on while stepping (this takes effect immediately,
+18:			    debugger was entered). Clear any stale per-cpu
+23:			for (i=0; i<m->ncpus; i++)
+24:				m->cpus[i]->last_was_function_transition = 0;
+27:			debugger_stepping_until_function_transition = 1;
+28:			debugger_n_steps_left_before_interaction = 0;
+32:			exit_debugger_to_continue_single_stepping = true;
+34:			strlcpy(repeat_cmd, "step call", MAX_CMD_BUFLEN);
+35:			return;
+38:		printf("syntax: step [n | call]\n");
+39:		return;
+43:		n = strtoull(args, NULL, 0);
+45:			printf("invalid nr of steps\n");
+46:			return;
+CVS
+alpha
+amiga
+arc
+arm32
+atari
+hp300
+i386
+kbus
+m68k
+mac68k
+mvme68k
+mvme88k
+pc532
+pmax
+powerpc
+sparc
+sun3
+vax
+wgrisc
+===RIG===
+GXEMUL-SEC/regress/gate_ab.sh:211:              "$log" "$1" -N -e luna-88k -d "$LUNA_IMG" boot)
+Findings:
+
+  1. `reg 1` prints `cpu1: pc = 0x...` and GPRs — so PC of cpu 1 IS observable in a cold debugger. ✓ (And `reg 1,0`? — coprocs & 1 dumps control regs — `reg 1,1`? The args are `[cpuid][,c]` where c is coprocnr; coprocs & 1 → control regs including PSR? It dumps n_control_regs=32 control regs for m88k — so PSR observable via `reg 1,0`? Actually `reg 1,0` → coprocnr=0 → coprocs = 1<<0 = 1 → dumps control registers incl. CR[PSR]. So the probe CAN read cpu 1's PSR and PC. Can it WRITE PSR? The harness `r4=0x...` syntax — that's a debugger register-assignment. Does the debugger support writing control regs (cr)? Let me check how the probe sets r4 — search the asrun probe for the command syntax. GXemul debugger has a feature: lines like `r4=0x84000100` are handled by debugger's "set register" — in debugger.c there's handling of `name=value` for GPRs. Control regs probably not settable that way. BUT the probe plants instructions; it could plant `stcr rX, PSR` on cpu 1... but cpu 1 executes its own PC — the probe would have to redirect cpu 1's PC. Can the debugger set cpu 1's PC? `pc=...` assignment while debugger_cur_cpu...? The debugger operates on `debugger_cur_cpu`; assignments apply to current cpu. Is there a command to switch current cpu? Hmm, `reg 1` just views. Let me check for a cpu-switch command... I recall in 0.7.0 there's no `cpu N` select command; debugger_cur_cpu changes when breakpoints hit. Let me grep for `debugger_cur_cpu =`.
+
+  2. `_guest-src-openbsd22/sys/arch/`: NO luna88k directory (alpha..vax list — mvme88k yes, luna88k no). ✓ OpenBSD 2.2 has no luna88k kernel — the brief's "probably no luna88k" is confirmed: absent. So OpenBSD's MASK1..3 behavior is NOT settleable from on-disk sources.
+
+  3. Rig: `GXEMUL-SEC/regress/gate_ab.sh:211` runs `-N -e luna-88k -d "$LUNA_IMG" boot` — no `-n` flag → default ncpus=1 ✓ "the rig boots with the default" confirmed.
+
+  4. step: need a bit more of the body to see if it steps all cpus. The emul loop steps all running cpus round-robin typically (single_step mode). In GXemul 0.7.0, `step n` sets n instructions and runs the emul loop; each cpu runs... Actually in GXemul, when single-stepping with multiple cpus, each "instruction" step advances ALL cpus? No — `emul_run` → per machine `machine_run` → for each cpu run one instruction chunk when single-stepping? Historically, single-step in GXemul steps one instruction per cpu per round? Hmm. Let me check quickly how single-step interleaves: src/emul.c or machine.c `machine_run` loop. Actually for the accept row design, the measuring seat will resolve this; I can state: `step` drives the normal emul loop, all unpaused cpus (luna88k unpauses all ncpus at setup) execute; cpu 1's PC observable via `reg 1`. The remaining sub-premise — how to get cpu 1's PSR.IND cleared in a cold debugger — needs either a debugger control-reg write or planted stcr on cpu 1. Let me check the register-assignment syntax handling in the debugger to see if `cr1=...` or `psr=...` works.GXEMUL-SEC/src/debugger/debugger.c:102:int debugger_cur_cpu;
+GXEMUL-SEC/src/debugger/debugger.c:503:			struct cpu* cpu = debugger_machine->cpus[debugger_cur_cpu];
+GXEMUL-SEC/src/debugger/debugger.c:888:	debugger_cur_cpu = 0;
+GXEMUL-SEC/src/debugger/debugger_cmds.c:1125:	debugger_cur_cpu = x;
+GXEMUL-SEC/src/debugger/debugger_cmds.c:1133:	printf("current cpu (%i)\n", debugger_cur_cpu);
+GXEMUL-SEC/src/debugger/debugger_cmds.c:1646:	int cpuid = debugger_cur_cpu, coprocnr = -1;
+GXEMUL-SEC/src/debugger/debugger_expr.c:52:extern int debugger_cur_cpu;
+GXEMUL-SEC/src/debugger/debugger_expr.c:168:			    debugger_cur_cpu, name);
+===ASSIGN===
+===SETREG===
+#!/usr/bin/env python3
+"""WITNESS (rung 3) for `lunaabsentcpu`: dev_luna88k.c reassert_interrupts() walks all MAX_CPUS
+slots and calls INTERRUPT_ASSERT(d->cpu_irq[cpu]) -- a direct call through a function pointer
+that DEVINIT connected only for configured CPUs (`if (devinit->machine->ncpus >= 2)` ...).  On
+the default ONE-cpu luna-88k a guest word store to INT_ST_MASK1 (0x65000004) arms slot 1
+(`d->interrupt_enable[cpunr] = idata` with no ncpus check), and a following store to SOFT_INT1
+(0x69000004) sets that slot's bit 26 and calls reassert_interrupts() SYNCHRONOUSLY inside the
+store -- so the NULL callback is reached while single-stepping, no host timer needed.
+
+ONE cold-debugger session, real m88k guest instructions (st/ld through real address decode and
+real memory_rw), COMMITTED UNMODIFIED machine description (-e luna-88k + the committed rig
+image; no device_add, no new machine, nothing introduced in order to reach the site).
+
+Attribution controls, in order:  C1 RAM liveness through the same decode;  C2 device signature
+(the handler's own >>8 on MASK0);  A1 the SAME two-store sequence on the CONNECTED slot 0
+(MASK0 bit 26 + SOFT_INT0) SURVIVES -- so a death on slot 1 is the absent slot, not the assert
+path;  A2 the MASK1 store ALONE survives (no pending bit yet) -- so the death needs the
+pending bit, which is what the reading predicts;  W1 THE WITNESS: SOFT_INT1 store with
+MASK1 armed.  Pre-fix: the emulator process dies inside W1.  Post-fix: survives, and C3 RAM
+liveness afterwards proves the machine still executes.
+
+Machinery copied from regress/luna_intmask_probe.py (rung-3 exemplar for this device).
+Encodings (cpu_m88k.c, same source as regress/m8820x_sites_probe.py):
+    ld rD,rS1,IMM16  op26=0x05 ;  st rD,rS1,IMM16  op26=0x09
+EVERY PLANTED WORD IS DISASSEMBLED AND ITS TEXT CHECKED BEFORE IT IS STEPPED.
+
+usage: luna_absentcpu_probe.py <gxemul-binary> <images-dir>
+"""
+import os, pty, re, select, sys, time
+
+BIN     = sys.argv[1]
+IMAGES  = sys.argv[2]
+IMG     = IMAGES + "/liveimage-luna88k-raw-20250518.img"
+CODE    = 0x00010000
+SCRATCH = 0x00020000
+MASK0   = 0x65000000        # INT_ST_MASK0 -- the LITERAL, deliberately not the #define
+SOFT0   = 0x69000000        # SOFT_INT0
+
+
+def enc(is_store, d, s1, imm16):
+    return ((0x09 if is_store else 0x05) << 26) | (d << 21) | (s1 << 16) | imm16
+
+
+SLOTS = [(CODE + 0x00, enc(True,  4, 5, 0), "st\tr4,r5,0x0"),
+         (CODE + 0x04, enc(False, 4, 5, 0), "ld\tr4,r5,0x0"),
+         (CODE + 0x08, enc(True,  4, 6, 0), "st\tr4,r6,0x0"),
+         (CODE + 0x0c, enc(False, 4, 6, 0), "ld\tr4,r6,0x0")]
+A_WDEV, A_RDEV, A_WRAM, A_RRAM = [s[0] for s in SLOTS]
+
+pid, fd = pty.fork()
+if pid == 0:
+    os.chdir(IMAGES)
+    os.execvp(BIN, [BIN, "-V", "-e", "luna-88k", "-d", "R:" + IMG, "boot"])
+    os._exit(127)
+
+buf = ""
+dead = [False]
+
+
+def rd(t=0.4):
+The probe harness: `-V -e luna-88k -d R:img boot` under a pty; `debugger_cur_cpu` switch exists at debugger_cmds.c:1125 — let me see what command that is (probably a `cpu N` command or the expression `cpu` assignment). Line 1125 context — check the command name.
+
+  Also the probe plants instructions via the debugger (writes memory) and steps. For the accept row on cpu 1: the debugger CAN switch current cpu (line 1125), so `pc=...` assignments on cpu 1 work, and planting stcr... m88k control reg write via instruction `stcr`. Let me check what command is at 1125.		y = atoi(p+1);
+		p2 = strchr(p+1, ',');
+		if (p2 == p+1) {
+			printf("No machine number specified?\n");
+			return;
+		}
+	}
+
+	if (y != -1) {
+		/*  Change machine:  */
+		if (y < 0 || y >= debugger_emul->n_machines) {
+			printf("Invalid machine number: %i\n", y);
+			return;
+		}
+
+		debugger_cur_machine = y;
+		debugger_machine = debugger_emul->machines[y];
+	}
+
+	/*  Change cpu:  */
+	if (x < 0 || x >= debugger_machine->ncpus) {
+		printf("Invalid cpu number: %i\n", x);
+		return;
+	}
+
+	debugger_cur_cpu = x;
+
+print_current_focus_and_return:
+	if (debugger_emul->n_machines > 1)
+		printf("current machine (%i): \"%s\"\n",
+		    debugger_cur_machine, debugger_machine->name == NULL?
+		    "(no name)" : debugger_machine->name);
+
+	printf("current cpu (%i)\n", debugger_cur_cpu);
+}
+
+
+/*  This is defined below.  */
+static void debugger_cmd_help(struct machine *m, char *args);
+
+
+This is the body of what is likely the `machine`/`cpu` focus command — `debugger_cur_cpu = x` with bounds check. Let me find the command name that registers this function. It's probably `focus`? Let me check the command table around line 2037-2079 for the entry. Actually grep for the function name.		} else {
+			/*  Slide the window, keeping pattern_len-1 bytes
+			    of overlap, 16-byte aligned:  */
+			uint64_t advance = fill - (pattern_len - 1);
+			advance &= ~((uint64_t) 0xf);
+			if (advance == 0)
+				advance = 16;
+			base += advance;
+		}
+	}
+
+	if (n_unreadable > 0)
+		printf("(skipped %i unreadable 16-byte chunk%s)\n",
+		    n_unreadable, n_unreadable == 1? "" : "s");
+	printf("%i match%s found.\n", n_matches, n_matches == 1? "" : "es");
+}
+
+
+/*
+ *  debugger_cmd_focus():
+ *
+ *  Changes focus to specific cpu, in a specific machine (in a specific
+ *  emulation).
+ */
+static void debugger_cmd_focus(struct machine *m, char *args)
+{
+	int x = -1, y = -1;
+	char *p, *p2;
+
+	if (!args[0]) {
+		printf("syntax: focus x[,y]\n");
+		printf("where x (cpu id) and y (machine number) "
+		    "are integers as\nreported by the 'emul'"
+		    " command.\n");
+		goto print_current_focus_and_return;
+	}
+1074: *  debugger_cmd_focus():
+1079:static void debugger_cmd_focus(struct machine *m, char *args)
+2043:	{ "focus", "x[,y[,z]]", 0, debugger_cmd_focus,
+The debugger has a `focus x[,y]` command (debugger_cmds.c:2043) that switches `debugger_cur_cpu`. So a cold-debugger accept row CAN: `focus 1`, set cpu 1's PC to planted code (debugger register assignment `pc=0x...` applies to current cpu), plant an `stcr` to clear PSR.IND... wait, stcr to PSR requires supervisor mode — the debugger's default is supervisor (probe brief says so). Sequence for the accept row under `-n 2`:
+
+  - cpu 0: store MASK1 = 0xfc000000, SOFT_INT1 = 1 → reassert → slot 1 → INTERRUPT_ASSERT(d->cpu_irq[1]) — CONNECTED under `-n 2` → `m88k_irq_interrupt_assert` → cpu1.irq_asserted = 1.
+  - `focus 1`; `reg` (or `reg 1`) → read PC. Plant at cpu 1's PC... actually cpu 1 starts at the kernel entry PC same as cpu 0? In a cold debugger before `boot` runs... hmm, the probe uses `-V ... boot` — the `-V` flag enters the debugger? `-V` in gxemul is... "verbose"? No — in GXemul, `-V` might mean "enter debugger". Actually the probe execs `[BIN, "-V", "-e", "luna-88k", ...]` — and the harness sends debugger commands. In GXemul 0.7.0, `-V` = "start in the debugger"? Let me not chase; the probe works, that's measured.
+
+  The cleanest accept-side observation that DOESN'T need PSR fiddling: hmm, irq_asserted is not printed anywhere. PC-vector-taken needs PSR.IND=0. What is m88k reset PSR? Check cpu_m88k.c cpu_new / reset: `cpu->cd.m88k.cr[M88K_CR_PSR] = ...`. Let me grep. If reset PSR has IND clear (interrupts enabled), then simply stepping cpu 1 after the assert takes the exception → PC = VBR+0x10 (vector 2). m88k vector for interrupt = 2. Check the exception raise path uses VBR. Quick greps:
+  - `M88K_CR_PSR] =` in cpu_m88k.c (reset value)
+  - where irq exception is raised in the run loop (search 'EXCEPTION' in cpu_m88k.c / cpu_dyntrans.c line ~212)
+
+  Then I have everything for Q4. Let me also spot-check the `M88K_PSR_IND` bit meaning (1 = interrupt disable). And vector offset: m88k_exception with vector M88K_EXCEPTION_INTERRUPT? grep.
+
+• `focus x[,y]` switches the debugger's current cpu (debugger_cmds.c:2043) — so an accept row can drive cpu 1 directly. Last accept-side pieces: cpu 1's reset PSR and the exception vector path:181:	cpu->cd.m88k.cr[M88K_CR_PSR] = M88K_PSR_MODE | M88K_PSR_IND;
+183:		cpu->cd.m88k.cr[M88K_CR_PSR] |= M88K_PSR_BO;
+472:		if (!!(cpu->cd.m88k.cr[M88K_CR_PSR] & M88K_PSR_BO)
+811:	if (cpu->cd.m88k.cr[M88K_CR_PSR] & M88K_PSR_SFRZ) {
+824:		cpu->cd.m88k.cr[M88K_CR_EPSR] = cpu->cd.m88k.cr[M88K_CR_PSR];
+827:	m88k_stcr(cpu, cpu->cd.m88k.cr[M88K_CR_PSR]
+===EXCEPT===
+	 *
+	 *  TODO: Turn this into a family-specific function somewhere...
+ 	 */
+
+	/*  Note: Do not cause interrupts while single-stepping. It is
+	    so horribly annoying.  */
+	if (!single_step) {
+#ifdef DYNTRANS_ARM
+		if (cpu->cd.arm.irq_asserted && !(cpu->cd.arm.cpsr & ARM_FLAG_I))
+			arm_exception(cpu, ARM_EXCEPTION_IRQ);
+#endif
+#ifdef DYNTRANS_M88K
+		if (cpu->cd.m88k.irq_asserted &&
+		    !(cpu->cd.m88k.cr[M88K_CR_PSR] & M88K_PSR_IND))
+			m88k_exception(cpu, M88K_EXCEPTION_INTERRUPT, 0);
+#endif
+#ifdef DYNTRANS_MIPS
+		int enabled, mask;
+		int status = cpu->cd.mips.coproc[0]->reg[COP0_STATUS];
+		if (cpu->cd.mips.cpu_type.exc_model == EXC3K) {
+			/*  R3000:  */
+			enabled = status & MIPS_SR_INT_IE;
+		} else {
+			/*  R4000 and others:  */
+			enabled = (status & STATUS_IE)
+			    && !(status & STATUS_EXL) && !(status & STATUS_ERL);
+703:	case M88K_EXCEPTION_INTERRUPT:
+891:		case M88K_EXCEPTION_INTERRUPT:
+
+
+• Critical finding for Q4: cpu_dyntrans.c:206-208 — **"Note: Do not cause interrupts while single-stepping. It is so horribly annoying."** — `if (!single_step)` gates the m88k interrupt exception. So in a cold debugger that single-steps, cpu 1 will NOT take the exception even with irq_asserted=1 and PSR.IND=0. This kills the "step and watch PC" channel for the accept row!
+
+  So the accept-side observable channels in a cold debugger:
+  - `irq_asserted` set on cpu 1 — NOT printed by any debugger command (m88k_cpu_dumpinfo prints name/endian only; reg prints pc+GPRs+control regs). Dead end via stock commands.
+  - Exception taken → gated OFF while single-stepping. Dead end.
+  - MASK1 readback bits 31..29 — reflects `interrupt_status & currentMask` (machine-wide lines only, not software bit 26 — read path doesn't OR software_interrupt_status). And anyway delivery-independent.
+
+  Wait — but how did the W1 probe itself observe the death then? The death happens inside the store's reassert call — synchronously during cpu 0's stepped `st`. The assert itself calls the function pointer immediately (INTERRUPT_ASSERT is a direct call, not deferred). On a 1-cpu machine the NULL call segfaults during the stepped store — no exception delivery needed. On a 2-cpu machine, the assert sets cpu1.irq_asserted=1 — that's it, synchronously. Nothing observable follows while single-stepping.
+
+  So is there ANY cold-debugger channel that proves delivery to cpu 1? Options:
+  1. `irq_asserted` — not exposed. UNLESS... the debugger `machine` command? debugger_cmd_machine prints machine info — let me check if it prints per-cpu irq state. Quick check worthwhile.
+  2. Single-step gating: is `single_step` true only for `step` but not for `continue`-until-breakpoint? The probe could set a breakpoint at the interrupt vector (VBR+0x10) on cpu 1's execution path and `continue` — continue runs free (single_step=false) until the breakpoint → proves delivery. But `continue` runs the whole machine freely — host timers run, the boot ROM runs... The probe uses `boot` arg (kernel filename "boot"?) — with `-d R:img boot`... wait, exec args were `[BIN, "-V", "-e", "luna-88k", "-d", "R:" + IMG, "boot"]`. So it loads file "boot" (relative to IMAGES dir after chdir) — that's `_images/boot`! The working dir listing shows `_images/boot` exists. And `-V`... let me check what -V does. Probably "verbose"? Hmm, but the probe interacts via pty with debugger commands. Maybe -V = "pause at debugger"? Let me check main.c for 'V'.
+
+  Actually, for the accept row: the brief's detector plan says "a `-n 2` ACCEPT row whose channel is cpu 1 ASSERTING (irq_asserted or the vector entry), not survival". My finding: 
+  - irq_asserted: no debugger-visible print (grep shows no print of it). 
+  - vector entry: gated off under single_step; needs `continue` + breakpoint at VBR+0x10 (VBR reset value? check M88K_CR_VBR reset — probably 0 → vector at 0x10) — but a free-running continue with 2 unpaused cpus and a live disk image will also run the PROM/boot code and host timers... which, with MASK1 armed (bit 31 set by 0xfc000000), means the clock tick asserts line 6 → slot 1 enable has bit 31 → assert → connected now → fine on 2 cpus. So a `continue`-to-breakpoint channel is workable but heavier.
+
+  Hold on — is there really no other readback of delivery? What about `reg 1,0` control regs: PSR/EPCR... no irq pending bit there. m88k has no memory-mapped per-cpu pending latch besides SOFT_INT readback (which shows the stored word, not the delivery; and read clears it — destroying the pending state mid-experiment; note: reading SOFT_INT1 back clears software_interrupt_status[1] → next reassert would deassert... but nothing reasserts until next store/line event. Fine.)
+
+  So Q4's honest answer: cold-debugger delivery observation is possible but only via (a) `focus 1` + `continue` with a breakpoint at cpu 1's interrupt vector (VBR reset value + 0x10), with PSR.IND cleared on cpu 1 first — reset PSR = M88K_PSR_MODE | M88K_PSR_IND (cpu_m88k.c:181), i.e., interrupts DISABLED at reset — so the row must clear IND on cpu 1 (plant stcr on cpu 1 via focus+pc redirect, or use a debugger register write if supported for control regs — the `r4=` syntax is GPR; control regs likely not assignable; planting stcr r,PSR works in supervisor mode — debugger steps are supervisor by default per the brief). OR (b) accept the weaker channel: SOFT_INT1 readback=1 (store landed) + survival, which does NOT prove delivery. I should state this precisely and name the free-running shape.
+
+  Wait, actually — one more idea: `step` gating is `if (!single_step)`. What about `continue` for a counted run? There's also possibly a debugger command to inspect a struct... no.
+
+  Hmm, but also: does the single_step flag also apply when the harness does `step` on cpu 0? Yes — that's exactly why W1's death is synchronous (the NULL call happens inside the store instruction's memory access, not via exception delivery). Consistent.
+
+  Now VBR reset value: check cpu_m88k.c for CR_VBR reset. And M88K_EXCEPTION_INTERRUPT vector number (2) → offset 2*8=0x10. From line 703/891 in cpu_m88k.c. Minor; can state "VBR + 0x10 (vector 2)" — verify vector number: grep M88K_EXCEPTION_INTERRUPT define.
+
+  Also confirm `-V` meaning for completeness? The probe works as measured; -V = "start with debugger" I believe (in gxemul, -V is... hmm. Actually I recall: gxemul flags: -i = enter debugger on... no. -V = verbose boot? Let me not guess — it doesn't matter for the review; the probe is measured working.)
+
+  Let me do the final small batch:
+  1. M88K_EXCEPTION_INTERRUPT value + VBR reset.
+  2. debugger_cmd_machine — does it print irq state? (quick grep in the function)
+  3. Check the "HACK" connect premise: does anything else connect cpu_irq[1..3] — confirmed only dev_luna88k.c references cpu_irq in luna context; the earlier grep `cpu_irq\[` outside dev_luna88k showed only dev_bebox.c (own struct). Also check `luna88k.1`/`luna88k.2` connections — who connects to lines 1 and 2? Line 3 = mb89352 (SCSI), 4 = le (ethernet), 5 = sio, 6 = timer. Lines 1, 2 unconnected (registered handlers that nothing asserts) — fine, not a defect, just noting.
+  4. The brief's premise: "the rig boots to login with the default one cpu and the emulator has never died there" — can't verify "never died" from the tree; gate_ab.sh:211 shows the rig command without -n. Good enough: configuration premise confirmed; the behavioral claim is the operator's record, not mine to re-derive.
+  5. Q6: check if the `default:` graceful-stop class is filed — ledger has only lunaabsentcpu + lunafuse under luna*; check CHANGELOG for "unimplemented.*luna88k" or similar entry, narrowly. grep CHANGELOG for 'default.*luna88k\|luna88k.*default' few lines. Also grep OUTSTANDING_BUGS.md for a luna default-arm entry (the ledger said lunafuse was filed in OUTSTANDING_BUGS.md). Quick grep for 'luna88k' in OUTSTANDING_BUGS.md with the default-arm phrasing.
+
+  Also for Q3 completeness: option-set member not named? A "connect-on-demand" variant... (c) covered. A "clamp cpunr in the arms + keep stores" (decline only the reassert for absent slots but still store) is effectively (a)-at-the-arms — a variant of (a) with different placement: bound at the two store arms instead of inside reassert. Difference: reassert also runs from the six line-assert handlers (luna88k_interrupt_assert/deassert → reassert walks MAX_CPUS). If a line asserts while an absent slot is armed (the sio/clock corollary), arm-side bounds don't help — the walk is inside reassert. So bounding must be in reassert (or the loop bound must come from d). This strengthens (a)'s placement: the shared-line path bypasses the store arms entirely. A "bound at arms" edit closes W1 but leaves the sio/clock corollary — and my new sio row would catch it. Good: that's the Q2 answer candidate — the smallest edit that closes the witness but leaves a guest-reachable death: bound cpunr/ncpus only at the SOFT_INT arm (or both store arms) instead of in reassert; the row that stays green (wrongly) is every store-arm row, and the row that catches it is the sio-line row (which I'm adding as the reachable replacement for timer1).
+
+  Also (b) alone insufficiency: a future writer of interrupt_enable[] — actually (b) declines stores so enable[1..3] stay 0 → reassert can't fire on them. But interrupt_status machine-wide + enable[0]... (b) alone leaves software state consistent. The brief asks "Is (b) alone enough, given a future edit could add another writer of interrupt_enable[]?" — with (b), enable[absent] is always 0, so status&enable=0 for absent slots → no assert even if reassert still walks MAX_CPUS. That's actually a strong invariant — but (b) changes readback (D4/E2 redden) and contradicts "the register file holds state for population" model of the board (the four words exist at fixed addresses regardless of CPU population — Q4's hardware note). And dev_mp.c idiom is for a guest-supplied index into a present-or-absent array; here the registers are board-fixed. The adjudication's (a) keeps guest-visible behavior unchanged on 1-cpu (readback identical) — that's the decisive, checkable warrant: post-(a), D4 readback still 0x00840001, E2 latch text still fires, the rig boot is bit-identical; post-(b) they are not. I'll ratify (a) with the enumeration that its safety leans on the ncpus≤4 cap (which I verified exists twice), and recommend the stored value be `devinit->machine->ncpus` with a one-line comment tying it to the cap, or MIN() defensively.
+
+  One more premise to check from section 2: "the struct has no machine pointer today (CHECK: grep -n 'struct machine' src/devices/dev_luna88k.c)". I read the struct (lines 89-130): confirmed no machine pointer. But note `grep -n 'struct machine'` would NOT be empty — add_cmmu_for_cpu uses `devinit->machine->ncpus`, DEVICE_ACCESS uses `cpu->machine` — but those are usages, not struct members. The premise as stated ("the struct has no machine pointer") is TRUE; the grep as proposed is a bad test for it (it matches usages in comments/code via `struct machine *`? Actually `devinit->machine` doesn't contain the literal 'struct machine'. `grep -n 'struct machine'` — would match declarations like `struct machine *m`? In dev_luna88k.c, is there any? The DEVICE_ACCESS macro expands... the source text has `struct cpu *cpu` in args. Probably no literal 'struct machine' in the file at all — the premise's parenthetical grep is just a weak proxy. Fine: the struct definition itself I read — no pointer. Premise TRUE by direct read.)
+
+  Also the premise "reassert_interrupts receives only d" ✓ (line 166).
+
+  Also: "INTERRUPT_CONNECT" on interrupt.h:77 — the connect macro; unconnected slots keep memset-0 struct interrupt → interrupt_assert NULL ✓ (memset at DEVINIT 966).
+
+  One more thing to verify — the premise that es438's D4 leaves slot 1 armed AND that probe "never stores SOFT_INT1": grep probe for SOFT_INT. Earlier grep showed no SOFT_INT hits in the head -30 output (only INT_ST_MASK1 hits). The grep output didn't show SOFT_INT lines at all — confirm absence: `grep -c SOFT_INT regress/luna_intmask_probe.py`. Quick.
+
+  And Q1 sub-question "does anything else connect cpu_irq[1..3] (another device, the machine description)?" — machine_luna88k.c only does `device_add(machine, "luna88k")` (no irq path overrides); grep 'luna88k\[' or 'machine\[0\].cpu\[' elsewhere: the DEVINIT uses literal "machine[0].cpu[N]". Any other place constructing cpu interrupt paths for luna? Only in DEVINIT. Also default interrupt_path for the device: device_add("luna88k") without irq= → devinit->interrupt_path default becomes... the framework default (probably "machine[0].cpu[0]"). Fine.
+
+  Batch now: 
+  1. `grep -c SOFT_INT GXEMUL-SEC/regress/luna_intmask_probe.py; grep -n 'M88K_EXCEPTION_INTERRUPT' GXEMUL-SEC/src/include/cpu_m88k.h | head -3; grep -n 'CR_VBR' GXEMUL-SEC/src/cpus/cpu_m88k.c | head -4`
+  2. Check debugger_cmd_machine for irq printing: sed the function.
+  3. grep OUTSTANDING_BUGS.md for luna88k default-arm filing.
+
+• The single-step gate (`cpu_dyntrans.c:206` — "Do not cause interrupts while single-stepping") is decisive for Q4. Final batch — vector numbers, `machine` cmd output, probe SOFT_INT absence, and the Q6 default-arm filing:0
+201:#define	M88K_EXCEPTION_INTERRUPT			1
+863:	cpu->pc = cpu->cd.m88k.cr[M88K_CR_VBR] + 8 * vector;
+===MACHINE_CMD===
+===OB===
+GXEMUL-SEC/OUTSTANDING_BUGS.md
+
+
+• - `SOFT_INT` count in the shipped es438 probe = 0 ✓ (it never stores SOFT_INT1 — premise confirmed).
+  - M88K_EXCEPTION_INTERRUPT = 1 → vector 1 → PC = VBR + 8*1 = VBR + 8 (cpu_m88k.c:863).
+  - `debugger_cmd_machine` prints nothing about irq (empty grep) ✓ — no stock command exposes irq_asserted.
+  - OUTSTANDING_BUGS.md exists but no match for a luna88k default-arm entry → the `default:`-arm graceful-stop class is NOT filed under luna (ledger has only lunaabsentcpu + lunafuse; lunafuse is the fuse ROM byte-write issue). Let me be careful: my grep pattern might miss different phrasing. One more targeted grep: 'luna' in OUTSTANDING_BUGS.md, count + the lines with 'running = 0' or 'unimplemented'. Narrow grep, few lines.
+
+  Also VBR reset value — didn't see CR_VBR reset in the grep (only line 863 using it). Probably reset to 0 via memset. So vector lands at 0x8. For the accept-row design: `focus 1`, clear PSR.IND (plant stcr or... actually, wait — can the harness even execute on cpu 1 with interrupts enabled without the exception firing while single-stepping? The single_step gate means: while single-stepping, NO interrupt exceptions at all. So vector-entry via step is impossible; via `continue` + breakpoint at 0x8 (VBR=0) works — but continue runs both cpus freely, boot code runs, timers run... acceptable for a row: breakpoint at 0x8, continue, expect break-hit on cpu 1 within N instructions. The attribution: did the break come from the delivered IPI? cpu 0 could also take interrupts (it has MASK0=0 unless the row arms it...). Keep MASK0=0, MASK1=0x84000000? Hmm, arm slot1 only with bit 26 (0x04000000) to avoid clock interference during free run... but then only software bit can fire slot1 → the break at vector on cpu1 can only come from the SOFT_INT1 delivery. Clean attribution. The row: `focus 0`-side stores via planted st on cpu0: MASK1=0x04000000, SOFT_INT1=1. Then `focus 1`, set cpu1 PSR without IND — via planted stcr: needs cpu1 to execute a stcr — set PC to planted stcr+rte loop? Actually simpler: does the debugger allow writing control registers? `pc=0x...` works (it's a well-known assignment). PSR? The debugger expression evaluator handles named registers — for m88k, names r0..r31, pc... control regs probably not. So plant on cpu1: stcr r0-without-IND-bit... hmm, stcr rD, PSR writes the whole PSR. Plant: `stcr r7,cr1` (PSR=cr1) with r7 = M88K_PSR_MODE (IND clear), then a tight loop (br .). Steps on cpu1 execute the stcr (stepping still gates exceptions, fine — we just need PSR updated), then set breakpoint 0x8... wait VBR is 0 at reset → vector addr 0x8; but is memory at 0x8 mapped? Vector fetch happens from VBR+8 — physical 0x8 is RAM (luna88k RAM starts at 0). Yes. `continue` → cpu1 takes the exception → hits breakpoint at 0x8. That's the free-running shape. It needs the probe to distinguish which cpu hit the breakpoint (the break message prints cpu id — debugger breaks print "cpu X" presumably).
+
+  I don't need to fully design it — name it. The key Q4 deliverables: `-n 2` configures it (verified parse range 1..256, machine allows ≤4, DEVINIT connects slot 1 under ncpus>=2); cold-debugger observation of delivery: NOT via single-step (gated, cpu_dyntrans.c:206), NOT via any printed state (irq_asserted unprinted) — only via free-running `continue` to a breakpoint at cpu1's vector after clearing cpu1's PSR.IND; the MASK1-readback channel does NOT prove delivery (read path never includes the software bit and is connection-independent).
+
+  One more small check: OUTSTANDING_BUGS.md luna lines. And then write the review.
+
+  Also for Q2, "name the row you expect to stay green": the question asks: given the smallest edit that closes the witness but leaves a residual death/wrong-readback, which detector row would (wrongly) stay green i.e. miss it. Candidates:
+  - Edit: bound only the SOFT_INT arm (`if (cpunr < ncpus)` around the SOFT_INT store arm). W1 closes (soft1 green). Residual: MASK1 armed + machine-wide line (sio TX-IE store or clock) → NULL call in reassert. Detector: all store-arm rows green; the catching row is the sio row (formerly timer1) — if the detector ships without it, this edit passes the battery while the guest-reachable death remains. So: rows soft1/mask1 stay green; the row that MUST exist to catch it is the synchronous sio-line row. The brief's worry about timer1 being unreachable is moot — sio TX_IE is synchronous.
+
+  Wait — actually also simpler for Q2: the smallest edit `if (d->cpu_irq[cpu].interrupt_assert != NULL)` in reassert assert-branch only (M_NULLCHECK) closes W1 but dies on the DISARM path (MASK1=0 after pending, irqActive[1]=1 → DEASSERT NULL). Row that stays green: all planned rows (none disarms after arming an absent slot) — need arm→disarm row. That's a second named gap. Good, I have both.
+
+  Q3: option set completeness — is there an unnamed member? The set: (a) bound loop, (b) decline store, (c) noop connect, (d) a+b, (e) fault. Unnamed: (f) bound at the CALLERS/arms only (placement variant of (a)) — strictly weaker, shown by the sio corollary; (g) NULL-check in the macro (global change to interrupt.h — affects every device; rejected as scope creep / changes tree-wide semantics); (h) guard inside reassert on `d->cpu_irq[cpu].interrupt_assert != NULL` — the connected-slot bound, which the adjudication folded into (a)'s parenthetical. I'll note (g) as the unnamed member and reject it (tree-wide macro change for a board-local defect; also changes INTERRUPT_ASSERT semantics for all devices, unaudited). Choice: (a) with stored ncpus, safety leaning on the verified ncpus≤4 caps (machine_luna88k.c:103 fatal; dev_luna88k.c:1036 exit) — recommend a MIN(ncpus, MAX_CPUS) at capture or a comment naming the cap as load-bearing, since the loop bound's safety is one deleted printf away from an OOB walk if the cap ever moves.
+
+  Is (a) alone enough given future edits? A future walk over MAX_CPUS in this file would reopen the class — that's what the PRETABLE mutants + the detector are for; (a) is the minimal guest-visible-delta fix. (b) alone: closes the witness too (enable[absent] stays 0 → status&enable=0 → no assert; BUT software_interrupt_status[absent] can be set — status |= bit26 — enable is 0 → no fire. Actually (b) alone is ALSO sound for the death... except readback change (rejected on the es438 rows) and it leaves the register file claiming-absent. The ruling's rejection of (b) for this round is grounded in a checkable delta: D4 readback expectation 0x00840001 (mask 0x00ffffff) would become 0 → red; E2's latch-text check also depends on the store landing. I verified D4's expectation at probe line 241. ✓ So the ruling's "(b) reddens D4/E2" is TRUE and checkable.
+
+  OpenBSD probe-by-readback concern (Q3): can't settle from disk (2.2 has no luna88k; only gcc target fragments). State that.
+
+  Q5 severity: HIGH stands. Reachability = two word stores from supervisor mode on the default configuration of a shipped machine; the precedent ranking criterion (reachability by ordinary instruction) is met. No evidence to argue down: the witness is measured on the committed binary; attribution rows exclude the assert path itself (slot0 survives). One could argue-down only if MASK1+SOFT_INT1 stores required something exotic — they don't (A2/mask1 row shows MASK1 alone is a plain store, and OpenBSD's own machdep writes these registers — well, can't verify what OpenBSD writes; but reachability doesn't depend on a driver doing it, per the stated precedent). Keep HIGH.
+
+  Q6: besides the default-arm: I found the `OBIO_CLOCK0..3` arm also computes cpunr but only compares == 0 — benign. The SIO data write to dev 1 has an unlatched `fatal()` for unknown keyboard/mouse bytes (line 775) — guest-drivable? A guest word store to OBIO_SIO+8 (data channel 1) with an unrecognized byte → fatal() exits the process. Is that filed? That's a `fatal`+exit, guest-reachable with one store... wait, is it? `fatal()` in GXemul prints and exits — that's the pre-#438 class (guest store ends process via fatal). Line 775: `fatal("[ luna88k: sio write to dev 1 (keyboard/mouse): 0x%02x ]\n", ...)`. Data channel 1 is keyboard/mouse; OpenBSD writes 0x00/0x01/0x10/0x11/0x20/0x60; any other byte → process exit. Guest-reachable (the guest owns the SIO). Is it filed? grep ledger ids again — only lunaabsentcpu, lunafuse. Check OUTSTANDING_BUGS for sio. Let me grep narrowly. This is a legit Q6 finding candidate.
+
+  Also the `case 0x3ffffff0` arm writes `cpu->cd.m88k.cmmu[1]->reg[CMMU_PFSR]` — cmmu[1] set up by add_cmmu_for_cpu for cpu 0 — fine.
+
+  Let me do the final greps: OUTSTANDING_BUGS luna lines + sio filing.
+
+• Last Q6 check — whether the SIO keyboard/mouse `fatal()` (dev_luna88k.c:775, guest-reachable via data channel 1) and the `default:`-arm class are already filed:===
+"id": "gdromdefault"
+"id": "gdromdefaultstatusless"
+"id": "gdromdmadefault"
+"id": "pcc2defaultkill"
+
+
+• - No luna88k SIO/keyboard/mouse or default-arm entry in OUTSTANDING_BUGS.md.
+  - Ledger has `pcc2defaultkill` (the precedent for a default:-arm kill) but nothing for luna88k's default arm, and no luna sio id.
+
+  So Q6: two unfiled candidates:
+  1. The `default:` arm of DEVICE_ACCESS(luna88k) — `cpu->running = 0; return 0` for any unimplemented address in the window (dev_luna88k.c:914-916) — a graceful stop, guest-reachable. NOT filed (no luna* default id; precedent id `pcc2defaultkill` exists for the same class on pcc2, so the class is recognized as fileable). Note: `return 0` from a device access — what does the framework do with return 0? In GXemul, returning 0 from a device access → "memory access failed" → typically fatal or exception. Worth naming, not adjudicating here.
+  2. The SIO channel-1 data write `fatal()` at dev_luna88k.c:775 — guest store to OBIO_SIO+8 with a byte ∉ {0x00,0x01,0x10,0x11,0x20,0x60} → process exit. Unlatched, guest-reachable, same class #438 de-fatalised in the MASK arm. NOT filed. This one is arguably worse than a graceful stop (fatal+exit) and it's ONE ordinary store.
+
+  Both are Q6 material. The default-arm one was named in the brief as a candidate ("is it already filed?") — answer: NO, not under luna* ids, though the class precedent pcc2defaultkill exists.
+
+  Now let me also double check one premise I haven't explicitly: "lines 1..6 -> bits 26..31" — `1 << (interrupt->line + 25)` with line=i for i=1..6 (DEVINIT loop 1000-1014: templ.line = i) → bits 26..31 ✓ enumerated: line1→26, 2→27, 3→28, 4→29, 5→30, 6→31. Timer→line6→bit31 ✓ (connect at 1017). SIO→line5→bit30 ✓ (1030). LE→line4→bit29 (1048-1049). SCSI→line3→bit28 (1062). Lines 1,2: registered as handlers but no device connects to them in-tree (nothing calls INTERRUPT_CONNECT with `.luna88k.1` or `.2`) — harmless.
+
+  Domain enumeration for cpunr (the brief demands walking the producer's domain): the switch (dev_luna88k.c:614) matches `addr` exactly; the MASK arm is reached ONLY for addr ∈ {0x65000000, 0x65000004, 0x65000008, 0x6500000c} → cpunr ∈ {0,1,2,3}. Same for SOFT. So cpunr can never exceed 3; the arrays are [4]; stores to the arrays are in-bounds. The defect is NOT an index OOB — it's the reassert loop's MAX_CPUS walk crossing from "array in bounds" to "callback unconnected". The brief states this correctly; I enumerate it to confirm.
+
+  Also the read path arithmetic: `odata = currentMask >> 8` — for 0xfc000000 → 0x00fc0000 ✓ matches witness. `odata |= highestCurrentStatus << 29` — i ∈ 1..6 → bits 29..31 hold 1..6 (max 6 = 0b110 fits in 3 bits ✓).
+
+  And the #438 comment block at 820-845 matches the brief's quote ("STORE AS-IS", "The latch is MANDATORY as a capability bound") ✓.
+
+  One premise from section 2 I should double check: "#438's own latch in this arm says '(reported once per cpu)'" ✓ line 850.
+
+  And the `dev_mp.c` idiom — let me glance at line 96 context to confirm it's a silent break (decline). I have the anchor line only; the brief quotes the comment. Good enough — anchor confirmed at dev_mp.c:96.
+
+  `(once)` count: 33 today vs brief's "25 on 2026-08-31" — not a discrepancy that matters; the date differs. The spelling idiom exists ✓.
+
+  Now — one thing I should sanity-check for the M_STOREBUTNOREASSERT mutant channel: store lands, reassert skipped → readback shows the store (MASK1 readback = stored>>8) but pending level never updates → the sio-corollary row dies? Under that mutant: MASK1 store lands but no reassert; SOFT_INT1 store lands, no reassert → no NULL call → soft1 row GREEN (survives) — so M_STOREBUTNOREASSERT is NOT killed by soft1! What kills it: a row where a reassert-driven effect is observable... slot0 row: MASK0=0xfc000000 + SOFT_INT0=1 with reassert skipped → cpu0.irq_asserted never set → no observable in cold debugger (irq_asserted unprinted, exceptions gated)! Hmm — wait, but under this mutant the SOFT_INT0 readback still returns 1 (read path independent of reassert). So M_STOREBUTNOREASSERT might be cold-debugger-INDISTINGUISHABLE. Is it? Effect of reassert that's visible: MASK readback bits 31..29 (highestCurrentStatus from interrupt_status — set by line asserts, not by reassert). irqActive — internal. So no planned cold row sees reassert-skipping. UNLESS the accept row (free-running continue to vector) is in the battery: under M_STOREBUTNOREASSERT, no assert → cpu1 never takes the interrupt → accept row RED. So the `-n 2` free-running accept row is what kills M_STOREBUTNOREASSERT. Good — name that dependency explicitly: without the accept row, M_STOREBUTNOREASSERT is vacuous-green.
+
+  Similarly M_LATCHTHENDELIVER (decline once, deliver on second store): killed by soft1x2 (second SOFT_INT1 store) ✓ — planned row exists.
+  M_DECLINEALL: slot0 rows red ✓.
+  M_BOUND2: on 1-cpu, loop walks cpu<2 → slot1 still NULL → soft1 RED → killed by soft1 itself. The mask2/soft2/mask3/soft3 rows kill a "bound at 2 but treat 2..3 as..." hmm — actually M_BOUND2 dies on soft1; the slot2/3 rows additionally kill a fix that hardcodes `< 2` as "connected count" — same thing. Wait, re-read the brief: "mask2/soft2 and mask3/soft3 (slots 2 and 3: kills a fix that bounds at `< 2`...". A fix bounding at literal 2 walks slots 0,1 → slot1 NULL → soft1 kills it. The slot2/3 rows would catch... a fix bound at literal 3? (walks 0,1,2 → soft1/soft2 kill). Honestly soft1 alone kills any literal bound ≥ 2 on a 1-cpu machine. The slot 2/3 rows' real value: kill a fix that only patches the SOFT_INT1 label or only bounds slot 1 (M_LABEL: SOFT_INT3 arm unbounded — mask3/soft3 catches; M_LABEL as stated leaves SOFT_INT3 unbounded but reassert is shared... M_LABEL is about an arm-level fix). Yes: if the fix is arm-level (decline in arms) and forgets SOFT_INT3's... arms share one body (the four labels fall through to one arm), so "forgetting a label" can't happen textually — the mutant is artificial (someone splits the arms). Fine.
+  M_REVERT: soft1 red ✓.
+
+  Q2 precise answer: smallest edit closing W1 with residual death = NULL-check only the ASSERT call inside reassert (M_NULLCHECK as defined): closes soft1/soft1x2/sio-row-on-assert... wait — the sio row asserts line 5 → reassert → slot1: NULL check skips the assert → survives. Then disarm path: guest stores MASK1=0 → reassert → slot1: status&enable==0, irqActive[1]==1 → INTERRUPT_DEASSERT(NULL) → death. So M_NULLCHECK residual needs an arm→pend→disarm row. Row staying green under it: every planned row including soft1x2 and my sio row (all arm, none disarm-after-pending). Name: add row `mask1clear` (MASK1 bit30 armed, SIO TX-IE store to pend, MASK1=0 store) → M_NULLCHECK dies on the third store; option (a) survives (slot1 never walked, irqActive[1] stays 0).
+
+  Also note under (a): does the disarm path even matter? irqActive[absent] never set → no. ✓
+
+  I think I've verified everything I set out to. Let me also quickly confirm the brief's claim about `dev_mp.c` decline being a silent break (read 3 lines of context) and check `debugger allows pc=` assignment — the probe asrun uses `send("r4=0x...")` so GPR assignment works; pc assignment is the same mechanism (debugger_expr handles register names; the probe sets pc? It must, to run planted code — it sets pc to CODE presumably via `pc=0x10000`). Fine.
+
+  One more premise in §2: "emul.c, per the batch-7 reviewer -- CHECK" for `m->ncpus = 1` — confirmed at core/emul.c:490 ✓ (context: likely in emul_machine_setup default loop — good enough).
+
+  Also confirm rig: gate_ab.sh:211 `-N -e luna-88k -d "$LUNA_IMG" boot` — no -n → 1 cpu ✓.
+
+  Now compose the review. Structure:
+
+  VERDICT LINE FIRST: PROCEED-WITH-(a) — the batch-7 ruling stands, with one load-bearing premise made explicit (the ncpus≤4 cap is what makes a stored raw ncpus bound safe; I verified it exists twice) and two detector amendments (sio synchronous row replacing timer1; arm→pend→disarm row for M_NULLCHECK; the `-n 2` accept row must be free-running, not stepped).
+
+  Then Q1: premise audit table — all verified premises with anchors; the one premise that needs sharpening: none of the brief's factual premises is wrong; enumerate the arithmetic (bits, cpunr domain, readback shifts). The "struct machine grep" proxy is weak but the struct read confirms no machine member. `(once)` count is 33 now, not 25 (date drift, immaterial). Ledger DOES contain lunaabsentcpu (state open, opened 2026-09-05, no commits) — consistent with NOT-shipped; section 0's evidence (CHANGELOG 0, no regress probe) holds.
+
+  Q2: smallest edit with residual death = M_NULLCHECK (guard only the ASSERT) → all planned rows stay green incl. sio; the catching row is arm→pend→disarm (mask1clear). Alternative smallest edit: arm-side cpunr bound only (both store arms) → residual via line-assert path (sio TX-IE) because reassert is shared; caught only by the sio row. Name rows.
+
+  Q3: completeness — unnamed member (g): NULL-check inside INTERRUPT_ASSERT macro itself (tree-wide; reject: changes every device's semantics for a board-local defect, and silently masks genuine unconnected-callback bugs elsewhere). Choice: (a), warrant = zero guest-visible delta (D4 readback 0x00840001 and E2 latch text unchanged — verified probe line 241), matches in-file precedent RESET_CPU_ALL (ncpus-bound) and add_cmmu_for_cpu guard; (b)'s rejection verified as factual (D4 expects stored-as-is readback). (a)-alone sufficiency: the loop is the only walk site (grep: reassert's loop is the sole MAX_CPUS iteration touching cpu_irq; other MAX_CPUS uses are array decls + per-slot latch, all index-bounded by cpunr∈0..3). Future-edit hazard is detector's job (M_REVERT). The cap: machine_luna88k.c:103 fatal + dev_luna88k.c:1036 exit — option (a)'s stored bound cannot exceed MAX_CPUS; recommend capturing as `d->ncpus = devinit->machine->ncpus` right after the existing cap check, with a comment naming the cap as the bound's warrant (or MIN() defensively). (b)-alone: enable[absent] stays 0 → also closes the death, but readback delta reddens D4/E2 (verified) and misrepresents a board-fixed register file; filed question lunaabsentmaskdecl is the right parking. OpenBSD readback probe: NOT settleable from disk — `_guest-src-openbsd22` has no sys/arch/luna88k (port postdates 2.2; only gcc target fragments mention luna88k).
+
+  Q4: `-n 2` (main.c:423, range 1..256; machine allows ≤4; DEVINIT connects slot 1 at ncpus>=2). Cold-debugger observation of DELIVERY: irq_asserted is set (cpu_m88k.c:415) but printed nowhere (dumpinfo prints name/endian only; debugger_cmd_machine prints no irq state); exception entry is gated OFF while single-stepping (cpu_dyntrans.c:206 "Do not cause interrupts while single-stepping"); MASK1 readback bits 31..29 come from machine-wide interrupt_status only (read path never ORs software_interrupt_status) and are connection-independent → proves pending, not delivery. So a STEPPED row cannot observe delivery; the free-running shape: focus 1, clear PSR.IND on cpu 1 (reset PSR = M88K_PSR_MODE|M88K_PSR_IND, cpu_m88k.c:181 — plant stcr via debugger or... need to be careful: simplest is plant a stcr on cpu1 and step it — stepping executes instructions fine, just no interrupt exceptions), breakpoint at cpu1's vector (VBR+8*1 = VBR+8, cpu_m88k.c:863; VBR resets to 0), continue; break-hit on cpu1 with slot0 masked off = delivered IPI. Also name: this accept row is what kills M_STOREBUTNOREASSERT (no stepped row can).
+
+  Q5: HIGH stands — reachability is two supervisor-mode word stores on the default configuration of the machine the project boots (rig cmd verified: gate_ab.sh:211, no -n → ncpus=1); witness measured on the committed binary with attribution controls (slot0 survives same sequence). Ranked on reachability per the cited precedent; no checkable reason to argue down.
+
+  Q6: two unfiled: (i) the default: arm (dev_luna88k.c:901-916, `cpu->running = 0; return 0` on any unimplemented address) — NOT filed (ledger luna ids: lunaabsentcpu open, lunafuse held only; class precedent pcc2defaultkill exists so the class is fileable); (ii) NEW finding: SIO channel-1 data-write `fatal()` at dev_luna88k.c:775 — a single guest byte store to OBIO_SIO+8 with an unrecognized value exits the process; unlatched; not in ledger/OUTSTANDING_BUGS under luna/sio. Also note: `(once)` count drift 25→33 (immaterial); lines 1-2 of the six registered lines have no in-tree asserter (harmless).
+
+  Detector-plan notes (§5): timer1 → replace with the synchronous SIO row (verified path: WR1.TX_IE set → sio_tx_pending=1 at 729-730 → reassert_serial_interrupt at 732 → INTERRUPT_ASSERT(sio_irq) → line5→bit30 → reassert — all inside the store, no host timer). Row set additions: mask1clear (arm→pend→disarm) for M_NULLCHECK; and the explicit statement that M_STOREBUTNOREASSERT is stepped-indistinguishable — only the free-running accept row catches it. Channel-cannot-vary rows: mask2/soft2/mask3/soft3 add no mutant coverage beyond soft1 on a 1-cpu machine for loop-bound mutants (soft1 kills any literal bound ≥2); their value is only against arm-splitting mutants (M_LABEL) — keep, but label them as such.
+
+  Wait, one correction: mask2/soft2 — under arm-level fix that bounds only slot 1? There's no plausible textual mutant that bounds only slot 1 in the shared arm... M_LABEL says "SOFT_INT3 arm left unbounded" — requires splitting the shared arm, artificial but that's what mutants are. OK.
+
+  Also should I double-check the `return 0` semantics of the default arm? "cpu->running = 0; return 0" — returning 0 from DEVICE_ACCESS. In GXemul's memory subsystem, a device access returning 0 triggers... `fatal()` in memory_rw? Actually it causes a "no device" style error → typically the emulation aborts with a message. The brief calls it a graceful stop ("Stop the emulation immediately"). Whether return-0 is graceful or fatal — the comment says stop. Fine, out of scope; I noted it's unfiled.
+
+  Length: this is a panel review; be thorough but organized. VERDICT first. Cite by anchor. Use the vocabulary requested. Write in English (the brief is English).
+
+  One more verification I should do before writing — the claim in §0's corollary that I now can strengthen: after ONE arming store (D4's 0x84000100 = bits 31,26,8 set), the NEXT device interrupt kills on a running guest. With bit 31 set in enable[1]: any line-6 (timer) assert → slot1 fires. ✓ logic checks out against the code. And in a cold debugger the sio row makes the equivalent synchronous with bit 30. Note D4's value has bit 31 set but NOT bit 30 — so for the es438 session specifically, sio wouldn't fire it; the clock would. My new row arms bit 30 explicitly. Fine.
+
+  Also enumerate 0x84000100 bits explicitly in the review: 0x84000100 = 0x80000000 | 0x04000000 | 0x00000100 → bits 31, 26, 8. ✓ (brief's corrected claim: bit 26 SET ✓).
+
+  And the low-bits latch for D4: 0x84000100 & 0x03ffffff = 0x00000100 ≠ 0 → latch fires (fatal, once per cpu) — that's the es438 behavior; and store-as-is → enable[1]=0x84000100. ✓ consistent.
+
+  Write the final answer now. Keep it structured: VERDICT, then premise-audit (Q1), Q2..Q6, detector amendments, anything-else. Cite anchors as `grep -nF`-style or file:line? The brief says "Cite by grep anchor (grep -nF '<anchor>' <file>), not by line number." I'll cite anchors with file names (line numbers as convenience secondary since anchors are primary). Actually it says cite by grep anchor NOT line number — I'll give the anchor string + file, which I've verified.
+
+• All premises I set out to check are now settled against the tree. Writing the review.
+
+  ---
+
+  **VERDICT: PROCEED-WITH-(a)** — the batch-7 ruling survives a premise audit. Every load-bearing premise in the brief re-derives from `GXEMUL-SEC/src/` @ `83df95c`; none is wrong. Two amendments, both detector-side, not fix-side: **(1)** the `timer1` row is not needed — there is a *synchronous* guest-store path to a machine-wide line (SIO TX-IE), so the shared-line corollary is cold-debugger-reachable after all; **(2)** two mutant-coverage gaps need rows (arm→pend→disarm kills M_NULLCHECK; only a *free-running* `-n 2` accept row kills M_STOREBUTNOREASSERT, because single-stepping gates off interrupt delivery). Option (a)'s safety rests on a premise the brief did not cite and I verified: **the ncpus ≤ 4 cap exists twice** (fatal in `MACHINE_SETUP(luna88k)`, printf+exit in `DEVINIT(luna88k)`) — that cap is what makes a stored raw `d->ncpus` bound safe; make it explicit in the edit.
+
+  ---
+
+  ## Q1 — PREMISE AUDIT (all checked against `GXEMUL-SEC/`, HEAD `83df95c`)
+
+  **Not-shipped claim: TRUE, with one clarification.** `git log -1 -- src/devices/dev_luna88k.c` → `cf4b083` (#438). `grep -c lunaabsentcpu CHANGELOG.md` → 0. `regress/luna*` → only `luna_intmask_probe.py`. Clarification: `tools/pipeline/ledger.json` *does* already contain `"id": "lunaabsentcpu"` — but with `"state": "open"`, `"opened": "2026-09-05"`, `"commits": ""`. That is this round's own filing, not a ship; section 0's conclusion stands.
+
+  **The loop: TRUE verbatim.** `grep -nF 'static void reassert_interrupts' src/devices/dev_luna88k.c` → walks `for (cpu = 0; cpu < MAX_CPUS; cpu++)`, `MAX_CPUS 4` (same file, `#define MAX_CPUS`). `interrupt_status` is a single machine-wide field of `struct luna88k_data`; `software_interrupt_status[]`/`interrupt_enable[]`/`irqActive[]`/`cpu_irq[]` are per-slot `[MAX_CPUS]`. The per-slot body is exactly as inlined, including `status |= (1 << 26)` for a pending soft interrupt.
+
+  **The macro: TRUE.** `grep -nF 'INTERRUPT_ASSERT(istruct)' src/include/interrupt.h` → `#define INTERRUPT_ASSERT(istruct) (istruct).interrupt_assert(&(istruct))` — raw call, no NULL check; same for DEASSERT.
+
+  **The connection: TRUE.** `DEVINIT(luna88k)` memsets `d`, connects `devinit->interrupt_path` → `cpu_irq[0]`, then slots 1/2/3 under `if (devinit->machine->ncpus >= 2/3/4)` (anchor `HACK for trying out CPUs 1, 2 and 3`). On a one-cpu machine `cpu_irq[1..3]` are all-NULL from the memset. **Nothing else in the tree connects them**: `grep -rn 'cpu_irq\[' src/` outside dev_luna88k.c hits only `dev_bebox.c`'s own private struct. The machine description contributes nothing — `machine_luna88k.c` does `device_add(machine, "luna88k")` with no irq plumbing of its own.
+
+  **Default cpu count: TRUE.** `grep -nF 'm->ncpus = 1' src/core/emul.c` → hit. Rig runs the default: `grep -nF 'luna-88k' regress/gate_ab.sh` → `-N -e luna-88k -d "$LUNA_IMG" boot`, no `-n`.
+
+  **The store arms: TRUE verbatim.** Anchor `case INT_ST_MASK0:` — the #438 low-bits latch (fatal first time per slot, "(reported once per cpu)", `debug()` after), then unconditional `d->interrupt_enable[cpunr] = idata; reassert_interrupts(d);`. Read path: `odata = currentMask >> 8; odata |= (highestCurrentStatus << 29)` scanning bits 26..31 of `interrupt_status & currentMask`. Anchor `case SOFT_INT0:` — as inlined; neither arm compares cpunr with ncpus. Anchor `case RESET_CPU_ALL:` *is* ncpus-bounded — the in-file precedent for (a)'s shape. `add_cmmu_for_cpu` guards `if (cpunr >= devinit->machine->ncpus) return;` — confirmed.
+
+  **Arithmetic, enumerated, not reasoned:**
+
+  - *cpunr domain*: `DEVICE_ACCESS(luna88k)` computes `addr = relative_addr + LUNA88K_REGISTERS_BASE` and switches on exact `addr`. The MASK arm is reachable only from `addr ∈ {0x65000000, 04, 08, 0c}` → `cpunr = (addr − INT_ST_MASK0)/4 ∈ {0,1,2,3}`. Same for SOFT (`0x69000000..0c`). **cpunr can never exceed 3; the per-slot arrays are never indexed out of bounds. The defect is not an index OOB — it is the loop bound (MAX_CPUS) exceeding the connected-slot count.** The brief states this correctly; I enumerate it because it is the premise that decides between (a) and an arm-side guard.
+  - *Line→bit map*: DEVINIT registers six handlers `templ.line = i` for `i = 1..6`, and `luna88k_interrupt_assert` does `interrupt_status |= (1 << (line + 25))` → lines 1..6 → bits 26,27,28,29,30,31. Timer connects line 6 → bit 31 ✓; SIO line 5 → bit 30 ✓; le line 4 → bit 29; mb89352 line 3 → bit 28. Lines 1 and 2 have registered handlers but no in-tree asserter (harmless).
+  - *D4 value*: `0x84000100 = 0x80000000 | 0x04000000 | 0x00000100` → bits 31, 26, 8 — bit 26 SET, as the corrected draft says. So after D4, slot 1 is armed on bits 31+26, and `grep -c SOFT_INT regress/luna_intmask_probe.py` → **0**: the probe never stores SOFT_INT1 and a cold debugger never ticks the clock. The "could not see it" explanation is confirmed.
+  - *Readback shifts*: `0xfc000000 >> 8 = 0x00fc0000` ✓ (witness devsig/mask1 rows); `0x84000100 >> 8 = 0x00840001` ✓ (es438 D4 expectation, probe line with `check("D4 readback ... 0x00840001, 0x00ffffff")`).
+
+  **The witness: matches the committed artifacts.** `regress/artifacts/lunaabsentcpu/witness_head_20260905_2130.out` shows exactly the five rows in the brief: live/devsig/slot0/mask1 OK, soft1 `RESULT=HALT HOST DIED (signal 11)`, `LUNAABS_RESULT=4/5`. The as-run probe header documents `-V -e luna-88k -d R:img boot`, planted `st`/`ld` words disassembled before stepping, and the attribution design (slot 0 survives the identical sequence — so the death is the absent slot, not the assert path).
+
+  **Struct/machine-pointer premise: TRUE by direct read; the proposed grep is a weak proxy.** `struct luna88k_data` (anchor `struct luna88k_data {`) has no `machine` member. (`grep -n 'struct machine'` would also match *usages* like `cpu->machine->ncpus` in `RESET_CPU_ALL` — the premise is about the struct, and the struct is clean.)
+
+  **Minor drifts, immaterial:** the `(once)` latch spelling now greps 33 times in `src/devices/*.c`, not 25 (the brief's count is dated 2026-08-31); the idiom and spelling are as claimed. `grep -rn 'noop.*interrupt\|dummy.*interrupt' src/` → empty ✓ (option (c) really would fabricate plumbing).
+
+  ## Q2 — SMALLEST EDIT THAT CLOSES W1 BUT LEAVES A DEATH
+
+  Two candidates, each exposing a different detector gap:
+
+  1. **M_NULLCHECK as defined** — guard only the assert (`if (!d->irqActive[cpu] && d->cpu_irq[cpu].interrupt_assert != NULL) INTERRUPT_ASSERT(...)`), still setting `irqActive[cpu] = 1`. Closes W1, soft1x2, *and* my SIO row (all are assert-path). Residual death: guest stores MASK1=0 while the soft bit is still pending → the else-branch finds `irqActive[1] == 1` → `INTERRUPT_DEASSERT(d->cpu_irq[1])` → NULL call. **Every row in the plan stays green** — none disarms after pending an absent slot. Required row: `mask1clear` = arm MASK1 (bit 30), pend via the SIO TX-IE store (or SOFT_INT1), then store MASK1=0. Under (a) this survives (slot 1 never walked, `irqActive[1]` never set); under M_NULLCHECK it dies on the third store.
+  2. **Arm-side bound only** (`if (cpunr < ncpus)` in the two store arms, reassert untouched). Closes W1. Residual death: reassert is also called from `luna88k_interrupt_assert/deassert` — the six shared lines bypass the store arms entirely, so MASK1 armed (the store landed before the guard? no — the guard declines the *store*... the arming store itself must land, so this mutant only works as "bound the reassert call in the arms", i.e. store but skip reassert for absent slots) — then MASK1 is armed and the *next SIO/timer line assert* walks into slot 1's NULL. **Row that stays green: every store-arm row** (soft1 included, if the mutant also skips reassert after SOFT_INT1). The catching row is the synchronous SIO row (below) — which is why that row is mandatory, not optional.
+
+  Row I expect to stay green under these insufficient edits: all of live/devsig/slot0/mask1/soft1/soft1x2 — that is exactly the problem; the two named additions are what close the gap.
+
+  ## Q3 — OPTION-SET COMPLETENESS AND THE CHOICE
+
+  **Unnamed member (g): guard inside the `INTERRUPT_ASSERT` macro itself** (`interrupt.h`). Rejected: it changes call semantics for *every* device in the tree to fix a board-local defect, and it would silently mask genuinely-unconnected callbacks everywhere else — the opposite of a capability bound. The brief's set is otherwise complete; (c) is correctly dismissed (`grep` confirms no no-op-interrupt helper exists), (e) correctly rejected by construction (the four MASK words are one case arm at fixed board addresses — `switch (addr)` on absolute values, population-independent).
+
+  **(a) is the right member, and its warrant is checkable, not rhetorical:**
+
+  - *Zero guest-visible delta.* Under (a), stores to absent slots still land and read back exactly as today — I verified es438's D4 expectation is `0x00840001` masked `0x00ffffff` (stored-as-is `>> 8`), and E2's latch text depends on the store landing. Under (b) both redden: a declined store reads back 0. The batch-7 claim "(b) reddens D4/E2" is **factually true**, verified against `regress/luna_intmask_probe.py`.
+  - *In-file precedent.* `RESET_CPU_ALL` bounds by `cpu->machine->ncpus`; `add_cmmu_for_cpu` declines `cpunr >= ncpus`; the cross-file house idiom for a guest-supplied cpu index is `dev_mp.c` (`which_cpu >= cpu->machine->ncpus` → silent decline) — but note dev_mp's index is guest-*supplied*, whereas here cpunr is address-derived and always ∈ {0..3}; the defect is the *loop*, so the fix belongs in the loop. (a) matches the defect's actual shape.
+  - *The one premise the ruling left implicit*: a stored raw `d->ncpus` is a safe loop bound **only because ncpus ≤ 4 is enforced before any walk** — `machine_luna88k.c` (`fatal("More than 4 CPUs is not supported for LUNA 88K.")`, anchor `machine->ncpus > 4`) and `DEVINIT(luna88k)` (`if (devinit->machine->ncpus > 4) { printf(...); exit(1); }`). `-n` itself parses up to 256 (`src/core/main.c`, `case 'n':` → `parse_int_option('n', optarg, 1, 256)`), so without those caps, option (a) as written would trade a NULL call for an OOB walk past `cpu_irq[4]` on `-n 5`. The caps exist and hold; the edit should capture `d->ncpus = devinit->machine->ncpus` *next to* the existing DEVINIT cap with a one-line comment naming the cap as the bound's warrant (or clamp `MIN(ncpus, MAX_CPUS)` defensively — one deleted printf should not be able to reopen an OOB).
+
+  **Is (a) alone enough?** For today's tree, yes — `grep -n 'cpu_irq\|interrupt_enable\|software_interrupt_status\|irqActive' src/devices/dev_luna88k.c` shows reassert's loop is the *only* MAX_CPUS walk touching those arrays; every other use is a declaration or indexed by cpunr ∈ {0..3}. A future edit adding another MAX_CPUS walk is a real hazard class, but that is what M_REVERT in the battery is for — defense against future edits is the detector's job, not a reason to pay (b)'s guest-visible delta now.
+
+  **Is (b) alone enough?** Mechanically yes (enable[absent] stays 0 → `status & enable` never fires for absent slots even though the loop still walks them) — but it changes readback (D4/E2 red, verified) and makes the register file claim four board-fixed words don't hold state. Parking it as `lunaabsentmaskdecl` is correct.
+
+  **OpenBSD's MASK1..3 behavior: NOT settleable from disk.** `_guest-src-openbsd22/sys/arch/` contains alpha…vax — **no luna88k** (the port postdates 2.2; the only `luna88k` hits in the tree are gcc target fragments, `gnu/usr.bin/gcc/config/m88k/luna.h`). So whether a real kernel probes MASK1..3 by readback is unknown; what *is* checkable is that the project's own rig (`regress/gate_ab.sh`: `-N -e luna-88k ... boot`, no `-n` → one cpu) boots today with stores landing as-is, and (a) preserves that bit-for-bit while (b) does not. That is the transferred in-tree warrant, and it is sufficient for this round.
+
+  ## Q4 — THE ACCEPT SIDE
+
+  **Configuration: `-n 2`.** Verified end-to-end: `main.c` `case 'n'` accepts 1..256; luna-88k permits ≤ 4 (both caps above); `DEVINIT` connects `machine[0].cpu[1]` at `ncpus >= 2`. Whether the rig *image* boots under `-n 2` is unneeded — the accept row runs in the cold debugger.
+
+  **What a cold-debugger row can observe of a delivery — less than the detector plan hopes, and one of its premises is wrong:**
+
+  - Delivery sets `cpu->cd.m88k.irq_asserted = 1` (`grep -nF 'm88k_irq_interrupt_assert' src/cpus/cpu_m88k.c`). **No debugger command prints it**: `m88k_cpu_dumpinfo` prints name/endian only; `debugger_cmd_machine` has no irq output. Channel "irq_asserted" is *not* observable with stock commands.
+  - Vector entry **cannot be observed while single-stepping**: `src/cpus/cpu_dyntrans.c`, anchor `Do not cause interrupts while single-stepping` — the m88k exception (`irq_asserted && !(PSR & M88K_PSR_IND)` → `m88k_exception(cpu, M88K_EXCEPTION_INTERRUPT, 0)`) is inside `if (!single_step)`. The witness works *despite* this because W1's death is synchronous inside the stepped store, not via exception delivery.
+  - MASK1 readback bits 31..29 **cannot prove delivery**: the read path uses machine-wide `interrupt_status & currentMask` and never ORs `software_interrupt_status[cpunr]` — the soft bit is invisible there, and the line bits are connection-independent.
+
+  So the accept row needs the **free-running shape**: `focus 1` (the debugger's cpu switch, `debugger_cmds.c` anchor `debugger_cmd_focus`), get cpu 1 to clear PSR.IND (reset PSR is `M88K_PSR_MODE | M88K_PSR_IND`, `cpu_m88k.c` — plant an `stcr` on cpu 1 and step it; stepping executes instructions, it just suppresses exceptions), arm MASK1 with bit 26 only (`0x04000000` — avoids clock interference during the free run), store SOFT_INT1 from cpu 0, breakpoint at cpu 1's vector (`pc = cr[VBR] + 8 * vector`, vector `M88K_EXCEPTION_INTERRUPT = 1` → VBR+8, VBR reset 0), `continue`. Break-hit *on cpu 1* with slot 0 masked off attributes the delivery to the SOFT_INT1 route. This is the measuring seat's build; I name it because the plan's stepped channel does not exist.
+
+  **Load-bearing consequence for §5**: this free-running accept row is the *only* planned row that kills **M_STOREBUTNOREASSERT**. In a stepped cold debugger, that mutant (store lands, reassert skipped) is observationally identical to a correct fix — SOFT_INT readback still returns the stored word, no assert is ever visible. Without the accept row, that mutant ships.
+
+  ## Q5 — SEVERITY: HIGH STANDS
+
+  Reachability is two ordinary supervisor-mode word stores on the *default* configuration of the machine the project boots (rig command verified, no `-n`). The witness is measured on a committed unmodified binary with attribution controls (C1 RAM liveness, C2 device signature, A1 the identical sequence surviving on connected slot 0, A2 the arming store alone surviving). Ranked on ordinary-instruction reachability per the `pcc2defaultkill`/`m88kexcdeliver` precedent, nothing checkable argues it down. The corollary strengthens it: on a *running* guest, a single arming store (es438's own D4 value `0x84000100` sets bit 31) makes the next clock tick fatal — the SOFT_INT1 route is merely the deterministic form.
+
+  ## Q6 — OTHER FINDINGS
+
+  1. **The `default:` arm is NOT filed.** Ledger `luna*` ids are exactly `lunaabsentcpu` (open) and `lunafuse` (held); no OUTSTANDING_BUGS.md entry matches. The class precedent `pcc2defaultkill` *is* in the ledger, so the class is recognized as fileable — this instance (dev_luna88k.c, anchor `// Stop the emulation immediately.`: `cpu->running = 0; return 0` for any unimplemented address in the window) deserves its own row, as the brief suspected.
+  2. **NEW, unfiled: a one-store guest kill in the SIO arm.** `dev_luna88k.c`, anchor `sio write to dev 1 (keyboard/mouse)` — a guest data write to OBIO_SIO channel 1 (`0x51000008`) with any byte outside {0x00, 0x01, 0x10, 0x11, 0x20, 0x60} hits an **unlatched `fatal()`** and ends the process. One ordinary byte store, no arming needed — the same class #438 de-fatalised in the MASK arm, one switch away. Not in the ledger under any sio/luna id. Recommend filing.
+  3. `OBIO_CLOCK0..3` also derives `cpunr = (addr - OBIO_CLOCK0)/4` but only compares `== 0` — benign, no per-slot indexing.
+
+  ---
+
+  **Summary for the chair:** ruling (a) confirmed with the cap premise made explicit (capture `d->ncpus` beside the DEVINIT `ncpus > 4` check, comment naming it, or `MIN()`); detector needs three amendments — replace `timer1` with the synchronous SIO TX-IE row (verified path: WR1.TX_IE store → `sio_tx_pending = 1` → `reassert_serial_interrupt` → `INTERRUPT_ASSERT(d->sio_irq)` → line 5 → bit 30 → `reassert_interrupts`, all inside the stepped store), add `mask1clear` (arm→pend→disarm) for M_NULLCHECK, and build the `-n 2` accept row free-running (`focus 1` + PSR.IND clear + breakpoint at VBR+8 + `continue`) because stepped delivery is unobservable by construction. File the SIO channel-1 `fatal()` and the `default:`-arm row.
+
+To resume this session: kimi -r session_b5aa6794-5976-4dcd-9a15-da2f1c13f9f9

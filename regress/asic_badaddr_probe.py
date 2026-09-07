@@ -88,7 +88,11 @@ out.  Each is a limit a records panel would otherwise find. ***
        clause denied it.  It is anchored to a cell by a SIDE EFFECT (the
        tick zeroes the latch), which makes it absolute with respect to
        the DECODE -- but `mask_9[3]` lands on `asserted_13` at byte 48
-       purely by ADJACENCY (verified by offsetof further down this file),
+       purely by ADJACENCY (offsets MEASURED by compiling the declaration on
+       2026-08-25 and recorded in the CHANGELOG #463 block -- NO code in this
+       file verifies them, and this line said `verified by offsetof further down
+       this file' until the retrospective re-check of 2026-09-06 grepped for one
+       and found only its own two claims.  A pin is filed: asiclayoutpin),
        so a struct REORDER unpins it exactly as it unpins `crossarr`.
        Anchoring buys decode-absoluteness, not layout-independence.
   (iii) ARRAY GEOMETRY IS OUT OF CONTRACT.  `uint32_t mask_13[3]` ->
@@ -447,7 +451,9 @@ row("alias2", printed(t, "r2") if alive else "died", "0xa1",
 #
 #  It is not a cosmetic escape.  Under +1 every `+0x?8` register moves from
 #  r=2 to r=3 -- one past a [3] array -- and mask_9[3] IS `int asserted_13`
-#  (verified by offsetof: mask_9 at byte 36, asserted_13 at byte 48).  So a
+#  (offsets MEASURED 2026-08-25 by compiling the declaration, CHANGELOG #463 block:
+#  mask_9 at byte 36, asserted_13 at byte 48.  Nothing in THIS file checks them --
+#  see the note at the top; corrected 2026-09-06).  So a
 #  single aligned 32-bit guest store to +0x38, a documented register, writes
 #  the interrupt-assertion latch, and the write arm's own tick then issues a
 #  spurious INTERRUPT_DEASSERT and drops a legitimately pending IRQ13.

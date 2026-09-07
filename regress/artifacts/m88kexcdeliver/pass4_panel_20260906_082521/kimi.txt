@@ -1,0 +1,1330 @@
+kimi version 0.36.0
+• This is a complex technical review task. I'm being asked to act as one of the "two Anthropic Agent seats" answering in pass 4 of an adjudication chain for an MC88100 exception-delivery detector in GXemul.
+
+  The packet is deliberately self-contained: "every fact is inlined; name any premise you cannot settle rather than guessing." The task is to review ONLY the repair diff (probe v3 → v4), rule on whether any floor breach survives in the v4 detector, rule on the two repairs (UPHOLD/OVERTURN/REFINE), answer the SFD1 question, and keep it under a page.
+
+  The operational rule says: do NOT run run.sh, gate scripts, or battery. Building/running a single detector or mutant in my own temp directory is fine. But also — I actually have the tree available (GXEMUL-SEC/src/ is in my working directory). The packet says "If you cannot read files that is expected" — but I CAN read files. So I should verify the key claims by reading the actual files rather than just trusting the inline packet. That would make my review much stronger.
+
+  Let me think about what to verify:
+
+  1. The repair diff in `GXEMUL-SEC/regress/m88k_exc_probe.py` — check the indclr row, EXPECT_VECTOR logic, the halted predicate, sfu1h stage1 check.
+
+  2. The SFD1 question: every pre-fault PSR has SFD1 clear, so a dropped `| M88K_PSR_SFD1` in the exception-path PSR write would give 0x80000003 (wait, let me compute). Actually the claim: expected post-exception PSR is 0x8000000b = 1000...1011 binary: bit 31 (0x80000000 = MODE... actually let me decode).
+
+  M88K PSR bits (from MC88100 manual / gxemul source):
+  - 0x80000000 = MODE (bit 31): supervisor mode
+  - 0x40000000 = ... actually let me recall from gxemul's m88k_cpu.h or similar:
+    - M88K_PSR_MODE 0x80000000
+    - M88K_PSR_IND 0x40000000? Hmm, wait. Actually in the real MC88100:
+      - bit 31: MODE (1 = supervisor)
+      - bit 30: IND (interrupt disable... no wait)
+      
+  Let me recall the actual 88100 PSR layout:
+  - PSR<31> MODE: 1 = supervisor, 0 = user
+  - PSR<30> IND: interrupt disable
+  - PSR<29> SFD1: SFU1 disable
+  - PSR<28:22> ... 
+  - PSR<3> MXM: misaligned access exception enable? Actually:
+  - Real layout: bit 0: (reserved?), bit 1: SER?, let me think.
+
+  From the MC88100 RISC Microprocessor User's Manual, PSR bits:
+  - Bit 31: MODE — supervisor/user
+  - Bit 30: IND — interrupt disable
+  - Bit 29: SFD1 — SFU 1 disable
+  - Bit 28: (0)
+  - Bit 27: SFRZ — scoreboard freeze
+  - ...
+  - Bit 3: MXM — misaligned exception enable? Hmm, actually MXM is bit 3? Let me check gxemul source values:
+
+  In gxemul `src/include/m88k_psr.h` or in cpu_m88k.c:
+  ```
+  #define M88K_PSR_MODE 0x80000000
+  #define M88K_PSR_IND 0x40000000
+  #define M88K_PSR_SFD1 0x20000000
+  #define M88K_PSR_SFRZ 0x08000000
+  #define M88K_PSR_EP ... 
+  #define M88K_PSR_BIG_ENDIAN 0x00010000? 
+  #define M88K_PSR_CARRY 0x20000000? 
+  ```
+
+  Hmm, no. Let me be careful. Actually from OpenBSD m88k/psl.h:
+  ```
+  #define PSR_MODE (1U << 31)     /* supervisor mode */
+  #define PSR_IND  (1U << 30)     /* interrupt disable */
+  #define PSR_SFD1 (1U << 29)     /* SFU1 disable */
+  #define PSR_SFRZ (1U << 27)     /* freeze mode? no... */
+  ```
+  Hmm wait, OpenBSD:
+  ```
+  #define PSR_MODE        0x80000000      /* supervisor mode */
+  #define PSR_IND         0x40000000      /* interrupt disable */
+  #define PSR_SFD1        0x20000000      /* SFU1 disable */
+  #define PSR_SFD2        0x10000000      /* SFU2 disable */
+  #define PSR_SFRZ        0x08000000      /* scoreboard freeze */
+  #define PSR_EP          0x04000000      /* exception pending */
+  ...
+  #define PSR_BIG_ENDIAN  0x00010000
+  #define PSR_SER         0x00000008? 
+  #define PSR_MXM         0x00000004      /* misaligned exception enable */
+  #define PSR_C           0x00000002? 
+  ```
+
+  Hmm. Actually the expected PSR 0x8000000b = 0x80000000 | 0x8 | 0x2 | 0x1 = MODE + bits 3,1,0. In OpenBSD: 
+  ```
+  #define PSR_MXM  0x00000004? 
+  ```
+  Hmm, 0xb = 1011. Let me check OpenBSD luna88k psl.h:
+
+  ```
+  #define PSR_MODE        0x80000000      /* supervisor mode */
+  #define PSR_IND         0x40000000      /* interrupt disable */
+  #define PSR_SFD1        0x20000000      /* SFU1 disable */
+  #define PSR_SFD2        0x10000000      /* SFU2 disable */
+  #define PSR_SFRZ        0x08000000      /* scoreboard freeze */
+  #define PSR_EP          0x04000000      /* exception pending */
+  #define PSR_SER         0x00010000      /* serial endian mode */
+  #define PSR_BO          0x00000010?     /* byte ordering? */
+  #define PSR_MXM         0x00000004      /* misaligned access enable */
+  #define PSR_C           0x00000002?     
+  #define PSR_SIGN?       
+  ```
+
+  Actually I recall OpenBSD:
+  ```
+  #define PSR_MXM 0x00000004 /* misaligned enable */
+  #define PSR_C   0x20000000 /* carry */
+  ```
+  No wait, on 88100, carry is bit 29? Hmm. Let me actually check the MC88100 manual layout properly:
+
+  MC88100 PSR (Processor Status Register):
+  - 31: MODE (0 = user, 1 = supervisor)
+  - 30: IND (interrupt disable)
+  - 29: SFD1 (SFU1 disable)
+  - 28: SFD2 (SFU2 disable)
+  - 27: SFRZ (scoreboard freeze)
+  - 26: EP (exception pending)
+  - 25: (0)
+  - 24: (0)
+  - 23-22: (0)
+  - 21: (0)
+  - 20: (0)
+  - ...
+  - 16: SER (serial mode endianness? no — big endian select? Hmm)
+
+  Actually: bit 16 is "BIG ENDIAN" (1 = big endian). 
+  - 15-4: (0)
+  - 3: MXM (misaligned access exception enable)
+  - 2: C (carry)
+  - 1: (0)? 
+  - 0: (0)?
+
+  Hmm, but 0x8000000b has bits 3,1,0 set plus MODE. If bit 3 = MXM, bit 2 = C... then 0xb = MXM + C + bit0. Hmm, 0xb = 8+2+1: bits 3,1,0. Not bit 2.
+
+  Hmm wait: 0xb = 1011 binary = bit 3 (8) + bit 1 (2) + bit 0 (1). So bits 3, 1, 0.
+
+  Hmm, in gxemul's m88k emulation... let me recall from gxemul source (src/cpus/cpu_m88k.c / m88k_cpu.h in gxemul legacy):
+
+  Actually gxemul's m88k: In gxemul `src/include/m88k_cpu.h`? The legacy gxemul has:
+
+  ```
+  #define M88K_PSR_MODE         0x80000000
+  #define M88K_PSR_IND          0x40000000
+  #define M88K_PSR_SFD1         0x20000000
+  #define M88K_PSR_SFD2         0x10000000
+  #define M88K_PSR_SFRZ         0x08000000
+  #define M88K_PSR_EP           0x04000000
+  #define M88K_PSR_BIG_ENDIAN   0x00010000? 
+  #define M88K_PSR_MXM          0x00000004? 
+  #define M88K_PSR_CARRY        0x00000002? 
+  ```
+
+  Hmm, but the packet says PSR values like 0x80000002 = MODE + 0x2. And they say "every row's pre-fault PSR (0x80000002 / 0x00000002 / 0x90000002) already had IND set" — wait, 0x80000002 doesn't have IND (0x40000000) set under my guessed layout. Hmm, so maybe in THIS fork the bit assignment differs, or... wait. The packet says "every row's pre-fault PSR (0x80000002 / 0x00000002 / 0x90000002) already had IND set, so dropping `| M88K_PSR_IND` from the exception-path PSR write was a 22/22 escape".
+
+  Hmm wait, that doesn't make sense if IND = 0x40000000. Unless... hmm, actually wait. Maybe they meant the pre-fault PSRs listed in the rows' init dicts? Let me re-read: "every row's pre-fault PSR (0x80000002 / 0x00000002 / 0x90000002) already had IND set, so dropping | M88K_PSR_IND from the exception-path PSR write was a 22/22 escape". 
+
+  Hmm, if IND = 0x40000000, none of those have IND set. So either the IND bit here is different, or... hmm wait. Actually maybe in gxemul the interrupt-disable bit is 0x00000002! Let me recall gxemul's actual m88k definitions.
+
+  From gxemul legacy source, `src/include/m88k_cpu.h` (I remember roughly):
+
+  ```
+  /*  PSR:  */
+  #define M88K_PSR_MODE		0x80000000
+  #define M88K_PSR_IND		0x40000000
+  ```
+
+  Hmm no. Actually I genuinely recall from OpenBSD luna88k `m88k/psl.h`:
+
+  ```
+  #define PSR_MODE        0x80000000      /* supervisor mode */
+  #define PSR_IND         0x40000000      /* interrupt disable */
+  #define PSR_SFD1        0x20000000      /* SFU1 disable */
+  #define PSR_SFD2        0x10000000      /* SFU2 disable */
+  #define PSR_SFRZ        0x08000000      /* scoreboard freeze */
+  #define PSR_EP          0x04000000      /* exception pending */
+  #define PSR_BO          0x00010000?     
+  #define PSR_SER         0x00008000?     
+  #define PSR_MXM         0x00000004      /* misaligned enable */
+  #define PSR_C           0x20000000?     
+  ```
+
+  No — carry on 88100 is bit 29? That can't be, bit 29 is SFD1. Let me think again from the actual manual:
+
+  MC88100 PSR:
+  - 31 MODE
+  - 30 IND
+  - 29 SFD1
+  - 28 SFD2
+  - 27 SFRZ
+  - 26 EP
+  - 25-22: 0
+  - 21-16: 0? 
+  - 16: BO (byte ordering) — big endian when 1
+  - 15: SER (serial mode)
+  - 14-8: 0
+  - 7-4: 0
+  - 3: MXM (misaligned exception enable)
+  - 2: C (carry)
+  - 1: 0
+  - 0: 0
+
+  So carry is 0x00000004? and MXM 0x00000008? Hmm. OpenBSD luna88k asm macros: `set PSR_C`... I recall `PSR_C 0x20000000`? No...
+
+  OK here's the thing — I don't need to settle the manual from memory. I have the actual tree on disk! The packet explicitly allows and even expects reading files: "If you cannot read files that is expected" — i.e., seats that can't read files should rely on inline facts. I CAN read files. The tree under review is `GXEMUL-SEC/src/` and the probe is `GXEMUL-SEC/regress/m88k_exc_probe.py`. 
+
+  So the right move: verify the claims against the actual files. Let me check:
+
+  1. `GXEMUL-SEC/regress/m88k_exc_probe.py` — the v4 probe with md5 0d5c0f33 (I can verify md5!).
+  2. The exception delivery path in `GXEMUL-SEC/src/cpus/cpu_m88k.c` (or wherever the m88k exception code is) — to check the PSR write `| M88K_PSR_IND`, `| M88K_PSR_SFD1`, MODE, SFRZ, EPSR, shadow updates, the fallback, vector routing, etc.
+  3. The PSR bit definitions in the include headers.
+  4. The mutants / killtable to verify the claimed results are consistent with the code.
+  5. Check the floor enumeration for gaps: rows vs lvalues.
+
+  The question to answer: "Does any floor breach survive in the v4 detector?" And: rule on the two repairs, answer the SFD1 question, name any omitted cell.
+
+  Also the operational rule says: don't run run.sh/gates/battery. Building/running a single detector or mutant in my own temp dir is fine. I might not even need to build — reading may suffice, and building gxemul could take a while but it's allowed if targeted. Given this is a review of a diff, reading is probably enough, possibly plus running the probe against existing instrument binaries if they're quick.
+
+  Let me plan the verification:
+
+  1. Find the probe: `GXEMUL-SEC/regress/m88k_exc_probe.py`. Read it fully. Verify:
+     - PSR_INDCLR = 0x80000000 used only in indclr row.
+     - indclr row: `[STCR_R5_CR1, ADD_R2_R3_R4]`, init r3=0x7fffffff, r4=1, r5=PSR_INDCLR, wants V_OVF, exc_addr 0x10008, expected PSR_INDCLR as EPSR? Wait the row tuple: `("indclr", [STCR_R5_CR1, ADD_R2_R3_R4], {"r3": 0x7fffffff, "r4": 1, "r5": PSR_INDCLR}, V_OVF, 0x10008, PSR_INDCLR, None)`. The fields are presumably (name, code, regs, vector, exc_pc, epsr_want, extra). The packet says "wants PSR 0x8000000b and EPSR 0x80000000". So the tuple's PSR_INDCLR at position 6 is the EPSR expectation (EPSR = pre-exception PSR... wait, EPSR gets the OLD PSR; the old PSR was 0x80000000 after stcr; so EPSR = 0x80000000 = PSR_INDCLR value). And the PSR expectation 0x8000000b comes from a default PSR_EXC (the packet says "indclr wants the default PSR_EXC 0x8000000b").
+     
+  2. EXPECT_VECTOR logic: `diag = re.search(r"unimplemented[^\r\n]*vector=0x([0-9a-f]+)", tr)`; `halted = diag is not None and ("machines stopped" in tr or "stopped" in tr)`. Then if halted and name in EXPECT_VECTOR and vector mismatch → halted = False. Then sfu1h requires pc == 8 * V_DIV0 (0x40 → V_DIV0 = 8, 8*8=0x40). Checks out with the packet.
+
+     Potential issues to look for:
+     - `"stopped" in tr` is a weak substring — does gxemul's output contain other "stopped" strings (e.g., "No machines stopped" or something)? Need to check what console output looks like. If the fallback diagnostic message itself contains the word "stopped" then the AND is trivially satisfied and repair 2 is void. Check the actual message text in cpu_m88k.c and the stop path (machine stop message "All machines stopped"? something like that in gxemul's emul.c: "All machines stopped"?). The regex searches `tr` which is presumably the full run transcript; "stopped" substring might appear in unrelated lines. Need to look at how `tr` is obtained and what lines it can contain.
+     - The diag regex `unimplemented[^\r\n]*vector=0x([0-9a-f]+)` — must match the actual diagnostic format in cpu_m88k.c. Check the actual fatal() string.
+     - Does `re.search` find the FIRST unimplemented diagnostic in the transcript? For sfu1h there are two divu executions: first at handler entry (vector 0x008 delivered... wait no). Let me get the sfu1h scenario right: sfu1h = SFU1 instruction inside a handler. On HEAD (unfixed), the first divu (by zero) halts on vector 0x008? Hmm, the packet says "sfu1h now reads STOP on HEAD because the first divu halts on vector 0x008, not 0x072". Wait, earlier it said "on HEAD, sfu1h 'passed' at pc=0x10004 because the FIRST divu halted". So on HEAD, the first divu (divide by zero) triggers the unimplemented fallback and halts with vector=0x008 (division-by-zero vector? Actually vector 0x008... hmm, M88K vectors: 0x002 = error, 0x008 = division by zero? Actually m88k vectors: 0 = reset, 1 = interrupt, 2 = instruction access, 3 = data access, 4 = misaligned, 5 = unimplemented opcode, 6 = privilege violation, 7 = bounds check, 8 = integer divide, 9 = integer overflow, 10 = error, 114 = SFU1 precise, 115 = SFU1 imprecise, 128.. = user traps. In "0x-prefixed" notation used here: 0x008 = vector 8 = integer divide exception. 0x072 = 0x72 = 114 = SFU1 precise exception. 0x032 = 0x32 = 50? Hmm, resid50 — vector 0x32 = 50 decimal. Hmm what's vector 50? 50 = 0x32... "resid50" — maybe a reserved/residual vector test. The fallback prints "vector=0x032". OK whatever — the point is these are the vectors the unimplemented-fallback diagnostic names.)
+
+     Wait, actually I need to be careful: in the packet's notation, vectors are sometimes given as 8*V (address) and sometimes as vector numbers. sfu1h requires pc == 8 * V_DIV0 = 0x40. So V_DIV0 = 8, and exception handler address = VBR + 8*vector. pc=0x40 means VBR=0. OK.
+
+     - Check: does the probe verify `pc` (program counter at halt) — yes for sfu1h.
+     - The "STOP" result vs "HALT": M_NOSTOP killed with "resid50 STOP, sfu1h STOP" at 21/23 — meaning with stop disabled, those two rows report STOP instead of HALT. Good.
+
+  3. The SFD1 question: The packet asks: "SFD1 (the exact compare; every pre-fault PSR has SFD1 CLEAR, so a dropped `| SFD1` gives 0x80000003 != 0x8000000b -> bad=psr on every row: is that right?)"
+
+     Let me compute: expected post-exception PSR = 0x8000000b. Pre-fault PSR values: 0x80000002, 0x00000002, 0x90000002, 0x80000000 (indclr). If SFD1 = 0x00000008 (bit 3), then the exception-path write is presumably `psr = old_psr | MODE | IND | SFD1 | SFRZ...`? Wait no — 0x8000000b from pre-fault 0x80000002: the write sets MODE (already set) and IND... if IND were 0x40000000 the result would have 0x40000000 set. So in THIS codebase the expected 0x8000000b = pre 0x80000002 | 0x9 = bits 3 and 0 newly set... wait 0x80000002 | 0x00000009 = 0x8000000b. So the exception path adds 0x9 = bits 3 and 0 to the PSR. Bit 2 (0x2) was already set in pre-fault. Hmm, and bit 1 (0x2 = bit 1) pre-set.
+
+     So what are bits 0-3 in this fork? The exception delivery sets: SFRZ? IND? SFD1? MODE=0x80000000. The packet's enumeration: "the PSR write's four bits -- SFRZ (M_NOSFRZ), IND (M_NOIND), SFD1 (the exact compare...), MODE (M_NOMODE...)". So the write ORs in MODE | SFRZ? | IND | SFD1. And 0x8000000b - MODE = 0xb = bits 0,1,3. Pre-fault 0x...02 has bit 1 set. So the write adds bits 0 and 3 (0x9), plus MODE. So which of SFRZ/IND/SFD1 map to bits 0/1/3? The write = old | MODE | X | Y where {X,Y} ⊆ {SFRZ, IND, SFD1} producing 0x9... but there are three named bits (SFRZ, IND, SFD1) and only 0x9 = two bits newly set (bit1 already set in pre-fault). Hmm: maybe pre-fault 0x80000002 already has one of them set (bit 1 = e.g. SFRZ?), and the write sets IND (bit 3?) and SFD1 (bit 0?)... 
+
+     I can't resolve this from memory — I need to read the actual header. Let me recall gxemul 0.7.0's m88k... Actually GXemul's m88k CPU support: `src/cpus/cpu_m88k.c`, `src/include/m88k_cpu.h`? In GXemul 0.7.0 (the new framework by Anders Gavare), m88k exists? GXemul 0.6.x had m88k in `src/cpus/cpu_m88k.c` with `src/include/m88k_psl.h`? Actually legacy gxemul has `src/include/m88k_cpu.h`? Hmm.
+
+     From legacy gxemul `src/include/m88k_cpu.h`? I recall in gxemul:
+     ```
+     #define M88K_PSR_MODE		0x80000000
+     #define M88K_PSR_IND		0x40000000
+     #define M88K_PSR_SFD1		0x20000000
+     #define M88K_PSR_SFD2		0x10000000
+     #define M88K_PSR_SFRZ		0x08000000
+     #define M88K_PSR_EP		0x04000000
+     #define M88K_PSR_BIG_ENDIAN	0x00010000
+     #define M88K_PSR_MXM		0x00000004
+     #define M88K_PSR_CARRY		0x20000000?
+     ```
+     No, carry... In OpenBSD luna88k: `#define PSR_C 0x20000000`? That collides with SFD1. Let me just recall OpenBSD's actual psl.h:
+
+     ```c
+     #define PSR_MODE	0x80000000	/* supervisor mode */
+     #define PSR_IND	0x40000000	/* interrupt disable */
+     #define PSR_SFD1	0x20000000	/* SFU1 disable */
+     #define PSR_SFD2	0x10000000	/* SFU2 disable */
+     #define PSR_SFRZ	0x08000000	/* scoreboard freeze */
+     #define PSR_EP	0x04000000	/* exception pending */
+     #define PSR_BIG_ENDIAN 0x00010000	/* big endian mode */
+     #define PSR_SER	0x00008000?	
+     #define PSR_MXM	0x00000004	/* misaligned enable? */
+     #define PSR_C	0x00000002?	
+     ```
+
+     Hmm, actually I now recall OpenBSD m88k psl.h more precisely:
+
+     ```c
+     #define PSR_MODE        0x80000000      /* supervisor mode */
+     #define PSR_IND         0x40000000      /* interrupt disable */
+     #define PSR_SFD1        0x20000000      /* SFU1 disable */
+     #define PSR_SFD2        0x10000000      /* SFU2 disable */
+     #define PSR_SFRZ        0x08000000      /* scoreboard freeze */
+     #define PSR_EP          0x04000000      /* exception pending */
+     #define PSR_BO          0x00010000?     /* byte order */
+     #define PSR_SER         0x00008000?     /* serial mode */
+     ...
+     #define PSR_MXM         0x00000004      /* misaligned access exception enable */
+     #define PSR_C           0x00000002?     
+     ```
+
+     No wait. MC88100 manual PSR: bit 29 is C (carry)! Let me recall the manual's diagram: PSR bits: 31 MODE, 30 IND, 29 SFD1, 28 SFD2, 27 SFRZ, 26 EP, 25-17 reserved, 16 BO, 15 SER, 14-4 reserved, 3 MXM, 2 C, 1-0 reserved.
+
+     So C = bit 2 = 0x00000004, MXM = bit 3 = 0x00000008.
+
+     Hmm! Then pre-fault 0x80000002 = MODE + bit 1?? Bit 1 is reserved... And 0x8000000b = MODE + MXM (8) + C? no wait 0xb = 8+2+1 = MXM + bit1 + bit0.
+
+     Hmm, so under the real manual layout, 0x8000000b = MODE|MXM|0x3. That doesn't cleanly map to SFRZ/IND/SFD1 at all. So the fork's PSR constants must be different — OR the numbers in the packet are using the fork's own (possibly nonstandard) encoding. This is exactly why I must read the actual source. Good thing I have the tree.
+
+     Actually wait — maybe I should reconsider: perhaps in gxemul's m88k include, the bits are defined differently. Legacy gxemul `src/include/m88k_cpu.h`? Hmm, actually I remember legacy gxemul had `src/cpus/cpu_m88k.c` and the PSR defines in that file or in `m88k_psl.h`? OpenBSD's luna88k psl.h:
+
+     I'm fairly confident OpenBSD luna88k `m88k/psl.h` says:
+     ```
+     #define	PSR_MODE	0x80000000
+     #define	PSR_IND		0x40000000
+     #define	PSR_SFD1	0x20000000
+     #define	PSR_SFD2	0x10000000
+     #define	PSR_SFRZ	0x08000000
+     #define	PSR_EP		0x04000000
+     #define	PSR_BIG_ENDIAN	0x00010000
+     #define	PSR_SER		0x00008000?
+     #define	PSR_C		0x20000000? 
+     ```
+     no...
+
+     Whatever — read the files. The discrepancy (0x80000002 pre-fault "already had IND set") strongly suggests this fork uses different bit values. E.g., if IND = 0x00000002 (bit 1), then 0x80000002 = MODE|IND. And 0x8000000b = MODE|IND|0x9, where 0x9 = bits 0 and 3 = SFRZ and SFD1? e.g. SFRZ=0x8, SFD1=0x1? Then the exception write `psr |= MODE | SFRZ | IND | SFD1`: from 0x80000002 → 0x8000000b. ✓. And the SFD1 question: dropped `| SFD1` gives 0x8000000a? Hmm, packet says "a dropped | SFD1 gives 0x80000003 != 0x8000000b". From pre-fault 0x80000002 with MODE|SFD1 dropped... 0x80000002 | MODE | IND | SFRZ = 0x80000002|0x80000000|0x2|0x8 = 0x8000000a, not 0x80000003. Hmm. Unless the write is not `old | bits` but an assignment. If the exception path ASSIGNS psr = MODE|IND|SFD1|SFRZ (= 0x8000000b if IND=2, SFD1=1, SFRZ=8), then dropping SFD1 gives 0x8000000a. Still not 0x80000003.
+
+     Packet says "a dropped | SFD1 gives 0x80000003 != 0x8000000b". 0x80000003 = MODE|IND|SFD1? no wait if SFD1 dropped: MODE|IND|SFRZ = 0x80000000|2|8 = 0x8000000a. For 0x80000003 you'd need IND|SFD1 without SFRZ... Hmm. Or maybe the write keeps old low bits: pre-fault 0x00000002 (user row) → exception: 0x8000000b. If SFD1=1 dropped from the OR: user pre-fault 0x2 | MODE|IND(2)|SFRZ(8) = 0x8000000a. Still 0xa.
+
+     Alternatively maybe the constants are: SFRZ=0x1, IND=0x2, SFD1=0x8. Pre-fault 0x80000002 = MODE|IND ✓ (IND already set). Write = old|MODE|SFRZ|IND|SFD1 → 0x8000000b ✓. Dropped SFD1 → 0x80000003 (MODE|SFRZ|IND = 0x80000000|1|2 = 0x80000003 ✓!). Yes! That matches the packet's "0x80000003". So in this fork: SFRZ = 0x1, IND = 0x2, SFD1 = 0x8, MODE = 0x80000000, and CARRY = ? M_CARRYCLR row "ovfc bad=psr": carry bit = 0x4 (bit 2)? The carry clear test: the exception path clears carry; ovfc row wants PSR 0x8000000b (carry clear); if carry isn't cleared, pre-fault had carry set (0x4) → post would be 0x8000000f ≠ 0x8000000b → bad=psr. That's consistent: carry = 0x4.
+
+     Wait, but these bit values (SFRZ=1, IND=2, CARRY=4, SFD1=8) are NOT the real MC88100 layout. This is a hardened fork of gxemul — gxemul's own m88k definitions! Let me recall gxemul legacy `src/include/m88k_cpu.h`... Actually legacy gxemul defines in `src/cpus/cpu_m88k.c`:
+
+     ```
+     #define M88K_PSR_MODE		0x80000000
+     #define M88K_PSR_IND		0x40000000
+     ...
+     ```
+     Hmm no. Actually I genuinely remember gxemul had:
+     ```
+     /*  From the M88100 manual:  */
+     #define M88K_PSR_MODE		0x80000000	/*  [S]  */
+     #define M88K_PSR_IND		0x40000000	/*  [S]  */
+     #define M88K_PSR_SFD1		0x20000000	/*  [S]  */
+     ```
+     
+     I can't trust memory here. The empirical evidence from the packet (0x80000002 has IND set; dropped SFD1 → 0x80000003) implies IND=0x2, SFRZ=0x1, SFD1=0x8 in whatever encoding the probe/PSR_WANT uses. But hold on — maybe the probe's PSR_WANT is expressed in gxemul's internal PSR encoding? No — the probe runs guest code (stcr r5,cr1 writes CR1=PSR in the guest), so PSR values are architectural, real 88100 values. So pre-fault PSR 0x80000002 would be MODE + bit1. On real hardware bit 1 is reserved/zero. Hmm, unless... the guest code explicitly sets those bits via stcr, and gxemul's PSR mask allows low bits. If the test writes 0x80000002 to PSR, that's MODE + reserved bit 1. And expected post-exception 0x8000000b. Hmm, this suggests the FORK uses a custom low-bit layout: maybe gxemul's m88k PSR bits are defined as:
+
+     Actually! I remember now. GXemul's m88k (legacy, from Gavare): in `src/include/m88k_cpu.h`? No — I think it's in cpu_m88k.c itself or `m88k_psl.h` isn't it. Honestly, I recall legacy gxemul:
+
+     ```c
+     #define	M88K_PSR_MODE		0x80000000
+     #define	M88K_PSR_IND		0x40000000
+     #define	M88K_PSR_SFD1		0x20000000
+     #define	M88K_PSR_SFD2		0x10000000
+     #define	M88K_PSR_SFRZ		0x08000000
+     #define	M88K_PSR_EP		0x04000000
+     #define	M88K_PSR_BIG_ENDIAN	0x00010000
+     #define	M88K_PSR_MXM		0x00000004
+     #define	M88K_PSR_CARRY		0x20000000? no
+     ```
+
+     Ugh. Stop guessing. READ THE FILES. That's the whole point — I'm a seat WITH file access; the packet even hints "If you cannot read files that is expected" meaning other seats may not have access, but I do.
+
+     Plan:
+     1. Read `GXEMUL-SEC/regress/m88k_exc_probe.py` fully (it's the v4 probe; verify md5 0d5c0f33 via md5sum).
+     2. Find and read the exception delivery path: likely `GXEMUL-SEC/src/cpus/cpu_m88k.c` — grep for "unimplemented", "vector=", M88K_PSR_IND, M88K_PSR_SFD1, M88K_PSR_SFRZ, EPSR, SXIP/SNIP/SFIP writes.
+     3. Read the PSR bit definitions.
+     4. Verify the two repairs' logic against the actual code and the mutant definitions (M_NOIND, M_NOSTOP).
+     5. Sweep for omitted body-tested lvalues: read the whole exception function and enumerate every store/branch the rows could observe: SXIP/SNIP/SFIP, EXIP/ENIP? (88110 has extended), EPSR, PSR bits (MODE, IND, SFD1, SFRZ, EP?), VBR use, pc = VBR + 8*vector, DMT0/1/2 & DMD for data exceptions, ILAR/INL? (those are MVME197/88200). Check which of these have no mutant/row.
+     6. Check the halted predicate against actual console output strings ("stopped" substring risk).
+     7. Check indclr row semantics: stcr r5,cr1 with r5=0x80000000 — does the row's expected EPSR field = PSR_INDCLR? And expected PSR = default PSR_EXC = 0x8000000b? Confirm in the file.
+     8. Then write the verdict.
+
+     Also verify table 4 consistency where possible without running gates: e.g., does M_VEC4 kill 22 rows leaving resid50? The packet says M_VEC4 1/23 killed (22 rows STOP; resid50 the 1). I can't re-measure without running; but the operational rule says measurements are inlined and running a single detector/mutant in my own temp dir is "fine and encouraged" — but building gxemul takes a while; maybe build/ already has built binaries I can use? The packet says `build/` rebuilt and 23/23. If there's a built gxemul in build/, I could potentially run the probe against it quickly. But careful: "Do not run run.sh, any gate_*.sh, or the battery... the gates share one log directory." Running the probe directly (python regress/m88k_exc_probe.py against the built binary) in my own temp dir might be OK — it says building and running a single detector or mutant in your own temp directory is fine and encouraged. Hmm, "Building and running a single detector or mutant in your own temp directory is fine and encouraged". So I could run the v4 probe against the fix build to confirm 23/23, and maybe against HEAD instrument to confirm 2/23. But that may take time; the probe presumably runs the emulator 23 times — each run probably a second or two. That's fine.
+
+     But wait — do I even have the instrument? "HEAD with the final instrument: 2/23 (probe_v4_head.out)". The instrument is the fixed instrument... no, HEAD = product at commit 83df95c (pre-fix), and "the final instrument" = the v4 probe? "The fix on the rebuilt build/: 23/23". So product code: HEAD is pre-fix; there's a fix somewhere (uncommitted round? "HEAD 83df95c + the uncommitted round" — the tree GXEMUL-SEC/src/ contains the fix, uncommitted). So GXEMUL-SEC/src/ working tree = fixed code; build/ = rebuilt fixed binary. HEAD (git commit) = pre-fix. To test HEAD I'd need to stash — too invasive. I'll just verify the fix build gives 23/23, and read code for the rest.
+
+     Actually, is this GXEMUL-SEC tree a git repo? The root listing shows GXEMUL-SEC/.git exists. So I can use git diff to see the uncommitted round (the product fix + probe v4 changes). That's very useful: `git -C GXEMUL-SEC diff` to see the uncommitted changes, `git log` for HEAD = 83df95c.
+
+     Careful with the operational rule: don't run run.sh/gate_*.sh/battery. git diff/log is fine. Running the probe directly in a temp dir: "fine and encouraged".
+
+     Let me also review: the pass is SHORT BY DESIGN: one diff, one table, one question. My reply must be: VERDICT LINE FIRST, then two repairs UPHOLD/OVERTURN/REFINE with reasons, then SFD1 question, then anything else, under a page.
+
+     Let me now go read the files. Steps:
+
+     1. `md5sum GXEMUL-SEC/regress/m88k_exc_probe.py` — verify 0d5c0f33... (md5 prefixed).
+     2. Read the probe fully.
+     3. `git -C GXEMUL-SEC status` and `git diff` (read-only git OK).
+     4. Grep GXEMUL-SEC/src for the m88k exception function.
+
+     Let me be careful about probe size — could be a few hundred lines. Read it.
+
+     Key things to verify in the probe:
+     - Row definitions: 23 rows; indclr row present; stcr encoding; the PSR_WANT/EPSR fields.
+     - halted logic exactly as packet quotes.
+     - How `tr` is captured; what "stopped" matches.
+     - How result classification works: DELIVER/HALT/STOP/BADREGS etc.
+     - Whether the indclr row's expected EPSR is 0x80000000 and expected PSR is default PSR_EXC.
+     - Whether PSR check is exact equality (bad=psr on any bit mismatch) — needed for SFD1 argument.
+     - V_OVF value and 0x10008 exc addr; STCR_R5_CR1 encoding; ADD_R2_R3_R4 encoding.
+     - The gate 11 pin (grep the probe or regress scripts for M88KEXC_RESULT).
+
+     In the product code (cpu_m88k.c or wherever):
+     - The exception delivery function: enumerate all observable effects:
+       - SFRZ set, IND set, SFD1 set, MODE set in PSR (the "|" write).
+       - EPSR = old PSR; EXIP/ENIP? On 88100: SXIP/SNIP/SFIP shadows (XIP registers: SXIP, SNIP, SFIP — actually 88100 has SXIP/SNIP/SFIP as part of... hmm, 88100 exception model: upon exception, PSR.SFRZ set; the "next instruction" pointers are saved in SXIP/SNIP/SFIP? Actually on the 88100, XIP (executing IP) is not saved; exception saves NIP into SFIP? Let me recall: 88100 has FIP (fetch), NIP (next), XIP (execute). On exception: SNIP←NIP? Hmm: the shadow registers: SXIP, SNIP, SFIP get the XIP, NIP, FIP values (shadowed). EPSR ← PSR. On rte: restore. Yes: on exception, SXIP←XIP, SNIP←NIP, SFIP←FIP, EPSR←PSR. That's the "shadow update" (M_NOSHADOW kills 20 rows bad=sxip,snip,sfip; M_SNIPX bad=snip,sfip).
+       - VBR + vector*8 branch.
+       - The fallback for unimplemented vectors (vectors ≥ 11? per census: 0..10 bypass, 1..10 delivered, 0 reset-tail stop, 11..127 halt at fallback = 117, plus vector 0 = 118 stop overall).
+       - Trap handling: trap instructions (tbnd, tb0, tc0?) route differently (is_trap) — M_ISTRAP 17/22, M_TRAPONLY equivalent, BOUNDS/ERROR trap-only by construction.
+       - The delay-slot else-arm (D1) — the dslot row.
+     - The unimplemented fallback diagnostic string: exact text "unimplemented ... vector=0x%x" and whether it calls something that stops the machine ("running = false" loop body mentioned in M_NOSTOP: the fallback's `running = false` loop body → `(void) j;`). So the fallback is in a loop setting running=false. Check that code.
+     - Where does "stopped" come from in output? Probably gxemul prints something when machine stops: e.g. "[ All machines stopped ]"? or "machine stopped"? Need to check what tr contains. If the fallback's diagnostic line itself contains "stopped", the predicate is trivially true. Check the fatal/warning text: maybe "unimplemented exception vector=0x... -- stopping machine"? If the diag line contains "stopping", then `"stopped" in tr`... "stopping" doesn't contain "stopped". OK but check.
+
+     - Also check: does `tr` include stdout of the emulator run including e.g. "GXemul ... stopped" banner at normal exit? If the emulator prints "stopped" on ANY normal exit path, then halted = diag AND stopped could be satisfied even when the machine didn't halt... but then M_NOSTOP killed 21/23 with resid50/sfu1h → STOP, meaning without the stop, result != HALT. If "stopped" were always in tr, M_NOSTOP wouldn't have changed anything. Table 4 shows M_NOSTOP killed: resid50 STOP, sfu1h STOP — so the predicate does discriminate. Good empirical evidence; still check the string provenance.
+
+     - The killtable mutants: check they're defined somewhere (maybe in the probe file or a mutants dir) so I can confirm M_NOIND = `| M88K_PSR_IND` → `| 0` etc. The packet says killtable4/ driver. Look at GXEMUL-SEC/regress/ or battery/.
+
+     SFD1 question details: The enumeration claims SFD1 is covered by "the exact compare" — every row's expected PSR is exactly 0x8000000b and every pre-fault PSR has SFD1 clear, so dropping `| M88K_PSR_SFD1` changes result PSR → bad=psr on every row. Verify: (a) every row's PSR expectation is exact-equality checked; (b) every pre-fault PSR (including user rows 0x00000002 and 0x90000002 — 0x90000002 = MODE|EP?|IND: 0x90000000 = bit31 + bit28 (SFD2?)... whatever) has SFD1 (0x8) clear; (c) the exception write ORs SFD1 unconditionally (not conditional on vector), so the mutant changes all rows. Also confirm 0x8000000b indeed includes 0x8 and that the mutant's result would be 0x80000003 as packet says (0x8000000b & ~0x8 = 0x80000003 ✓ — oh nice, that's simpler: dropping the bit from the final value 0x8000000b gives 0x80000003 regardless of pre-fault, PROVIDED pre-fault has the bit clear so it can't sneak in via the old value. Right: final = old | MODE|SFRZ|IND|SFD1 (0x8000000b given old=0x80000002). If SFD1 dropped from the OR, final = old | 0x80000003. If old has 0x8 clear for every row → final = old|0x80000003 ≠ 0x8000000b... but wait, expected is 0x8000000b which includes old's bits (old 0x80000002 has bit1=IND already; old's bits are a subset of 0x8000000b?). old=0x80000002: subset of 0x8000000b ✓. old=0x00000002 ✓. old=0x90000002: 0x90000000 = bits 31,28 — is bit 28 in 0x8000000b? NO! 0x90000002 has bit 28 set; 0x8000000b doesn't. So for the 0x90000002 row(s), expected PSR can't be 0x8000000b unless bit 28 is CLEARED by the exception path. Hmm! So the PSR write isn't a pure OR — bit 28 (SFD2?) gets cleared, or the row with 0x90000002 expects a different PSR. Which row has 0x90000002? The packet listed pre-fault PSRs "0x80000002 / 0x00000002 / 0x90000002" as the rows' pre-fault values (from pass-3 findings). Maybe 0x90000002 is for a row with different expected PSR (the row tuple carries per-row PSR override — indclr's tuple had PSR_INDCLR in one field which I interpreted as EPSR; maybe field 6 is expected PSR and field 7 is EPSR?). Need to read the actual row schema.
+
+     Hmm wait, indclr row: `("indclr", [STCR_R5_CR1, ADD_R2_R3_R4], {"r3": 0x7fffffff, "r4": 1, "r5": PSR_INDCLR}, V_OVF, 0x10008, PSR_INDCLR, None)`. Packet: "wants PSR 0x8000000b and EPSR 0x80000000". The row has two trailing fields: PSR_INDCLR (0x80000000) and None. If field 6 = expected EPSR, then EPSR=0x80000000 ✓ and field 7 = None (maybe expected PSR override → None = use default PSR_EXC=0x8000000b). Or field 6 = PSR override and 7 = EPSR... but PSR_INDCLR=0x80000000 can't be the expected PSR (they say PSR want is 0x8000000b). So field 6 is likely expected EPSR... but then what's field 7 (None)? Maybe "extra check" or "mem check". Read the probe.
+
+     For the 0x90000002 row: EPSR would be 0x90000002 and PSR expected might include bit 28? If the exception path is pure OR, PSR = 0x9000000b. Then per-row PSR expectations differ and the "exact compare" SFD1 argument still holds as long as each row's expected PSR has 0x8 set and pre-fault has it clear. Fine.
+
+     Also verify IND coverage claim: rows' pre-fault PSRs all have IND (0x2) set except indclr (0x80000000). So M_NOIND (`|IND` → `|0`): for all rows except indclr, final PSR = old|0x80000009|... wait old already has 0x2 → final unchanged 0x8000000b → escape for 22 rows; indclr catches it: old=0x80000000 (IND clear), final = 0x80000009 ≠ 0x8000000b → bad=psr ✓ matches table 4 (M_NOIND 22/23 killed: indclr bad=psr). ✓ consistent.
+
+     But hold on — SFD1 coverage by "exact compare" is the SAME shape as IND was pre-v4: it relies on no row having the bit set pre-fault. That's fine for a `|`-dropped mutant (bit disappears from result). The enumeration's SFD1 cell = "exact compare" — the packet asks "is that right?" I need to confirm: (a) probe compares full PSR equality per row (bad=psr on mismatch); (b) all 23 rows' pre-fault PSR have SFD1(0x8) clear — including the stcr-written ones (indclr r5=0x80000000 ✓) and any row that sets PSR via stcr with SFD1 set? Also rows that go through a first exception before the measured one (sfu1h: first divu exception sets PSR including SFD1=0x8! Then the SFU1 instruction inside the handler faults with pre-fault PSR = 0x8000000b which HAS SFD1 SET). For sfu1h's SECOND exception, pre-fault PSR = post-first-exception PSR which has SFD1 set → dropping `|SFD1` wouldn't change the second delivery's PSR (old already has it). BUT sfu1h expects HALT at the fallback with vector 0x072, pc==0x40 — a PSR-only mutant doesn't affect the halt classification... Actually wait: does dropping SFD1 affect whether the SFU1 instruction faults? SFD1 = SFU1 Disable! On real hardware, if SFD1=1, SFU1 instructions are disabled → executing one causes SFU1 precise exception (vector 114). If SFD1=0, SFU1 instruction would... execute (unimplemented in gxemul → maybe different behavior). Hmm, so the exception path SETTING SFD1 is what makes the nested SFU1 fault as SFU1-disable. A dropped `|SFD1` mutant would change sfu1h's behavior: first divu exception delivers with SFD1=0 in PSR; then the SFU1 instruction in the handler with SFD1=0 → NOT disabled → gxemul would try to execute it → probably "unimplemented instruction" fatal differently, or no fault → row fails differently. So M_NOSFD1 would likely be killed by sfu1h anyway (plus bad=psr on the 20 shadow rows if their post-exception PSR is compared exactly — 20 rows bad=psr, maybe 21-22 killed). Either way killed. But the packet's specific claim "0x80000003 != 0x8000000b -> bad=psr on every row" — "every row" is sloppy: rows whose expected PSR is 0x8000000b and whose pre-fault PSR lacks 0x8 — that's the 20 normal rows + indclr (pre-fault 0x80000000) + ovfc etc. sfu1h's second-stage pre-fault has SFD1 set... but sfu1h's expected outcome isn't a PSR compare anyway (it's HALT). resid50: pre-fault? If resid50's pre-fault = 0x80000002, dropping SFD1 → post PSR 0x80000003, but resid50 row expects HALT (vector 0x032) not a PSR compare — does the probe still check PSR on HALT rows? If result=HALT, maybe PSR isn't compared (machine halted, can't easily read? actually debug regs readable). Then dropped SFD1 on resid50 → still halts (the fallback halts regardless of SFD1) → HALT ✓ → row passes → escape for that row. But killed by 20+ other rows → mutant killed. The question is whether the enumeration's "SFD1" cell is adequately closed: YES at the floor level (mutant killed on ≥1 row), but the "bad=psr on every row" justification is imprecise for HALT rows (resid50, sfu1h) — unless the probe checks PSR even on HALT rows. And for sfu1h the semantic effect (SFU1 disable) adds a second net. So answer: UPHOLD with refinement — the cell is closed by exact PSR compare on the DELIVER rows (20+ rows) and by sfu1h's functional dependence (SFD1=0 changes the nested SFU1's fault behavior); the "every row" phrasing overreaches on the two HALT rows (whose PSR may not be compared, and whose halt doesn't depend on SFD1 — for resid50 at least). Also note: no dedicated M_NOSFD1 mutant exists in table 4 — the cell rests on the argument, not a measurement. That's acceptable (like M_TRAPONLY "equivalent" disclosures) but should be DISCLOSED as argument-not-measurement, OR a one-line mutant added. Since pass 4 is the closing pass and the enumeration explicitly asks "is that right?", the honest answer: the arithmetic is right (0x8000000b & ~SFD1 = 0x80000003, mismatch on every PSR-compared row whose pre-fault lacks 0x8 — that's ≥21 of 23), with two caveats: (1) HALT rows (resid50/sfu1h) may not PSR-compare; sfu1h's nested-SFU1 semantics catch it functionally IF gxemul honors SFD1 — need to check gxemul actually implements SFD1 disable for SFU1 instructions. If gxemul ignores SFD1 (treats SFU1 instr as always unimplemented), then dropped `|SFD1` doesn't change sfu1h behavior and the cell rests purely on the DELIVER rows' PSR compare — still ≥20 rows, still killed. Either way the cell holds; phrase accordingly. (2) Also the user-mode rows: 0x00000002 pre-fault → post 0x8000000b (MODE forced); dropped SFD1 → 0x80000003 ≠ want → bad=psr ✓ (assuming these rows PSR-compare; M_NOMODE killed exactly those four rows bad=psr so yes they compare PSR... M_NOMODE killed "priv privtb unimpl udiv0 (the four user-mode rows)" — with bad=psr presumably).
+
+     Also check: is there any row whose pre-fault PSR has SFD1 SET (besides sfu1h stage 2)? If the pre-fault init sets PSR via r5/stcr in multiple rows... The packet lists pre-fault PSRs as three values + indclr's. So no row has 0x8 set pre-fault. ✓ (verify in file).
+
+     Now the "name a cell with no row or a body-tested lvalue the enumeration omits": candidates to check in the exception function:
+     - EXIP/ENIP? No — 88100 has only SXIP/SNIP/SFIP shadows (XIP regs: the pipeline FIP/NIP/XIP shadow into SFIP/SNIP/SXIP). Covered by M_NOSHADOW/M_SNIPX/M_DSLOT/M_SFIPNOTGT/M_DSLOTSWAP.
+     - DMT0/DMT1/DMT2 + DMD0/1/2 updates on data access exceptions (vector 3): disclosed as "DMT under a frozen trap (m88kexcfrozendmt)" — but is DMT update on a NORMAL data exception rowed? Do any rows use a data-access exception (vector 3)? Rows seem to be: ovfc (vector 9), udiv0/div0 (8), priv (6), unimpl (5?), bounds (7), error (10?), trap rows, sfu1h, resid50, usertb, indclr, dslot, level... If no row raises a DATA access exception, then DMD/DMT0-2 writes are untested lvalues — but are they body-tested? The enumeration discloses DMT only "under a frozen trap". If the data-access vector row exists (misaligned = vector 4? M_VEC4 mutant suggests vector 4 = misaligned is rowed... "M_VEC4 1/23 killed (22 rows STOP; resid50 the 1)" — hmm that mutant changes vector numbering to 4? whatever). Need to read the actual row list and the exception function to enumerate lvalues: PSR, EPSR, SXIP, SNIP, SFIP, VBR-relative PC, DMT0-2/DMD0-2 (data), ILAR? (not on 88100 — 88100 has no ILAR; that's 88200/MVME197). Also: interrupt/exception priority & pending (EP bit = 0x04000000 set on nested exception?), the SFD2 bit? The write sets MODE|SFRZ|IND|SFD1 — does hardware also set EP when nested? If the code sets EP and no row checks EP... but PSR exact-compare on rows with nested (sfu1h stage2? no PSR compare there) — hmm, if code sets EP (0x04000000) in some path and expected PSR 0x8000000b lacks it, rows would fail — they don't (23/23), so either code doesn't set EP on these paths or... fine, exact compare covers ALL PSR bits automatically, including EP/SFD2/MXM/C — that's the beauty of exact compare: every bit of the PSR write is body-tested on every PSR-compared row. Same for EPSR (exact compare covers all its bits). So "body-tested lvalues" = registers written by the exception path that are NOT exactly compared in any row: candidates: DMT0/1/2, DMD0/1/2 (data exceptions only), and maybe the "current VBR" read (covered M_NOVBR), and the halt path (covered now), and vector routing for unrowed vectors (disclosed 0..3). Also: the RESET vector-0 tail arm (stops every CPU) — is that rowed? "vector 0 still stops every CPU in the RESET tail arm" — census says it stops; is there a row for vector 0? Probably not (can't easily raise reset). Vectors 0..3 unrowed disclosed.
+     
+     Wait — actually let me reconsider: are there rows for vectors 1..10 delivered? "10 are DELIVERED (1..10)" is the census of the CODE, and rows cover some of them. The denominator says "implemented per class x route (M_ISTRAP 17/22 in table 3...)". OK.
+
+     Another candidate: the exception-delivery's effect on the pipeline/interpreter state beyond registers — e.g., whether delivery clears the instruction's own side effects (the overflowing add must not write r2). Is there a row checking r2 unchanged after overflow exception? The ovfc row checks PSR/SXIP etc; does it check r2? If the add wrote r2 before the exception, that's a correctness bug a row could catch: "dest reg not written on faulting instruction". Is that in scope? The probe's reg checks (bad=regs?) — check the probe's register comparison: it probably compares ALL r0..r31 against expected values computed from... the row's init + which instructions should have completed. If expected regs model only init values and completed instructions, then a wrong r2 write → bad=r2. Check how the probe computes expected regs. If it does full-regfile compare, that lvalue class is covered. Read the probe.
+
+     Also: SFIP/SNIP/SXIP exact compare — yes rows check sxip,snip,sfip (bad=sxip,snip,sfip in M_NOSHADOW).
+
+     Also: does delivery happen at the right TIME (before next instruction)? Level/timing — M_LEVEL covers the log level channel... M_LEVEL killed 20 rows bad=level — "level" is the INFO/WARNING channel check. OK.
+
+     Another: multiple CPUs? Out of scope probably.
+
+     Also the "stopped" predicate — one more subtlety: `"stopped" in tr` where tr is the whole transcript: gxemul at exit might always print something like "[ machine stopped: ... ]"? Actually in gxemul, when the emulation stops, console: I recall gxemul prints nothing special on normal single-cpu halt; the debugger? Hmm, the fallback code sets running=false; then main loop exits; does gxemul print "stopped"? The packet's repair quote: `halted = diag is not None and ("machines stopped" in tr or "stopped" in tr)`. For M_NOSTOP to flip resid50/sfu1h to STOP, "stopped" must NOT appear when running=false is removed... but if the machine never stops, the emulator runs forever? The probe must have a timeout/step limit; tr would be the truncated output. If gxemul prints "stopped" anywhere in normal output (e.g. at exit after the test's own halt instruction?), the predicate could be fooled. But empirically M_NOSTOP → STOP for those rows, so on the mutant the transcript lacked "stopped" — meaning "stopped" appears only via the machine-stopped path. Good enough, but I'll glance at what prints "stopped" in gxemul src to make sure it's the emul-stop path (src/core/main.c? emul.c: "All machines stopped"?). Hmm — in gxemul 0.7.0, when all machines pause... Let me check quickly via grep "stopped" in GXEMUL-SEC/src.
+
+     Also the diag regex: `unimplemented[^\r\n]*vector=0x([0-9a-f]+)` — check the actual fatal message format in cpu_m88k.c: something like `fatal("cpu%i: unimplemented exception vector=0x%x ...")`. Note regex requires "unimplemented" then vector=0x on SAME line — fine. But also: could a NON-fallback line contain "unimplemented" + "vector=" — e.g. the unimplemented INSTRUCTION fatal (for sfu1h stage 2 if SFD1 handling differs) also prints "unimplemented" but maybe not "vector=" — check.
+
+     One more: EXPECT_VECTOR mismatch sets halted=False — then the row gets classified as... STOP? or something else; for a row expecting HALT, misclassified → fail. Good. And what if diag matches but the transcript ALSO contains the row's expected vector later? re.search finds the FIRST match only. On HEAD sfu1h: first divu halts with vector=0x008; diag.group(1)=008 ≠ 072 → halted=False → STOP (as packet says). ✓ repair working. But consider a product bug where the FIRST diagnostic is the right vector but the machine DIDN'T stop (M_NOSTOP shape): stopped absent → halted False ✓. And a bug where machine stops but on wrong vector: caught ✓. And a bug where the fallback prints twice (two unimplemented lines)? re.search takes first; second ignored — minor, not a floor breach for these rows.
+
+     Now the indclr row: `stcr r5,cr1` — CR1 = PSR? On 88100, control register 1 is PSR? Hmm: 88100 control regs: CR0 = PID, CR1 = PSR, CR2 = EPSR, CR3 = SSBR, CR4 = SXIP, CR5 = SNIP, CR6 = SFIP, CR7 = VBR. Yes CR1=PSR. stcr r5,cr1 sets PSR=0x80000000 (MODE only, IND clear, SFD1 clear, SFRZ clear, carry clear). Then add r2,r3,r4 with r3=0x7fffffff, r4=1 → overflow → vector 9 (V_OVF) at pc of the add = 0x10008 (two instructions: stcr at 0x10000? hmm rows seem loaded at 0x10000; indclr exc addr 0x10008 — so maybe there's a leading instruction or the stcr is at 0x10004... whatever, probe encodes it). Expected: EPSR = 0x80000000 (old PSR), PSR = 0x8000000b (MODE|SFD1|IND|SFRZ with carry clear). ✓ This kills M_NOIND and also pins carry-clear with IND clear simultaneously. Also note: this row ALSO tests that stcr to PSR takes effect (control-reg write path) — a bonus.
+
+     Wait, one subtlety on indclr + SFD1: pre-fault 0x80000000 has SFD1 clear ✓ so the SFD1 exact-compare net includes indclr too.
+
+     Now, also verify the probe md5 and that gate 11 pins 23/23 with the indclr pin — grep for M88KEXC_RESULT in GXEMUL-SEC (regress/gate scripts or battery). The operational rule says don't RUN gates; reading them is fine.
+
+     Let me also double check the "2/23 on HEAD" claim's consistency: usertb DELIVER (pre-existing user vector) — user trap vectors (128..255) route to a different arm (implemented), so HEAD passes usertb; resid50 HALT on HEAD ✓ expected. Everything else fails on HEAD. OK.
+
+     Also table 4's M_TAILRETURN initially skipped due to comment-edit moving find-text — repaired & re-measured; fine, records.
+
+     Now, is there anything ELSE I might find while verifying? Things to look for in the probe:
+     - Does the probe's BADREGS/stage checks use exact reg compare (all 32 regs + controls)? 
+     - The `pc != 8 * V_DIV0` check for sfu1h: pc at halt — on the fixed build, the first divu exception DELIVERS to vector 8 → handler at VBR+0x40 = 0x40 (VBR=0). Handler contains SFU1 instruction which faults → vector 114 = 0x72 → 0x72 ≥ 11 → fallback → diag vector=0x072 → halt. At halt, pc = ? The SFU1 instruction's pc... they require pc == 8*V_DIV0 = 0x40 — i.e., pc is AT the handler's first instruction (the SFU1 instr is at 0x40 exactly). ✓ consistent: "sfu1h additionally requires pc == 0x40 (the first delivery happened)".
+     - Hmm wait: if the SFU1 instruction is the first instruction of the handler at 0x40, then when it faults, XIP=0x40 → the fallback halts with pc... depending on whether pc advanced. They pin 0x40. Fine.
+     - The indclr row's exc addr 0x10008: stcr at 0x10000?, hmm 0x10008 means the add is the 3rd instruction? Or the rows have a standard prologue. Check ROWS layout in probe. Minor.
+
+     - Potential REAL issue to probe: the diag regex `vector=0x([0-9a-f]+)` — if the fatal message prints vector in decimal or without 0x, diag=None → halted=False always → resid50/sfu1h would FAIL on the fix build — but fix build is 23/23, so the format matches. ✓ empirically closed.
+
+     - `"stopped" in tr` — what string does gxemul print? Let me grep. In gxemul 0.7.0, `src/core/main.c`? I recall when emulation ends: nothing like "stopped"... Actually the fallback might itself print "... stopping"? If the fallback's fatal message includes "stopping" (not "stopped"), then the "machines stopped" string must come from elsewhere — maybe emul.c prints "[ All machines have stopped ]" when running becomes false? In legacy gxemul, cpu_run loops; when all cpus halted... there's a message in emul.c: `debug("all machines stopped\n")`? Something like that. If that message prints whenever the emulator exits for ANY reason (including end of guest program?), then... The probe rows that DELIVER exceptions then continue running guest code which ends with... how does each test end? Probably an infinite loop or a trap to exit; the probe probably kills after N steps or the guest does something to stop. If normal termination ALSO prints "stopped", then for HALT rows the predicate is weak — but combined with diag naming the specific vector + pc pin for sfu1h, it's OK for the floor: a mutant that delivers vector 0x32 instead of halting would... hmm, M_DELIVERALL (fallback → deliver instead) killed 21/23: resid50 sfu1h — so delivering instead of halting IS caught (because after delivery the machine keeps running and... "stopped" would appear only when the machine finally stops — maybe the guest later halts normally printing "stopped"?! If so, M_DELIVERALL resid50 would classify: diag present (deliver-all might not print "unimplemented"! If the mutant removes the fallback diag, diag=None → halted=False → STOP ≠ HALT → killed ✓). OK the AND with diag covers it.
+
+     Let me now also sanity-check the census claim vs code: 128 low vectors, 0..10 bypass fallback, 1..10 delivered, 0 stops in RESET tail arm, 11..127 halt at fallback (117), total stop = 118. I'll read the function and count. Also confirm the seven tail arms are bare breaks (M_TAILOFF equivalence) — the enumeration carries "vectors 0..3 unrowed" as debt — fine.
+
+     Also the SFRZ×is_trap four cells: error, errortb, trapfrozen rows; M_SFRZTRAP 21/22, M_ERRORDROP 21/22. OK.
+
+     Alright — time to actually read files. Given the volume, I'll do it myself with targeted reads (the probe file, the exception function, the PSR defines, grep for "stopped", the gate pin). This is very doable: maybe 5-8 tool calls. Let me start.
+
+     Order:
+     1. md5sum + read probe (it's the star of this pass).
+     2. Grep product for exception function: `grep -n "vector=0x" GXEMUL-SEC/src/cpus/cpu_m88k.c` and PSR defines.
+     3. Read the exception function region.
+     4. Grep "machines stopped" / "stopped" in src.
+     5. Grep M88KEXC_RESULT / gate 11 pin.
+     6. Maybe run the probe against build/ binary in a temp dir to confirm 23/23 (allowed & encouraged). Check how probe is invoked (read its header/usage).
+
+     Let me go. First batch of parallel calls:
+     - Bash: md5sum GXEMUL-SEC/regress/m88k_exc_probe.py
+     - Read: the probe file (need path — assume GXEMUL-SEC/regress/m88k_exc_probe.py)
+     - Grep: "unimplemented" in GXEMUL-SEC/src/cpus (m88k)
+     - Grep: M88K_PSR_SFD1 define
+
+     Actually first quickly locate files: Glob GXEMUL-SEC/regress/*probe* and GXEMUL-SEC/src/cpus/*m88k*. I'll do a compact first round.
+
+     One more thing to decide: verdict direction. Based on packet alone the chain looks closable; my job is to verify and either CLOSE with my own denominator or name a gap. I must genuinely look for a surviving breach. Candidates to scrutinize hard:
+     (a) SFD1 cell resting on argument not measurement (disclose-or-mutant question).
+     (b) The `"stopped" in tr` substring provenance.
+     (c) r2-not-written lvalue (dest reg of faulting instruction) — is it compared?
+     (d) DMT/DMD on non-frozen data exceptions — any row raising vector 3? If rows include a data-access exception row, then DMT0-2/DMD writes are body-tested lvalues the enumeration omits... or if no data row exists, it's an unrowed class: the enumeration's "implemented per class x route" — data access is implemented (delivered) — is there a row? misaligned (vector 4) row exists? M_VEC4... Let me read the row list.
+     (e) The exact-compare strength: confirm PSR compare is `==` not mask.
+
+     Let me go read. I'll aim to keep the final answer under a page, verdict first, in the panel's format. Language: English (packet is English).
+
+     Let me fire the first round of tools.
+
+• I'll verify the packet against the tree before ruling — probe md5, the v4 file, the product exception path, and the stop-string provenance.0d5c0f33ca10110b7a7f6612d52f60c1 *GXEMUL-SEC/regress/m88k_exc_probe.py
+README.md
+__pycache__
+absorb_census.py
+arcbios_shift_probe.py
+arm_endian_probe.py
+arm_flags_probe.py
+arm_fold_marker_probe.py
+arm_idle_probe.py
+arm_memcpy_probe.py
+arm_strlen_probe.py
+arm_writeback_probe.py
+artifacts
+asic_badaddr_probe.py
+build_asan.sh
+diag_div_sweep.py
+diff_autodev_gen.sh
+diff_dis_sync_ovl
+diff_dis_sync_ovl.map
+diff_diskimage_geom.c
+diff_diskimage_io.c
+diff_diskimage_parse.c
+diff_diskimage_sync.c
+diff_fbpending_bound.c
+diff_footbridge.c
+diff_ieee_store.c
+diff_m8820x.c
+diff_m8invread.c
+diff_memory_rw.c
+diff_rtc_range.c
+diff_sh4_tmu.c
+diff_timer.c
+diff_wdc_identify.c
+drive_guest.py
+fbpending_drain_probe.py
+fbpending_witness.py
+footbridge_sites_probe.py
+gate_ab.sh
+gate_arm.sh
+gate_asan_sweep.sh
+gate_build.sh
+gate_crossfamily.sh
+gate_hygiene.sh
+gate_m88k_rounding.sh
+gate_mips.sh
+gate_mips_folds.sh
+gate_mips_rounding.sh
+gate_offline.sh
+gate_ppc.sh
+gate_ppc_halt.sh
+gate_sh_rounding.sh
+
+
+• Probe md5 matches 0d5c0f33 ✓. Now read the probe and the PSR defines and the exception path.
+
+• md5 matches the frozen v4. Now reading the probe, the PSR header, and the exception path.
+
+• Good. The probe is fully read. Key observations so far:
+
+  1. The probe matches the packet's quoted diff. `PSR_INDCLR = 0x80000000`, indclr row present with `{"r3": 0x7fffffff, "r4": 1, "r5": PSR_INDCLR}, V_OVF, 0x10008, PSR_INDCLR, None` — field 6 = epsr_exp = PSR_INDCLR = 0x80000000, field 7 = handler = None. PSR want = PSR_WANT.get(name, PSR_EXC) = 0x8000000b for indclr (not in PSR_WANT). ✓ matches packet ("wants PSR 0x8000000b and EPSR 0x80000000").
+
+  2. Important finding: the probe's PSR bit assignments are NOT the real MC88100 layout. Look at the constants:
+     - PSR_RESET = 0x80000002 "MODE | IND (cpu_m88k.c: cr[PSR] = M88K_PSR_MODE | M88K_PSR_IND)"
+     - PSR_EXC = 0x8000000b "MODE | SFD1 | IND | SFRZ"
+     - PSR_USER = 0x00000002 "IND only"
+     - PSR_CARRY = 0x90000002 "MODE | C | IND: C = bit 28"
+     
+     So: MODE = 0x80000000, IND = 0x00000002, SFD1 = 0x00000008, SFRZ = 0x00000001, C = 0x10000000 (bit 28).
+     
+     Check: PSR_EXC = MODE|SFD1|IND|SFRZ = 0x80000000|0x8|0x2|0x1 = 0x8000000b ✓.
+     PSR_CARRY row: 0x90000002 = MODE|C(0x10000000)|IND(0x2) ✓ — so C = bit 28 = 0x10000000. ovfc wants 0x9000000b ✓ (carry preserved + exception bits).
+     
+     Wait, that means in THIS fork the PSR low bits are: SFRZ=0x1, IND=0x2, SFD1=0x8, C=0x10000000. That differs from the real 88100 manual (SFRZ=0x08000000, IND=0x40000000, SFD1=0x20000000, C=0x20000000? no). Hold on — is that plausible for a "hardened fork"? That would be a MASSIVE architectural deviation... OR the probe comments are describing gxemul's actual defines. Let me check m88k_psl.h in GXEMUL-SEC/src/include/thirdparty/. The grep for defines didn't return the actual define lines (only file lists). Let me read the header directly.
+
+     Hmm wait, actually the first grep (pattern `define M88K_PSR_...`) returned only file names — that was output_mode default = files_with_matches. I need the content. Let me read GXEMUL-SEC/src/include/thirdparty/m88k_psl.h.
+
+     Hmm, but wait: if this fork's PSR constants were IND=0x2 etc., then PSR values written/read in the guest are non-architectural and OpenBSD luna88k would never run. More likely: the probe's comments... no wait, the probe OBSERVES psr=0x8000000b after exceptions via `reg 0,0` from the real emulator. If gxemul's real PSR layout were the manual's, post-exception PSR would be 0xA8000002-ish (MODE|SFRZ|SFD1... = 0x80000000|0x08000000|0x20000000|... hmm). Actually let me compute manual layout: exception sets MODE(0x80000000)|IND(0x40000000)|SFD1(0x20000000)|SFRZ(0x08000000) → 0xE8000000-ish. The probe observes 0x8000000b. So the fork genuinely uses a different PSR bit layout — OR gxemul upstream does. Let me check the actual m88k_psl.h. This matters for the SFD1 question: is SFD1 = 0x8 in this tree?
+
+     Actually hold on. I recall now! Legacy GXemul's m88k PSR defines ARE nonstandard. From gxemul `src/include/m88k_psl.h`... Actually no. Let me just read the file. It's thirdparty/m88k_psl.h in this tree.
+
+  3. The `halted` predicate and EXPECT_VECTOR logic match the packet verbatim (lines 302-305, 326-327). ✓
+
+  4. `"machines stopped" in tr or "stopped" in tr` — the first disjunct is redundant given the second (substring). Weak substring risk: does tr ever contain "stopped" without the machine stopping? Need to find what prints "stopped" in gxemul. Grep GXEMUL-SEC/src for "machines stopped" and "stopped".
+
+  5. `levelmsg` regex at line 310-311: checks ERROR-level class line. OK.
+
+  6. Line 322: control rows: `ok = (not stopped) and r2 == EXPECT_R2[name]` where stopped = "machines stopped" in tr. Fine.
+
+  7. Classifier order: HALT before TAILHALT before STOP before pc!=entry→STOP else DELIVER-compare. Note: `if halted: res["result"]="HALT"; if name=="sfu1h" and pc != 8*V_DIV0: BADREGS stage1`. 
+
+     Wait — there's something here. For sfu1h: the pc check uses `pc != 8 * V_DIV0` = 0x40. On the fix: first divu delivers to 0x40, handler's legal divu with SFD1 set raises SFU1_PRECISE (114) → fallback prints vector=0x072 → halt. At halt, pc should be... the SFU1-faulting instruction at 0x40. ✓.
+
+     But here's a subtle question: on the FIXED build, is pc==0x40 at halt? The XIP execution model: when the SFU1 fault is raised, pc may have advanced. The packet says fix = 23/23 so sfu1h passes → pc==0x40 observed. OK.
+
+  8. Row schema: (name, prog, regs, vector, fault_pc, epsr_exp, handler). For indclr: vector=V_OVF(9), entry=0x48, fault_pc=0x10008, epsr=0x80000000, handler=None. want: sxip=0x10008|2=0x1000a, snip=0x1000c|2... wait (fault_pc+4)|2 = 0x1000c|0x2 = 0x1000e, sfip=0x10010|2=0x10012, psr=0x8000000b, epsr=0x80000000, r2=0xdeadbeef. ✓ consistent with packet.
+
+     Hmm wait, one thing: dslot row want: sxip=fault_pc|2=0x1000a, snip=(0x10008+4)|2=0x1000e, sfip=(CODE+4+16)|2 = 0x10014|2=0x10016. ✓.
+
+  9. The SFD1 question: "every pre-fault PSR has SFD1 CLEAR". Pre-fault PSRs in rows: PSR_RESET=0x80000002 (SFD1 0x8 clear ✓), PSR_USER=0x2 (✓), PSR_CARRY=0x90000002 (✓), PSR_INDCLR=0x80000000 (✓). And for sfu1h's SECOND fault, pre-fault = post-first-exception = 0x8000000b which HAS SFD1 set — but sfu1h is a HALT row; PSR is not compared on the HALT path (the compare only happens in the DELIVER branch, line 335-353). resid50 also HALT row, no PSR compare. So:
+
+     - Dropped `| M88K_PSR_SFD1` mutant (call it M_NOSFD1): for the 21 non-HALT rows... wait, 23 rows include 2 controls (live/attrib, vector=None) and 2 HALT rows (resid50, sfu1h) → 19 PSR-compared DELIVER rows. For each: pre-fault SFD1 clear, so post-exception PSR = (old & ~SFRZ?...) — hold on, is the write `psr = old | bits` or does it clear some bits? epsr=old, psr becomes 0x8000000b from old=0x80000002: bits added: 0x9 (SFRZ 0x1 + SFD1 0x8); from old=0x00000002 (user): adds 0x80000009 (MODE+SFRZ+SFD1); from 0x90000002: result 0x9000000b — carry 0x10000000 preserved, adds 0x9; from 0x80000000: adds 0xb (SFRZ+IND+SFD1). So the write = old | MODE | SFRZ | IND | SFD1 (pure OR, nothing cleared — carry survives, consistent with M_CARRYCLR being a distinct mutant: a mutant that CLEARS carry would do old & ~C | bits → ovfc catches it; the packet says M_CARRYCLR killed: ovfc bad=psr ✓).
+
+     So M_NOSFD1 (`| M88K_PSR_SFD1` → dropped): 19 DELIVER rows get psr = want & ~0x8 → 0x80000003 (or 0x90000003 for ovfc) ≠ want → bad=psr on all 19. resid50: HALT path, PSR not compared — but does the mutation change resid50's behavior? resid50 = tb1 0,r3,50 → trap route → fallback (vector 50 not implemented) → HALT with diag vector=0x032 — SFD1 plays no role in the trap route or the fallback. So resid50 still HALTs ✓ escapes (no red). sfu1h: SFD1 dropped means after first divu delivery, PSR = 0x80000003 (SFD1 CLEAR). Handler's divu r6,r5,r4: with SFD1 clear, is divu treated as SFU1? Wait — the probe comment says "with SFD1 set the divide raises SFU1_PRECISE (114)". So gxemul models SFD1: SFD1 set → SFU instructions (divu?? wait, divu is an SFU1 instruction on 88100! Yes — divide is in the SFU1 opcode space on the real 88100; gxemul implements divu in the main loop but gates it on SFD1?).
+
+     Hmm wait — but then the FIRST divu (in sfu1h, at 0x10004, pre-fault PSR=0x80000002 with SFD1 clear!) would ALSO raise SFU1_PRECISE instead of divide-by-zero! But sfu1h on the fix delivers the first divu to vector 8 (pc==0x40 check, "the first delivery happened"). So SFD1 clear does NOT gate the first divu?? Contradiction?
+
+     Unless... the SFD1 gating is: with SFD1 clear, divu executes natively (divide by zero → vector 8); with SFD1 set (in the handler after first exception), divu raises SFU1_PRECISE (114). That's exactly the manual: SFU1 disable → executing an SFU1 instruction (divu is SFU1) → SFU1 precise exception. And the divu-by-zero at top level has SFD1 clear so it executes and faults on divide-by-zero (vector 8). Hmm, but wait — udiv0 row comment: "also pins that user mode with SFD1 CLEAR yields vector 8, not SFU1 (the m88kexcsfu1 boundary)" ✓ consistent.
+
+     So with M_NOSFD1 (exception path drops `|SFD1`): sfu1h's first divu delivers with PSR=0x80000003 (SFD1 still clear) → handler's divu r6,r5,r4 executes NORMALLY (r6 = 0x60/0x10 = 6) → hits br . at 0x44 → spins forever → no diag → halted=False → grace expires → probe sends ^C... result: stopped? No — after ^C, wait_prompt gets prompt back; "stopped" not in tr; tailhalt no; pc != entry? pc would be 0x44 (spinning), entry for sfu1h = 8*114 = 0x390 → pc != entry → STOP. Expected HALT → row RED. So M_NOSFD1 would be killed by sfu1h too (via STOP), in addition to 19×bad=psr. 
+
+     So the SFD1 cell: closed by exact PSR compare on 19 rows + functional dependence on sfu1h. "bad=psr on every row" overreaches (resid50 doesn't compare PSR; sfu1h would red as STOP not bad=psr) but the FLOOR claim — the mutant is killed — is right. The packet asked "is that right?" → answer: the arithmetic (0x80000003≠0x8000000b) is right for the 19 DELIVER-compared rows; not literally "every row" — resid50 (HALT row, no PSR compare) escapes the psr channel; sfu1h catches it via the SFD1-gates-divu semantics instead. Net: cell holds, but it's an argument-closed cell (no M_NOSFD1 in table 4); recommend either naming it as such or adding the mutant. That's a REFINE, not a breach.
+
+     Hmm wait, actually let me double check "19 DELIVER rows": total fault rows = 23 (per M88KEXC_RESULT=23/23, total counts vector is not None: div0,ovf,misalign,bounds,priv,privtb,unimpl,error,dslot,errortb,misaligntb,unimpltb,div0tb,ovftb,vbrtb,trapfrozen,ovfc,indclr,privsuptb,udiv0,usertb,resid50,sfu1h = 23 ✓). Of these, EXPECT_RESULT HALT: resid50, sfu1h. So 21 DELIVER-expected rows. All 21 compare psr exactly against PSR_EXC or PSR_WANT (ovfc). Pre-fault PSRs: 0x80000002 (most), 0x2 (priv,privtb,unimpl,udiv0), 0x90000002 (ovfc), 0x80000000 (indclr) — all have 0x8 clear ✓. So M_NOSFD1 → 21/23 red (all DELIVER rows bad=psr) + sfu1h red (STOP) = 22/23 red, resid50 green. Actually wait, table 4's M_NOIND was 22/23 killed with only indclr red — because IND=0x2 was in every other pre-fault PSR. For SFD1: 0x8 in NO pre-fault PSR → 22 rows red. The packet said "0x80000003 != 0x8000000b -> bad=psr on every row" — closer to right than I thought: 21 bad=psr + sfu1h STOP. Only resid50 stays green (HALT unaffected). Fine.
+
+     BUT — one caveat on sfu1h-with-M_NOSFD1: does gxemul actually implement the SFD1 gate on divu? The probe comment asserts it and sfu1h passes 23/23 on the fix (HALT naming 0x072 means the handler's divu DID raise SFU1_PRECISE — so yes, SFD1 gating works in the product). ✓ verified by the shipped 23/23.
+
+  10. Now the CRITICAL question for "anything else": does the fork's PSR layout match the REAL 88100? If SFRZ=0x1, IND=0x2, SFD1=0x8, C=0x10000000 — that's NOT the MC88100 manual layout (SFRZ=bit 27=0x08000000, IND=bit30=0x40000000, SFD1=bit29=0x20000000, C=bit2=0x4? hmm, actually on the real 88100: bit 29 = SFD1? Let me recall the actual manual: PSR: 31 MODE, 30 IND, 29 SFD1, 28 SFD2, 27 SFRZ, 26 EP, 25-22 unused, 21-17 ?, 16 BO(big endian), 15 SER, 14-8 ?, 7-4 ?, 3 MXM, 2 C, 1-0 unused. So real: IND=0x40000000, SFD1=0x20000000, SFD2=0x10000000, SFRZ=0x08000000, EP=0x04000000, C=0x00000004, MXM=0x00000008.
+
+      If the fork uses IND=0x00000002 (= real C bit!), SFD1=0x00000008 (= real MXM!), SFRZ=0x00000001 (reserved bit 0), C=0x10000000 (= real SFD2!) — then the fork's PSR bit assignments are architecturally WRONG vs the manual. But wait — is that within this pass's scope? This pass reviews ONLY the v4 repair diff. The PSR layout would be a pre-existing product decision, presumably measured/established in earlier rounds (the fork runs OpenBSD luna88k? if PSR bits were scrambled, the guest would break). Hmm, but hold on — maybe I'm misreading the comments and the actual m88k_psl.h uses the manual layout with different values for these constants. PSR_RESET=0x80000002 is claimed = MODE|IND from cpu_m88k.c's reset code. If m88k_psl.h says M88K_PSR_IND=0x40000000 then PSR_RESET would be 0xC0000000, contradiction. So the tree's IND really is 0x2. Let me read the header to confirm — this is important because if the fork's PSR layout deviates from the manual, that's... well, it's a pre-existing condition far outside this diff, and presumably the guest-visible behavior was validated in earlier rounds (the whole project has extensive guest testing). NOT this pass's business beyond noting it. But let me read the header anyway to ground the SFD1 answer.
+
+  11. Things still to verify:
+      - The product exception path: read the exception function in GXEMUL-SEC/src/cpus/cpu_m88k.c — the `| M88K_PSR_IND | M88K_PSR_SFD1 | M88K_PSR_SFRZ | M88K_PSR_MODE` write, EPSR save, shadow updates, fallback with "unimplemented ... vector=0x%03x", running=false, the SFRZ re-route to ERROR, is_trap, VBR use, the tail switch.
+      - What prints "stopped": grep "machines stopped" in src.
+      - Gate 11 pin: find M88KEXC_RESULT=23/23 + indclr pin in the gate script (probably regress/gate_*.sh — but which one is "gate 11"? maybe harness/ or a specific gate file; grep for M88KEXC_RESULT).
+      - Census: count the switch arms.
+      - The "body-tested lvalues" sweep: read the whole exception function and enumerate writes: cr[EPSR], cr[SXIP], cr[SNIP], cr[SFIP], cr[PSR], pc, delay_slot write, running, DMT regs? Check if data-access path writes DMT/DMD (disclosed as not caught: "DMT contents"). ✓ disclosed in contract clause-e "Does NOT catch: ... DMT contents".
+      - r2-unchanged IS pinned (want r2=0xdeadbeef on every DELIVER row) ✓ — destination-not-written lvalue is covered.
+
+  12. Also verify: is there an M_NOSFD1-shaped risk with `stcr` rows — priv/privtb/unimpl/udiv0 write PSR_USER=0x2 via stcr then fault; post-fault want 0x8000000b. Dropped SFD1 → 0x80000003 ✓ red. Good.
+
+  13. One more possible hole in repair 2: `halted` requires `"machines stopped" in tr or "stopped" in tr`. Where does "stopped" come from? If gxemul prints e.g. "All machines stopped" when running=false. If a mutant removed running=false (M_NOSTOP), the machine keeps running — the transcript would then be cut by ^C... does the debugger print anything containing "stopped" on ^C? If yes, M_NOSTOP would NOT be caught (halted stays true). But table 4 measured M_NOSTOP = 21/23 killed (resid50 STOP, sfu1h STOP) — so on that mutant "stopped" was absent. ✓ empirically. Still, check what prints it for provenance: grep.
+
+      Also: ^C interrupt — after os.write(fd, b"\x03"), wait_prompt. If the emulator prints e.g. "^C" and returns to prompt without "stopped", fine.
+
+      Also note `stopped = "machines stopped" in tr` (line 313) used for control rows and STOP classification — consistent.
+
+  14. Edge: EXPECT_VECTOR mismatch → halted=False → falls to `elif stopped` → STOP (since "machines stopped" would be in tr if the fallback did stop on the wrong vector). So a wrong-vector halt = STOP, red for the HALT-expecting rows. ✓ And for HEAD sfu1h: diag names 0x008 ≠ 0x072 → halted=False → "machines stopped" in tr (fallback did stop) → STOP. Packet says sfu1h reads STOP on HEAD ✓ consistent (packet text says "sfu1h now reads STOP on HEAD because the first divu halts on vector 0x008" ✓, and "resid50 HALT (HEAD halts on vector 0x032 exactly as expected)" ✓ — so HEAD = 2/23: usertb DELIVER + resid50 HALT ✓).
+
+  15. Now let me also double-check the indclr row encoding claim: STCR_R5_CR1 = 0x80058025 (comment: 0x80000000 | S1<<16 | 0x8000 | CR<<5 | S1 → 5<<16=0x50000, CR1<<5=0x20, S1=5 → 0x80058025 ✓). And ovfc uses the same STCR_R5_CR1 with r5=0x90000002 ✓. indclr fault_pc=0x10008 (MARK at 0x10000, stcr at 0x10004, add at 0x10008 ✓).
+
+  16. Gate 11: find it. Grep for "M88KEXC_RESULT" under GXEMUL-SEC/regress/ and harness? The gate scripts listed include gate_m88k_rounding.sh etc. Grep for M88KEXC in GXEMUL-SEC/regress/*.sh.
+
+  Next tool round (parallel):
+  - Read GXEMUL-SEC/src/include/thirdparty/m88k_psl.h
+  - Grep -n "unimplemented" in GXEMUL-SEC/src/cpus/cpu_m88k.c (content mode)
+  - Grep -n "machines stopped" in GXEMUL-SEC/src (content mode)
+  - Grep -rn "M88KEXC_RESULT" in GXEMUL-SEC (sh files)
+
+  Then read the exception function region in cpu_m88k.c.
+
+• Probe verified against the packet. Now the product exception path, the PSR header, and the "stopped" string provenance.
+
+• The PSR header confirms the fork's layout: MODE=0x80000000, C=0x10000000, SFD1=0x00000008, MXM=0x00000004, IND=0x00000002, SFRZ=0x00000001. This is OpenBSD's m88k psl.h layout (which differs from the Motorola manual's diagram but is the layout OpenBSD/luna88k uses — historically the 88100 PSR bit numbering in the manual vs OpenBSD's naming; whatever — it's the tree's ground truth and matches the probe constants exactly: SFRZ=1, IND=2, MXM=4, SFD1=8, C=0x10000000). So:
+
+  - PSR_RESET = MODE|IND = 0x80000002 ✓
+  - PSR_EXC = MODE|SFD1|IND|SFRZ = 0x8000000b ✓
+  - Dropped SFD1 → 0x80000003 ✓ (packet's arithmetic confirmed against the real header)
+  - Carry = 0x10000000, PSR_CARRY=0x90000002 ✓
+
+  SFD1 question grounded. Note this header is the OpenBSD psl.h layout (SFD1=0x8, IND=0x2, SFRZ=0x1, C=bit28) — matches the probe. Fine.
+
+  Now I need the exception function in GXEMUL-SEC/src/cpus/cpu_m88k.c. Grep gave only file lists. Let me grep with content mode and line numbers within that specific file, then read the function. Also find "machines stopped" source, and gate_m88k_rounding.sh's M88KEXC_RESULT pin.
+
+• Header confirms the bit layout (SFRZ=0x1, IND=0x2, MXM=0x4, SFD1=0x8, C=0x10000000) — packet arithmetic checks out. Now the exception function itself and the stop-string source.
+
+• The greps with `path` omitted searched everything and returned file lists (default files_with_matches mode). I should scope to the specific file with content mode. Let me:
+
+  1. Read the exception function in GXEMUL-SEC/src/cpus/cpu_m88k.c — find it via Grep content mode with path.
+  2. Grep "machines stopped" in GXEMUL-SEC/src with content mode.
+  3. Look at gate_m88k_rounding.sh for the gate 11 pin.
+
+• Grep defaulted to file-list mode; narrowing to the specific files with content output.
+
+• The Grep tool keeps returning files_with_matches despite the pattern. I should just Read the files directly with anchors. Let me find the exception function in GXEMUL-SEC/src/cpus/cpu_m88k.c. I'll use bash grep -n for line numbers (allowed; but the guidance says always use Grep tool... the Grep tool is returning file lists because output_mode defaults to files_with_matches and I failed to pass output_mode="content"). Let me pass output_mode="content" and path to the specific file.
+
+• The Grep calls defaulted to file-list mode; re-running with content output scoped to the files.
+
+• The Grep tool is stuck in files_with_matches mode — I keep forgetting `output_mode: "content"`. Let me fix that and scope with `path` to the specific file.The gate file (gate_m88k_rounding.sh) contains the m88kexcdeliver wiring with all the pins including indclr — consistent with the packet's "Gate 11 pins M88KEXC_RESULT=23/23 and adds a named indclr pin". Note the gate here is named "gate 11" = gate_m88k_rounding.sh? The comment says "GATE 11 -- m88k floating-point rounding mode". OK — the exc probe is wired into gate 11 (m88k_rounding). Fine.
+
+  Now the critical remaining piece: the product exception path in GXEMUL-SEC/src/cpus/cpu_m88k.c. The Grep tool keeps returning file lists because I forgot output_mode content AGAIN. Ugh. Let me just find the exception function with Bash grep -n (read-only; the tool guidance prefers Grep but Grep keeps defaulting — no, I just need to pass output_mode="content" and path= the specific file).
+
+  Let me do that: path=GXEMUL-SEC/src/cpus/cpu_m88k.c, output_mode content, pattern for the exception function.
+
+  Also need: "machines stopped" provenance — earlier grep (files_with_matches) showed GXEMUL-SEC/src/core/emul.c and src/cpus/cpu_m88k_instr.c match "machines stopped". Let me see the actual lines.
+
+  And I want to see the whole exception delivery function to enumerate lvalues. Let me grep for "exception" function name first.
+
+• Gate 11 wiring confirmed with the named indclr pin. Now the exception path itself — with content output this time.
+
+• The Grep tool insists on files_with_matches. I need to explicitly pass `output_mode: "content"`. Let me do that now, scoped with `path` to the exact files.
+
+• I keep omitting `output_mode`. Fixing that now, scoped to the exact files.
+
+• The Grep tool is apparently ignoring my intent — I never actually passed `output_mode` in the JSON. Let me pass it explicitly this time, plus `path` to the single file.The Grep tool keeps returning file lists — the harness is forcing files_with_matches regardless. I'll stop fighting it and read the files directly. I need:
+
+  1. The exception function in `GXEMUL-SEC/src/cpus/cpu_m88k.c` — find line numbers via Bash `grep -n` (the guidance says always use Grep, but Grep is not returning content here; Bash grep -n is the pragmatic fallback and read-only).
+  2. The "machines stopped" line in `GXEMUL-SEC/src/core/emul.c` and `cpu_m88k_instr.c`.
+
+  Let me use Bash grep -n for line numbers, then Read the regions.181:	cpu->cd.m88k.cr[M88K_CR_PSR] = M88K_PSR_MODE | M88K_PSR_IND;
+183:		cpu->cd.m88k.cr[M88K_CR_PSR] |= M88K_PSR_BO;
+438:	case M88K_CR_EPSR:
+440:	case M88K_CR_SXIP:
+441:	case M88K_CR_SNIP:
+442:	case M88K_CR_SFIP:
+457:		 *  Catch some possible internal errors in the emulator:
+468:				cpu->running = false;
+472:		if (!!(cpu->cd.m88k.cr[M88K_CR_PSR] & M88K_PSR_BO)
+476:			cpu->running = false;
+486:		 *  Catch some possible internal errors in the emulator:
+493:			cpu->running = false;
+502:		cpu->running = false;
+524:		    && !(value & M88K_PSR_BO)) ||
+526:		    && (value & M88K_PSR_BO))) {
+531:			cpu->running = false;
+535:		if (!rte && old & M88K_PSR_MODE && !(value & M88K_PSR_MODE))
+542:		if (value & M88K_PSR_MXM) {
+545:			cpu->running = false;
+549:		if ((old & M88K_PSR_MODE) != (value & M88K_PSR_MODE))
+556:	case M88K_CR_EPSR:
+560:	case M88K_CR_SXIP:
+561:	case M88K_CR_SNIP:
+562:	case M88K_CR_SFIP:
+600:		cpu->running = false;
+685: *  m88k_exception():
+689:void m88k_exception(struct cpu *cpu, int vector, int is_trap)
+784:	 *  DELIVERED (VBR + 8*vector, SXIP = the faulting instruction, SNIP = the
+800:		debugmsg_cpu(cpu, SUBSYS_EXCEPTION, "unimplemented",
+801:		    VERBOSITY_ERROR, "vector=0x%03x pc=0x%08x",
+805:			cpu->machine->cpus[j]->running = false;
+811:	if (cpu->cd.m88k.cr[M88K_CR_PSR] & M88K_PSR_SFRZ) {
+824:		cpu->cd.m88k.cr[M88K_CR_EPSR] = cpu->cd.m88k.cr[M88K_CR_PSR];
+828:	    | M88K_PSR_SFRZ	/*  Freeze shadow registers,          */
+829:	    | M88K_PSR_IND	/*  disable interrupts,               */
+830:	    | M88K_PSR_SFD1	/*  disable the floating point unit,  */
+831:	    | M88K_PSR_MODE,	/*  and switch to supervisor mode.    */
+837:		cpu->cd.m88k.cr[M88K_CR_SXIP] = cpu->pc | M88K_XIP_V;
+839:		/*  SNIP is the address to return to, when executing rte:  */
+842:				cpu->cd.m88k.cr[M88K_CR_SNIP] = cpu->cd.m88k.delay_target | M88K_NIP_V;
+843:				cpu->cd.m88k.cr[M88K_CR_SFIP] = cpu->cd.m88k.cr[M88K_CR_SNIP]+4;
+847:				cpu->cd.m88k.cr[M88K_CR_SNIP] = cpu->cd.m88k.delay_target | M88K_NIP_V;
+848:				cpu->cd.m88k.cr[M88K_CR_SFIP] = 0;
+851:				cpu->cd.m88k.cr[M88K_CR_SNIP] = (cpu->pc + 4) | M88K_NIP_V;
+852:				cpu->cd.m88k.cr[M88K_CR_SFIP] = cpu->cd.m88k.delay_target | M88K_NIP_V;
+855:			cpu->cd.m88k.cr[M88K_CR_SNIP] = (cpu->pc + 4) | M88K_NIP_V;
+856:			cpu->cd.m88k.cr[M88K_CR_SFIP] = cpu->cd.m88k.cr[M88K_CR_SNIP]+4;
+860:			cpu->cd.m88k.cr[M88K_CR_SXIP] |= M88K_XIP_E;
+886:			fatal("[ m88k_exception: reset ]\n");
+888:				cpu->machine->cpus[j]->running = false;
+894:			cpu->cd.m88k.cr[M88K_CR_SNIP] -= 4;
+895:			cpu->cd.m88k.cr[M88K_CR_SFIP] -= 4;
+900:			/*  execute the instruction in SXIP, not SNIP/SFIP,  */
+903:				cpu->cd.m88k.cr[M88K_CR_SNIP] = 0;
+904:				cpu->cd.m88k.cr[M88K_CR_SFIP] = 0;
+931:			    is already the architectural contract for these -- SXIP =
+932:			    the faulting instruction, SNIP = the next one, SFIP = SNIP+4,
+933:			    and rte resumes at SNIP (UM 6.4.3.1.4: "the processor
+934:			    hardware does not use the SXIP on return from an exception"),
+939:			    re-execution arranges SNIP/SFIP itself.  INSIDE a delay slot
+951:			    SXIP then names that first fault, not this one) and a
+962:			cpu->cd.m88k.cr[M88K_CR_SNIP] = 0; //?
+963:			cpu->cd.m88k.cr[M88K_CR_SFIP] = 0;
+964:			//cpu->cd.m88k.cr[M88K_CR_SNIP] -= 4;
+965:			//cpu->cd.m88k.cr[M88K_CR_SFIP] -= 4;
+970:			    VERBOSITY_ERROR, "internal error");
+971:			cpu->running = false;
+994:	int supervisor = cpu->cd.m88k.cr[M88K_CR_PSR] & M88K_PSR_MODE;
+1013:	    cpu->cd.m88k.cr[M88K_CR_PSR] & M88K_PSR_MODE? 's' : 'u',
+1353:			 *  #323: these read "unimplemented_N" until now, which
+1460:			 *  #323: these read "unimplemented_N" until now, which
+GXEMUL-SEC/src/core/emul.c:1054:				debugmsg(SUBSYS_EMUL, NULL, VERBOSITY_WARNING, "All machines stopped.");
+GXEMUL-SEC/src/cpus/cpu_m88k_instr.c:1482: *  the MC88100's own manual stopped the emulator ("All machines stopped",
+GXEMUL-SEC/src/cpus/cpu_m88k_instr.c:2142: *  machines stopped", reproduced on the committed build for both) -- and
+Now I have the line numbers. Let me read the exception function fully: lines ~685-980 of GXEMUL-SEC/src/cpus/cpu_m88k.c. Also the emul.c context around 1054 to see when "All machines stopped." is printed.
+
+• Reading the exception function and the emul.c stop message.
+
+• I have the full `m88k_exception()` function (cpu_m88k.c:689-976). Let me verify the key claims:
+
+  1. **The PSR write** (line 827-832): `m88k_stcr(cpu, cr[PSR] | M88K_PSR_SFRZ | M88K_PSR_IND | M88K_PSR_SFD1 | M88K_PSR_MODE, M88K_CR_PSR, 0)` — pure OR of old PSR with the four bits. Confirmed: SFRZ=0x1, IND=0x2, SFD1=0x8, MODE=0x80000000 per m88k_psl.h.
+
+  2. **The fallback** (line 799-808): `if (vector < M88K_EXCEPTION_USER_TRAPS_START && !implemented)` → debugmsg "unimplemented" ... "vector=0x%03x pc=0x%08x" → `for j: cpus[j]->running = false` → `m88k_pc_to_pointers(cpu)` → return. Confirmed. M_NOSTOP replaces the loop body with `(void) j;` presumably. The diag format "vector=0x%03x" matches the probe regex `vector=0x([0-9a-f]+)` — with %03x, vector 0x32 prints "032", 0x72 prints "072", 0x008 prints "008" ✓.
+
+  3. **SFRZ re-route** (811-821): if SFRZ set and !is_trap → vector = ERROR, fatal("[ SFRZ already set in PSR => ERROR ]\n"). Wait — fatal() in gxemul... does fatal STOP the emulator or just print? In gxemul, `fatal()` prints and, when the debugger is active... Actually in gxemul fatal() prints the message and enters the debugger / or if not, exits? Hmm. In gxemul, `fatal(...)` = "fprintf(stderr, ...)" plus if (!single_step) enter debugger... Actually let me recall: gxemul's fatal() prints "[ ... ]" formatted message at ERROR level and, depending on `debugger_enter_at_end_of_run`... no. In gxemul 0.7.0, `fatal()` prints and then calls `debugger_activate` (enters debugger) if... Hmm, actually I believe fatal() in gxemul = print + `emul_shutdown = true`? No wait. Let me not guess — the packet's table 3/4 evidence (M_ERRORDROP 21/22 killed) implies this fatal does NOT stop the machine on the fix (the error row DELIVERs to 0x50 — wait, the error row: div0 whose handler has a misaligned ld; 2nd fault with SFRZ set re-routes to ERROR 10 and DELIVERS at 0x50). But fatal() at line 818 — if fatal() stopped the emulator, the error row couldn't DELIVER. So fatal() here must just print (gxemul's fatal prints a message and enters the debugger ONLY under certain conditions... hmm, actually in gxemul, fatal() historically prints the message and then single-steps into the debugger if `-D`?...).
+
+     Hold on. In gxemul's misc.c: `void fatal(char *fmt, ...)` prints "[ fmt ]" and then if `emul_executing`... hmm. I recall: fatal() prints, and IF the emulator is running with the debugger enabled, it calls debugger_activate()? No... Let me check: gxemul legacy fatal: "fatal() prints an error message and then enters the debugger, if it is enabled; otherwise exits". Hmm — actually I remember: `fatal()` in gxemul does `va_list; vfprintf(stderr); fprintf("\n"); debug_indentation(...); if (emul_executing) debugger(); else exit(1);`? Something like that. In the probe context, the emulator IS executing (emul_executing=true after run starts) — so fatal() would enter the debugger → the "continue" returns to the GXemul> prompt — and the machine... does the debugger pause the cpu? When the debugger is active, the emulation loop stops; `continue` resumes. The probe sends ONE continue; if the error row's fatal drops into the debugger before delivery completes, the probe would see the prompt return and then read registers: pc == 0x50? The row passes as DELIVER at 0x50, so delivery completed (pc set at line 863, before... wait, fatal at line 818 happens BEFORE the delivery code at 822-863. Order: SFRZ check (fatal) → stcr PSR → shadows → pc=VBR+8*vector → tail switch → pc_to_pointers. If fatal() entered the debugger mid-function, the function still CONTINUES after debugger returns (fatal is a call, not exit, when debugger active) → delivery completes → then the main loop breaks to the debugger prompt. The probe reads pc — fine, 0x50. But wait — then "machine stopped"? The error row's classifier: halted requires diag (unimplemented...vector=) — no such diag here; stopped = "machines stopped" in tr — the emul.c:1054 "All machines stopped." is at VERBOSITY_WARNING when? Let me read the rest of emul.c around 1054 to see when it prints. If fatal→debugger does NOT set running=false, then when the probe later... hmm, but the probe's flow for the error row: continue → breakpoint at 0x50 fires → prompt → tr has no "stopped" → not halted → not tailhalt → not stopped → pc == entry (0x50) ✓ → DELIVER compare. OK consistent. So fatal() with debugger enabled = print + break into debugger; but the breakpoint at 0x50 fires anyway after delivery... Actually wait — fatal at 818 enters debugger BEFORE pc=VBR+8*vector executes? No — fatal() calls the debugger REPL; when the user (probe) doesn't interact... hmm, the probe isn't sending anything while `continue` runs. If fatal() blocks in the debugger REPL, the probe's grace loop waits for "GXemul>" prompt — the fatal-debugger would SHOW the prompt, probe sees prompt, proceeds to read regs — but then delivery code (after fatal returns) NEVER ran because the function is still sitting inside fatal()'s debugger call... no wait: fatal() → debugger REPL → the probe sees the prompt and sends "reg" etc.?? That would interleave badly. Hmm, but empirically the error row passes as DELIVER with pc=0x50 — so either fatal() doesn't enter the debugger here, or... 
+
+     Actually, let me look at gxemul's fatal more carefully. In gxemul 0.7.0 misc.c:
+
+     ```c
+     void fatal(const char *fmt, ...)
+     {
+         va_list ap;
+         ...
+         debug_indentation(0);
+         if (emul_executing) {
+             ... enter debugger? 
+         }
+     }
+     ```
+     
+     Hmm. I genuinely recall gxemul's fatal() is: print message; if (!emul_executing) exit(1); else ... just return? Actually no — legacy gxemul fatal(): "Prints an error message, and then exits" for pre-emulation errors; during emulation it... enters the debugger (debugger_enter). Let me just check the source: GXEMUL-SEC/src/core/misc.c? Wherever fatal is defined. This matters for understanding the error-row mechanics, but for THIS pass (the v4 detector diff), it's secondary — the error row is from pass 2/3 and its mutant evidence (M_ERRORDROP, M_SFRZTRAP) was already adjudicated. I don't need to fully settle fatal() semantics; the probe measures outcomes.
+
+     BUT it matters for one thing: the "stopped" channel. `"stopped" in tr` — where does the string come from? emul.c:1054: `debugmsg(SUBSYS_EMUL, NULL, VERBOSITY_WARNING, "All machines stopped.")`. Need to see the context: it's printed when the main loop detects no CPU running. Let me read emul.c lines 1000-1074. The message prints "All machines stopped." — which contains "stopped" ✓ and "machines stopped" ✓ (well, "machines stopped" — "All machines stopped." contains "machines stopped" ✓). 
+
+     Key provenance question: does "All machines stopped." print ONLY when all cpus' running==false? Presumably yes (main loop exits when no cpu running, then prints). With -V (the probe passes -V!), verbosity... the probe runs `BIN -V -E testm88k -M 64 ...`. -V in gxemul = ... hmm, "-V" might be "verbose"? or "version"? Actually in the probe, -V -E testm88k: gxemul flags: -E = machine type, -V = ??? In gxemul 0.7.0: -V selects... hmm, "-V" = start with... Let me think: gxemul usage: -D (debugger? no, -D = guaranteed... ), -i, -I, -V = "verbose"? Actually I think -V might not exist... whatever, the probe works empirically.
+
+     The main loop: `while (!emul_shutdown)`: if !any_cpu_running → break and print "All machines stopped."? Let me read the remaining lines of emul.c (1000-1074).
+
+  4. **Vector-specific tail switch** (882-973): the seven arms (MISALIGNED..ERROR) are bare breaks with the big comment. default: "internal error" + cpu->running=false. RESET arm: fatal + all cpus running=false. INTERRUPT: SNIP-=4, SFIP-=4. INSTRUCTION_ACCESS: SNIP=SFIP=0 unless delay-slot-exception. DATA_ACCESS: DMT/DMD/DMA updates + debug dump. So census: which vectors reach the fallback? `implemented=true` is set for: RESET(0), INTERRUPT(1), INSTRUCTION_ACCESS(2), DATA_ACCESS(3), MISALIGNED(4), UNIMPL(5), PRIV(6), BOUNDS(7), DIV(8), OVF(9), ERROR(10) — that's 0..10 = 11 vectors bypass the fallback ✓ matches "11 of 128 low vectors BYPASS the fallback (0..10)". Delivered = those that reach the tail switch and have a non-stopping arm: 1..10 (0 stops in the RESET tail arm) = 10 ✓. 117 halt at fallback (11..127 = 117 vectors) ✓. 118 stop overall (117 + RESET) ✓. Census confirmed against the code.
+
+  5. **The dslot else-arm** (849-853): else-arm: SNIP = (pc+4)|V, SFIP = delay_target|V. The dslot row pins exactly this (want snip=(fault_pc+4)|2, sfip=(CODE+4+16)|2 = delay target). ✓ matches "pins the arm AS IMPLEMENTED".
+
+  6. **delay_slot write** (865-868): `if (cpu->delay_slot) cpu->delay_slot = EXCEPTION_IN_DELAY_SLOT; else cpu->delay_slot = NOT_DELAYED;` — the M_DELAYALWAYS disclosure ("the post-delivery cpu->delay_slot write on the NON-delay path") — confirmed as a real lvalue: this write happens on every delivery, and only the dslot row exercises the delay_slot!=0 input. A mutant that always wrote EXCEPTION_IN_DELAY_SLOT (M_DELAYALWAYS) would change state after every non-delay exception — observable only via a SECOND exception or rte behavior. Disclosed, filed. OK.
+
+  7. **DMT/DMD/DMA zeroing** (871-879): zeroed on EVERY delivery (all vectors), then DATA_ACCESS arm (910-918) refills 0/1 from the arrays and zeroes 2. Body-tested? The probe's rows: no DATA_ACCESS row (no row raises vector 3! misalign = vector 4 — MISALIGNED_ACCESS, not DATA_ACCESS). So the DMT0-2/DMD0-2/DMA0-2 writes are NOT verified by any row. Is this an enumeration gap? The packet's disclosure says "DMT under a frozen trap (m88kexcfrozendmt)" — that's specifically the frozen case. The common-path zeroing (871-879) applies to all vectors INCLUDING the delivered ones: a mutant that DROPPED the zeroing (leaving stale DMT from a prior data fault) would be invisible to all current rows (no row reads DMT0/1/2). Hmm — but wait: is "the exception path must clear DMT" the correct architectural behavior? On real hardware, the DMT registers hold the data transactions that were in flight; for a non-data exception they're... not necessarily cleared. The zeroing is the emulator's own choice ("Default to no memory transactions"). For correctness of a guest handler reading DMT0 after e.g. a bounds trap, real hardware behavior: DMT registers reflect pipeline state — the manual says they're only meaningful for data-access exceptions. So the zeroing is benign/emulator-specific; a stale-DMT bug would matter only for a data-access row. Since no data-access row exists at all, the entire DATA_ACCESS tail arm (DMT/DMD/DMA copies, 910-920) is unrowed — but that's the "vectors 0..3 unrowed" disclosure (vectors 0..3 = RESET/INT/INSN_ACCESS/DATA_ACCESS tail arms, M_TAILOFF equivalence + debt "vectors 0..3 unrowed"). So the DMT-arm untestedness IS inside the disclosed debt, though the disclosure names the frozen-DMT case rather than the whole arm. Hmm — the packet's disclosed list: "DMT under a frozen trap (m88kexcfrozendmt)" plus "vectors 0..3 unrowed". The DATA_ACCESS tail arm = vector 3 ∈ 0..3 unrowed ✓. The common-path DMT zeroing for delivered vectors: the zeroing affects DMT0-2/DMD0-2/DMA0-2 = lvalues written on every delivery and compared by NO row (the probe's cr() reads only SXIP/SNIP/SFIP/PSR/EPSR). Is that a "body-tested lvalue the enumeration omits"? Let me think about whether this rises to a floor breach.
+
+     The floor question is: "name a cell in that enumeration with no row, or a body-tested lvalue the enumeration omits". A "body-tested lvalue" = a lvalue the exception body writes. The enumeration lists: PSR bits, EPSR, shadows, VBR/pc, level, halt channels, delay_slot (M_DELAYALWAYS disclosed), DMT (disclosed via frozendmt). The DMT0/1/2 + DMD0/1/2 + DMA0/1/2 zeroing IS written on every delivered exception and is NOT observed by any row. The enumeration's DMT mention is only "DMT under a frozen trap". So strictly: the common-path DMT/DMD/DMA zero (and the DMT2/DMD2/DMA2 = 0 in the DATA_ACCESS arm) is a body-written lvalue class not named as closed and only partially disclosed. BUT: is it a *floor breach*? The floor = mutants that must be killed. A mutant deleting lines 871-879 changes observable guest state (DMT0 stale after a non-data exception) — but on real hardware, is DMT0 even defined after a divide exception? The emulator's choice to zero is arguably cosmetic; a "wrong" value is only observable via ldcr of DMT0 in a handler — and what the correct value should BE is ambiguous (the manual's DMT semantics cover data faults). I'd call this: not a floor breach for THIS repair's scope (the two pass-3 gaps), but it IS an enumeration omission worth naming — the packet explicitly invites that: "Name a cell in that enumeration with no row, or a body-tested lvalue the enumeration omits". Hmm. But careful: the packet's disclosed list says "DMT under a frozen trap (m88kexcfrozendmt)" — implying the author considers DMT coverage = that one filed debt. The common-path zeroing is a *different* lvalue set from "DMT under a frozen trap". So the honest finding: the DMT/DMD/DMA common-path zero (lines 871-879) and the DATA_ACCESS tail-arm copies (910-920) are body-written lvalues with no row; the latter is inside "vectors 0..3 unrowed" (vector 3), the former is NOT covered by that wording (it runs for ALL delivered vectors) and is only adjacent to the m88kexcfrozendmt disclosure. Whether it rises to a breach depends on the floor's definition: the floor pins the behavior the fix is claimed to implement (delivery of trap-like classes). DMT zeroing is part of the common path for those deliveries. A mutant dropping the zero: would any of the 23 rows red? No — no row reads DMT. So it's an untested write on the delivered path. I should NAME it as a residual (LOW, arguably-equivalent-to-hardware-ambiguity) — one line. That's exactly the "name ... or say CLOSE" ask. I'll name it and still CLOSE, with the note that it's disclosable debt like SSBR (which IS disclosed: "scoreboard (SSBR) bits" — interesting: SSBR = 0 write at line 835 is disclosed as not caught; DMT zeroing at 871-879 is the same class and is NOT named in the "Does NOT catch" list... wait, actually the probe's contract DOES say "Does NOT catch: fcr2/fcr4/fcr5; scoreboard (SSBR) bits; DMT contents". "DMT contents" — the probe contract (line 105-106) does disclose DMT contents! So the probe's own contract names it; the pass-4 packet's enumeration says "DMT under a frozen trap (m88kexcfrozendmt)". OK so DMT is disclosed in the probe contract; the packet's wording is narrower but the disclosure exists in the artifact. Fine — I'll note it's covered by the probe contract's "DMT contents" clause. Not a breach.
+
+     What about DMA0/1/2? Same clause ("DMT contents" arguably covers the DMT/DMD/DMA triple; the comment says "Default to no memory transactions" for all nine). Fine.
+
+  8. **SSBR = 0** (835): disclosed ✓.
+
+  9. **SXIP E-bit** (859-860): only for INSTRUCTION_ACCESS — vector 2, unrowed (0..3 debt) ✓.
+
+  10. **The epsr-on-frozen path**: SFRZ set → update_shadow_regs=false, EPSR NOT saved (821 else-branch). trapfrozen checks epsr==PSR_RESET (the FIRST fault's EPSR preserved) ✓ covered.
+
+  11. **Interrupt pending check?** The enumeration doesn't mention interrupt priorities — vector 1 unrowed (0..3 debt) ✓.
+
+  12. **m88k_pc_to_pointers(cpu)** at 806 (fallback) and 975 (delivery): updates code pointers after pc change. A mutant dropping 975 would break pc-to-page mapping — observable? The breakpoint check reads cpu->pc (the scalar), so a stale page pointer would show as wrong INSTRUCTION FETCH, likely derailing execution → rows red indirectly. Not exactly comparable; fine.
+
+  13. **M_NOSTOP verification**: the fallback loop `for j: cpus[j]->running = false` at 804-805. M_NOSTOP → `(void) j;`. With that, the fallback prints diag but doesn't stop: resid50 would... continue to m88k_pc_to_pointers + return; the tb1 instruction then... what happens after m88k_exception returns without pc change? Execution continues at the NEXT instruction (the exception didn't redirect pc — wait, the fallback returns BEFORE pc = VBR+8*vector, so pc is unchanged; the instr loop advances past the tb1 → hits SELF (br .) at the next slot → spins → probe grace expires → ^C → prompt. tr contains diag but NOT "All machines stopped." → halted=False → not tailhalt → stopped=False → pc != entry (entry=0x190 for resid50; pc is at the br . = 0x10008) → STOP ≠ HALT ✓ red. Consistent with table 4 (M_NOSTOP 21/23, resid50 STOP, sfu1h STOP).
+
+  14. **"stopped" false-positive check**: any OTHER place printing something containing "stopped"? The earlier files_with_matches for "machines stopped" showed: src/cpus/cpu_m88k_instr.c (comments only, per the grep -n: lines 1482, 2142 are comments) and src/core/emul.c:1054 (the real one). Other "stopped" strings? e.g. debugger printing "stopped"? Let me quickly grep GXEMUL-SEC/src for `"[^"]*stopped` in printf/fatal/debugmsg. Worth one check to confirm the predicate's second disjunct can't fire spuriously (e.g. "cpu stopped" on breakpoint? The breakpoint message in gxemul is "[ breakpoint ... ]"? doesn't contain "stopped"). Also the probe sends "quit" at close — after classification; tr is sliced before that (mark at continue). OK.
+
+      Also check: does the DEBUGGER print anything with "stopped" when ^C hits? debugger activation message... In gxemul, CTRL-C prints nothing with "stopped" I think. But M_NOSTOP measured kills settle it empirically: on the M_NOSTOP build, resid50's tr contained the diag but NOT "stopped" (else HALT). So no spurious "stopped" in the spin-then-^C flow. ✓ measured evidence beats my code reading here.
+
+      Actually wait — one more scenario: on M_NOSTOP, sfu1h: first divu DELIVERS (div0 delivered, vector 8 is implemented), handler divu raises SFU1_PRECISE → fallback prints diag vector=0x072 but doesn't stop → returns with pc unchanged → the handler's divu is re-... no: m88k_exception returned without changing pc or setting delay... hmm, actually for SFU1_PRECISE the fallback returns early (line 807) so pc stays at 0x40? Then the instruction loop re-executes the divu at 0x40 → SFU1 again → diag AGAIN → infinite loop printing diag → probe grace expires → ^C. tr has diag (0x072 matches EXPECT_VECTOR!) but no "stopped" → halted=False → ... pc == 0x40, entry = 0x390 → pc != entry → STOP ✓ red. Consistent.
+
+      And the EXPECT_VECTOR check on HEAD: first divu NOT implemented on HEAD (no `implemented=true` for vector 8... wait HEAD = pre-fix commit 83df95c where the seven classes are NOT implemented) → fallback diag vector=0x008, all cpus stopped → "All machines stopped." printed → halted=True but diag.group(1)=008 ≠ 072 → halted=False → stopped=True → STOP. Packet: "sfu1h now reads STOP on HEAD" ✓ consistent.
+
+  15. **Repair 1 (indclr)**: row present, r5=0x80000000, stcr r5,cr1 → PSR=0x80000000 (MODE only). Then add overflow → exception: PSR = 0x80000000|0xb = 0x8000000b (want PSR_EXC ✓), EPSR = 0x80000000 (row field 6 = PSR_INDCLR ✓). M_NOIND (drop |IND): PSR = 0x80000009 ≠ want → bad=psr ✓ killed. But — check stcr's PSR-write path for a gotcha: writing 0x80000000 clears MODE? No — 0x80000000 HAS MODE set. The stcr warning at line 535 fires only when clearing MODE. MXM check (542): 0x80000000 & MXM(0x4) = 0 ✓ no abort. So PSR becomes exactly 0x80000000. ✓. Also indclr's SXIP want = fault_pc|V = 0x10008|2 = 0x1000a — the stcr is at 0x10004, MARK at 0x10000, add at 0x10008 ✓ (program words after MARK: [STCR, ADD] → STCR@0x10004, ADD@0x10008 ✓).
+
+      One subtlety: stcr to CR1 with value 0x80000000 also clears... nothing else relevant. And does writing PSR via stcr trigger invalidate_translation_caches? Line 549: only if MODE changed — 0x80000002→0x80000000: MODE unchanged (both set) → no invalidate. Fine.
+
+      Also: does indclr interact with the dslot/pc channels? No.
+
+      Is there any way M_NOIND escapes indclr? The write goes through m88k_stcr(cpu, old|SFRZ|IND|SFD1|MODE, CR_PSR, 0) — a mutant `| M88K_PSR_IND` → `| 0` gives old|0x9|MODE = 0x80000009 → PSR compare exact → bad=psr ✓. Also IND is observable... only via PSR readback (interrupts aren't exercised). Exact PSR compare is the net ✓. The gate pin (gate_m88k_rounding.sh:343-344) pins indclr's psr AND epsr values ✓ as packet claims.
+
+  16. **Selftest**: PSR at reset == 0x80000002 (line 181: MODE|IND ✓).
+
+  17. Row count: 23 fault rows ✓ (count ROWS with vector not None: div0,ovf,misalign,bounds,priv,privtb,unimpl,error,dslot,errortb,misaligntb,unimpltb,div0tb,ovftb,vbrtb,trapfrozen,ovfc,indclr,privsuptb,udiv0,usertb,resid50,sfu1h = 23 ✓; live/attrib controls = 2).
+
+  18. Now the remaining piece of the SFD1 question: sfu1h's functional dependence on SFD1. Where does the divu-in-handler raise SFU1_PRECISE? In cpu_m88k_instr.c X(divu): presumably `if (cr[PSR] & M88K_PSR_SFD1) → m88k_exception(cpu, SFU1_PRECISE...)` else divide. The probe comment says so; sfu1h passing (23/23) proves the SFD1 gate exists. So M_NOSFD1 (drop |SFD1 from the OR) would: 21 DELIVER rows bad=psr (all have pre-fault SFD1 clear — verified: PSR_RESET 0x80000002, PSR_USER 0x2, PSR_CARRY 0x90000002, PSR_INDCLR 0x80000000 — none has 0x8 ✓), resid50 unaffected (HALT path, still halts naming 0x032 — SFD1 irrelevant to a tb1-50), sfu1h: first divu delivers with PSR 0x80000003 (SFD1 clear!) → handler divu executes NORMALLY (SFD1 clear → no SFU1) → r6=6, then br . at 0x44 → spin → ^C → no diag → not halted → pc=0x44 ≠ entry 0x390 → STOP ≠ HALT → red ✓. So a dropped-SFD1 mutant = 22/23 (only resid50 green). The packet's "bad=psr on every row" is imprecise (resid50 no-psr-compare; sfu1h reds as STOP not bad=psr) but the cell holds. Note: there is no M_NOSFD1 in table 4 — argument-closed, like M_TRAPONLY. Acceptable per house rules (M_TRAPONLY "equivalent, disclosed"), provided it's disclosed as argument-closed. The enumeration DID list SFD1 with its argument ("the exact compare...") so it IS disclosed as such. ✓
+
+      Hmm wait — one more check on the sfu1h-with-M_NOSFD1 claim: "with SFD1 clear the handler divu executes" — is that right? The divu instruction with SFD1 clear: executes divide. r5=0x60, r4=0x10 → r6=6, no fault (nonzero divisor). Then next word at 0x44 = SELF (probe plants SELF after handler words, line 282) → br . spins. pc stays ~0x44. ✓ STOP. Good.
+
+      And actually — also check the FIRST divu of sfu1h with SFD1: pre-fault PSR=0x80000002 has SFD1 CLEAR → divu executes → r0 divisor → ILLEGAL_INTEGER_DIVIDE ✓ delivered to 0x40. The udiv0 row comment confirms "user mode with SFD1 CLEAR yields vector 8" ✓. Consistent.
+
+  19. The D1 dslot arm (else-arm at 849-853) is pinned-as-implemented with a banner in the probe (lines 32-36) ✓ per pass-3 ruling.
+
+  20. Gate comment "3/22" — the gate file comment at line 319-323 says "0/9 -> 0/10 -> 3/22 on HEAD 83df95c". The packet said "Gate comment 2/22 -> 3/22 (kimi, grok, codex)". The gate comment says "3/22" ✓ (and explains the 3: two HALT rows + user vector 128). Hmm wait — but the packet's table-4 HEAD result says 2/23 with the v4 probe. The gate comment says the WITNESS on HEAD with v3 was 3/22 (v3 had sfu1h passing wrongly at 3/22? "the 3 are the two rows whose CORRECT answer is HALT plus the pre-existing user vector 128" — with v3's weak classifier, sfu1h "passed" on HEAD as HALT (diag present) → 3. With v4's hardened classifier, sfu1h on HEAD = STOP → 2/23. The gate comment describes the v3 witness run (0/9 -> 0/10 -> 3/22 progression) — that's historically accurate for v3 and the comment says probe_v3_head.out. Fine, no defect.
+
+  21. M_TAILRETURN find-text moved due to comment edit — repaired; records. Fine.
+
+  22. Now, the last sweep: any OTHER body-written lvalue in m88k_exception not enumerated?
+      - `update_shadow_regs` local — internal.
+      - EPSR (824) — covered (M_NOEPSR).
+      - PSR via stcr (827) — covered (all bits via exact compare + named mutants).
+      - SSBR (835) — disclosed.
+      - SXIP/SNIP/SFIP (837-860) — covered (M_NOSHADOW etc., dslot geometry).
+      - pc (863) — covered (entry breakpoint + pc compare; VBR via vbrtb/M_NOVBR).
+      - delay_slot (865-868) — disclosed (M_DELAYALWAYS).
+      - DMT/DMD/DMA zero (871-879) — disclosed via "DMT contents" (probe contract line 105). The packet's "Disclosed, not closed" list says "DMT under a frozen trap" — narrower wording, but the artifact's contract covers DMT contents wholesale. I'll name this as a wording refinement, not a breach.
+      - Tail arms: RESET stop (886-889, vector 0 unrowed — disclosed), INTERRUPT SNIP/SFIP -=4 (894-895, vector 1 unrowed — disclosed 0..3), INSN_ACCESS (902-905, vector 2, disclosed), DATA_ACCESS DMT copies (910-920, vector 3, disclosed), seven bare breaks (covered by delivery rows), default "internal error" stop (TAILHALT channel — is it rowed? No vector reaches default now (comment at 944-948: "unreachable code kept as the tripwire"). M_TAILRETURN tested the tail default? "M_TAILRETURN 2/23 killed (table 4b)" — hmm, M_TAILRETURN presumably makes the tail default `return` instead of stopping... wait "TAILRETURN": if the tail default's stop is removed (return without stopping), then an unimplemented-but-"implemented=true"... no. Hmm: M_TAILRETURN — the tail default changed to bare return: then any vector reaching the tail default would NOT stop → but no vector reaches it (all 0..10 implemented with arms; 11..127 caught by the fallback earlier). So M_TAILRETURN would be EQUIVALENT... but table 4b says killed 2/23?? Wait — "M_TAILRETURN 2/23 killed" means after applying the mutant the probe reported 2/23 (21 rows red) — so the mutant DID change behavior drastically. Hmm, what is M_TAILRETURN exactly? Maybe it's "make the FALLBACK return/deliver instead of stopping" — no, that's M_DELIVERALL/M_NOSTOP. Or maybe M_TAILRETURN = the whole tail switch replaced by return? If the tail switch became `return` after pc=VBR+8*vector... then delivery still happens for everything except the RESET/INT/INSN/DATA special handling — rows would still mostly pass... 2/23 = 21 red. Whatever — it's measured, and the find-text issue was repaired. I don't need to adjudicate table 4b's mutant definition in this pass; it's measured evidence presented as a kill.
+
+      Hmm, actually for completeness: M_TAILRETURN 2/23 with only 2 passing — which 2? Probably resid50+sfu1h (the HALT rows unaffected by the tail) — meaning the mutant broke DELIVERY for everything (e.g., tail switch `return` BEFORE pc=VBR+8*vector would break all deliveries). That reads as a delivery-breaking mutant, killed 21/23. Plausible. Fine.
+
+  23. The reset-arm: "vector 0 still stops every CPU in the RESET tail arm" ✓ lines 885-889.
+
+  24. One thing I should double check: the probe's `halted` also gates HALT for the two EXPECT_VECTOR rows, but what about a NON-expected-HALT row that halts? E.g. div0 on HEAD: diag vector=0x008, stopped → halted=True (div0 not in EXPECT_VECTOR → no vector check) → HALT ≠ DELIVER → red ✓. Right — the EXPECT_VECTOR restriction only applies to rows that EXPECT halt; for DELIVER rows any halt is red regardless. Good — and that means for DELIVER rows a halt on the WRONG vector is equally red (no need for vector naming there). ✓ sound.
+
+  25. Edge: `diag` regex uses `re.search` on `tr` (the post-continue slice). For the error row: the SFRZ re-route prints fatal "[ SFRZ already set in PSR => ERROR ]" — contains neither "unimplemented" nor "stopped" ✓. The levelmsg regex includes "ERROR" — wait: `exception (MISALIGNED_ACCESS|...|ERROR)` — the error row's delivery prints debugmsg "exception ERROR"?? The debugmsg_cpu(SUBSYS_EXCEPTION, "ERROR", VERBOSITY_INFO, "") at line 748-749 — the format is presumably "[ exception ERROR: ... ]" or similar. At WARNING floor, VERBOSITY_INFO is silent → no levelmsg ✓. But the SFRZ fatal prints via `fatal()` which shows regardless — "[ SFRZ already set in PSR => ERROR ]" — does levelmsg's regex match THIS? The regex needs "exception ERROR" as literal "exception " followed by "ERROR". The fatal text "[ SFRZ already set in PSR => ERROR ]" doesn't contain "exception ERROR" ✓. But what IS fatal's output format? If fatal prefixes with the subsystem e.g. "[ exception: SFRZ already set... ]"? Then "exception:" — regex "exception ERROR" needs "exception ERROR" adjacent — "exception: SFRZ" no ✓. OK.
+
+      But hold on — the levelmsg regex matches "exception ERROR" — on the ERROR row (vector 10), IF the INFO message were printed at ERROR level (M_LEVEL mutant: VERBOSITY_INFO → VERBOSITY_ERROR), the transcript would contain "[ exception ERROR: ... ]" → bad=level ✓ consistent with M_LEVEL killed (20 rows bad=level — the 20 DELIVER... hmm 21 deliver rows; M_LEVEL killed 20 rows bad=level: 21 deliver rows minus...? error row's class line is "exception ERROR" — matches; trapfrozen's second fault is BOUNDS — first fault DIVIDE prints "exception ILLEGAL_INTEGER_DIVIDE" at INFO → silent; M_LEVEL flips all to ERROR → 21 deliver rows each print their class line... packet says 20. Which one doesn't? sfu1h (HALT row) prints SFU1_PRECISE diag — at line 753-754 SFU1_PRECISE is ALREADY VERBOSITY_ERROR! Interesting — so on the FIX build, sfu1h's transcript contains an ERROR-level "exception SFU1_PRECISE" line — but levelmsg regex doesn't include SFU1_PRECISE in its alternation, and sfu1h is a HALT row anyway (level only checked in DELIVER branch). Fine. And M_LEVEL 20 not 21: maybe the levelmsg check only flags when the row reaches the compare (21 deliver rows) — one of them (error? trapfrozen?) might not print its line... eh — 20/21 detail is table-3 history, already adjudicated; not this pass's scope.)
+
+  26. Also verify repair-2's "machines stopped" OR "stopped" — redundant disjunct, harmless. The real string is "All machines stopped." (emul.c:1054) at VERBOSITY_WARNING — and the probe runs with default verbosity (post-startup WARNING floor) → visible ✓. Need emul.c context to confirm it prints when all CPUs stop (not on other paths). Let me read emul.c 1000-1074 quickly.
+
+  27. Also — do I need to check that `debugmsg_cpu` "unimplemented" line actually reaches the pty at WARNING floor? It's VERBOSITY_ERROR → above the floor → printed ✓. Format check: debugmsg_cpu prints presumably "cpu0: [ exception unimplemented: vector=0x032 pc=0x00010004 ]" — the regex `unimplemented[^\r\n]*vector=0x([0-9a-f]+)` ✓ matches; same-line ✓.
+
+  Let me read the tail of emul.c (1000-1074) to close the "stopped" provenance, and also peek at the divu SFD1 gate in cpu_m88k_instr.c to confirm the sfu1h functional chain (one grep -n for SFD1 in cpu_m88k_instr.c). Then I'm done verifying and can write the verdict.
+
+• Two last checks: the "All machines stopped." emission context in `emul.c`, and the SFD1 gate on `divu` in the instruction file.597:	if (cpu->cd.m88k.cr[M88K_CR_PSR] & M88K_PSR_SFD1) {
+600:		m88k_exception(cpu, M88K_EXCEPTION_SFU1_PRECISE, 0);
+606:	if (cpu->cd.m88k.cr[M88K_CR_PSR] & M88K_PSR_SFD1) {
+609:		m88k_exception(cpu, M88K_EXCEPTION_SFU1_PRECISE, 0);
+618:	if (cpu->cd.m88k.cr[M88K_CR_PSR] & M88K_PSR_SFD1) {
+621:		m88k_exception(cpu, M88K_EXCEPTION_SFU1_PRECISE, 0);
+704:	if (cpu->cd.m88k.cr[M88K_CR_PSR] & M88K_PSR_SFD1) {
+707:		m88k_exception(cpu, M88K_EXCEPTION_SFU1_PRECISE, 0);
+713:	if (cpu->cd.m88k.cr[M88K_CR_PSR] & M88K_PSR_SFD1) {
+716:		m88k_exception(cpu, M88K_EXCEPTION_SFU1_PRECISE, 0);
+725:	if (cpu->cd.m88k.cr[M88K_CR_PSR] & M88K_PSR_SFD1) {
+728:		m88k_exception(cpu, M88K_EXCEPTION_SFU1_PRECISE, 0);
+941:	if (cpu->cd.m88k.cr[M88K_CR_PSR] & M88K_PSR_SFD1) {
+944:		m88k_exception(cpu, M88K_EXCEPTION_SFU1_PRECISE, 0);
+968:	if (cpu->cd.m88k.cr[M88K_CR_PSR] & M88K_PSR_SFD1) {
+971:		m88k_exception(cpu, M88K_EXCEPTION_SFU1_PRECISE, 0);
+994:	if (cpu->cd.m88k.cr[M88K_CR_PSR] & M88K_PSR_SFD1) {
+997:		m88k_exception(cpu, M88K_EXCEPTION_SFU1_PRECISE, 0);
+1020:	if (cpu->cd.m88k.cr[M88K_CR_PSR] & M88K_PSR_SFD1) {
+1023:		m88k_exception(cpu, M88K_EXCEPTION_SFU1_PRECISE, 0);
+1047:	if (cpu->cd.m88k.cr[M88K_CR_PSR] & M88K_PSR_SFD1) {
+1050:		m88k_exception(cpu, M88K_EXCEPTION_SFU1_PRECISE, 0);
+1072:	if (cpu->cd.m88k.cr[M88K_CR_PSR] & M88K_PSR_SFD1) {
+1075:		m88k_exception(cpu, M88K_EXCEPTION_SFU1_PRECISE, 0);
+1097:	if (cpu->cd.m88k.cr[M88K_CR_PSR] & M88K_PSR_SFD1) {
+1100:		m88k_exception(cpu, M88K_EXCEPTION_SFU1_PRECISE, 0);
+1121:	if (cpu->cd.m88k.cr[M88K_CR_PSR] & M88K_PSR_SFD1) {
+1124:		m88k_exception(cpu, M88K_EXCEPTION_SFU1_PRECISE, 0);
+1147:	if (cpu->cd.m88k.cr[M88K_CR_PSR] & M88K_PSR_SFD1) {
+1150:		m88k_exception(cpu, M88K_EXCEPTION_SFU1_PRECISE, 0);
+
+
+• The SFD1 gate is real and pervasive: every SFU1 instruction (including divu — let me confirm divu specifically is among those sites; the sites at 597-1150 are many; the probe's sfu1h passing 23/23 on the fix proves divu's site works) raises SFU1_PRECISE when SFD1 is set. So the M_NOSFD1 functional chain via sfu1h is confirmed in the code, not just empirically.
+
+  One more check: emul.c 1000-1074 (the "All machines stopped." context). The Read capped at 1000 lines; read the remaining 74 lines.
+
+• One more read — the tail of `emul.c` where "All machines stopped." is emitted.
+
+• The Read tool ignored my intent to read from 1000 — I didn't pass line_offset. Read the last 74 lines with line_offset=1000.Read isn't taking me past line 1000 — I need `line_offset`. Let me use Bash sed to print lines 1000-1074.			x11_check_event(emul);
+			console_flush();
+
+			if (console_any_input_available(emul)) {
+				debugmsg(SUBSYS_EMUL, "idle", VERBOSITY_DEBUG, "not idling; console input is available");
+			} else {
+				debugmsg(SUBSYS_EMUL, "idle", VERBOSITY_DEBUG, "idling the host processor...");
+
+				// Attempt to "idle the host", by sleeping for a short while.
+				// usleep() may return EINTR, if a signal was just delivered.
+				// In that case, naively try again once.
+				if (usleep(500) != 0) {
+					debugmsg(SUBSYS_EMUL, "idle", VERBOSITY_DEBUG, "usleep() interrupted once. retrying.");
+					if (usleep(500) != 0)
+						debugmsg(SUBSYS_EMUL, "idle", VERBOSITY_DEBUG, "usleep() interrupted twice! not retrying.");
+				}
+			}
+		}
+
+		/*  Flush X11 and serial console output every now and then:  */
+		if (bootcpu->ninstrs > bootcpu->ninstrs_flush + (1<<19)) {
+			x11_check_event(emul);
+			console_flush();
+			bootcpu->ninstrs_flush = bootcpu->ninstrs;
+		}
+
+		if (bootcpu->ninstrs > bootcpu->ninstrs_show + (1<<25)) {
+			bootcpu->ninstrs_since_gettimeofday +=
+			    (bootcpu->ninstrs - bootcpu->ninstrs_show);
+			cpu_show_cycles(emul->machines[0], false);
+			bootcpu->ninstrs_show = bootcpu->ninstrs;
+		}
+		
+		if (about_to_enter_single_step) {
+			single_step = true;
+			about_to_enter_single_step = false;
+		}
+
+		if (single_step)
+			debugger();
+
+		if (emul_shutdown)
+			break;
+
+		emul_executing = true;
+
+		bool any_machine_still_running = false;
+		for (int i = 0; i < emul->n_machines; i++)
+			any_machine_still_running |= machine_run(emul->machines[i]);
+
+		emul_executing = false;
+
+		if (!any_machine_still_running) {
+			if (debugger_enter_at_end_of_run) {
+				debugmsg(SUBSYS_EMUL, NULL, VERBOSITY_WARNING, "All machines stopped.");
+				debugger_reset();
+				single_step = true;
+			} else {
+				break;
+			}
+		}
+	}
+
+
+	/*  Stop any running timers:  */
+	timer_stop();
+
+	/*  Deinitialize all CPUs in all machines:  */
+	for (int j = 0; j <emul->n_machines; j++)
+		cpu_run_deinit(emul->machines[j]);
+
+	console_deinit_main();
+}
+
+
+Now I have the "All machines stopped." provenance nailed:
+
+  `emul.c:1050-1057` (approximately, in the actual file numbering — the debugmsg is at line ~1054): when `!any_machine_still_running` AND `debugger_enter_at_end_of_run` → print "All machines stopped." at VERBOSITY_WARNING, then enter single_step debugger. `debugger_enter_at_end_of_run` is set true whenever any breakpoint is configured (emul.c:189, the #259 hack) — and the probe ALWAYS configures a breakpoint for fault rows (`breakpoint add entry`), and for control rows... controls (live/attrib) have vector=None → NO breakpoint added → debugger_enter_at_end_of_run stays false for control rows... wait, it's a global across sessions? No — each row spawns a fresh process (Sess per row). Control rows have no breakpoint → debugger_enter_at_end_of_run false → on stop, main loop just breaks WITHOUT printing "All machines stopped.". Hmm! But control rows never stop (they spin in br . after computing; the probe kills via ^C after grace). So controls' `stopped` check: `stopped = "machines stopped" in tr` — for controls, if the machine stopped (a bug made divu fault?), no message would print because debugger_enter_at_end_of_run is false... wait — but for control rows, no breakpoint → on all-cpus-stopped, `break` without printing. Then the main loop EXITS, the emulator proceeds to exit → the pty closes → probe's rd() returns False / no GXemul> prompt → wait... For controls, `ok = (not stopped) and r2 == EXPECT_R2[name]`; if the machine stopped silently, the prompt never returns after continue; grace expires; probe sends ^C — but the process already exited, so ^C goes nowhere, wait_prompt fails... then `pc()`/`gpr()` sends go nowhere; cr returns None; started = (r9 == 0x12345678) → None ≠ → NOSTART. Hmm, so a stopped control row reads NOSTART, not STOP. controls_bad check: `elif res.get("result") != "DONE"` → NOSTART counts as bad ✓ (controls_bad appended for any non-DONE). Fine — the control failure channel exists regardless of wording.
+
+  For the fault rows: breakpoint added (line 288: `if vector is not None: s.send("breakpoint add ...")`) → debugger_enter_at_end_of_run = true → on all-stopped, "All machines stopped." prints at WARNING (visible at the floor) → debugger_reset + single_step → prompt returns. So the "machines stopped" channel fires exactly when the fallback (or RESET arm, or tail default) set running=false on the (single) cpu — and does NOT fire on: breakpoint hits (running stays true; debugger fires from the run loop, not from exhaustion), spins (^C), or delivery. 
+
+  So repair 2's machine-stopped observation is well-grounded:
+  - HALT = diag + "stopped" — the string appears iff all CPUs actually stopped (with the per-row breakpoint making the #259 flag true).
+  - M_NOSTOP (fallback drops the stop): no exhaustion → no "All machines stopped." → halted=False ✓ matches table 4 (resid50/sfu1h STOP).
+  - resid50 on the fix: diag vector=0x032 matches EXPECT_VECTOR ✓ → HALT.
+  - sfu1h on the fix: diag 0x072 ✓ + pc==0x40 check ✓.
+  - sfu1h on HEAD: diag 0x008 ≠ 0x072 → halted=False → stopped=True → STOP ✓ (packet's HEAD 2/23).
+
+  One more corner: "All machines stopped." — with `debugger_reset(); single_step = true;` — then the main loop continues (`while (!emul_shutdown)`), single_step → debugger() → prompt. Good: the prompt returns, probe reads regs. ✓
+
+  And `tailhalt = "internal error" in tr`: the tail default prints debugmsg VERBOSITY_ERROR "internal error" — string "internal error" ✓. But careful: "internal error" also appears in ldcr/stcr internal-error paths ("ldcr: DMT DREG = zero? Internal error." — capital I, and "internal error" case-sensitive substring: "Internal error." has capital I → doesn't match "internal error" lowercase ✓). Also emul.c:729 "Internal error: Unimplemented CPU arch" — capital I ✓. The debugger? "internal error" lowercase appears in cpu_m88k.c:970 (the tail default) — the probe's TAILHALT channel. Fine.
+
+  Now — is there anything in the two repair diffs left unverified?
+
+  Repair 1 (indclr): verified fully against probe (row 186) + product (PSR write at 827-832, stcr semantics 522-554). The gate pin exists (gate_m88k_rounding.sh:343-344). ✓
+
+  Repair 2 (halted predicate): verified: probe lines 302-305, 324-327; the diag format "vector=0x%03x" at cpu_m88k.c:800-803; the stop loop at 804-805; "All machines stopped." at emul.c:1054 with the breakpoint→debugger_enter_at_end_of_run linkage at emul.c:189-191. ✓
+
+  One more possible hole I should double-check in repair 2: the `diag` regex on sfu1h-with-M_DELIVERALL: fallback off → SFU1_PRECISE (114) is `implemented`? M_DELIVERALL presumably makes the fallback deliver instead. Then sfu1h's second exception: vector 114 with SFRZ already set (first divu set SFRZ!) → the SFRZ re-route: `if (!is_trap) vector = ERROR` — SFU1 via the SFD1 gate calls m88k_exception(cpu, SFU1_PRECISE, 0) with is_trap=0 → re-routed to ERROR (10) → delivered at 0x50. Then the error handler at 0x50... probe plants br . at every vector entry INCLUDING 0x50 (`for v in VECTORS` — V_ERROR=10 ∈ VECTORS ✓) → spins at 0x50 → breakpoint? entry breakpoint for sfu1h = 8*114=0x390 — never fires; pc=0x50 ≠ 0x390 → after grace: no diag (fallback off → no "unimplemented" line), not stopped → pc != entry → STOP ✓ red. Matches packet ("With the fallback off it is RE-ROUTED TO ERROR (0x50)... the row reds as STOP" ✓ and M_DELIVERALL killed: resid50 sfu1h ✓).
+
+  Also — what does M_DELIVERALL do to resid50? vector 50 delivered → pc = 0x190 → breakpoint at 0x190 fires → prompt; no diag, no stop → pc == entry → DELIVER path → compares want: sxip=0x10006, psr=0x8000000b, epsr, r2 — those would hold (delivery is correct!) → result=DELIVER ≠ expected HALT → red ✓. Good, that's the negative control working.
+
+  Now the remaining question: the "one question" — does any floor breach survive? Let me do the final sweep of the exception body's writes and the enumeration:
+
+  Body writes in m88k_exception (delivery path):
+  1. cr[EPSR] = old PSR (only when !SFRZ) — covered: epsr exact-compare on 21 DELIVER rows + trapfrozen frozen-EPSR check (epsr stays PSR_RESET) + M_NOEPSR measured. The SFRZ-set no-save branch: covered by trapfrozen/error rows (epsr==PSR_RESET pinned). ✓
+  2. PSR write via stcr (SFRZ|IND|SFD1|MODE | old) — bits: SFRZ (M_NOSFRZ measured), IND (M_NOIND measured, indclr), SFD1 (exact compare, argument — no mutant), MODE (M_NOMODE measured). The "old|..." shape: bits of old that must SURVIVE: C (M_CARRYCLR measured, ovfc), and... any other old bit: BO (endianness) — a mutant dropping old bits entirely (e.g. `= 0x8000000f` assignment instead of OR)? That would be caught by ovfc (C lost → 0x8000000b ≠ 0x9000000b → bad=psr) ✓. MXM preservation: no row sets MXM pre-fault (stcr aborts on MXM! line 542-546 — writing PSR with MXM set stops the cpu: so no row CAN set MXM via stcr; the reset value has MXM clear). So MXM-survival is untestable through this rig — a "body-tested lvalue" question: PSR bit MXM is never set in any row, so a mutant clearing MXM in the exception path would be invisible... but no guest-visible pre-fault state can set MXM either (stcr blocks it; reset clears it), so it's unreachable, not a breach. Worth one clause? The enumeration's SFD1-style argument ("every pre-fault PSR has X clear") cuts both ways: bits that are always clear pre-fault (MXM, BO, SER, SGN, SRM, TRACE, SFD2, EP — EP isn't even in this header... the header has no EP bit; this fork's PSR model is the OpenBSD subset) are only tested in the "stay clear" direction (exact compare pins them clear post-exception since want=0x8000000b has them clear — wait, no: exact compare pins the FULL word: any post-exception bit outside 0x9000000f... the want values are exact 32-bit: 0x8000000b / 0x9000000b. So ALL 32 bits of post-exception PSR are pinned on 21 rows. The only untestable direction is a mutant that SETS an extra bit only when some precondition holds — e.g. "set SFD2 if ..." — that's not a deletion mutant; the floor is about the write's four bits + carry. Full-word exact compare covers everything that differs in ANY row. ✓ So the PSR lvalue is FULLY closed (all 32 bits) on the DELIVER rows — that's stronger than the enumeration's four-bit framing.
+  3. SSBR = 0 (835) — disclosed (not closed). ✓ named in probe contract.
+  4. SXIP/SNIP/SFIP (837-860) — exact-compared on 21 rows incl. dslot geometry and frozen variants. The XIP_E bit (860) — INSN_ACCESS only, vector 2, unrowed (disclosed 0..3). ✓
+  5. pc = VBR + 8*vector (863) — pc==entry compare + breakpoint firing + vbrtb anchor + M_NOVBR/M_VEC4/M_VEC7. ✓
+  6. delay_slot write (865-868) — M_DELAYALWAYS disclosed. ✓
+  7. DMT/DMD/DMA zero (871-879) — disclosed via probe contract "DMT contents". The packet's enumeration wording is narrower ("DMT under a frozen trap") — I'll note the contract covers it; suggest aligning the packet wording. NOT a breach (named in the artifact).
+  8. Tail arms: RESET stop (885-889) — vector 0 unrowed (disclosed). INTERRUPT -=4 (894-895) — vector 1 unrowed (disclosed). INSN_ACCESS zeroing (902-905) — vector 2 unrowed (disclosed). DATA_ACCESS DMT copies (910-920) — vector 3 unrowed (disclosed). Seven bare breaks — delivered rows cover 4,5,6,7,8,9,10. default internal-error stop — unreachable now (tripwire); TAILHALT channel + M_NAIVE/M_TAILRETURN measured. ✓
+  9. m88k_pc_to_pointers (975) — post-delivery code-pointer update; a mutant dropping it would desync fetch — observable via execution derailing (rows would die as STOP/NOSTART). Indirectly covered. Hmm — is it? A dropped pc_to_pointers on the delivery path: cpu->pc changed but the dyntrans/fetch pointer cache stale → next fetch uses stale page... in the debugger-driven probe (interpreter-ish?), m88k_pc_to_pointers updates pc->host page mapping. If dropped, execution likely continues at the OLD physical mapping → the handler breakpoint at entry never fires (fetch follows stale pointer) → STOP/pc-mismatch → red. Indirect but real. Not worth naming as a gap; it's a fetch-invariant, measured by every row's entry breakpoint.
+  10. The fallback itself (799-808): predicate (M_REVERT, M_DELIVERALL measured), the diag message (EXPECTED_VECTOR naming), the stop (M_NOSTOP measured), pc_to_pointers (806) — on the HALT path: dropping 806 would leave stale pointers but machine is stopped anyway — invisible, irrelevant (machine halted). Fine.
+  11. The SFRZ re-route (811-821): covered by error/trapfrozen + M_SFRZTRAP/M_ERRORDROP + the fatal line 818 — wait, `fatal("[ SFRZ already set in PSR => ERROR ]\n")` — fatal during emulation: does it print at ERROR level unconditionally? fatal() prints regardless of verbosity. Does it contain "stopped"? No. Does the error row still DELIVER after fatal()? Empirically yes (error row passes as DELIVER at 0x50 on the fix — the fix is 23/23). So fatal() here = print only (or prints + returns). Hmm, actually let me double check fatal's behavior — if fatal entered the debugger mid-exception, the error row's flow would break. The probe's 23/23 says it doesn't. Fine — measured.
+
+      Actually wait, I want to be careful about one thing in the fatal() semantics because it bears on the LEVEL channel: the re-route's fatal is a raw `fatal()` (not debugmsg) → always prints → so the error row's transcript ALWAYS contains "[ SFRZ already set in PSR => ERROR ]". The levelmsg regex includes `ERROR` as an alternative: `exception (MISALIGNED_ACCESS|...|INTEGER_OVERFLOW|ERROR)` — requires the literal "exception " before the class name. The fatal text "[ SFRZ already set in PSR => ERROR ]" does NOT contain "exception ERROR" ✓ no false level hit. And on the fix, the ERROR class debugmsg (line 749) is VERBOSITY_INFO → silent at the floor ✓. M_LEVEL flips INFO→ERROR → "exception ERROR" prints → bad=level ✓. Consistent.
+
+  12. VECTORS planted: the probe plants br . at every entry in VECTORS on both VBR bases — includes V_SFU1 (114 → 0x390) and V_RESID (50 → 0x190) ✓ consistent with the resid50/sfu1h geometry.
+
+  13. `usertb` — tb1 0,r3,128 → vector 128 = USER_TRAPS_START → pre-existing delivery path (vector ≥ 128 skips the fallback AND the tail switch — line 882 `if (vector < USER_TRAPS_START)`). Delivers at 0x400 ✓ pins the `<` guard (M_TAILLE 21/22 measured). ✓
+
+  So: enumeration complete. The only candidates beyond the disclosed debt:
+  - (a) The SFD1 cell rests on argument (no M_NOSFD1 mutant) — but the argument is airtight in BOTH directions I checked: exact full-word PSR compare on 21 rows (all pre-fault PSRs have 0x8 clear — verified all four pre-fault values) PLUS a functional net via sfu1h (the SFD1 gate at cpu_m88k_instr.c:597+ is real; dropping |SFD1 turns sfu1h's nested divu into a legal divide → row reds as STOP). The packet's "bad=psr on every row" overreaches slightly: resid50 never PSR-compares (HALT row), sfu1h reds via STOP not bad=psr. The cell HOLDS; the wording should be "21 rows bad=psr + sfu1h STOP; resid50 unaffected" and the mutant is argument-closed, same standing as M_TRAPONLY (disclosed equivalent).
+  - (b) DMT/DMD/DMA common-path zero: disclosed in the probe contract ("DMT contents") though the packet's wording ("DMT under a frozen trap") is narrower — the frozen case is a DIFFERENT cell (SFRZ-set path skips... wait, actually NO: look at the code — the DMT zeroing at 871-879 is OUTSIDE the `if (update_shadow_regs)` — it runs even when frozen. And the DATA_ACCESS arm at 910-918 copies dmt[0..1] arrays into cr — for a DATA_ACCESS while frozen... vector re-routed to ERROR before (is_trap=0) so DATA_ACCESS-frozen → ERROR. The m88kexcfrozendmt debt is about the DMT content under a frozen trap — hmm, whatever: the zeroing is the cell; it's contract-disclosed. Fine.
+  - (c) Anything else? `m88k_stcr` side effects during the exception PSR write: the write goes through the FULL stcr path — including the MODE-change invalidate (line 549-551: user rows DO change MODE → invalidate_translation_caches fires — covered functionally by user rows working) and the MXM-abort (542: if the OR'd value had MXM... never set, fine) and the endianness check (523: BO never set on this big-endian machine — if old PSR had BO... no row does). The rte=0 flag: correct (not an rte). All internal-consistent. One could imagine a mutant calling stcr with rte=1 — behaviorally identical here (rte only gates the MODE-clear warning at 535). Equivalent. Fine.
+
+  - (d) The two Anthropic-seat-specific ask: "if while verifying you find something ELSE, say so." Things I noticed:
+    1. `"stopped" in tr` subsumes `"machines stopped" in tr` — redundant but harmless; the real emission is single-point (emul.c:1054, only when debugger_enter_at_end_of_run, which the per-row breakpoint forces true). No spurious-"stopped" source found in src (the only other matches are comments in cpu_m88k_instr.c). For control rows (no breakpoint) a stop would surface as NOSTART instead of STOP — still counted bad via controls_bad. OK.
+    2. The EXPECT_VECTOR check uses re.search's FIRST "unimplemented...vector=" match in the transcript. For sfu1h on a hypothetical mutant that delivers the first divu and then halts on a DIFFERENT vector before reaching the handler (e.g. wrong delivery), first-match is the right semantics here because the halt is terminal — anything after "All machines stopped." can't produce another fallback diag (machine stopped). Solid.
+    3. The indclr gate pin regex: `^M88KEXC_ROW=indclr +RESULT=DELIVER .*psr=0x8000000b .*epsr=0x80000000` — note `.*` between, and the row line format prints pc first then sxip...: `M88KEXC_ROW=indclr RESULT=DELIVER pc=... sxip=... snip=... sfip=... psr=0x8000000b epsr=0x80000000 r2=...` ✓ matches.
+    4. One real residual observation: the packet's claim "M_NOSTOP 21/23 killed: resid50 STOP, sfu1h STOP" — from the code, M_NOSTOP leaves the machine running after the fallback; the transcript gains the diag but never "All machines stopped." → both rows STOP ✓ consistent. And nothing else changes (the 21 DELIVER rows never touch the fallback) → 21/23 ✓ consistent.
+    5. M_NOIND 22/23: only indclr reds — because every other row's pre-fault PSR has IND=0x2 set (PSR_RESET 0x80000002, PSR_USER 0x00000002, PSR_CARRY 0x90000002 — all have bit 1) ✓ verified against the row table. The sfu1h second-stage pre-fault (0x8000000b) also has IND — but sfu1h doesn't PSR-compare anyway; the fallback path doesn't write PSR at all (returns before line 824) — wait, actually: with M_NOIND on sfu1h: first divu delivers with PSR = 0x80000002|0x9 = 0x800000b|... 0x80000002|SFRZ|SFD1|MODE = 0x8000000b & ~IND = 0x80000009. Handler's divu: SFD1(0x8) IS set in 0x80000009 → SFU1_PRECISE → fallback halts naming 0x072, pc=0x40 → HALT ✓ row still passes (M_NOIND doesn't touch the halt channel). ✓ consistent with M_NOIND killing ONLY indclr.
+    6. The `halted` predicate also fires for rows NOT in EXPECT_VECTOR (e.g. div0 on HEAD) — no vector-naming constraint — correct, since any halt of a DELIVER row is red regardless of vector.
+    7. Gate comment says witness "0/9 -> 0/10 -> 3/22 on HEAD 83df95c" — with v4 the HEAD count is 2/23 (sfu1h's false-HALT now caught). The gate comment explicitly attributes 3/22 to probe_v3_head.out, so it's dated-accurate. Fine.
+
+  Everything checks. Now — do I CLOSE or name something? The packet asks: name a cell with no row, or a body-tested lvalue the enumeration omits, or CLOSE with own denominator.
+
+  My findings:
+  - The two repairs: both UPHOLD (verified against tree; md5 matches; semantics confirmed in product code).
+  - SFD1 question: the arithmetic is right (0x80000003 ≠ 0x8000000b; all four pre-fault PSRs have 0x8 clear; exact full-word compare on 21 rows), but "every row" overreaches: resid50 (HALT row) never PSR-compares and is SFD1-insensitive; sfu1h would red as STOP via the functional SFD1-gate, not bad=psr. Cell closed by argument, no M_NOSFD1 mutant — same standing as M_TRAPONLY; recommend the enumeration say so explicitly (it nearly does).
+  - No surviving floor breach found. My own denominator: the exception body's observable writes, each with its channel:
+    * cr[EPSR] (824; incl. the frozen no-save branch — trapfrozen/error pin epsr=PSR_RESET): closed (M_NOEPSR, exact compare ×21).
+    * cr[PSR] full 32 bits (827-832): exact compare ×21 (both directions: bits set AND old-bit survival via ovfc's C), plus named mutants M_NOSFRZ/M_NOIND/M_NOMODE/M_CARRYCLR; SFD1 by argument + sfu1h functional net.
+    * cr[SSBR]=0 (835): DISCLOSED open (named).
+    * cr[SXIP/SNIP/SFIP] (837-860 incl. delay-slot arms and XIP_E): closed for non-delay rows ×21, dslot geometry pinned-as-implemented (m88kdslotshadow carries the architectural dissent); XIP_E + INSN_ACCESS arms unrowed (disclosed, vectors 0..3).
+    * pc = VBR+8·vector (863): entry breakpoint + pc compare ×21 + vbrtb anchor (M_NOVBR) + scaling (M_VEC4/7).
+    * delay_slot (865-868): non-delay arm DISCLOSED open (M_DELAYALWAYS); delay arm exercised by dslot.
+    * DMT0-2/DMD0-2/DMA0-2 zero (871-879) + DATA_ACCESS copies (910-918): DISCLOSED (probe contract "DMT contents"; vectors 0..3 unrowed).
+    * tail arms RESET/INT/INSN/DATA (885-921): vectors 0..3 unrowed (disclosed; M_TAILOFF equivalence measured).
+    * tail default stop (969-971): TAILHALT channel + M_NAIVE/M_TAILRETURN; currently unreachable (tripwire).
+    * fallback predicate+diag+stop (799-808): M_REVERT/M_DELIVERALL/M_NOSTOP + EXPECT_VECTOR naming + machine-stopped observation (emul.c:1054, forced by the per-row breakpoint via emul.c:189).
+    * SFRZ re-route (811-821) × is_trap: error/errortb/trapfrozen + M_SFRZTRAP/M_ERRORDROP; BOUNDS/ERROR trap-only by construction disclosed; M_TRAPONLY equivalent disclosed.
+    * LEVEL channel: M_LEVEL; "not ERROR/WARNING" only (exact INFO disclosed open).
+    * r2 non-write (destination unchanged): pinned ×21 (r2=0xdeadbeef) — the enumeration didn't list it as a separate cell but it's in the DELIVER compare.
+    
+    Cells with no row that I can name beyond the disclosed list: NONE that rise to floor level. The closest naming candidates, all already disclosed in the artifact: (i) DMT/DMD/DMA zeroing is covered by the probe contract's "DMT contents" clause, but the PASS-4 packet's own wording narrows it to the frozen case — worth one line of alignment, not a breach; (ii) SFD1 is argument-closed, not mutant-closed — recommend the enumeration mark it so (it now says "is that right?" — answer: right, with the resid50/sfu1h precision above).
+
+  Also I should state what I did NOT re-measure: table 4's numbers (I verified consistency with the code, not by rerun — the operational rule allows running the detector in my own temp dir; I judged code-verification sufficient for a repair-scoped pass, and the packet's numbers are internally consistent with everything I read: M_NOIND 22/23 killing only indclr, M_NOSTOP 21/23 killing resid50+sfu1h as STOP, HEAD 2/23 with sfu1h STOP, fix 23/23).
+
+  Hmm — should I actually run the v4 probe against build/gxemul to confirm 23/23? The rule says running a single detector in my own temp dir is "fine and encouraged". The probe defaults BIN to /tmp/gxsec-build/gxemul but takes argv[1]. Is there a built binary at GXEMUL-SEC/build/gxemul? The packet says "The fix on the rebuilt build/: 23/23 (probe_v4_fix_final.out)". The gate uses $ROOT/build/gxemul — ROOT is the GXEMUL-SEC dir presumably (gate cd's to its own dir, ROOT defined in lib.sh). The working tree has build/ at top level (not under GXEMUL-SEC) and also GXEMUL-SEC has its own build? The listing shows GXEMUL-SEC/ contains src/, test/, battery/ etc but I didn't see build/ in its two-level listing... The gate's PMAX default is $ROOT/build/gxemul. Let me check quickly whether GXEMUL-SEC/build/gxemul exists and is fresh — if yes, one probe run (~23 rows × a few seconds + pty overhead, likely < 2 min) would give me an independent 23/23 confirmation. That's worth it: a seat that can measure should measure, and it directly validates the repair (both rows: indclr DELIVER with the pinned psr/epsr, sfu1h HALT naming 0x072 at pc 0x40, resid50 HALT naming 0x032).
+
+  Careful about the operational rule: "Do not run run.sh, any gate_*.sh, or the battery... Building and running a single detector or mutant in your own temp directory is fine and encouraged." Running `python3 GXEMUL-SEC/regress/m88k_exc_probe.py GXEMUL-SEC/build/gxemul` from a temp cwd (the probe writes its stub to /tmp/gx_m88k_exc_PID.bin — its own temp file, no shared log dir) does NOT touch the shared gate log directory. That's within the allowance. Do it — with M88KEXC_VERBOSE unset, output is compact.
+
+  Windows/Git-Bash caveat: the probe uses pty.fork() — Windows Python has no pty/os.fork! Wait — this environment is Windows with Git Bash. python3 on Git Bash (if it's the Windows Python) lacks pty. If it's MSYS2 Python, pty.fork exists. The operator runs this battery on... the logs suggest Linux/WSL normally. Running the probe here might fail with ImportError (pty) or os.execvp issues. Let me check `python3 -c "import pty"` quickly. If it fails, skip the run and say so (verification by reading stands). Also GXEMUL-SEC/build/gxemul — is it a Windows .exe? The top-level build/ dir has src/ etc. — these builds were probably made under WSL or MSYS. `file` the binary.
+
+  Let me do those two quick checks and then either run or not. Actually — time budget. The probe spawns 26 emulator sessions over ptys; if pty exists it should take ~1-2 min. Worth attempting; if the environment can't, that's a clean "could not measure here, verified by reading".
+
+  Let me check feasibility first.
+
+• All packet claims verified against the tree. One measurement is worth attempting locally: the v4 probe against the fixed binary — the rules allow running a single detector. Checking feasibility first.GXEMUL-SEC/build/gxemul: cannot open `GXEMUL-SEC/build/gxemul' (No such file or directory)
+Python was not found; run
+ without arguments to install from the Microsoft Store, or disable this shortcut from Settings > Apps > Advanced app settings > App execution aliases.
+
+
+• No python3 on this box (Microsoft Store stub) and no GXEMUL-SEC/build/gxemul at that path. The packet says the fix was rebuilt in `build/` — that's the TOP-LEVEL build/ (the working dir root shows build/ with src/, and .propagate.log etc.). Let me check build/gxemul. Also the probe's default BIN is /tmp/gxsec-build/gxemul (the operator's clone). The gate uses $ROOT/build/gxemul where ROOT... in gate_m88k_rounding.sh, `. ./lib.sh` from GXEMUL-SEC/regress/ — ROOT probably = GXEMUL-SEC. But there's no GXEMUL-SEC/build/gxemul — so the operator's run used something else, maybe ROOT is the top-level? Whatever — let me check for any gxemul binary quickly.
+
+  Also no python3 at all → I cannot run the probe here regardless (pty is also doubtful on Windows). So measurement is out; verification by reading stands. Let me do a fast check for a binary anyway, then write the verdict.-rw-r--r-- 1 User00 197121 6155592 Sep  5 22:06 build/gxemul
+/c/Users/User00/AppData/Local/Programs/Python/Python312/python
+/c/Users/User00/AppData/Local/Microsoft/WindowsApps/python3
+/c/Users/User00/AppData/Local/Programs/Python/Launcher/py
+---
+PRETABLE_m88kexc.out
+brief_m88kexc_adj.md
+brief_m88kexc_p2.md
+fable_p2.md
+glm_mini_p2.md
+killtable
+killtable2
+killtable3
+killtable4
+killtable4b
+opus_p2.md
+opus_p2_logs
+pass1
+pass2_panel_20260905_212630
+pass3_panel_20260905_220902
+probe10_head.out
+probe2_fix.out
+probe2_head.out
+probe_v3_fix.out
+probe_v3_fix_final.out
+probe_v3_head.out
+probe_v4_fix_final.out
+probe_v4_head.out
+- `build/gxemul` exists (top-level build/, dated Sep 5 22:06 — the rebuilt fix binary, 6.1 MB). But it's a Unix ELF presumably (no .exe; built under WSL/MSYS?). `file` it.
+  - Python exists: `C:/Users/User00/AppData/Local/Programs/Python/Python312/python` — that's WINDOWS Python 3.12 → no `pty` module (pty is Unix-only). So the probe cannot run under this Python. `py` launcher also Windows. So running the probe on THIS host is not possible without WSL. Check if `wsl` exists? That may be overkill; and the binary build/gxemul might be a Windows binary if built with MSYS2/MinGW — but the probe needs pty regardless.
+
+  Let me quickly: file build/gxemul; check wsl availability. If WSL exists, I could run `wsl python3 regress/m88k_exc_probe.py /mnt/c/.../build/gxemul`? Path translation and pty inside WSL would work, but this is getting heavy for a closing pass. The operational rule says measurement is optional ("Naming it is worth more than a timeout"). I've verified everything statically with high confidence; the packet's own measurements are internally consistent with the code I read.
+
+  Actually — one useful cheap measurement I CAN do: inspect the frozen artifacts probe_v4_fix_final.out and probe_v4_head.out (they're in the artifacts dir!) to confirm the packet's 23/23 and 2/23 claims and the exact row lines (indclr psr/epsr, sfu1h STOP-on-HEAD, resid50 HALT). Reading those files is read-only and direct. Do that instead of running.
+
+  Also peek at killtable4/ to confirm M_NOIND/M_NOSTOP definitions match the packet (the mutant definitions matter for repair review: M_NOIND = `| M88K_PSR_IND` → `| 0`; M_NOSTOP = fallback loop body → `(void) j;`).M88KEXC_SELFTEST=OK psr_at_reset=0x80000002 (want 0x80000002)
+M88KEXC_ROW=div0      RESULT=DELIVER  pc=0x00000040 sxip=0x00010006 snip=0x0001000a sfip=0x0001000e psr=0x8000000b epsr=0x80000002 r2=0xdeadbeef
+M88KEXC_ROW=ovf       RESULT=DELIVER  pc=0x00000048 sxip=0x00010006 snip=0x0001000a sfip=0x0001000e psr=0x8000000b epsr=0x80000002 r2=0xdeadbeef
+M88KEXC_ROW=misalign  RESULT=DELIVER  pc=0x00000020 sxip=0x00010006 snip=0x0001000a sfip=0x0001000e psr=0x8000000b epsr=0x80000002 r2=0xdeadbeef
+M88KEXC_ROW=bounds    RESULT=DELIVER  pc=0x00000038 sxip=0x00010006 snip=0x0001000a sfip=0x0001000e psr=0x8000000b epsr=0x80000002 r2=0xdeadbeef
+M88KEXC_ROW=priv      RESULT=DELIVER  pc=0x00000030 sxip=0x0001000a snip=0x0001000e sfip=0x00010012 psr=0x8000000b epsr=0x00000002 r2=0xdeadbeef
+M88KEXC_ROW=privtb    RESULT=DELIVER  pc=0x00000030 sxip=0x0001000a snip=0x0001000e sfip=0x00010012 psr=0x8000000b epsr=0x00000002 r2=0xdeadbeef
+M88KEXC_ROW=unimpl    RESULT=DELIVER  pc=0x00000028 sxip=0x0001000a snip=0x0001000e sfip=0x00010012 psr=0x8000000b epsr=0x00000002 r2=0xdeadbeef
+M88KEXC_ROW=error     RESULT=DELIVER  pc=0x00000050 sxip=0x00010006 snip=0x0001000a sfip=0x0001000e psr=0x8000000b epsr=0x80000002 r2=0xdeadbeef
+M88KEXC_ROW=dslot     RESULT=DELIVER  pc=0x00000040 sxip=0x0001000a snip=0x0001000e sfip=0x00010016 psr=0x8000000b epsr=0x80000002 r2=0xdeadbeef
+M88KEXC_ROW=errortb   RESULT=DELIVER  pc=0x00000050 sxip=0x00010006 snip=0x0001000a sfip=0x0001000e psr=0x8000000b epsr=0x80000002 r2=0xdeadbeef
+M88KEXC_ROW=misaligntb RESULT=DELIVER  pc=0x00000020 sxip=0x00010006 snip=0x0001000a sfip=0x0001000e psr=0x8000000b epsr=0x80000002 r2=0xdeadbeef
+M88KEXC_ROW=unimpltb  RESULT=DELIVER  pc=0x00000028 sxip=0x00010006 snip=0x0001000a sfip=0x0001000e psr=0x8000000b epsr=0x80000002 r2=0xdeadbeef
+M88KEXC_ROW=div0tb    RESULT=DELIVER  pc=0x00000040 sxip=0x00010006 snip=0x0001000a sfip=0x0001000e psr=0x8000000b epsr=0x80000002 r2=0xdeadbeef
+M88KEXC_ROW=ovftb     RESULT=DELIVER  pc=0x00000048 sxip=0x00010006 snip=0x0001000a sfip=0x0001000e psr=0x8000000b epsr=0x80000002 r2=0xdeadbeef
+M88KEXC_ROW=vbrtb     RESULT=DELIVER  pc=0x00002038 sxip=0x0001000a snip=0x0001000e sfip=0x00010012 psr=0x8000000b epsr=0x80000002 r2=0xdeadbeef
+M88KEXC_ROW=trapfrozen RESULT=DELIVER  pc=0x00000038 sxip=0x00010006 snip=0x0001000a sfip=0x0001000e psr=0x8000000b epsr=0x80000002 r2=0xdeadbeef
+M88KEXC_ROW=ovfc      RESULT=DELIVER  pc=0x00000048 sxip=0x0001000a snip=0x0001000e sfip=0x00010012 psr=0x9000000b epsr=0x90000002 r2=0xdeadbeef
+M88KEXC_ROW=indclr    RESULT=DELIVER  pc=0x00000048 sxip=0x0001000a snip=0x0001000e sfip=0x00010012 psr=0x8000000b epsr=0x80000000 r2=0xdeadbeef
+M88KEXC_ROW=privsuptb RESULT=DELIVER  pc=0x00000030 sxip=0x00010006 snip=0x0001000a sfip=0x0001000e psr=0x8000000b epsr=0x80000002 r2=0xdeadbeef
+M88KEXC_ROW=udiv0     RESULT=DELIVER  pc=0x00000040 sxip=0x0001000a snip=0x0001000e sfip=0x00010012 psr=0x8000000b epsr=0x00000002 r2=0xdeadbeef
+M88KEXC_ROW=usertb    RESULT=DELIVER  pc=0x00000400 sxip=0x00010006 snip=0x0001000a sfip=0x0001000e psr=0x8000000b epsr=0x80000002 r2=0xdeadbeef
+M88KEXC_ROW=resid50   RESULT=HALT     pc=0x00010004 sxip=0x00000000 snip=0x00000000 sfip=0x00000000 psr=0x80000002 epsr=0x00000000 r2=0xdeadbeef
+M88KEXC_ROW=sfu1h     RESULT=HALT     pc=0x00000040 sxip=0x00010006 snip=0x0001000a sfip=0x0001000e psr=0x8000000b epsr=0x80000002 r2=0xdeadbeef
+M88KEXC_ROW=live      RESULT=DONE     pc=0x00010008 sxip=0x00000000 snip=0x00000000 sfip=0x00000000 psr=0x80000002 epsr=0x00000000 r2=0x00000006
+M88KEXC_ROW=attrib    RESULT=DONE     pc=0x00010008 sxip=0x00000000 snip=0x00000000 sfip=0x00000000 psr=0x80000002 epsr=0x00000000 r2=0x00000001
+M88KEXC_RESULT=23/23
+M88KEXC_DONE
+===HEAD===
+M88KEXC_SELFTEST=OK psr_at_reset=0x80000002 (want 0x80000002)
+M88KEXC_ROW=div0      RESULT=HALT     pc=0x00010004 sxip=0x00000000 snip=0x00000000 sfip=0x00000000 psr=0x80000002 epsr=0x00000000 r2=0xdeadbeef
+M88KEXC_ROW=ovf       RESULT=HALT     pc=0x00010004 sxip=0x00000000 snip=0x00000000 sfip=0x00000000 psr=0x80000002 epsr=0x00000000 r2=0xdeadbeef
+M88KEXC_ROW=misalign  RESULT=HALT     pc=0x00010004 sxip=0x00000000 snip=0x00000000 sfip=0x00000000 psr=0x80000002 epsr=0x00000000 r2=0xdeadbeef
+M88KEXC_ROW=bounds    RESULT=HALT     pc=0x00010004 sxip=0x00000000 snip=0x00000000 sfip=0x00000000 psr=0x80000002 epsr=0x00000000 r2=0xdeadbeef
+M88KEXC_ROW=priv      RESULT=HALT     pc=0x00010008 sxip=0x00000000 snip=0x00000000 sfip=0x00000000 psr=0x00000002 epsr=0x00000000 r2=0xdeadbeef
+M88KEXC_ROW=privtb    RESULT=HALT     pc=0x00010008 sxip=0x00000000 snip=0x00000000 sfip=0x00000000 psr=0x00000002 epsr=0x00000000 r2=0xdeadbeef
+M88KEXC_ROW=unimpl    RESULT=HALT     pc=0x00010008 sxip=0x00000000 snip=0x00000000 sfip=0x00000000 psr=0x00000002 epsr=0x00000000 r2=0xdeadbeef
+M88KEXC_ROW=error     RESULT=HALT     pc=0x00010004 sxip=0x00000000 snip=0x00000000 sfip=0x00000000 psr=0x80000002 epsr=0x00000000 r2=0xdeadbeef
+M88KEXC_ROW=dslot     RESULT=HALT     pc=0x00010014 sxip=0x00000000 snip=0x00000000 sfip=0x00000000 psr=0x80000002 epsr=0x00000000 r2=0xdeadbeef
+M88KEXC_ROW=errortb   RESULT=HALT     pc=0x00010004 sxip=0x00000000 snip=0x00000000 sfip=0x00000000 psr=0x80000002 epsr=0x00000000 r2=0xdeadbeef
+M88KEXC_ROW=misaligntb RESULT=HALT     pc=0x00010004 sxip=0x00000000 snip=0x00000000 sfip=0x00000000 psr=0x80000002 epsr=0x00000000 r2=0xdeadbeef
+M88KEXC_ROW=unimpltb  RESULT=HALT     pc=0x00010004 sxip=0x00000000 snip=0x00000000 sfip=0x00000000 psr=0x80000002 epsr=0x00000000 r2=0xdeadbeef
+M88KEXC_ROW=div0tb    RESULT=HALT     pc=0x00010004 sxip=0x00000000 snip=0x00000000 sfip=0x00000000 psr=0x80000002 epsr=0x00000000 r2=0xdeadbeef
+M88KEXC_ROW=ovftb     RESULT=HALT     pc=0x00010004 sxip=0x00000000 snip=0x00000000 sfip=0x00000000 psr=0x80000002 epsr=0x00000000 r2=0xdeadbeef
+M88KEXC_ROW=vbrtb     RESULT=HALT     pc=0x00010008 sxip=0x00000000 snip=0x00000000 sfip=0x00000000 psr=0x80000002 epsr=0x00000000 r2=0xdeadbeef
+M88KEXC_ROW=trapfrozen RESULT=HALT     pc=0x00010004 sxip=0x00000000 snip=0x00000000 sfip=0x00000000 psr=0x80000002 epsr=0x00000000 r2=0xdeadbeef
+M88KEXC_ROW=ovfc      RESULT=HALT     pc=0x00010008 sxip=0x00000000 snip=0x00000000 sfip=0x00000000 psr=0x90000002 epsr=0x00000000 r2=0xdeadbeef
+M88KEXC_ROW=indclr    RESULT=HALT     pc=0x00010008 sxip=0x00000000 snip=0x00000000 sfip=0x00000000 psr=0x80000000 epsr=0x00000000 r2=0xdeadbeef
+M88KEXC_ROW=privsuptb RESULT=HALT     pc=0x00010004 sxip=0x00000000 snip=0x00000000 sfip=0x00000000 psr=0x80000002 epsr=0x00000000 r2=0xdeadbeef
+M88KEXC_ROW=udiv0     RESULT=HALT     pc=0x00010008 sxip=0x00000000 snip=0x00000000 sfip=0x00000000 psr=0x00000002 epsr=0x00000000 r2=0xdeadbeef
+M88KEXC_ROW=usertb    RESULT=DELIVER  pc=0x00000400 sxip=0x00010006 snip=0x0001000a sfip=0x0001000e psr=0x8000000b epsr=0x80000002 r2=0xdeadbeef
+M88KEXC_ROW=resid50   RESULT=HALT     pc=0x00010004 sxip=0x00000000 snip=0x00000000 sfip=0x00000000 psr=0x80000002 epsr=0x00000000 r2=0xdeadbeef
+M88KEXC_ROW=sfu1h     RESULT=STOP     pc=0x00010004 sxip=0x00000000 snip=0x00000000 sfip=0x00000000 psr=0x80000002 epsr=0x00000000 r2=0xdeadbeef
+M88KEXC_ROW=live      RESULT=DONE     pc=0x00010008 sxip=0x00000000 snip=0x00000000 sfip=0x00000000 psr=0x80000002 epsr=0x00000000 r2=0x00000006
+M88KEXC_ROW=attrib    RESULT=DONE     pc=0x00010008 sxip=0x00000000 snip=0x00000000 sfip=0x00000000 psr=0x80000002 epsr=0x00000000 r2=0x00000001
+M88KEXC_RESULT=2/23
+M88KEXC_DONE
+GXEMUL-SEC/regress/artifacts/m88kexcdeliver/killtable4/:
+BASE.out
+BASE_final.out
+M_CARRYCLR.out
+M_DELIVERALL.out
+M_LEVEL.out
+M_NOEPSR.out
+M_NOIND.out
+M_NOMODE.out
+M_NOSFRZ.out
+M_NOSHADOW.out
+M_NOSTOP.out
+M_SNIPX.out
+M_VEC4.out
+m88k_exc_probe.frozen4.py
+
+GXEMUL-SEC/regress/artifacts/m88kexcdeliver/killtable4b/:
+BASE.out
+BASE_final.out
+M_TAILRETURN.out
+The frozen outputs confirm the packet exactly:
+
+  - Fix build: 23/23. indclr: `RESULT=DELIVER ... psr=0x8000000b epsr=0x80000000` ✓ (matches the gate pin regex). sfu1h: HALT at pc=0x40 ✓. resid50: HALT ✓.
+  - HEAD: 2/23 — usertb DELIVER + resid50 HALT, sfu1h STOP (pc=0x10004, halted on the first divu) ✓ exactly as the packet describes.
+
+  Interesting details from HEAD run:
+  - HEAD indclr row: HALT with psr=0x80000000 epsr=0x00000000 — on HEAD the fallback runs BEFORE any PSR write (returns at line 807), so psr stays the pre-fault 0x80000000 ✓ consistent.
+  - dslot on HEAD: pc=0x10014 — the delay slot... the divu at 0x10008 faults → fallback halts, pc=0x10014? Interesting (delay_target). Whatever, HALT is what matters there.
+
+  Also worth checking M_NOIND.out and M_NOSTOP.out quickly to confirm the packet's kill claims (indclr bad=psr; resid50/sfu1h STOP). And the frozen probe md5 matches. Then write the verdict. Let me grab those two outputs' key lines.M88KEXC_ROW=div0      RESULT=DELIVER  pc=0x00000040 sxip=0x00010006 snip=0x0001000a sfip=0x0001000e psr=0x8000000b epsr=0x80000002 r2=0xdeadbeef
+M88KEXC_ROW=ovf       RESULT=DELIVER  pc=0x00000048 sxip=0x00010006 snip=0x0001000a sfip=0x0001000e psr=0x8000000b epsr=0x80000002 r2=0xdeadbeef
+M88KEXC_ROW=misalign  RESULT=DELIVER  pc=0x00000020 sxip=0x00010006 snip=0x0001000a sfip=0x0001000e psr=0x8000000b epsr=0x80000002 r2=0xdeadbeef
+M88KEXC_ROW=bounds    RESULT=DELIVER  pc=0x00000038 sxip=0x00010006 snip=0x0001000a sfip=0x0001000e psr=0x8000000b epsr=0x80000002 r2=0xdeadbeef
+M88KEXC_ROW=priv      RESULT=DELIVER  pc=0x00000030 sxip=0x0001000a snip=0x0001000e sfip=0x00010012 psr=0x8000000b epsr=0x00000002 r2=0xdeadbeef
+M88KEXC_ROW=privtb    RESULT=DELIVER  pc=0x00000030 sxip=0x0001000a snip=0x0001000e sfip=0x00010012 psr=0x8000000b epsr=0x00000002 r2=0xdeadbeef
+M88KEXC_ROW=unimpl    RESULT=DELIVER  pc=0x00000028 sxip=0x0001000a snip=0x0001000e sfip=0x00010012 psr=0x8000000b epsr=0x00000002 r2=0xdeadbeef
+M88KEXC_ROW=error     RESULT=DELIVER  pc=0x00000050 sxip=0x00010006 snip=0x0001000a sfip=0x0001000e psr=0x8000000b epsr=0x80000002 r2=0xdeadbeef
+M88KEXC_ROW=dslot     RESULT=DELIVER  pc=0x00000040 sxip=0x0001000a snip=0x0001000e sfip=0x00010016 psr=0x8000000b epsr=0x80000002 r2=0xdeadbeef
+M88KEXC_ROW=errortb   RESULT=DELIVER  pc=0x00000050 sxip=0x00010006 snip=0x0001000a sfip=0x0001000e psr=0x8000000b epsr=0x80000002 r2=0xdeadbeef
+M88KEXC_ROW=misaligntb RESULT=DELIVER  pc=0x00000020 sxip=0x00010006 snip=0x0001000a sfip=0x0001000e psr=0x8000000b epsr=0x80000002 r2=0xdeadbeef
+M88KEXC_ROW=unimpltb  RESULT=DELIVER  pc=0x00000028 sxip=0x00010006 snip=0x0001000a sfip=0x0001000e psr=0x8000000b epsr=0x80000002 r2=0xdeadbeef
+M88KEXC_ROW=div0tb    RESULT=DELIVER  pc=0x00000040 sxip=0x00010006 snip=0x0001000a sfip=0x0001000e psr=0x8000000b epsr=0x80000002 r2=0xdeadbeef
+M88KEXC_ROW=ovftb     RESULT=DELIVER  pc=0x00000048 sxip=0x00010006 snip=0x0001000a sfip=0x0001000e psr=0x8000000b epsr=0x80000002 r2=0xdeadbeef
+M88KEXC_ROW=vbrtb     RESULT=DELIVER  pc=0x00002038 sxip=0x0001000a snip=0x0001000e sfip=0x00010012 psr=0x8000000b epsr=0x80000002 r2=0xdeadbeef
+M88KEXC_ROW=trapfrozen RESULT=DELIVER  pc=0x00000038 sxip=0x00010006 snip=0x0001000a sfip=0x0001000e psr=0x8000000b epsr=0x80000002 r2=0xdeadbeef
+M88KEXC_ROW=ovfc      RESULT=DELIVER  pc=0x00000048 sxip=0x0001000a snip=0x0001000e sfip=0x00010012 psr=0x9000000b epsr=0x90000002 r2=0xdeadbeef
+M88KEXC_ROW=indclr    RESULT=BADREGS  pc=0x00000048 sxip=0x0001000a snip=0x0001000e sfip=0x00010012 psr=0x80000009 epsr=0x80000000 r2=0xdeadbeef bad=psr
+M88KEXC_ROW=privsuptb RESULT=DELIVER  pc=0x00000030 sxip=0x00010006 snip=0x0001000a sfip=0x0001000e psr=0x8000000b epsr=0x80000002 r2=0xdeadbeef
+M88KEXC_ROW=udiv0     RESULT=DELIVER  pc=0x00000040 sxip=0x0001000a snip=0x0001000e sfip=0x00010012 psr=0x8000000b epsr=0x00000002 r2=0xdeadbeef
+M88KEXC_ROW=usertb    RESULT=DELIVER  pc=0x00000400 sxip=0x00010006 snip=0x0001000a sfip=0x0001000e psr=0x8000000b epsr=0x80000002 r2=0xdeadbeef
+M88KEXC_ROW=resid50   RESULT=HALT     pc=0x00010004 sxip=0x00000000 snip=0x00000000 sfip=0x00000000 psr=0x80000002 epsr=0x00000000 r2=0xdeadbeef
+M88KEXC_ROW=sfu1h     RESULT=HALT     pc=0x00000040 sxip=0x00010006 snip=0x0001000a sfip=0x0001000e psr=0x8000000b epsr=0x80000002 r2=0xdeadbeef
+M88KEXC_ROW=live      RESULT=DONE     pc=0x00010008 sxip=0x00000000 snip=0x00000000 sfip=0x00000000 psr=0x80000002 epsr=0x00000000 r2=0x00000006
+M88KEXC_ROW=attrib    RESULT=DONE     pc=0x00010008 sxip=0x00000000 snip=0x00000000 sfip=0x00000000 psr=0x80000002 epsr=0x00000000 r2=0x00000001
+M88KEXC_RESULT=22/23
+===
+M88KEXC_ROW=div0      RESULT=DELIVER  pc=0x00000040 sxip=0x00010006 snip=0x0001000a sfip=0x0001000e psr=0x8000000b epsr=0x80000002 r2=0xdeadbeef
+M88KEXC_ROW=ovf       RESULT=DELIVER  pc=0x00000048 sxip=0x00010006 snip=0x0001000a sfip=0x0001000e psr=0x8000000b epsr=0x80000002 r2=0xdeadbeef
+M88KEXC_ROW=misalign  RESULT=DELIVER  pc=0x00000020 sxip=0x00010006 snip=0x0001000a sfip=0x0001000e psr=0x8000000b epsr=0x80000002 r2=0xdeadbeef
+M88KEXC_ROW=bounds    RESULT=DELIVER  pc=0x00000038 sxip=0x00010006 snip=0x0001000a sfip=0x0001000e psr=0x8000000b epsr=0x80000002 r2=0xdeadbeef
+M88KEXC_ROW=priv      RESULT=DELIVER  pc=0x00000030 sxip=0x0001000a snip=0x0001000e sfip=0x00010012 psr=0x8000000b epsr=0x00000002 r2=0xdeadbeef
+M88KEXC_ROW=privtb    RESULT=DELIVER  pc=0x00000030 sxip=0x0001000a snip=0x0001000e sfip=0x00010012 psr=0x8000000b epsr=0x00000002 r2=0xdeadbeef
+M88KEXC_ROW=unimpl    RESULT=DELIVER  pc=0x00000028 sxip=0x0001000a snip=0x0001000e sfip=0x00010012 psr=0x8000000b epsr=0x00000002 r2=0xdeadbeef
+M88KEXC_ROW=error     RESULT=DELIVER  pc=0x00000050 sxip=0x00010006 snip=0x0001000a sfip=0x0001000e psr=0x8000000b epsr=0x80000002 r2=0xdeadbeef
+M88KEXC_ROW=dslot     RESULT=DELIVER  pc=0x00000040 sxip=0x0001000a snip=0x0001000e sfip=0x00010016 psr=0x8000000b epsr=0x80000002 r2=0xdeadbeef
+M88KEXC_ROW=errortb   RESULT=DELIVER  pc=0x00000050 sxip=0x00010006 snip=0x0001000a sfip=0x0001000e psr=0x8000000b epsr=0x80000002 r2=0xdeadbeef
+M88KEXC_ROW=misaligntb RESULT=DELIVER  pc=0x00000020 sxip=0x00010006 snip=0x0001000a sfip=0x0001000e psr=0x8000000b epsr=0x80000002 r2=0xdeadbeef
+M88KEXC_ROW=unimpltb  RESULT=DELIVER  pc=0x00000028 sxip=0x00010006 snip=0x0001000a sfip=0x0001000e psr=0x8000000b epsr=0x80000002 r2=0xdeadbeef
+M88KEXC_ROW=div0tb    RESULT=DELIVER  pc=0x00000040 sxip=0x00010006 snip=0x0001000a sfip=0x0001000e psr=0x8000000b epsr=0x80000002 r2=0xdeadbeef
+M88KEXC_ROW=ovftb     RESULT=DELIVER  pc=0x00000048 sxip=0x00010006 snip=0x0001000a sfip=0x0001000e psr=0x8000000b epsr=0x80000002 r2=0xdeadbeef
+M88KEXC_ROW=vbrtb     RESULT=DELIVER  pc=0x00002038 sxip=0x0001000a snip=0x0001000e sfip=0x00010012 psr=0x8000000b epsr=0x80000002 r2=0xdeadbeef
+M88KEXC_ROW=trapfrozen RESULT=DELIVER  pc=0x00000038 sxip=0x00010006 snip=0x0001000a sfip=0x0001000e psr=0x8000000b epsr=0x80000002 r2=0xdeadbeef
+M88KEXC_ROW=ovfc      RESULT=DELIVER  pc=0x00000048 sxip=0x0001000a snip=0x0001000e sfip=0x00010012 psr=0x9000000b epsr=0x90000002 r2=0xdeadbeef
+M88KEXC_ROW=indclr    RESULT=DELIVER  pc=0x00000048 sxip=0x0001000a snip=0x0001000e sfip=0x00010012 psr=0x8000000b epsr=0x80000000 r2=0xdeadbeef
+M88KEXC_ROW=privsuptb RESULT=DELIVER  pc=0x00000030 sxip=0x00010006 snip=0x0001000a sfip=0x0001000e psr=0x8000000b epsr=0x80000002 r2=0xdeadbeef
+M88KEXC_ROW=udiv0     RESULT=DELIVER  pc=0x00000040 sxip=0x0001000a snip=0x0001000e sfip=0x00010012 psr=0x8000000b epsr=0x00000002 r2=0xdeadbeef
+M88KEXC_ROW=usertb    RESULT=DELIVER  pc=0x00000400 sxip=0x00010006 snip=0x0001000a sfip=0x0001000e psr=0x8000000b epsr=0x80000002 r2=0xdeadbeef
+M88KEXC_ROW=resid50   RESULT=STOP     pc=0x00010004 sxip=0x00000000 snip=0x00000000 sfip=0x00000000 psr=0x80000002 epsr=0x00000000 r2=0xdeadbeef
+M88KEXC_ROW=sfu1h     RESULT=STOP     pc=0x00000040 sxip=0x00010006 snip=0x0001000a sfip=0x0001000e psr=0x8000000b epsr=0x80000002 r2=0xdeadbeef
+M88KEXC_ROW=live      RESULT=DONE     pc=0x00010008 sxip=0x00000000 snip=0x00000000 sfip=0x00000000 psr=0x80000002 epsr=0x00000000 r2=0x00000006
+M88KEXC_ROW=attrib    RESULT=DONE     pc=0x00010008 sxip=0x00000000 snip=0x00000000 sfip=0x00000000 psr=0x80000002 epsr=0x00000000 r2=0x00000001
+M88KEXC_RESULT=21/23
+===
+M88KEXC_ROW=div0      RESULT=DELIVER  pc=0x00000040 sxip=0x00010006 snip=0x0001000a sfip=0x0001000e psr=0x8000000b epsr=0x80000002 r2=0xdeadbeef
+M88KEXC_ROW=ovf       RESULT=DELIVER  pc=0x00000048 sxip=0x00010006 snip=0x0001000a sfip=0x0001000e psr=0x8000000b epsr=0x80000002 r2=0xdeadbeef
+M88KEXC_ROW=misalign  RESULT=DELIVER  pc=0x00000020 sxip=0x00010006 snip=0x0001000a sfip=0x0001000e psr=0x8000000b epsr=0x80000002 r2=0xdeadbeef
+M88KEXC_ROW=bounds    RESULT=DELIVER  pc=0x00000038 sxip=0x00010006 snip=0x0001000a sfip=0x0001000e psr=0x8000000b epsr=0x80000002 r2=0xdeadbeef
+M88KEXC_ROW=priv      RESULT=DELIVER  pc=0x00000030 sxip=0x0001000a snip=0x0001000e sfip=0x00010012 psr=0x8000000b epsr=0x00000002 r2=0xdeadbeef
+M88KEXC_ROW=privtb    RESULT=DELIVER  pc=0x00000030 sxip=0x0001000a snip=0x0001000e sfip=0x00010012 psr=0x8000000b epsr=0x00000002 r2=0xdeadbeef
+M88KEXC_ROW=unimpl    RESULT=DELIVER  pc=0x00000028 sxip=0x0001000a snip=0x0001000e sfip=0x00010012 psr=0x8000000b epsr=0x00000002 r2=0xdeadbeef
+M88KEXC_ROW=error     RESULT=DELIVER  pc=0x00000050 sxip=0x00010006 snip=0x0001000a sfip=0x0001000e psr=0x8000000b epsr=0x80000002 r2=0xdeadbeef
+M88KEXC_ROW=dslot     RESULT=DELIVER  pc=0x00000040 sxip=0x0001000a snip=0x0001000e sfip=0x00010016 psr=0x8000000b epsr=0x80000002 r2=0xdeadbeef
+M88KEXC_ROW=errortb   RESULT=DELIVER  pc=0x00000050 sxip=0x00010006 snip=0x0001000a sfip=0x0001000e psr=0x8000000b epsr=0x80000002 r2=0xdeadbeef
+M88KEXC_ROW=misaligntb RESULT=DELIVER  pc=0x00000020 sxip=0x00010006 snip=0x0001000a sfip=0x0001000e psr=0x8000000b epsr=0x80000002 r2=0xdeadbeef
+M88KEXC_ROW=unimpltb  RESULT=DELIVER  pc=0x00000028 sxip=0x00010006 snip=0x0001000a sfip=0x0001000e psr=0x8000000b epsr=0x80000002 r2=0xdeadbeef
+M88KEXC_ROW=div0tb    RESULT=DELIVER  pc=0x00000040 sxip=0x00010006 snip=0x0001000a sfip=0x0001000e psr=0x8000000b epsr=0x80000002 r2=0xdeadbeef
+M88KEXC_ROW=ovftb     RESULT=DELIVER  pc=0x00000048 sxip=0x00010006 snip=0x0001000a sfip=0x0001000e psr=0x8000000b epsr=0x80000002 r2=0xdeadbeef
+M88KEXC_ROW=vbrtb     RESULT=DELIVER  pc=0x00002038 sxip=0x0001000a snip=0x0001000e sfip=0x00010012 psr=0x8000000b epsr=0x80000002 r2=0xdeadbeef
+M88KEXC_ROW=trapfrozen RESULT=DELIVER  pc=0x00000038 sxip=0x00010006 snip=0x0001000a sfip=0x0001000e psr=0x8000000b epsr=0x80000002 r2=0xdeadbeef
+M88KEXC_ROW=ovfc      RESULT=BADREGS  pc=0x00000048 sxip=0x0001000a snip=0x0001000e sfip=0x00010012 psr=0x8000000b epsr=0x90000002 r2=0xdeadbeef bad=psr
+M88KEXC_ROW=indclr    RESULT=DELIVER  pc=0x00000048 sxip=0x0001000a snip=0x0001000e sfip=0x00010012 psr=0x8000000b epsr=0x80000000 r2=0xdeadbeef
+M88KEXC_ROW=privsuptb RESULT=DELIVER  pc=0x00000030 sxip=0x00010006 snip=0x0001000a sfip=0x0001000e psr=0x8000000b epsr=0x80000002 r2=0xdeadbeef
+M88KEXC_ROW=udiv0     RESULT=DELIVER  pc=0x00000040 sxip=0x0001000a snip=0x0001000e sfip=0x00010012 psr=0x8000000b epsr=0x00000002 r2=0xdeadbeef
+M88KEXC_ROW=usertb    RESULT=DELIVER  pc=0x00000400 sxip=0x00010006 snip=0x0001000a sfip=0x0001000e psr=0x8000000b epsr=0x80000002 r2=0xdeadbeef
+M88KEXC_ROW=resid50   RESULT=HALT     pc=0x00010004 sxip=0x00000000 snip=0x00000000 sfip=0x00000000 psr=0x80000002 epsr=0x00000000 r2=0xdeadbeef
+M88KEXC_ROW=sfu1h     RESULT=HALT     pc=0x00000040 sxip=0x00010006 snip=0x0001000a sfip=0x0001000e psr=0x8000000b epsr=0x80000002 r2=0xdeadbeef
+M88KEXC_ROW=live      RESULT=DONE     pc=0x00010008 sxip=0x00000000 snip=0x00000000 sfip=0x00000000 psr=0x80000002 epsr=0x00000000 r2=0x00000006
+M88KEXC_ROW=attrib    RESULT=DONE     pc=0x00010008 sxip=0x00000000 snip=0x00000000 sfip=0x00000000 psr=0x80000002 epsr=0x00000000 r2=0x00000001
+M88KEXC_RESULT=22/23
+===
+0d5c0f33ca10110b7a7f6612d52f60c1 *GXEMUL-SEC/regress/artifacts/m88kexcdeliver/killtable4/m88k_exc_probe.frozen4.py
+All confirmed:
+  - Frozen probe md5 = 0d5c0f33... matches the working probe ✓.
+  - M_NOIND: 22/23, only indclr BADREGS bad=psr with psr=0x80000009 (exactly the missing IND bit: 0x8000000b & ~0x2 = 0x80000009) ✓.
+  - M_NOSTOP: 21/23, resid50 STOP + sfu1h STOP ✓ — and notably sfu1h STOP has pc=0x00000040: the diag vector matched (0x072) but "stopped" never appeared → halted=False → pc(0x40) != entry(0x390) → STOP. The machine-stopped channel is doing the work ✓.
+  - M_CARRYCLR: 22/23, ovfc bad=psr psr=0x8000000b (carry dropped; epsr still shows the pre-fault 0x90000002) ✓.
+
+  Verification complete. Everything in the packet that I could check against the tree and the frozen artifacts checks out. My pass-4 answer:
+
+  VERDICT: CLOSE THE CHAIN.
+
+  Repair 1 (indclr): UPHOLD.
+  Repair 2 (HALT = diag + machine-stopped + vector naming + sfu1h pc pin): UPHOLD.
+
+  SFD1 question: yes-with-precision — arithmetic right (0x8000000b & ~SFD1(0x8) = 0x80000003, exact full-word compare, all four pre-fault PSRs have 0x8 clear — verified: 0x80000002, 0x00000002, 0x90000002, 0x80000000), but "on every row" overreaches: 21 DELIVER rows red as bad=psr; resid50 is a HALT row and never PSR-compares (and SFD1 is irrelevant to its tb1-50 route, so it would stay green); sfu1h reds as STOP via the functional net (the SFD1 gate on divu at cpu_m88k_instr.c:597ff — dropped |SFD1 leaves the nested divu legal → spins → pc=0x44 ≠ 0x390 → STOP), not bad=psr. Cell holds; it's argument-closed (no M_NOSFD1 in table 4) — same standing as M_TRAPONLY; the enumeration should say so in those words.
+
+  My own denominator (the closing statement): enumerate m88k_exception's observable writes and their channels (as I worked out). Cells with no row beyond the disclosed debt: none found. The one wording nit: the common-path DMT0-2/DMD0-2/DMA0-2 zero (cpu_m88k.c:871-879) runs on EVERY delivery, not just under a frozen trap — the probe's contract clause "DMT contents" covers it, but the pass-4 enumeration's "DMT under a frozen trap (m88kexcfrozendmt)" reads narrower; align the wording or name it. Also verified emul.c:1054 is the only "stopped" emission and it fires iff all CPUs are !running with debugger_enter_at_end_of_run (forced true by the per-row breakpoint, emul.c:189-191); control rows add no breakpoint, so a stopped control surfaces as NOSTART — still counted bad via controls_bad. The redundant disjunct `"machines stopped" in tr or "stopped" in tr` is harmless.
+
+  Anything else found while verifying (the packet invites this):
+  1. PSR full-word exact compare makes the PSR cell stronger than the four-bit framing: all 32 bits pinned on 21 rows; bits never set pre-fault (MXM etc.) are pinned in the "stay clear" direction; the "set" direction for MXM is unreachable because stcr aborts on MXM writes (cpu_m88k.c:542-546) — unreachable, not a gap.
+  2. EPSR on the frozen path: the no-save branch (821) is pinned by trapfrozen/error (epsr==PSR_RESET), so both arms of the EPSR save are covered.
+  3. Gate comment "3/22 on HEAD" is v3-historical (probe_v3_head.out) and says so; v4 reads 2/23 on HEAD — consistent, no defect.
+  4. Couldn't re-run the probe here (this host's Python is Windows Python 3.12 — no pty; no local second binary), so my evidence is the frozen artifacts (md5-verified probe) + code reading. The two numbers I treated as load-bearing (M_NOIND 22/23, M_NOSTOP 21/23, HEAD 2/23, fix 23/23) are all in the frozen outputs and are code-consistent.
+
+  Keep it under a page. Verdict line first, then repairs, then SFD1, then anything else. Use grep anchors (file:line).
+
+• **VERDICT: CLOSE THE CHAIN.** Denominator: 23/23, verified against the frozen artifacts and the tree — every packet claim I could check from the files held; no floor breach survives. (I could not re-run the probe on this seat's host — Windows Python has no `pty` — so my evidence is the md5-verified frozen probe plus the code, not a fresh run.)
+
+  **Repair 1 (indclr): UPHOLD.** `PSR_INDCLR=0x80000000` and the row are in the probe exactly as quoted (`m88k_exc_probe.py:151,186`); the exception write is `old | SFRZ | IND | SFD1 | MODE` (`cpu_m88k.c:827-832`) with IND=0x2 (`m88k_psl.h:81`); every other pre-fault PSR (0x80000002 / 0x00000002 / 0x90000002) has bit 1 set, so M_NOIND really was a 22/22 escape before this row. The frozen `M_NOIND.out` shows the predicted shape exactly: 22/23, only `indclr BADREGS psr=0x80000009 bad=psr` — 0x8000000b & ~0x2, and EPSR still 0x80000000, so the kill is the PSR write, not a stcr artifact. The gate pin (`gate_m88k_rounding.sh:343-344`) matches the printed row format.
+
+  **Repair 2 (halted = diag ∧ stopped, vector-named, sfu1h pc pin): UPHOLD.** The classifier is as quoted (`m88k_exc_probe.py:302-305, 324-327`). The "stopped" channel is single-sourced: `emul.c:1054` "All machines stopped." prints only when every CPU's `running` is false, and it is reachable in this rig because the per-row `breakpoint add` forces `debugger_enter_at_end_of_run` (`emul.c:189-191`); no other non-comment "stopped" string exists in `src/`. The fallback diag format `vector=0x%03x` (`cpu_m88k.c:800-803`) matches the regex, and `re.search`'s first-match semantics are safe because the stop is terminal. Frozen `M_NOSTOP.out`: 21/23, `resid50 STOP`, `sfu1h STOP` with pc=0x40 — the vector matched but the machine kept running, so the hardened predicate, not luck, made the kill. HEAD 2/23 (`probe_v4_head.out`: usertb DELIVER, resid50 HALT, sfu1h STOP at pc=0x10004 on vector 0x008) and fix 23/23 (`probe_v4_fix_final.out`) both confirmed verbatim; the frozen probe md5 is 0d5c0f33 as claimed.
+
+  **The SFD1 question: yes, with one precision.** The arithmetic is right — SFD1=0x8 (`m88k_psl.h:79`), 0x8000000b & ~0x8 = 0x80000003, the compare is exact full-word (`m88k_exc_probe.py:335,349`), and all four pre-fault PSRs have 0x8 clear. But "bad=psr on *every* row" overreaches: the 21 DELIVER rows red as bad=psr; resid50 is a HALT row, never PSR-compares, and its tb1-50 route is SFD1-insensitive, so it would stay green; sfu1h reds as **STOP**, not bad=psr — the SFD1 gate on the nested divu (`cpu_m88k_instr.c:597` et seq.) makes a dropped `|SFD1` turn the handler's divide legal, so it spins at 0x44 ≠ entry 0x390. So: the cell holds (22/23 for a hypothetical M_NOSFD1), but it is **argument-closed, not mutant-closed** — same standing as M_TRAPONLY, and the enumeration should say so in those words.
+
+  **Anything else:**
+
+  - The DMT0-2/DMD0-2/DMA0-2 zero (`cpu_m88k.c:871-879`) runs on *every* delivery, not only under a frozen trap. The probe contract's "Does NOT catch: … DMT contents" covers it, but this packet's enumeration narrows it to "DMT under a frozen trap (m88kexcfrozendmt)" — align the wording or name the common-path zero explicitly. Disclosure gap, not a floor breach: no row reads those CRs, and correct values there are undefined for non-data exceptions.
+  - The PSR cell is stronger than the four-bit framing: exact 32-bit compare on 21 rows pins every bit in both directions (survival via ovfc's C; the clear-bits stay clear). The one untestable direction — setting MXM pre-fault — is unreachable because `stcr` aborts on MXM (`cpu_m88k.c:542-546`). Not a gap.
+  - EPSR's frozen no-save arm (`cpu_m88k.c:821`) is pinned by trapfrozen/error (epsr==PSR_RESET), so both EPSR arms are closed.
+  - Census checks against the code: `implemented` set for vectors 0..10 (`cpu_m88k.c:698-751`), fallback catches 11..127 (117), tail default (`:969-971`) is unreachable-by-construction tripwire, RESET arm (`:885-889`) stops all CPUs. 11/10/117/118 as stated.
+  - Records nit only: the gate comment's "3/22 on HEAD" is explicitly attributed to `probe_v3_head.out`; v4 reads 2/23 on HEAD. Consistent as dated history.
+
+  No surviving floor breach; the residual debts (M_DELAYALWAYS, vectors 0..3, frozendmt, SSBR, fcr2/4/5, m88kexcsfu1, m88kdslotshadow, exact-INFO) are all disclosed in the artifact. Close.
+
+To resume this session: kimi -r session_f3d49246-a145-4e41-8858-b14f0cef17cb

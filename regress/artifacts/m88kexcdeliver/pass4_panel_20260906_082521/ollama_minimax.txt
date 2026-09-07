@@ -1,0 +1,31 @@
+**VERDICT: ONE MORE REPAIR — the SFD1 cell in the PSR-bit enumeration has no mutant and the "exact compare" coverage argument is not checkable from the packet.** The two pass-3 repairs (IND-clear row, hardened HALT classifier) UPHOLD. The SFD1 question: NOT RIGHT under standard MC88100 numbering; consistent only under non-standard numbering.
+
+---
+
+**Repair 1 (IND via `indclr`): UPHOLD.** `PSR_INDCLR = 0x80000000` is IND-clear by construction; `stcr r5,cr1` with r5=0x80000000 sets the pre-fault PSR to IND-clear before the overflowing add. `M_NOIND` 22/23 with `indclr bad=psr` is the right shape: the row is the one that has IND clear going in, so dropping `| M88K_PSR_IND` from `PSR_EXC` is the only way to surface F6 (the carry shape). Internally consistent. READ from the diff and table 4.
+
+**Repair 2 (HALT classifier): UPHOLD.** The three-condition gate — diagnostic present, "stopped" text present, and (for `resid50`/`sfu1h`) the named vector matching `EXPECT_VECTOR` — plus `sfu1h`'s `pc == 8*V_DIV0` BADREGS arm, is a strict refinement. `M_NOSTOP` 21/23 with `resid50` and `sfu1h` surviving as STOP is the right shape: those are exactly the rows where HEAD halts via a different vector (0x032/0x008) than the row expects, and the classifier correctly refuses to call that a pass. The `sfu1h` HEAD-STOP observation (first divu halts on 0x008, not 0x072) confirms repair 2 is doing work, not just being decorative. READ from the diff and table 4.
+
+---
+
+**The SFD1 question: NOT checkable from the packet — name the premise.**
+
+The brief asserts: "every pre-fault PSR has SFD1 CLEAR, so a dropped `| SFD1` gives `0x80000003 != 0x8000000b` → `bad=psr` on every row." Two defects in that arithmetic, against the brief's own listed values:
+
+(a) `PSR_EXC = 0x8000000b` = bits {31, 3, 1, 0}. Dropping bit 1 (standard MC88100 SFD1) gives `0x80000009`, not `0x80000003`. The value `0x80000003` is `PSR_EXC` minus bit 3.
+
+(b) The listed pre-fault PSRs `0x80000002 / 0x00000002 / 0x90000002` all have bit 1 **set** (the `0x...02` suffix) and bit 3 **clear**. Under standard numbering (SFD1 = bit 1) the claim "every pre-fault PSR has SFD1 CLEAR" contradicts the listed values; under non-standard numbering (SFD1 = bit 3) it is consistent.
+
+Under standard numbering, dropping `| SFD1` yields `PSR_EXC' = 0x80000009`; ORed with any pre-fault PSR that already has bit 1 set, the result is still `0x8000000b` — the dropped bit is masked by the existing bit. `bad=psr` does **not** fire. SFD1 is then uncovered: it sits in the enumeration alongside SFRZ/IND/MODE (which have `M_NOSFRZ`/`M_NOIND`/`M_NOMODE`) but has no mutant, and the claimed "exact compare" coverage does not work. That is a body-tested lvalue the enumeration's coverage argument omits.
+
+Under non-standard numbering (SFD1 = bit 3), the arithmetic checks out and the exact-compare coverage holds — but this contradicts the MC88100 PSR convention where SFD1 = bit 1.
+
+**Single fact that would settle it:** the bit position of `M88K_PSR_SFD1` in `PSR_EXC` (or equivalently, the `M88K_PSR_SFD1` constant's value) in `cpu_m88k.c`. If it is `0x02` (bit 1, standard), SFD1 is uncovered and a new row with pre-fault PSR having bit 1 clear (analogous to `indclr`'s `0x80000000`) is needed, plus an `M_NOSFD1` mutant to prove it. If it is `0x08` (bit 3, non-standard), the enumeration holds and the chain can close.
+
+REASONED, not READ — I cannot grep the constant.
+
+---
+
+**Anything else:** No other cells in the enumeration look unbacked from the packet. The disclosed-not-closed list (vectors 0..3, DMT-under-frozen-trap, SSBR, fcr2/4/5, first-exception SFU1, dslot architectural values, exact INFO, `M_DELAYALWAYS`) is appropriately filed or carried. The five shadow-update mutants listed (`M_NOSHADOW`, `M_SNIPX`, `M_DSLOT`, `M_SFIPNOTGT`, `M_DSLOTSWAP`) have only the first two in table 4; the dslot architectural question is filed MEDIUM as `m88kdslotshadow`, but `M_SFIPNOTGT` and `M_DSLOTSWAP` are not explicitly disclosed in the packet — REASONED concern, not checkable.
+
+**Bottom line:** if `M88K_PSR_SFD1 == 0x02` (the standard reading), ONE MORE REPAIR for SFD1; if `0x08`, CLOSE on SFD1 and the chain can close. The arithmetic in the brief as written only works for the non-standard reading.

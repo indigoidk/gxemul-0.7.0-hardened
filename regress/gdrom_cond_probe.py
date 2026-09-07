@@ -41,9 +41,14 @@ falsifiable; one claiming completeness is not.  This one is designed to catch:
     * dropping either latch, so a decline floods                  (R3, R4)
     * non-identity treatment of d->cond on a DECLINE -- restoring
       `= idata` above the dispatch, zeroing it, assigning a
-      CONSTANT, or a value-conditional store.  Four pre-states,
+      CONSTANT, or a value-conditional store.  FOUR ROWS over
+      THREE DISTINCT pre-states -- 0xef (R5), 0x00 (R5b, a fresh
+      device), 0xa0 (R5c) and 0xef again (R5d, whose second field
+      observes the 0x09 decline rather than the pre-state) --
       because one sample cannot tell a function from a constant
       and a spanning set cannot see a conjunction  (R5, R5b, R5c, R5d)
+      [this said `Four pre-states'; corrected 2026-09-06 by the
+      retrospective re-check, R5d repeats R5's pre-state]
     * emptying either accepted arm                                (R6, R8, R9)
     * firing a completion event on a DECLINED write               (R7)
     * touching BUSY on a DECLINED write                           (R7b)
@@ -80,8 +85,15 @@ What survives is K ABOVE 0xff -- reachable because `idata` is the 64-bit datum f
 memory_readmax64() while `d->cond` is a uint8_t, so a wide value passes the predicate and
 TRUNCATES into the field.  R12c drives 0x0108 for exactly that.
 
-What is left after R12c is a K above 0xffff (beyond a 16-bit store's reach here) or a
-predicate keyed on something other than magnitude.  Those are DISCLOSED, not covered:
+What is left after R12c is a K anywhere in 0x1f0..0xffff -- 65,040 halfword values, ALL of
+them reachable by the same 16-bit store, since the largest value any row drives at this
+register is 0x1ef -- or a K above 0xffff, or a predicate keyed on something other than
+magnitude.  Those are DISCLOSED, not covered:
+[*** this said the remaining domain was `a K above 0xffff (beyond a 16-bit store's reach
+here)', which was false in the direction that matters: it put the untested values OUT of the
+guest's reach when 65,040 of them are IN it.  Corrected 2026-09-06 by the retrospective
+re-check (batch 8b), by enumerating every value the file stores at GDROM_COND.  The
+DISPOSITION is unchanged and the reason below is why: chasing every K is unbounded. ***]
 chasing every K is the unbounded shape this project has paid for once, and a
 value-conditional forge triggering only outside the anchored set is OUT-OF-CONTRACT.
 

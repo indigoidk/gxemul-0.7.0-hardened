@@ -1,0 +1,55 @@
+VERDICT: **PROCEED-WITH-(d) preferred; (a)-alone closes the current witness but is fragile; the ruling's rejection of (b) rests on premises I cannot verify.** The defect mechanism is correct as stated and follows from the inlined code. HIGH severity is supported. Premises I cannot settle from the packet are named below.
+
+---
+
+**Q1 — Premise audit.**
+
+The defect mechanism is airtight from the inlined code. `reassert_interrupts()` walks `MAX_CPUS=4` unconditionally; on a one-cpu machine `d->cpu_irq[1..3].interrupt_assert` are NULL (memset at DEVINIT, only slot 0 is `INTERRUPT_CONNECT`ed); `INTERRUPT_ASSERT` expands to a direct call through that pointer with no NULL check. The MASK1 store alone survives because `software_interrupt_status[1]` is still zero, so `status |= (1<<26)` does not fire and `status & enable` is zero. The SOFT_INT1 write sets `software_interrupt_status[1]=1`; reassert then evaluates `status = 0 | (1<<26)` against `enable[1]=0xfc000000`, hits the if-branch with `irqActive[1]==0`, and dereferences NULL. SIGSEGV follows. The `highestCurrentStatus`/readback arithmetic (`currentMask>>8`, bits 26..31 scan) is consistent with `0x00fc0000` for the mask1 readback.
+
+Premises the packet flags and that I **cannot** settle (each names the single fact that would):
+
+1. **Default cpu count is 1.** Brief attributes this to emul.c and marks CHECK. Settling fact: the `m->ncpus = 1` assignment in emul.c.
+2. **Nothing else in the tree connects `cpu_irq[1..3]`.** The packet only shows the four `INTERRUPT_CONNECT` calls in DEVINIT. Another device or a machine-description path could populate the struct's function pointer; the packet does not exhaust. Settling fact: a recursive grep over `cpu_irq` and over `INTERRUPT_CONNECT` in `GXEMUL-SEC/src/`.
+3. **`struct luna88k_data` has no `machine` pointer.** Brief flags this; (a) needs `d->ncpus` stored at DEVINIT or a back-pointer. Settling fact: the struct definition (`grep -n 'struct luna88k_data' src/devices/dev_luna88k.c`).
+4. **The six device-line call sites** (`luna88k_interrupt_assert/deassert` with `1<<(line+25)`). Inferred from the brief, not verbatim. Settling fact: those six call sites and whether any of them calls `reassert_interrupts` (the "after ONE arming store, the NEXT device interrupt kills" corollary requires it).
+5. **`fatal()` in the #438 low-bits latch exits or prints.** The probe's D4 row stores `0x84000100` (bit 8 set, triggers the latch) and the probe must continue to subsequent rows; if `fatal()` exits, the probe shape is inconsistent. Settling fact: the `fatal()` definition in this fork.
+6. **OpenBSD MASK1..3 behaviour on a uniprocessor.** Packet says unknown. Settling fact: `_guest-src-openbsd22/` contents (brief notes it probably has no luna88k; verify).
+7. **Es438 rows D4/E2 reddening under option (b).** Stated by the ruling; cannot evaluate. Settling fact: the es438 detector rows.
+
+I see no internal contradiction in the inlined code, and the witness rows are consistent with the control flow shown.
+
+**Q2 — Smallest edit.**
+
+(a) alone — store `d->ncpus = devinit->machine->ncpus` at DEVINIT, walk `cpu < d->ncpus` in `reassert_interrupts`. This bounds the loop so cpu=1..3 are never visited; the `soft1` store lands in `software_interrupt_status[1]` but reassert no longer reaches it; no NULL deref. The `mask1` row stays green (store lands, readback `0x00fc0000` unchanged). The `slot0` row stays green. The `soft1` row's *expectation* must change from HALT to OK under the fix — that's the probe edit, not a defect residue.
+
+Residue under (a) alone: none from the paths shown. But see Q3.
+
+**Q3 — Option set and the ruling.**
+
+The ruling's choice of (a) alone closes the current witness. I would push toward **(d) — (a) AND (b)** — for two reasons the packet supports:
+
+- **Robustness.** The ruling itself raises the concern: "a future edit could add another walk over MAX_CPUS." Under (a) alone, any future re-introduction of a `MAX_CPUS` walk re-opens the crash. Under (d), `interrupt_enable[cpunr]` and `software_interrupt_status[cpunr]` for absent slots are held at zero by (b), so even a stray walk evaluates `status & 0 == 0` and takes the else-branch with `irqActive[cpu]==0` — no NULL deref, no spurious delivery.
+- **(b) has an in-tree warrant the ruling does not credit.** `dev_mp.c`'s `which_cpu >= cpu->machine->ncpus → break` (silent decline) and `dev_luna88k.c`'s own `add_cmmu_for_cpu`'s `if (cpunr >= devinit->machine->ncpus) return` are both declines of out-of-range CPU indices from the same tree. The ruling calls (b) "unsourced board-model claim" — but the warrant here is a *house* idiom, not a LUNA-88K board-model claim.
+
+The ruling's stated grounds for rejecting (b) that I **can** evaluate from the packet:
+- *"Changes guest-visible readback"* — true: under (b), `mask1` ld-back becomes 0 instead of `0x00fc0000`. Whether this changes a real boot depends on whether the guest probes MASK1..3 (Q1 premise 6, uncheckable here). The "reddens es438 D4/E2" claim is also uncheckable from the packet. If those rows are themselves probing absent-slot readback, reddening them may be the *correct* outcome, not a regression — but I cannot judge without the rows.
+
+The ruling's grounds I **cannot** evaluate: es438 D4/E2 reddening, and whether OpenBSD or the LUNA-88K hardware actually returns the stored value on an absent slot. The latter is the dispositive fact and it is not in the packet.
+
+**My recommendation:** (d), unless a file-reading seat establishes that (b)'s readback change breaks a real boot path or a shipped es438 row that is itself correct. Under the information available here, the ruling under-protects.
+
+**Q4 — ACCEPT side.**
+
+Cannot verify the `-n 2` flag, the machine description's cpu-count configurability, or whether a cold-debugger row can observe a delivery to cpu 1 (e.g., does the debugger expose `irq_asserted` or a vector-pending register for a non-current cpu?). The MASK1 readback's bits 31..29 (`highestCurrentStatus`) would reflect pending levels regardless of delivery *if* reassert is called and the loop reaches cpu 1 — under (a) alone with `-n 2` it would; under (b) alone it would not (mask declined). The accept row's expectation is therefore conditional on the fix shape and on the configured cpu count — the probe must check `ncpus`, not assume it. Settling fact: the machine-description syntax for cpu count and the debugger's per-cpu inspection commands.
+
+**Q5 — Severity.**
+
+HIGH is supported. Two ordinary word stores from supervisor mode on the machine the project boots, no exotic driver required, deterministic SIGSEGV in the emulator process. The `pcc2defaultkill` / `m88kexcdeliver` precedent (ranked on reachability by an ordinary instruction) applies. I see no reason to argue it down from the packet.
+
+**Q6 — Other findings.**
+
+- The `default:` arm's `cpu->running = 0; return 0` for any unimplemented address in the device window is described (not verbatim) and may be a separate defect class — silent stop of the emulator on an unimplemented MMIO access. Whether already filed: cannot check (`grep -o '"id": "luna[a-z0-9]*"' tools/pipeline/ledger.json` is the settling command). If not filed, it is worth filing as a distinct row, not folded into `lunaabsentcpu`.
+- The `#438` low-bits latch: I noticed the probe's D4 row hits the latch on every run (bit 8 of `0x84000100` is nonzero, so `(idata & 0x03ffffff) != 0` fires). If `fatal()` actually exits, the probe cannot complete — Q1 premise 5. If it prints and returns, the latch's "(reported once per cpu)" semantics depend on `intmask_lowbits_reported[cpunr]` being cleared correctly across runs (process restart re-memsets it, so OK). The premise worth checking is whether `fatal()` here is exit or print.
+- The batch-7 adjudication's corollary — "after ONE arming store, the NEXT device interrupt of any kind kills the host" — depends on the device-line path calling `reassert_interrupts`. The packet does not show those six call sites verbatim. If the device path instead directly drives `cpu_irq[connected_slots]` without going through `reassert_interrupts`, the corollary doesn't hold and the defect is strictly the synchronous SOFT_INT1 form. Settling fact: the six `luna88k_interrupt_assert/deassert` definitions and their call sites.
+
+**Labels used:** every claim above is READ (from the inlined packet) or REASONED (from the inlined packet plus the inlined code). None is MEASURED.

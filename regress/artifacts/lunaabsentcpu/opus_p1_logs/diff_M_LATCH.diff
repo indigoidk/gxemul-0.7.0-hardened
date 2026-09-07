@@ -1,0 +1,38 @@
+--- /mnt/c/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_luna88k.c	2026-08-19 18:08:45.193189600 -0500
++++ /tmp/gxopus_lunaabs/src/devices/dev_luna88k.c	2026-09-06 08:12:00.385158541 -0500
+@@ -87,6 +87,8 @@
+ 
+ 
+ struct luna88k_data {
++	int		ncpus;
++	int		absent_seen[MAX_CPUS];
+ 	struct interrupt cpu_irq[MAX_CPUS];
+ 	int		irqActive[MAX_CPUS];
+ 	uint32_t	interrupt_enable[MAX_CPUS];
+@@ -180,8 +182,12 @@
+ 			status |= (1 << 26);
+ 
+ 	        if (status & enable) {
+-			if (!d->irqActive[cpu])
+-		                INTERRUPT_ASSERT(d->cpu_irq[cpu]);
++			if (!d->irqActive[cpu]) {
++				if (cpu >= d->ncpus && !d->absent_seen[cpu])
++					d->absent_seen[cpu] = 1;
++				else
++					INTERRUPT_ASSERT(d->cpu_irq[cpu]);
++			}
+ 
+ 			d->irqActive[cpu] = 1;
+ 		} else {
+@@ -965,6 +971,11 @@
+ 	CHECK_ALLOCATION(d = (struct luna88k_data *) malloc(sizeof(struct luna88k_data)));
+ 	memset(d, 0, sizeof(struct luna88k_data));
+ 
++	/*  #503: bound reassert_interrupts() to the slots connected below;
++	    walking all MAX_CPUS called a NULL interrupt_assert for an
++	    unpopulated slot -- a guest store to SOFT_INT1 killed the host.  */
++	d->ncpus = devinit->machine->ncpus;
++
+ 	// TODO: Values should correspond to the bootable disk id!
+ 	const int nsymbols = 2;
+ 	const char *s[2] = { "boot_unit", "boot_partition" };

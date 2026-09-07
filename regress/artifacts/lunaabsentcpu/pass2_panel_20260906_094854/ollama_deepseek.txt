@@ -1,0 +1,25 @@
+VERDICT LINE: SHIP WITH REPAIR: the diff is correct, but the detector’s 22-row claim is too strong — a clean-sweep mutant exists that masks SIO line 5 from `interrupt_status` and passes all rows. Add a row that asserts SIO line 5 on a connected slot and expects vector entry, or narrow the contract.
+
+**Q1 — Diff right and complete?**  
+READ: The diff adds `d->ncpus`, bounds the walk `cpu < d->ncpus`, and assigns `d->ncpus = devinit->machine->ncpus` after `memset` but before the `ncpus > 4` exit.  
+REASONED: The order is not material because the `ncpus > 4` exit ends the process at init time; no reassert can run after it. The bound is correct for all callers — the two store arms, the SIO line, and the clock tick all call `reassert_interrupts()`, and the bound applies uniformly. A walk bound is the right fix versus declining stores to absent slots, because the absent slots’ MASK/SOFT registers must remain guest-writable storage with readback (filed `lunaabsentmaskdecl`). No defect in the diff.
+
+**Q2 — Clean-sweep mutant in the (d) DEPENDS-ON enumeration?**  
+Yes. Exact edit: in `reassert_interrupts()`, change  
+`status = d->interrupt_status;`  
+to  
+`status = d->interrupt_status & ~(1 << 30);`  
+(i.e., ignore SIO line 5, bit 30). This is a change to a field the body reads (`interrupt_status`).  
+REASONED: It passes all 22 rows because no row requires SIO line 5 to deliver an interrupt to a connected slot. The `sio5` and `siofirst` rows only check that an absent slot does not crash; they do not check that a connected slot receives the SIO interrupt. The row that should have caught it is a new row in session B or C that asserts SIO line 5 on a connected slot (e.g., after `MASK0 <- 0x04000000`, set SIO TX_IE to raise line 5) and expects vector entry. Without that row, the detector’s claim “catches the walk reaching an unconnected slot by any route” is false for device-line routes that are masked out.
+
+**Q3 — What must the CHANGELOG carry beyond the table?**  
+READ/REASONED: It must carry:  
+- the M_CALLGUARD finding (alternative call-site fix measured wrong, killed by `sio5`/`siofirst`);  
+- the prediction corrections (killing rows are `soft1`/`siofirst`, not `mask1`);  
+- the witness numbers 15/17 with the denominator note (host dies mid-session);  
+- the clean-sweep mutant gap identified in Q2 and the added row required to close it;  
+- the disclosed equivalent M_NULLAB and disclosed debt M_NOREASSERT;  
+- the note that capture before the `ncpus > 4` exit is not material.
+
+**Q4 — Which main-loop disposition is wrong?**  
+The detector with 22 rows wired in gate 11 is wrong. It needs a 23rd row (SIO line 5 delivery to a connected slot) or the contract must be narrowed to exclude device-line routes that are masked out. All other listed dispositions are correct.

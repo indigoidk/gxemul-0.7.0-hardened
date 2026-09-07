@@ -73,5 +73,27 @@ try:
     resp = json.load(urllib.request.urlopen(req, timeout=1500))
     body = resp.get("response") or json.dumps(resp)
 except Exception as e:      # a retired model returns an HTTP 500 with a reason
-    body = "OLLAMA_SEAT_ERROR: %r" % e
+    #  *** READ THE RESPONSE BODY, NOT JUST THE STATUS.  MEASURED 2026-09-06. ***
+    #
+    #  This used to write `OLLAMA_SEAT_ERROR: <HTTPError 429: 'Too Many Requests'>` and
+    #  nothing else.  All three cloud seats returned exactly that, twice, forty minutes
+    #  apart -- and the operator read it as a transient rate limit and planned to re-fire
+    #  after spacing.  A direct POST to the same endpoint carried the real reason in the
+    #  BODY: "you (<user>) have reached your WEEKLY usage limit".  Three of the nine seats
+    #  were down for the week, and the seat file said something indistinguishable from a
+    #  five-minute wait.
+    #
+    #  A bare status code cannot tell a transient limit from a quota wall, and this
+    #  project's own rule is that a WALL is waited out while a REFUSED CONNECTION is one
+    #  command away -- two remedies that need different information to choose between.
+    #  urllib puts the server's explanation in the exception's readable body and throws it
+    #  away unless somebody asks; asking costs three lines.
+    detail = ""
+    try:
+        raw = e.read()                      # HTTPError is a file-like object
+        if raw:
+            detail = " BODY: " + raw.decode("utf-8", "replace").strip()
+    except Exception:
+        pass
+    body = "OLLAMA_SEAT_ERROR: %r%s" % (e, detail)
 open(out, "w", encoding="utf-8").write(body)

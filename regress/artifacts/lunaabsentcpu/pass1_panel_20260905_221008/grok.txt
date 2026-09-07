@@ -1,0 +1,137 @@
+I'll verify the brief's premises against `GXEMUL-SEC/src/` rather than ratify them, then answer Q1–Q6 with a verdict first. Starting with HEAD, the device source, and the inlined claims.Git is blocked in this mode, so I’ll verify the inlined claims from the source and records instead.The loop, store arms, and DEVINIT match the brief so far. Next I’ll check the interrupt macro, default CPU count, other `cpu_irq` connections, and the house idioms.**PROCEED-WITH-(a)** — bound `reassert_interrupts()` to `d->ncpus` captured at `DEVINIT`. The defect is real (rung-3 SIGSEGV). Batch-7’s choice of (a) alone survives a premise audit; (b) is still the wrong round. Two detector cuts in the brief will not do the job they are named for: A1/W1 as currently cut cannot see “store landed, reassert skipped”, and a stepped row cannot see cpu 1 asserting.
+
+agy was **DELIBERATELY NOT FIRED**. I did not run gates. I could not run `git` in this session; source and artifacts were read under `GXEMUL-SEC/src/`. Line numbers below are from that tree and match the brief’s anchors. Checkpoint `HEAD: ab9ae13` is stale relative to the brief’s `83df95c`.
+
+---
+
+## Q1 THE PREMISE AUDIT
+
+**Held, after re-derivation:**
+
+* **`interrupt_status` is one machine-wide word; software interrupts are per slot.** `struct luna88k_data` has a single `uint32_t interrupt_status` and `software_interrupt_status[MAX_CPUS]`. `luna88k_interrupt_assert` does `|= (1 << (line + 25))`; reassert copies that word then `|= (1 << 26)` only for that slot’s software latch. Confirmed.
+* **Default cpu count is 1, and the probe/rig use it.** `emul.c`: `if (m->ncpus == 0) m->ncpus = 1`. `main.c` `-n` is `parse_int_option(..., 1, 256)`. The witness argv is `-V -e luna-88k` with no `-n`. `machine_luna88k` and `DEVINIT(luna88k)` both `exit(1)` if `ncpus > 4`. Reachable luna populations are **{1,2,3,4}**.
+* **Nothing else connects `cpu_irq[1..3]`.** The only `cpu_irq` writes in this file are `INTERRUPT_CONNECT` on slot 0 always, and slots 1/2/3 under `ncpus >= 2/3/4`. No other file names this array. `memset(d, 0)` leaves those function pointers NULL.
+* **The macro has no NULL check.** `interrupt.h`: `INTERRUPT_ASSERT(istruct)` is `(istruct).interrupt_assert(&(istruct))`. Same for `DEASSERT`.
+* **Store arms do not compare `cpunr` to `ncpus`.** Domain of `cpunr` is the four case labels, not “any address”: `INT_ST_MASK0..3` at `0x65000000/04/08/0c` give `cpunr ∈ {0,1,2,3}`; `SOFT_INT0..3` at `0x69000000/04/08/0c` the same. `addr = relative_addr + LUNA88K_REGISTERS_BASE` then `switch (addr)` — unaligned offsets do not enter this arm.
+* **`d` has no `machine` pointer.** `grep` of `struct machine` in `dev_luna88k.c` is empty. Option (a) needs a stored `ncpus` (or a pointer).
+* **Not shipped.** `CHANGELOG.md` has 0 hits for `lunaabsentcpu`. `regress/` has `luna_intmask_probe.py` only; the new probe lives in `regress/artifacts/lunaabsentcpu/` and `_scratchpad/lunaabs/`.
+* **D4 really arms bit 26.** `0x84000100` = bit 31 + bit 26 + bit 8 (`INT_SLAVE_MASK` / `INT_SET_LV5` plus bit 8). After D4, slot 1 stays armed for the rest of that session. The “bit 26 CLEAR” draft was wrong; the correction is right.
+* **Witness log matches the packet** (`witness_head_20260905_2130.out`): 4/5, W1 `signal 11`, no diagnostic.
+
+**Wrong or incomplete premises:**
+
+1. **“The tree has no noop-interrupt helper.”** The brief’s grep (`noop.*interrupt|dummy.*interrupt`) missed `src/core/interrupt.c`: `static void no_interrupt_assert` / `no_interrupt_deassert`, filled in on empty-name lookup. **They are not a usable idiom:** the empty-name arm does not `return`, so lookup still `abort()`s, and `INTERRUPT_CONNECT("")` does not exist anywhere. (c) stays rejected; the grep result is false.
+2. **`dev_mp.c` is two idioms, not one.** `which_cpu >= ncpus` → silent `break` is a **guest index into `cpus[]`** (OOB). `for (i = 0; i < ncpus; i++)` at the PAUSE and IPI arms is a **walk bound**. Reassert is a walk over interrupt pins, not an OOB index: `interrupt_enable[4]` is in-range for `cpunr` 0..3. Transferring the *decline* is a category error; transferring the *walk* is the house match (`RESET_CPU_ALL`, `add_cmmu_for_cpu`, the connect guards).
+3. **MASK1 `highestCurrentStatus` does not show a software interrupt.** The read path uses `interrupt_status & currentMask` only. The `1 << 26` overlay lives in reassert’s local `status` and is never written into `interrupt_status`. A MASK1 readback cannot be the delivery oracle for SOFT_INT1.
+4. **OpenBSD/luna88k is absent from `_guest-src-openbsd22/`** (no `sys/arch/luna88k`; `mvme88k` is a different board). The on-disk header is an OpenBSD 6.2 import (`luna88k_board.h`) and names all four MASK/SOFT registers plus `INT_SLAVE_MASK` (“slave can only enable 6 and 1”). Whether a UP kernel *writes* MASK1 is still unsettled. The rig booting to login only proves it does not currently arm slot 1 **and** leave a pending bit.
+
+**Bit/line domain (enumerated, not reasoned):**
+
+| line | `1 << (line+25)` | connected as |
+|------|------------------|--------------|
+| 1 | bit 26 | software overlay; no separate device on `.luna88k.1` |
+| 2 | bit 27 | (registered, unused in DEVINIT) |
+| 3 | bit 28 | SCSI |
+| 4 | bit 29 | le |
+| 5 | bit 30 | sio |
+| 6 | bit 31 | timer |
+
+`0xfc000000` = bits 31..26 = `INT_SET_LV0`/`LV1`. SOFT_INT write of `1` is truthy → slot’s bit 26. Enable with bit 26 set AND software latch nonzero → `INTERRUPT_ASSERT`. MASK1 store alone: `interrupt_status==0` and software latch 0 → no call. That is why A2 survives and W1 dies.
+
+---
+
+## Q2 SMALLEST EDIT THAT CLOSES W1 AND STILL LEAVES A DEATH
+
+Three one-token shapes close the measured witness and leave a guest-reachable SIGSEGV. Name the row that stays **HALT**:
+
+| edit | W1 | remaining death | row that must exist |
+|------|----|-----------------|---------------------|
+| `if (cpu == 1) continue` (skip only the measured slot) | green | slots 2 and 3 still NULL-called | **`soft2` / `soft3` HALT** |
+| NULL-check **ASSERT only**, still `irqActive[cpu]=1` | green | later `INTERRUPT_DEASSERT` of NULL | **`soft1clr`**: SOFT_INT1 store then read-to-clear (or MASK1=0) **HALT** |
+| `d->ncpus = 1` hardcoded / `cpu < 1` | green | no death on 1-cpu; **wrong non-delivery on `-n 2`** | accept row, **if its channel is ASSERT**, not survival |
+
+`cpu < 2` **does not close W1** on the default 1-cpu machine (still walks slot 1). Do not file it as a “closes the witness” mutant; W1 already kills it.
+
+`ncpus` never assigned (`memset` → 0): loop never runs, W1 green, **cpu 0 also never asserts**. A1 as cut today (survive + `ld SOFT_INT0==1`) stays green. That is a channel hole, not a reason to skip the mutant.
+
+---
+
+## Q3 OPTION SET AND THE CHOICE
+
+**Member the brief did not name: (a′) skip the whole slot when `interrupt_assert == NULL`** (`continue`, including the `irqActive` update). No new field. For ncpus ∈ {1,2,3,4} it is guest-visible-equivalent to (a), because connect and population are 1:1. It is **not** M_NULLCHECK (skip the call, still set `irqActive`).
+
+**Checked ruling: (a) ALONE.** Warrant is transferred in-tree, not “cannot hurt”:
+
+* This file already bounds by `ncpus` at `RESET_CPU_ALL` and `add_cmmu_for_cpu`.
+* `dev_mp.c` PAUSE/IPI walks `i < ncpus`.
+* DEVINIT already connects slots 1..3 under `ncpus >= 2/3/4`.
+* Board header names four MASK registers at fixed addresses (against FAULT, and against treating MASK1 as unmapped).
+* Stores to absent slots still land and read back, so shipped es438 D4 (`want=0x00840001` on MASK1) and E2 (`LATCH_FIRST_HITS = 2`) stay green.
+
+**Is (a) enough if a future edit adds another `MAX_CPUS` walk?** There is **one** such walk today (`grep` of that `for` is a single hit). A second walk would be a new diff. Do not buy (b) as insurance; that is the addition licence. Put `ncpus` in the loop and in the contract. `M_REVERT` pins this loop.
+
+**Is (b) enough?** It closes W1 (enable stays 0, or the software latch stays 0). It does **not** close the D4-then-timer corollary unless MASK stores are declined, not only SOFT. It changes readback of documented registers, reddens D4/E2, and claims a board behaviour the tree does not source. File `lunaabsentmaskdecl`. A future writer of `interrupt_enable[]` is hypothetical; the only writer today is this arm.
+
+**OpenBSD SMP probing MASK1 by readback on a 1-cpu config:** not checkable from this packet or from `_guest-src-openbsd22/`. The 1-cpu rig boot only shows the kernel does not currently take the death path. Do not pick (b) on a guessed guest.
+
+**(c)** still fabricates plumbing. The dead `no_interrupt_*` pair does not change that.
+
+**(d)** inherits (b)’s readback delta. Not this round.
+
+**(e)** FAULT: rejected. Four labels, OpenBSD-imported header.
+
+**Edit shape for (a):** `int ncpus` in `struct luna88k_data`; `d->ncpus = devinit->machine->ncpus` after the `> 4` refusal (or cap with `MAX_CPUS`); loop `cpu < d->ncpus`. Do not `return` from the access arm; the common tail (`memory_writemax64` on read, `return 1`) must still run. A decline, if anyone later does (b), is `break` not `return`.
+
+I prefer stored `ncpus` over (a′) because the walk and the connect then share one predicate, and a later dummy pointer cannot re-open a slot. (a′) is the smaller patch; if the measuring seat finds them equivalent, either is above the floor. Do not ship ASSERT-only NULL check.
+
+---
+
+## Q4 THE ACCEPT SIDE
+
+**Configure with `-n 2`.** `main.c` `-n` is live; `MACHINE_SETUP(luna88k)` unpauses every cpu; DEVINIT then `INTERRUPT_CONNECT("machine[0].cpu[1]", d->cpu_irq[1])`. A cold-debugger probe does not need a boot (`-V` is “start paused in the interactive debugger”). `focus 1` switches `debugger_cur_cpu`. Machine description allows 2 (and 3, 4); it `exit(1)` above 4.
+
+**A stepped row cannot observe delivery to cpu 1.**
+
+* `irq_asserted` is set synchronously in `m88k_irq_interrupt_assert` during the store (device dispatch has no single-step guard). It is **not** in `CPU_SETTINGS` (`pc`, GPRs, CRs, FCRs only). `reg` will not print it. No debugger command names it.
+* MASK1 bits 31..29 do **not** include the software overlay (Q1.3).
+* SOFT_INT1 readback proves the latch stored, not that ASSERT ran.
+* Survival is not delivery. `ncpus = 1` hardcoded **survives** `-n 2` and fails to assert cpu 1.
+
+**Free-running shape that can:** `-n 2 -V -e luna-88k`, `focus 1`, clear `PSR.IND` (`M88K_PSR_IND` is **set** at `cpu_new`: “Start in supervisor mode, with interrupts disabled”), point `VBR` at RAM, plant a handler at `VBR + 8*M88K_EXCEPTION_INTERRUPT` = **VBR+0x8**, breakpoint there, MASK1 arm + SOFT_INT1, `continue` (not `step` — `cpu_dyntrans.c` suppresses dispatch while stepping). Channel: cpu 1 `pc == VBR+8`. Negative control: the same sequence on **1-cpu** must neither die nor take that vector.
+
+`timer1` as a stepped row: **N/A**. `luna88k_timer_tick` is a host-timer callback; `timer_stop()` while the debugger is interactive. Do not ship a survival-only timer row. SOFT_INT is the synchronous stand-in for “armed enable + pending bit”. The running-guest clock-after-D4 kill is the same loop; (a) closes it by not walking the slot.
+
+**MASK1 readback `0x00fc0000` is a store-landed row**, valid on both 1-cpu and 2-cpu under (a). It does not discharge the accept-side obligation.
+
+---
+
+## Q5 SEVERITY
+
+**HIGH stands.** Two ordinary supervisor `st`s on the unmodified `-e luna-88k` the project boots, host `SIGSEGV`, no diagnostic. Precedent is reachability of process death, not a known driver. “OpenBSD has not done it on the rig” is the same “driver doesn’t” argument that does not demote `pcc2defaultkill`. Among HIGHs it is behind live boot-path kills (the 1-cpu boot does not currently arm+pend slot 1) and ahead of graceful `running = 0` halts.
+
+---
+
+## Q6 ELSE
+
+1. **`default:` `cpu->running = 0; return 0` is not among `luna*` ledger ids** (only `lunafuse`, `lunaabsentcpu`). Documented board registers **RESET_CPU0..3** and **SOFT_INT_FLAG** (`0x6d000000/04/08/0c`, `0x6b000000`) have no `case` and take that path — a **graceful** machine halt, different class from this SIGSEGV. File separately; do not grow this round. OpenBSD may never hit them (rig boots).
+2. **A1/W1 as cut cannot kill `M_STOREBUTNOREASSERT`.** Both rows are survival + SOFT readback. A store that skips `reassert_interrupts()` keeps A1 and W1 green. The free-running accept (cpu 1 at VBR+8) is what kills it; so would a cpu-0 vector control. If you ship only the present 1-cpu stepped rows, say so in the contract: this detector does not claim the reassert call.
+3. **Bit 26 is shared** between software-int and hardware line 1. Not a defect; it is why `INT_SLAVE_MASK = 0x84000000` (bits 31 and 26 = levels 6 and 1).
+4. **Ledger `lunaabsentcpu.witness` is still `"none"`** while a rung-3 artefact exists. Records, not product code.
+5. **The `machine[0].cpu[N]` HACK** will `abort()` lookup if the machine path is not `machine[0]`. Out of scope; `-n 2` on the default machine is enough for the accept row.
+6. **`OBIO_CLOCK1..3`** compute `cpunr` with no `ncpus` check but only `cpunr == 0` decrements the timer. No NULL call. Not this defect.
+
+---
+
+## DETECTOR (what I would actually row)
+
+Contract: this detector catches **delivery to an unconnected `cpu_irq[]` pin** after a guest store that makes `status & enable` true. It does not claim completeness over MASK decode or over unimplemented `default:` addresses.
+
+**1-cpu (`-n` omitted):** live, devsig, slot0, mask1, **W1 HALT**, `soft1x2`, `soft1clr` (arm+clear), `mask2`/`soft2`, `mask3`/`soft3`. Channel for W1/`soft2`/`soft3`: host death vs survive. Channel for `soft1clr`: death under ASSERT-only NULL check vs survive under (a). Channel for maskN readback: `0x00fc0000` vs 0 (decline).
+
+**2-cpu (`-n 2`), free-running:** `mask1 accept` store-landed (readback) **and** `soft1 deliver`: cpu 1 `pc == VBR+8`. That pair is what kills `ncpus = 1` hardcoded and `M_STOREBUTNOREASSERT`. Survival-only on `-n 2` is vacuous for both.
+
+**Mutants:** `M_REVERT`, `cpu <= d->ncpus`, `ncpus` unassigned, `ncpus = 1` hardcoded, skip-only-slot-1, `M_NULLCHECK` (ASSERT only), `M_LATCHTHENDELIVER`, `M_DECLINEALL` (slot0/devsig must red), `M_STOREBUTNOREASSERT`. `M_BOUND2` (`cpu < 2`) is killed by W1, not by `soft2`. `M_LABEL` (unbounded SOFT_INT3 only) is not a one-token edit of the shared arm; do not pretend it is.
+
+**`timer1`:** N/A in this instrument; record the reason. **es438cells** (MASK2/MASK3 readback) ride along as store-landed rows.
+
+Wire next to `luna_intmask_probe.py` in `gate_m88k_rounding.sh`. Measuring seat: (a) in a scratch clone, not (d); (d) reddens D4/E2 by construction. Run W1 pre-fix red / post-fix green, then the `-n 2` vector row.

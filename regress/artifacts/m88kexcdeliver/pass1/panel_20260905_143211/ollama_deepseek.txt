@@ -1,0 +1,41 @@
+Verdict: D1 is correct as derived; the only material defect I can name from the packet is that the detector’s row list omits SNIP, so M_SNIPX may pass; the `ld` encoding and the raise-site census are not checkable from the packet.
+
+## 1. Premise audit
+
+- **Two-switch reading** — READ from inlined `m88k_exception()`: the first switch sets `implemented = true` only for RESET, INTERRUPT, INSTRUCTION_ACCESS, DATA_ACCESS. The five target classes fall through to the `if (vector < M88K_EXCEPTION_USER_TRAPS_START && !implemented)` fallback, which stops every CPU. The tail switch has a `default:` that sets `cpu->running = false` for any vector < USER_TRAPS_START not explicitly handled.  
+  REASONED: D1 (set `implemented = true` for the five **and** add five tail `case` labels with bare `break`) delivers the exception and leaves the CPU running. D2 (`implemented = true` only) reaches the tail `default:` and halts this CPU. That matches the brief.
+
+- **rte resumes at SNIP** — READ from manual lines 8983–8985 and 9030–9032: rte resumes at SNIP, not SXIP. For all five precise exceptions, SXIP = faulting instruction, SNIP = next instruction. The common path already sets SNIP = pc+4 | V.  
+  REASONED: the `#if 0` doubt about continuing after divide-by-zero is resolved by the manual; no PC backup is needed. The faulting instruction should not be re-executed.
+
+- **Encodings** — REASONED by enumeration:  
+  `divu r2,r3,r0` = 0xf4000000 | (2<<21) | (3<<16) | (0x68<<8) | 0 = 0xf4436800.  
+  `add r2,r3,r4` = 0xf4000000 | (2<<21) | (3<<16) | (0x70<<8) | 4 = 0xf4437004.  
+  These match.  
+  The `ld r2,r3,0` = 0x14430000 encoding is **not checkable from the packet** because the load/store decoder is not inlined. A wrong encoding could fake the symptom, as the brief notes.
+
+- **Raise-site census** — READ from the brief’s grep counts: SFU1_PRECISE 58, PRIVILEGE_VIOLATION 10, ILLEGAL_INTEGER_DIVIDE 4, INTEGER_OVERFLOW 3, MISALIGNED_ACCESS 1, UNIMPLEMENTED_OPCODE 1; BOUNDS_CHECK, ERROR, SFU1_IMPRECISE have no raise site.  
+  Not checkable from the packet, but internally consistent with the inlined function.
+
+- **SFD1 clear at reset** — READ from the brief: PSR reset value is `M88K_PSR_MODE | M88K_PSR_IND`, so SFD1 is clear and FPU is enabled. If true, `divu` by zero reaches ILLEGAL_INTEGER_DIVIDE, not SFU1. Not checkable from the packet.
+
+## 2. Smallest edit that breaks D1 and still passes the detector
+
+Set `SNIP = SXIP` (or `SNIP = pc`) for the five delivered classes. The inlined row description asserts `pc == 8*vector`, `SXIP == 0x10004 | V`, PSR bits, `r2` unchanged, and machine still RUNNING. It does **not** assert `SNIP == 0x10008 | V`. Therefore a mutant that sets SNIP to the faulting PC would still pass all listed delivered rows. The kill table lists M_SNIPX as caught, but the row description omits the SNIP check — that is a defect in the detector as specified. If the actual probe checks SNIP, then M_SNIPX is caught; but from the packet, the row list does not.
+
+## 3. Option-set completeness
+
+- **Q-D1a (message level):** Change the five to `VERBOSITY_INFO`. Delivered exceptions that a guest OS handles routinely should not be ERROR-level. Whether a hygiene row would red either way is **not checkable from the packet**; it depends on gate_ab’s expectations.
+- **Q-D1b (BOUNDS_CHECK):** No raise site today. Including it for consistency is harmless, but the precedent from other CPU cores is **not in the packet**. Single fact that would settle it: whether MIPS/SH/ARM/PPC cores deliver or stop on recognised-but-unmodeled exception classes.
+- **Q-D1c (ERROR):** Out of scope is defensible. A double fault halt vs. guest panic are both “guest dead,” but the guest’s panic message is the guest’s. File separately.
+- **Q-D1d (MISALIGNED scoreboard):** The fork has no scoreboard; SSBR is written 0. DMT0 is zeroed for every vector except DATA_ACCESS. For a precise exception detected before dispatch, zero DMT0 is consistent with the manual. Whether a guest handler reads DMT0 is **not checkable from the packet**.
+- **Q-D1e (fcr2/fcr4/fcr5):** Not written. If OpenBSD’s SIGFPE path does not read them, out of scope as a follow-up is fine. Condition on that belief.
+- **Missing member:** The detector’s omission of SNIP is the only option-set gap I can name from the packet.
+
+## 4. The guest
+
+A booted OpenBSD/luna88k system could raise these via: a userland `divu` by zero (SIGFPE), a user-mode `ldcr` or privileged instruction (SIGILL/SIGSEGV), or a misaligned access with MXM clear (SIGBUS). A measuring seat should run a small userland program under the guest that performs each and observe the expected signal. A boot-gate row could change if the kernel deliberately probes with a privileged instruction and expects a trap; run gate_ab with the fix and compare.
+
+## 5. Records
+
+The CHANGELOG block owes: the manual citation for rte-at-SNIP and SXIP semantics; resolution of the `#if 0` divide doubt; the retrospective batch-2 provenance; the split from `m88kexcsfu1`; and a note that the detector does not catch fcr2/fcr4/fcr5, scoreboard bits, or delay-slot arms.

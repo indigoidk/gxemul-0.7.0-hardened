@@ -1,0 +1,43 @@
+**VERDICT LINE FIRST: CLOSE THE CHAIN — with the disclosed BOUNDS↔ERROR clean-sweep in switch 1 as the residual.**
+
+## The one question
+
+**Yes**, a clean-sweep exists in the (d) enumeration, and it is the one the brief already names as a disclosure.
+
+**Exact edit:** in switch 1, swap the `BOUNDS` (7) and `ERROR` (10) case labels. The guarded body for each is `implemented = is_trap` (disclosed: "`implemented = is_trap` at BOUNDS/ERROR (equivalent today, m88ktbnd)"). Because both labels resolve to the same predicate, the swap is a behavioural no-op for every row in the 41-row suite:
+
+- `trapfrozen` (enters switch 1 as BOUNDS, is_trap=1): original `implemented = is_trap = true`; mutant `implemented = is_trap = true`. Identical. Re-route still exempted; delivered to 0x38; refatal absent.
+- `trapfrozen10` (enters switch 1 as ERROR, is_trap=1): identical reasoning. HALT/DELIVER and refatal both unchanged.
+- No non-trap row reaches switch 1 as BOUNDS or ERROR — BOUNDS has no non-trap route, and the five err* rows enter under their original classes (MISALIGNED, OVF, DIV0, PRIVILEGE, UNIMPLEMENTED), not as ERROR — so neither label is exercised by a row whose `implemented` differs between the two cases.
+
+**Row that should have caught it:** none. The disclosure is the catch — the equivalence *is* the reason no row can catch it. A row that would catch it would have to enter switch 1 with class BOUNDS or ERROR under a condition where `is_trap` differs from `!(PSR & MODE)`; no such row exists in the v8→v10 diff, and adding one would require a user-mode BOUNDS/ERROR route, which the hardware forbids (a user `tb1` naming either raises PRIVILEGE first, as already disclosed under the {class}×{MODE} closure).
+
+**Denominator if closed:** the diff's five row closures + refatal channel + gate repair + interval wording + withdrawn class-10 disclosure close every cell the diff touches. The BOUNDS↔ERROR swap is the one clean-sweep the (d) enumeration contains, and it is disclosed; the chain closes on it.
+
+## Premises I cannot settle from the packet
+
+- Whether `implemented` at BOUNDS/ERROR is literally `= is_trap` or literally `= !(PSR & MODE)` (the disclosure says "equivalent today", which admits either as the source form). Does not affect the verdict: both make the swap a no-op.
+- Whether the tail-switch labels include user-trap indices above 128 individually or fall through a range — relevant only if one were hunting for a second clean-sweep, and I found none (every implemented class 4–10 has a non-fallback row; user-trap indices 128+ are pinned by `usertb` and the new `trapfrozen128`).
+
+## Second question — which of the 10 dispositions is wrong
+
+Count: 5 row closures + 1 channel + 1 disclosure withdrawn + 1 gate repair + 1 interval wording + 1 deepseek 0..3 kept disclosed = 10.
+
+**None is wrongly classified.** Walked each against table 10:
+
+- The five row closures each have a 40/41 row in the table (trapfrozen10→M_ERRORFRZOFF & M_SFRZTRAP10; resid11→M_FB_LO; resid50ind→M_FBIND; resid50c→M_FBNOC; trapfrozen128→M_SFRZTRAPUSER). All close.
+- The refatal channel is what makes M_SFRZTRAP10 land on `bad=refatal` rather than on a vector mismatch — both arms deliver to 0x50, only the diagnostic distinguishes them. Without the channel, the class-10 disclosure could not be withdrawn.
+- The class-10 disclosure withdrawal is correct *for the shipped composite*: the re-route's plain `fatal()` print lands in the pty transcript the probe reads, and the exempt arm does not print — that is the channel. (The withdrawal is about the composite, not about pre-channel v8.)
+- The gate repair (literal `\n` between args in three check lines) is a real regression-of-this-round and was repaired before any gate ran; the diff's check lines are now real continuations.
+- The interval wording (glm `[115,128]` → `115..127`) is correct: 128 is the bound itself, not a shrink value; the mutants are `vector < N` for N in (114, 128) = 115..127.
+- Deepseek's 0..3 stay disclosed (m88kexchwtraps): vectors 0–3 are hardware-event tails with no instruction-raised route the probe can plant; correct to keep disclosed rather than fake a row.
+
+If forced to pick the *most* contestable: the **gate repair** is the only disposition whose evidence is "repaired before any gate ran" rather than "measured in a log" — the panel has the diff (the three check lines now read as real continuations) but no log line proving the pre-repair form. Not wrong, just the thinnest evidence in the set.
+
+## Anything else
+
+- `M_SFRZTRAP10` is correctly caught by `trapfrozen10` via `bad=refatal` rather than via a destination mismatch — both arms land on 0x50, only the diagnostic separates them. The disposition is right; calling it out so the panel doesn't double-count `trapfrozen10` as catching two mutants via the same channel.
+- The "class-10 observationally identical" disclosure was specifically about the *re-route vs* arm under the *re-route's* vector assignment; it was not about switch 1's ERROR arm. The withdrawn disclosure and the new `trapfrozen10` row together close both channels for class 10 (switch-1 ERROR eligibility under SFRZ via HALT/DELIVER; re-route exemption via refatal). Both are needed; either alone leaves a seam.
+- HEAD-with-final-instrument is 7/41 (`usertb` DELIVER; the six fallback rows HALT; everything else HALT; `sfu1h` STOP). The fix on the rebuilt `build/` is 41/41. The shipped composite (probe v10 + #502 fix) is what the floor question is asked of, and it passes.
+
+Chain closes. Denominator is the five row closures + refatal + the three non-row dispositions (gate, interval, withdrawn disclosure) + the kept 0..3 disclosure; the BOUNDS↔ERROR swap is the disclosed clean-sweep.

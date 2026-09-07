@@ -593,7 +593,12 @@ fi
 #  above the switch and above the writeflag test, so no store, no staging
 #  and no command sequence was needed.
 #
-#  THE DENOMINATOR IS 13.  FOUR OF THOSE ROWS EXIST BECAUSE A PANEL FOUND
+#  THE DENOMINATOR IS 14 -- it read 13 until 2026-09-06, when the retrospective
+#  re-check found the loop below naming thirteen of the probe's fourteen rows and
+#  omitting `sweep 256' (the byte-load of all 256 offsets), which is now added.  An
+#  unlisted row is not a failing row: it silently stops being checked while the gate
+#  stays green, which is this file's own padded-column hazard reached by a different
+#  road.  FOUR OF THOSE ROWS EXIST BECAUSE A PANEL FOUND
 #  THE FIRST NINE INSUFFICIENT.  `alias`, `alias2` and `crossarr` pin the INDEXING
 #  half of the bound on r; the other nine pin the kill and the accept side.
 #  They are COMPLEMENTARY on purpose -- neither catches the other's mutant:
@@ -682,7 +687,7 @@ else
         #  while the gate stays green.  Longest name here is `kill store` (10), so
         #  there are three characters of headroom.  Named by a panel seat, which
         #  computed the threshold rather than just warning about the class.
-        for v in "live" "devsig" "asic ok" "safe 8" "kill word" "kill byte" "kill store" "safe 4" "kill far" "alias" "crossarr" "alias2" "mask9 rt"; do
+        for v in "live" "devsig" "asic ok" "safe 8" "kill word" "kill byte" "kill store" "safe 4" "kill far" "alias" "crossarr" "alias2" "mask9 rt" "sweep 256"; do
             n=$(count "$ASLOG" "^$v  .*ok$")
             check "asic_badaddr $v" "$n" 1
         done
@@ -1206,10 +1211,21 @@ fi
 #  (0x08) is a bit of d->cond and the GDROM_DATA read path is gated on it, so leaving
 #  the store where it was would let any declined value forge or revoke data-available.
 #
-#  *** NO ROW HERE MAY READ SURVIVAL. ***  Post-fix every one of these accesses exits 0,
-#  so a survival oracle at a refusal-effect site answers the same whether or not the
-#  guard is right.  The round's WITNESS does use survival -- correctly, it ran BEFORE
+#  *** NO **ACCEPT-SIDE** ROW HERE MAY READ SURVIVAL. ***  Post-fix every accepted access
+#  exits 0, so a survival oracle at a refusal-EFFECT site answers the same whether or not
+#  the guard is right.  The round's WITNESS does use survival -- correctly, it ran BEFORE
 #  the fix -- and its accept rows are deliberately NOT carried into this detector.
+#
+#  *** THE BAN WAS WRITTEN WITHOUT THE QUALIFIER AND THAT WAS ITSELF A CLAUSE-(b) FLOOR
+#  BREACH.  Corrected 2026-09-06 by the retrospective re-check (batch 8b), against the
+#  probe rather than against this comment. ***  The DECLINE rows R1 and R2 read the exit
+#  status on purpose -- `row("R2 cond says", ... , "55|exit0", ...)` -- and
+#  gdrom_cond_probe.py's own docstring gives the reason at its anchor `R1 and R2 assert
+#  announced AND survived`: a presence-only decline row cannot see exit(1) being
+#  reinstated, because fatal() PRINTS AND THEN THE PROCESS DIES.  Count 1, byte correct,
+#  row green, defect back.  So the rule is: an ACCEPT row may not rest on survival
+#  (guarded and unguarded code both survive); a DECLINE row MUST carry it (it is the only
+#  channel that distinguishes announce-and-continue from announce-and-die).
 #
 #  `R5 cond keep` is the KEYSTONE and it is ANCHORED: a fresh device has cond == 0, so
 #  the naive "write 0x55, read back 0" is satisfied by the correct fix AND by a mutant

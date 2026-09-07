@@ -1,0 +1,108 @@
+I'll adjudicate the pass-2 findings against the tree and the v3 probe rather than ratify the dispositions. First I'll load HEAD, the checkpoint, and the uncommitted round so the premises can be checked in source.Checkpoint HEAD is stale (`ab9ae13` vs live `83df95c`). I'll read the uncommitted `m88k_exception` path, the v3 probe, and the pass-2 findings next.I'll read the exception function, the v3 probe, and the gate pins, then check the delay-slot and SFRZ claims against the manual.Several premises look shaky (HEAD v3 score, IND pin, delay-slot shadows, unfiled `m88kexcresetkill`). I'll check those against the instruction decoder, the manual, and the gate pins.**CLOSE THE CHAIN** (zero floor breaches in the (d) closure below). Three L4s to fold before commit; none is a new row or a product-code edit.
+
+---
+
+### F1–F24
+
+| id | ruling | reason |
+|---|---|---|
+| **F1** | **UPHOLD** | `if (!is_trap) implemented = true` on 4/5/8/9 leaves the instruction rows green. Repair is the four `*tb` rows: `killtable3/M_ISTRAP.out` is 17/22, those four HALT. tb0/tcnd are the same `m88k_exception(..., 1)` as tb1 (`cpu_m88k_instr.c` `X(tb0)`/`X(tb1)`/`X(tcnd)`). |
+| **F2** | **UPHOLD** | `X(tb0)` user-mode filter raises PRIVILEGE with `is_trap==0`; `privtb` is not the trap route. `privsuptb` is. M_ISTRAP's fifth HALT is `privsuptb`. |
+| **F3** | **UPHOLD** | Every other row runs VBR=0, so `pc = 8*vector` is invisible. `vbrtb` is the one anchored row (`pc=0x00002038` in `probe_v3_fix.out`). M_NOVBR 21/22. |
+| **F4** | **UPHOLD** | Manual `:8633-8636` / `:9290-9294` / `:10613`: a trap while frozen is not ERROR. `trapfrozen` delivers to 0x38 with shadows frozen at the first fault (`sxip=0x00010006`). M_SFRZTRAP 21/22. |
+| **F5** | **UPHOLD** | `probe_v3_fix.out` dslot: `snip=0x0001000e sfip=0x00010016` (V-bit on). The probe `assert` refuses a collapsed geometry. M_SFIPNOTGT / M_DSLOTSWAP 21/22. (The docstring still writes 0x1000c/0x10014 without V; the code is right.) |
+| **F6** | **UPHOLD** | 6.6 `:9305-9308` is carry unchanged for overflow; 6.8.3 is divide and does not mention carry. `ovfc` PSR `0x9000000b`. M_CARRYCLR 21/22. |
+| **F7** | **UPHOLD** | `main.c:802-803` (`add_verbosity_level(SUBSYS_ALL, -1)` after startup: INFO during boot, WARNING after). Probe `-V` is `single_step=true` (debugger), not extra verbosity (`-v` is). At WARNING, INFO is silent and ERROR prints. M_LEVEL 3/22, 19 rows `bad=level` (`killtable3/M_LEVEL.out`). The pass-1 “unobservable” sentence is a wrong record. |
+| **F8** | **UPHOLD** | `usertb` is pre-existing delivery of vector 128 (`case 0x80` in switch 1, fallback is `< 128`). M_TAILLE: `usertb` TAILHALT, 21/22. |
+| **F9** | **REFINE** | `resid50` is the D4 pin (M_DELIVERALL: resid50 TAILHALT at `pc=0x190`). `sfu1h` does **not** observe vector 114 at 0x390: a nested non-trap with SFRZ set is re-routed to ERROR (`M_DELIVERALL.out` sfu1h `RESULT=STOP pc=0x00000050`). The row still reds when the fallback is off, so the disposition (add it) stands; the claim “pins SFU1 not delivered” overstates the channel. A first-exception SFD1-set `divu` would pin 0x390; that is `m88kexcsfu1`, disclosed. |
+| **F10** | **UPHOLD** | `div0` is supervisor (`epsr=0x80000002`). `udiv0` is the measured user-mode sentence (`epsr=0x00000002`, vector 8). SFD1 is checked first in `X(divu)`, so this also pins the SFU1 boundary for SFD1-clear. |
+| **F11** | **UPHOLD** | M_DELAYALWAYS needs a second unfrozen exception. Disclosed in the contract / `m88kexcdebt`. |
+| **F12** | **UPHOLD** | For the seven arms the tail body is `break`; skipping them is equivalent. Vectors 0..3 are a different round (`m88kexchwtraps` / `m88kexcdebt`). |
+| **F13** | **UPHOLD** | `tbnd` is disassembly-only (`cpu_m88k.c` `case 0xf8`). M_TRAPONLY 22/22. Absence record names `m88ktbnd`. ERROR switch-1 is likewise trap-only (SFRZ rewrite is after switch 1). |
+| **F14** | **UPHOLD** (architecture: Fable/codex/grok; form: labelled change-detector) | See D1. Do not hold this fix. Labelled pin is the honest form (not laundering): you are not changing the else-arm, and the CHANGELOG/probe say the row is a change detector. Re-pin-first when `m88kdslotshadow` lands. |
+| **F15** | **UPHOLD** | `errortb` updates shadows; the SFRZ path freezes them. `error` row SXIP stays `0x00010006` (first fault). Comment now names both. |
+| **F16** | **UPHOLD** | 6.8.3 `:10300-10305` destination only; 6.6 carry. |
+| **F17** | **UPHOLD** | implemented={0..10}=tail labels; 11..127 return at the fallback; ≥128 skip the tail. `default:` is unreachable. M_NAIVE 3/22 re-arms it. |
+| **F18** | **UPHOLD** | SSBR=0 is under `update_shadow_regs`. SFU1 raise sites write FPECR (`X(divu)` `M88K_FPECR_FUNIMP`). |
+| **F19** | **UPHOLD** | 11..113 = 103, 116..127 = 12, +114/115 = 117. 128−11=117. |
+| **F20** | **REFINE** | 11 of 128 **skip the fallback** (vectors 0..10). 10 of those transfer to VBR+8·vector (1..10). Vector 0 is implemented and then **stops in the RESET tail**. 117 hit the fallback. “11 delivered = 4+7” repeats the pass-1 census defect in a new coat. Grok pass 2 already had 10+1+117. CHANGELOG `:86-87` still says “11 delivered”. |
+| **F21** | **UPHOLD** | Figure 6-4 is the rte flow (`:9018`). Recognition is Figure 6-3; §6.10 prose is the ERROR warrant. |
+| **F22** | **UPHOLD** | `arm_exception`: `exception_nr` out of range `exit(1)`; `ARM_EXCEPTION_RESET` `exit(1)` (`cpu_arm.c` around the RESET case). |
+| **F23** | **UPHOLD** | DMT0–2/DMD/DMA are zeroed after the freeze guard. 6.5.5 `:9290-9294`: a trap while frozen modifies none of the exception-time registers. Table 6-3 lists DMT as exception-time. Filed LOW: `trapfrozen`’s first fault is DIV0, so the row cannot see DMT loss. |
+| **F24** | **UPHOLD** | `m88kexcresetkill` was never a ledger id (grep of `"id": "m88kexc` is deliver/sfu1/frozendmt/hwtraps/debt). One row `m88kexchwtraps` covering 0..3 is the right merge. Vector 0 is the same all-CPU stop this round removed, but supervisor-only — LOW holds. |
+
+### D1–D3
+
+**D1 — REFINE the citation, uphold the filing, architecture with Fable/codex/grok.**  
+Table 6-3 (`:8798-8800`) says the shadows copy XIP/NIP/FIP *at exception time*; it does not itself list delay-slot values. Those come from `:2093-2104`: while the **slot** executes, XIP=slot, NIP=target, FIP=target+4. So SNIP=target, SFIP=target+4 — the DATA_ACCESS arm, not the else-arm.
+
+kimi’s 6.4.3.1.2 quote (“SFIP … or the target of a jump or branch”, `:8898-8902`) is FIP **while the branch is in XIP** (XIP=branch, NIP=slot, FIP=target). A precise fault *in* the slot is the next stage. kimi’s own “SNIP = shadow of NIP” then requires NIP=slot+4 at fault time, which contradicts `:2093-2095`. The else-arm is a mashup: SXIP from slot-execute, SNIP/SFIP from branch-execute.
+
+The discriminator is rte. Manual `:9032`: “The instruction pointed to by the SNIP is the first instruction to execute.” `X(rte)` (`cpu_m88k_instr.c`, `fip != nip + 4` arm) executes SNIP then SFIP. Else-arm ⇒ slot+4 (the instruction the taken `br.n` skipped) then target. DATA_ACCESS arm ⇒ target then target+4. Those are different post-rte sequences; that is the `m88kdslotshadow` row. Re-pin first.
+
+**D2 — UPHOLD.** Both true of different objects. Filed + disclosed.
+
+**D3 — UPHOLD, no dispute.** F7 measured the channel. INFO matches the four already-delivered classes. ERROR would print at the post-startup WARNING floor and would trip `#261` if that breakpoint is on. Compatible, not competing.
+
+---
+
+### Q2 — which accepted disposition is wrong?
+
+**F20.** You replaced “8 of 128” with “11 delivered”. Vector 0 is implemented and then dies in the RESET tail (`fatal("[ m88k_exception: reset ]")` + all-CPU stop). Grok already wrote “10 of 128 (vectors 1–10); vector 0 still dies”. The CHANGELOG pass-records paragraph (`:86-87`) still carries the 11-delivered sentence.
+
+Second, weaker: **F9’s characterisation of `sfu1h`**, not the decision to add the row. See F9.
+
+The labelled dslot pin is **not** the wrong one. Re-pinning now would red the 22/22 gate on an else-arm this round must not touch. Labelling + filing is the oracle-correction rule deferred to the round that will edit that arm. 22/22 must not be quoted as “shadows match the manual”; the CHANGELOG already forbids that.
+
+---
+
+### Q3 — what all nine missed
+
+1. **`sfu1h` never reaches 0x390.** Nested SFU1 runs with SFRZ set, so `if (!is_trap) vector = ERROR` fires before any SFU1 tail arm. M_DELIVERALL: `pc=0x50` STOP, not `pc=0x390` DELIVER. The first-exception SFU1 path (`m88kexcsfu1`) is unpinned by this detector. Disclosed by contract; the negative-control *sentence* is what overclaims.
+
+2. **`m88kexctaildefault` is the same phantom filing as `m88kexcresetkill`.** F24 grepped `m88kexc` and followed only vector 0. The product comment and CHANGELOG still name `m88kexctaildefault`; there is no ledger id (ids present: deliver, sfu1, bcndm6, idledup, dslotshadow, frozendmt, hwtraps, debt). `resid50` is the pin. File the option-row or stop citing it. Pass-1 `m88kmxmkill` is the same class outside that grep.
+
+3. **Gate comment `2/22` on HEAD is a wrong record in the repair.** `probe_v3_head.out` and `M_REVERT.out` are **3/22** (resid50 + sfu1h + **usertb**, which the fallback never touched). CHANGELOG got this right; `gate_m88k_rounding.sh` witness sentence still says `0/9 -> 0/10 -> 2/22`. Clause (a)/(b) still fail HEAD (3≠22); this is L4, not a floor breach.
+
+4. **IND is the F6 shape, disclosed rather than rowed.** Every pre-fault PSR in the 22 rows has `M88K_PSR_IND` already set (`0x80000002` / `0x00000002` / `0x90000002`). Dropping `\| M88K_PSR_IND` is a 22/22 escape. Carry-at-0 got `ovfc`; IND-at-1 got “IND idem”. Consistent with clause (e), inconsistent with F6’s remedy. Not floor: the seven-class body does not test IND (joint cells only where the body distinguishes them).
+
+5. **Table 6-3 is over-cited for delay-slot values** (D1). The live-pointer copy is Table 6-3; NIP=target / FIP=target+4 is `:2093-2104` at slot-execute. One sentence in the tail comment.
+
+Nothing in that list is a (d) cell of *this* diff left empty.
+
+---
+
+### Denominator (repair’s pass 2; chain-close)
+
+Swept against `killtable3/` (frozen md5 `28302f55`, BASE 22/22 both ends) plus `probe_v3_head.out` / `probe_v3_fix.out` / `probe_v3_fix_final.out`:
+
+| cell / mutant | score | closed? |
+|---|---|---|
+| `implemented` × {insn, trap} for 4,5,6,8,9 | M_ISTRAP 17/22 | yes |
+| BOUNDS/ERROR insn route | M_TRAPONLY 22/22 equivalent | disclosed (`m88ktbnd`) |
+| fallback on / off | M_REVERT 3/22, M_DELIVERALL 20/22 | yes |
+| tail labels | M_NAIVE 3/22 | yes |
+| tail bound `<` vs `<=` | M_TAILLE 21/22 | yes |
+| {SFRZ}×{is_trap} four cells | error, errortb, trapfrozen, ordinary; M_SFRZTRAP / M_ERRORDROP 21/22 | yes |
+| VBR | M_NOVBR 21/22 | yes |
+| PSR C | M_CARRYCLR 21/22 | yes |
+| else-arm as implemented | M_SFIPNOTGT, M_DSLOTSWAP, M_DSLOT 21/22 | yes (labelled) |
+| LEVEL | M_LEVEL 3/22 | yes |
+| clause (a) HEAD v3 | 3/22 `probe_v3_head.out` | yes |
+| clause (b) reinstatement | M_REVERT 3/22 | yes |
+
+Not closed, disclosed: M_DELAYALWAYS, vectors 0..3, DMT-under-frozen-trap, SSBR, fcr2/4/5, IND-clear pre-fault, first-exception SFU1, dslot *architectural* values.
+
+Comment-only edits owe a non-comment diff (you have that) and a probe re-run (`probe_v3_fix_final.out` 22/22). They do not owe another table.
+
+---
+
+### Before commit (L4, not another pass)
+
+- `gate_m88k_rounding.sh`: `2/22` → `3/22`, and “every trap-like class stopped” must not be the meaning of that 3 (usertb delivered on HEAD).
+- CHANGELOG `:86-87`: 11 skip the fallback, 10 delivered, 1 RESET-tail stop, 117 fallback.
+- Either file `m88kexctaildefault` (and `m88kmxmkill`) or stop naming them as rows.
+
+### Could not settle
+
+I did not rebuild or re-run mutants; scores are from the named logs. I did not open `mc88100.pdf` page images — Table 6-3 / `:2093-2104` / `:8898-8902` / `:9290-9294` / `:9032` are from `_scratchpad/mc88100.txt` (stagger-calibrated against the 6.8.3 / 6.6 pair this tree already uses). agy was deliberately not fired.

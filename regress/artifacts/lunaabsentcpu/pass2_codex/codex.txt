@@ -1,0 +1,17 @@
+ONE MORE REPAIR: (i)’s claim that moving the capture removes guard dependence.
+
+**The relocation does not remove that dependency.** Above or below the exit, the assignment supplies exactly the same bound whenever execution reaches the walk. Both versions rely on initialization rejecting excessive counts. The two-exits correction (v) is sound, but does not establish independence from those exits. Clamp the captured count to `MAX_CPUS` if that independence is required; otherwise correct the rationale. I found no resulting failure in currently accepted configurations.
+
+1. **The snapshot is stable in this fork.** CPU-count assignments occur during configuration and initial setup; CPUs are created before devices in [emul.c](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/core/emul.c:486). I found no later count mutation or CPU-add path. The only connections populate the contiguous configured slots. However, (iii) describes equal **values**, not literally one shared field: [the predicates](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_luna88k.c:995) still read `machine->ncpus`, while the walk reads its snapshot. Their equality holds here. Using `int` (ii) matches the source field and is appropriate.
+
+2. **The registers retain acceptance, not DECLINE.** MASK readback and SOFT storage/read-clear remain observable behavior. An absent CPU does not by itself establish that its controller registers disappear. The vendor’s absent-bank semantics are **not checkable from the packet**, so neither FAULT nor discarded writes have a demonstrated warrant. Preserving behavior under (iv), with the modeling question tracked separately under (vi), is reasonable. Declining those stores in-round would introduce an additional behavioral change requiring evidence.
+
+3. **A two-character, non-equivalent survivor:** append `&1`:
+   ```c
+   if (d->software_interrupt_status[cpu]&1)
+   ```
+   Every SOFT value written by v7 is `1`; this therefore preserves those observations while incorrectly dropping even nonzero pending values. Extend **`slot0 deliver`** with value `2`, retaining its value-1 case: expect **STOP** for this mutant.
+
+   If “edit to the fix” means strictly the three changed hunks, another survivor is the bound `cpu < (d->ncpus & -d->ncpus)`. It preserves tested counts 1, 2 and 4, but undercounts 3. Add **`cpu2 deliver3`** with only CPU 2 pending; expect **STOP**.
+
+These mutant outcomes are source-derived predictions; I did not rerun the simulator. The demonstrated error is (i)’s claimed effect, not a demonstrated present-day snapshot mismatch.

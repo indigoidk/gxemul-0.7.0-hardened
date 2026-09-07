@@ -90,8 +90,19 @@ STRB40 = (0xE5C01040, "strb r1,[r0,#64]")       # CNTR0 <- r1
 
 
 #  #440: controls C1/C2 and the A1 device signature, lifted VERBATIM out of body()
-#  so that every arm carries its own controls.  Arms D/F/T must go on measuring
+#  so that every arm EXECUTES its own controls.  Arms D/F/T must go on measuring
 #  exactly what they measured before this was extracted -- that is the check.
+#
+#  *** THIS SAID "every arm CARRIES its own controls", AND EXECUTING THEM IS NOT THE
+#  SAME AS CHECKING THEM.  Corrected 2026-09-06 by the retrospective re-check
+#  (batch 10), against the code rather than against this comment. ***  The three
+#  control rows all iterate `MMUOFF`, which names SEVEN arms -- D, F, P, Z, I, L, M --
+#  so arms **W and X run the prologue and their control results are never asserted on**.
+#  A W or X run whose liveness, MMU state or device signature had gone wrong would
+#  produce rows that look like findings about the counter latch.  Nothing measured says
+#  it HAS gone wrong; what is wrong is the sentence, which claimed a coverage the row
+#  set does not have.  Adding W and X to MMUOFF is a DETECTOR change owing its own
+#  mutant, so it is filed (`pitcounteraxis`) rather than done inside a records fix.
 #
 #  A1 survives the flip-flop fix on purpose: the MODE<-0x34 at 0x38 rewinds the
 #  selector under BOTH the old one-way clear and the new flip-flop, so A1 stays a

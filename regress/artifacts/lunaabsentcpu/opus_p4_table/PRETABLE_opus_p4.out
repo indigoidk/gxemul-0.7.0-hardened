@@ -1,0 +1,22 @@
+PRETABLE -- Opus 5 pass-4 seat, #503 lunaabsentcpu.  Written BEFORE the table runs (mtime proves the order).
+Composite under test: fix v2b + probe v5 (34 rows, frozen md5 3fd0198f).  Clone /tmp/gxopusluna_p4, baseline re-derived
+from SEC + fix_lunaabs.py.  Predictions, each with the ROW that should catch it if it is caught:
+
+M_ENP1   `interrupt_enable[cpu & 1]' + `software_interrupt_status[cpu & 1]' (the READ side aliased by parity).
+         PREDICT 34/34 -- TOTAL ESCAPE.  Reasoning: the alias is the identity at cpu 0 and cpu 1, so every
+         -n 1 and -n 2 session is unchanged; the only 4-cpu session is E, and v5's E writes THE SAME mask bit
+         (0x04000000) and THE SAME sw value (1) to all four slots, so slot 2's aliased read of slot 0 and slot 3's
+         of slot 1 see a correctly-armed partner.  M_IRQACTIVEP1 dies (32/34) only because it aliases a WRITE
+         (irqActive) that the first of each parity pair consumes; a READ alias consumes nothing.
+         Row that would catch it: an E-shaped session where a same-parity pair holds DISAGREEING enable/sw values
+         (v4's E -- slots 2,3 pending with 0,1 IDLE -- was exactly that and was DELETED by the v4->v5 rewrite).
+M_ENP1E  the ENABLE read alone.  PREDICT 34/34, same reasoning (isolates the half).
+M_EXIT8  `ncpus > 4' -> `ncpus > 8' at DEVINIT: the predicate the CAPTURE depends on, relaxed.  The walk bound
+         `cpu < d->ncpus' is KEPT and stops bounding cpu_irq[] (MAX_CPUS = 4).  PREDICT 34/34 -- TOTAL ESCAPE,
+         because every one of the 34 rows runs -n in {1,2,4} and the mutant differs only for ncpus in 5..8.
+         Row that would catch it: a `-n 5' non-start row (base: prints "LUNA 88K can't have more than 4 CPUs."
+         and exit(1); mutant: constructs and walks cpu_irq[4], one past the array).  ADDENDUM below measures -n 5.
+M_SWEQ1  `software_interrupt_status[cpu]' -> `== 1': the sw bit's VALUE domain narrowed to the single value every
+         row writes.  PREDICT 34/34 -- escape.  Classified clause-(e) DISCLOSURE (a single-lvalue value cell the
+         body never tests as a case), NOT a floor breach -- recorded so the escape is not mis-graded upward.
+BASE     PREDICT 34/34 (a validity control on the clone: if BASE is not 34/34 no escape number below means anything).

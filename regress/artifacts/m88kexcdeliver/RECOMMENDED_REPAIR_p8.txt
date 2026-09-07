@@ -1,0 +1,54 @@
+RECOMMENDED REPAIR for #502 pass 8 -- the {switch-1 arm} x {PSR bit} CLASS CLOSURE, in ONE diff.
+(Provisional until CENSUS_cells.txt confirms the open set; amend, do not re-derive from this file.)
+
+WHY A CLASS CLOSURE AND NOT ANOTHER CELL.  Three consecutive passes have found the SAME class -- a PSR-bit conjunct
+on a predicate that dominates the diff's edited lines -- at three different sites, and each was repaired at the site
+where the mutant happened to land:
+    pass 6   the FALLBACK predicate            -> rows resid50ind, resid50c
+    pass 7   the SFRZ RE-ROUTE predicate       -> rows errind, errc
+    pass 8   the SWITCH-1 `implemented' arms   -> (this repair)
+The carrier's repair-chain amendment is explicit about what that pattern owes: "WHEN TWO CONSECUTIVE PASSES FIND
+BREACHES OF ONE CLASS, THE NEXT REPAIR OWES THE CLASS CLOSURE: enumerate the full space from the function's own
+inputs, close every cell in ONE diff, and write into the CONTRACT which cells are covered and which are deliberately
+not."  Cell-by-cell repair here converges linearly and buys one cell per pass; the closure terminates the chain,
+because pass 9 then VERIFIES AN ENUMERATION instead of hunting.
+
+THE SPACE, enumerated from the function's own inputs: {7 switch-1 arms the diff edits} x {5 stcr-settable 88100 PSR
+bits} = 35 cells.  2 unreachable with a warrant (BOUNDS x MODE, ERROR x MODE: a user tb1 naming 7 or 10 raises
+PRIVILEGE instead -- cpu_m88k_instr.c X(tb1), and no instruction raises 7 or 10).  33 reachable, 23 already rowed.
+
+THE FIVE ROWS.  One PSR value closes BOTH open cells at an arm, because the open cells are always (C never set) and
+(IND never clear) and 0x90000000 is both at once -- the same trick ovfc and indclr already play at the OVERFLOW arm,
+and the same row SHAPE as resid50c (stcr then the trap instruction, fault_pc 0x10008).
+
+    PSR_SUPCNOIND = 0x90000000   # MODE | C, IND CLEAR: supervisor, carry set, interrupts enabled.  One value closes
+                                 # {arm} x {C} and {arm} x {IND} together (grok/kimi's surface, pass 7)
+
+    ("unimpltbc",  [STCR_R5_CR1, TB1_0_R3_5],  {"r3": 1, "r5": PSR_SUPCNOIND}, V_UNIMPL, 0x10008, PSR_SUPCNOIND, None),
+    ("privtbc",    [STCR_R5_CR1, TB1_0_R3_6],  {"r3": 1, "r5": PSR_SUPCNOIND}, V_PRIV,   0x10008, PSR_SUPCNOIND, None),
+    ("boundstbc",  [STCR_R5_CR1, TB1_0_R3_7],  {"r3": 1, "r5": PSR_SUPCNOIND}, V_BOUNDS, 0x10008, PSR_SUPCNOIND, None),
+    ("div0tbc",    [STCR_R5_CR1, TB1_0_R3_8],  {"r3": 1, "r5": PSR_SUPCNOIND}, V_DIV0,   0x10008, PSR_SUPCNOIND, None),
+    ("errortbc",   [STCR_R5_CR1, TB1_0_R3_10], {"r3": 1, "r5": PSR_SUPCNOIND}, V_ERROR,  0x10008, PSR_SUPCNOIND, None),
+
+    PSR_WANT: each of the five wants 0x9000000b (C survives exception entry -- exactly the fact table 11's BASE gate
+    established for errc, and ovfc states from the other side).  EPSR = 0x90000000.  No REFATAL_EXPECT entry: these
+    rows are UNFROZEN, so the re-route never runs.  M88KEXC_RESULT becomes 51/51; the gate's `46/46' pin and its
+    "43 fault rows" label both move.
+    MISALIGNED and OVERFLOW need no row: errc/errind and ovfc/indclr already hold all four of their cells.
+
+CHANNEL, per row: under `implemented = !(PSR & M88K_PSR_C)' at its arm the row's C-set fault becomes un-implemented,
+falls to the fallback and HALTs naming that arm's vector -- DELIVER -> HALT, which the probe already distinguishes.
+Under `implemented = (PSR & M88K_PSR_IND) != 0' the same, via IND clear.  Both observables vary; neither row is
+vacuous by construction.
+
+TWO ROWS THE CLOSURE DOES **NOT** BUY, and they belong in the contract as disclosed rather than left silent:
+  * MULTI-AXIS joints at a switch-1 arm (`implemented = !((PSR & C) && !(PSR & IND))' and friends).  The carrier's
+    own bound keeps these as clause-(e) debt -- "Multi-axis idata joints stay clause-(e) debt" -- and closing them
+    would be the 2^k growth the bound exists to refuse.
+  * MXM and BO: `m88k_stcr' sets `cpu->running = false' for MXM and for a BO flip (verified by reading), so no row
+    can put the machine in those states.  Disclosed with the mechanism, not merely asserted.
+
+THE STRUCTURAL ALTERNATIVE, NAMED AND NOT RECOMMENDED.  Seven identical `implemented = true;' statements are seven
+mutation sites for one decision; hoisting them to one site after the switch would make errc/errind/ovfc/indclr cover
+the whole class for zero new rows.  That is a product-code change to a shipped fix with no measured delta behind it
+-- the ADDITION LICENCE says no -- so it is FILED, not done.

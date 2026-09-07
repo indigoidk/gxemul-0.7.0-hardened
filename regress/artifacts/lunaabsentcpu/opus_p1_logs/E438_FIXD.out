@@ -1,0 +1,28 @@
+BINARY=/tmp/gxopus_luna_BIN_FIXD
+PLANTED -- each slot disassembled and checked against the emulator's own spelling:
+  0x00010000 word=0x24850000 dis='st\tr4,r5,0x0'      OK
+  0x00010004 word=0x14850000 dis='ld\tr4,r5,0x0'      OK
+  0x00010008 word=0x24860000 dis='st\tr4,r6,0x0'      OK
+  0x0001000c word=0x14860000 dis='ld\tr4,r6,0x0'      OK
+C1 LIVENESS -- plain RAM through the same decode:
+  C1 RAM readback                                                got=0x12345678 want=0x12345678 OK
+C2 DEVICE SIGNATURE -- the handler's own >>8; RAM cannot produce this:
+  C2 read INT_ST_MASK0 after legal write of 0xfc000000           got=0x00fc0000 want=0x00fc0000 OK
+D1 GUARDED WRITE #1 -- 0x84000100 (INT_SLAVE_MASK prefix + bit 8):
+  D1 readback  as-is=0x00840001 masked=0x00840000 nostore=0x00fc0000 got=0x00840001 want=0x00840001 OK
+  E1 a diagnostic was emitted at all -- 0 means the guard was deleted outright got=1 want>=1 OK
+D2 GUARDED WRITE #2 -- 0xe4000200; kills latch-once-then-exit-on-the-next:
+  D2 readback  as-is=0x00e40002 masked=0x00e40000 nostore=0x00840001 got=0x00e40002 want=0x00e40002 OK
+D3 GUARDED WRITE #3 -- 0xc4000041, low bits ONLY in 7..0; kills a narrowed guard:
+  D3 readback -- bits 7..0 are UNOBSERVABLE, >>8 eats them       got=0x00c40000 want=0x00c40000 OK
+D4 A SECOND CASE LABEL -- INT_ST_MASK1 at 0x65000004; the site has FOUR:
+  D4 readback from INT_ST_MASK1 -- independent of MASK0          got=0x00000000 want=0x00840001 *** MISMATCH ***
+C3 LIVENESS AGAIN -- the machine still executes after three guarded writes:
+  C3 RAM readback                                                got=0x0badf00d want=0x0badf00d OK
+  E2 LATCH (text-coupled, see comment) -- first-hit markers across 4 hits/2 regs got=0x00000001 want=0x00000002 *** MISMATCH ***
+DIAG_LINES_SEEN=3
+  emulator said: [ luna88k: INT_ST_MASK0: unimplemented low bits in write 0x84000100; stored as-is (reported once per cpu) ]
+  emulator said: [ luna88k: INT_ST_MASK0: unimplemented low bits in write 0xe4000200 ]
+  emulator said: [ luna88k: INT_ST_MASK0: unimplemented low bits in write 0xc4000041 ]
+LUNA_INTMASK_WITNESS=FAIL D4 readback from INT_ST_MASK1 -- independent of MASK0; E2 LATCH (text-coupled, see comment) -- first-hit markers across 4 hits/2 regs
+PROBE_WALL=1.0s

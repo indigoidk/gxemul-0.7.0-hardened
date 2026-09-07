@@ -1,0 +1,143 @@
+I'll read the full offloaded brief first, then check the cited source against the packet instead of ratifying it.I'll re-derive the two switches, encodings, raise-site census, and reset PSR from `GXEMUL-SEC/src/` rather than taking the packet's numbers as given.Vector numbers match the header. Next I’ll walk the decoder encodings, MXM/SFD1 reset path, and the other CPU exception cores.**VERDICT: RATIFY D1** — set `implemented = true` on the five and add tail `case` labels that `break` (not `return`) into `m88k_pc_to_pointers`. D2 is a halt, not a delivery. Ship privilege and unimplemented rows with the three already measured; do not ship SXIP/PSR/SNIP oracles until `reg 0,0` actually parses.
+
+agy was deliberately not fired.
+
+---
+
+## 1. Premise audit
+
+**Two switches.** D1 delivers; D2 halts. Re-derived from the inlined function, not from the brief’s conclusion.
+
+- Fallback (`vector < M88K_EXCEPTION_USER_TRAPS_START && !implemented`, `USER_TRAPS_START` = 128): only RESET / INTERRUPT / INSTRUCTION_ACCESS / DATA_ACCESS set `implemented`. The five leave it false, so every guest CPU is stopped and the function **returns before** shadows, PSR, or `pc = VBR + 8*vector`. That matches `probe_head.out`: `unimplemented vector=0x008/0x009/0x004`, `pc=0x00010004`, `emul: All machines stopped.` (`emul.c` prints that line). Graceful stop, not `exit`.
+- D1: `implemented = true` passes the fallback, common path runs (SXIP/SNIP/PSR/pc). Then the tail `switch` has only RESET/INTERRUPT/INSTRUCTION_ACCESS/DATA_ACCESS; the five hit `default:` → `"internal error"` + **this** CPU `running = false`. On uniprocessor `testm88k` that is still a halt, with `pc` already at `8*vector`. The retrospective “just set `implemented`” sketch is exactly D2.
+- Tail `break` is load-bearing: it falls through to `m88k_pc_to_pointers`. A tail `return` skips that (same shape as the sketch rule’s early-return). That mutant belongs in the table as **M_TAILRETURN**.
+
+**rte resumes at SNIP, for all five. Do not back up.** The `#if 0` doubt is resolved by the manual, not by taste:
+
+- 6.4.3 / `:8983-8985`: rte executes SNIP; hardware does not use SXIP on return.
+- 6.8.3 Integer-divide (`:10300-10305`): SXIP = the `div`/`divu`; **destination unchanged**.
+- 6.6 Integer overflow (`:9303-9308`, the section the packet left as a question): SXIP = the add/sub; **destination and carry unchanged**.
+- 6.5.2–6.5.4: same precise-exception shape for misaligned / unimplemented / privilege.
+
+Common path already does SXIP = `pc | V`, SNIP = `pc+4 | V`. Retry (`SNIP = pc`) would re-execute a faulting `divu` forever. `X(rte)` really does “First try the NIP, if it is Valid”.
+
+**Table 6-1 stagger (extracted text, not the brief’s numbers).** `mc88100.txt:8526-8538` prints Exception Number one row behind the definition (Reset’s `0` sits on the address line). Naive pairing would call misaligned vector 3. The header (`MISALIGNED=4` … `OVERFLOW=9`) and `8*vector` match the **address** column + definitions. The brief’s offsets are right; the extracted number column is not.
+
+**Raise-site census (named constants in `cpu_m88k*.c`).** Counts match: SFU1_PRECISE 58, PRIVILEGE 10, DIVIDE 4, OVERFLOW 3, MISALIGNED 1, UNIMPLEMENTED 1; BOUNDS/ERROR/SFU1_IMPRECISE zero named raises. Two qualifications:
+
+- The **list** of 10 privilege sites is `ldcr` / `fldcr` / `stcr` / `fstcr` / `xcr` / `rte` / `LS_USR` (one template) / `tb0` / `tb1` / `tcnd`. The brief named nine and omitted `fldcr`/`fstcr`.
+- Domain is incomplete: supervisor `tb0`/`tb1`/`tcnd` call `m88k_exception(cpu, ic->arg[2], 1)` with a **guest vector**. A supervisor trap with vector 4–9 is another way to reach these numbers (and today it still hits the fallback). User-mode low vectors become PRIVILEGE (`is_trap=0`), correctly.
+
+**SFD1 at reset is clear.** `cr[M88K_CR_PSR] = M88K_PSR_MODE | M88K_PSR_IND` (`0x80000002`). `M88K_PSR_SFD1` is `0x00000008`, not set. `testm88k` does not poke PSR later (`default_test` only). So `divu` by zero is ILLEGAL_INTEGER_DIVIDE, not SFU1. (Witness CPU **name** is 88110; `cpu_m88k.c` says `M88110: Not yet.` — delivery is the 88100 model. luna88k’s default CPU is 88100.)
+
+**Encodings.**
+
+| insn | word | decoder |
+|---|---|---|
+| `or r0,r0,r0` | `f4005800` | `0x3d` / sub `0x58` |
+| `divu r2,r3,r0` | `f4436800` | sub `0x68` |
+| `add r2,r3,r4` | `f4437004` | sub `0x70`; `0x7fffffff+1` really takes the `d != dx` arm |
+| `ld r2,r3,0` | `14430000` | **major opcode `0x05`**, not `0x15` (`0x15` is `xor.u imm`). Word is right; the case label in the brief is wrong. Vector `0x004` on the misalign row is the check. |
+| `br` `c3ffffff` | at `0x10008` | `d26 = -4` → target **`0x10004`** (the test insn), not self. True `br .` is `c0000000`. Controls still work via `r2`; do not pin `pc==0x10008` as the DONE oracle. |
+
+**`stcr` / `ldcr` (asked).** `case 0x20`:
+
+- `ldcr`: `(iword & 0x001ff81f) == 0x00004000`, `cr6 = (iword>>5)&0x3f`  
+  `ldcr r2, cr1` (PSR) = `0x80404020`
+- `stcr`: `(iword & 0x03e0f800) == 0x00008000` and `s1==s2`  
+  `stcr r11, cr1` = `0x800b802b`
+
+Simpler user-mode entry: debugger `PSR=0x2`. Init registers every CR by name (`CPU_SETTINGS_ADD_REGISTER32`). That write **does not** go through `m88k_stcr`, so it does not flush translations — and does not need to: `X(ldcr)` reads PSR at execution time.
+
+**Mode vs translation cache.** Caches are **not** mode-tagged. `m88k_stcr` on PSR, if `(old ^ value) & MODE`, calls `invalidate_translation_caches(..., INVALIDATE_ALL)`. Hardware says MODE should only be cleared by rte; the fork warns at `VERBOSITY_WARNING` and continues. Either `PSR=0x2` or a supervisor `stcr` then `ldcr` is a valid privilege row.
+
+`tb1 0,r0,0x10` = `0xf000d810` (`op26=0x3c`, `op10=0x36`). User-mode vector `< 128` raises PRIVILEGE **before** the bit test, so r0=0 is fine. `prom_call` in user mode is `0xf400fc92` (`M88K_PROM_INSTR`).
+
+**Witness.** Rung 3 on committed `testm88k` is real: three HALT, two DONE, `r2` live=6 / attrib=1 / faults still `deadbeef`. The repeated `unimplemented` lines are the fallback calling `m88k_pc_to_pointers` **without moving `pc`**, so the quantum re-executes the same insn until the outer loop sees `running=false`. After D1 that stops.
+
+---
+
+## 2. Smallest edit that breaks D1 and still passes
+
+**M_LEVEL escapes** (disclosed). No hygiene row will catch it: luna88k already boots to `login:` without this fix (`gate_ab` HEAD `1:1:1`), so the boot path does not raise any of the five. INFO vs ERROR is invisible to gate 6 unless a later userland path is added. `#261` break-on-ERROR is opt-in.
+
+**Also escapes unless the detector is repaired:**
+
+| mutant | why it is green today |
+|---|---|
+| **M_NOSHADOW / M_MODE / M_SNIPX** | `probe_head.out` has `sxip=None psr=None`. The SXIP/PSR/SNIP oracles never fired on the witness machine. A stale SXIP or skipped MODE bit is unobservable. |
+| **SSBR / DMT / fcr2,4,5 / SFD1-on-entry** | no row reads them (clause (e)) |
+| **delay-slot else-arm** | no fault-in-delay-slot row; that arm is still the upstream “Perhaps something like this could work” |
+| **MXM** | `stcr` of `M88K_PSR_MXM` **stops the emulator**; the load template never consults MXM |
+
+**M_NAIVE (D2) is only killed if HALT is `stopped` or `"internal error"`, not `pc==8*vector`.** D2 sets `pc` to the vector *before* the tail default. A pc-only oracle scores D2 as DELIVER.
+
+**Add M_TAILRETURN** (`break` → `return` in the new tail arms): skips `m88k_pc_to_pointers`; `cpu->pc` is already the vector; the dyntrans loop then runs the sequential next insn. Floor (d) on the tail repair.
+
+**Plant a spin at `VBR+8*vector` (`put w` of `c0000000`).** RAM there is zeros; `iword==0` is `goto bad` → `running=0` → `"All machines stopped"`. The probe classifies `stopped` as HALT **before** `pc==8*vector`, so a successful delivery into empty RAM scores HALT. The breakpoint is supposed to prevent that; a planted handler makes DELIVER not depend on it.
+
+---
+
+## 3. Option set
+
+**D1 is the right member.** D2 is the (d) mutant. D3 (decline / latched announce) does **not** apply: these are architected CPU exceptions with guest handlers; suppressing them lies to the guest.
+
+Unnamed member worth rejecting in the record: **retry** (SNIP = pc), which is the `#if 0` author’s question. Manual says skip, not retry.
+
+**House idiom — deliver, do not stop.**
+
+- SH: `#217` reserved insn, `#315` slot variants, `#457` TLB multi-hit — recognized classes that used to `exit(1)` now take the general vector.
+- MIPS: `mips_cpu_exception` **always** delivers (RI included, WARNING not halt).
+- ARM: UND/SWI/aborts deliver; only RESET stops.
+- PPC: `ppc_exception` always vectors.
+
+That decides Q-D1b/c:
+
+- **Q-D1a INFO:** yes, match the four implemented classes. No hygiene row owed. Disclose M_LEVEL.
+- **Q-D1b BOUNDS:** leave unimplemented. `tbnd` is disassembler-only. Delivering a class with no raise site is an untestable claim (addition licence). When `tbnd` is implemented, that round delivers vector 7.
+- **Q-D1c ERROR:** **file**, not this round. The re-route already exists for the four implemented classes (DATA_ACCESS with SFRZ set rewrites the vector to ERROR, then the **tail** default stops with `"internal error"` — it never hits the unimplemented fallback). D1 makes that nested path reachable from the five as well. Different contract (shadows frozen). OpenBSD’s error handler panics; still the guest’s panic, not ours — but it needs its own witness.
+- **Q-D1d MISALIGNED / DMT:** DMT zeroed is correct (precise, before data-unit dispatch, `:9236-9237`). Scoreboard is unmodelled (`SSBR = 0` on every exception). File. MXM is a separate halt (`stcr: TODO: MXM support`).
+- **Q-D1e fcr2/fcr4/fcr5:** file with `m88kexcsfu1`. Not on disk; do not guess OpenBSD’s SIGFPE path.
+
+**Delay-slot row:** not floor (the diff does not edit that arm). One `br.n` + faulting delay insn would pin the “perhaps” SNIP/SFIP split. Disclose if skipped.
+
+---
+
+## 4. Guest
+
+OpenBSD/luna88k reaching `login:` without this fix means the **boot path does not raise the five**. After D1, `gate_ab` should stay `1:1:1`. A measuring seat should still run it once, because ERROR-level `debugmsg` on a newly delivered path is the only way boot logs could move — and they should not.
+
+What *would* raise them after the fix (not during boot):
+
+- userland `divu`/`div` by zero → kernel FPE path (today: emulator stops)
+- userland `ldcr` / `rte` / `.usr` / low `tb1` → privilege
+- misaligned load/store with MXM clear (MXM cannot even be set without stopping)
+- userland `0xf400fc92`
+
+**Do not** expect a boot-time privileged probe that “wants a trap”: if that existed, HEAD would already halt.
+
+---
+
+## 5. Records
+
+CHANGELOG round block owes, in about that many sentences:
+
+- Provenance: `ab9ae13` retrospective batch-2 (Astra scoped to tb1; Fable widened to the class); pre-existing upstream (`git log -L` on the fallback = 0.7.0 import); not introduced by #323/#380.
+- Split: `m88kexcsfu1` kept separate (FPHS1/FPLS1/… never written).
+- Two sites in one function: `implemented = true` **and** tail `break`; D2 is the measured halt if the tail is omitted.
+- `#if 0` divide-backup **resolved**: 6.8.3 + 6.4.3; overflow 6.6 the same; dest unchanged; rte at SNIP = next.
+- INFO for the five, matching the four implemented classes; M_LEVEL disclosed.
+- BOUNDS left unimplemented; ERROR nested re-route filed.
+- Witness: `probe_head.out` 3 HALT + 2 DONE on committed `build/gxemul`.
+- Residuals to name: MXM halt; signed `div` with a negative operand (manual 6.8.3; fork only tests divisor==0); register-form `sub` is `goto bad`, not OVERFLOW; fcr2/4/5; scoreboard; delay-slot else-arm.
+
+---
+
+## Other findings (not in the packet)
+
+1. **`reg 0,0` did not parse on the run the brief cites.** PSR at reset would have been `0x80000002` if the dump reached the regex. Fix the dump/parse (or use `allsettings`) and show a pre-fix PSR read before claiming M_MODE/M_NOSHADOW/M_SNIPX.
+2. **Detector HALT/DELIVER order** vs empty vector RAM — plant `c0000000` at `8*vector`.
+3. **Privilege row:** `PSR=0x2` then `ldcr r2,cr1` (`80404020`), or `prom_call` `f400fc92` for unimplemented. Do not require a guest `stcr` unless you want to pin the flush.
+4. Signed `div` negatives and MXM are live modelling gaps; they are not this round’s delivery bug.
+
+D1 plus those detector repairs is the round. Do not ship `implemented = true` without the tail arms.

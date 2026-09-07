@@ -1,0 +1,31 @@
+I'll start from the full offloaded brief and the repo's current HEAD, then answer the pass-7 floor question from the shipped composite.HEAD is `83df95c`. Next I’ll verify the inlined premises against `cpu_m88k.c` and the v10 probe, then hunt for a (d) clean-sweep.I’ll read the exception path, the v10 probe, and PRETABLE10 next so the floor question is against the composite, not the brief.The product path matches the brief. Next I’ll check `stcr` bit rules and the v10 rows for an extra-conjunct that still sweeps.The re-route still sees guest PSR; I’m checking whether overflow sets C before delivery, because that would already kill the C-conjunct.**ONE MORE REPAIR: re-route × {IND, C}.** (Provisional on the Opus 5 / Fable 5 re-fire.)
+
+A clean-sweep mutant exists in the (d) enumeration of the composite. The v8→v10 rows close the five named cells; they do **not** close the PSR-bit class at the other dominating predicate that still sees guest PSR.
+
+Exact edits (anchor `if (cpu->cd.m88k.cr[M88K_CR_PSR] & M88K_PSR_SFRZ)`):
+
+1. `if ((PSR & SFRZ) && (PSR & IND))` — or the inner `if (!is_trap && (PSR & IND))`.
+2. `if ((PSR & SFRZ) && !(PSR & C))` — or the inner `if (!is_trap && !(PSR & C))`.
+
+Every SFRZ-set row still has IND set and C clear:
+
+| row family | PSR at the re-route |
+|---|---|
+| trapfrozen* / error / errovf | `0x8000000b` after the first delivery (`PSR_EXC`) |
+| errdiv0 | `PSR_FRZSUP = 0x80000003` |
+| errpriv / errunimpl | `PSR_FRZUSER = 0x00000003` |
+
+`X(add)` raises overflow and returns without writing C (`cpu_m88k_instr.c`, `X(add)`), so errovf does not set C either. Both extra conjuncts are true on all 41 rows → **41/41 by construction**. Non-equivalent: `m88k_stcr` stores PSR verbatim except MXM/BO (`cpu_m88k.c`, `stcr: TODO: MXM` / endianness abort); the round’s own `errdiv0` already stcr’s in a frozen handler. `0x80000003` → `0x80000001` (IND clear) or `0x90000003` (C set) is that same idiom.
+
+Row that should have caught it: **none**. Owed, dual to `resid50ind` / `resid50c`:
+
+- `errind` — handler `stcr` MODE|SFRZ (IND clear), then the `error` row’s odd `ld` → mutant delivers MISALIGNED `0x20` / no `[ SFRZ already set in PSR => ERROR ]` vs ERROR `0x50` + refatal.
+- `errc` — handler `stcr` with C set, same second fault.
+
+Bound, so this is not unbounded bit-chasing: 88100 bits stcr can set without stopping, at the one other predicate that still reads guest PSR. MODE and SFD1 already vary there (`errpriv`, `errdiv0`). 88110 SER/SGN/SRM/TRACE/SFD2 and `SFD` `0x3e0` also store; `&& !(PSR & SER)` would likewise sweep — **disclose as 88100**, do not row them. Switch-1 `implemented = !!(PSR & IND)` per arm is clause (e): that body does not read PSR; `{class}×{MODE}` is the axis already closed.
+
+**Denominator (composite, v10):** 12 reachable class×route cells; fallback predicate/off/stop/near/far/outside/user/IND/C; switch-1 eligibility including ERROR under SFRZ and `{class}×{MODE}`; re-route source / `is_trap` polarity / per-class non-trap / per-class trap including 10 and 128 / refatal both ways — **and, not closed, `{SFRZ}×{IND}` and `{SFRZ}×{C}`**; tail labels/bound/return; VBR; common-path SFRZ/IND/SFD1/MODE/C; EPSR; shadows; LEVEL; vector scaling.
+
+**Q2 (10 dispositions; 1 wrong):** the completeness claim on **resid50ind / resid50c** (“every settable PSR bit both sides at the fallback” as closing the class for the composite). Those two rows close the fallback cells. The re-route still has IND always-set and C always-clear. The other nine hold: `trapfrozen10` / `resid11` / `trapfrozen128` (table 10: 40/41 each), refatal (`M_SFRZTRAP10` `bad=refatal` on `trapfrozen10`), class-10 withdrawal (same log: both arms at `0x50`, only one prints), gate `check()` continuations, shrink values 115..127, 0..3 still `m88kexchwtraps`.
+
+Premises 1–5 hold (`m88k_psl.h`; `m88k_exception` order; `fatal()` at `debugmsg.c` is a plain `va_debug` with no early-out; `stcr` as above; probe HALT/refatal on the DELIVER path). Not measured: a clone table of the two edits — derived from the row PSR constants in `BASE_final.out`, not from a new log. Records only: vector 11 is `M88K_EXCEPTION_NMI` in `cpu_m88k.h`; the pin is still the first unimplemented vector.

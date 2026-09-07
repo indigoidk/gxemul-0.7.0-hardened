@@ -1,0 +1,22 @@
+**VERDICT (all three): Q1 — none of the ten rows redden (the author's NONE holds per the packet), but the gap is real and the four proposed rows close it; the surviving same-kind escape is class 6, PRIVILEGE_VIOLATION. Q2 — yes, the sentence is false as a universal; the diff's own errortb row falsifies it. Q3 — yes, the comment over-blesses the else-arm; the correction is (c).**
+
+**Q1. VERDICT: ZERO rows redden; the gap is real; the four added rows close it; remaining same-kind escape = class 6 (PRIVILEGE_VIOLATION).**
+
+1. READ: every row touching 4/5/8/9 — misalign, unimpl, div0, ovf, dslot — is route A (is_trap == 0), so the mutant still sets `implemented` for them; the only route-B rows are bounds (names 7) and errortb (names 10), neither in the mutant's set; priv/privtb are route A and so green on any reading of their vector; and the error row's in-handler fault is route A with the re-route to 10 landing after the first switch, so the mutant never bites it.
+2. REASONED: it is a real coverage gap regardless — manual 6.5.5 (READ: a supervisor trap may name any vector) makes `tb1` naming 4, 5, 8, or 9 legal input, and under the mutant that input leaves `implemented` false, so the fallback stops every guest CPU with no row witnessing the difference.
+3. REASONED: the four proposed rows close it exactly — each reaches the first switch with is_trap == 1 and vector in {4,5,8,9}, so under the mutant the "machine still running" assertion reddens, while under the fix the same rows verify delivery to 8*N with normal shadows, the path errortb already exercises (READ).
+4. REASONED: the remaining single-edit escape of the same kind is applying `if (!is_trap) implemented = true;` to class 6 — priv/privtb reach 6 only by route A (READ) and no row names 6 by route B, so it survives even after the four additions; a fifth row, `tb1` naming 6, is the symmetric closure.
+5. REASONED: 7 and 10 are not escapes — bounds and errortb are route-B rows on those vectors and would redden under the identical edit.
+
+**Q2. VERDICT: Yes — false as a universal; keep the frozen-shadows clause but scope it to the re-route path.**
+
+1. READ: the packet gives a second arrival — a supervisor trap naming vector 10 directly, is_trap == 1, SFRZ clear, shadows updated — and the errortb row exists for exactly that arrival, asserting the normal shadow values (SXIP = faulting pc | 2, SNIP = pc+4 | 2, SFIP = SNIP+4), which frozen shadows could not produce.
+2. REASONED: since both arrivals land in the same tail `case` (the bare label the fix added, READ), "ERROR arrives here from the SFRZ re-route above with the shadows deliberately frozen" claims an exhaustivity it does not have — it is true of the re-route path only.
+3. One-line correction (REASONED, preserves the true part): "ERROR arrives here two ways: from the SFRZ re-route above, with shadows deliberately frozen (update_shadow_regs false), and directly from a supervisor trap naming vector 10 (is_trap == 1), which takes ordinary trap processing with shadows updated."
+
+**Q3. VERDICT: Yes — the comment wrongly blesses the pre-existing else-arm; the correction is (c).**
+
+1. READ: Table 6-3 (inlined) for a fault in the delay slot of a taken `br.n` gives SNIP = branch target and SFIP = target+4, while the else-arm sets SNIP = pc+4 and SFIP = the branch's target.
+2. REASONED: with pc the faulting (delay-slot) address, pc+4 is the fall-through, not the target, so the else-arm violates "SNIP = the next one" precisely in the taken-branch case — and by the comment's own resume rule (rte at SNIP), rte there resumes at the fall-through and skips the target; the common path is the contract only in the sequential case.
+3. REASONED: hence (c) — (a) alone leaves a real code-vs-manual mismatch unfiled, (b) alone leaves this diff asserting a falsehood about its own code; reword the comment now to claim the contract only sequentially (in scope), and file the else-arm as a separate bug (out of scope — a fix changes observable SNIP/SFIP and, if the dslot row encodes current behavior, would redden it, so it needs its own change and its own row).
+4. NOT SETTLEABLE FROM THE PACKET: the generic row list says every row asserts SFIP = SNIP+4, which the else-arm's SFIP = target cannot satisfy for the dslot row — either that row's real expectations differ (possibly encoding the else-arm's SNIP = pc+4, itself non-architectural per Table 6-3 if its branch is taken) or its branch is not taken; the single settling fact is the dslot row's actual expected SNIP/SFIP values and its branch's taken-ness.

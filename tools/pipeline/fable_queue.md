@@ -1247,3 +1247,95 @@ to save an hour on a round that cannot start until that table finishes anyway.
 **Release condition:** `#497`'s table completes. The two existing entries are **not** re-fired
 and do **not** count toward the nine.
 
+
+---
+
+## 2026-09-06 — THE THREE-DAY WALL: everything owed to the flagship seat while its allowance is out
+
+**The wall is a fact, not an inference.** A real invocation at 12:40 returned HTTP 429
+`You've reached your Fable limit`, and the owner states the allowance resets on **the 9th**. So
+this is not the minutes-long wall the carrier's "test the seat, do not reason about it" rule is
+usually about; it is three days, and the standing response to that is different: the rounds do
+NOT wait, they close on the seats that answered and the flagship pass lands afterwards under the
+**late-dissent rule** — closure changes the licence, never the truth-value. Every item below is
+therefore *owed and written down*, not *blocking*.
+
+**Read this section first on the 9th.** It is ordered by what a late dissent could still change.
+
+### 1. `m88kexcdeliver` (#502) — passes 2 through 8, and the deferred ADJUDICATION
+
+**Held for: fable5 (all passes), opus5 (passes 6-8).** Eight panel passes ran; the flagship seat
+answered none of them. Packets, newest first:
+`regress/artifacts/m88kexcdeliver/brief_m88kexc_p8.md` (the closing pass: probe v10 → v14, the
+seven-mutant table 11, and the one question), then the pass-7, pass-6 and pass-4 briefs in the
+same directory, with every seat's answer under `pass<N>_panel_*/`.
+
+> **THE QUESTION: eleven kill tables and eight passes closed a detector that five separate
+> mutants swept as recently as pass 7. Is the chain's stop condition being MET, or merely being
+> declared? Specifically — the (d) DEPENDS-ON enumeration this round used treats the SFRZ
+> re-route's PSR read as in-scope for PSR-bit conjuncts and switch 1's `implemented` arms as
+> out of scope, because those arms read no PSR bit. That distinction is what makes the
+> remaining {arm} × {C, IND, SFD1} surface clause-(e) debt rather than a floor breach. Is it
+> the right cut?** Put precisely, because the evidence cuts finer than the question does: a
+> pass-7 mutant (M_MISNOC) built to DEMONSTRATE that debt measured 41/41 on the old instrument
+> and was then KILLED, 45/46, by the repair's own new `errc` row -- whose second fault is a
+> MISALIGNED access with the carry bit set. That does not by itself refute the cut, since floor
+> versus debt is a claim about what a round OWES rather than about what its rows happen to
+> cover; what it does show is that the disclosed surface was smaller than the disclosure said,
+> and the round narrowed the docstring rather than leave it overclaiming. **The question for the
+> seat is whether "the arm reads no PSR bit" is the right test at all, given that the FAULT
+> reaching the arm carries PSR state the arm could trivially be made to read.**
+
+Second question, count named: of the pass-7 dispositions (five row closures; one seat claim
+refuted by measurement; one disclosure narrowed; one mis-cut row repaired from the BASE gate;
+one records note; one L4), **which is wrong?**
+
+### 2. `lunaabsentcpu` (#503) — passes 1 through 4
+
+**Held for: fable5 (all), opus5 (pass 4 fired, result pending).** Packet:
+`regress/artifacts/lunaabsentcpu/brief_lunaabs_p4.md`; tables 1-5 under the same directory.
+
+> **THE QUESTION: pass 4 found a clause-(d) floor breach that pass 3's own repair CREATED —
+> the v4→v5 probe rewrite replaced the one session whose alias targets disagree instead of
+> adding beside it, and two seats independently predicted the resulting 34/34 sweep, which
+> table 5 then measured. That is the `#499` shape (a repair reproducing the defect it repairs)
+> arriving inside a detector rather than inside a fix. The pass-4 repair answers it with a
+> CLASS closure rather than a cell. Is the class enumerated correctly — every per-cpu array
+> the walk touches, under every alias that is a function of `cpu` alone — or is "a function of
+> `cpu` alone" itself the next cell someone will find outside?**
+
+Also owed on this row: a ruling on `M_NULLAB`. A both-sided NULL guard measures EQUIVALENT to
+the shipped bound on every reachable configuration (34/34, four tables running). It is recorded
+as an alternative fix with a warrant that expires if a slot can ever be connected above the
+bound or disconnected below it. **Is a measured equivalence with a stated expiry the right
+disposition, or does the round owe a choice between the two forms?**
+
+### 3. The retrospective re-check — FIVE adjudications, briefs already written
+
+Each is a complete packet naming the reviewing seat's answer file beside it:
+
+| batch | subject | brief |
+|---|---|---|
+| 6 | `dev_sgi_re.c` | `_scratchpad/retro_batch6_sgire/brief_fable_adj_batch6.md` (GPT-6 Astra refused this one on its content filter; a Grok substitute answered and is the file to adjudicate) |
+| 11a / 11b / 11c | `dev_sh4.c`, `cpu_sh*.c`, `memory_sh.c` | `_scratchpad/retro_batch11{a,b,c}_sh/brief_fable_adj_batch11*.md` |
+| 12 | the CPU-core remainder and `float_emul.c` | `_scratchpad/retro_batch12_core/brief_fable_adj_batch12.md` |
+
+Batch 12 raises a candidate PRODUCT defect and it is the one item here that could become a
+round: the MIPS `fpu_subst_tiny` path appears to detect tininess AFTER rounding where the R4000
+manual specifies before, with `0x1.fffffep-127` through `cvt.s.d` as the discriminating input.
+**Is that a real architectural divergence or a misreading of the manual's wording?**
+
+### 4. Stages short of the flagship seat, no held marker, carried here so they are not silent
+
+`sgirekills`, `sgitexindex`, `pcc2widthkills`, `lcabadval` (assess), `proberowsubset`,
+`probetimebased`, `ieeeupgrade`, `pitclobber` — each already has its own entry above or in the
+ledger; they are listed together here only so that a reader on the 9th sees the whole backlog in
+one place rather than reconstructing it from the checker's output.
+
+### 5. Two stages with live HELD markers and real questions — unchanged, still owed
+
+`wdccdbmidxfer` (regress) and `lcabadval` (research). Both carry their `hold_question` in the
+ledger; neither was defanged by the marker sweep.
+
+**Nothing in this section may be counted as reviewed.** That is this file's own founding rule and
+it is the reason the wall is written down rather than remembered.

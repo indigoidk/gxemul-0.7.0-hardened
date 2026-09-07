@@ -1,0 +1,38 @@
+NOTE on reading this table's driver.log -- written 2026-09-06, and CORRECTED the same evening after grok's pass 10
+refuted the first diagnosis.  The corrected mechanism is below; the first one is kept because a wrong reason gets
+reused, and this one was mine.
+
+THE SYMPTOM.  The driver's per-mutant echo lists TWO red rows for blocks whose own score says ONE:
+    M_DIV0SER      56/57   echoed: div0tbc, resid50ser
+    M_FBNOSER      56/57   echoed: resid50ser
+    M_RRNOSER      56/57   echoed: resid50ser, errser
+    CTL_DIV0SERINV 30/57   echoed: ... plus resid50ser
+
+MY FIRST DIAGNOSIS WAS WRONG.  I wrote that the echo "attributes rows to the wrong mutant -- the extra row belongs
+to the next block".  grok checked it and refuted it: the extra `resid50ser HALT' is THIS run's own line, and it is
+GREEN.  The next mutant's real red is a TAILHALT or a STOP, never that HALT.
+
+THE ACTUAL MECHANISM, and it is a class this project already records under another name.  The driver carries its
+OWN COPY of the probe's expectation table, inline:
+
+    exp={"resid50":"HALT","resid127":"HALT","resid11":"HALT","resid50ind":"HALT","resid50c":"HALT",
+         "sfu1h":"HALT","usfu1":"HALT"}
+    want = exp.get(name,"DELIVER")
+
+**`resid50ser` is missing from that copy.**  v17 added it as an expected-HALT row and the driver's duplicate of
+EXPECT_RESULT was not updated, so the printer computes want=DELIVER, sees HALT, and calls it red -- on EVERY mutant,
+including the ones it has nothing to do with.  The SCORES come from the probe itself and are unaffected; only the
+convenience printer is wrong.
+
+**This is the transcribed-table class, one level down from the transcribed COUNT the project already tracks.**  A
+driver that duplicates a probe's expectations goes stale the moment the probe gains a row, and it goes stale
+SILENTLY and in the direction that invents failures.  The fix for the class is not to update the copy: it is for the
+printer to read EXPECT_RESULT from the probe rather than restate it.  The next driver derived from this one owes
+that.
+
+READING THE ARTIFACTS SETTLES ANY DOUBT, and the arithmetic is the tell: 56/57 is ONE failing row, and diffing each
+mutant's own .out against BASE.out gives exactly one each --
+    M_DIV0SER -> div0tbc HALT | M_FBNOSER -> resid50ser TAILHALT | M_RRNOSER -> errser STOP
+    CTL_DIV0SERINV -> 27 rows (the polarity twin: the edit lands and the arm is reachable)
+
+Not fixed in this driver: it has run, and its frozen copy is the record of what ran.

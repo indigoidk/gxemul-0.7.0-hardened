@@ -1,0 +1,20 @@
+**VERDICT: The seven-class delivery is internally consistent and supported (facts 1–2), but the option set ignores the one guest-reachable hole the packet itself documents (fact 3 + the stop-all-CPUs fallback), and Q1's "bare break is right for all seven" rests on an unquoted paraphrase that the ERROR(10) row may violate. Two packet-internal gaps also weaken the evidence: only 3 rows were demonstrated, and "five-class fix" is never defined.**
+
+**Q1 — bare break's return-address contract.**
+READ: fact 5 — rte resumes at SNIP, never SXIP; the common path sets SNIP = (pc+4)|V. REASONED: so bare break encodes "resume past the faulting instruction," and re-execution is the *handler's* job (rewrite SNIP), not the emulator's. From the packet, no class among the seven needs SNIP = pc.
+
+Caveat: READ — fact 5's "for all seven classes SXIP = the faulting instruction" is a paraphrase; the only verbatim citation is 6.6, which covers the destination register and carry bit, not the pointer contract. REASONED: ERROR(10) is the weak row. Fact 4 shows second faults re-route to vector 10 while SFRZ is already set. If the manual's error-exception subsection says the exception-time registers (SXIP/SNIP/SFIP/EPSR) are *not updated* when the error exception is taken — the usual design, so the first fault's context survives — then bare break's overwritten shadow state is wrong for exactly the ERROR row. NOT CHECKABLE from the packet. Settling fact: the manual's error-exception subsection, on whether shadow registers update on vector 10.
+
+**Q2 — smallest edit that passes all assertions and is still wrong.**
+READ: 6.6 (quoted): "destination register **and carry bit** are unchanged." READ: the detector asserts "destination register unchanged" only — the carry bit is a second, unasserted destination.
+REASONED: smallest edit: leave everything the eight assertions pin untouched, and clobber the carry-bit register on the overflow row. Every assertion passes; the function is still wrong per 6.6. Same blind-spot class: no row executes rte, so the resume contract is pinned only as a delivery-time SNIP value; fact 4's path is also unasserted.
+
+**Q3 — options the set misses.**
+READ: fact 3 — tb0/tb1 carry a 9-bit guest-chosen vector, no filter in supervisor mode. READ: the fallback stops *every* guest CPU for any unimplemented vector < 128.
+REASONED: after the seven-class fix, a guest kernel can execute `tb1` with vector 42 and halt every CPU in the machine — a guest-triggerable stop-all that none of the four options touches. Worse, delivering BOUNDS_CHECK makes the tb-path live, so the design *widens* guest reach into the trap space while leaving it mined. Missed option: deliver arbitrary tb0/tb1 vectors (the 88100 has no "unimplemented vector" exception), or at minimum demote the fallback from stop-all-CPUs to stop-this-CPU.
+REASONED, second miss: the design silently converts fact 4's second-fault-in-handler from "dies at tail default" into "delivers to vector 10," with no option "deliver seven + define the error-in-handler path" (including error-inside-the-error-handler looping).
+
+**Packet-internal gaps (audit).**
+READ: fact 2 shows **3/3** rows only; the packet never says which three classes or modes those cover. REASONED: delivery for the other classes (and the user-mode EPSR=0x00000002 rows the detector expects) is inference, not demonstrated.
+READ: fact 4's "five-class fix" is never defined; the design is seven-class. REASONED: if that intermediate excluded ERROR(10), fact 4 is evidence about *that* fix only — it says nothing about the proposed design's second-fault behavior.
+READ: the packet never states what the four existing tail arms do beyond the common path. REASONED: if they perform per-vector side effects, bare break for the seven skips an analogous step; nothing shown proves one is needed, but nothing shown proves there isn't one. Not checkable from the packet.

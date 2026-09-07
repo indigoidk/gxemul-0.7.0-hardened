@@ -215,6 +215,126 @@ MANIFEST = {
     "wdc_addtoinbuf_probe.py":
         (CLASS_DETECTOR, "#495 wdc ATAPI data-port write during DATA-IN -- rung-3"),
 
+    #  m88kexcdeliver (#502) and lunaabsentcpu (#503), 2026-09-06: every .py these rounds preserved under
+    #  regress/artifacts/ is EVIDENCE -- frozen instruments beside their kill tables, the frozen mutant
+    #  generators and fix scripts, and the two measuring seats' own drivers.  Generated from this checker's
+    #  own UNCLASSIFIED list; one line per file, deliberately, as the pcc2 block above does.  The SHIPPED
+    #  detector m88k_exc_probe.py is the one entry here that is NOT evidence and is classified as a detector,
+    #  because the checker's own header warns that a detector misfiled as anything else silences the
+    #  requirement; its gate wiring is DERIVED below, not asserted here.
+    "artifacts/lunaabsentcpu/killtable/fix_lunaabs.py":
+        (CLASS_RESEARCH, "lunaabsentcpu (#503) table 1: the frozen fix script the baseline was derived from, preserved as evidence"),
+    "artifacts/lunaabsentcpu/killtable/luna_absentcpu_probe.frozen.py":
+        (CLASS_RESEARCH, "lunaabsentcpu (#503) table 1: the frozen instrument the table ran, preserved as evidence"),
+    "artifacts/lunaabsentcpu/killtable/mut_lunaabs.py":
+        (CLASS_RESEARCH, "lunaabsentcpu (#503) table 1: the frozen mutant generator, preserved as evidence"),
+    "artifacts/lunaabsentcpu/killtable2/fix_lunaabs.v2.py":
+        (CLASS_RESEARCH, "lunaabsentcpu (#503) table 2: the frozen fix script the baseline was derived from, preserved as evidence"),
+    "artifacts/lunaabsentcpu/killtable2/luna_absentcpu_probe.frozen.py":
+        (CLASS_RESEARCH, "lunaabsentcpu (#503) table 2: the frozen instrument the table ran, preserved as evidence"),
+    "artifacts/lunaabsentcpu/killtable2/mut_lunaabs.v3.py":
+        (CLASS_RESEARCH, "lunaabsentcpu (#503) table 2: the frozen mutant generator, preserved as evidence"),
+    "artifacts/lunaabsentcpu/killtable3/fix_lunaabs.v2b.py":
+        (CLASS_RESEARCH, "lunaabsentcpu (#503) table 3: the frozen fix script the baseline was derived from, preserved as evidence"),
+    "artifacts/lunaabsentcpu/killtable3/luna_absentcpu_probe.frozen.py":
+        (CLASS_RESEARCH, "lunaabsentcpu (#503) table 3: the frozen instrument the table ran, preserved as evidence"),
+    "artifacts/lunaabsentcpu/killtable3/mut_lunaabs.v4.py":
+        (CLASS_RESEARCH, "lunaabsentcpu (#503) table 3: the frozen mutant generator, preserved as evidence"),
+    "artifacts/lunaabsentcpu/killtable4/luna_absentcpu_probe.frozen.py":
+        (CLASS_RESEARCH, "lunaabsentcpu (#503) table 4: the frozen instrument the table ran, preserved as evidence"),
+    "artifacts/lunaabsentcpu/killtable5/luna_absentcpu_probe.frozen.py":
+        (CLASS_RESEARCH, "lunaabsentcpu (#503) table 5: the frozen instrument the table ran, preserved as evidence"),
+    "artifacts/lunaabsentcpu/luna_absentcpu_probe.asrun.py":
+        (CLASS_RESEARCH, "lunaabsentcpu (#503) the round's top-level evidence: the frozen instrument the table ran, preserved as evidence"),
+    "artifacts/lunaabsentcpu/luna_absentcpu_probe.v2.py":
+        (CLASS_RESEARCH, "lunaabsentcpu (#503) the round's top-level evidence: the frozen instrument the table ran, preserved as evidence"),
+    "artifacts/lunaabsentcpu/luna_absentcpu_probe.v3.py":
+        (CLASS_RESEARCH, "lunaabsentcpu (#503) the round's top-level evidence: the frozen instrument the table ran, preserved as evidence"),
+    "artifacts/lunaabsentcpu/luna_absentcpu_probe.v4.py":
+        (CLASS_RESEARCH, "lunaabsentcpu (#503) the round's top-level evidence: the frozen instrument the table ran, preserved as evidence"),
+    "artifacts/lunaabsentcpu/luna_absentcpu_probe.v5.py":
+        (CLASS_RESEARCH, "lunaabsentcpu (#503) the round's top-level evidence: the frozen instrument the table ran, preserved as evidence"),
+    "artifacts/lunaabsentcpu/luna_absentcpu_probe.v6.frozen.py":
+        (CLASS_RESEARCH, "lunaabsentcpu (#503) the round's top-level evidence: the frozen instrument the table ran, preserved as evidence"),
+    "artifacts/lunaabsentcpu/luna_absentcpu_probe.v7.frozen.py":
+        (CLASS_RESEARCH, "lunaabsentcpu (#503) the round's top-level evidence: the frozen instrument the table ran, preserved as evidence"),
+    "artifacts/lunaabsentcpu/opus_p4_table/luna_absentcpu_probe.frozen.py":
+        (CLASS_RESEARCH, "lunaabsentcpu (#503) the measuring seat's own pass-4 table: the frozen instrument the table ran, preserved as evidence"),
+    "artifacts/lunaabsentcpu/opus_p4_table_v5/probe_v4.py":
+        (CLASS_RESEARCH, "lunaabsentcpu (#503) the measuring seat's pass-4 cross-check against the frozen v5 instrument: preserved apparatus, preserved as evidence"),
+    "artifacts/lunaabsentcpu/opus_p4_table_v5/probe_v5.py":
+        (CLASS_RESEARCH, "lunaabsentcpu (#503) the measuring seat's pass-4 cross-check against the frozen v5 instrument: preserved apparatus, preserved as evidence"),
+    "artifacts/m88kexcdeliver/agy_p5/mutate.py":
+        (CLASS_RESEARCH, "m88kexcdeliver (#502) the agy seat's pass-5 measurement: preserved apparatus, preserved as evidence"),
+    "artifacts/m88kexcdeliver/killtable/m88k_exc_probe.frozen.py":
+        (CLASS_RESEARCH, "m88kexcdeliver (#502) table 1: the frozen instrument the table ran, preserved as evidence"),
+    "artifacts/m88kexcdeliver/killtable10/m88k_exc_probe.frozen10.py":
+        (CLASS_RESEARCH, "m88kexcdeliver (#502) table 10: the frozen instrument the table ran, preserved as evidence"),
+    "artifacts/m88kexcdeliver/killtable10/mut_m88kexc.v10.py":
+        (CLASS_RESEARCH, "m88kexcdeliver (#502) table 10: the frozen mutant generator, preserved as evidence"),
+    "artifacts/m88kexcdeliver/killtable11/m88k_exc_probe.frozen11.py":
+        (CLASS_RESEARCH, "m88kexcdeliver (#502) table 11: the frozen instrument the table ran, preserved as evidence"),
+    "artifacts/m88kexcdeliver/killtable11/m88k_exc_probe.frozen11.v14.py":
+        (CLASS_RESEARCH, "m88kexcdeliver (#502) table 11: the frozen instrument the table ran, preserved as evidence"),
+    "artifacts/m88kexcdeliver/killtable11_attempt1_v13/m88k_exc_probe.frozen11.py":
+        (CLASS_RESEARCH, "m88kexcdeliver (#502) table 11 run 1 (ABORTED at its BASE gate on a mis-cut row, preserved as the record of what ran): the frozen instrument the table ran, preserved as evidence"),
+    "artifacts/m88kexcdeliver/killtable11_attempt1_v13/m88k_exc_probe.frozen11.v13.py":
+        (CLASS_RESEARCH, "m88kexcdeliver (#502) table 11 run 1 (ABORTED at its BASE gate on a mis-cut row, preserved as the record of what ran): the frozen instrument the table ran, preserved as evidence"),
+    "artifacts/m88kexcdeliver/killtable12/m88k_exc_probe.frozen12.py":
+        (CLASS_RESEARCH, "m88kexcdeliver (#502) table 12: the frozen instrument the table ran, preserved as evidence"),
+    "artifacts/m88kexcdeliver/killtable13/m88k_exc_probe.frozen13.py":
+        (CLASS_RESEARCH, "m88kexcdeliver (#502) table 13: the frozen instrument the table ran, preserved as evidence"),
+    "artifacts/m88kexcdeliver/killtable2/m88k_exc_probe.frozen2.py":
+        (CLASS_RESEARCH, "m88kexcdeliver (#502) table 2: the frozen instrument the table ran, preserved as evidence"),
+    "artifacts/m88kexcdeliver/killtable3/m88k_exc_probe.frozen3.py":
+        (CLASS_RESEARCH, "m88kexcdeliver (#502) table 3: the frozen instrument the table ran, preserved as evidence"),
+    "artifacts/m88kexcdeliver/killtable4/m88k_exc_probe.frozen4.py":
+        (CLASS_RESEARCH, "m88kexcdeliver (#502) table 4: the frozen instrument the table ran, preserved as evidence"),
+    "artifacts/m88kexcdeliver/killtable5/m88k_exc_probe.frozen5.py":
+        (CLASS_RESEARCH, "m88kexcdeliver (#502) table 5: the frozen instrument the table ran, preserved as evidence"),
+    "artifacts/m88kexcdeliver/killtable5/mut_m88kexc.v5.py":
+        (CLASS_RESEARCH, "m88kexcdeliver (#502) table 5: the frozen mutant generator, preserved as evidence"),
+    "artifacts/m88kexcdeliver/killtable6/m88k_exc_probe.frozen6.py":
+        (CLASS_RESEARCH, "m88kexcdeliver (#502) table 6: the frozen instrument the table ran, preserved as evidence"),
+    "artifacts/m88kexcdeliver/killtable6/mut_m88kexc.v6.py":
+        (CLASS_RESEARCH, "m88kexcdeliver (#502) table 6: the frozen mutant generator, preserved as evidence"),
+    "artifacts/m88kexcdeliver/killtable7/m88k_exc_probe.frozen7.py":
+        (CLASS_RESEARCH, "m88kexcdeliver (#502) table 7: the frozen instrument the table ran, preserved as evidence"),
+    "artifacts/m88kexcdeliver/killtable7/mut_m88kexc.v7.py":
+        (CLASS_RESEARCH, "m88kexcdeliver (#502) table 7: the frozen mutant generator, preserved as evidence"),
+    "artifacts/m88kexcdeliver/killtable8/m88k_exc_probe.frozen8.py":
+        (CLASS_RESEARCH, "m88kexcdeliver (#502) table 8: the frozen instrument the table ran, preserved as evidence"),
+    "artifacts/m88kexcdeliver/killtable8/mut_m88kexc.v8.py":
+        (CLASS_RESEARCH, "m88kexcdeliver (#502) table 8: the frozen mutant generator, preserved as evidence"),
+    "artifacts/m88kexcdeliver/killtable_opus_p8/m88k_exc_probe.censusP8.py":
+        (CLASS_RESEARCH, "m88kexcdeliver (#502) the measuring seat's own pass-8 table: the frozen instrument the table ran, preserved as evidence"),
+    "artifacts/m88kexcdeliver/killtable_opus_p8/m88k_exc_probe.frozenP8.py":
+        (CLASS_RESEARCH, "m88kexcdeliver (#502) the measuring seat's own pass-8 table: the frozen instrument the table ran, preserved as evidence"),
+    "artifacts/m88kexcdeliver/killtable_opus_p8/mutate_p8.py":
+        (CLASS_RESEARCH, "m88kexcdeliver (#502) the measuring seat's own pass-8 table: preserved apparatus, preserved as evidence"),
+    "artifacts/m88kexcdeliver/kimi_p5/m88k_exc_probe_v5p2.py":
+        (CLASS_RESEARCH, "m88kexcdeliver (#502) the kimi seat's pass-5 measurement: the frozen instrument the table ran, preserved as evidence"),
+    "artifacts/m88kexcdeliver/m88k_exc_probe.v16.frozen.py":
+        (CLASS_RESEARCH, "m88kexcdeliver (#502) the round's top-level evidence: the frozen instrument the table ran, preserved as evidence"),
+    "m88k_exc_probe.py":
+        (CLASS_DETECTOR, "m88kexcdeliver detector (#502): the m88k exception-delivery path, 54 fault rows + 2 controls, run by gate_m88k_rounding.sh"),
+    #  m88kexcdeliver (#502) and lunaabsentcpu (#503), 2026-09-06 evening: the pass-9..12 and pass-2
+    #  additions.  One SHIPPED DETECTOR (luna_absentcpu_probe.py, gated in gate_m88k_rounding.sh);
+    #  the rest are frozen instruments and one deriver, preserved beside the tables that ran them.
+    "luna_absentcpu_probe.py":
+        (CLASS_DETECTOR, "lunaabsentcpu detector (#503): dev_luna88k.c reassert_interrupts(), 37 rows + liveness and device-signature controls, run by gate_m88k_rounding.sh.  Also the round's rung-3 WITNESS."),
+    "artifacts/lunaabsentcpu/luna_absentcpu_probe.v8.frozen.py":
+        (CLASS_RESEARCH, "lunaabsentcpu (#503): the v8 instrument (contract updated with table 6's measured members), preserved as evidence"),
+    "artifacts/m88kexcdeliver/derive_cells.py":
+        (CLASS_RESEARCH, "m88kexcdeliver (#502): the {arm x settable-bit} cell census DERIVER, written after a bare total proved underivable on pass 10; prints the grid, not the count.  Evidence, not a detector"),
+    "artifacts/m88kexcdeliver/killtable14/m88k_exc_probe.frozen14.py":
+        (CLASS_RESEARCH, "m88kexcdeliver (#502) table 14: the frozen instrument that table ran, preserved as evidence"),
+    "artifacts/m88kexcdeliver/m88k_exc_probe.v17.frozen.py":
+        (CLASS_RESEARCH, "m88kexcdeliver (#502): the v17 instrument (grok's pass-9 SER closure), preserved as evidence"),
+    "artifacts/m88kexcdeliver/m88k_exc_probe.v20.frozen.py":
+        (CLASS_RESEARCH, "m88kexcdeliver (#502): the v20 instrument (records-only over v19), preserved as evidence"),
+    "artifacts/m88kexcdeliver/m88k_exc_probe.v21.frozen.py":
+        (CLASS_RESEARCH, "m88kexcdeliver (#502): the v21 instrument (the pass-12 ruling recorded in place), preserved as evidence"),
     "artifacts/wdcaltoffset/witness_20260829/wdcaltoff_rung3_probe.py":
         (CLASS_RESEARCH, "#493 wdcaltoffset rung-3 witness probe, preserved as evidence"),
     "artifacts/wdcaltoffset/witness_20260829/mkfixleg.py":

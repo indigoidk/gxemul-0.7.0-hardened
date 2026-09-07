@@ -716,31 +716,38 @@ void m88k_exception(struct cpu *cpu, int vector, int is_trap)
 		break;
 
 	case M88K_EXCEPTION_MISALIGNED_ACCESS:
-		debugmsg_cpu(cpu, SUBSYS_EXCEPTION, "MISALIGNED_ACCESS", VERBOSITY_ERROR, "");
+		debugmsg_cpu(cpu, SUBSYS_EXCEPTION, "MISALIGNED_ACCESS", VERBOSITY_INFO, "");
+		implemented = true;	/*  m88kexcdeliver  */
 		break;
 
 	case M88K_EXCEPTION_UNIMPLEMENTED_OPCODE:
-		debugmsg_cpu(cpu, SUBSYS_EXCEPTION, "UNIMPLEMENTED_OPCODE", VERBOSITY_ERROR, "");
+		debugmsg_cpu(cpu, SUBSYS_EXCEPTION, "UNIMPLEMENTED_OPCODE", VERBOSITY_INFO, "");
+		implemented = true;	/*  m88kexcdeliver  */
 		break;
 
 	case M88K_EXCEPTION_PRIVILEGE_VIOLATION:
-		debugmsg_cpu(cpu, SUBSYS_EXCEPTION, "PRIVILEGE_VIOLATION", VERBOSITY_ERROR, "");
+		debugmsg_cpu(cpu, SUBSYS_EXCEPTION, "PRIVILEGE_VIOLATION", VERBOSITY_INFO, "");
+		implemented = true;	/*  m88kexcdeliver  */
 		break;
 
 	case M88K_EXCEPTION_BOUNDS_CHECK_VIOLATION:
-		debugmsg_cpu(cpu, SUBSYS_EXCEPTION, "BOUNDS_CHECK_VIOLATION", VERBOSITY_ERROR, "");
+		debugmsg_cpu(cpu, SUBSYS_EXCEPTION, "BOUNDS_CHECK_VIOLATION", VERBOSITY_INFO, "");
+		implemented = true;	/*  m88kexcdeliver  */
 		break;
 
 	case M88K_EXCEPTION_ILLEGAL_INTEGER_DIVIDE:
-		debugmsg_cpu(cpu, SUBSYS_EXCEPTION, "ILLEGAL_INTEGER_DIVIDE", VERBOSITY_ERROR, "");
+		debugmsg_cpu(cpu, SUBSYS_EXCEPTION, "ILLEGAL_INTEGER_DIVIDE", VERBOSITY_INFO, "");
+		implemented = true;	/*  m88kexcdeliver  */
 		break;
 
 	case M88K_EXCEPTION_INTEGER_OVERFLOW:
-		debugmsg_cpu(cpu, SUBSYS_EXCEPTION, "INTEGER_OVERFLOW", VERBOSITY_ERROR, "");
+		debugmsg_cpu(cpu, SUBSYS_EXCEPTION, "INTEGER_OVERFLOW", VERBOSITY_INFO, "");
+		implemented = true;	/*  m88kexcdeliver  */
 		break;
 
 	case M88K_EXCEPTION_ERROR:
-		debugmsg_cpu(cpu, SUBSYS_EXCEPTION, "ERROR", VERBOSITY_ERROR, "");
+		debugmsg_cpu(cpu, SUBSYS_EXCEPTION, "ERROR", VERBOSITY_INFO, "");
+		implemented = true;	/*  m88kexcdeliver  */
 		break;
 
 	case M88K_EXCEPTION_SFU1_PRECISE:
@@ -772,6 +779,23 @@ void m88k_exception(struct cpu *cpu, int vector, int is_trap)
 		    : VERBOSITY_INFO, "0x%03x", vector);
 	}
 
+	/*
+	 *  m88kexcdeliver (2026-09-05): the seven trap-like classes above are
+	 *  DELIVERED (VBR + 8*vector, SXIP = the faulting instruction, SNIP = the
+	 *  next one, destination register unchanged -- MC88100 UM 6.4.3/6.5/6.6/
+	 *  6.8.3), like the four this fallback never covered.  Before, any of them
+	 *  stopped EVERY guest CPU here: one divu by zero, in either mode, ended
+	 *  the emulation (measured: regress/m88k_exc_probe.py rows div0/udiv0).
+	 *  Pre-existing upstream code (this fallback is the 0.7.0 import),
+	 *  surfaced by the 2026-09-05 retrospective of #380.  What still lands
+	 *  here, by design: SFU1_PRECISE/IMPRECISE (114/115; row m88kexcsfu1 --
+	 *  faithful delivery needs the rest of the SFU1 exception state, which
+	 *  the fork does not write) and vectors 11..113/116..127 (117 vectors
+	 *  with the two SFU1 ones), which no literal-constant raise site names
+	 *  but a supervisor tb0/tb1/tcnd can name directly (row
+	 *  m88kexctaildefault; the probe's resid50/sfu1h rows pin that they
+	 *  STILL halt).
+	 */
 	if (vector < M88K_EXCEPTION_USER_TRAPS_START && !implemented) {
 		debugmsg_cpu(cpu, SUBSYS_EXCEPTION, "unimplemented",
 		    VERBOSITY_ERROR, "vector=0x%03x pc=0x%08x",
@@ -896,13 +920,45 @@ void m88k_exception(struct cpu *cpu, int vector, int is_trap)
 			m88k_memory_transaction_debug_dump(cpu, 1);
 			break;
 
-#if 0
+		case M88K_EXCEPTION_MISALIGNED_ACCESS:
+		case M88K_EXCEPTION_UNIMPLEMENTED_OPCODE:
+		case M88K_EXCEPTION_PRIVILEGE_VIOLATION:
+		case M88K_EXCEPTION_BOUNDS_CHECK_VIOLATION:
 		case M88K_EXCEPTION_ILLEGAL_INTEGER_DIVIDE:
-			/*  TODO: Is it correct to continue on the instruction
-			    _after_ the division by zero? Or should the PC
-			    be backed up one step?  */
+		case M88K_EXCEPTION_INTEGER_OVERFLOW:
+		case M88K_EXCEPTION_ERROR:
+			/*  m88kexcdeliver: OUTSIDE A DELAY SLOT the common path above
+			    is already the architectural contract for these -- SXIP =
+			    the faulting instruction, SNIP = the next one, SFIP = SNIP+4,
+			    and rte resumes at SNIP (UM 6.4.3.1.4: "the processor
+			    hardware does not use the SXIP on return from an exception"),
+			    so the upstream doubt that sat here in an #if 0 ("should the
+			    PC be backed up one step?") is answered NO: 6.5.x/6.8.3 say
+			    the destination register is unchanged (6.6: and the carry
+			    bit, for the overflow case), and a handler that wants
+			    re-execution arranges SNIP/SFIP itself.  INSIDE a delay slot
+			    the else-arm above ("Perhaps something like this could
+			    work") is upstream's guess and the manual disagrees (Table
+			    6-3: the shadows copy XIP/NIP/FIP, and UM 6.2 defines FIP as
+			    the taken branch's target while the branch executes, so for
+			    a fault in its delay slot NIP = target, FIP = target+4) --
+			    pre-existing, now reachable by ordinary faults, row
+			    m88kdslotshadow.
+			    Without these labels the classes reached the default: below,
+			    which stops the cpu -- the one-site fix was measured to do
+			    exactly that; with them, nothing below 128 reaches that
+			    default any more (it is unreachable code kept as the
+			    tripwire for an eighth class).  ERROR arrives here by TWO
+			    routes: the SFRZ re-route above (a fault inside a handler,
+			    shadows deliberately frozen at the FIRST fault's values --
+			    SXIP then names that first fault, not this one) and a
+			    supervisor tb0/tb1/tcnd naming vector 10 directly (shadows
+			    updated normally when that trap is taken UNFROZEN; inside a
+			    handler it takes the is_trap exemption above and arrives
+			    here with the shadows frozen).  Not modelled, disclosed: scoreboard
+			    capture (the shadow-update path writes SSBR = 0; a frozen
+			    SSBR keeps its old value) and fcr2/fcr4/fcr5 for the divide.  */
 			break;
-#endif
 
 #if 0
 		// TODO: Read up more about SFU1 exceptions and how the

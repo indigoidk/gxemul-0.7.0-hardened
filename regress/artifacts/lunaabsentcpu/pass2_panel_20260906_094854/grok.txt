@@ -1,0 +1,76 @@
+I'll start from the repo truth (HEAD, checkpoint, outstanding bugs) and then check the diff and detector against source rather than ratifying the brief.Git is blocked in this seat, so I’ll audit from the files themselves: checkpoint, outstanding bugs, and the LUNA-88K source.Next I’ll open the LUNA-88K handler, interrupt macros, and the baseline fix so the premises can be checked against the actual code.The walk and DEVINIT match the brief. Next I’ll read the probe rows, PRETABLE, and table logs to see which cells are actually pinned.**SHIP WITH REPAIR: records, not the diff.** Product walk-bound is right. Detector table 1 is above the floor it enumerated. Three of the main loop’s “unchanged” dispositions name rows that are not rows.
+
+Premises 1–5 re-derive from `GXEMUL-SEC/src/` (not `./src/`). `INTERRUPT_ASSERT` is a bare call (`interrupt.h`). Four `reassert_interrupts(` sites. DEVINIT connects slot 0 always, 1..3 under `ncpus >= 2/3/4`. `emul.c` maps `ncpus==0` to 1; `-n` is 1..256; DEVINIT `ncpus > 4` `exit(1)` runs during `device_add`, before `machine_luna88k.c`’s duplicate. Store arms index by address; `RESET_CPU_ALL` bounds by `cpu->machine->ncpus`. Table scores match `killtable_driver.log` / the `.out` files (frozen md5 `5a133aaa`).
+
+---
+
+**Q1 THE DIFF — right, complete, option (a) alone.**
+
+Capture-after-memset vs after the `> 4` exit is **not material** for any configuration that can reach the walk. Reachable `ncpus` is {1,2,3,4}. `luna88k_timer_tick` only increments a counter; `dev_luna88k_tick` (the reasserting tick) does not run during DEVINIT. The clamp variant was already measured equivalent and correctly declined (`fix_lunaabs.py`: “cannot hurt is not a warrant”). Do not add it.
+
+The bound is the right member. All four callers share one walk: MASK store, SOFT store/read, `luna88k_interrupt_assert`, `luna88k_interrupt_deassert`. **M_CALLGUARD 16/18 (`sio5`,`siofirst` HALT)** is why Fable-F4 is not a fix: SIO TX_IE reaches the walk through the device-line handler, not the store arms. Declining absent-slot stores is still (b): it would red `mask1`/`mask2`/`mask3` and is `lunaabsentmaskdecl`. `M_NULLAB` 22/22 is warrant-equivalence (Fable F8), not a reason to switch.
+
+Comment nit, not a repair: “CPUs actually INTERRUPT_CONNECTed” is `machine->ncpus`, and slot 0’s connect is unconditional. Equal on {1,2,3,4}.
+
+---
+
+**Q2 THE FLOOR — CLOSE on table 1’s (d) set. Denominator below. One predicted 22/22 for the ask-again, not a measured L2.**
+
+Dominating predicate: `cpu < d->ncpus`. Body-tested partitions: composed `status & enable` {0,≠0} (software OR’d into a **local** `status`, never into `d->interrupt_status` — Fable F5, still true), `irqActive` {0,1}. Slot axis: connected vs not, at ncpus∈{1,2} as rowed.
+
+| (d) form | mutant | score | cell |
+|---|---|---|---|
+| revert bound | M_REVERT | 15/17 | unconnected ASSERT |
+| weaken `<=` | M_OFFBY1 | 15/17 | one past |
+| never assign | M_NOASSIGN | 17/19 | no delivery |
+| hardcode 1 | M_HARD1 | 19/20 | ncpus=2 slot 1 |
+| skip slot 1 | M_SKIP1 | 19/20 | same |
+| ASSERT-only | M_NULLA / M_GUARDASSERT | 16/17 | unconnected DEASSERT (`soft1` **readback**, not store) |
+| latch-then-walk | M_LATCH | 15/17 | second visit |
+| call-site instead of walk | M_CALLGUARD | 16/18 | device-line third caller |
+| both-sided NULL | M_NULLAB | 22/22 | disclosed equivalent |
+| drop SOFT reassert | M_NOREASSERT | 22/22 | disclosed debt (tick’s `reassert_timer_interrupt` → same walk still delivers session B) |
+
+No clean-sweep **in that list**.
+
+Ask-again mutant, **predicted 22/22, not run here** (plan-mode; name it rather than guess a score):
+
+```c
+for (cpu = 0; cpu < d->ncpus; cpu++) {
+    if (!d->software_interrupt_status[cpu])
+        continue;
+    /* rest of body unchanged */
+}
+```
+
+Repair stays (unconnected slots still skipped). Session B/C still deliver (they drive SOFT). `sio5`/`siofirst` observe MASK **readback** (`interrupt_status & enable`), which does not require the walk — Fable F5 again. Row that would catch it: session B’s shape with MASK0 bit 30 + SIO TX_IE, **no SOFT**, free-running, `pc == VBR+8`. If that measures 22/22 it is clause (e), not L2: tightening with a body-read field, not nulling the bound. Also disclose, unrowed: `d->ncpus = min(n,2)` (ncpus=3/4; same class as M_HARD1, no `-n 3` row) and a connected-slot DEASSERT (SOFT readback pins the register, not `cpu_irq` dropping).
+
+Do not pin the gate at 22/22 until M_SWONLY is scored.
+
+---
+
+**Q3 THE RECORDS — CHANGELOG #503 must carry, beyond the table:**
+
+- M_CALLGUARD: F4 is **not** a correct fix; third caller is `luna88k_interrupt_assert` (SIO/clock/any line).
+- PRETABLE prediction corrections: HALT rows are `soft1`/`siofirst`, **not** `mask1` (nothing pending ⇒ no ASSERT/DEASSERT); M_CALLGUARD was predicted equivalent and is not. PRETABLE mtime is **not** order-proof (append-after-table); say so.
+- HEAD 15/17: session A aborts at `soft1`, five later A rows never run; A2 still runs (`prefix` is dead). Not 15/22.
+- Clamp equivalent, declined (addition licence) — answers Fable F12.
+- `M_NULLAB` equivalent; `M_NOREASSERT` debt (tick reassert, not “the clock IRQ bit”).
+- Ask-again: M_SWONLY, predicted 22/22.
+- Ledger `lunaabsentcpu.witness` is still `"none"` with a rung-3 artifact — L4 at closure: `probe:regress/luna_absentcpu_probe.py`.
+- File `lunadefaultstop` and `lunaabsentmaskdecl` as their own rows (they are names in prose). Close `es438cells` on `mask2`/`mask3` (ledger note: “owed in that round”).
+
+---
+
+**Q4 WRONG DISPOSITIONS**
+
+1. **`lunadefaultstop` unchanged** — there is no such ledger id (`lunafuse` + `lunaabsentcpu` only). `default:` (`cpu->running = 0; return 0`) plus unimplemented `RESET_CPU0..3` / `SOFT_INT_FLAG*` is still unfiled. Pass-1 F13: file separately. “Unchanged” is a phantom row.
+2. **`es438cells` unchanged** — this detector’s `mask2`/`mask3` **is** that owed pair. Discharge/close, don’t leave a rider.
+3. **`lunaabsentmaskdecl` unchanged-as-a-row** — the **design** hold (don’t decline stores) is right. The **row** was never created (named only inside the `lunaabsentcpu` OUTSTANDING_BUGS block). File it LOW documented-only.
+4. **Gate pin `LUNAABS_RESULT=22/22` before M_SWONLY** — not a product defect; don’t freeze the denominator on an un-asked ask-again.
+
+Not wrong: the diff; table 1; `M_NULLAB` equivalent; `M_NOREASSERT` debt; M_CALLGUARD as a refuted alternative.
+
+---
+
+**Else.** `soft1`’s value-readback is not a connected-slot DEASSERT channel; three mutants die on the **unconnected** DEASSERT. Channel line in the probe header overclaims “two channels” for the connected CPU. `sio5clr` did not kill M_NULLA (dies earlier at `soft1` readback) — same class as the mask1 prediction miss, already corrected for mask1, not for sio5clr.
