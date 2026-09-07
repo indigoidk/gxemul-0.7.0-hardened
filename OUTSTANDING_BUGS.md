@@ -6496,6 +6496,58 @@ One genuinely *latent* instance is worth distinguishing from the eight: `machine
 (`z8530`, `irq=0`) sits in `case ST_DEC_3000_300:`, which `-H` never advertises, and all three
 alpha subtypes construct. Latent is not reachable, and the row says so.
 
+> #### *** BOTH OF THOSE CLAIMS ARE MEASURABLY FALSE, AND THE INSTANCE IS LIVE.  Measured
+> #### 2026-09-07; evidence at `regress/artifacts/ctorabortclass/alpha_census_20260907.txt`. ***
+>
+> The paragraph above is kept verbatim because this project corrects in place and quotes what it
+> refutes.  **Do not act on it.**
+>
+> **CLAIM 1 — "which `-H` never advertises".**  `-H` lists it, by name, as one of **FOUR** alpha
+> subtypes:
+>
+>     Alpha ("alpha")
+>         - AlphaBook 1 ("alphabook1")
+>         - AlphaServer 4100 ("alphaserver4100")
+>         - DEC 3000/300 ("3000/300")        <- ADVERTISED
+>         - EB164 ("eb164")
+>
+> and it is registered at `machine_alpha.c:248`,
+> `machine_entry_add_subtype(me, "DEC 3000/300", ST_DEC_3000_300, "3000/300", NULL)`.
+>
+> **CLAIM 2 — "all three alpha subtypes construct".**  There are four, and one does not:
+>
+>     alphabook1         rc=124   CONSTRUCTED and RUNNING (a 20s timeout stopped it)
+>     alphaserver4100    rc=124   CONSTRUCTED and RUNNING
+>     3000/300           rc=134   *** ABORT (SIGABRT) ***  interrupt_handler_lookup("0") failed.
+>     eb164              rc=124   CONSTRUCTED and RUNNING
+>
+> **It is the class's own named mechanism, on a fifth machine.**  `machine_sgi.c:142` already
+> records that ip27 *"dies inside its own `device_add()`, at `interrupt_handler_lookup()` <-
+> `devinit_z8530()`, on its `irq=0`"* — which is this failure exactly, same device, same clause.
+>
+> **SO THE CLASS IS NINE SUBTYPES ACROSS FIVE MACHINES, not eight across four**, and the Alpha
+> instance is not latent: `gxemul -E alpha -e 3000/300 -M 64 <file>` aborts the host, every time,
+> with no guest involvement at all.  The abort precedes both the `model:` line and `file: loading`,
+> so it is **pure machine construction** — a rung-2 witness by the ladder's own definition — and the
+> load file is needed only to get past argument parsing.
+>
+> **WHY THE ORIGINAL WAS WRONG IS WORTH MORE THAN THE CORRECTION.**  The claim looks like something
+> that was checked, and the honest reading is that it was *inferred* — the arm is a bare
+> `device_add` with no `abort()` in it, and `machine_sgi.c`'s own comment warns about exactly this:
+> *"reading for `abort()` misses an abort raised by a callee."*  The five-abort SGI census was
+> measured by sweeping; the one-line Alpha aside beside it was not, and it is the only part that is
+> false.  **A measured census with an unmeasured sentence appended reads as though the sentence
+> shares the measurement.**
+>
+> *Two apparatus notes from taking it, both of which produced a confident wrong answer first.*  My
+> first sweep reported NO CONSTRUCTION for all four subtypes — because it passed no load file, so
+> every run died at *"No filename given"* long before any machine was built; **a probe that never
+> reaches what it tests reports the same "absent" as one that reaches it and finds nothing.**  And
+> the first capture of the abort held 43 bytes and looked like a program that printed nothing:
+> gxemul's stdout redirected to a file is BLOCK buffered, so the abort discarded the buffer.
+> `stdbuf -o0 -e0` recovered all 600 bytes.  Both traps are already in the carrier; I walked into
+> both inside ten minutes.
+
 Separate round from `hpcabort` under the reopening rule — different machines, different files, and
 the correct interrupt path differs per machine — but `hpcabort`'s witness enumerates subtypes from
 the binary's own `-H` rather than a hardcoded list, so pointing it at these costs almost nothing.
@@ -14307,8 +14359,30 @@ would not have triggered it**, so a future reader debugging the death is told th
 
 That is a WRONG RECORD emitted by product code at the exact moment of the kill, which is the one
 place a wrong record is hardest to recover from: the process is gone and the log is all that is
-left. The fix is the printf specifier (`0x%llx` with a `(long long)` cast, the file's own idiom
-elsewhere), not the guard.
+left. The fix is the printf specifier, not the guard.
+
+> #### *** THIS LINE NAMED THE WRONG SPECIFIER **AND** CLAIMED IT WAS THE FILE'S OWN IDIOM.
+> #### Both halves are false.  Corrected 2026-09-07, caught by the grok seat answering the
+> #### witness-design brief and verified here by reading the file. ***
+>
+> It said the fix is `` `0x%llx` with a `(long long)` cast, the file's own idiom elsewhere ``.
+> **`dev_lca.c` uses `PRIx64` five times and `%llx` never.**  The five sibling arms twelve to
+> ninety lines away -- TB_ENA, W_BASE0, W_MASK0, W_BASE1, W_MASK1 -- all read:
+>
+> ```c
+> 				fatal("TODO: LCA_IOC_TB_ENA value "
+> 				    " (0x%" PRIx64") has unimplemented "
+> 				    "bits.\n", (uint64_t)idata);
+> ```
+>
+> **Note they KEEP the cast** -- `(uint64_t)idata`, widening rather than narrowing.  An earlier
+> draft of the design brief said to *drop* the cast, which would have been a third wrong form.
+> **The correct repair is the sibling line, copied:** `0x%" PRIx64` with `(uint64_t)idata`.
+>
+> *A record that names a fix AND asserts it matches the surrounding code is the most costly
+> kind to get wrong: it discourages the one check -- reading a sibling -- that would catch it.
+> Verified safe to change: no gate, hygiene grep or probe in `regress/` matches on this
+> message's text.*
 
 **Deliberately NOT folded into `lcabadval`**, which is about the guards themselves. They interact
 and the ordering matters: `lcabadval`'s rows must match the `fatal()` TEXT rather than the exit
@@ -15761,3 +15835,174 @@ is the *later* `tile_nr >= 256` guard that rejects them.  Both guards are presen
 What is worth recording is that **they are not redundant**, and an edit deleting the second as "already
 covered by the rectangle check" would open a sixteen-element overrun.  A clause-(d)-shaped hazard in code
 nobody is currently editing — noted, not filed.
+
+## 2026-09-07 — `#505` pass 1: three rows filed from one panel, none of them the round's subject
+
+*Every one came from a seat answering a question about byte order and volunteering something else. The
+found-something-else licence produced three of this session's filed rows.*
+
+### `sgirgbscanoutrow` (LOW) — the round's strongest evidence is observed by no row
+
+`#505` chose the RGB **GET** as the defective arm on a warrant from a *different device*:
+`dev_sgi_gbe.c`'s scanout composes a 32-bit tile pixel as
+`(buf[0]<<24)+(buf[1]<<16)+(buf[2]<<8)+buf[3]`, and `CRMFB_MODE_TYP_RGB8` then takes R, G and B from
+bits 31..24 / 23..16 / 15..8 — **byte 0 is R and byte 3 is unused.** That is the whole reason the pad
+is known to live at `buf[3]`, and it is non-circular precisely because it comes from the consumer
+rather than from either arm under test.
+
+**No row observes it.** The detector drives the drawing engine and reads the destination word back
+through a guest load; it never reaches scanout. So it cannot distinguish a tree where DE and GBE agree
+on the container from one where both were changed consistently and wrongly.
+
+**A row would need a different probe SHAPE** — drive a DE draw, make GBE scan the tile out, and put the
+oracle on `dev_fb_access` output. That is not another row in this probe, which is why it is filed
+rather than added; the detector is above the floor without it.
+
+*Filed by `#505`'s own PRE-TABLE CLAIM→ROW check, as an explicit no-row sentence rather than an
+omission — an unrun check and an inapplicable one must not render the same.*
+
+### `sgirebufshiftub` (LOW) — `buf[i] << 24` on a `uint8_t` is signed-shift UB, on all four arms
+
+Raised by the **grok** seat. `buf[i]` is `uint8_t`, which the usual arithmetic conversions promote to
+**signed `int`** — not unsigned, because `int` represents every `uint8_t` value. So for any byte ≥ 128:
+
+    0xaa = 170;   170 << 24 = 2,852,126,720   >   INT_MAX (2,147,483,647)
+
+which is undefined behaviour under C99 6.5.7p4. Compilers produce the wrapped value everyone expects,
+which is why it has survived — but this tree runs a UBSan sweep.
+
+**Pre-existing and on all four GET arms**, not on the one `#505` edited: the shipped RGB arm used
+`buf[1] << 24` identically. `#505` replaced one instance of the idiom with another, which is the right
+minimal-surgical choice — casting one line would leave the file internally inconsistent for no measured
+gain. **Filed, not fixed, and the seat that raised it agrees**: *"not unique to RGB, not a reason to
+block."*
+
+**Owed before a fix round:** whether the UBSan sweep already reaches this function. If it does, the
+absence of a report is a finding about the sweep, not about the code.
+
+### `sgilinearnegidxpostmortem` (LOW) — a rule question raised by my own false HIGH finding
+
+See the `sgilinearnegidx` withdrawal above. The question is **not** "be more careful": I applied the
+discipline — identified the link I doubted, verified it by grep, ran an `offsetof` rather than trust
+hand arithmetic — and **every one of those was aimed at a link I had already decided to question.** The
+defeating fact sat in a declaration I never thought to read.
+
+Queued in full for the 2026-09-09 adjudication, asking (1) whether the premise-audit instruction needs a
+**self-directed twin**, since it currently tells *seats* not to ratify my premises and nothing tells me
+to enumerate the premises I never questioned; (2) whether *"a chain resting on an index or a bound
+quotes the DECLARATION of every variable in it"* earns a template line or is one instance wearing the
+clothes of a class; and (3) what it means for §C5 that the chain-shaped brief asking for this exact
+chain to be attacked was **refused**, while the same seat asked without the chain put the refutation in
+its verdict line.
+
+## 2026-09-07 — `artifactcaseclobber` (LOW, fixed in place): a rename that differs only in CASE is a CLOBBER on this filesystem
+
+**A committed 145 KB artifact was silently replaced by a 14 KB one, and nothing reported it.**
+
+Preserving a codex refusal log, I copied it to `codex_REFUSED_20260907.err` — believing that to be a
+new name beside the existing `codex_refused_20260907.err`. **On Windows the filesystem is
+case-insensitive: they are the same file.** The `cp` overwrote a tracked artifact from an earlier
+session (`tokens used 41,373`, 145,011 bytes) with today's (`tokens used 17,631`, 14,221 bytes).
+
+**Nothing caught it at the time.** `git status` showed ` M` on a tracked file, which is what every
+edited file shows. The `cp` succeeded. The only visible symptom was a diffstat line —
+**`2876 ++------` on a file I had not knowingly edited** — and that surfaced only because the owner
+asked how much work was outstanding and I went to count it.
+
+> **A RENAME THAT DIFFERS ONLY IN CASE IS NOT A RENAME HERE.** Preserving one artifact beside another
+> needs a name that differs by a WORD, not by capitalisation.
+
+**FIXED IN PLACE:** the tracked log restored from HEAD; today's preserved as
+`codex_witnessdesign_refusal_20260907.err`.
+
+**SWEPT, because one instance is not a population:** 4,793 tracked paths and 3,930 files under
+`regress/artifacts/` checked for case-insensitive duplicates — **zero collisions**. The incident was
+isolated.
+
+*This is the immutable-artifact rule's own failure mode arriving by a new route. That rule says a
+measurement cited in a durable record must live at a durable path, because a reused filename makes the
+citation point at something else. Here the filename was not reused — it was **aliased**, and the alias
+was invisible in every tool I use to check.*
+
+
+### `sgireput8tail` (low) -- filed 2026-09-07: `#505`'s detector has no row establishing that an 8-byte PUT's tail is initialised
+
+Raised by the codex seat answering the Q4 *"name the row you expect to stay green"*.
+
+`rgb depth64` and `rgb tiled64` widen the SOURCE READ to eight bytes; their DESTINATION is still a
+four-byte RGBA write. So the ten-row detector drives an eight-byte read and never an eight-byte
+write, and **nothing in it would redden if the PUT arms left `buf[4..7]` untouched at bufdepth 8.**
+
+Coverage debt, not a floor breach: the shipped detector satisfies (a)-(f) and this is a cell no
+enumerated mutant of `#505` distinguishes. Row demand is per enumerated mutant, never per uncovered
+state. It becomes live the moment [[sgirebufuninit]] ships, because a zero-fill fix's own accept side
+is exactly this cell.
+
+### `randompixdiagonce` (med) -- filed 2026-09-07: `sgi_re_randompixel_probe.py`'s `lin_b diag once` row does not assert `(once)`
+
+Volunteered by the codex seat under the found-something-else licence, on the `sgirandomcolour` design
+pass: *"It counts `"unimplemented dst_mode"` occurrences. Removing the required marker alone would
+leave that row green."*
+
+**The CLAIM->ROW check failing on shipped material.** The row's NAME asserts the latch marker; its
+ORACLE counts a different string. So the one row whose purpose is to pin the suppression marker is
+blind to that marker's removal -- vacuous with respect to its own name.
+
+Not a floor breach of any round in flight: it is a row in a different, already-shipped detector,
+above the floor, so it is coverage debt under the stopping rule. It becomes L3 the moment a round
+relies on that row as the sole carrier of a latch obligation.
+
+### `queueunrated` (med) -- filed 2026-09-07: 47% of the open queue carries no severity, and the witnessed subset is unranked
+
+Derived while trying to obey the standing directive *prioritise critical bugs and also easy
+resolvable ones*: **the directive is unexecutable over half the queue.**
+
+    open + in-work        187        carrying `sev`   100 (high 10, med 40, low 50)
+    UNRATED                87 = 47%
+
+A witness makes a row ELIGIBLE, and this project orders by SEVERITY, so an unranked witnessed row is
+invisible to the only ordering rule it has.
+
+**The fix is not a regex.** A keyword scan over titles buckets rows by host-kill / memory-safety /
+wrong-data language, and those buckets are CORRELATES: what makes a row high here is *a guest can
+reach it and something bad happens*, and no keyword tests reachability. A codex rating pass over
+fifteen of them rated none `high`, found three already fixed, and promoted one row whose title reads
+like harness debt and whose subject is a guest-reachable missing protection check.
+
+*A later count in the same brief was itself wrong: "note/witness cites a #NNN round: 40" could not be
+reproduced -- the field selection (`state_note` truncated to 400 chars) was never stated. A count
+owes its field selection and its snapshot, not just its command.*
+
+### `cxseatcheck` (med) -- filed 2026-09-07: a codex launcher that could report a REFUSED seat as a clean run
+
+Three defects, all mine, all one family -- a check that answers the same whether or not the thing it
+tests is true:
+
+1. the refusal check grepped **stdout**; a content-filter refusal writes nothing there and puts
+   `ERROR: This content was flagged...` on **stderr**, so it printed `refusal hits: 0` on a refusal
+   that had already destroyed 108,432 tokens of completed work;
+2. the script exited 0 while holding `rc=1`, so the harness reported the task COMPLETED;
+3. **the fix introduced a third defect**: grepping stderr freely for wall text reported `wall: 3` on
+   a HEALTHY seat, because codex streams the source it reads into stderr -- and all three hits were
+   this project's own ledger prose about seat walls.
+
+`tools/cxlaunch.sh` anchors stderr tests on codex's own `^ERROR:` lines and greps stdout freely;
+exit 7 refusal, 8 wall, 6 empty-with-neither, else `rc`. Controlled in four states.
+
+*`panel.sh` already had a better, POSITION-based discriminator (head/tail 400 bytes) with the
+incident that taught it recorded in its own comment. A claim here that it did not was false and is
+corrected: the consolidation should take position as the base test and add format where a seat's own
+error prefix is known.*
+
+### `alphaclrfen` (low) -- filed 2026-09-07: `PAL_clrfen` is named and user-mode-whitelisted but has no `case`
+
+Volunteered by the grok seat while enumerating every `apcb_flags` reader for `#507`'s fix review.
+
+`PAL_clrfen` (`0xae`) is named in the palcode file and appears in the user-mode whitelist, but the
+dispatch switch has **no `case` for it** -- so a guest that calls it falls to the default arm, which
+sets `cpu->running = 0` and stops the machine.
+
+**NOT verified by me**, recorded as the seat reported it; a round on this owes the reading first. It
+is the same shape as `#507` (a PAL entry that does not do what its name says), and an unimplemented
+PAL call is member 7 (IMPLEMENT) territory rather than a decline -- declining a context-flag
+operation leaves the machine in a state the guest cannot reason about.

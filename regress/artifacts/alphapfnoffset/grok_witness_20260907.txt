@@ -1,0 +1,139 @@
+I'll verify the walk, bootstrap mapping, and sibling probes against `GXEMUL-SEC/src/` rather than ratify the brief, then answer Q1–Q5 from that reading.The walk, PAL `swpctx`, and both sibling probes are the load-bearing sources; I'll read those next and check whether PTBR can be set without going through the defective swap.`swpctx` is one writer of `apcb_ptbr`; I need every other writer, plus how the cache path recomputes the offset, before answering whether this row waits on that fix.**VERDICT: the witness is buildable on today's committed tree and does not wait on `alphaswpctxptbr`.** Every route to a live `apcb_ptbr` goes through `swpctx`, but the swap is only a confound if `ptbr` and `flags` differ. Put the **same L1 PFN in both PCB fields**, plant the tables and the two data cells through a path that **keeps** the offset, then take **one** walked load of `vaddr+N` with `want =` the `page+N` value. Q3’s observation is right; Q3’s question about *N* is not — *N* does not select the slow path.
+
+The equivalent of yesterday’s “planted past RAM” defect is **not** another address above 64 MB (Q2 already names that bound). It is **planting the oracle through the walk, or treating `apcb_ptbr` / PTE high-halves as byte addresses rather than PFNs.** Either one greens or reds the committed build while measuring setup, not the offset drop.
+
+---
+
+## Premises
+
+**S1 holds.** `memory_alpha.c` returns `ALPHA_PTE_TO_PFN(pte3) << 13`. `memory_rw.c` then does `offset = paddr & 0x1fff` (`MRW_OFFSET_MASK` under `MEM_ALPHA`). A page-base paddr makes that offset zero.
+
+**S2 holds** on the walk expression and on the two masking arms. The three `ptbr==0` aliases are the `#if 1` block: `0x10000000` → `HWRPB_PADDR` (`0x14000`), `0xfffffe0000000000` → `0x7efa000 + …`, `0x20000000` → `PROM_ARGSPACE_PADDR` (`0x12000`). Those aliases die the moment `base != 0`. They are not available as table backing once the walk is armed.
+
+**S3 holds**, and it is sharper than the brief’s wording. The fast path is `cpu_alpha_instr_loadstore.c`: on a `host_load` hit it uses `c = addr & 8191` against the **host page** that `update_translation_table` cached from `paddr & ~offset_mask`. The walked paddr is wrong only for the fill; the cached host page is still the **correct physical page**. So a later hit at *any* in-page offset — including the N you chose — reads the right bytes **on the committed build**. I-fetch does the same (`page + (addr & 8191)`).
+
+**S4 is too strong.** `swpctx` is the only writer of `cpu->cd.alpha.pcb.apcb_ptbr` (the two assignments in the load block; debugger settings export only `pc` and the GPRs; `wrvptptr` writes unused `vptptr`; `machine_alpha.c` puts “PFN of current L1” in **`a1 = 0`**, not in the PCB). A probe that puts **different** values in `A.ptbr` and `A.flags` cannot attribute a bad translation. A probe that puts the **same PFN in both** can: both the defective line and the corrected line leave `apcb_ptbr` equal to that PFN.
+
+**S5 holds** — identity mapping (`base==0`, kernel) and K0SEG both skip the walk.
+
+**S6 holds** as method. The sibling’s RAM bound is real; this brief’s matching hole is a different one (below).
+
+Q3’s polarity **as an observation** is not the `lcaconfwidth` inversion. The inversion lands if the **row’s `want`** is the page-base value, or if setup writes the `page+N` cell **through the walk**.
+
+---
+
+## Q1 — `apcb_ptbr` without `swpctx`
+
+**No.** `put d` writes guest memory. Guest integer ops do not touch the PCB. The debugger has no `ptbr=` knob. The only assignments into `pcb.apcb_ptbr` are `cpu_alpha_palcode.c` `case 0x30`.
+
+**That is not a wait.** One `call_pal 0x30` with
+
+```text
+A.ptbr  = L1_PFN
+A.flags = L1_PFN     # same word
+```
+
+sets `apcb_ptbr = L1_PFN` on the committed handler **and** on the one-token fix. Stay in kernel mode (`ps` is 0 at reset; do not touch it — user mode makes K0SEG I-fetch walk). Code, PCB and pointer vector stay in **K0SEG** so they survive `base != 0`. `swpctx` already `INVALIDATE_ALL`s, which is what you want for a cold data miss.
+
+Do **not** put the PFN only in `flags` and 0 in `ptbr`: that arms the walk on HEAD and leaves identity mapping on the fixed PAL, so post-fix green would be the bootstrap, not the walk repair.
+
+The row does not wait on `alphaswpctxptbr`. Fixing that first is still good hygiene; it is not a witness dependency if the two fields match.
+
+---
+
+## Q2 — minimum table
+
+Three **page-aligned** table pages plus one data page, all `< 64 MB`, all **not** in the PROM/HWRPB physical pocket (`0x10000` entry stub, `0x10100` initial `ctx`, `0x12000` argspace, `0x14000` HWRPB). Concrete layout that stays off the sibling’s `0x0102/0103/0104xxxx` scratch:
+
+| page | physical | PFN (`>> 13`) |
+|---|---|---|
+| L1 | `0x01050000` | `0x828` |
+| L2 | `0x01052000` | `0x829` |
+| L3 | `0x01054000` | `0x82A` |
+| data | `0x01056000` | `0x82B` |
+
+Test vaddr in `[0, 8192)` so `i1=i2=i3=0`. One PTE per level, at offset 0 of that page:
+
+```text
+L1[0] = ALPHA_PTE_FROM_PFN(0x829) | ALPHA_PTE_VALID   # 0x0000082900000001
+L2[0] = ALPHA_PTE_FROM_PFN(0x82A) | ALPHA_PTE_VALID   # 0x0000082A00000001
+L3[0] = ALPHA_PTE_FROM_PFN(0x82B) | ALPHA_PTE_VALID   # 0x0000082B00000001
+apcb_ptbr = 0x828                                     # PFN, not 0x01050000
+```
+
+**Load-bearing for this walk: `ALPHA_PTE_VALID` only**, at all three levels. The function never tests `KR/KW/UR/UW`, `FAULT_ON_*`, `ASM`, or granularity. `FAULT_ON_READ` must stay **clear** even though it is unread — do not set bits the walk does not implement and then call them required. Protection bits are not licensed here (“cannot hurt” is not a licence); `VALID` is the whole predicate.
+
+Plant those four `put d`s **while `ptbr` is still 0**, at the **physical** addresses above (`store_64bit_word` sign-extends a value with bits 63:32 clear, but these addresses have bit 31 clear, so they survive). Little-endian: Alpha is `EMUL_LITTLE_ENDIAN`, the walk `LE64_TO_HOST`s.
+
+**The PFN trap (this brief’s planted-past-RAM):**
+
+- `apcb_ptbr = 0x01050000` → `base = 0x01050000 << 13` → past RAM → `memory_paddr_to_hostaddr` NULL → `not_found`.
+- PTE high half holding a byte address instead of a PFN does the same at L2/L3.
+- Planting at `0x20000000` / `0x10000000` / K1SEG uses the **bootstrap aliases** for the `put`, then the walk looks at the unaliased physical PFN, which is past `-M 64`. Same silent-zero class as yesterday, different door.
+
+Keep `assert max(L1,L2,L3,data,code,pcb) < 64*1024*1024`.
+
+---
+
+## Q3 — oracle, polarity, slow path
+
+**Observation is right:** plant `A` at `data+0`, `B` at `data+N` (`A ≠ B`, neither 0, neither the destination sentinel). Walked `ldq` of `vaddr+N`. HEAD returns `A`; a correct walk returns `B`.
+
+**Row polarity:** `want = B`. HEAD is red. `want = A` is the `lcaconfwidth` inversion and would score a clean pass on the committed binary.
+
+**`N` does not pick the slow path.** Any 8-byte-aligned `N` in `8 … 8184` distinguishes the two cells. `N = 0` is vacuous (walk and correct agree). The cached path **recomputes** the offset from the vaddr, so a hit at `N=8` is **correct on HEAD**.
+
+What actually forces the slow path:
+
+1. `swpctx`’s `INVALIDATE_ALL`.
+2. The oracle `ldq` is the **first** data access to that **virtual** page afterwards.
+3. Code stays in K0SEG so I-fetch does not fill, or steal, that page.
+4. Do not `put d` / `ldq` / `stq` the test vaddr (only the physical/K0SEG data page).
+
+An unaligned `N` (`N & 7 ≠ 0`) does force `LS_GENERIC_N` every time in **this** emulator (aligned `ldq` only fast-paths when `c & 7 == 0`). That is an emulator gap, not Alpha, and a later alignment check would kill the witness for the wrong reason. Do not use it as the design. `N = 8`, cold cache, one shot. Do not retry the load: the second step is a hit and goes green on HEAD.
+
+**The equivalent polarity trap:** plant `B` *through the walk* (`put d` or `stq` at `vaddr+N` after `ptbr` is live). On HEAD that store lands at `data+0`. The later load of `vaddr+N` also lands at `data+0` and reads `B`. **HEAD goes green measuring the defect against itself.** Plant `A` and `B` only via identity-physical or K0SEG of the **data page**, before the walk is used.
+
+A cousin: plant `A`/`B` at vaddr `0`/`N` while `ptbr==0` (identity). Those writes hit **physical** `0`/`N`, not `0x01056000`. The walk then reads an unplanted page (zeros). Both polarities collapse.
+
+Pre-set the load destination to a **third** sentinel `S`, not `A` and not `0`. A failed walk does **not** fault and does **not** write the register (`LS_GENERIC_N` returns on `memory_rw` failure; `#215`). Q4’s “faults or returns zero” is false for the guest-visible register. Unchanged `S` = walk never completed. `0` = walk succeeded onto unmapped physical (`memblock == NULL` still `do_return_ok`). `A` = walk hit the right page with offset 0. `B` = correct.
+
+---
+
+## Q4 — control
+
+K0SEG of the **same physical data page** is the right analogue of the sibling round-trip, and it does **not** fill the test vaddr’s translation slot (different vaddr key).
+
+Minimum set:
+
+| row | what | HEAD | meaning if it fails |
+|---|---|---|---|
+| `data0 k0` | K0SEG `ldq` of `data+0` | `A` | `A` was never in RAM |
+| `dataN k0` | K0SEG `ldq` of `data+N` | `B` | `B` was never in RAM |
+| `walk mapped` | walked dest ≠ `0` and ≠ `S` | (negate) | unmapped success or abandoned load |
+| `wasn't found` absent | no `alpha_translate_v2p: … wasn't found` | absent | table never walked to a valid L3 |
+| `walk off` | walked dest | `B` | **the defect row; red on HEAD** |
+
+`A` on the walked load, with the K0SEG rows green and no `wasn't found`, **is** proof the walk ran: right PFN, dropped offset. That is a stronger “the walk ran” channel than a same-decode round-trip, because the defect signature itself names the page.
+
+Do the K0SEG reads either before `swpctx` (physical identity) or after (K0SEG). Never via the test vaddr.
+
+---
+
+## Q5 — read vs write
+
+**Read is the better witness.** One guest `ldq`, three-way register (`S` / `A` / `B`), polarity is a single `want`. The ladder’s symptom *is* “this access resolved to the page’s first bytes.”
+
+A walked `stq` of `C` at `vaddr+N` is the same mechanism: HEAD clobbers `data+0`, leaves `data+N` as `B`; the fix writes `data+N`. Observe **only** through K0SEG. A walked read-back after the store is a cache hit and hides HEAD. Same three table pages plus the data page — **the write form does not save a PTE**. The walk is always three levels; there is no write-only shortcut.
+
+Use a walked store as a **second** row if you want the clobber visible in memory. Do not replace the load.
+
+---
+
+## What else
+
+- After `ptbr` is live, a PC of `0x01040000` (physical-looking, not K0SEG) walks with `i2=32`, `i3=0x82`. A 3-PTE table does not map it. I-fetch then `not_found` / `to_be_translated(): read failed`. Code and remaining instructions after `swpctx` must be `k0(P_CODE)`, as the sibling already does.
+- Do not identity-map the test vaddr onto physical page 0 as the data page. If `ptbr` failed to stick, identity **preserves** offset and HEAD would green for the wrong reason.
+- `pte1` invalid is silent except the `wasn't found` line; `pte2`/`pte3` invalid also `fatal("TODO: pte2/pte3 not valid.")`. Useful as a setup channel; not a guest fault.
+- `alphavmkill` (`exit(1)` on `0xfffffffd80000000`) lives only in the `base==0` arm. Once `ptbr` is set that address walks instead of killing. Do not use it as a vaddr here.
+- `store_64bit_word` sign-extends addresses with bits 63:32 clear. Stay below 2 GB for physical `put d`, or use K0SEG (high half nonzero, no extend).

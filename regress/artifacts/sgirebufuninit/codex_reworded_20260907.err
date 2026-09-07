@@ -1,0 +1,3868 @@
+Reading additional input from stdin...
+OpenAI Codex v0.153.4
+--------
+workdir: C:\DocumentNoSnc\CC\GXEMUL
+model: gpt-6-astra
+provider: openai
+approval: never
+sandbox: read-only
+reasoning effort: max
+reasoning summaries: none
+session id: 01a07cc0-2a4b-7871-9fc9-32959ec1cde2
+--------
+user
+# DESIGN BRIEF — `dev_sgi_re.c`: a local buffer whose assigned length and transferred length are decided independently
+
+*(This is a REWORDED version of `PASS1_brief.md`, which the codex seat's content filter rejected after
+43,839 tokens of work. The technical content is unchanged; what is removed is the framing of the
+CONSEQUENCE — the original described the defect in terms of host memory becoming visible to the
+guest. The design question does not depend on that framing, so this asks the same question about
+initialisation and about where to place it. **Recorded as a deliberate rewording so nobody later
+mistakes the two briefs for the same request answered twice.**)*
+
+## READ THIS FIRST — PLEASE DO NOT SIMPLY RATIFY
+
+**Check the premises, not just the derivations.** A seat that re-derives a premise from something
+this brief did NOT give it is worth more than one that agrees. **Four briefs of mine this week stated
+premises that were false or too broad**, and each was caught by a seat reading the code rather than
+my description of it.
+
+**THE TREE UNDER REVIEW IS `GXEMUL-SEC/src/`.** Three pristine-2021-upstream copies of GXemul sit
+under the project root and are NOT this fork.
+
+**SCOPE YOUR READING TO `GXEMUL-SEC/src/` AND `GXEMUL-SEC/regress/*.py`.**
+
+**Where this brief states an arithmetic claim, ENUMERATE it rather than reasoning about it.**
+
+**VERDICT LINE FIRST.**
+
+---
+
+## §C — SETTLED PREMISES
+
+**S1.** `horrible_getputpixel()` declares `uint8_t buf[8];` with no initialiser and no `memset`. It is
+a fresh automatic on every call, and the function is called once per pixel.
+
+**S2.** Two independent fields of the same guest-written mode word decide, separately, how many bytes
+get ASSIGNED and how many get TRANSFERRED:
+
+```c
+	uint32_t color_mode = mode & DE_MODE_TYPE_MASK;   /* bits 4-7 : which arm assigns buf */
+	int bufdepth = 1 << ((mode >> 8) & 3);            /* bits 8-9 : how many bytes move   */
+```
+
+The colour arm assigns a count fixed by the **type**; the transfer moves **`bufdepth`** bytes.
+`bufdepth` enumerates to 1, 2, 4, 8. Nothing constrains the two to agree.
+
+**S3 — THE TWO MISMATCH DIRECTIONS.**
+* **Transfer longer than the assignment.** At `bufdepth` 8 **no colour arm assigns `buf[4..7]`** — not
+  one of the five — yet all eight bytes are passed to `memory_rw(..., MEM_WRITE, ...)`.
+  `DE_MODE_TYPE_CI` assigns only `buf[0]`, so CI at any depth above 1 transfers more than it assigned.
+* **Assignment longer than the fill.** At `bufdepth` 1 or 2 the read fills only that many bytes, and
+  the RGB / RGBA / ABGR arms then read `buf[2..3]` regardless.
+
+**S4 — THE FORK HAS AN ESTABLISHED PATTERN FOR THIS.** `memory_rw.c` zero-fills at three sites, and
+the fork's own comments call it *"the same zero-fill ethos as the failed-device-read path (#95)"* and
+*"root-cause fix for the uninit-read class (cf. per-device #91/#93/#94)"*.
+
+**S5.** `#505` changed the RGB GET's indices from `buf[1..3]` to `buf[0..2]` — three bytes either way
+— so it neither created nor changed any of the above.
+
+---
+
+## The questions
+
+**Q1 — IS ZERO-FILL THE RIGHT REPAIR, and is it the whole repair?** The obvious edit is
+`uint8_t buf[8] = { 0 };`. S4 supports it. **But zero-fill produces a defined-but-still-wrong value
+where there was an unspecified one** — a CI pixel at `bufdepth` 4 would transfer `{value,0,0,0}`.
+**Is defined-but-wrong better here, or does it mask a defect better fixed by making each arm assign
+`bufdepth` bytes?** Argue both sides.
+
+**Q2 — WHERE SHOULD IT GO?** (a) at the declaration, costing a fill on every pixel; (b) only on the
+write side, before the switch; (c) only where `bufdepth` exceeds what the chosen arm assigns, which
+is a computed guard. The file's own comments call this helper per-pixel and hot — **is that cost real
+enough to decide it?**
+
+**Q3 — THE ORACLE, which is the hard part.** The value of an unassigned automatic is unspecified, so
+no value row can pin it. Two things already constrain the answer here: a determinism oracle is
+refuted (stack reuse can make a wrong value repeat), and for a neighbouring round a seat proposed
+counting **`MEM_WRITE` calls** rather than asserting a value. **What oracle distinguishes "the buffer
+was filled" from "the buffer happened to contain zeros"?** If no black-box guest-visible oracle can,
+say so plainly — that is a real answer and it changes the round's shape.
+
+**Q4 — WHICH DEFECT OWNS WHICH BYTES?** Two neighbouring rows overlap: a dead branch that forces
+every *tiled* MTE transfer to CI colour, and a default arm that assigns `random()` bytes. **Draw the
+boundary.** If this is repaired first, what remains of the other two?
+
+**Q5 — THE SMALLEST EDIT.** Once repaired, what is the smallest edit that breaks it and still passes
+a detector built as Q3 describes? Name the row you expect to stay green. I am after the clause-(d)
+family — a repair conditioned on a field the guarded body reads. A neighbouring round's detector was
+swept clean by exactly that shape at a transfer width no row drove, and again at an addressing mode
+no row used.
+
+## What I am not asking
+
+Do not write a patch and do not run anything.
+
+**If, while verifying a claim, you found something ELSE — say so.**
+codex
+I’ll check the premises in the scoped source and regressions, then give a verdict on the repair and oracle. I’ll read files only; I won’t patch code or execute tests.
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "Get-Content -LiteralPath 'GXEMUL-SEC/src/devices/dev_sgi_re.c'" in C:\DocumentNoSnc\CC\GXEMUL
+ succeeded in 302ms:
+/*
+ *  Copyright (C) 2003-2018  Anders Gavare.  All rights reserved.
+ *
+ *  Redistribution and use in source and binary forms, with or without
+ *  modification, are permitted provided that the following conditions are met:
+ *
+ *  1. Redistributions of source code must retain the above copyright
+ *     notice, this list of conditions and the following disclaimer.
+ *  2. Redistributions in binary form must reproduce the above copyright  
+ *     notice, this list of conditions and the following disclaimer in the 
+ *     documentation and/or other materials provided with the distribution.
+ *  3. The name of the author may not be used to endorse or promote products
+ *     derived from this software without specific prior written permission.
+ *
+ *  THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+ *  ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ *  IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ *  ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE   
+ *  FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ *  DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+ *  OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+ *  HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+ *  LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+ *  OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+ *  SUCH DAMAGE.
+ *   
+ *
+ *  COMMENT: SGI O2 "Rendering Engine"
+ *
+ *  Guesswork, based on how Linux, NetBSD, and OpenBSD use the graphics on
+ *  the SGI O2. Using NetBSD terminology (from crmfbreg.h):
+ *
+ *  dev_sgi_re.cc (THIS FILE):
+ *	0x15001000	rendering engine (TLBs)
+ *	0x15002000	drawing engine
+ *	0x15003000	memory transfer engine
+ *	0x15004000	status registers for drawing engine
+ *
+ *  dev_sgi_gbe.cc:
+ *	0x16000000	crm (or GBE) framebuffer control / video output
+ */
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "console.h"
+#include "cpu.h"
+#include "devices.h"
+#include "machine.h"
+#include "memory.h"
+#include "misc.h"
+
+#include "thirdparty/crmfbreg.h"
+#include "thirdparty/sgi_gl.h"
+
+
+/*
+ *  #497: one latch bit per WIDTH-guard site in DEVICE_ACCESS(sgi_re).
+ *
+ *  SIX FLAGS, NOT ONE.  dev_wdc.c's own comment adjudicates this: sharing a
+ *  latch is licensed only across sites that are MUTUALLY EXCLUSIVE at
+ *  runtime.  These six are six different address windows, and any driver
+ *  bringing up the rendering engine walks all of them in ONE session, so a
+ *  shared latch would report the first odd-width access and silence the
+ *  other five.
+ */
+enum {
+	SGIRE_W_TLBA_LEN  = 1 << 0,
+	SGIRE_W_TLBB_LEN  = 1 << 1,
+	SGIRE_W_TLBC_LEN  = 1 << 2,
+	SGIRE_W_TEX_LEN   = 1 << 3,
+	SGIRE_W_LINA_LEN  = 1 << 4,
+	SGIRE_W_LINB_LEN  = 1 << 5,
+
+	/*  #498: sgi_de's width decline.  ONE bit, not six: the six above are one
+	    per SITE because six windows with six distinct message texts are walked
+	    in a single bring-up session, and one latch would report the first and
+	    silence five.  sgi_de has ONE guard and ONE message text, so the house
+	    per-message-site rule gives one bit.  Measured cost: `sb' then `sh' at
+	    one offset announces len=1 and never len=2 -- accepted, and small,
+	    because the message already prints the width.
+
+	    It must be its OWN bit.  Reusing SGIRE_W_TLBA_LEN scored 23/25: the
+	    four handlers share one malloc'd struct, so any odd-width access to
+	    sgi_re's TLB_A window would silence sgi_de's decline entirely.  */
+	SGIRE_W_DE_LEN    = 1 << 6,
+
+	/*  #499: the unmatched-address catch-all.  TWO bits, one per DIRECTION:
+	    a driver probing an unmapped window commonly reads and writes it in
+	    one pass, and one bit would announce the first and silence the other.
+
+	    PLACED AFTER SGIRE_W_DE_LEN ON PURPOSE.  An earlier draft inserted
+	    these two after SGIRE_W_LINB_LEN (1 << 5), which left the enum ending
+	    at 1 << 6 -- so a maintainer scanning to the LAST enumerator for the
+	    next free bit would take 1 << 7, WHICH THESE TWO LINES BELOW ALREADY
+	    USE.  A duplicate enumerator is legal C and silent, and all four
+	    handlers share one malloc'd struct, so the collision crosses devices.
+
+	    (Wording sharpened after a pass-2 seat read "which is already used"
+	    as a standalone claim about 1 << 7 and reported the comment as
+	    self-contradictory against the code three lines down.  The claim was
+	    right and the sentence did not say BY WHAT.)  */
+	SGIRE_W_UNMAP_WR  = 1 << 7,
+	SGIRE_W_UNMAP_RD  = 1 << 8,
+
+	/*  #500: draw_primitive()'s unimplemented drawing op.  ITS OWN BIT,
+	    for the reason #498 measured on SGIRE_W_DE_LEN: a latch shared with
+	    another site is silenced by that site's ordinary traffic, so the
+	    announce this fix exists to make would never fire.
+
+	    (This comment used to end "The next free bit is 1 << 10; the enum
+	    ends HERE on purpose so that a maintainer scanning to the last
+	    enumerator finds it."  BOTH HALVES WENT FALSE when sgirandompixel
+	    added SGIRE_W_BADMODE = 1 << 10 BELOW this line.  Demoted rather
+	    than deleted, because the REASONING is still why the convention
+	    exists -- and leaving it live would have pointed the next reader at
+	    a taken bit, which is the duplicate-enumerator collision #499
+	    already paid for and warns about four lines up.  The live
+	    next-free claim is on the LAST enumerator, where it belongs.)  */
+	SGIRE_W_PRIM_OP   = 1 << 9,
+
+	/*  sgirandompixel: horrible_getputpixel()'s unimplemented-mode arm.  ITS
+	    OWN BIT, for the reason #498 measured and #500 repeated -- the four
+	    handlers share one malloc'd struct, so a latch shared with another
+	    site is silenced by that site's ordinary traffic and the announce
+	    never fires.  This one matters more than most: the helper is
+	    PER-PIXEL, called inside line, rectangle and tiled-MTE loops, so an
+	    UNLATCHED announce is a per-pixel flood rather than a diagnostic.
+	    The next free bit is 1 << 11; the enum ends HERE on purpose, as
+	    above.  */
+	SGIRE_W_BADMODE   = 1 << 10,
+};
+
+struct sgi_re_data {
+	// Rendering engine registers:
+	uint16_t	re_tlb_a[256];
+	uint16_t	re_tlb_b[256];
+	uint16_t	re_tlb_c[256];
+	uint16_t	re_tex[112];
+	// todo: clip_ids registers.
+	uint32_t	re_linear_a[32];
+	uint32_t	re_linear_b[32];
+
+	// Drawing engine registers:
+	uint32_t	de_reg[DEV_SGI_DE_LENGTH / sizeof(uint32_t)];
+
+	// Memory transfer engine registers:
+	uint32_t	mte_reg[DEV_SGI_MTE_LENGTH / sizeof(uint32_t)];
+
+	/*
+	 *  #497: width-guard decline latches; see the enum above.
+	 *
+	 *  PLACED LAST, DELIBERATELY, AND THE ORDER IS LOAD-BEARING.
+	 *  re_linear_a/b are written at [tlbi] AND [tlbi+1] with tlbi able to
+	 *  reach 31, so index 32 of either array lands on whichever field
+	 *  FOLLOWS it.  An earlier draft of this change put `warned' between
+	 *  re_linear_b and de_reg; measured with offsetof, that made
+	 *  re_linear_b[32] alias `warned' rather than de_reg[0] -- which both
+	 *  falsified the adjacency the two LINEAR site comments cite, and made
+	 *  an over-run SET WARNING LATCH BITS and silence this device's own
+	 *  diagnostics.  Keeping the latch after mte_reg restores the
+	 *  documented adjacency: re_linear_a[32] is re_linear_b[0] and
+	 *  re_linear_b[32] is de_reg[0].
+	 */
+	uint32_t	warned;
+};
+
+
+/*
+ *  horrible_getputpixel():
+ *
+ *  This routine gets/puts a pixel in one of the tiles, from the perspective of
+ *  the rendering/drawing engine. Given x and y, it figures out which tile
+ *  number it is, and then finally does a slow read/write to get/put the pixel
+ *  at the correct sub-coordinates within the tile.
+ *
+ *  Tiles are always 512 _bytes_ wide, and 128 pixels high. For 32-bit color
+ *  modes, for example, that means 128 x 128 pixels.
+ *
+ *  For "linear" modes, y is ignored and x is an offset to select which linear
+ *  TLB entry to use.
+ */
+void horrible_getputpixel(int put, struct cpu* cpu, struct sgi_re_data* d,
+	int x, int y, uint32_t* color, int mode)
+{
+	uint32_t color_mode = mode & DE_MODE_TYPE_MASK;
+	int bufdepth = 1 << ((mode >> 8) & 3); 
+
+	// dst_mode (see NetBSD's crmfbreg.h):
+	// #define DE_MODE_TLB_A           0x00000000
+	// #define DE_MODE_TLB_B           0x00000400
+	// #define DE_MODE_TLB_C           0x00000800
+	// #define DE_MODE_LIN_A           0x00001000
+	// #define DE_MODE_LIN_B           0x00001400
+	uint32_t tlb_mode = (mode >> 10) & 0x7;
+	int linear = tlb_mode > 3;
+
+	if (!linear && (x < 0 || y < 0 || x >= 2048 || y >= 2048))
+		return;
+
+	int tilewidth_in_pixels = 512 / bufdepth;
+	
+	int tile_nr_x = x / tilewidth_in_pixels;
+	int tile_nr_y = y >> 7;
+
+	unsigned int tile_nr = tile_nr_y * 16 + tile_nr_x;
+
+	y &= 127;
+	int xofs = (x % tilewidth_in_pixels) * bufdepth;
+	int ofs = 512 * y + xofs;
+
+	uint32_t tileptr = 0;
+
+	/*  #100: cases 0-2 index re_tlb_[abc][256] with a guest-derived
+	    tile_nr = (y>>7)*16 + x/tilewidth; bound it (case 4 self-checks).  */
+	if (tlb_mode <= 2 && tile_nr >= 256)
+		return;
+
+	switch (tlb_mode) {
+	case 0:	tileptr = d->re_tlb_a[tile_nr] << 16;
+		break;
+	case 1:	tileptr = d->re_tlb_b[tile_nr] << 16;
+		break;
+	case 2:	tileptr = d->re_tlb_c[tile_nr] << 16;
+		break;
+	case 4:	tile_nr = x >> 12;
+		if (tile_nr >= 32)
+			return;
+		tileptr = 0x80000000 | (d->re_linear_a[tile_nr] << 12);
+		ofs = x & 4095;
+		// TODO... probably not correct!
+		// printf("tileptr = %08x x = %i y = %i tile_nr = %i ofs = %i\n", tileptr, x, y, tile_nr, ofs);
+		break;
+	default:/*  sgirandompixel: this arm used to assign `*color = random()' -- with
+		    its exit(1) commented out -- so a failed GET handed the CALLER a
+		    random value, and draw_primitive() then wrote it to the destination
+		    in the same loop iteration, since `color' is shared by the XFER GET
+		    and the PUT.  DE_MODE_LIN_B (0x1400) is one of the FIVE modes
+		    crmfbreg.h documents and extracts to tlb_mode 5, so this was
+		    reachable with a DOCUMENTED mode, not only with a junk one.
+		    MEASURED, rung 3: the destination received 0x4b1763a1, 0x2ee4b4df
+		    and 0x7433cdc1 on successive runs of
+		    regress/sgi_re_randompixel_probe.py.
+
+		    NOW DECLINED: `*color' is left alone, so the caller's own
+		    `uint32_t color = fg' stands and what lands is at least
+		    DETERMINISTIC.  The announce is latched because this helper is
+		    per-pixel.
+
+		    WHAT THIS DOES NOT DO, filed rather than silently omitted: the
+		    caller STILL PERFORMS its dependent PUT, so a declined GET still
+		    writes fg (row sgirandomskipput -- suppressing it needs a return
+		    value and every GET site changed, which is more than one site);
+		    LIN_B is still not implemented, and the panel refused to endorse
+		    implementing it as LIN_A-with-the-other-array on symmetry alone
+		    (row sgirelinb); and the COLOUR-mode switch below carries the same
+		    random() shape at its own default (row sgirandomcolour).  */
+		if (!(d->warned & SGIRE_W_BADMODE)) {
+			d->warned |= SGIRE_W_BADMODE;
+			/*  `dst_mode' is kept from the original text although the
+			    parameter is also passed as src_mode on a GET: the probe
+			    anchors on this literal, and rewording it here would be
+			    scope creep AND would move an oracle anchor mid-round,
+			    which is the laundering shape whatever the intent.
+			    Filed as sgirenamedstmode.  */
+			fatal("[ sgi_re: unimplemented dst_mode %i for "
+			    "horrible_getputpixel (%s), x=%i y=%i; declined "
+			    "(once) ]\n", mode, put ? "put" : "get", x, y);
+		}
+		return;
+	}
+
+	// The highest bit seems to be set for a "valid" tile pointer.
+	if (!(tileptr & 0x80000000)) {
+		//printf("dst_mode %i, tile_nr = %i,  tileptr = 0x%llx\n", dst_mode, tile_nr, (long long)tileptr);
+		//fatal("sgi gbe horrible_getputpixel: unexpected non-set high bit of tileptr?\n");
+		//exit(1);
+		return;
+	}
+	
+	tileptr &= ~0x80000000;
+
+	uint8_t buf[8];		/* #100: bufdepth can be 8 = 1<<((mode>>8)&3) */
+	if (put) {
+		switch (color_mode) {
+		case DE_MODE_TYPE_CI:
+			buf[0] = *color;
+			break;
+		case DE_MODE_TYPE_RGB:
+			buf[0] = *color >> 24;
+			buf[1] = *color >> 16;
+			buf[2] = *color >> 8;
+			buf[3] = 0;
+			break;
+		case DE_MODE_TYPE_RGBA:
+			buf[0] = *color >> 24;
+			buf[1] = *color >> 16;
+			buf[2] = *color >> 8;
+			buf[3] = *color;
+			break;
+		case DE_MODE_TYPE_ABGR:
+			buf[0] = *color;
+			buf[1] = *color >> 8;
+			buf[2] = *color >> 16;
+			buf[3] = *color >> 24;
+			break;
+		default:buf[0] = random();
+			buf[1] = random();
+			buf[2] = random();
+			buf[3] = random();
+			// TODO.
+			fatal("[ put: color mode = 0x%x ]\n", color_mode);
+		}
+
+		cpu->memory_rw(cpu, cpu->mem, tileptr + ofs,
+		    buf, bufdepth, MEM_WRITE, NO_EXCEPTIONS | PHYSICAL);
+	} else {
+		cpu->memory_rw(cpu, cpu->mem, tileptr + ofs,
+		    buf, bufdepth, MEM_READ, NO_EXCEPTIONS | PHYSICAL);
+
+		switch (color_mode) {
+		case DE_MODE_TYPE_CI:
+			*color = buf[0];
+			break;
+		case DE_MODE_TYPE_RGB:
+			/*  #505: this read buf[1..3] while the PUT arm above
+			    writes the three channels at buf[0..2] and an
+			    explicit pad at buf[3] -- so an RGB pixel did not
+			    survive its own round trip, shifting one byte left
+			    with a zero fill on every RGB source read.
+
+			    The PUT arm is the authoritative one, and the
+			    warrant is OUTSIDE this function: dev_sgi_gbe.c's
+			    scanout reads the same tile memory back for display
+			    as (buf[0]<<24)+(buf[1]<<16)+(buf[2]<<8)+buf[3],
+			    then CRMFB_MODE_TYP_RGB8 takes R,G,B from bits
+			    31..24, 23..16 and 15..8 -- byte 0 is R and byte 3
+			    is UNUSED.  So the pad sits at buf[3] because the
+			    consumer ignores buf[3], not because PUT writes a
+			    zero there; that is what makes this non-circular.
+			    The RGBA and ABGR PUT arms independently agree --
+			    both lay [R,G,B,x] in memory despite opposite
+			    register word orders -- which leaves this GET the
+			    lone container outlier among the 32-bit arms.
+
+			    The low byte stays ZERO on purpose: RGB carries
+			    three channels, so a corrected read of 0xaabbccdd
+			    yields 0xaabbcc00, NOT the source word.  */
+			*color = (buf[0] << 24) + (buf[1] << 16) + (buf[2] << 8);
+			break;
+		case DE_MODE_TYPE_RGBA:
+			*color = (buf[0] << 24) + (buf[1] << 16) + (buf[2] << 8) + buf[3];
+			break;
+		case DE_MODE_TYPE_ABGR:
+			*color = (buf[3] << 24) + (buf[2] << 16) + (buf[1] << 8) + buf[0];
+			break;
+		default:// Read "raw" 32-bit value:
+			*color = (buf[3] << 24) + (buf[2] << 16) + (buf[1] << 8) + buf[0];
+			fatal("[ get: color mode = 0x%x ]\n", color_mode);
+		}
+	}
+}
+
+
+/*
+ *  SGI "re", NetBSD sources describes it as a "rendering engine".
+ */
+
+DEVICE_ACCESS(sgi_re)
+{
+	struct sgi_re_data *d = (struct sgi_re_data *) extra;
+	uint64_t idata = 0, odata = 0;
+
+	idata = memory_readmax64(cpu, data, len);
+
+	relative_addr += 0x1000;
+
+	/*
+	 *  #497: THE SIX WIDTH GUARDS BELOW USED TO END THE HOST PROCESS.
+	 *
+	 *  A guest choosing an access width is not an emulator error, so each
+	 *  `len != 8' arm now DECLINES the access and announces itself once.
+	 *  Three properties of the shape are load-bearing:
+	 *
+	 *  1. It is an `else if' SPLICE, not an early return.  A `return' here
+	 *     would skip this function's common tail, and `return 0' would be
+	 *     coerced to -1 by cpus/memory_rw.c and raise EXCEPTION_DBE in the
+	 *     guest -- turning a declined access into a guest bus error.
+	 *
+	 *  2. Control therefore reaches the tail, which answers a declined READ
+	 *     with odata (0).
+	 *
+	 *     *** THIS PARAGRAPH ONCE CALLED THAT TAIL DEAD CODE -- "every read arm
+	 *     below still exit(1)s, so odata is never assigned today".  #499 MADE IT
+	 *     LIVE: the unmatched-address catch-all no longer exits, so a declined
+	 *     read now runs the tail and lands a defined 0, and the shipped detector's
+	 *     `rd sent' row exists to pin exactly that.  The six `TODO: read from'
+	 *     arms below DO still exit(1) -- that half is unchanged and is sgirekills. ***
+	 *
+	 *  3. The guards are NOT redundant.  For TLB_A/B/C and TEX the store is a
+	 *     `for (hwi = 0; hwi < len; ...)' loop, so a narrower access simply
+	 *     runs fewer iterations and stays in bounds -- there the guard is
+	 *     modelling fidelity only.  For LINEAR_A and LINEAR_B it is not; see
+	 *     the note at those two sites.
+	 *
+	 *  Only the WIDTH kills change HERE, IN #497.  The six `TODO: read from ...'
+	 *  kills are still untouched.
+	 *
+	 *  *** THE CATCH-ALL IS NO LONGER UNTOUCHED: #499 DE-FATALISED IT and that row
+	 *  is CLOSED.  The sentence is #497's and was true when written; it is left
+	 *  standing with its correction rather than rewritten, because a reader
+	 *  arriving from #497's records needs to see which half moved. ***  The READ
+	 *  arms are
+	 *  `sgirekills`, the CATCH-ALL is `sgireunmapped` (two different rows: one is a
+	 *  direction, the other an unmatched address with no width predicate at all), as is
+	 *  DEVICE_ACCESS(sgi_de)'s own width kill, whose accept set is {4,8}
+	 *  rather than {8} (sgidewidth).
+	 */
+	if (relative_addr >= CRIME_RE_TLB_A && relative_addr < CRIME_RE_TLB_B) {
+		if (len != 8) {
+			if (!(d->warned & SGIRE_W_TLBA_LEN)) {
+				d->warned |= SGIRE_W_TLBA_LEN;
+				fatal("[ sgi_re: unimplemented len=%i for "
+				    "CRIME_RE_TLB_A -- declined.  (once) ]\n",
+				    (int) len);
+			}
+		} else if (writeflag == MEM_WRITE) {
+			int tlbi = ((relative_addr & 0x1ff) >> 1) & 0xff;
+			for (size_t hwi = 0; hwi < len; hwi += sizeof(uint16_t)) {
+				d->re_tlb_a[tlbi] = data[hwi]*256 + data[hwi+1];
+				debug("d->re_tlb_a[%i] = 0x%04x\n", tlbi, d->re_tlb_a[tlbi]);
+				tlbi++;
+			}
+		} else {
+			fatal("TODO: read from CRIME_RE_TLB_A\n");
+			exit(1);
+		}
+	} else if (relative_addr >= CRIME_RE_TLB_B && relative_addr < CRIME_RE_TLB_C) {
+		if (len != 8) {
+			if (!(d->warned & SGIRE_W_TLBB_LEN)) {
+				d->warned |= SGIRE_W_TLBB_LEN;
+				fatal("[ sgi_re: unimplemented len=%i for "
+				    "CRIME_RE_TLB_B -- declined.  (once) ]\n",
+				    (int) len);
+			}
+		} else if (writeflag == MEM_WRITE) {
+			int tlbi = ((relative_addr & 0x1ff) >> 1) & 0xff;
+			for (size_t hwi = 0; hwi < len; hwi += sizeof(uint16_t)) {
+				d->re_tlb_b[tlbi] = data[hwi]*256 + data[hwi+1];
+				debug("d->re_tlb_b[%i] = 0x%04x\n", tlbi, d->re_tlb_b[tlbi]);
+				tlbi++;
+			}
+		} else {
+			fatal("TODO: read from CRIME_RE_TLB_B\n");
+			exit(1);
+		}
+	} else if (relative_addr >= CRIME_RE_TLB_C && relative_addr < CRIME_RE_TLB_C + 0x200) {
+		if (len != 8) {
+			if (!(d->warned & SGIRE_W_TLBC_LEN)) {
+				d->warned |= SGIRE_W_TLBC_LEN;
+				fatal("[ sgi_re: unimplemented len=%i for "
+				    "CRIME_RE_TLB_C -- declined.  (once) ]\n",
+				    (int) len);
+			}
+		} else if (writeflag == MEM_WRITE) {
+			int tlbi = ((relative_addr & 0x1ff) >> 1) & 0xff;
+			for (size_t hwi = 0; hwi < len; hwi += sizeof(uint16_t)) {
+				d->re_tlb_c[tlbi] = data[hwi]*256 + data[hwi+1];
+				debug("d->re_tlb_c[%i] = 0x%04x\n", tlbi, d->re_tlb_c[tlbi]);
+				tlbi++;
+			}
+		} else {
+			fatal("TODO: read from CRIME_RE_TLB_C\n");
+			exit(1);
+		}
+	} else if (relative_addr >= CRIME_RE_TEX && relative_addr < CRIME_RE_TEX + 0xe0) {
+		if (len != 8) {
+			if (!(d->warned & SGIRE_W_TEX_LEN)) {
+				d->warned |= SGIRE_W_TEX_LEN;
+				fatal("[ sgi_re: unimplemented len=%i for "
+				    "CRIME_RE_TEX -- declined.  (once) ]\n",
+				    (int) len);
+			}
+		} else if (writeflag == MEM_WRITE) {
+			int tlbi = ((relative_addr & 0xff) >> 3) & 0xff;
+			for (size_t hwi = 0; hwi < len; hwi += sizeof(uint16_t)) {
+				d->re_tex[tlbi] = data[hwi]*256 + data[hwi+1];
+				debug("d->re_tex[%i] = 0x%04x\n", tlbi, d->re_tex[tlbi]);
+				tlbi++;
+			}
+		} else {
+			fatal("TODO: read from CRIME_RE_TEX\n");
+			exit(1);
+		}
+	} else if (relative_addr >= CRIME_RE_LINEAR_A && relative_addr < CRIME_RE_LINEAR_A + 0x80) {
+		if (len != 8) {
+			/*
+			 *  #497: THIS GUARD IS ALSO THE ONLY BOUNDS CHECK.  Unlike the
+			 *  TLB/TEX arms, the store below is FIXED ARITY -- it ignores len
+			 *  and always writes [tlbi] and [tlbi+1].  tlbi is
+			 *  ((relative_addr & 0x7f) >> 2) & 0x1f, so it reaches 31 and
+			 *  [tlbi+1] indexes 32 of a [32] array.  Only 8-byte ALIGNMENT
+			 *  keeps tlbi even and thus <= 30.  On the GUEST paths that
+			 *  alignment is supplied by two independent mechanisms, and both
+			 *  were checked rather than assumed:
+			 *    - an ordinary ld/sd tests addr & (LS_SIZE-1) and raises
+			 *      ADES/ADEL WITHOUT calling memory_rw at all
+			 *      (cpus/cpu_mips_instr_loadstore.c);
+			 *    - the unaligned ldl/ldr/sdl/sdr helper masks the address
+			 *      itself -- cpus/cpu_mips_instr_unaligned.c computes
+			 *      aligned_addr = addr & ~(wlen-1) and passes THAT to all
+			 *      three of its memory_rw calls, so it cannot deliver an
+			 *      unaligned len == 8 either.
+			 *  Narrower accesses carry len != 8 and are declined above, and
+			 *  dev_sgi_re_init is called only from machines/machine_sgi.c,
+			 *  so no other CPU family reaches this handler.
+			 *
+			 *  ONE EXCEPTION, AND IT IS NOT A GUEST PATH: the host debugger's
+			 *  `put d' prints "WARNING: address isn't aligned" and then
+			 *  PROCEEDS -- the warning is a printf, not a guard -- so it can
+			 *  hand an unaligned len == 8 straight to memory_rw.  That is why
+			 *  the invariant above is stated for GUEST paths only.  It also
+			 *  means `put d' must NOT be used to "witness" the over-run:
+			 *  it bypasses the guest instruction path, so a reproduction
+			 *  built on it would be laundering rather than witnessing.
+			 *  The over-run itself stays filed as sgilinearoob, and it is
+			 *  NOT guest-reachable while this guard stands.
+			 *
+			 *  Measured, not assumed: the over-run stays INSIDE the struct --
+			 *  re_linear_a[32] IS re_linear_b[0] and re_linear_b[32] IS
+			 *  de_reg[0] (offsetof: 1760/1888/2016).  So this is undefined
+			 *  behaviour and a SILENT clobber of the adjacent register array,
+			 *  reaching a DRAWING-engine register from a rendering-engine
+			 *  write -- not a wild write outside the allocation, and not
+			 *  something plain ASAN would flag.  Declining keeps it shut.
+			 */
+			if (!(d->warned & SGIRE_W_LINA_LEN)) {
+				d->warned |= SGIRE_W_LINA_LEN;
+				fatal("[ sgi_re: unimplemented len=%i for "
+				    "CRIME_RE_LINEAR_A -- declined.  (once) ]\n",
+				    (int) len);
+			}
+		} else if (writeflag == MEM_WRITE) {
+			/*
+			 *  Very interesting. NetBSD writes stuff such as:
+			 *
+			 *  CRIME_RE_LINEAR_A IDATA = 8000173080001731
+			 *  CRIME_RE_LINEAR_A IDATA = 8000173280001733
+			 *  CRIME_RE_LINEAR_A IDATA = 8000173480001735
+			 *  ...
+			 *
+			 *  but the PROM writes something which looks like wrongly
+			 *  32-bit sign-extended words:
+			 *
+			 *  CRIME_RE_LINEAR_A IDATA = ffffffff80040001
+			 *  CRIME_RE_LINEAR_A IDATA = ffffffff80040003
+			 *  CRIME_RE_LINEAR_A IDATA = ffffffff80040005
+			 *  ...
+			 *
+			 *  followed by
+			 *  [ sgi_mte: STARTING TRANSFER: mode=0x00000011
+			 *    dst0=0x0000000040000000, dst1=0x0000000040007fff
+			 *    (length 0x8000), dst_y_step=0 bg=0x0, bytemask=0xffffffff ]
+			 *
+			 *  indicating that it really meant to put both 0x80040000
+			 *  and 0x80040001 into the first LINEAR_A entry.
+			 *
+			 *  The first guess would be a bug in the implementation of
+			 *  one or more instructions in the emulator while coming up
+			 *  with those values, but debugging the PROM so far has NOT
+			 *  revealed any such bug. It may even be that the PROM code
+			 *  is buggy (?) and never really set the LINEAR entries
+			 *  correctly. Perhaps the hardware simply ignores the
+			 *  weird values and does not fill it (using the MTE)
+			 *  when asked to.
+			 */
+			// printf("CRIME_RE_LINEAR_A IDATA = %016llx\n", (long long)idata);
+			int tlbi = ((relative_addr & 0x7f) >> 2) & 0x1f;
+			d->re_linear_a[tlbi] = idata >> 32ULL;
+			d->re_linear_a[tlbi+1] = idata;
+			debug("[ d->re_linear_a[%i] = 0x%08x, [%i] = 0x%08x ]\n",
+				tlbi, d->re_linear_a[tlbi], tlbi+1, d->re_linear_a[tlbi+1]);
+		} else {
+			fatal("TODO: read from CRIME_RE_LINEAR_A\n");
+			exit(1);
+		}
+	} else if (relative_addr >= CRIME_RE_LINEAR_B && relative_addr < CRIME_RE_LINEAR_B + 0x80) {
+		if (len != 8) {
+			/*
+			 *  #497: THIS GUARD IS ALSO THE ONLY BOUNDS CHECK.  Unlike the
+			 *  TLB/TEX arms, the store below is FIXED ARITY -- it ignores len
+			 *  and always writes [tlbi] and [tlbi+1].  tlbi is
+			 *  ((relative_addr & 0x7f) >> 2) & 0x1f, so it reaches 31 and
+			 *  [tlbi+1] indexes 32 of a [32] array.  Only 8-byte ALIGNMENT
+			 *  keeps tlbi even and thus <= 30.  On the GUEST paths that
+			 *  alignment is supplied by two independent mechanisms, and both
+			 *  were checked rather than assumed:
+			 *    - an ordinary ld/sd tests addr & (LS_SIZE-1) and raises
+			 *      ADES/ADEL WITHOUT calling memory_rw at all
+			 *      (cpus/cpu_mips_instr_loadstore.c);
+			 *    - the unaligned ldl/ldr/sdl/sdr helper masks the address
+			 *      itself -- cpus/cpu_mips_instr_unaligned.c computes
+			 *      aligned_addr = addr & ~(wlen-1) and passes THAT to all
+			 *      three of its memory_rw calls, so it cannot deliver an
+			 *      unaligned len == 8 either.
+			 *  Narrower accesses carry len != 8 and are declined above, and
+			 *  dev_sgi_re_init is called only from machines/machine_sgi.c,
+			 *  so no other CPU family reaches this handler.
+			 *
+			 *  ONE EXCEPTION, AND IT IS NOT A GUEST PATH: the host debugger's
+			 *  `put d' prints "WARNING: address isn't aligned" and then
+			 *  PROCEEDS -- the warning is a printf, not a guard -- so it can
+			 *  hand an unaligned len == 8 straight to memory_rw.  That is why
+			 *  the invariant above is stated for GUEST paths only.  It also
+			 *  means `put d' must NOT be used to "witness" the over-run:
+			 *  it bypasses the guest instruction path, so a reproduction
+			 *  built on it would be laundering rather than witnessing.
+			 *  The over-run itself stays filed as sgilinearoob, and it is
+			 *  NOT guest-reachable while this guard stands.
+			 *
+			 *  Measured, not assumed: the over-run stays INSIDE the struct --
+			 *  re_linear_a[32] IS re_linear_b[0] and re_linear_b[32] IS
+			 *  de_reg[0] (offsetof: 1760/1888/2016).  So this is undefined
+			 *  behaviour and a SILENT clobber of the adjacent register array,
+			 *  reaching a DRAWING-engine register from a rendering-engine
+			 *  write -- not a wild write outside the allocation, and not
+			 *  something plain ASAN would flag.  Declining keeps it shut.
+			 */
+			if (!(d->warned & SGIRE_W_LINB_LEN)) {
+				d->warned |= SGIRE_W_LINB_LEN;
+				fatal("[ sgi_re: unimplemented len=%i for "
+				    "CRIME_RE_LINEAR_B -- declined.  (once) ]\n",
+				    (int) len);
+			}
+		} else if (writeflag == MEM_WRITE) {
+			int tlbi = ((relative_addr & 0x7f) >> 2) & 0x1f;
+			d->re_linear_b[tlbi] = idata >> 32ULL;
+			d->re_linear_b[tlbi+1] = idata;
+			debug("[ d->re_linear_b[%i] = 0x%08x, [%i] = 0x%08x ]\n",
+				tlbi, d->re_linear_b[tlbi], tlbi+1, d->re_linear_b[tlbi+1]);
+		} else {
+			fatal("TODO: read from CRIME_RE_LINEAR_B\n");
+			exit(1);
+		}
+	} else {
+		if (writeflag == MEM_WRITE) {
+			if (!(d->warned & SGIRE_W_UNMAP_WR)) {
+				d->warned |= SGIRE_W_UNMAP_WR;
+				fatal("[ sgi_re: unimplemented write to "
+				    "address 0x%llx, data=0x%016llx -- "
+				    "declined.  (once) ]\n",
+				    (long long)relative_addr, (long long)idata);
+			}
+		} else {
+			if (!(d->warned & SGIRE_W_UNMAP_RD)) {
+				d->warned |= SGIRE_W_UNMAP_RD;
+				fatal("[ sgi_re: unimplemented read from address"
+				    " 0x%llx -- declined.  (once) ]\n",
+				    (long long)relative_addr);
+			}
+		}
+	}
+
+	if (writeflag == MEM_READ)
+		memory_writemax64(cpu, data, len, odata);
+
+	return 1;
+}
+
+
+/*
+ *  dev_sgi_re_init():
+ */
+void dev_sgi_re_init(struct machine *machine, struct memory *mem, uint64_t baseaddr)
+{
+	struct sgi_re_data *d;
+
+	CHECK_ALLOCATION(d = (struct sgi_re_data *) malloc(sizeof(struct sgi_re_data)));
+	memset(d, 0, sizeof(struct sgi_re_data));
+
+	memory_device_register(mem, "sgi_re", baseaddr + 0x1000, DEV_SGI_RE_LENGTH,
+	    dev_sgi_re_access, d, DM_DEFAULT, NULL);
+
+	dev_sgi_de_init(mem, baseaddr + 0x2000, d);
+	dev_sgi_mte_init(mem, baseaddr + 0x3000, d);
+	dev_sgi_de_status_init(mem, baseaddr + 0x4000, d);
+}
+
+
+
+/****************************************************************************/
+
+/*
+ *  SGI "de", NetBSD sources describes it as a "drawing engine".
+ */
+
+void draw_primitive(struct cpu* cpu, struct sgi_re_data *d)
+{
+	uint32_t op = d->de_reg[(CRIME_DE_PRIMITIVE - 0x2000) / sizeof(uint32_t)];
+	uint32_t drawmode = d->de_reg[(CRIME_DE_DRAWMODE - 0x2000) / sizeof(uint32_t)];
+	uint32_t dst_mode = d->de_reg[(CRIME_DE_MODE_DST - 0x2000) / sizeof(uint32_t)];
+	uint32_t src_mode = d->de_reg[(CRIME_DE_MODE_SRC - 0x2000) / sizeof(uint32_t)];
+	uint32_t fg = d->de_reg[(CRIME_DE_FG - 0x2000) / sizeof(uint32_t)];
+	uint32_t bg = d->de_reg[(CRIME_DE_BG - 0x2000) / sizeof(uint32_t)];
+	uint32_t rop = d->de_reg[(CRIME_DE_ROP - 0x2000) / sizeof(uint32_t)];
+
+	uint32_t stipple_mode = d->de_reg[(CRIME_DE_STIPPLE_MODE - 0x2000) / sizeof(uint32_t)];
+	uint32_t pattern = d->de_reg[(CRIME_DE_STIPPLE_PAT - 0x2000) / sizeof(uint32_t)];
+	int nr_of_bits_to_strip_to_the_left = (stipple_mode >> DE_STIP_STRTIDX_SHIFT) & 31;
+	int nr_of_bits_to_strip_to_the_right = 31 - ((stipple_mode >> DE_STIP_MAXIDX_SHIFT) & 31);
+	pattern >>= nr_of_bits_to_strip_to_the_right;
+	pattern <<= nr_of_bits_to_strip_to_the_right;
+	pattern <<= nr_of_bits_to_strip_to_the_left;
+
+	int nr_of_bits_in_the_middle = 32 - nr_of_bits_to_strip_to_the_left - nr_of_bits_to_strip_to_the_right;
+
+	if (stipple_mode & 0xe0e0ffff)
+		fatal("[ sgi_de: UNIMPLEMENTED stipple_mode bits: 0x%08x ]\n", stipple_mode);
+
+	uint32_t x1 = (d->de_reg[(CRIME_DE_X_VERTEX_0 - 0x2000) / sizeof(uint32_t)] >> 16) & 0x7ff;
+	uint32_t y1 = d->de_reg[(CRIME_DE_X_VERTEX_0 - 0x2000) / sizeof(uint32_t)]& 0x7ff;
+	uint32_t x2 = (d->de_reg[(CRIME_DE_X_VERTEX_1 - 0x2000) / sizeof(uint32_t)] >> 16) & 0x7ff;
+	uint32_t y2 = d->de_reg[(CRIME_DE_X_VERTEX_1 - 0x2000) / sizeof(uint32_t)]& 0x7ff;
+	size_t x, y;
+
+	debug("[ sgi_de: STARTING DRAWING COMMAND: op = 0x%08x,"
+	    " drawmode=0x%x src_mode=0x%x dst_mode=0x%x x1=%i y1=%i"
+	    " x2=%i y2=%i fg=0x%x bg=0x%x pattern=0x%08x ]\n",
+	    op, drawmode, src_mode, dst_mode, x1, y1, x2, y2, fg, bg, pattern);
+
+	// bufdepth = 1, 2, or 4.
+	// int dst_bufdepth = 1 << ((dst_mode >> 8) & 3);
+	int src_bufdepth = 1 << ((src_mode >> 8) & 3);
+
+	int src_is_linear = 0;
+	int src_x = -1, src_y = -1;
+	int32_t step_x = 0;
+	if (drawmode & DE_DRAWMODE_XFER_EN) {
+		uint32_t addr_src = d->de_reg[(CRIME_DE_XFER_ADDR_SRC - 0x2000) / sizeof(uint32_t)];
+		uint32_t strd_src = d->de_reg[(CRIME_DE_XFER_STRD_SRC - 0x2000) / sizeof(uint32_t)];
+		step_x = d->de_reg[(CRIME_DE_XFER_STEP_X - 0x2000) / sizeof(uint32_t)];
+		int32_t step_y = d->de_reg[(CRIME_DE_XFER_STEP_Y - 0x2000) / sizeof(uint32_t)];
+		uint32_t addr_dst = d->de_reg[(CRIME_DE_XFER_ADDR_DST - 0x2000) / sizeof(uint32_t)];
+		uint32_t strd_dst = d->de_reg[(CRIME_DE_XFER_STRD_DST - 0x2000) / sizeof(uint32_t)];
+
+		src_is_linear = ((src_mode & 0x00001c00) >> 10) > 3;
+
+		if (src_is_linear) {
+			src_x = addr_src;
+			src_y = 0;
+		} else {
+			src_x = (addr_src >> 16) & 0x7ff;
+			src_y = addr_src & 0x7ff;
+		}
+
+		if (step_x != src_bufdepth || (step_y != 0 && step_y != 1)) {
+			fatal("[ sgi_de: unimplemented XFER addr_src=0x%x src_bufdepth=%i "
+				"strd_src=0x%x step_x=0x%x step_y=0x%x "
+				"addr_dst=0x%x strd_dst=0x%x ]\n",
+				addr_src, src_bufdepth, strd_src, step_x, step_y, addr_dst, strd_dst);
+
+			// exit(1);
+		}
+	}
+
+	if (!(drawmode & DE_DRAWMODE_PLANEMASK)) {
+		printf("!DE_DRAWMODE_PLANEMASK: TODO\n");
+	}
+	
+	if ((drawmode & DE_DRAWMODE_BYTEMASK) != DE_DRAWMODE_BYTEMASK) {
+		printf("not all DE_DRAWMODE_BYTEMASK set: TODO\n");
+	}
+	
+	// primitive rendering direction (not for Lines? and presumably
+	// not for Points either :-)
+	int dx = op & DE_PRIM_RL ? -1 :  1;
+	int dy = op & DE_PRIM_TB ?  1 : -1;
+
+	uint16_t saved_src_x = src_x;
+
+	/*
+	 *  Drawing is limited to 2048 x 2048 pixel space.
+	 *
+	 *  TODO: MAYBE it is really -2048 to 2027, i.e. 12 bits of
+	 *  pixel space. Perhaps it is possible to figure out
+	 *  experimentally some day, e.g. by drawing lines from
+	 *  -10,10 to 500,20 and see whether the real hardware
+	 *  interprets -10 as -10 or 0x800 - 10.
+	 */
+	uint16_t endx = (x2 + dx) & 0x7ff;
+	uint16_t endy = (y2 + dy) & 0x7ff;
+
+	int lx = abs((int)(x2 - x1)), ly = abs((int)(y2 - y1));
+	int linelen = lx > ly ? lx : ly;
+
+	switch (op & 0xff000000) {
+	case DE_PRIM_LINE:
+		if (drawmode & DE_DRAWMODE_XFER_EN)
+			fatal("[ sgi_de: XFER_EN for LINE op? ]\n");
+
+		// The PROM uses width 32, but NetBSD documents it as "half pixels".
+		// if ((op & DE_PRIM_LINE_WIDTH_MASK) != 2)
+		//	fatal("[ sgi_de: LINE_WIDTH_MASK = %i ]\n", op & DE_PRIM_LINE_WIDTH_MASK);
+
+		if (linelen == 0)
+			linelen ++;
+
+		for (int i = 0; i < ((op & DE_PRIM_LINE_SKIP_END)? linelen : linelen+1); ++i) {
+			x = (x2 * i + x1 * (linelen-i)) / linelen;
+			y = (y2 * i + y1 * (linelen-i)) / linelen;
+
+			uint32_t color = fg;
+			uint32_t oldcolor = fg;
+
+			if (drawmode & DE_DRAWMODE_ROP && rop != OPENGL_LOGIC_OP_COPY)
+				horrible_getputpixel(0, cpu, d, x, y, &oldcolor, dst_mode);
+
+			int draw = 1;
+			if (drawmode & DE_DRAWMODE_LINE_STIP) {
+				if (drawmode & DE_DRAWMODE_OPAQUE_STIP)
+					color = (pattern & 0x80000000UL) ? fg : bg;
+				else
+					draw = (pattern & 0x80000000UL)? 1 : 0;
+			}
+
+			// Raster-OP.
+			// TODO: Other ops.
+			// TODO: Should this be before or after other things?
+			if (drawmode & DE_DRAWMODE_ROP) {
+				switch (rop) {
+				case OPENGL_LOGIC_OP_COPY:
+					// color = color;
+					break;
+				case OPENGL_LOGIC_OP_XOR:
+					color = oldcolor ^ color;
+					break;
+				case OPENGL_LOGIC_OP_COPY_INVERTED:
+					color = 0xffffffff - oldcolor;
+					break;
+				default:{
+						static char rop_used[256];
+						static int first = 1;
+
+						if (first) {
+							memset(rop_used, 0, sizeof(rop_used));
+							first = 0;
+						}
+
+						if (!rop_used[rop & 255]) {
+							rop_used[rop & 255] = 1;
+							fatal("[ sgi_de: LINE: rop[0x%02x] used! ]\n", rop & 255);
+						}
+
+						if (rop >> 8) {
+							fatal("[ sgi_de: LINE: rop > 255: 0x%08x ]\n", rop);
+						}
+					}
+				}
+			}
+
+			if (draw)
+				horrible_getputpixel(1, cpu, d, x, y, &color, dst_mode);
+
+			// Rotate the stipple pattern:
+			pattern = (pattern << 1) | (pattern >> (nr_of_bits_in_the_middle-1));
+		}
+		break;
+
+	case DE_PRIM_RECTANGLE:
+		for (y = y1; y != endy; y = (y + dy) & 0x7ff) {
+			src_x = saved_src_x;
+			for (x = x1; x != endx; x = (x + dx) & 0x7ff) {
+				uint32_t color = fg;
+				uint32_t oldcolor = fg;
+
+				if (drawmode & DE_DRAWMODE_ROP && rop != OPENGL_LOGIC_OP_COPY)
+					horrible_getputpixel(0, cpu, d, x, y, &oldcolor, dst_mode);
+
+				// Pixel colors copied from another source.
+				// (OpenBSD draws characters using this mechanism.)
+				if (drawmode & DE_DRAWMODE_XFER_EN)
+					horrible_getputpixel(0, cpu, d,	src_x, src_y, &color, src_mode);
+
+				int draw = 1;
+				if (drawmode & DE_DRAWMODE_POLY_STIP) {
+					if (drawmode & DE_DRAWMODE_OPAQUE_STIP)
+						color = (pattern & 0x80000000UL) ? fg : bg;
+					else
+						draw = (pattern & 0x80000000UL)? 1 : 0;
+				}
+
+				// Raster-OP.
+				// TODO: Other ops.
+				// TODO: Should this be before or after other things?
+				if (drawmode & DE_DRAWMODE_ROP) {
+					switch (rop) {
+					case OPENGL_LOGIC_OP_COPY:
+						// color = color;
+						break;
+					case OPENGL_LOGIC_OP_XOR:
+						color = oldcolor ^ color;
+						break;
+					case OPENGL_LOGIC_OP_COPY_INVERTED:
+						color = 0xffffffff - oldcolor;
+						break;
+					default:{
+							static char rop_used[256];
+							static int first = 1;
+
+							if (first) {
+								memset(rop_used, 0, sizeof(rop_used));
+								first = 0;
+							}
+
+							if (!rop_used[rop & 255]) {
+								rop_used[rop & 255] = 1;
+								fatal("[ sgi_de: RECT: rop[0x%02x] used! ]\n", rop & 255);
+							}
+
+							if (rop >> 8) {
+								fatal("[ sgi_de: RECT: rop > 255: 0x%08x ]\n", rop);
+							}
+						}
+					}
+				}
+
+				if (draw)
+					horrible_getputpixel(1, cpu, d, x, y, &color, dst_mode);
+
+				// Rotate the stipple pattern:
+				pattern = (pattern << 1) | (pattern >> (nr_of_bits_in_the_middle-1));
+
+				if (src_is_linear)
+					src_x += step_x;
+				else
+					src_x = (src_x + dx) & 0x7ff;
+			}
+			
+			src_y = (src_y + dy) & 0x7ff;
+		}
+		break;
+
+	default:
+		/*  #500: a GUEST-WRITTEN drawing op ended the host process.
+		    The switch discriminates on the TOP BYTE only, so the domain
+		    is 256 values and only two are implemented -- DE_PRIM_LINE
+		    (0x01) and DE_PRIM_RECTANGLE (0x03).
+
+		    *** THE TWO KILLERS THAT MATTER ARE NOT EXOTIC VALUES: THEY
+		    ARE NAMED PRIMITIVES, AND ONE OF THEM IS THE RESET STATE. ***
+		    crmfbreg.h defines them as FULL 32-BIT VALUES, not top-byte
+		    indices: DE_PRIM_POINT 0x00000000, LINE 0x01000000,
+		    TRIANGLE 0x02000000, RECTANGLE 0x03000000.  Writing them
+		    as "0x01" invites a `case 0x02:' that can NEVER match,
+		    since the switch compares `op & 0xff000000'.  POINT and
+		    TRIANGLE land
+		    here.  And dev_sgi_re_init memsets the whole device struct,
+		    so CRIME_DE_PRIMITIVE reads 0 -- which IS POINT -- until a
+		    guest writes it.  A guest that sets the START bit having
+		    never written the primitive register at all therefore died
+		    here.  It need not choose a bad value; it need only omit a
+		    good one.
+
+		    Now a LATCHED DECLINE that falls out of the switch and
+		    returns.  The diagnostic is kept in full -- it names the op
+		    and the vertices, which is what a maintainer implementing
+		    the primitive would want -- and gains `-- declined.  (once)'
+		    so it cannot be mistaken for the old host kill and cannot
+		    flood a guest loop.  */
+		if (!(d->warned & SGIRE_W_PRIM_OP)) {
+			d->warned |= SGIRE_W_PRIM_OP;
+			fatal("[ sgi_de: UNIMPLEMENTED drawing op = 0x%08x,"
+			    " x1=%i y1=%i x2=%i y2=%i fg=0x%x bg=0x%x"
+			    " pattern=0x%08x -- declined.  (once) ]\n",
+			    op, x1, y1, x2, y2, fg, bg, pattern);
+		}
+		break;
+	}
+}
+
+DEVICE_ACCESS(sgi_de)
+{
+	struct sgi_re_data *d = (struct sgi_re_data *) extra;
+	uint64_t idata = 0, odata = 0;
+	int regnr;
+	int startFlag = relative_addr & CRIME_DE_START;
+
+	relative_addr &= ~CRIME_DE_START;
+
+	idata = memory_readmax64(cpu, data, len);
+	regnr = relative_addr / sizeof(uint32_t);
+
+	relative_addr += 0x2000;
+
+	/*
+	 *  Treat all registers as read/write, by default.  Sometimes these
+	 *  are accessed as 32-bit words, sometimes as 64-bit words to access
+	 *  two adjacent registers in one operation.
+	 */
+	if (len == 8) {
+		if (writeflag == MEM_WRITE) {
+			d->de_reg[regnr] = idata >> 32ULL;
+			d->de_reg[regnr+1] = idata;
+		} else
+			odata = ((uint64_t)d->de_reg[regnr] << 32ULL) +
+			    d->de_reg[regnr+1];
+	} else if (len == 4) {
+		if (writeflag == MEM_WRITE)
+			d->de_reg[regnr] = idata;
+		else
+			odata = d->de_reg[regnr];
+	} else {
+		/*
+		 *  #498: THIS USED TO END THE HOST PROCESS.  A guest choosing an
+		 *  access width is not an emulator error -- one `sb' anywhere in
+		 *  this 4 KB window did it.  Witnessed at rung 3 on an unmodified
+		 *  -E sgi -e ip32: sb, sh, lbu and lhu each gave exactly one
+		 *  "len = N not implemented" and exit(1), 4/4.
+		 *
+		 *  *** THE SHAPE IS NOT #497's SPLICE, AND THE DIFFERENCE IS
+		 *  MEASURED, NOT STYLISTIC. ***  #497's tail only answered a read.
+		 *  THIS function's tail also calls draw_primitive() when the guest
+		 *  set CRIME_DE_START, so falling through would run a rendering
+		 *  primitive for an access we just refused.
+		 *
+		 *  Clearing startFlag and falling through -- the obvious repair --
+		 *  scores 24/25: the declined access still reaches the switch
+		 *  below, which announces e.g. "TODO: non-zero CRIME_DE_SCISSOR"
+		 *  about a write THAT NEVER HAPPENED, from an idata this arm
+		 *  discarded.  Shipping a wrong record inside a diagnostic is the
+		 *  same class the ACCEPT member of the option set was found
+		 *  through.  The goto form scores 25/25.
+		 *
+		 *  `goto <label>' to a common exit is house idiom, not an
+		 *  invention: 10 device files use goto and 8 of those use it
+		 *  inside a DEVICE_ACCESS body (dc7085, i80321, le, mk48txx,
+		 *  ne2000, pvr, vr41xx, wdc).
+		 *
+		 *  It is not an early `return' either.  Control still reaches the
+		 *  common exit, so a declined READ is answered with odata (0) via
+		 *  memory_writemax64 and the function still returns 1.  `return 0'
+		 *  would be coerced to -1 by cpus/memory_rw.c and raise
+		 *  EXCEPTION_DBE -- turning a refusal into a guest bus error.
+		 */
+		if (!(d->warned & SGIRE_W_DE_LEN)) {
+			d->warned |= SGIRE_W_DE_LEN;
+			fatal("[ sgi_de: unimplemented len=%i -- declined."
+			    "  (once) ]\n", (int) len);
+		}
+		goto de_declined;
+	}
+
+	switch (relative_addr) {
+
+	case CRIME_DE_MODE_SRC:
+		debug("[ sgi_de: %s CRIME_DE_MODE_SRC: 0x%016llx ]\n",
+		    writeflag == MEM_WRITE ? "write to" : "read from",
+		    writeflag == MEM_WRITE ? (long long)idata : (long long)odata);
+		break;
+
+	case CRIME_DE_MODE_DST:
+		debug("[ sgi_de: %s CRIME_DE_MODE_DST: 0x%016llx ]\n",
+		    writeflag == MEM_WRITE ? "write to" : "read from",
+		    writeflag == MEM_WRITE ? (long long)idata : (long long)odata);
+		break;
+
+	case CRIME_DE_CLIPMODE:
+		debug("[ sgi_de: %s CRIME_DE_CLIPMODE: 0x%016llx ]\n",
+		    writeflag == MEM_WRITE ? "write to" : "read from",
+		    writeflag == MEM_WRITE ? (long long)idata : (long long)odata);
+		if (writeflag == MEM_WRITE && idata != 0)
+			fatal("[ sgi_de: TODO: non-zero CRIME_DE_CLIPMODE: 0x%016llx ]\n", idata);
+		break;
+
+	case CRIME_DE_DRAWMODE:
+		debug("[ sgi_de: %s CRIME_DE_DRAWMODE: 0x%016llx ]\n",
+		    writeflag == MEM_WRITE ? "write to" : "read from",
+		    writeflag == MEM_WRITE ? (long long)idata : (long long)odata);
+		break;
+
+	case CRIME_DE_SCRMASK0:
+		debug("[ sgi_de: %s CRIME_DE_SCRMASK0: 0x%016llx ]\n",
+		    writeflag == MEM_WRITE ? "write to" : "read from",
+		    writeflag == MEM_WRITE ? (long long)idata : (long long)odata);
+		if (writeflag == MEM_WRITE && idata != 0)
+			fatal("[ sgi_de: TODO: non-zero CRIME_DE_SCRMASK0: 0x%016llx ]\n", idata);
+		break;
+
+	case CRIME_DE_SCRMASK1:
+		debug("[ sgi_de: %s CRIME_DE_SCRMASK1: 0x%016llx ]\n",
+		    writeflag == MEM_WRITE ? "write to" : "read from",
+		    writeflag == MEM_WRITE ? (long long)idata : (long long)odata);
+		if (writeflag == MEM_WRITE && idata != 0)
+			fatal("[ sgi_de: TODO: non-zero CRIME_DE_SCRMASK1: 0x%016llx ]\n", idata);
+		break;
+
+	case CRIME_DE_SCRMASK2:
+		debug("[ sgi_de: %s CRIME_DE_SCRMASK2: 0x%016llx ]\n",
+		    writeflag == MEM_WRITE ? "write to" : "read from",
+		    writeflag == MEM_WRITE ? (long long)idata : (long long)odata);
+		if (writeflag == MEM_WRITE && idata != 0)
+			fatal("[ sgi_de: TODO: non-zero CRIME_DE_SCRMASK2: 0x%016llx ]\n", idata);
+		break;
+
+	case CRIME_DE_SCRMASK3:
+		debug("[ sgi_de: %s CRIME_DE_SCRMASK3: 0x%016llx ]\n",
+		    writeflag == MEM_WRITE ? "write to" : "read from",
+		    writeflag == MEM_WRITE ? (long long)idata : (long long)odata);
+		if (writeflag == MEM_WRITE && idata != 0)
+			fatal("[ sgi_de: TODO: non-zero CRIME_DE_SCRMASK3: 0x%016llx ]\n", idata);
+		break;
+
+	case CRIME_DE_SCRMASK4:
+		debug("[ sgi_de: %s CRIME_DE_SCRMASK4: 0x%016llx ]\n",
+		    writeflag == MEM_WRITE ? "write to" : "read from",
+		    writeflag == MEM_WRITE ? (long long)idata : (long long)odata);
+		if (writeflag == MEM_WRITE && idata != 0)
+			fatal("[ sgi_de: TODO: non-zero CRIME_DE_SCRMASK4: 0x%016llx ]\n", idata);
+		break;
+
+	case CRIME_DE_SCISSOR:
+		debug("[ sgi_de: %s CRIME_DE_SCISSOR: 0x%016llx ]\n",
+		    writeflag == MEM_WRITE ? "write to" : "read from",
+		    writeflag == MEM_WRITE ? (long long)idata : (long long)odata);
+		if (writeflag == MEM_WRITE && idata != 0)
+			fatal("[ sgi_de: TODO: non-zero CRIME_DE_SCISSOR: 0x%016llx ]\n", idata);
+		break;
+
+	case CRIME_DE_SCISSOR + 4:
+		// NetBSD writes 0x3fff3fff here. "High" part of SCISSOR register?
+		debug("[ sgi_de: %s CRIME_DE_SCISSOR+4: 0x%016llx ]\n",
+		    writeflag == MEM_WRITE ? "write to" : "read from",
+		    writeflag == MEM_WRITE ? (long long)idata : (long long)odata);
+		if (writeflag == MEM_WRITE && idata != 0x3fff3fff)
+			fatal("[ sgi_de: TODO: CRIME_DE_SCISSOR+4: 0x%016llx ]\n", idata);
+		break;
+
+	case CRIME_DE_PRIMITIVE:
+		debug("[ sgi_de: %s CRIME_DE_PRIMITIVE: 0x%016llx ]\n",
+		    writeflag == MEM_WRITE ? "write to" : "read from",
+		    writeflag == MEM_WRITE ? (long long)idata : (long long)odata);
+		break;
+
+	case CRIME_DE_WINOFFSET_SRC:
+		debug("[ sgi_de: %s CRIME_DE_WINOFFSET_SRC: 0x%016llx ]\n",
+		    writeflag == MEM_WRITE ? "write to" : "read from",
+		    writeflag == MEM_WRITE ? (long long)idata : (long long)odata);
+		if (writeflag == MEM_WRITE && idata != 0)
+			fatal("[ sgi_de: TODO: non-zero CRIME_DE_WINOFFSET_SRC: 0x%016llx ]\n", idata);
+		break;
+
+	case CRIME_DE_WINOFFSET_DST:
+		debug("[ sgi_de: %s CRIME_DE_WINOFFSET_DST: 0x%016llx ]\n",
+		    writeflag == MEM_WRITE ? "write to" : "read from",
+		    writeflag == MEM_WRITE ? (long long)idata : (long long)odata);
+		if (writeflag == MEM_WRITE && idata != 0)
+			fatal("[ sgi_de: TODO: non-zero CRIME_DE_WINOFFSET_DST: 0x%016llx ]\n", idata);
+		break;
+
+	case CRIME_DE_X_VERTEX_0:
+		debug("[ sgi_de: %s CRIME_DE_X_VERTEX_0: 0x%016llx ]\n",
+		    writeflag == MEM_WRITE ? "write to" : "read from",
+		    writeflag == MEM_WRITE ? (long long)idata : (long long)odata);
+		break;
+
+	case CRIME_DE_X_VERTEX_1:
+		debug("[ sgi_de: %s CRIME_DE_X_VERTEX_1: 0x%016llx ]\n",
+		    writeflag == MEM_WRITE ? "write to" : "read from",
+		    writeflag == MEM_WRITE ? (long long)idata : (long long)odata);
+		break;
+
+	case CRIME_DE_XFER_ADDR_SRC:
+		debug("[ sgi_de: %s CRIME_DE_XFER_ADDR_SRC: 0x%016llx ]\n",
+		    writeflag == MEM_WRITE ? "write to" : "read from",
+		    writeflag == MEM_WRITE ? (long long)idata : (long long)odata);
+		break;
+
+	case CRIME_DE_XFER_STRD_SRC:
+		debug("[ sgi_de: %s CRIME_DE_XFER_STRD_SRC: 0x%016llx ]\n",
+		    writeflag == MEM_WRITE ? "write to" : "read from",
+		    writeflag == MEM_WRITE ? (long long)idata : (long long)odata);
+		break;
+
+	case CRIME_DE_XFER_STEP_X:
+		debug("[ sgi_de: %s CRIME_DE_XFER_STEP_X: 0x%016llx ]\n",
+		    writeflag == MEM_WRITE ? "write to" : "read from",
+		    writeflag == MEM_WRITE ? (long long)idata : (long long)odata);
+		break;
+
+	case CRIME_DE_XFER_STEP_Y:
+		debug("[ sgi_de: %s CRIME_DE_XFER_STEP_Y: 0x%016llx ]\n",
+		    writeflag == MEM_WRITE ? "write to" : "read from",
+		    writeflag == MEM_WRITE ? (long long)idata : (long long)odata);
+		break;
+
+	case CRIME_DE_XFER_ADDR_DST:
+		debug("[ sgi_de: %s CRIME_DE_XFER_ADDR_DST: 0x%016llx ]\n",
+		    writeflag == MEM_WRITE ? "write to" : "read from",
+		    writeflag == MEM_WRITE ? (long long)idata : (long long)odata);
+		break;
+
+	case CRIME_DE_XFER_STRD_DST:
+		debug("[ sgi_de: %s CRIME_DE_XFER_STRD_DST: 0x%016llx ]\n",
+		    writeflag == MEM_WRITE ? "write to" : "read from",
+		    writeflag == MEM_WRITE ? (long long)idata : (long long)odata);
+		break;
+
+	case CRIME_DE_STIPPLE_MODE:
+		debug("[ sgi_de: %s CRIME_DE_STIPPLE_MODE: 0x%016llx ]\n",
+		    writeflag == MEM_WRITE ? "write to" : "read from",
+		    writeflag == MEM_WRITE ? (long long)idata : (long long)odata);
+		break;
+
+	case CRIME_DE_STIPPLE_PAT:
+		debug("[ sgi_de: %s CRIME_DE_STIPPLE_PAT: 0x%016llx ]\n",
+		    writeflag == MEM_WRITE ? "write to" : "read from",
+		    writeflag == MEM_WRITE ? (long long)idata : (long long)odata);
+		break;
+
+	case CRIME_DE_FG:
+		debug("[ sgi_de: %s CRIME_DE_FG: 0x%016llx ]\n",
+		    writeflag == MEM_WRITE ? "write to" : "read from",
+		    writeflag == MEM_WRITE ? (long long)idata : (long long)odata);
+		break;
+
+	case CRIME_DE_BG:
+		debug("[ sgi_de: %s CRIME_DE_BG: 0x%016llx ]\n",
+		    writeflag == MEM_WRITE ? "write to" : "read from",
+		    writeflag == MEM_WRITE ? (long long)idata : (long long)odata);
+		break;
+
+	case CRIME_DE_ROP:
+		debug("[ sgi_de: %s CRIME_DE_ROP: 0x%016llx ]\n",
+		    writeflag == MEM_WRITE ? "write to" : "read from",
+		    writeflag == MEM_WRITE ? (long long)idata : (long long)odata);
+		break;
+
+	case CRIME_DE_PLANEMASK:
+		debug("[ sgi_de: %s CRIME_DE_PLANEMASK: 0x%016llx ]\n",
+		    writeflag == MEM_WRITE ? "write to" : "read from",
+		    writeflag == MEM_WRITE ? (long long)idata : (long long)odata);
+		break;
+
+	case CRIME_DE_NULL:
+		debug("[ sgi_de: %s CRIME_DE_NULL: 0x%016llx ]\n",
+		    writeflag == MEM_WRITE ? "write to" : "read from",
+		    writeflag == MEM_WRITE ? (long long)idata : (long long)odata);
+		break;
+
+	case CRIME_DE_FLUSH:
+		debug("[ sgi_de: %s CRIME_DE_FLUSH: 0x%016llx ]\n",
+		    writeflag == MEM_WRITE ? "write to" : "read from",
+		    writeflag == MEM_WRITE ? (long long)idata : (long long)odata);
+		break;
+
+	default:
+		if (writeflag == MEM_WRITE)
+			fatal("[ sgi_de: unimplemented write to "
+			    "address 0x%llx, data=0x%016llx ]\n",
+			    (long long)relative_addr, (long long)idata);
+		else
+			fatal("[ sgi_de: unimplemented read from address"
+			    " 0x%llx ]\n", (long long)relative_addr);
+	}
+
+	if (startFlag)
+		draw_primitive(cpu, d);
+
+ de_declined:
+	/*  #498: a declined access jumps here, skipping BOTH the register
+	    switch and draw_primitive(), and is still answered.  */
+	if (writeflag == MEM_READ)
+		memory_writemax64(cpu, data, len, odata);
+
+	return 1;
+}
+
+
+/*
+ *  dev_sgi_de_init():
+ */
+void dev_sgi_de_init(struct memory *mem, uint64_t baseaddr, struct sgi_re_data *d)
+{
+	memory_device_register(mem, "sgi_de", baseaddr, DEV_SGI_DE_LENGTH,
+	    dev_sgi_de_access, (void *)d, DM_DEFAULT, NULL);
+}
+
+
+/****************************************************************************/
+
+/*
+ *  SGI "mte", NetBSD sources describes it as a "memory transfer engine".
+ *
+ *  If the relative address has the 0x0800 (CRIME_DE_START) flag set, it means
+ *  "go ahead with the transfer". Otherwise, it is just reads and writes of the
+ *  registers.
+ */
+
+void do_mte_transfer(struct cpu* cpu, struct sgi_re_data *d)
+{
+	uint32_t mode = d->mte_reg[(CRIME_MTE_MODE - 0x3000) / sizeof(uint32_t)];
+	uint32_t src0 = d->mte_reg[(CRIME_MTE_SRC0 - 0x3000) / sizeof(uint32_t)];
+	uint32_t src1 = d->mte_reg[(CRIME_MTE_SRC1 - 0x3000) / sizeof(uint32_t)];
+	uint32_t dst0 = d->mte_reg[(CRIME_MTE_DST0 - 0x3000) / sizeof(uint32_t)];
+	uint32_t dst1 = d->mte_reg[(CRIME_MTE_DST1 - 0x3000) / sizeof(uint32_t)];
+	int32_t src_y_step = d->mte_reg[(CRIME_MTE_SRC_Y_STEP - 0x3000) / sizeof(uint32_t)];
+	int32_t dst_y_step = d->mte_reg[(CRIME_MTE_DST_Y_STEP - 0x3000) / sizeof(uint32_t)];
+	uint32_t dstlen = dst1 - dst0 + 1, fill_addr;
+	unsigned char zerobuf[4096];
+	int depth = 8 << ((mode & MTE_MODE_DEPTH_MASK) >> MTE_DEPTH_SHIFT);
+	int src = (mode & MTE_MODE_SRC_BUF_MASK) >> MTE_SRC_TLB_SHIFT;
+	uint32_t bytemask = d->mte_reg[(CRIME_MTE_BYTEMASK - 0x3000) / sizeof(uint32_t)];
+	uint32_t bg = d->mte_reg[(CRIME_MTE_BG - 0x3000) / sizeof(uint32_t)];
+
+	debug("[ sgi_mte: STARTING: mode=0x%08x src0=0x%08x src1=0x%08x src_y_step=%i dst0=0x%08x,"
+	    " dst1=0x%08x dst_y_step=%i bg=0x%x bytemask=0x%x ]\n",
+	    mode,
+	    src0, src1, src_y_step,
+	    dst0, dst1, dst_y_step,
+	    bg, bytemask);
+
+	if (dst_y_step != 0 && dst_y_step != 1 && dst_y_step != -1) {
+		fatal("[ sgi_mte: TODO! unimplemented dst_y_step %i ]", dst_y_step);
+		// exit(1);
+	}
+
+	if (mode & MTE_MODE_STIPPLE) {
+		fatal("[ sgi_mte: unimplemented MTE_MODE_STIPPLE ]");
+		exit(1);
+	}
+
+	int src_tlb = (mode & MTE_MODE_SRC_BUF_MASK) >> MTE_SRC_TLB_SHIFT;
+	int dst_tlb = (mode & MTE_MODE_DST_BUF_MASK) >> MTE_DST_TLB_SHIFT;
+	
+	if (src > MTE_TLB_C) {
+		fatal("[ sgi_mte: unimplemented SRC ]");
+		exit(1);
+	}
+
+	switch (dst_tlb) {
+	case MTE_TLB_A:
+	case MTE_TLB_B:
+	case MTE_TLB_C:
+		// Used by NetBSD's crmfb_fill_rect. It puts graphical
+		// coordinates in dst0 and dst1.
+		{
+			int x1 = (dst0 >> 16) & 0xfff;
+			int y1 = dst0 & 0xfff;
+			int x2 = (dst1 >> 16) & 0xfff;
+			int y2 = dst1 & 0xfff;
+			x1 /= (depth / 8);
+
+
+
+			uint32_t dst_mode = (dst_tlb << 10) + (((mode & MTE_MODE_DEPTH_MASK) >> MTE_DEPTH_SHIFT) << 8);
+
+			// Hack. The MTE perhaps doesn't deal with colors per se,
+			// but this makes sure that we copy 32 bits when doing 32-bit
+			// transfers.
+			if (depth == 4) {
+				src_mode |= DE_MODE_TYPE_RGBA;
+				dst_mode |= DE_MODE_TYPE_RGBA;
+			}
+
+			int src_y = src_y1;
+			for (int y = y1; y != y2+dy; y += dy) {
+				int src_x = src_x1;
+				
+				for  (int x = x1; x != x2+dx; x += dx) {
+					if (mode & MTE_MODE_COPY) {
+						horrible_getputpixel(0, cpu, d,
+							src_x, src_y, &bg, src_mode);
+						src_x += dx;
+					}
+
+					horrible_getputpixel(1, cpu, d, x, y, &bg, dst_mode);
+				}
+				
+				src_y += dy;
+			}
+		}
+		break;
+	case MTE_TLB_LIN_A:
+	case MTE_TLB_LIN_B:
+		// Used by the PROM to zero-fill memory (?).
+		if (mode & MTE_MODE_COPY) {
+			fatal("[ sgi_mte: unimplemented MTE_MODE_COPY ]");
+			exit(1);
+		}
+
+		if (depth != 8) {
+			fatal("[ sgi_mte: unimplemented MTE_DEPTH_x ]");
+			exit(1);
+		}
+
+		debug("[ sgi_mte: LINEAR TRANSFER: mode=0x%08x dst0=0x%016llx,"
+		    " dst1=0x%016llx (length 0x%llx), dst_y_step=%i bg=0x%x, bytemask=0x%x ]\n",
+		    mode,
+		    (long long)dst0, (long long)dst1,
+		    (long long)dstlen, dst_y_step, (int)bg, (int)bytemask);
+
+		if (bytemask != 0xffffffff) {
+			fatal("unimplemented MTE bytemask 0x%08x\n", (int)bytemask);
+			exit(1);
+		}
+
+		/*
+		 *  Horrible hack:
+		 *
+		 *  During bootup, the PROM fills memory at 0x40000000 and
+		 *  forward. This corresponds to the lowest possible RAM address.
+		 *  However, these fills are not going via the CPU's cache,
+		 *  which contains things such as the return address on the
+		 *  stack. If we _really_ write this data in the emulator (which
+		 *  doesn't emulate the cache), it would overwrite the stack.
+		 *
+		 *  So let's not.
+		 *
+		 *  (If some guest OS or firmware variant actually depends on
+		 *  the ability to write to the start of memory this way,
+		 *  it would not work in the emulator.)
+		 */
+		// if (dst0 >= 0x40000000 && dst0 < 0x40004000 && dst1 > 0x40004000) {
+		//	dst0 += 0x4000;
+		//	dstlen -= 0x4000;
+		// }
+
+		/*
+		 *  HUH?
+		 *
+		 *  Note that due to a bug (?) in the PROM firmware when it
+		 *  is setting up the TLB entries, only every _second_ page is
+		 *  actually put correctly in the TLB. This means that even
+		 *  though it then tries to fill 0x40000000 .. 0x40007fff with
+		 *  zeroes, it only fills 0x40001000 .. 0x40001fff,
+		 *  0x40003000 .. 0x40003fff and so on!
+		 *
+		 *  So the Horrible hack above is not needed.
+		 *
+		 *  Ironic.
+		 */
+
+		memset(zerobuf, bg, dstlen < sizeof(zerobuf) ? dstlen : sizeof(zerobuf));
+		fill_addr = dst0;
+		while (dstlen != 0) {
+			uint64_t fill_len;
+			if (dstlen > sizeof(zerobuf))
+				fill_len = sizeof(zerobuf);
+			else
+				fill_len = dstlen;
+
+			uint64_t starting_page = fill_addr & ~0xfff;
+			uint64_t ending_page = (fill_addr + fill_len - 1) & ~0xfff;
+			if (starting_page != ending_page) {
+				fill_len = starting_page + 4096 - fill_addr;
+			}
+
+			// Find starting_page in the TLB in question.
+			starting_page >>= 12;
+			uint32_t *tlb = dst_tlb == MTE_TLB_LIN_A ? d->re_linear_a : d->re_linear_b;
+			int match = 0;
+			for (int i = 0; i < 32; ++i) {
+				uint32_t entry = tlb[i];
+				if (entry & 0x80000000) {
+					entry &= ~0x80000000;
+					if (entry == starting_page) {
+						match = 1;
+						break;
+					}
+				}
+			}
+			
+			if (match) {
+				cpu->memory_rw(cpu, cpu->mem, fill_addr, zerobuf, fill_len,
+					MEM_WRITE, NO_EXCEPTIONS | PHYSICAL);
+			} else {
+				debug("[ sgi_mte: WARNING: address 0x%x not found in TLB? Ignoring fill. ]\n",
+					(long long)fill_addr);
+			}
+
+			fill_addr += fill_len;
+			dstlen -= (uint32_t)fill_len;	/* OB-23: subtract bytes actually filled */
+		}
+		break;
+	default:
+		fatal("[ sgi_mte: TODO! unimplemented dst_tlb 0x%x ]", dst_tlb);
+	}
+}
+
+DEVICE_ACCESS(sgi_mte)
+{
+	struct sgi_re_data *d = (struct sgi_re_data *) extra;
+	uint64_t idata = 0, odata = 0;
+	int regnr;
+	int startFlag = relative_addr & CRIME_DE_START;
+
+	relative_addr &= ~CRIME_DE_START;
+
+	idata = memory_readmax64(cpu, data, len);
+	regnr = relative_addr / sizeof(uint32_t);
+
+	relative_addr += 0x3000;
+
+	/*
+	 *  Treat all registers as read/write, by default.  Sometimes these
+	 *  are accessed as 32-bit words, sometimes as 64-bit words.
+	 *
+	 *  NOTE: The lowest bits are internally stored in the "low" (+0)
+	 *  register, and the higher bits are stored in the "+1" word.
+	 */
+	if (len == 4) {
+		if (writeflag == MEM_WRITE)
+			d->mte_reg[regnr] = idata;
+		else
+			odata = d->mte_reg[regnr];
+	} else if (len != 4) {
+		if (writeflag == MEM_WRITE) {
+			d->mte_reg[regnr+1] = idata >> 32;
+			d->mte_reg[regnr] = idata;
+		} else {
+			odata = ((uint64_t)d->mte_reg[regnr+1] << 32) +
+			    d->mte_reg[regnr];
+		}
+	} else {
+		fatal("[ sgi_mte: UNIMPLEMENTED read/write len %i ]\n", len);
+		exit(1);
+	}
+
+	switch (relative_addr) {
+
+	case CRIME_MTE_MODE:
+		debug("[ sgi_mte: %s CRIME_MTE_MODE: 0x%016llx ]\n",
+		    writeflag == MEM_WRITE ? "write to" : "read from",
+		    writeflag == MEM_WRITE ? (long long)idata : (long long)odata);
+		break;
+
+	case CRIME_MTE_BYTEMASK:
+		debug("[ sgi_mte: %s CRIME_MTE_BYTEMASK: 0x%016llx ]\n",
+		    writeflag == MEM_WRITE ? "write to" : "read from",
+		    writeflag == MEM_WRITE ? (long long)idata : (long long)odata);
+		break;
+
+	case CRIME_MTE_STIPPLEMASK:
+		fatal("[ sgi_mte: %s CRIME_MTE_STIPPLEMASK: 0x%016llx ]\n",
+		    writeflag == MEM_WRITE ? "write to" : "read from",
+		    writeflag == MEM_WRITE ? (long long)idata : (long long)odata);
+		break;
+
+	case CRIME_MTE_BG:
+		debug("[ sgi_mte: %s CRIME_MTE_BG: 0x%016llx ]\n",
+		    writeflag == MEM_WRITE ? "write to" : "read from",
+		    writeflag == MEM_WRITE ? (long long)idata : (long long)odata);
+		break;
+
+	case CRIME_MTE_SRC0:
+		debug("[ sgi_mte: %s CRIME_MTE_SRC0: 0x%016llx ]\n",
+		    writeflag == MEM_WRITE ? "write to" : "read from",
+		    writeflag == MEM_WRITE ? (long long)idata : (long long)odata);
+		break;
+
+	case CRIME_MTE_SRC1:
+		debug("[ sgi_mte: %s CRIME_MTE_SRC1: 0x%016llx ]\n",
+		    writeflag == MEM_WRITE ? "write to" : "read from",
+		    writeflag == MEM_WRITE ? (long long)idata : (long long)odata);
+		break;
+
+	case CRIME_MTE_DST0:
+		debug("[ sgi_mte: %s CRIME_MTE_DST0: 0x%016llx ]\n",
+		    writeflag == MEM_WRITE ? "write to" : "read from",
+		    writeflag == MEM_WRITE ? (long long)idata : (long long)odata);
+		break;
+
+	case CRIME_MTE_DST1:
+		debug("[ sgi_mte: %s CRIME_MTE_DST1: 0x%016llx ]\n",
+		    writeflag == MEM_WRITE ? "write to" : "read from",
+		    writeflag == MEM_WRITE ? (long long)idata : (long long)odata);
+		break;
+
+	case CRIME_MTE_SRC_Y_STEP:
+		debug("[ sgi_mte: %s CRIME_MTE_SRC_Y_STEP: 0x%016llx ]\n",
+		    writeflag == MEM_WRITE ? "write to" : "read from",
+		    writeflag == MEM_WRITE ? (long long)idata : (long long)odata);
+		break;
+
+	case CRIME_MTE_DST_Y_STEP:
+		debug("[ sgi_mte: %s CRIME_MTE_DST_Y_STEP: 0x%016llx ]\n",
+		    writeflag == MEM_WRITE ? "write to" : "read from",
+		    writeflag == MEM_WRITE ? (long long)idata : (long long)odata);
+		break;
+
+	case CRIME_MTE_NULL:
+		fatal("[ sgi_mte: %s CRIME_MTE_NULL: 0x%016llx ]\n",
+		    writeflag == MEM_WRITE ? "write to" : "read from",
+		    writeflag == MEM_WRITE ? (long long)idata : (long long)odata);
+		break;
+
+	case CRIME_MTE_FLUSH:
+		fatal("[ sgi_mte: %s CRIME_MTE_FLUSH: 0x%016llx ]\n",
+		    writeflag == MEM_WRITE ? "write to" : "read from",
+		    writeflag == MEM_WRITE ? (long long)idata : (long long)odata);
+		break;
+
+	default:
+		if (writeflag == MEM_WRITE)
+			fatal("[ sgi_mte: unimplemented write to "
+			    "address 0x%llx, data=0x%016llx ]\n",
+			    (long long)relative_addr, (long long)idata);
+		else
+			fatal("[ sgi_mte: unimplemented read from address"
+			    " 0x%llx ]\n", (long long)relative_addr);
+	}
+
+	if (startFlag)
+		do_mte_transfer(cpu, d);
+
+	if (writeflag == MEM_READ)
+		memory_writemax64(cpu, data, len, odata);
+
+	return 1;
+}
+
+
+/*
+ *  dev_sgi_mte_init():
+ */
+void dev_sgi_mte_init(struct memory *mem, uint64_t baseaddr, struct sgi_re_data *d)
+{
+	memory_device_register(mem, "sgi_mte", baseaddr, DEV_SGI_MTE_LENGTH,
+	    dev_sgi_mte_access, (void *)d, DM_DEFAULT, NULL);
+}
+
+
+/****************************************************************************/
+
+/*
+ *  SGI "de_status".
+ */
+
+DEVICE_ACCESS(sgi_de_status)
+{
+	// struct sgi_re_data *d = (struct sgi_re_data *) extra;
+	uint64_t idata = 0, odata = 0;
+
+	idata = memory_readmax64(cpu, data, len);
+
+	relative_addr += 0x4000;
+
+	switch (relative_addr) {
+
+	case CRIME_DE_STATUS:	// 0x4000
+		odata = CRIME_DE_IDLE |
+			CRIME_DE_SETUP_IDLE |
+			CRIME_DE_PIXPIPE_IDLE |
+			CRIME_DE_MTE_IDLE;
+
+		/*
+		 *  TODO: Actually simulate pipeline of a number of commands?
+		 */
+		break;
+
+	case 0x4008:
+		/*  Unknown. Ignore for now.  */
+		break;
+
+	default:
+		if (writeflag == MEM_WRITE)
+			debug("[ sgi_de_status: unimplemented write to "
+			    "address 0x%llx, data=0x%016llx ]\n",
+			    (long long)relative_addr, (long long)idata);
+		else
+			debug("[ sgi_de_status: unimplemented read from address"
+			    " 0x%llx ]\n", (long long)relative_addr);
+	}
+
+	if (writeflag == MEM_READ)
+		memory_writemax64(cpu, data, len, odata);
+
+	return 1;
+}
+
+
+/*
+ *  dev_sgi_de_status_init():
+ */
+void dev_sgi_de_status_init(struct memory *mem, uint64_t baseaddr, struct sgi_re_data *d)
+{
+	memory_device_register(mem, "sgi_de_status", baseaddr, DEV_SGI_DE_STATUS_LENGTH,
+	    dev_sgi_de_status_access, (void *)d, DM_DEFAULT, NULL);
+}
+
+
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg --files GXEMUL-SEC/src GXEMUL-SEC/regress -g '*memory_rw*' -g '*.py'" in C:\DocumentNoSnc\CC\GXEMUL
+ succeeded in 72ms:
+GXEMUL-SEC/regress\wdc_latch_census.py
+GXEMUL-SEC/regress\wdc_flood_probe.py
+GXEMUL-SEC/regress\wdc_altoffset_sig_probe.py
+GXEMUL-SEC/regress\wdc_altoffset_probe.py
+GXEMUL-SEC/regress\wdc_altoffset_4bit_probe.py
+GXEMUL-SEC/regress\wdc_addtoinbuf_probe.py
+GXEMUL-SEC/regress\sh_tlbmulti_probe.py
+GXEMUL-SEC/regress\sh_rounding_probe.py
+GXEMUL-SEC/regress\sh_pclock_probe.py
+GXEMUL-SEC/regress\sh_iprbcd_probe.py
+GXEMUL-SEC/regress\sh_intprio_probe.py
+GXEMUL-SEC/regress\sh_halt_probe.py
+GXEMUL-SEC/regress\sh4_val_witness.py
+GXEMUL-SEC/regress\sh4_val_probe.py
+GXEMUL-SEC/regress\sh4_tlbda2_witness.py
+GXEMUL-SEC/regress\sh4_tlbda2_probe.py
+GXEMUL-SEC/regress\sh4_sci_witness.py
+GXEMUL-SEC/regress\sh4_sci_probe.py
+GXEMUL-SEC/regress\sh4_rtcsr_witness.py
+GXEMUL-SEC/regress\sh4_rtcsr_probe.py
+GXEMUL-SEC/regress\sh4_pcic_probe.py
+GXEMUL-SEC/regress\sh4_chcr_witness.py
+GXEMUL-SEC/regress\sh4_chcr_probe.py
+GXEMUL-SEC/regress\sh4_bsc_width_probe.py
+GXEMUL-SEC/regress\sh4pcic_witness.py
+GXEMUL-SEC/regress\sgi_re_width_probe.py
+GXEMUL-SEC/regress\sgi_re_unmapped_probe.py
+GXEMUL-SEC/regress\sgi_re_rgb_probe.py
+GXEMUL-SEC/regress\sgi_re_randompixel_probe.py
+GXEMUL-SEC/regress\sgi_eaddr_probe.py
+GXEMUL-SEC/regress\sgi_de_width_probe.py
+GXEMUL-SEC/regress\sgi_de_primop_probe.py
+GXEMUL-SEC/regress\selftest_logdir.py
+GXEMUL-SEC/regress\selftest_inactivity.py
+GXEMUL-SEC/regress\selftest_budget.py
+GXEMUL-SEC/regress\selftest_absorb.py
+GXEMUL-SEC/regress\selfmutants\memory_rw.why
+GXEMUL-SEC/regress\selfmutants\memory_rw.old
+GXEMUL-SEC/regress\selfmutants\memory_rw.new
+GXEMUL-SEC/regress\selfmutant.py
+GXEMUL-SEC/regress\readiness_predicate_test.py
+GXEMUL-SEC/regress\ppc_rounding_probe.py
+GXEMUL-SEC/regress\ppc_halt_probe.py
+GXEMUL-SEC/regress\pit8253_latch_probe.py
+GXEMUL-SEC/regress\pcc2_width_witness.py
+GXEMUL-SEC/regress\pcc2_width_probe.py
+GXEMUL-SEC/regress\pcc2_default_probe.py
+GXEMUL-SEC/regress\mips_subnorm_probe.py
+GXEMUL-SEC/regress\mips_rounding_probe.py
+GXEMUL-SEC/regress\mips_fold_probe.py
+GXEMUL-SEC/regress\mips_fixedmode_probe.py
+GXEMUL-SEC/regress\m88k_rounding_probe.py
+GXEMUL-SEC/regress\m88k_idle_probe.py
+GXEMUL-SEC/regress\m88k_exc_probe.py
+GXEMUL-SEC/regress\m8820x_sites_probe.py
+GXEMUL-SEC/regress\luna_intmask_probe.py
+GXEMUL-SEC/regress\luna_absentcpu_probe.py
+GXEMUL-SEC/regress\hpcmips_ctor_probe.py
+GXEMUL-SEC/regress\hpcabort_witness.py
+GXEMUL-SEC/regress\gdrom_toclen_probe.py
+GXEMUL-SEC/regress\gdrom_default_probe.py
+GXEMUL-SEC/regress\gdrom_decline_probe.py
+GXEMUL-SEC/regress\gdrom_data_probe.py
+GXEMUL-SEC/regress\gdrom_cond_probe.py
+GXEMUL-SEC/regress\footbridge_sites_probe.py
+GXEMUL-SEC/regress\fbpending_witness.py
+GXEMUL-SEC/regress\fbpending_drain_probe.py
+GXEMUL-SEC/regress\drive_guest.py
+GXEMUL-SEC/regress\diff_memory_rw.c
+GXEMUL-SEC/regress\diag_div_sweep.py
+GXEMUL-SEC/regress\asic_badaddr_probe.py
+GXEMUL-SEC/regress\artifacts\widthkillclass\witness_20260830\sgi_re_width_witness.py
+GXEMUL-SEC/regress\artifacts\widthkillclass\witness_20260830\sgi_re_width_witness.earlier.py
+GXEMUL-SEC/regress\artifacts\widthkillclass\opus_p1_20260830\opus497_read_probe.py
+GXEMUL-SEC/regress\artifacts\widthkillclass\opus_p1_20260830\latch_probe.py
+GXEMUL-SEC/regress\artifacts\widthkillclass\opus_p1_20260830\apply_mutant.py
+GXEMUL-SEC/regress\artifacts\widthkillclass\opus_p1_20260830\apply_m2.py
+GXEMUL-SEC/regress\artifacts\widthkillclass\opus_p1_20260830\apply_fix.py
+GXEMUL-SEC/regress\arm_fold_marker_probe.py
+GXEMUL-SEC/regress\arm_flags_probe.py
+GXEMUL-SEC/regress\arm_endian_probe.py
+GXEMUL-SEC/regress\arcbios_shift_probe.py
+GXEMUL-SEC/regress\alpha_harness_probe.py
+GXEMUL-SEC/regress\absorb_census.py
+GXEMUL-SEC/regress\artifacts\widthkillclass\opus_impl_20260830\strengthen_comment.py
+GXEMUL-SEC/regress\artifacts\widthkillclass\opus_impl_20260830\sgi_re_width_probe.py
+GXEMUL-SEC/regress\artifacts\widthkillclass\opus_impl_20260830\mutate497_v2.py
+GXEMUL-SEC/regress\artifacts\widthkillclass\opus_impl_20260830\mutate497.py
+GXEMUL-SEC/regress\artifacts\widthkillclass\opus_impl_20260830\move_warned.py
+GXEMUL-SEC/regress\artifacts\widthkillclass\opus_impl_20260830\apply_fix497.py
+GXEMUL-SEC/regress\artifacts\wdcringambig\rung3_20260827\wdcring_rung3_probe.py
+GXEMUL-SEC/regress\artifacts\wdcringambig\repro_20260827\author_repro484.py
+GXEMUL-SEC/regress\artifacts\gdromcondlies\witness_20260830\gdrom_cond_witness.py
+GXEMUL-SEC/regress\artifacts\gdromcondlies\witness_20260830\gdrom_cond_extras.py
+GXEMUL-SEC/regress\artifacts\makercfalse\hook_controls_20260830\clusterctl.py
+GXEMUL-SEC/regress\artifacts\sgireunmapped\opus_witness_20260830\sgi_re_unmapped_probe.py
+GXEMUL-SEC/regress\artifacts\sgireunmapped\opus_witness_20260830\mkvariant.py
+GXEMUL-SEC/regress\artifacts\makercfalse\hook_controls_20260829\hookctl.py
+GXEMUL-SEC/regress\artifacts\sgireunmapped\opus_witness_20260830\detector.py
+GXEMUL-SEC/src\cpus\memory_rw.c
+GXEMUL-SEC/regress\artifacts\wdcoddstep\overtaken_20260827\author_odd.py
+GXEMUL-SEC/regress\artifacts\sgireunmapped\killtable_20260831\repin2\sgi_re_width_probe.repinned.py
+GXEMUL-SEC/regress\artifacts\sgireunmapped\killtable_20260831\repin2\score500b.py
+GXEMUL-SEC/regress\artifacts\sgireunmapped\killtable_20260831\repin2\score500.py
+GXEMUL-SEC/regress\artifacts\sgireunmapped\killtable_20260831\repin2\mk500.py
+GXEMUL-SEC/regress\artifacts\wdccallsite\killtable_20260827\q4check.py
+GXEMUL-SEC/regress\artifacts\wdccallsite\killtable_20260827\q3check.py
+GXEMUL-SEC/regress\artifacts\wdccallsite\killtable_20260827\mut480b.py
+GXEMUL-SEC/regress\artifacts\wdccallsite\killtable_20260827\mut480.py
+GXEMUL-SEC/regress\artifacts\wdccallsite\killtable_20260827\mk480b.py
+GXEMUL-SEC/regress\artifacts\wdccallsite\killtable_20260827\mk480.py
+GXEMUL-SEC/regress\artifacts\wdccallsite\killtable_20260827\gatename480.py
+GXEMUL-SEC/regress\artifacts\wdccallsite\killtable_20260827\fixrows480.py
+GXEMUL-SEC/regress\arm_writeback_probe.py
+GXEMUL-SEC/regress\arm_strlen_probe.py
+GXEMUL-SEC/regress\arm_memcpy_probe.py
+GXEMUL-SEC/regress\arm_idle_probe.py
+GXEMUL-SEC/regress\artifacts\sgireunmapped\killtable_20260831\port\repin.py
+GXEMUL-SEC/regress\artifacts\sgireunmapped\killtable_20260831\port\patch_mk2.py
+GXEMUL-SEC/regress\artifacts\sgireunmapped\killtable_20260831\port\patch_mk.py
+GXEMUL-SEC/regress\artifacts\sgireunmapped\killtable_20260831\port\mkvariant499.py
+GXEMUL-SEC/regress\artifacts\wdcnoirq\witness_20260827\wdcnoirq_rung3_probe.py
+GXEMUL-SEC/regress\artifacts\wdcnoirq\repro_20260827\author_repro485.py
+GXEMUL-SEC/regress\artifacts\sgireunmapped\killtable_20260831\pass4\e0_mut.py
+GXEMUL-SEC/regress\artifacts\gdrompionull\opus_p2_20260826\mutate.py
+GXEMUL-SEC/regress\artifacts\gdrompionull\opus_p2_20260826\mism_probe.py
+GXEMUL-SEC/regress\artifacts\wdcaltoffset\witness_20260829\wdcaltoff_rung3_probe.py
+GXEMUL-SEC/regress\artifacts\wdcaltoffset\witness_20260829\mkfixleg.py
+GXEMUL-SEC/regress\artifacts\sgireunmapped\killtable_20260831\mkvariant499.py
+GXEMUL-SEC/regress\artifacts\wdcnoirq\killtable_20260827\author_rows485.py
+GXEMUL-SEC/regress\artifacts\wdcnoirq\killtable_20260827\author_mut485.py
+GXEMUL-SEC/regress\artifacts\wdcnoirq\killtable_20260827\author_mut11.py
+GXEMUL-SEC/regress\artifacts\wdcnoirq\killtable_20260827\author_legs3.py
+GXEMUL-SEC/regress\artifacts\wdcaltoffset\opus_p2_20260830\q2_mechanism.py
+GXEMUL-SEC/regress\artifacts\wdcaltoffset\opus_p2_20260830\PROPOSED_wdc_altoffset_4bit_probe.py
+GXEMUL-SEC/regress\artifacts\wdcaltoffset\opus_p2_20260830\mut494p2.py
+GXEMUL-SEC/regress\artifacts\sgireunmapped\killtable_20260831\l2repair\mkw.py
+GXEMUL-SEC/regress\artifacts\sgireunmapped\killtable_20260831\extra_rows.py
+GXEMUL-SEC/regress\artifacts\sgireunmapped\killtable_20260831\base_slot_probe.py
+GXEMUL-SEC/regress\artifacts\gdrompionull\gdrom_pio_null_probe.py
+GXEMUL-SEC/regress\artifacts\wdcaltoffset\mutants_20260830\table_c.py
+GXEMUL-SEC/regress\artifacts\wdcaltoffset\mutants_20260830\table_b.py
+GXEMUL-SEC/regress\artifacts\wdcaltoffset\mutants_20260830\table_a.py
+GXEMUL-SEC/regress\artifacts\wdcaltoffset\mutants_20260830\mkmutants.py
+GXEMUL-SEC/regress\artifacts\wdcfloodstale\measure_20260827\author_floodstale.py
+GXEMUL-SEC/regress\artifacts\gdromexitsix\gdrom_toclen_witness.py
+GXEMUL-SEC/regress\artifacts\gdromexitsix\opus_r2table_20260828\tprobe2.py
+GXEMUL-SEC/regress\artifacts\gdromexitsix\opus_r2table_20260828\mkmut.py
+GXEMUL-SEC/regress\artifacts\gdromexitsix\opus_r2table_20260828\mkfix.py
+GXEMUL-SEC/regress\artifacts\wdcaltctrlfam\killtable_20260827\mk483.py
+GXEMUL-SEC/regress\artifacts\wdcaltctrlfam\killtable_20260827\author_mut483.py
+GXEMUL-SEC/regress\artifacts\wdcaltctrlfam\killtable_20260827\author_fix483c.py
+GXEMUL-SEC/regress\artifacts\wdcaltctrlfam\killtable_20260827\author_fix483b.py
+GXEMUL-SEC/regress\artifacts\wdcaltctrlfam\killtable_20260827\author_fix483.py
+GXEMUL-SEC/regress\artifacts\gdromexitsix\supp_p2_20260829\instrument_22row.frozen.py
+GXEMUL-SEC/regress\artifacts\gdromexitsix\supp_p2_20260829\extend.py
+GXEMUL-SEC/regress\artifacts\gdromexitsix\opus_r2full_20260828\tprobe3.py
+GXEMUL-SEC/regress\artifacts\gdromexitsix\opus_r2full_20260828\mkmut_brace.py
+GXEMUL-SEC/regress\artifacts\gdromexitsix\opus_r2full_20260828\mkmut3.py
+GXEMUL-SEC/regress\artifacts\gdromexitsix\opus_r2full_20260828\mkfix.py
+GXEMUL-SEC/regress\artifacts\gdromexitsix\asan_m0_20260828\apply_m0.py
+GXEMUL-SEC/regress\artifacts\gdromexitsix\rot_20260829\probe.frozen.py
+GXEMUL-SEC/regress\artifacts\wdcaltctrlcov\killtable_20260827\mut482_RECONSTRUCTED.py
+GXEMUL-SEC/regress\artifacts\wdcaltctrlcov\killtable_20260827\mk482.py
+GXEMUL-SEC/regress\artifacts\gdromexitsix\killtable4_20260828\mut_common.py
+GXEMUL-SEC/regress\artifacts\gdromexitsix\p2askagain_20260829\mut490p2.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\killtable2\m88k_exc_probe.frozen2.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\killtable\m88k_exc_probe.frozen.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\derive_cells.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\killtable12\m88k_exc_probe.frozen12.py
+GXEMUL-SEC/regress\artifacts\wdcaltctrl\killtable_20260827\rows481b.py
+GXEMUL-SEC/regress\artifacts\wdcaltctrl\killtable_20260827\mutalt.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\killtable11_attempt1_v13\m88k_exc_probe.frozen11.v13.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\killtable11\m88k_exc_probe.frozen11.v14.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\killtable11\m88k_exc_probe.frozen11.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\killtable11_attempt1_v13\m88k_exc_probe.frozen11.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\agy_p5\mutate.py
+GXEMUL-SEC/regress\artifacts\wdcaltctrl\killtable_20260827\mkaltctrl.py
+GXEMUL-SEC/regress\artifacts\wdcaltctrl\killtable_20260827\gatealt2.py
+GXEMUL-SEC/regress\artifacts\wdcaltctrl\killtable_20260827\gatealt.py
+GXEMUL-SEC/regress\artifacts\wdcaltctrl\killtable_20260827\fixwarrant481.py
+GXEMUL-SEC/regress\artifacts\wdcaltctrl\killtable_20260827\fixaltctrl.py
+GXEMUL-SEC/regress\artifacts\wdcdataoutdrain\killtable_20260827\wiprepro.py
+GXEMUL-SEC/regress\artifacts\wdcdataoutdrain\killtable_20260827\mk478.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\killtable10\mut_m88kexc.v10.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\killtable14\m88k_exc_probe.frozen14.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\killtable10\m88k_exc_probe.frozen10.py
+GXEMUL-SEC/regress\artifacts\wdcdataoutdrain\killtable_20260827\drainvar.py
+GXEMUL-SEC/regress\artifacts\wdcdataoutdrain\killtable_20260827\addpkt.py
+GXEMUL-SEC/regress\artifacts\wdcdataoutdrain\killtable_20260827\addphaserow.py
+GXEMUL-SEC/regress\artifacts\wdcdataoutdrain\killtable_20260827\addpartial.py
+GXEMUL-SEC/regress\artifacts\wdcdataoutdrain\killtable_20260827\addp5.py
+GXEMUL-SEC/regress\artifacts\wdcdataoutdrain\killtable_20260827\addlocal.py
+GXEMUL-SEC/regress\artifacts\wdcdataoutdrain\killtable_20260827\addflush.py
+GXEMUL-SEC/regress\artifacts\wdcdataoutdrain\killtable_20260827\addannounce.py
+GXEMUL-SEC/regress\artifacts\wdcdataoutdrain\killtable_20260827\addaltctl.py
+GXEMUL-SEC/regress\artifacts\wdcdataoutdrain\killtable_20260827\addaccept.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\killtable13\m88k_exc_probe.frozen13.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\killtable_opus_p8\mutate_p8.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\killtable_opus_p8\m88k_exc_probe.frozenP8.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\killtable_opus_p8\m88k_exc_probe.censusP8.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\killtable5\mut_m88kexc.v5.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\killtable5\m88k_exc_probe.frozen5.py
+GXEMUL-SEC/regress\artifacts\wdccmdreset\killtable_20260827\repin479.py
+GXEMUL-SEC/regress\artifacts\wdccmdreset\killtable_20260827\port479.py
+GXEMUL-SEC/regress\artifacts\wdccmdreset\killtable_20260827\mk479.py
+GXEMUL-SEC/regress\artifacts\wdccmdreset\killtable_20260827\fix479.py
+GXEMUL-SEC/regress\artifacts\wdccmdreset\killtable_20260827\addwm.py
+GXEMUL-SEC/regress\artifacts\wdccmdreset\killtable_20260827\addmut479.py
+GXEMUL-SEC/regress\artifacts\wdccmdreset\killtable_20260827\addle.py
+GXEMUL-SEC/regress\artifacts\wdccmdreset\killtable_20260827\adddevctl.py
+GXEMUL-SEC/regress\artifacts\wdccmdreset\killtable_20260827\addbadlencdb.py
+GXEMUL-SEC/regress\artifacts\wdccmdreset\killtable_20260827\add479rows.py
+GXEMUL-SEC/regress\artifacts\wdcaddtoinbufbound\rung3_20260830\mkfix.py
+GXEMUL-SEC/regress\artifacts\wdcaddtoinbufbound\rung3_20260830\mkcd.py
+GXEMUL-SEC/regress\artifacts\wdcaddtoinbufbound\rung3_20260830\frozen_wave_20260830_102209.py
+GXEMUL-SEC/regress\artifacts\wdcaddtoinbufbound\rung3_20260830\addtoinbuf_rung3_probe.py
+GXEMUL-SEC/regress\artifacts\sgidewidth\opus_witness_20260831\gxdew_probe_frozen.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\killtable8\mut_m88kexc.v8.py
+GXEMUL-SEC/regress\artifacts\sgidewidth\opus_witness_20260831\gxdew_probe2_frozen.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\killtable8\m88k_exc_probe.frozen8.py
+GXEMUL-SEC/regress\artifacts\sgidewidth\opus_witness_20260831\gxdew_mz_frozen.py
+GXEMUL-SEC/regress\artifacts\sgidewidth\opus_witness_20260831\gxdew_mzp_frozen.py
+GXEMUL-SEC/regress\artifacts\sgidewidth\opus_witness_20260831\gxdew_mutate2_frozen.py
+GXEMUL-SEC/regress\artifacts\sgidewidth\opus_witness_20260831\gxdew_mr_frozen.py
+GXEMUL-SEC/regress\artifacts\sgidewidth\opus_witness_20260831\gxdew_kill_frozen.py
+GXEMUL-SEC/regress\artifacts\sgidewidth\opus_witness_20260831\gxdew_kill2_frozen.py
+GXEMUL-SEC/regress\artifacts\sgidewidth\opus_p2_20260831\probe_frozen.py
+GXEMUL-SEC/regress\artifacts\sgidewidth\opus_p2_20260831\mutate4.py
+GXEMUL-SEC/regress\artifacts\sgidewidth\opus_p2_20260831\mutate3.py
+GXEMUL-SEC/regress\artifacts\sgidewidth\opus_p2_20260831\mutate2.py
+GXEMUL-SEC/regress\artifacts\sgidewidth\opus_p2_20260831\mutate.py
+GXEMUL-SEC/regress\artifacts\sgidewidth\opus_p2_20260831\disc.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\killtable4\m88k_exc_probe.frozen4.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\killtable7\mut_m88kexc.v7.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\killtable7\m88k_exc_probe.frozen7.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\killtable3\m88k_exc_probe.frozen3.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\m88k_exc_probe.v20.frozen.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\m88k_exc_probe.v17.frozen.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\m88k_exc_probe.v16.frozen.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\killtable6\mut_m88kexc.v6.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\killtable6\m88k_exc_probe.frozen6.py
+GXEMUL-SEC/regress\artifacts\lunaabsentcpu\opus_p4_table_v5\probe_v5.py
+GXEMUL-SEC/regress\artifacts\lunaabsentcpu\opus_p4_table_v5\probe_v4.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\kimi_p5\m88k_exc_probe_v5p2.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\m88k_exc_probe.v21.frozen.py
+GXEMUL-SEC/regress\artifacts\shortread\round_20260827\shortread_witness.py
+GXEMUL-SEC/regress\artifacts\wdccdbmidxfer\killtable2_20260827\mk477b.py
+GXEMUL-SEC/regress\artifacts\lunaabsentcpu\opus_p4_table\luna_absentcpu_probe.frozen.py
+GXEMUL-SEC/regress\artifacts\sgirandompixel\witness_20260906\probe.frozen.py
+GXEMUL-SEC/regress\artifacts\lunaabsentcpu\luna_absentcpu_probe.v8.frozen.py
+GXEMUL-SEC/regress\artifacts\lunaabsentcpu\luna_absentcpu_probe.v7.frozen.py
+GXEMUL-SEC/regress\artifacts\lunaabsentcpu\luna_absentcpu_probe.v6.frozen.py
+GXEMUL-SEC/regress\artifacts\lunaabsentcpu\luna_absentcpu_probe.v5.py
+GXEMUL-SEC/regress\artifacts\lunaabsentcpu\luna_absentcpu_probe.v4.py
+GXEMUL-SEC/regress\artifacts\lunaabsentcpu\luna_absentcpu_probe.v3.py
+GXEMUL-SEC/regress\artifacts\lunaabsentcpu\luna_absentcpu_probe.v2.py
+GXEMUL-SEC/regress\artifacts\lunaabsentcpu\luna_absentcpu_probe.asrun.py
+GXEMUL-SEC/regress\artifacts\sgideprimop\killtable_20260903_table13_xfer\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\lunaabsentcpu\killtable\mut_lunaabs.py
+GXEMUL-SEC/regress\artifacts\lunaabsentcpu\killtable\luna_absentcpu_probe.frozen.py
+GXEMUL-SEC/regress\artifacts\lunaabsentcpu\killtable\fix_lunaabs.py
+GXEMUL-SEC/regress\artifacts\sgideprimop\killtable_20260903_table12_regs\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\sgirandompixel\killtable\probe.frozen.py
+GXEMUL-SEC/regress\artifacts\lunaabsentcpu\killtable5\luna_absentcpu_probe.frozen.py
+GXEMUL-SEC/regress\artifacts\sgirebufuninit\scan_len.py
+GXEMUL-SEC/regress\artifacts\sgirebufuninit\scan_fill.py
+GXEMUL-SEC/regress\artifacts\landiskaux\census_20260827\watch_2c.py
+GXEMUL-SEC/regress\artifacts\landiskaux\census_20260827\mk_censusB.py
+GXEMUL-SEC/regress\artifacts\landiskaux\census_20260827\analyse_hook.py
+GXEMUL-SEC/regress\artifacts\landiskaux\census_20260827\census.py
+GXEMUL-SEC/regress\artifacts\landiskaux\census_20260827\devlist.py
+GXEMUL-SEC/regress\artifacts\lunaabsentcpu\killtable4\luna_absentcpu_probe.frozen.py
+GXEMUL-SEC/regress\artifacts\lunaabsentcpu\killtable2\mut_lunaabs.v3.py
+GXEMUL-SEC/regress\artifacts\lunaabsentcpu\killtable2\luna_absentcpu_probe.frozen.py
+GXEMUL-SEC/regress\artifacts\lunaabsentcpu\killtable2\fix_lunaabs.v2.py
+GXEMUL-SEC/regress\artifacts\lunaabsentcpu\killtable3\luna_absentcpu_probe.frozen.py
+GXEMUL-SEC/regress\artifacts\lunaabsentcpu\killtable3\fix_lunaabs.v2b.py
+GXEMUL-SEC/regress\artifacts\lunaabsentcpu\killtable3\mut_lunaabs.v4.py
+GXEMUL-SEC/regress\artifacts\sgideprimop\gapB_20260903\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\pcc2_width_witness.asrun.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\pcc2_operator_reach.asrun.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\pass9_seats_20260904\opus\mutate.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\pass9_seats_20260904\opus\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\pass9_seats_20260904\opus\cmp_names.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\pass9_seats_20260904\opus\audit_gate.py
+GXEMUL-SEC/regress\artifacts\sgideprimop\killtable_20260902_table11_closure\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\sgideprimop\killtable_20260902_table4\negctl_n25_rectset_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\opus_pass3_20260903\pass3c\probe82.frozen.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\pass4_seats_20260903\opus_reader\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\pass8_seats_20260904\opus\mutate.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\pass8_seats_20260904\opus\mk_f1.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\pass11_seats_20260904\opus\control_iclr.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\pass4_seats_20260903\fable\probe_dry.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\pass4_seats_20260903\fable\probe_copy.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\pass4_seats_20260903\fable\dump_names.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\opus_pass3_20260903\pass3\probe.frozen.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\pass10_seats_20260904\opus\mutate.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\pass10_seats_20260904\opus\diffcheck.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\pass10_seats_20260904\opus\cmpnames.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\pass7_seats_20260904\opus\gatecheck.py
+GXEMUL-SEC/regress\artifacts\pcc2defaultkill\witness_20260905\defaultkill_witness.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\pass3_seats_20260903\opus_reader\nonequiv_check.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\pass3_seats_20260903\opus_reader\mutate.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\killtable_20260903\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\pass5_seats_20260903\opus_reader\xcheck.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\pass5_seats_20260903\opus_reader\mutate.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\pass5_seats_20260903\opus_reader\discriminator.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\pass5_seats_20260903\fable\pty_ret0_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\pass5_seats_20260903\fable\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\pass5_seats_20260903\opus_reader\artifacts\gxopus_p5_disc.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\pass5_seats_20260903\opus_reader\artifacts\discriminator.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\pass6_seats_20260903\opus\mutate.py
+GXEMUL-SEC/regress\artifacts\pcc2defaultkill\killtable_20260905\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2defaultkill\killtable_20260905\pcc2_width_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2defaultkill\killtable_20260905\run1_oldrowformat\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2defaultkill\killtable_20260905\run1_oldrowformat\pcc2_width_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2defaultkill\pass4_seats\opus_logs\offsets.py
+GXEMUL-SEC/regress\artifacts\pcc2defaultkill\pass4_seats\opus_logs\mutate.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\killtable2_20260903\part11\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\killtable2_20260903\part13_aborted\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2defaultkill\pass3_seats\opus_logs\edit_M_WRVAL0.py
+GXEMUL-SEC/regress\artifacts\pcc2defaultkill\pass3_seats\opus_logs\edit_M_WRDATA0.py
+GXEMUL-SEC/regress\artifacts\pcc2defaultkill\pass3_seats\opus_logs\edit_M_RELOAD.py
+GXEMUL-SEC/regress\artifacts\pcc2defaultkill\pass3_seats\opus_logs\edit_M_LATCHOFF.py
+GXEMUL-SEC/regress\artifacts\pcc2defaultkill\pass3_seats\opus_logs\edit_M_LASTBYTE.py
+GXEMUL-SEC/regress\artifacts\pcc2defaultkill\pass3_seats\opus_logs\edit_M_BACKEDLOW.py
+GXEMUL-SEC/regress\artifacts\pcc2defaultkill\killtable3_20260905\pcc2_width_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\killtable2_20260903\part10_aborted\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2defaultkill\killtable4_20260905\pcc2_width_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2defaultkill\killtable3_20260905\old23\pcc2_width_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2defaultkill\killtable3_20260905\old23\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2defaultkill\killtable3_20260905\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\killtable2_20260903\part9\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2defaultkill\pass4_seats\opus_logs\logs\len4_witness.py
+GXEMUL-SEC/regress\artifacts\pcc2defaultkill\pass4_seats\opus_logs\len4_witness.py
+GXEMUL-SEC/regress\artifacts\pcc2defaultkill\pass4_seats\opus_logs\gatecheck.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\killtable2_20260903\part13\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2defaultkill\killtable4_20260905\old36\pcc2_width_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2defaultkill\killtable4_20260905\old36\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2defaultkill\killtable4_20260905\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\killtable2_20260903\part10\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\killtable2_20260903\part5\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\killtable2_20260903\part12\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\killtable2_20260903\part2\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\killtable2_20260903\part13_partial\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\killtable2_20260903\part3c\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\killtable2_20260903\part3\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\killtable2_20260903\part8\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\killtable2_20260903\part4\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\killtable2_20260903\part6b\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\killtable2_20260903\part3b\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\killtable2_20260903\part7b\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\killtable2_20260903\part6\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\killtable2_20260903\part7\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\killtable2_20260903\part5b\frozen_probe.py
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg --files GXEMUL-SEC/src -g '*memory_rw*'" in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n 'DE_MODE_(TYPE|BUF|PIX)|MTE_MODE' GXEMUL-SEC/src/include/thirdparty/crmfbreg.h;" in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n 'horrible_getputpixel|MTE_MODE|mte_mode|src_mode|dst_mode|bufdepth|for \\(|while \\(' GXEMUL-SEC/src/devices/dev_sgi_re.c" in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg --files --max-depth 1 -g '*.py' -g '*sgi*' -g '*mem*'" in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\regress
+ succeeded in 276ms:
+240:#define CRIME_MTE_MODE		0x3000
+253:/* CRIME_MTE_MODE */
+254:#define MTE_MODE_DST_ECC	0x00000001	/* enable ECC in DST */
+255:#define MTE_MODE_SRC_ECC	0x00000002	/* enable ECC in SRC */
+256:#define MTE_MODE_DST_BUF_MASK	0x0000001c
+265:#define MTE_MODE_SRC_BUF_MASK	0x000000e0
+267:#define MTE_MODE_DEPTH_MASK	0x00000300
+272:#define MTE_MODE_STIPPLE	0x00000400
+273:#define MTE_MODE_COPY		0x00000800	/* 1 - copy, 0 - clear dst */
+325:#define DE_MODE_BUFDEPTH_8	0x00000000
+326:#define DE_MODE_BUFDEPTH_16	0x00000100
+327:#define DE_MODE_BUFDEPTH_32	0x00000200
+328:#define DE_MODE_TYPE_CI		0x00000000
+329:#define DE_MODE_TYPE_RGB	0x00000010
+330:#define DE_MODE_TYPE_RGBA	0x00000020
+331:#define DE_MODE_TYPE_ABGR	0x00000030
+332:#define DE_MODE_TYPE_YCRCB	0x000000f0
+333:#define DE_MODE_TYPE_MASK	0x000000f0
+334:#define DE_MODE_PIXDEPTH_8	0x00000000
+335:#define DE_MODE_PIXDEPTH_16	0x00000004
+336:#define DE_MODE_PIXDEPTH_32	0x00000008
+
+ succeeded in 275ms:
+123:	/*  sgirandompixel: horrible_getputpixel()'s unimplemented-mode arm.  ITS
+171: *  horrible_getputpixel():
+184:void horrible_getputpixel(int put, struct cpu* cpu, struct sgi_re_data* d,
+188:	int bufdepth = 1 << ((mode >> 8) & 3); 
+190:	// dst_mode (see NetBSD's crmfbreg.h):
+202:	int tilewidth_in_pixels = 512 / bufdepth;
+210:	int xofs = (x % tilewidth_in_pixels) * bufdepth;
+261:			/*  `dst_mode' is kept from the original text although the
+262:			    parameter is also passed as src_mode on a GET: the probe
+267:			fatal("[ sgi_re: unimplemented dst_mode %i for "
+268:			    "horrible_getputpixel (%s), x=%i y=%i; declined "
+276:		//printf("dst_mode %i, tile_nr = %i,  tileptr = 0x%llx\n", dst_mode, tile_nr, (long long)tileptr);
+277:		//fatal("sgi gbe horrible_getputpixel: unexpected non-set high bit of tileptr?\n");
+284:	uint8_t buf[8];		/* #100: bufdepth can be 8 = 1<<((mode>>8)&3) */
+317:		    buf, bufdepth, MEM_WRITE, NO_EXCEPTIONS | PHYSICAL);
+320:		    buf, bufdepth, MEM_READ, NO_EXCEPTIONS | PHYSICAL);
+402:	 *     `for (hwi = 0; hwi < len; ...)' loop, so a narrower access simply
+430:			for (size_t hwi = 0; hwi < len; hwi += sizeof(uint16_t)) {
+449:			for (size_t hwi = 0; hwi < len; hwi += sizeof(uint16_t)) {
+468:			for (size_t hwi = 0; hwi < len; hwi += sizeof(uint16_t)) {
+487:			for (size_t hwi = 0; hwi < len; hwi += sizeof(uint16_t)) {
+702:	uint32_t dst_mode = d->de_reg[(CRIME_DE_MODE_DST - 0x2000) / sizeof(uint32_t)];
+703:	uint32_t src_mode = d->de_reg[(CRIME_DE_MODE_SRC - 0x2000) / sizeof(uint32_t)];
+728:	    " drawmode=0x%x src_mode=0x%x dst_mode=0x%x x1=%i y1=%i"
+730:	    op, drawmode, src_mode, dst_mode, x1, y1, x2, y2, fg, bg, pattern);
+732:	// bufdepth = 1, 2, or 4.
+733:	// int dst_bufdepth = 1 << ((dst_mode >> 8) & 3);
+734:	int src_bufdepth = 1 << ((src_mode >> 8) & 3);
+747:		src_is_linear = ((src_mode & 0x00001c00) >> 10) > 3;
+757:		if (step_x != src_bufdepth || (step_y != 0 && step_y != 1)) {
+758:			fatal("[ sgi_de: unimplemented XFER addr_src=0x%x src_bufdepth=%i "
+761:				addr_src, src_bufdepth, strd_src, step_x, step_y, addr_dst, strd_dst);
+809:		for (int i = 0; i < ((op & DE_PRIM_LINE_SKIP_END)? linelen : linelen+1); ++i) {
+817:				horrible_getputpixel(0, cpu, d, x, y, &oldcolor, dst_mode);
+863:				horrible_getputpixel(1, cpu, d, x, y, &color, dst_mode);
+871:		for (y = y1; y != endy; y = (y + dy) & 0x7ff) {
+873:			for (x = x1; x != endx; x = (x + dx) & 0x7ff) {
+878:					horrible_getputpixel(0, cpu, d, x, y, &oldcolor, dst_mode);
+883:					horrible_getputpixel(0, cpu, d,	src_x, src_y, &color, src_mode);
+929:					horrible_getputpixel(1, cpu, d, x, y, &color, dst_mode);
+1302:	uint32_t mode = d->mte_reg[(CRIME_MTE_MODE - 0x3000) / sizeof(uint32_t)];
+1311:	int depth = 8 << ((mode & MTE_MODE_DEPTH_MASK) >> MTE_DEPTH_SHIFT);
+1312:	int src = (mode & MTE_MODE_SRC_BUF_MASK) >> MTE_SRC_TLB_SHIFT;
+1328:	if (mode & MTE_MODE_STIPPLE) {
+1329:		fatal("[ sgi_mte: unimplemented MTE_MODE_STIPPLE ]");
+1333:	int src_tlb = (mode & MTE_MODE_SRC_BUF_MASK) >> MTE_SRC_TLB_SHIFT;
+1334:	int dst_tlb = (mode & MTE_MODE_DST_BUF_MASK) >> MTE_DST_TLB_SHIFT;
+1365:			uint32_t src_mode = (src_tlb << 10) + (((mode & MTE_MODE_DEPTH_MASK) >> MTE_DEPTH_SHIFT) << 8);
+1366:			uint32_t dst_mode = (dst_tlb << 10) + (((mode & MTE_MODE_DEPTH_MASK) >> MTE_DEPTH_SHIFT) << 8);
+1372:				src_mode |= DE_MODE_TYPE_RGBA;
+1373:				dst_mode |= DE_MODE_TYPE_RGBA;
+1377:			for (int y = y1; y != y2+dy; y += dy) {
+1381:					if (mode & MTE_MODE_COPY) {
+1382:						horrible_getputpixel(0, cpu, d,
+1383:							src_x, src_y, &bg, src_mode);
+1387:					horrible_getputpixel(1, cpu, d, x, y, &bg, dst_mode);
+1397:		if (mode & MTE_MODE_COPY) {
+1398:			fatal("[ sgi_mte: unimplemented MTE_MODE_COPY ]");
+1456:		while (dstlen != 0) {
+1473:			for (int i = 0; i < 32; ++i) {
+1542:	case CRIME_MTE_MODE:
+1543:		debug("[ sgi_mte: %s CRIME_MTE_MODE: 0x%016llx ]\n",
+
+ succeeded in 321ms:
+GXEMUL-SEC/src\cpus\memory_rw.c
+
+ succeeded in 337ms:
+wdc_latch_census.py
+wdc_flood_probe.py
+wdc_altoffset_sig_probe.py
+wdc_altoffset_probe.py
+wdc_altoffset_4bit_probe.py
+wdc_addtoinbuf_probe.py
+sh_tlbmulti_probe.py
+sh_rounding_probe.py
+sh_pclock_probe.py
+sh_iprbcd_probe.py
+sh_intprio_probe.py
+sh_halt_probe.py
+sh4_val_witness.py
+sh4_val_probe.py
+sh4_tlbda2_witness.py
+sh4_tlbda2_probe.py
+sh4_sci_witness.py
+sh4_sci_probe.py
+sh4_rtcsr_witness.py
+sh4_rtcsr_probe.py
+sh4_pcic_probe.py
+sh4_chcr_witness.py
+sh4_chcr_probe.py
+sh4_bsc_width_probe.py
+sh4pcic_witness.py
+sgi_re_width_probe.py
+sgi_re_unmapped_probe.py
+sgi_re_rgb_probe.py
+sgi_re_randompixel_probe.py
+sgi_eaddr_probe.py
+sgi_de_width_probe.py
+sgi_de_primop_probe.py
+selftest_logdir.py
+selftest_inactivity.py
+selftest_budget.py
+selftest_absorb.py
+selfmutant.py
+readiness_predicate_test.py
+ppc_rounding_probe.py
+ppc_halt_probe.py
+pit8253_latch_probe.py
+pcc2_width_witness.py
+pcc2_width_probe.py
+pcc2_default_probe.py
+mips_subnorm_probe.py
+mips_rounding_probe.py
+mips_fold_probe.py
+mips_fixedmode_probe.py
+m88k_rounding_probe.py
+m88k_idle_probe.py
+m88k_exc_probe.py
+m8820x_sites_probe.py
+luna_intmask_probe.py
+luna_absentcpu_probe.py
+hpcmips_ctor_probe.py
+hpcabort_witness.py
+gdrom_toclen_probe.py
+gdrom_default_probe.py
+gdrom_decline_probe.py
+gdrom_data_probe.py
+gdrom_cond_probe.py
+footbridge_sites_probe.py
+fbpending_witness.py
+fbpending_drain_probe.py
+drive_guest.py
+diff_memory_rw.c
+diag_div_sweep.py
+asic_badaddr_probe.py
+alpha_harness_probe.py
+arm_fold_marker_probe.py
+absorb_census.py
+arm_writeback_probe.py
+arm_flags_probe.py
+arm_strlen_probe.py
+arm_memcpy_probe.py
+arm_endian_probe.py
+arm_idle_probe.py
+arcbios_shift_probe.py
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n -C 15 'zero-fill|uninit-read|memset\\(data|MEM_READ|return 0|res ==|res <' GXEMUL-SEC/src/cpus/memory_rw.c" in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n -B 9 -A 30 'MTE_MODE_DEPTH_MASK|DE_MODE_BUFDEPTH_8' GXEMUL-SEC/src/include/thirdparty/crmfbreg.h" in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n -A 119 '"'^void mte'"' GXEMUL-SEC/src/devices/dev_sgi_re.c" in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n '"'^(def |class |[A-Z_]+'"\\s*=)|MEM_WRITE|count|sent|row|bufdepth|depth|linear|tiled|0x[0-9a-fA-F]{3,}' sgi_re_rgb_probe.py sgi_re_randompixel_probe.py" in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\regress
+ succeeded in 182ms:
+36- *  TODO: Cleanup the "ok" variable usage!
+37- */
+38-
+39-
+40-/*
+41- *  memory_rw():
+42- *
+43- *  Read or write data from/to memory.
+44- *
+45- *	cpu		the cpu doing the read/write
+46- *	mem		the memory object to use
+47- *	vaddr		the virtual address
+48- *	data		a pointer to the data to be written to memory, or
+49- *			a placeholder for data when reading from memory
+50- *	len		the length of the 'data' buffer
+51: *	writeflag	set to MEM_READ or MEM_WRITE
+52- *	misc_flags	CACHE_{NONE,DATA,INSTRUCTION} | other flags
+53- *
+54- *  If the address indicates access to a memory mapped device, that device'
+55- *  read/write access function is called.
+56- *
+57- *  This function should not be called with cpu == NULL.
+58- *
+59- *  Returns one of the following:
+60- *	MEMORY_ACCESS_FAILED
+61- *	MEMORY_ACCESS_OK
+62- *
+63- *  (MEMORY_ACCESS_FAILED is 0.)
+64- */
+65-
+66-/*
+--
+199-		    at two million chunks.  No caller passes anything remotely like it (the
+200-		    largest in the tree are PHYSICAL and exempt), so the case is recorded
+201-		    and filed rather than handled.  */
+202-		while (len > granule - offset) {
+203-			size_t head = granule - offset;
+204-
+205-			if (!MEMORY_RW_ONE_PAGE(cpu, mem, vaddr, data, head,
+206-			    writeflag, misc_flags)) {
+207-				/*  #244 PROMISES THE WHOLE READ BUFFER, AND SPLITTING BROKE
+208-				    THAT: the worker zeroes only the chunk IT was given, so a
+209-				    failure before the last chunk used to leave the caller's
+210-				    remaining bytes untouched -- uninitialised host stack, for
+211-				    a caller that ignores the return value.  Unsplit, one call
+212-				    covered the whole length.  Zero the rest here so the
+213-				    guarantee is the same as it was.  */
+214:				if (writeflag == MEM_READ)
+215:					memset(data, 0, len);
+216-				return MEMORY_ACCESS_FAILED;
+217-			}
+218-
+219-			vaddr += head;
+220-			data += head;
+221-			len -= head;
+222-			offset = 0;
+223-		}
+224-	}
+225-
+226-	return MEMORY_RW_ONE_PAGE(cpu, mem, vaddr, data, len, writeflag, misc_flags);
+227-}
+228-
+229-
+230-static int MEMORY_RW_ONE_PAGE(struct cpu *cpu, struct memory *mem, uint64_t vaddr,
+--
+249-		    (writeflag? FLAG_WRITEFLAG : 0) +
+250-		    (no_exceptions? FLAG_NOEXCEPTIONS : 0)
+251-		    + (misc_flags & MEMORY_USER_ACCESS)
+252-		    + (cache==CACHE_INSTRUCTION? FLAG_INSTR : 0));
+253-
+254-		/*
+255-		 *  If the translation caused an exception, or was invalid in
+256-		 *  some way, then simply return without doing the memory
+257-		 *  access:
+258-		 */
+259-		if (!ok) {
+260-			/*  #244: A failed (or NO_EXCEPTIONS) translation leaves
+261-			    the caller's read buffer untouched; zero it so
+262-			    callers that ignore the return value (e.g. the DEC
+263-			    PROM string helpers) consume deterministic 0 bytes
+264:			    instead of uninitialised host stack. Same zero-fill
+265-			    ethos as the failed-device-read path (#95).  */
+266:			if (writeflag == MEM_READ)
+267:				memset(data, 0, len);
+268-			return MEMORY_ACCESS_FAILED;
+269-		}
+270-	}
+271-
+272-	/*
+273-	 *  #250: data write-watchpoint. Checked here, before the device /
+274-	 *  cache / RAM dispatch (several of which return early — notably the
+275-	 *  R3000 cached path via memory_cache_R3000()), so every store that
+276-	 *  reaches this slow path is covered. Watched pages are kept off the
+277-	 *  fast store table by update_translation_table(), and R3000 cached
+278-	 *  data already comes through here. Show the store (writer pc, target,
+279-	 *  width, value) and request entry into the debugger after the current
+280-	 *  instruction, via the same about_to_enter_single_step mechanism as
+281-	 *  subsystem breakpoints. NOP unless a watchpoint is set.
+282-	 */
+--
+474-
+475-		start = 0; end = mem->n_mmapped_devices - 1;
+476-		i = mem->last_accessed_device;
+477-
+478-		/*  Scan through all devices:  */
+479-		do {
+480-			if (paddr >= mem->devices[i].baseaddr &&
+481-			    paddr < mem->devices[i].endaddr) {
+482-				/*  Found a device, let's access it:  */
+483-				mem->last_accessed_device = i;
+484-
+485-				/*  #95: zero the caller's buffer up front on a read
+486-				    so a device handler that fills only part of it --
+487-				    or whose access is len-clamped just below -- can
+488-				    never hand back uninitialised host memory to the
+489:				    guest.  Root-cause fix for the uninit-read class
+490-				    (cf. per-device #91/#93/#94).  */
+491:				if (writeflag == MEM_READ)
+492:					memset(data, 0, len);
+493-
+494-				paddr -= mem->devices[i].baseaddr;
+495-				if (paddr + len > mem->devices[i].length) {
+496-					/*  Note the truncation per the
+497-					    warn-loudly ethos, but only at
+498-					    debug verbosity (-v) and at most
+499-					    8 times (single-threaded), since
+500-					    probing at the end of a device's
+501-					    mapped range is common and benign
+502:					    (cf. the unwarned zero-fill in
+503-					    #95/#119 above).  */
+504-					static int n_trunc_msgs = 0;
+505-					if (ENOUGH_VERBOSITY(SUBSYS_MEMORY,
+506-					    VERBOSITY_DEBUG) &&
+507-					    n_trunc_msgs < 8) {
+508-						n_trunc_msgs ++;
+509-						debugmsg_cpu(cpu,
+510-						    SUBSYS_MEMORY,
+511-						    mem->devices[i].name,
+512-						    VERBOSITY_DEBUG,
+513-						    "%s truncated at end of"
+514-						    " device: offset 0x%llx,"
+515-						    " len %i -> %i",
+516-						    writeflag == MEM_WRITE ?
+517-						    "write" : "read",
+--
+580-						    orig_paddr & ~offset_mask);
+581-				}
+582-
+583-				res = 0;
+584-				if (!no_exceptions || (mem->devices[i].flags &
+585-				    DM_READS_HAVE_NO_SIDE_EFFECTS)) {
+586-					bool running_before_device_access = cpu->running;
+587-					res = mem->devices[i].f(cpu, mem, paddr,
+588-					    data, len, writeflag,
+589-					    mem->devices[i].extra);
+590-
+591-					if (running_before_device_access && !cpu->running)
+592-						return MEMORY_ACCESS_FAILED;
+593-				}
+594-
+595:				if (res == 0)
+596-					res = -1;
+597-
+598-				/*
+599-				 *  If accessing the memory mapped device
+600-				 *  failed, then return with an exception.
+601-				 *  (Architecture specific.)
+602-				 */
+603:				if (res <= 0 && !no_exceptions) {
+604-					debug("[ %s device '%s' addr %08lx "
+605-					    "failed ]\n", writeflag?
+606-					    "writing to" : "reading from",
+607-					    mem->devices[i].name, (long)paddr);
+608-#ifdef MEM_MIPS
+609-					mips_cpu_exception(cpu,
+610-					    cache == CACHE_INSTRUCTION?
+611-					    EXCEPTION_IBE : EXCEPTION_DBE,
+612-					    0, vaddr, 0, 0, 0, 0);
+613-#endif
+614-#ifdef MEM_M88K
+615-					/*  TODO: This is enough for
+616-					    OpenBSD/mvme88k's badaddr()
+617-					    implementation... but the
+618-					    faulting address should probably
+--
+655-		/*  R4000 etc  */
+656-		/*  TODO  */
+657-		;
+658-	}
+659-#endif	/*  MEM_MIPS  */
+660-
+661-
+662-	/*  Outside of physical RAM?  */
+663-	if (paddr >= mem->physical_max) {
+664-#ifdef MEM_MIPS
+665-		if ((paddr & 0xffffc00000ULL) == 0x1fc00000) {
+666-			/*  Ok, this is PROM stuff  */
+667-		} else if ((paddr & 0xfffff00000ULL) == 0x1ff00000) {
+668-			/*  Sprite reads from this area of memory...  */
+669-			/*  TODO: is this still correct?  */
+670:			if (writeflag == MEM_READ)
+671:				memset(data, 0, len);
+672-			goto do_return_ok;
+673-		} else
+674-#endif /* MIPS */
+675-		{
+676-			if (paddr >= mem->physical_max && !no_exceptions)
+677-				if (memory_warn_about_unimplemented_addr
+678-				    (cpu, mem, writeflag, paddr, len))
+679-					return MEMORY_ACCESS_FAILED;
+680-
+681:			if (writeflag == MEM_READ) {
+682-				/*  Return all zeroes? (Or 0xff? TODO)  */
+683:				memset(data, 0, len);
+684-
+685-#if 0
+686-/*
+687- *  NOTE: This code prevents a PROM image from a real 5000/200 from booting.
+688- *  I think I introduced it because it was how some guest OS (NetBSD?) detected
+689- *  the amount of RAM on some machine.
+690- *
+691- *  TODO: Figure out if it is not needed anymore, and remove it completely.
+692- */
+693-#ifdef MEM_MIPS
+694-				/*
+695-				 *  For real data/instruction accesses, cause
+696-				 *  an exceptions on an illegal read:
+697-				 */
+698-				if (cache != CACHE_NONE && !no_exceptions &&
+--
+716-
+717-	/*
+718-	 *  Uncached access:
+719-	 *
+720-	 *  1)  Translate the physical address to a host address.
+721-	 *
+722-	 *  2)  Insert this virtual->physical->host translation into the
+723-	 *      fast translation arrays (using update_translation_table()).
+724-	 *
+725-	 *  3)  If this was a Write, then invalidate any code translations
+726-	 *      in that page.
+727-	 */
+728-	memblock = memory_paddr_to_hostaddr(mem, paddr & ~offset_mask,
+729-	    writeflag);
+730-	if (memblock == NULL) {
+731:		if (writeflag == MEM_READ)
+732:			memset(data, 0, len);
+733-		goto do_return_ok;
+734-	}
+735-
+736-	offset = paddr & offset_mask;
+737-
+738-	if (cpu->update_translation_table != NULL && !dyntrans_device_danger
+739-#ifdef MEM_MIPS
+740-	    /*  Ugly hack for R2000/R3000 caches:  */
+741-	    && (cpu->cd.mips.cpu_type.mmu_model != MMU3K ||
+742-            !(cpu->cd.mips.coproc[0]->reg[COP0_STATUS] & MIPS1_ISOL_CACHES))
+743-#endif
+744-	    && !(ok & MEMORY_NOT_FULL_PAGE)
+745-	    && !no_exceptions)
+746-		cpu->update_translation_table(cpu, vaddr & ~offset_mask,
+747-		    memblock, (misc_flags & MEMORY_USER_ACCESS) |
+
+ succeeded in 184ms:
+258-	#define MTE_TLB_B	1
+259-	#define MTE_TLB_C	2
+260-	#define MTE_TLB_TEX	3
+261-	#define MTE_TLB_LIN_A	4
+262-	#define MTE_TLB_LIN_B	5
+263-	#define MTE_TLB_CLIP	6
+264-	#define MTE_DST_TLB_SHIFT 2
+265-#define MTE_MODE_SRC_BUF_MASK	0x000000e0
+266-	#define MTE_SRC_TLB_SHIFT 5
+267:#define MTE_MODE_DEPTH_MASK	0x00000300
+268-	#define MTE_DEPTH_8	0
+269-	#define MTE_DEPTH_16	1
+270-	#define MTE_DEPTH_32	2
+271-	#define MTE_DEPTH_SHIFT 8
+272-#define MTE_MODE_STIPPLE	0x00000400
+273-#define MTE_MODE_COPY		0x00000800	/* 1 - copy, 0 - clear dst */
+274-
+275-/* drawing engine from 0x2000 */
+276-#define CRIME_DE_MODE_SRC	0x2000
+277-#define CRIME_DE_MODE_DST	0x2008
+278-#define CRIME_DE_CLIPMODE	0x2010
+279-#define CRIME_DE_DRAWMODE	0x2018
+280-#define CRIME_DE_SCRMASK0	0x2020
+281-#define CRIME_DE_SCRMASK1	0x2028
+282-#define CRIME_DE_SCRMASK2	0x2030
+283-#define CRIME_DE_SCRMASK3	0x2038
+284-#define CRIME_DE_SCRMASK4	0x2040
+285-#define CRIME_DE_SCISSOR	0x2048
+286-#define CRIME_DE_WINOFFSET_SRC	0x2050	/* x in upper, y in lower 16 bit */
+287-#define CRIME_DE_WINOFFSET_DST	0x2058
+288-#define CRIME_DE_PRIMITIVE	0x2060
+289-#define CRIME_DE_X_VERTEX_0	0x2070
+290-#define CRIME_DE_X_VERTEX_1	0x2074
+291-#define CRIME_DE_X_VERTEX_2	0x2078
+292-#define CRIME_DE_GL_VERTEX_0_X	0x2080
+293-#define CRIME_DE_GL_VERTEX_0_Y	0x2084
+294-#define CRIME_DE_GL_VERTEX_1_X	0x2088
+295-#define CRIME_DE_GL_VERTEX_1_Y	0x208c
+296-#define CRIME_DE_GL_VERTEX_2_X	0x2090
+297-#define CRIME_DE_GL_VERTEX_2_Y	0x2094
+--
+316-#define CRIME_DE_START		0x0800	/* OR this to a register address in
+317-					 * order to start a command */
+318-
+319-/* CRIME_DE_MODE_* */
+320-#define DE_MODE_TLB_A		0x00000000
+321-#define DE_MODE_TLB_B		0x00000400
+322-#define DE_MODE_TLB_C		0x00000800
+323-#define DE_MODE_LIN_A		0x00001000
+324-#define DE_MODE_LIN_B		0x00001400
+325:#define DE_MODE_BUFDEPTH_8	0x00000000
+326-#define DE_MODE_BUFDEPTH_16	0x00000100
+327-#define DE_MODE_BUFDEPTH_32	0x00000200
+328-#define DE_MODE_TYPE_CI		0x00000000
+329-#define DE_MODE_TYPE_RGB	0x00000010
+330-#define DE_MODE_TYPE_RGBA	0x00000020
+331-#define DE_MODE_TYPE_ABGR	0x00000030
+332-#define DE_MODE_TYPE_YCRCB	0x000000f0
+333-#define DE_MODE_TYPE_MASK	0x000000f0
+334-#define DE_MODE_PIXDEPTH_8	0x00000000
+335-#define DE_MODE_PIXDEPTH_16	0x00000004
+336-#define DE_MODE_PIXDEPTH_32	0x00000008
+337-#define DE_MODE_DOUBLE_PIX	0x00000002
+338-#define DE_MODE_DOUBLE_SELECT	0x00000001
+339-
+340-/* clip mode */
+341-#define DE_CLIPMODE_ENABLE	0x00000800
+342-/* enable testing against mask register n */
+343-#define DE_CLIPMODE_MASK0_EN	0x00000200
+344-#define DE_CLIPMODE_MASK1_EN	0x00000100
+345-#define DE_CLIPMODE_MASK2_EN	0x00000080
+346-#define DE_CLIPMODE_MASK3_EN	0x00000040
+347-#define DE_CLIPMODE_MASK4_EN	0x00000020
+348-/* let pixels pass if inside mask n, otherwise outside */
+349-#define DE_CLIPMODE_MASK0_IN	0x00000010
+350-#define DE_CLIPMODE_MASK1_IN	0x00000008
+351-#define DE_CLIPMODE_MASK2_IN	0x00000004
+352-#define DE_CLIPMODE_MASK3_IN	0x00000002
+353-#define DE_CLIPMODE_MASK4_IN	0x00000001
+354-
+355-/* draw mode */
+
+ exited 1 in 192ms:
+ succeeded in 189ms:
+sgi_re_randompixel_probe.py:18:#    DE_MODE_TLB_A 0x0000 -> 0 handled     DE_MODE_LIN_A 0x1000 -> 4 handled
+sgi_re_randompixel_probe.py:19:#    DE_MODE_TLB_B 0x0400 -> 1 handled     DE_MODE_LIN_B 0x1400 -> 5 *** default -> random() ***
+sgi_re_randompixel_probe.py:20:#    DE_MODE_TLB_C 0x0800 -> 2 handled
+sgi_re_randompixel_probe.py:26:#              every row.  Making the arm leave *color untouched turns `copy lin_b' green-by-accident
+sgi_re_randompixel_probe.py:28:#              known value and the row rejects it: "left alone" and "wrote random" are then distinct.
+sgi_re_randompixel_probe.py:39:#      tileptr = 0x80000000 | (d->re_linear_a[x >> 12] << 12);  ofs = x & 4095;
+sgi_re_randompixel_probe.py:40:#  so re_linear_a[0] = 0x10 puts the tile at physical 0x10000, and the byte offset is x itself.
+sgi_re_randompixel_probe.py:43:#  31 CLEAR and can never equal a source of 0xAABBCCDD.  Inequality is guaranteed, not 2^-32.
+sgi_re_randompixel_probe.py:48:BIN   = sys.argv[1]
+sgi_re_randompixel_probe.py:49:LABEL = sys.argv[2] if len(sys.argv) > 2 else "?"
+sgi_re_randompixel_probe.py:50:DUMMY = "/tmp/dummy_sgirand.bin"
+sgi_re_randompixel_probe.py:55:CODE      = 0x80001000
+sgi_re_randompixel_probe.py:56:SCRATCH   = 0xa0001800
+sgi_re_randompixel_probe.py:57:LIVE_VAL  = 0x5a5a5a5a
+sgi_re_randompixel_probe.py:58:DE_STATUS = 0xb5004000
+sgi_re_randompixel_probe.py:59:DE_STAT   = "0x1e000000"
+sgi_re_randompixel_probe.py:61:#  CRIME base is 0xb5000000: CRIME_DE_STATUS is 0x4000 and the shipped width probe reads 0xb5004000.
+sgi_re_randompixel_probe.py:62:RE_LINEAR_A   = 0xb5001700
+sgi_re_randompixel_probe.py:63:DE_MODE_SRC   = 0xb5002000
+sgi_re_randompixel_probe.py:64:DE_MODE_DST   = 0xb5002008
+sgi_re_randompixel_probe.py:65:DE_DRAWMODE   = 0xb5002018
+sgi_re_randompixel_probe.py:66:DE_XVERTEX_0  = 0xb5002070
+sgi_re_randompixel_probe.py:67:DE_XVERTEX_1  = 0xb5002074
+sgi_re_randompixel_probe.py:68:DE_XFER_ADDR  = 0xb50020a0
+sgi_re_randompixel_probe.py:69:DE_FG         = 0xb50020d0        # CRIME_DE_FG -- `uint32_t color = fg' is what a declined GET leaves
+sgi_re_randompixel_probe.py:70:DE_XFER_STEPX = 0xb50020a8
+sgi_re_randompixel_probe.py:71:DE_PRIM_START = 0xb5002860        # CRIME_DE_PRIMITIVE 0x2060 | CRIME_DE_START 0x0800
+sgi_re_randompixel_probe.py:73:MODE_LIN_A = 0x1220               # LIN_A 0x1000 | BUFDEPTH_32 0x200 | TYPE_RGBA 0x20
+sgi_re_randompixel_probe.py:74:MODE_LIN_B = 0x1620               # LIN_B 0x1400 | BUFDEPTH_32 0x200 | TYPE_RGBA 0x20
+sgi_re_randompixel_probe.py:75:DRAWMODE   = 0x002000f8           # XFER_EN 0x200000 | PLANEMASK 0x80 | BYTEMASK 0x78
+sgi_re_randompixel_probe.py:76:PRIM_RECT  = 0x03020000           # DE_PRIM_RECTANGLE 0x03000000 | DE_PRIM_TB 0x00020000
+sgi_re_randompixel_probe.py:78:TILE_PHYS  = 0x10000              # re_linear_a[0] = 0x10 -> (0x10 << 12)
+sgi_re_randompixel_probe.py:79:DST_KSEG1  = 0xa0000000 + TILE_PHYS          # x = 0    -> ofs 0
+sgi_re_randompixel_probe.py:80:SRC_OFS    = 0x40
+sgi_re_randompixel_probe.py:81:SRC_KSEG1  = 0xa0000000 + TILE_PHYS + SRC_OFS  # x = 0x40 -> ofs 0x40
+sgi_re_randompixel_probe.py:82:SRC_VAL    = 0xaabbccdd           # bit 31 SET: random() (31-bit) can never equal it
+sgi_re_randompixel_probe.py:83:DST_PAINT  = 0x11111111           # pre-paint, so "left untouched" is distinguishable
+sgi_re_randompixel_probe.py:84:FG_VAL     = 0x77665544           # DISTINCTIVE and NON-ZERO on purpose: with fg = 0 the rows
+sgi_re_randompixel_probe.py:88:OP_NOP      = 0x00000000
+sgi_re_randompixel_probe.py:89:OP_B_SELF   = 0x1000ffff
+sgi_re_randompixel_probe.py:90:OP_SW_T0_A3 = 0xace80000          # sw $t0, 0($a3)
+sgi_re_randompixel_probe.py:91:OP_SD_T0_A3 = 0xfce80000          # sd $t0, 0($a3)
+sgi_re_randompixel_probe.py:92:OP_LW_V0_AT = 0x8c220000          # lw $v0, 0($at)
+sgi_re_randompixel_probe.py:94:rows = []
+sgi_re_randompixel_probe.py:95:def row(name, got, want, note="", negate=False):
+sgi_re_randompixel_probe.py:97:    rows.append((name, ok))
+sgi_re_randompixel_probe.py:102:def session(cmds, settle=1.5, spin=1.6):
+sgi_re_randompixel_probe.py:106:                       "0x80001000:" + DUMMY])
+sgi_re_randompixel_probe.py:144:def printed(t, reg):
+sgi_re_randompixel_probe.py:146:    #  reads back as 0xffffffffaabbccdd and a row comparing raw strings fails on FORMATTING
+sgi_re_randompixel_probe.py:150:    return "absent" if not m else "0x%x" % (int(m.group(1), 16) & 0xffffffff)
+sgi_re_randompixel_probe.py:152:class Addr(object):
+sgi_re_randompixel_probe.py:157:def run_ops(ops, at):
+sgi_re_randompixel_probe.py:163:def store(A, addr, val, op=OP_SW_T0_A3):
+sgi_re_randompixel_probe.py:166:SENTINEL = 0xdeadbeef
+sgi_re_randompixel_probe.py:167:def load(A, addr):
+sgi_re_randompixel_probe.py:170:def setup(A, src_mode):
+sgi_re_randompixel_probe.py:175:    #  `sd' of 0x10 gave `re_linear_a[0] = 0, [1] = 0x10', so the tile pointer was 0 and every pixel
+sgi_re_randompixel_probe.py:178:    #  value below puts 0x10 in the HIGH word so re_linear_a[0] = 0x10.
+sgi_re_randompixel_probe.py:179:    c  = store(A, RE_LINEAR_A, 0x0000001000000000, op=OP_SD_T0_A3)  # sd: a 4-byte sw is DECLINED here
+sgi_re_randompixel_probe.py:185:    c += store(A, DE_XFER_ADDR,  SRC_OFS)              # linear: src_x = addr_src, src_y = 0
+sgi_re_randompixel_probe.py:186:    c += store(A, DE_XFER_STEPX, 4)                    # must equal src bufdepth or the XFER arm warns
+sgi_re_randompixel_probe.py:188:    c += store(A, DE_XVERTEX_0,  0x00000000)           # (x1,y1) = (0,0)
+sgi_re_randompixel_probe.py:193:    #  mutant scored 8/8, a clean escape, and the row was VACUOUS BY CONSTRUCTION.
+sgi_re_randompixel_probe.py:197:    c += store(A, DE_XVERTEX_1,  0x00000003)           # (x2,y2) = (0,3): 4 pixels, all at ofs 0
+sgi_re_randompixel_probe.py:202:print("%-16s %-12s %-12s %-44s %s" % ("row", "got", "want", "note", ""))
+sgi_re_randompixel_probe.py:205:A = Addr(CODE)
+sgi_re_randompixel_probe.py:207:row("live", printed(t, "v0") if alive else "died", "0x%x" % LIVE_VAL,
+sgi_re_randompixel_probe.py:210:A = Addr(CODE)
+sgi_re_randompixel_probe.py:212:row("devsig", printed(t, "v0") if alive else "died", DE_STAT,
+sgi_re_randompixel_probe.py:213:    "DEVSIG: CRIME_DE_STATUS reads 0x1e000000; RAM reads 0")
+sgi_re_randompixel_probe.py:216:#  Both modes LIN_A: the copy is the operation the defect corrupts.  If this row does not
+sgi_re_randompixel_probe.py:217:#  land the source value, the probe has not driven the engine and the defect row below is
+sgi_re_randompixel_probe.py:218:#  VACUOUS -- which is why it is a row and not an assumption.
+sgi_re_randompixel_probe.py:219:A = Addr(CODE)
+sgi_re_randompixel_probe.py:221:row("copy lin_a", printed(t, "v0") if alive else "died", "0x%x" % SRC_VAL,
+sgi_re_randompixel_probe.py:226:#  Two rows, because one is not enough: the value must differ from the SOURCE (so the copy
+sgi_re_randompixel_probe.py:228:A = Addr(CODE)
+sgi_re_randompixel_probe.py:231:row("lin_b not src", got_b, "0x%x" % SRC_VAL,
+sgi_re_randompixel_probe.py:237:row("lin_b is fg", got_b, "0x%x" % FG_VAL,
+sgi_re_randompixel_probe.py:239:row("lin_b alive", "alive" if alive else "died", "alive",
+sgi_re_randompixel_probe.py:243:#  ATTRIBUTION and the LATCH, in one row.  Bare presence was enough for a witness; for the fix it must
+sgi_re_randompixel_probe.py:246:#  row is the discriminator against a SILENT decline (member 2), which would emit nothing at all.
+sgi_re_randompixel_probe.py:247:n_diag = t.count("unimplemented dst_mode")
+sgi_re_randompixel_probe.py:248:row("lin_b diag", "yes" if n_diag else "no", "yes",
+sgi_re_randompixel_probe.py:250:row("lin_b diag once", "%d" % n_diag, "1",
+sgi_re_randompixel_probe.py:253:ok = sum(1 for _, o in rows if o)
+sgi_re_randompixel_probe.py:255:print("SGIRAND_RESULT=%d/%d" % (ok, len(rows)))
+sgi_re_randompixel_probe.py:256:print("SGIRAND_WITNESS=%s" % ("PASS" if ok == len(rows) else "FAIL"))
+sgi_re_randompixel_probe.py:258:sys.exit(0 if ok == len(rows) else 1)
+sgi_re_rgb_probe.py:17:#  corruption is a computable one-byte left shift with a zero fill, so the row asserts an exact
+sgi_re_rgb_probe.py:38:#    DE_MODE_TLB_A 0x0000 -> 0 handled     DE_MODE_LIN_A 0x1000 -> 4 handled
+sgi_re_rgb_probe.py:39:#    DE_MODE_TLB_B 0x0400 -> 1 handled     DE_MODE_LIN_B 0x1400 -> 5 *** default -> random() ***
+sgi_re_rgb_probe.py:40:#    DE_MODE_TLB_C 0x0800 -> 2 handled
+sgi_re_rgb_probe.py:48:#              known value and the row rejects it: "left alone" and "wrote random" are then distinct.
+sgi_re_rgb_probe.py:59:#      tileptr = 0x80000000 | (d->re_linear_a[x >> 12] << 12);  ofs = x & 4095;
+sgi_re_rgb_probe.py:60:#  so re_linear_a[0] = 0x10 puts the tile at physical 0x10000, and the byte offset is x itself.
+sgi_re_rgb_probe.py:63:#  31 CLEAR and can never equal a source of 0xAABBCCDD.  Inequality is guaranteed, not 2^-32.
+sgi_re_rgb_probe.py:68:BIN   = sys.argv[1]
+sgi_re_rgb_probe.py:69:LABEL = sys.argv[2] if len(sys.argv) > 2 else "?"
+sgi_re_rgb_probe.py:70:DUMMY = "/tmp/dummy_sgirand.bin"
+sgi_re_rgb_probe.py:75:CODE      = 0x80001000
+sgi_re_rgb_probe.py:76:SCRATCH   = 0xa0001800
+sgi_re_rgb_probe.py:77:LIVE_VAL  = 0x5a5a5a5a
+sgi_re_rgb_probe.py:78:DE_STATUS = 0xb5004000
+sgi_re_rgb_probe.py:79:DE_STAT   = "0x1e000000"
+sgi_re_rgb_probe.py:81:#  CRIME base is 0xb5000000: CRIME_DE_STATUS is 0x4000 and the shipped width probe reads 0xb5004000.
+sgi_re_rgb_probe.py:82:RE_LINEAR_A   = 0xb5001700
+sgi_re_rgb_probe.py:83:DE_MODE_SRC   = 0xb5002000
+sgi_re_rgb_probe.py:84:DE_MODE_DST   = 0xb5002008
+sgi_re_rgb_probe.py:85:DE_DRAWMODE   = 0xb5002018
+sgi_re_rgb_probe.py:86:DE_XVERTEX_0  = 0xb5002070
+sgi_re_rgb_probe.py:87:DE_XVERTEX_1  = 0xb5002074
+sgi_re_rgb_probe.py:88:DE_XFER_ADDR  = 0xb50020a0
+sgi_re_rgb_probe.py:89:DE_FG         = 0xb50020d0        # CRIME_DE_FG -- `uint32_t color = fg' is what a declined GET leaves
+sgi_re_rgb_probe.py:90:DE_XFER_STEPX = 0xb50020a8
+sgi_re_rgb_probe.py:91:DE_PRIM_START = 0xb5002860        # CRIME_DE_PRIMITIVE 0x2060 | CRIME_DE_START 0x0800
+sgi_re_rgb_probe.py:93:MODE_LIN_A = 0x1220               # LIN_A 0x1000 | BUFDEPTH_32 0x200 | TYPE_RGBA 0x20
+sgi_re_rgb_probe.py:94:MODE_RGB   = 0x1210               # LIN_A 0x1000 | BUFDEPTH_32 0x200 | TYPE_RGB  0x10
+sgi_re_rgb_probe.py:98:#  row's witness objection inapplicable.
+sgi_re_rgb_probe.py:101:#    GET RGB reads buf[1..3]   -> color = 0xbbccdd00
+sgi_re_rgb_probe.py:103:#    destination reads back    -> 0xbbccdd00   (a correct GET would give 0xaabbccdd)
+sgi_re_rgb_probe.py:104:RGB_CORRUPT = 0xbbccdd00           # what the SHIPPED GET produces
+sgi_re_rgb_probe.py:105:RGB_FIXED   = 0xaabbcc00           # what a CORRECTED GET produces
+sgi_re_rgb_probe.py:106:MODE_RGB64 = 0x1310               # LIN_A 0x1000 | BUFDEPTH_64 0x300 | TYPE_RGB 0x10
+sgi_re_rgb_probe.py:107:MODE_RGB_TLBA = 0x0210            # TLB_A 0x0000 | BUFDEPTH_32 0x200 | TYPE_RGB 0x10
+sgi_re_rgb_probe.py:109:#  is 0 here, so `linear = tlb_mode > 3' is FALSE -- which is the whole point.  Every other row in
+sgi_re_rgb_probe.py:110:#  this file drives LIN_A (tlb_mode 4), so `linear' was TRUE in all of them and a repair conditioned
+sgi_re_rgb_probe.py:111:#  on it was invisible: mutant M12_linear scored 8/8, a clean sweep.
+sgi_re_rgb_probe.py:112:RE_TLB_A   = 0xb5001000           # CRIME_RE_TLB_A 0x1000, same base as RE_LINEAR_A's 0x1700
+sgi_re_rgb_probe.py:113:TLBA_TILE  = 0x8002               # re_tlb_a[0].  *** BIT 15 IS NOT DECORATION. ***
+sgi_re_rgb_probe.py:114:TLBA_PHYS  = (TLBA_TILE << 16) & ~0x80000000   # -> 0x20000
+sgi_re_rgb_probe.py:119:#      if (!(tileptr & 0x80000000))
+sgi_re_rgb_probe.py:121:#      tileptr &= ~0x80000000;
+sgi_re_rgb_probe.py:123:#  LIN_A sets the bit EXPLICITLY -- `tileptr = 0x80000000 | (re_linear_a[n] << 12)' -- so a probe
+sgi_re_rgb_probe.py:124:#  built from the linear path never has to know.  TLB_A takes it from the STORED VALUE:
+sgi_re_rgb_probe.py:126:#  register.  `re_tlb_a[0] = 2' yields 0x00020000, the guard rejects it, and the GET returns without
+sgi_re_rgb_probe.py:129:#  MEASURED TWICE: the row read 0x77665544 = FG_VAL, which this probe's own DE_FG comment names as
+sgi_re_rgb_probe.py:131:#  fixed a real thing; it was not THIS thing, and the row said so again.  **Two wrong guesses, two
+sgi_re_rgb_probe.py:132:#  identical red rows, and the value never once looked like a tiled pixel.**
+sgi_re_rgb_probe.py:133:#  Tiled addressing is NOT the linear formula: `ofs = 512*y + (x % tilewidth)*bufdepth' rather than
+sgi_re_rgb_probe.py:134:#  `ofs = x & 4095'.  With a 1-wide, 4-tall rectangle the four source rows are 512 bytes apart, so
+sgi_re_rgb_probe.py:135:#  all four are painted -- unlike the LIN_A rows, which collide on one byte by design.
+sgi_re_rgb_probe.py:136:TLBA_ROWS  = [0xa0000000 + TLBA_PHYS + 512 * i for i in range(4)]
+sgi_re_rgb_probe.py:137:#  The SAME colour type at a DIFFERENT TRANSFER WIDTH.  bufdepth = 1 << ((mode>>8)&3),
+sgi_re_rgb_probe.py:138:#  so 0x300 gives 8 where 0x200 gives 4.  buf[0..2] are filled either way, so the expected
+sgi_re_rgb_probe.py:142:#  WAS.  That row would have gone RED against a CORRECT fix. ***
+sgi_re_rgb_probe.py:146:#  from the other side.  So a source word 0xaabbccdd copies as:
+sgi_re_rgb_probe.py:149:#      GET RGB (fixed)    (aa<<24)+(bb<<16)+(cc<<8)  =  0xaabbcc00      <- dd is DROPPED
+sgi_re_rgb_probe.py:151:#      destination        0xaabbcc00
+sgi_re_rgb_probe.py:153:#  Caught on pass 1 by FOUR seats independently naming 0xaabbcc00 -- grok, glm, the kimi
+sgi_re_rgb_probe.py:154:#  substitute and codex -- against a brief that had stated 0xaabbccdd.  **The dropped byte is
+sgi_re_rgb_probe.py:155:#  CORRECT BEHAVIOUR, not residual corruption**, which is exactly the distinction a row
+sgi_re_rgb_probe.py:157:DRAWMODE   = 0x002000f8           # XFER_EN 0x200000 | PLANEMASK 0x80 | BYTEMASK 0x78
+sgi_re_rgb_probe.py:158:PRIM_RECT  = 0x03020000           # DE_PRIM_RECTANGLE 0x03000000 | DE_PRIM_TB 0x00020000
+sgi_re_rgb_probe.py:160:TILE_PHYS  = 0x10000              # re_linear_a[0] = 0x10 -> (0x10 << 12)
+sgi_re_rgb_probe.py:161:DST_KSEG1  = 0xa0000000 + TILE_PHYS          # x = 0    -> ofs 0
+sgi_re_rgb_probe.py:162:SRC_OFS    = 0x40
+sgi_re_rgb_probe.py:163:SRC_KSEG1  = 0xa0000000 + TILE_PHYS + SRC_OFS  # x = 0x40 -> ofs 0x40
+sgi_re_rgb_probe.py:164:SRC_VAL    = 0xaabbccdd           # bit 31 SET: random() (31-bit) can never equal it
+sgi_re_rgb_probe.py:165:DST_PAINT  = 0x11111111           # pre-paint, so "left untouched" is distinguishable
+sgi_re_rgb_probe.py:166:FG_VAL     = 0x77665544           # DISTINCTIVE and NON-ZERO on purpose: with fg = 0 the rows
+sgi_re_rgb_probe.py:170:OP_NOP      = 0x00000000
+sgi_re_rgb_probe.py:171:OP_B_SELF   = 0x1000ffff
+sgi_re_rgb_probe.py:172:OP_SW_T0_A3 = 0xace80000          # sw $t0, 0($a3)
+sgi_re_rgb_probe.py:173:OP_SD_T0_A3 = 0xfce80000          # sd $t0, 0($a3)
+sgi_re_rgb_probe.py:174:OP_LW_V0_AT = 0x8c220000          # lw $v0, 0($at)
+sgi_re_rgb_probe.py:176:rows = []
+sgi_re_rgb_probe.py:177:def row(name, got, want, note="", negate=False):
+sgi_re_rgb_probe.py:179:    rows.append((name, ok))
+sgi_re_rgb_probe.py:184:def session(cmds, settle=1.5, spin=1.6):
+sgi_re_rgb_probe.py:188:                       "0x80001000:" + DUMMY])
+sgi_re_rgb_probe.py:226:def printed(t, reg):
+sgi_re_rgb_probe.py:228:    #  reads back as 0xffffffffaabbccdd and a row comparing raw strings fails on FORMATTING
+sgi_re_rgb_probe.py:232:    return "absent" if not m else "0x%x" % (int(m.group(1), 16) & 0xffffffff)
+sgi_re_rgb_probe.py:234:class Addr(object):
+sgi_re_rgb_probe.py:239:def run_ops(ops, at):
+sgi_re_rgb_probe.py:245:def store(A, addr, val, op=OP_SW_T0_A3):
+sgi_re_rgb_probe.py:248:SENTINEL = 0xdeadbeef
+sgi_re_rgb_probe.py:249:def load(A, addr):
+sgi_re_rgb_probe.py:252:def setup(A, src_mode, dst_mode=None, stepx=4, tiled_src=False):
+sgi_re_rgb_probe.py:257:    #  `sd' of 0x10 gave `re_linear_a[0] = 0, [1] = 0x10', so the tile pointer was 0 and every pixel
+sgi_re_rgb_probe.py:260:    #  value below puts 0x10 in the HIGH word so re_linear_a[0] = 0x10.
+sgi_re_rgb_probe.py:261:    c  = store(A, RE_LINEAR_A, 0x0000001000000000, op=OP_SD_T0_A3)  # sd: a 4-byte sw is DECLINED here
+sgi_re_rgb_probe.py:264:    if tiled_src:
+sgi_re_rgb_probe.py:266:        #  RE_LINEAR_A'S SHAPE.  Getting this wrong is what the row caught on its first run. ***
+sgi_re_rgb_probe.py:271:        #  because re_linear_a is uint32_t -- puts the value in re_tlb_a[2] and leaves [0] at
+sgi_re_rgb_probe.py:272:        #  zero, giving tileptr 0 and a DECLINED get.  Measured: the row read FG_VAL
+sgi_re_rgb_probe.py:273:        #  (0x77665544), which this probe's own DE_FG comment names as what a declined GET
+sgi_re_rgb_probe.py:274:        #  leaves.  **The row reported my setup error instead of passing quietly.**
+sgi_re_rgb_probe.py:281:    c += store(A, DE_XFER_ADDR,  0 if tiled_src else SRC_OFS)   # linear: src_x = addr_src (a BYTE
+sgi_re_rgb_probe.py:284:    c += store(A, DE_XFER_STEPX, stepx)                # must equal src bufdepth or the XFER arm warns
+sgi_re_rgb_probe.py:286:    c += store(A, DE_XVERTEX_0,  0x00000000)           # (x1,y1) = (0,0)
+sgi_re_rgb_probe.py:288:    #  NOT be used instead. ***  (The latch row that needed the height lives in the probe this
+sgi_re_rgb_probe.py:293:    #  mutant scored 8/8, a clean escape, and the row was VACUOUS BY CONSTRUCTION.
+sgi_re_rgb_probe.py:297:    c += store(A, DE_XVERTEX_1,  0x00000003)           # (x2,y2) = (0,3): 4 pixels, all at ofs 0
+sgi_re_rgb_probe.py:302:print("%-16s %-12s %-12s %-44s %s" % ("row", "got", "want", "note", ""))
+sgi_re_rgb_probe.py:305:A = Addr(CODE)
+sgi_re_rgb_probe.py:307:row("live", printed(t, "v0") if alive else "died", "0x%x" % LIVE_VAL,
+sgi_re_rgb_probe.py:310:A = Addr(CODE)
+sgi_re_rgb_probe.py:312:row("devsig", printed(t, "v0") if alive else "died", DE_STAT,
+sgi_re_rgb_probe.py:313:    "DEVSIG: CRIME_DE_STATUS reads 0x1e000000; RAM reads 0")
+sgi_re_rgb_probe.py:316:#  Both modes LIN_A: the copy is the operation the defect corrupts.  If this row does not
+sgi_re_rgb_probe.py:317:#  land the source value, the probe has not driven the engine and the defect row below is
+sgi_re_rgb_probe.py:318:#  VACUOUS -- which is why it is a row and not an assumption.
+sgi_re_rgb_probe.py:319:A = Addr(CODE)
+sgi_re_rgb_probe.py:321:row("copy lin_a", printed(t, "v0") if alive else "died", "0x%x" % SRC_VAL,
+sgi_re_rgb_probe.py:331:#  gate row, and the ladder says so in clause (i): a witness shows the symptom on the pre-fix
+sgi_re_rgb_probe.py:334:#  of every run, so the pre-fix log records it verbatim without any row having to expect it. ***
+sgi_re_rgb_probe.py:335:A = Addr(CODE)
+sgi_re_rgb_probe.py:339:#  THE FIX'S SUCCESS CRITERION.  RED on the committed build (it reads 0xbbccdd00), GREEN once
+sgi_re_rgb_probe.py:342:row("rgb chan", got_rgb, "0x%x" % RGB_FIXED,
+sgi_re_rgb_probe.py:346:#  the row above -- that one fails for ANY wrong value, this one names the SPECIFIC wrong value, so
+sgi_re_rgb_probe.py:349:row("rgb not corrupt", got_rgb, "0x%x" % RGB_CORRUPT,
+sgi_re_rgb_probe.py:350:    "must not be the buf[1..3] shift: 0xaabbccdd -> 0xbbccdd00", negate=True)
+sgi_re_rgb_probe.py:352:row("rgb alive", "alive" if alive else "died", "alive",
+sgi_re_rgb_probe.py:357:#  have: every row above is an RGB->RGBA copy, so the RGB *PUT* arm is never executed. ***
+sgi_re_rgb_probe.py:358:#      grok: "pin both with a same-mode RT row AND a raw-memory GET whose byte 3 is nonzero"
+sgi_re_rgb_probe.py:360:#             (today every pixel word shifts left 8) and the natural detector row; S4 is
+sgi_re_rgb_probe.py:363:#  It is also the shape a real guest takes, which the mixed-mode row is not: a driver that has
+sgi_re_rgb_probe.py:369:#  and is invisible to every row above.
+sgi_re_rgb_probe.py:371:#  grok's "byte 3 nonzero" condition is met by SRC_VAL itself: 0xaabbccdd has 0xdd at byte 3, so
+sgi_re_rgb_probe.py:372:#  this row additionally proves the pad is NOT carried rather than merely being zero already.
+sgi_re_rgb_probe.py:373:A = Addr(CODE)
+sgi_re_rgb_probe.py:377:row("rgb samemode", got_same, "0x%x" % RGB_FIXED,
+sgi_re_rgb_probe.py:378:    "RGB->RGB: exercises the RGB PUT arm, which no other row reaches")
+sgi_re_rgb_probe.py:387:#              if (bufdepth == 4)
+sgi_re_rgb_probe.py:392:#  and it scored a CLEAN SWEEP, 6/6, against every row above -- because EVERY session in this file
+sgi_re_rgb_probe.py:393:#  used BUFDEPTH_32, so bufdepth is 4 in all of them and the mutant's fix branch is the only one the
+sgi_re_rgb_probe.py:397:#  `bufdepth' is squarely inside the DEPENDS-ON closure: it is read by the guarded body (it is
+sgi_re_rgb_probe.py:401:#  Driving a SECOND width is what makes the width axis observable at all.  bufdepth 8 keeps
+sgi_re_rgb_probe.py:402:#  buf[0..2] filled by memory_rw, so the expected value is unchanged and the row stays a value
+sgi_re_rgb_probe.py:403:#  oracle; bufdepth 1 or 2 would leave buf[1..2] uninitialised, which is `sgirebufuninit' and would
+sgi_re_rgb_probe.py:404:#  make this row non-deterministic -- so 8 is the only other width that can carry a value oracle.
+sgi_re_rgb_probe.py:405:A = Addr(CODE)
+sgi_re_rgb_probe.py:409:row("rgb depth64", got_d64, "0x%x" % RGB_FIXED,
+sgi_re_rgb_probe.py:410:    "the fix must hold at bufdepth 8, not only at the width the other rows use")
+sgi_re_rgb_probe.py:415:#  Mutant M12_linear -- guard kept, repair conditioned on `linear':
+sgi_re_rgb_probe.py:418:#              if (linear) *color = (buf[0]<<24)+(buf[1]<<16)+(buf[2]<<8);   /* the fix    */
+sgi_re_rgb_probe.py:421:#  scored **8/8, a CLEAN SWEEP**, because every row above drives LIN_A (tlb_mode 4) and `linear' is
+sgi_re_rgb_probe.py:422:#  therefore true in all of them.  `linear' is `tlb_mode > 3' and it DOMINATES the edited lines via
+sgi_re_rgb_probe.py:423:#  the `if (!linear && (x < 0 || ...)) return;' guard, so it sits inside the DEPENDS-ON closure --
+sgi_re_rgb_probe.py:427:#  `tileptr &= ~0x80000000' strips the linear flag BEFORE the switch, so `tileptr' carries no
+sgi_re_rgb_probe.py:428:#  addressing-mode information by the time the arm runs.  `linear' is the variable that survives, and
+sgi_re_rgb_probe.py:431:#  THE SOURCE is tiled and the DESTINATION stays LIN_A, deliberately: the RGB arm under test is the
+sgi_re_rgb_probe.py:432:#  GET, and the GET's `linear' comes from src_mode.  A tiled DESTINATION would exercise the PUT and
+sgi_re_rgb_probe.py:434:A = Addr(CODE)
+sgi_re_rgb_probe.py:435:t, alive = session(setup(A, MODE_RGB_TLBA, tiled_src=True) + load(A, DST_KSEG1) + ["print v0"])
+sgi_re_rgb_probe.py:436:got_tiled = printed(t, "v0") if alive else "died"
+sgi_re_rgb_probe.py:438:row("rgb tiled", got_tiled, "0x%x" % RGB_FIXED,
+sgi_re_rgb_probe.py:441:ok = sum(1 for _, o in rows if o)
+sgi_re_rgb_probe.py:443:print("SGIRGB_RESULT=%d/%d" % (ok, len(rows)))
+sgi_re_rgb_probe.py:444:print("SGIRGB_WITNESS=%s" % ("PASS" if ok == len(rows) else "FAIL"))
+sgi_re_rgb_probe.py:446:sys.exit(0 if ok == len(rows) else 1)
+
+codex
+The core mismatch is present, but several premises need narrowing: RGB GET now reads bytes 0–2, `#505` changed which unfilled bytes it reads at narrow widths, and one pixel operation can call the helper more than once. I also found six zero-fill sites in `memory_rw.c`, rather than three. I’m checking the MTE branch and regression assertions next.
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n -C 4 'd->de_reg\\[|d->mte_reg\\[' GXEMUL-SEC/src/devices/dev_sgi_re.c" in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n '"'^'"' GXEMUL-SEC/src/devices/dev_sgi_re.c | Select-Object -Skip 1294 -First 110" in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n '"'^'"' GXEMUL-SEC/src/devices/dev_sgi_re.c | Select-Object -Skip 693 -First 244" in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n --max-depth 1 -g '*.py' 'sgirebufuninit|sgirandomcolour|MEM_WRITE|MemorySanitizer|Memcheck|definedness|uninitiali[sz]|uninit' ." in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\regress
+ succeeded in 179ms:
+.\arm_writeback_probe.py:278:#    put b  -> debugger_cmds.c  memory_rw(..., MEM_WRITE, CACHE_NONE|NO_EXCEPTIONS)
+.\arm_writeback_probe.py:280:#           -> memory.c         cpu->memory_rw(..., MEM_WRITE, CACHE_DATA)
+.\gdrom_default_probe.py:716:#  seat restricted the guard to `&& writeflag == MEM_WRITE`, scored 27/27, and
+.\gdrom_default_probe.py:770:#  `= 0` and assigned ONLY under `if (writeflag == MEM_WRITE)`, so on a read
+.\pcc2_width_probe.py:109:      direction split's own conjunct nulled, `writeflag == MEM_WRITE' -> `<= MEM_WRITE'
+.\pcc2_width_probe.py:178:      THE SECOND PREDICATE.  Each arm's `if (writeflag == MEM_WRITE)' is now load-bearing
+.\pcc2_width_probe.py:751:#  `if (len != 1 && writeflag == MEM_WRITE && !(d->warned & (1u << bit)))' -- the canonical
+.\pcc2_width_probe.py:781:#  MEM_WRITE)' (the pre-fix guard killed reads before it was reached; the Opus seat flagged it).
+.\sgi_de_primop_probe.py:72:      `if (startFlag)' is not conditioned on MEM_WRITE, so a START-aliased READ
+.\sgi_de_primop_probe.py:497:#  `if (startFlag)' is not conditioned on MEM_WRITE, so a START-aliased READ
+.\sgi_re_rgb_probe.py:18:#  value on both the defective and the fixed build.  No uninitialised byte is read, so the
+.\sgi_re_rgb_probe.py:403:#  oracle; bufdepth 1 or 2 would leave buf[1..2] uninitialised, which is `sgirebufuninit' and would
+.\sgi_re_unmapped_probe.py:80:#                         `writeflag == MEM_WRITE && idata' had no disagreeing
+.\sgi_re_unmapped_probe.py:486:#                     value, so `writeflag == MEM_WRITE && idata' had no disagreeing
+.\sgi_re_unmapped_probe.py:541:    "...and is announced AS A WRITE -- kills `writeflag == MEM_WRITE && idata'")
+.\sgi_re_width_probe.py:12:#        `len != 8' -> `len != 8 && writeflag == MEM_WRITE'  (the `lw surv' rows);
+.\sgi_re_width_probe.py:236:    #    This row is what kills M1 (`len != 8 && writeflag == MEM_WRITE').
+.\sh4_tlbda2_witness.py:123:        "the guard is above `if (writeflag == MEM_WRITE)`, so direction does not matter")
+
+ succeeded in 203ms:
+696- */
+697-
+698-void draw_primitive(struct cpu* cpu, struct sgi_re_data *d)
+699-{
+700:	uint32_t op = d->de_reg[(CRIME_DE_PRIMITIVE - 0x2000) / sizeof(uint32_t)];
+701:	uint32_t drawmode = d->de_reg[(CRIME_DE_DRAWMODE - 0x2000) / sizeof(uint32_t)];
+702:	uint32_t dst_mode = d->de_reg[(CRIME_DE_MODE_DST - 0x2000) / sizeof(uint32_t)];
+703:	uint32_t src_mode = d->de_reg[(CRIME_DE_MODE_SRC - 0x2000) / sizeof(uint32_t)];
+704:	uint32_t fg = d->de_reg[(CRIME_DE_FG - 0x2000) / sizeof(uint32_t)];
+705:	uint32_t bg = d->de_reg[(CRIME_DE_BG - 0x2000) / sizeof(uint32_t)];
+706:	uint32_t rop = d->de_reg[(CRIME_DE_ROP - 0x2000) / sizeof(uint32_t)];
+707-
+708:	uint32_t stipple_mode = d->de_reg[(CRIME_DE_STIPPLE_MODE - 0x2000) / sizeof(uint32_t)];
+709:	uint32_t pattern = d->de_reg[(CRIME_DE_STIPPLE_PAT - 0x2000) / sizeof(uint32_t)];
+710-	int nr_of_bits_to_strip_to_the_left = (stipple_mode >> DE_STIP_STRTIDX_SHIFT) & 31;
+711-	int nr_of_bits_to_strip_to_the_right = 31 - ((stipple_mode >> DE_STIP_MAXIDX_SHIFT) & 31);
+712-	pattern >>= nr_of_bits_to_strip_to_the_right;
+713-	pattern <<= nr_of_bits_to_strip_to_the_right;
+--
+717-
+718-	if (stipple_mode & 0xe0e0ffff)
+719-		fatal("[ sgi_de: UNIMPLEMENTED stipple_mode bits: 0x%08x ]\n", stipple_mode);
+720-
+721:	uint32_t x1 = (d->de_reg[(CRIME_DE_X_VERTEX_0 - 0x2000) / sizeof(uint32_t)] >> 16) & 0x7ff;
+722:	uint32_t y1 = d->de_reg[(CRIME_DE_X_VERTEX_0 - 0x2000) / sizeof(uint32_t)]& 0x7ff;
+723:	uint32_t x2 = (d->de_reg[(CRIME_DE_X_VERTEX_1 - 0x2000) / sizeof(uint32_t)] >> 16) & 0x7ff;
+724:	uint32_t y2 = d->de_reg[(CRIME_DE_X_VERTEX_1 - 0x2000) / sizeof(uint32_t)]& 0x7ff;
+725-	size_t x, y;
+726-
+727-	debug("[ sgi_de: STARTING DRAWING COMMAND: op = 0x%08x,"
+728-	    " drawmode=0x%x src_mode=0x%x dst_mode=0x%x x1=%i y1=%i"
+--
+736-	int src_is_linear = 0;
+737-	int src_x = -1, src_y = -1;
+738-	int32_t step_x = 0;
+739-	if (drawmode & DE_DRAWMODE_XFER_EN) {
+740:		uint32_t addr_src = d->de_reg[(CRIME_DE_XFER_ADDR_SRC - 0x2000) / sizeof(uint32_t)];
+741:		uint32_t strd_src = d->de_reg[(CRIME_DE_XFER_STRD_SRC - 0x2000) / sizeof(uint32_t)];
+742:		step_x = d->de_reg[(CRIME_DE_XFER_STEP_X - 0x2000) / sizeof(uint32_t)];
+743:		int32_t step_y = d->de_reg[(CRIME_DE_XFER_STEP_Y - 0x2000) / sizeof(uint32_t)];
+744:		uint32_t addr_dst = d->de_reg[(CRIME_DE_XFER_ADDR_DST - 0x2000) / sizeof(uint32_t)];
+745:		uint32_t strd_dst = d->de_reg[(CRIME_DE_XFER_STRD_DST - 0x2000) / sizeof(uint32_t)];
+746-
+747-		src_is_linear = ((src_mode & 0x00001c00) >> 10) > 3;
+748-
+749-		if (src_is_linear) {
+--
+999-	 *  two adjacent registers in one operation.
+1000-	 */
+1001-	if (len == 8) {
+1002-		if (writeflag == MEM_WRITE) {
+1003:			d->de_reg[regnr] = idata >> 32ULL;
+1004:			d->de_reg[regnr+1] = idata;
+1005-		} else
+1006:			odata = ((uint64_t)d->de_reg[regnr] << 32ULL) +
+1007:			    d->de_reg[regnr+1];
+1008-	} else if (len == 4) {
+1009-		if (writeflag == MEM_WRITE)
+1010:			d->de_reg[regnr] = idata;
+1011-		else
+1012:			odata = d->de_reg[regnr];
+1013-	} else {
+1014-		/*
+1015-		 *  #498: THIS USED TO END THE HOST PROCESS.  A guest choosing an
+1016-		 *  access width is not an emulator error -- one `sb' anywhere in
+--
+1298- */
+1299-
+1300-void do_mte_transfer(struct cpu* cpu, struct sgi_re_data *d)
+1301-{
+1302:	uint32_t mode = d->mte_reg[(CRIME_MTE_MODE - 0x3000) / sizeof(uint32_t)];
+1303:	uint32_t src0 = d->mte_reg[(CRIME_MTE_SRC0 - 0x3000) / sizeof(uint32_t)];
+1304:	uint32_t src1 = d->mte_reg[(CRIME_MTE_SRC1 - 0x3000) / sizeof(uint32_t)];
+1305:	uint32_t dst0 = d->mte_reg[(CRIME_MTE_DST0 - 0x3000) / sizeof(uint32_t)];
+1306:	uint32_t dst1 = d->mte_reg[(CRIME_MTE_DST1 - 0x3000) / sizeof(uint32_t)];
+1307:	int32_t src_y_step = d->mte_reg[(CRIME_MTE_SRC_Y_STEP - 0x3000) / sizeof(uint32_t)];
+1308:	int32_t dst_y_step = d->mte_reg[(CRIME_MTE_DST_Y_STEP - 0x3000) / sizeof(uint32_t)];
+1309-	uint32_t dstlen = dst1 - dst0 + 1, fill_addr;
+1310-	unsigned char zerobuf[4096];
+1311-	int depth = 8 << ((mode & MTE_MODE_DEPTH_MASK) >> MTE_DEPTH_SHIFT);
+1312-	int src = (mode & MTE_MODE_SRC_BUF_MASK) >> MTE_SRC_TLB_SHIFT;
+1313:	uint32_t bytemask = d->mte_reg[(CRIME_MTE_BYTEMASK - 0x3000) / sizeof(uint32_t)];
+1314:	uint32_t bg = d->mte_reg[(CRIME_MTE_BG - 0x3000) / sizeof(uint32_t)];
+1315-
+1316-	debug("[ sgi_mte: STARTING: mode=0x%08x src0=0x%08x src1=0x%08x src_y_step=%i dst0=0x%08x,"
+1317-	    " dst1=0x%08x dst_y_step=%i bg=0x%x bytemask=0x%x ]\n",
+1318-	    mode,
+--
+1520-	 *  register, and the higher bits are stored in the "+1" word.
+1521-	 */
+1522-	if (len == 4) {
+1523-		if (writeflag == MEM_WRITE)
+1524:			d->mte_reg[regnr] = idata;
+1525-		else
+1526:			odata = d->mte_reg[regnr];
+1527-	} else if (len != 4) {
+1528-		if (writeflag == MEM_WRITE) {
+1529:			d->mte_reg[regnr+1] = idata >> 32;
+1530:			d->mte_reg[regnr] = idata;
+1531-		} else {
+1532:			odata = ((uint64_t)d->mte_reg[regnr+1] << 32) +
+1533:			    d->mte_reg[regnr];
+1534-		}
+1535-	} else {
+1536-		fatal("[ sgi_mte: UNIMPLEMENTED read/write len %i ]\n", len);
+1537-		exit(1);
+
+ succeeded in 308ms:
+1295: *  If the relative address has the 0x0800 (CRIME_DE_START) flag set, it means
+1296: *  "go ahead with the transfer". Otherwise, it is just reads and writes of the
+1297: *  registers.
+1298: */
+1299:
+1300:void do_mte_transfer(struct cpu* cpu, struct sgi_re_data *d)
+1301:{
+1302:	uint32_t mode = d->mte_reg[(CRIME_MTE_MODE - 0x3000) / sizeof(uint32_t)];
+1303:	uint32_t src0 = d->mte_reg[(CRIME_MTE_SRC0 - 0x3000) / sizeof(uint32_t)];
+1304:	uint32_t src1 = d->mte_reg[(CRIME_MTE_SRC1 - 0x3000) / sizeof(uint32_t)];
+1305:	uint32_t dst0 = d->mte_reg[(CRIME_MTE_DST0 - 0x3000) / sizeof(uint32_t)];
+1306:	uint32_t dst1 = d->mte_reg[(CRIME_MTE_DST1 - 0x3000) / sizeof(uint32_t)];
+1307:	int32_t src_y_step = d->mte_reg[(CRIME_MTE_SRC_Y_STEP - 0x3000) / sizeof(uint32_t)];
+1308:	int32_t dst_y_step = d->mte_reg[(CRIME_MTE_DST_Y_STEP - 0x3000) / sizeof(uint32_t)];
+1309:	uint32_t dstlen = dst1 - dst0 + 1, fill_addr;
+1310:	unsigned char zerobuf[4096];
+1311:	int depth = 8 << ((mode & MTE_MODE_DEPTH_MASK) >> MTE_DEPTH_SHIFT);
+1312:	int src = (mode & MTE_MODE_SRC_BUF_MASK) >> MTE_SRC_TLB_SHIFT;
+1313:	uint32_t bytemask = d->mte_reg[(CRIME_MTE_BYTEMASK - 0x3000) / sizeof(uint32_t)];
+1314:	uint32_t bg = d->mte_reg[(CRIME_MTE_BG - 0x3000) / sizeof(uint32_t)];
+1315:
+1316:	debug("[ sgi_mte: STARTING: mode=0x%08x src0=0x%08x src1=0x%08x src_y_step=%i dst0=0x%08x,"
+1317:	    " dst1=0x%08x dst_y_step=%i bg=0x%x bytemask=0x%x ]\n",
+1318:	    mode,
+1319:	    src0, src1, src_y_step,
+1320:	    dst0, dst1, dst_y_step,
+1321:	    bg, bytemask);
+1322:
+1323:	if (dst_y_step != 0 && dst_y_step != 1 && dst_y_step != -1) {
+1324:		fatal("[ sgi_mte: TODO! unimplemented dst_y_step %i ]", dst_y_step);
+1325:		// exit(1);
+1326:	}
+1327:
+1328:	if (mode & MTE_MODE_STIPPLE) {
+1329:		fatal("[ sgi_mte: unimplemented MTE_MODE_STIPPLE ]");
+1330:		exit(1);
+1331:	}
+1332:
+1333:	int src_tlb = (mode & MTE_MODE_SRC_BUF_MASK) >> MTE_SRC_TLB_SHIFT;
+1334:	int dst_tlb = (mode & MTE_MODE_DST_BUF_MASK) >> MTE_DST_TLB_SHIFT;
+1335:	
+1336:	if (src > MTE_TLB_C) {
+1337:		fatal("[ sgi_mte: unimplemented SRC ]");
+1338:		exit(1);
+1339:	}
+1340:
+1341:	switch (dst_tlb) {
+1342:	case MTE_TLB_A:
+1343:	case MTE_TLB_B:
+1344:	case MTE_TLB_C:
+1345:		// Used by NetBSD's crmfb_fill_rect. It puts graphical
+1346:		// coordinates in dst0 and dst1.
+1347:		{
+1348:			int x1 = (dst0 >> 16) & 0xfff;
+1349:			int y1 = dst0 & 0xfff;
+1350:			int x2 = (dst1 >> 16) & 0xfff;
+1351:			int y2 = dst1 & 0xfff;
+1352:			x1 /= (depth / 8);
+1353:			x2 /= (depth / 8);
+1354:
+1355:			int src_x1 = (src0 >> 16) & 0xfff;
+1356:			int src_y1 = src0 & 0xfff;
+1357:			// int src_x2 = (src1 >> 16) & 0xfff;
+1358:			// int src_y2 = src1 & 0xfff;
+1359:			src_x1 /= (depth / 8);
+1360:			// src_x2 /= (depth / 8);
+1361:
+1362:			int dx = x1 > x2 ? -1 : 1;
+1363:			int dy = y1 > y2 ? -1 : 1;
+1364:			
+1365:			uint32_t src_mode = (src_tlb << 10) + (((mode & MTE_MODE_DEPTH_MASK) >> MTE_DEPTH_SHIFT) << 8);
+1366:			uint32_t dst_mode = (dst_tlb << 10) + (((mode & MTE_MODE_DEPTH_MASK) >> MTE_DEPTH_SHIFT) << 8);
+1367:
+1368:			// Hack. The MTE perhaps doesn't deal with colors per se,
+1369:			// but this makes sure that we copy 32 bits when doing 32-bit
+1370:			// transfers.
+1371:			if (depth == 4) {
+1372:				src_mode |= DE_MODE_TYPE_RGBA;
+1373:				dst_mode |= DE_MODE_TYPE_RGBA;
+1374:			}
+1375:
+1376:			int src_y = src_y1;
+1377:			for (int y = y1; y != y2+dy; y += dy) {
+1378:				int src_x = src_x1;
+1379:				
+1380:				for  (int x = x1; x != x2+dx; x += dx) {
+1381:					if (mode & MTE_MODE_COPY) {
+1382:						horrible_getputpixel(0, cpu, d,
+1383:							src_x, src_y, &bg, src_mode);
+1384:						src_x += dx;
+1385:					}
+1386:
+1387:					horrible_getputpixel(1, cpu, d, x, y, &bg, dst_mode);
+1388:				}
+1389:				
+1390:				src_y += dy;
+1391:			}
+1392:		}
+1393:		break;
+1394:	case MTE_TLB_LIN_A:
+1395:	case MTE_TLB_LIN_B:
+1396:		// Used by the PROM to zero-fill memory (?).
+1397:		if (mode & MTE_MODE_COPY) {
+1398:			fatal("[ sgi_mte: unimplemented MTE_MODE_COPY ]");
+1399:			exit(1);
+1400:		}
+1401:
+1402:		if (depth != 8) {
+1403:			fatal("[ sgi_mte: unimplemented MTE_DEPTH_x ]");
+1404:			exit(1);
+
+ exited 1 in 318ms:
+694:/*
+695: *  SGI "de", NetBSD sources describes it as a "drawing engine".
+696: */
+697:
+698:void draw_primitive(struct cpu* cpu, struct sgi_re_data *d)
+699:{
+700:	uint32_t op = d->de_reg[(CRIME_DE_PRIMITIVE - 0x2000) / sizeof(uint32_t)];
+701:	uint32_t drawmode = d->de_reg[(CRIME_DE_DRAWMODE - 0x2000) / sizeof(uint32_t)];
+702:	uint32_t dst_mode = d->de_reg[(CRIME_DE_MODE_DST - 0x2000) / sizeof(uint32_t)];
+703:	uint32_t src_mode = d->de_reg[(CRIME_DE_MODE_SRC - 0x2000) / sizeof(uint32_t)];
+704:	uint32_t fg = d->de_reg[(CRIME_DE_FG - 0x2000) / sizeof(uint32_t)];
+705:	uint32_t bg = d->de_reg[(CRIME_DE_BG - 0x2000) / sizeof(uint32_t)];
+706:	uint32_t rop = d->de_reg[(CRIME_DE_ROP - 0x2000) / sizeof(uint32_t)];
+707:
+708:	uint32_t stipple_mode = d->de_reg[(CRIME_DE_STIPPLE_MODE - 0x2000) / sizeof(uint32_t)];
+709:	uint32_t pattern = d->de_reg[(CRIME_DE_STIPPLE_PAT - 0x2000) / sizeof(uint32_t)];
+710:	int nr_of_bits_to_strip_to_the_left = (stipple_mode >> DE_STIP_STRTIDX_SHIFT) & 31;
+711:	int nr_of_bits_to_strip_to_the_right = 31 - ((stipple_mode >> DE_STIP_MAXIDX_SHIFT) & 31);
+712:	pattern >>= nr_of_bits_to_strip_to_the_right;
+713:	pattern <<= nr_of_bits_to_strip_to_the_right;
+714:	pattern <<= nr_of_bits_to_strip_to_the_left;
+715:
+716:	int nr_of_bits_in_the_middle = 32 - nr_of_bits_to_strip_to_the_left - nr_of_bits_to_strip_to_the_right;
+717:
+718:	if (stipple_mode & 0xe0e0ffff)
+719:		fatal("[ sgi_de: UNIMPLEMENTED stipple_mode bits: 0x%08x ]\n", stipple_mode);
+720:
+721:	uint32_t x1 = (d->de_reg[(CRIME_DE_X_VERTEX_0 - 0x2000) / sizeof(uint32_t)] >> 16) & 0x7ff;
+722:	uint32_t y1 = d->de_reg[(CRIME_DE_X_VERTEX_0 - 0x2000) / sizeof(uint32_t)]& 0x7ff;
+723:	uint32_t x2 = (d->de_reg[(CRIME_DE_X_VERTEX_1 - 0x2000) / sizeof(uint32_t)] >> 16) & 0x7ff;
+724:	uint32_t y2 = d->de_reg[(CRIME_DE_X_VERTEX_1 - 0x2000) / sizeof(uint32_t)]& 0x7ff;
+725:	size_t x, y;
+726:
+727:	debug("[ sgi_de: STARTING DRAWING COMMAND: op = 0x%08x,"
+728:	    " drawmode=0x%x src_mode=0x%x dst_mode=0x%x x1=%i y1=%i"
+729:	    " x2=%i y2=%i fg=0x%x bg=0x%x pattern=0x%08x ]\n",
+730:	    op, drawmode, src_mode, dst_mode, x1, y1, x2, y2, fg, bg, pattern);
+731:
+732:	// bufdepth = 1, 2, or 4.
+733:	// int dst_bufdepth = 1 << ((dst_mode >> 8) & 3);
+734:	int src_bufdepth = 1 << ((src_mode >> 8) & 3);
+735:
+736:	int src_is_linear = 0;
+737:	int src_x = -1, src_y = -1;
+738:	int32_t step_x = 0;
+739:	if (drawmode & DE_DRAWMODE_XFER_EN) {
+740:		uint32_t addr_src = d->de_reg[(CRIME_DE_XFER_ADDR_SRC - 0x2000) / sizeof(uint32_t)];
+741:		uint32_t strd_src = d->de_reg[(CRIME_DE_XFER_STRD_SRC - 0x2000) / sizeof(uint32_t)];
+742:		step_x = d->de_reg[(CRIME_DE_XFER_STEP_X - 0x2000) / sizeof(uint32_t)];
+743:		int32_t step_y = d->de_reg[(CRIME_DE_XFER_STEP_Y - 0x2000) / sizeof(uint32_t)];
+744:		uint32_t addr_dst = d->de_reg[(CRIME_DE_XFER_ADDR_DST - 0x2000) / sizeof(uint32_t)];
+745:		uint32_t strd_dst = d->de_reg[(CRIME_DE_XFER_STRD_DST - 0x2000) / sizeof(uint32_t)];
+746:
+747:		src_is_linear = ((src_mode & 0x00001c00) >> 10) > 3;
+748:
+749:		if (src_is_linear) {
+750:			src_x = addr_src;
+751:			src_y = 0;
+752:		} else {
+753:			src_x = (addr_src >> 16) & 0x7ff;
+754:			src_y = addr_src & 0x7ff;
+755:		}
+756:
+757:		if (step_x != src_bufdepth || (step_y != 0 && step_y != 1)) {
+758:			fatal("[ sgi_de: unimplemented XFER addr_src=0x%x src_bufdepth=%i "
+759:				"strd_src=0x%x step_x=0x%x step_y=0x%x "
+760:				"addr_dst=0x%x strd_dst=0x%x ]\n",
+761:				addr_src, src_bufdepth, strd_src, step_x, step_y, addr_dst, strd_dst);
+762:
+763:			// exit(1);
+764:		}
+765:	}
+766:
+767:	if (!(drawmode & DE_DRAWMODE_PLANEMASK)) {
+768:		printf("!DE_DRAWMODE_PLANEMASK: TODO\n");
+769:	}
+770:	
+771:	if ((drawmode & DE_DRAWMODE_BYTEMASK) != DE_DRAWMODE_BYTEMASK) {
+772:		printf("not all DE_DRAWMODE_BYTEMASK set: TODO\n");
+773:	}
+774:	
+775:	// primitive rendering direction (not for Lines? and presumably
+776:	// not for Points either :-)
+777:	int dx = op & DE_PRIM_RL ? -1 :  1;
+778:	int dy = op & DE_PRIM_TB ?  1 : -1;
+779:
+780:	uint16_t saved_src_x = src_x;
+781:
+782:	/*
+783:	 *  Drawing is limited to 2048 x 2048 pixel space.
+784:	 *
+785:	 *  TODO: MAYBE it is really -2048 to 2027, i.e. 12 bits of
+786:	 *  pixel space. Perhaps it is possible to figure out
+787:	 *  experimentally some day, e.g. by drawing lines from
+788:	 *  -10,10 to 500,20 and see whether the real hardware
+789:	 *  interprets -10 as -10 or 0x800 - 10.
+790:	 */
+791:	uint16_t endx = (x2 + dx) & 0x7ff;
+792:	uint16_t endy = (y2 + dy) & 0x7ff;
+793:
+794:	int lx = abs((int)(x2 - x1)), ly = abs((int)(y2 - y1));
+795:	int linelen = lx > ly ? lx : ly;
+796:
+797:	switch (op & 0xff000000) {
+798:	case DE_PRIM_LINE:
+799:		if (drawmode & DE_DRAWMODE_XFER_EN)
+800:			fatal("[ sgi_de: XFER_EN for LINE op? ]\n");
+801:
+802:		// The PROM uses width 32, but NetBSD documents it as "half pixels".
+803:		// if ((op & DE_PRIM_LINE_WIDTH_MASK) != 2)
+804:		//	fatal("[ sgi_de: LINE_WIDTH_MASK = %i ]\n", op & DE_PRIM_LINE_WIDTH_MASK);
+805:
+806:		if (linelen == 0)
+807:			linelen ++;
+808:
+809:		for (int i = 0; i < ((op & DE_PRIM_LINE_SKIP_END)? linelen : linelen+1); ++i) {
+810:			x = (x2 * i + x1 * (linelen-i)) / linelen;
+811:			y = (y2 * i + y1 * (linelen-i)) / linelen;
+812:
+813:			uint32_t color = fg;
+814:			uint32_t oldcolor = fg;
+815:
+816:			if (drawmode & DE_DRAWMODE_ROP && rop != OPENGL_LOGIC_OP_COPY)
+817:				horrible_getputpixel(0, cpu, d, x, y, &oldcolor, dst_mode);
+818:
+819:			int draw = 1;
+820:			if (drawmode & DE_DRAWMODE_LINE_STIP) {
+821:				if (drawmode & DE_DRAWMODE_OPAQUE_STIP)
+822:					color = (pattern & 0x80000000UL) ? fg : bg;
+823:				else
+824:					draw = (pattern & 0x80000000UL)? 1 : 0;
+825:			}
+826:
+827:			// Raster-OP.
+828:			// TODO: Other ops.
+829:			// TODO: Should this be before or after other things?
+830:			if (drawmode & DE_DRAWMODE_ROP) {
+831:				switch (rop) {
+832:				case OPENGL_LOGIC_OP_COPY:
+833:					// color = color;
+834:					break;
+835:				case OPENGL_LOGIC_OP_XOR:
+836:					color = oldcolor ^ color;
+837:					break;
+838:				case OPENGL_LOGIC_OP_COPY_INVERTED:
+839:					color = 0xffffffff - oldcolor;
+840:					break;
+841:				default:{
+842:						static char rop_used[256];
+843:						static int first = 1;
+844:
+845:						if (first) {
+846:							memset(rop_used, 0, sizeof(rop_used));
+847:							first = 0;
+848:						}
+849:
+850:						if (!rop_used[rop & 255]) {
+851:							rop_used[rop & 255] = 1;
+852:							fatal("[ sgi_de: LINE: rop[0x%02x] used! ]\n", rop & 255);
+853:						}
+854:
+855:						if (rop >> 8) {
+856:							fatal("[ sgi_de: LINE: rop > 255: 0x%08x ]\n", rop);
+857:						}
+858:					}
+859:				}
+860:			}
+861:
+862:			if (draw)
+863:				horrible_getputpixel(1, cpu, d, x, y, &color, dst_mode);
+864:
+865:			// Rotate the stipple pattern:
+866:			pattern = (pattern << 1) | (pattern >> (nr_of_bits_in_the_middle-1));
+867:		}
+868:		break;
+869:
+870:	case DE_PRIM_RECTANGLE:
+871:		for (y = y1; y != endy; y = (y + dy) & 0x7ff) {
+872:			src_x = saved_src_x;
+873:			for (x = x1; x != endx; x = (x + dx) & 0x7ff) {
+874:				uint32_t color = fg;
+875:				uint32_t oldcolor = fg;
+876:
+877:				if (drawmode & DE_DRAWMODE_ROP && rop != OPENGL_LOGIC_OP_COPY)
+878:					horrible_getputpixel(0, cpu, d, x, y, &oldcolor, dst_mode);
+879:
+880:				// Pixel colors copied from another source.
+881:				// (OpenBSD draws characters using this mechanism.)
+882:				if (drawmode & DE_DRAWMODE_XFER_EN)
+883:					horrible_getputpixel(0, cpu, d,	src_x, src_y, &color, src_mode);
+884:
+885:				int draw = 1;
+886:				if (drawmode & DE_DRAWMODE_POLY_STIP) {
+887:					if (drawmode & DE_DRAWMODE_OPAQUE_STIP)
+888:						color = (pattern & 0x80000000UL) ? fg : bg;
+889:					else
+890:						draw = (pattern & 0x80000000UL)? 1 : 0;
+891:				}
+892:
+893:				// Raster-OP.
+894:				// TODO: Other ops.
+895:				// TODO: Should this be before or after other things?
+896:				if (drawmode & DE_DRAWMODE_ROP) {
+897:					switch (rop) {
+898:					case OPENGL_LOGIC_OP_COPY:
+899:						// color = color;
+900:						break;
+901:					case OPENGL_LOGIC_OP_XOR:
+902:						color = oldcolor ^ color;
+903:						break;
+904:					case OPENGL_LOGIC_OP_COPY_INVERTED:
+905:						color = 0xffffffff - oldcolor;
+906:						break;
+907:					default:{
+908:							static char rop_used[256];
+909:							static int first = 1;
+910:
+911:							if (first) {
+912:								memset(rop_used, 0, sizeof(rop_used));
+913:								first = 0;
+914:							}
+915:
+916:							if (!rop_used[rop & 255]) {
+917:								rop_used[rop & 255] = 1;
+918:								fatal("[ sgi_de: RECT: rop[0x%02x] used! ]\n", rop & 255);
+919:							}
+920:
+921:							if (rop >> 8) {
+922:								fatal("[ sgi_de: RECT: rop > 255: 0x%08x ]\n", rop);
+923:							}
+924:						}
+925:					}
+926:				}
+927:
+928:				if (draw)
+929:					horrible_getputpixel(1, cpu, d, x, y, &color, dst_mode);
+930:
+931:				// Rotate the stipple pattern:
+932:				pattern = (pattern << 1) | (pattern >> (nr_of_bits_in_the_middle-1));
+933:
+934:				if (src_is_linear)
+935:					src_x += step_x;
+936:				else
+937:					src_x = (src_x + dx) & 0x7ff;
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n 'memset\\(' GXEMUL-SEC/src/cpus/memory_rw.c" in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n -C 10 'CRMFB_MODE_TYP_RGB8|buf\\[0\\].*24|buf\\[1\\].*16' GXEMUL-SEC/src/devices/dev_sgi_gbe.c" in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n -A 42 'A = Addr\\(CODE\\)"'$'"' sgi_re_rgb_probe.py | Select-Object -Last 102" in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\regress
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n --glob '*.[ch]' 'horrible_getputpixel|sgirebufuninit|sgirandomcolour|#505|DE_MODE_PIXDEPTH' GXEMUL-SEC/src" in C:\DocumentNoSnc\CC\GXEMUL
+ succeeded in 215ms:
+215:					memset(data, 0, len);
+267:				memset(data, 0, len);
+359:			memset(buf, 0xff, xsize * ysize*3);
+420:				memset(buf, 0xff, xsize*ysize);
+492:					memset(data, 0, len);
+671:				memset(data, 0, len);
+683:				memset(data, 0, len);
+732:			memset(data, 0, len);
+
+ succeeded in 224ms:
+118-		color &= 0xff;
+119-		*r = d->selected_palette[color] >> 24;
+120-		*g = d->selected_palette[color] >> 16;
+121-		*b = d->selected_palette[color] >>  8;
+122-		break;
+123-	case CRMFB_MODE_TYP_RG3B2:	// Used by NetBSD console mode
+124-		*r = 255 * ((color >> 5) & 7) / 7;
+125-		*g = 255 * ((color >> 2) & 7) / 7;
+126-		*b = (color & 3) * 85;
+127-		break;
+128:	case CRMFB_MODE_TYP_RGB8:	// Used by NetBSD's X11 server
+129-		*r = color >> 24;
+130-		*g = color >> 16;
+131-		*b = color >>  8;
+132-		break;
+133-	default:/*  #196: (Codex/Fable) d->color_mode is guest-controlled; an
+134-		    unimplemented WID mode must not exit() the host (get_rgb is
+135-		    per-pixel, so don't fatal()-flood either) -- render black.  */
+136-		*r = *g = *b = 0;
+137-		break;
+138-	}
+
+ succeeded in 199ms:
+GXEMUL-SEC/src\include\thirdparty\crmfbreg.h:334:#define DE_MODE_PIXDEPTH_8	0x00000000
+GXEMUL-SEC/src\include\thirdparty\crmfbreg.h:335:#define DE_MODE_PIXDEPTH_16	0x00000004
+GXEMUL-SEC/src\include\thirdparty\crmfbreg.h:336:#define DE_MODE_PIXDEPTH_32	0x00000008
+GXEMUL-SEC/src\devices\dev_sgi_re.c:123:	/*  sgirandompixel: horrible_getputpixel()'s unimplemented-mode arm.  ITS
+GXEMUL-SEC/src\devices\dev_sgi_re.c:171: *  horrible_getputpixel():
+GXEMUL-SEC/src\devices\dev_sgi_re.c:184:void horrible_getputpixel(int put, struct cpu* cpu, struct sgi_re_data* d,
+GXEMUL-SEC/src\devices\dev_sgi_re.c:258:		    random() shape at its own default (row sgirandomcolour).  */
+GXEMUL-SEC/src\devices\dev_sgi_re.c:268:			    "horrible_getputpixel (%s), x=%i y=%i; declined "
+GXEMUL-SEC/src\devices\dev_sgi_re.c:277:		//fatal("sgi gbe horrible_getputpixel: unexpected non-set high bit of tileptr?\n");
+GXEMUL-SEC/src\devices\dev_sgi_re.c:327:			/*  #505: this read buf[1..3] while the PUT arm above
+GXEMUL-SEC/src\devices\dev_sgi_re.c:817:				horrible_getputpixel(0, cpu, d, x, y, &oldcolor, dst_mode);
+GXEMUL-SEC/src\devices\dev_sgi_re.c:863:				horrible_getputpixel(1, cpu, d, x, y, &color, dst_mode);
+GXEMUL-SEC/src\devices\dev_sgi_re.c:878:					horrible_getputpixel(0, cpu, d, x, y, &oldcolor, dst_mode);
+GXEMUL-SEC/src\devices\dev_sgi_re.c:883:					horrible_getputpixel(0, cpu, d,	src_x, src_y, &color, src_mode);
+GXEMUL-SEC/src\devices\dev_sgi_re.c:929:					horrible_getputpixel(1, cpu, d, x, y, &color, dst_mode);
+GXEMUL-SEC/src\devices\dev_sgi_re.c:1382:						horrible_getputpixel(0, cpu, d,
+GXEMUL-SEC/src\devices\dev_sgi_re.c:1387:					horrible_getputpixel(1, cpu, d, x, y, &bg, dst_mode);
+
+ succeeded in 408ms:
+345-#  FLOOR CLAUSE (b): reds if the removed defect is reinstated VERBATIM.  It is not redundant with415-#  Mutant M12_linear -- guard kept, repair conditioned on `linear':
+416-#
+417-#      case DE_MODE_TYPE_RGB:
+418-#              if (linear) *color = (buf[0]<<24)+(buf[1]<<16)+(buf[2]<<8);   /* the fix    */
+419-#              else        *color = (buf[1]<<24)+(buf[2]<<16)+(buf[3]<<8);   /* the defect */
+420-#
+421-#  scored **8/8, a CLEAN SWEEP**, because every row above drives LIN_A (tlb_mode 4) and `linear' is
+422-#  therefore true in all of them.  `linear' is `tlb_mode > 3' and it DOMINATES the edited lines via
+423-#  the `if (!linear && (x < 0 || ...)) return;' guard, so it sits inside the DEPENDS-ON closure --
+424-#  this is a floor breach, not coverage debt.
+425-#
+426-#  The seat that named the axis proposed conditioning on `tileptr'.  That cannot work as stated:
+427-#  `tileptr &= ~0x80000000' strips the linear flag BEFORE the switch, so `tileptr' carries no
+428-#  addressing-mode information by the time the arm runs.  `linear' is the variable that survives, and
+429-#  building the mutant in the form the source permits is what turned a prediction into a measurement.
+430-#
+431-#  THE SOURCE is tiled and the DESTINATION stays LIN_A, deliberately: the RGB arm under test is the
+432-#  GET, and the GET's `linear' comes from src_mode.  A tiled DESTINATION would exercise the PUT and
+433-#  leave this mutant untouched.
+434:A = Addr(CODE)
+435-t, alive = session(setup(A, MODE_RGB_TLBA, tiled_src=True) + load(A, DST_KSEG1) + ["print v0"])
+436-got_tiled = printed(t, "v0") if alive else "died"
+437-
+438-row("rgb tiled", got_tiled, "0x%x" % RGB_FIXED,
+439-    "the fix must hold for a TILED source, not only for LIN_A")
+440-
+441-ok = sum(1 for _, o in rows if o)
+442-print("")
+443-print("SGIRGB_RESULT=%d/%d" % (ok, len(rows)))
+444-print("SGIRGB_WITNESS=%s" % ("PASS" if ok == len(rows) else "FAIL"))
+445-print("SGIRGB_DONE")
+446-sys.exit(0 if ok == len(rows) else 1)
+
+codex
+The MTE branch compares a depth in bits—8, 16, 32, or 64—with 4, so it never selects RGBA. For the buffer defect, counting `MEM_WRITE` calls cannot distinguish the repair: initialization changes neither the call count nor its length. The oracle needs to observe initialization state; value checks alone cannot prove it.
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n -B 12 -A 30 '"'^'"\\s*uint8_t buf\\[8\\]' GXEMUL-SEC/src/devices/dev_sgi_re.c" in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n -A 52 '"'^def setup'"' sgi_re_rgb_probe.py" in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\regress
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n -C 8 'memcpy\\(|memcpy_|do_return_ok:|return MEMORY_ACCESS_OK|memblock \\+ offset' GXEMUL-SEC/src/cpus/memory_rw.c" in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n -C 8 'color = .*\\[|get_rgb\\(' GXEMUL-SEC/src/devices/dev_sgi_gbe.c" in C:\DocumentNoSnc\CC\GXEMUL
+ succeeded in 157ms:
+252:def setup(A, src_mode, dst_mode=None, stepx=4, tiled_src=False):
+253-    """Program the engine, paint source and destination, then fire one rectangle.
+254-       Every store is a REAL GUEST INSTRUCTION through memory_rw -- no device_add,
+255-       no debugger `put' to a device register."""
+256-    #  *** THE 64-BIT STORE WRITES THE HIGH WORD TO [n] AND THE LOW WORD TO [n+1]. ***  Measured:
+257-    #  `sd' of 0x10 gave `re_linear_a[0] = 0, [1] = 0x10', so the tile pointer was 0 and every pixel
+258-    #  went to PHYSICAL ADDRESS 0 -- the destination stayed at its pre-paint and the ACCEPT control
+259-    #  failed, which is precisely the "do not leave it 0: that writes phys 0" trap grok named.  The
+260-    #  value below puts 0x10 in the HIGH word so re_linear_a[0] = 0x10.
+261-    c  = store(A, RE_LINEAR_A, 0x0000001000000000, op=OP_SD_T0_A3)  # sd: a 4-byte sw is DECLINED here
+262-    c += store(A, DST_KSEG1, DST_PAINT)
+263-    c += store(A, SRC_KSEG1, SRC_VAL)
+264-    if tiled_src:
+265-        #  *** re_tlb_a IS uint16_t[256] AND ITS STORE LOOP IS PER-HALFWORD, WHICH IS NOT
+266-        #  RE_LINEAR_A'S SHAPE.  Getting this wrong is what the row caught on its first run. ***
+267-        #      for (hwi = 0; hwi < len; hwi += 2)
+268-        #              d->re_tlb_a[tlbi] = data[hwi]*256 + data[hwi+1];
+269-        #  So an 8-byte store fills re_tlb_a[0..3] from FOUR big-endian halfwords, and the one
+270-        #  that lands in [0] is bits 63..48.  `TLBA_TILE << 32' -- the shift RE_LINEAR_A needs,
+271-        #  because re_linear_a is uint32_t -- puts the value in re_tlb_a[2] and leaves [0] at
+272-        #  zero, giving tileptr 0 and a DECLINED get.  Measured: the row read FG_VAL
+273-        #  (0x77665544), which this probe's own DE_FG comment names as what a declined GET
+274-        #  leaves.  **The row reported my setup error instead of passing quietly.**
+275-        c += store(A, RE_TLB_A, TLBA_TILE << 48, op=OP_SD_T0_A3)
+276-        for a in TLBA_ROWS:
+277-            c += store(A, a, SRC_VAL)
+278-    c += store(A, DE_MODE_DST,   MODE_LIN_A if dst_mode is None else dst_mode)
+279-    c += store(A, DE_MODE_SRC,   src_mode)
+280-    c += store(A, DE_DRAWMODE,   DRAWMODE)
+281-    c += store(A, DE_XFER_ADDR,  0 if tiled_src else SRC_OFS)   # linear: src_x = addr_src (a BYTE
+282-                                                      # offset).  Tiled: src_x is a PIXEL
+283-                                                      # coordinate, so 0 is the tile's origin.
+284-    c += store(A, DE_XFER_STEPX, stepx)                # must equal src bufdepth or the XFER arm warns
+285-    c += store(A, DE_FG,         FG_VAL)               # what a declined GET leaves in `color'
+286-    c += store(A, DE_XVERTEX_0,  0x00000000)           # (x1,y1) = (0,0)
+287-    #  *** (x2,y2) = (0,3): ONE COLUMN, FOUR ROWS.  The height is load-bearing and the width must
+288-    #  NOT be used instead. ***  (The latch row that needed the height lives in the probe this
+289-    #  file was copied from, not here -- but the geometry is kept so the two sessions stay
+290-    #  comparable, and because LIN_A addressing is `ofs = x & 4095' either way.
+291-    #  is the announcement COUNT -- which cannot vary at all if the rectangle is one pixel, because an
+292-    #  unlatched announce then also fires exactly once.  Measured: with (0,0)-(0,0) the M_NOLATCH
+293-    #  mutant scored 8/8, a clean escape, and the row was VACUOUS BY CONSTRUCTION.
+294-    #  It is the HEIGHT and not the width because LIN_A addressing is `ofs = x & 4095' -- y is
+295-    #  ignored -- so four ROWS write the same byte four times (the value oracle survives) while four
+296-    #  COLUMNS would write overlapping bytes at ofs 0..3 and destroy it.
+297-    c += store(A, DE_XVERTEX_1,  0x00000003)           # (x2,y2) = (0,3): 4 pixels, all at ofs 0
+298-    c += store(A, DE_PRIM_START, PRIM_RECT)            # PRIMITIVE|START fires the draw
+299-    return c
+300-
+301-print("sgirergbroundtrip RUNG-3 WITNESS -- binary=%s label=%s" % (BIN, LABEL))
+302-print("%-16s %-12s %-12s %-44s %s" % ("row", "got", "want", "note", ""))
+303-
+304-# ---------------------------------------------------------------- controls
+
+ succeeded in 175ms:
+762-	if ((paddr&((1<<BITS_PER_MEMBLOCK)-1)) + len > (1<<BITS_PER_MEMBLOCK)) {
+763-		/*  #165: (Codex/Fable) split accesses that cross a memblock
+764-		    boundary (e.g. large DMA transfers) at the boundary,
+765-		    instead of exiting the whole emulator.  */
+766-		size_t len_head = (size_t) ((1<<BITS_PER_MEMBLOCK) -
+767-		    (paddr & ((1<<BITS_PER_MEMBLOCK)-1)));
+768-
+769-		if (writeflag == MEM_WRITE)
+770:			memcpy(memblock + offset, data, len_head);
+771-		else
+772:			memcpy(data, memblock + offset, len_head);
+773-
+774-		return MEMORY_RW(cpu, mem, vaddr + len_head, data + len_head,
+775-		    len - len_head, writeflag, misc_flags);
+776-	}
+777-
+778-	/*  And finally, read or write the data:  */
+779-	if (writeflag == MEM_WRITE)
+780:		memcpy(memblock + offset, data, len);
+781-	else
+782:		memcpy(data, memblock + offset, len);
+783-
+784:do_return_ok:
+785:	return MEMORY_ACCESS_OK;
+786-}
+787-
+788-/*  #430: this file is included more than once per translation unit (see cpu_alpha.c), so
+789-    the per-inclusion macros must not leak into the next inclusion.  MRW_CAT/MRW_CAT2 are
+790-    inclusion-independent and are left defined behind their own guard.  */
+791-#undef MEMORY_RW_ONE_PAGE
+792-#undef MRW_OFFSET_MASK
+793-#undef MRW_SPLIT_MASK
+
+ succeeded in 185ms:
+272-	}
+273-
+274-	// The highest bit seems to be set for a "valid" tile pointer.
+275-	if (!(tileptr & 0x80000000)) {
+276-		//printf("dst_mode %i, tile_nr = %i,  tileptr = 0x%llx\n", dst_mode, tile_nr, (long long)tileptr);
+277-		//fatal("sgi gbe horrible_getputpixel: unexpected non-set high bit of tileptr?\n");
+278-		//exit(1);
+279-		return;
+280-	}
+281-	
+282-	tileptr &= ~0x80000000;
+283-
+284:	uint8_t buf[8];		/* #100: bufdepth can be 8 = 1<<((mode>>8)&3) */
+285-	if (put) {
+286-		switch (color_mode) {
+287-		case DE_MODE_TYPE_CI:
+288-			buf[0] = *color;
+289-			break;
+290-		case DE_MODE_TYPE_RGB:
+291-			buf[0] = *color >> 24;
+292-			buf[1] = *color >> 16;
+293-			buf[2] = *color >> 8;
+294-			buf[3] = 0;
+295-			break;
+296-		case DE_MODE_TYPE_RGBA:
+297-			buf[0] = *color >> 24;
+298-			buf[1] = *color >> 16;
+299-			buf[2] = *color >> 8;
+300-			buf[3] = *color;
+301-			break;
+302-		case DE_MODE_TYPE_ABGR:
+303-			buf[0] = *color;
+304-			buf[1] = *color >> 8;
+305-			buf[2] = *color >> 16;
+306-			buf[3] = *color >> 24;
+307-			break;
+308-		default:buf[0] = random();
+309-			buf[1] = random();
+310-			buf[2] = random();
+311-			buf[3] = random();
+312-			// TODO.
+313-			fatal("[ put: color mode = 0x%x ]\n", color_mode);
+314-		}
+
+ succeeded in 174ms:
+104-	int		bitdepth;
+105-	int		color_mode;
+106-	int		cmap_select;
+107-	uint32_t	selected_palette[256];
+108-	struct vfb_data *fb_data;
+109-};
+110-
+111-
+112:void get_rgb(struct sgi_gbe_data *d, uint32_t color, uint8_t* r, uint8_t* g, uint8_t* b)
+113-{
+114-	// TODO: Don't switch on color_mode. For overlays, this is always 
+115-	// 8-bit index mode!
+116-	switch (d->color_mode) {
+117-	case CRMFB_MODE_TYP_I8:
+118-		color &= 0xff;
+119-		*r = d->selected_palette[color] >> 24;
+120-		*g = d->selected_palette[color] >> 16;
+--
+276-					line = 128;
+277-				}
+278-
+279-				uint8_t fb_buf[512 * 3];
+280-				int fb_i = 0;
+281-				for (int i = 0; i < 512; i+=bytes_per_pixel) {
+282-					uint32_t color;
+283-					if (bytes_per_pixel == 1)
+284:						color = buf[i];
+285-					else if (bytes_per_pixel == 2)
+286:						color = (buf[i]<<8) + buf[i+1];
+287-					else // if (bytes_per_pixel == 4)
+288:						color = (buf[i]<<24) + (buf[i+1]<<16)
+289-							+ (buf[i+2]<<8)+buf[i+3];
+290:					get_rgb(d, color,
+291-					    &fb_buf[fb_i],
+292-					    &fb_buf[fb_i+1],
+293-					    &fb_buf[fb_i+2]);
+294-					fb_i += 3;
+295-				}
+296-
+297-				dev_fb_access(cpu, cpu->mem, fb_offset,
+298-				    fb_buf, fb_len, MEM_WRITE, d->fb_data);
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n -A 8 '"'^def row'"' sgi_re_rgb_probe.py" in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\regress
+ succeeded in 30ms:
+177:def row(name, got, want, note="", negate=False):
+178-    ok = (got != want) if negate else (got == want)
+179-    rows.append((name, ok))
+180-    print("%-16s %-12s %-12s %-44s %s" % (name, str(got), ("NOT " if negate else "") + str(want),
+181-                                          note, "ok" if ok else "FAIL"))
+182-    return ok
+183-
+184-def session(cmds, settle=1.5, spin=1.6):
+185-    pid, fd = pty.fork()
+
+codex
+**VERDICT: Zero-initialize all eight bytes at the existing declaration. That completes the local initialization repair in both directions, but does not establish correct pixel-format or MTE behavior. No guest-visible value or write-count oracle can reliably prove initialization occurred.**
+
+I reviewed the scoped source and top-level regression Python files. I made no edits and executed no emulator, tests, or probes.
+
+Several “settled” premises need correction.
+
+- **S1:** The uninitialized declaration is present. “Once per pixel” is too narrow: a rectangle iteration can read the old destination, read the source, and then write the destination. Each invocation can reuse the same physical stack storage. See the [rectangle loop](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:870).
+- **S2:** Confirmed for the implementation. The [register handler stores mode values directly](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:1001), and the helper independently extracts type and transfer width. However, implementation acceptance does not establish hardware validity: the [header names buffer depths of 8, 16, and 32 bits](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/thirdparty/crmfbreg.h:325), with no named 64-bit depth.
+- **S3/S5:** Current RGB GET consumes indices **0, 1, 2**, not index 3. The recorded `#505` change preserved the affected widths but reduced the unfilled bytes consumed.
+- **S4:** The current [memory implementation](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:207) contains **six** `memset(data, 0, len)` sites: lines 215, 267, 492, 671, 683, and 732. The quoted precedent is present. Those fills cover the supplied `len`; they cannot initialize bytes beyond the prefix this helper requests.
+
+Here is the arithmetic enumeration, including the MTE expression:
+
+| Extracted depth field | Helper `bufdepth` | MTE `depth` | MTE `depth == 4` |
+|---:|---:|---:|---|
+| 0 | 1 byte | 8 bits | False |
+| 1 | 2 bytes | 16 bits | False |
+| 2 | 4 bytes | 32 bits | False |
+| 3 | 8 bytes | 64 bits | False |
+
+The [helper’s switches](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:284) produce the following uninitialized-use inventory. GET rows assume the requested read prefix is completely filled. Entries are buffer indices; “—” means none.
+
+| Operation and arm | Depth 1 | Depth 2 | Depth 4 | Depth 8 |
+|---|---|---|---|---|
+| PUT CI | — | 1 | 1, 2, 3 | 1, 2, 3, 4, 5, 6, 7 |
+| PUT RGB/RGBA/ABGR/default | — | — | — | 4, 5, 6, 7 |
+| GET CI | — | — | — | — |
+| GET RGB | 1, 2 | 2 | — | — |
+| GET RGBA/ABGR/default | 1, 2, 3 | 2, 3 | — | — |
+
+For the recorded pre-`#505` RGB expression, the corresponding GET sets were:
+
+- Depth 1: `{1,2,3}` became `{1,2}`.
+- Depth 2: `{2,3}` became `{2}`.
+- Depth 4: empty remained empty.
+- Depth 8: empty remained empty.
+
+Thus, “neither created nor changed any of the above” is too broad. It did not eliminate the mismatch, but it changed its byte-level extent.
+
+**Q1.** Zero-fill is the right immediate repair because it establishes defined contents before either direction can consume otherwise untouched bytes. Making PUT arms assign more bytes does not repair narrow GETs.
+
+The case against stopping there is also sound: initialization supplies a fallback, not missing format semantics. But **“CI at depth 4 becomes defined-but-wrong” is itself unproven as a general hardware claim**. The local header distinguishes buffer depth from pixel depth; this helper does not decode the latter. Correct behavior might require packing, padding, preserving other bytes, or rejecting an unsupported combination. Merely equalizing assignment and transfer counts cannot choose among those policies.
+
+Consequently:
+
+- Zero-fill completes this automatic-buffer initialization repair.
+- Correct format/depth handling remains separate work.
+- Full-width assignment is appropriate only after establishing what those bytes represent.
+- A general eight-byte raw copy cannot pass through the existing four-byte `uint32_t color` representation without losing information.
+
+The fork’s zero-fill precedent supports that division. It does not establish pixel-format semantics.
+
+**Q2.** Choose **(a), at the existing declaration**.
+
+That declaration already follows the coordinate, addressing-mode, tile-index, and valid-pointer checks. Rejected accesses therefore need not reach the initialization.
+
+Option **(b)** leaves every narrow-GET gap in the table intact. Option **(c)**, as proposed, also addresses only PUTs. A complete conditional approach needs separate accounting for bytes assigned on PUT and bytes consumed on GET. RGB’s four-byte PUT footprint and three-byte GET footprint show why a single “arm size” is insufficient.
+
+The per-pixel cost deserves measurement if performance becomes an issue, but it does not presently justify conditional initialization. The source describes a slow memory access and performs an indirect `memory_rw` call. An eight-byte initializer may compile into a small store sequence; redundant stores may also be optimized. Neither its actual instruction sequence nor its performance impact can be established from this review. There is no measured basis here for accepting the added conditional complexity.
+
+**Q3.** **No complete black-box guest-visible oracle distinguishes initialization from coincidental zero contents.**
+
+A value assertion can enforce the repaired output policy and catch some regressions. It cannot prove the assignment happened: an execution with uninitialized storage containing the expected bytes can produce the same observations. Repetition does not resolve that ambiguity.
+
+Counting `MEM_WRITE` calls is even less discriminating here. The initialization repair preserves both the call count and transfer length. Such a count can establish that a transfer occurred; it cannot establish buffer definedness.
+
+The appropriate oracle observes initialization state separately from byte values:
+
+- Before a PUT transfer, every transferred byte must be defined.
+- After a GET read, every byte consumed by its decoding expression must be defined.
+- Transfer/reachability assertions must accompany these checks so an early return cannot make them pass vacuously.
+
+That requires host-side definedness instrumentation or a source-level proof. An ordinary callback inspecting byte values cannot supply that information. For the declaration repair, an unconditional initializer dominating both paths gives a simple local proof.
+
+Dynamic checks still prove only exercised paths. Coverage should distinguish both directions, all four widths, the color selections, and each implemented addressing case. In particular, **a wide GET does not test a wide PUT**.
+
+If the required claim is literally “all eight bytes were initialized,” a host-side check can assert that stronger property. The repair-independent safety property is narrower: every byte actually consumed or transferred must be defined.
+
+**Q4.** These defects overlap in byte positions, but have different responsibilities.
+
+| Defect | What it determines | What remains after initialization |
+|---|---|---|
+| Buffer initialization | Whether untouched local bytes have defined contents | This local gap is closed |
+| Dead MTE branch | Which color interpretation tiled transfers select | They still select CI and fail to preserve wider raw transfers |
+| Random-color default | Contents explicitly assigned by unsupported PUT types | Random bytes and the diagnostic remain |
+
+The [MTE construction](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:1365) starts with zero color-type bits. The enumerated comparison never selects RGBA. Consequently, transfers reaching that tiled helper path use CI.
+
+After buffer initialization, a tiled CI copy has these outcomes:
+
+| Transfer width | Copied from source | Supplied by initialization |
+|---:|---|---|
+| 1 | Byte 0 | Nothing |
+| 2 | Byte 0 | Byte 1 |
+| 4 | Byte 0 | Bytes 1, 2, 3 |
+| 8 | Byte 0 | Bytes 1, 2, 3, 4, 5, 6, 7 |
+
+Initialization therefore makes the remaining MTE data-loss behavior deterministic. Correcting the intended 32-bit selection would still leave the other widths requiring their own semantic assessment.
+
+For the color default, PUT explicitly assigns random values to bytes 0–3. Initialization does not replace those assignments. At width eight, the resulting buffer contains four assigned random bytes followed by four initialized zeros. At smaller widths, only the corresponding prefix transfers.
+
+Also, **GET’s color default is different**: it decodes four bytes in reverse order rather than calling `random()`. Its narrow-read initialization gap closes, but unsupported-format behavior remains. The header’s named `DE_MODE_TYPE_YCRCB` reaches these defaults; they are not restricted to unnamed selectors.
+
+If a later repair declines unsupported GETs, callers must also handle that failure. The existing source already records the separate dependent-PUT problem.
+
+**Q5.** I can assess the detector’s coverage gaps, but I can’t supply a target-specific edit that restores this memory-safety defect while evading detection.
+
+For a detector based solely on write counts, initialization is unobserved regardless of field coverage. For dynamic definedness checks, a repair restricted to exercised cases can leave untested cases unprotected. A sound all-paths proof would reject that restriction wherever a consumed byte becomes undefined.
+
+A concrete existing row expected to remain green is **`rgb depth64`** in [the RGB probe](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/sgi_re_rgb_probe.py:405). It performs an eight-byte RGB **GET**, then uses the setup’s default four-byte RGBA destination. Both relevant footprints are already filled or assigned. Its name therefore does not establish coverage of eight-byte PUT initialization. This is a source-based expectation, not a measured result.
+
+One additional oracle issue surfaced: the [RGB probe comment](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/sgi_re_rgb_probe.py:345) says neither `rgb chan` nor `rgb not corrupt` implies the other. The implemented comparisons contradict that:
+
+| Observed value | `rgb chan` | `rgb not corrupt` |
+|---|---|---|
+| Expected fixed value | Pass | Pass |
+| Historical corrupt value | Fail | Fail |
+| Any other value | Fail | Pass |
+
+`rgb chan` passing necessarily implies `rgb not corrupt` passing. The latter adds diagnostic classification, but no additional rejection power to the combined gate.
+tokens used
+96,941

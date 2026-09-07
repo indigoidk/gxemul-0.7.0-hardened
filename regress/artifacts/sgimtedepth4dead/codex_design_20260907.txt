@@ -1,0 +1,58 @@
+**VERDICT: confirmed dead comparison. `depth == 32` is a justified narrow correction; `sgirebufuninit` remains open, and a reliable MTE witness is still unestablished.**
+
+I inspected the scoped files in `GXEMUL-SEC`. No edits, builds, probes, or emulator sessions.
+
+S1, S2 and S5 check out. **S3 needs “PUT” inserted:** the CI *PUT* initializes only `buf[0]`; a successful GET reads `bufdepth` bytes into its own buffer, then retains only `buf[0]` in `*color`. **S4 overstates causation:** this branch explains the 32-bit MTE mismatch, but DE independently reaches the buffer defects. It also does not prove that every affected copy observably leaks or corrupts data.
+
+**Q1. `depth == 32` repairs the intended four-byte conversion.** Both synthesized modes then select RGBA, whose GET and PUT preserve all four bytes. That matches the nearby comment’s narrow intent. The conditional also affects tiled **fills**, because their PUT uses the same `dst_mode`. [MTE mode construction](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:1365)
+
+Selecting a colour type per width is not a complete solution with this helper:
+
+| MTE width | What the implemented helper supports |
+|---|---|
+| 8 bits | CI carries the one transferred byte. |
+| 16 bits | CI loses the second byte. Selecting RGBA would make GET consume two bytes beyond the two actually read. |
+| 32 bits | RGBA carries exactly four bytes. |
+| Emulator-derived 64 bits | No implemented type carries eight bytes; the intermediate `uint32_t` cannot represent them. |
+
+The broader repair needs explicit handling of transfer width, or refusal of unsupported combinations. **The scoped source cannot establish the hardware’s intended 16-bit packing or a 64-bit format.** The header’s separate `DE_MODE_PIXDEPTH_*` definitions do not settle this: the helper does not interpret those bits. [Helper implementation](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:184)
+
+**Q2. Field value 3 is guest-storable and reaches the emulator’s tiled transfer path.** MTE register writes retain the field, and the tiled destination cases have no depth-validation guard. The emulator consequently interprets it as an eight-byte transfer. The separate linear destination path rejects non-8-bit depth by exiting. [Register storage](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:1522), [destination dispatch](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:1341)
+
+What remains unknown is its **hardware meaning**. The missing constant proves only that this header names three encodings; it does not prove that the fourth is reserved. The regression’s `MODE_RGB64` also supplies no such evidence—it is a DE test value constructed locally. [Depth definitions](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/thirdparty/crmfbreg.h:267)
+
+For a complete MTE repair, I would require an explicit disposition for value 3. Declining it as **unimplemented** is defensible pending a hardware contract; calling it **reserved** is not established here. A comparison-only correction must leave that obligation recorded.
+
+**Q3. Zero-initialization remains necessary under the current acceptance policy, unless equivalent validation removes every incomplete-buffer case.** After correcting only the MTE comparison, these remain:
+
+| Remaining path | Bytes used without initialization |
+|---|---|
+| Tiled MTE CI PUT, 16 bits | `buf[1]` |
+| Tiled MTE CI PUT, field 3 | `buf[1..7]` |
+| DE CI PUT, widths 2/4/8 bytes | Everything after `buf[0]` within the transfer |
+| DE RGB/RGBA/ABGR/default PUT, width 8 bytes | `buf[4..7]` |
+| DE RGB GET, width 1 byte | `buf[1..2]` |
+| DE RGB GET, width 2 bytes | `buf[2]` |
+| DE RGBA/ABGR/default GET, widths 1/2 bytes | `buf[1..3]` / `buf[2..3]` |
+
+This assumes the memory read successfully supplies its requested bytes. The helper also ignores the read result; determining whether a failing read leaves additional bytes untouched requires examining the memory implementation outside this scope. [Buffer and conversion arms](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:284)
+
+DE reaches these through rectangle source reads, line/rectangle destination reads for raster operations, and their destination writes. Zero-initialization addresses the missing initialization; it does not restore discarded transfer data or eliminate the default arm’s explicit randomness.
+
+There is another distinction: a helper return before accessing the buffer leaves the caller’s colour unchanged. MTE still performs the dependent PUT, and its `bg` persists across iterations—so a declined GET can reuse an earlier source value. That is separate from buffer initialization.
+
+**Q4. The source supports feasibility on the sibling’s stock configuration, but not a claim of an established rung-3 witness.** RE initialization unconditionally registers MTE alongside DE, MTE dispatches synchronously, and its tiled PUT reaches guest physical memory. There is no separate registration or scanout prerequisite apparent here. [Shared initialization](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:675), [MTE dispatch](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:1624)
+
+The sibling’s **DE programming cannot be reused unchanged**. Its usual LIN_A destination is especially unsuitable: MTE’s linear destination path exits for COPY, while the source check also excludes linear sources.
+
+The substantial witness problem is the oracle. **An affected copy can appear correct if the PUT’s uninitialized tail happens to retain bytes from the preceding GET.** These are separate automatic objects; that preservation is neither guaranteed nor evidence of correctness. Consequently, source analysis cannot promise a fixed corrupt destination value or guaranteed failure of a simple copy-equality row. Fill and copy also need separate validation because fill bypasses the source conversion.
+
+**Q5. One character suffices:** after the proposed correction, change `32` to `33`. The branch becomes unreachable again. I expect **`rgb tiled64` to remain green**, together with the other nine assertions in that RGB script, because its transfers invoke DE and never exercise this MTE mode construction. This is a static prediction, not a measured mutation result. [Named row](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/sgi_re_rgb_probe.py:469)
+
+A future fill-only detector would also miss removal of the source RGBA assignment. The coverage contract therefore needs to distinguish both assignments and COPY versus fill; the neighbouring detector’s width/addressing coverage does not transfer automatically to MTE.
+
+I also found these separate issues while checking:
+
+- **Tiled MTE ignores several programmed controls:** `bytemask` does not affect its writes; source endpoint `src1` does not bound the copy; source and destination Y-step registers do not determine advancement. The loops use endpoint-derived `dy`. These are implementation facts requiring separate semantic adjudication. [Transfer loop](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:1376)
+- **MTE’s width-error arm is itself unreachable:** `len == 4` followed by `len != 4` exhausts the possibilities. The width probe already identifies this as `sgimtewidth`; this is a re-observation, not a newly discovered row. [Width handling](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:1522)
+- **The RGB detector’s “neither implies the other” claim is false.** Passing `rgb chan` necessarily passes `rgb not corrupt`, since their expected constants differ. The second assertion provides diagnostic distinction, but adds no independent rejection coverage. [Detector comment and assertions](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/sgi_re_rgb_probe.py:343)

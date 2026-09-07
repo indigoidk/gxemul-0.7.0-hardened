@@ -165,7 +165,21 @@ if (vaddr == 0xfffffffd80000000ULL) fatal("AYONA3\n");
 		goto not_found;
 	}
 
-	(*return_paddr) = ALPHA_PTE_TO_PFN(pte3) << pageSizeShift;
+	/*  #508: was just `PFN << pageSizeShift' -- a PAGE BASE.  memory_rw then takes
+	    `offset = paddr & offset_mask', which was therefore always zero, so every
+	    walked access resolved to the page's first bytes.  Measured: a cold guest ldq
+	    of vaddr+8 returned the vaddr+0 value.  A debugger watchpoint on a walked page
+	    landed at the base for the same reason.
+	
+	    The mask is derived from pageSizeShift rather than written as 0x1fff: this
+	    function already has TWO names for 13 (ALPHA_PAGESHIFT and this local), and a
+	    literal beside the shift is how the two drift.  `|' rather than `+' because
+	    that is what every other CPU's walk in this tree writes; here they are equal,
+	    the shifted PFN having bits 12:0 clear.  The TODO below STAYS: `flags' is
+	    still ignored, the protection bits untested, and `return 2' still reports
+	    every walked page writable.  */
+	(*return_paddr) = (ALPHA_PTE_TO_PFN(pte3) << pageSizeShift)
+	    | (vaddr & ((1ULL << pageSizeShift) - 1));
 
 	// TODO.
 	return 2;

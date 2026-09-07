@@ -1,0 +1,79 @@
+**VERDICT: REVISE — choose DECLINE + LATCHED ANNOUNCE with a return before the PUT transfer. `sgirebufuninit` is not a prerequisite. Source reachability is supported; the rung-3 witness remains pending.**
+
+I reviewed `GXEMUL-SEC`. The header actually included is [src/include/thirdparty/crmfbreg.h](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/thirdparty/crmfbreg.h:328).
+
+**S3 needs correction before applying its precedent.** `sgirandompixel` repaired the **addressing-mode** default, before GET and PUT diverge. That arm returns for both directions. The actual colour GET default still performs a raw conversion. Also, the `#498` anchors in this file identify the drawing-engine access-width repair. [Addressing default](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:235), [colour GET default](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:358), [#498](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:1015).
+
+**Q1: A declined PUT need not leave anything defined in `buf`, provided nothing consumes it.** The helper itself owns the memory write. Its callers receive no buffer to transfer afterward. [PUT switch and transfer](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:284).
+
+| Candidate | Guest-visible effect | Ownership |
+|---|---|---|
+| Remove the fill and fall through | Transfers indeterminate stack bytes | Reject in this round |
+| Zero the entire transferred span and fall through | Overwrites destination bytes with zero | A fallback-writing policy this round would need to justify |
+| Skip the actual transfer | Preserves destination bytes | This round |
+| Return from the PUT default | Preserves destination bytes; implements the preceding choice locally | This round; preferred |
+
+Thus **S5’s “same question” conclusion is false**, although its buffer defect is real. This round decides whether unsupported PUTs write anything. `sgirebufuninit` decides how paths that still transfer avoid consuming uninitialised bytes.
+
+There is no required patch ordering. If adjudications must be ordered, settle this row’s no-write contract first, then assess the remaining buffer paths. Initialising the buffer would neither remove the four `random()` calls nor justify writing zeros for an unsupported format.
+
+The return declines this pixel write. The drawing loop continues, and earlier GET operations are not undone.
+
+S1 also needs a width qualification: four bytes are **assigned** randomly, but the transfer length is **1, 2, 4, or 8 bytes**. Narrow transfers expose only the corresponding prefix; an eight-byte transfer additionally consumes four uninitialised bytes. [Width extraction](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:187).
+
+**Q2: I choose member 3, but its strongest objection is guest-visible false success.** A documented YCRCB operation would leave stale pixels while the register access succeeds and status reports idle. A host diagnostic gives the guest no recovery mechanism. This is a containment decision, not an implementation of the documented format. [Access completion](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:1267), [status response](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:1661).
+
+I nevertheless prefer it because preserving destination bytes avoids inventing pixel data, and a bounded diagnostic exposes why rendering was declined. Silent decline loses that attribution. ACCEPT or BACKED ACCEPT would require a justified representation; the raw GET fallback alone does not establish YCRCB packing or conversion semantics. IMPLEMENT needs more evidence than the header’s constant.
+
+FAULT is **available at the MIPS memory-access layer**. Its rejection here should not rest on a claim that this CPU cannot deliver exceptions. However, this helper returns `void`, its transfers request `NO_EXCEPTIONS`, and the outer device handler returns success. Choosing FAULT requires an error-propagation design and a warrant for the guest-visible exception. [MIPS exception delivery](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:603).
+
+The fork’s idioms are heterogeneous:
+
+- The helper silently returns for invalid coordinates or tile pointers.
+- Unsupported drawing primitives use a latched announcement and perform no drawing.
+- Unknown DE register accesses retain the generic register backing and announce.
+- Several MTE branches still terminate the host.
+- Elsewhere, PCC2 explicitly distinguishes already-served reads, which it accepts, from writes it declines. [Primitive decline](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:944), [backed DE accesses](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:1001), [MTE exits](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:1328), [PCC2 precedent](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_pcc2.c:67).
+
+For this repair, latch **only the announcement**; decline every invocation. Use an independent bit in the device’s `warned` field and the explicit `(once)` marker. Sharing `SGIRE_W_BADMODE` would let an addressing failure suppress the colour diagnostic. `fatal()` itself prints without terminating or applying the `debug()` quiet-mode check. [Latch allocation](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:123), [logging implementation](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/core/debugmsg.c:365).
+
+**Q3: Source inspection supports a cold-debugger witness on stock IP32; I found no machine-description blocker.** IP32 registers the rendering engine, and the drawing-engine path preserves the mode field through to the helper. The sibling already contains guest-instruction liveness, device-signature, and successful-drawing controls. [Machine registration](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/machines/machine_sgi.c:499), [existing controls](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/sgi_re_randompixel_probe.py:204).
+
+Two limitations matter before adapting that witness:
+
+- Its setup fixes the **destination** to RGBA. Varying its source-mode argument does not exercise the colour PUT default. Its existing green rows therefore provide no witness for this row. [Setup](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/sgi_re_randompixel_probe.py:170).
+- Its 31-bit randomness argument does not transfer. Four independently truncated bytes can produce a destination word with bit 31 set. No particular 32-bit sentinel is excluded by that argument.
+
+A future detector needs destination-span preservation assertions, supported-drawing controls, and repeated-call diagnostic checks. Diagnostic presence alone cannot establish that memory was written.
+
+**No probe was attempted**, following your explicit instruction. Record **“source-reachable; rung-3 attempt pending.”** This review does not satisfy the attempted-probe prerequisite for documented-only disposition.
+
+**Q4: The smallest predicted escape is making the new return conditional on `bufdepth == 4`.** Keep the colour default and latched diagnostic intact. Other widths then reach the transfer without a defined fill. That conditions the repair on a field directly consumed by the transfer.
+
+I expect **`lin_b is fg`** to remain green: its destination uses the implemented RGBA arm. More pointedly, **`rgb tiled64`** should also remain green: it varies the **GET source’s** addressing and width while retaining a linear, four-byte RGBA destination. Its name does not establish PUT coverage. [Sibling row](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/sgi_re_randompixel_probe.py:237), [RGB destination selection](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/sgi_re_rgb_probe.py:279), [joint GET row](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/sgi_re_rgb_probe.py:465).
+
+A future four-byte preservation row would also miss that escape. Cover the destination axes together: twelve unsupported types × four transfer widths × four implemented address modes gives **192 combinations** before coordinate and offset dependencies. Check the whole destination span, including eight-byte spans, alongside supported-type controls and latch independence. These are source-based predictions; no mutant was built.
+
+**Q5: S2’s PUT conclusion survives; its “handled nowhere” inference does not.** Enumerating `mode & 0xf0` gives:
+
+| Masked values | PUT handling |
+|---|---|
+| `0x00` | CI |
+| `0x10` | RGB |
+| `0x20` | RGBA |
+| `0x30` | ABGR |
+| `0x40, 0x50, 0x60, 0x70, 0x80, 0x90, 0xa0, 0xb0, 0xc0, 0xd0, 0xe0` | Default; eleven unnamed values |
+| `0xf0` | Default; named YCRCB |
+
+That is **sixteen values, four explicit PUT cases, twelve default values**.
+
+The DE register handler stores the mode without filtering the type nibble. Both line and rectangle callers pass destination mode unchanged. Supported addressing and valid mapping remain prerequisites, but those checks do not constrain the colour nibble. MTE constructs modes separately and is a constrained caller. [Register storage](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:1001), [mode loading](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:700), [rectangle PUT](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:928).
+
+The named-constant search misses the **GET default’s generic handling** of all twelve values: it assembles bytes using the same expression as ABGR and announces. That establishes existing fallback behaviour, not faithful YCRCB support.
+
+I also found two additional issues:
+
+- **MTE’s RGBA-selection branch is dead.** `depth` evaluates to 8, 16, 32, or 64, but the branch tests `depth == 4`. Consequently, these helper calls retain CI, whose PUT fills only one byte even when the transfer is wider. Buffer initialisation would address undefined bytes without restoring the intended multi-byte copying behaviour. [Depth calculation](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:1311), [dead branch](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:1365).
+- **The sibling’s `lin_b diag once` row does not assert `(once)`.** It counts `"unimplemented dst_mode"` occurrences. Removing the required marker alone would leave that row green. [Diagnostic assertions](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/sgi_re_randompixel_probe.py:247).
+
+No files were changed; no builds, gates, or probes were run.

@@ -1,0 +1,81 @@
+VERDICT: Three titles need correction; six rows are coverage debt. No whole row is established as fixed, and none merits **high**.
+
+Reviewed the `GXEMUL-SEC` fork at `a264a34`, using source, detector text, and existing records. No edits, builds, gates, or probes were run. Current mutant outcomes below are static conclusions, not new measurements.
+
+1. **`gdromcondavail` — TRUE, with qualification. Product defect; sev: med — consequence.**  
+   [dev_dreamcast_gdrom.c](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_dreamcast_gdrom.c:1073), anchors `cur_cnt >= d->cnt` and `GDROM_W_OVERREAD`: clearing availability at exhaustion depends on the mutable count; the overread branch returns all-ones without correcting availability.  
+   Guest-reachable through Dreamcast MMIO: the count can disagree with the buffer extent. Ordinary exhaustion does clear availability; the inconsistent state persists until another operation changes it.  
+   [gdrom_data_probe.py](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gdrom_data_probe.py:374), anchors `overread` / `overread x1`, already exercises that disagreement but checks survival and diagnostics, not subsequent COND consistency.  
+   **Would be wrong if** exhaustion independently cleared availability, or the count could not diverge during a response. Neither holds. `#496` fixed the separate bad-value paths, not this defect.
+
+2. **`gdromdmaclear` — TRUE as coverage debt. Sev: low — consequence.**  
+   [dev_dreamcast_gdrom.c](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_dreamcast_gdrom.c:1465), anchors `GDROM_W_DMANODATA` / `GDROM_W_DMAARM`: neither current decline clears the pending completion event. `idata = 0` clears the DMA trigger shadow, a different state.  
+   [gdrom_default_probe.py](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gdrom_default_probe.py:957), anchors `nodata quiet`, `arm quiet`, `accept event`: declines are checked with completion initially clear; successful completion is checked in a separate session.  
+   A guest can encounter a decline while an earlier completion remains pending, but the claimed destructive transition exists only in the proposed mutation.  
+   **Would be wrong if** a detector preserved an already-set completion across a decline in the same session. None does. “52 rows” is historical; the current gate pins 60.
+
+3. **`gdromdmaguard` — TRUE as coverage debt. Sev: low — consequence.**  
+   [dev_dreamcast_gdrom.c](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_dreamcast_gdrom.c:1387), anchor `case 0x18`: the shipped arming predicate still requires both register values to equal one. The weakened predicate is not present.  
+   [gdrom_default_probe.py](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gdrom_default_probe.py:862), anchors `arm halfarm`, `arm count2`, `arm enable2`, leaves the named zero-count boundary untested.  
+   The inputs are guest-reachable; an incorrect acceptance would require changing the product predicate first.  
+   **Would be wrong if** the detector checked that missing boundary with an observable distinguishing arming refusal from acceptance. The existing neighboring cases do not establish that.
+
+4. **`gdromkeyindex` — PARTLY STALE. Coverage debt; sev: low — consequence.**  
+   [dev_dreamcast_gdrom.c](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_dreamcast_gdrom.c:566), anchor `gdrom_unimpl_first`, currently uses the correct bitmap index and cumulative bit update; this is not evidence of live bitmap corruption.  
+   [gdrom_default_probe.py](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gdrom_default_probe.py:461) still lacks the recorded checks for cross-window state preservation, revisiting a key after another key, independent width/alignment discrimination, and diagnostic-text accuracy.  
+   **The fifth escape is overtaken:** `accept dma`, `accept event`, and `accept data` now distinguish disabled DMA; those checks arrived in `7c9dd9e` (`#462`). Five escapes against today’s detector is therefore wrong; 32/32 remains a historical claim.  
+   Most hypothetical effects would be guest-observable; the recorded misaligned full-width access instead concerns a debugger/device-call route.  
+   **Would be wrong as remaining debt if** current checks discriminate those four remaining behaviors. Their required assertions are absent; no fresh escape scores are claimed.
+
+5. **`sh4cpudevscope` — TRUE. Product ownership defect; sev: low — guest reachability.**  
+   [cpu_sh.c](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_sh.c:232), anchor `device_add(machine, "sh4")`, remains inside each SH-4 CPU constructor. [dev_sh4.c](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sh4.c:2844), anchor `DEVINIT(sh4)`, registers fixed windows in shared machine memory.  
+   A second SH-4 CPU therefore encounters the overlapping-device construction check before guest execution. Guest software cannot create this topology.  
+   The three TMU lookups still contain `machine[0].cpu[0].irq`; removing the registration collision alone would leave ownership wrong. The missing-clock host termination was separately fixed by `#459`.  
+   **Would be wrong if** registration were properly scoped to CPU-local memory and interrupt connections followed the owning instance. Neither condition holds.
+
+6. **`sh4iprunpinned` — PARTLY STALE. Coverage debt; sev: low — guest reachability.**  
+   [sh_iprbcd_probe.py](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/sh_iprbcd_probe.py:323), anchors `iprb wdt`, `ipra rtc`, `iprd hold`, `iprd ctl`, and `scif %s`: the current detector directly checks **eight slots**, not four.  
+   Six belong to the IPRA–IPRC mappings—WDT, RTC ATI, and four SCIF slots—and two are fixed IRQ controls. [cpu_sh.c](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_sh.c:396), anchor `sh_update_interrupt_priorities`, assigns 25 IPRA–IPRC event slots.  
+   Coverage remains missing for the named RTC siblings, REF, SCI, GPIO, DMAC, and H-UDI mappings; their current device wiring supplies no corresponding interrupt assertions. Guest IPR writes reach the mappings, but their delivery consequences are presently dormant.  
+   **Would be wrong as remaining debt if** every mapped destination and priority were checked. The added SCIF rows close one portion, not the whole class.
+
+7. **`sh4irlm` — TRUE. Model capability limitation; sev: low — consequence.**  
+   [dev_sh4.c](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sh4.c:2489), anchor `case SH4_ICR`, stores no ICR state, returns zero, and diagnoses the unsupported IRLM request. Guests can reach this arm.  
+   `case SH4_IPRD` stores a shadow value, while [cpu_sh.c](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_sh.c:454), anchor `IPRD IS DELIBERATELY NOT READ`, leaves it out of priority computation.  
+   The existing refusal and priority model are consistent. Supporting the mode requires coordinated mode state, chip-appropriate priorities, interrupt routing, and reconsideration of the detector’s `iprd hold` expectation.  
+   **Would be wrong if** a functioning independent-request mode already existed. It does not. This is missing functionality, not a presently incorrect application of IPRD.
+
+8. **`sh4pclockquiet` — TRUE as coverage debt. Sev: low — consequence.**  
+   [dev_sh4.c](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sh4.c:2089), anchor `cpu->cd.sh.pclock == 0`, currently declines before installing a rate or latching TCR, with diagnostics keyed by timer.  
+   [sh_pclock_probe.py](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/sh_pclock_probe.py:341), anchors `tcr_writes`, `hpcsh unlatch`, and `SAYS`, uses only the two recorded decline values, omits timer 2, and does not verify timer identity or exclude extra rate announcements.  
+   Thus the recorded gaps have several causes: limited values, limited timer coverage, and incomplete diagnostic checks. The value set alone does not explain all five.  
+   Guests reach the correct current decline; the faults being discussed require mutations. **Would be wrong if** the missing value, timer, and message assertions existed. They remain absent; 16/16 is not remeasured here.
+
+9. **`sh4standinglower` — TRUE as predicted coverage debt. Sev: low — consequence.**  
+   [sh_iprbcd_probe.py](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/sh_iprbcd_probe.py:264), anchors `raise`, `lower`, `deassert`: `lower` changes priority before assertion; `raise` begins without a selected request; `deassert` removes the request.  
+   None tests lowering the priority of an already-selected request while it remains asserted. That transition is guest-reachable through SCIF and IPR writes.  
+   Current [cpu_sh.c](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_sh.c:519) calls `sh_recalc_int_to_assert(cpu)` unconditionally; the helper resets and recomputes the selection. The product handles this case.  
+   **Would be wrong if** a detector exercised the missing standing transition. None does. Keep the escape labelled **predicted**, not measured.
+
+10. **`sh4testclock` — CLOCK PREMISE TRUE; HARNESS CONCLUSION FALSE. Fixture capability debt; sev: low — consequence.**  
+    [machine_test.c](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/machines/machine_test.c:519), anchors `MACHINE_SETUP(baresh)` / `MACHINE_SETUP(testsh)`, still provides no peripheral clock; the device’s missing-clock guard therefore applies to their guest TCR writes.  
+    But the harness already tests that decline on both machines, accepted clock configuration on Landisk/Dreamcast, and actual TMU behavior through [sh_intprio_probe.py](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/sh_intprio_probe.py:359), anchors `landisk_tmu` / `landisk_accept`.  
+    “The harness cannot test the TMU path” is overbroad. What remains unavailable is a functioning TMU on these two synthetic fixtures.  
+    **Would be wrong as that narrower capability request if** a synthetic fixture already supplied a usable clock. Neither does. Any future change should retain missing-clock coverage.
+
+11. **`gatebuildallow` — CORE CLAIM TRUE; OLD INCIDENT RESOLVED. Harness defect; sev: med — consequence.**  
+    [gate_build.sh](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gate_build.sh:163), anchor `DIVERGENT=`, still embeds its own list; it does not derive it from `tools/est_divergence.txt` or enforce agreement with that manifest. Guest-unreachable.  
+    The [saved battery log](/C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/nightly/battery_20260823_180000.log:6) confirms the stale `arcbios.c` entry, failed build gate, and downstream MIPS SKIP. `867c697` (`#481`) removed that entry.  
+    The current `.index` difference is legitimate: `list_diffs()` excludes its extension. Importing the shared manifest verbatim would create a permanently stale expected entry.  
+    **Would be wrong as remaining debt if** the gate derived or checked its list against the manifest after matching path and file-selection rules. It does neither.
+
+For **Q1**, the substantive title corrections are **`gdromkeyindex`**, **`sh4iprunpinned`**, and **`sh4testclock`**. The old `gatebuildallow` incident is fixed, but its underlying maintenance defect remains. `gdromdmaclear` and `gdromdmaguard` must explicitly say **detector gap**: neither describes current product behavior. None supports closing the entire row as “fixed.”
+
+For **Q3**, **none of the four GD-ROM rows is a duplicate**. They concern readiness consistency, preservation of pending completion, arming-boundary coverage, and several bitmap/default-handler coverage gaps. Sharing a register block or detector does not make their closure conditions interchangeable. Retire `gdromkeyindex`’s already-covered DMA-disable subcase without burying its other four.
+
+For **Q4**, the six coverage rows are **`gdromdmaclear`, `gdromdmaguard`, `gdromkeyindex`, `sh4iprunpinned`, `sh4pclockquiet`, `sh4standinglower`**. `gdromcondavail` and `sh4cpudevscope` are product defects; `sh4irlm` is missing model functionality; `sh4testclock` is a fixture capability choice; `gatebuildallow` is a harness implementation defect.
+
+Two additional findings matter:
+
+- The current detector still lists **`gdromdmasilent` as an escape**, although its own `arm bytetrig` row contradicts that premise and the ledger already marks it dropped. Anchor: [gdrom_default_probe.py, `KNOWN TO ESCAPE`](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gdrom_default_probe.py:112).
+- The [live ledger](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/tools/pipeline/ledger.json) does not literally match S1/S2: I counted **190** open/in-work rows; **12** lack both row-level `note` and `state_note`, with `verdictstate` the twelfth. All eleven requested rows already contain `entries[].note`. Moreover, all four GD-ROM fields labelled “has witness” begin with **“none”**; historical measurements in entries should not be confused with retained product witnesses.

@@ -1,0 +1,202 @@
+I'll start from the source, not the brief: locate `horrible_getputpixel`, enumerate every colour arm against `bufdepth`, and check the neighbouring rows before answering the five questions.The function and the three neighbouring rows are located. Next I’ll read the full handler, enumerate every colour arm against `bufdepth`, and check `#505` and the `#95` zero-fill sites.The function matches the brief’s sketch. I’ll now enumerate every arm against every `bufdepth`, then check whether `#95` actually runs on these `memory_rw` calls.S4’s site-count already looks wrong, and GET versus PUT may not share a `#95` path. Next I’ll read the MTE caller, the DE loops, and the existing probes to bound those claims.**VERDICT: GO-WITH-CHANGES.** Zero-fill `buf` at its current declaration is the right fix for *this* class and is the whole fix *of this class*. It is not the packing fix, it is not PUT-only, and no single-access guest value of `0` can pin it. S1 and S5 hold. S2’s decode holds. S3’s GET overstates RGB. S4’s quotes exist and its site-count does not.
+
+---
+
+## Premises (checked against `GXEMUL-SEC/src/`, not against the brief)
+
+**S1 — TRUE.** `uint8_t buf[8];` at the `#100` line has no initialiser and no `memset` in `horrible_getputpixel()`. It is a fresh automatic. The three callers (LINE, RECTANGLE, tiled MTE) invoke it inside per-pixel loops.
+
+It is declared *after* the coordinate / `tlb_mode` / `tileptr`-valid early returns, so a zero-fill at that site is not paid on declined pixels.
+
+**S2 — TRUE on the decode, slightly too tidy on “two independent guest fields”.**
+
+Walked, not reasoned:
+
+`(mode >> 8) & 3` ∈ {0,1,2,3} → `bufdepth` ∈ {1, 2, 4, 8}.
+
+`color_mode = mode & DE_MODE_TYPE_MASK` with `MASK = 0xf0` ∈ {0x00, 0x10, …, 0xf0} = 16 values. Four named arms (`CI/RGB/RGBA/ABGR`), twelve fall into `default:` including documented `DE_MODE_TYPE_YCRCB = 0xf0`.
+
+Header documents `DE_MODE_BUFDEPTH_8/16/32` only. Field 3 (`0x300` → depth 8) is unnamed. The formula still produces it; `#100` grew the array because of it.
+
+Nothing in this function, and nothing in `draw_primitive()`, couples type to depth. `dst_mode` / `src_mode` are guest registers passed through. On MTE the picture is different: colour bits are *not* a second guest field. `src_mode`/`dst_mode` are built as `(tlb << 10) + (depth_field << 8)` with no type bits, so `color_mode` is stuck at `0` (CI) unless the dead `if (depth == 4)` fires. That is a constant colliding with a guest depth, not two independent guest fields.
+
+A third field exists and is unused here: `DE_MODE_PIXDEPTH_*` (bits 2–3). `dev_sgi_re.c` never reads `PIXDEPTH`. The comment at the DE caller still says `// bufdepth = 1, 2, or 4.` — that is a wrong record sitting next to a decode that yields 8.
+
+**S3 — PUT true; GET overstated for RGB; emphasis on depth 8 is the weak vehicle.**
+
+PUT bytes each arm *stores* (walked from the switch):
+
+| arm | stores |
+|---|---|
+| CI | `buf[0]` only |
+| RGB | `buf[0..3]` (`buf[3] = 0` explicit pad) |
+| RGBA | `buf[0..3]` |
+| ABGR | `buf[0..3]` |
+| default | `buf[0..3]` via `random()` |
+
+None of the five writes `buf[4..7]`. Then `memory_rw(..., buf, bufdepth, MEM_WRITE, ...)`.
+
+PUT leak (transferred byte with no store):
+
+| | depth 1 | 2 | 4 | 8 |
+|---|---|---|---|---|
+| CI | none | `buf[1]` | `buf[1..3]` | `buf[1..7]` |
+| RGB/RGBA/ABGR/default | none | none | none | `buf[4..7]` |
+
+So “CI at any depth above 1” is true, and it includes the **documented** pair `TYPE_CI` + `BUFDEPTH_16/32`. Depth 8 is real but unnamed in `crmfbreg.h`. Leading with it repeats the framing OUTSTANDING_BUGS already corrected.
+
+GET: `memory_rw` copies **`len` bytes only** into `buf` (RAM path is `memcpy(data, memblock+offset, len)`; device `#95` zeros `len` bytes, not the rest of an 8-byte automatic). Then the arms read:
+
+| arm | reads |
+|---|---|
+| CI | `buf[0]` — **no GET leak at any depth** |
+| RGB | `buf[0]`, `buf[1]`, `buf[2]` — **not `buf[3]`** |
+| RGBA / ABGR / default | `buf[0..3]` |
+
+GET leak (`read index >= bufdepth`):
+
+| | depth 1 | 2 | 4 | 8 |
+|---|---|---|---|---|
+| CI | none | none | none | none |
+| RGB | `buf[1]`, `buf[2]` | `buf[2]` | none | none |
+| RGBA/ABGR/default | `buf[1..3]` | `buf[2..3]` | none | none |
+
+S3’s “RGB / RGBA / ABGR then read `buf[2..3]` regardless” is true of RGBA/ABGR/default and **false of RGB**, which never reads `buf[3]`. `#505` is why.
+
+**S4 — quotes true, count false, transfer is ethos not mechanism.**
+
+`memory_rw.c` has **six** `memset(data, 0, len)` sites, not three: split-remainder failure, failed translation (`#244`, the quoted “uninitialised host stack” comment), device-read pre-zero (`#95`, the quoted “Root-cause fix” comment), Sprite hole, outside `physical_max`, NULL `memblock`. **Every one is `writeflag == MEM_READ`.** None zeros a write source.
+
+On these calls the destination is tile RAM, `PHYSICAL`. Successful RAM access does not run `#95` at all. Even if it did, `#95` zeros `len` bytes — it cannot cover GET bytes past `bufdepth`, and it cannot cover PUT at all.
+
+The ethos (“do not let uninitialised host bytes escape”) transfers. The code path does not. `#95`’s own CHANGELOG line claiming to close the whole class is the overclaim this row exists to refute.
+
+**S5 — TRUE.** `#505` reindexed RGB GET `buf[1..3]` → `buf[0..2]`. Three bytes either way. PUT RGB still writes four. The CHANGELOG records the GUARD-FIELD check finding this disagreeing state and declining to row it.
+
+---
+
+## Q1 — Zero-fill is the right fix of *this* class, and it is the whole fix of *this* class
+
+Two defects share the mismatched `(type, depth)` pair. They are not the same repair.
+
+**For uninit (this row): zero-fill wins.**
+
+The host performs `memcpy`/`memory_rw` from an automatic whose tail was never written. That is undefined host behaviour *and* a guest-visible leak of stack contents. Both “zero the buffer” and “every arm writes `bufdepth` bytes” remove the UB. Zero-fill is the smaller one, and it is the one the tree already uses for unused bytes: RGB PUT’s `buf[3] = 0` is exactly “this format does not use this byte, so it is zero.” `#91/#93/#94/#95/#244` are the transferred warrant for “defined 0, not host junk.”
+
+Defined-but-wrong is better than uninit here because the wrongness is **already the packing**, and packing is not this round’s licence. A CI pixel at `bufdepth` 4 becoming `{index,0,0,0}` instead of `{index,junk,junk,junk}` does not hide a defect a later round cannot see: the type is still CI, MTE still failed to OR in RGBA, `random()` still runs on `default:`. It hides only the *host leak*, which is the thing this row is for.
+
+**For packing: making each arm fill `bufdepth` bytes is not licensed.**
+
+That is implementing conversions the header does not specify:
+
+- CI at 2/4/8 — replicate? pad? 16-bit RGB?
+- RGB/RGBA/ABGR at 8 — what are bytes 4–7?
+- GET RGB at depth 1 — invent G and B?
+
+The addition licence wants a measured delta or a transferred warrant. There is no CRIME/RE datasheet in `_scratchpad/` (checked by the `#505` round, not re-run here). Inventing packing would make the model *look* complete at mismatched pairs and would collide with `sgimtedepth4dead`, whose whole point is that 32-bit MTE was *supposed* to be RGBA, not “CI with extra bytes filled somehow.”
+
+A third member, not in the brief’s two-way frame: **clamp `memory_rw`’s `len` to the arm’s filled count**, keep `bufdepth` for addressing. CI at depth 4 would write one byte into a 4-byte slot and leave prior *guest* memory in the other three. That is also defined, also a packing choice, and also unlicensed without a datasheet. It is not this row.
+
+Zero-fill does not “mask” `sgimtedepth4dead`. After zeros, a 32-bit MTE fill is still `{bg&0xff, 0, 0, 0}` rather than RGBA of `bg`. That remains a value defect a packing round can pin.
+
+---
+
+## Q2 — (a) at the *current* declaration. Not the top of the function. Not PUT-only.
+
+**(a) `uint8_t buf[8] = { 0 };` where `buf` already sits.** One line, both directions, no parallel “how many bytes does this arm fill?” table that will drift the next time someone touches RGB. Early returns skip it (declaration is after those returns). That is already the “only on the path that uses it” placement.
+
+**(b) PUT-only before the switch.** Reject. S3 is two paths. GET RGB/RGBA/ABGR at documented `BUFDEPTH_8/16` (depths 1 and 2) still compose `*color` from bytes `memory_rw` never wrote, and `draw_primitive()` then PUTs that `*color`. A PUT-only memset ships a half-fix and a wrong record that GET was not a leak.
+
+**(c) computed “only where `bufdepth` exceeds the arm.”** Correct in the abstract, expensive in the way that actually matters here: it is a second specification of every arm’s width, including the GET/PUT RGB disagreement (PUT fills 4, GET reads 3). That table *is* the thing `#505` just had to correct. Do not build it as a guard.
+
+**Is the per-pixel cost real enough to matter?** No. The function’s own comment calls the `memory_rw` “slow.” It is a function-pointer call that scans mapped devices and then `memcpy`s. An 8-byte store on the same path is noise. The BADMODE announce is latched *because* this helper is per-pixel; they already treated diagnostics as the costly part, not eight bytes. `draw_primitive`’s stale “1, 2, or 4” comment is not evidence that depth 8 is hot either — field 3 is the rare unnamed one.
+
+Do not move the declaration to the top of the function to satisfy (a). That *would* tax every early return.
+
+---
+
+## Q3 — No reliable single-access black-box guest oracle distinguishes “was zero-filled” from “happened to contain zeros.” Say that, and change the round’s shape.
+
+A value row that wants `0` in the tail is green on the fix **and** green when the stack slot is already zero. A determinism row is green on the fix **and** green when stack reuse repeats the previous pixel’s bytes — which is exactly what a tight per-pixel loop does. Both oracles the neighbouring discussion already killed are still dead.
+
+`#95` does not help as an oracle: it does not run on RAM PUT, and on GET it would zero `len` bytes, not the tail.
+
+“Zero `MEM_WRITE` calls” is the wrong neighbouring idea. This path must still write. Observing a missing write tests a decline, not a fill.
+
+What *does* distinguish them:
+
+1. **Host instrumentation (MSAN / valgrind).** Lucky zeros still have uninit shadow. This tree has ASAN, not MSAN, and no valgrind wiring. ASAN will not see this. Do not pretend `gate_asan_sweep` is the detector.
+
+2. **A defined-wrong-fill mutant, not a value of zero by itself.** Guest row: tail bytes of a CI PUT (depth 2 and 4) and the extra channels of an RGB/RGBA GET (depth 1 and 2) equal `0`. Kill-table adversary: keep the fill, change the value (`memset(buf, 0xa5, sizeof buf)` instead of zero). That reds the tail rows deterministically. It proves the fill is load-bearing. It is clause-(d) shape (repair present, effect nulled), not clause-(b).
+
+3. **Clause (b) — verbatim reinstatement of uninit — is flaky here.** Deleting `= { 0 }` restores UB. The same row may see `0` or leftover pixel bytes depending on the frame. Do not rest the floor on (b) alone for an uninit defect. Rest it on (a) prefix-if-you-can, (c) identity, (d) poison-fill.
+
+4. **Prefix witness, reuse-conditional, disclosed as such.** Same helper, tight loop, same stack slot: PUT RGBA `0xaabbccdd` then PUT CI `0x11` at `BUFDEPTH_32`, read four bytes. Under reuse the tail is `bb cc dd` pre-fix and `00 00 00` post-fix. That *is* guest-visible and it *does* distinguish lucky zeros from a fill **when reuse holds**. gcc without `-ftrivial-auto-var-init` usually reuses; it is not a C promise. Ladder clause (i) wants the committed build red under the same script. If a prefix run comes back `11 00 00 00` on HEAD, that is not “no defect” — it is a failed dirtied-stack setup. Record it that way.
+
+Round shape: rung-3 probe with tail-value rows + dirtied setup as the *attempted* prefix; detector contract that names the poison mutant as the load-bearing kill; no claim that a lone `got=0` row proves initialisation.
+
+---
+
+## Q4 — Three defects, three byte-sets, almost no overlap of *repairs*
+
+**This row (`sgirebufuninit`)** owns bytes **nobody stores**: PUT tail (`CI` at depth 2/4/8; every arm at depth 8) and GET reads past `bufdepth` (RGB at 1/2; RGBA/ABGR/default at 1/2).
+
+**`sgimtedepth4dead`** owns the **colour type of tiled MTE**. `depth = 8 << field` is 8/16/32/64 **bits**, never 4. The branch that would `|= DE_MODE_TYPE_RGBA` is dead, so tiled MTE is always CI. The comment says it wants 32-bit transfers to copy 32 bits; the intended test is `depth == 32` (or `depth/8 == 4`), not `depth == 4`.
+
+If **this row is first:** MTE still always CI. Depth 8: still matched (1 byte, filled). Depth 16: `{bg0, 0}` instead of `{bg0, junk}` — leak gone, type still CI (and the dead branch never promised RGBA at 16). Depth 32: `{bg0, 0, 0, 0}` instead of RGBA(`bg`) — leak gone, **wrong type remains in full**. Depth 64: `{bg0, 0×7}` instead of 8 uninit — leak gone, type still CI. `sgimtedepth4dead` is not discharged. A round that then “fixes” `depth == 4` to `depth == 32` still has a real product change (CI 32-bit fill → RGBA fill) and still needs its own accept rows.
+
+If **`sgimtedepth4dead` is first** (`if (depth == 32)`): MTE depth 32 becomes RGBA, fills `buf[0..3]`, writes 4, **no leak at that one cell**. MTE depth 16 stays CI + write 2 → **1-byte leak remains (this row)**. DE `draw_primitive` is untouched. Default arm untouched. Depth-8 PUT leak untouched. This row is not discharged. The OUTSTANDING_BUGS warning stands: repairing the dead branch *alone* can look as if the 32-bit MTE leak is gone.
+
+**`sgirandomcolour`** owns the **four `random()` stores** in PUT `default:` (`buf[0..3]`). Zero-fill runs first, then `random()` overwrites 0–3. At depth 8, bytes 4–7 stay this row’s. At depth 1/2/4, PUT default has no uninit — only random. GET default at depth 1/2 is this row (raw 32-bit read past `len`), not randomcolour.
+
+If randomcolour is fixed first by deleting the stores and `break`ing into `memory_rw`, PUT default becomes a **full** uninit write of `bufdepth` bytes — this row gets worse. If it `return`s before `memory_rw`, that arm’s leak disappears because nothing is written. **Zero-fill first is the safe order**; then a decline of `default:` writes zeros (defined, still a packing/unimplemented-type question).
+
+YCRCB (`0xf0`) is a documented `default:` vehicle. It is randomcolour’s, plus this row’s tail at depth 8.
+
+Do not fold the three. One memset does not implement RGBA. One `depth == 32` does not initialise `buf`. Removing `random()` does not initialise the bytes it never wrote.
+
+---
+
+## Q5 — Smallest (d) edit, and the row that stays green
+
+The repair is an unconditioned initialiser. Clause (d) for a fix that adds no predicate is: **keep the fill, condition it on a field the body reads.** The body after `buf` is `if (put) switch (color_mode)` then `memory_rw(..., bufdepth)`. `#505` already measured this shape on this function: `if (bufdepth == 4)` swept a detector whose every session used `BUFDEPTH_32`. The same file’s LIN_A geometry writes the destination at **`(x,y)=(0,*)` so `ofs = 0` every PUT**, and reads the source at `SRC_OFS = 0x40`. Copying that shape here copies both blinds.
+
+Smallest edits that pass a detector which only rows the “strongest reachability” cell (CI PUT, `BUFDEPTH_32`, dest `ofs == 0`):
+
+```c
+if (bufdepth == 4)    /* or: if (put), if (color_mode == 0), if (ofs == 0) */
+    memset(buf, 0, sizeof buf);
+```
+
+or `memset(buf, 0, 4)` instead of 8 (depth-4 CI never transfers bytes 4–7).
+
+**Row that stays green:** `ci put depth32` at dest ofs 0 — the documented MTE/DE vehicle. Under `if (bufdepth == 4)` it still sees zeros. Under `if (put)` it still sees zeros. Under `if (ofs == 0)` it still sees zeros. Under `if (color_mode == CI)` it still sees zeros.
+
+Cells that mutant leaves open (need rows, or the detector is `#505` table 1 again):
+
+| axis | extra row that reds the mutant |
+|---|---|
+| width | CI PUT at depth **2** (`BUFDEPTH_16`, documented) and at depth **8** (field 3) |
+| direction | RGB or RGBA **GET** at depth 1 or 2 (documented `BUFDEPTH_8/16`) |
+| type | any non-CI PUT at depth 8 |
+| location | same CI PUT with dest `x != 0` so LIN_A `ofs != 0` (four *columns*, not four rows — the rgb probe’s own comment says four rows all land at ofs 0) |
+
+Floor for this repair, kept finite: leaking cells only, not the 2×5×4 product. PUT CI × {2,4,8}; PUT {RGB,RGBA,ABGR,default} × {8}; GET {RGB,RGBA,ABGR,default} × {1,2}. Fifteen cells. Non-leaking cells (GET CI; PUT non-CI at 1/2/4) cannot observe the fill; a row there is vacuous by construction.
+
+Poison-fill (`0xa5`) is the mutant that should actually kill those rows. Width/direction/location conditions are the mutants that escape a one-cell detector.
+
+---
+
+## Something else, found while checking
+
+1. **`#95` cannot be the GET backstop even on a device hit.** It zeros `len`, which is `bufdepth`. The GET leak is bytes *past* `len`. Citing `#95` as covering PATH B is false for a second, independent reason.
+
+2. **`draw_primitive` still says `bufdepth = 1, 2, or 4`.** Wrong after `#100`. A detector that only believes that comment will omit depth 8 and recreate the `#505` sweep.
+
+3. **MTE depth field 3 has no `MTE_DEPTH_64` name** in `crmfbreg.h` (only `_8/_16/_32`), but `(mode & 0x300) >> 8` still yields 3 → `depth = 64` → `bufdepth = 8`. Same shape as unnamed `BUFDEPTH` field 3.
+
+4. **`memory_rw`’s return is ignored.** A failed GET still runs the colour switch on a buffer that may be part-zeroed to `len` and uninit past it. Zero-fill at declaration closes that too; a PUT-only fill does not.
+
+5. **Signed `buf[i] << 24`** on GET remains (`sgirebufshiftub`). Zero-fill does not touch it; RGB GET still uses the same idiom `#505` copied.
+
+No patch. Nothing executed.

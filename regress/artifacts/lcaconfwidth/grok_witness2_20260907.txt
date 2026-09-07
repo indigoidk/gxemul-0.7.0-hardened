@@ -1,0 +1,113 @@
+I'll treat this as a premise audit, not a ratification: read the named sources, then answer Q1–Q5 with a verdict line first. No patch, no probe, no runs.Premises look plausible on first grep; next I’ll walk the store path, K0SEG translation, and the harness so Q1–Q4 rest on the actual dispatch, not the brief.**VERDICT: CONSTRUCTIBLE as a rung-3 witness on stock `alphabook1`. S2’s 64-bit path holds; `load_const` cannot build either operand; debugger `dump` cannot be the control; the 0x1 guest round-trip is required and is not sufficient alone; the oracle must match the hex, not just the phrase; `PRIx64` is already this file’s idiom and no live gate keys on this text.**
+
+Nothing below was executed. All of it is from reading `GXEMUL-SEC/src/` and the named harness, per the brief.
+
+---
+
+## Premises that do not survive contact
+
+**S5 overstates how K0SEG addresses get into registers.** `k0(x)` and the translation `vaddr & 0x000003ffffffffff` are right (`memory_alpha.c`, K0SEG checked *before* `ptbr`). What is not right is treating that as a guest `LDAH`/`LDA` materialisation. The harness’s own header already says lda/ldah build 32-bit constants and K0SEG needs bits 63..42; the working bootstrap is debugger `put d` into RAM, then one identity-mapped `ldq`. `load_const` also cannot build the **value** `0x100000000` (bit 32). A probe that uses `load_const` for either operand is not this witness.
+
+**Q5 disagrees with itself, and `OUTSTANDING_BUGS.md` disagrees with the file.** The five sibling arms (`TB_ENA`, `W_BASE0`, `W_MASK0`, `W_BASE1`, `W_MASK1`) use `"0x%" PRIx64` **with** `(uint64_t)idata`. They do not drop the cast, and they are not `%llx`/`(long long)`. That last form is what the filed row currently recommends, and it is false of this file.
+
+**S2’s `(int)0x100000000 == 0` is a toolchain fact, not a C99 one.** Out-of-range signed conversion is implementation-defined. GCC/Clang (this tree) truncate to the low 32 bits, so the message is `IOC_CONF: 0x0`. That is enough for a witness on this build; it is not a language guarantee.
+
+**The killing store cannot be read back.** The arm does `d->ioc_conf = idata` *then* `fatal`/`exit(1)`. A same-session read of the distinguishing value is impossible because the process is gone.
+
+**A miss is not only “unmapped → nothing”.** Offset 0 is `LCA_IOC_BASE` (HAE): `break` with no kill. A store of `0x100000000` to `k0(0x180000000)` is silent in exactly the shape S6 fears, while still being *inside* the LCA window.
+
+---
+
+## Q1 — constructible?
+
+**Yes.** Not documented-only.
+
+Recipe that actually matches this harness, not the 32-bit encoder:
+
+1. `-E alpha -e alphabook1 -M 64 -V` (the harness’s machine; S4 is right: `device_add(..., "lca")` is `ST_ALPHABOOK1` only).
+2. `put d` the two 64-bit words into RAM below 64 MB: `k0(0x180000020)` and `0x100000000`.
+3. Guest `ldq` both (while `ptbr` is still 0, same bootstrap as `swpctx`), then guest **`stq`**.
+4. Oracle is the **fatal text**, not the exit status: pre-fix `unimplemented bit of IOC_CONF: 0x0`; post-fix `...: 0x100000000` (unpadded `PRIx64`, which is how the siblings already print).
+
+Do **not** `put d` the killing value *at the device*. `store_64bit_word` goes through `memory_rw` with `CACHE_DATA` and **no** `NO_EXCEPTIONS`, so that path *does* enter `dev_lca_ioc_access` and will `exit(1)` from the debugger. That is not a guest instruction and is not rung-3.
+
+K0SEG translation for `0xfffffc0180000020` is `0x180000020`. The IOC window is `LCA_IOC_BASE`, length `0x20000000`, `DM_DEFAULT`. `relative_addr + LCA_IOC_BASE` is how the switch names `LCA_IOC_CONF`. That chain is intact.
+
+---
+
+## Q2 — control: which, and is either enough alone?
+
+**Guest `stq` of `0x1` then guest `ldq`, same decode.** That is the liveness control. Do it *before* the killing store (same session is fine: print the register, then `stq` the bad value last).
+
+Neither candidate in the brief is sufficient alone.
+
+| Candidate | What it proves | What it does not |
+|---|---|---|
+| Read-back of the killing `ioc_conf` | — | Impossible; `exit(1)` already ran |
+| Legal `0x1` round-trip | Window is this arm; not HAE; not unmapped-zero | High bits survived; diagnostic width |
+| Kill text `IOC_CONF: 0x0` | This arm fired; a 32-bit zero store cannot produce that pair | Ladder liveness (“a known value returns through the same decode”) |
+
+**Do not use debugger `dump` as the read-back.** `dump` calls `memory_rw` with `NO_EXCEPTIONS`. LCA is `DM_DEFAULT`, not `DM_READS_HAVE_NO_SIDE_EFFECTS`, so the handler is **skipped** and the caller gets the pre-zeroed buffer — the unmapped signature, from a hit.
+
+The 0x1 row is the analogue of `swpctx mapped`. It is what separates “guard did not fire” from “wrote HAE / wrote unmapped / dump skipped the device”. Unmapped and HAE both read back 0.
+
+---
+
+## Q3 — does the store carry 64 bits?
+
+**Yes. S2 is not wrong on this site.**
+
+- `stq` is opcode `0x2d` → `loadstore_type = 3` → `LS_Q` → 8-byte `data[]`.
+- Fast path: if `host_store` is NULL (device page; LCA is `DM_DEFAULT`, not `DM_DYNTRANS_OK`), it falls through to `LS_GENERIC_N`, which calls `memory_rw(..., sizeof(data)=8, MEM_WRITE)`.
+- Device dispatch passes `len` through. No 4-byte split. Memblock granule is 1 MB (`BITS_PER_MEMBLOCK` 20); `0x20+8` does not cross it. Device length does not truncate it.
+- Alpha is `EMUL_LITTLE_ENDIAN`. `memory_readmax64` rebuilds `0x100000000` from the eight bytes.
+- `idata` is `uint64_t`. `~1` is a signed `int` (−2) and converts to `uint64_t` as `0xfffffffffffffffe`, so **the guard does see bit 32**. (`~1U` would not. That is a different mutant.)
+
+Same function already compares `idata` to `0x300800000ULL` on `W_BASE0`. That constant does not fit in 32 bits; 64-bit stores are this handler’s native width.
+
+A 32-bit `stl` of 0 would *not* kill and would *not* witness this row. The guest instruction has to be `stq`.
+
+If the 8-byte path were ever split (it is not, from this source), the three outcomes are distinguishable: silence (narrowed to 0), default-arm kill at offset `0x24`, or `IOC_CONF: 0x0`. The last is the one that proves S2.
+
+---
+
+## Q4 — is `exit(1)` survivable as an oracle?
+
+**Yes, if the probe greps the phrase-plus-hex and treats process death as the expected outcome, not as a harness failure.**
+
+`fatal()` is `va_debug` → `printf` per character, **no `fflush`**, then `exit(1)`. The message ends in `\n`. A pty is a tty (line-buffered); `exit()` also flushes. The same harness already grepped a `fatal()` string (`"user mode"`) out of this pty, so the print path is proven. What `palgate` did *not* prove is process death: palcode sets `cpu->running = 0` and stays in the debugger under `-V`. This arm is `exit(1)`. `session()` already turns EOF into `alive=False` while keeping `buf`. Put the killing `stq` last.
+
+**Distinguish from the other ten live `exit(1)` sites by text, never by status.** The unique pin is `unimplemented bit of IOC_CONF`. The two interrupt stubs print `lca_interrupt_assert: TODO` / `lca_interrupt_deassert: TODO`. Under `-V` they also cannot fire by delivery (`cpu_dyntrans.c` suppresses interrupts while single-stepping), and this store does not assert them synchronously. Default-arm text is `[ lca_ioc: unimplemented write to offset 0x...`. Do not grep bare `TODO` or bare `IOC_CONF`.
+
+A row that only greps the phrase, not the hex, is **vacuous for this defect**: the intended specifier change would not move it.
+
+---
+
+## Q5 — smallest edit; `PRIx64`; hygiene
+
+**Smallest edit that matches this file, not the filed row:**
+
+```c
+fatal("TODO: Write to unimplemented bit of"
+    " IOC_CONF: 0x%" PRIx64 "\n", (uint64_t)idata);
+```
+
+That is byte-for-byte the sibling idiom already compiling in this function. Dropping the cast is equivalent (`idata` is already `uint64_t`) and is *not* what the siblings do.
+
+`PRIx64` is already used in this tree and in this file. `misc.h` includes `<inttypes.h>`; the `NO_C99_PRINTF_DEFINES` fallback still defines it (`"llx"` / `"lx"`).
+
+**No live gate or probe matches this message.** Hits are `dev_lca.c` itself, the filed row, and artifacts/ledger. Changing the specifier will not invert an existing hygiene grep.
+
+Edits smaller than that do **not** fix the message: `%llx` with `(int)` still prints `0`; `(uint64_t)` with `%x` still prints the low 32 bits. So an oracle that wants `0x100000000` post-fix is failable. Good.
+
+This round is the specifier. It does not remove `exit(1)`, and it does not undo the store-before-guard. Those are `lcabadval`.
+
+---
+
+## Else, found while checking
+
+1. **HAE (offset 0) is a silent accept** inside the same mapping. S6 named only unmapped. The 0x1 control is what catches both.
+2. **`dump` of this device returns zeros without entering the handler** (`DM_DEFAULT` + `NO_EXCEPTIONS`). That control would go red while claiming the window is missing.
+3. **`put d` to the device *does* enter the handler and will kill.** Opposite trap from `dump`.
+4. **Store-before-guard:** after a printf-only fix the 64-bit value is still committed to `d->ioc_conf` before death. PCI decode uses only bit 0, so it is currently unused — a `lcabadval` disposition fact, not a reason to widen this round.
+5. The filed row’s “file’s own idiom is `%llx` + `(long long)`” is false; this function already standardised on `PRIx64`.

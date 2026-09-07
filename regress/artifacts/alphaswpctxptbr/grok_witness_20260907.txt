@@ -1,0 +1,136 @@
+I'll treat this as a premise audit, not a ratification. First I'll confirm the live repo state, then read the PALcode and Alpha dispatch path myself.HEAD matches the checkpoint. Next I’ll read the swpctx handler and Alpha PAL dispatch myself instead of taking the brief’s excerpts as given.The assignment bug is in source. I’ll read the full handler, `call_pal` dispatch, and how Alpha machines enter PAL so Q1/Q2 rest on the code, not the excerpt.An Alpha harness probe already exists and names this defect. I’ll read it, then check translation and PAL gating against the source rather than the probe’s comments.**VERDICT: YES, a rung-3 witness is buildable on the three constructing Alpha machines — but the proposed “no MMU at all, two `swpctx`, read `A+16`” design is unsound as written if `A.flags` is nonzero. After the first switch, `apcb_ptbr` *is* the flags word, the identity map dies, and the second `call_pal` (and the save that is supposed to publish the bug) can fail to land or can `exit(1)` the host. Use K0SEG for code and both PCBs, or keep `flags==0` and accept a weaker oracle. The one-token fix is not a PAL convention; it is a copy-paste of the previous LHS.**
+
+I did not run the emulator, did not write a probe, and did not write a fix. Everything below is from `GXEMUL-SEC/src/` and `GXEMUL-SEC/regress/*.py`.
+
+---
+
+## Premises
+
+**S1 holds as a defect, with one wording trap.** The seventh assignment is `cpu->cd.alpha.pcb.apcb_ptbr = new_flags;` while `new_flags` was loaded from `ctx+40`. Nine locals, nine stores, seventh LHS is a copy of the PTBR line. `apcb_ptbr` is written twice; the second write wins. `apcb_flags` is **not** assigned on this load path.
+
+It is not true that `apcb_flags` is never assigned *anywhere*: `PAL_OSF1_wrfen` writes it from `a0` and stores it to `ctx+40`. The quiet half of the bug is: **this load never takes the incoming context’s flags**, so the outgoing value persists. The brief’s consequence is right; the universal “never assigned” is not.
+
+**S2 holds.** `apcb_ptbr` is read outside PALcode only in `alpha_translate_v2p`: `uint64_t base = cpu->cd.alpha.pcb.apcb_ptbr << ALPHA_PAGESHIFT`. `wrusp`/`rdusp` exist in the same file but are inside `#if 0`. `vptptr` is written by `wrvptptr` and is unused in the walk.
+
+**S3 holds.** Save uses `cpu->cd.alpha.ctx` *before* `cpu->cd.alpha.ctx = a0`. Offsets match `struct alpha_pcb` (`ptbr` at +16, `flags` at +40; `cpc`/`asn` are 32-bit at +24/+28).
+
+**S4 was not re-measured.** Source is consistent with the `3000/300` abort: that subtype does `device_add(..., "z8530 ... irq=0 ...")`, `INTERRUPT_CONNECT` looks up the path `"0"`, and `interrupt_handler_lookup` **`abort()`s** on a miss. The other three subtypes do not add that device. I did not re-check that they actually reach a debugger prompt.
+
+Two other brief-adjacent claims are false:
+
+1. **“Observable with no MMU at all”** is false for distinctive nonzero flags. The identity map is `if (!userMode && base == 0)`. The bug sets `base` from flags. K0SEG is the other walk bypass; it is still a translation, just not a page-table walk.
+2. **`regress/alpha_harness_probe.py` says `call_pal` has “no gating of any kind.”** That is false. `alpha_palcode()` refuses privileged PALs (including `0x30`) when `ps & ALPHA_PSL_USERMODE` and stops the CPU. Reset `ps` is 0 (`zeroed_alloc` of the CPU object; nothing in `machine_alpha.c` sets it), so a cold-debugger guest starts in kernel mode and the gate does not fire — but the gate exists.
+
+---
+
+## Q1 — Can a rung-3 witness be built?
+
+**Yes**, on unmodified `alphabook1`, `alphaserver4100`, and `eb164`. Not on `3000/300` (construction `abort()`, already a different defect).
+
+What makes it rung 3, from the source rather than from a boot story:
+
+- `-V` enters the interactive debugger paused. That is the cold-debugger shape.
+- Opcode `0x00` is `call_pal`; the PAL number is `iword & 0x3ffffff`. Guest word `0x00000030` is `call_pal 0x30`. `X(call_pal)` calls `alpha_palcode(cpu, ic->arg[0])`. There is no PAL-mode bit, no IPL check, no FEN check. The only gate is user mode.
+- `alpha_palcode` implements `case 0x30`. It is not in `#if 0`.
+- Putting instruction words and PCB bytes into RAM with debugger `put`, then `step`, is the same class as the existing Alpha harness (`regress/alpha_harness_probe.py`): a real guest instruction through real decode on an in-tree machine. Do not add a machine or a `device_add` to reach the site.
+
+What is **not** established, and will red a witness if copied from the harness comments: **which addresses are RAM.** `-M 64` is `physical_max = 0x4000000`. `0x20000000` is 512 MB. The walk’s special case maps only `0x20000000`–`0x20001fff` onto `PROM_ARGSPACE_PADDR` (8 KB). Identity-mapped `0x20010000` is beyond RAM; `memory_rw` then either warns-and-fails or **accepts a write and stores nothing**. The harness’s own liveness row is the right check for that; a swpctx witness must not inherit `0x20010000`.
+
+Safe physical range for `-M 64`: well inside `0 .. 0x4000000`, away from `0x10000` (PROM entry), `0x10100` (dummy `ctx`), `0x12000` (PROM args), `0x14000` (HWRPB). Prefer K0SEG of those physical addresses (`0xfffffc0000000000 | phys`) so translation does not depend on `ptbr`.
+
+---
+
+## Q2 — Attack the two-`swpctx` design
+
+**(a) Yes: the second save writes the old context, and at that moment the old context is still A.**
+
+```c
+store_64bit_word(cpu, cpu->cd.alpha.ctx + 16, cpu->cd.alpha.pcb.apcb_ptbr);
+/* ... */
+cpu->cd.alpha.r[ALPHA_A0] = cpu->cd.alpha.ctx;   /* local a0 already captured */
+cpu->cd.alpha.ctx = a0;                          /* AFTER the save */
+```
+
+Reset `ctx` is `0x10100`. First `swpctx(A)` saves the empty PCB there, then sets `ctx = A` and loads A (and then corrupts `apcb_ptbr`). Second `swpctx` saves to A. That part of the design is right. **Do not use `0x10100` as A or B** — the first save would clobber the block before the load.
+
+One `swpctx` is not enough for a memory oracle. The first save happens *before* the bad assignment, so `0x10100+16` gets the *old* PTBR (0), not the corrupted one. The host `pcb` is wrong after one call, but the debugger does not export `pcb.apcb_ptbr`. The second save is the guest-visible publication.
+
+**(b) Nothing else assigns `apcb_ptbr` between two consecutive guest instructions.** The only writers are the two lines in this handler. `wrfen` writes `apcb_flags`. Single-step suppresses interrupt dispatch. Alpha `irq_asserted` is unread anyway.
+
+**(c) `call_pal 0x30` does reach this handler from a guest instruction**, in kernel mode. It is privileged. A probe that leaves USERMODE set dies with `Privileged Alpha PALcode called from user mode` and never enters `case 0x30`.
+
+**Where the design breaks — this is the load-bearing objection.**
+
+After the first call, `apcb_ptbr` is `A.flags`. Every later `memory_rw` that is not K0SEG and not `base==0` walks page tables from `flags << 13`.
+
+`swpctx` ends with `invalidate_translation_caches(..., INVALIDATE_ALL)`. Every `run_instr` (including each debugger `step`) begins with `alpha_pc_to_pointers`. On a miss that function calls `translate_v2p`; if that returns 0, Alpha does **not** deliver an exception (`alphafaultclaim` in the source: the `#194` comment claims a fault, the instruction path just fails the access). `pc_to_pointers` then retries the same PC and, still failing, **`exit(1)`s the host** (`FATAL: could not find physical address of the exception handler`).
+
+So with **nonzero flags and a non-K0SEG PC**:
+
+- the second `step` can kill the host, or
+- if the second PAL somehow runs, its `store_64bit_word` to A walks from flags-as-PTBR, the store is ignored, `A+16` is unchanged, and the oracle reads as **“no bug”** (false negative on the committed build).
+
+The first call’s own save/load still see `ptbr==0`, so they are fine. The hole is everything *after* the assignment, including the save that was supposed to prove it.
+
+`call_pal` does not call `pc_to_pointers` when PC is unchanged. That does not save a `step`-based probe: the *next* `run_instr` still starts with `pc_to_pointers`.
+
+**`a0` is clobbered.** The comment says “Return old context in **v0**”; the code assigns **`ALPHA_A0` (r16), not `ALPHA_V0` (r0)**. After `swpctx(A)`, `a0` is `0x10100`. The local `a0` used for the load was captured at handler entry, so the *load* is still A; the *next* guest `call_pal` will use whatever is in r16. Reload `a0` with B before the second call. The `A+16` oracle actually depends on `ctx` still being A, not on `a0==B`; forgetting the reload still saves to A, then loads the dummy PCB. That is a mess, not a discriminator.
+
+---
+
+## Q3 — Controls the proposed witness owes
+
+A value at `A+16` that is wrong for the wrong reason is worse than no witness. Required:
+
+1. **Liveness, same RAM.** Guest `stq`/`ldq` of a known pattern through the same translation that will serve the PCBs and the code. If this is red, stop; do not interpret `A+16`.
+
+2. **Translation that survives the first switch.** Either:
+   - **K0SEG** for PC, A, and B (`ALPHA_K0SEG_BASE` is checked *before* `base==0`, so it ignores `ptbr`), or
+   - **`A.flags == 0`**, so identity map remains, with a weaker oracle (`A+16` becomes 0, not “the flags word”).
+
+   Distinctive nonzero flags **and** low physical addresses together are not a witness; they are a host kill or a silent failed save.
+
+3. **The second save landed.** On a correct load, a second save is a no-op on A, so “`A+16` still looks like PTBR” on a post-fix build is indistinguishable from “save never ran.” Between the two PALs, poison `A+16` with a third pattern. Then:
+   - poison still there → save did not land (setup failure);
+   - `A.flags` → the defect;
+   - `A.ptbr` → the save restored PTBR.
+
+4. **Mechanism, not leftover RAM.** `MAGIC_PTBR != MAGIC_FLAGS`, neither equal to the poison. Pre-fill both slots. The brief’s “distinguishable values” only pins the flags-overwrite if flags is allowed to be nonzero, which forces K0SEG.
+
+5. **Kernel mode.** `PAL_rdps` (`0x36`) is implemented and returns `ps` in `v0`. Confirm `USERMODE` clear so a red is not the privilege gate.
+
+6. **`call_pal` itself.** `PAL_whami` (`0x3c`) returns `cpu_id` in `v0` (0) with no PCB side effects. Separates “PAL dispatch is dead” from “swpctx is wrong.”
+
+7. **Dummy `ctx` is RAM and disjoint.** First save writes 64 bytes at `0x10100`. That is inside 64 MB and below HWRPB. A and B must not overlap it.
+
+8. **Do not use debugger `dump` of `pcb` (it is not a register) and do not treat a host `exit(1)` as the oracle.** The defect path is the guest `call_pal`; the publication is a guest `ldq` of `A+16` (dump of that VA is the same translate, but a guest load is the ladder’s access witness).
+
+9. **`a0` reloaded for B.** And do not read `v0` for the old context; that path is the neighbouring ABI bug.
+
+10. **Zeros are `call_pal 0` (`PAL_halt`), which is unimplemented and stops the CPU.** A `put` that did not store leaves a halt, which is not a swpctx miss.
+
+Addresses: stay inside `physical_max` after translation. Debugger `put d` and 64-bit register assigns (`a0=0xfffffc00…`) are how K0SEG pointers get into the guest; the existing harness `load_const` is 32-bit only.
+
+---
+
+## Q4 — Is the fix one token? Is the current line deliberate?
+
+**The PTBR/flags mix-up is one token: that LHS `apcb_ptbr` → `apcb_flags`.** I do not see a reading on which the current line is intended.
+
+- The comment immediately above says update every PCB field.
+- `new_flags` is loaded from the flags offset and would be unused if that line did not consume it. It is not compiler-dead; it is the corruption.
+- `struct alpha_pcb` and the save path keep `ptbr` and `flags` as separate fields at +16 and +40.
+- The only defined flag bits in this tree are `ALPHA_PCB_FLAGS_FEN` (bit 0) and `ALPHA_PCB_FLAGS_PME` (bit 62). Those are not a page-table PFN. `wrfen` exists specifically to write FEN into the flags word at PCB+40.
+- Real OSF/1 `swpctx` (the NetBSD wrapper in the same header) takes a PCB pointer in `a0` and returns the old one in `v0`. It does not smuggle PTBR in flags.
+
+The neighbouring `v0`/`a0` disagreement is real and **separate**: `ALPHA_V0` is 0, `ALPHA_A0` is 16. That is a wrong return register, not evidence that flags-as-PTBR is an ABI. The local `a0` is captured before the clobber, so it does not change which PCB is loaded. Do not fold the two one-token edits into one round; they have different observables.
+
+---
+
+## Found while checking, not asked
+
+- **`swpctx` always `INVALIDATE_ALL`s.** That is why “the next instruction is already decoded” does not protect a `step` probe.
+- **`machine_alpha.c` puts “PFN of current L1 page table” in `a1` (0), not in `pcb.apcb_ptbr`.** Identity map at reset is because the PCB field is zero, not because `a1` was copied.
+- **`store_64bit_word` sign-extends addresses with `addr>>32==0`.** Low RAM is fine. Addresses with bit 31 set and no high half become K1SEG, not K0SEG. Stay below 2 GB or use a full K0SEG value.
+- **Failed PCB loads are ignored** (`alphactxfail`): `#244` zeroes a failed read, the handler commits zeros. That is why liveness on A/B is not optional.
+- In-tree prior art: `regress/alpha_harness_probe.py` is a controls-only Alpha rung-3 harness and names this defect in a comment. It does not yet exercise `swpctx`. Do not copy its “no gating” sentence or its `0x2001xxxx` addresses into a witness.

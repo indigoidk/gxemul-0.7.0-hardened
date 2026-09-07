@@ -1,0 +1,135 @@
+I'll verify the cited sites and callers in `GXEMUL-SEC/src/` rather than ratify the brief, then answer Q1–Q5 from the code.The walk site matches S1. Next I’ll enumerate every consumer of `translate_v2p` and how `memory_rw` uses the returned physical address.Instruction fetch strips the page offset after translation. I’ll check data-path consumers and how sibling walks restore it.**VERDICT: RATIFY the assignment, not the round.** `| (vaddr & ((1 << pageSizeShift) - 1))` is the product fix. This witness goes 6/6 for that edit **and** for `0xfff` / `0x3fff` / `0x7fff` / unmasked `+ vaddr`. A second cold row is owed. Keep the `// TODO.`
+
+S1 holds (line numbers match the file). S3 holds, with a sting S3 does not mention. S2 I did not re-run.
+
+---
+
+### Q1 — that expression is the whole **product** fix
+
+I would write:
+
+```c
+	(*return_paddr) = (ALPHA_PTE_TO_PFN(pte3) << pageSizeShift)
+	    | (vaddr & ((1ULL << pageSizeShift) - 1));
+```
+
+Leave `return 2` and the `// TODO.` alone.
+
+`|` and `+` are **numerically the same today**. `ALPHA_PTE_TO_PFN(pte3) << 13` has bits 12:0 clear; the mask has only those bits. No overlap, no carry.
+
+They are not the same *sentence*:
+
+- `|` is every other walk in this tree: ARM `(d2 & ~off) | (vaddr & off)`, m88k, MIPS `~pmask | (vaddr & pmask)`, PPC, SH.
+- `+` is **this** function’s bootstrap windows (`:81`, `:84`, `:88`) — base plus offset for a fixed pocket, not a PTE.
+
+I would write `|`, and I would derive the mask from `pageSizeShift` (the same local the PFN is shifted by), not a literal `0x1fff`. `:88`’s `0x1fff` is right for a **fixed** 8 KB PROM window. Hardcoding it next to `<< pageSizeShift` is how the mask and the shift drift. `1ULL` matches this file’s `ULL` literals; a plain `1` is the same at shift 13.
+
+The parens are load-bearing. `1 << pageSizeShift - 1` is `0x1000`, not `0x1fff`. The existing `N = 8` row **does** kill that one (`8 & 0x1000 == 0` → `VAL_A`).
+
+It is the whole fix **for this defect**. It is not a finished translator (see Q4).
+
+---
+
+### Q2 — three callers; none add their own offset
+
+`cpu->translate_v2p` is assigned once (`cpu_alpha.c`, `cpu->translate_v2p = alpha_translate_v2p`) and invoked in three places:
+
+| caller | what it does with `*return_paddr` | wants a page base? |
+|---|---|---|
+| `memory_rw.c` `MEMORY_RW_ONE_PAGE` (both `alpha_memory_rw` and `alpha_userland_memory_rw`) | `offset = paddr & offset_mask` (`0x1fff` under `MEM_ALPHA`), then `memcpy(memblock + offset, …)` | **No. Needs the full address.** This is the defect. |
+| `cpu_dyntrans.c` I-fetch miss | `physaddr = paddr;` then `physaddr &= ~(DYNTRANS_PAGESIZE - 1)` with `DYNTRANS_PAGESIZE` 8192 | **Tolerates either.** Strips the offset itself. |
+| `debugger_cmds.c` watchpoint | stores `paddr` as the watch physical address | **No. Needs the full address.** Today a walked watch lands at the page base. |
+
+`cpu_alpha_instr_loadstore.c` does **not** call the walk. The generic path goes through `cpu->memory_rw`. The fast path is `page[addr & 8191]` on a cached host page — virtual offset, not walked paddr.
+
+No caller does `paddr + (vaddr & mask)`. The mirror defect is not present. A post-fix 6/6 is not hiding a double-add.
+
+---
+
+### Q3 — 6/6, and not enough. The `0x3fff` premise is wrong.
+
+Yes, the proposed edit goes 6/6. So do these, on the committed probe (`VADDR = 0`, `N = 8`):
+
+| lesser edit | at `vaddr = 8` | 6/6? |
+|---|---|---|
+| `vaddr & 0xfff` | 8 | **yes** |
+| `vaddr & 0x3fff` | 8 | **yes** |
+| `vaddr & 0x7fff` (copy `:81`, twelve lines from `:88`) | 8 | **yes** |
+| `vaddr & 0xf` / any mask that includes bit 3 | 8 | **yes** |
+| unmasked `+ vaddr` or `\| vaddr` | 8 (VPN is 0) | **yes** |
+| hardcoded `\| 8` | 8 | **yes** |
+
+**`0xfff` is the 4 KB copy.** `MRW_OFFSET_MASK` is `0xfff` on every non-Alpha build; `DYNTRANS_PAGESIZE` defaults to 4096. That is the tempting wrong token, and it leaves the **upper 4 KB of every walked page** still broken.
+
+**`0x3fff` is not “wrong further into the page.”** Within one 8 KB page the extra bit is bit 13, and bit 13 of the offset is 0 for every byte of that page. Going to `+0x1008` still scores a pass on `0x3fff`. The brief’s pairing of `0xfff` and `0x3fff` as the same shape is false.
+
+**Second row, required — same table, new cold session:**
+
+- `vaddr = 0x1008` (8-aligned, bit 12 set, `ldq` disp still in range)
+- Plant `VAL_C` (e.g. `0xcccc0000cccc`) at `data + 0x1008` through K0SEG, same as A and B
+- Want `VAL_C`
+- Extend the K0SEG control session so a plant error cannot look like a walk success
+
+| at `0x1008` | offset used | reads | value |
+|---|---|---|---|
+| HEAD / no offset | 0 | `data+0` | A `0xaaaa0000aaaa` |
+| `0xfff` | 8 | `data+8` | B `0xbbbb0000bbbb` |
+| `0x1fff` (the fix) | `0x1008` | `data+0x1008` | C |
+| `0x3fff` | `0x1008` | `data+0x1008` | C — **still green** |
+| hardcoded `\| 8` | 8 | `data+8` | B |
+
+That is the `A+40` row: one address, three values, and `0xfff` is no longer equivalent to the fix.
+
+**Do not put this `ldq` in the same guest program as `walk off`.** After the `+8` fill, `host_load` points at the correct physical page and the fast path indexes with `addr & 8191`. A second access on that page goes **green on HEAD**. New `session()`, one cold load, same as today.
+
+**Third row, named because you asked about `0x3fff`:** `vaddr = 0x2008` or `0x3008` (bit 13 set ⇒ `i3 = 1`). Needs `L3[1]` filled. That is what refuses `0x3fff`, `:81`’s `0x7fff`, and unmasked `+ vaddr`. I would not silently skip it: S3 invites “copy the in-function idiom,” and `:81` is the same shape at the wrong width. I would also not pretend `+0x1008` discharges it.
+
+`0x3008` (bits 12 and 13) on an `i3 = 1` mapping is the one extra load that fails both named widths. It is heavier (a second L3 slot). `0x1008` is the cheap row the 4 KB mutant actually requires.
+
+---
+
+### Q4 — keep the `// TODO.` It is not the offset.
+
+I cannot honestly pin that one-word comment on line 168. The file’s other TODOs are specific (VA_SIZE / VIRBND at the top; KRE → ACV vs TNV on `pte1`/`pte2`). This one sits **between** an incomplete PA and a hardcoded `return 2`.
+
+What is still true after the offset is restored:
+
+- `flags` is never read. `FLAG_WRITEFLAG`, `FLAG_INSTR`, `FLAG_NOEXCEPTIONS` are passed in and ignored.
+- `ALPHA_PTE_KR/KW/UR/UW` and `FAULT_ON_*` are defined in `alpha_cpu.h` and untested. The probe’s own comment 6 already recorded that only `ALPHA_PTE_VALID` is load-bearing.
+- Return `2` means writable. SH states the contract (`1` = RO, `2` = RW). `memory_rw` caches `ok - 1` as the store permission, so every walked Alpha page is cached writable.
+- Granularity-hint bits are ignored.
+
+Deleting the TODO would record the translator as finished. It is not. The offset fix leaves that comment true.
+
+---
+
+### Q5 — no double-count
+
+The fill already strips before it caches:
+
+```c
+memblock = memory_paddr_to_hostaddr(mem, paddr & ~offset_mask, writeflag);
+offset   = paddr & offset_mask;
+cpu->update_translation_table(cpu, vaddr & ~offset_mask, memblock, …,
+    paddr & ~offset_mask);
+```
+
+`update_translation_table` asserts both addresses are `DYNTRANS_PAGESIZE`-aligned (8192). After the fix, `paddr & ~0x1fff` is still the page base. `memory_paddr_to_hostaddr` on a page-aligned paddr returns the **host page**, and the fill’s `memcpy(memblock + offset)` uses the walked offset **once**.
+
+The fast path never looks at that paddr. It does `page[addr & 8191]` with the **virtual** offset. I-fetch also masks (`physaddr &= ~(DYNTRANS_PAGESIZE - 1)`) before `update_translation_table`. Invalidate does the same.
+
+The double-count you are worried about would be `memory_paddr_to_hostaddr(full_paddr)` **plus** `+ (paddr & offset_mask)`. That is not what the code does. The masks stay.
+
+---
+
+### Else found (not this round)
+
+1. **`:81` is the wrong neighbor.** S3 cites `:88` as the shape. `:81` is `(vaddr & 0x7fff) + HWRPB_PADDR` — same shape, 32 KB mask. A seat that “copies the in-function idiom” can copy the wrong one. The current witness cannot see it.
+
+2. **Unmasked `+ vaddr` is the other 6/6.** “Add the offset” without a mask is correct on page 0 and wrong as soon as `i3 != 0`. Same class as `0x3fff`.
+
+3. **`flags` is dead.** Failed walks still `fatal` the `wasn't found` line even under `FLAG_NOEXCEPTIONS` (debugger watchpoints). `pte1` invalid is silent; `pte2`/`pte3` still print. Separate from the offset.
+
+4. **`exit(1)` at the magic K0SEG vaddr** is still there. Already noted on the sibling round.
+
+5. **Two names for 13 in one function:** `ALPHA_PAGESHIFT` on the L1/L2 physical addresses, local `pageSizeShift` on the indices and the final shift. Couple the new mask to `pageSizeShift` so those two cannot diverge on the same line.

@@ -1,0 +1,31 @@
+VERDICT: The GET arm is the internally inconsistent one, but the brief’s S4 measured value does not match the quoted code; Q2–Q4 cannot be settled from the packet.
+
+**Q1 — Which arm is wrong?**  
+READ from the quoted code:  
+- PUT RGB writes `buf[0]=R, buf[1]=G, buf[2]=B, buf[3]=0`.  
+- GET RGB reads `buf[1]<<24 + buf[2]<<16 + buf[3]<<8`, ignoring `buf[0]`.  
+
+REASONED: These are not inverses. The PUT order matches RGBA’s `R,G,B,A` layout with `A` replaced by a zero pad at `buf[3]`. The GET order matches neither RGBA nor ABGR; it is a third layout `pad,R,G,B`. Internal consistency therefore favors GET being wrong.  
+The other side: if the hardware expects RGB pixels as `0x00RRGGBB` in big-endian memory order, then GET is correct and PUT should write `buf[0]=0, buf[1]=R, buf[2]=G, buf[3]=B`. That cannot be ruled out from the packet alone.
+
+**S4 inconsistency**  
+READ from the code: a same-mode RGB PUT→GET on `0xaabbccdd` produces `0xbbcc0000`, not `0xbbccdd00`. The brief’s stated measured value `0xbbccdd00` is not what the quoted GET expression predicts. This weakens the empirical claim unless the measurement path differs from the fragment.
+
+**Q2 — Hardware behavior**  
+Not checkable from the packet. The single fact that would settle it: documentation or an in-tree consumer showing how CRIME/RE stores a 32-bit RGB pixel for `DE_MODE_TYPE_RGB`.
+
+**Q3 — Dependencies on current behavior**  
+Not checkable from the packet. The fragment shows no other consumer. The fact needed: any code that reads back pixels written in RGB mode, e.g., framebuffer scanout, MTE copy, or `debug()`.
+
+**Q4 — Reachability by a real guest**  
+Not checkable from the packet. The brief states the MTE path uses `DE_MODE_TYPE_RGBA`, not `RGB`. No in-tree path selecting `DE_MODE_TYPE_RGB` is shown. The fact needed: a search for `DE_MODE_TYPE_RGB` in `src/` and `regress/*.py`.
+
+**Q5 — Mutant enumeration**  
+If the fix is changing GET RGB to  
+`*color = (buf[0] << 24) + (buf[1] << 16) + (buf[2] << 8);`  
+then mutants that still look right but fail include:  
+- `(buf[0] << 24) + (buf[1] << 16) + (buf[2] << 0)` — shift count changed by 8 on B.  
+- `(buf[0] << 24) + (buf[1] << 16) + (buf[3] << 8)` — byte index changed by one, reads the zero pad.  
+- `(buf[0] << 24) + (buf[1] << 16) + (buf[2] << 8) + (buf[3] << 24)` — harmless because `buf[3]=0`, but looks like a real term.  
+
+A test suite that only checks the three currently passing modes (CI, RGBA, ABGR) will not catch any RGB mutant. A detector must include an RGB roundtrip with distinct nonzero R, G, B bytes and a zero pad, e.g., `0x12345600`, to catch shift/index errors.

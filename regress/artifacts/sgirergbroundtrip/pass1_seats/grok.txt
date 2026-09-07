@@ -1,0 +1,141 @@
+I'll start from the repo and the actual `horrible_getputpixel` function, then check the brief's premises against declarations and callers rather than ratifying them.Git is blocked from this seat, so I’ll verify the function, constants, and callers directly in `GXEMUL-SEC/src/`.The GET formula and the S4 copy result are not the same experiment; next I’ll read callers, pixel-format comments, and whether `DE_MODE_TYPE_RGB` is ever selected.NetBSD’s crmfb driver does select `DE_MODE_TYPE_RGB`; I’ll read that path and how GBE consumes the same bytes.**VERDICT: GO-WITH-CHANGES — GET is the inconsistent arm; do not treat S2 as bufdepth-independent; RGB is a real guest mode; a same-mode round-trip row cannot see `+ buf[3]`.**
+
+I opened the full `horrible_getputpixel` in `GXEMUL-SEC/src/devices/dev_sgi_re.c` (declaration through the closing brace), `crmfbreg.h`, every caller, and `dev_sgi_gbe.c`’s 32-bit path. I did not run gates, did not write a patch, did not read `regress/artifacts/` or the ledger.
+
+---
+
+## Premises (checked, not ratified)
+
+**S1 holds.** `color_mode` is `uint32_t` (`mode & DE_MODE_TYPE_MASK`). `*color` is `uint32_t *`. `bufdepth` is `int bufdepth = 1 << ((mode >> 8) & 3)` — 1, 2, 4, or 8 — and that length, not 4, is what `memory_rw` transfers. The quoted tail matches the file.
+
+**S2’s table is true only when `bufdepth >= 4`.** That is not a quibble. The helper never consults `DE_MODE_PIXDEPTH_*`. RGB PUT fills `buf[0..3]` and then writes `bufdepth` bytes; RGB GET reads `bufdepth` bytes and then uses three indices. At `BUFDEPTH_8` (NetBSD’s default console is 8-bit) PUT stores only `*color >> 24` and GET currently assembles from **unread** `buf[1..3]`. The round-trip table is a 32-bit-buffer fact, not a mode fact.
+
+**S3 holds** (`CI 0x00`, `RGB 0x10`, `RGBA 0x20`, `ABGR 0x30`, `YCRCB 0xf0`, `MASK 0xf0`). `YCRCB` is the `default:` arm.
+
+**S4 is a different experiment from S2, and both still support GET-wrong.** Same-mode PUT-then-GET of `0x11223300` is the OUTSTANDING_BUGS number: bytes `11 22 33 00` come back `0x22330000`. S4 is RGB **GET of already-resident memory** `aa bb cc dd` then RGBA PUT, which yields `0xbbccdd00`. Same index bug, two channels. Do not write the record as if S4 were a same-mode round trip.
+
+**RGBA vs ABGR is not an endianness alibi for RGB.** RGBA is a big-endian unpack of the 32-bit register; ABGR is the little-endian unpack of the same register; both invert themselves. RGB GET is not an endian of RGB PUT. It is **RGBA GET with every index incremented by one and the last term dropped.** That is a typo shape, not a packing policy.
+
+---
+
+## Q1 — GET is wrong. The other side exists and loses.
+
+**GET is the arm that does not invert PUT, and it is the arm that does not match its neighbour.**
+
+PUT RGB is PUT RGBA with `buf[3] = 0` written on purpose. Byte 3 is the pad. GET that consumes `buf[3]` and skips `buf[0]` is reading the pad as a channel and dropping R.
+
+**The other side, argued as asked.** Suppose silicon stores XRGB (pad at byte 0, R at byte 1). Then current GET — `(buf[1]<<24)+(buf[2]<<16)+(buf[3]<<8)` — is the right unpack into `0xRRGGBB00`, and PUT is the broken arm: it writes RGBX. That is a coherent story. It is also the story the rest of this tree contradicts.
+
+What kills it, without a datasheet:
+
+1. **GBE’s 32-bit path independently treats byte 0 as R.** `dev_sgi_gbe.c` builds `color = (buf[i]<<24)+(buf[i+1]<<16)+(buf[i+2]<<8)+buf[i+3]` and `CRMFB_MODE_TYP_RGB8` takes `*r = color >> 24`. That is RGBX in memory. GBE never calls `horrible_getputpixel`. If PUT were “fixed” to XRGB, every RGB-mode store would display as a one-byte rotate on the window that already works for RGBA.
+2. **NetBSD packs `CRIME_DE_FG` as `(R<<24)|(G<<16)|(B<<8)`** when it paints the alpha-font swatches (`crmfb.c` around the `rasops_cmap[j] << 24` loop). That is the same register layout PUT RGB/RGBA encode.
+3. **ABGR is already the reversed packing.** If RGB were XRGB, the header would not need a fourth named type sitting next to RGBA that is RGBA-minus-alpha on the PUT side.
+
+I would still not ship a GET fix as “matches silicon.” I would ship it as “makes RGB the inverse of its own PUT and of RGBA-minus-alpha, which is what every in-tree consumer of these bytes already assumes.”
+
+Two design choices on the GET line, both better than today, not equivalent:
+
+| GET after the fix | same-mode RT of PUT `0xaabbccdd` | GET of raw memory `aa bb cc dd` |
+|---|---|---|
+| `(buf[0]<<24)+(buf[1]<<16)+(buf[2]<<8)` | `0xaabbcc00` | `0xaabbcc00` |
+| same `+ buf[3]` (RGBA GET copied) | `0xaabbcc00` (PUT zeros byte 3) | `0xaabbccdd` |
+
+The first treats RGB as “no alpha, even on read.” The second treats RGB as “RGBA in memory, alpha forced 0 only on write.” **A same-mode round-trip row cannot tell them apart.** S4’s copy row can.
+
+---
+
+## Q2 — I do not know what the hardware does.
+
+There is no CRIME/RE programming manual in `_scratchpad/` (the PDFs there are ARM, MIPS, SH, PPC, DC21285, PIT, MVME187). `crmfbreg.h` names the types and does not define byte lanes. `dev_sgi_re.c`’s own header says the device is **guesswork from Linux/NetBSD/OpenBSD**.
+
+What the tree *does* say, as a consumer of the same bytes:
+
+- GBE RGB8: R at byte 0, G at 1, B at 2 (cited above).
+- PUT RGB/RGBA: same.
+- Linux palette comment in `dev_sgi_gbe.c`: values “formated as `0xrrggbb00`.”
+
+That is emulator-plus-driver agreement, not a datasheet. If a later round finds a CRIME doc that says XRGB, PUT moves, not GET — and GBE RGB8 would then be the second bug. I have not found that doc.
+
+---
+
+## Q3 — Nothing silent depends on the *wrong GET*. GBE depends on the *current PUT*.
+
+Checked:
+
+| Path | Touches RGB GET/PUT? | If GET is corrected |
+|---|---|---|
+| **GBE tick** (`dev_sgi_gbe.c`) | Reads tile RAM with its own 32-bit assemble. Never calls `horrible_getputpixel`. | **No change**, provided PUT is left alone. |
+| **DE XFER** (`draw_primitive` RECTANGLE, `DE_DRAWMODE_XFER_EN`) | GET `src_mode`, PUT `dst_mode`. S4 is this path. | Copy RGB→RGBA (and RGB→RGB) **changes**, which is the fix. |
+| **DE ROP** (LINE/RECT, `OPENGL_LOGIC_OP_XOR` / `COPY_INVERTED`) | GET dest as `oldcolor` with `dst_mode`. | XOR against a shifted old pixel **changes**. Today it is wrong. |
+| **DE stipple/FG fill** | PUT only, `color = fg`. | Unchanged if PUT is unchanged. |
+| **MTE A/B/C** | Builds `src_mode`/`dst_mode` from TLB+depth only; the `if (depth == 4) \|\= RGBA` branch is dead (`depth = 8 << field` → 8/16/32/64). Colour type is always **CI**. | Does not exercise RGB GET/PUT at all. |
+| **`debug()` on `CRIME_DE_MODE_SRC/DST`** | Prints the register word, not pixel bytes. | Unchanged. |
+| **Pixel `debug()` inside the helper** | None. | — |
+
+`DE_DRAWMODE_ALPHA_BLEND` is defined in `crmfbreg.h` and **never read** in `draw_primitive`. NetBSD’s alpha-font blit therefore degrades, in this emulator, to a straight XFER (GET RGBA, PUT dest). That is S4’s topology, not a hidden dependency on the bad GET.
+
+I did not find a second device decoding RGB-mode pixels with the GET formula.
+
+---
+
+## Q4 — RGB is reachable by a real guest. This is a correctness round.
+
+**In-tree constructor: no.** The only `|= DE_MODE_TYPE_RGB` in `GXEMUL-SEC/src/` is the `case` labels. MTE forces RGBA in a branch that cannot run.
+
+**Guest registers: yes.** `draw_primitive` takes `dst_mode` / `src_mode` straight from `CRIME_DE_MODE_DST` / `CRIME_DE_MODE_SRC`. Those bits are documented (`0x10`).
+
+**NetBSD `crmfb.c` (not in this tree; current trunk): yes, on purpose.** After `setup_video` sets `sc_de_mode` to CI (8-bit) or RGBA (16/32-bit):
+
+```c
+if (FONT_IS_ALPHA(ri->ri_font)) {
+    sc->sc_de_mode =
+        (sc->sc_de_mode & ~DE_MODE_TYPE_MASK) | DE_MODE_TYPE_RGB;
+}
+```
+
+Then `crmfb_dst_mode(sc, sc->sc_de_mode)` and `crmfb_bitblt` does `crmfb_src_mode(sc, sc->sc_de_mode)`. `crmfb_putchar_aa` blits a 32-bit **RGBA** glyph onto `sc_de_mode` (RGB) with `DE_DRAWMODE_XFER_EN | DE_DRAWMODE_ALPHA_BLEND`.
+
+Caveats that belong in the record:
+
+- Default console depth in that driver is **8**, so the RGB that actually lands is often `TYPE_RGB | BUFDEPTH_8`. That is the S2-qualification above, and it collides with `sgirebufuninit`.
+- Fills/erases go through **MTE**, not the DE colour arms, so they never hit this GET.
+- What *does* hit it, if `sc_de_mode` is RGB: `crmfb_copycols`, `crmfb_cursor` (ROP 12 XOR via `bitblt`), and the second blit of `putchar_aa`.
+- 32-bit X11 in the same driver uses **RGBA**, not RGB, unless `setup_palette` runs again with an alpha font after a 32-bit `setup_video`.
+
+So: not “only a probe,” and not “every NetBSD boot.” Documented mode, real driver, conditional path. Grade it correctness, not robustness.
+
+---
+
+## Q5 — Clause (d) set, and the row the brief cannot name
+
+The brief says “my three rows” and **does not list them**. I cannot score those rows. What follows is against the two observables the packet *does* name (same-mode RT, RGB-src→RGBA-dst copy) plus an RGBA control.
+
+Assume the repair is one GET line whose terms are byte index and shift. DEPENDS-ON (expression, not a new predicate):
+
+| Mutant | Shape | Same-mode RT (`11 22 33 00` → want `0x11223300`) | S4 copy (`aa bb cc dd` through RGB GET) |
+|---|---|---|---|
+| `buf[1], [2], [3]` | (b) verbatim reinstatement | red (`0x22330000`) | red (`0xbbccdd00`) |
+| indices `0,1,3` or `0,2,3` | off-by-one term | red | red |
+| shifts `16,8,0` or `32,24,16` | shift ±8 | red | red |
+| `+` → `\|` | looks like a cleanup | **green** (disjoint bits) | **green** |
+| `+ buf[3]` (RGBA GET copied) | neighbour-shaped null-repair | **green** (PUT zeros byte 3) | **red iff the oracle is `0xaabbcc00`**, green if it only rejects `0xbbccdd00` or accepts any “not shifted” value including `0xaabbccdd` |
+| ABGR formula on the RGB arm | reverse packing | red | red |
+| `if (color_mode == RGB && put)` style extra conjunct | (d) on the case | N/A on GET-only rows | N/A |
+
+**The mutant a naive three-row suite will miss is `+ buf[3]`**, unless one row GETs RGB against memory whose byte 3 is **nonzero and not produced by RGB PUT**. S4 as described (`0xaabbccdd` → expect something other than `0xbbccdd00`) is that row only if the wanted value is pinned to `0xaabbcc00` rather than “not rotated.” Pin the wanted value.
+
+`+` → `\|` is equivalent here; it is not a floor cell. Disclose it.
+
+Also owed, because the helper’s transfer length is `bufdepth` not 4: at least one sentence in the contract that RGB GET/PUT are specified at `BUFDEPTH_32`. An 8-bit RGB row is `sgirebufuninit`’s population, not this repair’s, unless you take NetBSD’s 8-bit+alpha-font combo in-round — I would file that pairing, not grow this detector to two depths.
+
+---
+
+## Something else
+
+1. **`PIXDEPTH` is ignored.** Mode words carry both depth fields; only `mode >> 8` sizes the transfer. A detector that programs `TYPE_RGB | PIXDEPTH_32` without `BUFDEPTH_32` is not testing the arm it thinks it is.
+2. **Current RGB GET at `bufdepth < 4` is an uninitialised-stack read** of `buf[1..3]`. Fixing the indices to `0,1,2` without filling `buf` still leaves `buf[1]`/`buf[2]` uninit at `BUFDEPTH_8`. That is already filed as `sgirebufuninit`; a GET-only RGB fix does not close it.
+3. **`draw_primitive` never implements `DE_DRAWMODE_ALPHA_BLEND` or a partial `BYTEMASK`.** NetBSD `putchar_aa` uses both. The RGB dest path a real driver takes is, in this emulator, a plain XFER plus a `printf` TODO on bytemask. Worth a sentence in the record so “we fixed NetBSD alpha fonts” does not get written.
+4. **Integer promotions on `buf[i] << 24`:** `uint8_t` promotes to `int`; `255 << 24` is not representable in 32-bit `int`. Pre-existing on every GET arm, not unique to RGB, not a reason to block.
+
+**Design I would take to pass 2:** correct GET to invert PUT (R at `buf[0]`); decide explicitly whether byte 3 is forced 0 or passed through; pin both with a same-mode RT row **and** a raw-memory GET whose byte 3 is nonzero; leave PUT and GBE alone; name `BUFDEPTH_32` in the contract; do not claim a CRIME datasheet.

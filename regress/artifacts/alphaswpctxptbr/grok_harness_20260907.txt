@@ -1,0 +1,121 @@
+I'll review the probe as code against the Alpha decoder, PAL handler, and debugger — starting with the file and the claimed facts, not the design.The probe is in hand. Next I’ll check the decoder, PAL handler, K0SEG translation, and debugger `put` against the claims.**VERDICT: DO NOT TRUST THE FIRST RUN.** The lda/ldah/ldq bootstrap and the swpctx SAVE/RESTORE walk are right. The encodings that this file actually emits match the decoder. `put d` is the right debugger command. What is wrong is the **address plan**, and it makes three rows able to go green while measuring “unmapped reads return 0”, not the handler.
+
+---
+
+## Premises that are wrong or too broad
+
+The load-bearing miss is this one, and the file almost named it, then used the addresses anyway.
+
+**`0x20000000` is the file-load vaddr and the entry point. It is not RAM.** `-M 64` makes `physical_max = 0x4000000`. Generic Alpha RAM is that many bytes at physical 0 (`emul.c` → `memory_new`). `machine_alpha.c` adds no RAM device at `0x20000000`. `0x20000000` is 512 MB.
+
+The dummy load does **not** create a mapping there. `file_load_raw` writes through `memory_rw`. With `ptbr == 0`, `alpha_translate_v2p` remaps the **8 KB** window `0x20000000–0x20001fff` onto `PROM_ARGSPACE_PADDR` (`0x12000`). Eight zero bytes land in low RAM. Everything the probe actually uses (`0x20010000`, `0x20020000`, `0x20030000`, `0x20040000`, and `k0()` of those) is **outside** that window, identity-maps to the same physical, and is beyond `physical_max`.
+
+The comment “NetBSD stores 8KB temp prom data” at `0x20000000` is that remap. It is a virtual alias onto PROM args, not a reason to put PCBs there.
+
+**Unmapped access is silent without `-T`.** `memory_warn_about_unimplemented_addr` only returns true (and sets `running = 0`) when `halt_on_nonexistant_memaccess` is set. Without `-T`, a physical address past RAM **writes succeed and are discarded; reads return zeros.** Instruction fetch of zeros is a real instruction: `call_pal 0`.
+
+**`palalive` does not mean the CPU survived swpctx.** `alive` is “the pty is still readable”. `alpha_palcode`’s default arm does `cpu->running = 0` and stays in the debugger because `-V` is single-step. The emulator does not exit. `palalive` stays green.
+
+**The encoder self-test does not test the decoder.** It re-runs `load_const`’s own 32-bit wrap and masks with `& 0xffffffff`. LDAH sign-extends through `lda_0`’s `(int32_t)` cast. `0xdeadbeef` in that list would be `0xffffffffdeadbeef` in a register; the self-test still prints ok. The values this file actually uses have bit 31 clear, so the guest sequences happen to be fine.
+
+**`put q` is 128-bit, and it is also unimplemented** (`"quad-words: TODO"`). The premise is true and stronger than stated.
+
+The other listed facts hold: `call_pal` is opcode 0 with the PAL number in bits 25..0; `alpha_palcode()` gates on `ps & ALPHA_PSL_USERMODE` and `0x30` is not on the whitelist; `ps` is zero from `zeroed_alloc`; memory-format encoding and `ALPHA_REG_NAMES` match; `ALPHA_K0SEG_BASE` is `0xfffffc0000000000`; PCB offsets match `struct alpha_pcb`; K0SEG is checked before `base == 0`.
+
+---
+
+## Q1 — Bootstrap
+
+The **method** is valid. LDA/LDAH only build a 32-bit (sign-extended) constant; a K0SEG pointer has bits 63..42 set; writing those 64-bit values with `put d` and loading them with one `ldq` while `ptbr` is still 0 is the right way to get a K0SEG address into a register. After that, translation of those addresses does not read `apcb_ptbr`.
+
+Nothing between the `put d` writes and the first `call_pal` writes `apcb_ptbr`. Debugger `put` goes through `store_*` → `memory_rw`. Guest `ldah`/`lda`/`ldq` do not touch the PCB. `cpu->cd.alpha.ctx` starts at `0x10100`; PROM setup (`prom_emulation` defaults on) sets `a0 = 2048` and does not set `ptbr`. The defect session overwrites `a0` before the first `call_pal`.
+
+What is **not** valid is **where** it does this. Scratch, both PCBs, the pointer vector, and the K0SEG code page all sit at physical `0x200xxxxx`. K0SEG translation is `vaddr & 0x000003ffffffffff`, so `k0(0x20040000)` fetches physical `0x20040000`, which is still not in the 64 MB. The K0SEG idea survives contact with `alpha_translate_v2p`. The physical backing does not.
+
+`live`/`exec`/`palgate` also plant code at `0x20010000` via `run_ops`, not in K0SEG. That is fine for those rows (they never dirty `ptbr`), and it is still not RAM.
+
+---
+
+## Q2 — Encodings
+
+Checked against `cpu_alpha_instr.c` (`opcode = iword>>26`, `ra = iword>>21`, `rb = iword>>16`, `imm` sign-extended; LDA `0x08`, LDAH `0x09` then `arg[2] <<= 16`; LDQ `0x29` / STQ `0x2d` as `loadstore_type = 3`; `call_pal` takes `iword & 0x3ffffff`).
+
+| builder | vs decoder |
+|---|---|
+| `mem()` / `LDA` / `LDAH` / `LDQ` / `STQ` | match |
+| `CALL_PAL(0x30)` → `0x00000030` | match |
+| `T0,T1,T2,T3 = 1,2,3,4`; `A0 = 16`; `ZERO = 31` | match `ALPHA_*` and `ALPHA_REG_NAMES` (`t2` is register 3) |
+| `print t2` after `LDQ(T2, …)` | the register the load writes |
+| `load_const` sign correction for the 32-bit values used here (`0x20020000`, `0x5a5a5a5a`, `0x1234`, `0x20040000`) | bit 31 clear, LDAH does not pull in 1s |
+
+The earlier t1/t2 mix-up is not in this copy.
+
+`NOP = LDA(ZERO,0,ZERO)` is what the decoder turns into `instr(nop)`. It is unused in the programs.
+
+---
+
+## Q3 — Oracle
+
+The second `call_pal`’s SAVE writes the **old** context. Walk of `cpu_alpha_palcode.c` case `0x30`:
+
+1. SAVE current `pcb` through `cpu->cd.alpha.ctx` (`+16` = `apcb_ptbr`).
+2. Snapshot `a0` was taken at function entry. `ctx = a0` is the **new** PCB.
+3. LOAD from the new `ctx`. Line 278 sets `apcb_ptbr = new_ptbr`, then line 282 overwrites it with `new_flags`. That is the defect.
+4. `invalidate_translation_caches(…, INVALIDATE_ALL)`.
+
+First call: `a0 = k0(PCB_A)`, `ctx` was `0x10100`, so SAVE goes to `0x10100`, then LOAD A. In-CPU `apcb_ptbr` becomes `MARKER` on the committed build, `0` on a fixed one. Second call: `a0 = k0(PCB_B)`, SAVE goes to **A**. `A+16` is then `MARKER` or `0`. `LDQ(T2, 16, T3)` with `t3` held as `&PCB_A` is the right cell.
+
+K0SEG is the right place for that SAVE once `ptbr` is dirty: the K0SEG arm runs before `base` is used, so instruction fetch and the second SAVE still translate.
+
+Two handler facts the oracle does not currently pin:
+
+- The comment at the SAVE says “Return old context in v0.” The store is `r[ALPHA_A0]`, not `r[ALPHA_V0]`. The probe reloads `a0` before the second call, so Q3 still holds. `palgate` prints `v0`, which this arm does not write.
+- PAL comments say swpctx clobbers `t0`. This emulator leaves registers alone. The second `LDQ(A0, 8, T0)` depends on that inaccuracy.
+
+---
+
+## Q4 — `put d`
+
+Yes. `debugger_cmd_put`:
+
+- `d` = doubleword, 64 bits, `store_64bit_word`
+- `q` = quad-word, 128 bits, and the body is `printf("quad-words: TODO\n"); return;`
+
+`put d` is the only working 64-bit write. It **does** go through `translate_v2p` (`store_64bit_word` uses `CACHE_DATA`, not `PHYSICAL`). `put d 0x20030000, …` with `ptbr == 0` is an identity-mapped virtual write to physical `0x20030000`. `put w` of code at `k0(P_CODE)` translates to the same physical the guest will fetch. Internally consistent — and both miss RAM.
+
+---
+
+## Q5 — What will fail silently
+
+This is the same shape the footbridge probe was built to survive: **a 0 that looks like the success value.**
+
+Without `-T`, physical `0x200xxxxx` reads as 0 and writes are discarded. Fetching 0 executes `call_pal 0`, which hits `default:` (`unimplemented`, `running = 0`), not case `0x30`.
+
+| row | what a green can actually mean |
+|---|---|
+| **`swpctx ptbr`** | Want `0x0`. Unmapped PCB load → flags=0 → even line 282 assigns 0 → unmapped readback 0. **Green on the committed defective build while swpctx never saw MARKER.** |
+| **`swpctx notflags`** | `negate=True` against MARKER. Green for `0x0`, `"died"`, `"absent"`, anything except MARKER. Adds no protection against the zero path. |
+| **`palgate`** | Looks for the substring `"user mode"`. Fetching 0 runs palcode 0, which prints `unimplemented`, not that string. **Green without ever reaching the privilege gate or 0x30.** |
+| **`palalive` / `swpctx alive`** | Pty still up. `running = 0` does not kill it. Green after unimplemented palcode, and after a real swpctx. |
+| **`live`** | Want `0x5a5a5a5a`. Unmapped load returns 0 → **RED**. This is the one control that actually fires. It does not mechanically stop the defect rows from scoring `ok` in the same process; they are a later, separate session. |
+| **`exec`** | Want `0x1234`. Fetch 0, `t2` stays 0 → RED. Same. |
+| **`encoder`** | Offline tautology. Always green unless the Python wrap disagrees with itself. |
+
+So a first run can look like: `live`/`exec` FAIL, `palgate`/`palalive`/`swpctx alive`/`swpctx ptbr`/`swpctx notflags` ok, `ALPHAHARNESS_RESULT=5/8` or similar, exit 1. The danger is reading `swpctx ptbr ok` as “the handler is correct.” It measured zeros from unmapped memory.
+
+Nothing in the control set proves case `0x30` ran. A handler-signature would: after one `call_pal 0x30`, this emulator writes the old `ctx` (`0x10100`) into **`a0`**, not `v0`. If `a0` is still the PROM value `2048` or the programmed PCB pointer, the handler did not take that store.
+
+If the addresses are later moved into real RAM and K0SEG of **low** physical (`phys < 0x4000000`, e.g. `0x00100000`, avoiding `0x10000` PROM, `0x10100` initial ctx, `0x12000` PROM args, `0x14000` HWRPB), the oracle in Q3 is the right one. Until then the defect rows are not evidence.
+
+---
+
+## Else
+
+- **Line 251 is a second product bug**, independent of 282: comment says v0, code writes a0. OSF/1 swpctx returns the old PCB in v0. The probe does not use that return, so Q3 is unhurt; any later row that prints `v0` for “old ctx” will be wrong.
+- **`-x` is not the debugger.** `-V` is single-step (`main.c`). `-x` is slave xterms. Harmless on alphabook1 (no extra consoles); 3000/300 has a z8530. Sibling ARM probes use `-V -A`, not `-x`.
+- **No `-T`.** Sibling access probes that care about “0 from nowhere” pass it. Here it would turn the address miss into a halt instead of a plausible 0.
+- **`printed()` is fine on this debugger.** `debugger_parse_expression` returns `PARSE_NUMBER` on success, so `print t2` emits `0x…` on the next line, not `t2 = 0x…`. The regex matches that. `buf.replace("\r","")` covers the pty.
+- **Initial `ctx = 0x10100` is in RAM.** The first SAVE of a real swpctx lands there. It does not collide with `0x200xxxxx`. It *would* collide with a PCB parked at `0x10100`.
+- **K0SEG of the dummy’s load address is not the same as the dummy.** VA `0x20000000` with `ptbr==0` → `0x12000`. VA `k0(0x20000000)` → physical `0x20000000` (unmapped). The two paths disagree on purpose; do not mix them.
+
+I did not run it.

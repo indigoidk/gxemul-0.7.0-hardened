@@ -1,0 +1,120 @@
+**VERDICT: Zero-initialize all eight bytes at the existing declaration. That completes the local initialization repair in both directions, but does not establish correct pixel-format or MTE behavior. No guest-visible value or write-count oracle can reliably prove initialization occurred.**
+
+I reviewed the scoped source and top-level regression Python files. I made no edits and executed no emulator, tests, or probes.
+
+Several “settled” premises need correction.
+
+- **S1:** The uninitialized declaration is present. “Once per pixel” is too narrow: a rectangle iteration can read the old destination, read the source, and then write the destination. Each invocation can reuse the same physical stack storage. See the [rectangle loop](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:870).
+- **S2:** Confirmed for the implementation. The [register handler stores mode values directly](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:1001), and the helper independently extracts type and transfer width. However, implementation acceptance does not establish hardware validity: the [header names buffer depths of 8, 16, and 32 bits](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/thirdparty/crmfbreg.h:325), with no named 64-bit depth.
+- **S3/S5:** Current RGB GET consumes indices **0, 1, 2**, not index 3. The recorded `#505` change preserved the affected widths but reduced the unfilled bytes consumed.
+- **S4:** The current [memory implementation](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:207) contains **six** `memset(data, 0, len)` sites: lines 215, 267, 492, 671, 683, and 732. The quoted precedent is present. Those fills cover the supplied `len`; they cannot initialize bytes beyond the prefix this helper requests.
+
+Here is the arithmetic enumeration, including the MTE expression:
+
+| Extracted depth field | Helper `bufdepth` | MTE `depth` | MTE `depth == 4` |
+|---:|---:|---:|---|
+| 0 | 1 byte | 8 bits | False |
+| 1 | 2 bytes | 16 bits | False |
+| 2 | 4 bytes | 32 bits | False |
+| 3 | 8 bytes | 64 bits | False |
+
+The [helper’s switches](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:284) produce the following uninitialized-use inventory. GET rows assume the requested read prefix is completely filled. Entries are buffer indices; “—” means none.
+
+| Operation and arm | Depth 1 | Depth 2 | Depth 4 | Depth 8 |
+|---|---|---|---|---|
+| PUT CI | — | 1 | 1, 2, 3 | 1, 2, 3, 4, 5, 6, 7 |
+| PUT RGB/RGBA/ABGR/default | — | — | — | 4, 5, 6, 7 |
+| GET CI | — | — | — | — |
+| GET RGB | 1, 2 | 2 | — | — |
+| GET RGBA/ABGR/default | 1, 2, 3 | 2, 3 | — | — |
+
+For the recorded pre-`#505` RGB expression, the corresponding GET sets were:
+
+- Depth 1: `{1,2,3}` became `{1,2}`.
+- Depth 2: `{2,3}` became `{2}`.
+- Depth 4: empty remained empty.
+- Depth 8: empty remained empty.
+
+Thus, “neither created nor changed any of the above” is too broad. It did not eliminate the mismatch, but it changed its byte-level extent.
+
+**Q1.** Zero-fill is the right immediate repair because it establishes defined contents before either direction can consume otherwise untouched bytes. Making PUT arms assign more bytes does not repair narrow GETs.
+
+The case against stopping there is also sound: initialization supplies a fallback, not missing format semantics. But **“CI at depth 4 becomes defined-but-wrong” is itself unproven as a general hardware claim**. The local header distinguishes buffer depth from pixel depth; this helper does not decode the latter. Correct behavior might require packing, padding, preserving other bytes, or rejecting an unsupported combination. Merely equalizing assignment and transfer counts cannot choose among those policies.
+
+Consequently:
+
+- Zero-fill completes this automatic-buffer initialization repair.
+- Correct format/depth handling remains separate work.
+- Full-width assignment is appropriate only after establishing what those bytes represent.
+- A general eight-byte raw copy cannot pass through the existing four-byte `uint32_t color` representation without losing information.
+
+The fork’s zero-fill precedent supports that division. It does not establish pixel-format semantics.
+
+**Q2.** Choose **(a), at the existing declaration**.
+
+That declaration already follows the coordinate, addressing-mode, tile-index, and valid-pointer checks. Rejected accesses therefore need not reach the initialization.
+
+Option **(b)** leaves every narrow-GET gap in the table intact. Option **(c)**, as proposed, also addresses only PUTs. A complete conditional approach needs separate accounting for bytes assigned on PUT and bytes consumed on GET. RGB’s four-byte PUT footprint and three-byte GET footprint show why a single “arm size” is insufficient.
+
+The per-pixel cost deserves measurement if performance becomes an issue, but it does not presently justify conditional initialization. The source describes a slow memory access and performs an indirect `memory_rw` call. An eight-byte initializer may compile into a small store sequence; redundant stores may also be optimized. Neither its actual instruction sequence nor its performance impact can be established from this review. There is no measured basis here for accepting the added conditional complexity.
+
+**Q3.** **No complete black-box guest-visible oracle distinguishes initialization from coincidental zero contents.**
+
+A value assertion can enforce the repaired output policy and catch some regressions. It cannot prove the assignment happened: an execution with uninitialized storage containing the expected bytes can produce the same observations. Repetition does not resolve that ambiguity.
+
+Counting `MEM_WRITE` calls is even less discriminating here. The initialization repair preserves both the call count and transfer length. Such a count can establish that a transfer occurred; it cannot establish buffer definedness.
+
+The appropriate oracle observes initialization state separately from byte values:
+
+- Before a PUT transfer, every transferred byte must be defined.
+- After a GET read, every byte consumed by its decoding expression must be defined.
+- Transfer/reachability assertions must accompany these checks so an early return cannot make them pass vacuously.
+
+That requires host-side definedness instrumentation or a source-level proof. An ordinary callback inspecting byte values cannot supply that information. For the declaration repair, an unconditional initializer dominating both paths gives a simple local proof.
+
+Dynamic checks still prove only exercised paths. Coverage should distinguish both directions, all four widths, the color selections, and each implemented addressing case. In particular, **a wide GET does not test a wide PUT**.
+
+If the required claim is literally “all eight bytes were initialized,” a host-side check can assert that stronger property. The repair-independent safety property is narrower: every byte actually consumed or transferred must be defined.
+
+**Q4.** These defects overlap in byte positions, but have different responsibilities.
+
+| Defect | What it determines | What remains after initialization |
+|---|---|---|
+| Buffer initialization | Whether untouched local bytes have defined contents | This local gap is closed |
+| Dead MTE branch | Which color interpretation tiled transfers select | They still select CI and fail to preserve wider raw transfers |
+| Random-color default | Contents explicitly assigned by unsupported PUT types | Random bytes and the diagnostic remain |
+
+The [MTE construction](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:1365) starts with zero color-type bits. The enumerated comparison never selects RGBA. Consequently, transfers reaching that tiled helper path use CI.
+
+After buffer initialization, a tiled CI copy has these outcomes:
+
+| Transfer width | Copied from source | Supplied by initialization |
+|---:|---|---|
+| 1 | Byte 0 | Nothing |
+| 2 | Byte 0 | Byte 1 |
+| 4 | Byte 0 | Bytes 1, 2, 3 |
+| 8 | Byte 0 | Bytes 1, 2, 3, 4, 5, 6, 7 |
+
+Initialization therefore makes the remaining MTE data-loss behavior deterministic. Correcting the intended 32-bit selection would still leave the other widths requiring their own semantic assessment.
+
+For the color default, PUT explicitly assigns random values to bytes 0–3. Initialization does not replace those assignments. At width eight, the resulting buffer contains four assigned random bytes followed by four initialized zeros. At smaller widths, only the corresponding prefix transfers.
+
+Also, **GET’s color default is different**: it decodes four bytes in reverse order rather than calling `random()`. Its narrow-read initialization gap closes, but unsupported-format behavior remains. The header’s named `DE_MODE_TYPE_YCRCB` reaches these defaults; they are not restricted to unnamed selectors.
+
+If a later repair declines unsupported GETs, callers must also handle that failure. The existing source already records the separate dependent-PUT problem.
+
+**Q5.** I can assess the detector’s coverage gaps, but I can’t supply a target-specific edit that restores this memory-safety defect while evading detection.
+
+For a detector based solely on write counts, initialization is unobserved regardless of field coverage. For dynamic definedness checks, a repair restricted to exercised cases can leave untested cases unprotected. A sound all-paths proof would reject that restriction wherever a consumed byte becomes undefined.
+
+A concrete existing row expected to remain green is **`rgb depth64`** in [the RGB probe](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/sgi_re_rgb_probe.py:405). It performs an eight-byte RGB **GET**, then uses the setup’s default four-byte RGBA destination. Both relevant footprints are already filled or assigned. Its name therefore does not establish coverage of eight-byte PUT initialization. This is a source-based expectation, not a measured result.
+
+One additional oracle issue surfaced: the [RGB probe comment](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/sgi_re_rgb_probe.py:345) says neither `rgb chan` nor `rgb not corrupt` implies the other. The implemented comparisons contradict that:
+
+| Observed value | `rgb chan` | `rgb not corrupt` |
+|---|---|---|
+| Expected fixed value | Pass | Pass |
+| Historical corrupt value | Fail | Fail |
+| Any other value | Fail | Pass |
+
+`rgb chan` passing necessarily implies `rgb not corrupt` passing. The latter adds diagnostic classification, but no additional rejection power to the combined gate.

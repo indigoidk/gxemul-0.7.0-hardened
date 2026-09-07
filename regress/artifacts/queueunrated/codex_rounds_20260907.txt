@@ -1,0 +1,64 @@
+**VERDICT: DO NOT RATIFY THESE AS THREE COMPLETE ROUNDS. I found no incorrect source fix, but #506 is materially under-witnessed, and several record claims are false or stronger than their evidence.**
+
+I reviewed `GXEMUL-SEC/src/` against HEAD `a264a34`, including staged changes. No builds, probes, tests, or edits were performed. The saved logs support your headline scores; the surviving-mutant scores below are **static predictions, not measurements**.
+
+**Q1 — The three fixes are locally correct.**
+
+- **#505:** The corrected indices agree with the RGB PUT and independently with GBE’s RGB8 scanout. Reading `aa bb cc dd` as `0xaabbcc00` is correct for that layout. This establishes internal consistency, not hardware fidelity. [RGB helper](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:326), [scanout consumer](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_gbe.c:128).
+- **#506:** `idata` is `uint64_t`; converting `~1` for the comparison preserves the upper guard bits. Both changed format/argument pairs correctly preserve the value’s width. The preceding assignment, guard, and exit remain intact. [IOC handler](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:182).
+- **#507:** The input `a0` is captured before dispatch; all incoming PCB words are loaded into temporaries before the assignments change PTBR. The corrected block assigns all **nine storage fields once**, then invalidates translations. `apcb_flags = new_flags` is the right change. [Context-switch flow](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_alpha_palcode.c:229).
+
+**Q2 — #506 is the most under-witnessed.**
+
+Small surviving edits, without modifying any witness:
+
+| Round | Small edit that restores incorrect behavior | Predicted result and surviving row |
+|---|---|---|
+| #505 | Replace the RGB GET’s first operand, `buf[0]`, with `0xaa`. Red becomes a constant instead of the source’s red channel. Every RGB sample uses the same source word. | **10/10**; `rgb chan` remains green. |
+| #506 | Narrow only the changed `default:` diagnostic argument through `(uint64_t)(uint32_t)idata`. This restores its original upper-bit loss. | **6/6**; `kill width` remains green because the probe never visits `default:`. |
+| #507 | Change the new flags assignment from `=` to `|=`. | **10/10**; `swpctx flags` remains green. A loads correctly from initial zero; B’s zero flags fail to clear A’s flags, but the probe reads saved **A**, never saved B. |
+
+The relevant inputs and observations are in the [RGB probe](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/sgi_re_rgb_probe.py:165), [LCA probe](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/lca_confwidth_probe.py:155), and [Alpha probe](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/alpha_harness_probe.py:303).
+
+There is a sharper LCA failure: **append one literal `0` before the IOC_CONF diagnostic’s newline**. The actual message becomes `0x1000000000`, yet `kill width` still reports a green `0x100000000`. Its test accepts that substring and manufactures the displayed `got` from the boolean result. That predicts another **6/6**, with the diagnostic wrong at the very site being witnessed. [Parser and row](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/lca_confwidth_probe.py:186).
+
+Two further meaningful gaps:
+
+- **#505:** Restricting the correction to TLB_A and LIN_A, retaining the original expression for TLB_B/C, also predicts 10/10. The four tested cells cover two widths and two selected addressing modes.
+- **#507:** Narrowing `new_flags` to 32 bits also survives. The marker never exercises the documented PME flag at bit 62. [Flag definitions](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/thirdparty/alpha_cpu.h:74).
+
+**Q3 — The counts in the source comments survive; some universal wording does not.**
+
+- **#505:** The layout argument is sound, but “every RGB source read” needs the successful, sufficiently wide read qualification. Early declines and short reads remain possible.
+- **#506:** There really are five full-width sibling value diagnostics. “The file’s own outlier” is too broad: the second hunk fixes another narrowing site. “Outlier among these value-guard diagnostics” is accurate.
+- **#507:** The nine-field census is correct. “Never-loaded” means *not loaded by `swpctx`*: `wrfen` can already have assigned the field. The next save publishes stale flags; it does not necessarily publish zero or necessarily change the planted word. An intervening `wrfen` also matters.
+
+**Q4 — #505 changes the RGB portion of `sgirebufuninit`; it does not change the MTE defect.**
+
+For a successful memory read, the unfilled bytes subsequently consumed by **RGB GET** change as follows:
+
+| Read length | Before #505 | After #505 |
+|---|---|---|
+| 1 | `buf[1..3]` | `buf[1..2]` |
+| 2 | `buf[2..3]` | `buf[2]` |
+| 4 or 8 | None | None |
+
+PUT initialization is unchanged. RGBA, ABGR, and default GET are unchanged. Consequently, the revised CHANGELOG sentence placing the remaining exposure on “arms this diff does not touch” still omits **RGB’s remaining exposure in the edited arm**. [Residual wording](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/CHANGELOG.md:333).
+
+`do_mte_transfer()` still computes depth as 8/16/32/64 and tests `depth == 4`. Its constructed helper modes therefore retain CI; **that path never reaches the corrected RGB arm**. [MTE construction](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:1365).
+
+The RGB change also affects destination reads used by raster operations, beyond the XFER source reads your witness exercises. I found no direct interaction among the three source edits themselves.
+
+**Q5 — These record claims need correction or narrower attribution.**
+
+1. **“Three red rows now pin three distinct consequences” is false.** `swpctx ptbr` and `swpctx notflags` still inspect the same `got`; adding `swpctx flags` gives two observed words. The table also accounts for nine of ten rows, omitting the explicitly labelled non-oracle `palalive`. `swpctx alive` likewise measures PTY survival, not independently successful guest execution. [Alpha record](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/CHANGELOG.md:96).
+
+2. **LCA’s exact-value and exit-status claims exceed the instrument.** The prefix parser does not establish the complete diagnostic value, and `died` does not collect an exit status proving `exit(1)`. The blanket claim that no probe matches this message’s text also needs to exclude the new witness, which expressly does. [LCA record](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/CHANGELOG.md:159).
+
+3. **The RGB record misidentifies the pointer bit.** Bit 31 is a **validity bit**, present in accepted tiled pointers as well as linear pointers. Masking it does not remove a “linear flag.” Moreover, the chosen physical addresses can still distinguish these particular probe setups after masking; that is address correlation, not a mode tag. [Incorrect explanation](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/CHANGELOG.md:539).
+
+4. **The row-prefix explanation is wrong for these names.** `^rgb tiled .*ok$`, with one mandatory space, cannot match `rgb tiled64`: the next character is `6`. The record’s assertion that it would match both rows is false. The later “no name a prefix” claim is also stale. [Prefix claims](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/CHANGELOG.md:639). The gate additionally still calls M7 the mirror after the CHANGELOG correctly established otherwise. [Gate comment](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gate_arm.sh:1314).
+
+5. **M13/M14’s scores are supported; a Boolean-complement relationship is not.** M13 fails only `rgb tiled64`. Its actual complement would fail `rgb chan`, `rgb not corrupt`, `rgb samemode`, `rgb depth64`, and `rgb tiled`: **5/10**, not 7/10. The [M14 log](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/sgirergbroundtrip/killtable6_20260907/M14_compmirror.raw:6) instead shows only the three LIN_A/depth-4 assertions failing. If “mirror” means an opposite-corner construction, record that definition. The table directory preserves outputs without the exact mutant definitions or fingerprints needed to settle their identity.
+
+One incidental finding: **a new #508 block appeared during inspection, and its wide-mask equivalence claim is false.** The mask is applied to full `vaddr`, not an already isolated offset. For the existing second-row address `0x3008`, `& 0x1fff` gives `0x1008`, whereas both wider masks retain `0x3008`. “No row can distinguish them” does not follow. This is separate from my review of the three requested fixes. [New claim](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/CHANGELOG.md:27).

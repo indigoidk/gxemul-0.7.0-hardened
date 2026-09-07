@@ -1279,9 +1279,16 @@ else
     #
     #  The probe prints names with "%-16s" followed by an explicit space, so a name of N chars is followed
     #  by (16-N)+1 spaces.  The longest name here is `lin_b diag once' at 15, leaving exactly two -- so this
-    #  pattern has ONE CHARACTER of margin.  A row name of 16 or more makes the two-space pattern
-    #  UNSATISFIABLE, which is the same trap in its other, SILENT direction: the check stops testing
-    #  anything and stays green.  If a name must grow past 15, widen the probe's "%-16s" in the same diff.
+    #  pattern has ONE CHARACTER of margin.  If a name must grow past 15, widen the probe's "%-16s"
+    #  in the same diff.
+    #
+    #  *** CORRECTED 2026-09-07 (#505 pass 2, the kimi substitute).  This used to say a name of 16 or
+    #  more makes the pattern "UNSATISFIABLE, which is the same trap in its other, SILENT direction:
+    #  the check stops testing anything and stays green."  THE SILENT PART IS FALSE. ***  `count'
+    #  returns 0, `check' compares 0 against the wanted "1", and 0 != 1 FAILS -- loudly.  Measured
+    #  over rendered rows at lengths 15/16/17.  An unsatisfiable pattern is silent only where a check
+    #  wants ZERO, which no row check here does.  The dangerous direction is the ONE-SPACE form,
+    #  which matched `lin_b diag once' from `lin_b diag' and is what this block was written for.
     for v in "live" "devsig" "copy lin_a" "lin_b not src" "lin_b is fg" "lin_b alive" "lin_b diag" "lin_b diag once"; do
         check "sgi_re randompixel row: $v" "$(count "$RANDLOG" "^$v  .*ok$")" "1"
     done
@@ -1291,6 +1298,66 @@ else
           "$(( $(count "$RANDLOG" " ok$") + $(count "$RANDLOG" " FAIL$") ))" "8"
     check "sgi_re randompixel rows green" "$(count "$RANDLOG" " ok$")"   "8"
     check "sgi_re randompixel rows red"   "$(count "$RANDLOG" " FAIL$")" "0"
+fi
+
+#  ------------------------------------------------------------ #505 sgirergbroundtrip
+#  horrible_getputpixel()'s RGB GET read buf[1..3] while its RGB PUT writes the three channels at
+#  buf[0..2] and an explicit pad at buf[3] -- so an RGB pixel did not survive its own round trip and
+#  the red channel was dropped.  RGB was the ONLY 32-bit colour mode in the file failing this way.
+#
+#  THE ARM WAS CHOSEN ON EVIDENCE FROM A DIFFERENT DEVICE, which is what makes the warrant
+#  non-circular: dev_sgi_gbe.c's scanout reads the same tile memory back as
+#  (buf[0]<<24)+(buf[1]<<16)+(buf[2]<<8)+buf[3], and CRMFB_MODE_TYP_RGB8 takes R,G,B from bits
+#  31..24 / 23..16 / 15..8 -- byte 0 is R and byte 3 is UNUSED.  The pad sits at buf[3] because the
+#  CONSUMER ignores buf[3], not because PUT writes a zero there.
+#
+#  `rgb depth64' IS NOT DECORATION -- IT CLOSES A MEASURED CLAUSE-(d) FLOOR BREACH.  The first kill
+#  table's M6_cond (guard kept, repair conditioned on `bufdepth == 4') scored a CLEAN SWEEP 6/6,
+#  because every session then used BUFDEPTH_32 and the mutant's fix branch was the only one the
+#  detector ever executed.  Its mirror M7_cond8 (exempting bufdepth 8 instead) also dies, so the
+#  WIDTH AXIS is closed rather than the one cell the mutant happened to use.
+#
+#  `rgb samemode' reaches the RGB *PUT* arm, which no other row executes -- every other session is
+#  RGB->RGBA.  Measured, not assumed: M8_put corrupts that arm alone and reds exactly this row.
+RGBLOG=$LOGDIR/sgi_re_rgb.log
+python3 sgi_re_rgb_probe.py "$PMAX" gate > "$RGBLOG" 2>&1 || true
+
+if ! grep -q "SGIRGB_DONE" "$RGBLOG"; then
+    check "sgi_re rgb probe completed" "no" "yes"
+else
+    check "sgi_re rgb probe completed" "yes" "yes"
+    check "sgi_re rgb witness verdict" "$(count "$RGBLOG" '^SGIRGB_WITNESS=PASS$')" "1"
+    #  TWO SPACES AFTER $v, NOT ONE -- the sibling blocks above were both bitten by the one-space
+    #  form, in both of its directions.  Pre-flighted mechanically for this row set before the gate
+    #  ever ran: no name is a prefix of another, and every pattern matches exactly one rendered row.
+    #
+    #  The probe prints names with "%-16s" plus an explicit space, so a name of N chars is followed
+    #  by (16-N)+1 spaces.  The longest here is `rgb not corrupt' at 15, leaving exactly two -- ONE
+    #  CHARACTER of margin.  If a name must grow past 15, widen the probe's "%-16s" in the same diff.
+    #
+    #  *** WHAT A TOO-LONG NAME ACTUALLY DOES: IT REDS, LOUDLY.  The sibling block above says it
+    #  "silently stops testing anything while staying green", and an earlier draft of THIS block
+    #  copied that sentence.  It is WRONG, and the pass-2 panel caught it. ***  `count' returns 0
+    #  when the pattern matches nothing, `check' compares that 0 against a wanted "1", and 0 != 1
+    #  FAILS.  Measured over rendered rows at lengths 15/16/17: 15 matches (ok), 16 and 17 match
+    #  nothing (FAIL).  The UNSATISFIABLE direction of this trap is the SAFE one for a want-1 check;
+    #  it is only silent where a check wants ZERO.  The genuinely dangerous direction remains the
+    #  ONE-SPACE form, which matches a LONGER name's row as well and was measured on the sibling.
+    for v in "live" "devsig" "copy lin_a" "rgb chan" "rgb not corrupt" "rgb alive" "rgb samemode" "rgb depth64" "rgb tiled" "rgb tiled64"; do
+        check "sgi_re rgb row: $v" "$(count "$RGBLOG" "^$v  .*ok$")" "1"
+    done
+
+    #  DENOMINATOR, SUMMED ARITHMETICALLY: a row that stops being emitted at all is otherwise
+    #  invisible -- its named check goes 0, but so does a check for a row that never existed.
+    #  *** THE DENOMINATOR PINNED 8 WHILE THE PROBE EMITTED 9, AND THE ROW LIST NEVER NAMED
+    #  `rgb tiled'.  A pass-3 seat found it by reading the gate against the probe rather than the
+    #  probe against itself. ***  It would have failed LOUDLY -- emitted 9, wanted 8 -- which is the
+    #  safe direction, but it would have shipped, and `rgb tiled' would have been unchecked BY NAME
+    #  while appearing in the count.  Both new rows are named above and the pins are 10.
+    check "sgi_re rgb rows emitted" \
+          "$(( $(count "$RGBLOG" " ok$") + $(count "$RGBLOG" " FAIL$") ))" "10"
+    check "sgi_re rgb rows green" "$(count "$RGBLOG" " ok$")"   "10"
+    check "sgi_re rgb rows red"   "$(count "$RGBLOG" " FAIL$")" "0"
 fi
 
 #  ------------------------------------------------------------ #500 sgideprimop

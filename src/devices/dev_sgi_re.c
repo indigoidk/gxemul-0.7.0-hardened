@@ -324,7 +324,30 @@ void horrible_getputpixel(int put, struct cpu* cpu, struct sgi_re_data* d,
 			*color = buf[0];
 			break;
 		case DE_MODE_TYPE_RGB:
-			*color = (buf[1] << 24) + (buf[2] << 16) + (buf[3] << 8);
+			/*  #505: this read buf[1..3] while the PUT arm above
+			    writes the three channels at buf[0..2] and an
+			    explicit pad at buf[3] -- so an RGB pixel did not
+			    survive its own round trip, shifting one byte left
+			    with a zero fill on every RGB source read.
+
+			    The PUT arm is the authoritative one, and the
+			    warrant is OUTSIDE this function: dev_sgi_gbe.c's
+			    scanout reads the same tile memory back for display
+			    as (buf[0]<<24)+(buf[1]<<16)+(buf[2]<<8)+buf[3],
+			    then CRMFB_MODE_TYP_RGB8 takes R,G,B from bits
+			    31..24, 23..16 and 15..8 -- byte 0 is R and byte 3
+			    is UNUSED.  So the pad sits at buf[3] because the
+			    consumer ignores buf[3], not because PUT writes a
+			    zero there; that is what makes this non-circular.
+			    The RGBA and ABGR PUT arms independently agree --
+			    both lay [R,G,B,x] in memory despite opposite
+			    register word orders -- which leaves this GET the
+			    lone container outlier among the 32-bit arms.
+
+			    The low byte stays ZERO on purpose: RGB carries
+			    three channels, so a corrected read of 0xaabbccdd
+			    yields 0xaabbcc00, NOT the source word.  */
+			*color = (buf[0] << 24) + (buf[1] << 16) + (buf[2] << 8);
 			break;
 		case DE_MODE_TYPE_RGBA:
 			*color = (buf[0] << 24) + (buf[1] << 16) + (buf[2] << 8) + buf[3];

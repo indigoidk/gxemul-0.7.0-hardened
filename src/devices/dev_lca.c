@@ -201,8 +201,17 @@ DEVICE_ACCESS(lca_ioc)
 			/*  Only bit 0 is implemented so far, the PCI bus 0 vs
 			    bus non-0 selection bit.  */
 			if (idata & ~1) {
+				/*  #506: was `0x%x', (int)idata -- a 64-bit guarded value
+				    narrowed to 32 in the KILL diagnostic, so a write of
+				    0x100000000 trips `idata & ~1' and then reports "0x0",
+				    which is a value this same guard ACCEPTS.  The five
+				    sibling arms below already print the full width this
+				    way; this arm was the outlier among the VALUE-guard
+				    diagnostics.  (Not the file's only narrowing site --
+				    the default arm below has the same cast, and this
+				    round fixes it too.)  */
 				fatal("TODO: Write to unimplemented bit of"
-				    " IOC_CONF: 0x%x\n", (int)idata);
+				    " IOC_CONF: 0x%" PRIx64 "\n", (uint64_t)idata);
 				exit(1);
 			}
 		}
@@ -310,7 +319,7 @@ DEVICE_ACCESS(lca_ioc)
 		    writeflag == MEM_WRITE? "write" : "read", (int)
 		    relative_addr);
 		if (writeflag == MEM_WRITE)
-			fatal(": 0x%x", (int)idata);
+			fatal(": 0x%" PRIx64, (uint64_t)idata);	/*  #506  */
 		fatal(" ]\n");
 		exit(1);
 	}

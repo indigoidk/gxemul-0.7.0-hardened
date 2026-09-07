@@ -1,0 +1,988 @@
+Reading additional input from stdin...
+OpenAI Codex v0.153.4
+--------
+workdir: C:\DocumentNoSnc\CC\GXEMUL
+model: gpt-6-astra
+provider: openai
+approval: never
+sandbox: read-only
+reasoning effort: max
+reasoning summaries: none
+session id: 01a07ca0-2005-7bd3-ba9a-a6e71b90ec8e
+--------
+user
+# DESIGN BRIEF pass 1 — `sgirebufuninit`: uninitialised host stack reaches guest-visible memory
+
+## READ THIS FIRST — PLEASE DO NOT SIMPLY RATIFY
+
+**Check the premises, not just the derivations.** Where I state something as fact, ask whether it is
+true. A seat that re-derives a premise from something this brief did NOT give it is worth more than
+one that agrees.
+
+**Four briefs of mine this week stated premises that were false or too broad, and every one was
+caught by a seat reading the code instead of my description of it** — a variable's declared type,
+which of two arms is authoritative, what a sibling probe's oracle asserts, and the scope of "every
+MTE transfer". **If a premise below is wrong, that is the most valuable thing you can tell me.**
+
+**THE TREE UNDER REVIEW IS `GXEMUL-SEC/src/`.** Three pristine-2021-upstream copies of GXemul sit
+under the project root and are NOT this fork.
+
+**SCOPE YOUR READING TO `GXEMUL-SEC/src/` AND `GXEMUL-SEC/regress/*.py`.** Do not read
+`GXEMUL-SEC/regress/artifacts/` or `GXEMUL-SEC/tools/pipeline/ledger.json`.
+
+**Where this brief states an ARITHMETIC or COUNTING claim, ENUMERATE it rather than reasoning about
+it.** Walk the values.
+
+**VERDICT LINE FIRST.**
+
+---
+
+## §C — SETTLED PREMISES
+
+**S1 — THE BUFFER IS NEVER INITIALISED.** `horrible_getputpixel()` declares `uint8_t buf[8];` with no
+initialiser and no `memset` anywhere in the function. It is a fresh automatic on every call, and the
+function is called per pixel.
+
+**S2 — TWO INDEPENDENT FIELDS DECIDE HOW MUCH OF IT IS USED**, both from the same guest-written mode
+word, with nothing making them agree:
+
+```c
+	uint32_t color_mode = mode & DE_MODE_TYPE_MASK;   /* bits 4-7 : which arm fills buf   */
+	int bufdepth = 1 << ((mode >> 8) & 3);            /* bits 8-9 : how many bytes move   */
+```
+
+The colour arm fills a number of bytes fixed by the **type**; the transfer moves **`bufdepth`** bytes.
+`bufdepth` enumerates to 1, 2, 4, 8.
+
+**S3 — TWO REACHABLE PATHS, IN OPPOSITE DIRECTIONS.**
+
+* **PUT — host stack into guest memory.** At `bufdepth` 8, **no colour arm writes `buf[4..7]`** — not
+  one of the five, including the correct ones — and all eight bytes go to
+  `memory_rw(..., tileptr + ofs, buf, bufdepth, MEM_WRITE, NO_EXCEPTIONS | PHYSICAL)`.
+  `DE_MODE_TYPE_CI` writes only `buf[0]`, so CI at any depth above 1 ships the rest.
+* **GET — host stack into `*color`.** At `bufdepth` 1 or 2, `memory_rw` fills only that many bytes,
+  and the RGB / RGBA / ABGR arms then read `buf[2..3]` regardless.
+
+**S4 — THE FORK ALREADY HAS A POLICY FOR THIS CLASS, and it is not my invention.** `memory_rw.c`
+zero-fills at three sites, and the fork's own comments name the doctrine:
+
+```c
+	/*  ... instead of uninitialised host stack. Same zero-fill
+	    ethos as the failed-device-read path (#95).  */
+	if (writeflag == MEM_READ)
+		memset(data, 0, len);
+```
+
+and, at a third site, *"Root-cause fix for the uninit-read class (cf. per-device #91/#93/#94)."*
+
+**S5 — WHAT `#505` DID AND DID NOT DO.** `#505` corrected the RGB GET's byte indices. It changed
+`buf[1..3]` to `buf[0..2]` — **three bytes either way**, so it neither created nor cured any part of
+this. Its own pre-table check found this disagreeing state and deliberately declined to row it.
+
+---
+
+## The questions
+
+**Q1 — IS ZERO-FILL THE RIGHT FIX, and is it the whole fix?** The obvious edit is
+`uint8_t buf[8] = { 0 };` or a `memset`. S4 says the fork's policy supports it. **But zero-fill makes
+a wrong-but-defined value where there was an undefined one** — a CI pixel at `bufdepth` 4 would write
+`{value,0,0,0}` instead of `{value,junk,junk,junk}`. **Is defined-but-wrong actually better here, or
+does it mask a defect that should be fixed by making each arm fill `bufdepth` bytes?** Argue both.
+
+**Q2 — WHERE SHOULD IT GO?** Three candidate sites, and I want the trade-offs named rather than a
+vote: (a) at the declaration, costing a zero-fill on every pixel; (b) only on the PUT side before the
+switch; (c) only where `bufdepth` exceeds what the chosen arm fills, which is a computed guard.
+**(a) is a per-pixel cost in a function the file's own comments call per-pixel and hot** — is that
+cost real enough to matter?
+
+**Q3 — *** THE ORACLE, AND THIS IS THE HARD PART. *** ** The defect's output is **uninitialised**, so
+no value row can pin it. This project has already established two things that constrain the answer:
+a determinism oracle is refuted (stack reuse can make a wrong value repeat), and for a neighbouring
+round a seat proposed observing **zero `MEM_WRITE` calls** instead of a value. **What oracle
+distinguishes "the buffer was zero-filled" from "the buffer happened to contain zeros"?** If the
+honest answer is that no black-box guest-visible oracle can, say so — that is a real answer and it
+changes the round's shape.
+
+**Q4 — WHICH DEFECT OWNS WHICH BYTES?** Two neighbouring rows overlap this one:
+`sgimtedepth4dead` (a dead branch that forces every *tiled* MTE transfer to CI colour, which is this
+row's strongest reachability) and `sgirandomcolour` (a default arm writing `random()` bytes).
+**Draw the boundary.** If this row is fixed first, what remains of the other two?
+
+**Q5 — THE SMALLEST EDIT.** Once fixed, what is the smallest edit that breaks it and still passes a
+detector built as Q3 describes? Name the row you expect to stay green. I am after the clause-(d)
+family: a repair conditioned on a field the guarded body reads. Note that a neighbouring round's
+detector was swept clean by exactly that shape at a transfer width no row happened to drive, and
+again at a *location* no row happened to use.
+
+## What I am not asking
+
+Do not write a patch and do not run anything. I want the disposition and the oracle settled first.
+
+**If, while verifying a claim, you found something ELSE — say so.**
+codex
+Verdict: I’ll treat the claimed leak and fix as unproven until I check the fork’s code. I’ll read only `GXEMUL-SEC/src/` and `GXEMUL-SEC/regress/*.py`, without running the code or changing files.
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg --files GXEMUL-SEC/src -g '*sgi*' -g '*memory_rw*' -g 'AGENTS.md'" in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg --files GXEMUL-SEC/regress -g '*.py' -g '"'!*/artifacts/**'"' -g '"'!artifacts/**'"' -g '"'!*/**/*.py'"'" in C:\DocumentNoSnc\CC\GXEMUL
+ succeeded in 120ms:
+GXEMUL-SEC/src\machines\machine_sgi.o
+GXEMUL-SEC/src\machines\machine_sgi.c
+GXEMUL-SEC/src\cpus\memory_rw.c
+GXEMUL-SEC/src\include\thirdparty\sgi_macereg.h
+GXEMUL-SEC/src\include\thirdparty\sgi_gl.h
+GXEMUL-SEC/src\include\thirdparty\sgi_arcbios.h
+GXEMUL-SEC/src\devices\dev_sgi_ip20.o
+GXEMUL-SEC/src\devices\dev_sgi_ip20.c
+GXEMUL-SEC/src\devices\dev_sgi_ip19.o
+GXEMUL-SEC/src\devices\dev_sgi_ip19.c
+GXEMUL-SEC/src\devices\dev_sgi_gbe.o
+GXEMUL-SEC/src\devices\dev_sgi_gbe.c
+GXEMUL-SEC/src\devices\dev_sgi_ip30.o
+GXEMUL-SEC/src\devices\dev_sgi_ip30.c
+GXEMUL-SEC/src\devices\dev_sgi_ip22.o
+GXEMUL-SEC/src\devices\dev_sgi_ip22.c
+GXEMUL-SEC/src\devices\dev_sgi_ip32.o
+GXEMUL-SEC/src\devices\dev_sgi_ip32.c
+GXEMUL-SEC/src\devices\dev_sgi_mardigras.c
+GXEMUL-SEC/src\devices\dev_sgi_mardigras.o
+GXEMUL-SEC/src\devices\dev_sgi_mec.o
+GXEMUL-SEC/src\devices\dev_sgi_mec.c
+GXEMUL-SEC/src\devices\dev_sgi_re.c
+GXEMUL-SEC/src\devices\dev_sgi_re.o
+
+ exited 1 in 122ms:
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n 'horrible_getputpixel|DE_MODE_TYPE_|bufdepth|per.pixel|MTE|random\\(' GXEMUL-SEC/src/devices/dev_sgi_re.c" in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n 'uninitial|zero.fill|#95|#91|memset\\(data' GXEMUL-SEC/src/cpus/memory_rw.c" in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "Get-ChildItem -LiteralPath GXEMUL-SEC/regress -File -Filter '*.py' | Select-Object -ExpandProperty Name" in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n 'DE_MODE_TYPE_|MTE_MODE_DEPTH|MTE_MODE_.*BUF|DE_MODE_BUFDEPTH' GXEMUL-SEC/src/include -g '*.h'" in C:\DocumentNoSnc\CC\GXEMUL
+ succeeded in 231ms:
+210:				    remaining bytes untouched -- uninitialised host stack, for
+215:					memset(data, 0, len);
+264:			    instead of uninitialised host stack. Same zero-fill
+265:			    ethos as the failed-device-read path (#95).  */
+267:				memset(data, 0, len);
+485:				/*  #95: zero the caller's buffer up front on a read
+488:				    never hand back uninitialised host memory to the
+490:				    (cf. per-device #91/#93/#94).  */
+492:					memset(data, 0, len);
+502:					    (cf. the unwarned zero-fill in
+503:					    #95/#119 above).  */
+671:				memset(data, 0, len);
+683:				memset(data, 0, len);
+732:			memset(data, 0, len);
+
+ succeeded in 244ms:
+123:	/*  sgirandompixel: horrible_getputpixel()'s unimplemented-mode arm.  ITS
+128:	    PER-PIXEL, called inside line, rectangle and tiled-MTE loops, so an
+129:	    UNLATCHED announce is a per-pixel flood rather than a diagnostic.
+149:	uint32_t	mte_reg[DEV_SGI_MTE_LENGTH / sizeof(uint32_t)];
+171: *  horrible_getputpixel():
+184:void horrible_getputpixel(int put, struct cpu* cpu, struct sgi_re_data* d,
+187:	uint32_t color_mode = mode & DE_MODE_TYPE_MASK;
+188:	int bufdepth = 1 << ((mode >> 8) & 3); 
+202:	int tilewidth_in_pixels = 512 / bufdepth;
+210:	int xofs = (x % tilewidth_in_pixels) * bufdepth;
+235:	default:/*  sgirandompixel: this arm used to assign `*color = random()' -- with
+249:		    per-pixel.
+258:		    random() shape at its own default (row sgirandomcolour).  */
+268:			    "horrible_getputpixel (%s), x=%i y=%i; declined "
+277:		//fatal("sgi gbe horrible_getputpixel: unexpected non-set high bit of tileptr?\n");
+284:	uint8_t buf[8];		/* #100: bufdepth can be 8 = 1<<((mode>>8)&3) */
+287:		case DE_MODE_TYPE_CI:
+290:		case DE_MODE_TYPE_RGB:
+296:		case DE_MODE_TYPE_RGBA:
+302:		case DE_MODE_TYPE_ABGR:
+308:		default:buf[0] = random();
+309:			buf[1] = random();
+310:			buf[2] = random();
+311:			buf[3] = random();
+317:		    buf, bufdepth, MEM_WRITE, NO_EXCEPTIONS | PHYSICAL);
+320:		    buf, bufdepth, MEM_READ, NO_EXCEPTIONS | PHYSICAL);
+323:		case DE_MODE_TYPE_CI:
+326:		case DE_MODE_TYPE_RGB:
+352:		case DE_MODE_TYPE_RGBA:
+355:		case DE_MODE_TYPE_ABGR:
+575:			 *  weird values and does not fill it (using the MTE)
+732:	// bufdepth = 1, 2, or 4.
+733:	// int dst_bufdepth = 1 << ((dst_mode >> 8) & 3);
+734:	int src_bufdepth = 1 << ((src_mode >> 8) & 3);
+757:		if (step_x != src_bufdepth || (step_y != 0 && step_y != 1)) {
+758:			fatal("[ sgi_de: unimplemented XFER addr_src=0x%x src_bufdepth=%i "
+761:				addr_src, src_bufdepth, strd_src, step_x, step_y, addr_dst, strd_dst);
+817:				horrible_getputpixel(0, cpu, d, x, y, &oldcolor, dst_mode);
+863:				horrible_getputpixel(1, cpu, d, x, y, &color, dst_mode);
+878:					horrible_getputpixel(0, cpu, d, x, y, &oldcolor, dst_mode);
+883:					horrible_getputpixel(0, cpu, d,	src_x, src_y, &color, src_mode);
+929:					horrible_getputpixel(1, cpu, d, x, y, &color, dst_mode);
+1302:	uint32_t mode = d->mte_reg[(CRIME_MTE_MODE - 0x3000) / sizeof(uint32_t)];
+1303:	uint32_t src0 = d->mte_reg[(CRIME_MTE_SRC0 - 0x3000) / sizeof(uint32_t)];
+1304:	uint32_t src1 = d->mte_reg[(CRIME_MTE_SRC1 - 0x3000) / sizeof(uint32_t)];
+1305:	uint32_t dst0 = d->mte_reg[(CRIME_MTE_DST0 - 0x3000) / sizeof(uint32_t)];
+1306:	uint32_t dst1 = d->mte_reg[(CRIME_MTE_DST1 - 0x3000) / sizeof(uint32_t)];
+1307:	int32_t src_y_step = d->mte_reg[(CRIME_MTE_SRC_Y_STEP - 0x3000) / sizeof(uint32_t)];
+1308:	int32_t dst_y_step = d->mte_reg[(CRIME_MTE_DST_Y_STEP - 0x3000) / sizeof(uint32_t)];
+1311:	int depth = 8 << ((mode & MTE_MODE_DEPTH_MASK) >> MTE_DEPTH_SHIFT);
+1312:	int src = (mode & MTE_MODE_SRC_BUF_MASK) >> MTE_SRC_TLB_SHIFT;
+1313:	uint32_t bytemask = d->mte_reg[(CRIME_MTE_BYTEMASK - 0x3000) / sizeof(uint32_t)];
+1314:	uint32_t bg = d->mte_reg[(CRIME_MTE_BG - 0x3000) / sizeof(uint32_t)];
+1328:	if (mode & MTE_MODE_STIPPLE) {
+1329:		fatal("[ sgi_mte: unimplemented MTE_MODE_STIPPLE ]");
+1333:	int src_tlb = (mode & MTE_MODE_SRC_BUF_MASK) >> MTE_SRC_TLB_SHIFT;
+1334:	int dst_tlb = (mode & MTE_MODE_DST_BUF_MASK) >> MTE_DST_TLB_SHIFT;
+1336:	if (src > MTE_TLB_C) {
+1342:	case MTE_TLB_A:
+1343:	case MTE_TLB_B:
+1344:	case MTE_TLB_C:
+1365:			uint32_t src_mode = (src_tlb << 10) + (((mode & MTE_MODE_DEPTH_MASK) >> MTE_DEPTH_SHIFT) << 8);
+1366:			uint32_t dst_mode = (dst_tlb << 10) + (((mode & MTE_MODE_DEPTH_MASK) >> MTE_DEPTH_SHIFT) << 8);
+1368:			// Hack. The MTE perhaps doesn't deal with colors per se,
+1372:				src_mode |= DE_MODE_TYPE_RGBA;
+1373:				dst_mode |= DE_MODE_TYPE_RGBA;
+1381:					if (mode & MTE_MODE_COPY) {
+1382:						horrible_getputpixel(0, cpu, d,
+1387:					horrible_getputpixel(1, cpu, d, x, y, &bg, dst_mode);
+1394:	case MTE_TLB_LIN_A:
+1395:	case MTE_TLB_LIN_B:
+1397:		if (mode & MTE_MODE_COPY) {
+1398:			fatal("[ sgi_mte: unimplemented MTE_MODE_COPY ]");
+1403:			fatal("[ sgi_mte: unimplemented MTE_DEPTH_x ]");
+1414:			fatal("unimplemented MTE bytemask 0x%08x\n", (int)bytemask);
+1471:			uint32_t *tlb = dst_tlb == MTE_TLB_LIN_A ? d->re_linear_a : d->re_linear_b;
+1542:	case CRIME_MTE_MODE:
+1543:		debug("[ sgi_mte: %s CRIME_MTE_MODE: 0x%016llx ]\n",
+1548:	case CRIME_MTE_BYTEMASK:
+1549:		debug("[ sgi_mte: %s CRIME_MTE_BYTEMASK: 0x%016llx ]\n",
+1554:	case CRIME_MTE_STIPPLEMASK:
+1555:		fatal("[ sgi_mte: %s CRIME_MTE_STIPPLEMASK: 0x%016llx ]\n",
+1560:	case CRIME_MTE_BG:
+1561:		debug("[ sgi_mte: %s CRIME_MTE_BG: 0x%016llx ]\n",
+1566:	case CRIME_MTE_SRC0:
+1567:		debug("[ sgi_mte: %s CRIME_MTE_SRC0: 0x%016llx ]\n",
+1572:	case CRIME_MTE_SRC1:
+1573:		debug("[ sgi_mte: %s CRIME_MTE_SRC1: 0x%016llx ]\n",
+1578:	case CRIME_MTE_DST0:
+1579:		debug("[ sgi_mte: %s CRIME_MTE_DST0: 0x%016llx ]\n",
+1584:	case CRIME_MTE_DST1:
+1585:		debug("[ sgi_mte: %s CRIME_MTE_DST1: 0x%016llx ]\n",
+1590:	case CRIME_MTE_SRC_Y_STEP:
+1591:		debug("[ sgi_mte: %s CRIME_MTE_SRC_Y_STEP: 0x%016llx ]\n",
+1596:	case CRIME_MTE_DST_Y_STEP:
+1597:		debug("[ sgi_mte: %s CRIME_MTE_DST_Y_STEP: 0x%016llx ]\n",
+1602:	case CRIME_MTE_NULL:
+1603:		fatal("[ sgi_mte: %s CRIME_MTE_NULL: 0x%016llx ]\n",
+1608:	case CRIME_MTE_FLUSH:
+1609:		fatal("[ sgi_mte: %s CRIME_MTE_FLUSH: 0x%016llx ]\n",
+1639:	memory_device_register(mem, "sgi_mte", baseaddr, DEV_SGI_MTE_LENGTH,
+1665:			CRIME_DE_MTE_IDLE;
+
+ succeeded in 266ms:
+GXEMUL-SEC/src/include\thirdparty\crmfbreg.h:256:#define MTE_MODE_DST_BUF_MASK	0x0000001c
+GXEMUL-SEC/src/include\thirdparty\crmfbreg.h:265:#define MTE_MODE_SRC_BUF_MASK	0x000000e0
+GXEMUL-SEC/src/include\thirdparty\crmfbreg.h:267:#define MTE_MODE_DEPTH_MASK	0x00000300
+GXEMUL-SEC/src/include\thirdparty\crmfbreg.h:325:#define DE_MODE_BUFDEPTH_8	0x00000000
+GXEMUL-SEC/src/include\thirdparty\crmfbreg.h:326:#define DE_MODE_BUFDEPTH_16	0x00000100
+GXEMUL-SEC/src/include\thirdparty\crmfbreg.h:327:#define DE_MODE_BUFDEPTH_32	0x00000200
+GXEMUL-SEC/src/include\thirdparty\crmfbreg.h:328:#define DE_MODE_TYPE_CI		0x00000000
+GXEMUL-SEC/src/include\thirdparty\crmfbreg.h:329:#define DE_MODE_TYPE_RGB	0x00000010
+GXEMUL-SEC/src/include\thirdparty\crmfbreg.h:330:#define DE_MODE_TYPE_RGBA	0x00000020
+GXEMUL-SEC/src/include\thirdparty\crmfbreg.h:331:#define DE_MODE_TYPE_ABGR	0x00000030
+GXEMUL-SEC/src/include\thirdparty\crmfbreg.h:332:#define DE_MODE_TYPE_YCRCB	0x000000f0
+GXEMUL-SEC/src/include\thirdparty\crmfbreg.h:333:#define DE_MODE_TYPE_MASK	0x000000f0
+
+ succeeded in 373ms:
+absorb_census.py
+alpha_harness_probe.py
+arcbios_shift_probe.py
+arm_endian_probe.py
+arm_flags_probe.py
+arm_fold_marker_probe.py
+arm_idle_probe.py
+arm_memcpy_probe.py
+arm_strlen_probe.py
+arm_writeback_probe.py
+asic_badaddr_probe.py
+diag_div_sweep.py
+drive_guest.py
+fbpending_drain_probe.py
+fbpending_witness.py
+footbridge_sites_probe.py
+gdrom_cond_probe.py
+gdrom_data_probe.py
+gdrom_decline_probe.py
+gdrom_default_probe.py
+gdrom_toclen_probe.py
+hpcabort_witness.py
+hpcmips_ctor_probe.py
+luna_absentcpu_probe.py
+luna_intmask_probe.py
+m8820x_sites_probe.py
+m88k_exc_probe.py
+m88k_idle_probe.py
+m88k_rounding_probe.py
+mips_fixedmode_probe.py
+mips_fold_probe.py
+mips_rounding_probe.py
+mips_subnorm_probe.py
+pcc2_default_probe.py
+pcc2_width_probe.py
+pcc2_width_witness.py
+pit8253_latch_probe.py
+ppc_halt_probe.py
+ppc_rounding_probe.py
+readiness_predicate_test.py
+selfmutant.py
+selftest_absorb.py
+selftest_budget.py
+selftest_inactivity.py
+selftest_logdir.py
+sgi_de_primop_probe.py
+sgi_de_width_probe.py
+sgi_eaddr_probe.py
+sgi_re_randompixel_probe.py
+sgi_re_rgb_probe.py
+sgi_re_unmapped_probe.py
+sgi_re_width_probe.py
+sh4pcic_witness.py
+sh4_bsc_width_probe.py
+sh4_chcr_probe.py
+sh4_chcr_witness.py
+sh4_pcic_probe.py
+sh4_rtcsr_probe.py
+sh4_rtcsr_witness.py
+sh4_sci_probe.py
+sh4_sci_witness.py
+sh4_tlbda2_probe.py
+sh4_tlbda2_witness.py
+sh4_val_probe.py
+sh4_val_witness.py
+sh_halt_probe.py
+sh_intprio_probe.py
+sh_iprbcd_probe.py
+sh_pclock_probe.py
+sh_rounding_probe.py
+sh_tlbmulti_probe.py
+wdc_addtoinbuf_probe.py
+wdc_altoffset_4bit_probe.py
+wdc_altoffset_probe.py
+wdc_altoffset_sig_probe.py
+wdc_flood_probe.py
+wdc_latch_census.py
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$memLines = Get-Content -LiteralPath GXEMUL-SEC/src/cpus/memory_rw.c
+foreach ($i in 180..276) { '"'{0}: {1}' -f ("'$i + 1), $memLines[$i] }
+foreach ($i in 461..539) { '"'{0}: {1}' -f ("'$i + 1), $memLines[$i] }
+foreach ($i in 647..739) { '"'{0}: {1}' -f ("'$i + 1), $memLines[$i] }' in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$probeFiles = @(Get-ChildItem -LiteralPath GXEMUL-SEC/regress -File -Filter '"'*.py' | Select-Object -ExpandProperty FullName)
+rg -n 'sgirebufuninit|sgimtedepth4dead|sgirandomcolour|505|determinism|zero MEM_WRITE|write.count|uninitial|clause.?\\(?d\\)?|MemorySanitizer|Valgrind' -- "'$probeFiles' in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$sgiLines = Get-Content -LiteralPath GXEMUL-SEC/src/devices/dev_sgi_re.c
+foreach ($i in 170..380) { '"'{0}: {1}' -f ("'$i + 1), $sgiLines[$i] }
+foreach ($i in 1297..1501) { '"'{0}: {1}' -f ("'$i + 1), $sgiLines[$i] }' in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$regLines = Get-Content -LiteralPath GXEMUL-SEC/src/include/thirdparty/crmfbreg.h
+foreach ($i in 239..338) { '"'{0}: {1}' -f ("'$i + 1), $regLines[$i] }' in C:\DocumentNoSnc\CC\GXEMUL
+ succeeded in 431ms:
+181:  *  the memblock split keeps doing its job unchanged.
+182:  */
+183: int MEMORY_RW(struct cpu *cpu, struct memory *mem, uint64_t vaddr,
+184: 	unsigned char *data, size_t len, int writeflag, int misc_flags)
+185: {
+186: 	if (!(misc_flags & PHYSICAL) && cpu->translate_v2p != NULL) {
+187: 		size_t granule = (size_t) MRW_SPLIT_MASK + 1;
+188: 		size_t offset = (size_t) (vaddr & MRW_SPLIT_MASK);
+189: 
+190: 		/*  `len > granule - offset`, NOT `offset + len > granule`: the sum can
+191: 		    wrap for an absurd length (offset 1, len SIZE_MAX), which would skip
+192: 		    the loop and hand the whole thing to the worker.  The subtraction
+193: 		    cannot wrap, because offset < granule always.
+194: 
+195: 		    STATED EXACTLY, because the first version of this comment implied more
+196: 		    than it delivers: this form does not SERVICE such a length, it declines
+197: 		    to mis-copy it.  A length near SIZE_MAX now iterates about 2^54 times
+198: 		    instead of silently under-splitting -- measured, a fuzz watchdog fired
+199: 		    at two million chunks.  No caller passes anything remotely like it (the
+200: 		    largest in the tree are PHYSICAL and exempt), so the case is recorded
+201: 		    and filed rather than handled.  */
+202: 		while (len > granule - offset) {
+203: 			size_t head = granule - offset;
+204: 
+205: 			if (!MEMORY_RW_ONE_PAGE(cpu, mem, vaddr, data, head,
+206: 			    writeflag, misc_flags)) {
+207: 				/*  #244 PROMISES THE WHOLE READ BUFFER, AND SPLITTING BROKE
+208: 				    THAT: the worker zeroes only the chunk IT was given, so a
+209: 				    failure before the last chunk used to leave the caller's
+210: 				    remaining bytes untouched -- uninitialised host stack, for
+211: 				    a caller that ignores the return value.  Unsplit, one call
+212: 				    covered the whole length.  Zero the rest here so the
+213: 				    guarantee is the same as it was.  */
+214: 				if (writeflag == MEM_READ)
+215: 					memset(data, 0, len);
+216: 				return MEMORY_ACCESS_FAILED;
+217: 			}
+218: 
+219: 			vaddr += head;
+220: 			data += head;
+221: 			len -= head;
+222: 			offset = 0;
+223: 		}
+224: 	}
+225: 
+226: 	return MEMORY_RW_ONE_PAGE(cpu, mem, vaddr, data, len, writeflag, misc_flags);
+227: }
+228: 
+229: 
+230: static int MEMORY_RW_ONE_PAGE(struct cpu *cpu, struct memory *mem, uint64_t vaddr,
+231: 	unsigned char *data, size_t len, int writeflag, int misc_flags)
+232: {
+233: 	const int offset_mask = MRW_OFFSET_MASK;
+234: 
+235: 	int ok = 2;
+236: 	uint64_t paddr;
+237: 	int cache, no_exceptions, offset;
+238: 	unsigned char *memblock;
+239: 	int dyntrans_device_danger = 0;
+240: 
+241: 	no_exceptions = misc_flags & NO_EXCEPTIONS;
+242: 	cache = misc_flags & CACHE_FLAGS_MASK;
+243: 
+244: 
+245: 	if (misc_flags & PHYSICAL || cpu->translate_v2p == NULL) {
+246: 		paddr = vaddr;
+247: 	} else {
+248: 		ok = cpu->translate_v2p(cpu, vaddr, &paddr,
+249: 		    (writeflag? FLAG_WRITEFLAG : 0) +
+250: 		    (no_exceptions? FLAG_NOEXCEPTIONS : 0)
+251: 		    + (misc_flags & MEMORY_USER_ACCESS)
+252: 		    + (cache==CACHE_INSTRUCTION? FLAG_INSTR : 0));
+253: 
+254: 		/*
+255: 		 *  If the translation caused an exception, or was invalid in
+256: 		 *  some way, then simply return without doing the memory
+257: 		 *  access:
+258: 		 */
+259: 		if (!ok) {
+260: 			/*  #244: A failed (or NO_EXCEPTIONS) translation leaves
+261: 			    the caller's read buffer untouched; zero it so
+262: 			    callers that ignore the return value (e.g. the DEC
+263: 			    PROM string helpers) consume deterministic 0 bytes
+264: 			    instead of uninitialised host stack. Same zero-fill
+265: 			    ethos as the failed-device-read path (#95).  */
+266: 			if (writeflag == MEM_READ)
+267: 				memset(data, 0, len);
+268: 			return MEMORY_ACCESS_FAILED;
+269: 		}
+270: 	}
+271: 
+272: 	/*
+273: 	 *  #250: data write-watchpoint. Checked here, before the device /
+274: 	 *  cache / RAM dispatch (several of which return early �?" notably the
+275: 	 *  R3000 cached path via memory_cache_R3000()), so every store that
+276: 	 *  reaches this slow path is covered. Watched pages are kept off the
+277: 	 *  fast store table by update_translation_table(), and R3000 cached
+462: 		 *  this problem, but it is probably not very fast.
+463: 		 *
+464: 		 *  TODO: Convert this into a quick (multi-level, 64-bit)
+465: 		 *  address space lookup, to find dangerous pages.
+466: 		 */
+467: 		for (i=0; i<mem->n_mmapped_devices; i++)
+468: 			if (paddr >= (mem->devices[i].baseaddr & ~offset_mask)&&
+469: 			    paddr <= ((mem->devices[i].endaddr-1)|offset_mask)){
+470: 				dyntrans_device_danger = 1;
+471: 				break;
+472: 			}
+473: #endif
+474: 
+475: 		start = 0; end = mem->n_mmapped_devices - 1;
+476: 		i = mem->last_accessed_device;
+477: 
+478: 		/*  Scan through all devices:  */
+479: 		do {
+480: 			if (paddr >= mem->devices[i].baseaddr &&
+481: 			    paddr < mem->devices[i].endaddr) {
+482: 				/*  Found a device, let's access it:  */
+483: 				mem->last_accessed_device = i;
+484: 
+485: 				/*  #95: zero the caller's buffer up front on a read
+486: 				    so a device handler that fills only part of it --
+487: 				    or whose access is len-clamped just below -- can
+488: 				    never hand back uninitialised host memory to the
+489: 				    guest.  Root-cause fix for the uninit-read class
+490: 				    (cf. per-device #91/#93/#94).  */
+491: 				if (writeflag == MEM_READ)
+492: 					memset(data, 0, len);
+493: 
+494: 				paddr -= mem->devices[i].baseaddr;
+495: 				if (paddr + len > mem->devices[i].length) {
+496: 					/*  Note the truncation per the
+497: 					    warn-loudly ethos, but only at
+498: 					    debug verbosity (-v) and at most
+499: 					    8 times (single-threaded), since
+500: 					    probing at the end of a device's
+501: 					    mapped range is common and benign
+502: 					    (cf. the unwarned zero-fill in
+503: 					    #95/#119 above).  */
+504: 					static int n_trunc_msgs = 0;
+505: 					if (ENOUGH_VERBOSITY(SUBSYS_MEMORY,
+506: 					    VERBOSITY_DEBUG) &&
+507: 					    n_trunc_msgs < 8) {
+508: 						n_trunc_msgs ++;
+509: 						debugmsg_cpu(cpu,
+510: 						    SUBSYS_MEMORY,
+511: 						    mem->devices[i].name,
+512: 						    VERBOSITY_DEBUG,
+513: 						    "%s truncated at end of"
+514: 						    " device: offset 0x%llx,"
+515: 						    " len %i -> %i",
+516: 						    writeflag == MEM_WRITE ?
+517: 						    "write" : "read",
+518: 						    (long long) paddr,
+519: 						    (int) len,
+520: 						    (int) (mem->devices[i].
+521: 						    length - paddr));
+522: 					}
+523: 					len = mem->devices[i].length - paddr;
+524: 				}
+525: 
+526: 				if (cpu->update_translation_table != NULL &&
+527: 				    !(ok & MEMORY_NOT_FULL_PAGE) &&
+528: 				    mem->devices[i].flags & DM_DYNTRANS_OK) {
+529: 					int wf = writeflag == MEM_WRITE? 1 : 0;
+530: 					unsigned char *host_addr;
+531: 
+532: 					if (!(mem->devices[i].flags &
+533: 					    DM_DYNTRANS_WRITE_OK))
+534: 						wf = 0;
+535: 
+536: 					if (writeflag && wf) {
+537: 						if (paddr < mem->devices[i].
+538: 						    dyntrans_write_low)
+539: 							mem->devices[i].
+540: 							dyntrans_write_low =
+648: 		      (vaddr & 0xffffffffULL) <= 0xbfffffffULL)) {
+649: 			if (memory_cache_R3000(cpu, cache, paddr,
+650: 			    writeflag, len, data))
+651: 				goto do_return_ok;
+652: 		}
+653: 		break;
+654: 	default:
+655: 		/*  R4000 etc  */
+656: 		/*  TODO  */
+657: 		;
+658: 	}
+659: #endif	/*  MEM_MIPS  */
+660: 
+661: 
+662: 	/*  Outside of physical RAM?  */
+663: 	if (paddr >= mem->physical_max) {
+664: #ifdef MEM_MIPS
+665: 		if ((paddr & 0xffffc00000ULL) == 0x1fc00000) {
+666: 			/*  Ok, this is PROM stuff  */
+667: 		} else if ((paddr & 0xfffff00000ULL) == 0x1ff00000) {
+668: 			/*  Sprite reads from this area of memory...  */
+669: 			/*  TODO: is this still correct?  */
+670: 			if (writeflag == MEM_READ)
+671: 				memset(data, 0, len);
+672: 			goto do_return_ok;
+673: 		} else
+674: #endif /* MIPS */
+675: 		{
+676: 			if (paddr >= mem->physical_max && !no_exceptions)
+677: 				if (memory_warn_about_unimplemented_addr
+678: 				    (cpu, mem, writeflag, paddr, len))
+679: 					return MEMORY_ACCESS_FAILED;
+680: 
+681: 			if (writeflag == MEM_READ) {
+682: 				/*  Return all zeroes? (Or 0xff? TODO)  */
+683: 				memset(data, 0, len);
+684: 
+685: #if 0
+686: /*
+687:  *  NOTE: This code prevents a PROM image from a real 5000/200 from booting.
+688:  *  I think I introduced it because it was how some guest OS (NetBSD?) detected
+689:  *  the amount of RAM on some machine.
+690:  *
+691:  *  TODO: Figure out if it is not needed anymore, and remove it completely.
+692:  */
+693: #ifdef MEM_MIPS
+694: 				/*
+695: 				 *  For real data/instruction accesses, cause
+696: 				 *  an exceptions on an illegal read:
+697: 				 */
+698: 				if (cache != CACHE_NONE && !no_exceptions &&
+699: 				    paddr >= mem->physical_max &&
+700: 				    paddr < mem->physical_max+1048576) {
+701: 					mips_cpu_exception(cpu,
+702: 					    EXCEPTION_DBE, 0, vaddr, 0,
+703: 					    0, 0, 0);
+704: 				}
+705: #endif  /*  MEM_MIPS  */
+706: #endif
+707: 			}
+708: 
+709: 			/*  Hm? Shouldn't there be a DBE exception for
+710: 			    invalid writes as well?  TODO  */
+711: 
+712: 			goto do_return_ok;
+713: 		}
+714: 	}
+715: 
+716: 
+717: 	/*
+718: 	 *  Uncached access:
+719: 	 *
+720: 	 *  1)  Translate the physical address to a host address.
+721: 	 *
+722: 	 *  2)  Insert this virtual->physical->host translation into the
+723: 	 *      fast translation arrays (using update_translation_table()).
+724: 	 *
+725: 	 *  3)  If this was a Write, then invalidate any code translations
+726: 	 *      in that page.
+727: 	 */
+728: 	memblock = memory_paddr_to_hostaddr(mem, paddr & ~offset_mask,
+729: 	    writeflag);
+730: 	if (memblock == NULL) {
+731: 		if (writeflag == MEM_READ)
+732: 			memset(data, 0, len);
+733: 		goto do_return_ok;
+734: 	}
+735: 
+736: 	offset = paddr & offset_mask;
+737: 
+738: 	if (cpu->update_translation_table != NULL && !dyntrans_device_danger
+739: #ifdef MEM_MIPS
+740: 	    /*  Ugly hack for R2000/R3000 caches:  */
+
+ succeeded in 378ms:
+240: #define CRIME_MTE_MODE		0x3000
+241: #define CRIME_MTE_BYTEMASK	0x3008
+242: #define CRIME_MTE_STIPPLEMASK	0x3010
+243: #define CRIME_MTE_BG		0x3018
+244: #define CRIME_MTE_SRC0		0x3020	/* start */
+245: #define CRIME_MTE_SRC1		0x3028	/* end */
+246: #define CRIME_MTE_DST0		0x3030	/* start */
+247: #define CRIME_MTE_DST1		0x3038	/* end */
+248: #define CRIME_MTE_SRC_Y_STEP	0x3040
+249: #define CRIME_MTE_DST_Y_STEP	0x3048
+250: #define CRIME_MTE_NULL		0x3070
+251: #define CRIME_MTE_FLUSH		0x3078
+252: 
+253: /* CRIME_MTE_MODE */
+254: #define MTE_MODE_DST_ECC	0x00000001	/* enable ECC in DST */
+255: #define MTE_MODE_SRC_ECC	0x00000002	/* enable ECC in SRC */
+256: #define MTE_MODE_DST_BUF_MASK	0x0000001c
+257: 	#define MTE_TLB_A	0
+258: 	#define MTE_TLB_B	1
+259: 	#define MTE_TLB_C	2
+260: 	#define MTE_TLB_TEX	3
+261: 	#define MTE_TLB_LIN_A	4
+262: 	#define MTE_TLB_LIN_B	5
+263: 	#define MTE_TLB_CLIP	6
+264: 	#define MTE_DST_TLB_SHIFT 2
+265: #define MTE_MODE_SRC_BUF_MASK	0x000000e0
+266: 	#define MTE_SRC_TLB_SHIFT 5
+267: #define MTE_MODE_DEPTH_MASK	0x00000300
+268: 	#define MTE_DEPTH_8	0
+269: 	#define MTE_DEPTH_16	1
+270: 	#define MTE_DEPTH_32	2
+271: 	#define MTE_DEPTH_SHIFT 8
+272: #define MTE_MODE_STIPPLE	0x00000400
+273: #define MTE_MODE_COPY		0x00000800	/* 1 - copy, 0 - clear dst */
+274: 
+275: /* drawing engine from 0x2000 */
+276: #define CRIME_DE_MODE_SRC	0x2000
+277: #define CRIME_DE_MODE_DST	0x2008
+278: #define CRIME_DE_CLIPMODE	0x2010
+279: #define CRIME_DE_DRAWMODE	0x2018
+280: #define CRIME_DE_SCRMASK0	0x2020
+281: #define CRIME_DE_SCRMASK1	0x2028
+282: #define CRIME_DE_SCRMASK2	0x2030
+283: #define CRIME_DE_SCRMASK3	0x2038
+284: #define CRIME_DE_SCRMASK4	0x2040
+285: #define CRIME_DE_SCISSOR	0x2048
+286: #define CRIME_DE_WINOFFSET_SRC	0x2050	/* x in upper, y in lower 16 bit */
+287: #define CRIME_DE_WINOFFSET_DST	0x2058
+288: #define CRIME_DE_PRIMITIVE	0x2060
+289: #define CRIME_DE_X_VERTEX_0	0x2070
+290: #define CRIME_DE_X_VERTEX_1	0x2074
+291: #define CRIME_DE_X_VERTEX_2	0x2078
+292: #define CRIME_DE_GL_VERTEX_0_X	0x2080
+293: #define CRIME_DE_GL_VERTEX_0_Y	0x2084
+294: #define CRIME_DE_GL_VERTEX_1_X	0x2088
+295: #define CRIME_DE_GL_VERTEX_1_Y	0x208c
+296: #define CRIME_DE_GL_VERTEX_2_X	0x2090
+297: #define CRIME_DE_GL_VERTEX_2_Y	0x2094
+298: #define CRIME_DE_XFER_ADDR_SRC	0x20a0
+299: #define CRIME_DE_XFER_STRD_SRC	0x20a4
+300: #define CRIME_DE_XFER_STEP_X	0x20a8
+301: #define CRIME_DE_XFER_STEP_Y	0x20ac
+302: #define CRIME_DE_XFER_ADDR_DST	0x20b0
+303: #define CRIME_DE_XFER_STRD_DST	0x20b4
+304: #define CRIME_DE_STIPPLE_MODE	0x20c0
+305: #define CRIME_DE_STIPPLE_PAT	0x20c4
+306: #define CRIME_DE_FG		0x20d0
+307: #define CRIME_DE_BG		0x20d8
+308: #define CRIME_DE_ALPHA_COLOR	0x21a0	/* constant colour for alpha */
+309: #define CRIME_DE_ALPHA_FUNC	0x21a8	/* blend function */
+310: #define CRIME_DE_ROP		0x21b0
+311: #define CRIME_DE_PLANEMASK	0x21b8
+312: 
+313: #define CRIME_DE_NULL		0x21f0
+314: #define CRIME_DE_FLUSH		0x21f8
+315: 
+316: #define CRIME_DE_START		0x0800	/* OR this to a register address in
+317: 					 * order to start a command */
+318: 
+319: /* CRIME_DE_MODE_* */
+320: #define DE_MODE_TLB_A		0x00000000
+321: #define DE_MODE_TLB_B		0x00000400
+322: #define DE_MODE_TLB_C		0x00000800
+323: #define DE_MODE_LIN_A		0x00001000
+324: #define DE_MODE_LIN_B		0x00001400
+325: #define DE_MODE_BUFDEPTH_8	0x00000000
+326: #define DE_MODE_BUFDEPTH_16	0x00000100
+327: #define DE_MODE_BUFDEPTH_32	0x00000200
+328: #define DE_MODE_TYPE_CI		0x00000000
+329: #define DE_MODE_TYPE_RGB	0x00000010
+330: #define DE_MODE_TYPE_RGBA	0x00000020
+331: #define DE_MODE_TYPE_ABGR	0x00000030
+332: #define DE_MODE_TYPE_YCRCB	0x000000f0
+333: #define DE_MODE_TYPE_MASK	0x000000f0
+334: #define DE_MODE_PIXDEPTH_8	0x00000000
+335: #define DE_MODE_PIXDEPTH_16	0x00000004
+336: #define DE_MODE_PIXDEPTH_32	0x00000008
+337: #define DE_MODE_DOUBLE_PIX	0x00000002
+338: #define DE_MODE_DOUBLE_SELECT	0x00000001
+339: 
+
+ succeeded in 488ms:
+171:  *  horrible_getputpixel():
+172:  *
+173:  *  This routine gets/puts a pixel in one of the tiles, from the perspective of
+174:  *  the rendering/drawing engine. Given x and y, it figures out which tile
+175:  *  number it is, and then finally does a slow read/write to get/put the pixel
+176:  *  at the correct sub-coordinates within the tile.
+177:  *
+178:  *  Tiles are always 512 _bytes_ wide, and 128 pixels high. For 32-bit color
+179:  *  modes, for example, that means 128 x 128 pixels.
+180:  *
+181:  *  For "linear" modes, y is ignored and x is an offset to select which linear
+182:  *  TLB entry to use.
+183:  */
+184: void horrible_getputpixel(int put, struct cpu* cpu, struct sgi_re_data* d,
+185: 	int x, int y, uint32_t* color, int mode)
+186: {
+187: 	uint32_t color_mode = mode & DE_MODE_TYPE_MASK;
+188: 	int bufdepth = 1 << ((mode >> 8) & 3); 
+189: 
+190: 	// dst_mode (see NetBSD's crmfbreg.h):
+191: 	// #define DE_MODE_TLB_A           0x00000000
+192: 	// #define DE_MODE_TLB_B           0x00000400
+193: 	// #define DE_MODE_TLB_C           0x00000800
+194: 	// #define DE_MODE_LIN_A           0x00001000
+195: 	// #define DE_MODE_LIN_B           0x00001400
+196: 	uint32_t tlb_mode = (mode >> 10) & 0x7;
+197: 	int linear = tlb_mode > 3;
+198: 
+199: 	if (!linear && (x < 0 || y < 0 || x >= 2048 || y >= 2048))
+200: 		return;
+201: 
+202: 	int tilewidth_in_pixels = 512 / bufdepth;
+203: 	
+204: 	int tile_nr_x = x / tilewidth_in_pixels;
+205: 	int tile_nr_y = y >> 7;
+206: 
+207: 	unsigned int tile_nr = tile_nr_y * 16 + tile_nr_x;
+208: 
+209: 	y &= 127;
+210: 	int xofs = (x % tilewidth_in_pixels) * bufdepth;
+211: 	int ofs = 512 * y + xofs;
+212: 
+213: 	uint32_t tileptr = 0;
+214: 
+215: 	/*  #100: cases 0-2 index re_tlb_[abc][256] with a guest-derived
+216: 	    tile_nr = (y>>7)*16 + x/tilewidth; bound it (case 4 self-checks).  */
+217: 	if (tlb_mode <= 2 && tile_nr >= 256)
+218: 		return;
+219: 
+220: 	switch (tlb_mode) {
+221: 	case 0:	tileptr = d->re_tlb_a[tile_nr] << 16;
+222: 		break;
+223: 	case 1:	tileptr = d->re_tlb_b[tile_nr] << 16;
+224: 		break;
+225: 	case 2:	tileptr = d->re_tlb_c[tile_nr] << 16;
+226: 		break;
+227: 	case 4:	tile_nr = x >> 12;
+228: 		if (tile_nr >= 32)
+229: 			return;
+230: 		tileptr = 0x80000000 | (d->re_linear_a[tile_nr] << 12);
+231: 		ofs = x & 4095;
+232: 		// TODO... probably not correct!
+233: 		// printf("tileptr = %08x x = %i y = %i tile_nr = %i ofs = %i\n", tileptr, x, y, tile_nr, ofs);
+234: 		break;
+235: 	default:/*  sgirandompixel: this arm used to assign `*color = random()' -- with
+236: 		    its exit(1) commented out -- so a failed GET handed the CALLER a
+237: 		    random value, and draw_primitive() then wrote it to the destination
+238: 		    in the same loop iteration, since `color' is shared by the XFER GET
+239: 		    and the PUT.  DE_MODE_LIN_B (0x1400) is one of the FIVE modes
+240: 		    crmfbreg.h documents and extracts to tlb_mode 5, so this was
+241: 		    reachable with a DOCUMENTED mode, not only with a junk one.
+242: 		    MEASURED, rung 3: the destination received 0x4b1763a1, 0x2ee4b4df
+243: 		    and 0x7433cdc1 on successive runs of
+244: 		    regress/sgi_re_randompixel_probe.py.
+245: 
+246: 		    NOW DECLINED: `*color' is left alone, so the caller's own
+247: 		    `uint32_t color = fg' stands and what lands is at least
+248: 		    DETERMINISTIC.  The announce is latched because this helper is
+249: 		    per-pixel.
+250: 
+251: 		    WHAT THIS DOES NOT DO, filed rather than silently omitted: the
+252: 		    caller STILL PERFORMS its dependent PUT, so a declined GET still
+253: 		    writes fg (row sgirandomskipput -- suppressing it needs a return
+254: 		    value and every GET site changed, which is more than one site);
+255: 		    LIN_B is still not implemented, and the panel refused to endorse
+256: 		    implementing it as LIN_A-with-the-other-array on symmetry alone
+257: 		    (row sgirelinb); and the COLOUR-mode switch below carries the same
+258: 		    random() shape at its own default (row sgirandomcolour).  */
+259: 		if (!(d->warned & SGIRE_W_BADMODE)) {
+260: 			d->warned |= SGIRE_W_BADMODE;
+261: 			/*  `dst_mode' is kept from the original text although the
+262: 			    parameter is also passed as src_mode on a GET: the probe
+263: 			    anchors on this literal, and rewording it here would be
+264: 			    scope creep AND would move an oracle anchor mid-round,
+265: 			    which is the laundering shape whatever the intent.
+266: 			    Filed as sgirenamedstmode.  */
+267: 			fatal("[ sgi_re: unimplemented dst_mode %i for "
+268: 			    "horrible_getputpixel (%s), x=%i y=%i; declined "
+269: 			    "(once) ]\n", mode, put ? "put" : "get", x, y);
+270: 		}
+271: 		return;
+272: 	}
+273: 
+274: 	// The highest bit seems to be set for a "valid" tile pointer.
+275: 	if (!(tileptr & 0x80000000)) {
+276: 		//printf("dst_mode %i, tile_nr = %i,  tileptr = 0x%llx\n", dst_mode, tile_nr, (long long)tileptr);
+277: 		//fatal("sgi gbe horrible_getputpixel: unexpected non-set high bit of tileptr?\n");371: {1439: 		/*
+1440: 		 *  HUH?
+1441: 		 *
+1442: 		 *  Note that due to a bug (?) in the PROM firmware when it
+1443: 		 *  is setting up the TLB entries, only every _second_ page is
+1444: 		 *  actually put correctly in the TLB. This means that even
+1445: 		 *  though it then tries to fill 0x40000000 .. 0x40007fff with
+1446: 		 *  zeroes, it only fills 0x40001000 .. 0x40001fff,
+1447: 		 *  0x40003000 .. 0x40003fff and so on!
+1448: 		 *
+1449: 		 *  So the Horrible hack above is not needed.
+1450: 		 *
+1451: 		 *  Ironic.
+1452: 		 */
+1453: 
+1454: 		memset(zerobuf, bg, dstlen < sizeof(zerobuf) ? dstlen : sizeof(zerobuf));
+1455: 		fill_addr = dst0;
+1456: 		while (dstlen != 0) {
+1457: 			uint64_t fill_len;
+1458: 			if (dstlen > sizeof(zerobuf))
+1459: 				fill_len = sizeof(zerobuf);
+1460: 			else
+1461: 				fill_len = dstlen;
+1462: 
+1463: 			uint64_t starting_page = fill_addr & ~0xfff;
+1464: 			uint64_t ending_page = (fill_addr + fill_len - 1) & ~0xfff;
+1465: 			if (starting_page != ending_page) {
+1466: 				fill_len = starting_page + 4096 - fill_addr;
+1467: 			}
+1468: 
+1469: 			// Find starting_page in the TLB in question.
+1470: 			starting_page >>= 12;
+1471: 			uint32_t *tlb = dst_tlb == MTE_TLB_LIN_A ? d->re_linear_a : d->re_linear_b;
+1472: 			int match = 0;
+1473: 			for (int i = 0; i < 32; ++i) {
+1474: 				uint32_t entry = tlb[i];
+1475: 				if (entry & 0x80000000) {
+1476: 					entry &= ~0x80000000;
+1477: 					if (entry == starting_page) {
+1478: 						match = 1;
+1479: 						break;
+1480: 					}
+1481: 				}
+1482: 			}
+1483: 			
+1484: 			if (match) {
+1485: 				cpu->memory_rw(cpu, cpu->mem, fill_addr, zerobuf, fill_len,
+1486: 					MEM_WRITE, NO_EXCEPTIONS | PHYSICAL);
+1487: 			} else {
+1488: 				debug("[ sgi_mte: WARNING: address 0x%x not found in TLB? Ignoring fill. ]\n",
+1489: 					(long long)fill_addr);
+1490: 			}
+1491: 
+1492: 			fill_addr += fill_len;
+1493: 			dstlen -= (uint32_t)fill_len;	/* OB-23: subtract bytes actually filled */
+1494: 		}
+1495: 		break;
+1496: 	default:
+1497: 		fatal("[ sgi_mte: TODO! unimplemented dst_tlb 0x%x ]", dst_tlb);
+1498: 	}
+1499: }
+1500: 
+1501: DEVICE_ACCESS(sgi_mte)
+1502: {
+
+ succeeded in 506ms:
+C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\regress\arm_flags_probe.py:808:MOV_R5_55  = 0xE3A05055         # mov  r5,#0x55 -- sentinel
+C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\regress\asic_badaddr_probe.py:88:       clause denied it.  It is anchored to a cell by a SIDE EFFECT (the
+C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\regress\asic_badaddr_probe.py:431:#  pair.  `& 1` is the carrier's own canonical clause-(d) example, and the first
+C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\regress\gdrom_default_probe.py:1014:#  +0x18 reads BUSY FOREVER.  Under the corrected clause (d) -- which enumerates
+C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\regress\m8820x_sites_probe.py:38:IMG = IMAGES + "/liveimage-luna88k-raw-20250518.img"
+C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\regress\arm_strlen_probe.py:88:    0xE3A05055,   # 2 mov r5,#0x55          sentinel
+C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\regress\drive_guest.py:39:                 "R:" + IMAGES + "/liveimage-luna88k-raw-20250518.img", "boot"],
+C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\regress\gdrom_cond_probe.py:517:#  This is the row that kills the clause-(d) mutant BOTH Agent seats named independently on
+C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\regress\gdrom_cond_probe.py:856:#  width" reads like a robustness fix, which is exactly the shape clause (d) asks for.
+C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\regress\gdrom_toclen_probe.py:18:    `bad cond` row, which is the clause-(d) carrier and the reason this probe reads
+C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\regress\gdrom_toclen_probe.py:48:The obvious clause-(d) mutant weakens `!= 408` to `> 408`.  Then cnt=407 falls THROUGH to
+C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\regress\gdrom_toclen_probe.py:321:#  it is the clause-(d) carrier and looks like it should. ***  The guest writes
+C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\regress\luna_intmask_probe.py:31:IMG     = IMAGES + "/liveimage-luna88k-raw-20250518.img"
+C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\regress\sgi_re_rgb_probe.py:18:#  value on both the defective and the fixed build.  No uninitialised byte is read, so the
+C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\regress\sgi_re_rgb_probe.py:337:#  Table 1 built the canonical clause-(d) mutant -- guard KEPT, repair CONDITIONED on a field the
+C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\regress\sgi_re_rgb_probe.py:357:#  oracle; bufdepth 1 or 2 would leave buf[1..2] uninitialised, which is `sgirebufuninit' and would
+C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\regress\pcc2_width_probe.py:50:  clause-(d) shapes, the helper's own two operations, and four access widths.  Two
+C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\regress\pcc2_width_probe.py:173:      (1u << bit))', the canonical clause-(d) conjunct -- declines and announces the FIRST
+C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\regress\pcc2_width_probe.py:187:      outside the clause-(d) closure and is carried here as construction, not as a breach.
+C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\regress\pcc2_width_probe.py:249:                seat against its own letter; CLAUDE.md clause (d)): a joint cell is ENUMERATED when
+C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\regress\pcc2_width_probe.py:752:#  clause-(d) "condition qualified" form, at one arm or at all twelve -- swept every row above:
+C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\regress\pcc2_width_probe.py:1248:#  then lets the halfword land (the M_FALL shape -- decline nulled, guard kept: clause (d)).
+C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\regress\m88k_rounding_probe.py:42:IMG = IMAGES + "/liveimage-luna88k-raw-20250518.img"
+C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\regress\arm_idle_probe.py:92:    0xE3A05055,   # 3 mov r5,#0x55     sentinel
+C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\regress\arm_idle_probe.py:106:    0xE3A05055,   # 3 mov r5,#0x55
+C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\regress\luna_absentcpu_probe.py:51:    two cpus / cpu1 setup / mask1 land / survive /   M_HARD1 (`d->ncpus = 1' hardcoded -- the clause-(d) null repair:
+C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\regress\luna_absentcpu_probe.py:121:anyone built it.  **The disposition is UNCHANGED and is the pass-5 one: disclosed clause-(e) debt, not a clause-(d) floor
+C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\regress\luna_absentcpu_probe.py:122:breach** -- `(d->ncpus & -d->ncpus)' does not READ like the same check, which is clause (d)'s own test, and the single-token
+C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\regress\luna_absentcpu_probe.py:142:IMG     = IMAGES + "/liveimage-luna88k-raw-20250518.img"
+C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\regress\sgi_re_unmapped_probe.py:544:#  *** MEASURED FLOOR BREACH, clause (d): the guard kept, its repair removed. ***
+C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\regress\arm_fold_marker_probe.py:521:            0xE3A0505A, 0xEAFFFFFE]               # sentinel, park
+C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\regress\arm_fold_marker_probe.py:523:            0xE3A0505A, 0xEAFFFFFE]
+C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\regress\arm_fold_marker_probe.py:536:            0xE3A0505A, 0xEAFFFFFE]               # sentinel, park
+C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\regress\wdc_flood_probe.py:41:    * a latch whose repair is NULLED -- guard kept, flag never set (clause (d));
+C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\regress\wdc_altoffset_probe.py:38:             This is the ACCEPT control the de-escalation clause demands: it proves the
+C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\regress\wdc_addtoinbuf_probe.py:123:        It is clause (d)'s canonical form on the predicate #495 added,
+C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\regress\sgi_de_primop_probe.py:78:      clause declared "a legal LINE with a high bit set ... DELIBERATELY NO ROW"
+C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\regress\sgi_de_primop_probe.py:541:#  edit to the very constant this round ADDED: floor clause (d), not coverage
+C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\regress\sgi_de_primop_probe.py:699:#  latches are #498's and lie OUTSIDE this diff's clause-(d) closure, so that is
+C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\regress\sgi_de_primop_probe.py:860:#  ENTIRE LATCH-BYPASS FAMILY.  MEASURED CLEAN SWEEPS -- floor clause (d), L2. ***
+C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\regress\sgi_de_primop_probe.py:936:#  mutant it admits.  L2, clause (d), repaired here. ***
+C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\regress\sgi_de_primop_probe.py:1010:#  OUTSIDE clause (d) -- the same seat said so and declined to hang L2 on it.
+C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\regress\sgi_de_primop_probe.py:1087:#  THEM ARE A FAMILY THAT ONE SESSION CLOSES.  L2, clause (d), third consecutive
+C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\regress\sgi_de_primop_probe.py:1105:#  above the switch.  Whether that is inside clause (d)'s DEPENDS-ON bound is a RULE
+C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\regress\sgi_de_primop_probe.py:1287:#  PROVES IT.  L2, floor clause (d), repaired here.  THIRD INSTANCE OF ONE CLASS
+C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\regress\sgi_de_primop_probe.py:1291:#  the edited body -- squarely inside clause (d)'s enumeration:
+C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\regress\sgi_de_primop_probe.py:1373:#  CODE this diff does not touch, so they lie outside clause (d)'s diff-closed
+
+ERROR: This content was flagged for possible cybersecurity risk. If this seems wrong, try rephrasing your request. To get authorized for security work, join the Trusted Access for Cyber program: https://chatgpt.com/cyber
+ERROR: This content was flagged for possible cybersecurity risk. If this seems wrong, try rephrasing your request. To get authorized for security work, join the Trusted Access for Cyber program: https://chatgpt.com/cyber
+tokens used
+43,839

@@ -1,0 +1,125 @@
+I'll attack the proposed one-byte witness rather than ratify it: first the site, GENCTL write path, existing probe, and every other way the process can die.Premises look plausible; next I’ll read the helper, every call site, the GENCTL arm, and the existing probe’s survival/oracle mechanics.S3’s tick claim may be sequencing-wrong; I’ll read how the probe classifies death, whether `fatal()` is flushed, and whether C040 can be set without calling `reassert`.**VERDICT: NOT RATIFY as proposed.** A guest `st.b` of `0x04` at GENCTL is a sound *core* of a rung-3 witness of this kill. Survival-only, in `pcc2_width_probe.py`, with no same-decode preset and no site-attribution, is not. That is the same class as the design you asked me to assume: the observation is either destroyed by the defect, or it reports success while measuring nothing.
+
+---
+
+## Premises (checked against `GXEMUL-SEC/src/`, not derived from the brief)
+
+| | claim | holds? |
+|---|---|---|
+| **S1** | C040 test is the first thing in `reassert_interrupts()`, `fatal` then `exit(1)` | **Yes.** Unique text: `pcc2: C040 interrupt assertions... TODO` |
+| **S2** | one legal **guest** byte write of `0x04` stores unmasked and calls the helper | **Yes, for `st.b` only.** `pcctwo_reg` is `uint8_t[]`; `PCCTWO_GENCTL = 0x0002`; `PCC2_C040 = 0x04`; reset is `0x00`. **False of debugger `put b`.** |
+| **S3** | ten call sites, including tick at 400 | **Line numbers yes. The inference no.** |
+| **S4** | width probe already drives GENCTL; `c040ok()` keeps lanes off this bit | **Yes.** Authoring-time assert on the **low byte** of a hex string. Not a runtime filter. |
+
+**S3 is the load-bearing falsehood.** The ten sites are one shared branch. The GENCTL write arm **already calls** `reassert_interrupts()` after the store. A guest that “arms the bit and then does nothing” never reaches the next tick: it is already dead at the write. `pcc_timer_tick()` (the 100 Hz host-timer callback) **does not call** `reassert_interrupts()` at all. `DEVICE_TICK(pcc2)` does, unconditionally, but only after C040 is already set, which on this code means the write’s own call already fired.
+
+**Something else:** the same header defines `PCC2_GENCTL_C040` as `0x03` and `PCC2_C040` as `0x04`. The code tests the latter. A witness that used the `GENCTL_` spelling would never take the branch.
+
+---
+
+## The class-of-flaw, instantiated
+
+The defect **exits the process inside the store**. Anything you planned to observe *after* that write — GENCTL readback, scratch liveness, a later tick, a debugger prompt — is gone on the pre-fix build.
+
+That is why survival is the right **pre-fix** channel, and also why it is not enough: it is the channel the repair then destroys as a discriminator. After the check is gone, decline, accept, delete-the-check, and `return 0` all leave the host alive.
+
+The sibling already measured the silent-green form of this: `pcc2_default_probe.py` records that a hand-rolled prompt-waiter scored **every host kill as “survived”**. Do not invent a new `session()`. Extract the width probe’s, as that witness did.
+
+---
+
+## Q1 — what else kills, and what distinguishes *this* site
+
+`not alive` is satisfied by all of:
+
+| source | how / text |
+|---|---|
+| **this site** | `exit1` + `C040 interrupt assertions` |
+| `pcctwo_interrupt_common` default | `exit1` + `pcctwo_interrupt_common: TODO: line =` |
+| unimplemented MVME88K subtype | `exit1` + `Unknown subtype` / `Unimplemented MVME88K` — the width witness scored **0/10 including the RAM control** on `-e 187`; the alias is `mvme187` |
+| `execv` failure | `exit127` |
+| probe timeout / `os.kill` | `killed` / `unreaped` |
+| SIGPIPE after a previous death | `alive=False`, `how` may not be `exit1` |
+
+`fatal()` goes to `printf` character-by-character with **no `fflush`**. That is not fatal here: the line ends in `\n` (pty is a tty → line-buffered) and they call `exit(1)`, which flushes stdio. The defaultkill witness **already counted** a `fatal()` line on sessions that then died. Use that channel.
+
+**Required attribution, all of it:**
+
+1. **`how == "exit1"`**, not merely `not alive`.
+2. **Transcript contains `C040 interrupt assertions`** — this is the site pin. Missing text + `exit1` is *FAILED FOR SOME OTHER REASON*, not a pass.
+3. **Controls in sessions that must survive** (so a construction failure cannot masquerade as the defect): RAM round-trip; CHIPID `ld.bu` → `0x20` (RAM would not); a **C040-clear GENCTL round-trip of a nonzero value** (`0x82` is already proven in `val h genctl` and in defaultkill’s `genctl rt`).
+4. **Those GENCTL accesses run BEFORE the killing store**, in the same session or a sibling. Post-kill they cannot run.
+
+The zero trap: GENCTL resets to `0x00`. An unmapped read also returns `0`. A post-fix “readback 0 means declined” row is the alpha-harness failure mode. Preset `0x82` (or `0x10`, which `acc all` already stores), *then* write `0x04`. Decline leaves `0x82`; accept/delete-check leaves `0x04`.
+
+---
+
+## Q2 — the pre/post pair is not well-formed on survival alone
+
+Pass-1’s “nonvacuous oracle here” is true **only of the pre-fix build**. After the repair this becomes a refusal-or-accept site, and survival-only is the CHANNEL-line vacuity the width probe already names.
+
+The same script must carry a post-write observable that the repair can change:
+
+| repair | host | GENCTL after `st.b 0x04` from preset `0x82` | extra |
+|---|---|---|---|
+| **decline** | alive | **`0x82`** | optional one latched announce, not the C040 TODO |
+| **accept / delete the check** | alive | **`0x04`** | C040 text gone |
+| **`return 0` (FAULT)** | host alive, guest store faults | preset unchanged; scratch liveness after the store is **died** — the width probe already split `hwr genctl` / `hwr genctl lv` for this |
+| **pre-fix (the defect)** | `exit1` | unreadable | C040 text present |
+
+Survival inverts for every honest repair. The readback is what tells you *which* repair you shipped. The C040 text row must be **re-pinned** when the check goes; leaving `want=1` after a silent delete makes the detector red on a correct fix.
+
+---
+
+## Q3 — do not touch `c040ok()`; do not add the session to the width probe
+
+`c040ok()` is why the width rows are not *this* bug. It must stay. A new session that needs `0x04` simply must not pass through it. Relaxing it file-wide would let a DELETE/fall-through mutant of a width row die in `reassert_interrupts()` and still “red” — for the wrong reason. That is exactly the NOROW comment’s warning.
+
+**The real disturbance is the gate, not the helper.** `gate_arm.sh` pins this probe at **251 named green rows**. A new session that dies on HEAD turns `pcc2 width rows red` non-zero (if `want` is the fixed behaviour) or, if `want` is `exit1`, still moves the emitted count off 251. `pcc2_default_probe.py` **slices** `def session(` … `\ndef printed` out of this file; a dying top-level session in that slice would also run inside the default detector.
+
+The tree already has the shape: `pcc2_width_witness.py` and `artifacts/pcc2defaultkill/witness_20260905/`. A C040 witness belongs there, extracting `session()`, not as a 252nd width row.
+
+Existing width rows are isolated per `pty.fork`. They do not need `c040ok` relaxed.
+
+---
+
+## Q4 — one session is enough; a tick row is not owed as a witness
+
+All ten calls reach **one** `if (d->pcctwo_reg[PCCTWO_GENCTL] & PCC2_C040)`. The only writer of that byte is the GENCTL arm (`= idata`, unmasked). The counter `memcpy` starts at `0x04`/`0x08`/`0x0c`/`0x10` and cannot touch offset `0x02`. So:
+
+- Witness of the **live** kill = one guest `st.b 0x04` through that arm.
+- A tick-site row is **not independently reachable** with C040 set. It would only become a detector cell for a future mutant that *stores C040 and skips the write’s `reassert`*. That is coverage debt to file with the fix, not a second reproduction of today’s defect.
+
+`DEVICE_TICK` is shift 14 (~16384 steps). A `step 1` of the store will not get there anyway.
+
+---
+
+## Q5 — what goes green while measuring nothing
+
+These are not hypothetical; most are already measured in this probe family:
+
+1. **`put b 0xfff42002, 0x04`** — `debugger_cmds.c` writes with `NO_EXCEPTIONS`; `memory_rw` then **does not dispatch** to a `DM_DEFAULT` device (pcc2 is registered `DM_DEFAULT`). Defaultkill’s `put b ctl` / `put b ctl msg` already pin this: survives, no device text. **This is the silent-green if the session is a debugger poke.**
+2. **`put h` of a C040-carrying halfword** — reaches the arm, **width-declined**, bit never stored. Survives both builds.
+3. **`setup()` default `r5=0x5a5a5a5a`** with `ST_B(5, GENCTL)` — stores `0x5a`; `0x5a & 0x04 == 0`. Copy-paste from `devsig`/`byte rd`. Survives.
+4. **`PCC2_GENCTL_C040` (`0x03`)** instead of `PCC2_C040` (`0x04`).
+5. **`r2` not set to `PCC2`** — store lands in low RAM (`-M 64`). Survives.
+6. **Off-by-one to CHIPREV (`0x01`) or VECBASE (`0x03`)** — no C040 path; CHIPREV is ignore-write, VECBASE stores masked and does not reassert.
+7. **`-e 187`** — everything dies; survival-only scores the defect on a machine that never constructed.
+8. **Hand-rolled prompt wait** — death reads as survived (measured on this exact machine).
+9. **Post-fix GENCTL readback of `0` from reset** — unmapped reads are also `0`.
+10. **`acc all` already writes `0x10` to GENCTL** and survives. That is the negative control. It is not the witness.
+
+The legal path is the one the width probe already uses for accept rows: **guest `st.b`**, `r2=0xfff42000`, **`r5` explicitly `0x04`**, `program()` + `step N`.
+
+---
+
+## What a sound one-byte reproduction actually is
+
+Not a patch, a contract:
+
+- **Machine:** `-E mvme88k -e mvme187` (not `187`), unmodified, same `session()` helper.
+- **Kill session:** scratch store; `st.b 0x82` + `ld.bu` GENCTL (same decode, nonzero, C040 clear, proves the arm and that `reassert` does not always die); **then** `st.b 0x04`; then the post-access liveness/readback that pre-fix can only report as died.
+- **Pre-fix want:** `how=exit1` and the C040 `fatal()` line. Controls green. Kill rows red if `want` is the *fixed* behaviour (the width/defaultkill convention).
+- **Post-fix want:** host `exit0`, scratch still round-trips, GENCTL is the value the chosen member predicts (`0x82` vs `0x04`), C040 TODO absent.
+- **Not in** `pcc2_width_probe.py`. **Do not** relax `c040ok()`. **Do not** add a tick session as a second witness of this bug.
+
+The one-byte write is enough to *see* the kill. Survival alone is not enough to *attribute* it, and it will not be enough to *grade the repair*.

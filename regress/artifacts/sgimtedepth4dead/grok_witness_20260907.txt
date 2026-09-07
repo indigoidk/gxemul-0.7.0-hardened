@@ -1,0 +1,139 @@
+I'll start from the repo and the source the brief names, then check the premises against the actual MTE path instead of ratifying the edit.The fork’s MTE path is at `:1311`; the project-root `src/` is the 2021 copy. I’ll read only `GXEMUL-SEC/` and the related probes.The live question is what GET/PUT actually do with CI versus RGBA. I'll read that function and the filed row next.S2 already says the PUT transfers `bufdepth` bytes; the proposed “untouched tail” oracle may contradict that. I’ll confirm the write path, MTE kick, and how the family rounds actually interact.One more load-bearing check: whether `memory_rw` writes `buf[]` as sequential bytes or as an endian-swapped word. That decides whether `dest[0]` is even a stable oracle.**VERDICT: ACCEPT `depth == 32` (narrow). REFUSE the proposed tail-prepaint witness. This is not a `detector:` round — a FILL `dest[0]` channel is deterministic under the defect. COPY cannot carry this witness at all.**
+
+I did not write a patch or a probe, and I did not run the emulator. Everything below is from reading `GXEMUL-SEC/src/devices/dev_sgi_re.c`, `crmfbreg.h`, the existing `sgi_re_*.py` probes, and NetBSD `crmfb.c` (the driver the tiled-path comment names).
+
+---
+
+## Premises — two hold, one is imprecise, two are true but weaker than the questions need
+
+**S1 holds.** `depth = 8 << field` with a 2-bit field is 8/16/32/64 **bits**. `if (depth == 4)` is a byte count and is never true. Twelve lines earlier `src_x1 /= (depth / 8)` is the author converting bits→bytes. The comment states the 32-bit intent. Units bug, not a mystery.
+
+**S2 holds, and Q1’s oracle contradicts it.** Constructed `src_mode`/`dst_mode` carry TLB + BUFDEPTH and **no** `DE_MODE_TYPE_*` bits, so `color_mode` is CI. CI PUT assigns only `buf[0]`. Then `memory_rw(..., buf, bufdepth, MEM_WRITE, ...)` `memcpy`s **`bufdepth` bytes**. It does not splat `buf[0]`, and it does not leave a tail.
+
+**S3 holds as a bound, with one imprecision.** `*color` is `uint32_t`; RGBA fills 4 bytes; field 3’s `bufdepth` is 8. No implemented type carries a 64-bit transfer. At 16 bits, “RGBA would over-read two” is true of a **GET** (COPY reads 2 bytes then composes `buf[0..3]`). A 16-bit **FILL** PUT would only *write* 2 bytes (`R,G`); still the wrong packing, but not an over-read. The 32-bit-only repair is still the one the comment and the 32-bit driver both license.
+
+**S4 holds.** `MTE_DEPTH_8/16/32` names three encodings. That is not a reservation of field 3. The tiled `switch (dst_tlb)` has no depth guard; LINEAR `exit(1)`s on `depth != 8`. The disagreement is pre-existing.
+
+**S5 holds, and is stronger than written.** Copy-equality is untrustworthy on the tail. Worse: **COPY `dest[0]` is invariant under the fix.** See Q1.
+
+---
+
+## Q1 — Yes, it can be witnessed. The proposed channel is the wrong one.
+
+**CI PUT does not write `buf[0]` over the span, and it does not leave the tail.** It writes `buf[0] = (uint8_t)*color` at the lowest address and `buf[1 .. bufdepth-1]` as uninitialised stack over the rest. `memory_rw` is a `memcpy` of `len` bytes; there is no replication and no short write.
+
+So a destination pre-painted so that an “untouched tail” is distinguishable **does not work**:
+
+| Belief | What the code does |
+|---|---|
+| CI writes 1 byte, 3 stay painted | CI writes **4** bytes at `MTE_DEPTH_32`. The tail is overwritten with garbage. |
+| Remaining paint *is* the defect | On HEAD the tail is **not** paint. That row goes red because the path ran, which looks like “the witness failed to reach MTE.” |
+| Tail ≠ paint *is* the defect | True on HEAD (garbage) **and** after the fix (RGBA bytes). Vacuous. |
+| Tail equals the previous GET | S5: separate automatic `buf[8]` objects. Neither guaranteed nor evidence. |
+
+That is the same shape you were refused on: the edit is aimed at a real bug; this oracle cannot see it.
+
+**The channel that is deterministic under the defect is FILL `dest[0]`, not a tail and not a copy.**
+
+Tiled FILL (`MTE_MODE_COPY` clear) never GETs. It PUTs `CRIME_MTE_BG` through CI today:
+
+- `buf[0] = (uint8_t)bg` → lowest address gets the **low** byte of the register.
+- RGBA PUT lays `[bg>>24, bg>>16, bg>>8, bg]` → lowest address gets the **high** byte.
+
+Pick `bg` with four distinct bytes, e.g. `0x11223344`, pre-paint with something that is neither (`0x11111111` is the house pattern, and it is fine here as **liveness**, not as a tail oracle):
+
+| | HEAD (CI) | after `depth == 32` (RGBA) |
+|---|---|---|
+| `dest[0]` (BE `lw` top byte) | `0x44` | `0x11` |
+| `dest[1..3]` | uninitialised — **do not assert** | `22 33 44` |
+
+`dest[0] == 0x44` on HEAD is the defect. A guest `sw` of the same colour would have put `0x11` at `dest[0]`; that is the device-signature control (CI truncation vs a RAM store). If the word stays at the pre-paint, the transfer did not land (missing TLB valid bit — the trap `sgi_re_rgb_probe.py` already paid for twice).
+
+**COPY cannot witness this.** Source bytes `aa bb cc dd`:
+
+- CI GET takes `buf[0] == 0xaa`, CI PUT writes `0xaa` at `dest[0]`.
+- RGBA GET reconstructs `0xaabbccdd`, RGBA PUT writes `0xaa` at `dest[0]`.
+
+`dest[0]` is `0xaa` either way. The first byte of a copy is the one byte CI already gets right. The broken bytes are exactly the uninitialised ones S5 forbids you to read. A COPY row that compares `dest[0]`, or that compares the whole word, is green on HEAD, green after the fix, or flaky. **If the witness is a blit, refuse it.**
+
+NetBSD `crmfb_fill_rect` is FILL (`mode | 0`), tiled `MTE_TLB_A`, and at depth 32 it programs `MTE_DEPTH_32` and byte-scaled X (`x << 2`). The comment’s “graphical coordinates” are byte-scaled; at origin a 1-pixel rect still maps to pixel (0,0) after `/= (depth/8)`. The driver path and the FILL oracle are the same path.
+
+Reachability is not the problem: `dev_sgi_mte_init` is unconditional beside DE; `startFlag` calls `do_mte_transfer` synchronously; the PUT is `memory_rw` into guest physical RAM. Same machine as the existing probes (`-E sgi -e ip32`).
+
+---
+
+## Q2 — No. Do not use `detector:`.
+
+A FILL `dest[0]` probe is a rung-3 attempt on the stock machine. `detector:` is for a fix whose guest-path attempt was made and failed. This attempt has not been made, and the reason it looked impossible was a bad oracle, not an unreachable path.
+
+What *would* make it a false “cannot witness”:
+
+- Using **MTE LIN_A/B** at depth 32 → LINEAR `if (depth != 8) exit(1)`. Host death, not a red row.
+- Using **COPY** and looking at `dest[0]` or copy-equality → vacuous.
+- Asserting **`dest[1..3]` on HEAD** → stack garbage; also dies if `sgirebufuninit` lands first and those bytes become zeros.
+- Programming **TLB_A without bit 15** → silent return, dest stays painted, looks like “MTE did nothing.” The rgb probe’s `TLBA_TILE = 0x8002` and `sd` packing (`TLBA_TILE << 48`) are load-bearing here too: MTE’s tiled path is the same helper.
+
+Record the attempt against FILL `dest[0]`. If that row is `0x44` on HEAD and `0x11` after the edit, you have a witness. If it isn’t, the setup failed; do not fall back to `detector:` until that row has been seen.
+
+---
+
+## Q3 — Leave field 3. Do not decline it in this diff.
+
+Hardware meaning is unknown. NetBSD never programs MTE field 3 (it names `MTE_DEPTH_8/16/32` and, for a *different* register, GBE `TILESIZE` field 3 is collapsed to depth 32 — that warrant does not transfer). LINEAR already `exit(1)`s. Tiled currently runs it as CI with `bufdepth == 8` (7 uninitialised bytes).
+
+A tiled decline is a **second site**: new predicate, new announce, new accept row, and it is not the units bug. Member 7 (implement) has no spec. Treating 3 as 32 copies a different register’s policy. Member 4 (accept) would ship an 8-byte transfer through a 4-byte container.
+
+The path disagreement is already there. `if (depth == 32)` does not make it worse. File field 3 (and the LINEAR depth kill) as their own row. Do not grow this round to “make the two paths agree.”
+
+---
+
+## Q4 — `32 → 33` is the (b) reinstatement. It must die. The escapes are elsewhere.
+
+`32 → 33` (or back to `4`) leaves the branch dead. A FILL `dest[0]`/`dest-word` row reds. That is the floor, not an escape.
+
+**Lookalike that stays dead:** `if (depth == MTE_DEPTH_32)`. `MTE_DEPTH_32` is **2** (the field encoding). `depth` is **32** (bits). Same units bug, now wearing the named constant. A reviewer can write this believing they fixed it. Compare the **field** to `MTE_DEPTH_32`, or compare `depth` to the literal `32` — never mix them.
+
+**Subtler escapes, and the brief’s example is the one FILL already kills:**
+
+The two `|= DE_MODE_TYPE_RGBA` lines are not equivalent. FILL never reads `src_mode`.
+
+| mutant | FILL (witness vehicle) | COPY |
+|---|---|---|
+| RGBA on **src only**, dest still CI | still CI → FILL row **kills** | broken GET |
+| RGBA on **dst only**, src still CI | FILL looks **fixed → ESCAPE** | GET 1 byte, PUT 4 bytes of `0x000000xx` |
+| `DE_MODE_TYPE_RGB` instead of RGBA | `dest[0]` still `0x11` → **dest[0]-only ESCAPE**; full word `0x11223300` vs `0x11223344` kills | GET drops the low byte (`#505`) |
+| `&& dst_tlb == MTE_TLB_A` | green if the only row is A; B/C open | — |
+| `&& (mode & MTE_MODE_COPY)` | FILL stays CI → FILL kills | COPY looks fixed |
+
+So: **src-without-dst is not the subtle one.** dst-without-src is, and it is invisible unless a COPY row exists — and COPY cannot be the *witness*. That is clause (e): the witness pins FILL; the detector that ships with the fix owes either a COPY row or an explicit sentence that `src_mode` is unpinned.
+
+A dest[0]-only detector also lets RGB substitution through. The **shipped** accept oracle should be the full BE word `0x11223344` (RGBA layout of BG), which is only legal **after** the fix, when all four bytes are defined. On HEAD assert only `dest[0]`.
+
+---
+
+## Q5 — Only `sgirebufuninit` changes meaning, and only at MTE depth 32.
+
+**`#505` (RGB GET).** MTE constructs type 0 or, after this fix, `DE_MODE_TYPE_RGBA`. It never selects RGB. `#505` changed the RGB GET container; RGBA GET was already symmetric. This fix does not start exercising `#505`’s arm. (RGB-as-mutant on the MTE path is Q4, not a meaning change of `#505`.)
+
+**`sgirandomcolour`.** The colour `default:` is any type other than CI/RGB/RGBA/ABGR. MTE still never builds those bits. Unchanged.
+
+**`sgirebufuninit`.** This is the interaction the queue already named, and it is real:
+
+- Today, tiled MTE at `MTE_DEPTH_32` is the all-documented leak: CI fills 1, `bufdepth` 4, three uninitialised bytes, and NetBSD `crmfb_fill_rect` actually drives it.
+- This fix switches that cell to RGBA, which fills `buf[0..3]` before a 4-byte write. **The leak at depth 32 closes as a side effect.** Depth 16 (1 uninit byte), field 3 (7 bytes), and every DE-path CI+wide-`bufdepth` pair remain. Zero-filling `buf` is still necessary; it is no longer necessary *for this cell*.
+- **Round order is load-bearing for the witness.** If zero-fill ships first, HEAD FILL becomes `[low, 0, 0, 0]` — deterministic zeros, not garbage. A row that asserted “tail is junk” goes false without this bug moving. `dest[0]` survives either order. That is another reason not to put HEAD `dest[1..3]` in the oracle.
+- A round that only ships this and then claims `sgirebufuninit` “looks fixed” on MTE depth 32 is the vacuity-floor shape already written in the queue. Do not close that row on this diff.
+
+---
+
+## Something else
+
+1. **8-bit must stay CI.** NetBSD at depth 8 programs `MTE_DEPTH_8` and DE `TYPE_CI`. `if (depth != 8)` / `>= 16` would RGBA an 8-bit index fill. The narrow test is not timidity; widening it breaks the case that already matches.
+
+2. **16-bit stays wrong after this round, and the driver disagrees.** NetBSD at depth 16 programs `MTE_DEPTH_16` and DE `TYPE_RGBA | PIXDEPTH_16`. Emulator MTE stays CI. Do not “fix” it here — packing is unestablished — but do not write the contract as if 16-bit MTE were fine. File it.
+
+3. **Witness setup will host-kill if it copies DE habits onto MTE.** `MTE_TLB_LIN_A` at depth 32 is the LINEAR arm’s `exit(1)`. `src > MTE_TLB_C` `exit(1)`s even on FILL (NetBSD sets SRC to `TLB_A` anyway). `MTE_MODE_STIPPLE` still `exit(1)`. Tiled ignores `bytemask`; LINEAR does not. Kick with `CRIME_DE_START` on the **address**, after BG/DST/MODE are already stored — a START-on-first-MODE-write runs with zeros.
+
+4. **Tiled MTE does not use `dst_y_step` for the walk.** The loop’s `dy` comes from `y1 ? y2`. Step is only a (non-fatal) range check. Irrelevant to a 1-pixel fill; relevant if someone tries to pin step behaviour with this probe.
+
+5. I did not re-derive NetBSD from a tree copy; `crmfb_fill_rect` / the depth `switch` are from NetBSD `crmfb.c` as fetched. The in-tree comment is what pointed there. Field-3-as-32 on GBE `TILESIZE` is a different register and was not used as a warrant.

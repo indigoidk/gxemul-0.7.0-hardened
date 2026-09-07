@@ -1,0 +1,86 @@
+**VERDICT: DECLINE + LATCHED ANNOUNCE is justified, with an unconditional return from the PUT default. But the brief misstates #504’s oracle and the write’s byte count; depth 8 also exposes uninitialized buffer bytes.**
+
+The most consequential false premise is Q3’s description of #504. Its actual `lin_b is fg` assertion expects `FG_VAL = 0x77665544`, **not** the pre-paint `0x11111111`. The declined source GET preserves the caller’s foreground value, which the subsequent PUT writes. The probe explicitly rejects preserving the destination as a different disposition. This follows both the [executed assertion](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/sgi_re_randompixel_probe.py:237) and the [caller’s initialization and GET](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:874). Thus #504 warrants the latch-and-return idiom; it does **not** supply the claimed unchanged-destination oracle.
+
+For Q1, I would retain your disposition, with these qualifications.
+
+The colour enumeration is correct. Walking the [header constants](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/thirdparty/crmfbreg.h:328) against the PUT switch:
+
+- Implemented: `0x00` CI, `0x10` RGB, `0x20` RGBA, `0x30` ABGR.
+- Unnamed defaults: `0x40`, `0x50`, `0x60`, `0x70`, `0x80`, `0x90`, `0xa0`, `0xb0`, `0xc0`, `0xd0`, `0xe0`.
+- Named default: `0xf0` YCRCB.
+
+Those twelve selections reach the default **when the preceding coordinate/addressing/tile-validity checks pass**. The register handler stores the mode without colour validation, and `draw_primitive()` reads it directly.
+
+Grepping the fork did uncover relevant alternatives:
+
+- The helper’s [GET default](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:358) already provides a raw, ABGR-shaped fallback.
+- PCC2 has an actual [ACCEPT precedent](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_pcc2.c:427): a read has already been served from backing storage before the default diagnostic.
+- SGI’s [ROP diagnostics](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:850) latch by value, rather than using one bit for the whole message site.
+
+None establishes correct YCRCB PUT semantics. Mirroring the GET fallback would repeat the unsupported-authority problem you warned about. The YCRCB name establishes an encoding; it does not establish packing, conversion, or depth semantics. IMPLEMENT is defensible as a separately supported feature, but the permitted sources supply no implementation or demonstrated driver selection. I found no additional warranted disposition outside your option set.
+
+The strongest objection to one warning bit is diagnostic coverage: an earlier unnamed mode suppresses a later YCRCB announcement. Per-mode latching has precedent, but one bit remains consistent with this helper’s existing policy. The occupied bits enumerate as `0,1,2,3,4,5,6,7,8,9,10`; `warned` is `uint32_t`, so `1 << 11` is available. Accepted register traffic itself does not set these bits; traffic triggering another warning site can suppress a shared bit.
+
+For Q2, the shape is **a terminal default arm, containing a conditional announcement followed by an unconditional function return**:
+
+1. If the dedicated bit is clear, set it and announce the unsupported PUT.
+2. Return regardless of whether the bit was already set.
+
+The return must sit **outside the latch condition**. Merely adding `break` reaches the shared write with an uninitialized buffer.
+
+I read the complete helper: after the PUT/GET branches, it ends at line 363. There is no cleanup, output-marshalling, or common tail to preserve. The dangerous early-return precedent belongs to the separate device-access handlers. Returning from this `void` helper also permits the caller’s remaining loop bookkeeping to proceed. See the [shared write and function ending](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:316).
+
+Also, “silent write” needs qualification: [`fatal()` returns](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/core/debugmsg.c:384), but prints a diagnostic. The current write is diagnosed, without being declined.
+
+For Q3, **pre-paint equality is the correct PUT postcondition, but insufficient evidence of decline**. Random output prevents an exact assertion about the defective output; it does not prevent an exact assertion about the repaired behavior.
+
+An unchanged destination fails to distinguish:
+
+- Failure to reach the colour default: invalid mapping, an unstarted command, or an earlier return.
+- A repair that suppresses supported PUTs as well.
+- A write to the wrong location.
+- A write of identical bytes, or a write subsequently overwritten/restored.
+- A silent decline, an unlatched diagnostic, or a warning suppressed through bit sharing.
+- Correct behavior only at the tested colour, depth, or latch state.
+
+A sentinel with its high bit set does not rescue the RNG oracle here. Each assignment converts a separate RNG result to `uint8_t`; the whole-word restriction invoked by #504’s old witness does not establish an impossible sentinel byte pattern here.
+
+The strongest oracle observes the effect directly: **zero `MEM_WRITE` calls from an unsupported PUT**, alongside unchanged destination bytes. That distinguishes “no write” from “same final value.” If removing RNG use is also contractual, observe that separately.
+
+For a guest-memory detector, retain full-span pre-paint checks, surrounding sentinels, completion/liveness, supported controls, and exact diagnostic counts. Exercise every listed default colour against depths `1,2,4,8`, with the warning bit initially clear and already set. Read back after the repeated declined operation; a warning-count row alone does not establish repeated decline. The fork already records this exact gap in [`latch cond`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gdrom_toclen_probe.py:391).
+
+Supported controls should include CI at depth 1 and RGB/RGBA/ABGR at depth 4. Avoid asserting correctness of wider initialized output where the independent buffer-initialization defect remains.
+
+For Q4, a minimal clause-(d) edit is to condition the proposed unconditional return on `bufdepth == 4`, leaving the default selection and latch intact.
+
+The proposed row **“YCRCB, depth 4: destination equals pre-paint” stays green**, as do equivalent depth-4 rows for the other default colours. Depths `1`, `2`, and `8` instead fall through to the shared write. Because the repair removed the RNG assignments, this mutation writes untouched buffer contents; it breaks decline without restoring `random()`.
+
+A second small escape is moving the return inside the latch condition. A first-operation pre-paint row and a repeated-operation “diagnostic count equals one” row both stay green, while subsequent operations reach the write.
+
+There is also an existing row I can name without inventing a prospective detector: **#504’s `lin_b is fg` remains green under edits confined to this colour default.** Both of that probe’s mode constants use RGBA, so it never selects the PUT colour default. Its setup cannot be transferred unchanged.
+
+For Q5, yes. Walking the depth encoding and actual byte indices gives:
+
+| Bits 9–8 | `bufdepth` | RNG-derived bytes transmitted | Uninitialized bytes transmitted |
+|---|---:|---|---|
+| `00` | 1 | `buf[0]` | None |
+| `01` | 2 | `buf[0], buf[1]` | None |
+| `10` | 4 | `buf[0], buf[1], buf[2], buf[3]` | None |
+| `11` | 8 | `buf[0], buf[1], buf[2], buf[3]` | `buf[4], buf[5], buf[6], buf[7]` |
+
+All four RNG calls execute in every default invocation, but only the bytes selected by `bufdepth` are transmitted. The [buffer declaration](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:284) has no initializer, and the [RAM write path](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:779) copies the supplied length.
+
+At depth 8, `sgirandomcolour` owns the RNG-derived bytes `0,1,2,3`; `sgirebufuninit` owns the uninitialized bytes `4,5,6,7`. This is an initialization disclosure within an eight-byte array, not an eight-byte write beyond a four-byte array.
+
+Declining this default removes both contributions on this path. It leaves other initialization defects:
+
+- CI PUT, depth 2: unwritten index `1`.
+- CI PUT, depth 4: unwritten indices `1,2,3`.
+- CI PUT, depth 8: unwritten indices `1,2,3,4,5,6,7`.
+- RGB/RGBA/ABGR PUT, depth 8: unwritten indices `4,5,6,7`.
+- Unsupported GET, depth 1: decodes unwritten indices `1,2,3`; depth 2: `2,3`. Its diagnostic also remains unlatched.
+
+I found an additional concrete issue in the MTE caller. [`depth`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:1311) evaluates as encoding `0 → 8`, `1 → 16`, `2 → 32`, `3 → 64`. Consequently, [`if (depth == 4)`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:1371) is unreachable. That branch was supposed to select RGBA for a full-word transfer; the constructed modes instead retain CI. Thus even the named 16- and 32-bit tiled MTE paths reach the CI short-initialization cases above. This is a static finding consistent with a bit/byte unit mismatch.
+
+Review was limited to the permitted source and Python files. No files were changed, and no emulator, tests, or mutations were run.

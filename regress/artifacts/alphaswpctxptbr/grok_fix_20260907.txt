@@ -1,0 +1,126 @@
+I'll read the PAL `swpctx` site, PCB fields, and the probe rather than take the brief's field-count and reader claims as given.The load-block count matches. Next I’ll enumerate every `apcb_flags` / `apcb_ptbr` reader and check whether the probe’s two red rows actually depend on flags staying stale.**VERDICT: RATIFY the one-token product fix; do not ratify it as the whole round.** `apcb_flags = new_flags` is the right edit and it does repair both in-cpu consequences. The witness then goes **9/9 while remaining blind to consequence 2**. No reader in this tree relies on the stale field. The overconfident sentence is S3’s “the row records only the first” plus Q1’s “whatever the previous context left.”
+
+Tree read: `GXEMUL-SEC/src/cpus/cpu_alpha_palcode.c`, `src/include/thirdparty/alpha_cpu.h`, `src/include/cpu_alpha.h`, `src/cpus/memory_alpha.c`, `src/cpus/cpu_dyntrans.c`, `src/core/memory.c`, `regress/alpha_harness_probe.py`. Nothing was run.
+
+---
+
+## Premises — what holds, what is too tidy
+
+**S1, S2 — hold.** In the load block, `apcb_ptbr` is assigned at `:278` (`new_ptbr`) and again at `:282` (`new_flags`); `apcb_flags` is assigned zero times. The other seven PCB fields are assigned once. The SAVE at `:243-244` stores `apcb_flags` to `ctx+40`; the loader reads `new_flags` from `ctx+40`. That value is consumed, on the wrong LHS.
+
+S2 is correctly scoped to `:274-292`. The earlier “never assigned **at all**” claim is still false globally: `wrfen` at `:221` writes the field.
+
+**S3 — half right, and the half that is wrong matters.** Two consequences exist. The **witness** measures only the PTBR clobber (`A+16`). The **ledger title** already names both. What is missing is a measurement, not a record.
+
+Q1’s “`apcb_flags` is currently whatever the previous context left” is the overconfident bit. `swpctx` has never loaded that field from any PCB. The in-cpu value is **last `wrfen` or 0 from the zeroed cpu struct**, not context N−1’s flags word.
+
+**S4 — accepted as recorded, not re-measured.** The probe’s two red rows both read the same cell (`t2` ← `A+16`). The 7/9 split is the shape the source predicts.
+
+---
+
+## Q1 — the one-token fix is the whole *product* fix. It does not break a reader. It also does not pin what it repairs.
+
+`apcb_flags = new_flags` at `:282` stops the PTBR clobber **and** installs the incoming flags. One token, both in-cpu consequences.
+
+**Every `apcb_flags` site in `GXEMUL-SEC/src/`:**
+
+| site | direction | relies on today’s stale value? |
+|---|---|---|
+| `wrfen` `:221` | **write** `a0` over the whole word | No. It does not read the old value. |
+| `wrfen` `:222-223` | **write** that word to `ctx+40` | No. Uses what it just stored. |
+| `swpctx` SAVE `:243-244` | **read**, publish to outgoing PCB | No. Today this **propagates** the bug: the next SAVE writes stale 0 (or last `wrfen`) into the outgoing `+40`, wiping the flags the guest planted. After the fix it writes the flags that were actually loaded — which is the PAL contract. |
+| `ALPHA_PCB_FLAGS_FEN` / `_PME` | header only | Unused. |
+| `ALPHA_IF_CODE_FEN` | header only | No FEN trap in `cpu_alpha_instr.c` or anywhere else under `src/`. |
+| `PAL_clrfen` (`0xae`) | named, user-mode-whitelisted | **No `case`.** Hits the default arm and stops the CPU. |
+
+`memory_alpha.c:46` reads `apcb_ptbr`, not flags. `alpha_invalidate_translation_caches` is the generic dyntrans walk of `vph_tlb_entry[]`; it does not touch the PCB.
+
+So: making the field track the loaded value changes one observable, the SAVE to `ctx+40`. Nothing in this emulator uses that word for FP enablement, ASN, translation, or the debugger (`CPU_SETTINGS_ADD_REGISTER64` exports `pc` and the 32 GPRs, not PCB fields). Sticky-FEN-across-`swpctx` is a PAL bug, not a behaviour a reader is entitled to.
+
+**What the token does not fix** (already filed or adjacent, not reasons to reject it): `alphaswpctxreg` (`A0` vs `v0`), `alphactxfail` (ignored `memory_rw` status), `wrfen` replacing the **entire** flags word rather than bit 0, `clrfen` unimplemented.
+
+---
+
+## Q2 — 9/9, and that is the detector gap, not a comfort.
+
+Both red rows read **the same `got`**: `A+16` after the second `swpctx` SAVE. Neither reads `apcb_flags`. Neither reads `A+40`.
+
+After the fix:
+
+1. First `swpctx` loads A: `apcb_ptbr = PTBR_VAL` and is **not** overwritten. `apcb_flags = FLAGS_VAL` (unobserved).
+2. Second `swpctx` SAVE writes `PTBR_VAL` to `A+16`.
+3. `swpctx ptbr` wants `0xaaaa1111` → green. `swpctx notflags` wants not `0xbbbb2222` → green. `swpctx mapped` wants not `0` → still green.
+
+The seven controls do not consult that field. **9/9.**
+
+They also do not depend on flags staying stale. The probe writes PCB memory and reads PCB memory; the in-cpu flags field is never in the oracle.
+
+The cost of that 9/9: a build that **only** stops clobbering PTBR — delete `:282`, or assign `new_flags` to any other field — also scores 9/9. Consequence 2 is unpinned.
+
+A flags-oracle that would pin it, from the same session, no new machine: after the two swaps, `A+40` is **0 on HEAD** (SAVE of never-loaded flags) and `FLAGS_VAL` after the fix. Same page as `A+16`, so `swpctx mapped` already proved the backing exists. That row is not in the file.
+
+---
+
+## Q3 — `wrfen` interacts; `INVALIDATE_ALL` does not mask either consequence.
+
+`:221` is `PAL_OSF1_wrfen`. It is the only writer of the in-cpu field besides the missing load.
+
+**Interaction, and it is real:** without the load, FEN is process-global. `wrfen(1)` then `swpctx` to a PCB whose flags word is 0 leaves `apcb_flags == 1`. The SAVE of the *next* switch then publishes that 1 into the outgoing PCB. The fix makes FEN per-context: SAVE first (so the `wrfen` is preserved on the old PCB), then load the new PCB’s flags. That is the OSF order, not a regression.
+
+`wrfen` itself does not need the load. It overwrites. Its own defect is separate and becomes slightly more visible after the fix: it stores **all of `a0`**, not `(PCBB+40)<0>`, so a later `wrfen(1)` would smash a PME bit the new load had just installed. Today PME is almost never in that field, because nothing loads it.
+
+**`INVALIDATE_ALL` at `:287`:** generic TLB flush, no PCB read. It does not restore PTBR, does not touch flags, and does not hide the clobber. If anything it **exposes** the PTBR bug: cached translations from the old (often identity-mapped) `base==0` world are dropped, so the next non-K0SEG access re-walks with `base = flags<<13`. This probe never takes that walk — K0SEG is checked in `alpha_translate_v2p` **before** `base` is used — so for these nine rows the invalidate is a no-op on the oracle.
+
+`PAL_clrfen` does not interact, because it is not implemented.
+
+---
+
+## Q4 — smallest green mutant: drop or condition the flags store. Both defect rows stay green.
+
+This is not a de-fatalisation, so “keep the guard, null the repair” is: keep writing `new_flags` (or look like you do), do not actually install incoming flags, and do not re-clobber PTBR.
+
+The load block’s own locals are the DEPENDS-ON set. The probe plants `decrsv0 = decrsv1 = 0` in both PCBs.
+
+**Mutant that the brief’s family names:**
+
+```c
+if (new_decrsv0)
+    cpu->cd.alpha.pcb.apcb_flags = new_flags;
+```
+
+The assignment never fires. `:278` still sets PTBR correctly. **`swpctx ptbr` stays green. `swpctx notflags` stays green.** There is no third defect row to go red.
+
+Same 9/9 under smaller edits: delete `:282`; `apcb_flags = new_ptbr` (operand swap); `apcb_unique = new_flags`; `if (new_flags) …` is a *weaker* (d) here, because A’s flags are nonzero so that form still performs the store.
+
+Clause (b) — put `apcb_ptbr = new_flags` back — **is** caught (7/9). The floor hole is (d) on the flags half, not (b) on the clobber.
+
+If the round’s contract is “we stopped the PTBR clobber,” 9/9 is honest. If it is “both consequences, one token, detector shipped with the fix,” consequence 2 is a floor miss until something observes `A+40` (or an equivalent SAVE of flags).
+
+---
+
+## Q5 — the comment is false as C and true as guest-observability.
+
+`:276-284` are nine sequential stores with **no call** in between. The guest is inside `alpha_palcode()`. The debugger is waiting on `step`. `invalidate_translation_caches` runs **after** the block and does not read the PCB. Nothing in this emulator can see a half-updated `struct alpha_pcb`. For a guest, the updates are simultaneous.
+
+The comment is still a bad description of the function around them:
+
+1. `ctx` is switched at `:255` **before** any load or PCB store.
+2. `r[A0]` is written at `:251` before the load (and the comment says `v0` — `alphaswpctxreg`).
+3. The nine `load_*` calls use `memory_rw` **without `PHYSICAL`**, so they translate with the **old** `apcb_ptbr`. K0SEG / `base==0` is why that works at all.
+4. Then the stores. Then the TLB shootdown.
+
+Simultaneity of the nine assignments is real because there is no observer. Atomicity of the whole PAL, and atomicity under a failed load (`alphactxfail` / `#95` zeroes), are different claims the comment does not establish. Do not treat `:275` as a licence that the surrounding order is architectural.
+
+---
+
+## Found while checking, not asked
+
+1. **The durable form of consequence 2 is the SAVE-back.** After A then B, HEAD writes `0` over `A+40`. The probe never looks. That is the row Q4 is asking for, and it is cheap.
+
+2. **`regress/alpha_harness_probe.py` ~300–302 is stale.** It still says “A.ptbr = 0 so the CORRECT build leaves apcb_ptbr zero.” The `pcb()` call uses `PTBR_VAL`. Following the comment would fight the oracle, not silently green it — wrong record, safe direction.
+
+3. **`wrfen` stores all of `a0`, not FEN bit 0.** `clrfen` is on the user-mode whitelist (`:185`) and has no `case` — user `call_pal 0xae` dies in the default arm. Adjacent, not this diff.
+
+4. **`alphapfnoffset` is not broken by this fix.** That probe plants the same PFN in PTBR and flags so either LHS leaves PTBR armed. After the token, the first assignment becomes live and still writes `L1_PFN`.
+
+Nothing ships until the 2026-09-09 adjudication, as asked.

@@ -1,0 +1,44 @@
+**VERDICT: You have conflated a declined GET with a declined PUT. Keep Pass 1’s PUT-default decline: it prevents that call’s destination write. S3 concerns the separate dependent-PUT problem, and current MTE does not reach this colour default.**
+
+**Q1. They are different problems.** The proposed PUT-default `return` exits before `memory_rw(... MEM_WRITE ...)`. Whatever the caller’s `color` contains, that declined PUT does not transfer it. Leaving the destination’s existing bytes intact is consistent with declining an unsupported write. The reviewed source still contains the random assignments; the proposed fix has not landed. [PUT default and transfer](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:308)
+
+S4 correctly establishes that MTE retains `bg` across iterations. It does **not** establish reachability of this row. MTE constructs modes containing addressing and depth bits, leaving the colour type at CI. Its only colour override selects supported RGBA, behind the unreachable `depth == 4` condition: `depth` is calculated as `8 << ...`. Neither construction reaches the PUT colour default. [MTE depth](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:1311), [mode construction](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:1365)
+
+**Q2. There is no random-to-last-good MTE transition caused by this fix.** The relevant cases are:
+
+| Calls in the iteration | Destination effect |
+|---|---|
+| PUT declines before its transfer | No write from that PUT |
+| GET declines, then PUT accepts | PUT consumes the retained caller value |
+| GET declines, then PUT also declines | No write from that PUT |
+
+For the second case, “previous pixel’s value” needs qualification. MTE initially loads `bg` from `CRIME_MTE_BG` on **each transfer invocation**. A declined GET retains the latest value assigned during that invocation—or the initial register value if no preceding GET assigned anything. It does not retain a previous command’s local `bg`. [Initialization and loop](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:1314)
+
+Also, current MTE uses CI: its accepted PUT initializes only `buf[0]`. At eight-bit depth, the repeated byte is defined; at wider depths, the transfer also consumes uninitialized bytes. Thus “the whole rectangle deterministically receives the last good colour” is too strong, independently of this row. The analogous qualification applies to S1: the actual transfer length is `bufdepth`, not invariably four bytes. [CI encoding](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:284)
+
+Where retained-value substitution is defined, it improves reproducibility, not copy correctness. A plausible wrong colour and random corruption are both wrong results; random bytes are not a dependable error announcement.
+
+**Q3. The proposed PUT announcement fires at most once per device instance’s latch lifetime.** That means one message for a thousand qualifying PUT declines if the latch starts clear, and none if an earlier command already set it. The shared device structure is zeroed at initialization; the file contains no per-command latch reset. [Initialization](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:675)
+
+That granularity remains appropriate for the settled requirement of bounded diagnostics, using an independent bit. It deliberately cannot distinguish one declined pixel from a thousand. Reporting extent would require additional counting or a command summary.
+
+**Something else found:** bounding the PUT warning does not bound every warning from the operation. The existing GET colour default still logs without a latch. DE can perform that GET for a destination-dependent raster operation before reaching the declined PUT. [GET default](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:358), [DE destination GET](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:877)
+
+**Q4. Choose the PUT default only for `sgirandomcolour`.** It gives this unsupported write the honest disposition “no destination store,” with an explicit diagnostic.
+
+The other placements change additional behavior without solving the caller dependency:
+
+- Returning **before the GET default’s assignment** leaves `*color` unchanged, but its memory read has already occurred. Currently that default assigns a raw decoded value; it does not decline.
+- Validating unsupported colour types **before either transfer** can avoid that GET read, but a `void` helper return still cannot prevent the caller’s subsequent PUT.
+
+To preserve the destination after a failed source GET, none of those helper-only placements suffices. The caller needs a success/decline result and must suppress dependent work when a required GET fails—including destination reads used by raster operations. The source already identifies this separately as `sgirandomskipput`. [Existing separation](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:251)
+
+**Q5. Smallest straightforward breaking edit: change the proposed default-arm `return;` to `break;`, keeping its latch and announcement.** That resumes execution at the memory write and consumes the uninitialized buffer. It breaks the no-write contract without needing to restore `random()`.
+
+I expect **`rgb samemode` to stay green**: it exercises supported RGB PUT, so it never reaches the changed default. **`rgb tiled64` also stays green**: its tiled source is exercised through DE, and its destination uses supported RGBA. [Same-mode assertion](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/sgi_re_rgb_probe.py:375), [tiled64 assertion](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/sgi_re_rgb_probe.py:465)
+
+The gap is broader than missing MTE coverage: the scoped scripts do not select an unsupported destination colour type at all. Their green results cannot establish this PUT-default decline. They also contain no explicit MTE transfer exercise.
+
+**Another material finding:** `sgi_re_randompixel_probe.py` actively requires the dependent PUT: **`lin_b is fg` expects FG rather than the destination’s prepaint**. An MTE-only repair would escape it, but a general failed-GET/skip-PUT repair would make that existing row fail. That would require explicit adjudication of the oracle’s contract. [Active assertion](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/sgi_re_randompixel_probe.py:233)
+
+These are static predictions. I inspected files only; no patch, probe, build, test, or emulator execution.

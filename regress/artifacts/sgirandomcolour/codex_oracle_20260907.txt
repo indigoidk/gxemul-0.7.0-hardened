@@ -1,0 +1,52 @@
+**VERDICT: Your distinction is conditionally sound. A correctly scoped write-attempt observer works for Round A; the existing stepped probe supplies none. This fork’s debugger watchpoints offer a qualified alternative.**
+
+**Q1. The distinction survives, but “a write happened” needs a precise meaning.**
+
+A count of this helper’s outgoing `MEM_WRITE` calls distinguishes **no request** from **a request carrying the existing bytes**. It does not establish that RAM accepted the request. Conversely, zero calls does not establish correct rejection unless the unsupported arm was actually reached: an earlier return or an operation that never ran also produces zero.
+
+For Round B, initializing the buffer changes neither the transfer length nor the call count. Uninitialized bytes can happen to match the expected initialized values, so even matching values plus matching counts cannot establish initialization. Unexpected values can expose a failure; expected values cannot prove definedness.
+
+Two premise corrections from [the actual helper](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:284):
+
+- The buffer lacks a declaration initializer; it is not *never initialized*. PUT arms assign prefixes, and GET fills the requested transfer length.
+- The missing `break` is not what permits the write. The write is **after the switch**, so adding `break` would still reach it. The proposed return matters.
+
+**Q2. There is an observation mechanism in this fork—but it is not an exact counter.**
+
+The debugger implements write-watchpoints. The common memory path checks them **before device/cache/RAM dispatch**, and neither `PHYSICAL` nor `NO_EXCEPTIONS` excludes this helper’s write. A matching attempt emits a `WATCHPOINT: write` message. Thus the pty driver could observe debugger-generated write events without a newly instrumented build. This is debugger-visible evidence, not guest architectural state. [Memory watchpoint implementation](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:273)
+
+There are two decisive limitations:
+
+- The check requires `!single_step`. The existing SGI probe’s `run_ops()` executes its guest instructions using `step`. Merely adding watchpoints and counting their messages to that execution scheme could report **zero despite writes**. [Probe execution](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/sgi_re_randompixel_probe.py:157)
+- The check also requires `!about_to_enter_single_step`, then sets that flag after its first report. Subsequent pixel writes inside the same drawing command can therefore go unreported.
+
+What Python would count is **printed watchpoint reports**, not all `MEM_WRITE` calls. Watchpoints themselves have no hit-count field. [Watchpoint state](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/machine.h:80)
+
+That mechanism can support an **any-attempt-to-this-range** witness when observation is active throughout the relevant execution. It cannot automatically support “exactly N calls,” or “no writes anywhere from this helper.” A literal, attributed call count needs a suitable host-side observer or `harness:` witness.
+
+**Q3. Unchanged destination bytes prove only unchanged observed contents.**
+
+Assuming the reads genuinely accessed the intended RAM, they establish equality at the observation points. They also fit:
+
+- A same-value write, or a write followed by restoration.
+- A write to somewhere else.
+- No drawing operation, suppressed drawing, or an earlier helper return.
+- A declined access, with the supposed pre-paint never successfully stored.
+
+These are concrete concerns here. The helper returns on an invalid tile pointer, and the memory path can discard an out-of-RAM write while returning success; corresponding reads can return zeros. [Validity gate](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:274), [RAM handling](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:662)
+
+A useful control must establish that the pre-paint really exists and that a supported operation through the same destination mapping changes it. The unsupported case also needs evidence of reaching its particular arm. These checks address different failure modes.
+
+**Another finding:** `CRIME_DE_STATUS` returns constant idle flags. Its familiar value establishes neither that the command ran nor that it completed. [Status implementation](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:1661)
+
+**Q4. There is a better Round-A oracle, with an explicit ceiling.**
+
+For the destination-specific claim, the existing watchpoint offers a plausible deterministic event witness: verified arm reach and completed execution, an active observer that detects a supported write to the same range, then no matching write report for the rejected operation. Unchanged verified destination bytes remain useful corroboration. The announcement count separately tests “announce once.”
+
+That conclusion must remain **“no observed write attempt to this range under these validated conditions.”** Watching the intended destination cannot exclude writes to an unintended address. For the stronger original claim—zero outgoing write requests attributable to the unsupported helper invocation—use the host-side observer/harness.
+
+Also, “random output means no value row” is too broad. The repaired implementation has an exact expected value: the pre-paint. A value row can fail when the defective write changes it; it just lacks guaranteed discrimination when the random bytes match.
+
+One neighbouring oracle specifically does **not** transfer: the existing random-pixel probe uses a whole `random()` result’s clear high bit. Round A stores separately truncated results into bytes, so that high-bit exclusion does not constrain the assembled pixel. [Neighbouring oracle](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/sgi_re_randompixel_probe.py:42), [Round-A assignments](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:308)
+
+This is a source-review conclusion; I made no changes and ran no probe.

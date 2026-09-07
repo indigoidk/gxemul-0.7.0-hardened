@@ -1,0 +1,87 @@
+**VERDICT: `swpctx` assigns `apcb_ptbr` twice, leaves `apcb_flags` unchanged, and uses all nine locals. Its return line writes `a0`. Opcode-0 dispatch has no privilege check, but `alpha_palcode()` itself checks user mode before the switch.**
+
+Reviewed only `GXEMUL-SEC/src/`, through source inspection.
+
+**Q1.** These are the nine assignments in order. Destinations share the prefix `cpu->cd.alpha.pcb.`. [Source](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_alpha_palcode.c:276)
+
+| Line | Destination field ← source local |
+|---|---|
+| 276 | `apcb_ksp ← new_ksp` |
+| 277 | `apcb_usp ← new_usp` |
+| 278 | `apcb_ptbr ← new_ptbr` |
+| 279 | `apcb_cpc ← new_cpc` |
+| 280 | `apcb_asn ← new_asn` |
+| 281 | `apcb_unique ← new_unique` |
+| 282 | `apcb_ptbr ← new_flags` |
+| 283 | `apcb_decrsv0 ← new_decrsv0` |
+| 284 | `apcb_decrsv1 ← new_decrsv1` |
+
+`apcb_ptbr` is assigned **twice**. **No local is unused as a source**: each appears once. Specifically, `new_ptbr` is used, but its assigned value is subsequently overwritten. `apcb_flags` receives no assignment in this block.
+
+**Q2.** The offsets below are decimal byte offsets from the respective `ctx`. The [save block](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_alpha_palcode.c:231) and [load block](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_alpha_palcode.c:256) use these maps:
+
+| Offset | Access width | Saved field | Loaded local |
+|---|---|---|---|
+| 0 | 64 bits | `apcb_ksp` | `new_ksp` |
+| 8 | 64 bits | `apcb_usp` | `new_usp` |
+| 16 | 64 bits | `apcb_ptbr` | `new_ptbr` |
+| 24 | 32 bits | `apcb_cpc` | `new_cpc` |
+| 28 | 32 bits | `apcb_asn` | `new_asn` |
+| 32 | 64 bits | `apcb_unique` | `new_unique` |
+| 40 | 64 bits | `apcb_flags` | `new_flags` |
+| 48 | 64 bits | `apcb_decrsv0` | `new_decrsv0` |
+| 56 | 64 bits | `apcb_decrsv1` | `new_decrsv1` |
+
+**Yes: the memory-access offsets and widths match.** That does not make the subsequent destination assignments correct.
+
+**Q3.** These are all explicit reads of the two members found under `src/`.
+
+| Field | File and function | Use |
+|---|---|---|
+| `apcb_ptbr` | [cpus/cpu_alpha_palcode.c:236](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_alpha_palcode.c:236), `alpha_palcode()`, case `0x30` (`PAL_OSF1_swpctx`) | Supplies the value saved at `ctx + 16`. |
+| `apcb_ptbr` | [cpus/memory_alpha.c:46](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_alpha.c:46), `alpha_translate_v2p()` | Computes `base = apcb_ptbr << ALPHA_PAGESHIFT`. `base` controls the kernel zero-base fallback and forms the first-level page-table entry address. |
+| `apcb_flags` | [cpus/cpu_alpha_palcode.c:223](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_alpha_palcode.c:223), `alpha_palcode()`, case `0x2b` (`PAL_OSF1_wrfen`) | Supplies the value stored at `ctx + 40`, immediately after the field is assigned from `a0`. |
+| `apcb_flags` | [cpus/cpu_alpha_palcode.c:244](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_alpha_palcode.c:244), `alpha_palcode()`, case `0x30` (`PAL_OSF1_swpctx`) | Supplies the flags value saved at `ctx + 40`. |
+
+The `apcb_flags` readers are those two stores; no other member read was found.
+
+**Q4.** The actual [line 251](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_alpha_palcode.c:251) is:
+
+```c
+cpu->cd.alpha.r[ALPHA_A0] = cpu->cd.alpha.ctx;
+```
+
+It assigns **register 16, `a0`**. In [`ALPHA_REG_NAMES`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/cpu_alpha.h:113), index 16 is `"a0"` and index 0 is `"v0"`; the numeric register definitions agree.
+
+The comment and code disagree. **The comment matches the return convention used by these three active cases in the same switch:**
+
+- [`0x10`, `PAL_OSF1_rdmces`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_alpha_palcode.c:202): returns `mces` through `r[ALPHA_V0]`.
+- [`0x35`, `PAL_OSF1_swpipl`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_alpha_palcode.c:328): returns the old IPL through `r[ALPHA_V0]`.
+- [`0x36`, `PAL_rdps`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_alpha_palcode.c:334): returns `ps` through `r[ALPHA_V0]`.
+
+An independent corroboration: the in-tree [`alpha_pal_swpctx()` wrapper](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/thirdparty/alpha_cpu.h:449) binds `v0` to `$0` and returns it.
+
+**Q5.** The save block executes **before** the `ctx` update. These two source lines establish the order:
+
+- [Line 247](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_alpha_palcode.c:247), beginning the final save: `store_64bit_word(cpu, cpu->cd.alpha.ctx + 56,`
+- [Line 255](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_alpha_palcode.c:255): `cpu->cd.alpha.ctx = a0;`
+
+**Q6.** Your claim is correct **for dispatch into `alpha_palcode()`**, with a material qualification about the callee.
+
+In [`cpu_alpha_instr.c`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:831), `(iword >> 26) & 63` determines the opcode. Case `0x00` assigns `instr(call_pal)` and puts the low 26 bits into `ic->arg[0]`. [`X(call_pal)`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:53) synchronizes the PC, then directly calls:
+
+```c
+alpha_palcode(cpu, ic->arg[0]);
+```
+
+There is **no PAL-specific privilege check, mode check, or enable-bit check before that call**. Ordinary instruction-fetch failure, debugger stops, and translation read-ahead still affect whether an instruction executes. See the [fetch handling](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:807), [breakpoint handling](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1799), and [read-ahead return](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1917).
+
+**Inside `alpha_palcode()`, however, there is a mode gate.** It derives `userMode` from `ps & ALPHA_PSL_USERMODE`, then checks a whitelist before the switch. A disallowed PAL number—including `0x30`—in user mode causes `cpu->running = 0` and an immediate return. Thus dispatch into the function is unconditional with respect to privilege; execution of the `0x30` handler is gated. [Source](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_alpha_palcode.c:165)
+
+**Q7.** Correcting the Q1 assignment error requires **one identifier-token replacement on one line**, at [line 282](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_alpha_palcode.c:282):
+
+```c
+cpu->cd.alpha.pcb.apcb_flags = new_flags;
+```
+
+**Else found:** while reading Q3’s consumer, I also observed that `alpha_translate_v2p()` still contains an explicit [`exit(1)` at line 77](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_alpha.c:77). That is a separate source observation outside this handler’s assignment audit.

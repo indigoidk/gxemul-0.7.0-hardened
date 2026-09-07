@@ -1,0 +1,1873 @@
+Reading additional input from stdin...
+OpenAI Codex v0.153.4
+--------
+workdir: C:\DocumentNoSnc\CC\GXEMUL
+model: gpt-6-astra
+provider: openai
+approval: never
+sandbox: read-only
+reasoning effort: max
+reasoning summaries: none
+session id: 01a07cd1-26ad-71c1-ac97-ff3952615e10
+--------
+user
+# CODE REVIEW (read-only) — `regress/alpha_harness_probe.py`, before its first run
+
+## READ THIS FIRST — PLEASE DO NOT SIMPLY RATIFY
+
+**Check the premises, not just the derivations.** **Five briefs of mine this week stated premises that
+were false or too broad**, each caught by a seat reading the code rather than my description of it.
+**If a premise below is wrong, that is the most valuable thing you can tell me.**
+
+**THE TREE UNDER REVIEW IS `GXEMUL-SEC/src/`.** Three pristine-2021-upstream copies of GXemul sit
+under the project root and are NOT this fork.
+
+**SCOPE YOUR READING TO `GXEMUL-SEC/src/` AND `GXEMUL-SEC/regress/*.py`.**
+
+**VERDICT LINE FIRST.**
+
+---
+
+## What this is
+
+`regress/alpha_harness_probe.py` is a new file and **has never been run**. There has never been an
+Alpha probe in this tree. It exists because three open rows need one, and it is deliberately written
+controls-first: five control rows and three defect rows, with nothing asserted about the defect until
+the controls are green.
+
+**I am asking you to read it as CODE, not to assess the design.** The design was reviewed separately
+and one earlier version of it was refuted — the first design put both process control blocks in
+ordinary RAM, and a seat pointed out that the defect under test (`apcb_ptbr` taking the flags value)
+**destroys the address translation the witness needs to observe it**, because `alpha_translate_v2p`
+identity-maps only while `base == 0`. Everything now lives in K0SEG, which is checked before `base`
+is read.
+
+## Facts it was built on, each read out of `src/` rather than assumed
+
+* `call_pal` is opcode 0 with the PAL number in bits 25..0, dispatched to `alpha_palcode()`.
+* **`alpha_palcode()` gates its own switch on `ps & ALPHA_PSL_USERMODE`, and `0x30` is not on the
+  unprivileged whitelist** — in user mode it sets `cpu->running = 0` and returns. `ps` has no
+  initialiser, so it is zero (kernel mode); the `palgate` row measures that rather than trusting it.
+* Memory-format encoding is `opcode<<26 | ra<<21 | rb<<16 | disp16`; LDA `0x08`, LDAH `0x09`,
+  LDQ `0x29`, STQ `0x2d`.
+* Register numbers and debugger names come from `ALPHA_REG_NAMES`: r0 `v0`, r1 `t0`, r2 `t1`,
+  r3 `t2`, r4 `t3`, r16 `a0`, r31 `zero`.
+* `ALPHA_K0SEG_BASE = 0xfffffc0000000000`.
+* PCB field offsets from the handler's own save block: `+0` ksp, `+8` usp, `+16` ptbr, `+24` cpc,
+  `+28` asn, `+32` unique, `+40` flags, `+48`/`+56` decrsv.
+
+## The questions
+
+**Q1 — WILL THE BOOTSTRAP WORK?** `lda`/`ldah` build 32-bit constants and a K0SEG address needs bit
+63..42. The file writes the 64-bit pointers into identity-mapped scratch with the debugger's `put d`
+and has the guest load them with one `ldq` **while `ptbr` is still zero**, after which every address
+is a K0SEG value in a register. **Is that sequence actually valid**, and does anything between the
+`put d` writes and the first `call_pal` disturb `ptbr`?
+
+**Q2 — ARE THE INSTRUCTION ENCODINGS RIGHT?** This project has been bitten four times by
+hand-assembled encodings, most recently in this very file: two control rows loaded into register 3
+and printed `t1` (register 2), which would have read a register the test never wrote. **Check every
+encoder and every register number against the decoder in `src/cpus/cpu_alpha_instr.c`.**
+
+**Q3 — WILL THE ORACLE DISCRIMINATE?** `PCB_A` is written with `ptbr = 0` and `flags = MARKER`. Two
+`swpctx` calls later, `PCB_A+16` should hold the saved `apcb_ptbr` — `0` if the handler is correct,
+`MARKER` if the defect is present. **Walk the handler and say whether that is what lands there**, and
+in particular whether the second call's SAVE writes to the OLD context (A) or the new one.
+
+**Q4 — IS `put d` THE RIGHT DEBUGGER COMMAND?** The file uses `put d` for 64-bit writes on the
+grounds that `put q` is 128-bit in this debugger. **Confirm from `src/debugger/`.**
+
+**Q5 — WHAT WILL FAIL SILENTLY?** This is the question I most want answered. **Which of these rows
+could go GREEN while measuring something other than what it claims?** The harness's own recent
+history is that its sibling probe read a plausible value twice while the access was being declined —
+so a green row is not self-evidently a correct one.
+
+## What I am not asking
+
+Do not run it, do not fix it, and do not write the defect rows differently. I want to know what is
+wrong with the code before it runs, because its first run is also its first evidence.
+
+**If, while verifying a claim, you found something ELSE — say so.**
+codex
+Verdict: pending code review. I’ll check the probe against the fork’s Alpha decoder, PAL handler, memory translation, and debugger code, without running or changing it.
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n 'ALPHA_K0SEG_BASE|ALPHA_REG_NAMES|ALPHA_PSL_USERMODE|alpha_palcode|apcb_ptbr|swpctx|alpha_translate_v2p' GXEMUL-SEC/src" in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "Get-Content -LiteralPath 'GXEMUL-SEC/regress/alpha_harness_probe.py'" in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg --files GXEMUL-SEC/src -g AGENTS.md -g '*alpha*' -g '*debugger*'" in C:\DocumentNoSnc\CC\GXEMUL
+ succeeded in 179ms:
+GXEMUL-SEC/src\include\debugger.h
+GXEMUL-SEC/src\include\cpu_alpha.h
+GXEMUL-SEC/src\machines\machine_alpha.c
+GXEMUL-SEC/src\machines\machine_alpha.o
+GXEMUL-SEC/src\debugger\debugger.c
+GXEMUL-SEC/src\debugger\debugger_expr.o
+GXEMUL-SEC/src\debugger\debugger_expr.c
+GXEMUL-SEC/src\debugger\debugger_cmds.c
+GXEMUL-SEC/src\debugger\debugger.o
+GXEMUL-SEC/src\include\thirdparty\alpha_autoconf.h
+GXEMUL-SEC/src\include\thirdparty\alpha_lcareg.h
+GXEMUL-SEC/src\include\thirdparty\alpha_cpu.h
+GXEMUL-SEC/src\include\thirdparty\alpha_prom.h
+GXEMUL-SEC/src\include\thirdparty\alpha_rpb.h
+GXEMUL-SEC/src\cpus\cpu_alpha_instr_alu.c
+GXEMUL-SEC/src\cpus\cpu_alpha_instr.c
+GXEMUL-SEC/src\cpus\cpu_alpha.o
+GXEMUL-SEC/src\cpus\cpu_alpha.c
+GXEMUL-SEC/src\cpus\cpu_alpha_palcode.c
+GXEMUL-SEC/src\cpus\cpu_alpha_instr_loadstore.c
+GXEMUL-SEC/src\cpus\cpu_alpha_palcode.o
+GXEMUL-SEC/src\cpus\tmp_alpha_tail.c
+GXEMUL-SEC/src\cpus\tmp_alpha_misc.c
+GXEMUL-SEC/src\cpus\tmp_alpha_head.c
+GXEMUL-SEC/src\cpus\memory_alpha.o
+GXEMUL-SEC/src\cpus\memory_alpha.c
+GXEMUL-SEC/src\cpus\generate_alpha_misc.c
+GXEMUL-SEC/src\cpus\generate_alpha_misc
+
+ succeeded in 185ms:
+GXEMUL-SEC/src\cpus\cpu_alpha_palcode.c:51: *  alpha_palcode_name():
+GXEMUL-SEC/src\cpus\cpu_alpha_palcode.c:55:void alpha_palcode_name(uint32_t palcode, char *buf, size_t buflen)
+GXEMUL-SEC/src\cpus\cpu_alpha_palcode.c:68:	case 0x30: snprintf(buf, buflen, "PAL_OSF1_swpctx"); break;
+GXEMUL-SEC/src\cpus\cpu_alpha_palcode.c:158: *  alpha_palcode():
+GXEMUL-SEC/src\cpus\cpu_alpha_palcode.c:163:void alpha_palcode(struct cpu *cpu, uint32_t palcode)
+GXEMUL-SEC/src\cpus\cpu_alpha_palcode.c:166:	uint64_t userMode = cpu->cd.alpha.ps & ALPHA_PSL_USERMODE;
+GXEMUL-SEC/src\cpus\cpu_alpha_palcode.c:229:	case 0x30:	/*  PAL_OSF1_swpctx  */
+GXEMUL-SEC/src\cpus\cpu_alpha_palcode.c:236:		    cpu->cd.alpha.pcb.apcb_ptbr);
+GXEMUL-SEC/src\cpus\cpu_alpha_palcode.c:278:			cpu->cd.alpha.pcb.apcb_ptbr = new_ptbr;
+GXEMUL-SEC/src\cpus\cpu_alpha_palcode.c:282:			cpu->cd.alpha.pcb.apcb_ptbr = new_flags;
+GXEMUL-SEC/src\cpus\cpu_alpha_instr.c:63:	alpha_palcode(cpu, ic->arg[0]);
+GXEMUL-SEC/src\cpus\cpu_alpha.c:56:static const char *alpha_regname[N_ALPHA_REGS] = ALPHA_REG_NAMES; 
+GXEMUL-SEC/src\cpus\cpu_alpha.c:89:	cpu->translate_v2p = alpha_translate_v2p;
+GXEMUL-SEC/src\cpus\cpu_alpha.c:297:		alpha_palcode_name(iw & 0x3ffffff, palcode_name,
+GXEMUL-SEC/src\cpus\memory_alpha.c:41: *  alpha_translate_v2p():
+GXEMUL-SEC/src\cpus\memory_alpha.c:43:int alpha_translate_v2p(struct cpu *cpu, uint64_t vaddr,
+GXEMUL-SEC/src\cpus\memory_alpha.c:46:	uint64_t base = cpu->cd.alpha.pcb.apcb_ptbr << ALPHA_PAGESHIFT;
+GXEMUL-SEC/src\cpus\memory_alpha.c:47:	uint64_t userMode = cpu->cd.alpha.ps & ALPHA_PSL_USERMODE;
+GXEMUL-SEC/src\cpus\memory_alpha.c:62:	if (!userMode && (vaddr >= ALPHA_K0SEG_BASE && vaddr <= ALPHA_K0SEG_END)) {
+GXEMUL-SEC/src\cpus\memory_alpha.c:178:	fatal("[ alpha_translate_v2p: 0x%016" PRIx64" wasn't found ]\n", vaddr);
+GXEMUL-SEC/src\include\cpu_alpha.h:113:#define ALPHA_REG_NAMES		{				\
+GXEMUL-SEC/src\include\cpu_alpha.h:195:/*  cpu_alpha_palcode.c:  */
+GXEMUL-SEC/src\include\cpu_alpha.h:196:void alpha_palcode_name(uint32_t palcode, char *buf, size_t buflen);
+GXEMUL-SEC/src\include\cpu_alpha.h:197:void alpha_palcode(struct cpu *cpu, uint32_t palcode);
+GXEMUL-SEC/src\include\cpu_alpha.h:200:int alpha_translate_v2p(struct cpu *cpu, uint64_t vaddr,
+GXEMUL-SEC/src\include\thirdparty\alpha_cpu.h:64:	uint64_t	apcb_ptbr;	/* page table base reg */
+GXEMUL-SEC/src\include\thirdparty\alpha_cpu.h:103:#define	ALPHA_PSL_USERMODE	0x0008		/* set -> user mode */
+GXEMUL-SEC/src\include\thirdparty\alpha_cpu.h:115:#define	ALPHA_PSL_USERSET	ALPHA_PSL_USERMODE
+GXEMUL-SEC/src\include\thirdparty\alpha_cpu.h:209:#define	ALPHA_K0SEG_BASE	0xfffffc0000000000ULL	/* direct-mapped */
+GXEMUL-SEC/src\include\thirdparty\alpha_cpu.h:214:#define ALPHA_K0SEG_TO_PHYS(x)	((x) & ~ALPHA_K0SEG_BASE)
+GXEMUL-SEC/src\include\thirdparty\alpha_cpu.h:215:#define ALPHA_PHYS_TO_K0SEG(x)	((x) | ALPHA_K0SEG_BASE)
+GXEMUL-SEC/src\include\thirdparty\alpha_cpu.h:449:alpha_pal_swpctx(unsigned long ctx)
+GXEMUL-SEC/src\include\thirdparty\alpha_cpu.h:454:	__asm volatile("call_pal %2 # PAL_OSF1_swpctx"
+GXEMUL-SEC/src\include\thirdparty\alpha_cpu.h:456:		: "i" (PAL_OSF1_swpctx), "0" (a0)
+
+ succeeded in 234ms:
+#!/usr/bin/env python3#  known value through a real guest store and reads it back through a real guest load, and if
+#  the address is wrong that row goes RED and says so.  A harness that assumed an address and
+#  then reported a defect would be measuring its own mistake. ***
+
+import os, sys, re, pty, time, select
+
+BIN   = sys.argv[1]
+LABEL = sys.argv[2] if len(sys.argv) > 2 else "?"
+MACH  = sys.argv[3] if len(sys.argv) > 3 else "alphabook1"
+
+rows = []
+
+def row(name, got, want, note="", negate=False):
+    ok = (got != want) if negate else (got == want)
+    rows.append((name, ok))
+    print("%-18s %-20s %-20s %-40s %s" % (name, str(got), ("NOT " if negate else "") + str(want),
+                                          note, "ok" if ok else "FAIL"))
+    return ok
+
+# ---------------------------------------------------------------- the encoder
+#  Memory format.  `disp' is a SIGNED 16-bit displacement, so it is masked here and the caller
+#  is responsible for keeping values in range -- an out-of-range displacement silently truncating
+#  would be a wrong instruction that still assembles, which is the hand-assembled-encoding trap
+#  this project has paid for four times.  Hence the assert.
+def mem(op, ra, rb, disp):
+    assert -0x8000 <= disp <= 0xffff, "displacement %r out of 16-bit range" % disp
+    return ((op & 0x3f) << 26) | ((ra & 31) << 21) | ((rb & 31) << 16) | (disp & 0xffff)
+
+ZERO = 31
+def LDA (ra, disp, rb=ZERO): return mem(0x08, ra, rb, disp)
+def LDAH(ra, disp, rb=ZERO): return mem(0x09, ra, rb, disp)
+def LDQ (ra, disp, rb):      return mem(0x29, ra, rb, disp)
+def STQ (ra, disp, rb):      return mem(0x2d, ra, rb, disp)
+def LDL (ra, disp, rb):      return mem(0x28, ra, rb, disp)
+def STL (ra, disp, rb):      return mem(0x2c, ra, rb, disp)
+def CALL_PAL(n):             return n & 0x3ffffff        # opcode 0; see note 2 above
+NOP = LDA(ZERO, 0, ZERO)     # lda zero,0(zero) -- the decoder turns ra==zero into instr(nop)
+
+#  *** BUILDING A 32-BIT CONSTANT NEEDS TWO INSTRUCTIONS AND ONE CORRECTION FOR SIGN. ***
+#  LDAH adds (disp << 16) and LDA adds a SIGN-EXTENDED disp.  So for a low half with bit 15 set,
+#  the LDA subtracts 0x10000 and the high half must be pre-incremented to compensate.  Getting
+#  this wrong yields an address off by 65536, which would look like a memory-map problem rather
+#  than an encoding bug -- so it is done here once, with a self-test below.
+def load_const(reg, val):
+    hi, lo = (val >> 16) & 0xffff, val & 0xffff
+    if lo & 0x8000:
+        hi = (hi + 1) & 0xffff
+    return [LDAH(reg, hi, ZERO), LDA(reg, lo - 0x10000 if lo & 0x8000 else lo, reg)]
+
+def _selftest_load_const():
+    #  A NEGATIVE CONTROL ON THE ENCODER ITSELF, run every time.  It costs microseconds and it
+    #  checks the one piece of arithmetic in this file that is easy to get silently wrong.
+    for v in (0x00000000, 0x00001000, 0x00008000, 0x0000ffff, 0x20000000,
+              0x5a5a5a5a, 0x20018000, 0xdeadbeef, 0x0001ffff):
+        hi, lo = (v >> 16) & 0xffff, v & 0xffff
+        eff_hi = (hi + 1) & 0xffff if lo & 0x8000 else hi
+        eff_lo = lo - 0x10000 if lo & 0x8000 else lo
+        got = ((eff_hi << 16) + eff_lo) & 0xffffffff
+        if got != v:
+            print("ENCODER SELFTEST FAILED for 0x%08x -> 0x%08x" % (v, got))
+            return False
+    return True
+
+# ---------------------------------------------------------------- the session
+def session(cmds, settle=1.6, spin=1.8):
+    pid, fd = pty.fork()
+    if pid == 0:
+        os.execv(BIN, [BIN, "-V", "-x", "-E", "alpha", "-e", MACH, "-M", "64",
+                       "0x20000000:" + DUMMY])
+        os._exit(127)
+    buf = ""
+    def rd(t):
+        nonlocal buf
+        end = time.time() + t
+        while time.time() < end:
+            r, _, _ = select.select([fd], [], [], 0.1)
+            if not r:
+                continue
+            try:
+                d = os.read(fd, 65536)
+                if not d:
+                    return False
+                buf += d.decode("latin-1", "replace")
+            except OSError:
+                return False
+        return True
+    alive = rd(settle)
+    for i, c in enumerate(cmds):
+        try:
+            os.write(fd, (c + "\n").encode("latin-1"))
+        except OSError:
+            alive = False; break
+        if not rd(spin if i == len(cmds) - 1 else 0.25):
+            alive = False; break
+    try:
+        os.write(fd, b"quit\n"); rd(0.4)
+    except OSError:
+        pass
+    try:
+        os.close(fd)
+    except OSError:
+        pass
+    return buf.replace("\r", ""), alive
+
+def printed(t, reg):
+    m = re.search(r"print\s+%s\s*\n\s*(0x[0-9a-f]+)" % reg, t)
+    return "absent" if not m else "0x%x" % int(m.group(1), 16)
+
+def run_ops(ops, at=0x20010000):
+    put = ["put w 0x%x, 0x%08x" % (at + 4 * i, op) for i, op in enumerate(ops)]
+    return put + ["pc=0x%x" % at, "step %d" % len(ops)]
+
+# ---------------------------------------------------------------- go
+DUMMY = os.path.join(os.path.dirname(os.path.abspath(__file__)), "alpha_dummy.bin")
+if not os.path.exists(DUMMY):
+    with open(DUMMY, "wb") as f:
+        f.write(b"\x00" * 8)
+
+print("alpha_harness_probe -- binary=%s label=%s machine=%s" % (BIN, LABEL, MACH))
+print("%-18s %-20s %-20s %-40s %s" % ("row", "got", "want", "note", ""))
+
+row("encoder", "ok" if _selftest_load_const() else "FAILED", "ok",
+    "load_const's sign correction, 9 vectors, offline")
+
+#  CONTROL 1 -- LIVENESS.  A known value through a REAL guest store and a REAL guest load.
+#  If the scratch address is not writable RAM this row is RED, which is the point: it tells us
+#  the address is wrong rather than letting a later row blame the emulator.
+#  REGISTER NUMBERS, with their DEBUGGER NAMES beside them.  The two are offset by one and
+#  that offset has already produced one wrong row in this file: register 1 prints as "t0",
+#  register 2 as "t1", register 3 as "t2" (ALPHA_REG_NAMES, cpu_alpha.h).
+T0, T1, T2, T3 = 1, 2, 3, 4   # debugger names: "t0", "t1", "t2", "t3"
+SCRATCH, LIVE_VAL = 0x20020000, 0x5a5a5a5a
+ops = load_const(T0, SCRATCH) + load_const(T1, LIVE_VAL) + [STQ(T1, 0, T0), LDQ(T2, 0, T0)]
+#  PRINT THE REGISTER THE LOAD ACTUALLY TARGETS.  T2 is register NUMBER 3, and
+#  ALPHA_REG_NAMES calls register 3 "t2" -- an earlier draft printed "t1" (register 2), which
+#  the load never writes, so the row would have been reading an untouched register.  That is
+#  the hand-assembled-encoding trap in its purest form: a wrong register field yields a value
+#  no oracle here would have questioned.
+t, alive = session(run_ops(ops) + ["print t2"])
+row("live", printed(t, "t2") if alive else "died", "0x%x" % LIVE_VAL,
+    "LIVENESS: guest store then load, through RAM")
+
+#  CONTROL 2 -- did the CPU execute at all?  A register written by a guest instruction and
+#  nothing else.  It separates "the store/load path is wrong" from "no instruction ran", which
+#  the liveness row alone cannot distinguish -- both present as a wrong value.
+t, alive = session(run_ops(load_const(T2, 0x1234)) + ["print t2"])
+row("exec", printed(t, "t2") if alive else "died", "0x1234",
+    "a guest LDAH/LDA pair reached a register")
+
+#  CONTROL 3 -- THE PALCODE MODE GATE.  `call_pal 0x30' is privileged: in user mode
+#  alpha_palcode() prints "Privileged Alpha PALcode called from user mode" and sets
+#  cpu->running = 0 BEFORE its switch, so the handler never runs.  This row proves we are on the
+#  kernel-mode side of that gate, by asserting the diagnostic is ABSENT and the machine is still
+#  alive after issuing the call.
+#
+#  *** IT IS A CONTROL ON A PREMISE THAT WAS ALREADY WRONG ONCE. ***  I wrote in this file's own
+#  header that dispatch has "no gating of any kind"; a seat read alpha_palcode() and corrected
+#  it.  A harness that assumed kernel mode and hit the gate would report a dead machine and look
+#  like a pty or encoding fault -- so the assumption is measured here instead of trusted.
+t, alive = session(run_ops([CALL_PAL(0x30)]) + ["print v0"])
+gated = "gated" if "user mode" in t else "not gated"
+row("palgate", gated, "not gated",
+    "call_pal 0x30 is privileged; we must be in kernel mode")
+row("palalive", "alive" if alive else "died", "alive",
+    "the machine survives a swpctx call at all")
+
+# ---------------------------------------------------------------- the swpctx witness
+#  *** THE FIRST DESIGN WAS SELF-DEFEATING AND A SEAT REFUTED IT.  The defect DESTROYS THE PATH
+#  THE WITNESS NEEDS TO OBSERVE IT, and that is why everything below lives in K0SEG. ***
+#
+#  The naive design -- put both PCBs in ordinary RAM, swpctx twice, read ctx_A+16 -- fails because
+#  `alpha_translate_v2p' only identity-maps while `base == 0':
+#
+#      if (!userMode && (vaddr >= ALPHA_K0SEG_BASE && vaddr <= ALPHA_K0SEG_END)) {
+#              *return_paddr = vaddr & 0x000003ffffffffffULL;   /* checked FIRST */
+#              return 2; }
+#      ...
+#      if (!userMode && base == 0) { *return_paddr = vaddr & ...; ... }   /* the "UGLY hack" */
+#
+#  The moment the buggy line makes `apcb_ptbr' nonzero, `base != 0', the hack stops applying, and
+#  every later access -- INCLUDING INSTRUCTION FETCH -- falls into a page-table walk over garbage.
+#  One vaddr in that path even has an `exit(1)'.  So the second `call_pal' never lands and the save
+#  that is supposed to publish the defect never happens.
+#
+#  AND THE OBVIOUS FALLBACK FAILS TOO, by symmetry: putting the marker in `ptbr' instead of `flags'
+#  makes the identity map die on the FIXED build rather than on the defective one.  **No nonzero
+#  value anywhere in that field survives either polarity**, so K0SEG is not the better option -- it
+#  is the only one.
+#
+#  K0SEG is checked BEFORE `base' is read, so a K0SEG access is immune to whatever `apcb_ptbr'
+#  holds.  Code, both PCBs and the pointer vector therefore all live there.
+#
+#  *** THE BOOTSTRAP, because lda/ldah build 32-bit constants and K0SEG needs bit 63..42: ***
+#  the 64-bit pointers are written into memory with the debugger's `put d' (64-bit; note `put q' is
+#  128-bit in this debugger) and the guest loads them with ONE identity-mapped `ldq' issued while
+#  `ptbr' is still zero.  After that every address the guest uses is a K0SEG value held in a
+#  register, and nothing depends on translation state again.
+K0SEG      = 0xfffffc0000000000
+def k0(p):  return K0SEG | p
+
+P_CODE, P_PTRV, P_PCB_A, P_PCB_B = 0x20040000, 0x20020000, 0x20030000, 0x20031000
+MARKER = 0x00000000cafe1234          # goes in A.flags; must not be 0 and must not be A.ptbr
+
+#  PCB field offsets, read off the save block in cpu_alpha_palcode.c:
+#      +0 ksp  +8 usp  +16 ptbr  +24 cpc(32)  +28 asn(32)  +32 unique  +40 flags  +48/56 decrsv
+def pcb(base, ptbr, flags):
+    return ["put d 0x%x, 0x%x" % (base + 0,  0),
+            "put d 0x%x, 0x%x" % (base + 8,  0),
+            "put d 0x%x, 0x%x" % (base + 16, ptbr),
+            "put d 0x%x, 0x%x" % (base + 32, 0),
+            "put d 0x%x, 0x%x" % (base + 40, flags),
+            "put d 0x%x, 0x%x" % (base + 48, 0),
+            "put d 0x%x, 0x%x" % (base + 56, 0)]
+
+#  A.ptbr = 0 so the CORRECT build leaves apcb_ptbr zero; A.flags = MARKER so the DEFECTIVE build
+#  copies MARKER into apcb_ptbr.  The second swpctx then saves apcb_ptbr into A+16, and that word
+#  is the oracle: 0 if correct, MARKER if the defect is present.
+setup = pcb(P_PCB_A, 0, MARKER) + pcb(P_PCB_B, 0, 0)
+setup += ["put d 0x%x, 0x%x" % (P_PTRV + 0,  k0(P_PCB_A)),
+          "put d 0x%x, 0x%x" % (P_PTRV + 8,  k0(P_PCB_B)),
+          "put d 0x%x, 0x%x" % (P_PTRV + 16, k0(P_PTRV))]
+
+A0 = 16
+prog = (load_const(T0, P_PTRV)          # identity-mapped, while ptbr is still 0
+        + [LDQ(T0, 16, T0),             # t0 = K0SEG alias of the pointer vector
+           LDQ(A0, 0, T0),              # a0 = &PCB_A  (K0SEG)
+           LDQ(T3, 0, T0),              # t3 = &PCB_A  kept for the readback
+           CALL_PAL(0x30),              # swpctx -> loads A; the defect sets apcb_ptbr = MARKER
+           LDQ(A0, 8, T0),              # a0 = &PCB_B  -- t0 is K0SEG, so this survives
+           CALL_PAL(0x30),              # swpctx -> SAVES apcb_ptbr into PCB_A+16
+           LDQ(T2, 16, T3)])            # t2 = that saved word
+
+code_cmds = ["put w 0x%x, 0x%08x" % (k0(P_CODE) + 4 * i, op) for i, op in enumerate(prog)]
+t, alive = session(setup + code_cmds + ["pc=0x%x" % k0(P_CODE), "step %d" % len(prog), "print t2"])
+got = printed(t, "t2") if alive else "died"
+
+row("swpctx alive", "alive" if alive else "died", "alive",
+    "the guest survives two swpctx calls in K0SEG")
+
+#  THE DEFECT ROW.  RED on the committed build (it reads MARKER), GREEN once :282 assigns
+#  apcb_flags instead of apcb_ptbr.
+row("swpctx ptbr", got, "0x0",
+    "PCB_A+16 must hold A.ptbr (0), not A.flags")
+
+#  CLAUSE (b): pins the SPECIFIC wrong value, so a reinstatement of the defect is distinguishable
+#  from any other way of getting the word wrong.
+row("swpctx notflags", got, "0x%x" % MARKER,
+    "must not be A.flags -- that is the defect's exact signature", negate=True)
+
+ok = sum(1 for _, o in rows if o)
+print("")
+print("ALPHAHARNESS_RESULT=%d/%d" % (ok, len(rows)))
+print("ALPHAHARNESS_DONE")
+sys.exit(0 if ok == len(rows) else 1)
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n 'debugger_cmd_(put|print|step|quit)|put \\[|put [bhdqw]|case .[dqw].|memory_rw|debugger_readline|single_step|register_match' GXEMUL-SEC/src/debugger" in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "Get-Content -LiteralPath 'GXEMUL-SEC/src/cpus/memory_alpha.c'; Get-Content -LiteralPath 'GXEMUL-SEC/src/machines/machine_alpha.c' -TotalCount 300" in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$p = '"'GXEMUL-SEC/regress/alpha_harness_probe.py'; "'$n = 0; Get-Content -LiteralPath $p | ForEach-Object { $n++; '"'{0,4}: {1}' -f "'$n, $_ }' in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n 'memset.*cpu|calloc.*cpu|cd\\.alpha\\.(ps|pcb|ctx)|physical_ram|memory_amount|DEFAULT_RAM|initial.*pc|alpha_regname|register_match' GXEMUL-SEC/src/cpus/cpu_alpha.c GXEMUL-SEC/src/cpus/cpu.c GXEMUL-SEC/src/machines/machine_alpha.c GXEMUL-SEC/src/debugger/debugger_expr.c; rg --files GXEMUL-SEC/src -g '*memory*' -g '*load*' -g '*dyntrans*'; rg --files GXEMUL-SEC/regress -g '*.py'" in C:\DocumentNoSnc\CC\GXEMUL
+ succeeded in 225ms:
+GXEMUL-SEC/src/debugger\debugger.c:70:bool single_step = false;
+GXEMUL-SEC/src/debugger\debugger.c:71:bool about_to_enter_single_step = false;
+GXEMUL-SEC/src/debugger\debugger.c:73:volatile int single_step_breakpoint = 0;
+GXEMUL-SEC/src/debugger\debugger.c:81:static volatile bool exit_debugger_to_continue_single_stepping;
+GXEMUL-SEC/src/debugger\debugger.c:149:	if (single_step) {
+GXEMUL-SEC/src/debugger\debugger.c:158:		 * NOTE: Setting single_step = true directly is not wise,
+GXEMUL-SEC/src/debugger\debugger.c:161:		about_to_enter_single_step = true;
+GXEMUL-SEC/src/debugger\debugger.c:163:		/*  Discard any chars in the input queue:  */
+GXEMUL-SEC/src/debugger\debugger.c:259:			debugger_cmd_print(m, left);
+GXEMUL-SEC/src/debugger\debugger.c:270:		single_step_breakpoint = 0;
+GXEMUL-SEC/src/debugger\debugger.c:367: *  debugger_readline():
+GXEMUL-SEC/src/debugger\debugger.c:371:static char *debugger_readline(void)
+GXEMUL-SEC/src/debugger\debugger.c:803:	exit_debugger_to_continue_single_stepping = false;
+GXEMUL-SEC/src/debugger\debugger.c:807:		cmd = debugger_readline();
+GXEMUL-SEC/src/debugger\debugger.c:835:		if (exit_debugger_to_continue_single_stepping)
+GXEMUL-SEC/src/debugger\debugger.c:849:	single_step = false;
+GXEMUL-SEC/src/debugger\debugger_cmds.c:488:		    write to it now traps to memory_rw.  */
+GXEMUL-SEC/src/debugger\debugger_cmds.c:716:		r = c->memory_rw(c, mem, addr, &buf[0], sizeof(buf),
+GXEMUL-SEC/src/debugger\debugger_cmds.c:957:		case 'w':
+GXEMUL-SEC/src/debugger\debugger_cmds.c:965:		case 'd':
+GXEMUL-SEC/src/debugger\debugger_cmds.c:969:		case 'q':
+GXEMUL-SEC/src/debugger\debugger_cmds.c:1006:			res = c->memory_rw(c, c->mem, base + fill,
+GXEMUL-SEC/src/debugger\debugger_cmds.c:1311: *  debugger_cmd_print():
+GXEMUL-SEC/src/debugger\debugger_cmds.c:1313:static void debugger_cmd_print(struct machine *m, char *args)
+GXEMUL-SEC/src/debugger\debugger_cmds.c:1351: *  debugger_cmd_put():
+GXEMUL-SEC/src/debugger\debugger_cmds.c:1353:static void debugger_cmd_put(struct machine *m, char *args)
+GXEMUL-SEC/src/debugger\debugger_cmds.c:1365:	/*  syntax: put [b|h|w|d|q] addr, data  */
+GXEMUL-SEC/src/debugger\debugger_cmds.c:1396:		printf("syntax: put [b|h|w|d|q|s|z] addr, data\n");
+GXEMUL-SEC/src/debugger\debugger_cmds.c:1459:			res = m->cpus[0]->memory_rw(m->cpus[0],
+GXEMUL-SEC/src/debugger\debugger_cmds.c:1506:		res = m->cpus[0]->memory_rw(m->cpus[0], m->cpus[0]->mem, addr,
+GXEMUL-SEC/src/debugger\debugger_cmds.c:1528:	case 'w':
+GXEMUL-SEC/src/debugger\debugger_cmds.c:1548:	case 'd':
+GXEMUL-SEC/src/debugger\debugger_cmds.c:1563:	case 'q':
+GXEMUL-SEC/src/debugger\debugger_cmds.c:1627: *  debugger_cmd_quit():
+GXEMUL-SEC/src/debugger\debugger_cmds.c:1629:static void debugger_cmd_quit(struct machine *m, char *args)
+GXEMUL-SEC/src/debugger\debugger_cmds.c:1677: *  debugger_cmd_step():
+GXEMUL-SEC/src/debugger\debugger_cmds.c:1685:static void debugger_cmd_step(struct machine *m, char *args)
+GXEMUL-SEC/src/debugger\debugger_cmds.c:1716:			exit_debugger_to_continue_single_stepping = true;
+GXEMUL-SEC/src/debugger\debugger_cmds.c:1738:	exit_debugger_to_continue_single_stepping = true;
+GXEMUL-SEC/src/debugger\debugger_cmds.c:1918:			if (c->memory_rw(c, mem, actualaddr+i, buf+i, 1, MEM_READ,
+GXEMUL-SEC/src/debugger\debugger_cmds.c:2064:	{ "print", "expr", 0, debugger_cmd_print,
+GXEMUL-SEC/src/debugger\debugger_cmds.c:2067:	{ "put", "[b|h|w|d|q|s|z] addr, data", 0, debugger_cmd_put,
+GXEMUL-SEC/src/debugger\debugger_cmds.c:2073:	{ "quit", "", 0, debugger_cmd_quit,
+GXEMUL-SEC/src/debugger\debugger_cmds.c:2085:	{ "step", "[n|call]", 0, debugger_cmd_step,
+
+ succeeded in 311ms:
+GXEMUL-SEC/src/machines/machine_alpha.c:176:	    (machine->physical_ram_in_mb/2 - 16) * 128);
+GXEMUL-SEC/src/machines/machine_alpha.c:179:	    machine->physical_ram_in_mb/2 * 128);
+GXEMUL-SEC/src/machines/machine_alpha.c:182:	    (machine->physical_ram_in_mb/2) * 128);
+GXEMUL-SEC/src/machines/machine_alpha.c:230:MACHINE_DEFAULT_RAM(alpha)
+GXEMUL-SEC/src/machines/machine_alpha.c:232:	machine->physical_ram_in_mb = 128;
+GXEMUL-SEC/src/cpus/cpu.c:320:	memset(cpu->translation_cache, 0, sizeof(uint32_t)
+GXEMUL-SEC/src/cpus/cpu.c:558:	memset(fp, 0, sizeof(struct cpu_family));
+GXEMUL-SEC/src/cpus/cpu_alpha.c:56:static const char *alpha_regname[N_ALPHA_REGS] = ALPHA_REG_NAMES; 
+GXEMUL-SEC/src/cpus/cpu_alpha.c:107:	cpu->cd.alpha.ctx = 0x10100;
+GXEMUL-SEC/src/cpus/cpu_alpha.c:111:		CPU_SETTINGS_ADD_REGISTER64(alpha_regname[i],
+GXEMUL-SEC/src/cpus/cpu_alpha.c:186:				debug("%3s = 0x%016" PRIx64, alpha_regname[r],
+GXEMUL-SEC/src/cpus/cpu_alpha.c:245:		debug("(%s)", alpha_regname[rb]);
+GXEMUL-SEC/src/cpus/cpu_alpha.c:303:		debug("lda%s\t%s,", opcode == 9? "h" : "", alpha_regname[ra]);
+GXEMUL-SEC/src/cpus/cpu_alpha.c:361:				debug("%s,", alpha_regname[ra]);
+GXEMUL-SEC/src/cpus/cpu_alpha.c:397:			    alpha_regname[ra], (rb << 3) + (func >> 8),
+GXEMUL-SEC/src/cpus/cpu_alpha.c:398:			    alpha_regname[rc]);
+GXEMUL-SEC/src/cpus/cpu_alpha.c:400:			debug("%s\t%s,%s,%s\n", mnem, alpha_regname[ra],
+GXEMUL-SEC/src/cpus/cpu_alpha.c:401:			    alpha_regname[rb], alpha_regname[rc]);
+GXEMUL-SEC/src/cpus/cpu_alpha.c:432:				debug("clr\t%s\n", alpha_regname[rc]);
+GXEMUL-SEC/src/cpus/cpu_alpha.c:434:				debug("mov\t%s,%s\n", alpha_regname[rb],
+GXEMUL-SEC/src/cpus/cpu_alpha.c:435:				    alpha_regname[rc]);
+GXEMUL-SEC/src/cpus/cpu_alpha.c:437:				debug("mov\t%s,%s\n", alpha_regname[ra],
+GXEMUL-SEC/src/cpus/cpu_alpha.c:438:				    alpha_regname[rc]);
+GXEMUL-SEC/src/cpus/cpu_alpha.c:441:			debug("%s\t%s\n", mnem, alpha_regname[rc]);
+GXEMUL-SEC/src/cpus/cpu_alpha.c:444:			    alpha_regname[ra], (rb << 3) + (func >> 8),
+GXEMUL-SEC/src/cpus/cpu_alpha.c:445:			    alpha_regname[rc]);
+GXEMUL-SEC/src/cpus/cpu_alpha.c:447:			debug("%s\t%s,%s,%s\n", mnem, alpha_regname[ra],
+GXEMUL-SEC/src/cpus/cpu_alpha.c:448:			    alpha_regname[rb], alpha_regname[rc]);
+GXEMUL-SEC/src/cpus/cpu_alpha.c:485:			    alpha_regname[ra], (rb << 3) + (func >> 8),
+GXEMUL-SEC/src/cpus/cpu_alpha.c:486:			    alpha_regname[rc]);
+GXEMUL-SEC/src/cpus/cpu_alpha.c:488:			debug("%s\t%s,%s,%s\n", mnem, alpha_regname[ra],
+GXEMUL-SEC/src/cpus/cpu_alpha.c:489:			    alpha_regname[rb], alpha_regname[rc]);
+GXEMUL-SEC/src/cpus/cpu_alpha.c:505:			    alpha_regname[ra], (rb << 3) + (func >> 8),
+GXEMUL-SEC/src/cpus/cpu_alpha.c:506:			    alpha_regname[rc]);
+GXEMUL-SEC/src/cpus/cpu_alpha.c:508:			debug("%s\t%s,%s,%s\n", mnem, alpha_regname[ra],
+GXEMUL-SEC/src/cpus/cpu_alpha.c:509:			    alpha_regname[rb], alpha_regname[rc]);
+GXEMUL-SEC/src/cpus/cpu_alpha.c:574:				debug("(%s)", alpha_regname[rb]);
+GXEMUL-SEC/src/cpus/cpu_alpha.c:576:				debug("%s", alpha_regname[ra]);
+GXEMUL-SEC/src/cpus/cpu_alpha.c:592:			debug("\t%s,", alpha_regname[ra]);
+GXEMUL-SEC/src/cpus/cpu_alpha.c:593:			debug("(%s),", alpha_regname[rb]);
+GXEMUL-SEC/src/cpus/cpu_alpha.c:615:			debug("%s,", alpha_regname[ra]);
+GXEMUL-SEC/src/cpus/cpu_alpha.c:655:			debug("%s,", alpha_regname[ra]);
+GXEMUL-SEC/src\core\memory.o
+GXEMUL-SEC/src\core\memory.c
+GXEMUL-SEC/src\cpus\tmp_ppc_loadstore.c
+GXEMUL-SEC/src\cpus\tmp_mips_loadstore_multi.c
+GXEMUL-SEC/src\cpus\tmp_mips_loadstore.c
+GXEMUL-SEC/src\cpus\tmp_m88k_loadstore.c
+GXEMUL-SEC/src\cpus\tmp_arm_loadstore_p1_u1_w1.o
+GXEMUL-SEC/src\cpus\tmp_arm_loadstore_p1_u1_w1.c
+GXEMUL-SEC/src\cpus\tmp_arm_loadstore_p1_u1_w0.o
+GXEMUL-SEC/src\cpus\tmp_arm_loadstore_p1_u1_w0.c
+GXEMUL-SEC/src\cpus\tmp_arm_loadstore_p1_u0_w1.o
+GXEMUL-SEC/src\cpus\tmp_arm_loadstore_p1_u0_w1.c
+GXEMUL-SEC/src\cpus\tmp_arm_loadstore_p1_u0_w0.o
+GXEMUL-SEC/src\cpus\tmp_arm_loadstore_p1_u0_w0.c
+GXEMUL-SEC/src\cpus\tmp_arm_loadstore_p0_u1_w1.o
+GXEMUL-SEC/src\cpus\tmp_arm_loadstore_p0_u1_w1.c
+GXEMUL-SEC/src\cpus\tmp_arm_loadstore_p0_u1_w0.o
+GXEMUL-SEC/src\cpus\tmp_arm_loadstore_p0_u1_w0.c
+GXEMUL-SEC/src\cpus\tmp_arm_loadstore_p0_u0_w1.o
+GXEMUL-SEC/src\cpus\tmp_arm_loadstore_p0_u0_w1.c
+GXEMUL-SEC/src\cpus\tmp_arm_loadstore_p0_u0_w0.o
+GXEMUL-SEC/src\cpus\tmp_arm_loadstore_p0_u0_w0.c
+GXEMUL-SEC/src\cpus\tmp_arm_loadstore.o
+GXEMUL-SEC/src\cpus\tmp_arm_loadstore.c
+GXEMUL-SEC/src\cpus\memory_sh.o
+GXEMUL-SEC/src\cpus\memory_sh.c
+GXEMUL-SEC/src\cpus\memory_rw.c
+GXEMUL-SEC/src\cpus\memory_ppc.c
+GXEMUL-SEC/src\cpus\memory_mips_v2p.c
+GXEMUL-SEC/src\cpus\memory_mips.c
+GXEMUL-SEC/src\cpus\memory_m88k.o
+GXEMUL-SEC/src\cpus\memory_m88k.c
+GXEMUL-SEC/src\cpus\memory_arm.o
+GXEMUL-SEC/src\cpus\memory_arm.c
+GXEMUL-SEC/src\cpus\memory_alpha.o
+GXEMUL-SEC/src\cpus\memory_alpha.c
+GXEMUL-SEC/src\cpus\generate_ppc_loadstore.c
+GXEMUL-SEC/src\cpus\generate_ppc_loadstore
+GXEMUL-SEC/src\cpus\generate_mips_loadstore_multi.c
+GXEMUL-SEC/src\cpus\generate_mips_loadstore_multi
+GXEMUL-SEC/src\cpus\generate_mips_loadstore.c
+GXEMUL-SEC/src\cpus\generate_mips_loadstore
+GXEMUL-SEC/src\cpus\generate_m88k_loadstore.c
+GXEMUL-SEC/src\cpus\generate_m88k_loadstore
+GXEMUL-SEC/src\cpus\generate_arm_loadstore.c
+GXEMUL-SEC/src\cpus\generate_arm_loadstore
+GXEMUL-SEC/src\cpus\cpu_ppc_instr_loadstore.c
+GXEMUL-SEC/src\cpus\cpu_mips_instr_loadstore.c
+GXEMUL-SEC/src\cpus\cpu_m88k_instr_loadstore.c
+GXEMUL-SEC/src\cpus\cpu_dyntrans.c
+GXEMUL-SEC/src\cpus\cpu_arm_instr_loadstore.c
+GXEMUL-SEC/src\cpus\cpu_alpha_instr_loadstore.c
+GXEMUL-SEC/src\include\memory.h
+GXEMUL-SEC/regress\wdc_latch_census.py
+GXEMUL-SEC/regress\wdc_flood_probe.py
+GXEMUL-SEC/regress\wdc_altoffset_sig_probe.py
+GXEMUL-SEC/regress\wdc_altoffset_probe.py
+GXEMUL-SEC/regress\wdc_altoffset_4bit_probe.py
+GXEMUL-SEC/regress\wdc_addtoinbuf_probe.py
+GXEMUL-SEC/regress\sh_tlbmulti_probe.py
+GXEMUL-SEC/regress\sh_rounding_probe.py
+GXEMUL-SEC/regress\sh_pclock_probe.py
+GXEMUL-SEC/regress\sh_iprbcd_probe.py
+GXEMUL-SEC/regress\sh_intprio_probe.py
+GXEMUL-SEC/regress\sh_halt_probe.py
+GXEMUL-SEC/regress\sh4_val_witness.py
+GXEMUL-SEC/regress\sh4_val_probe.py
+GXEMUL-SEC/regress\sh4_tlbda2_witness.py
+GXEMUL-SEC/regress\sh4_tlbda2_probe.py
+GXEMUL-SEC/regress\sh4_sci_witness.py
+GXEMUL-SEC/regress\sh4_sci_probe.py
+GXEMUL-SEC/regress\sh4_rtcsr_witness.py
+GXEMUL-SEC/regress\sh4_rtcsr_probe.py
+GXEMUL-SEC/regress\sh4_pcic_probe.py
+GXEMUL-SEC/regress\sh4_chcr_witness.py
+GXEMUL-SEC/regress\sh4_chcr_probe.py
+GXEMUL-SEC/regress\sh4_bsc_width_probe.py
+GXEMUL-SEC/regress\sh4pcic_witness.py
+GXEMUL-SEC/regress\sgi_re_width_probe.py
+GXEMUL-SEC/regress\sgi_re_unmapped_probe.py
+GXEMUL-SEC/regress\sgi_re_rgb_probe.py
+GXEMUL-SEC/regress\sgi_re_randompixel_probe.py
+GXEMUL-SEC/regress\sgi_eaddr_probe.py
+GXEMUL-SEC/regress\sgi_de_width_probe.py
+GXEMUL-SEC/regress\sgi_de_primop_probe.py
+GXEMUL-SEC/regress\selftest_logdir.py
+GXEMUL-SEC/regress\selftest_inactivity.py
+GXEMUL-SEC/regress\selftest_budget.py
+GXEMUL-SEC/regress\selftest_absorb.py
+GXEMUL-SEC/regress\selfmutant.py
+GXEMUL-SEC/regress\readiness_predicate_test.py
+GXEMUL-SEC/regress\ppc_rounding_probe.py
+GXEMUL-SEC/regress\ppc_halt_probe.py
+GXEMUL-SEC/regress\pit8253_latch_probe.py
+GXEMUL-SEC/regress\pcc2_width_witness.py
+GXEMUL-SEC/regress\pcc2_width_probe.py
+GXEMUL-SEC/regress\pcc2_default_probe.py
+GXEMUL-SEC/regress\mips_subnorm_probe.py
+GXEMUL-SEC/regress\mips_rounding_probe.py
+GXEMUL-SEC/regress\mips_fold_probe.py
+GXEMUL-SEC/regress\mips_fixedmode_probe.py
+GXEMUL-SEC/regress\m88k_rounding_probe.py
+GXEMUL-SEC/regress\m88k_idle_probe.py
+GXEMUL-SEC/regress\m88k_exc_probe.py
+GXEMUL-SEC/regress\m8820x_sites_probe.py
+GXEMUL-SEC/regress\luna_intmask_probe.py
+GXEMUL-SEC/regress\luna_absentcpu_probe.py
+GXEMUL-SEC/regress\hpcmips_ctor_probe.py
+GXEMUL-SEC/regress\hpcabort_witness.py
+GXEMUL-SEC/regress\gdrom_toclen_probe.py
+GXEMUL-SEC/regress\gdrom_default_probe.py
+GXEMUL-SEC/regress\gdrom_decline_probe.py
+GXEMUL-SEC/regress\gdrom_data_probe.py
+GXEMUL-SEC/regress\gdrom_cond_probe.py
+GXEMUL-SEC/regress\footbridge_sites_probe.py
+GXEMUL-SEC/regress\fbpending_witness.py
+GXEMUL-SEC/regress\fbpending_drain_probe.py
+GXEMUL-SEC/regress\drive_guest.py
+GXEMUL-SEC/regress\diag_div_sweep.py
+GXEMUL-SEC/regress\asic_badaddr_probe.py
+GXEMUL-SEC/regress\absorb_census.py
+GXEMUL-SEC/regress\artifacts\widthkillclass\witness_20260830\sgi_re_width_witness.py
+GXEMUL-SEC/regress\artifacts\widthkillclass\witness_20260830\sgi_re_width_witness.earlier.py
+GXEMUL-SEC/regress\artifacts\widthkillclass\opus_p1_20260830\opus497_read_probe.py
+GXEMUL-SEC/regress\artifacts\widthkillclass\opus_p1_20260830\latch_probe.py
+GXEMUL-SEC/regress\artifacts\widthkillclass\opus_p1_20260830\apply_mutant.py
+GXEMUL-SEC/regress\artifacts\widthkillclass\opus_p1_20260830\apply_m2.py
+GXEMUL-SEC/regress\artifacts\widthkillclass\opus_p1_20260830\apply_fix.py
+GXEMUL-SEC/regress\artifacts\wdcaltctrlcov\killtable_20260827\mut482_RECONSTRUCTED.py
+GXEMUL-SEC/regress\artifacts\wdcaltctrlcov\killtable_20260827\mk482.py
+GXEMUL-SEC/regress\artifacts\sgideprimop\killtable_20260903_table13_xfer\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\sgideprimop\killtable_20260903_table12_regs\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\widthkillclass\opus_impl_20260830\strengthen_comment.py
+GXEMUL-SEC/regress\artifacts\widthkillclass\opus_impl_20260830\sgi_re_width_probe.py
+GXEMUL-SEC/regress\artifacts\widthkillclass\opus_impl_20260830\mutate497_v2.py
+GXEMUL-SEC/regress\artifacts\widthkillclass\opus_impl_20260830\mutate497.py
+GXEMUL-SEC/regress\artifacts\widthkillclass\opus_impl_20260830\move_warned.py
+GXEMUL-SEC/regress\artifacts\widthkillclass\opus_impl_20260830\apply_fix497.py
+GXEMUL-SEC/regress\artifacts\wdcaltctrl\killtable_20260827\rows481b.py
+GXEMUL-SEC/regress\artifacts\wdcaltctrl\killtable_20260827\mutalt.py
+GXEMUL-SEC/regress\artifacts\wdcaltctrl\killtable_20260827\mkaltctrl.py
+GXEMUL-SEC/regress\artifacts\wdcaltctrl\killtable_20260827\gatealt2.py
+GXEMUL-SEC/regress\artifacts\wdcaltctrl\killtable_20260827\gatealt.py
+GXEMUL-SEC/regress\artifacts\wdcaltctrl\killtable_20260827\fixwarrant481.py
+GXEMUL-SEC/regress\artifacts\wdcaltctrl\killtable_20260827\fixaltctrl.py
+GXEMUL-SEC/regress\artifacts\sgirebufuninit\scan_len.py
+GXEMUL-SEC/regress\artifacts\sgirebufuninit\scan_fill.py
+GXEMUL-SEC/regress\artifacts\wdcaddtoinbufbound\rung3_20260830\mkfix.py
+GXEMUL-SEC/regress\artifacts\wdcaddtoinbufbound\rung3_20260830\mkcd.py
+GXEMUL-SEC/regress\artifacts\wdcaddtoinbufbound\rung3_20260830\frozen_wave_20260830_102209.py
+GXEMUL-SEC/regress\artifacts\wdcaddtoinbufbound\rung3_20260830\addtoinbuf_rung3_probe.py
+GXEMUL-SEC/regress\artifacts\wdcringambig\rung3_20260827\wdcring_rung3_probe.py
+GXEMUL-SEC/regress\artifacts\sgirandompixel\witness_20260906\probe.frozen.py
+GXEMUL-SEC/regress\artifacts\wdccdbmidxfer\killtable2_20260827\mk477b.py
+GXEMUL-SEC/regress\artifacts\wdcringambig\repro_20260827\author_repro484.py
+GXEMUL-SEC/regress\artifacts\sgideprimop\killtable_20260902_table4\negctl_n25_rectset_probe.py
+GXEMUL-SEC/regress\artifacts\makercfalse\hook_controls_20260830\clusterctl.py
+GXEMUL-SEC/regress\artifacts\shortread\round_20260827\shortread_witness.py
+GXEMUL-SEC/regress\artifacts\sgirandompixel\killtable\probe.frozen.py
+GXEMUL-SEC/regress\artifacts\makercfalse\hook_controls_20260829\hookctl.py
+GXEMUL-SEC/regress\artifacts\wdccallsite\killtable_20260827\q4check.py
+GXEMUL-SEC/regress\artifacts\wdccallsite\killtable_20260827\q3check.py
+GXEMUL-SEC/regress\artifacts\wdccallsite\killtable_20260827\mut480b.py
+GXEMUL-SEC/regress\artifacts\wdccallsite\killtable_20260827\mut480.py
+GXEMUL-SEC/regress\artifacts\wdccallsite\killtable_20260827\mk480b.py
+GXEMUL-SEC/regress\artifacts\wdccallsite\killtable_20260827\mk480.py
+GXEMUL-SEC/regress\artifacts\wdccallsite\killtable_20260827\gatename480.py
+GXEMUL-SEC/regress\artifacts\wdccallsite\killtable_20260827\fixrows480.py
+GXEMUL-SEC/regress\artifacts\sgideprimop\killtable_20260902_table11_closure\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\wdcoddstep\overtaken_20260827\author_odd.py
+GXEMUL-SEC/regress\artifacts\wdcnoirq\witness_20260827\wdcnoirq_rung3_probe.py
+GXEMUL-SEC/regress\artifacts\sgireunmapped\opus_witness_20260830\sgi_re_unmapped_probe.py
+GXEMUL-SEC/regress\artifacts\sgireunmapped\opus_witness_20260830\mkvariant.py
+GXEMUL-SEC/regress\artifacts\wdcaltoffset\witness_20260829\wdcaltoff_rung3_probe.py
+GXEMUL-SEC/regress\artifacts\wdcnoirq\repro_20260827\author_repro485.py
+GXEMUL-SEC/regress\artifacts\wdcaltoffset\witness_20260829\mkfixleg.py
+GXEMUL-SEC/regress\artifacts\sgidewidth\opus_witness_20260831\gxdew_probe_frozen.py
+GXEMUL-SEC/regress\artifacts\sgidewidth\opus_witness_20260831\gxdew_probe2_frozen.py
+GXEMUL-SEC/regress\artifacts\sgidewidth\opus_witness_20260831\gxdew_mz_frozen.py
+GXEMUL-SEC/regress\artifacts\sgidewidth\opus_witness_20260831\gxdew_mzp_frozen.py
+GXEMUL-SEC/regress\artifacts\sgidewidth\opus_witness_20260831\gxdew_mutate2_frozen.py
+GXEMUL-SEC/regress\artifacts\sgidewidth\opus_witness_20260831\gxdew_mr_frozen.py
+GXEMUL-SEC/regress\artifacts\sgidewidth\opus_witness_20260831\gxdew_kill_frozen.py
+GXEMUL-SEC/regress\artifacts\sgidewidth\opus_witness_20260831\gxdew_kill2_frozen.py
+GXEMUL-SEC/regress\artifacts\sgireunmapped\opus_witness_20260830\detector.py
+GXEMUL-SEC/regress\artifacts\wdcaltoffset\opus_p2_20260830\q2_mechanism.py
+GXEMUL-SEC/regress\artifacts\wdcaltoffset\opus_p2_20260830\PROPOSED_wdc_altoffset_4bit_probe.py
+GXEMUL-SEC/regress\artifacts\wdcaltoffset\opus_p2_20260830\mut494p2.py
+GXEMUL-SEC/regress\artifacts\sgidewidth\opus_p2_20260831\probe_frozen.py
+GXEMUL-SEC/regress\artifacts\sgidewidth\opus_p2_20260831\mutate4.py
+GXEMUL-SEC/regress\artifacts\sgidewidth\opus_p2_20260831\mutate3.py
+GXEMUL-SEC/regress\artifacts\sgidewidth\opus_p2_20260831\mutate2.py
+GXEMUL-SEC/regress\artifacts\sgidewidth\opus_p2_20260831\mutate.py
+GXEMUL-SEC/regress\artifacts\sgidewidth\opus_p2_20260831\disc.py
+GXEMUL-SEC/regress\artifacts\wdcaltoffset\mutants_20260830\table_c.py
+GXEMUL-SEC/regress\artifacts\wdcaltoffset\mutants_20260830\table_b.py
+GXEMUL-SEC/regress\artifacts\wdcaltoffset\mutants_20260830\table_a.py
+GXEMUL-SEC/regress\artifacts\wdcaltoffset\mutants_20260830\mkmutants.py
+GXEMUL-SEC/regress\artifacts\wdcnoirq\killtable_20260827\author_rows485.py
+GXEMUL-SEC/regress\artifacts\wdcnoirq\killtable_20260827\author_mut485.py
+GXEMUL-SEC/regress\artifacts\wdcnoirq\killtable_20260827\author_mut11.py
+GXEMUL-SEC/regress\artifacts\wdcnoirq\killtable_20260827\author_legs3.py
+GXEMUL-SEC/regress\artifacts\sgireunmapped\killtable_20260831\mkvariant499.py
+GXEMUL-SEC/regress\artifacts\sgireunmapped\killtable_20260831\l2repair\mkw.py
+GXEMUL-SEC/regress\artifacts\sgireunmapped\killtable_20260831\extra_rows.py
+GXEMUL-SEC/regress\artifacts\sgireunmapped\killtable_20260831\base_slot_probe.py
+GXEMUL-SEC/regress\artifacts\wdcdataoutdrain\killtable_20260827\wiprepro.py
+GXEMUL-SEC/regress\artifacts\wdcdataoutdrain\killtable_20260827\mk478.py
+GXEMUL-SEC/regress\artifacts\sgireunmapped\killtable_20260831\repin2\sgi_re_width_probe.repinned.py
+GXEMUL-SEC/regress\artifacts\sgireunmapped\killtable_20260831\repin2\score500b.py
+GXEMUL-SEC/regress\artifacts\sgireunmapped\killtable_20260831\repin2\score500.py
+GXEMUL-SEC/regress\artifacts\sgireunmapped\killtable_20260831\repin2\mk500.py
+GXEMUL-SEC/regress\artifacts\sgireunmapped\killtable_20260831\pass4\e0_mut.py
+GXEMUL-SEC/regress\arm_writeback_probe.py
+GXEMUL-SEC/regress\arm_strlen_probe.py
+GXEMUL-SEC/regress\arm_memcpy_probe.py
+GXEMUL-SEC/regress\arm_idle_probe.py
+GXEMUL-SEC/regress\arm_fold_marker_probe.py
+GXEMUL-SEC/regress\arm_flags_probe.py
+GXEMUL-SEC/regress\arm_endian_probe.py
+GXEMUL-SEC/regress\arcbios_shift_probe.py
+GXEMUL-SEC/regress\alpha_harness_probe.py
+GXEMUL-SEC/regress\artifacts\wdcdataoutdrain\killtable_20260827\addlocal.py
+GXEMUL-SEC/regress\artifacts\wdcdataoutdrain\killtable_20260827\addflush.py
+GXEMUL-SEC/regress\artifacts\wdcdataoutdrain\killtable_20260827\addannounce.py
+GXEMUL-SEC/regress\artifacts\wdcdataoutdrain\killtable_20260827\addaltctl.py
+GXEMUL-SEC/regress\artifacts\wdcdataoutdrain\killtable_20260827\addaccept.py
+GXEMUL-SEC/regress\artifacts\wdcdataoutdrain\killtable_20260827\drainvar.py
+GXEMUL-SEC/regress\artifacts\wdcdataoutdrain\killtable_20260827\addpkt.py
+GXEMUL-SEC/regress\artifacts\wdcdataoutdrain\killtable_20260827\addphaserow.py
+GXEMUL-SEC/regress\artifacts\wdcdataoutdrain\killtable_20260827\addpartial.py
+GXEMUL-SEC/regress\artifacts\wdcdataoutdrain\killtable_20260827\addp5.py
+GXEMUL-SEC/regress\artifacts\wdcfloodstale\measure_20260827\author_floodstale.py
+GXEMUL-SEC/regress\artifacts\wdcaltctrlfam\killtable_20260827\mk483.py
+GXEMUL-SEC/regress\artifacts\wdcaltctrlfam\killtable_20260827\author_mut483.py
+GXEMUL-SEC/regress\artifacts\wdcaltctrlfam\killtable_20260827\author_fix483c.py
+GXEMUL-SEC/regress\artifacts\wdcaltctrlfam\killtable_20260827\author_fix483b.py
+GXEMUL-SEC/regress\artifacts\wdcaltctrlfam\killtable_20260827\author_fix483.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\killtable14\m88k_exc_probe.frozen14.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\kimi_p5\m88k_exc_probe_v5p2.py
+GXEMUL-SEC/regress\artifacts\sgireunmapped\killtable_20260831\port\repin.py
+GXEMUL-SEC/regress\artifacts\sgireunmapped\killtable_20260831\port\patch_mk2.py
+GXEMUL-SEC/regress\artifacts\sgireunmapped\killtable_20260831\port\patch_mk.py
+GXEMUL-SEC/regress\artifacts\sgireunmapped\killtable_20260831\port\mkvariant499.py
+GXEMUL-SEC/regress\artifacts\wdccmdreset\killtable_20260827\repin479.py
+GXEMUL-SEC/regress\artifacts\wdccmdreset\killtable_20260827\port479.py
+GXEMUL-SEC/regress\artifacts\wdccmdreset\killtable_20260827\mk479.py
+GXEMUL-SEC/regress\artifacts\wdccmdreset\killtable_20260827\fix479.py
+GXEMUL-SEC/regress\artifacts\wdccmdreset\killtable_20260827\addwm.py
+GXEMUL-SEC/regress\artifacts\wdccmdreset\killtable_20260827\addmut479.py
+GXEMUL-SEC/regress\artifacts\wdccmdreset\killtable_20260827\addle.py
+GXEMUL-SEC/regress\artifacts\wdccmdreset\killtable_20260827\adddevctl.py
+GXEMUL-SEC/regress\artifacts\wdccmdreset\killtable_20260827\addbadlencdb.py
+GXEMUL-SEC/regress\artifacts\wdccmdreset\killtable_20260827\add479rows.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\killtable_opus_p8\mutate_p8.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\killtable_opus_p8\m88k_exc_probe.frozenP8.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\killtable_opus_p8\m88k_exc_probe.censusP8.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\killtable13\m88k_exc_probe.frozen13.py
+GXEMUL-SEC/regress\artifacts\landiskaux\census_20260827\watch_2c.py
+GXEMUL-SEC/regress\artifacts\landiskaux\census_20260827\mk_censusB.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\killtable8\mut_m88kexc.v8.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\killtable8\m88k_exc_probe.frozen8.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\killtable4\m88k_exc_probe.frozen4.py
+GXEMUL-SEC/regress\artifacts\sgideprimop\gapB_20260903\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\killtable5\mut_m88kexc.v5.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\killtable5\m88k_exc_probe.frozen5.py
+GXEMUL-SEC/regress\artifacts\landiskaux\census_20260827\devlist.py
+GXEMUL-SEC/regress\artifacts\landiskaux\census_20260827\census.py
+GXEMUL-SEC/regress\artifacts\landiskaux\census_20260827\analyse_hook.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\killtable7\mut_m88kexc.v7.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\killtable7\m88k_exc_probe.frozen7.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\killtable3\m88k_exc_probe.frozen3.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\killtable2\m88k_exc_probe.frozen2.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\killtable6\mut_m88kexc.v6.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\killtable6\m88k_exc_probe.frozen6.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\m88k_exc_probe.v17.frozen.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\m88k_exc_probe.v16.frozen.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\m88k_exc_probe.v20.frozen.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\m88k_exc_probe.v21.frozen.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\pcc2_width_witness.asrun.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\pcc2_operator_reach.asrun.py
+GXEMUL-SEC/regress\artifacts\gdrompionull\opus_p2_20260826\mutate.py
+GXEMUL-SEC/regress\artifacts\gdrompionull\opus_p2_20260826\mism_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\pass9_seats_20260904\opus\mutate.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\pass9_seats_20260904\opus\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\pass9_seats_20260904\opus\cmp_names.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\pass9_seats_20260904\opus\audit_gate.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\pass5_seats_20260903\opus_reader\xcheck.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\pass5_seats_20260903\opus_reader\mutate.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\pass5_seats_20260903\opus_reader\discriminator.py
+GXEMUL-SEC/regress\artifacts\gdrompionull\gdrom_pio_null_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\pass5_seats_20260903\opus_reader\artifacts\gxopus_p5_disc.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\pass5_seats_20260903\opus_reader\artifacts\discriminator.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\pass3_seats_20260903\opus_reader\nonequiv_check.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\pass3_seats_20260903\opus_reader\mutate.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\pass8_seats_20260904\opus\mutate.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\pass8_seats_20260904\opus\mk_f1.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\pass5_seats_20260903\fable\pty_ret0_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\pass5_seats_20260903\fable\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\pass10_seats_20260904\opus\mutate.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\pass10_seats_20260904\opus\diffcheck.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\pass10_seats_20260904\opus\cmpnames.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\derive_cells.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\pass7_seats_20260904\opus\gatecheck.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\killtable_20260903\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\pass4_seats_20260903\opus_reader\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\agy_p5\mutate.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\pass4_seats_20260903\fable\probe_dry.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\pass4_seats_20260903\fable\probe_copy.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\pass4_seats_20260903\fable\dump_names.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\killtable12\m88k_exc_probe.frozen12.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\pass11_seats_20260904\opus\control_iclr.py
+GXEMUL-SEC/regress\artifacts\gdromexitsix\supp_p2_20260829\instrument_22row.frozen.py
+GXEMUL-SEC/regress\artifacts\gdromexitsix\supp_p2_20260829\extend.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\opus_pass3_20260903\pass3c\probe82.frozen.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\pass6_seats_20260903\opus\mutate.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\killtable11_attempt1_v13\m88k_exc_probe.frozen11.v13.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\killtable11_attempt1_v13\m88k_exc_probe.frozen11.py
+GXEMUL-SEC/regress\artifacts\gdromexitsix\killtable4_20260828\mut_common.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\opus_pass3_20260903\pass3\probe.frozen.py
+GXEMUL-SEC/regress\artifacts\gdromexitsix\rot_20260829\probe.frozen.py
+GXEMUL-SEC/regress\artifacts\gdromexitsix\gdrom_toclen_witness.py
+GXEMUL-SEC/regress\artifacts\gdromexitsix\asan_m0_20260828\apply_m0.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\killtable11\m88k_exc_probe.frozen11.v14.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\killtable11\m88k_exc_probe.frozen11.py
+GXEMUL-SEC/regress\artifacts\gdromcondlies\witness_20260830\gdrom_cond_witness.py
+GXEMUL-SEC/regress\artifacts\gdromcondlies\witness_20260830\gdrom_cond_extras.py
+GXEMUL-SEC/regress\artifacts\gdromexitsix\opus_r2table_20260828\tprobe2.py
+GXEMUL-SEC/regress\artifacts\gdromexitsix\opus_r2table_20260828\mkmut.py
+GXEMUL-SEC/regress\artifacts\gdromexitsix\opus_r2table_20260828\mkfix.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\killtable10\mut_m88kexc.v10.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\killtable10\m88k_exc_probe.frozen10.py
+GXEMUL-SEC/regress\artifacts\lunaabsentcpu\luna_absentcpu_probe.v2.py
+GXEMUL-SEC/regress\artifacts\lunaabsentcpu\luna_absentcpu_probe.asrun.py
+GXEMUL-SEC/regress\artifacts\lunaabsentcpu\luna_absentcpu_probe.v6.frozen.py
+GXEMUL-SEC/regress\artifacts\lunaabsentcpu\luna_absentcpu_probe.v5.py
+GXEMUL-SEC/regress\artifacts\lunaabsentcpu\luna_absentcpu_probe.v4.py
+GXEMUL-SEC/regress\artifacts\lunaabsentcpu\luna_absentcpu_probe.v3.py
+GXEMUL-SEC/regress\artifacts\lunaabsentcpu\luna_absentcpu_probe.v8.frozen.py
+GXEMUL-SEC/regress\artifacts\lunaabsentcpu\luna_absentcpu_probe.v7.frozen.py
+GXEMUL-SEC/regress\artifacts\lunaabsentcpu\opus_p4_table_v5\probe_v5.py
+GXEMUL-SEC/regress\artifacts\lunaabsentcpu\opus_p4_table_v5\probe_v4.py
+GXEMUL-SEC/regress\artifacts\gdromexitsix\p2askagain_20260829\mut490p2.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\killtable\m88k_exc_probe.frozen.py
+GXEMUL-SEC/regress\artifacts\gdromexitsix\opus_r2full_20260828\tprobe3.py
+GXEMUL-SEC/regress\artifacts\gdromexitsix\opus_r2full_20260828\mkmut_brace.py
+GXEMUL-SEC/regress\artifacts\gdromexitsix\opus_r2full_20260828\mkmut3.py
+GXEMUL-SEC/regress\artifacts\gdromexitsix\opus_r2full_20260828\mkfix.py
+GXEMUL-SEC/regress\artifacts\lunaabsentcpu\opus_p4_table\luna_absentcpu_probe.frozen.py
+GXEMUL-SEC/regress\artifacts\lunaabsentcpu\killtable2\luna_absentcpu_probe.frozen.py
+GXEMUL-SEC/regress\artifacts\lunaabsentcpu\killtable2\fix_lunaabs.v2.py
+GXEMUL-SEC/regress\artifacts\lunaabsentcpu\killtable2\mut_lunaabs.v3.py
+GXEMUL-SEC/regress\artifacts\pcc2defaultkill\witness_20260905\defaultkill_witness.py
+GXEMUL-SEC/regress\artifacts\lunaabsentcpu\killtable\mut_lunaabs.py
+GXEMUL-SEC/regress\artifacts\lunaabsentcpu\killtable\luna_absentcpu_probe.frozen.py
+GXEMUL-SEC/regress\artifacts\lunaabsentcpu\killtable\fix_lunaabs.py
+GXEMUL-SEC/regress\artifacts\lunaabsentcpu\killtable3\mut_lunaabs.v4.py
+GXEMUL-SEC/regress\artifacts\lunaabsentcpu\killtable3\luna_absentcpu_probe.frozen.py
+GXEMUL-SEC/regress\artifacts\lunaabsentcpu\killtable3\fix_lunaabs.v2b.py
+GXEMUL-SEC/regress\artifacts\lunaabsentcpu\killtable5\luna_absentcpu_probe.frozen.py
+GXEMUL-SEC/regress\artifacts\pcc2defaultkill\killtable_20260905\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2defaultkill\killtable_20260905\pcc2_width_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2defaultkill\pass3_seats\opus_logs\edit_M_LASTBYTE.py
+GXEMUL-SEC/regress\artifacts\pcc2defaultkill\pass3_seats\opus_logs\edit_M_BACKEDLOW.py
+GXEMUL-SEC/regress\artifacts\pcc2defaultkill\pass3_seats\opus_logs\edit_M_RELOAD.py
+GXEMUL-SEC/regress\artifacts\pcc2defaultkill\pass3_seats\opus_logs\edit_M_LATCHOFF.py
+GXEMUL-SEC/regress\artifacts\pcc2defaultkill\pass3_seats\opus_logs\edit_M_WRDATA0.py
+GXEMUL-SEC/regress\artifacts\pcc2defaultkill\killtable3_20260905\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\lunaabsentcpu\killtable4\luna_absentcpu_probe.frozen.py
+GXEMUL-SEC/regress\artifacts\pcc2defaultkill\pass3_seats\opus_logs\edit_M_WRVAL0.py
+GXEMUL-SEC/regress\artifacts\pcc2defaultkill\pass4_seats\opus_logs\gatecheck.py
+GXEMUL-SEC/regress\artifacts\pcc2defaultkill\pass4_seats\opus_logs\len4_witness.py
+GXEMUL-SEC/regress\artifacts\pcc2defaultkill\killtable4_20260905\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2defaultkill\killtable3_20260905\pcc2_width_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2defaultkill\pass4_seats\opus_logs\mutate.py
+GXEMUL-SEC/regress\artifacts\pcc2defaultkill\pass4_seats\opus_logs\offsets.py
+GXEMUL-SEC/regress\artifacts\pcc2defaultkill\killtable4_20260905\pcc2_width_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2defaultkill\killtable3_20260905\old23\pcc2_width_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2defaultkill\killtable3_20260905\old23\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2defaultkill\killtable_20260905\run1_oldrowformat\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2defaultkill\killtable_20260905\run1_oldrowformat\pcc2_width_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2defaultkill\killtable4_20260905\old36\pcc2_width_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2defaultkill\killtable4_20260905\old36\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2defaultkill\pass4_seats\opus_logs\logs\len4_witness.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\killtable2_20260903\part9\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\killtable2_20260903\part8\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\killtable2_20260903\part7b\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\killtable2_20260903\part7\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\killtable2_20260903\part2\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\killtable2_20260903\part13_partial\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\killtable2_20260903\part5\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\killtable2_20260903\part3b\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\killtable2_20260903\part11\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\killtable2_20260903\part13_aborted\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\killtable2_20260903\part3\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\killtable2_20260903\part13\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\killtable2_20260903\part4\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\killtable2_20260903\part3c\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\killtable2_20260903\part10_aborted\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\killtable2_20260903\part5b\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\killtable2_20260903\part6\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\killtable2_20260903\part12\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\killtable2_20260903\part10\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\killtable2_20260903\part6b\frozen_probe.py
+
+ succeeded in 332ms:
+/*
+ *  Copyright (C) 2006-2021  Anders Gavare.  All rights reserved.
+ *
+ *  Redistribution and use in source and binary forms, with or without
+ *  modification, are permitted provided that the following conditions are met:
+ *
+ *  1. Redistributions of source code must retain the above copyright
+ *     notice, this list of conditions and the following disclaimer.
+ *  2. Redistributions in binary form must reproduce the above copyright  
+ *     notice, this list of conditions and the following disclaimer in the 
+ *     documentation and/or other materials provided with the distribution.
+ *  3. The name of the author may not be used to endorse or promote products
+ *     derived from this software without specific prior written permission.
+ *
+ *  THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+ *  ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ *  IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ *  ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE   
+ *  FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ *  DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+ *  OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+ *  HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+ *  LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+ *  OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+ *  SUCH DAMAGE.
+ */
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "cpu.h"
+#include "machine.h"
+#include "memory.h"
+#include "misc.h"
+
+#include "thirdparty/alpha_rpb.h"
+
+
+/*
+ *  alpha_translate_v2p():
+ */
+int alpha_translate_v2p(struct cpu *cpu, uint64_t vaddr,
+	uint64_t *return_paddr, int flags)
+{
+	uint64_t base = cpu->cd.alpha.pcb.apcb_ptbr << ALPHA_PAGESHIFT;
+	uint64_t userMode = cpu->cd.alpha.ps & ALPHA_PSL_USERMODE;
+	// uint64_t vptptr = cpu->cd.alpha.vptptr;
+	
+	// TODO: From the Alpha "arm_book.book":
+	// IF {SEXT(VA<63:VA_SIZE>) NEQ SEXT(VA<VA_SIZE-1>} THEN
+	// 	{initiate Access Violation fault}
+	// IF (VIRBND in use) THEN
+	//   IF (VA LTU VIRBND) THEN
+	//     ptbr_value <- PTBR
+	//   ELSE
+	//     ptbr_value <- SYSPTBR
+	// ELSE
+	//   ptbr_value <- PTBR
+
+	/*  Kernel direct-mapped space (OSF/1, NetBSD):  */
+	if (!userMode && (vaddr >= ALPHA_K0SEG_BASE && vaddr <= ALPHA_K0SEG_END)) {
+		*return_paddr = vaddr & 0x000003ffffffffffULL;
+		return 2;
+	}
+
+	/*
+	 *  UGLY hack for now:
+	 *
+	 *  Before virtual memory has been set up, ptbr is most likely zero.
+	 *  In that case, simply map everything vaddr == paddr.
+	 */
+	if (!userMode && base == 0) {
+		*return_paddr = vaddr & 0x000003ffffffffffULL;
+if (vaddr == 0xfffffffd80000000ULL) {
+	fatal("Alpha kernel virtual memory seems to want to be used. Not yet implemented.\n");
+	exit(1);
+}
+#if 1
+		if ((vaddr & ~0x7fff) == 0x0000000010000000ULL)
+			*return_paddr = (vaddr & 0x7fff) + HWRPB_PADDR;
+
+		if ((vaddr & ~0xffffff) == 0xfffffe0000000000ULL)
+			*return_paddr = 0x7efa000 + (vaddr & 0xffffff);
+
+		/*  At 0x20000000, NetBSD stores 8KB temp prom data  */
+		if ((vaddr & ~0x1fff) == 0x0000000020000000ULL)
+			*return_paddr = (vaddr & 0x1fff) + PROM_ARGSPACE_PADDR;
+#endif
+		return 2;
+	}
+
+	// debug("base = 0x%016"PRIx64"\n", base);
+if (vaddr == 0xfffffffd80000000ULL) fatal("AYONA3\n");
+
+	uint64_t addr, pte1, pte2, pte3;
+	int i1, i2, i3;
+	unsigned char *pt_entry_ptr;
+	const int pageSizeShift = 13;
+	// const int pageSize = 1 << pageSizeShift;
+	const int bitsPerLevel = 10;
+	const int maskPerLevel = (1 << bitsPerLevel) - 1;
+
+	i1 = (vaddr >> (pageSizeShift + 2 * bitsPerLevel)) & maskPerLevel;
+	i2 = (vaddr >> (pageSizeShift + 1 * bitsPerLevel)) & maskPerLevel;
+	i3 = (vaddr >> (pageSizeShift + 0 * bitsPerLevel)) & maskPerLevel;
+
+	// debug("vaddr=%016llx i1=0x%x i2=0x%x i3=0x%x\n", (long long)vaddr, i1, i2, i3);
+
+	addr = base + i1 * sizeof(uint64_t);
+	
+	pt_entry_ptr = memory_paddr_to_hostaddr(cpu->mem, addr, 0);
+	if (pt_entry_ptr == NULL)
+		goto not_found;
+
+	pte1 = *(uint64_t *)(pt_entry_ptr);
+	pte1 = LE64_TO_HOST(pte1);
+
+	// debug("pte1 = 0x%016"PRIx64"\n", pte1);
+	if (!(pte1 & ALPHA_PTE_VALID)) {
+		// TODO:
+		// IF level1_pte<KRE> EQ 0 THEN
+		//   {initiate Access Violation fault}
+		// ELSE
+		//   {initiate Translation Not Valid fault}
+
+		// fatal("TODO: pte1 not valid.\n");
+		goto not_found;
+	}
+
+	addr = ((pte1 >> 32) << ALPHA_PAGESHIFT) + (i2 * sizeof(uint64_t));
+
+	pt_entry_ptr = memory_paddr_to_hostaddr(cpu->mem, addr, 0);
+	if (pt_entry_ptr == NULL)
+		goto not_found;
+
+	pte2 = *(uint64_t *)(pt_entry_ptr);
+	pte2 = LE64_TO_HOST(pte2);
+
+	// debug("pte2 = 0x%016"PRIx64"\n", pte2);
+	if (!(pte2 & ALPHA_PTE_VALID)) {
+		// TODO:
+		// IF level2_pte<KRE> EQ 0 THEN
+		//   {initiate Access Violation fault}
+		// ELSE
+		//   {initiate Translation Not Valid fault}
+
+		fatal("TODO: pte2 not valid.\n");
+		goto not_found;
+	}
+
+	addr = ((pte2 >> 32) << ALPHA_PAGESHIFT) + (i3 * sizeof(uint64_t));
+
+	pt_entry_ptr = memory_paddr_to_hostaddr(cpu->mem, addr, 0);
+	if (pt_entry_ptr == NULL)
+		goto not_found;
+
+	pte3 = *(uint64_t *)(pt_entry_ptr);
+	pte3 = LE64_TO_HOST(pte3);
+
+	// debug("pte3 = 0x%016"PRIx64"\n", pte3);
+
+	if (!(pte3 & ALPHA_PTE_VALID)) {
+		fatal("TODO: pte3 not valid.\n");
+		goto not_found;
+	}
+
+	(*return_paddr) = ALPHA_PTE_TO_PFN(pte3) << pageSizeShift;
+
+	// TODO.
+	return 2;
+
+not_found:
+	/*  No match.  */
+	/*  #194: (Codex/Fable) a failed guest page-table walk must not
+	    abort()/exit() the host; report no-translation (0) so the caller
+	    raises the fault (keeps the emulator alive and debuggable).  */
+	fatal("[ alpha_translate_v2p: 0x%016" PRIx64" wasn't found ]\n", vaddr);
+	return 0;
+}
+
+/*
+ *  Copyright (C) 2005-2021  Anders Gavare.  All rights reserved.
+ *
+ *  Redistribution and use in source and binary forms, with or without
+ *  modification, are permitted provided that the following conditions are met:
+ *
+ *  1. Redistributions of source code must retain the above copyright
+ *     notice, this list of conditions and the following disclaimer.
+ *  2. Redistributions in binary form must reproduce the above copyright  
+ *     notice, this list of conditions and the following disclaimer in the 
+ *     documentation and/or other materials provided with the distribution.
+ *  3. The name of the author may not be used to endorse or promote products
+ *     derived from this software without specific prior written permission.
+ *
+ *  THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+ *  ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ *  IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ *  ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE   
+ *  FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ *  DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+ *  OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+ *  HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+ *  LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+ *  OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+ *  SUCH DAMAGE.
+ *   
+ *
+ *  COMMENT: DEC Alpha machines
+ */
+
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+
+#include "cpu.h"
+#include "device.h"
+#include "devices.h"
+#include "machine.h"
+#include "memory.h"
+#include "misc.h"
+
+#include "thirdparty/alpha_autoconf.h"
+#include "thirdparty/alpha_rpb.h"
+
+
+MACHINE_SETUP(alpha)
+{
+	struct rpb rpb;
+	struct crb crb;
+	struct ctb ctb;
+	struct mddt mddt;
+	struct pcs *pcs = (struct pcs *) malloc(sizeof(struct pcs) * machine->ncpus);
+	int i;
+
+	switch (machine->machine_subtype) {
+
+	case ST_ALPHABOOK1:
+		machine->machine_name = strdup("AlphaBook 1");
+		if (machine->emulated_hz == 0)
+			machine->emulated_hz = 233000000;
+		device_add(machine, "lca");
+		break;
+
+	case ST_DEC_4100:
+		machine->machine_name = strdup("AlphaServer 4100");
+		break;
+
+	case ST_DEC_3000_300:
+		machine->machine_name = strdup("DEC 3000/300");
+		machine->main_console_handle = (size_t)device_add(machine,
+		    "z8530 addr=0x1b0200000 irq=0 addr_mult=4");
+		break;
+
+	case ST_EB164:
+		machine->machine_name = strdup("EB164");
+		break;
+
+	default:fatal("Unimplemented Alpha machine type %i\n",
+		    machine->machine_subtype);
+		exit(1);
+	}
+
+	if (!machine->prom_emulation)
+		return;
+
+	/*  These are used by NetBSD/alpha:  */
+	/*  a0 = First free Page Frame Number  */
+	/*  a1 = PFN of current Level 1 page table  */
+	/*  a2 = Bootinfo magic  */
+	/*  a3 = Bootinfo pointer  */
+	/*  a4 = Bootinfo version  */
+	cpu->cd.alpha.r[ALPHA_A0] = 16*1024*1024 / 8192;
+	cpu->cd.alpha.r[ALPHA_A1] = 0;	/*  TODO  */
+	cpu->cd.alpha.r[ALPHA_A2] = 0;	/*  Note: NOT ALPHA_BOOTINFO_MAGIC  */
+	cpu->cd.alpha.r[ALPHA_A3] = 0;	/*  TODO  */
+	cpu->cd.alpha.r[ALPHA_A4] = 1;
+
+	/*
+	 *  HWRPB: Hardware Restart Parameter Block
+	 *
+	 *  TODO: Almost everything.
+	 */
+	memset(&rpb, 0, sizeof(struct rpb));
+	store_64bit_word_in_host(cpu, (unsigned char *)
+	    &(rpb.rpb_phys), 0x14000);
+	strlcpy((char *)&(rpb.rpb_magic), "HWRPB", 8);
+	store_64bit_word_in_host(cpu, (unsigned char *)
+	    &(rpb.rpb_version), HWRPB_DSRDB_MINVERS);
+	store_64bit_word_in_host(cpu, (unsigned char *)
+	    &(rpb.rpb_size), sizeof(struct rpb));
+	store_64bit_word_in_host(cpu, (unsigned char *)
+	    &(rpb.rpb_page_size), 8192);
+	strlcpy((char *)&(rpb.rpb_ssn), "123456789", 10);
+	store_64bit_word_in_host(cpu, (unsigned char *)
+	    &(rpb.rpb_type), machine->machine_subtype);
+	store_64bit_word_in_host(cpu, (unsigned char *)
+	    &(rpb.rpb_cc_freq), machine->emulated_hz);
+	store_64bit_word_in_host(cpu, (unsigned char *)
+	    &(rpb.rpb_intr_freq), 1024 << 12);
+	store_64bit_word_in_host(cpu, (unsigned char *)
+	    &(rpb.rpb_pcs_cnt), machine->ncpus);
+	store_64bit_word_in_host(cpu, (unsigned char *)
+	    &(rpb.rpb_pcs_size), sizeof(struct pcs));
+	store_64bit_word_in_host(cpu, (unsigned char *)
+	    &(rpb.rpb_pcs_off), PCS_ADDR - HWRPB_ADDR);
+	store_64bit_word_in_host(cpu, (unsigned char *)
+	    &(rpb.rpb_ctb_off), CTB_ADDR - HWRPB_ADDR);
+	store_64bit_word_in_host(cpu, (unsigned char *)
+	    &(rpb.rpb_crb_off), CRB_ADDR - HWRPB_ADDR);
+	store_64bit_word_in_host(cpu, (unsigned char *)
+	    &(rpb.rpb_memdat_off), MEMDAT_ADDR - HWRPB_ADDR);
+
+	/*  CTB: Console Terminal Block  */
+	memset(&ctb, 0, sizeof(struct ctb));
+	store_64bit_word_in_host(cpu, (unsigned char *)
+	    &(ctb.ctb_term_type), machine->x11_md.in_use?
+	    CTB_GRAPHICS : CTB_PRINTERPORT);
+
+	/*  CRB: Console Routine Block  */
+	memset(&crb, 0, sizeof(struct crb));
+	store_64bit_word_in_host(cpu, (unsigned char *)
+	    &(crb.crb_v_dispatch), CRB_ADDR - 0x100);
+	store_64bit_word(cpu, CRB_ADDR - 0x100 + 8, PROM_ENTRY_PADDR);
+	store_64bit_word_in_host(cpu, (unsigned char *)
+	    &(crb.crb_v_fixup), CRB_ADDR - 0x80);
+	store_64bit_word(cpu, CRB_ADDR - 0x80 + 8, PROM_ENTRY_PADDR + 0x800);
+
+	/*  PCS: Processor ID etc.  */
+	for (i=0; i<machine->ncpus; i++) {
+		memset(&pcs[i], 0, sizeof(struct pcs));
+		store_64bit_word_in_host(cpu, (unsigned char *)
+		    &(pcs[i].pcs_flags), PCS_RC | PCS_PA | PCS_PP |
+		    PCS_CV | PCS_PV | PCS_PMV | PCS_PL);
+		store_64bit_word_in_host(cpu, (unsigned char *)
+		    &(pcs[i].pcs_proc_type),
+		    machine->cpus[i]->cd.alpha.cpu_type.pcs_type);
+	}
+
+	/*
+	 *  MDDT: Memory Data Descriptor Table. For now, it is a simple
+	 *  two-entry table with half of the available RAM in each entry.
+	 *  (The values are in number of 8K pages.)
+	 *  The first 16 MB are not included (the kernel lives there).
+	 *  The last 1 MB is not included either, it is reserved for bootup
+	 *  and similar.
+	 */
+	memset(&mddt, 0, sizeof(struct mddt));
+	memset(&mddt.mddt_clusters[0], 0, sizeof(struct mddt_cluster));
+	memset(&mddt.mddt_clusters[1], 0, sizeof(struct mddt_cluster));
+	store_64bit_word_in_host(cpu, (unsigned char *)
+	    &(mddt.mddt_cluster_cnt), 2);
+	store_64bit_word_in_host(cpu, (unsigned char *)
+	    &(mddt.mddt_clusters[0].mddt_pfn), 16 * 128);
+	store_64bit_word_in_host(cpu, (unsigned char *)
+	    &(mddt.mddt_clusters[0].mddt_pg_cnt),
+	    (machine->physical_ram_in_mb/2 - 16) * 128);
+	store_64bit_word_in_host(cpu, (unsigned char *)
+	    &(mddt.mddt_clusters[1].mddt_pfn),
+	    machine->physical_ram_in_mb/2 * 128);
+	store_64bit_word_in_host(cpu, (unsigned char *)
+	    &(mddt.mddt_clusters[1].mddt_pg_cnt),
+	    (machine->physical_ram_in_mb/2) * 128);
+
+	/*
+	 *  Place a special "hack" palcode call at PROM_ENTRY_PADDR and
+	 *  PROM_ENTRY_PADDR + 0x800:
+	 *  (Hopefully nothing else will be there.)
+	 */
+	store_32bit_word(cpu, PROM_ENTRY_PADDR, 0x3fffffe);
+	store_32bit_word(cpu, PROM_ENTRY_PADDR + 0x800, 0x3fffffd);
+
+	store_buf(cpu, HWRPB_ADDR, (char *)&rpb, sizeof(struct rpb));
+	store_buf(cpu, CTB_ADDR, (char *)&ctb, sizeof(struct ctb));
+	store_buf(cpu, CRB_ADDR, (char *)&crb, sizeof(struct crb));
+	store_buf(cpu, MEMDAT_ADDR, (char *)&mddt, sizeof(struct mddt));
+	store_buf(cpu, PCS_ADDR, (char *)pcs, sizeof(struct pcs) *
+	    machine->ncpus);
+
+	free(pcs);
+}
+
+
+MACHINE_DEFAULT_CPU(alpha)
+{
+	switch (machine->machine_subtype) {
+
+	case ST_ALPHABOOK1:
+		machine->cpu_name = strdup("21066");
+		break;
+
+	case ST_DEC_4100:
+		machine->cpu_name = strdup("21164A-2");
+		break;
+
+	case ST_DEC_3000_300:
+		machine->cpu_name = strdup("21064");
+		break;
+
+	case ST_EB164:
+		machine->cpu_name = strdup("21164PC");
+		break;
+
+	default:fatal("Unimplemented Alpha machine type %i\n",
+		    machine->machine_subtype);
+		exit(1);
+	}
+}
+
+
+MACHINE_DEFAULT_RAM(alpha)
+{
+	machine->physical_ram_in_mb = 128;
+}
+
+
+MACHINE_REGISTER(alpha)
+{
+	MR_DEFAULT(alpha, "Alpha", MACHINE_ALPHA);
+
+	machine_entry_add_alias(me, "alpha");
+
+	machine_entry_add_subtype(me, "AlphaBook 1", ST_ALPHABOOK1,
+	    "alphabook1", NULL);
+
+	machine_entry_add_subtype(me, "AlphaServer 4100", ST_DEC_4100,
+	    "alphaserver4100", NULL);
+
+	machine_entry_add_subtype(me, "DEC 3000/300", ST_DEC_3000_300,
+	    "3000/300", NULL);
+
+	machine_entry_add_subtype(me, "EB164", ST_EB164,
+	    "eb164", NULL);
+
+	me->set_default_ram = machine_default_ram_alpha;
+}
+
+
+ succeeded in 359ms:
+   1: #!/usr/bin/env python3
+   2: #  alpha_harness_probe.py -- THE ALPHA RUNG-3 HARNESS.
+   3: #
+   4: #  There has never been an Alpha probe in this tree, and three open HIGH rows need one
+   5: #  (`alphaswpctxptbr', `alphapfnoffset', and the swpctx return-register defect).  This file is
+   6: #  the FOUNDATION: an encoder, a pty session, and the two controls the witness ladder demands
+   7: #  of any rung-3 access witness.  It deliberately ships the controls FIRST and asserts nothing
+   8: #  about any defect, because a harness whose controls have never been green cannot be trusted
+   9: #  to say anything about a defect afterwards.
+  10: #
+  11: #  *** WHAT IS ESTABLISHED BEFORE THIS FILE RUNS, all read out of the fork rather than assumed:
+  12: #
+  13: #  1. THE MACHINES EXIST AND THREE OF FOUR RUN.  Measured 2026-09-07: `-H' advertises
+  14: #     alphabook1 (21066), alphaserver4100 (21164A-2), 3000/300 and eb164 (21164PC); the first,
+  15: #     second and fourth construct and reach the debugger prompt, and `3000/300' ABORTS the host
+  16: #     during construction at interrupt_handler_lookup("0") -- a separate filed defect.
+  17: #
+  18: #  2. `call_pal' IS OPCODE 0 WITH THE PAL NUMBER IN BITS 25..0, and cpu_alpha_instr.c dispatches
+  19: #     it STRAIGHT to alpha_palcode():
+  20: #         case 0x00:  ic->f = instr(call_pal);  ic->arg[0] = iword & 0x3ffffff;
+  21: #     so `call_pal 0x30' is literally the instruction word 0x00000030.
+  22: #
+  23: #     *** BUT "NO GATING OF ANY KIND" WAS MY CLAIM AND IT IS WRONG.  A seat corrected it, and
+  24: #     the correction is the difference between a working probe and one that mysteriously
+  25: #     halts. ***  Dispatch INTO alpha_palcode() carries no privilege check -- but the function
+  26: #     GATES ITS OWN SWITCH, at cpu_alpha_palcode.c:183:
+  27: #
+  28: #         uint64_t userMode = cpu->cd.alpha.ps & ALPHA_PSL_USERMODE;   /* 0x0008 */
+  29: #         if (userMode && !(palcode == 0x80 || 0x81 || 0x83 || 0xae ||
+  30: #                           0xaa || 0x86 || 0x9e || 0x92 || 0x9f)) {
+  31: #                 fatal("[ Privileged Alpha PALcode called from user mode: TODO ]");
+  32: #                 cpu->running = 0;          <-- THE MACHINE STOPS
+  33: #                 return;
+  34: #         }
+  35: #
+  36: #     0x30 is NOT on that whitelist.  So in user mode `call_pal 0x30' does not reach swpctx --
+  37: #     it HALTS THE CPU.  **That failure would present as a probe whose step never completes,
+  38: #     i.e. as a broken harness rather than as a mode problem**, which is exactly why it gets a
+  39: #     control row of its own below rather than a comment.
+  40: #
+  41: #     `cpu->cd.alpha.ps' has no explicit initialiser anywhere in src/, so it is zero from the
+  42: #     zeroed cpu struct and USERMODE is clear -- kernel mode.  **That is a DERIVATION, not a
+  43: #     measurement**, and the `palgate' row is what turns it into one.
+  44: #
+  45: #  3. THE MEMORY-FORMAT ENCODING is opcode<<26 | ra<<21 | rb<<16 | disp16, and the opcodes are
+  46: #     read off cpu_alpha_instr.c's own decoder rather than from a manual: LDA 0x08, LDAH 0x09,
+  47: #     LDQ 0x29, STQ 0x2d, LDL 0x28, STL 0x2c.
+  48: #
+  49: #  4. REGISTER NUMBERS AND DEBUGGER NAMES come from cpu_alpha.h's ALPHA_REG_NAMES:
+  50: #     r0 v0, r1 t0, r2 t1, r3 t2, ... r16 a0, ... r30 sp, r31 zero.
+  51: #
+  52: #  *** WHAT IS NOT ESTABLISHED, and is exactly what the controls are for: WHICH ADDRESSES ARE
+  53: #  WRITABLE RAM.  The machine loads a file at 0x20000000 and `alphaserver4100'/`eb164' report
+  54: #  "cpu0: starting at 0x0000000020000000", but -M 64 is 64 MB and 0x20000000 is 512 MB, so the
+  55: #  two facts do not obviously agree.  THIS FILE DOES NOT GUESS: the liveness control writes a
+  56: #  known value through a real guest store and reads it back through a real guest load, and if
+  57: #  the address is wrong that row goes RED and says so.  A harness that assumed an address and
+  58: #  then reported a defect would be measuring its own mistake. ***
+  59: 
+  60: import os, sys, re, pty, time, select
+  61: 
+  62: BIN   = sys.argv[1]
+  63: LABEL = sys.argv[2] if len(sys.argv) > 2 else "?"
+  64: MACH  = sys.argv[3] if len(sys.argv) > 3 else "alphabook1"
+  65: 
+  66: rows = []
+  67: 
+  68: def row(name, got, want, note="", negate=False):
+  69:     ok = (got != want) if negate else (got == want)
+  70:     rows.append((name, ok))
+  71:     print("%-18s %-20s %-20s %-40s %s" % (name, str(got), ("NOT " if negate else "") + str(want),
+  72:                                           note, "ok" if ok else "FAIL"))
+  73:     return ok
+  74: 
+  75: # ---------------------------------------------------------------- the encoder
+  76: #  Memory format.  `disp' is a SIGNED 16-bit displacement, so it is masked here and the caller
+  77: #  is responsible for keeping values in range -- an out-of-range displacement silently truncating
+  78: #  would be a wrong instruction that still assembles, which is the hand-assembled-encoding trap
+  79: #  this project has paid for four times.  Hence the assert.
+  80: def mem(op, ra, rb, disp):
+  81:     assert -0x8000 <= disp <= 0xffff, "displacement %r out of 16-bit range" % disp
+  82:     return ((op & 0x3f) << 26) | ((ra & 31) << 21) | ((rb & 31) << 16) | (disp & 0xffff)
+  83: 
+  84: ZERO = 31
+  85: def LDA (ra, disp, rb=ZERO): return mem(0x08, ra, rb, disp)
+  86: def LDAH(ra, disp, rb=ZERO): return mem(0x09, ra, rb, disp)
+  87: def LDQ (ra, disp, rb):      return mem(0x29, ra, rb, disp)
+  88: def STQ (ra, disp, rb):      return mem(0x2d, ra, rb, disp)
+  89: def LDL (ra, disp, rb):      return mem(0x28, ra, rb, disp)
+  90: def STL (ra, disp, rb):      return mem(0x2c, ra, rb, disp)
+  91: def CALL_PAL(n):             return n & 0x3ffffff        # opcode 0; see note 2 above
+  92: NOP = LDA(ZERO, 0, ZERO)     # lda zero,0(zero) -- the decoder turns ra==zero into instr(nop)
+  93: 
+  94: #  *** BUILDING A 32-BIT CONSTANT NEEDS TWO INSTRUCTIONS AND ONE CORRECTION FOR SIGN. ***
+  95: #  LDAH adds (disp << 16) and LDA adds a SIGN-EXTENDED disp.  So for a low half with bit 15 set,
+  96: #  the LDA subtracts 0x10000 and the high half must be pre-incremented to compensate.  Getting
+  97: #  this wrong yields an address off by 65536, which would look like a memory-map problem rather
+  98: #  than an encoding bug -- so it is done here once, with a self-test below.
+  99: def load_const(reg, val):
+ 100:     hi, lo = (val >> 16) & 0xffff, val & 0xffff
+ 101:     if lo & 0x8000:
+ 102:         hi = (hi + 1) & 0xffff
+ 103:     return [LDAH(reg, hi, ZERO), LDA(reg, lo - 0x10000 if lo & 0x8000 else lo, reg)]
+ 104: 
+ 105: def _selftest_load_const():
+ 106:     #  A NEGATIVE CONTROL ON THE ENCODER ITSELF, run every time.  It costs microseconds and it
+ 107:     #  checks the one piece of arithmetic in this file that is easy to get silently wrong.
+ 108:     for v in (0x00000000, 0x00001000, 0x00008000, 0x0000ffff, 0x20000000,
+ 109:               0x5a5a5a5a, 0x20018000, 0xdeadbeef, 0x0001ffff):
+ 110:         hi, lo = (v >> 16) & 0xffff, v & 0xffff 173:  278: A0 = 16
+ 279: prog = (load_const(T0, P_PTRV)          # identity-mapped, while ptbr is still 0
+ 280:         + [LDQ(T0, 16, T0),             # t0 = K0SEG alias of the pointer vector
+ 281:            LDQ(A0, 0, T0),              # a0 = &PCB_A  (K0SEG)
+ 282:            LDQ(T3, 0, T0),              # t3 = &PCB_A  kept for the readback
+ 283:            CALL_PAL(0x30),              # swpctx -> loads A; the defect sets apcb_ptbr = MARKER
+ 284:            LDQ(A0, 8, T0),              # a0 = &PCB_B  -- t0 is K0SEG, so this survives
+ 285:            CALL_PAL(0x30),              # swpctx -> SAVES apcb_ptbr into PCB_A+16
+ 286:            LDQ(T2, 16, T3)])            # t2 = that saved word
+ 287: 
+ 288: code_cmds = ["put w 0x%x, 0x%08x" % (k0(P_CODE) + 4 * i, op) for i, op in enumerate(prog)]
+ 289: t, alive = session(setup + code_cmds + ["pc=0x%x" % k0(P_CODE), "step %d" % len(prog), "print t2"])
+ 290: got = printed(t, "t2") if alive else "died"
+ 291: 
+ 292: row("swpctx alive", "alive" if alive else "died", "alive",
+ 293:     "the guest survives two swpctx calls in K0SEG")
+ 294: 
+ 295: #  THE DEFECT ROW.  RED on the committed build (it reads MARKER), GREEN once :282 assigns
+ 296: #  apcb_flags instead of apcb_ptbr.
+ 297: row("swpctx ptbr", got, "0x0",
+ 298:     "PCB_A+16 must hold A.ptbr (0), not A.flags")
+ 299: 
+ 300: #  CLAUSE (b): pins the SPECIFIC wrong value, so a reinstatement of the defect is distinguishable
+ 301: #  from any other way of getting the word wrong.
+ 302: row("swpctx notflags", got, "0x%x" % MARKER,
+ 303:     "must not be A.flags -- that is the defect's exact signature", negate=True)
+ 304: 
+ 305: ok = sum(1 for _, o in rows if o)
+ 306: print("")
+ 307: print("ALPHAHARNESS_RESULT=%d/%d" % (ok, len(rows)))
+ 308: print("ALPHAHARNESS_DONE")
+ 309: sys.exit(0 if ok == len(rows) else 1)
+
+codex
+The code does not enforce the “controls first” premise: failed controls do not prevent later rows from running or reporting green. Also, `alive` means the PTY stayed open during timed reads; it does not establish that the requested instructions finished.
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n 'debugger_cmd_(put|print|step|quit)|put \\[|case .[dqw].|memory_rw|single_step|register_match' GXEMUL-SEC/src/debugger" in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n 'memset.*cpu|calloc.*cpu|cd\\.alpha\\.(ps|pcb|ctx)|physical_ram|memory_amount|DEFAULT_RAM|initial.*pc|alpha_regname|register_match' GXEMUL-SEC/src/cpus/cpu_alpha.c GXEMUL-SEC/src/cpus/cpu.c GXEMUL-SEC/src/machines/machine_alpha.c GXEMUL-SEC/src/debugger/debugger_expr.c; rg --files GXEMUL-SEC/src -g '*memory*' -g '*load*' -g '*dyntrans*'" in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$p = '"'GXEMUL-SEC/src/cpus/memory_alpha.c'; "'$s = Get-Content -LiteralPath $p; for ($n = 40; $n -le 110; $n++) { '"'{0,4}: {1}' -f "'$n, $s[$n-1] }; $p = '"'GXEMUL-SEC/src/machines/machine_alpha.c'; "'$s = Get-Content -LiteralPath $p; for ($n = 40; $n -le 145; $n++) { '"'{0,4}: {1}' -f "'$n, $s[$n-1] }' in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n 'lda|ldah|case 0x0[089]|case 0x2[89cd]|ra =|rb =|d16|iword >>|r\\[ALPHA_ZERO\\]|running|single_step' GXEMUL-SEC/src/cpus/cpu_alpha_instr.c GXEMUL-SEC/src/cpus/cpu_alpha_instr_loadstore.c GXEMUL-SEC/src/cpus/cpu_alpha.c; rg -n 'ALPHA_REG_NAMES|ALPHA_(V0|T[0123]|A0|ZERO)|USERMODE|K0SEG' GXEMUL-SEC/src/include/cpu_alpha.h GXEMUL-SEC/src/include/thirdparty/alpha_cpu.h" in C:\DocumentNoSnc\CC\GXEMUL
+ succeeded in 197ms:
+GXEMUL-SEC/src/debugger\debugger_cmds.c:488:		    write to it now traps to memory_rw.  */
+GXEMUL-SEC/src/debugger\debugger_cmds.c:716:		r = c->memory_rw(c, mem, addr, &buf[0], sizeof(buf),
+GXEMUL-SEC/src/debugger\debugger_cmds.c:957:		case 'w':
+GXEMUL-SEC/src/debugger\debugger_cmds.c:965:		case 'd':
+GXEMUL-SEC/src/debugger\debugger_cmds.c:969:		case 'q':
+GXEMUL-SEC/src/debugger\debugger_cmds.c:1006:			res = c->memory_rw(c, c->mem, base + fill,
+GXEMUL-SEC/src/debugger\debugger_cmds.c:1311: *  debugger_cmd_print():
+GXEMUL-SEC/src/debugger\debugger_cmds.c:1313:static void debugger_cmd_print(struct machine *m, char *args)
+GXEMUL-SEC/src/debugger\debugger_cmds.c:1351: *  debugger_cmd_put():
+GXEMUL-SEC/src/debugger\debugger_cmds.c:1353:static void debugger_cmd_put(struct machine *m, char *args)
+GXEMUL-SEC/src/debugger\debugger_cmds.c:1365:	/*  syntax: put [b|h|w|d|q] addr, data  */
+GXEMUL-SEC/src/debugger\debugger_cmds.c:1396:		printf("syntax: put [b|h|w|d|q|s|z] addr, data\n");
+GXEMUL-SEC/src/debugger\debugger_cmds.c:1459:			res = m->cpus[0]->memory_rw(m->cpus[0],
+GXEMUL-SEC/src/debugger\debugger_cmds.c:1506:		res = m->cpus[0]->memory_rw(m->cpus[0], m->cpus[0]->mem, addr,
+GXEMUL-SEC/src/debugger\debugger_cmds.c:1528:	case 'w':
+GXEMUL-SEC/src/debugger\debugger_cmds.c:1548:	case 'd':
+GXEMUL-SEC/src/debugger\debugger_cmds.c:1563:	case 'q':
+GXEMUL-SEC/src/debugger\debugger_cmds.c:1627: *  debugger_cmd_quit():
+GXEMUL-SEC/src/debugger\debugger_cmds.c:1629:static void debugger_cmd_quit(struct machine *m, char *args)
+GXEMUL-SEC/src/debugger\debugger_cmds.c:1677: *  debugger_cmd_step():
+GXEMUL-SEC/src/debugger\debugger_cmds.c:1685:static void debugger_cmd_step(struct machine *m, char *args)
+GXEMUL-SEC/src/debugger\debugger_cmds.c:1716:			exit_debugger_to_continue_single_stepping = true;
+GXEMUL-SEC/src/debugger\debugger_cmds.c:1738:	exit_debugger_to_continue_single_stepping = true;
+GXEMUL-SEC/src/debugger\debugger_cmds.c:1918:			if (c->memory_rw(c, mem, actualaddr+i, buf+i, 1, MEM_READ,
+GXEMUL-SEC/src/debugger\debugger_cmds.c:2064:	{ "print", "expr", 0, debugger_cmd_print,
+GXEMUL-SEC/src/debugger\debugger_cmds.c:2067:	{ "put", "[b|h|w|d|q|s|z] addr, data", 0, debugger_cmd_put,
+GXEMUL-SEC/src/debugger\debugger_cmds.c:2073:	{ "quit", "", 0, debugger_cmd_quit,
+GXEMUL-SEC/src/debugger\debugger_cmds.c:2085:	{ "step", "[n|call]", 0, debugger_cmd_step,
+GXEMUL-SEC/src/debugger\debugger.c:70:bool single_step = false;
+GXEMUL-SEC/src/debugger\debugger.c:71:bool about_to_enter_single_step = false;
+GXEMUL-SEC/src/debugger\debugger.c:73:volatile int single_step_breakpoint = 0;
+GXEMUL-SEC/src/debugger\debugger.c:81:static volatile bool exit_debugger_to_continue_single_stepping;
+GXEMUL-SEC/src/debugger\debugger.c:149:	if (single_step) {
+GXEMUL-SEC/src/debugger\debugger.c:158:		 * NOTE: Setting single_step = true directly is not wise,
+GXEMUL-SEC/src/debugger\debugger.c:161:		about_to_enter_single_step = true;
+GXEMUL-SEC/src/debugger\debugger.c:259:			debugger_cmd_print(m, left);
+GXEMUL-SEC/src/debugger\debugger.c:270:		single_step_breakpoint = 0;
+GXEMUL-SEC/src/debugger\debugger.c:803:	exit_debugger_to_continue_single_stepping = false;
+GXEMUL-SEC/src/debugger\debugger.c:835:		if (exit_debugger_to_continue_single_stepping)
+GXEMUL-SEC/src/debugger\debugger.c:849:	single_step = false;
+
+ succeeded in 205ms:
+GXEMUL-SEC/src/cpus/cpu_alpha.c:121:		templ.extra = cpu;
+GXEMUL-SEC/src/cpus/cpu_alpha.c:255: *  If running is 1, cpu->pc should be the address of the instruction.
+GXEMUL-SEC/src/cpus/cpu_alpha.c:257: *  If running is 0, things that depend on the runtime environment (eg.
+GXEMUL-SEC/src/cpus/cpu_alpha.c:262:        int running, uint64_t dumpaddr)
+GXEMUL-SEC/src/cpus/cpu_alpha.c:270:	if (running)
+GXEMUL-SEC/src/cpus/cpu_alpha.c:278:	if (cpu->machine->ncpus > 1 && running)
+GXEMUL-SEC/src/cpus/cpu_alpha.c:286:	cpu_print_pc_indicator_in_disassembly(cpu, running, dumpaddr);
+GXEMUL-SEC/src/cpus/cpu_alpha.c:289:	ra = (iw >> 21) & 31;
+GXEMUL-SEC/src/cpus/cpu_alpha.c:290:	rb = (iw >> 16) & 31;
+GXEMUL-SEC/src/cpus/cpu_alpha.c:296:	case 0x00:
+GXEMUL-SEC/src/cpus/cpu_alpha.c:301:	case 0x08:
+GXEMUL-SEC/src/cpus/cpu_alpha.c:302:	case 0x09:
+GXEMUL-SEC/src/cpus/cpu_alpha.c:303:		debug("lda%s\t%s,", opcode == 9? "h" : "", alpha_regname[ra]);
+GXEMUL-SEC/src/cpus/cpu_alpha.c:321:	case 0x28:
+GXEMUL-SEC/src/cpus/cpu_alpha.c:322:	case 0x29:
+GXEMUL-SEC/src/cpus/cpu_alpha.c:325:	case 0x2c:
+GXEMUL-SEC/src/cpus/cpu_alpha.c:326:	case 0x2d:
+GXEMUL-SEC/src/cpus/cpu_alpha.c:345:		case 0x28: mnem = "ldl"; break;
+GXEMUL-SEC/src/cpus/cpu_alpha.c:346:		case 0x29: mnem = "ldq"; break;
+GXEMUL-SEC/src/cpus/cpu_alpha.c:349:		case 0x2c: mnem = "stl"; break;
+GXEMUL-SEC/src/cpus/cpu_alpha.c:350:		case 0x2d: mnem = "stq"; break;
+GXEMUL-SEC/src/cpus/cpu_alpha.c:354:		if (opcode == 0x0b && ra == ALPHA_ZERO) {
+GXEMUL-SEC/src/cpus/cpu_alpha.c:368:		case 0x00: mnem = "addl"; break;
+GXEMUL-SEC/src/cpus/cpu_alpha.c:370:		case 0x09: mnem = "subl"; break;
+GXEMUL-SEC/src/cpus/cpu_alpha.c:378:		case 0x29: mnem = "subq"; break;
+GXEMUL-SEC/src/cpus/cpu_alpha.c:380:		case 0x2d: mnem = "cmpeq"; break;
+GXEMUL-SEC/src/cpus/cpu_alpha.c:405:		case 0x000: mnem = "and"; break;
+GXEMUL-SEC/src/cpus/cpu_alpha.c:406:		case 0x008: mnem = "andnot"; break;
+GXEMUL-SEC/src/cpus/cpu_alpha.c:429:		else if (func == 0x020 && (ra == ALPHA_ZERO
+GXEMUL-SEC/src/cpus/cpu_alpha.c:430:		    || rb == ALPHA_ZERO)) {
+GXEMUL-SEC/src/cpus/cpu_alpha.c:431:			if (ra == ALPHA_ZERO && rb == ALPHA_ZERO)
+GXEMUL-SEC/src/cpus/cpu_alpha.c:433:			else if (ra == ALPHA_ZERO)
+GXEMUL-SEC/src/cpus/cpu_alpha.c:493:		case 0x00: mnem = "mull"; break;
+GXEMUL-SEC/src/cpus/cpu_alpha.c:514:		case 0x080: mnem = "adds"; break;
+GXEMUL-SEC/src/cpus/cpu_alpha.c:515:		case 0x081: mnem = "subs"; break;
+GXEMUL-SEC/src/cpus/cpu_alpha.c:516:		case 0x082: mnem = "muls"; break;
+GXEMUL-SEC/src/cpus/cpu_alpha.c:517:		case 0x083: mnem = "XXXx083"; break;
+GXEMUL-SEC/src/cpus/cpu_alpha.c:545:		if ((func & 0x7ff) == 0x020 && ra == 31 && rb == 31)
+GXEMUL-SEC/src/cpus/cpu_alpha.c:554:		case 0x0000: mnem = "trapb"; break;
+GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:65:	if (!cpu->running) {
+GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:692: *  lda:  Load address.
+GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:698:X(lda)
+GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:705: *  lda_0:  Load address compared to the zero register.
+GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:711:X(lda_0)
+GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:831:	opcode = (iword >> 26) & 63;
+GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:832:	ra = (iword >> 21) & 31;
+GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:833:	rb = (iword >> 16) & 31;
+GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:834:	func = (iword >> 5) & 0x7ff;
+GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:839:	case 0x00:						/*  CALL_PAL  */
+GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:843:	case 0x08:						/*  LDA  */
+GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:844:	case 0x09:						/*  LDAH  */
+GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:845:		if (ra == ALPHA_ZERO) {
+GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:851:		ic->f = instr(lda);
+GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:854:		if (rb == ALPHA_ZERO)
+GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:855:			ic->f = instr(lda_0);
+GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:862:		if (ra == ALPHA_ZERO && opcode == 0x0b) {
+GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:882:	case 0x28:
+GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:883:	case 0x29:
+GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:886:	case 0x2c:
+GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:887:	case 0x2d:
+GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:900:		case 0x28: loadstore_type = 2; load = 1; break;	/*  ldl  */
+GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:901:		case 0x29: loadstore_type = 3; load = 1; break;	/*  ldq  */
+GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:904:		case 0x2c: loadstore_type = 2; break;		/*  stl  */
+GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:905:		case 0x2d: loadstore_type = 3; break;		/*  stq  */
+GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:914:		if (load && ra == ALPHA_ZERO) {
+GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:937:		case 0x00: ic->f = instr(addl); break;
+GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:939:		case 0x09: ic->f = instr(subl); break;
+GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:947:		case 0x29: ic->f = instr(subq); break;
+GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:949:		case 0x2d: ic->f = instr(cmpeq); break;
+GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:994:		case 0x00: ic->f = instr(and); break;
+GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:995:		case 0x08: ic->f = instr(andnot); break;
+GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:999:			   if (ra == ALPHA_ZERO || rb == ALPHA_ZERO) {
+GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:1000:				if (ra == ALPHA_ZERO)
+GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:1001:					ra = rb;
+GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:1007:		case 0x28: ic->f = instr(ornot); break;
+GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:1119:		case 0x00: ic->f = instr(mull); break;
+GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:1165:			if (ra == 31 && rb == 31)
+GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:1186:			if (ra == ALPHA_ZERO) {
+GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:1200:		switch ((iword >> 14) & 3) {
+GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:1206:			if (ra == ALPHA_ZERO) {
+GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:1208:				    rb == ALPHA_RA)
+GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:1221:				    "rb=%i ]\n", ((iword >> 14) & 3), ra, rb);
+GXEMUL-SEC/src/include/cpu_alpha.h:75:#define	ALPHA_V0		0
+GXEMUL-SEC/src/include/cpu_alpha.h:76:#define	ALPHA_T0		1
+GXEMUL-SEC/src/include/cpu_alpha.h:77:#define	ALPHA_T1		2
+GXEMUL-SEC/src/include/cpu_alpha.h:78:#define	ALPHA_T2		3
+GXEMUL-SEC/src/include/cpu_alpha.h:79:#define	ALPHA_T3		4
+GXEMUL-SEC/src/include/cpu_alpha.h:93:#define	ALPHA_A0		16
+GXEMUL-SEC/src/include/cpu_alpha.h:102:#define	ALPHA_T10		24
+GXEMUL-SEC/src/include/cpu_alpha.h:103:#define	ALPHA_T11		25
+GXEMUL-SEC/src/include/cpu_alpha.h:105:#define	ALPHA_T12		27
+GXEMUL-SEC/src/include/cpu_alpha.h:109:#define	ALPHA_ZERO		31
+GXEMUL-SEC/src/include/cpu_alpha.h:113:#define ALPHA_REG_NAMES		{				\
+GXEMUL-SEC/src/include/thirdparty/alpha_cpu.h:103:#define	ALPHA_PSL_USERMODE	0x0008		/* set -> user mode */
+GXEMUL-SEC/src/include/thirdparty/alpha_cpu.h:115:#define	ALPHA_PSL_USERSET	ALPHA_PSL_USERMODE
+GXEMUL-SEC/src/include/thirdparty/alpha_cpu.h:209:#define	ALPHA_K0SEG_BASE	0xfffffc0000000000ULL	/* direct-mapped */
+GXEMUL-SEC/src/include/thirdparty/alpha_cpu.h:210:#define	ALPHA_K0SEG_END		0xfffffdffffffffffULL
+GXEMUL-SEC/src/include/thirdparty/alpha_cpu.h:214:#define ALPHA_K0SEG_TO_PHYS(x)	((x) & ~ALPHA_K0SEG_BASE)
+GXEMUL-SEC/src/include/thirdparty/alpha_cpu.h:215:#define ALPHA_PHYS_TO_K0SEG(x)	((x) | ALPHA_K0SEG_BASE)
+
+ succeeded in 234ms:
+GXEMUL-SEC/src/cpus/cpu.c:320:	memset(cpu->translation_cache, 0, sizeof(uint32_t)
+GXEMUL-SEC/src/cpus/cpu.c:558:	memset(fp, 0, sizeof(struct cpu_family));
+GXEMUL-SEC/src/machines/machine_alpha.c:176:	    (machine->physical_ram_in_mb/2 - 16) * 128);
+GXEMUL-SEC/src/machines/machine_alpha.c:179:	    machine->physical_ram_in_mb/2 * 128);
+GXEMUL-SEC/src/machines/machine_alpha.c:182:	    (machine->physical_ram_in_mb/2) * 128);
+GXEMUL-SEC/src/machines/machine_alpha.c:230:MACHINE_DEFAULT_RAM(alpha)
+GXEMUL-SEC/src/machines/machine_alpha.c:232:	machine->physical_ram_in_mb = 128;
+GXEMUL-SEC/src/cpus/cpu_alpha.c:56:static const char *alpha_regname[N_ALPHA_REGS] = ALPHA_REG_NAMES; 
+GXEMUL-SEC/src/cpus/cpu_alpha.c:107:	cpu->cd.alpha.ctx = 0x10100;
+GXEMUL-SEC/src/cpus/cpu_alpha.c:111:		CPU_SETTINGS_ADD_REGISTER64(alpha_regname[i],
+GXEMUL-SEC/src/cpus/cpu_alpha.c:186:				debug("%3s = 0x%016" PRIx64, alpha_regname[r],
+GXEMUL-SEC/src/cpus/cpu_alpha.c:245:		debug("(%s)", alpha_regname[rb]);
+GXEMUL-SEC/src/cpus/cpu_alpha.c:303:		debug("lda%s\t%s,", opcode == 9? "h" : "", alpha_regname[ra]);
+GXEMUL-SEC/src/cpus/cpu_alpha.c:361:				debug("%s,", alpha_regname[ra]);
+GXEMUL-SEC/src/cpus/cpu_alpha.c:397:			    alpha_regname[ra], (rb << 3) + (func >> 8),
+GXEMUL-SEC/src/cpus/cpu_alpha.c:398:			    alpha_regname[rc]);
+GXEMUL-SEC/src/cpus/cpu_alpha.c:400:			debug("%s\t%s,%s,%s\n", mnem, alpha_regname[ra],
+GXEMUL-SEC/src/cpus/cpu_alpha.c:401:			    alpha_regname[rb], alpha_regname[rc]);
+GXEMUL-SEC/src/cpus/cpu_alpha.c:432:				debug("clr\t%s\n", alpha_regname[rc]);
+GXEMUL-SEC/src/cpus/cpu_alpha.c:434:				debug("mov\t%s,%s\n", alpha_regname[rb],
+GXEMUL-SEC/src/cpus/cpu_alpha.c:435:				    alpha_regname[rc]);
+GXEMUL-SEC/src/cpus/cpu_alpha.c:437:				debug("mov\t%s,%s\n", alpha_regname[ra],
+GXEMUL-SEC/src/cpus/cpu_alpha.c:438:				    alpha_regname[rc]);
+GXEMUL-SEC/src/cpus/cpu_alpha.c:441:			debug("%s\t%s\n", mnem, alpha_regname[rc]);
+GXEMUL-SEC/src/cpus/cpu_alpha.c:444:			    alpha_regname[ra], (rb << 3) + (func >> 8),
+GXEMUL-SEC/src/cpus/cpu_alpha.c:445:			    alpha_regname[rc]);
+GXEMUL-SEC/src/cpus/cpu_alpha.c:447:			debug("%s\t%s,%s,%s\n", mnem, alpha_regname[ra],
+GXEMUL-SEC/src/cpus/cpu_alpha.c:448:			    alpha_regname[rb], alpha_regname[rc]);
+GXEMUL-SEC/src/cpus/cpu_alpha.c:485:			    alpha_regname[ra], (rb << 3) + (func >> 8),
+GXEMUL-SEC/src/cpus/cpu_alpha.c:486:			    alpha_regname[rc]);
+GXEMUL-SEC/src/cpus/cpu_alpha.c:488:			debug("%s\t%s,%s,%s\n", mnem, alpha_regname[ra],
+GXEMUL-SEC/src/cpus/cpu_alpha.c:489:			    alpha_regname[rb], alpha_regname[rc]);
+GXEMUL-SEC/src/cpus/cpu_alpha.c:505:			    alpha_regname[ra], (rb << 3) + (func >> 8),
+GXEMUL-SEC/src/cpus/cpu_alpha.c:506:			    alpha_regname[rc]);
+GXEMUL-SEC/src/cpus/cpu_alpha.c:508:			debug("%s\t%s,%s,%s\n", mnem, alpha_regname[ra],
+GXEMUL-SEC/src/cpus/cpu_alpha.c:509:			    alpha_regname[rb], alpha_regname[rc]);
+GXEMUL-SEC/src/cpus/cpu_alpha.c:574:				debug("(%s)", alpha_regname[rb]);
+GXEMUL-SEC/src/cpus/cpu_alpha.c:576:				debug("%s", alpha_regname[ra]);
+GXEMUL-SEC/src/cpus/cpu_alpha.c:592:			debug("\t%s,", alpha_regname[ra]);
+GXEMUL-SEC/src/cpus/cpu_alpha.c:593:			debug("(%s),", alpha_regname[rb]);
+GXEMUL-SEC/src/cpus/cpu_alpha.c:615:			debug("%s,", alpha_regname[ra]);
+GXEMUL-SEC/src/cpus/cpu_alpha.c:655:			debug("%s,", alpha_regname[ra]);
+GXEMUL-SEC/src\cpus\generate_ppc_loadstore.c
+GXEMUL-SEC/src\cpus\generate_ppc_loadstore
+GXEMUL-SEC/src\cpus\generate_mips_loadstore_multi.c
+GXEMUL-SEC/src\cpus\generate_mips_loadstore_multi
+GXEMUL-SEC/src\cpus\generate_mips_loadstore.c
+GXEMUL-SEC/src\cpus\generate_mips_loadstore
+GXEMUL-SEC/src\cpus\generate_m88k_loadstore.c
+GXEMUL-SEC/src\cpus\generate_m88k_loadstore
+GXEMUL-SEC/src\cpus\generate_arm_loadstore.c
+GXEMUL-SEC/src\cpus\generate_arm_loadstore
+GXEMUL-SEC/src\cpus\cpu_ppc_instr_loadstore.c
+GXEMUL-SEC/src\cpus\cpu_mips_instr_loadstore.c
+GXEMUL-SEC/src\cpus\cpu_m88k_instr_loadstore.c
+GXEMUL-SEC/src\cpus\cpu_dyntrans.c
+GXEMUL-SEC/src\cpus\cpu_arm_instr_loadstore.c
+GXEMUL-SEC/src\cpus\cpu_alpha_instr_loadstore.c
+GXEMUL-SEC/src\cpus\tmp_ppc_loadstore.c
+GXEMUL-SEC/src\cpus\tmp_mips_loadstore_multi.c
+GXEMUL-SEC/src\cpus\tmp_mips_loadstore.c
+GXEMUL-SEC/src\cpus\tmp_m88k_loadstore.c
+GXEMUL-SEC/src\cpus\tmp_arm_loadstore_p1_u1_w1.o
+GXEMUL-SEC/src\cpus\tmp_arm_loadstore_p1_u1_w1.c
+GXEMUL-SEC/src\cpus\tmp_arm_loadstore_p1_u1_w0.o
+GXEMUL-SEC/src\cpus\tmp_arm_loadstore_p1_u1_w0.c
+GXEMUL-SEC/src\cpus\tmp_arm_loadstore_p1_u0_w1.o
+GXEMUL-SEC/src\cpus\tmp_arm_loadstore_p1_u0_w1.c
+GXEMUL-SEC/src\cpus\tmp_arm_loadstore_p1_u0_w0.o
+GXEMUL-SEC/src\cpus\tmp_arm_loadstore_p1_u0_w0.c
+GXEMUL-SEC/src\cpus\tmp_arm_loadstore_p0_u1_w1.o
+GXEMUL-SEC/src\cpus\tmp_arm_loadstore_p0_u1_w1.c
+GXEMUL-SEC/src\cpus\tmp_arm_loadstore_p0_u1_w0.o
+GXEMUL-SEC/src\cpus\tmp_arm_loadstore_p0_u1_w0.c
+GXEMUL-SEC/src\cpus\tmp_arm_loadstore_p0_u0_w1.o
+GXEMUL-SEC/src\cpus\tmp_arm_loadstore_p0_u0_w1.c
+GXEMUL-SEC/src\cpus\tmp_arm_loadstore_p0_u0_w0.o
+GXEMUL-SEC/src\cpus\tmp_arm_loadstore_p0_u0_w0.c
+GXEMUL-SEC/src\cpus\tmp_arm_loadstore.o
+GXEMUL-SEC/src\cpus\tmp_arm_loadstore.c
+GXEMUL-SEC/src\cpus\memory_sh.o
+GXEMUL-SEC/src\cpus\memory_sh.c
+GXEMUL-SEC/src\cpus\memory_rw.c
+GXEMUL-SEC/src\cpus\memory_ppc.c
+GXEMUL-SEC/src\cpus\memory_mips_v2p.c
+GXEMUL-SEC/src\cpus\memory_mips.c
+GXEMUL-SEC/src\cpus\memory_m88k.o
+GXEMUL-SEC/src\cpus\memory_m88k.c
+GXEMUL-SEC/src\cpus\memory_arm.o
+GXEMUL-SEC/src\cpus\memory_arm.c
+GXEMUL-SEC/src\cpus\memory_alpha.o
+GXEMUL-SEC/src\cpus\memory_alpha.c
+GXEMUL-SEC/src\core\memory.c
+GXEMUL-SEC/src\core\memory.o
+GXEMUL-SEC/src\include\memory.h
+
+ succeeded in 285ms:
+  40: /* 106: 	i3 = (vaddr >> (pageSizeShift + 0 * bitsPerLevel)) & maskPerLevel;
+ 107: 
+ 108: 	// debug("vaddr=%016llx i1=0x%x i2=0x%x i3=0x%x\n", (long long)vaddr, i1, i2, i3);
+ 109: 
+ 110: 	addr = base + i1 * sizeof(uint64_t);
+  40: #include "misc.h"
+  41: 
+  42: #include "thirdparty/alpha_autoconf.h"
+  43: #include "thirdparty/alpha_rpb.h"
+  44: 
+  45: 
+  46: MACHINE_SETUP(alpha)
+  47: {
+  48: 	struct rpb rpb;
+  49: 	struct crb crb;
+  50: 	struct ctb ctb;
+  51: 	struct mddt mddt;
+  52: 	struct pcs *pcs = (struct pcs *) malloc(sizeof(struct pcs) * machine->ncpus);
+  53: 	int i;
+  54: 
+  55: 	switch (machine->machine_subtype) {
+  56: 
+  57: 	case ST_ALPHABOOK1:
+  58: 		machine->machine_name = strdup("AlphaBook 1");
+  59: 		if (machine->emulated_hz == 0)
+  60: 			machine->emulated_hz = 233000000;
+  61: 		device_add(machine, "lca");
+  62: 		break;
+  63: 
+  64: 	case ST_DEC_4100:
+  65: 		machine->machine_name = strdup("AlphaServer 4100");
+  66: 		break;
+  67: 
+  68: 	case ST_DEC_3000_300:
+  69: 		machine->machine_name = strdup("DEC 3000/300");
+  70: 		machine->main_console_handle = (size_t)device_add(machine,
+  71: 		    "z8530 addr=0x1b0200000 irq=0 addr_mult=4");
+  72: 		break;
+  73: 
+  74: 	case ST_EB164:
+  75: 		machine->machine_name = strdup("EB164");
+  76: 		break;
+  77: 
+  78: 	default:fatal("Unimplemented Alpha machine type %i\n",
+  79: 		    machine->machine_subtype);
+  80: 		exit(1);
+  81: 	}
+  82: 
+  83: 	if (!machine->prom_emulation)
+  84: 		return;
+  85: 
+  86: 	/*  These are used by NetBSD/alpha:  */
+  87: 	/*  a0 = First free Page Frame Number  */
+  88: 	/*  a1 = PFN of current Level 1 page table  */
+  89: 	/*  a2 = Bootinfo magic  */
+  90: 	/*  a3 = Bootinfo pointer  */
+  91: 	/*  a4 = Bootinfo version  */
+  92: 	cpu->cd.alpha.r[ALPHA_A0] = 16*1024*1024 / 8192;
+  93: 	cpu->cd.alpha.r[ALPHA_A1] = 0;	/*  TODO  */
+  94: 	cpu->cd.alpha.r[ALPHA_A2] = 0;	/*  Note: NOT ALPHA_BOOTINFO_MAGIC  */
+  95: 	cpu->cd.alpha.r[ALPHA_A3] = 0;	/*  TODO  */
+  96: 	cpu->cd.alpha.r[ALPHA_A4] = 1;
+  97: 
+  98: 	/*
+  99: 	 *  HWRPB: Hardware Restart Parameter Block
+ 100: 	 *
+ 101: 	 *  TODO: Almost everything.
+ 102: 	 */
+ 103: 	memset(&rpb, 0, sizeof(struct rpb));
+ 104: 	store_64bit_word_in_host(cpu, (unsigned char *)
+ 105: 	    &(rpb.rpb_phys), 0x14000);
+ 106: 	strlcpy((char *)&(rpb.rpb_magic), "HWRPB", 8);
+ 107: 	store_64bit_word_in_host(cpu, (unsigned char *)
+ 108: 	    &(rpb.rpb_version), HWRPB_DSRDB_MINVERS);
+ 109: 	store_64bit_word_in_host(cpu, (unsigned char *)
+ 110: 	    &(rpb.rpb_size), sizeof(struct rpb));
+ 111: 	store_64bit_word_in_host(cpu, (unsigned char *)
+ 112: 	    &(rpb.rpb_page_size), 8192);
+ 113: 	strlcpy((char *)&(rpb.rpb_ssn), "123456789", 10);
+ 114: 	store_64bit_word_in_host(cpu, (unsigned char *)
+ 115: 	    &(rpb.rpb_type), machine->machine_subtype);
+ 116: 	store_64bit_word_in_host(cpu, (unsigned char *)
+ 117: 	    &(rpb.rpb_cc_freq), machine->emulated_hz);
+ 118: 	store_64bit_word_in_host(cpu, (unsigned char *)
+ 119: 	    &(rpb.rpb_intr_freq), 1024 << 12);
+ 120: 	store_64bit_word_in_host(cpu, (unsigned char *)
+ 121: 	    &(rpb.rpb_pcs_cnt), machine->ncpus);
+ 122: 	store_64bit_word_in_host(cpu, (unsigned char *)
+ 123: 	    &(rpb.rpb_pcs_size), sizeof(struct pcs));
+ 124: 	store_64bit_word_in_host(cpu, (unsigned char *)
+ 125: 	    &(rpb.rpb_pcs_off), PCS_ADDR - HWRPB_ADDR);
+ 126: 	store_64bit_word_in_host(cpu, (unsigned char *)
+ 127: 	    &(rpb.rpb_ctb_off), CTB_ADDR - HWRPB_ADDR);
+ 128: 	store_64bit_word_in_host(cpu, (unsigned char *)
+ 129: 	    &(rpb.rpb_crb_off), CRB_ADDR - HWRPB_ADDR);
+ 130: 	store_64bit_word_in_host(cpu, (unsigned char *)
+ 131: 	    &(rpb.rpb_memdat_off), MEMDAT_ADDR - HWRPB_ADDR);
+ 132: 
+ 133: 	/*  CTB: Console Terminal Block  */
+ 134: 	memset(&ctb, 0, sizeof(struct ctb));
+ 135: 	store_64bit_word_in_host(cpu, (unsigned char *)
+ 136: 	    &(ctb.ctb_term_type), machine->x11_md.in_use?
+ 137: 	    CTB_GRAPHICS : CTB_PRINTERPORT);
+ 138: 
+ 139: 	/*  CRB: Console Routine Block  */
+ 140: 	memset(&crb, 0, sizeof(struct crb));
+ 141: 	store_64bit_word_in_host(cpu, (unsigned char *)
+ 142: 	    &(crb.crb_v_dispatch), CRB_ADDR - 0x100);
+ 143: 	store_64bit_word(cpu, CRB_ADDR - 0x100 + 8, PROM_ENTRY_PADDR);
+ 144: 	store_64bit_word_in_host(cpu, (unsigned char *)
+ 145: 	    &(crb.crb_v_fixup), CRB_ADDR - 0x80);
+
+ERROR: This content was flagged for possible cybersecurity risk. If this seems wrong, try rephrasing your request. To get authorized for security work, join the Trusted Access for Cyber program: https://chatgpt.com/cyber
+ERROR: This content was flagged for possible cybersecurity risk. If this seems wrong, try rephrasing your request. To get authorized for security work, join the Trusted Access for Cyber program: https://chatgpt.com/cyber
+tokens used
+42,363

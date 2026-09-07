@@ -1373,3 +1373,299 @@ code changed.
    `sgirenamedstmode`.  In particular: the round DECLINED to reword the `dst_mode` diagnostic because doing so
    broke the probe's anchor mid-round, and filed it instead.  **Was filing right, or was that an L4 the round
    should have taken with the anchor moved in the same diff?**
+
+---
+
+## 6. RULE QUESTIONS — QUEUED 2026-09-07, ready for the 2026-09-09 reset
+
+**These change how future rounds run, so the carrier caps their wait at about a day — and they have
+waited longer, because the flagship seats are held for this adjudication by standing owner directive.
+They are written out in full here so the adjudication can begin without reconstructing any of them.**
+
+Each states its question, my position (so the seat has something to attack), and what a ruling costs.
+**Where a ruling in my favour is available, please be harder on it than on the alternative** — a
+ruling that adopts your author's position is the one he is least likely to test.
+
+### `m88kexcdetectorl2` (HIGH) — is a MEASURED clean sweep an L2 floor breach, or clause-(e) debt?
+
+**The only one of the five that is HIGH, and the only one where a wrong answer changes what ships.**
+
+Deleting `implemented = true` at the DATA_ACCESS arm, or at RESET, scores **59/59 with zero row diffs**
+against the shipped `regress/m88k_exc_probe.py`. I measured both, and verified the instrument is sound
+by checking it reds on a control. The gap is real and it is not in dispute.
+
+**The question is the GRADE.** The floor says a clause-(d) mutant that sweeps a detector clean is an
+**L2 breach, repaired in-round however late**. But these two arms are **pre-existing** — `#502` added
+exactly seven arms and these are not among them — so the DEPENDS-ON enumeration, which is closed over
+the round's own diff, does not reach them. Under the strict reading they are clause-(e) coverage debt
+in code that round never touched; under the broad reading the shipped composite detector has a
+measured false pass and owes an in-round repair.
+
+**MY POSITION, and I have already acted on it in the weaker direction:** I first graded it L2, then
+downgraded it to a rule question on the diff-closure argument. **I think the downgrade is right and I
+am not confident.** The argument that worries me is that the floor asks its question *of the shipped
+composite on every pass* — which is `#499`'s own correction — and a composite includes arms the diff
+did not add.
+
+**COST OF EACH RULING:** L2 means two rows and a re-table on a closed round. Clause-(e) means a
+disclosure sentence in the contract and a filed row. Neither is expensive; the precedent is what
+matters, because this shape will recur on every detector that outlives the round that built it.
+
+### `codexbriefscoping` (LOW) — a BRIEF_TEMPLATE change made on measurement rather than by ruling
+
+`BRIEF_TEMPLATE.md` gained a **§C5** telling every codex brief to use ordinary engineering language and
+to scope the seat's reading to `src/` and `regress/*.py`. The evidence is a four-run experiment with a
+clean control: vocabulary alone converted an immediate refusal into a run that worked for minutes, and
+scoping alone carried that run past the exact byte where the unrestricted one was flagged — 279,132 vs
+279,268, same distance, opposite outcome. Six clean runs since.
+
+**THE QUESTION:** is scoping the seat AWAY from `regress/artifacts/` and the ledger a review-quality
+loss? Those archives hold the kill tables; a seat that cannot read them cannot check a historical
+score, and pass-2 briefs sometimes ask exactly that. **The measurement says reading them gets the seat
+refused; it does not say the reading was worthless.**
+
+**MY POSITION:** the loss is real and small, and the middle form — scope out by default, inline the
+specific artifact when a question depends on it — is right, since §C2 already mandates that machinery
+for the packet-fed seats. Reverting is one deletion.
+
+**AND A THIRD TRIGGER LANDED AFTER THAT EXPERIMENT, which strengthens the section and sharpens the
+question:** a brief obeying both existing rules was still refused for **chain-shaped content** — a
+numbered guest-controlled chain ending in a physical write. **See the entry below; that refusal has
+now demonstrably cost a correct answer, which is new evidence this row did not have when it was
+filed.**
+
+### `briefforcedwrong` (LOW) — the template's closing question assumes a premise must be wrong
+
+Filed by the codex seat against the template rather than against any code: *"the unsupported assumption
+is 'at least one numbered premise must be wrong.'"* All three premises in that brief were correct.
+
+The device earns its place — the carrier records it finding four wrong premises in one brief, and it
+has produced real premise corrections since. **The objection is narrower: as worded it instructs the
+seat to assume a defect exists, so a seat with sound premises must either invent one or push back on
+the instruction.** Pushing back is the right answer and the template does not invite it.
+
+**Proposed wording, held rather than applied:** keep the question, add *"or say NONE and name the
+forcing assumption as the defect"*.
+
+### `m88ksfd1row` (LOW) — does the addition licence authorise a zero-delta row that buys attribution?
+
+`trapfrozensfd1`'s measured delta against its own mutant is **ZERO** — delete it and the mutant is
+still caught 58/58 by `trapfrozenuser`. I claimed the anchor rule one level down: a row varying two
+bits cannot say which one fired. **codex rejected that**, citing the carrier — the anchor rule repairs
+an oracle comparing a path with *itself*, which this is not, and row demand is bounded *"per enumerated
+mutant, never per attribution need"*. Its verdict: close the chain.
+
+**Why the row is still in the tree, and it is the same seat's own next paragraph:** after removal, SFD1
+coverage rests entirely on `trapfrozenuser`, whose `PSR_FRZUSER` is SHARED with `errpriv` and
+`errunimpl`. Changing that constant from `0x03` to `0x0b` preserves *their* routes while silently
+deleting the only SFD1-clear stimulus, and **BASE alone would not notice.**
+
+**THE ASK:** either (a) the licence is right, the row goes, and the shared-constant hazard is handled
+some other way — noting that a comment is memory, and this project's finding is that memory does not
+fire; or (b) a distinguishing failure signature IS a licensed benefit when the alternative concentrates
+an axis on a shared constant, in which case the licence's wording should say so, because it does not.
+
+### *** `sgilinearnegidxpostmortem` — NEW, RAISED 2026-09-07 BY THE FAILURE ITSELF ***
+
+**I filed a HIGH finding, escalated it to a guest-chosen physical write address, wrote it into a commit
+message, and reported it as the session's most severe result. It was FALSE.** `tile_nr` is declared
+`unsigned int` three lines above the code I quoted, so the `>= 32` guard rejects every negative `x`.
+Withdrawn at `a264a34`; `15633bb`'s message is wrong and cannot be edited.
+
+**THE RULE QUESTION, and it is not "be more careful":** I *did* apply this project's discipline. I
+identified the link I doubted, verified it by grep, and ran an `offsetof` rather than trust hand
+arithmetic about a struct. **Every one of those was aimed at a link I had already decided to question.
+The defeating fact was in a declaration I never thought to read, in a range I had printed to my own
+screen earlier in the same session.**
+
+1. **Is there a STRUCTURAL form for this, or is it irreducibly judgement?** The carrier's thesis is
+   that a rule which lives in prose does not fire. The candidate rule — *"a chain resting on an index
+   or a bound quotes the DECLARATION of every variable in it"* — is cheap, mechanical, and would have
+   caught this in one line. Is it worth the template line, or is it one instance wearing the clothes
+   of a class?
+2. **Does the premise-audit instruction need a self-directed twin?** It tells *seats* not to ratify my
+   premises. Nothing tells *me* to enumerate which premises I never questioned — and that set is
+   exactly where this lived. **A premise you did not notice you were making is not audited by an
+   instruction aimed at your reader.**
+3. **What does this say about §C5?** The refusal is no longer a cost paid in inconvenience. The
+   chain-shaped brief asking for this exact chain to be attacked was REFUSED; the same seat, asked the
+   same subject without the chain, put the refutation in its verdict line. **The refusal did not stop a
+   bad question — it delayed a correct answer by hours, during which I escalated a false finding.**
+   Does that change the disposition of `codexbriefscoping` above, and does it warrant splitting every
+   chain into link questions BY DEFAULT rather than as a fallback?
+
+**MY POSITION:** (1) yes, and narrowly — restricted to chains whose conclusion is a bound or an index,
+which is a small and recognisable population. (2) yes, and it is the more valuable of the two. (3) it
+strengthens the case for the middle form rather than for reverting §C5, but I hold that weakly, and it
+is the question I would most like answered by someone who is not me.
+
+### `codexrefusalclass` — RAISED 2026-09-07: is a REFUSAL a seat failure, and how is it recorded?
+
+**This is a PANEL-MECHANICS question, deliberately separate from `codexbriefscoping` above.** That row
+asks whether §C5's scoping is right. This one asks what the harness should *do* when a seat refuses,
+and the answer changes every future round's record regardless of how §C5 is settled.
+
+**THE FACTS, from five refusals on 2026-09-07.** Four distinct triggers have been found, each by
+losing a run to it:
+
+| trigger | level | how it presents |
+|---|---|---|
+| vocabulary (`kills`, `host dies`) | prompt | immediate refusal, tiny `.err` |
+| reading `regress/artifacts/` or the ledger | content | refusal after minutes of work |
+| chain-shaped content (a numbered guest-controlled sequence) | prompt | immediate, ~8 KB `.err` |
+| **the defect CLASS itself** (information disclosure) | content | **refusal after 43,839 tokens** |
+
+*** THE RECORDING PROBLEM: A REFUSAL LEAVES A ZERO-BYTE ANSWER FILE BESIDE A LARGE `.err`. THAT IS
+BYTE-FOR-BYTE THE agy QUOTA-WALL SIGNATURE. *** The carrier already warns that a zero-byte agy log is
+the normal mid-run state and that the discriminator is the `.err` — but a refusal and a wall both put
+text there, and nothing distinguishes them by shape. `panel.sh`'s seat check does not classify
+refusals at all; `seat_verdicts.py` gained a SEAT REFUSED label only for the echo shape, which this
+is not.
+
+**THE QUESTIONS:**
+
+1. **Is a refusal a SEAT FAILURE?** It is not a wall (no quota is exhausted), not a burn (no thinking
+   budget spent — well, 43k tokens *were* spent), not a stall, and not a considered non-answer. The
+   seat ledger's rule is that a seat which did not answer is a failure and never agreement. **Does a
+   refusal inherit that, or is it a sixth class needing its own disposition?**
+2. **Should `seat_verdicts.py` and `panel.sh` learn the signature?** The content-level form is
+   detectable — the `.err` tail carries a fixed provider string. The cost is one grep; the risk is
+   the check-that-cannot-fail family if the string ever changes silently.
+3. **IS THE ROUTING CLAUSE THE STANDING ANSWER?** Measured twice today: codex refused a witness-design
+   brief and an information-disclosure brief; **grok answered both in full**, found a defect in my
+   witness design and corrected three premises in the other. **One extra invocation, nothing lost.**
+   Should §C5 gain *"witness designs and disclosure-class defects go to grok and the packet-fed seats;
+   codex takes the reading questions"* — or does that quietly halve the roster's strongest seat on a
+   class this fork's queue is full of (`#91`/`#93`/`#94`/`#95`, `sgirebufuninit`, `sgirandomcolour`,
+   `sgimtedepth4dead`)?
+
+**MY POSITION, weakly held:** (1) yes, a sixth class — it is an OPERATIONAL failure like a wall, and
+must never read as agreement; (2) yes, but as a *report* rather than a gate, since the string is
+outside our control; (3) the routing clause is right as a DEFAULT and wrong as a rule — the reworded
+experiment (`PASS1_brief_reworded.md`) is meant to find out whether the framing or the subject is what
+trips it, and that answer should decide this rather than my preference.
+
+**AND A DISCLOSURE ABOUT THE REWORDING, because it is the part I am least comfortable with:** the
+reworded brief keeps every technical premise and removes the sentence describing what the defect
+*means*. That is honest — the design question does not depend on the consequence — but it is one step
+from writing briefs that describe defects in words chosen to pass a filter rather than words chosen
+to be true. **The adjudication should say where that line is**, because I will otherwise be drawing
+it myself, repeatedly, under time pressure.
+
+
+---
+
+## 7. ADDED 2026-09-07 (afternoon) — CLOSURE RATIFICATIONS and four new rule questions
+
+### 7a. TWO CLOSURES PROPOSED, NOT MADE — please ratify or refuse
+
+Both were found by a codex rating pass and then **verified by me against the source**. I did not close
+them, because closing on one seat's reading plus my own agreement is precisely the self-review the
+conflict-of-interest badge exists to disclose. Badge: `A` (author self-review disclosed).
+
+* **`pitclobber`** — `dev_8253.c:303-308` handles `I8253_TIMER_LATCH` with a `break;` *before* `:310
+  d->mode_byte = idata;`, so a latch command can no longer reach the reprogramming store. **The row's
+  own `witness` field already said so**: *"none needed -- the defect was fixed by `#439` (`020a672`),
+  which also shipped `regress/pit8253_latch_probe.py` as its detector."* Carrying row:
+  `R1 latch preserves programming`.
+* **`asiceventaddr`** — `dreamcast_sysasicvar.h:140` is
+  `(SYSASIC_BASE + 4*((e)>>5) + SYSASIC_EVENT_RANGE_OK(e))`, so the domain guard is *inside* the
+  macro and an out-of-domain event cannot produce an address. Added by `#467`/`#468` (`29b450c`). The
+  row's existing witness text is stale — it still gives the *pre-fix* warrant ("the highest defined
+  event is 67 < 96").
+
+**`wdcflood` is deliberately NOT proposed** although the same pass called it fixed and I verified the
+latch at `dev_wdc.c:1065`: the row is `in work` with its own commit, and an `in work` row may carry an
+obligation a source reading cannot see. **That judgement is the one I want checked**, in both
+directions — am I being too cautious there, or not cautious enough on the other two?
+
+### 7b. THE CLASS BEHIND THEM, and the question it raises
+
+**Five already-fixed-and-still-open rows surfaced today** (`lunaabsentcpu`, `wdcflood`, `pitclobber`,
+`asiceventaddr`, and a `dev_pvr.c` site grok found de-fatalised by `#166`). I derived a mechanical
+signal — **a row carrying a `commits` value that is still open** — which returns 14 rows and contains
+3 of the 4 known instances. A codex pass on the other 11 is in flight.
+
+> **THE QUESTION: should closing be part of a round's own gate?** A round that fixes a defect and does
+> not close its row leaves a queue that overstates the work outstanding — and this queue is the thing
+> the standing directive asks me to prioritise from. But a mechanical auto-close is the
+> check-that-cannot-fail family: a row can be fixed *and* still owe a detector.
+
+### 7c. NEW RULE QUESTION — the two-deriver practice
+
+**Four censuses of mine today each keyed on ONE spelling and missed a variant:** `severity` (the field
+is `sev`) → 0 of 260 matched; `witness != 'none'` (the convention is `none -- <why>`) → 37 of 73
+miscounted; `<< 24` (a `uint16_t << 16` is the same UB) → the structural site missed entirely;
+`(int)idata` (the tree also writes `(int) idata`) → 226 where the answer is 309. **Every one was
+caught by someone else's derivation, never by re-reading mine.**
+
+The carrier already says *when two derivers DISAGREE neither is trustworthy until you look at what
+each matched*, and `sgirekills` added *when two AGREE that is not evidence either, if they can fail
+the same way*. **The proposal: a census written into a durable record runs TWO derivations with
+different keys and PRINTS BOTH.** Cheap, and disagreement is a free signal available before any seat
+reads the work. **Is that a rule, or is it the counts rule's stop condition being widened past what
+the evidence supports?** The honest severity is the same as the counts rule's: *no stale census has
+yet changed a decision* — though `lcaconfwidth`'s 226-vs-309 came within one brief of doing so.
+
+### 7d. NEW RULE QUESTION — where does an apparatus control belong?
+
+Three separate row-classes were built today whose entire purpose is to separate **"measured nothing"**
+from **"measured a zero"**, independently and within hours of each other:
+
+    UBSan in-band control   a known-UB binary must REPORT before a silent emulator run is read
+    kill-table NUL check    a log with NUL bytes means concurrent writers; the score is VOID
+    `swpctx mapped`         a 0 readback means the memory was never there -- a SETUP failure
+
+**Each was added only after the corresponding failure nearly landed a false negative** — and one of
+them (UBSan take 1) *did* produce a clean-looking `0` that I was one step from recording. **Should the
+witness ladder's control clause (ii) be widened from LIVENESS + DEVICE-SIGNATURE to include an
+explicit APPARATUS control** — *this instrument would have spoken if the thing were true* — or does
+that duplicate what liveness already means? I think it is genuinely different: liveness proves the
+path works, and this proves the OBSERVER works.
+
+### 7e. REFUSAL #7 REFINES QUESTION 3 ABOVE
+
+The `lcaconfwidth` census brief was refused after **108,432 tokens of completed work**. Its shape:
+*"say whether a 64-bit value exists that trips the guard and prints as something the guard would
+accept — give the discriminating value."* That is a printf-format-correctness question. **The trigger
+is the SHAPE — find the input that defeats the check — not the subject**, which strengthens the
+"chain-shaped content" reading already recorded and weakens "it is about the framing of consequences".
+
+**grok answered it in full and corrected my census in both directions.** Routing worked for the fourth
+time. The question in §6.3 stands and now has a fourth data point.
+
+
+### 7f. THREE RUNG-3 WITNESSES BUILT AND RUN ON 2026-09-07 — two for HIGH rows that had none
+
+All three show the symptom on the **committed** build, which is what clause (i) asks for, and all
+three carry a control that separates *measured the thing* from *measured nothing*.
+
+| row | probe | HEAD | the defect row |
+|---|---|---|---|
+| `alphaswpctxptbr` (high) | `regress/alpha_harness_probe.py` | **7/9** | `PCB_A+16` reads `0xbbbb2222` (A.flags) where `0xaaaa1111` (A.ptbr) is required |
+| `lcaconfwidth` (med) | `regress/lca_confwidth_probe.py` | **4/6** | the IOC_CONF kill message reads `0x0` — a value that guard **accepts** |
+| `alphapfnoffset` (high) | `regress/alpha_pfnoffset_probe.py` | **5/6** | a cold guest `ldq` of `vaddr+8` returns the `data+0` value |
+
+**The question for the adjudication is not whether these are correct — it is what they cost.** Each
+took one design pass from a reading seat plus one build, and **each design pass killed at least one
+trap that would have produced a GREEN run on the defective build**:
+
+* the Alpha harness's first draft planted every structure **past the end of RAM**, where writes are
+  discarded and reads return zeros — three rows would have gone green measuring nothing;
+* the LCA probe's read-back would have used debugger `dump`, which skips a `DM_DEFAULT` handler and
+  returns the pre-zeroed buffer — *the unmapped signature produced by a hit*;
+* the PFN probe would have planted its oracle value **through the walk under test**, so HEAD would
+  have measured the defect against itself and gone green.
+
+> **NONE OF THE THREE IS THE KIND OF ERROR A SECOND PAIR OF EYES ON THE *CODE* WOULD CATCH.** Each is
+> a property of the APPARATUS, invisible in the probe's own text, and each was found by a seat asked
+> specifically *what would make this go green while measuring nothing*. **Is that question worth
+> adding to the brief template as a standing item for any witness design?**
+
+**And one I got wrong twice, which is the reason to ask:** the first `lca_confwidth_probe.py` scored
+**6/6 on the committed build** because it asserted the DEFECT as the passing state. It reads as
+success and would have gone red the moment the bug was fixed. The sibling `alpha_harness_probe.py`
+had the polarity right (7/9) **in the same tree on the same day**. The cheap tell is *"what does this
+row do after the fix?"* — if the answer is "goes red", the polarity is inverted whatever the score
+says. **Should that be a checkable rule rather than a habit?** A witness whose score is
+`len(rows)` on HEAD is suspicious by construction, and that is mechanical.

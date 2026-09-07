@@ -1,0 +1,35 @@
+VERDICT: The defect claim re-derives cleanly from the inlined code — RGB PUT treats buf[3] as the pad, RGB GET treats buf[0] as the pad; they are not inverses — but the conclusion that **the GET is the wrong arm does NOT follow from anything in the packet**. Ground 1 is circular, ground 2 is neutralized by the ABGR arm, and S4 is arm-neutral: under a pad-first hardware layout, the measured `0xbbccdd00` would be the *faithful* result and PUT the bug. Arm selection requires one fact not in the packet (the real CRIME/RE type-0x10 byte layout), and Q5's premise ("the fix is one line in the GET arm") inherits that gap.
+
+**The core claim, re-derived (READ from inlined code)**
+
+- PUT RGB writes channels to buf{0,1,2}, pad to buf[3]. GET RGB reads channels from buf{1,2,3} and never touches buf[0] — i.e., GET implicitly treats buf[0] as the pad. Index sets {0,1,2} vs {1,2,3}: not inverses. `GET(PUT(0x11223344)) = 0x22330000`.
+- Every other mode's PUT and GET use the *same* index set (I checked each row of S2 against S1; the table is accurate).
+- Sharpening the brief: the corruption doesn't need a mode-change probe. An in-place RGB read-then-write through these arms rewrites memory `[m0,m1,m2,m3]` as `[m1,m2,m3,0]` — each read-modify-write shifts the pixel one byte. So "exactly one arm is wrong" is provable without any hardware knowledge. **This much of the brief I ratify.**
+
+**Q1 — arguing the other side (REASONED)**
+
+- Ground 1 ("`buf[3] = 0` is an explicit pad write") is circular: it records what the PUT author believed. If PUT is the buggy arm, that same line is the half that overwrites B with zero.
+- Ground 2 ("the RGBA neighbour puts R at buf[0]") overreaches as a family argument: ABGR — same engine, same mode field — puts R at buf[3]. This engine demonstrably implements both alpha-last (RGBA) and alpha-first (ABGR) layouts, so a pad-*first* RGB layout `[X,R,G,B]` is exactly as precedented as `[R,G,B,X]`. The RGB≈RGBA name adjacency is a convention argument; it's real but weaker than stated, and it is the *only* packet evidence favoring the GET-is-wrong side.
+- S4 is arm-neutral: under XRGB hardware, memory `[aa=pad, bb, cc, dd]` read by the current GET yields `0xbbccdd00` — which *is* the correct canonical value. The measurement proves the inconsistency and contributes zero evidence about which side is wrong. The sentence "which is what the GET reading buf[1..3] predicts exactly" is true and equally true of correct pad-first hardware.
+- So: **Q1 is underdetermined by the packet.** The single fact that settles it: the actual memory byte order of RE type-0x10 pixels — most likely in the comments of `src/include/thirdparty/crmfbreg.h` where the constants are defined (the header name says it was imported from a real driver; if its comments give byte lanes, done), else any real driver (NetBSD `crmfb.c`, IRIX) that programs type RGB.
+
+**Q2 — honest gap.** I do not know the hardware layout. I have an unverifiable recollection that these constants originate in a NetBSD sgimips header, which is exactly why the header's own comments are the cheapest settling fact — but I cannot read them from here, and I won't reconstruct a plausible-sounding answer.
+
+**Q3/Q4 — not checkable from the packet; two things it does prove (READ/REASONED)**
+
+- The S4 probe selected RGB mode and read `CRIME_DE_STATUS` through the guest-visible register interface — so RGB is guest-*reachable* in principle. Whether any shipping driver selects it is an external fact (`crmfb.c` / IRIX RE driver); name it in the record as open rather than assumed.
+- Per the brief's own Q4 note, the only internal mode synthesis forces RGBA (MTE path), so nothing in-tree described here depends on the RGB GET.
+- Unstated premise in S1: the snippet presupposes `color_mode` is already type-masked (bits 8–9 of mode carry bufdepth; an unmasked `switch(color_mode)` would match nothing). S4 working implies masking happens; the assignment site of `color_mode` — register value ANDed with MASK vs. internal default, plus the mode register's reset value — is also the single fact that settles "reachable without explicit guest selection" (Q3) and needs one line of a reading seat's time.
+
+**Q5 — clause-(d) set (REASONED against the rows described in S4)**
+
+- **Escapes everything: the mirror edit in the PUT arm** — move PUT's channels to buf{1,2,3} and the pad to buf[0]. Against the corrected GET this reintroduces the round-trip defect, it reads like plausible code, and the described rows never *write* an RGB pixel (probe destination is RGBA; controls are RAM/status/RGBA). The fix is only correct relative to PUT's byte positions, so PUT is an expression the fix depends on. Detector needs an RGB-destination row: RGBA→RGB copy read back via RGBA, expecting `0xaabbcc00`, or an RGB→RGB round trip.
+- **Conditional escape: `+ buf[3]` appended to the corrected GET** (paste-the-RGBA-arm shape). Behaviorally differs — it returns the pad byte in the low lane instead of 0. It is caught only if the post-fix expected literal is `0xaabbcc00`; a detector author who naively expects identity (`0xaabbccdd`) will see the *true fix fail* and this mutant *pass*. State the expected constant explicitly, with a comment that the RGB source's low byte is the pad and must be dropped.
+- **Uncatchable by construction: `+`→`|`.** The byte lanes are disjoint, so the two are semantically identical; no value-based row can ever distinguish them. Exclude it from scoring rather than demanding coverage.
+- Everything else — any single index ±1, any shift ±8, dropped terms, `buf[1]/buf[2]` swap — is caught, because `0xaabbccdd` has four distinct bytes and `0xaa` also exercises the sign lane of `<<24`. Preserve both properties in any added vector.
+
+**Other things found (READ from inlined code)**
+
+- YCRCB (`0xf0`, inside MASK) has no case: PUT's default writes four bytes of host `random()` and then fatals; GET's default computes `*color` and then fatals. If `fatal()` exits, both are dead code; the writes-before-fatal and the `TODO` suggest unhandled real modes swept under the rug.
+- The default GET's "raw 32-bit value" assembles `(buf3,buf2,buf1,buf0)` — little-endian order — which would *not* equal a big-endian guest load of the same bytes. Harmless (it fatals), but it's an authorship fingerprint: the file's byte-order intuition was ABGR-shaped, consistent with one arm being a slip rather than a design.
+- All three 32-bit arms pack/unpack four bytes regardless of `bufdepth`, which by the inlined comment can be 1, 2, 4, or 8. If any depth < 4 can coexist with type RGB/RGBA/ABGR, GET consumes uninitialized stack bytes (`buf` is never cleared). Reachability not checkable from the packet; the settling fact is whether `(mode>>8)&3` can be < 2 while the type field is non-CI.

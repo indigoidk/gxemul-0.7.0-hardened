@@ -1,0 +1,102 @@
+**VERDICT: Defer `depth == 32` activation. Correct the comment now and fix buffer initialization under `sgirebufuninit`. The one-token repair changes defined fill behaviour as well as copy behaviour, and exposes another existing arithmetic defect through MTE.**
+
+This was static inspection within your permitted paths. No patch, build, emulator run, or probe execution.
+
+S1 and S3 hold. S2 needs a scope correction: **tiled** MTE transfers use this helper; linear MTE fills use a separate path. Also, the proposed activation affects **fills as well as copies**.
+
+For Q1, enumeration confirms the likely intended condition. Only source/destination TLB selectors A, B and C reach this block: the source check rejects larger selectors, and these are the destination switch cases containing it. [MTE implementation](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:1333)
+
+| Extracted field | `depth`, bits | `depth / 8` and helper `bufdepth` | Constructed mode for A / B / C |
+|---|---:|---:|---|
+| 0 | 8 | 1 | `0x000` / `0x400` / `0x800` |
+| 1 | 16 | 2 | `0x100` / `0x500` / `0x900` |
+| 2 | 32 | 4 | `0x200` / `0x600` / `0xa00` |
+| 3 | 64 | 8 | `0x300` / `0x700` / `0xb00` |
+
+None equals depth 4. Every listed mode has type bits `0x00`. At depth 32, OR-ing RGBA produces exactly `0x220`, `0x620`, or `0xa20`. The hypothetical RGB collision is also exact: `0x10 | 0x20 = 0x30`; its prerequisite is absent here.
+
+There is independent support beyond the hack comment: the included header explicitly defines `MTE_DEPTH_32` as **2**. It defines depths 8, 16 and 32, but **does not name field value 3 as a supported 64-bit MTE mode**. “64” describes what this decoder computes, not established hardware support. [Definitions](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/thirdparty/crmfbreg.h:267)
+
+`depth` consistently holds bits; the divisions explicitly convert to bytes. The anomalous comparison is `== 4`. Thus `== 32` is a strong reconstruction of intent. It is not, by itself, a warrant for every resulting behaviour.
+
+For Q2, the missing distinction is **copy versus fill**. For a serviced pixel, take source bytes `12 34 56 78` and an initial BG register value `0x12345678`:
+
+| Observation | Present CI route | Activated RGBA route |
+|---|---|---|
+| Successful copy GET leaves local `bg` | `0x00000012` | `0x12345678` |
+| Copy PUT supplies bytes | `12 ? ? ?` | `12 34 56 78` |
+| Fill PUT supplies bytes | `78 ? ? ?` | `12 34 56 78` |
+
+Here `?` means **unassigned PUT-local storage**, not preserved destination bytes or necessarily different bytes. GET and PUT have separate automatic-object lifetimes; incidental stack reuse could make a defective copy appear correct. A pre-fix inequality oracle cannot assume otherwise. [Serialization and memory accesses](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:284)
+
+The resulting changes are:
+
+- Copy GET consumes all four returned bytes into `bg`; PUT explicitly supplies all four bytes.
+- Fill changes even the explicitly assigned first byte: BG’s low byte becomes its high byte.
+- If a source GET returns early, the dependent PUT still occurs. It now serializes the full retained BG value—initial BG or a previous successful pixel’s value.
+- Transfer length remains four bytes. Address calculation, tile selection, coordinate conversion and iteration are unaffected by the type override.
+
+The branch is outside the `MTE_MODE_COPY` condition. A repair described merely as “32-bit copy correction” would therefore understate its scope. [Branch and loop](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:1368)
+
+I would also qualify “a code path that has never executed”: **the MTE-to-RGBA combination is currently unreachable; the RGBA helper arms are already selected by drawing-engine paths.** The existing `copy lin_a` control explicitly requests RGBA for both source and destination. Its assertions provide no MTE-fill evidence. [Existing control](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/sgi_re_rgb_probe.py:273)
+
+There is some independent representation evidence: GBE scanout assembles four bytes in the same order and takes RGB from the first three. That supports the framebuffer layout; it does not establish how `CRIME_MTE_BG` must expand into that layout. [Scanout](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_gbe.c:283)
+
+Under the addition rule you supplied, my disposition is:
+
+- **Correct the comment and defer functional activation.** State that the existing comparison is unreachable and wider tiled transfers currently select CI.
+- **Initialize the complete helper buffer under `sgirebufuninit`.** This addresses unassigned storage across callers without redefining CI as a general multibyte encoding. The fork already provides a concrete precedent: `memory_rw` zeroes the requested read extent before potentially partial device reads. [Existing initialization policy](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:485)
+- Deleting the dead block is also defensible cleanup, but neither deletion nor annotation closes the functional 32-bit transfer defect. Keep that limitation explicit.
+
+Initialization would make the example CI copy supply `12 00 00 00` and the fill supply `78 00 00 00`. Those are deterministic containment outcomes, **not complete 32-bit transfers**.
+
+I would not categorically exclude activation from being a bug fix merely because it makes a branch reachable. The objection is its insufficiently warranted scope, especially fills.
+
+For Q3, the clean boundary is between **mode selection**, **initialized storage**, and **deliberately generated random contents**. Those contracts can overlap on particular bytes.
+
+After changing only the depth comparison, MTE’s 32-bit PUT no longer has unassigned bytes 1, 2 and 3. These helper-wide exposures remain:
+
+| Helper operation | Width 1: unassigned bytes used | Width 2 | Width 4 | Width 8 |
+|---|---|---|---|---|
+| CI PUT | None | 1 | 1–3 | 1–7 |
+| RGB / RGBA / ABGR / default PUT | None | None | None | 4–7 |
+| CI GET | None | None | None | None |
+| RGB GET | 1–2 | 2 | None | None |
+| RGBA / ABGR / default GET | 1–3 | 2–3 | None | None |
+
+The GET entries assume the requested read extent is filled. The width-four CI PUT entry remains reachable through drawing-engine modes even after MTE stops selecting it.
+
+**Your RGB short-read premise needs correction:** this fork’s repaired RGB GET reads `buf[0..2]`, not `buf[0..3]`. At width two, only byte 2 is missing; at width one, bytes 1 and 2 are missing. RGBA, ABGR and default GET still read four bytes. [Current GET arms](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:322)
+
+Also:
+
+- MTE depth 16 retains its CI PUT byte-1 exposure.
+- Decoder field 3 retains its CI PUT byte-1-through-7 exposure.
+- An eight-byte GET fills bytes 4–7 but no colour arm consumes them. The `uint32_t` colour carrier cannot transport all eight bytes. Initializing storage does not implement that transfer.
+- The default PUT’s first four bytes are explicitly assigned random values. They belong to `sgirandomcolour`; its eight-byte tail also belongs to `sgirebufuninit`.
+
+For Q4, **buffer initialization first avoids conflating a safety correction with MTE semantics**. Repairing the branch first removes a convenient 32-bit MTE manifestation while leaving the generic initialization defect intact.
+
+`sgirandomcolour` is otherwise independent of branch activation: current MTE chooses CI (`0x00`); repaired MTE chooses CI or RGBA (`0x20`). Neither enters the colour default. That default transmits random bytes at indices:
+
+| Width | Random bytes transmitted | Unassigned tail transmitted |
+|---:|---|---|
+| 1 | 0 | None |
+| 2 | 0–1 | None |
+| 4 | 0–3 | None |
+| 8 | 0–3 | 4–7 |
+
+A default-PUT decline would remove both classes from that arm, leaving recognized-mode exposures intact. Conversely, after whole-buffer initialization, merely deleting the random assignments would produce zero writes. A detector must distinguish the chosen disposition from that accidental outcome.
+
+For Q5, I found no dedicated detector for these open rows in the permitted Python files, so these are predicted escapes, not measured results:
+
+- **For buffer hardening:** shorten an eight-byte initialization to four bytes. A detector covering only 32-bit MTE still passes while eight-byte PUTs regain their unassigned tail. The existing **`rgb depth64`** row also stays green: it uses an eight-byte **source GET**, but its destination remains four-byte RGBA. It does not exercise the defective tail. [Actual setup defaults](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/sgi_re_rgb_probe.py:222), [actual width row](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/sgi_re_rgb_probe.py:359)
+- **For a later activation:** changing `== 32` to `>= 32` is a one-character mutation. A proposed `mte copy32` row stays green while field 3 also changes behaviour.
+- **For representation coverage:** selecting ABGR on both sides still preserves bytes in a copy. Thus copy equality alone cannot distinguish RGBA from ABGR; a mixed-byte BG fill distinguishes their output orders.
+- **For my immediate comment-only disposition:** restoring the false comment leaves runtime rows such as `copy lin_a` green. Documentation correction cannot honestly claim a runtime red-to-green witness.
+
+Finally, I found two additional concerns relevant to activation:
+
+**Signed shifts:** RGBA GET assembles the word using byte operands promoted to signed `int`. On a 32-bit `int` host, high-bit leading bytes encounter signed-shift undefined behaviour. Activation adds this site to MTE copy execution. The fork already has unsigned `READ_WORD_BE`/`READ_WORD_LE` helpers specifically addressing this defect class. The tiled pointer shifts have an analogous promotion issue. These are separate from buffer initialization. [Word assembly helpers](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/misc.h:196), [tile-pointer assembly](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:220)
+
+**Existing MTE limitations:** the tiled path does not apply the fetched `bytemask`, and its row traversal uses coordinate-derived `dy` rather than the supplied step registers. Together with the retained-BG PUT after an early GET return, these limit any claim that activating RGBA establishes generally correct MTE copying.

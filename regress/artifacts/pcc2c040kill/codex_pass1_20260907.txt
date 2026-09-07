@@ -1,0 +1,77 @@
+**VERDICT: DECLINE + LATCHED ANNOUNCE for unsupported C040 delivery. Survival is a nonvacuous oracle here, but cannot establish interrupt correctness.**
+
+The main premise correction is that **the GENCTL write itself immediately calls the terminating helper**. Arming and termination occur within that access; subsequent SCC traffic is unnecessary.
+
+**S1–S3 check out, with a qualification on “every path.”** The constants match the brief. The register array holds `uint8_t` elements; GENCTL rejects non-byte writes, but its accepted byte write stores `idata` without masking and immediately calls `reassert_interrupts()`. There is no read-only treatment preventing the bit from being stored. The header also explicitly permits byte accesses. [Register definitions](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/thirdparty/mvme_pcctworeg.h:9), [write path](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_pcc2.c:452).
+
+I enumerated these **ten actual call expressions**, excluding comments and the declaration:
+
+| Line in `dev_pcc2.c` | Calling context |
+|---:|---|
+| 383 | `pcctwo_interrupt_common()`, after its recognized source cases |
+| 400 | PCC2 device tick, unconditionally |
+| 459 | GENCTL byte write |
+| 551 | Shared T1ICR/T2ICR byte-write body |
+| 574 | SCCICR byte write |
+| 588 | SCCTX byte write |
+| 602 | SCCRX byte write |
+| 609 | SCCRXIACK access, without a direction test |
+| 622 | SCSIICR byte write |
+| 662 | MASK byte write |
+
+These reach **one shared terminating branch**. The precise condition is “C040 is set when the helper checks GENCTL.” It is not sticky: a GENCTL write clearing C040 stores the cleared value before calling the helper. [Helper and callers](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_pcc2.c:267).
+
+**Q1:** Choose DECLINE + LATCHED ANNOUNCE **for the unsupported interrupt-delivery operation**. The register write has already been accepted; describe that distinction explicitly.
+
+The idiom exists in this file’s `pcc2_width_decline()` and, more directly, in `dev_sgi_re.c`: per-instance warning state, latched `fatal()`, then an unconditional return outside the warning latch. `fatal()` itself is a printing function here. [PCC2 idiom](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_pcc2.c:404), [helper-return idiom](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:259), [logger](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/core/debugmsg.c:384).
+
+| Disposition | Assessment |
+|---|---|
+| DELETE | Removing the branch permits ordinary delivery; removing only the exit also leaves repeated diagnostics. Neither establishes C040 semantics. |
+| DECLINE, silent | Conceals an unsupported mode that can prevent guest interrupt handling. |
+| **DECLINE + LATCHED ANNOUNCE** | Makes the limitation visible while bounding repeated diagnostics from ticks and callbacks. |
+| ACCEPT | Ordinary interrupt routing is not established as a valid substitute for C040 routing. |
+| FAULT | M88K device-access exceptions **are available**, but this is an implementation limitation, with no established hardware access fault. Tick/callback callers also lack a faulting transaction. |
+| BACKED ACCEPT | GENCTL already has backing storage. Readback alone cannot implement its interrupt-delivery effect. |
+| IMPLEMENT | The faithful eventual solution, requiring delivery semantics and appropriate wiring that this source does not supply. |
+
+FAULT’s availability is confirmed by the M88K dispatch in `memory_rw.c` and implemented DATA_ACCESS handling; rejecting it here is a semantic decision. [Fault dispatch](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:603), [CPU handling](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_m88k.c:713).
+
+Use a dedicated latch per PCC2 instance for this mode. The latch should suppress subsequent **messages**, never subsequent **refusals**.
+
+**Q2:** **The scoped source does not settle hardware-correct behavior.** Its comment identifies EIPL output as the missing mechanism. The implemented tail instead calculates IPL, compares MASK, applies MIEN, and drives the connected CPU interrupt. That does not establish whether real C040 mode retains the same internal register calculations, or how its mode transitions behave.
+
+For the proposed refusal contract, I favor returning before ordinary recalculation and delivery, with the modeled CPU output explicitly deasserted. Treat that as a documented approximation.
+
+A bare return does **not** mean “nothing remains asserted.” The CPU callback stores persistent `irq_asserted` state; only its deassert callback clears it. Returning with local `assert = 0` never invokes that callback. It also leaves existing IPL/vector state untouched. Thus the contract must distinguish suppressing new assertions from withdrawing an existing one. [Persistent CPU IRQ state](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_m88k.c:412).
+
+**Q3:** Model reachability is established by the write path above. Deliberate use by an ordinary guest is **not established within the permitted scope**.
+
+I found no deliberate C040-setting writer in the scoped source. `mvmeprom.c` initializes PROM vectors and board information without writing PCC2. The device initializes GENCTL clear. OpenBSD’s `cl.c` is absent from the permitted source paths, so I cannot independently ratify that driver claim or infer its runtime frequency. [PROM implementation](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/promemul/mvmeprom.c:55), [device initialization](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_pcc2.c:748).
+
+S4’s **emulator-side** claim is correct: SCCRXIACK has no `writeflag` test and clears SCCRX’s interrupt bit before calling the helper. The unconditional PCC2 tick independently establishes a routine internal caller. Neither proves ordinary guest arming.
+
+For S5, the ten width-kill blocks identified by the in-scope record enumerate as: **GENCTL, VECBASE, PSCALEADJ, TxCTL, TxICR, SCCERR, SCCICR, SCCTX, SCCRX, SCSIICR**. The current conversion additionally covers **IPL and MASK**, recorded as pre-existing warn-once cases. Historical removal is documented by the witness; this review did not reconstruct an earlier revision. [Width witness](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/pcc2_width_witness.py:4).
+
+I verified `c040ok()` and its two call sites: it checks the landing byte of the chosen wide-write values. The neighboring detector explicitly excludes this C040 failure. [Assertion and callers](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/pcc2_width_probe.py:811).
+
+**Q4:** **A survival-only row is nonvacuous against the existing process termination, provided it actually reaches the operation.** That differs from a refusal-effect test where both alternatives survive.
+
+Its contract remains narrow. Survival alone cannot distinguish the chosen refusal from ordinary fallthrough or a swallowed write. The stronger oracle should establish:
+
+- Guest progress after the access and retained GENCTL readback.
+- The declared interrupt-output behavior with pending work and MIEN enabled.
+- Withdrawal of an existing assertion and recovery after leaving C040 mode.
+- Continued refusal after the announcement latch is set, with bounded announcements.
+
+A concrete instrumentation trap exists: debugger byte writes use `NO_EXCEPTIONS`, and `memory_rw()` skips this `DM_DEFAULT` device under that flag. Such an attempted setup can survive without reaching PCC2. The neighboring default probe already names this as the control row **`put b ctl`**. [Debugger path](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/debugger/debugger_cmds.c:1496), [dispatch gate](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:583), [control row](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/pcc2_default_probe.py:243).
+
+**Q5:** There is no existing C040 detector row to certify; the width probe prints `NOROW`.
+
+A smallest static counterexample is **whole-register equality replacing C040 bit membership** in the proposed refusal condition. A proposed **`c040 idle`** survival row using only the brief’s single value would stay green. The refusal would then depend on companion GENCTL bits, including MIEN, which the ordinary delivery body reads. Other C040 configurations could fall through.
+
+Existing **`rb4 genctl`** and **`rb8 genctl`** would also remain green because they deliberately keep C040 clear. These are static expectations, not measured results. Coverage must vary MIEN and meaningful pending-interrupt state and observe disposition; extra survival checks alone do not close this gap.
+
+I also found a conflicting unused definition: **`PCC2_GENCTL_C040` is `0x03`**, while the actual helper uses **`PCC2_C040`**, correctly identified in the brief. That discrepancy does not change this path’s current condition. A separate `exit(1)` remains in `pcctwo_interrupt_common()`’s unsupported-line default; guest reachability was not established. [Conflicting definition](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/thirdparty/mvme_pcctworeg.h:134), [separate default](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_pcc2.c:378).
+
+No edits, builds, emulator runs, or probes were performed. An initial grep returned nested regression-artifact matches; I excluded those from the findings above.

@@ -1,3 +1,682 @@
+# `#508` alphapfnoffset: the Alpha page-table walk returned a page BASE, dropping the offset
+
+**THE DEFECT.** `memory_alpha.c`, after the third-level PTE validates:
+
+    (*return_paddr) = ALPHA_PTE_TO_PFN(pte3) << pageSizeShift;
+
+`memory_rw.c` then takes `offset = paddr & offset_mask`, which is therefore **always zero** — so every
+walked access resolved to the page's first bytes. A codex reachability pass enumerated all 8192
+offsets: the walk yields offset zero throughout, differing from the offset-preserving address for
+**8191** of them.
+
+**WITNESS, rung 3, unmodified `-E alpha -e alphabook1`:** `regress/alpha_pfnoffset_probe.py`.
+**HEAD 5/7** (`probe_head7_20260907.out`), **fix 7/7, same script** (`probe_fix_20260907.out`).
+A cold guest `ldq` through a hand-built three-level page table:
+
+| row | HEAD | fix | |
+|---|---|---|---|
+| `walk off` | `0xaaaa0000aaaa` | `0xbbbb0000bbbb` | `vaddr+8` must return `data+8`, not `data+0` |
+| `walk vpn` | `0xcccc0000cccc` | `0xdddd0000dddd` | non-zero VPN, offset in the upper 4 KB |
+| five controls | ok | ok | two K0SEG reads, `wasn't found` absent, sentinel, not-unmapped |
+
+**THE SECOND ROW EXISTS BECAUSE THE FIX REVIEW REFUSED THE ROUND WITHOUT IT.** With `VADDR = 0` and
+`N = 8`, **six lesser edits also score a clean sweep**: masks `0xfff`, `0x3fff`, `0x7fff`, any mask
+including bit 3, a hardcoded `| 8`, and **unmasked `+ vaddr`** — the last correct only because the VPN
+is zero on page 0. `walk vpn` kills the three that matter.
+
+> **AND TWO OF THE SIX ARE DELIBERATELY NOT KILLED.** `0x3fff` and `0x7fff` are **equivalent inside an
+> 8 KB page** — bits 13 and 14 of an offset are always zero there — so no row can distinguish them and
+> none pretends to. *A row that claimed to would be vacuous by construction.* Recorded in the probe.
+
+**A THREE-WAY PLANT MAKES THE ROW DIAGNOSTIC RATHER THAN MERELY RED:** `VAL_B2` at `data2+0x1008` is
+correct, `VAL_C2` at `data2+8` is what a `0xfff` mask or a hardcoded `| 8` reads, `VAL_A2` at
+`data2+0` is a page-base result. HEAD read **`VAL_A2`**, naming the defect exactly.
+
+**THE FORM OF THE FIX, and every clause of it was argued rather than assumed:**
+
+    (*return_paddr) = (ALPHA_PTE_TO_PFN(pte3) << pageSizeShift)
+        | (vaddr & ((1ULL << pageSizeShift) - 1));
+
+* **`|`, not `+`** — numerically identical here (the shifted PFN has bits 12:0 clear), but `|` is what
+  every other walk in this tree writes (ARM, m88k, MIPS, PPC, SH), while `+` is this function's own
+  *fixed* bootstrap windows. Different sentences.
+* **the mask derived from `pageSizeShift`, never a literal.** `:88`'s `0x1fff` is correct for a fixed
+  8 KB PROM pocket; beside `<< pageSizeShift` it is how a mask and its shift drift — and **this
+  function already carries two names for 13** (`ALPHA_PAGESHIFT` and the local `pageSizeShift`).
+* **the parentheses are load-bearing:** `1 << pageSizeShift - 1` is `0x1000`, not `0x1fff`. *The
+  existing `N = 8` row already kills that one* (`8 & 0x1000 == 0`).
+
+**A THIRD CONSUMER, found by enumerating the callers rather than assuming one.** `translate_v2p` is
+called from three places: `memory_rw.c` (needs the full address — the defect), `cpu_dyntrans.c`
+I-fetch (tolerates either; strips the offset itself), and **`debugger_cmds.c` watchpoints, which take
+the address directly — so a walked watchpoint has been landing at the page base too.** No caller adds
+its own offset, so the mirror defect is absent and the post-fix sweep is not hiding a double-add.
+
+**THE `// TODO.` STAYS, and the round says why.** Restoring the offset leaves it true: `flags` is
+never read (`FLAG_WRITEFLAG`, `FLAG_INSTR`, `FLAG_NOEXCEPTIONS` all ignored), `ALPHA_PTE_KR/KW/UR/UW`
+and `FAULT_ON_*` are untested, granularity hints are ignored, and **`return 2` means writable — so
+`memory_rw` caches every walked Alpha page as writable.** *Deleting the comment would record the
+translator as finished. It is not.*
+
+**Trees:** `memory_alpha.c` is not in `tools/est_divergence.txt`, so it is shared and landed
+byte-identical in all four. `build/`, `build-asan/` and `/tmp/gxsec-build` rebuilt; two-part clearance
+CLEAN/FRESH on all three, `est/` part 2 N/A.
+
+# `#507` alphaswpctxptbr: `swpctx` assigned `apcb_ptbr` twice and `apcb_flags` never
+
+**THE DEFECT.** `cpu_alpha_palcode.c`, `case 0x30` PAL_OSF1_swpctx, load-new-context block:
+
+    :278    cpu->cd.alpha.pcb.apcb_ptbr    = new_ptbr;
+    :282    cpu->cd.alpha.pcb.apcb_ptbr    = new_flags;      <-- apcb_ptbr, again
+
+A field-name transposition. The value is loaded correctly — the SAVE stores `apcb_flags` to
+`ctx + 40` and the loader reads `new_flags` from `ctx + 40` — and lands on the wrong left-hand side.
+
+**FOUND BY COUNTING, NOT BY READING.** Over the block, `apcb_ptbr` is assigned **twice**,
+`apcb_flags` **zero** times, every other field exactly once. Reading it, `:282` looks like an ordinary
+assignment in a column of ordinary assignments and the eye supplies the field name it expects; a
+one-line census makes the 2-and-0 unmissable. **The same census is the fix's verification:**
+
+    before   apcb_ptbr 2   apcb_flags 0     (every other field 1)
+    after    apcb_ptbr 1   apcb_flags 1     (every field exactly 1)
+
+*The block's own comment at `:275` reads "Update all variables in the pcb simultaneously" — directly
+above the list that fails to. A claim of completeness is the least-checked line in a block, because
+it reads as a description of the code beneath it.*
+
+**THREE CONSEQUENCES, and the row originally recorded one.**
+1. `apcb_ptbr` ends up holding the flags word — the clobber the witness first measured.
+2. `apcb_flags` is never loaded **by `swpctx`**, so the incoming context's flags are dropped. (It is
+   not unwritten in general: `wrfen` at `:221` assigns the field, so the in-cpu value is whatever
+   the last `wrfen` left, or 0 from the zeroed cpu struct.)
+3. **The SAVE then publishes that stale word into the OUTGOING PCB.** *The bug propagates outward
+   into guest memory, not only inward into the cpu struct.* It does not necessarily publish ZERO,
+   and whether it changes the planted word depends on any intervening `wrfen`.
+
+**WITNESS, rung 3, unmodified `-E alpha -e alphabook1`:** `regress/alpha_harness_probe.py`.
+**HEAD 7/10** (`probe_head10_20260907.out`), **fix 10/10, same script** (`probe_fix_20260907.out`):
+
+| row | HEAD | fix | |
+|---|---|---|---|
+| `swpctx ptbr` | `0xbbbb2222` | `0xaaaa1111` | `PCB_A+16` must hold A.ptbr |
+| `swpctx notflags` | `0xbbbb2222` | `0xaaaa1111` | the defect's exact signature |
+| `swpctx flags` | **`0x0`** | **`0xbbbb2222`** | `PCB_A+40` must hold A.flags |
+| six controls | ok | ok | encoder, live, exec, palgate, swpctx alive, swpctx mapped |
+
+> ### *** THE THIRD ROW EXISTS BECAUSE THE FIX REVIEW REFUSED TO RATIFY THE ROUND WITHOUT IT. ***
+>
+> grok ratified the one-token product fix and then declined to call it the round: *"Both red rows read
+> the same `got`: `A+16`. A build that only stops clobbering PTBR — delete `:282`, or assign
+> `new_flags` to any other field — also scores 9/9. **Consequence 2 is unpinned.**"*
+>
+> That is a clause-(d) gap in the WITNESS rather than in the fix, and the repair it named cost one
+> readback on a page `swpctx mapped` had already proved was backed: `A+40` is `0` on HEAD (a save of a
+> never-loaded field) and `FLAGS_VAL` after. **Three red rows now pin three distinct consequences
+> instead of one cell read twice.**
+
+**NO READER RELIES ON THE STALE FIELD.** Every `apcb_flags` site in `src/` was enumerated: `wrfen`
+`:221` writes the whole word without reading it; `:222-223` publishes what it just stored; the SAVE at
+`:243-244` publishes to the outgoing PCB (which today propagates the bug and after the fix carries the
+loaded value — the PAL contract); `ALPHA_PCB_FLAGS_FEN`, `_PME` and `ALPHA_IF_CODE_FEN` are header-only
+and unused; `memory_alpha.c:46` reads `apcb_ptbr`, not flags. *Sticky-FEN-across-`swpctx` is a PAL bug,
+not a behaviour a reader is entitled to.*
+
+**TWO PREMISES OF MINE CORRECTED BY THE REVIEW**, both in the direction of less confidence:
+`apcb_flags` **is** written globally (by `wrfen`), so "never assigned at all" holds only inside the
+load block; and the in-cpu value is **last `wrfen` or 0 from the zeroed cpu struct**, not "whatever
+the previous context left" — `swpctx` has never loaded that field from any PCB.
+
+**FILED IN PASSING, not fixed here:** `PAL_clrfen` (`0xae`) is named and user-mode-whitelisted but has
+**no `case`**, so it reaches the default arm and stops the CPU.
+
+**Trees:** `cpu_alpha_palcode.c` is not in `tools/est_divergence.txt`, so it is shared and landed
+byte-identical in all four. `build/`, `build-asan/` and `/tmp/gxsec-build` rebuilt; two-part clearance
+CLEAN/FRESH on all three, `est/` part 2 N/A (source tree — inapplicable, not unrun).
+
+# `#506` lcaconfwidth: the LCA kill diagnostic named a value the guard ACCEPTS
+
+**THE DEFECT.** `dev_lca.c`'s `LCA_IOC_CONF` write arm stores the full 64-bit value, guards on all 64
+bits, and reports 32:
+
+    d->ioc_conf = idata;                              /* the FULL value is stored */
+    if (idata & ~1) {                                 /* the guard sees 64 bits   */
+            fatal("TODO: Write to unimplemented bit of"
+                " IOC_CONF: 0x%x\n", (int)idata);      /* the message sees 32     */
+            exit(1);
+    }
+
+A guest `stq` of `0x100000000` sets bit 32. `idata & ~1` is true, so the process dies — and
+`(int)idata` is **0**, which is a value this same guard **accepts**. *The kill message named an
+acceptable value while killing on an unacceptable one*, in the one place a wrong record is hardest to
+recover from: the process is gone and the log is all that is left.
+
+**WITNESS, rung 3, on an unmodified `-E alpha -e alphabook1`:** `regress/lca_confwidth_probe.py`.
+**HEAD 4/6** (`regress/artifacts/lcaconfwidth/probe_head_20260907.out`), **fix 6/6, same script**
+(`probe_fix_20260907.out`) — clause (i) satisfied by the pair, not by argument:
+
+| row | HEAD | fix | |
+|---|---|---|---|
+| `live` | alive | alive | control: the session survives the legal write |
+| `ioc rt` | `0x1` | `0x1` | control: guest `stq 0x1` then guest `ldq`, SAME decode |
+| `kill fired` | yes | yes | control: the IOC_CONF arm announced — not HAE, not unmapped |
+| `kill width` | **`0x0`** | **`0x100000000`** | the message must name the value that ACTUALLY killed |
+| `kill notzero` | **`0x0`** | wider | `0x0` is a value this guard ACCEPTS |
+| `died` | died | died | control: `exit(1)` really ran |
+
+**THE FIX IS THE FILE'S OWN SIBLINGS, COPIED.** `TB_ENA`, `W_BASE0`, `W_MASK0`, `W_BASE1` and
+`W_MASK1` — twelve to ninety lines away — already print `0x%" PRIx64` with `(uint64_t)idata`. This arm
+was the outlier **among the value-guard diagnostics** -- not the file's only narrowing site, since the
+`default:` arm carried the same cast and this round fixes it too. `PRIx64` already resolved in the file
+(5 uses), so no include changed, and **no gate,
+hygiene grep or probe in `regress/` matches this message's text**, so changing it turns nothing else
+red.
+
+**TWO SITES, AND THE RECORD DISTINGUISHES THEM RATHER THAN LUMPING THEM.**
+* `:205` **IOC_CONF** — the sharp instance. The guard is on the **value**, so the narrowed message can
+  name a value the guard would have accepted. This is what the witness measures.
+* `:319` **the `default:` arm** — the same narrowing, but its guard is on the **offset**, so the
+  printed value is wrong *without* being one the guard would have accepted. Fixed for consistency,
+  not because it can mislead the same way.
+
+> ### *** THE FILED RECORD PRESCRIBED THE WRONG FIX **AND** CLAIMED IT MATCHED THE SURROUNDING CODE.
+> ### Corrected in `OUTSTANDING_BUGS.md` before the edit. ***
+>
+> It said the repair was `` `0x%llx` with a `(long long)` cast, the file's own idiom elsewhere ``.
+> **`dev_lca.c` uses `PRIx64` five times and `%llx` never**, and the siblings **keep** the cast rather
+> than dropping it. A design brief of mine then compounded it by saying to *drop* the cast — a third
+> wrong form. **A record that names a fix and asserts it matches the neighbours is the most costly
+> kind to get wrong: it discourages the one check — reading a sibling — that catches it.**
+
+**FOUR DESIGN CORRECTIONS FROM THE GROK SEAT, each of which would have produced an unreadable or
+falsely-green run** (`regress/artifacts/lcaconfwidth/grok_witness2_20260907.txt`):
+* `load_const` cannot build either operand — LDA/LDAH make 32-bit sign-extended constants, the K0SEG
+  address needs bits 63..42 and the value needs bit 32. Both are planted with `put d` and loaded with
+  `ldq` while `ptbr` is still 0.
+* **Debugger `dump` cannot be the read-back.** It calls `memory_rw` with `NO_EXCEPTIONS`, and LCA
+  registers `DM_DEFAULT` rather than `DM_READS_HAVE_NO_SIDE_EFFECTS`, so the handler is *skipped* and
+  the caller gets the pre-zeroed buffer — **the unmapped signature produced by a hit.**
+* **`put d` of the killing value is not rung 3.** `store_64bit_word` goes through `memory_rw` with
+  `CACHE_DATA` and no `NO_EXCEPTIONS`, so it enters the handler and `exit(1)`s — a real kill caused by
+  no guest instruction.
+* **A miss is not only "unmapped → nothing".** Offset 0 of the window is HAE, which `break`s with no
+  kill, so a store there is silent *inside* the LCA window. `ioc rt` is what separates the two.
+
+**AND THE PROBE'S FIRST DRAFT SCORED 6/6 ON THE COMMITTED BUILD** because it asserted the DEFECT as
+the passing state. That reads as success and would have gone red the moment the bug was fixed — a
+detector-of-the-defect wearing a witness's clothes. The sibling `alpha_harness_probe.py` had the
+polarity right (7/9) in the same tree on the same day. *The cheap tell: ask what the row does AFTER
+the fix; if the answer is "goes red", the polarity is inverted whatever the score says.*
+
+**Trees:** `dev_lca.c` is not in `tools/est_divergence.txt`, so it is shared and landed
+byte-identical in all four. Rebuilt `build/`, `build-asan/` and `/tmp/gxsec-build`; two-part clearance
+CLEAN/FRESH on all three, `est/` part 2 N/A (source tree — inapplicable, not unrun).
+
+**Honest limit:** `(int)0x100000000 == 0` is implementation-defined, not guaranteed by C99. GCC and
+Clang truncate to the low 32 bits, which is what this tree builds with, so the witness holds on this
+build and the round claims nothing about the language.
+
+# `#505` sgirergbroundtrip: the RGB GET read the pad byte and dropped the red channel — and the panel refuted my reason before a different file supplied a better one
+
+**THE DEFECT.** `horrible_getputpixel()`'s RGB arms are not inverses of each other:
+
+    PUT RGB   buf[0] = c>>24;  buf[1] = c>>16;  buf[2] = c>>8;  buf[3] = 0;
+    GET RGB   *color = (buf[1] << 24) + (buf[2] << 16) + (buf[3] << 8);
+
+PUT lays the three channels at bytes 0, 1, 2 and an explicit pad at 3. GET reads 1, 2, 3 — the pad
+included, the red channel discarded. **RGB is the only 32-bit colour mode in the file that fails its own
+round trip**, and a copy with an RGB source turns `0xaabbccdd` into `0xbbccdd00`.
+
+**WITNESS, rung 3, on an unmodified `-E sgi -e ip32`:** `regress/artifacts/sgirergbroundtrip/rgb_witness.py`.
+Both ladder controls are present and were green in every run — `live` (a guest store and load through RAM)
+and `devsig` (`CRIME_DE_STATUS` reads `0x1e000000` where RAM reads 0) — plus a sibling accept control,
+`copy lin_a`, which drives an **RGBA** source through the same helper and proves a repair did not break the
+neighbour.
+
+---
+
+## *** THE PANEL REFUTED MY ATTRIBUTION, AND IT WAS RIGHT TO. ***
+
+The brief argued the GET is the wrong arm on two grounds. Four seats attacked both, independently:
+
+* **Ground 1 was CIRCULAR.** *"PUT's `buf[3] = 0` is an explicit pad write, so a GET reading byte 3 reads
+  the pad"* — that assumes PUT is authoritative, which is exactly the question.
+* **Ground 2 was NEUTRALISED.** I appealed to RGBA's byte order; ABGR uses the opposite one, **and the
+  default/raw GET arm uses ABGR order too**, so the file offers no single order to appeal to.
+* **The measurement is ARM-NEUTRAL.** `0xbbccdd00` is simply what the code does. Under a pad-FIRST
+  container it is the *faithful* result and PUT is the bug. **A round-trip failure cannot say which end
+  failed** — which is the whole reason this needed a panel and not a fix.
+
+### The settling fact is in `dev_sgi_gbe.c`, and no seat found it
+
+The scanout reads the same tile memory back for display:
+
+    color = (buf[i]<<24) + (buf[i+1]<<16) + (buf[i+2]<<8) + buf[i+3];   /* byte 0 = MSB */
+    case CRMFB_MODE_TYP_RGB8:      // Used by NetBSD's X11 server
+            *r = color >> 24;  *g = color >> 16;  *b = color >> 8;      /* byte 3 UNUSED */
+
+**R = byte 0, G = byte 1, B = byte 2, and byte 3 is ignored — exactly what the PUT arm writes.** So the pad
+sits at `buf[3]` *because the consumer ignores `buf[3]`*, not because PUT writes a zero there. Different
+file, opposite direction, and independent of which DE arm is right: that is what makes it non-circular.
+
+### And glm dissolved the ABGR objection from the other end
+
+> *"for the same color, RGBA and ABGR write **identical memory bytes**, `[R,G,B,A]`; they differ only in
+> register word order … among the five 4-byte arms, the RGB GET is the lone container outlier — your case
+> is stronger than you stated."*
+
+Verified by reading: RGBA word `0xRRGGBBAA` → `buf[RR,GG,BB,AA]`; ABGR word `0xAABBGGRR` →
+`buf[RR,GG,BB,AA]`. **My "opposite byte orders" claim was about the register WORD. The question is about
+the memory CONTAINER, and on the container all three 4-byte PUT arms agree.** The objection I had invited
+turned into the strongest supporting argument, from the seat that raised it.
+
+**codex's reservation is kept and is in the contract:** *"GET is the best-supported repair site for this
+emulator's RGB layout; hardware fidelity and real-driver usage remain unproved."* No CRIME/RE datasheet is
+in `_scratchpad/` — checked by `ls`, not assumed — so this ships as an **internal-consistency fix warranted
+by the tree's own consumer**, never as a claim about silicon.
+
+---
+
+## *** THE PANEL ALSO CAUGHT MY ORACLE, AND IT WOULD HAVE FAILED A CORRECT FIX. ***
+
+The witness's success row pinned **`0xaabbccdd`**, the source word. A corrected RGB GET returns
+**`0xaabbcc00`** — RGB carries three channels and the pad is not transported, which PUT's own `buf[3] = 0`
+says from the other side.
+
+**Four seats named `0xaabbcc00` independently** — grok, glm, the kimi substitute, and codex — against a
+brief that had stated otherwise. The row was re-pinned **before** the code changed and the committed build
+re-measured RED under the new expectation, which is the oracle-correction rule's order discriminator
+satisfied rather than asserted.
+
+*The surviving row is stronger for it: `rgb chan` pins the exact post-fix value, so a fix that moves the
+bytes to some **third** wrong place still reds — which a "not the corrupt value" row could never do.*
+
+**This is the second time in one day that I built a conclusion on a premise I had not thought to
+question** — the first was `sgilinearnegidx`, withdrawn at `a264a34` because a variable's declared type
+three lines above the code I quoted refuted it. There the premise was a type; here it was which arm is
+authoritative. The queued rule question `sgilinearnegidxpostmortem` asks whether the premise-audit
+instruction needs a self-directed twin, and this round is its second instance.
+
+---
+
+## Residuals filed, none of them the round's subject
+
+All three came from seats volunteering something under the found-something-else licence:
+
+* **`sgirgbscanoutrow`** — the round's strongest evidence is a claim about `dev_sgi_gbe.c` that **no row
+  observes**. A row would need a framebuffer oracle, i.e. a different probe shape. Filed as an explicit
+  no-row sentence by the PRE-TABLE CLAIM→ROW check rather than omitted.
+* **`sgirebufshiftub`** — `buf[i] << 24` on a `uint8_t` promotes to **signed** `int`, so any byte ≥ 128
+  is a signed-shift overflow (UB). Pre-existing on all four GET arms; `#505` replaced one instance of the
+  idiom with another, which is the right minimal-surgical choice. Filed, and grok agrees it is *"not a
+  reason to block"*.
+* **`sgirebufuninit` SHARPENED** — glm widened it from one exposure to three, and the third was new: at
+  `bufdepth` 1 or 2 the RGB/RGBA/ABGR GETs read bytes that the guest's own read never filled. `#505`'s own
+  GUARD-FIELD-vs-BODY-FIELD check found the same disagreeing state and **declined to row it** — a row here
+  would attribute a pre-existing defect to a round that neither created nor cured it.
+
+  > #### *** THIS BULLET FIRST READ *"the RGB/RGBA/ABGR GETs read `buf[2..3]`"* AND GAVE THE DECLINE'S
+  > #### REASON AS *"the exposure is identical before and after this edit"*.  **BOTH ARE FALSE OF RGB, AND
+  > #### `#505` IS WHAT FALSIFIED THEM.**  Corrected 2026-09-07, before commit. ***
+  >
+  > Three seats on the `sgirebufuninit` panel said the read-side sentence was too broad — grok: *"its GET
+  > sentence is false of RGB as the file sits"*; glm: *"asserted in prose, not in the enumerated table, and
+  > under the packet's own model it is wrong"*; minimax: *"the table is asymmetric — write direction
+  > enumerated, read direction mentioned in one sentence only."*  The codex seat then supplied the
+  > per-arm table, and it is **verified here by reading `dev_sgi_re.c`'s GET arms**:
+  >
+  > | GET arm | unassigned bytes consumed after a 1-byte read | after 2 bytes | after 4 or 8 |
+  > |---|---|---|---|
+  > | CI | none | none | none |
+  > | **RGB** | `buf[1..2]` | **`buf[2]`** | none |
+  > | RGBA / ABGR / default | `buf[1..3]` | `buf[2..3]` | none |
+  >
+  > **RGB never touches `buf[3]` any more, because this round is what stopped it**: the GET went from
+  > `buf[1..3]` to `buf[0..2]`.  So the exposure is **not** identical before and after — for RGB this
+  > round *reduced* it by one byte.
+  >
+  > **The DECLINE still stands and is now better warranted**: the round did not create or worsen the
+  > uninitialised read, it shrank it.
+  >
+  > *** BUT "the remaining exposure is on arms this diff does not touch" WAS WRONG, and a pass-2
+  > review of this round caught it. ***  **RGB retains exposure in the EDITED arm**: after this
+  > change a 1-byte read still consumes `buf[1..2]` and a 2-byte read still consumes `buf[2]`.  The
+  > diff shrank RGB's exposure from `buf[1..3]`/`buf[2..3]`; it did not remove it.  PUT
+  > initialisation is unchanged, and RGBA/ABGR/default GET are untouched.  **What was wrong was the REASON, and a wrong reason gets reused** — this project has
+  > twice cited one before anyone reopened the file.
+  >
+  > *Worth naming plainly: the false sentence was written INSIDE the round that falsified it.  A block
+  > describing a fix inherits the pre-fix file's facts unless each one is re-read against the post-fix
+  > source, and nothing prompts that re-reading — the diff looks like the thing that changed, and the
+  > prose looks like the thing that describes it.*
+
+## Seats
+
+**6 of 7 scriptable answered.** codex 233 KB, grok 12 KB, glm 9.9 KB, minimax 6.8 KB, kimi-substitute
+6.9 KB, deepseek 2.7 KB. Preserved at `regress/artifacts/sgirergbroundtrip/pass1_seats/`.
+
+* **kimi CLI — WALLED** on its weekly window (350 bytes; `seat_verdicts.py` reported WALLED rather than
+  scoring it a short answer). Its seat is **COVERED** by the `kimi-k3:cloud` substitute, which is
+  packet-fed — so nothing it said is credited as a repo fact.
+* **agy — DELIBERATELY NOT FIRED.** Measurement reserve, owner ruling 2026-08-30.
+* **Opus 5 and Fable 5 — DELIBERATELY NOT FIRED.** Both held entire for the 2026-09-09 adjudication by
+  standing owner directive.
+
+*Three seats unfired for three different stated reasons. None is a seat failure and none is agreement,
+and the round record says which is which by name.*
+
+---
+
+## The fix
+
+```c
+	case DE_MODE_TYPE_RGB:
+		/*  #505: ... (the full warrant is in the comment; the code is one line)  */
+		*color = (buf[0] << 24) + (buf[1] << 16) + (buf[2] << 8);
+		break;
+```
+
+**The low byte stays zero on purpose.** RGB carries three channels, so a corrected read of
+`0xaabbccdd` yields `0xaabbcc00`, **not** the source word — which is what PUT's own `buf[3] = 0` says
+from the other side, and what the panel had to correct me on.
+
+## Measured — every score names the log that produced it
+
+**Witness, `regress/sgi_re_rgb_probe.py`, on the committed pre-fix build `a264a34`:**
+`4/6` (`regress/artifacts/sgirergbroundtrip/prefix_a264a34.raw`) — **and pass 2 was right that this
+is not a same-script pair:** `4/`**`6`**` -> 8/`**`8`** is two different probes, while the ladder's
+clause (i) wants one script red before and green after. Table 3's `prefix8row` runs the shipped
+8-row probe against pre-fix source, which is the genuine pair — `rgb chan` reading `0xbbccdd00`
+against a wanted `0xaabbcc00`, with `live`, `devsig` and the sibling accept row `copy lin_a` all
+green in the same run. **Post-fix, same script: `8/8`** (`postfix_505.raw`).
+
+> #### *** SUPERSEDED BY THE SHIPPED DETECTOR, WHICH IS TEN ROWS.  The `8/8` pair above is TABLE 3's
+> #### and is kept as the record of what was measured then — it is NOT the clause (i) pair for what
+> #### this round ships. ***
+>
+> The class closure added `rgb tiled64`, so the committed `regress/sgi_re_rgb_probe.py` carries **ten**
+> rows and every table before 6 scores a detector that no longer exists.  **The clause (i) pair for the
+> shipped detector, measured 2026-09-07 in `killtable6_20260907/`:**
+>
+>     prefix10row   4/10   the SHIPPED 10-row probe against PRE-FIX source
+>     base          10/10  the SHIPPED 10-row probe against the fix
+>
+> One script, red before and green after, which is what clause (i) asks for.  The six red rows are
+> `rgb chan`, `rgb not corrupt`, `rgb samemode`, `rgb depth64`, `rgb tiled`, `rgb tiled64`; `live`,
+> `devsig`, `copy lin_a` and `rgb alive` stay green in the same run, so the probe is demonstrably
+> serving the machine rather than failing wholesale.
+>
+> **Clause (c), the null medium: `nullmedium` scores 1/10** against `/etc/hostname` — the detector
+> carries identity rows and does not pass on an empty medium.
+
+**KILL TABLE 1** — 6-row detector, `regress/artifacts/sgirergbroundtrip/killtable_20260907/`:
+
+| mutant | score | disposition |
+|---|---|---|
+| base | 6/6 | — |
+| `M1_verbatim` | 4/6 | killed — clause (b), by **both** RGB rows |
+| `M2_off1` | 5/6 | killed |
+| `M3_pad` | 5/6 | killed **by one row only** |
+| `M4_or` | 6/6 | **EQUIVALENT** — see below |
+| `M5_rev` | 5/6 | killed |
+| `M6_cond` | **6/6** | *** CLEAN SWEEP — clause (d) FLOOR BREACH *** |
+| nullmedium | 1/6 | clause (c) discharged |
+
+**KILL TABLE 2** — the shipped 8-row detector, `killtable2_20260907/`. A second table rather than a
+patch to the first, because adding rows perturbs other mutants' scores and **a table that scores a
+detector different from the one that ships is a wrong record**:
+
+| mutant | score | disposition |
+|---|---|---|
+| base | 8/8 | — |
+| `M1_verbatim` | 4/8 | killed |
+| `M2_off1` | 5/8 | killed |
+| `M3_pad` | 6/8 | killed |
+| `M4_or` | 8/8 | EQUIVALENT |
+| `M5_rev` | 5/8 | killed |
+| `M6_cond` | **7/8** | **the breach is closed** |
+| `M7_cond8` | **7/8** | **the MIRROR is closed too** |
+| `M8_put` | **7/8** | `rgb samemode` measured, not assumed |
+| nullmedium | 1/8 | clause (c) |
+
+### *** THE FLOOR BREACH, AND IT WAS IN MY OWN DETECTOR. L2, REPAIRED IN-ROUND. ***
+
+`M6_cond` is the canonical clause-(d) form — guard kept, repair conditioned on a field the guarded
+body reads:
+
+```c
+	case DE_MODE_TYPE_RGB:
+		if (bufdepth == 4)  *color = (buf[0]<<24)+(buf[1]<<16)+(buf[2]<<8);   /* the fix */
+		else                *color = (buf[1]<<24)+(buf[2]<<16)+(buf[3]<<8);   /* the defect */
+```
+
+**Every session in the 6-row detector used `BUFDEPTH_32`, so `bufdepth` was 4 in all of them and the
+mutant's fix branch was the only one the detector ever executed.** It proved the fix works exactly
+where I measured it and said nothing whatever about anywhere else. `bufdepth` is not an exotic
+choice: it is read by the guarded body (it is `memory_rw`'s transfer length) and comes from **bits
+8-9 of the same mode word** whose bits 4-7 the guard reads. The DEPENDS-ON closure enumerates it
+first, not last.
+
+**Repair: `rgb depth64`, one extra session at `BUFDEPTH_64`.** Width 8 keeps `buf[0..2]` filled so
+the row stays a *value* oracle; widths 1 and 2 would read uninitialised bytes (`sgirebufuninit`) and
+make it non-deterministic — **8 is the only other width that can carry a value oracle at all.**
+
+### *** AND THE MUTANT I BUILT TO CHECK FOR THE `#499` SHAPE WAS ITSELF MIS-BUILT.  Pass 2 caught it. ***
+
+I added `M7_cond8` to test whether I had repaired only the cell M6 named, and recorded its 7/8 as
+proof the width axis was closed. **The kimi substitute — a packet-fed seat that cannot read the
+repo — refuted it from the packet's own arithmetic:**
+
+> *"`M7_cond8` cannot be both 'the mirror of M6' and score 7/8; a mirror predicts 5/8."*
+
+```
+M6_cond   if (bufdepth == 4) FIXED else DEFECT   ->  width 4 fixed, width 8 defective
+M7_cond8  if (bufdepth != 8) FIXED else DEFECT   ->  width 4 fixed, width 8 defective
+```
+
+**Over the only two widths any row drives, {4, 8}, those are the same function.** M7 re-measured M6.
+
+**MEASURED, table 3 (`killtable3_20260907/`): the true mirror `M9_truemirror`
+(`if (bufdepth == 8) FIXED else DEFECT`) scores 5/8** — exactly what kimi derived — with three
+width-4 rows red. **So the width axis is closed, but by `M9`, not by the mutant this block first
+credited.** The conclusion survives; its evidence did not, and a claim resting on a mutant that
+measures nothing is a wrong record however right the conclusion turns out to be.
+
+**Pass 2 also named LOCATION as an unpinned axis** and predicted `if (ofs == K)` would sweep 8/8,
+since every row writes at ofs 0. **`M10_ofs` reds four rows instead** — because the source pixel is
+read at `src_x = 0x40`, so `ofs` is 0x40 on every GET and 0 only on the destination PUT. The rows
+discriminate on location already, **by an accident of the probe's geometry rather than by design**,
+which is recorded as exactly that: covered, unintended, and fragile to anyone who moves `SRC_OFS`.
+
+### `M4_or` is an equivalent mutant, which is a result and not a hole
+
+`+` → `|` on `(buf[0]<<24) + (buf[1]<<16) + (buf[2]<<8)`. The three fields are disjoint — bits 24-31,
+16-23, 8-15 — so `+`, `|` and `^` compute the same value. Verified two ways: enumerated over 80 byte
+triples with zero disagreements, and its row values are byte-identical to base. Of the three
+explanations the carrier gives for a mutant that will not die, this is *"the target is dead"*: there
+is no behavioural difference for any test to detect. *Honest caveat: that derivation assumes
+well-defined arithmetic, and `sgirebufshiftub` records that `buf[i]<<24` on a `uint8_t` is
+signed-shift UB for bytes ≥ 128. The measurement settles it for this compiler; the derivation alone
+would not.*
+
+**KILL TABLE 3** — the mutants pass 2 demanded, `regress/artifacts/sgirergbroundtrip/killtable3_20260907/`:
+
+| run | score | |
+|---|---|---|
+| base | 8/8 | |
+| `M9_truemirror` (`bufdepth == 8` -> fix) | **5/8** | the *actual* mirror — killed by three width-4 rows |
+| `M10_ofs` (`ofs == 0` -> fix) | **4/8** | location axis — killed |
+| `M11_cmode` (colour-type conditioning) | **7/8** | killed |
+| **`prefix8row`** | **4/8** | *** the shipped 8-row probe against PRE-FIX source *** |
+
+*** `prefix8row` CLOSES THE CLAUSE-(i) GAP PASS 2 NAMED. *** The witness ladder wants ONE script red
+before the fix and green after; I had quoted `4/`**`6`** against `8/`**`8`**, which is two probes.
+The shipped 8-row detector is **4/8 RED on pre-fix source and 8/8 GREEN on the fix** — same script,
+opposite colour, which is what clause (i) actually asks for.
+
+**`M9_truemirror` scored exactly what the packet-fed seat derived without seeing the tree.** kimi said
+*"a mirror predicts 5/8"*; it measures 5/8.
+
+**`M10_ofs` went the OTHER way from its prediction, and the reason is a fact about the probe rather
+than the code.** kimi predicted `if (ofs == K)` sweeps clean because every row writes at ofs 0. It
+reds four rows — because the *source* pixel is read at `src_x = 0x40`, so `ofs` is 0x40 on every GET
+and 0 only on the destination PUT. **The rows discriminate on location already, by an accident of the
+probe's geometry rather than by design**, and that is recorded as exactly that: covered, unintended,
+and fragile to anyone who moves `SRC_OFS`.
+
+### *** KILL TABLE 4: A SECOND FLOOR BREACH, ON AN AXIS NOBODY HAD LOOKED AT. ***
+
+`regress/artifacts/sgirergbroundtrip/killtable4_20260907/`:
+
+| run | score | |
+|---|---|---|
+| base | 8/8 | |
+| **`M12_linear`** | **8/8** | *** CLEAN SWEEP — clause (d) floor breach *** |
+
+```c
+	case DE_MODE_TYPE_RGB:
+		if (linear)  *color = (buf[0]<<24)+(buf[1]<<16)+(buf[2]<<8);   /* the fix    */
+		else         *color = (buf[1]<<24)+(buf[2]<<16)+(buf[3]<<8);   /* the defect */
+```
+
+**Every row in the detector drove LIN_A**, so `linear` was true in all eight and a repair conditioned
+on it applied everywhere the detector looked. `linear` is `tlb_mode > 3` and it **dominates** the
+edited lines through the `if (!linear && (x < 0 || …)) return;` guard, so it is inside the DEPENDS-ON
+closure — a floor breach, not coverage debt. **L2, repaired in-round** by `rgb tiled`, a ninth row
+driving a TLB_A source.
+
+**Turning the prediction into a measurement required correcting the seat's form.** deepseek proposed
+conditioning on `tileptr`; that cannot discriminate addressing mode, because
+`tileptr &= ~0x80000000` strips the linear flag **before** the switch. `linear` is the variable the
+source keeps, and building the mutant in the shape the code permits is what made it measurable.
+
+**AND THE NEW ROW CAUGHT MY OWN SETUP ERROR ON ITS FIRST RUN, which is what a row is for.** It read
+`0x77665544` — `FG_VAL`, which this probe's own `DE_FG` comment names as *"what a declined GET
+leaves"*. The cause: `re_tlb_a` is `uint16_t[256]` filled by a **halfword** loop
+(`d->re_tlb_a[tlbi] = data[hwi]*256 + data[hwi+1]`), not `uint32_t` like `re_linear_a`. The `<< 32`
+shift that is correct for LINEAR_A lands in `re_tlb_a[2]` and leaves `[0]` at zero, giving
+`tileptr = 0` and a declined access. Corrected to `<< 48`. **A row that passed quietly here would
+have been vacuous by construction — it would have measured a declined access, not a tiled one.**
+
+### *** BUILDING THE ROW THAT CLOSES THE BREACH TOOK TWO CORRECTIONS, AND THE ROW REPORTED BOTH. ***
+
+`rgb tiled` went red twice before it went green, and both times it read exactly `0x77665544` —
+`FG_VAL`, which this probe's own `DE_FG` comment names as *"what a declined GET leaves"*. **The value
+was self-documenting: the GET was never reaching the RGB arm at all.**
+
+**Correction 1 — the array is halfwords, not words.**
+
+```c
+	uint16_t	re_tlb_a[256];              /* vs uint32_t re_linear_a[32] */
+	...
+	for (size_t hwi = 0; hwi < len; hwi += sizeof(uint16_t)) {
+		d->re_tlb_a[tlbi] = data[hwi]*256 + data[hwi+1];
+		tlbi++;
+	}
+```
+
+An 8-byte store fills `re_tlb_a[0..3]` from four big-endian halfwords, so the element that lands in
+`[0]` is bits 63..48. The `<< 32` shift that is **correct for `RE_LINEAR_A`** — because
+`re_linear_a` is `uint32_t` — puts the value in `re_tlb_a[2]` and leaves `[0]` at zero.
+
+**Correction 2 — a tiled tile pointer must carry its own valid bit, and the linear path hides that.**
+
+```c
+	// The highest bit seems to be set for a "valid" tile pointer.
+	if (!(tileptr & 0x80000000))
+		return;                          /* silent decline */
+	tileptr &= ~0x80000000;
+```
+
+`LIN_A` sets that bit **explicitly** — `tileptr = 0x80000000 | (re_linear_a[n] << 12)` — so a probe
+built from the linear path never learns it exists. `TLB_A` takes it from the stored value:
+`tileptr = re_tlb_a[n] << 16`, and `re_tlb_a` is `uint16_t`, so bit 31 of `tileptr` **is bit 15 of the
+register**. `re_tlb_a[0] = 2` yields `0x00020000`, the guard rejects it, and the GET returns without
+touching `*color`.
+
+Fixed by `re_tlb_a[0] = 0x8002`, giving `tileptr = 0x80020000` → valid → masked to `0x20000`.
+
+> **A ROW THAT HAD GONE GREEN THROUGH EITHER MISTAKE WOULD HAVE BEEN VACUOUS BY CONSTRUCTION** — it
+> would have measured a *declined* access while claiming to measure a *tiled* one, which is the
+> refusal-effect vacuity `#489` paid for four times. It went red instead, twice, and named the value
+> that explained why.
+
+*And there is a lesson about the breach itself: `M12_linear` swept 8/8 precisely because no row had
+ever driven the non-linear path — and closing it required two facts about the device that the linear
+path conceals. **An axis nothing exercises is also an axis nobody has had to learn**, which is why
+the cost of closing one is systematically underestimated.*
+
+### *** PASS 3 REFUSED TO CLOSE THE CHAIN, AND IT WAS RIGHT: A THIRD FLOOR BREACH. ***
+
+The repair-chain rule says a repair made in response to a pass 2 owes its own pass, and that the chain
+closes on the first pass finding **zero** breaches. Pass 3 found one, and **five seats declined to
+ratify** — codex (`NOT ESTABLISHED YET | OPEN`), grok (`NOT RATIFY`), minimax, deepseek and the kimi
+substitute (`NOT CLOSED`).
+
+**THE BREACH IS A JOINT CELL, and it is the documented consequence of what I did.** Two axes had each
+been closed on their own:
+
+| | bufdepth 4 | bufdepth 8 |
+|---|---|---|
+| **LIN_A** | `rgb chan`, `rgb samemode` | `rgb depth64` |
+| **tiled** | `rgb tiled` | *** UNROWED *** |
+
+A repair conditioned on `(bufdepth == 4 || linear)` is **true in all three rowed cells** and therefore
+scores 9/9 by construction. **grok, the kimi substitute and deepseek each derived that cell
+independently**, and the kimi seat wrote the mutant out in exactly that form — from the packet, without
+reading the tree.
+
+> **This is precisely the shape the class-closure amendment predicts:** *"when two consecutive passes
+> find breaches of one class, the next repair owes the CLASS CLOSURE — enumerate the full space from
+> the function's own inputs, close every cell in ONE diff."* I repaired cell-by-cell twice, at exactly
+> the address each mutant used, and got the third breach the rule exists to prevent.
+
+**Closed with `rgb tiled64`** — the fourth corner, tiled source at `BUFDEPTH_64` — **in the same diff
+as the gate fix below**, rather than as another single cell.
+
+### grok read the GATE against the PROBE, which nobody else did
+
+> *"`gate_arm.sh` still pins **8** rows and never names `rgb tiled`."*
+
+True, and it would have shipped. The gate's row list omitted the new row and its denominators pinned 8
+against a probe emitting 9. **It would have failed loudly** — emitted 9, wanted 8, which is the safe
+direction — **but `rgb tiled` would have been uncounted by name while appearing in the total.** Both
+new rows are now named and the pins are 10.
+
+*A detector and its gate are two artifacts, and every review so far had read the probe against itself.*
+
+### Two apparatus lessons, both from rules I was actively applying
+
+* **`rgb tiled` is a prefix of `rgb tiled64`** — the padded-column trap's *dangerous* direction, live
+  for the first time in this round. The two-space idiom prevents it; the pre-flight confirmed every
+  name matches exactly one rendered row. Had the block used the one-space form, `rgb tiled` would have
+  matched both rows and the check would have read `2`.
+* **A bare `&` in a shell call killed a probe run**, in a variant the carrier does not record: it
+  documents a *zero-byte* log, and this left a **truncated 381-byte one** stopping after `devsig`,
+  because the process ran ~2 s before its shell exited. **The completion-sentinel rule caught it** —
+  no `SGIRGB_DONE`. Size alone read as a run in progress.
+
+## Two apparatus defects in my own work, recorded rather than quietly fixed
+
+* **Table 1's driver used `grep -c 'FAIL$'` for its red-row column**, which also matched the summary
+  line `SGIRGB_WITNESS=FAIL` — inflating every *failing* run's count by exactly one. The scores were
+  never affected (they come from the sentinel) but the column beside them was wrong. **That is this
+  project's own unanchored-grep trap, in a script written while applying its rules.** Table 2 anchors
+  it.
+* **The detector's gate block was pre-flighted mechanically before the gate ever ran**, in both
+  directions of the padded-column trap: longest row name 15 characters against a `%-16s` column
+  (*one* character of margin), and no name a prefix of another. The sibling block was bitten by the
+  one-space form on its first run; this one was not.
+
+## Wiring
+
+`regress/sgi_re_rgb_probe.py`, `CLASS_DETECTOR`, run by `gate_arm.sh`. It was moved there from
+`regress/artifacts/` because `check_probe_wiring.py`'s own manifest header says instruments preserved
+beside a kill table are TOOL or RESEARCH, since *"calling them detectors demands a gate they should
+never have"* — and this one **is** the shipped detector. **The checker caught the move before the
+gate could**, reporting `GHOST` until the file was staged: *"a probe enters the domain the moment it
+is `git add`-ed."*
+
+
 # Retrospective PASS 2 on `79cd12e` -- the receipt that round never filed, and what a late panel found
 
 `precommit_check.sh` section F refused this commit with **NO PASS-2 RECEIPT for 79cd12e**, adding that *"R6 and

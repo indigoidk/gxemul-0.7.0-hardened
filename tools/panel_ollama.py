@@ -64,14 +64,65 @@ or REASONED.  Never label anything MEASURED -- you cannot measure.
 
 """
 brief = PACKET_PREAMBLE + brief
-try:
+
+
+def _ask(payload):
     req = urllib.request.Request(
         "http://localhost:11434/api/generate",
-        data=json.dumps({"model": model, "prompt": brief,
-                         "stream": False}).encode("utf-8"),
+        data=json.dumps(payload).encode("utf-8"),
         headers={"Content-Type": "application/json"})
-    resp = json.load(urllib.request.urlopen(req, timeout=1500))
-    body = resp.get("response") or json.dumps(resp)
+    return json.load(urllib.request.urlopen(req, timeout=1500))
+
+
+try:
+    resp = _ask({"model": model, "prompt": brief, "stream": False})
+    body = resp.get("response") or ""
+
+    #  *** THE THINKING-BURN RECOVERY.  MEASURED 2026-09-07, after glm burned TWICE IN ONE DAY
+    #  and both answers had to be recovered by hand. ***
+    #
+    #  The burn signature is an EMPTY `response` beside a huge `thinking` field, with
+    #  done_reason "stop" -- the model FINISHES and never emits an answer.  It is invisible to
+    #  every size check (glm's burns were 115 kB and 121 kB, among the largest files in their
+    #  panels) and `seat_verdicts.py` correctly reports SEAT DOWN, which is honest and loses the
+    #  answer anyway.
+    #
+    #  *** BOTH RECOVERED BURNS CONTAINED THE BEST CRITIQUE IN THEIR PANEL. ***  The first found
+    #  three unstated premises in a warrant four other seats had ratified; the second
+    #  reconstructed a per-row kill matrix from the scores alone.  So the answer is NOT to turn
+    #  thinking off -- the hidden reasoning is where this seat's value is.
+    #
+    #  MEASURED, one small prompt, three states:
+    #      glm-5.3:cloud  baseline           response  238   thinking 2363
+    #      glm-5.3:cloud  think=False        response 2592   thinking    0
+    #      glm-5.3-flash  baseline           response  288   thinking 3676
+    #  `think: False` is accepted by this daemon (0.33.2) and moves everything to `response`.
+    #  Answer quality was comparable on the control question -- all three were correct.
+    #
+    #  So: KEEP thinking, and re-fire with it disabled ONLY when the first shot burned.  That
+    #  preserves the seat when it works and guarantees an answer when it does not.  The
+    #  recovered `thinking` is written out too, because a hand-recovery twice today proved it is
+    #  worth reading even when a verdict line is lost.
+    if not body.strip():
+        thinking = resp.get("thinking") or ""
+        note = ("*** THINKING BURN RECOVERED BY panel_ollama.py ***\n"
+                "First shot returned an EMPTY response beside %d chars of hidden reasoning\n"
+                "(done_reason=%s).  Re-fired with think=False.\n\n"
+                % (len(thinking), resp.get("done_reason")))
+        try:
+            retry = _ask({"model": model, "prompt": brief, "stream": False, "think": False})
+            body = retry.get("response") or ""
+            note += ("RETRY response: %d chars.\n" % len(body)) if body.strip() else \
+                    "RETRY ALSO EMPTY -- the burn is not thinking-budget alone.\n"
+        except Exception as re_err:
+            note += "RETRY FAILED: %r\n" % (re_err,)
+        #  The first shot's reasoning is preserved regardless: it is what was worth reading
+        #  both times this happened.
+        body = (note + "\n---- retry answer ----\n" + body +
+                "\n\n---- first shot's hidden reasoning, preserved ----\n" + thinking)
+
+    if not body.strip():
+        body = json.dumps(resp)
 except Exception as e:      # a retired model returns an HTTP 500 with a reason
     #  *** READ THE RESPONSE BODY, NOT JUST THE STATUS.  MEASURED 2026-09-06. ***
     #

@@ -1,0 +1,73 @@
+**VERDICT: Confirmed PIO completion defect. Prefer clearing availability on the final valid read; clearing only on over-read repairs it one read late. Lowering `cnt` creates no mirror. The existing `overread x1` oracle would reject the preferred repair.**
+
+1. **Q1 — Clearing at `:1087` is justified within this model, but incomplete.**
+
+   That arm means the **entire staged buffer** is exhausted. The re-arm at `:1081` occurs in the opposite branch, where bytes remain. Those bytes are already allocated and populated; this is count segmentation, not an asynchronous refill. The explicit example is the 65,536-byte transfer split into 32,768-byte phases. Clearing in the exhausted arm cannot strand that continuation. ([Read path](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_dreamcast_gdrom.c:1073), [segmentation workaround](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_dreamcast_gdrom.c:933))
+
+   Its limitation is timing: after the last valid read, a status-only poll still sees availability until another DATA read performs cleanup.
+
+   S6 establishes why both empty-read paths must survive and announce their disposition. It does **not** establish a requirement to preserve stale availability.
+
+2. **Q2 — Buffer exhaustion should control availability; count exhaustion should retain its role in segmentation.**
+
+   Clear availability when the final valid halfword consumes the buffer, independently of the guest count. Preserve re-arming when the count boundary is reached **with bytes remaining**.
+
+   There is another coupled effect: `SYSASIC_TRIGGER_EVENT` at `:1085` sits behind the same count condition. Merely moving the availability clear leaves final completion notification suppressed in the inconsistent-count case. The design should handle final exhaustion and its completion event together, while preserving intermediate phase events.
+
+   S3 also needs an explicit domain: **raising the count is not sufficient by itself**. With no further writes, the new count must exceed
+   `cur_cnt + (data_len - cur_data_offset)` to prevent any subsequent count-boundary transition. The existing TOC stimulus satisfies that. Guest writes select only 16 bits; the device can internally hold a count or extent of 65,536.
+
+   **The C source cannot establish actual hardware behavior for count writes during an active transfer.** Search-indexed excerpts of Sega’s SPI specification say the host sets Byte Count before issuing the packet and DRQ clears after the last data byte. That supports exhaustion-based completion for the documented protocol. I could not retrieve the full PDF, and those excerpts do not settle how real hardware handles the intervening count writes here. ([Sega SPI specification, pp. 13 and 32](https://segaretro.org/images/7/72/Cdif131e.pdf))
+
+3. **Q3 — No existing scoped row observes this transition.**
+
+   [`gdrom_toclen_probe.py`’s `ok cond`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gdrom_toclen_probe.py:282) observes availability immediately after arming. It does not observe exhaustion, and its separate session cannot anchor the over-read session.
+
+   A proposed `exhaust cond` row should read **`GDROM_COND`**, physical **`0x005f709c`**, through the existing P2 address **`0xa05f709c`**. Use a 16-bit load and compare the low byte:
+
+   | Observation in the same armed TOC transfer | Expected COND |
+   |---|---:|
+   | After arming | `0xa8` |
+   | Immediately before the final valid halfword | `0xa8` |
+   | Immediately after that halfword | `0xa0` |
+   | After the first empty DATA read | `0xa0` |
+   | After further empty DATA reads | `0xa0` |
+
+   These are this fork’s values: command shadow `0xa0`, plus availability bit `0x08`. The [COND read arm](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_dreamcast_gdrom.c:1206) returns that shadow directly.
+
+   Keep all observations in one session, with no intervening COND writes or new packets. The initial observation excludes “never set”; the pre-final observation excludes premature clearing; the immediate post-final observation distinguishes the two proposed repairs.
+
+   **S5 understates the oracle problem.** [`overread x1`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gdrom_data_probe.py:393) requires one **OVERREAD** diagnostic specifically:
+   - Clearing only at `:1087` preserves that one diagnostic; subsequent reads switch to NODATA, whose additional announcement this row ignores.
+   - Clearing on the final valid read makes subsequent reads enter NODATA immediately. OVERREAD count becomes **zero**.
+
+   Thus the existing oracle needs deliberate revision alongside the preferred design; simply appending a COND assertion is insufficient.
+
+4. **Q4 — One extra field predicate can defeat a TOC-only oracle.**
+
+   A small, non-equivalent edit is to condition the completion clear on **`d->cur_cnt == d->cur_data_offset`**.
+
+   The existing `overread` survival row stays green. The proposed raised-count TOC `exhaust cond` row also stays green: without a re-arm, both fields finish at 408. After a legitimate re-arm, however, `cur_cnt` resets and `cur_data_offset` does not. The conditional then suppresses clearing at actual exhaustion.
+
+   Other members of the same family illustrate the missing domains:
+
+   | Extra condition around the completion clear | Case a positive-count TOC row misses |
+   |---|---|
+   | `d->cnt != 0` | Count changed to zero immediately before the final valid read |
+   | `d->data_len == 408` | Completion of a sector-data buffer |
+
+   These are source-derived predictions, **not measured mutation results**. For the preferred repair, the untouched `overread x1` expectation already needs revision as explained above.
+
+5. **Q5 — Lowering the count does not clear availability while data remains.**
+
+   A count write itself performs no completion check. On the next valid DATA read, the outer comparison can succeed early, but the inner extent check still prevents clearing. Instead, the device sets `cnt` to the remaining bytes, resets `cur_cnt`, and signals the phase boundary.
+
+   Consequently, the proposed mirror is absent. Also, lowering the count **after** entering the exhausted inconsistent state does not recover it: those reads bypass the count comparison entirely.
+
+I found three additional points worth recording:
+
+- **Another producer of false availability survives:** the accepted `0xef` arm assigns that value directly to `cond`, including bit `0x08`, without producing a buffer. Therefore the over-read arm remains reachable even after fixing normal exhaustion. This warrants retaining empty-arm cleanup as well; clearing just that bit would preserve `0xef`’s other bits as `0xe7`. Hardware intent remains marked TODO. ([Accepted arm](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_dreamcast_gdrom.c:1282))
+- **A concrete stale count:** the TOC comment says changing `!= 408` to `< 408` changes 65,527 values. In its stated 16-bit domain, the affected set is **409–65,535 inclusive: 65,127 values**. ([Comment](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_dreamcast_gdrom.c:711))
+- **A false reachability claim:** the data-probe docstring says all four removed fatal sites were individually reachable by one instruction on a fresh device. OVERREAD requires preceding state preparation; that sentence is false even as a historical claim. ([Docstring](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gdrom_data_probe.py:29))
+
+No files changed; no builds, gates, probes, or mutants ran.

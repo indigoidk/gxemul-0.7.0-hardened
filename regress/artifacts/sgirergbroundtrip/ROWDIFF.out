@@ -1,0 +1,103 @@
+ROW DIFF -- #505 sgirergbroundtrip
+The PRE-TABLE block PRESCRIBES rows; a later list that does not contain them has dropped an
+obligation, and the diff is the only thing that says so.  `#490` named two mutants in its own
+PRETABLE.out at 16:05, rewrote its row list from a panel's findings at 18:45, and BOTH prescribed
+rows silently vanished -- then both mutants escaped the committed detector.
+
+Written in a SEPARATE FILE on purpose: PRETABLE.out must keep the mtime that proves it preceded
+table 1, so it is not appended to.
+
+================================================================================
+PRESCRIBED BY PRETABLE.out (6)          PRESENT IN THE SHIPPED PROBE?
+================================================================================
+  live                                  YES  (control, ladder clause (ii))
+  devsig                                YES  (control, ladder clause (ii))
+  copy lin_a                            YES  (sibling accept control)
+  rgb chan        pin 0xaabbcc00        YES  -- and the exact pin survived
+  rgb not corrupt pin NOT 0xbbccdd00    YES  (clause (b))
+  rgb alive                             YES  (survival control)
+
+  DROPPED: none.  RE-PINNED: none.  RENAMED: none.
+
+================================================================================
+ADDED AFTER THE PRESCRIPTION (2), each with the obligation it discharges
+================================================================================
+  rgb samemode    RGB -> RGB copy
+        WHY: TWO pass-1 seats independently asked for it.
+             grok -- "pin both with a same-mode RT row AND a raw-memory GET whose byte 3 is nonzero"
+             glm  -- "a same-mode RGB->RGB copy, raw-seeded -- the most guest-realistic corruption
+                      and the natural detector row; S4 is RGB->RGBA only"
+        WHAT IT BUYS: every other row is RGB->RGBA, so the RGB **PUT** arm was never executed by
+             this detector at all.  Table 2's M8_put exists to MEASURE whether it bought that,
+             rather than to assert it.
+        grok's "byte 3 nonzero" condition is met by SRC_VAL itself (0xaabbccdd has 0xdd at byte 3),
+             so the row additionally proves the pad is not carried rather than merely already zero.
+
+  rgb depth64     bufdepth 8 instead of 4
+        WHY: *** A MEASURED CLAUSE-(d) FLOOR BREACH.  L2, repaired in-round. ***
+             Table 1's M6_cond -- guard kept, repair conditioned on `bufdepth == 4' -- scored a
+             CLEAN SWEEP 6/6.  Every session in the pre-repair detector used BUFDEPTH_32, so
+             bufdepth was 4 in all of them and the mutant's fix branch was the only one the
+             detector ever executed.  **The detector proved the fix works exactly where it was
+             measured and said nothing about anywhere else.**
+        WHY 8 AND NOT 1 OR 2: bufdepth 8 keeps buf[0..2] filled by memory_rw, so the row stays a
+             VALUE oracle.  bufdepth 1 or 2 would leave buf[1..2] uninitialised -- that is
+             `sgirebufuninit', a different defect, and it would make this row non-deterministic.
+             8 is the only other width that can carry a value oracle at all.
+
+================================================================================
+TABLE 1 RESULT SUMMARY (killtable_20260907/, 6-row detector)
+================================================================================
+  base            6/6
+  M1_verbatim     4/6   KILLED  -- clause (b), by BOTH rgb rows
+  M2_off1         5/6   KILLED  -- rgb chan
+  M3_pad          5/6   KILLED  -- rgb chan ONLY; `rgb not corrupt' passes it
+  M4_or           6/6   EQUIVALENT (see below) -- not a coverage gap
+  M5_rev          5/6   KILLED  -- rgb chan
+  M6_cond         6/6   *** CLEAN SWEEP -- clause (d) FLOOR BREACH -> repaired above ***
+  nullmedium      1/6   clause (c) discharged: the probe fails on a non-binary
+
+  *** M3_pad IS THE MEASURED PAYOFF FROM THE PANEL. ***  It returns 0xaabbccdd -- the SOURCE word,
+  which is exactly what my pre-panel oracle expected.  `rgb not corrupt' passes it (0xaabbccdd is
+  not 0xbbccdd00).  So it is killed by EXACTLY ONE ROW, and that row is the one four seats made me
+  re-pin.  With the original oracle this mutant scored 6/6 and escaped.
+
+  *** M4_or IS AN EQUIVALENT MUTANT, WHICH IS A RESULT AND NOT A HOLE. ***  The three byte fields
+  are disjoint -- buf[0]<<24 occupies bits 24-31, buf[1]<<16 bits 16-23, buf[2]<<8 bits 8-15 -- so
+  `+', `|' and `^' compute the same value.  Verified two ways: enumerated over 80 byte triples,
+  zero disagreements; and its row values are byte-identical to base.  Of the three explanations the
+  carrier gives for a mutant that will not die, this is "the target is dead": there is no
+  behavioural difference for any test to detect.
+      HONEST CAVEAT: that proof assumes well-defined arithmetic, and `sgirebufshiftub' records that
+      buf[i]<<24 on a uint8_t is signed-shift UB for bytes >= 128.  The MEASUREMENT settles it for
+      this compiler; the derivation alone would not.
+
+  APPARATUS DEFECT IN MY OWN TABLE-1 DRIVER, recorded rather than quietly fixed: its red-row column
+  used `grep -c 'FAIL$'`, which ALSO matched the summary line `SGIRGB_WITNESS=FAIL`, inflating every
+  FAILING run's count by exactly one (M1 showed 3 for 2 real reds).  **The SCORES were never
+  affected** -- they come from the sentinel -- but the column beside them was wrong.  This is the
+  unanchored-grep trap the carrier documents, in a script I wrote while applying its rules.  Table 2
+  anchors it: `grep -cE '^[a-z].* FAIL$'`.
+
+================================================================================
+THE PROBE MOVED AFTER TABLE 2, AND PRETABLE.out STILL CITES ITS OLD PATH
+================================================================================
+  was:  regress/artifacts/sgirergbroundtrip/rgb_witness.py
+  now:  regress/sgi_re_rgb_probe.py          (CLASS_DETECTOR, run by gate_arm.sh)
+
+**PRETABLE.out IS DELIBERATELY NOT EDITED.**  Its mtime is the evidence that it was written BEFORE
+table 1 ran -- that is the whole point of the pre-table block, and rewriting it to fix a path would
+destroy the one property it exists to have.  Its citation was correct when written.
+
+**WHY THE MOVE:** `check_probe_wiring.py`'s own manifest header says instruments preserved under
+`regress/artifacts/` beside a kill table are TOOL or RESEARCH, because *"calling them detectors
+demands a gate they should never have"*.  This file is the SHIPPED detector -- it is backed by two
+kill tables and defends the fix -- so it belongs in `regress/` proper, which is where `#504` put its
+equivalent (`sgi_re_randompixel_probe.py`).
+
+**AND THE CHECKER CAUGHT THE MOVE BEFORE THE GATE DID, by design:** it enumerates with
+`git ls-files`, so the manifest entry read GHOST until the file was staged -- *"a probe enters the
+domain the moment it is git add-ed."*  A moved-but-unstaged detector is exactly the state that would
+otherwise ship a manifest entry pointing at nothing.
+ROWDIFF_DONE
+

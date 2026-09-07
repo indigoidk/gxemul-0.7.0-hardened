@@ -152,6 +152,10 @@ CLASSES = (CLASS_DETECTOR, CLASS_WITNESS, CLASS_TOOL, CLASS_RESEARCH)
 #  cannot arrive unnoticed, which is exactly how all four debts below arrived.
 MANIFEST = {
     # -- detectors a gate RUNS today (the evidence is derived, not asserted here) ---------
+    "sgi_re_rgb_probe.py":         (CLASS_DETECTOR, "#505 RGB GET/PUT byte container"),
+    "alpha_harness_probe.py":     (CLASS_WITNESS,  "alphaswpctxptbr: swpctx overwrites apcb_ptbr with the flags word -- HEAD 7/9"),
+    "lca_confwidth_probe.py":     (CLASS_WITNESS,  "lcaconfwidth: the IOC_CONF kill names a value the guard accepts -- HEAD 4/6"),
+    "alpha_pfnoffset_probe.py":   (CLASS_WITNESS,  "alphapfnoffset: the page-table walk drops the within-page offset -- HEAD 5/6"),
     "arm_endian_probe.py":         (CLASS_DETECTOR, "ARM LDR rotation / endianness"),
     "arm_flags_probe.py":          (CLASS_DETECTOR, "ARM flag semantics"),
     "arm_fold_marker_probe.py":    (CLASS_DETECTOR, "instruction-combination markers"),

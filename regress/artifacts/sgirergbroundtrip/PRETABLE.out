@@ -1,0 +1,134 @@
+PRE-TABLE CHECK -- #505 sgirergbroundtrip
+Written 2026-09-07 BEFORE table 1 runs, so this file's own mtime proves the order.
+Baseline: a264a34 + the #505 edit to src/devices/dev_sgi_re.c (one case arm).
+Detector: regress/artifacts/sgirergbroundtrip/rgb_witness.py, 6 rows.
+
+================================================================================
+1. SIBLING PARITY
+================================================================================
+The edit changes ONE arm of a five-arm switch.  The siblings are the other four
+GET arms, and the PUT switch is the mirror.  Compared:
+
+  arm     PUT writes            GET reads                 memory container
+  ----    ------------------    ----------------------    ----------------
+  CI      buf[0]                buf[0]                    [I,-,-,-]
+  RGB     buf[0],[1],[2],3=0    buf[0],[1],[2]   <- FIXED [R,G,B,pad]
+  RGBA    buf[0],[1],[2],[3]    buf[0],[1],[2],[3]        [R,G,B,A]
+  ABGR    buf[0],[1],[2],[3]    buf[3],[2],[1],[0]        [R,G,B,A]
+  default random() x4           buf[3..0]                 (declines since #504)
+
+ASYMMETRY FOUND, and it is the defect being fixed: before this edit RGB was the
+only arm whose GET was not the inverse of its own PUT.  After it, all four
+implemented arms round-trip.
+
+ASYMMETRY REMAINING, DISCLOSED: the CI arm is single-byte and the default arm
+declines, so neither can carry a container row.  No row is owed for them -- they
+are not de-fatalisations and this round does not touch them.
+
+ROW OWED BY PARITY: an ACCEPT row proving a SIBLING arm still works, so a fix
+that repaired RGB by breaking RGBA would red.  DISCHARGED by `copy lin_a`,
+which drives an RGBA source through the same helper and was green pre-fix and
+post-fix.  It is a pre-existing row, not one added here.
+
+================================================================================
+2. CLAIM -> ROW   (semantic trigger: does the sentence assert something a row
+                   could observe?  Verb lists miss counterfactuals.)
+================================================================================
+Added comment sentences, each mapped:
+
+ C1 "an RGB pixel did not survive its own round trip, shifting one byte left
+     with a zero fill on every RGB source read"
+     -> ROW `rgb not corrupt` (pins the exact pre-fix value 0xbbccdd00)
+
+ C2 "the PUT arm is the authoritative one ... dev_sgi_gbe.c's scanout reads the
+     same tile memory back as (buf[0]<<24)+... and RGB8 takes R,G,B from bits
+     31..24, 23..16, 15..8 -- byte 0 is R and byte 3 is UNUSED"
+     -> NO ROW, AND THE REASON IS RECORDED RATHER THAN LEFT BLANK.  This is a
+        claim about a DIFFERENT DEVICE's read path.  A row could in principle
+        drive gbe scanout and compare framebuffer output, but this detector runs
+        the drawing engine only and has no framebuffer oracle.  It is a WARRANT
+        for the choice of arm, not a behavioural claim of this diff.  Filed as
+        the residual `sgirgbscanoutrow` rather than silently omitted.
+
+ C3 "the RGBA and ABGR PUT arms independently agree -- both lay [R,G,B,x] in
+     memory despite opposite register word orders"
+     -> NO ROW OWED: it is a statement about code this diff does not change, and
+        it is checkable by reading (done: see table in section 1).  It supports
+        C2 and asserts nothing about runtime behaviour of the edited arm.
+
+ C4 "the low byte stays ZERO on purpose ... a corrected read of 0xaabbccdd
+     yields 0xaabbcc00, NOT the source word"
+     -> ROW `rgb chan`, which pins 0xaabbcc00 EXACTLY.  *** THIS IS THE ROW THE
+        PANEL SAVED. ***  The pre-panel draft pinned 0xaabbccdd and would have
+        gone RED against a correct fix; four seats independently named
+        0xaabbcc00.  A row asserting the source value could never have drawn the
+        distinction C4 makes.
+
+================================================================================
+3. GUARD FIELD vs BODY FIELD
+================================================================================
+Guard  : `color_mode`, = `mode & DE_MODE_TYPE_MASK` (bits 4-7), where `mode` is
+         the function's own parameter, supplied by the caller as src_mode or
+         dst_mode -- read straight from de_reg[] with NO filtering.
+Body   : buf[0], buf[1], buf[2]  (and, before the edit, buf[3]).
+         buf is filled by memory_rw() for `bufdepth` bytes;
+         bufdepth = 1 << ((mode >> 8) & 3), i.e. bits 8-9 of the SAME word.
+
+DISAGREEING STATE EXISTS AND IS REAL: the guard reads bits 4-7 and the body's
+length comes from bits 8-9, so a guest can select RGB with bufdepth 1 or 2 --
+and then the GET reads buf[1..2] that memory_rw never filled.
+
+  *** DISCLOSED, NOT ROWED, AND THE REASON IS THAT IT IS A DIFFERENT DEFECT. ***
+  Reading uninitialised buf[] is `sgirebufuninit`, already filed, and it is
+  PRE-EXISTING: the shipped GET read buf[1..3] and the fixed one reads buf[0..2],
+  so both read three bytes and both are exposed identically at bufdepth 1 or 2.
+  **This edit neither creates nor cures it, and a row here would attribute a
+  pre-existing defect to this round.**  Independently named by the glm seat on
+  pass 1 ("with bufdepth 1 or 2 the RGB/RGBA/ABGR GETs read uninitialized
+  buf[2..3]"), which is a sharper statement than the filed row carries; the row
+  gains it.
+
+================================================================================
+4. CHANNEL   (per row: the mutant it kills, and the observable that DIFFERS
+              under that mutant.  A row whose channel cannot vary under its
+              named mutant is vacuous BY CONSTRUCTION.)
+================================================================================
+ row              kills                              channel that differs
+ ---------------  ---------------------------------  -------------------------
+ live             a broken probe / dead emulator      v0 after a RAM store+load
+ devsig           probing RAM instead of the device   CRIME_DE_STATUS=0x1e000000
+                                                      vs 0 from RAM
+ copy lin_a       a fix that breaks the RGBA sibling   destination word
+ rgb chan         ANY wrong byte placement, incl.      destination word, pinned
+                  the +buf[3] mutant that returns      to an exact value
+                  0xaabbccdd
+ rgb not corrupt  verbatim reinstatement (clause b)    destination word vs the
+                                                      specific pre-fix value
+ rgb alive        a fix that kills the host            process survival
+
+CHANNEL VARIES UNDER EVERY NAMED MUTANT?  Yes for all six -- each names the
+destination word or an independently observed value, and the destination word is
+exactly what the edited expression computes.  **No survive-only oracle sits on
+the edited path**, which is the vacuity shape #489 paid for: this is a
+wrong-VALUE defect, not a refusal-effect site, so `rgb alive` is the only
+survival row and it is a control rather than the defect's oracle.
+
+CHECKING THE CHANNEL LINE ITSELF, as the carrier asks of applications of a young
+rule: its claim is that a row's channel-under-its-mutant is knowable at WRITING
+time.  Here it was -- and it did work, in the sharpest possible way: writing
+"channel = destination word, pinned to an exact value" for `rgb chan` is what
+forced the question "pinned to WHICH value?", which is where the 0xaabbccdd
+error lived.  **The check found a real defect in this detector before any table
+ran.**  Recorded as one instance, not a law.
+
+================================================================================
+PRESCRIBED ROWS (diff this list against the final row set -- #490 lost two rows
+                 to a later rewrite that only ADDED the panel's findings)
+================================================================================
+  rgb chan          MUST pin 0xaabbcc00 exactly, not merely "not the corrupt one"
+  rgb not corrupt   MUST pin the pre-fix value 0xbbccdd00 (clause b)
+  copy lin_a        sibling accept control -- keep
+  live / devsig     ladder clause (ii) controls -- keep
+  rgb alive         survival control -- keep
+ALL SIX PRESENT IN THE SHIPPED FILE AT THE TIME THIS WAS WRITTEN.
+PRETABLE_DONE

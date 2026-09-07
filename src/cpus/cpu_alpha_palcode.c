@@ -279,7 +279,13 @@ Make sure they are correct, as documented in the Manual.
 			cpu->cd.alpha.pcb.apcb_cpc = new_cpc;
 			cpu->cd.alpha.pcb.apcb_asn = new_asn;
 			cpu->cd.alpha.pcb.apcb_unique = new_unique;
-			cpu->cd.alpha.pcb.apcb_ptbr = new_flags;
+			/*  #507: was `apcb_ptbr = new_flags' -- a field-name transposition that
+			    assigned apcb_ptbr TWICE (here and three lines up) and apcb_flags NEVER,
+			    while every other field in this block is assigned exactly once.  Two
+			    consequences: apcb_ptbr ended up holding the flags word, and the incoming
+			    context's flags were dropped -- so the NEXT save published a never-loaded
+			    word back into the outgoing PCB, wiping what the guest planted.  */
+			cpu->cd.alpha.pcb.apcb_flags = new_flags;	/*  #507  */
 			cpu->cd.alpha.pcb.apcb_decrsv0 = new_decrsv0;
 			cpu->cd.alpha.pcb.apcb_decrsv1 = new_decrsv1;
 

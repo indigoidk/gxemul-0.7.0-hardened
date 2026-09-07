@@ -1,0 +1,61 @@
+VERDICT: **The brief's conclusion (GET wrong, PUT right) is not established by the packet. A counter-reading (PUT off-by-one for XRGB layout, GET correct) is consistent with the inlined code and with S4. The "RGBA parallel" cuts both ways: ABGR uses the opposite byte order, and the default GET falls back to ABGR order. Q2-Q4 are not checkable from the packet. Q5: the `+`→`|` mutant slips behavioral tests; if the test suite lacks an RGB round-trip, all RGB-GET mutants slip through.**
+
+---
+
+## Premise audit
+
+**S1 (code snippet):** READ. Inlined verbatim; PUT writes `buf[0]=*color>>24`, `buf[1]=*color>>16`, `buf[2]=*color>>8`, `buf[3]=0`; GET reads `buf[1..3]` with shifts 24/16/8. Internal mismatch between the two arms is real.
+
+**S2 (byte-position table):** READ. Correctly derived from S1. RGB is the only mode where PUT and GET disagree on which byte holds which channel.
+
+**S3 (constants):** READ. Inlined; internally consistent.
+
+**S4 (measurement):** REASONED, with a caveat. The interpretation (`0xaabbccdd` → `0xbbccdd00`, "shifted one byte left, zero fill") matches the buggy GET reading `buf[1..3]`. **But S4 does not distinguish "GET wrong" from "PUT wrong for a different layout."** Trace: source buffer written as RGBA with `0xaabbccdd` → bytes `aa bb cc dd` at `buf[0..3]`. Source GET reads `buf[1..3] = bb cc dd` → `0xbbccdd00`. This trace is identical whether RGB uses RGBA-style byte order (R at `buf[0]`) or XRGB (pad at `buf[0]`, R at `buf[1]`, G at `buf[2]`, B at `buf[3]`). The probe writes the source via RGBA PUT, so the byte it ends up reading is determined by the RGBA layout, not the RGB layout. **The measurement does not break the tie.**
+
+---
+
+## Q1 — Which arm is wrong?
+
+The brief argues GET. Strongest evidence: RGBA PUT writes R at `buf[0]`; RGB PUT also writes R at `buf[0]`; so RGB "shares" RGBA's byte order, and the explicit `buf[3]=0` pad write is consistent with byte 3 being a pad.
+
+**Counter-argument (PUT wrong, GET right):**
+
+1. **ABGR exists in the same file with the opposite byte order.** ABGR PUT writes `buf[0] = *color` (the low byte). Under ABGR semantics (A low, R high), that puts **A at `buf[0]`**, so ABGR's R sits at `buf[3]`. The emulator therefore already supports both layouts. For 24-bit RGB the hardware can plausibly use either.
+
+2. **The default GET arm (unknown mode) reads `buf[3,2,1,0]` — bit-identical to ABGR GET.** This is the code's fallback assumption. If RGB followed that family, the layout would be **XRGB**: pad at `buf[0]`, B at `buf[1]`, G at `buf[2]`, R at `buf[3]`. In XRGB, GET reading `buf[1..3]` with shifts 24/16/8 reconstructs `(R<<24)+(G<<16)+(B<<8) = 0xRRGGBB00` — a correct 24-bit RGB value. And PUT in the current code writes R to `buf[0]` (the pad byte), G to `buf[1]` (R's position), B to `buf[2]` (G's position), 0 to `buf[3]` (B's position) — **off by one byte in every position**. In XRGB, PUT is the broken arm.
+
+3. **The "explicit pad write" argument is circular.** `buf[3]=0` is a pad write *if* the layout is RGBA-style; in XRGB it is a clobber of B. The argument assumes the layout it then claims to prove.
+
+4. **S4 does not distinguish**, as noted above.
+
+**Conclusion for Q1:** GET-wrong is the more probable reading given the RGBA parallel and the pad write, but PUT-wrong (XRGB) is consistent with the inlined code and S4. **The packet does not settle this.** A single probe that writes a source pixel via **RGB** PUT (not RGBA PUT) and reads it back via RGB GET would break the tie: RGBA-style preserves the high three bytes; XRGB preserves bytes 1,2,3 and loses byte 0. The brief does not include this probe.
+
+---
+
+## Q2-Q4 — Not checkable from the packet
+
+**Q2 (hardware behavior):** NOT CHECKABLE. What would settle it: a CRIME/RE hardware reference, a Linux framebuffer driver for SGI O2 documenting the 24-bit RGB pixel layout, or any in-tree consumer that reads these bytes back.
+
+**Q3 (other consumers):** NOT CHECKABLE. The brief names candidates (framebuffer path, later copies, `debug()`) but none are inlined. What would settle it: a grep for `DE_MODE_TYPE_RGB` across `src/` and for any framebuffer read of a pixel written in RGB mode.
+
+**Q4 (RGB mode reachability):** NOT CHECKABLE. The brief shows one MTE-path fragment (`src_mode |= DE_MODE_TYPE_RGBA`) but not the surrounding context or the `dst_mode` line. What would settle it: a grep for `DE_MODE_TYPE_RGB` across `src/` and `regress/*.py`, and reading the mode-construction code in the MTE path and any backend/CRIME setup path.
+
+---
+
+## Q5 — Mutant enumeration
+
+Assume the fix changes RGB GET to `(buf[0]<<24)+(buf[1]<<16)+(buf[2]<<8)`:
+
+- **Shift count off by 8** (e.g., `buf[0]<<16`): caught by any RGB round-trip test with a non-zero pixel — the result packs into the wrong bits.
+- **Byte index off by one** (e.g., `buf[1]` instead of `buf[0]`): caught by an RGB round-trip test.
+- **`+` → `|`**: **NOT caught by behavioral tests.** For the bit patterns in question (three non-overlapping bytes shifted into the high 24 bits) `+` and `|` are semantically identical — no carry is generated between fields. Only an AST or string-equality check would catch it.
+
+**If the test suite contains only the three round-trips named in S2 (CI, RGBA, ABGR) and no RGB round-trip, then *all* mutants in the RGB GET fix slip through** — those three tests do not exercise the RGB code path at all. The brief's "three rows" are exactly the wrong set for guarding an RGB-GET edit.** A detector must include an RGB round-trip (PUT then GET in RGB mode, input with distinct non-zero bytes in positions 0, 1, and 2) to catch shift and index mutants; only a syntactic check catches `+`→`|`.
+
+If the fix turns out to be the *other* direction (PUT corrected for XRGB), the same logic applies in mirror: an RGB round-trip test guards PUT, and CI/RGBA/ABGR tests are silent.
+
+---
+
+## Defect to flag (the one the brief most needs to hear)
+
+The brief's own framing — *"RGBA and ABGR both round-trip while using opposite byte orders, which is why I claim this is an internal inconsistency rather than an endianness question"* — is the load-bearing premise, and **it does not support the conclusion.** The coexistence of two opposite byte orders in the same file means the emulator supports both layouts; it does not mean RGB mode is immune to the layout question. The pad-write argument is circular. S4 does not break the tie because the source buffer is populated via RGBA PUT, which fixes the byte positions regardless of the RGB layout. **Q1 is genuinely open from this packet.** The single fact that would settle it is the result of an RGB-PUT → RGB-GET round-trip on a known input; until that exists, neither "GET is wrong" nor "PUT is wrong" is established.

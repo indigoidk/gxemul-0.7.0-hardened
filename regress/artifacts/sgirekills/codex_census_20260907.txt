@@ -1,0 +1,105 @@
+**VERDICT: The count is twelve. Eleven are guest-reachable; one is unreachable. There are no two or three genuine one-line repairs already covered by success tests. The cheapest plausible functional pair is LINEAR_A and LINEAR_B readback—but both need corrected oracles.**
+
+The anchored source search matched exactly the twelve statements below. S1 is confirmed. The current code also confirms S2’s essential point: the RE width guards run first and admit eight-byte accesses into the remaining read kills.
+
+For the census, `RE` means `dev_sgi_re_access`, `XFER` means `do_mte_transfer`, and `MTE` means `dev_sgi_mte_access`. RE ranges use the adjusted `relative_addr`, after its `+0x1000`. Every RE row additionally requires `len == 8` and the non-write arm—`MEM_READ` for guest accesses. Every XFER row is entered through MTE’s command-start path.
+
+| # | Exit line in [dev_sgi_re.c](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c) | Function | Condition reaching it | Recommended disposition |
+|---|---:|---|---|---|
+| 1 | 437 | RE | `CRIME_RE_TLB_A ≤ addr < CRIME_RE_TLB_B` | **IMPLEMENT** TLB_A reads |
+| 2 | 456 | RE | `CRIME_RE_TLB_B ≤ addr < CRIME_RE_TLB_C` | **IMPLEMENT** TLB_B reads |
+| 3 | 475 | RE | `CRIME_RE_TLB_C ≤ addr < CRIME_RE_TLB_C + 0x200` | **IMPLEMENT** TLB_C reads |
+| 4 | 494 | RE | `CRIME_RE_TEX ≤ addr < CRIME_RE_TEX + 0xe0` | **IMPLEMENT** TEX reads |
+| 5 | 586 | RE | `CRIME_RE_LINEAR_A ≤ addr < CRIME_RE_LINEAR_A + 0x80` | **IMPLEMENT** LINEAR_A reads |
+| 6 | 644 | RE | `CRIME_RE_LINEAR_B ≤ addr < CRIME_RE_LINEAR_B + 0x80` | **IMPLEMENT** LINEAR_B reads |
+| 7 | 1330 | XFER | `mode & MTE_MODE_STIPPLE` | **DECLINE + LATCHED ANNOUNCE** |
+| 8 | 1338 | XFER | STIPPLE clear; source selector `> MTE_TLB_C` | **DECLINE + LATCHED ANNOUNCE** for an unsupported active copy source; **ACCEPT** the irrelevant source field when COPY is clear |
+| 9 | 1399 | XFER | STIPPLE clear; source selector `≤ MTE_TLB_C`; destination LIN_A or LIN_B; COPY set | **DECLINE + LATCHED ANNOUNCE** |
+| 10 | 1404 | XFER | Same source/destination prerequisites as #9; COPY clear; `depth != 8` | **DECLINE + LATCHED ANNOUNCE** |
+| 11 | 1415 | XFER | Same source/destination prerequisites; COPY clear; `depth == 8`; `bytemask != 0xffffffff` | **DECLINE + LATCHED ANNOUNCE** |
+| 12 | 1537 | MTE | Final `else` after `if (len == 4)` and `else if (len != 4)` | **DELETE** unreachable branch |
+
+For Q2, **#1–#6 are entire missing read paths**, not guards rejecting particular read values. Each admitted read reaches only `fatal("TODO…"); exit(1);`. Backing arrays exist, but no read value has been assembled or served. IMPLEMENT can use that backing where its semantics warrant it; simply deleting the exit would leave zero-valued reads and repeated TODO diagnostics.
+
+For #7–#11, the declined operation is the **transfer command**. MTE’s register access has already read or updated `mte_reg` before calling the helper. These checks precede transfer writes, so declining can stop the command while preserving that register access. Removing an exit and continuing would allow unsupported configurations into partial implementations—for example, linear COPY into the fill path.
+
+**#8 also contains a separate overbroad predicate:** the source selector is checked even when COPY is clear, although that transfer never consumes source pixels. Preserving that predicate while removing termination is containment, not a complete correction.
+
+S4 needs qualification if it refers to PCC2’s default arm. PCC2 [serves reads before its switch](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_pcc2.c:427), then [preserves those reads while declining writes](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_pcc2.c:666). That precedent does not establish that an entirely missing RE read should return zero.
+
+For Q3, this is my **estimated total-cost ranking**, including meaningful verification. Equal ranks are intentional.
+
+| Rank | Site | New latch bit? | Row/session work |
+|---|---|---|---|
+| 1 | #12 — dead MTE width branch | No | Nothing beyond source cleanup. **No runtime improvement.** |
+| 2= | #5 — LINEAR_A read | No for implementation | Replace existing kill oracle with readback assertions; extend existing sessions. |
+| 2= | #6 — LINEAR_B read | No for implementation | Same. |
+| 3= | #1 — TLB_A read | No for implementation | Reuse existing sessions; add returned-value, packing and cell-selection assertions. |
+| 3= | #2 — TLB_B read | No for implementation | Same. |
+| 3= | #3 — TLB_C read | No for implementation | Same. |
+| 4= | #7 — STIPPLE | One | New targeted MTE rows and session scenario. |
+| 4= | #9 — linear COPY | One | New targeted MTE rows and session scenario. |
+| 4= | #10 — linear depth | One | New targeted MTE rows and session scenario. |
+| 4= | #11 — linear bytemask | One | New targeted MTE rows and session scenario. |
+| 5 | #8 — source selector | One for rejection | New MTE rejection tests plus acceptance coverage for an inactive source field. |
+| 6 | #4 — TEX read | No for implementation | Resolve indexing semantics; add an adjacent-slot scenario and returned-value oracle. |
+
+LINEAR_A/B are cheapest because their existing stores already split a value into adjacent 32-bit entries. TLB_A/B/C require assembling the corresponding halfword entries and checking byte order. Existing kill sessions can be extended; a new process launch or row name is not inherently necessary, but a **new success oracle is**. Reads of untouched zero-initialized backing would not establish correct readback.
+
+The MTE cases can reuse the IP32 session machinery, but I found no targeted coverage for their transfer guards in the permitted top-level Python files. Their new coverage must establish command refusal, continued execution, latch behavior and a supported-command control.
+
+TEX costs more because its [write indexing](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:486) advances the starting index by one halfword per eight-byte slot, while each write stores four halfwords. Adjacent slots consequently overlap in the model. Existing write oracles explicitly pin that indexing. A read implementation should not silently settle this by symmetry.
+
+**The answer to “which two or three are genuinely one-line changes with existing coverage?” is none.** Changing an MTE exit into a helper return leaves an unlatched diagnostic; deleting an RE exit does not implement its read. Deleting #12 changes only unreachable code.
+
+For Q4, the reachability partition is:
+
+| Category | Members | Evidence checked |
+|---|---|---|
+| **(a) Ordinary guest register accesses** | #1, #2, #3, #4, #5, #6 | Valid-width RE reads reach their respective arms. Checked IP32 initialization, RE registration, MIPS load dispatch and the width-first branches. |
+| **(a) Ordinary guest register accesses** | #7, #8, #9, #10, #11 | Ordinary MTE register programming and command-start handling reach the helper. Earlier guards can be satisfied without enabling another defect. |
+| **(b) Another defect must first enable the path** | **None** | No such prerequisite appears in the caller or guard chain. |
+| **(c) No guest can reach it** | #12 | The preceding complementary width predicates exhaust every possible `len`. This is unreachable for host callers too. |
+
+Specifically, I checked [IP32 construction](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/machines/machine_sgi.c:459), [device registration](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:682), the [MTE callback’s START handling](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:1506), its sole [transfer-helper call](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:1624), and [memory callback dispatch](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:583). START handling is not qualified by write direction.
+
+I also checked the [ordinary MIPS alignment check](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_mips_instr_loadstore.c:57) and [unaligned-access helper](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_mips_instr_unaligned.c:44). The latter supplies aligned addresses and includes device reads even in its store path.
+
+For Q5, **none of the twelve exit sites currently has a latch**. The existing [enum](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:68) contains these `SGIRE_W_` suffixes:
+
+| Bit | Suffix | Bit | Suffix |
+|---:|---|---:|---|
+| 0 | `TLBA_LEN` | 6 | `DE_LEN` |
+| 1 | `TLBB_LEN` | 7 | `UNMAP_WR` |
+| 2 | `TLBC_LEN` | 8 | `UNMAP_RD` |
+| 3 | `TEX_LEN` | 9 | `PRIM_OP` |
+| 4 | `LINA_LEN` | 10 | `BADMODE` |
+| 5 | `LINB_LEN` | | |
+
+The proposed transfer declines need distinct bits for **STIPPLE, source selector, linear COPY, linear depth and linear bytemask**. Their guards being mutually exclusive during one command does not justify sharing a latch across the device’s lifetime.
+
+There is legitimate grouping **within** each of #9, #10 and #11: its single code site handles both LIN_A and LIN_B. That does not justify sharing between those three sites.
+
+Successful read implementations need no warning bits, and dead-code deletion needs none. Thus the proposed disposition needs **five additional bits**, which fit at 11–15 in the existing `uint32_t`. If the six reads instead receive temporary announced declines, each needs its own additional bit, separate from its width latch; that alternative still fits without enlarging `warned`.
+
+For Q6, fixing every RE read path requires replacing these exact [kill rows](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/sgi_re_width_probe.py:269):
+
+| Current row, expecting `exit1+txt` | Site | Existing boundary write rows also retained |
+|---|---:|---|
+| `tlb_a ld kill` | #1 | `tlba acc lo`, `tlba acc hi` |
+| `tlb_b ld kill` | #2 | `tlbb acc lo`, `tlbb acc hi` |
+| `tlb_c ld kill` | #3 | `tlbc acc lo`, `tlbc acc hi` |
+| `tex ld kill` | #4 | `tex acc lo`, `tex acc hi` |
+| `linear_a ld kill` | #5 | `lina acc lo`, `lina acc hi` |
+| `linear_b ld kill` | #6 | `linb acc lo`, `linb acc hi` |
+
+**No window loses all coverage.** Each retains its `sw surv`, `sw lat1`, `lw surv` and `accept` rows, plus the listed [boundary write rows](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/sgi_re_unmapped_probe.py:633). Those retained rows do not establish correct eight-byte read behavior.
+
+The replacements must observe a completed read and its expected value; merely changing `exit1` to `exit0` is insufficient. Your ordering applies: establish the replacement expectations, measure the unchanged build RED, then edit the affected read paths. Fixing only a subset changes only that subset’s rows. Changes confined to MTE require none of these inversions.
+
+Two further findings matter:
+
+- The [unreachable MTE width branch](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:1522) conceals an overbroad acceptance path: **every non-four-byte access takes the two-register branch**, including narrow accesses. Deleting the dead exit does not repair that.
+- MTE computes depth as **8, 16, 32 or 64**, but its [RGBA-selection condition tests `depth == 4`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:1371). That condition is impossible—a separate units mismatch.
+
+No files were modified and no build, probe or test was executed. Current gate status and gate wiring were not measured.
