@@ -15609,3 +15609,42 @@ corrections are one fact seen from opposite sides.
 **values, not determinism**.  kimi's proof is the sharper: post-fix PATH B yields a deterministic value *and*
 the `bufdepth`-sized mutant yields the previous pixel's bytes, which are **also** deterministic under stack
 reuse — so *"a determinism oracle CANNOT catch the mutant."*
+
+## 2026-09-07 — `sgilinearnegidx` (HIGH): a guest-chosen physical write address, found by a packet-fed seat
+
+**FOUND BY THE `glm` SEAT** — a transport that cannot read the repo and had only the function inlined.  It
+noticed that one guard's precondition excludes the very mode the other guard assumes:
+
+    if (!linear && (x < 0 || y < 0 || x >= 2048 || y >= 2048))   <- SKIPPED when linear
+            return;
+    ...
+    case 4: tile_nr = x >> 12;
+            if (tile_nr >= 32)                                   <- bounds ABOVE only
+                    return;
+            tileptr = 0x80000000 | (d->re_linear_a[tile_nr] << 12);
+
+`x = -1` gives `tile_nr = -1`, which passes `>= 32`, and indexes `re_linear_a[-1]`.
+
+*** THE READ VALUE BECOMES A PHYSICAL ADDRESS, AND THE MEMORY IT READS IS GUEST-WRITABLE. ***  `offsetof`
+**measured** (not derived — `regress/artifacts/sgilinearnegidx/offcheck.c`): `re_tex` ends at 1760 and
+`re_linear_a` begins at 1760, **zero padding**, so `re_linear_a[-1]` is `re_tex[110]` and `re_tex[111]` — both
+written by the guest through the `CRIME_RE_TEX` store arm.
+
+**The chain, each step read from the source:** guest fills `re_tex[110..111]` → sets `CRIME_DE_XFER_STEP_X`
+negative (an `int32_t`, and the check at `:734` only **announces and continues**) → `src_x += step_x` drives
+`src_x` negative → linear-mode GET skips the sign guard → `tile_nr = -1` passes → `tileptr` is the two
+guest-written halfwords shifted left 12 → `memory_rw(…, tileptr + ofs, buf, bufdepth, MEM_WRITE, PHYSICAL)`.
+**The guest selects the physical destination of a device write, bypassing translation.**
+
+**NOT ESTABLISHED, and a round owes each:** no witness — every step is reachable by reading, none observed;
+`sgitexindex`'s overlapping TEX writes complicate *which* values land in `[110..111]`, affecting
+controllability rather than reachability; and whether any real driver drives a negative step is unknown.
+
+**Not a duplicate of `sgilinearoob`** (the same array's *above* bound, in a different function), and **must
+not be folded into `sgirebufuninit`** — that is about buffer *contents*, this about the write *destination*,
+and a memset fixes nothing here.
+
+**A note on the seat, because it cuts against expectation:** the doctrine says packet-fed transports supply
+attack *reasoning* rather than repo fact, and are never equivalent votes on the tree.  That held exactly — glm
+could not confirm the struct layout or the caller, and said so.  What it could do was notice a contradiction
+between two guards in code it had been handed, and **that was the strongest single finding on the brief.**
