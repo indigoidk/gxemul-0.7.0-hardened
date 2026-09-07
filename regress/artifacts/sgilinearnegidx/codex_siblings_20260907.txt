@@ -1,0 +1,69 @@
+**VERDICT: The stated case-4 underflow is absent in this fork: `tile_nr` is unsigned. The other upper-only index checks are bounds-safe. There are missing checks on complete write spans in TLB_A/B/C and LINEAR_A/B, whose safety depends on caller alignment.**
+
+The declaration is **`unsigned int tile_nr`**, at [dev_sgi_re.c:207](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:207). Case 4 assigns `x >> 12` to that variable **before** checking it. With 32-bit arithmetic right shift, `x = -1` produces unsigned `4294967295`, which the guard rejects. Regardless of the implementation-defined negative shift result, the checked unsigned index must be below 32 before use.
+
+I enumerated every offset in the relevant address windows, every coordinate pair in the permitted 2048×2048 space for all four depth encodings, and both endpoints of every signed-32-bit case-4 quotient class. No files changed or tests ran.
+
+The complete subscript census follows. Array declarations are at [line 137](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:137); DE/MTE each have **1,024 `uint32_t` elements**, using the length definitions in [devices.h](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/devices.h:403).
+
+| Array/site | Index expression and type | Guard and actual bounds | Guest influence |
+|---|---|---|---|
+| `re_tlb_a[256]`, `re_tlb_b[256]`, `re_tlb_c[256]`: pixel lookup | Unsigned `tile_nr = (y >> 7)*16 + x/tilewidth_in_pixels` | `tlb_mode <= 2 && tile_nr >= 256` rejects. Earlier, tiled modes reject negative coordinates and coordinates ≥2048. **Upper-only comparison is sufficient.** | Coordinates and mode derive from DE/MTE registers and coordinate updates. |
+| `re_linear_a[32]`: case-4 lookup | Unsigned `tile_nr = x >> 12` | `tile_nr >= 32` rejects the **same variable used**. No negative subscript survives. | DE coordinates/source-position state. |
+| `re_tlb_a[256]`, `re_tlb_b[256]`, `re_tlb_c[256]`: register writes | Signed `int tlbi`, initially `((relative_addr & 0x1ff) >> 1) & 0xff`, then incremented four times | Address-window checks and `len == 8`. Initial index cannot be negative; **later indexes can exceed 255** without caller alignment. No per-element capacity check. | Guest-selected access address; increments are internal. |
+| `re_tex[112]`: register writes | Signed `int tlbi`, initially `((relative_addr & 0xff) >> 3) & 0xff`, then four consecutive indexes | Window and `len == 8` checks. Enumeration gives initial **0–27**, used **0–30**. Neither side can escape. | Guest-selected access address. |
+| `re_linear_a[32]`, `re_linear_b[32]`: register writes | Signed `int tlbi = ((relative_addr & 0x7f) >> 2) & 0x1f`; uses `[tlbi]` and `[tlbi+1]` | Window and `len == 8` checks. Initial **0–31**; second index **1–32**. **Second-element upper bound is missing locally.** | Guest-selected access address; safety depends on alignment. |
+| `de_reg[1024]`: register access | Signed `int regnr`, from unsigned `relative_addr / sizeof(uint32_t)` after clearing START; also `[regnr+1]` | Width branches accept 4/8 bytes. Dispatch bounds plus START masking give **0–511**, with second index at most **512**. Safe within the declared array. | Guest-selected access address. |
+| `mte_reg[1024]`: register access | Same index construction as DE | Same **0–511 / 1–512** bounds. Its width condition is defective, discussed below, but these indexes remain inside 1,024 elements. | Guest-selected access address. |
+| `de_reg[1024]`: drawing-state reads | Constant `(CRIME_DE_* - 0x2000)/sizeof(uint32_t)` | Enumerated indexes: **0, 2, 6, 24, 28, 29, 40, 41, 42, 43, 44, 45, 48, 49, 52, 54, 108**. No runtime guard needed. | Contents are guest-written; subscripts are constants. |
+| `mte_reg[1024]`: transfer-state reads | Constant `(CRIME_MTE_* - 0x3000)/sizeof(uint32_t)` | Enumerated indexes: **0, 2, 6, 8, 10, 12, 14, 16, 18**. Safe. | Contents are guest-written; subscripts are constants. |
+| Two separate static `rop_used[256]` arrays | Unsigned `rop & 255` | Enumerated low-byte outputs **0–255**. Mask supplies both bounds. | `rop` is guest-written, although the arrays hold internal diagnostic state. |
+| `tlb[i]`, aliasing `re_linear_a[32]` or `re_linear_b[32]` | Signed `int i` | `for (int i = 0; i < 32; ++i)`. **Upper-only loop condition**, with lower bound supplied by initialization and increment. | Guest affects table selection, contents and early termination; not the index progression. |
+| Local `buf[8]` | Explicit subscripts **0, 1, 2, 3**; bulk length `1 << ((mode >> 8) & 3)` | Enumerated lengths **1, 2, 4, 8** fit the allocation. Initialization is a separate defect. | Subscripts are constants; transfer length is guest-influenced. |
+| Local `zerobuf[4096]` | Bulk operations, without explicit subscripts | Initialization caps length at 4096. Transfer length is capped, then shortened at a page boundary. Enumerating all capped lengths/page offsets gives **1–4096**, never an enlargement. | Guest controls requested length and address; consumed span is bounded. |
+| Caller-supplied `data`, length `len` | `size_t hwi`, accessing `[hwi]` and `[hwi+1]` | `hwi < len` alone checks only the first byte. Current `len == 8` restriction yields exactly **(0,1), (2,3), (4,5), (6,7)**. Safe. | Access width is guest-influenced; loop progression is internal. |
+
+The register-write sites are at [TLB_A](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:406), [TLB_B](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:425), [TLB_C](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:444), [TEX](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:463), [LINEAR_A](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:556), and [LINEAR_B](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:614). Their debug reads reuse the same subscripts.
+
+For the missing write-span checks, enumeration gives these complete boundary sequences:
+
+| Site | Initial index | Elements accessed |
+|---|---:|---|
+| Each TLB write loop | 253 | 253, 254, 255, **256** |
+| Each TLB write loop | 254 | 254, 255, **256, 257** |
+| Each TLB write loop | 255 | 255, **256, 257, 258** |
+| Each LINEAR write pair | 31 | 31, **32** |
+
+These are **handler robustness gaps**, not established guest out-of-bounds writes. For the normal SGI CPU access paths checked, eight-byte accesses have eight-byte alignment. Enumerating aligned addresses gives TLB starting indexes `0,4,…,252`, and LINEAR starting indexes `0,2,…,30`; their complete spans fit. I verified the alignment handling in the [ordinary access code](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_mips_instr_loadstore.c:59) and [unaligned-access helper](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_mips_instr_unaligned.c:52), rather than accepting the device comments.
+
+The coordinate arithmetic also needs distinctions:
+
+| Depth field | `bufdepth` | Tile width | Enumerated pre-guard `tile_nr` minimum/maximum |
+|---:|---:|---:|---:|
+| 0 | 1 | 512 | 0 / 243 |
+| 1 | 2 | 256 | 0 / 247 |
+| 2 | 4 | 128 | 0 / 255 |
+| 3 | 8 | 64 | 0 / 271 |
+
+Thus the coordinate rectangle check **does not by itself establish the TLB capacity bound**. The depth-8 calculation produces indexes **256–271**, and the later guard rejects them. All divisors are positive; the permitted tiled arithmetic does not overflow. These expressions and checks are together at [line 199](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:199).
+
+Signed division, signed shift and masking are not interchangeable: for example, `-1 / 64` is `0`, arithmetic `-1 >> 6` is `-1`, `-1 % 64` is `-1`, and two’s-complement `-1 & 63` is `63`. **Tiled coordinates are rejected before these operations.** Linear modes skip that coordinate guard, but case 4 replaces the preliminary tile index and offset and checks its new unsigned index. The actual register-address and ROP subscript masks operate on unsigned operands.
+
+For Q3 specifically:
+
+- The pixel guards constrain the **actual subscript variable**. Case 4’s reassignment receives its own check.
+- The register-write guards constrain the starting address and width, while accesses use an **advanced index**. That is the substantive mismatch.
+- DE/MTE compute indexes before their register-name switches. Those switches provide no index validation; safety comes from dispatch bounds and clearing START. The dispatcher’s address checks are at [memory_rw.c:480](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:480).
+- The ROP diagnostics examine `rop >> 8` **after** indexing, but the actual subscript is already masked. They are diagnostics, not bounds guards. See the [line-operation instance](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:827).
+- MTE checks `src` but subsequently uses `src_tlb`; these are independently assigned the **same masked expression**, with no intervening change. Enumeration gives identical values 0–7. This apparent mismatch is harmless. See [line 1289](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:1289).
+
+I also found these separate issues:
+
+- **TEX indexing overlaps writes.** Successive aligned writes address `0–3`, `1–4`, through `27–30`. Elements **31–111** are never addressed by this handler. This establishes an indexing/mapping anomaly without assuming the intended hardware mapping.
+- **Pixel-buffer initialization does not match transfer width.** CI PUT initializes one byte; other PUT branches initialize four, while the transfer may consume eight. Non-CI GET expressions use bytes through index 3 even when only one or two bytes were read. The allocation is large enough; initialization is incomplete. See [line 284](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:284).
+- **Stipple rotation can have a negative shift count.** Walking all 1,024 start/max-field pairs gives rotation counts **−31 through 31**, with **496 negative cases**. These are undefined C shifts, independent of array bounds. See [calculation](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:687) and [use](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:843).
+- **Signed arithmetic remains unsafe elsewhere.** `src_x += step_x` can overflow; the earlier step diagnostic does not reject execution. `saved_src_x` also truncates the source coordinate to `uint16_t` before each rectangle row. See [line 757](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:757) and [line 912](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:912).
+- **Value-building left shifts have signed-promotion problems.** On 32-bit-int C, the TLB `uint16_t << 16` expressions and pixel `uint8_t << 24` expressions can produce results unrepresentable as signed `int`. These occur after safe subscript selection.
+- **MTE has two plainly inconsistent conditions:** `else if (len != 4)` accepts every remaining width, making its final rejection arm unreachable; `depth == 4` is also unreachable because the enumerated depths are **8, 16, 32, 64**. See [width handling](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:1499) and [depth comparison](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:1348).
+
+These additional arithmetic and initialization issues are guest-influenced through register contents or access width. The fixed register subscripts and the linear-table scan counter remain internally determined.

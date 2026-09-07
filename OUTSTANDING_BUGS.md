@@ -15610,7 +15610,13 @@ corrections are one fact seen from opposite sides.
 the `bufdepth`-sized mutant yields the previous pixel's bytes, which are **also** deterministic under stack
 reuse — so *"a determinism oracle CANNOT catch the mutant."*
 
-## 2026-09-07 — `sgilinearnegidx` (HIGH): a guest-chosen physical write address, found by a packet-fed seat
+## 2026-09-07 — `sgilinearnegidx`: *** WITHDRAWN THE SAME DAY — THE FINDING IS FALSE. ***
+
+*** `tile_nr` IS **UNSIGNED**, SO THE `>= 32` GUARD REJECTS EVERY NEGATIVE `x`.  THE ENTRY BELOW IS
+KEPT VERBATIM — THIS PROJECT CORRECTS IN PLACE AND QUOTES WHAT IT REFUTES — BUT NOTHING IN IT IS A
+DEFECT.  READ THE CORRECTION AT THE FOOT OF THE ENTRY BEFORE ACTING ON ANY OF IT. ***
+
+### (superseded) a guest-chosen physical write address, found by a packet-fed seat
 
 **FOUND BY THE `glm` SEAT** — a transport that cannot read the repo and had only the function inlined.  It
 noticed that one guard's precondition excludes the very mode the other guard assumes:
@@ -15648,3 +15654,110 @@ and a memset fixes nothing here.
 attack *reasoning* rather than repo fact, and are never equivalent votes on the tree.  That held exactly — glm
 could not confirm the struct layout or the caller, and said so.  What it could do was notice a contradiction
 between two guards in code it had been handed, and **that was the strongest single finding on the brief.**
+
+### *** THE CORRECTION.  Measured 2026-09-07, hours after the entry above was written and committed. ***
+
+**The declaration is three lines above the code the entry quotes**, in the same function, inside a range I had
+already printed to my own screen earlier in the session:
+
+    :204   int tile_nr_x = x / tilewidth_in_pixels;
+    :205   int tile_nr_y = y >> 7;
+    :207   unsigned int tile_nr = tile_nr_y * 16 + tile_nr_x;      <- UNSIGNED
+    ...
+    case 4: tile_nr = x >> 12;             <- converted to unsigned ON ASSIGNMENT
+            if (tile_nr >= 32)             <- 4294967295 >= 32 is TRUE
+                    return;                <- IT RETURNS
+
+    x = -1      ->  x >> 12 = -1  ->  as unsigned = 4294967295  ->  >= 32  ->  REJECTED
+    x = -8192   ->  x >> 12 = -2  ->  as unsigned = 4294967294  ->  >= 32  ->  REJECTED
+
+**The guard I called "bounds ABOVE only" is a COMPLETE bound**, because the conversion folds every negative
+value into the rejected range.  No out-of-bounds read, no guest-chosen tile pointer, no write primitive.  The
+chain is broken at its FIRST link and every later link is therefore moot.
+
+**WHAT SURVIVES:** the `offsetof` measurement is TRUE and is preserved at
+`regress/artifacts/sgilinearnegidx/offcheck.c` — `re_tex` does end at 1760 and `re_linear_a` does begin at
+1760 with zero padding.  It is a correct measurement of a path nothing can reach, so it supports no finding.
+
+*** HOW THIS HAPPENED, recorded because the process failure is the only thing of value left here. ***
+
+* I wrote *"the chain, each step read from the source"* and *"every link is now verified by reading"*.  I did
+  verify the link I DOUBTED — whether `src_x` is masked in the linear path — and never checked the **type of
+  the index variable**, which is the most basic property of an index and the one that decides the question.
+* I reached for `offsetof` precisely to avoid trusting hand arithmetic about the struct.  **That rigour was
+  real and it was aimed at the wrong link.**  Care taken on one step does not transfer to a step you never
+  thought to question.
+* The seat that found it was asked the same subject **without the chain** — *"which array indexes are bounded
+  on one side only?"* — and answered in its verdict line.  The chain-shaped version of that same question had
+  been REFUSED by the same seat hours earlier (see §C5).  **The refusal did not stop a bad question; it
+  delayed a correct answer**, and in the interval I escalated the finding, wrote it into a commit message, and
+  reported it as the session's most severe result.
+* **Commit `15633bb`'s MESSAGE carries this claim as its headline and cannot be edited.**  This entry and the
+  ledger row are the correction a reader must reach — the same treatment `de96f11`'s over-broad RMW claim
+  already has.
+
+**And a note on the note.**  The paragraph above about the packet-fed seat is still true about what glm did:
+it noticed a real asymmetry between two guards in code it had been handed.  What it could not do — exactly as
+the doctrine says — is check the declaration, because the type is a repo fact and it is packet-fed.  **The
+doctrine's warning was about crediting such a seat with repo fact, and that is precisely the error I then
+made on its behalf.**
+
+## 2026-09-07 — `sgirespanchk` (LOW, filed): the index is bounded, the write SPAN is not
+
+Split out of the withdrawn row above rather than folded into it, **because a withdrawn entry is the worst
+possible place to hide a live finding.**  From the same audit's verdict line, which refuted the negative-index
+claim and then continued:
+
+> *"There are missing checks on complete write SPANS in TLB_A/B/C and LINEAR_A/B, whose safety depends on
+> caller alignment."*
+
+**A span check is a different question from an index bound.**  An index can be in range while the multi-byte
+access starting at it runs past the end of the array — the bound answers *where does it start*, the span
+answers *where does it finish*.  Nothing in the withdrawn chain bears on this, and the refutation of that
+chain does not touch it.
+
+**OWED before this is worth a round:** the arrays and their declared sizes; which accesses are multi-byte and
+how the width is chosen; and — the load-bearing one — **whether any caller can present an unaligned or
+oversized span, since the verdict explicitly conditions the safety on caller alignment rather than asserting
+a defect.**  That is a reading task, and it is exactly the shape the codex seat answers cleanly.
+
+### *** AND IT WAS ALREADY ANSWERED, IN THE BODY OF THE SAME ANSWER, BEFORE I FIRED A SECOND RUN TO ASK IT.
+### MED → LOW. ***
+
+I filed the paragraph above from the seat's VERDICT LINE without reading its body.  The body enumerates the
+overruns — a TLB loop starting at 255 touches 255, **256, 257, 258**; a LINEAR pair starting at 31 touches
+31, **32** — and then discharges the very question I had just written down as owed:
+
+> *"These are **handler robustness gaps**, not established guest out-of-bounds writes.  For the normal SGI CPU
+> access paths checked, eight-byte accesses have eight-byte alignment.  Enumerating aligned addresses gives
+> TLB starting indexes `0,4,…,252`, and LINEAR starting indexes `0,2,…,30`; their complete spans fit.  **I
+> verified the alignment handling in the ordinary access code and unaligned-access helper, rather than
+> accepting the device comments.**"*
+
+— naming `src/cpus/cpu_mips_instr_loadstore.c` and `src/cpus/cpu_mips_instr_unaligned.c`.  **That is exactly
+the checked-versus-assumed distinction this entry was filed to demand**, and the seat drew it in those words.
+
+**What remains open is one word — "checked".**  The MIPS load/store paths were verified; a DMA engine, a
+device-to-device access or the debugger's `put` reach a device handler without going through a CPU load, and
+those were not enumerated.  A second read-only audit is running whose Q4 asks precisely that; it was written
+and fired *before* this body was read, so its answer will be independent rather than a re-confirmation.
+
+*** FIFTH UNDER-HARVEST OF THE SESSION, AND THE FIRST TO COST A WHOLE INVOCATION. ***  The previous four took
+a seat's finding and dropped its refutation.  This one dropped the seat's own **discharge** of an obligation,
+which I then wrote into a row and spent a codex run re-asking.  **A verdict line is a summary written against
+the brief's framing, and is the least likely part of an answer to carry a qualification** — this project
+already says that about corrections; it is equally true of discharges.
+
+**Five side-checks harvested from the same body, none of them asked for:** `de_reg[1024]` at `[regnr]` and
+`[regnr+1]` reaches at most 512; both static `rop_used[256]` arrays are masked `& 255`, which supplies *both*
+bounds; `zerobuf[4096]` is length-capped then page-shortened, never enlarged; `buf[8]` takes enumerated
+lengths 1/2/4/8, all of which fit — with the seat volunteering that its *initialisation* is a separate
+defect, which is `sgirebufuninit`, already filed.
+
+**And one finding that is not a span question at all:** *"the coordinate rectangle check does not by itself
+establish the TLB capacity bound."*  At depth field 3 (`bufdepth` 8, tile width 64) the pre-guard `tile_nr`
+reaches **271**, not 255 — the `x, y < 2048` rectangle admits indexes past the end of a `[256]` array, and it
+is the *later* `tile_nr >= 256` guard that rejects them.  Both guards are present, so nothing is broken.
+What is worth recording is that **they are not redundant**, and an edit deleting the second as "already
+covered by the rectangle check" would open a sixteen-element overrun.  A clause-(d)-shaped hazard in code
+nobody is currently editing — noted, not filed.
