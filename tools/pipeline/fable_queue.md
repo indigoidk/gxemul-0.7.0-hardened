@@ -1669,3 +1669,269 @@ had the polarity right (7/9) **in the same tree on the same day**. The cheap tel
 row do after the fix?"* — if the answer is "goes red", the polarity is inverted whatever the score
 says. **Should that be a checkable rule rather than a habit?** A witness whose score is
 `len(rows)` on HEAD is suspicious by construction, and that is mechanical.
+
+
+## 7g. ADDED 2026-09-07 (evening) — `#509` sgimtedepth4dead: FOUR RULE QUESTIONS, one of them a
+## live SEAT DISAGREEMENT I resolved by adopting one side, which is exactly the shape that owes
+## an adjudication rather than an author's ruling
+
+Round context, so the questions stand on their own: `dev_sgi_re.c` `do_mte_transfer()` had
+`if (depth == 4)` where `depth` is a count of BITS (`8 <<` a two-bit field, so 8/16/32/64), and 4
+is the corresponding BYTE count. The branch was unreachable, so every tiled MTE transfer took the
+CI colour arm — which at 32bpp assigns `buf[0]` alone while `memory_rw` copies four, publishing
+three bytes of host stack into guest memory. Fix: `depth == 32`. Six seats answered pass 1; all
+six confirmed the enumeration and **three of them found errors in my brief**.
+
+---
+
+### 7g-1. (HIGH) *** A SEAT DISAGREEMENT ON SIBLING PARITY THAT I SETTLED BY READING, AND WHICH
+### GENERALISES TO EVERY MULTI-LABEL SWITCH BLOCK IN THIS TREE. ***
+
+The edited comparison sits inside a block served by THREE `case` labels:
+
+    switch (dst_tlb) {
+    case MTE_TLB_A:
+    case MTE_TLB_B:
+    case MTE_TLB_C:
+            { ... if (depth == 32) { src_mode |= RGBA; dst_mode |= RGBA; } ... }
+
+The PRE-TABLE CHECK's SIBLING PARITY row says that at a block serving several labels, **the
+siblings are the LABELS**. So do B and C owe rows?
+
+* **codex (GPT-6 Astra, max):** enumerated the admitted pairs (`AA AB AC BA BB BC CA CB CC` ×
+  `fill/copy` × four depths = 72 field combinations) and concluded *"`fill b top` covers B but
+  leaves C uncovered ... the proposed rows are not exhaustive."*
+* **grok (4.6, xhigh):** *"A/B/C share one block; the helper distinguishes TLB arrays.
+  `fill b top` is sibling parity on PACKING, not a floor cell of the comparison. Cheap, not
+  required."*
+
+**I ADOPTED GROK** and DISCLOSED the cell in `PRETABLE.out`: a repair conditioned on
+`dst_tlb == MTE_TLB_A` escapes this detector. My reasoning was that the repaired comparison does
+not read `dst_tlb` at all, so a per-label row would pin the helper's ARRAY SELECTION — a
+different property, already the subject of other rows in this tree.
+
+> **THE QUESTION, stated generally because that is where it bites: when an edited expression sits
+> in a block reached by several case labels but does NOT READ THE SELECTOR, are the labels FLOOR
+> CELLS (rows owed) or DISCLOSED DEBT?**
+>
+> The floor's own wording — *the cross-product of the guard's dominating predicates with the
+> device-STATE lvalues the fix's repair path reads* — arguably answers YES, because the switch IS
+> a dominating dispatch and the pass-10 ruling says *dispatch axes are full axes*. My reading
+> narrows that with "…that the repair path READS", and I am not confident the narrowing is
+> licensed.
+
+**Why it matters beyond this round:** this tree is full of multi-label device blocks. If codex is
+right, a large number of shipped detectors are short by (labels − 1) rows apiece, and that is a
+class finding, not a round finding. If grok is right, the narrowing should be written into the
+SIBLING PARITY row so nobody re-argues it.
+
+*I note against my own position that I adopted the reading which costs less work, and that the
+seat I overruled is the one that actually enumerated the space.*
+
+> #### *** PASS 2 SHARPENED THIS INTO A TENSION INSIDE grok's OWN TWO ANSWERS, AND IT LEANS
+> #### AGAINST THE READING I ADOPTED.  Noticed while writing 7g-6; stated as a question, not a
+> #### ruling, because it is my analysis of a seat rather than a seat's own words. ***
+>
+> In pass 2 grok reclassified `M4` from clause (d) to clause (e), and its reason is exact:
+> **DEPENDS-ON takes (1) the predicates DOMINATING the edited line, plus (2) for operand-swap
+> forms, lvalues the GUARDED BODY reads.**  `mode & MTE_MODE_COPY` is tested LATER, inside the
+> transfer loop, so it dominates nothing, and the guarded body -- exactly the two `|=` statements
+> -- never reads it.  Both clauses fail; clause (e).  **I verified that by reading and adopted it.**
+>
+> **But grok gave the SAME reason for B/C** -- *"the type OR does not read `dst_tlb`"* -- and
+> there the two clauses come apart:
+>
+>     mode & MTE_MODE_COPY   dominates? NO   body reads it? NO    -> clause (e).  Agreed.
+>     switch (dst_tlb)       dominates? YES  body reads it? NO    -> clause (1) ALREADY APPLIES
+>
+> **The `switch (dst_tlb)` is the dispatch that reaches the edited line at all.**  If clause (1)
+> is what it says, the three labels are dominating predicates and the cross-product with the
+> repair's written lvalues is FLOOR -- which is codex's position, reached by grok's own rule.
+>
+> So grok may be applying clause (2) uniformly in a place where clause (1) already answers.  It is
+> right about `M4` either way; the B/C half is where the two clauses disagree and it did not
+> separate them.
+>
+> **WHAT TURNS ON IT, concretely:** `if (depth == 32 && dst_tlb == MTE_TLB_A)` escapes this
+> detector -- every row drives TLB_A.  **That mutant is buildable in one run.**  If the labels are
+> floor cells it is an L2 breach and `#509` owes two more rows; if they are clause-(e) debt the
+> disclosure already standing in `PRETABLE.out` is sufficient.  **I have deliberately NOT built it,
+> because building it would not settle the rule -- it would only tell me the score I already
+> predict.**  The rule is the question.
+
+---
+
+### 7g-2. (MED) MAY A DETECTOR ROW BE **GATED** ON ANOTHER ROW'S OUTCOME?
+
+> *** SUPERSEDED BY 7g-6.  DO NOT ANSWER THIS ONE. ***  It was written from pass 1 with no
+> evidence behind it, and two of its statements are now known false: it recorded "no
+> precedent found in this tree" (there is one -- `pcc2_default_probe.py` gates on session
+> survival), and it described the gate as per-row when it is a single shared flag.  7g-6
+> carries the same question with the pass-2 measurements, the three-way seat split, and the
+> two measured limits.  Kept below only as the record of what was asked before the evidence
+> existed.
+
+Two rows in the shipped detector — `fill bot` and `copy 2nd`, plus `copy 4th` — read bytes that
+are HOST STACK before the fix and DEFINED after it. Asserting them pre-fix would score a
+nondeterministic byte. So they are gated:
+
+    rgba_ran = (got == "0x11")                      # the leading byte proves the RGBA arm ran
+    row("fill bot", byte_n(fullword, 3) if rgba_ran else "n/a: dest[0] not RGBA", "0x44", ...)
+
+Pre-fix the row reports `n/a: dest[0] not RGBA` and **FAILS deterministically, naming its own
+reason**. Post-fix it reports `0x44` and passes. Under an RGB-for-RGBA substitution it reports
+`0x00` and fails.
+
+> **Is a gated row legitimate, or does it violate the spirit of the witness clauses?** Two
+> readings, and I can argue both:
+>
+> * **FOR:** the alternative is asserting a byte whose value is undefined, which is worse. The
+>   gate makes the row deterministic in all three states, which is exactly what the rows this
+>   project keeps having to repair were missing.
+> * **AGAINST:** the row's pre-fix red is not "red for the reason under test" — it is red because
+>   a DIFFERENT row failed. A cascade of gated rows could make one real failure look like several.
+
+**Precedent I could not find:** I looked for an existing gated row in this tree and found none, so
+this is a new form and it is shipping in `#509` unless refused. *If it is refused, the fallback is
+to drop the three rows and accept that RGB-for-RGBA is undetectable — which three seats
+independently flagged as the round's most dangerous escape.*
+
+---
+
+### 7g-3. (MED) IS A **CODE-INTENT WARRANT** ENOUGH TO CHANGE GUEST-VISIBLE OUTPUT?
+
+Raised by the minimax seat and confirmed by me: **there is no SGI/CRIME hardware documentation in
+this project.** Derived, not assumed — `ls _scratchpad/*.pdf` lists sixteen manuals (ARM, MIPS,
+m88k, SH, PowerPC, DC21285, i8254, MVME187) and **none for this device**.
+
+So the fix picks `DE_MODE_TYPE_RGBA` on two internal warrants only: the dead branch itself named
+RGBA, and the comment says *"copy 32 bits"* while the RGB arm zero-pads the low byte and therefore
+does not copy 32 bits of data. minimax put the gap precisely: *"no CRIME/MTE hardware spec is
+cited. A regression that picked RGB instead would still pass the witness."* (That specific escape
+is now closed by `fill bot`/`copy 4th` — but the WARRANT question survives the closure.)
+
+> **Is "the dead code's own choice, plus a comment" a sufficient warrant for a round that changes
+> what a guest reads back?** This round says yes and discloses the basis. The alternative
+> disposition would be to fix the UNREACHABILITY (make the branch live) while filing the TYPE
+> choice separately — which nobody proposed and which I do not think is better, but I have not
+> tested that opinion against a seat.
+
+---
+
+### 7g-4. (LOW) SCOPE — one round for the class, or one per cell?  **5–1, and please ratify.**
+
+The same defect class (the CI arm assigns one byte while the transfer copies `bufdepth`) hits
+depth 16 (one byte leaks), depth 32 (three) and encoding 3 (seven). `#509` fixes ONLY the 32 cell,
+by a different mechanism (selecting RGBA, which assigns four).
+
+* **codex, grok, glm, kimi-substitute:** ONE round for the remaining class
+  (`sgirebufuninit`), across all widths. codex: *"Handle the shared initialization invariant
+  across widths together in a companion repair, rather than scheduling one initialization fix per
+  depth."*
+* **deepseek:** *"One round per cell is defensible, provided the siblings are filed and tracked."*
+* **minimax:** siblings, but *"a tracking issue at the class level is warranted so the three rounds
+  don't drift."*
+
+I went with the majority, because a per-depth chain is the `#499` same-class-three-times shape the
+repair-chain rule exists to end.
+
+> **AND THE TRAP THAT MAKES THIS MORE THAN BOOKKEEPING**, named by grok and now recorded in the
+> CHANGELOG and `PRETABLE.out` verbatim: **`#509` fills `buf[0..3]` at depth 32, so it
+> ACCIDENTALLY MASKS the 32-bit tiled cell of the uninitialised-buffer sibling.** A later round
+> that rows only depth 32 on this path **will look fixed and will not be.** The sibling must be
+> kept alive on depth 16.
+
+---
+
+### 7g-5. FOR THE RECORD, NOT A QUESTION — what the premise-audit opener bought this round
+
+Three errors in my own brief, each found by a seat, none by me:
+
+1. **A wrong count, caught INDEPENDENTLY by two seats** (kimi-substitute and codex). I wrote that
+   `depth >= 32` "converts a four-byte problem into a four-byte problem". At encoding 3, CI leaves
+   **seven** bytes uninitialised and RGBA would leave **four** — a reduction, not a neutral swap.
+   The conclusion held; the arithmetic under it did not.
+2. **A wrong record in the probe header** (codex): it said "only the top byte is read". The probe
+   executes `lw` and masks afterwards — it **reads four bytes and asserts one**.
+3. **An imprecise mechanism** (kimi-substitute): my `copy top` byte-walk gave the right answer for
+   the wrong reason, and the seat asked for one sentence in the row's comment so a future reader
+   would not "correct" the want.
+
+And **two escapes in my row set** that three seats found between them (RGB-for-RGBA invisible to
+`dest[0]`; `depth >= 16` reding nothing), plus **a third the PRE-TABLE CHECK found on its own** —
+a source-side RGB substitution escaping all twelve rows. All three closed before table 1 ran.
+
+
+### 7g-6. (MED) *** THE GATED-ROW FORM, AFTER PASS 2: THREE SEATS SPLIT, AND THE ONLY IN-TREE
+### PRECEDENT TURNS OUT TO GATE ON SOMETHING ELSE. ***
+
+7g-2 asked this from pass 1 with no evidence behind it. Pass 2 supplied the evidence and the
+split, so it is restated here with both, and 7g-2 should be read as superseded by this.
+
+**THE FORM.** Three rows in `#509`'s detector -- `fill bot`, `copy 2nd`, `copy 4th` -- read bytes
+that are HOST STACK before the fix and DEFINED after it. Each is gated:
+
+    fill_top_ok = (fill session's dest[0] == 0x11)
+    row("fill bot", byte_n(fullword, 3) if fill_top_ok else "n/a: ...", "0x44", ...)
+
+Pre-fix the row reports `n/a` and **FAILS deterministically, naming its reason**, instead of
+scoring an undefined byte. The alternative is to drop all three -- which measurably re-opens two
+total escapes (`dst_mode |= RGB` and `src_mode |= RGB`, M5 and M8, both 11/13 and 12/13 only
+because these rows exist).
+
+**THE SPLIT, and it is not a tally -- the arguments differ in kind:**
+
+* **grok: SHIP `fill bot`, KEEP `copy 4th`, and write the coupling on the row.** Its reason is
+  precise: `fill bot` gates on **the same `lw` it then scores**, so its coupling is local. The
+  copy rows gate on a **different session**, which is a weaker thing, and it says so rather than
+  lumping them together. *"Fail-when-closed is a derived red, and that is acceptable HERE because
+  the n/a names the reason and the row's job is the RGB cell, not the pre-fix leak."*
+* **codex: KEEP all three, with truthful dependency diagnostics.** *"Their pre-fix failures need
+  not be independent defect witnesses to make useful post-fix assertions. A failed prerequisite
+  should still prevent an overall pass."* It adds that the gate must be renamed `fill_top_ok`,
+  because `dest[0] == 0x11` **admits RGB as well as RGBA** -- so the current name overclaims.
+* **deepseek: NOT RATIFY -- fix the gate per-path or drop the rows.** *** ITS REMEDY IS REJECTED
+  ON MEASUREMENT, NOT ON A VOTE: *** it proposes gating the copy rows on `copy dest[0] == 0x1a`.
+  grok's byte-walk shows that is VACUOUS -- `0x1a` is what **both** CI-CI and RGBA-RGBA produce,
+  so the gate would always be open, including pre-fix, and the rows would then score exactly the
+  host stack the gate exists to avoid. *A proposed edit is a sketch until it is run against the
+  real control flow.*
+
+**WHAT I DID:** shipped all three, renamed the flag, corrected the message to name the FILL, and
+wrote both measured limits into the probe. **The disposition is mine and it is the one that costs
+least work, which is why it wants an adjudication.**
+
+> #### THE PRECEDENT QUESTION, and pass 2 changed the answer to it
+>
+> Pass 1 recorded "no precedent found in this tree". **That was wrong in a way that cuts both
+> ways.** `pcc2_default_probe.py:174-178` DOES use the `n/a`-and-fail shape --
+> `t.count(MSG) if alive else "n/a"` -- so a row that refuses to score and names its reason is
+> already house style. **But it gates on SURVIVAL of its own session.** codex and grok both drew
+> the line in the same place: that establishes the *n/a idiom*, and it does **not** establish a
+> **cross-session dependency**, which is what `copy 2nd` and `copy 4th` actually do.
+>
+> So the genuinely new thing is narrower than pass 1 thought and still real.
+
+**THE TWO MEASURED LIMITS, both from grok, both now written into the probe rather than glossed:**
+
+1. **Under a `&& (mode & MTE_MODE_COPY)` mutant the copy rows are a WRONG-REASON KILL.** The copy
+   path there really does take RGBA -- `dest[3]` would be `0x4d` and would PASS -- but the FILL is
+   CI, so the gate closes and both rows red anyway. **Their own bytes do not move.** The mutant is
+   still killed by `fill top`, so nothing escapes; but the CHANNEL those rows report under it is
+   vacuous, and the pre-table CHANNEL check is exactly what should have caught that.
+2. **The dual, `if (depth == 32 && !(mode & MTE_MODE_COPY))`, is NOT PINNED AND CANNOT BE.** Every
+   fill row stays green; `copy top` stays green because `dest[0]` of a same-type copy is invariant;
+   and the gate OPENS, so the two tail rows would score bytes a CI-CI PUT never wrote. **There is
+   no copy-local four-byte signal that is not those bytes themselves.** Disclosed as clause-(e)
+   debt.
+
+> **THE QUESTION IN ONE LINE: is a row that fails because ANOTHER SESSION'S row failed a
+> legitimate detector row, or is it a cascade that makes one defect look like three?**
+>
+> And the sharper sub-question, which limit 1 makes concrete: **a gated row can red under a mutant
+> whose own observable did not move.** That is a false kill in the strict sense, even though the
+> mutant is caught by a different row. Does the vacuity floor care?
+
+*If the form is refused, the fallback is to drop the three rows and accept that RGB-for-RGBA is
+undetectable at this site -- which three seats independently called this round's most dangerous
+escape. That is the cost, stated so the ruling can weigh it.*

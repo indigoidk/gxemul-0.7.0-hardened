@@ -1,0 +1,86 @@
+PREMISES THE PACKET COULD NOT SETTLE, SETTLED FROM THE TREE — 2026-09-07
+
+The deepseek seat ratified #506 and #508 from the diff alone and made #505 and #507 CONDITIONAL
+on two facts the packet did not carry.  That is the honest form, and both are one file-read away,
+so they are settled here rather than left hanging.  Neither reading changes a verdict; both
+remove a condition.
+
+1. #505 -- "the RGB PUT arm writes three channels at buf[0..2] with an explicit pad at buf[3]"
+   CONFIRMED.  dev_sgi_re.c:290-295:
+
+       case DE_MODE_TYPE_RGB:
+               buf[0] = *color >> 24;
+               buf[1] = *color >> 16;
+               buf[2] = *color >> 8;
+               buf[3] = 0;
+
+   So a GET reading buf[1..3] took two channels and the pad; reading buf[0..2] is correct.
+
+2. #507 -- "there is an earlier apcb_ptbr assignment three lines up"
+   CONFIRMED.  cpu_alpha_palcode.c:276-281 is swpctx's block, commented "Update all variables in
+   the pcb simultaneously":
+
+       :276  apcb_ksp = new_ksp
+       :277  apcb_usp = new_usp
+       :278  apcb_ptbr = new_ptbr      <-- the earlier assignment
+       :279  apcb_cpc = new_cpc
+       :280  apcb_asn = new_asn
+       :281  apcb_unique = new_unique
+       :282  #507's site, was `apcb_ptbr = new_flags'
+
+   After the fix each field in that block is assigned exactly ONCE.
+
+   *** AND A COUNT THAT LOOKS LIKE A DEFECT AND IS NOT, checked so nobody re-raises it: a
+   file-wide grep reports apcb_flags assigned TWICE.  The second is at :221, inside
+   `case 0x2b: PAL_OSF1_wrfen` -- a DIFFERENT PAL call, which sets the flags word from a0 and
+   stores it.  The two assignments are in different PAL entries and are not a duplication. ***
+
+3. deepseek's UB note on #505, accepted and already filed: the corrected GET arm still computes
+   `buf[i] << 24` on a promoted uint8_t, undefined for a byte >= 0x80.  #505 neither introduces
+   nor removes it.  Filed separately as [[sgirebufshiftub]], whose own title was corrected the
+   same day -- FOUR of the five GET arms shift, not every one: CI shifts nothing, and ABGR and
+   the default arm shift buf[3] rather than buf[0].
+
+
+==========================================================================================
+THE minimax SEAT ENUMERATED SEVEN PREMISES IT COULD NOT SETTLE, EACH WITH THE ONE FACT THAT
+CLOSES IT.  SIX ARE SETTLED HERE.  ALL SIX CONFIRM THE ROUNDS.
+==========================================================================================
+
+That enumeration is the most useful thing a packet-fed seat can produce: it did not guess, and
+it did not hedge -- it named the reading that would settle each one.
+
+4. *** #506's LOAD-BEARING PREMISE: is `idata` really 64-bit? ***  minimax put it exactly:
+   "the declared type of idata is the single premise that decides whether this is a defect or a
+   stylistic rewrite."  SETTLED -- dev_lca.c:91 and :184 both declare `uint64_t idata = 0`, fed
+   by `idata = memory_readmax64(cpu, data, len)`.  **So #506 repaired a real narrowing, not a
+   cosmetic one.**
+
+5. #506's PRIx64 availability.  SETTLED by construction: `<inttypes.h>` is not included directly
+   in dev_lca.c, but the macro resolves transitively and EIGHT device files already use it -- and
+   all four build trees compiled clean after the change.  A build is the test here.
+
+6. *** #508's CONSUMER CLAIM -- "memory_rw takes offset = paddr & offset_mask" -- CONFIRMED
+   VERBATIM. ***  memory_rw.c:736 is literally `offset = paddr & offset_mask;`, and :770/:780
+   are `memcpy(memblock + offset, data, len)`.  MRW_OFFSET_MASK is `0x1fff` under MEM_ALPHA,
+   which is exactly `(1 << pageSizeShift) - 1` for the 8 KB page the walk uses.  So a walk that
+   returns a page BASE gives offset 0 and every access lands at `memblock + 0` -- the page's
+   first bytes, exactly as the round's block states.
+
+2. #505's dev_sgi_gbe cross-check: PARTIALLY settled and NOT load-bearing.  The grep finds
+   `val = (r << 8) | (g << 16) | (b << 24)` in a colour-composition path rather than the scanout
+   read minimax had in mind.  Recorded as unsettled rather than claimed; the fix stands on
+   premise 1, which is settled.
+
+7. WITNESS CONTAMINATION -- minimax asked which witnesses held the five non-observation rows and
+   whether the rows were dead.  ALREADY MEASURED IN BOTH DIRECTIONS, 2026-09-07: the five rows
+   are in three of this commit's witnesses (alpha_harness x2, alpha_pfnoffset x2, lca_confwidth
+   x1).  Run against /bin/true -- every session dead, every readback a non-observation -- the
+   PRE-REPAIR rows all scored `ok` (4/10, 3/7, 2/6) and the REPAIRED rows all FAIL (2/10, 1/7,
+   1/6).  On the real build the scores did NOT move (10/10, 7/7, 6/6).  **So the detectors never
+   escaped -- an equality sibling reds on a non-observation in every one of the five -- and what
+   was wrong was each row's own NOTE, which claimed a control it did not have.  L4, corrected in
+   place.**  minimax's caution was right and its worry does not survive the measurement.
+
+SO: of the seven, SIX are settled and every one confirms the round it belongs to; the seventh is
+recorded as unsettled and is not load-bearing.  No verdict moved.

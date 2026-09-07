@@ -1,0 +1,52 @@
+**VERDICT: #506 and #508 are correct from the inlined diff alone. #505 and #507 are correct only if two premises not shown in the packet are true (the PUT arm layout in `dev_sgi_re.c`; the earlier `apcb_ptbr` assignment in `cpu_alpha_palcode.c`). The negate=True rows likely inflated the commit’s measured HEAD scores but do not indicate detector escape. No added comment claims code does something the code does not do; #508’s TODO is disclosed.**
+
+---
+
+### 1. Premise audit
+
+- **#505 `sgirergbroundtrip`**  
+  **READ:** The diff changes the RGB GET arm from `buf[1..3]` to `buf[0..2]`.  
+  **NOT CHECKABLE:** The claim that the PUT arm writes channels at `buf[0..2]` with pad at `buf[3]` is not in the packet.  
+  **REASONED:** If that PUT layout is true, the fix is correct. The old read was off by one byte; the new read aligns with the stated layout.  
+  **UB note:** The correction still uses `buf[i] << 24` on a promoted `uint8_t`. For bytes ≥ 0x80 this is undefined behaviour. That UB was already present in the old code, so #505 does not introduce it, but the fix does not remove it. The off-by-one defect is repaired; the UB is a separate defect filed as `sgirebufshiftub`.
+
+- **#506 `lcaconfwidth`**  
+  **READ:** Both sites change `(int)idata` with `%x` to `(uint64_t)idata` with `PRIx64`.  
+  **REASONED:** The guard `idata & ~1` operates on the full 64-bit value. Casting to `int` before printing could show a value the guard accepts (e.g. `0x100000000` → `0x0`). The fix is correct.  
+  **NOT CHECKABLE:** Whether `PRIx64` is available via an include is not shown, but the comment says sibling arms already use it, so likely fine.
+
+- **#507 `alphaswpctxptbr`**  
+  **READ:** The diff changes the second assignment from `apcb_ptbr = new_flags` to `apcb_flags = new_flags`.  
+  **NOT CHECKABLE:** The earlier assignment to `apcb_ptbr` (three lines up) is not in the packet.  
+  **REASONED:** If that earlier assignment exists, the fix is correct: `apcb_ptbr` is assigned once, `apcb_flags` is assigned once, and the transposition is removed.
+
+- **#508 `alphapfnoffset`**  
+  **READ:** The diff adds `| (vaddr & ((1ULL << pageSizeShift) - 1))` to the shifted PFN.  
+  **REASONED:** The shifted PFN has low bits clear, so `|` and `+` are equivalent. The mask extracts the within-page offset from `vaddr`. The fix is correct.  
+  **READ:** The comment explicitly states that `flags` is still ignored, protection bits untested, and `return 2` still reports every walked page writable. That is a disclosed partial repair, not a hidden one.
+
+---
+
+### 2. Which would I NOT have shipped?
+
+- **#506 and #508** — ship as-is. They are correct from the diff and their comments are accurate.
+- **#505 and #507** — ship only after verifying the two missing premises. If the PUT arm layout or the earlier `apcb_ptbr` assignment is not as claimed, the fixes would be wrong. The packet does not contain those facts, so I cannot ratify them unconditionally.
+
+---
+
+### 3. Do the added comments claim anything the code does not do?
+
+No. The comments explain reasoning and external warrants, but they do not assert that the changed code performs actions it does not.  
+**NOT CHECKABLE:** Several external claims (e.g. `dev_sgi_gbe.c` scanout layout, RGBA/ABGR PUT arms, five sibling arms in `dev_lca.c`, every other field assigned once in `cpu_alpha_palcode.c`) are not in the packet. They may be true or false, but they are not code claims about the diff itself.
+
+---
+
+### 4. Was keeping the `// TODO` in #508 right?
+
+Yes. The comment explicitly discloses that `flags` is ignored, protection bits are untested, and `return 2` means writable unconditionally. The round’s scope was the offset bug, not the protection model. Keeping the TODO is honest; no additional disclosure is owed beyond what the comment already states.
+
+---
+
+### On the negate=True rows (Section 3)
+
+**REASONED:** If the equality siblings reded on the same non-observations (`"absent"`, `"died"`, `0x0`), then the detectors did not escape — they correctly failed to produce a positive result. The negate=True rows went green because their row logic inverted a non-observation into a pass. That means the commit’s measured HEAD scores were inflated by those false greens. The scores do not indicate detector escape, but they are not reliable as measurements of the fix’s effectiveness until the rows are repaired.

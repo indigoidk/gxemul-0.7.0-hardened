@@ -1,0 +1,114 @@
+**VERDICT: BRIEF IS LARGELY CORRECT — ONE COMMENT CLAIM IS NOT ESTABLISHED BY THE ROW SET, AND THE KILL TABLE IS INTERNALLY CONSISTENT ONCE CI SOURCE-READ SEMANTICS ARE CORRECTLY MODELED.**
+
+---
+
+## 1. THE DIFF — verified
+
+One token of behaviour change (`depth == 4` → `depth == 32`), plus a multi-paragraph comment. The condition fix is exactly what the pass-1 enumeration demands: `depth` ranges over `{8,16,32,64}` only, so `depth == 4` is unreachable and `depth == 32` is the correct predicate for the 32-bit cell. **READ.**
+
+---
+
+## 2. COMMENT CLAIMS — one overclaim
+
+Enumerating every sentence of the added comment:
+
+| Claim | Established by rows? |
+|---|---|
+| `depth` is a count of BITS | **No** — established by pass-1 code enumeration, not by rows |
+| `8 <<` two-bit field gives 8/16/32/64 | **No** — same |
+| 4 is the BYTE count | **No** — same |
+| author used `/ (depth / 8)` correctly above | **No** — code-reading |
+| both assignments were dead | **No** — code-reading + reasoning |
+| every **tiled** transfer took the CI arm | **Partially** — rows test tiled only; linear is out of scope and disclosed |
+| at 32 bits CI assigns `buf[0]` alone | **No** — code-reading |
+| `memory_rw` copies four | **No** — code-reading |
+| **publishing three bytes of host stack into guest memory** | **NO — INFERENCE, NOT OBSERVED** |
+| comment above states 32-bit transfers | quotes existing comment |
+| repairs 32-bit cell ONLY | disclosed in comment itself |
+| 16-bit and encoding-3 cells still live | disclosed in comment itself |
+
+**The "three bytes of host stack" sentence is a claim a row could observe but does not.** The rows demonstrate:
+- pre-fix `dest[0] == 0x44` (CI assignment of the colour's low byte — *not* host stack)
+- post-fix `dest[0] == 0x11` and `dest[3] == 0x44` (RGBA assignments)
+
+No row asserts that pre-fix `dest[1]`, `dest[2]`, or `dest[3]` is host stack. `fill bot` and `copy 4th` are gated on `rgba_ran`, so pre-fix they fail at the gate (because `dest[0]` is not the expected RGBA value), not because the asserted byte is wrong. The "three bytes" claim is a true code-intent inference that the row set does not directly establish.
+
+**Severity:** minor. The comment is explanatory narrative, not a testable claim. But the brief's own question 1 asks exactly this, and the honest answer is: *yes, that sentence is unestablished by the rows.*
+
+---
+
+## 3. DETECTOR ROWS — 13 enumerated, three are gated
+
+Enumerating: live, devsig, paint ok, fill alive, fill ran, fill top, fill bot, depth8 top, depth16 top, copy alive, copy top, copy 2nd, copy 4th = 13. **READ.**
+
+The three gated rows (`fill bot`, `copy 2nd`, `copy 4th`) gate on `rgba_ran` so that pre-fix they fail with a named reason rather than scoring an undefined byte. This is a methodological choice — **the brief correctly flags it as a question and notes no precedent in this tree.** The alternative (drop the three rows) is strictly weaker: it makes RGB-for-RGBA invisible on those bytes, which the brief notes three seats independently called the round's most dangerous escape.
+
+**My read:** ship the gated form, but the disclosure in section 3 must remain in the record. A reader who sees `copy 4th: n/a` pre-fix and assumes the row was inert is wrong; the row is the only thing that catches the `src_mode |= RGB` mutant (M8). **REASONED.**
+
+---
+
+## 4. KILL TABLE — internally consistent once CI source-read semantics are correctly modeled
+
+This is the part I had to work hardest at. The key insight the brief leaves implicit:
+
+- **CI source-read** returns the **first byte** of the big-endian source word (byte 0), not the low byte. For source `0x1a2b3c4d` stored big-endian, CI source-read gives `0x1a`, not `0x4d`.
+- **CI destination-write** assigns `buf[0] = colour`, where `colour` is whatever the source-read produced.
+- **RGBA source-read** returns the full 32-bit value; **CI destination-write** then takes `colour & 0xff`.
+
+With that model:
+
+| Mutant | Kills (per model) | Score | Matches brief? |
+|---|---|---|---|
+| M1 (depth==4) | fill top, fill bot, copy 2nd, copy 4th | 9/13 | ✓ |
+| M2 (no dst RGBA) | fill top, fill bot, copy top, copy 2nd, copy 4th | 8/13 | ✓ |
+| M3 (no src RGBA) | copy top, copy 2nd, copy 4th | 10/13 | ✓ |
+| M4 (depth==32 && COPY) | fill top, fill bot, copy 2nd, copy 4th | 9/13 | ✓ if COPY bit is unset for the detector's copy (see below) |
+| M5 (dst RGB) | fill bot, copy 4th | 11/13 | ✓ (requires RGB to leave alpha as 0/stack, not source byte 3) |
+| M6 (depth>=16) | depth16 top | 12/13 | ✓ |
+| M7 (depth!=8) | depth16 top | 12/13 | ✓ |
+| M8 (src RGB) | copy 4th | 12/13 | ✓ (requires RGB source-read to zero alpha) |
+
+**M1–M4 each come in exactly one lower than predicted, from `copy 4th` gating** — the brief's explanation is consistent with the model. **READ.**
+
+**One thing the brief does not say but the model implies:** M4 only equals M1 if `(mode & COPY)` is **never true** in the detector's copy operation. If the detector's copy does set the COPY bit, M4 applies the fix to copies and `copy 2nd`/`copy 4th` would pass, giving M4 a score of 11/13, not 9/13. The brief's "as M1" is a factual claim about the detector's mode register that I cannot verify from the packet. **NAME THIS:** the premise "M4 reproduces pre-fix because `(mode & COPY)` is false for the detector's copy" is the single fact that would settle whether M4's score is 9/13 or 11/13.
+
+---
+
+## 5. SECTION 5 CONTRACT — complete
+
+Enumerating disclosures:
+- 16-bit and encoding-3 uninitialised-buffer cells — disclosed in comment + section 5
+- **The trap**: `#509` fills `buf[0..3]` at depth 32, accidentally masking the 32-bit tiled cell of the sibling — disclosed (and this is the most important disclosure in the section)
+- MTE_TLB_B/C not rowed — disclosed with the codex/grok split and the adopted position
+- LINEAR arm out of scope — disclosed
+- `dst_tlb` default arm out of scope — disclosed
+- `sgirebufshiftub` out of scope — disclosed
+
+**The trap disclosure is correct and load-bearing.** A future round that rows only the 32-bit tiled path on this code WILL look fixed and WILL NOT BE, because `buf[0..3]` are now all assigned by the RGBA substitution. The sibling defect remains live at depth 16 and encoding 3. **READ.**
+
+---
+
+## 6. NOT CHECKABLE FROM THIS PACKET
+
+Naming the premises I cannot settle:
+
+1. **CI source-read semantics** — the model I used (CI returns byte 0 of big-endian source) is required for M1 to score 9/13 rather than 8/13. The brief does not state this explicitly. The single fact that would settle it: the exact code of the CI GET arm in `do_mte_transfer`.
+2. **`(mode & COPY)` for the detector's copy** — required for M4 to score 9/13 rather than 11/13. The brief's "as M1" is an empirical claim. Single fact: the value of the mode register the detector writes before the copy.
+3. **RGB mode alpha behaviour** — required for M5 to kill only `fill bot`/`copy 4th` (not `fill top`) and for M8 to kill only `copy 4th` (not `copy top`/`copy 2nd`). Single fact: the RGB GET arm's handling of the alpha byte.
+4. **Codex vs grok on MTE_TLB_B/C** — the brief adopts grok. I cannot adjudicate without reading the helper.
+5. **No SGI/CRIME hardware docs in the project** — stated as derived from `ls _scratchpad/*.pdf`. Plausible but not independently verified.
+
+---
+
+## 7. ANSWERS TO THE SIX QUESTIONS
+
+1. **Diff correct?** Yes. **Comment overclaim?** Yes — "three bytes of host stack" is inferred, not row-established. The other sentences are either code-reading claims or scope disclaimers.
+2. **Wrong disposition?** I find none among the eleven pass-1 findings that the brief accepted or overruled. The codex/grok split is disclosed; the deepseek 5–1 scope overrule is a scope question outside my reach.
+3. **Gated rows?** Ship them. The alternative (drop three rows) makes RGB-for-RGBA invisible, which three seats called the round's most dangerous escape. The gate fails deterministically with a named reason, which is honest reporting.
+4. **Contract complete?** Yes, modulo the unverifiable premises in section 6.
+
+---
+
+## 8. SOMETHING ELSE FOUND
+
+The comment says `depth` is "a count of BITS (8 << a two-bit field, so 8/16/32/64 only)". This is correct for the *encoding*, but the comment does not note that field value 3 (depth=64) is **undefined by the header** (no `MTE_DEPTH_64` macro). The pass-1 enumeration caught this; the comment does not surface it. A reader who walks into encoding 3 thinking "64 is a documented depth" will be wrong, and the sibling defect at encoding 3 is arguably worse than at 16 bits (7 uninitialised bytes vs. 1). The section 5 contract covers this; the comment does not.

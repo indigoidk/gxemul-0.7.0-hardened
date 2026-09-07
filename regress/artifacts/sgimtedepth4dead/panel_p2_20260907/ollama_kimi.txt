@@ -1,0 +1,62 @@
+**VERDICT: The packet survives its own audit — every arithmetic claim enumerates correctly, all eight kill-table counts recompute exactly from the stated row semantics, and the diff is what the brief says. I found one undisclosed escape class (over-inclusive depth guards: no depth-64 row exists, so `depth >= 32` scores 13/13 while changing guest-visible behavior at field value 3), one imprecision in the "single cause" story (M3's copy 4th is a value-red, not a gate-red), and the gated-row form is shippable with two named caveats. Several load-bearing premises are static-analysis claims no row establishes; I name each with the fact that would settle it.**
+
+---
+
+## 0. Arithmetic, enumerated (as ordered)
+
+*REASONED from the formula as stated:* field ∈ {0,1,2,3} → 8<<field = {8,16,32,64}; 4 unreachable ✓. bufdepth ∈ {1,2,4,8}; `depth==32 ⟺ bufdepth==4` ✓ a bijection. The formula itself is a static premise — see §5.
+
+*REASONED — pass-1's enc-3 correction re-enumerated:* field 3 → bufdepth 8; CI assigns buf[0] alone → **7** uninitialised; RGBA assigns 4 → **4** uninitialised. 7→4 is a reduction ✓. Brief is now correct.
+
+*REASONED — kill table recomputed red-by-red from the stated row semantics (gate = n/a counts as fail):*
+- **M1** (both CI): fill top (0x44) + fill bot, copy 2nd, copy 4th (all three gate-red, rgba_ran false) = 4 reds → **9/13** ✓.
+- **M2** (src RGBA, dst CI): fill not RGBA → fill top + 3 gate-reds + copy top (0x4d) = 5 → **8/13** ✓.
+- **M3** (src CI, dst RGBA): fill IS RGBA (kill list omits fill bot, so rgba_ran **true**) → copy top (0x00), copy 2nd, copy 4th red **on value** = 3 → **10/13** ✓.
+- **M4** (COPY-only): fill CI → fill top + 3 gate-reds; copy path genuinely RGBA but copy 2nd/4th gate-red anyway = 4 → **9/13** ✓.
+- **M5** 2 reds → 11/13 ✓; **M6/M7** depth16 top alone → 12/13 ✓; **M8** copy 4th alone → 12/13 ✓.
+
+No count contradicts any stated row behavior. **"No escapes" holds within the tabled mutants.** ✓
+
+## Q1. The diff, and comment sentences vs. rows
+
+*READ:* the behavioral change is exactly `4`→`32`, one literal, plus comment. Scope (`depth==32` only) matches the stated intent ("32-bit transfers") and excludes 64 correctly.
+
+*REASONED — yes, three comment sentences are claims rows could observe (in principle) and do not:*
+1. **"publishing three bytes of host stack into guest memory."** No row observes dest[1..3] pre-fix — fill bot is gated off in precisely that state. Rows prove dest[0] ≠ RGBA-expected; the leak is inferred from the uninitialised-buf static reading, never demonstrated guest-side. The detector evidences the **RGBA-selection repair**, not the infoleak narrative.
+2. **"every tiled transfer took the CI arm."** Rows sample 8/16/32 fill and 32 copy. No depth-64 tiled cell is exercised anywhere.
+3. **"The 16-bit and reserved-encoding-3 cells assign fewer bytes than they copy."** depth16 top reads dest[0] only; enc-3 has no row at all. A row *could* assert 16bpp dest[1]-definedness; none does.
+
+§5 owns all three gaps, so the comment does not overclaim relative to the brief's own disclosures. But if the comment is meant to be row-backed, sentence 1 is the one that isn't.
+
+## Q2. Which accepted disposition is most contestable
+
+*REASONED:* **The grok-over-codex TLB_B/C call.** Its stated warrant — "the comparison does not read `dst_tlb`" — is true of the token and unproven for the dataflow feeding it; grok's own phrase concedes per-label array selection. If `depth`/`mode` for B/C derive from per-TLB registers, a B/C row pins real comparison lineage, not "a different property." §5's disclosure keeps this honest, but the premise is asserted, not shown. **Not settleable from the packet. Settling fact: do the operands of the `depth` computation depend on `dst_tlb`?** (i.e., are depth/bufdepth computed once from a shared `mode` for all three labels — the lines just above the hunk answer it.)
+
+*Not checkable from the packet:* the deepseek 5–1 scope overrule — no content inlined. Name it.
+
+*REASONED — capture-check on 9/11 accepted:* pass-1 seats found two of the three RGB-for-RGBA escapes, so the panel produced substance. And the M1–M4 prediction misses **authenticate** the pre-registration: a post-hoc PRETABLE.out would have been exact. The misses went uncaught by seats and were caught by measurement — all four involve the newest gated row — which says the panel accepted the gate's semantics more shallowly than the enumeration above requires. Slight evidence of ratification drift on that one mechanism, not of general capture.
+
+## Q3. Gated rows — ship, with two caveats stated in the rows
+
+*REASONED:* Ship. Enumeration shows the gate predicate (`dest[0]==0x11`) is **identical to fill top's predicate**, so pre-fix the three rows carry zero information beyond fill top — they are regression rows by construction, deterministic and self-naming, and scoring n/a as fail (not excluding it) is what makes the pre-fix verdict 9/13-hard rather than 9/10-soft. Both alternatives are strictly worse, and the table proves it: dropping the rows resurrects the measured M5/M6/M8 escapes.
+
+Two caveats the packet does not state:
+1. **The gate proxies copy-definedness via the fill.** With the gate open, checked bytes can still be undefined — M3 is exactly that shape (fill healthy, copy GET broken-CI): copy 2nd/4th scored uninitialised stack and happened to red; copy top (0x00) backstopped the kill. Conversely M4 shows the gate can red a row whose own path is healthy. Keep the form; write both facts in the row comment and keep gate-red vs value-red distinguishable in the summary line.
+2. *READ:* "no precedent in this tree" — not checkable from the packet; the form stands on its merits regardless.
+
+## Q4. §5 is incomplete — two cells
+
+**1. (REASONED, headline) Encoding 3 is unwatched as a guard boundary, not just as a sibling defect.** Enumerate the domain against the 13 rows for mutant **`depth >= 32`**: fires at 32 (fill top/bot, all copy rows green, rgba_ran true); cold at 8 and 16 (depth8 top, depth16 top both green) → **13/13, total escape** — while flipping guest-visible behavior at 64bpp (dest[0] 0x44→0x11, uninitialised 7→4). Same for `==32 || field==3`, `!=8 && !=16`. §5 discloses enc-3 as a live *sibling*; it does not disclose that the fix's **upper** guard boundary has no over-reach control while the lower one got two (depth16 top alone kills M6/M7 — and note: two of eight kills rest on a single row each, the detector's brittle points). An over-inclusive guard is a natural wrong-fix shape. A `depth64 top` row is the symmetric pin.
+
+**2. (REASONED, minor) Interior bytes unrowed.** fill dest[1]/dest[2] (0x22/0x33) and copy dest[2] (0x3c) are unasserted; a byte-permutation mutant preserving endpoints escapes. Endpoints are pinned, so this is subordinate to (1), but it is a cell §5 should name.
+
+## Premises I cannot settle from this packet — each with its settling fact
+
+- **The depth formula** (`8 << ((mode & 0x300) >> 8)`). Settle: the assignment line itself. (Arithmetic *given* it: verified.)
+- **`DE_MODE_TYPE_CI == 0` and modes carry zero type bits when the branch is dead.** Settle: the enum and the mode initialisation.
+- **Arm behavior: CI assigns buf[0] only at every depth; RGBA 4 bytes; RGB 3 + zero low byte; `buf[8]` uninitialised.** Settle: the four arm bodies and the declaration. *REASONED:* corroborated indirectly — M5–M8, the mutants exercising arm semantics, were predicted exactly; all misses were gate mechanics.
+- **"copy top green both sides" (CI/CI yields 0x1a).** Settle: CI copy-arm derivation. Corroborated by M1/M2/M3 counts, not derivable.
+- **mtime ordering of PRETABLE.out.** Settle: `stat`. *REASONED:* the four blind predictions self-authenticate it.
+- **No CRIME documentation.** Not checkable; honestly flagged by the brief as a code-intent warrant.
+
+Nothing found beyond the above while verifying.

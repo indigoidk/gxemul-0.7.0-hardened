@@ -1,0 +1,65 @@
+VERDICT: All four fixes are mechanically correct as repairs of the defects they name; none is a repair of something that was not broken. #508 is a partial repair but discloses that explicitly. I would ship all four — but with a flag on two unverified premises I cannot settle from the packet (the PUT arm in #505 and the "three lines up" `apcb_ptbr` assignment in #507), and a flag on the five non-observation rows that I also cannot settle.
+
+---
+
+## Per-round audit
+
+### #505 sgirergbroundtrip — SHIP
+- **Arithmetic, READ**: Pre-fix `*color = (buf[1]<<24)+(buf[2]<<16)+(buf[3]<<8)`. For PUT output buf=[R,G,B,pad], this returns G at [31:24], B at [23:16], pad at [15:8], 0 at [7:0] — the channels shift one slot left and R is dropped. Post-fix returns R/G/B at [31:24]/[23:16]/[15:8], 0 at [7:0]. Round trip preserves the three channels with low byte zero, which the comment explicitly states is the design.
+- **UB concern, REASONED**: `buf[i] << 24` on a `uint8_t` is UB for byte values 0x80–0xFF on a 32-bit `int` target. The fix changes indices, not the shift, so the UB is untouched. **The fix's correctness as an off-by-one repair is independent of the UB.** Disposition is unchanged; the UB is a separate filed issue.
+- **Comment, REASONED**: The cross-reference to `dev_sgi_gbe.c`'s scanout and CRMFB_MODE_TYP_RGB8 channel positions, the "RGBA and ABGR PUT arms independently agree" claim, and the PUT-arm description are all outside the packet. The PUT arm itself is the load-bearing premise and is NOT in the diff.
+
+### #506 lcaconfwidth — SHIP (with one unverified type premise)
+- **Arithmetic, READ**: For idata = 0x100000000, `idata & ~1` is truthy (guard trips), `(int)idata` is 0 on 32-bit-`int` targets, so the diagnostic prints "0x0" — a value the guard would have ACCEPTED. The fix prints full 64-bit width via `%" PRIx64 "`. The defect is real iff `idata` is genuinely 64-bit.
+- **Cast necessity, REASONED**: If `idata` were 32-bit, the fix would be a cosmetic no-op (a real-but-not-bug repair). **The declared type of `idata` in `DEVICE_ACCESS(lca_ioc)` is the single premise that decides whether this is a defect or a stylistic rewrite.** I cannot read the declaration.
+- **Count, REASONED**: "Two sites" is supported by the diff. The parenthetical "(Not the file's only narrowing site -- the default arm below has the same cast, and this round fixes it too.)" is ambiguous — the "default arm" might be site 2 or a third site not shown. Cannot settle.
+
+### #507 alphaswpctxptbr — SHIP (with one unverified premise)
+- **Visible defect, READ**: The line was `apcb_ptbr = new_flags`. If `new_flags` belongs on `apcb_flags`, the LHS is wrong, period. The fix changes LHS to `apcb_flags`.
+- **"Three lines up" claim, REASONED**: The comment asserts `apcb_ptbr` is correctly assigned earlier in the block. The diff does not show that line. **If the earlier assignment does not exist, the original code had two bugs (wrong LHS here AND `apcb_ptbr` never loaded) and the fix addresses only one.** I cannot verify.
+- **Visible context, READ**: Every other field in the shown block (`apcb_cpc`, `apcb_asn`, `apcb_unique`, `apcb_decrsv0`, `apcb_decrsv1`) is assigned exactly once. The "exactly once" claim holds for the visible portion.
+
+### #508 alphapfnoffset — SHIP (with full disclosure)
+- **Arithmetic, READ**: `(PFN << pageSizeShift) | (vaddr & ((1ULL << pageSizeShift) - 1))`. The PFN shift clears bits [pageSizeShift-1:0], and the mask extracts exactly those bits of `vaddr`. OR and ADD are equivalent here; the comment's claim is correct.
+- **Scope, READ**: The fix addresses only the dropped offset. The `// TODO.` line and `return 2` are preserved. The fix comment explicitly discloses: flags ignored, protection untested, every walked page reported writable. **Disclosure was made** — the question of whether the round "owes" a separate disclosure is moot because one is in the commit.
+- **Stylistic note, REASONED**: "this function already has TWO names for 13" is the author's gloss; the substantive point — use the computed mask, not a literal — is sound regardless of whether the local is always 13.
+
+---
+
+## Premises I cannot settle from the packet
+
+Naming them so a file-reading seat can resolve each with one fact:
+
+1. **#505 PUT arm**: the brief states the PUT writes three channels at `buf[0..2]` with pad at `buf[3]`. The PUT arm is not in the diff. Settled by reading the PUT arm of `horrible_getputpixel` in `dev_sgi_re.c`.
+2. **#505 cross-check**: `dev_sgi_gbe.c`'s scanout reads `(buf[0]<<24)+(buf[1]<<16)+(buf[2]<<8)+buf[3]` and CRMFB_MODE_TYP_RGB8 takes R/G/B from [31:24]/[23:16]/[15:8]. Settled by reading `dev_sgi_gbe.c`.
+3. **#506 type of `idata`**: 32-bit or 64-bit? Settled by reading the signature/parameters of `DEVICE_ACCESS(lca_ioc)` in `dev_lca.c`.
+4. **#506 includes**: `<inttypes.h>` is required for `PRIx64`. Settled by grep on `dev_lca.c`.
+5. **#507 "three lines up"**: whether `apcb_ptbr = new_ptbr` actually appears earlier in the `swpctx` block. Settled by reading `cpu_alpha_palcode.c` around line 279.
+6. **#508 consumer claim**: `memory_rw` derives offset as `paddr & offset_mask`. Settled by reading `memory_rw`.
+7. **Witness contamination**: which of the four witnesses contain the five `negate=True` rows that went GREEN on `absent`/`died`/`0x0`; whether the detectors actually ran on those rows or the rows are dead observations. Settled by reading the witness logs (not in packet).
+
+If the file-reading seats can answer #1, #3, and #5, the dispositional questions are closed.
+
+---
+
+## Answers to the brief's questions
+
+**Q1 — Is each fix a correct repair?**
+Yes for all four as repairs of the named defects. #508 is partial but disclosed. None repairs something that wasn't broken, modulo the #506 conditional on `idata`'s actual type (premise #3 above).
+
+**Q2 — Which would I NOT ship?**
+None. But I would NOT ratify without settling premises #1, #3, and #5 — they are the load-bearing ones. The brief's "five rows on non-observations" worry bears on the *measurement*, not the *fix*; even if those rows are false GREENs, the fixes themselves remain correct (the witness underclaiming or overclaiming doesn't change whether the code change repairs the defect). I want this distinguished on the record.
+
+**Q3 — Do the comments claim things the code does not do?**
+No. Every comment claim about the **code in the diff** is consistent with the visible diff. The comments that go beyond the diff (PUT arm, scanout format, sibling arm count, three-lines-up assignment) are reasoned, not contradicted, but they are exactly the unverified premises above. The one near-overclaim is #508's "TWO names for 13" if `pageSizeShift` is not always 13 — but the substantive point is the drift risk, which is independent of the constant's value.
+
+**Q4 — Was keeping the TODO right?**
+The disclosure was made in the commit (the comment explicitly names what stays broken). Whether the project standard requires a separate ticket or a CHANGELOG entry is not visible from the packet. Given the disclosure is present in the commit itself, I read the round as honest about its scope. A separate round for protection is owed; that is the round that owes further disclosure, not this one.
+
+---
+
+## One thing the brief did not ask but I noticed
+
+The #508 comment ends with "the protection bits untested, and `return 2` still reports every walked page writable." If a guest writes through a walked page that the architecture marks read-only, the walk will return success and the write will proceed. This is not a defect of #508 — it is a defect of the surrounding function that predates and outlives #508. But it means the witness for #508, which measured a `ldq`, may have observed the page-offset fix without ever exercising the protection path. That does not undermine #508; it does mean the witness does not overclaim (and the comment correctly does not overclaim either).
+
+No file-reading attempted. No measurement requested. The seven unverified premises are listed in priority order so the next seat knows exactly which three lines to read.

@@ -331,8 +331,15 @@ row("swpctx ptbr", got, "0x%x" % PTBR_VAL,
 
 #  CLAUSE (b): pins the SPECIFIC wrong value, so a reinstatement of the defect is distinguishable
 #  from any other way of getting the word wrong.
-row("swpctx notflags", got, "0x%x" % FLAGS_VAL,
-    "must not be A.flags -- the defect's exact signature", negate=True)
+#  *** AN INEQUALITY PASSES ON EVERY NON-OBSERVATION.  Repaired 2026-09-07 after a probe-helper
+#  audit found this row, and four siblings across three probes, green on "absent"/"died"/0x0 --
+#  states in which nothing was measured at all.  `swpctx ptbr' reds on those, so the DETECTOR
+#  never escaped; what was wrong was this row's own note, which claims a control it did not have.
+#  Stated positively, a non-observation lands in the `got' column instead of scoring green. ***
+obs = got.startswith("0x") and got != "0x0"
+notflags = obs and got != ("0x%x" % FLAGS_VAL)
+row("swpctx notflags", "yes" if notflags else got, "yes",
+    "an OBSERVED word that is not A.flags -- absent/died/0x0 are setup failures, not passes")
 
 #  AND NOT ZERO EITHER.  Zero is what an unmapped read returns, so it is the signature of a BROKEN
 #  SETUP rather than of either code state.  Without this row a probe whose addresses drifted back
@@ -348,8 +355,8 @@ row("swpctx notflags", got, "0x%x" % FLAGS_VAL,
 row("swpctx flags", printed(t, "t4"), "0x%x" % FLAGS_VAL,
     "PCB_A+40 must hold A.flags -- apcb_flags is never loaded on HEAD")
 
-row("swpctx mapped", got, "0x0",
-    "0 means the memory was never there -- a setup failure, not a result", negate=True)
+row("swpctx mapped", "yes" if obs else got, "yes",
+    "a real nonzero readback -- 0x0/absent/died all mean the memory was never there")
 
 ok = sum(1 for _, o in rows if o)
 print("")

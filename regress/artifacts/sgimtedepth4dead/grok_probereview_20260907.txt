@@ -1,0 +1,134 @@
+I'll review the unrun probe against the RE handler, the CRIME header, and the sibling RGB probe — starting with HEAD, the checkpoint, and the probe itself.HEAD is `7a41b3f`. Next I’ll trace the MTE fill path, the TLB packing, and the sibling probe’s conventions against this build.The sibling probe uses `-M 64` and a dummy disk; this one does not. I'll read the MTE handler, fill path, and TLB packing next.Sibling probes all pass `-M 64` and a dummy kernel; this one does not. I'll check whether IP32 RAM actually sits at the physical address the fill writes.**VERDICT: DO NOT RUN AS WRITTEN. `fill ran` is the past-RAM row — it goes green on anything except `0x99`, including a host that never started. The session argv cannot launch gxemul. Polarity, mode, START order, and TLB packing are right.**
+
+I did not edit the probe and I did not run it. Everything below is from `GXEMUL-SEC/regress/sgi_mte_fill_probe.py` against `dev_sgi_re.c`, `crmfbreg.h`, `sgi_re_rgb_probe.py`, and `src/core/main.c`.
+
+---
+
+## Q1 — `fill ran` is the row that goes green measuring nothing
+
+It is `negate=True` against `"0x99"`. The only FAIL is dest[0] still equal to the paint byte. Every other outcome is a PASS:
+
+| `got` | what it actually means | `fill ran` |
+|---|---|---|
+| `0x44` | CI PUT ran (HEAD, the defect) | PASS — intended |
+| `0x11` | RGBA PUT ran (after the fix) | PASS — intended |
+| `0x00` | paint never landed; reads return zeros | **PASS** |
+| `0xde` | `lw` never ran; `v0` is still `SENTINEL` | **PASS** |
+| `absent` | `print v0` regex missed | **PASS** |
+| `died` | gxemul never started / session died | **PASS** |
+
+`fill alive` only catches `died`. It does not catch zeros, the leftover sentinel, or a missed print.
+
+**Missing TLB bit 15 is the one failure `fill ran` *does* catch**, and it is distinguishable: dest stays `0x99`, so `fill ran` FAILs and `fill top` FAILs with `got=0x99` rather than `0x44`. That half of the question is fine. The trap the rgb probe paid for is pinned.
+
+**What is not pinned is the paint.** `live` is a store/load at `SCRATCH = 0xa0001800`, not at `DEST = 0xa0020000`. There is no row that asserts the paint landed at the oracle address. That is the alpha shape: liveness at a good address, payload at an unchecked one, inequality row green on zeros. *This* DEST happens to be RAM (phys `0x20000` inside the default 128 MB, same formula the rgb probe measured), so the hole is not live at this address — but `fill ran` would still score the expected HEAD 4/5 if DEST were a hole, and the fix would not turn `fill top` green.
+
+**The instance that fires immediately is the argv.** Every working SGI probe in this tree does:
+
+```python
+os.execv(BIN, [BIN, "-V", "-x", "-E", "sgi", "-e", "ip32", "-M", "64",
+               "0x80001000:" + DUMMY])
+```
+
+This one does:
+
+```python
+os.execv(BIN, [BIN, "-V", "-x", "-E", "sgi", "-e", "ip32"])
+```
+
+`main.c` on `extra_argc == 0` without `-d`:
+
+```c
+usage(false);
+fprintf(stderr, "\nNo filename given. Aborting.\n");
+exit(1);
+```
+
+The emulator never constructs. `live` / `devsig` / `fill alive` go `died` (loud). **`fill ran` still PASSES**, because `"died" != "0x99"`. That is the three-green-rows-measuring-nothing failure, reduced to one row by the other controls.
+
+A paint-verify row at DEST (`lw` after the `sw` of `PAINT`, before START, `topbyte == 0x99`) is what makes `fill ran` fail-able. Without it, “not 0x99” is not a transfer control.
+
+---
+
+## Q2 — `MODE_TILED_FILL = 0x200` is right. Zero bytemask does **not** reach the kill.
+
+Three fields, independently:
+
+| field | extract | `0x200` | wanted |
+|---|---|---|---|
+| `dst_tlb` | `(mode & 0x1c) >> 2` | 0 | `MTE_TLB_A` |
+| `depth` | `8 << ((mode & 0x300) >> 8)` | 32 | `MTE_DEPTH_32` (field value 2, stored as `2<<8`) |
+| COPY | bit `0x800` | clear | FILL |
+
+Constructed `dst_mode` is `(0 << 10) + (2 << 8) = 0x200` = TLB_A + BUFDEPTH_32 + TYPE_CI. `bufdepth = 1 << 2 = 4`. Consistent.
+
+The other zeros:
+
+- **STIPPLE `0x400` clear** — required. Set, and `:1328-1330` `exit(1)`s.
+- **SRC bits 5–7 = 0 = `MTE_TLB_A`** — required. `if (src > MTE_TLB_C) exit(1)` at `:1336` runs on FILL too, not only COPY.
+- **DST_ECC / SRC_ECC** — tiled path never reads them.
+- **Bytemask = 0** (`memset` of the device struct, never written). The `bytemask != 0xffffffff` kill at `:1413-1415` sits **inside `case MTE_TLB_LIN_A/B` only**. The tiled arm never tests it. A zero bytemask does not reach that kill on this probe.
+
+Leaving the rest at zero is legal for this path, not an accidental selector.
+
+---
+
+## Q3 — Store, then fire. DST1 is written. This probe cannot *see* that.
+
+`DEVICE_ACCESS(sgi_mte)`:
+
+1. `startFlag = relative_addr & CRIME_DE_START` — captured first
+2. `relative_addr &= ~CRIME_DE_START` — then stripped
+3. `regnr = relative_addr / 4`; on `len == 4`, `mte_reg[regnr] = idata` — **store**
+4. switch (debug only for DST1)
+5. `if (startFlag) do_mte_transfer(cpu, d)` — **then fire**
+
+`0xb5003838`: MTE is registered at `0x15003000` length `0x1000`, so relative `0x838`. `0x838 & 0x800` is START. Strip → `0x038`, `regnr = 14` = `(CRIME_MTE_DST1 - 0x3000)/4`. The value 0 lands in DST1, then the transfer runs. The 0x800 in the **address** is not the 0x800 COPY **mode** bit.
+
+**Vacuity on this question, not an order bug:** DST0 and DST1 are both 0, and `memset` already left them 0. Fire-before-store would still draw `(0,0)–(0,0)`. A non-zero DST1 is what would make the order observable.
+
+MODE / BG / DST0 are stored on earlier steps without START, so they are not zeros-at-fire. That half is done right.
+
+---
+
+## Q4 — The inconsistency is real. Both sides of it are right.
+
+Three packing conventions in one file:
+
+| site | what it does |
+|---|---|
+| RE TLB_A | `data[hwi]*256 + data[hwi+1]` over `len` halfwords. An `sd` of `0x8002 << 48` is BE bytes `80 02 00 00 00 00 00 00` → `re_tlb_a[0] = 0x8002`. Bit 15 set. |
+| LINEAR_A / DE `len==8` | `reg[n] = idata >> 32` (HIGH in `[n]`) |
+| MTE `len!=4` | `mte_reg[n] = idata` (LOW in `[n]`), `mte_reg[n+1] = idata >> 32` |
+
+Opposite of each other, and the TLB path is a third thing (raw `data[]`, not `idata`). The rgb probe measured `<< 48` for TLB_A; `<< 32` left `[0]` at 0, valid bit clear, silent decline. Copying that here is correct.
+
+32-bit `sw` for MTE writes exactly one `mte_reg[]` slot via `mte_reg[regnr] = idata` and never touches the 64-bit MTE packing. That is the right way to avoid the opposite convention. `memory_readmax64` on BE (`machine_sgi.c` sets `EMUL_BIG_ENDIAN`) assembles `buf[0]<<24|…`, so `sw` of `0x200` is `mte_reg[0] = 0x200`.
+
+`len != 8` at TLB_A is declined (`#497`). An `sw` there would leave `re_tlb_a[0] = 0` and look like Q1’s TLB miss. They used `sd`. Right.
+
+---
+
+## Q5 — Polarity is right. `fill ran` is not vacuous against a **landed** paint, and is vacuous against everything else.
+
+`fill top` wants `"0x11"` (RGBA `bg>>24`). On HEAD, CI PUT does `buf[0] = (uint8_t)bg = 0x44`. BE `lw` top byte is dest[0] = `0x44`. **FAIL on HEAD.** They did not assert the defect as the passing state.
+
+After `depth == 32`, RGBA lays `[0x11, 0x22, 0x33, 0x44]`, dest[0] = `0x11`, same script greens. That is clause (i).
+
+`fill ran` vs a landed `0x99`: CI writes dest[0] = `0x44`, RGBA writes `0x11`, neither is `0x99`. “Wrong byte” and “never landed” are distinct **when the paint is still there**. When it is not — Q1 — the row is vacuous by construction.
+
+`dest[1..3]` are not read. Correct; those bytes are uninitialised on HEAD.
+
+---
+
+## Something else
+
+1. **Missing loadfile is fatal, not cosmetic.** `sgi_re_unmapped_probe.py` says so in its own words: a load file is required. The rgb sibling creates `/tmp/dummy_sgirand.bin` if absent. This file creates nothing and passes nothing. `-M 64` is the one omission that does *not* matter (IP32 default is 128 MB; DEST is at 128 KB either way).
+
+2. **`printed()` does not mask to 32 bits.** The rgb probe does, because `lw` sign-extends and a full-word compare fails on formatting. `topbyte` uses `>> 24` of the Python int, which still extracts bits 31–24 of a sign-extended `0xffffffff99999999`, so it happens to be safe *for this oracle*. A later row that compares a whole word will not be.
+
+3. **RGB substitution also puts `0x11` at dest[0]** (`buf[0] = color>>24`, `buf[3] = 0`). A dest[0]-only witness cannot see RGB vs RGBA. Fine for a witness of CI vs a 32-bit type; not fine for a detector. The design already said the shipped accept oracle is the full word `0x11223344`, legal only after the fix.
+
+4. **`fill ran` PASSes on `"died"`.** Even after the dummy is restored, keep the negate off `"died"` / `"absent"` — or pin the paint at DEST — or the control remains an inequality against a value the failure modes do not produce.
+
+5. I did not re-check NetBSD `crmfb_fill_rect` in this pass; the three mode fields and the START path are from the fork. Field-3 / 16-bit MTE are unchanged from the design answer and are not this probe’s job.

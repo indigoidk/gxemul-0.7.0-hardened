@@ -1,3 +1,215 @@
+# `#509` sgimtedepth4dead: a bit-count compared against a byte-count, so the branch never ran
+
+**THE DEFECT.** `dev_sgi_re.c`, `do_mte_transfer()`, in the block shared by the `MTE_TLB_A/B/C`
+case labels:
+
+    int depth = 8 << ((mode & MTE_MODE_DEPTH_MASK) >> MTE_DEPTH_SHIFT);   /* BITS */
+    ...
+            x1 /= (depth / 8);          /* the author converting bits -> bytes, correctly */
+    ...
+            // this makes sure that we copy 32 bits when doing 32-bit transfers.
+            if (depth == 4) {           /* ... and comparing against the BYTE count */
+
+`MTE_MODE_DEPTH_MASK` is `0x300` and `MTE_DEPTH_SHIFT` is 8, so the field is two bits and `depth`
+takes **only** 8, 16, 32 or 64. **`depth == 4` is unreachable.** Both `|= DE_MODE_TYPE_RGBA`
+assignments were therefore dead, every tiled MTE transfer took the `DE_MODE_TYPE_CI` arm — and at
+32 bits that arm assigns `buf[0]` alone while `memory_rw` copies **four** bytes from a
+`uint8_t buf[8]` that has no initialiser. **Three bytes of host stack per pixel reached guest
+memory**, and the pixel's colour was the wrong byte of the background register.
+
+**THE FIX is one token**, and the comment above it already stated the intended condition in words:
+
+    if (depth == 32) {	/*  #509  */
+
+**WITNESS, rung 3, unmodified `-E sgi -e ip32`:** `regress/sgi_mte_fill_probe.py`. A cold guest
+programs one RE tile-table entry and the MTE mode/background/destination registers with real `sw`
+and `sd` instructions, the last write carrying the transfer-start address bit, then reads the
+destination back with a real `lw`. Background `0x11223344` — four distinct bytes, so the
+destination's first byte names which colour arm ran.
+
+    6-row witness    HEAD  5/6    witness_prefix_HEAD.raw    fill top got 0x44, want 0x11
+    14-row detector  FIX  14/14   killtable2_20260907/BASE.raw
+    14-row detector  HEAD 10/14   killtable2_20260907/M1_reinstate.raw
+
+`M1` is the verbatim reinstatement of the removed comparison, so it re-measures the pre-fix state
+at a durable path rather than leaving that score in a terminal.
+
+## The detector grew from 6 rows to 14, and every added row came from someone else
+
+Three of the eight mutants below were **total escapes** against the row set the round proposed.
+
+| row | added by | the mutant it kills, and the channel |
+|---|---|---|
+| `fill bot` | pass-1 glm and grok | `dst_mode \|= DE_MODE_TYPE_RGB`. The RGB arm writes `{bg>>24, bg>>16, bg>>8, 0x00}` — **identical to RGBA at dest[0]**, different at dest[3]. Invisible to any first-byte oracle. |
+| `depth16 top` | pass-1 glm | `depth >= 16`. It fires at 32 (so `fill top` stays green) and is cold at 8 (so `depth8 top` stays green). **Nothing else reds.** |
+| `copy 4th` | the PRE-TABLE CHECK | `src_mode \|= DE_MODE_TYPE_RGB`. RGB's GET drops only the LOW byte, so dest[0] and dest[1] are unchanged. |
+
+**`copy top` and `copy 2nd` exist because a FILL never reads `src_mode`** — deleting only
+`src_mode |= DE_MODE_TYPE_RGBA` was invisible to all six original rows, which four seats confirmed
+independently.
+
+**Three rows are GATED, and this is a new form in this tree.** `fill bot`, `copy 2nd` and
+`copy 4th` read bytes that are host stack before the fix and defined after it. Each computes
+`rgba_ran = (dest[0] == 0x11)` and reports `n/a: dest[0] not RGBA` when false — **failing
+deterministically and naming its own reason** instead of scoring an undefined byte. *No precedent
+for a gated row was found in this tree; it is raised for the flagship adjudication rather than
+asserted as settled.*
+
+**The copy rows use source word `0x1a2b3c4d`, first byte deliberately below `0x80`,** because every
+GET arm computes `buf[0] << 24` on a promoted `uint8_t` — undefined for a first byte `>= 0x80`.
+That is `sgirebufshiftub`, already filed, and **re-derived independently by the pass-1 codex seat**.
+A detector must not stand on undefined behaviour.
+
+## Pass 2 refused the round, and it was right to — an L2 floor breach, MEASURED
+
+**Six seats answered pass 2; two returned NOT RATIFY.** The substantive refusal found a mutant the
+shipped 13-row detector could not see at all:
+
+> **`depth == 32` -> `depth >= 32` scored 13/13. A CLEAN SWEEP.**
+
+It fires additionally at field value 3, and **nothing drove 64bpp**. Three seats reached it
+independently — glm derived it, the kimi substitute derived it, and **grok derived it AND
+classified it clause (d)**: the guard's own operand with its bound relaxed, `==` -> `>=` on the same
+constant. It is not a hypothetical edit either; it is option **F2**, which this round considered
+and rejected on the arithmetic.
+
+**L2, repaired in-round** by a 14th row. `depth64 top` drives field 3 and wants the **CI** byte —
+it asserts what this round does NOT change, and takes no position on what 64bpp ought to do, which
+nothing in the header and no local manual would warrant. Note the shape: M6 (`>= 16`) is a LARGER
+edit and was already killed; **the SMALLER one escaped** — the accept-row-at-the-near-bound
+pattern, with the far neighbour unpinned.
+
+## Kill table 2 — 10 mutants at 14 rows, scratch clone, frozen driver
+
+Table 1's predictions were each one high on M1–M4; table 2's were rebuilt from table 1's MEASURED
+kill lists and **all ten landed exact**. Both columns are given because a prediction copied into a
+measured column is the frozen-number class in a new coat.
+
+    mutant                                      predicted  measured   killed by
+    BASE   (the shipped fix)                      14/14     14/14
+    M1     depth == 32 -> depth == 4  (b)         10/14     10/14     fill top, fill bot,
+                                                                      copy 2nd, copy 4th
+    M2     delete dst_mode |= RGBA    (d)          9/14      9/14     + copy top (0x4d)
+    M3     delete src_mode |= RGBA    (d)         11/14     11/14     copy top, copy 2nd, copy 4th
+    M4     depth == 32 && (mode & COPY) (e)       10/14     10/14     as M1
+    M5     dst_mode |= RGB                        12/14     12/14     fill bot, copy 4th
+    M6     depth >= 16                            12/14     12/14     depth16 top, depth64 top
+    M7     depth != 8                             12/14     12/14     depth16 top, depth64 top
+    M8     src_mode |= RGB                        13/14     13/14     copy 4th ALONE
+    M9     depth >= 32                            13/14     13/14     depth64 top ALONE
+
+**Every mutant killed; zero deviations from the pre-registered predictions.**
+
+> **AND THE HONEST SCOPE SENTENCE, supplied by the pass-2 codex seat and kept in its words:** the
+> detector exercises `AA` fills at 8/16/32 and one `AA` copy at 32, out of **72 admitted
+> (src, dst, depth, fill/copy) combinations**. **"No escapes" means none among these ten mutants,
+> not complete coverage.**
+
+## What pass 2 corrected, beyond the breach
+
+**M4 is clause (e), not (d)** — grok's reading, verified here by opening the file. DEPENDS-ON
+enumerates the predicates DOMINATING the edited line plus the lvalues the GUARDED BODY reads. That
+body is exactly `src_mode |= ...; dst_mode |= ...` and never reads `MTE_MODE_COPY`, which is tested
+later in the transfer loop. **Filing M4 as (d) would import its dual into the FLOOR** — and that
+dual, `if (depth == 32 && !(mode & MTE_MODE_COPY))`, is a cell this instrument provably cannot
+kill: every fill row stays green, `copy top` stays green because `dest[0]` of a same-type copy is
+invariant, and the gate OPENS so the tail rows would score bytes a CI-CI PUT never wrote.
+Disclosed as clause-(e) debt.
+
+**Three wrong records in the round's own comments**, each found by a seat:
+
+* *"every GET arm computes `buf[0] << 24`"* — **false.** CI shifts nothing; ABGR and the default
+  arm shift `buf[3]`. Four of five arms, two of them a different byte. The pre-existing
+  `sgirebufshiftub` row's own TITLE carried the same overclaim and is corrected there too.
+* *"`depth8 top` reds if the comparison became `!= 8`"* — **false.** `!= 8` is FALSE at depth 8, so
+  the branch stays cold and the row is green. **`>= 16` and `!= 8` agree on all four reachable
+  depths — they are EQUIVALENT MUTANTS.** *Table 1 had already shown it: M7 was killed by
+  `depth16 top` ALONE, one red and not two. The score was read and the row list was not.*
+* The header banner still called a 14-row detector *"a witness, expected to FAIL, must not be
+  gated"* — true of the 6-row version against HEAD, stale now.
+
+**And the gate flag was renamed `rgba_ran` -> `fill_top_ok`**, because `fill dest[0] == 0x11` is
+produced by the RGB arm as well as by RGBA. The flag means *the fill PUT put `bg>>24` at dest[0]*,
+not *RGBA specifically ran*; `fill bot` is the row that separates those. A flag whose name
+overclaims is how a future reader builds on a fact nobody has.
+
+**One seat's finding was REFUTED by measurement, and one seat's remedy rejected on another seat's:**
+glm claimed M3's copy kills "rest on undefined bytes" — under M3 the PUT is RGBA, which writes all
+four, and the log shows the defined `0x00`/`0x1a`. deepseek proposed gating the copy rows on
+`copy dest[0] == 0x1a`; grok's byte-walk shows that is **vacuous**, since `0x1a` is what BOTH CI-CI
+and RGBA-RGBA produce — the gate would always be open, including pre-fix, and the rows would then
+score exactly the host stack the gate exists to avoid.
+
+*Both of those seats' errors trace to one ambiguous sentence in the round's own pass-2 brief, which
+described the gate as per-row when it is a single shared flag. Two seats recovered the true reading
+from `BASE 13/13` alone; two did not. That is a brief defect, not a seat failure.*
+
+## *** WHAT THIS ROUND DOES NOT CLOSE — and the trap that makes saying so load-bearing ***
+
+The same underlying defect — the CI arm assigning fewer bytes than the transfer copies — is live at
+**16 bits** (one uninitialised byte) and at **field value 3** (seven). `#509` closes the 32-bit cell
+only, and by a different mechanism: it selects a type that assigns four.
+
+> **THE TRAP, named by the pass-1 grok seat and kept in its own words: `#509` fills `buf[0..3]` at
+> depth 32, so it ACCIDENTALLY MASKS the 32-bit tiled cell of `sgirebufuninit`. A later round that
+> rows only depth 32 on this path WILL LOOK FIXED AND WILL NOT BE. Keep that sibling alive on depth
+> 16.**
+
+**So this round does NOT claim the uninitialised-buffer leak is closed**, and `depth16 top` is the
+row that keeps the claim honest: if a later edit silently changed the 16-bit cell, it reds.
+
+**Also disclosed rather than rowed:** `MTE_TLB_B` and `MTE_TLB_C` — a repair conditioned on
+`dst_tlb == MTE_TLB_A` escapes this detector. Pass 1 **split** on it: codex enumerated 72 admitted
+field combinations and called B/C uncovered; grok held that the comparison does not read `dst_tlb`,
+so a per-label row would pin the helper's array selection — a different property — and called it
+"cheap, not required". *The round adopted grok, i.e. the cheaper reading, over the seat that had
+enumerated the space, and that call is queued for the flagship adjudication rather than settled
+here.* The LINEAR arm, the `dst_tlb` default arm and `sgirebufshiftub` are out of scope and named
+in `PRETABLE.out`.
+
+**And the warrant for RGBA over RGB is CODE INTENT, not a datasheet.** Raised by the minimax seat
+and verified: `ls _scratchpad/*.pdf` lists sixteen manuals and **none for SGI/CRIME**. The basis is
+the dead branch's own choice plus the comment — "copy 32 bits", which RGB's zero-padded low byte
+does not do. Recorded as a limitation, not glossed.
+
+## The pass-1 panel found three errors in the round's own brief
+
+Each was found by a seat, none by the author, and they are listed because the premise-audit opener
+is the one piece of prose in this project that demonstrably fires.
+
+1. **A wrong count, caught independently by TWO seats** (codex and the kimi substitute): the brief
+   said `depth >= 32` "converts a four-byte problem into a four-byte problem". At field value 3, CI
+   leaves **seven** bytes uninitialised and RGBA would leave **four** — a reduction. The conclusion
+   (reject it for want of a semantic warrant) held; the arithmetic under it did not.
+2. **A wrong record in the probe header** (codex): it claimed "only the top byte of the big-endian
+   word is read". The probe executes `lw` and masks afterwards — it **reads four bytes and asserts
+   one**. Corrected in place, and the distinction is load-bearing, because the tail becomes
+   assertable the moment the fix lands.
+3. **An imprecise mechanism** (kimi substitute): the `copy top` byte-walk gave the right answer for
+   the wrong reason. The dest-only cell yields `0x00` because the CI GET *assigns*
+   `*color = buf[0]`, zero-extending — not "the high byte of a low-byte colour" in general. That
+   sentence now lives in the row's comment so a future reader does not "correct" the want to `0x11`.
+
+## Seats
+
+Pass 1, `_scratchpad/panel_20260907_170713` (durable copy:
+`regress/artifacts/sgimtedepth4dead/panel_p1_20260907`). **Seven transports fired, six answered.**
+
+    codex GPT-6 Astra max  ANSWERED 140 KB   grok 4.6 xhigh    ANSWERED 12 KB
+    glm-5.3                ANSWERED  7.7 KB  deepseek-v4-pro   ANSWERED 4.4 KB
+    minimax-m3             ANSWERED  8.7 KB  kimi-k3:cloud     ANSWERED 8.0 KB
+    kimi CLI               *** WALLED -- 403 weekly (7-day) limit *** SEAT COVERED by kimi-k3
+    agy 3.7                DELIBERATELY NOT FIRED -- measurement reserve (owner ruling 2026-08-30)
+    Opus 5, Fable 5        DELIBERATELY NOT FIRED -- held for the 2026-09-09 adjudication
+
+**A walled seat, a covered seat, a reserved seat and a held seat are four different things and are
+recorded as four different things.** The stage stands at **7/9 awaiting opus5, fable5**, with the
+question it is held for in `tools/pipeline/fable_queue.md` section 7g.
+
+**deepseek dissented on scope** — "one round per cell is defensible" — and was overruled 5–1,
+because a per-depth chain is the `#499` same-class-three-times shape. The dissent is carried
+verbatim to `fable_queue.md` 7g-4 rather than dropped.
+
 # `#508` alphapfnoffset: the Alpha page-table walk returned a page BASE, dropping the offset
 
 **THE DEFECT.** `memory_alpha.c`, after the third-level PTE validates:
@@ -5,7 +217,10 @@
     (*return_paddr) = ALPHA_PTE_TO_PFN(pte3) << pageSizeShift;
 
 `memory_rw.c` then takes `offset = paddr & offset_mask`, which is therefore **always zero** — so every
-walked access resolved to the page's first bytes. A codex reachability pass enumerated all 8192
+walked access FILLED ITS TRANSLATION FROM the page's first bytes — *not* "resolved to", which is
+the L4 the retrospective pass 2 on this commit found: the Alpha fast path recomputes `addr & 8191`
+itself, so a subsequent cache HIT reads correctly and the corruption is the SLOW-PATH FILL. A
+codex reachability pass enumerated all 8192
 offsets: the walk yields offset zero throughout, differing from the offset-preserving address for
 **8191** of them.
 
@@ -24,9 +239,30 @@ A cold guest `ldq` through a hand-built three-level page table:
 including bit 3, a hardcoded `| 8`, and **unmasked `+ vaddr`** — the last correct only because the VPN
 is zero on page 0. `walk vpn` kills the three that matter.
 
-> **AND TWO OF THE SIX ARE DELIBERATELY NOT KILLED.** `0x3fff` and `0x7fff` are **equivalent inside an
-> 8 KB page** — bits 13 and 14 of an offset are always zero there — so no row can distinguish them and
-> none pretends to. *A row that claimed to would be vacuous by construction.* Recorded in the probe.
+> ### *** THIS PARAGRAPH WAS ARITHMETICALLY FALSE AND IS CORRECTED, 2026-09-07, BY THE RETROSPECTIVE
+> ### PASS 2 ON THIS COMMIT — which the pre-commit gate demanded because the round shipped without one. ***
+>
+> It read: *"AND TWO OF THE SIX ARE DELIBERATELY NOT KILLED. `0x3fff` and `0x7fff` are equivalent
+> inside an 8 KB page — bits 13 and 14 of an offset are always zero there — so no row can distinguish
+> them and none pretends to."*
+>
+> **The premise is about an OFFSET; the expression masks the FULL VIRTUAL ADDRESS.** That is true of
+> `walk off`, whose `VADDR = 0` keeps every candidate mask inside the first page — which is where the
+> sentence came from. It is **false of `walk vpn`**, which exists precisely to leave that page:
+
+>     walk vpn drives vaddr = VADDR2 + N2 = 0x3008
+>       mask 0x0fff -> 0x0008      mask 0x1fff -> 0x1008   (correct)
+>       mask 0x3fff -> 0x3008      mask 0x7fff -> 0x3008
+>
+> The two wider masks equal **each other** and **both differ from the correct `0x1008`** — bit 13 is
+> set, so `base | 0x3008` lands in the NEXT 8 KB page, which nothing planted. **`walk vpn` kills all
+> four lesser masks, not three.**
+>
+> *So the sentence generalised a property of ROW 1 to the whole probe, in the very paragraph
+> explaining why ROW 2 had to exist.* The correction makes the detector STRONGER than it claimed —
+> the safe direction to be wrong in, and still a wrong record. **NOT separately measured:** no mutant
+> was built for either mask; the arithmetic is the warrant, and unlike the survival the old sentence
+> asserted, it is checkable by reading.
 
 **A THREE-WAY PLANT MAKES THE ROW DIAGNOSTIC RATHER THAN MERELY RED:** `VAL_B2` at `data2+0x1008` is
 correct, `VAL_C2` at `data2+8` is what a `0xfff` mask or a hardcoded `| 8` reads, `VAL_A2` at

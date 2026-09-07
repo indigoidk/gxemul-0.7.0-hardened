@@ -1,0 +1,53 @@
+**VERDICT: SHIP WITH THREE AMENDMENTS.** The fix token, the 13-row list, and all nine kill-table rows are internally consistent — I re-derived every score and every kill list — but only under a reading of the gated rows the brief never states: all three gate on the **FILL's** `dest[0] == 0x11`, not their own. Read per-row (the natural reading of §3), BASE 13/13 is impossible. Under the consistent reading, three things follow that the brief does not own: M3's two copy kills rest on undefined bytes, M4's own result proves `mode & COPY` is never exercised, and `depth >= 32` is a total escape §5 does not disclose.
+
+## A. Arithmetic that checks (READ inputs, REASONED verification)
+
+- `8<<{0,1,2,3}` = {8,16,32,64}; 4 ∉ domain; `depth==32 ⟺ bufdepth==4`. ✓
+- Leak counts: 32bpp CI = 4−1 = **3** ✓; encoding 3: 8−1 = **7**, RGBA-hypothetical 8−4 = **4** ✓. At 8bpp CI assigns 1 and copies 1 — the comment's enumeration of leaky cells as {16, 3} is exactly right ✓.
+- Hunk header −7/+22 forces: 3 leading context + 1 removed + 3 trailing (old); 3 + 16 added (15 comment lines + 1 `if`) + 3 trailing (new). ✓ — see Finding 5.
+- Kill table, cardinality = 13 − score for every row: M1 4→9, M2 5→8, M3 3→10, M4 4→9, M5 2→11, M6/M7/M8 1→12. All ✓. Predicted deltas: M1–M4 −1 each, M5–M8 0, exactly as claimed; measured-minus-predicted = {copy 4th} in each of M1–M4. ✓
+- Drop the gated rows and M5 (kills = {fill bot, copy 4th}) and M8 ({copy 4th}) become total escapes ✓ — your claim checks.
+- 0x1a dodges `buf[0] << 24`: uint8_t promotes to int; 0x80<<24 = 2³¹ overflows → UB; 0x1a<<24 fits. ✓ (assumes 32-bit int — true on any plausible host).
+
+## B. Finding 1 — the gate's referent is ambiguous; only one reading survives
+
+READ: §3 says all three gated rows compute `rgba_ran = (dest[0] == 0x11)`; copy top expects 0x1a "green both sides"; BASE = 13/13.
+
+REASONED: if each row gates on **its own** `dest[0]`, the copy rows' gate is false post-fix (0x1a ≠ 0x11) and they cannot pass at BASE → 13/13 impossible. The per-row reading contradicts the table. The unique consistent reading is a **shared flag on the fill's** dest[0]: under it I re-derived all nine rows and matched every score and kill list exactly.
+
+Consequences you do not state:
+1. In M3 the fill is green, so the gate is **TRUE**, and copy 2nd/4th assert dest[1]/dest[3] — host-stack bytes under CI-GET. **M3's two copy kills are undefined-byte comparisons**: the one place the table stands on undefined behaviour, against your own standard ("The detector must not stand on undefined behaviour").
+2. Gated this way, the copy rows' red says nothing about the copy path whenever the fill is red; a fill-only regression reds them with the message "dest[0] not RGBA", which names the wrong buffer for those rows. Fails closed, but say it, and name the fill in the message.
+3. Your "single cause" is single in effect, not mechanism: copy 4th reds via the gate in M1/M2/M4 but via an undefined byte in M3. Answer to "is something else moving?": in the **measured** column, no — fully consistent (§A). In the **predicted** column, yes: copy 2nd was predicted killed in all four and copy 4th in none, though the rows are gated identically and their gates take identical values in every one of those builds (false in M1/M2/M4, true in M3). No single gate model yields that prediction set; PRETABLE.out was not generated from one coherent model. Settling facts: the gate lines in `sgi_mte_fill_probe.py`; PRETABLE.out's per-mutant predicted kill lists.
+
+## C. Finding 2 — M4's result silently proves the COPY bit is never exercised (a §5 cell)
+
+READ: M4 = `depth == 32 && (mode & COPY)`, measured 9/13, "as M1".
+REASONED: if any rowed 32-bit transfer set the COPY bit, M4 would fire RGBA on it and score 11/13 with copy rows green. The measured 9/13 forces: **no rowed transfer sets `mode & COPY` at this branch**. So M4 is behaviourally the pre-fix build; its kill adds nothing beyond M1, and the detector never exercises the COPY conjunct. Undisclosed. Settling fact: the mode word's COPY bit for the detector's tiled copy.
+
+## D. Finding 3 — `depth >= 32` is a total escape; encoding-3 blindness
+
+REASONED, row by row: 32bpp rows match BASE (green); 8 and 16bpp rows match CI (branch cold, green); identity rows green; 64bpp fires RGBA and **nothing rows it**. 13/13. You tabled `== → >=` at 16 (M6) but not at 32 — and the added comment's last sentence invites exactly this widening. §5 discloses encoding 3 as an open **defect** but not that the **detector cannot see a change there**. One 64bpp row, even an identity row, or one sentence of disclosure closes it. (Named as a disclosure gap, not a proposed mutant.)
+
+## E. Finding 4 — the four copy-top values are not derivable from the stated premises
+
+READ: copy top = 0x1a at BASE, 0x1a pre-fix, 0x4d under M2, 0x00 under M3.
+REASONED: with "the CI arm assigns buf[0] only" read as identity, M3 forces CI-GET's buf[0] = 0x00, so pre-fix should read 0x00, not 0x1a; and M2 should read 0x1a, not 0x4d. The four values are jointly consistent only if the CI arms **transform** (reassign from other bytes, palette, etc.) — semantics §1 never states. The table's *deltas* are checkable from the packet; its *mechanisms* are not. Settling fact: the GET/PUT arm code — inline the arms in the next packet. Note: pre-fix copy top = 0x1a may be build/stack-dependent under any transform story; re-measure it across a rebuild before leaning on "green both sides".
+
+## F. Minor premises
+
+- The inlined diff elides exactly its 3 trailing context lines — **the branch body**. The two `|=` statements are never READ here; they exist only as M2/M3's names. If the body is anything else, "the entire product change" is not what was inlined.
+- "its mtime proves the order": one file's mtime proves only its own write time; order needs the *pair* (PRETABLE.out vs table-1 artifacts), and mtime is settable — "consistent with", not "proves".
+- devsig "a value RAM cannot give": RAM can hold 0x1e000000 if something stored it; the real warrant is the probe's store pattern. Wording nit.
+- Byte 2 is unpinned everywhere (no copy 3rd; fill bytes 1–2 unpinned). Copies are rowed only at 32bpp — 16-bit behaviour is pinned for fills, **not for copies**; the sibling disclosure covers the 16-bit *uninit* cell, not 16-bit copy *correctness*.
+- Unsettleable from this packet, with settling facts: the depth formula itself (source line — the root premise); the `/ (depth / 8)` lines (function body); "no other code sets type bits" (grep `DE_MODE_TYPE` in the function); the header's missing `MTE_DEPTH_64`; grok's "the comparison does not read dst_tlb" (comparison code); deepseek's scope claim (panel log); gated-row precedent (tree search — a file-reading seat's job).
+
+## G. The questions
+
+**Q1.** The diff is what you say, up to the elided body (F). Sentences a row could observe but doesn't: (1) "publishing three bytes of host stack into guest memory" — pre-fix copy 2nd/4th read exactly those bytes and the detector *deliberately declines to record them*; that sentence's warrant is code-reading, not rows. Keep it, but know that. (2) The encoding-3 clause — zero rows at 64bpp (D). (3) "every tiled transfer took the CI arm" — observed for three transfer shapes; universal by derivation. No comment sentence is contradicted by the rows.
+
+**Q2.** None of the nine visible acceptances is wrong on packet-internal grounds; each is arithmetic or row-set verifiable here. The record shows argument, not capitulation — the brief preserves its own pass-1 correction ("four into four" → seven-and-four) and preserves codex's dissent. The TLB adoption is right **if** grok's code fact holds — a code fact outranks an enumeration, and codex's 72 combinations then cannot manifest in the compared quantity; the disclosed residual escape (a TLB_A-conditioned repair passes 13/13) is the correct fallback and should stay attached to the detector. The deepseek overrule is unauditable from the packet. The disposition I would reopen is from **this** pass, not pass 1: the gate description (Finding 1).
+
+**Q3.** Ship the gated rows; dropping them re-opens M5 and M8 as total escapes (verified, §A) and strips M2/M3. A coupled pre-fix red is a legitimate kill — mutation kills have never required independence. Amendments: state the gate's referent (the per-row reading is impossible); name the fill in the copy rows' n/a message; mark M3's copy kills as undefined-byte kills in the record. Precedent: not checkable from this packet; in principle a preconditioned assertion with a named-reason fail is ordinary conditional-oracle practice and should ship.
+
+**Q4.** Two cells to disclose: **encoding-3 detector-blindness** (D) and the **COPY-bit cell** (C). Minor: third-byte blindness and the 16-bit-copy gap (F).

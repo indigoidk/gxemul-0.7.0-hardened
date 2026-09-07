@@ -206,8 +206,13 @@ row("kill fired", "yes" if hit else "no", "yes",
     "CONTROL: the IOC_CONF guard announced -- not HAE, not unmapped, not a skipped handler")
 row("kill width", shown, "0x%x" % KILLER,
     "the message must name the value that ACTUALLY killed")
-row("kill notzero", shown, "0x0", negate=True,
-    note="0x0 is a value this guard ACCEPTS -- naming it is the defect")
+#  *** AN INEQUALITY PASSES ON EVERY NON-OBSERVATION.  Repaired 2026-09-07 -- see the same note
+#  in alpha_harness_probe.py.  With the diagnostic REMOVED but the terminating call kept, `shown'
+#  is "absent", which is != "0x0" and scored GREEN.  `kill fired' reds on that, so the detector
+#  did not escape; this row's note claimed a control it did not have. ***
+notzero = hit and ioc != 0
+row("kill notzero", "yes" if notzero else shown, "yes",
+    "the diagnostic must NAME a nonzero value -- 0x0 is a value this guard ACCEPTS, and 'absent' is no diagnostic at all")
 row("died", "died" if not alive2 else "alive", "died",
     "CONTROL: exit(1) really ran -- distinguishes a kill from a silent decline")
 

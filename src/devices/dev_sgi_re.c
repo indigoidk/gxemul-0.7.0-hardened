@@ -1368,7 +1368,22 @@ void do_mte_transfer(struct cpu* cpu, struct sgi_re_data *d)
 			// Hack. The MTE perhaps doesn't deal with colors per se,
 			// but this makes sure that we copy 32 bits when doing 32-bit
 			// transfers.
-			if (depth == 4) {
+			/*  #509: was `depth == 4' -- UNREACHABLE.  `depth' is
+			    a count of BITS (8 << a two-bit field, so 8/16/32/64
+			    only); 4 is the corresponding BYTE count, which the
+			    author used correctly in the `/ (depth / 8)' lines
+			    just above.  So both assignments were dead, every
+			    tiled transfer took the CI arm, and at 32 bits CI
+			    assigns buf[0] alone while memory_rw copies four --
+			    publishing three bytes of host stack into guest
+			    memory.  The comment above states the intended
+			    condition in words: 32-bit transfers.
+
+			    This repairs the 32-bit cell ONLY.  The 16-bit and
+			    reserved-encoding-3 cells assign fewer bytes than
+			    they copy for the same reason and are NOT closed
+			    here -- see the uninitialised-buffer sibling.  */
+			if (depth == 32) {	/*  #509  */
 				src_mode |= DE_MODE_TYPE_RGBA;
 				dst_mode |= DE_MODE_TYPE_RGBA;
 			}

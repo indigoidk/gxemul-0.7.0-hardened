@@ -1,0 +1,185 @@
+PRE-TABLE CHECK -- #509 sgimtedepth4dead -- written 2026-09-07 BEFORE table 1 runs.
+Its mtime is the order discriminator; a block written after a table is a rationalisation.
+
+Detector: regress/sgi_mte_fill_probe.py, 13 rows.
+Fix:      dev_sgi_re.c do_mte_transfer(), `if (depth == 4)' -> `if (depth == 32)'.
+Measured: 9/12 pre-fix and 12/12 post-fix at 12 rows; 13/13 post-fix after `copy 4th'.
+          (The 12-row PRE-fix number is re-measured in the clone as M1 below, because the
+          build/ binary is now FIXED and a score with no surviving artifact is the frozen-
+          number class.  The 6-row pre-fix run is preserved as witness_prefix_HEAD.raw, 5/6.)
+
+
+1. SIBLING PARITY
+------------------------------------------------------------------------------------------
+The edited comparison sits in a block served by THREE case labels -- MTE_TLB_A, _B, _C --
+which share one body.  At a block serving several labels the siblings are the LABELS.
+
+    label      rowed?   disposition
+    MTE_TLB_A  YES      every row uses it
+    MTE_TLB_B  NO       DISCLOSED, not owed.  See the reason below.
+    MTE_TLB_C  NO       DISCLOSED, not owed.
+
+REASON, and it is the grok seat's, adopted over the codex seat's contrary reading: the
+repaired comparison does not read `dst_tlb'.  The three labels differ only in which TLB
+array the helper indexes, which is PACKING, not the comparison under test.  A per-label row
+would pin the helper's array selection -- a different property, already the subject of other
+rows in this tree.  Codex called B/C "uncovered", which is true and is not the same as owed.
+DISCLOSED as coverage debt: a mutant conditioning the repair on `dst_tlb == MTE_TLB_A'
+escapes this detector.
+
+The OTHER dominating guards in the function -- MTE_MODE_STIPPLE and `src > MTE_TLB_C' --
+both terminate the process, so they admit no reachable cell and are correctly unrowed.
+The `dst_y_step' guard's exit(1) is commented out, so it does not reject; it is not read in
+the tiled arm.  Neither is this round's business.
+
+
+2. CLAIM -> ROW  (every added comment sentence asserting an observable consequence)
+------------------------------------------------------------------------------------------
+The #509 comment makes four assertions.  Three are rowed; the fourth is a DISCLAIMER and is
+deliberately rowed in the negative direction.
+
+  "depth is a count of BITS ... 8/16/32/64 only"
+        -> depth8 top + depth16 top + fill top.  Three of the four values are driven.
+           Field value 3 (depth 64) is NOT driven -- see section 5.
+  "both assignments were dead, every tiled transfer took the CI arm"
+        -> fill top (0x44 pre-fix, 0x11 post-fix) and copy 2nd (host stack pre-fix).
+  "at 32 bits CI assigns buf[0] alone while memory_rw copies four"
+        -> fill bot.  Pre-fix it CANNOT be asserted (the tail is host stack), which is why
+           the row is gated and reports n/a rather than scoring a nondeterministic byte.
+  "This repairs the 32-bit cell ONLY ... 16-bit and encoding-3 are NOT closed here"
+        -> depth16 top pins that 16 still takes CI.  That is the row that keeps the claim
+           HONEST: if a later edit silently changed the 16-bit cell, this row reds.
+           *** NO ROW ASSERTS THAT THE 16-BIT LEAK IS STILL PRESENT, and none should: the
+           leak is unobservable through a defined channel.  The CHANGELOG must therefore not
+           claim the leak is closed, and the grok seat's warning is recorded verbatim in the
+           round block. ***
+
+
+3. GUARD FIELD vs BODY FIELD
+------------------------------------------------------------------------------------------
+  guard reads:  depth   (derived solely from mode bits 8-9)
+  body writes:  src_mode, dst_mode
+  body then reads:  dst_mode  ALWAYS
+                    src_mode  ONLY under `mode & MTE_MODE_COPY'
+
+That asymmetry is the whole reason the copy rows exist.  The two written lvalues can
+DISAGREE -- one repaired, the other not -- and a fill can never see the disagreement.
+
+    disagreeing state          row that sees it
+    dst repaired, src not      copy top (0x4d), copy 4th
+    src repaired, dst not      fill top (0x44), copy top (0x00)
+    both repaired but to RGB   fill bot (0x00), copy 4th (0x00)
+
+`mode & MTE_MODE_COPY' is a body-tested partition, so the floor cells are
+{fill, copy} x {src_mode, dst_mode}.  All four are rowed.
+
+
+4. CHANNEL -- per row: the mutant it kills, and the observable that differs under it
+------------------------------------------------------------------------------------------
+  live         no mutant; identity.  Kills a broken harness.  Channel: RAM round-trip.
+  devsig       no mutant; identity.  Kills reading RAM instead of CRIME.  Channel: a value
+               RAM cannot produce (0x1e000000).
+  paint ok     no mutant; identity.  Kills a paint that lands somewhere other than the
+               oracle address.  Channel: dest[0] before any transfer.
+  fill alive   M4, M6, M7 indirectly.  Channel: process survival.
+  fill ran     any mutant that makes the transfer silent.  Channel: dest[0] is a byte the
+               fill can produce at all.
+  fill top     M1 (verbatim reinstatement), M2, M4.  Channel: dest[0], 0x44 vs 0x11.
+  fill bot     M5 (dst RGB-for-RGBA).  Channel: dest[3], 0x44 vs 0x00.
+               *** THIS ROW IS THE ONE THE PANEL ADDED.  Without it M5 scores 12/12. ***
+  depth8 top   M7 (`!= 8' / always-true).  Channel: dest[0] at 8bpp, 0x44 vs 0x11.
+  depth16 top  M6 (`>= 16').  Channel: dest[0] at 16bpp, 0x44 vs 0x11.
+               *** ALSO PANEL-ADDED.  depth8 cannot see M6: the branch is cold at 8. ***
+  copy alive   M-any that makes the copy path terminate.  Channel: process survival.
+  copy top     M2 (dst not repaired -> 0x4d), M3 (src not repaired -> 0x00).
+               Channel: dest[0].  Green on HEAD AND post-fix by construction -- it pins
+               COUPLING, not the fix, and must not be reported as a witness row.
+  copy 2nd     M3, and any mutant leaving the copy path on CI.  Channel: dest[1].
+  copy 4th     M8 (src RGB-for-RGBA), M5, M3.  Channel: dest[3], 0x4d vs 0x00 vs 0x1a.
+               *** ADDED IN THIS BLOCK, before table 1, because the enumeration showed M8
+               escaping all twelve earlier rows.  That is what this check is for. ***
+
+NO ROW HAS A CHANNEL THAT CANNOT VARY UNDER ITS NAMED MUTANT.  The two survival rows are
+the closest call: they are identity rows, not mutant discriminators, and are labelled so.
+
+
+5. DISCLOSED -- cells this detector does NOT cover, stated before the table rather than after
+------------------------------------------------------------------------------------------
+  * MTE_TLB_B and MTE_TLB_C (section 1).  A repair conditioned on the label escapes.
+  * Field value 3 / depth 64.  The header defines no MTE_DEPTH_64; driving it would assert
+    behaviour nobody has a warrant for.  Two seats corrected my arithmetic here and the
+    corrected figure is in the round block: CI leaves SEVEN bytes uninitialised there and
+    an RGBA substitution would leave FOUR -- so F2 (`depth >= 32') is a reduction, not a
+    fix, and is rejected for want of a semantic warrant rather than because it is neutral.
+  * The LINEAR arm (MTE_TLB_LIN_A/B).  It terminates the process on COPY and on any depth
+    other than 8, so a depth-32 linear row is host death, not a red row.
+  * The `dst_tlb' default arm (values 3, 6, 7): diagnoses and continues.  Not this round.
+  * The uninitialised-buffer class at 16 bits and at encoding 3 -- [[sgirebufuninit]].
+    *** F1 fills buf[0..3] at depth 32, so it ACCIDENTALLY MASKS that sibling's 32-bit
+    tiled cell.  A later round that rows only depth 32 on this path will look fixed and
+    will not be.  Keep that sibling alive on depth 16. ***  (grok, pass 1.)
+  * [[sgirebufshiftub]] -- every GET arm computes buf[0] << 24 on a uint8_t, which promotes
+    to signed int and is UB for a first byte >= 0x80.  Re-derived independently by codex.
+    This detector must not stand on it: SRC_WORD's first byte is 0x1a, deliberately.
+
+
+6. MUTANTS TO BE BUILT, WITH PREDICTIONS MADE BEFORE THE RUN
+------------------------------------------------------------------------------------------
+Predictions are recorded here so the table can refute them.  A prediction copied into a
+measured column afterwards is the frozen-number class in a new coat.
+
+    M1  depth == 32 -> depth == 4          clause (b), verbatim.  predict 10/13
+    M2  delete dst_mode |= RGBA            clause (d).            predict  9/13
+    M3  delete src_mode |= RGBA            clause (d), the fill-blind one.  predict 11/13
+    M4  depth == 32 && (mode & COPY)       clause (d).            predict 10/13
+    M5  dst_mode |= RGB (not RGBA)         value substitution.    predict 11/13
+    M6  depth >= 16                        over-reach.            predict 12/13
+    M7  depth != 8                         over-reach.            predict 12/13
+    M8  src_mode |= RGB (not RGBA)         value substitution.    predict 12/13
+
+M1 doubles as the re-measurement of the pre-fix score, which is why it is built first.
+
+
+==========================================================================================
+TABLE 2 -- written 2026-09-07 AFTER pass 2 and BEFORE table 2 runs.  Same order discipline.
+==========================================================================================
+
+WHY A SECOND TABLE: pass 2 found a MEASURED TOTAL ESCAPE (`depth >= 32' scored 13/13 on the
+shipped 13-row detector -- M9_ge32.raw).  Three seats reached it independently: glm derived it,
+the kimi substitute derived it, and grok derived it AND classified it as clause (d) -- the
+guard's own operand with its bound relaxed, `==' -> `>=' on the same constant.  That is an L2
+floor breach, repaired in-round by a 14th row.
+
+`depth64 top' drives field value 3 and wants the CI byte 0x44.  It asserts what this round does
+NOT change; it takes no position on what 64bpp ought to do, which nothing in the header and no
+local manual would warrant.  Note M6 (`>= 16') is a LARGER edit and was already killed; the
+SMALLER one escaped -- the accept-row-at-the-near-bound shape, with the far neighbour unpinned.
+
+PREDICTIONS AT 14 ROWS.  Recorded so table 2 can refute them; table 1's predictions were each
+one high on M1-M4 and that is written into the record rather than smoothed away.
+
+    BASE            14/14
+    M1_reinstate    10/14   fill top, fill bot, copy 2nd, copy 4th   (depth64 cold -> green)
+    M2_nodst         9/14   + copy top
+    M3_nosrc        11/14   copy top, copy 2nd, copy 4th             (depth64 cold -> green)
+    M4_copyonly     10/14   as M1                                    (fill at 64 has no COPY)
+    M5_dstrgb       12/14   fill bot, copy 4th                       (depth64 cold -> green)
+    M6_ge16         12/14   depth16 top AND depth64 top              <- gains a second red
+    M7_ne8          12/14   depth16 top AND depth64 top              <- gains a second red
+    M8_srcrgb       13/14   copy 4th
+    M9_ge32         13/14   depth64 top ALONE                        <- the L2 repair's own kill
+
+ALSO DISCLOSED BY PASS 2, and NOT rowed (clause (e) coverage debt, with its reason):
+
+  * `if (depth == 32 && !(mode & MTE_MODE_COPY))' -- the dual of M4.  Every fill row stays green,
+    `copy top' stays green because dest[0] of a same-type copy is invariant, and the gate OPENS,
+    so the two tail rows would score bytes a CI-CI PUT never wrote.  There is no copy-local
+    four-byte signal that is not those bytes themselves.  UNPINNED, and it cannot be pinned by
+    this instrument.
+  * M4's own copy-row reds are a WRONG-REASON KILL: under it the copy path really is RGBA and
+    dest[3] would be 0x4d, but the fill is CI so the gate closes and both rows red anyway.  The
+    mutant is still killed by `fill top'; the CHANNEL those two rows report under it is vacuous.
+  * M4 is therefore clause (e), NOT (d).  DEPENDS-ON enumerates predicates DOMINATING the edited
+    line plus lvalues the GUARDED BODY reads; the body is exactly the two `|=' statements and
+    does not read MTE_MODE_COPY, which is tested later in the loop.  Filing M4 as (d) would
+    import its dual into the floor, and that dual is the unpinnable cell above.

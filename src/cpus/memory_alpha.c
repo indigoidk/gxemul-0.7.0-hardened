@@ -167,7 +167,12 @@ if (vaddr == 0xfffffffd80000000ULL) fatal("AYONA3\n");
 
 	/*  #508: was just `PFN << pageSizeShift' -- a PAGE BASE.  memory_rw then takes
 	    `offset = paddr & offset_mask', which was therefore always zero, so every
-	    walked access resolved to the page's first bytes.  Measured: a cold guest ldq
+	    walked access FILLED THE TRANSLATION FROM the page's first bytes.  ("every
+	    walked access resolved to" until 2026-09-07: a pass-2 seat noted that the
+	    Alpha FAST PATH recomputes `addr & 8191' itself, so a later cache HIT reads
+	    the right bytes.  The corruption is the SLOW-PATH FILL, which is also why a
+	    watchpoint -- which keeps a page off the fast store table -- makes it
+	    reproducible.)  Measured: a cold guest ldq
 	    of vaddr+8 returned the vaddr+0 value.  A debugger watchpoint on a walked page
 	    landed at the base for the same reason.
 	

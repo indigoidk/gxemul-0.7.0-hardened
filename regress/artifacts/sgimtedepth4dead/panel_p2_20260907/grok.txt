@@ -1,0 +1,118 @@
+I'll audit the packet against the tree rather than ratify it: the product hunk, the 13-row detector, and the eight mutants, starting with the source and probe.The brief forbids `regress/artifacts/`; I'll stay in source and the probe. Next I'll read the transfer, GET/PUT arms, and the 13-row detector.The copy-row gate looks coupled to the fill session; I’ll confirm endianness, the product diff, and whether `>= 32` really escapes.**VERDICT: NOT RATIFY.** The product token `depth == 32` is the right one-character repair. The 13-row instrument is not: three copy/fill rows are described as one gated form and they are not, M4 is filed as clause (d) and it is not, and section 5 is missing two cells the eight-mutant table itself makes visible. Do not drop the three gated rows. Do not ship the packet’s description of them.
+
+Tree checked: `GXEMUL-SEC/src/devices/dev_sgi_re.c`, `GXEMUL-SEC/src/include/thirdparty/crmfbreg.h`, `GXEMUL-SEC/src/cpus/memory_rw.c`, `GXEMUL-SEC/src/machines/machine_sgi.c`, `GXEMUL-SEC/regress/sgi_mte_fill_probe.py`. Line numbers match the fork, not the 2021 copies. `est/src/devices/dev_sgi_re.c` carries the same `#509` token. No gates run.
+
+---
+
+## 1. Premise audit
+
+**The diff is what you say it is.** One behaviour token in `do_mte_transfer` (`depth == 4` → `depth == 32`) plus the comment. Confirmed against the working tree.
+
+**Settled arithmetic, enumerated, not reasoned:**
+
+`MTE_MODE_DEPTH_MASK = 0x300`, shift 8, `depth = 8 << field`, `bufdepth = 1 << ((constructed_mode >> 8) & 3)`:
+
+| field | depth | bufdepth | `== 4` | `== 32` | CI PUT assigns | `memory_rw` copies | uninit |
+|---|---|---|---|---|---|---|---|
+| 0 | 8 | 1 | no | no | 1 | 1 | 0 |
+| 1 | 16 | 2 | no | no | 1 | 2 | 1 |
+| 2 | 32 | 4 | no | **yes** | 1 | 4 | **3** |
+| 3 | 64 | 8 | no | no | 1 | 8 | **7** |
+
+`depth == 4` is unreachable. `depth == 32` iff `bufdepth == 4` on this constructed mode. No `MTE_DEPTH_64` in the header. `DE_MODE_TYPE_CI == 0`, constructed `src_mode`/`dst_mode` carry no type bits, so the dead branch really was CI every time. RGBA PUT assigns four bytes; RGB PUT assigns three plus a zero pad. IP32 is `EMUL_BIG_ENDIAN`. `CRIME_DE_STATUS` ORs to `0x1e000000`. Copy source `0x1a2b3c4d` stays under the `buf[0] << 24` UB. All of that holds.
+
+**Comment vs rows.** Several added sentences assert observables the rows do not establish:
+
+- *“publishing three bytes of host stack into guest memory.”* No row reads those three bytes. `fill bot` scores `dest[3]` only after `dest[0]` already proves a 4-byte PUT ran, at which point `dest[3]` is **not** stack. That sentence is source-true (`uint8_t buf[8]` with no initialiser; CI PUT writes `buf[0]` only; `memory_rw` is called with `bufdepth`). It is not row-true. The no-row paragraph covers 16-bit and encoding 3, not the 32-bit stack publish the comment leads with.
+- *“both assignments were dead.”* `fill top` on M1 observes **dst** was CI. It does not observe **src**. `copy top` is green on both CI-CI and RGBA-RGBA, so it cannot carry that half.
+- *“every tiled transfer took the CI arm.”* Source-true for the A/B/C block. The detector only ever programs TLB_A. “Every” is not a row-established claim.
+- *“8/16/32/64 only.”* 64 is named and unrowed. Fine as arithmetic; it is not a pin.
+
+The second paragraph (“repairs the 32-bit cell ONLY … 16-bit and reserved-encoding-3 are NOT closed”) is a real no-row sentence. Keep it.
+
+---
+
+## 2. Which accepted disposition is wrong
+
+A round that accepted nine of eleven has stopped arguing in two places. The panel was not empty.
+
+**Wrong: “three gated rows, each computing `rgba_ran = (dest[0] == 0x11)`.”**
+
+`rgba_ran` is assigned **once**, from the **fill** session’s `dest[0]`, then reused by `copy 2nd` and `copy 4th`. Copy `dest[0]` is `0x1a` on the fix, never `0x11`. If those two rows used their own sample the way the brief describes, they would n/a-fail on BASE and you would not have 13/13. BASE 13/13 is the measurement that the brief’s gate description is false.
+
+That is not the same form as `fill bot`. `fill bot` gates on the same `lw` it then scores. The copy rows gate on a **different session**.
+
+**Wrong: M4 listed as clause (d).**
+
+DEPENDS-ON enumerates dominating predicates of the edited `if`, and body-read lvalues of the guarded assignments. The guarded body is `src_mode |= RGBA; dst_mode |= RGBA`. It does not read `mode & MTE_MODE_COPY`. COPY is tested later, in the loop, and does not dominate the edited line. M4 is clause (e) extra coverage. Filing it as (d) imports the dual (`&& !(mode & COPY)`) into the floor, and that dual is an escape this instrument cannot legitimately kill (see Q4).
+
+**Wrong: “M1–M4 each came in one lower from a single cause: `copy 4th` gated.”**
+
+I walked all eight. Scores match the table. The 1-off is always `copy 4th`, but it is not always the gate:
+
+| mutant | `copy 4th` got | gate | why it reds |
+|---|---|---|---|
+| M1 | n/a | closed | fill was CI |
+| M2 | n/a | closed | fill was CI |
+| **M3** | **`0x1a`** | **open** | CI GET + RGBA PUT; dest[3] is the zero-extended colour. This is the row’s documented job |
+| M4 | n/a | closed | fill was CI; **copy dest[3] would be `0x4d` and would PASS** |
+
+M3’s extra red is a real channel you wrote into the probe comment and then left out of the prediction. M4’s extra red is a false kill: the named observable does not move. Two omissions of one row, two causes.
+
+**Not wrong:** grok over codex on B/C (the type OR does not read `dst_tlb`; disclose the `dst_tlb == MTE_TLB_A` conjunct). Not wrong: holding 16-bit and encoding-3 uninit out of this round. Not wrong: RGBA over RGB — M5 and M8 are the measurement, and RGB’s pad is a zero, which is not “copy 32 bits.”
+
+---
+
+## 3. Gated rows: ship `fill bot`; keep `copy 4th`; do not treat them as one form
+
+**`fill bot` should ship.** Same-session, deterministic n/a, and it is the only row that kills M5 (`dst_mode |= RGB`) without reading host stack. RGB and RGBA both put `bg>>24` at `dest[0]`; they differ at `dest[3]` (`0x00` vs `0x44`). Dropping it reopens a total escape two seats already named. Fail-when-closed is a derived red (it fails because `fill top` failed), and that is acceptable **here** because the n/a names the reason and the row’s job is the RGB cell, not the pre-fix leak.
+
+There is no `n/a:` row anywhere else under `GXEMUL-SEC/regress/*.py`. The other “gated” probes mean a witness/detector **file split**, not a row that refuses to score. This is a new form, not a forbidden one. Ship it with the coupling written on the row.
+
+**Do not drop `copy 4th`.** It is the only row that kills M8 (`src_mode |= RGB`). Dest[0] and dest[1] are identical under RGB GET + RGBA PUT (`0x1a`, `0x2b`); only dest[3] moves (`0x00` vs `0x4d`).
+
+**`copy 2nd` does not prove “the COPY path took RGBA.”** RGB GET also yields dest[1] `== 0x2b`. On the eight mutants it never uniquely kills anything: M3 is already killed by `copy top` and `copy 4th`. Keep it as belt-and-suspenders or drop it; the comment overclaims either way.
+
+**Do not gate the copy rows on fill’s `dest[0]` without saying so.** Under M4 the copy path **is** RGBA (`copy top` is `0x1a`, dest[1] would be `0x2b`, dest[3] would be `0x4d`) and both copy rows still n/a-fail. Their CHANNEL under M4 is vacuous: they red while their own bytes do not move. M4 is still killed by `fill top`, so this is not an escape of the eight. It is a wrong-reason kill, which is what you asked the panel to challenge.
+
+The honest description: `rgba_ran` means “the fill PUT put `bg>>24` at dest[0]” (RGB **or** RGBA, not RGBA specifically), and the copy rows inherit that as a proxy for “the unconditioned `depth == 32` branch ran.” That proxy is valid only while fill and copy cannot disagree.
+
+---
+
+## 4. Contract is not complete
+
+Section 5 names the uninit sibling, the 32-bit mask trap, B/C, LINEAR, the `dst_tlb` default, and `sgirebufshiftub`. Two cells it should disclose and does not:
+
+**A. Comparison over-reach onto field 3.**  
+`depth >= 32`, `depth > 16`, `== 32 || == 64` are observationally identical to the fix at every rowed cell: 8 stays CI (`depth8 top` green), 16 stays CI (`depth16 top` green), 32 stays RGBA (`fill top` green). Nothing reds. You rowed the documented neighbour **below** 32 and not the reserved neighbour **above**. That is the accept-row-at-the-near-bound shape: “if this comparison also fired at 64, which row reds?” Answer: none.
+
+This is distinct from “encoding 3 still leaks.” The disclosure describes the **shipped** fix staying CI at field 3 (7 uninit bytes). `>= 32` would **select RGBA** there (4 uninit) and this detector would still report 13/13. Either add a `depth64 top` row that wants the CI byte `0x44` (over-reach control only; it does not close the uninit sibling and does not mask it) or write the far cell into the contract as deliberately unpinned.
+
+Under DEPENDS-ON this **is** clause (d): the guard’s own operand, bound relaxed (`==` → `>=` on the same constant). M6 (`>= 16`) is a **larger** edit and is killed by `depth16 top`. The smaller one escapes. I did not add it to your table; I checked that none of the eight is this mutant.
+
+**B. Fill-only RGBA: `if (depth == 32 && !(mode & COPY))`.**  
+The dual of M4. Fill rows all green. `copy top` green (CI-CI dest[0] is `0x1a` either way). The gate **opens** (fill dest[0] is `0x11`) and `copy 2nd` / `copy 4th` then score **host stack** — the UB the gate exists to avoid. There is no legitimate copy-local 4-byte signal that is not dest[1..3] themselves, and dest[0] of a same-type copy is invariant (CI-CI and RGBA-RGBA both keep byte 0). So this cell is either an escape or an illegitimate stack-kill.
+
+If M4 stays filed as (d), this dual is in-rule and the floor is breached. Reclassify M4 as (e) **and** disclose the dual. Do not do one without the other.
+
+Also missing, cheaper: `copy 2nd`/`copy 4th` are coupled to fill, so a repair that selects RGBA on fill xor copy is outside what those rows can honestly pin.
+
+---
+
+## The eight mutants, checked
+
+Byte-walked against `horrible_getputpixel`, not against the inlined scores. The measured column is internally consistent. Every mutant is killed. No escape **among these eight**.
+
+M5 11/13 = `fill bot` + `copy 4th`. M8 12/13 = `copy 4th` alone. M6/M7 12/13 = `depth16 top` alone. Those four predictions were exact because they do not depend on the fill→copy gate.
+
+M2 `copy top == 0x4d` is right (RGBA GET reconstructs `0x1a2b3c4d`, CI PUT emits the low byte). M3 `copy top == 0x00` is right (CI GET zero-extends `0x1a`, RGBA PUT emits `00 00 00 1a`).
+
+---
+
+## Something else
+
+The probe header still says *“THIS IS A WITNESS, NOT A DETECTOR … it must not be gated.”* The file is a 13-row detector with three gated rows, expected to pass on the fix. That is a wrong record in the artefact that will be cited as the witness. Line 8 still documents `if (depth == 4)` as if it were current.
+
+`n/a: dest[0] not RGBA` is also slightly false as a label: `dest[0] == 0x11` is RGB or RGBA. The gate **should** open for RGB; that is how `fill bot` works. Rename the flag.
+
+I did not run the probe. The M4 “would PASS” and fill-only “would score stack” claims are byte walks. If you want those measured, name the two mutants; they are the ones the inlined table does not contain.

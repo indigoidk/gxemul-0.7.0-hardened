@@ -15502,7 +15502,9 @@ alongside `sgirebufuninit`, `sgigbeconvover` and `#95`'s incomplete class closur
 
 **`alphapfnoffset` (HIGH, provisional) — the page-table walk drops the within-page offset.**
 `(*return_paddr) = ALPHA_PTE_TO_PFN(pte3) << pageSizeShift` returns a page base, and `memory_rw` then computes
-`offset = paddr & offset_mask`, which is zero — so every walked access lands at its page's first bytes.
+`offset = paddr & offset_mask`, which is zero — so every walked access FILLS FROM its page's first
+bytes. (*Not* "lands at": the fast path recomputes the offset, so a cache HIT is correct and the
+corruption is the slow-path fill. Corrected 2026-09-07 from the retrospective pass 2.)
 **Codex's hedge is correct and I verified it:** both direct-mapped paths mask the vaddr and *keep* the offset,
 so only the real walk is affected.  **HIGH is provisional on reachability** — `memory_alpha.c` carries seven
 TODOs and an explicit "not yet implemented" exit, so a bootable config may never reach the walk, in which case
@@ -15525,7 +15527,9 @@ UBSan sweep already flags it, and if not, why not.
 
 **MY OWN OVERCLAIM, CORRECTED.**  The entry above says of the Alpha page-table walk:
 
-> `offset = paddr & offset_mask`, which is zero — so **every walked access lands at its page's first bytes.**
+> `offset = paddr & offset_mask`, which is zero — so **every walked access FILLS FROM its page's
+> first bytes** (not "lands at" — the fast path recomputes the offset; the corruption is the
+> slow-path fill).
 
 **"Every" is too broad.**  A codex reachability pass (`regress/artifacts/alphapfnoffset/codex_reachability_20260907.txt`)
 enumerated **all 8,192 offsets** — confirming the walk yields offset zero throughout and differs from the
@@ -16006,3 +16010,612 @@ sets `cpu->running = 0` and stops the machine.
 is the same shape as `#507` (a PAL entry that does not do what its name says), and an unimplemented
 PAL call is member 7 (IMPLEMENT) territory rather than a decline -- declining a context-flag
 operation leaves the machine in a state the guest cannot reason about.
+
+
+### `negrowclass` (med) -- filed 2026-09-07: an inequality row scores every NON-OBSERVATION green
+
+*** THE FIVE UNGATED INSTANCES ARE ALREADY REPAIRED AND MEASURED (see the CHANGELOG round block).
+THIS ROW CARRIES THE **GATED** ONES, WHICH OWE A GATE RUN AND SO ARE NOT A RIDER. ***
+
+A row written `row(name, got, FORBIDDEN, negate=True)` asserts only `got != FORBIDDEN`. Every state
+in which **nothing was measured at all** satisfies that: `"absent"` (the print regex missed),
+`"died"` (the guest never started), and `0x0` (the memory was never backed). So the row goes green
+on failures strictly worse than the one its own note claims to guard against.
+
+**MEASURED IN BOTH DIRECTIONS, 2026-09-07**, by running each probe against `/bin/true` -- which
+execs and exits instantly, so every readback is a non-observation:
+
+    pre-repair   swpctx notflags / swpctx mapped / walk stored / walk mapped / kill notzero   ALL ok
+    repaired     the same five                                                                ALL FAIL
+    HEAD         alpha_harness 10/10   alpha_pfnoffset 7/7   lca_confwidth 6/6   (unchanged)
+
+**The detectors never escaped** -- an equality sibling (`swpctx ptbr`, `walk off`, `kill fired`)
+reds on a non-observation in every one of the five. What was wrong was each row's NOTE, which
+claimed a control the row did not have. That is **L4, a wrong record**, and it is why these were
+corrected in place rather than filed.
+
+**STILL OPEN -- the same class in GATED probes, each owing a targeted gate run:**
+
+    sgi_re_rgb_probe.py          `rgb not corrupt`     gate_arm.sh
+    sgi_re_randompixel_probe.py  `lin_b not src`       gate_arm.sh
+
+The repair is mechanical and identical: compute `obs = v.startswith("0x") and v != "0x0"`, then
+assert the positive `obs and v != FORBIDDEN`. **Row NAMES must not change** -- the gates match on
+`^<name> .* ok$`, so a renamed row silently stops being tested (the padded-column trap).
+
+*And a defect the repair itself introduced and the control caught: two notes were written with an
+escaped newline, so `row()` printed them across two lines and the `FAIL` marker landed on the
+second -- invisible to exactly that gate pattern. Flattened, re-measured. **A repair is not safer
+than the thing it repairs.***
+
+### `probeneedleterm` (med) -- filed 2026-09-07: unterminated needles accept longer numbers
+
+From the same codex audit. Distinct from `negrowclass`: these rows DO observe a value, and then
+accept a wrong one because the pattern has no right-hand boundary.
+
+* **`pcc2_default_probe.py` `srvd val text`, `srvd half text`** (gated, `gate_arm.sh`). The needles
+  end at `0x34` and `0x56` without terminating the value. Codex's counterexample: change the
+  diagnostic's `data[0]` argument to `data[0] << 8` in `dev_pcc2.c`; the reports become `0x3400`
+  and `0x5600` and **both rows still pass**. It states that by inspection this preserves all 46 row
+  predicates on an otherwise passing build. `wide rd srvd` has the zero mirror -- appending a
+  literal `abc` after the `%02x` gives `0x00abc`, which still satisfies its `0x00` needle.
+* **`sh4_val_probe.py` `V22 TCR timer_hz`** (gated, `gate_sh_rounding.sh`). It tests
+  `clocks[0].startswith("520833")`. Changing the P64 calculation from `pclock/64.0` to
+  `pclock/6.4` gives `5208333.281250` -- **ten times wrong**, retains the prefix, and does not
+  contain the forbidden P4 string. The row prints the observed clock; the defect is its comparison.
+* **`m88k_exc_probe.py` `Sess.cr()`, `gpr()`, `pc()`** (gated, `gate_m88k_rounding.sh`). They
+  capture `[0-9a-f]{8}` with no right boundary, so appending a literal `0` to the control-register
+  format turns `0x00010006` into `0x000100060` and the capture still reads the expected value.
+  Codex is explicit that this establishes acceptance of a **wrong diagnostic value**, not an
+  independently demonstrated CPU-state escape.
+
+**NOT MEASURED.** Codex says so plainly: *"These are source-derived counterexamples, not executed
+mutant results."* Each needs its mutant built before any claim is made about it.
+
+### `gdrommappedvacuous` (med) -- filed 2026-09-07: four `gdrom map` controls prove nothing
+
+`gdrom_data_probe.py`, `gdrom_decline_probe.py`, `gdrom_toclen_probe.py` and the nested
+`gdrompionull` PIO detector each call `printed()` and convert **any** `0x...` result to `"mapped"`.
+
+Codex's counterexample: remove the main GD-ROM window's device registration. The access then falls
+to `memory_rw.c`'s zero-filled successful read, `printed()` returns `0x0`, and the control still
+reports `"mapped"`. **These rows do not establish that the GD-ROM handler served the access** --
+which is precisely what the witness ladder's DEVICE-SIGNATURE control exists to establish, and what
+`sgi_mte_fill_probe.py`'s `devsig` row does correctly by reading a value RAM cannot produce.
+
+Other device-behaviour rows in those probes can reject the edit, so this is a misleading control
+rather than a whole-detector escape.
+
+### `sessionechosat` (med) -- filed 2026-09-07: the debugger's own ECHO satisfies the liveness check
+
+Volunteered by codex while tracing `sessionrefused` below -- the standing "if you found something
+else, say so" channel.
+
+`sh_intprio_probe.py` and `sh_iprbcd_probe.py` verify a live session by sending `print 0x1234` and
+accepting `"0x1234"` **anywhere** in the transcript, ignoring the final read's return value. The
+debugger **echoes command characters**, so the string is present because it was TYPED. Codex's
+counterexample: remove the numeric response entirely and the verification still passes on the echo.
+
+That is the check-that-cannot-fail family in its purest form -- a liveness control that answers the
+same whether or not the thing it tests is true. The repair is to anchor the match to the RESPONSE
+position rather than searching the whole buffer, which is the discriminator `panel.sh` and
+`seat_verdicts.py` already use for seat answers.
+
+### `sessionrefused` (med) -- filed 2026-09-07: host death is scored as a successful refusal
+
+`sh_intprio_probe.py` `irq14 imask`, and `sh_iprbcd_probe.py`'s `iprc_lo`, `raise_lo` and `lower`
+through `run_deliver()`/`run_deliver2()`, convert a `session()` FAILURE into the string
+`"refused"` -- which is the value those negative rows want. So a build that ends the host process
+whenever an interrupt is pending, BL is clear and IMASK masks its priority scores those rows GREEN.
+
+This is `negrowclass` one step further along: not merely green on a non-observation, but green on
+the specific catastrophic outcome the probe exists to rule out. **A failed session must never map
+onto a legitimate expected value.**
+
+### `printedvariants` (low) -- filed 2026-09-07: 20 copies of `printed()`, four different contracts
+
+Codex censused all 20 definitions: **7** first-match in the original hexadecimal spelling, **10**
+first-match integer-normalised at full width, **2** first-match normalised AND masked to 32 bits,
+**1** LAST match. All 20 return `"absent"` on a miss.
+
+**And a wrong record it found while counting:** both masked helpers (`sgi_re_rgb`,
+`sgi_re_randompixel`) describe their normalisation as matching `sgi_re_width`, **whose `printed()`
+does not mask**. `sgi_de_width` separately exposes a `printed32()` and keeps full-width reads
+elsewhere.
+
+Codex explicitly declined to recommend a class-wide gating checker, and gave its reason rather than
+a preference: its screen selected 79/79 files, so **13-of-25 is a selected sample, not a precision
+figure**, and recall across ~95 helpers is unmeasured. Several candidate signals have legitimate
+uses -- `got if alive else "died"` can fail correctly, first-match selection is sometimes
+deliberate, and a greedy `+` behaves differently from `{8}`. A shared helper would need explicit
+sample selection, missing-result handling and a width policy; globally replacing "first" with
+"last" would break legitimate callers.
+
+*Audit denominator, stated because a search without one is not checkable: 79 top-level probe files
+screened, 25 reviewed in depth, 20/20 `printed()` definitions read, plus one nested detector. The
+remaining 54 received screening only. No probe, gate or binary was executed and no file was
+changed.*
+
+
+### `armbfxwidth32` (med) -- filed 2026-09-07: UBFX/SBFX build their mask with `1 << 32`
+
+Found by a codex class hunt for bits-vs-bytes confusion; it is not that class, and the seat said
+so plainly rather than forcing the finding into the question it was asked.
+
+**VERIFIED HERE BY READING, not taken on report.** Both decoders compute the width the same way:
+
+    cpu_arm_instr.c:4486   ubfx:   int width = 1 + ((iword >> 16) & 31);
+    cpu_arm_instr.c:4493   sbfx:   int width = 1 + ((iword >> 16) & 31);
+
+so `width` reaches **32**. Both handlers then recover it with `ic->arg[2] >> 16` and build
+
+    cpu_arm_instr.c:1316   ubfx:   uint32_t mask = (1 << width) - 1;
+    cpu_arm_instr.c:1340   sbfx:   uint32_t mask = (1 << width) - 1;
+
+`1` is a plain `int`, so at width 32 this is a shift by the full width of the type -- **undefined
+behaviour**, and the value the mask takes decides the result the guest sees at
+`x &= mask`. On the common host lowering (shift count taken mod 32) the mask becomes **0** and
+the instruction returns zero instead of the whole register.
+
+**`UBFX rd, rn, #0, #32` is a legal encoding** -- the architectural constraint is
+`lsb + width <= 32`, which `lsb = 0, width = 32` satisfies -- so this is guest-reachable, not a
+decoder-only curiosity.
+
+**`sbfx` has a SECOND site at the same width:** `uint32_t topBitMask = 1 << (width-1);` at
+`:1344` evaluates `1 << 31` on a signed `int`, which overflows. The `width < 32` test that would
+have saved it is at `:1345`, **after** the shift.
+
+*The BFI decoder two blocks up (`:4474-4480`) is correct and is worth keeping as the contrast: it
+packs `msb`, not a width, and its handler never shifts by a value that can reach 32.*
+
+**Cheap to fix:** the repair is `width == 32 ? 0xffffffffU : ((1U << width) - 1)`, plus hoisting
+the `width < 32` test above `topBitMask`. **The `U` is NOT cosmetic -- see the pass-1 correction
+below.**
+
+> ### *** THE PASS-1 PANEL (2026-09-07) MADE THIS ENTRY WRONG IN THREE WAYS, EACH IN THE DIRECTION
+> ### OF UNDERSTATING IT.  Corrected here; every element re-verified by reading before the edit. ***
+>
+> **1. THE DEFECT IS TWO WIDTHS WIDE, NOT ONE.  `width == 31` IS ALSO UB** -- and it is reachable
+> through utterly ordinary encodings, unlike the exotic `#0, #32`.  Found independently by the
+> kimi substitute, minimax and deepseek:
+>
+>     width == 32   ->  1 << 32   shift COUNT >= type width          C99 6.5.7p3
+>     width == 31   ->  1 << 31   2^31 not representable in `int`    C99 6.5.7p4  <-- MISSED
+>
+> `UBFX rd, rn, #0, #31` needs only `widthm1 == 30`, so this is the common case rather than the
+> corner one.  **This also kills the "if the encoding is UNPREDICTABLE the disposition changes"
+> escape hatch**, because width 31 is legal beyond argument.
+>
+> #### *** BUT UB AND WRONG-ANSWER ARE DIFFERENT CLAIMS, AND ONLY ONE WIDTH IS OBSERVABLY BROKEN.
+> #### Derived by walking the values rather than by accepting the seats' framing. ***
+>
+> Three seats said the defect is "two widths wide".  That is right about the LANGUAGE and needs a
+> qualifier about the SYMPTOM.  With `r1 = 0x89abcdef`:
+>
+>     width  correct       likely today  observable?
+>     32     0x89abcdef    0x00000000    YES -- the whole register becomes zero
+>     31     0x09abcdef    0x09abcdef    no  -- same answer
+>      8     0x000000de    0x000000de    no
+>      1     0x00000001    0x00000001    no
+>
+> **At width 31 the expression is undefined TWICE and wraps back to the right answer:** `1 << 31`
+> yields `INT_MIN` on the common lowering, and `INT_MIN - 1` wraps to `INT_MAX` = `0x7fffffff` --
+> which is exactly the correct mask for a 31-bit field.  At width 32 the count-UB gives `1`, the
+> mask becomes `0`, and the instruction returns zero instead of the register.
+>
+> **THIS IS A PREDICTION ABOUT A LOWERING, NOT A MEASUREMENT**, and it is labelled so for the same
+> reason grok labelled its own: grok set out to measure the host lowering and reported plainly
+> that it did not finish.  *Nothing here rests on it -- the fix is required by the language
+> regardless, and a future compiler is free to exploit either UB.*  What it changes is the
+> ROUND'S SEVERITY SENTENCE, which must not say "broken at 31 and 32", and the WITNESS, whose
+> single red row is width 32.
+>
+> *** AND IT MAKES THE SMALL-NONZERO ROW LOAD-BEARING RATHER THAN PRUDENT. ***  The width-32
+> symptom is **exactly zero** -- indistinguishable from an instruction word that never executed.
+> `UBFX r0, r1, #4, #8` on that value gives **0xde**: a small nonzero answer that only a correctly
+> encoded, correctly executed instruction can produce.
+>
+> **The encodings derive from the decoder rather than from memory**, and self-check against its
+> own mask `(iword & 0x0fe00070) == 0x07e00050`:
+>
+>     UBFX r0,r1,#0,#32  -> 0xe7ff0051      UBFX r0,r1,#4,#8  -> 0xe7e70251
+>     UBFX r0,r1,#0,#31  -> 0xe7fe0051      UBFX r0,r1,#0,#1  -> 0xe7e00051
+>
+> Field positions read out of `X(to_be_translated)`: `rd = (iword>>12)&15`, **the source is `rm` =
+> `iword & 15`, NOT `rn`** -- `rn`'s bits 19:16 are occupied by `widthm1`, which is why the ubfx
+> block takes `rm`.  *Getting that backwards is precisely the hand-assembled-encoding trap.*
+>
+> **2. THE `(uint32_t)` CAST IN THE m88k TEMPLATE IS LOAD-BEARING, and this entry's source brief
+> said the opposite.**  It stated *"the guard is what avoids the undefined shift, not the cast"*.
+> Half wrong: the GUARD defends `w == 0` (which m88k spells as 32); **the CAST is the only thing
+> defending `w == 31`.**  Three seats corrected it.  So `1U` in the repair above is required, not
+> style.
+>
+> **3. *** THERE IS A FOURTH SITE, AND THIS ENTRY CITED IT AS THE CONTRAST CASE -- THE ONE THAT IS
+> CORRECT. ***  Raised by minimax, which asked the question the brief did not: *"BFI's 'correct'
+> claim is decoder-only -- the handler could plausibly hit the same class."*  Verified by opening
+> the file:
+>
+>     cpu_arm_instr.c:1370   X(bfi)   uint32_t mask = (1 << width) - 1;
+>                                     int width = msb - lsb + 1;   msb,lsb in {0..31}
+>
+> **`msb = 31, lsb = 0` gives width 32; `msb = 30, lsb = 0` gives 31.**  BFI has the identical
+> defect at both widths.  The DECODER is genuinely different (it packs `msb`, not a width) and
+> that is all the brief actually checked -- *a contrast drawn at the decoder and asserted about
+> the handler.*
+>
+> **AND TWO MORE OF THE SAME CLASS IN THE SAME FILE**, found by grepping `1 <<` rather than by
+> reasoning:
+>
+>     cpu_arm_instr.c:2685   is_userpage[index >> 5] & (1 << (index & 31))
+>     cpu_arm_instr.c:2823   is_userpage[index >> 5] & (1 << (index & 31))
+>
+> `index & 31` reaches 31, so both evaluate `1 << 31` on a signed `int`.  *The file's author knew
+> the idiom somewhere -- `:2216` writes `(uint32_t)1 << 27`.*
+>
+> #### *** AND BFI HAS A **THIRD** UB REGION THAT NO SEAT NAMED AND I DID NOT EXPECT: A NEGATIVE
+> #### SHIFT COUNT.  Found by WRITING THE ENUMERATION the brief's own opener demands, in order to
+> #### check the width-31 claim -- it returned a domain I had not considered. ***
+>
+> `msb` and `lsb` are INDEPENDENT five-bit fields, so `width = msb - lsb + 1` is not confined to
+> the positives at all.  Walked rather than reasoned:
+>
+>     ubfx/sbfx  width = 1 + ((iword>>16)&31)        domain   1 .. 32
+>     bfi        width = msb - lsb + 1               domain -30 .. 32
+>
+> **Every `msb < lsb` encoding gives a negative width, and `1 << negative` is undefined by the
+> same clause as the count-too-large case (C99 6.5.7p3).**  That is 496 of the 1024 (msb, lsb)
+> pairs -- **nearly half the encoding space**, against the two single values that are UB in
+> ubfx/sbfx.
+>
+> ARM specifies `msb >= lsb` for BFI and calls the rest UNPREDICTABLE, **and that is the point
+> rather than an excuse: an UNPREDICTABLE GUEST ENCODING MUST NOT PRODUCE UNDEFINED BEHAVIOUR IN
+> THE HOST.**  The emulator has to do something defined -- decline, take the Undefined Instruction
+> exception (this file already routes unknown encodings there, `#312`), or compute a defined
+> result.  It currently shifts by a negative amount.
+>
+> *This is the enumerate-do-not-reason instruction firing on its author.  I wrote the walk to
+> confirm a claim three seats had already made; it returned a region none of us had named.*
+>
+> **SO THE SITE COUNT IS SIX, NOT TWO**: `ubfx:1316`, `sbfx:1340`, `sbfx:1344` (`topBitMask`),
+> `bfi:1370`, and the two `is_userpage` tests.  Whether they belong in one round or two is a scope
+> question for the design pass; the bit-field three are one semantic class, the `is_userpage` pair
+> is another.
+
+**AND A LIMIT ON WHAT CAN BE CITED: THE ARCHITECTURAL LEGALITY OF `widthm1 == 31` IS NOT SETTLED
+BY ANY LOCAL SOURCE.**  Derived, not assumed: `grep -ci 'ubfx|sbfx' _scratchpad/ddi0100i.txt`
+returns **0** -- DDI 0100I is ARMv5 and these are ARMv6T2 instructions.  deepseek flagged exactly
+this as not-checkable-from-the-packet and it is right.  **Per the standing rule (cite only what
+you have READ in these files), no page number may be cited for this**, and a round resting on the
+`lsb + width <= 32` constraint must either obtain a v7 manual or state the premise as unverified.
+*The `width == 31` case above makes this much less load-bearing than it was, which is the main
+practical consequence of finding it.*
+
+**Witness vehicle: NOT the existing gate, but the capability is ESTABLISHED and the exemplar is
+in-tree.**  Measured: `grep -rn -i 'ubfx|sbfx' regress/` matches in exactly two files and **both
+are a codex log's own quotation of the source**, not a probe row.  `gate_arm.sh`'s 358 real-decode
+checks do not reach these handlers, so this round owes a NEW witness. *An absence like that is
+worth as much as the defect: it says how the defect survived.*
+
+> #### *** BUT "no ARM example exists" WOULD HAVE BEEN WRONG, AND I CHECKED BEFORE ASSUMING IT.
+> #### Every ARM probe in `regress/` plants and executes instruction words. ***
+>
+>     arm_flags_probe.py        put_w=68  pc==11  step=5     <- the exemplar
+>     arm_writeback_probe.py    put_w=21  pc==2
+>     arm_endian_probe.py       put_w=11  pc==1   step=1
+>     arm_memcpy / strlen / idle / fold_marker / footbridge_sites   put_w=3..5 each
+>
+> `arm_flags_probe.py`'s `run_flags(iw, rn, rm, cin)` takes **an arbitrary instruction word**: it
+> execs `-V -A -E testarm -M 64`, plants a preamble, then `iw`, then `MRS`/`STR` to capture the
+> result, sets `pc` and `step 5`, and reads the answer back from a known address.  **A ubfx/sbfx
+> witness is that function with a different `iw` and a register-value capture instead of a flags
+> capture.**  grok's "rung-3 is achievable" is therefore confirmed by construction, not by opinion.
+>
+> *** AND THE ONE HAZARD THAT COMES WITH IT, from this project's own scar: THE CONSTANTS ARE
+> HAND-ASSEMBLED HEX. ***  `SUBS_R6_R6_R7 = 0xe0566007`, `MRS_R3_CPSR`, `STR_R3_R4` -- every one a
+> literal.  The hand-assembled-encoding trap has bitten four times here, once in a COMMITTED gate
+> row that measured the wrong register for months, and its signature is always the same: **a wrong
+> register field yields 0, and a row that accepts 0 as a legitimate answer passes by accident.**
+>
+> **So the witness owes a row expecting a SMALL NONZERO value**, e.g. `UBFX` of a middle field
+> whose correct answer is neither 0 nor 0xffffffff.  Without it, the `width == 32` case -- whose
+> predicted broken answer is **exactly 0** -- would be indistinguishable from a mis-encoded
+> instruction word that never executed.  *That is the single most likely way this round produces a
+> confident wrong result, and it is designed out before the first line is written.*
+
+### `dec21143deadclamp` (low) -- filed 2026-09-07: three unreachable size guards and one always-true test
+
+Same hunt. Static, source-derived, **not measured** -- and the seat was explicit that this was
+static analysis with nothing executed.
+
+In `dev_dec21143.c`, `dec21143_tx()` computes
+
+    buf1_size = tdes1 & TDCTL_SIZE1;                       /* mask 0x000007ff */
+    buf2_size = (tdes1 & TDCTL_SIZE2) >> TDCTL_SIZE2_SHIFT; /* mask 0x003ff800, shift 11 */
+    bufsize   = buf1_size ? buf1_size : buf2_size;
+
+Both masks (from `tulipreg.h`) bound their fields to **0..2047**, so `bufsize` cannot leave that
+range. That makes three guards dead: `bufsize < 0` at **:752** and **:784**, and
+`bufsize > 65536` at **:754**. Their clamp assignments have no current effect.
+
+**The neighbouring comparison at :786 is NOT dead** -- `bufsize > 65536 - d->cur_tx_buf_len`
+involves the accumulated length -- and the seat drew that line itself rather than sweeping the
+whole neighbourhood into the finding.
+
+Separately, `dec21143_rx()` initialises `writeback_len = 4` at **:353** with no later assignment,
+so `writeback_len > 1` at **:468** is always true. The transfer length is
+`sizeof(uint32_t) * writeback_len`, which is unit-consistent -- **this is redundancy, not a
+format-selection error**, and is recorded as such rather than as a defect.
+
+*Disposition: documented-only unless someone shows a path that widens `bufsize`. A dead clamp is
+not a live defect; it is a place where a future widening of the field would silently lose its
+guard, which is why it is written down rather than deleted.*
+
+**The hunt's own denominator, because a search without one is not checkable:** 224 C/header files
+screened (122 `devices/`, 102 `cpus/`, including 50 generated), 60 shortlisted expression sites
+traced across 18 files. **No additional bits-vs-bytes sibling was confirmed** -- and two close
+candidates were positively CLEARED by derivation rather than left ambiguous:
+`dev_sgi_gbe.c:171` (`bitdepth / 8` gives {1,2,4,8}, both `== 1` and `== 2` reachable) and
+`dev_px.c:145` (`bitdepth >> 3` gives {1,3}, both branches reachable). So `#509`'s comparison
+appears to be an isolated slip, which is a more useful result than a padded list.
+
+
+### `armbfxwidth32` PASS-1 PANEL, 2026-09-07 -- SIX SEATS, CONVERGED, AND THE ROUND IS READY
+
+Panel `_scratchpad/panel_20260907_174941`. **Seven transports fired, six answered.** kimi CLI
+WALLED (403 weekly) and its seat COVERED by the `kimi-k3:cloud` substitute; agy deliberately not
+fired (measurement reserve); Opus 5 and Fable 5 deliberately not fired (held for 2026-09-09).
+
+**WHAT ALL SIX AGREE ON:**
+
+* `1 << width` is UB at **BOTH** 32 (C99 6.5.7p3, count >= type width) **and 31** (6.5.7p4,
+  `2^31` unrepresentable in `int`). **The 31 case is the common one** and it removes the
+  "maybe the encoding is UNPREDICTABLE" escape entirely.
+* **`1U` is MANDATORY, not style.** The brief said the m88k guard rather than its cast is what
+  avoids the UB; three seats corrected that -- the guard defends `w == 0`, the CAST defends
+  `w == 31`.
+* **SITE 3 (`topBitMask = 1 << (width-1)`) is a second live UB**, and the `width < 32` test that
+  would moot it sits on the NEXT line.
+* **F3 (reject at decode) and F4 (document only) are OUT** -- the encoding is defined.
+* **F1 with `1U`, or F2 (`(uint32_t)((1ULL << width) - 1)`), are both correct.** glm checked F2
+  explicitly: `1ULL << 32` is representable in `unsigned long long`, and `- 1` then truncates to
+  `0xffffffff` on the cast.
+
+**AND grok INDEPENDENTLY REACHED THE BFI FINDING FROM THE SOURCE**, having read the handlers, the
+decoder, `cpu_m88k_instr.c`, `generate_arm_r.c`, `cpu.h` and `regress/*.py`: *"BFI also builds
+`(1 << width) - 1` after `width = msb - lsb + 1`, so the 'BFI is correct' contrast may be
+wrong."* Two seats, two routes, same conclusion -- and it was the CONTRAST case in my brief.
+
+**TWO FACTS grok SETTLED BY READING THAT NOTHING ELSE COULD:**
+* **DDI 0100I contains no UBFX, SBFX or BFI** -- confirmed independently of my own grep. The
+  encoding-legality premise has no local primary source and no page may be cited for it.
+* **`regress/*.py` contains no `ubfx`/`sbfx` rows** -- confirmed independently. The round owes a
+  NEW witness.
+* **"Rung-3 is achievable"** -- so this is not a documented-only round.
+
+**STILL UNMEASURED, and flagged by grok as such:** what the guest actually observes today. grok
+set out to measure the host lowering and reported plainly that it did not complete it -- *"the
+guest-zero lowering is still unmeasured"*. **The `mask becomes 0` claim remains a guess about a
+lowering and must not be written as a measurement.**
+
+*Transport note worth keeping: glm's first shot was a THINKING BURN -- empty response beside
+113,201 chars of hidden reasoning with `done_reason=stop`, the signature that defeats every
+size-based check. `panel_ollama.py` detected it and re-fired with `think=False`, recovering a
+102 KB answer. The fifth seat-failure class is now handled by the transport rather than costing
+a seat, and this is the first time it has been seen firing in a live panel.*
+
+### `shiftubcensus` (low) -- filed 2026-09-07: a tree-wide census came back HONESTLY PARTIAL
+
+Codex was asked to census `src/cpus/` and `src/devices/` for shifts of a signed `1` reaching 31,
+32 or a negative count. **It declined the ranked-discovery half and said so in its verdict line:**
+*"Partial census only. Eight selected left-shift sites are positively cleared; the remaining
+shifts are not settled ... I can't supply a ranked discovery of guest-triggerable vulnerabilities
+and their triggering domains."*
+
+**That is the honest form and it is recorded as a result, not a seat failure.** What it did give
+is a real denominator, which is what makes the gap checkable:
+
+    src/cpus/     102 files   4,410 `<<`   2,081 `<<=`
+    src/devices/  122 files     562 `<<`      14 `<<=`
+    total         224 files   7,067 left shifts LEXICALLY, 8 examined SEMANTICALLY
+
+So the class is **surveyed at roughly 0.1%**. The eight cleared are the m88k `X(clr)`/`X(set)`
+pair and their `to_be_translated` siblings, each safe because the ternary evaluates the shift only
+for 1-31 and the `(uint32_t)` cast covers 31.
+
+> #### *** AND THE REFUSAL SHAPE IS A `§C5` FINDING: ASKING FOR A RANKING BY EXPLOITABILITY IS
+> #### CONSTRUCTION FRAMING, EVEN WHEN THE TASK IS A CENSUS. ***
+>
+> `BRIEF_TEMPLATE.md` §C5 records three codex triggers: vocabulary, unscoped archive reading, and
+> **asking the seat to BUILD SOMETHING THAT REACHES A DEFECT**. This brief satisfied the first two
+> -- neutral wording, reading scoped to `src/` -- and still lost half its answer.
+>
+> **The trigger was my ranking axis.** I asked it to rank by *"whether the count is
+> GUEST-CONTROLLED"* and to give *"the triggering domain"*. That is the reach-the-defect framing
+> wearing a census's clothes: it asks which inputs an attacker can drive, not what is true.
+>
+> **The repair costs nothing: ask for the DERIVED DOMAIN of each shift count and for its
+> PRODUCER, and rank by nothing.** Those are the same facts; the guest-control judgement is the
+> main loop's to make afterwards from the producer. *A census and a target list differ only in the
+> column you sort on.*
+
+
+### `armbfxwidth32` — THE WITNESS MACHINERY, ANSWERED FROM SOURCE 2026-09-07
+
+A codex capability pass (framed as *what exists*, not *build me one* — the §C5 discriminator) read
+**all eight** ARM probe files and the debugger/CPU machinery. Verdict: **YES, the capability
+exists**; seven of the eight plant executable words with `put w`, and the eighth
+(`arm_idle_probe.py`) loads a raw file and uses `put w` only for seed DATA.
+
+*My own grep had counted `put w` in all eight and would have called all eight code-planters. The
+count was right and the reading would have been wrong — the seat distinguished code from data.*
+
+**FIVE FACTS THAT CHANGE HOW THE PROBE MUST BE WRITTEN, each with its source:**
+
+1. *** `r10`–`r15` ARE NOT REGISTERED DEBUGGER NAMES. *** `arm_cpu_new()` exposes `r0`–`r9`, then
+   **`sl`, `fp`, `ip`, `sp`, `lr`**, plus `pc` and `cpsr` (`ARM_REG_NAMES`, `cpu_arm.h`). A row
+   doing `print r10` does not read a register — it fails a lookup. **This is the padded-column
+   trap's cousin: the probe would report `absent` and a negate-style row would score it green.**
+2. *** A DIRECT `cpsr` PRINT CAN SHOW STALE NZCV. *** The settings access does not synchronise the
+   separate execution-flags field; only `arm_cpu_register_dump()` and the architectural status-read
+   handler do. **Any flags-based row must read flags the way the architecture does, not with
+   `print cpsr`.** Not needed for `ubfx` (it writes a GPR), but it would have bitten a sibling round.
+3. **No guest cache maintenance is required.** `put w` → `store_32bit_word()` → the CPU memory
+   function calls `invalidate_code_translation()`, and ARM's invalidator resets the **entire 4 KiB
+   instruction page** (translated PC-relative loads can hold cached literals). Interactive debugger
+   entry also resets code and address-translation caches.
+4. **Byte order differs between the two candidate machines.** `testarm` keeps the constructor's
+   **little-endian**; `barearm` sets **big-endian** and adds a 128 MiB mirror at `0xa0000000`.
+   Both default to SA1110, supervisor mode, **MMU disabled**, so `arm_translate_v2p()` treats
+   virtual as physical. Base RAM is `[0, R)`; both harnesses request `-M 64`, i.e.
+   `0x00000000–0x03ffffff`. **`put w` writes through `cpu->byte_order`, so one literal word works
+   on either** — but a probe that also plants DATA must know which machine it is on.
+5. **The top of RAM is occupied and it is not only the halt stub.** `testarm` writes a 12-byte halt
+   stub at `LR = SP+32` with `SP = R−4096`, and — the part I would not have guessed —
+   **`arm_cpu_new()` writes a PROM hook at `R−8`** when PROM emulation is on, *before* `barearm`
+   changes byte order. Plant low.
+
+**AND THE FAILURE SIGNATURE OF A MIS-ENCODED WORD IS BENIGN AND DETECTABLE**, which matters
+because this round's real symptom is *exactly zero*: a word the decoder cannot translate reaches
+the shared `bad` label, which reports, sets `cpu->running = 0` and redirects to `nothing_call`.
+**It stops the virtual CPU; it does not exit the host.** So a bad encoding shows as *the machine
+stopped*, distinguishable from *the instruction ran and returned 0*.
+
+> **BUT NOT EVERY STRAY ENCODING IS SAFE:** `arm_coproc_15()`, `arm_coproc_i80321_6()` and
+> `arm_coproc_xscale_14()` still call `exit(1)` on unsupported operations. **A probe must not emit
+> coprocessor encodings by accident** — which is a live risk when hand-assembling, since a wrong
+> bit can turn a data-processing word into a CP one.
+
+*** AND THE TECHNIQUE WORTH STEALING, FOUND IN THIS TREE: `footbridge_sites_probe.py`'s `run_arm()`
+CHECKS THE EXECUTION DISASSEMBLY AGAINST THE PLANTED WORDS. *** That is a *direct* defence against
+the hand-assembled-encoding trap — it verifies the word decoded as intended — where my planned
+small-nonzero row is only an indirect one. **Use both:** the disassembly check proves the right
+instruction ran, and the `0xde` row proves it computed something only a correct execution produces.
+
+*Denominator: eight ARM probe files opened, plus `debugger_cmds.c`, `debugger.c`, `core/memory.c`,
+`memory_rw.c`, `cpu_dyntrans.c`, `cpu_arm.c`, `cpu_arm_instr.c`, `cpu_arm_coproc.c`,
+`memory_arm.c`, `machine_test.c`, `core/emul.c`, `dev_ram.c`. No probe executed. It also flagged
+honestly that `_scratchpad/gxprobe.py` was OUTSIDE the reading scope I set, so it could not
+classify it — the scoping rule cutting against me, correctly reported rather than guessed around.*
+
+
+### `mtesrcdup` (low) -- filed 2026-09-07: one source-TLB expression computed twice under two names
+
+*Filed in the ledger during `#509` and NOT here, which section P caught: an open row that exists
+only in the ledger is invisible to anyone reading the queue.*
+
+`do_mte_transfer()` computes the same expression twice:
+
+    :1312  int src     = (mode & MTE_MODE_SRC_BUF_MASK) >> MTE_SRC_TLB_SHIFT;
+    :1333  int src_tlb = (mode & MTE_MODE_SRC_BUF_MASK) >> MTE_SRC_TLB_SHIFT;
+
+**Byte-identical.** `src` guards `:1336 if (src > MTE_TLB_C)`; `src_tlb` builds `src_mode` at
+`:1365`. They cannot disagree today, so **this is not a defect** -- it is recorded because the
+two-names-for-one-value shape is exactly what `#508` found in `memory_alpha.c` (`ALPHA_PAGESHIFT`
+and a local `pageSizeShift` both meaning 13), where the hazard is a later edit changing one and
+not the other.
+
+*The read that found it was checking something else: `:1336` tests `src`, not the `src_tlb`
+computed one line above, which LOOKS like a variable mix-up until you find the earlier
+declaration. That momentary alarm is the actual cost of the duplication.*
+
+Documented-only unless a round is already editing that function.
+
+
+### `armbfxwidth32` — THE FIX CHECKED, 2026-09-07: A AND B RATIFIED, AND THE BFI HALF IS A DESIGN
+### QUESTION THE FORK DOES NOT SETTLE
+
+A codex pass was given the proposed repair and asked to CHECK it (never to write one — the §C5
+discriminator). It examined **6/6 supplied shift sites, both m88k mask examples, and 13
+comparable decisions across the tree.**
+
+**RATIFIED:**
+
+* **A** — `uint32_t mask = (width == 32) ? 0xffffffffU : ((1U << width) - 1);` — is correct for
+  every width in `{1..32}`, checked at the boundaries: `1` → `0x1`; `31` → `0x80000000U - 1` =
+  `0x7fffffff`, both operations unsigned; `32` selects the constant and **the shift arm is never
+  evaluated**. It follows `cpu_m88k_instr.c:529`'s own unsigned-mask/full-width-special-case shape.
+* **B** — hoisting `width < 32` above the `topBitMask` shift — preserves the branch condition
+  across `{1..32}`; `x` and `width` are ordinary locals with no side effects, so reordering the
+  `&&` operands cannot change the truth value. What changes is only that width 32 goes from
+  *undefined* to *defined*.
+* **A leaves `bfi`'s NEGATIVE width undefined** — confirming the prediction rather than
+  contradicting it. `A` fixes the count-too-large case at all three mask sites and does nothing
+  for `msb < lsb`.
+
+*** THE OPTION SET WAS WRONG IN BOTH DIRECTIONS, WHICH IS WHY THE GREP-THE-FORK STEP KEEPS
+EARNING ITS PLACE: ***
+
+**TWO MEMBERS I HAD NOT NAMED, each with an in-tree precedent:**
+
+* **DIAGNOSE AND STOP EMULATION.** Decode rejection alone specifies no guest outcome — during
+  execution the translation tail diagnoses and sets `cpu->running = 0`. That is a distinct
+  disposition from "decline at decode", which I had listed as one thing.
+* **CHOOSE ANOTHER DEFINED RESULT**, and this one has the closest precedent of any candidate:
+  `cpu_arm_instr_loadstore.c:204` (`A__NAME__general`) **explicitly accepts aligned-down,
+  unrotated data for an UNPREDICTABLE halfword load**, and `memory_arm.c:84` (`arm_check_access`)
+  diagnoses an UNPREDICTABLE control-bit combination and returns "no access". *The fork already
+  answers "the guest did something unpredictable" by picking a defined answer and saying so.*
+
+*** AND A TRAP IN THE OPTION I FAVOURED, WHICH I WOULD HAVE WALKED INTO: ***
+
+> **`X(und)` at `cpu_arm_instr.c:1020` expects `arg[0]` to contain a PC OFFSET before it calls
+> `arm_exception()`. `bfi`'s `arg[0]` is a REGISTER POINTER.** Routing bfi's unchanged call record
+> to `arm_instr_und()` would be incorrect — it would hand a pointer to code that reads an offset.
+
+**NOTHING EXAMINED SETTLES BFI's CHOICE UNIQUELY**, and the seat said so rather than picking:
+no-op has direct bitfield precedent, conditional UND has explicit ARM decoder precedent, and
+**`#312`'s own comment argues AGAINST halting for its case** — so the existing halt paths must not
+be read as a consistent policy. *That is a genuine design question and it goes to the flagship
+adjudication rather than being settled by whoever writes the diff.*
+
+**AND THE CLASS GREW AGAIN — two new sites, both READING findings, neither measured:**
+
+    cpu_m88k_instr.c:513   m88k_rot     uint32_t mask = (1 << n) - 1;
+    cpu_mips_instr.c:1757  MIPS X(ext)  uint32_t x = (rs << (32-lsb-size)) >> (32-lsb-size);
+
+*The seat cited the FUNCTION starts (`:508`, `:1752`); the expressions are at `:513` and `:1757`
+and are quoted above from the file. Both re-derived here before filing:*
+
+* **`m88k_rot`** takes `n = reg(ic->arg[2]) & 0x1f` and is guarded by `if (n != 0)`, so
+  **`n ∈ {1..31}`** — and at `n == 31`, `1 << 31` overflows a signed `int`. The same UB the
+  `#509`-adjacent `sgirebufshiftub` row describes, in the same file as this round's own SAFE
+  exemplar.
+* **MIPS `X(ext)`** packs `arg[2] = (msbd << 5) + lsb`, so `lsb ∈ {0..31}` and
+  `size = msbd + 1 ∈ {1..32}`. **`32 - lsb - size` therefore spans `{-31..31}` and is NEGATIVE
+  for a large part of the encoding space.** MIPS requires `lsb + size <= 32` for EXT, so those
+  encodings are architecturally invalid — **and the model does not check, which is the same
+  unpredictable-guest-encoding-produces-host-UB shape as `bfi`'s negative width.** `rs` is
+  `uint32_t`, so there is no signed overflow here; the defect is purely the shift count.
+
+**The m88k one is the sharpest thing in the answer.** `cpu_m88k_instr.c` is the file this round
+cites as carrying the fork's SAFE idiom — at `:532` and `:539`. **`:508`, twenty lines above, is
+the unsafe form.** One file, one author, two neighbouring functions, opposite outcomes. *A
+"the fork already knows how to do this" warrant is weaker than it sounds when the same file
+contains both answers.*
+
+**Site count is now EIGHT across three CPUs**, in three UB regions (count ≥ width, `1 << 31`
+signed overflow, negative count). `A`+`B` address four; `1U` alone fixes `:2685`/`:2823`; the two
+new ones are unexamined by any proposed repair.
+
+
+### `alphapteprot` (med) -- filed 2026-09-07: the Alpha walk ignores every protection bit
+
+**Filed on the retrospective pass-2 seat's own recommendation:** *"No `alphapteprot` queue row
+exists today. The disclosure is only the `#508` comment."* A disclosure in a comment is not a
+queue row, and a reader working the queue would never find it.
+
+`alpha_translate_v2p()` returns **2** for every successfully walked page. grok traced what that
+means downstream: `memory_rw.c` puts `ok - 1` into the fast table and, at `ok == 2` with
+`CACHE_DATA`, invalidates code translations — **so every walked page is cached WRITABLE.**
+
+    flags                      never read
+    ALPHA_PTE_KR / KW / UR / UW   never tested
+    FAULT_ON_READ / WRITE / EXECUTE  never tested
+
+`#508` disclosed all three in its comment and deliberately did not fix them, which was right: a
+protection model needs a different oracle — *a write to a KW-clear page that must not store* --
+and the reopening rule forbids bolting a second defect onto an offset repair.
+
+*Distinct from [[alphafaultclaim]], which is the FAILED-walk path. This is the SUCCEEDED-walk
+path returning a blanket "writable".*

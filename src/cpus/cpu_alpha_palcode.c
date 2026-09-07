@@ -280,7 +280,10 @@ Make sure they are correct, as documented in the Manual.
 			cpu->cd.alpha.pcb.apcb_asn = new_asn;
 			cpu->cd.alpha.pcb.apcb_unique = new_unique;
 			/*  #507: was `apcb_ptbr = new_flags' -- a field-name transposition that
-			    assigned apcb_ptbr TWICE (here and three lines up) and apcb_flags NEVER,
+			    assigned apcb_ptbr TWICE (here and at the `apcb_ptbr = new_ptbr' four
+			    lines above -- "three lines up" until 2026-09-07, corrected
+			    after a pass-2 seat derived the true distance from the hunk
+			    header alone and called the phrasing inconsistent) and apcb_flags NEVER,
 			    while every other field in this block is assigned exactly once.  Two
 			    consequences: apcb_ptbr ended up holding the flags word, and the incoming
 			    context's flags were dropped -- so the NEXT save published a never-loaded

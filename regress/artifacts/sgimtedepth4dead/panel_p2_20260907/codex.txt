@@ -1,0 +1,2096 @@
+Reading additional input from stdin...
+OpenAI Codex v0.153.4
+--------
+workdir: C:\DocumentNoSnc\CC\GXEMUL
+model: gpt-6-astra
+provider: openai
+approval: never
+sandbox: read-only
+reasoning effort: max
+reasoning summaries: none
+session id: 01a07e11-424c-79f1-8af3-ac2d7cd3d99e
+--------
+user
+# PASS 2 — `#509` sgimtedepth4dead: the real diff, the 13-row detector, and a 9-row kill table
+
+## READ THIS FIRST — PLEASE DO NOT SIMPLY RATIFY
+
+Pass 1 on this round found **three errors in my brief and two escapes in my row set**, so
+ratification is not what is wanted here either.  **Check the premises, not just the
+derivations.**  Where I state something as fact, ask whether it is true.
+
+**THE TREE UNDER REVIEW IS `GXEMUL-SEC/src/`.**  Three pristine-2021-upstream copies of
+GXemul exist under the project root and are NOT this fork.  Line numbers off by hundreds
+mean you are reading one of them — say so rather than reconciling.
+
+**If you cannot read files that is expected** — the diff, the detector's row list and the
+whole kill table are inlined.  Name any premise you cannot settle from this packet.
+
+**Where this brief states an ARITHMETIC claim, ENUMERATE it rather than reasoning about it.**
+
+**VERDICT LINE FIRST.**
+
+### If you can read files
+Scope your reading to `GXEMUL-SEC/src/` and `GXEMUL-SEC/regress/*.py`.
+**Do not read `regress/artifacts/` or `tools/pipeline/ledger.json`.**
+
+---
+
+## 1. PREMISES SETTLED BY PASS 1, RE-INLINED SO NOBODY SPENDS AN ANSWER RE-DERIVING THEM
+
+Six seats answered pass 1 (`_scratchpad/panel_20260907_170713`; durable copy at
+`regress/artifacts/sgimtedepth4dead/panel_p1_20260907`).  All six confirmed these by
+enumeration, several from the packet alone:
+
+* **`depth = 8 << ((mode & 0x300) >> 8)`, a two-bit field, so `depth ∈ {8,16,32,64}`.**
+  `depth == 4` is unreachable; the byte count is 4 and the author used `/ (depth / 8)`
+  correctly two lines above.
+* **`depth == 32` ⟺ `bufdepth == 4`** — both are bijections of the same field value.
+* **With the branch dead, both constructed modes carry no type bits, so `DE_MODE_TYPE_CI`
+  (== 0) is always selected.**
+* **At 32bpp the CI arm assigns `buf[0]` only, and `memory_rw` copies `bufdepth` = 4 bytes
+  from a `uint8_t buf[8]` with no initialiser** — three bytes of host stack reach guest RAM.
+* **The header defines `MTE_DEPTH_8/16/32` and no `MTE_DEPTH_64`**; field value 3 computes
+  64 and is undefined by the header.
+* **Corrected in pass 1, by two seats independently:** at field value 3, CI leaves **seven**
+  bytes uninitialised and an RGBA substitution would leave **four** — a reduction, not a
+  neutral swap.  My brief had said "four into four".
+* **There is NO SGI/CRIME hardware documentation in this project** — derived by
+  `ls _scratchpad/*.pdf`, sixteen manuals, none for this device.  So the warrant for RGBA
+  over RGB is the dead branch's own choice plus the comment ("copy 32 bits", which RGB's
+  zero-padded low byte does not do).  **That is a code-intent warrant and this brief does
+  not pretend otherwise.**
+
+---
+
+## 2. THE DIFF — the entire product change, one hunk
+
+```diff
+@@ -1368,7 +1368,22 @@ void do_mte_transfer(struct cpu* cpu, struct sgi_re_data *d)
+ 			// Hack. The MTE perhaps doesn't deal with colors per se,
+ 			// but this makes sure that we copy 32 bits when doing 32-bit
+ 			// transfers.
+-			if (depth == 4) {
++			/*  #509: was `depth == 4' -- UNREACHABLE.  `depth' is
++			    a count of BITS (8 << a two-bit field, so 8/16/32/64
++			    only); 4 is the corresponding BYTE count, which the
++			    author used correctly in the `/ (depth / 8)' lines
++			    just above.  So both assignments were dead, every
++			    tiled transfer took the CI arm, and at 32 bits CI
++			    assigns buf[0] alone while memory_rw copies four --
++			    publishing three bytes of host stack into guest
++			    memory.  The comment above states the intended
++			    condition in words: 32-bit transfers.
++
++			    This repairs the 32-bit cell ONLY.  The 16-bit and
++			    reserved-encoding-3 cells assign fewer bytes than
++			    they copy for the same reason and are NOT closed
++			    here -- see the uninitialised-buffer sibling.  */
++			if (depth == 32) {	/*  #509  */
+ 				src_mode |= DE_MODE_TYPE_RGBA;
+ 				dst_mode |= DE_MODE_TYPE_RGBA;
+ 			}
+```
+
+**That is the whole product diff: one token of behaviour, plus a comment.**
+
+---
+
+## 3. THE DETECTOR — 13 rows, and where each came from
+
+`regress/sgi_mte_fill_probe.py`.  Rung-3: real guest `sw`/`sd` through real CRIME decode on
+an unmodified `-E sgi -e ip32`, read back with a real `lw`.
+
+    live         RAM round-trip                                      identity
+    devsig       CRIME_DE_STATUS 0x1e000000, a value RAM cannot give  identity
+    paint ok     the paint lands AT the oracle address                identity
+    fill alive   host survives a tiled 32-bit fill                    identity
+    fill ran     dest[0] is a byte the fill can produce at all        identity
+    fill top     dest[0] == 0x11 (bg>>24)          THE DEFECT ROW; 0x44 pre-fix
+    fill bot     dest[3] == 0x44 (bg's low byte)   ADDED BY PASS 1 (glm, grok)
+    depth8 top   dest[0] == 0x44 at 8bpp           over-reach control
+    depth16 top  dest[0] == 0x44 at 16bpp          ADDED BY PASS 1 (glm)
+    copy alive   host survives a tiled 32-bit copy                    identity
+    copy top     dest[0] == 0x1a                   coupling pin, green both sides
+    copy 2nd     dest[1] == 0x2b                   proves the COPY path took RGBA
+    copy 4th     dest[3] == 0x4d                   ADDED BY THE PRE-TABLE CHECK
+
+**Three rows are GATED and I want this challenged.**  `fill bot`, `copy 2nd` and `copy 4th`
+read bytes that are HOST STACK before the fix and DEFINED after it.  Asserting them pre-fix
+would score an undefined byte.  So each computes
+`rgba_ran = (dest[0] == 0x11)` and reports `n/a: dest[0] not RGBA` when that is false —
+**failing deterministically and naming its own reason** rather than scoring garbage.
+
+> **Is a gated row legitimate?**  Its pre-fix red is not "red for the reason under test"; it
+> is red because a different row failed.  The alternative is to drop all three and accept
+> that RGB-for-RGBA is undetectable, which three seats independently called this round's most
+> dangerous escape.  **I found no precedent for a gated row in this tree.  Say whether this
+> form should ship.**
+
+**The source word for the copy rows is `0x1a2b3c4d`, first byte deliberately below 0x80**,
+because every GET arm computes `buf[0] << 24` on a promoted `uint8_t` — undefined for a
+first byte ≥ 0x80.  That is a separate filed defect (`sgirebufshiftub`), re-derived
+independently by the pass-1 codex seat.  **The detector must not stand on undefined
+behaviour**, so the value dodges it.
+
+---
+
+## 4. THE KILL TABLE — 9 rows, run in a scratch clone from a frozen driver
+
+Predictions were written into `PRETABLE.out` **before** table 1 ran, so its mtime proves the
+order.  Both columns are inlined so the deltas are checkable:
+
+    mutant                                          predicted  measured   killed by
+    BASE   (the shipped fix)                          13/13     13/13     --
+    M1     depth == 32 -> depth == 4  (clause b)      10/13      9/13     fill top, fill bot,
+                                                                          copy 2nd, copy 4th
+    M2     delete dst_mode |= RGBA    (clause d)       9/13      8/13     + copy top (0x4d)
+    M3     delete src_mode |= RGBA    (clause d)      11/13     10/13     copy top (0x00),
+                                                                          copy 2nd, copy 4th
+    M4     depth == 32 && (mode & COPY)               10/13      9/13     as M1
+    M5     dst_mode |= RGB (not RGBA)                 11/13     11/13     fill bot, copy 4th
+    M6     depth >= 16                                12/13     12/13     depth16 top ALONE
+    M7     depth != 8                                 12/13     12/13     depth16 top ALONE
+    M8     src_mode |= RGB (not RGBA)                 12/13     12/13     copy 4th ALONE
+
+**Every mutant is killed.  No escapes.**  M1 is also the pre-fix build, so it re-measures the
+before-state at a durable path rather than leaving it in scrollback.
+
+**M1–M4 each came in exactly ONE lower than predicted, from a single cause:** `copy 4th` is
+gated on `rgba_ran` and reds in all four, which I did not carry into those four predictions.
+M5–M8 were exact.  **Is that the whole explanation, or is something else moving?**
+
+**Three of these mutants would have been TOTAL ESCAPES against the row set I proposed:**
+M5 and M8 (RGB-for-RGBA, invisible to `dest[0]` on either side) and M6 (`>= 16` fires at 32
+and is cold at 8, so nothing reds).  Two were found by pass-1 seats; M8 was found by the
+pre-table check itself.
+
+---
+
+## 5. WHAT THE ROUND DOES **NOT** CLOSE — stated here so the record cannot overclaim
+
+* **The uninitialised-buffer class at 16 bits and at encoding 3 is still live.**  `#509`
+  fixes the 32 cell by selecting a type that assigns four bytes; it does nothing at the
+  others.
+* *** AND THE TRAP, named by the pass-1 grok seat: `#509` fills `buf[0..3]` at depth 32, so
+  it ACCIDENTALLY MASKS the 32-bit tiled cell of that sibling.  A later round that rows only
+  depth 32 on this path WILL LOOK FIXED AND WILL NOT BE.  The sibling must be kept alive on
+  depth 16. ***
+* **MTE_TLB_B and MTE_TLB_C are not rowed.**  Pass 1 SPLIT on this: codex enumerated 72 field
+  combinations and said B/C are uncovered; grok said the comparison does not read `dst_tlb`,
+  so a per-label row pins the helper's array selection — a different property — and called it
+  "cheap, not required".  **I adopted grok and disclosed the cell.**  A repair conditioned on
+  `dst_tlb == MTE_TLB_A` escapes this detector.
+* The LINEAR arm, the `dst_tlb` default arm, and `sgirebufshiftub` are all out of scope and
+  named in `PRETABLE.out`.
+
+---
+
+## 6. QUESTIONS
+
+1. **The premise audit on THIS packet.**  Is the diff what I say it is?  Does the comment
+   claim anything the rows do not establish?  **Is any sentence in the added comment a
+   claim a row could observe but does not?**
+2. **Which of my accepted dispositions is wrong?**  Pass 1 raised eleven findings and I
+   accepted nine, adopted grok over codex on one, and overruled deepseek 5–1 on scope.  **A
+   round that accepted almost everything has either had a very good panel or has stopped
+   arguing, and only a seat can tell me which.**
+3. **The gated-row form** (section 3).  Ship it, or drop the three rows?
+4. **Is the contract in section 5 complete?**  Name a cell it should disclose and does not.
+   *(Codex seat: answer 1, 2, 3, 4 — do not propose new mutants; CHECK the eight above.)*
+
+If, while verifying a claim, you found something ELSE — say so.
+
+
+## OPERATIONAL RULE FOR EVERY SEAT (appended by panel.sh, not by the author)
+
+**Do not run `run.sh`, any `gate_*.sh`, or the battery.** Every measurement you need is
+inlined above. A gate takes minutes -- longer than your response budget -- and a second
+concurrent invocation corrupts the operator run in progress, because the gates share one
+log directory. A seat that runs a gate produces no review AND may invalidate someone
+else s. Building and running a single detector or mutant in your own temp directory is
+fine and encouraged; driving the harness is not.
+
+If you want a measurement that is not inlined, NAME IT and say why. Naming it is worth
+far more to this panel than a timeout.
+codex
+Verdict: not yet ratified. I’ll check the fork source, detector gates, and all eight listed mutants within your read scope, without running the harness.
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command Get-Location in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg --files GXEMUL-SEC/src GXEMUL-SEC/regress -g '*.py' -g '*sgi*' -g '*crime*' -g 'AGENTS.md' -g '"'!artifacts/**'"' -g '"'!**/artifacts/**'"'" in C:\DocumentNoSnc\CC\GXEMUL
+ succeeded in 143ms:
+GXEMUL-SEC/regress\wdc_latch_census.py
+GXEMUL-SEC/regress\wdc_flood_probe.py
+GXEMUL-SEC/regress\wdc_altoffset_sig_probe.py
+GXEMUL-SEC/regress\wdc_altoffset_probe.py
+GXEMUL-SEC/regress\wdc_altoffset_4bit_probe.py
+GXEMUL-SEC/regress\wdc_addtoinbuf_probe.py
+GXEMUL-SEC/regress\sh_tlbmulti_probe.py
+GXEMUL-SEC/regress\sh_rounding_probe.py
+GXEMUL-SEC/regress\sh_pclock_probe.py
+GXEMUL-SEC/regress\sh_iprbcd_probe.py
+GXEMUL-SEC/regress\sh_intprio_probe.py
+GXEMUL-SEC/regress\sh_halt_probe.py
+GXEMUL-SEC/regress\sh4_val_witness.py
+GXEMUL-SEC/regress\sh4_val_probe.py
+GXEMUL-SEC/regress\sh4_tlbda2_witness.py
+GXEMUL-SEC/regress\sh4_tlbda2_probe.py
+GXEMUL-SEC/regress\sh4_sci_witness.py
+GXEMUL-SEC/regress\sh4_sci_probe.py
+GXEMUL-SEC/regress\sh4_rtcsr_witness.py
+GXEMUL-SEC/regress\sh4_rtcsr_probe.py
+GXEMUL-SEC/regress\sh4_pcic_probe.py
+GXEMUL-SEC/regress\sh4_chcr_witness.py
+GXEMUL-SEC/regress\sh4_chcr_probe.py
+GXEMUL-SEC/regress\sh4_bsc_width_probe.py
+GXEMUL-SEC/regress\sh4pcic_witness.py
+GXEMUL-SEC/regress\sgi_re_width_probe.py
+GXEMUL-SEC/regress\sgi_re_unmapped_probe.py
+GXEMUL-SEC/regress\sgi_re_rgb_probe.py
+GXEMUL-SEC/regress\sgi_re_randompixel_probe.py
+GXEMUL-SEC/regress\sgi_mte_fill_probe.py
+GXEMUL-SEC/regress\sgi_mte_dummy.bin
+GXEMUL-SEC/regress\sgi_eaddr_probe.py
+GXEMUL-SEC/regress\sgi_de_width_probe.py
+GXEMUL-SEC/regress\sgi_de_primop_probe.py
+GXEMUL-SEC/regress\selftest_logdir.py
+GXEMUL-SEC/regress\selftest_inactivity.py
+GXEMUL-SEC/regress\selftest_budget.py
+GXEMUL-SEC/regress\selftest_absorb.py
+GXEMUL-SEC/regress\selfmutant.py
+GXEMUL-SEC/regress\readiness_predicate_test.py
+GXEMUL-SEC/regress\ppc_rounding_probe.py
+GXEMUL-SEC/regress\ppc_halt_probe.py
+GXEMUL-SEC/regress\pit8253_latch_probe.py
+GXEMUL-SEC/regress\pcc2_width_witness.py
+GXEMUL-SEC/regress\pcc2_width_probe.py
+GXEMUL-SEC/regress\pcc2_default_probe.py
+GXEMUL-SEC/regress\mips_subnorm_probe.py
+GXEMUL-SEC/regress\mips_rounding_probe.py
+GXEMUL-SEC/regress\mips_fold_probe.py
+GXEMUL-SEC/regress\mips_fixedmode_probe.py
+GXEMUL-SEC/regress\m88k_rounding_probe.py
+GXEMUL-SEC/regress\m88k_idle_probe.py
+GXEMUL-SEC/regress\m88k_exc_probe.py
+GXEMUL-SEC/regress\m8820x_sites_probe.py
+GXEMUL-SEC/regress\luna_intmask_probe.py
+GXEMUL-SEC/regress\luna_absentcpu_probe.py
+GXEMUL-SEC/regress\lca_confwidth_probe.py
+GXEMUL-SEC/regress\hpcmips_ctor_probe.py
+GXEMUL-SEC/regress\hpcabort_witness.py
+GXEMUL-SEC/regress\gdrom_toclen_probe.py
+GXEMUL-SEC/regress\gdrom_default_probe.py
+GXEMUL-SEC/regress\gdrom_decline_probe.py
+GXEMUL-SEC/regress\gdrom_data_probe.py
+GXEMUL-SEC/regress\gdrom_cond_probe.py
+GXEMUL-SEC/regress\footbridge_sites_probe.py
+GXEMUL-SEC/regress\fbpending_witness.py
+GXEMUL-SEC/regress\fbpending_drain_probe.py
+GXEMUL-SEC/regress\drive_guest.py
+GXEMUL-SEC/regress\diag_div_sweep.py
+GXEMUL-SEC/regress\asic_badaddr_probe.py
+GXEMUL-SEC/src\machines\machine_sgi.o
+GXEMUL-SEC/src\machines\machine_sgi.c
+GXEMUL-SEC/regress\arm_writeback_probe.py
+GXEMUL-SEC/regress\arm_strlen_probe.py
+GXEMUL-SEC/regress\arm_memcpy_probe.py
+GXEMUL-SEC/regress\arm_idle_probe.py
+GXEMUL-SEC/regress\arm_fold_marker_probe.py
+GXEMUL-SEC/regress\arm_flags_probe.py
+GXEMUL-SEC/regress\arm_endian_probe.py
+GXEMUL-SEC/regress\arcbios_shift_probe.py
+GXEMUL-SEC/regress\alpha_pfnoffset_probe.py
+GXEMUL-SEC/regress\alpha_harness_probe.py
+GXEMUL-SEC/regress\absorb_census.py
+GXEMUL-SEC/src\include\thirdparty\crimereg.h
+GXEMUL-SEC/src\include\thirdparty\sgi_macereg.h
+GXEMUL-SEC/src\include\thirdparty\sgi_gl.h
+GXEMUL-SEC/src\include\thirdparty\sgi_arcbios.h
+GXEMUL-SEC/src\devices\dev_sgi_re.o
+GXEMUL-SEC/src\devices\dev_sgi_re.c
+GXEMUL-SEC/src\devices\dev_sgi_mec.o
+GXEMUL-SEC/src\devices\dev_sgi_mec.c
+GXEMUL-SEC/src\devices\dev_sgi_mardigras.o
+GXEMUL-SEC/src\devices\dev_sgi_mardigras.c
+GXEMUL-SEC/src\devices\dev_sgi_ip32.o
+GXEMUL-SEC/src\devices\dev_sgi_ip32.c
+GXEMUL-SEC/src\devices\dev_sgi_ip30.o
+GXEMUL-SEC/src\devices\dev_sgi_ip30.c
+GXEMUL-SEC/src\devices\dev_sgi_ip22.o
+GXEMUL-SEC/src\devices\dev_sgi_ip22.c
+GXEMUL-SEC/src\devices\dev_sgi_ip20.o
+GXEMUL-SEC/src\devices\dev_sgi_ip20.c
+GXEMUL-SEC/src\devices\dev_sgi_ip19.o
+GXEMUL-SEC/src\devices\dev_sgi_ip19.c
+GXEMUL-SEC/src\devices\dev_sgi_gbe.o
+GXEMUL-SEC/src\devices\dev_sgi_gbe.c
+
+ succeeded in 216ms:
+
+Path                      
+----                      
+C:\DocumentNoSnc\CC\GXEMUL
+
+
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n 'DE_MODE_(TYPE|BUFDEPTH)|MTE_(DEPTH|TLB|MODE|COPY)|uint8_t buf\\[8\\]|GET_PIXEL|PUT_PIXEL' GXEMUL-SEC/src/devices/dev_sgi_re.c GXEMUL-SEC/src/include/thirdparty/crimereg.h" in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$reviewPath = '"'GXEMUL-SEC/src/devices/dev_sgi_re.c'; "'$reviewLines = Get-Content -LiteralPath $reviewPath; for ($reviewIndex = 1180; $reviewIndex -lt [Math]::Min(1505, $reviewLines.Length); $reviewIndex++) { '"'{0,5}: {1}' -f ("'$reviewIndex + 1), $reviewLines[$reviewIndex] }' in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$reviewPath = '"'GXEMUL-SEC/regress/sgi_mte_fill_probe.py'; "'$reviewLines = Get-Content -LiteralPath $reviewPath; for ($reviewIndex = 0; $reviewIndex -lt $reviewLines.Length; $reviewIndex++) { '"'{0,5}: {1}' -f ("'$reviewIndex + 1), $reviewLines[$reviewIndex] }' in C:\DocumentNoSnc\CC\GXEMUL
+ succeeded in 469ms:
+GXEMUL-SEC/src/devices/dev_sgi_re.c:187:	uint32_t color_mode = mode & DE_MODE_TYPE_MASK;
+GXEMUL-SEC/src/devices/dev_sgi_re.c:284:	uint8_t buf[8];		/* #100: bufdepth can be 8 = 1<<((mode>>8)&3) */
+GXEMUL-SEC/src/devices/dev_sgi_re.c:287:		case DE_MODE_TYPE_CI:
+GXEMUL-SEC/src/devices/dev_sgi_re.c:290:		case DE_MODE_TYPE_RGB:
+GXEMUL-SEC/src/devices/dev_sgi_re.c:296:		case DE_MODE_TYPE_RGBA:
+GXEMUL-SEC/src/devices/dev_sgi_re.c:302:		case DE_MODE_TYPE_ABGR:
+GXEMUL-SEC/src/devices/dev_sgi_re.c:323:		case DE_MODE_TYPE_CI:
+GXEMUL-SEC/src/devices/dev_sgi_re.c:326:		case DE_MODE_TYPE_RGB:
+GXEMUL-SEC/src/devices/dev_sgi_re.c:352:		case DE_MODE_TYPE_RGBA:
+GXEMUL-SEC/src/devices/dev_sgi_re.c:355:		case DE_MODE_TYPE_ABGR:
+GXEMUL-SEC/src/devices/dev_sgi_re.c:1302:	uint32_t mode = d->mte_reg[(CRIME_MTE_MODE - 0x3000) / sizeof(uint32_t)];
+GXEMUL-SEC/src/devices/dev_sgi_re.c:1311:	int depth = 8 << ((mode & MTE_MODE_DEPTH_MASK) >> MTE_DEPTH_SHIFT);
+GXEMUL-SEC/src/devices/dev_sgi_re.c:1312:	int src = (mode & MTE_MODE_SRC_BUF_MASK) >> MTE_SRC_TLB_SHIFT;
+GXEMUL-SEC/src/devices/dev_sgi_re.c:1328:	if (mode & MTE_MODE_STIPPLE) {
+GXEMUL-SEC/src/devices/dev_sgi_re.c:1329:		fatal("[ sgi_mte: unimplemented MTE_MODE_STIPPLE ]");
+GXEMUL-SEC/src/devices/dev_sgi_re.c:1333:	int src_tlb = (mode & MTE_MODE_SRC_BUF_MASK) >> MTE_SRC_TLB_SHIFT;
+GXEMUL-SEC/src/devices/dev_sgi_re.c:1334:	int dst_tlb = (mode & MTE_MODE_DST_BUF_MASK) >> MTE_DST_TLB_SHIFT;
+GXEMUL-SEC/src/devices/dev_sgi_re.c:1336:	if (src > MTE_TLB_C) {
+GXEMUL-SEC/src/devices/dev_sgi_re.c:1342:	case MTE_TLB_A:
+GXEMUL-SEC/src/devices/dev_sgi_re.c:1343:	case MTE_TLB_B:
+GXEMUL-SEC/src/devices/dev_sgi_re.c:1344:	case MTE_TLB_C:
+GXEMUL-SEC/src/devices/dev_sgi_re.c:1365:			uint32_t src_mode = (src_tlb << 10) + (((mode & MTE_MODE_DEPTH_MASK) >> MTE_DEPTH_SHIFT) << 8);
+GXEMUL-SEC/src/devices/dev_sgi_re.c:1366:			uint32_t dst_mode = (dst_tlb << 10) + (((mode & MTE_MODE_DEPTH_MASK) >> MTE_DEPTH_SHIFT) << 8);
+GXEMUL-SEC/src/devices/dev_sgi_re.c:1387:				src_mode |= DE_MODE_TYPE_RGBA;
+GXEMUL-SEC/src/devices/dev_sgi_re.c:1388:				dst_mode |= DE_MODE_TYPE_RGBA;
+GXEMUL-SEC/src/devices/dev_sgi_re.c:1396:					if (mode & MTE_MODE_COPY) {
+GXEMUL-SEC/src/devices/dev_sgi_re.c:1409:	case MTE_TLB_LIN_A:
+GXEMUL-SEC/src/devices/dev_sgi_re.c:1410:	case MTE_TLB_LIN_B:
+GXEMUL-SEC/src/devices/dev_sgi_re.c:1412:		if (mode & MTE_MODE_COPY) {
+GXEMUL-SEC/src/devices/dev_sgi_re.c:1413:			fatal("[ sgi_mte: unimplemented MTE_MODE_COPY ]");
+GXEMUL-SEC/src/devices/dev_sgi_re.c:1418:			fatal("[ sgi_mte: unimplemented MTE_DEPTH_x ]");
+GXEMUL-SEC/src/devices/dev_sgi_re.c:1486:			uint32_t *tlb = dst_tlb == MTE_TLB_LIN_A ? d->re_linear_a : d->re_linear_b;
+GXEMUL-SEC/src/devices/dev_sgi_re.c:1557:	case CRIME_MTE_MODE:
+GXEMUL-SEC/src/devices/dev_sgi_re.c:1558:		debug("[ sgi_mte: %s CRIME_MTE_MODE: 0x%016llx ]\n",
+
+ exited 1 in 719ms:
+Cannot invoke method. Method invocation is supported only on core types in this language mode.
+At line:2 char:133
++ ... dex = 1180; $reviewIndex -lt [Math]::Min(1505, $reviewLines.Length);  ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : InvalidOperation: (:) [], RuntimeException
+    + FullyQualifiedErrorId : MethodInvocationNotSupportedInConstrainedLanguage
+ 
+
+ succeeded in 803ms:
+    1: #!/usr/bin/env python3
+    2: #
+    3: #  sgimtedepth4dead -- RUNG-3 WITNESS: `if (depth == 4)' is dead, so MTE never selects RGBA.
+    4: #
+    5: #      :1311  int depth = 8 << ((mode & MTE_MODE_DEPTH_MASK) >> MTE_DEPTH_SHIFT);   /* BITS */
+    6: #      :1359  src_x1 /= (depth / 8);                     <- the author converting bits -> bytes
+    7: #      :1369  // ... this makes sure that we copy 32 bits when doing 32-bit transfers.
+    8: #      :1371  if (depth == 4) { src_mode |= DE_MODE_TYPE_RGBA; dst_mode |= ...; }
+    9: #
+   10: #  The field is two bits, so `depth' is 8/16/32/64 -- never 4.  The branch is dead, the constructed
+   11: #  modes carry no type bits, `color_mode' stays CI, and CI's PUT assigns buf[0] only while the
+   12: #  transfer moves `bufdepth' bytes.
+   13: #
+   14: #  *** THIS IS A WITNESS, NOT A DETECTOR.  Its rows assert the CORRECT behaviour and are expected to
+   15: #  FAIL here; it must not be gated. ***
+   16: #
+   17: #  ---------------------------------------------------------------------------------------------
+   18: #  THE ORACLE IS `dest[0]' OF A TILED **FILL**, AND EVERY OTHER CHANNEL I PROPOSED WAS REFUSED.
+   19: #  From the grok design review, each point measured against the source rather than argued:
+   20: #
+   21: #  * A PRE-PAINTED TAIL CANNOT WORK.  CI PUT does not replicate buf[0] across the span and does not
+   22: #    leave a tail: it writes buf[0] at the lowest address and buf[1..bufdepth-1] as uninitialised
+   23: #    stack, and memory_rw memcpys `bufdepth' bytes.  So the paint is OVERWRITTEN WITH GARBAGE.  A row
+   24: #    asserting "tail still painted" reds on HEAD because the path RAN -- which reads as "the witness
+   25: #    never reached MTE".  A row asserting "tail != paint" is true on HEAD *and* after the fix.
+   26: #
+   27: #  * COPY CANNOT WITNESS THIS AT ALL.  Source `aa bb cc dd': CI GET takes buf[0] == 0xaa and CI PUT
+   28: #    writes 0xaa at dest[0]; RGBA GET reconstructs 0xaabbccdd and RGBA PUT also writes 0xaa there.
+   29: #    The first byte of a copy is the one byte CI already gets right, and the broken bytes are exactly
+   30: #    the uninitialised ones that must not be read.  "If the witness is a blit, refuse it."
+   31: #
+   32: #  * FILL IS DETERMINISTIC BECAUSE IT NEVER GETs.  With bg = 0x11223344:
+   33: #        CI   PUT -> buf[0] = (uint8_t)bg          -> dest[0] = 0x44   (the LOW byte)
+   34: #        RGBA PUT -> [bg>>24, bg>>16, bg>>8, bg]   -> dest[0] = 0x11   (the HIGH byte)
+   35: #    dest[1..3] are uninitialised on HEAD.  **DO NOT ASSERT THEM THERE.**
+   36: #
+   37: #  *** THAT SENTENCE USED TO END "only the top byte of the big-endian word is READ", WHICH IS
+   38: #  FALSE AND WAS CAUGHT BY THE PASS-1 CODEX SEAT.  The probe executes `lw' and masks afterwards:
+   39: #  it READS four bytes and ASSERTS one.  Corrected 2026-09-07 -- the distinction matters because
+   40: #  the tail IS assertable once the fix lands (RGBA writes all four), which is what `fill bot'
+   41: #  below now does. ***
+   42: #
+   43: #  * TLB_A WITHOUT BIT 15 RETURNS SILENTLY and leaves the destination painted, which looks like "MTE
+   44: #    did nothing".  sgi_re_rgb_probe.py paid for that trap twice; TLBA_TILE = 0x8002 is why.
+   45: #
+   46: #  * MTE LIN_A/B at depth 32 would `exit(1)' in the LINEAR arm -- host death, not a red row.
+   47: #
+   48: #  Usage:  sgi_mte_fill_probe.py <gxemul-binary> [label]
+   49: import os, sys, pty, select, time, re
+   50: 
+   51: BIN   = sys.argv[1]
+   52: LABEL = sys.argv[2] if len(sys.argv) > 2 else "?"
+   53: 
+   54: rows = []
+   55: def row(name, got, want, note="", negate=False):
+   56:     ok = (got != want) if negate else (got == want)
+   57:     rows.append((name, ok))
+   58:     shown = ("NOT " + str(want)) if negate else str(want)
+   59:     print("%-12s %-14s %-16s %-52s %s" % (name, str(got), shown, note, "ok" if ok else "FAIL"))
+   60:     return ok
+   61: 
+   62: # ---------------------------------------------------------------- guest instructions
+   63: OP_SW_T0_A3 = 0xace80000          # sw   $t0, 0($a3)
+   64: OP_SD_T0_A3 = 0xfce80000          # sd   $t0, 0($a3)
+   65: OP_LW_V0_AT = 0x8c220000          # lw   $v0, 0($at)
+   66: OP_B_SELF   = 0x1000ffff          # b    .
+   67: OP_NOP      = 0x00000000
+   68: 
+   69: CODE      = 0x80001000
+   70: SCRATCH   = 0xa0001800
+   71: LIVE_VAL  = 0x5a5a5a5a
+   72: SENTINEL  = 0xdeadbeef
+   73: DE_STATUS = 0xb5004000
+   74: DE_STAT   = "0x1e000000"          # CRIME_DE_STATUS; RAM reads 0 -- the device signature
+   75: 
+   76: #  *** A LOAD FILE IS REQUIRED, NOT COSMETIC.  `main.c' with extra_argc == 0 and no `-d' prints
+   77: #  "No filename given. Aborting." and exit(1) -- so the FIRST DRAFT OF THIS PROBE COULD NOT START,
+   78: #  and its `fill ran' row would have reported GREEN on that (see the row's own comment). ***
+   79: #  `-M 64' is copied from the siblings for uniformity only: IP32 defaults to 128 MB and DEST is at
+   80: #  128 KB, so it changes nothing here.
+   81: DUMMY = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sgi_mte_dummy.bin")
+   82: if not os.path.exists(DUMMY):
+   83:     with open(DUMMY, "wb") as f:
+   84:         f.write(b"\0" * 8)
+   85: 
+   86: # ---------------------------------------------------------------- the MTE registers
+   87: #  CRIME RE base 0xb5000000; CRIME_MTE_* offsets from crmfbreg.h.
+   88: MTE_MODE       = 0xb5003000
+   89: MTE_BG         = 0xb5003018
+   90: MTE_DST0       = 0xb5003030
+   91: MTE_DST1_START = 0xb5003838       # CRIME_MTE_DST1 0x3038 | CRIME_DE_START 0x0800
+   92: #  `if (startFlag) do_mte_transfer(cpu, d);' sits at the END of DEVICE_ACCESS(sgi_mte), so any MTE
+   93: #  write with bit 0x800 in its ADDRESS fires the transfer.  DST1 is written last, with START.
+   94: 
+   95: #  dst_tlb = (mode & MTE_MODE_DST_BUF_MASK 0x1c) >> 2  -> MTE_TLB_A = 0
+   96: #  depth   = 8 << ((mode & 0x300) >> 8)                -> MTE_DEPTH_32 = 2 gives 32
+   97: #  MTE_MODE_COPY 0x800 CLEAR = fill.  (0x800 here is a MODE bit; the 0x800 in the address is START.)
+   98: MODE_TILED_FILL = 0x200
+   99: BG_VAL          = 0x11223344      # four distinct bytes, so dest[0] names which arm ran
+  100: CI_TOP          = 0x44            # what the DEFECT writes at dest[0]
+  101: RGBA_TOP        = 0x11            # what a CORRECT RGBA selection writes there
+  102: PAINT           = 0x99999999      # neither -- liveness only, NOT a tail oracle
+  103: PAINT_TOP       = 0x99
+  104: 
+  105: #  DEPTH IS AN AXIS, NOT A CONSTANT.  Two seats independently showed the six-row witness blind to
+  106: #  an OVER-REACH mutant: `depth >= 16' fires at 32 (so `fill top' stays green) and is cold at 8
+  107: #  (so `depth8 top' stays green).  The adjacent DOCUMENTED cell -- 16 -- is what catches it.
+  108: MODE_D8    = 0x000                # MTE_DEPTH_8  << MTE_DEPTH_SHIFT
+  109: MODE_D16   = 0x100                # MTE_DEPTH_16 << MTE_DEPTH_SHIFT
+  110: MODE_D32   = 0x200                # MTE_DEPTH_32 << MTE_DEPTH_SHIFT
+  111: MODE_COPY  = 0x800                # MTE_MODE_COPY (a MODE bit; the 0x800 in an ADDRESS is START)
+  112: MTE_SRC0   = 0xb5003020           # CRIME_MTE_SRC0 0x3020 -- no 0x800, so it does not fire START
+  113: 
+  114: #  *** THE FIRST SOURCE BYTE IS DELIBERATELY BELOW 0x80. ***  Every GET arm computes
+  115: #  `buf[0] << 24' on a uint8_t, which promotes to signed int -- so a first byte >= 0x80 shifts
+  116: #  past INT_MAX and is undefined behaviour.  That is a SEPARATE filed defect ([[sgirebufshiftub]],
+  117: #  re-derived independently by the pass-1 codex seat); this probe must not stand on it, so the
+  118: #  copy rows use 0x1a as byte 0.  Four distinct bytes, so each names its own position.
+  119: SRC_WORD   = 0x1a2b3c4d
+  120: SRC_B0     = 0x1a                 # what BOTH correct copy shapes put at dest[0]
+  121: SRC_B1     = 0x2b                 # what only a REAL RGBA copy puts at dest[1]
+  122: SRC_B3     = 0x4d                 # the byte RGB DROPS -- the only channel that sees it
+  123: SRC_PIX_X  = 4                    # src0's x field; /(depth/8) = 1 -> source byte offset 4
+  124: 
+  125: RE_TLB_A   = 0xb5001000
+  126: TLBA_TILE  = 0x8002               # re_tlb_a[0].  BIT 15 IS THE VALID BIT.
+  127: TLBA_PHYS  = (TLBA_TILE << 16) & ~0x80000000       # -> 0x20000
+  128: DEST       = 0xa0000000 + TLBA_PHYS                # pixel (0,0) of the tile
+  129: 
+  130: #  dst0/dst1 pack as x=(v>>16)&0xfff, y=v&0xfff.  Both zero draws exactly one pixel at (0,0):
+  131: #  `for (y = y1; y != y2+dy; y += dy)' with dy = 1 runs once.
+  132: DST0 = 0x00000000
+  133: DST1 = 0x00000000
+  134: 
+  135: def session(cmds, settle=1.5, spin=1.8):
+  136:     pid, fd = pty.fork()
+  137:     if pid == 0:
+  138:         os.execv(BIN, [BIN, "-V", "-x", "-E", "sgi", "-e", "ip32", "-M", "64",
+  139:                        "0x%x:" % CODE + DUMMY])
+  140:         os._exit(127)
+  141:     buf = ""
+  142:     def rd(t):
+  143:         nonlocal buf
+  144:         end = time.time() + t
+  145:         while time.time() < end:
+  146:             r, _, _ = select.select([fd], [], [], 0.1)
+  147:             if not r:
+  148:                 continue
+  149:             try:
+  150:                 d = os.read(fd, 65536)
+  151:                 if not d:
+  152:                     return False
+  153:                 buf += d.decode("latin-1", "replace")
+  154:             except OSError:
+  155:                 return False
+  156:         return True
+  157:     alive = rd(settle)
+  158:     for i, c in enumerate(cmds):
+  159:         try:
+  160:             os.write(fd, (c + "\n").encode("latin-1"))
+  161:         except OSError:
+  162:             alive = False; break
+  163:         if not rd(spin if i == len(cmds) - 1 else 0.22):
+  164:             alive = False; break
+  165:     try:
+  166:         os.write(fd, b"quit\n"); rd(0.4)
+  167:     except OSError:
+  168:         pass
+  169:     try:
+  170:         os.close(fd)
+  171:     except OSError:
+  172:         pass
+  173:     return buf.replace("\r", ""), alive
+  174: 
+  175: def printed(t, reg):
+  176:     m = re.search(r"print\s+%s\s*\n\s*(0x[0-9a-f]+)" % reg, t)
+  177:     return "absent" if not m else "0x%x" % int(m.group(1), 16)
+  178: 
+  179: class Addr(object):
+  180:     def __init__(self, base): self.a = base
+  181:     def take(self, n):
+  182:         got = self.a; self.a += 4 * (n + 2) + 0x20; return got
+  183: 
+  184: def run_ops(ops, at):
+  185:     put = ["put w 0x%x, 0x%08x" % (at + 4 * i, op) for i, op in enumerate(ops)]
+  186:     put += ["put w 0x%x, 0x%08x" % (at + 4 * len(ops), OP_B_SELF),
+  187:             "put w 0x%x, 0x%08x" % (at + 4 * len(ops) + 4, OP_NOP)]
+  188:     return put + ["pc=0x%x" % at, "step %d" % len(ops)]
+  189: 
+  190: def store(A, addr, val, op=OP_SW_T0_A3):
+  191:     return ["a3=0x%x" % addr, "t0=0x%x" % val] + run_ops([op], A.take(1))
+  192: 
+  193: def load(A, addr):
+  194:     return ["at=0x%x" % addr, "v0=0x%x" % SENTINEL] + run_ops([OP_LW_V0_AT], A.take(1))
+  195: 
+  196: def topbyte(s):
+  197:     if not s.startswith("0x"):
+  198:         return s
+  199:     return "0x%02x" % ((int(s, 16) >> 24) & 0xff)
+  200: 
+  201: def byte_n(s, n):
+  202:     """Byte n of the big-endian word, n = 0 at the LOWEST address."""
+  203:     if not s.startswith("0x"):
+  204:         return s
+  205:     return "0x%02x" % ((int(s, 16) >> (8 * (3 - n))) & 0xff)
+  206: 
+  207: def fill(A, depth=MODE_D32):
+  208:     """Program a tiled FILL at `depth' and fire it.  Every store is a REAL GUEST INSTRUCTION."""
+  209:     #  re_tlb_a[0] = 0x8002.  The RE TLB write walks `len' in halfwords from tlbi 0, so an `sd'
+  210:     #  carrying the tile in its TOP halfword lands it at index 0 -- the packing sgi_re_rgb_probe.py
+  211:     #  established, and getting it wrong leaves the valid bit clear and the transfer silent.
+  212:     c  = store(A, RE_TLB_A, TLBA_TILE << 48, op=OP_SD_T0_A3)
+  213:     c += store(A, DEST, PAINT)                     # pre-paint: liveness, NOT a tail oracle
+  214:     c += store(A, MTE_MODE, depth)
+  215:     c += store(A, MTE_BG,   BG_VAL)
+  216:     c += store(A, MTE_DST0, DST0)
+  217:     c += store(A, MTE_DST1_START, DST1)            # START fires do_mte_transfer()
+  218:     return c
+  219: 
+  220: def copy(A):
+  221:     """Tiled 32-bit COPY of ONE pixel: source (1,0) -> dest (0,0), both in TLB_A's tile.
+  222: 
+  223:     These rows exist because a FILL never reads `src_mode': deleting only
+  224:     `src_mode |= DE_MODE_TYPE_RGBA' is invisible to every fill row.  Three seats confirmed both
+  225:     the prediction and the byte walk.  dest[0] is 0x1a under BOTH correct shapes -- so `copy top'
+  226:     distinguishes neither HEAD nor the fix, and that IS its job: it reds only under a ONE-SIDED
+  227:     edit (source-only -> 0x4d, dest-only -> 0x00).
+  228: 
+  229:     A note the kimi seat asked for, so a future reader does not "correct" the want: the
+  230:     dest-only cell gives 0x00 because the CI GET *assigns* `*color = buf[0]', zero-extending it.
+  231:     Had the GET left `bg' untouched, an RGBA PUT would have emitted bg>>24 instead.  The row is
+  232:     right; the reason is the assignment, not "the high byte of a low-byte colour" in general.
+  233: 
+  234:     The destination is PRE-PAINTED so that a transfer which silently does nothing (an invalid
+  235:     TLB entry, say) reports 0x99 rather than looking like a plausible byte."""
+  236:     c  = store(A, RE_TLB_A, TLBA_TILE << 48, op=OP_SD_T0_A3)
+  237:     c += store(A, DEST + 4, SRC_WORD)              # the source pixel, four distinct bytes
+  238:     c += store(A, DEST,     PAINT)                 # the destination, so a no-op is visible
+  239:     c += store(A, MTE_MODE, MODE_D32 | MODE_COPY)
+  240:     c += store(A, MTE_SRC0, SRC_PIX_X << 16)       # src x=4 -> pixel 1 at depth 32, y=0
+  241:     c += store(A, MTE_DST0, DST0)
+  242:     c += store(A, MTE_DST1_START, DST1)            # START fires do_mte_transfer()
+  243:     return c
+  244: 
+  245: print("sgi_mte_fill_probe -- binary=%s label=%s machine=sgi/ip32" % (BIN, LABEL))
+  246: print("%-12s %-14s %-16s %-52s %s" % ("row", "got", "want", "note", ""))
+  247: 
+  248: A = Addr(CODE)
+  249: t, alive = session(store(A, SCRATCH, LIVE_VAL) + load(A, SCRATCH) + ["print v0"])
+  250: row("live", printed(t, "v0") if alive else "died", "0x%x" % LIVE_VAL,
+  251:     "LIVENESS: guest store then load, through RAM")
+  252: 
+  253: A = Addr(CODE)
+  254: t, alive = session(load(A, DE_STATUS) + ["print v0"])
+  255: row("devsig", printed(t, "v0") if alive else "died", DE_STAT,
+  256:     "DEVSIG: CRIME_DE_STATUS reads 0x1e000000; RAM reads 0")
+  257: 
+  258: #  *** THE PAINT MUST BE PINNED AT THE ORACLE ADDRESS, IN ITS OWN SESSION. ***
+  259: #  `live' proves RAM works at SCRATCH, which is NOT where the fill lands.  Without this row an
+  260: #  inequality against the paint passes on zeros, on the leftover sentinel, on a missed print and
+  261: #  on a dead session.  A SEPARATE session because `printed()' returns the FIRST match: two reads
+  262: #  of v0 in one session return the same sample.
+  263: A = Addr(CODE)
+  264: t, alive = session(store(A, DEST, PAINT) + load(A, DEST) + ["print v0"])
+  265: row("paint ok", topbyte(printed(t, "v0")) if alive else "died", "0x%02x" % PAINT_TOP,
+  266:     "CONTROL: the paint really lands AT the oracle address, not just at SCRATCH")
+  267: 
+  268: A = Addr(CODE)
+  269: t, alive = session(fill(A) + load(A, DEST) + ["print v0"])
+  270: got = topbyte(printed(t, "v0")) if alive else "died"
+  271: 
+  272: row("fill alive", "alive" if alive else "died", "alive",
+  273:     "CONTROL: the host survives a tiled 32-bit fill")
+  274: #  *** AN INEQUALITY AGAINST THE PAINT PASSES ON EVERY NON-OUTCOME. ***  0x00 (paint never
+  275: #  landed), 0xde (the `lw' never ran, v0 still SENTINEL), "absent" (the print regex missed) and
+  276: #  "died" (gxemul never started) are all != 0x99, so the first draft scored them all GREEN.
+  277: #  Stated POSITIVELY instead: dest[0] must be a byte the fill can actually produce, so each of
+  278: #  those four is a FAILURE that names itself in the got column.
+  279: produced = got in ("0x%02x" % CI_TOP, "0x%02x" % RGBA_TOP)
+  280: row("fill ran", "yes" if produced else got, "yes",
+  281:     "CONTROL: dest[0] is 0x%02x (CI) or 0x%02x (RGBA) -- not paint/zero/sentinel/died"
+  282:     % (CI_TOP, RGBA_TOP))
+  283: #  *** THE DEFECT ROW.  It asserts the CORRECT byte and is expected to FAIL on HEAD. ***
+  284: row("fill top", got, "0x%02x" % RGBA_TOP,
+  285:     "dest[0] must be bg>>24 (RGBA), not (uint8_t)bg = 0x%02x (CI)" % CI_TOP)
+  286: 
+  287: #  *** `fill top' CANNOT TELL RGBA FROM RGB, AND THAT MUTANT PASSES EVERY OTHER ROW HERE. ***
+  288: #  Found independently by two seats.  The RGB PUT arm writes {bg>>24, bg>>16, bg>>8, 0x00} --
+  289: #  IDENTICAL to RGBA at dest[0], different at dest[3].  So a one-token `|= DE_MODE_TYPE_RGB'
+  290: #  substitution is invisible to dest[0] no matter how many fill rows exist.
+  291: #
+  292: #  The tail is assertable only once the fix is in, because CI leaves dest[1..3] as host stack.
+  293: #  So this row is GATED on the leading byte proving the RGBA arm ran: on HEAD it reports `n/a'
+  294: #  and FAILS -- deterministically, naming its own reason -- instead of scoring a nondeterministic
+  295: #  stack byte.  Honest in all three states:
+  296: #      HEAD (CI)      n/a: dest[0] not RGBA   FAIL
+  297: #      fixed (RGBA)   0x44                    ok
+  298: #      fixed + RGB    0x00                    FAIL
+  299: #  `printed()' returns the FIRST match, which is what is wanted here: `got' and `fullword' are
+  300: #  deliberately the SAME sample, read at two byte positions.
+  301: rgba_ran = (got == "0x%02x" % RGBA_TOP)
+  302: fullword = printed(t, "v0") if alive else "died"
+  303: row("fill bot", byte_n(fullword, 3) if rgba_ran else "n/a: dest[0] not RGBA",
+  304:     "0x%02x" % CI_TOP,
+  305:     "dest[3] must be bg's LOW byte -- RGB writes 0x00 there and still passes `fill top'")
+  306: 
+  307: #  ---- THE DEPTH AXIS.  Both rows want the CI byte, because at 8 and 16 bits CI is CORRECT and
+  308: #  the branch must stay COLD.  Green on HEAD and green after the fix; they red only if the
+  309: #  repaired comparison OVER-REACHES.  16 is not optional -- it is the cell that catches
+  310: #  `depth >= 16', which 8 cannot see, and it is a DOCUMENTED encoding (MTE_DEPTH_16).
+  311: A = Addr(CODE)
+  312: t8, alive8 = session(fill(A, MODE_D8) + load(A, DEST) + ["print v0"])
+  313: row("depth8 top", byte_n(printed(t8, "v0"), 0) if alive8 else "died", "0x%02x" % CI_TOP,
+  314:     "8bpp: CI is CORRECT here -- reds if the comparison became `!= 8' or always-true")
+  315: 
+  316: A = Addr(CODE)
+  317: t16, alive16 = session(fill(A, MODE_D16) + load(A, DEST) + ["print v0"])
+  318: row("depth16 top", byte_n(printed(t16, "v0"), 0) if alive16 else "died", "0x%02x" % CI_TOP,
+  319:     "16bpp: the ADJACENT documented cell -- reds under `depth >= 16', invisible at 8bpp")
+  320: 
+  321: #  ---- THE COPY AXIS.  A fill never reads `src_mode', so these are the only rows that can see a
+  322: #  source-side edit.  See copy() for the byte walk and for why dest[0] is 0x1a either way.
+  323: A = Addr(CODE)
+  324: tc, alivec = session(copy(A) + load(A, DEST) + ["print v0"])
+  325: cw = printed(tc, "v0") if alivec else "died"
+  326: row("copy alive", "alive" if alivec else "died", "alive",
+  327:     "CONTROL: the host survives a tiled 32-bit copy")
+  328: row("copy top", byte_n(cw, 0), "0x%02x" % SRC_B0,
+  329:     "source byte 0 survives BOTH correct shapes -- reds only on a ONE-SIDED type edit")
+  330: row("copy 2nd", byte_n(cw, 1) if rgba_ran else "n/a: dest[0] not RGBA", "0x%02x" % SRC_B1,
+  331:     "proves the COPY path really took RGBA -- CI leaves dest[1] as host stack")
+  332: 
+  333: #  *** THE SOURCE-SIDE RGB SUBSTITUTION ESCAPES ALL TWELVE ROWS ABOVE, AND THE PRE-TABLE CHECK
+  334: #  IS WHERE THAT WAS SUPPOSED TO SURFACE -- so it is closed here, before the table runs. ***
+  335: #  `src_mode |= DE_MODE_TYPE_RGB' makes the GET compute (b0<<24)+(b1<<16)+(b2<<8) -- it DROPS
+  336: #  the low byte.  dest[0] and dest[1] are unchanged, so `copy top' and `copy 2nd' stay green.
+  337: #  Only the LAST byte moves: 0x4d becomes 0x00.  The grok seat named this channel by predicting
+  338: #  the row set would need `dest[3] == 0x00 vs 0xdd'.
+  339: #  It closes three cells at once -- source RGB (0x00), dest RGB (0x00), and a deleted source
+  340: #  assignment (0x1a, because a CI GET zero-extends and RGBA then writes the colour at dest[3]).
+  341: row("copy 4th", byte_n(cw, 3) if rgba_ran else "n/a: dest[0] not RGBA", "0x%02x" % SRC_B3,
+  342:     "source byte 3 -- the ONLY byte an RGB-for-RGBA substitution moves on either side")
+  343: 
+  344: ok = sum(1 for _, o in rows if o)
+  345: print()
+  346: print("MTEFILL_RESULT=%d/%d" % (ok, len(rows)))
+  347: print("MTEFILL_DONE")
+  348: sys.exit(0 if ok == len(rows) else 1)
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n 'MTE_DEPTH_|MTE_TLB_|MTE_MODE_|MTE_.*TLB_SHIFT|DE_MODE_TYPE_|DE_MODE_BUF' GXEMUL-SEC/src/include -g '*.h';" in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$reviewLines = Get-Content -LiteralPath '"'GXEMUL-SEC/src/devices/dev_sgi_re.c'; for ("'$reviewIndex = 1290; $reviewIndex -lt 1527 -and $reviewIndex -lt $reviewLines.Length; $reviewIndex++) { '"'{0,5}: {1}' -f ("'$reviewIndex + 1), $reviewLines[$reviewIndex] }' in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$reviewLines = Get-Content -LiteralPath '"'GXEMUL-SEC/src/devices/dev_sgi_re.c'; for ("'$reviewIndex = 145; $reviewIndex -lt 375 -and $reviewIndex -lt $reviewLines.Length; $reviewIndex++) { '"'{0,5}: {1}' -f ("'$reviewIndex + 1), $reviewLines[$reviewIndex] }' in C:\DocumentNoSnc\CC\GXEMUL
+ succeeded in 74ms:
+GXEMUL-SEC/src/include\thirdparty\crmfbreg.h:254:#define MTE_MODE_DST_ECC	0x00000001	/* enable ECC in DST */
+GXEMUL-SEC/src/include\thirdparty\crmfbreg.h:255:#define MTE_MODE_SRC_ECC	0x00000002	/* enable ECC in SRC */
+GXEMUL-SEC/src/include\thirdparty\crmfbreg.h:256:#define MTE_MODE_DST_BUF_MASK	0x0000001c
+GXEMUL-SEC/src/include\thirdparty\crmfbreg.h:257:	#define MTE_TLB_A	0
+GXEMUL-SEC/src/include\thirdparty\crmfbreg.h:258:	#define MTE_TLB_B	1
+GXEMUL-SEC/src/include\thirdparty\crmfbreg.h:259:	#define MTE_TLB_C	2
+GXEMUL-SEC/src/include\thirdparty\crmfbreg.h:260:	#define MTE_TLB_TEX	3
+GXEMUL-SEC/src/include\thirdparty\crmfbreg.h:261:	#define MTE_TLB_LIN_A	4
+GXEMUL-SEC/src/include\thirdparty\crmfbreg.h:262:	#define MTE_TLB_LIN_B	5
+GXEMUL-SEC/src/include\thirdparty\crmfbreg.h:263:	#define MTE_TLB_CLIP	6
+GXEMUL-SEC/src/include\thirdparty\crmfbreg.h:264:	#define MTE_DST_TLB_SHIFT 2
+GXEMUL-SEC/src/include\thirdparty\crmfbreg.h:265:#define MTE_MODE_SRC_BUF_MASK	0x000000e0
+GXEMUL-SEC/src/include\thirdparty\crmfbreg.h:266:	#define MTE_SRC_TLB_SHIFT 5
+GXEMUL-SEC/src/include\thirdparty\crmfbreg.h:267:#define MTE_MODE_DEPTH_MASK	0x00000300
+GXEMUL-SEC/src/include\thirdparty\crmfbreg.h:268:	#define MTE_DEPTH_8	0
+GXEMUL-SEC/src/include\thirdparty\crmfbreg.h:269:	#define MTE_DEPTH_16	1
+GXEMUL-SEC/src/include\thirdparty\crmfbreg.h:270:	#define MTE_DEPTH_32	2
+GXEMUL-SEC/src/include\thirdparty\crmfbreg.h:271:	#define MTE_DEPTH_SHIFT 8
+GXEMUL-SEC/src/include\thirdparty\crmfbreg.h:272:#define MTE_MODE_STIPPLE	0x00000400
+GXEMUL-SEC/src/include\thirdparty\crmfbreg.h:273:#define MTE_MODE_COPY		0x00000800	/* 1 - copy, 0 - clear dst */
+GXEMUL-SEC/src/include\thirdparty\crmfbreg.h:325:#define DE_MODE_BUFDEPTH_8	0x00000000
+GXEMUL-SEC/src/include\thirdparty\crmfbreg.h:326:#define DE_MODE_BUFDEPTH_16	0x00000100
+GXEMUL-SEC/src/include\thirdparty\crmfbreg.h:327:#define DE_MODE_BUFDEPTH_32	0x00000200
+GXEMUL-SEC/src/include\thirdparty\crmfbreg.h:328:#define DE_MODE_TYPE_CI		0x00000000
+GXEMUL-SEC/src/include\thirdparty\crmfbreg.h:329:#define DE_MODE_TYPE_RGB	0x00000010
+GXEMUL-SEC/src/include\thirdparty\crmfbreg.h:330:#define DE_MODE_TYPE_RGBA	0x00000020
+GXEMUL-SEC/src/include\thirdparty\crmfbreg.h:331:#define DE_MODE_TYPE_ABGR	0x00000030
+GXEMUL-SEC/src/include\thirdparty\crmfbreg.h:332:#define DE_MODE_TYPE_YCRCB	0x000000f0
+GXEMUL-SEC/src/include\thirdparty\crmfbreg.h:333:#define DE_MODE_TYPE_MASK	0x000000f0
+
+ succeeded in 154ms:
+ 1291: 
+ 1292: /*
+ 1293:  *  SGI "mte", NetBSD sources describes it as a "memory transfer engine".
+ 1294:  *
+ 1295:  *  If the relative address has the 0x0800 (CRIME_DE_START) flag set, it means
+ 1296:  *  "go ahead with the transfer". Otherwise, it is just reads and writes of the
+ 1297:  *  registers.
+ 1298:  */
+ 1299: 
+ 1300: void do_mte_transfer(struct cpu* cpu, struct sgi_re_data *d)
+ 1301: {
+ 1302: 	uint32_t mode = d->mte_reg[(CRIME_MTE_MODE - 0x3000) / sizeof(uint32_t)];
+ 1303: 	uint32_t src0 = d->mte_reg[(CRIME_MTE_SRC0 - 0x3000) / sizeof(uint32_t)];
+ 1304: 	uint32_t src1 = d->mte_reg[(CRIME_MTE_SRC1 - 0x3000) / sizeof(uint32_t)];
+ 1305: 	uint32_t dst0 = d->mte_reg[(CRIME_MTE_DST0 - 0x3000) / sizeof(uint32_t)];
+ 1306: 	uint32_t dst1 = d->mte_reg[(CRIME_MTE_DST1 - 0x3000) / sizeof(uint32_t)];
+ 1307: 	int32_t src_y_step = d->mte_reg[(CRIME_MTE_SRC_Y_STEP - 0x3000) / sizeof(uint32_t)];
+ 1308: 	int32_t dst_y_step = d->mte_reg[(CRIME_MTE_DST_Y_STEP - 0x3000) / sizeof(uint32_t)];
+ 1309: 	uint32_t dstlen = dst1 - dst0 + 1, fill_addr;
+ 1310: 	unsigned char zerobuf[4096];
+ 1311: 	int depth = 8 << ((mode & MTE_MODE_DEPTH_MASK) >> MTE_DEPTH_SHIFT);
+ 1312: 	int src = (mode & MTE_MODE_SRC_BUF_MASK) >> MTE_SRC_TLB_SHIFT;
+ 1313: 	uint32_t bytemask = d->mte_reg[(CRIME_MTE_BYTEMASK - 0x3000) / sizeof(uint32_t)];
+ 1314: 	uint32_t bg = d->mte_reg[(CRIME_MTE_BG - 0x3000) / sizeof(uint32_t)];
+ 1315: 
+ 1316: 	debug("[ sgi_mte: STARTING: mode=0x%08x src0=0x%08x src1=0x%08x src_y_step=%i dst0=0x%08x,"
+ 1317: 	    " dst1=0x%08x dst_y_step=%i bg=0x%x bytemask=0x%x ]\n",
+ 1318: 	    mode,
+ 1319: 	    src0, src1, src_y_step,
+ 1320: 	    dst0, dst1, dst_y_step,
+ 1321: 	    bg, bytemask);
+ 1322: 
+ 1323: 	if (dst_y_step != 0 && dst_y_step != 1 && dst_y_step != -1) {
+ 1324: 		fatal("[ sgi_mte: TODO! unimplemented dst_y_step %i ]", dst_y_step);
+ 1325: 		// exit(1);
+ 1326: 	}
+ 1327: 
+ 1328: 	if (mode & MTE_MODE_STIPPLE) {
+ 1329: 		fatal("[ sgi_mte: unimplemented MTE_MODE_STIPPLE ]");
+ 1330: 		exit(1);
+ 1331: 	}
+ 1332: 
+ 1333: 	int src_tlb = (mode & MTE_MODE_SRC_BUF_MASK) >> MTE_SRC_TLB_SHIFT;
+ 1334: 	int dst_tlb = (mode & MTE_MODE_DST_BUF_MASK) >> MTE_DST_TLB_SHIFT;
+ 1335: 	
+ 1336: 	if (src > MTE_TLB_C) {
+ 1337: 		fatal("[ sgi_mte: unimplemented SRC ]");
+ 1338: 		exit(1);
+ 1339: 	}
+ 1340: 
+ 1341: 	switch (dst_tlb) {
+ 1342: 	case MTE_TLB_A:
+ 1343: 	case MTE_TLB_B:
+ 1344: 	case MTE_TLB_C:
+ 1345: 		// Used by NetBSD's crmfb_fill_rect. It puts graphical
+ 1346: 		// coordinates in dst0 and dst1.
+ 1347: 		{
+ 1348: 			int x1 = (dst0 >> 16) & 0xfff;
+ 1349: 			int y1 = dst0 & 0xfff;
+ 1350: 			int x2 = (dst1 >> 16) & 0xfff;
+ 1351: 			int y2 = dst1 & 0xfff;
+ 1352: 			x1 /= (depth / 8);
+ 1353: 			x2 /= (depth / 8);
+ 1354: 
+ 1355: 			int src_x1 = (src0 >> 16) & 0xfff;
+ 1356: 			int src_y1 = src0 & 0xfff;
+ 1357: 			// int src_x2 = (src1 >> 16) & 0xfff;
+ 1358: 			// int src_y2 = src1 & 0xfff;
+ 1359: 			src_x1 /= (depth / 8);
+ 1360: 			// src_x2 /= (depth / 8);
+ 1361: 
+ 1362: 			int dx = x1 > x2 ? -1 : 1;
+ 1363: 			int dy = y1 > y2 ? -1 : 1;
+ 1364: 			
+ 1365: 			uint32_t src_mode = (src_tlb << 10) + (((mode & MTE_MODE_DEPTH_MASK) >> MTE_DEPTH_SHIFT) << 8);
+ 1366: 			uint32_t dst_mode = (dst_tlb << 10) + (((mode & MTE_MODE_DEPTH_MASK) >> MTE_DEPTH_SHIFT) << 8);
+ 1367: 
+ 1368: 			// Hack. The MTE perhaps doesn't deal with colors per se,
+ 1369: 			// but this makes sure that we copy 32 bits when doing 32-bit
+ 1370: 			// transfers.
+ 1371: 			/*  #509: was `depth == 4' -- UNREACHABLE.  `depth' is
+ 1372: 			    a count of BITS (8 << a two-bit field, so 8/16/32/64
+ 1373: 			    only); 4 is the corresponding BYTE count, which the
+ 1374: 			    author used correctly in the `/ (depth / 8)' lines
+ 1375: 			    just above.  So both assignments were dead, every
+ 1376: 			    tiled transfer took the CI arm, and at 32 bits CI
+ 1377: 			    assigns buf[0] alone while memory_rw copies four --
+ 1378: 			    publishing three bytes of host stack into guest
+ 1379: 			    memory.  The comment above states the intended
+ 1380: 			    condition in words: 32-bit transfers.
+ 1381: 
+ 1382: 			    This repairs the 32-bit cell ONLY.  The 16-bit and
+ 1383: 			    reserved-encoding-3 cells assign fewer bytes than
+ 1384: 			    they copy for the same reason and are NOT closed
+ 1385: 			    here -- see the uninitialised-buffer sibling.  */
+ 1386: 			if (depth == 32) {	/*  #509  */
+ 1387: 				src_mode |= DE_MODE_TYPE_RGBA;
+ 1388: 				dst_mode |= DE_MODE_TYPE_RGBA;
+ 1389: 			}
+ 1390: 
+ 1391: 			int src_y = src_y1;
+ 1392: 			for (int y = y1; y != y2+dy; y += dy) {
+ 1393: 				int src_x = src_x1;
+ 1394: 				
+ 1395: 				for  (int x = x1; x != x2+dx; x += dx) {
+ 1396: 					if (mode & MTE_MODE_COPY) {
+ 1397: 						horrible_getputpixel(0, cpu, d,
+ 1398: 							src_x, src_y, &bg, src_mode);
+ 1399: 						src_x += dx;
+ 1400: 					}
+ 1401: 
+ 1402: 					horrible_getputpixel(1, cpu, d, x, y, &bg, dst_mode);
+ 1403: 				}
+ 1404: 				
+ 1405: 				src_y += dy;
+ 1406: 			}
+ 1407: 		}
+ 1408: 		break;
+ 1409: 	case MTE_TLB_LIN_A:
+ 1410: 	case MTE_TLB_LIN_B:
+ 1411: 		// Used by the PROM to zero-fill memory (?).
+ 1412: 		if (mode & MTE_MODE_COPY) {
+ 1413: 			fatal("[ sgi_mte: unimplemented MTE_MODE_COPY ]");
+ 1414: 			exit(1);
+ 1415: 		}
+ 1416: 
+ 1417: 		if (depth != 8) {
+ 1418: 			fatal("[ sgi_mte: unimplemented MTE_DEPTH_x ]");
+ 1419: 			exit(1);
+ 1420: 		}
+ 1421: 
+ 1422: 		debug("[ sgi_mte: LINEAR TRANSFER: mode=0x%08x dst0=0x%016llx,"
+ 1423: 		    " dst1=0x%016llx (length 0x%llx), dst_y_step=%i bg=0x%x, bytemask=0x%x ]\n",
+ 1424: 		    mode,
+ 1425: 		    (long long)dst0, (long long)dst1,
+ 1426: 		    (long long)dstlen, dst_y_step, (int)bg, (int)bytemask);
+ 1427: 
+ 1428: 		if (bytemask != 0xffffffff) {
+ 1429: 			fatal("unimplemented MTE bytemask 0x%08x\n", (int)bytemask);
+ 1430: 			exit(1);
+ 1431: 		}
+ 1432: 
+ 1433: 		/*
+ 1434: 		 *  Horrible hack:
+ 1435: 		 *
+ 1436: 		 *  During bootup, the PROM fills memory at 0x40000000 and
+ 1437: 		 *  forward. This corresponds to the lowest possible RAM address.
+ 1438: 		 *  However, these fills are not going via the CPU's cache,
+ 1439: 		 *  which contains things such as the return address on the
+ 1440: 		 *  stack. If we _really_ write this data in the emulator (which
+ 1441: 		 *  doesn't emulate the cache), it would overwrite the stack.
+ 1442: 		 *
+ 1443: 		 *  So let's not.
+ 1444: 		 *
+ 1445: 		 *  (If some guest OS or firmware variant actually depends on
+ 1446: 		 *  the ability to write to the start of memory this way,
+ 1447: 		 *  it would not work in the emulator.)
+ 1448: 		 */
+ 1449: 		// if (dst0 >= 0x40000000 && dst0 < 0x40004000 && dst1 > 0x40004000) {
+ 1450: 		//	dst0 += 0x4000;
+ 1451: 		//	dstlen -= 0x4000;
+ 1452: 		// }
+ 1453: 
+ 1454: 		/*
+ 1455: 		 *  HUH?
+ 1456: 		 *
+ 1457: 		 *  Note that due to a bug (?) in the PROM firmware when it
+ 1458: 		 *  is setting up the TLB entries, only every _second_ page is
+ 1459: 		 *  actually put correctly in the TLB. This means that even
+ 1460: 		 *  though it then tries to fill 0x40000000 .. 0x40007fff with
+ 1461: 		 *  zeroes, it only fills 0x40001000 .. 0x40001fff,
+ 1462: 		 *  0x40003000 .. 0x40003fff and so on!
+ 1463: 		 *
+ 1464: 		 *  So the Horrible hack above is not needed.
+ 1465: 		 *
+ 1466: 		 *  Ironic.
+ 1467: 		 */
+ 1468: 
+ 1469: 		memset(zerobuf, bg, dstlen < sizeof(zerobuf) ? dstlen : sizeof(zerobuf));
+ 1470: 		fill_addr = dst0;
+ 1471: 		while (dstlen != 0) {
+ 1472: 			uint64_t fill_len;
+ 1473: 			if (dstlen > sizeof(zerobuf))
+ 1474: 				fill_len = sizeof(zerobuf);
+ 1475: 			else
+ 1476: 				fill_len = dstlen;
+ 1477: 
+ 1478: 			uint64_t starting_page = fill_addr & ~0xfff;
+ 1479: 			uint64_t ending_page = (fill_addr + fill_len - 1) & ~0xfff;
+ 1480: 			if (starting_page != ending_page) {
+ 1481: 				fill_len = starting_page + 4096 - fill_addr;
+ 1482: 			}
+ 1483: 
+ 1484: 			// Find starting_page in the TLB in question.
+ 1485: 			starting_page >>= 12;
+ 1486: 			uint32_t *tlb = dst_tlb == MTE_TLB_LIN_A ? d->re_linear_a : d->re_linear_b;
+ 1487: 			int match = 0;
+ 1488: 			for (int i = 0; i < 32; ++i) {
+ 1489: 				uint32_t entry = tlb[i];
+ 1490: 				if (entry & 0x80000000) {
+ 1491: 					entry &= ~0x80000000;
+ 1492: 					if (entry == starting_page) {
+ 1493: 						match = 1;
+ 1494: 						break;
+ 1495: 					}
+ 1496: 				}
+ 1497: 			}
+ 1498: 			
+ 1499: 			if (match) {
+ 1500: 				cpu->memory_rw(cpu, cpu->mem, fill_addr, zerobuf, fill_len,
+ 1501: 					MEM_WRITE, NO_EXCEPTIONS | PHYSICAL);
+ 1502: 			} else {
+ 1503: 				debug("[ sgi_mte: WARNING: address 0x%x not found in TLB? Ignoring fill. ]\n",
+ 1504: 					(long long)fill_addr);
+ 1505: 			}
+ 1506: 
+ 1507: 			fill_addr += fill_len;
+ 1508: 			dstlen -= (uint32_t)fill_len;	/* OB-23: subtract bytes actually filled */
+ 1509: 		}
+ 1510: 		break;
+ 1511: 	default:
+ 1512: 		fatal("[ sgi_mte: TODO! unimplemented dst_tlb 0x%x ]", dst_tlb);
+ 1513: 	}
+ 1514: }
+ 1515: 
+ 1516: DEVICE_ACCESS(sgi_mte)
+ 1517: {
+ 1518: 	struct sgi_re_data *d = (struct sgi_re_data *) extra;
+ 1519: 	uint64_t idata = 0, odata = 0;
+ 1520: 	int regnr;
+ 1521: 	int startFlag = relative_addr & CRIME_DE_START;
+ 1522: 
+ 1523: 	relative_addr &= ~CRIME_DE_START;
+ 1524: 
+ 1525: 	idata = memory_readmax64(cpu, data, len);
+ 1526: 	regnr = relative_addr / sizeof(uint32_t);
+ 1527: 
+
+ succeeded in 154ms:
+  146: 	uint32_t	de_reg[DEV_SGI_DE_LENGTH / sizeof(uint32_t)];
+  147: 
+  148: 	// Memory transfer engine registers:
+  149: 	uint32_t	mte_reg[DEV_SGI_MTE_LENGTH / sizeof(uint32_t)];
+  150: 
+  151: 	/*
+  152: 	 *  #497: width-guard decline latches; see the enum above.
+  153: 	 *
+  154: 	 *  PLACED LAST, DELIBERATELY, AND THE ORDER IS LOAD-BEARING.
+  155: 	 *  re_linear_a/b are written at [tlbi] AND [tlbi+1] with tlbi able to
+  156: 	 *  reach 31, so index 32 of either array lands on whichever field
+  157: 	 *  FOLLOWS it.  An earlier draft of this change put `warned' between
+  158: 	 *  re_linear_b and de_reg; measured with offsetof, that made
+  159: 	 *  re_linear_b[32] alias `warned' rather than de_reg[0] -- which both
+  160: 	 *  falsified the adjacency the two LINEAR site comments cite, and made
+  161: 	 *  an over-run SET WARNING LATCH BITS and silence this device's own
+  162: 	 *  diagnostics.  Keeping the latch after mte_reg restores the
+  163: 	 *  documented adjacency: re_linear_a[32] is re_linear_b[0] and
+  164: 	 *  re_linear_b[32] is de_reg[0].
+  165: 	 */
+  166: 	uint32_t	warned;
+  167: };
+  168: 
+  169: 
+  170: /*
+  171:  *  horrible_getputpixel():
+  172:  *
+  173:  *  This routine gets/puts a pixel in one of the tiles, from the perspective of
+  174:  *  the rendering/drawing engine. Given x and y, it figures out which tile
+  175:  *  number it is, and then finally does a slow read/write to get/put the pixel
+  176:  *  at the correct sub-coordinates within the tile.
+  177:  *
+  178:  *  Tiles are always 512 _bytes_ wide, and 128 pixels high. For 32-bit color
+  179:  *  modes, for example, that means 128 x 128 pixels.
+  180:  *
+  181:  *  For "linear" modes, y is ignored and x is an offset to select which linear
+  182:  *  TLB entry to use.
+  183:  */
+  184: void horrible_getputpixel(int put, struct cpu* cpu, struct sgi_re_data* d,
+  185: 	int x, int y, uint32_t* color, int mode)
+  186: {
+  187: 	uint32_t color_mode = mode & DE_MODE_TYPE_MASK;
+  188: 	int bufdepth = 1 << ((mode >> 8) & 3); 
+  189: 
+  190: 	// dst_mode (see NetBSD's crmfbreg.h):
+  191: 	// #define DE_MODE_TLB_A           0x00000000
+  192: 	// #define DE_MODE_TLB_B           0x00000400
+  193: 	// #define DE_MODE_TLB_C           0x00000800
+  194: 	// #define DE_MODE_LIN_A           0x00001000
+  195: 	// #define DE_MODE_LIN_B           0x00001400
+  196: 	uint32_t tlb_mode = (mode >> 10) & 0x7;
+  197: 	int linear = tlb_mode > 3;
+  198: 
+  199: 	if (!linear && (x < 0 || y < 0 || x >= 2048 || y >= 2048))
+  200: 		return;
+  201: 
+  202: 	int tilewidth_in_pixels = 512 / bufdepth;
+  203: 	
+  204: 	int tile_nr_x = x / tilewidth_in_pixels;
+  205: 	int tile_nr_y = y >> 7;
+  206: 
+  207: 	unsigned int tile_nr = tile_nr_y * 16 + tile_nr_x;
+  208: 
+  209: 	y &= 127;
+  210: 	int xofs = (x % tilewidth_in_pixels) * bufdepth;
+  211: 	int ofs = 512 * y + xofs;
+  212: 
+  213: 	uint32_t tileptr = 0;
+  214: 
+  215: 	/*  #100: cases 0-2 index re_tlb_[abc][256] with a guest-derived
+  216: 	    tile_nr = (y>>7)*16 + x/tilewidth; bound it (case 4 self-checks).  */
+  217: 	if (tlb_mode <= 2 && tile_nr >= 256)
+  218: 		return;
+  219: 
+  220: 	switch (tlb_mode) {
+  221: 	case 0:	tileptr = d->re_tlb_a[tile_nr] << 16;
+  222: 		break;
+  223: 	case 1:	tileptr = d->re_tlb_b[tile_nr] << 16;
+  224: 		break;
+  225: 	case 2:	tileptr = d->re_tlb_c[tile_nr] << 16;
+  226: 		break;
+  227: 	case 4:	tile_nr = x >> 12;
+  228: 		if (tile_nr >= 32)
+  229: 			return;
+  230: 		tileptr = 0x80000000 | (d->re_linear_a[tile_nr] << 12);
+  231: 		ofs = x & 4095;
+  232: 		// TODO... probably not correct!
+  233: 		// printf("tileptr = %08x x = %i y = %i tile_nr = %i ofs = %i\n", tileptr, x, y, tile_nr, ofs);
+  234: 		break;
+  235: 	default:/*  sgirandompixel: this arm used to assign `*color = random()' -- with
+  236: 		    its exit(1) commented out -- so a failed GET handed the CALLER a
+  237: 		    random value, and draw_primitive() then wrote it to the destination
+  238: 		    in the same loop iteration, since `color' is shared by the XFER GET
+  239: 		    and the PUT.  DE_MODE_LIN_B (0x1400) is one of the FIVE modes
+  240: 		    crmfbreg.h documents and extracts to tlb_mode 5, so this was
+  241: 		    reachable with a DOCUMENTED mode, not only with a junk one.
+  242: 		    MEASURED, rung 3: the destination received 0x4b1763a1, 0x2ee4b4df
+  243: 		    and 0x7433cdc1 on successive runs of
+  244: 		    regress/sgi_re_randompixel_probe.py.
+  245: 
+  246: 		    NOW DECLINED: `*color' is left alone, so the caller's own
+  247: 		    `uint32_t color = fg' stands and what lands is at least
+  248: 		    DETERMINISTIC.  The announce is latched because this helper is
+  249: 		    per-pixel.
+  250: 
+  251: 		    WHAT THIS DOES NOT DO, filed rather than silently omitted: the
+  252: 		    caller STILL PERFORMS its dependent PUT, so a declined GET still
+  253: 		    writes fg (row sgirandomskipput -- suppressing it needs a return
+  254: 		    value and every GET site changed, which is more than one site);
+  255: 		    LIN_B is still not implemented, and the panel refused to endorse
+  256: 		    implementing it as LIN_A-with-the-other-array on symmetry alone
+  257: 		    (row sgirelinb); and the COLOUR-mode switch below carries the same
+  258: 		    random() shape at its own default (row sgirandomcolour).  */
+  259: 		if (!(d->warned & SGIRE_W_BADMODE)) {
+  260: 			d->warned |= SGIRE_W_BADMODE;
+  261: 			/*  `dst_mode' is kept from the original text although the
+  262: 			    parameter is also passed as src_mode on a GET: the probe
+  263: 			    anchors on this literal, and rewording it here would be
+  264: 			    scope creep AND would move an oracle anchor mid-round,
+  265: 			    which is the laundering shape whatever the intent.
+  266: 			    Filed as sgirenamedstmode.  */
+  267: 			fatal("[ sgi_re: unimplemented dst_mode %i for "
+  268: 			    "horrible_getputpixel (%s), x=%i y=%i; declined "
+  269: 			    "(once) ]\n", mode, put ? "put" : "get", x, y);
+  270: 		}
+  271: 		return;
+  272: 	}
+  273: 
+  274: 	// The highest bit seems to be set for a "valid" tile pointer.
+  275: 	if (!(tileptr & 0x80000000)) {
+  276: 		//printf("dst_mode %i, tile_nr = %i,  tileptr = 0x%llx\n", dst_mode, tile_nr, (long long)tileptr);
+  277: 		//fatal("sgi gbe horrible_getputpixel: unexpected non-set high bit of tileptr?\n");
+  278: 		//exit(1);
+  279: 		return;
+  280: 	}
+  281: 	
+  282: 	tileptr &= ~0x80000000;
+  283: 
+  284: 	uint8_t buf[8];		/* #100: bufdepth can be 8 = 1<<((mode>>8)&3) */
+  285: 	if (put) {
+  286: 		switch (color_mode) {
+  287: 		case DE_MODE_TYPE_CI:
+  288: 			buf[0] = *color;
+  289: 			break;
+  290: 		case DE_MODE_TYPE_RGB:
+  291: 			buf[0] = *color >> 24;
+  292: 			buf[1] = *color >> 16;
+  293: 			buf[2] = *color >> 8;
+  294: 			buf[3] = 0;
+  295: 			break;
+  296: 		case DE_MODE_TYPE_RGBA:
+  297: 			buf[0] = *color >> 24;
+  298: 			buf[1] = *color >> 16;
+  299: 			buf[2] = *color >> 8;
+  300: 			buf[3] = *color;
+  301: 			break;
+  302: 		case DE_MODE_TYPE_ABGR:
+  303: 			buf[0] = *color;
+  304: 			buf[1] = *color >> 8;
+  305: 			buf[2] = *color >> 16;
+  306: 			buf[3] = *color >> 24;
+  307: 			break;
+  308: 		default:buf[0] = random();
+  309: 			buf[1] = random();
+  310: 			buf[2] = random();
+  311: 			buf[3] = random();
+  312: 			// TODO.
+  313: 			fatal("[ put: color mode = 0x%x ]\n", color_mode);
+  314: 		}
+  315: 
+  316: 		cpu->memory_rw(cpu, cpu->mem, tileptr + ofs,
+  317: 		    buf, bufdepth, MEM_WRITE, NO_EXCEPTIONS | PHYSICAL);
+  318: 	} else {
+  319: 		cpu->memory_rw(cpu, cpu->mem, tileptr + ofs,
+  320: 		    buf, bufdepth, MEM_READ, NO_EXCEPTIONS | PHYSICAL);
+  321: 
+  322: 		switch (color_mode) {
+  323: 		case DE_MODE_TYPE_CI:
+  324: 			*color = buf[0];
+  325: 			break;
+  326: 		case DE_MODE_TYPE_RGB:
+  327: 			/*  #505: this read buf[1..3] while the PUT arm above
+  328: 			    writes the three channels at buf[0..2] and an
+  329: 			    explicit pad at buf[3] -- so an RGB pixel did not
+  330: 			    survive its own round trip, shifting one byte left
+  331: 			    with a zero fill on every RGB source read.
+  332: 
+  333: 			    The PUT arm is the authoritative one, and the
+  334: 			    warrant is OUTSIDE this function: dev_sgi_gbe.c's
+  335: 			    scanout reads the same tile memory back for display
+  336: 			    as (buf[0]<<24)+(buf[1]<<16)+(buf[2]<<8)+buf[3],
+  337: 			    then CRMFB_MODE_TYP_RGB8 takes R,G,B from bits
+  338: 			    31..24, 23..16 and 15..8 -- byte 0 is R and byte 3
+  339: 			    is UNUSED.  So the pad sits at buf[3] because the
+  340: 			    consumer ignores buf[3], not because PUT writes a
+  341: 			    zero there; that is what makes this non-circular.
+  342: 			    The RGBA and ABGR PUT arms independently agree --
+  343: 			    both lay [R,G,B,x] in memory despite opposite
+  344: 			    register word orders -- which leaves this GET the
+  345: 			    lone container outlier among the 32-bit arms.
+  346: 
+  347: 			    The low byte stays ZERO on purpose: RGB carries
+  348: 			    three channels, so a corrected read of 0xaabbccdd
+  349: 			    yields 0xaabbcc00, NOT the source word.  */
+  350: 			*color = (buf[0] << 24) + (buf[1] << 16) + (buf[2] << 8);
+  351: 			break;
+  352: 		case DE_MODE_TYPE_RGBA:
+  353: 			*color = (buf[0] << 24) + (buf[1] << 16) + (buf[2] << 8) + buf[3];
+  354: 			break;
+  355: 		case DE_MODE_TYPE_ABGR:
+  356: 			*color = (buf[3] << 24) + (buf[2] << 16) + (buf[1] << 8) + buf[0];
+  357: 			break;
+  358: 		default:// Read "raw" 32-bit value:
+  359: 			*color = (buf[3] << 24) + (buf[2] << 16) + (buf[1] << 8) + buf[0];
+  360: 			fatal("[ get: color mode = 0x%x ]\n", color_mode);
+  361: 		}
+  362: 	}
+  363: }
+  364: 
+  365: 
+  366: /*
+  367:  *  SGI "re", NetBSD sources describes it as a "rendering engine".
+  368:  */
+  369: 
+  370: DEVICE_ACCESS(sgi_re)
+  371: {
+  372: 	struct sgi_re_data *d = (struct sgi_re_data *) extra;
+  373: 	uint64_t idata = 0, odata = 0;
+  374: 
+  375: 	idata = memory_readmax64(cpu, data, len);
+
+codex
+The source matches the inlined hunk. The detector has one shared gate derived from the fill result; both copy-tail rows reuse it. In M3 that gate is open and `copy 4th` fails on a defined `0x1a`; in M4 it is closed despite a correct RGBA copy. The totals may still agree, but the stated explanation does not.
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg --files GXEMUL-SEC/src -g '*Makefile*' -g 'Makefile*' -g 'AGENTS.md' -g '*build*';" in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n 'CXX|CC=|CXXFLAGS|CFLAGS|std=c|g\\+\\+|clang\\+\\+' GXEMUL-SEC/src -g 'Makefile*' -g '*.mk';" in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n 'rgba_ran|n/a:|\\bgated?\\b|SKIP|blocked|prerequisite' GXEMUL-SEC/regress -g '*.py' -g '"'!**/artifacts/**'"';" in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$reviewLines = Get-Content -LiteralPath '"'GXEMUL-SEC/src/devices/dev_sgi_re.c'; for ("'$reviewIndex = 0; $reviewIndex -lt 145; $reviewIndex++) { '"'{0,5}: {1}' -f ("'$reviewIndex + 1), $reviewLines[$reviewIndex] };' in C:\DocumentNoSnc\CC\GXEMUL
+ succeeded in 122ms:
+GXEMUL-SEC/src\Makefile:13:CC=cc
+GXEMUL-SEC/src\net\Makefile.skel:5:CFLAGS=$(CWARNINGS) $(COPTIM) $(XINCLUDE) $(DINCLUDE)
+GXEMUL-SEC/src\promemul\Makefile.skel:5:CFLAGS=$(CWARNINGS) $(COPTIM) $(DINCLUDE)
+GXEMUL-SEC/src\net\Makefile:13:CC=cc
+GXEMUL-SEC/src\net\Makefile:25:CFLAGS=$(CWARNINGS) $(COPTIM) $(XINCLUDE) $(DINCLUDE)
+GXEMUL-SEC/src\symbol\Makefile:13:CC=cc
+GXEMUL-SEC/src\symbol\Makefile:27:CFLAGS=$(CWARNINGS) $(COPTIM) $(DINCLUDE)
+GXEMUL-SEC/src\machines\Makefile.skel:5:CFLAGS=$(CWARNINGS) $(COPTIM) $(XINCLUDE) $(DINCLUDE)
+GXEMUL-SEC/src\machines\Makefile:13:CC=cc
+GXEMUL-SEC/src\machines\Makefile:25:CFLAGS=$(CWARNINGS) $(COPTIM) $(XINCLUDE) $(DINCLUDE)
+GXEMUL-SEC/src\console\Makefile.skel:8:CFLAGS=$(CWARNINGS) $(COPTIM) $(XINCLUDE) $(DINCLUDE)
+GXEMUL-SEC/src\console\Makefile:13:CC=cc
+GXEMUL-SEC/src\console\Makefile:28:CFLAGS=$(CWARNINGS) $(COPTIM) $(XINCLUDE) $(DINCLUDE)
+GXEMUL-SEC/src\promemul\Makefile:13:CC=cc
+GXEMUL-SEC/src\promemul\Makefile:25:CFLAGS=$(CWARNINGS) $(COPTIM) $(DINCLUDE)
+GXEMUL-SEC/src\symbol\Makefile.skel:7:CFLAGS=$(CWARNINGS) $(COPTIM) $(DINCLUDE)
+GXEMUL-SEC/src\cpus\Makefile.skel:5:CFLAGS=$(CWARNINGS) $(COPTIM) $(DINCLUDE)
+GXEMUL-SEC/src\include\Makefile:13:CC=cc
+GXEMUL-SEC/src\debugger\Makefile.skel:5:CFLAGS=$(CWARNINGS) $(COPTIM) $(XINCLUDE) $(DINCLUDE)
+GXEMUL-SEC/src\debugger\Makefile:13:CC=cc
+GXEMUL-SEC/src\debugger\Makefile:25:CFLAGS=$(CWARNINGS) $(COPTIM) $(XINCLUDE) $(DINCLUDE)
+GXEMUL-SEC/src\devices\Makefile.skel:5:CFLAGS=$(CWARNINGS) $(COPTIM) $(XINCLUDE) $(DINCLUDE)
+GXEMUL-SEC/src\devices\Makefile:13:CC=cc
+GXEMUL-SEC/src\devices\Makefile:25:CFLAGS=$(CWARNINGS) $(COPTIM) $(XINCLUDE) $(DINCLUDE)
+GXEMUL-SEC/src\disk\Makefile.skel:5:CFLAGS=$(CWARNINGS) $(COPTIM) $(DINCLUDE)
+GXEMUL-SEC/src\disk\Makefile:13:CC=cc
+GXEMUL-SEC/src\disk\Makefile:25:CFLAGS=$(CWARNINGS) $(COPTIM) $(DINCLUDE)
+GXEMUL-SEC/src\file\Makefile.skel:5:CFLAGS=$(CWARNINGS) $(COPTIM) $(DINCLUDE)
+GXEMUL-SEC/src\file\Makefile:13:CC=cc
+GXEMUL-SEC/src\file\Makefile:25:CFLAGS=$(CWARNINGS) $(COPTIM) $(DINCLUDE)
+GXEMUL-SEC/src\core\Makefile:13:CC=cc
+GXEMUL-SEC/src\core\Makefile:25:CFLAGS=$(CWARNINGS) $(COPTIM) $(XINCLUDE) $(DINCLUDE)
+GXEMUL-SEC/src\core\Makefile.skel:5:CFLAGS=$(CWARNINGS) $(COPTIM) $(XINCLUDE) $(DINCLUDE)
+GXEMUL-SEC/src\cpus\Makefile:13:CC=cc
+GXEMUL-SEC/src\cpus\Makefile:25:CFLAGS=$(CWARNINGS) $(COPTIM) $(DINCLUDE)
+GXEMUL-SEC/src\devices\fonts\Makefile:13:CC=cc
+
+ succeeded in 127ms:
+GXEMUL-SEC/regress\arm_flags_probe.py:250:         of execution and runs the combiner for each) is separately gated on
+GXEMUL-SEC/regress\arm_flags_probe.py:729:    """#350's r1 == 0 arm: gate the HONEST iteration count via the marker.
+GXEMUL-SEC/regress\arm_flags_probe.py:866:    can prove the fold still fires. #349's DEBUG-gated marker took over that
+GXEMUL-SEC/regress\arm_flags_probe.py:1167:#  say so rather than implying the gate covers it.
+GXEMUL-SEC/regress\arm_flags_probe.py:1316:    gate 14 uses in ARM mode -- never a debugger cpsr write, which reaches
+GXEMUL-SEC/regress\arm_flags_probe.py:1597:#  it a DEBUG-gated fold-fired marker; #350 made a non-multiple counter fall
+GXEMUL-SEC/regress\arm_flags_probe.py:1609:#  NB debugmsg's verbosity gate is bypassed under single_step, so the quiet
+GXEMUL-SEC/regress\arm_endian_probe.py:312:    #  scored as landed, PUT_STATUS printed OK, and gate 14's "endian puts all
+GXEMUL-SEC/regress\arm_endian_probe.py:646:    #  session that never started still printed PUT_STATUS=OK and gate 14's
+GXEMUL-SEC/regress\arcbios_shift_probe.py:26:scope.  The companion behavioural row in gate 9 (UBSan sweep over the reaching subtypes)
+GXEMUL-SEC/regress\arcbios_shift_probe.py:27:covers execution, and inherits gate 9's staleness caveat (`asanstale`), which is exactly
+GXEMUL-SEC/regress\alpha_harness_probe.py:208:#  kernel-mode side of that gate, by asserting the diagnostic is ABSENT and the machine is still
+GXEMUL-SEC/regress\alpha_harness_probe.py:213:#  it.  A harness that assumed kernel mode and hit the gate would report a dead machine and look
+GXEMUL-SEC/regress\alpha_harness_probe.py:216:gated = "gated" if "user mode" in t else "not gated"
+GXEMUL-SEC/regress\alpha_harness_probe.py:217:row("palgate", gated, "not gated",
+GXEMUL-SEC/regress\alpha_pfnoffset_probe.py:13:#  which is what licenses a fix, and it must NOT be gated -- a witness stays red until the fix
+GXEMUL-SEC/regress\absorb_census.py:38:`absorb_census.py $LOGDIR` destroyed /tmp/gxregress -- the pty logs gate 6 grades -- and the
+GXEMUL-SEC/regress\arm_writeback_probe.py:2:"""Round 104 gate candidate: the ARM load/store base writeback (#19).
+GXEMUL-SEC/regress\arm_writeback_probe.py:36:translation array is gated on `!no_exceptions`, so seeding a page with `put w`
+GXEMUL-SEC/regress\arm_writeback_probe.py:44:of gate 14 still green at 261 checks. The historical pre-fix sweep of 5/14 is
+GXEMUL-SEC/regress\arm_writeback_probe.py:68:writeback statements turns 8 gate checks red in the strlen and fold-marker
+GXEMUL-SEC/regress\arm_writeback_probe.py:71:intact) and the whole gate passed at 264: `ldrb` has datalen 1, so
+GXEMUL-SEC/regress\arm_writeback_probe.py:86:`#362`'s general-path rotation was deletable with the whole gate green before
+GXEMUL-SEC/regress\arm_writeback_probe.py:124:arm_translate_v2p_mmu failure returns BEFORE the insertion gate, so `put w` would
+GXEMUL-SEC/regress\arm_writeback_probe.py:163:be gated. #355 already taught this project not to assert on encodings the
+GXEMUL-SEC/regress\arm_writeback_probe.py:211:#  mis-encoded row before, one of them a committed gate row that measured the
+GXEMUL-SEC/regress\arm_writeback_probe.py:281:#    insertion gate, memory_rw.c:
+GXEMUL-SEC/regress\arm_writeback_probe.py:286:#  page cold and `put w` does not. Note the gate ALSO requires a full page, so
+GXEMUL-SEC/regress\arm_writeback_probe.py:309:#  exits EXIT_SKIP -- so every check AFTER the writeback section stops running and
+GXEMUL-SEC/regress\arm_writeback_probe.py:310:#  gate 14 reports SKIP, which reads like a missing rig image rather than a
+GXEMUL-SEC/regress\arm_writeback_probe.py:387:#  still satisfy a two-space gate pattern. The longest name here is 26 chars
+GXEMUL-SEC/regress\arm_writeback_probe.py:392:#  Names stay well inside that column, so a gate check of
+GXEMUL-SEC/regress\arm_writeback_probe.py:453:    #  rotation left intact, the rows above stayed GREEN and the whole of gate 14
+GXEMUL-SEC/regress\arm_writeback_probe.py:473:    #  witness IS a writeback assertion. Deleting both statements turns 8 gate
+GXEMUL-SEC/regress\arm_writeback_probe.py:489:    #  pair intact -- and the whole of gate 14 passed at 264 checks, 0 failures.
+GXEMUL-SEC/regress\arm_writeback_probe.py:567:    #  CACHE_NONE | NO_EXCEPTIONS, and translation-array insertion is gated on
+GXEMUL-SEC/regress\arm_writeback_probe.py:702:    #  #367: the path assertion, printed as its own row so the gate can name it.
+GXEMUL-SEC/regress\arm_writeback_probe.py:705:    #  cosmetic. The gate greps named rows as "^<name>  .*ok$" -- TWO spaces --
+GXEMUL-SEC/regress\arm_writeback_probe.py:712:    #  the format's two literal spaces keep the gate pattern satisfiable
+GXEMUL-SEC/regress\arm_idle_probe.py:12:read-ahead is gated on `cpu->machine->breakpoints.n == 0` (cpu_dyntrans.c:1939),
+GXEMUL-SEC/regress\arm_idle_probe.py:157:    #  gate-14 flake. `debug()` reaches va_debug(), which emits ONE printf per
+GXEMUL-SEC/regress\arm_strlen_probe.py:17:        selected by whether the combination happened, and -J is gate 14's own
+GXEMUL-SEC/regress\arm_strlen_probe.py:31:would not be acceptable in a gate; this is deterministic.
+GXEMUL-SEC/regress\arm_strlen_probe.py:241:#  probe prints 0/0, and the gate fails loudly on both the control check and
+GXEMUL-SEC/regress\arm_memcpy_probe.py:156:    #  probe 12/12 and the whole of gate 14 at 243 checks. Sampling the
+GXEMUL-SEC/regress\arm_memcpy_probe.py:220:#  and gate 14 at all 243 checks. These are PIN, not DISC: the genuine
+GXEMUL-SEC/regress\arm_fold_marker_probe.py:37:TWO PASSES ARE REQUIRED. The folds gate on is_userpage, which only an access
+GXEMUL-SEC/regress\arm_fold_marker_probe.py:57:                  NEVER `step`: single-step BYPASSES the verbosity gate, so a
+GXEMUL-SEC/regress\arm_fold_marker_probe.py:121:    the folds install and fire on BE exactly as on testarm (their matchers gate
+GXEMUL-SEC/regress\arm_fold_marker_probe.py:268:#  default verbosity, which tests the verbosity gate rather than the fold. These
+GXEMUL-SEC/regress\arm_fold_marker_probe.py:605:#  install gate because these matchers key on the GENERIC handler, which
+GXEMUL-SEC/regress\arm_fold_marker_probe.py:660:    #  prove the fold FIRED -- a gated-off fold runs the general handler on
+GXEMUL-SEC/regress\asic_badaddr_probe.py:7:The gate passes "$PMAX" "$KERNEL" explicitly, so the gate would NOT have
+GXEMUL-SEC/regress\asic_badaddr_probe.py:57:        measured against the THIRTEEN-row table #463 shipped.  The gate pin is 14
+GXEMUL-SEC/regress\fbpending_drain_probe.py:9:timer_tick0 is called from nowhere else).  A gate row cannot spend that.
+GXEMUL-SEC/regress\fbpending_drain_probe.py:335:        #  `_mark`, not `mark`: gate 6's fresh-mark census keys on that exact spelling.
+GXEMUL-SEC/regress\fbpending_drain_probe.py:576:    skip = dict(label="(not run)", status="SKIPPED", regs={}, badis=[],
+GXEMUL-SEC/regress\fbpending_drain_probe.py:578:    K = run_kill() if not ONLY else dict(status="SKIPPED", saw=False)
+GXEMUL-SEC/regress\fbpending_drain_probe.py:579:    E = run_drainenc() if not ONLY else dict(status="SKIPPED", badis=[],
+GXEMUL-SEC/regress\drive_guest.py:12:        the calling gate can parse them without guessing.
+GXEMUL-SEC/regress\drive_guest.py:35:        # gate 7 fail non-deterministically; see the note in gate_ab.sh.
+GXEMUL-SEC/regress\drive_guest.py:43:        # than 600 s. Two runs, and they are DIFFERENT runs -- do not merge them: gate 7's
+GXEMUL-SEC/regress\drive_guest.py:44:        # file-polling driver reached login at 742 s (markers only), and this gate's pty
+GXEMUL-SEC/regress\drive_guest.py:48:        # 12 G is the same budget gate 7 uses (observed max 7.786 G over eleven boots,
+GXEMUL-SEC/regress\drive_guest.py:208:    AT MODULE SCOPE ON PURPOSE. The gate can only observe this driver's OUTPUT, so it cannot
+GXEMUL-SEC/regress\drive_guest.py:210:    every gate row. regress/selftest_absorb.py calls THIS function, not a copy: a
+GXEMUL-SEC/regress\drive_guest.py:240:    #  directory instead of poisoning the shared logs gate 6 grades.  `or`, not
+GXEMUL-SEC/regress\drive_guest.py:246:    #  create the directory in one place and try to write the logs in another -- and gate 6
+GXEMUL-SEC/regress\drive_guest.py:346:        mutants survive every gate row. A canned-stream test of the real function kills 10
+GXEMUL-SEC/regress\drive_guest.py:410:    #  (`budget * 1000` in argument position) left every printed key identical and every gate
+GXEMUL-SEC/regress\drive_guest.py:442:        *** BACKSTOP IS A HARD FAIL HERE, unlike gate 7. *** Gate 7 can call a wall-clock
+GXEMUL-SEC/regress\drive_guest.py:513:    #  a4: TELEMETRY, NEVER AN ORACLE.  No gate row may fail on this value: a wall-clock
+GXEMUL-SEC/regress\drive_guest.py:516:    #  is PRESENT and that it is contained by the gate's own measured interval -- never a
+GXEMUL-SEC/regress\drive_guest.py:597:    # line: with the gate comparing VALUES against VALUES_WANT, both absent compared
+GXEMUL-SEC/regress\gdrom_decline_probe.py:377:#  PRODUCT ROW FAILED, which is exactly the conflation the gate section exists to prevent. ***
+GXEMUL-SEC/regress\gdrom_decline_probe.py:378:#  The gate reads this to say "a run whose controls died is an APPARATUS failure and must not
+GXEMUL-SEC/regress\gdrom_data_probe.py:8:de-escalation clause enumerates EVERY predicate that used to gate death, so a
+GXEMUL-SEC/regress\gdrom_cond_probe.py:16:d->cond, and the GDROM_DATA read path is gated on it, so leaving the store above the
+GXEMUL-SEC/regress\gdrom_cond_probe.py:387:#  failure and must not be read as a wall of product failures.  The gate keys on this line
+GXEMUL-SEC/regress\footbridge_sites_probe.py:58:executed.  This project has a recorded incident where a wrong register field made a gate row
+GXEMUL-SEC/regress\hpcmips_ctor_probe.py:205:# for.  The parse follows gate 9's awk, gate_asan_sweep.sh:233-249 (OPENED, not
+GXEMUL-SEC/regress\luna_absentcpu_probe.py:83:    four cpus / cpu3 deliver / cpu2 deliver /        M_AND1 (`cpu_irq[cpu & 1]'), M_MIN2 (the bound clamped to two), M_SKIP2 (slot 2
+GXEMUL-SEC/regress\luna_absentcpu_probe.py:94:(a gate can rely on it).  On HEAD the witness reads PRE_FIX_SYMPTOM at row soft1 (session A) and at siofirst (session A2).
+GXEMUL-SEC/regress\luna_absentcpu_probe.py:123:weakenings of this bound (M_OFFBY1, M_REVERT, M_HARD1, M_SKIP1) are all rowed and all die.  **THE CLOSURE IS ONE SESSION AT
+GXEMUL-SEC/regress\hpcabort_witness.py:193:# for.  The parse follows gate 9's awk (regress/gate_asan_sweep.sh:50-55): a type
+GXEMUL-SEC/regress\lca_confwidth_probe.py:19:#  COMMITTED build, which is what licenses a fix.  It is not a detector and must not be gated --
+GXEMUL-SEC/regress\lca_confwidth_probe.py:33:#     SKIPPED and the caller gets the pre-zeroed buffer.  That is the UNMAPPED SIGNATURE PRODUCED
+GXEMUL-SEC/regress\luna_intmask_probe.py:22:project has a recorded incident where a wrong register field made a gate row measure the
+GXEMUL-SEC/regress\gdrom_default_probe.py:66:       denominator.  The probe has since grown and the gate pin is authoritative;
+GXEMUL-SEC/regress\gdrom_default_probe.py:76:                           from a stale ROW SCORE against the gate's pin of 58.
+GXEMUL-SEC/regress\gdrom_default_probe.py:163:    is indistinguishable from a stale ROW SCORE, and the score-claims gate
+GXEMUL-SEC/regress\gdrom_default_probe.py:272:#  exactly the two spaces the gate needs, with nothing left over.
+GXEMUL-SEC/regress\gdrom_default_probe.py:276:#  the count reads 0 against a wanted 1, so the gate fails LOUDLY rather
+GXEMUL-SEC/regress\gdrom_default_probe.py:890:#  the %-14s column, leaving ZERO trailing spaces -- so the gate's `^$v  `
+GXEMUL-SEC/regress\gdrom_default_probe.py:1215:#  measured when it had 58 rows; the gate pin is authoritative for TODAY's
+GXEMUL-SEC/regress\m8820x_sites_probe.py:31:project has a recorded incident where a wrong register field made a gate row measure the
+GXEMUL-SEC/regress\m88k_exc_probe.py:672:    #  exit status: the gate can rely on it (a row printing a failure word while the process exits 0 was a pass-2 finding)
+GXEMUL-SEC/regress\m88k_rounding_probe.py:471:#  only this probe's pty capture ever sees -- a gate grepping its own log for it would be
+GXEMUL-SEC/regress\m88k_rounding_probe.py:473:#  seat caught exactly that in the first version of this gate). So the probe counts the
+GXEMUL-SEC/regress\m88k_rounding_probe.py:650:#  total -- the gate asserts one number.
+GXEMUL-SEC/regress\m88k_idle_probe.py:38:Rows (the gate asserts the fixed strings):
+GXEMUL-SEC/regress\mips_rounding_probe.py:10:Reserved Instruction exception on the ldc1 -- measured, which is why this gate does not
+GXEMUL-SEC/regress\mips_fold_probe.py:8:cpu_dyntrans.c:1888 combination gate skips single_step, so a step-driven row
+GXEMUL-SEC/regress\mips_fold_probe.py:11:breakpoints.n == 0); the :1888 gate tests neither breakpoints.n nor the plain
+GXEMUL-SEC/regress\mips_fold_probe.py:79:  its gate.  The loop never stores to its own code page; data lives on the
+GXEMUL-SEC/regress\pcc2_width_probe.py:360:      reason the row names (`no-breakpoint') -- run the gate alone.  Their poll loops also
+GXEMUL-SEC/regress\pcc2_width_probe.py:540:    #  give it a moment after the pty closed, then kill it -- the row says so, the gate
+GXEMUL-SEC/regress\pcc2_default_probe.py:161:    #  STATUS LAST: gate 14 counts a row with `^<name>  .*ok$' / ` ok$' / ` FAIL$' -- a first draft printed the
+GXEMUL-SEC/regress\pcc2_default_probe.py:162:    #  status before the note and the gate counted ZERO of 23 rows while the probe said DONE (caught by the gate, L1).
+GXEMUL-SEC/regress\mips_subnorm_probe.py:10:emulated machines do not wire), so on pmax/R3000 the gate falls through and the
+GXEMUL-SEC/regress\mips_subnorm_probe.py:144:#  a fix that reached only one dyntrans mode would pass a single-rig gate.
+GXEMUL-SEC/regress\mips_subnorm_probe.py:225:    #  diff-review seat's finding, and the same class of defect this gate
+GXEMUL-SEC/regress\readiness_predicate_test.py:56:#  TRAILING comment (the gate's filter only strips lines that BEGIN with '#').
+GXEMUL-SEC/regress\readiness_predicate_test.py:57:#  That fake computed nothing and passed the pin and every gate row.
+GXEMUL-SEC/regress\readiness_predicate_test.py:59:#  shift by exactly its length. The gate passes a nonce and checks the arithmetic,
+GXEMUL-SEC/regress\readiness_predicate_test.py:64:#  WITHHELD. The real fix (have the gate drive these predicates instead of reading
+GXEMUL-SEC/regress\readiness_predicate_test.py:135:#  deleted from all fourteen sites with every gate still green, because nothing
+GXEMUL-SEC/regress\selftest_absorb.py:6:measure seat quantified the consequence -- 13 of 18 driver mutants survive every gate row.
+GXEMUL-SEC/regress\ppc_rounding_probe.py:535:#  no other instruction in this gate can exercise.
+GXEMUL-SEC/regress\ppc_rounding_probe.py:586:    So the gate proved stickiness against the single instruction that
+GXEMUL-SEC/regress\ppc_rounding_probe.py:963:#  rows the fix could be deleted from X(lfsx) and the gate would still score
+GXEMUL-SEC/regress\ppc_rounding_probe.py:999:    #  the positive rows into 0x80000000, and nothing in this gate would have
+GXEMUL-SEC/regress\selftest_logdir.py:4:WHY THIS EXISTS, and why it is not a gate-5 row.  #422 measured that in the DEFAULT battery
+GXEMUL-SEC/regress\selftest_logdir.py:7:check that cannot fail.  A real detector must point LOGDIR somewhere ELSE, and gate 5 cannot
+GXEMUL-SEC/regress\selftest_logdir.py:8:do that without moving the files gate 6 grades.  So the check runs here, offline, with a stub
+GXEMUL-SEC/regress\selftest_logdir.py:60:        print("SELFTEST_LOGDIR_SKIP")
+GXEMUL-SEC/regress\pit8253_latch_probe.py:654:    #  This probe is scheduled for gate 14 by 2026-09-20 (`wiringcliff`).  Adding the
+GXEMUL-SEC/regress\pit8253_latch_probe.py:655:    #  sentinel now means the gate row that wires it can be written correctly the
+GXEMUL-SEC/regress\selftest_budget.py:6:gate grades.  MEASURED: mutating only the enforcing read (`budget * 1000` in argument
+GXEMUL-SEC/regress\selftest_budget.py:7:position) left every printed key identical and every gate row GREEN, while the run went from
+GXEMUL-SEC/regress\selftest_budget.py:25:anything -- a review seat caught the first version of this file claiming otherwise while gate
+GXEMUL-SEC/regress\selftest_budget.py:26:2, the OFFLINE gate, would have gone red on a machine without it.  When the directory is
+GXEMUL-SEC/regress\selftest_budget.py:27:absent this prints a distinguishable SKIP rather than a failure that blames the driver.
+GXEMUL-SEC/regress\selftest_budget.py:114:        print("SELFTEST_BUDGET_SKIP")
+GXEMUL-SEC/regress\sgi_eaddr_probe.py:19:    fix, while the gate row printed green.
+GXEMUL-SEC/regress\sgi_eaddr_probe.py:51:CLASS: DETECTOR (green once the defect is gone), so it must be run by a gate.
+GXEMUL-SEC/regress\sgi_de_primop_probe.py:54:      (RL 16, TB 17, SKIP_END 18, derived by grepping every read of `op'), so the
+GXEMUL-SEC/regress\sgi_de_primop_probe.py:281:    #  <= 15 chars: the name column is %-16s and the gate's per-row pattern needs
+GXEMUL-SEC/regress\sgi_de_primop_probe.py:282:    #  TWO spaces after the name.  A 16-char name emits ONE and the gate check
+GXEMUL-SEC/regress\sgi_de_primop_probe.py:283:    #  becomes unsatisfiable -- a RED gate on a GREEN probe.  A sibling round
+GXEMUL-SEC/regress\sgi_de_primop_probe.py:284:    #  shipped exactly that and it was found by a review seat, not by the gate.
+GXEMUL-SEC/regress\sgi_de_primop_probe.py:288:    #  gate would have caught it -- its per-row check wants exactly 1 -- but only
+GXEMUL-SEC/regress\sgi_de_primop_probe.py:294:        "row name %r is %d chars; the gate pattern needs <= 15" % (name, len(name)))
+GXEMUL-SEC/regress\sgi_de_primop_probe.py:559:#  PRE-TABLE BLOCK -- the mandatory check I had SKIPPED, run late, which located
+GXEMUL-SEC/regress\sgi_de_primop_probe.py:729:#      DE_PRIM_LINE_SKIP_END 0x00040000   line bound      read at            :735
+GXEMUL-SEC/regress\sgi_de_primop_probe.py:731:#  So `RECTANGLE | RL' and `LINE | SKIP_END' are LEGAL primitives that the widened
+GXEMUL-SEC/regress\sgi_de_primop_probe.py:755:#      bit 18      DE_PRIM_LINE_SKIP_END   read at             :735  (loop bound)
+GXEMUL-SEC/regress\sgi_de_primop_probe.py:1185:#      M_FLOOD_SK   (op & SKIP_END)     bit 18 -> RED    dec flood
+GXEMUL-SEC/regress\sgi_de_width_probe.py:63:#        the same diff adds.  Found by a measuring seat, not by a gate. ***
+GXEMUL-SEC/regress\sgi_re_rgb_probe.py:332:#  gate row, and the ladder says so in clause (i): a witness shows the symptom on the pre-fix
+GXEMUL-SEC/regress\sgi_mte_fill_probe.py:15:#  FAIL here; it must not be gated. ***
+GXEMUL-SEC/regress\sgi_mte_fill_probe.py:296:#      HEAD (CI)      n/a: dest[0] not RGBA   FAIL
+GXEMUL-SEC/regress\sgi_mte_fill_probe.py:301:rgba_ran = (got == "0x%02x" % RGBA_TOP)
+GXEMUL-SEC/regress\sgi_mte_fill_probe.py:303:row("fill bot", byte_n(fullword, 3) if rgba_ran else "n/a: dest[0] not RGBA",
+GXEMUL-SEC/regress\sgi_mte_fill_probe.py:330:row("copy 2nd", byte_n(cw, 1) if rgba_ran else "n/a: dest[0] not RGBA", "0x%02x" % SRC_B1,
+GXEMUL-SEC/regress\sgi_mte_fill_probe.py:341:row("copy 4th", byte_n(cw, 3) if rgba_ran else "n/a: dest[0] not RGBA", "0x%02x" % SRC_B3,
+GXEMUL-SEC/regress\sgi_re_unmapped_probe.py:97:#        gate-wired, and which MEASURED 32/35 against the 1<<0 -> 1<<1 mutant
+GXEMUL-SEC/regress\sgi_re_unmapped_probe.py:231:    #  ONE space, the gate's check becomes UNSATISFIABLE (got=0 against want=1),
+GXEMUL-SEC/regress\sgi_re_unmapped_probe.py:232:    #  and the gate goes RED on a GREEN probe.
+GXEMUL-SEC/regress\sgi_re_unmapped_probe.py:235:    #  a review seat rather than by the gate -- because the gate SCRIPT was never
+GXEMUL-SEC/regress\sgi_re_unmapped_probe.py:241:        "row name %r is %d chars; the gate pattern needs <= 15" % (name, len(name)))
+GXEMUL-SEC/regress\ppc_halt_probe.py:46:                                 gate drives is a 32-bit G4, where real
+GXEMUL-SEC/regress\ppc_halt_probe.py:71:committed gate row that measured an empty register for months (see #325). A
+GXEMUL-SEC/regress\sh4_pcic_probe.py:266:        #  `_mark`, not `mark`: gate 6's fresh-mark census keys on that exact
+GXEMUL-SEC/regress\sh4_pcic_probe.py:938:    skipped = " -- SKIPPED (--fast), which is a FAILURE by design" if a.fast \
+GXEMUL-SEC/regress\sh4_rtcsr_witness.py:60:be wired into a gate -- `check_probe_wiring.py` treats a gated witness as a HARD failure.
+GXEMUL-SEC/regress\sh4_sci_witness.py:55:be wired into a gate.  MEASURED both ways on the same script: 8/8 before #451 and 5/8
+GXEMUL-SEC/regress\sh4_sci_witness.py:58:SEPARATE artefact, sh4_sci_probe.py, which is the gated one.
+GXEMUL-SEC/regress\sh4_tlbda2_probe.py:48:                  The de-escalation accept row.  The predicate that used to gate death
+GXEMUL-SEC/regress\sh4_val_probe.py:14:host", and folding #447 rows under that token would make the gate's own check
+GXEMUL-SEC/regress\sh4_val_probe.py:132:#  finds the sibling however the gate spells its cwd.
+GXEMUL-SEC/regress\sh4_val_witness.py:11:is what a witness should be, and is why it is not wired into a gate.  Its
+GXEMUL-SEC/regress\sh4_chcr_probe.py:23:    pin the ACCEPT SIDE of every predicate that used to gate death.
+GXEMUL-SEC/regress\sh4_chcr_probe.py:44:    visible in the gate rather than silent.
+GXEMUL-SEC/regress\sh4_chcr_probe.py:495:    #  gate that goes red is how anyone finds out the exclusion has expired.
+GXEMUL-SEC/regress\sh_iprbcd_probe.py:4:Its rows assert the POST-fix state, which is why it is gated; the witness is the
+GXEMUL-SEC/regress\sh_iprbcd_probe.py:204:    as absent while the probe itself printed a correct 6/10 (10-row era) and 10/10.  A gate
+GXEMUL-SEC/regress\sh_iprbcd_probe.py:205:    that greps nothing scores the same as a gate whose rows all pass.
+GXEMUL-SEC/regress\sh4_bsc_width_probe.py:127:        #  `_mark`, not `mark`: gate 6's fresh-mark census keys on that exact spelling
+GXEMUL-SEC/regress\sh4_bsc_width_probe.py:411:#  `SH4_BSC_WIDTH_PASS` and `_FAIL` are mutually exclusive, so a gate keyed on either one
+GXEMUL-SEC/regress\sh4_bsc_width_probe.py:418:#  by its existence.  Adding it now means the gate row that wires this probe can be written
+GXEMUL-SEC/regress\sh_pclock_probe.py:6:green after the fix and safe to gate.  The WITNESS is the recorded fact that this
+GXEMUL-SEC/regress\sh_rounding_probe.py:22:explicitly marked a pin. Otherwise reverting #296 would leave the gate green.
+GXEMUL-SEC/regress\sh_rounding_probe.py:149:    #  -Inf - 1.0 as a NaN. The offline gate watched both corruptions happen before the
+GXEMUL-SEC/regress\sh_rounding_probe.py:312:# count of genuinely discriminating vectors so the gate can assert on it rather than
+GXEMUL-SEC/regress\sh4pcic_witness.py:83:                  this while a gate is running -- gate oracles are wall-clock.
+GXEMUL-SEC/regress\sh4pcic_witness.py:199:        #  `_mark`, not `mark`: gate 6's fresh-mark census keys on that exact
+GXEMUL-SEC/regress\sh4_chcr_witness.py:45:what a witness should be, and it is why it must NEVER be wired into a gate --
+GXEMUL-SEC/regress\sh4_chcr_witness.py:46:`check_probe_wiring.py` treats a gated witness as a HARD failure, because it manufactures
+GXEMUL-SEC/regress\sh_intprio_probe.py:395:#  gated death, so exactly one accept row is owed.
+GXEMUL-SEC/regress\sh_intprio_probe.py:438:         #  exceptions are not blocked.  Reset leaves IMASK at 15, which would
+GXEMUL-SEC/regress\wdc_altoffset_4bit_probe.py:23:              predicate the old exit(1) used to gate; 0x0e is a LEGAL control
+GXEMUL-SEC/regress\wdc_altoffset_probe.py:121:  PRE-FIX binary and a post-fix one -- and no gate builds a second leg.  Dated-exempt
+GXEMUL-SEC/regress\wdc_altoffset_probe.py:234:    accept by accident -- this project has shipped that mistake into a committed gate.
+GXEMUL-SEC/regress\wdc_altoffset_probe.py:396:#  gate grepping for `^<label> .*ok$` then matches NOTHING -- the row silently stops
+GXEMUL-SEC/regress\wdc_flood_probe.py:104:      in the gate rather than here.
+GXEMUL-SEC/regress\wdc_flood_probe.py:691:#  100 lines with the process continuing -- so no predicate here ever gated death, and
+GXEMUL-SEC/regress\wdc_latch_census.py:45:#      => the producer flood is unbounded again and the gate is GREEN
+GXEMUL-SEC/regress\wdc_latch_census.py:137:            #  swallowed a real SET and the gate stayed green.
+GXEMUL-SEC/regress\selfmutant.py:21:verdict tokens, and detect NOTHING -- with every gate-2 assertion green.  Every one of those
+GXEMUL-SEC/regress\selfmutant.py:40:3.  THE ANCHOR MUST BE UNIQUE, not merely present.  gate 3's applier tests membership and
+GXEMUL-SEC/regress\selfmutant.py:64:#  The same flags gate 2 uses.  -Wl,--gc-sections is load-bearing for several of these
+GXEMUL-SEC/regress\selfmutant.py:71:#  ELSE. ***  gate 2 builds diff_memory_rw.c with -fno-optimize-sibling-calls, and its own
+GXEMUL-SEC/regress\selfmutant.py:111:#  not OK, not FAIL, not SETUP -- and gate 2 wedged with nothing to grade.  Reproduced: an
+GXEMUL-SEC/regress\selfmutant.py:121:#  gate, which is the fastest way to get a gate switched off.
+GXEMUL-SEC/regress\selfmutant.py:142:    #  substitution creates no new group in non-interactive bash -- so killpg would be gate
+GXEMUL-SEC/regress\selfmutant.py:143:    #  suicide.  Measured: the child's pgid was 32 against the gate's 11.
+GXEMUL-SEC/regress\selfmutant.py:174:    #  same class as gate 3's filed #55.  A negative returncode is a signal on POSIX.
+GXEMUL-SEC/regress\selfmutant.py:393:    #  fragment file, and a wrong argument count each produced NO SELFMUTANT_* token, and gate
+GXEMUL-SEC/regress\selfmutant.py:396:    #  failure at the gate, which is the whole class this round removes.  The timeout closes
+
+ succeeded in 140ms:
+GXEMUL-SEC/src\symbol\Makefile.skel
+GXEMUL-SEC/src\symbol\Makefile
+GXEMUL-SEC/src\promemul\Makefile.skel
+GXEMUL-SEC/src\promemul\Makefile
+GXEMUL-SEC/src\net\Makefile.skel
+GXEMUL-SEC/src\net\Makefile
+GXEMUL-SEC/src\Makefile.skel
+GXEMUL-SEC/src\Makefile
+GXEMUL-SEC/src\machines\Makefile.skel
+GXEMUL-SEC/src\machines\Makefile
+GXEMUL-SEC/src\debugger\Makefile.skel
+GXEMUL-SEC/src\debugger\Makefile
+GXEMUL-SEC/src\core\Makefile.skel
+GXEMUL-SEC/src\core\Makefile
+GXEMUL-SEC/src\console\Makefile.skel
+GXEMUL-SEC/src\console\Makefile
+GXEMUL-SEC/src\disk\Makefile.skel
+GXEMUL-SEC/src\disk\Makefile
+GXEMUL-SEC/src\file\Makefile.skel
+GXEMUL-SEC/src\file\Makefile
+GXEMUL-SEC/src\include\Makefile
+GXEMUL-SEC/src\include\Makefile.skel
+GXEMUL-SEC/src\cpus\Makefile.skel
+GXEMUL-SEC/src\cpus\Makefile
+GXEMUL-SEC/src\devices\Makefile.skel
+GXEMUL-SEC/src\devices\Makefile
+GXEMUL-SEC/src\devices\fonts\Makefile.skel
+GXEMUL-SEC/src\devices\fonts\Makefile
+
+ succeeded in 216ms:
+    1: /*
+    2:  *  Copyright (C) 2003-2018  Anders Gavare.  All rights reserved.
+    3:  *
+    4:  *  Redistribution and use in source and binary forms, with or without
+    5:  *  modification, are permitted provided that the following conditions are met:
+    6:  *
+    7:  *  1. Redistributions of source code must retain the above copyright
+    8:  *     notice, this list of conditions and the following disclaimer.
+    9:  *  2. Redistributions in binary form must reproduce the above copyright  
+   10:  *     notice, this list of conditions and the following disclaimer in the 
+   11:  *     documentation and/or other materials provided with the distribution.
+   12:  *  3. The name of the author may not be used to endorse or promote products
+   13:  *     derived from this software without specific prior written permission.
+   14:  *
+   15:  *  THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+   16:  *  ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+   17:  *  IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+   18:  *  ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE   
+   19:  *  FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+   20:  *  DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+   21:  *  OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+   22:  *  HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+   23:  *  LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+   24:  *  OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+   25:  *  SUCH DAMAGE.
+   26:  *   
+   27:  *
+   28:  *  COMMENT: SGI O2 "Rendering Engine"
+   29:  *
+   30:  *  Guesswork, based on how Linux, NetBSD, and OpenBSD use the graphics on
+   31:  *  the SGI O2. Using NetBSD terminology (from crmfbreg.h):
+   32:  *
+   33:  *  dev_sgi_re.cc (THIS FILE):
+   34:  *	0x15001000	rendering engine (TLBs)
+   35:  *	0x15002000	drawing engine
+   36:  *	0x15003000	memory transfer engine
+   37:  *	0x15004000	status registers for drawing engine
+   38:  *
+   39:  *  dev_sgi_gbe.cc:
+   40:  *	0x16000000	crm (or GBE) framebuffer control / video output
+   41:  */
+   42: 
+   43: #include <stdio.h>
+   44: #include <stdlib.h>
+   45: #include <string.h>
+   46: 
+   47: #include "console.h"
+   48: #include "cpu.h"
+   49: #include "devices.h"
+   50: #include "machine.h"
+   51: #include "memory.h"
+   52: #include "misc.h"
+   53: 
+   54: #include "thirdparty/crmfbreg.h"
+   55: #include "thirdparty/sgi_gl.h"
+   56: 
+   57: 
+   58: /*
+   59:  *  #497: one latch bit per WIDTH-guard site in DEVICE_ACCESS(sgi_re).
+   60:  *
+   61:  *  SIX FLAGS, NOT ONE.  dev_wdc.c's own comment adjudicates this: sharing a
+   62:  *  latch is licensed only across sites that are MUTUALLY EXCLUSIVE at
+   63:  *  runtime.  These six are six different address windows, and any driver
+   64:  *  bringing up the rendering engine walks all of them in ONE session, so a
+   65:  *  shared latch would report the first odd-width access and silence the
+   66:  *  other five.
+   67:  */
+   68: enum {
+   69: 	SGIRE_W_TLBA_LEN  = 1 << 0,
+   70: 	SGIRE_W_TLBB_LEN  = 1 << 1,
+   71: 	SGIRE_W_TLBC_LEN  = 1 << 2,
+   72: 	SGIRE_W_TEX_LEN   = 1 << 3,
+   73: 	SGIRE_W_LINA_LEN  = 1 << 4,
+   74: 	SGIRE_W_LINB_LEN  = 1 << 5,
+   75: 
+   76: 	/*  #498: sgi_de's width decline.  ONE bit, not six: the six above are one
+   77: 	    per SITE because six windows with six distinct message texts are walked
+   78: 	    in a single bring-up session, and one latch would report the first and
+   79: 	    silence five.  sgi_de has ONE guard and ONE message text, so the house
+   80: 	    per-message-site rule gives one bit.  Measured cost: `sb' then `sh' at
+   81: 	    one offset announces len=1 and never len=2 -- accepted, and small,
+   82: 	    because the message already prints the width.
+   83: 
+   84: 	    It must be its OWN bit.  Reusing SGIRE_W_TLBA_LEN scored 23/25: the
+   85: 	    four handlers share one malloc'd struct, so any odd-width access to
+   86: 	    sgi_re's TLB_A window would silence sgi_de's decline entirely.  */
+   87: 	SGIRE_W_DE_LEN    = 1 << 6,
+   88: 
+   89: 	/*  #499: the unmatched-address catch-all.  TWO bits, one per DIRECTION:
+   90: 	    a driver probing an unmapped window commonly reads and writes it in
+   91: 	    one pass, and one bit would announce the first and silence the other.
+   92: 
+   93: 	    PLACED AFTER SGIRE_W_DE_LEN ON PURPOSE.  An earlier draft inserted
+   94: 	    these two after SGIRE_W_LINB_LEN (1 << 5), which left the enum ending
+   95: 	    at 1 << 6 -- so a maintainer scanning to the LAST enumerator for the
+   96: 	    next free bit would take 1 << 7, WHICH THESE TWO LINES BELOW ALREADY
+   97: 	    USE.  A duplicate enumerator is legal C and silent, and all four
+   98: 	    handlers share one malloc'd struct, so the collision crosses devices.
+   99: 
+  100: 	    (Wording sharpened after a pass-2 seat read "which is already used"
+  101: 	    as a standalone claim about 1 << 7 and reported the comment as
+  102: 	    self-contradictory against the code three lines down.  The claim was
+  103: 	    right and the sentence did not say BY WHAT.)  */
+  104: 	SGIRE_W_UNMAP_WR  = 1 << 7,
+  105: 	SGIRE_W_UNMAP_RD  = 1 << 8,
+  106: 
+  107: 	/*  #500: draw_primitive()'s unimplemented drawing op.  ITS OWN BIT,
+  108: 	    for the reason #498 measured on SGIRE_W_DE_LEN: a latch shared with
+  109: 	    another site is silenced by that site's ordinary traffic, so the
+  110: 	    announce this fix exists to make would never fire.
+  111: 
+  112: 	    (This comment used to end "The next free bit is 1 << 10; the enum
+  113: 	    ends HERE on purpose so that a maintainer scanning to the last
+  114: 	    enumerator finds it."  BOTH HALVES WENT FALSE when sgirandompixel
+  115: 	    added SGIRE_W_BADMODE = 1 << 10 BELOW this line.  Demoted rather
+  116: 	    than deleted, because the REASONING is still why the convention
+  117: 	    exists -- and leaving it live would have pointed the next reader at
+  118: 	    a taken bit, which is the duplicate-enumerator collision #499
+  119: 	    already paid for and warns about four lines up.  The live
+  120: 	    next-free claim is on the LAST enumerator, where it belongs.)  */
+  121: 	SGIRE_W_PRIM_OP   = 1 << 9,
+  122: 
+  123: 	/*  sgirandompixel: horrible_getputpixel()'s unimplemented-mode arm.  ITS
+  124: 	    OWN BIT, for the reason #498 measured and #500 repeated -- the four
+  125: 	    handlers share one malloc'd struct, so a latch shared with another
+  126: 	    site is silenced by that site's ordinary traffic and the announce
+  127: 	    never fires.  This one matters more than most: the helper is
+  128: 	    PER-PIXEL, called inside line, rectangle and tiled-MTE loops, so an
+  129: 	    UNLATCHED announce is a per-pixel flood rather than a diagnostic.
+  130: 	    The next free bit is 1 << 11; the enum ends HERE on purpose, as
+  131: 	    above.  */
+  132: 	SGIRE_W_BADMODE   = 1 << 10,
+  133: };
+  134: 
+  135: struct sgi_re_data {
+  136: 	// Rendering engine registers:
+  137: 	uint16_t	re_tlb_a[256];
+  138: 	uint16_t	re_tlb_b[256];
+  139: 	uint16_t	re_tlb_c[256];
+  140: 	uint16_t	re_tex[112];
+  141: 	// todo: clip_ids registers.
+  142: 	uint32_t	re_linear_a[32];
+  143: 	uint32_t	re_linear_b[32];
+  144: 
+  145: 	// Drawing engine registers:
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n 'CRIME_DE_STATUS|0x1e000000|0x15000000|DEVINIT\\(sgi_re\\)|startFlag|do_mte_transfer' GXEMUL-SEC/src/devices/dev_sgi_re.c GXEMUL-SEC/src/machines/machine_sgi.c GXEMUL-SEC/src/include/thirdparty/crmfbreg.h" in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n 'if .* else .*(n/a|unavailable|unobserv|blocked|SKIP|missing|not run|not reached)|if (not )?(alive|.*ok|.*ran|.*ready)|prerequisite' GXEMUL-SEC/regress/sgi*.py GXEMUL-SEC/regress/gdrom_decline_probe.py GXEMUL-SEC/regress/gdrom_cond_probe.py" in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$reviewLines = Get-Content -LiteralPath '"'GXEMUL-SEC/src/devices/Makefile'; for ("'$reviewIndex = 0; $reviewIndex -lt 46 -and $reviewIndex -lt $reviewLines.Length; $reviewIndex++) { '"'{0,5}: {1}' -f ("'$reviewIndex + 1), $reviewLines[$reviewIndex] }' in C:\DocumentNoSnc\CC\GXEMUL
+ succeeded in 61ms:
+GXEMUL-SEC/src/include/thirdparty/crmfbreg.h:422:#define CRIME_DE_STATUS		0x4000
+GXEMUL-SEC/src/machines/machine_sgi.c:500:		dev_sgi_re_init(machine, mem, 0x15000000);
+GXEMUL-SEC/src/devices/dev_sgi_re.c:987:	int startFlag = relative_addr & CRIME_DE_START;
+GXEMUL-SEC/src/devices/dev_sgi_re.c:1027:		 *  Clearing startFlag and falling through -- the obvious repair --
+GXEMUL-SEC/src/devices/dev_sgi_re.c:1267:	if (startFlag)
+GXEMUL-SEC/src/devices/dev_sgi_re.c:1300:void do_mte_transfer(struct cpu* cpu, struct sgi_re_data *d)
+GXEMUL-SEC/src/devices/dev_sgi_re.c:1521:	int startFlag = relative_addr & CRIME_DE_START;
+GXEMUL-SEC/src/devices/dev_sgi_re.c:1639:	if (startFlag)
+GXEMUL-SEC/src/devices/dev_sgi_re.c:1640:		do_mte_transfer(cpu, d);
+GXEMUL-SEC/src/devices/dev_sgi_re.c:1676:	case CRIME_DE_STATUS:	// 0x4000
+
+ exited 1 in 74ms:
+rg: GXEMUL-SEC/regress/sgi*.py: The filename, directory name, or volume label syntax is incorrect. (os error 123)
+GXEMUL-SEC/regress/gdrom_decline_probe.py:190:                                          "ok" if ok else "FAIL"))
+GXEMUL-SEC/regress/gdrom_decline_probe.py:350:row("live", printed(t, "r2") if alive else "died", "0x%x" % LIVE,
+GXEMUL-SEC/regress/gdrom_decline_probe.py:372:row("gdrom map", ("mapped" if g.startswith("0x") else g) if alive else "died", "mapped",
+GXEMUL-SEC/regress/gdrom_decline_probe.py:384:      % ("OK" if rows and all(ok for _, ok in rows) else "DEAD"))
+GXEMUL-SEC/regress/gdrom_decline_probe.py:515:n = sum(1 for _, ok in rows if ok)
+GXEMUL-SEC/regress/gdrom_decline_probe.py:517:print("GDROM_DECL_VECTOR=" + ",".join(("1" if ok else "0") for _, ok in rows))
+GXEMUL-SEC/regress/gdrom_cond_probe.py:177:                                          "ok" if ok else "FAIL"))
+GXEMUL-SEC/regress/gdrom_cond_probe.py:1021:sys.exit(0 if ok == len(rows) else 1)
+
+ succeeded in 128ms:
+    1: #
+    2: #  DO NOT EDIT THIS FILE! It is automagically created by
+    3: #  the configure script, based on Makefile.skel.
+    4: #
+    5: 
+    6: XINCLUDE=-I/usr/X11R6/include
+    7: XLIB=-L/usr/X11R6/lib -lX11 -Wl,-rpath,/usr/X11R6/lib
+    8: CWARNINGS=-Wshadow -Wcast-align -Wstrict-aliasing -Wall  -Wextra -Wno-unused-parameter -Wno-cast-align
+    9: COPTIM=-fstrict-aliasing -fomit-frame-pointer -fpeephole -fgnu89-inline -O3 -DNDEBUG 
+   10: INCLUDE=-Iinclude/
+   11: DINCLUDE=-I../include/
+   12: INCLUDE2=-I../../include/
+   13: CC=cc
+   14: OTHERLIBS=-lm 
+   15: CPU_ARCHS= cpu_alpha.o cpu_alpha_palcode.o memory_alpha.o cpu_arm.o cpu_arm_coproc.o memory_arm.o  tmp_arm_loadstore.o tmp_arm_loadstore_p0_u0_w0.o tmp_arm_loadstore_p0_u0_w1.o tmp_arm_loadstore_p0_u1_w0.o tmp_arm_loadstore_p0_u1_w1.o tmp_arm_loadstore_p1_u0_w0.o tmp_arm_loadstore_p1_u0_w1.o tmp_arm_loadstore_p1_u1_w0.o tmp_arm_loadstore_p1_u1_w1.o tmp_arm_dpi.o tmp_arm_r.o tmp_arm_r0.o tmp_arm_r1.o tmp_arm_r2.o tmp_arm_r3.o tmp_arm_r4.o tmp_arm_r5.o tmp_arm_r6.o tmp_arm_r7.o tmp_arm_r8.o tmp_arm_r9.o tmp_arm_ra.o tmp_arm_rb.o tmp_arm_rc.o tmp_arm_rd.o tmp_arm_re.o tmp_arm_rf.o tmp_arm_multi.o cpu_i960.o memory_i960.o cpu_m88k.o memory_m88k.o cpu_mips.o cpu_mips_coproc.o  cpu_mips_instr_unaligned.o cpu_ppc.o cpu_riscv.o memory_riscv.o cpu_sh.o memory_sh.o
+   16: CPU_TOOLS= generate_alpha_misc generate_arm_dpi generate_arm_r generate_arm_loadstore generate_arm_multi generate_m88k_bcnd generate_m88k_loadstore generate_mips_loadstore generate_mips_loadstore_multi generate_ppc_loadstore
+   17: PREFIX=/usr
+   18: MANDIR=/usr/share/man
+   19: DESTDIR=
+   20: 
+   21: #
+   22: #  Makefile for GXemul devices
+   23: #
+   24: 
+   25: CFLAGS=$(CWARNINGS) $(COPTIM) $(XINCLUDE) $(DINCLUDE)
+   26: 
+   27: OBJS=device.o bus_isa.o bus_pci.o lk201.o \
+   28: 	dev_8253.o dev_8259.o dev_adb.o dev_ahc.o dev_algor.o dev_asc.o \
+   29: 	dev_bebox.o dev_bt431.o dev_bt455.o dev_bt459.o dev_clmpcc.o \
+   30: 	dev_colorplanemask.o dev_cons.o dev_cpc700.o dev_dc7085.o \
+   31: 	dev_dec21030.o dev_dec21143.o dev_dec5800.o dev_dec_ioasic.o \
+   32: 	dev_disk.o dev_dreamcast_asic.o dev_dreamcast_g2.o \
+   33: 	dev_dreamcast_gdrom.o dev_dreamcast_maple.o dev_dreamcast_rtc.o \
+   34: 	dev_eagle.o dev_ether.o dev_fb.o dev_fbctrl.o dev_fdc.o \
+   35: 	dev_footbridge.o dev_gc.o dev_gt.o dev_hammerhead.o dev_i80321.o \
+   36: 	dev_igsfb.o dev_iq80321_7seg.o dev_irqc.o dev_jazz.o dev_kn01.o \
+   37: 	dev_kn02.o dev_kn02ba.o dev_kn220.o dev_kn230.o dev_lca.o dev_le.o \
+   38: 	dev_lpt.o dev_luna88k.o dev_lunafb.o dev_m8820x.o dev_malta_lcd.o \
+   39: 	dev_mb8696x.o dev_mb89352.o dev_mc146818.o \
+   40: 	dev_mk48txx.o dev_mp.o dev_mvme187.o dev_ne2000.o dev_ns16550.o dev_ohci.o \
+   41: 	dev_osiop.o dev_palmbus.o dev_pcc2.o dev_pccmos.o dev_pcic.o dev_pckbc.o \
+   42: 	dev_pmagja.o dev_pmppc.o dev_prep.o dev_ps2_ether.o dev_ps2_gif.o \
+   43: 	dev_ps2_gs.o dev_ps2_spd.o dev_ps2_stuff.o dev_pvr.o dev_px.o \
+   44: 	dev_ram.o dev_random.o dev_rs5c313.o dev_rtc.o dev_rtl8139c.o \
+   45: 	dev_scc.o dev_sfb.o dev_sgi_gbe.o dev_sgi_ip19.o dev_sgi_ip20.o \
+   46: 	dev_sgi_ip22.o dev_sgi_ip30.o dev_sgi_ip32.o dev_sgi_mardigras.o \
+
+codex
+Enumeration matches all nine reported totals. It also shows that M6 and M7 select the same depths: 16, 32, and 64.
+
+I found another issue in the exercised path: the helper shifts the valid TLB entry `0x8002` left by 16 after promotion to signed `int`. With a 32-bit C `int`, that result is unrepresentable. The low copy-source byte therefore does not establish that the detector’s execution avoids undefined behavior.
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n 'row\\(' GXEMUL-SEC/regress/sgi_mte_fill_probe.py;" in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n 'if .* else .*(n/a|unavailable|unobserv|blocked|SKIP|missing|not run|not reached)|prerequisite' GXEMUL-SEC/regress -g 'sgi*.py' -g '"'!**/artifacts/**'"'" in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$reviewLines = Get-Content -LiteralPath '"'GXEMUL-SEC/src/devices/dev_sgi_re.c'; for ("'$reviewIndex = 1665; $reviewIndex -lt 1700; $reviewIndex++) { '"'{0,5}: {1}' -f ("'$reviewIndex + 1), $reviewLines[$reviewIndex] }' in C:\DocumentNoSnc\CC\GXEMUL
+ succeeded in 116ms:
+GXEMUL-SEC/regress\sgi_mte_fill_probe.py:303:row("fill bot", byte_n(fullword, 3) if rgba_ran else "n/a: dest[0] not RGBA",
+GXEMUL-SEC/regress\sgi_mte_fill_probe.py:330:row("copy 2nd", byte_n(cw, 1) if rgba_ran else "n/a: dest[0] not RGBA", "0x%02x" % SRC_B1,
+GXEMUL-SEC/regress\sgi_mte_fill_probe.py:341:row("copy 4th", byte_n(cw, 3) if rgba_ran else "n/a: dest[0] not RGBA", "0x%02x" % SRC_B3,
+
+ succeeded in 127ms:
+55:def row(name, got, want, note="", negate=False):
+250:row("live", printed(t, "v0") if alive else "died", "0x%x" % LIVE_VAL,
+255:row("devsig", printed(t, "v0") if alive else "died", DE_STAT,
+265:row("paint ok", topbyte(printed(t, "v0")) if alive else "died", "0x%02x" % PAINT_TOP,
+272:row("fill alive", "alive" if alive else "died", "alive",
+280:row("fill ran", "yes" if produced else got, "yes",
+284:row("fill top", got, "0x%02x" % RGBA_TOP,
+303:row("fill bot", byte_n(fullword, 3) if rgba_ran else "n/a: dest[0] not RGBA",
+313:row("depth8 top", byte_n(printed(t8, "v0"), 0) if alive8 else "died", "0x%02x" % CI_TOP,
+318:row("depth16 top", byte_n(printed(t16, "v0"), 0) if alive16 else "died", "0x%02x" % CI_TOP,
+326:row("copy alive", "alive" if alivec else "died", "alive",
+328:row("copy top", byte_n(cw, 0), "0x%02x" % SRC_B0,
+330:row("copy 2nd", byte_n(cw, 1) if rgba_ran else "n/a: dest[0] not RGBA", "0x%02x" % SRC_B1,
+341:row("copy 4th", byte_n(cw, 3) if rgba_ran else "n/a: dest[0] not RGBA", "0x%02x" % SRC_B3,
+
+ succeeded in 166ms:
+ 1666: {
+ 1667: 	// struct sgi_re_data *d = (struct sgi_re_data *) extra;
+ 1668: 	uint64_t idata = 0, odata = 0;
+ 1669: 
+ 1670: 	idata = memory_readmax64(cpu, data, len);
+ 1671: 
+ 1672: 	relative_addr += 0x4000;
+ 1673: 
+ 1674: 	switch (relative_addr) {
+ 1675: 
+ 1676: 	case CRIME_DE_STATUS:	// 0x4000
+ 1677: 		odata = CRIME_DE_IDLE |
+ 1678: 			CRIME_DE_SETUP_IDLE |
+ 1679: 			CRIME_DE_PIXPIPE_IDLE |
+ 1680: 			CRIME_DE_MTE_IDLE;
+ 1681: 
+ 1682: 		/*
+ 1683: 		 *  TODO: Actually simulate pipeline of a number of commands?
+ 1684: 		 */
+ 1685: 		break;
+ 1686: 
+ 1687: 	case 0x4008:
+ 1688: 		/*  Unknown. Ignore for now.  */
+ 1689: 		break;
+ 1690: 
+ 1691: 	default:
+ 1692: 		if (writeflag == MEM_WRITE)
+ 1693: 			debug("[ sgi_de_status: unimplemented write to "
+ 1694: 			    "address 0x%llx, data=0x%016llx ]\n",
+ 1695: 			    (long long)relative_addr, (long long)idata);
+ 1696: 		else
+ 1697: 			debug("[ sgi_de_status: unimplemented read from address"
+ 1698: 			    " 0x%llx ]\n", (long long)relative_addr);
+ 1699: 	}
+ 1700: 
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n 'if .* else .*(n/a|unavailable|unobserv|blocked|not run|not reached)' GXEMUL-SEC/regress -g '*.py' -g '"'!**/artifacts/**'"' -g '"'!sgi_mte_fill_probe.py'"'" in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n 'CRIME_DE_(IDLE|SETUP_IDLE|PIXPIPE_IDLE|MTE_IDLE)' GXEMUL-SEC/src/include/thirdparty/crmfbreg.h" in C:\DocumentNoSnc\CC\GXEMUL
+ succeeded in 49ms:
+423:#define CRIME_DE_IDLE		0x10000000
+424:#define CRIME_DE_SETUP_IDLE	0x08000000
+425:#define CRIME_DE_PIXPIPE_IDLE	0x04000000
+426:#define CRIME_DE_MTE_IDLE	0x02000000
+
+ succeeded in 60ms:
+GXEMUL-SEC/regress\fbpending_drain_probe.py:666:        "arm D accrual iterations = %s" % (D["out"][1] if ranD else "n/a"))
+GXEMUL-SEC/regress\pcc2_default_probe.py:174:row("named wr msg", t.count(MSG) if alive else "n/a", 18, "one announce PER OFFSET: a whole-arm latch prints 1, an unlatched arm prints 18 too -- see `latch sameoff' (an aggregate count, not a locator)")
+GXEMUL-SEC/regress\pcc2_default_probe.py:177:row("named rd msg", t.count(MSG) if alive else "n/a", 18, "the read announce fires once per offset too")
+GXEMUL-SEC/regress\pcc2_default_probe.py:178:row("named rd srvd", t.count("served 0x") if alive else "n/a", 18, "the read announce says what happened -- SERVED, never 'ignored' (the VALUE is pinned by `srvd val text')")
+GXEMUL-SEC/regress\pcc2_default_probe.py:181:row("inword msg", t.count(MSG) if alive else "n/a", 12, "...twelve announces for twelve offsets; the SECOND write to 0x06 and the read-back are silent: the latch is per offset in THIS class too (Opus M_LATCHOFF)")
+GXEMUL-SEC/regress\pcc2_default_probe.py:187:row("unnamed msg", t.count(MSG) if alive else "n/a", 13, "...thirteen announces; the second write to 0x21 and its read-back are silent (per-offset latch, unnamed class)")
+GXEMUL-SEC/regress\pcc2_default_probe.py:200:row("latch sameoff", t.count(MSG) if alive else "n/a", 1, "two writes to one offset announce ONCE: an unlatched arm prints 3 -- both writes and the appended read-back (silent under the fix: bit set); measured 3 in table 4")
+GXEMUL-SEC/regress\pcc2_default_probe.py:203:row("latch twooff", t.count(MSG) if alive else "n/a", 2, "two offsets announce TWICE: a single whole-arm latch bit prints 1")
+GXEMUL-SEC/regress\pcc2_default_probe.py:205:row("latch rw one", t.count(MSG) if alive else "n/a", 1, "a write then a read at ONE offset announce once: the WRITE sets the bit the READ tests")
+GXEMUL-SEC/regress\pcc2_default_probe.py:207:row("latch rd rd", t.count(MSG) if alive else "n/a", 1, "two READS at one offset announce once: a latch SET only on writes prints 2 (grok A) -- the setter x tester cell rw one cannot see")
+GXEMUL-SEC/regress\pcc2_default_probe.py:209:row("latch rd wr", t.count(MSG) if alive else "n/a", 1, "a READ then a write at one offset announce once: the read's bit silences the write (the fourth setter x tester cell)")
+GXEMUL-SEC/regress\pcc2_default_probe.py:211:row("latch aba", t.count(MSG) if alive else "n/a", 2, "A,B,A announces TWICE: `|=' -> `=' forgets A when B announces and prints 3 (codex) -- earlier bits survive a new offset")
+GXEMUL-SEC/regress\pcc2_default_probe.py:215:row("alias msg", t.count("offset 0x2a") if alive else "n/a", 1, "...and the announce names the FOLDED offset 0x2a: a changed fold names another")
+GXEMUL-SEC/regress\pcc2_default_probe.py:217:row("dir wr text", t.count("unimplemented write to") if alive else "n/a", 1, "the announce says WRITE for a store (an inverted writeflag test in the text says read)")
+GXEMUL-SEC/regress\pcc2_default_probe.py:218:row("wr declined", t.count("declined") if alive else "n/a", 1, "...and the word is DECLINED (no other row counts it: `ignored' would pass every count row)")
+GXEMUL-SEC/regress\pcc2_default_probe.py:219:row("wr val text", t.count("0x30 (len 1): 0x5a -- declined") if alive else "n/a", 1, "...and the announced VALUE is the byte written: the mirror of `srvd val text' on the write arm -- `idata -> 0' printed 0x0 and passed 36 rows (Opus M_WRVAL0, MEASURED)")
+GXEMUL-SEC/regress\pcc2_default_probe.py:221:row("dir rd text", t.count("unimplemented read from") if alive else "n/a", 1, "...and READ for a load")
+GXEMUL-SEC/regress\pcc2_default_probe.py:225:row("srvd val text", t.count("0x5 (len 1) -- served 0x34") if alive else "n/a", 1, "...and the announce prints THAT byte (data[0], what was served) WITH its width: `served 0x%02x' of 0 passed 23 rows (Opus M_O1, MEASURED); `(len 1)' -> `(len 4)' passed 36 (codex)")
+GXEMUL-SEC/regress\pcc2_default_probe.py:226:row("srvd half text", t.count("0x6 (len 2) -- served 0x56") if alive else "n/a", 1, "a len-2 default read at 0x06 is announced from its FIRST byte (0x56 of 0x5678): data[len-1] says 0x78 (Opus M_LASTBYTE, MEASURED 36/36); a len-2 re-kill dies here")
+GXEMUL-SEC/regress\pcc2_default_probe.py:233:row("wide wr msg", t.count("offset 0x28 (len 4)") if alive else "n/a", 1, "...announced once, with the width; the ld.w at the same offset is silenced by the per-offset bit")
+GXEMUL-SEC/regress\pcc2_default_probe.py:234:row("wide wr val", t.count("(len 4): 0x5a5a5a5a -- declined") if alive else "n/a", 1, "...and the announced value is the WHOLE word: printing data[0] instead of idata says 0x5a (Opus M_WRDATA0, MEASURED 36/36)")
+GXEMUL-SEC/regress\pcc2_default_probe.py:237:row("wide rd srvd", t.count("(len 4) -- served 0x00") if alive else "n/a", 1, "...and the announce names the width and the first served byte")
+GXEMUL-SEC/regress\pcc2_default_probe.py:245:row("put b ctl msg", t.count(MSG) if alive else "n/a", 0, "...so it prints nothing -- not a witness, a control")
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n '"'^def row|ok =|rows.append|def byte_n|TYPE_CI|TYPE_ABGR'"' GXEMUL-SEC/regress/pcc2_default_probe.py GXEMUL-SEC/src/devices/dev_sgi_re.c" in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$reviewLines = Get-Content -LiteralPath '"'GXEMUL-SEC/regress/pcc2_default_probe.py'; for ("'$reviewIndex = 54; $reviewIndex -lt 73; $reviewIndex++) { '"'{0,5}: {1}' -f ("'$reviewIndex + 1), $reviewLines[$reviewIndex] }; for ($reviewIndex = 165; $reviewIndex -lt 180; $reviewIndex++) { '"'{0,5}: {1}' -f ("'$reviewIndex + 1), $reviewLines[$reviewIndex] }' in C:\DocumentNoSnc\CC\GXEMUL
+ succeeded in 47ms:
+GXEMUL-SEC/regress/pcc2_default_probe.py:158:def row(name, got, want, why):
+GXEMUL-SEC/regress/pcc2_default_probe.py:159:    ok = str(got) == str(want)
+GXEMUL-SEC/regress/pcc2_default_probe.py:160:    rows.append(name); (None if ok else bad.append(name))
+GXEMUL-SEC/src/devices/dev_sgi_re.c:287:		case DE_MODE_TYPE_CI:
+GXEMUL-SEC/src/devices/dev_sgi_re.c:302:		case DE_MODE_TYPE_ABGR:
+GXEMUL-SEC/src/devices/dev_sgi_re.c:323:		case DE_MODE_TYPE_CI:
+GXEMUL-SEC/src/devices/dev_sgi_re.c:355:		case DE_MODE_TYPE_ABGR:
+
+ succeeded in 104ms:
+   55:   the READ announce printing a wrong or constant byte (Opus M_O1, MEASURED 23/23)
+   56:                                                     -> `srvd val text' (`served 0x34' absent) -- the served byte itself
+   57:                                                        is one the GUEST wrote (`srvd val'), not a default
+   58:   the READ announce printing the wrong byte of a HALFWORD read (Opus M_LASTBYTE `data[len-1]', MEASURED 36/36: `wide rd
+   59:       srvd' reads four ZERO bytes, so its channel could not vary)   -> `srvd half text' (0x56 of 0x5678, not 0x78).  NOT the
+   60:       wrong byte of a WORD read: `data[len>>2]' (Opus MO1, pass 4) MEASURED 46/46 -- see DISCLOSED
+   61:   THE ANNOUNCE GRID (channel x arm x width), written so the next pass verifies rather than hunts -- R = rowed, D = disclosed:
+   62:       channel        READ len1  READ len2  READ len4   WRITE len1  WRITE len2  WRITE len4
+   63:       fate            R          R          R           R           R           R
+   64:       count           R          R(0x06)    R(0x30)     R           D(silent)   R
+   65:       direction text  R          R          R           R           D(silent)   R
+   66:       width label     R          R          R           R           D(silent)   R
+   67:       value           R          R          D(zeros)    R           D(silent)   R
+   68:       offset label    R(0x5,0x6) R(0x6)     D           R(0x2a,0x30) D(silent)  R(0x28)
+   69:       every offset label outside those five is D (Opus MO3 `relative_addr < 0x14 ? relative_addr : 0', MEASURED 46/46);
+   70:       the low bit of every value cell is D (codex: all exact anchors are even)
+   71:   the WRITE announce printing a wrong or constant value (Opus M_WRVAL0 `0' and M_WRDATA0 `data[0]', MEASURED 36/36 --
+   72:       the mirror of M_O1, unrowed by the pass-2 repair)  -> `wr val text' (0x5a at len 1), `wide wr val' (0x5a5a5a5a at
+   73:                                                        len 4, where data[0] says 0x5a)
+  166: 
+  167: t, alive, how = session(setup() + program([I_ST_SCR, I_LD_SCR]) + ["print r4"])
+  168: row("live", val(t, alive, how), "0x5a5a5a5a", "LIVENESS: scratch RAM st/ld round-trip")
+  169: t, alive, how = session(setup() + program([LD_BU(4, CHIPID)]) + ["print r4"])
+  170: row("devsig chipid", val(t, alive, how), "0x20", "DEVICE-SIGNATURE: CHIPID reads PCC2_ID through a guest ld.bu (RAM would read 0)")
+  171: # -- the eighteen named unimplemented registers, one session each direction
+  172: t, alive, how = session(setup(r5="0x5a") + program([ST_B(5, o) for o in NAMED18]))
+  173: row("named wr", fate(alive, how), "survived", "guest st.b at all 18 named unimplemented registers in ONE session: (b) reinstated exit(1) kills on the first")
+  174: row("named wr msg", t.count(MSG) if alive else "n/a", 18, "one announce PER OFFSET: a whole-arm latch prints 1, an unlatched arm prints 18 too -- see `latch sameoff' (an aggregate count, not a locator)")
+  175: t, alive, how = session(setup() + program([LD_BU(4, o) for o in NAMED18]))
+  176: row("named rd", fate(alive, how), "survived", "guest ld.bu at all 18 in one session: the READ side of the defect; a writeflag guard that re-kills reads dies here")
+  177: row("named rd msg", t.count(MSG) if alive else "n/a", 18, "the read announce fires once per offset too")
+  178: row("named rd srvd", t.count("served 0x") if alive else "n/a", 18, "the read announce says what happened -- SERVED, never 'ignored' (the VALUE is pinned by `srvd val text')")
+  179: t, alive, how = session(setup(r5="0x5a") + program([ST_B(5, o) for o in INWORD] + [ST_B(5, 0x06), LD_BU(4, 0x06)]) + ["print r4"])
+  180: row("inword wr", fate(alive, how), "survived", "ALL twelve bytes inside the four 32-bit counter/compare words: no case -> default: (a re-kill at any one dies)")
+
+codex
+I would keep the three gated checks, with diagnostics that name the failed fill prerequisite. Across the eight listed mutants, every tail byte they actually score is defined; the shared fill gate still cannot prove that the copy took RGBA.
+
+The coverage statement also needs to name the unasserted bytes: fill bytes 1 and 2, and copy byte 2. These are observable parts of the comment’s “copy 32 bits” claim.
+
+codex
+**Verdict: approve `4 → 32`; do not ratify the packet unchanged. All eight listed mutants are killed, but the gate explanation is partly wrong, coverage is overstated, and the detector reaches another signed-shift issue.**
+
+I read the correct fork, including `do_mte_transfer` at line 1300. I did not read the excluded paths or run the harness. The calculations below are source-derived, not new emulator measurements.
+
+For **question 1**, the current [product hunk](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:1371) matches your supplied replacement. The supplied diff changes one behavioral token and adds the comment. Establishing that this is the *entire historical product diff* would require the comparison baseline.
+
+**Yes, the comment contains observable claims that these rows do not establish.** Its “repairs the 32-bit cell” statement includes preservation of bytes that remain unasserted:
+
+| Byte index | Fill expectation | Asserted? | Copy expectation | Asserted? |
+|---|---|---|---|---|
+| 0 | `11` | Yes | `1a` | Yes |
+| 1 | `22` | **No** | `2b` | Gated |
+| 2 | `33` | **No** | `3c` | **No** |
+| 3 | `44` | Gated | `4d` | Gated |
+
+The source assignments support those missing bytes; the detector does not observe their correctness. Likewise, “32-bit cell ONLY” includes noninterference at encoding 3, which has no row. These are differences between source evidence and measured coverage, not reasons to reject the token change.
+
+Two wording qualifications also matter:
+
+- “Every tiled transfer took the CI arm” should mean every transfer **reaching the color switch**; the helper can return earlier.
+- The header establishes that encoding 3 is **undefined by this header**. Without hardware documentation, “reserved” should not imply an independently established hardware designation.
+
+There is also a new problem with the asserted UB avoidance. The TLB arrays are `uint16_t`, and [line 221](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:221) evaluates their entry shifted left by 16 before assignment to `uint32_t`. With a 32-bit C `int`:
+
+```text
+entry                         0x8002 = 32770
+mathematical entry << 16   0x80020000 = 2147614720
+INT_MAX                   0x7fffffff = 2147483647
+```
+
+The promoted signed shift is unrepresentable. Your valid entry necessarily reaches this expression. The checked-in device Makefile uses `CC=cc`; I cannot verify the frozen binary’s compiler overrides. **Keeping the copy source below `0x80` avoids the RGB/RGBA reconstruction issue, but does not establish UB-free execution.** This does not erase the reported measurements.
+
+For **question 2**, I retain the narrow product scope and the requirement to keep the buffer sibling witnessed at depth 16. I disagree with grok’s *rationale* for B/C: those labels are also inputs over which the repaired behavior is claimed, so coverage there is not exclusively an array-selection property. Deferring those rows is nevertheless defensible **as the disclosed limitation you now state**.
+
+Two accepted descriptions need correction:
+
+- `copy 2nd` does not prove RGBA specifically: RGB also preserves `2b`, as M5 and M8 demonstrate.
+- “Every GET arm computes `buf[0] << 24`” is false. [CI GET](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:323) does no shift; ABGR and the default arm shift `buf[3]` by 24. Your chosen source word remains suitable for the relevant RGB/RGBA calculation.
+
+The complete eleven findings and their dispositions are not supplied, so I cannot independently adjudicate the acceptance count or the scope vote.
+
+For **question 3: keep the three gated checks**, with truthful dependency diagnostics. Their pre-fix failures need not be independent defect witnesses to make useful post-fix assertions. A failed prerequisite should still prevent an overall pass.
+
+However, the implementation is different from the description: [`rgba_ran` is assigned once from the fill result](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/sgi_mte_fill_probe.py:301), and both copy-tail rows reuse it. It is not recomputed from each copy result. Moreover, `fill[0] == 0x11` also admits RGB.
+
+Call it `fill_top_ok`, and report something like `blocked: fill top failed`. Do not present that condition as proof that the copy selected RGBA or initialized its tail.
+
+I enumerated the supplied mutants. `U` denotes an unassigned byte; **no numerical value was assigned to it in this calculation**. Every derived total matches your reported measurement.
+
+| Build | Fill bytes | Copy bytes | Shared gate | Predicted → derived |
+|---|---|---|---|---|
+| BASE | `11 22 33 44` | `1a 2b 3c 4d` | Open | 13 → 13 |
+| M1 | `44 U U U` | `1a U U U` | Closed | 10 → 9 |
+| M2 | `44 U U U` | `4d U U U` | Closed | 9 → 8 |
+| M3 | `11 22 33 44` | `00 00 00 1a` | **Open** | 11 → 10 |
+| M4 | `44 U U U` | `1a 2b 3c 4d` | **Closed** | 10 → 9 |
+| M5 | `11 22 33 00` | `1a 2b 3c 00` | Open | 11 → 11 |
+| M6 | `11 22 33 44` | `1a 2b 3c 4d` | Open | 12 → 12 |
+| M7 | `11 22 33 44` | `1a 2b 3c 4d` | Open | 12 → 12 |
+| M8 | `11 22 33 44` | `1a 2b 3c 00` | Open | 12 → 12 |
+
+Thus, omitting `copy 4th` accounts arithmetically for all four prediction deltas. **Attributing all four to a closed gate is wrong.**
+
+- M3 evaluates a defined fourth byte, `0x1a`, and rejects it.
+- M4 blocks both copy-tail checks despite a correct copy.
+- M1 and M2 block the unassigned copy tails.
+
+Across these eight mutants, every tail byte actually scored is defined. That is a bounded justification for these checks, not a general guarantee supplied by the shared gate.
+
+There is already a structural precedent for an `n/a` prerequisite failure in [pcc2_default_probe.py](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/pcc2_default_probe.py:174). It gates on survival, so it does not establish precedent for this particular cross-session dependency.
+
+One further arithmetic correction:
+
+| Depth | `== 32` | `>= 16` | `!= 8` |
+|---|---|---|---|
+| 8 | False | False | False |
+| 16 | False | True | True |
+| 32 | True | True | True |
+| 64 | False | True | True |
+
+M6 and M7 are equivalent over the entire reachable depth domain. Consequently, **M5, M6, M7, and M8—four listed mutants—would escape the described earlier row set**. The probe’s [depth8 note](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/sgi_mte_fill_probe.py:314), claiming that `!= 8` reds that row, is also false.
+
+For **question 4**, the contract is incomplete. At minimum, disclose **32-bit copy byte 2**, an unasserted cell inside the behavior being repaired. Also disclose the two unasserted fill bytes, the absence of 8/16-bit copy rows, and the absence of an encoding-3 noninterference row. Disclosing that encoding 3 still leaks does not establish that its behavior is regression-tested.
+
+The raw TLB pairs are `AA, AB, AC, BA, BB, BC, CA, CB, CC`; each has fill/copy at depths `8,16,32,64`, giving 72 combinations. The detector exercises `AA` fills at 8/16/32 and an `AA` copy at 32. “No escapes” therefore means **none among these eight mutants**, not complete coverage.
+
+Finally, the probe header still calls it a witness expected to fail and says it must not be gated. That description is stale. I also cannot establish prediction chronology, frozen-build identity, or project-wide absence of hardware manuals from this packet. An mtime alone does not authenticate when particular prediction contents were recorded.
+tokens used
+82,093
+**Verdict: approve `4 → 32`; do not ratify the packet unchanged. All eight listed mutants are killed, but the gate explanation is partly wrong, coverage is overstated, and the detector reaches another signed-shift issue.**
+
+I read the correct fork, including `do_mte_transfer` at line 1300. I did not read the excluded paths or run the harness. The calculations below are source-derived, not new emulator measurements.
+
+For **question 1**, the current [product hunk](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:1371) matches your supplied replacement. The supplied diff changes one behavioral token and adds the comment. Establishing that this is the *entire historical product diff* would require the comparison baseline.
+
+**Yes, the comment contains observable claims that these rows do not establish.** Its “repairs the 32-bit cell” statement includes preservation of bytes that remain unasserted:
+
+| Byte index | Fill expectation | Asserted? | Copy expectation | Asserted? |
+|---|---|---|---|---|
+| 0 | `11` | Yes | `1a` | Yes |
+| 1 | `22` | **No** | `2b` | Gated |
+| 2 | `33` | **No** | `3c` | **No** |
+| 3 | `44` | Gated | `4d` | Gated |
+
+The source assignments support those missing bytes; the detector does not observe their correctness. Likewise, “32-bit cell ONLY” includes noninterference at encoding 3, which has no row. These are differences between source evidence and measured coverage, not reasons to reject the token change.
+
+Two wording qualifications also matter:
+
+- “Every tiled transfer took the CI arm” should mean every transfer **reaching the color switch**; the helper can return earlier.
+- The header establishes that encoding 3 is **undefined by this header**. Without hardware documentation, “reserved” should not imply an independently established hardware designation.
+
+There is also a new problem with the asserted UB avoidance. The TLB arrays are `uint16_t`, and [line 221](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:221) evaluates their entry shifted left by 16 before assignment to `uint32_t`. With a 32-bit C `int`:
+
+```text
+entry                         0x8002 = 32770
+mathematical entry << 16   0x80020000 = 2147614720
+INT_MAX                   0x7fffffff = 2147483647
+```
+
+The promoted signed shift is unrepresentable. Your valid entry necessarily reaches this expression. The checked-in device Makefile uses `CC=cc`; I cannot verify the frozen binary’s compiler overrides. **Keeping the copy source below `0x80` avoids the RGB/RGBA reconstruction issue, but does not establish UB-free execution.** This does not erase the reported measurements.
+
+For **question 2**, I retain the narrow product scope and the requirement to keep the buffer sibling witnessed at depth 16. I disagree with grok’s *rationale* for B/C: those labels are also inputs over which the repaired behavior is claimed, so coverage there is not exclusively an array-selection property. Deferring those rows is nevertheless defensible **as the disclosed limitation you now state**.
+
+Two accepted descriptions need correction:
+
+- `copy 2nd` does not prove RGBA specifically: RGB also preserves `2b`, as M5 and M8 demonstrate.
+- “Every GET arm computes `buf[0] << 24`” is false. [CI GET](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:323) does no shift; ABGR and the default arm shift `buf[3]` by 24. Your chosen source word remains suitable for the relevant RGB/RGBA calculation.
+
+The complete eleven findings and their dispositions are not supplied, so I cannot independently adjudicate the acceptance count or the scope vote.
+
+For **question 3: keep the three gated checks**, with truthful dependency diagnostics. Their pre-fix failures need not be independent defect witnesses to make useful post-fix assertions. A failed prerequisite should still prevent an overall pass.
+
+However, the implementation is different from the description: [`rgba_ran` is assigned once from the fill result](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/sgi_mte_fill_probe.py:301), and both copy-tail rows reuse it. It is not recomputed from each copy result. Moreover, `fill[0] == 0x11` also admits RGB.
+
+Call it `fill_top_ok`, and report something like `blocked: fill top failed`. Do not present that condition as proof that the copy selected RGBA or initialized its tail.
+
+I enumerated the supplied mutants. `U` denotes an unassigned byte; **no numerical value was assigned to it in this calculation**. Every derived total matches your reported measurement.
+
+| Build | Fill bytes | Copy bytes | Shared gate | Predicted → derived |
+|---|---|---|---|---|
+| BASE | `11 22 33 44` | `1a 2b 3c 4d` | Open | 13 → 13 |
+| M1 | `44 U U U` | `1a U U U` | Closed | 10 → 9 |
+| M2 | `44 U U U` | `4d U U U` | Closed | 9 → 8 |
+| M3 | `11 22 33 44` | `00 00 00 1a` | **Open** | 11 → 10 |
+| M4 | `44 U U U` | `1a 2b 3c 4d` | **Closed** | 10 → 9 |
+| M5 | `11 22 33 00` | `1a 2b 3c 00` | Open | 11 → 11 |
+| M6 | `11 22 33 44` | `1a 2b 3c 4d` | Open | 12 → 12 |
+| M7 | `11 22 33 44` | `1a 2b 3c 4d` | Open | 12 → 12 |
+| M8 | `11 22 33 44` | `1a 2b 3c 00` | Open | 12 → 12 |
+
+Thus, omitting `copy 4th` accounts arithmetically for all four prediction deltas. **Attributing all four to a closed gate is wrong.**
+
+- M3 evaluates a defined fourth byte, `0x1a`, and rejects it.
+- M4 blocks both copy-tail checks despite a correct copy.
+- M1 and M2 block the unassigned copy tails.
+
+Across these eight mutants, every tail byte actually scored is defined. That is a bounded justification for these checks, not a general guarantee supplied by the shared gate.
+
+There is already a structural precedent for an `n/a` prerequisite failure in [pcc2_default_probe.py](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/pcc2_default_probe.py:174). It gates on survival, so it does not establish precedent for this particular cross-session dependency.
+
+One further arithmetic correction:
+
+| Depth | `== 32` | `>= 16` | `!= 8` |
+|---|---|---|---|
+| 8 | False | False | False |
+| 16 | False | True | True |
+| 32 | True | True | True |
+| 64 | False | True | True |
+
+M6 and M7 are equivalent over the entire reachable depth domain. Consequently, **M5, M6, M7, and M8—four listed mutants—would escape the described earlier row set**. The probe’s [depth8 note](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/sgi_mte_fill_probe.py:314), claiming that `!= 8` reds that row, is also false.
+
+For **question 4**, the contract is incomplete. At minimum, disclose **32-bit copy byte 2**, an unasserted cell inside the behavior being repaired. Also disclose the two unasserted fill bytes, the absence of 8/16-bit copy rows, and the absence of an encoding-3 noninterference row. Disclosing that encoding 3 still leaks does not establish that its behavior is regression-tested.
+
+The raw TLB pairs are `AA, AB, AC, BA, BB, BC, CA, CB, CC`; each has fill/copy at depths `8,16,32,64`, giving 72 combinations. The detector exercises `AA` fills at 8/16/32 and an `AA` copy at 32. “No escapes” therefore means **none among these eight mutants**, not complete coverage.
+
+Finally, the probe header still calls it a witness expected to fail and says it must not be gated. That description is stale. I also cannot establish prediction chronology, frozen-build identity, or project-wide absence of hardware manuals from this packet. An mtime alone does not authenticate when particular prediction contents were recorded.

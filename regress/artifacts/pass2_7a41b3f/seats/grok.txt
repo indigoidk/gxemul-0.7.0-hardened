@@ -1,0 +1,139 @@
+I'll verify the four shipped fixes against the actual `GXEMUL-SEC/src/` code and the related probes, rather than ratifying the brief. First stop is the repo state and the four edited sites.Git is blocked in this plan-mode seat, so I’ll read the four product files and the related probes directly.The four sites match the inlined diff. Next I’ll independently re-derive the warrants the comments rest on: GBE scanout, sibling LCA prints, Alpha PCB layout, and other CPU walks.**VERDICT: RATIFY all four repairs. None of the four is a fix of something that was not broken. I would have shipped all four. Do not revert. One shipped comment overclaims, and that is an L4 trim, not a reason to unship.**
+
+I read `GXEMUL-SEC/src/` and the four `regress/*.py` witnesses. I did not run gates. I did not open `regress/artifacts/` or `ledger.json`. Working tree has later `#509` dirt in `dev_sgi_re.c`; the four sites below still match the inlined diff.
+
+---
+
+## 1. Premise audit — each named defect is real, each repair matches it
+
+### `#505` — RGB GET was off by one. The PUT arm was already right.
+
+PUT RGB writes `[R,G,B,0]` at `buf[0..3]`. Old GET assembled `(buf[1]<<24)+(buf[2]<<16)+(buf[3]<<8)`.
+
+Enumerated on source word `0xaabbccdd` in big-endian tile memory `[aa,bb,cc,dd]`:
+
+| path | bytes consumed | `*color` |
+|---|---|---|
+| old GET | `buf[1..3]` | `0xbbccdd00` |
+| new GET | `buf[0..2]` | `0xaabbcc00` |
+| PUT then GET | PUT stores `[aa,bb,cc,00]` | `0xaabbcc00` |
+
+That is a one-byte left shift with a zero fill. It is not an endianness question: RGBA GET/PUT and ABGR GET/PUT already round-trip, using opposite register word orders, and both PUT arms lay `[R,G,B,x]` in memory. RGB GET was the lone 32-bit container outlier.
+
+The GBE warrant is outside this function, as claimed. `dev_sgi_gbe.c` scanout builds `color = (buf[i]<<24)+(buf[i+1]<<16)+(buf[i+2]<<8)+buf[i+3]`; `CRMFB_MODE_TYP_RGB8` then takes R/G/B from bits 31..24 / 23..16 / 15..8 and never uses the low byte. Byte 0 is R; byte 3 is unused. So GET must read `buf[0..2]`. PUT writing a zero at `buf[3]` is consistent with that, not the reason for it.
+
+The low byte of `*color` staying zero is correct behaviour, not residual corruption. RGB has three channels. A row that demanded `0xaabbccdd` back would have failed a correct fix.
+
+**UB (`sgirebufshiftub`) does not change this disposition.** `buf` is `uint8_t[8]`. `buf[i]` promotes to signed `int`, then `<< 24`. For any byte `≥ 0x80`:
+
+- `0xaa = 170`; `170 × 2^24 = 2,852,126,720 > INT_MAX (2,147,483,647)` → C99 6.5.7p4 UB.
+
+The witness uses `0xaabbccdd`, so the **new** GET hits UB on `buf[0]=0xaa`. The **old** GET hit the same UB on `buf[1]=0xbb`. RGBA GET, ABGR GET, the default GET, and GBE scanout all use the same idiom. `#505` replaced one instance of an existing idiom with another. Casting this one line and leaving the siblings would have been a style delta with no measured gain. Filed separately is right; it is not a reason to block or revert.
+
+### `#506` — the diagnostic named a value the guard accepts. Two sites, both real.
+
+`idata` is `uint64_t`. Guard is `if (idata & ~1)`.
+
+Enumerated on the cited killer `0x100000000`:
+
+- `1` is `int`; `~1` is `-2`; promoted against `uint64_t` → `0xfffffffffffffffe`
+- `0x100000000 & 0xfffffffffffffffe = 0x100000000 ≠ 0` → guard fires
+- `(int)0x100000000` is implementation-defined; on this tree’s GCC/Clang it is the low 32 bits = `0`
+- `0x%x` of that prints `0x0`, which is a value `idata & ~1` **accepts**
+
+The comment’s “five sibling arms” is exact: `TB_ENA`, `W_BASE0`, `W_MASK0`, `W_BASE1`, `W_MASK1` already print `0x%" PRIx64` with `(uint64_t)idata`. `W_T_BASE0` / `W_T_BASE1` have no value-guard diagnostic. IOC_CONF was the outlier among the value-guards; the default arm was the other `(int)idata` site; both are in the diff.
+
+This is a lying kill message, not a false kill. The host still `exit(1)`s. That is the round’s stated scope, and the probe header is honest that `(int)` truncation is not a C99 guarantee.
+
+### `#507` — field-name transposition. One token, two consequences, both real.
+
+PCB layout from `alpha_cpu.h` (and from the save block at `cpu_alpha_palcode.c`, which is the better warrant because it is what a guest actually sees):
+
+| offset | field |
+|---|---|
+| +0 | ksp |
+| +8 | usp |
+| +16 | ptbr |
+| +24/+28 | cpc / asn |
+| +32 | unique |
+| +40 | flags |
+| +48/+56 | decrsv0 / decrsv1 |
+
+Load block: `new_ptbr` from +16, `new_flags` from +40. Assignments after the fix: each field once. Before: `apcb_ptbr = new_ptbr` then `apcb_ptbr = new_flags`; `apcb_flags` never written **in this block**.
+
+Two consequences, both from that one line:
+
+1. `apcb_ptbr` holds the flags word. `alpha_translate_v2p` opens with `base = apcb_ptbr << ALPHA_PAGESHIFT`, so the next walk uses flags as a PFN.
+2. Incoming flags are dropped. The next `swpctx` save writes `pcb.apcb_flags` (stale) to outgoing +40, wiping what the guest planted.
+
+The extra `swpctx flags` row is load-bearing. Both PTBR rows read A+16; deleting `:282` or sending `new_flags` to any other field would have greened them. A+40 is the cell that distinguishes “stop clobbering PTBR” from “actually load flags”.
+
+`wrfen` *does* assign `apcb_flags` (`cpu_alpha_palcode.c`, case `0x2b`). The comment is scoped to this block and is still true. “Never-loaded” means never stored into the PCB field; the local `new_flags` was loaded and then written to the wrong place.
+
+### `#508` — the walk returned a page base. The `| offset` is the missing half.
+
+`ALPHA_PTE_TO_PFN(pte) = (pte)>>32`. `pageSizeShift = 13`. `PFN << 13` has bits 12:0 clear.
+
+Under `MEM_ALPHA`, `MRW_OFFSET_MASK` is `0x1fff` (`memory_rw.c`). Pre-fix:
+
+- `paddr = PFN << 13`
+- `offset = paddr & 0x1fff = 0` for every offset in the page
+
+Post-fix: `paddr = (PFN << 13) | (vaddr & 0x1fff)`. `|` equals `+` here because the shifted PFN has bits 12:0 clear. ARM/m88k/PPC/SH walks in this tree already write `|`. Direct-map and `ptbr==0` paths already kept the offset (`vaddr & 0x000003ffffffffffULL`). Only the walked leaf dropped it.
+
+The `walk vpn` row (nonzero VPN, offset `0x1008` in the upper 4 KB, three-way plant) is what stops a `0xfff` mask or a hardcoded `| 8` from scoring a clean sweep of the `vaddr+8` row.
+
+---
+
+## 2. Which of the four I would NOT have shipped
+
+**None.**
+
+`#505`, `#507`, `#508` are guest-visible wrong answers (pixel, PTBR/flags, physical address). `#506` is the weakest of the four — LOW, diagnostic-only, host still dies — but a kill message that names a value the guard accepts is a wrong record at the one moment the process is gone and the log is all that is left. The specifier, not the guard, was the defect. Sibling-parity already had the form. I would have shipped it as a records-in-product fix and not pretended it was a de-fatalisation.
+
+A pass that ratifies all four because the diffs are small has stopped arguing. I argued: the RGB low byte, the GBE warrant, the A+40 cell, the `0xfff`/`|8` joint, the `~1` promotion, the five-sibling census. Those all hold. What does not hold is one sentence in a comment, below.
+
+---
+
+## 3. Comments vs code
+
+**`#508` repeats an overclaim this project had already corrected the same day.**
+
+The added comment says a page-base `paddr` meant “every walked access resolved to the page’s first bytes”. `OUTSTANDING_BUGS.md` already narrowed that: the walk yields offset zero for 8191 of 8192 offsets, **but** Alpha fast-path hits recompute `addr & 8191` themselves, so subsequent cache hits read the right bytes. The corruption is the **slow-path fill**. The comment’s own measured sentence (“a cold guest ldq of vaddr+8 returned the vaddr+0 value”) is the accurate one. Watchpoints force the slow path (`memory_rw.c`: watched pages are kept off the fast store table), so the watchpoint claim is mechanistically sound and is not the problem. The word **every** is.
+
+That is L4 in a product comment: tighten “every walked access” to “every slow-path walked access / every fill”. It does not touch the `| offset` line.
+
+The rest of the `#508` comment is true: mask derived from `pageSizeShift` rather than a `0x1fff` literal; `|` not `+`; the TODO stays.
+
+`#505` “yields `0xaabbcc00`, NOT the source word” — the code does that. `#505` “lone container outlier among the 32-bit arms” — true of the named RGB/RGBA/ABGR arms. `#506` “five sibling arms” — five, listed above. `#506` “reports `0x0`” — true on this compiler, and the probe already refuses to claim it as C99. `#507` “assigned `apcb_ptbr` twice and `apcb_flags` never, while every other field in this block is assigned exactly once” — true of this block.
+
+---
+
+## 4. Keeping the `#508` `// TODO.` was right
+
+`flags` is never read. `ALPHA_PTE_KR/KW/UR/UW` / `FAULT_ON_*` are never tested. `return 2` is what `memory_rw.c` treats as writable (`ok - 1` into the fast table; `ok == 2 && cache == CACHE_DATA` invalidates code translations). Every walked page is therefore cached writable.
+
+Fixing that in the same round would have been a second defect with a new oracle (a write to a KW-clear page that must not store). The reopening rule forbids bolting it on. The new comment names all three remainders. That **is** the disclosure.
+
+What the round did not do is file a named queue row for “walk ignores protection / `return 2`”. `alphafaultclaim` is already on file for the failed-walk path. I would file `alphapteprot` as a follow-up rather than call this round incomplete. The one-word `// TODO.` is still content-free; the `#508` block above it is what a later reader will actually use.
+
+---
+
+## The two “what has changed since” questions
+
+**Negate-True vacuity does not change what a live HEAD score means.** An inequality greens on `"absent"` / `"died"` / `"0x0"`. The equality siblings (`rgb chan`, `kill width`, `swpctx ptbr`, `walk off`) red on those same states, so the **probe** still fails and the detector does not escape. A HEAD run that actually printed `0xbbccdd00` / `IOC_CONF: 0x0` / `0xbbbb2222` / `VAL_A` was a real observation of the defect. What those rows’ notes overclaimed was that they were themselves controls. The later positive restatements (`kill notzero`, `swpctx notflags`, `walk stored` / `walk mapped`) are L4 in the witnesses, and they are already in the working tree.
+
+**Something else, still live:** `sgi_re_rgb_probe.py` still has `negate=True` on `rgb not corrupt`. Same class. `rgb chan` still reds on non-observation, so the same “detector didn’t escape, note overclaimed” reading. It was not in the five-row repair.
+
+**`#505` and the UB:** sits on it, does not introduce it, does not fix it. Disposition unchanged.
+
+---
+
+## Found while verifying, not in the four claims
+
+- `swpctx` still writes the old context to `r[ALPHA_A0]` under a comment that says v0. `alpha_pal_swpctx` in `alpha_cpu.h` reads `v0`. That is `alphaswpctxreg`, already filed; the local `a0` is captured before the overwrite, so it is a wrong return value, not a wrong load. Not this round.
+- `#506` still does `d->ioc_conf = idata` **before** the guard. If a later round de-fatalises without moving that store, unimplemented bits stick. Not this round’s claim.
+- Default-arm `(int)relative_addr` is still narrowed. Not `idata`, not claimed.
+- No `alphapteprot` queue row exists today. The disclosure is only the `#508` comment.
+
+I cannot settle from this packet whether the cited HEAD scores were live observations or mixed with dead sessions; that lives in `regress/artifacts/`, which this brief forbade. The probe source is enough to say the equality siblings make a dead session fail overall.

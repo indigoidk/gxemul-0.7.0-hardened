@@ -1,0 +1,51 @@
+**VERDICT: The central claim survives audit — `depth == 4` is unsatisfiable over the domain the producer can emit, F1 (`depth == 32`) is the correct minimal edit and is behaviourally identical to `bufdepth == 4` — but the proposed row set leaves two named mutants alive (RGB-for-RGBA substitution on the dst side; over-reach to depth 16), `copy top` is a legitimate mutation-pin yet hostage to the elided RGBA read case, and E3 is confirmed invisible to all six rows though it is not the only edit of its kind.**
+
+## 1. Premise audit
+
+**The depth domain.** READ: `depth = 8 << ((mode & 0x300) >> 8)`. REASONED, enumerated:
+
+| f = (mode & 0x300) >> 8 | depth = 8<<f | bufdepth = 1<<f |
+|---|---|---|
+| 0 | 8 | 1 |
+| 1 | 16 | 2 |
+| 2 | 32 | 4 |
+| 3 | 64 | 8 |
+
+`depth == 4` requires 8<<f == 4, which has no solution for f ≥ 0. The producer check matters and holds: `mode` is a guest-written register, but the two-bit mask bounds f ∈ {0..3} for *every* register value — no guest input escapes the domain. READ: within the inlined span (function head through the marked line, which the packet says is the whole path) `depth` is read but never assigned. **The branch is unreachable. REASONED, follows.**
+
+**depth==32 ⟺ bufdepth==4.** REASONED: both are bijections of the same field value; both pick f==2. Your claim is correct. The comment's intent is also 32: "32-bit transfers" with depth-in-bits means f==2, and `depth == 4` is exactly `bufdepth == 4` with the variable name swapped — consistent with "copy 32 bits." The historical bug is a bits/bytes name swap, and F1 is the restoration.
+
+**Consequences 1 and 2.** REASONED/READ: constructed modes place tlb at bits 10–12 and depth at 8–9; bits 4–7 (DE_MODE_TYPE_MASK) are zero, so with the branch dead both modes are always CI. At f==2 the CI arm assigns buf[0] only and `memory_rw` copies 4 — three host-stack bytes cross into guest RAM. Your F2 arithmetic also checks: at f==3, RGBA assigns 4 of 8, so four uninitialised bytes remain, at offset +4.
+
+**The 5/6 probe.** READ as a packet fact (it is your measurement, not mine). It is internally consistent: got 0x44 is the low byte of bg 0x11223344, exactly the CI arm's `buf[0] = *color`; want 0x11 is bg>>24, exactly the RGBA arm's first byte. Code-reading and witness corroborate each other.
+
+**Premises I could NOT settle from the packet:**
+- **(a)** Every file-reading warrant (the line text, the masks, no `MTE_DEPTH_64`, no `#509`). Settling fact: the comparison and the depth initializer as they stand in `GXEMUL-SEC/src/devices/dev_sgi_re.c`.
+- **(b)** The RGBA **read** case is elided ("reads back all four bytes, high byte first"). `copy top`'s 0xaa depends on it: if reassembly were low-byte-first, post-F1 copy yields dest[0] = 0xdd, and the row's semantics change. Settling fact: that case's assignment expression.
+- **(c)** The RGB read case is elided entirely — needed to say whether `copy top` kills a src-side RGB substitution.
+- **(d)** The probe's depth register value: the note "tiled 32-bit fill" asserts 32, but the row table never states the mode word; I take it on the note.
+- **(e)** The grep for a prior bits-vs-bytes idiom: #505/#499 are named but their diffs are not inlined — not checkable.
+
+## 2. Smallest re-opening change that passes the six rows
+
+**E3, already in your list — confirmed.** All six rows stay green because the read is guarded by `mode & MTE_MODE_COPY` (READ) and a fill never reads `src_mode`. The row that *should* have caught it and stays green is **`fill top`**. `copy top` kills it: read CI gives \*color = 0x000000aa, RGBA write puts \*color>>24 = 0x00 ≠ 0xaa. Your E1/E2/E4 predictions are also confirmed by byte-walk: each leaves the fill path CI, so `fill top` sees 0x44 ≠ 0x11 and goes red.
+
+**Is E3 the only edit of its kind? No.** The class is "edits visible only through the read path": any edit to the elided RGBA read case is invisible to all six rows (whether `copy top` catches it is unsettleable, per (b)/(c)); a src-side RGB substitution likewise. `copy top` covers the members it can; the packet cannot show full coverage.
+
+**Is `copy top` legitimate or self-satisfying?** Legitimate. A self-satisfying row is green under fix *and* mutant; this one is green today and post-fix but red under E2 (0xdd) and E3 (0x00). It is a mutation-pin, not a fix-detector — it contributes nothing to the before/after measurement — and should be recorded as such.
+
+## 3. Option-set completeness
+
+F1–F5 is behaviourally complete for the 32-cell as far as the packet shows; variants (comparing the field against `MTE_DEPTH_32`, `depth/8 == 4`) are F1 in different tokens. The one disposition not named: **F1+F4 in one round**. Your separation is defensible — F4 alone indeed leaves `fill top` red (initialising buf[1..3] does not change buf[0]) — but the separation is precisely what forces a first-byte-only oracle, and it is what leaves Hole 1 below open. The panel should choose that trade-off knowingly.
+
+## 4. Scope
+
+One round for the 32-cell is right: it is the only cell with intent evidence (the comment names 32) and the only one with a UB-free oracle. The 16 and 64 cells share the defect *class* (uninitialised stack bytes crossing into guest memory) but have no intent oracle — the header defines no colour type for 2- or 8-byte pixels, so fixing them means choosing semantics (F4 zero-fill vs F5 little-endian CI), a design decision, not a restoration. File them as siblings under one class label. F1 leaves both cells bit-identical (the branch is still cold at 16 and 64), so there is no interaction hazard.
+
+## Holes in the row set (the "something else")
+
+**Hole 1 — RGB-for-RGBA survives everything you proposed.** Mutant: `dst_mode |= DE_MODE_TYPE_RGB` in the post-F1 code. Fill with bg 0x11223344: the RGB arm writes buf = {0x11, 0x22, 0x33, 0x00} → `fill top` green (first byte 0x11). Copy: read RGBA → 0xaabbccdd; RGB write puts >>24 = 0xaa → `copy top` green. `depth8 top`, `fill b top`: green. This mutant writes 0x00 where the colour's low byte belongs and passes all nine rows. It is catchable only by asserting dest[1..3] — unsound while buf is uninitialised (your "must not be an oracle" rule is correct for today's build), sound the moment F4 lands. So: accept the hole, or sequence F4 and add a four-byte assertion.
+
+**Hole 2 — over-reach to depth 16 is unpinned.** Mutant `depth == 16 || depth == 32`: fires at 32 (`fill top` green), cold at 8 (`depth8 top` green), `copy top` green. Nothing goes red. Your enumeration "{depth 32, depth not 32}" is the weak link — "not 32" is three different behaviours (8: correct; 16: one uninitialised byte; 64: seven, in an encoding the header doesn't define). A `depth16 top` row (fill, expect 0x44, green today and post-F1, red under the over-reach) closes it. The depth axis needs 8, 16 and 32.
+
+**Smaller notes, each from the packet's own text:** MTE_MODE_DST_BUF_MASK 0x1c and SRC_BUF_MASK 0xe0 overlap DE_MODE_TYPE_MASK 0xf0 (bit 4 is both dst_tlb's LSB and DE_MODE_TYPE_RGB) — the constructed modes dodge this by placing tlb at bit 10, but any caller passing a raw MTE mode word to the helper would alias; no such caller is shown, so this is a hazard note. In the shown switch, dst_tlb ∈ {3, 6, 7} matches no case and no default is visible before the cut — if none exists, those mode words silently do nothing (unsettleable: the switch is truncated). The dst_y_step rejection has its `exit(1)` commented out, unlike the stipple and src checks — whether that path continues depends on whether `fatal()` returns, which the packet does not settle.

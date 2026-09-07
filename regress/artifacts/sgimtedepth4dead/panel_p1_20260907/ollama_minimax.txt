@@ -1,0 +1,83 @@
+**VERDICT:** Central claim is TRUE: `if (depth == 4)` is unreachable because `depth = 8 << field` and `field ∈ {0,1,2,3}`, giving `depth ∈ {8,16,32,64}`. Branch never runs; tiled MTE transfers always use the CI arm; at depth=32 this writes one byte of colour plus three uninitialised stack bytes. F1 (`depth == 4` → `depth == 32`) is the minimal correct fix and matches the comment. Witness design and E1–E4 predictions check out by byte-walk. Three premises cannot be settled from this packet and are flagged below.
+
+---
+
+## 1. Central claim, enumerated
+
+`depth = 8 << ((mode & 0x300) >> 8)`. The mask 0x300 covers exactly bits 8–9 of `mode`. Right-shifting by 8 yields the two-bit field value in `{0,1,2,3}`. So:
+
+| field | depth  | bufdepth = 1<<field | depth == 4? |
+|------:|------:|--------------------:|:-----------:|
+| 0     | 8     | 1                   | no          |
+| 1     | 16    | 2                   | no          |
+| 2     | 32    | 4                   | no          |
+| 3     | 64    | 8                   | no          |
+
+Four values walked, none equals 4. **Branch is unreachable.** (REASONED from the inline arithmetic.)
+
+`bufdepth == depth/8` for all four values, so `depth == 32` and `bufdepth == 4` are exactly the same condition. (REASONED.)
+
+## 2. Subclaims, walked
+
+**(a) src_mode / dst_mode always carry type CI for tiled MTE.** The construction is `(tlb<<10) + (field<<8)`. None of the `MTE_TLB_*` constants (0,1,2,4,5) or the depth-field bit positions (8,9) overlap with the type bits (4–7). With the `|= DE_MODE_TYPE_RGBA` lines never executing, bits 4–7 stay zero → `DE_MODE_TYPE_CI`. (REASONED.) **TRUE.**
+
+**(b) At depth=32 the CI arm writes 1 byte and the transfer copies 4.** `buf[0] = *color` is the only assignment in the CI arm; `buf` is `uint8_t buf[8]` with no initialiser. `memory_rw(..., buf, bufdepth=4, MEM_WRITE, ...)` then copies buf[0..3]. buf[1..3] are stack garbage. (REASONED from inline.) **TRUE.**
+
+**(c) The comment's stated intent is depth==32.** Comment inlined: "this makes sure that we copy 32 bits when doing 32-bit transfers." `depth` is in bits by the conversion `x1 /= (depth/8)` two lines earlier, so "32-bit transfers" parses as `depth==32`, and "copy 32 bits" parses as bufdepth==4. The original `depth == 4` is incoherent with both halves of that sentence. (REASONED.) **TRUE.**
+
+## 3. Witness row `fill top`, walked
+
+bg = 0x11223344, dst_mode = CI (because (a)), put = 1.
+
+- CI arm writes `buf[0] = (uint8_t)bg = 0x44`. memory_rw writes buf[0..3], but only buf[0] is meaningful.
+- dest[0] = 0x44. want = 0x11 (i.e. RGBA arm: `buf[0] = bg>>24 = 0x11`).
+
+Measured 0x44 is consistent with the CI arm running. (READ from §4.) The fact that **only** dest[0] is asserted is correct: buf[1..3] are stack contents and asserting them would be a self-asserting oracle.
+
+## 4. E1–E4 predictions, walked
+
+Treating each as an edit on top of F1 (or restoring F1's condition for E1):
+
+| edit | effect at depth=32 in **fill** mode                                | fill top | effect at depth=32 in **copy** mode (source = aa bb cc dd)                              | copy top |
+|------|---------------------------------------------------------------------|:--------:|------------------------------------------------------------------------------------------|:--------:|
+| E1   | branch never runs; both CI; dest[0] = (uint8_t)bg = 0x44           | RED      | both CI; bg=0xaa; dest[0]=0xaa                                                           | GREEN    |
+| E2   | src=RGBA, dst=CI; dst arm writes low byte of bg = 0x44              | RED      | read: bg=0xaabbccdd; write CI: dest[0]=0xdd                                              | RED      |
+| E3   | src=CI, dst=RGBA; dst arm writes bg>>24 = 0x11                      | GREEN    | read: bg=0xaa; write RGBA: dest[0]=bg>>24=0x00                                           | RED      |
+| E4   | branch condition `&& MTE_MODE_COPY` is false in fill; both CI; dest[0]=0x44 | RED      | branch condition true in copy; both RGBA; bg=0xaabbccdd; dest[0]=0xaa                    | GREEN    |
+
+E3 is the only edit that turns `fill top` green (i.e. is invisible to the six-row witness). `copy top` is needed to catch it. **Author's prediction is correct.** (REASONED.)
+
+## 5. F1–F5 option set
+
+F1 (depth==32) — minimal, comment-aligned, fixes one cell.
+F2 (depth>=32) — does not actually fix depth=64 cleanly because the RGBA arm only assigns four bytes regardless of bufdepth; at depth=64, bufdepth=8 and four uninitialised bytes still leak. Author's rejection is correct. (REASONED.)
+F3 (depth→type switch) — over-engineered for one cell; reasonable as a class-level fix but not for a single round.
+F4 (initialise buf) — orthogonal defect; would not turn fill top green because the byte-order question is settled by which arm runs, not by what's in buf[1..3]. Author's note that it is a separate defect is correct.
+F5 (extend CI) — wrong scope; alters every caller of the helper.
+
+I see no sixth option that materially changes the space. The closest cousin I can name without file access is "initialise the uninitialised portion of buf in the CI arm" (a hybrid of F4 and F5), which would close depth=16 and depth=32 in one go but is the same defect class as F4 and doesn't address the byte-order question. (REASONED; not file-checked.)
+
+## 6. Q4 — three cells, one fix
+
+The same defect class ("CI arm writes one byte when bufdepth > 1") hits depth=16 (1 uninitialised byte leaks), depth=32 (3 leak), and depth=64 (7 leak; F2's RGBA path still leaks 4 because RGBA only assigns four). The fix shapes are not identical across cells, so "one round per cell" is not pure repetition — but they are siblings and a tracking issue at the class level is warranted so the three rounds don't drift. Confining the present round to depth=32 is correct because the witness is calibrated to that cell and the fix is one token. (REASONED.)
+
+## 7. Premises I cannot settle from this packet
+
+These are stated as fact in §1 but I have no inlined source for them; a single file read each would settle:
+
+1. **"There is no `MTE_DEPTH_64` in the header."** Stated; the header file is not inlined in full. If a `MTE_DEPTH_64` symbol exists with a different value (say, an alias of 2), my enumeration of `field == 3` is unaffected, but the author's claim that field=3 is "undefined by the header" is not checkable.
+2. **The committed build exhibits 5/6 with the cited `got`/`want`.** The measurement is MEASURED by the author this session and I have no way to re-run it. The arithmetic above shows the result is internally consistent with the code path, but I cannot certify the build.
+3. **RGBA byte order is the correct hardware layout for depth=32.** The witness distinguishes CI from RGBA by dest[0]=0x44 vs 0x11, but it does **not** distinguish RGBA from RGB at depth=32 — both put the high byte first. The author's choice of RGBA is supported by the comment ("32 bits", which excludes RGB's zero-padded low byte) and is the natural reading, but no CRIME/MTE hardware spec is cited. A regression that picked RGB instead would still pass the witness. (REASONED from the comment; not hardware-anchored.)
+
+## 8. Other findings
+
+- The witness's `copy top` row reads 0xaa both today (no fix) and after F1. It is not green-on-both-sides in a problematic sense — it is the canonical "guard against the asymmetric edit" row, which is a legitimate role. (Not self-satisfying.)
+- The `depth8 top` proposed row is the right negative control: it pins that the change did not flip depth=8 from CI to RGBA. The brief should consider adding `depth16` and `depth64` rows even though those cells are out-of-scope fixes — they pin that the change did not flip non-target depths.
+- E3 (asymmetric: only src_mode flipped) is structurally the most dangerous edit because it is invisible to any fill-only witness. The brief is correct that this is the motivation for `copy top`. Worth noting: E3 is the natural "I deleted the wrong line" mistake during a fix.
+- The brief's two rejected channels (pre-painted tail, copy alone) are correctly rejected for the reasons given.
+
+---
+
+**Settled from the packet:** branch unreachable; tiled MTE always uses CI; depth=32 leaks three bytes; comment intent is depth==32; F1 is the minimal fix; F2 is incomplete for depth=64; witness design is sound; E1–E4 predictions are correct; three broken cells are siblings of one defect class.
+
+**Not settled from the packet:** header symbol `MTE_DEPTH_64` (claimed absent); build measurement (claimed 5/6); hardware byte-order warrant for RGBA over RGB at depth=32.

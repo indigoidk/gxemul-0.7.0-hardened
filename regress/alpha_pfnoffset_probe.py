@@ -233,10 +233,16 @@ dest2 = printed(t3txt, "t4")
 
 row("walk found", "absent" if not notfound else "wasn't found", "absent",
     "CONTROL: the table walked to a valid L3")
-row("walk stored", dest, "0x%x" % VAL_S, negate=True,
-    note="CONTROL: the sentinel surviving means the load never wrote t4 at all")
-row("walk mapped", dest, "0x0", negate=True,
-    note="CONTROL: 0 would mean the walk landed on unmapped physical")
+#  *** AN INEQUALITY PASSES ON EVERY NON-OBSERVATION.  Repaired 2026-09-07 -- see the same note
+#  in alpha_harness_probe.py.  Both rows below scored GREEN when `dest' was "absent" or "died",
+#  i.e. when the readback never happened.  `walk off' reds on those, so the detector did not
+#  escape; the defect was in these two rows' claim to be CONTROLS. ***
+obs = dest.startswith("0x") and dest != "0x0"
+stored = obs and dest != ("0x%x" % VAL_S)
+row("walk stored", "yes" if stored else dest, "yes",
+    "CONTROL: an OBSERVED word that is not the sentinel -- the sentinel surviving, or no readback at all, means the load never wrote t4")
+row("walk mapped", "yes" if obs else dest, "yes",
+    "CONTROL: a real nonzero word -- 0x0/absent/died all mean the walk found no physical page")
 row("walk off", dest, "0x%x" % VAL_B,
     "the walked load must return data+N, not data+0")
 
@@ -245,8 +251,21 @@ row("walk off", dest, "0x%x" % VAL_B,
 #      VAL_B2  correct
 #      VAL_C2  a 0xfff mask (the 4 KB copy) or a hardcoded `| 8'
 #      VAL_A2  a page-base result
-#  0x3fff and 0x7fff are EQUIVALENT inside an 8 KB page -- bits 13/14 of an offset are always
-#  zero there -- so no row kills them and none should pretend to.
+#  *** THAT LAST CLAIM WAS ARITHMETICALLY FALSE AND IS CORRECTED, 2026-09-07, BY THE
+#  RETROSPECTIVE PASS 2 ON THIS COMMIT.  It read: "0x3fff and 0x7fff are EQUIVALENT inside an
+#  8 KB page -- bits 13/14 of an offset are always zero there -- so no row kills them and none
+#  should pretend to."  The premise is about an OFFSET; the expression masks the FULL VIRTUAL
+#  ADDRESS.  This row drives vaddr = VADDR2 + N2 = 0x3008, so:
+#
+#      mask 0x0fff -> 0x0008     mask 0x1fff -> 0x1008  (correct)
+#      mask 0x3fff -> 0x3008     mask 0x7fff -> 0x3008
+#
+#  The two wider masks equal EACH OTHER and BOTH differ from the correct 0x1008 -- bit 13 is
+#  set, so `base | 0x3008' lands in the NEXT 8 KB page, which nothing planted.  **`walk vpn'
+#  therefore DOES kill both.**  The correction makes this detector STRONGER than it claimed,
+#  which is the safe direction to have been wrong in and is still a wrong record. ***
+#  NOT separately measured: no mutant was built for either mask.  The arithmetic above is the
+#  warrant, and it is checkable by reading -- unlike the survival the old sentence asserted.
 row("walk vpn", dest2, "0x%x" % VAL_B2,
     "non-zero VPN, offset in the UPPER 4 KB: kills the 0xfff mask and unmasked +vaddr")
 

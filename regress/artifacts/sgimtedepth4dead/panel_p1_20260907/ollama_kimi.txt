@@ -1,0 +1,52 @@
+**VERDICT: The central claim is TRUE and checkable from the packet — `depth` ∈ {8,16,32,64}, so `if (depth == 4)` is unreachable; consequences 1–3 follow. The copy-top arithmetic in §6 is correct as far as it goes and the row is legitimate, but my re-derivation finds one of its four cells wrong as tabulated. E1–E4 predictions confirmed, except "E3 is the only edit of its kind" is false. F2's rejection rationale contains a misstated number. Scope: F1 alone is right for the branch defect; the uninitialised-buf defect is the one that must close in a single round, not three.**
+
+## 1. Premise audit
+
+* **(READ + REASONED) `depth` confinement.** Inlined: `int depth = 8 << ((mode & 0x300) >> 8);`. The mask selects bits 8–9, so the shift result n ∈ {0,1,2,3}. Enumerated: n=0→8, n=1→16, n=2→32, n=3→64. No overflow, no UB. `depth == 4` is false for every reachable value. **Unreachable: confirmed.**
+* **(READ) Comment intent.** "this makes sure that we copy 32 bits when doing 32-bit transfers" — states 32 in plain words. Confirmed.
+* **(REASONED) `depth == 32` ⟺ `bufdepth == 4`.** Caller: `depth = 8 << n`. Helper: `bufdepth = 1 << ((mode >> 8) & 3)` where `mode` is `src_mode`/`dst_mode`, whose bits 8–9 are `n << 8` copied from the same field. Enumerated: n=2 gives depth 32 and bufdepth 4; no other n gives either. Same producer field, so the equivalence is operational, not coincidental. **Confirmed.**
+* **(REASONED) Consequence 1.** `src_mode`/`dst_mode` = `(tlb << 10) + (n << 8)`, tlb ≤ 7, n ≤ 3 → only bits 8–12 can be set; `DE_MODE_TYPE_MASK` is bits 4–7, all zero → type CI. With the branch dead, always CI. **Confirmed.**
+* **(REASONED) Consequence 2 with one formal caveat.** At n=2: CI writes `buf[0]`, `bufdepth` = 4, `buf` is `uint8_t[8]` uninitialised → bytes 1–3 are indeterminate stack contents, copied to guest. **Confirmed**, noting that C-wise this is UB whose de-facto behaviour is stack garbage; harmless to the argument.
+* **Not settleable from this packet (named, not guessed):** (a) the `#509` grep / not-shipped status — settle with one grep over `GXEMUL-SEC/src/devices/dev_sgi_re.c`; (b) the 5/6 probe result — I take it as given; it is internally consistent (CI at fill gives `(uint8_t)0x11223344 = 0x44` exactly as measured); (c) the "no `MTE_DEPTH_64` in the header" and "existing idiom elsewhere in the fork" claims — settle with one read of `crmfbreg.h` and one grep for comparisons on `depth` or the depth field in the fork.
+
+## 2. Smallest re-opener passing all six rows
+
+**E3 — delete (or alter) only `src_mode |= DE_MODE_TYPE_RGBA;`.** Every one of the six rows stays green, including `fill top`. Reason (READ): the only use of `src_mode` is the read call inside `if (mode & MTE_MODE_COPY)`; all six rows are fill/liveness. This matches your own prediction. E1, E2, E4 all turn `fill top` red (each leaves the fill path CI → 0x44 ≠ 0x11), so E3 is unique *among the four listed*.
+
+## 3. Copy-top arithmetic — and the wrong cell
+
+READ from the helper: CI read sets `*color = buf[0]`; RGBA read reconstructs the full word `buf[0]<<24 | buf[1]<<16 | buf[2]<<8 | buf[3]`; CI write does `buf[0] = *color` (low byte); RGBA write does `buf[0] = *color >> 24` (high byte). Walking source pixel `aa bb cc dd`:
+
+| shape | read color | write buf[0] | dest[0] |
+|---|---|---|---|
+| both CI (today) | 0x000000aa | 0xaa | **0xaa** |
+| both RGBA (after F1) | 0xaabbccdd | 0xaa | **0xaa** |
+| E2: src RGBA, dst CI | 0xaabbccdd | 0xdd | **0xdd** |
+| E3: src CI, dst RGBA | 0x000000aa | 0x00 | **0x00** |
+
+This matches your table, and the row is **legitimate, not self-satisfying**: 0xaa / 0xdd / 0x00 are three distinct reachable outcomes and each one-sided edit turns the row red. It pins coupling, not the fix — `fill top` remains the bug witness; `copy top` is a regression guard. **However, the E3 mechanism as described in your table is wrong:** you tabulate "dest RGBA only → read gives 0xaa; write puts 0x00 first" — true only because `*color` is assigned (0-extended) on the CI read. `color` in the caller is `bg`; had the CI read left it untouched (or the call passed an uninitialised variable), RGBA write would emit `bg >> 24 = 0x11`, not 0x00. The row works, but for a different reason than "write puts high byte of a low-byte colour first" in general. Worth one sentence in the row's comment so a future seat doesn't "fix" the want to 0x11.
+
+## 4. E3 is not the only edit of its kind
+
+*E3's kind* is "edits visible only on the copy path or only to the source side." Members the six-row witness cannot see:
+- `src_mode |= DE_MODE_TYPE_RGB;` (wrong constant — one token, all six green; copy top goes red only because dest[0] becomes `color >> 24` of a CI colour = 0x00 ≠ 0xaa — caught, but only if the row exists);
+- deleting `src_x += dx;` — **not caught even by copy top** if the source region's pixels are uniform, as your spec implies (one stated pixel `aa bb cc dd`). To pin source-coordinate stepping you need at least two adjacent distinct source pixels;
+- any edit confined to the linear arm (values 4/5 of dst_tlb) — the whole witness is tiled A/B/C.
+
+So: E3 is the minimal representative of a class, and `copy top` covers the src_mode-coupling members but not the source-advance member.
+
+Also (REASONED): your cell enumeration {A,B,C} × {copy} × {depth 32 / not-32} is complete *for the guarded block* — the other dominating tests (stipple, src range) are terminating, so they add no reachable cells. Confirmed.
+
+## 5. Option set (Q3)
+
+One unnamed disposition: **F1′ — test the encoding, not the derived count:** `((mode & MTE_MODE_DEPTH_MASK) >> MTE_DEPTH_SHIFT) == MTE_DEPTH_32`. This is the constant the header actually defines (there is no `MTE_DEPTH_64`), and it survives a future "fix" that changes `depth`'s units to bytes — under which F1's `depth == 32` silently becomes unreachable again. Cost: diverges from the local bit-count idiom. Also, **F1+F4 combined** is a disposition excluded only by your scoping decision (see Q4). I cannot grep the fork (packet-fed); the single settling fact is whether `dev_sgi_re.c` elsewhere compares `depth` to a plain constant or compares the shifted field — that names the fork's existing idiom.
+
+Defect in your own reasoning: **F2's rationale misstates the depth-64 cell.** At field value 3 today, CI writes 1 of 8 bytes copied → **7** uninitialised bytes. F2 would switch it to RGBA, which writes 4 of 8 → **4** uninitialised at offsets 4–7. So F2 "converts a seven-byte problem into a four-byte problem," not "a four-byte problem into a four-byte problem." The conclusion (reject F2 — no warrant for what field 3 should do) stands, but for a leak-count argument this matters.
+
+## 6. Scope (Q4)
+
+Confining F1 to one cell is right, because the defective *condition* can only name one value; depth 16 and 64 are not instances of "wrong constant in `depth == 4`." The thing that spans all three cells is a **different defect** — CI never fills `bufdepth` bytes — which F4 fixes for 16/32(64) in one edit. The "three passes of the same class" bite happens only if the uninitialised-buf leak gets filed per-depth. Recommendation: F1 alone this round; **one** F4 round for the leak at all depths; and note a possible third, genuinely different defect — 16-bit transfers presumably want RGB565, which neither arm emits — needing a hardware/driver warrant I cannot supply from this packet.
+
+## Found while verifying, out of scope
+
+(READ) The `dst_y_step` rejection has `exit(1)` commented out, so it does not reject — execution continues into both arms. Harmless in the tiled arm (`dst_y_step` is never read there), but the guard is cosmetic. Also (READ): `dst_tlb` is a three-bit field (mask 0x1c >> 2) and the inlined switch shows no case or default for values 3, 6, 7 — not settleable from the packet whether one exists below; settle with one read of the switch tail.

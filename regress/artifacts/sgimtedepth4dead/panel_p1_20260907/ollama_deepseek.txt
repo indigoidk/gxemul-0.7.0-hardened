@@ -1,0 +1,60 @@
+VERDICT: The branch is unreachable as stated: `depth` is a bit count with possible values {8,16,32,64}, so `depth == 4` never executes. F1 (`depth == 32`) is the correct one-token fix and matches the comment. The six-row witness as specified does not detect E3; the proposed `copy top` row is a legitimate guard against one-sided edits, not a self-satisfying row.
+
+---
+
+### Q1 — Premise audit
+
+- **`depth` confined to `{8,16,32,64}`** — READ from the inlined code and constants.  
+  `depth = 8 << ((mode & 0x300) >> 8)`. The field is two bits, so the shift is 0,1,2,3.  
+  Enumerated: `8<<0=8`, `8<<1=16`, `8<<2=32`, `8<<3=64`.  
+  Therefore `depth == 4` is never true. **REASONED** from the enumeration.
+
+- **Branch unreachable** — REASONED from the above. The line `if (depth == 4)` cannot be reached because `4` is not in the set.
+
+- **Comment’s intended condition is `32`** — READ from the comment: *“copy 32 bits when doing 32-bit transfers.”*  
+  A 32-bit transfer corresponds to `depth == 32`, not `depth == 4`. **REASONED**.
+
+- **`depth == 32` and `bufdepth == 4` are the same condition** — READ from the two formulas:  
+  `depth = 8 << field`, `bufdepth = 1 << field`.  
+  Enumerated: field 0 → depth 8, bufdepth 1; field 1 → 16,2; field 2 → 32,4; field 3 → 64,8.  
+  So yes, `depth == 32` iff `bufdepth == 4`. **REASONED**.
+
+- **Premises I could not settle from this packet**  
+  - The measured probe result `5/6` and the claim that the committed build is unmodified upstream text are stated but not checkable from the inlined text alone.  
+  - The absence of `#509` and the exact tree scope (`GXEMUL-SEC/src/`) cannot be verified from this packet.  
+  - The header defining only three depth encodings is given as READ, but I cannot confirm there is no `MTE_DEPTH_64` elsewhere in the file.
+
+---
+
+### Q2 — Smallest change that re-opens this and still passes the six rows
+
+The smallest such change is **E3: delete `src_mode |= DE_MODE_TYPE_RGBA;`**.
+
+- The six-row witness is entirely fill-only: it never exercises `src_mode` because `mode & MTE_MODE_COPY` is off.  
+- Therefore all six rows stay green under E3.  
+- The row that would catch E3 is the proposed **`copy top`** row. Under E3, `src_mode` remains CI while `dst_mode` is RGBA, so the destination first byte becomes `0x00`, not the expected `0xaa`. That row would be red.
+
+**E1–E4 predictions checked:**
+
+- **E1** (`depth == 32` → `depth == 4`): restores original unreachable branch → `fill top` red. Correct.
+- **E2** (delete `dst_mode |= RGBA`): `dst_mode` becomes CI → `fill top` red. Correct.
+- **E3** (delete `src_mode |= RGBA`): invisible to six-row witness; `copy top` red. Correct.
+- **E4** (`depth == 32 && (mode & MTE_MODE_COPY)`): fill has copy off → condition false → `dst_mode` CI → `fill top` red. Correct.
+
+E3 is not the only edit of its kind: any mutation that affects only `src_mode` and not `dst_mode` will pass the fill-only six rows. The `copy top` row is designed to catch that entire class.
+
+---
+
+### Q3 — Option-set completeness
+
+F1–F5 covers the plausible dispositions. One missing member is to use **`bufdepth == 4`** as the guard instead of `depth == 32`. That would require computing `bufdepth` in `do_mte_transfer()` (or passing it in), so it is more invasive than F1 but directly expresses the byte-count condition and avoids the bit/byte confusion. Semantically it is equivalent to F1.
+
+No other disposition is apparent from the inlined text. F1 is the minimal correct fix.
+
+---
+
+### Q4 — Scope
+
+The three depth cells (16, 32, 64) are the same class of defect: the CI arm writes one byte while the transfer copies `bufdepth` bytes, leaving uninitialised stack bytes in guest memory. However, the 32-bit case is the only one with an existing, clearly intended guard that is simply wrong. Fixing it with F1 is a one-token correction of an obvious typo.
+
+The 16-bit and 64-bit cases require new logic (e.g., extending RGBA, initialising `buf`, or rejecting unsupported depths). They are siblings, not the same one-line defect. One round per cell is defensible, provided the siblings are filed and tracked. The 64-bit case is especially questionable because field value 3 is undefined by the header; a malicious guest could set it, but it may not be reachable in normal operation.
