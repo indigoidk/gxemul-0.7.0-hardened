@@ -1,3 +1,238 @@
+# Retrospective PASS 2 on `79cd12e` -- the receipt that round never filed, and what a late panel found
+
+`precommit_check.sh` section F refused this commit with **NO PASS-2 RECEIPT for 79cd12e**, adding that *"R6 and
+R7 both shipped without one, the second time one round after the first was caught and written down."*  The gate
+is right, and the response was to run the review rather than to write the receipt: `#502` passes 9-12 and `#503`
+shipped two product fixes across twelve passes and never had a pass on their own diff.
+
+**THE PACKET.**  Product code is only 10,435 bytes across three files (`cpu_m88k.c`, `dev_luna88k.c`,
+`dev_wdc.c`), so all of it was inlined; the ~70 artifact files and two large probes were marked
+`NOT SHOWN -- <reason>`, per the checklist rule that the harm is silent narrowing rather than brevity.  **The
+brief was built with `git show --format=`**, and the *"diff hunks inlined"* count was CHECKED (127) before
+launch -- a previous round printed `0` immediately above the line that fired six seats and nobody read it.
+
+**SEATS: 5 answered, 1 WALLED, agy reserved, Opus 5 / Fable 5 held for the 9th.**
+
+*** THE kimi CLI IS HARD-WALLED ON A NEW WEEKLY WINDOW, AND THE SUBSTITUTE WAS RESTORED THE SAME MINUTE. ***
+Its file was 350 bytes reading `403 You've reached your weekly (7-day) usage limit`, and `seat_verdicts.py`
+reported WALLED rather than scoring it a short answer.  Re-firing the CLI cannot help -- this is a quota, not a
+moment -- but `curl localhost:11434/api/tags` lists `kimi-k3:cloud`, so **`OLLAMA4` was restored to the
+substitute**: the sixth seat-failure class exactly as `panel.sh` documents it, *one transport walled while
+another is live*, and one line away.  **The seat's CLASS changes with the transport** -- the substitute is
+PACKET-FED -- so the restored comment says in as many words that crediting it with a repo fact while that line
+is set is the conflation the doctrine forbids.  *The likeliest reason the window is spent is this same night's
+own 72 KB and 123 KB kimi answers.*
+
+**WHAT THE PASS SETTLED, and two seats were needed for it.**  `minimax` named the settling fact for `#503` and
+said honestly it could not check it from the packet -- *"grep the fork for any post-DEVINIT assignment to
+`machine->ncpus`"*.  `grok` then did exactly that and settled it: three assignment sites, **all before any
+device exists** (`main.c` `-n`, `emul_parse.c`, and `emul.c` before `MACHINE_SETUP` -> `device_add`), with no
+later write anywhere -- not in the debugger, not on a guest path, not a hotplug.  **The DEVINIT snapshot is
+stable and the bound is right.**  That is the packet-fed / file-reading division working as designed rather
+than by luck.
+
+*** AND A FALSE ALARM THAT WAS WORTH EVERY MINUTE IT COST, because the method that produced it is the one this
+project wants. ***  `glm` enumerated the packet's arithmetic and reported that `#502` *"closes only 5 of its 7
+classes"* -- the `#499` one-cell-repair shape, which would be an L2 breach in shipped code.  It offered a clean
+bifurcation: *"Either two lines were lost in transport, or the shipped fix leaves the two cells symmetric to
+div0 open."*  **Settled in two minutes by reading:** `git` reports 68 added lines for `cpu_m88k.c` and the
+brief inlined exactly 68, so nothing was lost; and the case group carries all seven labels, `INTEGER_OVERFLOW`
+and `ERROR` included, each setting `implemented = true`.  **Its count was off by two and its conclusion was
+false -- and it did the right thing anyway**: it enumerated instead of reasoning, named what would settle each
+branch, and said *"I name what would settle each rather than guess."*  A packet-fed seat cannot open the file;
+it can say precisely what would decide the question, and this one did.
+
+**THE PASS'S ONE ACTIONABLE FINDING IS A PREDICTION, AND IT IS RECORDED AS ONE.**  `grok`: the `#502` detector
+has a clause-(d) mutant it predicts sweeps **59/59** -- `implemented = true` -> `implemented =
+(cpu->machine->ncpus < 2)` on the seven arms.  That is the canonical clause-(d) shape: the guard kept, its
+repair conditioned on a field the guarded body reads.  **It said plainly it could not build it** (read-only
+seat, gates forbidden) and did not dress the prediction as a score.  Filed as `m88kexcdetectorl2`, MED, with
+the disposition stated: **the floor's L2 rule fires on a MEASURED false pass, so a prediction is a candidate,
+not a breach.**  If it sweeps, it is L2 **of the detector** -- every seat agrees the product fix is in the
+right place -- and if it does not, the row closes as a measured non-finding with its score, which is a result
+rather than a waste.
+
+*** CODEX WAS FLAGGED AGAIN, AND THE PATTERN NOW HAS FOUR DATA POINTS. ***  Its 395 KB answer ends in
+`ERROR: This content was flagged for possible cybersecurity risk`, twice -- immediately after it had been
+reading the ledger, the CHANGELOG and the m88k manual.  **Every flagged run tonight was reading this project's
+own ARCHIVES**, which carry months of accumulated `kill` / `host kill` / `exit(1)` vocabulary; the one codex
+run that finished cleanly stayed in `src/`.  Recorded on `codexsubjectrefusal`, whose earlier diagnosis -- that
+the trigger is the reach-the-defect FRAMING -- **this refutes**, since the refused briefs include a read-only
+scoping task that says outright *"Do not design the fix diff."*
+
+# Round #504 sgirandompixel -- a failed pixel read handed the caller `random()` and the destination write stored it; the arm now declines with a latched announce, witnessed at rung 3 and backed by a five-mutant table
+
+`src/devices/dev_sgi_re.c`, `horrible_getputpixel()`.  Its `default:` arm printed a diagnostic, had its
+`exit(1)` **commented out**, and then executed `*color = random(); return;`.  `*color` is the CALLER's
+variable, and in `draw_primitive()` the failed source read and the destination write share one `color` in one
+loop iteration -- so a declined read did not decline: it substituted a random value and the next line stored
+it.
+
+*** THE UNHANDLED VALUE IS A DOCUMENTED MODE, WHICH IS WHAT MAKES THIS MORE THAN A CURIOSITY. ***  The arm
+switches on `tlb_mode = (mode >> 10) & 0x7` and implements 0, 1, 2 and 4.  `src/include/thirdparty/crmfbreg.h`
+defines FIVE modes, and `DE_MODE_LIN_B` (`0x1400`) extracts to **5**.  Four of the five documented modes work
+and the fifth returns random data.  Both mode words are ordinary device registers written by ordinary stores.
+
+**RUNG-3 WITNESS, BUILT AND MEASURED** -- `regress/sgi_re_randompixel_probe.py`, real guest instructions on an
+unmodified committed `-E sgi -e ip32`, no `device_add`.  Both mandated controls green (liveness through RAM; a
+device signature RAM could not produce).  The destination received `0x4b1763a1`, `0x2ee4b4df`, `0x7433cdc1` on
+successive runs -- **bit 31 clear every time**, because glibc `random()` is 31-bit, which is what makes the
+oracle deterministic although the value is not: inequality with a `0xaabbccdd` source is CERTAIN, not 2^-32.
+
+**THE DESIGN CAME FROM THE PANEL AND SO DID THE ONE THING THAT MADE THE WITNESS WORK.**  grok specified it and
+warned that the obvious probe FINDS NOTHING: at reset the destination mode is TLB_A with its valid bit clear,
+so the write silently returns and the destination is unchanged -- a false negative that looks like a clean run.
+**I hit that trap anyway**, from a direction it had also named: a 64-bit store writes the HIGH word to `[n]`,
+so storing `0x10` left the tile pointer at 0 and every pixel went to physical address 0.  **The ACCEPT control
+is what caught it**; a probe carrying only defect rows would have reported no defect.
+
+**THE FIX IS MEMBER 3 (DECLINE + LATCHED ANNOUNCE) IN THE MINIMAL SCOPE**, 3 of 5 answering seats, and the two
+dissents were refuted on a point both file-reading seats reached independently: they voted FAULT, but **the
+device access that triggers this already succeeded** -- the store to PRIMITIVE|START was accepted -- so there
+is nothing left to fault.  grok: *"'member 5 is available here' is true of IP32 and FALSE OF THIS CALL SITE."*
+codex argued for the fuller form (an explicit success result, every read site suppressing its dependent write);
+**a return value plus seven call sites is not ONE SITE**, so the reopening rule takes grok's scoping and
+codex's form is filed as `sgirandomskipput` rather than dropped.
+
+**TEST-FIRST, IN THE ORDER THE ORACLE-CORRECTION RULE FIXES.**  The witness PASSES while the defect is PRESENT,
+so its oracle had to invert.  Re-pinned FIRST, the COMMITTED build measured **RED at 7/8**
+(`prefix_repinned_RED.out`), and only then was the code changed -- 8/8 after, same script.  Without that order
+a re-pin cannot be told from fitting the test to the binary.
+
+**THE KILL TABLE** (`artifacts/sgirandompixel/killtable/`, BASE 8/8 opening AND closing, clone clean, no
+sentinel; every score re-derived by DIFFING each result against `BASE.out`, never the driver's echo):
+
+| mutant | score | rows red |
+|---|---|---|
+| `M_RANDOM` -- verbatim reinstatement (clause (b)) | 6/8 | value AND latch count |
+| `M_ZERO` -- guard kept, repair nulled (clause (d)) | 7/8 | value only, `0x0` |
+| `M_NOLATCH` -- drop the latch guard | 7/8 | latch count, **4 vs 1** |
+| `M_SILENT` -- member 2 instead of member 3 | 6/8 | both diagnostic rows |
+| `M_EXIT` -- restore `exit(1)` | 4/8 | four rows; the machine dies |
+
+*** TABLE 1 FOUND TWO DEFECTS IN THE INSTRUMENT ITSELF, BOTH REPAIRED IN-ROUND UNDER L1. ***
+* **`lin_b diag once` was VACUOUS BY CONSTRUCTION and `M_NOLATCH` escaped 8/8.**  The probe drew a **1x1**
+  rectangle, so an UNLATCHED announce also fired exactly once and the count channel could not vary.  **The
+  pre-table CHANNEL check is exactly the check that should have caught it** -- I named the channel and never
+  asked whether the session could MOVE it, which is the half that matters.  Repaired to **1 wide x 4 tall**:
+  HEIGHT not width, because LIN_A addressing is `ofs = x & 4095` (y ignored), so four rows rewrite one byte
+  and the value oracle survives, while four columns would overlap and destroy it.
+* **`M_RANDOM` was MIS-BUILT** -- it also silenced the announce, so it reddened three rows and died for TWO
+  reasons; an over-determined mutant cannot attribute its kill to the channel its row names.  Corrected to
+  restore both halves the fix changed, which is what clause (b) asks for.  *My PRETABLE prediction of 7/8 was
+  then wrong for a third reason and the measurement was right: the fix changed TWO things, so a verbatim
+  reinstatement necessarily reddens two rows.*
+
+**PASS 2: SHIP.  Six seats answering, none walled, none down** -- the fullest roster of the session, and it
+cost one liveness call: **kimi had walled on three consecutive panels and returned its token on the first
+re-fire**, then answered 72 KB.  A wall is a moment, not a state.  Both FILE-READING seats answered with NO
+verdict line, and reading them in full is where the round's one finding was.  codex **re-derived all 40 row
+outcomes (8 rows x 5 mutants) from the preserved artifacts** and confirmed the table, saying plainly it ran
+nothing itself.  grok answered **NONE IS WRONG** to the five-way disposition question and named the question's
+own frame as the unsupported assumption -- the SECOND seat that day to make that correction independently
+(row `briefforcedwrong`).
+
+**THE ROUND'S ONE L4, AND IT WAS SELF-INFLICTED IN THE ENUM THIS ROUND EXTENDED.**  `SGIRE_W_PRIM_OP`'s comment
+still said *"the next free bit is 1 << 10; the enum ends HERE on purpose"* -- both false once
+`SGIRE_W_BADMODE = 1 << 10` was appended below it.  **That is the duplicate-enumerator collision this file
+already paid for and warns about four lines earlier**; a duplicate enumerator is legal C, silent, and crosses
+devices because all four handlers share one allocation.  I read that warning while placing the bit, obeyed it,
+and left the signpost pointing at the bit I had just taken.  Fixed by DEMOTING the superseded sentence inside
+its own correction, leaving exactly one live next-free claim, on the last enumerator.
+
+**FILED, not fixed** -- five rows, each named in the shipped comment so no reference dangles:
+`sgirandomskipput` (the declined read still lets the caller write fg -- codex's fuller form),
+`sgirelinb` (LIN_B unimplemented; the panel REFUSED to endorse implementing it as LIN_A-with-the-other-array,
+because case 4 carries its own `TODO... probably not correct!` and the MTE path checks validity and searches
+by page while case 4 indexes directly -- symmetry is supporting evidence, not a transferred warrant),
+`sgirandomcolour` (**grok found a SECOND `random()` site nobody else saw**: the colour-mode `default:` fills
+four bytes the same way), `sgitileptrsilent` (the sibling arm declines with no announce at all -- from the
+sibling-parity check), and `sgirenamedstmode` (the diagnostic says `dst_mode` although the parameter is also
+passed as src_mode; the round DID reword it, which broke the probe's anchor and reddened two rows on a FIXED
+build, and **moving the anchor to match would have been the laundering shape** -- the wording went back).
+
+**Wired into `gate_arm.sh`** beside its two siblings, following that block's own two lessons: the completion
+sentinel is checked BEFORE any row, and the denominator is summed arithmetically across three rows, because a
+single count cannot tell a LOST row from a FAILING one.
+
+*** AND THE GATE'S FIRST RUN FAILED ON THE BLOCK I HAD JUST WRITTEN -- THE PADDED-COLUMN TRAP, IN ITS
+MATCHES-TWO-ROWS DIRECTION. ***  `FAIL sgi_re randompixel row: lin_b diag  got=2 want=1`, while the probe
+itself emitted 8 rows, 8 green, 0 red.  **The probe was right and my CHECK was wrong**: I wrote
+`"^$v .*ok$"` with ONE space, so the pattern for `lin_b diag` also matched the row `lin_b diag once`.
+**The sibling block eight lines above uses TWO spaces** -- I copied that block's comments and lessons and not
+its pattern.
+
+Fixed to the house idiom and **pre-flighted against the real probe log before re-running the 15-minute gate**,
+which is the two-second check the carrier prescribes for exactly this: each of the eight patterns now selects
+exactly 1, summing to 8, and the NEGATIVE CONTROL still reproduces `got=2` under the old one-space form.
+
+*** AND THEN I RAN TWO GATES AT ONCE, WHICH IS THE ONE THING THE HARNESS RULES FORBID MOST PLAINLY. ***
+
+I read run 1's log as finished -- it had 177 `ok' rows, 1 `FAIL', and the randompixel block complete at the
+tail -- fixed the pattern, and launched run 2.  **Run 1 was still executing.**  Its log carried no
+`RB_GATE_DONE', and I never looked for one: I counted ROWS and read the TAIL, both of which look identical on
+a finished run and on a run that is merely past the section you care about.
+
+**The carrier states the rule in capitals and I had quoted it into this very round's gate block four hours
+earlier:** *A PRESERVED LOG IS VERIFIED BY ITS COMPLETION SENTINEL, NOT BY ITS EXISTENCE.*  The block I wrote
+checks `SGIRAND_DONE' BEFORE any row for exactly this reason.  I applied the rule to the probe and not to the
+gate that runs it -- **knowing a rule and having it fire on the right object are different problems**, which is
+the carrier's own diagnosis of itself.
+
+**WHAT IT COST, and the damage is to evidence rather than to the tree.**  Both runs default to
+`LOGDIR=/tmp/gxregress' and `gate_arm.sh' greps probe logs there BY NAME, so for about six minutes two runs
+wrote and graded the same files.  **Every verdict from both runs is discarded** -- not because any of them
+looked wrong, but because a measurement taken from a shared, concurrently-written log is not a measurement.
+Detected by an impossible pair: two `python3'->`gxemul' chains under DIFFERENT parents, one aged 05:42 and one
+00:04, when a single gate runs one probe at a time.
+
+**The pre-flight of the row patterns SURVIVES**, and it is worth saying why rather than re-running it for
+comfort: it ran BEFORE run 2 was launched, so it had a single writer; and what it tested -- which pattern
+selects which row NAME -- is a property of the probe's `%-16s' format, not of which run produced the file.
+
+**Fixed STRUCTURALLY rather than by resolving to be careful**, since being careful is what just failed: the
+runner now REFUSES to start when a `gxemul' is already alive, and clears `$LOGDIR' first so a killed run's
+stale probe log cannot be graded as the new run's.  The refusal matches on the process IMAGE, never on a
+script name -- git-bash `ps' is argument-blind, so a name pattern can never match and would be a check that
+cannot fail.
+
+*** AND THE DASHBOARD GENERATOR REFUSED TO RENDER THIS ROUND, WHICH IS THE THIRD TIME TONIGHT A TOOL CAUGHT ME
+RATHER THAN THE OTHER WAY ROUND. ***
+
+`gen_dashboard.py` exited with *"REFUSING TO RENDER -- seat ids used by entries but declared by no column"*,
+naming `'main'` (2 entries) and `'main-loop'` (5).  **All seven were mine, written during this session** as I
+recorded triage and prep work: I had been using the ledger's `entries' list as a general worklog.
+
+**IT IS NOT A NAMING NIT.  `entries' IS THE SEAT ANSWER LIST.**  `check_stage_panels.py` COUNTS entries to
+decide whether a stage's nine seats were fired, so a main-loop note parked there **MANUFACTURES A SEAT ANSWER
+THAT NEVER HAPPENED** -- the seat-failure-counted-as-agreement shape inverted, and the carrier already records
+exactly this mechanism for a wrongly-defanged hold marker falling through into the seat tally.  Left alone, my
+seven notes would have made four rows look better-reviewed than they are.
+
+All seven migrated into `state_note', where the row's narrative belongs, each carrying a header saying why it
+moved; every remaining entry names one of the nine declared seats, verified by re-reading the file after the
+edit.  The dashboard then rendered: 242 in work, 111 closed, 9 seats.
+
+**The generator is the hero here and it is worth saying why it worked:** it does not warn and continue, it
+REFUSES -- and it prints the orphan ids, their counts, and the rows they sit on, so the fix is mechanical.
+That is the opposite of the two defects this same round found in `panel.sh`'s history, where a message
+reported an action the code did not take.  *A check that stops the pipeline is worth ten that advise it.*
+
+**ATTRIBUTION NOTE, because the gate ran with an uncommitted file in the tree.**  `regress/sgi_de_primop_probe.py`
+carries an unrelated in-flight edit that this commit deliberately does NOT include, and `gate_arm.sh` runs that
+probe -- so the run that cleared this round was not, strictly, a run of the committed tree.  **Checked rather
+than waved past:** `git diff -U0` on it is 20 added / 6 removed lines, and every one is comment prose or a
+`row()` NOTE argument -- no `want', no oracle, no session, no store.  Notes do not participate in the row's
+`got == want' comparison and the gate matches on row NAME plus `ok$', so the verdicts are identical either way.
+*The carrier's comparison-run rule -- a note change shows up as an apparent behavioural difference -- binds a
+base-versus-mutant DIFF, which this is not.*
+
+**The margin is ONE CHARACTER and the comment now says so**, because this trap's other direction is silent:
+the probe prints `"%-16s"` plus an explicit space, so a name of N chars is followed by `(16-N)+1` spaces.
+The longest row name here is `lin_b diag once` at **15**, leaving exactly two.  **A name of 16 or more makes
+the two-space pattern UNSATISFIABLE -- the check stops testing anything and stays GREEN**, which is how a row
+quietly stops being tested.  Growing a name past 15 requires widening the probe's `%-16s` in the same diff.
+
 # Round #503 lunaabsentcpu -- the LUNA-88K interrupt controller called an absent CPU's NULL handler: a store to an interrupt mask on the DEFAULT one-CPU machine terminated the simulator; the walk is now bounded to the slots DEVINIT connected, with a 37-row rung-3 detector
 
 `src/devices/dev_luna88k.c`.  `reassert_interrupts()` walked `for (cpu = 0; cpu < MAX_CPUS; cpu++)` and called

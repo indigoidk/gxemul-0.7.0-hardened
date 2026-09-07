@@ -1,0 +1,72 @@
+PRE-TABLE BLOCK -- sgirandompixel, the 8-row instrument.  Written BEFORE the first mutant build, so this
+file's own mtime proves the order.  2026-09-06.
+
+SIBLING PARITY
+  The arm's nearest sibling is the `tileptr' high-bit check immediately below it -- also a disabled kill
+  (`//exit(1)'), also in horrible_getputpixel, also reached on a failed GET.  ASYMMETRY, and it is owed as a
+  SENTENCE not a row: that sibling returns WITHOUT touching *color, which is exactly the behaviour this round
+  gives the mode arm.  So after this fix the two siblings AGREE, where before they differed -- one substituted
+  random() and one declined silently.  The remaining difference is that the sibling does not ANNOUNCE at all;
+  that is filed (sgitileptrsilent), not fixed, because it is a second site.
+  The colour-mode switch's `default:' (buf[0..3] = random()) is the same CLASS at a different site and is
+  filed as sgirandomcolour -- found by grok, verified at dev_sgi_re.c:294-297.
+
+CLAIM -> ROW
+  The added comment makes four assertions with observable consequences.  Each maps to a row or to an explicit
+  no-row sentence:
+    "*color is left alone, so the caller's `color = fg' stands"     -> row `lin_b is fg'
+    "the announce is latched because this helper is per-pixel"      -> row `lin_b diag once'
+    "the caller STILL PERFORMS its dependent PUT"                   -> row `lin_b is fg' (a PUT happened at all)
+    "MEASURED: 0x4b1763a1, 0x2ee4b4df, 0x7433cdc1"                  -> the preserved pre-fix logs; no row owed,
+                                                                       these are historical measurements
+  NO CLAIM IS MADE about LIN_B being implemented, about other GET sites, or about the colour-mode arm -- all
+  three are filed with row ids in the comment itself.
+
+GUARD FIELD vs BODY FIELD
+  Guard reads `d->warned & SGIRE_W_BADMODE'.  Body reads `mode', `put', `x', `y' and writes `d->warned'.
+  The guard field and the body fields are DISJOINT, so the classic "swap the guard's operand for a body-read
+  field" mutant has no target here.  THE REAL QUESTION FOR A SHARED BITFIELD is the one #490 measured:
+  *who else writes d->warned, and can they set my bit?*  Derived: `grep -c 'd->warned |='` = 8 sites, all
+  setting DIFFERENT bits, and SGIRE_W_BADMODE (1 << 10) is used at exactly one site -- this one.  The enum's
+  own closing comment now says the next free bit is 1 << 11, preserving the scan-to-the-last-enumerator
+  property the file documents.
+
+CHANNEL -- per row, the mutant it kills and the observable that differs under it
+  live            no mutant; LIVENESS control.  Reds if the harness stops driving the machine at all.
+  devsig          no mutant; DEVICE-SIGNATURE control.  Reds if the value could have come from RAM.
+  copy lin_a      M_BREAKACCEPT.  Channel: the destination holds the SOURCE value.  This row is what caught
+                  the tile-pointer-zero false negative during the witness build, when every pixel was written
+                  to physical address 0 and the defect rows still looked green.
+  lin_b not src   NON-DISCRIMINATING BY CONSTRUCTION and kept deliberately: true before AND after the fix.
+                  It is a REGRESSION guard against IMPLEMENT-as-copy, not a fix row, and is labelled so.
+  lin_b is fg     M_RANDOM (reinstate `*color = random()' verbatim -- floor clause (b)) and M_ZERO (`*color =
+                  0' -- clause (d): the guard kept, its repair nulled).  Channel: the 32-bit value at the
+                  destination.  fg is programmed to 0x77665544, DISTINCTIVE AND NON-ZERO on purpose -- with
+                  fg = 0 the rows "left *color alone" and "zeroed *color" are the SAME observation and this
+                  row would be VACUOUS BY CONSTRUCTION.  That is the reason the witness's fg=0x0 run could not
+                  have served as the fix oracle.
+  lin_b alive     M_EXIT (restore `exit(1)').  Channel: the machine survives to answer the debugger.
+  lin_b diag      M_SILENT (delete the announce, keep the decline -- i.e. member 2 instead of member 3).
+                  Channel: the diagnostic text appears at all.
+  lin_b diag once M_NOLATCH (drop the `if (!(d->warned & ...))' guard).  Channel: the COUNT of announcements,
+                  which goes from 1 to one-per-pixel.  ALSO M_LATCHSHARE (reuse SGIRE_W_PRIM_OP instead of the
+                  fresh bit): the file records that collision class costing a measurement at 23/25, and the
+                  count channel is what would see it once another site sets that bit first.
+
+PREDICTIONS, recorded BEFORE the run so the table can refute them
+  BASE          8/8 before and after; a closing BASE that is not 8/8 VOIDS the table.
+  M_RANDOM      7/8, reddening `lin_b is fg' alone -- the pre-fix behaviour restored verbatim.
+  M_ZERO        7/8, reddening `lin_b is fg' alone.  IF THIS ESCAPES, fg was not programmed and the row is
+                vacuous -- that is the failure mode this block exists to predict.
+  M_EXIT        heavily red: the machine dies, so every row after the first session fails.
+  M_SILENT      6/8, reddening `lin_b diag' and `lin_b diag once' together.
+  M_NOLATCH     7/8, reddening `lin_b diag once' alone -- `lin_b diag' still sees text.
+  M_LATCHSHARE  PREDICTED GREEN 8/8 in isolation, and that is NOT a hole: nothing else in this probe's
+                sessions sets SGIRE_W_PRIM_OP, so the collision cannot be provoked here.  Recorded as a
+                DISCLOSED limit rather than a row, per clause (e).
+
+APPARATUS
+  Scratch clone under /tmp, never a project tree; clone-local .MUTANT sentinel; frozen driver and frozen
+  probe; MUTANT-TEXT-NOT-FOUND is a FAILURE, not a survival; every .out diffed against BASE.out rather than
+  trusting the driver's echo -- two tables tonight had summaries that were wrong while their measurements
+  were right.

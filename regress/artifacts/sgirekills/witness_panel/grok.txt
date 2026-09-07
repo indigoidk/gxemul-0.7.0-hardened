@@ -1,0 +1,37 @@
+I'll start from the repo truth (HEAD, checkpoint, the open queue) and then read the SGI RE device path to see whether a real guest instruction can reach `LIN_B` → `random()`.Git is blocked from this seat, so I’ll read the device, ledger row, and existing SGI probes directly.Premises look intact so far. Next I’ll read `draw_primitive()`, the SGI machine install, and existing RE probes to see whether a guest store can actually fire `LIN_B`.The drawing path is real; next I’ll read the existing DE primitive probe, how START fires, and how a pixel is actually stored so a readback oracle is possible.Minimax’s “`fatal()` exits” claim is already false in this fork. I’ll try a real guest-instruction probe next, and check whether any in-tree guest actually programs `LIN_B`.**WITNESS BUILDABLE:** guest `sd`/`sw`/`lw` on unmodified `-E sgi -e ip32` (alias `-e o2`). `draw_primitive` is already reached that way by `sgi_de_primop_probe.py`. This seat is plan-mode (write/exec denied), so the pixel oracle is specified, not run.
+
+**All four premises hold.** None is wrong.
+- **(i)** `fatal()` prints and returns. `debugmsg.c` `fatal()` is `va_debug` only; the early-out lives on `debug()`, not here. `// exit(1);` is what was disabled. `*color = random(); return;` runs.
+- **(ii)** `DE_MODE_LIN_B` is `0x1400`; `(0x1400 >> 10) & 7 == 5`; switch has 0/1/2/4 only.
+- **(iii)** `CRIME_DE_MODE_SRC/DST` are `d->de_reg[]`; `DEVICE_ACCESS(sgi_de)` accepts `len` 4/8 stores; those cases only `debug()`.
+- **(iv)** RECTANGLE + `DE_DRAWMODE_XFER_EN`: GET `&color, src_mode` then PUT `&color, dst_mode` in the same iteration.
+
+A packet-fed seat that treats `fatal()` as `exit(1)` is wrong about this fork.
+
+### Machine
+`dev_sgi_re_init` is called only from `machine_sgi.c` IP32 (`O2`), phys `0x15000000`. GBE is at `0x16000000`. Every shipped SGI probe already uses `-E sgi -e ip32 -M 64`. No `device_add`.
+
+Readback does **not** need GBE. `horrible_getputpixel` PUTs through `memory_rw(..., PHYSICAL)` into the tile’s RAM; a guest `lw` of that KSEG1 address is the oracle.
+
+### The hard part is dest setup, not `random()`
+At reset `dst_mode == 0` (TLB_A) and `re_tlb_a[]` has bit 31 clear, so PUT returns without writing. A naive “SRC=`LIN_B`, XFER, draw, read dest” leaves dest **unchanged** — a false negative. `sgi_de_primop_probe.py` already named this gap.
+
+LIN_A dest closes it: case 4 does `tileptr = 0x80000000 | (re_linear_a[x>>12] << 12)`, so the valid bit is forced. Program `CRIME_RE_LINEAR_A` with a guest **`sd`** (len=8; `sw` is declined — `sgi_re_width_probe.py` already lands this). `re_linear_a[0] = 0x10` → phys `0x10000` = `0xa0010000`. Do not leave it 0: that writes phys 0.
+
+Also OR `DE_PRIM_TB` on the rectangle. `(x1,y1)=(x2,y2)=(0,0)` without TB wraps 2048 rows.
+
+### Sketch (one session, then a second)
+1. **Liveness:** `sw`/`lw` `0x5a5a5a5a` at `0xa0010000`.
+2. **Device signature:** `lw` `CRIME_DE_STATUS` (`0xb5004000`) → `0x1e000000` (RAM would read 0). Same control as the width probe.
+3. `sd` LINEAR_A[0]=`0x10`. Paint dest `0x11111111`, source `0xAABBCCDD` (bit 31 set).
+4. **Control:** `MODE_DST=MODE_SRC=LIN_A|BUFDEPTH_32|TYPE_RGBA` (`0x1220`), `DRAWMODE=XFER_EN|PLANEMASK|BYTEMASK` (`0x002000F8`), `XFER_ADDR_SRC=0x200`, `XFER_STEP_X=4`, `sw` `DE_PRIM_RECTANGLE|DE_PRIM_TB` at `PRIM|START` (`DE+0x860`). Dest `lw` must equal `0xAABBCCDD`. That is the copy the defect is supposed to be.
+5. **Defect:** same, but `MODE_SRC=LIN_B|BUFDEPTH_32|TYPE_RGBA` (`0x1620`). GET hits default → `color=random()` → PUT writes it.
+   - Primary oracle: dest ≠ `0xAABBCCDD` and dest ≠ `0x11111111`. glibc `random()` is 31-bit, so dest bit 31 is clear and inequality with the source is **certain**, not 2⁻³².
+   - Attribution: `unimplemented dst_mode` / `get` — RAM emits no text.
+   - Host stays up (`exit(1)` is commented out).
+6. **Two runs:** default `srandom(tv_sec ^ pid ^ tv_usec)` (`main.c`; skip with `-D`). Two runs should differ. **`-D` makes them identical** — that changes the second oracle, not the defect. Keep dest≠source as the pin.
+
+`random()` is not the blocker. An unprogrammed TLB dest is.
+
+### LIN_B in practice
+**In principle, not shown in-tree.** `DE_MODE_LIN_B` appears only in `crmfbreg.h` and the function comment. The XFER comment names OpenBSD **character drawing**, not which src mode. PROM uses `MTE_TLB_LIN_A/B` to zero-fill; that path does **not** call `horrible_getputpixel`. `images.md` has no O2/sgimips image. Documented mode, guest-storable, not boot-witnessed here. That is a real severity split; the constant existing does not make it a driver-selected mode.

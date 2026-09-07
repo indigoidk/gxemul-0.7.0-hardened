@@ -107,10 +107,29 @@ enum {
 	/*  #500: draw_primitive()'s unimplemented drawing op.  ITS OWN BIT,
 	    for the reason #498 measured on SGIRE_W_DE_LEN: a latch shared with
 	    another site is silenced by that site's ordinary traffic, so the
-	    announce this fix exists to make would never fire.  The next free
-	    bit is 1 << 10; the enum ends HERE on purpose so that a maintainer
-	    scanning to the last enumerator finds it.  */
+	    announce this fix exists to make would never fire.
+
+	    (This comment used to end "The next free bit is 1 << 10; the enum
+	    ends HERE on purpose so that a maintainer scanning to the last
+	    enumerator finds it."  BOTH HALVES WENT FALSE when sgirandompixel
+	    added SGIRE_W_BADMODE = 1 << 10 BELOW this line.  Demoted rather
+	    than deleted, because the REASONING is still why the convention
+	    exists -- and leaving it live would have pointed the next reader at
+	    a taken bit, which is the duplicate-enumerator collision #499
+	    already paid for and warns about four lines up.  The live
+	    next-free claim is on the LAST enumerator, where it belongs.)  */
 	SGIRE_W_PRIM_OP   = 1 << 9,
+
+	/*  sgirandompixel: horrible_getputpixel()'s unimplemented-mode arm.  ITS
+	    OWN BIT, for the reason #498 measured and #500 repeated -- the four
+	    handlers share one malloc'd struct, so a latch shared with another
+	    site is silenced by that site's ordinary traffic and the announce
+	    never fires.  This one matters more than most: the helper is
+	    PER-PIXEL, called inside line, rectangle and tiled-MTE loops, so an
+	    UNLATCHED announce is a per-pixel flood rather than a diagnostic.
+	    The next free bit is 1 << 11; the enum ends HERE on purpose, as
+	    above.  */
+	SGIRE_W_BADMODE   = 1 << 10,
 };
 
 struct sgi_re_data {
@@ -213,10 +232,42 @@ void horrible_getputpixel(int put, struct cpu* cpu, struct sgi_re_data* d,
 		// TODO... probably not correct!
 		// printf("tileptr = %08x x = %i y = %i tile_nr = %i ofs = %i\n", tileptr, x, y, tile_nr, ofs);
 		break;
-	default:fatal("unimplemented dst_mode %i for horrible_getputpixel (%s), x=%i y=%i\n",
-			mode, put ? "put" : "get", x, y);
-		// exit(1);
-		*color = random();
+	default:/*  sgirandompixel: this arm used to assign `*color = random()' -- with
+		    its exit(1) commented out -- so a failed GET handed the CALLER a
+		    random value, and draw_primitive() then wrote it to the destination
+		    in the same loop iteration, since `color' is shared by the XFER GET
+		    and the PUT.  DE_MODE_LIN_B (0x1400) is one of the FIVE modes
+		    crmfbreg.h documents and extracts to tlb_mode 5, so this was
+		    reachable with a DOCUMENTED mode, not only with a junk one.
+		    MEASURED, rung 3: the destination received 0x4b1763a1, 0x2ee4b4df
+		    and 0x7433cdc1 on successive runs of
+		    regress/sgi_re_randompixel_probe.py.
+
+		    NOW DECLINED: `*color' is left alone, so the caller's own
+		    `uint32_t color = fg' stands and what lands is at least
+		    DETERMINISTIC.  The announce is latched because this helper is
+		    per-pixel.
+
+		    WHAT THIS DOES NOT DO, filed rather than silently omitted: the
+		    caller STILL PERFORMS its dependent PUT, so a declined GET still
+		    writes fg (row sgirandomskipput -- suppressing it needs a return
+		    value and every GET site changed, which is more than one site);
+		    LIN_B is still not implemented, and the panel refused to endorse
+		    implementing it as LIN_A-with-the-other-array on symmetry alone
+		    (row sgirelinb); and the COLOUR-mode switch below carries the same
+		    random() shape at its own default (row sgirandomcolour).  */
+		if (!(d->warned & SGIRE_W_BADMODE)) {
+			d->warned |= SGIRE_W_BADMODE;
+			/*  `dst_mode' is kept from the original text although the
+			    parameter is also passed as src_mode on a GET: the probe
+			    anchors on this literal, and rewording it here would be
+			    scope creep AND would move an oracle anchor mid-round,
+			    which is the laundering shape whatever the intent.
+			    Filed as sgirenamedstmode.  */
+			fatal("[ sgi_re: unimplemented dst_mode %i for "
+			    "horrible_getputpixel (%s), x=%i y=%i; declined "
+			    "(once) ]\n", mode, put ? "put" : "get", x, y);
+		}
 		return;
 	}
 

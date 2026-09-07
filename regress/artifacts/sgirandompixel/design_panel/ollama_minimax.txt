@@ -1,0 +1,43 @@
+VERDICT LINE FIRST
+================
+**MEMBER 5: FAULT.** `horrible_getputpixel()` returns int (0 ok, <0 fail); on the default arm it sets no `*color` (caller's `fg` initialisation stands but is never consumed because the caller must skip the dependent PUT); the negative return propagates up the device-access chain until `memory_rw.c`'s `res <= 0 && !no_exceptions` arm raises `EXCEPTION_DBE`.
+**PREMISE (i) IS THE LOAD-BEARING ONE AND CANNOT BE SETTLED FROM THIS PACKET** -- see below. Premises (ii)-(iv) hold as arithmetic / structural claims from the inlined text.
+
+AUDIT OF PREMISES
+=================
+- (i) `fatal()` returns. **Not checkable from the packet.** The brief states it was verified by opening `src/core/debugmsg.c`. The witness is *also* consistent with it (the two observed values `0x4b1763a1`, `0x2ee4b4df` are 31-bit, matching glibc `random()`, and `lin_b alive` is `alive` -- if `fatal()` exited, neither row could be observed). One fact would settle it definitively: the body of `fatal()` in this fork. Until then I rate it **READ-from-author-claim, corroborated by witness, but not independently verified by this seat.**
+- (ii) cases 0/1/2/4 implemented. **REASONED, consistent.** `(mode >> 10) & 0x7` of `0x1000` is `4`, of `0x0400` is `1`, of `0x0800` is `2`, of `0x0000` is `0`. Four cases handled, five modes documented -- one missing. Consistent with the brief and with the witness.
+- (iv) `src_mode` / `dst_mode` are writable `de_reg[]` entries. **READ from packet.** Consistent with the `width-checked store path` description. Cannot be checked.
+
+No premise contradicts another.
+
+WHY FAULT, NOT THE OTHER SIX
+============================
+- DELETE: the mode is documented and used; wrong category.
+- DECLINE (silent) and DECLINE+LATCHED ANNOUNCE: both leave `*color` untouched, so the destination is written with the caller's `fg`. The brief itself flags this as "plausible-looking wrong data rather than obviously wrong data" -- a strictly worse failure mode than today's random(), and the announce adds nothing the witness can't already see.
+- ACCEPT / BACKED ACCEPT: the structural warrant (`re_linear_b[]` exists, same write path, real CRIME hardware treats A/B as parallel tile tables) is strong, but the addition licence requires a measured delta or a transferred warrant -- not "it cannot hurt." A witness row that *measures* `copy lin_b == source` post-fix is exactly that delta, but the seat that ships ACCEPT without first taking that measurement ships invented behaviour. FAULT does not.
+- IMPLEMENT: same warrant problem, plus more code to be wrong.
+
+FAULT is mechanically available (the brief confirms `memory_rw.c` already does this on `res <= 0`), requires no warrant about LIN_B semantics, surfaces the bug loudly to the guest rather than hiding it, and matches the pass-2 seat's proposal for the sibling `tileptr` arm.
+
+`*color` ON FAILED GET: UNTOUCHED. The brief's third option ("propagate failure so the caller SKIPS the dependent PUT") is the only one that stops the write; the function being `void` is the obstacle, not a reason to choose another option. Change the signature. The cost is real (caller-chain update) but mechanical.
+
+LATCH QUESTION (your Q3): the announce, if any, does **not** belong here. Per-pixel call site, inside line / rect / tiled-MTE loops -- any announce here without a latch is a flood, and a latched announce at the per-pixel site is the wrong granularity. If FAULT is chosen there is no announce at all; the witness observes the exception instead. If a later change reintroduces ACCEPT, the announce belongs at the command-wide validation point before the loops, not inside `horrible_getputpixel()`. This file already has the right idiom (`SGIRE_W_UNMAP_RD/WR`); use it there, not here.
+
+POST-FIX ORACLE (re-pin FIRST, per the brief's rule)
+====================================================
+Under FAULT, the following rows must INVERT:
+- `lin_b diag` : `yes` -> `no` (the `fatal()` path is no longer taken)
+- `lin_b written` : `0x2ee4b4df` -> UNCHANGED from initialised `fg` (no PUT executed)
+- `lin_b alive` : `alive` -> `dead` or `exception` (guest took `EXCEPTION_DBE`; whether the witness sees `dead` depends on whether the test harness catches it)
+
+Rows that should NOT invert (controls):
+- `live`, `devsig`, `copy lin_a` stay green -- RAM path and the implemented mode are untouched.
+
+A new row is owed: `lin_b exception` asserting `EXCEPTION_DBE` was delivered to the guest. Without it, "host died for some other reason" is indistinguishable from "fix worked."
+
+Until that row exists and the oracle is re-pinned, the committed build must measure RED on `lin_b diag` (still `yes`) and `lin_b written` (still random) -- that is the gate against fitting the test to the binary.
+
+ONE MEASUREMENT I WOULD NAME, NOT TAKE
+=====================================
+The single fact that decides this whole review and that no amount of packet-reasoning can supply: the body of `fatal()` in `src/core/debugmsg.c` of THIS fork (not the three pristine-2021 upstream copies). Every other question in the brief is downstream of it. If `fatal()` actually calls `exit()`, the witness rows `lin_b alive` / `lin_b written` are impossible and the analysis is void; if it does not, the rest follows. A seat with file access should read those four lines and quote them.

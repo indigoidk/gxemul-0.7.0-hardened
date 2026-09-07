@@ -1,0 +1,21 @@
+VERDICT: No L2/L3 floor breach is demonstrable from the packet alone. Q1 #503’s guard is sound only if `machine->ncpus` is immutable after DEVINIT — a premise stated but not checkable from the inlined diff. Q1 #502 closes the seven named classes, but its own comment contradicts “nothing below 128 reaches that default” while also saying SFU1/tail vectors still halt. Q2 and Q3 cannot be settled without the detector row list and full function source, which are NOT SHOWN.
+
+**Q1 — Premise audit**
+
+1. **#503 `ncpus` capture at DEVINIT**  
+   - READ: The diff adds `int ncpus;` to `struct luna88k_data` and assigns `d->ncpus = devinit->machine->ncpus;` in DEVINIT, after the `ncpus > 4` exit.  
+   - REASONED: The guard is correct **only if** `machine->ncpus` never changes after device init. The comment claims “nothing in this fork mutates the count after device init (pass 2, codex),” but that is a premise not verifiable from the packet. If any code path mutates `machine->ncpus` later, the snapshot becomes stale and the bound is wrong.  
+   - Single fact to settle: whether any post-DEVINIT code writes to `machine->ncpus`.
+
+2. **#502 symmetric cell**  
+   - READ: The diff sets `implemented = true` for seven exception classes and adds corresponding `case` labels in the later switch, preventing them from reaching the halting default.  
+   - REASONED: The seven named classes are closed. However, the comment states “nothing below 128 reaches that default any more” but then immediately says SFU1_PRECISE/IMPRECISE (114/115) and tail vectors 11..113/116..127 **still halt**. Those vectors are below 128, so the comment is self-contradictory. The tail vectors are a symmetric open cell in the sense that they still halt all CPUs when raised via supervisor `tb0/tb1/tcnd`, but they are a different set from the seven fixed classes and are disclosed as “by design.” The code itself may be correct, but the prose is false.
+
+**Q2 — Smallest edit to re-open defect and still pass detector**  
+- REASONED: Cannot be determined from the packet because the detector’s row list is NOT SHOWN. A candidate edit: revert one `implemented = true` assignment for a class not covered by the detector (e.g., `M88K_EXCEPTION_BOUNDS_CHECK_VIOLATION`) while leaving its later `case` label. That class would then hit the `!implemented` block and halt, re-opening the defect. The row expected to stay green is `div0/udiv0` (the divide-by-zero rows), because that class remains fixed. If the detector tests all seven classes, no such edit exists.
+
+**Q3 — Floor question (clean-sweep mutant in DEPENDS-ON enumeration)**  
+- REASONED: Cannot be settled from the packet. The full function bodies of `m88k_exception` and `reassert_interrupts` are not inlined, and the mutation operators for clause-(d) are not specified. Denominator unknown. No clean-sweep mutant is demonstrable from the diff alone.
+
+**Q4 — What did the twelve passes miss?**  
+- REASONED: The self-contradiction in the #502 comment (“nothing below 128 reaches that default” vs. SFU1/tail still halting) is a prose defect that a careful read catches. The #503 comment’s immutability claim (“nothing in this fork mutates the count after device init”) is an unverified premise that could hide a real bug if false. No other defects are evident from the packet.

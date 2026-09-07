@@ -1,0 +1,924 @@
+kimi version 0.36.0
+• The user wants me to read a specific file and review it adversarially as its own Questions/Review-asks section directs. Let me read the file first.Let me understand the task. The user wants me to adversarially review this brief, following its own Questions/Review-asks section (§5 Q1-Q6, plus the "READ THIS FIRST" instructions). I should not summarise it back. I need to end with GO / NO-GO / GO-WITH-CHANGES.
+
+  The brief says:
+  - The tree under review is `GXEMUL-SEC/src/`.
+  - Check premises, not just derivations.
+  - Enumerate arithmetic claims.
+  - Verdict line first.
+
+  The brief is about `horrible_getputpixel()` in `dev_sgi_re.c` in the `GXEMUL-SEC` fork. Claims:
+  - `uint8_t buf[8]` never initialised.
+  - Two independent fields from mode word: color_mode (bits 4-7), bufdepth (bits 8-9 → 1<<x).
+  - PATH A (PUT): color arms fill at most buf[0..3], but bufdepth bytes written to guest memory → uninit stack leak into guest-visible memory.
+  - PATH B (GET): read fills bufdepth bytes, combine reads 4 → uninit bytes into *color, which caller stores.
+  - #95 fix (zero caller's buffer on device READ for len bytes) doesn't cover: Path A is WRITE; Path B reads beyond len.
+  - Witness: existing probe `regress/sgi_re_randompixel_probe.py` with mode word change.
+
+  I need to verify these against the actual code in `GXEMUL-SEC/src/devices/dev_sgi_re.c` and `GXEMUL-SEC/src/cpus/memory_rw.c`. I can read files — the brief says "If you cannot read files that is expected" but I actually CAN read files since I'm on the host. So I should verify everything against the real tree.
+
+  Let me plan the verification:
+
+  1. Read `GXEMUL-SEC/src/devices/dev_sgi_re.c` — find `horrible_getputpixel`, check buf declaration, check the switch arms, check for memset, check the mode decode, check callers (draw_primitive), check how mode is passed, check depth field reachability.
+  2. Read `GXEMUL-SEC/src/cpus/memory_rw.c` — check the #95 pre-zero: does it zero on device READ only? Does it cover len bytes? Is tileptr+ofs RAM or device?
+  3. Check `crmfbreg.h` for the DE_MODE_TYPE values.
+  4. Check CHANGELOG.md for #95, #100 claims.
+  5. Check `regress/` for the probes.
+  6. Check callers of horrible_getputpixel for guards on mode.
+  7. Check the scan claims (spot-check dev_px.c, dev_sgi_gbe.c, dev_scc.c, dev_sgi_mec.c).
+  8. Check Q1.5: is depth field 3 reachable — bufdepth 8, buf[8] size. Also check tilewidth_in_pixels = 512/bufdepth = 64, xofs = (x % 64)*8 max = 63*8=504, ofs = 512*127+504 = 65535... wait, but for LIN_A case, ofs = x & 4095. Hmm, but the switch happens BEFORE buf usage. For case 4 (LIN_A), ofs = x & 4095, tileptr = 0x80000000 | (re_linear_a[tile_nr] << 12). Then memory_rw at tileptr+ofs with bufdepth bytes. With bufdepth 8 and ofs up to 4095, tileptr+ofs+8 could cross a 4K page boundary... but that's a different matter.
+
+  Also important: check whether `memory_rw` with PHYSICAL|NO_EXCEPTIONS on a RAM address goes through the device-read path at all (Q1.3). If the pre-zero in memory_rw.c is in the device-read dispatch only, RAM reads skip it. Need to look at the actual code.
+
+  Also check the claim "all seven call sites pass one of them" — the mode words at call sites. Let me grep for horrible_getputpixel callers.
+
+  Also check Q4 witness: probe file exists, mode word 0x1220.
+
+  Also verify the arithmetic claims:
+  - bits 4-7 mask 0xf0: DE_MODE_TYPE values given. mode & 0xf0. CI=0x00, RGB=0x10, RGBA=0x20, ABGR=0x30, YCRCB=0xf0. OK.
+  - bufdepth = 1 << ((mode >> 8) & 3): bits 8-9 → 1,2,4,8. OK.
+  - tlb_mode = (mode >> 10) & 0x7: bits 10-12. LIN_A = 0x1000 → (0x1000>>10)&7 = 4. OK. linear = tlb_mode > 3.
+  - 0x1220: tlb = (0x1220>>10)&7 = (0x4)&7... let me compute: 0x1220 = 0001 0010 0010 0000b. >>10 = 0b100 = 4. &7 = 4 → LIN_A. depth = (0x1220>>8)&3 = 0x12 & 3 = 2 → bufdepth 4. color = 0x1220 & 0xf0 = 0x20 → RGBA. Matches the brief.
+  - 0x1320: >>8 &3 = 0x13&3 = 3 → bufdepth 8. color 0x20 RGBA. tlb (0x1320>>10)&7 = 4. Matches.
+  - 0x1020: depth 0 → bufdepth 1. Matches.
+
+  PATH A with bufdepth 8: RGBA arm fills buf[0..3], writes 8 bytes → buf[4..7] uninit → written to guest memory. Confirmed by the code (if the code matches the inline).
+
+  PATH B with bufdepth 1: read 1 byte into buf[0]; RGBA combine reads buf[0..3] → buf[1..3] uninit. Confirmed.
+
+  Now #95: need to check memory_rw.c. The claim: zeroes caller's buffer on device READ for len bytes. If true: Path A is MEM_WRITE → not covered. Path B reads bufdepth bytes → buf[0..bufdepth-1] zeroed then filled by read; buf[bufdepth..7] untouched → still uninit. So both paths survive #95. Need to verify in the real code.
+
+  Also Q1.3: tileptr+ofs — PHYSICAL memory_rw. Is it RAM or device? tileptr comes from guest-programmed TLB entries (re_tlb_a/b/c or re_linear_a). These are physical addresses the guest chooses. They could point anywhere in physical space — RAM or device. If RAM, #95's device-read zeroing doesn't run (it's on device READ dispatch). Actually wait — need to check where #95 zeroes: "zero the caller's buffer on every device READ before the len-clamp/dispatch". If the pre-zero is in the device-dispatch branch only, then RAM accesses skip it. But also if it's at the top of memory_rw for all reads... need to check.
+
+  Actually, hold on — for PATH B the concern is bytes beyond bufdepth. Even if #95 zeroes buf[0..len-1] on every read (RAM or device), bytes buf[len..7] are untouched. So PATH B survives regardless of Q1.3's answer, as long as the zeroing is bounded by len. Q1.3 matters for the oracle design (what the stale bytes are).
+
+  Let me now verify against the actual tree. I should read:
+  - GXEMUL-SEC/src/devices/dev_sgi_re.c (horrible_getputpixel + callers + memset grep)
+  - GXEMUL-SEC/src/cpus/memory_rw.c (#95 fix)
+  - GXEMUL-SEC/src/include/thirdparty/crmfbreg.h
+  - GXEMUL-SEC/CHANGELOG.md (#95/#100 entries)
+  - GXEMUL-SEC/regress/ (probes)
+
+  This is a substantial verification task. I could delegate parallel exploration to subagents, but the user asked ME to review adversarially. I can use tools directly. Given the number of files, let me do targeted reads myself — the key files are known. Actually, let me consider delegating some independent verification threads to explore agents to save context... But the core premise verification is the crux and I should do it myself with direct reads. The files are known paths. Let me do it.
+
+  Plan:
+  1. Grep for horrible_getputpixel in GXEMUL-SEC/src/devices/dev_sgi_re.c to find line numbers.
+  2. Read the function in the real file.
+  3. Grep for memset in dev_sgi_re.c.
+  4. Grep for callers of horrible_getputpixel.
+  5. Read memory_rw.c #95 fix.
+  6. Read crmfbreg.h defines.
+  7. Check CHANGELOG.md #95/#100.
+  8. Check regress probes exist and mode word.
+  9. Spot check the class-scan verdicts (dev_px.c nspans shift, dev_sgi_gbe.c clamp, dev_scc.c chained assignment, dev_sgi_mec.c).
+
+  Let me batch these.
+
+  Then answer Q1.1-1.6, Q2, Q3, Q4, Q5, Q6 with verdicts, and end with GO/NO-GO/GO-WITH-CHANGES.
+
+  Let me start.
+
+• I'll verify this brief's premises against the actual `GXEMUL-SEC` tree rather than ratify them. Starting with the core claims.
+
+• Let me get line numbers in GXEMUL-SEC/src/devices/dev_sgi_re.c specifically.The function is at line 184 in the real tree. Let me read it fully, plus the callers around 700-920 and 1350-1370.The function matches the inline verbatim (lines 184-340 match brief §4 exactly, including the comment blocks). Good.
+
+  Key confirmations so far:
+  - `uint8_t buf[8]` at line 284, no initialiser.
+  - No memset on buf. memsets at 657 (device struct), 823/889 (rop_used), 1431 (zerobuf). Matches the brief's grep claim.
+  - PUT arm: writes bufdepth bytes at line 316-317.
+  - GET arm: reads bufdepth bytes at 319-320, combines 4 bytes for RGBA at 330.
+  - Callers: draw_primitive at 794, 840, 855, 860, 906; also line 1359/1364 (MTE path, do_mte_transfer probably). All pass dst_mode or src_mode which are raw guest registers from de_reg[]. No guard pairing color_mode with bufdepth visible. Let me check the MTE caller around 1350.
+
+  Also I need to verify:
+  1. #95 fix in memory_rw.c — the pre-zero on device READ.
+  2. crmfbreg.h values.
+  3. CHANGELOG #95/#100 entries verbatim.
+  4. The probes in regress/.
+  5. Q1.3: whether tileptr+ofs is RAM or device — i.e., how memory_rw handles PHYSICAL addresses, and whether the pre-zero applies to RAM reads too or only device reads.
+  6. The class-scan verdicts: dev_px.c, dev_sgi_gbe.c, dev_scc.c, dev_sgi_mec.c spot checks.
+  7. Whether any caller constrains the mode pair (Q1.4). From draw_primitive: dst_mode and src_mode come straight from de_reg[], guest-written. The XFER check at 734 checks step_x == src_bufdepth but not color-vs-depth. No guard. Also check do_mte_transfer (line ~1359).
+
+  Let me read the rest of dev_sgi_re.c (1000-1679), and memory_rw.c.
+
+• The function matches the inline verbatim. Now checking the MTE call site, the #95 fix in `memory_rw.c`, and the header.
+
+• Very good. Now I have the #95 fix located: `GXEMUL-SEC/src/cpus/memory_rw.c:485-492`. It zeroes `data` for `len` bytes, only when `writeflag == MEM_READ`, and only in the device-dispatch branch (inside the `if (paddr >= devices[i].baseaddr && ...)` block). So:
+
+  - **Path A (MEM_WRITE)**: pre-zero is `if (writeflag == MEM_READ)` — does not run. Confirmed: #95 cannot apply to Path A.
+  - **Path B (MEM_READ of bufdepth bytes)**: zeroes `buf[0..len-1]` where len == bufdepth (well, after len-clamp; len here is bufdepth ≤ 8, device length... but wait, is the target a device or RAM?).
+
+  Q1.3: is tileptr+ofs RAM or device? tileptr comes from guest-programmed TLB entries. For LIN_A: tileptr = 0x80000000 | (re_linear_a[tile_nr] << 12), then tileptr &= ~0x80000000. So tileptr is a guest-chosen physical address. In the randompixel probe, presumably it points at RAM. If RAM (not a registered device), the #95 device-branch memset does NOT run; the read goes to memblock lookup at line 728+, which memcpys from host RAM. So buf[0..bufdepth-1] get real memory content, buf[bufdepth..7] stay uninit. If unmapped, line 730-733 zeroes len bytes. Either way, bytes ≥ len are untouched. So PATH B stands regardless of the RAM/device answer; the answer only changes WHAT the stale bytes are (previous stack frame contents vs. — no wait, in both sub-cases bytes beyond len are untouched stack). Actually Q1.3's real consequence per the brief is the oracle design: whether buf[0..bufdepth-1] is zeroed (#95 device branch) or filled with RAM content. Both are deterministic-ish. The leak bytes (buf[bufdepth..7]) are stack in all cases. Good.
+
+  Wait — one nuance for PATH B: after the device-dispatch memset(data, 0, len) — if the target IS a device, buf[0..bufdepth-1] is zeroed then the device handler fills some. For RGBA + bufdepth=1, combine reads buf[0..3]; buf[1..3] uninit (stack). Leak stands.
+
+  Also check: does `memory_rw` get called with bufdepth as `int len`? Signature: cpu->memory_rw(cpu, mem, addr, data, len, writeflag, misc_flags). len is size_t probably. bufdepth ∈ {1,2,4,8}. Fine.
+
+  Now — an important check on PATH A vs #100's history: the array is buf[8], bufdepth max 8. So no overflow (that was #100's fix). The claim now is uninit bytes, not overflow. OK.
+
+  Q1.5: is depth field 3 (bufdepth 8) reachable? The mode word is a guest-written register (CRIME_DE_MODE_DST / CRIME_DE_MODE_SRC in de_reg, or mte mode). DEVICE_ACCESS(sgi_de) stores idata into de_reg[regnr] with len 4 or 8 — no masking of bits 8-9. So yes, any 32-bit value lands. Also the MTE path constructs src_mode/dst_mode from MTE_MODE_DEPTH_MASK bits — depth = 8 << ((mode & MTE_MODE_DEPTH_MASK) >> MTE_DEPTH_SHIFT). Need to check MTE_MODE_DEPTH_MASK width. If it's 2 bits, depth ∈ {8,16,32,64}, and src_mode gets ((mode & MASK) >> SHIFT) << 8, so depth field ∈ {0,1,2,3} → bufdepth ∈ {1,2,4,8}. And color_mode for MTE path: only set to RGBA if depth == 4... wait, depth here is `8 << x` so depth ∈ {8,16,32,64} bytes? No wait — `int depth = 8 << ((mode & MTE_MODE_DEPTH_MASK) >> MTE_DEPTH_SHIFT);` and then `if (depth == 4)` — depth can never be 4 since it's 8<<n! Hmm, that's a pre-existing oddity in the MTE path (depth==4 never true), not this round's concern. But interesting: in the MTE path, color_mode bits 4-7 of src_mode/dst_mode are 0 unless depth==4 sets RGBA — so color_mode = CI (0x00) normally, i.e., the CI arm, which fills buf[0] only, then writes bufdepth bytes. So MTE COPY with depth field ≥ 1 leaks via PATH A too (CI arm, bufdepth 2/4/8). Actually wait — for MTE_TLB_A/B/C path, yes. That strengthens reachability: not just draw_primitive.
+
+  Hold on, let me double check MTE depth: `depth = 8 << (...)` with 2 bits → 8, 16, 32, 64. Then `x1 /= (depth / 8)` → divides by 1,2,4,8. And `src_mode = (src_tlb << 10) + (((mode & MTE_MODE_DEPTH_MASK) >> MTE_DEPTH_SHIFT) << 8)` — so the bufdepth field of the constructed mode = the raw 2-bit field → bufdepth = 1,2,4,8. And color bits zero → CI. So MTE COPY fill... wait no, the MTE_TLB_A/B/C path calls horrible_getputpixel(1, ...) with dst_mode unconditionally (line 1364), and if MTE_MODE_COPY also GETs with src_mode. The PUT with CI color mode writes buf[0] = bg, then writes bufdepth bytes. bufdepth 8 → buf[1..7] uninit leaked into guest memory. So PATH A is reachable via the MTE path too, with color_mode = CI — a DOCUMENTED mode (DE_MODE_TYPE_CI = 0). This actually strengthens the brief: the brief's table says "CI leaks at any depth above 1". And the MTE path generates exactly CI modes. Good.
+
+  Let me verify MTE_MODE_DEPTH_MASK in crmfbreg.h. Also check DE_MODE_TYPE_* values.
+
+  Also Q1.4: guards in callers? draw_primitive: src_bufdepth check at line 734 only compares step_x to src_bufdepth (and fatals but continues — note fatal without exit... wait, `fatal()` in this fork — does it exit? In GXemul, fatal() prints and... let me check. In upstream GXemul, fatal() does NOT exit; it just prints. exit(1) is separate. Line 734-741: fatal(...) then commented-out exit. So it continues. Anyway, that's about step_x, not color/depth pairing. No cross-check between color_mode and bufdepth anywhere. Confirmed by grep for '>> 8) & 3' — let me redo that grep on GXEMUL-SEC only.
+
+  Also need to verify:
+  - crmfbreg.h: DE_MODE_TYPE_* values, MTE_MODE_DEPTH_MASK, DE_MODE_LIN_A etc.
+  - CHANGELOG.md #95/#100 entries verbatim.
+  - regress/ probes exist, randompixel probe uses 0x1220, gate_arm.sh wires them.
+  - The class scan spot checks: dev_px.c 151/265 nspans shift; dev_sgi_gbe.c 263 clamp; dev_scc.c 305 chained assignment; dev_sgi_mec.c 200/370.
+  - Q4 witness: check regress/sgi_re_randompixel_probe.py mode word 0x1220.
+
+  Also there's a subtle premise to check in §3a PATH A: "all seven call sites pass one of them [ordinary device registers]". Call sites: 794 (dst_mode), 840 (dst_mode), 855 (dst_mode), 860 (src_mode), 906 (dst_mode), 1359 (src_mode), 1364 (dst_mode). That's 7 call sites. dst_mode/src_mode in draw_primitive come from de_reg[] — guest registers. In do_mte_transfer they're constructed from guest mte_reg mode. OK.
+
+  Another premise: "bits 4-7" for color_mode — DE_MODE_TYPE_MASK = 0xf0 → bits 4-7. Yes.
+
+  Now PATH B severity check — one more consideration: in PATH B, the combine for RGBA reads buf[0..3]. buf is uint8_t[8]. buf[1..3] uninit → *color gets uninit bytes. Then caller stores *color via PUT... wait no — in draw_primitive, GET writes into oldcolor or color, then color is used in the PUT call (which re-encodes per dst color_mode). So uninit host stack → guest-visible framebuffer memory. Confirmed shape.
+
+  But WAIT — a critical check on PATH B's premise: the GET's memory_rw is `NO_EXCEPTIONS | PHYSICAL`. PHYSICAL access. In memory_rw, for PHYSICAL the translation block is skipped (no ok=0 path). Then device dispatch: if paddr in a device range → #95 memset(data,0,len) on read. If RAM: memblock lookup, memcpy len bytes. Either way only len bytes touched. buf[bufdepth..7] uninit. Solid.
+
+  One more subtle thing to verify: is there possibly a compiler-visible initialisation — e.g., `-ftrivial-auto-var-init` in CFLAGS, or a build flag that zeroes stack? Check the Makefile / config. That's Q1.1's "compiler-visible one". Let me grep the build config for auto-var-init or -Wuninitialized... Actually more decisive: check CFLAGS in GXEMUL-SEC Makefile/configure for anything like `ftrivial-auto-var-init`. If the fork builds with such a flag, the premise "uninitialised" would be weakened (though still UB-by-standard, it'd be deterministic in practice). Worth a grep.
+
+  Also for Q2/Q3 I should grep the fork's idiom for reconciling independent mode fields — e.g., look for existing "decline" patterns with latched announce (SGIRE_W_*), which is clearly the house idiom. Already visible: #497-#500, sgirandompixel all use latched decline. So disposition 4 matches house idiom. But brief asks to grep for precedent of reconciling two independent guest-chosen mode fields. Could grep for clamp patterns. I'll do a light pass.
+
+  Also Q6: sgirandomcolour — verify YCRCB 0xf0 has no case (confirmed from the switch I read: cases CI, RGB, RGBA, ABGR, default). And grep -c YCRCB dev_sgi_re.c → let me run it.
+
+  Also verify the claim about the randompixel probe: regress/sgi_re_randompixel_probe.py exists and uses 0x1220. And gate_arm.sh wires the three probes.
+
+  Also check CHANGELOG for #95/#100 verbatim and grep -c sgirebufuninit = 0.
+
+  Also §C0: git log of GXEMUL-SEC — last commit touching dev_sgi_re.c is 840f3d0 "#500..."? Run git log in GXEMUL-SEC.
+
+  Let me also verify the enclosing-function freeze claim: regress/artifacts/sgirebufuninit/enclosing_function.txt exists? That would be created when the round fires... The brief says "Frozen at regress/artifacts/sgirebufuninit/enclosing_function.txt" — check if it exists. If it doesn't exist yet, that's a minor packaging gap. Let me check.
+
+  Batch of commands now.
+
+• `#95` is confirmed at `memory_rw.c:485-492` — `MEM_READ`-only, `len` bytes, device branch only. Now checking the header values, CHANGELOG, probes, and reachability premises.840f3d0 2026-09-01 #500 sgideprimop: a drawing op a guest never chose, and the reset value was one
+---
+0
+---
+sgi_re_randompixel_probe.py
+sgi_re_unmapped_probe.py
+sgi_re_width_probe.py
+---
+0
+---
+sgirebufuninit
+(freeze dir check done)
+
+
+• Header values confirmed verbatim. MTE_MODE_DEPTH_MASK = 0x300, shift 8 → 2-bit field → bufdepth ∈ {1,2,4,8} on the MTE path too. YCRCB grep = 0 confirmed. CHANGELOG grep for sgirebufuninit = 0 confirmed. §C0 git log matches. Probes exist. The freeze dir `regress/artifacts/sgirebufuninit` exists — check the enclosing_function.txt is there and matches.
+
+  Now:
+  1. Check CHANGELOG #95/#100 verbatim.
+  2. Check the probe's mode word (0x1220).
+  3. Check gate_arm.sh wiring.
+  4. Check the freeze artifact vs the in-tree function.
+  5. Grep for '>> 8) & 3' across GXEMUL-SEC/src/devices to verify the "no guard" claim.
+  6. Spot-check class-scan verdicts: dev_px.c, dev_sgi_gbe.c, dev_scc.c, dev_sgi_mec.c.
+  7. Check build flags for auto-var-init (Q1.1 compiler-visible init).
+  8. Check callers for color/depth cross-checks (Q1.4) — already largely done by reading draw_primitive + do_mte_transfer. No guard seen. But also check DEVICE_ACCESS(sgi_de) for any masking of writes to CRIME_DE_MODE_DST/SRC... I read lines 959-1000 partially; the len==4/8 writes store idata verbatim. Let me check the rest of sgi_de access (1000-1100) to be sure there's no masking on MODE registers.1022:did not receive (Opus adds a third backstop: `memory_rw.c` `#95` pre-zeroes the buffer before device dispatch).
+1153:the read is zero-filled while the array byte is kept.  Opus adds a third backstop, `memory_rw.c` `#95` pre-zeroing the
+5792:Two lesser warrants in the same comment were also weak and are gone: `#95` already zeroes the
+11021:(`#95`). So the assignment is **explicit but not load-bearing**, and deliberately carries no
+12296:## #95 — central uninit-leak fix (Phase A) + #96–#100 (Phase B new-surface audit)
+12297:**#95 `cpus/memory_rw.c`** (root-cause): zero the caller's buffer on every device READ before the
+12307:| `devices/dev_sgi_re.c` | #100 | `buf[4]`→`buf[8]` (bufdepth up to 8 stack overflow) + bound `tile_nr < 256` (re_tlb index) |
+12377:Rate-limited with `static` first-N guards (GXemul is single-threaded) so a hostile ROM cannot flood. `#95`
+12737:  buffer on failure (same ethos as the failed-device-read zero-fill #95).
+13439:`physical_max`), `:569-573` (NULL memblock; by design, `memory.c:554-564`) or `:330-331` (#95) —
+16275:the read tail (#95), and reports success.
+16675:`memory_rw.c:484-491` — **correction `#95` in this same tree** — already zeroes the caller's
+16776:  `#95` were ever narrowed, the mutant would become live and this detector would not see
+===
+## #95 — central uninit-leak fix (Phase A) + #96–#100 (Phase B new-surface audit)
+**#95 `cpus/memory_rw.c`** (root-cause): zero the caller's buffer on every device READ before the
+len-clamp/dispatch, so a device handler that fills only part of `data` — or whose access is len-clamped —
+can never return uninitialised host memory to the guest. Closes the whole class (cf. per-device #91/93/94).
+
+| File | Corr. | What changed |
+|------|-------|--------------|
+| `devices/dev_kn01.c` | #96 | OB-8b: mask the overlay-palette *read* index `& 15` (16-entry array; the write index was masked in #75, read missed) — guest OOB palette read |
+| `disk/bootblock_apple.c` | #97 | bound the partition loop (`ofs+0x40 <= sizeof(buf)`) + `%.32s` — `n_partitions=buf[0x207]` drove a ~130 KB OOB stack read on a malformed Apple-partition disk |
+| `devices/dev_vga.c` | #98 | bound `vga_update_graphics` 8-bit/4-bit reads vs `gfx_mem_size` (OOB redraw read; complements #91) |
+| `devices/dev_ps2_gs.c` | #99 | **CRITICAL**: reject `regnr (=relative_addr/16) >= N_GS_REGS` — guest 64-bit OOB heap **write** past `reg[264]` |
+| `devices/dev_sgi_re.c` | #100 | `buf[4]`→`buf[8]` (bufdepth up to 8 stack overflow) + bound `tile_nr < 256` (re_tlb index) |
+
+Phase B also ran a 3-agent fan-out (PROMs/framebuffers/disk-parsers): PROMs + config parser verified
+CLEAN; 7 further agent candidates recorded in `OUTSTANDING_BUGS.md` (OB-27..33). scan-build clean.
+
+## #101–#105 (Phase C deeper audit: network / SCSI / remaining devices)
+5:#  THE DEFECT.  horrible_getputpixel() extracts `tlb_mode = (mode >> 10) & 0x7' and switches on it.
+11:#      if (drawmode & DE_DRAWMODE_XFER_EN)
+12:#              horrible_getputpixel(0, ..., src_x, src_y, &color, src_mode);   // may set random()
+15:#              horrible_getputpixel(1, ..., x, y, &color, dst_mode);           // writes it
+17:#  AND THE UNHANDLED VALUE IS A DOCUMENTED MODE.  src/include/thirdparty/crmfbreg.h defines five:
+18:#    DE_MODE_TLB_A 0x0000 -> 0 handled     DE_MODE_LIN_A 0x1000 -> 4 handled
+19:#    DE_MODE_TLB_B 0x0400 -> 1 handled     DE_MODE_LIN_B 0x1400 -> 5 *** default -> random() ***
+20:#    DE_MODE_TLB_C 0x0800 -> 2 handled
+35:#  set the source mode to LIN_B, draw, read the destination -- FINDS NOTHING.  At reset the
+36:#  destination mode is TLB_A and re_tlb_a[] has bit 31 clear, so the PUT returns WITHOUT WRITING and
+63:DE_MODE_SRC   = 0xb5002000
+64:DE_MODE_DST   = 0xb5002008
+65:DE_DRAWMODE   = 0xb5002018
+73:MODE_LIN_A = 0x1220               # LIN_A 0x1000 | BUFDEPTH_32 0x200 | TYPE_RGBA 0x20
+74:MODE_LIN_B = 0x1620               # LIN_B 0x1400 | BUFDEPTH_32 0x200 | TYPE_RGBA 0x20
+75:DRAWMODE   = 0x002000f8           # XFER_EN 0x200000 | PLANEMASK 0x80 | BYTEMASK 0x78
+170:def setup(A, src_mode):
+182:    c += store(A, DE_MODE_DST,   MODE_LIN_A)
+183:    c += store(A, DE_MODE_SRC,   src_mode)
+184:    c += store(A, DE_DRAWMODE,   DRAWMODE)
+216:#  Both modes LIN_A: the copy is the operation the defect corrupts.  If this row does not
+220:t, alive = session(setup(A, MODE_LIN_A) + load(A, DST_KSEG1) + ["print v0"])
+229:t, alive = session(setup(A, MODE_LIN_B) + load(A, DST_KSEG1) + ["print v0"])
+247:n_diag = t.count("unimplemented dst_mode")
+===
+1155:SGILOG=$LOGDIR/sgi_re_width.log
+1156:python3 sgi_re_width_probe.py "$PMAX" gate > "$SGILOG" 2>&1 || true
+1161:    note "sgi_re width probe did not reach its completion sentinel; last lines follow"
+1163:    check "sgi_re width probe completed" "no" "yes"
+1171:        check "sgi_re control: $c" "$(count "$SGILOG" "^$c  .*ok$")" "1"
+1173:    check "sgi_re controls live" \
+1182:        check "sgi_re row: $v" "$(count "$SGILOG" "^$v  .*ok$")" "1"
+1206:    check "sgi_re rows emitted" \
+1208:    check "sgi_re rows green"   "$(count "$SGILOG" " ok$")"   "35"
+1209:    check "sgi_re rows red"     "$(count "$SGILOG" " FAIL$")" "0"
+1214:#  ---- sgi_re_width probe's success branch, so if THAT probe missed its sentinel this
+1226:#  ---- the coordinator's file.  Modelled on the sgi_re_width_probe block -- find it
+1227:#  ---- with `grep -n 'sgi_re_width_probe.py "$PMAX"' gate_arm.sh`, NOT by line
+1231:UNMLOG=$LOGDIR/sgi_re_unmapped.log
+1232:python3 sgi_re_unmapped_probe.py "$PMAX" gate > "$UNMLOG" 2>&1 || true
+1237:    check "sgi_re unmapped probe completed" "no" "yes"
+1239:    check "sgi_re unmapped probe completed" "yes" "yes"
+1240:    check "sgi_re unmapped controls" "$(count "$UNMLOG" '^OPUS499T_CONTROL=OK$')" "1"
+1242:        check "sgi_re unmapped row: $v" "$(count "$UNMLOG" "^$v  .*ok$")" "1"
+1247:    check "sgi_re unmapped rows emitted" \
+1249:    check "sgi_re unmapped rows green" "$(count "$UNMLOG" " ok$")"   "50"
+1250:    check "sgi_re unmapped rows red"   "$(count "$UNMLOG" " FAIL$")" "0"
+1268:RANDLOG=$LOGDIR/sgi_re_randompixel.log
+1269:python3 sgi_re_randompixel_probe.py "$PMAX" gate > "$RANDLOG" 2>&1 || true
+1272:    check "sgi_re randompixel probe completed" "no" "yes"
+1274:    check "sgi_re randompixel probe completed" "yes" "yes"
+1275:    check "sgi_re randompixel witness verdict" "$(count "$RANDLOG" '^SGIRAND_WITNESS=PASS$')" "1"
+1286:        check "sgi_re randompixel row: $v" "$(count "$RANDLOG" "^$v  .*ok$")" "1"
+1290:    check "sgi_re randompixel rows emitted" \
+1292:    check "sgi_re randompixel rows green" "$(count "$RANDLOG" " ok$")"   "8"
+1293:    check "sgi_re randompixel rows red"   "$(count "$RANDLOG" " FAIL$")" "0"
+===
+BRIEF_pass1.md
+enclosing_function.txt
+scan_fill.py
+scan_len.py
+Good. Confirmed:
+  - CHANGELOG #95/#100 entries verbatim match the brief's quotes.
+  - Probe uses MODE_LIN_A = 0x1220 (matched case), and the probes are wired into gate_arm.sh (which lives... where? the grep hit gate_arm.sh — path? The grep output shows line numbers but not the file path clearly. It says `regress/gate_arm.sh`? Actually I grep'd `regress/*.sh harness/*.sh` — the hits don't show filenames in this output format... they should. Let me check: output shows "1155:SGILOG=$LOGDIR/..." without filename prefix, meaning grep found it in one file — probably regress/gate_arm.sh. Fine, wired.
+  - The freeze artifact exists: regress/artifacts/sgirebufuninit/enclosing_function.txt. Also BRIEF_pass1.md, scan_fill.py, scan_len.py are in-tree there (not /tmp as the brief says — the brief says "/tmp/scan_len.py, reproduced here" — fine).
+
+  Now verify:
+  1. The frozen enclosing_function.txt matches the in-tree function (§4 claim "Frozen at ... which is the version under review").
+  2. No guard pairing color_mode and bufdepth anywhere: grep '>> 8) & 3' in GXEMUL-SEC/src/devices.
+  3. Q1.4: check DEVICE_ACCESS(sgi_de) write path for MODE registers (lines 1000-1100) — whether MODE_DST/SRC writes are masked.
+  4. Class-scan spot checks: dev_px.c:151/265, dev_sgi_gbe.c:263, dev_scc.c:305, dev_sgi_mec.c:200/370.
+  5. Compiler flags: -ftrivial-auto-var-init or similar in GXEMUL-SEC build.
+  6. bufdepth=8 reachability — any upstream rejection of depth field 3? Check DE register write path and do_mte_transfer depth handling. In do_mte_transfer for MTE_TLB_A/B/C there's no depth restriction (only the LINEAR path requires depth==8, i.e. `depth != 8` fatal+exit — wait, that says `if (depth != 8) { fatal; exit(1); }` — hmm, depth = 8 << field, so depth==8 means field 0. The LINEAR path exits unless field 0. But that's the MTE linear path, not relevant to horrible_getputpixel's LIN_A which is tlb_mode 4 via DE registers).
+
+  For the DE path: guest writes CRIME_DE_MODE_DST = 0x1320, DRAWMODE with XFER_EN etc., PRIMITIVE = RECTANGLE, START → draw_primitive → horrible_getputpixel(1, ..., dst_mode=0x1320) → bufdepth 8, RGBA fills 4, writes 8. Reachable. Need to confirm sgi_de access doesn't mask mode writes. Let me read the remainder of DEVICE_ACCESS(sgi_de).
+
+  Also verify: does anything reject depth field 3 = "64-bit" mode? crmfbreg.h may document DE_MODE_DEPTH_* values. Let me look at the header around line 320-340 for DE_MODE_DEPTH defines — 1,2,4,8 bytes are plausible documented depths (8/16/32/64 bpp). So depth field 3 is documented, not junk. Good for the brief's "documented registers, no undocumented value" claim. Let me check the header for DE_MODE_DEPTH_* / BUFDEPTH names.
+
+  Also for Q4, check the probe more fully to see whether its apparatus can be reused with one constant changed (it programs DE_MODE_SRC/DST via stores; controls green). The brief's claim "ONE CONSTANT CHANGED" — for PATH A the change is MODE_LIN_A 0x1220 → 0x1320 for DST. Actually the probe sets DE_MODE_DST = MODE_LIN_A always (line 182) and src_mode varies. For PATH A witness: set DST mode to 0x1320, PUT writes 8 bytes of which 4 stale. Oracle: destination memory contains bytes from a previous known PUT (stale carry-over) — same carry-over problem as PATH B. Hmm, for PATH A the oracle could be: paint pixel with known colour at matched depth (buf[0..7]... no wait, at depth 4 RGBA only buf[0..3] filled; buf[4..7] never written by any arm in the PUT switch — so buf[4..7] carry whatever the stack held from the PREVIOUS call. First call at matched 0x1220: buf[0..3]=colour, write 4 bytes; buf[4..7] still uninit (first call). Second call 0x1320 different address: buf[0..3]=colour2, buf[4..7]=??? from first call's frame — but first call didn't write buf[4..7] either! So carry-over from a matched-depth PUT does NOT populate buf[4..7]. The brief's Q4 oracle ("paint pixel 1 with distinctive colour so buf holds known bytes") — painting at 0x1220 only sets buf[0..3]; buf[4..7] remain untouched by every PUT arm. So for PATH A the stale bytes buf[4..7] are never made known by painting. Hmm — BUT the CI arm writes only buf[0]; RGB/RGBA/ABGR write buf[0..3]. Nothing writes buf[4..7] in the PUT switch. So to make buf[4..7] known you need... a GET at depth 8 first! A GET at 0x1320 (LIN_A, depth 8) reads 8 bytes from guest memory into buf[0..7] — that DOES fill buf[4..7] with known memory content. Then a PUT at 0x1320 to a different address writes buf[0..3]=new colour + buf[4..7]=the bytes the earlier GET fetched. Oracle: destination[4..7] == source memory bytes of the GET. That's an architectural carry-over? No — still relies on stack frame reuse between two calls. But wait: within ONE horrible_getputpixel call there's no carry-over needed if... no, each call has its own frame. The carry-over is always incidental. Hmm, but actually there's a subtlety: draw_primitive's RECTANGLE loop calls horrible_getputpixel per pixel — consecutive calls at the same stack depth, so the frame reuse is quite reliable in practice (same call site, same depth). "Reliable in practice" is still not architectural. The brief acknowledges this as its own open worry #1. I should evaluate: is there a way to make it architectural? Yes, actually: within a SINGLE call, is there a path where buf is partially filled and then read beyond the fill? PATH B within a single call: GET at depth 1 (0x1020) reads 1 byte, combines 4 — buf[1..3] from THIS frame's inception. If the caller's frame... no, buf is local to horrible_getputpixel. The bytes at frame inception are whatever was in that stack slot — which, on the FIRST call ever, is truly unknown host stack; on subsequent calls from the same call site at the same depth, it's the previous call's buf. So the carry-over is incidental-but-very-reliable. An architectural variant: the previous call's buf content can be made known if the previous operation was a GET at depth 8 (fills all 8) or... for PATH B (0x1020, needs buf[1..3]): a preceding GET at depth 4 (0x1220) fills buf[0..3] from known memory — then a GET at 0x1020 of a DIFFERENT address: buf[0] = new memory byte, buf[1..3] = previous GET's bytes 1..3 (known). Then *color = buf[0]<<24 | prev[1]<<16 | prev[2]<<8 | prev[3]. The caller (draw_primitive XFER) then PUTs that colour to dst. Oracle: read dst memory, check bytes 1..3 equal the known source bytes rather than the actual dst-source memory at the second address. This is exactly the brief's proposal, and it's sound modulo frame-reuse. Frame-reuse: both calls are the same call site (line 860, XFER GET in the RECTANGLE loop), same depth, consecutive loop iterations — about as reliable as C stack behaviour gets without a guarantee. Also — does the compiler (with -O2) reuse? It's the same function called repeatedly; the stack pointer returns to the same value; buf occupies the same 8 bytes (plus alignment). Yes, practically deterministic. But an oracle built on it should ALSO have a control: run the same two-pixel sequence with MATCHED depth (0x1220 for both) and assert bytes 1..3 come from pixel 2's memory — that control distinguishes "frame reuse happened" from "luck". The brief's proposal lacks an explicit matched-case control but the existing probe has "both modes LIN_A" control row (line 216-220: "If this row does not..."). OK.
+
+  There's another subtle oracle option nobody needs: initialize-on-first-call... no. Fine.
+
+  Now Q2 (smallest re-opening edit that passes the obvious detector): If fix = memset(buf,0,sizeof buf) + detector "bytes are deterministic/known", then re-opening edits: change sizeof(buf)→bufdepth (PATH B reopens silently because bytes beyond bufdepth stale again — but wait, detector that checks "destination deterministic across runs" might still pass since stack is deterministic-ish per run... the vacuity concern). Or: move memset AFTER the PUT switch but before memory_rw (memset still present, now it erases the colour arms' fills — changes behaviour, detector might catch wrong colours... actually that breaks correct modes too, so detector would catch). The sharpest answer: `memset(buf, 0, bufdepth)` keeps a memset, correct size for PATH A, and reopens PATH B — and a detector built only around PATH A (destination bytes deterministic) stays green. That's exactly the brief's own option 2, and the brief is right to flag it. Another: `uint8_t buf[8] = {0};` at declaration — wait that fixes both. `memset(buf, 0, 4)` — constant size covering the combine width but not the depth-8 write: PATH A at bufdepth 8 reopens (buf[4..7] stale), PATH B stays fixed (combine reads ≤ 4). A "bytes not stale" detector that only exercises depth-4 PUT + depth-1 GET stays green. So the smallest re-open is `memset(buf, 0, 4)` or `memset(buf, 0, bufdepth)` depending on which path the detector watches. The row expected to stay green: whichever detector row only covers one path. The detector therefore must witness BOTH paths (0x1320 PUT and 0x1020 GET) — that's the design consequence. Good.
+
+  Q3 (option-set completeness + fork idiom): house idiom is latched decline (SGIRE_W_* bits, "declined (once)"). Disposition 4 matches it. Any missing member? Possible additional dispositions:
+  6. Zero-fill on the READ side only the bytes the combine will use — i.e., memset(buf,0,8) only in the GET branch... that's a variant of 1/2.
+  7. Reject depth field 3 / clamp bufdepth to 4 (variant of 5).
+  8. Make the transfer length match the colour arm instead of bufdepth (transfer 4 for RGBA regardless) — variant of 5 really (clamp transfer to what colour needs). Hmm, or its dual: make the COMBINE read only bufdepth bytes (mask *color to bufdepth bytes). That's a distinct member the brief didn't name: keep the transfer at bufdepth but make the consume width agree with the fill width on the GET side (e.g., *color built from only the bytes read). Actually brief's (5) "Clamp bufdepth to what the colour mode needs" covers the transfer side; the consume-side dual (build *color from min(bufdepth,4) bytes, zero-extended) is NOT explicitly listed. It's behaviourally ≈ (2) for the GET (bytes beyond bufdepth read as zero). So the option set is essentially complete modulo that dual, which collapses into (2)'s observable outcome. Worth naming in the review.
+  Also: is there an in-tree precedent for reconciling two independent guest-chosen mode fields? The MTE code itself: `if (depth != 8) fatal+exit` on the LINEAR path (an upstream refuse), and draw_primitive's `step_x != src_bufdepth` check (fatal, continues) — a cross-check precedent between two guest fields (step_x vs src_bufdepth)! That's exactly an in-tree precedent of reconciling two independent guest-chosen fields, and it chooses "announce and continue" (declined-ish, unlatched). Also dev_sgi_gbe's len clamp (OB-14) is clamp idiom. I should grep for others quickly. The fork's dominant recent idiom (#497-#500, sgirandompixel) is latched decline — disposition 4. Good.
+
+  Q6 (one round or two): sgirandomcolour — PUT default arm fills buf[0..3] with random() then fatal (no exit! fatal doesn't exit — check: fatal() in this fork... in upstream GXemul fatal() prints only. Let me confirm fatal semantics: misc.h — fatal() is a macro printing and NOT exiting; exit is explicit. Yes: line 308-313, default: fills random, then fatal(...) with NO exit, falls to the memory_rw write. So YCRCB PUT writes 4 random bytes + 4 uninit bytes at depth 8). sgirandomcolour's defect: nondeterminism from random(). Shared oracle "destination deterministic across runs": for sgirebufuninit PATH A, the uninit bytes are typically deterministic across runs (same stack history) — so a determinism oracle may NOT catch PATH A at all! That's a sharp point AGAINST merging: uninit-stack reuse is usually deterministic run-to-run (same execution path → same stale bytes), whereas random() varies. So the proposed shared oracle (determinism across runs) is WEAK for sgirebufuninit and is exactly the "passes by luck"/vacuity shape the brief warns about. So the letter is right: separate rounds; sgirandomcolour needs its own oracle (determinism across runs suits random() fine, but not uninit). Actually wait — determinism across runs suits sgirandomcolour (random varies → nondeterministic → caught). For sgirebufuninit, determinism across runs does NOT suit it. The brief says "a single oracle — the destination is DETERMINISTIC across runs — plausibly covers both". That's wrong for PATH A/B in the typical case (stack reuse is deterministic); it only catches the leak if stale bytes vary run-to-run (ASLR doesn't change stack CONTENT reuse; content is prior frames' data — deterministic for deterministic emulation). So the shared oracle is weaker than a purpose-built known-stale-content oracle for sgirebufuninit. Recommend: keep separate (the letter is right), OR if merged, the detector must use the known-content oracle, not determinism. Also note: fixing PATH A/B with memset makes the output deterministic AND zero — and a determinism oracle passes trivially post-fix but doesn't pin the fix vs. luck. Right.
+
+  Q5 severity: HIGH — arguments. Let me think about the actual severity honestly. PATH A: uninit host stack bytes written into guest-visible memory. Guest can READ that memory back (it's guest RAM/framebuffer). So it IS a host-memory disclosure channel into guest-visible state, not just wrong colours: a guest that PUTs at depth 8 and reads back bytes 4..7 of each 8-byte group receives host stack content. In a drawing loop it's usually the previous pixel's colour (not secret), but the FIRST call after other host stack activity could carry whatever was there — and a guest can influence stack history how? The guest can't easily control what else runs on the host stack at that depth. draw_primitive's callees... The stale bytes come from prior executions of horrible_getputpixel's frame (same depth) mostly — previous pixels. Between drawing commands, other host code (device handlers, cpu loop) may reuse that stack region. So the disclosure is real but low-bandwidth and poorly controlled by the guest: mostly prior framebuffer content. Practical exfiltration: weak. The brief's §3c grades it honestly. HIGH on this project's ledger seems driven by "#95 claimed to close the class" — a ledger/consistency argument more than an impact argument. I'd say MEDIUM-HIGH impact; HIGH as a ledger grade is defensible but I'd accept a seat talking it to MEDIUM with the caveat that it contradicts #95's class-closure claim. The brief itself invites talking down. My call: the defect is real and guest-reachable; impact is mostly wrong-colour with a weak disclosure flavour; HIGH is defensible, MEDIUM is defensible; not a reason to block the round.
+
+  Now, other premise checks still to run:
+  (a) frozen enclosing_function.txt vs in-tree function — diff.
+  (b) grep '>> 8) & 3' across GXEMUL-SEC/src/devices for guards.
+  (c) sgi_de write path masking (read 1000-1120 of dev_sgi_re.c).
+  (d) class-scan spot checks (dev_px.c nspans>>24, dev_sgi_gbe.c clamp 512, dev_scc.c chained assignment, dev_sgi_mec.c 200/370).
+  (e) build flags for auto-var-init (Makefile / configure in GXEMUL-SEC).
+  (f) The "seven call sites" claim: grep showed 7 calls (794, 840, 855, 860, 906, 1359, 1364). ✓ (5 in draw_primitive, 2 in do_mte_transfer.)
+  (g) Check whether `fatal()` exits or not — important for the default arms (does YCRCB PUT reach memory_rw?). Check misc.h.
+  (h) Q1.3 settle: tileptr+ofs device or RAM? It's guest-programmed physical address; in the probe it points at RAM (0x80040000-style LIN entries → physical 0x40000?). The answer: it CAN be either, guest's choice; in the probe it's RAM, so #95 doesn't even run for PATH B in the probe config — meaning pre-zero doesn't apply and stale bytes are pure stack. Actually wait — if RAM, the memblock path copies real memory into buf[0..bufdepth-1]; no zeroing. If the address is a device, #95 zeroes buf[0..len-1] then device fills. Either way ≥len untouched. So §3b holds in both sub-cases. The brief said "I have not settled this and I am not guessing" — I can settle it: it's BOTH, guest-dependent, and the defect survives either way. But nuance for the oracle: with RAM destination, no pre-zero at all — buf[0..bufdepth-1] = real memory bytes (deterministic), buf[bufdepth..7] = stack. Good.
+
+  Also (i): check that no OTHER function zeroes the stack frame... no. And (j): check upstream pristine ./src for comparison? The brief says line numbers differ by hundreds if reading pristine. In-tree GXEMUL-SEC line 284 vs brief's frozen artifact — matches (buf at 284, memory_rw write at 316-317, read at 319-320; brief's scan table says 316/319 ✓).
+
+  Wait — the brief's scan table (§6) says dev_sgi_re.c 316 (MEM_WRITE) and 319 (MEM_READ); actual: 316 is the memory_rw write call line (316-317) and 319-320 read. ✓. And 1462 zerobuf ✓ (line 1462 matches!). dev_px 151/265, dev_sgi_gbe 263 — spot check those.
+
+  (k) For Q1.5 depth-8 reachability: also confirm nothing in the DE write path masks bits 8-9 of MODE_DST/SRC. DEVICE_ACCESS(sgi_de) stores idata verbatim into de_reg[regnr] (lines 978-989). ✓ no masking. And MTE path builds mode with the raw 2-bit field shifted into bits 8-9 — so depth 3 → bufdepth 8 reachable via MTE too (with CI colour — immediate PATH A member). Also confirm MTE_TLB_A/B/C path doesn't restrict depth: lines 1318-1370 — no depth check there (only the LINEAR path checks depth != 8). ✓.
+
+  (l) One more: the brief says "default (incl. YCRCB 0xf0) | buf[0..3] = random()". For PATH A with YCRCB at depth 8: buf[0..3]=random, buf[4..7] uninit — both defects at once. Fine.
+
+  (m) Also verify the claim in §3: "grep -rn '>> *8) *& *3' src/devices/ returns only the decode itself, the #100 comment, and the two XFER siblings — no guard anywhere." Run it on GXEMUL-SEC/src/devices.
+
+  (n) Check build flags: grep for auto-var-init / -O in GXEMUL-SEC Makefile or src/Makefile. Let me check how GXEMUL-SEC builds (there's a Makefile at root after configure). Quick grep.
+
+  Also, is there a possibility the compiler clobbers... no.
+
+  (o) The brief §7 table: 0x1220 → tlb_mode 4 ✓ (0x1220>>10 = 0b100, &7 = 4). 0x1320>>10: 0x1320 = 0001 0011 0010 0000; >>10 = 0b100 = 4 ✓. depth: (0x1320>>8)&3 = 0x13&3 = 3 ✓ bufdepth 8. 0x1020: >>10 = 4 ✓, depth 0 ✓ bufdepth 1, colour 0x20 RGBA ✓. All three verified.
+
+  (p) tilewidth_in_pixels = 512/bufdepth: for LIN_A case, before the switch, tile_nr_x = x / tilewidth — with bufdepth 8, tilewidth 64 — but case 4 recomputes tile_nr = x>>12 and ofs = x&4095, so the earlier computation is discarded (division by something nonzero; bufdepth ≥ 1, no div-by-zero). Note: for tlb_mode 4, linear=1 so the x<2048 bound is skipped, x can be large: x>>12 could be huge → bounded by `if (tile_nr >= 32) return`. But x is int from size_t x in draw_primitive (0..0x7ff) — fine. For MTE path x1..x2 are 12-bit. OK, not this round's concern.
+
+  One thing to double-check for PATH A at LIN_A: ofs = x & 4095, and bufdepth 8: writing 8 bytes at tileptr+ofs where ofs can be 4095 → crosses into next page — tileptr+4095..+4102. memory_rw handles cross-page via the split loop (#430 granule). Not a defect per se (guest chose it), just fidelity. Not this round.
+
+  Now let me also verify (q) the claim "all seven call sites pass one of them [ordinary device registers]" — draw_primitive's dst_mode/src_mode are de_reg[] values written via DEVICE_ACCESS(sgi_de) — ordinary guest stores ✓. do_mte_transfer's modes derive from mte_reg mode + constructed — also guest stores ✓.
+
+  (r) For Q1.1 "compiler-visible initialisation": check CFLAGS in the GXEMUL-SEC build. Let me grep the Makefile for 'auto-var-init' or 'ftrivial'. Also check if there's a pattern of `uint8_t buf[8] = ...`. No. Also `-Wuninitialized` wouldn't change runtime. Quick grep in GXEMUL-SEC/Makefile* and configure.
+
+  (s) Also verify dev_px.c/dev_sgi_gbe.c/dev_scc.c/dev_sgi_mec.c spot checks to confirm the class-scan "safe" verdicts. These matter because §6 claims "SPECIFIC, not systemic". I'll spot check the four quickly.
+
+  Let me batch these now.
+
+• Premises so far hold. Now the remaining checks: freeze-artifact fidelity, guard greps, `fatal()` semantics, build flags, and the class-scan spot-checks.FREEZE_MATCHES
+src/devices/dev_sgi_re.c:188:	int bufdepth = 1 << ((mode >> 8) & 3); 
+src/devices/dev_sgi_re.c:284:	uint8_t buf[8];		/* #100: bufdepth can be 8 = 1<<((mode>>8)&3) */
+src/devices/dev_sgi_re.c:710:	// int dst_bufdepth = 1 << ((dst_mode >> 8) & 3);
+src/devices/dev_sgi_re.c:711:	int src_bufdepth = 1 << ((src_mode >> 8) & 3);
+===
+262:void fatal(const char *fmt, ...);
+===
+(buildflag check done)
+
+
+• - Freeze matches. ✓
+  - The grep for '>> 8) & 3' in GXEMUL-SEC/src/devices returns exactly: the decode (188), the #100 comment (284), the commented-out dst_bufdepth (710) and src_bufdepth (711). The brief said "the decode itself, the #100 comment, and the two XFER siblings" — matches (711 is the XFER sibling; 710 is commented out). No guard. ✓
+  - fatal is declared in misc.h; need its definition to confirm it doesn't exit. Check src/misc.cc or wherever fatal is defined.
+  - No auto-var-init build flag in Makefile/configure — but wait, is there a Makefile at GXEMUL-SEC root? The grep found nothing (maybe files don't exist). Let me check how it builds and confirm no such flag. Also fatal definition.===
+Makefile
+configure
+src/Makefile
+===
+fatal's definition isn't in src/*.cc/src/*.c at top level? Let me search more broadly. And check the Makefile for CFLAGS.src/core/debugmsg.c
+src/include/misc.h
+===
+9:COPTIM=-fstrict-aliasing -fomit-frame-pointer -fpeephole -fgnu89-inline -O3 -DNDEBUG 
+31:	$(CC) $(COPTIM) src/console/*.o src/cpus/*.o src/debugger/*.o src/devices/*.o src/disk/*.o src/file/*.o src/machines/*.o src/net/*.o src/core/*.o src/promemul/*.o src/symbol/*.o $(LIBS) -o $(BIN)
+fatal is defined in src/core/debugmsg.c. Let me check it doesn't exit. COPTIM has no auto-var-init — good, `-O3 -fomit-frame-pointer` actually makes frame reuse likely (no, -fomit-frame-pointer doesn't change stack slot reuse; -O3 might keep buf in registers? No — buf's address is taken (passed to memory_rw), so it must live on the stack. Good: stack slot reuse is near-certain at the same call site.)
+
+  Let me check fatal() definition, then do the class-scan spot checks, then the sgi_de write path masking check.void fatal(const char *fmt, ...)
+{
+	va_list argp;
+
+	va_start(argp, fmt);
+	va_debug(argp, fmt);
+	va_end(argp);
+}
+Confirmed:
+  - `fatal()` does NOT exit — it just prints. So the PUT `default:` arm (YCRCB) fills buf[0..3] with random() and then REACHES the memory_rw write. sgirandomcolour premise holds. Also means the `fatal` in the XFER step_x check doesn't stop execution. Fine.
+  - `CRIME_DE_MODE_SRC`/`CRIME_DE_MODE_DST` writes: only a debug() — no masking, no cross-check. The store to de_reg[regnr] happened earlier (len==4/8 arms). So mode words are stored verbatim. Q1.4: no guard in callers — confirmed for the DE path; the only cross-check anywhere is `step_x != src_bufdepth` (announces, continues) — unrelated to colour/depth pairing.
+
+  Now the class-scan spot checks. Let me look at:
+  1. dev_px.c:151/265 — dma_buf[32768], dma_len = 4*(5+nspans*3), nspans >>= 24.
+  2. dev_sgi_gbe.c:263 — buf[16384], len clamp 512, bitdepth = 8 << (..&3).
+  3. dev_scc.c:305 — chained assignment.
+  4. dev_sgi_mec.c:200/370 — memset full / memset(data,0,6) + prior read of 32 bytes.
+
+• `fatal()` doesn't exit — confirmed, so the YCRCB default arm does reach the write. Now spot-checking the four class-scan verdicts. *  For the "PX" board, read from main memory (cpu->mem). For all other
+ *  boards, read from the i860 SRAM portion of the device (d->sram).
+ */
+void dev_px_dma(struct cpu *cpu, uint32_t sys_addr, struct px_data *d)
+{
+	unsigned char dma_buf[32768];
+	size_t dma_len = sizeof(dma_buf);
+	int bytesperpixel;
+	uint32_t cmdword;
+
+	bytesperpixel = d->bitdepth >> 3;
+
+	dma_len = 56 * 4;	/*  TODO: this is just enough for NetBSD's
+					 putchar  */
+
+	if (d->type == DEV_PX_TYPE_PX) {
+		cpu->memory_rw(cpu, cpu->mem, sys_addr, dma_buf,
+		    dma_len, MEM_READ, NO_EXCEPTIONS | PHYSICAL);
+	} else {
+		/*  TODO:  past end of sram?  */
+		memmove(dma_buf, &d->sram[sys_addr & 0x1ffff], dma_len);
+		nspans >>= 24;
+		/*  Why not this?  lw = (lw + 1) >> 2;  */
+
+		if (px_debug)
+			debug("[ px: copyspans:  nspans = %i, lw = %i ]\n", nspans, lw);
+
+		/*  Reread copyspans command if it wasn't completely read:  */
+		if (dma_len < 4*(5 + nspans*3)) {
+			dma_len = 4 * (5+nspans*3);
+			if (d->type == DEV_PX_TYPE_PX)
+				cpu->memory_rw(cpu, cpu->mem, sys_addr,
+				    dma_buf, dma_len, MEM_READ,
+				    NO_EXCEPTIONS | PHYSICAL);
+			else
+				{
+					/*  #207: (Codex/Fable) bound the SRAM source span
+===GBE===
+	for (int tiley = 0; tiley < max_nr_of_tiles; ++tiley) {
+		for (int line = 0; line < 128; ++line) {
+			for (int tilex = 0; tilex < w; ++tilex) {
+				int tilenr = tilex + tiley * w;
+				
+				if (tilenr >= max_nr_of_tiles)
+					continue;
+				
+				uint32_t base = tile[tilenr];
+				
+				if (base == 0)
+					continue;
+				
+				// Read one line of up to 512 bytes from the tile.
+				int len = tilex < width_in_tiles ? 512 : (partial_pixels * bytes_per_pixel);
+				if (len > 512)	/* OB-14: fb_buf is 512 bytes/line */
+					len = 512;
+
+				cpu->memory_rw(cpu, cpu->mem, base + 512 * line,
+				    buf, len, MEM_READ, NO_EXCEPTIONS | PHYSICAL);
+
+				int fb_offset = (x + y * d->xres) * 3;
+				int fb_len = (len / bytes_per_pixel) * 3;
+
+				if (fb_offset + fb_len > screensize) {
+					fb_len = screensize - fb_offset;
+
+
+/*  TODO: all this is just nonsense  */
+
+		n = 0;
+		while (rx_avail(d, port)) {
+			word[0] = word[1] = word[2] = word[3] = 0;
+			word[0] = word[1] = word[2] = word[3] =
+			    rx_nextchar(d, port);
+			n++;
+			cpu->memory_rw(cpu, cpu->mem, addr, &word[0],
+			    sizeof(word), MEM_WRITE, NO_EXCEPTIONS | PHYSICAL);
+
+			addr += sizeof(word);
+			/*  Half-page?  */
+			if ((addr & 0x7fc) == 0)
+===MEC200===
+
+	/*  4 bytes of CRC at the end. Hm. TODO  */
+	d->cur_rx_packet_len += 4;
+
+	memset(data, 0, sizeof(data));
+	data[6] = (d->cur_rx_packet_len >> 8) & 255;
+	data[7] = d->cur_rx_packet_len & 255;
+	/*  TODO: lots of bits :-)  */
+	data[4] = 0x04;		/*  match MAC  */
+	data[0] = 0x80;		/*  0x80 = received.  */
+	res = cpu->memory_rw(cpu, cpu->mem, base,
+	    &data[0], sizeof(data), MEM_WRITE, PHYSICAL);
+
+	/*  Free the packet from memory:  */
+	free(d->cur_rx_packet);
+	d->cur_rx_packet = NULL;
+
+	d->reg[MEC_INT_STATUS / sizeof(uint64_t)] |= MEC_INT_RX_THRESHOLD;
+skip_and_advance:
+	d->cur_rx_addr_index ++;
+	d->cur_rx_addr_index %= N_RX_ADDRESSES;
+	d->reg[MEC_INT_STATUS / sizeof(uint64_t)] &= ~MEC_INT_RX_MCL_FIFO_ALIAS;
+	d->reg[MEC_INT_STATUS / sizeof(uint64_t)] |=
+	    (d->cur_rx_addr_index & 0x1f) << 8;
+	retval = 1;
+
+===MEC370===
+	    avoid net_ethernet_tx reading past cur_tx_packet.  */
+	d->cur_tx_packet_len = j;
+
+	net_ethernet_tx(cpu->machine->emul->net, &d->nic,
+	    d->cur_tx_packet, d->cur_tx_packet_len);
+
+	/*  see openbsd's if_mec.c for details  */
+	if (data[4] & 0x01) {
+		d->reg[MEC_INT_STATUS / sizeof(uint64_t)] |=
+		    MEC_INT_TX_PACKET_SENT;
+	}
+	memset(data, 0, 6);	/*  last 2 bytes are len  */
+	data[0] = 0x80;
+	data[5] = 0x80;
+
+	res = cpu->memory_rw(cpu, cpu->mem, addr,
+	    &data[0], sizeof(data), MEM_WRITE, PHYSICAL);
+
+	d->reg[MEC_INT_STATUS / sizeof(uint64_t)] |= MEC_INT_TX_EMPTY;
+	d->reg[MEC_INT_STATUS / sizeof(uint64_t)] |= MEC_INT_TX_PACKET_SENT;
+
+advance_tx:
+	/*  Advance the ring Read ptr.  */
+	tx_ring_ptr = d->reg[MEC_TX_RING_PTR / sizeof(uint64_t)];
+	ringread = tx_ring_ptr & MEC_TX_RING_READ_PTR;
+	ringwrite = tx_ring_ptr & MEC_TX_RING_WRITE_PTR;
+
+	ringread = (ringread >> 16) + 1;
+	ringread &= 63;
+	ringread <<= 16;
+
+
+
+• Class-scan spot checks:
+
+  1. **dev_px.c**: `nspans >>= 24` confirmed — caps nspans at 255 → dma_len = 4*(5+765) = 3080 ≤ 32768. Safe ✓. (The brief's claim holds.)
+
+  2. **dev_sgi_gbe.c:263**: `if (len > 512) len = 512;` confirmed. Need `partial_pixels` non-negative and `bytes_per_pixel` nonzero — brief says bitdepth = 8 << (..&3). Let me verify quickly. Actually the len clamp to 512 with buf[16384]... wait — buf is 16384 but len clamped to 512? The brief said buf[16384], len ≤ 512. The memory_rw at "base + 512*line" reads len ≤ 512 bytes into buf. Wait, but where's buf declared and is it 16384? Whatever — len ≤ 512 ≤ buf size, and it's a READ anyway (not a write of stack to guest). The scanner flagged it as unpinned-length READ. Reads INTO stack buffers are a different concern (buffer overflow if len > size — not the case; uninit READ-back is the #95 class — and #95 covers device reads; for RAM reads the memory fills it). Fine, safe as claimed. Let me quickly verify bytes_per_pixel can't be 0 (divisor at len / bytes_per_pixel): need bitdepth assignment. Quick grep.
+
+  3. **dev_scc.c:305**: chained assignment `word[0] = word[1] = word[2] = word[3] = rx_nextchar(d, port);` confirmed — and note there's even a `= 0` line before it. All 4 bytes set before the sizeof(word) write. FALSE POSITIVE confirmed ✓. Brief is honest about this.
+
+  4. **dev_sgi_mec.c:200 (mec_try_rx)**: `memset(data, 0, sizeof(data))` confirmed ✓. But wait — the brief says data is `data[8]` here and the scanner wrongly reported 32 due to the name-keyed map bug. The memset is sizeof(data) so full clear regardless. ✓.
+
+  5. **dev_sgi_mec.c:370 (mec_try_tx)**: `memset(data, 0, 6)` on data[32], writes sizeof(data)=32 bytes. Brief claims the same 32 bytes were READ from the same address at the top of the function and checked, so it's read-modify-write. Let me verify that claim — need to see the top of mec_try_tx where data is read. Let me check.
+
+  Also for Q1.3: settle device-vs-RAM. In the probe, LIN_A entries like 0x80040001 → tileptr = (0x80040001 & ~0x80000000) << 12 = 0x40001 << 12 = 0x40001000. On -E sgi -e ip32, physical 0x40001000 is... O2 RAM is at 0x00000000+? Actually IP32 physical RAM starts at 0x0 (with the 0x40000000 MTE fill hint suggesting RAM at 0x40000000 in some mapping — "This corresponds to the lowest possible RAM address"). So probe tileptr 0x40001000 = RAM. So in the witness configuration the target is RAM → #95's device-branch pre-zero does NOT run for PATH B; the memblock path fills buf[0..bufdepth-1] with real RAM content; buf[bufdepth..7] = stale stack. So the brief's §3b survives Q1.3 in both sub-cases, and for the probe config specifically, #95 doesn't run at all. But careful: the tileptr is guest-chosen, so a guest could also point it AT a device (e.g. another device's registers) — then #95 zeroes buf[0..len-1]. Bytes ≥ len still stale. So PATH B's leak bytes are outside len in both cases. Q1.3 settled: guest's choice; defect stands either way; oracle bytes beyond bufdepth are stack regardless.
+
+  Now check mec_try_tx's top to verify the read-modify-write claim.			dma_base = (data[dma_ptr_nr * 8 + 4] << 24)
+			         + (data[dma_ptr_nr * 8 + 5] << 16)
+			         + (data[dma_ptr_nr * 8 + 6] <<  8)
+			         + (data[dma_ptr_nr * 8 + 7]);
+			dma_base &= 0xfffffff8ULL;
+			dma_len = (data[dma_ptr_nr * 8 + 2] << 8)
+			        + (data[dma_ptr_nr * 8 + 3]) + 1;
+
+			/*  printf("dma_base = %08x, dma_len = %i\n",
+			    (int)dma_base, dma_len);  */
+
+			while (dma_len > 0) {
+				unsigned char ch;
+				res = cpu->memory_rw(cpu, cpu->mem, dma_base,
+				    &ch, sizeof(ch), MEM_READ, PHYSICAL);
+				/*  printf(" %02x", ch);  */
+
+				d->cur_tx_packet[j++] = ch;
+				if (j >= MAX_TX_PACKET_LEN) {
+					fatal("[ mec_try_tx: packet too large?"
+					    " ]\n");
+					break;
+				}
+				dma_base ++;
+				dma_len --;
+			}
+		}
+	}
+
+	if (j < len)
+		fatal("[ mec_try_tx: not enough data? ]\n");
+
+	/*  Transmit only the bytes actually copied into cur_tx_packet: len is
+	    guest-controlled and may exceed MAX_TX_PACKET_LEN, but the fill loops
+	    above stop at MAX_TX_PACKET_LEN, so use j (not len) as the length to
+	    avoid net_ethernet_tx reading past cur_tx_packet.  */
+	d->cur_tx_packet_len = j;
+
+	net_ethernet_tx(cpu->machine->emul->net, &d->nic,
+	    d->cur_tx_packet, d->cur_tx_packet_len);
+
+===
+134:	unsigned char data[8];
+228:	unsigned char data[32];
+===
+104:	int		bitdepth;
+171:	int bytes_per_pixel = d->bitdepth / 8;
+592:			d->bitdepth = 8 << ((d->tilesize >> CRMFB_FRM_TILESIZE_DEPTH_SHIFT) & 3);
+594:			d->partial_pixels = ((idata >> CRMFB_FRM_TILESIZE_RHS_SHIFT) & 0x1f) * 32 * 8 / d->bitdepth;
+597:			    d->bitdepth, d->width_in_tiles, d->partial_pixels);
+768:	d->bitdepth = GBE_DEFAULT_BITDEPTH;
+mec_try_tx (line 228: `unsigned char data[32]`): I need to see the top of the function where data is READ from the same addr. The snippet at 320-360 shows data being USED (dma_ptr_nr extraction) — so data was filled earlier. Let me see lines 228-260 for the initial read. And mec_try_rx at 134 has `unsigned char data[8]` — so the brief's claim that mec_try_rx's buffer is data[8] (scanner reported 32 due to name-keyed collapse) is CONFIRMED: two declarations of `data` at different sizes in one file (134: [8], 228: [32]). The brief's scanner-defect disclosure is accurate.
+
+  gbe: bitdepth = 8 << (..&3) at line 592 → 8/16/32/64, bytes_per_pixel = bitdepth/8 → 1/2/4/8, nonzero ✓. partial_pixels at 594: ((idata >> SHIFT) & 0x1f) * 32 * 8 / bitdepth — non-negative ✓. len ≤ 512 ✓, buf... the brief said buf[16384]; len clamped to 512 — safe.
+
+  Let me quickly see mec_try_tx's head (228-250) to confirm data is read from the same addr before the memset(…,6). *  mec_try_tx():
+ */
+static int mec_try_tx(struct cpu *cpu, struct sgi_mec_data *d)
+{
+	uint64_t base, addr, dma_base;
+	int tx_ring_ptr, ringread, ringwrite, res, i, j;
+	unsigned char data[32];
+	int len, start_offset, dma_ptr_nr, dma_len;
+
+	base = d->reg[MEC_TX_RING_BASE / sizeof(uint64_t)];
+	tx_ring_ptr = d->reg[MEC_TX_RING_PTR / sizeof(uint64_t)];
+
+	if (base == 0)
+		return 0;
+
+	/*  printf("base = 0x%016llx\n", base);  */
+
+	ringread = tx_ring_ptr & MEC_TX_RING_READ_PTR;
+	ringwrite = tx_ring_ptr & MEC_TX_RING_WRITE_PTR;
+	ringread >>= 16;
+	/*  All done? Then abort.  */
+	if (ringread == ringwrite)
+		return 0;
+
+	tx_ring_ptr &= MEC_TX_RING_READ_PTR;
+	tx_ring_ptr >>= 16;
+
+	/*  Each tx descriptor (+ buffer) is 128 bytes:  */
+	addr = base + tx_ring_ptr*128;
+	res = cpu->memory_rw(cpu, cpu->mem, addr,
+	    &data[0], sizeof(data), MEM_READ, PHYSICAL);
+	if (!res)
+		return 0;
+
+	/*  Is this packet transmitted already?  */
+	if (data[0] & 0x80) {
+		fatal("[ mec_try_tx: tx_ring_ptr = %i, already"
+		    " transmitted? ]\n", tx_ring_ptr);
+		goto advance_tx;
+Confirmed: mec_try_tx reads 32 bytes from `addr` into data at the top, checks `res`, and later memsets only 6 and writes 32 back to the same `addr`. Read-modify-write preserving the descriptor tail — the brief's "safe" verdict holds. (One caveat: memory_rw READ with PHYSICAL — if that read came from a device, #95 zeroes it first; if from RAM, real bytes. Either way data[6..31] is defined by the read, not stale. ✓)
+
+  All class-scan spot checks pass. Now let me finish remaining verifications:
+
+  1. Q1.5: depth field 3 reachability — already established: DE MODE registers stored verbatim (len==4/8 arms, debug only, no masking), MTE path constructs mode with raw 2-bit depth field. Also #100's comment at line 284 says bufdepth can be 8. Also crmfbreg.h — check if there's a DE_MODE_DEPTH define documenting depth 3. Let me check for DE_MODE_DEPTH or BUFDEPTH in the header.
+
+  2. Also verify the witness arithmetic once more and check the probe more fully — particularly that it runs on `-E sgi -e ip32` unmodified, and the "one constant changed" claim. Also check whether the probe's LIN_A setup writes re_linear_a entries with the valid bit (0x80000000) — from the PROM log inline in the source comment, entries look like 0x80040001 which has bit 31 set... wait, in horrible_getputpixel case 4: tileptr = 0x80000000 | (re_linear_a[tile_nr] << 12) — the valid bit is FORCED, so the LIN_A entry value doesn't need bit 31. ✓ (brief §7 says "Case 4 FORCES it" ✓).
+
+  3. Check the probe file more fully for the controls (both mandated controls green) — I saw control rows at 216-247. Good enough; I don't need to re-run it (and the operational rule forbids running gates anyway).
+
+  4. Q3: grep the fork for precedent of reconciling two independent guest-chosen mode fields. The step_x != src_bufdepth check at dev_sgi_re.c:734 is one (announce-and-continue). The MTE LINEAR `depth != 8` fatal+exit(1) is a refuse. Let me grep a bit more broadly for clamp idioms — e.g., "& 3]" patterns or min() clamps in devices. Actually the question asks specifically: "is there an existing in-tree precedent for a device that reconciles two independent guest-chosen mode fields?" Candidates:
+     - dev_sgi_re.c:734 step_x vs src_bufdepth (announce, continue with the guest's values — does NOT reconcile, just complains).
+     - dev_sgi_gbe.c: len clamp to 512 (OB-14) — clamp idiom.
+     - The #497 width guards — decline idiom (latched).
+     - dev_mec... Let me do a quick grep for pairs of fields compared. Honestly, the honest answer: the fork's dominant recent idiom for "guest-chosen combination we don't model" is the latched decline (#497–#500, sgirandompixel). There is no in-tree precedent that RECONCILES (pads/clamps) two independent mode fields into agreement; the precedents are decline (#497+), clamp-to-buffer (OB-14, a length not a mode pair), and announce-and-continue (step_x). So option 4 (decline the mismatched pair, latched) is the idiom-matching disposition; option 1 (memset sizeof) is the minimal-UB fix with defined observable behaviour (zeroes). The brief's own note that the project has previously taken "pick the one that is not UB and say so" applies.
+
+  5. Q2: smallest re-opening edit. As analysed: `memset(buf, 0, 4)` (constant, matches the combine width) or `memset(buf, 0, bufdepth)`. A detector built "the obvious way" — e.g., witness only PATH B (GET at 0x1020) — stays green under `memset(buf,0,4)` while PATH A at depth 8 reopens; witness only PATH A stays green under `memset(buf,0,bufdepth)` while PATH B reopens. Also subtler: `uint8_t buf[8] = {0};` INSIDE a future refactor into a helper... no. Another: memset placed after the switch in the PUT branch only — fixes A, leaves B. The row expected to stay green: whichever detector row witnesses only one path. So the detector MUST witness both 0x1320-PUT and 0x1020-GET rows. Also a memset(buf, 0, sizeof buf) inserted in the GET branch only (someone "fixing the read path") — PATH A reopens, PATH-B-only detector green. Good answer material.
+
+  6. Q4: witness design. 0x1020 for PATH B: sufficient? Reachability — LIN_A forced valid ✓. Oracle: brief's known-stale-content proposal. My analysis above: for PATH B, the paint step should be a GET at 0x1220 (depth 4) from known memory — that fills buf[0..3] with KNOWN bytes — then GET at 0x1020 from different known memory; *color = newbuf0<<24 | old1<<16 | old2<<8 | old3; caller PUTs it to dst at 0x1220; read dst and assert bytes 1..3 == source1 bytes 1..3 (which dst2's own memory does not hold). Sound, modulo frame reuse. Can carry-over be made architectural? Within one draw_primitive RECTANGLE loop with XFER_EN, the GET (line 860) and PUT (line 906) happen per pixel — two different call sites but the same depth. For the two-GET sequence the probe drives via guest stores; each pixel's GET is a separate call from the same call site → same frame. The reuse is a property of the C abstract machine? No — it's not guaranteed by the standard, but it IS deterministic for a fixed binary: same call site, same SP, no intervening calls that clobber those 8 bytes... wait, there ARE intervening calls: memory_rw (called BY horrible_getputpixel itself, deeper — its frame is below buf, doesn't touch buf), and between the two horrible_getputpixel calls, the loop body runs (no other calls except the PUT's horrible_getputpixel at 906 if draw... in XFER rectangle loop: GET(860) → PUT(906) → next iteration GET(860). The PUT call at 906 REUSES THE SAME FRAME (same call depth, same caller) — and the PUT writes buf[0..3] with the colour! So between GET(pixel N) and GET(pixel N+1), a PUT happens at the same stack slot, overwriting buf[0..3] with the PUT's encoding of *color. So the stale bytes at GET N+1's buf[1..3] are NOT pixel-N's GET bytes — they're pixel-N's PUT bytes (the colour just written, re-encoded per dst_mode). Hmm! That changes the oracle design: paint pixel 1 = PUT at 0x1320? No wait — for PATH B the sequence is: GET(src1, 0x1020) then PUT(dst1, 0x1220)... the XFER loop does GET(src_mode) then PUT(dst_mode) per pixel. The probe controls src_mode and dst_mode separately! So set src_mode = 0x1020 (depth 1, RGBA) and dst_mode = 0x1220. Then per pixel: GET reads 1 byte from src, combines with stale buf[1..3]; PUT writes the combined colour to dst. The stale buf[1..3] at GET time for pixel N+1 = the bytes the PUT of pixel N left in buf[0..3] = the RGBA encoding of the colour written to dst[N]. Which is KNOWN if we know what was written — but what was written depends on the stale bytes of the previous GET... induction. For pixel 0: buf state unknown (first call). Pixel 0's GET: color = src0_byte0<<24 | X1<<16 | X2<<8 | X3 (X unknown). PUT pixel 0: buf[0..3] = that colour's bytes = {src0_b0, X1, X2, X3}. Pixel 1's GET: color = src1_b0<<24 | X1<<16 | X2<<8 | X3 — the SAME X bytes. So from pixel 1 onward the unknown X is stable — dst[1] and dst[2] share the same low 24 bits in their upper... wait: color = (b0<<24)+(X1<<16)+(X2<<8)+X3, PUT RGBA encodes buf={b0,X1,X2,X3} — wait buf[0]=*color>>24 = b0, buf[1]=X1, etc. So dst pixel N (N≥1) = {srcN_b0, X1, X2, X3}: the low three bytes CONSTANT across pixels and equal to whatever the first frame held. The oracle: write src memory so that src pixel bytes differ (b0 varies per pixel), and assert dst pixels 1..N all share IDENTICAL low-24-bits — which a correct implementation (reading 4 real bytes per pixel, or zero-filling) would NOT produce (real src memory has varying bytes at positions 1..3 of each pixel; zero-fill gives 0). Hmm — but a memset fix gives low24 = 0; correct hardware gives the real src bytes; the bug gives constant X. Three distinguishable outcomes IF X ≠ 0 and X ≠ real bytes. X is first-frame stack garbage — could be 0 by luck! Control: also assert the value is NOT what the fixed build produces... circular. Better control: BEFORE the XFER, do a paint pass that leaves KNOWN bytes in buf[0..3]: e.g., a PUT at 0x1220 (matched) of a distinctive colour C — that leaves buf[0..3] = C's bytes at that stack slot. Then the XFER GETs at 0x1020 inherit X = C's bytes 1..3. THEN dst pixels' low 24 bits = C[1..3] — a positive identification, exactly the brief's proposal. And it works BECAUSE the intervening PUTs also write the same slot — actually the first XFER GET inherits from the paint PUT directly (same slot). After that it's self-sustaining. The catch I found: the brief's proposal says "paint a first pixel with a distinctive colour so buf holds known bytes, then read a second pixel at a mismatched depth" — correct shape, and the paint must be a PUT (or a depth-4 GET) so that buf[0..3] specifically are known. For PATH A (0x1320 PUT writes 8, arms fill 4): the stale bytes are buf[4..7], which NO PUT arm ever writes. To make buf[4..7] known: a preceding GET at depth 8 (0x1320 GET) from known memory fills buf[0..7] — then a PUT at 0x1320 elsewhere writes buf[4..7] = those known bytes to dst[4..7]. Oracle: dst[4..7] == known src memory bytes. But intervening calls at the same slot between the two — in the XFER loop, GET(src) and PUT(dst) alternate at the same slot: set src_mode = 0x1320 (depth 8 GET — fills all 8 from src memory) and dst_mode = 0x1320 (depth 8 PUT — writes 4 colour + 4 stale). Then pixel N's PUT stale bytes = pixel N's GET bytes 4..7 (the immediately preceding call at the same slot!) = src memory[N*8+4 .. N*8+7]. That's not just known — it's the IMMEDIATELY preceding call, minimising the window for anything else to touch the slot. Oracle: dst[N*8+4..N*8+7] == src[N*8+4..N*8+7]... wait but dst[N*8..N*8+3] = colour encoding. Hmm, what colour does the GET produce? src_mode 0x1320 = RGBA → *color = src bytes 0..3 combined; PUT RGBA writes them back to dst[0..3]. So dst[N*8+0..3] == src[N*8+0..3] (correct copy) and dst[N*8+4..7] == src[N*8+4..7] (the LEAK — a correct depth-8 implementation would write... what? If hardware depth-8 RGBA actually transfers 8 bytes, a correct emulator would copy all 8 → dst == src entirely. The bug ALSO produces dst == src entirely! VACUOUS! Hmm. Wait no — the bug produces dst[4..7] == src[4..7] BY COINCIDENCE of the frame reuse: GET filled buf[4..7] from src, PUT leaks them to dst. A correct implementation copies them properly. Same output! So the XFER-alternation oracle for PATH A is vacuous — the leak and the correct behaviour coincide. To witness PATH A you must DECOUPLE: fill buf[4..7] with known bytes that are NOT the correct output. E.g.: paint pass = GET at 0x1320 from address P (known bytes K4..K7), then PUT at 0x1320 to dst whose own memory at [4..7] holds DIFFERENT known bytes D4..D7, with a colour known — assert dst[4..7] == K4..K7 (leak) not D4..D7 (unchanged... no — a "correct" depth-8 transfer would write SOMETHING at 4..7; what? Unknown — hardware behaviour unknown! The honest oracle is: dst[4..7] == K4..K7 proves the bytes came from the stack slot, i.e., positive identification of uninit-stack content reaching guest memory. Any fix (memset/decline/pad) makes dst[4..7] != K4..K7 (zeroes / unchanged / replicated colour). But between the paint GET and the witness PUT, the XFER loop's own structure interleaves... if the probe uses draw_primitive with XFER_EN, GET and PUT both fire per pixel. To decouple, use TWO SEPARATE primitives: first a primitive that ends with a GET at 0x1320 (e.g. XFER with src=0x1320, dst=TLB_A invalid-bit-clear so the PUT returns early WITHOUT touching buf... wait the PUT's buf is the same slot — a PUT that returns early (before buf usage, e.g. dst TLB_A with valid bit clear → returns at the tileptr check, BEFORE declaring buf) — hmm, if it returns before declaring buf, does it still use the same stack slot? The frame is the same size regardless (compiler allocates max frame for the function) — buf's slot is reserved even on early-return paths at -O3 typically... not guaranteed. Ugh. Simpler decoupling: paint with a LINE op (no XFER): draw_primitive LINE at dst_mode=0x1320... LINE's PUT writes buf[0..3] colour, leaves buf[4..7] — no. Paint with what fills buf[4..7] with known values? ONLY a GET at depth 8 does that (any colour mode; the combine doesn't matter). A GET happens in the LINE loop only when ROP != COPY (line 794: oldcolor GET). So: LINE, dst_mode=0x1320, ROP=XOR → per pixel: GET (fills buf[0..7] from dst memory — known, we pre-wrote dst memory) then PUT (writes buf[0..3]=colour, buf[4..7]=the GET's bytes → written back to the SAME dst location+... same pixel! dst[4..7] gets back the bytes just read from that same dst pixel → vacuous again (read-modify-write of the same location is invisible). Need the GET and PUT at DIFFERENT addresses. XFER does that (src ≠ dst) but then the leak equals a correct copy. LINE+ROP reads and writes the same pixel. Hmm: XFER with src=0x1320 GET then dst=0x1320 PUT: leak produces dst[4..7]=src[4..7]; "correct 8-byte copy" also produces that. Vacuous AS A DISTINGUISHER OF BUG VS CORRECT-HARDWARE — but NOT vacuous as a distinguisher of BUG VS FIXED-EMULATOR: fixed emulator (memset) → dst[4..7]=0; (decline) → unchanged; (pad) → colour replication. The probe's job is to detect the defect in THIS tree and regressions of the FIX — the oracle "dst[4..7] == src[4..7] where a memset fix yields 0" DOES discriminate bug from memset-fix... but wait, it equals src — is that "passes by luck"? No: it's a positive identification that the bytes came from the preceding GET's fill of the same stack slot — deterministic given frame reuse. The luck component is only frame reuse itself, which the same-call-site alternation makes near-certain. And the control row: same program with dst=0x1220 (matched depth 4) must NOT show src[4..7] at dst (transfer is only 4 bytes — dst[4..7] of the group untouched). Hmm, actually with depth 4, pixel stride is 4 bytes so "dst[4..7]" belongs to the next pixel — the control design needs care, but it's doable: keep dst memory pre-filled with a sentinel, use depth-4, assert no 8-byte group shows the src tail bytes.
+
+  OK — I've done enough oracle design to answer Q4: 0x1020 witnesses PATH B; the known-stale-content approach is sound; the one refinement the brief missed is that in the XFER loop the immediately-preceding call at the same slot is the PUT, not the previous GET — which actually makes the carry-over MORE reliable (adjacent call, same slot) and gives an architectural-ish anchor: the stale bytes are the previous loop iteration's PUT encoding, a value the probe controls precisely. For PATH A the analogous witness needs a depth-8 GET immediately before the depth-8 PUT with src ≠ dst, and the oracle must be framed as bug-vs-fixed (bug: dst tail == src tail via stack; memset-fix: zeroes), NOT bug-vs-correct-hardware, because for the aligned copy the leak coincides with a correct copy. Also note: PATH A could alternatively be witnessed WITHOUT frame reuse via... is there any single-call shape where uninit bytes are written within ONE call with no reliance on prior state? Yes: the FIRST horrible_getputpixel call ever in the process with 0x1320 — buf[4..7] are whatever the host stack held at process start: unknowable, unassertable. So no — PATH A has no single-call oracle; it inherently needs the two-call carry-over. The brief's worry #1 is real but the loop structure answers it: in the XFER/RECTANGLE loop the carrier is the immediately preceding iteration's own call at the same site, which is as close to architectural as C gets without a guarantee; the probe should assert the carrier explicitly (paint value appears) rather than assert mere inequality. Also worth noting: -O3 -fomit-frame-pointer, buf's address taken → stack-resident; same call site → same SP. And a control that demonstrates the carrier (paint PUT at matched depth leaves colour bytes; mismatched GET picks them up) doubles as the frame-reuse check — if frame reuse ever breaks, the CONTROL goes red, not the witness row. That answers the brief's "probe that passes for a reason it does not state": make frame reuse itself a control assertion.
+
+  7. Q6 recommendation: keep separate. The shared determinism oracle is WRONG for sgirebufuninit (stack reuse is deterministic across runs — same guest program → same host call sequence → same stale bytes; a determinism oracle passes the BUGGY build → vacuous). It suits sgirandomcolour (random() varies across runs... unless seeded deterministically — check: does gxemul seed random()? srandom? If never seeded, random() returns the SAME sequence every run → deterministic across runs → even sgirandomcolour's determinism oracle would be vacuous! Let me check for srandom/srandomdev in the source. If random() is unseeded, "deterministic across runs" is USELESS for both. Then sgirandomcolour's oracle must be "value != any plausible correct value" or statistical across pixels within ONE run (adjacent pixels differ randomly where a uniform fill was requested — within-run nondeterminism: random() per pixel → dst pixels differ from each other where src was uniform). Let me check srandom quickly.
+
+  8. Q5: severity. Guest-reachable host-stack disclosure into guest-readable memory: real but weakly controlled; typical symptom wrong colours. The #95-class contradiction is the strongest argument for HIGH as a ledger grade. I'd accept HIGH or MEDIUM; not a blocker either way. One more consideration: is it a HOST info leak to the GUEST — in an emulator threat model where the guest is untrusted, that's the security boundary this whole fork (GXEMUL-SEC) is auditing. The leak bytes per 8-byte write: 4 bytes per pixel, guest can spray/readback. Controlled? The guest controls the cadence (per-pixel in a loop) but not the prior stack content. Between the MTE/DE command and host OS activity... the stack slot mostly holds prior pixels. First-call-after-boot could hold PROM-era host data. Weak. MEDIUM-HIGH. Fine.
+
+  9. Also the brief asks in §3a to enumerate "exactly two" paths — check for a THIRD: GET at depth 8: reads 8 bytes, combine uses ≤4 — over-read fills, no leak (extra bytes unused... *color only uses buf[0..3]; buf[4..7] filled but unused → no leak). PUT at depth 1 with CI: fills buf[0], writes 1 — matched. GET RGB at depth 1: reads 1, combine uses buf[1..3] (note RGB GET combine uses buf[1],buf[2],buf[3] — NOT buf[0]! At depth 1, buf[0] is the filled byte and the combine uses 1,2,3 — so RGB GET at ANY depth < 4 leaks; at depth 4 reads buf[0..3], combine uses 1..3 — buf[0] read but unused, fine). Also GET RGB at depth 2 (bufdepth 2): buf[0..1] filled, combine uses buf[1..3] → buf[2..3] stale. Yes — all within PATH B's shape. PUT with YCRCB (default): random fill 0..3 + depth 8 → uninit 4..7 — that's sgirandomcolour + PATH A overlap, counted. GET default (YCRCB): combine reads buf[0..3] with depth < 4 → PATH B shape + fatal. Any OTHER consumer of buf? No. Two paths, both families of (colour, depth) mismatch — enumeration complete. Also: GET CI at depth 2/4/8 reads extra bytes, uses buf[0] — no leak (over-fill unused). PUT RGB/RGBA/ABGR at depth 2: fills 4, writes 2 — no leak (under-transfer). So the leak matrix: PATH A = any colour × depth field 3 (8>4) + CI × any depth > 1. PATH B = non-CI colour × depth < 4 (RGB/RGBA/ABGR/default combine reads 4 bytes incl. RGB's 1..3) with depth field 0 or 1 (1 or 2 bytes). The brief's table captures this correctly.
+
+  10. Q1.6: YCRCB genuinely unimplemented — grep -c YCRCB = 0 ✓, no case 0xf0 in the switch ✓.
+
+  Remaining checks: srandom seeding; DE_MODE_DEPTH documentation in header (is depth field 3 a DOCUMENTED depth?); and a quick look at the probe's XFER address setup to confirm "one constant changed" suffices (does the probe already program re_linear_a via CRIME_RE_LINEAR_A and dst/src addresses?). Let me also double check the probe's register addresses: DE_MODE_SRC 0xb5002000? CRIME base for sgi -e ip32: dev_sgi_re_init registered at baseaddr + 0x2000 for de — baseaddr 0xb5000000? CRIME is at 0x14000000-ish physically on IP32, mapped... the probe uses 0xb5002000 (kseg1 uncached physical 0x15002000 — matches the file header comment "0x15002000 drawing engine" ✓).
+
+  Let me check srandom and DE_MODE_DEPTH.
+
+• All class-scan verdicts verified. Two last checks: whether `random()` is ever seeded (bears on Q6's shared-oracle proposal) and whether depth field 3 is a documented value.src/core/main.c:68:static bool skip_srandom_call = false;
+src/core/main.c:231:	printf("  -D        skip the srandom call at startup\n");
+src/core/main.c:333:			skip_srandom_call = true;
+src/core/main.c:688:	if (!skip_srandom_call) {
+src/core/main.c:691:		srandom(tv.tv_sec ^ getpid() ^ tv.tv_usec);
+Binary file src/core/main.o matches
+src/promemul/dreamcast_scramble.c:22:void my_srand(unsigned int n)
+src/promemul/dreamcast_scramble.c:74:  my_srand(filesz);
+src/promemul/dreamcast_scramble.c:161:  my_srand(filesz);
+Binary file src/promemul/dreamcast_scramble.o matches
+===
+174:#define		CRMFB_FRM_TILESIZE_DEPTH_SHIFT	13
+175:#define			CRMFB_FRM_TILESIZE_DEPTH_8	0
+176:#define			CRMFB_FRM_TILESIZE_DEPTH_16	1
+177:#define			CRMFB_FRM_TILESIZE_DEPTH_32	2
+267:#define MTE_MODE_DEPTH_MASK	0x00000300
+268:	#define MTE_DEPTH_8	0
+269:	#define MTE_DEPTH_16	1
+270:	#define MTE_DEPTH_32	2
+271:	#define MTE_DEPTH_SHIFT 8
+325:#define DE_MODE_BUFDEPTH_8	0x00000000
+326:#define DE_MODE_BUFDEPTH_16	0x00000100
+327:#define DE_MODE_BUFDEPTH_32	0x00000200
+334:#define DE_MODE_PIXDEPTH_8	0x00000000
+335:#define DE_MODE_PIXDEPTH_16	0x00000004
+336:#define DE_MODE_PIXDEPTH_32	0x00000008
+375:#define DE_DRAWMODE_DEPTH_TEST	0x00000004
+376:#define DE_DRAWMODE_DEPTH_MASK	0x00000002
+    return "absent" if not m else "0x%x" % (int(m.group(1), 16) & 0xffffffff)
+
+class Addr(object):
+    def __init__(self, base): self.a = base
+    def take(self, n):
+        got = self.a; self.a += 4 * (n + 2) + 0x20; return got
+
+def run_ops(ops, at):
+    put = ["put w 0x%x, 0x%08x" % (at + 4 * i, op) for i, op in enumerate(ops)]
+    put += ["put w 0x%x, 0x%08x" % (at + 4 * len(ops), OP_B_SELF),
+            "put w 0x%x, 0x%08x" % (at + 4 * len(ops) + 4, OP_NOP)]
+    return put + ["pc=0x%x" % at, "step %d" % len(ops)]
+
+def store(A, addr, val, op=OP_SW_T0_A3):
+    return ["a3=0x%x" % addr, "t0=0x%x" % val] + run_ops([op], A.take(1))
+
+SENTINEL = 0xdeadbeef
+def load(A, addr):
+    return ["at=0x%x" % addr, "v0=0x%x" % SENTINEL] + run_ops([OP_LW_V0_AT], A.take(1))
+
+def setup(A, src_mode):
+    """Program the engine, paint source and destination, then fire one rectangle.
+       Every store is a REAL GUEST INSTRUCTION through memory_rw -- no device_add,
+       no debugger `put' to a device register."""
+    #  *** THE 64-BIT STORE WRITES THE HIGH WORD TO [n] AND THE LOW WORD TO [n+1]. ***  Measured:
+    #  `sd' of 0x10 gave `re_linear_a[0] = 0, [1] = 0x10', so the tile pointer was 0 and every pixel
+    #  went to PHYSICAL ADDRESS 0 -- the destination stayed at its pre-paint and the ACCEPT control
+    #  failed, which is precisely the "do not leave it 0: that writes phys 0" trap grok named.  The
+    #  value below puts 0x10 in the HIGH word so re_linear_a[0] = 0x10.
+    c  = store(A, RE_LINEAR_A, 0x0000001000000000, op=OP_SD_T0_A3)  # sd: a 4-byte sw is DECLINED here
+    c += store(A, DST_KSEG1, DST_PAINT)
+    c += store(A, SRC_KSEG1, SRC_VAL)
+    c += store(A, DE_MODE_DST,   MODE_LIN_A)
+    c += store(A, DE_MODE_SRC,   src_mode)
+    c += store(A, DE_DRAWMODE,   DRAWMODE)
+    c += store(A, DE_XFER_ADDR,  SRC_OFS)              # linear: src_x = addr_src, src_y = 0
+    c += store(A, DE_XFER_STEPX, 4)                    # must equal src bufdepth or the XFER arm warns
+    c += store(A, DE_FG,         FG_VAL)               # what a declined GET leaves in `color'
+    c += store(A, DE_XVERTEX_0,  0x00000000)           # (x1,y1) = (0,0)
+    #  *** (x2,y2) = (0,3): ONE COLUMN, FOUR ROWS.  The height is load-bearing and the width must
+    #  NOT be used instead. ***  `lin_b diag once' pins that the announce is LATCHED, and its channel
+    #  is the announcement COUNT -- which cannot vary at all if the rectangle is one pixel, because an
+    #  unlatched announce then also fires exactly once.  Measured: with (0,0)-(0,0) the M_NOLATCH
+    #  mutant scored 8/8, a clean escape, and the row was VACUOUS BY CONSTRUCTION.
+    #  It is the HEIGHT and not the width because LIN_A addressing is `ofs = x & 4095' -- y is
+    #  ignored -- so four ROWS write the same byte four times (the value oracle survives) while four
+    #  COLUMNS would write overlapping bytes at ofs 0..3 and destroy it.
+    c += store(A, DE_XVERTEX_1,  0x00000003)           # (x2,y2) = (0,3): 4 pixels, all at ofs 0
+    c += store(A, DE_PRIM_START, PRIM_RECT)            # PRIMITIVE|START fires the draw
+    return c
+
+print("sgirandompixel RUNG-3 WITNESS -- binary=%s label=%s" % (BIN, LABEL))
+print("%-16s %-12s %-12s %-44s %s" % ("row", "got", "want", "note", ""))
+
+# ---------------------------------------------------------------- controls
+A = Addr(CODE)
+t, alive = session(store(A, SCRATCH, LIVE_VAL) + load(A, SCRATCH) + ["print v0"])
+row("live", printed(t, "v0") if alive else "died", "0x%x" % LIVE_VAL,
+    "LIVENESS: guest store then load, through RAM")
+
+A = Addr(CODE)
+t, alive = session(load(A, DE_STATUS) + ["print v0"])
+row("devsig", printed(t, "v0") if alive else "died", DE_STAT,
+    "DEVSIG: CRIME_DE_STATUS reads 0x1e000000; RAM reads 0")
+
+# ---------------------------------------------------------------- the accept control
+
+
+• Excellent — several important findings:
+
+  1. **`random()` IS seeded** at startup (`srandom(tv.tv_sec ^ getpid() ^ tv.tv_usec)`) unless `-D` is passed. So random() varies across runs in default invocations → a determinism-across-runs oracle DOES detect sgirandomcolour. But for sgirebufuninit (stack reuse), the stale bytes are deterministic across runs given the same guest program — so the "shared determinism oracle" the brief floats in Q6 would be VACUOUS for sgirebufuninit (buggy build passes it). That settles Q6 against merging on the letter's own terms. Good — evidence-based.
+
+  Wait, actually let me be careful: is the stale-stack content really run-deterministic? The host stack content at the same call depth for the same guest instruction stream — yes, deterministic given deterministic emulation (same binary, same guest ops). Stack addresses may vary with ASLR but CONTENT is prior-frame data → same values. First-call content could differ (env/argv layout) but in the loop it's previous pixels. So yes, a determinism oracle passes the buggy build → vacuous for sgirebufuninit. For sgirandomcolour, random() with time/pid seed varies → determinism oracle catches it. So one shared oracle does NOT cover both with teeth. Q6: keep separate — OR merge only if the detector uses the known-content oracle for sgirebufuninit and determinism for sgirandomcolour, which is two oracles, defeating the merge. The letter is right.
+
+  2. **Depth field 3 is NOT documented**: crmfbreg.h defines DE_MODE_BUFDEPTH_8/16/32 (0x000/0x100/0x200) — NO DE_MODE_BUFDEPTH_64. Similarly MTE_DEPTH_8/16/32 only, and CRMFB_FRM_TILESIZE_DEPTH_8/16/32 only. So depth field 3 (`0x300`) is an UNDOCUMENTED value! This directly contradicts the brief's framing in §3c ("guest-reachable through documented registers with no undocumented value anywhere") and Q5's "argument for higher: ... no undocumented value". The FIELD is documented; the VALUE 3 is not in the header. Hmm — but wait: the brief's PATH A claim says "With the depth field = 3 (bufdepth 8), NO colour arm writes buf[4..7]". And §3a PATH B uses depth field 0 (bufdepth 1) = DE_MODE_BUFDEPTH_8 = 0x000, which IS documented! PATH B's mismatch: colour RGBA (documented) + bufdepth 8bpp (documented value DE_MODE_BUFDEPTH_8) — two individually documented values whose COMBINATION is mismatched. So PATH B is reachable with all-documented values. PATH A at depth 3 uses an undocumented value... BUT PATH A is ALSO reachable via CI at depth field 1 or 2: CI (documented, 0x00) + DE_MODE_BUFDEPTH_16/32 (documented) → CI fills buf[0], writes 2/4 bytes → buf[1..] leak. And the MTE path generates exactly CI colour with depth fields 0-2 documented... MTE depth field 3 (0x300) also undocumented per MTE_DEPTH_* defines (only 8/16/32). So:
+     - PATH A with all-documented values: CI + BUFDEPTH_16 or _32 → leaks buf[1..3]. ✓ documented.
+     - PATH A maximal (8 bytes): needs depth 3 = undocumented value. #100's comment asserts bufdepth can be 8; the header documents only up to 32. So the "8 is reachable" premise: reachable in the CODE (no guard) ✓, but NOT a documented value. The brief's Q1.5 asks "is depth field 3 actually reachable, or does something upstream reject it?" — answer: reachable in code, nothing rejects it, but it is NOT a header-documented value; the honest statement is "no guard rejects it; the header documents only 8/16/32bpp". The brief's claim "guest-reachable through documented registers with no undocumented value anywhere" is TRUE for PATH B (RGBA + BUFDEPTH_8... wait, is RGBA + 8bpp a "documented combination"? The values are individually documented; their combination is guest-chosen. The brief's claim was about values, so OK for PATH B) but FALSE for the depth-8 form of PATH A. However PATH A survives on documented values via CI+16/32bpp. So the finding stands but §3c's "no undocumented value anywhere" needs qualification: PATH A's maximal form (and the 8-byte array's raison d'être) rests on an undocumented value that nothing rejects. This is exactly the kind of premise-slip the brief asked seats to catch. It doesn't kill the round — it reprices the severity language and the witness row choice (0x1320 uses the undocumented depth-3 value; a CI-based row like 0x1120? no — CI is 0x00 colour: mode = LIN_A 0x1000 | BUFDEPTH_32 0x200 | CI 0x00 = 0x1200 → fills buf[0], writes 4 → leaks 3 bytes with all-documented values).
+
+  3. The probe's XFER_STEPX = 4 "must equal src bufdepth or the XFER arm warns" — note: with src_mode = 0x1020 (bufdepth 1), step_x must be 1, else fatal (announce-only, continues — fatal doesn't exit, so the draw still happens; but the probe wants clean output). So "ONE CONSTANT CHANGED" is slightly optimistic: for a PATH B witness via XFER, DE_XFER_STEPX must change too (4→1) to keep step_x == src_bufdepth, or accept the announce. Minor. Also the probe's setup paints SRC and DST and uses (x2,y2)=(0,3) four rows at ofs 0 — for a buf-depth witness the addressing details differ (ofs = x & 4095 with x stepping by step_x per column...). Anyway — apparatus reuse claim basically holds; "one constant" is a slight undercount (two registers: MODE and STEPX, or use the LINE/RECT PUT path for PATH A which needs no XFER).
+
+  Also note the probe comment documents an important precedent: the oracle-discipline (height load-bearing, vacuity-by-construction measurement) — consistent with this brief's concerns.
+
+  4. Q1.3 settled: probe writes re_linear_a[0] = 0x10 → tileptr = 0x10 << 12 = 0x10000 (64 KiB, physical) → RAM on IP32 (RAM starts at 0x0... actually IP32 memory at 0x00000000? The probe stores DST_KSEG1 — kseg1 0xa0000000+ physical. tileptr 0x10000 = low RAM). So in the probe configuration, tileptr+ofs is RAM → #95 pre-zero does NOT run for PATH B (device branch not taken) — buf[0..bufdepth-1] filled by memblock copy, buf[bufdepth..7] stale stack. If a guest points tileptr at a device window, #95 zeroes [0..len-1] only. Either way, §3b holds. And note the brief's §3b worry "if RAM, #95 does not run at all and PATH B is worse" — confirmed RAM in the witness config; the consequence is only about what the stale bytes are (stack either way for indices ≥ len; for indices < len, real memory content). Settled.
+
+  5. Q1.1: buf uninitialised on every path — confirmed: declaration at 284 no init; no memset on buf anywhere; COPTIM has no -ftrivial-auto-var-init; buf's address is taken (passed to memory_rw) so it is stack-resident. ✓ TRUE.
+
+  6. Q1.2: #95 inapplicable — confirmed at memory_rw.c:485-492: `if (writeflag == MEM_READ) memset(data, 0, len);` — device branch only, len = bufdepth. Path A: MEM_WRITE → no. Path B: covers [0..bufdepth-1], combine reads up to [3] — bytes ≥ bufdepth untouched. ✓ TRUE. The class-closure claim "Closes the whole class" in CHANGELOG #95 is thereby falsified for this function — the brief's central contradiction is real.
+
+  7. Q1.4: independent fields, no guard — confirmed: bits 4-7 and 8-9 of the same word, de_reg stored verbatim, only cross-check in the subsystem is step_x vs src_bufdepth (announces, continues). ✓ TRUE.
+
+  8. Q1.5: depth 3 reachable — nothing rejects it (MODE registers stored verbatim; no mask on bits 8-9). BUT not header-documented (BUFDEPTH_8/16/32 only). #100's array growth to buf[8] is evidence the project already believed 8 reachable. Reachable ✓; "documented" ✗.
+
+  9. Q1.6: YCRCB unimplemented — confirmed (grep 0; default arm).
+
+  Also the brief §6 scanner claims: verified the four safe verdicts. The scanner limitations are honestly stated; the name-keyed-map bug disclosure checks out (data[8] at 134, data[32] at 228 in dev_sgi_mec.c).
+
+  One more check I should do: the brief says "all seven call sites pass one of them" (ordinary device registers / derived). Verified: 5 in draw_primitive (dst_mode, src_mode from de_reg), 2 in do_mte_transfer (constructed from mte mode). ✓ 7 sites total (794, 840, 855, 860, 906, 1359, 1364).
+
+  Also confirm no OTHER initialisation of buf via... the function has one declaration. ✓.
+
+  Now Q2: smallest re-opening edit. Answer: `memset(buf, 0, 4)` — keeps a memset, "covers the combine width", reopens PATH A at depth 8 while a detector that only witnesses PATH B (GET at 0x1020) stays green. Dual: `memset(buf, 0, bufdepth)` reopens PATH B while a PATH-A-only detector stays green. Also `uint8_t buf[8] = {0}` moved into a helper that... no, keep it simple. The row expected to stay green: the single-path detector row. Design consequence: the detector must pin BOTH paths AND pin that the zeroing is sizeof-wide or that consume≤fill structurally... a detector can only observe behaviour: it needs a PATH A row (0x1320 PUT → assert written tail bytes are the FIXED policy value, e.g. 0) and a PATH B row (0x1020 GET → assert combined colour's high bytes are policy). `memset(buf,0,4)` fails the PATH A row; `memset(buf,0,bufdepth)` fails the PATH B row. Good.
+
+  Q3: missing members? Add: (6) consume-side clamp — build *color from only the bytes actually read (zero-extend), transfer unchanged. Observably ≈ (2) for GET but leaves PUT... no wait, that's GET-only; for PUT the arms already fill ≥... hmm, (6) as stated fixes only PATH B. Also (7): transfer-side pairing — transfer min(bufdepth, arm width) on PUT AND read-then-zero-extend on GET — that's (5)+(6). The option set as enumerated covers the space reasonably: {pre-zero all, pre-zero len, pad fills, decline, clamp transfer}; the consume-side clamp is the one unnamed member. In-tree idiom: latched decline (#497–#500, sgirandompixel) is the dominant precedent for "guest-chosen combination we don't model"; step_x vs src_bufdepth at :734 is the one existing cross-field check and it announce-and-continues (does NOT reconcile). No in-tree precedent for reconciling two mode fields into agreement. So: idiom favours (4) latched decline of mismatched pairs; but (1) memset(sizeof) is the smallest behavioural delta that keeps every documented combination functioning and makes the guest see zeroes — with the honest "hardware unknown" comment the brief describes. The project precedent ("pick the one that is not UB and say so") supports (1) or (4). I'd flag: (4) changes behaviour for CI+16/32bpp — a combination NetBSD's actual crmfb driver... does real hardware CI mode use bufdepth... CI is 8bpp colour-index: CI+depth-1 is the MATCHED case; CI+16/32 is the mismatch. Declining mismatched CI could break a real driver IF one exists that uses it — unknown. memset (1) never breaks a combination, just zeroes. Note (1) costs 8 bytes per pixel — negligible. Also note interaction with sgirandomcolour: memset does NOT remove random() from the default arm — the brief says so correctly. And option (4) with latch would ALSO incidentally cover YCRCB? No — YCRCB is a colour-mode default, not a depth mismatch; decline-pair checks colour/depth agreement, YCRCB at MATCHED depth (0xf0 + depth 4 → default arm random 4 bytes, write 4) still random. Correct: separate.
+
+  Q4: answered above. Key deliverables:
+  - 0x1020 IS sufficient to reach PATH B (arithmetic verified: LIN_A | depth 0 | RGBA). 
+  - The known-stale-content oracle is sound; refinement: in the XFER RECTANGLE loop the immediately-preceding same-slot call is the pixel's own PUT, so the carrier for the GET's stale bytes is the PUT's encoding — controllable precisely. Better: make the carrier a deliberate paint PUT (matched depth, distinctive colour) immediately before, via a separate primitive... or simply rely on iteration N's PUT → iteration N+1's GET adjacency: paint pixel content known → assert GET result bytes 1..3 equal the previous pixel's known colour bytes, which pixel 2's own memory does not hold. That's positive identification. Frame-reuse made a CONTROL: add a row asserting the carrier mechanism itself (e.g. paint-then-read with the read's known bytes) so that if frame reuse ever breaks the control goes red, not silent green. This answers "is there a way to make the carry-over ARCHITECTURAL" — no, not fully (C gives no guarantee), but the carrier can be made the IMMEDIATELY PRECEDING call at the same site (minimal clobber window) and can be pinned by an explicit control row. 
+  - PATH A witness: 0x1320 PUT; carrier = a depth-8 GET (0x1320 GET fills buf[0..7] from known memory) immediately preceding; assert dst tail bytes == the GET's known source tail bytes. Caution: with XFER src and dst BOTH depth 8 and RGBA, the leak output coincides with a hypothetical correct 8-byte copy — the oracle discriminates bug-vs-FIXED (memset → 0; decline → unchanged; pad → replicated colour), not bug-vs-correct-hardware. Since hardware truth is unknown, the detector's post-fix expectation must encode the CHOSEN policy. Also note: PATH A does NOT need XFER at all — a plain RECTANGLE PUT at dst_mode 0x1320 works; and the carrier can be a preceding ROP GET at the same depth... simpler: two rectangles: rect1 GETs (ROP_XOR with dst=0x1320... the GET reads dst pixel itself — vacuous risk)... simplest decoupled carrier: XFER with src 0x1320 (GET fills 8 from src) + dst 0x1320 (PUT writes 8). The coincidence caveat above applies only to the "what would hardware do" question, not to bug-vs-fix discrimination. OK.
+  - Is there a simpler oracle? Alternative: assert on the ANNOUNCE (if fix = decline, the latch message IS the oracle — deterministic, no frame reliance). That's for disposition (4). For (1) memset, behavioural oracle needed. Not simpler, just different.
+
+  Q5: severity. My call: MEDIUM-HIGH is honest; HIGH is defensible on the ledger because it falsifies #95's "closes the whole class" sentence — but the brief's own "documented values" framing needs correction (PATH A maximal form needs undocumented depth 3; CI+16/32bpp documented form leaks 3/1 bytes; PATH B is all-documented). Impact: 4 bytes/pixel of stale stack into guest-readable memory, content mostly prior pixels — weak disclosure, strong correctness bug. Also note: it's not just determinism — for a GUEST trying to read host secrets, the channel is real but low-quality. I'd grade: correctness HIGH-ish, security MEDIUM. Net: HIGH on this fork's ledger is acceptable given the fork's mandate (it's a security-audit fork — GXEMUL-SEC), but the ledger entry should carry the corrected reachability framing.
+
+  Also the brief's §3c claim "all seven call sites pass one of them [ordinary device registers]" ✓ verified.
+
+  Something ELSE found while verifying (the brief invites this):
+  a) `do_mte_transfer` line 1348: `if (depth == 4)` — depth = 8 << field ∈ {8,16,32,64} can NEVER equal 4 → the RGBA hack is DEAD CODE, so the MTE path always uses CI colour (0x00) → MTE COPY/fill at depth 16/32 ALWAYS takes the CI arm → writes bufdepth (2/4) bytes with only buf[0] set → PATH A fires on the MTE path with fully documented mode construction. That's a third reachability vehicle the brief didn't mention (it strengthens, not weakens, the finding — and it's all-documented-values). Wait, actually check: MTE path colour bits are 0 unless depth==4 sets RGBA — depth is `8 << ((mode & 0x300) >> 8)` = 8/16/32/64 — never 4 → yes, dead condition; colour always CI. So every MTE_TLB_A/B/C fill with MTE_DEPTH_16/32 leaks buf[1..3] per pixel (documented MTE_DEPTH values!). This is the strongest reachability evidence: PROM/NetBSD crmfb_fill_rect uses this path. And it means PATH A does not depend on undocumented depth 3 at all — the brief over-relied on depth-8 in §3a's framing ("NO colour arm writes buf[4..7]") though its table does list "CI leaks at any depth above 1". The witness could be MTE-based too, but the existing probe is DE-based; fine.
+
+  Hmm wait, one more nuance: is `depth == 4` maybe intended as "32bpp" (4 bytes)? depth variable = 8<<field is in BITS (8/16/32/64 bpp). depth==4 would be "4 bits" — nonsense; dead code confirmed. It's a pre-existing upstream oddity, not this round's defect, but it DETERMINES the colour arm the MTE path takes (CI). Worth filing as an observation (maybe already filed? It's the "Hack" comment's condition — the comment says "this makes sure that we copy 32 bits when doing 32-bit transfers" — depth is in bits so the intent was depth==32! The condition should be `depth == 32`. As written it's dead; if it were depth==32, MTE 32-bit transfers would use RGBA (matched, fills 4, writes 4, no leak). As it stands, CI + depth32 → bufdepth 4, fill 1, write 4 → leaks 3. So the dead `depth == 4` is load-bearing for the leak's MTE instance. Flag as a sibling observation — DO NOT fix in this round (scope), but name it.)
+
+  b) PATH B GET combine for RGB uses buf[1..3] (not buf[0]) — at matched depth 4 that's fine; it means RGB's own byte layout differs, but no leak at matched depth. Fine.
+
+  c) The brief says the default GET arm also has the random() shape? No — GET default combines buf bytes (no random), plus fatal. The random is only in the PUT default. The brief's Q6 says "that switch's default: does buf[0..3] = random() and writes them" — PUT switch ✓. GET default: deterministic combine of (possibly stale) bytes — that's PATH B family. ✓.
+
+  d) Check §3's claim about grep -c memset... "the only memset calls in dev_sgi_re.c are on the device struct, on rop_used, and on zerobuf" — verified: 657 (struct), 823/889 (rop_used), 1431 (zerobuf). ✓ four calls, three targets.
+
+  e) The freeze artifact matches the in-tree function ✓.
+
+  f) §C0: not shipped ✓ (git log, CHANGELOG grep 0, three probes exist).
+
+  Now — the "two prior rounds" premise attack (#95 + #100): #95 falsified-for-this-function as shown. #100: edited THIS array (buf[4]→buf[8]) — the #100 change prevents OVERFLOW (bufdepth 8 into buf[8]) but creates the condition where 8 bytes are WRITTEN while only 4 are filled: before #100, bufdepth 8 would overflow the stack buffer (worse); after, it's a clean leak. The brief's framing is accurate.
+
+  Am I missing any path where buf gets fully initialised? Compiler: -O3, address taken → real stack. No auto-var-init. ✓.
+
+  One more possible premise-slip to check: the brief says PATH B's combine builds *color which "the caller then STORES" — for XFER RECT: GET writes &color (line 860), then PUT(906) encodes color into buf and writes to dst ✓. For the ROP GET (794/855): writes &oldcolor, then oldcolor is combined into color (XOR etc.) and PUT — also stored ✓. MTE GET (1359): writes &bg, then PUT writes &bg to dst ✓. So every GET consumer stores. ✓.
+
+  Also: "NO colour arm writes buf[4..7] — not one of the five" — verified across CI(1)/RGB(4)/RGBA(4)/ABGR(4)/default(4). ✓.
+
+  Also verify tilewidth division for bufdepth 8 in NON-linear modes: tilewidth = 512/8 = 64; xofs = (x%64)*8 ≤ 504; ofs = 512*127 + 504 = 65535+... = 65024+504 = 65528; +8 bytes write ≤ 65536 — tile is 512 bytes wide × 128 high = 65536 bytes. So ofs+8 ≤ 65536 exactly — in-tile. Fine, no overflow of the tile addressing. OK.
+
+  Also the claim "A seat that re-derives a premise..." — I've enumerated:
+  - PATH A leak matrix: colour × depth: CI×{2,4,8} leaks {1,3,7} bytes; RGB/RGBA/ABGR/default ×{8} leaks 4; (×{1,2,4} no leak — fill ≥ transfer). Wait RGB at depth 1: fills 4, writes 1 — writes buf[0] only — no leak (under-transfer). ✓.
+  - PATH B: combine width 4 (RGB uses 1..3, RGBA 0..3, ABGR 0..3, default 0..3) vs fill bufdepth: depth 1 → 3 stale bytes; depth 2 → 2 stale; depth 4/8 → 0. CI: uses buf[0] → 0 stale at any depth. ✓ matches brief's shape.
+
+  Verdict: The finding is REAL, both paths verified against the tree. #95's inapplicability confirmed. Premise corrections needed:
+  1. §3c/Q5 "no undocumented value anywhere": FALSE for depth field 3 (BUFDEPTH_64 undocumented). PATH A's maximal form rests on it; but PATH A stands on documented values via CI (and the MTE path — dead `depth == 4` — forces CI always). PATH B all-documented. Fix the sentence, not the round.
+  2. Q6's proposed shared determinism oracle is VACUOUS for sgirebufuninit (stack reuse deterministic across runs) and only works for sgirandomcolour (srandom seeded with time/pid — verified main.c:688-691, unless -D). Keep the letter: separate rounds.
+  3. "One constant changed" undercounts slightly: XFER-based witness at depth 0/1 must also change DE_XFER_STEPX to keep step_x == src_bufdepth (or tolerate the announce). PATH A via plain RECT PUT needs no XFER changes.
+  4. Q4: the carrier analysis needs the refinement that in the XFER loop the preceding same-slot call is the PUT; make frame reuse itself a control row.
+
+  Everything else checks out: freeze fidelity, mode arithmetic (0x1220/0x1320/0x1020 — enumerated), reachability, class scan (all four "safe" verdicts independently verified), scanner-defect disclosure accurate, §3b logic airtight.
+
+  So: GO-WITH-CHANGES. The changes: correct the "no undocumented value" framing; reject the Q6 merger explicitly (with the srandom evidence); adjust witness design notes (STEPX, carrier control row); record the dead `depth == 4` observation as a filed sibling (not in scope).
+
+  Q2 answer: smallest re-opening edit = `memset(buf, 0, 4)` (or `memset(buf, 0, bufdepth)` for the other path); detector must pin both paths' post-fix policy bytes. Also `memset(buf,0,sizeof buf)` placed only in ONE branch (put or get) — a future "tidy" refactor could scope it to one side. Row expected to stay green: whichever single-path detector row.
+
+  Q3 answer: add the consume-side clamp member (zero-extend *color from the bytes actually read) — observably ≈ (2) for GET only. In-tree precedent grep: no reconcile-into-agreement precedent; house idiom is latched decline (#497–#500, sgirandompixel — all in THIS file), plus announce-and-continue at :734 (the only existing cross-field check: step_x vs src_bufdepth). Dispositions (1) and (4) both defensible; (1) preserves all documented combos, (4) matches idiom but changes observable behaviour for CI×16/32 (which the MTE path currently EXERCISES — a decline there would fire on... does any real guest use MTE fill with DEPTH_16/32? The PROM zero-fill uses LINEAR path (depth must be 8, i.e. field 0 → 8<<0=8 ✓ that's why the check passes). TLB_A/B/C fill path with depth 16/32 — NetBSD crmfb_fill_rect uses it per the comment at 1322. If NetBSD uses 32bpp fills via MTE TLB path, disposition (4) would announce-decline on a REAL driver — that argues for (1) memset over (4) decline. Good design input: check what NetBSD crmfb does... can't easily; but the risk alone favours (1). Also (1) is what #95's ethos ("deterministic zeroes") suggests. Recommend (1) with the honest hardware-unknown comment + a comment that the transfer width and fill width intentionally differ.
+
+  Wait — careful: does disposition (1) memset change CORRECT-case behaviour? Matched cases: all written bytes were already filled → memset is invisible. CI×depth1: invisible. So (1) only changes the mismatched cases (stale → 0). Minimal blast radius ✓. And per-pixel cost trivial.
+
+  Also for Q2, note: the fix at (1) is one line; the "wrong SIZE" mutant the brief worries about (sizeof vs bufdepth) — with (1)=sizeof(buf), the mutant to bufdepth reopens PATH B; detector PATH B row catches it IF the row asserts the post-fix policy bytes (zeroes in the combined colour) rather than mere determinism. Because post-fix, PATH B GET at 0x1020 yields *color = b0<<24 | 0 — deterministic; the mutant yields stale bytes — ALSO deterministic (stack reuse). So a determinism oracle CANNOT catch the mutant; only a value oracle (assert specific zero bytes / assert paint-carrier bytes pre-fix vs zero post-fix... hmm the detector post-fix asserts *color's low 24 bits == 0; mutant → low 24 = previous pixel's colour bytes ≠ 0 (chosen ≠ 0). Works IF the paint colour's bytes 1..3 are non-zero AND the assertion is value-based. So: detector must assert VALUES, not determinism — same lesson as Q6.
+
+  I think I have everything. Also quickly double-check the "seven of nine seats confirmed a false premise" warning — my independent re-derivation found the premises hold except the "no undocumented value" overreach. Good.
+
+  Also should I check whether there's an existing detector-row convention name to suggest? Not needed.
+
+  One more: brief §7 "Cases 0-2 ... guest must first arrange the valid bit. Case 4 FORCES it" ✓ verified (line 230: tileptr = 0x80000000 | ...). And case 4's bound tile_nr >= 32 return ✓ (227-229). And the y>>7 etc. fine.
+
+  Also the brief's §4 freeze claim "Every exit path is present" ✓ (early returns at 199-200, 217-218, 228-229, 271, 279 + common tail).
+
+  Write the review now. Verdict line first per the brief's instruction. Structure by Q1–Q6 + premise audit + found-elsewhere. Keep it tight but complete. End with GO-WITH-CHANGES (the brief asks to END with the verdict line, but also says "VERDICT LINE FIRST, so your answer survives truncation" — do both: first and last).
+
+• VERDICT: **GO-WITH-CHANGES** — the defect is real, both paths verified against the tree, `#95`'s inapplicability confirmed; but the brief overclaims "no undocumented value anywhere", its Q6 shared-oracle idea is vacuous for this defect (proven below), and the witness-cost claim undercounts. Details per question.
+
+  ---
+
+  ## Premise audit (§C0 / "two prior rounds")
+
+  - **Not shipped: confirmed.** `git log` on `GXEMUL-SEC/src/devices/dev_sgi_re.c` gives `840f3d0 … #500`, `grep -c sgirebufuninit CHANGELOG.md` = 0, three sibling probes exist. The freeze artifact `regress/artifacts/sgirebufuninit/enclosing_function.txt` **diffs clean** against `dev_sgi_re.c:184-340` — the inlined §4 is verbatim, all exit paths present.
+  - **#95 falsified for this function — confirmed, and strengthened.** The pre-zero is at `GXEMUL-SEC/src/cpus/memory_rw.c:485-492`: inside the device-dispatch branch, `if (writeflag == MEM_READ) memset(data, 0, len)`. PATH A is `MEM_WRITE` — untouched. PATH B passes `len = bufdepth`, so bytes `≥ bufdepth` are untouched **even when the branch runs**. The CHANGELOG's "Closes the whole class" sentence is thereby wrong for this function. The brief's central contradiction is real.
+  - **#100 confirmed**: the `uint8_t buf[8]` declaration at line 284 carries the `#100` comment; the array growth converted an overflow into a clean leak, as the brief says.
+
+  ## Q1 — the six premise questions
+
+  1. **`buf` uninitialised on every path: TRUE.** Declaration at :284 has no initialiser; the only `memset`s in the file are :657 (device struct), :823/:889 (`rop_used`), :1431 (`zerobuf`). Build flags (`Makefile` COPTIM `-O3 -fstrict-aliasing …`) contain no `-ftrivial-auto-var-init`. `buf`'s address is taken, so it is stack-resident.
+  2. **#95 inapplicable: TRUE**, per above. Neither sub-case of Q1.3 rescues it.
+  3. **RAM or device — settled, and the brief's "not guessing" can now be closed: it is the guest's choice, and the defect survives both.** `tileptr` is guest-programmed (TLB entries / `re_linear_a[] << 12`). In the probe's own configuration (`re_linear_a[0] = 0x10` → physical 0x10000) it is **RAM**, so #95's branch never even runs for PATH B there; the memblock path fills `buf[0..bufdepth-1]` with real memory. If pointed at a device window, #95 zeroes only `[0..len-1]`. Either way, indices `≥ bufdepth` are stale stack. §3b holds unconditionally.
+  4. **Fields independent, no guard: TRUE.** `de_reg[]` stores are verbatim (len==4/8 arms, :978-989); `CRIME_DE_MODE_SRC/DST` cases are `debug()`-only (:1033-1043). The only cross-field check in the subsystem is `step_x != src_bufdepth` (:734) — announce-and-continue, unrelated pair. The `>> 8) & 3` grep returns exactly the decode, the #100 comment, and the two XFER siblings. **All seven call sites** (:794, :840, :855, :860, :906, :1359, :1364) pass a guest register or a mode constructed from one.
+  5. **Depth 3 reachable: TRUE in code — but here is the brief's one real premise error.** Nothing masks bits 8-9, so `bufdepth` 8 is reachable. However `crmfbreg.h` documents only `DE_MODE_BUFDEPTH_8/16/32` (:325-327) and `MTE_DEPTH_8/16/32` (:268-270) — **depth field 3 is an UNDOCUMENTED value**. §3c's "no undocumented value anywhere" is false for PATH A's maximal (8-byte) form. What saves the finding: PATH A is reachable with **all-documented values** via `CI` (0x00) × `BUFDEPTH_16/32` (fills 1, writes 2/4), and PATH B (`RGBA` × `BUFDEPTH_8`, both documented) needs nothing undocumented at all. Correct the sentence; the round stands.
+  6. **YCRCB unimplemented: TRUE.** `grep -c YCRCB dev_sgi_re.c` = 0; the switch has four cases + default.
+
+  Enumeration check (§3a's "exactly two"): PUT leak matrix = CI×{depth 2,4,8} leaking {1,3,7} bytes, and RGB/RGBA/ABGR/default ×{depth 8} leaking 4; under-transfers (fill 4, write 1/2/4) leak nothing. GET leak = any non-CI arm × depth {1,2}, 3 or 2 stale bytes; CI GET never leaks; depth 4/8 GETs over-fill harmlessly. Two families, as claimed.
+
+  ## Q2 — smallest re-opening edit
+
+  `memset(buf, 0, 4)` — a plausible "cover the combine width" refactor — keeps a memset, fixes PATH B, silently reopens PATH A at depth 8. Dual: `memset(buf, 0, bufdepth)` fixes PATH A, reopens PATH B. A third: a `memset(buf,0,sizeof buf)` scoped into one branch only by a future tidy-up. The row that stays green is whichever single-path detector row exists — so the detector **must pin both paths, and must assert VALUES, not determinism**: post-fix PATH B at `0x1020` yields `*color = b0<<24 | 0`; the `bufdepth`-sized mutant yields the previous pixel's bytes, which are *also deterministic* under stack reuse. A "bytes not stale"/determinism check cannot distinguish fix from mutant. That is the concrete design consequence.
+
+  ## Q3 — option-set completeness
+
+  One unnamed member: **consume-side clamp** — build `*color` from only the bytes actually read (zero-extend). Observably identical to (2) on the GET side, no PUT effect; it collapses into (2), so the set is effectively complete.
+
+  Idiom grep results: there is **no in-tree precedent for reconciling two independent guest-chosen mode fields into agreement**. The precedents are: latched decline (#497–#500, sgirandompixel — all in this file), announce-and-continue (`step_x` check, :734), and clamp-to-buffer (OB-14, a length, not a mode pair). Note a force against disposition (4) that the brief didn't weigh: **the MTE path always exercises the mismatched CI combination** (next paragraph), so a decline-pair latch would announce on the `crmfb_fill_rect`-style path a real OS is documented to use (comment at :1322). That pushes to **(1) `memset(buf, 0, sizeof buf)`**: invisible in every matched case, deterministic zeroes in mismatched ones, honest "hardware behaviour unknown" comment — the disposition this project has taken before, and the one #95's own ethos suggests.
+
+  ## Found while verifying (the brief asked)
+
+  **`do_mte_transfer`'s `if (depth == 4)` (:1348) is dead code, and it is load-bearing for this finding.** `depth = 8 << ((mode & 0x300) >> 8)` ∈ {8,16,32,64} — never 4 (the comment's intent was clearly 32 *bits*). So the MTE TLB_A/B/C path **always** runs the CI arm, and MTE fills at documented `MTE_DEPTH_16/32` write 2/4 bytes with only `buf[0]` set — PATH A on a third vehicle, with fully documented values, on the path NetBSD's `crmfb_fill_rect` uses. This **strengthens** the finding and removes its dependence on undocumented depth 3 entirely. Do not fix it in this round; file it as a sibling observation.
+
+  ## Q4 — witness
+
+  - Mode arithmetic enumerated: `0x1220`→tlb 4/depth 2/RGBA ✓, `0x1320`→4/3/RGBA ✓, `0x1020`→4/1/RGBA ✓. Case 4 forces the valid bit (:230) ✓. `0x1020` is sufficient for PATH B.
+  - The known-stale-content oracle is sound, with one refinement the brief missed: **in the XFER rectangle loop the immediately-preceding same-slot call is the pixel's own PUT (:906), not the previous GET** — so the carrier for a GET's stale bytes is the previous iteration's *PUT encoding of a colour the probe chose*. That is tighter than the brief's framing: the carrier is the adjacent call, and its content is probe-controlled exactly. Make **frame reuse itself a control row** (paint known bytes → assert the mismatched read picks *those* bytes pre-fix), so if reuse ever breaks, a control goes red instead of the witness passing silently. That answers "architectural, not incidental": C gives no guarantee, but same-caller-same-depth adjacency plus an explicit carrier control is as close as a probe gets.
+  - PATH A's witness needs a depth-8 GET (`0x1320`) immediately before the depth-8 PUT with src ≠ dst, asserting dst tail == the GET's known source tail. Caveat to state in the round: when src and dst layouts align, the leak output *coincides* with a hypothetical correct 8-byte copy — so that oracle discriminates **bug-vs-fixed-emulator** (memset→0, decline→unchanged, pad→replicated), not bug-vs-hardware. With hardware truth unknown, the post-fix expectation encodes the chosen policy; say so in the detector comment.
+  - "One constant changed" **undercounts**: an XFER-based PATH B witness at depth 0/1 must also change `DE_XFER_STEPX` (the probe sets it to 4 with the note "must equal src bufdepth", since :734 announces otherwise — and `fatal()` does not exit, confirmed at `src/core/debugmsg.c`, so the draw proceeds regardless, but the row would be dirty). A PATH A witness via plain RECT PUT needs no XFER registers at all. Cost class unchanged; the "one constant" line should say "one register plus the step_x twin, or zero via the PUT-only path".
+
+  ## Q5 — severity
+
+  Talk-down partially warranted. As a disclosure channel it is weak: 4 stale bytes per 8-byte pixel write, content usually prior pixels, guest controls cadence but not prior stack content. As a correctness defect it is strong: guest-reachable, deterministic wrong colours. The strongest argument for HIGH is not impact but that it falsifies #95's "closes the whole class" sentence in the same batch that edited this array. HIGH on the ledger is defensible for this fork's mandate — **provided the entry carries the corrected reachability framing** (PATH A maximal form needs undocumented depth 3; documented-forms: CI×16/32 and the MTE-CI vehicle; PATH B all-documented). Do not ship the entry with "no undocumented value anywhere" in it.
+
+  ## Q6 — one round or two
+
+  **Keep the letter: separate.** The proposed shared oracle — "destination deterministic across runs" — is **vacuous for sgirebufuninit and only toothed for sgirandomcolour, proven from the tree**: `srandom(tv_sec ^ getpid() ^ tv_usec)` runs at startup (`src/core/main.c:688-691`), so `random()` varies per run, but stale-stack reuse under a fixed guest program is run-*deterministic* — the buggy build passes a determinism oracle. One shared oracle that is weak for one member is the vacuity floor's problem, as the brief itself says. `sgirandomcolour` also has no witness and the `fatal()` at :313 falls through to the write (confirmed — `fatal` does not exit), so it is reachable but unwitnessed. Separate rounds; if ever merged, the detector needs the value-oracle anyway, which is two oracles in everything but name.
+
+  ---
+
+  **GO-WITH-CHANGES** — mandatory before firing: (i) strike/qualify "no undocumented value anywhere" per Q1.5; (ii) record the Q6 shared-oracle rejection with the `srandom` evidence; (iii) correct the witness-cost line (STEPX twin or PUT-only path); (iv) add the carrier-control row to the Q4 design and the bug-vs-fixed framing for PATH A; (v) file the dead `depth == 4` at :1348 as a sibling observation, out of scope. The defect itself, the #95 gap, the class scan, and both path analyses all verified against the tree.
+
+To resume this session: kimi -r session_48e6c585-e6d2-48c0-80e7-8457b98e79cf

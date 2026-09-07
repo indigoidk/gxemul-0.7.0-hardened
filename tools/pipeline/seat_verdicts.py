@@ -467,6 +467,14 @@ def main():
         #  is a verdict on that invocation, and the seat should be RE-FIRED ONCE
         #  before the round closes rather than recorded as gone.
         is_walled = _is_wall(t[-600:], t[-4000:]) and not v
+        #  *** A CONTENT-FILTER REFUSAL IS NOT A WALL AND IS NOT AN ANSWER. ***  Measured
+        #  2026-09-06: codex refused one brief three times; through panel.sh it wrote 150,372
+        #  bytes at 97%% novel and this tool called it `answered'.  The refusal carries NO quota
+        #  keyword, so the wall test misses it, and the seat streams its reasoning BEFORE the
+        #  filter fires, so the echo test misses it too.  Keyed on the vendor's own sentence.
+        is_refused = (not v) and (
+            "flagged for possible cybersecurity risk" in t[-4000:]
+            or "Trusted Access for Cyber" in t[-4000:])
         if recovered:
             #  Write it beside the raw envelope so the answer is READABLE, not just
             #  known to exist.  A seat whose answer nobody can open is, in practice,
@@ -491,6 +499,15 @@ def main():
                      "start ollama and re-fire ***"
                      if "ConnectionRefused" in err or "refused it" in err
                      else "*** SEAT DOWN -- transport/model error ***")
+            down += 1
+        elif is_refused:
+            #  Counted with the DOWN seats, not the walled ones: the remedies are opposite.  A wall is
+            #  waited out and re-fired unchanged; a refusal must be RE-ROUTED to a seat without this
+            #  filter (grok, kimi and the Ollama transports do not share it) or rewritten.  Neutralising
+            #  the vocabulary is NOT reliable -- it recovered five briefs and then failed on this one
+            #  twice, so the trigger can be the subject shape rather than a phrase.
+            state = ("*** SEAT REFUSED -- content filter, NOT a wall and NOT an answer: "
+                     "RE-ROUTE to a seat without this filter, or rewrite ***")
             down += 1
         elif is_walled:
             #  *** A WALL IS A MOMENT, AND THE FILE UNDER IT IS NOT NECESSARILY EMPTY. ***

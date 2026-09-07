@@ -215,9 +215,20 @@ OLLAMA3="minimax-m3:cloud"        # all FOUR are THINKING models; send no
 #  CLI walls again, set OLLAMA4 back to kimi-k3:cloud and the seat is COVERED rather
 #  than lost.  That is the sixth seat-failure class -- one transport walled while
 #  another is live -- and the whole point is that it is one line away.
-OLLAMA4=""   # OWNER DIRECTIVE 2026-09-04: the kimi CLI is on its WEEKLY wall; the
-                          # Ollama substitute covers the seat UNTIL 2026-09-05, then restore
-                          # OLLAMA4="" (the CLI is the seat again once the window resets).
+OLLAMA4="kimi-k3:cloud"   # *** RESTORED 2026-09-07: THE CLI HAS WALLED AGAIN, ON A NEW WEEKLY
+                          # WINDOW.  Measured, not inferred -- its answer file was 350 bytes reading
+                          # "403 You have reached your weekly (7-day) usage limit", and
+                          # seat_verdicts.py reported WALLED.  The window that the 2026-09-04
+                          # directive was waiting on DID reset -- the CLI answered 72 KB and 123 KB
+                          # earlier the same night -- and those answers are the likeliest reason the
+                          # new window is now spent.
+                          #
+                          # This is the SIXTH seat-failure class exactly as this file documents it:
+                          # one transport walled while another is LIVE.  curl localhost:11434/api/tags
+                          # lists kimi-k3:cloud, so the seat is COVERED rather than lost.  Note the
+                          # CLASS CHANGES with the transport: the substitute is PACKET-FED, so a kimi
+                          # answer credited as a REPO FACT while this line is set is the conflation
+                          # the doctrine forbids.  Blank it again when the CLI recovers.
 
 #  argv on Windows caps near 32 KB; the "$(cat brief)" seats fail above it.
 #

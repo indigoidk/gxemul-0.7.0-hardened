@@ -1,0 +1,189 @@
+I'll treat this as a real pass-2, not a ratification: first I'll pull HEAD/checkpoint/queue truth, then read the shipped product code and detectors against the brief's premises.Git from the shell was blocked, so I’m reading the shipped sources, detectors, and CHANGELOG directly and will re-derive the premises from those.The comments’ arithmetic checks out; next I’ll verify ncpus mutation, raise sites, and whether a one-token bound or `implemented` edit actually escapes the shipped detectors.**VERDICT: GO-WITH-CHANGES.** Both product fixes are in the right place. `#503`'s `ncpus` snapshot is stable. `#502`'s C diff delivers all seven classes at both sites — it is not a `#499` one-cell repair. The `#502` detector, asked of the shipped composite, has one clause-(d) mutant I predict sweeps **59/59**: `implemented = true` → `implemented = (cpu->machine->ncpus < 2)` on the seven arms. I could not build it (read-only seat; gates forbidden). If that score is real it is **L2 of the detector**, not of `cpu_m88k.c`. `#503`'s single-token / operand-swap set is closed on the counts the probe actually boots.
+
+I am the grok seat. I read `GXEMUL-SEC/src/` (line numbers match the brief, not a 2021 copy). I did not run a gate, a probe, or a mutant.
+
+---
+
+## Q1 — premise audit
+
+### `#503`: the guard is right, and the snapshot is stable
+
+`machine->ncpus` is assigned in three places, all before any device exists:
+
+| site | when |
+|---|---|
+| `main.c` `-n` | CLI, `parse_int_option(..., 1, 256)` |
+| `emul_parse.c` | config parse |
+| `emul.c` | `if (ncpus == 0) ncpus = 1`, then `cpu_new`, **then** `MACHINE_SETUP` → `device_add("luna88k")` |
+
+A grep of `ncpus =` under `GXEMUL-SEC/src/` finds no later write: not in the debugger, not in a guest path, not in a hotplug. The comment's premise holds. Capture at DEVINIT is a snapshot of a frozen value, not of a moving one.
+
+The walk bound and the connect predicates are the same **value**, not one field — also true, and worth keeping in that wording. Connect still reads `machine->ncpus` (`>= 2/3/4`, cpu0 unconditional); the walk reads `d->ncpus`. They match for every accepted count 1..4.
+
+Placement: the assignment sits **below** the `ncpus > 4` exit. The comment now says relocating it does not remove dependence on that exit. That is true: both placements die before any walk at `-n 5`. The second exit in `machine_luna88k.c` is also real. Deleting **both** is what would walk `cpu_irq[4]` (and `interrupt_enable[4]`, `irqActive[4]` — all `MAX_CPUS` arrays).
+
+One residual, not a product defect: `d->ncpus` is 0 from `memset` until that assignment, and the assignment is **after** `memory_device_register`, `INTERRUPT_CONNECT`, and `timer_add`. Any `reassert_interrupts` in that window is a no-op (`cpu < 0`). I have no witness that a tick fires there. File, don't "fix".
+
+### `#502`: this C diff does **not** do the `#499` shape
+
+The brief's premise that "the repair closes cells in a state space" is true of the **probe**, not of this `cpu_m88k.c` hunk. Passes 9–12 closed SER / MODE / SFD1 in `m88k_exc_probe.py`. The product diff is:
+
+- `implemented = true` on vectors **4, 5, 6, 7, 8, 9, 10**
+- matching empty `case` labels in the tail switch
+- verbosity ERROR → INFO on those seven
+
+That is class-complete at both sites. Dropping ERROR from switch 1 still delivers the SFRZ re-route (flag comes from the **original** class; vector is rewritten after). Dropping ERROR from the tail still delivers `errortb` via switch 1 then hits `default:` (`TAILHALT`). Both routes are rowed. Not a one-cell close.
+
+Comment arithmetic, enumerated rather than trusted:
+
+- vectors 0..127 = 128
+- implemented (bypass fallback) = 0..10 = 11
+- halt at fallback = 128 − 11 = **117**
+- 11..113 inclusive = 103; 114, 115 = 2; 116..127 = 12; 103+2+12 = **117**
+
+"No literal-constant raise site names 11..113 / 116..127": **true**. `memory_m88k.c` raises `INSTRUCTION_ACCESS` or `DATA_ACCESS` only. `memory_rw.c` the same. `SFU1_IMPRECISE` (115) has a case label and **zero** raise sites; only a `tb1` can name it.
+
+"Nothing below 128 reaches the tail `default:`": **true** on the shipped CFG. 0..10 have labels; 11..127 hit the fallback and `return` first. The only rewrite (`vector = ERROR`) has a label. The `default:` is the tripwire for an eighth `implemented = true` without a tail case.
+
+"SNIP = the next one" in the **first** new comment is false inside a delay slot. The tail comment qualifies it and names `m88kdslotshadow`. Mild L4, already rescued in the same diff.
+
+Destination unchanged: `X(divu_imm)` / overflow `return` **before** `reg(ic->arg[0]) = ...`. Holds.
+
+---
+
+## Q2 — smallest edit that re-opens the defect and still passes
+
+### `#503` — the measured crash cannot pass this detector
+
+The filed crash is: 1-cpu, MASK1 armed, SOFT_INT1 (or SIO line 5) → walk slot 1 → NULL `interrupt_assert`.
+
+W1 requires the host **alive** while that store happens. Any bound that walks slot 1 on `ncpus==1` with that slot armed dies on W1. The single-token weakenings are already killed (`M_REVERT`, `M_OFFBY1`, `M_HARD1`, `M_NOASSIGN`).
+
+**No single-token edit of `cpu < d->ncpus` re-opens that instance and stays green.**
+
+Sibling that I predict is **37/37**, and it does reopen a NULL walk the probe never fires:
+
+```c
+for (cpu = 0; cpu < d->ncpus || cpu >= 2; cpu++)
+```
+
+| count | walks | what the probe does |
+|---|---|---|
+| 1 | 0, 2, 3 (**skips 1**) | W1/S1/siofirst arm slot 1 — **never walked**, host lives, MASK1 readback still shows level 5 (that path does not use the walk) |
+| 2 | 0,1,2,3 | session C still delivers cpu 1; slots 2/3 exist as NULL but are not pending |
+| 4 | 0..3 | all connected |
+
+Expected green: **every row**. Re-opens SIGSEGV on 1-cpu MASK2 + a later device line (clock bit 31). Session A writes MASK2 **after** SIO is cleared and never ticks. Same family as the already-measured `cpu < (d->ncpus & -d->ncpus)` (**37/37**, `killtable6_codexpred/`) which does **not** reopen SIGSEGV — it under-walks only at `-n 3` (`lunancpus3`).
+
+### `#502` — this is the high-yield one
+
+```c
+implemented = true;   /* each of the seven arms */
+```
+→
+```c
+implemented = (cpu->machine->ncpus < 2);
+```
+
+`m88k_exc_probe.py` execs `-E testm88k` with **no `-n`**. `emul.c` defaults `ncpus==0` to 1. `MACHINE_SETUP(testm88k)` does not set a count. The instrument is one CPU.
+
+On that machine the mutant is identical to the fix: all 59 fault rows stay DELIVER/HALT as now. On luna-88k `-n 2` (a configuration `#503`'s own probe boots) a `divu` by zero takes the fallback again and the loop at the fallback still does:
+
+```c
+for (int j = 0; j < cpu->machine->ncpus; ++j)
+    cpu->machine->cpus[j]->running = false;
+```
+
+That is the original defect, on every SMP configuration, with the detector green. Expected green: **all 59 rows** (`div0`, `udiv0`, `ovf`, `uovf`, `misalign`, `umisalign`, `bounds`, `priv`/`privtb`/`privsuptb`, `unimpl`, `error`/`errortb`, `dslot`, the `err*` / `trapfrozen*` set, the `resid*` HALT rows — none of them looks at a sibling CPU).
+
+The round's own sentence is "stopped **EVERY** guest CPU". A 1-cpu probe cannot observe EVERY. That is the accept-side hole.
+
+---
+
+## Q3 — floor, shipped composite, with denominator
+
+Review effort was this diff. The floor question is the composite.
+
+### `#503` `reassert_interrupts` — no (d) clean sweep on the booted counts
+
+**Dominating predicate:** `cpu < d->ncpus` (enclosing function). DEVINIT `ncpus > 4` dominates the store; both exits keep it off the walk.
+
+**Body-read lvalues:** `interrupt_status`, `interrupt_enable[cpu]`, `software_interrupt_status[cpu]`, `irqActive[cpu]`, `cpu_irq[cpu]`.
+
+Swept (from the round's own tables, not re-run here):
+
+| shape | mutant | score |
+|---|---|---|
+| revert bound | `MAX_CPUS` | killed (`M_REVERT`) |
+| off-by-one | `<=` / `+ 1` | killed (`M_OFFBY1`) |
+| hardcoded 1 / 2 | `M_HARD1` / `M_MIN2` | killed (sessions C, E) |
+| never assigned | `M_NOASSIGN` (0 from memset) | killed (session B) |
+| index alias `[cpu & 1]` / `[0]` | enable, sw, irqActive, cpu_irq | killed (E / E2 / C2) |
+| call-guard in store arms | `M_CALLGUARD` | killed (`sio5`) |
+| both-sided NULL guard | `M_NULLAB` | **37/37 EQUIVALENT** (does not reopen) |
+
+**Not (d), disclosed (e):** `d->ncpus & -d->ncpus` (measured 37/37); `software_interrupt_status[cpu] & 1` (37/37); `cpu < d->ncpus \|\| cpu >= 2` (predicted 37/37, Q2). Those do not read like the same check, and the probe never boots `-n 3` and never pending-fires slots 2/3 on a 1-cpu machine.
+
+**Zero (d) sweeps found** on {1,2,4} × {bound weakenings, body-field operand swaps}. That is "zero found" with that denominator, not "zero looked for".
+
+### `#502` `m88k_exception` — one cell in the enumeration has no row
+
+**Dominating predicates:** `switch (vector)`; `vector < 128 && !implemented`; `PSR & SFRZ` / `!is_trap`; `vector < 128` (tail); `delay_slot` on the common path.
+
+**Body-read of the fallback the seven assignments exist to skip:** `cpu->machine->ncpus` (the all-CPU stop). Operand-swap / qualification of `implemented = true` with that field is in-enumeration. It is the Q2 mutant.
+
+Swept by existing rows (again: from the record, not re-built):
+
+| axis | pin |
+|---|---|
+| drop `implemented` per class 4..10 | instruction rows + `*tb` |
+| `implemented = is_trap` | those rows; BOUNDS/ERROR **equivalent** (`m88ktbnd`) |
+| `implemented = MODE` | `udiv0`, `umisalign`, `uovf`, `priv`/`unimpl` |
+| `implemented = !(PSR & SFRZ)` at ERROR | `trapfrozen10` / `errortb` |
+| drop a tail label | `TAILHALT` |
+| verbosity back to ERROR | `bad=level` |
+| fallback window near / far / just outside | `resid11`, `resid127`, `usertb` |
+| fallback × {MODE, IND, C, SER, SFD1, SFRZ} | `usfu1`, `resid50ind/c/ser`, `sfu1h` |
+| re-route × class × is_trap | `err*`, `trapfrozen*` |
+| re-route × {MODE, SFD1, IND, C, SER} | v19 rows; SFRZ invariant inside the guard |
+| VBR dropped | `vbrtb` |
+| delay-slot else-arm SFIP | `dslot` (**DIV0 only**) |
+
+**Predicted (d) sweep, not measured:** `implemented = (ncpus < 2)` on the seven arms. If 59/59, that is L2 of the detector: one `-n 2` row whose oracle is "cpu 1 still `running` after cpu 0 takes div0". I would not file it as `lunancpus3`-style (e). `lunancpus3` is identity at every count that probe boots; this probe **never varies ncpus**, and ncpus is the field the removed kill actually wrote.
+
+**Also unrowed, (e) not (d):** delay-slot steal for classes other than DIV0 (`else if (vector == MISALIGNED)` keeps `dslot` green). Adjacent to `m88kdslotshadow`. Vectors 0..3 (`m88kexchwtraps`). Multi-axis PSR joints (contract). SFU1 delivery (`m88kexcsfu1`). `SFU1_IMPRECISE` (115) has no raise site.
+
+I am **not** declaring a measured false pass. Measure the ncpus mutant before routing it. If it is 59/59, repair the detector; do not argue it into debt.
+
+---
+
+## Q4 — what twelve passes missed
+
+1. **The 1-cpu instrument cannot see "EVERY guest CPU."** Twelve passes closed a 56-cell PSR×class grid and never once passed `-n`. That is the class a reading seat should have handed the measuring seat. Same shape as `lunancpus3`, worse warrant: the fallback body still walks `ncpus`.
+
+2. **`dslot` pins the else-arm for DIV0 only.** A class-conditioned steal of MISALIGNED / PRIV / UNIMPL / BOUNDS / OVF / ERROR from that else-arm is invisible. File next to `m88kdslotshadow`, or extend `dslot`.
+
+3. **`#502`'s cell-space work is not in this product diff.** A pass-2 that only inlines `src/*` cannot verify passes 9–12. I opened the probe anyway. The C hunk is not where those cells live.
+
+4. **`#503` init window:** `d->ncpus` stays 0 while the device is already on the bus. No witness. File.
+
+5. **`wdc` L4 comment, enumerated:** widths 1..8 call `wdc_get_inbuf` **1, 2, 2, 4, 2, 2, 2, 2** times. Matches the `len >= 2` / `len == 4` arms. Empty ring returns `(uint64_t)-1` without advancing tail. `consumed` is still `len == 4 ? 4 : (len >= 2 ? 2 : 1)` — attempts, as the comment now says. That comment holds. `wdcconsumedattempts` is the right row.
+
+6. **`testm88k` default CPU is 88110**, already confessed in the probe docstring. Exception path does not read `cpu_type`. Claim stands; `-C 88100` is still owed as a records revision if anyone wants the label true.
+
+---
+
+## Routing (late-dissent rule)
+
+| item | grade | action |
+|---|---|---|
+| `#503` snapshot / bound | holds | none |
+| `#502` seven classes, both sites | holds | none |
+| `implemented = (ncpus < 2)` | **predicted L2 of the detector** | measure; if 59/59, add a 2-cpu sibling-still-running row |
+| `cpu < d->ncpus \|\| cpu >= 2` | predicted (e), sibling of `lunancpus3` | file or ride with `lunancpus3` |
+| delay-slot non-DIV0 | (e) | file beside `m88kdslotshadow` |
+| `#503` capture-after-register | un-witnessed residual | file |
+| "SNIP = next" without delay-slot qualifier | weak L4 | optional in-place clause |
+| wdc call-count comment | true | none |
+
+Product code: **do not reopen.** Detector: **measure Q2 `#502` before calling the chain closed.** A 12-pass convergence on a 1-cpu grid is allowed to have missed a field the fallback still reads.

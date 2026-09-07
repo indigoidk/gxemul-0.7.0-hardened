@@ -1,0 +1,684 @@
+kimi version 0.36.0
+• Let me understand what's being asked. This is a review task for a code change in GXemul 0.7.0, in the `GXEMUL-SEC/src/` tree. The packet describes a fix to `sgirandompixel` handling in a graphics device model (dev_sgi probably — crmfb / horrible_getputpixel).
+
+  The packet asks: "Which of these is wrong?" — five candidate choices (i)-(v). The verdict line first: SHIP / ONE MORE REPAIR: <which> / DO NOT SHIP.
+
+  I need to verify the premises and the diff claims against the actual code. Let me look at the relevant files:
+
+  1. `GXEMUL-SEC/src/core/debugmsg.c` — check `fatal()` doesn't exit.
+  2. The device file with `horrible_getputpixel` — probably `GXEMUL-SEC/src/devices/dev_sgi_something.c` — check `tlb_mode = (mode >> 10) & 0x7`, DE_MODE_LIN_B = 0x1400, the latch bit SGIRE_W_BADMODE = 1 << 10, and the changed arm.
+  3. `crmfbreg.h` — check DE_MODE_LIN_B is one of five modes.
+  4. Check the kill table claims at least in structure (though per the operational rule, I should not run the gates; but building/running a single detector in my own temp dir is allowed — though likely unnecessary).
+
+  Let me explore. The plan:
+
+  - Find `horrible_getputpixel` in GXEMUL-SEC/src/devices/.
+  - Read the relevant device file.
+  - Check debugmsg.c fatal.
+  - Check the enum and the last-enumerator property.
+  - Check the caller structure (line, rect, MTE loops) and that `uint32_t color = fg;` stands.
+  - Evaluate the five candidate answers.
+
+  Then produce a verdict under a page.
+
+  Let me start with grep for horrible_getputpixel.
+
+• I'll verify the premises against the actual code before answering.
+
+• The relevant files are `GXEMUL-SEC/src/devices/dev_sgi_re.c` and `GXEMUL-SEC/src/core/debugmsg.c`. Let me read both, plus `crmfbreg.h` for DE_MODE_LIN_B.Good. The GXEMUL-SEC tree has the fix in place (`SGIRE_W_BADMODE = 1 << 10` at line 124, the decline arm at line 227, latch at 251-252). Now let me read the actual relevant sections of `GXEMUL-SEC/src/devices/dev_sgi_re.c` to verify:
+
+  1. The enum region (lines 60-130).
+  2. The `horrible_getputpixel` function (around lines 180-260).
+  3. The callers — the line/rect/MTE loops, and `uint32_t color = fg;`.
+  4. `GXEMUL-SEC/src/core/debugmsg.c` — fatal() implementation.
+
+  Let me read these in parallel.Now I've read both files. Let me verify each premise:
+
+  **Premise 1: `fatal()` prints and returns.** Confirmed: `GXEMUL-SEC/src/core/debugmsg.c:384-391` — `void fatal(const char *fmt, ...)` is `va_start`/`va_debug`/`va_end`, no exit. And `debug()` has the early-out (`if ((quiet_mode && !ss) || v < 0) return;`). CONFIRMED.
+
+  **Premise 2: `tlb_mode = (mode >> 10) & 0x7`, implements 0, 1, 2, 4; DE_MODE_LIN_B = 0x1400 → 5.** Confirmed at dev_sgi_re.c:188, 212-264. DE_MODE_LIN_B = 0x1400 at crmfbreg.h:324. (0x1400 >> 10) & 7 = 5. The switch has case 0, 1, 2, 4, default. CONFIRMED. Five modes in crmfbreg.h: TLB_A, TLB_B, TLB_C, LIN_A, LIN_B — yes, five.
+
+  **Premise 3: helper is per-pixel.** Confirmed: called in LINE loop (line 786, 832), RECTANGLE nested loop (847, 852, 898). Also MTE — need to check dev_sgi_mte.c or the rest of dev_sgi_re.c (file is 1671 lines; I read 1000). The packet says "line, rectangle and tiled-MTE loops". Let me check the rest of the file for MTE calls of horrible_getputpixel. I should read lines 1000-1671 to see the MTE part and the DE_STATUS part, and confirm there are no other calls.
+
+  **Premise 4 / the diff:** The default arm at 227-263 now: latched announce with `SGIRE_W_BADMODE`, leaves `*color` alone, returns. Enum: SGIRE_W_BADMODE = 1 << 10, last enumerator at 124, and the comment at 113 says "The next free bit is 1 << 10; the enum ends HERE" — wait, that's the #500 comment for SGIRE_W_PRIM_OP = 1 << 9, which says "The next free bit is 1 << 10; the enum ends HERE on purpose so that a maintainer scanning to the last enumerator finds it." Hmm — that comment is now STALE! The enum no longer ends at SGIRE_W_PRIM_OP; it ends at SGIRE_W_BADMODE. The #500 comment says "the enum ends HERE on purpose" but the enum now continues. Let me re-read:
+
+  ```c
+  	/*  #500: draw_primitive()'s unimplemented drawing op.  ITS OWN BIT,
+  	    for the reason #498 measured on SGIRE_W_DE_LEN: a latch shared with
+  	    another site is silenced by that site's ordinary traffic, so the
+  	    announce this fix exists to make would never fire.  The next free
+  	    bit is 1 << 10; the enum ends HERE on purpose so that a maintainer
+  	    scanning to the last enumerator finds it.  */
+  	SGIRE_W_PRIM_OP   = 1 << 9,
+
+  	/*  sgirandompixel: horrible_getputpixel()'s unimplemented-mode arm.  ITS
+  	    OWN BIT, for the reason #498 measured and #500 repeated -- the four
+  	    handlers share one malloc'd struct, so a latch shared with another
+  	    site is silenced by that site's ordinary traffic and the announce
+  	    never fires.  This one matters more than most: the helper is
+  	    PER-PIXEL, called inside line, rectangle and tiled-MTE loops, so an
+  	    UNLATCHED announce is a per-pixel flood rather than a diagnostic.
+  	    The next free bit is 1 << 11; the enum ends HERE on purpose, as
+  	    above.  */
+  	SGIRE_W_BADMODE   = 1 << 10,
+  ```
+
+  The #500 comment now says "the enum ends HERE" while the enum doesn't end there anymore. Is this a real defect? Consider: the property being preserved is "a maintainer scanning to the last enumerator finds the next free bit". The #500 comment's claim "the enum ends HERE" is now factually wrong — it ends at SGIRE_W_BADMODE. Does that break the load-bearing property? The property that matters: the LAST enumerator's comment states the next free bit (1 << 11 in the new last comment — correct). The stale "ends HERE" in #500's comment is misleading prose but doesn't cause a collision: a maintainer scanning to the last enumerator finds SGIRE_W_BADMODE = 1 << 10 with comment "next free bit is 1 << 11", which is correct. Someone reading #500's comment might be confused, but the actual mechanism (scan to last enumerator) works. Is this worth flagging as "ONE MORE REPAIR"? It's a stale comment, not a behavioral defect. The packet explicitly asks about behavior/choices. The "preserve scan-to-the-last-enumerator property" is preserved: last enumerator is 1 << 10 and its comment correctly names 1 << 11 as next free. The stale #500 sentence is a doc nit. Given the file's own convention of leaving old comments standing with corrections ("The sentence is #497's and was true when written; it is left standing with its correction"), this might merit a note but not a repair-blocking verdict. Hmm, but wait — actually, the file's convention is to leave standing WITH a correction. Here there's no correction appended to #500's comment. It's a minor doc inconsistency. I'll flag it as a note, not a blocker.
+
+  Now, the diff description: "The arm previously did `fatal(...)` with its `exit(1)` commented out, then `*color = random(); return;`." Let me check the original upstream to confirm. Let me look at the original src/devices/dev_sgi_re.c (project root `src/`, not GXEMUL-SEC) to see the original arm.
+
+  Also check the caller: "The caller's own `uint32_t color = fg;` therefore stands, so the PUT writes fg". In the LINE loop: `uint32_t color = fg;` at 782, `uint32_t oldcolor = fg;` at 783. In the RECTANGLE loop: 843-844. Yes.
+
+  But wait — there's a subtlety for the XFER GET in the RECTANGLE loop at line 852: `horrible_getputpixel(0, cpu, d, src_x, src_y, &color, src_mode)` — a declined GET leaves `color = fg`, then the ROP may combine with oldcolor (also fg if that GET declined too), then PUT writes result. So the PUT writes fg (or fg-derived deterministic value). Deterministic. The packet's claim "the PUT writes fg — deterministic, and still a write the guest did not ask for, which is exactly what sgirandomskipput records" — confirmed in shape.
+
+  Now for MTE: need to read the rest of the file (1000-1671). Let me check where horrible_getputpixel is called in the MTE section. Let me grep for calls within the file. From the read so far, calls at 786, 832, 847, 852, 898. There may be more in the MTE part (after line 1000). Let me read the rest.
+
+  Also, I should check the kill table artifacts: the packet says "killtable/, BASE 8/8 opening AND closing". Where are these artifacts? Probably under GXEMUL-SEC/regress/artifacts/sgirandompixel/ or similar. Let me look. The packet mentions `prefix_repinned_RED.out` and `killtable/`. Let me find them.
+
+  Also the probe: `regress/sgi_re_randompixel_probe.py` mentioned in the comment at line 236. Let me check the regress directory for the artifacts.
+
+  Let me also verify the original code to confirm the diff description. And check `M_RANDOM` etc. are just claims; I can inspect the kill table results files if present.
+
+  Plan:
+  1. Read rest of dev_sgi_re.c (1000-1671).
+  2. Find artifacts: GXEMUL-SEC/regress/artifacts/sgirandompixel*/ — killtable, BASE.out, prefix_repinned_RED.out.
+  3. Check original src/devices/dev_sgi_re.c default arm for the diff claim.
+  4. Check DE_MODE_TYPE_MASK etc. for the colour-mode default arm (sgirandomcolour residual): line 300-305 put default uses random() ×4 — confirmed present at 300. And get default at 327-329 reads raw 32-bit — no random on GET color-mode default. OK, sgirandomcolour filed — the PUT colour-mode default still uses random(). Confirmed in code.
+
+  Let me also verify the probe file and the 8 cells. Let me look at the artifacts directory structure first.README.md
+agyreservation
+asic463
+asicoffsetkill
+b120u
+batteryreds
+diskimagesign
+fbclearidempotent
+fbclearread
+gdromcondlies
+gdromdefault_461
+gdromexitsix
+gdrompionull
+gdromwarnbits
+gxprobepccache
+holdmarkermulti
+idesync
+kill462
+landiskaux
+lcabadval
+lunaabsentcpu
+m88kexcdeliver
+makercfalse
+mrwstore2
+ovsync
+panelargvcap
+pcc2defaultkill
+pcc2widthkills
+retro_20260905
+rs5c313_404
+sgideprimop
+sgidewidth
+sgirandompixel
+sgirekills
+sgireunmapped
+shortread
+staleheld
+wdcaddtoinbufbound
+wdcaltctrl
+wdcaltctrlcov
+wdcaltctrlfam
+wdcaltoffset
+wdcatapistswap
+wdccallsite
+wdccdbmidxfer
+wdcchunking
+wdccmdreset
+wdcdataoutdrain
+wdcflood
+wdcfloodstale
+---
+GXEMUL-SEC/regress/artifacts/sgirandompixel
+GXEMUL-SEC/regress/artifacts/sgirandompixel/PRETABLE_sgirandom.out
+GXEMUL-SEC/regress/sgi_re_randompixel_probe.py
+The `sgirandompixel` artifacts directory exists but seems to only contain `PRETABLE_sgirandom.out`? Let me list it fully. Also the killtable mentioned in the packet ("`killtable/`, BASE 8/8 opening AND closing"). Let me look.GXEMUL-SEC/regress/artifacts/sgirandompixel/PRETABLE_sgirandom.out
+GXEMUL-SEC/regress/artifacts/sgirandompixel/design_panel/SEATS.txt
+GXEMUL-SEC/regress/artifacts/sgirandompixel/design_panel/brief.md
+GXEMUL-SEC/regress/artifacts/sgirandompixel/design_panel/codex.txt
+GXEMUL-SEC/regress/artifacts/sgirandompixel/design_panel/grok.txt
+GXEMUL-SEC/regress/artifacts/sgirandompixel/design_panel/kimi.txt
+GXEMUL-SEC/regress/artifacts/sgirandompixel/design_panel/ollama_deepseek.txt
+GXEMUL-SEC/regress/artifacts/sgirandompixel/design_panel/ollama_glm.txt
+GXEMUL-SEC/regress/artifacts/sgirandompixel/design_panel/ollama_minimax.txt
+GXEMUL-SEC/regress/artifacts/sgirandompixel/killtable/BASE.out
+GXEMUL-SEC/regress/artifacts/sgirandompixel/killtable/BASE_final.out
+GXEMUL-SEC/regress/artifacts/sgirandompixel/killtable/M_EXIT.out
+GXEMUL-SEC/regress/artifacts/sgirandompixel/killtable/M_NOLATCH.out
+GXEMUL-SEC/regress/artifacts/sgirandompixel/killtable/M_RANDOM.out
+GXEMUL-SEC/regress/artifacts/sgirandompixel/killtable/M_SILENT.out
+GXEMUL-SEC/regress/artifacts/sgirandompixel/killtable/M_ZERO.out
+GXEMUL-SEC/regress/artifacts/sgirandompixel/killtable/driver.frozen.sh
+GXEMUL-SEC/regress/artifacts/sgirandompixel/killtable/driver.log
+GXEMUL-SEC/regress/artifacts/sgirandompixel/killtable/probe.frozen.py
+GXEMUL-SEC/regress/artifacts/sgirandompixel/witness_20260906/head_79cd12e.out
+GXEMUL-SEC/regress/artifacts/sgirandompixel/witness_20260906/prefix_repinned_RED.out
+GXEMUL-SEC/regress/artifacts/sgirandompixel/witness_20260906/probe.frozen.py
+---
+total 40
+drwxr-xr-x 1 User00 197121    0 Sep  6 23:18 .
+drwxr-xr-x 1 User00 197121    0 Sep  6 22:57 ..
+-rw-r--r-- 1 User00 197121 5873 Sep  6 23:17 PRETABLE_sgirandom.out
+drwxr-xr-x 1 User00 197121    0 Sep  6 23:07 design_panel
+drwxr-xr-x 1 User00 197121    0 Sep  6 23:42 killtable
+drwxr-xr-x 1 User00 197121    0 Sep  6 23:10 witness_20260906
+The killtable artifacts exist. Let me read:
+  1. `probe.frozen.py` (the probe — to check the cells, especially the 1x4 rectangle claim and the 8 cells)
+  2. `BASE.out`, `M_RANDOM.out`, `M_ZERO.out`, `M_NOLATCH.out`, `M_SILENT.out`, `M_EXIT.out` — diff each against BASE.out to re-derive scores.
+  3. `prefix_repinned_RED.out` and `head_79cd12e.out` (witness: committed build RED under re-pinned oracle = 7/8).
+  4. `driver.frozen.sh` to understand scoring.
+
+  Let me read the probe and driver first.
+
+• The killtable artifacts exist. Let me read the probe, the driver, and re-derive the scores by diffing each result against BASE.
+
+• The probe and driver look consistent with the packet's description. Now let me re-derive the kill table scores by diffing each .out against BASE.out. The packet says BASE 8/8 opening AND closing, M_RANDOM 6/8, M_ZERO 7/8, M_NOLATCH 7/8, M_SILENT 6/8, M_EXIT 4/8.
+
+  Let me read the output files.=== M_RANDOM vs BASE ===
+< lin_b not src    0x77665544   NOT 0xaabbccdd the copy did not happen -- true before AND after the fix ok
+< lin_b is fg      0x77665544   0x77665544   FIX: a declined GET leaves *color, so the PUT writes FG ok
+> lin_b not src    0x65451d1e   NOT 0xaabbccdd the copy did not happen -- true before AND after the fix ok
+> lin_b is fg      0x65451d1e   0x77665544   FIX: a declined GET leaves *color, so the PUT writes FG FAIL
+< lin_b diag once  1            1            LATCH: one announcement for FOUR pixels, not one each ok
+> lin_b diag once  4            1            LATCH: one announcement for FOUR pixels, not one each FAIL
+< SGIRAND_RESULT=8/8
+> SGIRAND_RESULT=6/8
+> SGIRAND_WITNESS=FAIL
+=== M_ZERO vs BASE ===
+< lin_b not src    0x77665544   NOT 0xaabbccdd the copy did not happen -- true before AND after the fix ok
+< lin_b is fg      0x77665544   0x77665544   FIX: a declined GET leaves *color, so the PUT writes FG ok
+> lin_b not src    0x0          NOT 0xaabbccdd the copy did not happen -- true before AND after the fix ok
+> lin_b is fg      0x0          0x77665544   FIX: a declined GET leaves *color, so the PUT writes FG FAIL
+< SGIRAND_RESULT=8/8
+> SGIRAND_RESULT=7/8
+> SGIRAND_WITNESS=FAIL
+=== M_NOLATCH vs BASE ===
+< lin_b diag once  1            1            LATCH: one announcement for FOUR pixels, not one each ok
+> lin_b diag once  4            1            LATCH: one announcement for FOUR pixels, not one each FAIL
+< SGIRAND_RESULT=8/8
+> SGIRAND_RESULT=7/8
+> SGIRAND_WITNESS=FAIL
+=== M_SILENT vs BASE ===
+< lin_b diag       yes          yes          ATTRIBUTION: the arm's own diagnostic; RAM emits no text ok
+< lin_b diag once  1            1            LATCH: one announcement for FOUR pixels, not one each ok
+> lin_b diag       no           yes          ATTRIBUTION: the arm's own diagnostic; RAM emits no text FAIL
+> lin_b diag once  0            1            LATCH: one announcement for FOUR pixels, not one each FAIL
+< SGIRAND_RESULT=8/8
+> SGIRAND_RESULT=6/8
+> SGIRAND_WITNESS=FAIL
+=== M_EXIT vs BASE ===
+< lin_b not src    0x77665544   NOT 0xaabbccdd the copy did not happen -- true before AND after the fix ok
+< lin_b is fg      0x77665544   0x77665544   FIX: a declined GET leaves *color, so the PUT writes FG ok
+< lin_b alive      alive        alive        the host survives: the arm's exit(1) is commented out ok
+< lin_b diag       yes          yes          ATTRIBUTION: the arm's own diagnostic; RAM emits no text ok
+< lin_b diag once  1            1            LATCH: one announcement for FOUR pixels, not one each ok
+> lin_b not src    died         NOT 0xaabbccdd the copy did not happen -- true before AND after the fix ok
+> lin_b is fg      died         0x77665544   FIX: a declined GET leaves *color, so the PUT writes FG FAIL
+> lin_b alive      died         alive        the host survives: the arm's exit(1) is commented out FAIL
+> lin_b diag       no           yes          ATTRIBUTION: the arm's own diagnostic; RAM emits no text FAIL
+> lin_b diag once  0            1            LATCH: one announcement for FOUR pixels, not one each FAIL
+< SGIRAND_RESULT=8/8
+> SGIRAND_RESULT=4/8
+=== BASE_final vs BASE ===
+
+=== driver.log tail ===
+=== M_RANDOM ===
+applied
+  SGIRAND_RESULT=6/8
+=== M_ZERO ===
+applied
+  SGIRAND_RESULT=7/8
+=== M_NOLATCH ===
+applied
+  SGIRAND_RESULT=7/8
+=== M_SILENT ===
+applied
+  SGIRAND_RESULT=6/8
+=== M_EXIT ===
+applied
+  SGIRAND_RESULT=4/8
+=== BASE (closing) -- a closing BASE that is not 8/8 VOIDS the table ===
+  SGIRAND_RESULT=8/8
+clone CLEAN vs SEC
+no sentinel left
+KILLSGI_DONE
+The kill table re-derives exactly as the packet claims:
+
+  - BASE (opening): 8/8. BASE_final: identical to BASE (no diff output) → 8/8 closing. Clone clean, no sentinel (driver.log confirms).
+  - M_RANDOM: 6/8 — red on `lin_b is fg` (value channel: random 0x65451d1e instead of fg) and `lin_b diag once` (4 vs 1 — latch count). Matches "value, latch count".
+  - M_ZERO: 7/8 — red on `lin_b is fg` only (0x0). Matches "value only".
+  - M_NOLATCH: 7/8 — red on `lin_b diag once` (4 vs 1). Matches.
+  - M_SILENT: 6/8 — red on both diag rows. Matches.
+  - M_EXIT: 4/8 — red on `lin_b is fg`, `lin_b alive`, `lin_b diag`, `lin_b diag once`. "four rows; machine dies". Matches.
+
+  Wait — one nuance on M_EXIT: `lin_b not src` shows "died" and still "ok" because it's a negate row (died != 0xaabbccdd). That's a bit generous to the mutant but the packet's count of four red rows matches.
+
+  Now the witness directory: prefix_repinned_RED.out (7/8 committed build under re-pinned oracle) and head_79cd12e.out. Let me read those to verify the test-first claim.
+
+  Also let me check PRETABLE_sgirandom.out (predictions written before first build), and check the current probe in GXEMUL-SEC/regress/sgi_re_randompixel_probe.py matches the frozen one.840f3d0 #500 sgideprimop: a drawing op a guest never chose, and the reset value was one
+938b328 #499 L2: two mutants swept the detector clean, one restoring the round's own witness
+a481d8b #499 pass 2, run LATE because the round shipped without one -- and it found three defects
+---
+1daecf6096f7f443fb71c455f7937474 *regress/sgi_re_randompixel_probe.py
+1daecf6096f7f443fb71c455f7937474 *regress/artifacts/sgirandompixel/killtable/probe.frozen.py
+a734e5241187545c6b211b92ff95b359 *regress/artifacts/sgirandompixel/witness_20260906/probe.frozen.py
+---
+ M src/devices/dev_sgi_re.c
+?? regress/sgi_re_randompixel_probe.py
+Interesting details:
+
+  1. `prefix_repinned_RED.out`: The committed build (label PREFIX_79cd12e_REPINNED, binary = build/gxemul) scores 7/8 under the re-pinned oracle — red on `lin_b is fg` only, and it shows a random value `0x1b6adc48` (bit 31 clear — consistent with random()). Wait, but interesting: `lin_b diag once` shows 1 even in the pre-fix build — because the pre-fix announce was unlatched BUT the probe draws 4 pixels... Hmm wait, the re-pinned probe at witness time — let me check: the witness probe (witness_20260906/probe.frozen.py, md5 a734...) differs from the killtable frozen probe (1dae...). In prefix_repinned_RED.out, `lin_b diag once` is 1 with note "LATCH: exactly one announcement, not one per pixel". Hmm, that's odd: pre-fix the announce was unlatched — 4 pixels → 4 announces. But the output shows 1?
+
+  Wait — let me re-check. The pre-fix arm was `fatal(...)` then `*color = random(); return;`. The fatal was NOT latched. So 4 pixels should give 4 messages. But prefix_repinned_RED.out row 10 shows got=1.
+
+  Hmm, wait. Maybe the pre-fix code in the committed build had the announce counted differently. Let me think. Actually wait — maybe in the pre-fix committed build the announce fired only once because... the probe draws a 1-wide × 4-tall rectangle. Each of the 4 pixels: XFER GET (with src_mode LIN_B → default arm → announce + random). So `unimplemented dst_mode` should be printed 4 times.
+
+  Unless... the witness probe.frozen.py at witness time counted differently, e.g. counted only in a window. Or the pre-fix build... let me actually check git: what was the pre-fix code? The current working tree has `M src/devices/dev_sgi_re.c` modified. Let me check `git diff HEAD -- src/devices/dev_sgi_re.c` or `git show HEAD:src/devices/dev_sgi_re.c` for the original arm.
+
+  Actually, wait. Let me re-read prefix_repinned_RED.out more carefully. Row 10: `lin_b diag once  1  1  LATCH: exactly one announcement, not one per pixel  ok`. Hmm, "got"=1. But if the pre-fix code announced per pixel, got should be 4.
+
+  Hold on — maybe the witness probe at that point had a 1x1 rectangle? The packet says: "lin_b diag once was VACUOUS BY CONSTRUCTION. The probe drew a 1x1 rectangle, so an unlatched announce also fired exactly once and M_NOLATCH escaped 8/8. Repaired by making the rectangle 1 wide x 4 tall."
+
+  So the sequence: witness-time probe had... hmm, but prefix_repinned_RED.out shows the repinned oracle (with `lin_b is fg` row) and got=1 for diag once on the pre-fix build. If the rectangle was 1x1 at that time, an unlatched announce fires once → got=1 → row green. That matches "vacuous by construction". Then they repaired the probe to 1x4 and the killtable probe (md5 1dae...) has the 1x4 rectangle.
+
+  But wait — the packet says the oracle was re-pinned first, committed build measured RED (7/8, preserved as prefix_repinned_RED.out), then code changed. And the defect disclosure says the vacuity was found in "the first table" and repaired. So there might have been an earlier killtable with 1x1 where M_NOLATCH escaped. The current killtable dir has the repaired probe. The note in the current probe (lines 189-196) documents exactly this repair. OK.
+
+  So the timeline in the packet is consistent: prefix_repinned_RED.out is with the repinned (post-first-table?) probe... Hmm, actually wait. prefix_repinned_RED.out has the note "LATCH: exactly one announcement, not one per pixel" while the killtable BASE.out has "LATCH: one announcement for FOUR pixels, not one each". So prefix_repinned_RED.out was run with an intermediate probe (repinned oracle, 1x1 rectangle? or 1x4?). It got diag once = 1 on the pre-fix build — with a 1x4 rectangle an unlatched announce would print 4 times. So the intermediate probe must have been 1x1 (vacuous), i.e., prefix_repinned_RED.out predates the vacuity repair. That's consistent with the disclosure: the first table found the vacuity, then the probe was repaired, then the final table (the one in killtable/) was run with the 1x4 probe.
+
+  Hmm, but then the claim "the committed build measured RED under the new expectations (7/8, preserved as prefix_repinned_RED.out)" — yes, 7/8 with the value row red. And after probe repair + code fix, 8/8. Fine. But strictly, the test-first claim rests on a probe version that was later repaired; the repair only made the latch row non-vacuous — the red row (`lin_b is fg`) is the same in both probe versions. So the test-first order still holds: oracle changed first, measured RED, then code changed. And the probe repair was itself test-first-ish: M_NOLATCH escaped 8/8 in the first table (documented), then probe fixed, then re-run.
+
+  Let me verify the git pre-fix state to confirm the diff description ("fatal(...) with exit(1) commented out, then *color = random(); return;"). Let me run `git diff` or `git show HEAD:src/devices/dev_sgi_re.c | sed -n '200,240p'`.
+
+  2. `head_79cd12e.out` is the ORIGINAL witness (7 rows, old oracle, PASS) — that's the pass-1 witness establishing the defect. Good.
+
+  3. The current probe in regress/ matches the killtable frozen probe (md5 1dae...). Good — no drift between shipped probe and the one used in the table.
+
+  4. Git status: `M src/devices/dev_sgi_re.c` (the fix is uncommitted working-tree change; HEAD is at 840f3d0 "#500") and the probe is untracked (`??`). So "the committed build" = build/gxemul built from HEAD 79cd12e? Hmm, label says PREFIX_79cd12e but git log shows HEAD at 840f3d0. Wait, git log -3 shows 840f3d0 as most recent commit touching dev_sgi_re.c. The label "79cd12e" might be the HEAD commit hash overall, not the file's last change. Let me check `git rev-parse --short HEAD` and `git log --oneline -1`.
+
+  Also the driver's clone comes from `/mnt/c/.../GXEMUL/build` (the build tree) overlaid with the SEC working-tree dev_sgi_re.c. So BASE = post-fix working set, as stated ("baseline: clone == SEC (post-fix working set)").
+
+  Now, the remaining verification for premises:
+
+  - Premise 3: "helper is PER-PIXEL — called inside line, rectangle and tiled-MTE loops." I've confirmed line (786, 832) and rectangle (847, 852, 898) loops. Tiled-MTE: the MTE section is beyond line 1000. Let me check for horrible_getputpixel calls in dev_sgi_mte.c or in the rest of dev_sgi_re.c. Grep showed `horrible_getputpixel` only in dev_sgi_re.c files. Let me read lines 1000-1671 to find the MTE loop calls.
+
+  - The question items:
+    (i) member 3 (decline + latched announce) vs codex's fuller form (explicit success result + suppress dependent PUT). The packet says codex's fuller form is filed as sgirandomskipput. Is member 3 wrong? The decline leaves a deterministic fg write — a write the guest didn't ask for, but harmless-ish (deterministic), and announced. The fuller form changes the helper's signature and every GET site — more intrusion. For a minimal fix, member 3 is defensible. The residual is filed. I need to check the design panel briefs to see what members 2/3 were and whether the choice was adjudicated. Let me read design_panel/brief.md and maybe codex.txt/grok.txt briefly.
+
+    (ii) leave *color untouched so PUT writes fg, rather than zeroing. fg is the foreground register the guest itself programmed — writing fg for a pixel whose source couldn't be fetched is at least a deterministic, guest-visible state. Zeroing would write a value with no relationship to any guest register. fg is defensible and arguably better (fg is the documented drawing color). Not wrong.
+
+    (iii) latch on its own fresh bit: consistent with the file's own measured rule (#498 measured that a shared latch gets silenced by ordinary traffic; the four handlers share one malloc'd struct — confirmed: dev_sgi_re_init registers sgi_re, sgi_de, sgi_mte, sgi_de_status all with the same `d`). BADMODE = 1 << 10 is the next free bit; enum now ends there with correct "next free bit is 1 << 11" comment. Confirmed. One nit: the #500 comment above SGIRE_W_PRIM_OP still says "the enum ends HERE on purpose" — now stale. Doc nit, not a correctness issue. Should I flag it? The packet's own house convention is to leave old text standing with correction. This one has no correction appended. Worth one line as a nit, not a repair.
+
+    (iv) `lin_b not src` kept as non-discriminating regression guard (true before and after). It's green both pre- and post-fix; it's a negated row that pins "the copy did not happen" — guards against a future change implementing LIN_B-as-copy silently (would go red: got == SRC_VAL → negate fails... wait, if LIN_B were implemented as copy, got_b would be SRC_VAL, and the negate row would FAIL — good, it discriminates against silently implementing LIN_B). Also guards against M_EXIT? No — M_EXIT gives "died" ≠ src → ok, so it doesn't red there. It's mostly a tripwire for "LIN_B suddenly works" and for "PUT suppressed" (if PUT suppressed, got = pre-paint 0x11111111 ≠ src → still ok... hmm, no: suppressing PUT leaves pre-paint, which is ≠ src, so row stays green — the `lin_b is fg` row catches that instead). So `lin_b not src` is weak but not vacuous: it specifically reds if someone implements LIN_B copying (sgirelinb) without updating the probe. As a regression guard against the filed sgirelinb row being silently taken, it has a function. Keeping it is defensible; it's cheap. Not wrong.
+
+    (v) five residuals filed rather than taken in-round. Check the ledger/filing: pipeline/ledger.json or fable_queue.md? The packet says "FILED as sgirandomskipput". Let me verify these rows exist in whatever tracking file the project uses. Let me grep for sgirandomskipput, sgirelinb, sgirandomcolour, sgitileptrsilent, sgirenamedstmode.
+
+  Also I should verify:
+  - The MTE per-pixel claim (premise 3's third loop).
+  - The "BASE 8/8 opening" (driver.log says... let me check the head of driver.log).
+  - PRETABLE predictions existed before first build (PRETABLE_sgirandom.out timestamp 23:17 vs killtable 23:42 — plausible).
+
+  Let me do these in parallel.79cd12e
+79cd12e #502 pass 9-12 and #503: two fixes shipped, a filing overturned to a floor breach and repaired, and a detector's own contract predicting both of its escapes
+---
+	y &= 127;
+	int xofs = (x % tilewidth_in_pixels) * bufdepth;
+	int ofs = 512 * y + xofs;
+
+	uint32_t tileptr = 0;
+
+	/*  #100: cases 0-2 index re_tlb_[abc][256] with a guest-derived
+	    tile_nr = (y>>7)*16 + x/tilewidth; bound it (case 4 self-checks).  */
+	if (tlb_mode <= 2 && tile_nr >= 256)
+		return;
+
+	switch (tlb_mode) {
+	case 0:	tileptr = d->re_tlb_a[tile_nr] << 16;
+		break;
+	case 1:	tileptr = d->re_tlb_b[tile_nr] << 16;
+		break;
+	case 2:	tileptr = d->re_tlb_c[tile_nr] << 16;
+		break;
+	case 4:	tile_nr = x >> 12;
+		if (tile_nr >= 32)
+			return;
+		tileptr = 0x80000000 | (d->re_linear_a[tile_nr] << 12);
+		ofs = x & 4095;
+		// TODO... probably not correct!
+		// printf("tileptr = %08x x = %i y = %i tile_nr = %i ofs = %i\n", tileptr, x, y, tile_nr, ofs);
+		break;
+	default:fatal("unimplemented dst_mode %i for horrible_getputpixel (%s), x=%i y=%i\n",
+			mode, put ? "put" : "get", x, y);
+		// exit(1);
+		*color = random();
+		return;
+	}
+
+	// The highest bit seems to be set for a "valid" tile pointer.
+	if (!(tileptr & 0x80000000)) {
+		//printf("dst_mode %i, tile_nr = %i,  tileptr = 0x%llx\n", dst_mode, tile_nr, (long long)tileptr);
+		//fatal("sgi gbe horrible_getputpixel: unexpected non-set high bit of tileptr?\n");
+		//exit(1);
+		return;
+	}
+	
+---
+baseline: clone == SEC (post-fix working set)
+frozen probe: 1daecf60
+=== BASE (opening) ===
+  SGIRAND_RESULT=8/8
+=== M_RANDOM ===
+applied
+  SGIRAND_RESULT=6/8
+=== M_ZERO ===
+applied
+  SGIRAND_RESULT=7/8
+=== M_NOLATCH ===
+applied
+Key confirmations so far:
+
+  1. HEAD is 79cd12e — matches the witness labels. The pre-fix committed code at HEAD shows exactly: `default: fatal("unimplemented dst_mode %i ..."); // exit(1); *color = random(); return;` — the diff description is accurate. And the working tree has the fix (M src/devices/dev_sgi_re.c).
+
+  2. Premise 1 confirmed: fatal() = va_start/va_debug/va_end, no exit. debug() has the early-out.
+
+  3. Premise 2 confirmed: tlb_mode extraction, cases 0/1/2/4, DE_MODE_LIN_B = 0x1400 → 5, five modes documented in crmfbreg.h (TLB_A, TLB_B, TLB_C, LIN_A, LIN_B).
+
+  4. Diff confirmed in the working tree: decline arm leaves *color alone, latched on SGIRE_W_BADMODE = 1 << 10, last enumerator, with "next free bit is 1 << 11" comment.
+
+  5. Kill table re-derived by diffing: M_RANDOM 6/8 (lin_b is fg FAIL + diag once 4), M_ZERO 7/8 (lin_b is fg, 0x0), M_NOLATCH 7/8 (diag once 4), M_SILENT 6/8 (both diag rows), M_EXIT 4/8 (four rows red, died). BASE opening 8/8, BASE_final identical to BASE (diff empty), driver.log confirms 8/8 closing + clone clean + no sentinel. All match the packet's table.
+
+  6. Test-first: prefix_repinned_RED.out = 7/8 on build/gxemul (committed build) with the re-pinned oracle (has `lin_b is fg` row red). head_79cd12e.out = original 7-row witness PASS. The probe in regress/ == killtable frozen probe (md5 match).
+
+  7. Residuals: sgirandomskipput/sgirelinb/sgirandomcolour/sgirenamedstmode appear in the device comment itself (filed in-code). The packet claims they're filed as rows. The grep only found them in the brief files (_scratchpad). Where's the actual filing? The packet says "FILED as sgirandomskipput" — the in-code comment at lines 243-258 names sgirandomskipput, sgirelinb, sgirandomcolour, sgirenamedstmode. What about sgitileptrsilent? Let me check for sgitileptrsilent in the tree — grep found it only in the brief. Let me search more broadly (not just .md). Also there may be a FINDINGS/ledger file in GXEMUL-SEC. Let me check where other rows like sgilinearoob/sgirekills are filed — probably GXEMUL-SEC/regress/README.md or a FINDINGS file.
+
+  Also still to verify:
+  - Premise 3's "tiled-MTE loops" — the MTE section (lines 1000-1671). The file's MTE part — dev_sgi_mte_init is in this file? Line 655: dev_sgi_mte_init(mem, baseaddr + 0x3000, d) — but is it defined in this file or in dev_sgi_mte.c? The grep for horrible_getputpixel found only dev_sgi_re.c instances, and within the file, calls at 786, 832, 847, 852, 898 so far (lines 1-1000). The MTE section is at lines 1000+. Let me read 1000-1671 to find MTE calls. Actually the earlier grep output for `SGIRE_W_BADMODE|...` showed line 1015-1016 is the DE_LEN latch. Let me just read 1000-1671.
+
+  - The residual "sgitileptrsilent": what is it? Probably about the `if (!(tileptr & 0x80000000)) return;` silent decline at line 267-272 (commented-out fatal). That's a silent drop — filed. Need to check the filing location.
+
+  Let me check where rows are filed — likely a FINDINGS.md or ROWS file in GXEMUL-SEC. Let me search.I have almost everything. Remaining checks:
+
+  1. The five residuals are filed in `GXEMUL-SEC/tools/pipeline/ledger.json` (lines 30250-30290). Let me verify they're real entries with a status (filed/open, not taken). Let me read those ledger entries.
+
+  2. Premise 3 — "tiled-MTE loops": confirmed. `do_mte_transfer` case MTE_TLB_A/B/C at lines 1346-1360 calls horrible_getputpixel per pixel (GET at 1351, PUT at 1356) in nested x/y loops. Note: this is the TILED MTE path (TLB_A/B/C), not the LIN path. The packet says "line, rectangle and tiled-MTE loops" — accurate.
+
+  Also interesting: in the MTE copy path, `bg` is shared between the GET and PUT (`&bg`) — same shape as draw_primitive's `color`. And MTE_TLB_LIN_A/LIN_B path does NOT call horrible_getputpixel (it's the zerobuf fill path) — consistent with the probe comment "the PROM's MTE zero-fill path does not call this function".
+
+  3. One more check on the MTE src_mode construction: `src_mode = (src_tlb << 10) + ...`. src_tlb is `(mode & MTE_MODE_SRC_BUF_MASK) >> MTE_SRC_TLB_SHIFT` and guarded `if (src > MTE_TLB_C) exit(1)` at 1305-1308. So src_tlb ≤ 2 in the MTE path — the default arm is not reachable via MTE src (only via dst_tlb... wait, dst_tlb in the TLB_A/B/C case is 0-2 as well; LIN_A/LIN_B go to the other case). So within MTE, horrible_getputpixel is called with tlb_mode 0-2 only. The default arm is reachable only via draw_primitive (LINE/RECT with dst_mode or src_mode = LIN_B). That's fine — doesn't contradict anything in the packet. The packet's claim is about per-pixel calling, which holds.
+
+  4. The design panel: the packet says "The panel chose member 3 (DECLINE + LATCHED ANNOUNCE) in grok's MINIMAL scope; codex's fuller form ... is FILED as sgirandomskipput". Let me read the design panel brief to check what "member 3" and "member 2" were, and the PRETABLE file. Let me read PRETABLE_sgirandom.out (predictions written before the first build — that's the oracle-correction/test-first discipline evidence) and the design_panel/brief.md + grok.txt/codex.txt quickly.
+
+  5. The remaining question items to adjudicate:
+     (i) member 3 vs codex's fuller form now — need to see the panel docs.
+     (iv) `lin_b not src` as regression guard.
+
+  Let me read the PRETABLE and the design panel files.   "id": "codexsubjectrefusal",
+   "sev": "low",
+   "state": "open",
+   "opened": "2026-09-06",
+   "title": "codex content-filter refusal survived neutralisation -- the trigger is the REACH-THE-DEFECT framing, not the subject; and its signature reads as an ANSWER through panel.sh",
+   "witness": "harness:two refusals of the same brief, before and after phrase neutralisation",
+   "state_note": "*** MY OWN DIAGNOSIS IN THIS ROW WAS WRONG WITHIN THE HOUR, AND THE CORRECTION MATTERS BECAUSE IT CHANGES\nTHE REMEDY. ***  I wrote that the trigger is 'the SUBJECT SHAPE, not a phrase', on the evidence of two\nrefusals of one brief.  **codex then answered a brief on THE SAME DEFECT, in the same file, at 167 KB.**\n\nThe difference is the FRAMING, and it is sharper than either earlier guess:\n  REFUSED  the WITNESS brief -- 'can you build a probe that REACHES this and shows the bad value?'\n  ANSWERED the DESIGN brief -- 'what should this code do instead, and what should the rows assert?'\nSame defect, same file, same session.  A request to CONSTRUCT A PATH TO A DEFECT reads as an attack recipe;\na request to DECIDE WHAT THE CODE SHOULD DO reads as ordinary review.  Neutralising the vocabulary did not\nhelp because the vocabulary was never the trigger.\n\n**SO THE REMEDY IS NOT ONLY RE-ROUTING: it is to ask codex the DESIGN question and let another seat answer\nthe REACHABILITY one.**  That is cheaper than it sounds -- grok answered the witness brief with a complete\nbuildable sketch, and codex then produced the best design answer of the panel.  Each seat was asked the\nquestion it would answer.\n\n*** THE SEAT-CHECK HAZARD IS UNCHANGED AND IS THE PART THAT WAS ACTUALLY FIXED. ***  The refusal writes a\nzero-byte stdout with the reason on stderr on a direct call -- indistinguishable from an agy quota wall --\nand through panel.sh it produced 150,372 bytes at 97% novel, which `seat_verdicts.py` scored as **answered,\nNO VERDICT LINE**.  A seat failure counted as an answer, in the tool built to refuse exactly that.  Every\nexisting test passed it: no quota keyword (not a wall), high novelty because the seat streams reasoning\nBEFORE the filter fires (not an echo), CLI seat (not a burn).  Now reported as **SEAT REFUSED**, counted with\nthe DOWN seats, keyed on the vendor's own sentence, and controlled in four directions: it fires on the\nrefusal, leaves a genuine quota wall as WALLED, leaves the mid-answer wall's READ-THE-BODY label intact, and\ndoes not touch answering seats.\n\nBoth refusal transcripts and the answered design brief are preserved beside the round's artifacts, so the\nbefore/after comparison is checkable rather than remembered.",
+   "entries": []
+  },
+  {
+   "id": "sgirandomskipput",
+   "sev": "med",
+   "state": "open",
+   "opened": "2026-09-06",
+   "title": "dev_sgi_re.c: a DECLINED pixel GET still lets the caller perform its dependent PUT, so the destination is written with fg",
+   "witness": null,
+   "state_note": "FILED 2026-09-06 from the `sgirandompixel' design panel, where **codex argued for it as part of that round\nand grok argued for filing it -- and grok's scoping was taken**, because a return value plus every GET site\nis not ONE SITE and the reopening rule says a round takes one.\n\nAfter `sgirandompixel', `horrible_getputpixel()' leaves `*color' alone on a declined GET, so the caller's\nown `uint32_t color = fg' stands and the PUT writes the FOREGROUND.  That is DETERMINISTIC, which is the\nwhole gain of that round -- and it is still a write of data the guest did not ask for.\n\n**codex's form, recorded verbatim because it is the design if this is taken:** give the function an explicit\nSUCCESS RESULT; *'unchanged `*color' is merely an output-parameter guarantee: callers must not consume it\nfollowing failure'*.  Cover ALL the GET sites -- the source GET, the `oldcolor' GET used by ROPs, and MTE's\n`bg' GET.  **AND ITS WARNING, which is the sketch rule and is the reason this is not a one-liner:**\n*'preserve coordinate advancement and stipple rotation when suppressing a pixel's PUT; an early `continue'\ncan bypass those updates'* -- anchors `src_x += step_x' and `Rotate the stipple pattern'.\n\nThe shipped detector already discriminates this: `lin_b is fg' expects fg TODAY, and under a skip-PUT fix it\nwould expect the PRE-PAINT instead.  So the oracle-correction rule applies again and the row set is known in\nadvance.",
+   "entries": []
+  },
+  {
+   "id": "sgirelinb",
+   "sev": "low",
+   "state": "open",
+   "opened": "2026-09-06",
+   "title": "dev_sgi_re.c: DE_MODE_LIN_B is documented in crmfbreg.h and not implemented -- and implementing it as LIN_A-with-the-other-array was REFUSED for want of a warrant",
+   "witness": null,
+   "state_note": "FILED 2026-09-06.  `horrible_getputpixel()' implements tlb_mode 0, 1, 2 and 4; **LIN_B extracts to 5 and\nfalls to the default arm**, which now declines.  `re_linear_b[]' exists, is written by the same width-checked\nstore path as `re_linear_a[]', and case 4 is four lines -- so the tempting fix is one more case.\n\n*** THE PANEL REFUSED TO ENDORSE THAT, and the reasoning is the ADDITION LICENCE working. ***  codex: case 4\nitself carries `TODO... probably not correct!'; and the MTE path that does select either array checks\n`entry & 0x80000000' for validity and searches BY PAGE, while case 4 indexes DIRECTLY and FORCES validity.\n**Symmetry between the two arrays is supporting evidence, not a transferred warrant for DE translation.**\nBefore implementing, obtain a DE address/validity reference or a hardware comparison using DISTINCT A/B\nmappings.\n\nIt also caught that the witness probe programs only LINEAR_A, so *'merely changing its expected LIN_B result\nto SRC_VAL would be unjustified'* -- the instrument would be asserting a behaviour nothing established.",
+   "entries": []
+  },
+  {
+   "id": "sgirandomcolour",
+   "sev": "med",
+   "state": "open",
+   "opened": "2026-09-06",
+   "title": "dev_sgi_re.c: the COLOUR-mode switch's default arm does buf[0..3] = random() and those bytes are then written -- the same class as sgirandompixel at a second site",
+   "witness": null,
+   "state_note": "FILED 2026-09-06.  **FOUND BY GROK** on the `sgirandompixel' design panel, as a residual it explicitly said\nto file rather than grow the round with: *'`default:' of the COLOUR-mode switch still does\n`buf[n] = random()' and then writes those bytes.  Same class, different arm.'*\n\n**VERIFIED BY READING before filing**: four `random()' calls at dev_sgi_re.c, anchor `buf[0] = random();',\nin the colour-mode `default:'.  `sgirandompixel' removed the ONE in `horrible_getputpixel()'; these four\nremain and are the reason `grep -c 'random()'` on that file is still non-zero after the fix.\n\nNobody else on that panel saw it -- not codex, not the packet-fed seats, not me -- and I had read the file\nseveral times that evening.  The design is presumably the same member 3 (decline + latched announce), but\nthe observable differs: this arm fills a BUFFER rather than a single caller variable, so what a declined\nfill should leave is its own question and the detector shape is not simply copied.",
+   "entries": []
+  },
+  {
+   "id": "sgitileptrsilent",
+   "sev": "low",
+   "state": "open",
+   "opened": "2026-09-06",
+   "title": "dev_sgi_re.c: the tileptr high-bit arm declines SILENTLY -- the sibling of sgirandompixel's arm, with no announce at all",
+   "witness": null,
+   "state_note": "FILED 2026-09-06 from `sgirandompixel''s pre-table SIBLING PARITY check, which is what the check is for.\n\nThe nearest sibling of the mode arm is the `if (!(tileptr & 0x80000000))' check immediately below it: also a\ndisabled kill (`//exit(1)'), also in `horrible_getputpixel()', also reached on a failed GET.  It returns\nWITHOUT touching `*color' -- which is exactly the behaviour `sgirandompixel' gave the mode arm, **so after\nthat round the two siblings AGREE on the value and DIFFER on the announce**: the mode arm now says so once,\nand this one says nothing at all.\n\nWhether that asymmetry should be closed is a real question rather than an obvious yes: a silent decline is\noption-set member 2, and the pass-2 seat on that panel noted the tileptr arm *'safely suppresses a put, but a\nget leaves foreground -- or the previous copied pixel -- in place'*, which is a DIFFERENT observable from the\nmode arm's.  Sibling parity says name the asymmetry, not that every asymmetry is a defect.",
+   "entries": []
+  },
+  {
+   "id": "sgirenamedstmode",
+   "sev": "low",
+   "state": "open",
+   "opened": "2026-09-06",
+   "title": "dev_sgi_re.c: the unimplemented-mode diagnostic says `dst_mode' although the same parameter is passed as src_mode on a GET",
+   "witness": null,
+   "state_note": "FILED 2026-09-06.  `horrible_getputpixel(int put, ..., int mode)' is called with `dst_mode' by the PUT sites\nand with `src_mode' by the XFER GET, but its diagnostic hardcodes the word `dst_mode' -- so the message a\nreader sees for a failed SOURCE read names the wrong register.\n\n**DELIBERATELY NOT FIXED IN `sgirandompixel', and the reason is worth keeping.**  That round DID reword it,\nwhich broke the probe's grep anchor and turned two rows red on the fixed build for a reason unrelated to the\nfix.  Moving the anchor to match would have been the easy repair and is **the laundering shape**: changing\nan oracle after seeing a red row cannot be told from fitting the test to the binary.  The wording went back\nand the inaccuracy is filed.\n\nWhoever takes this changes the message AND the probe's anchor in ONE diff, and says so.",
+   "entries": []
+  }
+ ],
+ "state_semantics": {
+All five residuals are filed as open rows in the ledger with substantive notes. The PRETABLE predictions match the measured table except one: PRETABLE predicted M_RANDOM 7/8 ("reddening `lin_b is fg' alone") but measured 6/8 (also reddened `lin_b diag once` 4 vs 1). Wait — the packet explains: the M_RANDOM mutant is "verbatim reinstatement (random + unlatched announce)" — clause (b) asks to restore both halves the fix changed, i.e. random() AND the unlatched announce. The pre-fix announce was unlatched, so restoring it gives 4 announces → reddens `lin_b diag once` too. The PRETABLE prediction of 7/8 for M_RANDOM was thus WRONG (predicted only the value row); measured 6/8. Hmm — but PRETABLE line 58 says "M_RANDOM 7/8, reddening `lin_b is fg' alone -- the pre-fix behaviour restored verbatim." The measured is 6/8. So a prediction missed. Is that disclosed anywhere? The packet's kill table says M_RANDOM 6/8 with "value, latch count" — accurate to the measurement. The PRETABLE was written before the run "so the table can refute them" — and it did refute this one. The packet doesn't flag this prediction miss explicitly, but it does say "Every score re-derived by DIFFING" and reports the true 6/8. The purpose of predictions is to be refutable; a missed prediction that is then reported accurately is the instrument working. But wait — actually, let me think again: is M_RANDOM reddening two rows a problem for attribution? The packet says M_RANDOM kills via "value, latch count". The pre-table said M_RANDOM should red only `lin_b is fg`. Measured: also `lin_b diag once`. The driver's comment (lines 60-63) explains: the first M_RANDOM attempt used `if (0)` which silenced the announce (3 rows red, died for two reasons), corrected to `if (1)` = verbatim pre-fix = announce per call = 4 announces. So 6/8 IS the correct score for verbatim reinstatement, and the pre-table's 7/8 prediction was simply wrong about the latch row (the pre-fix code had no latch, so verbatim reinstatement must red the latch row — obvious in hindsight). Not a defect in the fix; a prediction refinement. The packet itself discloses the M_RANDOM mis-build and correction.
+
+  Hmm, actually wait. Let me re-check the packet's claim about the FIRST table's defects: "TWO DEFECTS THE FIRST TABLE FOUND IN MY OWN INSTRUMENT" — (1) lin_b diag once vacuous by construction (1x1 rect; M_NOLATCH escaped 8/8); (2) M_RANDOM mis-built (silenced the announce too). Both disclosed and repaired. The current artifacts: the probe now draws 1x4 (line 197: (x2,y2) = (0,3)) and M_RANDOM restores both halves. The killtable outputs are consistent with the repaired instrument: M_NOLATCH 7/8 (no longer escapes), M_RANDOM 6/8.
+
+  One more check on the vacuity repair: with the 1x4 rectangle, do four rows really rewrite the same byte? LIN_A: ofs = x & 4095, x=0 always (x1=0, x2=0 → only x=0), y goes 0..3 but ignored. tile_nr = x >> 12 = 0. tileptr = 0x80000000 | (re_linear_a[0] << 12) = phys 0x10000. ofs = 0. So all four pixels PUT to phys 0x10000 with bufdepth 4 (BUFDEPTH_32 → (mode>>8)&3 = 2 → bufdepth 4). So each PUT writes 4 bytes at the same address; the value written each time is `color` = fg (post-fix) — same value each time → final value fg. Oracle survives. Confirmed by BASE.out row 7: 0x77665544. And the diag count: 4 GET declines → unlatched would print 4, latched prints 1. Confirmed by M_NOLATCH (4) vs BASE (1).
+
+  Wait, one subtlety: are there 4 GETs or also 4 PUTs hitting the default arm? The PUT uses dst_mode = MODE_LIN_A (0x1220 → tlb_mode 4, handled). The GET uses src_mode = MODE_LIN_B (0x1620 → 5, default). So the default arm fires only on the 4 GETs. Good.
+
+  Also the ROP GET at line 847: DRAWMODE = 0x002000f8 — XFER_EN(0x200000) | PLANEMASK(0x80) | BYTEMASK(0x78). DE_DRAWMODE_ROP — what value? If ROP bit not set, no oldcolor GET. The probe doesn't set it, so only the XFER GET fires per pixel. Good.
+
+  Now the design panel question (i): member 3 (DECLINE + LATCHED ANNOUNCE) in grok's MINIMAL scope vs codex's fuller form. Let me read the design_panel/brief.md and grok.txt/codex.txt to verify the panel actually chose this and what members 2/3 were. This matters for answering (i) honestly.
+
+  Also for (iv): `lin_b not src` — non-discriminating, true before and after. Kept as a regression guard against IMPLEMENT-as-copy. That's its only discriminating power: if someone implements LIN_B correctly (sgirelinb), got_b == SRC_VAL → negate row FAILS. So it's not vacuous — it discriminates exactly one future change (the filed sgirelinb being taken silently without re-pinning the probe). It also cannot be reddened by any mutant of THIS fix's shape (decline family), which is why the packet calls it non-discriminating for this table. Keeping it costs nothing and guards the oracle from going stale relative to the ledger row. Defensible.
+
+  Let me read the design panel files.Now I understand the option set: DELETE(1) · DECLINE silent(2) · DECLINE + LATCHED ANNOUNCE(3) · ACCEPT(4) · FAULT(5) · BACKED ACCEPT(6) · IMPLEMENT(7). Member 3 = decline + latched announce. The packet says the panel chose member 3 in grok's MINIMAL scope, with codex's fuller form (success result + suppress PUT at every GET site) filed as sgirandomskipput.
+
+  Let me quickly check grok.txt and codex.txt to see whether the panel story holds.I'll check the four premises against `GXEMUL-SEC/src/` first, then decide the option-set member and what happens to `*color` from the arm and its callers.Premises look plausible so far; next I’ll read the function, callers, and how LIN_A vs LIN_B are actually stored.MTE already treats LIN_B as the other linear array; I’ll read that path, the DE mode stores, latches, and the witness probe next.Checking whether a real driver programs `DE_MODE_LIN_B`, and how `FAULT` is dispatched from this call path.**MEMBER 3: DECLINE + LATCHED ANNOUNCE; `*color` UNTOUCHED.** All four numbered premises hold.
+
+`fatal()` is `va_debug` and returns (`debugmsg.c`, `void fatal`). The switch implements 0/1/2/4 only. `DE_MODE_LIN_B` is `0x1400` → `(mode >> 10) & 7 == 5`. `src_mode`/`dst_mode` are `d->de_reg[]`, filled by the generic 4/8-byte store in `DEVICE_ACCESS(sgi_de)` before the print-only cases.
+
+---
+
+### What the arm should do
+
+Delete `*color = random();`. Keep the diagnostic, latch it, `return` without touching `*color`. Same shape as `#500`'s `SGIRE_W_PRIM_OP` arm, and the same `*color` contract as every other failure in this function (`x/y` OOB, `tile_nr >= 256`, linear `tile_nr >= 32`, invalid `tileptr` bit 31). Next free bit is `1 << 10` (the `SGIRE_W_PRIM_OP` comment says so on purpose). One bit, not two: one site, one format string; `(once)` in the text.
+
+**Do not IMPLEMENT `LIN_B` this round.** `re_linear_b[]` existing, and MTE's `dst_tlb == MTE_TLB_LIN_A ? re_linear_a : re_linear_b`, do not transfer. MTE linear is a reverse page-number lookup and does not call this function; DE case 4 is `x >> 12` plus a forced valid bit, and that arm is tagged `TODO... probably not correct!`. Cloning it is inventing a second linear walker. Member 7's tell is a stubbed path with no predicate; this is a missing `switch` case. File `LIN_B` as its own round if a driver is found. `draw_primitive` already treats `tlb_mode > 3` as linear for XFER coordinates — that is the start of a warrant, not a licence to ship the copy.
+
+**Do not FAULT.** The brief's "member 5 is available here" is true of IP32 and false of this call site. `horrible_getputpixel` is a `void` helper inside an already-accepted `CRIME_DE_START` write; `sgi_de_access` always `return 1`, and the pixel `memory_rw` uses `NO_EXCEPTIONS | PHYSICAL`. DBE is not a drawing-mode disposition. The same file rejected `return 0` for that reason at the `#498` width guard.
+
+**Do not skip the dependent PUT this round.** That needs a return value this function does not have, and it would make this arm unlike the `tileptr` sibling, which already fails a GET and still PUTs `fg`. If skip-PUT is wanted, do it for every GET failure in one round, with the enclosing loops inlined (LINE, RECT, MTE tiled). File it.
+
+**Do not zero `*color`.** That is a fabricated pixel, the same class as `random()`. On today's probe it is also indistinguishable from untouched, because FG is never programmed and reset `fg` is 0.
+
+**Announce at this arm, not at a command-wide abort.** `#500` aborts because the *primitive* is unimplemented; LINE/RECT here are implemented. Aborting the whole draw because the source mode is `LIN_B` would leave the destination at its pre-paint, which is skip-PUT by another door. A pixel-arm latch already stops the flood (this is per-pixel, inside line/rect/MTE loops).
+
+ACCEPT and BACKED ACCEPT do not apply: the arm computes no value. DELETE drops the diagnostic the house keeps.
+
+---
+
+### Post-fix rows (re-pin FIRST; HEAD must go RED)
+
+The current two negate rows **do not invert** under this fix. Failed GET leaves `color = fg`; the caller still PUTs; destination becomes `fg`, which is neither `0xaabbccdd` nor `0x11111111`. Both `lin_b not src` and `lin_b written` stay green. The probe contract that says leave-`*color`-untouched greens only if the pre-paint is removed conflates "don't touch `*color`" with "don't write the destination." Those are different.
+
+**Change the setup before the code:** `sw` `CRIME_DE_FG` to a third colour, e.g. `0x22222222` (not source, not pre-paint, not 0). Then:
+
+| row | want | HEAD `79cd12e` | after this fix |
+|---|---|---|---|
+| `live` / `devsig` / `copy lin_a` | unchanged | green | green (ACCEPT: LIN_A still copies) |
+| **`lin_b is fg`** | dest `== 0x22222222` | random → **RED** | green |
+| `lin_b not src` | dest `!= 0xaabbccdd` | green | green (pins "we did not silently implement") |
+| `lin_b alive` | alive | green | green |
+| `lin_b diag` | `"unimplemented dst_mode"` present | green | green |
+| **`lin_b diag once`** | two primitives, diagnostic count `== 1` | 2 → **RED** | green |
+
+`lin_b is fg` is the inverting oracle. It is also the discriminator against the rejected dispositions: zero leaves `0`, skip-PUT leaves `0x11111111`, IMPLEMENT-as-copy leaves `0xaabbccdd`. `lin_b diag once` is the discriminator against silent decline (member 2). Drop `lin_b written` as a defect row; under this member it is true before and after.
+======
+Reading additional input from stdin...
+OpenAI Codex v0.153.4
+--------
+workdir: C:\DocumentNoSnc\CC\GXEMUL
+model: gpt-6-astra
+provider: openai
+approval: never
+sandbox: read-only
+reasoning effort: max
+reasoning summaries: none
+session id: 01a07a05-5635-7682-b878-7806beb4ef4f
+--------
+user
+# `sgirandompixel` DESIGN -- pass 1.  The witness is BUILT and GREEN; what should the arm do instead?  2026-09-06.
+
+## WHAT THIS IS
+An ordinary correctness review of a graphics-engine device model in a hardware simulator for obsolete
+workstations (GXemul 0.7.0, a maintained fork).  Plain engineering vocabulary; no security framing is intended
+or wanted, and none of this concerns a production system.
+
+**The tree under review is `GXEMUL-SEC/src/`; the file is `src/devices/dev_sgi_re.c`.  Ignore any other `src/`
+you find** -- three pristine-2021 upstream copies sit under the project root and are NOT this fork.  Cite by
+grep anchor.  **VERDICT LINE FIRST.**
+
+## READ THIS FIRST -- PLEASE DO NOT SIMPLY RATIFY
+Check the premises, not just the derivations.  **If they all hold, say so plainly** -- a previous brief of mine
+closed by insisting one must be wrong and a seat correctly named that instruction as the unsupported
+assumption.
+
+## SETTLED PREMISES (each verified by opening the file; re-inlined because packet-fed seats cannot check them)
+1. **`fatal()` PRINTS AND RETURNS in this fork.**  `src/core/debugmsg.c`: `fatal()` is `va_start` / `va_debug` /
+   `va_end` with **no `exit` of any kind**.  The early-out lives on `debug()`, not on `fatal()`.  *A seat ruled
+   the opposite on the witness panel because I failed to inline this; it is the one fact that decides whether
+   the code below is reachable.*
+2. `horrible_getputpixel()` takes `tlb_mode = (mode >> 10) & 0x7` and implements cases 0, 1, 2 and 4.
+3. `crmfbreg.h` defines five modes: TLB_A `0x0000`, TLB_B `0x0400`, TLB_C `0x0800`, LIN_A `0x1000`,
+   **LIN_B `0x1400`**.  Those extract to 0, 1, 2, 4 and **5** -- so LIN_B, a documented mode, is unhandled.
+4. `src_mode` and `dst_mode` are `d->de_reg[]` entries, written by ordinary stores.
+
+## THE ARM, verbatim
+```c
+	default:fatal("unimplemented dst_mode %i for horrible_getputpixel (%s), x=%i y=%i\n",
+			mode, put ? "put" : "get", x, y);
+		// exit(1);
+		*color = random();
+		return;
+	}
+```
+`*color` is the CALLER'S variable.  On a `get` the caller then writes it to the destination in the same loop
+iteration of `draw_primitive()`.
+grok's answer confirms: MEMBER 3, *color untouched, latch on own bit, don't implement LIN_B, don't skip PUT this round (file it), don't zero. The panel story in the packet checks out.
+
+  Now let me quickly verify the remaining items:
+
+  - Item (i): member 3 minimal scope vs codex's fuller form — the ledger entry sgirandomskipput records codex's form verbatim with its warning. The reopening rule ("a round takes one [site]") is cited. grok's own text says skip-PUT "needs a return value this function does not have, and it would make this arm unlike the tileptr sibling". Defensible scoping.
+
+  - Item (iv): `lin_b not src` — as analyzed: it discriminates IMPLEMENT-as-copy (sgirelinb taken silently → row goes red). grok's table also lists it as "pins 'we did not silently implement'". Not vacuous in that direction. Fine.
+
+  - One remaining check: `copy lin_a` accept control on the post-fix build = green (BASE.out row 5 ok). Yes.
+
+  - Check the witness probe vs current probe drift: witness probe md5 a734... differs from the current probe 1dae... — expected, since the oracle was re-pinned and the rectangle reshaped. The witness_20260906/probe.frozen.py is the intermediate (repinned, 1x1?) version. prefix_repinned_RED.out note for diag once says "LATCH: exactly one announcement, not one per pixel" and got=1 on the PRE-fix build. Wait — on the pre-fix build the announce was UNLATCHED, so with a 1x4 rectangle it would print 4 times. prefix_repinned_RED.out got=1 means the intermediate probe drew 1x1. That's consistent with the disclosure that the vacuity was found in the FIRST table (which used the 1x1 probe) and repaired after. So the timeline: witness (7 rows, 1x1, PASS on HEAD) → re-pinned oracle (8 rows, still 1x1: prefix_repinned_RED 7/8 — only `lin_b is fg` red; diag once vacuously green at 1) → first table (M_NOLATCH escaped 8/8, M_RANDOM mis-built) → probe repaired to 1x4, M_RANDOM rebuilt → final table (the one in killtable/: all mutants killed). 
+
+  Hmm — one wrinkle: the packet says "the committed build measured RED under the new expectations (7/8, preserved as prefix_repinned_RED.out), and only then was the code changed". The re-pin at that point still had the vacuous latch row, but the re-pinning row that matters (`lin_b is fg`) was present and red. The vacuity repair came later and only strengthened the instrument. Also the final 8/8 post-fix is with the repaired probe — BASE.out. So the ordering obligations hold.
+
+  Is there anything actually wrong among (i)-(v)? Let me scrutinize each once more:
+
+  (i) member 3 minimal vs codex's fuller form now. Taking the fuller form in-round would change a void function's signature and touch every GET site (LINE oldcolor GET, RECT XFER GET, MTE bg GET — three sites, plus coordinate-advance/stipple-rotation hazards codex named). The house rule "a round takes one site" — defensible; residual filed with codex's design verbatim. Not wrong.
+
+  (ii) leave *color untouched → PUT writes fg. Deterministic, matches the tileptr sibling's behavior exactly (sibling parity — the sibling already fails a GET and the caller still PUTs fg). Zeroing is "a fabricated pixel, same class as random()" (grok). Also the probe deliberately sets fg=0x77665544 non-zero so the two are distinguishable. Not wrong.
+
+  (iii) latch on fresh bit 1<<10, last enumerator, comment names 1<<11 next. The file's own #498 measurement (23/25 for a shared bit) is cited. The four handlers share one struct (confirmed at init: all four registered with same d). One nit: the #500 comment block above SGIRE_W_PRIM_OP still ends with "the enum ends HERE on purpose" — now false, since the enum ends at SGIRE_W_BADMODE. It's stale prose; the load-bearing property (last enumerator's comment names next free bit) is intact. This is the file's own convention of leaving superseded sentences standing, but #497's stale sentence got an explicit correction appended and this one didn't. Worth one line as a note, not a repair — it cannot cause a wrong bit to be taken (a maintainer scanning to the last enumerator finds BADMODE with the correct "1 << 11" guidance). Hmm, could someone reading #500's comment take 1<<10 thinking the enum ends at PRIM_OP? They'd have to not look at the actual last enumerator. The risk the comment-guard exists for is "scan to the last enumerator" — that scan lands on BADMODE. So the stale sentence is inert. Note it.
+
+  (iv) `lin_b not src` kept. As analyzed — it is the one row that reddens if LIN_B ever gets implemented-as-copy without re-pinning; labelled non-discriminating for this fix. Not wrong.
+
+  (v) five residuals filed: verified in ledger.json, all state "open", opened 2026-09-06, with substantive notes including codex's verbatim design for skipput. Not wrong.
+
+  Kill-table denominator: 8 rows × 5 mutants + opening/closing BASE. All five mutant shapes swept: verbatim reinstatement (b), nulled repair (d), latch dropped, silent decline (member 2), exit restored. I re-derived every score by diffing .out files against BASE.out myself: M_RANDOM 6/8 (fg row + latch row), M_ZERO 7/8 (fg row, 0x0), M_NOLATCH 7/8 (latch row 4), M_SILENT 6/8 (both diag rows), M_EXIT 4/8 (4 rows, died). BASE_final identical to BASE. driver.log confirms clean clone, no sentinel, frozen probe md5 1daecf60 matches the shipped probe.
+
+  One more check I should do: the PRETABLE prediction for M_RANDOM was 7/8 but measured 6/8 — the prediction was refuted, and the packet's own table reports the measured 6/8. That's fine — predictions are there to be refuted, and the discrepancy is explained by the corrected M_RANDOM build (verbatim pre-fix = unlatched announce → latch row reds too). The packet's table is the measured one.
+
+  Also check: does the announce text keep "dst_mode" wording — yes, and it's filed (sgirenamedstmode) with the laundering rationale. And the probe anchors on "unimplemented dst_mode" — present in the shipped message. Consistent.
+
+  One more possible check: "(once)" in message text — house idiom. The new message ends with "declined (once) ]" — hmm, looking at the format string: "horrible_getputpixel (%s), x=%i y=%i; declined (once) ]\n" — wait let me look: "fatal("[ sgi_re: unimplemented dst_mode %i for horrible_getputpixel (%s), x=%i y=%i; declined (once) ]\n", ...)" — yes "(once)" present. Good.
+
+  Now, am I confident enough to say SHIP? Let me consider what could still be wrong that I haven't checked:
+
+  1. I haven't rebuilt or rerun anything myself — the operational rule discourages running gates, but building+running a single detector in my own temp dir is "fine and encouraged". The artifacts are internally consistent and match the code. The one thing I could independently verify is that the current working-tree code actually produces BASE 8/8 — but that's exactly what the table's opening/closing BASE measured, and re-running it in my own temp dir would take a build of the whole emulator (the clone is at /tmp/gxsgir — a WSL path; I'm in Git Bash on Windows; /tmp/gxsgir from the driver refers to the WSL environment where python3 pty works. pty doesn't work on Windows Git Bash. So I cannot re-run the probe here — it needs pty/pexpect on Linux. The driver ran under WSL (/mnt/c paths). So independent re-execution is not feasible in this seat's environment within budget. I'll say what I verified and what I didn't run.)
+
+  2. Check there's no drift between the shipped probe and what BASE measured: md5 1daecf60 both. Done.
+
+  3. The enum comment staleness (the #500 "ends HERE" sentence) — a doc nit to name.
+
+  Let me also double check that the `warned` field is uint32_t and 11 bits in use — no overflow. 1<<10 fine.
+
+  And confirm premise: "the enum's documented next-free position" — the #500 comment documented 1<<10 as next free; BADMODE took exactly that, and its own comment names 1<<11. Consistent.
+
+  One more sanity check on (ii): "still a write the guest did not ask for" — well, the guest DID ask for a draw of a rectangle; the write of fg is the deterministic stand-in. Fine.
+
+  Also should verify claim in packet: "codex's fuller form ... is FILED as sgirandomskipput" — confirmed in ledger with verbatim design. 
+
+  And check the packet's claim "the panel chose member 3 ... in grok's MINIMAL scope" — grok.txt confirms member 3 with minimal scoping and explicit file-it instructions. Confirmed.
+
+  Now, the question asks "Which of these is wrong?" — my answer: none; all five hold. Verdict: SHIP.
+
+  Denominator to report:
+  - Premises: all 4 verified by opening the files (fatal in debugmsg.c:384-391; tlb_mode/cases at dev_sgi_re.c:188,212-264; crmfbreg.h:320-324 five modes; per-pixel call sites at 786/832/847/852/898 + MTE 1351/1356).
+  - Cells: all 8 rows of BASE.out read; each mutant .out diffed against BASE.out by me: red rows exactly as the packet's table.
+  - Mutant shapes: all 5 (verbatim reinstatement, nulled repair, unlatched, silent, exit) — swept via the diffed outputs, not the driver echo; driver.frozen.sh mutate() strings inspected (they do what the labels say: M_RANDOM restores `*color = random()` + `if (1)` unlatched announce, etc.).
+  - Test-first chain: prefix_repinned_RED.out (7/8, red row = lin_b is fg on committed HEAD binary), head_79cd12e.out (7/7 original witness), probe md5 match shipped vs frozen.
+  - Ledger: all five residuals present, state open, opened 2026-09-06.
+  - Design panel: grok's member-3 verdict and codex's filed fuller form confirmed in design_panel/.
+
+  What I did NOT do: re-run any gate/probe (per the operational rule; also the probe needs pty, unavailable in this Git Bash seat). Scores were re-derived from the preserved .out files, not re-measured.
+
+  Nits worth one line each:
+  - The #500 comment above SGIRE_W_PRIM_OP still says "the enum ends HERE on purpose" — now stale (enum ends at BADMODE). Inert for the scan-to-last-enumerator property, but unlike #497's stale sentence it carries no correction marker. Not a repair blocker.
+  - PRETABLE predicted M_RANDOM 7/8; measured 6/8 (verbatim reinstatement reddens the latch row too, since pre-fix had no latch). Prediction refuted as designed; the packet's table reports the measured value. No action.
+  - M_EXIT's `lin_b not src` row shows "died" and scores ok on the negate — generous to the mutant, but M_EXIT still dies 4/8, and the packet's count matches.
+
+  Answer under a page, verdict line first. The user language is English.
+
+• **SHIP — none of (i)–(v) is wrong.** All four settled premises hold, and I re-derived every cell of the kill table from the preserved `.out` files rather than trusting the packet.
+
+  ## What I checked, and the denominator
+
+  **Premises (opened each file, `GXEMUL-SEC/` tree only):**
+  - `fatal()` is `va_start`/`va_debug`/`va_end`, no exit — `src/core/debugmsg.c:384-391`; the early-out is on `debug()` (`:375-376`). Holds.
+  - `tlb_mode = (mode >> 10) & 0x7`, cases 0/1/2/4 + default — `src/devices/dev_sgi_re.c:188,212-264`. `DE_MODE_LIN_B 0x1400` → 5, one of exactly five modes in `crmfbreg.h:320-324`. Holds.
+  - Per-pixel: LINE loop (`:786,:832`), RECT loop (`:847,:852,:898`), tiled-MTE nested loop (`:1351,:1356` — and it shares `&bg` between GET and PUT, the same shape as `color`). Holds. The LIN_A/LIN_B MTE fill path never calls the helper, as the probe's contract says.
+  - The diff vs HEAD `79cd12e` is exactly as described: pre-fix was `fatal(...); // exit(1); *color = random(); return;` (confirmed via `git show HEAD:`); post-fix declines, `*color` untouched, latch `SGIRE_W_BADMODE = 1 << 10` as the last enumerator with a correct "next free 1 << 11" note; caller's `uint32_t color = fg` stands (`:843`).
+
+  **Cells and mutant shapes swept — all of them, by my own diff against `BASE.out`:**
+  - BASE opening 8/8; `BASE_final.out` is byte-identical to BASE (empty diff); `driver.log` closes 8/8, clone clean, no sentinel.
+  - `M_RANDOM` 6/8 — red rows `lin_b is fg` (0x65451d1e ≠ fg) and `lin_b diag once` (4 vs 1). `M_ZERO` 7/8 — `lin_b is fg` only (0x0). `M_NOLATCH` 7/8 — `diag once` 4 only. `M_SILENT` 6/8 — both diag rows. `M_EXIT` 4/8 — four rows, machine died. Every row matches the packet's table; `driver.frozen.sh`'s mutate strings do what their labels claim (M_RANDOM restores *both* halves via `if (1)`).
+  - Test-first chain: `head_79cd12e.out` (7/7 original witness) → `prefix_repinned_RED.out` (committed binary, 7/8, red exactly on the new inverting row `lin_b is fg`) → post-fix 8/8. The 1×1→1×4 vacuity repair is documented in the probe itself (`probe.frozen.py:189-197`), and the height-not-width reasoning is sound: with x=0 and LIN_A's `ofs = x & 4095`, four rows hit the same byte, so the value oracle survives — confirmed by BASE showing `0x77665544`. Shipped probe == frozen probe (md5 1daecf60).
+
+  **The five candidates:** (i) member 3 minimal is grok's verdict verbatim in `design_panel/grok.txt`, and codex's fuller form (success result, all three GET sites, coordinate/stipple hazard) is preserved verbatim in ledger row `sgirandomskipput` — filing it is the house one-site rule working, not evasion. (ii) `fg` over zero is right: zero is a fabricated pixel of the same class as `random()`, and it matches the `tileptr` sibling's existing fail-and-write-fg behaviour. (iii) the fresh bit is the file's own measured rule (#498's 23/25 shared-bit collision), and the four handlers share one malloc'd struct (`:651-656`). (iv) `lin_b not src` is not vacuous in the one direction that matters: it is the only row that reddens if someone silently takes `sgirelinb` (dest would equal SRC_VAL) — a regression guard against the ledger, correctly labelled non-discriminating for this fix. (v) all five residuals verified in `tools/pipeline/ledger.json` — present, `state: open`, opened 2026-09-06, with substantive notes.
+
+  ## Nits (not repairs)
+  - The #500 comment above `SGIRE_W_PRIM_OP` still says "the enum ends HERE on purpose" — stale since BADMODE now ends it. Inert (a scan-to-last lands on BADMODE's correct guidance), but unlike #497's superseded sentence it carries no correction marker.
+  - PRETABLE predicted M_RANDOM 7/8; measured 6/8 — verbatim reinstatement also reds the latch row, since pre-fix had no latch. A refuted prediction working as designed; the packet's table reports the measured value.
+  - `M_EXIT`'s `lin_b not src` scores ok on "died" via the negate — generous to the mutant, immaterial at 4/8.
+
+  **Not done:** I ran nothing (per the panel rule; the probe also needs `pty`, unavailable in this seat's Git Bash). Scores are re-derived from the preserved outputs, not re-measured.
+
+To resume this session: kimi -r session_2c9a1287-b341-4cd4-b457-26e1a2570d96

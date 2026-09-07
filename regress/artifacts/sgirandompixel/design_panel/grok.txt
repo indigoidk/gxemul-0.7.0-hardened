@@ -1,0 +1,50 @@
+I'll check the four premises against `GXEMUL-SEC/src/` first, then decide the option-set member and what happens to `*color` from the arm and its callers.Premises look plausible so far; next I’ll read the function, callers, and how LIN_A vs LIN_B are actually stored.MTE already treats LIN_B as the other linear array; I’ll read that path, the DE mode stores, latches, and the witness probe next.Checking whether a real driver programs `DE_MODE_LIN_B`, and how `FAULT` is dispatched from this call path.**MEMBER 3: DECLINE + LATCHED ANNOUNCE; `*color` UNTOUCHED.** All four numbered premises hold.
+
+`fatal()` is `va_debug` and returns (`debugmsg.c`, `void fatal`). The switch implements 0/1/2/4 only. `DE_MODE_LIN_B` is `0x1400` → `(mode >> 10) & 7 == 5`. `src_mode`/`dst_mode` are `d->de_reg[]`, filled by the generic 4/8-byte store in `DEVICE_ACCESS(sgi_de)` before the print-only cases.
+
+---
+
+### What the arm should do
+
+Delete `*color = random();`. Keep the diagnostic, latch it, `return` without touching `*color`. Same shape as `#500`'s `SGIRE_W_PRIM_OP` arm, and the same `*color` contract as every other failure in this function (`x/y` OOB, `tile_nr >= 256`, linear `tile_nr >= 32`, invalid `tileptr` bit 31). Next free bit is `1 << 10` (the `SGIRE_W_PRIM_OP` comment says so on purpose). One bit, not two: one site, one format string; `(once)` in the text.
+
+**Do not IMPLEMENT `LIN_B` this round.** `re_linear_b[]` existing, and MTE's `dst_tlb == MTE_TLB_LIN_A ? re_linear_a : re_linear_b`, do not transfer. MTE linear is a reverse page-number lookup and does not call this function; DE case 4 is `x >> 12` plus a forced valid bit, and that arm is tagged `TODO... probably not correct!`. Cloning it is inventing a second linear walker. Member 7's tell is a stubbed path with no predicate; this is a missing `switch` case. File `LIN_B` as its own round if a driver is found. `draw_primitive` already treats `tlb_mode > 3` as linear for XFER coordinates — that is the start of a warrant, not a licence to ship the copy.
+
+**Do not FAULT.** The brief's "member 5 is available here" is true of IP32 and false of this call site. `horrible_getputpixel` is a `void` helper inside an already-accepted `CRIME_DE_START` write; `sgi_de_access` always `return 1`, and the pixel `memory_rw` uses `NO_EXCEPTIONS | PHYSICAL`. DBE is not a drawing-mode disposition. The same file rejected `return 0` for that reason at the `#498` width guard.
+
+**Do not skip the dependent PUT this round.** That needs a return value this function does not have, and it would make this arm unlike the `tileptr` sibling, which already fails a GET and still PUTs `fg`. If skip-PUT is wanted, do it for every GET failure in one round, with the enclosing loops inlined (LINE, RECT, MTE tiled). File it.
+
+**Do not zero `*color`.** That is a fabricated pixel, the same class as `random()`. On today's probe it is also indistinguishable from untouched, because FG is never programmed and reset `fg` is 0.
+
+**Announce at this arm, not at a command-wide abort.** `#500` aborts because the *primitive* is unimplemented; LINE/RECT here are implemented. Aborting the whole draw because the source mode is `LIN_B` would leave the destination at its pre-paint, which is skip-PUT by another door. A pixel-arm latch already stops the flood (this is per-pixel, inside line/rect/MTE loops).
+
+ACCEPT and BACKED ACCEPT do not apply: the arm computes no value. DELETE drops the diagnostic the house keeps.
+
+---
+
+### Post-fix rows (re-pin FIRST; HEAD must go RED)
+
+The current two negate rows **do not invert** under this fix. Failed GET leaves `color = fg`; the caller still PUTs; destination becomes `fg`, which is neither `0xaabbccdd` nor `0x11111111`. Both `lin_b not src` and `lin_b written` stay green. The probe contract that says leave-`*color`-untouched greens only if the pre-paint is removed conflates "don't touch `*color`" with "don't write the destination." Those are different.
+
+**Change the setup before the code:** `sw` `CRIME_DE_FG` to a third colour, e.g. `0x22222222` (not source, not pre-paint, not 0). Then:
+
+| row | want | HEAD `79cd12e` | after this fix |
+|---|---|---|---|
+| `live` / `devsig` / `copy lin_a` | unchanged | green | green (ACCEPT: LIN_A still copies) |
+| **`lin_b is fg`** | dest `== 0x22222222` | random → **RED** | green |
+| `lin_b not src` | dest `!= 0xaabbccdd` | green | green (pins "we did not silently implement") |
+| `lin_b alive` | alive | green | green |
+| `lin_b diag` | `"unimplemented dst_mode"` present | green | green |
+| **`lin_b diag once`** | two primitives, diagnostic count `== 1` | 2 → **RED** | green |
+
+`lin_b is fg` is the inverting oracle. It is also the discriminator against the rejected dispositions: zero leaves `0`, skip-PUT leaves `0x11111111`, IMPLEMENT-as-copy leaves `0xaabbccdd`. `lin_b diag once` is the discriminator against silent decline (member 2). Drop `lin_b written` as a defect row; under this member it is true before and after.
+
+Run that instrument on the committed binary and keep the red log. Only then delete the `random()` assignment.
+
+---
+
+### Residuals (file, don't grow the round)
+
+- `default:` of the **colour-mode** switch still does `buf[n] = random()` and then writes those bytes. Same class, different arm.
+- `tlb_mode` 3/6/7 share this `default:` with `LIN_B`. One junk-mode row is cheap sibling parity if the detector is extended; not required to ship the decline.
+- Skip-PUT for all GET failures, and a real `LIN_B` case, are separate rounds.

@@ -1,0 +1,31 @@
+**VERDICT: AUDIT — premise P1 uncheckable from packet; F1 flags delay-slot path now reachable; Q2/Q3 partial.**
+
+**P1 (NOT CHECKABLE FROM PACKET).** `#503` captures `d->ncpus = devinit->machine->ncpus` at DEVINIT and bounds the walk with it. The premise it relies on — count stable for the life of the device — is asserted in the comment but cannot be verified here. The fix's own comment discloses that **two** termination conditions matter (`ncpus > 4` in DEVINIT AND a second `ncpus > 4` in machine_luna88k.c AFTER device_add). The author flags: "the pass-2 revision was made on a claim codex then refuted." **Settling fact:** grep the fork for any post-DEVINIT assignment to `machine->ncpus` (or `ncpus++`/`ncpus--`). If reachable, the captured value is a snapshot of a moving quantity and the bound is wrong on that path.
+
+**F1 (REASONED, Q4 — finding).** The `#502` diff closes the cell it claims: all 7 trap-like classes get `implemented = true` AND appear as cases in the big switch with `break;`; they no longer hit the default halt. **But the comment in the new case block itself flags the delay-slot path:**
+
+> "INSIDE a delay slot the else-arm above ('Perhaps something like this could work') is upstream's guess and the manual disagrees (Table 6-3: ... for a fault in its delay slot NIP = target, FIP = target+4) -- pre-existing, now reachable by ordinary faults, row m88kdslotshadow."
+
+Before this fix, delay-slot faults of these 7 classes hit the fallback halt (loud failure). After this fix, they skip the fallback and reach the else-arm path. The comment says the manual disagrees with that path. **The fix converts a loud halt into silent corruption of guest shadows (NIP, FIP) for delay-slot faults of these 7 classes.** The probe row `m88kdslotshadow` is named in the comment. The packet does not state whether that row is currently green or red. **If it was green before and is red now, that is a regression introduced by the fix. If it was always red, that is a defect the fix neither fixed nor caught.** Either way, the comment's own "row m88kdslotshadow" reference without a status leaves a known-bad path newly reachable, and that needs a measurement the brief did not inline.
+
+**Q2 (REASONED).**
+
+*Negative controls* — smallest edits that re-open THE defect AND the detector catches (proves detector is sensitive):
+- `#503`: change `for (cpu = 0; cpu < d->ncpus; cpu++)` back to `for (cpu = 0; cpu < MAX_CPUS; cpu++)`. Expected: `luna_absentcpu_probe.py` NULL-deref row goes RED.
+- `#502`: remove any single `implemented = true` line, e.g. the one for `ILLEGAL_INTEGER_DIVIDE`. Expected: `m88k_exc_probe.py` row `div0` goes RED.
+
+*Clean-sweep candidates* — smallest edits that re-open A defect AND the detector stays green:
+- `#503`: set `d->ncpus = 0`. Walk is empty — no NULL deref, so the probe (if scoped to NULL deref) stays green; interrupts silently never re-asserted. **Whether the probe also tests re-assertion behavior is not stated in the packet.**
+- `#502`: remove a case label while keeping `implemented = true`. Vector no longer halts (probe passes), but the case falls through to whatever is after — if benign, delivery is silently lost. **Cannot enumerate without file access.**
+
+**Q3 (REASONED, partial denominator).**
+
+Cells swept from the diff: 1 capture + 1 walk in `#503`; 7 `implemented = true` assignments + 7 case labels in `#502`.
+
+Mutant shapes swept: the four listed under Q2. **NOT swept:** predicate dominator walks to enclosing function boundaries (need file access); operand swaps in `d->cpu_irq[cpu].interrupt_assert/deassert` reads; removal of all 7 case labels in `#502` if the post-switch default is benign; addition of `implemented = true` for a vector that should legitimately halt.
+
+"Zero clean-sweep found" is **not** a claim I can make; "this many shapes looked at by diff inspection alone" is.
+
+**F2 (REASONED — disclosed, partial).** Two unmodeled items in the `#502` comment: scoreboard capture (SSBR = 0 on write; frozen SSBR keeps old value) and fcr2/fcr4/fcr5 for the divide. Real limitations for software that depends on those registers. Disclosed, not fixed. Whether load-bearing depends on detectors not inlined.
+
+The `#503` comment discloses that absent slots' MASK/SOFT registers remain "guest-writable storage with readback" (board-model fidelity, row `lunaabsentmaskdecl`). Disclosed, not fixed.

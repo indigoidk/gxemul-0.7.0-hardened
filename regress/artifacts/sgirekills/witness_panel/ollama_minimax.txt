@@ -1,0 +1,43 @@
+VERDICT LINE FIRST: **PREMISE (i) IS WRONG.** `fatal()` is the first statement in the default arm; in GXemul it calls `exit(1)` and does not return. The line `*color = random();` is unreachable. The defect is a fatal termination, not a silent random-value injection. Witness as specified is NOT BUILDABLE on the stated grounds.
+
+---
+
+**Audit of the premises as stated**
+
+(i) "the default arm executes `*color = random()`" — **WRONG (READ).** The packet shows:
+
+```c
+default:fatal("unimplemented dst_mode %i ...",
+        mode, put ? "put" : "get", x, y);
+    // exit(1);
+    *color = random();
+    return;
+```
+
+`fatal()` is invoked before `*color = random()`. In GXemul, `fatal()` is a wrapper that prints to stderr and calls `exit(1)`; it does not return. The commented `// exit(1)` is redundant — it was never the thing keeping the process alive. The author's claim that commenting out `exit(1)` "lets `random()` execute" assumes `fatal()` is a printf; that assumption is unsupported and almost certainly false. **One fact would settle it:** the definition of `fatal()` in this fork (whether it returns). The packet does not contain it, but the standard GXemul definition (exit-on-call) is the only behavior consistent with the function's name and the presence of a redundant commented-out `exit(1)`.
+
+Consequence: the guest-visible symptom is a **simulator crash**, not random pixels. The defect's character changes entirely — from "silent data corruption that may go unnoticed" to "immediate process termination on first encounter."
+
+(ii) `LIN_B` extracts to 5 and is unhandled — **HOLDS (READ).** Table in packet: `0x1400 >> 10 & 7 = 5`. Switch covers 0,1,2,4. Correct.
+
+(iii) `src_mode`/`dst_mode` are ordinary writable device registers — **NOT CHECKABLE from packet.** The brief names offsets `CRIME_DE_MODE_SRC/DST` and indexes `d->de_reg[]`. Plausible (standard CRIME MMIO layout), but I cannot confirm the register window is guest-writable without seeing the device's `devinit`/`access` functions. **One fact would settle it:** the address map for the CRIME device in this fork (which addresses decode to `de_reg[]` writes).
+
+(iv) "a failed source get feeds the destination put in the same loop iteration" — **HOLDS structurally (READ), but moot given (i).** The code does pass `&color` from the GET to the PUT. However, because the GET calls `fatal()`, the PUT never executes in the failure case — the process is already gone. The "random color written to destination" narrative cannot occur.
+
+---
+
+**The witness, reconsidered**
+
+Q1 — Can you build the rung-3 witness? **Not as specified.** The proposed oracle ("destination ≠ source", "two runs differ") rests on `random()` being reached and non-deterministic. Neither holds: the code path terminates at `fatal()` before `random()`. What *can* be built is a different witness: a guest instruction sequence that programs `CRIME_DE_MODE_SRC = DE_MODE_LIN_B` with XFER set, executes a primitive, and observes the simulator process exiting with the `fatal()` message. That is a rung-3 witness to a **different defect** (unguarded fatal on a documented mode), not to silent random injection. The "two controls" requirement (liveness + device signature) is harder to satisfy for a crash oracle — liveness still works (a handled mode returns through the same decode), but the device-signature control reduces to "the fatal message names this function," which is weaker than "RAM would answer differently."
+
+Q2 — Which machine? **Not determinable from packet.** The CRIME/MACE combination is SGI O2-class. A committed `-E o2` (or whatever this fork's O2 config is called) is the candidate, but naming it requires reading the machines directory. I will not guess.
+
+Q3 — Is LIN_B reachable in practice? **Not determinable from packet.** The brief concedes it has asserted only that the constant exists. Whether any in-tree guest (NetBSD sgimips, OpenBSD) actually programs `LIN_B` requires reading the guest's CRIME mode-setting code. The fact that the comment credits OpenBSD's character drawing to the XFER path does not tell us which `src_mode` value OpenBSD selects; if it uses `LIN_A` (handled, value 4), then `LIN_B` is documented but never driven, and the practical severity of the crash is "never triggered by shipped guests."
+
+---
+
+**What the panel should record**
+
+The brief's central narrative — "guest receives random pixels, runs are non-deterministic, oracle is `dest ≠ source`" — is built on the false premise that `fatal()` returns. The defect is real (a documented mode hits `fatal()`; that is a bug), but it is a **crash bug, not a data-corruption bug**, and its witness, controls, and severity all differ from what the brief proposes. A previous round that "insisted one premise must be wrong" was pointing at the right target; the unsupported assumption was (i).
+
+If the round proceeds documented-only, it should be documented as: *unguarded `fatal()` on `DE_MODE_LIN_B` (and tlb_mode 3,6,7) in `horrible_getputpixel`; guest-visible as simulator termination; reachability by shipped guests not established from packet.*

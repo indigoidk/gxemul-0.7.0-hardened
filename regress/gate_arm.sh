@@ -1250,6 +1250,49 @@ else
     check "sgi_re unmapped rows red"   "$(count "$UNMLOG" " FAIL$")" "0"
 fi
 
+#  ---- sgirandompixel: horrible_getputpixel()'s unimplemented-mode arm.
+#
+#  WHAT THIS PROTECTS.  That arm used to do `*color = random()' with its exit(1) commented out, so a failed
+#  pixel GET handed the CALLER a random value and draw_primitive() wrote it to the destination in the same
+#  loop iteration.  DE_MODE_LIN_B (0x1400) is one of the FIVE modes crmfbreg.h documents and extracts to
+#  tlb_mode 5, so it was reachable with a DOCUMENTED mode.  Now declined, with a latched announce.
+#
+#  The probe is BOTH the rung-3 WITNESS (7/8 red on the pre-fix build under the re-pinned oracle, preserved as
+#  artifacts/sgirandompixel/witness_20260906/prefix_repinned_RED.out) and the DETECTOR (kill table in
+#  artifacts/sgirandompixel/killtable/: five mutants, all killed, BASE 8/8 opening and closing).
+#
+#  `lin_b diag once' IS THE ROW THAT NEEDED THE MOST CARE and the reason the probe draws a 1x4 rectangle
+#  rather than a single pixel: with one pixel an UNLATCHED announce also fires exactly once, the count channel
+#  cannot vary, and M_NOLATCH escaped 8/8.  Height rather than width, because LIN_A addressing is
+#  `ofs = x & 4095' -- y is ignored, so four rows rewrite one byte and the VALUE oracle survives.
+RANDLOG=$LOGDIR/sgi_re_randompixel.log
+python3 sgi_re_randompixel_probe.py "$PMAX" gate > "$RANDLOG" 2>&1 || true
+
+if ! grep -q "SGIRAND_DONE" "$RANDLOG"; then
+    check "sgi_re randompixel probe completed" "no" "yes"
+else
+    check "sgi_re randompixel probe completed" "yes" "yes"
+    check "sgi_re randompixel witness verdict" "$(count "$RANDLOG" '^SGIRAND_WITNESS=PASS$')" "1"
+    #  TWO SPACES AFTER $v, NOT ONE -- the sibling block above uses the same idiom and this block did not,
+    #  which the gate caught on its first run: `lin_b diag' got=2, because `^lin_b diag .*ok$' also matches
+    #  the row `lin_b diag once'.  That is the padded-column trap in its MATCHES-TWO-ROWS direction.
+    #
+    #  The probe prints names with "%-16s" followed by an explicit space, so a name of N chars is followed
+    #  by (16-N)+1 spaces.  The longest name here is `lin_b diag once' at 15, leaving exactly two -- so this
+    #  pattern has ONE CHARACTER of margin.  A row name of 16 or more makes the two-space pattern
+    #  UNSATISFIABLE, which is the same trap in its other, SILENT direction: the check stops testing
+    #  anything and stays green.  If a name must grow past 15, widen the probe's "%-16s" in the same diff.
+    for v in "live" "devsig" "copy lin_a" "lin_b not src" "lin_b is fg" "lin_b alive" "lin_b diag" "lin_b diag once"; do
+        check "sgi_re randompixel row: $v" "$(count "$RANDLOG" "^$v  .*ok$")" "1"
+    done
+
+    #  DENOMINATOR, SUMMED ARITHMETICALLY -- two rows, not one, for the sibling block's reason.
+    check "sgi_re randompixel rows emitted" \
+          "$(( $(count "$RANDLOG" " ok$") + $(count "$RANDLOG" " FAIL$") ))" "8"
+    check "sgi_re randompixel rows green" "$(count "$RANDLOG" " ok$")"   "8"
+    check "sgi_re randompixel rows red"   "$(count "$RANDLOG" " FAIL$")" "0"
+fi
+
 #  ------------------------------------------------------------ #500 sgideprimop
 #  draw_primitive()'s default arm ended the host on a guest-written drawing op.
 #  Now a latched decline.  The detector is its OWN probe rather than rows bolted

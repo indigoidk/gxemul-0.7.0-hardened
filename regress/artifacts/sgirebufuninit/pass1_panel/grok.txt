@@ -1,0 +1,232 @@
+I'll start from the full offloaded brief, then check the repo against the premises rather than ratifying them.The brief is loaded. Next I’ll re-derive the load-bearing premises from `GXEMUL-SEC/src/` instead of taking the packet’s arithmetic as given.BUFDEPTH in the header is 8/16/32 only — field 3 is undocumented. I’ll confirm whether the destination is RAM and whether callers constrain the pair.**VERDICT: TAKE THE ROUND, BUT NOT ON THE BRIEF'S PATH-A EXEMPLAR.** `#95` does **not** cover either path. `buf` is uninitialised. Destination is **RAM**, not a device. PATH A is live on **documented** `CI` + `BUFDEPTH_16/32` (`0x1200`), not only on undocumented depth 8. PATH B is live on documented `RGBA/RGB/ABGR` + `BUFDEPTH_8/16`. Fix is `memset(buf, 0, sizeof buf)` / `uint8_t buf[8] = {0}` (defined padding, not a refusal). Do **not** join `sgirandomcolour`. Talk HIGH down to **MEDIUM**. The brief's `0x1320` PATH-A vehicle is the weaker one.
+
+Line numbers below are `GXEMUL-SEC/src/` (`horrible_getputpixel` at `dev_sgi_re.c:184`; `buf` at `:284`). They match the inlined function, not a 2021 tree.
+
+---
+
+## Q1 — premises, settled from the tree (not from the packet)
+
+### 1. `buf` is uninitialised on every path that uses it. Yes.
+
+Block-scope `uint8_t buf[8];` at `:284`, no initialiser, no `memset` of `buf`. The five `memset`s in this file are `d`, `rop_used` (twice), a comment, and `zerobuf`. C99 does not zero it. There is no compiler-visible store that fills `buf[4..7]` on any colour arm, and no arm fills more than four bytes.
+
+Early returns (`x/y` reject, `tile_nr >= 256`, `tlb_mode` default, `tile_nr >= 32`, high-bit clear) never reach `buf`. Those paths are not leaks; they also do not initialise it.
+
+### 2. `#95` does not cover PATH A. It does not cover PATH B's extra bytes either. The round is not dead.
+
+`#95` is `memory_rw.c:485-492`:
+
+```c
+if (writeflag == MEM_READ)
+    memset(data, 0, len);
+```
+
+inside the **device-hit** arm, before dispatch. Three independent misses:
+
+| path | why `#95` cannot save it |
+|---|---|
+| PATH A | `MEM_WRITE`. The `if` is read-only. |
+| PATH B, extra bytes | even on a device read it zeroes `len` = `bufdepth` bytes. The combine then reads **past** `len`. |
+| both, on the real destination | see Q1.3: this access never takes the device arm. |
+
+`#95`'s CHANGELOG sentence is about **device handlers filling the caller's `data`**. This helper is the opposite: a local stack buffer used to read/write **framebuffer RAM**. `#100` grew `buf[4]`→`buf[8]` to stop a **stack overflow** when `bufdepth==8`. It did not initialise the new bytes. That converted overflow into a well-defined uninit write. Different class, same function, both claims in the packet survive.
+
+### 3. `tileptr + ofs` is RAM. `#95` does not run. PATH B is worse than the brief said, in the way the brief feared.
+
+Case 4 (`LIN_A`) is the witness vehicle:
+
+```c
+tileptr = 0x80000000 | (d->re_linear_a[tile_nr] << 12);
+ofs = x & 4095;
+...
+tileptr &= ~0x80000000;
+cpu->memory_rw(..., tileptr + ofs, buf, bufdepth, ..., PHYSICAL);
+```
+
+The shipped probe sets `re_linear_a[0] = 0x10` → physical **`0x10000`**. CRIME is at `0x14000000` (`machine_sgi.c`). `0x10000` is ordinary RAM.
+
+Successful RAM path (`memory_rw.c:778-782`) is `memcpy` of `len` bytes. No pre-zero. Failed RAM (`memblock == NULL`, `paddr >= physical_max`) zeroes `len` only, still not the tail of `buf`.
+
+So on the path the probe already uses: PATH A writes host stack into guest RAM; PATH B's `memcpy` fills `buf[0 .. bufdepth-1]` from RAM and leaves `buf[bufdepth .. 7]` as stack. No `#95` anywhere.
+
+### 4. The two fields are independent. No caller guard.
+
+Enumerated producers of `mode`:
+
+- `CRIME_DE_MODE_DST` / `CRIME_DE_MODE_SRC` (`:1033-1043`): stored as raw `idata` into `de_reg[]`. No mask.
+- `draw_primitive` (`:679-680, :794, :840, :855, :860, :906`): passes those registers straight through. The only related check is XFER `step_x != src_bufdepth`, which **warns and continues**.
+- MTE (`:1342-1364`): synthesises a mode from the MTE depth field. No DE colour/depth cross-check. (And it currently *generates* a mismatch — see “something else” below.)
+
+`DE_MODE_PIXDEPTH_*` (bits 2–3) exists in `crmfbreg.h` and is **used nowhere in `src/`**. Third independent field, unused.
+
+### 5. Depth field = 3 (`bufdepth` 8) is reachable as a guest store. PATH A does **not** rest on it.
+
+Walk of bits 8–9, the actual producer (`(mode >> 8) & 3`):
+
+| bits 8–9 | `bufdepth` | header name |
+|---|---|---|
+| 0 | 1 | `DE_MODE_BUFDEPTH_8` `0x00000000` |
+| 1 | 2 | `DE_MODE_BUFDEPTH_16` `0x00000100` |
+| 2 | 4 | `DE_MODE_BUFDEPTH_32` `0x00000200` |
+| 3 | 8 | **no constant** |
+
+Nothing in the DE store path rejects `0x300`. `#100`'s comment is evidence they believed 8 was reachable. It is, as a raw store.
+
+**The brief's PATH-A headline is still the wrong vehicle.** Walk of PUT fill vs transfer, documented depths only:
+
+| colour | fills | bd=1 | bd=2 | bd=4 | bd=8 (undocumented) |
+|---|---|---|---|---|---|
+| CI | `buf[0]` | clean | **leak `buf[1]`** | **leak `buf[1..3]`** | leak `buf[1..7]` |
+| RGB/RGBA/ABGR | `buf[0..3]` (RGB sets `buf[3]=0`) | clean (short write) | clean | clean | leak `buf[4..7]` |
+| default / YCRCB | `buf[0..3]=random()` | (random, not uninit) | same | same | uninit `buf[4..7]` on top of random |
+
+**Documented PATH A is `CI` + `BUFDEPTH_16` or `BUFDEPTH_32`.** Mode word for the existing LIN_A apparatus: **`0x1200`** = `LIN_A | BUFDEPTH_32 | CI`. The brief's `0x1320` is real but is the undocumented extra.
+
+PATH B, documented, GET combine vs fill:
+
+| colour | combine reads | bd=1 | bd=2 | bd=4 |
+|---|---|---|---|---|
+| CI | `buf[0]` only | clean | clean | clean |
+| RGB | **`buf[1], buf[2], buf[3]`** (not `buf[0]`) | leak | leak | clean for those three |
+| RGBA / ABGR / default | `buf[0..3]` | leak | leak | clean |
+
+`0x1020` = `LIN_A | BUFDEPTH_8 | RGBA` is a valid PATH-B word made of **documented** fields. Arithmetic in §7 is correct for the three words given; it just picked the weak PATH-A member.
+
+### 6. `YCRCB` (`0xf0`) is unimplemented here. Yes.
+
+`grep YCRCB src/devices/dev_sgi_re.c` is 0. Mask is `0xf0`, so bits 4–7 have 16 values. Five are named; four have `case`s; `0xf0` and the other eleven hit `default:`. Confirmed.
+
+---
+
+## Q2 — smallest edit that re-opens the defect and stays green on the obvious detector
+
+Assume the fix is `memset(buf, 0, sizeof buf)` (or `= {0}`) **before** the `if (put)`.
+
+**The one-token (d) mutant is `sizeof buf` → `bufdepth`.**
+
+- PATH A, CI + bd=4: `memset` of 4, fill `buf[0]`, write 4. Extra bytes are still 0. **A “bytes are not stale / extra bytes are 0” row stays green.**
+- PATH B, RGBA + bd=1: `memset` of 1, read 1, combine 4. `buf[1..3]` are stack again.
+
+That is exactly the refactor the brief named. A detector that only pins PATH A cannot see it.
+
+Other small edits, for the contract:
+
+| edit | PATH A CI+4 | PATH A RGBA+8 | PATH B RGBA+1 |
+|---|---|---|---|
+| delete `memset` | reopens | reopens | reopens |
+| `sizeof` → `bufdepth` | **green** | green (bd=8 zeros all 8) | **reopens** |
+| `sizeof` → `4` | green | **reopens `buf[4..7]`** | green (combine is 4) |
+| `memset` only in the PUT arm | reopens | reopens | **reopens** |
+| `memset` only in the GET arm | **reopens** | **reopens** | green |
+| `memset` *after* the PUT fill | dest is all zeros: “not stale” can still pass; colour-byte row must red |
+
+**Rows owed:** (1) PATH A extra bytes are 0, and the colour byte *is* the intended byte (kills post-switch memset). (2) PATH B combined colour has zeros in the unfilled positions (kills `sizeof`→`bufdepth`). (3) If you also row undocumented bd=8, that kills `sizeof`→`4`; if you disclose bd=8, say so in the contract.
+
+---
+
+## Q3 — option set. Two members you did not name. Decline is the wrong one.
+
+Grep, not argument:
+
+- **This function's own RGB PUT** (`:290-294`) already pads with **zero** (`buf[3] = 0`). In-function precedent for “defined padding”, not refusal.
+- **`dev_dreamcast_maple.c:255/285` and `:306/330`**: `uint8_t buf[8];` then `memset(buf, 0, 8)` then partial fill then `memory_rw(..., MEM_WRITE, PHYSICAL)`. Same shape, house answer is zero the whole array.
+- **`dev_sgi_gbe.c:133-137` (#196)**: unimplemented colour type renders **black** (zeros), no `fatal` flood. Sibling SGI framebuffer, unknown type → defined zeros.
+- **MTE `zerobuf`**: `memset` before the write (`:1431`). Same file.
+
+Unnamed members:
+
+6. **`uint8_t buf[8] = {0};`** — C99 form of (1), same observable.
+7. **Clamp the *transfer* to bytes filled** (`len = min(bufdepth, filled)`). Guest-visible: old destination bytes survive. Different from zeros.
+8. **IMPLEMENT / model hardware** (YCRCB, 64-bit depth). No datasheet in `_scratchpad/` for CRIME DE pixel packing. Addition licence: no.
+
+**Pick (1) / (6). Say in the comment that hardware padding is unknown and this is defined behaviour, not a CRIME model.**
+
+Why not (4) decline-mismatch: `CI` + `BUFDEPTH_32` is a plausible 8-bit index in a 32-bit container (RGB already pads). Declining it would also break the MTE 16/32-bit TLB fill path, which **already emits that pair** (below). No hardware evidence it is illegal.
+
+Why not (2) `memset(..., bufdepth)`: does not close PATH B. That is the Q2 mutant.
+
+Why not (5) clamp `bufdepth` down: short write; previous frame's high bytes remain. Worse model than zeros for a 32-bit pixel.
+
+Why not (3) per-arm fill-to-`bufdepth`: for `CI` it is zeros (same as 1). For RGBA+8 it invents four bytes we have no warrant for.
+
+---
+
+## Q4 / §7 — witness. `0x1020` is a PATH-B word, not a PATH-A word. Do not trust stack reuse across primitives.
+
+§7 arithmetic is correct. LIN_A is the right vehicle (forced valid bit). Cost is one constant on the existing probe — but **which** constant.
+
+**Do not paint with `0x1220` then mismatch in a second primitive.** `buf` is a new frame each call. Between primitives you have `draw_primitive` return, `DEVICE_ACCESS` return, debugger. Reuse there is hope, not an oracle. The brief already named this; it is fatal to that shape.
+
+**PATH A, architectural dirt, one pixel, documented fields:**
+
+Same loop iteration already does GET then PUT (`:859-906`). Consecutive calls, same SP, only ROP/stipple on `draw_primitive`'s frame in between. That is the tightest reuse this ABI gives; it is still not a C guarantee, so **measure it**.
+
+- `src_mode = 0x1220` (RGBA-32 GET: fills `buf[0..3]` from a painted source `0xA1B2C3D4` at ofs `0x40`)
+- `dst_mode = 0x1200` (CI-32 PUT)
+- XFER_EN, one pixel, `step_x = 4`
+- dest pre-paint `0x11111111`
+
+If reuse holds, dest bytes are **`D4 B2 C3 D4`** (PUT overwrites `buf[0]` with `*color`'s low byte `D4`, leaves GET's `buf[1..3]`). That fingerprint cannot come from dest pre-paint, from source as a 32-bit store, or from zeros.
+
+If reuse fails: dest is `D4 ?? ?? ??`. Width is still proven (four pre-paint bytes change). `??` all-zero is **inconclusive**, not green. Name that measurement; do not ship a luck oracle.
+
+**PATH B:** `0x1020` as **source** (GET RGBA bd=1), dest matched `0x1220`. First GET in the iteration has no prior PUT to dirty `buf`. Two-pixel dirt is possible (pixel 0 PUT poisons, pixel 1 GET leaks) but LIN_A `ofs = x & 4095` makes adjacent `x` overlapping byte writes — the existing probe already burned that. Post-fix PATH B **is** deterministic (`(loaded_byte << 24)` with zeros in the rest). Pre-fix red is the hard half. Honest split: witness PATH A; pin PATH B on the detector as the (d) `sizeof`→`bufdepth` row; if pre-fix PATH B is green because the stack was zero, record INCONCLUSIVE, do not claim a PATH-B reproduction.
+
+A “value is wrong” oracle can pass by luck. Agreed. Positive identification or nothing.
+
+---
+
+## Q5 — severity. Talk it down.
+
+**MEDIUM, not HIGH.** Guest-reachable uninit into guest-visible RAM is real. Everyday symptom is wrong padding / previous pixel, not a useful exfil channel. First call of a session *can* land host-stack bytes (possibly pointers) in the framebuffer; that is the honest ceiling, and it is still not `#95`'s device-read class.
+
+`#95` claiming “the whole class” does not upgrade this. That sentence is about device-read uninit. This is a drawing helper. `#100` fixed overflow, not contents.
+
+Do not talk it to LOW: it is documented registers, seven call sites, and (via MTE) a path the file itself says NetBSD `crmfb_fill_rect` uses.
+
+---
+
+## Q6 — two rounds. The letter is right.
+
+Different defects at the same lines:
+
+- `sgirebufuninit`: bytes **nobody** assigns.
+- `sgirandomcolour`: bytes assigned from **`random()`**.
+
+`memset` does not stop `default:` overwriting with `random()`. Removing `random()` does not fill `buf[4..7]`. A shared “deterministic across runs” oracle **misses stable-stack uninit** (wrong every run, same every run) and is the vacuity-floor problem, not a saving. `sgirandomcolour` still has `witness: null`. Same detector, no new oracle: false.
+
+GBE `#196` (unknown type → black) is the warrant to hand that later round, not this one.
+
+---
+
+## Something else, found while checking premises
+
+**1. MTE `if (depth == 4)` is dead. The emulator itself emits PATH A's documented pair.**
+
+```c
+int depth = 8 << ((mode & MTE_MODE_DEPTH_MASK) >> MTE_DEPTH_SHIFT);
+/* depth ∈ {8,16,32,64} bits */
+...
+if (depth == 4) {           /* never true */
+    src_mode |= DE_MODE_TYPE_RGBA;
+    dst_mode |= DE_MODE_TYPE_RGBA;
+}
+```
+
+16- and 32-bit MTE TLB fills therefore always run as **CI + matching bufdepth**. 32-bit fill writes `bg`'s low byte plus three uninit bytes. Comment at `:1322` says NetBSD `crmfb_fill_rect` uses this. File as its own row (`sgimtedepth4` or similar). Do **not** join: fixing `== 4` to `== 32` changes MTE 32-bit *colour* semantics, which memset does not. Memset would turn that path into “low byte + zeros” — defined, still wrong.
+
+**2. RGB GET is not the inverse of RGB PUT.** PUT stores R,G,B,0 in `buf[0..3]`. GET does `(buf[1]<<24)+(buf[2]<<16)+(buf[3]<<8)` — **never reads `buf[0]`**. GBE `CRMFB_MODE_TYP_RGB8` matches the PUT packing, not this GET. Separate correctness bug; file it; it also makes RGB+bd=1 PATH B worse (the one byte actually read is the one the combine ignores).
+
+**3. Scan limit 3:** I did not re-run the scanner. I grepped `uint8_t buf[` under `src/devices/`: maple (memset-then-fill, safe) and this site. The maple idiom is the transferred warrant for (1). I am not treating “only member in the tree” as corroboration of the defect; the function is.
+
+---
+
+## Contract sketch (if you take it)
+
+- **Catch:** uninit bytes transferred on PUT when `bufdepth` > bytes the colour arm assigns; uninit bytes combined on GET when `bufdepth` < bytes the colour arm reads. Documented cells: CI+16/32 PUT; RGB/RGBA/ABGR+8/16 GET.
+- **Repair:** zero `sizeof buf` before either arm. Padding is defined zeros, hardware unknown.
+- **Disclose:** `bufdepth==8` (no header constant); YCRCB/`default:` random (`sgirandomcolour`); MTE `depth==4` dead (`sgimtedepth4`); RGB GET/PUT non-inverse; LIN_B still declined.
+- **(d) mutant:** `sizeof buf` → `bufdepth`. PATH B row must red.
+- **Do not claim:** `#95` regression; host-secret exfil; that `0x1320` is required.
+
+**Named measurement I did not run** (operational rule / this seat is read-only): one-pixel XFER GET `0x1220` / PUT `0x1200` and print dest's four bytes. If they are `D4 B2 C3 D4` (source `A1B2C3D4`), reuse is measured and PATH A is rung-3. If they are `D4 00 00 00` already, something else is zeroing and the round's premise needs a re-read before anyone edits.

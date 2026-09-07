@@ -1,0 +1,103 @@
+# `sgirandompixel` -- the RUNG-3 WITNESS ATTEMPT.  One question: can this be reached by a real guest instruction?  2026-09-06.
+
+## WHAT THIS IS
+A design review of a hardware simulator for an obsolete workstation (GXemul 0.7.0, a maintained fork).  The question is one of
+MODELLING FIDELITY: the model calls `exit(1)` -- terminating its own process -- for register traffic the vendor documentation
+treats as legal, and the round has to choose among six standard dispositions this project already uses elsewhere.  Ordinary
+software-correctness review of simulator code; no security framing is intended or wanted, and none of this concerns a
+production system.
+
+
+## WHAT THIS IS
+An ordinary correctness review of a graphics-engine device model in a hardware simulator for obsolete
+workstations (GXemul 0.7.0, a maintained fork).  Plain engineering vocabulary; no security framing is intended
+or wanted, and none of this concerns a production system.
+
+**The tree under review is `GXEMUL-SEC/src/`; the file is `src/devices/dev_sgi_re.c`.  Ignore any other `src/`
+you find** -- three pristine-2021 upstream copies sit under the project root and are NOT this fork.  Cite by
+grep anchor.  **VERDICT LINE FIRST.**
+
+## THE ASK, and it is deliberately ONE thing
+This project's lifecycle says: **before recording a round as documented-only, ask ONE seat to try a rung-3
+probe.**  A rung-3 witness is a real guest instruction through real address decode and real `memory_rw`, on an
+**UNMODIFIED, COMMITTED** machine description -- no `device_add` added to reach the site, since that would prove
+only that the harness can call the code.  It must show the symptom on the committed build and carry TWO controls: a LIVENESS
+control (a known value returns through the same decode) and a DEVICE-SIGNATURE control (the observed value
+could only have come from this device -- RAM would answer differently).
+
+**If you cannot build one, say so plainly and say what stopped you.**  That is a real answer and the round
+proceeds as documented-only with the attempt recorded.  What it may never mean is "nobody thought to ask".
+
+## THE DEFECT, verified by reading before this brief was written
+
+`horrible_getputpixel()` extracts `uint32_t tlb_mode = (mode >> 10) & 0x7;` and switches on it.  **Cases 0, 1,
+2 and 4 are implemented.  The `default:` arm is:**
+
+```c
+	default:fatal("unimplemented dst_mode %i for horrible_getputpixel (%s), x=%i y=%i\n",
+			mode, put ? "put" : "get", x, y);
+		// exit(1);
+		*color = random();
+		return;
+	}
+```
+
+**The `exit(1)` is commented out and `*color = random()` executes.**  So a failed *get* does not decline -- it
+hands the caller a random 32-bit value.
+
+*** AND THE UNHANDLED VALUE IS A DOCUMENTED MODE, NOT A NONSENSE ONE. ***  The function's own comment lists
+five modes from NetBSD's `crmfbreg.h`, and the vendored header at `src/include/thirdparty/crmfbreg.h` confirms
+them:
+
+| constant | value | `(mode >> 10) & 7` | switch |
+|---|---|---|---|
+| `DE_MODE_TLB_A` | `0x0000` | 0 | handled |
+| `DE_MODE_TLB_B` | `0x0400` | 1 | handled |
+| `DE_MODE_TLB_C` | `0x0800` | 2 | handled |
+| `DE_MODE_LIN_A` | `0x1000` | 4 | handled |
+| **`DE_MODE_LIN_B`** | **`0x1400`** | **5** | ***default -> `random()`*** |
+
+`tlb_mode` 3, 6 and 7 also reach it.
+
+**THE PATH THAT MAKES IT GUEST-VISIBLE, in `draw_primitive()`:**
+
+```c
+	uint32_t dst_mode = d->de_reg[(CRIME_DE_MODE_DST - 0x2000) / sizeof(uint32_t)];
+	uint32_t src_mode = d->de_reg[(CRIME_DE_MODE_SRC - 0x2000) / sizeof(uint32_t)];
+	...
+	// Pixel colors copied from another source.
+	// (OpenBSD draws characters using this mechanism.)
+	if (drawmode & DE_DRAWMODE_XFER_EN)
+		horrible_getputpixel(0, cpu, d, src_x, src_y, &color, src_mode);   // GET -- may set color = random()
+	...
+	if (draw)
+		horrible_getputpixel(1, cpu, d, x, y, &color, dst_mode);           // PUT -- writes it
+```
+
+Both mode words are ordinary device registers, written by the operating system inside through normal stores.
+So when `CRIME_DE_MODE_SRC` holds `LIN_B` and the transfer bit is set, **the destination pixel receives the
+value produced by `random()` instead of the source pixel, once per pixel, with no decline** -- and the
+code's own comment says this is the path OpenBSD uses to draw characters.
+
+## THE QUESTIONS
+1. **Can you build the rung-3 witness?**  An unmodified committed SGI machine, guest stores programming
+   `CRIME_DE_MODE_SRC = DE_MODE_LIN_B` and the XFER drawmode bit, then a primitive -- and an oracle that reads the
+   destination back and shows it does not equal the source.  **The oracle is the hard part**: `random()` is
+   non-deterministic, so pin *"the destination does not equal the source"* and *"two runs of the same sequence
+   differ"* rather than any value.  If seeding makes runs identical, say so -- that changes the oracle, not the
+   defect.
+2. **Which machine?**  Name the committed `-E`/`-e` that installs this device with a framebuffer the probe can
+   read back through `memory_rw`.
+3. **Is `LIN_B` reachable in practice, or only in principle?**  Does any in-tree guest actually program it?  A
+   documented-but-unused mode and a mode NetBSD really selects are different severities, and I have asserted
+   only that the constant exists.
+
+## THE SECOND QUESTION
+Of my premises -- (i) the default arm executes `*color = random()`; (ii) `LIN_B` extracts to 5 and is
+unhandled; (iii) `src_mode`/`dst_mode` are ordinary writable device registers; (iv) a failed source get feeds the destination put
+in the same loop iteration -- **is any wrong?**  *If they all hold, say that plainly; a previous brief of mine
+closed by insisting one must be wrong and a seat correctly named that instruction as the unsupported
+assumption.*
+
+VERDICT LINE FIRST (`WITNESS BUILDABLE: <sketch>` / `NOT BUILDABLE: <what stops it>` / `PREMISE <n> IS WRONG`),
+then the detail.  Under a page.

@@ -614,6 +614,46 @@ MANIFEST = {
 
     "sgi_re_unmapped_probe.py":
         (CLASS_DETECTOR, "#499 sgireunmapped -- the unmatched-address catch-all is a latched per-direction decline; wired into gate_arm.sh in the same commit as the fix, row count derived from the gate rather than restated here"),
+
+    "sgi_re_randompixel_probe.py":
+        (CLASS_DETECTOR, "#504 sgirandompixel -- horrible_getputpixel's unimplemented-mode arm is a "
+                         "latched decline; 8 rows, wired into gate_arm.sh in the same commit as the "
+                         "fix. It is BOTH the rung-3 witness and the detector. The `lin_b diag once' "
+                         "row requires the probe's 1x4 rectangle: with a single pixel an UNLATCHED "
+                         "announce also fires exactly once, the latch channel cannot vary, and "
+                         "M_NOLATCH escaped 8/8 -- height not width, because LIN_A addressing is "
+                         "`ofs = x & 4095' so y is ignored and four rows rewrite one byte, leaving "
+                         "the value oracle intact"),
+
+    #  #504's frozen evidence.  The killtable copy is the instrument the five-mutant table ran; the
+    #  witness copy is the instrument that measured the COMMITTED build RED at 7/8 under the re-pinned
+    #  oracle, which is this round's order proof.  Both are preserved rather than regenerated because a
+    #  measurement cited in a durable record must live at a durable path.
+    "artifacts/sgirandompixel/killtable/probe.frozen.py":
+        (CLASS_RESEARCH, "sgirandompixel (#504) kill table: the frozen instrument the five-mutant "
+                         "table ran, preserved as evidence"),
+    "artifacts/sgirandompixel/witness_20260906/probe.frozen.py":
+        (CLASS_RESEARCH, "sgirandompixel (#504) witness: the frozen instrument that measured the "
+                         "committed pre-fix build RED at 7/8 under the re-pinned oracle -- the "
+                         "oracle-correction order proof, preserved as evidence"),
+
+    #  sgirebufuninit's two census scanners, preserved beside the brief that cites their OUTPUT.  They
+    #  are ANALYSIS tools, not detectors: neither has an oracle and neither is wired to anything.  They
+    #  are kept because the brief makes a claim about the whole device tree -- that only dev_sgi_re.c
+    #  carries this defect -- and a reader must be able to re-run the search rather than trust the count.
+    "artifacts/sgirebufuninit/scan_len.py":
+        (CLASS_RESEARCH, "sgirebufuninit: scans src/devices for memory_rw calls whose transfer LENGTH "
+                         "is not pinned to the stack buffer (6 sites). Blind by construction to a "
+                         "partially-filled buffer passed as sizeof(buf) -- which is what scan_fill.py "
+                         "exists to cover"),
+    "artifacts/sgirebufuninit/scan_fill.py":
+        (CLASS_RESEARCH, "sgirebufuninit: the companion scan -- every memory_rw that WRITES a stack "
+                         "byte-buffer into guest-visible memory, with whether the buffer is ever "
+                         "initialised wholesale (5 sites). Found dev_scc.c:305, which scan_len.py "
+                         "excludes by construction. NOTE its known defect, recorded because it nearly "
+                         "produced a wrong conclusion: the declaration map is keyed by NAME file-wide, "
+                         "so two functions declaring the same buffer at different sizes collapse to the "
+                         "last one parsed -- its `size' column reported 32 for a data[8]"),
     #  #499 pass 4's FROZEN MUTATOR, preserved because the E0/E0W measurement is cited in
     #  the round record and a citation into a session temp dir is not a citation.  It builds
     #  the announce-then-exit(0) mutants; it is EVIDENCE, not a detector the battery owes a

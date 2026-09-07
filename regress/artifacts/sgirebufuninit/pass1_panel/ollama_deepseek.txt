@@ -1,0 +1,68 @@
+VERDICT: The core uninitialised-`buf` claim is READ from the inlined function and REASONED valid for the four implemented colour modes; Path B is also valid. The brief’s table for `default`/YCRCB assumes `fatal()` returns, which is not established. Several reachability and oracle premises are not checkable from this packet. Severity HIGH is defensible but not proven.
+
+---
+
+### Q1 — Premise audit
+
+1. **Is `buf` uninitialised on every path?**  
+   READ from the inlined function: yes, for the paths that reach `memory_rw` after the `switch`.  
+   REASONED exception: the `default:` arm calls `fatal()` before `memory_rw`. If `fatal()` is `noreturn`, that path never writes `buf`; the brief’s table for `default`/YCRCB is therefore not established. The four implemented colour modes (`CI`, `RGB`, `RGBA`, `ABGR`) do reach the write without initialising all transferred bytes.
+
+2. **Is `#95`’s pre-zero inapplicable?**  
+   READ from the brief’s description of `#95`: it zeroes the caller’s buffer on device **READ** for `len` bytes.  
+   REASONED: Path A is `MEM_WRITE`, so not covered. Path B is `MEM_READ` of `bufdepth` bytes; the pre-zero covers only `buf[0 .. bufdepth-1]`. The combine reads beyond `bufdepth`, so those bytes remain uninitialised. The claim holds.
+
+3. **Is `tileptr + ofs` a device or RAM?**  
+   NOT CHECKABLE from this packet. The inlined function does not show the memory map. This matters for whether `#95` runs at all on Path B, but even if it does, the beyond-`len` bytes are still uninitialised.
+
+4. **Are the two mode fields independent?**  
+   READ from the inlined function: `color_mode` uses bits 4–7, `bufdepth` uses bits 8–9; no cross-check in the function.  
+   NOT CHECKABLE whether a caller constrains the pair. No caller code is inlined.
+
+5. **Is depth field = 3 (`bufdepth` 8) reachable?**  
+   NOT CHECKABLE from this packet. The `#100` comment is evidence, not proof. No upstream validation is inlined.
+
+6. **Is `DE_MODE_TYPE_YCRCB` (0xf0) unimplemented?**  
+   READ from the inlined switch: there is no `case` for `0xf0`; it falls to `default`. The header inlined documents `0xf0`. So yes, unimplemented here.
+
+---
+
+### Q2 — Smallest edit that reopens the defect and passes an obvious detector
+
+If the fix is `memset(buf, 0, sizeof buf)` at declaration, the smallest reopening edit is to change the size to `bufdepth`:
+
+```c
+memset(buf, 0, bufdepth);
+```
+
+This keeps a `memset`, so a detector that only checks for the presence of a `memset` or only checks that the transferred bytes are initialised will pass. It reopens **Path B**, because the GET combine still reads `buf[1..3]` (or `buf[0..3]` for RGBA) beyond `bufdepth`. Path A remains fixed because all transferred bytes are zeroed.
+
+---
+
+### Q3 — Option-set completeness
+
+A missing member: **change the transfer length to the number of bytes actually assigned by the colour arm**, rather than `bufdepth`. For example, write only 1 byte for `CI`, 4 bytes for `RGB`/`RGBA`/`ABGR`. This avoids writing uninitialised bytes without padding or clamping the mode fields. It is distinct from options 1–5 and changes guest-visible transfer length.
+
+The fork’s own idiom cannot be checked from this packet; no in-tree precedent is inlined.
+
+---
+
+### Q4 — Witness shape
+
+`0x1020` is sufficient to exercise Path B **if** depth field 0 is reachable and the LIN_A path is as described.  
+The proposed oracle is **not sound** as stated: `buf` is a fresh stack frame each call. The carry-over of bytes from a previous call is incidental, not architectural. A probe relying on it can pass for a reason it does not state.
+
+A deterministic oracle would require making the stale content known without relying on stack reuse. No such method is inlined. The honest answer is that Path B may not support a deterministic oracle from the packet; Path A is easier to witness because the uninitialised bytes are written directly to guest-visible memory.
+
+---
+
+### Q5 — Severity
+
+HIGH is defensible: the defect is guest-reachable through documented registers, and it contradicts `#95`’s claim to close the whole class.  
+However, the practical impact is usually wrong colours, not host-secret disclosure. The severity depends on unresolved premises (device vs RAM, `fatal` behaviour, reachability of depth 3). I would not talk it down below HIGH without settling those.
+
+---
+
+### Q6 — One round or two?
+
+The letter is right: `sgirebufuninit` and `sgirandomcolour` are different defects at the same lines. Fixing one leaves the other standing. A shared oracle of “destination is deterministic across runs” is weaker: uninitialised stack bytes may happen to be deterministic (e.g., previous pixel), so it would not reliably catch `sgirebufuninit`. Separate rounds are justified.

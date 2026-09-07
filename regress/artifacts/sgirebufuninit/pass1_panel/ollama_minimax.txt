@@ -1,0 +1,51 @@
+**VERDICT — packet-level structure confirmed, but the load-bearing premise is NOT CHECKABLE and the brief states it confidently anyway.** The inline code does show `buf[8]` uninitialised, two independent guest-chosen fields decoded locally, and writes/reads of `bufdepth` bytes through `memory_rw`. PATH A and PATH B are real as described. The premise that defeats the round, that `#95`'s "zero on every device READ" does not apply to a `MEM_WRITE` (Q1.2), cannot be settled from this packet, and on this premise the entire defence against "but #95 closed this" rests. Flagging as load-bearing rather than passing.
+
+---
+
+## Premises I can confirm from the inline code (READ)
+
+- **`buf[8]` is never initialised.** No `memset`, no initialiser, no preceding assignment in the function. The inlined source shows the declaration as `uint8_t buf[8];` with only a comment after it. (Q1.1 — yes, within the function.)
+- **PATH A is structurally present.** All five PUT arms assign at most `buf[0..3]`. Enumerated from inline code:
+  - `DE_MODE_TYPE_CI` → `buf[0]` assigned; `buf[1..7]` not.
+  - `DE_MODE_TYPE_RGB` → `buf[0..3]` assigned (including `buf[3]=0`); `buf[4..7]` not.
+  - `DE_MODE_TYPE_RGBA` → `buf[0..3]`; `buf[4..7]` not.
+  - `DE_MODE_TYPE_ABGR` → `buf[0..3]`; `buf[4..7]` not.
+  - `default:` → `buf[0..3] = random()`; `buf[4..7]` not.
+  So any PUT with `bufdepth > bytes-filled-by-arm` leaks. RGBA at depth 3 (`bufdepth=8`) writes 8 bytes with only 4 assigned. CI at depth 2, 4, or 8 leaks at depths above 1 (brief mentions this in passing but the reachability table focuses only on RGBA-at-8 — see "real defect" below).
+- **PATH B is structurally present.** GET reads `bufdepth` bytes into `buf` and the `DE_MODE_TYPE_RGBA` arm combines `buf[0..3]`. With `bufdepth=1`, only `buf[0]` is filled; `buf[1..3]` are stale.
+- **Reachability table arithmetic is correct.** I re-decoded:
+  - `0x1220` = `0001 0010 0010 0000`: bits 4-7 = `0010` (RGBA), bits 8-9 = `10` (2 → `bufdepth=4`), bits 10-12 = `100` (LIN_A).
+  - `0x1320` = `0001 0011 0010 0000`: bits 8-9 = `11` (3 → `bufdepth=8`), rest same.
+  - `0x1020` = `0001 0000 0010 0000`: bits 8-9 = `00` (0 → `bufdepth=1`), rest same.
+- **`YCRCB` (0xf0) hits `default:` in both switches.** (Q1.6 — yes.) Documented in `crmfbreg.h` per the inlined `#define`s, no `case` in either switch.
+
+## Premises I cannot confirm from the packet (NOT CHECKABLE — name the fact that would settle)
+
+- **Q1.2 — does `#95` zero the buffer on a `MEM_WRITE`?** The brief states this confidently ("Path A is a `MEM_WRITE`. A read-side pre-zero cannot apply to it at all."). The fact needed is the body of `cpus/memory_rw.c`, specifically whether the pre-zero is gated on the direction argument or runs unconditionally. If it runs on both directions, **PATH A is dead** and the round collapses. The brief's own §3b invites this attack and asks "If either of those is wrong the round is dead and I want it dead now." I cannot settle it. **This is the most important premise in the packet and it is the one the author states most confidently while the panel needs the source to ratify it.**
+- **Q1.3 — is `tileptr + ofs` RAM or a device mapping?** The author explicitly says they have not settled this. The fact needed is what the framebuffer backing is (the `0x80000000 | (linear_a[tile_nr] << 12)` value — is this a physical RAM window or a device? `d->re_linear_a`'s initialisation, and any MMU mapping at boot). If RAM, `#95` doesn't run for PATH B at all, which is *worse* than the brief claims; if device, `#95`'s pre-zero covers `buf[0..bufdepth-1]` only, so PATH B's combine at `buf[1..3]` is still exposed. Either way the author is honest about the gap — but it should not have been filed with this gap open.
+- **Q1.4 — does a caller guard the (color_mode, bufdepth) pair?** The inline function does not. The brief claims the grep `>> *8) *& *3` returns only the decode, the `#100` comment, and "two XFER siblings — no guard anywhere." I cannot run that grep. If a caller rejects the (CI, depth>1) or (non-CI, depth=8) combinations upstream, the reachability claim weakens. The XFER siblings in particular may already have a paired check.
+- **Q1.5 — is `bufdepth=8` reachable from a guest instruction path?** The inline function doesn't reject depth=3. `#100` grew the array to 8, which is *evidence* (acknowledged) and not proof. The fact needed is whether any code that constructs the `mode` argument (in `draw_primitive`, in the XFER path, or anywhere it is written to a register) ever passes a `mode` with bits 8-9 = `11` to a non-rejected destination.
+
+## Path arithmetic walk (enumeration)
+
+I re-enumerated each row of §3a's table against the inline code. Confirmed. CI is correctly listed as filling only `buf[0]`, so the brief's `bytes assigned by nothing` column for CI as `buf[1..7]` is right; the brief's note "CI leaks at any depth above 1" is right but only briefly mentioned, not surfaced as a row in §7's reachability table — see defect below.
+
+## Per-question
+
+- **Q2** — the brief's smallest-edit hypothesis is the right shape: `memset(buf, 0, bufdepth)` would silence a "is there a memset?" detector while leaving PATH B leaking, because PATH B's combine reads `buf[1..3]` which `bufdepth=1` does not touch. A detector must check that *all reads of buf in the same lexical scope* are covered, not just the call argument.
+- **Q3** — I cannot name a member the brief missed; the five cover the design space. The "in-tree precedent for a device that reconciles two independent guest-chosen mode fields" question requires a grep I cannot run. Disposition equivalence note is correct: (1) and (2) yield zeroes, (3) yields a replicated colour, (4) leaves destination unchanged, (5) yields a shorter transfer — five distinct guest-visible outcomes, none of them hardware-evidenced. The "we do not know what the hardware does" fallback the brief mentions is a legitimate answer and has precedent in this project.
+- **Q4** — the proposed oracle has a real weakness the brief acknowledges: the compiler may not preserve `buf`'s stack slot between the two calls. An oracle that rests on "the stale bytes are the previous pixel's" is, by the author's own framing, an oracle that can pass by luck. The honest answer is that PATH B's deterministic oracle requires either (a) `buf`'s stack slot being architecturally preserved (which C does not promise) or (b) some other observable; PATH A is worse — no GET mode consumes `buf[4..7]`, so the witness would have to be a direct framebuffer read, with a then-uncertain "what should these bytes be" answer. The brief itself entertains this conclusion.
+- **Q5** — defensible HIGH given that `#95` was CRITICAL-class. The author has already laid out both sides.
+- **Q6** — the unification argument is plausible but the brief's own caveat applies. Two purpose-built oracles over a shared weak one is the safer record. The brief invites honest disagreement and I'd record disagreement here.
+
+## A real defect I noticed (READ)
+
+**§3a's enumeration claims "exactly two paths" but does not surface CI-at-depth-2 and CI-at-depth-4 as separate rows in §7's reachability table.** §3a's table correctly shows CI assigning only `buf[0]`; the prose correctly says "CI leaks at any depth above 1"; but §7's witness table shows only `(0x1220, 0x1320, 0x1020)` — all RGBA. The CI-at-depth-2 case is reachable through a different mode-word value than `0x1320` (e.g., `0x1210` = LIN_A | depth 2 | CI) and is not captured in the witness design. The brief does not need a third witness row if the disposition covers all depth/mode mismatches uniformly, but the table gives the reader the impression RGBA is the only relevant colour mode.
+
+## Things explicitly NOT settled from the packet (recorded as such)
+
+- All of §1's premise that "two prior rounds touched this exact code" — I cannot verify whether `#95` and `#100` were the only edits, nor whether `#95`'s description in the changelog is complete.
+- The scanner results in §6 — both scanners and their hits/clean-sites are claims about a grep I cannot run. The methodology is sound; I cannot confirm the output.
+- The "XFER siblings" — the brief mentions them as having the same shape but does not inline them. Whether they share the defect or have already been fixed is unknown.
+
+**Final:** the structural claim (PATH A, PATH B) is sound per the inlined source. The premise that #95 doesn't apply to writes needs the file. That single fact — the body of `cpus/memory_rw.c` — is what would settle it, and the brief should not have stated it as confidently as it did.

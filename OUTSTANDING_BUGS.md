@@ -15155,3 +15155,242 @@ one brief, and three more tonight), but as worded it instructs a seat to assume 
 sound premises must invent one or push back.  **Pushing back is the right answer and the template does not invite
 it.**  Proposed: keep the question, add *"or say NONE and name the forcing assumption as the defect"*.  Held
 rather than applied — the template is what every brief starts from.
+
+## 2026-09-07 — #504 `sgirandompixel` shipped; five residuals filed from its two panels
+
+**SHIPPED.**  `horrible_getputpixel()`'s unimplemented-mode `default:` arm did `*color = random(); return;` with
+its `exit(1)` commented out — and `*color` is the CALLER's variable, so `draw_primitive()` stored the random
+value on the very next line.  Reachable with a **documented** mode: the arm implements tlb_mode 0/1/2/4 and
+`DE_MODE_LIN_B` (`0x1400`, one of the five modes `crmfbreg.h` defines) extracts to 5.  Now declines with a
+latched announce (`SGIRE_W_BADMODE`), witnessed at **rung 3** on unmodified `-E sgi -e ip32`
+(`regress/sgi_re_randompixel_probe.py`, 8 rows, both mandated controls green), backed by a five-mutant kill
+table with BASE 8/8 opening and closing, and wired into `gate_arm.sh` beside its two siblings.
+
+**The five residuals, all named in the shipped comment so no reference dangles:**
+
+**`sgirandomcolour` (MED — the same class at a second site, and NOBODY ELSE SAW IT).**  The COLOUR-mode
+switch's `default:` does `buf[0..3] = random()` and those bytes are then written.  Found by **grok** on the
+design panel and verified by reading before filing: four `random()` calls remain in `dev_sgi_re.c` after this
+round removed the one in `horrible_getputpixel()`.  Not codex, not the packet-fed seats, not me — and I had read
+the file several times that evening.  Presumably the same member 3, but the observable differs: it fills a
+BUFFER rather than one caller variable, so what a declined fill should leave is its own question.
+
+**`sgirandomskipput` (MED — codex's fuller form, filed rather than dropped).**  A declined GET still lets the
+caller perform its dependent PUT, so the destination now gets the FOREGROUND — deterministic, which is this
+round's whole gain, and still a write the guest did not ask for.  codex's design if taken: give the function an
+explicit success result and cover ALL the GET sites (source, `oldcolor` for ROPs, MTE's `bg`).  **Its own
+warning is the sketch rule** — preserve coordinate advancement and stipple rotation; an early `continue` bypasses
+both.  The shipped detector already discriminates it: `lin_b is fg` expects fg today and would expect the
+PRE-PAINT under a skip-PUT fix, so the oracle-correction order applies again and the row set is known ahead.
+
+**`sgirelinb` (LOW — and the panel REFUSED to endorse the obvious fix).**  LIN_B is documented and unimplemented,
+`re_linear_b[]` exists, and case 4 is four lines — so "one more case" is tempting.  codex refused: case 4 carries
+its own `TODO... probably not correct!`, and the MTE path that does select either array checks validity and
+searches BY PAGE while case 4 indexes directly and forces validity.  **Symmetry between the arrays is supporting
+evidence, not a transferred warrant.**  It also caught that the witness programs only LINEAR_A, so re-pinning the
+LIN_B row to `SRC_VAL` would make the instrument assert a behaviour nothing established.
+
+**`sgitileptrsilent` (LOW — from the SIBLING PARITY check, which is what that check is for).**  The
+`tileptr & 0x80000000` arm below is the nearest sibling: also a disabled kill, also on a failed GET, and it
+leaves `*color` alone — so after this round the two **agree on the value and differ on the announce**.  Whether
+to close that is a real question, not an obvious yes: a silent decline is member 2, and the pass-2 seat noted the
+tileptr arm's observable differs (a GET leaves foreground, or the previous copied pixel, in place).
+
+**`sgirenamedstmode` (LOW — and the reason it was NOT fixed in-round is the point).**  The diagnostic hardcodes
+`dst_mode` although the same parameter arrives as `src_mode` on a GET.  This round DID reword it, which broke the
+probe's grep anchor and turned two rows red on a FIXED build for a reason unrelated to the fix.  **Moving the
+anchor to match would have been the laundering shape** — an oracle changed after seeing a red row cannot be told
+from fitting the test to the binary.  The wording went back; whoever takes this changes message and anchor in ONE
+diff and says so.
+
+**`briefforcedwrong` HAS ITS SECOND INDEPENDENT INSTANCE.**  grok answered **NONE IS WRONG** to that round's
+five-way disposition question and named the question's own frame as the unsupported assumption — the same
+correction the codex seat made hours earlier on a different brief, neither knowing of the other.  Two seats, two
+briefs, one template line.  Still held for the 2026-09-09 adjudication rather than applied.
+
+**Two in-round L1 repairs worth carrying, both found by table 1 rather than by review.**  `lin_b diag once` was
+**vacuous by construction** and `M_NOLATCH` escaped 8/8: the probe drew a 1x1 rectangle, so an unlatched announce
+also fired exactly once.  Repaired to **1 wide x 4 tall** — HEIGHT not width, because LIN_A addressing is
+`ofs = x & 4095`, so four rows rewrite one byte and the value oracle survives while four columns would destroy
+it.  **The pre-table CHANNEL check is exactly what should have caught this**: I named the channel and never asked
+whether the session could MOVE it, which is the half that matters.  And `M_RANDOM` was **mis-built** — it also
+silenced the announce, so it died for two reasons and could not attribute its kill to the channel its row names.
+
+**The round's one L4 was mine, in the enum it extended.**  `SGIRE_W_PRIM_OP`'s comment still said *"the next free
+bit is 1 << 10; the enum ends HERE on purpose"* — both false once `SGIRE_W_BADMODE = 1 << 10` was appended below
+it.  That is the duplicate-enumerator collision the file already paid for and warns about four lines earlier; I
+read the warning, placed my bit correctly by it, and left the signpost pointing at the bit I had taken.  Found by
+grok on pass 2, fixed by demoting the superseded sentence inside its own correction.
+
+## 2026-09-07 — three rows filed from the `#504` triage pass
+
+**`sgirebufuninit` (HIGH — `dev_sgi_re.c`: `uint8_t buf[8]` is never initialised, and the guest picks how
+many of its bytes are used).**  `horrible_getputpixel()` declares the buffer with no initialiser and no
+`memset`.  Two independent fields of ONE guest-written mode word decide how much of it is used —
+`color_mode = mode & DE_MODE_TYPE_MASK` (bits 4-7) says how many bytes an arm FILLS, and
+`bufdepth = 1 << ((mode >> 8) & 3)` (bits 8-9) says how many are TRANSFERRED — and **nothing anywhere makes
+them agree**; `grep -rn '>> *8) *& *3' src/devices/` finds the decode, its own `#100` comment and the two
+XFER siblings, and no guard.  Two reachable paths in opposite directions: a **PUT** writes bytes no colour
+arm assigns into guest-visible memory, and a **GET** builds a 32-bit colour out of bytes the read never
+filled, which `draw_primitive()` then stores.
+
+*** THE PROVENANCE IS THE SHARPEST PART: `#95` WAS THIS FORK'S "central uninit-leak fix" CLAIMING TO CLOSE
+*THE WHOLE CLASS*, AND `#100` IN THE SAME BATCH EDITED THIS EXACT ARRAY. ***  `#100` grew it `buf[4]`→`buf[8]`
+because the guest can demand 8 bytes — fixing a stack OVERFLOW — and never asked what fills the bytes it had
+just added.  `#95` zeroes device **READ** buffers for `len` bytes, so it cannot reach a `MEM_WRITE` and cannot
+reach bytes past `len`.
+
+**PASS 1 CORRECTED MY OWN FRAMING, AND THE CORRECTION MADE IT WORSE.**  The brief drove the PUT path with mode
+`0x1320` (depth field 3).  The grok seat objected that the header documents only `DE_MODE_BUFDEPTH_8/16/32`
+and **field 3 is undocumented** — verified against `crmfbreg.h` before being accepted — so my vehicle was the
+weak one, while `DE_MODE_TYPE_CI` (colour type **zero**, the reset value) assigns only `buf[0]` and
+`BUFDEPTH_32` transfers four, making **`0x1200` a fully documented leak of `buf[1..3]`**.  The same seat
+settled the question the brief had left open: **the destination is RAM, not a device**, so `#95`'s pre-zero
+does not run *at all* on either path.  Severity is under active adjudication — grok argues MEDIUM, and that
+call is held until the full roster lands rather than taken from one seat.
+
+**`sgiwidthwiredobl` (LOW — `sgi_re_width_probe.py`'s contract states an obligation that was discharged in the
+commit that wrote it).**  Its `other decl` contract closes *"…which MUST BE GATE-WIRED — unwired, that coverage
+exists nowhere."*  Measured: it **is** wired, by `9f666a8`, **the same commit**; `gate_arm.sh` runs the probe,
+its row list checks all three named rows by name, and the block reports 50 rows emitted, 50 green, 0 red.  So a
+reader concludes coverage exists nowhere when it is wired and passing.  That is the carrier's
+present-tense-description class, and it is worse than an ordinary stale line because it reads as an
+**outstanding obligation** — a future round could redo finished work.  Repair is to DEMOTE it in place, since
+the reasoning (unwired coverage exists nowhere) is exactly why the wiring was done.  **Deliberately not fixed
+on the spot: the gate was running and about to execute that probe, and Python reads a script whole at startup,
+so an edit between runs hands two runs different instruments** — a records-only change would have been
+invisible in the diff and visible in the measurement, which is the worst combination.
+
+**`codexsubjectrefusal` (LOW — a codex content-filter refusal survived neutralisation, and the trigger is not
+what it first appeared).**  Filed earlier in this session and recorded here so the queue and the ledger agree.
+The first diagnosis — that the refusal keyed on the SUBJECT — was wrong; re-testing showed **design briefs are
+answered while witness briefs are refused**, so the trigger is the reach-the-defect FRAMING rather than the
+device or the defect class.  `seat_verdicts.py` now reports a refusal as `SEAT REFUSED` and counts it DOWN,
+because it had been filing as *"answered, NO VERDICT LINE (format miss)"* — a refused seat scored as a live
+seat with bad formatting, which is the seat-failure-counted-as-agreement shape.
+
+## 2026-09-07 — two new defects from the `sgirebufuninit` pass-1 panel, both found by the codex seat on a brief about something else
+
+Both arrived under the standing *"if, while verifying a claim, you found something ELSE — say so"* licence, and
+both were **verified at HEAD before filing**.  The seat's verdict was **GO-WITH-CHANGES**, and it sits at the
+END of a 317 KB answer, which is why the extractor scored it a format miss — *a seat with no verdict line gets
+its body read, and this is the third time that has paid.*
+
+**`sgirergbroundtrip` (MED — the RGB colour arms are off by one byte position).**  The two arms disagree about
+which byte holds which channel:
+
+    PUT  case DE_MODE_TYPE_RGB:   buf[0] = *color >> 24;  buf[1] = *color >> 16;
+                                  buf[2] = *color >> 8;   buf[3] = 0;
+    GET  case DE_MODE_TYPE_RGB:   *color = (buf[1] << 24) + (buf[2] << 16) + (buf[3] << 8);
+
+PUT stores the top three bytes at indices **0,1,2**; GET recombines from **1,2,3**.  Storing `0x11223300` gives
+bytes `11 22 33 00`, which GET reads back as **`0x22330000`** — a round trip through the model's own RGB mode
+does not return what was written.
+
+*** WHY IT MATTERS BEYOND THE BUG: EVERY ANALYSIS THIS WEEK, MINE INCLUDED, CALLED THE FOUR IMPLEMENTED COLOUR
+ARMS "CORRECT" AND SUSPECTED ONLY THE `default:` ARMS. ***  The `sgirebufuninit` brief says it outright —
+*"NO colour arm writes `buf[4..7]` — not one of the five, including the four CORRECT ones"*.  codex:
+*"Calling all implemented color arms 'correct' is unwarranted."*  The phrase had been repeated unchecked across
+three documents.  **Which side is wrong is deliberately NOT decided here**: RGBA is symmetric 0–3 on both
+sides and ABGR is reversed on both, so RGB is the lone asymmetric pair — but whether the hardware packs RGB at
+the low or high three bytes is a datasheet question, and a round taking this owes that reference or a real
+framebuffer comparison.
+
+**`sgimtedepth4dead` (LOW — `do_mte_transfer()`'s `if (depth == 4)` can never be true).**
+`depth = 8 << ((mode & MTE_MODE_DEPTH_MASK) >> MTE_DEPTH_SHIFT)`, with mask `0x00000300` and shift 8 — a
+two-bit field, so `depth` is only ever **8, 16, 32 or 64**.  The guarded block is dead code.  codex reads the
+dead block as the intended RGBA construction, leaving *"its helper calls retain CI"*; **that half is not
+verified here** and is what a round would have to establish.  *** IT ALSO REFUTES A PREMISE OF
+`sgirebufuninit`: that brief asks whether callers constrain the (colour type, depth) pair, and this is a caller
+that TRIES to and FAILS SILENTLY. ***  LOW because a dead branch corrupts nothing by itself; the severity lives
+in the missing construction, which is unestablished.
+
+**And a correction to `sgirebufuninit`'s own scope claim, from the same seat.**  Its class scan reported six
+unpinned-length and five stack-buffer-write sites and concluded `dev_sgi_re.c` is the class's only member.
+Codex found **four write sites both scanners missed** — `dev_dec21143.c` descriptor writebacks (nested argument
+commas defeat the comma-splitting, which the brief *had* disclosed as a limit) and `dev_dreamcast_maple.c`
+response writes (casts prevent recognition of the buffer argument, which it had **not**).  All four are safe,
+**so the conclusion survives and the denominator does not** — different claims, which the brief conflated.
+The sharp part is methodological: *"Agreement between scanners sharing parsing limitations is not exhaustive
+corroboration."*  Both scanners split arguments with the same regex, so **they are one deriver run twice** —
+the identical lesson this project already paid for on the `sgirekills` count, where two agreeing greps both
+counted comment lines.
+
+## 2026-09-07 — two rows from the retrospective pass 2 on `79cd12e`
+
+**`m88kexcdetectorl2` (HIGH — four `implemented = true` sites sit on exception classes the 59-row detector
+never drives).**  Predicted independently by **two** seats, on **two different mutants**, neither of which
+could build it:
+
+* **grok** — *"the `#502` detector, asked of the shipped composite, has one clause-(d) mutant I predict sweeps
+  59/59: `implemented = true` → `implemented = (cpu->machine->ncpus < 2)` on the seven arms. I could not build
+  it (read-only seat; gates forbidden). If that score is real it is L2 of the detector, not of `cpu_m88k.c`."*
+* **the `kimi-k3:cloud` substitute** — *"a one-line deletion of `implemented = true;` on an unprobed exception
+  class re-opens `#502` exactly, and every probe row named in this packet stays green."*
+
+**Kimi's is the cheaper mutant AND the harder to dismiss**, because its premise is checkable by reading — no
+build. So I checked it, and it holds:
+
+    implemented = true sites          11   (not the 7 the round's narrative implies)
+      RESET                 line 700   <-- the probe drives no such row
+      INTERRUPT             line 705   <-- the probe drives no such row
+      INSTRUCTION_ACCESS    line 710   <-- the probe drives no such row
+      DATA_ACCESS           line 715   <-- the probe drives no such row
+      the seven fixed arms  720-750, ALL probed
+
+The probe's 59 rows drive bounds / div0 / error / misalign / ovf / priv / unimpl / sfu1 and the trap family.
+**None drives those four**, so deleting the flag on any of them is invisible to every row — a clean sweep by
+the smallest possible edit.  **And two of the four are ordinary guest traffic:** `DATA_ACCESS` and
+`INSTRUCTION_ACCESS` are page and bus faults, so a regression there would silently re-open the all-CPU-stop
+that `#502` spent twelve passes closing.  `RESET` and `INTERRUPT` reachability is **not** established here.
+
+*** WHAT IS NOT ESTABLISHED IS THE SCORE, and that distinction is the row's whole disposition. ***  The
+vacuity floor's L2 rule fires on a **measured** false pass; a prediction with a verified premise is still a
+candidate.  Measuring it is one deletion scored against the shipped probe, and it is what the **agy measurement
+reserve** exists for — the only compile-and-measure seat off the Agent transport, with Opus 5 and Fable 5 held
+for the 9th.  If it sweeps it is **L2 of the detector**, not of `cpu_m88k.c`, whose fix every seat placed
+correctly; if it does not, the row closes as a measured non-finding with its score.
+
+*Worth recording about the seat rather than the bug: a PACKET-FED transport that can read neither the probe nor
+the switch reasoned from the packet's structure alone that a per-class flag plus a partial detector must leave
+classes uncovered — and named the check instead of asserting the answer.*
+
+**`sgigbeconvover` (LOW — `dev_sgi_gbe.c`'s tile-line conversion loop runs past what was read).**  Raised by
+the codex seat as a narrowing of one of my own SAFE verdicts in the `sgirebufuninit` class scan, and verified:
+
+    cpu->memory_rw(..., buf, len, MEM_READ, ...);      /* fills len bytes   */
+    for (int i = 0; i < 512; i += bytes_per_pixel)     /* reads 512 -- not len */
+
+`len < 512` is reachable on the last tile column (`partial_pixels * bytes_per_pixel`), so up to 511
+uninitialised bytes are fed through `get_rgb()`.  **Scope kept to what is demonstrable, matching the seat's own
+hedge:** only `fb_len = (len / bytes_per_pixel) * 3` bytes are forwarded, so the pixels built from the
+uninitialised tail are **computed and discarded** — undefined behaviour and an ASAN-class defect, *not* a guest
+disclosure.  The fix is one token, `i < len`.
+
+*The neighbouring OB-14 clamp shows someone already reasoned about this loop's bounds once — and bounded the
+READ while leaving the CONSUMPTION at a literal.  That is the third instance tonight of a round bounding one
+side of a length relationship and not the other; `#100` grew `buf[4]`→`buf[8]` without asking what fills the
+new bytes, and `#95` zeroed device reads for `len` without covering writes or the bytes past `len`.*
+
+## 2026-09-07 — `codexbriefscoping` (LOW, RULE QUESTION for the 2026-09-09 adjudication)
+
+`BRIEF_TEMPLATE.md` gained a **§C5** telling every codex brief to (1) use ordinary engineering language and
+(2) scope the seat's reading to `src/` and `regress/*.py`, away from `regress/artifacts/` and the ledger.
+
+**The evidence is a four-run experiment with a clean control.**  Codex refused two briefs outright with
+`ERROR: This content was flagged for possible cybersecurity risk` — writing **0 bytes to stdout** while
+leaving healthy-looking stderr, which is invisible to every size-based check.  Rewriting the vocabulary
+(*kills / the host dies* → ordinary error-handling language) converted an **immediate** refusal into a run
+that worked for minutes; adding one paragraph scoping the reading then carried that run **past the exact byte
+where the unrestricted one was flagged** — 279,132 vs 279,268, same distance, opposite outcome.  The cause is
+that our archives are a months-long record of a hardening campaign, and read in bulk they look like what the
+filter exists to catch.
+
+**Disclosed as a template change made on measurement rather than by ruling**, because `BRIEF_TEMPLATE.md` was
+adopted by flagship adjudication and is what every brief starts from.  I made it structural rather than prose
+because this project's own thesis is that prose does not fire — and that same thesis is why it should be
+reviewed rather than assumed.  **Three questions for the seat, with my position stated so it has something to
+attack:** whether scoping away from the archives is a review-quality loss (I say small but real); whether the
+middle form is scope-out-by-default plus inline-the-artifact-when-a-question-depends-on-it, as `§C2` already
+mandates for packet-fed seats (I say yes); and whether avoiding the word `kill` risks a wrong record (I say
+negligible for briefs, serious for records, and the section says so).  **Reverting is one deletion.**

@@ -1,0 +1,24 @@
+**SEVERITY ORDER: unsafe pixel/transfer continuation first; 11 guest-reachable exits next; one unreachable exit last.**
+
+Grep anchors below refer to [dev_sgi_re.c](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c).
+
+| Class | Disposition |
+|---|---|
+| Six `TODO: read from CRIME_RE_` arms: TLB A/B/C, TEX, LINEAR A/B | **BACKED ACCEPT:** implement bounded, endian-correct readback from the existing arrays, retaining width guards. These are missing read paths. |
+| Five `do_mte_transfer` exits: `MTE_MODE_STIPPLE`, `unimplemented SRC`, linear `MTE_MODE_COPY`, `MTE_DEPTH_x`, `unimplemented MTE bytemask` | **IMPLEMENT** defined features; meanwhile **DECLINE + LATCHED ANNOUNCE**, returning before transfer writes. Source validation should apply when copying: today `src > MTE_TLB_C` also rejects fills. |
+| `UNIMPLEMENTED read/write len` in `DEVICE_ACCESS(sgi_mte)` | **DELETE** the unreachable exit while repairing width dispatch. `if (len == 4)` followed by `else if (len != 4)` exhausts every possibility—and incorrectly accepts every other width. Unsupported widths need a decline that also skips START processing. |
+
+The four disabled exits are **not a sound blanket precedent**:
+
+- **`unimplemented dst_mode … horrible_getputpixel`:** logs on every call, assigns `*color = random()`, then returns. A put writes nothing but mutates its caller’s color; a failed source get supplies random data that the caller can subsequently write elsewhere. Replace this with explicit failure propagation and a latched announcement.
+- **`if (!(tileptr & 0x80000000))`:** returns before memory access, without changing `*color`. This avoids aliasing an invalid pointer to tile zero. It safely suppresses a put, but a get leaves foreground/background—or the previous copied pixel—in place. Callers initialize these values; the defect is stale/substitute color, not an uninitialized caller variable. Failed reads must prevent the dependent destination write.
+- **`unimplemented XFER addr_src`:** this is in `draw_primitive()`, **not `DEVICE_ACCESS`**. It logs and continues. `step_y` and the stride registers do not govern the subsequent traversal; non-linear copying advances using primitive directions. Implement those semantics or decline the command.
+- **`unimplemented dst_y_step`:** logs and continues; the value never controls stepping. Tiled transfers derive direction from endpoints, while linear transfers fill contiguously. That is not a faithful arbitrary-stride fallback.
+
+By source tracing, the six read exits and five transfer exits are guest-reachable. The latter include named features; there is no basis here for asserting that “no driver does this.” The twelfth exit is impossible for **any** driver.
+
+`horrible_getputpixel()` is per-pixel, called inside line, rectangle, and tiled-MTE loops, sometimes repeatedly per pixel. **None of the twelve uncommented exits is inside it.** Use distinct per-device `d->warned` bits, following `SGIRE_W_UNMAP_RD/WR`; validate command-wide restrictions before loops and propagate pixel failures.
+
+**All four premises hold as your stated lexical census:** independently stripping comments/strings confirms **12 statements + 4 disabled statements + 3 prose mentions = 19**; `#499` changed the catch-all and left the six read exits. Operationally, however, only **11** exits are reachable: seven mentions are comments, and an eighth is unreachable code.
+
+FAULT is mechanically available on this IP32/MIPS path: [memory_rw.c](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c), anchors `res <= 0 && !no_exceptions` and `EXCEPTION_DBE`. Missing feature implementation alone does not establish hardware bus-fault semantics.

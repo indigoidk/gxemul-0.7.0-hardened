@@ -1,0 +1,110 @@
+# RESEARCH TASK (read-only) — scope `sgirekills` before its design brief exists
+
+## READ THIS FIRST — PLEASE DO NOT SIMPLY RATIFY
+
+**Check the premises, not just the derivations.** Where I state something as fact, ask whether it is
+true. A seat that re-derives a premise from something this brief did NOT give it is worth more than
+a seat that agrees.
+
+**THE TREE UNDER REVIEW IS `GXEMUL-SEC/src/`.** There are THREE pristine-2021-upstream copies of
+GXemul under the project root (`./src/` and two under `_archive/audit-results-*/builds/`). They are
+NOT this fork. If your line numbers disagree with mine by hundreds you are reading one of them — say
+so rather than reconciling.
+
+**Where this brief states an ARITHMETIC claim — a count, an index range, a set of reachable
+offsets — ENUMERATE it rather than reasoning about it.** Walk the values. A derivation that skips
+one masking line reads exactly like a correct one.
+
+**VERDICT LINE FIRST**, so your answer survives truncation.
+
+**This is a SCOPING task, not a fix.** Nothing is being changed. I want the round's shape settled
+before I write its design brief, and I would rather you tell me the shape is wrong now than after
+nine seats have reviewed it.
+
+---
+
+## 1. THE ROW
+
+`dev_sgi_re.c` carries live terminating calls that a guest access can reach. The queue row is
+`sgirekills`, currently HIGH.
+
+**Its count has had THREE generations and I corrected it twice**, which is why I am not asking you to
+trust any number here:
+
+    the row title said         21
+    my first correction said   19      (counted comment lines)
+    the derived live count     12      grep -cE '^[[:space:]]+exit\(1\);'  vs 19 raw hits
+
+**Q1: re-derive the live count yourself, by a method of your choosing, and say what you counted.**
+If you get something other than 12, I want to know the method, not just the number — two agreeing
+greps already fooled me once on this exact row because both counted comments.
+
+## 2. THE ORDERING OBLIGATION — this is what makes the round unusual
+
+`regress/sgi_re_width_probe.py` is gate-wired into `gate_arm.sh` and ships **six `<site> ld kill`
+rows** whose oracle asserts **THE HOST STILL DIES**:
+
+    row(nm + " ld kill", how + ("+txt" if ok_txt else "-txt"), "exit1+txt",
+        "len=8 READ STILL KILLS THE HOST here -- untouched (sgirekills)")
+
+So **fixing this row turns a green gate RED by succeeding, six rows' worth.** The round therefore
+inherits the oracle-correction ordering: re-pin the six rows FIRST, measure the COMMITTED build RED
+under the new expectations, and only THEN change the code.
+
+## 3. THE RE-PIN DESIGN I HAVE PRE-REGISTERED — please attack it
+
+I did not invent this. `#499` re-pinned the neighbouring `other kill` row **in this same probe** when
+it removed the catch-all kill, and its comment records that **both obvious oracles were MEASURED
+VACUOUS before a third was chosen**:
+
+* **DEATH-ONLY** (`how == "exit1"`) — observes THAT it killed, never WHICH kill. A message change
+  leaving `exit(1)` standing scored **35/35** against a matched control at 34/35. Filed as
+  `otherkilldeath`.
+* **`exit0`** — exit status cannot separate *declined, then quit* from *died with status 0*. The
+  variant `mexit0` scores GREEN on an `exit0+txt` oracle while `alive=False`. Filed as `exit0oracle`.
+
+What survived pins **three** channels:
+
+* `how` — the host survives;
+* `txt` — **ONE CONTIGUOUS literal** including the address and data fields. Two independent substring
+  tests are weaker: `-- declined.` is emitted by the six `#497` width declines and by `#498`'s sgi_de
+  decline too, so a bare substring cross-matches;
+* `v0` — **a declined READ reaches the common tail and lands a DEFINED 0.** `v0` is preset to a
+  SENTINEL by `load()`, so *wrote odata (0)* and *never landed* are distinguishable. This is the
+  channel that kills `mret0` (return 0 → `memory_rw` coerces to −1 → `EXCEPTION_DBE`) and `mrdexit0`
+  (exit(0) in the READ branch only), **neither of which any write-only oracle can see** — and these
+  six are READ arms, so it is not optional here.
+
+**Q2: is that the right oracle for these six, or does a READ arm need something the catch-all did
+not?** The `other decl` row covers a WRITE announce plus a READ tail-return; these six are reads at
+six distinct windows. Name any channel the three above cannot see.
+
+**Q3: what is the SMALLEST EDIT that re-opens one of these kills and still passes a detector built
+that way?** Name the row you expect to stay green.
+
+## 4. THE DISPOSITION QUESTION
+
+The de-fatalisation option set has SEVEN members: **1 DELETE · 2 DECLINE (silent) · 3 DECLINE +
+BOUNDED (LATCHED) ANNOUNCE · 4 ACCEPT · 5 FAULT · 6 BACKED ACCEPT · 7 IMPLEMENT.**
+
+**Q4: which member does each of the live sites want, and do they all want the SAME one?** The
+reopening rule lets a round take a second site only if one fix design covers both and the same
+detector covers both with no new oracle — so if these twelve split across members, this is several
+rounds and I want to know that now.
+
+**Before answering, GREP THE FORK FOR THE EXISTING IDIOM** — the tree's own precedents are part of
+the design space, and this project has twice found whole option-set members that way. In particular
+check what the SIBLING arms in this same file already do, since `#497`, `#499`, `#500` and `#504`
+have each de-fatalised something here and their choices constrain what is consistent.
+
+**And check member 5 is even AVAILABLE on this machine before recommending it.** FAULT works because
+`memory_rw.c` dispatches an exception on a failed device access — for MIPS and M88K. A member that
+the target CPU cannot deliver is not an option, however good it looks.
+
+## 5. WHAT I AM NOT ASKING
+
+Do not design the fix diff. Do not write rows. I want: the count, the classification, whether it is
+one round or several, and whether the pre-registered oracle survives contact.
+
+**If, while verifying a claim, you found something ELSE — say so.** The last two rounds' best
+findings arrived that way, including two defects in code everyone had called correct.
