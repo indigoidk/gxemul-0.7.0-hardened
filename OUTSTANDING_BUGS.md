@@ -15523,3 +15523,89 @@ otherwise be dead, and `apcb_flags` exists in the struct and would otherwise nev
 walk's BASE; that one corrupts the walk's RESULT.  A probe that sets up a context via `swpctx` and then
 observes a bad translation cannot attribute it without pinning which of the two produced it.  Fixing this one
 first is certain, one token, and removes a confound from the harder row.
+
+## 2026-09-07 — CORRECTION to `alphaswpctxptbr`, plus two more Alpha rows and a refuted prediction
+
+**TWO OF MY SUPPORTING PREMISES WERE WRONG AND THE ENTRY ABOVE STATES ONE OF THEM AS FACT.**  It says:
+
+> **`apcb_ptbr` is assigned twice and **`apcb_flags` is never assigned at all**.**
+
+**False.**  `grep -rn apcb_flags src/` returns `cpu_alpha_palcode.c:221` — **`wrfen` assigns it** from
+`r[ALPHA_A0]` and writes it back to PCB memory, and `swpctx` itself *reads* the field when saving the outgoing
+context.  The honest statement is narrower and still a defect: **`swpctx` never assigns `apcb_flags` when
+LOADING a new context**, so the incoming context's flags are dropped and the outgoing context's value persists
+across the switch.  *Never written anywhere* was not true.
+
+Second, I wrote that `new_flags` *"would otherwise be dead"*.  It has exactly one use — the erroneous PTBR
+assignment — so it is unused but **not dead in the current program**: it changes PTBR.  My phrasing implied a
+compiler would flag it; it would not, because the bad line consumes it.
+
+**A QUALIFICATION THAT BOUNDS `alphaswpctxreg`:** the handler captures its input into a *local* `a0` before
+dispatch, so overwriting `r[ALPHA_A0]` does **not** change which context is loaded.  That defect is purely a
+wrong return value — a reporting bug, not state corruption.  I had not established that.
+
+**SCOPE: TWO CHANGES, NOT ONE.**  I intended to fix both in one diff (same function, same class).  The design
+pass ruled them two under the reopening rule, and I accept it: the observables differ — a guest register versus
+internal PCB state reachable only through a translation — so one test cannot cover both without a new
+observation, which is what that rule forbids.
+
+*** AND MY OWN PREDICTION WAS REFUTED, WHICH IS WORTH RECORDING AS MUCH AS A FINDING. ***  I argued that with
+two wrong-destination assignments in one function a **third was "more likely than not"**, and asked for the
+whole handler and the surrounding PALcode cases to be read.  They were.  **There is no third.**  A predicted
+class that does not materialise is a result, and it stops the next round hunting for one.
+
+**`alphatbinegsel` (MED).**  `tbi`'s selector is compared as **unsigned**, so enumerating gives
+`-2 → VADDR, -1 → VADDR, 0 → ALL, 1..3 → VADDR`, while the header requires all-entry and all-per-process
+invalidation for the negative selectors.  So `tbi(-1)` — the OS saying *invalidate everything* — invalidates
+one address.  **A TLB flush that silently flushes almost nothing is the dangerous direction**: the guest
+believes stale translations are gone.  Not independently verified by me.
+
+**`alphactxfail` (MED).**  The context save and load ignore every memory-access failure, and `ctx` changes
+before loading finishes with no check before committing the PCB.  *** THE INTERACTION WITH `#95` IS THE SHARP
+PART — the third time tonight that fix has surfaced with an unconsidered edge. ***  `#95` zeroes the caller's
+buffer on a device read so a partial fill cannot leak host memory, which is unambiguously right; here that
+same zeroing means **a failed load returns a well-formed zero instead of an error**, and the caller, which
+checks nothing, commits it to the PCB.  A safety fix that converts a detectable failure into a plausible value
+is worth knowing about generally.  Not independently verified by me.
+
+## 2026-09-07 — `sgimtedepth4dead` raised LOW → HIGH: the dead branch is the MECHANISM, not a curiosity
+
+**I FILED THIS SAYING "a dead branch cannot itself corrupt anything".  THAT IS WRONG.**  The finding was in the
+kimi seat's pass-1 answer — a file I had already opened and under-read — and is verified here:
+
+    src_mode = (src_tlb << 10) + (((mode & MTE_MODE_DEPTH_MASK) >> MTE_DEPTH_SHIFT) << 8);
+    dst_mode = (dst_tlb << 10) + (((mode & MTE_MODE_DEPTH_MASK) >> MTE_DEPTH_SHIFT) << 8);
+    if (depth == 4) {                     <- DEAD: depth = 8 << field, so 8/16/32/64, never 4
+            src_mode |= DE_MODE_TYPE_RGBA;
+            dst_mode |= DE_MODE_TYPE_RGBA;
+    }
+
+The constructed modes carry **no colour bits**, so the colour type is `0x00` = **CI**, and the only thing that
+would make them RGBA is the dead branch.  **So the MTE path always runs CI** — and CI's PUT arm fills only
+`buf[0]` while the transfer is `bufdepth` bytes:
+
+    MTE_DEPTH_8  = 0 -> bufdepth 1   matched, no leak
+    MTE_DEPTH_16 = 1 -> bufdepth 2   fills buf[0], writes 2 -> 1 uninitialised byte per pixel
+    MTE_DEPTH_32 = 2 -> bufdepth 4   fills buf[0], writes 4 -> 3 uninitialised bytes per pixel
+
+**All three are documented constants.**  kimi: *"every MTE_TLB_A/B/C fill with MTE_DEPTH_16/32 leaks
+buf[1..3] per pixel (documented MTE_DEPTH values!).  This is the strongest reachability evidence: PROM/NetBSD
+`crmfb_fill_rect` uses this path."*  That gives `sgirebufuninit` an **all-documented** reachability vehicle on
+a path a real driver uses — where every argument I had recorded relied on the DE path and conceded that PATH
+A's maximal form needs the undocumented depth field 3.
+
+*** AND IT CHANGES THE FIX ORDER IN A WAY THAT WOULD HAVE BITTEN. ***  Repairing `depth == 4` **alone** would
+switch the MTE path to RGBA, which fills `buf[0..3]` — **accidentally masking the leak at depth 32** while
+leaving depth 16 (2 bytes, RGBA fills 4) and every DE-path case untouched.  A round fixing only this would
+*look* like it had fixed `sgirebufuninit` and would not have.  That is the shape the vacuity floor exists to
+catch, surfacing before either round starts.
+
+**It also settles a correction I had recorded without noticing what it implied.**  The codex seat told me *"not
+all seven call sites receive those register words — the two MTE sites construct their own modes."*  I filed
+that as a narrowing of my reachability claim.  **Constructing them is exactly what makes them leak** — the two
+corrections are one fact seen from opposite sides.
+
+**Both file-reading seats independently reached the same detector requirement:** the oracle must assert
+**values, not determinism**.  kimi's proof is the sharper: post-fix PATH B yields a deterministic value *and*
+the `bufdepth`-sized mutant yields the previous pixel's bytes, which are **also** deterministic under stack
+reuse — so *"a determinism oracle CANNOT catch the mutant."*
