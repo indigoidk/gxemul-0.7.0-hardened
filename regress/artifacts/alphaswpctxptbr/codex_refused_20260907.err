@@ -1,0 +1,2688 @@
+Reading additional input from stdin...
+OpenAI Codex v0.153.4
+--------
+workdir: C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+model: gpt-6-astra
+provider: openai
+approval: never
+sandbox: read-only
+reasoning effort: max
+reasoning summaries: none
+session id: 01a07af8-a33d-7003-8980-bebdbe56f347
+--------
+user
+# DESIGN SCOPING (read-only) — two register-assignment defects in one Alpha PALcode handler
+
+## READ THIS FIRST — PLEASE DO NOT SIMPLY RATIFY
+
+**Check the premises, not just the derivations.** Where I state something as fact, ask whether it is
+true. A seat that re-derives a premise from something this brief did NOT give it is worth more than
+one that agrees. **A recent panel had seven of nine seats confirm a premise stated wrongly.**
+
+**THE TREE UNDER REVIEW IS `GXEMUL-SEC/src/`.** There are three pristine-2021-upstream copies of
+GXemul under the project root. They are NOT this fork.
+
+**SCOPE YOUR READING TO `GXEMUL-SEC/src/` AND `GXEMUL-SEC/regress/*.py`.** Do not read
+`GXEMUL-SEC/regress/artifacts/` or `GXEMUL-SEC/tools/pipeline/ledger.json`.
+
+**Where this brief states an ARITHMETIC claim, ENUMERATE it rather than reasoning about it.**
+
+**VERDICT LINE FIRST**, so your answer survives truncation.
+
+---
+
+## 1. THE TWO DEFECTS — both verified by reading, both one token
+
+`PAL_OSF1_swpctx` in `src/cpus/cpu_alpha_palcode.c` swaps process context. Two register
+assignments in it look wrong, and in both cases a comment states the intent the code misses.
+
+**(A) The return register.**
+
+    /*  Return old context in v0.  */
+    cpu->cd.alpha.r[ALPHA_A0] = cpu->cd.alpha.ctx;
+
+The comment says `v0`; the store is to `ALPHA_A0`. `ALPHA_V0` exists and is used correctly
+elsewhere in the same file. The ABI wrapper `alpha_pal_swpctx` in
+`src/include/thirdparty/alpha_cpu.h` declares its return register `__asm("$0")` and ends
+`return (v0);`.
+
+**(B) The page-table base.**
+
+    // Update all variables in the pcb simultaneously:
+    cpu->cd.alpha.pcb.apcb_ptbr   = new_ptbr;      <- correct
+    ...
+    cpu->cd.alpha.pcb.apcb_ptbr   = new_flags;     <- should this be apcb_flags?
+
+`apcb_ptbr` is assigned twice; `apcb_flags` appears never to be assigned at all. If that reading is
+right, then after any `swpctx` the page-table base holds the flags word — and
+`alpha_translate_v2p()` opens with `base = cpu->cd.alpha.pcb.apcb_ptbr << ALPHA_PAGESHIFT`.
+
+## 2. THE QUESTIONS
+
+**Q1 — are both readings right?** In particular for (B): is `apcb_flags` genuinely never written
+anywhere, and is `new_flags` genuinely otherwise dead? **If either is used somewhere I have not
+looked, (B) is not a defect and I want to know before writing a fix.**
+
+**Q2 — are the two fixes right, and are they ONE change or TWO?** This project's reopening rule
+lets a round take a second site only if one fix design covers both and one test covers both with no
+new observation. Same function, same class, same file — but say so explicitly if you disagree, and
+say why.
+
+**Q3 — what else is wrong in this handler?** Both defects are of the same species: an assignment to
+the wrong member of a struct or register file, next to a comment asserting the right one. **A third
+instance is more likely than not.** Please read the whole handler, including the context-SAVE half
+above the load, and the surrounding PALcode cases.
+
+**Q4 — the witness.** A previous pass established that this handler is reachable by a cold-debugger
+probe on an unmodified `eb164` or AlphaServer 4100 description, with no OS boot: the debugger can
+plant instructions, set a breakpoint and continue, and Alpha fetches and decodes through its real
+memory path.
+
+**What is the smallest guest program that would witness each defect, and what would it observe?**
+For (A) I expect: plant a `call_pal 0x30`, run it, read `v0` and `a0`. For (B) the observable is
+less obvious to me — `apcb_ptbr` is internal state, not a guest register, so a probe must observe it
+*through its effect*, and the effect is a translation. **Is there a cheaper observable?** Say so if
+the honest answer is that (B) needs a translation to be visible at all.
+
+**Q5 — the accept side.** If these are fixed, what must a test pin so that a later edit cannot
+silently undo them? A row that only checks `v0` after a `swpctx` would pass if someone assigned BOTH
+`a0` and `v0`.
+
+## 3. WHAT I AM NOT ASKING
+
+Do not write the diff. Do not write the probe. I want the readings checked, the round's scope
+settled, and the witness shape named.
+
+**If, while verifying a claim, you found something ELSE — say so.** Four of tonight's findings
+arrived that way, including (B) itself, which came out of a brief that asked only whether Alpha
+machines can run anything.
+codex
+I’ll check the premises against `GXEMUL-SEC/src/` and `regress/*.py`, including the save half and nearby PALcode cases, then assess whether the fixes share a test under your reopening rule. I’ll keep this read-only and describe witnesses at the observation level.
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "Get-Location; rg --files -g AGENTS.md -g '*alpha*' src; rg --files regress -g '*.py' -g '"'!artifacts/**'"'" in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n 'PAL_OSF1_swpctx|apcb_flags|new_flags|apcb_ptbr|alpha_pal_swpctx|alpha_translate_v2p' src" in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+ succeeded in 150ms:
+src\include\cpu_alpha.h:200:int alpha_translate_v2p(struct cpu *cpu, uint64_t vaddr,
+src\include\thirdparty\alpha_cpu.h:64:	uint64_t	apcb_ptbr;	/* page table base reg */
+src\include\thirdparty\alpha_cpu.h:69:	uint64_t	apcb_flags;	/* flags; see below */
+src\include\thirdparty\alpha_cpu.h:449:alpha_pal_swpctx(unsigned long ctx)
+src\include\thirdparty\alpha_cpu.h:454:	__asm volatile("call_pal %2 # PAL_OSF1_swpctx"
+src\include\thirdparty\alpha_cpu.h:456:		: "i" (PAL_OSF1_swpctx), "0" (a0)
+src\cpus\cpu_alpha.c:89:	cpu->translate_v2p = alpha_translate_v2p;
+src\cpus\cpu_alpha_palcode.c:68:	case 0x30: snprintf(buf, buflen, "PAL_OSF1_swpctx"); break;
+src\cpus\cpu_alpha_palcode.c:221:		cpu->cd.alpha.pcb.apcb_flags = cpu->cd.alpha.r[ALPHA_A0];
+src\cpus\cpu_alpha_palcode.c:223:		    cpu->cd.alpha.pcb.apcb_flags);
+src\cpus\cpu_alpha_palcode.c:229:	case 0x30:	/*  PAL_OSF1_swpctx  */
+src\cpus\cpu_alpha_palcode.c:236:		    cpu->cd.alpha.pcb.apcb_ptbr);
+src\cpus\cpu_alpha_palcode.c:244:		    cpu->cd.alpha.pcb.apcb_flags);
+src\cpus\cpu_alpha_palcode.c:268:			uint64_t new_flags =
+src\cpus\cpu_alpha_palcode.c:278:			cpu->cd.alpha.pcb.apcb_ptbr = new_ptbr;
+src\cpus\cpu_alpha_palcode.c:282:			cpu->cd.alpha.pcb.apcb_ptbr = new_flags;
+src\cpus\memory_alpha.c:41: *  alpha_translate_v2p():
+src\cpus\memory_alpha.c:43:int alpha_translate_v2p(struct cpu *cpu, uint64_t vaddr,
+src\cpus\memory_alpha.c:46:	uint64_t base = cpu->cd.alpha.pcb.apcb_ptbr << ALPHA_PAGESHIFT;
+src\cpus\memory_alpha.c:178:	fatal("[ alpha_translate_v2p: 0x%016" PRIx64" wasn't found ]\n", vaddr);
+
+ succeeded in 298ms:
+
+src\machines\machine_alpha.o
+src\machines\machine_alpha.c
+src\include\thirdparty\alpha_cpu.h
+src\include\thirdparty\alpha_autoconf.h
+src\include\cpu_alpha.h
+src\include\thirdparty\alpha_prom.h
+src\include\thirdparty\alpha_rpb.h
+src\include\thirdparty\alpha_lcareg.h
+src\cpus\tmp_alpha_tail.c
+src\cpus\tmp_alpha_misc.c
+src\cpus\tmp_alpha_head.c
+src\cpus\memory_alpha.o
+src\cpus\memory_alpha.c
+src\cpus\generate_alpha_misc.c
+src\cpus\generate_alpha_misc
+src\cpus\cpu_alpha_palcode.o
+src\cpus\cpu_alpha_palcode.c
+src\cpus\cpu_alpha_instr_loadstore.c
+src\cpus\cpu_alpha_instr_alu.c
+src\cpus\cpu_alpha_instr.c
+src\cpus\cpu_alpha.o
+src\cpus\cpu_alpha.c
+regress\wdc_latch_census.py
+regress\wdc_flood_probe.py
+regress\wdc_altoffset_sig_probe.py
+regress\wdc_altoffset_probe.py
+regress\wdc_altoffset_4bit_probe.py
+regress\wdc_addtoinbuf_probe.py
+regress\sh_tlbmulti_probe.py
+regress\sh_rounding_probe.py
+regress\sh_pclock_probe.py
+regress\sh_iprbcd_probe.py
+regress\sh_intprio_probe.py
+regress\sh_halt_probe.py
+regress\sh4_val_witness.py
+regress\sh4_val_probe.py
+regress\sh4_tlbda2_witness.py
+regress\sh4_tlbda2_probe.py
+regress\sh4_sci_witness.py
+regress\sh4_sci_probe.py
+regress\sh4_rtcsr_witness.py
+regress\sh4_rtcsr_probe.py
+regress\sh4_pcic_probe.py
+regress\sh4_chcr_witness.py
+regress\sh4_chcr_probe.py
+regress\sh4_bsc_width_probe.py
+regress\sh4pcic_witness.py
+regress\sgi_re_width_probe.py
+regress\sgi_re_unmapped_probe.py
+regress\sgi_re_randompixel_probe.py
+regress\sgi_eaddr_probe.py
+regress\sgi_de_width_probe.py
+regress\sgi_de_primop_probe.py
+regress\selftest_logdir.py
+regress\selftest_inactivity.py
+regress\selftest_budget.py
+regress\selftest_absorb.py
+regress\selfmutant.py
+regress\readiness_predicate_test.py
+regress\ppc_rounding_probe.py
+regress\ppc_halt_probe.py
+regress\pit8253_latch_probe.py
+regress\pcc2_width_witness.py
+regress\pcc2_width_probe.py
+regress\pcc2_default_probe.py
+regress\mips_subnorm_probe.py
+regress\mips_rounding_probe.py
+regress\mips_fold_probe.py
+regress\mips_fixedmode_probe.py
+regress\m88k_rounding_probe.py
+regress\m88k_idle_probe.py
+regress\m88k_exc_probe.py
+regress\m8820x_sites_probe.py
+regress\absorb_census.py
+regress\luna_intmask_probe.py
+regress\luna_absentcpu_probe.py
+regress\hpcmips_ctor_probe.py
+regress\hpcabort_witness.py
+regress\gdrom_toclen_probe.py
+regress\gdrom_default_probe.py
+regress\gdrom_decline_probe.py
+regress\gdrom_data_probe.py
+regress\gdrom_cond_probe.py
+regress\footbridge_sites_probe.py
+regress\fbpending_witness.py
+regress\fbpending_drain_probe.py
+regress\arm_memcpy_probe.py
+regress\arm_idle_probe.py
+regress\drive_guest.py
+regress\arm_fold_marker_probe.py
+regress\arm_flags_probe.py
+regress\arm_endian_probe.py
+regress\arcbios_shift_probe.py
+regress\diag_div_sweep.py
+regress\asic_badaddr_probe.py
+regress\arm_strlen_probe.py
+regress\arm_writeback_probe.py
+regress\artifacts\widthkillclass\witness_20260830\sgi_re_width_witness.py
+regress\artifacts\widthkillclass\witness_20260830\sgi_re_width_witness.earlier.py
+regress\artifacts\widthkillclass\opus_p1_20260830\opus497_read_probe.py
+regress\artifacts\widthkillclass\opus_p1_20260830\latch_probe.py
+regress\artifacts\widthkillclass\opus_p1_20260830\apply_mutant.py
+regress\artifacts\widthkillclass\opus_p1_20260830\apply_m2.py
+regress\artifacts\widthkillclass\opus_p1_20260830\apply_fix.py
+regress\artifacts\sgirandompixel\witness_20260906\probe.frozen.py
+regress\artifacts\gdromcondlies\witness_20260830\gdrom_cond_witness.py
+regress\artifacts\gdromcondlies\witness_20260830\gdrom_cond_extras.py
+regress\artifacts\sgirandompixel\killtable\probe.frozen.py
+regress\artifacts\widthkillclass\opus_impl_20260830\strengthen_comment.py
+regress\artifacts\widthkillclass\opus_impl_20260830\sgi_re_width_probe.py
+regress\artifacts\widthkillclass\opus_impl_20260830\mutate497_v2.py
+regress\artifacts\widthkillclass\opus_impl_20260830\mutate497.py
+regress\artifacts\widthkillclass\opus_impl_20260830\move_warned.py
+regress\artifacts\widthkillclass\opus_impl_20260830\apply_fix497.py
+regress\artifacts\sgidewidth\opus_witness_20260831\gxdew_probe_frozen.py
+regress\artifacts\sgidewidth\opus_witness_20260831\gxdew_probe2_frozen.py
+regress\artifacts\sgidewidth\opus_witness_20260831\gxdew_mz_frozen.py
+regress\artifacts\sgidewidth\opus_witness_20260831\gxdew_mzp_frozen.py
+regress\artifacts\sgidewidth\opus_witness_20260831\gxdew_mutate2_frozen.py
+regress\artifacts\sgidewidth\opus_witness_20260831\gxdew_mr_frozen.py
+regress\artifacts\sgidewidth\opus_witness_20260831\gxdew_kill_frozen.py
+regress\artifacts\sgidewidth\opus_witness_20260831\gxdew_kill2_frozen.py
+regress\artifacts\sgidewidth\opus_p2_20260831\probe_frozen.py
+regress\artifacts\sgidewidth\opus_p2_20260831\mutate4.py
+regress\artifacts\sgidewidth\opus_p2_20260831\mutate3.py
+regress\artifacts\sgidewidth\opus_p2_20260831\mutate2.py
+regress\artifacts\sgidewidth\opus_p2_20260831\mutate.py
+regress\artifacts\sgidewidth\opus_p2_20260831\disc.py
+regress\artifacts\makercfalse\hook_controls_20260830\clusterctl.py
+regress\artifacts\wdcringambig\rung3_20260827\wdcring_rung3_probe.py
+regress\artifacts\makercfalse\hook_controls_20260829\hookctl.py
+regress\artifacts\wdcringambig\repro_20260827\author_repro484.py
+regress\artifacts\wdcoddstep\overtaken_20260827\author_odd.py
+regress\artifacts\wdcaltoffset\witness_20260829\wdcaltoff_rung3_probe.py
+regress\artifacts\wdcaltoffset\witness_20260829\mkfixleg.py
+regress\artifacts\gdrompionull\opus_p2_20260826\mutate.py
+regress\artifacts\gdrompionull\opus_p2_20260826\mism_probe.py
+regress\artifacts\wdcaltoffset\opus_p2_20260830\q2_mechanism.py
+regress\artifacts\wdcaltoffset\opus_p2_20260830\PROPOSED_wdc_altoffset_4bit_probe.py
+regress\artifacts\wdcaltoffset\opus_p2_20260830\mut494p2.py
+regress\artifacts\gdrompionull\gdrom_pio_null_probe.py
+regress\artifacts\wdcaltoffset\mutants_20260830\table_c.py
+regress\artifacts\wdcaltoffset\mutants_20260830\table_b.py
+regress\artifacts\wdcaltoffset\mutants_20260830\table_a.py
+regress\artifacts\wdcaltoffset\mutants_20260830\mkmutants.py
+regress\artifacts\wdcnoirq\witness_20260827\wdcnoirq_rung3_probe.py
+regress\artifacts\wdcnoirq\repro_20260827\author_repro485.py
+regress\artifacts\sgirebufuninit\scan_len.py
+regress\artifacts\sgirebufuninit\scan_fill.py
+regress\artifacts\wdcnoirq\killtable_20260827\author_rows485.py
+regress\artifacts\wdcnoirq\killtable_20260827\author_mut485.py
+regress\artifacts\wdcnoirq\killtable_20260827\author_mut11.py
+regress\artifacts\wdcnoirq\killtable_20260827\author_legs3.py
+regress\artifacts\gdromexitsix\supp_p2_20260829\instrument_22row.frozen.py
+regress\artifacts\gdromexitsix\supp_p2_20260829\extend.py
+regress\artifacts\wdcfloodstale\measure_20260827\author_floodstale.py
+regress\artifacts\gdromexitsix\rot_20260829\probe.frozen.py
+regress\artifacts\sgideprimop\gapB_20260903\frozen_probe.py
+regress\artifacts\shortread\round_20260827\shortread_witness.py
+regress\artifacts\sgireunmapped\opus_witness_20260830\sgi_re_unmapped_probe.py
+regress\artifacts\sgireunmapped\opus_witness_20260830\mkvariant.py
+regress\artifacts\sgireunmapped\opus_witness_20260830\detector.py
+regress\artifacts\gdromexitsix\p2askagain_20260829\mut490p2.py
+regress\artifacts\wdcdataoutdrain\killtable_20260827\wiprepro.py
+regress\artifacts\wdcdataoutdrain\killtable_20260827\mk478.py
+regress\artifacts\wdcaltctrl\killtable_20260827\rows481b.py
+regress\artifacts\wdcaltctrl\killtable_20260827\mutalt.py
+regress\artifacts\wdcaltctrl\killtable_20260827\mkaltctrl.py
+regress\artifacts\wdcaltctrl\killtable_20260827\gatealt2.py
+regress\artifacts\wdcaltctrl\killtable_20260827\gatealt.py
+regress\artifacts\wdcaltctrl\killtable_20260827\fixwarrant481.py
+regress\artifacts\wdcaltctrl\killtable_20260827\fixaltctrl.py
+regress\artifacts\gdromexitsix\opus_r2table_20260828\tprobe2.py
+regress\artifacts\gdromexitsix\opus_r2table_20260828\mkmut.py
+regress\artifacts\gdromexitsix\opus_r2table_20260828\mkfix.py
+regress\artifacts\m88kexcdeliver\m88k_exc_probe.v21.frozen.py
+regress\artifacts\m88kexcdeliver\m88k_exc_probe.v20.frozen.py
+regress\artifacts\m88kexcdeliver\m88k_exc_probe.v17.frozen.py
+regress\artifacts\m88kexcdeliver\m88k_exc_probe.v16.frozen.py
+regress\artifacts\wdcdataoutdrain\killtable_20260827\drainvar.py
+regress\artifacts\wdcdataoutdrain\killtable_20260827\addpkt.py
+regress\artifacts\wdcdataoutdrain\killtable_20260827\addphaserow.py
+regress\artifacts\wdcdataoutdrain\killtable_20260827\addpartial.py
+regress\artifacts\wdcdataoutdrain\killtable_20260827\addp5.py
+regress\artifacts\wdcdataoutdrain\killtable_20260827\addlocal.py
+regress\artifacts\wdcdataoutdrain\killtable_20260827\addflush.py
+regress\artifacts\wdcdataoutdrain\killtable_20260827\addannounce.py
+regress\artifacts\wdcdataoutdrain\killtable_20260827\addaltctl.py
+regress\artifacts\wdcdataoutdrain\killtable_20260827\addaccept.py
+regress\artifacts\m88kexcdeliver\kimi_p5\m88k_exc_probe_v5p2.py
+regress\artifacts\pcc2widthkills\pcc2_width_witness.asrun.py
+regress\artifacts\pcc2widthkills\pcc2_operator_reach.asrun.py
+regress\artifacts\m88kexcdeliver\killtable_opus_p8\mutate_p8.py
+regress\artifacts\m88kexcdeliver\killtable_opus_p8\m88k_exc_probe.frozenP8.py
+regress\artifacts\wdccmdreset\killtable_20260827\repin479.py
+regress\artifacts\m88kexcdeliver\killtable_opus_p8\m88k_exc_probe.censusP8.py
+regress\artifacts\wdccmdreset\killtable_20260827\port479.py
+regress\artifacts\wdccmdreset\killtable_20260827\mk479.py
+regress\artifacts\wdccmdreset\killtable_20260827\fix479.py
+regress\artifacts\wdccmdreset\killtable_20260827\addwm.py
+regress\artifacts\wdccmdreset\killtable_20260827\addmut479.py
+regress\artifacts\wdccmdreset\killtable_20260827\addle.py
+regress\artifacts\wdccmdreset\killtable_20260827\adddevctl.py
+regress\artifacts\wdccmdreset\killtable_20260827\addbadlencdb.py
+regress\artifacts\wdccmdreset\killtable_20260827\add479rows.py
+regress\artifacts\wdcaddtoinbufbound\rung3_20260830\mkfix.py
+regress\artifacts\wdcaddtoinbufbound\rung3_20260830\mkcd.py
+regress\artifacts\wdcaddtoinbufbound\rung3_20260830\frozen_wave_20260830_102209.py
+regress\artifacts\wdcaddtoinbufbound\rung3_20260830\addtoinbuf_rung3_probe.py
+regress\artifacts\m88kexcdeliver\killtable8\mut_m88kexc.v8.py
+regress\artifacts\m88kexcdeliver\killtable8\m88k_exc_probe.frozen8.py
+regress\artifacts\gdromexitsix\opus_r2full_20260828\tprobe3.py
+regress\artifacts\gdromexitsix\opus_r2full_20260828\mkmut_brace.py
+regress\artifacts\gdromexitsix\opus_r2full_20260828\mkmut3.py
+regress\artifacts\gdromexitsix\opus_r2full_20260828\mkfix.py
+regress\artifacts\sgireunmapped\killtable_20260831\repin2\sgi_re_width_probe.repinned.py
+regress\artifacts\sgireunmapped\killtable_20260831\repin2\score500b.py
+regress\artifacts\sgireunmapped\killtable_20260831\repin2\score500.py
+regress\artifacts\sgireunmapped\killtable_20260831\repin2\mk500.py
+regress\artifacts\wdcaltctrlfam\killtable_20260827\author_fix483b.py
+regress\artifacts\wdcaltctrlfam\killtable_20260827\author_fix483.py
+regress\artifacts\wdcaltctrlfam\killtable_20260827\mk483.py
+regress\artifacts\wdcaltctrlfam\killtable_20260827\author_mut483.py
+regress\artifacts\wdcaltctrlfam\killtable_20260827\author_fix483c.py
+regress\artifacts\m88kexcdeliver\killtable7\mut_m88kexc.v7.py
+regress\artifacts\m88kexcdeliver\killtable7\m88k_exc_probe.frozen7.py
+regress\artifacts\pcc2widthkills\pass9_seats_20260904\opus\mutate.py
+regress\artifacts\pcc2widthkills\pass9_seats_20260904\opus\frozen_probe.py
+regress\artifacts\pcc2widthkills\pass9_seats_20260904\opus\cmp_names.py
+regress\artifacts\pcc2widthkills\pass9_seats_20260904\opus\audit_gate.py
+regress\artifacts\m88kexcdeliver\killtable6\mut_m88kexc.v6.py
+regress\artifacts\m88kexcdeliver\killtable6\m88k_exc_probe.frozen6.py
+regress\artifacts\wdcaltctrlcov\killtable_20260827\mut482_RECONSTRUCTED.py
+regress\artifacts\wdcaltctrlcov\killtable_20260827\mk482.py
+regress\artifacts\wdccdbmidxfer\killtable2_20260827\mk477b.py
+regress\artifacts\sgireunmapped\killtable_20260831\port\repin.py
+regress\artifacts\sgireunmapped\killtable_20260831\port\patch_mk2.py
+regress\artifacts\sgireunmapped\killtable_20260831\port\patch_mk.py
+regress\artifacts\sgireunmapped\killtable_20260831\port\mkvariant499.py
+regress\artifacts\wdccallsite\killtable_20260827\q4check.py
+regress\artifacts\wdccallsite\killtable_20260827\q3check.py
+regress\artifacts\wdccallsite\killtable_20260827\mut480b.py
+regress\artifacts\wdccallsite\killtable_20260827\mut480.py
+regress\artifacts\wdccallsite\killtable_20260827\mk480b.py
+regress\artifacts\wdccallsite\killtable_20260827\mk480.py
+regress\artifacts\wdccallsite\killtable_20260827\gatename480.py
+regress\artifacts\wdccallsite\killtable_20260827\fixrows480.py
+regress\artifacts\gdromexitsix\gdrom_toclen_witness.py
+regress\artifacts\m88kexcdeliver\killtable5\mut_m88kexc.v5.py
+regress\artifacts\m88kexcdeliver\killtable5\m88k_exc_probe.frozen5.py
+regress\artifacts\gdromexitsix\killtable4_20260828\mut_common.py
+regress\artifacts\sgireunmapped\killtable_20260831\pass4\e0_mut.py
+regress\artifacts\pcc2widthkills\pass8_seats_20260904\opus\mutate.py
+regress\artifacts\pcc2widthkills\pass8_seats_20260904\opus\mk_f1.py
+regress\artifacts\sgireunmapped\killtable_20260831\mkvariant499.py
+regress\artifacts\m88kexcdeliver\killtable4\m88k_exc_probe.frozen4.py
+regress\artifacts\m88kexcdeliver\killtable14\m88k_exc_probe.frozen14.py
+regress\artifacts\m88kexcdeliver\killtable11\m88k_exc_probe.frozen11.v14.py
+regress\artifacts\m88kexcdeliver\killtable11\m88k_exc_probe.frozen11.py
+regress\artifacts\gdromexitsix\asan_m0_20260828\apply_m0.py
+regress\artifacts\lunaabsentcpu\luna_absentcpu_probe.v3.py
+regress\artifacts\lunaabsentcpu\luna_absentcpu_probe.v2.py
+regress\artifacts\lunaabsentcpu\luna_absentcpu_probe.asrun.py
+regress\artifacts\sgireunmapped\killtable_20260831\l2repair\mkw.py
+regress\artifacts\sgireunmapped\killtable_20260831\extra_rows.py
+regress\artifacts\sgireunmapped\killtable_20260831\base_slot_probe.py
+regress\artifacts\pcc2widthkills\pass7_seats_20260904\opus\gatecheck.py
+regress\artifacts\m88kexcdeliver\killtable3\m88k_exc_probe.frozen3.py
+regress\artifacts\m88kexcdeliver\killtable10\mut_m88kexc.v10.py
+regress\artifacts\m88kexcdeliver\killtable10\m88k_exc_probe.frozen10.py
+regress\artifacts\m88kexcdeliver\killtable13\m88k_exc_probe.frozen13.py
+regress\artifacts\m88kexcdeliver\killtable2\m88k_exc_probe.frozen2.py
+regress\artifacts\sgideprimop\killtable_20260903_table13_xfer\frozen_probe.py
+regress\artifacts\m88kexcdeliver\killtable\m88k_exc_probe.frozen.py
+regress\artifacts\m88kexcdeliver\derive_cells.py
+regress\artifacts\m88kexcdeliver\killtable12\m88k_exc_probe.frozen12.py
+regress\artifacts\lunaabsentcpu\killtable\mut_lunaabs.py
+regress\artifacts\lunaabsentcpu\killtable\luna_absentcpu_probe.frozen.py
+regress\artifacts\lunaabsentcpu\killtable\fix_lunaabs.py
+regress\artifacts\pcc2widthkills\pass6_seats_20260903\opus\mutate.py
+regress\artifacts\m88kexcdeliver\killtable11_attempt1_v13\m88k_exc_probe.frozen11.v13.py
+regress\artifacts\m88kexcdeliver\killtable11_attempt1_v13\m88k_exc_probe.frozen11.py
+regress\artifacts\m88kexcdeliver\agy_p5\mutate.py
+regress\artifacts\pcc2widthkills\opus_pass3_20260903\pass3c\probe82.frozen.py
+regress\artifacts\lunaabsentcpu\killtable5\luna_absentcpu_probe.frozen.py
+regress\artifacts\landiskaux\census_20260827\watch_2c.py
+regress\artifacts\landiskaux\census_20260827\mk_censusB.py
+regress\artifacts\pcc2widthkills\opus_pass3_20260903\pass3\probe.frozen.py
+regress\artifacts\pcc2defaultkill\witness_20260905\defaultkill_witness.py
+regress\artifacts\pcc2widthkills\pass5_seats_20260903\opus_reader\xcheck.py
+regress\artifacts\pcc2widthkills\pass5_seats_20260903\opus_reader\mutate.py
+regress\artifacts\pcc2widthkills\pass5_seats_20260903\opus_reader\discriminator.py
+regress\artifacts\lunaabsentcpu\opus_p4_table_v5\probe_v5.py
+regress\artifacts\lunaabsentcpu\opus_p4_table_v5\probe_v4.py
+regress\artifacts\landiskaux\census_20260827\devlist.py
+regress\artifacts\landiskaux\census_20260827\census.py
+regress\artifacts\landiskaux\census_20260827\analyse_hook.py
+regress\artifacts\pcc2widthkills\pass5_seats_20260903\opus_reader\artifacts\gxopus_p5_disc.py
+regress\artifacts\pcc2widthkills\pass5_seats_20260903\opus_reader\artifacts\discriminator.py
+regress\artifacts\lunaabsentcpu\opus_p4_table\luna_absentcpu_probe.frozen.py
+regress\artifacts\pcc2widthkills\killtable2_20260903\part9\frozen_probe.py
+regress\artifacts\pcc2widthkills\killtable_20260903\frozen_probe.py
+regress\artifacts\pcc2widthkills\pass5_seats_20260903\fable\pty_ret0_probe.py
+regress\artifacts\pcc2widthkills\pass5_seats_20260903\fable\frozen_probe.py
+regress\artifacts\lunaabsentcpu\killtable4\luna_absentcpu_probe.frozen.py
+regress\artifacts\pcc2defaultkill\pass4_seats\opus_logs\offsets.py
+regress\artifacts\pcc2defaultkill\pass4_seats\opus_logs\mutate.py
+regress\artifacts\pcc2widthkills\killtable2_20260903\part8\frozen_probe.py
+regress\artifacts\lunaabsentcpu\luna_absentcpu_probe.v8.frozen.py
+regress\artifacts\lunaabsentcpu\luna_absentcpu_probe.v7.frozen.py
+regress\artifacts\lunaabsentcpu\luna_absentcpu_probe.v6.frozen.py
+regress\artifacts\lunaabsentcpu\luna_absentcpu_probe.v5.py
+regress\artifacts\lunaabsentcpu\luna_absentcpu_probe.v4.py
+regress\artifacts\pcc2defaultkill\pass4_seats\opus_logs\logs\len4_witness.py
+regress\artifacts\pcc2defaultkill\pass4_seats\opus_logs\len4_witness.py
+regress\artifacts\pcc2defaultkill\pass4_seats\opus_logs\gatecheck.py
+regress\artifacts\pcc2widthkills\pass4_seats_20260903\opus_reader\frozen_probe.py
+regress\artifacts\pcc2widthkills\pass3_seats_20260903\opus_reader\nonequiv_check.py
+regress\artifacts\pcc2widthkills\pass3_seats_20260903\opus_reader\mutate.py
+regress\artifacts\pcc2widthkills\killtable2_20260903\part7b\frozen_probe.py
+regress\artifacts\lunaabsentcpu\killtable3\mut_lunaabs.v4.py
+regress\artifacts\lunaabsentcpu\killtable3\luna_absentcpu_probe.frozen.py
+regress\artifacts\lunaabsentcpu\killtable3\fix_lunaabs.v2b.py
+regress\artifacts\pcc2widthkills\pass4_seats_20260903\fable\probe_dry.py
+regress\artifacts\pcc2widthkills\pass4_seats_20260903\fable\probe_copy.py
+regress\artifacts\pcc2widthkills\pass4_seats_20260903\fable\dump_names.py
+regress\artifacts\pcc2widthkills\killtable2_20260903\part7\frozen_probe.py
+regress\artifacts\pcc2defaultkill\pass3_seats\opus_logs\edit_M_WRVAL0.py
+regress\artifacts\pcc2defaultkill\pass3_seats\opus_logs\edit_M_WRDATA0.py
+regress\artifacts\pcc2defaultkill\pass3_seats\opus_logs\edit_M_RELOAD.py
+regress\artifacts\pcc2defaultkill\pass3_seats\opus_logs\edit_M_LATCHOFF.py
+regress\artifacts\pcc2defaultkill\pass3_seats\opus_logs\edit_M_LASTBYTE.py
+regress\artifacts\pcc2defaultkill\pass3_seats\opus_logs\edit_M_BACKEDLOW.py
+regress\artifacts\pcc2widthkills\killtable2_20260903\part6b\frozen_probe.py
+regress\artifacts\sgideprimop\killtable_20260902_table4\negctl_n25_rectset_probe.py
+regress\artifacts\sgideprimop\killtable_20260903_table12_regs\frozen_probe.py
+regress\artifacts\lunaabsentcpu\killtable2\mut_lunaabs.v3.py
+regress\artifacts\pcc2widthkills\killtable2_20260903\part13_partial\frozen_probe.py
+regress\artifacts\lunaabsentcpu\killtable2\luna_absentcpu_probe.frozen.py
+regress\artifacts\lunaabsentcpu\killtable2\fix_lunaabs.v2.py
+regress\artifacts\pcc2widthkills\killtable2_20260903\part6\frozen_probe.py
+regress\artifacts\pcc2widthkills\killtable2_20260903\part13_aborted\frozen_probe.py
+regress\artifacts\pcc2widthkills\pass11_seats_20260904\opus\control_iclr.py
+regress\artifacts\pcc2widthkills\killtable2_20260903\part5b\frozen_probe.py
+regress\artifacts\sgideprimop\killtable_20260902_table11_closure\frozen_probe.py
+regress\artifacts\pcc2widthkills\killtable2_20260903\part13\frozen_probe.py
+regress\artifacts\pcc2widthkills\killtable2_20260903\part5\frozen_probe.py
+regress\artifacts\pcc2defaultkill\killtable4_20260905\pcc2_width_probe.py
+regress\artifacts\pcc2widthkills\killtable2_20260903\part12\frozen_probe.py
+regress\artifacts\pcc2widthkills\pass10_seats_20260904\opus\mutate.py
+regress\artifacts\pcc2widthkills\pass10_seats_20260904\opus\diffcheck.py
+regress\artifacts\pcc2widthkills\pass10_seats_20260904\opus\cmpnames.py
+regress\artifacts\pcc2defaultkill\killtable4_20260905\old36\pcc2_width_probe.py
+regress\artifacts\pcc2widthkills\killtable2_20260903\part4\frozen_probe.py
+regress\artifacts\pcc2defaultkill\killtable4_20260905\old36\frozen_probe.py
+regress\artifacts\pcc2defaultkill\killtable4_20260905\frozen_probe.py
+regress\artifacts\pcc2widthkills\killtable2_20260903\part11\frozen_probe.py
+regress\artifacts\pcc2widthkills\killtable2_20260903\part3c\frozen_probe.py
+regress\artifacts\pcc2widthkills\killtable2_20260903\part10_aborted\frozen_probe.py
+regress\artifacts\pcc2widthkills\killtable2_20260903\part3b\frozen_probe.py
+regress\artifacts\pcc2widthkills\killtable2_20260903\part10\frozen_probe.py
+regress\artifacts\pcc2widthkills\killtable2_20260903\part3\frozen_probe.py
+regress\artifacts\pcc2defaultkill\killtable3_20260905\old23\pcc2_width_probe.py
+regress\artifacts\pcc2defaultkill\killtable_20260905\run1_oldrowformat\pcc2_width_probe.py
+regress\artifacts\pcc2defaultkill\killtable3_20260905\old23\frozen_probe.py
+regress\artifacts\pcc2defaultkill\killtable_20260905\run1_oldrowformat\frozen_probe.py
+regress\artifacts\pcc2defaultkill\killtable3_20260905\frozen_probe.py
+regress\artifacts\pcc2defaultkill\killtable_20260905\pcc2_width_probe.py
+regress\artifacts\pcc2defaultkill\killtable3_20260905\pcc2_width_probe.py
+regress\artifacts\pcc2defaultkill\killtable_20260905\frozen_probe.py
+regress\artifacts\pcc2widthkills\killtable2_20260903\part2\frozen_probe.py
+Path                                 
+----                                 
+C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+
+
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$n=0; Get-Content -LiteralPath '"'src/cpus/cpu_alpha_palcode.c' | ForEach-Object { "'$n++; '"'{0,4}: {1}' -f "'$n,$_ }' in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n 'ctx|pcb|ALPHA_V0|ALPHA_A0|ps|reg.*dump|register_dump|register_match' src/cpus/cpu_alpha.c src/include/cpu_alpha.h; rg -n 'alpha|ALPHA|breakpoint|instruction_has_been_translated|call_pal' src/machines/machine_alpha.c src/cpus/cpu_alpha_instr.c src/cpus/tmp_alpha_head.c src/cpus/tmp_alpha_tail.c; rg --files src -g AGENTS.md; rg --files regress -g '*.py' -g '"'!artifacts/**'"' -g '"'!**/artifacts/**'"' -g '"'!*/**/*.py'"'" in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$n=0; Get-Content -LiteralPath '"'src/cpus/memory_alpha.c' | ForEach-Object { "'$n++; '"'{0,4}: {1}' -f "'$n,$_ }; $n=0; Get-Content -LiteralPath '"'src/include/thirdparty/alpha_cpu.h' | ForEach-Object { "'$n++; if ($n -le 210 -or ($n -ge 380 -and $n -le 495)) { '"'{0,4}: {1}' -f "'$n,$_ } }' in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+ exited 1 in 251ms:
+src/cpus/cpu_alpha.c:107:	cpu->cd.alpha.ctx = 0x10100;
+src/cpus/cpu_alpha.c:163: *  alpha_cpu_register_dump():
+src/cpus/cpu_alpha.c:170:void alpha_cpu_register_dump(struct cpu *cpu, int gprs, int coprocs)
+src/include/cpu_alpha.h:75:#define	ALPHA_V0		0
+src/include/cpu_alpha.h:93:#define	ALPHA_A0		16
+src/include/cpu_alpha.h:164:	uint64_t		ps;		/*  Processor Status  */
+src/include/cpu_alpha.h:170:	uint64_t		ctx;		/*  Ptr to current PCB (?)  */
+src/include/cpu_alpha.h:171:	struct alpha_pcb	pcb;		/*  Process Control Block  */
+src/cpus/tmp_alpha_tail.c:10:#define DYNTRANS_FUNCTION_TRACE_DEF alpha_cpu_functioncall_trace
+src/cpus/tmp_alpha_tail.c:14:#define DYNTRANS_INIT_TABLES alpha_cpu_init_tables
+src/cpus/tmp_alpha_tail.c:18:#define DYNTRANS_TC_ALLOCATE_DEFAULT_PAGE_DEF alpha_tc_allocate_default_page
+src/cpus/tmp_alpha_tail.c:26:#define DYNTRANS_INVALIDATE_TC alpha_invalidate_translation_caches
+src/cpus/tmp_alpha_tail.c:30:#define DYNTRANS_INVALIDATE_TC_CODE alpha_invalidate_code_translation
+src/cpus/tmp_alpha_tail.c:34:#define DYNTRANS_UPDATE_TRANSLATION_TABLE alpha_update_translation_table
+src/cpus/tmp_alpha_tail.c:38:#define MEMORY_RW alpha_memory_rw
+src/cpus/tmp_alpha_tail.c:39:#define MEM_ALPHA
+src/cpus/tmp_alpha_tail.c:41:#undef MEM_ALPHA
+src/cpus/tmp_alpha_tail.c:44:#define DYNTRANS_PC_TO_POINTERS_FUNC alpha_pc_to_pointers
+src/cpus/tmp_alpha_tail.c:45:#define DYNTRANS_PC_TO_POINTERS_GENERIC alpha_pc_to_pointers_generic
+src/cpus/tmp_alpha_tail.c:51:#define COMBINE_INSTRUCTIONS alpha_combine_instructions
+src/cpus/tmp_alpha_tail.c:61:#define COMBINE(n) alpha_combine_ ## n
+src/cpus/tmp_alpha_tail.c:63:#include "cpu_alpha_instr.c"
+src/cpus/tmp_alpha_tail.c:65:#define DYNTRANS_RUN_INSTR_DEF alpha_run_instr
+src/cpus/tmp_alpha_tail.c:71:#define COMBINE_INSTRUCTIONS alpha32_combine_instructions
+src/cpus/tmp_alpha_tail.c:75:#define X(n) void alpha32_instr_ ## n(struct cpu *cpu, \
+src/cpus/tmp_alpha_tail.c:76:	struct alpha_instr_call *ic)
+src/cpus/tmp_alpha_tail.c:77:#define instr(n) alpha32_instr_ ## n
+src/cpus/tmp_alpha_tail.c:90:#define DYNTRANS_INVALIDATE_TLB_ENTRY alpha32_invalidate_tlb_entry
+src/cpus/tmp_alpha_tail.c:94:#define DYNTRANS_INVALIDATE_TC alpha32_invalidate_translation_caches
+src/cpus/tmp_alpha_tail.c:98:#define DYNTRANS_INVALIDATE_TC_CODE alpha32_invalidate_code_translation
+src/cpus/tmp_alpha_tail.c:102:#define DYNTRANS_UPDATE_TRANSLATION_TABLE alpha32_update_translation_table
+src/cpus/tmp_alpha_tail.c:106:#define DYNTRANS_PC_TO_POINTERS_FUNC alpha32_pc_to_pointers
+src/cpus/tmp_alpha_tail.c:107:#define DYNTRANS_PC_TO_POINTERS_GENERIC alpha32_pc_to_pointers_generic
+src/cpus/tmp_alpha_tail.c:109:#define DYNTRANS_PC_TO_POINTERS alpha32_pc_to_pointers
+src/cpus/tmp_alpha_tail.c:116:#define COMBINE(n) alpha32_combine_ ## n
+src/cpus/tmp_alpha_tail.c:118:#include "cpu_alpha_instr.c"
+src/cpus/tmp_alpha_tail.c:121:#define DYNTRANS_PC_TO_POINTERS alpha_pc_to_pointers
+src/cpus/tmp_alpha_tail.c:122:#define DYNTRANS_PC_TO_POINTERS32 alpha32_pc_to_pointers
+src/cpus/tmp_alpha_tail.c:124:#define DYNTRANS_RUN_INSTR_DEF alpha32_run_instr
+src/cpus/tmp_alpha_tail.c:131:CPU_FAMILY_INIT(alpha,"Alpha")
+src/cpus/tmp_alpha_head.c:6:#define DYNTRANS_MAX_VPH_TLB_ENTRIES ALPHA_MAX_VPH_TLB_ENTRIES
+src/cpus/tmp_alpha_head.c:7:#define DYNTRANS_ARCH alpha
+src/cpus/tmp_alpha_head.c:8:#define DYNTRANS_ALPHA
+src/cpus/tmp_alpha_head.c:10:#define DYNTRANS_L2N ALPHA_L2N
+src/cpus/tmp_alpha_head.c:11:#define DYNTRANS_L3N ALPHA_L3N
+src/cpus/tmp_alpha_head.c:12:#if !defined(ALPHA_L2N) || !defined(ALPHA_L3N)
+src/cpus/tmp_alpha_head.c:15:#define DYNTRANS_L2_64_TABLE alpha_l2_64_table
+src/cpus/tmp_alpha_head.c:16:#define DYNTRANS_L3_64_TABLE alpha_l3_64_table
+src/cpus/tmp_alpha_head.c:21:#define DYNTRANS_IC alpha_instr_call
+src/cpus/tmp_alpha_head.c:22:#define DYNTRANS_IC_ENTRIES_PER_PAGE ALPHA_IC_ENTRIES_PER_PAGE
+src/cpus/tmp_alpha_head.c:23:#define DYNTRANS_INSTR_ALIGNMENT_SHIFT ALPHA_INSTR_ALIGNMENT_SHIFT
+src/cpus/tmp_alpha_head.c:24:#define DYNTRANS_TC_PHYSPAGE alpha_tc_physpage
+src/cpus/tmp_alpha_head.c:25:#define DYNTRANS_INVALIDATE_TLB_ENTRY alpha_invalidate_tlb_entry
+src/cpus/tmp_alpha_head.c:26:#define DYNTRANS_ADDR_TO_PAGENR ALPHA_ADDR_TO_PAGENR
+src/cpus/tmp_alpha_head.c:27:#define DYNTRANS_PC_TO_IC_ENTRY ALPHA_PC_TO_IC_ENTRY
+src/cpus/tmp_alpha_head.c:28:#define DYNTRANS_TC_ALLOCATE alpha_tc_allocate_default_page
+src/cpus/tmp_alpha_head.c:29:#define DYNTRANS_TC_PHYSPAGE alpha_tc_physpage
+src/cpus/tmp_alpha_head.c:30:#define DYNTRANS_PC_TO_POINTERS alpha_pc_to_pointers
+src/cpus/tmp_alpha_head.c:31:#define DYNTRANS_PC_TO_POINTERS_GENERIC alpha_pc_to_pointers_generic
+src/cpus/tmp_alpha_head.c:32:#define COMBINE_INSTRUCTIONS alpha_combine_instructions
+src/cpus/tmp_alpha_head.c:33:#define DISASSEMBLE alpha_cpu_disassemble_instr
+src/cpus/tmp_alpha_head.c:37:extern int single_step_breakpoint;
+src/cpus/tmp_alpha_head.c:41:/* instr uses the same names as in cpu_alpha_instr.c */
+src/cpus/tmp_alpha_head.c:42:#define instr(n) alpha_instr_ ## n
+src/cpus/tmp_alpha_head.c:45:#define instr32(n) alpha32_instr_ ## n
+src/cpus/tmp_alpha_head.c:50:#define X(n) void alpha_instr_ ## n(struct cpu *cpu, \
+src/cpus/tmp_alpha_head.c:51: struct alpha_instr_call *ic)
+src/cpus/tmp_alpha_head.c:62:	cpu->cd.alpha.next_ic --;
+src/cpus/tmp_alpha_head.c:66:static struct alpha_instr_call nothing_call = { instr(nothing), {0,0,0} };
+src/machines/machine_alpha.c:42:#include "thirdparty/alpha_autoconf.h"
+src/machines/machine_alpha.c:43:#include "thirdparty/alpha_rpb.h"
+src/machines/machine_alpha.c:46:MACHINE_SETUP(alpha)
+src/machines/machine_alpha.c:57:	case ST_ALPHABOOK1:
+src/machines/machine_alpha.c:86:	/*  These are used by NetBSD/alpha:  */
+src/machines/machine_alpha.c:92:	cpu->cd.alpha.r[ALPHA_A0] = 16*1024*1024 / 8192;
+src/machines/machine_alpha.c:93:	cpu->cd.alpha.r[ALPHA_A1] = 0;	/*  TODO  */
+src/machines/machine_alpha.c:94:	cpu->cd.alpha.r[ALPHA_A2] = 0;	/*  Note: NOT ALPHA_BOOTINFO_MAGIC  */
+src/machines/machine_alpha.c:95:	cpu->cd.alpha.r[ALPHA_A3] = 0;	/*  TODO  */
+src/machines/machine_alpha.c:96:	cpu->cd.alpha.r[ALPHA_A4] = 1;
+src/machines/machine_alpha.c:156:		    machine->cpus[i]->cd.alpha.cpu_type.pcs_type);
+src/machines/machine_alpha.c:203:MACHINE_DEFAULT_CPU(alpha)
+src/machines/machine_alpha.c:207:	case ST_ALPHABOOK1:
+src/machines/machine_alpha.c:230:MACHINE_DEFAULT_RAM(alpha)
+src/machines/machine_alpha.c:236:MACHINE_REGISTER(alpha)
+src/machines/machine_alpha.c:238:	MR_DEFAULT(alpha, "Alpha", MACHINE_ALPHA);
+src/machines/machine_alpha.c:240:	machine_entry_add_alias(me, "alpha");
+src/machines/machine_alpha.c:242:	machine_entry_add_subtype(me, "AlphaBook 1", ST_ALPHABOOK1,
+src/machines/machine_alpha.c:243:	    "alphabook1", NULL);
+src/machines/machine_alpha.c:246:	    "alphaserver4100", NULL);
+src/machines/machine_alpha.c:254:	me->set_default_ram = machine_default_ram_alpha;
+src/cpus/cpu_alpha_instr.c:49: *  call_pal:  PALcode call
+src/cpus/cpu_alpha_instr.c:53:X(call_pal)
+src/cpus/cpu_alpha_instr.c:57:	    cpu->cd.alpha.cur_ic_page) / sizeof(struct alpha_instr_call);
+src/cpus/cpu_alpha_instr.c:58:	cpu->pc &= ~((ALPHA_IC_ENTRIES_PER_PAGE-1) <<
+src/cpus/cpu_alpha_instr.c:59:	    ALPHA_INSTR_ALIGNMENT_SHIFT);
+src/cpus/cpu_alpha_instr.c:60:	cpu->pc += (low_pc << ALPHA_INSTR_ALIGNMENT_SHIFT);
+src/cpus/cpu_alpha_instr.c:63:	alpha_palcode(cpu, ic->arg[0]);
+src/cpus/cpu_alpha_instr.c:67:		cpu->cd.alpha.next_ic = &nothing_call;
+src/cpus/cpu_alpha_instr.c:72:		alpha_pc_to_pointers(cpu);
+src/cpus/cpu_alpha_instr.c:86:	uint64_t mask_within_page = ((ALPHA_IC_ENTRIES_PER_PAGE-1)
+src/cpus/cpu_alpha_instr.c:87:	    << ALPHA_INSTR_ALIGNMENT_SHIFT) |
+src/cpus/cpu_alpha_instr.c:88:	    ((1 << ALPHA_INSTR_ALIGNMENT_SHIFT) - 1);
+src/cpus/cpu_alpha_instr.c:91:	    cpu->cd.alpha.cur_ic_page) / sizeof(struct alpha_instr_call);
+src/cpus/cpu_alpha_instr.c:92:	cpu->pc &= ~((ALPHA_IC_ENTRIES_PER_PAGE-1)
+src/cpus/cpu_alpha_instr.c:93:	    << ALPHA_INSTR_ALIGNMENT_SHIFT);
+src/cpus/cpu_alpha_instr.c:94:	cpu->pc += (low_pc << ALPHA_INSTR_ALIGNMENT_SHIFT) + 4;
+src/cpus/cpu_alpha_instr.c:101:	 *  already in, then just set cpu->cd.alpha.next_ic.
+src/cpus/cpu_alpha_instr.c:104:		cpu->cd.alpha.next_ic = cpu->cd.alpha.cur_ic_page +
+src/cpus/cpu_alpha_instr.c:108:		alpha_pc_to_pointers(cpu);
+src/cpus/cpu_alpha_instr.c:134:	uint64_t mask_within_page = ((ALPHA_IC_ENTRIES_PER_PAGE-1)
+src/cpus/cpu_alpha_instr.c:135:	    << ALPHA_INSTR_ALIGNMENT_SHIFT)
+src/cpus/cpu_alpha_instr.c:136:	    | ((1 << ALPHA_INSTR_ALIGNMENT_SHIFT) - 1);
+src/cpus/cpu_alpha_instr.c:142:	 *  already in, then just set cpu->cd.alpha.next_ic.
+src/cpus/cpu_alpha_instr.c:145:		cpu->cd.alpha.next_ic = cpu->cd.alpha.cur_ic_page +
+src/cpus/cpu_alpha_instr.c:149:		alpha_pc_to_pointers(cpu);
+src/cpus/cpu_alpha_instr.c:177:	    cpu->cd.alpha.cur_ic_page) / sizeof(struct alpha_instr_call);
+src/cpus/cpu_alpha_instr.c:178:	cpu->pc &= ~((ALPHA_IC_ENTRIES_PER_PAGE-1)
+src/cpus/cpu_alpha_instr.c:179:	    << ALPHA_INSTR_ALIGNMENT_SHIFT);
+src/cpus/cpu_alpha_instr.c:180:	cpu->pc += (low_pc << ALPHA_INSTR_ALIGNMENT_SHIFT);
+src/cpus/cpu_alpha_instr.c:184:	alpha_pc_to_pointers(cpu);
+src/cpus/cpu_alpha_instr.c:200:	    cpu->cd.alpha.cur_ic_page) / sizeof(struct alpha_instr_call);
+src/cpus/cpu_alpha_instr.c:201:	cpu->pc &= ~((ALPHA_IC_ENTRIES_PER_PAGE-1)
+src/cpus/cpu_alpha_instr.c:202:	    << ALPHA_INSTR_ALIGNMENT_SHIFT);
+src/cpus/cpu_alpha_instr.c:203:	cpu->pc += (low_pc << ALPHA_INSTR_ALIGNMENT_SHIFT);
+src/cpus/cpu_alpha_instr.c:211:	alpha_pc_to_pointers(cpu);
+src/cpus/cpu_alpha_instr.c:322: *  arg[0] = pointer to new alpha_instr_call
+src/cpus/cpu_alpha_instr.c:326:	cpu->cd.alpha.next_ic = (struct alpha_instr_call *) ic->arg[0];
+src/cpus/cpu_alpha_instr.c:334: *  arg[0] = pointer to new alpha_instr_call
+src/cpus/cpu_alpha_instr.c:342:	    cpu->cd.alpha.cur_ic_page) / sizeof(struct alpha_instr_call);
+src/cpus/cpu_alpha_instr.c:343:	cpu->pc &= ~((ALPHA_IC_ENTRIES_PER_PAGE-1)
+src/cpus/cpu_alpha_instr.c:344:	    << ALPHA_INSTR_ALIGNMENT_SHIFT);
+src/cpus/cpu_alpha_instr.c:345:	cpu->pc += (low_pc << ALPHA_INSTR_ALIGNMENT_SHIFT);
+src/cpus/cpu_alpha_instr.c:348:	cpu->cd.alpha.next_ic = (struct alpha_instr_call *) ic->arg[0];
+src/cpus/cpu_alpha_instr.c:355: *  arg[0] = pointer to new alpha_instr_call
+src/cpus/cpu_alpha_instr.c:368: *  arg[0] = pointer to new alpha_instr_call
+src/cpus/cpu_alpha_instr.c:381: *  arg[0] = pointer to new alpha_instr_call
+src/cpus/cpu_alpha_instr.c:394: *  arg[0] = pointer to new alpha_instr_call
+src/cpus/cpu_alpha_instr.c:407: *  arg[0] = pointer to new alpha_instr_call
+src/cpus/cpu_alpha_instr.c:420: *  arg[0] = pointer to new alpha_instr_call
+src/cpus/cpu_alpha_instr.c:434: *  arg[0] = pointer to new alpha_instr_call
+src/cpus/cpu_alpha_instr.c:447: *  arg[0] = pointer to new alpha_instr_call
+src/cpus/cpu_alpha_instr.c:500: *  alpha_store_t():  #333
+src/cpus/cpu_alpha_instr.c:521:static uint64_t alpha_store_t(double v)
+src/cpus/cpu_alpha_instr.c:545:	reg(ic->arg[0]) = alpha_store_t(fa.f + fb.f);
+src/cpus/cpu_alpha_instr.c:552:	reg(ic->arg[0]) = alpha_store_t(fa.f - fb.f);
+src/cpus/cpu_alpha_instr.c:559:	reg(ic->arg[0]) = alpha_store_t(fa.f * fb.f);
+src/cpus/cpu_alpha_instr.c:566:	reg(ic->arg[0]) = alpha_store_t(fa.f / fb.f);
+src/cpus/cpu_alpha_instr.c:613:	reg(ic->arg[0]) = cpu->cd.alpha.cpu_type.implver;
+src/cpus/cpu_alpha_instr.c:735:	reg(ic->arg[0]) = cpu->cd.alpha.pcc;
+src/cpus/cpu_alpha_instr.c:738:	cpu->cd.alpha.pcc += 20;
+src/cpus/cpu_alpha_instr.c:742:#include "tmp_alpha_misc.c"
+src/cpus/cpu_alpha_instr.c:751:	cpu->pc &= ~((ALPHA_IC_ENTRIES_PER_PAGE-1)
+src/cpus/cpu_alpha_instr.c:752:	    << ALPHA_INSTR_ALIGNMENT_SHIFT);
+src/cpus/cpu_alpha_instr.c:753:	cpu->pc += (ALPHA_IC_ENTRIES_PER_PAGE
+src/cpus/cpu_alpha_instr.c:754:	    << ALPHA_INSTR_ALIGNMENT_SHIFT);
+src/cpus/cpu_alpha_instr.c:757:	alpha_pc_to_pointers(cpu);
+src/cpus/cpu_alpha_instr.c:768: *  alpha_instr_to_be_translated():
+src/cpus/cpu_alpha_instr.c:770: *  Translate an instruction word into an alpha_instr_call. ic is filled in with
+src/cpus/cpu_alpha_instr.c:781:	void (*samepage_function)(struct cpu *, struct alpha_instr_call *);
+src/cpus/cpu_alpha_instr.c:785:	low_pc = ((size_t)ic - (size_t)cpu->cd.alpha.cur_ic_page)
+src/cpus/cpu_alpha_instr.c:786:	    / sizeof(struct alpha_instr_call);
+src/cpus/cpu_alpha_instr.c:787:	addr = cpu->pc & ~((ALPHA_IC_ENTRIES_PER_PAGE-1) <<
+src/cpus/cpu_alpha_instr.c:788:	    ALPHA_INSTR_ALIGNMENT_SHIFT);
+src/cpus/cpu_alpha_instr.c:789:	addr += (low_pc << ALPHA_INSTR_ALIGNMENT_SHIFT);
+src/cpus/cpu_alpha_instr.c:790:	addr &= ~((1 << ALPHA_INSTR_ALIGNMENT_SHIFT) - 1);
+src/cpus/cpu_alpha_instr.c:802:		struct DYNTRANS_L2_64_TABLE *l2 = cpu->cd.alpha.l1_64[x1];
+src/cpus/cpu_alpha_instr.c:840:		ic->f = instr(call_pal);
+src/cpus/cpu_alpha_instr.c:845:		if (ra == ALPHA_ZERO) {
+src/cpus/cpu_alpha_instr.c:852:		ic->arg[0] = (size_t) &cpu->cd.alpha.r[ra];
+src/cpus/cpu_alpha_instr.c:853:		ic->arg[1] = (size_t) &cpu->cd.alpha.r[rb];
+src/cpus/cpu_alpha_instr.c:854:		if (rb == ALPHA_ZERO)
+src/cpus/cpu_alpha_instr.c:862:		if (ra == ALPHA_ZERO && opcode == 0x0b) {
+src/cpus/cpu_alpha_instr.c:870:		ic->arg[0] = (size_t) &cpu->cd.alpha.r[ra];
+src/cpus/cpu_alpha_instr.c:871:		ic->arg[1] = (size_t) &cpu->cd.alpha.r[rb];
+src/cpus/cpu_alpha_instr.c:909:		ic->f = alpha_loadstore[
+src/cpus/cpu_alpha_instr.c:914:		if (load && ra == ALPHA_ZERO) {
+src/cpus/cpu_alpha_instr.c:919:			ic->arg[0] = (size_t) &cpu->cd.alpha.f[ra];
+src/cpus/cpu_alpha_instr.c:921:			ic->arg[0] = (size_t) &cpu->cd.alpha.r[ra];
+src/cpus/cpu_alpha_instr.c:922:		ic->arg[1] = (size_t) &cpu->cd.alpha.r[rb];
+src/cpus/cpu_alpha_instr.c:926:		if (rc == ALPHA_ZERO) {
+src/cpus/cpu_alpha_instr.c:930:		ic->arg[0] = (size_t) &cpu->cd.alpha.r[rc];
+src/cpus/cpu_alpha_instr.c:931:		ic->arg[1] = (size_t) &cpu->cd.alpha.r[ra];
+src/cpus/cpu_alpha_instr.c:935:			ic->arg[2] = (size_t) &cpu->cd.alpha.r[rb];
+src/cpus/cpu_alpha_instr.c:983:		if (rc == ALPHA_ZERO) {
+src/cpus/cpu_alpha_instr.c:987:		ic->arg[0] = (size_t) &cpu->cd.alpha.r[rc];
+src/cpus/cpu_alpha_instr.c:988:		ic->arg[1] = (size_t) &cpu->cd.alpha.r[ra];
+src/cpus/cpu_alpha_instr.c:992:			ic->arg[2] = (size_t) &cpu->cd.alpha.r[rb];
+src/cpus/cpu_alpha_instr.c:999:			   if (ra == ALPHA_ZERO || rb == ALPHA_ZERO) {
+src/cpus/cpu_alpha_instr.c:1000:				if (ra == ALPHA_ZERO)
+src/cpus/cpu_alpha_instr.c:1002:				ic->f = alpha_mov_r_r[ra + rc*32];
+src/cpus/cpu_alpha_instr.c:1036:		if (rc == ALPHA_ZERO) {
+src/cpus/cpu_alpha_instr.c:1040:		ic->arg[0] = (size_t) &cpu->cd.alpha.r[rc];
+src/cpus/cpu_alpha_instr.c:1041:		ic->arg[1] = (size_t) &cpu->cd.alpha.r[ra];
+src/cpus/cpu_alpha_instr.c:1045:			ic->arg[2] = (size_t) &cpu->cd.alpha.r[rb];
+src/cpus/cpu_alpha_instr.c:1106:		if (rc == ALPHA_ZERO) {
+src/cpus/cpu_alpha_instr.c:1110:		ic->arg[0] = (size_t) &cpu->cd.alpha.r[rc];
+src/cpus/cpu_alpha_instr.c:1111:		ic->arg[1] = (size_t) &cpu->cd.alpha.r[ra];
+src/cpus/cpu_alpha_instr.c:1115:			ic->arg[2] = (size_t) &cpu->cd.alpha.r[rb];
+src/cpus/cpu_alpha_instr.c:1131:		if (rc == ALPHA_ZERO) {
+src/cpus/cpu_alpha_instr.c:1135:		ic->arg[0] = (size_t) &cpu->cd.alpha.f[rc];
+src/cpus/cpu_alpha_instr.c:1136:		ic->arg[1] = (size_t) &cpu->cd.alpha.f[ra];
+src/cpus/cpu_alpha_instr.c:1137:		ic->arg[2] = (size_t) &cpu->cd.alpha.f[rb];
+src/cpus/cpu_alpha_instr.c:1155:		if (rc == ALPHA_ZERO) {
+src/cpus/cpu_alpha_instr.c:1159:		ic->arg[0] = (size_t) &cpu->cd.alpha.f[rc];
+src/cpus/cpu_alpha_instr.c:1160:		ic->arg[1] = (size_t) &cpu->cd.alpha.f[ra];
+src/cpus/cpu_alpha_instr.c:1161:		ic->arg[2] = (size_t) &cpu->cd.alpha.f[rb];
+src/cpus/cpu_alpha_instr.c:1186:			if (ra == ALPHA_ZERO) {
+src/cpus/cpu_alpha_instr.c:1190:			ic->arg[0] = (size_t) &cpu->cd.alpha.r[ra];
+src/cpus/cpu_alpha_instr.c:1204:			ic->arg[0] = (size_t) &cpu->cd.alpha.r[ra];
+src/cpus/cpu_alpha_instr.c:1205:			ic->arg[1] = (size_t) &cpu->cd.alpha.r[rb];
+src/cpus/cpu_alpha_instr.c:1206:			if (ra == ALPHA_ZERO) {
+src/cpus/cpu_alpha_instr.c:1208:				    rb == ALPHA_RA)
+src/cpus/cpu_alpha_instr.c:1245:			if (ra != ALPHA_ZERO) {
+src/cpus/cpu_alpha_instr.c:1290:			ic->arg[1] = (size_t) &cpu->cd.alpha.f[ra];
+src/cpus/cpu_alpha_instr.c:1292:			ic->arg[1] = (size_t) &cpu->cd.alpha.r[ra];
+src/cpus/cpu_alpha_instr.c:1302:			    ((ALPHA_IC_ENTRIES_PER_PAGE-1) << 2) | 3;
+src/cpus/cpu_alpha_instr.c:1309:				    cpu->cd.alpha.cur_ic_page +
+
+ succeeded in 332ms:
+   1: /*
+   2:  *  Copyright (C) 2005-2021  Anders Gavare.  All rights reserved.
+   3:  *
+   4:  *  Redistribution and use in source and binary forms, with or without
+   5:  *  modification, are permitted provided that the following conditions are met:
+   6:  *
+   7:  *  1. Redistributions of source code must retain the above copyright
+   8:  *     notice, this list of conditions and the following disclaimer.
+   9:  *  2. Redistributions in binary form must reproduce the above copyright  
+  10:  *     notice, this list of conditions and the following disclaimer in the 
+  11:  *     documentation and/or other materials provided with the distribution.
+  12:  *  3. The name of the author may not be used to endorse or promote products
+  13:  *     derived from this software without specific prior written permission.
+  14:  *
+  15:  *  THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+  16:  *  ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+  17:  *  IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+  18:  *  ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE   
+  19:  *  FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+  20:  *  DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+  21:  *  OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+  22:  *  HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+  23:  *  LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+  24:  *  OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+  25:  *  SUCH DAMAGE.
+  26:  *
+  27:  *
+  28:  *  Alpha PALcode-related functionality.
+  29:  *
+  30:  *  (See http://www.alphalinux.org/docs/alphaahb.html for good descriptions
+  31:  *  of many PALcode functions.)
+  32:  */
+  33: 
+  34: 
+  35: #include <stdio.h>
+  36: #include <stdlib.h>
+  37: #include <string.h>
+  38: #include <ctype.h>
+  39: 
+  40: #include "console.h"
+  41: #include "cpu.h"
+  42: #include "machine.h"
+  43: #include "memory.h"
+  44: #include "misc.h"
+  45: #include "symbol.h"
+  46: 
+  47: #include "thirdparty/alpha_prom.h"
+  48: 
+  49:   95: } 100:  */
+ 101: void alpha_prom_call(struct cpu *cpu)
+ 102: {
+ 103: 	uint64_t addr, a1 = cpu->cd.alpha.r[ALPHA_A1];
+ 104: 	uint64_t a2 = cpu->cd.alpha.r[ALPHA_A2], a3 = cpu->cd.alpha.r[ALPHA_A3];
+ 105: 	uint64_t len;
+ 106: 	const char *s = "";
+ 107: 
+ 108: 	switch (cpu->cd.alpha.r[ALPHA_A0]) {
+ 109: 
+ 110: 	case PROM_R_PUTS:
+ 111: 		/*  a1 = channel, a2 = ptr to buf, a3 = len  */
+ 112: 		for (addr = a2; addr < a2 + a3; addr ++) {
+ 113: 			unsigned char ch;
+ 114: 			cpu->memory_rw(cpu, cpu->mem, addr, &ch, sizeof(ch),
+ 115: 			    MEM_READ, CACHE_DATA | NO_EXCEPTIONS);
+ 116: 			console_putchar(cpu->machine->main_console_handle, ch);
+ 117: 		}
+ 118: 		cpu->cd.alpha.r[ALPHA_V0] = a3;
+ 119: 		break;
+ 120: 
+ 121: 	case PROM_R_GETENV:
+ 122: 		/*  a1 = variable id, a2 = char *buf, a3 = bufsize  */
+ 123: 		switch (a1) {
+ 124: 		case PROM_E_BOOTED_DEV:
+ 125: 			s = "";		/*  TODO  */
+ 126: 			break;
+ 127: 		case PROM_E_BOOTED_FILE:
+ 128: 			s = cpu->machine->boot_kernel_filename;
+ 129: 			break;
+ 130: 		case PROM_E_BOOTED_OSFLAGS:
+ 131: 			s = cpu->machine->boot_string_argument;
+ 132: 			break;
+ 133: 		case PROM_E_TTY_DEV:
+ 134: 			s = "";		/*  TODO  */
+ 135: 			break;
+ 136: 		default:fatal("[ Alpha PALcode: GXemul PROM getenv %i: TODO "
+ 137: 			    "]\n", cpu->cd.alpha.r[ALPHA_A1]);
+ 138: 			cpu->running = 0;
+ 139: 		}
+ 140: 		/*  Copy at most a3 bytes.  */
+ 141: 		len = a3;
+ 142: 		if (strlen(s) < len)
+ 143: 			len = strlen(s) + 1;
+ 144: 		store_buf(cpu, a2, s, len);
+ 145: 		break;
+ 146: 
+ 147: 	default:fatal("[ Alpha PALcode: GXemul PROM call, a0=0x%" PRIx64" ]\n",
+ 148: 		    (uint64_t) cpu->cd.alpha.r[ALPHA_A0]);
+ 149: 		cpu->running = 0;
+ 150: 	}
+ 151: 
+ 152: 	/*  Return from the PROM call.  */
+ 153: 	cpu->pc = cpu->cd.alpha.r[ALPHA_RA];
+ 154: }
+ 155: 
+ 156: 
+ 157: /*
+ 158:  *  alpha_palcode():
+ 159:  *
+ 160:  *  Execute an Alpha PALcode instruction. (Most of these correspond to
+ 161:  *  OSF1 palcodes, used by for example NetBSD/alpha.)
+ 162:  */
+ 163: void alpha_palcode(struct cpu *cpu, uint32_t palcode)
+ 164: {
+ 165: 	uint64_t a0 = cpu->cd.alpha.r[ALPHA_A0], a1 = cpu->cd.alpha.r[ALPHA_A1];
+ 166: 	uint64_t userMode = cpu->cd.alpha.ps & ALPHA_PSL_USERMODE;
+ 167: 
+ 168: 	/*
+ 169: 	 *  Only these are unprivileged, i.e. can be invoked in user mode,
+ 170: 	 *  according to the manual:
+ 171: 	 *
+ 172: 	 *	bpt		kernel and user
+ 173: 	 *	bugchk		kernel and user
+ 174: 	 *	callsys		user
+ 175: 	 *	clrfen		user
+ 176: 	 *	gentrap		kernel and user
+ 177: 	 *	imb		kernel and user
+ 178: 	 *	rdunique	kernel and user
+ 179: 	 *	urti		user
+ 180: 	 *	wrunique	kernel and user
+ 181: 	 */
+ 182: 
+ 183: 	if (userMode && !(
+ 184: 	    palcode == 0x80 || palcode == 0x81 || palcode == 0x83 ||
+ 185: 	    palcode == 0xae || palcode == 0xaa || palcode == 0x86 ||
+ 186: 	    palcode == 0x9e || palcode == 0x92 || palcode == 0x9f)) {
+ 187: 		// opDec fault.
+ 188: 		fatal("[ Privileged Alpha PALcode called from user mode: TODO ]");
+ 189: 		cpu->running = 0;
+ 190: 		return;
+ 191: 	}
+ 192: 
+ 193: 	switch (palcode) {
+ 194: #if 0
+ 195: TODO: Uncomment more again, as I progress with the emulation...
+ 196: Make sure they are correct, as documented in the Manual.
+ 197: 
+ 198: 	case 0x02:	/*  PAL_draina  */
+ 199: 		/*  TODO?  */
+ 200: 		break;
+ 201: #endif
+ 202: 	case 0x10:	/*  PAL_OSF1_rdmces  */
+ 203: 		/*  Return Machine Check status in v0.  */
+ 204: 		cpu->cd.alpha.r[ALPHA_V0] = cpu->cd.alpha.mces;
+ 205: 		break;
+ 206: 	case 0x11:	/*  PAL_OSF1_wrmces  */
+ 207: 		/*  Clear bits 0, 1, and 2 of the Machine Check and Error status.  */
+ 208: 		cpu->cd.alpha.mces = ~(cpu->cd.alpha.r[ALPHA_A0] & 7);
+ 209: 
+ 210: 		/*  Set bits 3 and 4 of the Machine Check and Error status.  */
+ 211: 		cpu->cd.alpha.mces &= ~0x18;
+ 212: 		cpu->cd.alpha.mces |= (cpu->cd.alpha.r[ALPHA_A0] & 0x18);
+ 213: 		break;
+ 214: 	case 0x2b:	/*  PAL_OSF1_wrfen  */
+ 215: 		/*  Floating point enable: a0 = 1 or 0.  */
+ 216: 		/*  TODO. Since clrfen is documented as:
+ 217: 			FEN �+? 0
+ 218: 			(PCBB+40)<0> �+? 0
+ 219: 		    then most likely wrfen should do the reverse.
+ 220: 		 */
+ 221: 		cpu->cd.alpha.pcb.apcb_flags = cpu->cd.alpha.r[ALPHA_A0];
+ 222: 		store_64bit_word(cpu, cpu->cd.alpha.ctx + 40,
+ 223: 		    cpu->cd.alpha.pcb.apcb_flags);
+ 224: 		break;
+ 225: 	case 0x2d:	/*  PAL_OSF1_wrvptptr  */
+ 226: 		/*  Write Virtual Page Table Pointer. a0 = value  */
+ 227: 		cpu->cd.alpha.vptptr = a0;
+ 228: 		break;
+ 229: 	case 0x30:	/*  PAL_OSF1_swpctx  */
+ 230: 		/*  Save old context:  */
+ 231: 		store_64bit_word(cpu, cpu->cd.alpha.ctx + 0,
+ 232: 		    cpu->cd.alpha.pcb.apcb_ksp);
+ 233: 		store_64bit_word(cpu, cpu->cd.alpha.ctx + 8,
+ 234: 		    cpu->cd.alpha.pcb.apcb_usp);
+ 235: 		store_64bit_word(cpu, cpu->cd.alpha.ctx + 16,
+ 236: 		    cpu->cd.alpha.pcb.apcb_ptbr);
+ 237: 		store_32bit_word(cpu, cpu->cd.alpha.ctx + 24,
+ 238: 		    cpu->cd.alpha.pcb.apcb_cpc);
+ 239: 		store_32bit_word(cpu, cpu->cd.alpha.ctx + 28,
+ 240: 		    cpu->cd.alpha.pcb.apcb_asn);
+ 241: 		store_64bit_word(cpu, cpu->cd.alpha.ctx + 32,
+ 242: 		    cpu->cd.alpha.pcb.apcb_unique);
+ 243: 		store_64bit_word(cpu, cpu->cd.alpha.ctx + 40,
+ 244: 		    cpu->cd.alpha.pcb.apcb_flags);
+ 245: 		store_64bit_word(cpu, cpu->cd.alpha.ctx + 48,
+ 246: 		    cpu->cd.alpha.pcb.apcb_decrsv0);
+ 247: 		store_64bit_word(cpu, cpu->cd.alpha.ctx + 56,
+ 248: 		    cpu->cd.alpha.pcb.apcb_decrsv1);
+ 249: 
+ 250: 		/*  Return old context in v0.  */
+ 251: 		cpu->cd.alpha.r[ALPHA_A0] = cpu->cd.alpha.ctx;
+ 252: 
+ 253: 		/*  Load new context:  */
+ 254: 		{
+ 255: 			cpu->cd.alpha.ctx = a0;
+ 256: 			uint64_t new_ksp =
+ 257: 			    load_64bit_word(cpu, cpu->cd.alpha.ctx + 0);
+ 258: 			uint64_t new_usp =
+ 259: 			    load_64bit_word(cpu, cpu->cd.alpha.ctx + 8);
+ 260: 			uint64_t new_ptbr =
+ 261: 			    load_64bit_word(cpu, cpu->cd.alpha.ctx + 16);
+ 262: 			uint64_t new_cpc =
+ 263: 			    load_32bit_word(cpu, cpu->cd.alpha.ctx + 24);
+ 264: 			uint64_t new_asn =
+ 265: 			    load_32bit_word(cpu, cpu->cd.alpha.ctx + 28);
+ 266: 			uint64_t new_unique =
+ 267: 			    load_64bit_word(cpu, cpu->cd.alpha.ctx + 32);
+ 268: 			uint64_t new_flags =
+ 269: 			    load_64bit_word(cpu, cpu->cd.alpha.ctx + 40);
+ 270: 			uint64_t new_decrsv0 =
+ 271: 			    load_64bit_word(cpu, cpu->cd.alpha.ctx + 48);
+ 272: 			uint64_t new_decrsv1 =
+ 273: 			    load_64bit_word(cpu, cpu->cd.alpha.ctx + 56);
+ 274: 
+ 275: 			// Update all variables in the pcb simultaneously:
+ 276: 			cpu->cd.alpha.pcb.apcb_ksp = new_ksp;
+ 277: 			cpu->cd.alpha.pcb.apcb_usp = new_usp;
+ 278: 			cpu->cd.alpha.pcb.apcb_ptbr = new_ptbr;
+ 279: 			cpu->cd.alpha.pcb.apcb_cpc = new_cpc;
+ 280: 			cpu->cd.alpha.pcb.apcb_asn = new_asn;
+ 281: 			cpu->cd.alpha.pcb.apcb_unique = new_unique;
+ 282: 			cpu->cd.alpha.pcb.apcb_ptbr = new_flags;
+ 283: 			cpu->cd.alpha.pcb.apcb_decrsv0 = new_decrsv0;
+ 284: 			cpu->cd.alpha.pcb.apcb_decrsv1 = new_decrsv1;
+ 285: 
+ 286: 			// TODO: Don't invalidate EVERYTHING!
+ 287: 			cpu->invalidate_translation_caches(cpu, 0, INVALIDATE_ALL);
+ 288: 		}
+ 289: 		break;
+ 290: #if 0
+ 291: 	case 0x31:	/*  PAL_OSF1_wrval  */
+ 292: 		/*  a0 = value  */
+ 293: 		cpu->cd.alpha.sysvalue = a0;
+ 294: 		break;
+ 295: 	case 0x32:	/*  PAL_OSF1_rdval  */
+ 296: 		/*  return: v0 = value  */
+ 297: 		cpu->cd.alpha.r[ALPHA_V0] = cpu->cd.alpha.sysvalue;
+ 298: 		break;
+ 299: #endif
+ 300: 	case 0x33:	/*  PAL_OSF1_tbi  */
+ 301: 		/*
+ 302: 		 *  a0 = op, a1 = vaddr
+ 303: 		 *  a0 is ignored for now. TODO.
+ 304: 		 *	a0 = 1: ITB invalidate
+ 305: 		 *	a0 = 2: DTB invalidate
+ 306: 		 *	a0 = 3: both ITB and DTB
+ 307: 		 *	a0 = -1: invalidate everything with ASM=0.
+ 308: 		 *	a0 = -2: invalidate everything
+ 309: 		 */
+ 310: 		// debug("[ Alpha PALcode: PAL_OSF1_tbi: a0=%" PRIi64" a1=0x%"
+ 311: 		//    PRIx64" ]\n", (int64_t)a0, (uint64_t)a1);
+ 312: 		if (a0 >= 1)
+ 313: 			cpu->invalidate_translation_caches(cpu, a1, INVALIDATE_VADDR);
+ 314: 		else
+ 315: 			cpu->invalidate_translation_caches(cpu, 0, INVALIDATE_ALL);
+ 316: 		break;
+ 317: 	case 0x34:	/*  PAL_OSF1_wrent (Write System Entry Address)  */
+ 318: 		/*  a0 = new vector, a1 = vector selector  */
+ 319: 		if (a1 < N_ALPHA_KENTRY)
+ 320: 			cpu->cd.alpha.kentry[a1] = a0;
+ 321: 		else {
+ 322: 			fatal("[ Alpha PALcode: PAL_OSF1_wrent: attempt to "
+ 323: 			    "write to non-implemented selector %i ]\n",
+ 324: 			    (int)a1);
+ 325: 			cpu->running = 0;
+ 326: 		}
+ 327: 		break;
+ 328: 	case 0x35:	/*  PAL_OSF1_swpipl  */
+ 329: 		/*  a0 = new ipl, v0 = return old ipl  */
+ 330: 		cpu->cd.alpha.r[ALPHA_V0] = cpu->cd.alpha.ps & ALPHA_PSL_IPL_MASK;
+ 331: 		cpu->cd.alpha.ps &= ~ALPHA_PSL_IPL_MASK;
+ 332: 		cpu->cd.alpha.ps |= (a0 & ALPHA_PSL_IPL_MASK);
+ 333: 		break;
+ 334: 	case 0x36:	/*  PAL_rdps  */
+ 335: 		cpu->cd.alpha.r[ALPHA_V0] = cpu->cd.alpha.ps;
+ 336: 		break;
+ 337: 	case 0x37:	/*  PAL_OSF1_wrkgp  */
+ 338: 		cpu->cd.alpha.kgp = a0;
+ 339: 		break;
+ 340: #if 0
+ 341: 	case 0x38:	/*  PAL_OSF1_wrusp  */
+ 342: 		/*  a0 = value  */
+ 343: 		cpu->cd.alpha.pcb.apcb_usp = a0;
+ 344: 		break;
+ 345: 	case 0x3a:	/*  PAL_OSF1_rdusp  */
+ 346: 		/*  return: v0 = value  */
+ 347: 		cpu->cd.alpha.r[ALPHA_V0] = cpu->cd.alpha.pcb.apcb_usp;
+ 348: 		break;
+ 349: #endif
+ 350: 	case 0x3c:	/*  PAL_whami  */
+ 351: 		/*  Returns CPU id in v0:  */
+ 352: 		cpu->cd.alpha.r[ALPHA_V0] = cpu->cpu_id;
+ 353: 		break;
+ 354: #if 0
+ 355: 	case 0x81:	/*  PAL_bugchk  */
+ 356: 		cpu->running = 0;
+ 357: 		break;
+ 358: 	case 0x83:	/*  PAL_OSF1_syscall  */
+ 359: 		fatal("[ Alpha PALcode: syscall, but no syscall handler ]\n");
+ 360: 		cpu->running = 0;
+ 361: 		break;
+ 362: #endif
+ 363: 	case 0x86:	/*  PAL_imb  */
+ 364: 		/*  TODO  */
+ 365: 		break;
+ 366: #if 0
+ 367: 	case 0x3fffffc:
+ 368: 		fatal("[ Alpha: KENTRY not set! Halting. ]");
+ 369: 		cpu->running = 0;
+ 370: 		break;
+ 371: 	case 0x3fffffd:
+ 372: 		fatal("[ Alpha PALcode: Fixup: TODO ]\n");
+ 373: 		/*  Return from the fixup call.  */
+ 374: 		cpu->cd.alpha.r[ALPHA_V0] = 0;	/*  Success?  */
+ 375: 		cpu->pc = cpu->cd.alpha.r[ALPHA_RA];
+ 376: 		break;
+ 377: #endif
+ 378: 	case 0x3fffffe:
+ 379: 		alpha_prom_call(cpu);
+ 380: 		break;
+ 381: 	default:fatal("[ Alpha PALcode 0x%x unimplemented! ]\n", palcode);
+ 382: 		cpu->running = 0;
+ 383: 	}
+ 384: 
+ 385: 	/*
+ 386: 	 *  Many PALcode instructions in the Alpha manual (and in NetBSD/Alpha
+ 387: 	 *  source code) are described with "clobbers t0, t8-t11", some also
+ 388: 	 *  with a0, and some also with a1 included.
+ 389: 	 *
+ 390: 	 *  However, it's easier to just leave the registers as they are.
+ 391: 	 */
+ 392: }
+ 393: 
+
+ succeeded in 339ms:
+   1: /*
+   2:  *  Copyright (C) 2006-2021  Anders Gavare.  All rights reserved.
+   3:  *
+   4:  *  Redistribution and use in source and binary forms, with or without
+   5:  *  modification, are permitted provided that the following conditions are met:
+   6:  *
+   7:  *  1. Redistributions of source code must retain the above copyright
+   8:  *     notice, this list of conditions and the following disclaimer.
+   9:  *  2. Redistributions in binary form must reproduce the above copyright  
+  10:  *     notice, this list of conditions and the following disclaimer in the 
+  11:  *     documentation and/or other materials provided with the distribution.
+  12:  *  3. The name of the author may not be used to endorse or promote products
+  13:  *     derived from this software without specific prior written permission.
+  14:  *
+  15:  *  THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+  16:  *  ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+  17:  *  IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+  18:  *  ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE   
+  19:  *  FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+  20:  *  DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+  21:  *  OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+  22:  *  HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+  23:  *  LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+  24:  *  OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+  25:  *  SUCH DAMAGE.
+  26:  */
+  27: 
+  28: #include <stdio.h>
+  29: #include <stdlib.h>
+  30: #include <string.h>
+  31: 
+  32: #include "cpu.h"
+  33: #include "machine.h"
+  34: #include "memory.h"
+  35: #include "misc.h"
+  36: 
+  37: #include "thirdparty/alpha_rpb.h"
+  38: 
+  39: 
+  40: /*
+  41:  *  alpha_translate_v2p():
+  42:  */
+  43: int alpha_translate_v2p(struct cpu *cpu, uint64_t vaddr,
+  44: 	uint64_t *return_paddr, int flags)
+  45: {
+  46: 	uint64_t base = cpu->cd.alpha.pcb.apcb_ptbr << ALPHA_PAGESHIFT;
+  47: 	uint64_t userMode = cpu->cd.alpha.ps & ALPHA_PSL_USERMODE;
+  48: 	// uint64_t vptptr = cpu->cd.alpha.vptptr;
+  49: 	
+  50: 	// TODO: From the Alpha "arm_book.book":
+  51: 	// IF {SEXT(VA<63:VA_SIZE>) NEQ SEXT(VA<VA_SIZE-1>} THEN
+  52: 	// 	{initiate Access Violation fault}
+  53: 	// IF (VIRBND in use) THEN
+  54: 	//   IF (VA LTU VIRBND) THEN
+  55: 	//     ptbr_value <- PTBR
+  56: 	//   ELSE
+  57: 	//     ptbr_value <- SYSPTBR
+  58: 	// ELSE
+  59: 	//   ptbr_value <- PTBR 110: 	addr = base + i1 * sizeof(uint64_t);
+ 111: 	
+ 112: 	pt_entry_ptr = memory_paddr_to_hostaddr(cpu->mem, addr, 0);
+ 113: 	if (pt_entry_ptr == NULL)
+ 114: 		goto not_found;
+ 115: 
+ 116: 	pte1 = *(uint64_t *)(pt_entry_ptr);
+ 117: 	pte1 = LE64_TO_HOST(pte1);
+ 118: 
+ 119: 	// debug("pte1 = 0x%016"PRIx64"\n", pte1);
+ 120: 	if (!(pte1 & ALPHA_PTE_VALID)) {
+ 121: 		// TODO:
+ 122: 		// IF level1_pte<KRE> EQ 0 THEN
+ 123: 		//   {initiate Access Violation fault}
+ 124: 		// ELSE
+ 125: 		//   {initiate Translation Not Valid fault}
+ 126: 
+ 127: 		// fatal("TODO: pte1 not valid.\n");
+ 128: 		goto not_found;
+ 129: 	}
+ 130: 
+ 131: 	addr = ((pte1 >> 32) << ALPHA_PAGESHIFT) + (i2 * sizeof(uint64_t));
+ 132: 
+ 133: 	pt_entry_ptr = memory_paddr_to_hostaddr(cpu->mem, addr, 0);
+ 134: 	if (pt_entry_ptr == NULL)
+ 135: 		goto not_found;
+ 136: 
+ 137: 	pte2 = *(uint64_t *)(pt_entry_ptr);
+ 138: 	pte2 = LE64_TO_HOST(pte2);
+ 139: 
+ 140: 	// debug("pte2 = 0x%016"PRIx64"\n", pte2);
+ 141: 	if (!(pte2 & ALPHA_PTE_VALID)) {
+ 142: 		// TODO:
+ 143: 		// IF level2_pte<KRE> EQ 0 THEN
+ 144: 		//   {initiate Access Violation fault}
+ 145: 		// ELSE
+ 146: 		//   {initiate Translation Not Valid fault}
+ 147: 
+ 148: 		fatal("TODO: pte2 not valid.\n");
+ 149: 		goto not_found;
+ 150: 	}
+ 151: 
+ 152: 	addr = ((pte2 >> 32) << ALPHA_PAGESHIFT) + (i3 * sizeof(uint64_t));
+ 153: 
+ 154: 	pt_entry_ptr = memory_paddr_to_hostaddr(cpu->mem, addr, 0);
+ 155: 	if (pt_entry_ptr == NULL)
+ 156: 		goto not_found;
+ 157: 
+ 158: 	pte3 = *(uint64_t *)(pt_entry_ptr);
+ 159: 	pte3 = LE64_TO_HOST(pte3);
+ 160: 
+ 161: 	// debug("pte3 = 0x%016"PRIx64"\n", pte3);
+ 162: 
+ 163: 	if (!(pte3 & ALPHA_PTE_VALID)) {
+ 164: 		fatal("TODO: pte3 not valid.\n");
+ 165: 		goto not_found;
+ 166: 	}
+ 167: 
+ 168: 	(*return_paddr) = ALPHA_PTE_TO_PFN(pte3) << pageSizeShift;
+ 169: 
+ 170: 	// TODO.
+ 171: 	return 2;
+ 172: 
+ 173: not_found:
+ 174: 	/*  No match.  */
+ 175: 	/*  #194: (Codex/Fable) a failed guest page-table walk must not
+ 176: 	    abort()/exit() the host; report no-translation (0) so the caller
+ 177: 	    raises the fault (keeps the emulator alive and debuggable).  */
+ 178: 	fatal("[ alpha_translate_v2p: 0x%016" PRIx64" wasn't found ]\n", vaddr);
+ 179: 	return 0;
+ 180: }
+ 181: 
+   1: /*  GXemul: $Id: alpha_cpu.h,v 1.2 2006-09-01 16:40:57 debug Exp $  */
+   2: /* $NetBSD: alpha_cpu.h,v 1.48 2006/02/16 20:17:13 perry Exp $ */
+   3: 
+   4: #ifndef __ALPHA_ALPHA_CPU_H__
+   5: #define	__ALPHA_ALPHA_CPU_H__
+   6: 
+   7: /*
+   8:  * Copyright (c) 1996 Carnegie-Mellon University.
+   9:  * All rights reserved.
+  10:  *
+  11:  * Author: Chris G. Demetriou
+  12:  *
+  13:  * Permission to use, copy, modify and distribute this software and
+  14:  * its documentation is hereby granted, provided that both the copyright
+  15:  * notice and this permission notice appear in all copies of the
+  16:  * software, derivative works or modified versions, and any portions
+  17:  * thereof, and that both notices appear in supporting documentation.
+  18:  *
+  19:  * CARNEGIE MELLON ALLOWS FREE USE OF THIS SOFTWARE IN ITS "AS IS"
+  20:  * CONDITION.  CARNEGIE MELLON DISCLAIMS ANY LIABILITY OF ANY KIND
+  21:  * FOR ANY DAMAGES WHATSOEVER RESULTING FROM THE USE OF THIS SOFTWARE.
+  22:  *
+  23:  * Carnegie Mellon requests users of this software to return to
+  24:  *
+  25:  *  Software Distribution Coordinator  or  Software.Distribution@CS.CMU.EDU
+  26:  *  School of Computer Science
+  27:  *  Carnegie Mellon University
+  28:  *  Pittsburgh PA 15213-3890
+  29:  *
+  30:  * any improvements or extensions that they make and grant Carnegie the
+  31:  * rights to redistribute these changes.
+  32:  */
+  33: 
+  34: /*
+  35:  * Alpha CPU + OSF/1 PALcode definitions for use by the kernel.
+  36:  *
+  37:  * Definitions for:
+  38:  *
+  39:  *	Process Control Block
+  40:  *	Interrupt/Exception/Syscall Stack Frame
+  41:  *	Processor Status Register
+  42:  *	Machine Check Error Summary Register
+  43:  *	Machine Check Logout Area
+  44:  *	Per CPU state Management of Machine Check Handling
+  45:  *	Virtual Memory Management
+  46:  *	Kernel Entry Vectors
+  47:  *	MMCSR Fault Type Codes
+  48:  *	Translation Buffer Invalidation
+  49:  *
+  50:  * and miscellaneous PALcode operations.
+  51:  */
+  52: 
+  53: 
+  54: /*
+  55:  * Process Control Block definitions [OSF/1 PALcode Specific]
+  56:  *
+  57:  * GXemul note: all of these uint64_t were 'unsigned long' in the original
+  58:  * NetBSD header file, and the uint32_t were 'unsigned int'.
+  59:  */
+  60: 
+  61: struct alpha_pcb {
+  62: 	uint64_t	apcb_ksp;	/* kernel stack ptr */
+  63: 	uint64_t	apcb_usp;	/* user stack ptr */
+  64: 	uint64_t	apcb_ptbr;	/* page table base reg */
+  65: 	uint32_t	apcb_cpc;	/* charged process cycles */
+  66: 	uint32_t	apcb_asn;	/* address space number */
+  67: 	uint64_t	apcb_unique;	/* process unique value */
+  68: #define	apcb_backup_ksp	apcb_unique	/* backup kernel stack ptr */
+  69: 	uint64_t	apcb_flags;	/* flags; see below */
+  70: 	uint64_t	apcb_decrsv0;	/* DEC reserved */
+  71: 	uint64_t	apcb_decrsv1;	/* DEC reserved */
+  72: };
+  73: 
+  74: #define	ALPHA_PCB_FLAGS_FEN	0x0000000000000001
+  75: #define	ALPHA_PCB_FLAGS_PME	0x4000000000000000
+  76: 
+  77: /*
+  78:  * Interrupt/Exception/Syscall "Hardware" (really PALcode)
+  79:  * Stack Frame definitions
+  80:  *
+  81:  * These are quadword offsets from the sp on kernel entry, i.e.
+  82:  * to get to the value in question you access (sp + (offset * 8)).
+  83:  *
+  84:  * On syscall entry, A0-A2 aren't written to memory but space
+  85:  * _is_ reserved for them.
+  86:  */
+  87: 
+  88: #define	ALPHA_HWFRAME_PS	0	/* processor status register */
+  89: #define	ALPHA_HWFRAME_PC	1	/* program counter */
+  90: #define	ALPHA_HWFRAME_GP	2	/* global pointer */
+  91: #define	ALPHA_HWFRAME_A0	3	/* a0 */
+  92: #define	ALPHA_HWFRAME_A1	4	/* a1 */
+  93: #define	ALPHA_HWFRAME_A2	5	/* a2 */
+  94: 
+  95: #define	ALPHA_HWFRAME_SIZE	6	/* 6 8-byte words */
+  96: 
+  97: /*
+  98:  * Processor Status Register [OSF/1 PALcode Specific]
+  99:  *
+ 100:  * Includes user/kernel mode bit, interrupt priority levels, etc.
+ 101:  */
+ 102: 
+ 103: #define	ALPHA_PSL_USERMODE	0x0008		/* set -> user mode */
+ 104: #define	ALPHA_PSL_IPL_MASK	0x0007		/* interrupt level mask */
+ 105: 
+ 106: #define	ALPHA_PSL_IPL_0		0x0000		/* all interrupts enabled */
+ 107: #define	ALPHA_PSL_IPL_SOFT	0x0001		/* software ints disabled */
+ 108: #define	ALPHA_PSL_IPL_IO	0x0004		/* I/O dev ints disabled */
+ 109: #define	ALPHA_PSL_IPL_CLOCK	0x0005		/* clock ints disabled */
+ 110: #define	ALPHA_PSL_IPL_HIGH	0x0006		/* all but mchecks disabled */
+ 111: 
+ 112: #define	ALPHA_PSL_MUST_BE_ZERO	0xfffffffffffffff0
+ 113: 
+ 114: /* Convenience constants: what must be set/clear in user mode */
+ 115: #define	ALPHA_PSL_USERSET	ALPHA_PSL_USERMODE
+ 116: #define	ALPHA_PSL_USERCLR	(ALPHA_PSL_MUST_BE_ZERO | ALPHA_PSL_IPL_MASK)
+ 117: 
+ 118: /*
+ 119:  * Interrupt Type Code Definitions [OSF/1 PALcode Specific]
+ 120:  */
+ 121:  
+ 122: #define	ALPHA_INTR_XPROC	0	/* interprocessor interrupt */
+ 123: #define	ALPHA_INTR_CLOCK	1	/* clock interrupt */
+ 124: #define	ALPHA_INTR_ERROR	2	/* correctable error or mcheck */
+ 125: #define	ALPHA_INTR_DEVICE	3	/* device interrupt */
+ 126: #define	ALPHA_INTR_PERF		4	/* performance counter */
+ 127: #define	ALPHA_INTR_PASSIVE	5	/* passive release */
+ 128: 
+ 129: /*
+ 130:  * Machine Check Error Summary Register definitions [OSF/1 PALcode Specific]
+ 131:  *
+ 132:  * The following bits are values as read.  On write, _PCE, _SCE, and
+ 133:  * _MIP are "write 1 to clear."
+ 134:  */
+ 135: 
+ 136: #define	ALPHA_MCES_IMP							\
+ 137:     0xffffffff00000000	/* impl. dependent */
+ 138: #define	ALPHA_MCES_RSVD							\
+ 139:     0x00000000ffffffe0	/* reserved */
+ 140: #define	ALPHA_MCES_DSC							\
+ 141:     0x0000000000000010	/* disable system correctable error reporting */
+ 142: #define	ALPHA_MCES_DPC							\
+ 143:     0x0000000000000008	/* disable processor correctable error reporting */
+ 144: #define	ALPHA_MCES_PCE							\
+ 145:     0x0000000000000004	/* processor correctable error in progress */
+ 146: #define	ALPHA_MCES_SCE							\
+ 147:     0x0000000000000002	/* system correctable error in progress */
+ 148: #define	ALPHA_MCES_MIP							\
+ 149:     0x0000000000000001	/* machine check in progress */
+ 150: 
+ 151: /*
+ 152:  * Machine Check Error Summary Register definitions [OSF/1 PALcode Specific]
+ 153:  *
+ 154:  * Note that these are *generic* OSF/1 PALcode specific defines. There are
+ 155:  * platform variations to these entities.
+ 156:  *
+ 157:  * GXemul note: These uint32_t were 'unsigned int' in the original NetBSD
+ 158:  * header file.
+ 159:  */
+ 160: 
+ 161: struct alpha_logout_area {
+ 162: 	uint32_t	la_frame_size;		/* frame size */
+ 163: 	uint32_t	la_flags;		/* flags; see below */
+ 164: 	uint32_t	la_cpu_offset;		/* offset to cpu area */
+ 165: 	uint32_t	la_system_offset;	/* offset to system area */
+ 166: };
+ 167: 
+ 168: #define	ALPHA_LOGOUT_FLAGS_RETRY	0x80000000	/* OK to continue */
+ 169: #define	ALPHA_LOGOUT_FLAGS_SE		0x40000000	/* second error */
+ 170: #define	ALPHA_LOGOUT_FLAGS_SBZ		0x3fffffff	/* should be zero */
+ 171: 
+ 172: #define	ALPHA_LOGOUT_NOT_BUILT						\
+ 173:     (struct alpha_logout_area *)0xffffffffffffffff)
+ 174: 
+ 175: #define	ALPHA_LOGOUT_PAL_AREA(lap)					\
+ 176:     (unsigned long *)((unsigned char *)(lap) + 16)
+ 177: #define	ALPHA_LOGOUT_PAL_SIZE(lap)					\
+ 178:     ((lap)->la_cpu_offset - 16)
+ 179: #define	ALPHA_LOGOUT_CPU_AREA(lap)					\
+ 180:     (unsigned long *)((unsigned char *)(lap) + (lap)->la_cpu_offset)
+ 181: #define	ALPHA_LOGOUT_CPU_SIZE(lap)					\
+ 182:     ((lap)->la_system_offset - (lap)->la_cpu_offset)
+ 183: #define	ALPHA_LOGOUT_SYSTEM_AREA(lap)					\
+ 184:     (unsigned long *)((unsigned char *)(lap) + (lap)->la_system_offset) 411: 	register unsigned long v0 __asm("$0"); 423: 	register unsigned long v0 __asm("$0");
+ 424: 
+ 425: 	__asm volatile("call_pal %1 # PAL_OSF1_rdusp"
+ 426: 		: "=r" (v0)
+ 427: 		: "i" (PAL_OSF1_rdusp)
+ 428: 		/* clobbers t0, t8..t11 */
+ 429: 		: "$1", "$22", "$23", "$24", "$25");
+ 430: 
+ 431: 	return (v0);
+ 432: }
+ 433: 
+ 434: static __inline unsigned long
+ 435: alpha_pal_rdval(void)
+ 436: {
+ 437: 	register unsigned long v0 __asm("$0");
+ 438: 
+ 439: 	__asm volatile("call_pal %1 # PAL_OSF1_rdval"
+ 440: 		: "=r" (v0)
+ 441: 		: "i" (PAL_OSF1_rdval)
+ 442: 		/* clobbers t0, t8..t11 */
+ 443: 		: "$1", "$22", "$23", "$24", "$25");
+ 444: 
+ 445: 	return (v0);
+ 446: }
+ 447: 
+ 448: static __inline unsigned long
+ 449: alpha_pal_swpctx(unsigned long ctx)
+ 450: {
+ 451: 	register unsigned long a0 __asm("$16") = ctx;
+ 452: 	register unsigned long v0 __asm("$0");
+ 453: 
+ 454: 	__asm volatile("call_pal %2 # PAL_OSF1_swpctx"
+ 455: 		: "=r" (a0), "=r" (v0)
+ 456: 		: "i" (PAL_OSF1_swpctx), "0" (a0)
+ 457: 		/* clobbers t0, t8..t11, a0 (above) */
+ 458: 		: "$1", "$22", "$23", "$24", "$25", "memory");
+ 459: 
+ 460: 	return (v0);
+ 461: }
+ 462: 
+ 463: static __inline unsigned long
+ 464: alpha_pal_swpipl(unsigned long ipl)
+ 465: {
+ 466: 	register unsigned long a0 __asm("$16") = ipl;
+ 467: 	register unsigned long v0 __asm("$0");
+ 468: 
+ 469: 	__asm volatile("call_pal %2 # PAL_OSF1_swpipl"
+ 470: 		: "=r" (a0), "=r" (v0)
+ 471: 		: "i" (PAL_OSF1_swpipl), "0" (a0)
+ 472: 		/* clobbers t0, t8..t11, a0 (above) */
+ 473: 		: "$1", "$22", "$23", "$24", "$25", "memory");
+ 474: 
+ 475: 	return (v0);
+ 476: }
+ 477: 
+ 478: static __inline void
+ 479: alpha_pal_tbi(unsigned long op, vaddr_t va)
+ 480: {
+ 481: 	register unsigned long a0 __asm("$16") = op;
+ 482: 	register unsigned long a1 __asm("$17") = va;
+ 483: 
+ 484: 	__asm volatile("call_pal %2 # PAL_OSF1_tbi"
+ 485: 		: "=r" (a0), "=r" (a1)
+ 486: 		: "i" (PAL_OSF1_tbi), "0" (a0), "1" (a1)
+ 487: 		/* clobbers t0, t8..t11, a0 (above), a1 (above) */
+ 488: 		: "$1", "$22", "$23", "$24", "$25");
+ 489: }
+ 490: 
+ 491: static __inline unsigned long
+ 492: alpha_pal_whami(void)
+ 493: {
+ 494: 	register unsigned long v0 __asm("$0");
+ 495: 
+
+codex
+One premise is already false: the adjacent `wrfen` case writes `apcb_flags`, and `swpctx` reads it when saving the outgoing PCB. B still looks defective: loading flags into `apcb_ptbr` overwrites the page-table base regardless of those other uses. I’m checking whether that save path also provides a cheaper observable.
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$n=0; Get-Content -LiteralPath '"'src/cpus/cpu_alpha.c' | ForEach-Object { "'$n++; if (($n -ge 55 -and $n -le 117) -or ($n -ge 161 -and $n -le 244)) { '"'{0,4}: {1}' -f "'$n,$_ } }; rg -n '"'apcb_|cd\\.alpha\\.(ctx|pcb|mces)|ALPHA_SP|register.*alpha|alpha.*register' src -g '*.[ch]' -g '"'!tmp*'"'" in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$n=0; Get-Content -LiteralPath '"'src/cpus/memory_alpha.c' | ForEach-Object { "'$n++; if ($n -ge 40) { '"'{0,4}: {1}' -f "'$n,$_ } }; $n=0; Get-Content -LiteralPath '"'src/include/thirdparty/alpha_cpu.h' | ForEach-Object { "'$n++; if (($n -ge 45 -and $n -le 145) -or ($n -ge 449 -and $n -le 461)) { '"'{0,4}: {1}' -f "'$n,$_ } }' in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+ succeeded in 285ms:
+  40: /*
+  41:  *  alpha_translate_v2p():
+  42:  */
+  43: int alpha_translate_v2p(struct cpu *cpu, uint64_t vaddr,
+  44: 	uint64_t *return_paddr, int flags)
+  45: {
+  46: 	uint64_t base = cpu->cd.alpha.pcb.apcb_ptbr << ALPHA_PAGESHIFT;
+  47: 	uint64_t userMode = cpu->cd.alpha.ps & ALPHA_PSL_USERMODE;
+  48: 	// uint64_t vptptr = cpu->cd.alpha.vptptr;
+  49: 	
+  50: 	// TODO: From the Alpha "arm_book.book":
+  51: 	// IF {SEXT(VA<63:VA_SIZE>) NEQ SEXT(VA<VA_SIZE-1>} THEN
+  52: 	// 	{initiate Access Violation fault}
+  53: 	// IF (VIRBND in use) THEN
+  54: 	//   IF (VA LTU VIRBND) THEN
+  55: 	//     ptbr_value <- PTBR
+  56: 	//   ELSE
+  57: 	//     ptbr_value <- SYSPTBR
+  58: 	// ELSE
+  59: 	//   ptbr_value <- PTBR
+  60: 
+  61: 	/*  Kernel direct-mapped space (OSF/1, NetBSD):  */
+  62: 	if (!userMode && (vaddr >= ALPHA_K0SEG_BASE && vaddr <= ALPHA_K0SEG_END)) {
+  63: 		*return_paddr = vaddr & 0x000003ffffffffffULL;
+  64: 		return 2;
+  65: 	}
+  66: 
+  67: 	/*
+  68: 	 *  UGLY hack for now:
+  69: 	 *
+  70: 	 *  Before virtual memory has been set up, ptbr is most likely zero.
+  71: 	 *  In that case, simply map everything vaddr == paddr.
+  72: 	 */
+  73: 	if (!userMode && base == 0) {
+  74: 		*return_paddr = vaddr & 0x000003ffffffffffULL;
+  75: if (vaddr == 0xfffffffd80000000ULL) {
+  76: 	fatal("Alpha kernel virtual memory seems to want to be used. Not yet implemented.\n");
+  77: 	exit(1);
+  78: }
+  79: #if 1
+  80: 		if ((vaddr & ~0x7fff) == 0x0000000010000000ULL)
+  81: 			*return_paddr = (vaddr & 0x7fff) + HWRPB_PADDR;
+  82: 
+  83: 		if ((vaddr & ~0xffffff) == 0xfffffe0000000000ULL)
+  84: 			*return_paddr = 0x7efa000 + (vaddr & 0xffffff);
+  85: 
+  86: 		/*  At 0x20000000, NetBSD stores 8KB temp prom data  */
+  87: 		if ((vaddr & ~0x1fff) == 0x0000000020000000ULL)
+  88: 			*return_paddr = (vaddr & 0x1fff) + PROM_ARGSPACE_PADDR;
+  89: #endif
+  90: 		return 2;
+  91: 	}
+  92: 
+  93: 	// debug("base = 0x%016"PRIx64"\n", base);
+  94: if (vaddr == 0xfffffffd80000000ULL) fatal("AYONA3\n");
+  95: 
+  96: 	uint64_t addr, pte1, pte2, pte3;
+  97: 	int i1, i2, i3;
+  98: 	unsigned char *pt_entry_ptr;
+  99: 	const int pageSizeShift = 13;
+ 100: 	// const int pageSize = 1 << pageSizeShift;
+ 101: 	const int bitsPerLevel = 10;
+ 102: 	const int maskPerLevel = (1 << bitsPerLevel) - 1;
+ 103: 
+ 104: 	i1 = (vaddr >> (pageSizeShift + 2 * bitsPerLevel)) & maskPerLevel;
+ 105: 	i2 = (vaddr >> (pageSizeShift + 1 * bitsPerLevel)) & maskPerLevel;
+ 106: 	i3 = (vaddr >> (pageSizeShift + 0 * bitsPerLevel)) & maskPerLevel;
+ 107: 
+ 108: 	// debug("vaddr=%016llx i1=0x%x i2=0x%x i3=0x%x\n", (long long)vaddr, i1, i2, i3);
+ 109: 
+ 110: 	addr = base + i1 * sizeof(uint64_t);
+ 111: 	
+ 112: 	pt_entry_ptr = memory_paddr_to_hostaddr(cpu->mem, addr, 0);
+ 113: 	if (pt_entry_ptr == NULL)
+ 114: 		goto not_found;
+ 115: 
+ 116: 	pte1 = *(uint64_t *)(pt_entry_ptr);
+ 117: 	pte1 = LE64_TO_HOST(pte1);
+ 118: 
+ 119: 	// debug("pte1 = 0x%016"PRIx64"\n", pte1);
+ 120: 	if (!(pte1 & ALPHA_PTE_VALID)) {
+ 121: 		// TODO:
+ 122: 		// IF level1_pte<KRE> EQ 0 THEN
+ 123: 		//   {initiate Access Violation fault}
+ 124: 		// ELSE
+ 125: 		//   {initiate Translation Not Valid fault}
+ 126: 
+ 127: 		// fatal("TODO: pte1 not valid.\n");
+ 128: 		goto not_found;
+ 129: 	}
+ 130: 
+ 131: 	addr = ((pte1 >> 32) << ALPHA_PAGESHIFT) + (i2 * sizeof(uint64_t));
+ 132: 
+ 133: 	pt_entry_ptr = memory_paddr_to_hostaddr(cpu->mem, addr, 0);
+ 134: 	if (pt_entry_ptr == NULL)
+ 135: 		goto not_found;
+ 136: 
+ 137: 	pte2 = *(uint64_t *)(pt_entry_ptr);
+ 138: 	pte2 = LE64_TO_HOST(pte2);
+ 139: 
+ 140: 	// debug("pte2 = 0x%016"PRIx64"\n", pte2);
+ 141: 	if (!(pte2 & ALPHA_PTE_VALID)) {
+ 142: 		// TODO:
+ 143: 		// IF level2_pte<KRE> EQ 0 THEN
+ 144: 		//   {initiate Access Violation fault}
+ 145: 		// ELSE
+ 146: 		//   {initiate Translation Not Valid fault}
+ 147: 
+ 148: 		fatal("TODO: pte2 not valid.\n");
+ 149: 		goto not_found;
+ 150: 	}
+ 151: 
+ 152: 	addr = ((pte2 >> 32) << ALPHA_PAGESHIFT) + (i3 * sizeof(uint64_t));
+ 153: 
+ 154: 	pt_entry_ptr = memory_paddr_to_hostaddr(cpu->mem, addr, 0);
+ 155: 	if (pt_entry_ptr == NULL)
+ 156: 		goto not_found;
+ 157: 
+ 158: 	pte3 = *(uint64_t *)(pt_entry_ptr);
+ 159: 	pte3 = LE64_TO_HOST(pte3);
+ 160: 
+ 161: 	// debug("pte3 = 0x%016"PRIx64"\n", pte3);
+ 162: 
+ 163: 	if (!(pte3 & ALPHA_PTE_VALID)) {
+ 164: 		fatal("TODO: pte3 not valid.\n");
+ 165: 		goto not_found;
+ 166: 	}
+ 167: 
+ 168: 	(*return_paddr) = ALPHA_PTE_TO_PFN(pte3) << pageSizeShift;
+ 169: 
+ 170: 	// TODO.
+ 171: 	return 2;
+ 172: 
+ 173: not_found:
+ 174: 	/*  No match.  */
+ 175: 	/*  #194: (Codex/Fable) a failed guest page-table walk must not
+ 176: 	    abort()/exit() the host; report no-translation (0) so the caller
+ 177: 	    raises the fault (keeps the emulator alive and debuggable).  */
+ 178: 	fatal("[ alpha_translate_v2p: 0x%016" PRIx64" wasn't found ]\n", vaddr);
+ 179: 	return 0;
+ 180: }
+ 181: 
+  45:  *	Virtual Memory Management
+  46:  *	Kernel Entry Vectors
+  47:  *	MMCSR Fault Type Codes
+  48:  *	Translation Buffer Invalidation
+  49:  *
+  50:  * and miscellaneous PALcode operations.
+  51:  */
+  52: 
+  53: 
+  54: /*
+  55:  * Process Control Block definitions [OSF/1 PALcode Specific]
+  56:  *
+  57:  * GXemul note: all of these uint64_t were 'unsigned long' in the original
+  58:  * NetBSD header file, and the uint32_t were 'unsigned int'.
+  59:  */
+  60: 
+  61: struct alpha_pcb {
+  62: 	uint64_t	apcb_ksp;	/* kernel stack ptr */
+  63: 	uint64_t	apcb_usp;	/* user stack ptr */
+  64: 	uint64_t	apcb_ptbr;	/* page table base reg */
+  65: 	uint32_t	apcb_cpc;	/* charged process cycles */
+  66: 	uint32_t	apcb_asn;	/* address space number */
+  67: 	uint64_t	apcb_unique;	/* process unique value */
+  68: #define	apcb_backup_ksp	apcb_unique	/* backup kernel stack ptr */
+  69: 	uint64_t	apcb_flags;	/* flags; see below */
+  70: 	uint64_t	apcb_decrsv0;	/* DEC reserved */
+  71: 	uint64_t	apcb_decrsv1;	/* DEC reserved */
+  72: };
+  73: 
+  74: #define	ALPHA_PCB_FLAGS_FEN	0x0000000000000001
+  75: #define	ALPHA_PCB_FLAGS_PME	0x4000000000000000
+  76: 
+  77: /*
+  78:  * Interrupt/Exception/Syscall "Hardware" (really PALcode)
+  79:  * Stack Frame definitions
+  80:  *
+  81:  * These are quadword offsets from the sp on kernel entry, i.e.
+  82:  * to get to the value in question you access (sp + (offset * 8)).
+  83:  *
+  84:  * On syscall entry, A0-A2 aren't written to memory but space
+  85:  * _is_ reserved for them.
+  86:  */
+  87: 
+  88: #define	ALPHA_HWFRAME_PS	0	/* processor status register */
+  89: #define	ALPHA_HWFRAME_PC	1	/* program counter */
+  90: #define	ALPHA_HWFRAME_GP	2	/* global pointer */
+  91: #define	ALPHA_HWFRAME_A0	3	/* a0 */
+  92: #define	ALPHA_HWFRAME_A1	4	/* a1 */
+  93: #define	ALPHA_HWFRAME_A2	5	/* a2 */
+  94: 
+  95: #define	ALPHA_HWFRAME_SIZE	6	/* 6 8-byte words */
+  96: 
+  97: /*
+  98:  * Processor Status Register [OSF/1 PALcode Specific]
+  99:  *
+ 100:  * Includes user/kernel mode bit, interrupt priority levels, etc.
+ 101:  */
+ 102: 
+ 103: #define	ALPHA_PSL_USERMODE	0x0008		/* set -> user mode */
+ 104: #define	ALPHA_PSL_IPL_MASK	0x0007		/* interrupt level mask */
+ 105: 
+ 106: #define	ALPHA_PSL_IPL_0		0x0000		/* all interrupts enabled */
+ 107: #define	ALPHA_PSL_IPL_SOFT	0x0001		/* software ints disabled */
+ 108: #define	ALPHA_PSL_IPL_IO	0x0004		/* I/O dev ints disabled */
+ 109: #define	ALPHA_PSL_IPL_CLOCK	0x0005		/* clock ints disabled */
+ 110: #define	ALPHA_PSL_IPL_HIGH	0x0006		/* all but mchecks disabled */
+ 111: 
+ 112: #define	ALPHA_PSL_MUST_BE_ZERO	0xfffffffffffffff0
+ 113: 
+ 114: /* Convenience constants: what must be set/clear in user mode */
+ 115: #define	ALPHA_PSL_USERSET	ALPHA_PSL_USERMODE
+ 116: #define	ALPHA_PSL_USERCLR	(ALPHA_PSL_MUST_BE_ZERO | ALPHA_PSL_IPL_MASK)
+ 117: 
+ 118: /*
+ 119:  * Interrupt Type Code Definitions [OSF/1 PALcode Specific]
+ 120:  */
+ 121:  
+ 122: #define	ALPHA_INTR_XPROC	0	/* interprocessor interrupt */
+ 123: #define	ALPHA_INTR_CLOCK	1	/* clock interrupt */
+ 124: #define	ALPHA_INTR_ERROR	2	/* correctable error or mcheck */
+ 125: #define	ALPHA_INTR_DEVICE	3	/* device interrupt */
+ 126: #define	ALPHA_INTR_PERF		4	/* performance counter */
+ 127: #define	ALPHA_INTR_PASSIVE	5	/* passive release */
+ 128: 
+ 129: /*
+ 130:  * Machine Check Error Summary Register definitions [OSF/1 PALcode Specific]
+ 131:  *
+ 132:  * The following bits are values as read.  On write, _PCE, _SCE, and
+ 133:  * _MIP are "write 1 to clear."
+ 134:  */
+ 135: 
+ 136: #define	ALPHA_MCES_IMP							\
+ 137:     0xffffffff00000000	/* impl. dependent */
+ 138: #define	ALPHA_MCES_RSVD							\
+ 139:     0x00000000ffffffe0	/* reserved */
+ 140: #define	ALPHA_MCES_DSC							\
+ 141:     0x0000000000000010	/* disable system correctable error reporting */
+ 142: #define	ALPHA_MCES_DPC							\
+ 143:     0x0000000000000008	/* disable processor correctable error reporting */
+ 144: #define	ALPHA_MCES_PCE							\
+ 145:     0x0000000000000004	/* processor correctable error in progress */
+ 449: alpha_pal_swpctx(unsigned long ctx)
+ 450: {
+ 451: 	register unsigned long a0 __asm("$16") = ctx;
+ 452: 	register unsigned long v0 __asm("$0");
+ 453: 
+ 454: 	__asm volatile("call_pal %2 # PAL_OSF1_swpctx"
+ 455: 		: "=r" (a0), "=r" (v0)
+ 456: 		: "i" (PAL_OSF1_swpctx), "0" (a0)
+ 457: 		/* clobbers t0, t8..t11, a0 (above) */
+ 458: 		: "$1", "$22", "$23", "$24", "$25", "memory");
+ 459: 
+ 460: 	return (v0);
+ 461: }
+
+ succeeded in 291ms:
+  55: /*  Alpha symbolic register names:  */
+  56: static const char *alpha_regname[N_ALPHA_REGS] = ALPHA_REG_NAMES; 
+  57: 
+  58: void alpha_irq_interrupt_assert(struct interrupt *interrupt);
+  59: void alpha_irq_interrupt_deassert(struct interrupt *interrupt);
+  60: 
+  61: 
+  62: /*
+  63:  *  alpha_cpu_new():
+  64:  *
+  65:  *  Create a new Alpha CPU object by filling the CPU struct.
+  66:  *  Return 1 on success, 0 if cpu_type_name isn't a valid Alpha processor.
+  67:  */
+  68: int alpha_cpu_new(struct cpu *cpu, struct memory *mem,
+  69: 	struct machine *machine, int cpu_id, char *cpu_type_name)
+  70: {
+  71: 	int i = 0;
+  72: 	struct alpha_cpu_type_def cpu_type_defs[] = ALPHA_CPU_TYPE_DEFS;
+  73: 
+  74: 	/*  Scan the cpu_type_defs list for this cpu type:  */
+  75: 	while (cpu_type_defs[i].name != NULL) {
+  76: 		if (strcasecmp(cpu_type_defs[i].name, cpu_type_name) == 0) {
+  77: 			break;
+  78: 		}
+  79: 		i++;
+  80: 	}
+  81: 	if (cpu_type_defs[i].name == NULL)
+  82: 		return 0;
+  83: 
+  84: 	cpu->is_32bit = 0;
+  85: 	cpu->byte_order = EMUL_LITTLE_ENDIAN;
+  86: 
+  87: 	cpu->memory_rw = alpha_memory_rw;
+  88: 	cpu->run_instr = alpha_run_instr;
+  89: 	cpu->translate_v2p = alpha_translate_v2p;
+  90: 	cpu->update_translation_table = alpha_update_translation_table;
+  91: 	cpu->invalidate_translation_caches =
+  92: 	    alpha_invalidate_translation_caches;
+  93: 	cpu->invalidate_code_translation = alpha_invalidate_code_translation;
+  94: 
+  95: 	cpu->cd.alpha.cpu_type = cpu_type_defs[i];
+  96: 
+  97: 	cpu->cd.alpha.r[ALPHA_SP] = 0xfffffc000000ff00ULL;
+  98: 
+  99: 	/*  Set up dummy kentry pointers to something which crashes
+ 100: 	    the machine:  */
+ 101: 	store_32bit_word(cpu, 0x10010, 0x3fffffc);
+ 102: 	for (i=0; i<N_ALPHA_KENTRY; i++)
+ 103: 		cpu->cd.alpha.kentry[i] = 0x10010;
+ 104: 
+ 105: 	/*  Bogus initial context (will be overwritten on first
+ 106: 	    context switch):  */
+ 107: 	cpu->cd.alpha.ctx = 0x10100;
+ 108: 
+ 109: 	CPU_SETTINGS_ADD_REGISTER64("pc", cpu->pc);
+ 110: 	for (i=0; i<N_ALPHA_REGS; i++)
+ 111: 		CPU_SETTINGS_ADD_REGISTER64(alpha_regname[i],
+ 112: 		    cpu->cd.alpha.r[i]);
+ 113: 
+ 114: 	/*  Register the CPU interrupt pin:  */
+ 115: 	{
+ 116: 		struct interrupt templ;
+ 117: 
+ 161: 
+ 162: /*
+ 163:  *  alpha_cpu_register_dump():
+ 164:  *  
+ 165:  *  Dump cpu registers in a relatively readable format.
+ 166:  *  
+ 167:  *  gprs: set to non-zero to dump GPRs and some special-purpose registers.
+ 168:  *  coprocs: set bit 0..3 to dump registers in coproc 0..3.
+ 169:  */
+ 170: void alpha_cpu_register_dump(struct cpu *cpu, int gprs, int coprocs)
+ 171: { 
+ 172: 	char *symbol;
+ 173: 	uint64_t offset;
+ 174: 	int i, x = cpu->cpu_id;
+ 175: 
+ 176: 	if (gprs) {
+ 177: 		symbol = get_symbol_name(&cpu->machine->symbol_context,
+ 178: 		    cpu->pc, &offset);
+ 179: 		debug("cpu%i:\t pc = 0x%016" PRIx64, x, (uint64_t) cpu->pc);
+ 180: 		debug("  <%s>\n", symbol != NULL? symbol : " no symbol ");
+ 181: 		for (i=0; i<N_ALPHA_REGS; i++) {
+ 182: 			int r = (i >> 1) + ((i & 1) << 4);
+ 183: 			if ((i % 2) == 0)
+ 184: 				debug("cpu%i:\t", x);
+ 185: 			if (r != ALPHA_ZERO)
+ 186: 				debug("%3s = 0x%016" PRIx64, alpha_regname[r],
+ 187: 				    (uint64_t) cpu->cd.alpha.r[r]);
+ 188: 			if ((i % 2) == 1)
+ 189: 				debug("\n");
+ 190: 			else
+ 191: 				debug("   ");
+ 192: 		}
+ 193: 	}
+ 194: }
+ 195: 
+ 196: 
+ 197: /*
+ 198:  *  alpha_cpu_tlbdump():
+ 199:  *
+ 200:  *  Called from the debugger to dump the TLB in a readable format.
+ 201:  *  x is the cpu number to dump, or -1 to dump all CPUs.
+ 202:  *
+ 203:  *  If rawflag is nonzero, then the TLB contents isn't formated nicely,
+ 204:  *  just dumped.
+ 205:  */
+ 206: void alpha_cpu_tlbdump(struct cpu* cpu, int rawflag)
+ 207: {
+ 208: }
+ 209: 
+ 210: 
+ 211: /*
+ 212:  *  alpha_irq_interrupt_assert():
+ 213:  *  alpha_irq_interrupt_deassert():
+ 214:  */
+ 215: void alpha_irq_interrupt_assert(struct interrupt *interrupt)
+ 216: {
+ 217: 	struct cpu *cpu = (struct cpu *) interrupt->extra;
+ 218: 	cpu->cd.alpha.irq_asserted = 1;
+ 219: }
+ 220: void alpha_irq_interrupt_deassert(struct interrupt *interrupt)
+ 221: {
+ 222: 	struct cpu *cpu = (struct cpu *) interrupt->extra;
+ 223: 	cpu->cd.alpha.irq_asserted = 0;
+ 224: }
+ 225: 
+ 226: 
+ 227: /*
+ 228:  *  alpha_print_imm16_disp():
+ 229:  *
+ 230:  *  Used internally by alpha_cpu_disassemble_instr().
+ 231:  */
+ 232: static void alpha_print_imm16_disp(int imm, int rb)
+ 233: {
+ 234: 	imm = (int16_t)imm;
+ 235: 
+ 236: 	if (imm < 0) {
+ 237: 		debug("-");
+ 238: 		imm = -imm;
+ 239: 	}
+ 240: 	if (imm <= 256)
+ 241: 		debug("%i", imm);
+ 242: 	else
+ 243: 		debug("0x%x", imm);
+ 244: 	if (rb != ALPHA_ZERO)
+src\machines\automachine.c:45:void machine_register_alpha(void);
+src\machines\automachine.c:96:	machine_register_alpha();
+src\include\cpu_alpha.h:108:#define	ALPHA_SP		30
+src\cpus\cpu_alpha.c:97:	cpu->cd.alpha.r[ALPHA_SP] = 0xfffffc000000ff00ULL;
+src\cpus\cpu_alpha.c:107:	cpu->cd.alpha.ctx = 0x10100;
+src\cpus\cpu_alpha.c:163: *  alpha_cpu_register_dump():
+src\cpus\cpu_alpha.c:170:void alpha_cpu_register_dump(struct cpu *cpu, int gprs, int coprocs)
+src\cpus\cpu_alpha_palcode.c:204:		cpu->cd.alpha.r[ALPHA_V0] = cpu->cd.alpha.mces;
+src\cpus\cpu_alpha_palcode.c:208:		cpu->cd.alpha.mces = ~(cpu->cd.alpha.r[ALPHA_A0] & 7);
+src\cpus\cpu_alpha_palcode.c:211:		cpu->cd.alpha.mces &= ~0x18;
+src\cpus\cpu_alpha_palcode.c:212:		cpu->cd.alpha.mces |= (cpu->cd.alpha.r[ALPHA_A0] & 0x18);
+src\cpus\cpu_alpha_palcode.c:221:		cpu->cd.alpha.pcb.apcb_flags = cpu->cd.alpha.r[ALPHA_A0];
+src\cpus\cpu_alpha_palcode.c:222:		store_64bit_word(cpu, cpu->cd.alpha.ctx + 40,
+src\cpus\cpu_alpha_palcode.c:223:		    cpu->cd.alpha.pcb.apcb_flags);
+src\cpus\cpu_alpha_palcode.c:231:		store_64bit_word(cpu, cpu->cd.alpha.ctx + 0,
+src\cpus\cpu_alpha_palcode.c:232:		    cpu->cd.alpha.pcb.apcb_ksp);
+src\cpus\cpu_alpha_palcode.c:233:		store_64bit_word(cpu, cpu->cd.alpha.ctx + 8,
+src\cpus\cpu_alpha_palcode.c:234:		    cpu->cd.alpha.pcb.apcb_usp);
+src\cpus\cpu_alpha_palcode.c:235:		store_64bit_word(cpu, cpu->cd.alpha.ctx + 16,
+src\cpus\cpu_alpha_palcode.c:236:		    cpu->cd.alpha.pcb.apcb_ptbr);
+src\cpus\cpu_alpha_palcode.c:237:		store_32bit_word(cpu, cpu->cd.alpha.ctx + 24,
+src\cpus\cpu_alpha_palcode.c:238:		    cpu->cd.alpha.pcb.apcb_cpc);
+src\cpus\cpu_alpha_palcode.c:239:		store_32bit_word(cpu, cpu->cd.alpha.ctx + 28,
+src\cpus\cpu_alpha_palcode.c:240:		    cpu->cd.alpha.pcb.apcb_asn);
+src\cpus\cpu_alpha_palcode.c:241:		store_64bit_word(cpu, cpu->cd.alpha.ctx + 32,
+src\cpus\cpu_alpha_palcode.c:242:		    cpu->cd.alpha.pcb.apcb_unique);
+src\cpus\cpu_alpha_palcode.c:243:		store_64bit_word(cpu, cpu->cd.alpha.ctx + 40,
+src\cpus\cpu_alpha_palcode.c:244:		    cpu->cd.alpha.pcb.apcb_flags);
+src\cpus\cpu_alpha_palcode.c:245:		store_64bit_word(cpu, cpu->cd.alpha.ctx + 48,
+src\cpus\cpu_alpha_palcode.c:246:		    cpu->cd.alpha.pcb.apcb_decrsv0);
+src\cpus\cpu_alpha_palcode.c:247:		store_64bit_word(cpu, cpu->cd.alpha.ctx + 56,
+src\cpus\cpu_alpha_palcode.c:248:		    cpu->cd.alpha.pcb.apcb_decrsv1);
+src\cpus\cpu_alpha_palcode.c:251:		cpu->cd.alpha.r[ALPHA_A0] = cpu->cd.alpha.ctx;
+src\cpus\cpu_alpha_palcode.c:255:			cpu->cd.alpha.ctx = a0;
+src\cpus\cpu_alpha_palcode.c:257:			    load_64bit_word(cpu, cpu->cd.alpha.ctx + 0);
+src\cpus\cpu_alpha_palcode.c:259:			    load_64bit_word(cpu, cpu->cd.alpha.ctx + 8);
+src\cpus\cpu_alpha_palcode.c:261:			    load_64bit_word(cpu, cpu->cd.alpha.ctx + 16);
+src\cpus\cpu_alpha_palcode.c:263:			    load_32bit_word(cpu, cpu->cd.alpha.ctx + 24);
+src\cpus\cpu_alpha_palcode.c:265:			    load_32bit_word(cpu, cpu->cd.alpha.ctx + 28);
+src\cpus\cpu_alpha_palcode.c:267:			    load_64bit_word(cpu, cpu->cd.alpha.ctx + 32);
+src\cpus\cpu_alpha_palcode.c:269:			    load_64bit_word(cpu, cpu->cd.alpha.ctx + 40);
+src\cpus\cpu_alpha_palcode.c:271:			    load_64bit_word(cpu, cpu->cd.alpha.ctx + 48);
+src\cpus\cpu_alpha_palcode.c:273:			    load_64bit_word(cpu, cpu->cd.alpha.ctx + 56);
+src\cpus\cpu_alpha_palcode.c:276:			cpu->cd.alpha.pcb.apcb_ksp = new_ksp;
+src\cpus\cpu_alpha_palcode.c:277:			cpu->cd.alpha.pcb.apcb_usp = new_usp;
+src\cpus\cpu_alpha_palcode.c:278:			cpu->cd.alpha.pcb.apcb_ptbr = new_ptbr;
+src\cpus\cpu_alpha_palcode.c:279:			cpu->cd.alpha.pcb.apcb_cpc = new_cpc;
+src\cpus\cpu_alpha_palcode.c:280:			cpu->cd.alpha.pcb.apcb_asn = new_asn;
+src\cpus\cpu_alpha_palcode.c:281:			cpu->cd.alpha.pcb.apcb_unique = new_unique;
+src\cpus\cpu_alpha_palcode.c:282:			cpu->cd.alpha.pcb.apcb_ptbr = new_flags;
+src\cpus\cpu_alpha_palcode.c:283:			cpu->cd.alpha.pcb.apcb_decrsv0 = new_decrsv0;
+src\cpus\cpu_alpha_palcode.c:284:			cpu->cd.alpha.pcb.apcb_decrsv1 = new_decrsv1;
+src\cpus\cpu_alpha_palcode.c:343:		cpu->cd.alpha.pcb.apcb_usp = a0;
+src\cpus\cpu_alpha_palcode.c:347:		cpu->cd.alpha.r[ALPHA_V0] = cpu->cd.alpha.pcb.apcb_usp;
+src\include\thirdparty\alpha_cpu.h:62:	uint64_t	apcb_ksp;	/* kernel stack ptr */
+src\include\thirdparty\alpha_cpu.h:63:	uint64_t	apcb_usp;	/* user stack ptr */
+src\include\thirdparty\alpha_cpu.h:64:	uint64_t	apcb_ptbr;	/* page table base reg */
+src\include\thirdparty\alpha_cpu.h:65:	uint32_t	apcb_cpc;	/* charged process cycles */
+src\include\thirdparty\alpha_cpu.h:66:	uint32_t	apcb_asn;	/* address space number */
+src\include\thirdparty\alpha_cpu.h:67:	uint64_t	apcb_unique;	/* process unique value */
+src\include\thirdparty\alpha_cpu.h:68:#define	apcb_backup_ksp	apcb_unique	/* backup kernel stack ptr */
+src\include\thirdparty\alpha_cpu.h:69:	uint64_t	apcb_flags;	/* flags; see below */
+src\include\thirdparty\alpha_cpu.h:70:	uint64_t	apcb_decrsv0;	/* DEC reserved */
+src\include\thirdparty\alpha_cpu.h:71:	uint64_t	apcb_decrsv1;	/* DEC reserved */
+src\cpus\memory_alpha.c:46:	uint64_t base = cpu->cd.alpha.pcb.apcb_ptbr << ALPHA_PAGESHIFT;
+src\include\thirdparty\crmfbreg.h:397:/* alpha function register */
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n 'load_(32|64)bit_word|store_(32|64)bit_word' src/memory.c src/include/memory.h src/include/misc.h src -g '*.[ch]' -g '"'!tmp*'"' -g '*memory*'; rg -n 'cd\\.alpha|ALPHA_|MEM_PHYSICAL|NO_EXCEPTIONS|translate_v2p|return_paddr|paddr.*vaddr|vaddr.*paddr' src/memory_rw.c src/cpus/cpu_dyntrans.cc src/cpus/cpu_dyntrans.c src/cpus/cpu_alpha_instr_loadstore.c src/include/cpu_alpha.h" in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$n=0; Get-Content -LiteralPath '"'src/machines/machine_alpha.c' | ForEach-Object { "'$n++; if (($n -ge 46 -and $n -le 98) -or ($n -ge 195)) { '"'{0,4}: {1}' -f "'$n,$_ } }; $n=0; Get-Content -LiteralPath '"'src/cpus/cpu_alpha_instr.c' | ForEach-Object { "'$n++; if (($n -ge 49 -and $n -le 77) -or ($n -ge 783 -and $n -le 848)) { '"'{0,4}: {1}' -f "'$n,$_ } }; rg -n '"'debugger_cmd_(break|continue|put)|\"put\"|\"continue\"|\"breakpoint\"|single_step_breakpoint|WITH_ALPHA' src/debugger* src -g '*debugger*.c' -g '*debugger*.cc'" in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+ exited 1 in 170ms:
+rg: src/memory.c: The system cannot find the file specified. (os error 2)
+src/include/memory.h:168:int store_64bit_word(struct cpu *cpu, uint64_t addr, uint64_t data64);
+src/include/memory.h:169:int store_32bit_word(struct cpu *cpu, uint64_t addr, uint64_t data32);
+src/include/memory.h:172:void store_64bit_word_in_host(struct cpu *cpu, unsigned char *data,
+src/include/memory.h:174:void store_32bit_word_in_host(struct cpu *cpu, unsigned char *data,
+src/include/memory.h:178:uint64_t load_64bit_word(struct cpu *cpu, uint64_t addr);
+src/include/memory.h:179:uint32_t load_32bit_word(struct cpu *cpu, uint64_t addr);
+src\core\memory.c:739:	store_32bit_word(cpu, ptr, addr);
+src\core\memory.c:745:	store_32bit_word(cpu, ptr, addr);
+src\core\memory.c:758: *  store_64bit_word():
+src\core\memory.c:763:int store_64bit_word(struct cpu *cpu, uint64_t addr, uint64_t data64)
+src\core\memory.c:788: *  store_32bit_word():
+src\core\memory.c:794:int store_32bit_word(struct cpu *cpu, uint64_t addr, uint64_t data32)
+src\core\memory.c:871:		store_64bit_word(cpu, addr, data);
+src\core\memory.c:874:		store_32bit_word(cpu, addr, data);
+src\core\memory.c:882: *  load_64bit_word():
+src\core\memory.c:886:uint64_t load_64bit_word(struct cpu *cpu, uint64_t addr)
+src\core\memory.c:909: *  load_32bit_word():
+src\core\memory.c:913:uint32_t load_32bit_word(struct cpu *cpu, uint64_t addr)
+src\core\memory.c:950: *  store_64bit_word_in_host():
+src\core\memory.c:956:void store_64bit_word_in_host(struct cpu *cpu,
+src\core\memory.c:977: *  store_32bit_word_in_host():
+src\core\memory.c:979: *  See comment for store_64bit_word_in_host().
+src\core\memory.c:984:void store_32bit_word_in_host(struct cpu *cpu,
+src\core\memory.c:1001: *  See comment for store_64bit_word_in_host().
+src\cpus\cpu_alpha.c:101:	store_32bit_word(cpu, 0x10010, 0x3fffffc);
+src\cpus\cpu_arm.c:187:		store_32bit_word(cpu, cpu->cd.arm.of_emul_addr, 0xef8c64be);
+src\cpus\cpu_alpha_palcode.c:222:		store_64bit_word(cpu, cpu->cd.alpha.ctx + 40,
+src\cpus\cpu_alpha_palcode.c:231:		store_64bit_word(cpu, cpu->cd.alpha.ctx + 0,
+src\cpus\cpu_alpha_palcode.c:233:		store_64bit_word(cpu, cpu->cd.alpha.ctx + 8,
+src\cpus\cpu_alpha_palcode.c:235:		store_64bit_word(cpu, cpu->cd.alpha.ctx + 16,
+src\cpus\cpu_alpha_palcode.c:237:		store_32bit_word(cpu, cpu->cd.alpha.ctx + 24,
+src\cpus\cpu_alpha_palcode.c:239:		store_32bit_word(cpu, cpu->cd.alpha.ctx + 28,
+src\cpus\cpu_alpha_palcode.c:241:		store_64bit_word(cpu, cpu->cd.alpha.ctx + 32,
+src\cpus\cpu_alpha_palcode.c:243:		store_64bit_word(cpu, cpu->cd.alpha.ctx + 40,
+src\cpus\cpu_alpha_palcode.c:245:		store_64bit_word(cpu, cpu->cd.alpha.ctx + 48,
+src\cpus\cpu_alpha_palcode.c:247:		store_64bit_word(cpu, cpu->cd.alpha.ctx + 56,
+src\cpus\cpu_alpha_palcode.c:257:			    load_64bit_word(cpu, cpu->cd.alpha.ctx + 0);
+src\cpus\cpu_alpha_palcode.c:259:			    load_64bit_word(cpu, cpu->cd.alpha.ctx + 8);
+src\cpus\cpu_alpha_palcode.c:261:			    load_64bit_word(cpu, cpu->cd.alpha.ctx + 16);
+src\cpus\cpu_alpha_palcode.c:263:			    load_32bit_word(cpu, cpu->cd.alpha.ctx + 24);
+src\cpus\cpu_alpha_palcode.c:265:			    load_32bit_word(cpu, cpu->cd.alpha.ctx + 28);
+src\cpus\cpu_alpha_palcode.c:267:			    load_64bit_word(cpu, cpu->cd.alpha.ctx + 32);
+src\cpus\cpu_alpha_palcode.c:269:			    load_64bit_word(cpu, cpu->cd.alpha.ctx + 40);
+src\cpus\cpu_alpha_palcode.c:271:			    load_64bit_word(cpu, cpu->cd.alpha.ctx + 48);
+src\cpus\cpu_alpha_palcode.c:273:			    load_64bit_word(cpu, cpu->cd.alpha.ctx + 56);
+src\promemul\ps2_bios.c:137:			tmpaddr = load_32bit_word(cpu,
+src\promemul\ps2_bios.c:140:			tmpaddr = load_32bit_word(cpu,
+src\promemul\ps2_bios.c:143:			tmpaddr = load_32bit_word(cpu,
+src\promemul\ps2_bios.c:146:			tmpaddr = load_32bit_word(cpu,
+src\promemul\ps2_bios.c:151:			tmpaddr = load_32bit_word(cpu,
+src\promemul\ps2_bios.c:156:			store_32bit_word(cpu, tmpaddr, 1);
+src\promemul\ps2_bios.c:158:			store_32bit_word(cpu, tmpaddr + 4, 1);
+src\promemul\ps2_bios.c:160:			store_32bit_word(cpu,
+src\promemul\ps2_bios.c:183:			tmpaddr = load_32bit_word(cpu,
+src\promemul\ps2_bios.c:187:			tmpaddr = load_32bit_word(cpu,
+src\promemul\ps2_bios.c:190:			size = load_32bit_word(cpu, tmpaddr + 0);
+src\promemul\ps2_bios.c:192:			tmpaddr = load_32bit_word(cpu,
+src\promemul\ps2_bios.c:195:			tmpaddr = load_32bit_word(cpu,
+src\promemul\ps2_bios.c:200:			tmpaddr = load_32bit_word(cpu,
+src\promemul\ps2_bios.c:205:			store_32bit_word(cpu, tmpaddr, 1);
+src\promemul\ps2_bios.c:207:			store_32bit_word(cpu, tmpaddr + 4, 1);
+src\promemul\ps2_bios.c:210:			store_32bit_word(cpu,
+src\cpus\cpu_mips.c:303:		store_32bit_word(cpu, 0xffffffff9fc00000ULL, 0x00c0de0d);
+src\promemul\of.c:212:	store_32bit_word(cpu, base + retofs, od == NULL? 0 : od->handle);
+src\promemul\of.c:226:	store_32bit_word(cpu, base + retofs, OF_GET_ARG(0));
+src\promemul\of.c:241:	store_32bit_word(cpu, base + retofs, h);
+src\promemul\of.c:289:	store_32bit_word(cpu, base + retofs, len_returned);
+src\promemul\of.c:315:	store_32bit_word(cpu, base + retofs, pr->len);
+src\promemul\of.c:324:	store_32bit_word(cpu, base + retofs, handle);
+src\promemul\of.c:342:	store_32bit_word(cpu, base + retofs, 0);	/*  ?  TODO  */
+src\promemul\of.c:344:		store_32bit_word(cpu, base + retofs + 4, 80);
+src\promemul\of.c:346:		store_32bit_word(cpu, base + retofs + 4, 40);
+src\promemul\of.c:348:		store_32bit_word(cpu, base + retofs + 4, 15);
+src\promemul\of.c:350:		store_32bit_word(cpu, base + retofs + 4, 10);
+src\promemul\of.c:352:		store_32bit_word(cpu, base + retofs + 4, 0);
+src\promemul\of.c:354:		store_32bit_word(cpu, base + retofs + 4, 0);
+src\promemul\of.c:375:	store_32bit_word(cpu, base + retofs, od == NULL? 0 : od->parent);
+src\promemul\of.c:387:		store_32bit_word(cpu, base + retofs, 1);
+src\promemul\of.c:412:	store_32bit_word(cpu, base + retofs, peer);
+src\promemul\of.c:475:	store_32bit_word(cpu, base + retofs, c == -1? 0 : 1);
+src\promemul\of.c:501:	store_32bit_word(cpu, base + retofs, n_written);
+src\promemul\of.c:1124:	ptr   = load_32bit_word(cpu, base);
+src\promemul\of.c:1125:	nargs = load_32bit_word(cpu, base + 4);
+src\promemul\of.c:1126:	nret  = load_32bit_word(cpu, base + 8);
+src\promemul\of.c:1147:		ptr = load_32bit_word(cpu, base + ofs);
+src\promemul\mvmeprom.c:71:	store_32bit_word(cpu, vbr + 8 * MVMEPROM_VECTOR, M88K_PROM_INSTR);
+src\promemul\mvmeprom.c:72:	store_32bit_word(cpu, vbr + 8 * MVMEPROM_VECTOR + 4, 0xf400fc00);
+src\promemul\luna88kprom.c:66:        store_32bit_word(cpu, 0x1100 + sizeof(uint32_t) * 3, 0x2030);       /*  ROM console getch  */
+src\promemul\luna88kprom.c:67:        store_32bit_word(cpu, 0x1100 + sizeof(uint32_t) * 4, 0x2040);       /*  ROM console putch  */
+src\promemul\luna88kprom.c:69:        store_32bit_word(cpu, 0x2030, M88K_PROM_INSTR);
+src\promemul\luna88kprom.c:70:        store_32bit_word(cpu, 0x2034, 0xf400c001);	/*  jmp (r1)  */
+src\promemul\luna88kprom.c:72:        store_32bit_word(cpu, 0x2040, M88K_PROM_INSTR);
+src\promemul\luna88kprom.c:73:        store_32bit_word(cpu, 0x2044, 0xf400c001);	/*  jmp (r1)  */
+src\promemul\luna88kprom.c:76:        store_32bit_word(cpu, 0x1114, machine->x11_md.in_use ? 1 : 0);
+src\promemul\dreamcast.c:207:		store_32bit_word(cpu, 0x8c0000b0 + i, 0x8c000100 + i);
+src\promemul\dreamcast.c:218:	store_64bit_word(cpu, DREAMCAST_MACHINE_ID_ADDRESS, 0x0000000000000000ULL);
+src\promemul\dec_prom.c:605:		store_32bit_word(cpu, DEC_PROM_TCINFO +  0, 0);
+src\promemul\dec_prom.c:606:		store_32bit_word(cpu, DEC_PROM_TCINFO +  4, 50);
+src\promemul\dec_prom.c:607:		store_32bit_word(cpu, DEC_PROM_TCINFO +  8, 4);
+src\promemul\dec_prom.c:608:		store_32bit_word(cpu, DEC_PROM_TCINFO + 12, 10);
+src\promemul\dec_prom.c:609:		store_32bit_word(cpu, DEC_PROM_TCINFO + 16, 1);
+src\promemul\dec_prom.c:610:		store_32bit_word(cpu, DEC_PROM_TCINFO + 20, 100);
+src\promemul\dec_prom.c:611:		store_32bit_word(cpu, DEC_PROM_TCINFO + 24, 0);
+src\promemul\dec_prom.c:612:		store_32bit_word(cpu, DEC_PROM_TCINFO + 28, 0);
+src\machines\machine_algor.c:93:	store_32bit_word(cpu, (int32_t)0x9fc01000, 0x9fc01040);
+src\machines\machine_algor.c:94:	store_32bit_word(cpu, (int32_t)0x9fc01004, 0x9fc01200);
+src\machines\machine_algor.c:95:	store_32bit_word(cpu, (int32_t)0x9fc01008, 0);
+src\machines\machine_algor.c:106:		store_32bit_word(cpu, (int32_t)0x9fc01800, 0x9fc01900);
+src\machines\machine_algor.c:107:		store_32bit_word(cpu, (int32_t)0x9fc01804, 0x9fc01a00);
+src\machines\machine_algor.c:108:		store_32bit_word(cpu, (int32_t)0x9fc01808, 0);
+src\promemul\arcbios.c:491:		store_32bit_word_in_host(cpu,
+src\promemul\arcbios.c:493:		store_64bit_word_in_host(cpu,
+src\promemul\arcbios.c:495:		store_64bit_word_in_host(cpu,
+src\promemul\arcbios.c:500:		store_32bit_word_in_host(cpu,
+src\promemul\arcbios.c:502:		store_32bit_word_in_host(cpu,
+src\promemul\arcbios.c:504:		store_32bit_word_in_host(cpu,
+src\promemul\arcbios.c:598:			store_32bit_word(cpu, peeraddr + 0x00, epeer);
+src\promemul\arcbios.c:605:			store_32bit_word(cpu, peeraddr + 0x04, echild);
+src\promemul\arcbios.c:627:	store_32bit_word(cpu, a + 0x00, peer);
+src\promemul\arcbios.c:628:	store_32bit_word(cpu, a + 0x04, child);
+src\promemul\arcbios.c:629:	store_32bit_word(cpu, a + 0x08, parent);
+src\promemul\arcbios.c:630:	store_32bit_word(cpu, a+  0x0c, host_tmp_component->Class);
+src\promemul\arcbios.c:631:	store_32bit_word(cpu, a+  0x10, host_tmp_component->Type);
+src\promemul\arcbios.c:632:	store_32bit_word(cpu, a+  0x14, host_tmp_component->Flags +
+src\promemul\arcbios.c:634:	store_32bit_word(cpu, a+  0x18, host_tmp_component->Revision);
+src\promemul\arcbios.c:635:	store_32bit_word(cpu, a+  0x1c, host_tmp_component->Key);
+src\promemul\arcbios.c:636:	store_32bit_word(cpu, a+  0x20, host_tmp_component->AffinityMask);
+src\promemul\arcbios.c:637:	store_32bit_word(cpu, a+  0x24, host_tmp_component->
+src\promemul\arcbios.c:639:	store_32bit_word(cpu, a+  0x28, host_tmp_component->IdentifierLength);
+src\promemul\arcbios.c:640:	store_32bit_word(cpu, a+  0x2c, host_tmp_component->Identifier);
+src\promemul\arcbios.c:645:		store_32bit_word(cpu, a + 0x2c, a + 0x30);
+src\promemul\arcbios.c:761:			store_64bit_word(cpu, peeraddr + 0 *
+src\promemul\arcbios.c:769:			store_64bit_word(cpu, peeraddr + 1 *
+src\promemul\arcbios.c:795:	store_64bit_word(cpu, a + 0x00, peer);
+src\promemul\arcbios.c:796:	store_64bit_word(cpu, a + 0x08, child);
+src\promemul\arcbios.c:797:	store_64bit_word(cpu, a + 0x10, parent);
+src\promemul\arcbios.c:798:	store_32bit_word(cpu, a+  0x18, host_tmp_component->Class);
+src\promemul\arcbios.c:799:	store_32bit_word(cpu, a+  0x1c, host_tmp_component->Type);
+src\promemul\arcbios.c:800:	store_32bit_word(cpu, a+  0x20, host_tmp_component->Flags);
+src\promemul\arcbios.c:801:	store_32bit_word(cpu, a+  0x24, host_tmp_component->Version +
+src\promemul\arcbios.c:803:	store_32bit_word(cpu, a+  0x28, host_tmp_component->Key);
+src\promemul\arcbios.c:804:	store_64bit_word(cpu, a+  0x30, host_tmp_component->AffinityMask);
+src\promemul\arcbios.c:805:	store_64bit_word(cpu, a+  0x38, host_tmp_component->
+src\promemul\arcbios.c:807:	store_64bit_word(cpu, a+  0x40, host_tmp_component->IdentifierLength);
+src\promemul\arcbios.c:808:	store_64bit_word(cpu, a+  0x48, host_tmp_component->Identifier);
+src\promemul\arcbios.c:815:		store_64bit_word(cpu, a + 0x48, a + 0x50);
+src\promemul\arcbios.c:1145:	store_64bit_word(cpu, addr + 0, 0);
+src\promemul\arcbios.c:1146:	store_64bit_word(cpu, addr + 8, size);
+src\promemul\arcbios.c:1147:	store_64bit_word(cpu, addr + 16, 0);
+src\promemul\arcbios.c:1148:	store_32bit_word(cpu, addr + 24, 1);
+src\promemul\arcbios.c:1149:	store_32bit_word(cpu, addr + 28, 0);
+src\promemul\arcbios.c:1150:	store_32bit_word(cpu, addr + 32, 0);
+src\promemul\arcbios.c:1639:			store_32bit_word(cpu, cpu->cd.mips.gpr[MIPS_GPR_A2],
+src\promemul\arcbios.c:1722:			store_32bit_word(cpu, cpu->cd.mips.gpr[MIPS_GPR_A3],
+src\promemul\arcbios.c:1772:				store_32bit_word(cpu,
+src\promemul\arcbios.c:1854:				store_32bit_word(cpu,
+src\promemul\arcbios.c:1877:			store_32bit_word(cpu, cpu->cd.mips.gpr[MIPS_GPR_A3],
+src\promemul\arcbios.c:2059:	store_32bit_word(cpu, 0xffffffff80000000ULL, 0x3c1abfc8);
+src\promemul\arcbios.c:2060:	store_32bit_word(cpu, 0xffffffff80000004ULL, 0x375a8888);
+src\promemul\arcbios.c:2061:	store_32bit_word(cpu, 0xffffffff80000008ULL, 0x03400008);
+src\promemul\arcbios.c:2062:	store_32bit_word(cpu, 0xffffffff8000000cULL, 0x00000000);
+src\promemul\arcbios.c:2064:	store_32bit_word(cpu, 0xffffffff80000080ULL, 0x3c1abfc8);
+src\promemul\arcbios.c:2065:	store_32bit_word(cpu, 0xffffffff80000084ULL, 0x375a8888);
+src\promemul\arcbios.c:2066:	store_32bit_word(cpu, 0xffffffff80000088ULL, 0x03400008);
+src\promemul\arcbios.c:2067:	store_32bit_word(cpu, 0xffffffff8000008cULL, 0x00000000);
+src\promemul\arcbios.c:2069:	store_32bit_word(cpu, 0xffffffff80000180ULL, 0x3c1abfc8);
+src\promemul\arcbios.c:2070:	store_32bit_word(cpu, 0xffffffff80000184ULL, 0x375a8888);
+src\promemul\arcbios.c:2071:	store_32bit_word(cpu, 0xffffffff80000188ULL, 0x03400008);
+src\promemul\arcbios.c:2072:	store_32bit_word(cpu, 0xffffffff8000018cULL, 0x00000000);
+src\promemul\arcbios.c:2771:		store_32bit_word(cpu, ARC_ENV_SGI + 0x08, 0x53484452);
+src\promemul\arcbios.c:2772:		store_32bit_word(cpu, ARC_ENV_SGI + 0x0c, 0x00000400);
+src\promemul\arcbios.c:2773:		store_32bit_word(cpu, ARC_ENV_SGI + 0x10, 0x03030000);
+src\promemul\arcbios.c:2774:		store_32bit_word(cpu, ARC_ENV_SGI + 0x14, 0x656e7600);
+src\promemul\arcbios.c:2775:		store_32bit_word(cpu, ARC_ENV_SGI + 0x34, 0x312e3000);
+src\promemul\arcbios.c:2776:		store_32bit_word(cpu, ARC_ENV_SGI + 0x3c, 0x131811ae);
+src\promemul\arcbios.c:3215:			store_64bit_word(cpu, ARC_FIRMWARE_VECTORS + i*8, ARC_FIRMWARE_ENTRIES + i*8);
+src\promemul\arcbios.c:3216:			store_64bit_word(cpu, ARC_PRIVATE_VECTORS + i*8, ARC_PRIVATE_ENTRIES + i*8);
+src\promemul\arcbios.c:3219:			store_32bit_word(cpu, ARC_FIRMWARE_ENTRIES + i*8, 0x00c0de0c);
+src\promemul\arcbios.c:3220:			store_32bit_word(cpu, ARC_PRIVATE_ENTRIES + i*8, 0x00c0de0c);
+src\promemul\arcbios.c:3222:			store_32bit_word(cpu, ARC_FIRMWARE_VECTORS + i*4, ARC_FIRMWARE_ENTRIES + i*4);
+src\promemul\arcbios.c:3223:			store_32bit_word(cpu, ARC_PRIVATE_VECTORS + i*4, ARC_PRIVATE_ENTRIES + i*4);
+src\promemul\arcbios.c:3226:			store_32bit_word(cpu, ARC_FIRMWARE_ENTRIES + i*4, 0x00c0de0c);
+src\promemul\arcbios.c:3227:			store_32bit_word(cpu, ARC_PRIVATE_ENTRIES + i*4, 0x00c0de0c);
+src\promemul\arcbios.c:3239:		store_64bit_word_in_host(cpu, (unsigned char *) &arcbios_spb_64.SPBSignature, ARCBIOS_SPB_SIGNATURE);
+src\promemul\arcbios.c:3242:		store_64bit_word_in_host(cpu, (unsigned char *) &arcbios_spb_64.FirmwareVector, ARC_FIRMWARE_VECTORS);
+src\promemul\arcbios.c:3248:		store_32bit_word_in_host(cpu, (unsigned char *) &arcbios_spb.SPBSignature, ARCBIOS_SPB_SIGNATURE);
+src\promemul\arcbios.c:3249:		store_32bit_word_in_host(cpu, (unsigned char *) &arcbios_spb.SPBLength, sizeof(arcbios_spb));     
+src\promemul\arcbios.c:3252:		store_32bit_word_in_host(cpu, (unsigned char *) &arcbios_spb.FirmwareVector, ARC_FIRMWARE_VECTORS);
+src\promemul\arcbios.c:3253:		store_32bit_word_in_host(cpu, (unsigned char *) &arcbios_spb.FirmwareVectorLength, 35 * sizeof(uint32_t));
+src\promemul\arcbios.c:3254:		store_32bit_word_in_host(cpu, (unsigned char *) &arcbios_spb.PrivateVector, ARC_PRIVATE_VECTORS);
+src\promemul\arcbios.c:3255:		store_32bit_word_in_host(cpu, (unsigned char *) &arcbios_spb.PrivateVectorLength, 13 * sizeof(uint32_t));
+src\promemul\arcbios.c:3263:			store_32bit_word_in_host(cpu, (unsigned char *) &arcbios_spb.RestartBlock, btsr_addr);
+src\promemul\arcbios.c:3265:			store_32bit_word(cpu, btsr_addr + 0x00, 0x42545352);
+src\promemul\arcbios.c:3266:			store_32bit_word(cpu, btsr_addr + 0x1c, 0x40);	// 0x40 means "Processor Ready"
+src\debugger\debugger_cmds.c:958:			store_32bit_word_in_host(c, pattern, data);
+src\debugger\debugger_cmds.c:966:			store_64bit_word_in_host(c, pattern, data);
+src\debugger\debugger_cmds.c:1543:		res = store_32bit_word(m->cpus[0], addr, data);
+src\debugger\debugger_cmds.c:1558:		res = store_64bit_word(m->cpus[0], addr, data);
+src\machines\machine_androidarm.c:139:		store_32bit_word(cpu, cpu->cd.arm.r[2], swap_if_little_endian(0xd00dfeed, cpu));
+src\machines\machine_cats.c:90:	store_32bit_word(cpu, 0x41000008ULL, 0xef8c64ebUL);
+src\machines\machine_cats.c:96:	store_32bit_word_in_host(cpu, (unsigned char *)
+src\machines\machine_cats.c:98:	store_32bit_word_in_host(cpu, (unsigned char *)
+src\machines\machine_cats.c:100:	store_32bit_word_in_host(cpu, (unsigned char *)
+src\machines\machine_cats.c:102:	store_32bit_word_in_host(cpu, (unsigned char *)
+src\machines\machine_cats.c:105:	store_32bit_word_in_host(cpu, (unsigned char *)
+src\machines\machine_cats.c:107:	store_32bit_word_in_host(cpu, (unsigned char *)
+src\machines\machine_cats.c:109:	store_32bit_word_in_host(cpu, (unsigned char *)
+src\machines\machine_cats.c:112:	store_32bit_word_in_host(cpu, (unsigned char *)
+src\machines\machine_cats.c:114:	store_32bit_word_in_host(cpu, (unsigned char *)
+src\machines\machine_cats.c:116:	store_32bit_word_in_host(cpu, (unsigned char *)
+src\machines\machine_hpcarm.c:114:	store_32bit_word_in_host(cpu, (unsigned char *)&hpc_bootinfo.platid_cpu,
+src\machines\machine_hpcarm.c:118:	store_32bit_word_in_host(cpu, (unsigned char *)&hpc_bootinfo.
+src\machines\machine_hpcarm.c:148:	store_32bit_word(cpu, machine->physical_ram_in_mb * 1048576 - 512,
+src\machines\machine_hpcarm.c:150:	store_32bit_word(cpu, machine->physical_ram_in_mb * 1048576 - 512 +4,0);
+src\machines\machine_hpcarm.c:157:		store_32bit_word(cpu, machine->physical_ram_in_mb * 1048576 -
+src\machines\machine_hpcarm.c:159:		store_32bit_word(cpu, machine->physical_ram_in_mb * 1048576 -
+src\machines\machine_hpcarm.c:170:	store_32bit_word_in_host(cpu, (unsigned char *)&hpc_bootinfo.magic,
+src\machines\machine_hpcarm.c:172:	store_32bit_word_in_host(cpu, (unsigned char *)&hpc_bootinfo.fb_addr,
+src\machines\machine_hpcarm.c:185:	store_32bit_word_in_host(cpu,(unsigned char *)&hpc_bootinfo.timezone,0);
+src\machines\machine_alpha.c:104:	store_64bit_word_in_host(cpu, (unsigned char *)
+src\machines\machine_alpha.c:107:	store_64bit_word_in_host(cpu, (unsigned char *)
+src\machines\machine_alpha.c:109:	store_64bit_word_in_host(cpu, (unsigned char *)
+src\machines\machine_alpha.c:111:	store_64bit_word_in_host(cpu, (unsigned char *)
+src\machines\machine_alpha.c:114:	store_64bit_word_in_host(cpu, (unsigned char *)
+src\machines\machine_alpha.c:116:	store_64bit_word_in_host(cpu, (unsigned char *)
+src\machines\machine_alpha.c:118:	store_64bit_word_in_host(cpu, (unsigned char *)
+src\machines\machine_alpha.c:120:	store_64bit_word_in_host(cpu, (unsigned char *)
+src\machines\machine_alpha.c:122:	store_64bit_word_in_host(cpu, (unsigned char *)
+src\machines\machine_alpha.c:124:	store_64bit_word_in_host(cpu, (unsigned char *)
+src\machines\machine_alpha.c:126:	store_64bit_word_in_host(cpu, (unsigned char *)
+src\machines\machine_alpha.c:128:	store_64bit_word_in_host(cpu, (unsigned char *)
+src\machines\machine_alpha.c:130:	store_64bit_word_in_host(cpu, (unsigned char *)
+src\machines\machine_alpha.c:135:	store_64bit_word_in_host(cpu, (unsigned char *)
+src\machines\machine_alpha.c:141:	store_64bit_word_in_host(cpu, (unsigned char *)
+src\machines\machine_alpha.c:143:	store_64bit_word(cpu, CRB_ADDR - 0x100 + 8, PROM_ENTRY_PADDR);
+src\machines\machine_alpha.c:144:	store_64bit_word_in_host(cpu, (unsigned char *)
+src\machines\machine_alpha.c:146:	store_64bit_word(cpu, CRB_ADDR - 0x80 + 8, PROM_ENTRY_PADDR + 0x800);
+src\machines\machine_alpha.c:151:		store_64bit_word_in_host(cpu, (unsigned char *)
+src\machines\machine_alpha.c:154:		store_64bit_word_in_host(cpu, (unsigned char *)
+src\machines\machine_alpha.c:170:	store_64bit_word_in_host(cpu, (unsigned char *)
+src\machines\machine_alpha.c:172:	store_64bit_word_in_host(cpu, (unsigned char *)
+src\machines\machine_alpha.c:174:	store_64bit_word_in_host(cpu, (unsigned char *)
+src\machines\machine_alpha.c:177:	store_64bit_word_in_host(cpu, (unsigned char *)
+src\machines\machine_alpha.c:180:	store_64bit_word_in_host(cpu, (unsigned char *)
+src\machines\machine_alpha.c:189:	store_32bit_word(cpu, PROM_ENTRY_PADDR, 0x3fffffe);
+src\machines\machine_alpha.c:190:	store_32bit_word(cpu, PROM_ENTRY_PADDR + 0x800, 0x3fffffd);
+src\machines\machine_evbmips.c:124:	store_32bit_word(cpu, (int32_t)0x9fc01000, 0x9fc01040);
+src\machines\machine_evbmips.c:125:	store_32bit_word(cpu, (int32_t)0x9fc01004, 0x9fc01200);
+src\machines\machine_evbmips.c:126:	store_32bit_word(cpu, (int32_t)0x9fc01008, 0);
+src\machines\machine_evbmips.c:143:	store_32bit_word(cpu, (int32_t)(0x80000000 + MALTA_REVISION),
+src\machines\machine_evbmips.c:148:		store_32bit_word(cpu, (int64_t)(int32_t)0x9fc00500 + i,
+src\machines\machine_evbmips.c:153:		store_32bit_word(cpu, (int64_t)(int32_t)0x9fc00800 + i,
+src\machines\machine_hpcmips.c:339:	store_32bit_word_in_host(cpu, (unsigned char *)&hpc_bootinfo.platid_cpu,
+src\machines\machine_hpcmips.c:343:	store_32bit_word_in_host(cpu, (unsigned char *)&hpc_bootinfo.
+src\machines\machine_hpcmips.c:372:	store_32bit_word(cpu, 0x80000000ULL + (machine->physical_ram_in_mb <<
+src\machines\machine_hpcmips.c:375:	store_32bit_word(cpu, 0x80000000ULL + (machine->physical_ram_in_mb <<
+src\machines\machine_hpcmips.c:387:		store_32bit_word(cpu, 0x80000000 + machine->physical_ram_in_mb
+src\machines\machine_hpcmips.c:390:		store_32bit_word(cpu, 0x80000000 + machine->physical_ram_in_mb
+src\machines\machine_hpcmips.c:414:		store_32bit_word(cpu, 0x80000000 + machine->physical_ram_in_mb
+src\machines\machine_hpcmips.c:417:		store_32bit_word(cpu, 0x80000000 + machine->physical_ram_in_mb
+src\machines\machine_hpcmips.c:428:	store_32bit_word_in_host(cpu, (unsigned char *)&hpc_bootinfo.magic,
+src\machines\machine_hpcmips.c:430:	store_32bit_word_in_host(cpu, (unsigned char *)&hpc_bootinfo.fb_addr,
+src\machines\machine_hpcmips.c:447:	store_32bit_word_in_host(cpu,(unsigned char *)&hpc_bootinfo.timezone,0);
+src\machines\machine_iyonix.c:105:	store_32bit_word_in_host(cpu, (unsigned char *)
+src\machines\machine_iyonix.c:107:	store_32bit_word_in_host(cpu, (unsigned char *)
+src\machines\machine_macppc.c:126:	store_32bit_word(cpu, a + 0x0104, 0);	/*  base  */
+src\machines\machine_macppc.c:127:	store_32bit_word(cpu, a + 0x0108, machine->physical_ram_in_mb
+src\machines\machine_macppc.c:130:		store_32bit_word(cpu, a + 0x0104 + i, 0);
+src\machines\machine_macppc.c:133:	store_32bit_word(cpu, a+0, 0xf1000000);	/*  video base  */
+src\machines\machine_macppc.c:134:	store_32bit_word(cpu, a+4, 0);		/*  display code (?)  */
+src\machines\machine_macppc.c:135:	store_32bit_word(cpu, a+8, 1024);	/*  bytes per pixel row  */
+src\machines\machine_macppc.c:136:	store_32bit_word(cpu, a+12, 1024);	/*  width  */
+src\machines\machine_macppc.c:137:	store_32bit_word(cpu, a+16, 768);	/*  height  */
+src\machines\machine_macppc.c:138:	store_32bit_word(cpu, a+20, 8);		/*  pixel depth  */
+src\machines\machine_macppc.c:140:	store_32bit_word(cpu, a+0, 127);	/*  gestalt number (TODO)  */
+src\machines\machine_macppc.c:141:	store_32bit_word(cpu, a+4, 0);		/*  device tree pointer (TODO)*/
+src\machines\machine_macppc.c:142:	store_32bit_word(cpu, a+8, 0);		/*  device tree length  */
+src\machines\machine_macppc.c:143:	store_32bit_word(cpu, a+12, b);	/*  last address of kernel data area  */
+src\machines\machine_macppc.c:153:	store_32bit_word(cpu, cpu->cd.ppc.of_emul_addr, 0x44ee0002);
+src\machines\machine_luna88k.c:92:			store_32bit_word(cpu, FUSE_ROM_ADDR + i * 8 + 0, h << 24);
+src\machines\machine_luna88k.c:93:			store_32bit_word(cpu, FUSE_ROM_ADDR + i * 8 + 4, l << 28);
+src\machines\machine_mvmeppc.c:133:	store_32bit_word(cpu, cpu->cd.ppc.gpr[5]+ 68, 9600);
+src\machines\machine_mvmeppc.c:134:	store_32bit_word(cpu, cpu->cd.ppc.gpr[5]+ 72, 0);
+src\machines\machine_mvmeppc.c:137:	store_32bit_word(cpu, cpu->cd.ppc.gpr[5]+ 80,
+src\machines\machine_mvmeppc.c:139:	store_32bit_word(cpu, cpu->cd.ppc.gpr[5]+ 84, 33 * 1000000);
+src\machines\machine_mvmeppc.c:140:	store_32bit_word(cpu, cpu->cd.ppc.gpr[5]+ 88, 33 * 1000000);
+src\machines\machine_pmax.c:746:		store_32bit_word(cpu, DEC_PROM_CALLBACK_STRUCT + i*4,
+src\machines\machine_pmax.c:751:		store_32bit_word(cpu, DEC_PROM_EMULATION + i*8,
+src\machines\machine_pmax.c:753:		store_32bit_word(cpu, DEC_PROM_EMULATION + i*8 + 4,
+src\machines\machine_pmax.c:759:		store_32bit_word(cpu, 0xbfc00000 + i,
+src\machines\machine_pmax.c:761:		store_32bit_word(cpu, 0xbfc00000 + i + 4,
+src\machines\machine_pmax.c:784:	store_32bit_word(cpu, INITIAL_STACK_POINTER + 0x10, BOOTINFO_MAGIC);
+src\machines\machine_pmax.c:785:	store_32bit_word(cpu, INITIAL_STACK_POINTER + 0x14, BOOTINFO_ADDR);
+src\machines\machine_pmax.c:787:	store_32bit_word(cpu, DEC_PROM_INITIAL_ARGV,
+src\machines\machine_pmax.c:789:	store_32bit_word(cpu, DEC_PROM_INITIAL_ARGV+4,
+src\machines\machine_pmax.c:791:	store_32bit_word(cpu, DEC_PROM_INITIAL_ARGV+8,
+src\machines\machine_pmax.c:793:	store_32bit_word(cpu, DEC_PROM_INITIAL_ARGV+12, 0);
+src\machines\machine_pmax.c:883:	store_32bit_word_in_host(cpu,
+src\include\memory.h:168:int store_64bit_word(struct cpu *cpu, uint64_t addr, uint64_t data64);
+src\include\memory.h:169:int store_32bit_word(struct cpu *cpu, uint64_t addr, uint64_t data32);
+src\include\memory.h:172:void store_64bit_word_in_host(struct cpu *cpu, unsigned char *data,
+src\include\memory.h:174:void store_32bit_word_in_host(struct cpu *cpu, unsigned char *data,
+src\include\memory.h:178:uint64_t load_64bit_word(struct cpu *cpu, uint64_t addr);
+src\include\memory.h:179:uint32_t load_32bit_word(struct cpu *cpu, uint64_t addr);
+src\machines\machine_playstation2.c:104:			store_32bit_word(cpu, 0xa0000000 + machine->
+src\machines\machine_playstation2.c:118:	store_32bit_word(cpu, PLAYSTATION2_BDA + 0,
+src\machines\machine_playstation2.c:123:	store_32bit_word(cpu, PLAYSTATION2_SIFBIOS, 0x00c0de0c);
+src\machines\machine_playstation2.c:125:	store_32bit_word(cpu, 0xa0000000 + machine->physical_ram_in_mb
+src\machines\machine_playstation2.c:159:	store_32bit_word(cpu, 0xa0000000 + machine->physical_ram_in_mb
+src\machines\machine_prep.c:108:	store_32bit_word(cpu, 0, 0xdeadc0de);
+src\machines\machine_prep.c:126:	store_32bit_word(cpu, cpu->cd.ppc.gpr[6]+ 0, 12);
+src\machines\machine_prep.c:127:	store_32bit_word(cpu, cpu->cd.ppc.gpr[6]+ 4, 2);
+src\machines\machine_prep.c:128:	store_32bit_word(cpu, cpu->cd.ppc.gpr[6]+ 8, machine->emulated_hz);
+src\machines\machine_prep.c:131:	store_32bit_word(cpu, cpu->cd.ppc.gpr[6]+12, 20);
+src\machines\machine_prep.c:132:	store_32bit_word(cpu, cpu->cd.ppc.gpr[6]+16, 1);
+src\machines\machine_prep.c:135:	store_32bit_word(cpu, cpu->cd.ppc.gpr[6]+24, 0x3f8);/*  addr  */
+src\machines\machine_prep.c:136:	store_32bit_word(cpu, cpu->cd.ppc.gpr[6]+28, 9600);/*  speed  */
+src\machines\machine_prep.c:139:	store_32bit_word(cpu, cpu->cd.ppc.gpr[6]+32, 0);
+src\machines\machine_prep.c:140:	store_32bit_word(cpu, cpu->cd.ppc.gpr[6]+36, 0);
+src\machines\machine_prep.c:141:	store_32bit_word(cpu, cpu->cd.ppc.gpr[6]+40,/*  addr of data  */
+src\machines\machine_prep.c:145:	store_32bit_word(cpu, cpu->cd.ppc.gpr[6]+0x100, 0x200);
+src\machines\machine_prep.c:147:	store_32bit_word(cpu, cpu->cd.ppc.gpr[6]+0x100+0x1f8,
+src\machines\machine_sgi.c:184:		store_32bit_word(cpu, 0xa0000000 + 0x3000,
+src\machines\machine_sgi.c:189:		store_32bit_word(cpu, 0xa0000000 + 0x26d0, 30000);
+src\machines\machine_sgi.c:373:		store_32bit_word(cpu, 0xa0000000ULL + 0x26d0,
+src\include\of.h:76:#define	OF_GET_ARG(i)		load_32bit_word(cpu, base + 12 + \
+src\machines\machine_test.c:200:	store_32bit_word(cpu, cpu->cd.arm.r[ARM_LR] + 0, 0xe3a00201);
+src\machines\machine_test.c:201:	store_32bit_word(cpu, cpu->cd.arm.r[ARM_LR] + 4, 0xe5c00010);
+src\machines\machine_test.c:202:	store_32bit_word(cpu, cpu->cd.arm.r[ARM_LR] + 8, 0xeafffffe);
+rg: src/memory_rw.c: The system cannot find the file specified. (os error 2)
+rg: src/cpus/cpu_dyntrans.cc: The system cannot find the file specified. (os error 2)
+src/cpus/cpu_alpha_instr_loadstore.c:168:	cpu->cd.alpha.load_linked_addr = addr & ~63;
+src/cpus/cpu_alpha_instr_loadstore.c:169:	cpu->cd.alpha.ll_flag = 1;
+src/cpus/cpu_alpha_instr_loadstore.c:172:	if (cpu->cd.alpha.ll_flag == 1) {
+src/cpus/cpu_alpha_instr_loadstore.c:175:			cpu->machine->cpus[i]->cd.alpha.ll_flag = 0;
+src/include/cpu_alpha.h:1:#ifndef	CPU_ALPHA_H
+src/include/cpu_alpha.h:2:#define	CPU_ALPHA_H
+src/include/cpu_alpha.h:57:#define	ALPHA_FEATURE_BWX		1
+src/include/cpu_alpha.h:59:#define ALPHA_CPU_TYPE_DEFS	{					\
+src/include/cpu_alpha.h:72:/*  ALPHA_KENTRY_INT .. ALPHA_KENTRY_SYS  */
+src/include/cpu_alpha.h:73:#define	N_ALPHA_KENTRY		6
+src/include/cpu_alpha.h:75:#define	ALPHA_V0		0
+src/include/cpu_alpha.h:76:#define	ALPHA_T0		1
+src/include/cpu_alpha.h:77:#define	ALPHA_T1		2
+src/include/cpu_alpha.h:78:#define	ALPHA_T2		3
+src/include/cpu_alpha.h:79:#define	ALPHA_T3		4
+src/include/cpu_alpha.h:80:#define	ALPHA_T4		5
+src/include/cpu_alpha.h:81:#define	ALPHA_T5		6
+src/include/cpu_alpha.h:82:#define	ALPHA_T6		7
+src/include/cpu_alpha.h:84:#define	ALPHA_T7		8
+src/include/cpu_alpha.h:85:#define	ALPHA_S0		9
+src/include/cpu_alpha.h:86:#define	ALPHA_S1		10
+src/include/cpu_alpha.h:87:#define	ALPHA_S2		11
+src/include/cpu_alpha.h:88:#define	ALPHA_S3		12
+src/include/cpu_alpha.h:89:#define	ALPHA_S4		13
+src/include/cpu_alpha.h:90:#define	ALPHA_S5		14
+src/include/cpu_alpha.h:91:#define	ALPHA_FP		15
+src/include/cpu_alpha.h:93:#define	ALPHA_A0		16
+src/include/cpu_alpha.h:94:#define	ALPHA_A1		17
+src/include/cpu_alpha.h:95:#define	ALPHA_A2		18
+src/include/cpu_alpha.h:96:#define	ALPHA_A3		19
+src/include/cpu_alpha.h:97:#define	ALPHA_A4		20
+src/include/cpu_alpha.h:98:#define	ALPHA_A5		21
+src/include/cpu_alpha.h:99:#define	ALPHA_T8		22
+src/include/cpu_alpha.h:100:#define	ALPHA_T9		23
+src/include/cpu_alpha.h:102:#define	ALPHA_T10		24
+src/include/cpu_alpha.h:103:#define	ALPHA_T11		25
+src/include/cpu_alpha.h:104:#define	ALPHA_RA		26
+src/include/cpu_alpha.h:105:#define	ALPHA_T12		27
+src/include/cpu_alpha.h:106:#define	ALPHA_AT		28
+src/include/cpu_alpha.h:107:#define	ALPHA_GP		29
+src/include/cpu_alpha.h:108:#define	ALPHA_SP		30
+src/include/cpu_alpha.h:109:#define	ALPHA_ZERO		31
+src/include/cpu_alpha.h:111:#define	N_ALPHA_REGS		32
+src/include/cpu_alpha.h:113:#define ALPHA_REG_NAMES		{				\
+src/include/cpu_alpha.h:122:#define	ALPHA_N_IC_ARGS			3
+src/include/cpu_alpha.h:123:#define	ALPHA_INSTR_ALIGNMENT_SHIFT	2
+src/include/cpu_alpha.h:124:#define	ALPHA_IC_ENTRIES_SHIFT		11
+src/include/cpu_alpha.h:125:#define	ALPHA_IC_ENTRIES_PER_PAGE	(1 << ALPHA_IC_ENTRIES_SHIFT)
+src/include/cpu_alpha.h:126:#define	ALPHA_PC_TO_IC_ENTRY(a)		(((a)>>ALPHA_INSTR_ALIGNMENT_SHIFT) \
+src/include/cpu_alpha.h:127:					& (ALPHA_IC_ENTRIES_PER_PAGE-1))
+src/include/cpu_alpha.h:128:#define	ALPHA_ADDR_TO_PAGENR(a)		((a) >> (ALPHA_IC_ENTRIES_SHIFT \
+src/include/cpu_alpha.h:129:					+ ALPHA_INSTR_ALIGNMENT_SHIFT))
+src/include/cpu_alpha.h:131:#define	ALPHA_MAX_VPH_TLB_ENTRIES	128
+src/include/cpu_alpha.h:133:#define	ALPHA_L2N		17
+src/include/cpu_alpha.h:134:#define	ALPHA_L3N		17
+src/include/cpu_alpha.h:140:#define	ALPHA_PAGESHIFT		13
+src/include/cpu_alpha.h:151:	uint64_t		r[N_ALPHA_REGS];	/*  Integer  */
+src/include/cpu_alpha.h:152:	uint64_t		f[N_ALPHA_REGS];	/*  Floating Point  */
+src/include/cpu_alpha.h:169:	uint64_t		kentry[N_ALPHA_KENTRY];
+src/include/cpu_alpha.h:200:int alpha_translate_v2p(struct cpu *cpu, uint64_t vaddr,
+src/include/cpu_alpha.h:204:#endif	/*  CPU_ALPHA_H  */
+src/cpus/cpu_dyntrans.c:523:		    r[ALPHA_A0
+src/cpus/cpu_dyntrans.c:672:		if (cpu->translate_v2p != NULL) {
+src/cpus/cpu_dyntrans.c:679:			ok = cpu->translate_v2p(
+src/cpus/cpu_dyntrans.c:680:			    cpu, vaddr, &paddr, FLAG_INSTR);
+src/cpus/cpu_dyntrans.c:689:			 *  or if that fails, call translate_v2p for the
+src/cpus/cpu_dyntrans.c:692:			/*  fatal("TODO: instruction vaddr=>paddr translation "
+src/cpus/cpu_dyntrans.c:721:				ok = cpu->translate_v2p(cpu, cpu->pc, &paddr,
+src/cpus/cpu_dyntrans.c:1294:		fatal("HUH? Invalidate: Not vaddr, all, or paddr?\n");
+src/cpus/cpu_dyntrans.c:1332:	    vaddr_page, paddr_page;
+
+ exited 1 in 284ms:
+  46: MACHINE_SETUP(alpha)
+  47: {
+  48: 	struct rpb rpb;
+  49: 	struct crb crb;
+  50: 	struct ctb ctb;
+  51: 	struct mddt mddt;
+  52: 	struct pcs *pcs = (struct pcs *) malloc(sizeof(struct pcs) * machine->ncpus);
+  53: 	int i;
+  54: 
+  55: 	switch (machine->machine_subtype) {
+  56: 
+  57: 	case ST_ALPHABOOK1:
+  58: 		machine->machine_name = strdup("AlphaBook 1");
+  59: 		if (machine->emulated_hz == 0)
+  60: 			machine->emulated_hz = 233000000;
+  61: 		device_add(machine, "lca");
+  62: 		break;
+  63: 
+  64: 	case ST_DEC_4100:
+  65: 		machine->machine_name = strdup("AlphaServer 4100");
+  66: 		break;
+  67: 
+  68: 	case ST_DEC_3000_300:
+  69: 		machine->machine_name = strdup("DEC 3000/300");
+  70: 		machine->main_console_handle = (size_t)device_add(machine,
+  71: 		    "z8530 addr=0x1b0200000 irq=0 addr_mult=4");
+  72: 		break;
+  73: 
+  74: 	case ST_EB164:
+  75: 		machine->machine_name = strdup("EB164");
+  76: 		break;
+  77: 
+  78: 	default:fatal("Unimplemented Alpha machine type %i\n",
+  79: 		    machine->machine_subtype);
+  80: 		exit(1);
+  81: 	}
+  82: 
+  83: 	if (!machine->prom_emulation)
+  84: 		return;
+  85: 
+  86: 	/*  These are used by NetBSD/alpha:  */
+  87: 	/*  a0 = First free Page Frame Number  */
+  88: 	/*  a1 = PFN of current Level 1 page table  */
+  89: 	/*  a2 = Bootinfo magic  */
+  90: 	/*  a3 = Bootinfo pointer  */
+  91: 	/*  a4 = Bootinfo version  */
+  92: 	cpu->cd.alpha.r[ALPHA_A0] = 16*1024*1024 / 8192;
+  93: 	cpu->cd.alpha.r[ALPHA_A1] = 0;	/*  TODO  */
+  94: 	cpu->cd.alpha.r[ALPHA_A2] = 0;	/*  Note: NOT ALPHA_BOOTINFO_MAGIC  */
+  95: 	cpu->cd.alpha.r[ALPHA_A3] = 0;	/*  TODO  */
+  96: 	cpu->cd.alpha.r[ALPHA_A4] = 1;
+  97: 
+  98: 	/*
+ 195: 	store_buf(cpu, MEMDAT_ADDR, (char *)&mddt, sizeof(struct mddt));
+ 196: 	store_buf(cpu, PCS_ADDR, (char *)pcs, sizeof(struct pcs) *
+ 197: 	    machine->ncpus);
+ 198: 
+ 199: 	free(pcs);
+ 200: }
+ 201: 
+ 202: 
+ 203: MACHINE_DEFAULT_CPU(alpha)
+ 204: {
+ 205: 	switch (machine->machine_subtype) {
+ 206: 
+ 207: 	case ST_ALPHABOOK1:
+ 208: 		machine->cpu_name = strdup("21066");
+ 209: 		break;
+ 210: 
+ 211: 	case ST_DEC_4100:
+ 212: 		machine->cpu_name = strdup("21164A-2");
+ 213: 		break;
+ 214: 
+ 215: 	case ST_DEC_3000_300:
+ 216: 		machine->cpu_name = strdup("21064");
+ 217: 		break;
+ 218: 
+ 219: 	case ST_EB164:
+ 220: 		machine->cpu_name = strdup("21164PC");
+ 221: 		break;
+ 222: 
+ 223: 	default:fatal("Unimplemented Alpha machine type %i\n",
+ 224: 		    machine->machine_subtype);
+ 225: 		exit(1);
+ 226: 	}
+ 227: }
+ 228: 
+ 229: 
+ 230: MACHINE_DEFAULT_RAM(alpha)
+ 231: {
+ 232: 	machine->physical_ram_in_mb = 128;
+ 233: }
+ 234: 
+ 235: 
+ 236: MACHINE_REGISTER(alpha)
+ 237: {
+ 238: 	MR_DEFAULT(alpha, "Alpha", MACHINE_ALPHA);
+ 239: 
+ 240: 	machine_entry_add_alias(me, "alpha");
+ 241: 
+ 242: 	machine_entry_add_subtype(me, "AlphaBook 1", ST_ALPHABOOK1,
+ 243: 	    "alphabook1", NULL);
+ 244: 
+ 245: 	machine_entry_add_subtype(me, "AlphaServer 4100", ST_DEC_4100,
+ 246: 	    "alphaserver4100", NULL);
+ 247: 
+ 248: 	machine_entry_add_subtype(me, "DEC 3000/300", ST_DEC_3000_300,
+ 249: 	    "3000/300", NULL);
+ 250: 
+ 251: 	machine_entry_add_subtype(me, "EB164", ST_EB164,
+ 252: 	    "eb164", NULL);
+ 253: 
+ 254: 	me->set_default_ram = machine_default_ram_alpha;
+ 255: }
+ 256: 
+  49:  *  call_pal:  PALcode call
+  50:  *
+  51:  *  arg[0] = pal nr
+  52:  */
+  53: X(call_pal)
+  54: {
+  55: 	/*  Synchronize PC first:  */
+  56: 	uint64_t old_pc, low_pc = ((size_t)ic - (size_t)
+  57: 	    cpu->cd.alpha.cur_ic_page) / sizeof(struct alpha_instr_call);
+  58: 	cpu->pc &= ~((ALPHA_IC_ENTRIES_PER_PAGE-1) <<
+  59: 	    ALPHA_INSTR_ALIGNMENT_SHIFT);
+  60: 	cpu->pc += (low_pc << ALPHA_INSTR_ALIGNMENT_SHIFT);
+  61: 	old_pc = cpu->pc;
+  62: 
+  63: 	alpha_palcode(cpu, ic->arg[0]);
+  64: 
+  65: 	if (!cpu->running) {
+  66: 		cpu->n_translated_instrs --;
+  67: 		cpu->cd.alpha.next_ic = &nothing_call;
+  68: 	} else if (cpu->pc != old_pc) {
+  69: 		/*  The PC value was changed by the palcode call.  */
+  70: 		/*  Find the new physical page and update the translation
+  71: 		    pointers:  */
+  72: 		alpha_pc_to_pointers(cpu);
+  73: 	}
+  74: }
+  75: 
+  76: 
+  77: /*
+ 783: 
+ 784: 	/*  Figure out the (virtual) address of the instruction:  */
+ 785: 	low_pc = ((size_t)ic - (size_t)cpu->cd.alpha.cur_ic_page)
+ 786: 	    / sizeof(struct alpha_instr_call);
+ 787: 	addr = cpu->pc & ~((ALPHA_IC_ENTRIES_PER_PAGE-1) <<
+ 788: 	    ALPHA_INSTR_ALIGNMENT_SHIFT);
+ 789: 	addr += (low_pc << ALPHA_INSTR_ALIGNMENT_SHIFT);
+ 790: 	addr &= ~((1 << ALPHA_INSTR_ALIGNMENT_SHIFT) - 1);
+ 791: 	cpu->pc = addr;
+ 792: 
+ 793: 	/*  Read the instruction word from memory:  */
+ 794: 	{
+ 795: 		const uint32_t mask1 = (1 << DYNTRANS_L1N) - 1;
+ 796: 		const uint32_t mask2 = (1 << DYNTRANS_L2N) - 1;
+ 797: 		const uint32_t mask3 = (1 << DYNTRANS_L3N) - 1;
+ 798: 		uint32_t x1 = (addr >> (64-DYNTRANS_L1N)) & mask1;
+ 799: 		uint32_t x2 = (addr >> (64-DYNTRANS_L1N-DYNTRANS_L2N)) & mask2;
+ 800: 		uint32_t x3 = (addr >> (64-DYNTRANS_L1N-DYNTRANS_L2N-
+ 801: 		    DYNTRANS_L3N)) & mask3;
+ 802: 		struct DYNTRANS_L2_64_TABLE *l2 = cpu->cd.alpha.l1_64[x1];
+ 803: 		struct DYNTRANS_L3_64_TABLE *l3 = l2->l3[x2];
+ 804: 		page = l3->host_load[x3];
+ 805: 	}
+ 806: 
+ 807: 	if (page != NULL) {
+ 808: 		/*  fatal("TRANSLATION HIT!\n");  */
+ 809: 		memcpy(ib, page + (addr & 8191), sizeof(ib));
+ 810: 	} else {
+ 811: 		/*  fatal("TRANSLATION MISS!\n");  */
+ 812: 		if (!cpu->memory_rw(cpu, cpu->mem, addr, &ib[0],
+ 813: 		    sizeof(ib), MEM_READ, CACHE_INSTRUCTION)) {
+ 814: 			fatal("to_be_translated(): read failed: TODO\n");
+ 815: 			goto bad;
+ 816: 		}
+ 817: 	}
+ 818: 
+ 819: 	/*  Alpha instruction words are always little-endian. Convert
+ 820: 	    to host order:  */
+ 821: 	{
+ 822: 		uint32_t *p = (uint32_t *) ib;
+ 823: 		iword = LE32_TO_HOST( *p );
+ 824: 	}
+ 825: 
+ 826: #define DYNTRANS_TO_BE_TRANSLATED_HEAD
+ 827: #include "cpu_dyntrans.c"
+ 828: #undef	DYNTRANS_TO_BE_TRANSLATED_HEAD
+ 829: 
+ 830: 
+ 831: 	opcode = (iword >> 26) & 63;
+ 832: 	ra = (iword >> 21) & 31;
+ 833: 	rb = (iword >> 16) & 31;
+ 834: 	func = (iword >> 5) & 0x7ff;
+ 835: 	rc = iword & 31;
+ 836: 	imm = iword & 0xffff;
+ 837: 
+ 838: 	switch (opcode) {
+ 839: 	case 0x00:						/*  CALL_PAL  */
+ 840: 		ic->f = instr(call_pal);
+ 841: 		ic->arg[0] = (size_t) (iword & 0x3ffffff);
+ 842: 		break;
+ 843: 	case 0x08:						/*  LDA  */
+ 844: 	case 0x09:						/*  LDAH  */
+ 845: 		if (ra == ALPHA_ZERO) {
+ 846: 			ic->f = instr(nop);
+ 847: 			break;
+ 848: 		}
+rg: src/debugger*: The filename, directory name, or volume label syntax is incorrect. (os error 123)
+src\debugger\debugger_expr.c:59: *  This function takes a string as input, and tries to match it to a register
+src\debugger\debugger_expr.c:216: *  Input:
+src\debugger\debugger.c:73:volatile int single_step_breakpoint = 0;
+src\debugger\debugger.c:81:static volatile bool exit_debugger_to_continue_single_stepping;
+src\debugger\debugger.c:163:		/*  Discard any chars in the input queue:  */
+src\debugger\debugger.c:177: *  show_breakpoint():
+src\debugger\debugger.c:179:static void show_breakpoint(struct machine *m, int i)
+src\debugger\debugger.c:183:		printf("%08" PRIx32, (uint32_t) m->breakpoints.addr[i]);
+src\debugger\debugger.c:185:		printf("%016" PRIx64, (uint64_t) m->breakpoints.addr[i]);
+src\debugger\debugger.c:186:	if (m->breakpoints.string[i] != NULL)
+src\debugger\debugger.c:187:		printf(" (%s)", m->breakpoints.string[i]);
+src\debugger\debugger.c:189:	printf("  [hits=%" PRIi64, (int64_t) m->breakpoints.hitcount[i]);
+src\debugger\debugger.c:190:	if (m->breakpoints.ignore_left[i] > 0)
+src\debugger\debugger.c:192:		    (int64_t) m->breakpoints.ignore_left[i]);
+src\debugger\debugger.c:264:	 *  If the PC has changed, then release any breakpoint we were
+src\debugger\debugger.c:270:		single_step_breakpoint = 0;
+src\debugger\debugger.c:528:			/*  #248: also show breakpoint hit counts.  */
+src\debugger\debugger.c:529:			for (i = 0; i < debugger_machine->breakpoints.n; i++) {
+src\debugger\debugger.c:532:				    "breakpoint %i: hits=%" PRIi64, i,
+src\debugger\debugger.c:534:				    breakpoints.hitcount[i]);
+src\debugger\debugger.c:535:				if (debugger_machine->breakpoints.ignore_left[i]
+src\debugger\debugger.c:541:					    breakpoints.ignore_left[i]);
+src\debugger\debugger.c:764:	/*  "step call": continue single-stepping, without interaction,
+src\debugger\debugger.c:803:	exit_debugger_to_continue_single_stepping = false;
+src\debugger\debugger.c:823:				continue;
+src\debugger\debugger.c:835:		if (exit_debugger_to_continue_single_stepping)
+src\debugger\debugger_cmds.c:42: *  debugger_cmd_breakpoint():
+src\debugger\debugger_cmds.c:45: *  e.g. "breakpoint s" == "breakpoint show".
+src\debugger\debugger_cmds.c:47:static void debugger_cmd_breakpoint(struct machine *m, char *args)
+src\debugger\debugger_cmds.c:62:		printf("syntax: breakpoint subcmd [args...]\n");
+src\debugger\debugger_cmds.c:64:		printf("  add addr[, N] add a breakpoint for address addr"
+src\debugger\debugger_cmds.c:66:		printf("  delete x      delete breakpoint nr x\n");
+src\debugger\debugger_cmds.c:67:		printf("  show          show current breakpoints\n");
+src\debugger\debugger_cmds.c:69:		printf("                show or set breakpoints on subsystem"
+src\debugger\debugger_cmds.c:72:		    " e.g. \"breakpoint sh\".\n");
+src\debugger\debugger_cmds.c:89:		printf("Unknown breakpoint subcommand.\n");
+src\debugger\debugger_cmds.c:93:		printf("Ambiguous breakpoint subcommand '%.*s'.\n",
+src\debugger\debugger_cmds.c:105:			printf("syntax: breakpoint show\n");
+src\debugger\debugger_cmds.c:108:		if (m->breakpoints.n == 0)
+src\debugger\debugger_cmds.c:109:			printf("No breakpoints set.\n");
+src\debugger\debugger_cmds.c:110:		for (i=0; i<m->breakpoints.n; i++)
+src\debugger\debugger_cmds.c:111:			show_breakpoint(m, i);
+src\debugger\debugger_cmds.c:119:			printf("syntax: breakpoint delete x\n");
+src\debugger\debugger_cmds.c:125:		if (m->breakpoints.n == 0) {
+src\debugger\debugger_cmds.c:126:			printf("No breakpoints set.\n");
+src\debugger\debugger_cmds.c:129:		if (x < 0 || x >= m->breakpoints.n) {
+src\debugger\debugger_cmds.c:130:			printf("Invalid breakpoint nr %i. Use 'breakpoint "
+src\debugger\debugger_cmds.c:131:			    "show' to see the current breakpoints.\n", x);
+src\debugger\debugger_cmds.c:135:		free(m->breakpoints.string[x]);
+src\debugger\debugger_cmds.c:137:		for (i=x; i<m->breakpoints.n-1; i++) {
+src\debugger\debugger_cmds.c:138:			m->breakpoints.addr[i]   = m->breakpoints.addr[i+1];
+src\debugger\debugger_cmds.c:139:			m->breakpoints.string[i] = m->breakpoints.string[i+1];
+src\debugger\debugger_cmds.c:141:			m->breakpoints.hitcount[i]    =
+src\debugger\debugger_cmds.c:142:			    m->breakpoints.hitcount[i+1];
+src\debugger\debugger_cmds.c:143:			m->breakpoints.ignore_left[i] =
+src\debugger\debugger_cmds.c:144:			    m->breakpoints.ignore_left[i+1];
+src\debugger\debugger_cmds.c:146:		m->breakpoints.n --;
+src\debugger\debugger_cmds.c:157:		size_t breakpoint_buf_len;
+src\debugger\debugger_cmds.c:162:			printf("syntax: breakpoint add addr[, ignorecount]\n");
+src\debugger\debugger_cmds.c:179:		i = m->breakpoints.n;
+src\debugger\debugger_cmds.c:187:		/*  #256: mirror add_breakpoints() (emul.c). The address is
+src\debugger\debugger_cmds.c:189:		    MIPS sign-extension. Un-extended, a kseg0/kseg1 breakpoint
+src\debugger\debugger_cmds.c:198:		CHECK_ALLOCATION(m->breakpoints.string = (char **) realloc(
+src\debugger\debugger_cmds.c:199:		    m->breakpoints.string, sizeof(char *) *
+src\debugger\debugger_cmds.c:200:		    (m->breakpoints.n + 1)));
+src\debugger\debugger_cmds.c:201:		CHECK_ALLOCATION(m->breakpoints.addr = (uint64_t *) realloc(
+src\debugger\debugger_cmds.c:202:		    m->breakpoints.addr, sizeof(uint64_t) *
+src\debugger\debugger_cmds.c:203:		   (m->breakpoints.n + 1)));
+src\debugger\debugger_cmds.c:205:		CHECK_ALLOCATION(m->breakpoints.hitcount = (uint64_t *) realloc(
+src\debugger\debugger_cmds.c:206:		    m->breakpoints.hitcount, sizeof(uint64_t) *
+src\debugger\debugger_cmds.c:207:		   (m->breakpoints.n + 1)));
+src\debugger\debugger_cmds.c:208:		CHECK_ALLOCATION(m->breakpoints.ignore_left = (int64_t *)
+src\debugger\debugger_cmds.c:209:		    realloc(m->breakpoints.ignore_left, sizeof(int64_t) *
+src\debugger\debugger_cmds.c:210:		   (m->breakpoints.n + 1)));
+src\debugger\debugger_cmds.c:212:		breakpoint_buf_len = strlen(rest) + 1;
+src\debugger\debugger_cmds.c:214:		CHECK_ALLOCATION(m->breakpoints.string[i] = (char *)
+src\debugger\debugger_cmds.c:215:		    malloc(breakpoint_buf_len));
+src\debugger\debugger_cmds.c:216:		strlcpy(m->breakpoints.string[i], rest,
+src\debugger\debugger_cmds.c:217:		    breakpoint_buf_len);
+src\debugger\debugger_cmds.c:218:		m->breakpoints.addr[i] = tmp;
+src\debugger\debugger_cmds.c:219:		m->breakpoints.hitcount[i] = 0;		/*  #248  */
+src\debugger\debugger_cmds.c:220:		m->breakpoints.ignore_left[i] = ignore;	/*  #248  */
+src\debugger\debugger_cmds.c:222:		m->breakpoints.n ++;
+src\debugger\debugger_cmds.c:223:		/*  #259: a configured breakpoint implies -K — drop into the
+src\debugger\debugger_cmds.c:226:		show_breakpoint(m, i);
+src\debugger\debugger_cmds.c:245:			debugmsg_print_breakpoints();
+src\debugger\debugger_cmds.c:271:			printf("syntax: breakpoint subsystem name "
+src\debugger\debugger_cmds.c:284:			printf("%s breakpoint level '%.*s'. Levels are: "
+src\debugger\debugger_cmds.c:291:		if (!debugmsg_set_breakpoint(name, level)) {
+src\debugger\debugger_cmds.c:298:		/*  #259: an armed subsystem breakpoint (level >= 0) also
+src\debugger\debugger_cmds.c:303:		debugmsg_print_breakpoints();
+src\debugger\debugger_cmds.c:315: *  cell. Modelled on debugger_cmd_breakpoint().
+src\debugger\debugger_cmds.c:415:		    so the fast-store suppression is recomputed on remap.  */
+src\debugger\debugger_cmds.c:503: *  debugger_cmd_continue():
+src\debugger\debugger_cmds.c:505:static void debugger_cmd_continue(struct machine *m, char *args)
+src\debugger\debugger_cmds.c:508:		printf("syntax: continue\n");
+src\debugger\debugger_cmds.c:783: *  Search a memory range for a value or a string; similar to 'put', but
+src\debugger\debugger_cmds.c:1020:					continue;
+src\debugger\debugger_cmds.c:1025:					continue;
+src\debugger\debugger_cmds.c:1351: *  debugger_cmd_put():
+src\debugger\debugger_cmds.c:1353:static void debugger_cmd_put(struct machine *m, char *args)
+src\debugger\debugger_cmds.c:1355:	static char put_type = ' ';  /*  Remembered across multiple calls.  */
+src\debugger\debugger_cmds.c:1365:	/*  syntax: put [b|h|w|d|q] addr, data  */
+src\debugger\debugger_cmds.c:1387:			put_type = *q;
+src\debugger\debugger_cmds.c:1391:		/*  printf("type '%c', L '%s', R '%s'\n", put_type, q, p);  */
+src\debugger\debugger_cmds.c:1396:		printf("syntax: put [b|h|w|d|q|s|z] addr, data\n");
+src\debugger\debugger_cmds.c:1407:	if (put_type == ' ') {
+src\debugger\debugger_cmds.c:1434:	if (put_type == 's' || put_type == 'z') {
+src\debugger\debugger_cmds.c:1444:		if (put_type == 'z')
+src\debugger\debugger_cmds.c:1471:		    put_type == 'z'? " (including terminating nul)" : "");
+src\debugger\debugger_cmds.c:1495:	switch (put_type) {
+src\debugger\debugger_cmds.c:1568:		printf("Unimplemented type '%c'\n", put_type);
+src\debugger\debugger_cmds.c:1683: *  call trace output ("trace") implicitly turned on while stepping.
+src\debugger\debugger_cmds.c:1716:			exit_debugger_to_continue_single_stepping = true;
+src\debugger\debugger_cmds.c:1738:	exit_debugger_to_continue_single_stepping = true;
+src\debugger\debugger_cmds.c:2022:	{ "breakpoint", "...", 0, debugger_cmd_breakpoint,
+src\debugger\debugger_cmds.c:2023:		"manipulate breakpoints" },
+src\debugger\debugger_cmds.c:2025:	/*  NOTE: Try to keep 'c' down to only one command. Having 'continue'
+src\debugger\debugger_cmds.c:2028:	{ "continue", "", 0, debugger_cmd_continue,
+src\debugger\debugger_cmds.c:2029:		"continue execution" },
+src\debugger\debugger_cmds.c:2067:	{ "put", "[b|h|w|d|q|s|z] addr, data", 0, debugger_cmd_put,
+src\debugger\debugger_cmds.c:2161:				continue;
+
+ERROR: This content was flagged for possible cybersecurity risk. If this seems wrong, try rephrasing your request. To get authorized for security work, join the Trusted Access for Cyber program: https://chatgpt.com/cyber
+ERROR: This content was flagged for possible cybersecurity risk. If this seems wrong, try rephrasing your request. To get authorized for security work, join the Trusted Access for Cyber program: https://chatgpt.com/cyber
+tokens used
+41,373

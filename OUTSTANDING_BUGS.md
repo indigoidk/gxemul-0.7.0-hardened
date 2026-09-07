@@ -15394,3 +15394,132 @@ attack:** whether scoping away from the archives is a review-quality loss (I say
 middle form is scope-out-by-default plus inline-the-artifact-when-a-question-depends-on-it, as `§C2` already
 mandates for packet-fed seats (I say yes); and whether avoiding the word `kill` risks a wrong record (I say
 negligible for briefs, serious for records, and the section says so).  **Reverting is one deletion.**
+
+## 2026-09-07 — four rows from ONE scoped codex invocation on `dev_lca.c`, plus the warrant `lcabadval` was missing
+
+All four came from a single read-only codex run (`regress/artifacts/lcabadval/codex_scoping_20260907.txt`),
+the second run under the new §C5 discipline — neutral language, reading scoped to `src/` and `regress/*.py`.
+It completed at 297,783 bytes with **zero** content-filter flags, on a device unrelated to the one that
+produced the rule. **Every claim below was verified against the source before filing; one of the four I found
+by reading the function while checking codex's table, not from the answer itself.**
+
+**`lcabadval` (HIGH, existing) — the severity warrant it was missing.**  Each window guard STORES the value
+and *then* ends the process:
+
+    d->window_mask_0 = idata;                          <- the store LANDS
+    if (idata != 0x700000ULL) { fatal(...); exit(1); } <- then the process ends
+
+And **zero is a documented encoding** — `alpha_lcareg.h` defines `IOC_W_MASK_1M` as `0x0`, the 1 MB window.
+So a guest selecting the smallest documented window size kills the emulator; likewise `W_BASE1`, whose one
+accepted constant carries the `WEN` *window enable* bit, so a driver **disabling** a window is killed too.
+That is `#504`'s warrant at a second device: documented values the model dies on, not junk ones.
+
+**Its RANGE site is also far more reachable than the row said.**  It was recorded as `ofs > len`; in fact
+`relative_addr >>= 5; ofs = relative_addr & 3;` — **`ofs` is guest address bits 5-6**, so an ordinary 1-byte
+access at an address with those bits set to 2 or 3 ends the process.  That is address decoding, not a value
+whitelist, and it belongs to a different disposition class from the six value guards.
+
+**`lcaisalane` (MED) — three defects in eleven lines.**  The guard is `>` where `>=` was meant, so
+`(len,ofs) = (1,1)` and `(2,2)` pass, perform a real downstream read, and **return all zeros** because no `i`
+ever equals `ofs` — the guest is told the device answered zero when that lane was never asked.  The read path
+**discards** the failure result the write path returns.  And `uint8_t byte;` is **uninitialised** and consumed
+if that discarded read failed — **the fourth instance of the uninitialised-consumption family today**,
+alongside `sgirebufuninit`, `sgigbeconvover` and `#95`'s incomplete class closure.
+
+**`alphapfnoffset` (HIGH, provisional) — the page-table walk drops the within-page offset.**
+`(*return_paddr) = ALPHA_PTE_TO_PFN(pte3) << pageSizeShift` returns a page base, and `memory_rw` then computes
+`offset = paddr & offset_mask`, which is zero — so every walked access lands at its page's first bytes.
+**Codex's hedge is correct and I verified it:** both direct-mapped paths mask the vaddr and *keep* the offset,
+so only the real walk is affected.  **HIGH is provisional on reachability** — `memory_alpha.c` carries seven
+TODOs and an explicit "not yet implemented" exit, so a bootable config may never reach the walk, in which case
+this is latent.  A round settles reachability *first*; the fix is adding the offset back.
+
+**`alphavmkill` (MED) — a guest virtual address ends the host.**  `vaddr == 0xfffffffd80000000` hits
+`fatal(...); exit(1);` inside the `ptbr == 0` bootstrap arm, so it is reached early in a boot on an address the
+kernel chooses.  **The disposition is genuinely not obvious**, which is why it is filed rather than fixed:
+declining leaves the guest with a wrong translation to fault on somewhere less legible, so this may be one of
+the rare sites where a loud stop beats continuing — and if so the round's product is a record saying so plus a
+latch, not a removal.
+
+**`lcashiftub` (LOW) — `0x800 << dev` reaches `2^31` in a signed 32-bit `int`**, undefined behaviour.  The
+irony is worth the line: **that loop is the file's own precedent for graceful degradation** — its `dev >= 21`
+fallback has a commented-out `exit(1)` and substitutes a safe default, which `lcabadval` cites as a
+transferable in-tree warrant.  The safe path contains UB.  `0x800U` fixes it; the first question is whether a
+UBSan sweep already flags it, and if not, why not.
+
+## 2026-09-07 — CORRECTION to this morning's `alphapfnoffset` entry, plus two more Alpha rows
+
+**MY OWN OVERCLAIM, CORRECTED.**  The entry above says of the Alpha page-table walk:
+
+> `offset = paddr & offset_mask`, which is zero — so **every walked access lands at its page's first bytes.**
+
+**"Every" is too broad.**  A codex reachability pass (`regress/artifacts/alphapfnoffset/codex_reachability_20260907.txt`)
+enumerated **all 8,192 offsets** — confirming the walk yields offset zero throughout and differs from the
+offset-preserving address for **8,191** of them, and confirming the masking paths preserve offsets across
+**three** bootstrap alias regions, not the two I had read.  But: *"Slow-path accesses consume the incorrect
+physical offset, but cached Alpha loads/stores calculate `addr & 8191` themselves.  Subsequent cache hits can
+therefore access the correct within-page bytes."*  **So the corruption is confined to the slow path**; once a
+page is cached the load/store instructions recompute the offset and read the right bytes.  HIGH stands, but on
+the narrower warrant.
+
+**Reachability is neither "live" nor "latent".**  There is *no source barrier* to a guest-instruction witness
+on the existing `eb164` description, and the smallest decisive observation is **one completed guest data
+access** that reaches the walk with a nonzero page offset and whose caller completes on the returned page-base
+address — a PTBR watchpoint or a walker-entry breakpoint is explicitly **not** enough, since reaching the walk
+is not the same as an access completing wrongly.  What the seat could not supply: *"I cannot name a
+demonstrated working Alpha OS boot from the allowed files."*  So the honest status is **witnessable in
+principle, unwitnessed in fact.**
+
+**`alphafaultclaim` (MED).**  *"The fork's claim that a failed Alpha walk causes the caller to raise a fault is
+unsupported by this path.  The translator returns zero, the memory worker returns failure, and the Alpha data
+instruction abandons the access without delivering an Alpha exception."*  That is an **L4 wrong-record
+candidate in a comment the fork added itself** — `memory_alpha.c`'s `not_found` label carries a `#194
+(Codex/Fable)` note reasoning about exactly this.  It also **corroborates a standing carrier claim from a new
+direction**: the option-set rule already records that member 5 (FAULT) has no Alpha equivalent, derived from
+`memory_rw.c`; this reaches the same conclusion from the instruction side.  Any round reaching for FAULT on an
+Alpha device now has two independent reasons not to.  **Not verified by me** — recorded as stated, with its
+citations.
+
+**`alphaswpctxreg` (LOW).**  `swpctx` writes the old context into `a0` while the ABI wrapper in `alpha_cpu.h`
+reads it from `v0` — a silent wrong value rather than a crash, which is the harder kind to notice.  **Not
+verified by me**, and filed rather than confirmed because the Alpha queue is now four rows deep and none has a
+witness.  It is the cheapest of the four to check, so a round taking any Alpha item should settle it first.
+
+## 2026-09-07 — `alphaswpctxptbr` (HIGH), and the Alpha boot question answered: all five rows are witnessable
+
+**THE BOOT QUESTION IS ANSWERED AND IT REVERSES MY CONCERN.**  I had flagged the risk that the Alpha queue was
+accumulating well-analysed rows on a machine nothing can exercise.  A scoped codex pass
+(`regress/artifacts/alphapfnoffset/codex_boot_20260907.txt`) settled it: *"EB164 or AlphaServer 4100 provides
+the required unmodified machine description.  There is no architectural requirement to boot an OS first."*
+Debugger word writes go through the memory helpers, Alpha fetches and decodes through its actual memory path,
+and the shared breakpoint machinery applies — **which is exactly the rung-3 cold-debugger shape the ladder
+admits.**  All four previously filed Alpha defects classify as **cold-debugger reachable**.
+
+The qualification that matters for `alphapfnoffset` specifically: the walk needs page-table state, and *the
+ordinary bootstrap identity mapping bypasses the walk* — so its probe must first establish a non-zero
+`apcb_ptbr` and a valid three-level table.  That is real work, and it keeps that row the hardest of the five
+despite being the most severe if reached.
+
+**`alphaswpctxptbr` (HIGH) — `swpctx` clobbers the page-table base register.**  Raised by the same pass under
+the found-something-else licence, on a brief that asked only whether Alpha can run anything, and verified by
+reading before filing:
+
+    // Update all variables in the pcb simultaneously:
+    cpu->cd.alpha.pcb.apcb_ptbr   = new_ptbr;      <- correct
+    ...
+    cpu->cd.alpha.pcb.apcb_ptbr   = new_flags;     <- *** should be apcb_flags ***
+
+**`apcb_ptbr` is assigned twice and `apcb_flags` is never assigned at all.**  `alpha_translate_v2p()` opens
+with `base = cpu->cd.alpha.pcb.apcb_ptbr << ALPHA_PAGESHIFT`, so **after any `swpctx` the page-table walk reads
+its tables from an address derived from the flags word** — every translation after a context switch walks
+garbage.  And `apcb_flags` retains the outgoing context's value, a second and quieter defect from the same
+line.  The comment directly above asserts what the code does not do; that is the **second** comment-versus-code
+contradiction in this one function, the other being `alphaswpctxreg`.
+
+**Fix: one token.**  The intent is not in doubt — `new_flags` is loaded from the context block and would
+otherwise be dead, and `apcb_flags` exists in the struct and would otherwise never be written.
+
+*** IT IS A CONFOUND FOR `alphapfnoffset`'s WITNESS AND MUST BE FIXED FIRST. ***  This defect corrupts the
+walk's BASE; that one corrupts the walk's RESULT.  A probe that sets up a context via `swpctx` and then
+observes a bad translation cannot attribute it without pinning which of the two produced it.  Fixing this one
+first is certain, one token, and removes a confound from the harder row.

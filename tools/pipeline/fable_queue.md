@@ -1339,3 +1339,37 @@ ledger; neither was defanged by the marker sweep.
 
 **Nothing in this section may be counted as reviewed.** That is this file's own founding rule and
 it is the reason the wall is written down rather than remembered.
+
+### `sgirandompixel` (#504, `257f56f`) — regress stage — **QUEUED 2026-09-07**
+
+Closed at `257f56f`.  `regress` is flagship-only, and the flagship seats are held for the 2026-09-09
+adjudication by standing owner directive — so this is owed, not skipped, and written down rather than
+remembered.  Section I caught it the moment the row closed.
+
+**What shipped:** `horrible_getputpixel()`'s unimplemented-mode arm no longer does `*color = random()`; it
+declines and announces once (`SGIRE_W_BADMODE`).  Witness AND detector is
+`regress/sgi_re_randompixel_probe.py`, 8 rows, gate-wired into `gate_arm.sh`; five mutants, all killed; BASE
+8/8 opening and closing; the re-pinned oracle measured RED at 7/8 on the committed pre-fix build before the
+code changed.
+
+**THE QUESTIONS THIS STAGE IS HELD FOR — three, and none is boilerplate:**
+
+1. **Is the latch-sharing disclosure sufficient, or does it owe a row?**  The contract discloses that a
+   latch-sharing mutant scores 8/8 *in isolation*, because nothing in these sessions sets another
+   `d->warned` bit first.  But `d->warned` is a shared bitfield — `grep -c 'd->warned |='` on `dev_sgi_re.c`
+   finds several setters, most inside `DEVICE_ACCESS`, so **ordinary guest register traffic sets neighbouring
+   bits.**  A collision would therefore be silenced by benign traffic, which is exactly the shape `#490` paid
+   for.  Is clause-(e) disclosure the right disposition here, or is this a row the round owed?
+
+2. **Is `lin_b diag once`'s channel robust, or accidentally load-bearing on geometry?**  That row's oracle is
+   the announcement COUNT, and it can only vary because the probe draws a **1 wide x 4 tall** rectangle —
+   height, not width, because LIN_A addressing is `ofs = x & 4095` so four columns would collide on one byte
+   and destroy the value oracle.  **The row is therefore coupled to an addressing quirk of the arm under
+   test.**  If `sgirelinb` is ever implemented, or LIN_A addressing corrected, does this row silently stop
+   discriminating?
+
+3. **Is the five-way residual split right?**  `sgirandomskipput`, `sgirelinb`, `sgirandomcolour` (since raised
+   to HIGH — YCRCB is documented and reaches the same `random()` shape), `sgitileptrsilent`,
+   `sgirenamedstmode`.  In particular: the round DECLINED to reword the `dst_mode` diagnostic because doing so
+   broke the probe's anchor mid-round, and filed it instead.  **Was filing right, or was that an L4 the round
+   should have taken with the anchor moved in the same diff?**

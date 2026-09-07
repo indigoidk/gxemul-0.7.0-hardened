@@ -330,6 +330,43 @@ honest record of DEFENSIVE work, and its own vocabulary is what makes the seat r
 > **The control run is why (2) is needed even when (1) is satisfied:** the pass-2 brief was already
 > neutral and was still flagged, at the very end, after reading the ledger and the CHANGELOG.
 
+> ### *** THERE IS A THIRD TRIGGER AND IT IS THE STRONGEST.  §C5 SHIPPED INCOMPLETE; CORRECTED THE SAME
+> ### NIGHT, ON THE RUN THAT FOUND IT. ***
+>
+> A design brief that stayed ENTIRELY INSIDE `src/` -- the flag fired while it was grepping
+> `debugger_cmds.c`, which is in scope -- was refused at 145 KB, far short of the clean runs.  **So
+> scoping is necessary and not sufficient.**  Sorting all six runs by WHAT THEY ASKED FOR:
+>
+>     asked WHAT IS TRUE                                          result
+>     analysis of a defect                                        317 KB clean
+>     count + classify + choose a disposition                     298 KB clean
+>     is this code path reached?                                  294 KB clean
+>     CAN a guest program run at all? (capability)                502 KB clean
+>
+>     asked for a CONSTRUCTION THAT REACHES A DEFECT              result
+>     "the smallest EDIT that RE-OPENS one of these"              375 KB FLAGGED
+>     "the smallest guest PROGRAM that would WITNESS each"        145 KB FLAGGED
+>
+> **The discriminator is not the subject, the vocabulary, or the files read.  It is whether the brief
+> asks the seat to BUILD SOMETHING THAT TRIGGERS A DEFECT.**  Note the fourth clean run asked at length
+> about cold-debugger probes and breakpoints and was fine -- because it asked whether such a thing is
+> POSSIBLE, not for one aimed at a specific defect.
+>
+> **SO A CODEX BRIEF ADDS A THIRD RULE, AND IT IS THE ONE THAT COSTS SOMETHING REAL:**
+>
+> 3. **Do not ask codex for a mutant, a witness program, or "the smallest edit that re-opens this".**
+>    Ask it to CHECK a construction you supply, or to say whether one is possible -- both are clean.
+>    **The construction itself goes to a different seat.**
+>
+> *** THIS REHABILITATES A DIAGNOSIS I RECORDED AS REFUTED, AND THE REFUTATION WAS MY OWN MISREADING. ***
+> The first diagnosis of this class was *the reach-the-defect FRAMING is the trigger*.  I recorded that as
+> REFUTED because a read-only SCOPING brief was also refused -- but **that brief's Q3 asked "what is the
+> smallest change to the model that would restore the old behaviour"**, which is construction framing.  I
+> had the right answer, discarded it on a brief I had not re-read, and replaced it with a narrower one.
+>
+> **The archive-scoping finding stands and is NOT superseded** -- it demonstrably carried a run past the
+> exact byte where an unscoped one died.  There are TWO triggers, and the earlier text implied one.
+
 **THIS IS NOT A LICENCE TO SOFTEN WHAT IS BEING REVIEWED.**  The rewritten brief kept every technical
 claim, every site, every count, and the same adversarial questions — the answers it produced were
 harder, not softer.  Rewording a defect out of existence would be a records defect; **rewording the
