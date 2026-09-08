@@ -41,7 +41,7 @@ those panels produced had six or seven seats behind it.
 <!-- BEGIN GENERATED: codex-wall -- edit gen_codex_wall.py, not this block -->
 ### HELD STAGES -- every row awaiting a seat, derived from the ledger
 
-`carrier` (regress:fable5) · `es438` (regress:fable5) · `gdromcondlies` (regress:fable5) · `holdmarkermulti` (regress:fable5) · `lcabadval` (assess:codex,fable5,grok,kimi,opus5; research:fable5) · `ns16550` (regress:fable5) · `pcc2widthkills` (assess:fable5,opus5) · `proberowsubset` (assess:codex) · `sgideprimop` (regress:fable5) · `sgidewidth` (regress:fable5) · `sgirekills` (assess:codex,grok,kimi,opus5) · `sgireunmapped` (regress:fable5) · `sgitexindex` (assess:codex,fable5,grok,kimi,opus5) · `sh4sci` (regress:fable5) · `wdccdbmidxfer` (regress:fable5; research:opus5) · `wdcdataoutdrain` (regress:fable5)
+`carrier` (regress:fable5) · `es438` (regress:fable5) · `gdromcondlies` (regress:fable5) · `holdmarkermulti` (regress:fable5) · `lcabadval` (assess:codex,fable5,grok,kimi,opus5; research:fable5) · `ns16550` (regress:fable5) · `pcc2widthkills` (assess:fable5,opus5) · `proberowsubset` (assess:codex) · `sgideprimop` (regress:fable5) · `sgidewidth` (regress:fable5) · `sgimtedepth4dead` (assess:fable5,opus5; review:fable5,opus5) · `sgirekills` (assess:codex,grok,kimi,opus5) · `sgireunmapped` (regress:fable5) · `sgitexindex` (assess:codex,fable5,grok,kimi,opus5) · `sh4sci` (regress:fable5) · `wdccdbmidxfer` (regress:fable5; research:opus5) · `wdcdataoutdrain` (regress:fable5)
 
 *** TWO DIFFERENT KINDS OF HOLD APPEAR BELOW AND THEY MUST NOT BE READ ALIKE. ***
 
@@ -60,7 +60,7 @@ marker can mask another gap* -- section H cannot see a shortfall that a differen
 **Neither kind is a blank.** A blank cell and a seat failure must not look alike, and an
 allocation is a third thing again: recorded by seat name, per row, with the reason.
 
-**This is ONE outage plus one allocation, not 16 decisions, and it is written once rather than once per panel.**
+**This is ONE outage plus one allocation, not 17 decisions, and it is written once rather than once per panel.**
 **THE CODEX HISTORY, kept because it calibrates what a wall looks like.** Across ten panels it
 produced the identical signature every time -- the echoed brief followed by the usage-limit
 error -- in files of 26,992 / 11,180 / 10,036 / 8,323 / 12,414 / 11,938 / 10,726 / 16,694 /
@@ -1683,6 +1683,12 @@ three bytes of host stack into guest memory. Fix: `depth == 32`. Six seats answe
 six confirmed the enumeration and **three of them found errors in my brief**.
 
 ---
+
+### `sgimtedepth4dead` -- the row these six questions belong to
+
+*Section I of the pre-commit gate caught that 7g named its questions and never named its ROW:
+"HELD but NOT NAMED IN THE QUEUE -- a promise nobody recorded". Holding a stage and queueing it
+are ONE action. Both its `assess` and `review` stages stand at 7/9 awaiting opus5 and fable5.*
 
 ### 7g-1. (HIGH) *** A SEAT DISAGREEMENT ON SIBLING PARITY THAT I SETTLED BY READING, AND WHICH
 ### GENERALISES TO EVERY MULTI-LABEL SWITCH BLOCK IN THIS TREE. ***

@@ -153,9 +153,21 @@ CLASSES = (CLASS_DETECTOR, CLASS_WITNESS, CLASS_TOOL, CLASS_RESEARCH)
 MANIFEST = {
     # -- detectors a gate RUNS today (the evidence is derived, not asserted here) ---------
     "sgi_re_rgb_probe.py":         (CLASS_DETECTOR, "#505 RGB GET/PUT byte container"),
-    "alpha_harness_probe.py":     (CLASS_WITNESS,  "alphaswpctxptbr: swpctx overwrites apcb_ptbr with the flags word -- HEAD 7/9"),
-    "lca_confwidth_probe.py":     (CLASS_WITNESS,  "lcaconfwidth: the IOC_CONF kill names a value the guard accepts -- HEAD 4/6"),
-    "alpha_pfnoffset_probe.py":   (CLASS_WITNESS,  "alphapfnoffset: the page-table walk drops the within-page offset -- HEAD 5/6"),
+    #  *** TWO OF THESE THREE CARRIED STALE HEAD SCORES until 2026-09-07: 7/9 and 5/6 were the
+    #  counts BEFORE each round added the row its own fix review demanded (`swpctx flags`,
+    #  `walk vpn`).  Corrected to the measured values. ***
+    "alpha_harness_probe.py":     (CLASS_WITNESS,  "alphaswpctxptbr: swpctx overwrites apcb_ptbr with the flags word -- HEAD 7/10, fix 10/10"),
+    "lca_confwidth_probe.py":     (CLASS_WITNESS,  "lcaconfwidth: the IOC_CONF kill names a value the guard accepts -- HEAD 4/6, fix 6/6"),
+    "alpha_pfnoffset_probe.py":   (CLASS_WITNESS,  "alphapfnoffset: the page-table walk drops the within-page offset -- HEAD 5/7, fix 7/7"),
+    #  #509.  It began as a 6-row witness and grew to 14 rows across two kill tables; it is
+    #  classified WITNESS because nothing gates it, which is the same footing as the three
+    #  above.  Wiring it is a separate decision and a separate round.
+    "sgi_mte_fill_probe.py":      (CLASS_WITNESS,  "sgimtedepth4dead: `depth == 4' is unreachable so tiled MTE always took CI -- HEAD 10/14, fix 14/14"),
+    #  armbfxwidth32's `arm_bfx_width_probe.py` belongs here TOO -- it is written, run, and red
+    #  on the committed build at 9/11 -- but the entry lands in the SAME COMMIT as the file,
+    #  because this checker reads TRACKED files and a manifest naming an untracked probe is a
+    #  GHOST.  That is the mirror of the stale-exemption rule two hundred lines down: an entry
+    #  without its file is as wrong as a file without its entry.
     "arm_endian_probe.py":         (CLASS_DETECTOR, "ARM LDR rotation / endianness"),
     "arm_flags_probe.py":          (CLASS_DETECTOR, "ARM flag semantics"),
     "arm_fold_marker_probe.py":    (CLASS_DETECTOR, "instruction-combination markers"),
