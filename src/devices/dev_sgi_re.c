@@ -127,9 +127,32 @@ enum {
 	    never fires.  This one matters more than most: the helper is
 	    PER-PIXEL, called inside line, rectangle and tiled-MTE loops, so an
 	    UNLATCHED announce is a per-pixel flood rather than a diagnostic.
-	    The next free bit is 1 << 11; the enum ends HERE on purpose, as
-	    above.  */
+
+	    (This comment used to end "The next free bit is 1 << 11; the enum
+	    ends HERE on purpose, as above."  BOTH HALVES WENT FALSE when #513
+	    added SGIRE_W_TEX_RD = 1 << 11 BELOW this line -- the SAME failure,
+	    in the SAME enum, that the comment ten lines up already records
+	    happening to SGIRE_W_PRIM_OP.  Demoted rather than deleted, for that
+	    comment's own reason: the REASONING is still why the convention
+	    exists, and leaving the claim live would point the next reader at a
+	    TAKEN bit.  The live next-free claim is on the LAST enumerator.)  */
 	SGIRE_W_BADMODE   = 1 << 10,
+
+	/*
+	    #513: THE TEX READ DECLINE GETS ITS OWN BIT, not SGIRE_W_TEX_LEN.
+	    Sharing one was measured at 23/25 for SGIRE_W_DE_LEN in #498: an
+	    ordinary narrow write fires the width latch, and the read decline is
+	    then silently suppressed for the life of the instance.  The detector
+	    has a row for exactly this (`tex xbit', which fires all six width
+	    latches before reading).
+
+	    THE NEXT FREE BIT IS 1 << 12, AND THIS IS THE LAST ENUMERATOR --
+	    which is where that claim belongs, per the convention two comments
+	    up.  A maintainer adding a bit BELOW this line must move this
+	    sentence with it and demote the copy here, exactly as #513 had to
+	    demote SGIRE_W_BADMODE's.
+	 */
+	SGIRE_W_TEX_RD    = 1 << 11,
 };
 
 struct sgi_re_data {
@@ -398,6 +421,12 @@ DEVICE_ACCESS(sgi_re)
 	 *     `rd sent' row exists to pin exactly that.  The six `TODO: read from'
 	 *     arms below DO still exit(1) -- that half is unchanged and is sgirekills. ***
 	 *
+	 *     *** AND THAT HALF IS NOW GONE TOO: #513 REMOVED ALL SIX.  The tail is
+	 *     reached by more than declines now -- five of the six arms ASSIGN odata
+	 *     and let the tail deliver it, so the tail is the ACCEPT path as well as
+	 *     the decline path.  The sentence above is #499's and was true when
+	 *     written; it stands with its correction, as #499's own does. ***
+	 *
 	 *  3. The guards are NOT redundant.  For TLB_A/B/C and TEX the store is a
 	 *     `for (hwi = 0; hwi < len; ...)' loop, so a narrower access simply
 	 *     runs fewer iterations and stays in bounds -- there the guard is
@@ -406,6 +435,12 @@ DEVICE_ACCESS(sgi_re)
 	 *
 	 *  Only the WIDTH kills change HERE, IN #497.  The six `TODO: read from ...'
 	 *  kills are still untouched.
+	 *
+	 *  *** UNTRUE SINCE #513, WHICH IS THE ROUND THAT TOOK THEM.  Five became
+	 *  ACCEPTs (the read returns what the write stored) and CRIME_RE_TEX became a
+	 *  latched decline.  #497's sentence was accurate for #497 and is kept for the
+	 *  same reason the catch-all correction below is kept: a reader arriving from
+	 *  #497's records has to be able to see which half moved and when. ***
 	 *
 	 *  *** THE CATCH-ALL IS NO LONGER UNTOUCHED: #499 DE-FATALISED IT and that row
 	 *  is CLOSED.  The sentence is #497's and was true when written; it is left
@@ -433,8 +468,28 @@ DEVICE_ACCESS(sgi_re)
 				tlbi++;
 			}
 		} else {
-			fatal("TODO: read from CRIME_RE_TLB_A\n");
-			exit(1);
+			/*
+			 *  #513: ACCEPT.  A guest read of a len == 8 TLB slot ended
+			 *  the host.  The write arm directly above already computes
+			 *  and stores the value, so the disposition is member 4 of
+			 *  the option set -- delete the kill and RETURN THE VALUE --
+			 *  rather than a decline: nothing is unimplemented here.
+			 *  This loop is the exact inverse of the write loop, cell for
+			 *  cell and shift for shift.
+			 *
+			 *  *** IT MUST WRITE odata, NOT data[]. ***  The function's
+			 *  common tail is
+			 *      if (writeflag == MEM_READ)
+			 *              memory_writemax64(cpu, data, len, odata);
+			 *  so anything stored into data[] here is overwritten before
+			 *  it reaches the guest.  A first draft of this fix filled
+			 *  data[] and would have returned zeroes while looking right.
+			 */
+			int tlbi = ((relative_addr & 0x1ff) >> 1) & 0xff;
+			for (size_t hwi = 0; hwi < len; hwi += sizeof(uint16_t)) {
+				odata = (odata << 16) | d->re_tlb_a[tlbi];
+				tlbi++;
+			}
 		}
 	} else if (relative_addr >= CRIME_RE_TLB_B && relative_addr < CRIME_RE_TLB_C) {
 		if (len != 8) {
@@ -452,8 +507,13 @@ DEVICE_ACCESS(sgi_re)
 				tlbi++;
 			}
 		} else {
-			fatal("TODO: read from CRIME_RE_TLB_B\n");
-			exit(1);
+			/*  #513: ACCEPT -- the inverse of the write loop.  See the
+			    CRIME_RE_TLB_A arm for why this sets odata, not data[].  */
+			int tlbi = ((relative_addr & 0x1ff) >> 1) & 0xff;
+			for (size_t hwi = 0; hwi < len; hwi += sizeof(uint16_t)) {
+				odata = (odata << 16) | d->re_tlb_b[tlbi];
+				tlbi++;
+			}
 		}
 	} else if (relative_addr >= CRIME_RE_TLB_C && relative_addr < CRIME_RE_TLB_C + 0x200) {
 		if (len != 8) {
@@ -471,8 +531,13 @@ DEVICE_ACCESS(sgi_re)
 				tlbi++;
 			}
 		} else {
-			fatal("TODO: read from CRIME_RE_TLB_C\n");
-			exit(1);
+			/*  #513: ACCEPT -- the inverse of the write loop.  See the
+			    CRIME_RE_TLB_A arm for why this sets odata, not data[].  */
+			int tlbi = ((relative_addr & 0x1ff) >> 1) & 0xff;
+			for (size_t hwi = 0; hwi < len; hwi += sizeof(uint16_t)) {
+				odata = (odata << 16) | d->re_tlb_c[tlbi];
+				tlbi++;
+			}
 		}
 	} else if (relative_addr >= CRIME_RE_TEX && relative_addr < CRIME_RE_TEX + 0xe0) {
 		if (len != 8) {
@@ -490,8 +555,34 @@ DEVICE_ACCESS(sgi_re)
 				tlbi++;
 			}
 		} else {
-			fatal("TODO: read from CRIME_RE_TEX\n");
-			exit(1);
+			/*
+			 *  #513: DECLINE + LATCHED ANNOUNCE -- and TEX is the ONE arm
+			 *  of the six that is NOT an accept.  The warrant is specific
+			 *  and is recorded as `sgitexindex':
+			 *
+			 *    - the write arm's index is `>> 3' where a flat
+			 *      uint16_t[112] incremented once per halfword needs the
+			 *      register number times four.  The SGI CRIME specification
+			 *      lists TLB.tex[28] as 28 separate 64-bit registers, so
+			 *      `>> 3' is the REGISTER number and the missing factor of
+			 *      four is the defect;
+			 *    - consequently only 31 of the 112 cells are reachable and
+			 *      consecutive registers overlap by three;
+			 *    - `re_tex' has NO consumer anywhere in this file -- it is
+			 *      written and debug-printed, never read back.
+			 *
+			 *  Accepting the read would therefore publish a mapping the
+			 *  project has already recorded as wrong, and turn a future
+			 *  sgitexindex fix into a breaking change to a shipped oracle.
+			 *  Declining costs nothing today (no consumer) and leaves that
+			 *  round free.  sgitexindex carries a standing do-not-code
+			 *  ruling, so this round does not touch the shift.
+			 */
+			if (!(d->warned & SGIRE_W_TEX_RD)) {
+				d->warned |= SGIRE_W_TEX_RD;
+				fatal("[ sgi_re: unimplemented read from "
+				    "CRIME_RE_TEX -- declined.  (once) ]\n");
+			}
 		}
 	} else if (relative_addr >= CRIME_RE_LINEAR_A && relative_addr < CRIME_RE_LINEAR_A + 0x80) {
 		if (len != 8) {
@@ -582,8 +673,29 @@ DEVICE_ACCESS(sgi_re)
 			debug("[ d->re_linear_a[%i] = 0x%08x, [%i] = 0x%08x ]\n",
 				tlbi, d->re_linear_a[tlbi], tlbi+1, d->re_linear_a[tlbi+1]);
 		} else {
-			fatal("TODO: read from CRIME_RE_LINEAR_A\n");
-			exit(1);
+			/*
+			 *  #513: ACCEPT -- the inverse of the fixed-arity write
+			 *  directly above.  See CRIME_RE_TLB_A for the odata note.
+			 *
+			 *  The [tlbi+1] here has the SAME exposure as the write's
+			 *  [tlbi+1] and no more, which is `sgilinearoob'.
+			 *
+			 *  *** AN EARLIER WORDING OF THIS SENTENCE SAID THE TWO ARE
+			 *  "bounded only by the len == 8 guard keeping tlbi even".
+			 *  THAT IS FALSE: WIDTH DOES NOT IMPLY ALIGNMENT.  The guard
+			 *  tests LENGTH.  What keeps tlbi even is the CPU-side
+			 *  alignment described at the write arm above -- ld/sd raise
+			 *  ADES/ADEL before memory_rw, and the unaligned helper masks
+			 *  the address itself.  Corrected on this round's pass 2;
+			 *  the older surrounding comment had it right and my new one
+			 *  did not. ***  This fix
+			 *  deliberately does NOT add a clamp -- an unlicensed addition
+			 *  here would change the index behaviour that sgilinearoob is
+			 *  filed to fix across all five arms with ONE design.
+			 */
+			int tlbi = ((relative_addr & 0x7f) >> 2) & 0x1f;
+			odata = ((uint64_t) d->re_linear_a[tlbi] << 32)
+			    | d->re_linear_a[tlbi+1];
 		}
 	} else if (relative_addr >= CRIME_RE_LINEAR_B && relative_addr < CRIME_RE_LINEAR_B + 0x80) {
 		if (len != 8) {
@@ -640,8 +752,29 @@ DEVICE_ACCESS(sgi_re)
 			debug("[ d->re_linear_b[%i] = 0x%08x, [%i] = 0x%08x ]\n",
 				tlbi, d->re_linear_b[tlbi], tlbi+1, d->re_linear_b[tlbi+1]);
 		} else {
-			fatal("TODO: read from CRIME_RE_LINEAR_B\n");
-			exit(1);
+			/*
+			 *  #513: ACCEPT -- the inverse of the fixed-arity write
+			 *  directly above.  See CRIME_RE_TLB_A for the odata note.
+			 *
+			 *  The [tlbi+1] here has the SAME exposure as the write's
+			 *  [tlbi+1] and no more, which is `sgilinearoob'.
+			 *
+			 *  *** AN EARLIER WORDING OF THIS SENTENCE SAID THE TWO ARE
+			 *  "bounded only by the len == 8 guard keeping tlbi even".
+			 *  THAT IS FALSE: WIDTH DOES NOT IMPLY ALIGNMENT.  The guard
+			 *  tests LENGTH.  What keeps tlbi even is the CPU-side
+			 *  alignment described at the write arm above -- ld/sd raise
+			 *  ADES/ADEL before memory_rw, and the unaligned helper masks
+			 *  the address itself.  Corrected on this round's pass 2;
+			 *  the older surrounding comment had it right and my new one
+			 *  did not. ***  This fix
+			 *  deliberately does NOT add a clamp -- an unlicensed addition
+			 *  here would change the index behaviour that sgilinearoob is
+			 *  filed to fix across all five arms with ONE design.
+			 */
+			int tlbi = ((relative_addr & 0x7f) >> 2) & 0x1f;
+			odata = ((uint64_t) d->re_linear_b[tlbi] << 32)
+			    | d->re_linear_b[tlbi+1];
 		}
 	} else {
 		if (writeflag == MEM_WRITE) {

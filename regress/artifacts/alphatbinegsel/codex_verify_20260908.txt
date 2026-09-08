@@ -1,0 +1,119 @@
+**Verdict: the unsigned-selector misdispatch is confirmed. A different flush effect—and guest observability—cannot yet be established within the stated reading scope.**
+
+**Q1. Actual handler and comparison**
+
+In [src/cpus/cpu_alpha_palcode.c:309](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_alpha_palcode.c:309):
+
+```c
+	case 0x33:	/*  PAL_OSF1_tbi  */
+		/*
+		 *  a0 = op, a1 = vaddr
+		 *  a0 is ignored for now. TODO.
+		 *	a0 = 1: ITB invalidate
+		 *	a0 = 2: DTB invalidate
+		 *	a0 = 3: both ITB and DTB
+		 *	a0 = -1: invalidate everything with ASM=0.
+		 *	a0 = -2: invalidate everything
+		 */
+		// debug("[ Alpha PALcode: PAL_OSF1_tbi: a0=%" PRIi64" a1=0x%"
+		//    PRIx64" ]\n", (int64_t)a0, (uint64_t)a1);
+		if (a0 >= 1)
+			cpu->invalidate_translation_caches(cpu, a1, INVALIDATE_VADDR);
+		else
+			cpu->invalidate_translation_caches(cpu, 0, INVALIDATE_ALL);
+		break;
+```
+
+The operand at the comparison is the **`uint64_t` local `a0`**, declared at [line 165](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_alpha_palcode.c:165):
+
+```c
+uint64_t a0 = cpu->cd.alpha.r[ALPHA_A0], a1 = cpu->cd.alpha.r[ALPHA_A1];
+```
+
+The register array is also unsigned, in [src/include/cpu_alpha.h:151](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/cpu_alpha.h:151):
+
+```c
+uint64_t		r[N_ALPHA_REGS];	/*  Integer  */
+```
+
+There is **no active signed cast** at the comparison. The cast in the commented debug statement has no effect. The integer literal `1` is converted to `uint64_t` for comparison.
+
+| Selector | Value in `a0` | `a0 >= 1` | Callback arguments |
+|---|---:|---|---|
+| −2 | `0xfffffffffffffffe` | true | `a1, INVALIDATE_VADDR` |
+| −1 | `0xffffffffffffffff` | true | `a1, INVALIDATE_VADDR` |
+| 0 | `0` | false | `0, INVALIDATE_ALL` |
+| 1 | `1` | true | `a1, INVALIDATE_VADDR` |
+| 2 | `2` | true | `a1, INVALIDATE_VADDR` |
+| 3 | `3` | true | `a1, INVALIDATE_VADDR` |
+
+Thus the earlier enumeration is correct.
+
+**Q2. Independent header definitions**
+
+Found in [src/include/thirdparty/alpha_cpu.h:277](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/thirdparty/alpha_cpu.h:277), inside `_KERNEL`:
+
+```c
+/*
+ * Translation Buffer Invalidation definitions [OSF/1 PALcode Specific]
+ */
+
+#define	ALPHA_TBIA()	alpha_pal_tbi(-2, 0)		/* all TB entries */
+#define	ALPHA_TBIAP()	alpha_pal_tbi(-1, 0)		/* all per-process */
+#define	ALPHA_TBISI(va)	alpha_pal_tbi(1, (va))		/* ITB entry for va */
+#define	ALPHA_TBISD(va)	alpha_pal_tbi(2, (va))		/* DTB entry for va */
+#define	ALPHA_TBIS(va)	alpha_pal_tbi(3, (va))		/* all for va */
+```
+
+These are wrapper macros containing the selector encodings. **They explicitly define negative selectors.** They do not define selector `0`; its observed fallback behavior is not a header requirement.
+
+**Q3. Does the effect differ?**
+
+**Unresolved.** The handler proves that different callback arguments are selected. It does not prove what the callback does with them.
+
+The flush calls are quoted above, but the callback implementation and its Alpha binding are outside your explicit reading scope. Without that trace, neither “only one address actually gets invalidated” nor “both paths produce the same flush/no-op” is established. I would not promote this to a verified functional invalidation defect yet.
+
+**Q4. Smallest repair and observation**
+
+A minimal local repair, correct for every header-defined selector and avoiding unsigned-to-signed conversion assumptions, is:
+
+```c
+if (a0 >= 1 && a0 <= 3)
+```
+
+This sends both negative selectors to the existing `INVALIDATE_ALL` path. Whether that path implements sufficient invalidation remains the Q3 dependency.
+
+A host-side regression can observe the callback’s `(address, flags)` arguments for the six values above. That is a decisive **dispatch oracle**, but it does not establish a guest-visible effect.
+
+**Guest channel: unknown.** If the callback is a no-op or performs the same full flush regardless of flags, this repair has no guest-visible invalidation effect. I have not established either condition.
+
+**Q5. Round scope**
+
+On the supplied descriptions: **six separate candidate rounds**, with `alphafaultclaim` still needing classification as documentation versus behavior. No merger currently has sufficient evidence.
+
+| Candidate | One fix design | One oracle |
+|---|---|---|
+| `alphatbinegsel` | Correct classification of the defined selector encodings. | Expected invalidation callback arguments for each selector. |
+| `alphaswpctxreg` | Return the old context through the ABI-defined result register. | Returned `v0` equals the outgoing context address. |
+| `alphactxfail` | Propagate context-memory failures through a defined failed-switch outcome. | An injected memory failure produces that outcome, without reporting a successful switch. |
+| `alphapteprot` | Return/cache permissions according to the actual translation contract. | Observed access disposition matches independently specified page permissions. |
+| `alphafaultclaim` | If this is only a false comment, document actual fault ownership. | The documented claim is supported by the return/caller control flow. |
+| `alphavmkill` | Replace the terminal path with the architecturally appropriate translation outcome. | That outcome is observed for the affected address class. |
+
+The last four designs are conditional on their premises being verified. In particular, a constant successful return value alone does not establish incorrect permission handling without the caller contract.
+
+`alphafaultclaim` and `alphavmkill` could be reconsidered together only after proving they share a file, one fault-handling repair, and the same fault-delivery oracle. Correcting a comment and preventing termination do not establish that grouping.
+
+**Q6. First and ranking**
+
+**The first repair currently justified by verified behavioral evidence is `alphaswpctxreg`**, accepting your verification: it has a defined ABI failure and a decisive return-value witness. That is a confidence judgment, not a claim that it has the greatest potential severity.
+
+Before scheduling paging-dependent witnesses, establish the page-walk success/failure contract and the reachability of the terminal path. **The claim that `alphapteprot` prevents all guest paging is not established by this review.**
+
+A defensible complete severity ranking is currently unavailable:
+
+- `alphapteprot`, `alphactxfail`, and `alphavmkill` need their claimed effects and witness prerequisites checked.
+- `alphatbinegsel` has confirmed dispatch behavior but unverified functional consequences.
+- `alphafaultclaim`, if documentation only, belongs last in behavioral severity.
+
+The pending scope extension is necessary because your explicit “Read only” list excludes the invalidation implementation and the page-walk/caller trace needed to finish Q3–Q4 and establish Q6’s ordering.

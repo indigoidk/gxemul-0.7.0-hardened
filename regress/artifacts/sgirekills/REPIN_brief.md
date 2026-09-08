@@ -8,6 +8,14 @@ found before the rows are written**, so the useful reply is the weakness, not ag
 
 ---
 
+## 0.  READING SCOPE
+
+**Please read only `src/` and `regress/*.py`.**  Do not read `regress/artifacts/`,
+`tools/pipeline/ledger.json`, `CHANGELOG.md` or `OUTSTANDING_BUGS.md` -- they are this project's
+own archive of a hardening campaign and are not needed for this question.  Everything required is
+inlined below.
+
+
 ## 1.  WHAT THIS IS
 
 Six RE read arms in `dev_sgi_re.c` end the host on a legal 8-byte `ld`.  The round is SANCTIONED

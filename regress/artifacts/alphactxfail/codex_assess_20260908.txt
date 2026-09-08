@@ -1,0 +1,143 @@
+Verdict: **The store claim is true; the load claim assigns responsibility to the wrong layer. Neither helper passes `NO_EXCEPTIONS`.** Failed translations can become committed zero-valued PCB state. I would document `alphactxfail` as an observable, low-severity candidate pending architectural evidence, and keep it separate from `alphaswpctxreg`.
+
+Q1: **Stores return status; loads return data without a failure indication.** Here are the complete definitions from [memory.c:763](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/core/memory.c:763) and [memory.c:886](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/core/memory.c:886):
+
+```c
+int store_64bit_word(struct cpu *cpu, uint64_t addr, uint64_t data64)
+{
+	unsigned char data[8];
+	if ((addr >> 32) == 0)
+		addr = (int64_t)(int32_t)addr;
+	data[0] = (data64 >> 56) & 255;
+	data[1] = (data64 >> 48) & 255;
+	data[2] = (data64 >> 40) & 255;
+	data[3] = (data64 >> 32) & 255;
+	data[4] = (data64 >> 24) & 255;
+	data[5] = (data64 >> 16) & 255;
+	data[6] = (data64 >> 8) & 255;
+	data[7] = (data64) & 255;
+	if (cpu->byte_order == EMUL_LITTLE_ENDIAN) {
+		int tmp = data[0]; data[0] = data[7]; data[7] = tmp;
+		tmp = data[1]; data[1] = data[6]; data[6] = tmp;
+		tmp = data[2]; data[2] = data[5]; data[5] = tmp;
+		tmp = data[3]; data[3] = data[4]; data[4] = tmp;
+	}
+	return cpu->memory_rw(cpu, cpu->mem,
+	    addr, data, sizeof(data), MEM_WRITE, CACHE_DATA);
+}
+```
+
+```c
+uint64_t load_64bit_word(struct cpu *cpu, uint64_t addr)
+{
+	unsigned char data[8];
+
+	cpu->memory_rw(cpu, cpu->mem,
+	    addr, data, sizeof(data), MEM_READ, CACHE_DATA);
+
+	if (cpu->byte_order == EMUL_LITTLE_ENDIAN) {
+		int tmp = data[0]; data[0] = data[7]; data[7] = tmp;
+		tmp = data[1]; data[1] = data[6]; data[6] = tmp;
+		tmp = data[2]; data[2] = data[5]; data[5] = tmp;
+		tmp = data[3]; data[3] = data[4]; data[4] = tmp;
+	}
+
+	return
+	    ((uint64_t)data[0] << 56) + ((uint64_t)data[1] << 48) +
+	    ((uint64_t)data[2] << 40) + ((uint64_t)data[3] << 32) +
+	    ((uint64_t)data[4] << 24) + ((uint64_t)data[5] << 16) +
+	    ((uint64_t)data[6] << 8) + (uint64_t)data[7];
+}
+```
+
+`MEMORY_ACCESS_FAILED` is zero; `MEMORY_ACCESS_OK` is one. Thus `swpctx` really does discard actionable store status. For loads, **the helper discards the status**: its caller cannot distinguish a failed read yielding zero from a successful read of zero. Testing the returned scalar would not fix that.
+
+The 32-bit helpers used for CPC and ASN have the same distinction: `int store_32bit_word(...)` propagates status; `uint32_t load_32bit_word(...)` discards it. See [definitions](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/core/memory.c:794).
+
+Q2: **The flags are `CACHE_DATA`, without either `NO_EXCEPTIONS` or `PHYSICAL`.** `CACHE_DATA` itself is zero. Consequently these accesses invoke translation; the translator receives zero for reads and `FLAG_WRITEFLAG` for writes. [Flag definitions](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/memory.h:116), [translation dispatch](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:241).
+
+Absence of `NO_EXCEPTIONS` does **not** establish that an exception occurs:
+
+- Alpha’s translator does not act on `flags`. Its `not_found` path logs through `fatal()` and returns zero, without setting a guest exception or stopping the CPU. [memory_alpha.c:192](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_alpha.c:192).
+- `fatal()` is a logging function here; it does not terminate execution. [debugmsg.c:384](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/core/debugmsg.c:384).
+- On translation failure, shared `memory_rw` zero-fills the read buffer and returns failure; a write returns failure before accessing the target. It adds no Alpha exception. [memory_rw.c:259](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:259).
+
+So these failures are silent **to guest exception handling**, although diagnostics are printed. The comment claiming that the caller “raises the fault” is not implemented by this call chain.
+
+“Unbacked” needs a separate distinction:
+
+| Condition | Actual behavior |
+|---|---|
+| Failed translation | Failure status; failed read bytes become zero; failed write portion is skipped. |
+| Translated address outside RAM, with no matching device and no configured halt | Reads return zero; writes are dropped; **status reports success**. |
+| Valid RAM lacking an allocated host memblock | Reads return zero successfully; writes allocate backing. This is ordinary sparse RAM behavior. |
+
+The latter two paths are in [memory_rw.c:662](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:662) and [memory.c:539](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/core/memory.c:539). Adding caller status checks would not detect the success-reporting case.
+
+There are exceptions to any blanket “zeroes and continues” description. The nonexistent-memory halt option can stop all CPUs and return failure **before** read-buffer initialization. Device failures have their own behavior. A split read can retain an already successful prefix. Thus neither “every failure is silent” nor “every failed load returns an entirely zero word” is universally correct.
+
+Q3: **Both incomplete saves and corrupted incoming PCB contents are possible, conditional on which accesses succeed.**
+
+The [save/load block](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_alpha_palcode.c:229) accesses these fields:
+
+| PCB offset | Width | Field |
+|---:|---:|---|
+| 0 | 64 bits | `apcb_ksp` |
+| 8 | 64 bits | `apcb_usp` |
+| 16 | 64 bits | `apcb_ptbr` |
+| 24 | 32 bits | `apcb_cpc` |
+| 28 | 32 bits | `apcb_asn` |
+| 32 | 64 bits | `apcb_unique` |
+| 40 | 64 bits | `apcb_flags` |
+| 48 | 64 bits | `apcb_decrsv0` |
+| 56 | 64 bits | `apcb_decrsv1` |
+
+During saving, successful writes remain committed. A translation-failed write leaves its target unchanged, and subsequent saves and the incoming load still happen. There is no rollback. An incomplete save requires mixed outcomes; if every save fails, none of the outgoing image is refreshed.
+
+During loading, `ctx` changes to local `a0` **before** the reads. All nine values are collected into locals, then assigned unconditionally to the PCB. Completely failed translation reads contribute zeroes; successful reads contribute their actual values. If all nine reads fail completely, all nine PCB fields become zero.
+
+A useful qualification: **the incoming PTBR is installed after all reads**, so those reads still use the outgoing PTBR. This is not a progressive switch of translation context between individual loads.
+
+The handler then invalidates translation caches and returns. Translation failure itself leaves `running` unchanged, so instruction dispatch continues; subsequent execution can encounter further failures. The [PAL instruction wrapper](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:53) contains no recovery for this case.
+
+The observable consequences are concrete: PTBR controls subsequent translation, and PCB fields are written back on a later save. However, this block does **not** assign the general-purpose stack-pointer register merely because `apcb_ksp` changes.
+
+Q4: **Privileged reachability is established; a correct-guest failure case and the architectural response are not.**
+
+The handler rejects `swpctx` in user mode. [Privilege gate](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_alpha_palcode.c:183). A bad PCB address or damaged translation state supplied by a guest kernel is a plausible prerequisite. I have not established an ordinary, correctly formed guest context switch that encounters this failure.
+
+Conversely, “therefore always a guest bug” is stronger than the evidence: PCB accesses undergo the emulator’s translation, whose correctness and applicability are separate questions.
+
+**I cannot establish the required Alpha/OSF1 architectural response from a manual present in the reviewed tree.** Your scratchpad inventory supplies no Alpha reference. Source comments and the imported NetBSD header do not settle invalid-PCB behavior. I therefore cannot certify a page fault, machine check, restartability, rollback requirement, or whether these PCB accesses should use physical addressing.
+
+Q5: **The fork contains checked status usage, but I found no checking PAL context-switch sibling.**
+
+I grepped helper names throughout `GXEMUL-SEC/src/`, and context/task-switch terminology:
+
+- The sibling `wrfen` handler also discards `store_64bit_word` status. [cpu_alpha_palcode.c:222](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_alpha_palcode.c:222).
+- Other CPU-file occurrences of these helpers are initialization calls in `cpu_alpha.c`, `cpu_arm.c`, and `cpu_mips.c`; none supplies a checked context-switch precedent.
+- The debugger explicitly assigns store-helper results to `res` and tests `!res`, for both widths. This establishes that their status is meaningful. [debugger_cmds.c:1543](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/debugger/debugger_cmds.c:1543).
+- Alpha’s ordinary load/store implementation checks **direct `memory_rw` calls** and returns on failure before consuming read data or reporting store-conditional success. That is the strongest nearby implementation idiom, though it is not a PAL context switch. [cpu_alpha_instr_loadstore.c:68](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_alpha_instr_loadstore.c:68).
+
+The latter’s comment saying the translator already signalled a fault is also unsupported by the inspected Alpha failure path.
+
+Q6: **My disposition is documented candidate pending architectural evidence.**
+
+Your three possibilities omit the present combination: **observable behavior is proved, but architectural incorrectness is not yet proved**.
+
+This is not “nothing to ignore”: stores expose failure, and loads erase underlying failure information. It is also not “no observable channel”: PCB saveback and PTBR supply one.
+
+But under your architectural criterion, changing behavior for invalid input requires establishing what that input permits or requires. I would not invent a fault or transactional switch rule and use that invention as the oracle. Provisional severity is **low, affecting guest state integrity**; this review establishes no host compromise or unprivileged route.
+
+If promoted, narrow the claim to reported failures being discarded or hidden. Success-reporting accesses outside RAM require a separate examination of the memory layer’s contract.
+
+Q7: **No merger with `alphaswpctxreg`.** Their proximity does not give them one fix or one oracle.
+
+| Row | Fix concern | Oracle concern |
+|---|---|---|
+| `alphaswpctxreg` | Correct result-register assignment | Successful-switch return value appears in the required register |
+| `alphactxfail` | Preserve access status and apply a verified failure policy before continuing/committing | Failed access produces the contractually required state and control flow |
+
+Either correction can exist while the other problem remains. Thus they remain separate issues; **if `alphactxfail` qualifies for a round, it gets its own**.
+
+This was a static source review; no guest sequence or runtime reproduction was performed.

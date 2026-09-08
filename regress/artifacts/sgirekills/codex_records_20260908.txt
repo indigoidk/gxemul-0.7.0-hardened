@@ -1,0 +1,114 @@
+Yes. Several records still disagree with the code.
+
+The probe changed during this review. These findings refer to its latest **546-line version**, which now claims to fire bits 0–10.
+
+1. **Q4: the new “ALL ELEVEN” claim does not match the added calls.**  
+   [The annotation](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/sgi_re_width_probe.py:467) says:
+   > “ALL ELEVEN other latch bits fired first”
+
+   But [the helper signature](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/sgi_re_width_probe.py:255) is:
+   ```python
+   def store(A, addr, op=OP_SW_T0_A3, val="0x12345678"):
+   ```
+   and [an added call](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/sgi_re_width_probe.py:456) is:
+   ```python
+   cmds += store(A, DE_MODE_DST, MODE_LIN_B)
+   ```
+   All six added calls supply the intended value as **`op`**, leaving `val` at its default. They do not perform the register writes described by the comment. Here, the implementation disagrees with the stated intent. The bit-to-enumerator table itself is correct.
+
+2. **Q3: there is no unambiguous replacement contract in the header.**  
+   [The correction](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/sgi_re_width_probe.py:31) says:
+   > “THE TWO PARAGRAPHS ABOVE … ARE NO LONGER TRUE”  
+   > “The contract below is the LIVE one”
+
+   Yet the paragraph immediately **below** says:
+   > “an ordinary 8-byte `ld` … STILL ENDS THE HOST”
+
+   The [actual read implementation](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:490) assigns:
+   ```c
+   odata = (odata << 16) | d->re_tlb_a[tlbi];
+   ```
+   and the common tail delivers `odata`. The five accepting arms and TEX decline are explained farther down, but the reader must reconstruct the live contract from several layers.
+
+   Two independently stale sentences remain: [header line 59](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/sgi_re_width_probe.py:59), “every read arm here still exit(1)s,” and [the per-site note](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/sgi_re_width_probe.py:316), “An 8-byte read still dies.” Those sentences are wrong now.
+
+3. **Q4/Q5: later annotations still describe the earlier cross-bit setup in present tense.**  
+   [The probe’s L2 note](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/sgi_re_width_probe.py:518) says:
+   > “`tex xbit` sweeps the six `*_LEN` bits only”
+
+   [The gate](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gate_arm.sh:1192) likewise says:
+   > “`tex xbit` sets bits 0-5 only”
+
+   Even apart from finding 1, [the current code](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/sgi_re_width_probe.py:450) includes the DE-width and both unmapped-direction accesses, including:
+   ```python
+   cmds += load(A, OUTSIDE, OP_LW_V0_AT)
+   ```
+   These descriptions need an explicit historical qualifier. They describe the superseded setup.
+
+4. **Older DE-kill descriptions remain live.**  
+   Both [the device commentary](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:452) and [probe header](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/sgi_re_width_probe.py:55) call the DE width guard a “width kill.” Its [current branch](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:1179) instead latches a diagnostic and executes:
+   ```c
+   goto de_declined;
+   ```
+   That label reaches the read-response tail and `return 1`.
+
+   Similarly, [gate line 1093](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gate_arm.sh:1093) says the drawing default “is fatal on 254 of 256 top-byte op classes.” The [current default](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:1104) latches its diagnostic and `break`s. Its host-death description is stale.
+
+   The header’s exclusion of **“anything in DEVICE_ACCESS(sgi_de)”** is also too broad now: `tex xbit` includes a DE access and checks session survival. That is incidental DE coverage, though not comprehensive coverage.
+
+5. **The gate still repeats the padded-column error that another comment corrects.**  
+   [Lines 1176–1178](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gate_arm.sh:1176) say:
+   > “makes a check UNSATISFIABLE and the row quietly stops being tested”
+
+   But [the check](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gate_arm.sh:1182) requires:
+   ```bash
+   check "sgi_re row: $v" "$(count "$SGILOG" "^$v  .*ok$")" "1"
+   ```
+   No match produces zero against a required one: **failure**, not silent success. The same stale explanation appears at [line 1088](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gate_arm.sh:1088). The correction at line 1298 already explains the behavior correctly.
+
+   Nearby, “the count is the only thing” preventing lost rows from passing is also overstated: retained named checks detect missing rows independently.
+
+6. **Two read-block summaries have broader scope than their code.**  
+   [Line 376](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/sgi_re_width_probe.py:376) says:
+   > “No row below reads exit status.”
+
+   But [the later catch-all row](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/sgi_re_width_probe.py:511) includes `how`:
+   ```python
+   got = "%s/%s/%s" % (how, ...)
+   ```
+   and expects `"exit0/txt/0x0"`. The sentence needs to name the re-pinned read rows specifically.
+
+   [Lines 393–395](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/sgi_re_width_probe.py:393) describe “these four” TEX rows as having the “store-first shape.” Only the two `tex ld` rows have that nonzero TEX-store setup. [The latch row](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/sgi_re_width_probe.py:410) consists of two loads.
+
+7. **The buffer-depth enumeration omits a value the code computes.**  
+   [The device comment](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:865) says:
+   ```c
+   // bufdepth = 1, 2, or 4.
+   ```
+   Immediately below:
+   ```c
+   int src_bufdepth = 1 << ((src_mode >> 8) & 3);
+   ```
+   The possible values are **1, 2, 4, and 8**. The comment is wrong.
+
+8. **`printed()` does not normalize sign extension.**  
+   [Its comment](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/sgi_re_width_probe.py:239) invokes registers printing “sign/zero-extended” as formatting differences. The implementation is:
+   ```python
+   return "0x%x" % int(m.group(1), 16)
+   ```
+   This removes leading zeroes. It does not equate a sign-extended representation with a zero-extended one. The comment overstates the normalization.
+
+9. **Two older gate records contradict current gate requirements.**  
+   [“Today’s table would read 41/58”](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gate_arm.sh:24) is no longer current: [the gate requires](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gate_arm.sh:115) `"$want" 190`.
+
+   The [older writeback table](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gate_arm.sh:582) says only three cold-word rows enter the general path, “and nothing else.” The [current named requirements](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gate_arm.sh:680) list five, including `A wb word ldrt post4 unal` and `A wb word cold pre4 unal`. The historical boundary needs to be explicit here too.
+
+**Q1 passes:** `SGIRE_W_TEX_RD = 1 << 11` is the last enumerator; `1 << 12` is free. The BADMODE text clearly says its former claim went false and was demoted.
+
+**Q2 passes:** both LINEAR corrections consistently attribute alignment to the CPU mechanisms described by the older comments, rather than to access width.
+
+**Q5’s arithmetic passes:** the probe declares 46 distinct rows, the gate names those same 46, and both denominators are 46. The complete progression is `35 - 6 + 14 + 1 + 2 = 46`. Every named pattern matched exactly one formatted row in static checks.
+
+The `VAL_HI` correction also matches the constants and row construction. No PRETABLE clause-(d) enumeration occurs in these three files, so I did not validate that external record.
+
+I made no changes and ran no guest, probe, or gate. The artifacts directory and ledger were not opened.

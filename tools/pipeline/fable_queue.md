@@ -41,7 +41,7 @@ those panels produced had six or seven seats behind it.
 <!-- BEGIN GENERATED: codex-wall -- edit gen_codex_wall.py, not this block -->
 ### HELD STAGES -- every row awaiting a seat, derived from the ledger
 
-`armbfxwidth32` (assess:fable5,opus5; review:fable5,opus5) · `carrier` (regress:fable5) · `es438` (regress:fable5) · `gdromcondlies` (regress:fable5) · `holdmarkermulti` (regress:fable5) · `lcabadval` (assess:codex,fable5,grok,kimi,opus5; design:fable5; research:fable5) · `lcaconfbus1kill` (design:fable5) · `lcairqstubkill` (design:fable5) · `m88kexcdetectorl2` (design:fable5) · `ns16550` (regress:fable5) · `pcc2c040kill` (assess:fable5; design:fable5; review:fable5) · `pcc2widthkills` (assess:fable5,opus5) · `proberowsubset` (assess:codex) · `sgideprimop` (regress:fable5) · `sgidewidth` (regress:fable5) · `sgimtedepth4dead` (assess:fable5,opus5; review:fable5,opus5) · `sgirekills` (assess:codex,grok,kimi,opus5) · `sgireunmapped` (regress:fable5) · `sgitexindex` (assess:codex,fable5,grok,kimi,opus5) · `sh4sci` (regress:fable5) · `wdccdbmidxfer` (regress:fable5; research:opus5) · `wdcdataoutdrain` (regress:fable5)
+`alphatbinegsel` (assess:fable5,opus5) · `armbfxwidth32` (assess:fable5,opus5; review:fable5,opus5) · `carrier` (regress:fable5) · `es438` (regress:fable5) · `gdromcondlies` (regress:fable5) · `holdmarkermulti` (regress:fable5) · `lcabadval` (assess:codex,fable5,grok,kimi,opus5; design:fable5; research:fable5) · `lcaconfbus1kill` (design:fable5) · `lcairqstubkill` (design:fable5) · `m88kexcdetectorl2` (design:fable5) · `ns16550` (regress:fable5) · `pcc2c040kill` (assess:fable5; design:fable5; review:fable5) · `pcc2widthkills` (assess:fable5,opus5) · `proberowsubset` (assess:codex) · `sgideprimop` (regress:fable5) · `sgidewidth` (regress:fable5) · `sgimtedepth4dead` (assess:fable5,opus5; review:fable5,opus5) · `sgirekills` (assess:codex,grok,kimi,opus5) · `sgireunmapped` (regress:fable5) · `sgitexindex` (assess:codex,fable5,grok,kimi,opus5) · `sh4sci` (regress:fable5) · `wdccdbmidxfer` (regress:fable5; research:opus5) · `wdcdataoutdrain` (regress:fable5)
 
 *** TWO DIFFERENT KINDS OF HOLD APPEAR BELOW AND THEY MUST NOT BE READ ALIKE. ***
 
@@ -60,7 +60,7 @@ marker can mask another gap* -- section H cannot see a shortfall that a differen
 **Neither kind is a blank.** A blank cell and a seat failure must not look alike, and an
 allocation is a third thing again: recorded by seat name, per row, with the reason.
 
-**This is ONE outage plus one allocation, not 22 decisions, and it is written once rather than once per panel.**
+**This is ONE outage plus one allocation, not 23 decisions, and it is written once rather than once per panel.**
 **THE CODEX HISTORY, kept because it calibrates what a wall looks like.** Across ten panels it
 produced the identical signature every time -- the echoed brief followed by the usage-limit
 error -- in files of 26,992 / 11,180 / 10,036 / 8,323 / 12,414 / 11,938 / 10,726 / 16,694 /
@@ -2274,3 +2274,35 @@ rule exists and I did not apply it, or it does not say what I think it says.** W
 *Secondary, and cheap: is the 16-row enumeration complete over `GENCTL & C040` × `warned`, or is
 there a fifth cell? Three rows past the product came from seats — collateral state (three seats,
 independently) and per-session liveness (the substitute seat, alone).*
+
+### `alphatbinegsel` — the OS's "invalidate everything" clears ONE page, and the severity raise is mine
+
+**Source-confirmed by two seats and re-verified by me; witness DESIGNED, not built.**
+`ALPHA_TBIA()` is `alpha_pal_tbi(-2, 0)`; `a0` is a `uint64_t` with no signed cast; `a0 >= 1` is
+TRUE for `-2`; the call takes the **VADDR** arm with `a1 = 0`. So the primitive that means
+*invalidate every TLB entry* invalidates **cached virtual page zero and nothing else** — and the
+Alpha fast path goes on consuming the surviving `host_load`/`host_store` pointers into stale
+physical backing.
+
+#### 7n-1. (HIGH) Is the severity raise right — and it is MINE, not a seat's
+
+I raised this med → high. The facts are the seats'; **the ranking is the one judgment in this row
+that is not a measurement.** A documented OS primitive silently under-flushing during ordinary
+operation put it, for me, with the other HIGH rows. **Confirm or correct.**
+
+#### 7n-2. (HIGH) Ship the COARSE repair, or does the round owe the finer semantics?
+
+`if (a0 >= 1 && a0 <= 3)` fixes the misdispatch and does **not** give `ALPHA_TBIAP()` its ASM=0
+selectivity. A seat supplied the accurate CHANGELOG sentence and its limit. Is shipping the coarse
+repair with that disclosed correct?
+
+#### 7n-3. (MED) Ordering — the input to the existing ranking has changed
+
+A file-reading seat ranked `alphaswpctxreg` FIRST and called that *"a confidence judgment, not a
+claim that it has the greatest potential severity"* — explicitly because **this** row's consequences
+were then unverified. They are now verified. Does that move this row first?
+
+*Stage state: assess ran two targeted briefs (codex on the dispatch and the callback trace; grok on
+the witness design after codex refused it) plus four packet-fed seats. **opus5 and fable5 are
+preserved for this adjudication and agy is the measurement reserve, so no flagship seat could run.**
+Held and queued as one action.*

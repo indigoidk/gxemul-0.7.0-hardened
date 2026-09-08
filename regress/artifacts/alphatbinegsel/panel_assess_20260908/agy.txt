@@ -1,0 +1,68 @@
+**Verdict: Confirmed against source. The unsigned comparison in `PAL_OSF1_tbi` causes `ALPHA_TBIA()` (`op = -2`) and `ALPHA_TBIAP()` (`op = -1`) to misdispatch to `INVALIDATE_VADDR` for page 0 instead of `INVALIDATE_ALL`, leaving all other cached translations live.**
+
+---
+
+### Source Verification of Brief Premises
+
+* **PALcode dispatch operand**: In [`src/cpus/cpu_alpha_palcode.c:165`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_alpha_palcode.c#L165), `a0` is declared `uint64_t a0 = cpu->cd.alpha.r[ALPHA_A0]`. At [lines 321–324](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_alpha_palcode.c#L321-L324), `if (a0 >= 1)` evaluates `-2` (`0xfffffffffffffffeULL`) as true without any active signed cast, dispatching `a1 = 0` to `INVALIDATE_VADDR`.
+* **OS wrapper definitions**: [`src/include/thirdparty/alpha_cpu.h:281-285`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/thirdparty/alpha_cpu.h#L281-L285) defines `ALPHA_TBIA()` as `alpha_pal_tbi(-2, 0)` and `ALPHA_TBIAP()` as `alpha_pal_tbi(-1, 0)`.
+* **Dyntrans invalidation branches**: In [`src/cpus/cpu_dyntrans.c:1228-1288`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c#L1228-L1288), `INVALIDATE_VADDR` invalidates only entries matching `(vaddr_page & cpu->vaddr_mask) == (addr_page & cpu->vaddr_mask)`. With `vaddr_mask = (int64_t)-1` ([`src/cpus/cpu.c:144`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu.c#L144)) and 8 KiB pages ([`src/cpus/cpu_alpha.c:51`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_alpha.c#L51)), this invalidates only virtual page 0. `INVALIDATE_ALL` loops over all valid entries unconditionally.
+* **Debugger trap**: In [`src/debugger/debugger.c:781-797`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/debugger/debugger.c#L781-L797), when `debugger_n_steps_left_before_interaction <= 0`, `debugger()` calls `invalidate_translation_caches(..., 0, INVALIDATE_ALL)`. Multi-step debugging flushes the TLB between steps unless executed in a single `step N`.
+* **K0SEG bypass**: In [`src/cpus/memory_alpha.c:62`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_alpha.c#L62), `ALPHA_K0SEG_BASE` to `ALPHA_K0SEG_END` translations return immediately without consulting `ptbr`.
+* **No Alpha device exception**: [`src/cpus/memory_rw.c:608-624`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c#L608-L624) has `#ifdef` arms for `MEM_MIPS` and `MEM_M88K` only; `ALPHA_KENTRY_MM` ([`src/include/thirdparty/alpha_cpu.h:250`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/thirdparty/alpha_cpu.h#L250)) has zero consumers in the tree.
+
+---
+
+### Answers to Panel Questions
+
+#### Q1. Is the severity right?
+**CONFIRMED (High Severity).**
+`ALPHA_TBIA()` is a core architectural primitive invoked during process context switching, page remapping, and address space teardown. Silently dropping broad TLB invalidations causes the guest OS to retain stale translation cache entries (`host_load`/`host_store` pointers in [`src/cpus/cpu_alpha_instr_loadstore.c:156`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_alpha_instr_loadstore.c#L156)). Subsequent loads and stores bypass page-table checks and mutate or read stale physical memory during normal execution. This is a silent memory and protection integrity failure across address spaces.
+
+#### Q2. Is the COARSE repair the right thing to ship?
+**YES.**
+The proposed repair `if (a0 >= 1 && a0 <= 3)` routes selectors 1–3 to `INVALIDATE_VADDR` and negative selectors (-1, -2) to `INVALIDATE_ALL`. 
+GXemul's translation cache architecture does not track ASM (Address Space Match) bits or ASN tags per TLB entry in `vph_tlb_entry` / `l1_64` tables. Flushing all entries on `ALPHA_TBIAP()` (`a0 = -1`) is conservative and safe: it forces subsequent accesses to global pages to re-walk the page table. Implementing fine ASM=0 filtering would require re-architecting the emulator's generic dyntrans cache data structures without functional benefit. Shipping the coarse repair with the disclosed limitation is correct.
+
+#### Q3. What is the smallest edit that reinstates this defect while looking correct?
+Any of the following subtle edits reinstates the defect while appearing plausible to a reviewer:
+
+1. **Unsigned 32-bit cast**:
+   ```c
+   if ((uint32_t)a0 >= 1)
+   ```
+   *Rationale*: Looks like narrowing to the 32-bit PALcode argument convention, but `(uint32_t)-2` is `0xfffffffe >= 1` (true), sending `-2` back to `INVALIDATE_VADDR`.
+2. **Simplified non-zero check**:
+   ```c
+   if (a0 > 0)
+   ```
+   *Rationale*: Appears to be a clean equivalent of `a0 >= 1`, but because `a0` remains `uint64_t`, `(uint64_t)-2 > 0` is true.
+3. **Disjunction typo**:
+   ```c
+   if (a0 >= 1 || a0 <= 3)
+   ```
+   *Rationale*: Typo (`||` instead of `&&`) makes the condition true for all 64-bit values.
+4. **Target misdirection in the else arm**:
+   ```c
+   if (a0 >= 1 && a0 <= 3)
+       cpu->invalidate_translation_caches(cpu, a1, INVALIDATE_VADDR);
+   else
+       cpu->invalidate_translation_caches(cpu, 0, INVALIDATE_VADDR);
+   ```
+   *Rationale*: The guard looks fixed, but the fallback branch still specifies `INVALIDATE_VADDR` instead of `INVALIDATE_ALL`.
+
+#### Q4. Is there a channel the witness above would MISS?
+The witness (fill mapping $\to$ remap L3 PTE via K0SEG $\to$ `ALPHA_TBIA()` $\to$ load and observe `VAL_OLD` vs `VAL_NEW`) would become vacuous or miss the defect under the following conditions:
+
+1. **Page 0 Test VPN (`VPN < 0x2000`)**: If the test VPN is page 0 (`0x0000`), HEAD's defective `INVALIDATE_VADDR` with `a1 = 0` flushes page 0 anyway, making HEAD return `VAL_NEW` and turning the defect row green.
+2. **Polluted `a1` Register (`a1 == test VPN`)**: If `a1` is not explicitly set to 0 before `call_pal 0x33`, HEAD flushes `a1`, masking the bug.
+3. **Value Collision (`VAL_OLD == VAL_NEW`)**: If the old and new pages contain identical data (or uninitialized zeroes), observing the load cannot distinguish a cached hit from a re-walk.
+4. **Split Debugger Steps**: If the fill, remap, `tbi`, and read are split across separate debugger prompt interactions, [`src/debugger/debugger.c:795`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/debugger/debugger.c#L795) executes `INVALIDATE_ALL`, causing both builds to re-walk and return `VAL_NEW`.
+5. **Direct-mapped access**: Accessing via K0SEG or when `ptbr == 0` bypasses the 3-level page table entirely.
+
+#### Q5. Ordering
+**`alphatbinegsel` should go FIRST.**
+Now that the consequences and guest witness feasibility are verified:
+1. **Severity**: `alphatbinegsel` is a high-severity silent memory corruption bug affecting all address-space switches and page table updates. `alphaswpctxreg` is medium severity (writing return value to `a0` rather than `v0`).
+2. **Witnessability**: `alphatbinegsel` has a clear differential observable (`VAL_OLD` vs `VAL_NEW`) across a single `step N` execution on `-E alpha -e alphabook1`.
+3. **No circular dependency**: While `alphaswpctxreg` resides in `swpctx`, `swpctx`'s internal context arming (`apcb_ptbr`) functions regardless of whether `v0` or `a0` receives the old context address.

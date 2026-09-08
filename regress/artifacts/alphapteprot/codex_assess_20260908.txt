@@ -1,0 +1,105 @@
+**Verdict: Every successful Alpha walk returns `2`, meaning read/write under a documented contract. PTE protection is ignored. “EVERY walk gets cached” is overstated; the underlying defect is missing Alpha protection enforcement, affecting both cached and uncached accesses.**
+
+**Q1. Actual returns**
+
+The completed page walk ends with this exact code:
+
+```c
+(*return_paddr) = (ALPHA_PTE_TO_PFN(pte3) << pageSizeShift)
+    | (vaddr & ((1ULL << pageSizeShift) - 1));
+
+// TODO.
+return 2;
+```
+
+Source: [memory_alpha.c:186](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_alpha.c:186).
+
+The function’s cases are:
+
+| Case | Result |
+|---|---|
+| Kernel direct-mapped space | `return 2;` at line 64 |
+| Kernel bootstrap mapping when the page-table base is zero | `return 2;` at line 90; one hardcoded case exits beforehand |
+| Three-level walk with accessible table backing and all three PTEs valid | `return 2;` at line 190 |
+| Missing table backing or an invalid PTE at any level | Diagnostic, then `return 0;` at line 198 |
+
+The only PTE access checks are `ALPHA_PTE_VALID` at lines 120, 141 and 163. There is **no protection-dependent successful return**, and `flags` is unused. The constant-return premise is correct.
+
+**Q2. Return contract**
+
+It is documented. [memory.h:141](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/memory.h:141) defines:
+
+| Value | Name | Meaning |
+|---|---|---|
+| `0` | `MEMORY_ACCESS_FAILED` | Translation/access denied or failed |
+| `1` | `MEMORY_ACCESS_OK` | Successful readable-only mapping |
+| `2` | `MEMORY_ACCESS_OK_WRITE` | Successful readable and writable mapping |
+| `256` | `MEMORY_NOT_FULL_PAGE` | Additional flag suppressing whole-page caching in `memory_rw` |
+
+The explicit prose authority is [memory_arm.c:106](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_arm.c:106):
+
+```c
+ *  Return values:
+ *      0  Failure
+ *      1  Success, the page is readable only
+ *      2  Success, the page is read/write
+ *
+ *  If this is a 1KB page access, then the return value is ORed with
+ *  MEMORY_NOT_FULL_PAGE.
+```
+
+The consumer agrees. On ordinary RAM data accesses, [memory_rw.c:746](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:746) passes **`ok - 1`** as the cache’s write permission: `1 → 0`, `2 → 1`. Alpha’s cache installer then does:
+
+```c
+l3->host_load[x3] = host_page;
+l3->host_store[x3] = writeflag? host_page : NULL;
+```
+
+Source: [cpu_dyntrans.c:1654](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1654).
+
+Thus **both `1` and `2` are cacheable**; caching a read-only mapping is legitimate. These are translation results, distinct from `memory_rw`’s own success/failure return.
+
+“EVERY walk” needs qualification: cache installation also depends on backing availability, cache callbacks, `NO_EXCEPTIONS`, and device flags. Instruction fills use a different write-permission rule. See [memory_rw.c:526](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:526) and [memory_rw.c:728](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:728).
+
+**Q3. What is lost, and is it enforced elsewhere?**
+
+The walker ignores the mode-dependent read/write permissions and fault-on-read/write/execute bits defined in [alpha_cpu.h:219](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/thirdparty/alpha_cpu.h:219). Searching this fork’s `src/` found those protection masks only in their definitions.
+
+**Yes: an architecturally write-protected mapping to ordinary backed RAM can receive a writable cache entry.** The walker reports `2`; the data-access consumer converts that to write permission; Alpha’s fast store uses `host_store` and writes through that pointer without another PTE check. See [cpu_alpha_instr_loadstore.c:155](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_alpha_instr_loadstore.c:155) and its [store implementation](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_alpha_instr_loadstore.c:243).
+
+The architectural expectation is explicit: disabling the applicable KWE/UWE permission requires an access-violation fault on a store. See the [Alpha Architecture Reference Manual, Table 17–3](https://docs.alexrp.com/alpha/alpha_4th.pdf#page=510).
+
+**The slow path also accepts the prohibited store.** `memory_rw` supplies `FLAG_WRITEFLAG`, but rejects only a zero translation result ([memory_rw.c:248](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:248)). Alpha returns `2`; the RAM path eventually performs the write ([memory_rw.c:778](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:778)). The physical backing helper has no guest-PTE protection check either ([memory.c:539](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/core/memory.c:539)).
+
+Consequently, changing the successful return to `1` alone would be insufficient: denied write requests must themselves fail.
+
+There is also no implemented Alpha MM-fault dispatch here. `ALPHA_KENTRY_MM` and `ALPHA_MMCSR_*` have definitions but no consumers; `kentry` entries are initialized and assigned, never used to dispatch. The comments claiming the translator or caller “already signalled” a fault are unsupported by the implementation.
+
+One qualification to the supplied RAM premise: base RAM is created through [memory_new](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/core/emul.c:484). The `DM_EMULATED_RAM` registration found in this source is the [RAM-mirror branch](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_ram.c:194), which also includes `DM_DYNTRANS_WRITE_OK`. This does not change the conclusion that `2` is cacheable.
+
+**Q4. Existing in-tree idiom**
+
+Two direct comparisons establish what Alpha is missing:
+
+- **M88K** rejects writes when accumulated permissions contain `PG_RO`, then returns:
+  ```c
+  return (accumulated_flags & PG_RO)? 1 : 2;
+  ```
+  See [memory_m88k.c:338](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_m88k.c:338).
+- **ARM’s MMU walker** calculates permission from the descriptors and current mode, requires `access > writeflag`, and returns that permission, optionally ORed with the no-cache flag. Otherwise it takes the permission-fault path. See [memory_arm.c:233](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_arm.c:233).
+
+The established idiom combines **request-time permission enforcement** with **permission-dependent cache metadata**.
+
+**Q5. Observable channel**
+
+The concrete channel is **guest RAM contents**: a prohibited write changes bytes that should remain unchanged. Internal cache state also exposes the incorrect writable mapping through `host_store`.
+
+Architectural fault delivery is another expected channel, but Alpha’s implementation lacks that machinery. Therefore “protection is unmodelled, so nothing can observe the error” does **not** follow: memory contents remain observable.
+
+**Q6. Severity and disposition**
+
+Using your root-cause distinction, I would file this as an **Alpha MMU protection-fidelity gap with observable guest-memory correctness consequences**. Protection enforcement is absent across both access paths; there is no working slow-path policy that caching alone defeats.
+
+Its functional impact is substantial for software relying on page permissions: architecturally protected memory can change without the required fault. A documented-only disposition could record unsupported Alpha protection, but would not establish harmless behavior. This analysis establishes neither host-memory corruption nor a host security-boundary failure.
+
+These conclusions come from static source analysis; no guest sequence was constructed or executed.

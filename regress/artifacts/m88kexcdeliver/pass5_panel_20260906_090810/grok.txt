@@ -1,0 +1,32 @@
+I'll start from the repo and the repair sources, then check the (d) enumeration against the shipped composite rather than ratifying the brief.Git is blocked in this mode, so I’ll read the exception path, probe, and table artifacts directly.Settled PSR bits match the header. Next I’ll read the exception function and the eleven dispositions so the floor question is against the composite, not the packet.I'll verify the instruction-side raises, the stop string, Table 6-3 against the manual, and the eleven dispositions before deciding close vs. one more.**CLOSE THE CHAIN.** No clean-sweep mutant in the (d) enumeration of the shipped composite (#502 fix + probe v5). Of the eleven dispositions, the L4 *“four LOW rows filed by (vii)”* is the one that is wrong.
+
+### The floor question
+
+`m88k_exception()` is the function boundary. Dominating predicates of the composite: switch 1’s class labels (`implemented = true` on 4–10); fallback `vector < 128 && !implemented`; re-route `PSR & SFRZ` and `!is_trap`; tail `vector < USER_TRAPS_START` and those same labels. Body-tested joints: class × SFRZ × is_trap. MODE is never tested in this function (only OR’d in; callers `X(tb0)` / `X(ldcr)` / `X(prom_call)` test it) — that is why it is clause (e) unless a row already holds the cell.
+
+Single-operand (d) forms that used to sweep v4 are now single-killer or four-killer, from artifacts I opened:
+
+| mutant | score | killer |
+|---|---|---|
+| `implemented = (PSR & MODE)` at OVERFLOW | 28/29 (`M_OVFSUPONLY.out`) | `uovf` HALT |
+| same at MISALIGNED | 28/29 | `umisalign` HALT |
+| `!is_trap && vector == MISALIGNED` | 25/29 (`M_SFRZMIS.out`) | four `err*` STOP at the class entry |
+| `!is_trap && vector != OVERFLOW` (and DIV0/PRIV/UNIMPL twins) | 28/29 | the matching `err*` |
+
+The canonical extra conjunct on the re-route, `if (!is_trap)` → `if (!is_trap && (PSR & MODE))`, is in-enumeration and is **not** a sweep: `errpriv` / `errunimpl` are MODE-clear frozen non-traps (handler `stcr` of `PSR_FRZUSER=0x00000003`, then `ldcr` / `prom_call`). A two-axis extra conjunct that exempts only user-mode frozen DIV0/OVF/MISALIGNED would go 29/29; that is the contract’s disclosed `{MODE}×{SFRZ}×{class}` triple, generating-set clause (e), not floor.
+
+Equivalent / dead (green for a reason, already disclosed): `implemented = is_trap` or `implemented = MODE` at BOUNDS/ERROR (no instruction raise; user `tb1` naming them is PRIVILEGE — `X(tb0)`); re-route `vector != BOUNDS/ERROR` (no non-trap route); tail arms are bare `break`s so an `is_trap` filter on tail entry does not change an observable.
+
+**Denominator I close on** (function writes, not the packet’s list): implemented per class 4–10 × instruction/*tb (M_ISTRAP, M_ERRORDROP) × MODE where a user raise exists (udiv0, priv/privtb, unimpl, umisalign, uovf; BOUNDS/ERROR disclosed); fallback on/off/stop (M_REVERT / M_DELIVERALL / M_NOSTOP; resid50, sfu1h); `{SFRZ}×{is_trap}` four cells including frozen-shadow polarity (error, trapfrozen, M_SFRZTRAP, M_UPDSHADOWTRAP) and `{SFRZ set, !is_trap}×{class}` five reachable classes (error, errovf, errdiv0, errpriv, errunimpl); tail labels + bound (M_NAIVE, M_TAILLE, usertb); PSR OR `{SFRZ,IND,SFD1,MODE,C}` (M_NOSFRZ, M_NOIND, M_NOSFD1 1/29, M_NOMODE, ovfc); EPSR save vs frozen no-save; shadows including dslot else-arm as implemented; VBR; LEVEL not ERROR/WARNING; vector scaling. Still disclosed, not floor: `{class}×{delay_slot}` beyond DIV0; the MODE×SFRZ×class triple for MISALIGNED/OVF/DIV0; M_DELAYALWAYS; DMT; SSBR; fcr2/4/5; first-exception SFU1; exact INFO; vectors 0–3 tails.
+
+HEAD `probe_v5_head.out` is 2/29 (usertb DELIVER, resid50 HALT, sfu1h STOP on vector 0x008). Fix `probe_v5_fix_final.out` / `killtable5/BASE_final.out` are 29/29.
+
+### Which of the eleven is wrong
+
+The two class closures, the classifier refine (`halted = diag ∧ "machines stopped"` — `emul.c` is the one stop string; `"stopped" in tr` had made that term dead), Table 6-3 (the table at `:8777` copies XIP/NIP/FIP; delay-slot values are UM 6.2 `:2093-2104`), the UNFROZEN shadows sentence, killtable4b in the gate comment, sfu1h HEAD=STOP (`probe_v5_head.out`), the filing `m88ksfrzfatal`, and the DMT “both stand” ruling all hold.
+
+**(vii) named three rows** (`m88kexctaildefault`, `m88ktbnd`, `m88kmxmkill`). Calling that L4 “four LOW rows filed by (vii)” folds the separate filing into the wrong count. The blocks were owed; the four is not.
+
+Residual, not one of the eleven: `gate_m88k_rounding.sh` still titles the pin `"23 fault rows"` while grepping `M88KEXC_RESULT=29/29` (functional, label stale), and `OUTSTANDING_BUGS.md`’s `m88kdslotshadow` line still attributes `NIP = target` to Table 6-3. Fold before commit; neither is a floor breach.
+
+Premises 1–7 checked against `m88k_psl.h`, `cpu_m88k.c` (`m88k_exception`, `m88k_stcr` case PSR: MODE-clear warns and stores), `cpu_m88k_instr.c` (`X(divu)` SFD1 before divisor==0; `X(prom_call)` user → UNIMPLEMENTED; `X(tb0)` user ∧ vector<128 → PRIVILEGE, `is_trap==0`), `emul.c` `"All machines stopped."`. agy deliberately not fired. No gate/probe run from this seat; scores are from the named artifacts above.

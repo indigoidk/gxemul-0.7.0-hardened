@@ -1,0 +1,79 @@
+**Verdict: both a guest-visible nondeterminism defect and a bounded information-exposure defect.** The source establishes a path from uninitialised emulator storage to guest memory; it does not establish sensitive contents or measurable severity. Two qualifications matter: RGB GET reads only three bytes, and zero-initialisation does not remove the `random()` behaviour.
+
+**Q1. PUT:** Each cell below is **bytes written by the switch / uninitialised bytes transferred**. Counts follow the current [PUT switch](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:307).
+
+| Colour type | Depth 1 | Depth 2 | Depth 4 | Depth 8 |
+|---|---:|---:|---:|---:|
+| CI | 1 / 0 | 1 / **1** | 1 / **3** | 1 / **7** |
+| RGB | 1 / 0 | 2 / 0 | 4 / 0 | 4 / **4** |
+| RGBA | 1 / 0 | 2 / 0 | 4 / 0 | 4 / **4** |
+| ABGR | 1 / 0 | 2 / 0 | 4 / 0 | 4 / **4** |
+| YCRCB, through `default` | 1 / 0 | 2 / 0 | 4 / 0 | 4 / **4** |
+| Each other encoding, `0x40` through `0xe0` | 1 / 0 | 2 / 0 | 4 / 0 | 4 / **4** |
+
+`random()` **initialises** its four destination bytes, although their values are objectionable for a separate reason.
+
+There are:
+
+- **6 affected combinations out of 16** for the four explicitly handled types.
+- **7 out of 20** including the fifth named type, YCRCB.
+- **18 out of 64** across all sixteen encodings allowed by the [type mask](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/thirdparty/crmfbreg.h:328): three CI combinations plus depth 8 for each other encoding.
+
+These are colour-type × byte-depth counts. They assume the call passes the coordinate/TLB/pointer guards and reaches writable guest RAM. No colour/depth pairing validation prevents those combinations. The default arm’s [`fatal()` only logs](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/core/debugmsg.c:384), so it does not prevent the transfer. The RAM path [copies the requested bytes](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:778).
+
+**Q2. GET:** Assuming the read supplies all `bufdepth` bytes, the following counts are **uninitialised bytes consumed by recombination**:
+
+| Colour type | Bytes recombined | Depth 1 | Depth 2 | Depth 4 | Depth 8 |
+|---|---|---:|---:|---:|---:|
+| CI | `buf[0]` | 0 | 0 | 0 | 0 |
+| RGB | `buf[0..2]` | **2** | **1** | 0 | 0 |
+| RGBA | `buf[0..3]` | **3** | **2** | 0 | 0 |
+| ABGR | `buf[0..3]` | **3** | **2** | 0 | 0 |
+| YCRCB, through `default` | `buf[0..3]` | **3** | **2** | 0 | 0 |
+| Each other encoding | `buf[0..3]` | **3** | **2** | 0 | 0 |
+
+Thus **6/16**, **8/20**, or **30/64**, using the same populations as Q1. The current [RGB recombination](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:373) never reads `buf[3]`.
+
+The unwritten elements are **uninitialised on every invocation**, including the first. Reused stack storage can physically contain bytes from an earlier call—or unrelated earlier work—but there is no persistent previous-call buffer in the language semantics. Automatic storage becomes indeterminate again on each execution of the declaration. [C11 draft, §6.2.4 and §6.7.9](https://www.open-std.org/jtc1/sc22/wg14/www/docs/n1570.pdf)
+
+Those bytes participate directly in the assignment to `*color`, reaching the caller’s object. In [rectangle drawing](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:1007), the source GET updates `color`, which can subsequently reach the destination PUT. Other GETs update `oldcolor` for raster operations. **Not every affected GET necessarily exposes every affected byte:** subsequent processing, truncation or suppression can discard them.
+
+The current tiled MTE constructs CI/1, CI/2, RGBA/4 and CI/8. Its successful GETs therefore avoid this short-read recombination problem; its CI/2 and CI/8 PUTs remain affected. See the [MTE mode construction and calls](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:1498).
+
+The GET table assumes a fully supplied read. The helper ignores the memory operation’s return value; a read leaving additional bytes untouched can broaden the problem.
+
+**Q3. Exposure:** These are bytes from the emulator process’s own automatic storage. Guest output can consequently depend on host execution history, and previously stored process data can cross into guest-visible memory. That supports **both classifications**.
+
+The bound here is up to **seven unwritten bytes per PUT**, or **three bytes incorporated into a GET result**. This defect does not require reading beyond `buf[8]`. The contents might be zeros, guest-derived data, or other process data. Source inspection alone does not demonstrate secrets, another process’s memory, or a reliable arbitrary host-memory read.
+
+**Q4. Smallest fix:** Replace the declaration with:
+
+```c
+uint8_t buf[8] = {0};
+```
+
+That is equivalent here to immediately clearing all eight bytes with `memset`.
+
+**It preserves the output of otherwise defined paths whose consumed bytes were already initialised.** PUT overwrites the same bytes before transferring them; GET overwrites the requested bytes before recombination. Transfer addresses and lengths remain unchanged. Previously unwritten bytes acquire a defined zero value.
+
+This fixes buffer initialisation; it does not establish correct hardware semantics for unsupported formats or depths.
+
+The cost is an eight-byte initialisation each time execution reaches the declaration, subject to compiler elimination of redundant stores. It adds no allocation or guest-memory transaction. I have not measured its runtime cost.
+
+**Q5. Two rounds:** I agree with treating these as two separately scoped defects, but not with the oracle argument literally. One test suite can check multiple independent properties; one CI/depth-8 observation cannot establish YCRCB correctness.
+
+The claimed “half-fix” needs precision:
+
+- Zero-initialisation fixes the **four unwritten tail bytes** of default PUT at depth 8.
+- It also fixes default GET’s recombination of bytes beyond a short read.
+- It leaves **all four `random()` calls**, their assigned bytes, and their PRNG-state effects intact.
+
+Therefore, it fixes overlapping **uninitialised-buffer behaviour**, not half of the four random assignments. If `sgirandomcolour` includes those tail/GET cases, its scope overlaps this row and that overlap should be recorded explicitly. Under your stated definition—default PUT filling bytes with `random()`—that defect remains.
+
+**Q6. Observable:** The value channel is **destination guest RAM**, including bytes that scanout may ignore. For GET, it is the returned `*color` and any affected bytes preserved by a later destination write. The existing diagnostic text does not distinguish initialised from uninitialised storage.
+
+**A single ordinary run cannot reliably distinguish fixed from unfixed.** Uninitialised storage can happen to contain zeros or a stable pattern; source inspection cannot establish how often. Repeated identical output also does not prove initialisation.
+
+An observation of whether bytes are initialised, using instrumentation such as [MemorySanitizer](https://clang.llvm.org/docs/MemorySanitizer.html), can distinguish uninitialised zeros from deliberately initialised zeros. Copying may propagate that state before a diagnostic occurs, so consumption matters.
+
+This was source analysis only; I made no edits or runtime measurements.

@@ -1,0 +1,20 @@
+VERDICT: Q1 high confirmed; Q2 coarse repair acceptable with disclosure; Q3 `if (a0 != 0 && a0 != (uint64_t)-1)`; Q4 yes, if old/new data match; Q5 not checkable from packet.
+
+**Q1 — Severity**  
+READ: packet states a documented OS primitive silently clears one page instead of all, and a guest can then reach stale physical backing.  
+REASONED: that is high severity — it breaks memory isolation and can cause guest-visible corruption or information leakage. Confirm high.
+
+**Q2 — Coarse repair**  
+READ: proposed repair `if (a0 >= 1 && a0 <= 3)` sends both negative selectors to INVALIDATE_ALL; it does not implement ASM=0 selectivity for `ALPHA_TBIAP()`.  
+REASONED: over-invalidation is safe for correctness; it only costs performance. Shipping the coarse repair with the limit disclosed is acceptable unless the round requires architectural performance fidelity or exact per-process semantics. The packet does not state such a requirement.
+
+**Q3 — Smallest edit that reinstates the defect while looking correct**  
+REASONED: change the guard to `if (a0 != 0 && a0 != (uint64_t)-1)`.  
+READ: `-2` is neither `0` nor `(uint64_t)-1`, so it still takes the VADDR branch. This looks like an attempt to special-case `ALPHA_TBIA()`/`ALPHA_TBIAP()` but misses `-2`.
+
+**Q4 — Witness miss**  
+REASONED: yes. If the remapped PTE points to a physical page whose contents at the observed offset equal the old page’s contents, the load returns the same value and the row cannot distinguish stale from correct. The witness must use distinct sentinel values or check a side effect that differs between old and new mappings.
+
+**Q5 — Ordering**  
+READ: brief says this row’s consequences are now verified, but does not provide the severity or impact of `alphaswpctxreg`.  
+REASONED: cannot rank without that fact. Need one fact: relative severity/impact of `alphaswpctxreg`. If this row is high and verified, it may go first, but that is not established from the packet.

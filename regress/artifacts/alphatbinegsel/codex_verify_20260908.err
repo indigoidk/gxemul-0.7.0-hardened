@@ -1,0 +1,767 @@
+Reading additional input from stdin...
+OpenAI Codex v0.153.4
+--------
+workdir: C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+model: gpt-6-astra
+provider: openai
+approval: never
+sandbox: read-only
+reasoning effort: max
+reasoning summaries: none
+session id: 01a08003-751f-7731-b778-c81c5e28cb5a
+--------
+user
+# alphatbinegsel -- does the TLB-invalidate selector lose its negative cases?
+
+## 0. READING SCOPE
+
+Read only:
+
+* `src/cpus/cpu_alpha_palcode.c` -- the `tbi` handler
+* the header that defines the selector constants (find it; I believe it is under
+  `src/include/thirdparty/`, but do not take that from me)
+* `src/cpus/cpu_alpha.c` / `src/include/cpu_alpha.h` only if the register plumbing is needed
+
+Please do NOT read `regress/artifacts/` or `tools/pipeline/ledger.json`.
+
+The tree under review is `GXEMUL-SEC/src/`. There is another `src/` at the project root which is
+pristine 2021 upstream -- ignore it. Line numbers disagreeing with this brief by hundreds mean you
+have the wrong copy.
+
+## 1. THE QUESTION
+
+Ordinary emulator-correctness review of an operand's signedness. An earlier seat wrote, on a brief
+about something else:
+
+> *"Local `a0` is unsigned. Enumerating the comparison gives `-2 -> VADDR`, `-1 -> VADDR`,
+> `0 -> ALL`, `1 -> VADDR`, `2 -> VADDR`, `3 -> VADDR`. The header's independent definitions require
+> all-entry and all-per-process invalidation for the negative selectors."*
+
+**I have NOT verified this.** It is one comparison plus the header's constants, and I am asking you
+to check it rather than to agree with it.
+
+**Please do not simply ratify.** A recent panel had seven of nine seats confirm a premise the brief
+had stated wrongly. **Check the premises, not just the derivations.** In particular I may have the
+selector encoding, the type, or the header wrong.
+
+## 2. WHAT I WANT BACK -- VERDICT LINE FIRST
+
+**Q1. Quote the actual `tbi` handler** and say what type the selector operand has at the point of
+comparison, and where that type comes from (the register array's declared type, a local, a cast).
+Then enumerate the comparison for selectors -2, -1, 0, 1, 2, 3 and say which branch each takes.
+
+**Q2. Quote the header's definitions** of the selector constants, with the file path. If the header
+does not define negative selectors, say so plainly -- that would refute the row, and I would rather
+learn that now.
+
+**Q3. Does the branch actually taken differ in EFFECT from the one the header specifies?** This is
+the part that decides whether the row is real. A branch that invalidates a single virtual address
+where the specification calls for invalidating all entries is a difference; a branch that reaches
+the same flush by another route is not. Say which this is, and quote the flush code.
+
+**Q4. What is the smallest correct repair, and what would OBSERVE it?** Note the emulator may not
+model a TLB in a way that makes the difference visible from a guest -- if the invalidation is a
+no-op or a full flush regardless of selector, then the defect is real in the source and
+**unobservable**, and I want that said rather than papered over. Name a channel or say there is
+none.
+
+## 3. THE CLUSTER QUESTION -- this one is scoping, not correctness
+
+Six Alpha rows are open, all found in the last two days, all in adjacent code:
+
+    alphatbinegsel    this one -- the tbi selector comparison
+    alphaswpctxreg    swpctx stores the old context in a0; the ABI wrapper reads v0, and the
+                      comment directly above the store says v0.  ALREADY VERIFIED by me
+    alphactxfail      swpctx's context save and load do not check whether the memory accesses
+                      succeeded
+    alphapteprot      the page walk returns the same protection value for every successful walk,
+                      so memory_rw caches every walk identically
+    alphafaultclaim   a comment claims a failed page-table walk makes the caller raise a fault;
+                      the row says that is unsupported by the code
+    alphavmkill       one guest virtual address reaches an unrecoverable error path
+
+**Q5. How many ROUNDS is this?** The project's round-scope rule is: a round takes ONE site; a second
+joins only if it is in the same file and same semantic class, covered by one fix design and one
+detector with no new oracle. More findings create more candidate rounds, never bigger rounds.
+
+Group them, and say for each group what the ONE fix design and the ONE oracle would be. If a group
+needs two oracles it is two rounds -- say so. **I would rather have five small rounds than one that
+cannot state its detector.**
+
+**Q6. Which of the six should go FIRST, and why?** Rank by severity and by whether a witness is
+constructible, not by how easy the edit is. If one of them is a prerequisite for testing the others
+-- for instance if the page-walk row governs whether any Alpha guest paging path is exercisable at
+all -- that ordering matters more than severity and I want it named.
+codex
+I’ll check the handler and selector definitions in the review tree, then trace the flush effect within your reading scope. I’ll distinguish verified findings from the other rows’ descriptions when grouping and ranking them.
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n -C 12 '\\btbi\\b|ALPHA_TBI|TBIA|TBIS|invalidate_translation|\\ba0\\b' src/cpus/cpu_alpha_palcode.c" in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "Get-Location; rg --files -g AGENTS.md -g '"'!regress/artifacts/**'"' -g '"'!tools/pipeline/**'"' -g '"'!**/.git/**'"' ." in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg --files src -g '*.h' -g '*alpha*' -g '*pal*' -g '*cpu*'" in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+ succeeded in 71ms:
+135-			break;
+136-		default:fatal("[ Alpha PALcode: GXemul PROM getenv %i: TODO "
+137-			    "]\n", cpu->cd.alpha.r[ALPHA_A1]);
+138-			cpu->running = 0;
+139-		}
+140-		/*  Copy at most a3 bytes.  */
+141-		len = a3;
+142-		if (strlen(s) < len)
+143-			len = strlen(s) + 1;
+144-		store_buf(cpu, a2, s, len);
+145-		break;
+146-
+147:	default:fatal("[ Alpha PALcode: GXemul PROM call, a0=0x%" PRIx64" ]\n",
+148-		    (uint64_t) cpu->cd.alpha.r[ALPHA_A0]);
+149-		cpu->running = 0;
+150-	}
+151-
+152-	/*  Return from the PROM call.  */
+153-	cpu->pc = cpu->cd.alpha.r[ALPHA_RA];
+154-}
+155-
+156-
+157-/*
+158- *  alpha_palcode():
+159- *
+160- *  Execute an Alpha PALcode instruction. (Most of these correspond to
+161- *  OSF1 palcodes, used by for example NetBSD/alpha.)
+162- */
+163-void alpha_palcode(struct cpu *cpu, uint32_t palcode)
+164-{
+165:	uint64_t a0 = cpu->cd.alpha.r[ALPHA_A0], a1 = cpu->cd.alpha.r[ALPHA_A1];
+166-	uint64_t userMode = cpu->cd.alpha.ps & ALPHA_PSL_USERMODE;
+167-
+168-	/*
+169-	 *  Only these are unprivileged, i.e. can be invoked in user mode,
+170-	 *  according to the manual:
+171-	 *
+172-	 *	bpt		kernel and user
+173-	 *	bugchk		kernel and user
+174-	 *	callsys		user
+175-	 *	clrfen		user
+176-	 *	gentrap		kernel and user
+177-	 *	imb		kernel and user
+--
+203-		/*  Return Machine Check status in v0.  */
+204-		cpu->cd.alpha.r[ALPHA_V0] = cpu->cd.alpha.mces;
+205-		break;
+206-	case 0x11:	/*  PAL_OSF1_wrmces  */
+207-		/*  Clear bits 0, 1, and 2 of the Machine Check and Error status.  */
+208-		cpu->cd.alpha.mces = ~(cpu->cd.alpha.r[ALPHA_A0] & 7);
+209-
+210-		/*  Set bits 3 and 4 of the Machine Check and Error status.  */
+211-		cpu->cd.alpha.mces &= ~0x18;
+212-		cpu->cd.alpha.mces |= (cpu->cd.alpha.r[ALPHA_A0] & 0x18);
+213-		break;
+214-	case 0x2b:	/*  PAL_OSF1_wrfen  */
+215:		/*  Floating point enable: a0 = 1 or 0.  */
+216-		/*  TODO. Since clrfen is documented as:
+217-			FEN ← 0
+218-			(PCBB+40)<0> ← 0
+219-		    then most likely wrfen should do the reverse.
+220-		 */
+221-		cpu->cd.alpha.pcb.apcb_flags = cpu->cd.alpha.r[ALPHA_A0];
+222-		store_64bit_word(cpu, cpu->cd.alpha.ctx + 40,
+223-		    cpu->cd.alpha.pcb.apcb_flags);
+224-		break;
+225-	case 0x2d:	/*  PAL_OSF1_wrvptptr  */
+226:		/*  Write Virtual Page Table Pointer. a0 = value  */
+227:		cpu->cd.alpha.vptptr = a0;
+228-		break;
+229-	case 0x30:	/*  PAL_OSF1_swpctx  */
+230-		/*  Save old context:  */
+231-		store_64bit_word(cpu, cpu->cd.alpha.ctx + 0,
+232-		    cpu->cd.alpha.pcb.apcb_ksp);
+233-		store_64bit_word(cpu, cpu->cd.alpha.ctx + 8,
+234-		    cpu->cd.alpha.pcb.apcb_usp);
+235-		store_64bit_word(cpu, cpu->cd.alpha.ctx + 16,
+236-		    cpu->cd.alpha.pcb.apcb_ptbr);
+237-		store_32bit_word(cpu, cpu->cd.alpha.ctx + 24,
+238-		    cpu->cd.alpha.pcb.apcb_cpc);
+239-		store_32bit_word(cpu, cpu->cd.alpha.ctx + 28,
+--
+243-		store_64bit_word(cpu, cpu->cd.alpha.ctx + 40,
+244-		    cpu->cd.alpha.pcb.apcb_flags);
+245-		store_64bit_word(cpu, cpu->cd.alpha.ctx + 48,
+246-		    cpu->cd.alpha.pcb.apcb_decrsv0);
+247-		store_64bit_word(cpu, cpu->cd.alpha.ctx + 56,
+248-		    cpu->cd.alpha.pcb.apcb_decrsv1);
+249-
+250-		/*  Return old context in v0.  */
+251-		cpu->cd.alpha.r[ALPHA_A0] = cpu->cd.alpha.ctx;
+252-
+253-		/*  Load new context:  */
+254-		{
+255:			cpu->cd.alpha.ctx = a0;
+256-			uint64_t new_ksp =
+257-			    load_64bit_word(cpu, cpu->cd.alpha.ctx + 0);
+258-			uint64_t new_usp =
+259-			    load_64bit_word(cpu, cpu->cd.alpha.ctx + 8);
+260-			uint64_t new_ptbr =
+261-			    load_64bit_word(cpu, cpu->cd.alpha.ctx + 16);
+262-			uint64_t new_cpc =
+263-			    load_32bit_word(cpu, cpu->cd.alpha.ctx + 24);
+264-			uint64_t new_asn =
+265-			    load_32bit_word(cpu, cpu->cd.alpha.ctx + 28);
+266-			uint64_t new_unique =
+267-			    load_64bit_word(cpu, cpu->cd.alpha.ctx + 32);
+--
+284-			    lines above -- "three lines up" until 2026-09-07, corrected
+285-			    after a pass-2 seat derived the true distance from the hunk
+286-			    header alone and called the phrasing inconsistent) and apcb_flags NEVER,
+287-			    while every other field in this block is assigned exactly once.  Two
+288-			    consequences: apcb_ptbr ended up holding the flags word, and the incoming
+289-			    context's flags were dropped -- so the NEXT save published a never-loaded
+290-			    word back into the outgoing PCB, wiping what the guest planted.  */
+291-			cpu->cd.alpha.pcb.apcb_flags = new_flags;	/*  #507  */
+292-			cpu->cd.alpha.pcb.apcb_decrsv0 = new_decrsv0;
+293-			cpu->cd.alpha.pcb.apcb_decrsv1 = new_decrsv1;
+294-
+295-			// TODO: Don't invalidate EVERYTHING!
+296:			cpu->invalidate_translation_caches(cpu, 0, INVALIDATE_ALL);
+297-		}
+298-		break;
+299-#if 0
+300-	case 0x31:	/*  PAL_OSF1_wrval  */
+301:		/*  a0 = value  */
+302:		cpu->cd.alpha.sysvalue = a0;
+303-		break;
+304-	case 0x32:	/*  PAL_OSF1_rdval  */
+305-		/*  return: v0 = value  */
+306-		cpu->cd.alpha.r[ALPHA_V0] = cpu->cd.alpha.sysvalue;
+307-		break;
+308-#endif
+309-	case 0x33:	/*  PAL_OSF1_tbi  */
+310-		/*
+311:		 *  a0 = op, a1 = vaddr
+312:		 *  a0 is ignored for now. TODO.
+313:		 *	a0 = 1: ITB invalidate
+314:		 *	a0 = 2: DTB invalidate
+315:		 *	a0 = 3: both ITB and DTB
+316:		 *	a0 = -1: invalidate everything with ASM=0.
+317:		 *	a0 = -2: invalidate everything
+318-		 */
+319:		// debug("[ Alpha PALcode: PAL_OSF1_tbi: a0=%" PRIi64" a1=0x%"
+320:		//    PRIx64" ]\n", (int64_t)a0, (uint64_t)a1);
+321:		if (a0 >= 1)
+322:			cpu->invalidate_translation_caches(cpu, a1, INVALIDATE_VADDR);
+323-		else
+324:			cpu->invalidate_translation_caches(cpu, 0, INVALIDATE_ALL);
+325-		break;
+326-	case 0x34:	/*  PAL_OSF1_wrent (Write System Entry Address)  */
+327:		/*  a0 = new vector, a1 = vector selector  */
+328-		if (a1 < N_ALPHA_KENTRY)
+329:			cpu->cd.alpha.kentry[a1] = a0;
+330-		else {
+331-			fatal("[ Alpha PALcode: PAL_OSF1_wrent: attempt to "
+332-			    "write to non-implemented selector %i ]\n",
+333-			    (int)a1);
+334-			cpu->running = 0;
+335-		}
+336-		break;
+337-	case 0x35:	/*  PAL_OSF1_swpipl  */
+338:		/*  a0 = new ipl, v0 = return old ipl  */
+339-		cpu->cd.alpha.r[ALPHA_V0] = cpu->cd.alpha.ps & ALPHA_PSL_IPL_MASK;
+340-		cpu->cd.alpha.ps &= ~ALPHA_PSL_IPL_MASK;
+341:		cpu->cd.alpha.ps |= (a0 & ALPHA_PSL_IPL_MASK);
+342-		break;
+343-	case 0x36:	/*  PAL_rdps  */
+344-		cpu->cd.alpha.r[ALPHA_V0] = cpu->cd.alpha.ps;
+345-		break;
+346-	case 0x37:	/*  PAL_OSF1_wrkgp  */
+347:		cpu->cd.alpha.kgp = a0;
+348-		break;
+349-#if 0
+350-	case 0x38:	/*  PAL_OSF1_wrusp  */
+351:		/*  a0 = value  */
+352:		cpu->cd.alpha.pcb.apcb_usp = a0;
+353-		break;
+354-	case 0x3a:	/*  PAL_OSF1_rdusp  */
+355-		/*  return: v0 = value  */
+356-		cpu->cd.alpha.r[ALPHA_V0] = cpu->cd.alpha.pcb.apcb_usp;
+357-		break;
+358-#endif
+359-	case 0x3c:	/*  PAL_whami  */
+360-		/*  Returns CPU id in v0:  */
+361-		cpu->cd.alpha.r[ALPHA_V0] = cpu->cpu_id;
+362-		break;
+363-#if 0
+364-	case 0x81:	/*  PAL_bugchk  */
+--
+385-		break;
+386-#endif
+387-	case 0x3fffffe:
+388-		alpha_prom_call(cpu);
+389-		break;
+390-	default:fatal("[ Alpha PALcode 0x%x unimplemented! ]\n", palcode);
+391-		cpu->running = 0;
+392-	}
+393-
+394-	/*
+395-	 *  Many PALcode instructions in the Alpha manual (and in NetBSD/Alpha
+396-	 *  source code) are described with "clobbers t0, t8-t11", some also
+397:	 *  with a0, and some also with a1 included.
+398-	 *
+399-	 *  However, it's easier to just leave the registers as they are.
+400-	 */
+401-}
+402-
+
+ succeeded in 76ms:
+src\machines\machine_alpha.o
+src\machines\machine_alpha.c
+src\include\x11.h
+src\include\wdc.h
+src\include\vga.h
+src\include\timer.h
+src\include\diskimage.h
+src\include\devices.h
+src\include\machine_arc.h
+src\include\device.h
+src\include\debugger.h
+src\include\cpu_sh.h
+src\include\machine.h
+src\include\cpu_riscv.h
+src\include\interrupt.h
+src\include\cpu_ppc.h
+src\include\float_emul.h
+src\include\cpu_mips.h
+src\include\emul.h
+src\include\cpu_m88k.h
+src\include\cpu_i960.h
+src\include\thirdparty\alpha_cpu.h
+src\include\cpu_arm.h
+src\include\cpu_alpha.h
+src\include\thirdparty\alpha_autoconf.h
+src\include\cpu.h
+src\include\arcbios.h
+src\include\thirdparty\algor_p5064reg.h
+src\include\cop0.h
+src\include\console.h
+src\include\thirdparty\aic7xxx_reg.h
+src\include\thirdparty\adb_viareg.h
+src\include\opcodes_ppc.h
+src\include\opcodes_mips.h
+src\include\of.h
+src\include\bus_pci.h
+src\include\net.h
+src\include\misc.h
+src\include\mips_cpu_types.h
+src\include\bus_isa.h
+src\include\memory.h
+src\include\arm_cpu_types.h
+src\include\machine_pmax.h
+src\include\refcount_ptr.h
+src\include\quick_pc_to_pointers.h
+src\include\ppc_spr_strings.h
+src\include\sh4_dmacreg.h
+src\include\settings.h
+src\include\symbol.h
+src\include\thirdparty\crimereg.h
+src\include\thirdparty\cpc700reg.h
+src\include\thirdparty\comreg.h
+src\include\thirdparty\clmpccreg.h
+src\include\thirdparty\bt459.h
+src\include\thirdparty\cyclone_boot.h
+src\include\thirdparty\crmfbreg.h
+src\include\thirdparty\bt431reg.h
+src\include\thirdparty\bootblock.h
+src\include\thirdparty\bireg.h
+src\include\thirdparty\bcureg.h
+src\include\thirdparty\armreg.h
+src\include\thirdparty\arcbios_other.h
+src\include\thirdparty\alpha_rpb.h
+src\include\thirdparty\alpha_prom.h
+src\include\thirdparty\alpha_lcareg.h
+src\include\thirdparty\dc21285reg.h
+src\include\thirdparty\dc7085.h
+src\include\thirdparty\arm_cputypes.h
+src\include\testmachine\dev_rtc.h
+src\include\testmachine\dev_mp.h
+src\include\testmachine\dev_irqc.h
+src\include\testmachine\dev_fb.h
+src\include\testmachine\dev_ether.h
+src\include\testmachine\dev_disk.h
+src\include\testmachine\dev_cons.h
+src\include\thirdparty\if_mecreg.h
+src\include\thirdparty\if_lereg.h
+src\include\thirdparty\i8253reg.h
+src\include\thirdparty\i82365reg.h
+src\include\thirdparty\i80321reg.h
+src\include\thirdparty\hpc_bootinfo.h
+src\include\thirdparty\hitachi_hm53462_rop.h
+src\include\thirdparty\gtreg.h
+src\include\thirdparty\exec_elf.h
+src\include\thirdparty\exec_ecoff_mips.h
+src\include\thirdparty\exec_ecoff.h
+src\include\thirdparty\exec_bout.h
+src\include\thirdparty\exec_aout.h
+src\include\thirdparty\errno_netbsd.h
+src\include\thirdparty\errno_freebsd.h
+src\include\thirdparty\ee_timerreg.h
+src\include\thirdparty\dreamcast_sysasicvar.h
+src\include\thirdparty\dreamcast_pvr.h
+src\include\thirdparty\dreamcast_maple.h
+src\include\thirdparty\dp83932reg.h
+src\include\thirdparty\dec_prom.h
+src\include\thirdparty\dec_maxine.h
+src\include\thirdparty\dec_kn03.h
+src\include\thirdparty\dec_kn02.h
+src\include\thirdparty\dec_kn01.h
+src\include\thirdparty\dec_kmin.h
+src\include\thirdparty\dec_bootinfo.h
+src\include\thirdparty\dec_5100.h
+src\include\thirdparty\m88k_psl.h
+src\include\thirdparty\m88k_dmt.h
+src\include\thirdparty\m8820x_pte.h
+src\include\thirdparty\m8820x.h
+src\include\thirdparty\luna88k_board.h
+src\include\thirdparty\lptreg.h
+src\include\thirdparty\lk201.h
+src\include\thirdparty\kbdreg.h
+src\include\thirdparty\jazz_r4030_dma.h
+src\include\thirdparty\iopi2creg.h
+src\include\thirdparty\impactsr-bsd.h
+src\include\thirdparty\imcreg.h
+src\include\thirdparty\igsfbreg.h
+src\include\thirdparty\if_pcnreg.h
+src\include\thirdparty\mk48txxreg.h
+src\include\thirdparty\mips_cpuregs.h
+src\include\thirdparty\mii.h
+src\include\thirdparty\mc146818reg.h
+src\include\thirdparty\mb89352reg.h
+src\include\thirdparty\mb86960reg.h
+src\include\thirdparty\maltareg.h
+src\include\thirdparty\mvme_memcreg.h
+src\include\thirdparty\mvmeprom.h
+src\include\thirdparty\mvme88k_vme.h
+src\include\thirdparty\mvme187.h
+src\include\thirdparty\ncr53c9xreg.h
+src\include\thirdparty\mvme_pcctworeg.h
+src\include\thirdparty\netbsd_iyonix_bootconfig.h
+src\include\thirdparty\z8530reg.h
+src\include\thirdparty\yamon.h
+src\include\thirdparty\xmireg.h
+src\include\thirdparty\wdcreg.h
+src\include\thirdparty\vr_rtcreg.h
+src\include\thirdparty\vrkiureg.h
+src\include\thirdparty\vripreg.h
+src\include\thirdparty\tulipreg.h
+src\include\thirdparty\tgareg.h
+src\include\thirdparty\tc_ioasicreg.h
+src\include\thirdparty\siireg.h
+src\include\thirdparty\sh4_tmureg.h
+src\include\thirdparty\sh4_scireg.h
+src\include\thirdparty\sh4_scifreg.h
+src\include\thirdparty\sh4_rtcreg.h
+src\include\thirdparty\sh4_pcicreg.h
+src\include\thirdparty\sh4_mmu.h
+src\include\thirdparty\sh4_intcreg.h
+src\include\thirdparty\sh4_exception.h
+src\include\thirdparty\sh4_cpu.h
+src\include\thirdparty\sh4_cache.h
+src\include\thirdparty\sh4_bscreg.h
+src\include\thirdparty\sgi_macereg.h
+src\include\thirdparty\sgi_gl.h
+src\include\thirdparty\sgi_arcbios.h
+src\include\thirdparty\sfbreg.h
+src\include\thirdparty\sccreg.h
+src\include\thirdparty\rtl81x9reg.h
+src\include\thirdparty\rs5c313reg.h
+src\include\thirdparty\pxreg.h
+src\include\thirdparty\ps2_dmacreg.h
+src\include\thirdparty\ppc_spr.h
+src\include\thirdparty\ppc_pte.h
+src\include\thirdparty\ppc_bat.h
+src\include\thirdparty\pmppc.h
+src\include\thirdparty\pica.h
+src\include\thirdparty\pcmciareg.h
+src\include\thirdparty\pcireg.h
+src\include\thirdparty\osiopreg.h
+src\include\thirdparty\ohcireg.h
+src\include\thirdparty\ns16550reg.h
+src\cpus\cpu_arm.o
+src\cpus\cpu_alpha_instr.c
+src\cpus\cpu_alpha.o
+src\cpus\cpu_arm.c
+src\cpus\cpu_alpha.c
+src\cpus\cpu_alpha_palcode.o
+src\cpus\cpu.o
+src\cpus\cpu_alpha_palcode.c
+src\cpus\cpu.c
+src\cpus\cpu_alpha_instr_loadstore.c
+src\cpus\arm_tmphead_1.h
+src\cpus\cpu_alpha_instr_alu.c
+src\cpus\cpu_arm_multi.txt
+src\cpus\cpu_arm_instr_misc.c
+src\cpus\cpu_arm_instr_loadstore.c
+src\cpus\cpu_arm_instr_dpi.c
+src\cpus\cpu_arm_instr.c
+src\cpus\cpu_arm_coproc.o
+src\cpus\cpu_arm_coproc.c
+src\cpus\cpu_m88k.c
+src\cpus\cpu_i960_instr.c
+src\cpus\cpu_i960.o
+src\cpus\cpu_i960.c
+src\cpus\cpu_dyntrans.c
+src\cpus\cpu_m88k_instr.c
+src\cpus\cpu_m88k.o
+src\cpus\cpu_mips.c
+src\cpus\cpu_m88k_instr_loadstore.c
+src\cpus\cpu_mips.o
+src\cpus\tmp_alpha_tail.c
+src\cpus\tmp_alpha_misc.c
+src\cpus\tmp_alpha_head.c
+src\cpus\memory_alpha.o
+src\cpus\memory_alpha.c
+src\cpus\generate_alpha_misc.c
+src\cpus\generate_alpha_misc
+src\cpus\cpu_sh_instr.c
+src\cpus\cpu_sh.o
+src\cpus\cpu_sh.c
+src\cpus\cpu_riscv_instr.c
+src\cpus\cpu_riscv.o
+src\cpus\cpu_riscv.c
+src\cpus\cpu_ppc_instr_loadstore.c
+src\cpus\cpu_ppc_instr.c
+src\cpus\cpu_ppc.o
+src\cpus\cpu_ppc.c
+src\cpus\cpu_mips_instr_unaligned.o
+src\cpus\cpu_mips_instr_unaligned.c
+src\cpus\cpu_mips_instr_loadstore.c
+src\cpus\cpu_mips_instr.c
+src\cpus\cpu_mips_coproc.o
+src\cpus\cpu_mips_coproc.c
+src\devices\dev_palmbus.c
+src\devices\dev_palmbus.o
+
+ exited 1 in 149ms:
+
+Path                                 
+----                                 
+C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+
+
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n -C 4 'uint64_t[ \\t]+r\\[|int64_t[ \\t]+r\\[|ALPHA_A0|ALPHA_A1|#include' src/include/cpu_alpha.h; rg -n -C 2 'uint64_t a0' src/cpus/cpu_alpha_palcode.c; Get-Content -LiteralPath src/cpus/cpu_alpha_palcode.c | Select-Object -Skip 308 -First 17" in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -l --glob '*.h' 'ALPHA_TBI|ALPHA.*TBIA|ALPHA.*TBIS' src/include" in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+ succeeded in 49ms:
+src/include\thirdparty\alpha_cpu.h
+
+ succeeded in 154ms:
+30- *
+31- *  Alpha CPU definitions.
+32- */
+33-
+34:#include "misc.h"
+35-
+36:#include "thirdparty/alpha_cpu.h"
+37-
+38-
+39-/*  ALPHA CPU types:  */
+40-struct alpha_cpu_type_def { 
+--
+89-#define	ALPHA_S4		13
+90-#define	ALPHA_S5		14
+91-#define	ALPHA_FP		15
+92-
+93:#define	ALPHA_A0		16
+94:#define	ALPHA_A1		17
+95-#define	ALPHA_A2		18
+96-#define	ALPHA_A3		19
+97-#define	ALPHA_A4		20
+98-#define	ALPHA_A5		21
+--
+147-	/*
+148-	 *  General Purpose Registers:
+149-	 */
+150-
+151:	uint64_t		r[N_ALPHA_REGS];	/*  Integer  */
+152-	uint64_t		f[N_ALPHA_REGS];	/*  Floating Point  */
+153-
+154-	uint64_t		fpcr;			/*  FP Control Reg.  */
+155-
+163-void alpha_palcode(struct cpu *cpu, uint32_t palcode)
+164-{
+165:	uint64_t a0 = cpu->cd.alpha.r[ALPHA_A0], a1 = cpu->cd.alpha.r[ALPHA_A1];
+166-	uint64_t userMode = cpu->cd.alpha.ps & ALPHA_PSL_USERMODE;
+167-
+	case 0x33:	/*  PAL_OSF1_tbi  */
+		/*
+		 *  a0 = op, a1 = vaddr
+		 *  a0 is ignored for now. TODO.
+		 *	a0 = 1: ITB invalidate
+		 *	a0 = 2: DTB invalidate
+		 *	a0 = 3: both ITB and DTB
+		 *	a0 = -1: invalidate everything with ASM=0.
+		 *	a0 = -2: invalidate everything
+		 */
+		// debug("[ Alpha PALcode: PAL_OSF1_tbi: a0=%" PRIi64" a1=0x%"
+		//    PRIx64" ]\n", (int64_t)a0, (uint64_t)a1);
+		if (a0 >= 1)
+			cpu->invalidate_translation_caches(cpu, a1, INVALIDATE_VADDR);
+		else
+			cpu->invalidate_translation_caches(cpu, 0, INVALIDATE_ALL);
+		break;
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n -C 7 'ALPHA_TBI|ALPHA.*TBIA|ALPHA.*TBIS' src/include/thirdparty/alpha_cpu.h" in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+ succeeded in 24ms:
+274-
+275-#ifdef _KERNEL
+276-
+277-/*
+278- * Translation Buffer Invalidation definitions [OSF/1 PALcode Specific]
+279- */
+280-
+281:#define	ALPHA_TBIA()	alpha_pal_tbi(-2, 0)		/* all TB entries */
+282:#define	ALPHA_TBIAP()	alpha_pal_tbi(-1, 0)		/* all per-process */
+283:#define	ALPHA_TBISI(va)	alpha_pal_tbi(1, (va))		/* ITB entry for va */
+284:#define	ALPHA_TBISD(va)	alpha_pal_tbi(2, (va))		/* DTB entry for va */
+285:#define	ALPHA_TBIS(va)	alpha_pal_tbi(3, (va))		/* all for va */
+286-
+287-#endif /* _KERNEL */
+288-
+289-/*
+290- * Bits used in the amask instruction [EV56 and later]
+291- */
+292-
+
+codex
+The unsigned operand and negative selector encodings are confirmed in the review tree. The handler calls an invalidation callback, so this proves the wrong flag is passed; the callback’s behavior still needs checking to establish an effect or observable difference. Your reading scope excludes that trace.
+codex
+May I extend the reading scope to the invalidation callback’s implementation and Alpha binding for Q3–Q4, and the page-walk return/caller checks needed to establish Q6’s paging prerequisite? The explicit “Read only” list excludes those traces.
+- Allow both narrow traces
+- Allow only the invalidation trace
+- Keep the original scope; report the limits
+codex
+The branch enumeration matches the earlier quote: `-2` and `-1` select `INVALIDATE_VADDR`; `0` selects `INVALIDATE_ALL`; `1`, `2`, and `3` select `INVALIDATE_VADDR`. The header does not define selector `0`.
+
+For round scope, the three PALcode rows need separate oracles: selector dispatch, return-register placement, and handling of failed context memory accesses. Sharing a file does not combine them under your rule.
+codex
+**Verdict: the unsigned-selector misdispatch is confirmed. A different flush effect—and guest observability—cannot yet be established within the stated reading scope.**
+
+**Q1. Actual handler and comparison**
+
+In [src/cpus/cpu_alpha_palcode.c:309](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_alpha_palcode.c:309):
+
+```c
+	case 0x33:	/*  PAL_OSF1_tbi  */
+		/*
+		 *  a0 = op, a1 = vaddr
+		 *  a0 is ignored for now. TODO.
+		 *	a0 = 1: ITB invalidate
+		 *	a0 = 2: DTB invalidate
+		 *	a0 = 3: both ITB and DTB
+		 *	a0 = -1: invalidate everything with ASM=0.
+		 *	a0 = -2: invalidate everything
+		 */
+		// debug("[ Alpha PALcode: PAL_OSF1_tbi: a0=%" PRIi64" a1=0x%"
+		//    PRIx64" ]\n", (int64_t)a0, (uint64_t)a1);
+		if (a0 >= 1)
+			cpu->invalidate_translation_caches(cpu, a1, INVALIDATE_VADDR);
+		else
+			cpu->invalidate_translation_caches(cpu, 0, INVALIDATE_ALL);
+		break;
+```
+
+The operand at the comparison is the **`uint64_t` local `a0`**, declared at [line 165](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_alpha_palcode.c:165):
+
+```c
+uint64_t a0 = cpu->cd.alpha.r[ALPHA_A0], a1 = cpu->cd.alpha.r[ALPHA_A1];
+```
+
+The register array is also unsigned, in [src/include/cpu_alpha.h:151](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/cpu_alpha.h:151):
+
+```c
+uint64_t		r[N_ALPHA_REGS];	/*  Integer  */
+```
+
+There is **no active signed cast** at the comparison. The cast in the commented debug statement has no effect. The integer literal `1` is converted to `uint64_t` for comparison.
+
+| Selector | Value in `a0` | `a0 >= 1` | Callback arguments |
+|---|---:|---|---|
+| −2 | `0xfffffffffffffffe` | true | `a1, INVALIDATE_VADDR` |
+| −1 | `0xffffffffffffffff` | true | `a1, INVALIDATE_VADDR` |
+| 0 | `0` | false | `0, INVALIDATE_ALL` |
+| 1 | `1` | true | `a1, INVALIDATE_VADDR` |
+| 2 | `2` | true | `a1, INVALIDATE_VADDR` |
+| 3 | `3` | true | `a1, INVALIDATE_VADDR` |
+
+Thus the earlier enumeration is correct.
+
+**Q2. Independent header definitions**
+
+Found in [src/include/thirdparty/alpha_cpu.h:277](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/thirdparty/alpha_cpu.h:277), inside `_KERNEL`:
+
+```c
+/*
+ * Translation Buffer Invalidation definitions [OSF/1 PALcode Specific]
+ */
+
+#define	ALPHA_TBIA()	alpha_pal_tbi(-2, 0)		/* all TB entries */
+#define	ALPHA_TBIAP()	alpha_pal_tbi(-1, 0)		/* all per-process */
+#define	ALPHA_TBISI(va)	alpha_pal_tbi(1, (va))		/* ITB entry for va */
+#define	ALPHA_TBISD(va)	alpha_pal_tbi(2, (va))		/* DTB entry for va */
+#define	ALPHA_TBIS(va)	alpha_pal_tbi(3, (va))		/* all for va */
+```
+
+These are wrapper macros containing the selector encodings. **They explicitly define negative selectors.** They do not define selector `0`; its observed fallback behavior is not a header requirement.
+
+**Q3. Does the effect differ?**
+
+**Unresolved.** The handler proves that different callback arguments are selected. It does not prove what the callback does with them.
+
+The flush calls are quoted above, but the callback implementation and its Alpha binding are outside your explicit reading scope. Without that trace, neither “only one address actually gets invalidated” nor “both paths produce the same flush/no-op” is established. I would not promote this to a verified functional invalidation defect yet.
+
+**Q4. Smallest repair and observation**
+
+A minimal local repair, correct for every header-defined selector and avoiding unsigned-to-signed conversion assumptions, is:
+
+```c
+if (a0 >= 1 && a0 <= 3)
+```
+
+This sends both negative selectors to the existing `INVALIDATE_ALL` path. Whether that path implements sufficient invalidation remains the Q3 dependency.
+
+A host-side regression can observe the callback’s `(address, flags)` arguments for the six values above. That is a decisive **dispatch oracle**, but it does not establish a guest-visible effect.
+
+**Guest channel: unknown.** If the callback is a no-op or performs the same full flush regardless of flags, this repair has no guest-visible invalidation effect. I have not established either condition.
+
+**Q5. Round scope**
+
+On the supplied descriptions: **six separate candidate rounds**, with `alphafaultclaim` still needing classification as documentation versus behavior. No merger currently has sufficient evidence.
+
+| Candidate | One fix design | One oracle |
+|---|---|---|
+| `alphatbinegsel` | Correct classification of the defined selector encodings. | Expected invalidation callback arguments for each selector. |
+| `alphaswpctxreg` | Return the old context through the ABI-defined result register. | Returned `v0` equals the outgoing context address. |
+| `alphactxfail` | Propagate context-memory failures through a defined failed-switch outcome. | An injected memory failure produces that outcome, without reporting a successful switch. |
+| `alphapteprot` | Return/cache permissions according to the actual translation contract. | Observed access disposition matches independently specified page permissions. |
+| `alphafaultclaim` | If this is only a false comment, document actual fault ownership. | The documented claim is supported by the return/caller control flow. |
+| `alphavmkill` | Replace the terminal path with the architecturally appropriate translation outcome. | That outcome is observed for the affected address class. |
+
+The last four designs are conditional on their premises being verified. In particular, a constant successful return value alone does not establish incorrect permission handling without the caller contract.
+
+`alphafaultclaim` and `alphavmkill` could be reconsidered together only after proving they share a file, one fault-handling repair, and the same fault-delivery oracle. Correcting a comment and preventing termination do not establish that grouping.
+
+**Q6. First and ranking**
+
+**The first repair currently justified by verified behavioral evidence is `alphaswpctxreg`**, accepting your verification: it has a defined ABI failure and a decisive return-value witness. That is a confidence judgment, not a claim that it has the greatest potential severity.
+
+Before scheduling paging-dependent witnesses, establish the page-walk success/failure contract and the reachability of the terminal path. **The claim that `alphapteprot` prevents all guest paging is not established by this review.**
+
+A defensible complete severity ranking is currently unavailable:
+
+- `alphapteprot`, `alphactxfail`, and `alphavmkill` need their claimed effects and witness prerequisites checked.
+- `alphatbinegsel` has confirmed dispatch behavior but unverified functional consequences.
+- `alphafaultclaim`, if documentation only, belongs last in behavioral severity.
+
+The pending scope extension is necessary because your explicit “Read only” list excludes the invalidation implementation and the page-walk/caller trace needed to finish Q3–Q4 and establish Q6’s ordering.
+tokens used
+37,403

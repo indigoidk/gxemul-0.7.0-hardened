@@ -1,0 +1,73 @@
+**Q3 is (a): YES, the effects differ.** Section 1 is correct.
+
+Alpha binds the callback to `alpha_invalidate_translation_caches` in [cpu_alpha.c](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_alpha.c:91). Its generated implementation comes from [tmp_alpha_tail.c](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/tmp_alpha_tail.c:26):
+
+```c
+#define DYNTRANS_INVALIDATE_TC alpha_invalidate_translation_caches
+#include "cpu_dyntrans.c"
+```
+
+The **64-bit VADDR branch** iterates over the cache using this condition, then returns. [cpu_dyntrans.c](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1241):
+
+```c
+for (r=0; r<DYNTRANS_MAX_VPH_TLB_ENTRIES; r++)
+	if (cpu->cd.DYNTRANS_ARCH.vph_tlb_entry[r].valid &&
+	    (cpu->cd.DYNTRANS_ARCH.vph_tlb_entry[r].vaddr_page
+	    & cpu->vaddr_mask) == (addr_page & cpu->vaddr_mask)) {
+		DYNTRANS_INVALIDATE_TLB_ENTRY(cpu, cpu->cd.DYNTRANS_ARCH.vph_tlb_entry[r].vaddr_page, flags);
+		n ++;
+	}
+```
+
+The **ALL branch** has no address predicate. With comments omitted, [its implementation](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1276) is:
+
+```c
+if (flags & INVALIDATE_ALL) {
+	for (r=0; r<DYNTRANS_MAX_VPH_TLB_ENTRIES; r++) {
+		if (cpu->cd.DYNTRANS_ARCH.vph_tlb_entry[r].valid) {
+			DYNTRANS_INVALIDATE_TLB_ENTRY(cpu, cpu->cd.
+			    DYNTRANS_ARCH.vph_tlb_entry[r].vaddr_page,
+			    0);
+		}
+	}
+	return;
+}
+```
+
+Those calls actually remove usable mappings. The [64-bit entry helper](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1134) contains:
+
+```c
+l3->host_load[x3] = NULL;
+l3->host_store[x3] = NULL;
+l3->phys_addr[x3] = 0;
+l3->phys_page[x3] = NULL;
+if (l3->vaddr_to_tlbindex[x3] != 0) {
+	cpu->cd.DYNTRANS_ARCH.vph_tlb_entry[
+	    l3->vaddr_to_tlbindex[x3] - 1].valid = 0;
+```
+
+Consequently, the earlier comment claiming VADDR clears only the quick array is stale for this implementation.
+
+Alpha uses **8 KiB pages**, and normal CPU construction gives it an **all-ones `vaddr_mask`**. Thus `ALPHA_TBIA()` currently invalidates only cached virtual page zero—nothing if that page is absent. Every other cached mapping survives. [Page size](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_alpha.c:50), [mask initialization](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu.c:140).
+
+**The guest-visible consequence is stale translations surviving a flush the OS believes succeeded.** A previously cached, subsequently remapped nonzero virtual page can still access its old physical backing: Alpha’s [load/store fast path](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_alpha_instr_loadstore.c:151) consumes those surviving host pointers.
+
+An empty cache can make the two calls coincide; that does not make their semantics equivalent. “ALL” here clears address-translation mappings, rather than discarding all separately cached compiled instructions.
+
+**Q4: a witness is feasible from the source, but I have not established your required red/green witness.**
+
+“No Alpha paging rig exists” would be an incorrect disposition:
+
+- [memory_alpha.c](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_alpha.c:96) contains an active three-level page-table walker. The “Not yet implemented” diagnostic earlier in that file is inside a specific zero-PTBR bootstrap case.
+- [AlphaBook 1 is registered in-tree](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/machines/machine_alpha.c:242).
+- Existing [Alpha harness controls](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/alpha_harness_probe.py:180) cover guest memory liveness and PAL dispatch, and the [paging probe](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/alpha_pfnoffset_probe.py:125) uses the ordinary Alpha machine executable.
+
+These establish an existing basis for testing, **not a completed `alphatbinegsel` differential**. I found no dedicated test in the searched regression sources and ran no before/after comparison. The defensible status is **source-confirmed functional defect; witness unvalidated**. Neither inherent unobservability nor absent paging support justifies closing it as documented-only.
+
+**Q5: yes, I still recommend `if (a0 >= 1 && a0 <= 3)`.** It makes the defined negative selectors select full invalidation and preserves address-specific handling for selectors 1–3.
+
+This is a **functional repair**. It retains coarse full flushing for `-1`; it does not implement selective preservation of global entries. After applying it, an accurate CHANGELOG claim would be:
+
+> Correct Alpha PAL `tbi` handling of negative selectors so broad invalidation clears all cached address mappings.
+
+A guest-verified claim still requires the differential and liveness results.

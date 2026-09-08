@@ -1,0 +1,78 @@
+**Verdict: return the old context pointer in `ALPHA_V0` (`$0`). The one-character edit is correct. There is one demonstrated ABI defect: this wrapper already permits `a0` to be clobbered.**
+
+**Q1.** The full [in-tree wrapper](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/thirdparty/alpha_cpu.h:448) is:
+
+```c
+static __inline unsigned long
+alpha_pal_swpctx(unsigned long ctx)
+{
+	register unsigned long a0 __asm("$16") = ctx;
+	register unsigned long v0 __asm("$0");
+
+	__asm volatile("call_pal %2 # PAL_OSF1_swpctx"
+		: "=r" (a0), "=r" (v0)
+		: "i" (PAL_OSF1_swpctx), "0" (a0)
+		/* clobbers t0, t8..t11, a0 (above) */
+		: "$1", "$22", "$23", "$24", "$25", "memory");
+
+	return (v0);
+}
+```
+
+`=` declares an output; `r` requests a register. The explicit register declarations determine which physical registers these operands use. A numeric input constraint matches an output operand’s location. These are GCC’s [constraint rules](https://gcc.gnu.org/onlinedocs/gcc-12.5.0/gcc/Extended-Asm.html#InputOperands) and [local-register binding rules](https://gcc.gnu.org/onlinedocs/gcc-8.4.0/gcc/Local-Register-Variables.html).
+
+| Operand | Constraint/expression | Location and role |
+|---|---|---|
+| 0 | `"=r" (a0)` | `$16`: output whose resulting value is discarded |
+| 1 | `"=r" (v0)` | `$0`: output returned by `return (v0)` |
+| 2 | `"i" (PAL_OSF1_swpctx)` | Immediate PAL number substituted for `%2` |
+| 3 | `"0" (a0)` | Input tied to **operand 0**, hence `$16`, carrying `ctx` |
+
+Thus `"0"` refers to **output operand zero**, which here occupies **register sixteen**. It neither selects physical `$0` nor transfers the result into it. The emulator’s [register definitions](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/cpu_alpha.h:75) agree: `ALPHA_V0 = 0`, `ALPHA_A0 = 16`.
+
+**Q2.** One defect with two register-state effects. The existing assignment leaves `v0` without the required result and overwrites `a0`. But that overwrite is **permitted by the wrapper’s constraints**: `a0` is an output tied to an input, so its incoming value need not survive.
+
+The smallest edit at [line 251](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_alpha_palcode.c:251) is:
+
+```diff
+-		cpu->cd.alpha.r[ALPHA_A0] = cpu->cd.alpha.ctx;
++		cpu->cd.alpha.r[ALPHA_V0] = cpu->cd.alpha.ctx;
+```
+
+This supplies the return value and removes that `a0` overwrite. No separate preservation handling or wrapper change is needed. Preserving `a0` becomes this implementation’s behavior, without becoming an ABI requirement.
+
+**Q3.** Yes. The closest active sibling is [the `swpipl` case](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_alpha_palcode.c:337):
+
+```c
+	case 0x35:	/*  PAL_OSF1_swpipl  */
+		/*  a0 = new ipl, v0 = return old ipl  */
+		cpu->cd.alpha.r[ALPHA_V0] = cpu->cd.alpha.ps & ALPHA_PSL_IPL_MASK;
+		cpu->cd.alpha.ps &= ~ALPHA_PSL_IPL_MASK;
+		cpu->cd.alpha.ps |= (a0 & ALPHA_PSL_IPL_MASK);
+		break;
+```
+
+It writes the old state directly into `ALPHA_V0`, then installs the new state from the copied `a0`. Other active PAL cases use the same destination: `rdmces` returns `mces` at line 204, `rdps` returns `ps` at 344, and `whami` returns `cpu_id` at 361.
+
+The earlier return at [line 118](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_alpha_palcode.c:118) belongs to `PROM_R_PUTS` in `alpha_prom_call()`, which also writes `ALPHA_V0`.
+
+**Q4.** The host local `a0` remains live through [`cpu->cd.alpha.ctx = a0`](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_alpha_palcode.c:255). Your premise about that copy is correct.
+
+The rest of this case does not consume `r[ALPHA_A0]` as an old-context result. Its [direct emulator caller](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:63) checks execution status and PC afterward; it does not read `a0` or move it into `v0`. The wrapper discards its `a0` output, and the searched `src/` contains no calls to that wrapper.
+
+No in-tree dependency was found. An external guest explicitly relying on the accidental old-context value in `a0` would observe a change; the inspected wrapper provides no such guarantee.
+
+**Q5.** Let `C` be the outgoing context pointer, `N` the incoming argument, and `P` the pre-call `v0`. On normal completion, before subsequent instructions overwrite these registers:
+
+| Observable | Existing code | Fixed code |
+|---|---|---|
+| `v0` | `P` | `C` |
+| `a0` | `C` | `N` |
+
+The return-value oracle is **`v0_after == ctx_before`**. A distinguishing observation requires `P != C`; otherwise stale `v0` happens to look correct.
+
+The debugger’s [`reg` command](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/debugger/debugger_cmds.c:1644) reaches the [Alpha register dump](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_alpha.c:170), which prints both registers by name. **Guest code need not consume the return value for the debugger to distinguish the builds.**
+
+**Q6.** Keep the comment. “Return old context in v0” asserts an observable postcondition: both the returned value and its register. Under your stated project rule, it owes a test row pinning the Q5 oracle. Calling it a description does not remove that claim. It makes no claim about preserving `a0`.
+
+This was a source review; no files were changed and no runtime test row was executed.

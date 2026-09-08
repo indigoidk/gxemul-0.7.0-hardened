@@ -1,0 +1,118 @@
+**VERDICT: Four behavioral issues, one conditional initialization gap, and one minor format mismatch. The filed “three” overstates the initialization claim. These are several candidate rounds, with one already-recorded site requiring explicit rescoping.**
+
+This review used the fork’s source and permitted regression/documentation files. I made no changes and ran no probes.
+
+The grep results give useful precedents:
+
+- The same function’s **write arm already returns the downstream result**. That is the strongest precedent for repairing its read arm.
+- Both sibling handlers initialize `odata = 0`: [`lca_pci_conf`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:91) and [`lca_ioc`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:217). The configuration handler also has a nonterminating fallback, `dev = 0`, at line 163. That supports avoiding termination, but does **not** establish correct ISA lane semantics.
+- Comparable bridge handlers [`eagle`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_eagle.c:52) and [`footbridge_isa`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c:411) initialize read results; Footbridge warns about unsupported writes without exiting. Footbridge’s handler acknowledges interrupts—it is not an equivalent sparse-lane mapper.
+- The closest forwarding precedent is [`DEV_RAM_MIRROR`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_ram.c:77): it passes `PHYSICAL` and returns the nested result.
+- For unsupported access widths, the ISA-connected [`wdc`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c:1488) already declines and latches its announcement. I found no second implementation of LCA’s sparse-lane packing in the fork.
+
+1. **The lane boundary is inconsistent with the read and write operations.**  
+   [`dev_lca.c:193`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:193):
+
+   ```c
+   if (ofs > len) {
+   ```
+
+   Equality passes. The later write expression, `byte = data[ofs % len];`, then selects byte zero; the read expression, `data[i] = i == ofs? byte : 0x00;`, never places the downstream byte anywhere. Nevertheless, the downstream read has occurred and may have side effects.
+
+   Under this function’s existing “selected lane must exist in the buffer” contract, rejection must include equality: **`ofs >= len`**. Accepted accesses can then index `data[ofs]` directly.
+
+   This is **not a demonstrated buffer overrun**: positive-length writes use modulo, and the read loop stays within `len`. The modulo is part of the incorrect boundary behavior, not another independent OOB finding. A zero-length write introduces a separate modulo-zero possibility, but no zero-length guest access was established.
+
+2. **The rejected-lane disposition terminates the emulator.**  
+   [`dev_lca.c:196`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:196):
+
+   ```c
+   exit(1);
+   ```
+
+   This converts an unsupported lane/container combination into process termination. Changing only `>` to `>=` would expand that termination behavior.
+
+   My interim disposition is **3 DECLINE + LATCHED ANNOUNCE**: omit the downstream access, define the declined read result, discard the write, and announce once per LCA instance. A zero-filled read is an explicit emulation fallback here, not a claim that hardware returned zero.
+
+   This site is already described in the [`lcabadval` range-site note](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/OUTSTANDING_BUGS.md:15491). Do not file its termination as a new discovery.
+
+3. **The read arm discards downstream failure and reports success.**  
+   [`dev_lca.c:205`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:205):
+
+   ```c
+   cpu->memory_rw(cpu, cpu->mem, LCA_ISA_BASE + relative_addr,
+       &byte, 1, MEM_READ, CACHE_NONE);
+   ```
+
+   followed by:
+
+   ```c
+   return 1;
+   ```
+
+   The write arm preserves the nested status; the read arm replaces it with success and continues assembling data.
+
+   It should **check the nested result before consuming `byte`, and preserve failure**. This is **7 IMPLEMENT**, meaning complete the forwarding contract. Simply initializing `byte` would leave this defect intact.
+
+   On Alpha, preserving failure still matters: the [load helper](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_alpha_instr_loadstore.c:68) returns before destination-register writeback when `memory_rw` fails. It does **not** thereby deliver a guest exception.
+
+4. **The uninitialized-byte claim has a narrow surviving case, not the filed general explanation.**  
+   [`dev_lca.c:188`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:188):
+
+   ```c
+   uint8_t byte;
+   ```
+
+   The fork already zeroes read buffers on [failed translation](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:259), and [before device dispatch](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:485). Ordinary unmapped reads also receive zeros. Therefore, “a failed read leaves `byte` uninitialized” is generally false in this fork.
+
+   One exception remains: the [halt-on-nonexistent-memory path](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:675) returns before zero-fill. LCA can then copy an indeterminate byte into its caller’s buffer. However, that path stops the CPUs, and the [outer device dispatcher](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:586) detects the running-to-stopped transition and returns failure. Normal Alpha load writeback is consequently suppressed.
+
+   **Withdraw the broad guest-visible disclosure claim.** Retain a conditional initialization gap: initialize `byte` and avoid consuming failed results. Initializing it is **7 IMPLEMENT** for defined output handling; repairing item 3 can also eliminate this failed-read consumption without a separate initialization change.
+
+5. **Both forwarding calls treat a physical ISA address as a virtual address.**  
+   [`dev_lca.c:202`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:202) and line 206 pass:
+
+   ```c
+   relative_addr, &byte, 1, writeflag, CACHE_NONE);
+   ```
+
+   ```c
+   &byte, 1, MEM_READ, CACHE_NONE);
+   ```
+
+   `LCA_ISA_BASE` is the base used to register downstream ISA devices. But [`memory_rw`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:245) bypasses virtual translation only with `PHYSICAL` or no translator; `CACHE_NONE` does not do that.
+
+   Alpha’s [bootstrap identity mapping](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_alpha.c:67) masks the mistake. Outside that bootstrap condition, the forwarding address can be translated elsewhere or fail translation.
+
+   Both calls should request **physical forwarding**, preserving the cache choice, as in `CACHE_NONE | PHYSICAL`. Disposition: **7 IMPLEMENT**. This is distinct from all three adjudication rows named in the question.
+
+6. **The guard diagnostic has a format/type mismatch.**  
+   [`dev_lca.c:194`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:194):
+
+   ```c
+   fatal("[ ofs=%i len=%i in lca_isa access function. "
+       "aborting ]\n", ofs, len);
+   ```
+
+   The [`DEVICE_ACCESS` signature](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/memory.h:149) makes `len` a `size_t`; `%i` expects `int`. Use `%zu` for `len` and `%u` for `ofs`.
+
+   This is a **LOW portability defect**, not evidence of corrupted diagnostics on the current host. In the existing rejection branch, `len < ofs <= 3`, so large-length truncation cannot explain an actual output discrepancy. If assigned an option-set member, this is **7 IMPLEMENT** correct formatting; it is not an access-disposition decision.
+
+The severity and distinguishing channels are:
+
+| Item | Disposition | Severity supported here | Fixed-versus-unfixed observable |
+|---|---|---|---|
+| 1. Lane boundary | **3** for an unavailable lane | **MED, source-only:** wrong data and unintended downstream side effects; no OOB established | Downstream access occurrence and payload. Readback zero alone cannot distinguish the behaviors. |
+| 2. Process exit | **3** | **MED pending witness:** process-wide availability impact, already recorded under `lcabadval` | Process survival, absence of downstream access, and one attributable announcement. |
+| 3. Lost read failure | **7** | **LOW/documented-only presently:** broken completion contract; no independent failing-read witness found | Handler return status and suppression of destination-register writeback. |
+| 4. Initialization gap | **7**, or consequence of item 3’s repair | **LOW/documented-only:** conditional indeterminate propagation; no established guest disclosure | Buffer definedness/control-flow analysis. Normal guest readback is not an established distinguishing channel. |
+| 5. Physical forwarding | **7** | **MED, conditional on translation state:** wrong backing access or translation failure; bootstrap masks it | Identity of the downstream backing accessed and independence from guest virtual mappings. |
+| 6. Diagnostic format | **7** | **LOW, portability-only** | Format/type analysis; no current runtime text difference established. |
+
+**Member 5 FAULT is unavailable as a completed remedy here.** The [device-failure dispatcher](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:603) has MIPS and M88K exception delivery, with no Alpha arm. The fork search likewise found `ALPHA_KENTRY_MM` defined but unused. Recommending architectural faulting obliges implementing Alpha delivery first; returning zero alone does not satisfy it.
+
+For rounds, the boundary and termination policy belong to the **same guard site** and can form one invalid-lane disposition design. Read completion is another candidate; physical forwarding is another. Initialization and formatting need their own justification unless they disappear as consequences of those repairs. Sharing a function—or a prospective test executable—does not establish one semantic class and one oracle. Nothing reviewed establishes the shared-oracle exception for batching these candidates.
+
+For duplicate handling, the original [`lcabadval` scope](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/OUTSTANDING_BUGS.md:13615) explicitly excludes range-guard analysis, while its later note records this exact termination site. Extract or reassign that site explicitly rather than counting it twice. The configuration-bus termination and interrupt-stub termination remain separate defects; their severity and witnesses do not transfer to this handler.
+
+Finally, **I found no in-tree regression exercising the sparse `lca_isa` handler**. The configuration probes cover other handlers. The [IRQ probe](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/lca_irqstub_probe.py:156) accesses the downstream ISA mapping directly, bypassing this shim. These therefore remain documented source candidates, with the channels above naming what a future oracle must observe.

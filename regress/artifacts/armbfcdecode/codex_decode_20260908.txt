@@ -1,0 +1,84 @@
+**Verdict: source field 15 reaches `X(bfi)` and supplies the stored `r[15]` value. That implementation claim holds, but the value is not reliably PC or PC+8. The permitted manual does not establish the encoding’s BFC meaning.**
+
+Q1: The decoder does **not** distinguish source 15. The instruction’s source field is called `rm` in this generic decoder: [line 4016](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c:4016) reads:
+
+```c
+rm    = iword & 15;
+```
+
+The [decoder arm, lines 4564–4570](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c:4564), reads:
+
+```c
+} else if ((iword & 0x0fe00070) == 0x07c00010) {
+	ic->f = cond_instr(bfi);
+	ic->arg[0] = (size_t)(&cpu->cd.arm.r[rd]);
+	ic->arg[1] = (size_t)(&cpu->cd.arm.r[rm]);
+	int lsb = (iword >> 7) & 31;
+	int msb = (iword >> 16) & 31;
+	ic->arg[2] = (msb << 16) + lsb;
+```
+
+The mask leaves bits `[3:0]` unrestricted, and no enclosing guard excludes source 15. Thus **`arg[1]` carries the address of `r[15]`**. All your settled extraction and packing premises are correct.
+
+Its contents depend on execution history. Translation reconstructs the instruction address into [`cpu->pc`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c:3967), without refreshing `r[15]` there. PC-relative loads compute PC+8 in the separate [`tmp_pc`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr_loadstore.c:577). This BFI arm does not use that storage.
+
+For concrete possible contents, a load into PC leaves its loaded target in [`r[15]`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr_loadstore.c:587); exception entry writes the [exception-vector address](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c:731). Consequently, BFI can read a previous target or vector rather than its own instruction address.
+
+Q2: The [complete handler, lines 1450–1467](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c:1450), is:
+
+```c
+X(bfi)
+{
+	uint32_t x = reg(ic->arg[1]);
+
+	int lsb = (uint8_t)ic->arg[2];
+	int msb = ic->arg[2] >> 16;
+	int width = msb - lsb + 1;
+
+	x <<= lsb;
+
+	uint32_t mask = (1 << width) - 1;
+
+	mask <<= lsb;
+
+	reg(ic->arg[0]) &= ~mask;
+	reg(ic->arg[0]) |= (x & mask);
+}
+Y(bfi)
+```
+
+It reads the register value unconditionally when the handler executes. There is no source-15 clear path. With defined mask arithmetic, it coincidentally produces a clear when the source’s **low `width` bits** are zero. Those are the bits shifted into the destination field; the relevant source bits are not `[msb:lsb]`.
+
+Q3: **BFI/BFC are not in this manual.** I found the specified extract at [GXEMUL/_scratchpad/ddi0100i.txt](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ddi0100i.txt). Searches found neither mnemonic nor a bit-field insert/clear entry.
+
+One premise needs correction: DDI 0100I is not ARMv5-only. Its [preface explicitly includes ARMv6](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ddi0100i.txt:402). That does not supply the later BFI/BFC definitions.
+
+Therefore, the source behavior above is independently verified, but **source 15 → architectural BFC is not document-verified within this reading scope**. The repair and expected result below use that stated later-ISA rule; I cannot attach a local manual page citation to it.
+
+Q4: For this operand-selection defect, the smallest local repair is to replace the initial register read with:
+
+```c
+uint32_t x = ic->arg[1] == (size_t)(&cpu->cd.arm.r[ARM_PC])
+    ? 0 : reg(ic->arg[1]);
+```
+
+The existing pointer preserves the source-register identity, so this makes source 15 supply zero while retaining ordinary BFI behavior. The mask defect still needs its separate repair.
+
+A distinguishing observation **is constructible**:
+
+- Initialize `r0 = 0xffffffff`.
+- Execute a successful word load into PC whose target is `0x00001008`. The inspected load path puts that target in `r[15]` and branches there.
+- At that target, execute unconditional `BFC r0, #8, #4`: `lsb = 8`, `msb = 11`, width 4.
+
+With `r[15] = 0x00001008`, the low four source bits are `8`, and the destination mask is `0x00000f00`.
+
+| Behavior | Result in `r0` |
+|---|---|
+| Clear the field | `0xfffff0ff` |
+| Current handler inserts stored `r[15]` bits | `0xfffff8ff` |
+
+Merely placing the instruction at address `0x1008` would not establish that register-slot value; the load-to-PC setup matters. Width 4 avoids the sibling mask boundary cases. These results are source-derived and arithmetic-checked, not an emulator run.
+
+Q5: **Keep two rounds.** Correcting source-15 semantics leaves mask construction unchanged; correcting mask construction leaves source-15 semantics unchanged. The width-4 observation above isolates this defect, while a width test can use an ordinary source register.
+
+Also, “undefined for most encodable widths” is incorrect for a 32-bit `int`: positive widths **1–30** are fine for this expression. Width **31** encounters the signed boundary, and width **32** shifts by the operand’s bit width. That correction does not weaken the case for separate rounds.

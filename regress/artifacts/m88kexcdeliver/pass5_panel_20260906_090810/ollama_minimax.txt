@@ -1,0 +1,122 @@
+```
+VERDICT LINE FIRST: CLOSE THE CHAIN — no undisclosed clean-sweep mutant in the
+(d) enumeration.  Two premises I cannot settle from the packet; one equivalent
+mutant class (threshold on the fallback) is a clean sweep by construction, not
+a floor breach.  Of the eleven dispositions, none I can evaluate is wrong; the
+six "L4 records" are opaque to me from the packet (the term appears nowhere
+else in the brief — I cannot name them, let alone judge them).
+```
+
+# The one question
+
+The (d) enumeration runs: switch 1's class→`implemented` mapping; the fallback
+`vector < 128 && !implemented`; the re-route's `PSR & SFRZ` and `is_trap`; the
+tail switch's labels; operand swaps limited to fields the guarded bodies read;
+joint cells `class × SFRZ × is_trap`.  I worked each axis against the probe
+v5 row set and the table 5 measurements.  Findings:
+
+1. **Re-route (`PSR & SFRZ`, `!is_trap`, `vector = ERROR`,
+   `update_shadow_regs = false`).**  The five new rows (errovf, errdiv0,
+   errpriv, errunimpl) plus the existing error and trapfrozen rows cover every
+   per-class re-route mutant — M_SFRZNOOVF / M_SFRZNODIV0 / M_SFRZNOPRIV /
+   M_SFRZNOUNIMPL all red exactly the row whose class the mutant excluded
+   (28/29 each).  `PSR & SFRZ` is anchored to bit 0; mutating to `PSR & SFD1`
+   (bit 3) is caught by errdiv0, whose handler clears SFD1 via stcr while
+   keeping SFRZ (premise 4 permits this) — SFD1-clear means the mutant does
+   not re-route, errdiv0 delivers at 0x40 not 0x50, row reds.  Mutating to
+   `PSR & IND` (bit 1) is caught by every non-frozen row: PSR_RESET = 0x80000002
+   has IND set but SFRZ clear, so the mutant fires the re-route on first
+   exceptions — umisalign / uovf / udiv0 / unimpl / ovfc / indclr / usertb
+   all red.  `update_shadow_regs = false` removal is caught by sxip mismatch
+   on every frozen row (sxip = second-fault PC vs the row's first-fault PC).
+   `is_trap` mutants (invert, threshold shift) are caught by sfu1h + trapfrozen.
+
+2. **Switch 1 `implemented` per class.**  The five user-mode rows pin the
+   {class} × {MODE} closure for MISALIGNED / OVERFLOW / DIV0 / PRIVILEGE /
+   UNIMPLEMENTED.  Operand swaps inside the class arms: swapping MODE for any
+   other bit flips the user-mode verdict and is caught.  `implemented = true`
+   (hardcode) is an equivalent mutant — no row expects HALT for these classes.
+
+3. **Fallback `vector < 128 && !implemented`.**  M_REVERT / M_DELIVERALL /
+   M_NOSTOP are listed and caught.  **Threshold mutant** `vector < 128` →
+   `vector < N` for N ≤ 114 is caught by sfu1h (vector 0x072 = 114 — the only
+   row that exercises an unimplemented vector in 64..127).  **Threshold mutant**
+   `vector < 128` → `vector < N` for 114 < N ≤ 128 is a **clean sweep** under
+   the probe: no row exercises an unimplemented fault in N..127, so the
+   mutant changes no observable behaviour.  This is an *equivalent mutant* —
+   it cannot be caught without modifying the cpu model to raise a fault the
+   probe can trigger, which is out of scope.  The closure's fallback denominator
+   does not list it; that is a gap in the *enumeration*, not a floor breach.
+   `!implemented` invert / hardcode-false / hardcode-true are all caught by
+   the delivery vs HALT split.
+
+4. **Tail switch labels (vectors 0..3).**  No probe row uses 0..3; any label
+   swap is a clean sweep.  Disclosed in the contract: "vectors 0..3's tail
+   arms" still disclosed.  Not a floor breach.
+
+5. **Joint cell {SFRZ set, non-trap} × {class}.**  Five cells tested
+   (MISALIGNED, OVERFLOW, DIV0, PRIVILEGE, UNIMPLEMENTED).  BOUNDS and ERROR
+   excluded on the premise *"BOUNDS and ERROR have no non-trap route"* (the
+   frozen TRAP is trapfrozen).  **This premise is not checkable from the
+   packet.**  If `rte` can raise BOUNDS_CHECK_VIOLATION with mismatched BBU/BBL
+   in a frozen handler (the manual's documented BOUNDS source), then
+   {SFRZ set, non-trap} × {BOUNDS} is a reachable, untested cell, and a
+   mutant `!is_trap && vector != BOUNDS_CHECK_VIOLATION` is a clean sweep on
+   that cell (the five tested rows all have vector ≠ BOUNDS, so they would
+   still be re-routed and pass — the mutant is invisible to them).  The
+   single fact that would settle it: the m88k manual's entry for
+   BOUNDS_CHECK_VIOLATION (vector 0x07 / 0x70 / whatever the panel's table
+   says) and whether `rte` is the only source.  I cannot open the manual.
+
+# My denominator (not a repetition of the closure's)
+
+```
+{class} × {PSR.MODE at fault}              : 5 classes × 2 modes = 10 cells, all pinned
+{SFRZ set, non-trap} × {class}              : 5 cells, all pinned (BOUNDS/ERROR excluded —
+                                              premise not checkable from packet)
+{SFRZ set, trap} × {class}                  : 1 cell, pinned by trapfrozen (universal is_trap
+                                              exemption; per-class trap mutants are equivalent)
+{SFRZ clear, non-trap} × {class}            : covered by existing delivery rows
+{SFRZ clear, trap} × {class}                : covered by usertb
+fallback predicate                          : structural mutants (REVERT/DELIVERALL/NOSTOP)
+                                              pinned; threshold mutants in 115..127 are
+                                              equivalent under the probe
+switch 1 class→implemented                  : pinned by user-mode rows
+tail switch (vectors 0..3)                  : disclosed, not floor
+re-route predicates (PSR&SFRZ, !is_trap,
+  vector=ERROR, update_shadow_regs=false)   : pinned by 5 new rows + error + trapfrozen
+```
+
+# The eleven dispositions
+
+I can evaluate five of the eleven (two class closures, the classifier refine,
+the filing, the carried-wording ruling).  **None is wrong** given the stated
+premises.  Specifically:
+
+- Classifier refine (`stopped = "machines stopped" in tr`, disjunct dropped):
+  correct — premise 6 states emul.c's `All machines stopped.` is the only stop
+  emission, so `"stopped" in tr` matches iff `"machines stopped" in tr` matches,
+  making the disjunct dead code.
+- {class} × {MODE} closure: correct given premise (BOUNDS/ERROR have no
+  user-mode route — uncheckable but asserted).
+- {SFRZ set, non-trap} × {class} closure: correct given the same premise;
+  the BOUNDS gap is a premise issue, not a disposition error.
+- Filing m88kdslotshadow: appropriate scope-out for the dslot row.
+- Carried-wording ruling (Table 6-3 attribution → UM 6.2 pointer definitions):
+  the comment correction is internal to a docstring and the product-code
+  comment mirrors it; consistent with the stated citations.
+
+The **six "L4 records"** are not defined anywhere in the packet I can find.
+The brief names them as a count but never exhibits them — no row names, no
+mutant codes, no log references.  I cannot name a wrong one if I cannot name
+any of them.  The single fact that would settle it: the list of the six
+records (row names or mutant codes) inlined into the brief.
+
+# Premises I cannot settle
+
+1. **BOUNDS_CHECK_VIOLATION has no non-trap route.**  The packet asserts it;
+   the m88k manual's BOUNDS entry would settle it.  If false, the {SFRZ set,
+   non-trap} × {class} closure is incomplete by one cell.
+2. **ERROR has no non-trap route and no user-mode route.**  Same status.  Same
+   single-fact settlement (the manual's ERROR entry).
+3. **The identity of the six L4 records.**  Not in the packet.

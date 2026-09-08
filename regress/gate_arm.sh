@@ -1167,7 +1167,7 @@ else
     #  CONTROLS BY NAME, not by count.  A green-row total lets a control go red while the
     #  sum stays acceptable -- and a run whose controls died is an APPARATUS failure, which
     #  must not be read as a wall of product failures.
-    for c in "live" "devsig stat"; do
+    for c in "live" "live64" "devsig stat"; do
         check "sgi_re control: $c" "$(count "$SGILOG" "^$c  .*ok$")" "1"
     done
     check "sgi_re controls live" \
@@ -1178,13 +1178,27 @@ else
     #  makes a check UNSATISFIABLE and the row quietly stops being tested.
     #  The list is ONE LINE on purpose -- a backslash-continued list assembled through
     #  nested quoting once gained a bogus word `n` and shipped a RED gate.
-    for v in "live" "devsig stat" "tlb_a sw surv" "tlb_a sw lat1" "tlb_a lw surv" "tlb_a accept" "tlb_b sw surv" "tlb_b sw lat1" "tlb_b lw surv" "tlb_b accept" "tlb_c sw surv" "tlb_c sw lat1" "tlb_c lw surv" "tlb_c accept" "tex sw surv" "tex sw lat1" "tex lw surv" "tex accept" "linear_a sw surv" "linear_a sw lat1" "linear_a lw surv" "linear_a accept" "linear_b sw surv" "linear_b sw lat1" "linear_b lw surv" "linear_b accept" "xsite 6msg" "xsite order" "tlb_a ld kill" "tlb_b ld kill" "tlb_c ld kill" "tex ld kill" "linear_a ld kill" "linear_b ld kill" "other decl"; do
+    for v in "live" "devsig stat" "tlb_a sw surv" "tlb_a sw lat1" "tlb_a lw surv" "tlb_a accept" "tlb_b sw surv" "tlb_b sw lat1" "tlb_b lw surv" "tlb_b accept" "tlb_c sw surv" "tlb_c sw lat1" "tlb_c lw surv" "tlb_c accept" "tex sw surv" "tex sw lat1" "tex lw surv" "tex accept" "linear_a sw surv" "linear_a sw lat1" "linear_a lw surv" "linear_a accept" "linear_b sw surv" "linear_b sw lat1" "linear_b lw surv" "linear_b accept" "xsite 6msg" "xsite order" "other decl" "live64" "tlb_a ld lo" "tlb_a ld hi" "tlb_b ld lo" "tlb_b ld hi" "tlb_c ld lo" "tlb_c ld hi" "linear_a ld lo" "linear_a ld hi" "linear_b ld lo" "linear_b ld hi" "tex ld lo" "tex ld hi" "tex rd lat1" "tex xbit" "tex/unmap" "unmap/tex"; do
         check "sgi_re row: $v" "$(count "$SGILOG" "^$v  .*ok$")" "1"
     done
 
     #  DENOMINATOR PINNED TO A LITERAL.  A detector that loses rows must not be able to pass
     #  by shrinking, and the count is the only thing that says so.  Raise it DELIBERATELY.
-    #  Both halves pinned: 35 rows emitted AND all 35 green.  Two rows rather than one,
+    #  Both halves pinned: 46 rows emitted AND all 46 green.
+    #  *** RAISED 44 -> 46 ON THIS ROUND'S OWN PASS 2. ***  The panel found a clause-(d)
+    #  floor breach: giving the TEX read decline an already-used NON-LEN latch bit
+    #  (1 << 8 = SGIRE_W_UNMAP_RD) escapes a 44/44 sweep, because the detector's four
+    #  TEX-read scenarios and its unmapped-read scenario never share an emulator instance
+    #  -- `tex xbit' set bits 0-5 only AT THAT TIME (it now fires 0-10).  Repaired by two
+    #  SAME-INSTANCE rows asserting both
+    #  announces fire, in BOTH orderings; one ordering would leave the mirror open.
+    #  *** RAISED 35 -> 44 BY #513, DELIBERATELY, IN THE SAME COMMIT AS THE FIX. ***
+    #  The six `<arm> ld kill' rows are GONE -- they asserted that a len == 8 READ still
+    #  ends the host at each window, which was true until #513 removed those kills.  They
+    #  are replaced by TWO anchored ACCEPT rows per accepting arm (window base AND last
+    #  slot, because a row at the base tests the near bound twice and the far bound never),
+    #  four CRIME_RE_TEX decline rows, and a 64-bit liveness control.  Arithmetic:
+    #  35 - 6 + 14 + 1 = 44.  Two rows rather than one,
     #  because a single "35 ok" check cannot tell a LOST row from a FAILING one -- and
     #  those need different responses.
     #  *** THE FIRST DRAFT OF THIS BLOCK HAD TWO DEFECTS, BOTH FOUND BY THE PASS-2 SEAT.
@@ -1204,8 +1218,8 @@ else
     #  Summed ARITHMETICALLY instead, which needs no regex dialect at all -- and unlike the
     #  string-concatenation form it replaces, it cannot be satisfied by (3 ok, 50 FAIL).
     check "sgi_re rows emitted" \
-          "$(( $(count "$SGILOG" " ok$") + $(count "$SGILOG" " FAIL$") ))" "35"
-    check "sgi_re rows green"   "$(count "$SGILOG" " ok$")"   "35"
+          "$(( $(count "$SGILOG" " ok$") + $(count "$SGILOG" " FAIL$") ))" "46"
+    check "sgi_re rows green"   "$(count "$SGILOG" " ok$")"   "46"
     check "sgi_re rows red"     "$(count "$SGILOG" " FAIL$")" "0"
 
 fi

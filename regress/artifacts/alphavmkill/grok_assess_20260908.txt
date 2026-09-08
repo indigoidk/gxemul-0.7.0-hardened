@@ -1,0 +1,196 @@
+I'll treat the filed claim as unverified and start from the Alpha memory walker, the machine model, and how other architectures handle unmodelled address space.The `fatal("AYONA3")` hit is in the tree; next I’ll read the full walker, `fatal()` semantics, and the other Alpha assessments so the claim isn’t ratified from the string alone.Two arms mention that address; I’ll check whether K0SEG swallows it first, and what `fatal()` actually does versus `exit(1)`.K0SEG does not swallow that VA. I’ll census the other walkers’ unmodelled-space arms and the Alpha `return 0` callers next.The walker ignores `flags`, so a debugger `dump` of that VA may still hit the trap. I’ll confirm the callers and the sibling Alpha assessments next.**VERDICT: Claim true only for kernel + PTBR==0 on that exact VA (`fatal` then `exit(1)`). Member 3 (DECLINE + LATCHED ANNOUNCE, `return 0`). Not FAULT — that member is unavailable and would be a new IMPLEMENT of Alpha MM delivery. Six separate rounds still; missing MM-dispatch is a carrier, not a shared repair. MED, below `alphatbinegsel`.**
+
+---
+
+## Q1. Is the claim true?
+
+**Mostly, with three premise failures.**
+
+The filed sentence treats one VA as always unrecoverable. The source has **two** hits on `0xfffffffd80000000`, and only one of them terminates.
+
+**Arm that kills** (`src/cpus/memory_alpha.c`):
+
+```73:90:src/cpus/memory_alpha.c
+	if (!userMode && base == 0) {
+		*return_paddr = vaddr & 0x000003ffffffffffULL;
+if (vaddr == 0xfffffffd80000000ULL) {
+	fatal("Alpha kernel virtual memory seems to want to be used. Not yet implemented.\n");
+	exit(1);
+}
+#if 1
+		if ((vaddr & ~0x7fff) == 0x0000000010000000ULL)
+			*return_paddr = (vaddr & 0x7fff) + HWRPB_PADDR;
+        // ... two more remaps ...
+#endif
+		return 2;
+	}
+```
+
+`fatal()` is only a print (`src/core/debugmsg.c`). Termination is the `exit(1)` immediately after. Nothing recovers in between.
+
+**Arm that does not kill:**
+
+```94:94:src/cpus/memory_alpha.c
+if (vaddr == 0xfffffffd80000000ULL) fatal("AYONA3\n");
+```
+
+That prints and **falls into the three-level walk**. Same VA, not unrecoverable.
+
+### Which addresses actually reach the kill
+
+| Condition | Path |
+|---|---|
+| Kernel, VA in K0SEG (`0xfffffc0000000000`–`0xfffffdffffffffff`) | Direct map, `return 2`. **Never sees the trap.** |
+| Kernel, `apcb_ptbr == 0`, VA **exactly** `0xfffffffd80000000` | `fatal` + `exit(1)` |
+| Kernel, `apcb_ptbr == 0`, any **other** VA including other K1SEG | Identity map (plus three remaps), `return 2` |
+| Kernel, `apcb_ptbr != 0`, this VA | `AYONA3` print, then walk |
+| User mode, this VA | Skips the bootstrap arm entirely; `AYONA3` then walk |
+
+The VA is **K1SEG**, not K0SEG:
+
+```209:212:src/include/thirdparty/alpha_cpu.h
+#define	ALPHA_K0SEG_BASE	0xfffffc0000000000ULL	/* direct-mapped */
+#define	ALPHA_K0SEG_END		0xfffffdffffffffffULL
+#define	ALPHA_K1SEG_BASE	0xfffffe0000000000ULL	/* virtual */
+#define	ALPHA_K1SEG_END		0xffffffffffffffffULL
+```
+
+`0xfffffffd80000000 > 0xfffffdffffffffff`, so the K0SEG gate does not swallow it. (An earlier reachability pass in this tree first claimed it was inside K0SEG and then corrected that; the numeric comparison is the correction.)
+
+It is an **exact equality**, not a range. `0xfffffffd80000008` is identity-mapped like every other bootstrap VA. That is a debug landmine, not a modelled window.
+
+`flags` is unused, including `FLAG_NOEXCEPTIONS`. Debugger `dump` / `put` / `unassemble` still die.
+
+Reset on an existing Alpha machine is kernel + PTBR 0: `cpu_new` zero-allocates the CPU (`src/cpus/cpu.c`), `ps` and `apcb_ptbr` start at 0, and `machine_alpha.c` advertises `a1 = 0` as the L1 PFN.
+
+**Premise I will not ratify:** *OUTSTANDING_BUGS* says this is “reached early in a boot on an address the kernel chooses.” That constant appears nowhere else in this tree — not in the machine, not in PAL, not in a demo. Upstream gxemul 0.7.0 has the same landmine. I did not find an in-tree guest that uses it. K1SEG is the mapped kernel window; the walk already handles it once PTBR is set. “Kernel chooses this VA before paging” is unverified.
+
+---
+
+## Q2. Option-set member: **3 DECLINE + LATCHED ANNOUNCE** (`return 0`)
+
+### Census of `memory_<arch>.c` (asked for, not first principles)
+
+What walkers actually do with an address outside every modelled space:
+
+| Walker | Unmodelled / stub region | Ordinary translation miss |
+|---|---|---|
+| **Alpha** | This one VA: `fatal`+`exit(1)`. Other PTBR==0 VAs: **ACCEPT** identity. | `fatal` print (unlatched) + **`return 0`**. No guest exception. `#194` already removed abort/exit from this path. |
+| **MIPS** | — | `mips_cpu_exception`, `return 0` |
+| **ARM** | Unimplemented descriptor type: `fatal`+`exit(1)` | `arm_exception`, `return 0` |
+| **PPC** | 64-bit translation: `fatal`+`exit(1)` | `ppc_exception`, `return 0` |
+| **M88K** | Internal inconsistency: `exit(1)` | `m88k_exception`, `return 0` |
+| **SH** | Unimplemented kernel VA: `fatal`+`exit(1)` (**honors `FLAG_NOEXCEPTIONS`**) | `sh_exception`, `return 0` |
+
+RISC-V / i960 declare `translate_v2p` and have no `memory_*.c` walker in this tree.
+
+Two in-file idioms disagree:
+
+1. **PTBR==0 siblings in the same `if`:** ACCEPT (`return 2`), including a real 16MB K1SEG slice at `0xfffffe0000000000`.
+2. **Walk `not_found`:** DECLINE (`return 0`) + unlatched `fatal`. This project already chose that over host death (`#194`).
+
+The kill is the outlier in both directions: it is not the sibling ACCEPT, and it is not the walk’s `return 0`.
+
+Architectures that can fault, fault. Alpha cannot. `memory_rw.c`’s failed-device path raises `mips_cpu_exception` / `m88k_exception` only. `ALPHA_KENTRY_MM` / `ALPHA_MMCSR_*` have definitions and **no consumers**; `kentry[]` is written by `wrent` and initialised to a dummy PAL, never dispatched. Confirmed by grep of `src/`.
+
+### Members, in order
+
+**5 FAULT — architecturally right, not available.** Unmapped K1SEG is an MM fault on real OSF PAL. Choosing FAULT here obliges building delivery first: PAL frame, `kentry[ALPHA_KENTRY_MM]`, MMCSR/VA, and teaching `pc_to_pointers` to see a redirected PC. That is a new IMPLEMENT round, not this de-fatalisation. I am not recommending it as this row’s product.
+
+**4 ACCEPT — mechanical shape, failed premise.** The identity `*return_paddr` is computed *before* the kill. Deleting `exit(1)` would keep that value. Member 4 requires the **right** value. This is the comment’s own “UGLY hack,” using the K0SEG mask on a K1SEG address (`paddr = 0x3fd80000000`, ~4TB, default RAM 128MB). Data then takes the unmapped-physical path: zeros / dropped writes, **success**. That is the silent bogus map the landmine exists to refuse.
+
+**1 DELETE** is the same fall-through as ACCEPT.
+
+**6 BACKED ACCEPT** does not apply (not inventing device storage).
+
+**7 IMPLEMENT** does not apply. Member 7’s tell is “no predicate, whole path stubbed.” This is a one-address predicate. K1SEG translation **is** the walk, once PTBR is set. There is nothing to walk at PTBR 0. The 16MB low-K1SEG window is already remapped in this same arm.
+
+**2 DECLINE (silent)** — `return 0` with no message. Drops the only signal the author planted.
+
+**3 DECLINE + LATCHED ANNOUNCE — the available member.** `return 0` before the identity `return 2`; one `(once)` `fatal`, house latch (`N = 1`), not `#194`’s unlatched flood. Matches the file’s own walk-miss disposition, with the latch `#194` should have used.
+
+Do **not** widen the predicate to “all of K1SEG except the 16MB window” this round. That is a different oracle (which bootstrap K1SEG addresses a guest actually uses) and would change currently-accepted identity maps.
+
+### Limitation that must be in the record
+
+`return 0` recovers **data**. A guest `ldq` of this VA then takes `#215`: abandon the access, host lives.
+
+`return 0` does **not** recover **instruction fetch**. `cpu_dyntrans.c` retries `translate_v2p` on the unchanged PC (Alpha delivers no exception, so PC does not move) and then:
+
+```729:732:src/cpus/cpu_dyntrans.c
+			if (!ok) {
+				fatal("FATAL: could not find physical"
+				    " address of the exception handler?");
+				exit(1);
+```
+
+That is the missing MM-dispatch showing up as a *second* host kill, with a worse message — the *OUTSTANDING_BUGS* worry that declining “faults somewhere less legible.” It is a pre-existing Alpha I-fetch property (any failed translation, not this VA). Do not hold this landmine hostage to it, and do not pretend member 3 makes I-fetch safe.
+
+---
+
+## Q3. One round or several? **Still six. The bar is not met.**
+
+Codex’s test: *share a file, one fault-handling repair, and the same fault-delivery oracle.*
+
+| Test | `alphafaultclaim` × `alphavmkill` |
+|---|---|
+| Same file | **Yes** — `memory_alpha.c` |
+| One fault-handling repair | **No.** The common repair would be IMPLEMENT of PAL MM delivery. That is neither row’s scoped product. `alphafaultclaim` can close as a comment fix (`#194`/`#215` claim a fault the caller never raises). `alphavmkill` can close as `return 0` + latch. Those are two repairs. The common one is a third, larger round spanning palcode, the walker, and dyntrans. |
+| Same fault-delivery oracle | **No.** “Guest MM handler ran with MMCSR/VA set” does not exist and would have to be built. This row’s detector is “host does not `exit(1)` on this VA.” `alphafaultclaim`’s is “comment matches control flow” or “an MM exception is delivered.” |
+
+Shared missing MM-dispatch is a **carrier both rows consume**. It is evidence that a future IMPLEMENT-MM-faults round would have both as customers. It is not evidence these two are one round now.
+
+The other four stay separate (already established; I am not re-deriving):
+
+- `alphatbinegsel` — PAL `tbi` selector (different file, different oracle)
+- `alphaswpctxreg` / `alphactxfail` — PAL `swpctx` (different file; two observables already split)
+- `alphapteprot` — **successful** walk always `return 2` (same file, opposite path, protection oracle)
+
+`AYONA3` is the same predicate and is **not** a second round. It is debug residue on the non-killing arm. Deleting it can ride this diff; the detector is still “this VA.” Expanding to all of K1SEG cannot.
+
+---
+
+## Q4. Witness: constructible. Debugger: reaches it.
+
+**Guest instruction path, existing machine, no new `device_add`.**
+
+`gxemul -E eb164` (or alphabook1 / 4100 / 3000/300). Reset is already kernel + PTBR 0.
+
+Data path (the one member 3 actually recovers):
+
+1. `put` an `ldq` at a **K0SEG** address (modelled; not the magic VA).
+2. Point the base register at `0xfffffffd80000000`.
+3. Set PC at the `ldq`, `step`.
+
+First access misses the fast map, `memory_rw` calls `translate_v2p`, host `exit(1)`. The `put` is of an instruction in modelled space; the guest load is what hits the site. That is the cold-debugger shape this project already admitted for Alpha.
+
+I-fetch path: `reg pc 0xfffffffd80000000` then `step`. `pc_to_pointers` calls `translate_v2p` directly. After member 3 this path **still** dies at dyntrans (Q2). Pin the data `ldq` as the oracle, or the round will look red after a correct translator fix.
+
+**Debugger reaches it — unlike `pcc2defaultkill`’s `put b`.** `dump` / `put` / `unassemble` all go through `memory_rw(..., CACHE_NONE | NO_EXCEPTIONS)`. Alpha ignores `flags`, so `dump 0xfffffffd80000000` is a host kill. SH’s analogous unimplemented-VA kill honors `FLAG_NOEXCEPTIONS`; this one does not. That is operator-reachable and real, but **not the only route**, so it does not cap severity by itself.
+
+A `put` *of the magic address* is not a witness (ladder). It would also kill, for the same reason.
+
+Natural OS boot: **unwitnessed, and the “early boot” claim is unsupported.** A constructed guest `ldq` is enough to make the defect real; it is not enough to call it a boot-blocker.
+
+---
+
+## Q5. Severity: **MED. Below `alphatbinegsel`. Do not raise.**
+
+`alphatbinegsel` is a routine privileged primitive (`tbi -1/-2`) that **silently under-flushes** during normal OS operation. The guest believes stale translations are gone. That is why it was raised.
+
+This row is a **loud host kill** on **one debug equality**, only while PTBR is still 0. Once `swpctx` has loaded a table, the kill is gone (only `AYONA3` remains). It is not a primitive that misbehaves on every context switch.
+
+Relative placement:
+
+| | `alphatbinegsel` | `alphavmkill` |
+|---|---|---|
+| When | Normal PAL TBIA | Bootstrap, PTBR==0, one VA |
+| Failure mode | Silent wrong TLB state | Process death |
+| Guest-instruction witness | PAL `tbi` with selector -1/-2 | Constructed `ldq` / PC-set |
+| In-tree boot hit | Any guest that flushes the TB | Unverified; constant unused elsewhere |
+
+Host-kill on an existing machine without a new device is why it is not LOW. Absence of a shown boot path, and the one-address debug shape, are why it is not HIGH. If a later boot measurement hits this VA before PTBR is set, raise it then — not on the *OUTSTANDING_BUGS* sentence.
+
+---
+
+**Found besides the brief:** `alpha_translate_v2p` ignores `flags` entirely (`FLAG_NOEXCEPTIONS`, `FLAG_INSTR`, write). That is why the debugger dies, and it is the same unused-`flags` fact `alphapteprot` already recorded. Not a seventh Alpha round by itself.

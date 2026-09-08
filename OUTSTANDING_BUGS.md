@@ -17601,3 +17601,102 @@ what comes back.**  It cost one command here and would have saved the round.
 *Related in shape, one row over: `sgilinearoob` carried a bare title and an EMPTY note while the
 2026-09-02 adjudication referred to "the siblings' overrun" as known -- the class was known to the
 adjudication and not findable from the row that carries it.*
+
+## 2026-09-08 — `#513 sgirekills`: five modelled registers ended the host when read back, and the panel refused my detector before the table did
+
+**THE DEFECT.**  `dev_sgi_re.c` carried SIX read arms of the form
+
+    } else {
+            fatal("TODO: read from CRIME_RE_TLB_A\n");
+            exit(1);
+    }
+
+each on the `else` of a `writeflag == MEM_WRITE` test, inside a window whose WRITE path is fully
+modelled.  **A guest could store a value to `CRIME_RE_TLB_A` and reading the same address back ended
+the emulator** -- one `ld` on an unmodified `-E sgi -e ip32`.
+
+**FIVE BECAME ACCEPT** (option-set member 4: the write arm already computes and stores the value, so
+the read returns it -- a decline would have shipped a wrong record in product code, announcing
+"unimplemented" about a register the model implements).  **`CRIME_RE_TEX` became a latched DECLINE**
+on its own new bit, because `sgitexindex` records its write index as a missing factor of four, only
+31 of 112 cells are reachable, `re_tex` has NO consumer anywhere in the file, and that row carries a
+standing do-not-code ruling.  Accepting it would publish a mapping the project has recorded as wrong.
+
+**THE ORACLE-CORRECTION ORDERING, run rather than asserted.**  Six shipped rows asserted that a
+len == 8 READ still ends the host.  The fix makes them false *by succeeding*, so the rows were
+re-pinned FIRST and the committed build measured RED under the new expectations:
+
+    committed build, re-pinned oracles   30/44    PREFIX_RED_20260908.out
+    after the fix, SAME script           44/44   POSTFIX_20260908.out
+
+Every red row on the pre-fix run was a NEW row; all pre-existing rows stayed green and all three
+controls were green.
+
+**KILL TABLE: 12 of 12 mutants killed, NONE escaped** (scratch clone, frozen
+instrument, `killtable_20260908/TABLE1.txt`).
+
+*** THE PART WORTH RECORDING IS THAT THE DESIGN PANEL REFUSED MY ROW SET, AND THE TABLE THEN MEASURED
+BOTH OF ITS OBJECTIONS. ***  I proposed one row per window at the window BASE plus a `#499`-style
+decline row for TEX.  grok refused it with two floor-shaped holes:
+
+* **the FAR BOUND was unpinned** -- an accept row at a window's base tests the near bound twice and
+  the far bound never.  Hence TWO rows per accepting arm, base AND last slot;
+* **a load-only TEX decline row would have been VACUOUS** -- it wants `v0 == 0`, and a later ACCEPT
+  of TEX would read back the ZEROED array and yield 0 as well, so the row could not redden at the
+  very edit it exists to catch.  The TEX rows therefore STORE a non-zero value first.
+
+**Measured afterwards, and both would have swept clean under my design:**
+
+    M4_readshift  43/44   read-side index re-map    caught ONLY by the last-slot row
+    M7_farbound   43/44   far-bound window shrink   caught ONLY by the last-slot row
+    M8_texaccept  40/44   TEX -> ACCEPT             caught by all four store-first TEX rows
+
+**THE `odata` TRAP.**  The function's common tail is
+`if (writeflag == MEM_READ) memory_writemax64(cpu, data, len, odata);`, so a read arm filling
+`data[]` is overwritten before the guest sees it.  A first draft of this fix did exactly that and
+**would have returned zeroes while looking correct**; it is now mutant `M2_datafill`.  Caught by the
+sketch rule -- an edit is not a fix until it has been run against the enclosing function's real
+control flow.
+
+**RECORDS.**  Two comment paragraphs in this file asserted the six read kills were "still untouched"
+-- true when `#497` and `#499` wrote them, false the moment this round landed.  Both corrected in
+place beside their originals rather than rewritten, so a reader arriving from those rounds can see
+which half moved and when.  `gate_arm.sh` went 35 -> 44 rows in the same commit
+(35 - 6 retired + 14 re-pinned + 1 new 64-bit liveness control).
+
+**SEATS.**  grok, glm, deepseek, minimax and kimi (via the `kimi-k3:cloud` substitute) answered the
+design pass.  **codex was REFUSED TWICE by the provider content filter on this subject**, once
+unscoped and once with the `codexsubjectrefusal` scoping remedy applied deliberately -- a controlled
+negative now recorded on that row, whose diagnosis is that scoping reading to `src/` cannot help when
+`src/` IS the flagged content.  agy DELIBERATELY NOT FIRED (measurement reserve); Opus 5 and Fable 5
+DELIBERATELY NOT FIRED (preserved for the 2026-09-09 adjudication).
+
+## 2026-09-08 — `sgidefatalstale` (LOW, filed): the de-fatalisation rounds left DESCRIPTIONS of host kills behind
+
+Filed from a codex records-only review of the `#513` composite
+(`regress/artifacts/sgirekills/codex_records_20260908.txt`).  **These are PRE-EXISTING and were not
+written by `#513`** -- that round's own six record defects were corrected in place.
+
+* `dev_sgi_re.c` commentary and the probe header both call the DE width guard a **"width kill"**.
+  Its current branch latches a diagnostic and executes `goto de_declined;`, reaching the tail and
+  `return 1`.  Traceable to `sgidewidth`.
+* `gate_arm.sh` says the drawing default **"is fatal on 254 of 256 top-byte op classes"**.  The
+  current default latches and `break`s.  Traceable to `sgideprimop`.
+* the probe header excludes **"anything in DEVICE_ACCESS(sgi_de)"** from scope -- now too broad,
+  since `#513`'s `tex xbit` makes a DE access and checks session survival.
+* **`gate_arm.sh` disagrees with itself about the padded-column trap.**  It says a too-long name
+  "makes a check UNSATISFIABLE and the row quietly stops being tested"; the check is
+  `count(...)` against a required `1`, so no match is a **FAILURE, not a silent pass** -- and a
+  correction further down the same file already says so.
+* two older gate records contradict current requirements: a table saying "today's table would read
+  41/58" where the gate now requires 190, and a writeback table naming three cold-word rows "and
+  nothing else" where five are now required.
+
+**ALREADY COVERED ELSEWHERE, checked before filing:** the `// bufdepth = 1, 2, or 4.` comment (the
+value can be 8) is `sgirebufuninit`'s subject; the `printed()` normalisation nit is not claimed as
+new.
+
+**SEVERITY low, argued:** none of these changes what the code does or what any gate measures.  The
+cost is a reader being told a guard is fatal when it declines -- the misreading that makes someone
+re-fix a fixed defect.  *This session already had a stale ROW send me to design a round around an
+already-repaired bug, so the harm model is real; it has not been paid here.*

@@ -1,0 +1,108 @@
+**Verdict: the Enable-read asymmetry is real. IRQEnable `+0x188` terminates the host; FIQEnable `+0x288` silently returns zero. Both warrant 4 ACCEPT, in separate rounds. Zero is correct when disabled, but not for every configured state. The claimed ARM device-failure arm is absent from this tree.**
+
+**Q1. The source confirms the specific claim.** The [IRQ arm](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c:578) is:
+
+```c
+case IRQ_ENABLE_SET:
+	if (writeflag == MEM_WRITE) {
+		d->irq_enable |= idata;
+		if (d->irq_status & d->irq_enable)
+			INTERRUPT_ASSERT(d->irq);
+		else
+			INTERRUPT_DEASSERT(d->irq);
+	} else {
+		odata = d->irq_enable;
+		fatal("[ WARNING: footbridge read from "
+		    "ENABLE SET? ]\n");
+		exit(1);
+	}
+	break;
+```
+
+The [FIQ arm](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c:626) is:
+
+```c
+case FIQ_ENABLE_SET:
+	if (writeflag == MEM_WRITE)
+		d->fiq_enable |= idata;
+	break;
+```
+
+`odata` starts at zero. The FIQ read leaves it untouched, reaches `memory_writemax64`, and returns success (`1`). IRQ assigns the mask but exits with process status `1` before delivering it. These are distinct mechanisms: **IRQ discards a computed answer through termination; FIQ omits the read assignment.** See the [initialization](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c:498) and [common tail](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c:754).
+
+The neighboring arms matter:
+
+| Register pair, IRQ / FIQ offsets | Current read behavior | Current write behavior |
+|---|---|---|
+| Enable, `+0x188` / `+0x288` | IRQ exits; FIQ returns zero | ORs data into the respective mask; IRQ also updates its output |
+| EnableClear, `+0x18c` / `+0x28c` | IRQ selects its mask, then exits; FIQ returns zero | Clears corresponding mask bits; IRQ also updates its output |
+| Status, `+0x180` / `+0x280` | Returns respective `status & enable` | Both diagnose and exit |
+| RawStatus, `+0x184` / `+0x284` | Returns respective `status` | Both diagnose and exit |
+
+Offsets come from the [register definitions](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/thirdparty/dc21285reg.h:330); behavior comes from the [register arms](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c:560). The Status arms therefore do **not** exhibit the filed termination-versus-silence asymmetry.
+
+**Q2. The local datasheet specifies readable state, with separate write aliases.**
+
+I read the project-level `_scratchpad/dc21285.txt`: Intel order **278115-001, September 1998**. Its [§7.3.28](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/dc21285.txt:6798) says:
+
+> “Enable and EnableSet share the same address for reads and writes respectively.”
+
+[Table 7-10](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/dc21285.txt:6821) explicitly places IRQEnable/FIQEnable in the **Read** column at `188h/288h`, and IRQEnableSet/FIQEnableSet in the **Write** column at those same addresses.
+
+| Register | Datasheet semantics |
+|---|---|
+| Enable — §7.3.31 | Read-only enable mask; reset value zero |
+| EnableSet — §7.3.32 | Write-only; ones set corresponding enable bits, zeros have no effect |
+| EnableClear — §7.3.33 | Write-only; ones clear corresponding enable bits, zeros have no effect |
+| Status — §7.3.29 | Read-only masked active-source state |
+| RawStatus — §7.3.30 | Read-only active-source state, identical between IRQ and FIQ |
+
+The decisive quotations are:
+
+- [§7.3.31](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/dc21285.txt:6911): “The value of this register can only be changed by writing to the EnableSet and EnableClear registers.” Also: “Reset value: 0.”
+- [§7.3.29](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/dc21285.txt:6886): “This read-only register is a bit-wise AND of RawStatus and IRQEnable/FIQEnable.”
+- [§7.3.30](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/dc21285.txt:6901): “The IRQRawStatus and FIQRawStatus read-only registers always contain identical data.”
+
+Thus, reset Enable and masked Status should be zero. **RawStatus need not be zero merely because interrupts are disabled.**
+
+For EnableClear reads, Table 7-10 has no read entry. I found no specified returned value or required abort for those reads; neither zero nor enable-mask readback should be presented as a documented hardware answer.
+
+**Q3. Choose 4 ACCEPT for IRQEnable `+0x188`.**
+
+The documented read should deliver the existing `d->irq_enable` value through the successful-read tail. Removing the erroneous diagnostic and termination preserves an answer the model already has.
+
+The ARM premise needs correction. In this checkout, the [`memory_rw` device-failure branch](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:598) invokes exceptions only under `MEM_MIPS` and `MEM_M88K`, then returns `MEMORY_ACCESS_FAILED`. There is **no `MEM_ARM` exception arm there**.
+
+ARM does have abort machinery in its [address-translation failure path](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_arm.c:257). But its [load caller](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr_loadstore.c:233) merely returns on memory failure, assuming an exception was already generated. Changing the device callback to return failure would therefore **not automatically deliver an ARM Data Abort**.
+
+Member 5 is unavailable through that existing failure path. Even if implemented, faulting this documented read would be the wrong behavior.
+
+**Q4. FIQEnable is independently wrong: also 4 ACCEPT.**
+
+The model initializes `fiq_enable` to zero, then maintains it through EnableSet and EnableClear writes. A constant-zero read is correct whenever that mask is zero; it becomes incorrect when documented enable bits are set. Returning the existing mask requires no functioning FIQ interrupt delivery.
+
+There is also a separate **FIQ raw/status state defect**. The interrupt callbacks [update only `irq_status`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c:375). `fiq_status` has no updating assignment after initialization. Consequently:
+
+- FIQRawStatus remains zero even when a modeled source makes IRQRawStatus nonzero, violating §7.3.30.
+- FIQStatus remains zero even when an active source is FIQ-enabled.
+
+That requires correcting which source state feeds the FIQ registers. Full FIQ delivery is additional implementation work: the [ARM interrupt registration](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c:198) still contains `/* FIQ: TODO */`.
+
+**Q5. Two rounds for the filed pair.**
+
+One round removes IRQEnable’s termination and delivers its existing answer. Another supplies FIQEnable’s omitted readback. Each can be corrected while leaving the other defect intact, and their observables differ.
+
+If `+0x188` already has a candidate row, this review confirms that row rather than creating a duplicate. The additional FIQ raw/status finding creates another candidate; EnableClear policy and full FIQ delivery stay outside the two Enable-read rounds.
+
+**Q6. The distinguishing channels are different.**
+
+| Half | Observable distinguishing fixed behavior |
+|---|---|
+| IRQEnable | **Host process status and diagnostic**, plus successful delivery of the stored mask. Unfixed exits with status `1`; fixed completes the read. Survival alone is insufficient. |
+| FIQEnable | **Returned register data** when the stored mask contains documented nonzero bits. Unfixed returns zero; fixed returns that mask. Reset-only observation cannot distinguish them. |
+
+An existing [Footbridge probe assertion](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/footbridge_sites_probe.py:289) explicitly expects the IRQEnable termination, and [gate_arm.sh](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gate_arm.sh:1009) requires that expectation to pass. Its correction belongs in the IRQ round.
+
+I found **no Footbridge FIQ register or delivery probe** in the searched `regress`, `test`, `battery`, `demos`, and `experiments` sources. The FIQ findings are therefore source-established fidelity candidates without demonstrated guest-workload impact here; that limits the demonstrated severity.
+
+This was source and local-datasheet review only. No files changed or probes ran.

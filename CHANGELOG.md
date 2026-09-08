@@ -1,3 +1,206 @@
+# `#513` sgirekills: five modelled registers ended the host when read back -- and four adversarial passes, three of which found something
+
+**THE DEFECT.**  `dev_sgi_re.c` carried SIX read arms of the form
+
+    } else {
+            fatal("TODO: read from CRIME_RE_TLB_A");
+            exit(1);
+    }
+
+each on the `else` of a `writeflag == MEM_WRITE` test, inside a window whose WRITE path is fully
+modelled.  **A guest could store to `CRIME_RE_TLB_A` and reading the same address back ended the
+emulator** -- one `ld` on an unmodified `-E sgi -e ip32`.
+
+**FIVE BECAME ACCEPT** -- option-set member 4, because the write arm directly above each one already
+computes and stores the value, so nothing is unimplemented and a decline would have shipped a wrong
+record in product code.  **`CRIME_RE_TEX` became a latched DECLINE** on its own bit: `sgitexindex`
+records its write index as a missing factor of four, only 31 of 112 cells are reachable, `re_tex`
+has NO consumer in the file, and that row carries a standing do-not-code ruling -- so accepting the
+read would publish a mapping the project has already recorded as wrong.
+
+**THE FIX HAD TO WRITE `odata`, NOT `data[]`.**  The common tail is
+`if (writeflag == MEM_READ) memory_writemax64(cpu, data, len, odata);`, so a read arm filling
+`data[]` is overwritten before the guest sees it.  A first draft did exactly that and **would have
+returned zeroes while looking correct**; it is now mutant `M2_datafill`.
+
+## THE ORACLE-CORRECTION ORDERING, run rather than asserted
+
+Six shipped rows asserted that a len == 8 READ still ends the host.  The fix makes them false *by
+succeeding*, so the rows were re-pinned FIRST and the committed build measured RED:
+
+    committed build, re-pinned oracles   30/44        PREFIX_RED_20260908.out
+    after the fix, SAME script           44/44       POSTFIX_20260908.out
+    after the pass-2 repair, on build/   46/46        POSTFIX46_20260908.out
+
+Every red row on the pre-fix run was a NEW row; all pre-existing rows and all three controls stayed
+green.
+
+## FOUR PASSES.  THE PANEL WAS RIGHT THREE TIMES AND I WAS WRONG THREE TIMES.
+
+**PASS 1** refused my six-row design with two floor-shaped holes: an accept row at a window BASE
+tests the near bound twice and the far bound never, and a load-only TEX decline row would have been
+VACUOUS -- it wants `v0 == 0`, and a later ACCEPT of the zeroed array yields 0 too.  **Both were
+then measured**: `M4_readshift` and `M7_farbound` are caught ONLY by the last-slot row, and would
+have swept my design clean.
+
+**PASS 2** found an L2 floor breach: aliasing the new latch onto `SGIRE_W_UNMAP_RD` escapes, because
+no session read TEX and the unmapped address together.  Repaired with two same-instance rows in both
+orderings.  **It also found three wrong records in text I had just written**, including the enum
+"next free bit is 1 << 11" -- **which this file already records going false the same way for
+`SGIRE_W_PRIM_OP`.  I repeated a documented failure while editing the enum that documents it.**
+
+**PASS 3** found that repair closed ONE cell of FIVE: bits 6, 7, 9 and 10 are the same one-token
+edit on the same line.  **My "#392, unbounded" objection was a strawman** -- the cover is LINEAR,
+the edited latch against each other used bit.  Closed with one widened row, not four.
+
+*** AND A READING SEAT THEN FOUND A LIVE BUG A GREEN 46/46 RUN HAD ENDORSED. ***  `store()` is
+`store(A, addr, op=..., val=...)`; I wrote `store(A, DE_MODE_DST, MODE_LIN_B)`, so the VALUE became
+the OPCODE.  Six calls, all wrong the same way -- **the row executed garbage and still scored 46/46,
+because its only oracle was the TEX decline count.**  No mutant could have found it: every mutant is
+scored against the same broken row.  Repaired twice over -- the calls fixed, AND the row made
+SELF-CHECKING (it now wants `1/11`, so a silently-failing setup reds it).
+
+**PASS 4** split 3-2 to close, and the surviving objection was kimi's: **only 2 of 11 aliases had a
+logged kill against the FINAL row -- the other nine were carried across a row edit, which this
+round own doctrine forbids.**  *"Close every cell in ONE diff" deserves "kill every cell on ONE
+probe version."*  Hence the sweep below.
+
+## THE MEASUREMENTS
+
+### kill table -- 12 mutants
+```
+# #513 sgirekills -- kill table 1   (scratch clone /tmp/gx513, frozen instrument)
+# baseline BASE 44/44   (from BASE.raw, re-derived)
+#
+# *** THIS LINE READ "42/44" WHEN THE TABLE WAS WRITTEN, WHICH IS M12_linswap's SCORE, NOT THE
+# BASELINE'S.  My summary block reused the loop variables `n, d' after the mutant loop had
+# reassigned them, so the header printed the LAST mutant's numbers under the baseline's
+# label.  Corrected 2026-09-08 by re-deriving from BASE.raw.
+#
+# The real baseline was provably clean regardless: the driver exits with
+#   "*** BASELINE NOT CLEAN -- table uninterpretable"
+# unless numerator == denominator, and it did not exit.  BASE.raw confirms 44/44 with its
+# completion sentinel present.
+#
+# Same class as the variable-shadowing bug that made this session's gate-edit script report
+# "+616 re-pinned" rows.  Both were caught by checking the OUTPUT against an independent
+# source rather than trusting the script that produced it.
+
+mutant          score    floor  verdict   what it is
+M1_reinstate6   30/44    (b)    KILLED    restore fatal()+exit(1) at ALL SIX read arms, verbatim
+M2_datafill     42/44    (d)    KILLED    fill data[] instead of odata -- the tail overwrites it (the bug I nearly shipped)
+M3_noincr       42/44    (d)    KILLED    drop the tlbi++ -- four copies of one cell
+M4_readshift    43/44    (d)    KILLED    read-side index re-map >> 1 -> >> 2, write side untouched
+M5_shortloop    42/44    (d)    KILLED    shorten the read loop; the guard still tests len != 8
+M6_translate    41/44    (f)    KILLED    ANCHOR: +1 translation on BOTH store and read in TLB_A
+M7_farbound     43/44    (f)    KILLED    FAR-BOUND shrink of TLB_A -- invisible to a row at the window base
+M8_texaccept    40/44    (d)    KILLED    convert TEX to ACCEPT -- what the store-first TEX rows exist to catch
+M9_texnolatch   43/44    (d)    KILLED    remove the latch: announce per access instead of per instance
+M10_texbit      43/44    (d)    KILLED    CROSS-BIT: give the read decline the WIDTH latch instead of its own
+M11_lanerev     42/44    (d)    KILLED    reverse the halfword lane order -- VAL_HI differs in every lane
+M12_linswap     42/44    (d)    KILLED    swap the two LINEAR_A words -- the fixed-arity analogue of M11
+
+NOT KILLED: none
+KILLTABLE_DONE
+```
+
+### the pass-2 L2 repair
+```
+# #513 pass-2 L2 verification  (scratch clone /tmp/gx513b, frozen instrument)
+
+BASE_pass2        46/46   repaired detector, CLEAN
+M13_latchcollide  44/46   KILLED   SGIRE_W_TEX_RD 1<<11 -> 1<<8 (= SGIRE_W_UNMAP_RD)
+
+# The panel PREDICTED this mutant at 44/44 against the PRE-REPAIR 44-row detector.
+# That prediction is not re-measured here -- the 44-row form no longer exists.  What is
+# measured is that the REPAIRED detector kills it.
+L2VERIFY_DONE
+```
+
+### the class closure
+```
+# #513 pass 3 -- LATCH-COLLISION CLASS CLOSURE  (clone /tmp/gx513e)
+
+BASE_fixed   46/46   tex xbit widened to bits 0-10 AND made SELF-CHECKING, CLEAN
+#
+# *** THE 46/46 ABOVE MEANS MORE THAN THE EARLIER ONES.  The row now wants `1/11' -- the TEX
+# decline once, AND all eleven other latch announces present -- so a CLEAN run PROVES the setup
+# fired.  The previous 46/46 did not: it was scored against a row whose six drawing-engine stores
+# passed their VALUE as the OPCODE and therefore did nothing. ***
+
+M_bit9     45/46   KILLED   SGIRE_W_TEX_RD -> that bit
+M_bit10    45/46   KILLED   SGIRE_W_TEX_RD -> that bit
+
+# *** THIS FOOTER IS THE DRIVER'S TEMPLATE TEXT FROM THE PREVIOUS RUN AND IT IS NOW FALSE.
+# It said bits 9 and 10 "ESCAPE BY DESIGN and are DISCLOSED".  THEY ARE KILLED -- see the two
+# rows above it.  Left in place with this correction rather than deleted, so the sequence is
+# legible; a footer contradicting the results directly above it is exactly the wrong-record
+# class this round has been correcting all evening, and it appeared in a MEASUREMENT LOG. ***
+#
+# THE ACTUAL SEQUENCE, and the before/after is the point:
+#
+#   CLASSVERIFY.txt   bits 6,7 KILLED   bits 9,10 ESCAPED 46/46, disclosed in the contract
+#   CLASSVERIFY2      bit 9 ESCAPED again -- but that run scored the BROKEN row (see above),
+#                     so its escape is evidence of the bug, NOT of an open cell
+#   CLASSVERIFY3      bits 9 and 10 BOTH KILLED 45/46 against the fixed, self-checking row
+#
+# So the disclosure was withdrawn and REPLACED BY COVERAGE.  Two seats had called a
+# measured-open cell on the edited line a breach whatever the contract says; closing it beat
+# defending it, and the settling fact I had recorded as unknown was one grep away in a shipped
+# probe that already drives the drawing engine.
+#
+# THE CLASS IS NOW CLOSED: SGIRE_W_TEX_RD aliased onto each of the eleven other used bits of
+# `d->warned' is killed -- bits 0-5 by M10, bit 8 by `tex/unmap' and `unmap/tex', and bits
+# 6, 7, 9, 10 by the widened `tex xbit'.
+CLASSVERIFY_DONE
+```
+
+### *** ELEVEN ALIASES, ONE PROBE VERSION -- what actually closes the chain ***
+```
+# #513 pass 4 -- ELEVEN ALIASES, ONE PROBE VERSION  (clone /tmp/gx513f)
+
+# kimi, pass 4: only 2 of 11 had a logged kill against the FINAL row; the other nine were
+# measured against earlier versions of the row that kills them.  This table fixes that:
+# every cell, one frozen probe, one run.
+
+SWEEP_BASE   46/46   the final self-checking probe, CLEAN
+
+S_bit00   bit 0   45/46   KILLED   SGIRE_W_TEX_RD -> 1 << 0
+S_bit01   bit 1   45/46   KILLED   SGIRE_W_TEX_RD -> 1 << 1
+S_bit02   bit 2   45/46   KILLED   SGIRE_W_TEX_RD -> 1 << 2
+S_bit03   bit 3   45/46   KILLED   SGIRE_W_TEX_RD -> 1 << 3
+S_bit04   bit 4   45/46   KILLED   SGIRE_W_TEX_RD -> 1 << 4
+S_bit05   bit 5   45/46   KILLED   SGIRE_W_TEX_RD -> 1 << 5
+S_bit06   bit 6   45/46   KILLED   SGIRE_W_TEX_RD -> 1 << 6
+S_bit07   bit 7   45/46   KILLED   SGIRE_W_TEX_RD -> 1 << 7
+S_bit08   bit 8   43/46   KILLED   SGIRE_W_TEX_RD -> 1 << 8
+S_bit09   bit 9   45/46   KILLED   SGIRE_W_TEX_RD -> 1 << 9
+S_bit10   bit 10  45/46   KILLED   SGIRE_W_TEX_RD -> 1 << 10
+
+NOT KILLED: none -- ALL ELEVEN CELLS KILLED ON ONE PROBE
+SWEEP11_DONE
+```
+
+**11 killed, 0 escaped.**  *(An earlier draft of this block said 13.  The generator counted the WORD "KILLED", which also matches the table's own summary line and its "NOT KILLED: none" footer -- 13 for 11 results.  I had just fixed that identical bug in the ledger script and shipped it here: the mechanical rule is "when correcting a claim, grep for its siblings before calling it fixed", and I did not.)*
+
+## RECORDS
+
+Nine wrong records were found in this round own text, by four different seats, and corrected in
+place: the enum next-free claim; a LINEAR comment attributing alignment to the width guard
+(**width does not imply alignment**); the probe contract still describing removed kills; a
+`VAL_HI` necessity overclaim; the clause-(d) enumeration omitting `odata`; and a correction of mine
+that OVERSHOT, saying two TEX rows "would not redden on an ACCEPT" when both oracle the decline
+count and do.  **Five pre-existing stale records found alongside them are filed as
+`sgidefatalstale` rather than fixed here.**
+
+`gate_arm.sh` went 35 -> 46 rows in the same commit: `35 - 6 + 14 + 1 + 2 = 46`.
+
+**SEATS.**  Pass 2: six fired, six answered.  Pass 3: six fired, five answered -- **codex refused,
+and the refusal is characterised: the ask-again question is evasion construction, which it will not
+do.**  Pass 4: five fired (codex deliberately not fired for that reason), five answered.  agy
+DELIBERATELY NOT FIRED (measurement reserve); **Opus 5 and Fable 5 DELIBERATELY NOT FIRED, preserved
+for the 2026-09-09 adjudication.**
+
 # `#512` pcc2c040kill: one legal guest byte store ended the host
 
 **THE DEFECT.** `dev_pcc2.c`, `reassert_interrupts()`:
@@ -1016,7 +1219,11 @@ PUT lays the three channels at bytes 0, 1, 2 and an explicit pad at 3. GET reads
 included, the red channel discarded. **RGB is the only 32-bit colour mode in the file that fails its own
 round trip**, and a copy with an RGB source turns `0xaabbccdd` into `0xbbccdd00`.
 
-**WITNESS, rung 3, on an unmodified `-E sgi -e ip32`:** `regress/artifacts/sgirergbroundtrip/rgb_witness.py`.
+**WITNESS, rung 3, on an unmodified `-E sgi -e ip32`:** `regress/sgi_re_rgb_probe.py`.  *** THIS BLOCK ORIGINALLY CITED
+`regress/artifacts/sgirergbroundtrip/rgb_witness.py`, WHICH DOES NOT EXIST AND ON THE EVIDENCE OF
+that directory never did.  Corrected 2026-09-08 when sgirergbroundtrip was closed; the witness is
+real -- its header opens "sgirergbroundtrip -- RUNG-3 WITNESS" and restates the defect -- and only
+the pointer was wrong.  A citation nobody follows is indistinguishable from a citation that works. ***
 Both ladder controls are present and were green in every run — `live` (a guest store and load through RAM)
 and `devsig` (`CRIME_DE_STATUS` reads `0x1e000000` where RAM reads 0) — plus a sibling accept control,
 `copy lin_a`, which drives an **RGBA** source through the same helper and proves a repair did not break the

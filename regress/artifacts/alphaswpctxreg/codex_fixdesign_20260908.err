@@ -1,0 +1,2700 @@
+Reading additional input from stdin...
+OpenAI Codex v0.153.4
+--------
+workdir: C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+model: gpt-6-astra
+provider: openai
+approval: never
+sandbox: read-only
+reasoning effort: max
+reasoning summaries: none
+session id: 01a08024-b652-75f3-ba91-85293cbea358
+--------
+user
+# alphaswpctxreg -- fix design: which register carries swpctx's result?
+
+## 0. READING SCOPE
+
+Read what you need under `GXEMUL-SEC/src/`, in particular `src/cpus/cpu_alpha_palcode.c`,
+`src/include/cpu_alpha.h` and `src/include/thirdparty/alpha_cpu.h`. Please avoid
+`regress/artifacts/` and `tools/pipeline/ledger.json`.
+
+Tree under review: `GXEMUL-SEC/src/`. Ignore the pristine 2021 `src/` at the project root.
+
+**This is a register-convention question about existing code.** I am not asking for a test sequence
+or a way to reach anything; I want the ABI read correctly and the smallest correct edit.
+
+## 1. THE OBSERVATION
+
+In `PAL_OSF1_swpctx`, after saving the outgoing context, the handler has:
+
+    /*  Return old context in v0.  */
+    cpu->cd.alpha.r[ALPHA_A0] = cpu->cd.alpha.ctx;
+
+    /*  Load new context:  */
+    {
+            cpu->cd.alpha.ctx = a0;
+            uint64_t new_ksp = load_64bit_word(cpu, cpu->cd.alpha.ctx + 0);
+            ...
+
+**The comment says v0; the store is to `ALPHA_A0`.** `ALPHA_V0` exists and is used elsewhere in the
+same file. The local `a0` is a `uint64_t` copied from the register file at function entry, so the
+"load new context" step still uses the original argument and is unaffected by the store above it.
+
+The kernel-side wrapper in `alpha_cpu.h` is roughly:
+
+    alpha_pal_swpctx(unsigned long ctx)
+    {
+            ... __asm volatile("call_pal %2 # PAL_OSF1_swpctx"
+                    : ...
+                    : "i" (PAL_OSF1_swpctx), "0" (a0) ...
+
+## 2. QUESTIONS -- VERDICT LINE FIRST
+
+**Please do not simply ratify.** A recent panel had seven of nine seats confirm a premise a brief
+stated wrongly, and you yourself refuted four premises of mine when asked to. **Check the premises,
+not just the derivations.** In particular I may be reading the asm constraints wrongly.
+
+**Q1. Quote the full wrapper** and say which register it actually reads the result from, deriving it
+from the constraint letters rather than from the comment. `"0"` ties an input to output operand 0 --
+say what operand 0 is and which physical register it lands in.
+
+**Q2. Is this ONE defect or TWO?** My reading is that writing `r[ALPHA_A0]` here does two wrong
+things at once: it fails to place the result where the caller reads it, **and** it clobbers the
+caller's `a0`. If both hold, does the single-character fix (`ALPHA_A0` -> `ALPHA_V0`) repair both,
+or does the clobber need separate handling?
+
+**Q3. Does any other PAL handler in this file set a return value, and how?** You noted last pass
+that the PAL dispatch a hundred lines up uses `ALPHA_V0` correctly. **Give me the in-tree idiom**,
+because the project's rule is to grep the fork for the existing idiom rather than reason from first
+principles -- and a fix that matches its siblings is easier to review and harder to get wrong.
+
+**Q4. Is `a0` live after this point for any other reason?** If the handler or its callers rely on
+`r[ALPHA_A0]` holding the old context anywhere -- however unlikely -- changing it is not a pure
+improvement and I want that named now rather than discovered later.
+
+**Q5. What ORACLE distinguishes the fix from the defect?** Not a guest sequence -- just: what
+observable value differs between the two builds, and is it a register the emulator's own debugger
+can print? If the answer is "the two are indistinguishable without a guest that reads the return
+value", say so; that changes the disposition and the round would have to state it.
+
+**Q6. Does the COMMENT need changing too?** It currently says the right thing while the code does
+the wrong thing. After the fix the comment becomes accurate -- but this project treats a comment
+that asserts an observable as owing a test row, so say whether the comment as written is a claim
+that should be pinned or merely a description.
+codex
+I’ll check the wrapper constraints, sibling PAL handlers, and debugger register output in the reviewed tree, then give the verdict and smallest edit.
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "Get-Location; rg --files -g AGENTS.md -g '"'!regress/artifacts/**'"' -g '"'!tools/pipeline/ledger.json'"' -g '"'!src/**'"' -g '"'!GXEMUL-SEC/src/**'"'" in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$instructionPaths = @('"'C:\\AGENTS.md','C:\\DocumentNoSnc\\AGENTS.md','C:\\DocumentNoSnc\\CC\\AGENTS.md','C:\\DocumentNoSnc\\CC\\GXEMUL\\AGENTS.md','C:\\DocumentNoSnc\\CC\\GXEMUL\\GXEMUL-SEC\\AGENTS.md'); foreach ("'$instructionPath in $instructionPaths) { if (Test-Path -LiteralPath $instructionPath) { Write-Output $instructionPath; Get-Content -LiteralPath $instructionPath } }' in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Item -LiteralPath src/cpus/cpu_alpha_palcode.c,src/include/cpu_alpha.h,src/include/thirdparty/alpha_cpu.h | Select-Object FullName,Length' in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+ succeeded in 152ms:
+ exited 1 in 162ms:
+
+Path                                 
+----                                 
+C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+
+
+
+ succeeded in 199ms:
+
+FullName                                                                 Length
+--------                                                                 ------
+C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\src\cpus\cpu_alpha_palcode.c        13661
+C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\src\include\cpu_alpha.h              6014
+C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\src\include\thirdparty\alpha_cpu.h  16179
+
+
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'rg --files --hidden src -g AGENTS.md' in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$lineNumber = 0; Get-Content -LiteralPath src/include/thirdparty/alpha_cpu.h | ForEach-Object { $lineNumber++; '"'{0,4}: {1}' -f "'$lineNumber, $_ }' in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$lineNumber = 0; Get-Content -LiteralPath src/cpus/cpu_alpha_palcode.c | ForEach-Object { $lineNumber++; '"'{0,4}: {1}' -f "'$lineNumber, $_ }' in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$lineNumber = 0; Get-Content -LiteralPath src/include/cpu_alpha.h | ForEach-Object { $lineNumber++; '"'{0,4}: {1}' -f "'$lineNumber, $_ }' in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+ exited 1 in 124ms:
+ succeeded in 218ms:
+   1: #ifndef	CPU_ALPHA_H
+   2: #define	CPU_ALPHA_H
+   3: 
+   4: /*
+   5:  *  Copyright (C) 2005-2021  Anders Gavare.  All rights reserved.
+   6:  *
+   7:  *  Redistribution and use in source and binary forms, with or without
+   8:  *  modification, are permitted provided that the following conditions are met:
+   9:  *
+  10:  *  1. Redistributions of source code must retain the above copyright
+  11:  *     notice, this list of conditions and the following disclaimer.
+  12:  *  2. Redistributions in binary form must reproduce the above copyright  
+  13:  *     notice, this list of conditions and the following disclaimer in the 
+  14:  *     documentation and/or other materials provided with the distribution.
+  15:  *  3. The name of the author may not be used to endorse or promote products
+  16:  *     derived from this software without specific prior written permission.
+  17:  *
+  18:  *  THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+  19:  *  ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+  20:  *  IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+  21:  *  ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE   
+  22:  *  FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+  23:  *  DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+  24:  *  OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+  25:  *  HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+  26:  *  LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+  27:  *  OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+  28:  *  SUCH DAMAGE.
+  29:  *
+  30:  *
+  31:  *  Alpha CPU definitions.
+  32:  */
+  33: 
+  34: #include "misc.h"
+  35: 
+  36: #include "thirdparty/alpha_cpu.h"
+  37: 
+  38: 
+  39: /*  ALPHA CPU types:  */
+  40: struct alpha_cpu_type_def { 
+  41: 	const char	*name;
+  42: 	uint64_t	pcs_type;	/*  See alpha_rpb.h  */
+  43: 	int		features;
+  44: 	int		implver;
+  45: 	int		icache_shift;
+  46: 	int		ilinesize;
+  47: 	int		iway;
+  48: 	int		dcache_shift;
+  49: 	int		dlinesize;
+  50: 	int		dway;
+  51: 	int		l2cache_shift;
+  52: 	int		l2linesize;
+  53: 	int		l2way;
+  54: };
+  55: 
+  56: /*  TODO: More features  */
+  57: #define	ALPHA_FEATURE_BWX		1
+  58: 
+  59: #define ALPHA_CPU_TYPE_DEFS	{					\
+  60: 	{ "21064",	0x000000002ULL, 0, 0, 16,5,2, 16,5,2,  0,0,0 },	\
+  61: 	{ "21066",	0x200000004ULL, 0, 0, 16,5,2, 16,5,2,  0,0,0 },	\
+  62: 	{ "21164",	0x000000005ULL, 0, 1, 16,5,2, 16,5,2,  0,0,0 },	\
+  63: 	{ "21164A-2",	0x000000007ULL, 0, 1, 16,5,2, 16,5,2,  0,0,0 },	\
+  64: 	{ "21164PC",	0x000000009ULL, 0, 1, 16,5,2, 16,5,2,  0,0,0 },	\
+  65: 	{ "21264",	0x00000000dULL, 0, 2, 16,5,2, 16,5,2,  0,0,0 },	\
+  66: 	{ "21364",	0x000000000ULL, 0, 3, 16,5,2, 16,5,2,  0,0,0 },	\
+  67: 	{ NULL,		0x000000000ULL, 0, 0,  0,0,0,  0,0,0,  0,0,0 }	}
+  68: 
+  69: 
+  70: struct cpu_family;
+  71: 
+  72: /*  ALPHA_KENTRY_INT .. ALPHA_KENTRY_SYS  */
+  73: #define	N_ALPHA_KENTRY		6
+  74: 
+  75: #define	ALPHA_V0		0
+  76: #define	ALPHA_T0		1
+  77: #define	ALPHA_T1		2
+  78: #define	ALPHA_T2		3
+  79: #define	ALPHA_T3		4
+  80: #define	ALPHA_T4		5
+  81: #define	ALPHA_T5		6
+  82: #define	ALPHA_T6		7
+  83: 
+  84: #define	ALPHA_T7		8
+  85: #define	ALPHA_S0		9
+  86: #define	ALPHA_S1		10
+  87: #define	ALPHA_S2		11
+  88: #define	ALPHA_S3		12
+  89: #define	ALPHA_S4		13
+  90: #define	ALPHA_S5		14
+  91: #define	ALPHA_FP		15
+  92: 
+  93: #define	ALPHA_A0		16
+  94: #define	ALPHA_A1		17
+  95: #define	ALPHA_A2		18
+  96: #define	ALPHA_A3		19
+  97: #define	ALPHA_A4		20
+  98: #define	ALPHA_A5		21
+  99: #define	ALPHA_T8		22
+ 100: #define	ALPHA_T9		23
+ 101: 
+ 102: #define	ALPHA_T10		24
+ 103: #define	ALPHA_T11		25
+ 104: #define	ALPHA_RA		26
+ 105: #define	ALPHA_T12		27
+ 106: #define	ALPHA_AT		28
+ 107: #define	ALPHA_GP		29
+ 108: #define	ALPHA_SP		30
+ 109: #define	ALPHA_ZERO		31
+ 110: 
+ 111: #define	N_ALPHA_REGS		32
+ 112: 
+ 113: #define ALPHA_REG_NAMES		{				\
+ 114: 	"v0", "t0", "t1", "t2", "t3", "t4", "t5", "t6",		\
+ 115: 	"t7", "s0", "s1", "s2", "s3", "s4", "s5", "fp",		\
+ 116: 	"a0", "a1", "a2", "a3", "a4", "a5", "t8", "t9",		\
+ 117: 	"t10", "t11", "ra", "t12", "at", "gp", "sp", "zero" 	}
+ 118: 
+ 119: 
+ 120: /*  Dyntrans definitions:  */
+ 121: 
+ 122: #define	ALPHA_N_IC_ARGS			3
+ 123: #define	ALPHA_INSTR_ALIGNMENT_SHIFT	2
+ 124: #define	ALPHA_IC_ENTRIES_SHIFT		11
+ 125: #define	ALPHA_IC_ENTRIES_PER_PAGE	(1 << ALPHA_IC_ENTRIES_SHIFT)
+ 126: #define	ALPHA_PC_TO_IC_ENTRY(a)		(((a)>>ALPHA_INSTR_ALIGNMENT_SHIFT) \
+ 127: 					& (ALPHA_IC_ENTRIES_PER_PAGE-1))
+ 128: #define	ALPHA_ADDR_TO_PAGENR(a)		((a) >> (ALPHA_IC_ENTRIES_SHIFT \
+ 129: 					+ ALPHA_INSTR_ALIGNMENT_SHIFT))
+ 130: 
+ 131: #define	ALPHA_MAX_VPH_TLB_ENTRIES	128
+ 132: 
+ 133: #define	ALPHA_L2N		17
+ 134: #define	ALPHA_L3N		17
+ 135: 
+ 136: DYNTRANS_MISC_DECLARATIONS(alpha,ALPHA,uint64_t)
+ 137: DYNTRANS_MISC64_DECLARATIONS(alpha,ALPHA,uint8_t)
+ 138: 
+ 139: 
+ 140: #define	ALPHA_PAGESHIFT		13
+ 141: 
+ 142: 
+ 143: struct alpha_cpu {
+ 144: 	struct alpha_cpu_type_def	cpu_type;
+ 145: 
+ 146: 
+ 147: 	/*
+ 148: 	 *  General Purpose Registers:
+ 149: 	 */
+ 150: 
+ 151: 	uint64_t		r[N_ALPHA_REGS];	/*  Integer  */
+ 152: 	uint64_t		f[N_ALPHA_REGS];	/*  Floating Point  */
+ 153: 
+ 154: 	uint64_t		fpcr;			/*  FP Control Reg.  */
+ 155: 
+ 156: 	/*  Misc.:  */
+ 157: 	uint64_t		pcc;			/*  Cycle Counter  */
+ 158: 	uint64_t		load_linked_addr;
+ 159: 	int			ll_flag;
+ 160: 
+ 161: 	int			irq_asserted;
+ 162: 
+ 163: 	/*  OSF1 PALcode specific:  */
+ 164: 	uint64_t		ps;		/*  Processor Status  */
+ 165: 	uint64_t		vptptr;		/*  Virtual Page Table Ptr  */
+ 166: 	uint64_t		sysvalue;
+ 167: 	uint64_t		mces;		/*  Machine Check Error Summary  */
+ 168: 	uint64_t		kgp;		/*  Kernel GP  */
+ 169: 	uint64_t		kentry[N_ALPHA_KENTRY];
+ 170: 	uint64_t		ctx;		/*  Ptr to current PCB (?)  */
+ 171: 	struct alpha_pcb	pcb;		/*  Process Control Block  */
+ 172: 
+ 173: 
+ 174: 	/*
+ 175: 	 *  Instruction translation cache and Virtual->Physical->Host
+ 176: 	 *  address translation:
+ 177: 	 */
+ 178: 	DYNTRANS_ITC(alpha)
+ 179: 	VPH_TLBS(alpha,ALPHA)
+ 180: 	VPH64(alpha,ALPHA)
+ 181: };
+ 182: 
+ 183: 
+ 184: /*  cpu_alpha.c:  */
+ 185: void alpha_update_translation_table(struct cpu *cpu, uint64_t vaddr_page,
+ 186: 	unsigned char *host_page, int writeflag, uint64_t paddr_page);
+ 187: void alpha_invalidate_translation_caches(struct cpu *cpu, uint64_t, int);
+ 188: void alpha_invalidate_code_translation(struct cpu *cpu, uint64_t, int);
+ 189: void alpha_init_64bit_dummy_tables(struct cpu *cpu);
+ 190: int alpha_run_instr(struct cpu *cpu);
+ 191: int alpha_memory_rw(struct cpu *cpu, struct memory *mem, uint64_t vaddr,
+ 192: 	unsigned char *data, size_t len, int writeflag, int cache_flags);
+ 193: void alpha_cpu_family_init(struct cpu_family *);
+ 194: 
+ 195: /*  cpu_alpha_palcode.c:  */
+ 196: void alpha_palcode_name(uint32_t palcode, char *buf, size_t buflen);
+ 197: void alpha_palcode(struct cpu *cpu, uint32_t palcode);
+ 198: 
+ 199: /*  memory_alpha.c:  */
+ 200: int alpha_translate_v2p(struct cpu *cpu, uint64_t vaddr,
+ 201: 	uint64_t *return_addr, int flags);
+ 202: 
+ 203: 
+ 204: #endif	/*  CPU_ALPHA_H  */
+
+ succeeded in 233ms:
+   1: /*
+   2:  *  Copyright (C) 2005-2021  Anders Gavare.  All rights reserved.
+   3:  *
+   4:  *  Redistribution and use in source and binary forms, with or without
+   5:  *  modification, are permitted provided that the following conditions are met:
+   6:  *
+   7:  *  1. Redistributions of source code must retain the above copyright
+   8:  *     notice, this list of conditions and the following disclaimer.
+   9:  *  2. Redistributions in binary form must reproduce the above copyright  
+  10:  *     notice, this list of conditions and the following disclaimer in the 
+  11:  *     documentation and/or other materials provided with the distribution.
+  12:  *  3. The name of the author may not be used to endorse or promote products
+  13:  *     derived from this software without specific prior written permission.
+  14:  *
+  15:  *  THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+  16:  *  ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+  17:  *  IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+  18:  *  ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE   
+  19:  *  FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+  20:  *  DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+  21:  *  OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+  22:  *  HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+  23:  *  LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+  24:  *  OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+  25:  *  SUCH DAMAGE.
+  26:  *
+  27:  *
+  28:  *  Alpha PALcode-related functionality.
+  29:  *
+  30:  *  (See http://www.alphalinux.org/docs/alphaahb.html for good descriptions
+  31:  *  of many PALcode functions.)
+  32:  */
+  33: 
+  34: 
+  35: #include <stdio.h>
+  36: #include <stdlib.h>
+  37: #include <string.h>
+  38: #include <ctype.h>
+  39: 
+  40: #include "console.h"
+  41: #include "cpu.h"
+  42: #include "machine.h"
+  43: #include "memory.h"
+  44: #include "misc.h"
+  45: #include "symbol.h"
+  46: 
+  47: #include "thirdparty/alpha_prom.h"
+  48: 
+  49: 
+  50: /*
+  51:  *  alpha_palcode_name():
+  52:  *
+  53:  *  Return the name of a PALcode number, as a string.
+  54:  */
+  55: void alpha_palcode_name(uint32_t palcode, char *buf, size_t buflen)
+  56: {
+  57: 	switch (palcode) {
+  58: 	case 0x00: snprintf(buf, buflen, "PAL_halt"); break;
+  59: 	case 0x01: snprintf(buf, buflen, "PAL_cflush"); break;
+  60: 	case 0x02: snprintf(buf, buflen, "PAL_draina"); break;
+  61: 	case 0x09: snprintf(buf, buflen, "PAL_cserve"); break;
+  62: 	case 0x0a: snprintf(buf, buflen, "PAL_swppal"); break;
+  63: 	case 0x0d: snprintf(buf, buflen, "PAL_ipir"); break;
+  64: 	case 0x10: snprintf(buf, buflen, "PAL_OSF1_rdmces"); break;
+  65: 	case 0x11: snprintf(buf, buflen, "PAL_OSF1_wrmces"); break;
+  66: 	case 0x2b: snprintf(buf, buflen, "PAL_OSF1_wrfen"); break;
+  67: 	case 0x2d: snprintf(buf, buflen, "PAL_OSF1_wrvptptr"); break;
+  68: 	case 0x30: snprintf(buf, buflen, "PAL_OSF1_swpctx"); break;
+  69: 	case 0x31: snprintf(buf, buflen, "PAL_OSF1_wrval"); break;
+  70: 	case 0x32: snprintf(buf, buflen, "PAL_OSF1_rdval"); break;
+  71: 	case 0x33: snprintf(buf, buflen, "PAL_OSF1_tbi"); break;
+  72: 	case 0x34: snprintf(buf, buflen, "PAL_OSF1_wrent"); break;
+  73: 	case 0x35: snprintf(buf, buflen, "PAL_OSF1_swpipl"); break;
+  74: 	case 0x36: snprintf(buf, buflen, "PAL_rdps"); break;
+  75: 	case 0x37: snprintf(buf, buflen, "PAL_OSF1_wrkgp"); break;
+  76: 	case 0x38: snprintf(buf, buflen, "PAL_OSF1_wrusp"); break;
+  77: 	case 0x39: snprintf(buf, buflen, "PAL_OSF1_wrperfmon"); break;
+  78: 	case 0x3a: snprintf(buf, buflen, "PAL_OSF1_rdusp"); break;
+  79: 	case 0x3c: snprintf(buf, buflen, "PAL_whami"); break;
+  80: 	case 0x3d: snprintf(buf, buflen, "PAL_OSF1_retsys"); break;
+  81: 	case 0x3e: snprintf(buf, buflen, "PAL_wtint"); break;
+  82: 	case 0x3f: snprintf(buf, buflen, "PAL_OSF1_rti"); break;
+  83: 	case 0x80: snprintf(buf, buflen, "PAL_bpt"); break;
+  84: 	case 0x81: snprintf(buf, buflen, "PAL_bugchk"); break;
+  85: 	case 0x83: snprintf(buf, buflen, "PAL_OSF1_callsys"); break;
+  86: 	case 0x86: snprintf(buf, buflen, "PAL_imb"); break;
+  87: 	case 0x92: snprintf(buf, buflen, "PAL_OSF1_urti"); break;
+  88: 	case 0x9e: snprintf(buf, buflen, "PAL_rdunique"); break;
+  89: 	case 0x9f: snprintf(buf, buflen, "PAL_wrunique"); break;
+  90: 	case 0xaa: snprintf(buf, buflen, "PAL_gentrap"); break;
+  91: 	case 0xae: snprintf(buf, buflen, "PAL_clrfen"); break;
+  92: 	case 0x3fffffe: snprintf(buf, buflen, "GXemul_PROM"); break;
+  93: 	default:snprintf(buf, buflen, "UNKNOWN 0x%" PRIx32, palcode);
+  94: 	}
+  95: }
+  96: 
+  97: 
+  98: /*
+  99:  *  alpha_prom_call():
+ 100:  */
+ 101: void alpha_prom_call(struct cpu *cpu)
+ 102: {
+ 103: 	uint64_t addr, a1 = cpu->cd.alpha.r[ALPHA_A1];
+ 104: 	uint64_t a2 = cpu->cd.alpha.r[ALPHA_A2], a3 = cpu->cd.alpha.r[ALPHA_A3];
+ 105: 	uint64_t len;
+ 106: 	const char *s = "";
+ 107: 
+ 108: 	switch (cpu->cd.alpha.r[ALPHA_A0]) {
+ 109: 
+ 110: 	case PROM_R_PUTS:
+ 111: 		/*  a1 = channel, a2 = ptr to buf, a3 = len  */
+ 112: 		for (addr = a2; addr < a2 + a3; addr ++) {
+ 113: 			unsigned char ch;
+ 114: 			cpu->memory_rw(cpu, cpu->mem, addr, &ch, sizeof(ch),
+ 115: 			    MEM_READ, CACHE_DATA | NO_EXCEPTIONS);
+ 116: 			console_putchar(cpu->machine->main_console_handle, ch);
+ 117: 		}
+ 118: 		cpu->cd.alpha.r[ALPHA_V0] = a3;
+ 119: 		break;
+ 120: 
+ 121: 	case PROM_R_GETENV:
+ 122: 		/*  a1 = variable id, a2 = char *buf, a3 = bufsize  */
+ 123: 		switch (a1) {
+ 124: 		case PROM_E_BOOTED_DEV:
+ 125: 			s = "";		/*  TODO  */
+ 126: 			break;
+ 127: 		case PROM_E_BOOTED_FILE:
+ 128: 			s = cpu->machine->boot_kernel_filename;
+ 129: 			break;
+ 130: 		case PROM_E_BOOTED_OSFLAGS:
+ 131: 			s = cpu->machine->boot_string_argument;
+ 132: 			break;
+ 133: 		case PROM_E_TTY_DEV:
+ 134: 			s = "";		/*  TODO  */
+ 135: 			break;
+ 136: 		default:fatal("[ Alpha PALcode: GXemul PROM getenv %i: TODO "
+ 137: 			    "]\n", cpu->cd.alpha.r[ALPHA_A1]);
+ 138: 			cpu->running = 0;
+ 139: 		}
+ 140: 		/*  Copy at most a3 bytes.  */
+ 141: 		len = a3;
+ 142: 		if (strlen(s) < len)
+ 143: 			len = strlen(s) + 1;
+ 144: 		store_buf(cpu, a2, s, len);
+ 145: 		break;
+ 146: 
+ 147: 	default:fatal("[ Alpha PALcode: GXemul PROM call, a0=0x%" PRIx64" ]\n",
+ 148: 		    (uint64_t) cpu->cd.alpha.r[ALPHA_A0]);
+ 149: 		cpu->running = 0;
+ 150: 	}
+ 151: 
+ 152: 	/*  Return from the PROM call.  */
+ 153: 	cpu->pc = cpu->cd.alpha.r[ALPHA_RA];
+ 154: }
+ 155: 
+ 156: 
+ 157: /*
+ 158:  *  alpha_palcode():
+ 159:  *
+ 160:  *  Execute an Alpha PALcode instruction. (Most of these correspond to
+ 161:  *  OSF1 palcodes, used by for example NetBSD/alpha.)
+ 162:  */
+ 163: void alpha_palcode(struct cpu *cpu, uint32_t palcode)
+ 164: {
+ 165: 	uint64_t a0 = cpu->cd.alpha.r[ALPHA_A0], a1 = cpu->cd.alpha.r[ALPHA_A1];
+ 166: 	uint64_t userMode = cpu->cd.alpha.ps & ALPHA_PSL_USERMODE;
+ 167: 
+ 168: 	/*
+ 169: 	 *  Only these are unprivileged, i.e. can be invoked in user mode,
+ 170: 	 *  according to the manual:
+ 171: 	 *
+ 172: 	 *	bpt		kernel and user
+ 173: 	 *	bugchk		kernel and user
+ 174: 	 *	callsys		user
+ 175: 	 *	clrfen		user
+ 176: 	 *	gentrap		kernel and user
+ 177: 	 *	imb		kernel and user
+ 178: 	 *	rdunique	kernel and user
+ 179: 	 *	urti		user
+ 180: 	 *	wrunique	kernel and user
+ 181: 	 */
+ 182: 
+ 183: 	if (userMode && !(
+ 184: 	    palcode == 0x80 || palcode == 0x81 || palcode == 0x83 ||
+ 185: 	    palcode == 0xae || palcode == 0xaa || palcode == 0x86 ||
+ 186: 	    palcode == 0x9e || palcode == 0x92 || palcode == 0x9f)) {
+ 187: 		// opDec fault.
+ 188: 		fatal("[ Privileged Alpha PALcode called from user mode: TODO ]");
+ 189: 		cpu->running = 0;
+ 190: 		return;
+ 191: 	}
+ 192: 
+ 193: 	switch (palcode) {
+ 194: #if 0
+ 195: TODO: Uncomment more again, as I progress with the emulation...
+ 196: Make sure they are correct, as documented in the Manual.
+ 197: 
+ 198: 	case 0x02:	/*  PAL_draina  */
+ 199: 		/*  TODO?  */
+ 200: 		break;
+ 201: #endif
+ 202: 	case 0x10:	/*  PAL_OSF1_rdmces  */
+ 203: 		/*  Return Machine Check status in v0.  */
+ 204: 		cpu->cd.alpha.r[ALPHA_V0] = cpu->cd.alpha.mces;
+ 205: 		break;
+ 206: 	case 0x11:	/*  PAL_OSF1_wrmces  */
+ 207: 		/*  Clear bits 0, 1, and 2 of the Machine Check and Error status.  */
+ 208: 		cpu->cd.alpha.mces = ~(cpu->cd.alpha.r[ALPHA_A0] & 7);
+ 209: 
+ 210: 		/*  Set bits 3 and 4 of the Machine Check and Error status.  */
+ 211: 		cpu->cd.alpha.mces &= ~0x18;
+ 212: 		cpu->cd.alpha.mces |= (cpu->cd.alpha.r[ALPHA_A0] & 0x18);
+ 213: 		break;
+ 214: 	case 0x2b:	/*  PAL_OSF1_wrfen  */
+ 215: 		/*  Floating point enable: a0 = 1 or 0.  */
+ 216: 		/*  TODO. Since clrfen is documented as:
+ 217: 			FEN �+? 0
+ 218: 			(PCBB+40)<0> �+? 0
+ 219: 		    then most likely wrfen should do the reverse.
+ 220: 		 */
+ 221: 		cpu->cd.alpha.pcb.apcb_flags = cpu->cd.alpha.r[ALPHA_A0];
+ 222: 		store_64bit_word(cpu, cpu->cd.alpha.ctx + 40,
+ 223: 		    cpu->cd.alpha.pcb.apcb_flags);
+ 224: 		break;
+ 225: 	case 0x2d:	/*  PAL_OSF1_wrvptptr  */
+ 226: 		/*  Write Virtual Page Table Pointer. a0 = value  */
+ 227: 		cpu->cd.alpha.vptptr = a0;
+ 228: 		break;
+ 229: 	case 0x30:	/*  PAL_OSF1_swpctx  */
+ 230: 		/*  Save old context:  */
+ 231: 		store_64bit_word(cpu, cpu->cd.alpha.ctx + 0,
+ 232: 		    cpu->cd.alpha.pcb.apcb_ksp);
+ 233: 		store_64bit_word(cpu, cpu->cd.alpha.ctx + 8,
+ 234: 		    cpu->cd.alpha.pcb.apcb_usp);
+ 235: 		store_64bit_word(cpu, cpu->cd.alpha.ctx + 16,
+ 236: 		    cpu->cd.alpha.pcb.apcb_ptbr);
+ 237: 		store_32bit_word(cpu, cpu->cd.alpha.ctx + 24,
+ 238: 		    cpu->cd.alpha.pcb.apcb_cpc);
+ 239: 		store_32bit_word(cpu, cpu->cd.alpha.ctx + 28,
+ 240: 		    cpu->cd.alpha.pcb.apcb_asn);
+ 241: 		store_64bit_word(cpu, cpu->cd.alpha.ctx + 32,
+ 242: 		    cpu->cd.alpha.pcb.apcb_unique);
+ 243: 		store_64bit_word(cpu, cpu->cd.alpha.ctx + 40,
+ 244: 		    cpu->cd.alpha.pcb.apcb_flags);
+ 245: 		store_64bit_word(cpu, cpu->cd.alpha.ctx + 48,
+ 246: 		    cpu->cd.alpha.pcb.apcb_decrsv0);
+ 247: 		store_64bit_word(cpu, cpu->cd.alpha.ctx + 56,
+ 248: 		    cpu->cd.alpha.pcb.apcb_decrsv1);
+ 249: 
+ 250: 		/*  Return old context in v0.  */
+ 251: 		cpu->cd.alpha.r[ALPHA_A0] = cpu->cd.alpha.ctx;
+ 252: 
+ 253: 		/*  Load new context:  */
+ 254: 		{
+ 255: 			cpu->cd.alpha.ctx = a0;
+ 256: 			uint64_t new_ksp =
+ 257: 			    load_64bit_word(cpu, cpu->cd.alpha.ctx + 0);
+ 258: 			uint64_t new_usp =
+ 259: 			    load_64bit_word(cpu, cpu->cd.alpha.ctx + 8);
+ 260: 			uint64_t new_ptbr =
+ 261: 			    load_64bit_word(cpu, cpu->cd.alpha.ctx + 16);
+ 262: 			uint64_t new_cpc =
+ 263: 			    load_32bit_word(cpu, cpu->cd.alpha.ctx + 24);
+ 264: 			uint64_t new_asn =
+ 265: 			    load_32bit_word(cpu, cpu->cd.alpha.ctx + 28);
+ 266: 			uint64_t new_unique =
+ 267: 			    load_64bit_word(cpu, cpu->cd.alpha.ctx + 32);
+ 268: 			uint64_t new_flags =
+ 269: 			    load_64bit_word(cpu, cpu->cd.alpha.ctx + 40);
+ 270: 			uint64_t new_decrsv0 =
+ 271: 			    load_64bit_word(cpu, cpu->cd.alpha.ctx + 48);
+ 272: 			uint64_t new_decrsv1 =
+ 273: 			    load_64bit_word(cpu, cpu->cd.alpha.ctx + 56);
+ 274: 
+ 275: 			// Update all variables in the pcb simultaneously:
+ 276: 			cpu->cd.alpha.pcb.apcb_ksp = new_ksp;
+ 277: 			cpu->cd.alpha.pcb.apcb_usp = new_usp;
+ 278: 			cpu->cd.alpha.pcb.apcb_ptbr = new_ptbr;
+ 279: 			cpu->cd.alpha.pcb.apcb_cpc = new_cpc;
+ 280: 			cpu->cd.alpha.pcb.apcb_asn = new_asn;
+ 281: 			cpu->cd.alpha.pcb.apcb_unique = new_unique;
+ 282: 			/*  #507: was `apcb_ptbr = new_flags' -- a field-name transposition that
+ 283: 			    assigned apcb_ptbr TWICE (here and at the `apcb_ptbr = new_ptbr' four
+ 284: 			    lines above -- "three lines up" until 2026-09-07, corrected
+ 285: 			    after a pass-2 seat derived the true distance from the hunk
+ 286: 			    header alone and called the phrasing inconsistent) and apcb_flags NEVER,
+ 287: 			    while every other field in this block is assigned exactly once.  Two
+ 288: 			    consequences: apcb_ptbr ended up holding the flags word, and the incoming
+ 289: 			    context's flags were dropped -- so the NEXT save published a never-loaded
+ 290: 			    word back into the outgoing PCB, wiping what the guest planted.  */
+ 291: 			cpu->cd.alpha.pcb.apcb_flags = new_flags;	/*  #507  */
+ 292: 			cpu->cd.alpha.pcb.apcb_decrsv0 = new_decrsv0;
+ 293: 			cpu->cd.alpha.pcb.apcb_decrsv1 = new_decrsv1;
+ 294: 
+ 295: 			// TODO: Don't invalidate EVERYTHING!
+ 296: 			cpu->invalidate_translation_caches(cpu, 0, INVALIDATE_ALL);
+ 297: 		}
+ 298: 		break;
+ 299: #if 0
+ 300: 	case 0x31:	/*  PAL_OSF1_wrval  */
+ 301: 		/*  a0 = value  */
+ 302: 		cpu->cd.alpha.sysvalue = a0;
+ 303: 		break;
+ 304: 	case 0x32:	/*  PAL_OSF1_rdval  */
+ 305: 		/*  return: v0 = value  */
+ 306: 		cpu->cd.alpha.r[ALPHA_V0] = cpu->cd.alpha.sysvalue;
+ 307: 		break;
+ 308: #endif
+ 309: 	case 0x33:	/*  PAL_OSF1_tbi  */
+ 310: 		/*
+ 311: 		 *  a0 = op, a1 = vaddr
+ 312: 		 *  a0 is ignored for now. TODO.
+ 313: 		 *	a0 = 1: ITB invalidate
+ 314: 		 *	a0 = 2: DTB invalidate
+ 315: 		 *	a0 = 3: both ITB and DTB
+ 316: 		 *	a0 = -1: invalidate everything with ASM=0.
+ 317: 		 *	a0 = -2: invalidate everything
+ 318: 		 */
+ 319: 		// debug("[ Alpha PALcode: PAL_OSF1_tbi: a0=%" PRIi64" a1=0x%"
+ 320: 		//    PRIx64" ]\n", (int64_t)a0, (uint64_t)a1);
+ 321: 		if (a0 >= 1)
+ 322: 			cpu->invalidate_translation_caches(cpu, a1, INVALIDATE_VADDR);
+ 323: 		else
+ 324: 			cpu->invalidate_translation_caches(cpu, 0, INVALIDATE_ALL);
+ 325: 		break;
+ 326: 	case 0x34:	/*  PAL_OSF1_wrent (Write System Entry Address)  */
+ 327: 		/*  a0 = new vector, a1 = vector selector  */
+ 328: 		if (a1 < N_ALPHA_KENTRY)
+ 329: 			cpu->cd.alpha.kentry[a1] = a0;
+ 330: 		else {
+ 331: 			fatal("[ Alpha PALcode: PAL_OSF1_wrent: attempt to "
+ 332: 			    "write to non-implemented selector %i ]\n",
+ 333: 			    (int)a1);
+ 334: 			cpu->running = 0;
+ 335: 		}
+ 336: 		break;
+ 337: 	case 0x35:	/*  PAL_OSF1_swpipl  */
+ 338: 		/*  a0 = new ipl, v0 = return old ipl  */
+ 339: 		cpu->cd.alpha.r[ALPHA_V0] = cpu->cd.alpha.ps & ALPHA_PSL_IPL_MASK;
+ 340: 		cpu->cd.alpha.ps &= ~ALPHA_PSL_IPL_MASK;
+ 341: 		cpu->cd.alpha.ps |= (a0 & ALPHA_PSL_IPL_MASK);
+ 342: 		break;
+ 343: 	case 0x36:	/*  PAL_rdps  */
+ 344: 		cpu->cd.alpha.r[ALPHA_V0] = cpu->cd.alpha.ps;
+ 345: 		break;
+ 346: 	case 0x37:	/*  PAL_OSF1_wrkgp  */
+ 347: 		cpu->cd.alpha.kgp = a0;
+ 348: 		break;
+ 349: #if 0
+ 350: 	case 0x38:	/*  PAL_OSF1_wrusp  */
+ 351: 		/*  a0 = value  */
+ 352: 		cpu->cd.alpha.pcb.apcb_usp = a0;
+ 353: 		break;
+ 354: 	case 0x3a:	/*  PAL_OSF1_rdusp  */
+ 355: 		/*  return: v0 = value  */
+ 356: 		cpu->cd.alpha.r[ALPHA_V0] = cpu->cd.alpha.pcb.apcb_usp;
+ 357: 		break;
+ 358: #endif
+ 359: 	case 0x3c:	/*  PAL_whami  */
+ 360: 		/*  Returns CPU id in v0:  */
+ 361: 		cpu->cd.alpha.r[ALPHA_V0] = cpu->cpu_id;
+ 362: 		break;
+ 363: #if 0
+ 364: 	case 0x81:	/*  PAL_bugchk  */
+ 365: 		cpu->running = 0;
+ 366: 		break;
+ 367: 	case 0x83:	/*  PAL_OSF1_syscall  */
+ 368: 		fatal("[ Alpha PALcode: syscall, but no syscall handler ]\n");
+ 369: 		cpu->running = 0;
+ 370: 		break;
+ 371: #endif
+ 372: 	case 0x86:	/*  PAL_imb  */
+ 373: 		/*  TODO  */
+ 374: 		break;
+ 375: #if 0
+ 376: 	case 0x3fffffc:
+ 377: 		fatal("[ Alpha: KENTRY not set! Halting. ]");
+ 378: 		cpu->running = 0;
+ 379: 		break;
+ 380: 	case 0x3fffffd:
+ 381: 		fatal("[ Alpha PALcode: Fixup: TODO ]\n");
+ 382: 		/*  Return from the fixup call.  */
+ 383: 		cpu->cd.alpha.r[ALPHA_V0] = 0;	/*  Success?  */
+ 384: 		cpu->pc = cpu->cd.alpha.r[ALPHA_RA];
+ 385: 		break;
+ 386: #endif
+ 387: 	case 0x3fffffe:
+ 388: 		alpha_prom_call(cpu);
+ 389: 		break;
+ 390: 	default:fatal("[ Alpha PALcode 0x%x unimplemented! ]\n", palcode);
+ 391: 		cpu->running = 0;
+ 392: 	}
+ 393: 
+ 394: 	/*
+ 395: 	 *  Many PALcode instructions in the Alpha manual (and in NetBSD/Alpha
+ 396: 	 *  source code) are described with "clobbers t0, t8-t11", some also
+ 397: 	 *  with a0, and some also with a1 included.
+ 398: 	 *
+ 399: 	 *  However, it's easier to just leave the registers as they are.
+ 400: 	 */
+ 401: }
+ 402: 
+
+ succeeded in 247ms:
+   1: /*  GXemul: $Id: alpha_cpu.h,v 1.2 2006-09-01 16:40:57 debug Exp $  */
+   2: /* $NetBSD: alpha_cpu.h,v 1.48 2006/02/16 20:17:13 perry Exp $ */
+   3: 
+   4: #ifndef __ALPHA_ALPHA_CPU_H__
+   5: #define	__ALPHA_ALPHA_CPU_H__
+   6: 
+   7: /*
+   8:  * Copyright (c) 1996 Carnegie-Mellon University.
+   9:  * All rights reserved.
+  10:  *
+  11:  * Author: Chris G. Demetriou
+  12:  *
+  13:  * Permission to use, copy, modify and distribute this software and
+  14:  * its documentation is hereby granted, provided that both the copyright
+  15:  * notice and this permission notice appear in all copies of the
+  16:  * software, derivative works or modified versions, and any portions
+  17:  * thereof, and that both notices appear in supporting documentation.
+  18:  *
+  19:  * CARNEGIE MELLON ALLOWS FREE USE OF THIS SOFTWARE IN ITS "AS IS"
+  20:  * CONDITION.  CARNEGIE MELLON DISCLAIMS ANY LIABILITY OF ANY KIND
+  21:  * FOR ANY DAMAGES WHATSOEVER RESULTING FROM THE USE OF THIS SOFTWARE.
+  22:  *
+  23:  * Carnegie Mellon requests users of this software to return to
+  24:  *
+  25:  *  Software Distribution Coordinator  or  Software.Distribution@CS.CMU.EDU
+  26:  *  School of Computer Science
+  27:  *  Carnegie Mellon University
+  28:  *  Pittsburgh PA 15213-3890
+  29:  *
+  30:  * any improvements or extensions that they make and grant Carnegie the
+  31:  * rights to redistribute these changes.
+  32:  */
+  33: 
+  34: /*
+  35:  * Alpha CPU + OSF/1 PALcode definitions for use by the kernel.
+  36:  *
+  37:  * Definitions for:
+  38:  *
+  39:  *	Process Control Block
+  40:  *	Interrupt/Exception/Syscall Stack Frame
+  41:  *	Processor Status Register
+  42:  *	Machine Check Error Summary Register
+  43:  *	Machine Check Logout Area
+  44:  *	Per CPU state Management of Machine Check Handling
+  45:  *	Virtual Memory Management
+  46:  *	Kernel Entry Vectors
+  47:  *	MMCSR Fault Type Codes
+  48:  *	Translation Buffer Invalidation
+  49:  *
+  50:  * and miscellaneous PALcode operations.
+  51:  */
+  52: 
+  53: 
+  54: /*
+  55:  * Process Control Block definitions [OSF/1 PALcode Specific]
+  56:  *
+  57:  * GXemul note: all of these uint64_t were 'unsigned long' in the original
+  58:  * NetBSD header file, and the uint32_t were 'unsigned int'.
+  59:  */
+  60: 
+  61: struct alpha_pcb {
+  62: 	uint64_t	apcb_ksp;	/* kernel stack ptr */
+  63: 	uint64_t	apcb_usp;	/* user stack ptr */
+  64: 	uint64_t	apcb_ptbr;	/* page table base reg */
+  65: 	uint32_t	apcb_cpc;	/* charged process cycles */
+  66: 	uint32_t	apcb_asn;	/* address space number */
+  67: 	uint64_t	apcb_unique;	/* process unique value */
+  68: #define	apcb_backup_ksp	apcb_unique	/* backup kernel stack ptr */
+  69: 	uint64_t	apcb_flags;	/* flags; see below */
+  70: 	uint64_t	apcb_decrsv0;	/* DEC reserved */
+  71: 	uint64_t	apcb_decrsv1;	/* DEC reserved */
+  72: };
+  73: 
+  74: #define	ALPHA_PCB_FLAGS_FEN	0x0000000000000001
+  75: #define	ALPHA_PCB_FLAGS_PME	0x4000000000000000
+  76: 
+  77: /*
+  78:  * Interrupt/Exception/Syscall "Hardware" (really PALcode)
+  79:  * Stack Frame definitions
+  80:  *
+  81:  * These are quadword offsets from the sp on kernel entry, i.e.
+  82:  * to get to the value in question you access (sp + (offset * 8)).
+  83:  *
+  84:  * On syscall entry, A0-A2 aren't written to memory but space
+  85:  * _is_ reserved for them.
+  86:  */
+  87: 
+  88: #define	ALPHA_HWFRAME_PS	0	/* processor status register */
+  89: #define	ALPHA_HWFRAME_PC	1	/* program counter */
+  90: #define	ALPHA_HWFRAME_GP	2	/* global pointer */
+  91: #define	ALPHA_HWFRAME_A0	3	/* a0 */
+  92: #define	ALPHA_HWFRAME_A1	4	/* a1 */
+  93: #define	ALPHA_HWFRAME_A2	5	/* a2 */
+  94: 
+  95: #define	ALPHA_HWFRAME_SIZE	6	/* 6 8-byte words */
+  96: 
+  97: /*
+  98:  * Processor Status Register [OSF/1 PALcode Specific]
+  99:  *
+ 100:  * Includes user/kernel mode bit, interrupt priority levels, etc.
+ 101:  */
+ 102: 
+ 103: #define	ALPHA_PSL_USERMODE	0x0008		/* set -> user mode */
+ 104: #define	ALPHA_PSL_IPL_MASK	0x0007		/* interrupt level mask */
+ 105: 
+ 106: #define	ALPHA_PSL_IPL_0		0x0000		/* all interrupts enabled */
+ 107: #define	ALPHA_PSL_IPL_SOFT	0x0001		/* software ints disabled */
+ 108: #define	ALPHA_PSL_IPL_IO	0x0004		/* I/O dev ints disabled */
+ 109: #define	ALPHA_PSL_IPL_CLOCK	0x0005		/* clock ints disabled */
+ 110: #define	ALPHA_PSL_IPL_HIGH	0x0006		/* all but mchecks disabled */
+ 111: 
+ 112: #define	ALPHA_PSL_MUST_BE_ZERO	0xfffffffffffffff0
+ 113: 
+ 114: /* Convenience constants: what must be set/clear in user mode */
+ 115: #define	ALPHA_PSL_USERSET	ALPHA_PSL_USERMODE
+ 116: #define	ALPHA_PSL_USERCLR	(ALPHA_PSL_MUST_BE_ZERO | ALPHA_PSL_IPL_MASK)
+ 117: 
+ 118: /*
+ 119:  * Interrupt Type Code Definitions [OSF/1 PALcode Specific]
+ 120:  */
+ 121:  
+ 122: #define	ALPHA_INTR_XPROC	0	/* interprocessor interrupt */
+ 123: #define	ALPHA_INTR_CLOCK	1	/* clock interrupt */
+ 124: #define	ALPHA_INTR_ERROR	2	/* correctable error or mcheck */
+ 125: #define	ALPHA_INTR_DEVICE	3	/* device interrupt */
+ 126: #define	ALPHA_INTR_PERF		4	/* performance counter */
+ 127: #define	ALPHA_INTR_PASSIVE	5	/* passive release */
+ 128: 
+ 129: /*
+ 130:  * Machine Check Error Summary Register definitions [OSF/1 PALcode Specific]
+ 131:  *
+ 132:  * The following bits are values as read.  On write, _PCE, _SCE, and
+ 133:  * _MIP are "write 1 to clear."
+ 134:  */
+ 135: 
+ 136: #define	ALPHA_MCES_IMP							\
+ 137:     0xffffffff00000000	/* impl. dependent */
+ 138: #define	ALPHA_MCES_RSVD							\
+ 139:     0x00000000ffffffe0	/* reserved */
+ 140: #define	ALPHA_MCES_DSC							\
+ 141:     0x0000000000000010	/* disable system correctable error reporting */
+ 142: #define	ALPHA_MCES_DPC							\
+ 143:     0x0000000000000008	/* disable processor correctable error reporting */
+ 144: #define	ALPHA_MCES_PCE							\
+ 145:     0x0000000000000004	/* processor correctable error in progress */
+ 146: #define	ALPHA_MCES_SCE							\
+ 147:     0x0000000000000002	/* system correctable error in progress */
+ 148: #define	ALPHA_MCES_MIP							\
+ 149:     0x0000000000000001	/* machine check in progress */
+ 150: 
+ 151: /*
+ 152:  * Machine Check Error Summary Register definitions [OSF/1 PALcode Specific]
+ 153:  *
+ 154:  * Note that these are *generic* OSF/1 PALcode specific defines. There are
+ 155:  * platform variations to these entities.
+ 156:  *
+ 157:  * GXemul note: These uint32_t were 'unsigned int' in the original NetBSD
+ 158:  * header file.
+ 159:  */
+ 160: 
+ 161: struct alpha_logout_area {
+ 162: 	uint32_t	la_frame_size;		/* frame size */
+ 163: 	uint32_t	la_flags;		/* flags; see below */
+ 164: 	uint32_t	la_cpu_offset;		/* offset to cpu area */
+ 165: 	uint32_t	la_system_offset;	/* offset to system area */
+ 166: };
+ 167: 
+ 168: #define	ALPHA_LOGOUT_FLAGS_RETRY	0x80000000	/* OK to continue */
+ 169: #define	ALPHA_LOGOUT_FLAGS_SE		0x40000000	/* second error */
+ 170: #define	ALPHA_LOGOUT_FLAGS_SBZ		0x3fffffff	/* should be zero */
+ 171: 
+ 172: #define	ALPHA_LOGOUT_NOT_BUILT						\
+ 173:     (struct alpha_logout_area *)0xffffffffffffffff)
+ 174: 
+ 175: #define	ALPHA_LOGOUT_PAL_AREA(lap)					\
+ 176:     (unsigned long *)((unsigned char *)(lap) + 16)
+ 177: #define	ALPHA_LOGOUT_PAL_SIZE(lap)					\
+ 178:     ((lap)->la_cpu_offset - 16)
+ 179: #define	ALPHA_LOGOUT_CPU_AREA(lap)					\
+ 180:     (unsigned long *)((unsigned char *)(lap) + (lap)->la_cpu_offset)
+ 181: #define	ALPHA_LOGOUT_CPU_SIZE(lap)					\
+ 182:     ((lap)->la_system_offset - (lap)->la_cpu_offset)
+ 183: #define	ALPHA_LOGOUT_SYSTEM_AREA(lap)					\
+ 184:     (unsigned long *)((unsigned char *)(lap) + (lap)->la_system_offset)
+ 185: #define	ALPHA_LOGOUT_SYSTEM_SIZE(lap)					\
+ 186:     ((lap)->la_frame_size - (lap)->la_system_offset)
+ 187: 
+ 188: /* types of machine checks */
+ 189: #define	ALPHA_SYS_ERROR		0x620	/* System correctable error	*/
+ 190: #define	ALPHA_PROC_ERROR	0x630	/* Processor correctable error	*/
+ 191: #define	ALPHA_SYS_MCHECK	0x660	/* System machine check		*/
+ 192: #define	ALPHA_PROC_MCHECK	0x670	/* Processor machine check	*/
+ 193: 
+ 194: /*
+ 195:  * Virtual Memory Management definitions [OSF/1 PALcode Specific]
+ 196:  *
+ 197:  * Includes user and kernel space addresses and information,
+ 198:  * page table entry definitions, etc.
+ 199:  *
+ 200:  * NOTE THAT THESE DEFINITIONS MAY CHANGE IN FUTURE ALPHA CPUS!
+ 201:  */
+ 202: 
+ 203: #define	ALPHA_PGSHIFT		13
+ 204: #define	ALPHA_PGBYTES		(1 << ALPHA_PGSHIFT)
+ 205: 
+ 206: #define	ALPHA_USEG_BASE		0			/* virtual */
+ 207: #define	ALPHA_USEG_END		0x000003ffffffffffULL
+ 208: 
+ 209: #define	ALPHA_K0SEG_BASE	0xfffffc0000000000ULL	/* direct-mapped */
+ 210: #define	ALPHA_K0SEG_END		0xfffffdffffffffffULL
+ 211: #define	ALPHA_K1SEG_BASE	0xfffffe0000000000ULL	/* virtual */
+ 212: #define	ALPHA_K1SEG_END		0xffffffffffffffffULL
+ 213: 
+ 214: #define ALPHA_K0SEG_TO_PHYS(x)	((x) & ~ALPHA_K0SEG_BASE)
+ 215: #define ALPHA_PHYS_TO_K0SEG(x)	((x) | ALPHA_K0SEG_BASE)
+ 216: 
+ 217: #define	ALPHA_PTE_VALID			0x0001
+ 218: 
+ 219: #define	ALPHA_PTE_FAULT_ON_READ		0x0002
+ 220: #define	ALPHA_PTE_FAULT_ON_WRITE	0x0004
+ 221: #define	ALPHA_PTE_FAULT_ON_EXECUTE	0x0008
+ 222: 
+ 223: #define	ALPHA_PTE_ASM			0x0010		/* addr. space match */
+ 224: #define	ALPHA_PTE_GRANULARITY		0x0060		/* granularity hint */
+ 225: 
+ 226: #define	ALPHA_PTE_PROT			0xff00
+ 227: #define	ALPHA_PTE_KR			0x0100
+ 228: #define	ALPHA_PTE_UR			0x0200
+ 229: #define	ALPHA_PTE_KW			0x1000
+ 230: #define	ALPHA_PTE_UW			0x2000
+ 231: 
+ 232: #define	ALPHA_PTE_WRITE			(ALPHA_PTE_KW | ALPHA_PTE_UW)
+ 233: 
+ 234: #define	ALPHA_PTE_SOFTWARE		0x00000000ffff0000
+ 235: #define	ALPHA_PTE_PALCODE		(~ALPHA_PTE_SOFTWARE) /* shorthand */
+ 236: 
+ 237: #define	ALPHA_PTE_PFN			0xffffffff00000000
+ 238: 
+ 239: #define	ALPHA_PTE_TO_PFN(pte)		((pte) >> 32)
+ 240: #define	ALPHA_PTE_FROM_PFN(pfn)		((pfn) << 32)
+ 241: 
+ 242: typedef unsigned long alpha_pt_entry_t;
+ 243: 
+ 244: /*
+ 245:  * Kernel Entry Vectors.  [OSF/1 PALcode Specific]
+ 246:  */
+ 247: 
+ 248: #define	ALPHA_KENTRY_INT	0
+ 249: #define	ALPHA_KENTRY_ARITH	1
+ 250: #define	ALPHA_KENTRY_MM		2
+ 251: #define	ALPHA_KENTRY_IF		3
+ 252: #define	ALPHA_KENTRY_UNA	4
+ 253: #define	ALPHA_KENTRY_SYS	5
+ 254: 
+ 255: /*
+ 256:  * MMCSR Fault Type Codes.  [OSF/1 PALcode Specific]
+ 257:  */
+ 258: 
+ 259: #define	ALPHA_MMCSR_INVALTRANS	0
+ 260: #define	ALPHA_MMCSR_ACCESS	1
+ 261: #define	ALPHA_MMCSR_FOR		2
+ 262: #define	ALPHA_MMCSR_FOE		3
+ 263: #define	ALPHA_MMCSR_FOW		4
+ 264: 
+ 265: /*
+ 266:  * Instruction Fault Type Codes.  [OSF/1 PALcode Specific]
+ 267:  */
+ 268: 
+ 269: #define	ALPHA_IF_CODE_BPT	0
+ 270: #define	ALPHA_IF_CODE_BUGCHK	1
+ 271: #define	ALPHA_IF_CODE_GENTRAP	2
+ 272: #define	ALPHA_IF_CODE_FEN	3
+ 273: #define	ALPHA_IF_CODE_OPDEC	4
+ 274: 
+ 275: #ifdef _KERNEL
+ 276: 
+ 277: /*
+ 278:  * Translation Buffer Invalidation definitions [OSF/1 PALcode Specific]
+ 279:  */
+ 280: 
+ 281: #define	ALPHA_TBIA()	alpha_pal_tbi(-2, 0)		/* all TB entries */
+ 282: #define	ALPHA_TBIAP()	alpha_pal_tbi(-1, 0)		/* all per-process */
+ 283: #define	ALPHA_TBISI(va)	alpha_pal_tbi(1, (va))		/* ITB entry for va */
+ 284: #define	ALPHA_TBISD(va)	alpha_pal_tbi(2, (va))		/* DTB entry for va */
+ 285: #define	ALPHA_TBIS(va)	alpha_pal_tbi(3, (va))		/* all for va */
+ 286: 
+ 287: #endif /* _KERNEL */
+ 288: 
+ 289: /*
+ 290:  * Bits used in the amask instruction [EV56 and later]
+ 291:  */
+ 292: 
+ 293: #define	ALPHA_AMASK_BWX		0x0001		/* byte/word extension */
+ 294: #define	ALPHA_AMASK_FIX		0x0002		/* floating point conv. ext. */
+ 295: #define	ALPHA_AMASK_CIX		0x0004		/* count extension */
+ 296: #define	ALPHA_AMASK_MVI		0x0100		/* multimedia extension */
+ 297: #define	ALPHA_AMASK_PAT		0x0200		/* precise arith. traps */
+ 298: #define	ALPHA_AMASK_PMI		0x1000		/* prefetch w/ modify intent */
+ 299: 
+ 300: #define	ALPHA_AMASK_ALL		(ALPHA_AMASK_BWX|ALPHA_AMASK_FIX|	\
+ 301: 				 ALPHA_AMASK_CIX|ALPHA_AMASK_MVI|	\
+ 302: 				 ALPHA_AMASK_PAT|ALPHA_AMASK_PMI)
+ 303: 
+ 304: #define	ALPHA_AMASK_BITS						\
+ 305:     "\20\17PMI\12PAT\11MVI\3CIX\2FIX\1BWX"
+ 306: 
+ 307: /*
+ 308:  * Chip family IDs returned by implver instruction
+ 309:  */
+ 310: 
+ 311: #define	ALPHA_IMPLVER_EV4	0		/* LCA/EV4/EV45 */
+ 312: #define	ALPHA_IMPLVER_EV5	1		/* EV5/EV56/PCA56 */
+ 313: #define	ALPHA_IMPLVER_EV6	2		/* EV6 */
+ 314: #define	ALPHA_IMPLVER_EV7	3		/* EV7/EV79 */
+ 315: 
+ 316: #ifdef _KERNEL
+ 317: 
+ 318: /*
+ 319:  * Maximum processor ID we allow from `whami', and related constants.
+ 320:  *
+ 321:  * XXX This is not really processor or PALcode specific, but this is
+ 322:  * a convenient place to put these definitions.
+ 323:  *
+ 324:  * XXX This is clipped at 63 so that we can use `long's for proc bitmasks.
+ 325:  */
+ 326: 
+ 327: #define	ALPHA_WHAMI_MAXID	63
+ 328: #define	ALPHA_MAXPROCS		(ALPHA_WHAMI_MAXID + 1)
+ 329: 
+ 330: /*
+ 331:  * Misc. support routines.
+ 332:  */
+ 333: const char	*alpha_dsr_sysname(void);
+ 334: 
+ 335: /*
+ 336:  * Stubs for Alpha instructions normally inaccessible from C.
+ 337:  */
+ 338: unsigned long	alpha_amask(unsigned long);
+ 339: unsigned long	alpha_implver(void);
+ 340: 
+ 341: #endif /* _KERNEL */
+ 342: 
+ 343: #if 0
+ 344: 
+ 345: /* XXX Expose the insn wrappers to userspace, for now. */
+ 346: 
+ 347: static __inline unsigned long
+ 348: alpha_rpcc(void)
+ 349: {
+ 350: 	unsigned long v0;
+ 351: 
+ 352: 	__asm volatile("rpcc %0" : "=r" (v0));
+ 353: 	return (v0);
+ 354: }
+ 355: 
+ 356: #define	alpha_mb()	__asm volatile("mb" : : : "memory")
+ 357: #define	alpha_wmb()	__asm volatile("mb" : : : "memory")	/* XXX */
+ 358: 
+ 359: #endif
+ 360: 
+ 361: #if defined(_KERNEL) || defined(_STANDALONE)
+ 362: 
+ 363: /*
+ 364:  * Stubs for OSF/1 PALcode operations.
+ 365:  */
+ 366: #include <machine/pal.h>
+ 367: 
+ 368: void		alpha_pal_cflush(unsigned long);
+ 369: void		alpha_pal_halt(void) __attribute__((__noreturn__));
+ 370: unsigned long	_alpha_pal_swpipl(unsigned long);	/* for profiling */
+ 371: void		alpha_pal_wrent(void *, unsigned long);
+ 372: void		alpha_pal_wrvptptr(unsigned long);
+ 373: 
+ 374: #define	alpha_pal_draina() __asm volatile("call_pal %0 # PAL_draina"	\
+ 375: 				: : "i" (PAL_draina) : "memory")
+ 376: 
+ 377: #define	alpha_pal_imb()	__asm volatile("call_pal %0 # PAL_imb"	\
+ 378: 				: : "i" (PAL_imb) : "memory")
+ 379: 
+ 380: static __inline unsigned long
+ 381: alpha_pal_rdmces(void)
+ 382: {
+ 383: 	register unsigned long v0 __asm("$0");
+ 384: 
+ 385: 	__asm volatile("call_pal %1 # PAL_OSF1_rdmces"
+ 386: 		: "=r" (v0)
+ 387: 		: "i" (PAL_OSF1_rdmces)
+ 388: 		/* clobbers t0, t8..t11 */
+ 389: 		: "$1", "$22", "$23", "$24", "$25");
+ 390: 
+ 391: 	return (v0);
+ 392: }
+ 393: 
+ 394: static __inline unsigned long
+ 395: alpha_pal_rdps(void)
+ 396: {
+ 397: 	register unsigned long v0 __asm("$0");
+ 398: 
+ 399: 	__asm volatile("call_pal %1 # PAL_OSF1_rdps"
+ 400: 		: "=r" (v0)
+ 401: 		: "i" (PAL_OSF1_rdps)
+ 402: 		/* clobbers t0, t8..t11 */
+ 403: 		: "$1", "$22", "$23", "$24", "$25");
+ 404: 
+ 405: 	return (v0);
+ 406: }
+ 407: 
+ 408: static __inline unsigned long
+ 409: alpha_pal_rdunique(void)
+ 410: {
+ 411: 	register unsigned long v0 __asm("$0");
+ 412: 
+ 413: 	__asm volatile("call_pal %1 # PAL_rdunique"
+ 414: 		: "=r" (v0)
+ 415: 		: "i" (PAL_rdunique));
+ 416: 
+ 417: 	return (v0);
+ 418: }
+ 419: 
+ 420: static __inline unsigned long
+ 421: alpha_pal_rdusp(void)
+ 422: {
+ 423: 	register unsigned long v0 __asm("$0");
+ 424: 
+ 425: 	__asm volatile("call_pal %1 # PAL_OSF1_rdusp"
+ 426: 		: "=r" (v0)
+ 427: 		: "i" (PAL_OSF1_rdusp)
+ 428: 		/* clobbers t0, t8..t11 */
+ 429: 		: "$1", "$22", "$23", "$24", "$25");
+ 430: 
+ 431: 	return (v0);
+ 432: }
+ 433: 
+ 434: static __inline unsigned long
+ 435: alpha_pal_rdval(void)
+ 436: {
+ 437: 	register unsigned long v0 __asm("$0");
+ 438: 
+ 439: 	__asm volatile("call_pal %1 # PAL_OSF1_rdval"
+ 440: 		: "=r" (v0)
+ 441: 		: "i" (PAL_OSF1_rdval)
+ 442: 		/* clobbers t0, t8..t11 */
+ 443: 		: "$1", "$22", "$23", "$24", "$25");
+ 444: 
+ 445: 	return (v0);
+ 446: }
+ 447: 
+ 448: static __inline unsigned long
+ 449: alpha_pal_swpctx(unsigned long ctx)
+ 450: {
+ 451: 	register unsigned long a0 __asm("$16") = ctx;
+ 452: 	register unsigned long v0 __asm("$0");
+ 453: 
+ 454: 	__asm volatile("call_pal %2 # PAL_OSF1_swpctx"
+ 455: 		: "=r" (a0), "=r" (v0)
+ 456: 		: "i" (PAL_OSF1_swpctx), "0" (a0)
+ 457: 		/* clobbers t0, t8..t11, a0 (above) */
+ 458: 		: "$1", "$22", "$23", "$24", "$25", "memory");
+ 459: 
+ 460: 	return (v0);
+ 461: }
+ 462: 
+ 463: static __inline unsigned long
+ 464: alpha_pal_swpipl(unsigned long ipl)
+ 465: {
+ 466: 	register unsigned long a0 __asm("$16") = ipl;
+ 467: 	register unsigned long v0 __asm("$0");
+ 468: 
+ 469: 	__asm volatile("call_pal %2 # PAL_OSF1_swpipl"
+ 470: 		: "=r" (a0), "=r" (v0)
+ 471: 		: "i" (PAL_OSF1_swpipl), "0" (a0)
+ 472: 		/* clobbers t0, t8..t11, a0 (above) */
+ 473: 		: "$1", "$22", "$23", "$24", "$25", "memory");
+ 474: 
+ 475: 	return (v0);
+ 476: }
+ 477: 
+ 478: static __inline void
+ 479: alpha_pal_tbi(unsigned long op, vaddr_t va)
+ 480: {
+ 481: 	register unsigned long a0 __asm("$16") = op;
+ 482: 	register unsigned long a1 __asm("$17") = va;
+ 483: 
+ 484: 	__asm volatile("call_pal %2 # PAL_OSF1_tbi"
+ 485: 		: "=r" (a0), "=r" (a1)
+ 486: 		: "i" (PAL_OSF1_tbi), "0" (a0), "1" (a1)
+ 487: 		/* clobbers t0, t8..t11, a0 (above), a1 (above) */
+ 488: 		: "$1", "$22", "$23", "$24", "$25");
+ 489: }
+ 490: 
+ 491: static __inline unsigned long
+ 492: alpha_pal_whami(void)
+ 493: {
+ 494: 	register unsigned long v0 __asm("$0");
+ 495: 
+ 496: 	__asm volatile("call_pal %1 # PAL_OSF1_whami"
+ 497: 		: "=r" (v0)
+ 498: 		: "i" (PAL_OSF1_whami)
+ 499: 		/* clobbers t0, t8..t11 */
+ 500: 		: "$1", "$22", "$23", "$24", "$25");
+ 501: 
+ 502: 	return (v0);
+ 503: }
+ 504: 
+ 505: static __inline void
+ 506: alpha_pal_wrfen(unsigned long onoff)
+ 507: {
+ 508: 	register unsigned long a0 __asm("$16") = onoff;
+ 509: 
+ 510: 	__asm volatile("call_pal %1 # PAL_OSF1_wrfen"
+ 511: 		: "=r" (a0)
+ 512: 		: "i" (PAL_OSF1_wrfen), "0" (a0)
+ 513: 		/* clobbers t0, t8..t11, a0 (above) */
+ 514: 		: "$1", "$22", "$23", "$24", "$25");
+ 515: }
+ 516: 
+ 517: static __inline void
+ 518: alpha_pal_wripir(unsigned long cpu_id)
+ 519: {
+ 520: 	register unsigned long a0 __asm("$16") = cpu_id;
+ 521: 
+ 522: 	__asm volatile("call_pal %1 # PAL_ipir"
+ 523: 		: "=r" (a0)
+ 524: 		: "i" (PAL_ipir), "0" (a0)
+ 525: 		/* clobbers t0, t8..t11, a0 (above) */
+ 526: 		: "$1", "$22", "$23", "$24", "$25");
+ 527: }
+ 528: 
+ 529: static __inline void
+ 530: alpha_pal_wrunique(unsigned long unique)
+ 531: {
+ 532: 	register unsigned long a0 __asm("$16") = unique;
+ 533: 
+ 534: 	__asm volatile("call_pal %1 # PAL_wrunique"
+ 535: 		: "=r" (a0)
+ 536: 		: "i" (PAL_wrunique), "0" (a0));
+ 537: }
+ 538: 
+ 539: static __inline void
+ 540: alpha_pal_wrusp(unsigned long usp)
+ 541: {
+ 542: 	register unsigned long a0 __asm("$16") = usp;
+ 545: 		: "=r" (a0) 546: 		: "i" (PAL_OSF1_wrusp), "0" (a0)
+ 547: 		/* clobbers t0, t8..t11, a0 (above) */
+ 548: 		: "$1", "$22", "$23", "$24", "$25");
+ 549: }
+ 550: 
+ 551: static __inline void
+ 552: alpha_pal_wrmces(unsigned long mces)
+ 553: {
+ 554: 	register unsigned long a0 __asm("$16") = mces;
+ 555: 
+ 556: 	__asm volatile("call_pal %1 # PAL_OSF1_wrmces"
+ 557: 		: "=r" (a0)
+ 558: 		: "i" (PAL_OSF1_wrmces), "0" (a0)
+ 559: 		/* clobbers t0, t8..t11 */
+ 560: 		: "$1", "$22", "$23", "$24", "$25");
+ 561: }
+ 562: 
+ 563: static __inline void
+ 564: alpha_pal_wrval(unsigned long val)
+ 565: {
+ 566: 	register unsigned long a0 __asm("$16") = val;
+ 567: 
+ 568: 	__asm volatile("call_pal %1 # PAL_OSF1_wrval"
+ 569: 		: "=r" (a0)
+ 570: 		: "i" (PAL_OSF1_wrval), "0" (a0)
+ 571: 		/* clobbers t0, t8..t11, a0 (above) */
+ 572: 		: "$1", "$22", "$23", "$24", "$25");
+ 573: }
+ 574: 
+ 575: #endif /* _KERNEL */
+ 576: 
+ 577: #endif /* __ALPHA_ALPHA_CPU_H__ */
+
+web search: 
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n --glob '*.{c,cc,h,S,s}' 'swpctx|alpha_palcode\\s*\\(' src" in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n 'register_dump|register_match|ALPHA_REG_NAMES|ALPHA_[AV]0|invalidate_translation_caches' src/cpus/cpu_alpha.c src/cpus/cpu_alpha_instr.c src/debugger src/include/cpu_alpha.h" in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$sourceLines = Get-Content -LiteralPath src/include/thirdparty/alpha_cpu.h; for ($lineNumber = 448; $lineNumber -le 476; $lineNumber++) { '"'{0,4}: {1}' -f "'$lineNumber, $sourceLines[$lineNumber - 1] }; rg -n '"'ALPHA_V0|ALPHA_A0' src/cpus/cpu_alpha_palcode.c" in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+ succeeded in 111ms:
+src/include/cpu_alpha.h:75:#define	ALPHA_V0		0
+src/include/cpu_alpha.h:93:#define	ALPHA_A0		16
+src/include/cpu_alpha.h:113:#define ALPHA_REG_NAMES		{				\
+src/include/cpu_alpha.h:187:void alpha_invalidate_translation_caches(struct cpu *cpu, uint64_t, int);
+src/cpus/cpu_alpha.c:56:static const char *alpha_regname[N_ALPHA_REGS] = ALPHA_REG_NAMES; 
+src/cpus/cpu_alpha.c:91:	cpu->invalidate_translation_caches =
+src/cpus/cpu_alpha.c:92:	    alpha_invalidate_translation_caches;
+src/cpus/cpu_alpha.c:163: *  alpha_cpu_register_dump():
+src/cpus/cpu_alpha.c:170:void alpha_cpu_register_dump(struct cpu *cpu, int gprs, int coprocs)
+src/debugger\debugger_cmds.c:417:			if (m->cpus[i]->invalidate_translation_caches != NULL)
+src/debugger\debugger_cmds.c:418:				m->cpus[i]->invalidate_translation_caches(
+src/debugger\debugger_cmds.c:490:			if (m->cpus[i]->invalidate_translation_caches != NULL)
+src/debugger\debugger_cmds.c:491:				m->cpus[i]->invalidate_translation_caches(
+src/debugger\debugger_cmds.c:1672:	cpu_register_dump(m, m->cpus[cpuid], gprs, coprocs);
+src/debugger\debugger.c:795:			    invalidate_translation_caches(
+
+ succeeded in 161ms:
+src\cpus\cpu_alpha_palcode.c:68:	case 0x30: snprintf(buf, buflen, "PAL_OSF1_swpctx"); break;
+src\cpus\cpu_alpha_palcode.c:158: *  alpha_palcode():
+src\cpus\cpu_alpha_palcode.c:163:void alpha_palcode(struct cpu *cpu, uint32_t palcode)
+src\cpus\cpu_alpha_palcode.c:229:	case 0x30:	/*  PAL_OSF1_swpctx  */
+src\cpus\cpu_alpha_instr.c:63:	alpha_palcode(cpu, ic->arg[0]);
+src\include\cpu_alpha.h:197:void alpha_palcode(struct cpu *cpu, uint32_t palcode);
+src\include\thirdparty\alpha_cpu.h:449:alpha_pal_swpctx(unsigned long ctx)
+src\include\thirdparty\alpha_cpu.h:454:	__asm volatile("call_pal %2 # PAL_OSF1_swpctx"
+src\include\thirdparty\alpha_cpu.h:456:		: "i" (PAL_OSF1_swpctx), "0" (a0)
+
+ succeeded in 213ms:
+ 448: static __inline unsigned long
+ 449: alpha_pal_swpctx(unsigned long ctx)
+ 450: {
+ 451: 	register unsigned long a0 __asm("$16") = ctx;
+ 452: 	register unsigned long v0 __asm("$0");
+ 453: 
+ 454: 	__asm volatile("call_pal %2 # PAL_OSF1_swpctx"
+ 455: 		: "=r" (a0), "=r" (v0)
+ 456: 		: "i" (PAL_OSF1_swpctx), "0" (a0)
+ 457: 		/* clobbers t0, t8..t11, a0 (above) */
+ 458: 		: "$1", "$22", "$23", "$24", "$25", "memory");
+ 459: 
+ 460: 	return (v0);
+ 461: }
+ 462: 
+ 463: static __inline unsigned long
+ 464: alpha_pal_swpipl(unsigned long ipl)
+ 465: {
+ 466: 	register unsigned long a0 __asm("$16") = ipl;
+ 467: 	register unsigned long v0 __asm("$0");
+ 468: 
+ 469: 	__asm volatile("call_pal %2 # PAL_OSF1_swpipl"
+ 470: 		: "=r" (a0), "=r" (v0)
+ 471: 		: "i" (PAL_OSF1_swpipl), "0" (a0)
+ 472: 		/* clobbers t0, t8..t11, a0 (above) */
+ 473: 		: "$1", "$22", "$23", "$24", "$25", "memory");
+ 474: 
+ 475: 	return (v0);
+ 476: }
+108:	switch (cpu->cd.alpha.r[ALPHA_A0]) {
+118:		cpu->cd.alpha.r[ALPHA_V0] = a3;
+148:		    (uint64_t) cpu->cd.alpha.r[ALPHA_A0]);
+165:	uint64_t a0 = cpu->cd.alpha.r[ALPHA_A0], a1 = cpu->cd.alpha.r[ALPHA_A1];
+204:		cpu->cd.alpha.r[ALPHA_V0] = cpu->cd.alpha.mces;
+208:		cpu->cd.alpha.mces = ~(cpu->cd.alpha.r[ALPHA_A0] & 7);
+212:		cpu->cd.alpha.mces |= (cpu->cd.alpha.r[ALPHA_A0] & 0x18);
+221:		cpu->cd.alpha.pcb.apcb_flags = cpu->cd.alpha.r[ALPHA_A0];
+251:		cpu->cd.alpha.r[ALPHA_A0] = cpu->cd.alpha.ctx;
+306:		cpu->cd.alpha.r[ALPHA_V0] = cpu->cd.alpha.sysvalue;
+339:		cpu->cd.alpha.r[ALPHA_V0] = cpu->cd.alpha.ps & ALPHA_PSL_IPL_MASK;
+344:		cpu->cd.alpha.r[ALPHA_V0] = cpu->cd.alpha.ps;
+356:		cpu->cd.alpha.r[ALPHA_V0] = cpu->cd.alpha.pcb.apcb_usp;
+361:		cpu->cd.alpha.r[ALPHA_V0] = cpu->cpu_id;
+383:		cpu->cd.alpha.r[ALPHA_V0] = 0;	/*  Success?  */
+
+web search: https://gcc.gnu.org/onlinedocs/gcc/Extended-Asm.html
+codex
+The wrapper returns `v0`, but it also declares `a0` as an asm output tied to the input, allowing `a0` to be clobbered. That supports one return-register defect; it does not support treating the `a0` write as a second ABI violation. I’m checking for in-tree dependencies on that write and confirming debugger visibility.
+web search: 
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$sourceLines = Get-Content -LiteralPath src/cpus/cpu_alpha_instr.c; for ($lineNumber = 30; $lineNumber -le 100; $lineNumber++) { '"'{0,4}: {1}' -f "'$lineNumber, $sourceLines[$lineNumber - 1] }; rg -n '"'swpctx|alpha_palcode|alpha\\.r\\[ALPHA_A0\\]|alpha\\.ctx|invalidate_translation_caches' src/cpus/cpu_alpha* src/memory* src/include -g '*alpha*'" in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$sourceLines = Get-Content -LiteralPath src/cpus/cpu_alpha.c; foreach ($lineSpan in @(@(50,125),@(155,260),@(930,1040))) { for ($lineNumber = $lineSpan[0]; $lineNumber -le $lineSpan[1] -and $lineNumber -le $sourceLines.Count; $lineNumber++) { '"'{0,4}: {1}' -f "'$lineNumber, $sourceLines[$lineNumber - 1] } }' in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n 'debugger_cmd_regs|cpu_register_dump|\"regs\"|\"reg\"|\"print\"' src/debugger/debugger_cmds.c src/debugger/debugger.c src/cpus/cpu.c; rg -n 'invalidate_translation_caches|ALPHA_A0|alpha\\.r' src/cpus/cpu_dyntrans.c src/cpus/cpu_dyntrans.h src/memory/memory_alpha.c src/include/cpu_dyntrans.h" in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+ exited 1 in 168ms:
+src/debugger/debugger.c:152:		printf("^C");
+src/debugger/debugger.c:181:	printf("%3i: 0x", i);
+src/debugger/debugger.c:183:		printf("%08" PRIx32, (uint32_t) m->breakpoints.addr[i]);
+src/debugger/debugger.c:185:		printf("%016" PRIx64, (uint64_t) m->breakpoints.addr[i]);
+src/debugger/debugger.c:187:		printf(" (%s)", m->breakpoints.string[i]);
+src/debugger/debugger.c:189:	printf("  [hits=%" PRIi64, (int64_t) m->breakpoints.hitcount[i]);
+src/debugger/debugger.c:191:		printf(", ignore %" PRIi64 " more",
+src/debugger/debugger.c:193:	printf("]\n");
+src/debugger/debugger.c:222:		fprintf(stderr, "internal error in the debugger\n");
+src/debugger/debugger.c:236:	/*  printf("left  = '%s'\nright = '%s'\n", left, right);  */
+src/debugger/debugger.c:241:		printf("No match for the right-hand side of the assignment.\n");
+src/debugger/debugger.c:244:		printf("Multiple matches for the right-hand side of the "
+src/debugger/debugger.c:251:			printf("No match for the left-hand side of the "
+src/debugger/debugger.c:255:			printf("Multiple matches for the left-hand side "
+src/debugger/debugger.c:259:			debugger_cmd_print(m, left);
+src/debugger/debugger.c:334:		printf("Unknown command '%s'. Type 'help' for help.\n", cmd);
+src/debugger/debugger.c:340:		printf("Ambiguous command '%s':  ", cmd);
+src/debugger/debugger.c:344:				printf("  %s", cmds[i].name);
+src/debugger/debugger.c:347:		printf("\n");
+src/debugger/debugger.c:361:		printf("FATAL ERROR: internal error in debugger.c:"
+src/debugger/debugger.c:380:	printf("GXemul> ");
+src/debugger/debugger.c:399:			printf("\b");
+src/debugger/debugger.c:401:				printf("%c", cmd[i]);
+src/debugger/debugger.c:402:			printf(" \b");
+src/debugger/debugger.c:404:				printf("\b");
+src/debugger/debugger.c:412:				printf("%c", cmd[i]);
+src/debugger/debugger.c:413:			printf(" \b");
+src/debugger/debugger.c:415:				printf("\b");
+src/debugger/debugger.c:420:				printf("\b");
+src/debugger/debugger.c:425:				printf("\b");
+src/debugger/debugger.c:432:			printf("\n");
+src/debugger/debugger.c:434:			printf("GXemul> ");
+src/debugger/debugger.c:440:				printf("%c", cmd[cursor_pos]);
+src/debugger/debugger.c:446:				printf("%c",
+src/debugger/debugger.c:477:						printf(" ");
+src/debugger/debugger.c:479:						printf("\b \b");
+src/debugger/debugger.c:487:						printf(" ");
+src/debugger/debugger.c:489:						printf("\b \b");
+src/debugger/debugger.c:494:					printf("%s", cmd);
+src/debugger/debugger.c:501:			printf("^T\n");
+src/debugger/debugger.c:506:			snprintf(info, sizeof(info), "ninstrs=%lli, pc=", (long long) cpu->ninstrs);
+src/debugger/debugger.c:509:				snprintf(info + strlen(info), sizeof(info) - strlen(info),
+src/debugger/debugger.c:512:				snprintf(info + strlen(info), sizeof(info) - strlen(info),
+src/debugger/debugger.c:519:				snprintf(info + strlen(info), sizeof(info) - strlen(info),
+src/debugger/debugger.c:523:				snprintf(info + strlen(info), sizeof(info) - strlen(info),
+src/debugger/debugger.c:531:				snprintf(bpinfo, sizeof(bpinfo),
+src/debugger/debugger.c:537:					snprintf(bpinfo + strlen(bpinfo),
+src/debugger/debugger.c:547:			printf("GXemul> ");
+src/debugger/debugger.c:550:			// Reprint all chars, then backspace if cursor_pos is less than cmd_len.
+src/debugger/debugger.c:552:				printf("%c", cmd[i]);
+src/debugger/debugger.c:554:				printf("\b");
+src/debugger/debugger.c:567:				printf("\b");
+src/debugger/debugger.c:569:					printf("%c", cmd[i]);
+src/debugger/debugger.c:570:				printf(" \b");
+src/debugger/debugger.c:572:					printf("\b");
+src/debugger/debugger.c:582:				printf("\b");
+src/debugger/debugger.c:584:					printf("%c", cmd[i]);
+src/debugger/debugger.c:585:				printf(" \b");
+src/debugger/debugger.c:587:					printf("\b");
+src/debugger/debugger.c:597:			printf("%c", ch);
+src/debugger/debugger.c:599:				printf("%c", cmd[i]);
+src/debugger/debugger.c:601:				printf("\b");
+src/debugger/debugger.c:604:			printf("\n");
+src/debugger/debugger.c:625:				printf("\a");
+src/debugger/debugger.c:640:				printf("\a\n");	/*  Beep. :-)  */
+src/debugger/debugger.c:642:				j = 0;		/*  j = # of cmds printed  */
+src/debugger/debugger.c:647:							printf("  ");
+src/debugger/debugger.c:648:						printf("%s",
+src/debugger/debugger.c:654:								printf(" ");
+src/debugger/debugger.c:656:							printf("\n");
+src/debugger/debugger.c:663:					printf("\n");
+src/debugger/debugger.c:665:				printf("GXemul> ");
+src/debugger/debugger.c:668:					printf("%c", cmd[i]);
+src/debugger/debugger.c:881:		fprintf(stderr, "\nERROR: No machines, "
+src/cpus/cpu.c:74:	snprintf(cpu->path, strlen(machine->path) + 15,
+src/cpus/cpu.c:87:	snprintf(tmpstr, sizeof(tmpstr), "cpu[%i]", cpu_id);
+src/cpus/cpu.c:216: *  cpu_register_dump():
+src/cpus/cpu.c:218: *  Dump cpu registers in a relatively readable format.
+src/cpus/cpu.c:221: *  coprocs: set bit 0..x to dump registers in coproc 0..x. (CPU dependent.)
+src/cpus/cpu.c:223:void cpu_register_dump(struct machine *m, struct cpu *cpu,
+src/cpus/cpu.c:226:	if (cpu->cpu_family == NULL || cpu->cpu_family->register_dump == NULL)
+src/cpus/cpu.c:227:		fatal("cpu_register_dump(): NULL\n");
+src/cpus/cpu.c:229:		cpu->cpu_family->register_dump(cpu, gprs, coprocs);
+src/cpus/cpu.c:328:	 *  within the translation_cache region. Let's invalidate those too:
+src/cpus/cpu.c:344:	snprintf(cpuname, sizeof(cpuname), "cpu%i", cpu->cpu_id);
+src/cpus/cpu.c:426: *  cpu_print_pc_indicator_in_disassembly():
+src/cpus/cpu.c:431:void cpu_print_pc_indicator_in_disassembly(struct cpu *cpu, int running, uint64_t dumpaddr)
+src/cpus/cpu.c:446: *  If show_nr_of_instructions is on, then print a line to stdout about how
+src/cpus/cpu.c:478:	printf("[ %" PRIi64" instrs", (int64_t) cpu->ninstrs);
+src/cpus/cpu.c:489:		printf("; idling");
+src/cpus/cpu.c:492:		printf("; i/s=%" PRIi64" avg=%" PRIi64, is, avg);
+src/cpus/cpu.c:498:			printf("; pc=0x%08" PRIx32, (uint32_t) pc);
+src/cpus/cpu.c:500:			printf("; pc=0x%016" PRIx64, (uint64_t) pc);
+src/cpus/cpu.c:509:		printf(" <%s>", symbol);
+src/cpus/cpu.c:510:	printf(" ]\n");
+src/cpus/cpu.c:529:		printf("Machine with no CPUs? TODO.\n");
+src/debugger/debugger_cmds.c:62:		printf("syntax: breakpoint subcmd [args...]\n");
+src/debugger/debugger_cmds.c:63:		printf("Available subcmds (and args) are:\n");
+src/debugger/debugger_cmds.c:64:		printf("  add addr[, N] add a breakpoint for address addr"
+src/debugger/debugger_cmds.c:66:		printf("  delete x      delete breakpoint nr x\n");
+src/debugger/debugger_cmds.c:67:		printf("  show          show current breakpoints\n");
+src/debugger/debugger_cmds.c:68:		printf("  subsystem [name error|warning|info|debug|off]\n");
+src/debugger/debugger_cmds.c:69:		printf("                show or set breakpoints on subsystem"
+src/debugger/debugger_cmds.c:71:		printf("Subcmds may be abbreviated to any unambiguous prefix,"
+src/debugger/debugger_cmds.c:89:		printf("Unknown breakpoint subcommand.\n");
+src/debugger/debugger_cmds.c:93:		printf("Ambiguous breakpoint subcommand '%.*s'.\n",
+src/debugger/debugger_cmds.c:105:			printf("syntax: breakpoint show\n");
+src/debugger/debugger_cmds.c:109:			printf("No breakpoints set.\n");
+src/debugger/debugger_cmds.c:119:			printf("syntax: breakpoint delete x\n");
+src/debugger/debugger_cmds.c:126:			printf("No breakpoints set.\n");
+src/debugger/debugger_cmds.c:130:			printf("Invalid breakpoint nr %i. Use 'breakpoint "
+src/debugger/debugger_cmds.c:162:			printf("syntax: breakpoint add addr[, ignorecount]\n");
+src/debugger/debugger_cmds.c:183:			printf("Couldn't parse '%s'\n", rest);
+src/debugger/debugger_cmds.c:245:			debugmsg_print_breakpoints();
+src/debugger/debugger_cmds.c:271:			printf("syntax: breakpoint subsystem name "
+src/debugger/debugger_cmds.c:284:			printf("%s breakpoint level '%.*s'. Levels are: "
+src/debugger/debugger_cmds.c:292:			printf("Unknown subsystem name '%s'. Use the "
+src/debugger/debugger_cmds.c:303:		debugmsg_print_breakpoints();
+src/debugger/debugger_cmds.c:330:		printf("syntax: watchpoint subcmd [args...]\n");
+src/debugger/debugger_cmds.c:331:		printf("Available subcmds (and args) are:\n");
+src/debugger/debugger_cmds.c:332:		printf("  add addr[, len]  break on a guest write to the len-byte"
+src/debugger/debugger_cmds.c:334:		printf("                   (len defaults to 4)\n");
+src/debugger/debugger_cmds.c:335:		printf("  delete x         delete watchpoint nr x\n");
+src/debugger/debugger_cmds.c:336:		printf("  show             show current watchpoints\n");
+src/debugger/debugger_cmds.c:337:		printf("Subcmds may be abbreviated to any unambiguous prefix.\n");
+src/debugger/debugger_cmds.c:352:		printf("Unknown watchpoint subcommand.\n");
+src/debugger/debugger_cmds.c:356:		printf("Ambiguous watchpoint subcommand '%.*s'.\n",
+src/debugger/debugger_cmds.c:367:			printf("No watchpoints set.\n");
+src/debugger/debugger_cmds.c:369:			printf("%3i: paddr 0x", i);
+src/debugger/debugger_cmds.c:371:				printf("%08" PRIx32,
+src/debugger/debugger_cmds.c:374:				printf("%016" PRIx64,
+src/debugger/debugger_cmds.c:376:			printf(", %" PRIi64 " byte(s)",
+src/debugger/debugger_cmds.c:379:				printf(" (%s)", m->watchpoints.string[i]);
+src/debugger/debugger_cmds.c:380:			printf("\n");
+src/debugger/debugger_cmds.c:389:			printf("syntax: watchpoint delete x\n");
+src/debugger/debugger_cmds.c:396:			printf("No watchpoints set.\n");
+src/debugger/debugger_cmds.c:400:			printf("Invalid watchpoint nr %i. Use 'watchpoint "
+src/debugger/debugger_cmds.c:430:			printf("syntax: watchpoint add addr[, len]\n");
+src/debugger/debugger_cmds.c:447:			printf("Couldn't parse '%s'\n", rest);
+src/debugger/debugger_cmds.c:463:			printf("(warning: couldn't translate 0x%" PRIx64 " to a "
+src/debugger/debugger_cmds.c:494:		printf("watchpoint %i: paddr 0x%" PRIx64 ", %" PRIi64
+src/debugger/debugger_cmds.c:508:		printf("syntax: continue\n");
+src/debugger/debugger_cmds.c:529:		printf("No cpus (?)\n");
+src/debugger/debugger_cmds.c:534:		printf("m->cpus[m->bootstrap_cpu] = NULL\n");
+src/debugger/debugger_cmds.c:540:		printf("No cpus (?)\n");
+src/debugger/debugger_cmds.c:545:		printf("m->cpus[m->bootstrap_cpu] = NULL\n");
+src/debugger/debugger_cmds.c:559:			printf("Weird device number. Use 'device list'.\n");
+src/debugger/debugger_cmds.c:564:			printf("No memory-mapped devices in this machine.\n");
+src/debugger/debugger_cmds.c:567:			printf("%2i: %25s @ 0x%011" PRIx64", len = 0x%" PRIx64,
+src/debugger/debugger_cmds.c:573:				printf(" (");
+src/debugger/debugger_cmds.c:575:					printf("DYNTRANS R");
+src/debugger/debugger_cmds.c:577:					printf("+W");
+src/debugger/debugger_cmds.c:578:				printf(")");
+src/debugger/debugger_cmds.c:580:			printf("\n");
+src/debugger/debugger_cmds.c:588:	printf("syntax: devices cmd [...]\n");
+src/debugger/debugger_cmds.c:589:	printf("Available cmds are:\n");
+src/debugger/debugger_cmds.c:590:	printf("  add name_and_params    add a device to the current "
+src/debugger/debugger_cmds.c:592:	printf("  all                    list all registered devices\n");
+src/debugger/debugger_cmds.c:593:	printf("  consoles               list all slave consoles\n");
+src/debugger/debugger_cmds.c:594:	printf("  list                   list memory-mapped devices in the"
+src/debugger/debugger_cmds.c:596:	printf("  remove x               remove device nr x from the "
+src/debugger/debugger_cmds.c:673:			printf("Unparsable address: %s\n", args);
+src/debugger/debugger_cmds.c:681:		printf("No cpus (?)\n");
+src/debugger/debugger_cmds.c:686:		printf("m->cpus[m->bootstrap_cpu] = NULL\n");
+src/debugger/debugger_cmds.c:704:			printf("Unparsable address: %s\n", args);
+src/debugger/debugger_cmds.c:720:			printf("0x%08" PRIx32"  ", (uint32_t) addr);
+src/debugger/debugger_cmds.c:722:			printf("0x%016" PRIx64"  ", (uint64_t) addr);
+src/debugger/debugger_cmds.c:725:			printf("(memory access failed)\n");
+src/debugger/debugger_cmds.c:730:					printf("%02x%s", buf[x],
+src/debugger/debugger_cmds.c:733:					printf("  %s", (x&3)==3? " " : "");
+src/debugger/debugger_cmds.c:735:			printf(" ");
+src/debugger/debugger_cmds.c:739:					printf("%c", (buf[x]>=' ' &&
+src/debugger/debugger_cmds.c:742:					printf(" ");
+src/debugger/debugger_cmds.c:744:			printf("\n");
+src/debugger/debugger_cmds.c:767:		printf("syntax: emul\n");
+src/debugger/debugger_cmds.c:817:		printf("syntax: find [b|h|w|d|q|s|z] startaddr, endaddr,"
+src/debugger/debugger_cmds.c:819:		printf("   b    byte        (8 bits)\n");
+src/debugger/debugger_cmds.c:820:		printf("   h    half-word   (16 bits)\n");
+src/debugger/debugger_cmds.c:821:		printf("   w    word        (32 bits)\n");
+src/debugger/debugger_cmds.c:822:		printf("   d    doubleword  (64 bits)\n");
+src/debugger/debugger_cmds.c:823:		printf("   q    quad-word   (128 bits)\n");
+src/debugger/debugger_cmds.c:824:		printf("   s    string (without terminating nul)\n");
+src/debugger/debugger_cmds.c:825:		printf("   z    nul-terminated string\n");
+src/debugger/debugger_cmds.c:841:			printf("Invalid type '%s'\n", p_start);
+src/debugger/debugger_cmds.c:851:		printf("No type specified.\n");
+src/debugger/debugger_cmds.c:858:		printf("Couldn't parse the start address.\n");
+src/debugger/debugger_cmds.c:861:		printf("Multiple matches for the start address."
+src/debugger/debugger_cmds.c:869:		printf("INTERNAL ERROR in debugger.c.\n");
+src/debugger/debugger_cmds.c:876:		printf("Couldn't parse the end address.\n");
+src/debugger/debugger_cmds.c:879:		printf("Multiple matches for the end address."
+src/debugger/debugger_cmds.c:887:		printf("INTERNAL ERROR in debugger.c.\n");
+src/debugger/debugger_cmds.c:892:		printf("No cpus (?)\n");
+src/debugger/debugger_cmds.c:897:		printf("m->cpus[m->bootstrap_cpu] = NULL\n");
+src/debugger/debugger_cmds.c:917:			printf("Empty search string.\n");
+src/debugger/debugger_cmds.c:927:			printf("Couldn't parse the data.\n");
+src/debugger/debugger_cmds.c:930:			printf("Multiple matches for the data value."
+src/debugger/debugger_cmds.c:938:			printf("INTERNAL ERROR in debugger.c.\n");
+src/debugger/debugger_cmds.c:947:				printf("(NOTE: truncating %0" PRIx64")\n",
+src/debugger/debugger_cmds.c:954:				printf("(NOTE: truncating %0" PRIx64")\n",
+src/debugger/debugger_cmds.c:962:				printf("(NOTE: truncating %0" PRIx64")\n",
+src/debugger/debugger_cmds.c:970:			printf("quad-words: TODO\n");
+src/debugger/debugger_cmds.c:973:			printf("Unimplemented type '%c'\n", find_type);
+src/debugger/debugger_cmds.c:979:		printf("The end address must be larger than the start"
+src/debugger/debugger_cmds.c:1000:			printf("(interrupted)\n");
+src/debugger/debugger_cmds.c:1030:						printf("match at 0x%08" PRIx32
+src/debugger/debugger_cmds.c:1033:						printf("match at 0x%016" PRIx64
+src/debugger/debugger_cmds.c:1037:					printf("(further matches not"
+src/debugger/debugger_cmds.c:1067:		printf("(skipped %i unreadable 16-byte chunk%s)\n",
+src/debugger/debugger_cmds.c:1069:	printf("%i match%s found.\n", n_matches, n_matches == 1? "" : "es");
+src/debugger/debugger_cmds.c:1085:		printf("syntax: focus x[,y]\n");
+src/debugger/debugger_cmds.c:1086:		printf("where x (cpu id) and y (machine number) "
+src/debugger/debugger_cmds.c:1089:		goto print_current_focus_and_return;
+src/debugger/debugger_cmds.c:1095:		printf("No cpu number specified?\n");
+src/debugger/debugger_cmds.c:1103:			printf("No machine number specified?\n");
+src/debugger/debugger_cmds.c:1111:			printf("Invalid machine number: %i\n", y);
+src/debugger/debugger_cmds.c:1121:		printf("Invalid cpu number: %i\n", x);
+src/debugger/debugger_cmds.c:1127:print_current_focus_and_return:
+src/debugger/debugger_cmds.c:1129:		printf("current machine (%i): \"%s\"\n",
+src/debugger/debugger_cmds.c:1133:	printf("current cpu (%i)\n", debugger_cur_cpu);
+src/debugger/debugger_cmds.c:1147:		printf("syntax: itrace\n");
+src/debugger/debugger_cmds.c:1158:	printf("instruction_trace = %s\n", m->instruction_trace? "ON":"OFF");
+src/debugger/debugger_cmds.c:1173:		printf("syntax: lookup name|addr\n");
+src/debugger/debugger_cmds.c:1187:			printf("lookup for '%s' failed\n", args);
+src/debugger/debugger_cmds.c:1190:		printf("%s = 0x", args);
+src/debugger/debugger_cmds.c:1192:			printf("%08" PRIx32"\n", (uint32_t) newaddr);
+src/debugger/debugger_cmds.c:1194:			printf("%016" PRIx64"\n", (uint64_t) newaddr);
+src/debugger/debugger_cmds.c:1202:			printf("0x%08" PRIx32, (uint32_t) addr);
+src/debugger/debugger_cmds.c:1204:			printf("0x%016" PRIx64, (uint64_t) addr);
+src/debugger/debugger_cmds.c:1205:		printf(" = %s\n", symbol);
+src/debugger/debugger_cmds.c:1207:		printf("lookup for '%s' failed\n", args);
+src/debugger/debugger_cmds.c:1219:		printf("syntax: machine\n");
+src/debugger/debugger_cmds.c:1267:			printf("syntax: trace [on|off]\n");
+src/debugger/debugger_cmds.c:1275:	printf("show_nr_of_instructions = %s",
+src/debugger/debugger_cmds.c:1278:		printf("  (was: %s)", previous_mode? "ON" : "OFF");
+src/debugger/debugger_cmds.c:1279:	printf("\n");
+src/debugger/debugger_cmds.c:1293:		printf("syntax: pause cpuid\n");
+src/debugger/debugger_cmds.c:1298:		printf("cpu%i doesn't exist.\n", cpuid);
+src/debugger/debugger_cmds.c:1304:	printf("cpu%i (%s) in machine \"%s\" is now %s\n", cpuid,
+src/debugger/debugger_cmds.c:1311: *  debugger_cmd_print():
+src/debugger/debugger_cmds.c:1313:static void debugger_cmd_print(struct machine *m, char *args)
+src/debugger/debugger_cmds.c:1322:		printf("syntax: print expr\n");
+src/debugger/debugger_cmds.c:1329:		printf("No match.\n");
+src/debugger/debugger_cmds.c:1332:		printf("Multiple matches. Try prefixing with %%, $, or @.\n");
+src/debugger/debugger_cmds.c:1335:		printf("%s = 0x%" PRIx64"\n", args, (uint64_t)tmp);
+src/debugger/debugger_cmds.c:1339:			printf("%s = 0x%08" PRIx32"\n", args, (uint32_t)tmp);
+src/debugger/debugger_cmds.c:1341:			printf("%s = 0x%016" PRIx64"\n", args,(uint64_t)tmp);
+src/debugger/debugger_cmds.c:1344:		printf("0x%" PRIx64"\n", (uint64_t) tmp);
+src/debugger/debugger_cmds.c:1376:		/*  printf("L = '%s', R = '%s'\n", copy, p);  */
+src/debugger/debugger_cmds.c:1384:				printf("Invalid type '%s'\n", q);
+src/debugger/debugger_cmds.c:1391:		/*  printf("type '%c', L '%s', R '%s'\n", put_type, q, p);  */
+src/debugger/debugger_cmds.c:1396:		printf("syntax: put [b|h|w|d|q|s|z] addr, data\n");
+src/debugger/debugger_cmds.c:1397:		printf("   b    byte        (8 bits)\n");
+src/debugger/debugger_cmds.c:1398:		printf("   h    half-word   (16 bits)\n");
+src/debugger/debugger_cmds.c:1399:		printf("   w    word        (32 bits)\n");
+src/debugger/debugger_cmds.c:1400:		printf("   d    doubleword  (64 bits)\n");
+src/debugger/debugger_cmds.c:1401:		printf("   q    quad-word   (128 bits)\n");
+src/debugger/debugger_cmds.c:1402:		printf("   s    string (without terminating nul)\n");
+src/debugger/debugger_cmds.c:1403:		printf("   z    nul-terminated string\n");
+src/debugger/debugger_cmds.c:1408:		printf("No type specified.\n");
+src/debugger/debugger_cmds.c:1416:		printf("Couldn't parse the address.\n");
+src/debugger/debugger_cmds.c:1419:		printf("Multiple matches for the address."
+src/debugger/debugger_cmds.c:1427:		printf("INTERNAL ERROR in debugger.c.\n");
+src/debugger/debugger_cmds.c:1448:			printf("Empty string.\n");
+src/debugger/debugger_cmds.c:1453:			printf("0x%08" PRIx32, (uint32_t) addr);
+src/debugger/debugger_cmds.c:1455:			printf("0x%016" PRIx64, (uint64_t) addr);
+src/debugger/debugger_cmds.c:1463:				printf(": FAILED (at byte offset %i)!\n",
+src/debugger/debugger_cmds.c:1469:		printf(": %i byte%s written%s\n", (int) len,
+src/debugger/debugger_cmds.c:1478:		printf("Couldn't parse the data.\n");
+src/debugger/debugger_cmds.c:1481:		printf("Multiple matches for the data value."
+src/debugger/debugger_cmds.c:1489:		printf("INTERNAL ERROR in debugger.c.\n");
+src/debugger/debugger_cmds.c:1499:			printf("0x%08" PRIx32, (uint32_t) addr);
+src/debugger/debugger_cmds.c:1501:			printf("0x%016" PRIx64, (uint64_t) addr);
+src/debugger/debugger_cmds.c:1502:		printf(": %02x", a_byte);
+src/debugger/debugger_cmds.c:1504:			printf(" (NOTE: truncating %0" PRIx64")",
+src/debugger/debugger_cmds.c:1509:			printf("  FAILED!\n");
+src/debugger/debugger_cmds.c:1510:		printf("\n");
+src/debugger/debugger_cmds.c:1514:			printf("WARNING: address isn't aligned\n");
+src/debugger/debugger_cmds.c:1516:			printf("0x%08" PRIx32, (uint32_t) addr);
+src/debugger/debugger_cmds.c:1518:			printf("0x%016" PRIx64, (uint64_t) addr);
+src/debugger/debugger_cmds.c:1519:		printf(": %04x", (int)data);
+src/debugger/debugger_cmds.c:1521:			printf(" (NOTE: truncating %0" PRIx64")",
+src/debugger/debugger_cmds.c:1525:			printf("  FAILED!\n");
+src/debugger/debugger_cmds.c:1526:		printf("\n");
+src/debugger/debugger_cmds.c:1530:			printf("WARNING: address isn't aligned\n");
+src/debugger/debugger_cmds.c:1532:			printf("0x%08" PRIx32, (uint32_t) addr);
+src/debugger/debugger_cmds.c:1534:			printf("0x%016" PRIx64, (uint64_t) addr);
+src/debugger/debugger_cmds.c:1536:		printf(": %08x", (int)data);
+src/debugger/debugger_cmds.c:1540:			printf(" (NOTE: truncating %0" PRIx64")",
+src/debugger/debugger_cmds.c:1545:			printf("  FAILED!\n");
+src/debugger/debugger_cmds.c:1546:		printf("\n");
+src/debugger/debugger_cmds.c:1550:			printf("WARNING: address isn't aligned\n");
+src/debugger/debugger_cmds.c:1552:			printf("0x%08" PRIx32, (uint32_t) addr);
+src/debugger/debugger_cmds.c:1554:			printf("0x%016" PRIx64, (uint64_t) addr);
+src/debugger/debugger_cmds.c:1556:		printf(": %016" PRIx64, (uint64_t) data);
+src/debugger/debugger_cmds.c:1560:			printf("  FAILED!\n");
+src/debugger/debugger_cmds.c:1561:		printf("\n");
+src/debugger/debugger_cmds.c:1564:		printf("quad-words: TODO\n");
+src/debugger/debugger_cmds.c:1568:		printf("Unimplemented type '%c'\n", put_type);
+src/debugger/debugger_cmds.c:1607:			printf("syntax: quiet [on|off]\n");
+src/debugger/debugger_cmds.c:1615:	printf("quiet_mode = %s", old_quiet_mode? "ON" : "OFF");
+src/debugger/debugger_cmds.c:1617:		printf(" (was: %s)", previous_mode? "ON" : "OFF");
+src/debugger/debugger_cmds.c:1618:	printf("; setting verbosity for all subsystems to %s\n",
+src/debugger/debugger_cmds.c:1632:		printf("syntax: quit\n");
+src/debugger/debugger_cmds.c:1642: *  debugger_cmd_reg():
+src/debugger/debugger_cmds.c:1644:static void debugger_cmd_reg(struct machine *m, char *args)
+src/debugger/debugger_cmds.c:1655:				printf("cpu%i doesn't exist.\n", cpuid);
+src/debugger/debugger_cmds.c:1663:				printf("Invalid coprocessor number.\n");
+src/debugger/debugger_cmds.c:1672:	cpu_register_dump(m, m->cpus[cpuid], gprs, coprocs);
+src/debugger/debugger_cmds.c:1722:		printf("syntax: step [n | call]\n");
+src/debugger/debugger_cmds.c:1729:			printf("invalid nr of steps\n");
+src/debugger/debugger_cmds.c:1759:				printf("cpu%i doesn't exist.\n", x);
+src/debugger/debugger_cmds.c:1771:				printf("Unknown tlbdump flag.\n");
+src/debugger/debugger_cmds.c:1772:				printf("syntax: tlbdump [cpuid][,r]\n");
+src/debugger/debugger_cmds.c:1815:			printf("syntax: trace [on|off]\n");
+src/debugger/debugger_cmds.c:1823:	printf("show_trace_tree = %s", m->show_trace_tree? "ON" : "OFF");
+src/debugger/debugger_cmds.c:1825:		printf("  (was: %s)", previous_mode? "ON" : "OFF");
+src/debugger/debugger_cmds.c:1826:	printf("\n");
+src/debugger/debugger_cmds.c:1863:			printf("Unparsable address: %s\n", args);
+src/debugger/debugger_cmds.c:1871:		printf("No cpus (?)\n");
+src/debugger/debugger_cmds.c:1876:		printf("m->cpus[m->bootstrap_cpu] = NULL\n");
+src/debugger/debugger_cmds.c:1894:			printf("Unparsable address: %s\n", args);
+src/debugger/debugger_cmds.c:1924:			printf("(memory access failed)\n");
+src/debugger/debugger_cmds.c:1965:		debugmsg_print_settings(subsystem);
+src/debugger/debugger_cmds.c:1970:	snprintf(s, sizeof(s), "%s", subsystem);
+src/debugger/debugger_cmds.c:1975:		printf("syntax: verbosity [subsystem [n]]\n");
+src/debugger/debugger_cmds.c:1984:	/* printf("subsystem = '%s'\n", s);
+src/debugger/debugger_cmds.c:1986:		printf("n = '%s'\n", n);
+src/debugger/debugger_cmds.c:1999:		printf("syntax: version\n");
+src/debugger/debugger_cmds.c:2003:	printf("%s, %s\n", VERSION, COMPILE_DATE);
+src/debugger/debugger_cmds.c:2064:	{ "print", "expr", 0, debugger_cmd_print,
+src/debugger/debugger_cmds.c:2076:	/*  NOTE: Try to keep 'r' down to only one command. Having 'reg'
+src/debugger/debugger_cmds.c:2079:	{ "reg", "[cpuid][,c]", 0, debugger_cmd_reg,
+src/debugger/debugger_cmds.c:2080:		"show GPRs (or coprocessor c's registers)" },
+src/debugger/debugger_cmds.c:2149:		printf("Available commands:\n");
+src/debugger/debugger_cmds.c:2156:		snprintf(buf, sizeof(buf), "%s", cmds[i].name);
+src/debugger/debugger_cmds.c:2167:			snprintf(buf + strlen(buf), sizeof(buf) - strlen(buf),
+src/debugger/debugger_cmds.c:2170:		printf("  ");
+src/debugger/debugger_cmds.c:2173:				printf("%c", buf[j]);
+src/debugger/debugger_cmds.c:2175:				printf(" ");
+src/debugger/debugger_cmds.c:2177:		printf("  %s\n", cmds[i].description);
+src/debugger/debugger_cmds.c:2183:			printf("-- more --"); fflush(stdout);
+src/debugger/debugger_cmds.c:2185:			printf("\n");
+src/debugger/debugger_cmds.c:2194:			printf("%s: no such command\n", args);
+src/debugger/debugger_cmds.c:2202:		printf("-- more --"); fflush(stdout);
+src/debugger/debugger_cmds.c:2204:		printf("\n");
+src/debugger/debugger_cmds.c:2210:	printf("\nIn generic assignments, x must be a register or other "
+src/debugger/debugger_cmds.c:2211:	    "writable settings\nvariable, and expr can contain registers/"
+src/debugger/debugger_cmds.c:2215:	    "register), you may add a prefix character as a hint: '#' for"
+src/debugger/debugger_cmds.c:2216:	    " registers, '@'\nfor symbols, and '$' for numeric values. Use"
+rg: src/cpus/cpu_dyntrans.h: The system cannot find the file specified. (os error 2)
+rg: src/memory/memory_alpha.c: The system cannot find the path specified. (os error 3)
+rg: src/include/cpu_dyntrans.h: The system cannot find the file specified. (os error 2)
+src/cpus/cpu_dyntrans.c:523:		    r[ALPHA_A0
+src/cpus/cpu_dyntrans.c:826:		cpu->invalidate_translation_caches(cpu, physaddr,
+src/cpus/cpu_dyntrans.c:1196: *  XXX_invalidate_translation_caches():
+
+ succeeded in 250ms:
+  50: #define	DYNTRANS_8K
+  51: #define	DYNTRANS_PAGESIZE	8192
+  52: #include "tmp_alpha_head.c"
+  53: 
+  54: 
+  55: /*  Alpha symbolic register names:  */
+  56: static const char *alpha_regname[N_ALPHA_REGS] = ALPHA_REG_NAMES; 
+  57: 
+  58: void alpha_irq_interrupt_assert(struct interrupt *interrupt);
+  59: void alpha_irq_interrupt_deassert(struct interrupt *interrupt);
+  60: 
+  61: 
+  62: /*
+  63:  *  alpha_cpu_new():
+  64:  *
+  65:  *  Create a new Alpha CPU object by filling the CPU struct.
+  66:  *  Return 1 on success, 0 if cpu_type_name isn't a valid Alpha processor.
+  67:  */
+  68: int alpha_cpu_new(struct cpu *cpu, struct memory *mem,
+  69: 	struct machine *machine, int cpu_id, char *cpu_type_name)
+  70: {
+  71: 	int i = 0;
+  72: 	struct alpha_cpu_type_def cpu_type_defs[] = ALPHA_CPU_TYPE_DEFS;
+  73: 
+  74: 	/*  Scan the cpu_type_defs list for this cpu type:  */
+  75: 	while (cpu_type_defs[i].name != NULL) {
+  76: 		if (strcasecmp(cpu_type_defs[i].name, cpu_type_name) == 0) {
+  77: 			break;
+  78: 		}
+  79: 		i++;
+  80: 	}
+  81: 	if (cpu_type_defs[i].name == NULL)
+  82: 		return 0;
+  83: 
+  84: 	cpu->is_32bit = 0;
+  85: 	cpu->byte_order = EMUL_LITTLE_ENDIAN;
+  86: 
+  87: 	cpu->memory_rw = alpha_memory_rw;
+  88: 	cpu->run_instr = alpha_run_instr;
+  89: 	cpu->translate_v2p = alpha_translate_v2p;
+  90: 	cpu->update_translation_table = alpha_update_translation_table;
+  91: 	cpu->invalidate_translation_caches =
+  92: 	    alpha_invalidate_translation_caches;
+  93: 	cpu->invalidate_code_translation = alpha_invalidate_code_translation;
+  94: 
+  95: 	cpu->cd.alpha.cpu_type = cpu_type_defs[i];
+  96: 
+  97: 	cpu->cd.alpha.r[ALPHA_SP] = 0xfffffc000000ff00ULL;
+  98: 
+  99: 	/*  Set up dummy kentry pointers to something which crashes
+ 100: 	    the machine:  */
+ 101: 	store_32bit_word(cpu, 0x10010, 0x3fffffc);
+ 102: 	for (i=0; i<N_ALPHA_KENTRY; i++)
+ 103: 		cpu->cd.alpha.kentry[i] = 0x10010;
+ 104: 
+ 105: 	/*  Bogus initial context (will be overwritten on first
+ 106: 	    context switch):  */
+ 107: 	cpu->cd.alpha.ctx = 0x10100;
+ 108: 
+ 109: 	CPU_SETTINGS_ADD_REGISTER64("pc", cpu->pc);
+ 110: 	for (i=0; i<N_ALPHA_REGS; i++)
+ 111: 		CPU_SETTINGS_ADD_REGISTER64(alpha_regname[i],
+ 112: 		    cpu->cd.alpha.r[i]);
+ 113: 
+ 114: 	/*  Register the CPU interrupt pin:  */
+ 115: 	{
+ 116: 		struct interrupt templ;
+ 117: 
+ 118: 		memset(&templ, 0, sizeof(templ));
+ 119: 		templ.line = 0;
+ 120: 		templ.name = cpu->path;
+ 121: 		templ.extra = cpu;
+ 122: 		templ.interrupt_assert = alpha_irq_interrupt_assert; 
+ 123: 		templ.interrupt_deassert = alpha_irq_interrupt_deassert; 
+ 124: 		interrupt_handler_register(&templ);
+ 125: 	}
+ 155: 		i++;
+ 156: 		if ((i % 4) == 0 || tdefs[i].name == NULL)
+ 157: 			debug("\n");
+ 158: 	}
+ 159: }
+ 160: 
+ 161: 
+ 162: /*
+ 163:  *  alpha_cpu_register_dump():
+ 164:  *  
+ 165:  *  Dump cpu registers in a relatively readable format.
+ 166:  *  
+ 167:  *  gprs: set to non-zero to dump GPRs and some special-purpose registers.
+ 168:  *  coprocs: set bit 0..3 to dump registers in coproc 0..3.
+ 169:  */
+ 170: void alpha_cpu_register_dump(struct cpu *cpu, int gprs, int coprocs)
+ 171: { 
+ 172: 	char *symbol;
+ 173: 	uint64_t offset;
+ 174: 	int i, x = cpu->cpu_id;
+ 175: 
+ 176: 	if (gprs) {
+ 177: 		symbol = get_symbol_name(&cpu->machine->symbol_context,
+ 178: 		    cpu->pc, &offset);
+ 179: 		debug("cpu%i:\t pc = 0x%016" PRIx64, x, (uint64_t) cpu->pc);
+ 180: 		debug("  <%s>\n", symbol != NULL? symbol : " no symbol ");
+ 181: 		for (i=0; i<N_ALPHA_REGS; i++) {
+ 182: 			int r = (i >> 1) + ((i & 1) << 4);
+ 183: 			if ((i % 2) == 0)
+ 184: 				debug("cpu%i:\t", x);
+ 185: 			if (r != ALPHA_ZERO)
+ 186: 				debug("%3s = 0x%016" PRIx64, alpha_regname[r],
+ 187: 				    (uint64_t) cpu->cd.alpha.r[r]);
+ 188: 			if ((i % 2) == 1)
+ 189: 				debug("\n");
+ 190: 			else
+ 191: 				debug("   ");
+ 192: 		}
+ 193: 	}
+ 194: }
+ 195: 
+ 196: 
+ 197: /*
+ 198:  *  alpha_cpu_tlbdump():
+ 199:  *
+ 200:  *  Called from the debugger to dump the TLB in a readable format.
+ 201:  *  x is the cpu number to dump, or -1 to dump all CPUs.
+ 202:  *
+ 203:  *  If rawflag is nonzero, then the TLB contents isn't formated nicely,
+ 204:  *  just dumped.
+ 205:  */
+ 206: void alpha_cpu_tlbdump(struct cpu* cpu, int rawflag)
+ 207: {
+ 208: }
+ 209: 
+ 210: 
+ 211: /*
+ 212:  *  alpha_irq_interrupt_assert():
+ 213:  *  alpha_irq_interrupt_deassert():
+ 214:  */
+ 215: void alpha_irq_interrupt_assert(struct interrupt *interrupt)
+ 216: {
+ 217: 	struct cpu *cpu = (struct cpu *) interrupt->extra;
+ 218: 	cpu->cd.alpha.irq_asserted = 1;
+ 219: }
+ 220: void alpha_irq_interrupt_deassert(struct interrupt *interrupt)
+ 221: {
+ 222: 	struct cpu *cpu = (struct cpu *) interrupt->extra;
+ 223: 	cpu->cd.alpha.irq_asserted = 0;
+ 224: }
+ 225: 
+ 226: 
+ 227: /*
+ 228:  *  alpha_print_imm16_disp():
+ 229:  *
+ 230:  *  Used internally by alpha_cpu_disassemble_instr().
+ 231:  */
+ 232: static void alpha_print_imm16_disp(int imm, int rb)
+ 233: {
+ 234: 	imm = (int16_t)imm;
+ 235: 
+ 236: 	if (imm < 0) {
+ 237: 		debug("-");
+ 238: 		imm = -imm;
+ 239: 	}
+ 240: 	if (imm <= 256)
+ 241: 		debug("%i", imm);
+ 242: 	else
+ 243: 		debug("0x%x", imm);
+ 244: 	if (rb != ALPHA_ZERO)
+ 245: 		debug("(%s)", alpha_regname[rb]);
+ 246: }
+ 247: 
+ 248: 
+ 249: /*
+ 250:  *  alpha_cpu_disassemble_instr():
+ 251:  *
+ 252:  *  Convert an instruction word into human readable format, for instruction
+ 253:  *  tracing.
+ 254:  *              
+ 255:  *  If running is 1, cpu->pc should be the address of the instruction.
+ 256:  *
+ 257:  *  If running is 0, things that depend on the runtime environment (eg.
+ 258:  *  register contents) will not be shown, and addr will be used instead of
+ 259:  *  cpu->pc for relative addresses.
+ 260:  */                     
+
+ exited 1 in 262ms:
+  30:  *  Individual functions should keep track of cpu->n_translated_instrs.
+  31:  *  (If no instruction was executed, then it should be decreased. If, say, 4
+  32:  *  instructions were combined into one function and executed, then it should
+  33:  *  be increased by 3.)
+  34:  */
+  35: 
+  36: 
+  37: #include "float_emul.h"
+  38: 
+  39: 
+  40: /*
+  41:  *  nop:  Do nothing.
+  42:  */
+  43: X(nop)
+  44: {
+  45: }
+  46: 
+  47: 
+  48: /*
+  49:  *  call_pal:  PALcode call
+  50:  *
+  51:  *  arg[0] = pal nr
+  52:  */
+  53: X(call_pal)
+  54: {
+  55: 	/*  Synchronize PC first:  */
+  56: 	uint64_t old_pc, low_pc = ((size_t)ic - (size_t)
+  57: 	    cpu->cd.alpha.cur_ic_page) / sizeof(struct alpha_instr_call);
+  58: 	cpu->pc &= ~((ALPHA_IC_ENTRIES_PER_PAGE-1) <<
+  59: 	    ALPHA_INSTR_ALIGNMENT_SHIFT);
+  60: 	cpu->pc += (low_pc << ALPHA_INSTR_ALIGNMENT_SHIFT);
+  61: 	old_pc = cpu->pc;
+  62: 
+  63: 	alpha_palcode(cpu, ic->arg[0]);
+  64: 
+  65: 	if (!cpu->running) {
+  66: 		cpu->n_translated_instrs --;
+  67: 		cpu->cd.alpha.next_ic = &nothing_call;
+  68: 	} else if (cpu->pc != old_pc) {
+  69: 		/*  The PC value was changed by the palcode call.  */
+  70: 		/*  Find the new physical page and update the translation
+  71: 		    pointers:  */
+  72: 		alpha_pc_to_pointers(cpu);
+  73: 	}
+  74: }
+  75: 
+  76: 
+  77: /*
+  78:  *  jsr:  Jump to SubRoutine
+  79:  *
+  80:  *  arg[0] = ptr to uint64_t where to store return PC
+  81:  *  arg[1] = ptr to uint64_t of new PC
+  82:  */
+  83: X(jsr)
+  84: {
+  85: 	uint64_t old_pc = cpu->pc, low_pc;
+  86: 	uint64_t mask_within_page = ((ALPHA_IC_ENTRIES_PER_PAGE-1)
+  87: 	    << ALPHA_INSTR_ALIGNMENT_SHIFT) |
+  88: 	    ((1 << ALPHA_INSTR_ALIGNMENT_SHIFT) - 1);
+  89: 
+  90: 	low_pc = ((size_t)ic - (size_t)
+  91: 	    cpu->cd.alpha.cur_ic_page) / sizeof(struct alpha_instr_call);
+  92: 	cpu->pc &= ~((ALPHA_IC_ENTRIES_PER_PAGE-1)
+  93: 	    << ALPHA_INSTR_ALIGNMENT_SHIFT);
+  94: 	cpu->pc += (low_pc << ALPHA_INSTR_ALIGNMENT_SHIFT) + 4;
+  95: 
+  96: 	*((int64_t *)ic->arg[0]) = cpu->pc;
+  97: 	cpu->pc = *((int64_t *)ic->arg[1]);
+  98: 
+  99: 	/*
+ 100: 	 *  If this is a jump/return into the same code page as we were
+rg: src/cpus/cpu_alpha*: The filename, directory name, or volume label syntax is incorrect. (os error 123)
+rg: src/memory*: The filename, directory name, or volume label syntax is incorrect. (os error 123)
+src/include\thirdparty\alpha_cpu.h:449:alpha_pal_swpctx(unsigned long ctx)
+src/include\thirdparty\alpha_cpu.h:454:	__asm volatile("call_pal %2 # PAL_OSF1_swpctx"
+src/include\thirdparty\alpha_cpu.h:456:		: "i" (PAL_OSF1_swpctx), "0" (a0)
+src/include\cpu_alpha.h:187:void alpha_invalidate_translation_caches(struct cpu *cpu, uint64_t, int);
+src/include\cpu_alpha.h:195:/*  cpu_alpha_palcode.c:  */
+src/include\cpu_alpha.h:196:void alpha_palcode_name(uint32_t palcode, char *buf, size_t buflen);
+src/include\cpu_alpha.h:197:void alpha_palcode(struct cpu *cpu, uint32_t palcode);
+
+web search: site.gcc.gnu.org/onlinedocs/gcc "Input Constraints" "same place" "0" ...
+web search: 
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n 'invalidate_translation_caches|ALPHA_A0|cd\\.alpha\\.r' src/cpus/cpu_dyntrans.c src/cpus/cpu_dyntrans.h src/memory/memory_alpha.c src/include/cpu_dyntrans.h; rg -n 'debugger_cmd_regs|cpu_register_dump' src/debugger/debugger_cmds.c src/cpus/cpu.c; rg -n 'load_64bit_word|load_32bit_word|store_64bit_word|store_32bit_word' src/memory" in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg --files src -g '*alpha*' -g '*dyntrans*' -g '*memory*'; rg -n 'swpctx|alpha_palcode\\s*\\(|cd\\.alpha\\.r\\[ALPHA_A0\\]|cd\\.alpha\\.ctx' src" in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+ succeeded in 74ms:
+src\machines\machine_alpha.o
+src\machines\machine_alpha.c
+src\include\memory.h
+src\include\cpu_alpha.h
+src\core\memory.o
+src\core\memory.c
+src\cpus\cpu_alpha_instr_alu.c
+src\cpus\cpu_alpha_instr.c
+src\cpus\cpu_alpha.o
+src\cpus\cpu_alpha.c
+src\cpus\cpu_alpha_palcode.c
+src\cpus\cpu_alpha_instr_loadstore.c
+src\cpus\cpu_alpha_palcode.o
+src\include\thirdparty\alpha_rpb.h
+src\include\thirdparty\alpha_prom.h
+src\include\thirdparty\alpha_lcareg.h
+src\include\thirdparty\alpha_cpu.h
+src\include\thirdparty\alpha_autoconf.h
+src\cpus\memory_m88k.o
+src\cpus\memory_m88k.c
+src\cpus\memory_arm.o
+src\cpus\memory_arm.c
+src\cpus\memory_alpha.o
+src\cpus\memory_alpha.c
+src\cpus\generate_alpha_misc.c
+src\cpus\generate_alpha_misc
+src\cpus\cpu_dyntrans.c
+src\cpus\memory_sh.c
+src\cpus\memory_rw.c
+src\cpus\memory_ppc.c
+src\cpus\memory_mips_v2p.c
+src\cpus\memory_mips.c
+src\cpus\tmp_alpha_head.c
+src\cpus\memory_sh.o
+src\cpus\tmp_alpha_misc.c
+src\cpus\tmp_alpha_tail.c
+src\cpus\cpu_alpha_instr.c:63:	alpha_palcode(cpu, ic->arg[0]);
+src\cpus\cpu_alpha.c:107:	cpu->cd.alpha.ctx = 0x10100;
+src\cpus\cpu_alpha_palcode.c:68:	case 0x30: snprintf(buf, buflen, "PAL_OSF1_swpctx"); break;
+src\cpus\cpu_alpha_palcode.c:108:	switch (cpu->cd.alpha.r[ALPHA_A0]) {
+src\cpus\cpu_alpha_palcode.c:148:		    (uint64_t) cpu->cd.alpha.r[ALPHA_A0]);
+src\cpus\cpu_alpha_palcode.c:158: *  alpha_palcode():
+src\cpus\cpu_alpha_palcode.c:163:void alpha_palcode(struct cpu *cpu, uint32_t palcode)
+src\cpus\cpu_alpha_palcode.c:165:	uint64_t a0 = cpu->cd.alpha.r[ALPHA_A0], a1 = cpu->cd.alpha.r[ALPHA_A1];
+src\cpus\cpu_alpha_palcode.c:208:		cpu->cd.alpha.mces = ~(cpu->cd.alpha.r[ALPHA_A0] & 7);
+src\cpus\cpu_alpha_palcode.c:212:		cpu->cd.alpha.mces |= (cpu->cd.alpha.r[ALPHA_A0] & 0x18);
+src\cpus\cpu_alpha_palcode.c:221:		cpu->cd.alpha.pcb.apcb_flags = cpu->cd.alpha.r[ALPHA_A0];
+src\cpus\cpu_alpha_palcode.c:222:		store_64bit_word(cpu, cpu->cd.alpha.ctx + 40,
+src\cpus\cpu_alpha_palcode.c:229:	case 0x30:	/*  PAL_OSF1_swpctx  */
+src\cpus\cpu_alpha_palcode.c:231:		store_64bit_word(cpu, cpu->cd.alpha.ctx + 0,
+src\cpus\cpu_alpha_palcode.c:233:		store_64bit_word(cpu, cpu->cd.alpha.ctx + 8,
+src\cpus\cpu_alpha_palcode.c:235:		store_64bit_word(cpu, cpu->cd.alpha.ctx + 16,
+src\cpus\cpu_alpha_palcode.c:237:		store_32bit_word(cpu, cpu->cd.alpha.ctx + 24,
+src\cpus\cpu_alpha_palcode.c:239:		store_32bit_word(cpu, cpu->cd.alpha.ctx + 28,
+src\cpus\cpu_alpha_palcode.c:241:		store_64bit_word(cpu, cpu->cd.alpha.ctx + 32,
+src\cpus\cpu_alpha_palcode.c:243:		store_64bit_word(cpu, cpu->cd.alpha.ctx + 40,
+src\cpus\cpu_alpha_palcode.c:245:		store_64bit_word(cpu, cpu->cd.alpha.ctx + 48,
+src\cpus\cpu_alpha_palcode.c:247:		store_64bit_word(cpu, cpu->cd.alpha.ctx + 56,
+src\cpus\cpu_alpha_palcode.c:251:		cpu->cd.alpha.r[ALPHA_A0] = cpu->cd.alpha.ctx;
+src\cpus\cpu_alpha_palcode.c:255:			cpu->cd.alpha.ctx = a0;
+src\cpus\cpu_alpha_palcode.c:257:			    load_64bit_word(cpu, cpu->cd.alpha.ctx + 0);
+src\cpus\cpu_alpha_palcode.c:259:			    load_64bit_word(cpu, cpu->cd.alpha.ctx + 8);
+src\cpus\cpu_alpha_palcode.c:261:			    load_64bit_word(cpu, cpu->cd.alpha.ctx + 16);
+src\cpus\cpu_alpha_palcode.c:263:			    load_32bit_word(cpu, cpu->cd.alpha.ctx + 24);
+src\cpus\cpu_alpha_palcode.c:265:			    load_32bit_word(cpu, cpu->cd.alpha.ctx + 28);
+src\cpus\cpu_alpha_palcode.c:267:			    load_64bit_word(cpu, cpu->cd.alpha.ctx + 32);
+src\cpus\cpu_alpha_palcode.c:269:			    load_64bit_word(cpu, cpu->cd.alpha.ctx + 40);
+src\cpus\cpu_alpha_palcode.c:271:			    load_64bit_word(cpu, cpu->cd.alpha.ctx + 48);
+src\cpus\cpu_alpha_palcode.c:273:			    load_64bit_word(cpu, cpu->cd.alpha.ctx + 56);
+src\include\cpu_alpha.h:197:void alpha_palcode(struct cpu *cpu, uint32_t palcode);
+src\machines\machine_alpha.c:92:	cpu->cd.alpha.r[ALPHA_A0] = 16*1024*1024 / 8192;
+src\include\thirdparty\alpha_cpu.h:449:alpha_pal_swpctx(unsigned long ctx)
+src\include\thirdparty\alpha_cpu.h:454:	__asm volatile("call_pal %2 # PAL_OSF1_swpctx"
+src\include\thirdparty\alpha_cpu.h:456:		: "i" (PAL_OSF1_swpctx), "0" (a0)
+
+ exited 1 in 76ms:
+rg: src/cpus/cpu_dyntrans.h: The system cannot find the file specified. (os error 2)
+rg: src/memory/memory_alpha.c: The system cannot find the path specified. (os error 3)
+rg: src/include/cpu_dyntrans.h: The system cannot find the file specified. (os error 2)
+src/cpus/cpu_dyntrans.c:523:		    r[ALPHA_A0
+src/cpus/cpu_dyntrans.c:826:		cpu->invalidate_translation_caches(cpu, physaddr,
+src/cpus/cpu_dyntrans.c:1196: *  XXX_invalidate_translation_caches():
+src/cpus/cpu.c:216: *  cpu_register_dump():
+src/cpus/cpu.c:223:void cpu_register_dump(struct machine *m, struct cpu *cpu,
+src/cpus/cpu.c:227:		fatal("cpu_register_dump(): NULL\n");
+src/debugger/debugger_cmds.c:1672:	cpu_register_dump(m, m->cpus[cpuid], gprs, coprocs);
+rg: src/memory: IO error for operation on src/memory: The system cannot find the file specified. (os error 2)
+
+web search: https://gcc.gnu.org/onlinedocs/gcc-12.5.0/gcc/Extended-Asm.html
+web search: 
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$sourceLines = Get-Content -LiteralPath src/cpus/cpu_dyntrans.c; for ($lineNumber = 1190; $lineNumber -le 1430; $lineNumber++) { '"'{0,4}: {1}' -f "'$lineNumber, $sourceLines[$lineNumber - 1] }; rg -n '"'invalidate_translation_caches|INVALIDATE_TC|ALPHA_A0|ALPHA_V0' src/cpus/tmp_alpha_head.c src/cpus/tmp_alpha_tail.c src/cpus/tmp_alpha_misc.c src/cpus/memory_alpha.c src/cpus/memory_rw.c" in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$sourceLines = Get-Content -LiteralPath src/debugger/debugger_cmds.c; for ($lineNumber = 1580; $lineNumber -le 1676; $lineNumber++) { '"'{0,4}: {1}' -f "'$lineNumber, $sourceLines[$lineNumber - 1] }; rg -n '"'load_64bit_word|load_32bit_word|store_64bit_word|store_32bit_word' src/core/memory.c src/include/memory.h src/core/misc.c; rg -n '\\bregs\\b|\\bprint\\b' src/include/debugger.h" in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+ exited 1 in 157ms:
+1580: 	int previous_mode = old_quiet_mode;
+1581: 
+1582: 	if (args[0] != '\0') {
+1583: 		while (args[0] != '\0' && args[0] == ' ')
+1584: 			args ++;
+1585: 		switch (args[0]) {
+1586: 		case '0':
+1587: 			toggle = 0;
+1588: 			old_quiet_mode = 0;
+1589: 			break;
+1590: 		case '1':
+1591: 			toggle = 0;
+1592: 			old_quiet_mode = 1;
+1593: 			break;
+1594: 		case 'o':
+1595: 		case 'O':
+1596: 			toggle = 0;
+1597: 			switch (args[1]) {
+1598: 			case 'n':
+1599: 			case 'N':
+1600: 				old_quiet_mode = 1;
+1601: 				break;
+1602: 			default:
+1603: 				old_quiet_mode = 0;
+1604: 			}
+1605: 			break;
+1606: 		default:
+1607: 			printf("syntax: quiet [on|off]\n");
+1608: 			return;
+1609: 		}
+1610: 	}
+1611: 
+1612: 	if (toggle)
+1613: 		old_quiet_mode = 1 - old_quiet_mode;
+1614: 
+1615: 	printf("quiet_mode = %s", old_quiet_mode? "ON" : "OFF");
+1616: 	if (old_quiet_mode != previous_mode)
+1617: 		printf(" (was: %s)", previous_mode? "ON" : "OFF");
+1618: 	printf("; setting verbosity for all subsystems to %s\n",
+1619: 	    old_quiet_mode ? "ERROR" : "WARNING");
+1620: 
+1621: 	debugmsg_set_verbosity_level(SUBSYS_ALL,
+1622: 	    old_quiet_mode ? VERBOSITY_ERROR : VERBOSITY_WARNING);
+1623: }
+1624: 
+1625: 
+1626: /*
+1627:  *  debugger_cmd_quit():
+1628:  */
+1629: static void debugger_cmd_quit(struct machine *m, char *args)
+1630: {
+1631: 	if (*args) {
+1632: 		printf("syntax: quit\n");
+1633: 		return;
+1634: 	}
+1635: 
+1636: 	emul_shutdown = true;
+1637: 	exit_debugger = true;
+1638: }
+1639: 
+1640: 
+1641: /*
+1642:  *  debugger_cmd_reg():
+1643:  */
+1644: static void debugger_cmd_reg(struct machine *m, char *args)
+1645: {
+1646: 	int cpuid = debugger_cur_cpu, coprocnr = -1;
+1647: 	int gprs, coprocs;
+1648: 	char *p;
+1649: 
+1650: 	/*  [cpuid][,c]  */
+1651: 	if (args[0] != '\0') {
+1652: 		if (args[0] != ',') {
+1653: 			cpuid = strtoull(args, NULL, 0);
+1654: 			if (cpuid < 0 || cpuid >= m->ncpus) {
+1655: 				printf("cpu%i doesn't exist.\n", cpuid);
+1656: 				return;
+1657: 			}
+1658: 		}
+1659: 		p = strchr(args, ',');
+1660: 		if (p != NULL) {
+1661: 			coprocnr = atoi(p + 1);
+1662: 			if (coprocnr < 0 || coprocnr >= 4) {
+1663: 				printf("Invalid coprocessor number.\n");
+1664: 				return;
+1665: 			}
+1666: 		}
+1667: 	}
+1668: 
+1669: 	gprs = (coprocnr == -1)? 1 : 0;
+1670: 	coprocs = (coprocnr == -1)? 0x0 : (1 << coprocnr);
+1671: 
+1672: 	cpu_register_dump(m, m->cpus[cpuid], gprs, coprocs);
+1673: }
+1674: 
+1675: 
+1676: /*
+src/include/memory.h:168:int store_64bit_word(struct cpu *cpu, uint64_t addr, uint64_t data64);
+src/include/memory.h:169:int store_32bit_word(struct cpu *cpu, uint64_t addr, uint64_t data32);
+src/include/memory.h:172:void store_64bit_word_in_host(struct cpu *cpu, unsigned char *data,
+src/include/memory.h:174:void store_32bit_word_in_host(struct cpu *cpu, unsigned char *data,
+src/include/memory.h:178:uint64_t load_64bit_word(struct cpu *cpu, uint64_t addr);
+src/include/memory.h:179:uint32_t load_32bit_word(struct cpu *cpu, uint64_t addr);
+src/core/memory.c:739:	store_32bit_word(cpu, ptr, addr);
+src/core/memory.c:745:	store_32bit_word(cpu, ptr, addr);
+src/core/memory.c:758: *  store_64bit_word():
+src/core/memory.c:763:int store_64bit_word(struct cpu *cpu, uint64_t addr, uint64_t data64)
+src/core/memory.c:788: *  store_32bit_word():
+src/core/memory.c:794:int store_32bit_word(struct cpu *cpu, uint64_t addr, uint64_t data32)
+src/core/memory.c:871:		store_64bit_word(cpu, addr, data);
+src/core/memory.c:874:		store_32bit_word(cpu, addr, data);
+src/core/memory.c:882: *  load_64bit_word():
+src/core/memory.c:886:uint64_t load_64bit_word(struct cpu *cpu, uint64_t addr)
+src/core/memory.c:909: *  load_32bit_word():
+src/core/memory.c:913:uint32_t load_32bit_word(struct cpu *cpu, uint64_t addr)
+src/core/memory.c:950: *  store_64bit_word_in_host():
+src/core/memory.c:956:void store_64bit_word_in_host(struct cpu *cpu,
+src/core/memory.c:977: *  store_32bit_word_in_host():
+src/core/memory.c:979: *  See comment for store_64bit_word_in_host().
+src/core/memory.c:984:void store_32bit_word_in_host(struct cpu *cpu,
+src/core/memory.c:1001: *  See comment for store_64bit_word_in_host().
+
+ succeeded in 163ms:
+1190: }
+1191: #endif
+1192: 
+1193: 
+1194: #ifdef DYNTRANS_INVALIDATE_TC
+1195: /*
+1196:  *  XXX_invalidate_translation_caches():
+1197:  *
+1198:  *  Invalidate all entries matching a specific physical address, a specific
+1199:  *  virtual address, or ALL entries.
+1200:  *
+1201:  *  flags should be one of
+1202:  *	INVALIDATE_PADDR  INVALIDATE_VADDR  or  INVALIDATE_ALL
+1203:  *
+1204:  *  In addition, for INVALIDATE_ALL, INVALIDATE_VADDR_UPPER4 may be set and
+1205:  *  bit 31..28 of addr are used to select the virtual addresses to invalidate.
+1206:  *  (This is useful for PowerPC emulation, when segment registers are updated.)
+1207:  *
+1208:  *  In the case when all translations are invalidated, paddr doesn't need
+1209:  *  to be supplied.
+1210:  *
+1211:  *  NOTE/TODO: When invalidating a virtual address, it is only cleared from
+1212:  *             the quick translation array, not from the linear
+1213:  *             vph_tlb_entry[] array.  Hopefully this is enough anyway.
+1214:  */
+1215: void DYNTRANS_INVALIDATE_TC(struct cpu *cpu, uint64_t addr, int flags)
+1216: {
+1217: 	int r;
+1218: #ifdef MODE32
+1219: 	uint32_t
+1220: #else
+1221: 	uint64_t
+1222: #endif
+1223: 	    addr_page = addr & ~(DYNTRANS_PAGESIZE - 1);
+1224: 
+1225: 	/*  fatal("invalidate(): ");  */
+1226: 
+1227: 	/*  Quick case for _one_ virtual addresses: see note above.  */
+1228: 	if (flags & INVALIDATE_VADDR) {
+1229: 		/*  fatal("vaddr 0x%08x\n", (int)addr_page);  */
+1230: 
+1231: #ifdef MODE32
+1232: 		DYNTRANS_INVALIDATE_TLB_ENTRY(cpu, addr_page, flags);
+1233: #else
+1234: 		// In principle, there can be multiple entries, and they must
+1235: 		// be invalidated based on the bits that matter. For example,
+1236: 		// using vaddr 0x00A0000012345678 and 0x00B000001234567c
+1237: 		// actually point to the same physical page, and if then
+1238: 		// the virtual address 0x0000000012345000 is to be invalidated,
+1239: 		// then both of those should be invalidated!
+1240: 		int n = 0;
+1241: 		for (r=0; r<DYNTRANS_MAX_VPH_TLB_ENTRIES; r++)
+1242: 			if (cpu->cd.DYNTRANS_ARCH.vph_tlb_entry[r].valid &&
+1243: 			    (cpu->cd.DYNTRANS_ARCH.vph_tlb_entry[r].vaddr_page
+1244: 			    & cpu->vaddr_mask) == (addr_page & cpu->vaddr_mask)) {
+1245: 				DYNTRANS_INVALIDATE_TLB_ENTRY(cpu, cpu->cd.DYNTRANS_ARCH.vph_tlb_entry[r].vaddr_page, flags);
+1246: 				n ++;
+1247: 			}
+1248: 
+1249: 		if (n > 1)
+1250: 			debug("[ DYNTRANS_INVALIDATE_TC: CACHE COLLISION vaddr 0x%016llx! ]\n",
+1251: 				(long long)addr_page);
+1252: #endif
+1253: 
+1254: 		return;
+1255: 	}
+1256: 
+1257: 	/*  Invalidate everything:  */
+1258: #ifdef DYNTRANS_PPC
+1259: 	if (flags & INVALIDATE_ALL && flags & INVALIDATE_VADDR_UPPER4) {
+1260: 		/*  fatal("all, upper4 (PowerPC segment)\n");  */
+1261: 		for (r=0; r<DYNTRANS_MAX_VPH_TLB_ENTRIES; r++) {
+1262: 			if (cpu->cd.DYNTRANS_ARCH.vph_tlb_entry[r].valid &&
+1263: 			    (cpu->cd.DYNTRANS_ARCH.vph_tlb_entry[r].vaddr_page
+1264: 			    & 0xf0000000) == addr_page) {
+1265: 				DYNTRANS_INVALIDATE_TLB_ENTRY(cpu, cpu->cd.
+1266: 				    DYNTRANS_ARCH.vph_tlb_entry[r].vaddr_page,
+1267: 				    0);
+1268: 				// Not needed: DYNTRANS_INVALIDATE_TLB_ENTRY should
+1269: 				// set valid to 0 anyway.
+1270: 				// cpu->cd.DYNTRANS_ARCH.vph_tlb_entry[r].valid=0;
+1271: 			}
+1272: 		}
+1273: 		return;
+1274: 	}
+1275: #endif
+1276: 	if (flags & INVALIDATE_ALL) {
+1277: 		/*  fatal("all\n");  */
+1278: 		for (r=0; r<DYNTRANS_MAX_VPH_TLB_ENTRIES; r++) {
+1279: 			if (cpu->cd.DYNTRANS_ARCH.vph_tlb_entry[r].valid) {
+1280: 				DYNTRANS_INVALIDATE_TLB_ENTRY(cpu, cpu->cd.
+1281: 				    DYNTRANS_ARCH.vph_tlb_entry[r].vaddr_page,
+1282: 				    0);
+1283: 				// Not needed: DYNTRANS_INVALIDATE_TLB_ENTRY should
+1284: 				// set valid to 0 anyway.
+1285: 				// cpu->cd.DYNTRANS_ARCH.vph_tlb_entry[r].valid=0;
+1286: 			}
+1287: 		}
+1288: 		return;
+1289: 	}
+1290: 
+1291: 	/*  Invalidate a physical page:  */
+1292: 
+1293: 	if (!(flags & INVALIDATE_PADDR))
+1294: 		fatal("HUH? Invalidate: Not vaddr, all, or paddr?\n");
+1295: 
+1296: 	/*  fatal("addr 0x%08x\n", (int)addr_page);  */
+1297: 
+1298: 	for (r=0; r<DYNTRANS_MAX_VPH_TLB_ENTRIES; r++) {
+1299: 		if (cpu->cd.DYNTRANS_ARCH.vph_tlb_entry[r].valid && addr_page
+1300: 		    == cpu->cd.DYNTRANS_ARCH.vph_tlb_entry[r].paddr_page) {
+1301: 			DYNTRANS_INVALIDATE_TLB_ENTRY(cpu,
+1302: 			    cpu->cd.DYNTRANS_ARCH.vph_tlb_entry[r].vaddr_page,
+1303: 			    flags);
+1304: 			if (flags & JUST_MARK_AS_NON_WRITABLE)
+1305: 				cpu->cd.DYNTRANS_ARCH.vph_tlb_entry[r]
+1306: 				    .writeflag = 0;
+1307: 			else
+1308: 				cpu->cd.DYNTRANS_ARCH.vph_tlb_entry[r]
+1309: 				    .valid = 0;
+1310: 		}
+1311: 	}
+1312: }
+1313: #endif	/*  DYNTRANS_INVALIDATE_TC  */
+1314: 
+1315: 
+1316: 
+1317: #ifdef DYNTRANS_INVALIDATE_TC_CODE
+1318: /*
+1319:  *  XXX_invalidate_code_translation():
+1320:  *
+1321:  *  Invalidate code translations for a specific physical address, a specific
+1322:  *  virtual address, or for all entries in the cache.
+1323:  */
+1324: void DYNTRANS_INVALIDATE_TC_CODE(struct cpu *cpu, uint64_t addr, int flags)
+1325: {
+1326: 	int r;
+1327: #ifdef MODE32
+1328: 	uint32_t
+1329: #else
+1330: 	uint64_t
+1331: #endif
+1332: 	    vaddr_page, paddr_page;
+1333: 
+1334: 	addr &= ~(DYNTRANS_PAGESIZE-1);
+1335: 
+1336: 	/*  printf("DYNTRANS_INVALIDATE_TC_CODE addr=0x%08x flags=%i\n",
+1337: 	    (int)addr, flags);  */
+1338: 
+1339: 	if (flags & INVALIDATE_PADDR) {
+1340: 		int pagenr, table_index;
+1341: 		uint32_t physpage_ofs, *physpage_entryp;
+1342: 		struct DYNTRANS_TC_PHYSPAGE *ppp, *prev_ppp;
+1343: 
+1344: 		pagenr = DYNTRANS_ADDR_TO_PAGENR(addr);
+1345: 		table_index = PAGENR_TO_TABLE_INDEX(pagenr);
+1346: 
+1347: 		physpage_entryp = &(((uint32_t *)cpu->
+1348: 		    translation_cache)[table_index]);
+1349: 		physpage_ofs = *physpage_entryp;
+1350: 
+1351: 		/*  Return immediately if there is no code translation
+1352: 		    for this page.  */
+1353: 		if (physpage_ofs == 0)
+1354: 			return;
+1355: 
+1356: 		prev_ppp = ppp = NULL;
+1357: 
+1358: 		/*  Traverse the physical page chain:  */
+1359: 		while (physpage_ofs != 0) {
+1360: 			prev_ppp = ppp;
+1361: 			ppp = (struct DYNTRANS_TC_PHYSPAGE *)
+1362: 			    (cpu->translation_cache + physpage_ofs);
+1363: 
+1364: 			/*  If we found the page in the cache,
+1365: 			    then we're done:  */
+1366: 			if (ppp->physaddr == addr)
+1367: 				break;
+1368: 
+1369: 			/*  Try the next page in the chain:  */
+1370: 			physpage_ofs = ppp->next_ofs;
+1371: 		}
+1372: 
+1373: 		/*  If there is no translation, there is no need to go
+1374: 		    on and try to remove it from the vph_tlb_entry array:  */
+1375: 		if (physpage_ofs == 0)
+1376: 			return;
+1377: 
+1378: #if 0
+1379: 		/*
+1380: 		 *  "Bypass" the page, removing it from the code cache.
+1381: 		 *
+1382: 		 *  NOTE/TODO: This gives _TERRIBLE_ performance with self-
+1383: 		 *  modifying code, or when a single page is used for both
+1384: 		 *  code and (writable) data.
+1385: 		 */
+1386: 		if (ppp != NULL) {
+1387: 			if (prev_ppp != NULL)
+1388: 				prev_ppp->next_ofs = ppp->next_ofs;
+1389: 			else
+1390: 				*physpage_entryp = ppp->next_ofs;
+1391: 		}
+1392: #else
+1393: 		(void)prev_ppp;	// shut up compiler warning
+1394: 
+1395: 		/*
+1396: 		 *  Instead of removing the page from the code cache, each
+1397: 		 *  entry can be set to "to_be_translated". This is slow in
+1398: 		 *  the general case, but in the case of self-modifying code,
+1399: 		 *  it might be faster since we don't risk wasting cache
+1400: 		 *  memory as quickly (which would force unnecessary Restarts).
+1401: 		 */
+1402: 		if (ppp != NULL && ppp->translations_bitmap != 0) {
+1403: 			uint32_t x = ppp->translations_bitmap;	/*  TODO:
+1404: 				urk Should be same type as the bitmap */
+1405: 			int i, j, n, m;
+1406: 
+1407: #ifdef DYNTRANS_ARM
+1408: 			/*
+1409: 			 *  Note: On ARM, PC-relative load instructions are
+1410: 			 *  implemented as immediate mov instructions. When
+1411: 			 *  setting parts of the page to "to be translated",
+1412: 			 *  we cannot keep track of which of the immediate
+1413: 			 *  movs that were affected, so we need to clear
+1414: 			 *  the entire page. (ARM only; not for the general
+1415: 			 *  case.)
+1416: 			 */
+1417: 			x = 0xffffffff;
+1418: #endif
+1419: 			n = 8 * sizeof(x);
+1420: 			m = DYNTRANS_IC_ENTRIES_PER_PAGE / n;
+1421: 
+1422: 			for (i=0; i<n; i++) {
+1423: 				if (x & 1) {
+1424: 					for (j=0; j<m; j++)
+1425: 						ppp->ics[i*m + j].f =
+1426: 						    TO_BE_TRANSLATED;
+1427: 				}
+1428: 
+1429: 				x >>= 1;
+1430: 			}
+src/cpus/tmp_alpha_tail.c:26:#define DYNTRANS_INVALIDATE_TC alpha_invalidate_translation_caches
+src/cpus/tmp_alpha_tail.c:28:#undef DYNTRANS_INVALIDATE_TC
+src/cpus/tmp_alpha_tail.c:30:#define DYNTRANS_INVALIDATE_TC_CODE alpha_invalidate_code_translation
+src/cpus/tmp_alpha_tail.c:32:#undef DYNTRANS_INVALIDATE_TC_CODE
+src/cpus/tmp_alpha_tail.c:94:#define DYNTRANS_INVALIDATE_TC alpha32_invalidate_translation_caches
+src/cpus/tmp_alpha_tail.c:96:#undef DYNTRANS_INVALIDATE_TC
+src/cpus/tmp_alpha_tail.c:98:#define DYNTRANS_INVALIDATE_TC_CODE alpha32_invalidate_code_translation
+src/cpus/tmp_alpha_tail.c:100:#undef DYNTRANS_INVALIDATE_TC_CODE
+
+web search: https://gcc.gnu.org/onlinedocs/gcc-12.5.0/gcc/Extended-Asm.html
+codex
+I found no in-tree code that consumes `a0` as the old-context result after this handler. The debugger prints both `v0` and `a0`, so the changed register state is observable without guest code reading the return value. The decisive oracle is `v0_after == ctx_before`; a differing pre-call `v0` makes the two implementations distinguishable.
+web search: 
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$sourceLines = Get-Content -LiteralPath src/core/memory.c; for ($lineNumber = 882; $lineNumber -le 937; $lineNumber++) { '"'{0,4}: {1}' -f "'$lineNumber, $sourceLines[$lineNumber - 1] }; rg -n '"'debugger_cmd_reg|ALPHA_A0|ALPHA_V0' src/debugger/debugger_cmds.c src/cpus/memory_alpha.c; rg -n '\\breg\\b' src/debugger/debugger_cmds.c" in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$sourceLines = Get-Content -LiteralPath src/cpus/cpu_alpha_palcode.c; foreach ($lineSpan in @(@(202,205),@(337,362),@(394,401))) { for ($lineNumber = $lineSpan[0]; $lineNumber -le $lineSpan[1]; $lineNumber++) { '"'{0,4}: {1}' -f "'$lineNumber, $sourceLines[$lineNumber - 1] } }; rg -n '"'DYNTRANS_INVALIDATE_TLB_ENTRY' src/cpus/cpu_dyntrans.c src/cpus/tmp_alpha_head.c src/cpus/tmp_alpha_tail.c" in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+ succeeded in 109ms:
+ 202: 	case 0x10:	/*  PAL_OSF1_rdmces  */
+ 203: 		/*  Return Machine Check status in v0.  */
+ 204: 		cpu->cd.alpha.r[ALPHA_V0] = cpu->cd.alpha.mces;
+ 205: 		break;
+ 337: 	case 0x35:	/*  PAL_OSF1_swpipl  */
+ 338: 		/*  a0 = new ipl, v0 = return old ipl  */
+ 339: 		cpu->cd.alpha.r[ALPHA_V0] = cpu->cd.alpha.ps & ALPHA_PSL_IPL_MASK;
+ 340: 		cpu->cd.alpha.ps &= ~ALPHA_PSL_IPL_MASK;
+ 341: 		cpu->cd.alpha.ps |= (a0 & ALPHA_PSL_IPL_MASK);
+ 342: 		break;
+ 343: 	case 0x36:	/*  PAL_rdps  */
+ 344: 		cpu->cd.alpha.r[ALPHA_V0] = cpu->cd.alpha.ps;
+ 345: 		break;
+ 346: 	case 0x37:	/*  PAL_OSF1_wrkgp  */
+ 347: 		cpu->cd.alpha.kgp = a0;
+ 348: 		break;
+ 349: #if 0
+ 350: 	case 0x38:	/*  PAL_OSF1_wrusp  */
+ 351: 		/*  a0 = value  */
+ 352: 		cpu->cd.alpha.pcb.apcb_usp = a0;
+ 353: 		break;
+ 354: 	case 0x3a:	/*  PAL_OSF1_rdusp  */
+ 355: 		/*  return: v0 = value  */
+ 356: 		cpu->cd.alpha.r[ALPHA_V0] = cpu->cd.alpha.pcb.apcb_usp;
+ 357: 		break;
+ 358: #endif
+ 359: 	case 0x3c:	/*  PAL_whami  */
+ 360: 		/*  Returns CPU id in v0:  */
+ 361: 		cpu->cd.alpha.r[ALPHA_V0] = cpu->cpu_id;
+ 362: 		break;
+ 394: 	/*
+ 395: 	 *  Many PALcode instructions in the Alpha manual (and in NetBSD/Alpha
+ 396: 	 *  source code) are described with "clobbers t0, t8-t11", some also
+ 397: 	 *  with a0, and some also with a1 included.
+ 398: 	 *
+ 399: 	 *  However, it's easier to just leave the registers as they are.
+ 400: 	 */
+ 401: }
+src/cpus/tmp_alpha_tail.c:89:#undef DYNTRANS_INVALIDATE_TLB_ENTRY
+src/cpus/tmp_alpha_tail.c:90:#define DYNTRANS_INVALIDATE_TLB_ENTRY alpha32_invalidate_tlb_entry
+src/cpus/tmp_alpha_head.c:25:#define DYNTRANS_INVALIDATE_TLB_ENTRY alpha_invalidate_tlb_entry
+src/cpus/cpu_dyntrans.c:1007:static void DYNTRANS_INVALIDATE_TLB_ENTRY(struct cpu *cpu,
+src/cpus/cpu_dyntrans.c:1232:		DYNTRANS_INVALIDATE_TLB_ENTRY(cpu, addr_page, flags);
+src/cpus/cpu_dyntrans.c:1245:				DYNTRANS_INVALIDATE_TLB_ENTRY(cpu, cpu->cd.DYNTRANS_ARCH.vph_tlb_entry[r].vaddr_page, flags);
+src/cpus/cpu_dyntrans.c:1265:				DYNTRANS_INVALIDATE_TLB_ENTRY(cpu, cpu->cd.
+src/cpus/cpu_dyntrans.c:1268:				// Not needed: DYNTRANS_INVALIDATE_TLB_ENTRY should
+src/cpus/cpu_dyntrans.c:1280:				DYNTRANS_INVALIDATE_TLB_ENTRY(cpu, cpu->cd.
+src/cpus/cpu_dyntrans.c:1283:				// Not needed: DYNTRANS_INVALIDATE_TLB_ENTRY should
+src/cpus/cpu_dyntrans.c:1301:			DYNTRANS_INVALIDATE_TLB_ENTRY(cpu,
+src/cpus/cpu_dyntrans.c:1579:			DYNTRANS_INVALIDATE_TLB_ENTRY(cpu,
+
+ succeeded in 113ms:
+ 882:  *  load_64bit_word():
+ 883:  *
+ 884:  *  Helper function. Emulated byte order is taken into account.
+ 885:  */
+ 886: uint64_t load_64bit_word(struct cpu *cpu, uint64_t addr)
+ 887: {
+ 888: 	unsigned char data[8];
+ 889: 
+ 890: 	cpu->memory_rw(cpu, cpu->mem,
+ 891: 	    addr, data, sizeof(data), MEM_READ, CACHE_DATA);
+ 892: 
+ 893: 	if (cpu->byte_order == EMUL_LITTLE_ENDIAN) {
+ 894: 		int tmp = data[0]; data[0] = data[7]; data[7] = tmp;
+ 895: 		tmp = data[1]; data[1] = data[6]; data[6] = tmp;
+ 896: 		tmp = data[2]; data[2] = data[5]; data[5] = tmp;
+ 897: 		tmp = data[3]; data[3] = data[4]; data[4] = tmp;
+ 898: 	}
+ 899: 
+ 900: 	return
+ 901: 	    ((uint64_t)data[0] << 56) + ((uint64_t)data[1] << 48) +
+ 902: 	    ((uint64_t)data[2] << 40) + ((uint64_t)data[3] << 32) +
+ 903: 	    ((uint64_t)data[4] << 24) + ((uint64_t)data[5] << 16) +
+ 904: 	    ((uint64_t)data[6] << 8) + (uint64_t)data[7];
+ 905: }
+ 906: 
+ 907: 
+ 908: /*
+ 909:  *  load_32bit_word():
+ 910:  *
+ 911:  *  Helper function. Emulated byte order is taken into account.
+ 912:  */
+ 913: uint32_t load_32bit_word(struct cpu *cpu, uint64_t addr)
+ 914: {
+ 915: 	unsigned char data[4];
+ 916: 
+ 917: 	cpu->memory_rw(cpu, cpu->mem,
+ 918: 	    addr, data, sizeof(data), MEM_READ, CACHE_DATA);
+ 919: 
+ 920: 	if (cpu->byte_order == EMUL_LITTLE_ENDIAN) {
+ 921: 		int tmp = data[0]; data[0] = data[3]; data[3] = tmp;
+ 922: 		tmp = data[1]; data[1] = data[2]; data[2] = tmp;
+ 923: 	}
+ 924: 
+ 925: 	return (data[0] << 24) + (data[1] << 16) + (data[2] << 8) + data[3];
+ 926: }
+ 927: 
+ 928: 
+ 929: /*
+ 930:  *  load_16bit_word():
+ 931:  *
+ 932:  *  Helper function. Emulated byte order is taken into account.
+ 933:  */
+ 934: uint16_t load_16bit_word(struct cpu *cpu, uint64_t addr)
+ 935: {
+ 936: 	unsigned char data[2];
+ 937: 
+src/debugger/debugger_cmds.c:1642: *  debugger_cmd_reg():
+src/debugger/debugger_cmds.c:1644:static void debugger_cmd_reg(struct machine *m, char *args)
+src/debugger/debugger_cmds.c:2079:	{ "reg", "[cpuid][,c]", 0, debugger_cmd_reg,
+2076:	/*  NOTE: Try to keep 'r' down to only one command. Having 'reg'
+2079:	{ "reg", "[cpuid][,c]", 0, debugger_cmd_reg,
+
+web search: https://gcc.gnu.org/onlinedocs/gcc-8.4.0/gcc/Local-Register-Variables.html
+codex
+**Verdict: return the old context pointer in `ALPHA_V0` (`$0`). The one-character edit is correct. There is one demonstrated ABI defect: this wrapper already permits `a0` to be clobbered.**
+
+**Q1.** The full [in-tree wrapper](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/thirdparty/alpha_cpu.h:448) is:
+
+```c
+static __inline unsigned long
+alpha_pal_swpctx(unsigned long ctx)
+{
+	register unsigned long a0 __asm("$16") = ctx;
+	register unsigned long v0 __asm("$0");
+
+	__asm volatile("call_pal %2 # PAL_OSF1_swpctx"
+		: "=r" (a0), "=r" (v0)
+		: "i" (PAL_OSF1_swpctx), "0" (a0)
+		/* clobbers t0, t8..t11, a0 (above) */
+		: "$1", "$22", "$23", "$24", "$25", "memory");
+
+	return (v0);
+}
+```
+
+`=` declares an output; `r` requests a register. The explicit register declarations determine which physical registers these operands use. A numeric input constraint matches an output operand’s location. These are GCC’s [constraint rules](https://gcc.gnu.org/onlinedocs/gcc-12.5.0/gcc/Extended-Asm.html#InputOperands) and [local-register binding rules](https://gcc.gnu.org/onlinedocs/gcc-8.4.0/gcc/Local-Register-Variables.html).
+
+| Operand | Constraint/expression | Location and role |
+|---|---|---|
+| 0 | `"=r" (a0)` | `$16`: output whose resulting value is discarded |
+| 1 | `"=r" (v0)` | `$0`: output returned by `return (v0)` |
+| 2 | `"i" (PAL_OSF1_swpctx)` | Immediate PAL number substituted for `%2` |
+| 3 | `"0" (a0)` | Input tied to **operand 0**, hence `$16`, carrying `ctx` |
+
+Thus `"0"` refers to **output operand zero**, which here occupies **register sixteen**. It neither selects physical `$0` nor transfers the result into it. The emulator’s [register definitions](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/cpu_alpha.h:75) agree: `ALPHA_V0 = 0`, `ALPHA_A0 = 16`.
+
+**Q2.** One defect with two register-state effects. The existing assignment leaves `v0` without the required result and overwrites `a0`. But that overwrite is **permitted by the wrapper’s constraints**: `a0` is an output tied to an input, so its incoming value need not survive.
+
+The smallest edit at [line 251](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_alpha_palcode.c:251) is:
+
+```diff
+-		cpu->cd.alpha.r[ALPHA_A0] = cpu->cd.alpha.ctx;
++		cpu->cd.alpha.r[ALPHA_V0] = cpu->cd.alpha.ctx;
+```
+
+This supplies the return value and removes that `a0` overwrite. No separate preservation handling or wrapper change is needed. Preserving `a0` becomes this implementation’s behavior, without becoming an ABI requirement.
+
+**Q3.** Yes. The closest active sibling is [the `swpipl` case](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_alpha_palcode.c:337):
+
+```c
+	case 0x35:	/*  PAL_OSF1_swpipl  */
+		/*  a0 = new ipl, v0 = return old ipl  */
+		cpu->cd.alpha.r[ALPHA_V0] = cpu->cd.alpha.ps & ALPHA_PSL_IPL_MASK;
+		cpu->cd.alpha.ps &= ~ALPHA_PSL_IPL_MASK;
+		cpu->cd.alpha.ps |= (a0 & ALPHA_PSL_IPL_MASK);
+		break;
+```
+
+It writes the old state directly into `ALPHA_V0`, then installs the new state from the copied `a0`. Other active PAL cases use the same destination: `rdmces` returns `mces` at line 204, `rdps` returns `ps` at 344, and `whami` returns `cpu_id` at 361.
+
+The earlier return at [line 118](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_alpha_palcode.c:118) belongs to `PROM_R_PUTS` in `alpha_prom_call()`, which also writes `ALPHA_V0`.
+
+**Q4.** The host local `a0` remains live through [`cpu->cd.alpha.ctx = a0`](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_alpha_palcode.c:255). Your premise about that copy is correct.
+
+The rest of this case does not consume `r[ALPHA_A0]` as an old-context result. Its [direct emulator caller](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:63) checks execution status and PC afterward; it does not read `a0` or move it into `v0`. The wrapper discards its `a0` output, and the searched `src/` contains no calls to that wrapper.
+
+No in-tree dependency was found. An external guest explicitly relying on the accidental old-context value in `a0` would observe a change; the inspected wrapper provides no such guarantee.
+
+**Q5.** Let `C` be the outgoing context pointer, `N` the incoming argument, and `P` the pre-call `v0`. On normal completion, before subsequent instructions overwrite these registers:
+
+| Observable | Existing code | Fixed code |
+|---|---|---|
+| `v0` | `P` | `C` |
+| `a0` | `C` | `N` |
+
+The return-value oracle is **`v0_after == ctx_before`**. A distinguishing observation requires `P != C`; otherwise stale `v0` happens to look correct.
+
+The debugger’s [`reg` command](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/debugger/debugger_cmds.c:1644) reaches the [Alpha register dump](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_alpha.c:170), which prints both registers by name. **Guest code need not consume the return value for the debugger to distinguish the builds.**
+
+**Q6.** Keep the comment. “Return old context in v0” asserts an observable postcondition: both the returned value and its register. Under your stated project rule, it owes a test row pinning the Q5 oracle. Calling it a description does not remove that claim. It makes no claim about preserving `a0`.
+
+This was a source review; no files were changed and no runtime test row was executed.
+tokens used
+83,713

@@ -1,0 +1,173 @@
+I'll read the Alpha PAL, dyntrans, machine, and existing probe sources first so the witness design is grounded in how this tree actually runs, not in the previous pass's claims.The defect site and the two Alpha probes are the next reads; I’ll also pull dyntrans invalidation and how alphabook1 maps memory so the witness can actually cache a VPN.PAL dispatch is confirmed; next I’ll read how VADDR vs ALL invalidation actually matches entries, and how Alpha load/store fills and consumes the dyntrans TLB.A rung-3 guest witness **is constructible** on unmodified `-E alpha -e alphabook1`. The observable is a **stale dyntrans hit after a PTE remap**, not a dispatch spy. Section 1 is right on the defect; two extra constraints decide whether the row is real or vacuous.
+
+---
+
+## Premises (section 1)
+
+All six claims hold. Two footnotes, neither of which undoes the defect:
+
+1. **`a0` is an unsigned compare of `-2`.** `alpha_palcode()` copies `cpu->cd.alpha.r[ALPHA_A0]` into a `uint64_t a0` and then does `if (a0 >= 1)` with no signed cast (`cpu_alpha_palcode.c`). `ALPHA_TBIA()` is `alpha_pal_tbi(-2, 0)` (`src/include/thirdparty/alpha_cpu.h`). `-2` is `0xfffffffffffffffe`, which is `>= 1`, so the call takes `INVALIDATE_VADDR` with `a1 = 0`.
+
+2. **The two invalidate arms really differ.** VADDR keeps an entry only when `(vaddr_page & vaddr_mask) == (addr_page & vaddr_mask)`; ALL walks every valid entry with no address test (`cpu_dyntrans.c`). Alpha is 8 KiB (`DYNTRANS_8K` in `cpu_alpha.c`) and `vaddr_mask` is the `cpu.c` default `(int64_t)-1` because `cpu_alpha.c` never sets it (`is_32bit = 0`). So `ALPHA_TBIA()` invalidates **cached virtual page 0 only**.
+
+   The comment that VADDR “only clears the quick array, not `vph_tlb_entry[]`” is stale. The 64-bit helper **does** NULL `host_load` / `host_store` / `phys_addr` / `phys_page` and clear `valid`. The bug is **which** entries are selected, not that the helper is a no-op.
+
+3. **The fast path consumes those pointers.** `LS_N` indexes `l3->host_load[x3]` (store: `host_store`); NULL falls through to `LS_GENERIC_N` → `memory_rw` (`cpu_alpha_instr_loadstore.c`).
+
+`ALPHA_TBIAP()` (`-1, 0`) is the same wrap. The ALL arm also does not implement ASM=0. That is extra, not a contradiction.
+
+---
+
+## Q1. Shape on `alphabook1`
+
+Yes, on the in-tree machine. `machine_alpha.c` already `device_add`s LCA for `ST_ALPHABOOK1`; the probe must not add a device or a new machine to reach PAL 0x33.
+
+The defect is invisible unless a **non-zero VPN is already in the dyntrans TLB**. Cache fill is a guest load, not a debugger `put`. `put d` can fill K0SEG translations (`store_64bit_word` uses `CACHE_DATA`), but the debugger prompt **ALL-flushes** before the next interaction (`debugger.c`: if `debugger_n_steps_left_before_interaction` is 0 it calls `cpu_create_or_reset_tc` and `invalidate_translation_caches(..., INVALIDATE_ALL)`). So fill, remap, `tbi`, and the observing load **must be one `step N`**. Split them across two `step`s and both builds re-walk after the remap; the row is green on HEAD.
+
+**How the mapping gets cached**
+
+`swpctx` is the only writer of `apcb_ptbr`, and it already ALL-flushes (`cpu_alpha_palcode.c`). After that, the first walked `ldq` of the test VPN misses (`host_load` NULL), goes through `memory_rw` → `alpha_translate_v2p` → `update_translation_table`, which writes `l3->host_load[x3]`. Alpha RAM is `DM_DYNTRANS_OK | DM_EMULATED_RAM`; `MEMORY_NOT_FULL_PAGE` is 256, not 2, so a translate result of 2 is cacheable. `alpha_pfnoffset_probe.py` already measured that the second access is a fast-path hit. 128 TLB slots (`ALPHA_MAX_VPH_TLB_ENTRIES`); sequential replacement will not evict the handful of pages this program touches.
+
+Identity map (`ptbr == 0`) and K0SEG cannot witness this. There is no PTE to change; K0SEG is checked **before** `ptbr` (`memory_alpha.c`).
+
+**Guest program** (one session, one `step N`), on the pfnoffset page-table substrate:
+
+Debugger setup, while `ptbr` is still 0, all via K0SEG, all inside `-M 64`:
+
+| Plant | Role |
+|---|---|
+| L1/L2/L3 | Walk; `L3[1]` → `P_OLD` (VPN `0x2000`) |
+| `P_OLD[0] = VAL_OLD`, `P_NEW[0] = VAL_NEW` | Distinctive, neither zero, neither the sentinel |
+| PCB.ptbr **and** PCB.flags = L1 PFN | So the swpctx field-swap cannot change what is armed |
+| `k0(PCB)`, `k0(L3+8)`, `PTE(P_NEW)` | 64-bit cells `lda`/`ldah` cannot build |
+
+Guest:
+
+```text
+ldq  a0, k0(PCB)
+call_pal 0x30              # swpctx: arm walk, ALL-flush
+lda  t0, 0x2000            # VPN ≠ 0
+ldq  t1, 0(t0)             # FILL: cold walk, host_load → P_OLD
+ldq  t4, planted PTE(P_NEW)
+stq  t4, 0(k0(L3+8))       # remap via K0SEG, not via the walked VPN
+lda  a0, -2(zero)          # lda_0 sign-extends; a0 = 0xfffffffffffffffe
+lda  a1, 0(zero)           # ALPHA_TBIA's a1; must not be the test VPN
+call_pal 0x33              # PAL_OSF1_tbi
+ldq  t2, 0(t0)             # OBSERVE
+```
+
+`lda a0, -2(zero)` is real: `lda_0` does `(int64_t)(int32_t)arg[2]`, and LDA stores a sign-extended `int16` (`cpu_alpha_instr.c`). Still **print `a0`/`a1` after the program** (`0xfffffffffffffffe` and `0`). A truncated `0xfffe` would also take the VADDR arm on HEAD and the ALL arm under `a0 <= 3`, so the defect row would move, but it would no longer be TBIA.
+
+Kernel mode is already required: 0x33 is not on the user whitelist; user mode prints `Privileged Alpha PALcode called from user mode` and sets `cpu->running = 0` before the switch. `ps` is zero at construction. Keep the harness `palgate` row.
+
+Do not insert a watchpoint. Adding one ALL-flushes.
+
+---
+
+## Q2. The observable
+
+**Named:** after the old mapping is cached and the L3 PTE is pointed at a different physical page, `ALPHA_TBIA()` leaves the fast-path pointer aimed at the old host page, so the next `ldq` of that VPN returns `VAL_OLD`. After the fix the same `ldq` misses, re-walks, and returns `VAL_NEW`.
+
+| Build | `t2` |
+|---|---|
+| HEAD (`if (a0 >= 1)` → VADDR of 0) | `VAL_OLD` |
+| Fix (`a0 >= 1 && a0 <= 3` → else ALL) | `VAL_NEW` |
+
+That is a **guest effect**, not a callback dump. A host spy on `invalidate_translation_caches` would decide the branch and stay silent about whether any mapping died. It is not required here, and it would make this a detector-backed round.
+
+Unmap-and-watch-the-sentinel is weaker. A failed walk does not write the destination register (pfnoffset lesson 5), so “sentinel survived” on the fixed build is also “the load never ran.” `VAL_NEW` is a positive read of the new page.
+
+**Controls that make the observation unique** (same script, extra sessions, each its own `step N`):
+
+| Row | Program | Want (both builds unless noted) | What it kills |
+|---|---|---|---|
+| `data old/new k0` | K0SEG `ldq` of `P_OLD` / `P_NEW` | `VAL_OLD` / `VAL_NEW` | Unmapped read = 0; plants never landed |
+| `fill` | `t1` after the first walked `ldq` | `VAL_OLD` | Walk never completed (`VAL_S` / 0 / absent) |
+| `no tbi` | fill, remap, **no** `call_pal 0x33`, load | `VAL_OLD` | Cache never stuck, or the K0SEG PTE store itself flushed the VPN |
+| `tbis right` | fill, remap, `a0=3`, `a1=0x2000`, load | `VAL_NEW` | `tbi` is a no-op |
+| `tbis wrong` | fill, remap, `a0=3`, `a1=0`, load | `VAL_OLD` | Both arms ALL (see Q5) |
+| `tbia` | fill, remap, `a0=-2`, `a1=0`, load | `VAL_NEW` (red on HEAD) | The defect |
+| `tbiap` | same with `a0=-1` | `VAL_NEW` (red on HEAD) | The other documented negative selector |
+| `mapped` | observed word is a real `0x…` and not `0` | yes | `print` missed / died / unmapped |
+
+`live` / `exec` / `palgate` stay as in `alpha_harness_probe.py`. `palalive` stays a labelled non-oracle (`-V` keeps the debugger up either way).
+
+Polarity trap, same family as pfnoffset: planting `VAL_NEW` **through the walked VPN** after the fill writes it into `P_OLD`. Plants go in via K0SEG before `ptbr` is armed. The remap store is K0SEG of L3, not `stq` through `0x2000`.
+
+Offset 0. This tree already contains the #508 page-offset repair in `memory_alpha.c`. Using a non-zero offset would couple this row to that one. Offset 0 is inside the fast-path `addr & 8191` path either way.
+
+---
+
+## Q3. Page-0-clean, and the sibling `a1` constraint
+
+Yes. The buggy arm invalidates **virtual page 0**. A test VPN of 0 is flushed on HEAD and on the fix, so the defect row is green on both. Same shape as an accept row written at a window’s base.
+
+**Constraint:** the observing VPN’s page number must not be 0. `0x2000` (`i3 = 1`, already L3[1] in pfnoffset) is enough. Also print the VPN so a future edit cannot slide it back to 0 without redding a control.
+
+**Sibling, just as load-bearing:** `a1` must be 0, not the test VPN. HEAD takes `INVALIDATE_VADDR` with `a1`. If `a1` still holds `0x2000`, HEAD flushes the test page and the defect row is green on the bug. PROM setup happens to zero `a1`; do not trust that. `lda a1, 0` and print it.
+
+Do not treat a **page-0 TBIA row** as the detector. It is a labelled trap: it goes green on HEAD by construction.
+
+---
+
+## Q4. New probe, old plumbing
+
+Do **not** extend either existing probe’s assertion set.
+
+- `alpha_harness_probe.py` is the foundation plus the swpctx field-swap. It has no page tables.
+- `alpha_pfnoffset_probe.py` is the offset-drop witness. Its contract is **one cold walked load**. This defect needs the opposite: fill, then a **hit**. Mixing two defects in one file makes a red `ALPHAPFN_RESULT` unreadable. pfnoffset’s separate sessions exist to **prevent** a second access in the same run; we need that second access in the same `step N`.
+
+Write a **new** `alpha_tbi_probe.py` (or similar) that **copies** from those two:
+
+From the harness: `session()`, encoder, `load_const`, `CALL_PAL`, K0SEG bootstrap, `palgate`, `live`/`exec`, the “print the register the load actually wrote” discipline, and “addresses inside 64 MB or reads return 0 silently.”
+
+From pfnoffset: 8 KiB tables, PFN-not-byte `apcb_ptbr`, **same PFN in ptbr and flags**, K0SEG plants, VPN `0x2000` / L3[1], sentinel, `wasn't found` control, three-way oracle (`S` / 0 / planted word).
+
+What has to be **added** (none of it exists today): guest `stq` of a new L3 PTE; `lda a0,-2` / `lda a1,0` / `call_pal 0x33`; fill-then-observe in **one** `step N`; the `no tbi` / `tbis right` / `tbis wrong` sessions; `tbia`/`tbiap` defect rows that assert `VAL_NEW` (red on HEAD).
+
+That is still a pty clone, not new pty architecture. `drive_guest.py` is a booted-OS driver; it does not help here.
+
+---
+
+## Q5. Vacuity mutant
+
+Assume the fix is:
+
+```c
+if (a0 >= 1 && a0 <= 3)
+    cpu->invalidate_translation_caches(cpu, a1, INVALIDATE_VADDR);
+else
+    cpu->invalidate_translation_caches(cpu, 0, INVALIDATE_ALL);
+```
+
+**Reinstatement (guard kept, else restored to VADDR):**
+
+```c
+else
+    cpu->invalidate_translation_caches(cpu, a1, INVALIDATE_VADDR);
+```
+
+or `INVALIDATE_VADDR` with address 0. TBIA is again VADDR of 0. The `tbia` row stays `VAL_OLD`. The witness sees it.
+
+**Collapse (guard kept, both arms ALL) — this is the one that beats a TBIA-only row:**
+
+```c
+if (a0 >= 1 && a0 <= 3)
+    cpu->invalidate_translation_caches(cpu, a1, INVALIDATE_ALL);
+else
+    cpu->invalidate_translation_caches(cpu, 0, INVALIDATE_ALL);
+```
+
+`&& a0 <= 3` is dead. `ALPHA_TBIA()` flushes everything, so `tbia` goes green while TBIS no longer means “this vaddr.” A TBIA-only remap probe is **below the vacuity floor**. The `tbis wrong` row (`a0=3`, `a1=0`, expect `VAL_OLD`) is what makes that mutant red.
+
+Other small else-arm nulls the TBIA row already catches: else deleted; else `INVALIDATE_PADDR` of 0; else `invalidate_code_translation`. All leave `host_load` of VPN 1 intact, so `t2` stays `VAL_OLD`.
+
+With `{tbia, tbiap, no tbi, tbis right, tbis wrong, fill, mapped}` the natural handler mutants are visible. A spy-only oracle would still miss “called ALL, helper did not drop `host_load`.”
+
+---
+
+## What this is not
+
+It is not a rung-1 `#include` of `alpha_palcode()`. Remove `machine_alpha.c` or the `call_pal` → `alpha_palcode` decode and the script cannot run.
+
+It has not been executed in this pass. The cache-fill premise is source plus pfnoffset’s already-measured second-access hit; `no tbi` is the in-probe measurement that that fill actually stuck. If `no tbi` comes back `VAL_NEW`, the mapping was never cached and there is no witness — that is a red control, not a green defect row.

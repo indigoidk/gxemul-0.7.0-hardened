@@ -1,0 +1,38 @@
+**VERDICT:** Mechanism holds IF the inlined facts are right; the brief has an internal wording inversion between its VADDR premise and its conclusion that must be reconciled before any seat signs off on severity; coarse fix is right to ship; Q3 has a one-liner; Q4 names specific channels; Q5 overclaims "verified."
+
+---
+
+**Internal defect in the brief.** Section 1: *"VADDR keeps an entry only when `(vaddr_page & vaddr_mask) == (addr_page & vaddr_mask)`"*. The natural English reading is "matching entries are preserved, non-matching invalidated." With `vaddr=0` and `vaddr_mask=-1`, that makes TBIA-via-VADDR **keep page 0 and invalidate everything else** — a *medium-low* bug (TBIA almost works, only page 0 leaks). The conclusion two sentences later — *"TBIA invalidates cached virtual page ZERO and nothing else"* — is the **opposite**: page 0 invalidated, everything else kept, **high** severity (TBIA effectively a no-op). These are not the same bug. One of the two is a typo.
+
+Two file-reading seats established this; the conclusion is likelier correct and *"keeps"* is the typo (standard QEMU `INVALIDATE_VADDR` semantics = invalidate matching). But the panel must state that explicitly before signing off. A row going med→high on a one-letter typo is precisely the seven-of-nine failure the brief warns against. READ on inlined code; REASONED on which way to reconcile.
+
+---
+
+**Q1 — severity.** High is right **iff** the conclusion stands. Two supporting points the panel should note: (a) no real Alpha guest does remap-and-retry fallback; (b) the affected set is "every non-page-0 TB entry" = essentially the whole working set. In practice, TBIA does nothing, and any subsequent PTE remap leaves stale physical backing in the cache. High, not medium. REASONED.
+
+**Q2 — coarse repair.** Ship it. "ASM-0 selectivity" for `ALPHA_TBIAP()` is not a thing in this model: QEMU's TB cache carries no per-entry ASN. Routing `-1` to ALL is what TBIAP wants when there is no ASN to be selective about. Finer semantics are owed to an ASN-tracking rewrite of the cache, not to this PAL handler. The brief calling the fix "COARSE" reads like the author remembering a real-Alpha-architecture detail that doesn't apply to QEMU's translation-cache model. REASONED.
+
+**Q3 — adversarial reinstatement.** A one-line `||` clause with a justifying comment passes code review:
+
+```diff
+-    if (a0 >= 1)
++    if (a0 >= 1 || a0 == (uint64_t)-2)   /* explicitly admit TBIA */
+```
+
+Looks like a comprehensive fix; does exactly what the broken code does. Smaller still: comment-only — `/* unsigned compare; -1, -2 wrap to UINT64_MAX and intentionally also pass */`. Zero code change, the comment does the lying.
+
+**Q4 — channels the witness would miss.** Five, at least:
+
+1. **Test va = page 0.** Under the conclusion, the bug actually flushes page 0 correctly. A test mapped at va 0 passes on the broken build vacuously.
+2. **KSEG0 / KSEG1.** Direct-mapped, bypass TLB. Brief names K0SEG; KSEG1 same problem.
+3. **Remap that doesn't change contents** (same data, new PTE). No detectable stale.
+4. **Remap that points the new PTE at the same physical page.** Same data, no detectable stale.
+5. **Cold TB cache at the observing load.** "Fill, remap, tbi, load in one `step N`" partly covers this — but the fill itself needs a prior guest memory access to seed the entry, and that access is also inside the same debugger step, so its effects have to be observable *and* survive the subsequent remap without themselves triggering an invalidate.
+
+The brief mentions K0SEG; the other four are not addressed in the packet. Witness design has to dodge all five. REASONED.
+
+**Q5 — ordering.** "Consequences verified" overclaims. What's established: mechanism understood, witness shape known, build-side constraints (the `step N` trap) mapped. What isn't: an actual run on the unmodified build returning a stale value. The previous ranking — `alphaswpctxreg` first on the ground that this row's consequences were unverified — was honest. Flipping that on the strength of "constructible in principle" is the same shape of error in reverse. Right move: mark this row **ready to elevate once the witness actually runs**, not leapfrog `alphaswpctxreg` on mechanism alone. REASONED.
+
+---
+
+**Closing.** Mechanism and repair are right, but the brief has an internal wording inversion it must fix before any seat commits to severity. Q1/Q2/Q3 are otherwise straightforward. Q4 wants more witness-design discipline than the packet shows. Q5 wants the brief to stop short of "verified."

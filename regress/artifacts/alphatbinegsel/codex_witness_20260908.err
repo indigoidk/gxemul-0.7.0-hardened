@@ -1,0 +1,107 @@
+Reading additional input from stdin...
+OpenAI Codex v0.153.4
+--------
+workdir: C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+model: gpt-6-astra
+provider: openai
+approval: never
+sandbox: read-only
+reasoning effort: max
+reasoning summaries: none
+session id: 01a08019-9a9c-7be1-8412-64fd920f7aa6
+--------
+user
+# alphatbinegsel -- design the rung-3 witness
+
+## 0. READING SCOPE -- deliberately wide
+
+Last pass I scoped you too narrowly and you correctly said the question could not be settled inside
+it. Read whatever you need under `GXEMUL-SEC/src/` and `GXEMUL-SEC/regress/*.py`. In particular:
+
+* `src/cpus/cpu_alpha_palcode.c`, `cpu_alpha.c`, `cpu_dyntrans.c`, `memory_alpha.c`
+* `src/cpus/cpu_alpha_instr_loadstore.c`
+* `src/machines/machine_alpha.c`
+* `regress/alpha_harness_probe.py` and `regress/alpha_pfnoffset_probe.py` -- the two existing Alpha
+  probes, which you cited last pass as the basis for testing
+
+Please still avoid `regress/artifacts/` and `tools/pipeline/ledger.json`.
+
+Tree under review: `GXEMUL-SEC/src/`. Ignore the pristine 2021 `src/` at the project root.
+
+## 1. SETTLED -- your own findings from the previous pass, inlined so this stands alone
+
+You established, with citations, and I re-verified each against the source before writing this:
+
+* `PAL_OSF1_tbi` (case 0x33) dispatches on `if (a0 >= 1)`, where `a0` is a `uint64_t` local copied
+  from `cpu->cd.alpha.r[ALPHA_A0]`, itself `uint64_t`. No active signed cast.
+* `alpha_cpu.h` defines `ALPHA_TBIA() = alpha_pal_tbi(-2, 0)` ("all TB entries") and
+  `ALPHA_TBIAP() = alpha_pal_tbi(-1, 0)` ("all per-process").
+* so `-2` compares as `0xff..fe >= 1` -> TRUE -> the **VADDR** branch, with `a1 = 0`.
+* the two branches genuinely differ in `cpu_dyntrans.c`: VADDR matches
+  `(entry[r].vaddr_page & cpu->vaddr_mask) == (addr_page & cpu->vaddr_mask)`; the ALL branch has no
+  address predicate and clears every valid entry.
+* Alpha has 8 KiB pages and normal construction leaves `vaddr_mask` all-ones
+  (`cpu.c` sets `(int64_t)-1` for the non-32-bit case).
+* **therefore `ALPHA_TBIA()` invalidates cached virtual page ZERO and nothing else** -- or nothing
+  at all if page 0 is not cached.
+* the entry helper NULLs `host_load`, `host_store`, `phys_addr`, `phys_page` and clears the TLB
+  entry's `valid`, and the Alpha load/store fast path consumes those pointers.
+
+Your status line was: **"source-confirmed functional defect; witness unvalidated."** This brief is
+about closing that gap.
+
+## 2. WHAT A WITNESS MUST BE HERE
+
+The project's ladder, stated so you can hold the design to it:
+
+* **rung 3** = a real guest instruction through real address decode and real `memory_rw`, on an
+  **UNMODIFIED in-tree machine description**. A machine or `device_add` introduced *in order to*
+  reach the site is laundering, not witnessing.
+* it must show the symptom on the **pre-fix committed build** and go green post-fix **with the same
+  script** -- that is the test-first requirement, restated per probe.
+* it must carry a **LIVENESS control** (a known value returns through the same path) and, for an
+  access witness, a control establishing the observation could not have come from somewhere else.
+* an `#include`/direct-call harness is **rung 1 and is NOT a reproduction** -- if it still compiles
+  and fails after the machine description and dispatch are removed, it was never a witness.
+
+## 3. THE QUESTIONS
+
+**Q1. Is a rung-3 witness constructible for this defect, on `-E alpha -e alphabook1`?** Give the
+concrete shape: what the guest sets up, which PAL call it makes, and what it then observes. Be
+specific about how the guest gets a mapping *cached* in the first place -- the defect only shows if
+an entry is in the dyntrans TLB before the flush.
+
+**Q2. What is the OBSERVABLE?** This is the hard part and I want it named precisely. The defect is
+"a mapping that should have been invalidated survives". Candidates I can see:
+
+  * remap a VPN to a different physical page, `ALPHA_TBIA()`, then load from that VPN and see the
+    OLD contents;
+  * observe the invalidation callback's arguments directly (a **dispatch** oracle -- decisive about
+    dispatch, silent about guest effect, and you already said so);
+  * something else.
+
+**If the only constructible oracle is the dispatch one, say so** -- that is a real answer, and it
+would make this a detector-backed round rather than a guest-witnessed one, which is a different and
+weaker claim that the round must state honestly.
+
+**Q3. Does the guest have to be page-0-clean?** Since the buggy path invalidates virtual page zero,
+a witness whose test VPN happens to *be* page 0 would pass on both builds. Name the constraint the
+probe must satisfy so the row cannot be vacuous by address choice. *This is the same shape as an
+accept row written at a window's base -- it tests the one address the bug happens to handle.*
+
+**Q4. Can the two existing Alpha probes be extended, or does this need a new one?** You cited
+`alpha_harness_probe.py` (liveness + PAL dispatch controls) and `alpha_pfnoffset_probe.py` (cold
+walked loads at different VPNs). Reusing a probe that already drives the ordinary Alpha machine is
+much cheaper than writing pty plumbing from scratch. Say which, and what would have to be added.
+
+**Q5. What is the smallest edit that defeats the witness you designed?** Assume the fix
+`if (a0 >= 1 && a0 <= 3)` is in place, and find the mutant that keeps the guard and nulls its
+effect. If your witness cannot see that mutant, it is below the vacuity floor and I would rather
+know now.
+
+**Please do not simply ratify.** If any premise in section 1 is wrong -- including one you supplied
+-- say so. And if you conclude no rung-3 witness is constructible, say that plainly with the reason;
+this project treats an honest "tried and could not" as a real answer, and treats it as very
+different from "did not think to ask".
+ERROR: This content was flagged for possible cybersecurity risk. If this seems wrong, try rephrasing your request. To get authorized for security work, join the Trusted Access for Cyber program: https://chatgpt.com/cyber
+ERROR: This content was flagged for possible cybersecurity risk. If this seems wrong, try rephrasing your request. To get authorized for security work, join the Trusted Access for Cyber program: https://chatgpt.com/cyber

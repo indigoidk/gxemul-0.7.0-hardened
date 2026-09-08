@@ -1,0 +1,81 @@
+**Verdict: extend `#510` with a nonpositive-width guard. The original 468 UB pairs are correct; copying `#510` verbatim leaves 465 undefined, not 467.**
+
+**Q1.** The three current mask initializers are:
+
+[UBFX, line 1351](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c:1351):
+
+```c
+uint32_t mask = (width == 32) ? 0xffffffffU : ((1U << width) - 1);
+```
+
+[SBFX, line 1411](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c:1411):
+
+```c
+uint32_t mask = (width == 32) ? 0xffffffffU : ((1U << width) - 1);
+```
+
+[BFI, line 1460](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c:1460):
+
+```c
+uint32_t mask = (1 << width) - 1;
+```
+
+Confirmed: two repaired siblings and one unrepaired site.
+
+**Q2.** Their decoder-derived domains are:
+
+| Handler | Decoder calculation | Handler width domain |
+|---|---|---|
+| [UBFX](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c:4571) | `1 + ((iword >> 16) & 31)` | `1..32` |
+| [SBFX](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c:4578) | `1 + ((iword >> 16) & 31)` | `1..32` |
+| [BFI](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c:4564) | Independent `msb`, `lsb` in `0..31`; `width = msb - lsb + 1` | `-30..32` |
+
+**Both extract handlers can produce 31.** Neither produces zero or negative widths. Their decoders also omit a `lsb + width <= 32` check; that does not introduce another undefined shift in these repaired handlers.
+
+Under the 32-bit C integer model, `1U << 31` is defined, and the subtraction is unsigned. The guard handles 32; negative counts remain undefined. Thus verbatim transfer repairs **three pairs**: two at width 31 and one at width 32. These distinctions follow C’s shift rules, [§6.5.7 paragraphs 3–4](https://www.open-std.org/jtc1/sc22/wg14/www/docs/n1570.pdf).
+
+My enumeration confirms:
+
+- Original UB: `465 + 2 + 1 = 468`.
+- Reversed ordering: `465 + 31 = 496`.
+- Their intersection: **465**.
+- Currently defined: `31 + 525 = 556`.
+
+**Q3.** I re-extracted the [local ARM DDI 0100I PDF](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ddi0100i.pdf) and found no BFI/BFC occurrences. I cannot substantiate the proposed **UNPREDICTABLE** classification from that local manual.
+
+Choose an empty field for `msb < lsb`, leaving the destination unchanged, and document this as an **emulator choice**. This also preserves the existing defined behavior at width zero.
+
+**Q4.** Replace only BFI’s initializer:
+
+```diff
+-	uint32_t mask = (1 << width) - 1;
++	/*  Emulator choice: msb < lsb leaves the destination unchanged.  */
++	uint32_t mask = (width <= 0) ? 0U :
++	    (width == 32) ? 0xffffffffU : ((1U << width) - 1);
+```
+
+Splitting the nonpositive domain makes preservation explicit:
+
+| Width | Pairs | Original C behavior | Proposed behavior |
+|---|---:|---|---|
+| `< 0` | 465 | Undefined | Zero mask; destination unchanged |
+| `0` | 31 | Defined | Same zero mask and unchanged destination |
+| `1..30` | 525 | Defined | Identical mask and insertion |
+| `31` | 2 | Undefined | Mask `0x7fffffffU`; 31-bit insertion |
+| `32` | 1 | Undefined | Mask `0xffffffffU`; full-register copy, since `lsb == 0` |
+
+The conditional evaluates the width shift only for `1..31`. The remaining shifts use `uint32_t` operands and `lsb` in `0..31`.
+
+**No currently defined pair changes behavior.** For all 556 such pairs, the mask is numerically identical, so the unchanged destination-update statements produce identical results for every source and destination value. Enumeration also found zero mismatches against an independently constructed, bit-by-bit field mask across all 1024 pairs.
+
+**Q5.** The useful runtime observable is a **UBSan diagnostic at the offending expression**, or failure status with recovery disabled—not a particular wrong register value. UBSan’s shift checks cover negative/excessive counts and signed-left-shift overflow in C. [UBSan documentation](https://clang.llvm.org/docs/UndefinedBehaviorSanitizer.html)
+
+UBSan is not literally the only honest detector: a sound static type/range analysis also establishes the defect. Ordinary result comparisons cannot establish definedness.
+
+Your [CPU build Makefile](C:/DocumentNoSnc/CC/GXEMUL/build-asan/src/cpus/Makefile:9) already specifies `-fsanitize=address,undefined`; this configuration includes UBSan. ASan alone would not detect this arithmetic UB. Also, **468 counts input pairs, not expected diagnostic lines**.
+
+**Q6.** They remain two rounds. The decoder unconditionally supplies `&cpu->cd.arm.r[rm]`, including source field 15. This patch makes no operand-selection change and therefore leaves the reported BFC issue unresolved—including at the 525 ordinary, already-defined pairs.
+
+The separation remains straightforward: this change repairs mask construction; `armbfcdecode` addresses source selection. Defined mask arithmetic also removes a confounder from subsequent BFC checks.
+
+Validation here was mathematical enumeration and source review; no compiled sanitizer run was performed. **The patch is supplied but unapplied because this session’s filesystem is read-only.**

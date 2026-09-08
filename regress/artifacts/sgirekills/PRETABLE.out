@@ -1,0 +1,200 @@
+# #513 sgirekills -- PRE-TABLE CHECK
+
+Written BEFORE the first kill table runs, so this file's own mtime proves the order.
+Recorded OUTPUT, not assertion.  `N/A` is always accompanied by its reason: an unrun check and
+an inapplicable one must not render the same.
+
+    round      #513  sgirekills
+    diff       src/devices/dev_sgi_re.c   (5 read arms -> ACCEPT, 1 -> latched decline,
+                                            1 new enum bit, 2 L4 comment corrections)
+               regress/sgi_re_width_probe.py  (-6 rows, +15)
+               regress/gate_arm.sh            (row list, controls, denominators 35 -> 44)
+    detector   regress/sgi_re_width_probe.py, 44 rows
+    baseline   HEAD 5fbd139 + this round's working set
+
+
+## 1. SIBLING PARITY -- compare each de-fatalised arm against its nearest sibling
+
+Six sibling arms, all in one `if/else if` cascade, all previously identical
+(`fatal("TODO: read from <SYM>"); exit(1);`).  **The fix treats them ASYMMETRICALLY and that is
+the first thing this check has to justify.**
+
+    CRIME_RE_TLB_A     ACCEPT    write loop stores it; read returns it
+    CRIME_RE_TLB_B     ACCEPT    idem
+    CRIME_RE_TLB_C     ACCEPT    idem
+    CRIME_RE_LINEAR_A  ACCEPT    fixed-arity write stores two words; read returns them
+    CRIME_RE_LINEAR_B  ACCEPT    idem
+    CRIME_RE_TEX       *** DECLINE + LATCHED ANNOUNCE -- THE OUTLIER ***
+
+**THE ASYMMETRY IS WARRANTED, NOT AN OVERSIGHT**, and the warrant is a filed row rather than a
+judgement:
+
+  * `sgitexindex` records that the TEX write arm's `>> 3` is a missing factor of four against a
+    flat `uint16_t[112]` advanced once per halfword.  Only 31 of 112 cells are reachable and
+    consecutive registers overlap by three.
+  * `grep -n re_tex dev_sgi_re.c` -> 3 hits: the declaration, the store, the store's debug.
+    **NO CONSUMER.**  Accepting the read would publish a mapping the project has recorded as
+    wrong, with no user to serve.
+  * `sgitexindex` carries a standing do-not-code ruling, so this round may not fix the shift.
+
+  ROW OWED BY THE ASYMMETRY: yes, and shipped -- `tex ld lo` / `tex ld hi` STORE a non-zero value
+  before loading, so a later conversion of TEX to ACCEPT reddens them.  A load-only decline row
+  would have been vacuous: it wants 0, and an ACCEPT of the zeroed array also yields 0.
+
+
+## 2. CLAIM -> ROW -- every added sentence asserting an OBSERVABLE consequence
+
+The trigger is SEMANTIC (does this sentence assert something a row could observe?), not the
+five-verb grep, which could not fire on `#489`'s own motivating case.
+
+    ADDED SENTENCE                                             ROW / NO-ROW
+    ---------------------------------------------------------  --------------------------------
+    "This loop is the exact inverse of the write loop, cell     the 10 `<arm> ld lo|hi' rows
+     for cell and shift for shift."
+    "IT MUST WRITE odata, NOT data[] ... anything stored into    the same 10 rows: a data[] fill
+     data[] here is overwritten before it reaches the guest."    returns 0, not the stored value
+    "unimplemented read from CRIME_RE_TEX -- declined. (once)"  tex ld lo, tex ld hi (literal
+                                                                present exactly once)
+    "one announce per instance, not one per access"             tex rd lat1
+    "#513: THE TEX READ DECLINE GETS ITS OWN BIT"               tex xbit
+    "The [tlbi+1] here has the SAME exposure as the write's      *** NO ROW, DELIBERATELY. ***
+     [tlbi+1] and no more"                                      This asserts an EQUIVALENCE of
+                                                                exposure between two code paths,
+                                                                not an observable difference.
+                                                                The exposure itself is
+                                                                `sgilinearoob' and is
+                                                                operator-reachable only (`put d'),
+                                                                which the ladder forbids as a
+                                                                witness.  No row can observe it
+                                                                from a guest.
+    "re_tex has NO consumer anywhere in this file"              *** NO ROW. ***  A source fact,
+                                                                settled by grep (3 hits, listed
+                                                                above), not by execution.
+
+
+## 3. GUARD FIELD vs BODY FIELD
+
+    DOMINATING PREDICATES of the edited lines, walked up to the enclosing function only:
+        relative_addr >= <WIN> && relative_addr < <NEXT>      (window selection)
+        len != 8                                             (width)
+        writeflag == MEM_WRITE                               (direction; the edit is its `else')
+
+    FIELDS THE GUARDED BODY READS:
+        relative_addr        -> the index expression
+        len                  -> the read loop's bound (TLB arms only; LINEAR is fixed-arity)
+        d->re_tlb_a/b/c[],
+        d->re_linear_a/b[]   -> the values returned
+        d->warned            -> TEX only, the latch
+
+    WHERE THEY DIFFER, and whether written at the same sites:
+
+      len          guard TESTS it (`!= 8'); body USES it as a loop bound.  A mutant can shorten
+                   the loop without touching the guard.  COVERED: a short loop leaves odata's
+                   high lanes unfilled, so the value differs and the 6 TLB `ld' rows redden.
+
+      d->warned    read by the TEX body's own latch test; WRITTEN AT 8 SITES, six of them inside
+                   DEVICE_ACCESS -- so ordinary guest register traffic sets bits in this field.
+                   *** THIS IS THE DISAGREEING-STATE CASE AND IT OWES A ROW. ***  Shipped as
+                   `tex xbit': fire all six width latches with narrow writes FIRST, then read
+                   TEX.  If the decline were given an existing bit rather than SGIRE_W_TEX_RD its
+                   message would already be suppressed and the row reds.
+
+    *** THE ENUMERATION ABOVE IS INCOMPLETE, AND THREE SEATS FOUND THE SAME MISSING CELL
+    ON PASS 2: `odata'. ***
+
+      The guarded ACCEPT body READS it -- `odata = (odata << 16) | cell' on the TLB arms,
+      and the LINEAR arms assign it -- and the function's common tail CONSUMES it.  So it
+      is a body-read lvalue inside the closure as I defined it, walked no further than
+      DEVICE_ACCESS(sgi_re), and it should have been listed beside `writeflag', `len',
+      `relative_addr', the arrays and `d->warned'.
+
+      **THE COVERAGE IS NOT AFFECTED -- ONLY THE STATEMENT WAS.**  `M2_datafill' IS the
+      odata-cell mutant: it swaps the destination from `odata' to `data[]', which the tail
+      then overwrites.  It scored 42/44 and KILLED.  In grok's words, *"M2 is the existence
+      proof -- you nearly shipped the swap to data[] -- and it is not generated by the
+      listed names."*
+
+      So this is a WRONG RECORD (L4), corrected here, and not a floor breach: the cell has
+      a mutant and the mutant dies.  **What it cost is that the enumeration could not have
+      GENERATED its own strongest mutant** -- M2 came from having made the mistake, not
+      from working the closure.  A future round applying this block mechanically would have
+      missed it.
+
+      *Found independently by codex, glm and grok.  The convergence is the reason it is
+      recorded as a defect in the method rather than as a stylistic quibble.*
+
+    JOINT CELLS (the body-tested-partition rule):
+      accept arms  the guarded body contains NO `if' at all -- it is a loop and an assignment.
+                   The partition is trivial, so there are no joint cells to enumerate.  N/A by
+                   construction, not unchecked.
+      TEX          the body tests exactly one lvalue, `d->warned & SGIRE_W_TEX_RD', giving two
+                   cells {latch clear, latch set}.  BOTH ROWED: `tex ld lo' enters with it clear,
+                   `tex rd lat1' and `tex xbit' with it set.
+
+
+## 4. CHANNEL -- per row, the mutant it kills and the observable that differs under that mutant
+
+A row whose named channel cannot vary under its named mutant is vacuous BY CONSTRUCTION, and that
+is knowable now, before any table runs.
+
+    ROW                 KILLS (mutant)                        OBSERVABLE THAT DIFFERS
+    ------------------  ------------------------------------  ------------------------------------
+    live64              a mis-specified 64-bit want format;    the printed v0 on a path that
+                        a broken sd/ld through RAM             cannot die -- this is the row that
+                                                              makes the other 14 interpretable
+    <arm> ld lo   x5    verbatim reinstatement of exit(1);     v0: the stored value vs death or a
+                        read-side index re-map; lane swap;     wrong/zero value.  PLUS the store's
+                        a data[] fill instead of odata;        own debug naming the index (clause
+                        a whole-window translation             (f) anchor) -- absent under a
+                                                              translation, since the store's index
+                                                              text moves with it
+    <arm> ld hi   x5    all of the above, AND a FAR-BOUND      same channel at the window's LAST
+                        shrink of the window                   slot.  A base-only row cannot see a
+                                                              far-bound move at all
+    tex ld lo/hi        TEX converted to ACCEPT; the decline    v0 == 0 AND the count of the TEX
+                        literal deleted or renamed             decline literal.  *** THE STORE IS
+                                                              WHAT MAKES THIS NON-VACUOUS: without
+                                                              it an ACCEPT of the zeroed array
+                                                              returns 0 too and the row cannot
+                                                              redden ***
+    tex rd lat1         the latch removed (announce per        literal count over TWO reads at two
+                        access rather than per instance)       DIFFERENT offsets -- so a latch
+                                                              keyed on the address also reds
+    tex xbit            SGIRE_W_TEX_RD replaced by an          literal count after all six width
+                        already-used bit (SGIRE_W_TEX_LEN      latches are set: 1 vs 0
+                        or any *_LEN)
+
+    *** NO ROW BELOW READS EXIT STATUS. ***  `#499` measured `how == "exit0"' vacuous at a
+    refusal-effect site: an exit(0) reinstatement prints its message and then dies, scoring green
+    with the process dead.  Survival here is implied by the VALUE -- a dead session prints none.
+
+
+## 4b. THE LATCH-INDEPENDENCE CELL -- ADDED ON PASS 2 (L2, floor breach, repaired in-round)
+
+The CHANNEL table above lists `tex xbit' as killing *"SGIRE_W_TEX_RD replaced by an already-used
+bit (SGIRE_W_TEX_LEN or any *_LEN)"*.  **The parenthesis is the defect: `tex xbit' fires the six
+WIDTH latches only, so it sweeps bits 0-5 and cannot see a collision with any other bit.**
+
+codex named the escape and predicted its score against the 44-row detector:
+
+    SGIRE_W_TEX_RD = 1 << 11   ->   1 << 8   (= SGIRE_W_UNMAP_RD)      predicted 44/44
+
+with the reason drawn from the detector's own session schedule: **the four TEX-read scenarios and
+the unmapped-read scenario never share an emulator instance**, so bit 8 is clear in every session
+that reads TEX.  `M10' established detection of a WIDTH-bit collision, not of every existing-bit
+collision -- which is the same over-generalisation the parenthesis made.
+
+    ROW                 KILLS                              OBSERVABLE THAT DIFFERS
+    ------------------  ---------------------------------  --------------------------------
+    tex/unmap           SGIRE_W_TEX_RD colliding with any  both decline literals present
+    unmap/tex           OTHER used bit, in either order    exactly once, in ONE instance
+
+**Both orderings are rowed deliberately.**  One would leave the mirror open -- the `#499' shape,
+where a repair closes the cell the mutant used and leaves its symmetric twin for the next pass.
+
+## 5. CARRY-FORWARD
+
+`#490` lost two rows this block had prescribed when a later panel rewrote the addition list.
+**Any later rewrite of this round's row set is DIFFED against the five rows named in section 4
+(`live64`, the lo/hi pairs, the four TEX rows), not merely extended with whatever the pass-2 panel
+finds.**  The block prescribes rows; a list that does not contain them has dropped an obligation.
