@@ -17781,5 +17781,11 @@ caught. Six seats confirmed the fix; two independently corrected a census of min
 eight `ALPHA_V0` sites are inside `#if 0`). `opus5`/`fable5` HELD for the 2026-09-09 adjudication.
 
 **STILL OPEN in the same arm and deliberately excluded:** the `// TODO: Don't invalidate
-EVERYTHING!` at `:296`, which bears on `alphatbinegsel` — and since `#514` landed first, that row
-now owes a witness re-baselined with this fix present.
+EVERYTHING!`, which bears on `alphatbinegsel`.
+
+*** THE RE-BASELINE DEBT I RECORDED HERE IS WITHDRAWN. ***  I wrote that `alphatbinegsel` owes a
+witness re-baselined with this fix present, because `#514` landed first. **`#514` did not touch the
+flush** — `git diff --format= 3031a30^ 3031a30 -- src/cpus/cpu_alpha_palcode.c | grep -cE
+'^[+-].*invalidate_translation_caches'` is **0**. The pass-1 warning was conditional on a round that
+MOVED the flush observable; this round did not, and I applied its conclusion without re-checking
+its condition.

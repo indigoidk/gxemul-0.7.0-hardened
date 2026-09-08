@@ -6,8 +6,15 @@
     cpu->cd.alpha.r[ALPHA_A0] = cpu->cd.alpha.ctx;
 
 The third-party ABI wrapper settles the intent independently.  `alpha_pal_swpctx`
-(`alpha_cpu.h:449-459`) declares `register unsigned long v0 __asm("$0")` as an **output** and lists
-`a0` among the clobbers -- *"clobbers t0, t8..t11, a0 (above)"*.  **So a correct caller reads the
+(`alpha_cpu.h:449-459`) declares `register unsigned long v0 __asm("$0")` as an **output**.
+
+*** AND THIS PARAGRAPH FIRST SAID THE WRAPPER "LISTS a0 AMONG THE CLOBBERS".  IT DOES NOT, and a
+pass-2 seat found it by reading the asm instead of the comment beside it. ***  The clobber list is
+`"$1", "$22", "$23", "$24", "$25", "memory"` -- **a0 is `$16` and is not in it.**  a0 is an **IN-OUT
+OPERAND**: `"=r" (a0)` as an output, with `"0" (a0)` tying the input to operand 0.  The wrapper's
+own *comment* says *"clobbers t0, t8..t11, a0 (above)"*, and the **"(above)"** is doing the work --
+it points at that operand.  **The conclusion is untouched** (the caller may not rely on a0 either
+way) **and the reason was wrong, which is the half that gets reused.**  **So a correct caller reads the
 result from `v0` and may not rely on `a0`: the model published into the register the caller is told
 to throw away and left untouched the one it reads.**  A guest calling `ALPHA_SWPCTX()` gets whatever
 `v0` happened to hold.
@@ -23,6 +30,15 @@ codex refused that as too strong -- software CAN read `a0`, it simply cannot req
 
     PREFIX_20260908.out    2/4   measured on fc687db with the file UNMODIFIED
     POSTFIX_20260908.out   4/4   same script, after the one-identifier change
+
+*** A NOTE ON THE FLOOR, because I named the wrong clause and four seats let it pass. ***  I
+claimed clause **(d)** was discharged "by construction".  grok refused the NAME while accepting the
+conclusion: **(d) enumerates the predicates DOMINATING the edited lines, plus operand swaps from a
+GUARDED body.  This diff is a register-index substitution on an UNGUARDED assignment, so that
+enumeration is EMPTY** -- and the two written special cases for "the fix adds no predicate"
+(de-fatalisation, pure deletion) are neither.  `v0 = a0` is an **RHS COVERAGE** mutant, not a (d)
+mutant.  **So (d) enumerated the empty set here, and the three-value oracle IS the coverage** --
+recorded so the next one-identifier round does not inherit "by construction" as a floor discharge.
 
 **THE ORACLE CARRIES THREE DISTINGUISHABLE VALUES, and that is what makes it more than a
 value check.**  An old context `C = 0x01000000`, a new context `N = 0x01010000`, and a sentinel
@@ -65,11 +81,21 @@ wrong*, because the comment, the code and the third-party wrapper agree independ
 was corroboration, never the load-bearing evidence** -- which is why an inflated count did not
 change the answer.
 
-**SCOPE, deliberately narrow:** the `// TODO: Don't invalidate EVERYTHING!` at `:296` in the same
-arm is **excluded** -- every seat called it a separate row, and the one-site rule governs.  It bears
-on `alphatbinegsel`, which is open on the same flush behaviour; **`#514` has now landed first, so
-that row owes a re-baselined witness**, and the question is queued for the flagship seat rather than
-answered here.
+**SCOPE, deliberately narrow:** the `// TODO: Don't invalidate EVERYTHING!` in the same arm is
+**excluded** -- every seat called it a separate row, and the one-site rule governs.
+
+*** AND THE COUPLING I CLAIMED TO `alphatbinegsel` DOES NOT FOLLOW.  Measured, not argued. ***  I
+wrote that *"`#514` has now landed first, so that row owes a re-baselined witness"*, carrying
+forward a pass-1 warning that whichever of the two landed second would need re-baselining.  **But
+`#514` did not touch the flush at all:**
+
+    git diff --format= 3031a30^ 3031a30 -- src/cpus/cpu_alpha_palcode.c \
+        | grep -cE '^[+-].*invalidate_translation_caches'      ->  0
+
+The `INVALIDATE_ALL` in this arm is untouched, and so are both arms of the `tbi` dispatch.  **So no
+re-baseline debt was created and the claim is withdrawn** -- in this block, in `OUTSTANDING_BUGS.md`
+and in the flagship queue.  *The pass-1 warning was conditional on a round that MOVED the flush
+observable; this round did not.  I applied its conclusion without re-checking its condition.*
 
 # `#513` sgirekills: five modelled registers ended the host when read back -- and four adversarial passes, three of which found something
 

@@ -30,6 +30,28 @@ THE HANDLER RAN AND WROTE THE WRONG REGISTER, and separates that from "the handl
 executed", which would leave a0 holding N and v0 holding S.  One observation, two hypotheses
 distinguished.
 
+THE CONTRACT -- what this probe is designed to catch, and what it deliberately is not.
+
+CAUGHT: the shipped defect (v0 never written); any repair that returns the NEW context instead
+of the old; and any repair that publishes the OLD context into a0.  NOT CAUGHT, and disclosed
+rather than discovered later: this probe does NOT assert that the new context was actually
+INSTALLED.  An edit leaving `r[ALPHA_V0] = ctx' correct while breaking the subsequent
+load-new-context block would produce v0 == C and a0 == N and score 4/4.  Raised independently
+by deepseek and kimi on the pass-2 panel; filed as coverage debt rather than fixed here,
+because it is a different part of the handler from the fix's own repair and so is not a
+clause-(d) breach.  The row that would close it: a THIRD swpctx call, which should return N as
+its old context.
+
+ALSO NOT CAUGHT, named by grok on the pass-2 panel: a product edit that HARDCODES the planted
+value -- `cpu->cd.alpha.r[ALPHA_V0] = 0x01000000;' -- scores 4/4 here.  Filed rather than chased,
+and the reason is the bound: the contract is "the OLD context in v0", the planted C is ONE old
+context, and rowing every RHS that happens to equal C for this one pair is the unbounded shape.
+The hole is NAMED so a later escape is "outside the contract" rather than a surprise.
+
+THIS PROBE DOES NOT PIN a0's VALUE ON A CORRECT BUILD.  The architecture marks a0
+UNPREDICTABLE after the call; only the negative claim -- a0 does not receive the old context --
+is owed.  See `a0 land' below for the measurement that established this.
+
 WHY THE PROGRAM RELOADS ITS SCRATCH POINTER.  T0 is Alpha t0, which the wrapper's own clobber
 list names.  Whether this model clobbers it is not the point: the guest program is written to
 be correct under the ABI, not under the model's current behaviour.
@@ -159,8 +181,26 @@ txt, alive = session(cmds)
 
 v0_after1 = printed(txt, "v0")
 allv0 = re.findall(r"print\s+v0\s*\n\s*(0x[0-9a-f]+)", txt)
-v0_final = "0x%x" % int(allv0[-1], 16) if allv0 else "absent"
 a0_final = printed(txt, "a0")
+
+#  *** A MEASURED FALSE PASS LIVED HERE UNTIL 2026-09-08, AND A SEAT FOUND IT BY EXERCISING THIS
+#  PARSER IN ISOLATION RATHER THAN BY READING IT. ***  This was `allv0[-1] if allv0 else "absent"'.
+#  The script issues TWO `print v0' commands; if the SECOND response is missed -- a short pty read,
+#  a slow step -- `[-1]' silently returns the FIRST call's value.  Under an incorrect repair that
+#  returns the INCOMING context (`v0 = a0'), call 1 is passed C, so that stale first value IS C,
+#  and the `v0 ctx' row that wants C GOES GREEN ON A BROKEN BUILD.
+#
+#  codex fed exactly that synthetic transcript -- one v0 response of C, plus a0 = N -- to this
+#  scoring code and it returned 4/4.  Not a product escape: a HARNESS false pass, which the
+#  stopping rule says is fixed in-round rather than filed.
+#
+#  THE FIX IS TO REFUSE, NOT TO GUESS.  Fewer than two responses is an APPARATUS failure and must
+#  be loud, because "the apparatus selected nothing" and "the value was wrong" must not render the
+#  same.  The `v0 pair' row below states the denominator, which is the discipline this project
+#  already requires of any search.
+V0_RESPONSES = len(allv0)
+v0_final = ("0x%x" % int(allv0[-1], 16)) if V0_RESPONSES >= 2 else \
+           ("ONLY %d v0 RESPONSE(S)" % V0_RESPONSES)
 
 #  ---- CONTROL 1: LIVENESS -- the guest ran and the debugger answered ---------------------
 row("live", "alive" if alive else "died", "alive",
@@ -168,11 +208,33 @@ row("live", "alive" if alive else "died", "alive",
 row("v0 read", "yes" if v0_after1 != "absent" else "absent", "yes",
     "CONTROL: v0 is readable at all through `print' after call 1")
 
-#  ---- CONTROL 2: ATTRIBUTION -- the handler RAN, and we can see where it wrote ------------
-#  On the shipped build a0 holds C: the handler executed and published to the wrong register.
-#  If the handler had never run, a0 would still hold N and this row would read 0x1010000.
-row("a0 land", a0_final, "0x%x" % CTX_N,
-    "ATTRIBUTION: post-fix a0 keeps the INCOMING context; pre-fix it holds the OLD one")
+#  ---- CONTROL 1b: APPARATUS -- the second observation actually arrived --------------------
+#  Without this, a missed second response silently reuses the first and can GREEN a broken build.
+row("v0 pair", "%d of 2" % V0_RESPONSES, "2 of 2",
+    "APPARATUS: both `print v0' responses were captured, so v0_final is call 2's")
+
+#  ---- CONTROL 2: ATTRIBUTION -- did the handler publish the old context into a0? ----------
+#  *** THIS ROW WANTED `a0 == CTX_N' UNTIL 2026-09-08, AND THAT WAS A MEASURED FALSE FAIL. ***
+#  Three pass-2 seats read it as pinning THIS MODEL'S CHOSEN REPAIR rather than the
+#  architecture, and a built mutant settled it: a CORRECT implementation that also clobbers a0
+#  (`r[ALPHA_V0] = ctx' kept, plus `r[ALPHA_A0] = 0xdeadbeef') scored 3/4, failing HERE while
+#  `v0 ctx' stayed green.  Real PALcode does clobber a0, and the fix's own comment invokes a0's
+#  UNPREDICTABLE status -- which permits ANY value.  So the old row required what the round
+#  itself said was not owed.  (kimi: "the probe pins this model's chosen repair, not the
+#  architecture".)
+#
+#  THE HONEST ASSERTION IS THE NEGATIVE ONE: the handler must not publish the OLD context into
+#  a0.  That is exactly the defect, and it leaves a0 otherwise free.  All four states:
+#
+#      shipped defect   (v0=S, a0=C)      RED here      -- the defect, still caught
+#      correct          (v0=C, a0=N)      green
+#      correct+clobber  (v0=C, a0=0xdead) green         -- no longer a false fail
+#      never executed   (v0=S, a0=N)      green here, but `v0 ctx' REDS
+#
+#  The never-executed case is covered by `v0 ctx', so nothing is lost by relaxing this row --
+#  and the OBSERVED a0 is printed either way, which is where the attribution reading lives.
+row("a0 land", "yes" if a0_final != ("0x%x" % CTX_C) else "no", "yes",
+    "ATTRIBUTION: a0 must NOT hold the OLD context (observed a0 = %s)" % a0_final)
 
 #  ---- THE DEFECT ROW ---------------------------------------------------------------------
 #  Asserts the CORRECT behaviour, so: pre-fix RED, post-fix GREEN, same script.

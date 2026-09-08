@@ -2332,7 +2332,7 @@ executed witness showing a documented primitive returns a sentinel instead of it
 **Or is that exactly the reachability-versus-harm confusion the ladder warns against** — rung
 measures proof strength, never harm?
 
-#### 3. (MED) `#514` landed first, so what does `alphatbinegsel` now owe?
+#### 3. (MED) ~~`#514` landed first, so what does `alphatbinegsel` now owe?~~ — **WITHDRAWN, and the withdrawal is the answer**
 
 Every seat called the `:296` `// TODO: Don't invalidate EVERYTHING!` a separate row and I excluded
 it. But `alphatbinegsel` is open on the **same** flush behaviour, and glm warned that whichever of

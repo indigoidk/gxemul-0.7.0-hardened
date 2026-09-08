@@ -1,0 +1,55 @@
+**VERDICT: the product fix is correct and sufficient for `#514`; severity stays `med`. The detector’s floor discharge and the round’s completion are not yet established.**
+
+I checked the SEC source, committed probe, and saved reports. I exercised the probe’s encoder and parser in isolation; I did not build or run GXemul mutants.
+
+1. **Q1 — Require the built wrong-return mutant before claiming empirical closure.**
+
+   The three-value argument correctly proves that an observation of `N` fails an equality against `C`. It does not establish that the harness actually observes the second call’s result.
+
+   There is a concrete gap: [the parser](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/alpha_swpctx_v0_probe.py:160) accepts **one** `v0` response and uses it as both the baseline and final observation. Under `v0 = a0`, the **first** call returns `C`. If the second response is missing, that first `C` satisfies the defect row.
+
+   I passed the actual parsing/scoring code a synthetic transcript containing only that first `v0=C` response and final `a0=N`: **it scored 4/4**. This is a measured parser defect, not a measured product-mutant escape.
+
+   Require two distinct, correctly attributed responses, then build `v0 = a0` and measure it. The predicted score is **3/4**, with `v0 ctx` alone failing. Also, “adds no predicate” is insufficient justification: the [local rule explicitly changed “introduced” to “depends on”](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/tools/CLAUDE.md:1322).
+
+   The saved pair supports (a)/(b) at this single site. For (c), no measured null-medium result is exhibited. `live` and `v0 read` establish communication; neither independently identifies execution of `swpctx`.
+
+2. **Q2 — Yes: an incorrect return-value mask escapes this fixture.**
+
+   Replace the fixed assignment’s RHS with:
+
+   `cpu->cd.alpha.ctx & ~0xffffULL`
+
+   This is predicted to retain **4/4**. The asserted old context, `C`, has its low sixteen bits clear. The first return changes, but `v0 read` only checks readability.
+
+   **`v0 ctx` is the row that should detect this**, but its single operand cannot. An otherwise suitable old PCB address such as `0x01002000` would distinguish the implementations. That is concrete coverage debt within the return-value property.
+
+   The probe also does not independently establish that the second call installed `N`, or verify PCB save/load contents.
+
+3. **Q3 — The unchanged probe has no identified accidental route to `v0=C`; probe edits can create one.**
+
+   I checked the emitted seven instructions and the [real instruction dispatch](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:838). The sentinel instruction writes exactly `S`; the following load targets `a0`; `CALL_PAL` invokes `alpha_palcode`. The current seed therefore excludes a pre-existing `C` from satisfying the defect row.
+
+   A subtle future edit breaks that protection: **`SENT = 0x01000001`** still passes the three-distinct-values assertion, but `LDAH(V0, SENT >> 16)` actually loads **`0x01000000`**. The broken handler then leaves `C` in `v0`. This falsely passes the defect row, producing a predicted **3/4**, because `a0 land` still fails. Use the full constant loader or assert the seed’s actual representability.
+
+   For a complete false pass, append a scratch-pointer reload and loads of `SCRATCH[0]` into `v0` and `SCRATCH[8]` into `a0` after the second PAL call. The fixture then supplies both expected answers, giving predicted **4/4 on the broken handler** without changing expectations. This illustrates why the observation must precede any register restoration.
+
+4. **Q4 — It distinguishes the two stated hypotheses under additional premises; it is not unique attribution.**
+
+   Given independently established incoming `a0=N` and completion of the intended instruction sequence, observing `a0=C` distinguishes the shipped assignment from simply skipping the PAL call.
+
+   But those premises are not asserted by the row. A staging failure can leave a fixture-loaded value in `a0`; debugger survival and register readability do not exclude that.
+
+   There is also an architectural third explanation: **`a0=C` can be a permitted clobber**, including in an implementation that returns the correct value in `v0`. The [architecture manual, §16.2.9](https://docs.alexrp.com/alpha/alpha_4th.pdf#page=485), explicitly makes `a0` unpredictable after `swpctx`.
+
+   Consequently, `a0 land == N` is an **implementation fingerprint**, not an ABI correctness requirement. Keep the pre-fix observation as diagnostic evidence, but do not let an allowed `a0` value fail architectural conformance. Pre-call state checks and an independent PCB writeback observation would strengthen attribution.
+
+5. **Q5 — There is additional, concrete regression-protection debt.**
+
+   The largest new finding is [the wiring manifest entry](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/tools/pipeline/check_probe_wiring.py:165): it classifies this script as `CLASS_WITNESS`. Yet [that checker’s own definitions](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/tools/pipeline/check_probe_wiring.py:54) classify assertions of repaired behavior as a detector. No gate invokes this probe. Its reproduction role does not remove its detector obligations.
+
+   Furthermore, [the reporting tail](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/alpha_swpctx_v0_probe.py:182) prints failures and completes normally. I verified that behavior independently. A caller checking only exit status would accept the reported 2/4 failure.
+
+   Before declaring completion, correct the classification and wire a failing gate—or record the permitted dated exemption. Make failure machine-readable, reject missing observations, measure the bounded wrong-return/null controls, and rerun both product variants with the same revised probe. Preserve raw transcripts and build/probe identities with those measurements.
+
+   Also document the bounded coverage: one context tuple, no independent second-installation assertion, no general PCB or flush validation. The already-recorded `alphatbinegsel` re-baseline remains owed. None of these findings requires expanding the `#514` product change or raising its severity.

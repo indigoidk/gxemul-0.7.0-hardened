@@ -26,11 +26,21 @@ is named.  The measurements that ARE version-specific and logged are listed in A
 independently verified line-by-line by a separate audit that read the archive
 (`codex_packetaudit_20260908.txt`); every headline number held.
 
-**AND A SCOPING NOTE THAT IS NOT A DEFECT:** the second audit marks many claims UNSUPPORTED --
-seat totals, tree cleanliness, commit `7a41b3f`, the pass-3 vote, the unread-review instance.  **It
-was forbidden from reading `regress/artifacts/` and the ledger**, and says so: *"This is a scoping
-finding, not a claim that they are false."*  The FIRST audit read the archive and verified those.
-*The two are complementary: one checked the measurements, the other checked the epistemics.*
+**AND A SCOPING NOTE:** the second audit marks many claims UNSUPPORTED -- seat totals, tree
+cleanliness, commit `7a41b3f`, the pass-3 vote, the unread-review instance.  **It was forbidden
+from reading `regress/artifacts/` and the ledger**, and says so: *"This is a scoping finding, not a
+claim that they are false."*
+
+*** THE SENTENCE THAT FOLLOWED WAS FALSE AND IS WITHDRAWN.  It said "The FIRST audit read the
+archive and verified those."  A THIRD audit, run on this packet before you saw it, checked and
+refuted that: the first audit EXPLICITLY LEFT the seat census, the ledger history, the decision
+counts and the unread-review history UNSUPPORTED, and reported defects that are still present
+below. ***
+
+> **So I promoted a SEAT FINDING into independent verification -- which is precisely the category
+> error this packet's opening section exists to prevent, committed in that section.**  The two
+> audits are NOT complementary in the way I claimed: neither one verified the seat census or the
+> ledger history, and no one has.
 
 **SEATS USED TONIGHT, by name, per the seat-ledger rule:**
 
@@ -47,12 +57,24 @@ finding, not a claim that they are false."*  The FIRST audit read the archive an
 
 ## A. THE ROUND IN FLIGHT
 
-### A1. `#513 sgirekills` -- fix applied and measured, NOT YET COMMITTED
+### A1. `#513 sgirekills` -- *** SHIPPED as `e302c98`.  This section said "NOT YET COMMITTED" and
+### that was stale by the time you read it. ***
 
     witness       PREFIX_RED_20260908.out   30/44  committed build, re-pinned oracles
                   POSTFIX_20260908.out      44/44  same script after the fix
     kill table    killtable_20260908/       12 mutants, scratch clone, frozen instrument
-    trees         part 1 CLEAN on all four; build/ PART2_CLEAR; **build-asan/ PART2 STALE**
+    CLOSING RUN   SWEEP11.txt               ALL ELEVEN alias cells KILLED on ONE probe version,
+                                            SWEEP_BASE 46/46 -- recounted independently from the
+                                            raw logs by a later audit: baseline 46/46, ten aliases
+                                            45/46, bit 8 43/46
+    trees         part 1 CLEAN on all four; build/ and build-asan/ BOTH part-2 clear (this section
+                  said build-asan was STALE; it was rebuilt and the account went out of date)
+
+*** TWO FURTHER STALE CLAIMS IN THIS SECTION, both found by audit rather than by me: "pass 4 not
+yet fired" is false -- it answered, and its measurement objection is what SWEEP11 exists to
+discharge; and A2's MEASURED line GROUPS the final `BASE_fixed` score with bit-6/7 kills taken on
+the EARLIER, non-self-checking instrument.  Those scores are real, but transferring their force to
+the final instrument was an INFERENCE -- and it is the precise objection SWEEP11 answers. ***
 
 Five read arms became ACCEPT; `CRIME_RE_TEX` became a latched decline on its own bit.
 
@@ -185,13 +207,31 @@ FAVOUR", FROM MEMORY RATHER THAN FROM THE FILES.  Corrected before this packet s
     deepseek    NOT ESTABLISHED   cannot rank without alphaswpctxreg's severity
     minimax     NOT YET           "ready to elevate once the witness actually RUNS"
 
-**But the count is the least informative part, and you should not adjudicate on it.  All three
-NOT-YET seats give ONE reason and it is the same reason: the witness has not been RUN.  None
-disputes the severity or the mechanism.**  So the panel did not split on the ordering -- it stated
-unanimously the CONDITION under which the ordering flips, and that condition is exactly what
-opus5's hold on this row is for.  minimax put the trap best: *"the previous ranking was honest;
-flipping it on the strength of 'constructible in principle' is the same shape of error in
-reverse."*
+*** I WROTE THAT ALL THREE DISSENTS GIVE ONE REASON.  THEY DO NOT.  Refuted by a later audit and
+then verified by me against the three answers themselves. ***
+
+    minimax   THE WITNESS HAS NOT RUN            "ready to elevate once the witness actually runs"
+    glm       BOTH                               the witness has not run, AND "I cannot see the
+                                                 other five rows' defects, so I cannot compare
+                                                 severities -- five one-line descriptions would
+                                                 settle it"
+    deepseek  THE COMPARATOR, NOT THE WITNESS    "cannot rank without that fact.  Need one fact:
+                                                 relative severity/impact of alphaswpctxreg"
+
+**deepseek's reason is not the witness at all.**  So there is no unanimous condition, and
+*"promote it once the witness runs red-then-green"* is **MY PROPOSED ORDERING RULE, not the panel's
+finding.**  Two of the three additionally want the comparator's severity, which a witness run does
+not supply.
+
+> **AND THE COMPARATOR IS NOW KNOWN, which changes the question you are being asked.**
+> `alphaswpctxreg` shipped as `#514` and its own six-seat panel said **keep `med`**.  So the
+> ranking is no longer high-versus-unknown; it is high-versus-med with both rows characterised.
+> *An earlier line in this packet called `alphaswpctxreg` "HIGH-adjacent", which obscures exactly
+> the comparator these seats asked for.*
+
+**What survives unchanged is minimax's warning, and it is the reason I am not ruling on this
+myself:** *"the previous ranking was honest; flipping it on the strength of 'constructible in
+principle' is the same shape of error in reverse."*
 
 **So the question for you is narrower than "which row first": is CONDITIONAL promotion -- first
 once the witness runs red-then-green, not before -- the right disposition, or does the med -> high
@@ -525,3 +565,94 @@ treating *"the manual documents behaviour X"* as evidence that *"a guest will do
 different claims -- the same conflation the `alphatbinegsel` panel caught me making about
 *"during ordinary operation"*. **Which of the seven table rows above is doing work it has not
 earned?**
+
+---
+
+## X. *** THIS PACKET WAS AUDITED BY A SEAT AND ITS VERDICT WAS "NOT READY FOR SOLE-SOURCE
+## ADJUDICATION".  EVERY FINDING IS LISTED HERE WITH ITS DISPOSITION. ***
+
+`regress/artifacts/adjudication20260909/codex_audit_20260908.txt`, 9,840 b.  I fired it precisely
+because this packet is the only thing you will see, so a wrong claim in it produces a wrong ruling
+with nothing downstream to catch it.  **It found eight substantive defects and I have corrected
+three in place and disclosed the rest.  Read this section before ruling on anything above.**
+
+### CORRECTED IN PLACE (the text above now carries the correction)
+
+1. **The opening assurance promoted a SEAT FINDING into independent verification.**  It claimed the
+   first audit had verified what the second could not read.  The first audit **explicitly left the
+   seat census, ledger history, decision counts and unread-review history unsupported.**  Withdrawn
+   at the top of this packet.
+2. **B1 converted a genuine ordering split into a unanimity that does not exist.**  I wrote that all
+   three dissenting seats give one reason -- the witness has not run.  **deepseek's reason is the
+   COMPARATOR's severity and not the witness at all**, and glm gives both.  So the *"promote it once
+   the witness runs"* rule is MINE, not the panel's.  Verified against the three answers before
+   correcting.
+3. **A1 stated the wrong `#513` endpoint.**  "NOT YET COMMITTED" and "pass 4 not yet fired" were
+   both false -- `e302c98` shipped and pass 4 answered -- and SWEEP11, the closing measurement, was
+   omitted entirely.  The build-asan STALE note was also out of date.
+
+### DISCLOSED, NOT CORRECTED -- and the first is the one I could not have found myself
+
+4. *** THREE QUESTIONS EXPRESSLY RESERVED FOR YOU ARE MISSING FROM THIS DOCKET. ***  Their ledger
+   entries still await the flagship seats and this packet does not carry them:
+
+   * **`sgimtedepth4dead` (`fable_queue.md` S7g)** -- the sibling-coverage disagreement resolved by
+     adopting the cheaper reading, the cross-session detector dependency, the code-intent warrant.
+   * **`armbfxwidth32` (S7h)** -- the disclosed definedness escapes, whether the sanitizer lane was
+     owed, and the disputed exclusion of BFI.
+   * **`m88kexcdetectorl2` (S7k)** -- how much remeasurement an added row owes.
+   * and **section Y names `lcaconfbus1kill` without carrying its own held detector/addition
+     question**, or the later review that revised its premises.
+
+   **PLEASE READ `tools/pipeline/fable_queue.md` ALONGSIDE THIS PACKET.**  It is the complete
+   docket; this file is a summary of part of it, and I did not know how much it was leaving out.
+   *This is the answer to the one question I asked the auditor that I could not ask myself -- what
+   is missing that is not in the "what I did not do" section -- and it found four things.*
+
+5. **`sgirandomcolour` is a SECOND author-origin severity raise and B3 does not say so.**  The
+   ledger places *"SEVERITY RAISED MED -> HIGH"* inside a **MAIN-LOOP RECORD dated 2026-09-07**,
+   outside the seat-answer list, and the later design panel does not supply the attribution.
+   **Treat B3's HIGH as MY JUDGMENT, dated 7 September**, exactly as `alphatbinegsel`'s raise is
+   labelled.  My section E claim of "no other raise" was true only of 8 September and does not
+   repair B3.
+6. **B3 omits the disagreement behind the design it adopts.**  The 5/5 agreement is about
+   *two-round scope*; on the design itself **glm recommended candidate (a) and the packet adopts
+   (b)** without labelling that an author choice among differing recommendations.  Its "NEVER an
+   early return" also reads as an established requirement when the common tail's absence was
+   verified later.
+7. **B3's readiness claim omits a characterised observation problem.**  "No mode validation"
+   supports mode REACHABILITY; it does not establish a discriminating WITNESS.  An earlier oracle
+   review records that the stepped probe disables write-watchpoint observation, and unchanged
+   destination contents do not prove no write occurred.  **Source-derived reachability and a
+   validated observation method are different claims and I ran them together.**
+8. **A1 omits the strongest counterargument to its own TEX warrant** -- grok's point that the
+   existing `tex accept` WRITE oracle already pins part of what the decline is argued to protect.
+9. **Section Z's "18 of 21" has no stated derivation and the grouping is wrong.**  The cited audit
+   table has **27 entries, of which 23 explicitly carry FG/FR**.  A different grouping needs an
+   explicit membership list, and I gave none.
+10. *** AND SECTION Z CONFLATES A FILE WITH ITS EDIT, WHICH MATTERS BECAUSE THE WHOLE POINT OF THAT
+    SECTION IS SNAPSHOT DISCIPLINE. ***  I wrote that section D's green rows were computed from
+    *"a file that is not in the commit"*.  **`regress/sgi_de_primop_probe.py` IS in the `e302c98`
+    tree; what was excluded is its UNSTAGED EDIT.**  The substance stands -- D read unstaged
+    additions and the 129 staged files were invisible to it -- but the sentence as written is
+    wrong, and Z2 also omits the seat's actual cheaper alternative (an agreement guard plus the D
+    correction, with stated limits).
+11. **Section D promotes observed outcomes into categorical capability claims.**  *"The difference
+    is pass 3's Q3"* and *"will not construct an edit"* have a direct counterexample in the packet's
+    own A2.  Read timing does not establish the internal cause of a refusal.  D's opening "one
+    refusal" also contradicts D2/D3, and its *"agy NOT FIRED"* contradicts B1's recorded agy
+    assessment.
+12. **Bare counts still needing derivers:** C's *"zero decisions"* (author-reported, no census),
+    A1's 31/112, B3's 12/16, B5's 18/64 and 30/64.  **B2's "eight precedents" is an actual
+    overcount** -- three of the eight are inside `#if 0`, leaving five compiled and four in
+    PALcode.  *That one is already corrected in the `#514` record; it does not overturn the
+    register defect.*
+
+### WHAT THE AUDIT FOUND CLEAN
+
+The explicit M13 prediction label, the M8 withdrawal, section C's 468 arithmetic, and B6's finding
+about the generic device-failure dispatcher.
+
+> **THE HONEST SUMMARY: this packet is a useful summary and it is NOT a complete docket.  Rule from
+> it together with `fable_queue.md`, and treat every number in it as author-reported unless it
+> names its deriver.**

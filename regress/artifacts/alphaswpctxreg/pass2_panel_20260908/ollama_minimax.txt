@@ -1,0 +1,83 @@
+**VERDICT:** Fix is correct as argued (one-identifier change, `r[A0]` → `r[V0]`); the three-value oracle distinguishes the three cases it claims to distinguish; the witness measurements (2/4 → 4/4) are accepted as given. The argument-by-construction in Q1 is acceptable for the specific `v0 = a0` mutant it names. The probe has one real coverage gap (first-call `v0` not asserted), and the attribution row carries a model-dependent assumption (handler preserves `a0`). Round is substantially complete pending the `alphatbinegsel` re-baseline noted in Q5. Three premises below are not checkable from the packet and are flagged as such.
+
+---
+
+## Premise audit (READ = in packet, REASONED = my inference)
+
+- **[READ]** Comment at `:250` says "v0"; code at `:251` writes `ALPHA_A0`. Self-contradiction confirmed.
+- **[READ]** `alpha_pal_swpctx` declares `v0 __asm("$0")` as OUTPUT and lists `a0` as CLOBBER (per the inline ABI wrapper excerpt).
+- **[NOT CHECKABLE FROM PACKET]** "`ALPHA_A0` is the only `r[ALPHA_A0] =` in this file" — this is a source-tree claim. If a second site exists and has the same defect, the fix is incomplete. Settled by `grep -n 'r\[ALPHA_A0\] *=' src/cpus/cpu_alpha_palcode.c`.
+- **[NOT CHECKABLE FROM PACKET]** "every compiled return here uses `ALPHA_V0`" — same: source-tree claim. Settled by reading the function.
+- **[NOT CHECKABLE FROM PACKET, REASONED PLAUSIBLE]** "the architecture marks `a0` UNPREDICTABLE" — this is an Alpha Architecture Reference Manual claim about PAL_OSF1_swpctx (call_pal 0x30). I believe it is correct from prior knowledge of the Alpha PAL conventions, but a seat with the ARM in hand should confirm. **This premise matters for Q4 below.**
+- **[READ]** Probe's three oracle values are distinct (`assert len({C,N,S}) == 3`), all addresses are inside RAM (`< 64 MB`), and the `LDAH(V0, 0x00ab)` encoding actually produces `0x00ab0000` (I re-checked the Alpha `LDAH` semantics: `Ra ← sext(disp) << 16 + Rb`, with `Rb=0`, `disp=0x00ab` → `0x00ab0000`). The sentinel is correctly built.
+- **[READ]** Probe uses the SAME script pre- and post-fix. Oracle polarity is consistent with the witness ladder (asserts correct behaviour → RED pre, GREEN post).
+
+---
+
+## Q1 — The vacuity floor, clause (d)
+
+**Acceptable as stated, with one caveat.** The argument-by-construction is sound for the specific mutant it names (`r[V0] = cpu->cd.alpha.r[ALPHA_A0]`, i.e., "return the incoming context"): with `a0 = N` going into the second call, this mutant produces `v0 == N`, which fails the row that demands `v0 == C`. The oracle's three distinct values are what makes this work — they are not decorative, they are load-bearing for the "common misrepair" case.
+
+**Caveat:** "by construction" covers the mutant the brief names, not the universe of conceivable edits. A built `v0 = a0` mutant + a measured score would be empirical confirmation. Whether that is *owed* depends on the testing standard the project applies. The brief is honest about the distinction (argument vs. measurement); I would not block the round on this.
+
+A weaker but related mutant the brief does not name: `r[V0] = cpu->cd.alpha.r[ALPHA_A0]` *before* the `ctx = a0` assignment. This would also produce `v0 == N` on the second call (because `a0` is still `N` at that point in the function), and is likewise caught by construction. Same argument, same answer.
+
+## Q2 — Edit to product the probe would not catch
+
+**The first-call `v0` result is not asserted.** `v0_after1` is captured and feeds the `v0 read` control row (regex matched), but its value is never compared to anything. A fix that returns the old context correctly on the *second* call but returns something wrong on the *first* call would pass all four rows. For a one-line fix that does not branch on call count this is implausible, but it is a real gap on paper.
+
+Other edits the probe *would* catch, for completeness:
+- `r[V0] = r[ALPHA_A0]` (returns new context): `v0 ctx` row fails (would read `N`).
+- Restore original code: `a0 land` fails (`a0 == C`); `v0 ctx` fails (`v0 == S`).
+- Delete the line entirely: `v0 ctx` fails.
+- Write `v0` from a wrong source (e.g., a constant): `v0 ctx` fails.
+- Overwrite `v0` with `N` later in the "Load new context" block: `v0 ctx` fails.
+
+What it does *not* catch:
+- Subtle endianness / sign-extension issues in the *handler's* own internal use of `ctx` (the probe only observes the final `v0` and `a0`).
+- A fix that works under the test's specific `a0 = N` value but mishandles other `a0` values (e.g., alignment requirements the model checks). The probe does not vary `a0`.
+
+## Q3 — Edit to probe that makes it pass on the broken build
+
+**Hard to construct.** For `v0_final == C` (`0x01000000`) to hold on a build where the handler does not write `v0`, something between the `LDAH(V0, S)` seed and the second `print v0` would have to put `C` into `v0` by a path that is not the handler writing it. The instruction sequence between is `LDQ(A0, 8, T0); CALL_PAL(0x30)`. `LDQ` writes `A0`, not `V0`. `CALL_PAL` is the only thing that could touch `V0`, and on the broken build it does not. So `v0` should remain `S` after the call. Spurious pass requires either:
+- a debugger quirk that makes `step N` skip the `LDAH` (unlikely; one-step granularity is normal for these emulators);
+- a parse quirk where `re.findall(... 'print v0' ...)[-1]` picks up a value from before the second `print` (would require an earlier transcript line of the shape `print v0\n0x01000000`, which has no source);
+- the regex silently matching across an unrelated line. The pattern requires a literal `\n` followed by `0x[0-9a-f]+`; this is tight enough.
+
+The probe does have one soft parse-dependency: it assumes the debugger's `print` output is `<value>` on its own line after the command. If the model ever changes its `print` format to `print v0\nv0 = 0x...`, the regex breaks. That would *fail* the row, not pass it spuriously, so it does not buy a green on the broken build — it buys a red on both.
+
+## Q4 — The attribution control
+
+**It separates the two stated hypotheses. But it has a model-dependent assumption.**
+
+The two hypotheses:
+- Handler ran and wrote the wrong register: `a0` ends as `C` (because the handler wrote `ctx = C` into `a0`).
+- Handler never ran: `a0` ends as `N` (the value loaded by the probe before the call).
+
+The row's expectation (`a0 == N`) distinguishes these.
+
+**The assumption:** the fixed handler leaves `a0` unchanged. The brief justifies this by saying "the architecture marks `a0` UNPREDICTABLE, which permits it to remain unchanged." "Permits" is true; "does" is not guaranteed by the architecture — UNPREDICTABLE means the *caller* cannot rely on `a0`, not that the implementation will preserve it. A future "improvement" to the model that has the handler clobber `a0` (still architecturally legal) would break the `a0 land` row, *not* because `swpctx` regressed, but because the probe's attribution is now reading through a clobber. This is empirical, not architectural, and the brief should say so.
+
+A *third* explanation I considered and rejected: a register-file caching artefact where `print a0` reads a stale slot. If such a thing existed it would itself be a model bug worth surfacing; not a real concern.
+
+A subtler third explanation worth naming: if the model's swpctx path touches `a0` for some reason other than writing the old context (e.g., it uses `a0` as a scratch register inside the handler and restores it), then `a0 == N` is "handler ran and was careful with a0", which is fine for the attribution. But the *strength* of the attribution (proving the handler *wrote* the wrong register) is weakened — if on the broken build the handler writes `C` to `a0`, then restores it from a saved copy elsewhere, you could get `a0 == N` on the broken build too. I do not think this is happening — the witness shows `a0 == C` on the broken build — but the row's claim is "post-fix `a0` keeps the incoming context", which is a *correctness* claim about the handler, not just an attribution claim.
+
+## Q5 — What the round did not do
+
+Owed, as the brief notes:
+- **`alphatbinegsel` re-baseline** against the new build. [#]514 changed code generation / flushing behaviour on Alpha; any open row that depended on the prior baseline should be re-measured before being closed.
+
+Not owed for this round's scope, but worth recording:
+- **Other call counts.** Probe asserts only the second `swpctx`; first-call behaviour is exercised but not asserted (see Q2).
+- **Other PAL calls in the same file.** If `:251` was the only `r[A0] =` site (per the brief's source claim — **[NOT CHECKABLE FROM PACKET]**), then there are no sister bugs to chase in this file. If there are other `r[WRONG_REG] =` sites that the grep missed, they are out of scope for this round and a follow-up.
+- **The `:296` TODO row** ("Don't invalidate EVERYTHING!") is correctly excluded from this round per the brief; that is a separate concern about TLB flush scope on context switch.
+- **No probe for what the *guest* does with the returned `v0`.** The probe verifies the model returns the right value; it does not verify a guest program can *use* the returned context (e.g., to restore it). For a one-line ABI fix, this is acceptable scope.
+
+---
+
+**Summary of uncheckables** (the three things that need a file-reading seat):
+1. `:251` is the only `r[ALPHA_A0] =` in the file → `grep`.
+2. Every `swpctx` return in the function uses `ALPHA_V0` → read the function.
+3. Alpha ARM classifies `a0` as UNPREDICTABLE for PAL_OSF1_swpctx → consult ARM.
+
+None of these is likely to overturn the verdict; (1) and (2) would expand the fix if violated, (3) is plausibly correct from prior knowledge and would only matter if a seat chooses to challenge Q4's model-dependence note.

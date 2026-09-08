@@ -1,0 +1,121 @@
+I'll inspect the `#514` product, probe, and artifacts in `src/` first, then check the premises those six seats treated as given.Pass-1 panel notes and the actual palcode handler are next, so I can test the floor claim against the tree rather than the write-up.I'll read the pass-1 briefs, witness artifacts, and Alpha PAL docs next, then check whether the wrapper and census claims actually match the tree.Pass-1 seats and the architecture sources are next; I need to see which census and wrapper claims actually got corrected.I'll check the vacuity-floor rule, the `#507` probe, `alphatbinegsel` coupling, and whether `print` can accidentally yield `C`.**VERDICT: The one-identifier product is correct and sufficient. The witness is a real rung-3 red-then-green. The round is not complete as argued: clause (d) was misnamed, `a0 land` pins a value the architecture does not require, and the probe is blind to a hardcoded `v0 = 0x01000000`. None of that is an L2 floor breach. Do not owe a built `v0 = a0` mutant. Do not treat the `alphatbinegsel` re-baseline as a `#514` flush debt — this hunk did not touch the invalidate.**
+
+I read the handler, the wrapper, the register map, the debugger print path, both artifacts, the `#507` sibling, and the floor text in `tools/CLAUDE.md`. I did not re-run the probe (this host has no `pty.fork`). PREFIX/POSTFIX are taken as files; their hex values are internally consistent with the oracle in a way a broken parser would have to be very lucky to fake.
+
+---
+
+### Premises that do not hold as stated
+
+**1. The wrapper does not list `a0` among the clobbers.** `alpha_pal_swpctx` is:
+
+```c
+: "=r" (a0), "=r" (v0)
+: "i" (PAL_OSF1_swpctx), "0" (a0)
+: "$1", "$22", "$23", "$24", "$25", "memory"
+```
+
+Operand 0 is `$16` (a0), in-out. Operand 1 is `$0` (v0), a pure output. `"0" (a0)` ties the input to operand 0, **not** to v0. The function `return`s `v0`. The clobber list is t0 and t8–t11 plus `memory`. The comment “a0 (above)” means a0 is already an output, which GCC forbids repeating as a clobber. Same ABI conclusion; the brief’s wording is the comment, not the constraints.
+
+**2. The product comment re-freezes the census pass 1 already corrected.** After this hunk there is no `r[ALPHA_A0] =` in the file (the string survives only inside the new comment). Compiled PAL returns to v0 are five: `rdmces`, this `swpctx`, `swpipl`, `rdps`, `whami`. Three more sit in `#if 0` (`rdval`, `rdusp`, the fixup stub). `:118` is `alpha_prom_call`, not a PAL. “Every compiled return uses `ALPHA_V0`” is true *after* the fix; it was the load-bearing claim when it was false.
+
+**3. “`(d)` by construction” is a category error.** The floor’s (d) enumerates predicates that **dominate the edited lines**, plus operand-swaps from fields a **guarded body** reads. This diff is `r[ALPHA_A0]` → `r[ALPHA_V0]` on an unguarded assignment. That enumeration is empty. The special cases already written for “fix adds none” are de-fatalisation and pure deletion. A register-index substitution is neither. `v0 = a0` is a **RHS coverage** mutant, not a (d) mutant under the bound as written.
+
+**4. `#514` did not change the flush.** `:306` is still `INVALIDATE_ALL`. Coupling `alphatbinegsel` to this round as “the flush observable moved” does not follow.
+
+---
+
+### Q1. Construction is the wrong name for a right conclusion. Do not owe the binary.
+
+(a) PREFIX 2/4. Measured in the artifact. **Clears.**
+
+(b) That PREFIX **is** the verbatim reinstatement: the defect *is* the shipped identifier. **Clears.** A separate `M_revert` binary would measure the same file.
+
+(c) `live` and `v0 read` pass on both builds. They are identity rows for the session and for `print`, not for PAL dispatch. A comment-only write (handler still switches, no v0 store) was not run; it would be 3/4 (`v0 ctx` red, `a0 land` green). That is enough for a four-row harness. **Clears, inferred not measured.**
+
+**(d) does not apply to this hunk.** If you keep calling `v0 = a0` “(d)”, you have extended the rule and then the project’s own lesson from `#461` says **measure it** — (b) does not imply (d), and arguments about what a probe would do have been wrong.
+
+If you classify it as coverage — which is what it is — you do **not** owe the binary, and the two artifacts already close the wiring hazard that would have made the arithmetic a lie:
+
+| observation | PREFIX | POSTFIX | what it proves |
+|---|---|---|---|
+| `v0 ctx` | `0xab0000` (S) | `0x1000000` (C) | the row is the **second** PAL’s v0, not call 1’s (`I = 0x10100`) |
+| `a0 land` | `0x1000000` (C) | `0x1010000` (N) | the second `LDQ` of N actually happens (POSTFIX preserves a0) |
+
+A `r[ALPHA_V0] = a0` mutant therefore produces N on the observation this row already reads, and N ≠ C. That is arithmetic **on a wiring the artifacts already pinned**. It is not a floor discharge, and it is not a reason to hold the round.
+
+The three-value oracle is still doing real work: a row that only asserted “v0 changed” would pass `v0 = a0`. That is why C/N/S exists. It is coverage **above** an empty (d), not (d) itself.
+
+---
+
+### Q2. Yes. `cpu->cd.alpha.r[ALPHA_V0] = 0x01000000;`
+
+That edit is this hunk, it looks like a fix, and this probe goes 4/4 on it.
+
+- Second call: v0 becomes C, which is what `v0 ctx` wants.
+- a0 stays N, which is what `a0 land` wants.
+- `live` / `v0 read` are unaffected.
+
+The row that should have caught it is already half-written. After call 1 the probe **prints v0 and throws the value away**. On a correct handler that value is the init PCBB `0x10100` (`cpu_alpha.c:107`). On the hardcoded-C edit it is `0x01000000`. A row `v0 after1 == 0x10100` reddens that mutant and also reddens `v0 = a0` on the first call (a0 is C, so v0 becomes C, not `0x10100`).
+
+Same miss, same missing row: `r[ALPHA_V0] = cpu->cd.alpha.r[ALPHA_A0] - 0x10000` (second call: N − 0x10000 = C).
+
+Caught, for the record:
+
+- revert to `ALPHA_A0` — PREFIX
+- `r[ALPHA_V0] = a0` or the store moved after `ctx = a0` — `v0 ctx` gets N
+- delete the store — `v0 ctx` gets S
+- write a different register — same as delete
+
+**False red, not a miss:** also writing `r[ALPHA_A0] = ctx` (legal UNPREDICTABLE, and a more faithful PAL). `a0 land` wants N and would fail. That is Q4 leaking into coverage.
+
+PCB save/load, PTBR, flags, and `:306` are outside this product. The probe is silent on them; it should be.
+
+---
+
+### Q3. Probe edits, yes. Accidental `v0 == C` on this script, no — and PREFIX already kills the dangerous mix-up.
+
+Edits that 4/4 the broken build:
+
+- seed `SENT = CTX_C` (or any `S == C`). Broken PAL leaves v0 untouched; v0 is then C; `v0 ctx` goes green. This is the vacuity the seed exists to prevent, inverted.
+- change `v0 ctx`’s want to `0xab0000`.
+- change `a0 land`’s want to `CTX_C`.
+
+**On the script as committed, `v0 == 0x01000000` without this PAL writing v0 is not reachable.** Call 1 on the broken handler does not touch v0 (init is 0). The sentinel is `LDAH`’d in the same `step N` as the second PAL. PREFIX measured `v0 ctx = 0xab0000`. The leftover after call 1 is 0, not C.
+
+The mix-up that *would* have produced C on the broken build is scoring a0 as v0: PREFIX a0 **is** C. PREFIX `v0 ctx = 0xab0000` refutes that. They used `allv0[-1]`, not `a0_final`, and the artifact agrees.
+
+`debugger_parse_expression` returns `PARSE_NUMBER` on success, so `print v0` emits a bare `0x…` line. The regex matches that path. (If it had taken `PARSE_SETTINGS` / `v0 = 0x…`, PREFIX would have been `absent`. It was not.)
+
+---
+
+### Q4. The PREFIX *reading* does the job. The scored row does something else, and that something has a third explanation.
+
+**PREFIX `a0 == C` ∧ `v0 == S`, on the shipped binary, does separate “second PAL wrote a0 and not v0” from “second PAL never ran after a correct load of N”.** Never-ran-after-LDQ-N is `a0 == N`, `v0 == S`. Leftover from call 1 on the **broken** handler is `a0 == 0x10100` (the init PCBB), not C. So PREFIX `a0 == C` is not first-call leftover.
+
+POSTFIX `a0 == N` on the same guest program closes the remaining fork “second LDQ loaded C and PAL did not run”: that program’s displacement-8 load produces N when PAL does not clobber a0.
+
+**What the brief overclaims is the row as wired.** `a0 land` asserts `want == N` on every run, including the post-fix 4/4. That is not attribution. Attribution is a PREFIX-only diagnostic. When the row is green it means “a0 still holds the incoming N”, which is:
+
+- the project’s stated policy at the bottom of this file (“easier to just leave the registers as they are”), **and**
+- “the handler never ran”, **and**
+- the architecture’s UNPREDICTABLE-may-remain-unchanged.
+
+A third explanation of a **green** `a0 land` is therefore “PAL never executed.” The defect row is what breaks that tie (`v0 == C` vs `v0 == S`). The brief’s “one observation, two hypotheses” is true of PREFIX `a0 == C`, not of the 4/4.
+
+The cost of scoring `want == N`: a legal PAL that clobbers a0 to C, to 0, or to anything else — including “write both registers,” which an earlier design brief on this same handler already named — fails `a0 land` while implementing the ABI the round claims to pin. That is a probe over-constraint, not a product miss.
+
+---
+
+### Q5. Write three things down. Do not open a second site.
+
+**Already named, and still right as hygiene rather than as a `#514` observable:** build any `alphatbinegsel` witness on HEAD. This hunk does not change `tbi`, does not change `INVALIDATE_ALL`, and the two existing swpctx probes (`alpha_harness_probe.py`, `alpha_pfnoffset_probe.py`) consume t2/t4 after `call_pal 0x30`, not a0/v0. They do not need a re-baseline for this identifier. `:296` remains a separate row; a future narrowing of that flush is what would actually move a tbi witness.
+
+**Not written down, and owed as record rather than as code:**
+
+1. **Clause (d) enumerated the empty set on this diff.** Record that, so the next one-identifier round does not inherit “by construction” as a floor discharge. `v0 = a0` stays coverage; the three-value oracle is the coverage.
+2. **Hardcoded `v0 = 0x01000000` is a product edit this probe will not catch.** File it, or add the first-call row against `0x10100`. I would file: the contract is “old context in v0”, the planted C is one old context, and chasing every RHS that equals C for this one pair is the unbounded shape. Name the hole.
+3. **`a0 land` is a PREFIX diagnostic scored as a post-fix requirement.** Either drop it from the 4/4 (keep it as a printed PREFIX note) or state in the probe that it pins this file’s leave-registers policy, not Tru64 PAL §16.2.9.
+
+**Not owed:** an a0 clobber, a t0/t8–t11 clobber, merging `:296`, merging `alphactxfail`, a booting-OS consumer of v0, a gate script (no `gate_alpha` exists; the probe is already in `check_probe_wiring.py`).
+
+The product hunk can stand. The round’s write-up cannot stand as “floor cleared including (d) by construction.”

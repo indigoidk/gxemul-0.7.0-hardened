@@ -1,0 +1,41 @@
+**VERDICT: The fix is sound on the packet's own showing, and Q1's clause (d) is discharged by inspection, not by argument — no built mutant is owed. But the shipped comment engraves four premises the packet never exhibits (one of them carries the "correct AND sufficient" claim), the probe leaves the entire load-new-context/invalidate tail of `swpctx` unwitnessed, and the `a0 land` row scores as required a behavior the comment itself says is not owed.**
+
+## Premise audit (things I could and could not settle)
+
+Settled from the packet, READ:
+
+- The defect is real and the fix is internally consistent: comment says v0, code wrote a0 (`:250-251`), and the fixed store still executes **before** the `/* Load new context: */` block, so the value returned is the pre-switch `ctx`. The comment's `:251` self-reference matches the hunk arithmetic (`@@ -248,7 @@`, minus-line is old line 251).
+- The witness is self-consistent: the reported values (pre: a0=0x1000000, v0=0xab0000; post: a0=0x1010000, v0=0x1000000) are exactly the oracle constants, and I recomputed the row comparisons from the inlined probe — pre-fix scores 2/4 (a0 land and v0 ctx fail), post-fix 4/4, matching the artifact headers. The encoder also checks out: `LDAH(t0,0x102)` builds SCRATCH exactly; the sentinel seed is the instruction immediately before the second call.
+
+Not settleable from the packet — each is named, with the single fact that settles it:
+
+1. **"`:251` was the only `r[ALPHA_A0] =` in this file; every compiled return uses ALPHA_V0."** Not checkable — I have one hunk. Settles with: the grep result over `cpu_alpha_palcode.c`. This premise *is* the "sufficiency" half of the round's claim; if false, the fix is incomplete.
+2. **"the `a0` at the `ctx = a0` below is the LOCAL captured at `:165`."** Not checkable — the function's entry and the case's tail are unexhibited. Settles with: the entry lines showing the capture. This is the premise on which "ordering is unaffected" rests, and it is still unshown even though pass-1 seats flagged unexhibited premises.
+3. **"the architecture marks a0 UNPREDICTABLE."** Uncited. Settles with: the manual's register-effects entry for `swpctx`. Note the wrapper's clobber list independently supports "a0 not reliable," so the *no-a0-write* conclusion has one exhibited leg and one asserted leg — but the v0 conclusion needs neither, since the emulator's own comment fixes v0 as the return register.
+4. **Artifact provenance.** I cannot tie PREFIX to the pre-fix blob (`7c66cd0`) or POSTFIX to the fixed blob from the packet. Settles with: the committed `.out` files and a recorded commit hash per artifact.
+
+## Q1 — the floor
+
+**(d) by construction is acceptable here, and I'd push back on calling it an argument.** READ: the row is a constant equality, `v0_final` against `"0x%x" % CTX_C`; the three oracle constants are pairwise distinct and the probe *asserts* their distinctness; both sides use the same formatter, so no hex-width accident; and every other row is value-blind with all parse failures failing RED (`printed` returns `"absent"`, which fails every comparison). The only route to GREEN is the parsed value equaling C exactly. Of the three oracle cells, S is measured (2/4 pre-fix — the handler-never-writes-v0 world) and C is measured (4/4); the N cell needs nothing but `N ≠ C`. A built `v0 = a0` mutant would add only "the probe runs on a v0-writing build," and runnability is already evidenced twice. **A mutant is owed when the row's predicate could be satisfied by a wrong repair ("v0 changed"); this row's predicate cannot be.** The round owes one sentence recording that discharge, so pass 3 doesn't re-litigate. Caveat on scope: this discharges wrong-repair vacuity for the *return-value* contract only — see Q2.
+
+## Q2 — coverage
+
+**Concrete uncaptured edit:** break the `/* Load new context: */` block — e.g., store the old context back instead of the incoming a0, or corrupt the `pcb.apcb_*` loads visible in the hunk context. Since the v0 store reads `cpu->cd.alpha.ctx` *before* that block runs, v0 still equals C, a0 still equals N, and the probe goes 4/4 GREEN with swpctx's primary effect destroyed. The row that should have caught it: a **third** `swpctx` call asserting the next returned old context is N — i.e., "the switch took" — or any observation of a PCB field loaded from N. The `:296` invalidate region (the deferred TODO) is likewise unwitnessed; the round should write down that this probe's coverage is the return register only.
+
+## Q3 — accidental pass
+
+**No reachable accident.** READ: v0 is forced to S immediately before the second call, and between that seed and the final `print v0` only the handler can write v0 — no guest instruction in between targets it. So v0 = C requires the handler to have written exactly C; the N-repair fails. The only residual path is a step desync that skips the seed **plus** a machine whose boot-time v0 (pre-fix) or initial ctx (post-fix, call 1's write) happens to equal the magic 0x01000000 — two independent coincidences, and post-fix a0 = N (the LDQ's load) corroborates that the sequence did not desync. All regex/format failures fail RED, so parsing weirdness cannot manufacture a GREEN.
+
+## Q4 — attribution
+
+The row does the job, but only as the **pair** of runs. On the pre-fix run alone, a0 = C proves "something in the handler wrote old-ctx to a0," but from one hunk I cannot exclude a stray a0-writer elsewhere in the case. What closes that is the differential: exactly one identifier changed and a0 flipped C→N — a stray writer would have kept a0 = C post-fix. REASONED: the prefix/postfix pair, not the row alone, pins the changed line as the sole a0-writer. "Handler never ran" is excluded pre-fix because the program set a0 = N before the call (T0 is rebuilt *before* the LDQ, so even a call-1 clobber of t0 can't misroute the load — READ from the instruction order). Note the polarity carefully: on a *fixed* build where the handler never ran, `a0 land` would PASS (a0 = N) and only `v0 ctx` (v0 = S) catches it — the docstring is right about the values but this row alone does not catch never-ran. Third explanation considered and closed: post-fix a0 = N is indistinguishable from "kept" vs. "deliberately written" — and harmless, since both are conformant per the wrapper's clobber list. **The real defect in this row is forward-looking: it scores `a0 == N` as required while the product comment says a0 is UNPREDICTABLE and "nothing further owed."** A later conformant change that clobbers a0 false-REDs this witness. The round must either mark it diagnostic-only (printed, unscored) or write down that it deliberately pins this build's a0 behavior.
+
+## Q5 — what's owed and unwritten
+
+1. Verification of the four comment premises above — they are now engraved in a shipped comment; if any is false, the comment is itself a defect.
+2. The coverage boundary statement: the load/invalidate tail of the `swpctx` case (including `:296`) has no witness; the TODO row, when taken up, needs its own.
+3. The `a0 land` contract-vs-diagnostic decision (Q4) — the round's own premises conflict with its probe here.
+4. The `alphatinegsel` re-baseline — already acknowledged; I have nothing to add.
+5. Optionally, the third-call row if the panel wants the context *switch* witnessed at all.
+
+Pass-1 unanimity is not evidence and I have not leaned on it; everything above rests on the inlined diff and probe. Severity `med`: no basis in the packet to disturb it.

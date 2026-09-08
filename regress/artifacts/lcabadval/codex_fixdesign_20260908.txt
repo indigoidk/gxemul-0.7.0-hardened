@@ -1,0 +1,70 @@
+**VERDICT: preserve masked register state; validate `W_MASK` fields; remove the `W_BASE` magic-value whitelists. Leave TEN’s two-state policy alone, but `TB_ENA`’s reserved-bit guard still needs correction. This fixes register handling, not DMA translation.**
+
+The panel’s findings need three qualifications:
+
+- **`TB_ENA`: “0/2 rejected” is correct only for normalized TEN values.** Its other bits are `RES`, type `X`, so the existing operand guard still rejects writes the hardware ignores. Leaving the entire arm unchanged would contradict Q2. [HRM Table 6-13](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/21066_66a_hrm.txt:10439)
+- **All six configuration fields are WO, not RW.** The manual makes reads of IOC write-only registers unpredictable. Preserving readback is a useful existing emulator convention, not a hardware requirement. `RES` alone does not mean ignored: the decisive evidence is each register table’s **type `X`**, interpreted through the conventions. [HRM conventions](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/21066_66a_hrm.txt:979)
+- **`IOC_CONF` has four representable field encodings.** Calling these four supported PCI operating modes goes beyond the evidence: the HRM also requires compliance with PCI configuration-cycle encoding restrictions. It does explicitly route both CFG bits to PCI address bits. [Local restriction](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/21066_66a_hrm.txt:9224), [original HRM, Table 6-1](https://www.zx.net.nz/mirror/download.majix.org/dec/21066_66a_hrm.pdf)
+
+The remaining numerical premises check out. Table 6-6 contains exactly 13 mask encodings and explicitly excludes other encodings. Enumerating all 4,096 field values confirms the shifted-field predicate matches those 13 exactly. With the **nonzero, enabled** accepted bases fixed, natural alignment permits four sizes for window 0 and eleven for window 1; those combinations do not overlap. Thus **12/13** describes rejection across the register’s supported encodings; among configurations compatible with those fixed bases, the counts are **3/4** and **10/11**. The disabled zero base is a separate case. [HRM Table 6-6 and alignment rule](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/21066_66a_hrm.txt:9577)
+
+For **Q1 and Q2**, I recommend the following. All six arms already have backing fields and read handlers; retain them.
+
+| Arm | Mask applied before validation/storage | Disposition and reason |
+|---|---|---|
+| `IOC_CONF` | `0x3ULL` | **Accept and store** both bits. Announce once when bit 1 requests behavior the model does not implement. |
+| `IOC_TB_ENA` | `0x80ULL` (`IOC_TB_ENA_TEN`) | **Keep accepting and storing both TEN states.** Ignore RES bits; the rejection guard becomes unnecessary. |
+| `IOC_W_BASE0` | `0x3fff00000ULL` | **Accept and store** the defined base, SG and WEN fields. Preserve existing readback; remove the magic-value whitelist. |
+| `IOC_W_MASK0` | `0xfff00000ULL` | **Accept and store** all 13 supported fields. Decline unsupported fields with a once-only announcement, preserving previous state. |
+| `IOC_W_BASE1` | `0x3fff00000ULL` | **Accept and store**, as for base 0. In particular, zero must work: initialization explicitly requires it. |
+| `IOC_W_MASK1` | `0xfff00000ULL` | **Accept and store** all 13 supported fields; decline unsupported fields once, preserving previous state. |
+| `default` | No universal register mask | **Decline writes with a once-only announcement; return zero on reads with a separate announcement.** Consume the access successfully. Do not manufacture generic backing storage for unknown offsets. |
+
+The base mask preserves `<33:20>`: WEN, SG and the twelve address bits. The manual supplies a **parameterized definition**, rather than a list of accepted numbers: window address, translation mode, enable, alignment and non-overlap. That is evidence for storing these fields; it is not evidence that every resulting window configuration is valid. [HRM Table 6-16](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/21066_66a_hrm.txt:10533)
+
+I would not add rejection based on the currently paired registers to this storage-only repair. That would introduce programming-order behavior, including handling disabled windows and intermediate configurations, which the current model does not implement. Document the alignment/non-overlap requirements and announce once, when a window is enabled, that translation remains unimplemented. Both base registers must accept zero independently of their current masks. [Initialization requirement](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/21066_66a_hrm.txt:10777)
+
+For masks, the actual validation is:
+
+```c
+uint64_t value = idata & 0xfff00000ULL;
+uint64_t field = value >> 20;
+int supported = (field & (field + 1)) == 0;
+```
+
+**The panel’s `field = idata >> 20` is still incomplete:** it retains reserved bits above bit 31. Mask first, or use `(idata >> 20) & 0xfff`. Store `value` only after validation succeeds. Otherwise, replacing `exit()` with “declined” while retaining the upstream assignment would falsely report rejection after changing state.
+
+For **Q3**, the closest analogue for the resulting state behavior is **Galileo’s address-decode registers**: they store writes, return stored values, print TODO diagnostics, and do not use those values to reconfigure address decoding. That transfers directly to LCA’s window registers. Its unbounded logging should not transfer. [dev_gt.c](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_gt.c:107)
+
+The closest analogue for a **mask-value check** is Footbridge’s `SDRAM_BA_MASK`: an enumerated set, with an unsupported value printing a diagnostic and continuing. Its discard behavior does not establish the right LCA policy because it lacks equivalent readback storage. [dev_footbridge.c](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c:709)
+
+The same-file comparison is stronger:
+
+- `W_T_BASE0` and `W_T_BASE1` already accept, store and return values despite unimplemented translation.
+- `TBIA` deliberately ignores an operation.
+- The base/HAE arm ignores accesses.
+- The PCI configuration decoder’s `dev >= 21` fallback establishes nontermination, but does not establish register-storage semantics.
+
+These are distinct precedents; the translated-base siblings support preserving storage for the six named registers. [dev_lca.c](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:303)
+
+My marker census excluded comments and joined adjacent C string literals. Across `src/devices/**/*.c`, **`(once)` occurs at 32 diagnostic sites**: GD-ROM 11, PCC2 4, SGI RE 12, SH4 3, WDC 2. It is a plurality among 67 parenthesized once/suppression-marker occurrences; the runner-up is `(once per offset)` at 12. Use bounded, per-device latches: separate registers/reasons, and separate default-read/default-write latches. Announcements must accurately distinguish **stored but unimplemented** from **declined**.
+
+For **Q4**, the regression contract should assert state, not just survival:
+
+| Regression property | Required observable after the repair |
+|---|---|
+| Accepted write persists | The corresponding backing field **and existing readback** equal the normalized new value, distinct from the previous value. |
+| Both masks support the documented domain | Every Table 6-6 encoding is retained independently in each mask register. |
+| Unsupported mask is declined | Previous mask remains unchanged; repeated occurrences produce exactly one announcement for that register/reason. |
+| Reserved bits are ignored | Low and high RES-bit variations yield identical normalized state and no unsupported-value announcement. |
+| Base 1 accepts initialization | After establishing nonzero state, writing zero leaves `window_base_1 == 0`; testing only its zero-initialized state would miss discarded writes. |
+| Base flags retain their width | SG and WEN survive storage/readback; no 32-bit truncation. |
+| Default handles both directions | Writes preserve named-register state; reads return zero; each direction continues and obeys its announcement latch. |
+
+Use quadword accesses: §6.4 explicitly excludes longwords. [HRM access requirement](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/21066_66a_hrm.txt:10175)
+
+These observations establish **register storage**. They cannot establish window translation: the fork references the window/TLB fields only for storage/readback. `IOC_CONF` alone has a functional consumer, using bit 0; its nonzero-bus path remains unimplemented and terminating. Accepting bit 1 therefore does not complete PCI configuration-cycle emulation. [IOC_CONF consumer](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:121)
+
+For **Q5: static reachability is yes, for privileged guest CPU accesses on unmodified `-E alpha -e alphabook1`.** That subtype installs LCA, whose initialization registers the IOC handler; CPU accesses are not gated by functioning DMA or by these window registers. The inspected Alpha memory path can dispatch accesses to it. This establishes source reachability, not evidence that an existing OS boot performs a particular rejected write. [Machine installation](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/machines/machine_alpha.c:57), [IOC registration](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:401)
+
+I inspected the supplied harness but did not execute or extend it. I can provide the defensive design and regression assertions above, but cannot supply the guest instruction or debugger sequence for reproducing host-process termination.

@@ -250,15 +250,22 @@ Make sure they are correct, as documented in the Manual.
 		/*  Return old context in v0.  */
 		/*  #514: was ALPHA_A0, contradicting the comment directly above and the
 		    third-party ABI wrapper.  `alpha_pal_swpctx' (alpha_cpu.h) declares
-		    `v0 __asm("$0")' as an OUTPUT and lists a0 as CLOBBERED, so a correct
-		    caller reads the result from v0 and may not rely on a0 -- the model was
-		    publishing into the register the caller is told to discard and leaving
-		    untouched the one it reads.  `:251' was the only `r[ALPHA_A0] =' in this
-		    file; every compiled return here uses ALPHA_V0.  No a0 write is added:
-		    the architecture marks a0 UNPREDICTABLE, which permits it to remain
-		    unchanged, so there is nothing further owed.  Ordering is unaffected --
-		    `a0' at the `ctx = a0' below is the LOCAL captured at function entry
-		    (`:165'), not a live register read, so this store cannot perturb it.  */
+		    `v0 __asm("$0")' as an OUTPUT, so a correct caller reads the result
+		    from v0.  a0 is NOT in that asm's clobber list ($1,$22..$25,memory) --
+		    it is an IN-OUT OPERAND ("=r" (a0) with input "0" (a0)), and the
+		    wrapper's own comment marks it clobbered "(above)", i.e. handled as
+		    that operand.  Either way the caller may not rely on a0, so the model
+		    was publishing into the register the caller discards and leaving
+		    untouched the one it reads.  (An earlier draft of this comment said the
+		    wrapper "lists a0 as clobbered"; a pass-2 seat read the asm and showed
+		    it does not.)  No a0 write is added: the architecture marks a0
+		    UNPREDICTABLE, which permits it to remain unchanged.  Ordering is
+		    unaffected -- `a0' at the `ctx = a0' below is the LOCAL captured at
+		    function entry (`:165'), not a live register read.  Census, corrected
+		    twice and stated as of AFTER this fix: no `r[ALPHA_A0] =' remains in the
+		    file, and the compiled PAL returns to v0 are rdmces, this swpctx,
+		    swpipl, rdps and whami -- three further v0 stores sit inside `#if 0' and
+		    `:118' is alpha_prom_call, not a PAL.  */
 		cpu->cd.alpha.r[ALPHA_V0] = cpu->cd.alpha.ctx;	/*  #514  */
 
 		/*  Load new context:  */
