@@ -10477,7 +10477,74 @@ already marked HONESTLY PARTIAL.  These make the partiality concrete.
 *Provenance worth keeping: my own sibling census for `#511` MISSED both, because it excluded
 literal `1` as &quot;the ordinary bitmask idiom&quot;.  `1` has the most headroom and is therefore the only
 literal that overflows at the maximum shift a `&lt; 32` loop produces -- the exclusion removed exactly
-the population it should have kept.*</span></span><span class="state st-open">open</span></span></th></tr><tr class="ph st-open"><th scope="row" class="phlabel">Assessment (initial problem)</th><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td></tr><tr class="ph st-open"><th scope="row" class="phlabel">Research (fix proposals)</th><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td></tr><tr class="ph st-open"><th scope="row" class="phlabel">Final review (flagship adjudication)</th><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td></tr><tr class="ph st-open"><th scope="row" class="phlabel">Regression testing</th><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td></tr><tr class="fixhead st-open"><th colspan="10"><span class="hline"><span class="wrap" tabindex="0"><span class="rid">bugfilereverse</span><span class="ttl">check_bugfile_sync.py is one-directional on a warrant that has since decayed: 33 OUTSTANDING_BUGS headings have no ledger row</span><span class="tip">check_bugfile_sync.py is one-directional on a warrant that has since decayed: 33 OUTSTANDING_BUGS headings have no ledger row — witness: none — note: `check_bugfile_sync.py` verifies that every OPEN LEDGER ROW is findable in OUTSTANDING_BUGS.md.  It does NOT verify the reverse, and its docstring says why:
+the population it should have kept.*
+
+*** THE TYPE CHECK EACH SITE OWED IS DONE, AND THE TWO SITES DIVERGE -- ONE REPAIR IS
+BEHAVIOUR-PRESERVING AND THE OTHER IS NOT.  A THIRD SITE WAS FOUND IN THE PROCESS, ON THE LINE
+ABOVE, THAT NEITHER SEAT NAMED. ***
+
+**`#511`&#x27;s conclusion turned on `tag` being a 32-bit `int`, so the `&amp;` happened at 32 bits and the
+bit pattern was unchanged.  That reasoning must be redone per site, and it does not give the same
+answer twice.**
+
+**(A) `dev_uninorth.c:70-71` -- THE REPAIR CHANGES BEHAVIOUR, AND FIXES A REAL DEFECT.**
+
+    :56    uint64_t idata = memory_readmax64(cpu, data, len | MEM_PCI_LITTLE_ENDIAN);
+    :70    for (dev=11; dev&lt;32; dev++)
+    :71        if (idata &amp; (1 &lt;&lt; dev))
+
+`idata` is **`uint64_t`**, and it is the same variable at both lines (one block, declared at `:56`,
+used at `:71`).  So the `&amp;` is `uint64_t &amp; int`:
+
+    OLD at dev==31:  `1 &lt;&lt; 31&#x27; is int, 0x80000000, NEGATIVE  -&gt;  sign-extends to 0xffffffff80000000
+    NEW at dev==31:  `1U &lt;&lt; 31&#x27; is unsigned, 0x80000000      -&gt;  zero-extends to 0x0000000080000000
+
+**Those masks differ, and `idata` really can carry bits 32..63** -- it comes from
+`memory_readmax64` with the access width, and is stored whole into `d-&gt;cur_addr` (a `uint64_t`).
+**So under the CURRENT code a guest write with any bit in 32..63 set matches spuriously at dev==31
+and the scan breaks on the wrong device.**  The `1U` repair does not merely remove UB there; it
+corrects a guest-visible mis-decode.
+
+*This is exactly the case the `#511` pass-2 seats warned about in the abstract -- glm, minimax,
+deepseek and the kimi substitute all raised the wider-operand sign-extension scenario -- and it is
+REAL here even though it was not real in `#511`.*
+
+**(B) `dev_v3.c:164-165` -- THE REPAIR IS BEHAVIOUR-PRESERVING.**
+
+    :161   relative_addr &amp;= 0xfffff;
+    :162   relative_addr |= ((d-&gt;lb_map0 &amp; 0xfff0) &lt;&lt; 16);
+    :164   for (dev=24; dev&lt;32; dev++)
+    :165       if (relative_addr &amp; (1 &lt;&lt; dev))
+
+`relative_addr` is `uint64_t` (the `DEVICE_ACCESS` macro), so the same sign-extension happens -- but
+by `:164` its **bits 32..63 are all ZERO**: `:161` masks to 20 bits and `:162` ORs in a value that
+cannot exceed bit 31.  The extra ones in `0xffffffff80000000` therefore meet only zeros, and the
+result is identical either way.  **Still worth repairing -- the shift itself is UB regardless of what
+the `&amp;` does with it -- but nothing observable moves.**
+
+*** (C) A THIRD SITE, ON `dev_v3.c:162` ITSELF, WHICH NEITHER SEAT NAMED AND MY OWN CENSUS ALSO
+MISSED. ***
+
+    :63    uint16_t  lb_map0;
+    :162   relative_addr |= ((d-&gt;lb_map0 &amp; 0xfff0) &lt;&lt; 16);
+
+`lb_map0` is `uint16_t`, which INTEGER-PROMOTES to `int`; `0xfff0` is an `int`; so the `&amp;` yields an
+`int` and the `&lt;&lt; 16` is a signed shift.
+
+    0xfff0 &lt;&lt; 16 = 0xfff00000 = 4293918720      INT_MAX = 2147483647      OVERFLOWS
+
+**It overflows whenever bit 15 of `lb_map0` is set** -- i.e. for half the values the register can
+hold -- and `lb_map0` is GUEST-WRITABLE at `:212` (`d-&gt;lb_map0 = idata`).  Repair: `0xfff0U`, or
+cast the operand.
+
+*My census could not see this one either, for a different reason than the `1 &lt;&lt; 31` misses: the
+shift count here is a CONSTANT (16), so a filter keyed on &quot;shifted by a VARIABLE&quot; -- which mine was
+-- excludes it by construction.  **Two filters, two blind spots, both of my own choosing.**  The
+honest form of this row remains what it already said: HONESTLY PARTIAL.*
+
+**STATUS: three verified members, none repaired.**  Each is a one-token change but (A) has a
+guest-visible consequence and therefore owes a witness of its own, while (B) and (C) are
+language-level repairs.  They are NOT bundled: (A) is a defect round, (B)/(C) are hygiene.</span></span><span class="state st-open">open</span></span></th></tr><tr class="ph st-open"><th scope="row" class="phlabel">Assessment (initial problem)</th><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td></tr><tr class="ph st-open"><th scope="row" class="phlabel">Research (fix proposals)</th><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td></tr><tr class="ph st-open"><th scope="row" class="phlabel">Final review (flagship adjudication)</th><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td></tr><tr class="ph st-open"><th scope="row" class="phlabel">Regression testing</th><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td></tr><tr class="fixhead st-open"><th colspan="10"><span class="hline"><span class="wrap" tabindex="0"><span class="rid">bugfilereverse</span><span class="ttl">check_bugfile_sync.py is one-directional on a warrant that has since decayed: 33 OUTSTANDING_BUGS headings have no ledger row</span><span class="tip">check_bugfile_sync.py is one-directional on a warrant that has since decayed: 33 OUTSTANDING_BUGS headings have no ledger row — witness: none — note: `check_bugfile_sync.py` verifies that every OPEN LEDGER ROW is findable in OUTSTANDING_BUGS.md.  It does NOT verify the reverse, and its docstring says why:
 
     &quot;The reverse direction is already clean (no OUTSTANDING_BUGS header lacks a ledger
      row), which is what the es438 fix bought.  This closes the other direction.&quot;

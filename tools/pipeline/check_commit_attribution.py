@@ -126,7 +126,14 @@ MIN_ID = 4
 #  names `carrier` in backticks still matches and is still graded.  The set is printed
 #  every run, because a check that silently skips subjects while printing a green line
 #  is the vacuity class this file's own header names.
-SUBJECT_STOPWORDS = {"carrier"}
+SUBJECT_STOPWORDS = {"carrier", "census"}   #  "census" added 2026-09-07: same measured
+                                            #  class as "carrier" -- a row id that is also
+                                            #  an ordinary English word, so a subject using
+                                            #  it as PROSE ("my sibling census had a
+                                            #  backwards filter") hard-failed against the
+                                            #  CLOSED row `census'.  Controlled both ways
+                                            #  on the day: the prose subject stops matching,
+                                            #  and a backticked `census' STILL matches.
 
 #  A commit subject claiming the work is finished.  Deliberately narrow -- "gate", "record"
 #  and "file" are progress verbs here, not closure verbs, and including them would turn every
