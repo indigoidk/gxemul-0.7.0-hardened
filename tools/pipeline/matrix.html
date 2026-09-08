@@ -13896,7 +13896,114 @@ architecture reaches `return MEMORY_ACCESS_FAILED` with no exception delivered a
 -- I told the seat that &quot;member 5 FAULT may genuinely be available here, `memory_rw`&#x27;s
 device-failure path has an ARM arm.&quot;  It replied that the claimed arm **is absent from this tree**,
 and opening the file confirms it.  **I was one brief away from spreading a false availability claim
-across the ARM queue**, having just corrected three rows for the Alpha version of it.*</span></span><span class="state st-open">open</span></span></th></tr><tr class="ph st-open"><th scope="row" class="phlabel">Assessment (initial problem)</th><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td></tr><tr class="ph st-open"><th scope="row" class="phlabel">Research (fix proposals)</th><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td></tr><tr class="ph st-open"><th scope="row" class="phlabel">Final review (flagship adjudication)</th><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td></tr><tr class="ph st-open"><th scope="row" class="phlabel">Regression testing</th><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td></tr><tr class="fixhead st-open"><th colspan="10"><span class="hline"><span class="wrap" tabindex="0"><span class="rid">lcairqstubkill</span><span class="ttl">dev_lca.c: lca_interrupt_assert/_deassert are bare fatal()+exit(1) with NO GUARD, and DEVINIT registers them as the handlers that bus_isa_init wires to BUS_ISA_IDE0|IDE1 -- so an ISA/IDE interrupt ends the host, needing no unusual value at all</span><span class="tip">dev_lca.c: lca_interrupt_assert/_deassert are bare fatal()+exit(1) with NO GUARD, and DEVINIT registers them as the handlers that bus_isa_init wires to BUS_ISA_IDE0|IDE1 -- so an ISA/IDE interrupt ends the host, needing no unusual value at all — commits: 7c2f8e4 — witness: probe:regress/lca_irqstub_probe.py -- rung 3, MEASURED 3/4 on the committed build (witness_HEAD_20260907.raw); ONE guest store to the 8042 command port ends the host. Post-fix half PENDING (no fix chosen). — note: FILED 2026-09-07.  **NOT a new discovery of the SITE** -- [[lcabadval]]&#x27;s eleven-kill census already
+across the ARM queue**, having just corrected three rows for the Alpha version of it.*
+
+*** codex: REVISE.  THE SHIFT IS RIGHT AND ALMOST EVERYTHING AROUND IT NEEDED CORRECTING --
+INCLUDING TWO PREMISES I STATED AS SETTLED. ***
+
+**CONFIRMED, with a denominator.**  `dev = (tag &gt;&gt; 11) &amp; 0x1f` is correct: `relative_addr &gt;&gt; 5`
+undoes the address expansion, so for a valid tag T and aligned register R,
+`A = (T &lt;&lt; 5) | (R &lt;&lt; 5) | 24` gives `((A &gt;&gt; 5) &amp; ~0xff) == T`, putting device bits at 15..11 of
+the recovered tag.  Validated over **4,194,304 encode/decode combinations, zero mismatches** --
+and codex labelled that an ARITHMETIC check, not an emulator test, which is the honest form.
+
+*** MY IMPLEMENT SKETCH WAS INCOMPLETE: IT DECODED `dev` AND NOT `bus`. ***  `IOC_CONF` selects
+the CYCLE FORMAT, it does not supply the bus number -- PCI address bits 23..2 come from CPU
+address bits 28..7, and only bits 1..0 come from `IOC_CONF[1:0]`.  So the minimum correction is
+
+    } else {
+        bus = (tag &gt;&gt; 16) &amp; 0xff;
+        dev = (tag &gt;&gt; 11) &amp; 0x1f;
+    }
+
+&gt; **AND THE TRAP IN THE OBVIOUS ALTERNATIVE, which I would have walked into: DO NOT CHOOSE THE
+&gt; DECODING BRANCH FROM THE EXTRACTED BUS FIELD.**  Primary-bus IDSEL bits overlap that field, and
+&gt; keeping `bus == 1` in the forwarding call **collapses every type-1 destination onto bus 1**.
+
+*** PREMISE 4 IS FALSE AS STATED, and the refutation is one function away. ***  I wrote that an
+empty-slot read returns all-ones.  `bus_pci_data_access` implements a THREE-WAY contract:
+
+    read, register 0        -&gt;  0xffffffffffffffff
+    read, any other reg     -&gt;  ZERO
+    write                   -&gt;  a diagnostic on EVERY access, then returns
+
+The measured ID-register instance stands; the GENERAL claim does not.  **This matters because it
+means the candidate dispositions differ TODAY, with no bus-1 device added at all** -- an
+unconditional all-ones responder differs from the backend at nonzero registers, and announcement
+policies differ on diagnostic output.  (The write diagnostic does not terminate: `fatal()` returns
+normally.)
+
+*** THE DISCRIMINATING ROW I PROPOSED CANNOT DISCRIMINATE, AND IT HAS THREE FALSE-POSITIVE TRAPS.
+***  At register 0, all-ones is returned by correct forwarding, by the INCORRECT bus-fixed-to-1
+forwarding, by explicit all-ones completion, and by announced all-ones completion -- four
+dispositions, one observable.  Worse:
+
+* **THE EXISTING ADDRESS DOES NOT ENCODE BUS 1.**  `lca_confbus_probe.py`&#x27;s setup uses a ZERO
+  window offset, so the recovered tag -- bus field included -- is zero, and the control side
+  reaches the **no-IDSEL fallback to device 0**.  *The witness establishes mode-dependent
+  termination, not a correctly addressed secondary-bus transaction.*  That is a scope correction
+  to what this row&#x27;s existing witness is entitled to claim.
+* **A FAILED LOAD PRESERVES THE CONTROL SIGNATURE.**  `memory_rw` pre-zeros, so a handler that
+  returns success without filling data yields zero -- but a literal `return 0` takes the FAILURE
+  path, and `LS_GENERIC_N` then returns *before updating the destination register*, so the witness
+  **reads back the all-ones the register already held.**  A vacuity trap of exactly the shape the
+  carrier&#x27;s witness clauses exist to catch.
+* **THE PARSER TAKES THE FIRST OBSERVATION** (`printed` uses `re.search`), so adding another print
+  and calling the helper again retrieves the CONTROL&#x27;s result rather than the new one.
+
+**WHAT IT PRESCRIBES INSTEAD:** keep the signature check as an empty-ID COMPLETION check with an
+independently identified result and a distinct prior destination value, and add a **model-level
+routing fixture** observing the exact bus/device/function/register passed onward -- distinct
+synthetic devices on bus 1 and on another bus separate correct decoding from hardcoded bus 1 and
+from constant-return stubs.  Include write dispatch and preservation of primary-bus decoding.
+
+*** A SECOND ARCHITECTURAL PREMISE CORRECTED: RAW LCA ABSENCE DOES NOT GUARANTEE ALL-ONES. ***
+Digital&#x27;s §6.2.18 says an unanswered transaction is a MASTER ABORT: the read returns *arbitrary
+data with error status*, raising an instruction exception plus interrupt and IOC error logging.
+**So the 64-bit all-ones signature is an EMULATOR-COMPATIBILITY oracle, not a hardware contract**,
+and the round may not claim hardware fidelity for it.  The current path delegates to the generic
+backend and returns success; it implements none of that error sequence.
+
+**SCOPE, stated so the round does not overclaim what it closes:** this closes the configuration
+handler&#x27;s termination and its missing destination decode ONLY.  Still open in the same file --
+`lca_ioc`&#x27;s unconditional read/write `default` termination and its register-value rejections;
+`lca_interrupt_assert` / `lca_interrupt_deassert`; and `lca_isa`&#x27;s separate guard.  Nor does
+forwarding implement bridge topology or configuration-cycle error reporting: the backend matches a
+numeric tuple and receives **no cycle-type argument at all**, so type 1 with a zero bus field needs
+an explicit policy or simple forwarding will alias a root-bus device.
+
+**PRIMARY SOURCE, and this project did not have it:** codex cited the *Digital 21066/21066A
+Hardware Reference Manual* (Table 6-1, §6.4.2, §6.2.18) with page anchors.  No 21066/LCA manual was
+in `_scratchpad/`, and there are several open LCA rows reasoning from source alone.  Fetched at the
+citation, on the `vmesbcp2.pdf` precedent.
+
+*** AND THEN VERIFIED LOCALLY RATHER THAN TRUSTED, which is what the carrier&#x27;s rule demands and
+which this project has been burned by skipping: `#357`/`#362`/`#365` shipped DDI 0100I page numbers
+that came from panel output rather than a manual. ***  `_scratchpad/21066_66a_hrm.txt`, 713 KB /
+13,876 lines:
+
+    :8840  S6.2.6   &quot;CPU physical address bits &lt;31:7&gt; are used for PCI address bits &lt;26:2&gt;&quot;
+                    -&gt; THE SHIFT OF 5 that `relative_addr &gt;&gt; 5` implements.  CONFIRMED.
+    :9216  S6.2.9   &quot;PCI address bits ad&lt;1:0&gt; come directly from configuration cycle type
+                     register (IOC_CONF, Section 6.4.2) bits &lt;1:0&gt;&quot;
+                    -&gt; IOC_CONF selects the CYCLE TYPE and does NOT supply the bus.  CONFIRMED.
+    :9486  S6.2.18  &quot;the IOC returns arbitrary data with error status to the CPU, which causes
+                     an instruction exception&quot; + internal interrupt + ERR/CODE=1/CMD/ADDR/LOST
+                    -&gt; absent-device reads are NOT all-ones on real hardware.  CONFIRMED.
+
+**One narrowing, stated because a wrong reason gets reused:** codex wrote *&quot;bits 23..2 from CPU
+address bits 28..7&quot;*.  The manual&#x27;s general sparse rule is the WIDER `&lt;31:7&gt; -&gt; &lt;26:2&gt;` with the
+same shift; codex&#x27;s range is the PCI **type-1 config format** (bus 23..16, dev 15..11, fn 10..8,
+reg 7..2), which S6.2.9 defers to explicitly -- *&quot;restricted by the encoding requirements of PCI
+configuration cycles as described in the PCI Local Bus [Specification]&quot;*.  **Same shift, narrower
+window, and the narrowing is correct for config cycles** -- so `bus = (tag &gt;&gt; 16) &amp; 0xff` and
+`dev = (tag &gt;&gt; 11) &amp; 0x1f` rest on the PCI spec&#x27;s field layout, not on this manual, and the round
+should say so rather than citing the LCA manual for the field positions.
+
+*** A TRAP FOR THE NEXT READER: `file` REPORTS THIS PDF AS &quot;10 page(s)&quot; AND IT IS WRONG. ***  The
+real count lives in a linearized trailer.  I nearly discarded the download as truncated because
+codex had cited `#page=194` and `#page=211`; `pdftotext -layout` settled it in one command.  *A
+size or page check that disagrees with a citation is a reason to extract, not to discard.*</span></span><span class="state st-open">open</span></span></th></tr><tr class="ph st-open"><th scope="row" class="phlabel">Assessment (initial problem)</th><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td></tr><tr class="ph st-open"><th scope="row" class="phlabel">Research (fix proposals)</th><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td></tr><tr class="ph st-open"><th scope="row" class="phlabel">Final review (flagship adjudication)</th><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td></tr><tr class="ph st-open"><th scope="row" class="phlabel">Regression testing</th><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td></tr><tr class="fixhead st-open"><th colspan="10"><span class="hline"><span class="wrap" tabindex="0"><span class="rid">lcairqstubkill</span><span class="ttl">dev_lca.c: lca_interrupt_assert/_deassert are bare fatal()+exit(1) with NO GUARD, and DEVINIT registers them as the handlers that bus_isa_init wires to BUS_ISA_IDE0|IDE1 -- so an ISA/IDE interrupt ends the host, needing no unusual value at all</span><span class="tip">dev_lca.c: lca_interrupt_assert/_deassert are bare fatal()+exit(1) with NO GUARD, and DEVINIT registers them as the handlers that bus_isa_init wires to BUS_ISA_IDE0|IDE1 -- so an ISA/IDE interrupt ends the host, needing no unusual value at all — commits: 7c2f8e4 — witness: probe:regress/lca_irqstub_probe.py -- rung 3, MEASURED 3/4 on the committed build (witness_HEAD_20260907.raw); ONE guest store to the 8042 command port ends the host. Post-fix half PENDING (no fix chosen). — note: FILED 2026-09-07.  **NOT a new discovery of the SITE** -- [[lcabadval]]&#x27;s eleven-kill census already
 enumerated `:73` and `:85` and called them *&quot;plausibly the most severe of the eleven&quot;*.  What was
 missing is a ROW: the census names them inside a row titled for VALUE GUARDS, which is the census&#x27;s
 own closing lesson (*a row named after one class hides the members of the others*), and

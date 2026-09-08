@@ -2911,6 +2911,23 @@ FIFTEEN PDFs ARE PRESENT AND THE PROSE ABOVE NAMED ABOUT SEVEN. ***
                        DOCUMENTS the PCC2 alias the fork's `relative_addr %= PCC2_SIZE` models, which two seats
                        had rightly called unestablished; `:5430` SCLR is write-1-to-clear.  A round about
                        PCC2/CD2401/MVME187 opens THIS before reasoning from the source alone.)
+  21066_66a_hrm.pdf   (ADDED 2026-09-08: Alpha 21066/21066A Microprocessors Hardware Reference Manual,
+                       EC-QC4GB-TE -- the LCA chipset.  Fetched at the GPT-6 Astra seat's citation during the
+                       `lcaconfbus1kill' fix-design review, on this list's own vmesbcp2 precedent, and its two
+                       load-bearing claims were then VERIFIED LOCALLY rather than taken from the seat's page
+                       anchors -- which is the rule this list exists to enforce.  `21066_66a_hrm.txt:8840'
+                       (S6.2.6) says CPU physical address bits <31:7> map to PCI address bits <26:2>, i.e. THE
+                       SHIFT OF 5 the fork's `relative_addr >> 5' implements; `:9216' (S6.2.9) says PCI ad<1:0>
+                       come from IOC_CONF<1:0>, so IOC_CONF selects the CYCLE TYPE and does NOT supply the bus
+                       number; and `:9486' (S6.2.18, PCI Master Abort) says an unanswered read "returns
+                       arbitrary data with error status to the CPU, which causes an instruction exception",
+                       plus an internal interrupt and ERR/CODE/CMD/ADDR logging.  *** THAT LAST ONE REFUTES A
+                       PREMISE THIS PROJECT HAD BEEN REASONING FROM: absent-device reads on real LCA hardware
+                       are NOT all-ones.  The 0xffffffff.. signature is an EMULATOR-COMPATIBILITY oracle
+                       (`bus_pci_data_access' returns it for register 0 ONLY, zero for every other register),
+                       never a hardware contract. ***  `file` reports this PDF as "10 page(s)" and that is
+                       WRONG -- the real count is in a linearized trailer, and `pdftotext -layout` yields
+                       713 KB / 13,876 lines.  An LCA/Alpha-PCI round opens THIS first.)
 ```
 
 **SIX were undocumented**, and two of them are load-bearing for work in flight the day this was

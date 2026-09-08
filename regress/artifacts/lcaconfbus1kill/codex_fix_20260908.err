@@ -1,0 +1,3049 @@
+Reading additional input from stdin...
+OpenAI Codex v0.153.4
+--------
+workdir: C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+model: gpt-6-astra
+provider: openai
+approval: never
+sandbox: read-only
+reasoning effort: max
+reasoning summaries: none
+session id: 01a080fd-7de8-7c22-9adc-f7ce2e4ed262
+--------
+user
+# DESIGN BRIEF — `lcaconfbus1kill` pass 1: what should `lca_pci_conf` do for a non-zero bus?
+
+**VERDICT LINE FIRST**, then the body.
+
+Tree under review: **`GXEMUL-SEC/src/`**. Ignore any other `src/` under the project root — three
+pristine 2021 upstream copies live there and give line numbers off by hundreds.
+
+## PLEASE DO NOT SIMPLY RATIFY
+
+A recent panel here had seven of nine seats confirm a premise the brief stated wrongly. **Check the
+premises, not just the derivations.** I have already had to withdraw one characterisation of this
+very fix (see "A correction of mine" below), so treat my proposal as a sketch, not a design.
+
+---
+
+# SETTLED PREMISES (inlined; you need not read files)
+
+**1. The defect is MEASURED, rung 3.** `regress/lca_confbus_probe.py` on unmodified `alphabook1`:
+a guest `stq` of `0x1` to `LCA_IOC_CONF` is **accepted** (`idata & ~1` is 0), and the *next* guest
+`ldq` into the PCI config window ends the host.
+
+    bus ctl      yes                    yes                    control read at ioc_conf==0 survived   ok
+    bus ctlsig   0xffffffffffffffff     0xffffffffffffffff     empty-slot ID probe signature          ok
+    bus kill     dead                   alive                  <- THE DEFECT                          FAIL
+    bus attrib   yes                    yes                    EVIDENCE: TODO. Non-zero bus.          ok
+
+**2. The code.** `DEVICE_ACCESS(lca_pci_conf)`, verbatim, after `#511`:
+
+```c
+	reg = (relative_addr >> 5) & 0xfc;
+	tag = (relative_addr >> 5) & ~0xff;
+
+	bus = d->ioc_conf & 1;
+
+	if (bus == 0) {
+		for (dev=0; dev<21; dev++)
+			if (tag & (0x800U << dev))	/*  #511  */
+				break;
+		if (dev >= 21) {
+			/*  fatal("[ LCA: No bus 0 device? TODO ]\n");
+			exit(1);  */
+			dev = 0;
+		}
+	} else {
+		fatal("TODO. Non-zero bus.\n");
+		exit(1);
+	}
+
+	func = (tag >> 8) & 7;
+	/*  Pass PCI accesses onto bus_pci:  */
+	bus_pci_setaddr(cpu, d->pci_data, bus, dev, func, reg);
+	bus_pci_data_access(cpu, d->pci_data, ...);
+```
+
+**3. The file's own comment on tag layout**, quoted verbatim:
+
+```
+	 *  According to NetBSD's lca_pci.c, the address is composed like this:
+	 *	addr = tag << 5 | (regoffset & ~0x03) << 5 | 0x3 << 3
+	 *
+	 *  On the primary bus (nr 0):
+	 *	tag = (1 << (device + 11)) | (function << 8);
+	 *  and on other busses, the tag is a normal:
+	 *	tag = (bus << 16) | (device << 11) | (function << 8)
+```
+
+**4. `bus_pci` is bus-agnostic**, verified: `cur_bus` is a plain `int` (`bus_pci.h:84`), devices are
+a **linked list** (`first_device`), and lookup is `dev->bus == pci_data->cur_bus` (`bus_pci.c:102`).
+Nothing is sized for one bus and nothing asserts. An empty-slot **read** returns
+`0xffffffffffffffff` — which the probe's `bus ctlsig` row has MEASURED on bus 0.
+
+**5. `fatal()` does not terminate**; only the explicit `exit(1)` does.
+
+---
+
+# A CORRECTION OF MINE, MADE BEFORE WRITING THIS
+
+I earlier recorded that the fix is **"a DELETION — stop special-casing `bus != 0` and let the
+existing path serve the cycle."** *** THAT IS WRONG AND I WITHDRAW IT. *** The `bus == 0` branch does
+not merely guard — it **computes `dev`** from the IDSEL bit. Deleting the `else` would leave `dev`
+**uninitialised** on the non-zero-bus path and pass garbage to `bus_pci_setaddr`.
+
+So this is option-set **member 7 (IMPLEMENT)**, not a deletion. That changes what the round owes.
+
+# THE SKETCH I WANT ATTACKED
+
+Per premise 3, a non-zero-bus tag is `(bus << 16) | (device << 11) | (function << 8)`, so:
+
+```c
+	} else {
+		dev = (tag >> 11) & 0x1f;	/*  type-1: device is bits 15..11  */
+	}
+```
+
+leaving `func` and `reg` as they already are, and letting `bus_pci_setaddr(bus, dev, func, reg)`
+serve the cycle — an absent device on an absent bus then answers all-ones by itself.
+
+## Questions
+
+1. **Is `dev = (tag >> 11) & 0x1f` right?** The comment says device occupies bits 15..11 of the tag
+   for type-1. **But `tag` here is `(relative_addr >> 5) & ~0xff`, which has already been shifted** —
+   so is the comment describing the same `tag` this code computes, or the pre-shift value? **This is
+   the premise I am least sure of and it is the whole fix.**
+
+2. **Where does `bus` come from architecturally?** The code takes it from `ioc_conf & 1` — a
+   *register bit* — while the type-1 tag layout says the bus number is in **bits 23..16 of the tag**.
+   Those are two different sources. **Which one does real LCA hardware use, and does the model's
+   choice make the type-1 decode incoherent?** If `bus` should come from the tag, the fix is
+   different and larger.
+
+3. **Is IMPLEMENT even the right member here?** The alternatives: DECLINE the cycle silently;
+   DECLINE with a latched announce; or return all-ones explicitly without touching `bus_pci`. Note
+   that on real hardware a config read of an absent device returns all-ones, so declining and
+   implementing may be **observationally identical for an empty bus** — and differ only if a device
+   is ever placed on bus 1, which nothing in this tree does.
+
+4. *** THE DISCRIMINATING ROW. *** The existing witness only checks that the host survives, and
+   "survives" is true for a silent return, a latched announce, and a working implementation alike.
+   I propose adding the mirror of `bus ctlsig` on the armed side: **the armed read must return
+   `0xffffffffffffffff`**, which separates "serviced an empty bus" from "returned without
+   servicing" (`0x0`, indistinguishable from unmapped). **Is that sufficient, or does it still
+   conflate members?**
+
+5. **What does this NOT close?** The `default:` arm of `lca_ioc` still exits for reads and writes,
+   and `lca_interrupt_assert`/`_deassert` are still bare kills (filed as `lcairqstubkill`, witnessed).
+
+6. If, while checking this, you found something ELSE — say so.
+
+## Rules
+
+* Answer from the source; name file and function for every behaviour you assert.
+* Give the denominator: how many callers/consumers of `bus_pci_setaddr` you examined.
+* A clean "your Q1 shift is wrong because X" is the most useful answer you can give.
+codex
+VERDICT: The proposed device decode needs verification, and it does not yet resolve the bus-number mismatch. I’ll check the reviewed tree and the LCA hardware documentation.
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "Get-Location; rg --files -g AGENTS.md -g '*lca*' -g '*bus_pci*' -g '*confbus*' -g '"'!**/.git/**'"'" in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+ succeeded in 97ms:
+
+regress\lca_confwidth_probe.py
+regress\lca_confbus_probe.py
+regress\lca_irqstub_probe.py
+src\include\thirdparty\alpha_lcareg.h
+src\include\bus_pci.h
+src\devices\dev_lca.o
+src\devices\dev_lca.c
+src\devices\bus_pci.o
+src\devices\bus_pci.c
+Path                                 
+----                                 
+C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+
+
+
+web search: 
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$paths = @('"'C:\\AGENTS.md','C:\\DocumentNoSnc\\AGENTS.md','C:\\DocumentNoSnc\\CC\\AGENTS.md','C:\\DocumentNoSnc\\CC\\GXEMUL\\AGENTS.md','C:\\DocumentNoSnc\\CC\\GXEMUL\\GXEMUL-SEC\\AGENTS.md'); foreach ("'$p in $paths) { if (Test-Path -LiteralPath $p) { Write-Output $p; Get-Content -LiteralPath $p } }; rg -n --glob '"'*.[ch]' 'bus_pci_setaddr|DEVICE_ACCESS\\(lca|lca_interrupt_|LCA_IOC_CONF|LCA_PCI_CONF' src; "'$n=0; Get-Content -LiteralPath src/devices/dev_lca.c | ForEach-Object { $n++; '"'{0,5}: {1}' -f "'$n, $_ }; $n=0; Get-Content -LiteralPath src/include/thirdparty/alpha_lcareg.h | ForEach-Object { $n++; '"'{0,5}: {1}' -f "'$n, $_ }' in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+ succeeded in 123ms:
+src\include\bus_pci.h:148:void bus_pci_setaddr(struct cpu *cpu, struct pci_data *pci_data,
+src\include\thirdparty\alpha_lcareg.h:46:#define LCA_PCI_CONF	0x1e0000000ULL		/* PCI Conf. Space */
+src\include\thirdparty\alpha_lcareg.h:54:#define LCA_IOC_CONF	(LCA_IOC_BASE + 0x020)	/* Configuration Cycle Type */
+src\devices\dev_gt.c:184:		bus_pci_setaddr(cpu, d->pci_data, bus, dev, func, reg);
+src\devices\bus_pci.c:188: *  bus_pci_setaddr():
+src\devices\bus_pci.c:192:void bus_pci_setaddr(struct cpu *cpu, struct pci_data *pci_data,
+src\devices\bus_pci.c:196:		fatal("bus_pci_setaddr(): NULL ptr\n");
+src\devices\dev_cpc700.c:89:		bus_pci_setaddr(cpu, d->pci_data, bus, dev, func, reg);
+src\devices\dev_footbridge.c:474:	bus_pci_setaddr(cpu, d->pcibus, bus, dev, func, reg);
+src\devices\dev_eagle.c:69:		bus_pci_setaddr(cpu, d->pci_data, bus, dev, func, reg);
+src\devices\dev_lca.c:66: *  lca_interrupt_assert():
+src\devices\dev_lca.c:70:void lca_interrupt_assert(struct interrupt *interrupt)
+src\devices\dev_lca.c:72:	fatal("lca_interrupt_assert: TODO\n");
+src\devices\dev_lca.c:78: *  lca_interrupt_deassert():
+src\devices\dev_lca.c:82:void lca_interrupt_deassert(struct interrupt *interrupt)
+src\devices\dev_lca.c:84:	fatal("lca_interrupt_deassert: TODO\n");
+src\devices\dev_lca.c:89:DEVICE_ACCESS(lca_pci_conf)
+src\devices\dev_lca.c:174:	bus_pci_setaddr(cpu, d->pci_data, bus, dev, func, reg);
+src\devices\dev_lca.c:185:DEVICE_ACCESS(lca_isa)
+src\devices\dev_lca.c:215:DEVICE_ACCESS(lca_ioc)
+src\devices\dev_lca.c:229:	case LCA_IOC_CONF:
+src\devices\dev_lca.c:394:	    LCA_PCI_CONF, 0x20000000, dev_lca_pci_conf_access, (void *)d,
+src\devices\dev_lca.c:414:	interrupt_template.interrupt_assert = lca_interrupt_assert;
+src\devices\dev_lca.c:415:	interrupt_template.interrupt_deassert = lca_interrupt_deassert;
+src\devices\dev_i80321.c:217:			bus_pci_setaddr(cpu, d->pci_bus, bus, dev, func, reg);
+src\devices\dev_sgi_ip32.c:746:		bus_pci_setaddr(cpu, d->pci_data, bus, dev, func, pcireg);
+src\devices\dev_sh4.c:1534:			bus_pci_setaddr(cpu, d->pci_data, bus, dev, func, reg);
+src\devices\dev_uninorth.c:81:		bus_pci_setaddr(cpu, d->pci_data, bus, dev, func, reg);
+src\devices\dev_v3.c:174:	bus_pci_setaddr(cpu, d->pci_data, bus, dev, func, reg);
+    1: /*
+    2:  *  Copyright (C) 2006-2011  Anders Gavare.  All rights reserved.
+    3:  *
+    4:  *  Redistribution and use in source and binary forms, with or without
+    5:  *  modification, are permitted provided that the following conditions are met:
+    6:  *
+    7:  *  1. Redistributions of source code must retain the above copyright
+    8:  *     notice, this list of conditions and the following disclaimer.
+    9:  *  2. Redistributions in binary form must reproduce the above copyright  
+   10:  *     notice, this list of conditions and the following disclaimer in the 
+   11:  *     documentation and/or other materials provided with the distribution.
+   12:  *  3. The name of the author may not be used to endorse or promote products
+   13:  *     derived from this software without specific prior written permission.
+   14:  *
+   15:  *  THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+   16:  *  ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+   17:  *  IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+   18:  *  ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE   
+   19:  *  FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+   20:  *  DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+   21:  *  OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+   22:  *  HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+   23:  *  LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+   24:  *  OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+   25:  *  SUCH DAMAGE.
+   26:  *
+   27:  *
+   28:  *  COMMENT: LCA PCI bus, for Alpha machines
+   29:  */
+   30: 
+   31: #include <stdio.h>
+   32: #include <stdlib.h>
+   33: #include <string.h>
+   34: 
+   35: #include "bus_isa.h"
+   36: #include "bus_pci.h"
+   37: #include "cpu.h"
+   38: #include "device.h"
+   39: #include "emul.h"
+   40: #include "interrupt.h"
+   41: #include "machine.h"
+   42: #include "memory.h"
+   43: #include "misc.h"
+   44: 
+   45: #include "thirdparty/alpha_lcareg.h"
+   46: 
+   47: #define	LCA_ISA_BASE	(LCA_PCI_SIO + 0x10000000)
+   48: #define	LCA_ISA_MEMBASE	(LCA_PCI_SIO + 0x18000000)
+   49: 
+   50: 
+   51: struct lca_data {
+   52: 	struct pci_data		*pci_data;
+   53: 
+   54: 	uint64_t		ioc_conf;
+   55: 	uint64_t		tlb_enable;
+   56: 	uint64_t		window_base_0;
+   57: 	uint64_t		window_mask_0;
+   58: 	uint64_t		window_t_base_0;
+   59: 	uint64_t		window_base_1;
+   60: 	uint64_t		window_mask_1;
+   61: 	uint64_t		window_t_base_1;
+   62: };
+   63: 
+   64: 
+   65: /*
+   66:  *  lca_interrupt_assert():
+   67:  *
+   68:  *  Line 0 = ISA interrupt.
+   69:  */
+   70: void lca_interrupt_assert(struct interrupt *interrupt)
+   71: {
+   72: 	fatal("lca_interrupt_assert: TODO\n");
+   73: 	exit(1);
+   74: }
+   75: 
+   76: 
+   77: /*
+   78:  *  lca_interrupt_deassert():
+   79:  *
+   80:  *  Line 0 = ISA interrupt.
+   81:  */
+   82: void lca_interrupt_deassert(struct interrupt *interrupt)
+   83: {
+   84: 	fatal("lca_interrupt_deassert: TODO\n");
+   85: 	exit(1);
+   86: }
+   87: 
+   88: 
+   89: DEVICE_ACCESS(lca_pci_conf)
+   90: {
+   91: 	uint64_t idata = 0, odata = 0;
+   92: 	int tag, bus, dev, func, reg;
+   93: 	struct lca_data *d = (struct lca_data *) extra;
+   94: 
+   95: 	if (writeflag == MEM_WRITE)
+   96: 		idata = memory_readmax64(cpu, data, len);
+   97: 
+   98: 	/*
+   99: 	 *  1. Decompose the address into a tag.
+  100: 	 *
+  101: 	 *  According to NetBSD's lca_pci.c, the address is composed like this:
+  102: 	 *
+  103: 	 *	addr = tag << 5 | (regoffset & ~0x03) << 5 | 0x3 << 3
+  104: 	 */
+  105: 	reg = (relative_addr >> 5) & 0xfc;
+  106: 	tag = (relative_addr >> 5) & ~0xff;
+  107: 
+  108: 	/*
+  109: 	 *  2. Decompose the tag into bus, dev, and func.
+  110: 	 *
+  111: 	 *  The tag can be constructed in one of two ways. On the primary
+  112: 	 *  bus (nr 0):
+  113: 	 *
+  114: 	 *	tag = (1 << (device + 11)) | (function << 8);
+  115: 	 *
+  116: 	 *  and on other busses, the tag is a normal:
+  117: 	 *
+  118: 	 *	tag = (bus << 16) | (device << 11) | (function << 8)
+  119: 	 */
+  120: 	/*  printf("tag = 0x%x\n", (int)tag);  */
+  121: 	bus = d->ioc_conf & 1;
+  122: 
+  123: 	if (bus == 0) {
+  124: 		/*  #511: was `0x800 << dev'.  `0x800' is a plain int (2^11) and `dev'
+  125: 		    reaches 20, so the last iteration evaluates 2^31 -- a SIGNED
+  126: 		    OVERFLOW, undefined by C99 6.5.7p4, not merely
+  127: 		    implementation-defined.  MEASURED under UBSAN before the change:
+  128: 		    "dev_lca.c:125:21: runtime error: left shift of 2048 by 20 places
+  129: 		    cannot be represented in type 'int'", reached by an ordinary guest
+  130: 		    ldq into the PCI config window (regress/lca_confbus_probe.py against
+  131: 		    build-asan; artifacts/lcashiftub/ubsan_HEAD_20260907.raw).
+  132: 
+  133: 		    `0x800U' makes the operand unsigned, so 2048U << 20 is 0x80000000U --
+  134: 		    inside unsigned int -- and NOTHING ELSE MOVES.
+  135: 
+  136: 		    *** THE REASON, CORRECTED: AN EARLIER DRAFT SAID `tag' IS "ALREADY A
+  137: 		    WIDER UNSIGNED QUANTITY".  THAT IS FALSE -- `tag' is a plain signed
+  138: 		    `int' (:92) -- AND FOUR PASS-2 SEATS CAUGHT IT.  Worse, the claim was
+  139: 		    backwards: being WIDER is what would CREATE a difference, not remove
+  140: 		    one.  Had `tag' been `uint64_t', the old `int' 0x80000000 is NEGATIVE
+  141: 		    and would SIGN-EXTEND to 0xffffffff80000000 for the `&', while
+  142: 		    `0x800U << 20' zero-extends to 0x0000000080000000 -- two different
+  143: 		    masks.  The seats were right about the mechanism and it does not fire
+  144: 		    here only because of the type.
+  145: 
+  146: 		    WHAT ACTUALLY HOLDS: both operands are 32-bit, so the `&' is performed
+  147: 		    at 32 bits either way -- `int & int' before, and after, `tag' converted
+  148: 		    to `unsigned int' by the usual arithmetic conversions.  The RESULT'S
+  149: 		    BIT PATTERN IS IDENTICAL; only its type changes, and it is consumed
+  150: 		    solely as a truth test in `if (...)'.  So no guest-visible value moves,
+  151: 		    and the repair is owed purely by the LANGUAGE. ***
+  152: 
+  153: 		    *** THE LOOP THIS SITS IN IS THIS FILE'S OWN GRACEFUL-DEGRADATION
+  154: 		    PRECEDENT -- the `dev >= 21' arm below has a commented-out
+  155: 		    fatal()/exit(1) and substitutes `dev = 0' instead, and `lcabadval'
+  156: 		    cites it as a transferable warrant.  The safe path contained the UB. ***  */
+  157: 		for (dev=0; dev<21; dev++)
+  158: 			if (tag & (0x800U << dev))	/*  #511  */
+  159: 				break;
+  160: 		if (dev >= 21) {
+  161: 			/*  fatal("[ LCA: No bus 0 device? TODO ]\n");
+  162: 			exit(1);  */
+  163: 			dev = 0;
+  164: 		}
+  165: 	} else {
+  166: 		fatal("TODO. Non-zero bus.\n");
+  167: 		exit(1);
+  168: 	}
+  169: 
+  170: 	func = (tag >> 8) & 7;
+  171: 	/*  printf("bus=%i dev=%i func=%i reg=%i\n", bus,dev,func,reg);  */
+  172: 
+  173: 	/*  Pass PCI accesses onto bus_pci:  */
+  174: 	bus_pci_setaddr(cpu, d->pci_data, bus, dev, func, reg);
+  175: 	bus_pci_data_access(cpu, d->pci_data, writeflag == MEM_READ?
+  176: 	    &odata : &idata, len, writeflag);
+  177: 
+  178: 	if (writeflag == MEM_READ)
+  179: 		memory_writemax64(cpu, data, len, odata);
+  180: 
+  181: 	return 1;
+  182: }
+  183: 
+  184: 
+  185: DEVICE_ACCESS(lca_isa)
+  186: {
+  187: 	unsigned int ofs, i;
+  188: 	uint8_t byte;
+  189: 
+  190: 	relative_addr >>= 5;
+  191: 
+  192: 	ofs = relative_addr & 3;
+  193: 	if (ofs > len) {
+  194: 		fatal("[ ofs=%i len=%i in lca_isa access function. "
+  195: 		    "aborting ]\n", ofs, len);
+  196: 		exit(1);
+  197: 	}
+  198: 
+  199: 	if (writeflag == MEM_WRITE) {
+  200: 		byte = data[ofs % len];
+  201: 		return cpu->memory_rw(cpu, cpu->mem, LCA_ISA_BASE +
+  202: 		    relative_addr, &byte, 1, writeflag, CACHE_NONE);
+  203: 	}
+  204: 
+  205: 	cpu->memory_rw(cpu, cpu->mem, LCA_ISA_BASE + relative_addr,
+  206: 	    &byte, 1, MEM_READ, CACHE_NONE);
+  207: 
+  208: 	for (i=0; i<len; i++)
+  209: 		data[i] = i == ofs? byte : 0x00;
+  210: 
+  211: 	return 1;
+  212: }
+  213: 
+  214: 
+  215: DEVICE_ACCESS(lca_ioc)
+  216: {
+  217: 	uint64_t idata = 0, odata = 0;
+  218: 	struct lca_data *d = (struct lca_data *) extra;
+  219: 
+  220: 	if (writeflag == MEM_WRITE)
+  221: 		idata = memory_readmax64(cpu, data, len);
+  222: 
+  223: 	switch (relative_addr + LCA_IOC_BASE) {
+  224: 
+  225: 	case LCA_IOC_BASE:
+  226: 		/*  Ignore? Linux reads from the base at startup.  */
+  227: 		break;
+  228: 
+  229: 	case LCA_IOC_CONF:
+  230: 		if (writeflag == MEM_READ) {
+  231: 			odata = d->ioc_conf;
+  232: 		} else {
+  233: 			d->ioc_conf = idata;
+  234: 			/*  Only bit 0 is implemented so far, the PCI bus 0 vs
+  235: 			    bus non-0 selection bit.  */
+  236: 			if (idata & ~1) {
+  237: 				/*  #506: was `0x%x', (int)idata -- a 64-bit guarded value
+  238: 				    narrowed to 32 in the KILL diagnostic, so a write of
+  239: 				    0x100000000 trips `idata & ~1' and then reports "0x0",
+  240: 				    which is a value this same guard ACCEPTS.  The five
+  241: 				    sibling arms below already print the full width this
+  242: 				    way; this arm was the outlier among the VALUE-guard
+  243: 				    diagnostics.  (Not the file's only narrowing site --
+  244: 				    the default arm below has the same cast, and this
+  245: 				    round fixes it too.)  */
+  246: 				fatal("TODO: Write to unimplemented bit of"
+  247: 				    " IOC_CONF: 0x%" PRIx64 "\n", (uint64_t)idata);
+  248: 				exit(1);
+  249: 			}
+  250: 		}
+  251: 		break;
+  252: 
+  253: 	case LCA_IOC_TBIA:
+  254: 		/*  TLB Invalidate All.  */
+  255: 		/*  TODO: For now, let's just ignore it.  */
+  256: 		break;
+  257: 
+  258: 	case LCA_IOC_TB_ENA:
+  259: 		if (writeflag == MEM_READ) {
+  260: 			odata = d->tlb_enable;
+  261: 		} else {
+  262: 			d->tlb_enable = idata;
+  263: 			/*  TODO: Actually implement this.  */
+  264: 			if (idata & ~IOC_TB_ENA_TEN) {
+  265: 				fatal("TODO: LCA_IOC_TB_ENA value "
+  266: 				    " (0x%" PRIx64") has unimplemented "
+  267: 				    "bits.\n", (uint64_t)idata);
+  268: 				exit(1);
+  269: 			}
+  270: 		}
+  271: 		break;
+  272: 
+  273: 	case LCA_IOC_W_BASE0:
+  274: 		if (writeflag == MEM_READ) {
+  275: 			odata = d->window_base_0;
+  276: 		} else {
+  277: 			d->window_base_0 = idata;
+  278: 			/*  TODO: Actually implement this.  */
+  279: 			if (idata != 0ULL && idata != 0x300800000ULL) {
+  280: 				fatal("TODO: LCA_IOC_W_BASE0 value differs"
+  281: 				    " (0x%" PRIx64") from the only implemented"
+  282: 				    " values\n", (uint64_t)idata);
+  283: 				exit(1);
+  284: 			}
+  285: 		}
+  286: 		break;
+  287: 
+  288: 	case LCA_IOC_W_MASK0:
+  289: 		if (writeflag == MEM_READ) {
+  290: 			odata = d->window_mask_0;
+  291: 		} else {
+  292: 			d->window_mask_0 = idata;
+  293: 			/*  TODO: Actually implement this.  */
+  294: 			if (idata != 0x700000ULL) {
+  295: 				fatal("TODO: LCA_IOC_W_MASK0 value differs"
+  296: 				    " (0x%" PRIx64") from the only implemented"
+  297: 				    " value\n", (uint64_t)idata);
+  298: 				exit(1);
+  299: 			}
+  300: 		}
+  301: 		break;
+  302: 
+  303: 	case LCA_IOC_W_T_BASE0:
+  304: 		if (writeflag == MEM_READ) {
+  305: 			odata = d->window_t_base_0;
+  306: 		} else {
+  307: 			d->window_t_base_0 = idata;
+  308: 			/*  TODO: Actually implement this.  */
+  309: 		}
+  310: 		break;
+  311: 
+  312: 	case LCA_IOC_W_BASE1:
+  313: 		if (writeflag == MEM_READ) {
+  314: 			odata = d->window_base_1;
+  315: 		} else {
+  316: 			d->window_base_1 = idata;
+  317: 			/*  TODO: Actually implement this.  */
+  318: 			if (idata != 0x240000000ULL) {
+  319: 				fatal("TODO: LCA_IOC_W_BASE1 value differs"
+  320: 				    " (0x%" PRIx64") from the only implemented"
+  321: 				    " value\n", (uint64_t)idata);
+  322: 				exit(1);
+  323: 			}
+  324: 		}
+  325: 		break;
+  326: 
+  327: 	case LCA_IOC_W_MASK1:
+  328: 		if (writeflag == MEM_READ) {
+  329: 			odata = d->window_mask_1;
+  330: 		} else {
+  331: 			d->window_mask_1 = idata;
+  332: 			/*  TODO: Actually implement this.  */
+  333: 			if (idata != 0x3ff00000ULL) {
+  334: 				fatal("TODO: LCA_IOC_W_MASK1 value differs"
+  335: 				    " (0x%" PRIx64") from the only implemented"
+  336: 				    " value\n", (uint64_t)idata);
+  337: 				exit(1);
+  338: 			}
+  339: 		}
+  340: 		break;
+  341: 
+  342: 	case LCA_IOC_W_T_BASE1:
+  343: 		if (writeflag == MEM_READ) {
+  344: 			odata = d->window_t_base_1;
+  345: 		} else {
+  346: 			d->window_t_base_1 = idata;
+  347: 			/*  TODO: Actually implement this.  */
+  348: 		}
+  349: 		break;
+  350: 
+  351: 	default:fatal("[ lca_ioc: unimplemented %s to offset 0x%x",
+  352: 		    writeflag == MEM_WRITE? "write" : "read", (int)
+  353: 		    relative_addr);
+  354: 		if (writeflag == MEM_WRITE)
+  355: 			fatal(": 0x%" PRIx64, (uint64_t)idata);	/*  #506  */
+  356: 		fatal(" ]\n");
+  357: 		exit(1);
+  358: 	}
+  359: 
+  360: 	if (writeflag == MEM_READ)
+  361: 		memory_writemax64(cpu, data, len, odata);
+  362: 
+  363: 	return 1;
+  364: }
+  365: 
+  366: 
+  367: DEVINIT(lca)
+  368: {
+  369: 	char *interrupt_path;
+  370: 	struct interrupt interrupt_template;
+  371: 	struct lca_data *d;
+  372: 
+  373: 	CHECK_ALLOCATION(d = (struct lca_data *) malloc(sizeof(struct lca_data)));
+  374: 	memset(d, 0, sizeof(struct lca_data));
+  375: 
+  376: 	/*  Register a PCI bus:  */
+  377: 	d->pci_data = bus_pci_init(
+  378: 	    devinit->machine,
+  379: 	    "TODO: irq"		/*  pciirq: TODO  */,
+  380: 	    LCA_PCI_SIO,	/*  pci device io offset  */
+  381: 	    0x00000000,		/*  pci device mem offset: TODO  */
+  382: 	    0x00000000,		/*  PCI portbase: TODO  */
+  383: 	    0x00000000,		/*  PCI membase: TODO  */
+  384: 	    "TODO: pci irq base",	/*  PCI irqbase: TODO  */
+  385: 	    LCA_ISA_BASE,	/*  ISA portbase  */
+  386: 	    LCA_ISA_MEMBASE,	/*  ISA membase  */
+  387: 	    "TODO: irqbase isa");                /*  ISA irqbase: TODO  */
+  388: 
+  389: 	/*  Add the "sio0" controller (as seen by NetBSD):  */
+  390: 	bus_pci_add(devinit->machine, d->pci_data, devinit->machine->memory,
+  391: 	    0, 7, 0, "i82378zb");
+  392: 
+  393: 	memory_device_register(devinit->machine->memory, "lca_pci_conf",
+  394: 	    LCA_PCI_CONF, 0x20000000, dev_lca_pci_conf_access, (void *)d,
+  395: 	    DM_DEFAULT, NULL);
+  396: 
+  397: 	memory_device_register(devinit->machine->memory, "lca_isa",
+  398: 	    LCA_PCI_SIO, 0x10000 << 5, dev_lca_isa_access, (void *)d,
+  399: 	    DM_DEFAULT, NULL);
+  400: 
+  401: 	memory_device_register(devinit->machine->memory, "lca_ioc",
+  402: 	    LCA_IOC_BASE, 0x20000000, dev_lca_ioc_access, (void *)d,
+  403: 	    DM_DEFAULT, NULL);
+  404: 
+  405: 	CHECK_ALLOCATION(interrupt_path = (char *)
+  406: 	    malloc(strlen(devinit->machine->path) + 10));
+  407: 	snprintf(interrupt_path, strlen(devinit->machine->path) + 10,
+  408: 	    "%s.lca", devinit->machine->path);
+  409: 
+  410: 	memset(&interrupt_template, 0, sizeof(interrupt_template));
+  411: 	interrupt_template.line = 0;
+  412: 	interrupt_template.name = interrupt_path;
+  413: 	interrupt_template.extra = d;
+  414: 	interrupt_template.interrupt_assert = lca_interrupt_assert;
+  415: 	interrupt_template.interrupt_deassert = lca_interrupt_deassert;
+  416: 	interrupt_handler_register(&interrupt_template);
+  417: 
+  418: 	bus_isa_init(devinit->machine, interrupt_path,
+  419: 	    BUS_ISA_IDE0 | BUS_ISA_IDE1, LCA_ISA_BASE, LCA_ISA_MEMBASE);
+  420: 
+  421: 	return 1;
+  422: }
+  423: 
+    1: /* GXemul: $Id: alpha_lcareg.h,v 1.2 2006-06-16 18:31:26 debug Exp $ */
+    2: /* $NetBSD: lcareg.h,v 1.8 1997/09/05 02:14:31 thorpej Exp $ */
+    3: 
+    4: #ifndef ALPHA_LCAREG_H
+    5: #define	ALPHA_LCAREG_H
+    6: 
+    7: /*
+    8:  * Copyright (c) 1995 Carnegie-Mellon University.
+    9:  * All rights reserved.
+   10:  *
+   11:  * Authors: Jeffrey Hsu, Jason R. Thorpe
+   12:  * 
+   13:  * Permission to use, copy, modify and distribute this software and
+   14:  * its documentation is hereby granted, provided that both the copyright
+   15:  * notice and this permission notice appear in all copies of the
+   16:  * software, derivative works or modified versions, and any portions
+   17:  * thereof, and that both notices appear in supporting documentation.
+   18:  * 
+   19:  * CARNEGIE MELLON ALLOWS FREE USE OF THIS SOFTWARE IN ITS "AS IS" 
+   20:  * CONDITION.  CARNEGIE MELLON DISCLAIMS ANY LIABILITY OF ANY KIND 
+   21:  * FOR ANY DAMAGES WHATSOEVER RESULTING FROM THE USE OF THIS SOFTWARE.
+   22:  * 
+   23:  * Carnegie Mellon requests users of this software to return to
+   24:  *
+   25:  *  Software Distribution Coordinator  or  Software.Distribution@CS.CMU.EDU
+   26:  *  School of Computer Science
+   27:  *  Carnegie Mellon University
+   28:  *  Pittsburgh PA 15213-3890
+   29:  *
+   30:  * any improvements or extensions that they make and grant Carnegie the
+   31:  * rights to redistribute these changes.
+   32:  */
+   33: 
+   34: /*
+   35:  * 21066 chip registers
+   36:  */
+   37: 
+   38: #define REGVAL(r)	(*(volatile int32_t *)ALPHA_PHYS_TO_K0SEG(r))
+   39: #define REGVAL64(r)	(*(volatile int64_t *)ALPHA_PHYS_TO_K0SEG(r))
+   40: 
+   41: /*
+   42:  * Base addresses
+   43:  */
+   44: #define LCA_IOC_BASE	0x180000000ULL		/* LCA IOC Regs */
+   45: #define LCA_PCI_SIO	0x1c0000000ULL		/* PCI Sp. I/O Space */
+   46: #define LCA_PCI_CONF	0x1e0000000ULL		/* PCI Conf. Space */
+   47: #define LCA_PCI_SPARSE	0x200000000ULL		/* PCI Sparse Space */
+   48: #define LCA_PCI_DENSE	0x300000000ULL		/* PCI Dense Space */
+   49: 
+   50: #define LCA_IOC_HAE	LCA_IOC_BASE		/* Host Address Ext. (64) */
+   51: #define	IOC_HAE_ADDREXT	0x00000000f8000000ULL
+   52: #define	IOC_HAE_RSVSD	0xffffffff07ffffffULL
+   53: 
+   54: #define LCA_IOC_CONF	(LCA_IOC_BASE + 0x020)	/* Configuration Cycle Type */
+   55: 
+   56: #define LCA_IOC_STAT0	(LCA_IOC_BASE + 0x040)	/* Status 0 */
+   57: #define	IOC_STAT0_CMD	0x000000000000000fULL	/* PCI command mask */
+   58: #define	IOC_STAT0_ERR	0x0000000000000010ULL	/* IOC error indicator R/W1C */
+   59: #define	IOC_STAT0_LOST	0x0000000000000020ULL	/* IOC lose error info R/W1C */
+   60: #define	IOC_STAT0_THIT	0x0000000000000040ULL	/* test hit */
+   61: #define	IOC_STAT0_TREF	0x0000000000000080ULL	/* test reference */
+   62: #define	IOC_STAT0_CODE	0x0000000000000700ULL	/* code mask */
+   63: #define	IOC_STAT0_CODESHIFT 8
+   64: #define	IOC_STAT0_P_NBR	0x00000000ffffe000ULL	/* page number mask */
+   65: 
+   66: #define LCA_IOC_STAT1	(LCA_IOC_BASE + 0x060)	/* Status 1 */
+   67: #define	IOC_STAT1_ADDR	0x00000000ffffffffULL	/* PCI address mask */
+   68: 
+   69: #define	LCA_IOC_TBIA	(LCA_IOC_BASE + 0x080)	/* TLB Invalidate All */
+   70: #define	LCA_IOC_TB_ENA	(LCA_IOC_BASE + 0x0a0)	/* TLB Enable */
+   71: #define	IOC_TB_ENA_TEN	0x0000000000000080ULL
+   72: 
+   73: #define LCA_IOC_W_BASE0	(LCA_IOC_BASE + 0x100)	/* Window Base */
+   74: #define LCA_IOC_W_MASK0	(LCA_IOC_BASE + 0x140)	/* Window Mask */
+   75: #define LCA_IOC_W_T_BASE0 (LCA_IOC_BASE + 0x180) /* Translated Base */
+   76: 
+   77: #define LCA_IOC_W_BASE1	(LCA_IOC_BASE + 0x120)	/* Window Base */
+   78: #define LCA_IOC_W_MASK1	(LCA_IOC_BASE + 0x160)	/* Window Mask */
+   79: #define LCA_IOC_W_T_BASE1 (LCA_IOC_BASE + 0x1a0) /* Translated Base */
+   80: 
+   81: #define	IOC_W_BASE_W_BASE 0x00000000fff00000ULL	/* Window base value */
+   82: #define	IOC_W_BASE_SG	  0x0000000100000000ULL	/* Window uses SGMAPs */
+   83: #define	IOC_W_BASE_WEN	  0x0000000200000000ULL	/* Window enable */
+   84: 
+   85: #define	IOC_W_MASK_1M	0x0000000000000000ULL	/* 1MB window */
+   86: #define	IOC_W_MASK_2M	0x0000000000100000ULL	/* 2MB window */
+   87: #define	IOC_W_MASK_4M	0x0000000000300000ULL	/* 4MB window */
+   88: #define	IOC_W_MASK_8M	0x0000000000700000ULL	/* 8MB window */
+   89: #define	IOC_W_MASK_16M	0x0000000000f00000ULL	/* 16MB window */
+   90: #define	IOC_W_MASK_32M	0x0000000001f00000ULL	/* 32MB window */
+   91: #define	IOC_W_MASK_64M	0x0000000003f00000ULL	/* 64MB window */
+   92: #define	IOC_W_MASK_128M	0x0000000007f00000ULL	/* 128M window */
+   93: #define	IOC_W_MASK_256M	0x000000000ff00000ULL	/* 256M window */
+   94: #define	IOC_W_MASK_512M	0x000000001ff00000ULL	/* 512M window */
+   95: #define	IOC_W_MASK_1G	0x000000003ff00000ULL	/* 1GB window */
+   96: #define	IOC_W_MASK_2G	0x000000007ff00000ULL	/* 2GB window */
+   97: #define	IOC_W_MASK_4G	0x00000000fff00000ULL	/* 4GB window */
+   98: 
+   99: #define	IOC_W_T_BASE	0x00000000fffffc00ULL	/* page table base */
+  100: 
+  101: #endif	/*  ALPHA_LCAREG_H  */
+
+web search: NetBSD lca_pci.c pci_conf_read IOC_CONF type 1 ...
+web search: 
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$n=0; Get-Content -LiteralPath regress/lca_confbus_probe.py | ForEach-Object { $n++; '"'{0,5}: {1}' -f "'$n, $_ }; rg -n --glob '"'*.[ch]' 'bus_pci_add\\s*\\(|cur_bus|cur_device|cur_func|cur_reg|void fatal\\(' src; rg --files --hidden -g AGENTS.md -g '"'!**/.git/**'"' src regress" in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$n=0; Get-Content -LiteralPath src/devices/bus_pci.c | ForEach-Object { $n++; if ($n -le 340) { '"'{0,5}: {1}' -f "'$n, $_ } }; $n=0; Get-Content -LiteralPath src/include/bus_pci.h | ForEach-Object { $n++; if ($n -ge 35 -and $n -le 170) { '"'{0,5}: {1}' -f "'$n, $_ } }; $n=0; Get-Content -LiteralPath src/include/thirdparty/alpha_lcareg.h | ForEach-Object { $n++; if ($n -ge 30 -and $n -le 105) { '"'{0,5}: {1}' -f "'$n, $_ } }' in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+ exited 1 in 188ms:
+    1: #!/usr/bin/env python3
+    2: #
+    3: #  lcaconfbus1kill -- RUNG-3 WITNESS: an ACCEPTED write to LCA_IOC_CONF arms a host kill in a
+    4: #  DIFFERENT handler, reached by an ordinary guest load with no rejected value anywhere on the path.
+    5: #
+    6: #  THE DEFECT, two handlers in `dev_lca.c':
+    7: #
+    8: #      DEVICE_ACCESS(lca_ioc), case LCA_IOC_CONF:
+    9: #              d->ioc_conf = idata;
+   10: #              /*  Only bit 0 is implemented so far, the PCI bus 0 vs bus non-0 selection bit.  */
+   11: #              if (idata & ~1) { fatal(...); exit(1); }     <-- 0x1 PASSES.  Accepted and stored.
+   12: #
+   13: #      DEVICE_ACCESS(lca_pci_conf):
+   14: #              bus = d->ioc_conf & 1;
+   15: #              if (bus == 0) { ...dev scan, already de-fatalised... }
+   16: #              else { fatal("TODO. Non-zero bus.\n"); exit(1); }
+   17: #
+   18: #  So: guest stores 0x1 to IOC_CONF (accepted), then ANY access in the PCI config window ends the
+   19: #  host.  Two ordinary accesses; nothing is refused.
+   20: #
+   21: #  *** WHY THIS IS A SEPARATE FILE AND NOT A SESSION IN lca_confwidth_probe.py. ***  That probe is a
+   22: #  SHIPPED witness with its own contract (HEAD 4/6, fix 6/6) recorded in the wiring manifest.  Adding
+   23: #  rows to a shipped detector perturbs its RESULT line and its recorded scores, and this defect is a
+   24: #  separate queue row with a separate disposition.  The ENCODERS and the session driver are copied
+   25: #  deliberately -- probes in this tree are standalone by design.
+   26: #
+   27: #  ---------------------------------------------------------------------------------------------
+   28: #  DESIGN REVIEWED BY THE grok SEAT, 2026-09-07, AFTER codex REFUSED THE BRIEF ON A CONTENT FILTER
+   29: #  (regress/artifacts/lcaconfbus1kill/grok_witness_20260907.txt).  VERDICT: SOUND.  Four corrections
+   30: #  from that review are built in here and are NOT optional:
+   31: #
+   32: #    1.  ONE PROCESS, NOT TWO SESSIONS.  The control read and the armed read happen in the SAME
+   33: #        emulator run, so ONLY `ioc_conf' differs between them.  Two separate sessions would leave a
+   34: #        residual that something else differed before the debugger prompt.
+   35: #    2.  S2 IS A READ, NOT A WRITE.  Both reach the kill.  But an empty-slot WRITE makes
+   36: #        `bus_pci_data_access' print "[ ... write to non-existant device ... ]", so the CONTROL
+   37: #        would carry a second fatal() on stderr.  An empty-slot READ of reg 0 is the architectural
+   38: #        ID probe and is silent.
+   39: #    3.  LIVENESS IS NOT `ioc rt'.  That row (in the sibling probe) proves the WRITER round-trips;
+   40: #        it says nothing about THIS window.  Liveness here is the control read SURVIVING and
+   41: #        returning the empty-slot signature.
+   42: #    4.  STAY ON `step'.  `continue' would make `lca_interrupt_assert'/`_deassert' -- bare
+   43: #        fatal()+exit(1) stubs with no guard -- a confounder.
+   44: #
+   45: #  THREE TRAPS THE SIBLING PROBE ALREADY PAID FOR, and none recurs here:
+   46: #    *  debugger `dump' skips DM_DEFAULT handlers and would return the #95 pre-zero, making both
+   47: #       reads look unmapped.  Every access below is a guest instruction.
+   48: #    *  a debugger `put d' of a killing value IS a host kill but is NOT a guest instruction, so it
+   49: #       witnesses nothing.  The arming store is a guest `stq'.
+   50: #    *  HAE at window offset 0 silently succeeds -- but that is `LCA_IOC_BASE+0' in `lca_ioc'.
+   51: #       `lca_pci_conf' has NO per-offset special case, so `LCA_PCI_CONF+0' is a clean control.
+   52: #
+   53: #  *** CONTRACT -- WHAT THIS WITNESSES AND WHAT IT DOES NOT. ***
+   54: #  It establishes: on unmodified `alphabook1', an ACCEPTED `stq 0x1' to CONF followed by ANY access
+   55: #  in the PCI config window produces a host exit(1) whose diagnostic is this arm, with no rejected
+   56: #  value on the path.  It does NOT establish that any shipped guest does this, and it is NOT a
+   57: #  detector of the repair: "host survives" greens equally for a silent return, for a latched
+   58: #  announce, and for falling through into bus_pci with cur_bus=1 (empty type-1 also survives).  A
+   59: #  fix round owes a row that discriminates those.  Do not read a green here as "type-1 is modelled".
+   60: #
+   61: #  Usage:  lca_confbus_probe.py <gxemul-binary> [label]
+   62: import os, sys, pty, select, time, re
+   63: 
+   64: BIN   = sys.argv[1]
+   65: LABEL = sys.argv[2] if len(sys.argv) > 2 else "?"
+   66: MACH  = "alphabook1"          #  device_add(machine, "lca") is ST_ALPHABOOK1 ONLY
+   67: 
+   68: rows = []
+   69: def row(name, got, want, note=""):
+   70:     ok = (got == want)
+   71:     rows.append((name, ok))
+   72:     print("%-14s %-24s %-24s %-52s %s" % (name, str(got), str(want), note, "ok" if ok else "FAIL"))
+   73:     return ok
+   74: 
+   75: # ---------------------------------------------------------------- encoder (memory format only)
+   76: ZERO, T0, T1, T2, T3 = 31, 1, 2, 3, 4
+   77: 
+   78: def mem(op, ra, rb, disp):
+   79:     assert -32768 <= disp <= 32767, "displacement %d out of range" % disp
+   80:     return (op << 26) | (ra << 21) | (rb << 16) | (disp & 0xffff)
+   81: 
+   82: def LDA (ra, disp, rb=ZERO): return mem(0x08, ra, rb, disp)
+   83: def LDAH(ra, disp, rb=ZERO): return mem(0x09, ra, rb, disp)
+   84: def LDQ (ra, disp, rb):      return mem(0x29, ra, rb, disp)
+   85: def STQ (ra, disp, rb):      return mem(0x2d, ra, rb, disp)
+   86: 
+   87: def load_const(reg, val):
+   88:     #  32-bit only, and deliberately so: this builds the SCRATCH pointer, never a 64-bit operand.
+   89:     lo = val & 0xffff
+   90:     hi = (val >> 16) & 0xffff
+   91:     if lo >= 0x8000:
+   92:         hi = (hi + 1) & 0xffff
+   93:     ops = [LDAH(reg, hi if hi < 0x8000 else hi - 0x10000)]
+   94:     if lo:
+   95:         ops.append(LDA(reg, lo if lo < 0x8000 else lo - 0x10000, reg))
+   96:     return ops
+   97: 
+   98: # ---------------------------------------------------------------- addresses (ALL RAM < 64 MB)
+   99: K0SEG        = 0xfffffc0000000000
+  100: def k0(p):   return K0SEG | p
+  101: 
+  102: LCA_IOC_BASE = 0x180000000
+  103: LCA_IOC_CONF = LCA_IOC_BASE + 0x020      # alpha_lcareg.h
+  104: LCA_PCI_CONF = 0x1e0000000               # alpha_lcareg.h; DEVINIT maps 0x20000000 bytes here
+  105: SCRATCH      = 0x01020000
+  106: CODE         = 0x01040000
+  107: LEGAL        = 0x1                       # `idata & ~1' == 0 -> ACCEPTED by the CONF guard
+  108: 
+  109: assert max(SCRATCH, CODE) < 64 * 1024 * 1024, "scratch/code must be inside RAM"
+  110: 
+  111: DUMMY = os.path.join(os.path.dirname(os.path.abspath(__file__)), "alpha_dummy.bin")
+  112: if not os.path.exists(DUMMY):
+  113:     with open(DUMMY, "wb") as f:
+  114:         f.write(b"\0" * 8)
+  115: 
+  116: # ---------------------------------------------------------------- session
+  117: def session(cmds, settle=1.6, spin=2.2):
+  118:     pid, fd = pty.fork()
+  119:     if pid == 0:
+  120:         os.execv(BIN, [BIN, "-V", "-x", "-E", "alpha", "-e", MACH, "-M", "64",
+  121:                        "0x20000000:" + DUMMY])
+  122:         os._exit(127)
+  123:     buf = ""
+  124:     def rd(t):
+  125:         nonlocal buf
+  126:         end = time.time() + t
+  127:         while time.time() < end:
+  128:             r, _, _ = select.select([fd], [], [], 0.1)
+  129:             if not r:
+  130:                 continue
+  131:             try:
+  132:                 d = os.read(fd, 65536)
+  133:                 if not d:
+  134:                     return False
+  135:                 buf += d.decode("latin-1", "replace")
+  136:             except OSError:
+  137:                 return False
+  138:         return True
+  139:     alive = rd(settle)
+  140:     for i, c in enumerate(cmds):
+  141:         try:
+  142:             os.write(fd, (c + "\n").encode("latin-1"))
+  143:         except OSError:
+  144:             alive = False; break
+  145:         if not rd(spin if i == len(cmds) - 1 else 0.35):
+  146:             alive = False; break
+  147:     try:
+  148:         os.write(fd, b"quit\n"); rd(0.4)
+  149:     except OSError:
+  150:         pass
+  151:     try:
+  152:         os.close(fd)
+  153:     except OSError:
+  154:         pass
+  155:     return buf.replace("\r", ""), alive
+  156: 
+  157: def printed(t, reg):
+  158:     m = re.search(r"print\s+%s\s*\n\s*(0x[0-9a-f]+)" % reg, t)
+  159:     return "absent" if not m else "0x%x" % int(m.group(1), 16)
+  160: 
+  161: print("lca_confbus_probe -- binary=%s label=%s machine=%s" % (BIN, LABEL, MACH))
+  162: print("%-14s %-24s %-24s %-52s %s" % ("row", "got", "want", "note", ""))
+  163: 
+  164: # ---------------------------------------------------------------- the single session
+  165: #  Register discipline: T0 holds the SCRATCH base and is CLOBBERED last, after both pointers are
+  166: #  loaded, so only four temporaries are needed.
+  167: setup = ["put d 0x%x, 0x%x" % (SCRATCH + 0,  k0(LCA_IOC_CONF)),
+  168:          "put d 0x%x, 0x%x" % (SCRATCH + 8,  LEGAL),
+  169:          "put d 0x%x, 0x%x" % (SCRATCH + 16, k0(LCA_PCI_CONF))]
+  170: 
+  171: lc      = load_const(T0, SCRATCH)
+  172: prologue = lc + [LDQ(T1, 16, T0),   # t1 = k0(LCA_PCI_CONF)
+  173:                  LDQ(T3, 0,  T0),   # t3 = k0(LCA_IOC_CONF)
+  174:                  LDQ(T0, 8,  T0),   # t0 = 0x1   (base clobbered LAST -- both pointers are loaded)
+  175:                  LDQ(T2, 0,  T1)]   # [A] CONTROL read of PCI config, with ioc_conf == 0
+  176: armed    = [STQ(T0, 0, T3),         # [B] the ACCEPTED store: ioc_conf = 1
+  177:             LDQ(T2, 0, T1)]         # [C] the SAME read again -- now bus == 1
+  178: 
+  179: prog = prologue + armed
+  180: cmds = setup + ["put w 0x%x, 0x%08x" % (k0(CODE) + 4 * i, op) for i, op in enumerate(prog)]
+  181: cmds += ["pc=0x%x" % k0(CODE),
+  182:          "step %d" % len(prologue),    # run up to and including the CONTROL read
+  183:          "print t2",                   # its value, while the host is certainly still alive
+  184:          "step %d" % len(armed)]       # the accepted store, then the armed read
+  185: txt, alive = session(cmds)
+  186: 
+  187: ctl = printed(txt, "t2")
+  188: 
+  189: #  ---- CONTROL 1: the same access, same address, same width, SURVIVES with ioc_conf == 0 --------
+  190: #  This is what attributes any later death to the VALUE and not to the address, the width, or the
+  191: #  fact that the window was touched at all.
+  192: row("bus ctl", "yes" if ctl != "absent" else "absent", "yes",
+  193:     "CONTROL: identical read at ioc_conf==0 completed and printed")
+  194: 
+  195: #  ---- CONTROL 2: DEVICE SIGNATURE on the control -----------------------------------------------
+  196: #  grok: an empty-slot read returns 0xffffffffffffffff via memory_writemax64; UNMAPPED returns 0.
+  197: #  So this distinguishes "reached lca_pci_conf and probed an absent device" from "missed the device".
+  198: row("bus ctlsig", ctl, "0xffffffffffffffff",
+  199:     "DEVICE SIGNATURE: empty-slot ID probe; unmapped would read 0")
+  200: 
+  201: #  ---- THE DEFECT ROW ---------------------------------------------------------------------------
+  202: #  ORACLE POLARITY: the ladder requires the witness to show the symptom on the PRE-FIX build and go
+  203: #  GREEN post-fix with the SAME script, so this asserts the CORRECT behaviour.
+  204: #  PRE-FIX  -> "dead"  -> RED.        POST-FIX -> "alive" -> GREEN.
+  205: row("bus kill", "alive" if alive else "dead", "alive",
+  206:     "an ACCEPTED stq 0x1 then an ordinary ldq must NOT end the host")
+  207: 
+  208: #  ---- ATTRIBUTION: if it died, it died HERE ----------------------------------------------------
+  209: #  Green in BOTH directions by construction, and RED only if the host dies WITHOUT this arm's
+  210: #  diagnostic -- i.e. if something else killed it.  The literal is unique in src/ (one site).
+  211: sig = ("TODO. Non-zero bus." in txt)
+  212: row("bus attrib", "yes" if (alive or sig) else "died-elsewhere", "yes",
+  213:     "ATTRIBUTION: a death here must carry THIS arm's unique diagnostic")
+  214: 
+  215: #  *** ECHO THE EVIDENCE INTO THIS LOG. ***  The first run of this probe passed `bus attrib' by
+  216: #  testing the PTY buffer and printing nothing, so the PRESERVED artifact carried no trace of the
+  217: #  diagnostic the row rests on -- a green row whose evidence a later reader cannot check.  The
+  218: #  literal is unique in src/ (one site, dev_lca.c:133; a second grep hit is the .o).
+  219: for _l in txt.split(chr(10)):
+  220:     if "Non-zero bus" in _l or "lca_ioc: unimplemented" in _l:
+  221:         print("  EVIDENCE: %s" % _l.strip())
+  222: 
+  223: ok = sum(1 for _, o in rows if o)
+  224: print("")
+  225: print("LCACONFBUS_RESULT=%d/%d" % (ok, len(rows)))
+  226: print("LCACONFBUS_WITNESS=%s" % ("PASS" if ok == len(rows) else "FAIL"))
+  227: print("LCACONFBUS_DONE")
+src\core\debugmsg.c:384:void fatal(const char *fmt, ...)
+src\devices\bus_pci.c:102:		if (dev->bus      == pci_data->cur_bus &&
+src\devices\bus_pci.c:103:		    dev->function == pci_data->cur_func &&
+src\devices\bus_pci.c:104:		    dev->device   == pci_data->cur_device)
+src\devices\bus_pci.c:112:			if (pci_data->cur_reg == 0)
+src\devices\bus_pci.c:119:			    pci_data->cur_bus, pci_data->cur_func,
+src\devices\bus_pci.c:120:			    pci_data->cur_device);
+src\devices\bus_pci.c:127:	    pci_data->cur_reg >= PCI_MAPREG_START &&
+src\devices\bus_pci.c:128:	    pci_data->cur_reg <= PCI_MAPREG_END - 4)
+src\devices\bus_pci.c:136:		int ofs = pci_data->cur_reg + i;
+src\devices\bus_pci.c:146:		    pci_data->cur_reg >= PCI_MAPREG_START &&
+src\devices\bus_pci.c:147:		    pci_data->cur_reg <= PCI_MAPREG_END - 4) {
+src\devices\bus_pci.c:153:		    dev->cfg_reg_write(dev, pci_data->cur_reg, *data) == 0) {
+src\devices\bus_pci.c:159:			    (long long)x, pci_data->cur_bus,
+src\devices\bus_pci.c:160:			    pci_data->cur_device, pci_data->cur_func,
+src\devices\bus_pci.c:161:			    dev->name, pci_data->cur_reg);
+src\devices\bus_pci.c:165:			if (pci_data->cur_reg == PCI_COMMAND_STATUS_REG
+src\devices\bus_pci.c:182:	    pci_data->cur_bus, pci_data->cur_device, pci_data->cur_func,
+src\devices\bus_pci.c:183:	    dev->name, pci_data->cur_reg, len, (long)*data);
+src\devices\bus_pci.c:200:	pci_data->cur_bus = bus;
+src\devices\bus_pci.c:201:	pci_data->cur_device = device;
+src\devices\bus_pci.c:202:	pci_data->cur_func = function;
+src\devices\bus_pci.c:203:	pci_data->cur_reg = reg;
+src\devices\bus_pci.c:208: *  bus_pci_add():
+src\devices\bus_pci.c:212:void bus_pci_add(struct machine *machine, struct pci_data *pci_data,
+src\devices\bus_pci.c:221:		fatal("bus_pci_add(): pci_data == NULL!\n");
+src\devices\bus_pci.c:233:			fatal("bus_pci_add(): (bus %i, device %i, function"
+src\machines\machine_sgi.c:620:		/*  bus_pci_add(machine, pci_data, mem, 0, 0, 0,
+src\machines\machine_sgi.c:645:			bus_pci_add(machine, pci_data, mem, 0, 1, 0, "ahc");
+src\machines\machine_sgi.c:648:		// bus_pci_add(machine, pci_data, mem, 0, 2, 0, "ahc");
+src\machines\machine_prep.c:71:		bus_pci_add(machine, pci_data, machine->memory,
+src\machines\machine_prep.c:75:			bus_pci_add(machine, pci_data, machine->memory,
+src\devices\dev_cpc700.c:228:		bus_pci_add(devinit->machine, d->pci_data,
+src\machines\machine_pmppc.c:72:	bus_pci_add(machine, pci_data, machine->memory, 0, 8, 0, "dec21143");
+src\machines\machine_netwinder.c:63:		bus_pci_add(machine, pci_bus, machine->memory,
+src\machines\machine_mvmeppc.c:69:		bus_pci_add(machine, pci_data, machine->memory,
+src\machines\machine_macppc.c:71:	/*  bus_pci_add(
+src\machines\machine_macppc.c:73:	bus_pci_add(machine, pci_data, machine->memory, 0, 15, 0, "gc_obio");
+src\machines\machine_macppc.c:76:		bus_pci_add(machine, pci_data, machine->memory, 0, 16, 0,
+src\machines\machine_landisk.c:99:	bus_pci_add(machine, pcibus, machine->memory, 0, 0, 0, "rtl8139c");
+src\machines\machine_iq80321.c:84:	bus_pci_add(machine, pci, machine->memory, 0, 6, 0, "i31244");
+src\include\bus_pci.h:84:	int		cur_bus, cur_device, cur_func, cur_reg;
+src\include\bus_pci.h:160:void bus_pci_add(struct machine *machine, struct pci_data *pci_data,
+src\devices\dev_eagle.c:149:	bus_pci_add(devinit->machine, d->pci_data,
+src\devices\dev_eagle.c:162:		bus_pci_add(devinit->machine, d->pci_data,
+src\devices\dev_eagle.c:167:		bus_pci_add(devinit->machine, d->pci_data,
+src\devices\dev_eagle.c:177:			bus_pci_add(devinit->machine, d->pci_data,
+src\machines\machine_evbmips.c:93:			bus_pci_add(machine, pci_data, machine->memory,
+src\machines\machine_evbmips.c:97:		bus_pci_add(machine, pci_data, machine->memory,
+src\machines\machine_evbmips.c:99:		bus_pci_add(machine, pci_data, machine->memory,
+src\machines\machine_evbmips.c:103:		/*  bus_pci_add(machine, pci_data, machine->memory,
+src\machines\machine_cobalt.c:101:	/*  bus_pci_add(machine, pci_data, mem, 0,  7, 0, "dec21143");  */
+src\machines\machine_cobalt.c:102:	/*  bus_pci_add(machine, pci_data, mem, 0,  8, 0, "symbios_860");
+src\machines\machine_cobalt.c:104:	bus_pci_add(machine, pci_data, mem, 0,  9, 0, "vt82c586_isa");
+src\machines\machine_cobalt.c:105:	bus_pci_add(machine, pci_data, mem, 0,  9, 1, "vt82c586_ide");
+src\machines\machine_cobalt.c:106:	/*  bus_pci_add(machine, pci_data, mem, 0, 12, 0, "dec21143");  */
+src\machines\machine_cats.c:82:	bus_pci_add(machine, pci_bus, machine->memory, 0xc0, 8, 0, "s3_virge");
+src\machines\machine_algor.c:80:	/*  bus_pci_add(machine, pci_bus, machine->memory, 0, 0, 0,
+src\devices\dev_gt.c:301:	bus_pci_add(machine, d->pci_data, mem, 0, 0, 0, gt_name);
+src\devices\dev_lca.c:390:	bus_pci_add(devinit->machine, d->pci_data, devinit->machine->memory,
+src\devices\dev_footbridge.c:860:		bus_pci_add(devinit->machine, d->pcibus,
+src\devices\dev_footbridge.c:862:		bus_pci_add(devinit->machine, d->pcibus,
+src\devices\dev_footbridge.c:864:		bus_pci_add(devinit->machine, d->pcibus,
+src\devices\dev_footbridge.c:868:		bus_pci_add(devinit->machine, d->pcibus,
+src\devices\dev_footbridge.c:870:		bus_pci_add(devinit->machine, d->pcibus,
+src\include\misc.h:262:void fatal(const char *fmt, ...);
+src\devices\dev_uninorth.c:138:	bus_pci_add(machine, d->pci_data, mem, 0, 11, 0, "uninorth");
+src\devices\dev_v3.c:325:		bus_pci_add(devinit->machine, d->pci_data,
+src\devices\dev_v3.c:327:		bus_pci_add(devinit->machine, d->pci_data,
+
+ succeeded in 197ms:
+    1: /*
+    2:  *  Copyright (C) 2004-2021  Anders Gavare.  All rights reserved.
+    3:  *
+    4:  *  Redistribution and use in source and binary forms, with or without
+    5:  *  modification, are permitted provided that the following conditions are met:
+    6:  *
+    7:  *  1. Redistributions of source code must retain the above copyright
+    8:  *     notice, this list of conditions and the following disclaimer.
+    9:  *  2. Redistributions in binary form must reproduce the above copyright  
+   10:  *     notice, this list of conditions and the following disclaimer in the 
+   11:  *     documentation and/or other materials provided with the distribution.
+   12:  *  3. The name of the author may not be used to endorse or promote products
+   13:  *     derived from this software without specific prior written permission.
+   14:  *
+   15:  *  THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+   16:  *  ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+   17:  *  IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+   18:  *  ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE   
+   19:  *  FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+   20:  *  DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+   21:  *  OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+   22:  *  HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+   23:  *  LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+   24:  *  OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+   25:  *  SUCH DAMAGE.
+   26:  *   
+   27:  *
+   28:  *  COMMENT: Generic PCI bus framework
+   29:  *
+   30:  *  This is not a normal "device", but is used by individual PCI controllers
+   31:  *  and devices.
+   32:  *
+   33:  *  See NetBSD's pcidevs.h for more PCI vendor and device identifiers.
+   34:  *
+   35:  *  TODO:
+   36:  *
+   37:  *	x) Allow guest OSes to do runtime address fixups (i.e. actually
+   38:  *	   move a device from one address to another).
+   39:  *
+   40:  *	x) Generalize the PCI and legacy ISA interrupt routing stuff.
+   41:  *
+   42:  *	x) Make sure that pci_little_endian is used correctly everywhere.
+   43:  */
+   44: 
+   45: #include <stdio.h>
+   46: #include <stdlib.h>
+   47: #include <string.h>
+   48: 
+   49: #define BUS_PCI_C
+   50: 
+   51: #include "bus_isa.h"
+   52: #include "bus_pci.h"
+   53: #include "cpu.h"
+   54: #include "device.h"
+   55: #include "devices.h"
+   56: #include "diskimage.h"
+   57: #include "machine.h"
+   58: #include "memory.h"
+   59: #include "misc.h"
+   60: #include "wdc.h"
+   61: 
+   62: #include "thirdparty/cpc700reg.h"
+   63: 
+   64: extern int verbose;
+   65: 
+   66: 
+   67: /*
+   68:  *  bus_pci_decompose_1():
+   69:  *
+   70:  *  Helper function for decomposing Mechanism 1 tags.
+   71:  */
+   72: void bus_pci_decompose_1(uint32_t t, int *bus, int *dev, int *func, int *reg)
+   73: {
+   74: 	*bus  = (t >> 16) & 0xff;
+   75: 	*dev  = (t >> 11) & 0x1f;
+   76: 	*func = (t >>  8) &  0x7;
+   77: 	*reg  =  t        & 0xff;
+   78: 
+   79: 	/*  Warn about unaligned register access:  */
+   80: 	if (t & 3)
+   81: 		fatal("[ bus_pci_decompose_1: WARNING: reg = 0x%02x ]\n",
+   82: 		    t & 0xff);
+   83: }
+   84: 
+   85: 
+   86: /*
+   87:  *  bus_pci_data_access():
+   88:  *
+   89:  *  Reads from or writes to the PCI configuration registers of a device.
+   90:  */
+   91: void bus_pci_data_access(struct cpu *cpu, struct pci_data *pci_data,
+   92: 	uint64_t *data, int len, int writeflag)
+   93: {
+   94: 	struct pci_device *dev;
+   95: 	unsigned char *cfg_base;
+   96: 	uint64_t x, idata = *data;
+   97: 	int i;
+   98: 
+   99: 	/*  Scan through the list of pci_device entries.  */
+  100: 	dev = pci_data->first_device;
+  101: 	while (dev != NULL) {
+  102: 		if (dev->bus      == pci_data->cur_bus &&
+  103: 		    dev->function == pci_data->cur_func &&
+  104: 		    dev->device   == pci_data->cur_device)
+  105: 			break;
+  106: 		dev = dev->next;
+  107: 	}
+  108: 
+  109: 	/*  No device? Then return emptiness.  */
+  110: 	if (dev == NULL) {
+  111: 		if (writeflag == MEM_READ) {
+  112: 			if (pci_data->cur_reg == 0)
+  113: 				*data = (uint64_t) -1;
+  114: 			else
+  115: 				*data = 0;
+  116: 		} else {
+  117: 			fatal("[ bus_pci_data_access(): write to non-existant"
+  118: 			    " device, bus %i func %i device %i ]\n",
+  119: 			    pci_data->cur_bus, pci_data->cur_func,
+  120: 			    pci_data->cur_device);
+  121: 		}
+  122: 		return;
+  123: 	}
+  124: 
+  125: 	/*  Return normal config data, or length data?  */
+  126: 	if (pci_data->last_was_write_ffffffff &&
+  127: 	    pci_data->cur_reg >= PCI_MAPREG_START &&
+  128: 	    pci_data->cur_reg <= PCI_MAPREG_END - 4)
+  129: 		cfg_base = dev->cfg_mem_size;
+  130: 	else
+  131: 		cfg_base = dev->cfg_mem;
+  132: 
+  133: 	/*  Read data as little-endian:  */
+  134: 	x = 0;
+  135: 	for (i=len-1; i>=0; i--) {
+  136: 		int ofs = pci_data->cur_reg + i;
+  137: 		x <<= 8;
+  138: 		x |= cfg_base[ofs & (PCI_CFG_MEM_SIZE - 1)];
+  139: 	}
+  140: 
+  141: 	/*  Register write:  */
+  142: 	if (writeflag == MEM_WRITE) {
+  143: 		debug("[ bus_pci: write to PCI DATA: data = 0x%08llx ]\n",
+  144: 		    (long long)idata);
+  145: 		if (idata == 0xffffffffULL &&
+  146: 		    pci_data->cur_reg >= PCI_MAPREG_START &&
+  147: 		    pci_data->cur_reg <= PCI_MAPREG_END - 4) {
+  148: 			pci_data->last_was_write_ffffffff = 1;
+  149: 			return;
+  150: 		}
+  151: 
+  152: 		if (dev->cfg_reg_write == NULL ||
+  153: 		    dev->cfg_reg_write(dev, pci_data->cur_reg, *data) == 0) {
+  154: 			/*  Print a warning for unhandled writes:  */
+  155: 			debug("[ bus_pci: write to PCI DATA: data = 0x%08llx"
+  156: 			    " (current value = 0x%08llx); NOT YET"
+  157: 			    " SUPPORTED. bus %i, device %i, function %i (%s)"
+  158: 			    " register 0x%02x ]\n", (long long)idata,
+  159: 			    (long long)x, pci_data->cur_bus,
+  160: 			    pci_data->cur_device, pci_data->cur_func,
+  161: 			    dev->name, pci_data->cur_reg);
+  162: 
+  163: 			/*  Special warning, to detect if NetBSD's special
+  164: 			    detection of PCI devices fails:  */
+  165: 			if (pci_data->cur_reg == PCI_COMMAND_STATUS_REG
+  166: 			    && !((*data) & PCI_COMMAND_IO_ENABLE)) {
+  167: 				fatal("\n[ NetBSD PCI detection stuff not"
+  168: 				    " yet implemented for device '%s' ]\n",
+  169: 				    dev->name);
+  170: 			}
+  171: 		}
+  172: 		return;
+  173: 	}
+  174: 
+  175: 	/*  Register read:  */
+  176: 	*data = x;
+  177: 
+  178: 	pci_data->last_was_write_ffffffff = 0;
+  179: 
+  180: 	debug("[ bus_pci: read from PCI DATA, bus %i, device "
+  181: 	    "%i, function %i (%s) register 0x%02x: (len=%i) 0x%08lx ]\n",
+  182: 	    pci_data->cur_bus, pci_data->cur_device, pci_data->cur_func,
+  183: 	    dev->name, pci_data->cur_reg, len, (long)*data);
+  184: }
+  185: 
+  186: 
+  187: /*
+  188:  *  bus_pci_setaddr():
+  189:  *
+  190:  *  Sets the address in preparation for a PCI register transfer.
+  191:  */
+  192: void bus_pci_setaddr(struct cpu *cpu, struct pci_data *pci_data,
+  193: 	int bus, int device, int function, int reg)
+  194: {
+  195: 	if (cpu == NULL || pci_data == NULL) {
+  196: 		fatal("bus_pci_setaddr(): NULL ptr\n");
+  197: 		exit(1);
+  198: 	}
+  199: 
+  200: 	pci_data->cur_bus = bus;
+  201: 	pci_data->cur_device = device;
+  202: 	pci_data->cur_func = function;
+  203: 	pci_data->cur_reg = reg;
+  204: }
+  205: 
+  206: 
+  207: /*
+  208:  *  bus_pci_add():
+  209:  *
+  210:  *  Add a PCI device to a bus_pci device.
+  211:  */
+  212: void bus_pci_add(struct machine *machine, struct pci_data *pci_data,
+  213: 	struct memory *mem, int bus, int device, int function,
+  214: 	const char *name)
+  215: {
+  216: 	struct pci_device *pd;
+  217: 	int ofs;
+  218: 	void (*init)(struct machine *, struct memory *, struct pci_device *);
+  219: 
+  220: 	if (pci_data == NULL) {
+  221: 		fatal("bus_pci_add(): pci_data == NULL!\n");
+  222: 		abort();
+  223: 	}
+  224: 
+  225: 	/*  Find the PCI device:  */
+  226: 	init = pci_lookup_initf(name);
+  227: 
+  228: 	/*  Make sure this bus/device/function number isn't already in use:  */
+  229: 	pd = pci_data->first_device;
+  230: 	while (pd != NULL) {
+  231: 		if (pd->bus == bus && pd->device == device &&
+  232: 		    pd->function == function) {
+  233: 			fatal("bus_pci_add(): (bus %i, device %i, function"
+  234: 			    " %i) already in use\n", bus, device, function);
+  235: 			exit(1);
+  236: 		}
+  237: 		pd = pd->next;
+  238: 	}
+  239: 
+  240: 	CHECK_ALLOCATION(pd = (struct pci_device *) malloc(sizeof(struct pci_device)));
+  241: 	memset(pd, 0, sizeof(struct pci_device));
+  242: 
+  243: 	/*  Add the new device first in the PCI bus' chain:  */
+  244: 	pd->next = pci_data->first_device;
+  245: 	pci_data->first_device = pd;
+  246: 
+  247: 	CHECK_ALLOCATION(pd->name = strdup(name));
+  248: 	pd->pcibus   = pci_data;
+  249: 	pd->bus      = bus;
+  250: 	pd->device   = device;
+  251: 	pd->function = function;
+  252: 
+  253: 	/*
+  254: 	 *  Initialize with some default values:
+  255: 	 *
+  256: 	 *  TODO:  The command status register is best to set up per device.
+  257: 	 *  The size registers should also be set up on a per-device basis.
+  258: 	 */
+  259: 	PCI_SET_DATA(PCI_COMMAND_STATUS_REG,
+  260: 	    PCI_COMMAND_IO_ENABLE | PCI_COMMAND_MEM_ENABLE);
+  261: 	for (ofs = PCI_MAPREG_START; ofs < PCI_MAPREG_END; ofs += 4)
+  262: 		PCI_SET_DATA_SIZE(ofs, 0x00100000 - 1);
+  263: 
+  264: 	if (init == NULL) {
+  265: 		fatal("No init function for PCI device \"%s\"?\n", name);
+  266: 		exit(1);
+  267: 	}
+  268: 
+  269: 	/*  Call the PCI device' init function:  */
+  270: 	init(machine, mem, pd);
+  271: }
+  272: 
+  273: 
+  274: /*
+  275:  *  allocate_device_space():
+  276:  *
+  277:  *  Used by glue code (see below) to allocate space for a PCI device.
+  278:  *
+  279:  *  The returned values in portp and memp are the actual (emulated) addresses
+  280:  *  that the device should use. (Normally only one of these is actually used.)
+  281:  *
+  282:  *  TODO: PCI irqs?
+  283:  */
+  284: static void allocate_device_space(struct pci_device *pd,
+  285: 	uint64_t portsize, uint64_t memsize,
+  286: 	uint64_t *portp, uint64_t *memp)
+  287: {
+  288: 	uint64_t port, mem;
+  289: 
+  290: 	/*  Calculate an aligned starting port:  */
+  291: 	port = pd->pcibus->cur_pci_portbase;
+  292: 	if (portsize != 0) {
+  293: 		port = ((port - 1) | (portsize - 1)) + 1;
+  294: 		pd->pcibus->cur_pci_portbase = port;
+  295: 		PCI_SET_DATA(PCI_MAPREG_START + pd->cur_mapreg_offset,
+  296: 		    port | PCI_MAPREG_TYPE_IO);
+  297: 		PCI_SET_DATA_SIZE(PCI_MAPREG_START + pd->cur_mapreg_offset,
+  298: 		    ((portsize - 1) & ~0xf) | 0xd);
+  299: 		pd->cur_mapreg_offset += sizeof(uint32_t);
+  300: 	}
+  301: 
+  302: 	/*  Calculate an aligned starting memory location:  */
+  303: 	mem = pd->pcibus->cur_pci_membase;
+  304: 	if (memsize != 0) {
+  305: 		mem = ((mem - 1) | (memsize - 1)) + 1;
+  306: 		pd->pcibus->cur_pci_membase = mem;
+  307: 		PCI_SET_DATA(PCI_MAPREG_START + pd->cur_mapreg_offset, mem);
+  308: 		PCI_SET_DATA_SIZE(PCI_MAPREG_START + pd->cur_mapreg_offset,
+  309: 		    ((memsize - 1) & ~0xf) | 0x0);
+  310: 		pd->cur_mapreg_offset += sizeof(uint32_t);
+  311: 	}
+  312: 
+  313: 	*portp = port + pd->pcibus->pci_actual_io_offset;
+  314: 	*memp  = mem  + pd->pcibus->pci_actual_mem_offset;
+  315: 
+  316: 	if (verbose >= 2) {
+  317: 		debug("pci device '%s' at", pd->name);
+  318: 		if (portsize != 0)
+  319: 			debug(" port 0x%llx-0x%llx", (long long)pd->pcibus->
+  320: 			    cur_pci_portbase, (long long)(pd->pcibus->
+  321: 			    cur_pci_portbase + portsize - 1));
+  322: 		if (memsize != 0)
+  323: 			debug(" mem 0x%llx-0x%llx", (long long)pd->pcibus->
+  324: 			    cur_pci_membase, (long long)(pd->pcibus->
+  325: 			    cur_pci_membase + memsize - 1));
+  326: 		debug("\n");
+  327: 	}
+  328: 
+  329: 	pd->pcibus->cur_pci_portbase += portsize;
+  330: 	pd->pcibus->cur_pci_membase += memsize;
+  331: }
+  332: 
+  333: 
+  334: /*
+  335:  *  bus_pci_init():
+  336:  *
+  337:  *  This doesn't register a device, but instead returns a pointer to a struct
+  338:  *  which should be passed to other bus_pci functions when accessing the bus.
+  339:  *
+  340:  *  irq_path is the interrupt path to the PCI controller.
+   35: 
+   36: #include "thirdparty/pcireg.h"
+   37: 
+   38: struct machine;
+   39: struct memory;
+   40: 
+   41: struct pci_device;
+   42: 
+   43: 
+   44: #ifndef BUS_PCI_C
+   45: 
+   46: struct pci_data;
+   47: 
+   48: #else
+   49: 
+   50: struct pci_data {
+   51: 	/*
+   52: 	 *  IRQ paths:
+   53: 	 *
+   54: 	 *  irq_path		Path of the controller itself.
+   55: 	 *  irq_path_isa	Path base of ISA interrupts.
+   56: 	 *  irq_path_pci	Path base of PCI interrupts.
+   57: 	 */
+   58: 	char		*irq_path;
+   59: 	char		*irq_path_isa;
+   60: 	char		*irq_path_pci;
+   61: 
+   62: 	/*
+   63: 	 *  Default I/O port, memory, and irq bases for PCI and legacy ISA
+   64: 	 *  devices, and the base address for actual (emulated) devices:
+   65: 	 *
+   66: 	 *  pci_portbase etc are what is stored in the device configuration
+   67: 	 *  registers. This address + pci_actual_{io,mem}_offset is where the
+   68: 	 *  emulated device should be registered.
+   69: 	 */
+   70: 	uint64_t	pci_actual_io_offset;
+   71: 	uint64_t	pci_actual_mem_offset;
+   72: 
+   73: 	uint64_t	pci_portbase;
+   74: 	uint64_t	pci_membase;
+   75: 
+   76: 	uint64_t	isa_portbase;
+   77: 	uint64_t	isa_membase;
+   78: 
+   79: 	/*  Current base when allocating space for PCI devices:  */
+   80: 	uint64_t	cur_pci_portbase;
+   81: 	uint64_t	cur_pci_membase;
+   82: 
+   83: 	/*  Current register access:  */
+   84: 	int		cur_bus, cur_device, cur_func, cur_reg;
+   85: 	int		last_was_write_ffffffff;
+   86: 
+   87: 	struct pci_device *first_device;
+   88: };
+   89: 
+   90: #define	PCI_CFG_MEM_SIZE	0x100
+   91: 
+   92: struct pci_device {
+   93: 	/*  Pointer to the next PCI device on this bus:  */
+   94: 	struct pci_device	*next;
+   95: 
+   96: 	/*  Pointer back to the bus this device is connected to:  */
+   97: 	struct pci_data		*pcibus;
+   98: 
+   99: 	/*  Short device name, and bus/device/function value:  */
+  100: 	char			*name;
+  101: 	int			bus, device, function;
+  102: 
+  103: 	/*  Configuration memory:  */
+  104: 	unsigned char		cfg_mem[PCI_CFG_MEM_SIZE];
+  105: 	unsigned char		cfg_mem_size[PCI_CFG_MEM_SIZE];
+  106: 
+  107: 	/*  Used when setting up the configuration registers:  */
+  108: 	int			cur_mapreg_offset;
+  109: 
+  110: 	/*  Function to handle device-specific cfg register writes:  */
+  111: 	int			(*cfg_reg_write)(struct pci_device *pd,
+  112: 				    int reg, uint32_t value);
+  113: 	void			*extra;
+  114: };
+  115: 
+  116: #define	PCIINIT(name)	void pciinit_ ## name(struct machine *machine,	\
+  117: 	struct memory *mem, struct pci_device *pd)
+  118: 
+  119: /*
+  120:  *  Store little-endian config data in the pci_data struct's cfg_mem[]
+  121:  *  or cfg_mem_size[], respectively.
+  122:  */
+  123: #define PCI_SET_DATA(ofs,value)	{					\
+  124: 	pd->cfg_mem[(ofs)]     = (value) & 255;				\
+  125: 	pd->cfg_mem[(ofs) + 1] = ((value) >> 8) & 255;			\
+  126: 	pd->cfg_mem[(ofs) + 2] = ((value) >> 16) & 255;			\
+  127: 	pd->cfg_mem[(ofs) + 3] = ((value) >> 24) & 255;			\
+  128: 	}
+  129: #define PCI_SET_DATA_SIZE(ofs,value)	{				\
+  130: 	pd->cfg_mem_size[(ofs)]     = (value) & 255;			\
+  131: 	pd->cfg_mem_size[(ofs) + 1] = ((value) >> 8) & 255;		\
+  132: 	pd->cfg_mem_size[(ofs) + 2] = ((value) >> 16) & 255;		\
+  133: 	pd->cfg_mem_size[(ofs) + 3] = ((value) >> 24) & 255;		\
+  134: 	}
+  135: 
+  136: #endif
+  137: 
+  138: #define	BUS_PCI_ADDR	0xcf8
+  139: #define	BUS_PCI_DATA	0xcfc
+  140: 
+  141: 
+  142: /*
+  143:  *  bus_pci.c:
+  144:  */
+  145: 
+  146: /*  Run-time access:  */
+  147: void bus_pci_decompose_1(uint32_t t, int *bus, int *dev, int *func, int *reg);
+  148: void bus_pci_setaddr(struct cpu *cpu, struct pci_data *pci_data,
+  149: 	int bus, int device, int function, int reg);
+  150: void bus_pci_data_access(struct cpu *cpu, struct pci_data *pci_data,
+  151: 	uint64_t *data, int len, int writeflag);
+  152: 
+  153: /*  Initialization:  */
+  154: struct pci_data *bus_pci_init(struct machine *machine, const char *irq_path,
+  155: 	uint64_t pci_actual_io_offset, uint64_t pci_actual_mem_offset,
+  156: 	uint64_t pci_portbase, uint64_t pci_membase, const char *pci_irqbase,
+  157: 	uint64_t isa_portbase, uint64_t isa_membase, const char *isa_irqbase);
+  158: 
+  159: /*  Add a PCI device to a PCI bus:  */
+  160: void bus_pci_add(struct machine *machine, struct pci_data *pci_data,
+  161: 	struct memory *mem, int bus, int device, int function,
+  162: 	const char *name);
+  163: 
+  164: 
+  165: #endif	/*  BUS_PCI_H  */
+   30:  * any improvements or extensions that they make and grant Carnegie the
+   31:  * rights to redistribute these changes.
+   32:  */
+   33: 
+   34: /*
+   35:  * 21066 chip registers
+   36:  */
+   37: 
+   38: #define REGVAL(r)	(*(volatile int32_t *)ALPHA_PHYS_TO_K0SEG(r))
+   39: #define REGVAL64(r)	(*(volatile int64_t *)ALPHA_PHYS_TO_K0SEG(r))
+   40: 
+   41: /*
+   42:  * Base addresses
+   43:  */
+   44: #define LCA_IOC_BASE	0x180000000ULL		/* LCA IOC Regs */
+   45: #define LCA_PCI_SIO	0x1c0000000ULL		/* PCI Sp. I/O Space */
+   46: #define LCA_PCI_CONF	0x1e0000000ULL		/* PCI Conf. Space */
+   47: #define LCA_PCI_SPARSE	0x200000000ULL		/* PCI Sparse Space */
+   48: #define LCA_PCI_DENSE	0x300000000ULL		/* PCI Dense Space */
+   49: 
+   50: #define LCA_IOC_HAE	LCA_IOC_BASE		/* Host Address Ext. (64) */
+   51: #define	IOC_HAE_ADDREXT	0x00000000f8000000ULL
+   52: #define	IOC_HAE_RSVSD	0xffffffff07ffffffULL
+   53: 
+   54: #define LCA_IOC_CONF	(LCA_IOC_BASE + 0x020)	/* Configuration Cycle Type */
+   55: 
+   56: #define LCA_IOC_STAT0	(LCA_IOC_BASE + 0x040)	/* Status 0 */
+   57: #define	IOC_STAT0_CMD	0x000000000000000fULL	/* PCI command mask */
+   58: #define	IOC_STAT0_ERR	0x0000000000000010ULL	/* IOC error indicator R/W1C */
+   59: #define	IOC_STAT0_LOST	0x0000000000000020ULL	/* IOC lose error info R/W1C */
+   60: #define	IOC_STAT0_THIT	0x0000000000000040ULL	/* test hit */
+   61: #define	IOC_STAT0_TREF	0x0000000000000080ULL	/* test reference */
+   62: #define	IOC_STAT0_CODE	0x0000000000000700ULL	/* code mask */
+   63: #define	IOC_STAT0_CODESHIFT 8
+   64: #define	IOC_STAT0_P_NBR	0x00000000ffffe000ULL	/* page number mask */
+   65: 
+   66: #define LCA_IOC_STAT1	(LCA_IOC_BASE + 0x060)	/* Status 1 */
+   67: #define	IOC_STAT1_ADDR	0x00000000ffffffffULL	/* PCI address mask */
+   68: 
+   69: #define	LCA_IOC_TBIA	(LCA_IOC_BASE + 0x080)	/* TLB Invalidate All */
+   70: #define	LCA_IOC_TB_ENA	(LCA_IOC_BASE + 0x0a0)	/* TLB Enable */
+   71: #define	IOC_TB_ENA_TEN	0x0000000000000080ULL
+   72: 
+   73: #define LCA_IOC_W_BASE0	(LCA_IOC_BASE + 0x100)	/* Window Base */
+   74: #define LCA_IOC_W_MASK0	(LCA_IOC_BASE + 0x140)	/* Window Mask */
+   75: #define LCA_IOC_W_T_BASE0 (LCA_IOC_BASE + 0x180) /* Translated Base */
+   76: 
+   77: #define LCA_IOC_W_BASE1	(LCA_IOC_BASE + 0x120)	/* Window Base */
+   78: #define LCA_IOC_W_MASK1	(LCA_IOC_BASE + 0x160)	/* Window Mask */
+   79: #define LCA_IOC_W_T_BASE1 (LCA_IOC_BASE + 0x1a0) /* Translated Base */
+   80: 
+   81: #define	IOC_W_BASE_W_BASE 0x00000000fff00000ULL	/* Window base value */
+   82: #define	IOC_W_BASE_SG	  0x0000000100000000ULL	/* Window uses SGMAPs */
+   83: #define	IOC_W_BASE_WEN	  0x0000000200000000ULL	/* Window enable */
+   84: 
+   85: #define	IOC_W_MASK_1M	0x0000000000000000ULL	/* 1MB window */
+   86: #define	IOC_W_MASK_2M	0x0000000000100000ULL	/* 2MB window */
+   87: #define	IOC_W_MASK_4M	0x0000000000300000ULL	/* 4MB window */
+   88: #define	IOC_W_MASK_8M	0x0000000000700000ULL	/* 8MB window */
+   89: #define	IOC_W_MASK_16M	0x0000000000f00000ULL	/* 16MB window */
+   90: #define	IOC_W_MASK_32M	0x0000000001f00000ULL	/* 32MB window */
+   91: #define	IOC_W_MASK_64M	0x0000000003f00000ULL	/* 64MB window */
+   92: #define	IOC_W_MASK_128M	0x0000000007f00000ULL	/* 128M window */
+   93: #define	IOC_W_MASK_256M	0x000000000ff00000ULL	/* 256M window */
+   94: #define	IOC_W_MASK_512M	0x000000001ff00000ULL	/* 512M window */
+   95: #define	IOC_W_MASK_1G	0x000000003ff00000ULL	/* 1GB window */
+   96: #define	IOC_W_MASK_2G	0x000000007ff00000ULL	/* 2GB window */
+   97: #define	IOC_W_MASK_4G	0x00000000fff00000ULL	/* 4GB window */
+   98: 
+   99: #define	IOC_W_T_BASE	0x00000000fffffc00ULL	/* page table base */
+  100: 
+  101: #endif	/*  ALPHA_LCAREG_H  */
+
+web search: https://raw.githubusercontent.com/NetBSD/src/trunk/sys/arch/alpha/pci/lca_pci.c
+codex
+Premise 4 needs narrowing: `bus_pci_data_access` returns all-ones for an absent device only at register 0; other registers return zero. That means the proposed signature row cannot establish general empty-bus behavior. I also found 10 direct `bus_pci_setaddr` call sites and am checking their decoding paths.
+web search: 
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n -B 32 -A 18 'bus_pci_setaddr\\(' src/devices/dev_cpc700.c src/devices/dev_eagle.c src/devices/dev_footbridge.c src/devices/dev_gt.c src/devices/dev_i80321.c src/devices/dev_sgi_ip32.c src/devices/dev_sh4.c src/devices/dev_uninorth.c src/devices/dev_v3.c; rg -n '"'^(DEVICE_ACCESS|static.*'"\\(|void.*\\(|int.*\\()|"'^}'"' src/devices/dev_cpc700.c src/devices/dev_eagle.c src/devices/dev_footbridge.c src/devices/dev_gt.c src/devices/dev_i80321.c src/devices/dev_sgi_ip32.c src/devices/dev_sh4.c src/devices/dev_uninorth.c src/devices/dev_v3.c; "'$n=0; Get-Content -LiteralPath src/include/thirdparty/alpha_lcareg.h | ForEach-Object { $n++; if ($n -ge 50 -and $n -le 92) { '"'{0,5}: {1}' -f "'$n, $_ } }; $n=0; Get-Content -LiteralPath src/core/debugmsg.c | ForEach-Object { $n++; if ($n -ge 364 -and $n -le 430) { '"'{0,5}: {1}' -f "'$n, $_ } }' in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+ succeeded in 106ms:
+src/devices/dev_cpc700.c:53:};
+src/devices/dev_cpc700.c:56:void cpc700_interrupt_assert(struct interrupt *interrupt)
+src/devices/dev_cpc700.c:62:}
+src/devices/dev_cpc700.c:63:void cpc700_interrupt_deassert(struct interrupt *interrupt)
+src/devices/dev_cpc700.c:69:}
+src/devices/dev_cpc700.c:77:DEVICE_ACCESS(cpc700_pci)
+src/devices/dev_cpc700.c:102:}
+src/devices/dev_cpc700.c:110:DEVICE_ACCESS(cpc700_int)
+src/devices/dev_cpc700.c:181:}
+src/devices/dev_cpc700.c:260:}
+src/devices/dev_uninorth.c:48:};
+src/devices/dev_uninorth.c:51:DEVICE_ACCESS(uninorth_addr)
+src/devices/dev_uninorth.c:90:}
+src/devices/dev_uninorth.c:93:DEVICE_ACCESS(uninorth_data)
+src/devices/dev_uninorth.c:108:}
+src/devices/dev_uninorth.c:147:}
+src/devices/dev_sgi_ip32.c:73:};
+src/devices/dev_sgi_ip32.c:85:};
+src/devices/dev_sgi_ip32.c:88:void mips_pc_to_pointers(struct cpu *);
+src/devices/dev_sgi_ip32.c:89:void mips32_pc_to_pointers(struct cpu *);
+src/devices/dev_sgi_ip32.c:92:void crime_interrupt_reassert(struct crime_data *d)
+src/devices/dev_sgi_ip32.c:118:}
+src/devices/dev_sgi_ip32.c:124:void crime_interrupt_assert(struct interrupt *interrupt)
+src/devices/dev_sgi_ip32.c:130:}
+src/devices/dev_sgi_ip32.c:131:void crime_interrupt_deassert(struct interrupt *interrupt)
+src/devices/dev_sgi_ip32.c:137:}
+src/devices/dev_sgi_ip32.c:140:void crime_update_crime_time(struct crime_data* d)
+src/devices/dev_sgi_ip32.c:170:}
+src/devices/dev_sgi_ip32.c:184:}
+src/devices/dev_sgi_ip32.c:187:DEVICE_ACCESS(crime)
+src/devices/dev_sgi_ip32.c:393:}
+src/devices/dev_sgi_ip32.c:399:void dev_crime_init(struct machine *machine, struct memory *mem,
+src/devices/dev_sgi_ip32.c:436:}
+src/devices/dev_sgi_ip32.c:449:};
+src/devices/dev_sgi_ip32.c:452:void mace_interrupt_reassert(struct mace_data *d)
+src/devices/dev_sgi_ip32.c:490:}
+src/devices/dev_sgi_ip32.c:498:void mace_interrupt_assert(struct interrupt *interrupt)
+src/devices/dev_sgi_ip32.c:509:}
+src/devices/dev_sgi_ip32.c:510:void mace_interrupt_deassert(struct interrupt *interrupt)
+src/devices/dev_sgi_ip32.c:521:}
+src/devices/dev_sgi_ip32.c:524:DEVICE_ACCESS(mace)
+src/devices/dev_sgi_ip32.c:632:}
+src/devices/dev_sgi_ip32.c:686:}
+src/devices/dev_sgi_ip32.c:692:DEVICE_ACCESS(macepci)
+src/devices/dev_sgi_ip32.c:778:}
+src/devices/dev_sgi_ip32.c:809:}
+src/devices/dev_sgi_ip32.c:817:};
+src/devices/dev_sgi_ip32.c:820:DEVICE_ACCESS(sgi_ust)
+src/devices/dev_sgi_ip32.c:853:}
+src/devices/dev_sgi_ip32.c:859:void dev_sgi_ust_init(struct memory *mem, uint64_t baseaddr)
+src/devices/dev_sgi_ip32.c:869:}
+src/devices/dev_i80321.c:80:};
+src/devices/dev_i80321.c:83:static void i80321_assert(struct i80321_data *d, uint32_t linemask)
+src/devices/dev_i80321.c:88:}
+src/devices/dev_i80321.c:89:static void i80321_deassert(struct i80321_data *d, uint32_t linemask)
+src/devices/dev_i80321.c:94:}
+src/devices/dev_i80321.c:103:void i80321_interrupt_assert(struct interrupt *interrupt)
+src/devices/dev_i80321.c:105:void i80321_interrupt_deassert(struct interrupt *interrupt)
+src/devices/dev_i80321.c:115:}
+src/devices/dev_i80321.c:119:static void tmr0_tick(struct timer *t, void *extra)
+src/devices/dev_i80321.c:123:}
+src/devices/dev_i80321.c:137:}
+src/devices/dev_i80321.c:140:DEVICE_ACCESS(i80321)
+src/devices/dev_i80321.c:402:}
+src/devices/dev_i80321.c:480:}
+src/devices/dev_gt.c:72:};
+src/devices/dev_gt.c:80:static void timer_tick(struct timer *timer, void *extra)
+src/devices/dev_gt.c:84:}
+src/devices/dev_gt.c:92:}
+src/devices/dev_gt.c:95:DEVICE_ACCESS(gt)
+src/devices/dev_gt.c:216:}
+src/devices/dev_gt.c:308:}
+src/devices/dev_v3.c:64:};
+src/devices/dev_v3.c:70:void v3_isa_interrupt_common(struct v3_data *d, int old_isa_assert)
+src/devices/dev_v3.c:95:}
+src/devices/dev_v3.c:104:void v3_isa_interrupt_assert(struct interrupt *interrupt)
+src/devices/dev_v3.c:118:}
+src/devices/dev_v3.c:127:void v3_isa_interrupt_deassert(struct interrupt *interrupt)
+src/devices/dev_v3.c:148:}
+src/devices/dev_v3.c:151:DEVICE_ACCESS(v3_pci)
+src/devices/dev_v3.c:184:}
+src/devices/dev_v3.c:187:DEVICE_ACCESS(v3)
+src/devices/dev_v3.c:241:}
+src/devices/dev_v3.c:346:}
+src/devices/dev_sh4.c:264:};
+src/devices/dev_sh4.c:390:};
+src/devices/dev_sh4.c:402:static int sh4_val_first(struct sh4_data *d, int cls, int instance, uint32_t bits);
+src/devices/dev_sh4.c:414:static void sh4_timer_tick(struct timer *t, void *extra)
+src/devices/dev_sh4.c:530:}
+src/devices/dev_sh4.c:533:static void sh4_pcic_interrupt_assert(struct interrupt *interrupt)
+src/devices/dev_sh4.c:537:}
+src/devices/dev_sh4.c:538:static void sh4_pcic_interrupt_deassert(struct interrupt *interrupt)
+src/devices/dev_sh4.c:542:}
+src/devices/dev_sh4.c:545:static void scif_reassert_interrupts(struct sh4_data *d)
+src/devices/dev_sh4.c:566:}
+src/devices/dev_sh4.c:608:}
+src/devices/dev_sh4.c:617:void sh4_dmac_transfer(struct cpu *cpu, struct sh4_data *d, int channel)
+src/devices/dev_sh4.c:794:}
+src/devices/dev_sh4.c:814:static void sh4_sci_cmd(struct sh4_data *d, struct cpu *cpu)
+src/devices/dev_sh4.c:908:}
+src/devices/dev_sh4.c:918:static uint8_t sh4_sci_access(struct sh4_data *d, struct cpu *cpu,
+src/devices/dev_sh4.c:970:}
+src/devices/dev_sh4.c:973:DEVICE_ACCESS(sh4_itlb_aa)
+src/devices/dev_sh4.c:1014:}
+src/devices/dev_sh4.c:1017:DEVICE_ACCESS(sh4_itlb_da1)
+src/devices/dev_sh4.c:1101:}
+src/devices/dev_sh4.c:1104:DEVICE_ACCESS(sh4_utlb_aa)
+src/devices/dev_sh4.c:1217:}
+src/devices/dev_sh4.c:1220:DEVICE_ACCESS(sh4_utlb_da1)
+src/devices/dev_sh4.c:1272:}
+src/devices/dev_sh4.c:1337:static int sh4_pcic_first(struct sh4_data *d, uint32_t addr, int cls)
+src/devices/dev_sh4.c:1359:}
+src/devices/dev_sh4.c:1362:DEVICE_ACCESS(sh4_pcic)
+src/devices/dev_sh4.c:1571:}
+src/devices/dev_sh4.c:1574:DEVICE_ACCESS(sh4_sq)
+src/devices/dev_sh4.c:1588:}
+src/devices/dev_sh4.c:1620:static unsigned int sh4_bsc16_shift(struct cpu *cpu, size_t len)
+src/devices/dev_sh4.c:1643:}
+src/devices/dev_sh4.c:1646:static int sh4_bsc16_report(struct sh4_data *d, int site, const char *name,
+src/devices/dev_sh4.c:1686:}
+src/devices/dev_sh4.c:1698:static int sh4_val_first(struct sh4_data *d, int cls, int instance, uint32_t bits)
+src/devices/dev_sh4.c:1715:}
+src/devices/dev_sh4.c:1738:DEVICE_ACCESS(sh4)
+src/devices/dev_sh4.c:2841:}
+src/devices/dev_sh4.c:3040:}
+src/devices/dev_footbridge.c:85:};
+src/devices/dev_footbridge.c:114:static void footbridge_pending(struct footbridge_data *d, int nr)
+src/devices/dev_footbridge.c:120:}
+src/devices/dev_footbridge.c:122:static void timer_tick0(struct timer *t, void *extra)
+src/devices/dev_footbridge.c:124:static void timer_tick1(struct timer *t, void *extra)
+src/devices/dev_footbridge.c:126:static void timer_tick2(struct timer *t, void *extra)
+src/devices/dev_footbridge.c:128:static void timer_tick3(struct timer *t, void *extra)
+src/devices/dev_footbridge.c:224:static uint64_t footbridge_effective_cycles(uint32_t load, uint32_t control,
+src/devices/dev_footbridge.c:258:}
+src/devices/dev_footbridge.c:261:static void reload_timer_value(struct cpu *cpu, struct footbridge_data *d,
+src/devices/dev_footbridge.c:339:}
+src/devices/dev_footbridge.c:369:}
+src/devices/dev_footbridge.c:375:void footbridge_interrupt_assert(struct interrupt *interrupt)
+src/devices/dev_footbridge.c:388:}
+src/devices/dev_footbridge.c:394:void footbridge_interrupt_deassert(struct interrupt *interrupt)
+src/devices/dev_footbridge.c:403:}
+src/devices/dev_footbridge.c:411:DEVICE_ACCESS(footbridge_isa)
+src/devices/dev_footbridge.c:432:}
+src/devices/dev_footbridge.c:440:DEVICE_ACCESS(footbridge_reset)
+src/devices/dev_footbridge.c:455:}
+src/devices/dev_footbridge.c:463:DEVICE_ACCESS(footbridge_pci)
+src/devices/dev_footbridge.c:495:}
+src/devices/dev_footbridge.c:498:DEVICE_ACCESS(footbridge)
+src/devices/dev_footbridge.c:758:}
+src/devices/dev_footbridge.c:896:}
+src/devices/dev_eagle.c:49:};
+src/devices/dev_eagle.c:52:DEVICE_ACCESS(eagle)
+src/devices/dev_eagle.c:82:}
+src/devices/dev_eagle.c:193:}
+   50: #define LCA_IOC_HAE	LCA_IOC_BASE		/* Host Address Ext. (64) */
+   51: #define	IOC_HAE_ADDREXT	0x00000000f8000000ULL
+   52: #define	IOC_HAE_RSVSD	0xffffffff07ffffffULL
+   53: 
+   54: #define LCA_IOC_CONF	(LCA_IOC_BASE + 0x020)	/* Configuration Cycle Type */
+   55: 
+   56: #define LCA_IOC_STAT0	(LCA_IOC_BASE + 0x040)	/* Status 0 */
+   57: #define	IOC_STAT0_CMD	0x000000000000000fULL	/* PCI command mask */
+   58: #define	IOC_STAT0_ERR	0x0000000000000010ULL	/* IOC error indicator R/W1C */
+   59: #define	IOC_STAT0_LOST	0x0000000000000020ULL	/* IOC lose error info R/W1C */
+   60: #define	IOC_STAT0_THIT	0x0000000000000040ULL	/* test hit */
+   61: #define	IOC_STAT0_TREF	0x0000000000000080ULL	/* test reference */
+   62: #define	IOC_STAT0_CODE	0x0000000000000700ULL	/* code mask */
+   63: #define	IOC_STAT0_CODESHIFT 8
+   64: #define	IOC_STAT0_P_NBR	0x00000000ffffe000ULL	/* page number mask */
+   65: 
+   66: #define LCA_IOC_STAT1	(LCA_IOC_BASE + 0x060)	/* Status 1 */
+   67: #define	IOC_STAT1_ADDR	0x00000000ffffffffULL	/* PCI address mask */
+   68: 
+   69: #define	LCA_IOC_TBIA	(LCA_IOC_BASE + 0x080)	/* TLB Invalidate All */
+   70: #define	LCA_IOC_TB_ENA	(LCA_IOC_BASE + 0x0a0)	/* TLB Enable */
+   71: #define	IOC_TB_ENA_TEN	0x0000000000000080ULL
+   72: 
+   73: #define LCA_IOC_W_BASE0	(LCA_IOC_BASE + 0x100)	/* Window Base */
+   74: #define LCA_IOC_W_MASK0	(LCA_IOC_BASE + 0x140)	/* Window Mask */
+   75: #define LCA_IOC_W_T_BASE0 (LCA_IOC_BASE + 0x180) /* Translated Base */
+   76: 
+   77: #define LCA_IOC_W_BASE1	(LCA_IOC_BASE + 0x120)	/* Window Base */
+   78: #define LCA_IOC_W_MASK1	(LCA_IOC_BASE + 0x160)	/* Window Mask */
+   79: #define LCA_IOC_W_T_BASE1 (LCA_IOC_BASE + 0x1a0) /* Translated Base */
+   80: 
+   81: #define	IOC_W_BASE_W_BASE 0x00000000fff00000ULL	/* Window base value */
+   82: #define	IOC_W_BASE_SG	  0x0000000100000000ULL	/* Window uses SGMAPs */
+   83: #define	IOC_W_BASE_WEN	  0x0000000200000000ULL	/* Window enable */
+   84: 
+   85: #define	IOC_W_MASK_1M	0x0000000000000000ULL	/* 1MB window */
+   86: #define	IOC_W_MASK_2M	0x0000000000100000ULL	/* 2MB window */
+   87: #define	IOC_W_MASK_4M	0x0000000000300000ULL	/* 4MB window */
+   88: #define	IOC_W_MASK_8M	0x0000000000700000ULL	/* 8MB window */
+   89: #define	IOC_W_MASK_16M	0x0000000000f00000ULL	/* 16MB window */
+   90: #define	IOC_W_MASK_32M	0x0000000001f00000ULL	/* 32MB window */
+   91: #define	IOC_W_MASK_64M	0x0000000003f00000ULL	/* 64MB window */
+   92: #define	IOC_W_MASK_128M	0x0000000007f00000ULL	/* 128M window */
+  364:  */
+  365: void debug(const char *fmt, ...)
+  366: {
+  367: 	va_list argp;
+  368: 	bool ss = single_step || about_to_enter_single_step;
+  369: 	int v = verbose;
+  370: 	if (emul_executing)
+  371: 		v--;
+  372: 	if (ss)
+  373: 		v++;
+  374: 
+  375: 	if ((quiet_mode && !ss) || v < 0)
+  376: 		return;
+  377: 
+  378: 	va_start(argp, fmt);
+  379: 	va_debug(argp, fmt);
+  380: 	va_end(argp);
+  381: }
+  382: 
+  383: 
+  384: void fatal(const char *fmt, ...)
+  385: {
+  386: 	va_list argp;
+  387: 
+  388: 	va_start(argp, fmt);
+  389: 	va_debug(argp, fmt);
+  390: 	va_end(argp);
+  391: }
+  392: 
+  393: 
+  394: void debugmsg_set_verbosity_level(int subsystem, int verbosity)
+  395: {
+  396: 	if (subsystem != SUBSYS_ALL)
+  397: 		debugmsg_current_verbosity[subsystem] = verbosity;
+  398: 	else
+  399: 		for (size_t i = 0; i < debugmsg_nr_of_subsystems; ++i)
+  400: 			debugmsg_current_verbosity[i] = verbosity;
+  401: }
+  402: 
+  403: 
+  404: void debugmsg_add_verbosity_level(int subsystem, int verbosity_delta)
+  405: {
+  406: 	if (subsystem != SUBSYS_ALL)
+  407: 		debugmsg_current_verbosity[subsystem] += verbosity_delta;
+  408: 	else
+  409: 		for (size_t i = 0; i < debugmsg_nr_of_subsystems; ++i)
+  410: 			debugmsg_current_verbosity[i] += verbosity_delta;
+  411: 
+  412: 	for (size_t i = 0; i < debugmsg_nr_of_subsystems; ++i)
+  413: 		if (debugmsg_current_verbosity[i] < 0)
+  414: 			debugmsg_current_verbosity[i] = 0;
+  415: }
+  416: 
+  417: 
+  418: /*
+  419:  *  debugmsg_register_subsystem():
+  420:  *
+  421:  *  Registers a new subsystem.
+  422:  */
+  423: int debugmsg_register_subsystem(const char* name)
+  424: {
+  425: 	// TODO: Another way would be to support multiple names with e.g.
+  426: 	// a suffix. Such as "le0", "le1", "le2" for the name "le".
+  427: 	// But for now, simply return the same subsystem for all of them.
+  428: 	ssize_t subsys = -1;
+  429: 	for (size_t i = 0; i < debugmsg_nr_of_subsystems; ++i)
+  430: 		if (strcmp(name, debugmsg_subsystem_name[i]) == 0)
+
+web search: "DECchip 21066" "Configuration Cycle Type" ...
+web search: 
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n --glob '"'!*.o'"' --glob '"'!*.a'"' --glob '"'!*.so'"' 'bus_pci_setaddr' src; rg -n --glob '*.[ch]' -A 3 'bus_pci_add\\s*\\(' src; rg -n 'lca|ALPHABOOK1|MACHINE_SETUP' src/machines/machine_alpha.c; rg -n 'relative_addr|devaccess\\[|devaccess\\(|device_access\\(|MEM_PADDR|#95|memset\\(data' src/memory/memory_rw.c src/memory/memory.c src/include/device.h src/cpus/cpu_alpha*; rg -n '"'^void va_debug|''^static void va_debug|''^}'"' src/core/debugmsg.c" in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+ succeeded in 86ms:
+src\include\bus_pci.h:148:void bus_pci_setaddr(struct cpu *cpu, struct pci_data *pci_data,
+src\devices\dev_cpc700.c:89:		bus_pci_setaddr(cpu, d->pci_data, bus, dev, func, reg);
+src\devices\dev_eagle.c:69:		bus_pci_setaddr(cpu, d->pci_data, bus, dev, func, reg);
+src\devices\dev_footbridge.c:474:	bus_pci_setaddr(cpu, d->pcibus, bus, dev, func, reg);
+src\devices\dev_gt.c:184:		bus_pci_setaddr(cpu, d->pci_data, bus, dev, func, reg);
+src\devices\dev_i80321.c:217:			bus_pci_setaddr(cpu, d->pci_bus, bus, dev, func, reg);
+src\devices\dev_lca.c:174:	bus_pci_setaddr(cpu, d->pci_data, bus, dev, func, reg);
+src\devices\dev_sgi_ip32.c:746:		bus_pci_setaddr(cpu, d->pci_data, bus, dev, func, pcireg);
+src\devices\dev_sh4.c:1534:			bus_pci_setaddr(cpu, d->pci_data, bus, dev, func, reg);
+src\devices\dev_uninorth.c:81:		bus_pci_setaddr(cpu, d->pci_data, bus, dev, func, reg);
+src\devices\dev_v3.c:174:	bus_pci_setaddr(cpu, d->pci_data, bus, dev, func, reg);
+src\devices\bus_pci.c:208: *  bus_pci_add():
+src\devices\bus_pci.c-209- *
+src\devices\bus_pci.c-210- *  Add a PCI device to a bus_pci device.
+src\devices\bus_pci.c-211- */
+src\devices\bus_pci.c:212:void bus_pci_add(struct machine *machine, struct pci_data *pci_data,
+src\devices\bus_pci.c-213-	struct memory *mem, int bus, int device, int function,
+src\devices\bus_pci.c-214-	const char *name)
+src\devices\bus_pci.c-215-{
+--
+src\devices\bus_pci.c:221:		fatal("bus_pci_add(): pci_data == NULL!\n");
+src\devices\bus_pci.c-222-		abort();
+src\devices\bus_pci.c-223-	}
+src\devices\bus_pci.c-224-
+--
+src\devices\bus_pci.c:233:			fatal("bus_pci_add(): (bus %i, device %i, function"
+src\devices\bus_pci.c-234-			    " %i) already in use\n", bus, device, function);
+src\devices\bus_pci.c-235-			exit(1);
+src\devices\bus_pci.c-236-		}
+--
+src\devices\dev_cpc700.c:228:		bus_pci_add(devinit->machine, d->pci_data,
+src\devices\dev_cpc700.c-229-		    devinit->machine->memory, 0, 0, 0, "heuricon_pmppc");
+src\devices\dev_cpc700.c-230-		break;
+src\devices\dev_cpc700.c-231-
+--
+src\include\bus_pci.h:160:void bus_pci_add(struct machine *machine, struct pci_data *pci_data,
+src\include\bus_pci.h-161-	struct memory *mem, int bus, int device, int function,
+src\include\bus_pci.h-162-	const char *name);
+src\include\bus_pci.h-163-
+--
+src\machines\machine_algor.c:80:	/*  bus_pci_add(machine, pci_bus, machine->memory, 0, 0, 0,
+src\machines\machine_algor.c-81-	    "dec21143");  */
+src\machines\machine_algor.c-82-
+src\machines\machine_algor.c-83-	if (!machine->prom_emulation)
+--
+src\machines\machine_cats.c:82:	bus_pci_add(machine, pci_bus, machine->memory, 0xc0, 8, 0, "s3_virge");
+src\machines\machine_cats.c-83-
+src\machines\machine_cats.c-84-	if (!machine->prom_emulation)
+src\machines\machine_cats.c-85-		return;
+--
+src\devices\dev_eagle.c:149:	bus_pci_add(devinit->machine, d->pci_data,
+src\devices\dev_eagle.c-150-	    devinit->machine->memory, 0, 0, 0, "eagle");
+src\devices\dev_eagle.c-151-
+src\devices\dev_eagle.c-152-	/*  ADDR and DATA configuration ports in ISA space:  */
+--
+src\devices\dev_eagle.c:162:		bus_pci_add(devinit->machine, d->pci_data,
+src\devices\dev_eagle.c-163-		    devinit->machine->memory, 0, 11, 0, "i82378zb");
+src\devices\dev_eagle.c-164-		break; */
+src\devices\dev_eagle.c-165-
+--
+src\devices\dev_eagle.c:167:		bus_pci_add(devinit->machine, d->pci_data,
+src\devices\dev_eagle.c-168-		    devinit->machine->memory, 0, 11, 0, "ibm_isa");
+src\devices\dev_eagle.c-169-		break;
+src\devices\dev_eagle.c-170-
+--
+src\devices\dev_eagle.c:177:			bus_pci_add(devinit->machine, d->pci_data,
+src\devices\dev_eagle.c-178-			    devinit->machine->memory, 0, 11, 0, "i82378zb");
+src\devices\dev_eagle.c-179-			break;
+src\devices\dev_eagle.c-180-		default:fatal("unimplemented machine subtype for "
+--
+src\machines\machine_cobalt.c:101:	/*  bus_pci_add(machine, pci_data, mem, 0,  7, 0, "dec21143");  */
+src\machines\machine_cobalt.c:102:	/*  bus_pci_add(machine, pci_data, mem, 0,  8, 0, "symbios_860");
+src\machines\machine_cobalt.c-103-	    PCI_VENDOR_SYMBIOS, PCI_PRODUCT_SYMBIOS_860  */
+src\machines\machine_cobalt.c:104:	bus_pci_add(machine, pci_data, mem, 0,  9, 0, "vt82c586_isa");
+src\machines\machine_cobalt.c:105:	bus_pci_add(machine, pci_data, mem, 0,  9, 1, "vt82c586_ide");
+src\machines\machine_cobalt.c:106:	/*  bus_pci_add(machine, pci_data, mem, 0, 12, 0, "dec21143");  */
+src\machines\machine_cobalt.c-107-
+src\machines\machine_cobalt.c-108-	if (!machine->prom_emulation)
+src\machines\machine_cobalt.c-109-		return;
+--
+src\devices\dev_footbridge.c:860:		bus_pci_add(devinit->machine, d->pcibus,
+src\devices\dev_footbridge.c-861-		    devinit->machine->memory, 0xc0, 7, 0, "ali_m1543");
+src\devices\dev_footbridge.c:862:		bus_pci_add(devinit->machine, d->pcibus,
+src\devices\dev_footbridge.c-863-		    devinit->machine->memory, 0xc0, 10, 0, "dec21143");
+src\devices\dev_footbridge.c:864:		bus_pci_add(devinit->machine, d->pcibus,
+src\devices\dev_footbridge.c-865-		    devinit->machine->memory, 0xc0, 16, 0, "ali_m5229");
+src\devices\dev_footbridge.c-866-		break;
+src\devices\dev_footbridge.c-867-	case MACHINE_NETWINDER:
+src\devices\dev_footbridge.c:868:		bus_pci_add(devinit->machine, d->pcibus,
+src\devices\dev_footbridge.c-869-		    devinit->machine->memory, 0xc0, 11, 0, "symphony_83c553");
+src\devices\dev_footbridge.c:870:		bus_pci_add(devinit->machine, d->pcibus,
+src\devices\dev_footbridge.c-871-		    devinit->machine->memory, 0xc0, 11, 1, "symphony_82c105");
+src\devices\dev_footbridge.c-872-		memory_device_register(devinit->machine->memory,
+src\devices\dev_footbridge.c-873-		    "footbridge_reset", 0x7c000338, 1,
+--
+src\devices\dev_gt.c:301:	bus_pci_add(machine, d->pci_data, mem, 0, 0, 0, gt_name);
+src\devices\dev_gt.c-302-
+src\devices\dev_gt.c-303-	memory_device_register(mem, "gt", baseaddr, DEV_GT_LENGTH,
+src\devices\dev_gt.c-304-	    dev_gt_access, d, DM_DEFAULT, NULL);
+--
+src\machines\machine_evbmips.c:93:			bus_pci_add(machine, pci_data, machine->memory,
+src\machines\machine_evbmips.c-94-			    0, 8, 0, "s3_virge");
+src\machines\machine_evbmips.c-95-		}
+src\machines\machine_evbmips.c-96-
+src\machines\machine_evbmips.c:97:		bus_pci_add(machine, pci_data, machine->memory,
+src\machines\machine_evbmips.c-98-		    0, 10, 0, "piix4_isa");
+src\machines\machine_evbmips.c:99:		bus_pci_add(machine, pci_data, machine->memory,
+src\machines\machine_evbmips.c-100-		    0, 10, 1, "piix4_ide");
+src\machines\machine_evbmips.c-101-
+src\machines\machine_evbmips.c-102-		/*  pcn: Not yet, since it is just a bogus device, so far.  */
+src\machines\machine_evbmips.c:103:		/*  bus_pci_add(machine, pci_data, machine->memory,
+src\machines\machine_evbmips.c-104-		    0, 11, 0, "pcn");  */
+src\machines\machine_evbmips.c-105-
+src\machines\machine_evbmips.c-106-		device_add(machine, "malta_lcd addr=0x1f000400");
+--
+src\machines\machine_netwinder.c:63:		bus_pci_add(machine, pci_bus, machine->memory,
+src\machines\machine_netwinder.c-64-		    0xc0, 8, 0, "igsfb");
+src\machines\machine_netwinder.c-65-	}
+src\machines\machine_netwinder.c-66-
+--
+src\machines\machine_macppc.c:71:	/*  bus_pci_add(
+src\machines\machine_macppc.c-72-	    machine, pci_data, machine->memory, 0, 12, 0, "dec21143");  */
+src\machines\machine_macppc.c:73:	bus_pci_add(machine, pci_data, machine->memory, 0, 15, 0, "gc_obio");
+src\machines\machine_macppc.c-74-
+src\machines\machine_macppc.c-75-	if (machine->x11_md.in_use)
+src\machines\machine_macppc.c:76:		bus_pci_add(machine, pci_data, machine->memory, 0, 16, 0,
+src\machines\machine_macppc.c-77-		    "ati_radeon_9200_2");
+src\machines\machine_macppc.c-78-
+src\machines\machine_macppc.c-79-	snprintf(tmpstr, sizeof(tmpstr), "z8530 addr=0xf3013000 irq="
+--
+src\machines\machine_mvmeppc.c:69:		bus_pci_add(machine, pci_data, machine->memory,
+src\machines\machine_mvmeppc.c-70-		    0, 14, 0, "dec21143");
+src\machines\machine_mvmeppc.c-71-
+src\machines\machine_mvmeppc.c-72-		device_add(machine, "nvram addr=0x80000074 name2=mvme1600");
+--
+src\machines\machine_iq80321.c:84:	bus_pci_add(machine, pci, machine->memory, 0, 6, 0, "i31244");
+src\machines\machine_iq80321.c-85-
+src\machines\machine_iq80321.c-86-	if (!machine->prom_emulation)
+src\machines\machine_iq80321.c-87-		return;
+--
+src\machines\machine_landisk.c:99:	bus_pci_add(machine, pcibus, machine->memory, 0, 0, 0, "rtl8139c");
+src\machines\machine_landisk.c-100-#endif
+src\machines\machine_landisk.c-101-
+src\machines\machine_landisk.c-102-	if (!machine->prom_emulation)
+--
+src\devices\dev_lca.c:390:	bus_pci_add(devinit->machine, d->pci_data, devinit->machine->memory,
+src\devices\dev_lca.c-391-	    0, 7, 0, "i82378zb");
+src\devices\dev_lca.c-392-
+src\devices\dev_lca.c-393-	memory_device_register(devinit->machine->memory, "lca_pci_conf",
+--
+src\machines\machine_sgi.c:620:		/*  bus_pci_add(machine, pci_data, mem, 0, 0, 0,
+src\machines\machine_sgi.c-621-		    "ne2000");  TODO  */
+src\machines\machine_sgi.c-622-
+src\machines\machine_sgi.c-623-		/*
+--
+src\machines\machine_sgi.c:645:			bus_pci_add(machine, pci_data, mem, 0, 1, 0, "ahc");
+src\machines\machine_sgi.c-646-
+src\machines\machine_sgi.c-647-		// ahc1:
+src\machines\machine_sgi.c:648:		// bus_pci_add(machine, pci_data, mem, 0, 2, 0, "ahc");
+src\machines\machine_sgi.c-649-
+src\machines\machine_sgi.c-650-		break;
+src\machines\machine_sgi.c-651-
+--
+src\machines\machine_prep.c:71:		bus_pci_add(machine, pci_data, machine->memory,
+src\machines\machine_prep.c-72-		    0, 13, 0, "dec21143");
+src\machines\machine_prep.c-73-
+src\machines\machine_prep.c-74-		if (machine->x11_md.in_use) {
+src\machines\machine_prep.c:75:			bus_pci_add(machine, pci_data, machine->memory,
+src\machines\machine_prep.c-76-			    0, 14, 0, "s3_virge");
+src\machines\machine_prep.c-77-		}
+src\machines\machine_prep.c-78-		break;
+--
+src\machines\machine_pmppc.c:72:	bus_pci_add(machine, pci_data, machine->memory, 0, 8, 0, "dec21143");
+src\machines\machine_pmppc.c-73-}
+src\machines\machine_pmppc.c-74-
+src\machines\machine_pmppc.c-75-
+--
+src\devices\dev_uninorth.c:138:	bus_pci_add(machine, d->pci_data, mem, 0, 11, 0, "uninorth");
+src\devices\dev_uninorth.c-139-
+src\devices\dev_uninorth.c-140-	/*  ADDR and DATA configuration ports:  */
+src\devices\dev_uninorth.c-141-	memory_device_register(mem, "uninorth_pci_addr", addr + 0x800000,
+--
+src\devices\dev_v3.c:325:		bus_pci_add(devinit->machine, d->pci_data,
+src\devices\dev_v3.c-326-		    devinit->machine->memory, 0, 2, 0, "piix3_isa");
+src\devices\dev_v3.c:327:		bus_pci_add(devinit->machine, d->pci_data,
+src\devices\dev_v3.c-328-		    devinit->machine->memory, 0, 2, 1, "piix3_ide");
+src\devices\dev_v3.c-329-		break;
+src\devices\dev_v3.c-330-	default:fatal("!\n! WARNING: v3 for non-implemented machine"
+46:MACHINE_SETUP(alpha)
+57:	case ST_ALPHABOOK1:
+61:		device_add(machine, "lca");
+207:	case ST_ALPHABOOK1:
+242:	machine_entry_add_subtype(me, "AlphaBook 1", ST_ALPHABOOK1,
+rg: src/memory/memory_rw.c: The system cannot find the path specified. (os error 3)
+rg: src/memory/memory.c: The system cannot find the path specified. (os error 3)
+rg: src/cpus/cpu_alpha*: The filename, directory name, or volume label syntax is incorrect. (os error 123)
+118:static void va_debug(va_list argp, const char *fmt)
+138:}
+300:}
+316:}
+333:}
+353:}
+381:}
+391:}
+401:}
+415:}
+451:}
+499:}
+551:}
+599:}
+664:}
+697:}
+
+web search: "lca_pci.c" "lca_conf_read" ...
+web search: 
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg --files src -g '*memory*' -g '*alpha*'; "'$n=0; Get-Content -LiteralPath src/core/debugmsg.c | ForEach-Object { $n++; if ($n -ge 105 -and $n -le 139) { '"'{0,5}: {1}' -f "'$n, $_ } }; $n=0; Get-Content -LiteralPath src/machines/machine_alpha.c | ForEach-Object { $n++; if ($n -ge 46 -and $n -le 85) { '"'{0,5}: {1}' -f "'$n, $_ } }; rg -n --glob '"'*.[ch]' 'cur_bus\\s*=|first_device\\s*=|\\.bus\\s*=|->bus\\s*=' src/devices/bus_pci.c src/machines src/devices/dev_lca.c; rg -n '#define[ \\t]+DEVICE_ACCESS|relative_addr' src/include/device.h" in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+ exited 1 in 211ms:
+src\core\memory.o
+src\core\memory.c
+src\machines\machine_alpha.o
+src\machines\machine_alpha.c
+src\include\memory.h
+src\include\cpu_alpha.h
+src\cpus\cpu_alpha_instr_alu.c
+src\cpus\cpu_alpha_instr.c
+src\cpus\cpu_alpha.o
+src\cpus\cpu_alpha.c
+src\cpus\cpu_alpha_palcode.c
+src\cpus\cpu_alpha_instr_loadstore.c
+src\cpus\cpu_alpha_palcode.o
+src\include\thirdparty\alpha_rpb.h
+src\include\thirdparty\alpha_prom.h
+src\include\thirdparty\alpha_lcareg.h
+src\include\thirdparty\alpha_cpu.h
+src\include\thirdparty\alpha_autoconf.h
+src\cpus\memory_mips.c
+src\cpus\memory_m88k.o
+src\cpus\memory_m88k.c
+src\cpus\memory_arm.o
+src\cpus\memory_arm.c
+src\cpus\memory_alpha.o
+src\cpus\memory_alpha.c
+src\cpus\generate_alpha_misc.c
+src\cpus\generate_alpha_misc
+src\cpus\memory_sh.c
+src\cpus\memory_rw.c
+src\cpus\memory_ppc.c
+src\cpus\memory_mips_v2p.c
+src\cpus\tmp_alpha_head.c
+src\cpus\memory_sh.o
+src\cpus\tmp_alpha_misc.c
+src\cpus\tmp_alpha_tail.c
+  105: 
+  106: static size_t debug_indent = 0;
+  107: static bool debug_old_currently_at_start_of_line = true;
+  108: 
+  109: #define	DEBUG_BUFSIZE		2048
+  110: #define	DEBUG_INDENTATION	4
+  111: 
+  112: 
+  113: /*
+  114:  *  va_debug():
+  115:  *
+  116:  *  Used internally by the old debug() and fatal() functions.
+  117:  */
+  118: static void va_debug(va_list argp, const char *fmt)
+  119: {
+  120: 	char buf[DEBUG_BUFSIZE + 1];
+  121: 	buf[0] = buf[DEBUG_BUFSIZE] = 0;
+  122: 	vsnprintf(buf, DEBUG_BUFSIZE, fmt, argp);
+  123: 
+  124: 	char* s = buf;
+  125: 	while (*s) {
+  126: 		if (debug_old_currently_at_start_of_line) {
+  127: 			for (size_t i = 0; i < debug_indent * DEBUG_INDENTATION; i++)
+  128: 				printf(" ");
+  129: 		}
+  130: 
+  131: 		printf("%c", *s);
+  132: 
+  133: 		debug_old_currently_at_start_of_line = false;
+  134: 		if (*s == '\n' || *s == '\r')
+  135: 			debug_old_currently_at_start_of_line = true;
+  136: 		s++;
+  137: 	}
+  138: }
+  139: 
+   46: MACHINE_SETUP(alpha)
+   47: {
+   48: 	struct rpb rpb;
+   49: 	struct crb crb;
+   50: 	struct ctb ctb;
+   51: 	struct mddt mddt;
+   52: 	struct pcs *pcs = (struct pcs *) malloc(sizeof(struct pcs) * machine->ncpus);
+   53: 	int i;
+   54: 
+   55: 	switch (machine->machine_subtype) {
+   56: 
+   57: 	case ST_ALPHABOOK1:
+   58: 		machine->machine_name = strdup("AlphaBook 1");
+   59: 		if (machine->emulated_hz == 0)
+   60: 			machine->emulated_hz = 233000000;
+   61: 		device_add(machine, "lca");
+   62: 		break;
+   63: 
+   64: 	case ST_DEC_4100:
+   65: 		machine->machine_name = strdup("AlphaServer 4100");
+   66: 		break;
+   67: 
+   68: 	case ST_DEC_3000_300:
+   69: 		machine->machine_name = strdup("DEC 3000/300");
+   70: 		machine->main_console_handle = (size_t)device_add(machine,
+   71: 		    "z8530 addr=0x1b0200000 irq=0 addr_mult=4");
+   72: 		break;
+   73: 
+   74: 	case ST_EB164:
+   75: 		machine->machine_name = strdup("EB164");
+   76: 		break;
+   77: 
+   78: 	default:fatal("Unimplemented Alpha machine type %i\n",
+   79: 		    machine->machine_subtype);
+   80: 		exit(1);
+   81: 	}
+   82: 
+   83: 	if (!machine->prom_emulation)
+   84: 		return;
+   85: 
+src/devices/bus_pci.c:102:		if (dev->bus      == pci_data->cur_bus &&
+src/devices/bus_pci.c:200:	pci_data->cur_bus = bus;
+src/devices/bus_pci.c:231:		if (pd->bus == bus && pd->device == device &&
+src/devices/bus_pci.c:245:	pci_data->first_device = pd;
+src/devices/bus_pci.c:249:	pd->bus      = bus;
+
+web search: https://cvsweb.netbsd.org/bsdweb.cgi/src/sys/arch/alpha/pci/lca_pci.c?rev=HEAD&content-type=text/x-cvsweb-markup
+codex
+The hardware manual confirms that `IOC_CONF` supplies the configuration-cycle type bits. The type-1 bus number comes from the address, so the fix needs a bus decode as well as your device decode. The existing witness also has a zero bus field in its tag; setting `IOC_CONF` to 1 does not make that a bus-1 address.
+web search: 
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n -B 8 -A 14 '#95|memset\\(data|devaccess\\[|devaccess\\(|paddr - mem->|relative_addr' src/cpus/memory_rw.c src/core/memory.c; rg -n --glob '*.h' '#define[ \\t]+DEVICE_ACCESS|MEMORY_ACCESS' src/include; "'$n=0; Get-Content -LiteralPath src/cpus/cpu_alpha_instr_loadstore.c | ForEach-Object { $n++; if ($n -le 220) { '"'{0,5}: {1}' -f "'$n, $_ } }; $n=0; Get-Content -LiteralPath src/cpus/memory_alpha.c | ForEach-Object { $n++; if ($n -ge 120 -and $n -le 230) { '"'{0,5}: {1}' -f "'$n, $_ } }' in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'try { $response = Invoke-WebRequest -UseBasicParsing -Uri '"'https://raw.githubusercontent.com/NetBSD/src/trunk/sys/arch/alpha/pci/lca_pci.c' -TimeoutSec 20; "'$response.Content } catch { Write-Output $_.Exception.Message }' in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+ succeeded in 300ms:
+src/cpus/memory_rw.c-207-				/*  #244 PROMISES THE WHOLE READ BUFFER, AND SPLITTING BROKE
+src/cpus/memory_rw.c-208-				    THAT: the worker zeroes only the chunk IT was given, so a
+src/cpus/memory_rw.c-209-				    failure before the last chunk used to leave the caller's
+src/cpus/memory_rw.c-210-				    remaining bytes untouched -- uninitialised host stack, for
+src/cpus/memory_rw.c-211-				    a caller that ignores the return value.  Unsplit, one call
+src/cpus/memory_rw.c-212-				    covered the whole length.  Zero the rest here so the
+src/cpus/memory_rw.c-213-				    guarantee is the same as it was.  */
+src/cpus/memory_rw.c-214-				if (writeflag == MEM_READ)
+src/cpus/memory_rw.c:215:					memset(data, 0, len);
+src/cpus/memory_rw.c-216-				return MEMORY_ACCESS_FAILED;
+src/cpus/memory_rw.c-217-			}
+src/cpus/memory_rw.c-218-
+src/cpus/memory_rw.c-219-			vaddr += head;
+src/cpus/memory_rw.c-220-			data += head;
+src/cpus/memory_rw.c-221-			len -= head;
+src/cpus/memory_rw.c-222-			offset = 0;
+src/cpus/memory_rw.c-223-		}
+src/cpus/memory_rw.c-224-	}
+src/cpus/memory_rw.c-225-
+src/cpus/memory_rw.c-226-	return MEMORY_RW_ONE_PAGE(cpu, mem, vaddr, data, len, writeflag, misc_flags);
+src/cpus/memory_rw.c-227-}
+src/cpus/memory_rw.c-228-
+src/cpus/memory_rw.c-229-
+--
+src/cpus/memory_rw.c-257-		 *  access:
+src/cpus/memory_rw.c-258-		 */
+src/cpus/memory_rw.c-259-		if (!ok) {
+src/cpus/memory_rw.c-260-			/*  #244: A failed (or NO_EXCEPTIONS) translation leaves
+src/cpus/memory_rw.c-261-			    the caller's read buffer untouched; zero it so
+src/cpus/memory_rw.c-262-			    callers that ignore the return value (e.g. the DEC
+src/cpus/memory_rw.c-263-			    PROM string helpers) consume deterministic 0 bytes
+src/cpus/memory_rw.c-264-			    instead of uninitialised host stack. Same zero-fill
+src/cpus/memory_rw.c:265:			    ethos as the failed-device-read path (#95).  */
+src/cpus/memory_rw.c-266-			if (writeflag == MEM_READ)
+src/cpus/memory_rw.c:267:				memset(data, 0, len);
+src/cpus/memory_rw.c-268-			return MEMORY_ACCESS_FAILED;
+src/cpus/memory_rw.c-269-		}
+src/cpus/memory_rw.c-270-	}
+src/cpus/memory_rw.c-271-
+src/cpus/memory_rw.c-272-	/*
+src/cpus/memory_rw.c-273-	 *  #250: data write-watchpoint. Checked here, before the device /
+src/cpus/memory_rw.c-274-	 *  cache / RAM dispatch (several of which return early — notably the
+src/cpus/memory_rw.c-275-	 *  R3000 cached path via memory_cache_R3000()), so every store that
+src/cpus/memory_rw.c-276-	 *  reaches this slow path is covered. Watched pages are kept off the
+src/cpus/memory_rw.c-277-	 *  fast store table by update_translation_table(), and R3000 cached
+src/cpus/memory_rw.c-278-	 *  data already comes through here. Show the store (writer pc, target,
+src/cpus/memory_rw.c-279-	 *  width, value) and request entry into the debugger after the current
+src/cpus/memory_rw.c-280-	 *  instruction, via the same about_to_enter_single_step mechanism as
+src/cpus/memory_rw.c-281-	 *  subsystem breakpoints. NOP unless a watchpoint is set.
+--
+src/cpus/memory_rw.c-477-
+src/cpus/memory_rw.c-478-		/*  Scan through all devices:  */
+src/cpus/memory_rw.c-479-		do {
+src/cpus/memory_rw.c-480-			if (paddr >= mem->devices[i].baseaddr &&
+src/cpus/memory_rw.c-481-			    paddr < mem->devices[i].endaddr) {
+src/cpus/memory_rw.c-482-				/*  Found a device, let's access it:  */
+src/cpus/memory_rw.c-483-				mem->last_accessed_device = i;
+src/cpus/memory_rw.c-484-
+src/cpus/memory_rw.c:485:				/*  #95: zero the caller's buffer up front on a read
+src/cpus/memory_rw.c-486-				    so a device handler that fills only part of it --
+src/cpus/memory_rw.c-487-				    or whose access is len-clamped just below -- can
+src/cpus/memory_rw.c-488-				    never hand back uninitialised host memory to the
+src/cpus/memory_rw.c-489-				    guest.  Root-cause fix for the uninit-read class
+src/cpus/memory_rw.c-490-				    (cf. per-device #91/#93/#94).  */
+src/cpus/memory_rw.c-491-				if (writeflag == MEM_READ)
+src/cpus/memory_rw.c:492:					memset(data, 0, len);
+src/cpus/memory_rw.c-493-
+src/cpus/memory_rw.c-494-				paddr -= mem->devices[i].baseaddr;
+src/cpus/memory_rw.c-495-				if (paddr + len > mem->devices[i].length) {
+src/cpus/memory_rw.c-496-					/*  Note the truncation per the
+src/cpus/memory_rw.c-497-					    warn-loudly ethos, but only at
+src/cpus/memory_rw.c-498-					    debug verbosity (-v) and at most
+src/cpus/memory_rw.c-499-					    8 times (single-threaded), since
+src/cpus/memory_rw.c-500-					    probing at the end of a device's
+src/cpus/memory_rw.c-501-					    mapped range is common and benign
+src/cpus/memory_rw.c-502-					    (cf. the unwarned zero-fill in
+src/cpus/memory_rw.c:503:					    #95/#119 above).  */
+src/cpus/memory_rw.c-504-					static int n_trunc_msgs = 0;
+src/cpus/memory_rw.c-505-					if (ENOUGH_VERBOSITY(SUBSYS_MEMORY,
+src/cpus/memory_rw.c-506-					    VERBOSITY_DEBUG) &&
+src/cpus/memory_rw.c-507-					    n_trunc_msgs < 8) {
+src/cpus/memory_rw.c-508-						n_trunc_msgs ++;
+src/cpus/memory_rw.c-509-						debugmsg_cpu(cpu,
+src/cpus/memory_rw.c-510-						    SUBSYS_MEMORY,
+src/cpus/memory_rw.c-511-						    mem->devices[i].name,
+src/cpus/memory_rw.c-512-						    VERBOSITY_DEBUG,
+src/cpus/memory_rw.c-513-						    "%s truncated at end of"
+src/cpus/memory_rw.c-514-						    " device: offset 0x%llx,"
+src/cpus/memory_rw.c-515-						    " len %i -> %i",
+src/cpus/memory_rw.c-516-						    writeflag == MEM_WRITE ?
+src/cpus/memory_rw.c-517-						    "write" : "read",
+--
+src/cpus/memory_rw.c-663-	if (paddr >= mem->physical_max) {
+src/cpus/memory_rw.c-664-#ifdef MEM_MIPS
+src/cpus/memory_rw.c-665-		if ((paddr & 0xffffc00000ULL) == 0x1fc00000) {
+src/cpus/memory_rw.c-666-			/*  Ok, this is PROM stuff  */
+src/cpus/memory_rw.c-667-		} else if ((paddr & 0xfffff00000ULL) == 0x1ff00000) {
+src/cpus/memory_rw.c-668-			/*  Sprite reads from this area of memory...  */
+src/cpus/memory_rw.c-669-			/*  TODO: is this still correct?  */
+src/cpus/memory_rw.c-670-			if (writeflag == MEM_READ)
+src/cpus/memory_rw.c:671:				memset(data, 0, len);
+src/cpus/memory_rw.c-672-			goto do_return_ok;
+src/cpus/memory_rw.c-673-		} else
+src/cpus/memory_rw.c-674-#endif /* MIPS */
+src/cpus/memory_rw.c-675-		{
+src/cpus/memory_rw.c-676-			if (paddr >= mem->physical_max && !no_exceptions)
+src/cpus/memory_rw.c-677-				if (memory_warn_about_unimplemented_addr
+src/cpus/memory_rw.c-678-				    (cpu, mem, writeflag, paddr, len))
+src/cpus/memory_rw.c-679-					return MEMORY_ACCESS_FAILED;
+src/cpus/memory_rw.c-680-
+src/cpus/memory_rw.c-681-			if (writeflag == MEM_READ) {
+src/cpus/memory_rw.c-682-				/*  Return all zeroes? (Or 0xff? TODO)  */
+src/cpus/memory_rw.c:683:				memset(data, 0, len);
+src/cpus/memory_rw.c-684-
+src/cpus/memory_rw.c-685-#if 0
+src/cpus/memory_rw.c-686-/*
+src/cpus/memory_rw.c-687- *  NOTE: This code prevents a PROM image from a real 5000/200 from booting.
+src/cpus/memory_rw.c-688- *  I think I introduced it because it was how some guest OS (NetBSD?) detected
+src/cpus/memory_rw.c-689- *  the amount of RAM on some machine.
+src/cpus/memory_rw.c-690- *
+src/cpus/memory_rw.c-691- *  TODO: Figure out if it is not needed anymore, and remove it completely.
+src/cpus/memory_rw.c-692- */
+src/cpus/memory_rw.c-693-#ifdef MEM_MIPS
+src/cpus/memory_rw.c-694-				/*
+src/cpus/memory_rw.c-695-				 *  For real data/instruction accesses, cause
+src/cpus/memory_rw.c-696-				 *  an exceptions on an illegal read:
+src/cpus/memory_rw.c-697-				 */
+--
+src/cpus/memory_rw.c-724-	 *
+src/cpus/memory_rw.c-725-	 *  3)  If this was a Write, then invalidate any code translations
+src/cpus/memory_rw.c-726-	 *      in that page.
+src/cpus/memory_rw.c-727-	 */
+src/cpus/memory_rw.c-728-	memblock = memory_paddr_to_hostaddr(mem, paddr & ~offset_mask,
+src/cpus/memory_rw.c-729-	    writeflag);
+src/cpus/memory_rw.c-730-	if (memblock == NULL) {
+src/cpus/memory_rw.c-731-		if (writeflag == MEM_READ)
+src/cpus/memory_rw.c:732:			memset(data, 0, len);
+src/cpus/memory_rw.c-733-		goto do_return_ok;
+src/cpus/memory_rw.c-734-	}
+src/cpus/memory_rw.c-735-
+src/cpus/memory_rw.c-736-	offset = paddr & offset_mask;
+src/cpus/memory_rw.c-737-
+src/cpus/memory_rw.c-738-	if (cpu->update_translation_table != NULL && !dyntrans_device_danger
+src/cpus/memory_rw.c-739-#ifdef MEM_MIPS
+src/cpus/memory_rw.c-740-	    /*  Ugly hack for R2000/R3000 caches:  */
+src/cpus/memory_rw.c-741-	    && (cpu->cd.mips.cpu_type.mmu_model != MMU3K ||
+src/cpus/memory_rw.c-742-            !(cpu->cd.mips.coproc[0]->reg[COP0_STATUS] & MIPS1_ISOL_CACHES))
+src/cpus/memory_rw.c-743-#endif
+src/cpus/memory_rw.c-744-	    && !(ok & MEMORY_NOT_FULL_PAGE)
+src/cpus/memory_rw.c-745-	    && !no_exceptions)
+src/cpus/memory_rw.c-746-		cpu->update_translation_table(cpu, vaddr & ~offset_mask,
+src/include\memory.h:141:#define	MEMORY_ACCESS_FAILED		0
+src/include\memory.h:142:#define	MEMORY_ACCESS_OK		1
+src/include\memory.h:143:#define	MEMORY_ACCESS_OK_WRITE		2
+src/include\memory.h:149:#define DEVICE_ACCESS(x)	int dev_ ## x ## _access(struct cpu *cpu, \
+    1: /*
+    2:  *  Copyright (C) 2005-2018  Anders Gavare.  All rights reserved.
+    3:  *
+    4:  *  Redistribution and use in source and binary forms, with or without
+    5:  *  modification, are permitted provided that the following conditions are met:
+    6:  *
+    7:  *  1. Redistributions of source code must retain the above copyright
+    8:  *     notice, this list of conditions and the following disclaimer.
+    9:  *  2. Redistributions in binary form must reproduce the above copyright
+   10:  *     notice, this list of conditions and the following disclaimer in the
+   11:  *     documentation and/or other materials provided with the distribution.
+   12:  *  3. The name of the author may not be used to endorse or promote products
+   13:  *     derived from this software without specific prior written permission.
+   14:  *
+   15:  *  THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+   16:  *  ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+   17:  *  IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+   18:  *  ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
+   19:  *  FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+   20:  *  DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+   21:  *  OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+   22:  *  HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+   23:  *  LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+   24:  *  OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+   25:  *  SUCH DAMAGE.
+   26:  *
+   27:  *
+   28:  *  Alpha load/store instructions.  (Included from cpu_alpha_instr_inc.c.)
+   29:  *
+   30:  *
+   31:  *  Load/store instructions have the following arguments:
+   32:  *  
+   33:  *  arg[0] = pointer to the register to load to or store from (uint64_t)
+   34:  *  arg[1] = pointer to the base register (uint64_t)
+   35:  *  arg[2] = offset (as an int32_t)
+   36:  *
+   37:  *  NOTE:
+   38:  *	Alpha byte and word loads (8- and 16-bit) are unsigned, while
+   39:  *	32-bit long words are sign-extended up to 64 bits during a load!
+   40:  */
+   41: 
+   42: 
+   43: #ifndef LS_IGNORE_OFFSET
+   44: static void LS_GENERIC_N(struct cpu *cpu, struct alpha_instr_call *ic)
+   45: {
+   46: #ifdef LS_B
+   47: 	unsigned char data[1];
+   48: #endif
+   49: #ifdef LS_W
+   50: 	unsigned char data[2];
+   51: #endif
+   52: #ifdef LS_L
+   53: 	unsigned char data[4];
+   54: #endif
+   55: #ifdef LS_Q
+   56: 	unsigned char data[8];
+   57: #endif
+   58: 	uint64_t addr = *((uint64_t *)ic->arg[1]);
+   59: 	uint64_t data_x;
+   60: 
+   61: 	addr += (int32_t)ic->arg[2];
+   62: #ifdef LS_UNALIGNED
+   63: 	addr &= ~7;
+   64: #endif
+   65: 
+   66: #ifdef LS_LOAD
+   67: 	/*  Load:  */
+   68: 	if (!cpu->memory_rw(cpu, cpu->mem, addr, data, sizeof(data),
+   69: 	    MEM_READ, CACHE_DATA)) {
+   70: 		/*  #215: (Codex/Fable) memory_rw() returned 0 = the translator
+   71: 		    already signalled a fault (cf. #194's no-translation return);
+   72: 		    abandon the access instead of exit()ing the host.  */
+   73: 		return;
+   74: 	}
+   75: 
+   76: 	data_x = data[0];
+   77: #ifndef LS_B
+   78: 	data_x += (data[1] << 8);
+   79: #ifndef LS_W
+   80: 	data_x += (data[2] << 16);
+   81: 	data_x += ((uint64_t)data[3] << 24);
+   82: #ifdef LS_L
+   83: 	data_x = (int64_t)(int32_t)data_x;
+   84: #endif
+   85: #ifndef LS_L
+   86: 	data_x += ((uint64_t)data[4] << 32);
+   87: 	data_x += ((uint64_t)data[5] << 40);
+   88: 	data_x += ((uint64_t)data[6] << 48);
+   89: 	data_x += ((uint64_t)data[7] << 56);
+   90: #endif
+   91: #endif
+   92: #endif
+   93: 	*((uint64_t *)ic->arg[0]) = data_x;
+   94: #else
+   95: 	/*  Store:  */
+   96: 	data_x = *((uint64_t *)ic->arg[0]);
+   97: 	data[0] = data_x;
+   98: #ifndef LS_B
+   99: 	data[1] = data_x >> 8;
+  100: #ifndef LS_W
+  101: 	data[2] = data_x >> 16;
+  102: 	data[3] = data_x >> 24;
+  103: #ifndef LS_L
+  104: 	data[4] = data_x >> 32;
+  105: 	data[5] = data_x >> 40;
+  106: 	data[6] = data_x >> 48;
+  107: 	data[7] = data_x >> 56;
+  108: #endif
+  109: #endif
+  110: #endif
+  111: 
+  112: 	if (!cpu->memory_rw(cpu, cpu->mem, addr, data, sizeof(data),
+  113: 	    MEM_WRITE, CACHE_DATA)) {
+  114: 		/*  #215: (Codex/Fable) memory_rw() returned 0 = the translator
+  115: 		    already signalled a fault (cf. #194's no-translation return);
+  116: 		    abandon the access instead of exit()ing the host.  */
+  117: 		return;
+  118: 	}
+  119: 
+  120: #ifdef LS_LLSC
+  121: #ifndef LS_LOAD
+  122: 	*((uint64_t *)ic->arg[0]) = 1;
+  123: #endif
+  124: #endif
+  125: 
+  126: #endif
+  127: }
+  128: #endif
+  129: 
+  130: 
+  131: static void LS_N(struct cpu *cpu, struct alpha_instr_call *ic)
+  132: {
+  133: 	unsigned char *page;
+  134: 	uint64_t addr = (*((uint64_t *)ic->arg[1]))
+  135: #ifndef LS_IGNORE_OFFSET
+  136: 	    + (int32_t)ic->arg[2]
+  137: #endif
+  138: 	    ;
+  139: 
+  140: 	const uint32_t mask1 = (1 << DYNTRANS_L1N) - 1;
+  141: 	const uint32_t mask2 = (1 << DYNTRANS_L2N) - 1;
+  142: 	const uint32_t mask3 = (1 << DYNTRANS_L3N) - 1;
+  143: 	uint32_t x1, x2, x3, c;
+  144: 	struct DYNTRANS_L2_64_TABLE *l2;
+  145: 	struct DYNTRANS_L3_64_TABLE *l3;
+  146: 	x1 = (addr >> (64-DYNTRANS_L1N)) & mask1;
+  147: 	x2 = (addr >> (64-DYNTRANS_L1N-DYNTRANS_L2N)) & mask2;
+  148: 	x3 = (addr >> (64-DYNTRANS_L1N-DYNTRANS_L2N-DYNTRANS_L3N)) & mask3;
+  149: 	/*  fatal("X3: addr=%016" PRIx64" x1=%x x2=%x x3=%x\n",
+  150: 	    (uint64_t) addr, (int) x1, (int) x2, (int) x3);  */
+  151: 	l2 = cpu->cd.DYNTRANS_ARCH.l1_64[x1];
+  152: 	/*  fatal("  l2 = %p\n", l2);  */
+  153: 	l3 = l2->l3[x2];
+  154: 	/*  fatal("  l3 = %p\n", l3);  */
+  155: #ifdef LS_LOAD
+  156: 	page = l3->host_load[x3];
+  157: #else
+  158: 	page = l3->host_store[x3];
+  159: #endif
+  160: 
+  161: #ifdef LS_UNALIGNED
+  162: 	addr &= ~7;
+  163: #endif
+  164: 
+  165: #ifdef LS_LLSC
+  166: #ifdef LS_LOAD
+  167: 	/*  TODO: cache-line size!  */
+  168: 	cpu->cd.alpha.load_linked_addr = addr & ~63;
+  169: 	cpu->cd.alpha.ll_flag = 1;
+  170: #else
+  171: 	/*  TODO: only invalidate per cache line, not everything!  */
+  172: 	if (cpu->cd.alpha.ll_flag == 1) {
+  173: 		int i;
+  174: 		for (i=0; i<cpu->machine->ncpus; i++)
+  175: 			cpu->machine->cpus[i]->cd.alpha.ll_flag = 0;
+  176: 	} else {
+  177: 		*((uint64_t *)ic->arg[0]) = 0;
+  178: 		return;
+  179: 	}
+  180: #endif
+  181: #endif
+  182: 
+  183: 	c = addr & 8191;
+  184: 
+  185: #ifndef LS_B
+  186: 	if (c &
+  187: #ifdef LS_W
+  188: 	    1
+  189: #endif
+  190: #ifdef LS_L
+  191: 	    3
+  192: #endif
+  193: #ifdef LS_Q
+  194: 	    7
+  195: #endif
+  196: 	    ) {
+  197: 		LS_GENERIC_N(cpu, ic);
+  198: 		return;
+  199: 	}
+  200: 	else
+  201: #endif
+  202: 
+  203: 	if (page != NULL) {
+  204: #ifdef LS_LOAD
+  205: #ifdef HOST_BIG_ENDIAN
+  206: 		uint64_t data_x;
+  207: 		data_x = page[c];
+  208: #ifndef LS_B
+  209: 		data_x += (page[c+1] << 8);
+  210: #ifndef LS_W
+  211: 		data_x += (page[c+2] << 16);
+  212: 		data_x += ((uint64_t)page[c+3] << 24);
+  213: #ifndef LS_L
+  214: 		data_x += ((uint64_t)page[c+4] << 32);
+  215: 		data_x += ((uint64_t)page[c+5] << 40);
+  216: 		data_x += ((uint64_t)page[c+6] << 48);
+  217: 		data_x += ((uint64_t)page[c+7] << 56);
+  218: #endif
+  219: #endif
+  220: #endif
+  120: 	if (!(pte1 & ALPHA_PTE_VALID)) {
+  121: 		// TODO:
+  122: 		// IF level1_pte<KRE> EQ 0 THEN
+  123: 		//   {initiate Access Violation fault}
+  124: 		// ELSE
+  125: 		//   {initiate Translation Not Valid fault}
+  126: 
+  127: 		// fatal("TODO: pte1 not valid.\n");
+  128: 		goto not_found;
+  129: 	}
+  130: 
+  131: 	addr = ((pte1 >> 32) << ALPHA_PAGESHIFT) + (i2 * sizeof(uint64_t));
+  132: 
+  133: 	pt_entry_ptr = memory_paddr_to_hostaddr(cpu->mem, addr, 0);
+  134: 	if (pt_entry_ptr == NULL)
+  135: 		goto not_found;
+  136: 
+  137: 	pte2 = *(uint64_t *)(pt_entry_ptr);
+  138: 	pte2 = LE64_TO_HOST(pte2);
+  139: 
+  140: 	// debug("pte2 = 0x%016"PRIx64"\n", pte2);
+  141: 	if (!(pte2 & ALPHA_PTE_VALID)) {
+  142: 		// TODO:
+  143: 		// IF level2_pte<KRE> EQ 0 THEN
+  144: 		//   {initiate Access Violation fault}
+  145: 		// ELSE
+  146: 		//   {initiate Translation Not Valid fault}
+  147: 
+  148: 		fatal("TODO: pte2 not valid.\n");
+  149: 		goto not_found;
+  150: 	}
+  151: 
+  152: 	addr = ((pte2 >> 32) << ALPHA_PAGESHIFT) + (i3 * sizeof(uint64_t));
+  153: 
+  154: 	pt_entry_ptr = memory_paddr_to_hostaddr(cpu->mem, addr, 0);
+  155: 	if (pt_entry_ptr == NULL)
+  156: 		goto not_found;
+  157: 
+  158: 	pte3 = *(uint64_t *)(pt_entry_ptr);
+  159: 	pte3 = LE64_TO_HOST(pte3);
+  160: 
+  161: 	// debug("pte3 = 0x%016"PRIx64"\n", pte3);
+  162: 
+  163: 	if (!(pte3 & ALPHA_PTE_VALID)) {
+  164: 		fatal("TODO: pte3 not valid.\n");
+  165: 		goto not_found;
+  166: 	}
+  167: 
+  168: 	/*  #508: was just `PFN << pageSizeShift' -- a PAGE BASE.  memory_rw then takes
+  169: 	    `offset = paddr & offset_mask', which was therefore always zero, so every
+  170: 	    walked access FILLED THE TRANSLATION FROM the page's first bytes.  ("every
+  171: 	    walked access resolved to" until 2026-09-07: a pass-2 seat noted that the
+  172: 	    Alpha FAST PATH recomputes `addr & 8191' itself, so a later cache HIT reads
+  173: 	    the right bytes.  The corruption is the SLOW-PATH FILL, which is also why a
+  174: 	    watchpoint -- which keeps a page off the fast store table -- makes it
+  175: 	    reproducible.)  Measured: a cold guest ldq
+  176: 	    of vaddr+8 returned the vaddr+0 value.  A debugger watchpoint on a walked page
+  177: 	    landed at the base for the same reason.
+  178: 	
+  179: 	    The mask is derived from pageSizeShift rather than written as 0x1fff: this
+  180: 	    function already has TWO names for 13 (ALPHA_PAGESHIFT and this local), and a
+  181: 	    literal beside the shift is how the two drift.  `|' rather than `+' because
+  182: 	    that is what every other CPU's walk in this tree writes; here they are equal,
+  183: 	    the shifted PFN having bits 12:0 clear.  The TODO below STAYS: `flags' is
+  184: 	    still ignored, the protection bits untested, and `return 2' still reports
+  185: 	    every walked page writable.  */
+  186: 	(*return_paddr) = (ALPHA_PTE_TO_PFN(pte3) << pageSizeShift)
+  187: 	    | (vaddr & ((1ULL << pageSizeShift) - 1));
+  188: 
+  189: 	// TODO.
+  190: 	return 2;
+  191: 
+  192: not_found:
+  193: 	/*  No match.  */
+  194: 	/*  #194: (Codex/Fable) a failed guest page-table walk must not
+  195: 	    abort()/exit() the host; report no-translation (0) so the caller
+  196: 	    raises the fault (keeps the emulator alive and debuggable).  */
+  197: 	fatal("[ alpha_translate_v2p: 0x%016" PRIx64" wasn't found ]\n", vaddr);
+  198: 	return 0;
+  199: }
+  200: 
+
+ succeeded in 406ms:
+The underlying connection was closed: An unexpected error occurred on a receive.
+
+web search: 
+web search: 
+web search: https://ftp.netbsd.org/pub/NetBSD/NetBSD-current/src/sys/arch/alpha/pci/lca_pci.c
+web search: 
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$n=0; Get-Content -LiteralPath src/cpus/memory_rw.c | ForEach-Object { $n++; if (($n -ge 72 -and $n -le 124) -or ($n -ge 231 -and $n -le 242) -or ($n -ge 520 -and $n -le 604)) { '"'{0,5}: {1}' -f "'$n, $_ } }; $n=0; Get-Content -LiteralPath src/include/memory.h | ForEach-Object { $n++; if ($n -ge 140 -and $n -le 157) { '"'{0,5}: {1}' -f "'$n, $_ } }; $n=0; Get-Content -LiteralPath src/devices/dev_uninorth.c | ForEach-Object { $n++; if ($n -ge 93 -and $n -le 110) { '"'{0,5}: {1}' -f "'$n, $_ } }; rg -n '"'"'^#define[ '"\\t]+MEMORY_RW|#include.*memory_rw' src/cpus/memory_alpha.c src/cpus/memory_rw.c; git status --short" in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+ succeeded in 210ms:
+   72:  *  value: it is 8 KB, not 4 KB, so anything that splits at "the page boundary" must use
+   73:  *  THIS and never a literal 4096.  A review seat caught exactly that hazard in the design
+   74:  *  brief, which had said "4 KB page" throughout.
+   75:  */
+   76: #ifdef MEM_ALPHA
+   77: #define	MRW_OFFSET_MASK		0x1fff
+   78: #else
+   79: #define	MRW_OFFSET_MASK		0xfff
+   80: #endif
+   81: 
+   82: /*
+   83:  *  #430: THE SPLIT GRANULE IS 1 KB, AND IT IS NOT THE SAME NUMBER AS THE MASK ABOVE.
+   84:  *
+   85:  *  MRW_OFFSET_MASK is the HOST-page granule: what memory_paddr_to_hostaddr() is asked for
+   86:  *  and what update_translation_table() caches.  The granule the SPLIT needs is a different
+   87:  *  thing -- the smallest unit at which a translator in this tree can send two adjacent
+   88:  *  virtual addresses to unrelated physical ones -- and it is SMALLER:
+   89:  *
+   90:  *      memory_arm.c:198-207   descriptor type 3 on a non-XScale core is a 1 KB page,
+   91:  *                             *return_paddr = (d2 & 0xfffffc00) | (vaddr & 0x3ff)
+   92:  *      memory_sh.c:116        SH4_PTEL_SZ_1K gives mask 0xfffffc00
+   93:  *      memory_mips_v2p.c      the VR41xx path likewise has 1 KB logic
+   94:  *
+   95:  *  A first draft of this split used the 4 KB mask and a review seat produced the
+   96:  *  counterexample: with a 1 KB mapping, a four-byte access at 0x13fe crosses a translation
+   97:  *  boundary but NOT a 4 KB one, so the loop never fired and the defect survived exactly
+   98:  *  where MEMORY_NOT_FULL_PAGE says it is most likely.  Splitting finer is always SAFE --
+   99:  *  each chunk is then inside one mapping for every translator here, and the worker's own
+  100:  *  host-page arithmetic is unchanged -- so the only cost is more worker calls on the slow
+  101:  *  path for a multi-page translated access, which is rare (large transfers are PHYSICAL
+  102:  *  and exempt).  Correctness at a known granule beats a faster one that is wrong on ARM.
+  103:  */
+  104: #define	MRW_SPLIT_MASK		0x3ff
+  105: 
+  106: /*  The one-page worker; its name is derived from MEMORY_RW because cpu_alpha.c includes
+  107:     this file TWICE in one translation unit (alpha_userland_memory_rw, then alpha_memory_rw
+  108:     via tmp_alpha_tail.c), so a plainly named static would be a redefinition.  */
+  109: #ifndef MRW_CAT2
+  110: #define	MRW_CAT2(a,b)		a##b
+  111: #define	MRW_CAT(a,b)		MRW_CAT2(a,b)
+  112: #endif
+  113: #define	MEMORY_RW_ONE_PAGE	MRW_CAT(MEMORY_RW, _one_page)
+  114: 
+  115: /*
+  116:  *  The one relationship between the two that MUST hold, asserted at COMPILE TIME because it
+  117:  *  cannot be asserted at run time by the offline differential.
+  118:  *
+  119:  *  MEM_ALPHA is never compiled by that differential -- its fixture is 4 KB-specific -- so a
+  120:  *  review seat MEASURED that widening MRW_OFFSET_MASK, or hardcoding the worker's local back
+  121:  *  to 0xfff (exactly the drift this macro exists to prevent), leaves every row green.  A
+  122:  *  static assertion costs nothing and covers the Alpha build the test cannot reach.  The
+  123:  *  name is derived because this file is included twice per translation unit.
+  124:  */
+  231: 	unsigned char *data, size_t len, int writeflag, int misc_flags)
+  232: {
+  233: 	const int offset_mask = MRW_OFFSET_MASK;
+  234: 
+  235: 	int ok = 2;
+  236: 	uint64_t paddr;
+  237: 	int cache, no_exceptions, offset;
+  238: 	unsigned char *memblock;
+  239: 	int dyntrans_device_danger = 0;
+  240: 
+  241: 	no_exceptions = misc_flags & NO_EXCEPTIONS;
+  242: 	cache = misc_flags & CACHE_FLAGS_MASK;
+  520: 						    (int) (mem->devices[i].
+  521: 						    length - paddr));
+  522: 					}
+  523: 					len = mem->devices[i].length - paddr;
+  524: 				}
+  525: 
+  526: 				if (cpu->update_translation_table != NULL &&
+  527: 				    !(ok & MEMORY_NOT_FULL_PAGE) &&
+  528: 				    mem->devices[i].flags & DM_DYNTRANS_OK) {
+  529: 					int wf = writeflag == MEM_WRITE? 1 : 0;
+  530: 					unsigned char *host_addr;
+  531: 
+  532: 					if (!(mem->devices[i].flags &
+  533: 					    DM_DYNTRANS_WRITE_OK))
+  534: 						wf = 0;
+  535: 
+  536: 					if (writeflag && wf) {
+  537: 						if (paddr < mem->devices[i].
+  538: 						    dyntrans_write_low)
+  539: 							mem->devices[i].
+  540: 							dyntrans_write_low =
+  541: 							    paddr &~offset_mask;
+  542: 						if (paddr >= mem->devices[i].
+  543: 						    dyntrans_write_high)
+  544: 							mem->devices[i].
+  545: 						 	dyntrans_write_high =
+  546: 							    paddr | offset_mask;
+  547: 					}
+  548: 
+  549: 					if (mem->devices[i].flags &
+  550: 					    DM_EMULATED_RAM) {
+  551: 						/*  MEM_WRITE to force the page
+  552: 						    to be allocated, if it
+  553: 						    wasn't already  */
+  554: 						uint64_t *pp = (uint64_t *)mem->
+  555: 						    devices[i].dyntrans_data;
+  556: 						uint64_t p = orig_paddr - *pp;
+  557: 						host_addr =
+  558: 						    memory_paddr_to_hostaddr(
+  559: 						    mem, p & ~offset_mask,
+  560: 						    MEM_WRITE);
+  561: 					} else if ((paddr | offset_mask) <
+  562: 					    mem->devices[i].length) {
+  563: 						host_addr = mem->devices[i].
+  564: 						    dyntrans_data +
+  565: 						    (paddr & ~offset_mask);
+  566: 					} else {
+  567: 						/*  #155: (Codex/Fable)
+  568: 						    don't install dyntrans
+  569: 						    fast-path access to a
+  570: 						    device page that is not
+  571: 						    fully backed; keep it on
+  572: 						    the bounded slow path.  */
+  573: 						host_addr = NULL;
+  574: 					}
+  575: 
+  576: 					if (host_addr != NULL)
+  577: 						cpu->update_translation_table(
+  578: 						    cpu, vaddr & ~offset_mask,
+  579: 						    host_addr, wf,
+  580: 						    orig_paddr & ~offset_mask);
+  581: 				}
+  582: 
+  583: 				res = 0;
+  584: 				if (!no_exceptions || (mem->devices[i].flags &
+  585: 				    DM_READS_HAVE_NO_SIDE_EFFECTS)) {
+  586: 					bool running_before_device_access = cpu->running;
+  587: 					res = mem->devices[i].f(cpu, mem, paddr,
+  588: 					    data, len, writeflag,
+  589: 					    mem->devices[i].extra);
+  590: 
+  591: 					if (running_before_device_access && !cpu->running)
+  592: 						return MEMORY_ACCESS_FAILED;
+  593: 				}
+  594: 
+  595: 				if (res == 0)
+  596: 					res = -1;
+  597: 
+  598: 				/*
+  599: 				 *  If accessing the memory mapped device
+  600: 				 *  failed, then return with an exception.
+  601: 				 *  (Architecture specific.)
+  602: 				 */
+  603: 				if (res <= 0 && !no_exceptions) {
+  604: 					debug("[ %s device '%s' addr %08lx "
+  140: 
+  141: #define	MEMORY_ACCESS_FAILED		0
+  142: #define	MEMORY_ACCESS_OK		1
+  143: #define	MEMORY_ACCESS_OK_WRITE		2
+  144: #define	MEMORY_NOT_FULL_PAGE		256
+  145: 
+  146: void memory_device_dyntrans_access(struct cpu *, struct memory *mem,
+  147: 	void *extra, uint64_t *low, uint64_t *high);
+  148: 
+  149: #define DEVICE_ACCESS(x)	int dev_ ## x ## _access(struct cpu *cpu, \
+  150: 	struct memory *mem, uint64_t relative_addr, unsigned char *data,  \
+  151: 	size_t len, int writeflag, void *extra)
+  152: 
+  153: void memory_device_update_data(struct memory *mem, void *extra,
+  154: 	unsigned char *data);
+  155: 
+  156: /*  #182: (Codex/Fable) resize a registered device's mapped length.  */
+  157: void memory_device_update_length(struct memory *mem, void *extra,
+   93: DEVICE_ACCESS(uninorth_data)
+   94: {
+   95: 	struct uninorth_data *d = (struct uninorth_data *) extra;
+   96: 	uint64_t idata = 0, odata = 0;
+   97: 
+   98: 	if (writeflag == MEM_WRITE)
+   99: 		idata = memory_readmax64(cpu, data, len|MEM_PCI_LITTLE_ENDIAN);
+  100: 
+  101: 	bus_pci_data_access(cpu, d->pci_data, writeflag == MEM_READ? &odata :
+  102: 	    &idata, len, writeflag);
+  103: 
+  104: 	if (writeflag == MEM_READ)
+  105: 		memory_writemax64(cpu, data, len|MEM_PCI_LITTLE_ENDIAN, odata);
+  106: 
+  107: 	return 1;
+  108: }
+  109: 
+  110: 
+src/cpus/memory_rw.c:113:#define	MEMORY_RW_ONE_PAGE	MRW_CAT(MEMORY_RW, _one_page)
+M  OUTSTANDING_BUGS.md
+A  regress/artifacts/gateworktree/ASSESS_brief.md
+A  regress/artifacts/gateworktree/codex_assess_20260908.err
+A  regress/artifacts/gateworktree/codex_assess_20260908.txt
+AM regress/artifacts/lcaconfbus1kill/codex_fix_20260908.err
+A  regress/artifacts/lcaconfbus1kill/codex_fix_20260908.txt
+ M regress/sgi_de_primop_probe.py
+M  tools/pipeline/ADJUDICATION_20260909.md
+M  tools/pipeline/ledger.json
+M  tools/pipeline/matrix.html
+?? _scratchpad/
+?? regress/alpha_dummy.bin
+?? regress/arm_bfx_stub.bin
+?? regress/artifacts/gdromdefault_461/
+?? regress/sgi_mte_dummy.bin
+
+web search: NetBSD lca_pci ...
+web search: 
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$n=0; Get-Content -LiteralPath src/cpus/memory_rw.c | ForEach-Object { $n++; if ($n -ge 598 -and $n -le 660) { '"'{0,5}: {1}' -f "'$n, $_ } }; rg -n '"'MEMORY_RW|MEM_ALPHA' src/cpus/cpu_alpha.c src/cpus/tmp_alpha_tail.c; rg -n 'memory_(read|write)max64' src/core/memory.c" in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+ succeeded in 103ms:
+  598: 				/*
+  599: 				 *  If accessing the memory mapped device
+  600: 				 *  failed, then return with an exception.
+  601: 				 *  (Architecture specific.)
+  602: 				 */
+  603: 				if (res <= 0 && !no_exceptions) {
+  604: 					debug("[ %s device '%s' addr %08lx "
+  605: 					    "failed ]\n", writeflag?
+  606: 					    "writing to" : "reading from",
+  607: 					    mem->devices[i].name, (long)paddr);
+  608: #ifdef MEM_MIPS
+  609: 					mips_cpu_exception(cpu,
+  610: 					    cache == CACHE_INSTRUCTION?
+  611: 					    EXCEPTION_IBE : EXCEPTION_DBE,
+  612: 					    0, vaddr, 0, 0, 0, 0);
+  613: #endif
+  614: #ifdef MEM_M88K
+  615: 					/*  TODO: This is enough for
+  616: 					    OpenBSD/mvme88k's badaddr()
+  617: 					    implementation... but the
+  618: 					    faulting address should probably
+  619: 					    be included somewhere too!  */
+  620: 					m88k_exception(cpu, cache == CACHE_INSTRUCTION
+  621: 					    ? M88K_EXCEPTION_INSTRUCTION_ACCESS
+  622: 					    : M88K_EXCEPTION_DATA_ACCESS, 0);
+  623: #endif
+  624: 					return MEMORY_ACCESS_FAILED;
+  625: 				}
+  626: 				goto do_return_ok;
+  627: 			}
+  628: 
+  629: 			if (paddr < mem->devices[i].baseaddr)
+  630: 				end = i - 1;
+  631: 			if (paddr >= mem->devices[i].endaddr)
+  632: 				start = i + 1;
+  633: 			i = (start + end) >> 1;
+  634: 		} while (start <= end);
+  635: 	}
+  636: 
+  637: 
+  638: #ifdef MEM_MIPS
+  639: 	/*
+  640: 	 *  Data and instruction cache emulation:
+  641: 	 */
+  642: 
+  643: 	switch (cpu->cd.mips.cpu_type.mmu_model) {
+  644: 	case MMU3K:
+  645: 		/*  if not uncached addess  (TODO: generalize this)  */
+  646: 		if (!(misc_flags & PHYSICAL) && cache != CACHE_NONE &&
+  647: 		    !((vaddr & 0xffffffffULL) >= 0xa0000000ULL &&
+  648: 		      (vaddr & 0xffffffffULL) <= 0xbfffffffULL)) {
+  649: 			if (memory_cache_R3000(cpu, cache, paddr,
+  650: 			    writeflag, len, data))
+  651: 				goto do_return_ok;
+  652: 		}
+  653: 		break;
+  654: 	default:
+  655: 		/*  R4000 etc  */
+  656: 		/*  TODO  */
+  657: 		;
+  658: 	}
+  659: #endif	/*  MEM_MIPS  */
+  660: 
+src/cpus/tmp_alpha_tail.c:38:#define MEMORY_RW alpha_memory_rw
+src/cpus/tmp_alpha_tail.c:39:#define MEM_ALPHA
+src/cpus/tmp_alpha_tail.c:41:#undef MEM_ALPHA
+src/cpus/tmp_alpha_tail.c:42:#undef MEMORY_RW
+src/cpus/cpu_alpha.c:670:#define MEMORY_RW       alpha_userland_memory_rw
+src/cpus/cpu_alpha.c:671:#define MEM_ALPHA
+src/cpus/cpu_alpha.c:675:#undef MEM_ALPHA
+src/cpus/cpu_alpha.c:676:#undef MEMORY_RW
+48: *  memory_readmax64():
+55:uint64_t memory_readmax64(struct cpu *cpu, unsigned char *buf, int len)
+82: *  memory_writemax64():
+89:void memory_writemax64(struct cpu *cpu, unsigned char *buf, int len,
+
+web search: https://mirrors.mit.edu/NetBSD/NetBSD-release-11/src/sys/arch/alpha/pci/lca_pci.c
+codex
+There is another premise to correct: the LCA manual specifies arbitrary read data plus an exception and logged error when no device responds. All-ones is therefore an emulator compatibility result here, not a complete hardware contract. Also, a literal `return 0` differs from a successful zero-filled return: Alpha’s load path can leave the destination register unchanged, which matters because the witness reuses its control-read register.
+web search: 
+web search: https://www.bitsavers.org/pdf/dec/semiconductor/pci/EC-Q8XVA-TE_DECchip_21050_PCI-to_PCI_Bridge_Data_Sheet_199406.pdf
+codex
+**VERDICT: REVISE. Q1’s shift is correct. Your IMPLEMENT sketch also needs to decode `bus` from the tag, and the proposed all-ones row still cannot distinguish implementation from several alternatives. Premise 4 is overstated.**
+
+1. **The device extraction is right.**
+
+   In [`dev_lca.c`, `DEVICE_ACCESS(lca_pci_conf)`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:98), `relative_addr >> 5` **undoes** the address expansion described by the comment. The resulting `tag` is the comment’s tag, with the register bits removed.
+
+   For a valid tag `T` and aligned configuration register offset `R`:
+
+   ```text
+   A = (T << 5) | (R << 5) | 24
+   ((A >> 5) & ~0xff) = T
+   ```
+
+   Consequently, device bits are **15..11 in the recovered tag**, or **20..16 in `relative_addr`**. Your `dev = (tag >> 11) & 0x1f` is correct. The existing function and register extractions remain consistent with this layout.
+
+2. **`IOC_CONF` selects the cycle format; it does not supply the bus number.**
+
+   Digital’s hardware manual, Table 6–1 and §6.4.2, specifies that configuration cycles obtain PCI address bits **23..2 from CPU address bits 28..7**, while **PCI address bits 1..0 come from `IOC_CONF[1:0]`**. Thus the type-1 bus field comes from the address. Within the model’s accepted register values, zero selects type 0 and one selects type 1. [Digital 21066/21066A Hardware Reference Manual](https://openwatcom.org/ftp/devel/docs/21066_66a_hrm.pdf#page=194)
+
+   The minimum correction to your replacement arm is therefore:
+
+   ```c
+   } else {
+       bus = (tag >> 16) & 0xff;
+       dev = (tag >> 11) & 0x1f;
+   }
+   ```
+
+   This works with the existing preceding assignment and branch in [`lca_pci_conf`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:121): the selector is tested first, then `bus` is overwritten with the actual destination.
+
+   For clarity, I would subsequently express cycle selection separately from destination bus. **Do not choose the decoding branch using the extracted bus field:** primary-bus IDSEL bits overlap that field. Keeping `bus == 1` in the forwarding call would collapse every type-1 destination onto bus 1.
+
+3. **IMPLEMENT is reasonable, but neither forced nor fully justified by the empty-slot premise.**
+
+   The uninitialised-`dev` correction rules out simply deleting the `else`; it does not rule out deliberately completing the cycle before reaching `bus_pci_setaddr`.
+
+   More significantly, [`bus_pci.c`, `bus_pci_data_access`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/bus_pci.c:109) implements this **actual** absent-device contract:
+
+   | Access | Backend behavior |
+   |---|---|
+   | Read, register 0 | Returns `0xffffffffffffffff` |
+   | Read, any other register | Returns zero |
+   | Write | Prints a diagnostic on every access, then returns |
+
+   Therefore, **premise 4’s general “empty-slot read returns all-ones” is false**. Its measured ID-register instance remains valid. The write diagnostic does not terminate: [`debugmsg.c`, `fatal`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/core/debugmsg.c:384) returns normally.
+
+   This also means the alternatives can differ **today**, without adding a bus-1 device: an unconditional all-ones responder differs from the backend at nonzero registers, and announcement policies differ on diagnostic output.
+
+   I favor IMPLEMENT **as translation into the existing flat PCI model**, with those limitations stated. Explicit empty-bus emulation is another defensible scoped contract; the current witness cannot select between them.
+
+4. **The proposed discriminating row is insufficient—and has two additional false-positive traps.**
+
+   At register 0, all of these can return all-ones: correct forwarding, your incorrect bus-fixed-to-1 forwarding, explicit all-ones completion, and announced all-ones completion.
+
+   Furthermore:
+
+   - **The existing address does not encode bus 1.** The top-level setup in [`lca_confbus_probe.py`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/lca_confbus_probe.py:167) uses a zero window offset. Its recovered tag, including its bus field, is zero. On the control side, [`lca_pci_conf`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:157) reaches the *no-IDSEL fallback* to device 0. The witness establishes the mode-dependent termination, not a correctly addressed secondary-bus transaction.
+   - **A failed load can preserve the control signature.** A successful handler return without filling data gives zero because [`memory_rw.c`, `MEMORY_RW_ONE_PAGE`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:485) prezeros the buffer. But a literal handler `return 0` takes the failure path at line 595; [`cpu_alpha_instr_loadstore.c`, `LS_GENERIC_N`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_alpha_instr_loadstore.c:66) then returns before updating the destination register. The witness reuses the register that already contains all-ones.
+   - **The parser selects the first observation.** [`lca_confbus_probe.py`, `printed`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/lca_confbus_probe.py:157) uses `re.search`. Merely adding another print and calling that helper again would retrieve the control result.
+
+   Retain the signature check as an empty-ID completion check, with an independently identified result and a distinct prior destination value. To substantiate IMPLEMENT, add a **model-level routing fixture** that observes the exact bus/device/function/register passed onward. Distinct synthetic devices on bus 1 and another bus can distinguish correct decoding from hardcoded bus 1 and constant-return stubs. Include write dispatch and preservation of primary-bus decoding.
+
+5. **This closes only the explicit configuration-handler termination and its missing destination decode.**
+
+   In [`dev_lca.c`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:215), these remain:
+
+   - `lca_ioc`: the unconditional read/write `default` termination at line 351 and the register-value rejection terminations.
+   - `lca_interrupt_assert` / `lca_interrupt_deassert`: explicit exits at lines 73 and 85.
+   - `lca_isa`: its separate termination guard at line 192.
+
+   Nor does forwarding through [`bus_pci_setaddr` and `bus_pci_data_access`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/bus_pci.c:192) implement bridge topology or configuration-cycle error reporting. The backend matches a numeric bus/device/function tuple; it receives no cycle-type argument. In particular, type 1 with a zero bus field needs an explicit policy before claiming hardware fidelity: simple forwarding can alias a root-bus device.
+
+6. **Another architectural premise needs correction: raw LCA absence does not guarantee all-ones.**
+
+   Digital’s §6.2.18 specifies that an unanswered transaction causes master abort; a read returns **arbitrary data with error status**, causing an instruction exception, alongside interrupt and IOC error logging. Thus the proposed 64-bit signature is an emulator compatibility oracle, not a complete real-LCA contract. [Digital manual, §6.2.18](https://openwatcom.org/ftp/devel/docs/21066_66a_hrm.pdf#page=211)
+
+   The current LCA configuration path delegates to the generic backend and returns success; it does not implement that hardware error sequence.
+
+**Caller denominator: 10/10 direct `bus_pci_setaddr` call sites examined**, including their address-decoding paths:
+
+| File | `DEVICE_ACCESS` function |
+|---|---|
+| [dev_cpc700.c:89](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_cpc700.c:89) | `cpc700_pci` |
+| [dev_eagle.c:69](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_eagle.c:69) | `eagle` |
+| [dev_footbridge.c:474](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c:474) | `footbridge_pci` |
+| [dev_gt.c:184](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_gt.c:184) | `gt` |
+| [dev_i80321.c:217](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_i80321.c:217) | `i80321` |
+| [dev_lca.c:174](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:174) | `lca_pci_conf` |
+| [dev_sgi_ip32.c:746](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_ip32.c:746) | `macepci` |
+| [dev_sh4.c:1534](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sh4.c:1534) | `sh4_pcic` |
+| [dev_uninorth.c:81](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_uninorth.c:81) | `uninorth_addr` |
+| [dev_v3.c:174](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_v3.c:174) | `v3_pci` |
+
+Also examined the setter, `bus_pci_decompose_1`, and the sole functional consumer of the selected tuple, `bus_pci_data_access`. All local source references use **GXEMUL-SEC/src**.
+
+Validation: 4,194,304 in-memory encoding/decoding combinations checked with zero mismatches. This was an arithmetic check, not an emulator test. No files changed or witness rerun; the hardware conclusions use Digital’s manual because the remote NetBSD source could not be retrieved.
+tokens used
+157,427

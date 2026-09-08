@@ -1,0 +1,96 @@
+**VERDICT: REVISE. Q1’s shift is correct. Your IMPLEMENT sketch also needs to decode `bus` from the tag, and the proposed all-ones row still cannot distinguish implementation from several alternatives. Premise 4 is overstated.**
+
+1. **The device extraction is right.**
+
+   In [`dev_lca.c`, `DEVICE_ACCESS(lca_pci_conf)`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:98), `relative_addr >> 5` **undoes** the address expansion described by the comment. The resulting `tag` is the comment’s tag, with the register bits removed.
+
+   For a valid tag `T` and aligned configuration register offset `R`:
+
+   ```text
+   A = (T << 5) | (R << 5) | 24
+   ((A >> 5) & ~0xff) = T
+   ```
+
+   Consequently, device bits are **15..11 in the recovered tag**, or **20..16 in `relative_addr`**. Your `dev = (tag >> 11) & 0x1f` is correct. The existing function and register extractions remain consistent with this layout.
+
+2. **`IOC_CONF` selects the cycle format; it does not supply the bus number.**
+
+   Digital’s hardware manual, Table 6–1 and §6.4.2, specifies that configuration cycles obtain PCI address bits **23..2 from CPU address bits 28..7**, while **PCI address bits 1..0 come from `IOC_CONF[1:0]`**. Thus the type-1 bus field comes from the address. Within the model’s accepted register values, zero selects type 0 and one selects type 1. [Digital 21066/21066A Hardware Reference Manual](https://openwatcom.org/ftp/devel/docs/21066_66a_hrm.pdf#page=194)
+
+   The minimum correction to your replacement arm is therefore:
+
+   ```c
+   } else {
+       bus = (tag >> 16) & 0xff;
+       dev = (tag >> 11) & 0x1f;
+   }
+   ```
+
+   This works with the existing preceding assignment and branch in [`lca_pci_conf`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:121): the selector is tested first, then `bus` is overwritten with the actual destination.
+
+   For clarity, I would subsequently express cycle selection separately from destination bus. **Do not choose the decoding branch using the extracted bus field:** primary-bus IDSEL bits overlap that field. Keeping `bus == 1` in the forwarding call would collapse every type-1 destination onto bus 1.
+
+3. **IMPLEMENT is reasonable, but neither forced nor fully justified by the empty-slot premise.**
+
+   The uninitialised-`dev` correction rules out simply deleting the `else`; it does not rule out deliberately completing the cycle before reaching `bus_pci_setaddr`.
+
+   More significantly, [`bus_pci.c`, `bus_pci_data_access`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/bus_pci.c:109) implements this **actual** absent-device contract:
+
+   | Access | Backend behavior |
+   |---|---|
+   | Read, register 0 | Returns `0xffffffffffffffff` |
+   | Read, any other register | Returns zero |
+   | Write | Prints a diagnostic on every access, then returns |
+
+   Therefore, **premise 4’s general “empty-slot read returns all-ones” is false**. Its measured ID-register instance remains valid. The write diagnostic does not terminate: [`debugmsg.c`, `fatal`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/core/debugmsg.c:384) returns normally.
+
+   This also means the alternatives can differ **today**, without adding a bus-1 device: an unconditional all-ones responder differs from the backend at nonzero registers, and announcement policies differ on diagnostic output.
+
+   I favor IMPLEMENT **as translation into the existing flat PCI model**, with those limitations stated. Explicit empty-bus emulation is another defensible scoped contract; the current witness cannot select between them.
+
+4. **The proposed discriminating row is insufficient—and has two additional false-positive traps.**
+
+   At register 0, all of these can return all-ones: correct forwarding, your incorrect bus-fixed-to-1 forwarding, explicit all-ones completion, and announced all-ones completion.
+
+   Furthermore:
+
+   - **The existing address does not encode bus 1.** The top-level setup in [`lca_confbus_probe.py`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/lca_confbus_probe.py:167) uses a zero window offset. Its recovered tag, including its bus field, is zero. On the control side, [`lca_pci_conf`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:157) reaches the *no-IDSEL fallback* to device 0. The witness establishes the mode-dependent termination, not a correctly addressed secondary-bus transaction.
+   - **A failed load can preserve the control signature.** A successful handler return without filling data gives zero because [`memory_rw.c`, `MEMORY_RW_ONE_PAGE`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:485) prezeros the buffer. But a literal handler `return 0` takes the failure path at line 595; [`cpu_alpha_instr_loadstore.c`, `LS_GENERIC_N`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_alpha_instr_loadstore.c:66) then returns before updating the destination register. The witness reuses the register that already contains all-ones.
+   - **The parser selects the first observation.** [`lca_confbus_probe.py`, `printed`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/lca_confbus_probe.py:157) uses `re.search`. Merely adding another print and calling that helper again would retrieve the control result.
+
+   Retain the signature check as an empty-ID completion check, with an independently identified result and a distinct prior destination value. To substantiate IMPLEMENT, add a **model-level routing fixture** that observes the exact bus/device/function/register passed onward. Distinct synthetic devices on bus 1 and another bus can distinguish correct decoding from hardcoded bus 1 and constant-return stubs. Include write dispatch and preservation of primary-bus decoding.
+
+5. **This closes only the explicit configuration-handler termination and its missing destination decode.**
+
+   In [`dev_lca.c`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:215), these remain:
+
+   - `lca_ioc`: the unconditional read/write `default` termination at line 351 and the register-value rejection terminations.
+   - `lca_interrupt_assert` / `lca_interrupt_deassert`: explicit exits at lines 73 and 85.
+   - `lca_isa`: its separate termination guard at line 192.
+
+   Nor does forwarding through [`bus_pci_setaddr` and `bus_pci_data_access`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/bus_pci.c:192) implement bridge topology or configuration-cycle error reporting. The backend matches a numeric bus/device/function tuple; it receives no cycle-type argument. In particular, type 1 with a zero bus field needs an explicit policy before claiming hardware fidelity: simple forwarding can alias a root-bus device.
+
+6. **Another architectural premise needs correction: raw LCA absence does not guarantee all-ones.**
+
+   Digital’s §6.2.18 specifies that an unanswered transaction causes master abort; a read returns **arbitrary data with error status**, causing an instruction exception, alongside interrupt and IOC error logging. Thus the proposed 64-bit signature is an emulator compatibility oracle, not a complete real-LCA contract. [Digital manual, §6.2.18](https://openwatcom.org/ftp/devel/docs/21066_66a_hrm.pdf#page=211)
+
+   The current LCA configuration path delegates to the generic backend and returns success; it does not implement that hardware error sequence.
+
+**Caller denominator: 10/10 direct `bus_pci_setaddr` call sites examined**, including their address-decoding paths:
+
+| File | `DEVICE_ACCESS` function |
+|---|---|
+| [dev_cpc700.c:89](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_cpc700.c:89) | `cpc700_pci` |
+| [dev_eagle.c:69](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_eagle.c:69) | `eagle` |
+| [dev_footbridge.c:474](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c:474) | `footbridge_pci` |
+| [dev_gt.c:184](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_gt.c:184) | `gt` |
+| [dev_i80321.c:217](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_i80321.c:217) | `i80321` |
+| [dev_lca.c:174](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:174) | `lca_pci_conf` |
+| [dev_sgi_ip32.c:746](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_ip32.c:746) | `macepci` |
+| [dev_sh4.c:1534](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sh4.c:1534) | `sh4_pcic` |
+| [dev_uninorth.c:81](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_uninorth.c:81) | `uninorth_addr` |
+| [dev_v3.c:174](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_v3.c:174) | `v3_pci` |
+
+Also examined the setter, `bus_pci_decompose_1`, and the sole functional consumer of the selected tuple, `bus_pci_data_access`. All local source references use **GXEMUL-SEC/src**.
+
+Validation: 4,194,304 in-memory encoding/decoding combinations checked with zero mismatches. This was an arithmetic check, not an emulator test. No files changed or witness rerun; the hardware conclusions use Digital’s manual because the remote NetBSD source could not be retrieved.
