@@ -1,0 +1,3356 @@
+Reading additional input from stdin...
+OpenAI Codex v0.153.4
+--------
+workdir: C:\DocumentNoSnc\CC\GXEMUL
+model: gpt-6-astra
+provider: openai
+approval: never
+sandbox: read-only
+reasoning effort: max
+reasoning summaries: none
+session id: 01a07e80-849b-7fc3-9ec5-a046229e7b0d
+--------
+user
+# CHECK A PROPOSED CHANGE — six value guards in `dev_lca.c` that end the process
+
+Scope your reading to `GXEMUL-SEC/src/`.
+**Do not read `regress/artifacts/` or `tools/pipeline/ledger.json`.**
+
+**VERDICT LINE FIRST.**
+
+**I am asking you to CHECK A CONSTRUCTION I SUPPLY and to audit its premises. Do not write a
+probe, choose register values, or design a test.**
+
+## What is there today
+
+`DEVICE_ACCESS(lca_ioc)` handles six chipset registers with an identical shape. Using
+`LCA_IOC_W_MASK0` as the example, verbatim:
+
+```c
+	case LCA_IOC_W_MASK0:
+		if (writeflag == MEM_READ) {
+			odata = d->window_mask_0;
+		} else {
+			d->window_mask_0 = idata;
+
+			if (idata != 0x700000ULL) {
+				fatal("TODO: LCA_IOC_W_MASK0 value differs"
+				    " ...");
+				exit(1);
+			}
+		}
+		break;
+```
+
+The six, with the value each accepts:
+
+    LCA_IOC_CONF     idata & ~1                 accepts 0 and 1
+    LCA_IOC_TB_ENA   idata & ~IOC_TB_ENA_TEN    accepts 0 and the TEN bit
+    LCA_IOC_W_BASE0  idata != 0 && != 0x300800000
+    LCA_IOC_W_MASK0  idata != 0x700000
+    LCA_IOC_W_BASE1  idata != 0x240000000
+    LCA_IOC_W_MASK1  idata != 0x3ff00000
+
+**Note the ordering, which is the whole basis of the proposal: the store `d->field = idata;`
+happens BEFORE the guard.** The model has already recorded the value when it decides to end the
+process over it.
+
+## The proposed change
+
+**Delete the `fatal(...)` and `exit(1)` from all six arms, keeping the store that already ran.**
+Nothing else changes — no masking, no substituted default, no new state.
+
+The warrant offered is in the same file: **`LCA_IOC_W_T_BASE0` and `LCA_IOC_W_T_BASE1`** — the
+sibling TRANSLATED-window registers — have the identical read/store shape and **no value guard at
+all**. They accept any value and store it.
+
+## Questions
+
+1. **Is the store really unconditional and prior to the guard in all six arms?** I read it that
+   way from one arm and generalised. **Check each of the six** rather than taking my word.
+
+2. **Are those six fields PURE STORAGE, or does something consume them?** My reading is that
+   `window_base_*`, `window_mask_*` and `tlb_enable` appear only as `odata = d->X` and
+   `d->X = idata`, while `ioc_conf` is consumed in exactly one place — `bus = d->ioc_conf & 1` in
+   `DEVICE_ACCESS(lca_pci_conf)`. **If that is right, extra CONF bits are already discarded at the
+   only consumer**, and masking the store would be an unlicensed addition. If it is wrong, say
+   where each is read.
+
+3. **Is the `W_T_BASE0` warrant sound?** Those siblings accept anything — but is that because
+   accepting is correct, or because nobody wrote a guard? Does anything downstream distinguish
+   them from the six?
+
+4. **What does the tree do elsewhere when a guest writes a value the model does not implement?**
+   Grep for the existing idiom rather than reasoning from first principles. I know of at least
+   two shapes — a bounded/latched diagnostic, and silent acceptance — and I do not know which
+   dominates or whether there is a third.
+
+5. **Is there a disposition I have not named?** The set I can see is: delete the terminating call
+   and keep the store; decline the write silently; decline with a once-only announcement; accept
+   and announce once; mask the stored value; leave it as is.
+
+6. **What is NOT closed by this change?** I believe the `default:` arm of the same switch still
+   ends the process, and that it covers registers the header documents as read/write-1-to-clear.
+   If so, this change can be complete and firmware can still terminate the emulator — which the
+   round must say out loud rather than claim the register file is safe.
+
+## Rules
+
+* Answer from the source; name file and function for every behaviour you assert.
+* A clean "your reading is wrong at arm N" is the most useful answer you can give.
+* Give the denominator: how many arms and how many consumer sites you actually examined.
+
+If, while verifying this, you found something ELSE — say so.
+codex
+VERDICT: Pending source verification. I’ll check all six arms, their consumers, and the surrounding write-handling idioms within `GXEMUL-SEC/src/`.
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg --files GXEMUL-SEC/src -g AGENTS.md -g '*lca*' -g '*dec*' -g '*memory*' -g '*misc*'" in C:\DocumentNoSnc\CC\GXEMUL
+ succeeded in 97ms:
+GXEMUL-SEC/src\net\net_misc.o
+GXEMUL-SEC/src\net\net_misc.c
+GXEMUL-SEC/src\promemul\dec_prom.o
+GXEMUL-SEC/src\promemul\dec_prom.c
+GXEMUL-SEC/src\cpus\generate_alpha_misc
+GXEMUL-SEC/src\cpus\cpu_arm_instr_misc.c
+GXEMUL-SEC/src\cpus\generate_alpha_misc.c
+GXEMUL-SEC/src\include\memory.h
+GXEMUL-SEC/src\include\misc.h
+GXEMUL-SEC/src\core\misc.o
+GXEMUL-SEC/src\core\misc.c
+GXEMUL-SEC/src\core\memory.o
+GXEMUL-SEC/src\core\memory.c
+GXEMUL-SEC/src\devices\dev_dec21143.o
+GXEMUL-SEC/src\devices\dev_dec21143.c
+GXEMUL-SEC/src\devices\dev_dec21030.o
+GXEMUL-SEC/src\devices\dev_dec21030.c
+GXEMUL-SEC/src\devices\dev_dec5800.o
+GXEMUL-SEC/src\devices\dev_dec5800.c
+GXEMUL-SEC/src\devices\dev_dec_ioasic.c
+GXEMUL-SEC/src\devices\dev_dec_ioasic.o
+GXEMUL-SEC/src\cpus\memory_mips.c
+GXEMUL-SEC/src\cpus\memory_m88k.o
+GXEMUL-SEC/src\cpus\memory_m88k.c
+GXEMUL-SEC/src\cpus\memory_arm.o
+GXEMUL-SEC/src\cpus\memory_arm.c
+GXEMUL-SEC/src\cpus\memory_alpha.o
+GXEMUL-SEC/src\cpus\memory_alpha.c
+GXEMUL-SEC/src\cpus\memory_rw.c
+GXEMUL-SEC/src\cpus\memory_ppc.c
+GXEMUL-SEC/src\cpus\memory_mips_v2p.c
+GXEMUL-SEC/src\cpus\memory_sh.o
+GXEMUL-SEC/src\cpus\memory_sh.c
+GXEMUL-SEC/src\cpus\tmp_alpha_misc.c
+GXEMUL-SEC/src\devices\dev_lca.c
+GXEMUL-SEC/src\devices\dev_lca.o
+GXEMUL-SEC/src\include\thirdparty\dec_prom.h
+GXEMUL-SEC/src\include\thirdparty\dec_maxine.h
+GXEMUL-SEC/src\include\thirdparty\dec_kn03.h
+GXEMUL-SEC/src\include\thirdparty\dec_kn02.h
+GXEMUL-SEC/src\include\thirdparty\dec_kn01.h
+GXEMUL-SEC/src\include\thirdparty\dec_kmin.h
+GXEMUL-SEC/src\include\thirdparty\dec_bootinfo.h
+GXEMUL-SEC/src\include\thirdparty\dec_5100.h
+GXEMUL-SEC/src\include\thirdparty\alpha_lcareg.h
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n '"'^'"' GXEMUL-SEC/src/include/thirdparty/alpha_lcareg.h" in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n '"'^'"' GXEMUL-SEC/src/devices/dev_lca.c" in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n --glob '*.[ch]' '(warned|warn_once|warning_once|only once|once only|once-only|ignored|ignoring|unsupported|unimplemented)' GXEMUL-SEC/src/devices" in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n -I '\\b(ioc_conf|tlb_enable|window_base_0|window_base_1|window_mask_0|window_mask_1|window_translated_base_0|window_translated_base_1|lca_data)\\b' GXEMUL-SEC/src" in C:\DocumentNoSnc\CC\GXEMUL
+ succeeded in 156ms:
+1:/*
+2: *  Copyright (C) 2006-2011  Anders Gavare.  All rights reserved.
+3: *
+4: *  Redistribution and use in source and binary forms, with or without
+5: *  modification, are permitted provided that the following conditions are met:
+6: *
+7: *  1. Redistributions of source code must retain the above copyright
+8: *     notice, this list of conditions and the following disclaimer.
+9: *  2. Redistributions in binary form must reproduce the above copyright  
+10: *     notice, this list of conditions and the following disclaimer in the 
+11: *     documentation and/or other materials provided with the distribution.
+12: *  3. The name of the author may not be used to endorse or promote products
+13: *     derived from this software without specific prior written permission.
+14: *
+15: *  THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+16: *  ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+17: *  IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+18: *  ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE   
+19: *  FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+20: *  DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+21: *  OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+22: *  HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+23: *  LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+24: *  OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+25: *  SUCH DAMAGE.
+26: *
+27: *
+28: *  COMMENT: LCA PCI bus, for Alpha machines
+29: */
+30:
+31:#include <stdio.h>
+32:#include <stdlib.h>
+33:#include <string.h>
+34:
+35:#include "bus_isa.h"
+36:#include "bus_pci.h"
+37:#include "cpu.h"
+38:#include "device.h"
+39:#include "emul.h"
+40:#include "interrupt.h"
+41:#include "machine.h"
+42:#include "memory.h"
+43:#include "misc.h"
+44:
+45:#include "thirdparty/alpha_lcareg.h"
+46:
+47:#define	LCA_ISA_BASE	(LCA_PCI_SIO + 0x10000000)
+48:#define	LCA_ISA_MEMBASE	(LCA_PCI_SIO + 0x18000000)
+49:
+50:
+51:struct lca_data {
+52:	struct pci_data		*pci_data;
+53:
+54:	uint64_t		ioc_conf;
+55:	uint64_t		tlb_enable;
+56:	uint64_t		window_base_0;
+57:	uint64_t		window_mask_0;
+58:	uint64_t		window_t_base_0;
+59:	uint64_t		window_base_1;
+60:	uint64_t		window_mask_1;
+61:	uint64_t		window_t_base_1;
+62:};
+63:
+64:
+65:/*
+66: *  lca_interrupt_assert():
+67: *
+68: *  Line 0 = ISA interrupt.
+69: */
+70:void lca_interrupt_assert(struct interrupt *interrupt)
+71:{
+72:	fatal("lca_interrupt_assert: TODO\n");
+73:	exit(1);
+74:}
+75:
+76:
+77:/*
+78: *  lca_interrupt_deassert():
+79: *
+80: *  Line 0 = ISA interrupt.
+81: */
+82:void lca_interrupt_deassert(struct interrupt *interrupt)
+83:{
+84:	fatal("lca_interrupt_deassert: TODO\n");
+85:	exit(1);
+86:}
+87:
+88:
+89:DEVICE_ACCESS(lca_pci_conf)
+90:{
+91:	uint64_t idata = 0, odata = 0;
+92:	int tag, bus, dev, func, reg;
+93:	struct lca_data *d = (struct lca_data *) extra;
+94:
+95:	if (writeflag == MEM_WRITE)
+96:		idata = memory_readmax64(cpu, data, len);
+97:
+98:	/*
+99:	 *  1. Decompose the address into a tag.
+100:	 *
+101:	 *  According to NetBSD's lca_pci.c, the address is composed like this:
+102:	 *
+103:	 *	addr = tag << 5 | (regoffset & ~0x03) << 5 | 0x3 << 3
+104:	 */
+105:	reg = (relative_addr >> 5) & 0xfc;
+106:	tag = (relative_addr >> 5) & ~0xff;
+107:
+108:	/*
+109:	 *  2. Decompose the tag into bus, dev, and func.
+110:	 *
+111:	 *  The tag can be constructed in one of two ways. On the primary
+112:	 *  bus (nr 0):
+113:	 *
+114:	 *	tag = (1 << (device + 11)) | (function << 8);
+115:	 *
+116:	 *  and on other busses, the tag is a normal:
+117:	 *
+118:	 *	tag = (bus << 16) | (device << 11) | (function << 8)
+119:	 */
+120:	/*  printf("tag = 0x%x\n", (int)tag);  */
+121:	bus = d->ioc_conf & 1;
+122:
+123:	if (bus == 0) {
+124:		for (dev=0; dev<21; dev++)
+125:			if (tag & (0x800 << dev))
+126:				break;
+127:		if (dev >= 21) {
+128:			/*  fatal("[ LCA: No bus 0 device? TODO ]\n");
+129:			exit(1);  */
+130:			dev = 0;
+131:		}
+132:	} else {
+133:		fatal("TODO. Non-zero bus.\n");
+134:		exit(1);
+135:	}
+136:
+137:	func = (tag >> 8) & 7;
+138:	/*  printf("bus=%i dev=%i func=%i reg=%i\n", bus,dev,func,reg);  */
+139:
+140:	/*  Pass PCI accesses onto bus_pci:  */
+141:	bus_pci_setaddr(cpu, d->pci_data, bus, dev, func, reg);
+142:	bus_pci_data_access(cpu, d->pci_data, writeflag == MEM_READ?
+143:	    &odata : &idata, len, writeflag);
+144:
+145:	if (writeflag == MEM_READ)
+146:		memory_writemax64(cpu, data, len, odata);
+147:
+148:	return 1;
+149:}
+150:
+151:
+152:DEVICE_ACCESS(lca_isa)
+153:{
+154:	unsigned int ofs, i;
+155:	uint8_t byte;
+156:
+157:	relative_addr >>= 5;
+158:
+159:	ofs = relative_addr & 3;
+160:	if (ofs > len) {
+161:		fatal("[ ofs=%i len=%i in lca_isa access function. "
+162:		    "aborting ]\n", ofs, len);
+163:		exit(1);
+164:	}
+165:
+166:	if (writeflag == MEM_WRITE) {
+167:		byte = data[ofs % len];
+168:		return cpu->memory_rw(cpu, cpu->mem, LCA_ISA_BASE +
+169:		    relative_addr, &byte, 1, writeflag, CACHE_NONE);
+170:	}
+171:
+172:	cpu->memory_rw(cpu, cpu->mem, LCA_ISA_BASE + relative_addr,
+173:	    &byte, 1, MEM_READ, CACHE_NONE);
+174:
+175:	for (i=0; i<len; i++)
+176:		data[i] = i == ofs? byte : 0x00;
+177:
+178:	return 1;
+179:}
+180:
+181:
+182:DEVICE_ACCESS(lca_ioc)
+183:{
+184:	uint64_t idata = 0, odata = 0;
+185:	struct lca_data *d = (struct lca_data *) extra;
+186:
+187:	if (writeflag == MEM_WRITE)
+188:		idata = memory_readmax64(cpu, data, len);
+189:
+190:	switch (relative_addr + LCA_IOC_BASE) {
+191:
+192:	case LCA_IOC_BASE:
+193:		/*  Ignore? Linux reads from the base at startup.  */
+194:		break;
+195:
+196:	case LCA_IOC_CONF:
+197:		if (writeflag == MEM_READ) {
+198:			odata = d->ioc_conf;
+199:		} else {
+200:			d->ioc_conf = idata;
+201:			/*  Only bit 0 is implemented so far, the PCI bus 0 vs
+202:			    bus non-0 selection bit.  */
+203:			if (idata & ~1) {
+204:				/*  #506: was `0x%x', (int)idata -- a 64-bit guarded value
+205:				    narrowed to 32 in the KILL diagnostic, so a write of
+206:				    0x100000000 trips `idata & ~1' and then reports "0x0",
+207:				    which is a value this same guard ACCEPTS.  The five
+208:				    sibling arms below already print the full width this
+209:				    way; this arm was the outlier among the VALUE-guard
+210:				    diagnostics.  (Not the file's only narrowing site --
+211:				    the default arm below has the same cast, and this
+212:				    round fixes it too.)  */
+213:				fatal("TODO: Write to unimplemented bit of"
+214:				    " IOC_CONF: 0x%" PRIx64 "\n", (uint64_t)idata);
+215:				exit(1);
+216:			}
+217:		}
+218:		break;
+219:
+220:	case LCA_IOC_TBIA:
+221:		/*  TLB Invalidate All.  */
+222:		/*  TODO: For now, let's just ignore it.  */
+223:		break;
+224:
+225:	case LCA_IOC_TB_ENA:
+226:		if (writeflag == MEM_READ) {
+227:			odata = d->tlb_enable;
+228:		} else {
+229:			d->tlb_enable = idata;
+230:			/*  TODO: Actually implement this.  */
+231:			if (idata & ~IOC_TB_ENA_TEN) {
+232:				fatal("TODO: LCA_IOC_TB_ENA value "
+233:				    " (0x%" PRIx64") has unimplemented "
+234:				    "bits.\n", (uint64_t)idata);
+235:				exit(1);
+236:			}
+237:		}
+238:		break;
+239:
+240:	case LCA_IOC_W_BASE0:
+241:		if (writeflag == MEM_READ) {
+242:			odata = d->window_base_0;
+243:		} else {
+244:			d->window_base_0 = idata;
+245:			/*  TODO: Actually implement this.  */
+246:			if (idata != 0ULL && idata != 0x300800000ULL) {
+247:				fatal("TODO: LCA_IOC_W_BASE0 value differs"
+248:				    " (0x%" PRIx64") from the only implemented"
+249:				    " values\n", (uint64_t)idata);
+250:				exit(1);
+251:			}
+252:		}
+253:		break;
+254:
+255:	case LCA_IOC_W_MASK0:
+256:		if (writeflag == MEM_READ) {
+257:			odata = d->window_mask_0;
+258:		} else {
+259:			d->window_mask_0 = idata;
+260:			/*  TODO: Actually implement this.  */
+261:			if (idata != 0x700000ULL) {
+262:				fatal("TODO: LCA_IOC_W_MASK0 value differs"
+263:				    " (0x%" PRIx64") from the only implemented"
+264:				    " value\n", (uint64_t)idata);
+265:				exit(1);
+266:			}
+267:		}
+268:		break;
+269:
+270:	case LCA_IOC_W_T_BASE0:
+271:		if (writeflag == MEM_READ) {
+272:			odata = d->window_t_base_0;
+273:		} else {
+274:			d->window_t_base_0 = idata;
+275:			/*  TODO: Actually implement this.  */
+276:		}
+277:		break;
+278:
+279:	case LCA_IOC_W_BASE1:
+280:		if (writeflag == MEM_READ) {
+281:			odata = d->window_base_1;
+282:		} else {
+283:			d->window_base_1 = idata;
+284:			/*  TODO: Actually implement this.  */
+285:			if (idata != 0x240000000ULL) {
+286:				fatal("TODO: LCA_IOC_W_BASE1 value differs"
+287:				    " (0x%" PRIx64") from the only implemented"
+288:				    " value\n", (uint64_t)idata);
+289:				exit(1);
+290:			}
+291:		}
+292:		break;
+293:
+294:	case LCA_IOC_W_MASK1:
+295:		if (writeflag == MEM_READ) {
+296:			odata = d->window_mask_1;
+297:		} else {
+298:			d->window_mask_1 = idata;
+299:			/*  TODO: Actually implement this.  */
+300:			if (idata != 0x3ff00000ULL) {
+301:				fatal("TODO: LCA_IOC_W_MASK1 value differs"
+302:				    " (0x%" PRIx64") from the only implemented"
+303:				    " value\n", (uint64_t)idata);
+304:				exit(1);
+305:			}
+306:		}
+307:		break;
+308:
+309:	case LCA_IOC_W_T_BASE1:
+310:		if (writeflag == MEM_READ) {
+311:			odata = d->window_t_base_1;
+312:		} else {
+313:			d->window_t_base_1 = idata;
+314:			/*  TODO: Actually implement this.  */
+315:		}
+316:		break;
+317:
+318:	default:fatal("[ lca_ioc: unimplemented %s to offset 0x%x",
+319:		    writeflag == MEM_WRITE? "write" : "read", (int)
+320:		    relative_addr);
+321:		if (writeflag == MEM_WRITE)
+322:			fatal(": 0x%" PRIx64, (uint64_t)idata);	/*  #506  */
+323:		fatal(" ]\n");
+324:		exit(1);
+325:	}
+326:
+327:	if (writeflag == MEM_READ)
+328:		memory_writemax64(cpu, data, len, odata);
+329:
+330:	return 1;
+331:}
+332:
+333:
+334:DEVINIT(lca)
+335:{
+336:	char *interrupt_path;
+337:	struct interrupt interrupt_template;
+338:	struct lca_data *d;
+339:
+340:	CHECK_ALLOCATION(d = (struct lca_data *) malloc(sizeof(struct lca_data)));
+341:	memset(d, 0, sizeof(struct lca_data));
+342:
+343:	/*  Register a PCI bus:  */
+344:	d->pci_data = bus_pci_init(
+345:	    devinit->machine,
+346:	    "TODO: irq"		/*  pciirq: TODO  */,
+347:	    LCA_PCI_SIO,	/*  pci device io offset  */
+348:	    0x00000000,		/*  pci device mem offset: TODO  */
+349:	    0x00000000,		/*  PCI portbase: TODO  */
+350:	    0x00000000,		/*  PCI membase: TODO  */
+351:	    "TODO: pci irq base",	/*  PCI irqbase: TODO  */
+352:	    LCA_ISA_BASE,	/*  ISA portbase  */
+353:	    LCA_ISA_MEMBASE,	/*  ISA membase  */
+354:	    "TODO: irqbase isa");                /*  ISA irqbase: TODO  */
+355:
+356:	/*  Add the "sio0" controller (as seen by NetBSD):  */
+357:	bus_pci_add(devinit->machine, d->pci_data, devinit->machine->memory,
+358:	    0, 7, 0, "i82378zb");
+359:
+360:	memory_device_register(devinit->machine->memory, "lca_pci_conf",
+361:	    LCA_PCI_CONF, 0x20000000, dev_lca_pci_conf_access, (void *)d,
+362:	    DM_DEFAULT, NULL);
+363:
+364:	memory_device_register(devinit->machine->memory, "lca_isa",
+365:	    LCA_PCI_SIO, 0x10000 << 5, dev_lca_isa_access, (void *)d,
+366:	    DM_DEFAULT, NULL);
+367:
+368:	memory_device_register(devinit->machine->memory, "lca_ioc",
+369:	    LCA_IOC_BASE, 0x20000000, dev_lca_ioc_access, (void *)d,
+370:	    DM_DEFAULT, NULL);
+371:
+372:	CHECK_ALLOCATION(interrupt_path = (char *)
+373:	    malloc(strlen(devinit->machine->path) + 10));
+374:	snprintf(interrupt_path, strlen(devinit->machine->path) + 10,
+375:	    "%s.lca", devinit->machine->path);
+376:
+377:	memset(&interrupt_template, 0, sizeof(interrupt_template));
+378:	interrupt_template.line = 0;
+379:	interrupt_template.name = interrupt_path;
+380:	interrupt_template.extra = d;
+381:	interrupt_template.interrupt_assert = lca_interrupt_assert;
+382:	interrupt_template.interrupt_deassert = lca_interrupt_deassert;
+383:	interrupt_handler_register(&interrupt_template);
+384:
+385:	bus_isa_init(devinit->machine, interrupt_path,
+386:	    BUS_ISA_IDE0 | BUS_ISA_IDE1, LCA_ISA_BASE, LCA_ISA_MEMBASE);
+387:
+388:	return 1;
+389:}
+390:
+
+ succeeded in 165ms:
+1:/* GXemul: $Id: alpha_lcareg.h,v 1.2 2006-06-16 18:31:26 debug Exp $ */
+2:/* $NetBSD: lcareg.h,v 1.8 1997/09/05 02:14:31 thorpej Exp $ */
+3:
+4:#ifndef ALPHA_LCAREG_H
+5:#define	ALPHA_LCAREG_H
+6:
+7:/*
+8: * Copyright (c) 1995 Carnegie-Mellon University.
+9: * All rights reserved.
+10: *
+11: * Authors: Jeffrey Hsu, Jason R. Thorpe
+12: * 
+13: * Permission to use, copy, modify and distribute this software and
+14: * its documentation is hereby granted, provided that both the copyright
+15: * notice and this permission notice appear in all copies of the
+16: * software, derivative works or modified versions, and any portions
+17: * thereof, and that both notices appear in supporting documentation.
+18: * 
+19: * CARNEGIE MELLON ALLOWS FREE USE OF THIS SOFTWARE IN ITS "AS IS" 
+20: * CONDITION.  CARNEGIE MELLON DISCLAIMS ANY LIABILITY OF ANY KIND 
+21: * FOR ANY DAMAGES WHATSOEVER RESULTING FROM THE USE OF THIS SOFTWARE.
+22: * 
+23: * Carnegie Mellon requests users of this software to return to
+24: *
+25: *  Software Distribution Coordinator  or  Software.Distribution@CS.CMU.EDU
+26: *  School of Computer Science
+27: *  Carnegie Mellon University
+28: *  Pittsburgh PA 15213-3890
+29: *
+30: * any improvements or extensions that they make and grant Carnegie the
+31: * rights to redistribute these changes.
+32: */
+33:
+34:/*
+35: * 21066 chip registers
+36: */
+37:
+38:#define REGVAL(r)	(*(volatile int32_t *)ALPHA_PHYS_TO_K0SEG(r))
+39:#define REGVAL64(r)	(*(volatile int64_t *)ALPHA_PHYS_TO_K0SEG(r))
+40:
+41:/*
+42: * Base addresses
+43: */
+44:#define LCA_IOC_BASE	0x180000000ULL		/* LCA IOC Regs */
+45:#define LCA_PCI_SIO	0x1c0000000ULL		/* PCI Sp. I/O Space */
+46:#define LCA_PCI_CONF	0x1e0000000ULL		/* PCI Conf. Space */
+47:#define LCA_PCI_SPARSE	0x200000000ULL		/* PCI Sparse Space */
+48:#define LCA_PCI_DENSE	0x300000000ULL		/* PCI Dense Space */
+49:
+50:#define LCA_IOC_HAE	LCA_IOC_BASE		/* Host Address Ext. (64) */
+51:#define	IOC_HAE_ADDREXT	0x00000000f8000000ULL
+52:#define	IOC_HAE_RSVSD	0xffffffff07ffffffULL
+53:
+54:#define LCA_IOC_CONF	(LCA_IOC_BASE + 0x020)	/* Configuration Cycle Type */
+55:
+56:#define LCA_IOC_STAT0	(LCA_IOC_BASE + 0x040)	/* Status 0 */
+57:#define	IOC_STAT0_CMD	0x000000000000000fULL	/* PCI command mask */
+58:#define	IOC_STAT0_ERR	0x0000000000000010ULL	/* IOC error indicator R/W1C */
+59:#define	IOC_STAT0_LOST	0x0000000000000020ULL	/* IOC lose error info R/W1C */
+60:#define	IOC_STAT0_THIT	0x0000000000000040ULL	/* test hit */
+61:#define	IOC_STAT0_TREF	0x0000000000000080ULL	/* test reference */
+62:#define	IOC_STAT0_CODE	0x0000000000000700ULL	/* code mask */
+63:#define	IOC_STAT0_CODESHIFT 8
+64:#define	IOC_STAT0_P_NBR	0x00000000ffffe000ULL	/* page number mask */
+65:
+66:#define LCA_IOC_STAT1	(LCA_IOC_BASE + 0x060)	/* Status 1 */
+67:#define	IOC_STAT1_ADDR	0x00000000ffffffffULL	/* PCI address mask */
+68:
+69:#define	LCA_IOC_TBIA	(LCA_IOC_BASE + 0x080)	/* TLB Invalidate All */
+70:#define	LCA_IOC_TB_ENA	(LCA_IOC_BASE + 0x0a0)	/* TLB Enable */
+71:#define	IOC_TB_ENA_TEN	0x0000000000000080ULL
+72:
+73:#define LCA_IOC_W_BASE0	(LCA_IOC_BASE + 0x100)	/* Window Base */
+74:#define LCA_IOC_W_MASK0	(LCA_IOC_BASE + 0x140)	/* Window Mask */
+75:#define LCA_IOC_W_T_BASE0 (LCA_IOC_BASE + 0x180) /* Translated Base */
+76:
+77:#define LCA_IOC_W_BASE1	(LCA_IOC_BASE + 0x120)	/* Window Base */
+78:#define LCA_IOC_W_MASK1	(LCA_IOC_BASE + 0x160)	/* Window Mask */
+79:#define LCA_IOC_W_T_BASE1 (LCA_IOC_BASE + 0x1a0) /* Translated Base */
+80:
+81:#define	IOC_W_BASE_W_BASE 0x00000000fff00000ULL	/* Window base value */
+82:#define	IOC_W_BASE_SG	  0x0000000100000000ULL	/* Window uses SGMAPs */
+83:#define	IOC_W_BASE_WEN	  0x0000000200000000ULL	/* Window enable */
+84:
+85:#define	IOC_W_MASK_1M	0x0000000000000000ULL	/* 1MB window */
+86:#define	IOC_W_MASK_2M	0x0000000000100000ULL	/* 2MB window */
+87:#define	IOC_W_MASK_4M	0x0000000000300000ULL	/* 4MB window */
+88:#define	IOC_W_MASK_8M	0x0000000000700000ULL	/* 8MB window */
+89:#define	IOC_W_MASK_16M	0x0000000000f00000ULL	/* 16MB window */
+90:#define	IOC_W_MASK_32M	0x0000000001f00000ULL	/* 32MB window */
+91:#define	IOC_W_MASK_64M	0x0000000003f00000ULL	/* 64MB window */
+92:#define	IOC_W_MASK_128M	0x0000000007f00000ULL	/* 128M window */
+93:#define	IOC_W_MASK_256M	0x000000000ff00000ULL	/* 256M window */
+94:#define	IOC_W_MASK_512M	0x000000001ff00000ULL	/* 512M window */
+95:#define	IOC_W_MASK_1G	0x000000003ff00000ULL	/* 1GB window */
+96:#define	IOC_W_MASK_2G	0x000000007ff00000ULL	/* 2GB window */
+97:#define	IOC_W_MASK_4G	0x00000000fff00000ULL	/* 4GB window */
+98:
+99:#define	IOC_W_T_BASE	0x00000000fffffc00ULL	/* page table base */
+100:
+101:#endif	/*  ALPHA_LCAREG_H  */
+
+ succeeded in 161ms:
+51:struct lca_data {
+54:	uint64_t		ioc_conf;
+55:	uint64_t		tlb_enable;
+56:	uint64_t		window_base_0;
+57:	uint64_t		window_mask_0;
+59:	uint64_t		window_base_1;
+60:	uint64_t		window_mask_1;
+93:	struct lca_data *d = (struct lca_data *) extra;
+121:	bus = d->ioc_conf & 1;
+185:	struct lca_data *d = (struct lca_data *) extra;
+198:			odata = d->ioc_conf;
+200:			d->ioc_conf = idata;
+227:			odata = d->tlb_enable;
+229:			d->tlb_enable = idata;
+242:			odata = d->window_base_0;
+244:			d->window_base_0 = idata;
+257:			odata = d->window_mask_0;
+259:			d->window_mask_0 = idata;
+281:			odata = d->window_base_1;
+283:			d->window_base_1 = idata;
+296:			odata = d->window_mask_1;
+298:			d->window_mask_1 = idata;
+338:	struct lca_data *d;
+340:	CHECK_ALLOCATION(d = (struct lca_data *) malloc(sizeof(struct lca_data)));
+341:	memset(d, 0, sizeof(struct lca_data));
+
+ succeeded in 184ms:
+GXEMUL-SEC/src/devices\bus_isa.c:318:		fatal("WARNING! bus_isa(): unimplemented bus_isa_flags 0x%x\n",
+GXEMUL-SEC/src/devices\bus_pci.c:480:	default:fatal("ali_m1543 init: unimplemented machine type\n");
+GXEMUL-SEC/src/devices\bus_pci.c:501:	default:fatal("ali_m5229 init: unimplemented machine type\n");
+GXEMUL-SEC/src/devices\bus_pci.c:1063:	default:fatal("symphony_83c553 init: unimplemented machine type\n");
+GXEMUL-SEC/src/devices\dev_8253.c:351:			fatal("[ 8253: unimplemented write to address 0x%x"
+GXEMUL-SEC/src/devices\dev_8253.c:354:			fatal("[ 8253: unimplemented read from address 0x%x "
+GXEMUL-SEC/src/devices\dev_8259.c:138:				fatal("[ 8259: unimplemented command 0x%02x"
+GXEMUL-SEC/src/devices\dev_8259.c:171:			 *	fatal("[ 8259: unimplemented command 0x%02x"
+GXEMUL-SEC/src/devices\dev_8259.c:229:			fatal("[ 8259: unimplemented write to address 0x%x"
+GXEMUL-SEC/src/devices\dev_8259.c:233:			fatal("[ 8259: unimplemented read from address 0x%x "
+GXEMUL-SEC/src/devices\dev_asc.c:125:	int		fifo_underrun_warned;
+GXEMUL-SEC/src/devices\dev_asc.c:126:	int		fifo_overrun_warned;
+GXEMUL-SEC/src/devices\dev_asc.c:132:	int		unknown_phase_warned;
+GXEMUL-SEC/src/devices\dev_asc.c:133:	int		newxfer_warned;
+GXEMUL-SEC/src/devices\dev_asc.c:258:		if (!d->fifo_underrun_warned) {
+GXEMUL-SEC/src/devices\dev_asc.c:259:			d->fifo_underrun_warned = 1;
+GXEMUL-SEC/src/devices\dev_asc.c:294:		if (!d->fifo_overrun_warned) {
+GXEMUL-SEC/src/devices\dev_asc.c:295:			d->fifo_overrun_warned = 1;
+GXEMUL-SEC/src/devices\dev_asc.c:321:		if (!d->newxfer_warned) {
+GXEMUL-SEC/src/devices\dev_asc.c:322:			d->newxfer_warned = 1;
+GXEMUL-SEC/src/devices\dev_asc.c:498:				 *  NCRCMD_ENSEL below is an unimplemented no-op.
+GXEMUL-SEC/src/devices\dev_asc.c:842:		if (!d->unknown_phase_warned) {
+GXEMUL-SEC/src/devices\dev_asc.c:843:			d->unknown_phase_warned = 1;
+GXEMUL-SEC/src/devices\dev_asc.c:844:			fatal("!!! TODO: unknown/unimplemented phase "
+GXEMUL-SEC/src/devices\dev_asc.c:1490:			/*  #240: An unimplemented/illegal ASC command must not
+GXEMUL-SEC/src/devices\dev_asc.c:1500:			    "unimplemented command 0x%02x", (int)idata);
+GXEMUL-SEC/src/devices\dev_bebox.c:177:			fatal("[ bebox: unimplemented write to 0x3f0:"
+GXEMUL-SEC/src/devices\dev_bebox.c:183:			fatal("[ bebox: unimplemented read from 0x%08lx ]\n",
+GXEMUL-SEC/src/devices\dev_bebox.c:186:			fatal("[ bebox: unimplemented write to 0x%08lx: 0x"
+GXEMUL-SEC/src/devices\dev_bt431.c:125:			debug("[ bt431: unimplemented write to address "
+GXEMUL-SEC/src/devices\dev_bt431.c:129:			debug("[ bt431: unimplemented read from address "
+GXEMUL-SEC/src/devices\dev_bt455.c:149:			debug("[ bt455: unimplemented write to address 0x%x,"
+GXEMUL-SEC/src/devices\dev_bt455.c:152:			debug("[ bt455: unimplemented read from address "
+GXEMUL-SEC/src/devices\dev_bt459.c:418:					fatal("[ bt459: unimplemented CCR "
+GXEMUL-SEC/src/devices\dev_bt459.c:500:			debug("[ bt459: unimplemented write to address 0x%x, "
+GXEMUL-SEC/src/devices\dev_bt459.c:503:			debug("[ bt459: unimplemented read from address "
+GXEMUL-SEC/src/devices\dev_colorplanemask.c:66:			debug("[ colorplanemask: unimplemented write "
+GXEMUL-SEC/src/devices\dev_colorplanemask.c:70:			debug("[ colorplanemask: unimplemented read "
+GXEMUL-SEC/src/devices\dev_clmpcc.c:162:				fatal("clmpcc: unimplemented STCR byte "
+GXEMUL-SEC/src/devices\dev_clmpcc.c:247:			fatal("[ clmpcc: unimplemented READ from offset 0x%x ]"
+GXEMUL-SEC/src/devices\dev_clmpcc.c:250:			fatal("[ clmpcc: unimplemented WRITE to offset 0x%x: "
+GXEMUL-SEC/src/devices\dev_cpc700.c:168:			fatal("[ cpc700_int: unimplemented write to "
+GXEMUL-SEC/src/devices\dev_cpc700.c:172:			fatal("[ cpc700_int: unimplemented read from "
+GXEMUL-SEC/src/devices\dev_dec21030.c:217:			debug("[ dec21030: unimplemented write to address"
+GXEMUL-SEC/src/devices\dev_dec21030.c:221:			debug("[ dec21030: unimplemented read from address"
+GXEMUL-SEC/src/devices\dev_dec21143.c:1122:		default:fatal("[ dec21243: unimplemented SROM/EEPROM "
+GXEMUL-SEC/src/devices\dev_dec21143.c:1341:			fatal("[ dec21143: read from unimplemented 0x%02x ]\n",
+GXEMUL-SEC/src/devices\dev_dec21143.c:1344:			fatal("[ dec21143: write to unimplemented 0x%02x: "
+GXEMUL-SEC/src/devices\dev_dec5800.c:296:			debug("[ decbi: (node %i) read from unimplemented "
+GXEMUL-SEC/src/devices\dev_dec5800.c:300:			debug("[ decbi: (node %i) write to unimplemented "
+GXEMUL-SEC/src/devices\dev_dec5800.c:481:			debug("[ decxmi: (node %i) read from unimplemented "
+GXEMUL-SEC/src/devices\dev_dec5800.c:485:			debug("[ decxmi: (node %i) write to unimplemented "
+GXEMUL-SEC/src/devices\dev_dec_ioasic.c:413:			    " ethernet address. ignored for now. ]\n");
+GXEMUL-SEC/src/devices\dev_dec_ioasic.c:436:			fatal("[ dec_ioasic: unimplemented write to address "
+GXEMUL-SEC/src/devices\dev_dec_ioasic.c:440:			fatal("[ dec_ioasic: unimplemented read from address "
+GXEMUL-SEC/src/devices\dev_disk.c:74:		static int warned = 0;	/* #119: loud-once (course-correction) */
+GXEMUL-SEC/src/devices\dev_disk.c:75:		if (!warned) {
+GXEMUL-SEC/src/devices\dev_disk.c:77:			    "ignored ]\n", (int)relative_addr, (int)d->buf_len);
+GXEMUL-SEC/src/devices\dev_disk.c:78:			warned = 1;
+GXEMUL-SEC/src/devices\dev_disk.c:85:		static int warned2 = 0;	/* #119: loud-once on the end-span clamp */
+GXEMUL-SEC/src/devices\dev_disk.c:86:		if (!warned2) {
+GXEMUL-SEC/src/devices\dev_disk.c:90:			warned2 = 1;
+GXEMUL-SEC/src/devices\dev_disk.c:180:			fatal("[ disk: unimplemented write to "
+GXEMUL-SEC/src/devices\dev_disk.c:184:			fatal("[ disk: unimplemented read from "
+GXEMUL-SEC/src/devices\dev_dreamcast_g2.c:259:			fatal("[ dreamcast_g2_misc: unimplemented 0xe4 ]\n");
+GXEMUL-SEC/src/devices\dev_dreamcast_gdrom.c:77: *  #461: the two `default:` arms -- unimplemented offsets in each window.
+GXEMUL-SEC/src/devices\dev_dreamcast_gdrom.c:113: *  unimplemented space are reported nowhere.  The write line is also the only
+GXEMUL-SEC/src/devices\dev_dreamcast_gdrom.c:145:	 *  #460: once-only diagnostic latch, ONE BIT PER SITE.
+GXEMUL-SEC/src/devices\dev_dreamcast_gdrom.c:147:	 *  Modelled on dev_wdc.c's `warned_badlen` (#337) FOR THE MECHANISM ONLY
+GXEMUL-SEC/src/devices\dev_dreamcast_gdrom.c:161:	uint32_t	warned;
+GXEMUL-SEC/src/devices\dev_dreamcast_gdrom.c:167:	 *  KEPT SEPARATE FROM #460's `warned` ABOVE, deliberately: those four bits
+GXEMUL-SEC/src/devices\dev_dreamcast_gdrom.c:210: *  `d->warned |= 0x40` that collides with the seventh enumerator when it arrives.  What
+GXEMUL-SEC/src/devices\dev_dreamcast_gdrom.c:217: *  `warned` widens from uint8_t to uint32_t in the same change, because an enum that can
+GXEMUL-SEC/src/devices\dev_dreamcast_gdrom.c:232:	GDROM_W_CMD_B,		/*  #490: the default: unimplemented-command decline  */
+GXEMUL-SEC/src/devices\dev_dreamcast_gdrom.c:258: *  *** AND THE COLLISION SURFACE IS WIDER THAN THIS PAIR.  `d->warned` now has NINE
+GXEMUL-SEC/src/devices\dev_dreamcast_gdrom.c:284: *  spelled `GDROM_W_NBITS <= 32` COMPILES CLEAN over a `uint8_t warned` carrying a live
+GXEMUL-SEC/src/devices\dev_dreamcast_gdrom.c:293: *    1. `warned` must be able to HOLD the bit -- the half mask_equivalence_check.c is blind
+GXEMUL-SEC/src/devices\dev_dreamcast_gdrom.c:296: *       undefined however wide `warned` becomes.  A `uint64_t` field would satisfy clause 1
+GXEMUL-SEC/src/devices\dev_dreamcast_gdrom.c:328:    (GDROM_W_NBITS <= 8 * sizeof(((struct dreamcast_gdrom_data *)0)->warned) &&
+GXEMUL-SEC/src/devices\dev_dreamcast_gdrom.c:525: *  `warned` and convert these to an enum of bit POSITIONS ending in a
+GXEMUL-SEC/src/devices\dev_dreamcast_gdrom.c:528: *  Why it was worth a trigger rather than a note: `warned |= (1u << 8)`
+GXEMUL-SEC/src/devices\dev_dreamcast_gdrom.c:547: *  #461: report an unimplemented offset ONCE per (direction, word).
+GXEMUL-SEC/src/devices\dev_dreamcast_gdrom.c:735:			if (!(d->warned & GDROM_W_TOCLEN)) {
+GXEMUL-SEC/src/devices\dev_dreamcast_gdrom.c:736:				d->warned |= GDROM_W_TOCLEN;
+GXEMUL-SEC/src/devices\dev_dreamcast_gdrom.c:789:			fatal("GDROM unimplemented data format 0x%02x. Continuing anway.\n", d->cmd[1]);
+GXEMUL-SEC/src/devices\dev_dreamcast_gdrom.c:816:			if (!(d->warned & GDROM_W_FMT)) {
+GXEMUL-SEC/src/devices\dev_dreamcast_gdrom.c:817:				d->warned |= GDROM_W_FMT;
+GXEMUL-SEC/src/devices\dev_dreamcast_gdrom.c:818:				fatal("[ dreamcast_gdrom: unimplemented data"
+GXEMUL-SEC/src/devices\dev_dreamcast_gdrom.c:894:		// Note/TODO: This is ignored for now.
+GXEMUL-SEC/src/devices\dev_dreamcast_gdrom.c:898:		 *  #490: an unimplemented command byte ended the host process.
+GXEMUL-SEC/src/devices\dev_dreamcast_gdrom.c:915:		if (!(d->warned & GDROM_W_CMD)) {
+GXEMUL-SEC/src/devices\dev_dreamcast_gdrom.c:916:			d->warned |= GDROM_W_CMD;
+GXEMUL-SEC/src/devices\dev_dreamcast_gdrom.c:918:			    " unimplemented command 0x%02x -- declined."
+GXEMUL-SEC/src/devices\dev_dreamcast_gdrom.c:1043:			if (!(d->warned & GDROM_W_LEN)) {
+GXEMUL-SEC/src/devices\dev_dreamcast_gdrom.c:1044:				d->warned |= GDROM_W_LEN;
+GXEMUL-SEC/src/devices\dev_dreamcast_gdrom.c:1055:				if (!(d->warned & GDROM_W_NODATA)) {
+GXEMUL-SEC/src/devices\dev_dreamcast_gdrom.c:1056:					d->warned |= GDROM_W_NODATA;
+GXEMUL-SEC/src/devices\dev_dreamcast_gdrom.c:1094:				if (!(d->warned & GDROM_W_OVERREAD)) {
+GXEMUL-SEC/src/devices\dev_dreamcast_gdrom.c:1095:					d->warned |= GDROM_W_OVERREAD;
+GXEMUL-SEC/src/devices\dev_dreamcast_gdrom.c:1120:				if (!(d->warned & GDROM_W_NOTWAIT)) {
+GXEMUL-SEC/src/devices\dev_dreamcast_gdrom.c:1121:					d->warned |= GDROM_W_NOTWAIT;
+GXEMUL-SEC/src/devices\dev_dreamcast_gdrom.c:1124:					    " for data -- ignored.  (once) ]\n");
+GXEMUL-SEC/src/devices\dev_dreamcast_gdrom.c:1168:				if (!(d->warned & GDROM_W_88VAL)) {
+GXEMUL-SEC/src/devices\dev_dreamcast_gdrom.c:1169:					d->warned |= GDROM_W_88VAL;
+GXEMUL-SEC/src/devices\dev_dreamcast_gdrom.c:1173:					    " ignored.  (once) ]\n",
+GXEMUL-SEC/src/devices\dev_dreamcast_gdrom.c:1287:				if (!(d->warned & GDROM_W_CONDVAL)) {
+GXEMUL-SEC/src/devices\dev_dreamcast_gdrom.c:1288:					d->warned |= GDROM_W_CONDVAL;
+GXEMUL-SEC/src/devices\dev_dreamcast_gdrom.c:1290:					    " unimplemented GDROM_COND ="
+GXEMUL-SEC/src/devices\dev_dreamcast_gdrom.c:1308:	 *  tree for unimplemented sub-windows: reads return 0, writes are ignored.
+GXEMUL-SEC/src/devices\dev_dreamcast_gdrom.c:1346:				    " 0x%x -- unimplemented, returning 0."
+GXEMUL-SEC/src/devices\dev_dreamcast_gdrom.c:1351:				    " 0x%x: 0x%x -- unimplemented, ignored."
+GXEMUL-SEC/src/devices\dev_dreamcast_gdrom.c:1465:					if (!(d->warned & GDROM_W_DMANODATA)) {
+GXEMUL-SEC/src/devices\dev_dreamcast_gdrom.c:1466:						d->warned |= GDROM_W_DMANODATA;
+GXEMUL-SEC/src/devices\dev_dreamcast_gdrom.c:1521:				if (!(d->warned & GDROM_W_DMAARM)) {
+GXEMUL-SEC/src/devices\dev_dreamcast_gdrom.c:1522:					d->warned |= GDROM_W_DMAARM;
+GXEMUL-SEC/src/devices\dev_dreamcast_gdrom.c:1525:					    " unsupported arming, declined.  (once) ]\n",
+GXEMUL-SEC/src/devices\dev_dreamcast_gdrom.c:1578:	 *  "unimplemented word" from "misaligned access to an implemented one",
+GXEMUL-SEC/src/devices\dev_dreamcast_gdrom.c:1608:				    " addr 0x%x -- unimplemented, returning %s."
+GXEMUL-SEC/src/devices\dev_dreamcast_gdrom.c:1614:				    " 0x%x: 0x%x -- unimplemented, %s."
+GXEMUL-SEC/src/devices\dev_dreamcast_gdrom.c:1648:	 *  unimplemented word.  It says nothing about an aligned NARROW access to an
+GXEMUL-SEC/src/devices\dev_ether.c:194:			fatal("[ ether: unimplemented write to "
+GXEMUL-SEC/src/devices\dev_ether.c:198:			fatal("[ ether: unimplemented read from "
+GXEMUL-SEC/src/devices\dev_eagle.c:180:		default:fatal("unimplemented machine subtype for "
+GXEMUL-SEC/src/devices\dev_eagle.c:186:	default:fatal("unimplemented machine type for eagle\n");
+GXEMUL-SEC/src/devices\dev_fbctrl.c:145:		fatal("[ dev_fbctrl: unimplemented relative addr 0x%x ]\n",
+GXEMUL-SEC/src/devices\dev_fb.c:139:		fatal("dev_fb_resize(): size too small (%i x %i); ignored.\n",
+GXEMUL-SEC/src/devices\dev_footbridge.c:876:	default:fatal("footbridge: unimplemented machine type.\n");
+GXEMUL-SEC/src/devices\dev_gc.c:193:			fatal("[ gc: unimplemented write to "
+GXEMUL-SEC/src/devices\dev_gc.c:197:			fatal("[ gc: unimplemented read from "
+GXEMUL-SEC/src/devices\dev_gt.c:273:	default:fatal("dev_gt_init(): unimplemented GT type (%i).\n", type);
+GXEMUL-SEC/src/devices\dev_i80321.c:193:		/*  ATU configuration register; ignored for now. TODO  */
+GXEMUL-SEC/src/devices\dev_igsfb.c:387:			fatal("[ igsfb: unimplemented write to address 0x%x"
+GXEMUL-SEC/src/devices\dev_igsfb.c:390:			fatal("[ igsfb: unimplemented read from address 0x%x "
+GXEMUL-SEC/src/devices\dev_irqc.c:139:			fatal("[ irqc: unimplemented write to "
+GXEMUL-SEC/src/devices\dev_irqc.c:143:			fatal("[ irqc: unimplemented read from "
+GXEMUL-SEC/src/devices\dev_jazz.c:332:				    "R4030_SYS_CONFIG ignored (data=0x%08x)",
+GXEMUL-SEC/src/devices\dev_jazz.c:486:		    ignore writes and read as 0, with a once-only diagnostic
+GXEMUL-SEC/src/devices\dev_jazz.c:493:				    "unimplemented %s of address 0x%x",
+GXEMUL-SEC/src/devices\dev_jazz.c:530:			fatal("[ jazz_led: unimplemented write to address 0x%x"
+GXEMUL-SEC/src/devices\dev_jazz.c:534:			fatal("[ jazz_led: unimplemented read from address 0x%x"
+GXEMUL-SEC/src/devices\dev_jazz.c:584:			fatal("[ jazz_isa_a0: unimplemented write to "
+GXEMUL-SEC/src/devices\dev_jazz.c:588:			fatal("[ jazz_isa_a0: unimplemented read from "
+GXEMUL-SEC/src/devices\dev_jazz.c:635:			fatal("[ jazz_isa_20: unimplemented write to "
+GXEMUL-SEC/src/devices\dev_jazz.c:639:			fatal("[ jazz_isa_20: unimplemented read from "
+GXEMUL-SEC/src/devices\dev_jazz.c:687:			fatal("[ jazzio: unimplemented write to address 0x%x"
+GXEMUL-SEC/src/devices\dev_jazz.c:691:			fatal("[ jazzio: unimplemented read from address 0x%x"
+GXEMUL-SEC/src/devices\dev_kn01.c:215:			debug("[ vdac: unimplemented write to address 0x%x,"
+GXEMUL-SEC/src/devices\dev_kn01.c:219:			debug("[ vdac: unimplemented read from address 0x%x"
+GXEMUL-SEC/src/devices\dev_kn02.c:108:			 *  ignored.)
+GXEMUL-SEC/src/devices\dev_kn220.c:91:			debug("[ dec5500_ioboard: unimplemented write to "
+GXEMUL-SEC/src/devices\dev_kn220.c:95:			debug("[ dec5500_ioboard: unimplemented read from"
+GXEMUL-SEC/src/devices\dev_kn220.c:133:			debug("[ sgec: unimplemented write to address 0x%llx,"
+GXEMUL-SEC/src/devices\dev_kn220.c:137:			debug("[ sgec: unimplemented read from address "
+GXEMUL-SEC/src/devices\dev_kn02ba.c:116:		/*  #222: (Codex/Fable) a guest MMIO access to an unimplemented
+GXEMUL-SEC/src/devices\dev_kn02ba.c:160:		/*  #222: (Codex/Fable) a guest MMIO access to an unimplemented
+GXEMUL-SEC/src/devices\dev_le.c:998:			 *  set should be ignored. However, Ultrix writes
+GXEMUL-SEC/src/devices\dev_lca.c:213:				fatal("TODO: Write to unimplemented bit of"
+GXEMUL-SEC/src/devices\dev_lca.c:233:				    " (0x%" PRIx64") has unimplemented "
+GXEMUL-SEC/src/devices\dev_lca.c:318:	default:fatal("[ lca_ioc: unimplemented %s to offset 0x%x",
+GXEMUL-SEC/src/devices\dev_m8820x.c:86: *  probing an unimplemented register should not forfeit its session.
+GXEMUL-SEC/src/devices\dev_m8820x.c:88:static void m8820x_unimplemented(struct m8820x_data *d, const char *what)
+GXEMUL-SEC/src/devices\dev_m8820x.c:92:		fatal("[ m8820x: cpu%i cmmu%i: unimplemented %s; ignored "
+GXEMUL-SEC/src/devices\dev_m8820x.c:95:		debug("[ m8820x: cpu%i cmmu%i: unimplemented %s; ignored ]\n",
+GXEMUL-SEC/src/devices\dev_m8820x.c:146:		 *  These are PATC (TLB) flushes.  Before this round an unimplemented
+GXEMUL-SEC/src/devices\dev_m8820x.c:231:			fatal("[ m8820x: cpu%i cmmu%i: unimplemented command "
+GXEMUL-SEC/src/devices\dev_m8820x.c:232:			    "0x%02x; ignored (reported once) ]\n",
+GXEMUL-SEC/src/devices\dev_m8820x.c:235:			debug("[ m8820x: cpu%i cmmu%i: unimplemented command "
+GXEMUL-SEC/src/devices\dev_m8820x.c:236:			    "0x%02x; ignored ]\n", d->cpu_nr, d->cmmu_nr, cmd);
+GXEMUL-SEC/src/devices\dev_m8820x.c:270:			m8820x_unimplemented(d, "write to CMMU_IDR");
+GXEMUL-SEC/src/devices\dev_m8820x.c:281:			m8820x_unimplemented(d, "read from CMMU_SCR");
+GXEMUL-SEC/src/devices\dev_m8820x.c:290:			/*  #433: ignoring a guest write to SSR corrupts nothing the model
+GXEMUL-SEC/src/devices\dev_m8820x.c:300:			m8820x_unimplemented(d, "write to CMMU_SSR");
+GXEMUL-SEC/src/devices\dev_m8820x.c:517:			m8820x_unimplemented(d, w);
+GXEMUL-SEC/src/devices\dev_m8820x.c:522:			m8820x_unimplemented(d, r);
+GXEMUL-SEC/src/devices\dev_mc146818.c:335:		 *  should be ignored. It works _almost_ as DEC, if offsets are
+GXEMUL-SEC/src/devices\dev_mc146818.c:436:			default:/*  debug("[ mc146818: unimplemented "
+GXEMUL-SEC/src/devices\dev_mc146818.c:487:			debug("[ mc146818: unimplemented write to "
+GXEMUL-SEC/src/devices\dev_lunafb.c:82:		    	    "unimplemented %i-bit WRITE to address 0x%x: 0x%x",
+GXEMUL-SEC/src/devices\dev_lunafb.c:88:		    	    "unimplemented %i-bit READ from address 0x%x",
+GXEMUL-SEC/src/devices\dev_lunafb.c:174:		    	    "unimplemented %i-bit WRITE to address 0x%x: 0x%x",
+GXEMUL-SEC/src/devices\dev_lunafb.c:180:		    	    "unimplemented %i-bit READ from address 0x%x",
+GXEMUL-SEC/src/devices\dev_malta_lcd.c:115:			fatal("[ malta_lcd: unimplemented write to "
+GXEMUL-SEC/src/devices\dev_malta_lcd.c:119:			fatal("[ malta_lcd: unimplemented read from "
+GXEMUL-SEC/src/devices\dev_mb89352.c:35: *        OpenBSD/luna88k as a guest OS will trigger unimplemented code
+GXEMUL-SEC/src/devices\dev_mb89352.c:61:const bool mb89352_abort_on_unimplemented_stuff = true;
+GXEMUL-SEC/src/devices\dev_mb89352.c:168:	    	    "DREG: read in unimplemented phase %i", d->phase);
+GXEMUL-SEC/src/devices\dev_mb89352.c:215:		    mb89352_abort_on_unimplemented_stuff ? VERBOSITY_ERROR : VERBOSITY_WARNING,
+GXEMUL-SEC/src/devices\dev_mb89352.c:234:	    	    "DREG: write in unimplemented phase %i", d->phase);
+GXEMUL-SEC/src/devices\dev_mb89352.c:306:		    mb89352_abort_on_unimplemented_stuff ? VERBOSITY_ERROR : VERBOSITY_WARNING,
+GXEMUL-SEC/src/devices\dev_mb89352.c:307:	    	    "unimplemented LEN: %i-bit access, address 0x%x: 0x%x",
+GXEMUL-SEC/src/devices\dev_mb89352.c:311:		if (mb89352_abort_on_unimplemented_stuff) {
+GXEMUL-SEC/src/devices\dev_mb89352.c:333:				    VERBOSITY_INFO, "unimplemented BDID value: 0x%x",
+GXEMUL-SEC/src/devices\dev_mb89352.c:421:						    " selected target; ignored");
+GXEMUL-SEC/src/devices\dev_mb89352.c:510:					    	    "Transfer command: unimplemented phase %i",
+GXEMUL-SEC/src/devices\dev_mb89352.c:529:				    mb89352_abort_on_unimplemented_stuff ? VERBOSITY_ERROR : VERBOSITY_WARNING,
+GXEMUL-SEC/src/devices\dev_mb89352.c:530:			    	    "unimplemented SCMD: 0x%x", (int) idata);
+GXEMUL-SEC/src/devices\dev_mb89352.c:532:				if (mb89352_abort_on_unimplemented_stuff) {
+GXEMUL-SEC/src/devices\dev_mb89352.c:546:				    "unimplemented write to TMOD: 0x%02x",
+GXEMUL-SEC/src/devices\dev_mb89352.c:567:		    	    "unimplemented write to PSNS/SDGC: 0x%x",
+GXEMUL-SEC/src/devices\dev_mb89352.c:580:		    	    "unimplemented write to SSTS: 0x%x",
+GXEMUL-SEC/src/devices\dev_mb89352.c:611:		    	    "unimplemented write to SERR: 0x%x",
+GXEMUL-SEC/src/devices\dev_mb89352.c:622:			    	    "write to read-only bits of PCTL ignored: 0x%x",
+GXEMUL-SEC/src/devices\dev_mb89352.c:632:		    	    "write to read-only MBC ignored: 0x%x",
+GXEMUL-SEC/src/devices\dev_mb89352.c:677:			    mb89352_abort_on_unimplemented_stuff ? VERBOSITY_ERROR : VERBOSITY_WARNING,
+GXEMUL-SEC/src/devices\dev_mb89352.c:678:		    	    "unimplemented %i-bit WRITE to address 0x%x: 0x%x",
+GXEMUL-SEC/src/devices\dev_mb89352.c:684:			    mb89352_abort_on_unimplemented_stuff ? VERBOSITY_ERROR : VERBOSITY_WARNING,
+GXEMUL-SEC/src/devices\dev_mb89352.c:685:		    	    "unimplemented %i-bit READ from address 0x%x",
+GXEMUL-SEC/src/devices\dev_mb89352.c:689:		if (mb89352_abort_on_unimplemented_stuff) {
+GXEMUL-SEC/src/devices\dev_mp.c:247:		fatal("[ dev_mp: unimplemented relative addr 0x%x ]\n",
+GXEMUL-SEC/src/devices\dev_mk48txx.c:113:			fatal("[ mk48txx: unimplemented READ from offset 0x%x ]"
+GXEMUL-SEC/src/devices\dev_mk48txx.c:116:			fatal("[ mk48txx: unimplemented WRITE to offset 0x%x: "
+GXEMUL-SEC/src/devices\dev_ne2000.c:430:			    "TXP while stopped; ignored");
+GXEMUL-SEC/src/devices\dev_ne2000.c:640:			    "ignored write 0x%02x to page-%i register 0x%02x",
+GXEMUL-SEC/src/devices\dev_mvme187.c:84:	default:fatal("[ mvme187_memc: unimplemented %s offset 0x%x",
+GXEMUL-SEC/src/devices\dev_osiop.c:89:	int			hostpage_fault_warned;	/* #118: warn once */
+GXEMUL-SEC/src/devices\dev_osiop.c:206:	if (!d->hostpage_fault_warned) {
+GXEMUL-SEC/src/devices\dev_osiop.c:210:		d->hostpage_fault_warned = 1;
+GXEMUL-SEC/src/devices\dev_osiop.c:302:		static int warned = 0;
+GXEMUL-SEC/src/devices\dev_osiop.c:303:		if (!warned) {
+GXEMUL-SEC/src/devices\dev_osiop.c:306:			warned = 1;
+GXEMUL-SEC/src/devices\dev_osiop.c:449:				static int warned = 0;
+GXEMUL-SEC/src/devices\dev_osiop.c:450:				if (!warned) {
+GXEMUL-SEC/src/devices\dev_osiop.c:454:					warned = 1;
+GXEMUL-SEC/src/devices\dev_osiop.c:501:					static int warned = 0;	/* #118/#119: was exit(1) */
+GXEMUL-SEC/src/devices\dev_osiop.c:502:					if (!warned) { fatal("[ osiop: SCSI command "
+GXEMUL-SEC/src/devices\dev_osiop.c:503:					    "failed; stopping script ]\n"); warned = 1; }
+GXEMUL-SEC/src/devices\dev_osiop.c:541:					static int warned = 0;	/* #118/#119: was exit(1) */
+GXEMUL-SEC/src/devices\dev_osiop.c:542:					if (!warned) { fatal("[ osiop: SCSI data-out "
+GXEMUL-SEC/src/devices\dev_osiop.c:543:					    "command failed; stopping script ]\n"); warned = 1; }
+GXEMUL-SEC/src/devices\dev_osiop.c:608:			default:fatal("osiop: TODO: unimplemented move, "
+GXEMUL-SEC/src/devices\dev_osiop.c:990:			static int warned = 0;
+GXEMUL-SEC/src/devices\dev_osiop.c:991:			if (!warned) {
+GXEMUL-SEC/src/devices\dev_osiop.c:993:				    "(0x%02x -> 0x%02x); ignoring, stopping "
+GXEMUL-SEC/src/devices\dev_osiop.c:995:				warned = 1;
+GXEMUL-SEC/src/devices\dev_osiop.c:1069:				    unimplemented bits and stop the script
+GXEMUL-SEC/src/devices\dev_osiop.c:1072:				static int warned = 0;
+GXEMUL-SEC/src/devices\dev_osiop.c:1073:				if (!warned) {
+GXEMUL-SEC/src/devices\dev_osiop.c:1075:					    "ignoring unimplemented low bits, "
+GXEMUL-SEC/src/devices\dev_osiop.c:1077:					warned = 1;
+GXEMUL-SEC/src/devices\dev_osiop.c:1132:			static int warned = 0;
+GXEMUL-SEC/src/devices\dev_osiop.c:1133:			if (!warned) {
+GXEMUL-SEC/src/devices\dev_osiop.c:1135:				    "STD unimplemented); stopping script ]\n",
+GXEMUL-SEC/src/devices\dev_osiop.c:1137:				warned = 1;
+GXEMUL-SEC/src/devices\dev_osiop.c:1160:		static int warned = 0;
+GXEMUL-SEC/src/devices\dev_osiop.c:1161:		if (!warned) {
+GXEMUL-SEC/src/devices\dev_osiop.c:1164:			warned = 1;
+GXEMUL-SEC/src/devices\dev_luna88k.c:317:			    	    "unimplemented LCD CONTROL: 0x%x",
+GXEMUL-SEC/src/devices\dev_luna88k.c:322:		    	    "unimplemented READ from PIO1A (pio1c = 0x%02x)",
+GXEMUL-SEC/src/devices\dev_luna88k.c:363:		    	    "unimplemented WRITE to PIO1A: 0x%x (pio1c = 0x%02x)",
+GXEMUL-SEC/src/devices\dev_luna88k.c:368:		    	    "unimplemented READ from PIO1A: 0x%x (pio1c = 0x%02x)",
+GXEMUL-SEC/src/devices\dev_luna88k.c:856:					fatal("[ luna88k: INT_ST_MASK%i: unimplemented "
+GXEMUL-SEC/src/devices\dev_luna88k.c:861:					debug("[ luna88k: INT_ST_MASK%i: unimplemented "
+GXEMUL-SEC/src/devices\dev_luna88k.c:912:		    	    "unimplemented %i-bit WRITE to address 0x%x: 0x%x",
+GXEMUL-SEC/src/devices\dev_luna88k.c:918:		    	    "unimplemented %i-bit READ from address 0x%x",
+GXEMUL-SEC/src/devices\dev_palmbus.c:87:			fatal("[ palmbus: unimplemented write to address 0x%x"
+GXEMUL-SEC/src/devices\dev_palmbus.c:91:			fatal("[ palmbus: unimplemented read from address 0x%x "
+GXEMUL-SEC/src/devices\dev_pcc2.c:142:	uint32_t		warned;
+GXEMUL-SEC/src/devices\dev_pcc2.c:146:	uint64_t		warned_unimpl;
+GXEMUL-SEC/src/devices\dev_pcc2.c:156:    `<= 32' tested a literal, not the field, so narrowing `warned' would compile
+GXEMUL-SEC/src/devices\dev_pcc2.c:159:typedef char pcc2_w_fits_in_warned[(PCC2_W_NBITS <= 8 * sizeof(((struct pcc2_data *)0)->warned)
+GXEMUL-SEC/src/devices\dev_pcc2.c:409:	if (!(d->warned & (1u << bit))) {
+GXEMUL-SEC/src/devices\dev_pcc2.c:410:		d->warned |= (1u << bit);
+GXEMUL-SEC/src/devices\dev_pcc2.c:411:		fatal("[ pcc2: unimplemented len=%i write to %s -- declined."
+GXEMUL-SEC/src/devices\dev_pcc2.c:431:			static int warned = 0;	/* #119: loud-once (course-correction) */
+GXEMUL-SEC/src/devices\dev_pcc2.c:432:			if (!warned) {
+GXEMUL-SEC/src/devices\dev_pcc2.c:436:				warned = 1;
+GXEMUL-SEC/src/devices\dev_pcc2.c:491:			fatal("[ pcc2: write to PSCALEADJ ignored (value "
+GXEMUL-SEC/src/devices\dev_pcc2.c:628:		    said "ignored" about a READ the memcpy above had already served.
+GXEMUL-SEC/src/devices\dev_pcc2.c:639:			    "ignored ]\n"); w = 1; }
+GXEMUL-SEC/src/devices\dev_pcc2.c:651:		    said "ignored" about a READ the memcpy above had already served.
+GXEMUL-SEC/src/devices\dev_pcc2.c:689:		if (!(d->warned_unimpl & (1ULL << relative_addr))) {
+GXEMUL-SEC/src/devices\dev_pcc2.c:690:			d->warned_unimpl |= 1ULL << relative_addr;
+GXEMUL-SEC/src/devices\dev_pcc2.c:692:				fatal("[ pcc2: unimplemented write to offset "
+GXEMUL-SEC/src/devices\dev_pcc2.c:701:				fatal("[ pcc2: unimplemented read from offset "
+GXEMUL-SEC/src/devices\dev_pccmos.c:144:	default:fatal("devinit_pccmos(): unimplemented machine type"
+GXEMUL-SEC/src/devices\dev_pcic.c:193:				debug("[ pcic: unimplemented write to "
+GXEMUL-SEC/src/devices\dev_pcic.c:199:				debug("[ pcic: unimplemented read from "
+GXEMUL-SEC/src/devices\dev_pckbc.c:108:	int		overrun_warned[2];	/*  #288  */
+GXEMUL-SEC/src/devices\dev_pckbc.c:151:	    then warned -- and head == tail is what pckbc_get_code() and the
+GXEMUL-SEC/src/devices\dev_pckbc.c:161:		if (!d->overrun_warned[port]) {
+GXEMUL-SEC/src/devices\dev_pckbc.c:162:			d->overrun_warned[port] = 1;
+GXEMUL-SEC/src/devices\dev_pckbc.c:676:					    "unimplemented translation table type %i",
+GXEMUL-SEC/src/devices\dev_pckbc.c:1168:			debug("[ pckbc: read from unimplemented reg %i ]\n",
+GXEMUL-SEC/src/devices\dev_pckbc.c:1172:			debug("[ pckbc: write to unimplemented reg %i:",
+GXEMUL-SEC/src/devices\dev_pmagja.c:108:						{ static int wd = 0; if (!wd) { fatal("[ pmagja: pixel ofs %i outside %ix%i; ignored ]\n", ofs, XSIZE, YSIZE); wd = 1; } }	/* #119 loud-once */
+GXEMUL-SEC/src/devices\dev_ps2_gs.c:96:		static int warned = 0;	/* #119: loud-once (course-correction; was debug) */
+GXEMUL-SEC/src/devices\dev_ps2_gs.c:97:		if (!warned) {
+GXEMUL-SEC/src/devices\dev_ps2_gs.c:99:			    "ignored ]\n", (int)relative_addr);
+GXEMUL-SEC/src/devices\dev_ps2_gs.c:100:			warned = 1;
+GXEMUL-SEC/src/devices\dev_px.c:798:		fatal("dev_px_init(): unimplemented px_type\n");
+GXEMUL-SEC/src/devices\dev_px.c:826:		fatal("dev_px_init(): unimplemented px_type\n");
+GXEMUL-SEC/src/devices\dev_pvr.c:867:					fatal("pvr: unimplemented texture_pixelformat %i\n", texture_pixelformat);
+GXEMUL-SEC/src/devices\dev_pvr.c:1150:			static int warned = 0;	/* #119: rate-limit (course-correction) */
+GXEMUL-SEC/src/devices\dev_pvr.c:1151:			if (!warned) {
+GXEMUL-SEC/src/devices\dev_pvr.c:1154:				warned = 1;
+GXEMUL-SEC/src/devices\dev_pvr.c:1418:			fatal("pvr_render: unimplemented list cmd %i\n", cmd);
+GXEMUL-SEC/src/devices\dev_pvr.c:2433:		static int warned = 0;
+GXEMUL-SEC/src/devices\dev_pvr.c:2434:		if (!warned) {
+GXEMUL-SEC/src/devices\dev_pvr.c:2440:			warned = 1;
+GXEMUL-SEC/src/devices\dev_rs5c313.c:128: *      writes: deliberately ignored.
+GXEMUL-SEC/src/devices\dev_rs5c313.c:132: *  13:00 is identical with the bit set or clear); TINT is unimplemented; the
+GXEMUL-SEC/src/devices\dev_rtc.c:169:			fatal("[ rtc: unimplemented write to "
+GXEMUL-SEC/src/devices\dev_rtc.c:173:			fatal("[ rtc: unimplemented read from "
+GXEMUL-SEC/src/devices\dev_rtl8139c.c:173:				fatal("rtl8139c: unimplemented write to"
+GXEMUL-SEC/src/devices\dev_rtl8139c.c:181:			fatal("[ rtl8139c: unimplemented write to "
+GXEMUL-SEC/src/devices\dev_rtl8139c.c:185:			fatal("[ rtl8139c: unimplemented read from "
+GXEMUL-SEC/src/devices\dev_scc.c:350:		static int scc_oob_warned = 0;
+GXEMUL-SEC/src/devices\dev_scc.c:351:		if (!scc_oob_warned) {
+GXEMUL-SEC/src/devices\dev_scc.c:352:			fatal("[ scc: out-of-range port %i (beyond %i) ignored; "
+GXEMUL-SEC/src/devices\dev_scc.c:354:			scc_oob_warned = 1;
+GXEMUL-SEC/src/devices\dev_sgi_gbe.c:134:		    unimplemented WID mode must not exit() the host (get_rgb is
+GXEMUL-SEC/src/devices\dev_sgi_gbe.c:727:				printf("unimplemented CRMFB_CURSOR_BITMAP len %i\n", (int)len);
+GXEMUL-SEC/src/devices\dev_sgi_gbe.c:739:			fatal("[ sgi_gbe: unimplemented write to address "
+GXEMUL-SEC/src/devices\dev_sgi_gbe.c:743:			fatal("[ sgi_gbe: unimplemented read from address "
+GXEMUL-SEC/src/devices\dev_sgi_ip19.c:65:			debug("[ sgi_ip19: unimplemented write to address "
+GXEMUL-SEC/src/devices\dev_sgi_ip19.c:75:			debug("[ sgi_ip19: unimplemented write to address "
+GXEMUL-SEC/src/devices\dev_sgi_ip19.c:86:			debug("[ sgi_ip19: unimplemented write to address "
+GXEMUL-SEC/src/devices\dev_sgi_ip19.c:98:			debug("[ sgi_ip19: unimplemented write to address "
+GXEMUL-SEC/src/devices\dev_sgi_ip19.c:102:			debug("[ sgi_ip19: unimplemented read from address "
+GXEMUL-SEC/src/devices\dev_sgi_ip20.c:79:			debug("[ sgi_ip20: unimplemented write to address "
+GXEMUL-SEC/src/devices\dev_sgi_ip20.c:83:			debug("[ sgi_ip20: unimplemented read from address "
+GXEMUL-SEC/src/devices\dev_sgi_ip22.c:90:			debug("[ sgi_ip22_imc: unimplemented write "
+GXEMUL-SEC/src/devices\dev_sgi_ip22.c:110:			debug("[ sgi_ip22_imc: unimplemented write "
+GXEMUL-SEC/src/devices\dev_sgi_ip22.c:120:			debug("[ sgi_ip22_imc: unimplemented write "
+GXEMUL-SEC/src/devices\dev_sgi_ip22.c:144:			debug("[ sgi_ip22_imc: unimplemented write to "
+GXEMUL-SEC/src/devices\dev_sgi_ip22.c:148:			debug("[ sgi_ip22_imc: unimplemented read from "
+GXEMUL-SEC/src/devices\dev_sgi_ip22.c:187:			debug("[ sgi_ip22_unknown: unimplemented write to "
+GXEMUL-SEC/src/devices\dev_sgi_ip22.c:191:			debug("[ sgi_ip22_unknown: unimplemented read from "
+GXEMUL-SEC/src/devices\dev_sgi_ip22.c:226:			debug("[ sgi_ip22_unknown2: unimplemented write "
+GXEMUL-SEC/src/devices\dev_sgi_ip22.c:230:			debug("[ sgi_ip22_unknown2: unimplemented read from "
+GXEMUL-SEC/src/devices\dev_sgi_ip22.c:393:			debug("[ sgi_ip22: unimplemented write to address "
+GXEMUL-SEC/src/devices\dev_sgi_ip22.c:397:			debug("[ sgi_ip22: unimplemented read from address "
+GXEMUL-SEC/src/devices\dev_sgi_ip30.c:171:			debug("[ sgi_ip30: unimplemented write to address "
+GXEMUL-SEC/src/devices\dev_sgi_ip30.c:175:			debug("[ sgi_ip30: unimplemented read from address"
+GXEMUL-SEC/src/devices\dev_sgi_ip30.c:221:			debug("[ sgi_ip30_2: unimplemented write to "
+GXEMUL-SEC/src/devices\dev_sgi_ip30.c:225:			debug("[ sgi_ip30_2: unimplemented read from address "
+GXEMUL-SEC/src/devices\dev_sgi_ip30.c:248:			debug("[ sgi_ip30_3: unimplemented write to "
+GXEMUL-SEC/src/devices\dev_sgi_ip30.c:258:			debug("[ sgi_ip30_3: unimplemented write to address "
+GXEMUL-SEC/src/devices\dev_sgi_ip30.c:285:			debug("[ sgi_ip30_3: unimplemented write to address "
+GXEMUL-SEC/src/devices\dev_sgi_ip30.c:289:			debug("[ sgi_ip30_3: unimplemented read from "
+GXEMUL-SEC/src/devices\dev_sgi_ip30.c:328:			debug("[ sgi_ip30_4: unimplemented write to address"
+GXEMUL-SEC/src/devices\dev_sgi_ip30.c:332:			debug("[ sgi_ip30_4: unimplemented read from address"
+GXEMUL-SEC/src/devices\dev_sgi_ip30.c:363:			debug("[ sgi_ip30_5: unimplemented write to address "
+GXEMUL-SEC/src/devices\dev_sgi_ip30.c:367:			debug("[ sgi_ip30_5: unimplemented read from address "
+GXEMUL-SEC/src/devices\dev_sgi_ip32.c:351:				fatal("[ CRIME_CONTROL: unimplemented "
+GXEMUL-SEC/src/devices\dev_sgi_ip32.c:699:		fatal("[ macepci: unimplemented len %i ]\n", len);
+GXEMUL-SEC/src/devices\dev_sgi_ip32.c:756:			fatal("[ macepci: unimplemented write to address "
+GXEMUL-SEC/src/devices\dev_sgi_ip32.c:760:			fatal("[ macepci: unimplemented read from address "
+GXEMUL-SEC/src/devices\dev_sgi_ip32.c:763:			/*  My real O2 returns 0xffffffff for all unimplemented
+GXEMUL-SEC/src/devices\dev_sgi_ip32.c:841:			debug("[ sgi_ust: unimplemented write to "
+GXEMUL-SEC/src/devices\dev_sgi_ip32.c:845:			debug("[ sgi_ust: unimplemented read from address"
+GXEMUL-SEC/src/devices\dev_sgi_re.c:107:	/*  #500: draw_primitive()'s unimplemented drawing op.  ITS OWN BIT,
+GXEMUL-SEC/src/devices\dev_sgi_re.c:123:	/*  sgirandompixel: horrible_getputpixel()'s unimplemented-mode arm.  ITS
+GXEMUL-SEC/src/devices\dev_sgi_re.c:157:	 *  FOLLOWS it.  An earlier draft of this change put `warned' between
+GXEMUL-SEC/src/devices\dev_sgi_re.c:159:	 *  re_linear_b[32] alias `warned' rather than de_reg[0] -- which both
+GXEMUL-SEC/src/devices\dev_sgi_re.c:166:	uint32_t	warned;
+GXEMUL-SEC/src/devices\dev_sgi_re.c:181: *  For "linear" modes, y is ignored and x is an offset to select which linear
+GXEMUL-SEC/src/devices\dev_sgi_re.c:259:		if (!(d->warned & SGIRE_W_BADMODE)) {
+GXEMUL-SEC/src/devices\dev_sgi_re.c:260:			d->warned |= SGIRE_W_BADMODE;
+GXEMUL-SEC/src/devices\dev_sgi_re.c:267:			fatal("[ sgi_re: unimplemented dst_mode %i for "
+GXEMUL-SEC/src/devices\dev_sgi_re.c:422:			if (!(d->warned & SGIRE_W_TLBA_LEN)) {
+GXEMUL-SEC/src/devices\dev_sgi_re.c:423:				d->warned |= SGIRE_W_TLBA_LEN;
+GXEMUL-SEC/src/devices\dev_sgi_re.c:424:				fatal("[ sgi_re: unimplemented len=%i for "
+GXEMUL-SEC/src/devices\dev_sgi_re.c:441:			if (!(d->warned & SGIRE_W_TLBB_LEN)) {
+GXEMUL-SEC/src/devices\dev_sgi_re.c:442:				d->warned |= SGIRE_W_TLBB_LEN;
+GXEMUL-SEC/src/devices\dev_sgi_re.c:443:				fatal("[ sgi_re: unimplemented len=%i for "
+GXEMUL-SEC/src/devices\dev_sgi_re.c:460:			if (!(d->warned & SGIRE_W_TLBC_LEN)) {
+GXEMUL-SEC/src/devices\dev_sgi_re.c:461:				d->warned |= SGIRE_W_TLBC_LEN;
+GXEMUL-SEC/src/devices\dev_sgi_re.c:462:				fatal("[ sgi_re: unimplemented len=%i for "
+GXEMUL-SEC/src/devices\dev_sgi_re.c:479:			if (!(d->warned & SGIRE_W_TEX_LEN)) {
+GXEMUL-SEC/src/devices\dev_sgi_re.c:480:				d->warned |= SGIRE_W_TEX_LEN;
+GXEMUL-SEC/src/devices\dev_sgi_re.c:481:				fatal("[ sgi_re: unimplemented len=%i for "
+GXEMUL-SEC/src/devices\dev_sgi_re.c:538:			if (!(d->warned & SGIRE_W_LINA_LEN)) {
+GXEMUL-SEC/src/devices\dev_sgi_re.c:539:				d->warned |= SGIRE_W_LINA_LEN;
+GXEMUL-SEC/src/devices\dev_sgi_re.c:540:				fatal("[ sgi_re: unimplemented len=%i for "
+GXEMUL-SEC/src/devices\dev_sgi_re.c:630:			if (!(d->warned & SGIRE_W_LINB_LEN)) {
+GXEMUL-SEC/src/devices\dev_sgi_re.c:631:				d->warned |= SGIRE_W_LINB_LEN;
+GXEMUL-SEC/src/devices\dev_sgi_re.c:632:				fatal("[ sgi_re: unimplemented len=%i for "
+GXEMUL-SEC/src/devices\dev_sgi_re.c:648:			if (!(d->warned & SGIRE_W_UNMAP_WR)) {
+GXEMUL-SEC/src/devices\dev_sgi_re.c:649:				d->warned |= SGIRE_W_UNMAP_WR;
+GXEMUL-SEC/src/devices\dev_sgi_re.c:650:				fatal("[ sgi_re: unimplemented write to "
+GXEMUL-SEC/src/devices\dev_sgi_re.c:656:			if (!(d->warned & SGIRE_W_UNMAP_RD)) {
+GXEMUL-SEC/src/devices\dev_sgi_re.c:657:				d->warned |= SGIRE_W_UNMAP_RD;
+GXEMUL-SEC/src/devices\dev_sgi_re.c:658:				fatal("[ sgi_re: unimplemented read from address"
+GXEMUL-SEC/src/devices\dev_sgi_re.c:758:			fatal("[ sgi_de: unimplemented XFER addr_src=0x%x src_bufdepth=%i "
+GXEMUL-SEC/src/devices\dev_sgi_re.c:971:		if (!(d->warned & SGIRE_W_PRIM_OP)) {
+GXEMUL-SEC/src/devices\dev_sgi_re.c:972:			d->warned |= SGIRE_W_PRIM_OP;
+GXEMUL-SEC/src/devices\dev_sgi_re.c:1046:		if (!(d->warned & SGIRE_W_DE_LEN)) {
+GXEMUL-SEC/src/devices\dev_sgi_re.c:1047:			d->warned |= SGIRE_W_DE_LEN;
+GXEMUL-SEC/src/devices\dev_sgi_re.c:1048:			fatal("[ sgi_de: unimplemented len=%i -- declined."
+GXEMUL-SEC/src/devices\dev_sgi_re.c:1259:			fatal("[ sgi_de: unimplemented write to "
+GXEMUL-SEC/src/devices\dev_sgi_re.c:1263:			fatal("[ sgi_de: unimplemented read from address"
+GXEMUL-SEC/src/devices\dev_sgi_re.c:1324:		fatal("[ sgi_mte: TODO! unimplemented dst_y_step %i ]", dst_y_step);
+GXEMUL-SEC/src/devices\dev_sgi_re.c:1329:		fatal("[ sgi_mte: unimplemented MTE_MODE_STIPPLE ]");
+GXEMUL-SEC/src/devices\dev_sgi_re.c:1337:		fatal("[ sgi_mte: unimplemented SRC ]");
+GXEMUL-SEC/src/devices\dev_sgi_re.c:1413:			fatal("[ sgi_mte: unimplemented MTE_MODE_COPY ]");
+GXEMUL-SEC/src/devices\dev_sgi_re.c:1418:			fatal("[ sgi_mte: unimplemented MTE_DEPTH_x ]");
+GXEMUL-SEC/src/devices\dev_sgi_re.c:1429:			fatal("unimplemented MTE bytemask 0x%08x\n", (int)bytemask);
+GXEMUL-SEC/src/devices\dev_sgi_re.c:1512:		fatal("[ sgi_mte: TODO! unimplemented dst_tlb 0x%x ]", dst_tlb);
+GXEMUL-SEC/src/devices\dev_sgi_re.c:1631:			fatal("[ sgi_mte: unimplemented write to "
+GXEMUL-SEC/src/devices\dev_sgi_re.c:1635:			fatal("[ sgi_mte: unimplemented read from address"
+GXEMUL-SEC/src/devices\dev_sgi_re.c:1693:			debug("[ sgi_de_status: unimplemented write to "
+GXEMUL-SEC/src/devices\dev_sgi_re.c:1697:			debug("[ sgi_de_status: unimplemented read from address"
+GXEMUL-SEC/src/devices\dev_sgi_mec.c:461:			fatal("[ sgi_mec: unimplemented %s len %i (addr 0x%x) ]\n",
+GXEMUL-SEC/src/devices\dev_sgi_mec.c:470:			fatal("[ sgi_mec: unimplemented %s len %i (addr 0x%x) ]\n",
+GXEMUL-SEC/src/devices\dev_sgi_mec.c:474:		fatal("[ sgi_mec: unimplemented %s len %i (addr 0x%x) ]\n",
+GXEMUL-SEC/src/devices\dev_sgi_mec.c:653:			    "unimplemented write to address"
+GXEMUL-SEC/src/devices\dev_sgi_mec.c:658:			    "unimplemented read from address"
+GXEMUL-SEC/src/devices\dev_sn.c:79:			fatal("[ sn: unimplemented write to address 0x%x"
+GXEMUL-SEC/src/devices\dev_sn.c:83:			fatal("[ sn: unimplemented read from address 0x%x "
+GXEMUL-SEC/src/devices\dev_v3.c:228:			fatal("[ v3: unimplemented write to "
+GXEMUL-SEC/src/devices\dev_v3.c:232:			fatal("[ v3: unimplemented read from "
+GXEMUL-SEC/src/devices\dev_vme.c:74:		debug("[ vme: unimplemented GCSRCTL ]\n");
+GXEMUL-SEC/src/devices\dev_vme.c:79:			debug("[ vme: unimplemented READ from TCR ]\n");
+GXEMUL-SEC/src/devices\dev_vme.c:81:			debug("[ vme: unimplemented WRITE to TCR: "
+GXEMUL-SEC/src/devices\dev_vme.c:104:		/*  debug("[ vme: unimplemented TCTL ]\n");  */
+GXEMUL-SEC/src/devices\dev_vme.c:109:			debug("[ vme: unimplemented READ from IRQEN ]\n");
+GXEMUL-SEC/src/devices\dev_vme.c:111:			debug("[ vme: unimplemented WRITE to IRQEN: "
+GXEMUL-SEC/src/devices\dev_vme.c:117:			debug("[ vme: unimplemented READ from IRQL3 ]\n");
+GXEMUL-SEC/src/devices\dev_vme.c:119:			debug("[ vme: unimplemented WRITE to IRQL3: "
+GXEMUL-SEC/src/devices\dev_vme.c:125:			debug("[ vme: unimplemented READ from IRQL4 ]\n");
+GXEMUL-SEC/src/devices\dev_vme.c:127:			debug("[ vme: unimplemented WRITE to IRQL4: "
+GXEMUL-SEC/src/devices\dev_vme.c:138:			debug("[ vme: unimplemented READ from offset 0x%x ]"
+GXEMUL-SEC/src/devices\dev_vme.c:141:			debug("[ vme: unimplemented WRITE to offset 0x%x: "
+GXEMUL-SEC/src/devices\dev_sh4.c:78: *  different complaints -- an unimplemented-offset access and a known register
+GXEMUL-SEC/src/devices\dev_sh4.c:99: *    - the BIT is which unimplemented feature was asked for.  RCR1's single guard
+GXEMUL-SEC/src/devices\dev_sh4.c:233: *  kind. ***  The other DMAC classes key on an unimplemented ENCODING and there are many
+GXEMUL-SEC/src/devices\dev_sh4.c:349:	/*  #443: one bit per word offset, so each unsupported transaction is reported
+GXEMUL-SEC/src/devices\dev_sh4.c:444:	 *  THE WORDING IS NOT "write ignored", WHICH IS THE RCR1 SENTENCE AND WOULD BE A
+GXEMUL-SEC/src/devices\dev_sh4.c:619:	/*  According to the SH7760 manual, bits 31..29 are ignored in  */
+GXEMUL-SEC/src/devices\dev_sh4.c:1062:			    " -- reads return 0, writes are ignored.  (once) ]\n",
+GXEMUL-SEC/src/devices\dev_sh4.c:1234:			    " -- reads return 0, writes are ignored.  (once) ]\n",
+GXEMUL-SEC/src/devices\dev_sh4.c:1276: *  #443: an unsupported PCIC transaction called exit(1) -- ELEVEN sites.  A MEASURED
+GXEMUL-SEC/src/devices\dev_sh4.c:1290: *  warned about this shape in general ("because exit was noreturn, a later assignment
+GXEMUL-SEC/src/devices\dev_sh4.c:1306: *    unimplemented CPU type" was ABSENT -- though that read alone in a fresh process
+GXEMUL-SEC/src/devices\dev_sh4.c:1309: *    a byte-write at 0xfe200015 printed "unimplemented addr", and the later
+GXEMUL-SEC/src/devices\dev_sh4.c:1324: *    -C SH7750, read only        latched=1, "read for unimplemented CPU type" PRESENT
+GXEMUL-SEC/src/devices\dev_sh4.c:1390:				    " ignored.  (once per offset) ]\n");
+GXEMUL-SEC/src/devices\dev_sh4.c:1410:					    " unimplemented CPU type %s --"
+GXEMUL-SEC/src/devices\dev_sh4.c:1436:				    " 0x%" PRIx32" -- ignored."
+GXEMUL-SEC/src/devices\dev_sh4.c:1448:				    " 0x%" PRIx32" -- ignored."
+GXEMUL-SEC/src/devices\dev_sh4.c:1460:				    " 0x%" PRIx32" -- ignored."
+GXEMUL-SEC/src/devices\dev_sh4.c:1472:				    " 0x%" PRIx32" -- ignored."
+GXEMUL-SEC/src/devices\dev_sh4.c:1484:				    " 0x%" PRIx32" -- ignored."
+GXEMUL-SEC/src/devices\dev_sh4.c:1496:				    " 0x%" PRIx32" -- ignored."
+GXEMUL-SEC/src/devices\dev_sh4.c:1507:				    ", not 0x%" PRIx32" -- ignored."
+GXEMUL-SEC/src/devices\dev_sh4.c:1519:				    ", not 0x%" PRIx32" -- ignored."
+GXEMUL-SEC/src/devices\dev_sh4.c:1552:				fatal("[ sh4_pcic: read from unimplemented"
+GXEMUL-SEC/src/devices\dev_sh4.c:1557:				fatal("[ sh4_pcic: write to unimplemented"
+GXEMUL-SEC/src/devices\dev_sh4.c:1558:				    " addr 0x%x: 0x%x -- ignored."
+GXEMUL-SEC/src/devices\dev_sh4.c:1601: *  access.  Servicing rather than ignoring is deliberate for an access that
+GXEMUL-SEC/src/devices\dev_sh4.c:2093:					    " -- TCR write ignored.  (once per"
+GXEMUL-SEC/src/devices\dev_sh4.c:2121:					fatal("[ sh4: timer %i: unimplemented TCR"
+GXEMUL-SEC/src/devices\dev_sh4.c:2122:					    " bits 0x%04x -- write ignored."
+GXEMUL-SEC/src/devices\dev_sh4.c:2245:					    " bits -- write ignored."
+GXEMUL-SEC/src/devices\dev_sh4.c:2510:				    " implemented -- write ignored."
+GXEMUL-SEC/src/devices\dev_sh4.c:2801:					    " ignored.  (once per bit) ]\n",
+GXEMUL-SEC/src/devices\dev_sh4.c:2816:				debug("[ SH4: TODO: RTC RCR2 value 0x%02x ignored. ]\n", (int)idata);
+GXEMUL-SEC/src/devices\dev_vga.c:118:	/*  #271: one-shot latch for the unimplemented-video-mode warning
+GXEMUL-SEC/src/devices\dev_vga.c:123:	int		invalid_mode_warned;
+GXEMUL-SEC/src/devices\dev_vga.c:635:				static int w_warned = 0;	/* #119: loud-once */
+GXEMUL-SEC/src/devices\dev_vga.c:636:				if (!w_warned) {
+GXEMUL-SEC/src/devices\dev_vga.c:638:					    "ignored ]\n", (int)relative_addr, (int)len,
+GXEMUL-SEC/src/devices\dev_vga.c:640:					w_warned = 1;
+GXEMUL-SEC/src/devices\dev_vga.c:647:				static int r_warned = 0;	/* #119: loud-once */
+GXEMUL-SEC/src/devices\dev_vga.c:648:				if (!r_warned) {
+GXEMUL-SEC/src/devices\dev_vga.c:652:					r_warned = 1;
+GXEMUL-SEC/src/devices\dev_vga.c:911:			if (!d->invalid_mode_warned) {
+GXEMUL-SEC/src/devices\dev_vga.c:912:				d->invalid_mode_warned = 1;
+GXEMUL-SEC/src/devices\dev_vga.c:962:	    unimplemented traffic rather than a deficiency tripwire, so gate
+GXEMUL-SEC/src/devices\dev_wdc.c:75:	int		warned_badlen;
+GXEMUL-SEC/src/devices\dev_wdc.c:76:	int		warned_empty_drain;
+GXEMUL-SEC/src/devices\dev_wdc.c:77:	int		warned_atapi_err;
+GXEMUL-SEC/src/devices\dev_wdc.c:78:	int		warned_null_xfer;
+GXEMUL-SEC/src/devices\dev_wdc.c:79:	int		warned_atapi_dataout;
+GXEMUL-SEC/src/devices\dev_wdc.c:94:	    checks was proposed and is wrong: #337's own shared warned_badlen
+GXEMUL-SEC/src/devices\dev_wdc.c:115:	int		warned_inbuf_overrun;
+GXEMUL-SEC/src/devices\dev_wdc.c:116:	int		warned_inbuf_overread;
+GXEMUL-SEC/src/devices\dev_wdc.c:117:	int		warned_unimpl_cmd;
+GXEMUL-SEC/src/devices\dev_wdc.c:118:	int		warned_nonbyte_write;
+GXEMUL-SEC/src/devices\dev_wdc.c:119:	int		warned_nonbyte_read;
+GXEMUL-SEC/src/devices\dev_wdc.c:120:	int		warned_data_unexpected;
+GXEMUL-SEC/src/devices\dev_wdc.c:208:	    push sees warned_inbuf_overrun == 1, skips the whole condition, and
+GXEMUL-SEC/src/devices\dev_wdc.c:246:		if (!d->warned_inbuf_overrun) {
+GXEMUL-SEC/src/devices\dev_wdc.c:247:			d->warned_inbuf_overrun = 1;
+GXEMUL-SEC/src/devices\dev_wdc.c:298:		if (!d->warned_inbuf_overread) {
+GXEMUL-SEC/src/devices\dev_wdc.c:299:			d->warned_inbuf_overread = 1;
+GXEMUL-SEC/src/devices\dev_wdc.c:516:			if (!d->warned_inbuf_overrun) {
+GXEMUL-SEC/src/devices\dev_wdc.c:517:				d->warned_inbuf_overrun = 1;
+GXEMUL-SEC/src/devices\dev_wdc.c:672:		    " ignored ]\n", (int)idata);
+GXEMUL-SEC/src/devices\dev_wdc.c:733:		    every LATER reset be ignored -- a failure this form cannot have --
+GXEMUL-SEC/src/devices\dev_wdc.c:739:		    clearing warned_* would undo #337 and #464).  */
+GXEMUL-SEC/src/devices\dev_wdc.c:795: *    the warned_*    latches.  Zeroing them alongside everything else reads as
+GXEMUL-SEC/src/devices\dev_wdc.c:1024:		    Inside it, the second unimplemented command silently
+GXEMUL-SEC/src/devices\dev_wdc.c:1036:		    "last-warned-opcode" latch, under which an alternating guest
+GXEMUL-SEC/src/devices\dev_wdc.c:1043:		    CHOICE. ***  Moved inside `if (!d->warned_unimpl_cmd)` below,
+GXEMUL-SEC/src/devices\dev_wdc.c:1044:		    only the FIRST unimplemented command per device would interrupt
+GXEMUL-SEC/src/devices\dev_wdc.c:1065:		if (!d->warned_unimpl_cmd) {
+GXEMUL-SEC/src/devices\dev_wdc.c:1066:			d->warned_unimpl_cmd = 1;
+GXEMUL-SEC/src/devices\dev_wdc.c:1093:			if (len != 1 && !d->warned_nonbyte_write) {
+GXEMUL-SEC/src/devices\dev_wdc.c:1094:				d->warned_nonbyte_write = 1;
+GXEMUL-SEC/src/devices\dev_wdc.c:1221:					if (!d->warned_null_xfer) {
+GXEMUL-SEC/src/devices\dev_wdc.c:1222:						d->warned_null_xfer = 1;
+GXEMUL-SEC/src/devices\dev_wdc.c:1408:			    !d->warned_data_unexpected) {
+GXEMUL-SEC/src/devices\dev_wdc.c:1409:				d->warned_data_unexpected = 1;
+GXEMUL-SEC/src/devices\dev_wdc.c:1472:			    which latches warned_atapi_dataout and prints `ATAPI DATA
+GXEMUL-SEC/src/devices\dev_wdc.c:1513:				        if (!d->warned_badlen) {
+GXEMUL-SEC/src/devices\dev_wdc.c:1514:						d->warned_badlen = 1;
+GXEMUL-SEC/src/devices\dev_wdc.c:1515:						fatal("wdc: unimplemented "
+GXEMUL-SEC/src/devices\dev_wdc.c:1516:						    "write len %i (ignored)\n",
+GXEMUL-SEC/src/devices\dev_wdc.c:1547:				        if (!d->warned_badlen) {
+GXEMUL-SEC/src/devices\dev_wdc.c:1548:						d->warned_badlen = 1;
+GXEMUL-SEC/src/devices\dev_wdc.c:1549:						fatal("wdc: unimplemented "
+GXEMUL-SEC/src/devices\dev_wdc.c:1550:						    "write len %i (ignored)\n",
+GXEMUL-SEC/src/devices\dev_wdc.c:1611:			    it, and recorded that this finally made `#337`'s `(ignored)`
+GXEMUL-SEC/src/devices\dev_wdc.c:1618:			    what the write did, so an access of an unimplemented width
+GXEMUL-SEC/src/devices\dev_wdc.c:1619:			    -- which pushes nothing and is announced as ignored -- still
+GXEMUL-SEC/src/devices\dev_wdc.c:1666:				    issues an unsupported or malformed packet
+GXEMUL-SEC/src/devices\dev_wdc.c:1674:					if (!d->warned_atapi_err) {
+GXEMUL-SEC/src/devices\dev_wdc.c:1675:						d->warned_atapi_err = 1;
+GXEMUL-SEC/src/devices\dev_wdc.c:1719:					    itself is still unimplemented,
+GXEMUL-SEC/src/devices\dev_wdc.c:1721:					if (!d->warned_atapi_dataout) {
+GXEMUL-SEC/src/devices\dev_wdc.c:1722:						d->warned_atapi_dataout = 1;
+GXEMUL-SEC/src/devices\dev_wdc.c:1793:			    inbuf_len % 512 == 0)) && !d->warned_empty_drain) {
+GXEMUL-SEC/src/devices\dev_wdc.c:1814:				d->warned_empty_drain = 1;
+GXEMUL-SEC/src/devices\dev_wdc.c:1968:			if (len != 1 && !d->warned_nonbyte_read) {
+GXEMUL-SEC/src/devices\dev_wdc.c:1969:				d->warned_nonbyte_read = 1;
+GXEMUL-SEC/src/devices\dev_vr41xx.c:442:			fatal("[ vr41xx KIU: unimplemented read from "
+GXEMUL-SEC/src/devices\dev_vr41xx.c:451:			debug("[ vr41xx KIU: unimplemented read from "
+GXEMUL-SEC/src/devices\dev_vr41xx.c:468:			debug("[ vr41xx KIU: unimplemented write to offset "
+GXEMUL-SEC/src/devices\dev_vr41xx.c:472:			debug("[ vr41xx KIU: unimplemented read from offset "
+GXEMUL-SEC/src/devices\dev_vr41xx.c:639:			debug("[ vr41xx: unimplemented write to address "
+GXEMUL-SEC/src/devices\dev_vr41xx.c:643:			debug("[ vr41xx: unimplemented read from address "
+GXEMUL-SEC/src/devices\lk201.c:338:				debug("[ lk201: unimplemented keyboard control: 0x%x ]\n",
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n --glob '*.[ch]' '(write ignored|write declined|accept.*once|stored.*once|latched.*once|silently|Ignoring write|ignoring write)' GXEMUL-SEC/src/devices" in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n --glob '*.[ch]' '(void fatal|fatal\\(const|fatal\\(char|void debug|debug\\(const|debug\\(char|fatal_exit|exit_on_error)' GXEMUL-SEC/src" in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n --glob '*.[ch]' '(warned|warn_once|warning_once|only once|once only|once-only|loud-once)' GXEMUL-SEC/src/devices -l" in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n --glob '*.[ch]' '\\b(ioc_conf|tlb_enable|window_base_[01]|window_mask_[01]|window_t_base_[01]|lca_data)\\b' GXEMUL-SEC/src" in C:\DocumentNoSnc\CC\GXEMUL
+ succeeded in 232ms:
+GXEMUL-SEC/src/devices\dev_asc.c
+GXEMUL-SEC/src/devices\dev_disk.c
+GXEMUL-SEC/src/devices\dev_dreamcast_gdrom.c
+GXEMUL-SEC/src/devices\dev_jazz.c
+GXEMUL-SEC/src/devices\dev_osiop.c
+GXEMUL-SEC/src/devices\dev_pcc2.c
+GXEMUL-SEC/src/devices\dev_pckbc.c
+GXEMUL-SEC/src/devices\dev_pmagja.c
+GXEMUL-SEC/src/devices\dev_ps2_gs.c
+GXEMUL-SEC/src/devices\dev_pvr.c
+GXEMUL-SEC/src/devices\dev_scc.c
+GXEMUL-SEC/src/devices\dev_sgi_re.c
+GXEMUL-SEC/src/devices\dev_sh4.c
+GXEMUL-SEC/src/devices\dev_vga.c
+GXEMUL-SEC/src/devices\dev_wdc.c
+
+ succeeded in 247ms:
+GXEMUL-SEC/src/devices\dev_asc.c:677:			 *  silently, since a short and a complete transfer
+GXEMUL-SEC/src/devices\dev_dreamcast_asic.c:145:	    exactly what a later widening would use to alias offsets silently.
+GXEMUL-SEC/src/devices\dev_dreamcast_asic.c:158:	    silently.  Staying in bounds needs BOTH:
+GXEMUL-SEC/src/devices\dev_dreamcast_gdrom.c:192: *  bare numbers, so a new site cannot silently reuse another's bit -- the
+GXEMUL-SEC/src/devices\dev_dreamcast_gdrom.c:715:		 *  possible values, silently.  `over cond` in the detector exists to catch it;
+GXEMUL-SEC/src/devices\dev_dreamcast_gdrom.c:1249:			 *  existed, and a genuine transfer silently
+GXEMUL-SEC/src/devices\dev_dreamcast_gdrom.c:1339:	 *  silently changes.
+GXEMUL-SEC/src/devices\dev_footbridge.c:201: *  NEGATIVE frequency that the core's floor clamp silently turned into one tick per ~3.2 years
+GXEMUL-SEC/src/devices\dev_footbridge.c:686:		    read the register silently acknowledged a pending timer interrupt;
+GXEMUL-SEC/src/devices\dev_footbridge.c:778:	 *  silently break it.
+GXEMUL-SEC/src/devices\dev_m8820x.c:505:		 *  ALREADY answers exactly this way, silently, on a path a real boot exercises
+GXEMUL-SEC/src/devices\dev_pcc2.c:157:    silently; this is dev_dreamcast_gdrom.c's own form.  Negative array size is a
+GXEMUL-SEC/src/devices\dev_pcc2.c:682:		    latched fatal() per offset per instance, the house `(once)' shape --
+GXEMUL-SEC/src/devices\dev_pckbc.c:153:	    silently discarded the WHOLE queue rather than the single code
+GXEMUL-SEC/src/devices\dev_rtc.c:118:			 *  below: an ADD silently becomes a REMOVE, and the timer core is
+GXEMUL-SEC/src/devices\dev_sgi_re.c:251:		    WHAT THIS DOES NOT DO, filed rather than silently omitted: the
+GXEMUL-SEC/src/devices\dev_sh4.c:80: *  and silently swallows the other.
+GXEMUL-SEC/src/devices\dev_sh4.c:102: *      asks for and silently swallows every other one at the same register.
+GXEMUL-SEC/src/devices\dev_sh4.c:444:	 *  THE WORDING IS NOT "write ignored", WHICH IS THE RCR1 SENTENCE AND WOULD BE A
+GXEMUL-SEC/src/devices\dev_sh4.c:1040:	 *  So `return 0` here would be worse than a fault, not equivalent to one: a silently
+GXEMUL-SEC/src/devices\dev_sh4.c:1609: *  onward these registers DO silently swallow a write, and free-running the
+GXEMUL-SEC/src/devices\dev_sh4.c:2058:			 *  read-modify-write on TCR silently loses its update here -- and the
+GXEMUL-SEC/src/devices\dev_sh4.c:2093:					    " -- TCR write ignored.  (once per"
+GXEMUL-SEC/src/devices\dev_sh4.c:2122:					    " bits 0x%04x -- write ignored."
+GXEMUL-SEC/src/devices\dev_sh4.c:2245:					    " bits -- write ignored."
+GXEMUL-SEC/src/devices\dev_sh4.c:2510:				    " implemented -- write ignored."
+GXEMUL-SEC/src/devices\dev_wdc.c:231:	    silently re-aims a 512-byte disk write at data the guest never staged
+GXEMUL-SEC/src/devices\dev_wdc.c:1024:		    Inside it, the second unimplemented command silently
+GXEMUL-SEC/src/devices\dev_wdc.c:1366:						    rather than a check that would silently never fire.  Filed
+GXEMUL-SEC/src/devices\dev_wdc.c:1459:			    silently at default verbosity.  Measured last round at
+GXEMUL-SEC/src/devices\dev_wdc.c:1796:				    and SAYS SO rather than proceeding silently.
+GXEMUL-SEC/src/devices\dev_wdc.c:1807:				    asserted -- a write silently vanishing.  N=1 per device
+
+ succeeded in 258ms:
+GXEMUL-SEC/src\devices\dev_lca.c:51:struct lca_data {
+GXEMUL-SEC/src\devices\dev_lca.c:54:	uint64_t		ioc_conf;
+GXEMUL-SEC/src\devices\dev_lca.c:55:	uint64_t		tlb_enable;
+GXEMUL-SEC/src\devices\dev_lca.c:56:	uint64_t		window_base_0;
+GXEMUL-SEC/src\devices\dev_lca.c:57:	uint64_t		window_mask_0;
+GXEMUL-SEC/src\devices\dev_lca.c:58:	uint64_t		window_t_base_0;
+GXEMUL-SEC/src\devices\dev_lca.c:59:	uint64_t		window_base_1;
+GXEMUL-SEC/src\devices\dev_lca.c:60:	uint64_t		window_mask_1;
+GXEMUL-SEC/src\devices\dev_lca.c:61:	uint64_t		window_t_base_1;
+GXEMUL-SEC/src\devices\dev_lca.c:93:	struct lca_data *d = (struct lca_data *) extra;
+GXEMUL-SEC/src\devices\dev_lca.c:121:	bus = d->ioc_conf & 1;
+GXEMUL-SEC/src\devices\dev_lca.c:185:	struct lca_data *d = (struct lca_data *) extra;
+GXEMUL-SEC/src\devices\dev_lca.c:198:			odata = d->ioc_conf;
+GXEMUL-SEC/src\devices\dev_lca.c:200:			d->ioc_conf = idata;
+GXEMUL-SEC/src\devices\dev_lca.c:227:			odata = d->tlb_enable;
+GXEMUL-SEC/src\devices\dev_lca.c:229:			d->tlb_enable = idata;
+GXEMUL-SEC/src\devices\dev_lca.c:242:			odata = d->window_base_0;
+GXEMUL-SEC/src\devices\dev_lca.c:244:			d->window_base_0 = idata;
+GXEMUL-SEC/src\devices\dev_lca.c:257:			odata = d->window_mask_0;
+GXEMUL-SEC/src\devices\dev_lca.c:259:			d->window_mask_0 = idata;
+GXEMUL-SEC/src\devices\dev_lca.c:272:			odata = d->window_t_base_0;
+GXEMUL-SEC/src\devices\dev_lca.c:274:			d->window_t_base_0 = idata;
+GXEMUL-SEC/src\devices\dev_lca.c:281:			odata = d->window_base_1;
+GXEMUL-SEC/src\devices\dev_lca.c:283:			d->window_base_1 = idata;
+GXEMUL-SEC/src\devices\dev_lca.c:296:			odata = d->window_mask_1;
+GXEMUL-SEC/src\devices\dev_lca.c:298:			d->window_mask_1 = idata;
+GXEMUL-SEC/src\devices\dev_lca.c:311:			odata = d->window_t_base_1;
+GXEMUL-SEC/src\devices\dev_lca.c:313:			d->window_t_base_1 = idata;
+GXEMUL-SEC/src\devices\dev_lca.c:338:	struct lca_data *d;
+GXEMUL-SEC/src\devices\dev_lca.c:340:	CHECK_ALLOCATION(d = (struct lca_data *) malloc(sizeof(struct lca_data)));
+GXEMUL-SEC/src\devices\dev_lca.c:341:	memset(d, 0, sizeof(struct lca_data));
+
+ succeeded in 263ms:
+GXEMUL-SEC/src\debugger\debugger_cmds.c:35:static void debugger_cmd_allsettings(struct machine *m, char *args)
+GXEMUL-SEC/src\debugger\debugger_cmds.c:47:static void debugger_cmd_breakpoint(struct machine *m, char *args)
+GXEMUL-SEC/src\debugger\debugger_cmds.c:317:static void debugger_cmd_watchpoint(struct machine *m, char *args)
+GXEMUL-SEC/src\debugger\debugger_cmds.c:505:static void debugger_cmd_continue(struct machine *m, char *args)
+GXEMUL-SEC/src\debugger\debugger_cmds.c:519:static void debugger_cmd_device(struct machine *m, char *args)
+GXEMUL-SEC/src\debugger\debugger_cmds.c:647:static void debugger_cmd_dump(struct machine *m, char *args)
+GXEMUL-SEC/src\debugger\debugger_cmds.c:764:static void debugger_cmd_emul(struct machine *m, char *args)
+GXEMUL-SEC/src\debugger\debugger_cmds.c:786:static void debugger_cmd_find(struct machine *m, char *args)
+GXEMUL-SEC/src\debugger\debugger_cmds.c:1079:static void debugger_cmd_focus(struct machine *m, char *args)
+GXEMUL-SEC/src\debugger\debugger_cmds.c:1138:static void debugger_cmd_help(struct machine *m, char *args);
+GXEMUL-SEC/src\debugger\debugger_cmds.c:1144:static void debugger_cmd_itrace(struct machine *m, char *args)
+GXEMUL-SEC/src\debugger\debugger_cmds.c:1165:static void debugger_cmd_lookup(struct machine *m, char *args)
+GXEMUL-SEC/src\debugger\debugger_cmds.c:1216:static void debugger_cmd_machine(struct machine *m, char *args)
+GXEMUL-SEC/src\debugger\debugger_cmds.c:1237:static void debugger_cmd_ninstrs(struct machine *m, char *args)
+GXEMUL-SEC/src\debugger\debugger_cmds.c:1286:static void debugger_cmd_pause(struct machine *m, char *args)
+GXEMUL-SEC/src\debugger\debugger_cmds.c:1313:static void debugger_cmd_print(struct machine *m, char *args)
+GXEMUL-SEC/src\debugger\debugger_cmds.c:1353:static void debugger_cmd_put(struct machine *m, char *args)
+GXEMUL-SEC/src\debugger\debugger_cmds.c:1577:static void debugger_cmd_quiet(struct machine *m, char *args)
+GXEMUL-SEC/src\debugger\debugger_cmds.c:1629:static void debugger_cmd_quit(struct machine *m, char *args)
+GXEMUL-SEC/src\debugger\debugger_cmds.c:1644:static void debugger_cmd_reg(struct machine *m, char *args)
+GXEMUL-SEC/src\debugger\debugger_cmds.c:1685:static void debugger_cmd_step(struct machine *m, char *args)
+GXEMUL-SEC/src\debugger\debugger_cmds.c:1749:static void debugger_cmd_tlbdump(struct machine *m, char *args)
+GXEMUL-SEC/src\debugger\debugger_cmds.c:1785:static void debugger_cmd_trace(struct machine *m, char *args)
+GXEMUL-SEC/src\debugger\debugger_cmds.c:1837:static void debugger_cmd_unassemble(struct machine *m, char *args)
+GXEMUL-SEC/src\debugger\debugger_cmds.c:1953:static void debugger_cmd_verbosity(struct machine *m, char *args)
+GXEMUL-SEC/src\debugger\debugger_cmds.c:1996:static void debugger_cmd_version(struct machine *m, char *args)
+GXEMUL-SEC/src\debugger\debugger_cmds.c:2126:static void debugger_cmd_help(struct machine *m, char *args)
+GXEMUL-SEC/src\debugger\debugger.c:145:void debugger_activate(int x)
+GXEMUL-SEC/src\debugger\debugger.c:211:void debugger_assignment(struct machine *m, char *cmd)
+GXEMUL-SEC/src\debugger\debugger.c:279:void debugger_execute_cmd(char *cmd, int cmd_len)
+GXEMUL-SEC/src\debugger\debugger.c:739:static void debugger_stop_step_call(void)
+GXEMUL-SEC/src\debugger\debugger.c:759:void debugger(void)
+GXEMUL-SEC/src\debugger\debugger.c:862:void debugger_reset(void)
+GXEMUL-SEC/src\debugger\debugger.c:874:void debugger_init(struct emul *emul)
+GXEMUL-SEC/src\disk\bootblock_iso9660.c:57:static void debug_print_volume_id_and_filename(int iso_type,
+GXEMUL-SEC/src\core\main.c:799:	device_set_exit_on_error(0);
+GXEMUL-SEC/src\core\debugmsg.c:146:static void debugmsg_va(struct cpu* cpu, int subsystem,
+GXEMUL-SEC/src\core\debugmsg.c:308:void debugmsg(int subsystem, const char *name,
+GXEMUL-SEC/src\core\debugmsg.c:325:void debugmsg_cpu(struct cpu* cpu, int subsystem, const char *name,
+GXEMUL-SEC/src\core\debugmsg.c:345:void debug_indentation(int diff)
+GXEMUL-SEC/src\core\debugmsg.c:365:void debug(const char *fmt, ...)
+GXEMUL-SEC/src\core\debugmsg.c:384:void fatal(const char *fmt, ...)
+GXEMUL-SEC/src\core\debugmsg.c:394:void debugmsg_set_verbosity_level(int subsystem, int verbosity)
+GXEMUL-SEC/src\core\debugmsg.c:404:void debugmsg_add_verbosity_level(int subsystem, int verbosity_delta)
+GXEMUL-SEC/src\core\debugmsg.c:459:void debugmsg_change_settings(char *subsystem_name, char *n)
+GXEMUL-SEC/src\core\debugmsg.c:507:void debugmsg_print_settings(const char *subsystem_name)
+GXEMUL-SEC/src\core\debugmsg.c:607:void debugmsg_print_breakpoints(void)
+GXEMUL-SEC/src\core\debugmsg.c:672:void debugmsg_init()
+GXEMUL-SEC/src\include\debugger.h:40:void debugger_activate(int x);
+GXEMUL-SEC/src\include\debugger.h:41:void debugger_execute_cmd(char *cmd, int cmd_len);
+GXEMUL-SEC/src\include\debugger.h:42:void debugger(void);
+GXEMUL-SEC/src\include\debugger.h:43:void debugger_reset(void);
+GXEMUL-SEC/src\include\debugger.h:44:void debugger_init(struct emul *emul);
+GXEMUL-SEC/src\include\device.h:81:void device_set_exit_on_error(int exit_on_error);
+GXEMUL-SEC/src\include\misc.h:260:void debug_indentation(int diff);
+GXEMUL-SEC/src\include\misc.h:261:void debug(const char *fmt, ...);
+GXEMUL-SEC/src\include\misc.h:262:void fatal(const char *fmt, ...);
+GXEMUL-SEC/src\include\misc.h:263:void debugmsg_init();
+GXEMUL-SEC/src\include\misc.h:265:void debugmsg_change_settings(char *subsystem_name, char *n);
+GXEMUL-SEC/src\include\misc.h:266:void debugmsg_print_settings(const char *subsystem_name);
+GXEMUL-SEC/src\include\misc.h:267:void debugmsg_add_verbosity_level(int subsystem, int verbosity_delta);
+GXEMUL-SEC/src\include\misc.h:268:void debugmsg_set_verbosity_level(int subsystem, int verbosity);
+GXEMUL-SEC/src\include\misc.h:269:void debugmsg(int subsystem, const char *name, int verbosity_required, const char *fmt, ...);
+GXEMUL-SEC/src\include\misc.h:270:void debugmsg_cpu(struct cpu* cpu, int subsystem, const char *name, int verbosity_required, const char *fmt, ...);
+GXEMUL-SEC/src\include\misc.h:272:void debugmsg_print_breakpoints(void);
+GXEMUL-SEC/src\cpus\cpu_ppc.c:1746:static void debug_spr_usage(uint64_t pc, int spr)
+GXEMUL-SEC/src\devices\device.c:44:static int device_exit_on_error = 1;
+GXEMUL-SEC/src\devices\device.c:287:		if (device_exit_on_error)
+GXEMUL-SEC/src\devices\device.c:310:			if (device_exit_on_error)
+GXEMUL-SEC/src\devices\device.c:360:			if (device_exit_on_error)
+GXEMUL-SEC/src\devices\device.c:386:		if (device_exit_on_error)
+GXEMUL-SEC/src\devices\device.c:426: *  device_set_exit_on_error():
+GXEMUL-SEC/src\devices\device.c:433:void device_set_exit_on_error(int exit_on_error)
+GXEMUL-SEC/src\devices\device.c:435:	device_exit_on_error = exit_on_error;
+
+codex
+All six write branches store the full value before the guard. The five non-CONF fields have only readback consumers; CONF also feeds the PCI bus selector, which uses bit 0. The sibling registers have explicit implementation TODOs, so their permissiveness supports consistency but does not establish hardware correctness. I’m checking the other write-handling patterns and the remaining termination paths.
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$sourceLines = Get-Content -LiteralPath '"'GXEMUL-SEC/src/core/debugmsg.c'; foreach ("'$range in @(@(146,305),@(355,393))) { for ($lineNumber = $range[0]; $lineNumber -le $range[1]; $lineNumber++) { '"'{0}:{1}' -f "'$lineNumber, $sourceLines[$lineNumber-1] } }' in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n '(DEVICE_ACCESS|warn|once|unsupported|unimplemented|ignored)' GXEMUL-SEC/src/devices/dev_jazz.c GXEMUL-SEC/src/devices/dev_pcc2.c GXEMUL-SEC/src/devices/dev_ps2_gs.c" in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n '(DEVICE_ACCESS|idata|TODO|unimplemented|exit\\(|default:)' GXEMUL-SEC/src/devices/dev_eagle.c GXEMUL-SEC/src/devices/dev_v3.c GXEMUL-SEC/src/devices/dev_sgi_ip22.c" in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$sourceLines = Get-Content -LiteralPath '"'GXEMUL-SEC/src/devices/dev_sh4.c'; foreach ("'$range in @(@(375,465),@(2750,2840))) { for ($lineNumber = $range[0]; $lineNumber -le $range[1]; $lineNumber++) { '"'{0}:{1}' -f "'$lineNumber, $sourceLines[$lineNumber-1] } }; rg -n '"'DEVICE_ACCESS|"'^static.*'"\\(' GXEMUL-SEC/src/devices/dev_sh4.c" in C:\DocumentNoSnc\CC\GXEMUL
+ succeeded in 363ms:
+GXEMUL-SEC/src/devices/dev_ps2_gs.c:84:DEVICE_ACCESS(ps2_gs)
+GXEMUL-SEC/src/devices/dev_ps2_gs.c:96:		static int warned = 0;	/* #119: loud-once (course-correction; was debug) */
+GXEMUL-SEC/src/devices/dev_ps2_gs.c:97:		if (!warned) {
+GXEMUL-SEC/src/devices/dev_ps2_gs.c:99:			    "ignored ]\n", (int)relative_addr);
+GXEMUL-SEC/src/devices/dev_ps2_gs.c:100:			warned = 1;
+GXEMUL-SEC/src/devices/dev_pcc2.c:67:/*  pcc2widthkills: TWELVE width-guard blocks in DEVICE_ACCESS(pcc2) -- TEN of them
+GXEMUL-SEC/src/devices/dev_pcc2.c:69:    two (IPL, MASK) #119 warn-once latches that declined it process-globally -- an ordinary aligned halfword load of a documented
+GXEMUL-SEC/src/devices/dev_pcc2.c:109:    are OPERATOR-reachable -- the debugger's `put h' warns on a
+GXEMUL-SEC/src/devices/dev_pcc2.c:142:	uint32_t		warned;
+GXEMUL-SEC/src/devices/dev_pcc2.c:146:	uint64_t		warned_unimpl;
+GXEMUL-SEC/src/devices/dev_pcc2.c:156:    `<= 32' tested a literal, not the field, so narrowing `warned' would compile
+GXEMUL-SEC/src/devices/dev_pcc2.c:159:typedef char pcc2_w_fits_in_warned[(PCC2_W_NBITS <= 8 * sizeof(((struct pcc2_data *)0)->warned)
+GXEMUL-SEC/src/devices/dev_pcc2.c:404:/*  pcc2widthkills: decline a wide WRITE to a byte register, announcing once per
+GXEMUL-SEC/src/devices/dev_pcc2.c:409:	if (!(d->warned & (1u << bit))) {
+GXEMUL-SEC/src/devices/dev_pcc2.c:410:		d->warned |= (1u << bit);
+GXEMUL-SEC/src/devices/dev_pcc2.c:411:		fatal("[ pcc2: unimplemented len=%i write to %s -- declined."
+GXEMUL-SEC/src/devices/dev_pcc2.c:412:		    "  (once) ]\n", len, name);
+GXEMUL-SEC/src/devices/dev_pcc2.c:416:DEVICE_ACCESS(pcc2)
+GXEMUL-SEC/src/devices/dev_pcc2.c:431:			static int warned = 0;	/* #119: loud-once (course-correction) */
+GXEMUL-SEC/src/devices/dev_pcc2.c:432:			if (!warned) {
+GXEMUL-SEC/src/devices/dev_pcc2.c:436:				warned = 1;
+GXEMUL-SEC/src/devices/dev_pcc2.c:491:			fatal("[ pcc2: write to PSCALEADJ ignored (value "
+GXEMUL-SEC/src/devices/dev_pcc2.c:628:		    said "ignored" about a READ the memcpy above had already served.
+GXEMUL-SEC/src/devices/dev_pcc2.c:639:			    "ignored ]\n"); w = 1; }
+GXEMUL-SEC/src/devices/dev_pcc2.c:651:		    said "ignored" about a READ the memcpy above had already served.
+GXEMUL-SEC/src/devices/dev_pcc2.c:653:		    the WIDTH latch.  (pcc2widthkills pass 7: this comment once claimed a
+GXEMUL-SEC/src/devices/dev_pcc2.c:682:		    latched fatal() per offset per instance, the house `(once)' shape --
+GXEMUL-SEC/src/devices/dev_pcc2.c:689:		if (!(d->warned_unimpl & (1ULL << relative_addr))) {
+GXEMUL-SEC/src/devices/dev_pcc2.c:690:			d->warned_unimpl |= 1ULL << relative_addr;
+GXEMUL-SEC/src/devices/dev_pcc2.c:692:				fatal("[ pcc2: unimplemented write to offset "
+GXEMUL-SEC/src/devices/dev_pcc2.c:693:				    "0x%x (len %d): 0x%x -- declined.  (once) ]\n",
+GXEMUL-SEC/src/devices/dev_pcc2.c:701:				fatal("[ pcc2: unimplemented read from offset "
+GXEMUL-SEC/src/devices/dev_pcc2.c:702:				    "0x%x (len %d) -- served 0x%02x.  (once) ]\n",
+GXEMUL-SEC/src/devices/dev_pcc2.c:712:DEVICE_ACCESS(mvme187_iack)
+GXEMUL-SEC/src/devices/dev_jazz.c:313:DEVICE_ACCESS(jazz)
+GXEMUL-SEC/src/devices/dev_jazz.c:332:				    "R4030_SYS_CONFIG ignored (data=0x%08x)",
+GXEMUL-SEC/src/devices/dev_jazz.c:486:		    ignore writes and read as 0, with a once-only diagnostic
+GXEMUL-SEC/src/devices/dev_jazz.c:493:				    "unimplemented %s of address 0x%x",
+GXEMUL-SEC/src/devices/dev_jazz.c:508:DEVICE_ACCESS(jazz_led)
+GXEMUL-SEC/src/devices/dev_jazz.c:530:			fatal("[ jazz_led: unimplemented write to address 0x%x"
+GXEMUL-SEC/src/devices/dev_jazz.c:534:			fatal("[ jazz_led: unimplemented read from address 0x%x"
+GXEMUL-SEC/src/devices/dev_jazz.c:553:DEVICE_ACCESS(jazz_a0)
+GXEMUL-SEC/src/devices/dev_jazz.c:584:			fatal("[ jazz_isa_a0: unimplemented write to "
+GXEMUL-SEC/src/devices/dev_jazz.c:588:			fatal("[ jazz_isa_a0: unimplemented read from "
+GXEMUL-SEC/src/devices/dev_jazz.c:605:DEVICE_ACCESS(jazz_20)
+GXEMUL-SEC/src/devices/dev_jazz.c:635:			fatal("[ jazz_isa_20: unimplemented write to "
+GXEMUL-SEC/src/devices/dev_jazz.c:639:			fatal("[ jazz_isa_20: unimplemented read from "
+GXEMUL-SEC/src/devices/dev_jazz.c:657:DEVICE_ACCESS(jazz_jazzio)
+GXEMUL-SEC/src/devices/dev_jazz.c:687:			fatal("[ jazzio: unimplemented write to address 0x%x"
+GXEMUL-SEC/src/devices/dev_jazz.c:691:			fatal("[ jazzio: unimplemented read from address 0x%x"
+
+ succeeded in 398ms:
+GXEMUL-SEC/src/devices/dev_sgi_ip22.c:51:	// TODO: Document this!
+GXEMUL-SEC/src/devices/dev_sgi_ip22.c:62:DEVICE_ACCESS(sgi_ip22_imc)
+GXEMUL-SEC/src/devices/dev_sgi_ip22.c:65:	uint64_t idata = 0, odata = 0;
+GXEMUL-SEC/src/devices/dev_sgi_ip22.c:69:		idata = memory_readmax64(cpu, data, len);
+GXEMUL-SEC/src/devices/dev_sgi_ip22.c:74:		d->imc_reg[regnr] = idata;
+GXEMUL-SEC/src/devices/dev_sgi_ip22.c:82:			    "IMC_CPUCTRL0, data=0x%08x ]\n", (int)idata);  */
+GXEMUL-SEC/src/devices/dev_sgi_ip22.c:90:			debug("[ sgi_ip22_imc: unimplemented write "
+GXEMUL-SEC/src/devices/dev_sgi_ip22.c:91:			    "IMC_SYSID, data=0x%08x ]\n", (int)idata);
+GXEMUL-SEC/src/devices/dev_sgi_ip22.c:102:			    "data=0x%08x ]\n", (int)idata);  */
+GXEMUL-SEC/src/devices/dev_sgi_ip22.c:110:			debug("[ sgi_ip22_imc: unimplemented write "
+GXEMUL-SEC/src/devices/dev_sgi_ip22.c:111:			    "IMC_MEMCFG0, data=0x%08x ]\n", (int)idata);
+GXEMUL-SEC/src/devices/dev_sgi_ip22.c:113:			odata = 0x3100 + (0x8000000 >> 22);  /*  ? TODO  */
+GXEMUL-SEC/src/devices/dev_sgi_ip22.c:120:			debug("[ sgi_ip22_imc: unimplemented write "
+GXEMUL-SEC/src/devices/dev_sgi_ip22.c:121:			    "IMC_MEMCFG1, data=0x%08x ]\n", (int)idata);
+GXEMUL-SEC/src/devices/dev_sgi_ip22.c:135:			    "0x%08x ]\n", (int)idata);
+GXEMUL-SEC/src/devices/dev_sgi_ip22.c:142:	default:
+GXEMUL-SEC/src/devices/dev_sgi_ip22.c:144:			debug("[ sgi_ip22_imc: unimplemented write to "
+GXEMUL-SEC/src/devices/dev_sgi_ip22.c:146:			    (int)relative_addr, (int)idata);
+GXEMUL-SEC/src/devices/dev_sgi_ip22.c:148:			debug("[ sgi_ip22_imc: unimplemented read from "
+GXEMUL-SEC/src/devices/dev_sgi_ip22.c:166:DEVICE_ACCESS(sgi_ip22_unknown)
+GXEMUL-SEC/src/devices/dev_sgi_ip22.c:169:	uint64_t idata = 0, odata = 0;
+GXEMUL-SEC/src/devices/dev_sgi_ip22.c:171:	idata = memory_readmax64(cpu, data, len);
+GXEMUL-SEC/src/devices/dev_sgi_ip22.c:177:			    " data=0x%08x ]\n", (int)relative_addr, (int)idata);
+GXEMUL-SEC/src/devices/dev_sgi_ip22.c:185:	default:
+GXEMUL-SEC/src/devices/dev_sgi_ip22.c:187:			debug("[ sgi_ip22_unknown: unimplemented write to "
+GXEMUL-SEC/src/devices/dev_sgi_ip22.c:189:			    (int)relative_addr, (int)idata);
+GXEMUL-SEC/src/devices/dev_sgi_ip22.c:191:			debug("[ sgi_ip22_unknown: unimplemented read from "
+GXEMUL-SEC/src/devices/dev_sgi_ip22.c:209:DEVICE_ACCESS(sgi_ip22_unknown2)
+GXEMUL-SEC/src/devices/dev_sgi_ip22.c:212:	uint64_t idata = 0, odata = 0;
+GXEMUL-SEC/src/devices/dev_sgi_ip22.c:215:	idata = memory_readmax64(cpu, data, len);
+GXEMUL-SEC/src/devices/dev_sgi_ip22.c:219:		d->unknown2_reg[regnr] = idata;
+GXEMUL-SEC/src/devices/dev_sgi_ip22.c:224:	default:
+GXEMUL-SEC/src/devices/dev_sgi_ip22.c:226:			debug("[ sgi_ip22_unknown2: unimplemented write "
+GXEMUL-SEC/src/devices/dev_sgi_ip22.c:228:			    (int)relative_addr, (int)idata);
+GXEMUL-SEC/src/devices/dev_sgi_ip22.c:230:			debug("[ sgi_ip22_unknown2: unimplemented read from "
+GXEMUL-SEC/src/devices/dev_sgi_ip22.c:243:DEVICE_ACCESS(sgi_ip22_sysid)
+GXEMUL-SEC/src/devices/dev_sgi_ip22.c:246:	uint64_t idata = 0, odata = 0;
+GXEMUL-SEC/src/devices/dev_sgi_ip22.c:248:	idata = memory_readmax64(cpu, data, len);
+GXEMUL-SEC/src/devices/dev_sgi_ip22.c:252:		    "data=0x%08x ]\n", (int)relative_addr, (int)idata);
+GXEMUL-SEC/src/devices/dev_sgi_ip22.c:277:DEVICE_ACCESS(sgi_ip22)
+GXEMUL-SEC/src/devices/dev_sgi_ip22.c:280:	uint64_t idata = 0, odata = 0;
+GXEMUL-SEC/src/devices/dev_sgi_ip22.c:283:	idata = memory_readmax64(cpu, data, len);
+GXEMUL-SEC/src/devices/dev_sgi_ip22.c:287:		d->reg[regnr] = idata;
+GXEMUL-SEC/src/devices/dev_sgi_ip22.c:296:			    "data=0x%llx ]\n", (long long)idata);
+GXEMUL-SEC/src/devices/dev_sgi_ip22.c:311:			 *  (TODO: Fix this.)
+GXEMUL-SEC/src/devices/dev_sgi_ip22.c:314:fatal("TODO: ip22 legacy interrupt rewrite!\n");
+GXEMUL-SEC/src/devices/dev_sgi_ip22.c:319://			    "data=0x%llx ]\n", (long long)idata);
+GXEMUL-SEC/src/devices/dev_sgi_ip22.c:328:			    "data=0x%llx ]\n", (long long)idata);
+GXEMUL-SEC/src/devices/dev_sgi_ip22.c:338:fatal("TODO: ip22 legacy interrupt rewrite!\n");
+GXEMUL-SEC/src/devices/dev_sgi_ip22.c:342://			    "data=0x%llx ]\n", (long long)idata);
+GXEMUL-SEC/src/devices/dev_sgi_ip22.c:351:			    "data=0x%llx ]\n", (long long)idata);
+GXEMUL-SEC/src/devices/dev_sgi_ip22.c:360:			    "MASK, data=0x%llx ]\n", (long long)idata);
+GXEMUL-SEC/src/devices/dev_sgi_ip22.c:369:			    "MASK, data=0x%llx ]\n", (long long)idata);
+GXEMUL-SEC/src/devices/dev_sgi_ip22.c:378:			    sequentially...  TODO  */
+GXEMUL-SEC/src/devices/dev_sgi_ip22.c:391:	default:
+GXEMUL-SEC/src/devices/dev_sgi_ip22.c:393:			debug("[ sgi_ip22: unimplemented write to address "
+GXEMUL-SEC/src/devices/dev_sgi_ip22.c:395:			    (int)idata);
+GXEMUL-SEC/src/devices/dev_sgi_ip22.c:397:			debug("[ sgi_ip22: unimplemented read from address "
+GXEMUL-SEC/src/devices/dev_v3.c:75:	/*  (TODO: don't hardcode this here)  */
+GXEMUL-SEC/src/devices/dev_v3.c:151:DEVICE_ACCESS(v3_pci)
+GXEMUL-SEC/src/devices/dev_v3.c:153:	uint64_t idata = 0, odata = 0;
+GXEMUL-SEC/src/devices/dev_v3.c:158:		idata = memory_readmax64(cpu, data, len|MEM_PCI_LITTLE_ENDIAN);
+GXEMUL-SEC/src/devices/dev_v3.c:178:	    &odata : &idata, len, writeflag);
+GXEMUL-SEC/src/devices/dev_v3.c:187:DEVICE_ACCESS(v3)
+GXEMUL-SEC/src/devices/dev_v3.c:190:	uint64_t idata = 0, odata = 0;
+GXEMUL-SEC/src/devices/dev_v3.c:193:		idata = memory_readmax64(cpu, data, len);
+GXEMUL-SEC/src/devices/dev_v3.c:212:			d->lb_map0 = idata;
+GXEMUL-SEC/src/devices/dev_v3.c:227:	default:if (writeflag == MEM_WRITE) {
+GXEMUL-SEC/src/devices/dev_v3.c:228:			fatal("[ v3: unimplemented write to "
+GXEMUL-SEC/src/devices/dev_v3.c:230:			    relative_addr, (int)idata);
+GXEMUL-SEC/src/devices/dev_v3.c:232:			fatal("[ v3: unimplemented read from "
+GXEMUL-SEC/src/devices/dev_v3.c:269:	default:fatal("!\n! WARNING: v3 for non-implemented machine"
+GXEMUL-SEC/src/devices/dev_v3.c:271:		exit(1);
+GXEMUL-SEC/src/devices/dev_v3.c:313:	    pci_irq_base		/*  pciirq: TODO  */,
+GXEMUL-SEC/src/devices/dev_v3.c:315:	    0x11000000,			/*  pci device mem offset: TODO  */
+GXEMUL-SEC/src/devices/dev_v3.c:316:	    0x00000000,			/*  PCI portbase: TODO  */
+GXEMUL-SEC/src/devices/dev_v3.c:317:	    0x00000000,			/*  PCI membase: TODO  */
+GXEMUL-SEC/src/devices/dev_v3.c:330:	default:fatal("!\n! WARNING: v3 for non-implemented machine"
+GXEMUL-SEC/src/devices/dev_v3.c:332:		exit(1);
+GXEMUL-SEC/src/devices/dev_eagle.c:52:DEVICE_ACCESS(eagle)
+GXEMUL-SEC/src/devices/dev_eagle.c:55:	uint64_t idata = 0, odata = 0;
+GXEMUL-SEC/src/devices/dev_eagle.c:59:		idata = memory_readmax64(cpu, data, len|MEM_PCI_LITTLE_ENDIAN);
+GXEMUL-SEC/src/devices/dev_eagle.c:68:		bus_pci_decompose_1(idata, &bus, &dev, &func, &reg);
+GXEMUL-SEC/src/devices/dev_eagle.c:74:		    &odata : &idata, len, writeflag);
+GXEMUL-SEC/src/devices/dev_eagle.c:120:	/*  TODO: Make these work like the BE web page stated...  */
+GXEMUL-SEC/src/devices/dev_eagle.c:135:	default:
+GXEMUL-SEC/src/devices/dev_eagle.c:180:		default:fatal("unimplemented machine subtype for "
+GXEMUL-SEC/src/devices/dev_eagle.c:182:			exit(1);
+GXEMUL-SEC/src/devices/dev_eagle.c:186:	default:fatal("unimplemented machine type for eagle\n");
+GXEMUL-SEC/src/devices/dev_eagle.c:187:		exit(1);
+
+ succeeded in 511ms:
+146:static void debugmsg_va(struct cpu* cpu, int subsystem,
+147:	const char *name, int verbosity, va_list argp, const char *fmt)
+148:{
+149:	bool subsystem_breakpoint = false;
+150:
+151:	/*
+152:	 *  #261: opt-in global break on any ERROR-level message (covers every
+153:	 *  subsystem, incl. ones registered after a per-subsystem breakpoint
+154:	 *  was set). Default off = single false test = no-op.
+155:	 */
+156:	bool do_bp = (debugmsg_n_breakpoints > 0 &&
+157:	    debugmsg_breakpoint_level[subsystem] >= 0 &&
+158:	    verbosity <= debugmsg_breakpoint_level[subsystem]);
+159:	if (debugmsg_break_on_error && verbosity <= VERBOSITY_ERROR)
+160:		do_bp = true;
+161:
+162:	if (do_bp) {
+163:		/*
+164:		 *  This message triggers a breakpoint on subsystem messages:
+165:		 *  make sure the message itself is shown (even if the current
+166:		 *  verbosity setting would have suppressed it), and request
+167:		 *  entry into the interactive debugger. The debugger is
+168:		 *  entered after the current instruction batch, using the
+169:		 *  same mechanism as normal breakpoints.
+170:		 */
+171:		subsystem_breakpoint = true;
+172:
+173:		if (!single_step && !about_to_enter_single_step) {
+174:			fatal("[ subsystem breakpoint: %s ]\n",
+175:			    debugmsg_subsystem_name[subsystem][0] != '\0'
+176:			    ? debugmsg_subsystem_name[subsystem] : "(startup)");
+177:			about_to_enter_single_step = true;
+178:		}
+179:	}
+180:
+181:	if (!subsystem_breakpoint && !single_step &&
+182:	    !ENOUGH_VERBOSITY(subsystem, verbosity))
+183:		return;
+184:
+185:	char buf[DEBUG_BUFSIZE];
+186:
+187:	buf[0] = buf[DEBUG_BUFSIZE - 1] = 0;
+188:	vsnprintf(buf, DEBUG_BUFSIZE, fmt, argp);
+189:
+190:	char* s = buf;
+191:	bool ss = single_step || about_to_enter_single_step;
+192:	bool debug_currently_at_start_of_line = true;
+193:	bool show_decorations = emul_executing && !ss;
+194:
+195:	if (console_are_slaves_allowed())
+196:		show_decorations = false;
+197:
+198:	while (true) {
+199:		if (debug_currently_at_start_of_line) {
+200:			if (show_decorations) {
+201:				color_normal();
+202:				printf("[ ");
+203:			} else {
+204:				for (size_t i = 0; i < debug_indent * DEBUG_INDENTATION; ++i)
+205:					printf(" ");
+206:			}
+207:
+208:			bool print_subsystem_name =
+209:			    debugmsg_subsystem_name[subsystem][0] != '\0' &&
+210:			    (debug_indent == 0 || (name == NULL || name[0] == '\0'));
+211:			bool print_colon = false;
+212:
+213:			if (cpu != NULL) {
+214:				// With multiple machines being emulated in the
+215:				// same emulation instance, print both the machine
+216:				// name and cpu id. If it is just one machine,
+217:				// only print the cpu id if there are multiple
+218:				// CPUs in order to not clutter the output
+219:				// needlessly.
+220:				struct emul* emul = cpu->machine->emul;
+221:				if (emul->n_machines > 1) {
+222:					printf("machine \"%s\" cpu%i: ",
+223:					    cpu->machine->name ? cpu->machine->name : "(no name)",
+224:					    cpu->cpu_id);
+225:					if (subsystem == SUBSYS_CPU)
+226:						print_subsystem_name = false;
+227:				} else if (cpu->machine->ncpus > 1) {
+228:					printf("cpu%i: ", cpu->cpu_id);
+229:					if (subsystem == SUBSYS_CPU)
+230:						print_subsystem_name = false;
+231:				}
+232:			}
+233:
+234:			if (verbosity == VERBOSITY_ERROR)
+235:				color_error(false);
+236:			else
+237:				color_debugmsg_subsystem();
+238:
+239:			if (print_subsystem_name) {
+240:				printf("%s", debugmsg_subsystem_name[subsystem]);
+241:				print_colon = true;
+242:			}
+243:
+244:			if (name != NULL && name[0] != '\0') {
+245:				if (print_subsystem_name)
+246:					printf(" ");
+247:
+248:				if (verbosity != VERBOSITY_ERROR)
+249:					color_debugmsg_name();
+250:
+251:				printf("%s", name);
+252:
+253:				print_colon = true;
+254:			}
+255:
+256:			if (print_colon)
+257:				printf(": ");
+258:
+259:			if (show_decorations) {
+260:				for (size_t i = 0; i < debug_indent * DEBUG_INDENTATION; ++i)
+261:					printf(" ");
+262:			}
+263:
+264:			if (verbosity == VERBOSITY_ERROR)
+265:				color_error(true);
+266:			else
+267:				color_normal();
+268:		}
+269:
+270:		debug_currently_at_start_of_line = false;
+271:
+272:		if (!*s)
+273:			break;
+274:
+275:		switch (*s) {
+276:		case '\n':
+277:			color_normal();
+278:			if (show_decorations) {
+279:				printf(" ]");
+280:			}
+281:
+282:			debug_currently_at_start_of_line = true;
+283:			printf("\n");
+284:			break;
+285:
+286:		default:
+287:			printf("%c", *s);
+288:		}
+289:
+290:		s++;
+291:	}
+292:
+293:	color_normal();
+294:
+295:	if (show_decorations)
+296:		printf(" ]");
+297:
+298:	if (!debug_currently_at_start_of_line)
+299:		printf("\n");
+300:}
+301:
+302:
+303:/*
+304: *  debugmsg():
+305: *
+355:
+356:/*
+357: *  debug() and fatal():
+358: *
+359: *  These are here because of all the legacy code that uses them. Basically,
+360: *  debug() is mapped to something that is only displayed with verbosity
+361: *  at the default level, and fatal() is used to always print stuff. With some
+362: *  hacks to make it work reasonable with -q and when executing normally or
+363: *  when executing single-stepping.
+364: */
+365:void debug(const char *fmt, ...)
+366:{
+367:	va_list argp;
+368:	bool ss = single_step || about_to_enter_single_step;
+369:	int v = verbose;
+370:	if (emul_executing)
+371:		v--;
+372:	if (ss)
+373:		v++;
+374:
+375:	if ((quiet_mode && !ss) || v < 0)
+376:		return;
+377:
+378:	va_start(argp, fmt);
+379:	va_debug(argp, fmt);
+380:	va_end(argp);
+381:}
+382:
+383:
+384:void fatal(const char *fmt, ...)
+385:{
+386:	va_list argp;
+387:
+388:	va_start(argp, fmt);
+389:	va_debug(argp, fmt);
+390:	va_end(argp);
+391:}
+392:
+393:
+
+ succeeded in 559ms:
+375:	uint32_t	tstr;
+376:	uint32_t	tcnt[N_SH4_TIMERS];
+377:	uint32_t	tcor[N_SH4_TIMERS];
+378:	uint32_t	tcr[N_SH4_TIMERS];
+379:	int		timer_interrupts_pending[N_SH4_TIMERS];
+380:	double		timer_hz[N_SH4_TIMERS];
+381:
+382:	/*  #447: [class][instance] -> the offending bits already reported.  See the
+383:	    SH4_VAL_* block near the top of this file for why the key has three parts.  */
+384:	uint32_t	val_reported[SH4_VAL_NCLASS][N_SH4_VAL_INST];
+385:
+386:	/*  RTC:  */
+387:	uint32_t	rtc_reg[14];	/*  Excluding rcr1 and rcr2  */
+388:	uint8_t		rtc_rcr1;
+389:	uint8_t		rtc_rcr2;
+390:};
+391:
+392:
+393:#define	SH4_PSEUDO_TIMER_HZ	110.0
+394:
+395:
+396:/*  #448/#449: the latch helper is defined far below, and BOTH sh4_timer_tick() and
+397:    sh4_dmac_transfer() are above it, so the prototype lives here -- immediately after
+398:    `struct sh4_data` and before the first user.
+399:    It must not sit beside the SH4_VAL_* defines: a prototype naming a struct the compiler
+400:    has not seen yet declares a NEW type in PARAMETER SCOPE.  That compiles, warns, and
+401:    then mismatches the real definition.  Measured while writing #448.  */
+402:static int sh4_val_first(struct sh4_data *d, int cls, int instance, uint32_t bits);
+403:
+404:
+405:/*
+406: *  sh4_timer_tick():
+407: *
+408: *  This function is called SH4_PSEUDO_TIMER_HZ times per real-world second.
+409: *  Its job is to update the SH4 timer counters, and if necessary, increase
+410: *  the number of pending interrupts.
+411: *
+412: *  Also, RAM Refresh is also faked here.
+413: */
+414:static void sh4_timer_tick(struct timer *t, void *extra)
+415:{
+416:	struct sh4_data *d = (struct sh4_data *) extra;
+417:	int i;
+418:
+419:	/*  Fake RAM refresh:  */
+420:	d->bsc_rfcr ++;
+421:	/*
+422:	 *  #449: this called exit(1), and it is reached from a HOST TIMER CALLBACK rather
+423:	 *  than from a guest store.  A guest write to RTCSR lands, the handler returns
+424:	 *  normally, and the process dies here about nine milliseconds later.  MEASURED on
+425:	 *  an unmodified -E landisk: the store alone leaves the host alive (which is why
+426:	 *  every store-site probe in this tree was blind to it), and a bounded free run
+427:	 *  after it kills the host with this diagnostic.  Two controls survive the same
+428:	 *  free run -- RTCSR 0x00, and RTCSR_CMF, a DIFFERENT bit of the SAME byte.
+429:	 *
+430:	 *  *** FALL THROUGH.  DO NOT RETURN. ***  The rest of this function is the TMU
+431:	 *  channel 0-2 update, which never reads bsc_rtcsr; the refresh work above is
+432:	 *  already done.  Returning early would make every tick skip the TMU while a
+433:	 *  DRAM-refresh enable bit stays set -- the #400 wall-clock freeze, newly gated on
+434:	 *  an unrelated register.  A review seat named that before it was written, and
+435:	 *  regress/diff_sh4_tmu.c now carries the row that catches it offline.
+436:	 *
+437:	 *  THE LATCH IS LOAD-BEARING HERE IN A WAY IT WAS NOT ON THE STORE-SITE ROUNDS.
+438:	 *  This runs at SH4_PSEUDO_TIMER_HZ, and timer.c can burst several ticks inside one
+439:	 *  signal; fatal() has no quiet_mode early-out, so an unlatched complaint is a
+440:	 *  flood that -q cannot stop.  The key is (class, instance 0, enable bits), and
+441:	 *  sh4_val_first() never clears -- so a guest that writes 0 and re-sets CMIE gets
+442:	 *  no second line, deliberately.  At most one line per bit for the device lifetime.
+443:	 *
+444:	 *  THE WORDING IS NOT "write ignored", WHICH IS THE RCR1 SENTENCE AND WOULD BE A
+445:	 *  LIE HERE: the write DID land, and the guest can read it back.  What is missing
+446:	 *  is the delivery of the interrupt.
+447:	 */
+448:	if (d->bsc_rtcsr & (RTCSR_CMIE | RTCSR_OVIE)) {
+449:		/*
+450:		 *  TWO WORDINGS HERE WERE CORRECTED BY A PASS-2 SEAT, and both were
+451:		 *  wrong in the same direction -- more specific than the code earns.
+452:		 *
+453:		 *  "the interrupt is NOT delivered" reads as though a refresh interrupt
+454:		 *  becomes pending and is then dropped.  Nothing becomes pending: CMF and
+455:		 *  OVF are never set on any path in this device, and RTCNT has no `case`
+456:		 *  at all, so there is no compare-match to raise.  The honest statement is
+457:		 *  that the GENERATION of the interrupt is not implemented.
+458:		 *
+459:		 *  "(once per bit)" is not quite what the latch does either: a single
+460:		 *  store that sets BOTH enables for the first time yields ONE coalesced
+461:		 *  line naming 0x42, not two.  Row R3 of sh4_rtcsr_probe.py measures
+462:		 *  exactly that, so the comment and the row now agree.
+463:		 */
+464:		if (sh4_val_first(d, SH4_VAL_RTCSRINT, 0,
+465:		    d->bsc_rtcsr & (RTCSR_CMIE | RTCSR_OVIE)))
+2750:
+2751:	/*************************************************/
+2752:
+2753:	case SH4_RSECCNT:
+2754:	case SH4_RMINCNT:
+2755:	case SH4_RHRCNT:
+2756:	case SH4_RWKCNT:
+2757:	case SH4_RDAYCNT:
+2758:	case SH4_RMONCNT:
+2759:	case SH4_RYRCNT:
+2760:	case SH4_RSECAR:
+2761:	case SH4_RMINAR:
+2762:	case SH4_RHRAR:
+2763:	case SH4_RWKAR:
+2764:	case SH4_RDAYAR:
+2765:	case SH4_RMONAR:
+2766:		if (writeflag == MEM_WRITE) {
+2767:			d->rtc_reg[(relative_addr - 0xffc80000) / 4] = idata;
+2768:		} else {
+2769:			/*  TODO: Update rtc_reg based on host's date/time.  */
+2770:			odata = d->rtc_reg[(relative_addr - 0xffc80000) / 4];
+2771:		}
+2772:		break;
+2773:
+2774:	case SH4_RCR1:
+2775:		if (writeflag == MEM_READ)
+2776:			odata = d->rtc_rcr1;
+2777:		else {
+2778:			/*
+2779:			 *  #447: *** THE STORE WAS UPSTREAM OF THE GUARD. ***  It ran
+2780:			 *  first and the guard second, so a rejected value had ALREADY
+2781:			 *  landed in rtc_rcr1 and exit(1) was the only thing stopping
+2782:			 *  the guest reading it back.  Dropping the exit and nothing
+2783:			 *  else turns a host kill into SILENT STATE CORRUPTION -- the
+2784:			 *  guest writes CIE|AIE, reads CIE|AIE back, and believes the
+2785:			 *  RTC will interrupt it.  It never will.  Same shape as #443
+2786:			 *  found in dev_sh4_pcic_access(), and the ONLY one of #447's
+2787:			 *  four sites that has it.  The store therefore moved below.
+2788:			 *
+2789:			 *  The mask is spelled from the header (thirdparty/sh4_rtcreg.h
+2790:			 *  :72-73) rather than as 0x18, because it is TWO independent
+2791:			 *  features and the latch keys on which one was asked for.
+2792:			 *
+2793:			 *  Values outside those two bits are accepted exactly as before.
+2794:			 */
+2795:			if (idata & (SH_RCR1_CIE | SH_RCR1_AIE)) {
+2796:				if (sh4_val_first(d, SH4_VAL_RCR1INT, 0,
+2797:				    (uint32_t) (idata &
+2798:				    (SH_RCR1_CIE | SH_RCR1_AIE))))
+2799:					fatal("[ sh4: RTC: RCR1 interrupt enable"
+2800:					    " 0x%02x not implemented -- write"
+2801:					    " ignored.  (once per bit) ]\n",
+2802:					    (int) (idata &
+2803:					    (SH_RCR1_CIE | SH_RCR1_AIE)));
+2804:			} else
+2805:				d->rtc_rcr1 = idata;
+2806:		}
+2807:		break;
+2808:
+2809:	case SH4_RCR2:
+2810:		if (writeflag == MEM_READ)
+2811:			odata = d->rtc_rcr2;
+2812:		else {
+2813:			d->rtc_rcr2 = idata;
+2814:			// bit 1 (i.e. idata == 0x02) means reset.
+2815:			if (idata != 0x02) {
+2816:				debug("[ SH4: TODO: RTC RCR2 value 0x%02x ignored. ]\n", (int)idata);
+2817:			}
+2818:		}
+2819:		break;
+2820:
+2821:
+2822:	/*************************************************/
+2823:
+2824:	default:if (writeflag == MEM_READ) {
+2825:			fatal("[ sh4: read from addr 0x%x ]\n",
+2826:			    (int)relative_addr);
+2827:		} else {
+2828:			fatal("[ sh4: write to addr 0x%x: 0x%x ]\n",
+2829:			    (int)relative_addr, (int)idata);
+2830:		}
+2831:
+2832:#ifdef SH4_DEBUG
+2833:		exit(1);
+2834:#endif
+2835:	}
+2836:
+2837:	if (writeflag == MEM_READ)
+2838:		memory_writemax64(cpu, data, len, odata);
+2839:
+2840:	return 1;
+87: *  #447: DEVICE_ACCESS(sh4)'s OWN value guards -- a separate cluster from the PCIC
+402:static int sh4_val_first(struct sh4_data *d, int cls, int instance, uint32_t bits);
+414:static void sh4_timer_tick(struct timer *t, void *extra)
+533:static void sh4_pcic_interrupt_assert(struct interrupt *interrupt)
+538:static void sh4_pcic_interrupt_deassert(struct interrupt *interrupt)
+545:static void scif_reassert_interrupts(struct sh4_data *d)
+814:static void sh4_sci_cmd(struct sh4_data *d, struct cpu *cpu)
+918:static uint8_t sh4_sci_access(struct sh4_data *d, struct cpu *cpu,
+973:DEVICE_ACCESS(sh4_itlb_aa)
+1017:DEVICE_ACCESS(sh4_itlb_da1)
+1104:DEVICE_ACCESS(sh4_utlb_aa)
+1220:DEVICE_ACCESS(sh4_utlb_da1)
+1337:static int sh4_pcic_first(struct sh4_data *d, uint32_t addr, int cls)
+1362:DEVICE_ACCESS(sh4_pcic)
+1574:DEVICE_ACCESS(sh4_sq)
+1620:static unsigned int sh4_bsc16_shift(struct cpu *cpu, size_t len)
+1646:static int sh4_bsc16_report(struct sh4_data *d, int site, const char *name,
+1698:static int sh4_val_first(struct sh4_data *d, int cls, int instance, uint32_t bits)
+1738:DEVICE_ACCESS(sh4)
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$sourceLines = Get-Content -LiteralPath '"'GXEMUL-SEC/src/devices/dev_v3.c'
+for ("'$lineNumber = 187; $lineNumber -le 246; $lineNumber++) { '"'{0}:{1}' -f "'$lineNumber, $sourceLines[$lineNumber-1] }' in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$sourceLines = Get-Content -LiteralPath '"'GXEMUL-SEC/src/devices/dev_jazz.c'
+foreach ("'$range in @(@(313,365),@(475,545))) { for ($lineNumber = $range[0]; $lineNumber -le $range[1]; $lineNumber++) { '"'{0}:{1}' -f "'$lineNumber, $sourceLines[$lineNumber-1] } }' in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$sourceLines = Get-Content -LiteralPath '"'GXEMUL-SEC/src/devices/dev_sgi_ip22.c'
+for ("'$lineNumber = 62; $lineNumber -le 163; $lineNumber++) { '"'{0}:{1}' -f "'$lineNumber, $sourceLines[$lineNumber-1] }' in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$sourceLines = Get-Content -LiteralPath '"'GXEMUL-SEC/src/devices/dev_pcc2.c'
+foreach ("'$range in @(@(404,500),@(610,710))) { for ($lineNumber = $range[0]; $lineNumber -le $range[1]; $lineNumber++) { '"'{0}:{1}' -f "'$lineNumber, $sourceLines[$lineNumber-1] } }' in C:\DocumentNoSnc\CC\GXEMUL
+ succeeded in 269ms:
+187:DEVICE_ACCESS(v3)
+188:{
+189:	struct v3_data *d = (struct v3_data *) extra;
+190:	uint64_t idata = 0, odata = 0;
+191:
+192:	if (writeflag == MEM_WRITE)
+193:		idata = memory_readmax64(cpu, data, len);
+194:
+195:	switch (relative_addr) {
+196:
+197:	case 0x06:	/*  PCI stat  */
+198:		break;
+199:
+200:	case 0x08:	/*  Revision  */
+201:		odata = 4;
+202:		break;
+203:
+204:	case 0x18:	/*  PCI DMA base 1  */
+205:		odata = 0x11000000;
+206:		break;
+207:
+208:	case 0x5e:	/*  LB MAP0  */
+209:		if (writeflag == MEM_READ)
+210:			odata = d->lb_map0;
+211:		else
+212:			d->lb_map0 = idata;
+213:		break;
+214:
+215:	case 0x62:	/*  PCI mem base 1  */
+216:		odata = 0x1100;
+217:		break;
+218:
+219:	case 0x64:	/*  L2 BASE  */
+220:		odata = 1;	/*  pci i/o enable  */
+221:		break;
+222:
+223:	case 0x66:	/*  Map 2  */
+224:		odata = 0x1d00;
+225:		break;
+226:
+227:	default:if (writeflag == MEM_WRITE) {
+228:			fatal("[ v3: unimplemented write to "
+229:			    "offset 0x%x: data=0x%x ]\n", (int)
+230:			    relative_addr, (int)idata);
+231:		} else {
+232:			fatal("[ v3: unimplemented read from "
+233:			    "offset 0x%x ]\n", (int)relative_addr);
+234:		}
+235:	}
+236:
+237:	if (writeflag == MEM_READ)
+238:		memory_writemax64(cpu, data, len, odata);
+239:
+240:	return 1;
+241:}
+242:
+243:
+244:DEVINIT(v3)
+245:{
+246:	struct v3_data *d;
+
+ succeeded in 287ms:
+62:DEVICE_ACCESS(sgi_ip22_imc)
+63:{
+64:	struct sgi_ip22_data *d = (struct sgi_ip22_data *) extra;
+65:	uint64_t idata = 0, odata = 0;
+66:	int regnr;
+67:
+68:	if (writeflag == MEM_WRITE)
+69:		idata = memory_readmax64(cpu, data, len);
+70:
+71:	regnr = relative_addr / sizeof(uint32_t);
+72:
+73:	if (writeflag == MEM_WRITE)
+74:		d->imc_reg[regnr] = idata;
+75:	else
+76:		odata = d->imc_reg[regnr];
+77:
+78:	switch (relative_addr) {
+79:	case (IMC_CPUCTRL0 - IP22_IMC_BASE):
+80:		if (writeflag == MEM_WRITE) {
+81:			/*  debug("[ sgi_ip22_imc: write to "
+82:			    "IMC_CPUCTRL0, data=0x%08x ]\n", (int)idata);  */
+83:		} else {
+84:			/*  debug("[ sgi_ip22_imc: read from IMC_CPUCTRL0, "
+85:			    "data=0x%08x ]\n", (int)odata);  */
+86:		}
+87:		break;
+88:	case (IMC_SYSID - IP22_IMC_BASE):
+89:		if (writeflag == MEM_WRITE) {
+90:			debug("[ sgi_ip22_imc: unimplemented write "
+91:			    "IMC_SYSID, data=0x%08x ]\n", (int)idata);
+92:		} else {
+93:			/*  Lowest 4 bits are the revision bits.  */
+94:			odata = 3;  /*  + IMC_SYSID_HAVEISA;  */
+95:			/*  debug("[ sgi_ip22_imc: read from IMC_SYSID, "
+96:			    "data=0x%08x ]\n", (int)odata);  */
+97:		}
+98:		break;
+99:	case (IMC_WDOG - IP22_IMC_BASE):
+100:		if (writeflag == MEM_WRITE) {
+101:			/*  debug("[ sgi_ip22_imc: write to IMC_WDOG, "
+102:			    "data=0x%08x ]\n", (int)idata);  */
+103:		} else {
+104:			/*  debug("[ sgi_ip22_imc: read from IMC_WDOG, "
+105:			    "data=0x%08x ]\n", (int)odata);  */
+106:		}
+107:		break;
+108:	case (IMC_MEMCFG0 - IP22_IMC_BASE):
+109:		if (writeflag == MEM_WRITE) {
+110:			debug("[ sgi_ip22_imc: unimplemented write "
+111:			    "IMC_MEMCFG0, data=0x%08x ]\n", (int)idata);
+112:		} else {
+113:			odata = 0x3100 + (0x8000000 >> 22);  /*  ? TODO  */
+114:			/*  debug("[ sgi_ip22_imc: read from IMC_MEMCFG0,"
+115:			    " data=0x%08x ]\n", (int)odata);  */
+116:		}
+117:		break;
+118:	case (IMC_MEMCFG1 - IP22_IMC_BASE):
+119:		if (writeflag == MEM_WRITE) {
+120:			debug("[ sgi_ip22_imc: unimplemented write "
+121:			    "IMC_MEMCFG1, data=0x%08x ]\n", (int)idata);
+122:		} else {
+123:			odata = 0;
+124:			/*  debug("[ sgi_ip22_imc: read from IMC_MEMCFG1, "
+125:			    "data=0x%08x ]\n", (int)odata);  */
+126:		}
+127:		break;
+128:	case (IMC_EEPROM - IP22_IMC_BASE):
+129:		/*
+130:		 *  The IP22 prom tries to access this during bootup,
+131:		 *  but I have no idea how it works.
+132:		 */
+133:		if (writeflag == MEM_WRITE) {
+134:			debug("[ sgi_ip22_imc: write to IMC_EEPROM, data="
+135:			    "0x%08x ]\n", (int)idata);
+136:		} else {
+137:			odata = random() & 0x1e;
+138:			debug("[ sgi_ip22_imc: read from IMC_WDOG, "
+139:			    "data=0x%08x ]\n", (int)odata);
+140:		}
+141:		break;
+142:	default:
+143:		if (writeflag == MEM_WRITE) {
+144:			debug("[ sgi_ip22_imc: unimplemented write to "
+145:			    "address 0x%x, data=0x%08x ]\n",
+146:			    (int)relative_addr, (int)idata);
+147:		} else {
+148:			debug("[ sgi_ip22_imc: unimplemented read from "
+149:			    "address 0x%x, data=0x%08x ]\n",
+150:			    (int)relative_addr, (int)odata);
+151:		}
+152:	}
+153:
+154:	if (writeflag == MEM_READ)
+155:		memory_writemax64(cpu, data, len, odata);
+156:
+157:	return 1;
+158:}
+159:
+160:
+161:/*
+162: *  dev_sgi_ip22_unknown_access():
+163: *
+
+ succeeded in 315ms:
+313:DEVICE_ACCESS(jazz)
+314:{
+315:	struct jazz_data *d = (struct jazz_data *) extra;
+316:	uint64_t idata = 0, odata = 0;
+317:
+318:	if (writeflag == MEM_WRITE)
+319:		idata = memory_readmax64(cpu, data, len);
+320:
+321:	// int regnr = relative_addr / sizeof(uint32_t);
+322:
+323:	switch (relative_addr) {
+324:	case R4030_SYS_CONFIG:
+325:		if (writeflag == MEM_WRITE) {
+326:			/*  #179: (Codex/Fable) guest-reachable; ignore the
+327:			    write instead of fatal()-flooding host stdout.  */
+328:			static int w = 0;
+329:			if (!w) {
+330:				debugmsg(SUBSYS_DEVICE, "jazz",
+331:				    VERBOSITY_WARNING, "write to "
+332:				    "R4030_SYS_CONFIG ignored (data=0x%08x)",
+333:				    (int)idata);
+334:				w = 1;
+335:			}
+336:		} else {
+337:			/*  Reading the config register should give
+338:			    0x0104 or 0x0410. Why? TODO  */
+339:			odata = 0x104;
+340:		}
+341:		break;
+342:	case R4030_SYS_TL_BASE:
+343:		if (writeflag == MEM_WRITE) {
+344:			d->dma_translation_table_base = idata;
+345:		} else {
+346:			odata = d->dma_translation_table_base;
+347:		}
+348:		break;
+349:	case R4030_SYS_TL_LIMIT:
+350:		if (writeflag == MEM_WRITE) {
+351:			d->dma_translation_table_limit = idata;
+352:		} else {
+353:			odata = d->dma_translation_table_limit;
+354:		}
+355:		break;
+356:	case R4030_SYS_TL_IVALID:
+357:		/*  TODO: Does invalidation actually need to be implemented?  */
+358:		break;
+359:	case R4030_SYS_DMA0_REGS:
+360:		if (writeflag == MEM_WRITE) {
+361:			d->dma0_mode = idata;
+362:		} else {
+363:			odata = d->dma0_mode;
+364:		}
+365:		break;
+475:
+476:			/*  Re-evaluate the ISA/IP4 funnel with the new EXT_IMASK:
+477:			    if this write unmasks IP4 while an ISA line is already
+478:			    latched+enabled, deliver it now rather than waiting for
+479:			    the next device edge (which could hang the guest).  */
+480:			reassert_isa_interrupts(d);
+481:		} else
+482:			odata = d->int_enable_mask;
+483:		break;
+484:	default:
+485:		/*  #179: (Codex/Fable) undefined offsets are guest-reachable:
+486:		    ignore writes and read as 0, with a once-only diagnostic
+487:		    instead of an unconditional fatal() flood.  */
+488:		{
+489:			static int w = 0;
+490:			if (!w) {
+491:				debugmsg(SUBSYS_DEVICE, "jazz",
+492:				    VERBOSITY_WARNING,
+493:				    "unimplemented %s of address 0x%x",
+494:				    writeflag == MEM_WRITE? "write" : "read",
+495:				    (int)relative_addr);
+496:				w = 1;
+497:			}
+498:		}
+499:	}
+500:
+501:	if (writeflag == MEM_READ)
+502:		memory_writemax64(cpu, data, len, odata);
+503:
+504:	return 1;
+505:}
+506:
+507:
+508:DEVICE_ACCESS(jazz_led)
+509:{
+510:	struct jazz_data *d = (struct jazz_data *) extra;
+511:	uint64_t idata = 0, odata = 0;
+512:
+513:	if (writeflag == MEM_WRITE)
+514:		idata = memory_readmax64(cpu, data, len);
+515:
+516:	// int regnr = relative_addr / sizeof(uint32_t);
+517:
+518:	switch (relative_addr) {
+519:	case 0:
+520:		if (writeflag == MEM_WRITE) {
+521:			d->led = idata;
+522:			debug("[ jazz_led: write to LED: 0x%02x ]\n",
+523:			    (int)idata);
+524:		} else {
+525:			odata = d->led;
+526:		}
+527:		break;
+528:	default:
+529:		if (writeflag == MEM_WRITE) {
+530:			fatal("[ jazz_led: unimplemented write to address 0x%x"
+531:			    ", data=0x%02x ]\n", (int)relative_addr,
+532:			    (int)idata);
+533:		} else {
+534:			fatal("[ jazz_led: unimplemented read from address 0x%x"
+535:			    " ]\n", (int)relative_addr);
+536:		}
+537:	}
+538:
+539:	if (writeflag == MEM_READ)
+540:		memory_writemax64(cpu, data, len, odata);
+541:
+542:	return 1;
+543:}
+544:
+545:
+
+ succeeded in 314ms:
+404:/*  pcc2widthkills: decline a wide WRITE to a byte register, announcing once per
+405:    block per instance.  The caller `break's after this; the read side of the same
+406:    block never reaches here.  */
+407:static void pcc2_width_decline(struct pcc2_data *d, int bit, const char *name, int len)
+408:{
+409:	if (!(d->warned & (1u << bit))) {
+410:		d->warned |= (1u << bit);
+411:		fatal("[ pcc2: unimplemented len=%i write to %s -- declined."
+412:		    "  (once) ]\n", len, name);
+413:	}
+414:}
+415:
+416:DEVICE_ACCESS(pcc2)
+417:{
+418:	uint64_t idata = 0;
+419:	struct pcc2_data *d = (struct pcc2_data *) extra;
+420:
+421:	/*  0xfff42000..0xfff42fff, but only 0x40 unique registers:  */
+422:	relative_addr %= PCC2_SIZE;
+423:
+424:	if (writeflag == MEM_WRITE)
+425:		idata = memory_readmax64(cpu, data, len);
+426:
+427:	if (writeflag == MEM_READ) {
+428:		if (relative_addr + len <= PCC2_SIZE)	/* OB-11: end-span */
+429:			memcpy(data, d->pcctwo_reg + relative_addr, len);
+430:		else {
+431:			static int warned = 0;	/* #119: loud-once (course-correction) */
+432:			if (!warned) {
+433:				fatal("[ pcc2: read 0x%x+%i beyond reg space 0x%x; "
+434:				    "zero-filled ]\n", (int)relative_addr, (int)len,
+435:				    (int)PCC2_SIZE);
+436:				warned = 1;
+437:			}
+438:			memset(data, 0, len);	/* OB-11b: don't leak uninit host memory */
+439:		}
+440:	}
+441:
+442:	switch (relative_addr) {
+443:
+444:	case PCCTWO_CHIPID:
+445:	case PCCTWO_CHIPREV:
+446:		if (writeflag == MEM_WRITE) {
+447:			fatal("[ IGNORING write to read-only PCCTWO_CHIPID/"
+448:			    "CHIPREV register ]\n");
+449:		}
+450:		break;
+451:
+452:	case PCCTWO_GENCTL:
+453:		if (len != 1 && writeflag == MEM_WRITE) {
+454:			pcc2_width_decline(d, PCC2_W_GENCTL_LEN, "PCCTWO_GENCTL", len);
+455:			break;
+456:		}
+457:		if (writeflag == MEM_WRITE) {
+458:			d->pcctwo_reg[relative_addr] = idata;
+459:			reassert_interrupts(d);
+460:		}
+461:		break;
+462:
+463:	case PCCTWO_VECBASE:
+464:		if (len != 1 && writeflag == MEM_WRITE) {
+465:			pcc2_width_decline(d, PCC2_W_VECBASE_LEN, "PCCTWO_VECBASE", len);
+466:			break;
+467:		}
+468:		if (writeflag == MEM_WRITE) {
+469:			d->pcctwo_reg[relative_addr] = idata & 0xf0;
+470:			if (idata & ~0xf0)
+471:				fatal("[ pcc2: HUH? write to PCCTWO_VECBASE"
+472:				    " with value 0x%02x. ]\n", (int) idata);
+473:		}
+474:		break;
+475:
+476:	case PCCTWO_T1CMP:
+477:	case PCCTWO_T2CMP:
+478:	case PCCTWO_T1COUNT:
+479:	case PCCTWO_T2COUNT:
+480:		if (writeflag == MEM_WRITE &&
+481:		    relative_addr + len <= PCC2_SIZE)	/* OB-11: end-span */
+482:			memcpy(d->pcctwo_reg + relative_addr, data, len);
+483:		break;
+484:
+485:	case PCCTWO_PSCALEADJ:
+486:		if (len != 1 && writeflag == MEM_WRITE) {
+487:			pcc2_width_decline(d, PCC2_W_PSCALEADJ_LEN, "PCCTWO_PSCALEADJ", len);
+488:			break;
+489:		}
+490:		if (writeflag == MEM_WRITE) {
+491:			fatal("[ pcc2: write to PSCALEADJ ignored (value "
+492:			    "0x%02x) ]\n", (int)idata);
+493:		}
+494:		break;
+495:
+496:	case PCCTWO_T2CTL:
+497:	case PCCTWO_T1CTL:
+498:		if (len != 1 && writeflag == MEM_WRITE) {
+499:			pcc2_width_decline(d, PCC2_W_TXCTL_LEN, "PCCTWO_TxCTL", len);
+500:			break;
+610:		break;
+611:
+612:	case PCCTWO_SCSIICR:
+613:		if (len != 1 && writeflag == MEM_WRITE) {
+614:			pcc2_width_decline(d, PCC2_W_SCSIICR_LEN, "PCCTWO_SCSIICR", len);
+615:			break;
+616:		}
+617:		if (writeflag == MEM_WRITE) {
+618:			d->pcctwo_reg[relative_addr] = idata & 0xdf;
+619:			if (idata & ~0xdf)
+620:				fatal("[ pcc2: HUH? write to PCCTWO_SCSIICR"
+621:				    " with value 0x%02x. ]\n", (int) idata);
+622:			reassert_interrupts(d);
+623:		}
+624:		break;
+625:
+626:	case PCCTWO_IPL:
+627:		/*  pcc2widthkills: was a #119 `static int w' -- process-global, and it
+628:		    said "ignored" about a READ the memcpy above had already served.
+629:		    Now per-instance, write-only, like the ten blocks above -- that is
+630:		    the WIDTH latch; the body's own #119 `static int w' below stays
+631:		    process-global (pcc2pscaleflood's family; not this round's).  */
+632:		if (len != 1 && writeflag == MEM_WRITE) {
+633:			pcc2_width_decline(d, PCC2_W_IPL_LEN, "PCCTWO_IPL", len);
+634:			break;
+635:		}
+636:		if (writeflag == MEM_WRITE) {
+637:			static int w = 0;	/* #119: was exit(1) (IPL is read-only) */
+638:			if (!w) { fatal("[ pcc2: write to read-only PCCTWO_IPL; "
+639:			    "ignored ]\n"); w = 1; }
+640:		} else {
+641:			if (d->pcctwo_reg[PCCTWO_IPL] == 0) {
+642:				static int w = 0;	/* #119: was exit(1) */
+643:				if (!w) { fatal("[ pcc2: IPL == 0 on read ]\n");
+644:				    w = 1; }
+645:			}
+646:		}
+647:		break;
+648:
+649:	case PCCTWO_MASK:
+650:		/*  pcc2widthkills: was a #119 `static int w' -- process-global, and it
+651:		    said "ignored" about a READ the memcpy above had already served.
+652:		    Now per-instance, write-only, like the ten blocks above -- that is
+653:		    the WIDTH latch.  (pcc2widthkills pass 7: this comment once claimed a
+654:		    #119 static of MASK's own "below" -- there is none; the body stores
+655:		    the byte and reasserts.  The static belongs to IPL's arm above.)  */
+656:		if (len != 1 && writeflag == MEM_WRITE) {
+657:			pcc2_width_decline(d, PCC2_W_MASK_LEN, "PCCTWO_MASK", len);
+658:			break;
+659:		}
+660:		if (writeflag == MEM_WRITE) {
+661:			d->pcctwo_reg[relative_addr] = idata;
+662:			reassert_interrupts(d);
+663:		}
+664:		break;
+665:
+666:	default:
+667:		/*  #501 (pcc2defaultkill): this arm ended the host with exit(1) on ANY
+668:		    access to an offset with no case -- 43 of the 0x40 byte offsets:
+669:		    eighteen documented registers the model does not implement (IEICR,
+670:		    IEERR, IEBERR, GPIO, SCSIERR, the printer block, SPEED, the *IACKs),
+671:		    the bytes inside the four counter/compare words, and the unnamed
+672:		    ones -- READS included, though the memcpy above the switch had
+673:		    already served them.  A guest ld.bu or st.b at any of them was a host
+674:		    kill (rung-3 witness).  Now: a READ keeps the served byte (the array's
+675:		    current byte, said so -- inside a running COUNT word that is the
+676:		    tick's value, not a default); a WRITE is DECLINED.  Not a
+677:		    backed store: the cased siblings contradict one (SCCERR clears on
+678:		    write, the ICRs mask and reassert, PSCALECNT/SPEED/the IACKs are
+679:		    read-only), no inspected OpenBSD driver path reaches them (if_ie never
+680:		    attaches: unreadable sits at its 82596 address), and a store from the
+681:		    one arm 43 offsets reach would add a bounded-write surface.  One
+682:		    latched fatal() per offset per instance, the house `(once)' shape --
+683:		    unlike PSCALEADJ's UNLATCHED print above (pcc2pscaleflood).  The
+684:		    IACK offsets 0x23/0x25 are declined like the rest: modelling them (on
+685:		    the SCCRXIACK shape) would open two new entries into the C040 path,
+686:		    so pcc2c040kill goes first.  The %= fold above IS the real part's:
+687:		    Motorola VMESBCP2 Table 6-1 lists $FFF42040-$FFF42FFF as repeated
+688:		    PCCchip2 registers.  */
+689:		if (!(d->warned_unimpl & (1ULL << relative_addr))) {
+690:			d->warned_unimpl |= 1ULL << relative_addr;
+691:			if (writeflag == MEM_WRITE)
+692:				fatal("[ pcc2: unimplemented write to offset "
+693:				    "0x%x (len %d): 0x%x -- declined.  (once) ]\n",
+694:				    (int) relative_addr, (int) len, (int) idata);
+695:			else
+696:				/*  data[0] is the byte actually SERVED; a reload of the
+697:				    array could differ: on the end-span path (zero-filled,
+698:				    the array byte kept) and inside a running COUNT word,
+699:				    whose SIGALRM-driven tick (timer.c) can land between
+700:				    the copy and this line.  A wide read is labelled.  */
+701:				fatal("[ pcc2: unimplemented read from offset "
+702:				    "0x%x (len %d) -- served 0x%02x.  (once) ]\n",
+703:				    (int) relative_addr, (int) len, data[0]);
+704:		}
+705:		break;
+706:	}
+707:
+708:	return 1;
+709:}
+710:
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n --glob '"'!*.o'"' '\\b(LCA_IOC_[A-Z0-9_]+|IOC_W_T_BASE|ioc_conf|tlb_enable|window_base_[01]|window_mask_[01]|window_t_base_[01]|lca_data)\\b' GXEMUL-SEC/src" in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n -C 5 'sh4_val_first\\(' GXEMUL-SEC/src/devices/dev_sh4.c" in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n '(va_debug|"'^static|''^void)'"' GXEMUL-SEC/src/core/debugmsg.c
+"'$sourceLines = Get-Content -LiteralPath '"'GXEMUL-SEC/src/core/debugmsg.c'
+for ("'$lineNumber = 55; $lineNumber -le 145; $lineNumber++) { '"'{0}:{1}' -f "'$lineNumber, $sourceLines[$lineNumber-1] }' in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n '("'^(static )?(void|int) .*'"\\(|DEVICE_ACCESS|case .*:|default:)' GXEMUL-SEC/src/devices/dev_wdc.c | Select-String -Pattern '"'^(?:[5-9][0-9][0-9]|10[0-8][0-9]):'"'
+"'$sourceLines = Get-Content -LiteralPath '"'GXEMUL-SEC/src/devices/dev_wdc.c'
+for ("'$lineNumber = 1010; $lineNumber -le 1084; $lineNumber++) { '"'{0}:{1}' -f "'$lineNumber, $sourceLines[$lineNumber-1] }' in C:\DocumentNoSnc\CC\GXEMUL
+ succeeded in 103ms:
+192- *      bit 7      cmd bit 7 clear                  (site 1, one condition)
+193- *      bit 0      transfer field 0x00, "neither"   (site 2)
+194- *      bit 3      transfer field 0x30, "both"      (site 2)
+195- *
+196- *  *** THE SITE-1 KEY IS A TOKEN AND MUST NOT BE `cmd & 0x80`. ***  That expression is
+197: *  ZERO on the only path that reaches the site, and sh4_val_first() computes
+198- *  `bits & ~reported` and returns `fresh != 0` -- so a zero key can NEVER report and the
+199- *  diagnostic would have been born permanently silent.  A review seat opened the helper
+200- *  and caught it before the edit was written; nothing else in this file would have.
+201- *
+202- *  Site 2 key IS derived, `1u << ((cmd & 0x30) >> 4)`, so it cannot drift away from the
+--
+254- *  would hide which timer the guest wanted.  Re-writing the SAME timer stays silent.
+255- *
+256- *  The key is the constant 1, deliberately, and NOT anything derived from the register.
+257- *  There is no value to report: the fault is that the MACHINE has no peripheral clock,
+258- *  which is the same fault whatever the guest stored.  #451 is the warning that shaped
+259: *  this -- a key of `cmd & 0x80` was zero on the only reaching path, and sh4_val_first()
+260- *  computes `bits & ~reported` returning `fresh != 0`, so a zero key is born silent.
+261- */
+262-	SH4_VAL_PCLOCK,		/*  TMU: no peripheral clock for this machine  */
+263-	SH4_VAL_NCLASS			/*  count, by construction -- never assign it  */
+264-};
+--
+397-    sh4_dmac_transfer() are above it, so the prototype lives here -- immediately after
+398-    `struct sh4_data` and before the first user.
+399-    It must not sit beside the SH4_VAL_* defines: a prototype naming a struct the compiler
+400-    has not seen yet declares a NEW type in PARAMETER SCOPE.  That compiles, warns, and
+401-    then mismatches the real definition.  Measured while writing #448.  */
+402:static int sh4_val_first(struct sh4_data *d, int cls, int instance, uint32_t bits);
+403-
+404-
+405-/*
+406- *  sh4_timer_tick():
+407- *
+--
+436-	 *
+437-	 *  THE LATCH IS LOAD-BEARING HERE IN A WAY IT WAS NOT ON THE STORE-SITE ROUNDS.
+438-	 *  This runs at SH4_PSEUDO_TIMER_HZ, and timer.c can burst several ticks inside one
+439-	 *  signal; fatal() has no quiet_mode early-out, so an unlatched complaint is a
+440-	 *  flood that -q cannot stop.  The key is (class, instance 0, enable bits), and
+441:	 *  sh4_val_first() never clears -- so a guest that writes 0 and re-sets CMIE gets
+442-	 *  no second line, deliberately.  At most one line per bit for the device lifetime.
+443-	 *
+444-	 *  THE WORDING IS NOT "write ignored", WHICH IS THE RCR1 SENTENCE AND WOULD BE A
+445-	 *  LIE HERE: the write DID land, and the guest can read it back.  What is missing
+446-	 *  is the delivery of the interrupt.
+--
+459-		 *  "(once per bit)" is not quite what the latch does either: a single
+460-		 *  store that sets BOTH enables for the first time yields ONE coalesced
+461-		 *  line naming 0x42, not two.  Row R3 of sh4_rtcsr_probe.py measures
+462-		 *  exactly that, so the comment and the row now agree.
+463-		 */
+464:		if (sh4_val_first(d, SH4_VAL_RTCSRINT, 0,
+465-		    d->bsc_rtcsr & (RTCSR_CMIE | RTCSR_OVIE)))
+466-			fatal("[ sh4: refresh interrupt enable(s) 0x%02x stored,"
+467-			    " but refresh-interrupt generation is not implemented"
+468-			    " -- each enable is reported once ]\n",
+469-			    (int) (d->bsc_rtcsr & (RTCSR_CMIE | RTCSR_OVIE)));
+--
+654-	 *  It is detectable, and the detector row is built on this: a `break` here falls
+655-	 *  through to the RS switch, which for most values complains too, so the escape
+656-	 *  shows up as a SECOND diagnostic from a single store.  Exactly one is correct.
+657-	 */
+658-	default:
+659:		if (sh4_val_first(d, SH4_VAL_DMACTS, channel,
+660-		    1u << ((chcr & CHCR_TS) >> 4)))
+661-			fatal("[ sh4: DMA channel %i: transmit size %i not"
+662-			    " implemented -- transfer declined.  (once per"
+663-			    " encoding) ]\n", channel,
+664-			    (int) ((chcr & CHCR_TS) >> 4));
+--
+668-	switch (chcr & CHCR_DM) {
+669-	case CHCR_DM_FIXED:       dst_delta = 0; break;
+670-	case CHCR_DM_INCREMENTED: dst_delta = 1; break;
+671-	case CHCR_DM_DECREMENTED: dst_delta = -1; break;
+672-	default:
+673:		if (sh4_val_first(d, SH4_VAL_DMACDM, channel,
+674-		    1u << ((chcr & CHCR_DM) >> 14)))
+675-			fatal("[ sh4: DMA channel %i: destination address mode"
+676-			    " %i not implemented -- transfer declined.  (once"
+677-			    " per encoding) ]\n", channel,
+678-			    (int) ((chcr & CHCR_DM) >> 14));
+--
+682-	switch (chcr & CHCR_SM) {
+683-	case CHCR_SM_FIXED:       src_delta = 0; break;
+684-	case CHCR_SM_INCREMENTED: src_delta = 1; break;
+685-	case CHCR_SM_DECREMENTED: src_delta = -1; break;
+686-	default:
+687:		if (sh4_val_first(d, SH4_VAL_DMACSM, channel,
+688-		    1u << ((chcr & CHCR_SM) >> 12)))
+689-			fatal("[ sh4: DMA channel %i: source address mode %i"
+690-			    " not implemented -- transfer declined.  (once per"
+691-			    " encoding) ]\n", channel,
+692-			    (int) ((chcr & CHCR_SM) >> 12));
+--
+725-	 *  normally, so FIFTEEN of the sixteen resource-select encodings reached exit(1)
+726-	 *  -- and a wholly legal transfer configuration (4-byte, both addresses
+727-	 *  incrementing) still ended the host, on its resource-select alone. ***
+728-	 */
+729-	default:
+730:		if (sh4_val_first(d, SH4_VAL_DMACRS, channel,
+731-		    1u << ((chcr & CHCR_RS) >> 8)))
+732-			fatal("[ sh4: DMA channel %i: resource select %i not"
+733-			    " implemented -- transfer declined.  (once per"
+734-			    " encoding) ]\n", channel,
+735-			    (int) ((chcr & CHCR_RS) >> 8));
+--
+781-	 *  diagnostic keeps the host alive and prints once while falsely reporting an
+782-	 *  unperformed transfer complete -- and makes the NEXT call return early at the
+783-	 *  `chcr & CHCR_TE` test above.  A seat named that mutant; the detector pins all four.
+784-	 */
+785-	if (cause_interrupt) {
+786:		if (sh4_val_first(d, SH4_VAL_DMACIE, channel, 1u << 0))
+787-			fatal("[ sh4: DMA channel %i: a transfer-end interrupt was"
+788-			    " requested (CHCR.IE), but single-address-mode transfers"
+789-			    " are performed by the external device, which this model"
+790-			    " does not simulate -- there is no completion event, so"
+791-			    " TE stays clear and no DMTE is generated.  (once per"
+--
+831-	 *  natural typo, since the braces are right there -- would decline the FIRST bad
+832-	 *  byte and let every later one fall through, which a detector that drives each
+833-	 *  offender once in a fresh emulator cannot see.  A review seat named that mutant.
+834-	 */
+835-	if (!(cmd & 0x80)) {
+836:		if (sh4_val_first(d, SH4_VAL_SCICMD, 0, 1u << 7))
+837-			fatal("[ sh4: SCI: command byte 0x%02x has the start bit"
+838-			    " clear -- command declined.  (once) ]\n", (int) cmd);
+839-		return;
+840-	}
+841-
+--
+863-		 *  oracle catches it.  `= 1` only re-latches sci_cur_addr, which prints NOTHING
+864-		 *  of its own: MEASURED as a clean 12/14 pass until row N2 was added.  A seat
+865-		 *  named the asymmetry after the first draft of this comment claimed they were
+866-		 *  the same invention.
+867-		 */
+868:		if (sh4_val_first(d, SH4_VAL_SCICMD, 0,
+869-		    1u << ((cmd & 0x30) >> 4)))
+870-			fatal("[ sh4: SCI: command byte 0x%02x selects AD/DT encoding"
+871-			    " %i, which is not implemented -- command declined."
+872-			    "  (once per encoding) ]\n", (int) cmd,
+873-			    (int) ((cmd & 0x30) >> 4));
+--
+1055-	 *  away, and because `odata = 0` alone genuinely would not be enough if #95 were ever
+1056-	 *  narrowed.  But it carries NO detector row: a mutant measured equivalent cannot be
+1057-	 *  killed, and a row that cannot fail is decoration.
+1058-	 */
+1059-	if (relative_addr & 0x800000) {
+1060:		if (sh4_val_first(d, SH4_VAL_TLBDA2, 0, SH4_VAL_TLBDA2_ITLB))
+1061-			fatal("[ sh4: ITLB data array 2 (0x%08x) is not implemented"
+1062-			    " -- reads return 0, writes are ignored.  (once) ]\n",
+1063-			    (int) (SH4_ITLB_DA1 + relative_addr));
+1064-		if (writeflag == MEM_READ)
+1065-			memory_writemax64(cpu, data, len, 0);
+--
+1227-
+1228-	/*  #452: see the matching block in sh4_itlb_da1() above.  The SITE BIT differs and
+1229-	    that is the whole point of the two-bit key -- one class, two sites, and neither
+1230-	    can silence the other.  */
+1231-	if (relative_addr & 0x800000) {
+1232:		if (sh4_val_first(d, SH4_VAL_TLBDA2, 0, SH4_VAL_TLBDA2_UTLB))
+1233-			fatal("[ sh4: UTLB data array 2 (0x%08x) is not implemented"
+1234-			    " -- reads return 0, writes are ignored.  (once) ]\n",
+1235-			    (int) (SH4_UTLB_DA1 + relative_addr));
+1236-		if (writeflag == MEM_READ)
+1237-			memory_writemax64(cpu, data, len, 0);
+--
+1685-	return !partial;
+1686-}
+1687-
+1688-
+1689-/*
+1690: *  sh4_val_first():
+1691- *
+1692- *  Non-zero the first time any of `bits` is reported for (cls, instance); records
+1693- *  them either way.  `bits` is the OFFENDING bits, not the whole written value --
+1694- *  passing the value would make every distinct write look like a fresh complaint and
+1695- *  hand a looping guest an unbounded host-CPU burn, which is the thing this latch is
+1696- *  here to prevent.
+1697- */
+1698:static int sh4_val_first(struct sh4_data *d, int cls, int instance, uint32_t bits)
+1699-{
+1700-	uint32_t fresh;
+1701-
+1702-	/*  Unreachable by construction: every caller passes a class from the SH4_VAL_*
+1703-	    list and an instance bounded by its own `case` fall-through.  Kept because
+--
+2085-			 *  which lets the write land and is caught by `unlatch`.  An earlier record
+2086-			 *  attached it to this paragraph; two mutants had one name, and NOTHING in
+2087-			 *  the kill table measures the guard's POSITION.)
+2088-			 */
+2089-			if (cpu->cd.sh.pclock == 0) {
+2090:				if (sh4_val_first(d, SH4_VAL_PCLOCK, timer_nr, 1))
+2091-					fatal("[ sh4: timer %i: no peripheral"
+2092-					    " clock configured for this machine"
+2093-					    " -- TCR write ignored.  (once per"
+2094-					    " timer) ]\n", timer_nr);
+2095-				break;
+--
+2114-			 *  `break` leaves the enclosing switch (relative_addr) -- no
+2115-			 *  loop or inner switch is open at this point -- so nothing
+2116-			 *  below runs and no state is touched.
+2117-			 */
+2118-			if (idata & TCR_UNIMPLEMENTED) {
+2119:				if (sh4_val_first(d, SH4_VAL_TCRBITS, timer_nr,
+2120-				    (uint32_t) (idata & TCR_UNIMPLEMENTED)))
+2121-					fatal("[ sh4: timer %i: unimplemented TCR"
+2122-					    " bits 0x%04x -- write ignored."
+2123-					    "  (once per bit) ]\n", timer_nr,
+2124-					    (int) (idata & TCR_UNIMPLEMENTED));
+--
+2236-			 *  0x1fffffff -- FIVE BITS WIDER than the read arm.  A detector
+2237-			 *  row here has to compare the LOW 24 bits against a value the
+2238-			 *  device accepted earlier; a plain read-back is vacuous.
+2239-			 */
+2240-			if (idata & ~0x00ffffff) {
+2241:				if (sh4_val_first(d, SH4_VAL_DMATCR, dma_channel,
+2242-				    (uint32_t) ((idata >> 24) & 0xff)))
+2243-					fatal("[ sh4: DMA channel %i: transfer"
+2244-					    " count 0x%08" PRIx32" exceeds 24"
+2245-					    " bits -- write ignored."
+2246-					    "  (once per bit) ]\n", dma_channel,
+--
+2502-		 *  the same day -- IPRD would then have to be applied, gated on the live
+2503-		 *  IRLM bit, with an explicit policy for the IRQ2/5/8/11 aliasing.  See
+2504-		 *  sh_update_interrupt_priorities().
+2505-		 */
+2506-		if (writeflag == MEM_WRITE && (idata & 0x80)) {
+2507:			if (sh4_val_first(d, SH4_VAL_ICRIRLM, 0,
+2508-			    (uint32_t) (idata & 0x80)))
+2509-				fatal("[ sh4: INTC: ICR IRLM bit 0x%04x not"
+2510-				    " implemented -- write ignored."
+2511-				    "  (once per bit) ]\n", (int) (idata & 0x80));
+2512-		}
+--
+2791-			 *  features and the latch keys on which one was asked for.
+2792-			 *
+2793-			 *  Values outside those two bits are accepted exactly as before.
+2794-			 */
+2795-			if (idata & (SH_RCR1_CIE | SH_RCR1_AIE)) {
+2796:				if (sh4_val_first(d, SH4_VAL_RCR1INT, 0,
+2797-				    (uint32_t) (idata &
+2798-				    (SH_RCR1_CIE | SH_RCR1_AIE))))
+2799-					fatal("[ sh4: RTC: RCR1 interrupt enable"
+2800-					    " 0x%02x not implemented -- write"
+2801-					    " ignored.  (once per bit) ]\n",
+
+ succeeded in 145ms:
+GXEMUL-SEC/src\include\thirdparty\alpha_lcareg.h:44:#define LCA_IOC_BASE	0x180000000ULL		/* LCA IOC Regs */
+GXEMUL-SEC/src\include\thirdparty\alpha_lcareg.h:50:#define LCA_IOC_HAE	LCA_IOC_BASE		/* Host Address Ext. (64) */
+GXEMUL-SEC/src\include\thirdparty\alpha_lcareg.h:54:#define LCA_IOC_CONF	(LCA_IOC_BASE + 0x020)	/* Configuration Cycle Type */
+GXEMUL-SEC/src\include\thirdparty\alpha_lcareg.h:56:#define LCA_IOC_STAT0	(LCA_IOC_BASE + 0x040)	/* Status 0 */
+GXEMUL-SEC/src\include\thirdparty\alpha_lcareg.h:66:#define LCA_IOC_STAT1	(LCA_IOC_BASE + 0x060)	/* Status 1 */
+GXEMUL-SEC/src\include\thirdparty\alpha_lcareg.h:69:#define	LCA_IOC_TBIA	(LCA_IOC_BASE + 0x080)	/* TLB Invalidate All */
+GXEMUL-SEC/src\include\thirdparty\alpha_lcareg.h:70:#define	LCA_IOC_TB_ENA	(LCA_IOC_BASE + 0x0a0)	/* TLB Enable */
+GXEMUL-SEC/src\include\thirdparty\alpha_lcareg.h:73:#define LCA_IOC_W_BASE0	(LCA_IOC_BASE + 0x100)	/* Window Base */
+GXEMUL-SEC/src\include\thirdparty\alpha_lcareg.h:74:#define LCA_IOC_W_MASK0	(LCA_IOC_BASE + 0x140)	/* Window Mask */
+GXEMUL-SEC/src\include\thirdparty\alpha_lcareg.h:75:#define LCA_IOC_W_T_BASE0 (LCA_IOC_BASE + 0x180) /* Translated Base */
+GXEMUL-SEC/src\include\thirdparty\alpha_lcareg.h:77:#define LCA_IOC_W_BASE1	(LCA_IOC_BASE + 0x120)	/* Window Base */
+GXEMUL-SEC/src\include\thirdparty\alpha_lcareg.h:78:#define LCA_IOC_W_MASK1	(LCA_IOC_BASE + 0x160)	/* Window Mask */
+GXEMUL-SEC/src\include\thirdparty\alpha_lcareg.h:79:#define LCA_IOC_W_T_BASE1 (LCA_IOC_BASE + 0x1a0) /* Translated Base */
+GXEMUL-SEC/src\include\thirdparty\alpha_lcareg.h:99:#define	IOC_W_T_BASE	0x00000000fffffc00ULL	/* page table base */
+GXEMUL-SEC/src\devices\dev_lca.c:51:struct lca_data {
+GXEMUL-SEC/src\devices\dev_lca.c:54:	uint64_t		ioc_conf;
+GXEMUL-SEC/src\devices\dev_lca.c:55:	uint64_t		tlb_enable;
+GXEMUL-SEC/src\devices\dev_lca.c:56:	uint64_t		window_base_0;
+GXEMUL-SEC/src\devices\dev_lca.c:57:	uint64_t		window_mask_0;
+GXEMUL-SEC/src\devices\dev_lca.c:58:	uint64_t		window_t_base_0;
+GXEMUL-SEC/src\devices\dev_lca.c:59:	uint64_t		window_base_1;
+GXEMUL-SEC/src\devices\dev_lca.c:60:	uint64_t		window_mask_1;
+GXEMUL-SEC/src\devices\dev_lca.c:61:	uint64_t		window_t_base_1;
+GXEMUL-SEC/src\devices\dev_lca.c:93:	struct lca_data *d = (struct lca_data *) extra;
+GXEMUL-SEC/src\devices\dev_lca.c:121:	bus = d->ioc_conf & 1;
+GXEMUL-SEC/src\devices\dev_lca.c:185:	struct lca_data *d = (struct lca_data *) extra;
+GXEMUL-SEC/src\devices\dev_lca.c:190:	switch (relative_addr + LCA_IOC_BASE) {
+GXEMUL-SEC/src\devices\dev_lca.c:192:	case LCA_IOC_BASE:
+GXEMUL-SEC/src\devices\dev_lca.c:196:	case LCA_IOC_CONF:
+GXEMUL-SEC/src\devices\dev_lca.c:198:			odata = d->ioc_conf;
+GXEMUL-SEC/src\devices\dev_lca.c:200:			d->ioc_conf = idata;
+GXEMUL-SEC/src\devices\dev_lca.c:220:	case LCA_IOC_TBIA:
+GXEMUL-SEC/src\devices\dev_lca.c:225:	case LCA_IOC_TB_ENA:
+GXEMUL-SEC/src\devices\dev_lca.c:227:			odata = d->tlb_enable;
+GXEMUL-SEC/src\devices\dev_lca.c:229:			d->tlb_enable = idata;
+GXEMUL-SEC/src\devices\dev_lca.c:232:				fatal("TODO: LCA_IOC_TB_ENA value "
+GXEMUL-SEC/src\devices\dev_lca.c:240:	case LCA_IOC_W_BASE0:
+GXEMUL-SEC/src\devices\dev_lca.c:242:			odata = d->window_base_0;
+GXEMUL-SEC/src\devices\dev_lca.c:244:			d->window_base_0 = idata;
+GXEMUL-SEC/src\devices\dev_lca.c:247:				fatal("TODO: LCA_IOC_W_BASE0 value differs"
+GXEMUL-SEC/src\devices\dev_lca.c:255:	case LCA_IOC_W_MASK0:
+GXEMUL-SEC/src\devices\dev_lca.c:257:			odata = d->window_mask_0;
+GXEMUL-SEC/src\devices\dev_lca.c:259:			d->window_mask_0 = idata;
+GXEMUL-SEC/src\devices\dev_lca.c:262:				fatal("TODO: LCA_IOC_W_MASK0 value differs"
+GXEMUL-SEC/src\devices\dev_lca.c:270:	case LCA_IOC_W_T_BASE0:
+GXEMUL-SEC/src\devices\dev_lca.c:272:			odata = d->window_t_base_0;
+GXEMUL-SEC/src\devices\dev_lca.c:274:			d->window_t_base_0 = idata;
+GXEMUL-SEC/src\devices\dev_lca.c:279:	case LCA_IOC_W_BASE1:
+GXEMUL-SEC/src\devices\dev_lca.c:281:			odata = d->window_base_1;
+GXEMUL-SEC/src\devices\dev_lca.c:283:			d->window_base_1 = idata;
+GXEMUL-SEC/src\devices\dev_lca.c:286:				fatal("TODO: LCA_IOC_W_BASE1 value differs"
+GXEMUL-SEC/src\devices\dev_lca.c:294:	case LCA_IOC_W_MASK1:
+GXEMUL-SEC/src\devices\dev_lca.c:296:			odata = d->window_mask_1;
+GXEMUL-SEC/src\devices\dev_lca.c:298:			d->window_mask_1 = idata;
+GXEMUL-SEC/src\devices\dev_lca.c:301:				fatal("TODO: LCA_IOC_W_MASK1 value differs"
+GXEMUL-SEC/src\devices\dev_lca.c:309:	case LCA_IOC_W_T_BASE1:
+GXEMUL-SEC/src\devices\dev_lca.c:311:			odata = d->window_t_base_1;
+GXEMUL-SEC/src\devices\dev_lca.c:313:			d->window_t_base_1 = idata;
+GXEMUL-SEC/src\devices\dev_lca.c:338:	struct lca_data *d;
+GXEMUL-SEC/src\devices\dev_lca.c:340:	CHECK_ALLOCATION(d = (struct lca_data *) malloc(sizeof(struct lca_data)));
+GXEMUL-SEC/src\devices\dev_lca.c:341:	memset(d, 0, sizeof(struct lca_data));
+GXEMUL-SEC/src\devices\dev_lca.c:369:	    LCA_IOC_BASE, 0x20000000, dev_lca_ioc_access, (void *)d,
+
+ succeeded in 195ms:
+83:static const char **debugmsg_subsystem_name = NULL;
+94:static int *debugmsg_breakpoint_level = NULL;
+95:static int debugmsg_n_breakpoints = 0;
+104:static const int default_verbosity = VERBOSITY_INFO;
+106:static size_t debug_indent = 0;
+107:static bool debug_old_currently_at_start_of_line = true;
+114: *  va_debug():
+118:static void va_debug(va_list argp, const char *fmt)
+146:static void debugmsg_va(struct cpu* cpu, int subsystem,
+308:void debugmsg(int subsystem, const char *name,
+325:void debugmsg_cpu(struct cpu* cpu, int subsystem, const char *name,
+345:void debug_indentation(int diff)
+365:void debug(const char *fmt, ...)
+379:	va_debug(argp, fmt);
+384:void fatal(const char *fmt, ...)
+389:	va_debug(argp, fmt);
+394:void debugmsg_set_verbosity_level(int subsystem, int verbosity)
+404:void debugmsg_add_verbosity_level(int subsystem, int verbosity_delta)
+459:void debugmsg_change_settings(char *subsystem_name, char *n)
+507:void debugmsg_print_settings(const char *subsystem_name)
+607:void debugmsg_print_breakpoints(void)
+672:void debugmsg_init()
+55: *
+56: *	Convert existing debug() and fatal() calls to the new debugmsg() call.
+57: *
+58: *	Make sure that all the hardcoded subsystems are actually used, and/or
+59: *	move registering to individual subsystems.
+60: */
+61:
+62:#include <stdarg.h>
+63:#include <stdbool.h>
+64:#include <stdio.h>
+65:#include <stdlib.h>
+66:#include <string.h>
+67:
+68:#include "console.h"
+69:#include "cpu.h"
+70:#include "emul.h"
+71:#include "machine.h"
+72:#include "misc.h"
+73:
+74:
+75:int verbose = 0;
+76:int quiet_mode = 0;
+77:
+78:extern bool emul_executing;
+79:extern bool single_step;
+80:extern bool about_to_enter_single_step;
+81:
+82:size_t debugmsg_nr_of_subsystems = 0;
+83:static const char **debugmsg_subsystem_name = NULL;
+84:int *debugmsg_current_verbosity = NULL;
+85:
+86:/*
+87: *  Breakpoints on subsystem messages: for each subsystem, the verbosity
+88: *  level at which messages trigger entry into the interactive debugger,
+89: *  or -1 when no breakpoint is set for that subsystem. (Lower value =
+90: *  more severe, so a message triggers when verbosity <= the level.)
+91: *  debugmsg_n_breakpoints counts subsystems with a breakpoint set, so
+92: *  that the common case (no breakpoints at all) is a single comparison.
+93: */
+94:static int *debugmsg_breakpoint_level = NULL;
+95:static int debugmsg_n_breakpoints = 0;
+96:
+97:/*
+98: *  #261: opt-in, default-OFF global "break on any ERROR-level message".
+99: *  Toggled by `breakpoint subsystem all error` / `... all off`, and checked
+100: *  in debugmsg_va() alongside the per-subsystem levels. Default 0 = no-op.
+101: */
+102:int debugmsg_break_on_error = 0;
+103:
+104:static const int default_verbosity = VERBOSITY_INFO;
+105:
+106:static size_t debug_indent = 0;
+107:static bool debug_old_currently_at_start_of_line = true;
+108:
+109:#define	DEBUG_BUFSIZE		2048
+110:#define	DEBUG_INDENTATION	4
+111:
+112:
+113:/*
+114: *  va_debug():
+115: *
+116: *  Used internally by the old debug() and fatal() functions.
+117: */
+118:static void va_debug(va_list argp, const char *fmt)
+119:{
+120:	char buf[DEBUG_BUFSIZE + 1];
+121:	buf[0] = buf[DEBUG_BUFSIZE] = 0;
+122:	vsnprintf(buf, DEBUG_BUFSIZE, fmt, argp);
+123:
+124:	char* s = buf;
+125:	while (*s) {
+126:		if (debug_old_currently_at_start_of_line) {
+127:			for (size_t i = 0; i < debug_indent * DEBUG_INDENTATION; i++)
+128:				printf(" ");
+129:		}
+130:
+131:		printf("%c", *s);
+132:
+133:		debug_old_currently_at_start_of_line = false;
+134:		if (*s == '\n' || *s == '\r')
+135:			debug_old_currently_at_start_of_line = true;
+136:		s++;
+137:	}
+138:}
+139:
+140:
+141:/*
+142: *  debugmsg_va():
+143: *
+144: *  Used internally by debugmsg().
+145: */
+
+ succeeded in 267ms:
+
+555:void wdc__write(struct cpu *cpu, struct wdc_data *d)
+584:static int status_byte(struct wdc_data *d, struct cpu *cpu)
+607:static void wdc_new_command_reset(struct wdc_data *d);
+609:DEVICE_ACCESS(wdc_altstatus)
+823:static void wdc_new_command_reset(struct wdc_data *d)
+836:void wdc_command(struct cpu *cpu, struct wdc_data *d, int idata)
+875:	case WDCC_READ:
+876:	case WDCC_READMULTI:
+884:	case WDCC_WRITE:
+885:	case WDCC_WRITEMULTI:
+893:	case WDCC_IDP:	/*  Initialize drive parameters  */
+899:	case SET_FEATURES:
+904:		case WDSF_SET_MODE:
+908:		default:d->error |= WDCE_ABRT;
+914:	case WDCC_RECAL:
+919:	case WDCC_IDENTIFY:
+920:	case ATAPI_IDENTIFY_DEVICE:
+932:	case WDCC_IDLE_IMMED:
+938:	case WDCC_SETMULTI:
+944:	case ATAPI_SOFT_RESET:
+950:	case ATAPI_PKT_CMD:
+958:	case WDCC_DIAGNOSE:
+966:	case WDCC_SEC_SET_PASSWORD:
+967:	case WDCC_SEC_UNLOCK:
+968:	case WDCC_SEC_ERASE_PREPARE:
+969:	case WDCC_SEC_ERASE_UNIT:
+970:	case WDCC_SEC_FREEZE_LOCK:
+971:	case WDCC_SEC_DISABLE_PASSWORD:
+979:		    when its data phase drains.  This arm and the `default:` arm
+1022:	default:/*  TODO  */
+1076:DEVICE_ACCESS(wdc)
+1010:		
+1011:		    It is kept as an ATTRIBUTED REPORT rather than deleted, because the
+1012:		    reachability it describes is why this arm was worth fixing at all --
+1013:		    but it is a seat's measurement, not this comment's, and a reader
+1014:		    who wants it must re-run a boot rather than cite this line.
+1015:		
+1016:		    The licence is protocol correctness at trivial cost, NOT a hang.
+1017:		    That much stands on the WDCS_BSY reading alone.  */
+1018:		d->error |= WDCE_ABRT;
+1019:		d->int_assert = 1;
+1020:		break;
+1021:
+1022:	default:/*  TODO  */
+1023:		/*  #464: `d->error |= WDCE_ABRT` STAYS OUTSIDE THE GUARD.
+1024:		    Inside it, the second unimplemented command silently
+1025:		    SUCCEEDS -- wdc_command() re-clears d->error per command,
+1026:		    so the guest is told the command worked.  A line-counting
+1027:		    oracle cannot see that; row `abrt 2nd` reads the status
+1028:		    register after the second command and can.
+1029:
+1030:		    ONE LINE PER DEVICE, NOT PER OPCODE.  A per-opcode set was
+1031:		    proposed and is FILED, not shipped: the scalar is what stops
+1032:		    a guest cycling 0x00..0xff for 256 lines, which is the flood
+1033:		    #464 exists to bound.  Row `unimpl 2op` pins the
+1034:		    per-device spec by firing TWO different opcodes and
+1035:		    demanding ONE line -- which also kills a
+1036:		    "last-warned-opcode" latch, under which an alternating guest
+1037:		    would flood forever.  */
+1038:		/*  #485: see the WDCC_SEC_* arm above for the invariant and the
+1039:		    warrant.  This is the other terminal arm that never raised its
+1040:		    completion interrupt.
+1041:
+1042:		    *** THE ASSERT IS OUTSIDE THE LATCH, AND THAT IS NOT A STYLE
+1043:		    CHOICE. ***  Moved inside `if (!d->warned_unimpl_cmd)` below,
+1044:		    only the FIRST unimplemented command per device would interrupt
+1045:		    and every later one would go silent again.  It is what a tidying
+1046:		    maintainer writes -- group the response with the warning -- and a
+1047:		    sweep using one fresh device per opcode CANNOT SEE IT, because
+1048:		    the latch is 0 on every leg.  Row `irq 2nd` exists for exactly
+1049:		    that mutant.
+1050:		
+1051:		    *** THAT SENTENCE NAMED A ROW `irq 2nd` THAT DOES NOT EXIST.
+1052:		    Repo-wide it occurred in this comment and nowhere else. ***  The
+1053:		    real artifact is an unnamed SUB-LEG of row_completion_irq(),
+1054:		    printing a `2nd` field inside a row named "a terminated command
+1055:		    raises its irq".  What makes the error dangerous rather than
+1056:		    untidy is the company it kept: the SAME sentence cites `abrt 2nd`,
+1057:		    which IS a real row -- so a true citation stood next to a
+1058:		    fabricated one and lent it credibility.
+1059:		
+1060:		    #464 already found the ABORT BIT wrongly inside
+1061:		    this same guard and shipped `abrt 2nd` for it; the interrupt
+1062:		    needed the same row.  */
+1063:		d->error |= WDCE_ABRT;
+1064:		d->int_assert = 1;
+1065:		if (!d->warned_unimpl_cmd) {
+1066:			d->warned_unimpl_cmd = 1;
+1067:			fatal("[ wdc: WARNING! Unimplemented command 0x%02x "
+1068:			    "(drive %i, head %i, cyl %i, sector %i, nsecs %i)"
+1069:			    " ]\n", d->cur_command, d->drive, d->head,
+1070:			    d->cyl_hi*256+d->cyl_lo, d->sector, d->seccnt);
+1071:		}
+1072:	}
+1073:}
+1074:
+1075:
+1076:DEVICE_ACCESS(wdc)
+1077:{
+1078:	struct wdc_data *d = (struct wdc_data *) extra;
+1079:	uint64_t idata = 0, odata = 0;
+1080:	int i;
+1081:
+1082:	relative_addr /= d->addr_mult;
+1083:
+1084:	if (!d->io_enabled)
+
+
+
+codex
+The tree uses several policies: silent storage, silent no-ops, bounded diagnostics, repeated diagnostics, masking, and device error responses. I also found a relevant counterexample: SH4’s RCR1 arm declines unsupported writes, and its comment explicitly discusses the former store-before-exit ordering. For LCA, both status registers still fall through to the terminating default; the header marks two bits in STAT0 as write-one-to-clear.
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n '(wdc_command\\(|int_assert|case.*error|case.*status|d->error|status_byte\\()' GXEMUL-SEC/src/devices/dev_wdc.c" in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n -C 6 'case SH4_RTCSR|bsc_rtcsr =' GXEMUL-SEC/src/devices/dev_sh4.c
+"'$sourceLines = Get-Content -LiteralPath '"'GXEMUL-SEC/src/devices/dev_sh4.c'
+foreach ("'$range in @(@(464,492),@(1698,1734))) { for ($lineNumber = $range[0]; $lineNumber -le $range[1]; $lineNumber++) { '"'{0}:{1}' -f "'$lineNumber, $sourceLines[$lineNumber-1] } }' in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'rg --files --hidden GXEMUL-SEC/src -g AGENTS.md
+$sourceLines = Get-Content -LiteralPath '"'GXEMUL-SEC/src/devices/dev_lca.c'
+"'$inIoc = $false
+$caseCount = 0
+$defaultCount = 0
+foreach ($sourceLine in $sourceLines) { if ($sourceLine -match '"'"'^DEVICE_ACCESS'"\\(lca_ioc\\)') { "'$inIoc = $true }; if ($inIoc -and $sourceLine -match '"'"'^DEVINIT'"\\(') { "'$inIoc = $false }; if ($inIoc -and $sourceLine -match '"'"'^'"\\s*case ') { "'$caseCount++ }; if ($inIoc -and $sourceLine -match '"'"'^'"\\s*default:') { "'$defaultCount++ } }
+'"'IOC case labels: {0}; default arms: {1}' -f "'$caseCount, $defaultCount
+rg -n '"'d->(ioc_conf|tlb_enable|window_base_[01]|window_mask_[01]|window_t_base_[01])' GXEMUL-SEC/src/devices/dev_lca.c" in C:\DocumentNoSnc\CC\GXEMUL
+ succeeded in 131ms:
+70:	int		int_assert;
+155:	if (d->int_assert)
+412:	 *  transmit loop in wdc_command()'s WDCC_IDENTIFY case pushes [i+1] before
+548:	d->int_assert = 1;
+579: *  status_byte():
+584:static int status_byte(struct wdc_data *d, struct cpu *cpu)
+594:	if (d->error)
+617:	odata = status_byte(d, cpu);
+757: *  #479: A COMMAND ENTERING wdc_command() STARTS WITHOUT THE PREVIOUS COMMAND'S
+768: *  wdc_command() cleared the ATAPI flag and the error and nothing else, so three
+798: *                    mistake in dev_asc.c, because wdc_command() runs far more often
+803: *  SCOPE.  TWO CALLERS: wdc_command(), and the ALT-CTRL arm on a real soft reset.
+805: *  *** THIS PARAGRAPH SAID "Called from wdc_command() only" AND PRESCRIBED WHAT WOULD
+834: *  wdc_command():
+836:void wdc_command(struct cpu *cpu, struct wdc_data *d, int idata)
+841:	d->error = 0;
+859:		d->error |= WDCE_ABRT;
+860:		d->int_assert = 1;
+867:		d->error |= WDCE_ABRT;
+868:		d->int_assert = 1;
+896:		d->int_assert = 1;
+908:		default:d->error |= WDCE_ABRT;
+911:		d->int_assert = 1;
+916:		d->int_assert = 1;
+929:		d->int_assert = 1;
+935:		d->int_assert = 1;
+941:		d->int_assert = 1;
+947:		d->int_assert = 1;
+953:		/*  d->int_assert = 1;  */
+961:		d->int_assert = 1;
+962:		d->error = 1;		/*  No error?  */
+975:		    few neighbours: every command wdc_command() FINISHES raises the
+1018:		d->error |= WDCE_ABRT;
+1019:		d->int_assert = 1;
+1023:		/*  #464: `d->error |= WDCE_ABRT` STAYS OUTSIDE THE GUARD.
+1025:		    SUCCEEDS -- wdc_command() re-clears d->error per command,
+1063:		d->error |= WDCE_ABRT;
+1064:		d->int_assert = 1;
+1234:					    The ATAPI_PKT_CMD arm of wdc_command() assigns only the flag and
+1254:					    wdc_command(), BEFORE the ATAPI_PKT_CMD case -- so every
+1374:					d->int_assert = 1;
+1384:					d->int_assert = 1;
+1569:			    `wdc_command(ATAPI_PKT_CMD)` sets PHASE_CMDOUT; a following
+1570:			    `wdc_command(WDCC_WRITE)` clears the flag at the top of that
+1683:					d->int_assert = 1;
+1729:				d->int_assert = 1;
+1783:				d->int_assert = 1;
+1841:	case wd_error:	/*  1: error (r), precomp (w)  */
+1843:			odata = d->error;
+1932:	case wd_command:	/*  7: command or status  */
+1934:			odata = status_byte(d, cpu);
+1939:			d->int_assert = 0;
+1942:			wdc_command(cpu, d, idata);
+1994:	d->error      = 1;
+
+ succeeded in 225ms:
+IOC case labels: 10; default arms: 1
+121:	bus = d->ioc_conf & 1;
+198:			odata = d->ioc_conf;
+200:			d->ioc_conf = idata;
+227:			odata = d->tlb_enable;
+229:			d->tlb_enable = idata;
+242:			odata = d->window_base_0;
+244:			d->window_base_0 = idata;
+257:			odata = d->window_mask_0;
+259:			d->window_mask_0 = idata;
+272:			odata = d->window_t_base_0;
+274:			d->window_t_base_0 = idata;
+281:			odata = d->window_base_1;
+283:			d->window_base_1 = idata;
+296:			odata = d->window_mask_1;
+298:			d->window_mask_1 = idata;
+311:			odata = d->window_t_base_1;
+313:			d->window_t_base_1 = idata;
+
+ succeeded in 229ms:
+2355-		if (writeflag == MEM_WRITE)
+2356-			d->bsc_pcr = idata;
+2357-		else
+2358-			odata = d->bsc_pcr;
+2359-		break;
+2360-
+2361:	case SH4_RTCSR:
+2362-		/*
+2363-		 *  Refresh Timer Control/Status Register.
+2364-		 *
+2365-		 *  This comment used to ask whether the manual called it
+2366-		 *  RTSCR while NetBSD called it RTCSR.  ANSWERED 2026-08-22
+2367-		 *  against a real SH7750 Hardware Manual (Rev.7.00,
+--
+2375-		if (writeflag == MEM_WRITE) {
+2376-			idata &= 0x00ff;
+2377-			if (idata & RTCSR_CMF) {
+2378-				idata = (idata & ~RTCSR_CMF)
+2379-				    | (d->bsc_rtcsr & RTCSR_CMF);
+2380-			}
+2381:			d->bsc_rtcsr = idata & 0x00ff;
+2382-		} else
+2383-			odata = d->bsc_rtcsr;
+2384-		break;
+2385-
+2386-	case SH4_RTCOR:
+2387-		/*  Refresh Time Constant Register (8 bits):  */
+464:		if (sh4_val_first(d, SH4_VAL_RTCSRINT, 0,
+465:		    d->bsc_rtcsr & (RTCSR_CMIE | RTCSR_OVIE)))
+466:			fatal("[ sh4: refresh interrupt enable(s) 0x%02x stored,"
+467:			    " but refresh-interrupt generation is not implemented"
+468:			    " -- each enable is reported once ]\n",
+469:			    (int) (d->bsc_rtcsr & (RTCSR_CMIE | RTCSR_OVIE)));
+470:		/*  TODO: Implement refresh interrupts etc.  */
+471:	}
+472:
+473:	/*  Timer interrupts:  */
+474:	for (i=0; i<N_SH4_TIMERS; i++) {
+475:		uint32_t step, cnt;
+476:
+477:		/*  Only update timers that are currently started:  */
+478:		if (!(d->tstr & (TSTR_STR0 << i)))
+479:			continue;
+480:
+481:		step = (uint32_t) (d->timer_hz[i] / SH4_PSEUDO_TIMER_HZ);
+482:		cnt  = d->tcnt[i];
+483:
+484:		/*
+485:		 *  #400: THE COUNTER'S CONVENTION, kept here because this is the
+486:		 *  only place in the tree that records it. TCNT counts
+487:		 *  TCOR, TCOR-1, ..., 1, 0 and then underflows to TCOR, so a
+488:		 *  period is TCOR+1 counts. That is an ASSUMPTION -- there is no
+489:		 *  SH-4 manual in this source collection -- and it is inherited
+490:		 *  from the comment this hunk replaces, which stated the intent as
+491:		 *  "Set tcnt[i] to tcor[i]" on underflow. Deleting that sentence
+492:		 *  without restating it would have removed the only evidence for
+1698:static int sh4_val_first(struct sh4_data *d, int cls, int instance, uint32_t bits)
+1699:{
+1700:	uint32_t fresh;
+1701:
+1702:	/*  Unreachable by construction: every caller passes a class from the SH4_VAL_*
+1703:	    list and an instance bounded by its own `case` fall-through.  Kept because
+1704:	    getting it wrong would be an out-of-bounds WRITE, not a wrong message, and
+1705:	    because it is free.  It SILENCES rather than reports, matching
+1706:	    sh4_pcic_first(); an unbounded key must not become an unbounded print.  */
+1707:	if (cls < 0 || cls >= SH4_VAL_NCLASS ||
+1708:	    instance < 0 || instance >= N_SH4_VAL_INST)
+1709:		return 0;
+1710:
+1711:	fresh = bits & ~d->val_reported[cls][instance];
+1712:	d->val_reported[cls][instance] |= bits;
+1713:
+1714:	return fresh != 0;
+1715:}
+1716:
+1717:
+1718:/*
+1719: *  #447: four value guards in the switch below ended the host process with exit(1) on
+1720: *  ONE ordinary guest store -- TCR, DMATCR, ICR and RCR1.  MEASURED on an unmodified
+1721: *  -E landisk, each with a matched surviving control at the SAME address and the SAME
+1722: *  width, so it is the VALUE that kills and not the address or the access width.
+1723: *
+1724: *  Fixed in the #438/#441/#443 shape -- keep the diagnostic, drop the exit(1), ignore
+1725: *  the write -- and the four arms differ in a way that is invisible at the call site:
+1726: *
+1727: *    RCR1    the store was UPSTREAM of the guard.  Dropping exit(1) alone would have
+1728: *            turned a host kill into SILENT STATE CORRUPTION.  Moved below the guard.
+1729: *    TCR     `timer_hz` was set from `idata & 3` BEFORE the guard and the debug() line
+1730: *            had already announced it, so the naive fix installs a timer frequency the
+1731: *            guest never asked for.  The guard moved ABOVE the prescaler switch.
+1732: *    DMATCR  the store is already downstream; nothing to move.
+1733: *    ICR     nothing is stored on any path, so there is no state to corrupt.
+1734: *
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$sourceLines = Get-Content -LiteralPath '"'GXEMUL-SEC/src/devices/dev_wdc.c'
+foreach ("'$range in @(@(145,163),@(584,605),@(1839,1853),@(1932,1958))) { for ($lineNumber = $range[0]; $lineNumber -le $range[1]; $lineNumber++) { '"'{0}:{1}' -f "'$lineNumber, $sourceLines[$lineNumber-1] } }' in C:\DocumentNoSnc\CC\GXEMUL
+ succeeded in 60ms:
+145:};
+146:
+147:
+148:#define COMMAND_RESET	0x100
+149:
+150:
+151:DEVICE_TICK(wdc)
+152:{ 
+153:	struct wdc_data *d = (struct wdc_data *) extra;
+154:
+155:	if (d->int_assert)
+156:		INTERRUPT_ASSERT(d->irq);
+157:}
+158:
+159:
+160:/*
+161: *  wdc_set_io_enabled():
+162: *
+163: *  Set io_enabled to zero to disable the I/O registers temporarily (e.g.
+584:static int status_byte(struct wdc_data *d, struct cpu *cpu)
+585:{
+586:	int odata = 0;
+587:	if (diskimage_exist(cpu->machine, d->drive + d->base_drive,
+588:	    DISKIMAGE_IDE))
+589:		odata |= WDCS_DRDY | WDCS_DSC;
+590:	if (d->inbuf_head != d->inbuf_tail)
+591:		odata |= WDCS_DRQ;
+592:	if (d->write_in_progress)
+593:		odata |= WDCS_DRQ;
+594:	if (d->error)
+595:		odata |= WDCS_ERR;
+596:	if (d->atapi_cmd_in_progress && (d->atapi_phase & WDCS_DRQ)) {
+597:		odata |= WDCS_DRQ;
+598:	}
+599:	return odata;
+600:}
+601:
+602:
+603:/*  #481: forward-declared so the ALT-CTRL arm below can call it.  A panel seat's
+604:    control mutant failed to compile for want of exactly this line and the failure
+605:    was briefly read as a design constraint against calling the shared helper; it
+1839:		break;
+1840:
+1841:	case wd_error:	/*  1: error (r), precomp (w)  */
+1842:		if (writeflag == MEM_READ) {
+1843:			odata = d->error;
+1844:			debug("[ wdc: read from ERROR: 0x%02x ]\n", (int)odata);
+1845:		} else {
+1846:			d->precomp = idata;
+1847:			debug("[ wdc: write to PRECOMP: 0x%02x ]\n",(int)idata);
+1848:		}
+1849:		break;
+1850:
+1851:	case wd_seccnt:	/*  2: sector count (or "ireason" for ATAPI)  */
+1852:		if (writeflag == MEM_READ) {
+1853:			odata = d->seccnt;
+1932:	case wd_command:	/*  7: command or status  */
+1933:		if (writeflag==MEM_READ) {
+1934:			odata = status_byte(d, cpu);
+1935:			if (!quiet_mode)
+1936:				debug("[ wdc: read from STATUS: 0x%02x ]\n",
+1937:				    (int)odata);
+1938:			INTERRUPT_DEASSERT(d->irq);
+1939:			d->int_assert = 0;
+1940:		} else {
+1941:			debug("[ wdc: write to COMMAND: 0x%02x ]\n",(int)idata);
+1942:			wdc_command(cpu, d, idata);
+1943:		}
+1944:		break;
+1945:
+1946:	default:
+1947:		if (writeflag==MEM_READ)
+1948:			debug("[ wdc: read from 0x%02x ]\n",
+1949:			    (int)relative_addr);
+1950:		else
+1951:			debug("[ wdc: write to  0x%02x: 0x%02x ]\n",
+1952:			    (int)relative_addr, (int)idata);
+1953:	}
+1954:
+1955:	/*  Assert interrupt, if necessary:  */
+1956:	dev_wdc_tick(cpu, extra);
+1957:
+1958:ret:
+
+codex
+VERDICT: Qualified yes. The six stores and your consumer analysis check out. Keeping those stores while removing the diagnostics and exits is consistent with the current model, but the sibling precedent does not establish hardware correctness or close the remaining termination paths.
+
+I read only `GXEMUL-SEC/src/`. Denominator: **all 10 cases plus `default` in `lca_ioc`; all six guarded arms; both translated-base siblings; all nine field-read sites across those eight fields**—eight readbacks and one functional consumer. No files were changed and no probes or tests were constructed.
+
+**1. All six stores precede their guards.**
+
+In `dev_lca.c`, `DEVICE_ACCESS(lca_ioc)`, each assignment is unconditional within its write branch. All six predicates match your list.
+
+| Register | Field | Readback line | Store line | Guard line |
+|---|---|---:|---:|---:|
+| [LCA_IOC_CONF](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:196) | `ioc_conf` | 198 | 200 | 203 |
+| [LCA_IOC_TB_ENA](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:225) | `tlb_enable` | 227 | 229 | 231 |
+| [LCA_IOC_W_BASE0](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:240) | `window_base_0` | 242 | 244 | 246 |
+| [LCA_IOC_W_MASK0](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:255) | `window_mask_0` | 257 | 259 | 261 |
+| [LCA_IOC_W_BASE1](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:279) | `window_base_1` | 281 | 283 | 285 |
+| [LCA_IOC_W_MASK1](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:294) | `window_mask_1` | 296 | 298 | 300 |
+
+**2. Five are storage-only; CONF has exactly one additional consumer.**
+
+Searching the field names and `struct lca_data` throughout the allowed tree found no additional uses. The five non-CONF fields have exactly the readbacks listed above.
+
+`ioc_conf` has **two reads total**: its register readback and `bus = d->ioc_conf & 1` in [`DEVICE_ACCESS(lca_pci_conf)`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:121). Extra bits are discarded **for bus selection**, while the IOC readback returns the stored value. Masking the store would therefore change the proposal’s readback policy; the existing bus consumer does not require it.
+
+The ordering establishes what has been assigned, but does not establish a successful-write contract: currently the rejected paths terminate. Your change deliberately lets them reach `return 1` and makes their stored values available to subsequent reads. [`DEVICE_ACCESS(lca_ioc)`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:327)
+
+**3. The sibling warrant supports consistency, with a substantial limit.**
+
+Both siblings have unrestricted store/readback handling:
+
+- [`LCA_IOC_W_T_BASE0`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:270): read at 272, store at 274.
+- [`LCA_IOC_W_T_BASE1`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:309): read at 311, store at 313.
+
+Both are in `DEVICE_ACCESS(lca_ioc)`, both say `TODO: Actually implement this`, and neither field has another consumer. They share the five storage-only fields’ downstream situation; CONF’s bus-selection consumer distinguishes it.
+
+The source cannot establish why no guard was written. The header identifies `IOC_W_T_BASE` as a page-table-base mask, showing architectural semantics that these handlers do not implement. Their permissiveness is evidence of an existing storage stub, not proof that arbitrary values are architecturally correct. [`alpha_lcareg.h`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/thirdparty/alpha_lcareg.h:99)
+
+**4. The tree uses more than two policies.**
+
+The grep-backed comparison below, together with point 5, covers **eight selected write arms**, plus relevant helpers and consumers. This is a behavioral sample, not a tree-wide prevalence census; I cannot substantiate which policy dominates.
+
+| Policy | Source and actual behavior |
+|---|---|
+| Silent storage | `dev_v3.c`, [`DEVICE_ACCESS(v3)`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_v3.c:208): LB MAP0 stores and reads back without a value guard. |
+| Silent no-op | `dev_jazz.c`, [`DEVICE_ACCESS(jazz)`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_jazz.c:356): `R4030_SYS_TL_IVALID` simply breaks, with an invalidation TODO. |
+| Decline with bounded diagnostics | `dev_sh4.c`, [`DEVICE_ACCESS(sh4)`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sh4.c:2795): unsupported RCR1 interrupt-enable writes leave the register unchanged. |
+| Store feature bits; diagnose later with a bound | `dev_sh4.c`, [`DEVICE_ACCESS(sh4)`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sh4.c:2375): RTCSR retains the unsupported interrupt-enable bits; [`sh4_timer_tick()`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sh4.c:464) reports them through a latch. |
+| Store with a repeatable diagnostic | `dev_sh4.c`, [`DEVICE_ACCESS(sh4)`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sh4.c:2809): RCR2 stores first, then calls `debug()` on each matching TODO condition. |
+| Mask storage and diagnose | `dev_pcc2.c`, [`DEVICE_ACCESS(pcc2)`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_pcc2.c:463): byte writes to VECBASE store a masked value and issue an unlatched diagnostic for excluded bits. |
+
+The SH4 bounded cases use [`sh4_val_first()`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sh4.c:1698), which records reported bits by class and instance.
+
+**Something else relevant:** the RCR1 comment explicitly discusses its former store-before-exit ordering and moving the store below the guard. The current code confirms rejection. That is a concrete counterexample to treating “the store already ran” as a general warrant for acceptance. [`DEVICE_ACCESS(sh4)`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sh4.c:2774)
+
+Also, `fatal()` itself **does not terminate**: it calls the returning printer `va_debug()`. `debug()` adds verbosity filtering. The explicit `exit(1)` is what terminates these LCA paths. [`core/debugmsg.c`, `fatal()` and `debug()`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/core/debugmsg.c:365)
+
+**5. Yes—your disposition list is incomplete.**
+
+Two additional dispositions have source examples:
+
+- **Continue with repeated announcements**, accepting or declining the write. RCR2 above accepts; byte writes to PSCALEADJ are ignored with an unlatched `fatal()` in `dev_pcc2.c`, [`DEVICE_ACCESS(pcc2)`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_pcc2.c:485).
+- **Complete with a guest-visible device error.** In `dev_wdc.c`, [`wdc_command()`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c:1063) sets `WDCE_ABRT` and requests an interrupt for every unsupported command, independently of its once-only diagnostic. [`DEVICE_ACCESS(wdc)`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c:1841) exposes the error register; [`DEVICE_TICK(wdc)`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c:151) asserts the requested interrupt.
+
+Those are existing alternatives, not evidence that LCA should acquire either policy.
+
+**6. The change leaves process termination and incomplete register semantics.**
+
+`DEVICE_ACCESS(lca_ioc)`’s [`default` arm](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:318) still diagnoses and exits for both reads and writes. Neither `LCA_IOC_STAT0` nor `LCA_IOC_STAT1` has a case.
+
+One correction to your wording: the header specifically marks **two bits in STAT0**, `IOC_STAT0_ERR` and `IOC_STAT0_LOST`, as R/W1C. It does not label STAT1 that way. [`alpha_lcareg.h`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/thirdparty/alpha_lcareg.h:56)
+
+Additional explicit exits remain in the same file’s [`DEVICE_ACCESS(lca_pci_conf)`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:132), [`DEVICE_ACCESS(lca_isa)`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:160), and [`lca_interrupt_assert()` / `lca_interrupt_deassert()`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:70).
+
+**The six-arm change can be complete while firmware can still terminate the emulator.** It removes six value-guard exits; it does not make the register file safe or implement the missing window/TLB behavior.
+tokens used
+79,309

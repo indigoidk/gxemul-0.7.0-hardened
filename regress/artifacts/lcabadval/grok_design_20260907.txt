@@ -1,0 +1,151 @@
+I'll verify the brief's premises against `GXEMUL-SEC/src/` first, then answer Q1–Q5 from the actual handlers rather than the census.The six guards store first and then kill; I’ll check Alpha exception delivery, the interrupt chain, and whether the header’s bitfields match those accepted constants.**VERDICT: NOT RATIFY as a six-armed one-design round until S5 and “six accept rows” are dropped.** One round can cover all six value guards, and the design is member 4 ACCEPT (delete `fatal`+`exit`, keep the store that already ran). Bitmask vs equality is a detector-shape split, not a fix-design split. S5 is the wrong in-file warrant. The stubs are a sibling (member 7), not a prerequisite of a text-keyed detector. FAULT is unavailable on Alpha.
+
+---
+
+## Premises — what holds, what does not
+
+**S1 count holds; S1 “four classes” does not.** I counted the live `exit(1)` sites in `GXEMUL-SEC/src/devices/dev_lca.c` by reading them, not by trusting the grep. Twelve textual hits, one inside the commented `dev >= 21` block, **11 live**. The brief then lists **five** classes and calls them four:
+
+| class | sites |
+|---|---|
+| interrupt stubs (no predicate) | `lca_interrupt_assert` / `_deassert` |
+| bus / cycle-type | `bus != 0` |
+| range / lane | `ofs > len` |
+| value | six `if (idata…)` arms |
+| default / unmapped offset | `default:` |
+
+That is the enumeration error the opener asked for, and it is in S1’s own headline. The same slip is already in the ledger state note: *“11 live, in four classes (2 interrupt, 1 bus, 1 range, 6 value, 1 default)”*.
+
+**S2’s six predicates hold.** They are exactly the `if (idata` tests in `DEVICE_ACCESS(lca_ioc)`. Three accept one value (`W_MASK0` `{0x700000}`, `W_BASE1` `{0x240000000}`, `W_MASK1` `{0x3ff00000}`); three accept two (`IOC_CONF` `{0,1}`, `TB_ENA` `{0,0x80}`, `W_BASE0` `{0, 0x300800000}`).
+
+**“The accept-row set is SIX” conflates predicates with pinning values.** De-escalation owes a row per **predicate**, but W_BASE0’s predicate is a conjunction of two accepted constants, and both bitmask arms accept `{0, mask}`. That is **nine pinning values**, not six rows, and three of the nines are reset `0` (vacuous unless sequenced after a nonzero write). The earlier census that dropped `W_BASE1`/`W_MASK1` is real; replacing “four” with “six” still under-counts what the detector has to pin.
+
+**S3 holds** as a statement about `#506`: the IOC_CONF diagnostic is now `0x%" PRIx64"` with `(uint64_t)idata`, matching the five siblings. I did not re-run the probe (you forbade it). The text-oracle prerequisite is discharged **for IOC_CONF**. It is not a licence to key survival on exit status.
+
+**S4 is right about the machine, slightly overclaimed about the six arms.** `machine_alpha.c` adds `"lca"` only under `ST_ALPHABOOK1`. `lca_confwidth_probe.py` has driven a guest `stq` into `LCA_IOC_CONF` on stock `alphabook1`. That proves the **device window**. The other five labels are the same `DEVICE_ACCESS(lca_ioc)` at header offsets inside a `0x20000000` mapping — inferred from the switch, not measured. A miss at those offsets is still this handler (HAE at +0 is silent; `STAT0`/`STAT1` at +0x40/+0x60 hit `default:` and still kill).
+
+**S5 does not transfer. This is the load-bearing refusal.** The live `dev = 0` path is PCI type-0 **tag decode**, not a register-value policy. A prior design pass already said so, and the source still says so: it aliases “no device selected” onto **slot 0**, which is empty today only because the installed SIO is device 7. Populate slot 0 and it is a latent alias, already filed as `lcashiftub` on the same loop. Substituting `0x700000` when firmware wrote `IOC_W_MASK_1M` (0) would be that same alias pointed at a documented encoding. **Do not cite S5 as “decline with a safe default” for these six.**
+
+---
+
+## Q1 — one round for the six; split everything else
+
+**One round, one fix design, all six value guards.** Same device, same handler, same shape (store `idata`, then kill on a developer whitelist), same detector (guest `stq` + guest `ldq` through the same decode, unique `fatal()` text). The bitmask/equality difference is how you **write the rows and the (d) mutants**, not a second product patch.
+
+**Do not split bitmask vs equality.** Five of the six fields are pure storage: `window_base_*`, `window_mask_*`, `tlb_enable` appear only as `odata = d->X` / `d->X = idata`. The sixth, `ioc_conf`, is consumed only as `bus = d->ioc_conf & 1` in `DEVICE_ACCESS(lca_pci_conf)`. Extra CONF bits are already discarded at the only consumer. A masked store (`idata & 1`) is an unlicensed extra under the addition licence; it is not required for correctness of anything that exists today.
+
+**The in-file warrant is `W_T_BASE0` / `W_T_BASE1`, not S5.** Those two sibling window registers already store any value and do not kill. Base/mask killing on a firmware snapshot while translated-base accepts everything is the file’s own outlier, not a second class.
+
+**Split these out (different member, different oracle, some already filed):**
+
+- interrupt stubs → member 7 IMPLEMENT (or the conflicting empty-TODO swallow; that argument is its own round)
+- `bus != 0` → type-1 config; deleting that `exit` **leaves `dev` uninitialized** in the `else` (sketch rule). Not a rider.
+- `ofs > len` → already `lcaisalane`; `ofs` is address bits 5–6
+- `default:` → documented `STAT0`/`STAT1` live here. Firmware that survives the six can still die on a status read/write
+
+Fixing the six does **not** make chipset init survive. Do not sell it as that.
+
+---
+
+## Q2 — member 4 ACCEPT on all six; FAULT is off the menu
+
+Every guarded assignment is:
+
+```c
+d->field = idata;
+if (/* whitelist */) { fatal(...); exit(1); }
+```
+
+The store has already landed. Deleting the kill **is** ACCEPT of whatever was written. That is member 4 (keep the value the model already computed), not member 6 (invent storage — the fields exist) and not DELETE of the write.
+
+| member | why not (or why) |
+|---|---|
+| **4 ACCEPT** | **This one.** Store already happened; five fields have no consumer; `ioc_conf` extra bits unused at `bus = d->ioc_conf & 1`; T_BASE siblings already accept; header encodings the whitelist rejects are documented (below). No latch: a message that says “unimplemented” about a value that stores and reads back is the footbridge wrong-record. |
+| 1 DELETE | Of the *check*, this is 4. Of the write arm, it loses readback. |
+| 2 silent decline | Requires moving the store after the check and dropping “bad” writes. Guest reads back the previous value (reset 0). For `W_MASK0` that previous value is the documented 1 MB encoding the old guard killed on — the readback would lie. |
+| 3 decline + latched announce | House idiom for a real refusal. These writes are not refusals once the store is kept. |
+| 5 FAULT | **Unavailable.** `memory_rw.c`’s failed-device path raises `mips_cpu_exception` / `m88k_exception` only. Alpha takes the `debug("[ … failed ]")` and `return MEMORY_ACCESS_FAILED` with **no** CPU exception. `dev_unreadable.c`’s `return 0` does not become a guest bus error here. `alphafaultclaim` is the same fact from the instruction side. A FAULT proposal owes Alpha exception delivery first. |
+| 6 BACKED ACCEPT | Storage already exists. |
+| 7 IMPLEMENT | DMA windows / SGMAP / TB is a feature. Out of scope. **This is the member for the interrupt stubs**, which have no predicate. |
+| S5 “safe default” | Rejected above. |
+
+**Header, not guesswork** (`alpha_lcareg.h`):
+
+- `W_MASK0` accepts only `IOC_W_MASK_8M`. `IOC_W_MASK_1M` is `0` — documented, reset, and fatal.
+- `W_MASK1` accepts `IOC_W_MASK_1G`. The other eleven sizes in the same table kill.
+- `W_BASE0` `0x300800000` = `WEN|SG|0x800000`. `0` (disable window 0) is accepted.
+- `W_BASE1` `0x240000000` = `WEN|0x40000000` (no SG). **Disabling window 1 (WEN clear, including 0) kills.**
+
+There is no LCA datasheet in `_scratchpad/`. The vendored header is the in-tree authority, and it already shows the whitelist is a firmware snapshot, not the architecture.
+
+**IOC_CONF is not a different product fix.** It is a different *consumer*. Write of `1` is accepted by this guard and **arms** the `bus != 0` kill on a later PCI config access. That is a coupling to a sibling round, not a reason to mask or decline this arm.
+
+Common tail of `lca_ioc` is `memory_writemax64` on read then `return 1`. Any edit that `return`s from a case skips that. Use `break`.
+
+---
+
+## Q3 — all six can carry an accept row; none is filtered; “six rows” is still the wrong picture
+
+`idata` comes from `memory_readmax64` with **no** store-arm filter. None of these is write-1-to-clear, read-only, or stripped before the predicate. **All six predicates can carry an accept row.**
+
+Values a guest can actually put in the operand (and that the accept row must use):
+
+| arm | predicate | pin these | trap |
+|---|---|---|---|
+| IOC_CONF | `idata & ~1` | `1`, then `0` | `0` is reset — vacuous unless after `1`. Existing `ioc rt` already pins `1`. `1` arms `bus != 0`; do **not** follow with PCI config. |
+| TB_ENA | `idata & ~IOC_TB_ENA_TEN` | `0x80`, then `0` | same reset-0 trap |
+| W_BASE0 | `!= 0 && != 0x300800000` | **both** `0x300800000` **and** `0` (after the magic) | `0` is the ordinary disable and the reset value. A row that only writes the magic misses the conjunct the brief itself names. Magic needs **`stq`**: WEN/SG live in bits 33/32. `stl` of that constant becomes `0x00800000` and is currently fatal. |
+| W_MASK0 | `!= 0x700000` | `0x700000` | `0` is **not** an accept value; it is `IOC_W_MASK_1M` and is the decline/survival pin for clause (a)/(b) |
+| W_BASE1 | `!= 0x240000000` | `0x240000000` | needs **`stq`** (WEN in bit 33). `0` disables the window and currently kills — another (a)/(b) pin, not an accept pin |
+| W_MASK1 | `!= 0x3ff00000` | `0x3ff00000` | same as MASK0: `0` is not accept |
+
+**None of the six “cannot carry an accept row.”** The ones that look like they can’t (`0` on MASK0/BASE1/MASK1) cannot carry a **0-accept** row because `0` is not on the accept side of those predicates. That is the opposite of “write-1-to-clear / read-only / filtered.”
+
+Floor (a) forbids an accept-only detector: on the committed build, writing the magic constants **survives**. Without rows that write a currently-rejected documented value (MASK0 `0`, BASE1 `0`, CONF `0x100000000`, a non-8M mask, …) and assert **survival after the fix** (and death or unique text before it), the detector is green on HEAD.
+
+`lca_confwidth_probe.py` is a **#506 witness**. Its `kill fired` / `died` wants will invert if this round ships. Re-pin that script before treating it as this detector; do not launder by editing wants after the product change.
+
+---
+
+## Q4 — sibling, not prerequisite; text is sufficient to **name** the kill, not to **protect** a survival row
+
+`DEVINIT(lca)` registers the stubs on `%s.lca` and passes that path to `bus_isa_init`. `isa_interrupt_common` does `INTERRUPT_ASSERT(d->irq)` when PIC1 `irr & ~ier` **changes**. Construction does not currently fire them: PIC `ier`/`irr` start at 0, 8253 is `in_use=0`, WDC is only added if an IDE image exists, ns16550 asserts only with `com_ier` bits. The #506 probe’s legal session already survived on this machine. Opus’s 2026-08-31 note matches the source.
+
+So:
+
+- **Exit status cannot tell a value-guard kill from a stub kill.** That is true and is why rows match unique `fatal()` text (`IOC_CONF:`, `LCA_IOC_TB_ENA`, `W_BASE0`, `W_MASK0`, `W_BASE1`, `W_MASK1`, vs `lca_interrupt_assert: TODO`).
+- **Text is sufficient to attribute.** A stub kill cannot satisfy an IOC_CONF text row.
+- **Text is not a survival oracle.** An accept row that wants `alive` still false-reds if a stub fires. That is controlled by **session shape** (cold prompt, `step`, do not touch the ISA window, PIT `in_use=0`), which the existing probe already uses — not by de-fatalising the stubs first.
+- **A boot / free-running witness would make the stubs a prerequisite.** `timer_stop` during debugger interaction is why stepping does not tick the PIT; a boot will. That is a different witness rung and a different round (member 7, and `irq_asserted` is still unread in the Alpha loop).
+
+`#506` was the prerequisite of the **IOC_CONF text** oracle. That landed. The stubs are not a second prerequisite of this round’s detector.
+
+---
+
+## Q5 — smallest edit that still passes: leave `W_MASK1` (or `W_BASE1`) fatal; `ioc rt` stays green
+
+The brief’s own history is the mutant. An earlier census dropped `W_BASE1` and `W_MASK1`. A repair that deletes `exit(1)` on five arms and leaves `W_MASK1` (or `W_BASE1`) in place is incomplete clause (b).
+
+**Row that stays green:** `ioc rt` in `lca_confwidth_probe.py` (IOC_CONF `stq` of `0x1`, guest `ldq` of `0x1`). Any other row aimed at CONF/TB_ENA/BASE0/MASK0 likewise. Nothing in that probe touches MASK1.
+
+Second, almost as small, on W_BASE0 only: drop `idata != 0ULL &&` and keep `idata != 0x300800000ULL` (or, after a full delete, re-introduce `if (idata == 0ULL) exit(1)`). The **magic** BASE0 accept row stays green. That is why BASE0 owes **two** accept pins, and why “six rows for six arms” is the (d) hole.
+
+Third, if someone “accepts” by deleting five equality kills and **keeping** `if (idata & ~1) exit(1)` on CONF: every window row stays green; only CONF-illegal rows would redden. Conditioning the remaining kill on a field the body reads (`d->ioc_conf` after the store is equivalent to `idata` — not a discriminator). The discriminating (d) forms here are **site omission** and **dropping one disjunct of a two-value predicate**, not an operand swap.
+
+A detector that only writes the six currently-legal constants is green under **verbatim reinstatement of all six original guards**. That is the vacuity-floor miss. The rows that make (b) bite are the documented-rejected writes (MASK0 `0`, BASE1 with WEN clear, CONF bit 32, a non-TEN TB_ENA bit).
+
+---
+
+## Something else, found while checking
+
+1. **`default:` still kills `STAT0`/`STAT1`**, which the header documents (`ERR`/`LOST` are R/W1C). This round can be green and firmware can still die. Name that in the contract as out of scope, or it will be reported as a false pass of “LCA no longer host-kills on IOC MMIO.”
+
+2. **HAE (`case LCA_IOC_BASE`) already silently ignores writes** to a documented register. That is the file’s other “unimplemented register” disposition, and it is member 2, not 4. Do not unify it with the six in this patch.
+
+3. **`bus != 0` is not “non-zero bus number.”** It is `ioc_conf & 1` as PCI **cycle type**. The `else` does not assign `dev`. A later de-fatalisation that just deletes that `exit(1)` is an uninitialized `dev` handed to `bus_pci_setaddr`. Sketch it against the whole function when that round happens.
+
+4. **Width is unguarded in `lca_ioc`.** Accept rows for WEN/SG constants are `stq` or they are a different (currently fatal) value. The #506 probe already had to learn that LDA/LDAH cannot build bit 32.
+
+5. **Empty `sh3_cpu_interrupt_*` TODOs** are an in-tree silent-ignore for unimplemented *callbacks*, in conflict with member 7. That conflict belongs on the stub round, not here. I am not settling it.
+
+6. **S5’s loop is UB at `dev == 20`** (`0x800 << 20` in a signed `int`). Already `lcashiftub`. Citing that path as the model fix is citing a defect as a warrant.

@@ -37,9 +37,14 @@
 #  indistinguishable from the defect this probe exists to witness.  THREE independent controls,
 #  because one is not enough:
 #
-#    * `pc adv'  -- pc must advance by exactly 4.  An untranslatable word reaches the shared `bad'
-#                  label, which sets cpu->running = 0 and redirects to nothing_call (it does NOT
-#                  exit the host), so a bad encoding STOPS THE MACHINE and pc does not move.
+#    * `pc adv'  -- pc must advance by exactly 4.  A word the decoder cannot translate does not
+#                  quietly do nothing.  *** AN EARLIER DRAFT SAID IT ALWAYS REACHES THE SHARED
+#                  `bad' LABEL AND SETS cpu->running = 0.  THAT IS STALE: `#312' added an
+#                  UNDEFINED-INSTRUCTION route, and cpu_arm_instr.c says so in its own words --
+#                  "Routing to und fixes that", "This is where the und routing lives now" -- while
+#                  a `goto bad' remains for other cases.  So the claim is true of SOME encodings
+#                  and false as stated.  Either way pc does not land on CODE+4 with r0 set, which
+#                  is what this row actually tests. ***
 #    * `mid'     -- UBFX r0,r1,#4,#8 must give 0xde.  A small nonzero answer that only a correctly
 #                  encoded, correctly executed instruction produces.
 #    * `live'    -- a plain MOV proves plant/step/print works before any bitfield word is tried.
@@ -249,9 +254,25 @@ row("s w32", r0 if alive else "died", "0x89abcdef",
 #  field.  No row had an SBFX field whose top bit is CLEAR, so nothing could see it. ***
 #      SBFX #1,#4 of 0x89abcdef: (V >> 1) & 0xf = 0x7, bit 3 CLEAR -> NOT sign-extended -> 0x7
 #      under always-extend:      0x7 | ~0xf = 0xfffffff7
+row("s w32 pc", pc if alive else "died", "0x%x" % (CODE + 4),
+    "CONTROL: the SBFX word EXECUTED -- see the note below")
+#  *** ADDED BY PASS 2.  An earlier draft of this probe, its CHANGELOG block AND its commit
+#  message all said `pc adv = 0x8004' holds "on EVERY row".  IT DID NOT: only `pc adv', `mid pc'
+#  and `w32 pc' asserted pc, and all three are MOV/UBFX.  NO SBFX ROW CHECKED PC AT ALL -- and the
+#  SBFX rows are the ones whose expected failure value is also EXACTLY ZERO, which is precisely
+#  the case the pc control exists to disambiguate.  Named by the codex seat. ***
+
 t, alive, r0, pc = run_word(sbfx(1, 4))
 row("s clear", r0 if alive else "died", "0x7",
     "SBFX #1,#4 -> field 0x7, top bit CLEAR: must NOT sign-extend")
+
+#  *** ADDED BY PASS 2: SBFX AT WIDTH 31 WAS ENTIRELY UNTESTED. ***  The round's headline claim --
+#  "only the width-32 case is observable" -- rested on a UBFX width-31 row and generalised to SBFX
+#  with no evidence.  SBFX #0,#31 of 0x89abcdef masks to 0x09abcdef, whose bit 30 is CLEAR, so it
+#  must NOT sign-extend.  (codex.)
+t, alive, r0, pc = run_word(sbfx(0, 31))
+row("s w31", r0 if alive else "died", "0x9abcdef",
+    "SBFX #0,#31: bit 30 CLEAR, so no sign extension -- and it pins SBFX at width 31 at all")
 
 ok = sum(1 for _, o in rows if o)
 print()

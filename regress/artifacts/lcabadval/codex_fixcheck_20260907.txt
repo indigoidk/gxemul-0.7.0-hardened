@@ -1,0 +1,73 @@
+VERDICT: Qualified yes. The six stores and your consumer analysis check out. Keeping those stores while removing the diagnostics and exits is consistent with the current model, but the sibling precedent does not establish hardware correctness or close the remaining termination paths.
+
+I read only `GXEMUL-SEC/src/`. Denominator: **all 10 cases plus `default` in `lca_ioc`; all six guarded arms; both translated-base siblings; all nine field-read sites across those eight fields**—eight readbacks and one functional consumer. No files were changed and no probes or tests were constructed.
+
+**1. All six stores precede their guards.**
+
+In `dev_lca.c`, `DEVICE_ACCESS(lca_ioc)`, each assignment is unconditional within its write branch. All six predicates match your list.
+
+| Register | Field | Readback line | Store line | Guard line |
+|---|---|---:|---:|---:|
+| [LCA_IOC_CONF](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:196) | `ioc_conf` | 198 | 200 | 203 |
+| [LCA_IOC_TB_ENA](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:225) | `tlb_enable` | 227 | 229 | 231 |
+| [LCA_IOC_W_BASE0](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:240) | `window_base_0` | 242 | 244 | 246 |
+| [LCA_IOC_W_MASK0](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:255) | `window_mask_0` | 257 | 259 | 261 |
+| [LCA_IOC_W_BASE1](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:279) | `window_base_1` | 281 | 283 | 285 |
+| [LCA_IOC_W_MASK1](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:294) | `window_mask_1` | 296 | 298 | 300 |
+
+**2. Five are storage-only; CONF has exactly one additional consumer.**
+
+Searching the field names and `struct lca_data` throughout the allowed tree found no additional uses. The five non-CONF fields have exactly the readbacks listed above.
+
+`ioc_conf` has **two reads total**: its register readback and `bus = d->ioc_conf & 1` in [`DEVICE_ACCESS(lca_pci_conf)`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:121). Extra bits are discarded **for bus selection**, while the IOC readback returns the stored value. Masking the store would therefore change the proposal’s readback policy; the existing bus consumer does not require it.
+
+The ordering establishes what has been assigned, but does not establish a successful-write contract: currently the rejected paths terminate. Your change deliberately lets them reach `return 1` and makes their stored values available to subsequent reads. [`DEVICE_ACCESS(lca_ioc)`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:327)
+
+**3. The sibling warrant supports consistency, with a substantial limit.**
+
+Both siblings have unrestricted store/readback handling:
+
+- [`LCA_IOC_W_T_BASE0`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:270): read at 272, store at 274.
+- [`LCA_IOC_W_T_BASE1`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:309): read at 311, store at 313.
+
+Both are in `DEVICE_ACCESS(lca_ioc)`, both say `TODO: Actually implement this`, and neither field has another consumer. They share the five storage-only fields’ downstream situation; CONF’s bus-selection consumer distinguishes it.
+
+The source cannot establish why no guard was written. The header identifies `IOC_W_T_BASE` as a page-table-base mask, showing architectural semantics that these handlers do not implement. Their permissiveness is evidence of an existing storage stub, not proof that arbitrary values are architecturally correct. [`alpha_lcareg.h`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/thirdparty/alpha_lcareg.h:99)
+
+**4. The tree uses more than two policies.**
+
+The grep-backed comparison below, together with point 5, covers **eight selected write arms**, plus relevant helpers and consumers. This is a behavioral sample, not a tree-wide prevalence census; I cannot substantiate which policy dominates.
+
+| Policy | Source and actual behavior |
+|---|---|
+| Silent storage | `dev_v3.c`, [`DEVICE_ACCESS(v3)`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_v3.c:208): LB MAP0 stores and reads back without a value guard. |
+| Silent no-op | `dev_jazz.c`, [`DEVICE_ACCESS(jazz)`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_jazz.c:356): `R4030_SYS_TL_IVALID` simply breaks, with an invalidation TODO. |
+| Decline with bounded diagnostics | `dev_sh4.c`, [`DEVICE_ACCESS(sh4)`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sh4.c:2795): unsupported RCR1 interrupt-enable writes leave the register unchanged. |
+| Store feature bits; diagnose later with a bound | `dev_sh4.c`, [`DEVICE_ACCESS(sh4)`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sh4.c:2375): RTCSR retains the unsupported interrupt-enable bits; [`sh4_timer_tick()`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sh4.c:464) reports them through a latch. |
+| Store with a repeatable diagnostic | `dev_sh4.c`, [`DEVICE_ACCESS(sh4)`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sh4.c:2809): RCR2 stores first, then calls `debug()` on each matching TODO condition. |
+| Mask storage and diagnose | `dev_pcc2.c`, [`DEVICE_ACCESS(pcc2)`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_pcc2.c:463): byte writes to VECBASE store a masked value and issue an unlatched diagnostic for excluded bits. |
+
+The SH4 bounded cases use [`sh4_val_first()`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sh4.c:1698), which records reported bits by class and instance.
+
+**Something else relevant:** the RCR1 comment explicitly discusses its former store-before-exit ordering and moving the store below the guard. The current code confirms rejection. That is a concrete counterexample to treating “the store already ran” as a general warrant for acceptance. [`DEVICE_ACCESS(sh4)`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sh4.c:2774)
+
+Also, `fatal()` itself **does not terminate**: it calls the returning printer `va_debug()`. `debug()` adds verbosity filtering. The explicit `exit(1)` is what terminates these LCA paths. [`core/debugmsg.c`, `fatal()` and `debug()`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/core/debugmsg.c:365)
+
+**5. Yes—your disposition list is incomplete.**
+
+Two additional dispositions have source examples:
+
+- **Continue with repeated announcements**, accepting or declining the write. RCR2 above accepts; byte writes to PSCALEADJ are ignored with an unlatched `fatal()` in `dev_pcc2.c`, [`DEVICE_ACCESS(pcc2)`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_pcc2.c:485).
+- **Complete with a guest-visible device error.** In `dev_wdc.c`, [`wdc_command()`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c:1063) sets `WDCE_ABRT` and requests an interrupt for every unsupported command, independently of its once-only diagnostic. [`DEVICE_ACCESS(wdc)`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c:1841) exposes the error register; [`DEVICE_TICK(wdc)`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c:151) asserts the requested interrupt.
+
+Those are existing alternatives, not evidence that LCA should acquire either policy.
+
+**6. The change leaves process termination and incomplete register semantics.**
+
+`DEVICE_ACCESS(lca_ioc)`’s [`default` arm](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:318) still diagnoses and exits for both reads and writes. Neither `LCA_IOC_STAT0` nor `LCA_IOC_STAT1` has a case.
+
+One correction to your wording: the header specifically marks **two bits in STAT0**, `IOC_STAT0_ERR` and `IOC_STAT0_LOST`, as R/W1C. It does not label STAT1 that way. [`alpha_lcareg.h`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/thirdparty/alpha_lcareg.h:56)
+
+Additional explicit exits remain in the same file’s [`DEVICE_ACCESS(lca_pci_conf)`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:132), [`DEVICE_ACCESS(lca_isa)`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:160), and [`lca_interrupt_assert()` / `lca_interrupt_deassert()`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:70).
+
+**The six-arm change can be complete while firmware can still terminate the emulator.** It removes six value-guard exits; it does not make the register file safe or implement the missing window/TLB behavior.

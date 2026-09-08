@@ -1315,12 +1315,19 @@ X(ubfx)
 
 	/*  #510: was `(1 << width) - 1'.  `width' is `1 + ((iword >> 16) & 31)', so
 	    it reaches 32 -- and `1' is a plain int, so the old expression was
-	    undefined at BOTH ends of that range: a shift count equal to the type's
-	    width at 32 (C99 6.5.7p3), and a signed overflow at 31 (6.5.7p4).
+	    undefined at THE TWO HIGHEST VALUES of that range: a shift count equal
+	    to the type's width at 32 (C99 6.5.7p3), and a signed overflow at 31
+	    (6.5.7p4).  (An earlier draft said "at BOTH ends", which is wrong for
+	    {1..32} -- the low end, width 1, is perfectly well defined.)
 
-	    ONLY THE 32 CASE IS OBSERVABLE, and the probe measured it: `UBFX
+	    IN THE WITNESS RUNS, ONLY THE WIDTH-32 RESULT ROWS FAILED: `UBFX
 	    r0,r1,#0,#32' of 0x89abcdef returned 0x0 on the committed build, while
-	    `#0,#31' returned the correct 0x9abcdef.
+	    `#0,#31' returned the correct 0x9abcdef.  (An earlier draft said "ONLY
+	    THE 32 CASE IS OBSERVABLE", which claims more than the runs establish --
+	    and at the time SBFX at width 31 was not tested AT ALL, so the claim
+	    generalised a UBFX row to the other function.  `s w31' now covers it.)
+	    Note also that a width-32 extract returns the whole register only for a
+	    LEGAL field, i.e. lsb = 0; the decoder does not enforce that.
 
 	    *** WHAT THAT MEASUREMENT IS, STATED PRECISELY, BECAUSE A PASS-2 SEAT
 	    CAUGHT AN EARLIER DRAFT OVERSTATING IT.  The rows observe the RESULT
@@ -1333,9 +1340,14 @@ X(ubfx)
 	    a wrong value on this host.  `1U' defends 31 and the guard defends 32 --
 	    but a guest-VALUE probe cannot establish that, because `1 << 31' and
 	    `1U << 31' yield the SAME mask after the `- 1'.  No row can kill a
-	    `1U' -> `1' regression; UBSAN or a source pin can.  This is
-	    `cpu_m88k_instr.c's idiom in X(clr) and X(set), where `w == 0' encodes 32
-	    for that architecture.  */
+	    UBSAN or a source pin can.
+
+	    The SHAPE comes from `cpu_m88k_instr.c's X(clr)/X(set), but the analogy
+	    needs care and an earlier draft ran the two together: there `w == 0'
+	    ENCODES full width and the guard selects the full-width mask instead of
+	    zero.  **It is not defending against a shift by 32 -- m88k's encoded
+	    count never reaches 32.**  Here the guard IS doing that job.  Same
+	    shape, different reason.  */
 	uint32_t mask = (width == 32) ? 0xffffffffU : ((1U << width) - 1);
 
 	x >>= lsb;
@@ -1362,13 +1374,20 @@ X(sbfx)
 
 	/*  #510: was `(1 << width) - 1'.  `width' is `1 + ((iword >> 16) & 31)', so
 	    it reaches 32 -- and `1' is a plain int, so the old expression was
-	    undefined at BOTH ends of that range: a shift count equal to the type's
-	    width at 32 (C99 6.5.7p3), and a signed overflow at 31 (6.5.7p4).
+	    undefined at THE TWO HIGHEST VALUES of that range: a shift count equal
+	    to the type's width at 32 (C99 6.5.7p3), and a signed overflow at 31
+	    (6.5.7p4).  (An earlier draft said "at BOTH ends", which is wrong for
+	    {1..32} -- the low end, width 1, is perfectly well defined.)
 
-	    ONLY THE 32 CASE IS OBSERVABLE, and the probe measured it HERE, on SBFX:
-	    the `s w32' row returned 0x0 on the committed build.  (An earlier draft
-	    of this block was a VERBATIM COPY of the ubfx one and quoted a UBFX
-	    measurement -- a sentence about the other function.)
+	    IN THE WITNESS RUNS, ONLY THE WIDTH-32 RESULT ROWS FAILED: the `s w32'
+	    row returned 0x0 on the committed build.  (An earlier draft of this block
+	    was a VERBATIM COPY of the ubfx one and quoted a UBFX measurement -- a
+	    sentence about the other function.)
+
+	    *** AND WHEN THAT SENTENCE WAS FIRST WRITTEN, SBFX AT WIDTH 31 WAS NOT
+	    TESTED AT ALL -- the claim generalised a UBFX row to this function, which
+	    is the same copy-the-neighbour defect one paragraph up, committed while
+	    correcting it.  `s w31' now pins it.  A pass-2 seat named both. ***
 
 	    *** WHAT THAT MEASUREMENT IS, STATED PRECISELY, BECAUSE A PASS-2 SEAT
 	    CAUGHT AN EARLIER DRAFT OVERSTATING IT.  The rows observe the RESULT
@@ -1381,9 +1400,14 @@ X(sbfx)
 	    a wrong value on this host.  `1U' defends 31 and the guard defends 32 --
 	    but a guest-VALUE probe cannot establish that, because `1 << 31' and
 	    `1U << 31' yield the SAME mask after the `- 1'.  No row can kill a
-	    `1U' -> `1' regression; UBSAN or a source pin can.  This is
-	    `cpu_m88k_instr.c's idiom in X(clr) and X(set), where `w == 0' encodes 32
-	    for that architecture.  */
+	    UBSAN or a source pin can.
+
+	    The SHAPE comes from `cpu_m88k_instr.c's X(clr)/X(set), but the analogy
+	    needs care and an earlier draft ran the two together: there `w == 0'
+	    ENCODES full width and the guard selects the full-width mask instead of
+	    zero.  **It is not defending against a shift by 32 -- m88k's encoded
+	    count never reaches 32.**  Here the guard IS doing that job.  Same
+	    shape, different reason.  */
 	uint32_t mask = (width == 32) ? 0xffffffffU : ((1U << width) - 1);
 	x >>= lsb;
 	x &= mask;

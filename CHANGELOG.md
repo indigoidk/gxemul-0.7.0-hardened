@@ -50,25 +50,68 @@ rather than after: `cpu_m88k_instr.c:532` and `:539`, in `X(clr)` and `X(set)` �
 **WITNESS, rung 3, unmodified `-E testarm`:** `regress/arm_bfx_width_probe.py`. A cold guest
 plants one instruction word with `put w`, sets `pc`, steps once, and reads `r0` and `pc` back.
 
-    HEAD  9/11   witness_HEAD_20260907.raw      FIX  11/11  witness_FIXED_20260907.raw
-                                                  FIX  12/12  witness_FIXED12_20260907.raw
-                                                               (after pass 2 added `s clear')
+    HEAD  9/11   witness_HEAD_20260907.raw       FIX  11/11  witness_FIXED_20260907.raw
+                                                    FIX  14/14  witness_FIXED14_20260907.raw
 
-    row      HEAD        FIX          want
-    w32      0x0         0x89abcdef   0x89abcdef  UBFX #0,#32 must return the WHOLE register
-    s w32    0x0         0x89abcdef   0x89abcdef  SBFX #0,#32 -- pins the MASK, see pass 2
-    w31      0x9abcdef   0x9abcdef    0x9abcdef   UB that WRAPS BACK to correct -- must STAY right
-    mid      0xde        0xde         0xde        small NONZERO anchor
-    s clear  --          0x7          0x7         ADDED BY PASS 2: top bit CLEAR, must not extend
-    pc adv   0x8004      0x8004       0x8004      on EVERY row, w32 included
+    *** A CITATION OF MINE DECAYED INSIDE ONE EVENING -- AND GIT GAVE IT BACK, WHICH IS THE
+    PART WORTH KEEPING. ***  The follow-up re-ran the probe and MY DRIVER REUSED THE FILENAME
+    `witness_FIXED12_20260907.raw' with a `>' redirect, so the working-tree copy stopped holding
+    the 12-row run and held a 14-row one instead.  For about an hour this block cited a file that
+    said something ELSE -- not unverifiable, but CONTRADICTED BY ITS OWN EVIDENCE, which is the
+    more detectable form and is how it was caught.
 
-> ### `pc adv` IS THE LOAD-BEARING CONTROL, AND THE REASON IS THIS ROUND'S OWN SYMPTOM.
+    **The artifact was COMMITTED, so `git checkout' restored it byte-for-byte and the 12/12 score
+    is genuine and citable.**  All four numbers below stand on their own logs: 9/11, 11/11, 12/12
+    and 14/14.  I first wrote this paragraph saying the measurement was GONE; that was wrong, and
+    a correction carries more authority than the error it corrects, so it earns a second reading
+    rather than less of one.
+
+    **The rule this vindicates is not the one I reached for.**  "A measurement cited in a durable
+    record must live at a durable path" held here because the path was UNDER VERSION CONTROL --
+    that is what made the clobber recoverable.  An identical clobber of an UNCOMMITTED artifact
+    is unrecoverable, which is precisely the case for anything still sitting in `_scratchpad/'
+    or in a run whose commit has not happened yet.  The new log carries its ROW COUNT in its name
+    so the collision cannot recur.
+
+    row       HEAD        FIX          want
+    w32       0x0         0x89abcdef   0x89abcdef  UBFX #0,#32 must return the WHOLE register
+    s w32     0x0         0x89abcdef   0x89abcdef  SBFX #0,#32 -- pins the MASK, see pass 2
+    w31       0x9abcdef   0x9abcdef    0x9abcdef   UB that WRAPS BACK to correct -- must STAY right
+    mid       0xde        0xde         0xde        small NONZERO anchor
+    s clear   --          0x7          0x7         ADDED BY PASS 2: top bit CLEAR, must not extend
+    s w31     --          0x9abcdef    0x9abcdef   ADDED BY PASS 2: SBFX at width 31 was UNTESTED
+    pc adv    0x8004      0x8004       0x8004      MOV control
+    mid pc    0x8004      0x8004       0x8004      UBFX control
+    w32 pc    0x8004      0x8004       0x8004      UBFX control AT the failing width
+    s w32 pc  --          0x8004       0x8004      ADDED BY PASS 2: the FIRST SBFX pc control
+
+> ### THE pc CONTROLS ARE LOAD-BEARING, AND THE REASON IS THIS ROUND'S OWN SYMPTOM.
 >
 > The width-32 failure returns **exactly zero** — indistinguishable from a mis-encoded word that
 > never executed. This project has been bitten four times by hand-assembled encodings, once in a
-> COMMITTED gate row that measured the wrong register for months. `pc adv = 0x8004` proves the
+> COMMITTED gate row that measured the wrong register for months. A `pc == CODE+4` row proves the
 > instruction EXECUTED and returned a wrong value; `mid = 0xde` is a second, independent anchor
 > that only a correct encoding AND execution can produce.
+>
+> ### *** AND THE SENTENCE THAT USED TO SIT HERE WAS FALSE, IN THIS BLOCK, IN THE PROBE COMMENT
+> ### AND IN COMMIT `c0c7f55`'s MESSAGE, WHICH CANNOT BE EDITED. ***
+>
+> All three said the pc control holds **"on EVERY row, w32 included"**. It did not. Only `pc adv`,
+> `mid pc` and `w32 pc` asserted pc, and **all three are MOV or UBFX rows — NO SBFX ROW CHECKED pc
+> AT ALL.** The SBFX rows are precisely the ones whose expected failure value is *also* exactly
+> zero, so they are the case the pc control exists to disambiguate, and they were the case it did
+> not cover. `s w32 pc` closes it.
+>
+> **The failure was one of TIMING, not of knowledge**: the codex pass-2 seat named it, and its body
+> was read after the commit had launched. That is this project's own rule about verdict lines
+> landing on itself — *a verdict line is written against the brief's framing and is the LEAST
+> likely part of an answer to carry a correction*, so the correction was in the body, and the body
+> is the part that waited. **A commit message cannot be amended; this block and the probe comment
+> ARE the record.**
+>
+> **A second, quieter gap went with it.** `s w31` did not exist either, so the round's headline
+> claim — *"only the width-32 case is observable"* — rested on a UBFX width-31 row and was
+> generalised to SBFX with no evidence for it. Both rows now exist and both are green.
 >
 > **And the encodings are DERIVED from the decoder, not recalled.** Field positions read out of
 > `X(to_be_translated)`: `rd = (iword>>12)&15`, and **the source is `rm` = `iword & 15`, NOT
