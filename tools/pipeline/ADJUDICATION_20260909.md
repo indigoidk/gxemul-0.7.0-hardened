@@ -466,3 +466,62 @@ pipeline invocation, with an isolated worktree as the practical route because th
 paths from `__file__`.  That is a change to the script every commit runs, owing negative controls
 in both directions.  **Is that the right size of round, or is there a cheaper partial -- e.g.
 fixing section D alone, whose input is one command -- that buys most of it?**
+
+---
+
+## Y. THE LCA CLUSTER -- six rows, one chipset, and a hardware manual that arrived today
+
+**This section did not exist when the packet was written.** The Alpha 21066 Hardware Reference
+Manual was fetched at a codex citation, read locally, and it changed three rows. The cluster is
+`lcabadval` (high), `lcaconfbus1kill` (high), `lcairqstubkill` (high), `lcaconfwidth` (med),
+`lcaisalane` (med), `lcashiftub` (low) -- all in `dev_lca.c`, all reachable from
+`-E alpha -e alphabook1`, which is the only machine that installs the device.
+
+### What is now established, with its evidence
+
+| claim | evidence |
+|---|---|
+| `IOC_W_MASK` has **13** documented-legal values; the fork accepts **one** per register | Table 6-6, read locally; confirmed by 5 of 6 seats |
+| the guards test the **whole 64-bit operand**, while the hardware defines a **12-bit field** and ignores the rest | deepseek raised it, codex settled it from the RES/type-X definition |
+| the manual **requires initialising both base registers to zero**, and `W_BASE1` rejects that | codex, S6.4.14 |
+| `IOC_TB_ENA` is **not** a functional defect -- both TEN states are accepted | codex |
+| `lca_interrupt_assert` is **guest-reachable** via the unconditionally-installed UART on ISA IRQ 4 | codex, path named end to end |
+| forwarding **cannot** complete interrupt delivery -- `cd.alpha.irq_asserted` has **no reader**, and `cpu_dyntrans.c` has no Alpha arm | codex, verified by my own census |
+| absent-device reads are **not** all-ones on real hardware -- master abort raises an instruction exception | S6.2.18, read locally |
+
+### QUESTION Y1 (scope) -- one round or six?
+
+Six rows, one file, one machine, and several share a disposition question (*what should a chipset
+register do with a value it does not model?*). **The one-site rule says a round takes ONE site and a
+second joins only if it is witnessed, in the same semantic class, and covered by the same detector
+with no new oracle.** `lcabadval`'s six arms are arguably one site by that test; the interrupt stubs
+are plainly not. **Is `lcabadval` one round, and if so does it take all six arms or only the two
+mask arms where the manual gives an enumerated legal set?**
+
+### QUESTION Y2 (a partial repair) -- does `lcairqstubkill` ship?
+
+It is HIGH and guest-reachable. But the honest fix forwards an interrupt to a flag **nothing reads**,
+because Alpha has no dispatch arm in the execution loop. So the repair converts *"the emulator
+terminates"* into *"the interrupt is silently dropped"*.
+
+**Is that an improvement worth shipping, or does it launder a missing feature into a silent one?**
+The option set has a member for this -- a bounded, latched announcement that the interrupt was
+dropped -- which preserves the diagnostic while removing the termination. **I lean that way and I
+want it challenged**, because it is also the disposition that lets a round claim to have fixed
+something while the machine still cannot take an interrupt.
+
+### QUESTION Y3 (the addition licence) -- the ASM/ASN plumbing
+
+`alphatbinegsel`'s coarse repair is right *because* the translation cache carries no ASM tag
+(`ALPHA_PTE_ASM` has zero consumers). The manual documents what the tag is for. **Is adding that
+plumbing a queue item at all, or is it a feature request wearing a defect's clothes?** The addition
+licence says additions need a measured delta or a transferred warrant, never "it cannot hurt".
+
+### QUESTION Y4 -- am I over-fitting to a manual I got this morning?
+
+Three rows changed disposition within hours of a PDF landing. **That is either the correct use of a
+primary source or an anchor**, and I cannot tell from inside it. The specific worry: I have been
+treating *"the manual documents behaviour X"* as evidence that *"a guest will do X"*, and those are
+different claims -- the same conflation the `alphatbinegsel` panel caught me making about
+*"during ordinary operation"*. **Which of the seven table rows above is doing work it has not
+earned?**
