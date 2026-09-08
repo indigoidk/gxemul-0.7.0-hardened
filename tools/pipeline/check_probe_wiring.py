@@ -158,6 +158,7 @@ MANIFEST = {
     #  `walk vpn`).  Corrected to the measured values. ***
     "alpha_harness_probe.py":     (CLASS_WITNESS,  "alphaswpctxptbr: swpctx overwrites apcb_ptbr with the flags word -- HEAD 7/10, fix 10/10"),
     "lca_confwidth_probe.py":     (CLASS_WITNESS,  "lcaconfwidth: the IOC_CONF kill names a value the guard accepts -- HEAD 4/6, fix 6/6"),
+    "lca_confbus_probe.py":       (CLASS_WITNESS,  "lcaconfbus1kill: an ACCEPTED stq 0x1 to IOC_CONF arms the bus!=0 kill in lca_pci_conf -- HEAD 3/4, the RED row is the defect; post-fix green PENDING"),
     "alpha_pfnoffset_probe.py":   (CLASS_WITNESS,  "alphapfnoffset: the page-table walk drops the within-page offset -- HEAD 5/7, fix 7/7"),
     #  #509.  It began as a 6-row witness and grew to 14 rows across two kill tables; it is
     #  classified WITNESS because nothing gates it, which is the same footing as the three
