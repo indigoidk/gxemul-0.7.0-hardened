@@ -1,0 +1,67 @@
+**VERDICT: 7 requires LCA wiring plus Alpha CPU/PALcode work. This tree can latch an IRQ level but cannot deliver an asynchronous Alpha guest interrupt. My interim choice is a diagnosed stop of guest emulation.**
+
+I examined **36/36 registration call sites in 28 files**, comprising **35 distinct assert/deassert pairs—70 callbacks**. These are source-site counts, not runtime pins expanded by registration loops. Everything examined was under `GXEMUL-SEC/src/`; no probe was written or run, and neither prohibited location was read.
+
+1. **The CPU entry points exist, but delivery does not.**
+
+   `alpha_cpu_new()` registers the CPU’s own path with `extra = cpu`. `alpha_irq_interrupt_assert()` sets `cpu->cd.alpha.irq_asserted = 1`; `_deassert()` clears it. Those callbacks need an interrupt object whose `extra` points to the destination CPU. LCA’s incoming object instead contains `extra = lca_data`, so passing that object directly to the CPU callback would be wrong. ([cpu_alpha.c, registration and callbacks](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_alpha.c:114), [dev_lca.c, `DEVINIT(lca)`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:377))
+
+   The minimal **wiring implementation** would give `lca_data` a connected upstream `struct interrupt`, connect it to `devinit->interrupt_path`, and forward both levels through it. That parent path already defaults to the bootstrap CPU in `device_add()`; LCA currently stores no upstream interrupt connection. ([device.c, `device_add()`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/device.c:278), [dev_lca.c, `lca_data`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:51))
+
+   **That would still deliver nothing to guest software.** The only references to Alpha’s `irq_asserted` are the two assignments. `alpha_run_instr()` is instantiated from `DYNTRANS_RUN_INSTR_DEF`, whose interrupt-dispatch block has ARM, M88K, MIPS, PPC and SH branches, but no Alpha branch. ([tmp_alpha_tail.c](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/tmp_alpha_tail.c:65), [cpu_dyntrans.c, `DYNTRANS_RUN_INSTR_DEF`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c:195))
+
+   A complete implementation would additionally need to consume the pending level subject to PS/IPL, identify the ISA source and its platform vector, enter `kentry[ALPHA_KENTRY_INT]` with the appropriate kernel context and PALcode frame, and support interrupt return. The source supplies frame definitions, interrupt-type constants, PCB state, and PAL calls that store `kentry`, IPL and kernel GP. It supplies **no implemented asynchronous entry routine or AlphaBook ISA-to-PAL vector conversion**. `PAL_OSF1_rti` has a name in `alpha_palcode_name()`, but no execution case in `alpha_palcode()`; it reaches the unsupported-call default. ([alpha_cpu.h, frame and interrupt definitions](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/thirdparty/alpha_cpu.h:77), [cpu_alpha.h, CPU state](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/cpu_alpha.h:161), [cpu_alpha_palcode.c, `alpha_palcode()`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_alpha_palcode.c:326))
+
+2. **There is a forwarding precedent whose shape transfers directly.**
+
+   `sh4_pcic_interrupt_assert()` and `_deassert()` retrieve device state from `extra` and invoke `INTERRUPT_ASSERT`/`INTERRUPT_DEASSERT` on a separately connected CPU interrupt. `DEVINIT(sh4)` registers the downstream handlers and connects their upstream CPU endpoints. LCA needs that same separation between the registered receiving endpoint and the connected outgoing endpoint. ([dev_sh4.c, callbacks](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sh4.c:533), [dev_sh4.c, `DEVINIT(sh4)` connections](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sh4.c:2951))
+
+3. **Q3’s implication that the tree establishes one preferred drop policy is unsupported.**
+
+   There are conflicting precedents:
+
+   | Source and function | Actual treatment |
+   |---|---|
+   | [cpu_sh.c, `sh3_cpu_interrupt_assert/deassert()`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_sh.c:527) | Silent TODO bodies. |
+   | [dev_pcc2.c, `reassert_interrupts()`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_pcc2.c:267) | Diagnoses unsupported C040 interrupt delivery and calls `exit(1)`. |
+   | [dev_sh4.c, `sh4_timer_tick()`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sh4.c:448) | Uses a latched announcement for missing refresh-interrupt **generation**, then continues other timer work. |
+
+   The SH4 example supports bounded reporting, but it does not establish a universal disposition for an asserted delivery path. If continued incomplete emulation is required, an explicit bounded announcement is more honest than invisible loss. It remains lost delivery.
+
+   The third option I recommend is **“unsupported emulation: diagnose and stop the guest CPU.”** `alpha_palcode()` already uses that behavior for unsupported PAL calls: diagnostic plus `cpu->running = 0`. This is an emulator limitation stop, not an architectural guest FAULT. A device implementation must also arrange a proper execution unwind: `alpha_instr_call_pal()` handles PAL stops by redirecting `next_ic` to `nothing_call`; merely changing `running` inside a device callback does not itself unwind the current batched execution. ([cpu_alpha_palcode.c, default](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_alpha_palcode.c:390), [cpu_alpha_instr.c, `alpha_instr_call_pal()`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:59))
+
+4. **The discriminating row for that interim choice is stopped guest state, plus the reason—not survival.**
+
+   Proposed acceptance row:
+
+   > Starting with a running CPU, an unsupported LCA assertion produces its specific diagnostic and leaves `cpu.running = false`. With debugger-at-end enabled, the debugger remains responsive, and subsequent steps execute no guest instructions. The matched nonasserting control remains running.
+
+   | Candidate behavior | Result against that row |
+   |---|---|
+   | Diagnosed guest stop | **Green** |
+   | Silent return | Red: CPU remains running |
+   | Latched announcement and return | Red: CPU remains running |
+   | Forwarding only, or working delivery to a handler that resumes | Red: CPU remains running |
+   | Existing `exit(1)` | Red: debugger/process is gone |
+
+   This state is already observable: `cpu_new()` exposes `running` as a setting; `machine_run()` skips stopped CPUs; `emul_run()` enters the debugger after all machines stop when debugger-at-end is enabled. Without that setting, the run ends normally instead. ([cpu.c, `cpu_new()`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu.c:85), [machine.c, `machine_run()`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/machines/machine.c:701), [emul.c, `emul_run()`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/core/emul.c:1052))
+
+   For the other dispositions, the observables differ:
+
+   - **Latched announcement:** diagnostic count across repeated actual assertion/release cycles distinguishes it from silence. That validates reporting, not delivery.
+   - **LCA wiring:** observing the destination CPU’s IRQ flag go `0 → 1 → 0` validates forwarding. This needs host-side state inspection or additional exposure; Alpha’s register dump shows PC/GPRs, not this flag. ([cpu_alpha.c, `alpha_cpu_register_dump()`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_alpha.c:170))
+   - **Real delivery:** require a guest interrupt-handler marker, correct entry/frame, return, and no continued retrigger after release. **There is no honest guest-delivery discriminator from single-stepping under the current dispatch policy:** `DYNTRANS_RUN_INSTR_DEF` explicitly gates interrupt delivery with `if (!single_step)`. It needs bounded normal execution, valid guest interrupt setup, and the missing Alpha implementation first. ([cpu_dyntrans.c](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c:204))
+
+   PIC IRR readback is insufficient: `isa_interrupt_assert()` updates it before invoking LCA, so both dropping variants retain that observable. ([bus_isa.c, `isa_interrupt_assert()`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/bus_isa.c:98))
+
+5. **Deassert needs the opposite state transition, not an identical failure policy.**
+
+   Correct forwarding clears the upstream CPU IRQ level. `isa_interrupt_common()` already aggregates the PIC requests and releases its output when no unmasked request remains. It can also assert again when one nonzero pending bitmap changes to another, so these are idempotent level operations—not increment/decrement accounting. ([bus_isa.c, `isa_interrupt_common()`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/bus_isa.c:52), [cpu_alpha.c, `_deassert()`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_alpha.c:220))
+
+   Both host exits should go, but under the proposed interim, deassert should release any retained level without restarting the stopped CPU or reporting another failed delivery. If assertion retained no state, an empty release can be sufficient. Once assertion forwards or records state, an empty deassert is incorrect.
+
+6. **Two additional routing facts matter.**
+
+   PIC register operations also drive this endpoint: `dev_8259_access()` recalculates and asserts/deasserts its connected output on mask changes and EOI operations; `bus_isa_init()` connects the primary PIC directly to LCA. The reachability is broader than peripheral callbacks through `isa_interrupt_common()`. ([dev_8259.c, `dev_8259_access()`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_8259.c:103), [bus_isa.c, `bus_isa_init()`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/bus_isa.c:219))
+
+   PCI routing is unfinished separately: `DEVINIT(lca)` passes three TODO interrupt-path strings to `bus_pci_init()`. `PCIINIT(i82378zb)` advertises PIRQ assignments through configuration bytes but creates no interrupt connections. Fixing the ISA callbacks would not complete PCI interrupt routing. ([dev_lca.c, `DEVINIT(lca)`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:343), [bus_pci.c, `PCIINIT(i82378zb)`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/bus_pci.c:753))
