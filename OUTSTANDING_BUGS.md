@@ -17034,3 +17034,53 @@ rung-3 probe witness (`regress/luna_absentcpu_probe.py`).  Read that round befor
 
 sev HIGH on the wiring; it would be CRITICAL if a witness lands, and the row says so rather than
 pre-judging it.
+
+
+### `uninorthdevscan` (med, pending a reachability answer) -- filed 2026-09-07:
+### a sign-extended mask can select the wrong PCI device on macppc
+
+FILED 2026-09-07, split out of [[shiftubcensus]] item (A) because it is the only member of that
+census with a **GUEST-VISIBLE CONSEQUENCE** rather than a language-level one, and it therefore owes a
+witness the others do not.
+
+**THE SITE**, `dev_uninorth.c`, in the PCI address-register write path:
+
+    :56    uint64_t idata = memory_readmax64(cpu, data, len | MEM_PCI_LITTLE_ENDIAN);
+    ...
+    :60    d->cur_addr = idata;
+    :70    for (dev=11; dev<32; dev++)
+    :71        if (idata & (1 << dev))
+    :72            break;
+
+**`idata` is `uint64_t` and `1 << dev` is an `int`.**  At `dev == 31` that is `0x80000000`, which as
+a signed `int` is NEGATIVE, so converting it for the `&` against a `uint64_t` **SIGN-EXTENDS it to
+`0xffffffff80000000`**.
+
+> **CONSEQUENCE IF `idata` CARRIES ANY BIT IN 32..63: the loop matches at `dev == 31` when no
+> device bit is set there, and the scan selects the WRONG DEVICE.**  The repair (`1U << dev`) is
+> therefore NOT behaviour-preserving here -- unlike its sibling in `dev_v3.c`, where the operand's
+> high bits are provably zero and the same edit changes nothing.
+
+**REACHABLE AS A DEVICE:** `machine_macppc.c:68` calls
+`dev_uninorth_init(machine, machine->memory, 0xe2000000, ...)`, and `dev_uninorth.c:141` registers
+`"uninorth_pci_addr"` at `addr + 0x800000` = **0xe2800000**.  macppc is a supported machine here.
+
+*** WHAT IS NOT ESTABLISHED, AND IT IS THE WHOLE QUESTION: CAN `idata` ACTUALLY CARRY BITS 32..63? ***
+`memory_readmax64(cpu, data, len | MEM_PCI_LITTLE_ENDIAN)` returns a value whose width follows the
+ACCESS WIDTH.  On a 4-byte store -- the ordinary way a guest writes a PCI config address -- the
+result cannot exceed 32 bits, the sign-extended ones meet only zeros, and **nothing observable
+happens**.  The defect needs an **8-byte** access to that register.
+
+**So the row is HELD at the reachability question, not at the arithmetic.**  A codex analysis is out
+on exactly this (`regress/artifacts/shiftubcensus/UNINORTH_brief.md`), asking: what does
+`memory_readmax64` return per width; what widths reach this handler on macppc; and -- the premise I
+am least sure of -- whether `MEM_PCI_LITTLE_ENDIAN`, which is OR'd into the `len` PARAMETER, can
+perturb the length itself rather than only the byte order.
+
+**SEVERITY DELIBERATELY LEFT AT `med` PENDING THAT ANSWER.**  If an 8-byte access reaches the
+handler this is a guest-drivable mis-decode on a supported machine and should be HIGH; if it cannot,
+this collapses into the same language-level hygiene as the other two census members and should be
+LOW.  *Grading it before the answer would be picking the number I prefer.*
+
+**THE REPAIR IS ONE TOKEN EITHER WAY** (`1U << dev`), and it is correct under both outcomes -- the
+question is only what the round may CLAIM, and whether it owes a witness.
