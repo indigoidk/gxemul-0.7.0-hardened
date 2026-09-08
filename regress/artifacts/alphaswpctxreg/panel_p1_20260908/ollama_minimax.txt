@@ -1,0 +1,54 @@
+**VERDICT: Real defect; correct fix. Ordering premise load-bearing (must be made explicit). Reachability open. `:296` is a separate row.**
+
+---
+
+**Q1 — fix correctness and sufficiency.**
+
+The defect is well-corroborated by three independent signals:
+
+- *READ*: line 250's comment says "Return old context in v0."
+- *READ*: file-internal convention — 8 return sites use `ALPHA_V0`; the lone `ALPHA_A0` destination is line 251.
+- *READ*: the wrapper at `alpha_cpu.h:449-459` declares `v0` (`$0`) as the sole output and tags `a0` as clobbered.
+
+*REASONED*: per the wrapper, the handler is *required* to put the return value into v0. The one-identifier change is correct.
+
+*REASONED*: the leftover in a0 (old ctx now sits there) is not a contract defect — by the wrapper's clobber declaration, callers cannot read it. Cosmetic only. Not worth raising as a second row.
+
+**Pushback on the brief's "ordering is correct" premise (section 2).**
+
+The brief states `:255` is `cpu->cd.alpha.ctx = a0;` and that this "overwrites [ctx] with the new one." That derivation holds only if `a0` on the RHS of `:255` is a captured input snapshot, not the register slot that `:251` just overwrote with the OLD ctx. The verbatim of `:251` accesses the register explicitly (`cpu->cd.alpha.r[ALPHA_A0]`); the verbatim of `:255` uses a bare `a0`. That asymmetry is the only signal in the packet that the ordering premise is sound. If `a0` at `:255` were a macro expanding to `cpu->cd.alpha.r[ALPHA_A0]`, the handler would have a *second*, more serious defect: ctx would never be updated and the emulator would not actually switch contexts. **The brief should make this inference explicit before the round is scoped**, because the one-identifier fix is *not* sufficient under the second-defect reading. This is exactly the narrowed-claim shape the warning at the top of the brief warns against.
+
+**Q2 — severity.**
+
+*REASONED*: `med` is defensible. Silent wrong-value on a documented PAL primitive; not a crash, but a public named entry point. Without reachability established (Q3) there is no basis to raise to `high` — silent wrong-value on an unobserved call site is not high by this project's usual accounting. Equally, downgrading to `low` would understate a documented PAL primitive that the project explicitly models. **`med` stands.** The `alphatbinegsel` history is not in the packet and does not anchor.
+
+**Q3 — reachability.**
+
+*REASONED*: **not checkable from the packet.** The brief correctly disclaims this; the wrapper's presence in the OS header is not evidence of use.
+
+The single fact that would settle it: a source trace through whatever guest kernels boot on the canonical `-e alphabook1` configuration (or equivalent), identifying `swpctx` call sites and confirming whether the return value is consumed; or a boot trace with a debugger that observes v0 unchanged across a swpctx invocation. Until one of those lands, the row is **documented-only** and the `med` severity is asserted, not witnessed. That is a real answer and the right one to record — it is not a downgrade.
+
+**Q4 — witness shape (if reachable).**
+
+*REASONED*: the two named traps are the right ones. Minimum probe inside one `step N`:
+
+1. Write `cpu->cd.alpha.ctx = X` (known value, via engine state-write).
+2. Write `v0 = Z` with `Z ≠ X` (sentinel).
+3. Write `a0 = Y` (input value).
+4. Execute the `swpctx` PALcall (one step).
+5. Read `v0`.
+
+Decoding:
+
+- `v0 == X` → handler wrote the return value correctly (fix in place).
+- `v0 == Z` → handler left v0 alone; engine does not clobber v0 on PAL entry. Defect present.
+- `v0 == 0` (or any other "engine-cleared" value) → engine clears v0 on PAL entry; handler does not restore it. Defect present, different shape.
+- `v0 == Y` or other → handler is doing a third thing. Investigate.
+
+The oracle is `v0 == X`, non-vacuous because the pre-fix handler leaves v0 exactly at `Z` and the fix overwrites it with `X`. The sentinel must be chosen so `Z ≠ X` for every plausible `X` (e.g., `0xDEADBEEFCAFEBABE` paired with `X = 0x1111111111111111`). Recording pre-call v0 is optional if the sentinel is well-chosen but makes the probe re-runnable across runs where `X` might drift.
+
+**Q5 — scope.**
+
+*REASONED*: `:296`'s `INVALIDATE_ALL` TODO is **out of scope** for this round. Different mechanism (cache invalidation vs register return), different detector (cache-staleness oracle vs register oracle), different oracle. Per the project's one-site-per-round rule, it is a separate row.
+
+*REASONED*: the neighbouring seat's re-baseline concern is a workflow matter for whichever row lands second — independent of whether `:296` joins this round, and not a reason to merge scopes. Re-baselining is what witnesses do when one row's fix changes the precondition for the other's probe; that is correctly handled at witness-design time, not at scoping time.

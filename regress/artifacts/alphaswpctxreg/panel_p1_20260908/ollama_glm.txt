@@ -1,0 +1,32 @@
+**VERDICT: The defect is real — comment, code, and the third-party wrapper triangulate on v0, and I confirm it from the packet alone. But the brief's own two quoted lines contradict each other unless `a0` at :255 binds to a local captured *before* :251, and the packet never exhibits that capture. The one-identifier fix is correct; its SUFFICIENCY is unproven from this packet. Keep :296 out of the round. Med confirmed. Reachability: not settleable from the packet — documented-only for now.**
+
+## Premise audit
+
+- **READ:** comment says v0, line writes `ALPHA_A0`; wrapper declares v0 (`$0`) a pure output and a0 (`$16`) an in-out operand explicitly called clobbered. The triangulation carries the verdict **even if both greps in §2 were wrong** — the verdict does not hang on the census.
+- **READ, minor gap:** the wrapper excerpt truncates before the `return` statement. The output-operand list makes intent unambiguous, but the actual `return v0;` is not in the packet. Non-load-bearing; name it for completeness.
+- **READ (author-asserted; I cannot re-run greps):** the 8-site/1-site census. Note it is a **write**-census (`r[ALPHA_A0] =`). It does not cover the risk the fix actually runs: **reads** of `r[ALPHA_A0]` after :251.
+- **The real premise defect.** Line :251 destroys the a0 register (argument → old ctx). Line :255 is rendered `cpu->cd.alpha.ctx = a0;`. If that `a0` is the register — the spelling of :251's LHS suggests registers are written as `cpu->cd.alpha.r[ALPHA_A0]`, and :255 is *not* spelled that way, which is the only thing making the packet coherent — then as literally quoted, :255 installs the OLD context, swpctx never switches contexts at all, "ordering is correct" is false, and the defect is much larger than one identifier. The packet is internally consistent **only** if `a0` at :255 is a local captured before :251. That object is never shown. The #507 history (READ: a prior transposition slip in this same block) keeps both hypotheses live. **Settling fact, single:** verbatim from case entry through ~257 showing the declaration and capture point of whatever `a0` binds to, plus `grep -n "r\[ALPHA_A0\]"` scoped to this case (a read-census).
+
+## Q1 — fix correct and sufficient?
+
+Correct: yes — `ALPHA_A0` → `ALPHA_V0`, comment already says the right thing, no other edit. Sufficient: **conditional** on the :255 binding and on no later read of `r[ALPHA_A0]` depending on the value :251 currently installs (see audit).
+
+On a0: **do nothing.** REASONED: the wrapper's in-out operand plus its clobber comment means any correct caller must treat a0 as destroyed — its post-call value is contractually unspecified, so no oracle for it can exist, and "fidelity" to an unspecified value is undefined. Preserving the current behavior (old ctx in a0) would enshrine the bug's side effect; post-fix a0 holds the caller's input, equally unobservable. Not a second defect; unobservable by construction.
+
+## Q2 — severity
+
+Med confirmed. REASONED: silent wrong-value in a documented primitive, no crash signature — the classic med profile. Nothing in the packet supports high (high needs a demonstrated consumer or crash-class). Nothing forces low **unless** Q3 resolves to "no supported guest reaches swpctx," under which low is defensible. The alphatbinegsel raise: its basis is not inlined in this packet, so it can anchor in neither direction.
+
+## Q3 — reachability
+
+**Not settleable from the packet.** The wrapper's presence in the tree shows ABI intent, not execution — the packet itself concedes this (§3, witness `None`). REASONED: swpctx sits on the context-switch path of any OSF/1-style kernel, so *if* the project boots such a kernel on alphabook1 to multi-context scheduling, the case executes — but execution ≠ observation: a caller switching context typically already holds the old context, so v0-consumption is plausibly absent even where the call is hot. Two facts would settle it, in order: (1) a trace or instrumented boot of the supported alpha guest showing this case executed; (2) that guest's swpctx call sites showing v0 consumed afterward. Until (1): **documented-only, and per your own framing that is a real answer.**
+
+## Q4 — witness shape
+
+If reachable: one interaction, one `step N`. Seed v0 ← MAGIC; a0 ← K1; plant `call_pal swpctx; <guest instruction loads a0 ← K2>; call_pal swpctx`. Read back v0. Discrimination: **v0 == K1** ⇒ fix present AND read-before-write ordering correct; **v0 == MAGIC** ⇒ handler never touches v0 (the current bug, deterministically); **v0 == K2** ⇒ ordering reversed.
+
+The seeding requirement you asked for: **MAGIC must differ from the value a correct handler would write.** The two-call design makes the correct answer a constant you chose (K1), so MAGIC ∉ {K1, K2} suffices — no dependence on unknowable pre-existing machine ctx. Pre-fix observable (MAGIC) and post-fix observable (K1) are disjoint by construction, which is what defeats the vacuous-oracle trap. a0 readback (K2 under fix, K1 under bug, and old-ctx0 under the catastrophic :255-register hypothesis) is a useful **diagnostic** for which pre-fix pathology you have — but not an oracle: the ABI specifies nothing about a0. This is a second reason to settle the :255 binding *before* witness-building. Flagged assumption (READ-reported from the neighbor row, not verified by me): the debugger can seed registers, plant instructions, and run one `step N` in a single interaction.
+
+## Q5 — scope of :296
+
+**:296 does not join this round.** On the packet's own rule it fails all three tests: different semantic class (return-register ABI correctness vs. conservative over-invalidation — REASONED: flushing more than necessary cannot yield stale translations, so it is correctness-safe and cost-only); a new oracle would be required (translation-cache observable vs. register observable); it is unwitnessed. It is also a self-acknowledged TODO whose resolution (narrowing invalidation) carries *fresh correctness risk* (under-invalidation) — the opposite risk class; bundling would let an untested perf change ride behind a correctness witness. Separate row if anyone wants it. The neighbor seat's re-baseline discipline is sound: this fix touches the swpctx case, so whichever swpctx-adjacent row lands second re-baselines.

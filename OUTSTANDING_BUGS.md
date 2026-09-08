@@ -17770,3 +17770,16 @@ audited without reconstructing the brief. **A brief that is not preserved is not
 
 **PROPOSED, NOT ADOPTED:** a neutral-vocabulary convention for codex briefs plus preserving every
 brief beside its answer. It changes every future brief, so it is the owner's call, not a round's.
+
+## 2026-09-08 — `alphaswpctxreg` FIXED as `#514`, with a rung-3 witness
+
+`cpu_alpha_palcode.c:251` published the old context into `ALPHA_A0` under a comment saying v0,
+while the ABI wrapper declares `v0 __asm("$0")` an **output** and lists a0 as **clobbered**. One
+identifier. `regress/alpha_swpctx_v0_probe.py`: **HEAD 2/4, fix 4/4**, same script, unmodified
+`-E alpha -e alphabook1`, three-value oracle so an incorrect repair returning the *new* context is
+caught. Six seats confirmed the fix; two independently corrected a census of mine (three of my
+eight `ALPHA_V0` sites are inside `#if 0`). `opus5`/`fable5` HELD for the 2026-09-09 adjudication.
+
+**STILL OPEN in the same arm and deliberately excluded:** the `// TODO: Don't invalidate
+EVERYTHING!` at `:296`, which bears on `alphatbinegsel` — and since `#514` landed first, that row
+now owes a witness re-baselined with this fix present.

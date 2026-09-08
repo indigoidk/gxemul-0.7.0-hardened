@@ -1,0 +1,139 @@
+I'll treat this as a premises check, not a ratification. First I'll read the PAL handler, ABI wrapper, and register conventions against the census you already have.The handler matches the packet. Next I’ll check the ABI wrapper, register numbers, and whether any guest actually calls `swpctx`.Existing notes already flag this as `alphaswpctxreg`. I’ll read those and the Alpha boot/witness material before answering reachability.Census and prior notes are in. I’ll now check PAL docs, alphabook1 boot, and the existing #507 probe so reachability isn’t guessed.Codex already answered this brief; I’ll re-check the census, PAL spec, alphabook1 boot, and the #507 probe instead of adopting that write-up.**VERDICT: `ALPHA_A0` → `ALPHA_V0` is the right one-identifier fix and is sufficient. Keep `med`. Do not clobber `a0`. Do not take the `:296` TODO. A booted OS that consumes `v0` is not established; a rung-3 planted-guest witness on unmodified `alphabook1` is, and that does not make the round documented-only.**
+
+I read the handler, the wrappers, the register map, the `#507` probe, the debugger flush, and Tru64 UNIX PAL §16.2.9 in the Alpha ARM 4th edition. Several premises in the packet are true; three are not, and one implication does not follow.
+
+---
+
+### Premises that hold
+
+- `:251` writes `r[ALPHA_A0]` under a comment that says v0. `ALPHA_V0` is 0, `ALPHA_A0` is 16.
+- `grep` of `r[ALPHA_A0] =` in this file is one line: 251.
+- The local `uint64_t a0` is captured at function entry (`:165`). `:255` loads the new PCB from that local, so the `r[ALPHA_A0]` store does not pick the wrong context. Ordering is not this defect.
+- `#507` is present (`apcb_flags = new_flags`) and is a different observable.
+- The wrapper returns `v0` (`$0`). `"0" (a0)` ties the input to **operand 0**, which is `$16`, not `$0`.
+
+### Premises that do not hold as stated
+
+**1. The “eight `ALPHA_V0` sites” census is textual, not live.** The eight assignments exist. Three of them (`:306` rdval, `:356` rdusp, `:383` fixup) sit inside `#if 0`. `:118` is `alpha_prom_call`, not a PAL. Live PAL returns in this file are four: `rdmces`, `swpipl`, `rdps`, `whami`. `swpctx` is the fifth live PAL that the ARM says returns in v0, and it is the only one that writes `a0` instead. The qualitative claim (this is not a local convention) survives; the denominator of eight does not.
+
+**2. “Unobservable by construction” is too strong.** A caller can read `a0`. They cannot require a particular post-call value. That is not the same as invisibility.
+
+**3. “No booting guest ⇒ documented-only” does not follow in this project.** `#507` already executed `call_pal 0x30` twice on unmodified `-E alpha -e alphabook1` and the CPU returned. That is the Alpha rung-3 shape this tree has already used. Absence of an OS-boot consumer is a severity bound, not a witness ban.
+
+---
+
+### Q1. One-identifier fix: correct and sufficient. Do not also clobber `a0`.
+
+Tru64 UNIX PAL (Alpha ARM 4th ed., II-B §16.2.9):
+
+```
+v0 ← PCBB          ! Return old PCBB
+PCBB ← a0          ! Switch PCBB
+…
+The old PCBB is returned in v0.
+On return … registers t0, t8…t11, and a0 are UNPREDICTABLE.
+```
+
+The architectural result is `v0`. The one-token edit is:
+
+```diff
+-		cpu->cd.alpha.r[ALPHA_A0] = cpu->cd.alpha.ctx;
++		cpu->cd.alpha.r[ALPHA_V0] = cpu->cd.alpha.ctx;
+```
+
+That is the same idiom as the closest live sibling, `swpipl` (`:337-342`): write old state to `ALPHA_V0`, then install new state from the copied `a0`.
+
+**`a0` after the call is not a second defect.**
+
+- ARM §1.6.3: an UNPREDICTABLE result **may be left unchanged**.
+- This file already records the project policy at `:394-400`: many PALs clobber `t0, t8-t11`, some also `a0`/`a1`, “it's easier to just leave the registers as they are.”
+- The wrapper marks `a0` as an output (`"=r" (a0)` plus matching `"0"`) and then **discards** it. `return (v0)`. The clobber comment is “a0 (above)” — the output operand — not a demand that PAL destroy `$16`.
+
+Register state, for outgoing context `C` and incoming `N`:
+
+| | today | after `ALPHA_V0` |
+|---|---|---|
+| **v0** | unchanged (stale) | **C** (required) |
+| **a0** | C | N (input preserved) |
+
+Today’s write of `C` into `a0` is a legal UNPREDICTABLE value in the **wrong** register for the **defined** result. After the fix, `a0` holding `N` is also legal UNPREDICTABLE. Inventing a dummy `a0` clobber would (a) contradict the file’s stated policy, (b) have no oracle (any value is legal), and (c) not be this defect.
+
+A caller that today reads `a0` and happens to see `C` will see `N` after the fix. That is a behavior change for an ABI-violating reader, not a reason to keep the mis-store.
+
+---
+
+### Q2. Confirm `med`. Do not raise. Do not drop.
+
+This is a documented PAL result delivered in the wrong register, silently. That is a functional-correctness / wrong-value defect. It is not a crash, and it is not memory corruption.
+
+**Not high.** `alphatbinegsel` is a different class: a flush the guest believes succeeded, leaving stale host-side translations. This handler still switches context; the local `a0` capture is intact. I am not using that row as an anchor. Nothing here shows isolation failure, a walk of the wrong physical page, or a demonstrated cascade.
+
+**Not low.** The original `LOW` filing was a queue label (“not verified yet, cheapest to check”), not a finished severity. The ARM names `v0` as the result; the in-tree C wrapper returns it; the comment at the site already states the contract. That is more than a comment typo.
+
+**Bound, not a refute:** the common OS switch paths I actually opened do **not** consume PAL `v0`. OpenBSD/NetBSD `SWITCH_CONTEXT` comments “Clobbers v0” and records the new PCB itself before the call. Linux `alpha_switch_to` does `call_pal PAL_swpctx` then `mov $17,$0` — it returns `a1` (the `prev` argument) and throws the PAL result away. So a booted NetBSD/alpha, if it ever got that far here, could switch and never look at `v0`. That caps guest-visible damage. It does not make the ABI wrong-result go away. Keep `med`.
+
+---
+
+### Q3. Booted OS: not established. Planted guest on `alphabook1`: yes, already measured.
+
+**Booted guest that calls `swpctx` and reads `v0`:** I cannot name that path. `PAL_OSF1_rti` (`0x3f`) is named and has no `case`; it hits the default arm and stops the CPU. `callsys` is likewise `#if 0`. HISTORY records NetBSD/alpha printing early boot messages on AlphaBook 1 in 2006; that is not evidence it reaches a context switch on this tree today, and it is not evidence anyone consumes `v0`. The wrapper existing in a NetBSD header is not a call site.
+
+Say it plainly: **no booting guest on this emulator is shown to reach `swpctx` and observe `v0`.**
+
+**That does not make the round documented-only.** Dispatch is:
+
+`opcode 0` (`cpu_alpha_instr.c:839`) → `alpha_instr_call_pal` → `alpha_palcode` → `case 0x30`.
+
+`0x30` is privileged. `ps` is zero from the zeroed cpu struct, so `ALPHA_PSL_USERMODE` is clear; kernel mode. `cpu->cd.alpha.ctx` starts at `0x10100` (`cpu_alpha.c:107`). The `#507` harness already issued `call_pal 0x30` on unmodified `-E alpha -e alphabook1`, passed `palgate` (no “user mode” diagnostic), and completed two switches. The CPU returned. What that probe did **not** do is look at `v0`.
+
+Call path for a witness: debugger-planted `call_pal 0x30` in kernel mode on `alphabook1`. Same machine, same PAL, already reached.
+
+---
+
+### Q4. Smallest rung-3 probe: seed `v0` with a sentinel `S ∉ {C, N, 0}`; oracle is `v0 == C`.
+
+`ctx` is **not** in the debugger register list (`CPU_SETTINGS_ADD_REGISTER64` only covers `pc` and the 32 GPRs). You cannot `print ctx`. The outgoing pointer on a cold CPU is the source constant `0x10100`.
+
+**Seed.** Default `v0` is 0. Default `C` is `0x10100`. Those happen to differ, so an unseeded probe can look discriminating **today**. That is luck, not an oracle. If `v0` already holds `C`, “handler did nothing” and “handler wrote the right thing” are the same bit pattern. Seed `v0` with a distinctive `S` where:
+
+`S ≠ C` (else vacuous), `S ≠ N` (else a “wrote the new PCB” bug looks green), `S ≠ 0` (else an unmapped/failed read looks like the defect).
+
+`0x00000000deadbeef` is fine. Do **not** seed with `0x10100`.
+
+**Smallest sequence, one `step N`:**
+
+1. A zeroed PCB in RAM (`ptbr == 0` keeps the identity map; this row does not need the `#507` K0SEG dance). Keep it off the 64-byte save at `0x10100`.
+2. Guest `ldah`/`lda` of `S` into `v0`, `N` into `a0`.
+3. `call_pal 0x30` (instruction word `0x00000030`).
+4. After that single `step N`: `print v0`.
+
+| | HEAD | fix |
+|---|---|---|
+| **v0** | `S` | `C` (`0x10100`) |
+| **a0** | `C` | `N` |
+
+The contract check is **`v0 == 0x10100`**, not “v0 changed” (that admits writing `N`) and not `print a0` (that is **green on the defect and red after the fix**).
+
+A two-switch variant is more robust because the second return is a pointer the probe itself planted (`v0 == N1` after `swpctx(N1); swpctx(N2)`), so the oracle does not depend on the init magic. Not required for a first witness; useful as a second row so a change of `0x10100` cannot vacate the test.
+
+**ALL-FLUSHES.** Real, at `debugger.c:786-797`: when `debugger_n_steps_left_before_interaction` hits 0, every CPU gets `INVALIDATE_ALL`. That trap is for **TLB state** spanning two interactions. This oracle is a GPR. `print v0` after one `step N` does not walk the translation cache. Put the seed and the PAL in that one `step` so you are not re-poking registers between flushes; do not cargo-cult a TLB constraint onto a register read.
+
+`swpctx` itself already `INVALIDATE_ALL`s at `:296`. `#507` already survived two calls. Not a new problem for this oracle.
+
+---
+
+### Q5. The `:296` TODO is a separate row. It is not even clearly a defect.
+
+`:296` is over-invalidation (`INVALIDATE_ALL`) with a performance/fidelity TODO. The ARM, when ASNs are absent (this emulator’s translation cache has no ASN/ASM tag — `ALPHA_PTE_ASM` is defined and unused), requires invalidating ASM=0 entries on PTBR change. `INVALIDATE_ALL` is a conservative superset. The dangerous direction is **under**-flush (`alphatbinegsel`). This TODO wants **less** flushing.
+
+Inclusion rule: a second site joins only if witnessed, same semantic class, same detector, no new oracle.
+
+| | this round | `:296` |
+|---|---|---|
+| class | defined return register | TB invalidation policy |
+| oracle | `v0 == C` | would need a stale-translation test |
+| direction | wrong value | extra flush (safe) |
+
+It fails every clause. Leave it. The neighbouring-row warning is a **later-witness hygiene** note: if someone later changes `swpctx`’s flush, a `tbi` witness must be re-baselined with that fix present. It is not a reason to merge the TODO into a `v0` round, and this round should not touch the invalidate line.
+
+Keep the comment at `:250`. After the fix it becomes true, and it is the claim the probe pins.

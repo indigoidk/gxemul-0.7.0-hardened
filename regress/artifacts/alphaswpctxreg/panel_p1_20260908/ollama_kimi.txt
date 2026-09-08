@@ -1,0 +1,33 @@
+**VERDICT: The defect is real on the packet's own evidence — the verbatim site contradicts itself (comment says v0, code writes a0), so it stands even if the unverifiable census is wrong — and `ALPHA_A0`→`ALPHA_V0` is the correct and sufficient fix. But the brief's "ordering is fine" premise is NOT checkable from the packet and carries a hidden fork: if `:255` reads the register rather than a captured local, the live bug is "swpctx is a silent no-op," and the same one-token fix repairs it. Reachability (Q3) cannot be settled from this packet. Confirm `med` conditional on Q3.**
+
+## Premise audit first
+
+- **Site contradiction — READ, self-sufficient.** "Return old context in v0" directly above `r[ALPHA_A0] = ...` is a contradiction needing no file and no census. The one assumption — `ALPHA_V0` ≠ `ALPHA_A0` — is discharged *inside the packet*: the wrapper binds v0 to `"$0"` and a0 to `"$16"`. Distinct registers, established by the packet itself.
+- **Census (8 V0 sites, 1 A0 site) — NOT CHECKABLE.** It is a stated measurement I cannot reproduce. Settling fact: the grep output or the eight cited lines verbatim. Note the finding does not depend on it; the site-level contradiction stands alone.
+- **Wrapper semantics — READ.** `v0` is the only pure output whose value the compiler will consume; `a0` is tied in-out and treated as dead after the asm. Consistent with Alpha PAL convention (REASONED).
+- **"Ordering is correct and NOT part of this defect" — NOT CHECKABLE, and this is my main catch.** The paraphrase `:255 cpu->cd.alpha.ctx = a0;` is ambiguous. If the incoming a0 was captured into a local *above* `:251` (Hypothesis B), the brief is right: only the return register is wrong, and the fix is exactly sufficient. If `:255` reads `r[ALPHA_A0]` *after* `:251` clobbered it (Hypothesis A), then today `ctx` gets the OLD ctx back — the swap never happens — and the one-identifier fix silently also revives the swap. The lowercase `a0` in the paraphrase hints at a local, but the packet does not show lines 244–255. **Settling fact: those lines verbatim.** One soft cross-check (REASONED): under Hypothesis A, any real swpctx user would fail catastrophically, not subtly — so either Hypothesis B holds or no supported guest ever calls swpctx. That same fork decides Q3's stakes.
+
+## Q1 — fix correct and sufficient; no a0 write required
+
+Triple agreement (comment, census-as-stated, wrapper) makes A0→V0 correct. Sufficiency: "clobbered" means a conforming caller may not read a0 afterward, so *any* residual value is a legal clobber — post-fix a0 keeps the input (new ctx), which is conformant. Leaving a0 untouched is not a second fidelity defect for any ABI-conforming guest; only differential poking against real PALcode could observe it, which is out of scope by construction (READ of wrapper + REASONED). Caveat: under Hypothesis A the fix's effect widens — the witness must then also cover the ctx transition, still one site.
+
+## Q2 — confirm `med`, explicitly conditional
+
+Not anchored to the tbine row: that raise, per the brief, came with demonstrated boot-path impact; this row has no witness yet. Escalator (REASONED): if Q3 shows reachable *and consumed*, a silently wrong return from the context-switch PAL is corruption-class → argue high. If Q3 proves unreachable for all supported guests → drop to low / documented-only. `med` is the correct ceiling today, and the wrong-value-not-crash framing is the argument that floors it above low — not an argument for high absent a consumer.
+
+## Q3 — not settleable from the packet
+
+Zero guest-side evidence exists in the packet. Settling fact: one instrumented boot of the supported guest set on `-E alpha -e alphabook1` with a breakpoint/printf on the `PAL_OSF1_swpctx` case — one hit settles reachable; zero hits across full boots settles documented-only. Path shape once issued: guest `call_pal` insn → PAL trap → `alpha_palcode()` dispatch → the case shown (REASONED from the site's existence). Unverified lead, not evidence (REASONED): kernels implementing context switch via `call_pal swpctx` would hit this at the *first* context switch, thousands of times per boot — check the booting guests' locore.
+
+## Q4 — probe shape; the seed answers your specific question
+
+**Seed v0 with S0 distinct from C_old AND C_new (and non-canonical).** That alone separates "handler did nothing to v0" (v0 == S0) from "wrote the right thing" (v0 == C_old) — this is the distinguishing seed. Shape:
+
+1. Halt at a privileged pc; deposit or locate a `call_pal` swpctx opcode. Set r[A0]=C_new, r[V0]=S0, with C_new ≠ C_old (the handler only stores ctx, so C_new need not be dereferenceable).
+2. **ONE `step 1`** — the entire PAL dispatch runs inside that instruction's emulation, so the all-flush trap never spans the call. Stepping from *on* the call also ends before the next guest instruction can clobber v0.
+3. Primary oracle: r[V0] == C_old. Pre-fix it returns S0 — fails — so the oracle is non-vacuous by construction, dodging the read-back trap. Secondary oracle from plain register dump: pre-fix r[A0] == C_old, post-fix r[A0] == C_new — distinct given C_new ≠ C_old.
+4. If internal `ctx` isn't debugger-readable (unknown from packet — settling fact: a state-dump showing it) and C_old is unknowable: differential oracle at a deterministic halt point — assert post.v0 == pre.a0 ∧ post.v0 ≠ S0. Non-vacuous with no absolute values.
+
+## Q5 — separate row; fails the project's own join test on all three prongs
+
+(READ of the stated rule) `:296` fails all three: no witness, different semantic class (over-invalidation vs wrong-value), different detector/oracle. Additionally (REASONED): invalidating *more* than necessary is semantically safe — it cannot create stale translations — so the TODO is fidelity/perf debt, not a defect sibling at all. The neighbouring seat's warning is real but is a *baseline* coupling, not a scope coupling: log now that whichever row lands second re-runs this witness with both fixes present. This round takes `:251` alone; the oracle reads v0, which invalidation scope cannot perturb, so interference is minimal.

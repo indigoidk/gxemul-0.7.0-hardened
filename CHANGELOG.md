@@ -1,3 +1,76 @@
+# `#514` alphaswpctxreg: the OS's context-switch primitive returned its result in the register the ABI tells the caller to discard
+
+**THE DEFECT, and it contradicts the comment directly above it.**  `cpu_alpha_palcode.c:250-251`:
+
+    /*  Return old context in v0.  */
+    cpu->cd.alpha.r[ALPHA_A0] = cpu->cd.alpha.ctx;
+
+The third-party ABI wrapper settles the intent independently.  `alpha_pal_swpctx`
+(`alpha_cpu.h:449-459`) declares `register unsigned long v0 __asm("$0")` as an **output** and lists
+`a0` among the clobbers -- *"clobbers t0, t8..t11, a0 (above)"*.  **So a correct caller reads the
+result from `v0` and may not rely on `a0`: the model published into the register the caller is told
+to throw away and left untouched the one it reads.**  A guest calling `ALPHA_SWPCTX()` gets whatever
+`v0` happened to hold.
+
+**THE FIX IS ONE IDENTIFIER** -- `ALPHA_A0` -> `ALPHA_V0` -- and six seats confirmed it is
+*sufficient*, not merely correct.  **No `a0` write is added**: the architecture marks `a0`
+UNPREDICTABLE after the call, and that definition explicitly permits a register to remain unchanged,
+so nothing further is owed.  *An earlier draft of mine called `a0` "unobservable by construction";
+codex refused that as too strong -- software CAN read `a0`, it simply cannot require a value.*
+
+**THE WITNESS IS RUNG 3 AND IT WENT RED FIRST.**  `regress/alpha_swpctx_v0_probe.py`, on unmodified
+`-E alpha -e alphabook1` with real `call_pal 0x30` instructions:
+
+    PREFIX_20260908.out    2/4   measured on fc687db with the file UNMODIFIED
+    POSTFIX_20260908.out   4/4   same script, after the one-identifier change
+
+**THE ORACLE CARRIES THREE DISTINGUISHABLE VALUES, and that is what makes it more than a
+value check.**  An old context `C = 0x01000000`, a new context `N = 0x01010000`, and a sentinel
+`S = 0x00ab0000` seeded into `v0` immediately before the second call:
+
+    v0 == C   correct                          <- what the row asserts
+    v0 == S   the handler never wrote v0       <- the shipped defect, measured
+    v0 == N   an INCORRECT repair returning the NEW context instead of the old
+
+*A row asserting only "v0 changed" would pass that third case.*  The design is codex's, from the
+pass-1 brief's Q4.
+
+**AND THE ATTRIBUTION CONTROL IS WHAT MAKES IT A WITNESS RATHER THAN A READING.**  `a0 land` reads
+`a0` after the second call.  Pre-fix it holds `C`, which proves **the handler RAN and wrote the
+wrong register**; had the handler never executed, `a0` would still hold `N`.  One observation, two
+hypotheses separated -- and both rows flipped together, 2/4 -> 4/4.
+
+**PASS 1: SIX SEATS, UNANIMOUS on the fix, the severity (`med`) and the scope.**  codex, grok, glm,
+kimi, deepseek and minimax.  `opus5` and `fable5` are HELD for the 2026-09-09 adjudication and `agy`
+is the measurement reserve, so all three are recorded BY NAME as deliberate non-firings -- which is
+neither a seat failure nor agreement.
+
+*** THE PANEL CAUGHT A PREMISE I ASSERTED AND NEVER EXHIBITED, AND THREE SEATS FOUND IT
+INDEPENDENTLY. ***  My brief said *"ordering in the handler is correct"* while showing only `:251`
+and `:255`.  glm, kimi and minimax all refused to grant it, and kimi named the fork exactly: **if
+`:255` read the REGISTER rather than a captured local, `:251` would clobber it and the live defect
+would be "swpctx is a silent no-op"** -- a larger bug that the same one-token fix repairs.  Verified
+by opening the file: `:165` is `uint64_t a0 = cpu->cd.alpha.r[ALPHA_A0], a1 = ...`, a local captured
+at function entry, so the fork does not exist.  **The premise was true, and it was true by luck of
+my having read it earlier rather than by anything the brief showed.**
+
+*** MY CENSUS WAS TEXTUALLY RIGHT AND MISLEADING, AND TWO SEATS FOUND IT SEPARATELY. ***  I reported
+EIGHT `ALPHA_V0` return sites.  Three -- `:306`, `:356`, `:383` -- are inside `#if 0`, and `:118` is
+`alpha_prom_call`, not a PAL handler.  codex and grok arrived at the same corrected figure
+independently: **five compiled assignments file-wide, four live PAL returns** (`rdmces`, `swpipl`,
+`rdps`, `whami`).  *I grepped for textual presence and reported it as compiled code.*
+
+**glm's triangulation point is the one worth keeping:** the verdict holds *even if both greps were
+wrong*, because the comment, the code and the third-party wrapper agree independently.  **The census
+was corroboration, never the load-bearing evidence** -- which is why an inflated count did not
+change the answer.
+
+**SCOPE, deliberately narrow:** the `// TODO: Don't invalidate EVERYTHING!` at `:296` in the same
+arm is **excluded** -- every seat called it a separate row, and the one-site rule governs.  It bears
+on `alphatbinegsel`, which is open on the same flush behaviour; **`#514` has now landed first, so
+that row owes a re-baselined witness**, and the question is queued for the flagship seat rather than
+answered here.
+
 # `#513` sgirekills: five modelled registers ended the host when read back -- and four adversarial passes, three of which found something
 
 **THE DEFECT.**  `dev_sgi_re.c` carried SIX read arms of the form

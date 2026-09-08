@@ -162,6 +162,7 @@ MANIFEST = {
     "lca_irqstub_probe.py":       (CLASS_WITNESS,  "lcairqstubkill: ONE guest store to the 8042 command port reaches lca_interrupt_assert and ends the host -- HEAD 3/4, the RED row is the defect; post-fix green PENDING"),
     "pcc2_c040_probe.py":         (CLASS_WITNESS,  "pcc2c040kill: ONE legal guest st.b of 0x04 to PCC2 GENCTL runs reassert_interrupts() in the same access and ends the host -- HEAD 3/4, the RED row is the defect; post-fix green PENDING"),
     "alpha_pfnoffset_probe.py":   (CLASS_WITNESS,  "alphapfnoffset: the page-table walk drops the within-page offset -- HEAD 5/7, fix 7/7"),
+    "alpha_swpctx_v0_probe.py":   (CLASS_WITNESS,  "alphaswpctxreg (#514): swpctx published the old context into a0, the register the ABI wrapper calls clobbered, leaving v0 untouched -- HEAD 2/4, fix 4/4"),
     #  #509.  It began as a 6-row witness and grew to 14 rows across two kill tables; it is
     #  classified WITNESS because nothing gates it, which is the same footing as the three
     #  above.  Wiring it is a separate decision and a separate round.

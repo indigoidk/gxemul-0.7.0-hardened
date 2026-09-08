@@ -1,0 +1,28 @@
+VERDICT: The one-identifier fix `ALPHA_A0` → `ALPHA_V0` is correct and sufficient for the stated defect. Reachability and severity cannot be settled from this packet. The `:296` TODO is a separate row.
+
+**Premise audit**
+- READ: The comment says v0; the line writes `ALPHA_A0`.  
+- READ: The packet states 8 `ALPHA_V0` return sites and exactly one `ALPHA_A0` assignment.  
+- REASONED: That makes the `A0` write a population of one against a return convention of eight — sound.  
+- READ: The ABI wrapper declares `v0` as an output and `a0` as clobbered.  
+- REASONED: A correct guest must read the result from `v0` and cannot rely on `a0` after the call.  
+- READ: Ordering is correct — old `ctx` is published before `ctx` is overwritten.
+
+**Q1 — Fix correct and sufficient?**  
+Yes. Changing `ALPHA_A0` to `ALPHA_V0` puts the old context in the architecturally defined return register.  
+No additional action on `a0` is required: the wrapper declares `a0` clobbered, so any value there is unobservable to a correct caller. Leaving `a0` holding the old context is not a second fidelity defect under the stated ABI.
+
+**Q2 — Severity**  
+Confirm `med`, provisionally. It is a silent wrong-value defect in a documented PALcode primitive, not a crash. But the packet does not establish reachability or guest-visible consequence, so `high` is not supported from the inlined facts. If reachability is later shown and a supported guest branches on `v0`, an upward argument could be made.
+
+**Q3 — Reachability**  
+Not checkable from this packet. The wrapper’s existence in `alpha_cpu.h` is not evidence that a booting `-E alpha -e alphabook1` guest calls `swpctx` and consumes `v0`.  
+Single fact that would settle it: a call path from guest code to `alpha_pal_swpctx` followed by a read of `v0`.
+
+**Q4 — Witness shape**  
+In one `step N`: seed `v0` with a sentinel `S`; set the current context to a known old value `C_old`; execute `swpctx` with a new context `C_new`; then read `v0`.  
+Oracle: `v0 == C_old`.  
+Pre-fix broken handler leaves `v0 == S`; fixed handler writes `C_old`. Ensure `S != C_old` so the oracle is not vacuous.
+
+**Q5 — Scope**  
+The `:296` TODO is a separate row. It is a performance/invalidation-granularity issue, not a wrong-register return defect. Different semantic class, different detector, and it would require a new oracle. It does not belong in this round.

@@ -41,7 +41,7 @@ those panels produced had six or seven seats behind it.
 <!-- BEGIN GENERATED: codex-wall -- edit gen_codex_wall.py, not this block -->
 ### HELD STAGES -- every row awaiting a seat, derived from the ledger
 
-`alphatbinegsel` (assess:fable5,opus5) · `armbfxwidth32` (assess:fable5,opus5; review:fable5,opus5) · `carrier` (regress:fable5) · `es438` (regress:fable5) · `gdromcondlies` (regress:fable5) · `holdmarkermulti` (regress:fable5) · `lcabadval` (assess:codex,fable5,grok,kimi,opus5; design:fable5; research:fable5) · `lcaconfbus1kill` (design:fable5) · `lcairqstubkill` (design:fable5) · `m88kexcdetectorl2` (design:fable5) · `ns16550` (regress:fable5) · `pcc2c040kill` (assess:fable5; design:fable5; review:fable5) · `pcc2widthkills` (assess:fable5,opus5) · `proberowsubset` (assess:codex) · `sgideprimop` (regress:fable5) · `sgidewidth` (regress:fable5) · `sgimtedepth4dead` (assess:fable5,opus5; review:fable5,opus5) · `sgirekills` (assess:codex,grok,kimi,opus5) · `sgireunmapped` (regress:fable5) · `sgitexindex` (assess:codex,fable5,grok,kimi,opus5) · `sh4sci` (regress:fable5) · `wdccdbmidxfer` (regress:fable5; research:opus5) · `wdcdataoutdrain` (regress:fable5)
+`alphaswpctxreg` (design:fable5,opus5) · `alphatbinegsel` (assess:fable5,opus5) · `armbfxwidth32` (assess:fable5,opus5; review:fable5,opus5) · `carrier` (regress:fable5) · `es438` (regress:fable5) · `gdromcondlies` (regress:fable5) · `holdmarkermulti` (regress:fable5) · `lcabadval` (assess:codex,fable5,grok,kimi,opus5; design:fable5; research:fable5) · `lcaconfbus1kill` (design:fable5) · `lcairqstubkill` (design:fable5) · `m88kexcdetectorl2` (design:fable5) · `ns16550` (regress:fable5) · `pcc2c040kill` (assess:fable5; design:fable5; review:fable5) · `pcc2widthkills` (assess:fable5,opus5) · `proberowsubset` (assess:codex) · `sgideprimop` (regress:fable5) · `sgidewidth` (regress:fable5) · `sgimtedepth4dead` (assess:fable5,opus5; review:fable5,opus5) · `sgirekills` (assess:codex,grok,kimi,opus5) · `sgireunmapped` (regress:fable5) · `sgitexindex` (assess:codex,fable5,grok,kimi,opus5) · `sh4sci` (regress:fable5) · `wdccdbmidxfer` (regress:fable5; research:opus5) · `wdcdataoutdrain` (regress:fable5)
 
 *** TWO DIFFERENT KINDS OF HOLD APPEAR BELOW AND THEY MUST NOT BE READ ALIKE. ***
 
@@ -60,7 +60,7 @@ marker can mask another gap* -- section H cannot see a shortfall that a differen
 **Neither kind is a blank.** A blank cell and a seat failure must not look alike, and an
 allocation is a third thing again: recorded by seat name, per row, with the reason.
 
-**This is ONE outage plus one allocation, not 23 decisions, and it is written once rather than once per panel.**
+**This is ONE outage plus one allocation, not 24 decisions, and it is written once rather than once per panel.**
 **THE CODEX HISTORY, kept because it calibrates what a wall looks like.** Across ten panels it
 produced the identical signature every time -- the echoed brief followed by the usage-limit
 error -- in files of 26,992 / 11,180 / 10,036 / 8,323 / 12,414 / 11,938 / 10,726 / 16,694 /
@@ -2306,3 +2306,39 @@ were then unverified. They are now verified. Does that move this row first?
 the witness design after codex refused it) plus four packet-fed seats. **opus5 and fable5 are
 preserved for this adjudication and agy is the measurement reserve, so no flagship seat could run.**
 Held and queued as one action.*
+
+### `alphaswpctxreg` (#514) — shipped with a rung-3 witness; the question is whether the round is complete
+
+**MEASURED, not argued:** `cpu_alpha_palcode.c:251` published the old context into `ALPHA_A0` under
+a comment saying v0, while the ABI wrapper declares `v0 __asm("$0")` an **output** and lists a0 as
+**clobbered**. One identifier. `regress/alpha_swpctx_v0_probe.py` scores **HEAD 2/4, fix 4/4** with
+the same script on unmodified `-E alpha -e alphabook1`, using a three-value oracle (old context C,
+new context N, sentinel S) so an incorrect repair returning the **new** context is caught rather
+than passing. Six seats agreed the fix is correct and sufficient; two independently corrected a
+census of mine.
+
+#### 1. (HIGH) Is the detector above the vacuity floor — and is clause (d) *by construction* enough?
+
+I claim (a) from the 2/4 pre-fix run, (b) because that run **is** a verbatim reinstatement, (c) from
+the two identity controls, and **(d) BY CONSTRUCTION** — the oracle wants C, and an incorrect repair
+gives N, so it cannot pass. **But (d) here is an argument, not a built mutant**, because the fix
+adds no predicate to weaken. **Is a clause-(d) satisfied by construction acceptable, or does the
+round owe a built `v0 = a0` mutant?**
+
+#### 2. (MED) Does an executed witness move severity?
+
+Six seats said keep `med` and I did not argue. The round now has what the assessment did not: an
+executed witness showing a documented primitive returns a sentinel instead of its result.
+**Or is that exactly the reachability-versus-harm confusion the ladder warns against** — rung
+measures proof strength, never harm?
+
+#### 3. (MED) `#514` landed first, so what does `alphatbinegsel` now owe?
+
+Every seat called the `:296` `// TODO: Don't invalidate EVERYTHING!` a separate row and I excluded
+it. But `alphatbinegsel` is open on the **same** flush behaviour, and glm warned that whichever of
+the two lands second must re-baseline its witness with the other's fix present. **#514 has landed
+first.**
+
+*Stage state: design ran SIX seats — codex, grok, glm, kimi, deepseek, minimax — all confirming.
+opus5 and fable5 are preserved for this adjudication and agy is the measurement reserve, so no
+flagship seat could run. Held and queued as one action.*
