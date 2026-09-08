@@ -8827,7 +8827,62 @@ already a wider unsigned quantity.
 
 **SEVERITY STAYS LOW and that is deliberate**: the overflow is UB by the language, the emitted code
 on every compiler this project targets is what was intended, and no wrong guest-visible value has
-been measured.  What changed is that it is now WITNESSED rather than argued.</span></span><span class="state st-open">open</span></span></th></tr><tr class="ph st-open"><th scope="row" class="phlabel">Assessment (initial problem)</th><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td></tr><tr class="ph st-open"><th scope="row" class="phlabel">Research (fix proposals)</th><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td></tr><tr class="ph st-open"><th scope="row" class="phlabel">Final review (flagship adjudication)</th><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td></tr><tr class="ph st-open"><th scope="row" class="phlabel">Regression testing</th><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td></tr><tr class="fixhead st-in work"><th colspan="10"><span class="hline"><span class="wrap" tabindex="0"><span class="rid">alphapfnoffset</span><span class="ttl">memory_alpha.c alpha_translate_v2p(): the page-table walk returns PFN &lt;&lt; pageSizeShift, dropping the within-page offset, while memory_rw derives its offset from that value -- every walked access would land at its page base</span><span class="tip">memory_alpha.c alpha_translate_v2p(): the page-table walk returns PFN &lt;&lt; pageSizeShift, dropping the within-page offset, while memory_rw derives its offset from that value -- every walked access would land at its page base — witness: probe:regress/alpha_pfnoffset_probe.py -- RUNG 3, unmodified `-E alpha -e alphabook1&#x27;. HEAD 5/7, fix 7/7, same script.  Two cold walked loads at different VPNs and offsets, five controls.  regress/artifacts/alphapfnoffset/probe_{head7,fix}_20260907.out — note: FILED 2026-09-07, raised by the codex seat (regress/artifacts/lcabadval/codex_scoping_20260907.txt) while scoping an unrelated device, and
+been measured.  What changed is that it is now WITNESSED rather than argued.
+
+*** THE FIX IS DESIGNED AND EXECUTABLE.  Written out here so the next session can run it rather than
+re-derive it -- the round is small and every input is now in hand. ***
+
+**THE EDIT, one token:**
+
+    -	if (tag &amp; (0x800 &lt;&lt; dev))
+    +	if (tag &amp; (0x800U &lt;&lt; dev))	/*  #NNN  */
+
+`0x800U` makes the operand `unsigned int`, so `2048U &lt;&lt; 20` is `0x80000000U` -- well inside
+`unsigned int` -- and no other behaviour moves: `tag` is already a wider unsigned quantity, so the
+`&amp;` and the truth value are unchanged at every one of the 21 iterations.  **The emitted code on
+every compiler this project targets is what was already intended**, which is why the severity is LOW
+even though the language calls it undefined.
+
+*** THE TEST-FIRST ORDER IS ALREADY SATISFIED, WHICH IS UNUSUAL AND WORTH NOTING. ***  The witness
+exists and is RED on the committed build: running `regress/lca_confbus_probe.py` against
+`build-asan/gxemul` emits
+
+    dev_lca.c:125:21: runtime error: left shift of 2048 by 20 places cannot be
+                      represented in type &#x27;int&#x27;
+
+So the reproduce-before-you-edit step is DONE and preserved
+(`regress/artifacts/lcashiftub/ubsan_HEAD_20260907.raw`).  The post-fix half is: the same command,
+same binary path, and **the diagnostic must be ABSENT**.  Same script, opposite outcome -- which is
+the ladder&#x27;s clause (i) exactly.
+
+**WHAT THE ROUND OWES, and the one real decision in it:**
+
+The two-direction control above is a UBSAN DIFFERENTIAL, and this project has that filed as its own
+round ([[ubsanshiftlane]]) because it is a NEW MEASUREMENT LANE -- a second binary and a STDERR
+oracle rather than a value oracle.  **So the honest choice is:**
+
+* **(a) ship the fix with the UBSAN differential as its detector**, which means building at least a
+  minimal version of the lane in this round -- and a lane added inside a fix round is a lane nobody
+  reviewed, which is the exact objection `ubsanshiftlane` was filed to avoid; or
+* **(b) ship the fix with a SOURCE PIN** -- a check asserting the expression is `0x800U` -- and
+  leave the differential to its own round.  `#510`&#x27;s own product comments already name a source pin
+  as the legitimate alternative to UBSAN for precisely this class (&quot;No row can kill a `1U&#x27; -&gt; `1&#x27;
+  regression; UBSAN or a source pin can&quot;).
+
+**(b) is in scope and (a) is not**, on this project&#x27;s own stopping rule: the fix is a one-token
+correctness repair, and expanding it into a new measurement lane is the scope creep the rule exists
+to refuse.  *Recorded as a reasoned choice rather than a preference, so a reviewer can disagree with
+the reason.*
+
+**COST: a build.**  The edit must propagate to all four trees and `build-asan` must be REBUILT for
+the post-fix measurement, which is the only expensive part and is why this was not executed the
+moment it was designed -- a rebuild must not overlap a running seat.
+
+**AND THE POST-FIX RUN IS THE ONE THAT MATTERS MORE THAN THE FIX.**  If the diagnostic does NOT
+disappear, the repair is wrong or the site is not the one being reported, and that is a finding
+about the measurement rather than a formality.  Predict-then-measure: it should vanish, and nothing
+else in the probe&#x27;s four rows should move (3/4 before, 3/4 after -- the `bus kill` row is a
+different defect and stays RED).</span></span><span class="state st-open">open</span></span></th></tr><tr class="ph st-open"><th scope="row" class="phlabel">Assessment (initial problem)</th><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td></tr><tr class="ph st-open"><th scope="row" class="phlabel">Research (fix proposals)</th><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td></tr><tr class="ph st-open"><th scope="row" class="phlabel">Final review (flagship adjudication)</th><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td></tr><tr class="ph st-open"><th scope="row" class="phlabel">Regression testing</th><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td></tr><tr class="fixhead st-in work"><th colspan="10"><span class="hline"><span class="wrap" tabindex="0"><span class="rid">alphapfnoffset</span><span class="ttl">memory_alpha.c alpha_translate_v2p(): the page-table walk returns PFN &lt;&lt; pageSizeShift, dropping the within-page offset, while memory_rw derives its offset from that value -- every walked access would land at its page base</span><span class="tip">memory_alpha.c alpha_translate_v2p(): the page-table walk returns PFN &lt;&lt; pageSizeShift, dropping the within-page offset, while memory_rw derives its offset from that value -- every walked access would land at its page base — witness: probe:regress/alpha_pfnoffset_probe.py -- RUNG 3, unmodified `-E alpha -e alphabook1&#x27;. HEAD 5/7, fix 7/7, same script.  Two cold walked loads at different VPNs and offsets, five controls.  regress/artifacts/alphapfnoffset/probe_{head7,fix}_20260907.out — note: FILED 2026-09-07, raised by the codex seat (regress/artifacts/lcabadval/codex_scoping_20260907.txt) while scoping an unrelated device, and
 verified at both ends.
 
     memory_alpha.c   (*return_paddr) = ALPHA_PTE_TO_PFN(pte3) &lt;&lt; pageSizeShift;
