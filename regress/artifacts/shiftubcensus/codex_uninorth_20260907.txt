@@ -1,0 +1,117 @@
+**VERDICT: NO. The macppc guest-store paths cannot place bits 32..63 in this register’s `idata` or `cur_addr`: the dispatcher clamps the four-byte address window before calling the handler. `MEM_PCI_LITTLE_ENDIAN` preserves these access widths.**
+
+All references below are within `GXEMUL-SEC/src/`.
+
+1. **`memory_readmax64()` can decode 64 bits, but this handler receives at most four bytes.**
+
+   In [core/memory.c:55](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/core/memory.c:55), `memory_readmax64()` initializes an unsigned accumulator:
+
+   ```c
+   uint64_t x = 0;
+   ```
+
+   Its little-endian arm, lines 72–77, is:
+
+   ```c
+   for (i=len-1; i>=0; i--) {
+       x <<= 8;
+       x |= buf[i];
+   }
+
+   return x;
+   ```
+
+   `buf` is `unsigned char *`. Thus, for the handler’s forced little-endian decode, the exact result is `Σ data[i] × 256^i`, for `i = 0..len-1`. No input byte is sign-extended.
+
+   | Handler `len` | Possible result | Bits 32..63 |
+   |---:|---:|---|
+   | 1 | `0..0xff` | Zero |
+   | 2 | `0..0xffff` | Zero |
+   | 3 | `0..0xffffff` | Zero |
+   | 4 | `0..0xffffffff` | Zero |
+
+   The same helper **would** admit high bits for decoded lengths 5–8, including all 64 bits at length 8. Those lengths do not reach this registered address handler through the examined guest-store paths.
+
+2. **An eight-byte guest store can be submitted, but the callback receives four bytes at `0xe2800000`.**
+
+   [dev_uninorth.c:141](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_uninorth.c:141), `dev_uninorth_init()`:
+
+   ```c
+   memory_device_register(mem, "uninorth_pci_addr", addr + 0x800000,
+       4, dev_uninorth_addr_access, d, DM_DEFAULT, NULL);
+   ```
+
+   [core/memory.c:466](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/core/memory.c:466), `memory_device_register()`, records `endaddr = baseaddr + len` and `length = len`.
+
+   The decisive enforcement is in [cpus/memory_rw.c:494](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:494), `MEMORY_RW_ONE_PAGE`, instantiated as `ppc_memory_rw_one_page`:
+
+   ```c
+   paddr -= mem->devices[i].baseaddr;
+   if (paddr + len > mem->devices[i].length) {
+       /* intervening diagnostic omitted */
+       len = mem->devices[i].length - paddr;
+   }
+   ```
+
+   The subsequent [callback invocation at line 587](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:587) passes that clamped `len`.
+
+   Specifically, [cpu_ppc_instr.c:3736](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc_instr.c:3736), `X(stfd)`, selects the doubleword store in both CPU modes, subject to its FPU check. [tmp_ppc_loadstore.c:1068](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/tmp_ppc_loadstore.c:1068) defines the 32-bit-mode implementation with `LS_SIZE 8`; [cpu_ppc_instr_loadstore.c:174](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc_instr_loadstore.c:174), `LS_GENERIC_N()`, submits `sizeof(data)` bytes. `X(to_be_translated)` also selects `size=3` for `std` at [line 4249](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc_instr.c:4249).
+
+   For an access resolving to this physical register, the memory request therefore carries eight bytes until the device clamp reduces it to four. `ppc_memory_rw()`’s [boundary-splitting wrapper](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:183) does not split that aligned eight-byte request. After the callback, the worker returns through `do_return_ok`; it does not dispatch the discarded four-byte tail.
+
+   Across offsets `r = 0..3`, the callback receives `min(request_length, 4-r)`. This explains **length 3**: an unaligned word access at offset 1 falls back through `LS_GENERIC_N()` and is clamped to three bytes ([cpu_ppc_instr_loadstore.c:228](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc_instr_loadstore.c:228)).
+
+   **Denominator:** I examined **one registered callback route, 1/1 found**, and **all six PPC instruction memory-write call-site families found**, counting generated variants together:
+
+   | Source and function | Bytes submitted per memory call |
+   |---|---:|
+   | [cpu_ppc_instr_loadstore.c: `LS_GENERIC_N`](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc_instr_loadstore.c:174), integer/FP stores | 1, 2, 4, 8 |
+   | [cpu_ppc_instr.c: `X(llsc)`](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc_instr.c:2276) | 4 or 8 |
+   | [cpu_ppc_instr.c: `X(stmw)`](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc_instr.c:2926) | 4 per iteration |
+   | [cpu_ppc_instr.c: `X(stswi)`](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc_instr.c:2998) | 1 per iteration |
+   | [cpu_ppc_instr.c: `X(stvx)`](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc_instr.c:3801) | 16 |
+   | [cpu_ppc_instr.c: `X(dcbz)`](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc_instr.c:986) | Cache-line chunks, at most 128 |
+
+   Every callback-reaching route uses the same clamp. The registration has `DM_DEFAULT = 0`, so the dispatcher’s `DM_DYNTRANS_OK` path does not apply ([memory.h:131](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/memory.h:131), [memory_rw.c:526](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:526)).
+
+3. **Your Q3 suspicion is wrong for these lengths: the flag is removed before either decoding loop.**
+
+   [include/memory.h:98](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/memory.h:98) defines `MEM_PCI_LITTLE_ENDIAN` as `128`. [core/memory.c:60](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/core/memory.c:60), `memory_readmax64()`:
+
+   ```c
+   if (len & MEM_PCI_LITTLE_ENDIAN) {
+       len &= ~MEM_PCI_LITTLE_ENDIAN;
+       byte_order = EMUL_LITTLE_ENDIAN;
+   }
+   ```
+
+   Consequently, lengths `1,2,3,4` become arguments `129,130,131,132`, then decode as `1,2,3,4` again. Likewise, `8|128` would decode as 8. **The OR changes byte order, not effective width, here.**
+
+4. **There is no additional mask before the loop.**
+
+   [dev_uninorth.c:55](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_uninorth.c:55), `dev_uninorth_addr_access()`, assigns the helper result directly to `cur_addr`; the loop arm leaves `idata` unchanged. The limiting operation is the **upstream buffer-length clamp**.
+
+   That clamp retains the first four buffer bytes, rather than necessarily the source register’s low 32 bits: `LS_GENERIC_N()` emits doubleword-store bytes most-significant first ([cpu_ppc_instr_loadstore.c:163](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc_instr_loadstore.c:163)). They still decode into only bits 0..31.
+
+   The other arm also passes through a `uint32_t` parameter in [bus_pci.c:72](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/bus_pci.c:72), `bus_pci_decompose_1()`; that does not protect the loop arm.
+
+5. **V3’s “upper bits are provably zero” argument needs correction.**
+
+   [dev_v3.c:63](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_v3.c:63) declares `lb_map0` as `uint16_t`. In [dev_v3_pci_access():161](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_v3.c:161):
+
+   ```c
+   relative_addr &= 0xfffff;
+   relative_addr |= ((d->lb_map0 & 0xfff0) << 16);
+   ```
+
+   With 32-bit `int`, `lb_map0` promotes to signed `int`; the shifted expression is also signed. Under the same two’s-complement behavior assumed in your question, setting its bit 31 can therefore produce upper ones when converted for the `uint64_t` OR.
+
+   **However, those upper ones occur only when bit 31 itself is already set.** They cannot independently create the proposed false match at `dev == 31`. Your conclusion about that particular false-match mechanism holds; the zero-upper-bits proof does not.
+
+6. **Other observations, scoped to this handler:**
+
+   - With 32-bit `int`, C’s signed `1 << 31` is undefined behavior, not a guaranteed negative result. That remains a separate issue in both scans; V3’s signed shift by 16 has the same issue when its result exceeds `INT_MAX`.
+   - `dev_uninorth_addr_access()` ignores `relative_addr` and replaces the whole `cur_addr` on a narrow write; it does not merge byte lanes. A zero write sets `cur_addr = 0`, then returns failure before updating the PCI selection ([dev_uninorth.c:55](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_uninorth.c:55)).
+   - Its `dev == 32` branch logs and continues to `bus_pci_setaddr()` ([dev_uninorth.c:73](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_uninorth.c:73)); `fatal()` itself is a logging wrapper ([core/debugmsg.c:384](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/core/debugmsg.c:384)).
+
+This was static source review. No probe was written or run, and neither excluded path was read.
