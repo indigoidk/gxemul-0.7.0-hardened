@@ -16619,3 +16619,46 @@ and the reopening rule forbids bolting a second defect onto an offset repair.
 
 *Distinct from [[alphafaultclaim]], which is the FAILED-walk path. This is the SUCCEEDED-walk
 path returning a blanket "writable".*
+
+
+### `gateworktree` (med) -- filed 2026-09-07: the pre-commit gate validates the WORKING TREE, not
+### what is being committed
+
+**MEASURED, on my own commit.** `2956c7e` committed `regress/sgi_mte_fill_probe.py` and NOT the
+`check_probe_wiring.py` MANIFEST entry that classifies it. A fresh clone at that SHA reds with
+`UNCLASSIFIED sgi_mte_fill_probe.py`. **`precommit_check.sh` reported `PRECOMMIT_PASS 0 hard`
+immediately before that commit**, because the working tree already carried the manifest edit --
+it was simply never staged.
+
+    git show HEAD:tools/pipeline/check_probe_wiring.py | grep -c sgi_mte_fill_probe.py   -> 0
+    grep -c sgi_mte_fill_probe.py tools/pipeline/check_probe_wiring.py                   -> 1
+
+> **A CHECK THAT VALIDATES A STATE OTHER THAN THE ONE THAT SHIPS CANNOT SEE A STAGING OMISSION.**
+> It is not the check-that-cannot-fail shape -- this gate fails all the time and caught eleven
+> real things tonight -- it is a check whose SUBJECT is one step to the left of the thing it is
+> guarding.
+
+*** AND IT INTERACTS WITH A POLICY THIS PROJECT ALREADY HOLDS, WHICH IS WHY IT IS WORTH A ROW
+RATHER THAN A NOTE. *** The carrier forbids `git add -A` and directory-level adds, so every commit
+here stages by EXPLICIT PATH. That is strictly safer against INCLUDING the wrong file -- the
+failure the rule was written for -- and strictly MORE EXPOSED to OMITTING the right one. **The two
+rules pull in opposite directions and only one of them has a checker.**
+
+**The same commit missed two more things, both caught by OTHER sections on the NEXT commit** --
+its own pass-2 receipt (section F) and the ledger row naming it (section L). So the gate's
+coverage is real; what it cannot do is bind that coverage to the staged set.
+
+**THE CHEAP FIX, and it is not obviously right, which is why this is filed rather than built:**
+run the gate against `git stash --keep-index`, or against a temporary checkout of the index. Both
+are invasive -- the gate takes ~2 minutes and already stashes nothing, and a gate that manipulates
+the working tree can lose uncommitted work if it dies mid-run. **That risk is worse than the
+defect**, so the disposition is NOT "wrap it in a stash".
+
+A narrower and safer candidate: **a single existence check comparing the STAGED set against a
+short list of paired files** -- a new `regress/*.py` and its MANIFEST entry; a `src/` change and a
+CHANGELOG round block. That is the `check_cited_artifacts.py` idiom (existence-only, forward-only
+from a cutoff) rather than a re-run of everything.
+
+*Not built here. It changes what every commit must satisfy, which is an owner decision and owes
+two negative controls: prove it reds on a probe staged without its manifest entry, and prove it
+stays green when both are staged.*
