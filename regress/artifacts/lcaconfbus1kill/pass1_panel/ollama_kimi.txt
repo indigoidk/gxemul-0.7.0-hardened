@@ -1,0 +1,53 @@
+**VERDICT: Q1's worry is unfounded — the sketch's decode is arithmetically consistent with the quoted comment, and the comment is pinned to the post-shift `tag` by the working bus-0 code (`0x800U` == `1<<11`, func at bits 10..8 in both rows), so `dev = (tag >> 11) & 0x1f` is the faithful type-1 decode of the spec this file gives itself. The unfixed defect is Q2: the model computes *three* bus/type sources from the address (AD[1:0] type bits, tag bus field) and discards two, keeping only `ioc_conf & 1`; the packet cannot say which one real hardware honours. The proposed discriminating row closes *this* defect but cannot separate IMPLEMENT from return-all-ones — only a populated bus-1 device can.**
+
+Denominator up front, per your rules: I examined **one** consumer's call site of `bus_pci_setaddr` — the inlined one in `DEVICE_ACCESS(lca_pci_conf)` — and **zero** others from source. Callee behaviour rests entirely on Premise 4 *as stated*. File names for `lca_pci_conf`/`lca_ioc` are **not given in the packet**; I assert behaviour by function name only.
+
+## Q1 — the shift is fine (REASONED from READ text)
+
+- READ (Premise 2): `tag = (relative_addr >> 5) & ~0xff`.
+- READ (Premise 3), bus-0 row: `tag = (1 << (device + 11)) | (function << 8)`. Code tests `tag & (0x800U << dev)`; `0x800` is `1 << 11`. **Exact bit-for-bit match.**
+- READ (Premise 2): `func = (tag >> 8) & 7`. Both comment rows place function at `<< 8`. **Match, for the same variable in both rows.**
+
+REASONED: the two comment rows use one word, "tag", for adjacent sentences describing one quantity, and the working bus-0 half pins that quantity to the code's post-shift variable. For the non-zero row to describe a *different*, pre-shift value, the comment would have to be self-contradictory. The `>>5` is common to `reg`, `tag`, and both layout rows simultaneously — it cannot have been "already shifted" for one row only. `dev = (tag >> 11) & 0x1f` extracts bits 15..11; no overlap with func (10..8) or bus (23..16). It also matches the generic PCI type-1 config-address layout (REASONED from general knowledge, not the packet).
+
+Not checkable from the packet: whether the *comment* matches the guest driver's actual address construction. **Settling fact:** instrument `lca_pci_conf` to log `relative_addr` and `ioc_conf` at the arm-and-read step of the probe, and inspect bits 23..16/15..11 of the real failing access. That is a one-detector run, not a gate — I name it; I cannot run it.
+
+## Q2 — the real defect (READ + REASONED)
+
+- READ (P2): `bus = d->ioc_conf & 1` — a one-bit namespace, {0,1}.
+- READ (P3): non-zero tag carries `bus << 16` — an 8-bit namespace.
+- REASONED (from P2 arithmetic): `reg = (addr>>5) & 0xfc` and `tag = (addr>>5) & ~0xff` together discard shifted bits 0..1 — i.e. `relative_addr` bits 5..6, which under the comment's `addr = tag << 5 | …` are AD[1:0], the architected type-0/type-1 discriminator. So the model **computes and throws away two address-carried sources** (type bits, bus field) and substitutes a register bit.
+
+Not incoherent for the witness: if the driver sets both the register and tag bus=1, the sketch serves bus 1 correctly. But the mixed states degrade badly and *silently* (REASONED from P2+P4):
+- register=1 with a type-0-shaped address: IDSEL one-hot bits 11..15 are decoded as a device *number* — phantom dev, still all-ones while empty (P4 mechanism).
+- register=0 with a tag bus field set: the access falls into the **bus-0 scan**; tag bit 16 matches the loop at `dev=5`. A bus-1 read could then return **bus-0 device 5's real config** if that slot is populated — wrong data, not a crash, and no witness row would see it.
+
+Which source is architecturally right for LCA: **not checkable from the packet.** The comment claims descent from NetBSD's `lca_pci.c`; **that file settles it** (does the driver write anything but bit 0 of `LCA_IOC_CONF`, and does it encode bus in the window address?). If tag-sourced, your "different and larger" fix is right: in the `else` branch, `bus = (tag >> 16) & 0xff`, and `ioc_conf & 1` degrades to a type selector. P4 (int `cur_bus`, `==` lookup) supports any bus 0..255 with no resize.
+
+## Q3 — is IMPLEMENT the right member? (REASONED from READ text)
+
+- READ (P4): empty-slot read → all-ones; nothing asserts; linked-list + `==` lookup. Writes to absent devices therefore drop silently by the same mechanism.
+- Given the author's claim that nothing populates a non-zero bus (**not checkable from packet; settling fact: enumerate device registrations and their bus arguments**), IMPLEMENT, explicit-ones, and latched-DECLINE-that-returns-ones are **observationally identical today**, reads and writes.
+- The one member that is *wrong regardless* is silent DECLINE returning 0 — PCI demands ones from an empty slot, and your own Q4 parenthetical concedes 0 is indistinguishable from unmapped.
+- Conclusion: member 7 is justified only by a stated future requirement (devices off bus 0). Record it as resting on that requirement, not on the witness — this witness cannot pay it off.
+
+## Q4 — the proposed row (REASONED)
+
+The armed-`0xff…ff` row discriminates exactly three classes: **crash / return-0 / return-ones**. Everything inside the ones-class — IMPLEMENT, hardcoded-ones, latched-announce — stays conflated. Sufficient to close the kill; insufficient to pick the member. To discriminate:
+
+1. **IMPLEMENT vs hardcoded-ones:** populate one device on bus 1; armed read must return its vendor/device ID, not ones. (P4's linked list implies the attach API takes a bus number — REASONED.)
+2. **The Q2 fork (sharpest missing row):** device on bus 1; arm the register; use an address whose tag bus field is **2**. Register-sourced code returns the bus-1 ID (wrong); tag-sourced code returns ones (right). This is the row the round actually owes.
+3. Write side: armed write to absent bus must not kill; armed write+readback against the populated bus-1 device.
+
+## Q5 — what is not closed (READ)
+
+I accept the brief's boundary (`lca_ioc` default arm; `lca_interrupt_assert`/`_deassert`). One addition from P2 itself: the bus-0 `if (dev >= 21) dev = 0;` fallback silently aliases a no-IDSEL type-0 access to **device 0** instead of all-ones — the same "absent ⇒ ones" semantic your witness enshrines, violated on the branch you are *not* touching. Pre-existing, different defect, worth its own row.
+
+## Q6 — something else (READ + REASONED)
+
+1. **The comment's first line contradicts its own rows.** `addr = tag << 5 | (regoffset & ~0x03) << 5 | 0x3 << 3` ORs the register into the tag field; the code puts reg and tag in disjoint masks (`& 0xfc`, `& ~0xff`) of the same shifted value. The rows are corroborated by working code; the composition line is refuted by it. Fix the comment in the same patch or the next author derives from a broken formula.
+2. **The arm is not pinned.** READ (P1): acceptance is `idata & ~1 == 0` — any odd value arms (`0x3`, `0xffff…1`). Any future interpretation of other `IOC_CONF` bits still passes this witness.
+3. The `bus attrib` row records **"ok" while citing the kill message as its evidence** — one bad edit away from passing on a dead host. It should assert host-alive alongside the attribution string.
+4. The discarded AD[1:0] bits (item under Q2) mean the model *already receives* the architected type discriminator and ignores it — worth stating in the commit message whichever member you choose.
+
+Named measurements I cannot take: the `relative_addr`/`ioc_conf` log on the armed access; the populated-bus-1 presence row; the tag-bus=2/register-armed fork row; the device-registration census. Each is a single-detector run; none requires the gates.

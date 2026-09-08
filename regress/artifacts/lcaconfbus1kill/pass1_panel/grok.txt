@@ -1,0 +1,156 @@
+I'll start from the repo and the LCA config path, then check the tag-shift premise against source rather than ratifying the sketch.Checkpoint is behind HEAD (`4b91d7a`); I'll read the LCA config handler, tag layout, and `bus_pci` from the current tree.Guest OpenBSD LCA sources are in-tree; I'll read those against `lca_pci_conf` before trusting the tag-shift sketch.OpenBSD’s `lca_conf_read` treats `IOC_CONF` as cycle type, not bus number. I’ll check the probe’s armed address and how other PCI hosts decode type-1 tags.**VERDICT: IMPLEMENT, but the sketch is one assignment short.** `dev = (tag >> 11) & 0x1f` is the right extract of *this* `tag` (Q1 is not a double-shift). Also assign `bus = (tag >> 16) & 0xff` — `ioc_conf & 1` is the PCI cycle *type*, not the bus number. Member 7; fall through into `bus_pci`. The proposed all-ones row is necessary and not sufficient: the witness address is not a type-1 tag, and empty-slot data cannot pin the extract.
+
+---
+
+I read `DEVICE_ACCESS(lca_pci_conf)` and `DEVICE_ACCESS(lca_ioc)` in `GXEMUL-SEC/src/devices/dev_lca.c`, `bus_pci_setaddr` / `bus_pci_data_access` / `bus_pci_decompose_1` in `bus_pci.c`, all **10** `bus_pci_setaddr` call sites under `GXEMUL-SEC/src/` (lca, uninorth, sh4, eagle, cpc700, gt, footbridge, i80321, sgi_ip32, v3), `DEVINIT(lca)`, `PCIINIT(i82378zb)`, `regress/lca_confbus_probe.py`, and the in-tree OpenBSD 2.2 driver (`_guest-src-openbsd22/sys/arch/alpha/pci/lca_pci.c`, `lca.c`, `lcareg.h`). I did not run a gate.
+
+---
+
+### Q1 — `dev = (tag >> 11) & 0x1f` is right. The comment’s `tag` is this `tag`.
+
+The comment in `lca_pci_conf` is the composition of a *software* tag, then a sparse-space shift:
+
+```
+addr = tag << 5 | (regoffset & ~0x03) << 5 | 0x3 << 3
+```
+
+The code undoes that:
+
+```c
+reg = (relative_addr >> 5) & 0xfc;
+tag = (relative_addr >> 5) & ~0xff;
+```
+
+`relative_addr` is `uint64_t` (`DEVICE_ACCESS` in `memory.h`). `>> 5` undoes `tag << 5`. `& ~0xff` strips the register (bits 7:2) that OpenBSD ORs in separately as `(offset & ~0x03) << 5`. `(0x3 << 3) >> 5` is 0, so the sparse size bits vanish. What remains is the software tag the comment named.
+
+Worked example, OpenBSD type-1 `bus=1, device=5, func=2, offset=0x04`:
+
+| quantity | value |
+|---|---|
+| software tag | `(1<<16)\|(5<<11)\|(2<<8)` = `0x12a00` |
+| `relative_addr` | `(0x12a00<<5) \| (0x04<<5) \| 0x18` = `0x254098` |
+| `reg` | `(0x254098>>5) & 0xfc` = `0x04` |
+| `tag` | `(0x254098>>5) & ~0xff` = `0x12a00` |
+| `(tag>>11)&0x1f` | `5` |
+| `(tag>>8)&7` | `2` (already extracted below the `if`) |
+| `(tag>>16)&0xff` | `1` |
+
+OpenBSD `lca_conf_read` (`lca_pci.c`) builds that address for any `secondary != 0` and leaves the tag *unfrobbed*. The in-tree helper `bus_pci_decompose_1` is the same layout: bus 23:16, device 15:11, func 10:8, reg 7:0.
+
+The wrong shift would be applying `>> 11` to `relative_addr` (device would land in bits 10:6 of the software tag — function/register junk). The sketch uses `tag`. Do not shift again.
+
+`tag` is a signed `int` (`lca_pci_conf`). The config window is `0x20000000` bytes (`DEVINIT(lca)`), so `relative_addr>>5` is 24 bits. Arithmetic `>>` does not fire. (Linux’s type-0 walk stops at device 12; this model walks to 21. Pre-existing, not this round.)
+
+---
+
+### Q2 — `IOC_CONF` is cycle type. The bus number is in the tag. The sketch keeps the wrong source.
+
+Three independent sources, none of them the model’s own `lca_ioc` comment:
+
+1. **The header.** `alpha_lcareg.h`: `LCA_IOC_CONF /* Configuration Cycle Type */`. Same text in OpenBSD `lcareg.h`.
+2. **OpenBSD `lca.c`**, citing the 21066 HRM §6.4.2: bits `<1:0>` are write-only; write `0x00` “for PCI Type 0 configuration access.”
+3. **OpenBSD `lca_conf_read` / `lca_conf_write`:** decompose the tag to get the *bus number* (they name it `secondary`); if it is non-zero, write `LCA_IOC_CONF = 0x01` and put the **unfrobbed** tag — `(bus<<16)|(device<<11)|(function<<8)` — into the address. `0x01` is written for bus 2 the same as for bus 1. The actual bus number never enters `IOC_CONF`.
+
+So `bus = d->ioc_conf & 1` in `lca_pci_conf` is using a 1-bit cycle-type latch as if it were an 8-bit bus number. That happens to match a guest that only ever scans bus 1. It mis-routes bus 2+ to `cur_bus=1`.
+
+The `lca_ioc` comment (“PCI bus 0 vs bus non-0 selection bit”) is the model author’s collapse of those two quantities. Shipping the sketch *and* leaving that comment is a wrong record: the sketch still treats the bit as the bus number, which is what the comment says and what the header/OpenBSD contradict.
+
+**In-tree precedent:** `DEVICE_ACCESS(uninorth_addr)` — the type bit (`idata & 1`) selects the *decode method*; on type-1 it calls `bus_pci_decompose_1` and takes `bus` from the tag. `SH4_PCIPAR` does the same extract (`(idata>>16)&0xff`). Mechanism-1 callers (eagle, cpc700, gt, ip32, footbridge) all take bus from the tag. The one sibling that *overrides* the extract is `dev_i80321.c` (`bus = 0; /* NOTE */`). Do not copy that.
+
+**Does taking `bus` from the tag make type-1 “incoherent”?** Only for the pair no real driver emits: `IOC_CONF=1` with a tag whose bus field is 0. Hardware would generate a type-1 cycle; local devices respond to type-0 IDSEL, so the SIO at bus 0 device 7 would not answer. `bus_pci_setaddr(0, 7, …)` *would* hit `PCIINIT(i82378zb)`. OpenBSD/Linux never pair those. Disclose it; do not special-case it in this round.
+
+Recommended `else` (then the existing tail):
+
+```c
+} else {
+	/* type-1: IOC_CONF bit 0 is the cycle type; bus/dev are in the tag */
+	bus = (tag >> 16) & 0xff;
+	dev = (tag >> 11) & 0x1f;
+}
+```
+
+That is one extra assignment, not a larger fix. `func` and `reg` stay where they are — they are already type-agnostic. Do not early-return; the common tail is `bus_pci_setaddr` → `bus_pci_data_access` → `memory_writemax64` → `return 1`.
+
+On today’s `alphabook1` topology the extra assignment is observationally identical to the sketch for every access OpenBSD actually issues (the only `bus_pci_add` in `DEVINIT(lca)` is bus 0, device 7, `"i82378zb"`, an ISA bridge, not a PCI-to-PCI bridge). It is still the right line: `bus_pci` is bus-agnostic (`cur_bus` is a plain `int`; lookup is `dev->bus == pci_data->cur_bus`; `machine_cats.c` already places a device on bus `0xc0`).
+
+---
+
+### Q3 — IMPLEMENT (member 7). Decline is a lie at vendor ID.
+
+This is a stubbed path, not a value refusal: the `else` is `fatal`+`exit(1)` with no decode. Member 7. Member 4 (ACCEPT) does not apply — nothing currently computes the type-1 fields and then discards them.
+
+| member | what the guest sees at an empty-slot *vendor ID* read |
+|---|---|
+| silent decline / `return 1` without writing | `0` (`memory_rw.c` `#95` pre-zero) |
+| `return 0` (FAULT) | `0` (unmapped) |
+| hardcoded `odata = (uint64_t)-1` | all-ones at every register |
+| IMPLEMENT via `bus_pci` | all-ones at `cur_reg==0`, **0 at every other register** |
+
+PCI ID probes treat `0xffffffff` as “absent” and `0` as “vendor 0”. Decline that returns 0 can invent a device. The house idiom in all 10 `bus_pci_setaddr` callers is decode-and-dispatch, not decline.
+
+The brief’s “absent device answers all-ones by itself” is **false as a universal**. `bus_pci_data_access`: empty READ returns `(uint64_t)-1` only when `pci_data->cur_reg == 0`; otherwise `*data = 0`. That is the discriminator between “fell through into `bus_pci`” and “hardcoded all-ones”.
+
+A latched announce on top of IMPLEMENT is optional and not licensed by a measured delta. Bare IMPLEMENT matches type-0 in the same function (the `dev>=21` arm already deleted its `exit(1)`).
+
+---
+
+### Q4 — All-ones at the *current* armed address is not enough, and not even a type-1 cycle.
+
+The witness’s armed `ldq` is `LCA_PCI_CONF+0` (`lca_confbus_probe.py`: `put d` of `k0(LCA_PCI_CONF)`, then `LDQ(T2, 0, T1)`). That is `relative_addr = 0` → `tag = 0`, `reg = 0`. It is a type-0-shaped empty slot. After the sketch:
+
+- `bus = 1`, `dev = 0` → empty → all-ones
+- architectural `bus = (tag>>16)&0xff` → bus 0, dev 0 → also empty → all-ones
+
+Same number. The row cannot see Q1 or Q2.
+
+Even at a *proper* type-1 address — `relative_addr = ((1<<16)<<5) = 0x200000` for bus 1, device 0, func 0, reg 0, well inside the `0x20000000` window — empty-slot data still cannot kill a wrong shift. `(tag>>11)&0x1f` versus `(tag>>8)&0x1f` versus `(tag>>16)&0x1f` all miss every device on this machine and all return all-ones at reg 0. **Q1 is a reading. It is not guest-measurable on the current topology.** Write that into the contract; do not pretend the all-ones row pins the extract.
+
+What the detector *can* pin, cheaply, without adding a device:
+
+1. **Survival** of the armed access (the witness already has this; it greens silent decline, latched announce, and IMPLEMENT alike).
+2. **Reg 0 = `0xffffffffffffffff`** at a *type-1-encoded* address (bus 1 in the tag, not `+0`). Separates “serviced empty” from “`#95` zero / unmapped”.
+3. **Reg 4 (or any `cur_reg != 0`) = 0** at that same tag. Separates `bus_pci`’s empty-slot policy from hardcoded `-1`. Together, (2) and (3) are the empty-slot signature `bus_pci_data_access` actually implements.
+4. **Keep the type-0 control** at `ioc_conf==0` (already `bus ctlsig`).
+
+Still conflated after that: IMPLEMENT vs “decline that forges the same two values”; `bus = ioc_conf&1` vs `bus` from the tag, on any empty secondary bus. Disclose both. Do not add a `bus_pci_add(..., 1, …)` to alphabook1 to pin them — that is a product topology change, not a detector row.
+
+Channel line, at writing time: the mutant that reinstates `exit(1)` reds (1); a `return 1` with no store reds (2); `odata = (uint64_t)-1; return 1` reds (3). A mutant of the shift does **not** red any of those rows. That is knowable before table 1.
+
+---
+
+### Q5 — Agreed, plus the STAT0 hole the bug file already named.
+
+This round does not close:
+
+- `lca_ioc` `default:` (`STAT0`/`STAT1`/`SFT_RST`/…). Master-abort reporting through the register the header designates for it stays blocked. The `lcaconfbus1kill` row already says so.
+- `lca_interrupt_assert` / `_deassert` (`lcairqstubkill`).
+- `bus_pci_data_access` empty WRITE still `fatal()`s unlatched (the witness used a READ for that reason). Opening type-1 makes that reachable with `IOC_CONF=1`.
+- Type-0 IDSEL walk length (model 21 / OpenBSD `lca_bus_maxdevs` 16 / Linux 12) and the `dev>=21; dev=0` fallback.
+- `lcabadval`’s other IOC value guards.
+
+Correct the `lca_ioc` IOC_CONF comment in the same diff if you take bus from the tag; otherwise the comment and the code agree on a false picture.
+
+---
+
+### Q6 — Other findings
+
+1. **The witness never issues a type-1 cycle.** Armed and control reads are the same address (`LCA_PCI_CONF+0`). A green `bus kill` after this fix means “the host did not exit,” not “type-1 is modelled.” The probe’s own contract already says that; the sketch’s test plan forgot it.
+2. **OpenBSD says IOC_CONF bits `<1:0>`**, two bits, write-only (`lca.c` §6.4.2). The model accepts only bit 0 (`idata & ~1`) and kills on bit 1. Out of scope (that is `lcabadval`); do not widen the accept set as a rider.
+3. **`i82378zb` is `PCI_SUBCLASS_BRIDGE_ISA`**, header type 0, multifunction (`PCIINIT(i82378zb)`). A well-behaved guest will probably never write `IOC_CONF=1` on this machine. The kill is still guest-drivable; the witness did it in two instructions. That does not licence DECLINE.
+4. **CHECKPOINT.md still says this fix is “a DELETION.”** The brief withdraws that. The checkpoint is stale on the same point (and on HEAD: git is at `4b91d7a`, the checkpoint names `c7d7414`).
+5. **Do not use `bus_pci_decompose_1` on `tag` for `reg`.** Low 8 bits were already cleared; `reg` must stay `(relative_addr >> 5) & 0xfc`. Using the helper for bus/dev/func only is optional; the two shifts matching the comment are clearer.
+
+---
+
+### What to write
+
+```c
+	} else {
+		bus = (tag >> 16) & 0xff;	/* type-1 bus, not ioc_conf */
+		dev = (tag >> 11) & 0x1f;
+	}
+	func = (tag >> 8) & 7;
+	bus_pci_setaddr(...);	/* existing tail, unchanged */
+```
+
+Detector owed: type-1-encoded empty-slot **reg 0 = all-ones** and **reg 4 = 0**, plus survival. Contract names those mutants and discloses that the type-1 bitfields are unpinned on this topology. The author’s withdrawal of “just delete the `else`” stands — `dev` would be uninitialised.

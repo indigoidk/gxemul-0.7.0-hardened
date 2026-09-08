@@ -1,0 +1,13 @@
+**VERDICT: Q1’s `dev = (tag >> 11) & 0x1f` is correct for the inlined tag definition, but the sketch is incomplete/incoherent because it keeps `bus = d->ioc_conf & 1` while the type-1 tag comment says bus is in tag bits 23..16; Q4’s proposed all-ones row is necessary but not sufficient to distinguish IMPLEMENT from an explicit all-ones return.**
+
+- **Q1 — READ/REASONED.** The code’s `tag = (relative_addr >> 5) & ~0xff` equals the comment’s pre-shift `tag` after the shift and mask. The comment places device in bits 15..11, so `(tag >> 11) & 0x1f` is correct. No shift error.
+
+- **Q2 — READ.** The code takes `bus = d->ioc_conf & 1`; the comment says for non-zero bus the tag is `(bus << 16) | (device << 11) | (function << 8)`. These are two different sources. **Cannot settle from the packet** which is architecturally correct; need the LCA PCI configuration address spec or NetBSD `lca_pci.c`. If bus should come from the tag, the fix must extract `bus = (tag >> 16) & 0xff` and the role of `ioc_conf & 1` must be clarified.
+
+- **Q3 — READ/REASONED.** The current witness only checks survival; a silent all-ones return would also pass. IMPLEMENT is not required to close the measured defect, but it is the more faithful model if a bus-1 device is ever added. Cannot decide from the packet alone.
+
+- **Q4 — REASONED.** The proposed row separates all-ones from `0x0`, but it does **not** separate IMPLEMENT from a member that explicitly returns all-ones without calling `bus_pci`. To discriminate, you would need a test with a device on bus 1 (none exists in the tree) or an internal trace of `bus_pci_setaddr`.
+
+- **Q5 — READ.** The `default:` arm of `lca_ioc` still exits for reads/writes, and `lca_interrupt_assert`/`_deassert` are bare kills. Not closed.
+
+- **Q6 — Denominator.** Only one call site of `bus_pci_setaddr` is inlined (`lca_pci_conf`); no other callers examined. No additional defects beyond the bus-source contradiction.

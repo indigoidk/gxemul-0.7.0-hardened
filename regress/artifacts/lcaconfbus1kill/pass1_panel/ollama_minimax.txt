@@ -1,0 +1,33 @@
+VERDICT: Q1 fix is RIGHT. The existing IDSEL check proves the code's `tag` is the comment's `tag`. Q2 is a 1-bit `ioc_conf` model limit, coherent for every reachable state. Q4 conflation is unavoidable without a synthetic bus-1 device.
+
+---
+
+**Q1 — the shift concern is unfounded.** REASONED. Proof from the existing code: the `bus == 0` branch checks `tag & (0x800U << dev)` for `dev` 0..20. The mask `1 << (dev+11)` only matches real hardware if `tag` holds IDSEL bits at positions 11..31 — exactly the comment's type-0 layout `(1 << (device+11)) | (function<<8)`. That branch is exercised today on real (bus-0) traffic and works (premise 1's bus-0 row), so the interpretation is forced. `tag = (relative_addr >> 5) & ~0xff` therefore recovers the comment's logical PCI tag, and `dev = (tag >> 11) & 0x1f` extracts bits 15..11 — the type-1 device field. The two `<< 5` in premise 3's `addr = tag << 5 | (regoffset & ~0x03) << 5 | 0x3 << 3` look like a transcription artifact; it doesn't matter — the IDSEL check is the ground truth.
+
+**Q2 — bus source.** REASONED, partly UNCHECKABLE. Comment: bus in tag bits 23..16. Code: `ioc_conf & 1`. Two sources. Coherence: premise 1's `idata & ~1 is 0` (under the only interpretation consistent with the defect — see premise audit) means the write stores only bit 0, so `ioc_conf` ∈ {0, 1} always. The tag's bus byte, in any reachable state, also matches (0 or 1). Coherent for what the model can express. The model is silent for bus ≥ 2 — there are no bits in `ioc_conf` for them. **What would settle "which source does real LCA use":** a citation to the LCA spec or to NetBSD's `lca_pci.c` for the register field that carries the bus number on type-1. NOT in the packet. The proposed fix using `bus = ioc_conf & 1` is correct for this model's reachability and does not need to change.
+
+**Q3 — IMPLEMENT vs alternatives.** REASONED. IMPLEMENT is the only member that degrades correctly if a device is ever placed on bus 1. DECLINE / latched-announce / explicit-all-ones are observationally identical today (empty bus, all-ones) but would silently mis-route a real bus-1 device. The defect closes either way; IMPLEMENT is the honest member.
+
+**Q4 — the discriminating row.** REASONED. `0xffffffffffffffff` on the armed read separates IMPLEMENT / explicit-all-ones from any DECLINE variant (which would read as 0). It does **not** separate IMPLEMENT from explicit-all-ones — both return all-ones on an empty bus. To split them, place a synthetic device on bus 1 and probe it: IMPLEMENT would read the device's actual config; explicit-all-ones would still return all-ones. Not possible without a fixture. The row is best-available; record the conflation as a known limit, not a defect in the witness.
+
+**Q5 — not closed.** READ from brief. `default:` arm of `lca_ioc` and `lca_interrupt_{assert,deassert}` are separate kills, untouched by this fix.
+
+---
+
+**Premise audit:**
+
+- **Premise 1 wording.** READ. "idata & ~1 is 0" is ambiguous: (a) "the bits masked off are 0" (idata has only bit 0 set; write is clean) or (b) "the value stored is 0" (idata=1, mask=~1, result=0). Only interpretation (a) produces the defect. The parenthetical does not by itself prove (a). **UNCHECKABLE from packet.** What settles it: the actual `lca_ioc_write` handler for `LCA_IOC_CONF`. The defect story only needs (a); the wording alone doesn't establish it.
+- **Premise 2.** READ, consistent with the rest.
+- **Premise 3.** The duplicate `<< 5` is a transcription artifact. Doesn't matter — the IDSEL check is the ground truth. REASONED.
+- **Premise 4.** READ. The "empty-slot read returns all-ones" claim is grounded by the witness's bus-0 row; extending to bus 1 is sound because lookup is bus-agnostic. REASONED.
+- **Premise 5.** READ, consistent. Note: this is why removing only `fatal()` and keeping `exit(1)` would still kill; the IMPLEMENT fix must remove **both**, which it does.
+
+---
+
+**Source-denominator caveat.** I cannot read files, so I cannot enumerate callers of `bus_pci_setaddr`. The fix only INVOKES `bus_pci_setaddr(bus, dev, func, reg)` from `DEVICE_ACCESS(lca_pci_conf)` with arguments derived from `tag` / `ioc_conf & 1`. Argument order matches the existing call site in the verbatim extract. No other call site is altered by the patch.
+
+**Additional things noticed (Q6):**
+- Premise 1's ambiguous parenthetical (above) — would be settled by reading `lca_ioc_write`.
+- The double `<< 5` artifact in premise 3 — cosmetic, doesn't affect the fix.
+- The bus ≥ 2 model limitation — out of scope; would require widening `ioc_conf` or extracting bus from tag bits 23..16.
+- Premise 5 is load-bearing: if `fatal()` ever grew a longjmp/exit, the bare-kill diagnosis of *that* call site would shift. Worth recording but doesn't change this fix.

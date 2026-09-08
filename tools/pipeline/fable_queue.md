@@ -41,7 +41,7 @@ those panels produced had six or seven seats behind it.
 <!-- BEGIN GENERATED: codex-wall -- edit gen_codex_wall.py, not this block -->
 ### HELD STAGES -- every row awaiting a seat, derived from the ledger
 
-`armbfxwidth32` (assess:fable5,opus5; review:fable5,opus5) · `carrier` (regress:fable5) · `es438` (regress:fable5) · `gdromcondlies` (regress:fable5) · `holdmarkermulti` (regress:fable5) · `lcabadval` (assess:codex,fable5,grok,kimi,opus5; design:fable5; research:fable5) · `lcairqstubkill` (design:fable5) · `m88kexcdetectorl2` (design:fable5) · `ns16550` (regress:fable5) · `pcc2widthkills` (assess:fable5,opus5) · `proberowsubset` (assess:codex) · `sgideprimop` (regress:fable5) · `sgidewidth` (regress:fable5) · `sgimtedepth4dead` (assess:fable5,opus5; review:fable5,opus5) · `sgirekills` (assess:codex,grok,kimi,opus5) · `sgireunmapped` (regress:fable5) · `sgitexindex` (assess:codex,fable5,grok,kimi,opus5) · `sh4sci` (regress:fable5) · `wdccdbmidxfer` (regress:fable5; research:opus5) · `wdcdataoutdrain` (regress:fable5)
+`armbfxwidth32` (assess:fable5,opus5; review:fable5,opus5) · `carrier` (regress:fable5) · `es438` (regress:fable5) · `gdromcondlies` (regress:fable5) · `holdmarkermulti` (regress:fable5) · `lcabadval` (assess:codex,fable5,grok,kimi,opus5; design:fable5; research:fable5) · `lcaconfbus1kill` (design:fable5) · `lcairqstubkill` (design:fable5) · `m88kexcdetectorl2` (design:fable5) · `ns16550` (regress:fable5) · `pcc2widthkills` (assess:fable5,opus5) · `proberowsubset` (assess:codex) · `sgideprimop` (regress:fable5) · `sgidewidth` (regress:fable5) · `sgimtedepth4dead` (assess:fable5,opus5; review:fable5,opus5) · `sgirekills` (assess:codex,grok,kimi,opus5) · `sgireunmapped` (regress:fable5) · `sgitexindex` (assess:codex,fable5,grok,kimi,opus5) · `sh4sci` (regress:fable5) · `wdccdbmidxfer` (regress:fable5; research:opus5) · `wdcdataoutdrain` (regress:fable5)
 
 *** TWO DIFFERENT KINDS OF HOLD APPEAR BELOW AND THEY MUST NOT BE READ ALIKE. ***
 
@@ -60,7 +60,7 @@ marker can mask another gap* -- section H cannot see a shortfall that a differen
 **Neither kind is a blank.** A blank cell and a seat failure must not look alike, and an
 allocation is a third thing again: recorded by seat name, per row, with the reason.
 
-**This is ONE outage plus one allocation, not 20 decisions, and it is written once rather than once per panel.**
+**This is ONE outage plus one allocation, not 21 decisions, and it is written once rather than once per panel.**
 **THE CODEX HISTORY, kept because it calibrates what a wall looks like.** Across ten panels it
 produced the identical signature every time -- the echoed brief followed by the usage-limit
 error -- in files of 26,992 / 11,180 / 10,036 / 8,323 / 12,414 / 11,938 / 10,726 / 16,694 /
@@ -2175,3 +2175,68 @@ full table versus a few runs, and the answer governs every future L2 repair, not
 the gap — the "seven" counted only arms carrying a `/* m88kexcdeliver */` annotation, silently
 excluding four pre-existing vectors in the same switch. A count keyed on an annotation rather than
 on what defines the class.*
+
+
+---
+
+## 7l. `lcaconfbus1kill` — the fix is SETTLED; the DETECTOR is not, and four seats agree it cannot be
+
+*Pass-1 fix panel: `regress/artifacts/lcaconfbus1kill/pass1_panel/` — six seats (codex, grok, glm,
+deepseek, minimax, the kimi-k3:cloud substitute). No flagship seat, by the standing directive
+reserving opus5/fable5 for this adjudication.*
+
+**THE DEFECT IS MEASURED** (`regress/lca_confbus_probe.py`, 3/4, the RED row being the defect): an
+**accepted** `stq 0x1` to `LCA_IOC_CONF` arms a bare `fatal(); exit(1)` that the next PCI config
+access reaches.
+
+**THE FIX IS SETTLED AND CONFIRMED AGAINST A PRIMARY SOURCE.** Not from the fork's comment but from
+`_guest-src-openbsd22/sys/arch/alpha/pci/lca_pci.c` — the real OpenBSD LCA driver, on this machine:
+
+    } else {
+            bus = (tag >> 16) & 0xff;    /*  lca_decompose_tag:103  */
+            dev = (tag >> 11) & 0x1f;    /*  lca_decompose_tag:106  */
+    }
+
+and `lca_conf_read:127` writes `REGVAL(LCA_IOC_CONF) = 0x01` on the secondary path, proving the
+register selects the configuration **format**, not a bus number. **The same driver shows my witness's
+two accesses are its own secondary-bus sequence, line for line** — so the row's earlier caution
+("not claimed that any shipped guest issues this") is withdrawn.
+
+### 7l-1. (HIGH) SHIP A FIX WHOSE DETECTOR PROVABLY CANNOT DISCRIMINATE IT?  *(the `hold_question`)*
+
+Four seats reached this independently, by different routes:
+
+| seat | how it put the wall |
+|---|---|
+| grok | *"the witness address is not a type-1 tag, and empty-slot data cannot pin the extract"* |
+| glm | it *"conflates IMPLEMENT with explicit-all-ones DECLINE, silent with latched, and can false-pass on stale all-ones unless the destination register is pre-seeded"* |
+| minimax, kimi(sub) | only a **populated bus-1 device** could separate them |
+
+**An empty bus 1 answers all-ones whether the model implements type-1 or merely fakes the reply**,
+and nothing in this tree places a device on bus 1. So:
+
+> **(a)** ship the fix and DISCLOSE the non-discriminating detector under clause (e); or
+> **(b)** ADD a synthetic bus-1 device to the apparatus so the row becomes possible.
+>
+> **(b) is an addition to the test apparatus made in order to observe a fix** — which is precisely
+> the shape the addition licence exists to police, and it is not obviously refused by it either,
+> since the licence governs PRODUCT additions. **That boundary is the question.**
+
+*glm's pre-seeding point is the one improvement available under (a) and should be taken either way:
+seed the destination register so a stale all-ones cannot false-pass.*
+
+### 7l-2. (MED) A CARRIER LINE FOR `guestsrcunknown` — proposed, not done
+
+`_guest-src-openbsd22/` holds **8,138 `.c` files** covering `alpha`, `arc`, `arm32`, `mvme88k`,
+`pmax` and `powerpc` — six of this fork's own targets — at the project root, untracked, and
+**mentioned nowhere in the carrier or the harness**. I declared a chipset question unanswerable from
+this machine one paragraph before a seat answered it from that tree.
+
+The carrier already says to `ls _scratchpad/*.pdf` before reasoning from first principles about a
+device, and records that an absent-source note was load-bearing and wrong for twelve days. **This is
+the same shape one directory over.** Editing `CLAUDE.md` is owner-facing and section J checks its
+tracked copy, so: **is the analogous line wanted, and in what words?**
+
+*With the caution that belongs beside it: OpenBSD 2.2 is ONE guest at ONE version. Cite it as "the
+OpenBSD 2.2 driver does X", never as "the hardware does X" — the models are obliged to match the
+hardware, of which this is a well-informed second-hand reading.*

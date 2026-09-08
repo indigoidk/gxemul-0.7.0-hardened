@@ -17084,3 +17084,61 @@ LOW.  *Grading it before the answer would be picking the number I prefer.*
 
 **THE REPAIR IS ONE TOKEN EITHER WAY** (`1U << dev`), and it is correct under both outcomes -- the
 question is only what the round may CLAIM, and whether it owes a witness.
+
+
+### `guestsrcunknown` (low) -- filed 2026-09-07: a contemporary guest OS source tree
+### sits at the project root and nothing in the carrier mentions it
+
+FILED 2026-09-07.  **NOT a defect -- a RESOURCE this project has and does not know it has**, filed
+because I declared a hardware question unanswerable from this machine one paragraph before a seat
+answered it from a file on disk.
+
+*** `_guest-src-openbsd22/` SITS AT THE PROJECT ROOT AND CONTAINS THE ACTUAL GUEST OS SOURCE. ***
+Derived rather than transcribed:
+
+    8,138  .c files
+    architectures: alpha  amiga  arc  arm32  atari  hp300  i386  kbus  m68k  mac68k  mvme68k
+                   mvme88k  pc532  pmax  powerpc  sparc  sun3  vax  wgrisc
+
+**Six of those are this fork's own emulation targets** -- `alpha` (alphabook1), `arc`, `arm32`,
+`mvme88k` (the m88k/luna family), `pmax` (DECstation) and `powerpc` (macppc).  It is OpenBSD 2.2,
+dated 1997, i.e. CONTEMPORARY with the hardware these device models emulate.
+
+**IT IS NOT IN THE REPO.**  It lives at the project root, outside `GXEMUL-SEC/`, untracked -- which
+is why nothing in the carrier or the harness mentions it and why a fresh session has no way to learn
+it exists.
+
+*** THE MEASURED PAYOFF, on the day it was noticed. ***  Working `lcaconfbus1kill`, I wrote into the
+ledger that whether `ioc_conf & 1` is a bus selector or a cycle type is *"a statement about the
+21066 ... not CHECKED here"*, because `_scratchpad/` holds no LCA datasheet.  The codex seat then
+cited `_guest-src-openbsd22/sys/arch/alpha/pci/lca_pci.c`, and reading it settled the question
+outright:
+
+    :103   *bp = (tag >> 16) & 0xff;      /*  bus      */
+    :106   *dp = (tag >> 11) & 0x1f;      /*  device   */
+    :127   if (secondary) { ... REGVAL(LCA_IOC_CONF) = 0x01; ... }
+
+That is the fix's decode verbatim, plus proof that the register selects the configuration FORMAT.
+**And it converted the row's own caution -- "NOT CLAIMED: that any shipped guest issues this
+sequence" -- into the opposite finding: the sequence IS the driver's secondary-bus path.**
+
+> **WHY THIS BEATS A DATASHEET FOR THIS PROJECT'S QUESTIONS.**  The recurring question here is not
+> *what does the hardware do* but *what does a guest actually do* -- is a path travelled, is a
+> register written, does a driver depend on this behaviour.  The witness ladder itself ranks a boot
+> above a probe for exactly that reason ("a probe proves a path CAN be reached; a boot proves it IS
+> travelled").  **A contemporary driver for the emulated chipset answers that class directly, and it
+> is greppable in seconds.**
+
+**PROPOSED, NOT DONE: a carrier line.**  `CLAUDE.md` tells a reader to `ls _scratchpad/*.pdf` before
+reasoning from first principles about a device, and records that an absent-source note was
+load-bearing and wrong for twelve days.  **This is the same shape one directory over**, and the
+analogous line would be: *before calling a guest-behaviour or chipset question unanswerable, grep
+`_guest-src-openbsd22/sys/arch/<arch>/`.*  Editing the carrier is an owner-facing act and section J
+checks its tracked copy, so it is **filed as a candidate for the 2026-09-09 adjudication** rather
+than done unilaterally.
+
+**A CAUTION THAT BELONGS WITH IT:** OpenBSD 2.2 is ONE guest at ONE version.  What it does is
+evidence that a real driver does it; what it does NOT do is not evidence that no guest does.  And
+the fork's models are not obliged to match this driver -- they are obliged to match the HARDWARE, of
+which this is a well-informed second-hand reading.  *Cite it as "the OpenBSD 2.2 driver does X", never
+as "the hardware does X".*
