@@ -16954,3 +16954,83 @@ report a device error through the register the header designates for it.**
 
 sev HIGH: a guest-drivable host kill, reached by two ordinary accesses with no rejected value
 anywhere on the path.
+
+
+### `lcairqstubkill` (high) -- filed 2026-09-07: the LCA interrupt handlers are
+### `fatal()+exit(1)` with no guard, and DEVINIT wires the ISA/IDE bus straight to them
+
+FILED 2026-09-07.  **NOT a new discovery of the SITE** -- [[lcabadval]]'s eleven-kill census already
+enumerated `:73` and `:85` and called them *"plausibly the most severe of the eleven"*.  What was
+missing is a ROW: the census names them inside a row titled for VALUE GUARDS, which is the census's
+own closing lesson (*a row named after one class hides the members of the others*), and
+`OUTSTANDING_BUGS.md` mentioned them **zero** times.
+
+**THE SITE, verbatim -- there is no predicate at all:**
+
+    void lca_interrupt_assert(struct interrupt *interrupt)
+    {
+            fatal("lca_interrupt_assert: TODO\n");
+            exit(1);
+    }
+
+    void lca_interrupt_deassert(struct interrupt *interrupt)
+    {
+            fatal("lca_interrupt_deassert: TODO\n");
+            exit(1);
+    }
+
+*** THE WIRING, DERIVED BY READING `DEVINIT(lca)` -- AND IT IS WHAT MAKES THIS SEVERE. ***
+
+    memset(&interrupt_template, 0, sizeof(interrupt_template));
+    interrupt_template.line = 0;
+    interrupt_template.name = interrupt_path;                        /*  "<machine>.lca"  */
+    interrupt_template.extra = d;
+    interrupt_template.interrupt_assert   = lca_interrupt_assert;
+    interrupt_template.interrupt_deassert = lca_interrupt_deassert;
+    interrupt_handler_register(&interrupt_template);
+
+    bus_isa_init(devinit->machine, interrupt_path,
+        BUS_ISA_IDE0 | BUS_ISA_IDE1, LCA_ISA_BASE, LCA_ISA_MEMBASE);
+
+**The stubs are registered as the handlers for `<machine>.lca`, and `bus_isa_init` is handed THAT
+SAME PATH together with `BUS_ISA_IDE0 | BUS_ISA_IDE1`.**  So the ISA bus -- both IDE controllers
+included -- routes its interrupts into a function whose entire body is `fatal()` + `exit(1)`.  The
+file's own comment above the stub says *"Line 0 = ISA interrupt."*
+
+**WHY IT IS PLAUSIBLY THE WORST KILL IN THE FILE.**  Every other terminating call in `dev_lca.c`
+needs a guest to write a value the model does not expect.  **This one needs only that an interrupt
+is asserted** -- i.e. ordinary disk activity on a machine whose DEVINIT attaches two IDE channels.
+No unusual value, no undocumented register, no firmware revision.
+
+*** WHAT IS ESTABLISHED AND WHAT IS NOT -- read this before quoting the row. ***
+* **ESTABLISHED, by reading:** the stubs terminate unconditionally; they are registered as the
+  interrupt handlers; `bus_isa_init` receives the same interrupt path with both IDE channels.
+* **NOT ESTABLISHED:** that any guest actually reaches them.  **No measurement has been made.**  A
+  device could conceivably never assert on this path, and `interrupt_handler_register` semantics
+  have not been read here.  The row does NOT claim "alphabook1 cannot boot"; it claims the wiring
+  is present and the handler is a kill.
+
+**NEXT STEP IS A RUNG-3 ATTEMPT, and the apparatus already exists.**
+`regress/lca_confbus_probe.py` (shipped 2026-09-07 for [[lcaconfbus1kill]]) already boots
+unmodified `alphabook1` under the debugger with a disk image attached and drives guest `ldq`/`stq`
+through real decode.  The question is whether a guest access can make an IDE channel assert while
+single-stepping -- **and the carrier's rule cuts against it: a step-based probe sees a SYNCHRONOUS
+assert (a device handler reached inside the guest's own store) but NOT one that depends on a
+host-timer callback.**  So the honest first question is *what produces the assert*, and if the
+answer is `timer_add`, this needs a free-running probe rather than a stepped one.
+
+**DISPOSITION: option-set MEMBER 7 (IMPLEMENT), and the set's other members do not apply.**  There
+is no value being refused and nothing to decline, accept, mask or fault -- it is an entire path
+stubbed out.  The carrier added member 7 on 2026-09-06 from this very file, using these very
+functions as its example.  A cheaper interim is member 3 (decline + LATCHED announce): return
+without asserting, announce once, and let the guest see a missing interrupt rather than a dead host
+-- **but that trades a host kill for a silently lost interrupt**, which is the readback-lie shape
+[[lcabadval]] is currently held on, so it is a design question and not an obvious win.
+
+**TRANSFERABLE PRECEDENT, already closed in this tree:** [[lunaabsentcpu]] -- *"dev_luna88k.c
+reassert_interrupts() calls the NULL interrupt callback of an UNCONFIGURED cpu slot"* -- same family
+(a terminating/absent interrupt callback reached by ordinary operation), fixed, and closed with a
+rung-3 probe witness (`regress/luna_absentcpu_probe.py`).  Read that round before designing this one.
+
+sev HIGH on the wiring; it would be CRITICAL if a witness lands, and the row says so rather than
+pre-judging it.

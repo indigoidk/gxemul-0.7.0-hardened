@@ -1,72 +1,94 @@
-# MEASUREMENT TASK — score two mutants against the shipped `m88k_exc_probe.py`
+# MEASUREMENT JOB — build ONE mutant and score it against a shipped detector
 
-You are the **measurement seat**. This is not a review: I want two numbers and the logs that produced
-them. Two other seats predicted a hole in this detector and neither could build it; you can.
+**You are being asked to MEASURE, not to design.** Report the score and what reddened. If you
+cannot build or cannot run, **say so plainly and stop** — an honest "could not" is worth more than
+a guess, and this project treats an unmeasured prediction differently from a measured result.
 
-## *** SANDBOX RULES — READ THESE FIRST, THEY ARE NOT BOILERPLATE ***
+---
 
-You run with `--dangerously-skip-permissions`, so this brief is the only thing keeping you out of the
-project tree. **Every one of these has been violated before and each cost a round:**
+## *** SANDBOX RULES — READ FIRST.  You run with no sandbox. ***
 
-1. **NEVER write to `C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC`, `build/`, `build-asan/`, `est/`, or WSL
-   `/tmp/gxsec-build`.** Those are the project trees and two of them carry gate binaries.
-2. **COPY THE TREE FIRST.** `cp -a` a fresh clone to your own scratch directory under WSL `/tmp`, and
-   do all building and mutating there.
-3. Build inside `wsl -d Gentoo` — the default distro has no `make`.
-4. **`rm src/cpus/*.o` before each build.** Kept as a conservative clean-build precaution.
-5. **CHECK `[ binary -nt source ]` after every build.** `MAKE_RC` has been observed reporting **0 on a
-   failed build**, so exit status alone is not proof a binary was produced.
-6. **Copy every log you cite into `regress/artifacts/m88kexcdetectorl2/` when you are done** — `/tmp`
-   evaporates, and a measurement cited from a volatile path is not a citation.
+**NEVER write to `C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC`, `build/`, `build-asan/`, `est/`, or
+`/tmp/gxsec-build`.** Those are the project's live trees and one stray write costs a day.
 
-## THE CLAIM TO TEST
+**COPY THE TREE, BUILD THE COPY:**
 
-`src/cpus/cpu_m88k.c` has **eleven** `implemented = true;` sites. Four sit on exception classes that
-`regress/m88k_exc_probe.py` (59 rows) never drives:
+```sh
+rm -rf /tmp/gxm88k && cp -a /mnt/c/DocumentNoSnc/CC/GXEMUL/build /tmp/gxm88k
+cd /tmp/gxm88k
+```
 
-    line 700  case M88K_EXCEPTION_RESET:
-    line 705  case M88K_EXCEPTION_INTERRUPT:
-    line 710  case M88K_EXCEPTION_INSTRUCTION_ACCESS:
-    line 715  case M88K_EXCEPTION_DATA_ACCESS:
+Everything below happens in `/tmp/gxm88k`. Verify at the end that
+`git -C /mnt/c/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC status --porcelain` is unchanged by your work.
 
-(The seven at 720–750 are the `#502` fix's own arms and **are** probed.)
+## Build traps — all three are real and none is guessable
 
-**The prediction is that deleting the flag on an unprobed class re-opens `#502` for that class while
-every row stays green — a clean sweep.** I verified the premise by reading; **the score is what I do
-not have.**
+1. Build inside **`wsl -d Gentoo`**. The default distro has no `make`.
+2. **`rm src/cpus/*.o` before every build.** Conservative clean-build precaution in this tree.
+3. ***`MAKE_RC` HAS BEEN OBSERVED REPORTING 0 ON A FAILED BUILD.*** Do not trust the exit status —
+   check **`[ /tmp/gxm88k/gxemul -nt /tmp/gxm88k/src/cpus/cpu_m88k.c ]`**, i.e. that the binary is
+   genuinely NEWER than the source you edited. If it is not, the build failed and any score you
+   report is of the OLD binary.
 
-## WHAT TO RUN
+---
 
-**BASE first.** Build the clone unmodified and run `regress/m88k_exc_probe.py` exactly as
-`gate_m88k_rounding.sh` invokes it. Record the score. **If BASE is not a full pass, STOP and say so** —
-every later number is meaningless if the baseline is not clean, and I would rather have that sentence
-than a table built on a broken base.
+## Step 1 — BASELINE
 
-Then, each as a **separate build from a fresh copy of the baseline source** (never stacked):
+Build the copy **unmodified** and score it:
 
-* **M1 — `DATA_ACCESS`**: delete `implemented = true;` at line 715 only. *This is the important one:
-  `DATA_ACCESS` is an ordinary page/bus fault, so it is the most guest-reachable of the four.*
-* **M2 — `RESET`**: delete `implemented = true;` at line 700 only.
+```sh
+cd /tmp/gxm88k && rm -f src/cpus/*.o && make
+python3 -u /mnt/c/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/m88k_exc_probe.py /tmp/gxm88k/gxemul BASE
+```
 
-Report for each: **score `n/59`**, and **which rows changed colour relative to BASE**, derived by
-diffing the row lines against the BASE log — **not** from the driver's own summary. A driver that
-echoes a score it did not recompute is a known failure mode here.
+**Report the baseline RESULT line verbatim.** If it is not a full score, STOP and report that —
+a mutant score means nothing against a baseline that is already failing.
 
-## WHAT I AM ASKING, PRECISELY
+## Step 2 — THE MUTANT
 
-1. **BASE score.**
-2. **M1 score, and the rows that differ from BASE.**
-3. **M2 score, and the rows that differ from BASE.**
-4. **Did the mutant text actually land?** Show the `diff` of the mutated file against baseline for
-   each. A mutant whose text was never applied scores like a clean build and is indistinguishable
-   from a pass — treat MUTANT-TEXT-NOT-FOUND as a hard failure, not a silent skip.
+In `/tmp/gxm88k/src/cpus/cpu_m88k.c`, change every **`implemented = true;`** inside the exception
+dispatch to:
 
-## WHAT I AM NOT ASKING
+```c
+		implemented = (cpu->machine->ncpus < 2);
+```
 
-Do not design a fix. Do not add rows. Do not touch the probe. **If a mutant does not sweep, that is a
-result and I want it** — a mutant that refuses to die is a finding about the code or about the mutant,
-not a failed errand, and this project treats it as one.
+**DERIVE THE SITE LIST; DO NOT TRUST A COUNT FROM ME.** Run:
 
-**If the build or the run fails in a way you cannot resolve, say so plainly and stop.** A clear "I
-could not build this, here is the error" is worth more than a number I cannot trust — and it is
-explicitly what I want rather than a best effort.
+```sh
+grep -n 'implemented = true' /tmp/gxm88k/src/cpus/cpu_m88k.c
+```
+
+*** A PREMISE OF MINE TO CHECK, AND I BELIEVE IT IS WRONG. ***  The queue row that prompted this job
+says the edit applies to **seven** arms. My own grep of the tree returns **eleven** occurrences.
+**Report how many you actually found and how many you changed**, and if some are outside the
+exception dispatch (a different function, or a path the detector cannot reach), say which and leave
+them alone — then tell me. The count discrepancy is itself a finding.
+
+Rebuild (with the `rm` and the freshness check) and score it the same way, label `M1`.
+
+## Step 3 — REPORT
+
+* the BASELINE result line and the MUTANT result line, verbatim;
+* **exactly which rows reddened**, by name, or "none";
+* how many sites you found and changed;
+* the freshness check result for both builds.
+
+**The prediction under test is that the mutant scores a CLEAN SWEEP — every row still green.** Two
+seats predicted that independently from reading, neither could build it, and both said so honestly.
+
+* **If it sweeps**, that is a real coverage hole in the detector, and saying so with a number is the
+  whole point of this job.
+* **If it does NOT sweep**, the prediction was wrong and the row closes as a measured non-finding.
+  **That is an equally good outcome** — record which rows killed it.
+
+## Restore
+
+Nothing to restore: you worked in `/tmp/gxm88k`, which is disposable. Confirm the project tree is
+untouched and say so.
+
+## Rules
+
+* Report what the commands PRINTED, not what you expected them to print.
+* If a step fails, report the failure and stop rather than working around it.
+* Do not edit the probe. Do not edit anything under `GXEMUL-SEC`.
