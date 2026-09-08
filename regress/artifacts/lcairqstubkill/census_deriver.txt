@@ -1,0 +1,47 @@
+import io, os, re
+
+BS = chr(92)
+#  KEY ON WHAT DEFINES THE CLASS: a function ASSIGNED to .interrupt_assert / .interrupt_deassert.
+#  The earlier pass keyed on the NAME pattern, which is a correlate -- a handler called anything
+#  else would have been missed entirely.
+ASSIGN = re.compile(r'\.interrupt_(?:de)?assert\s*=\s*([A-Za-z_]\w*)')
+
+assigned = {}          # handler name -> set of files that register it
+for root, dirs, files in os.walk('src'):
+    for f in sorted(files):
+        if not f.endswith('.c'):
+            continue
+        p = os.path.join(root, f).replace(BS, '/')
+        s = io.open(p, encoding='utf-8', errors='replace').read()
+        for m in ASSIGN.finditer(s):
+            assigned.setdefault(m.group(1), set()).add(p)
+
+print('  distinct functions ASSIGNED as an interrupt handler: %d' % len(assigned))
+
+#  now find each one's body anywhere in the tree and test it
+bodies = {}
+for root, dirs, files in os.walk('src'):
+    for f in sorted(files):
+        if not f.endswith('.c'):
+            continue
+        p = os.path.join(root, f).replace(BS, '/')
+        s = io.open(p, encoding='utf-8', errors='replace').read()
+        for name in assigned:
+            m = re.search(r'^(?:static\s+)?\w[\w\s\*]*?' + re.escape(name) +
+                          r'\s*\([^)]*\)\s*\n\{(.*?)^\}', s, re.S | re.M)
+            if m:
+                bodies[name] = (p, s[:m.start()].count('\n') + 1, m.group(1))
+
+print('  of those, bodies located:                            %d' % len(bodies))
+missing = sorted(set(assigned) - set(bodies))
+if missing:
+    print('  *** bodies NOT located (would be invisible to this census): %s' % missing)
+
+killers = [(n, v[0], v[1]) for n, v in sorted(bodies.items()) if 'exit(' in v[2]]
+print()
+print('  HANDLERS WHOSE BODY CALLS exit():  %d' % len(killers))
+for n, p, ln in killers:
+    print('    %-28s %s:%d' % (n, p, ln))
+
+print()
+print('  (the other %d registered handlers do NOT terminate)' % (len(bodies) - len(killers)))
