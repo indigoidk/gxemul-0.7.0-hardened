@@ -1,0 +1,54 @@
+**VERDICT: YES. Existing ARM probes already plant and execute instruction words through the cold debugger. Successful execution of every possible word is not guaranteed.**
+
+I opened **all eight ARM probe files you named**. **Seven plant executable code with `put w`; one loads its own generated program through the raw-file loader.**
+
+| Probe file | Function | Existing mechanism |
+|---|---|---|
+| [arm_flags_probe.py](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/arm_flags_probe.py:196) | `run_flags()`, `run_und()` | Plants instruction words, sets `pc`, and steps on `testarm`. Other cases use `continue`. |
+| [arm_endian_probe.py](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/arm_endian_probe.py:270) | `run()` | Plants the supplied program, sets `pc`, steps, and prints registers on `testarm` and `barearm`. |
+| [arm_writeback_probe.py](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/arm_writeback_probe.py:510) | `run()` | Plants program words, sets `pc`, uses `continue`, then interrupts and reads results. |
+| [arm_memcpy_probe.py](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/arm_memcpy_probe.py:64) | `session()` | Plants program words, sets `pc`, and uses `continue`. |
+| [arm_strlen_probe.py](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/arm_strlen_probe.py:98) | `session()` | Plants program words, sets `pc`, and uses `continue`. |
+| [arm_fold_marker_probe.py](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/arm_fold_marker_probe.py:114) | `session()` | Plants program words and runs them with `continue`, on `testarm` or `barearm`. |
+| [footbridge_sites_probe.py](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/footbridge_sites_probe.py:107) | `run_arm()` | Plants program words, sets `pc`, and single-steps on `cats`; checks the execution disassembly against the planted words. |
+| [arm_idle_probe.py](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/arm_idle_probe.py:119) | `session()` | Serializes its complete program into a raw file, loads it, sets `pc`, and uses `continue`. Its debugger puts seed data. |
+
+Thus, these eight are executing probe-supplied code. The small startup file in the planting cases does not establish that they merely observe existing code: `arm_flags_probe.py`, for example, overwrites it before execution.
+
+The debugger supplies the machinery you described, with these ARM details:
+
+- **Word writes:** `debugger_cmd_put()` calls `store_32bit_word()`, which stores the low 32 bits using `cpu->byte_order`, through the CPU’s memory function with `CACHE_DATA`. It applies no instruction-encoding whitelist. See [debugger_cmds.c](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/debugger/debugger_cmds.c:1528) and [core/memory.c](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/core/memory.c:794).
+- **Setting PC:** `debugger_assignment()` writes through the settings system. `arm_cpu_new()` registers `pc` directly against `cpu->pc`, separately from the ARM register array. There is no debugger-side pipeline-offset adjustment or additional register assignment required. `arm_run_instr()` reconstructs instruction pointers from that PC. Assignment itself does not switch ARM/Thumb mode; dispatch checks CPSR’s Thumb flag. See [debugger.c](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/debugger/debugger.c:211), [cpu_arm.c](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c:192), and the shared implementation in [cpu_dyntrans.c](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c:177).
+- **Code-cache invalidation:** `arm_memory_rw()`, instantiated from `memory_rw.c`, calls `invalidate_code_translation()` for RAM writes using the physical address. ARM’s invalidator resets **the entire 4 KiB instruction page**, because translated PC-relative loads can contain cached literal values. Additionally, interactive `debugger()` entry resets code translations and address-translation caches. This route requires no separate guest instruction-cache maintenance operation. See [memory_rw.c](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:738), [cpu_dyntrans.c](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1407), and [debugger.c](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/debugger/debugger.c:786).
+- **Register names:** `arm_cpu_new()` exposes `r0`–`r9`, then `sl`, `fp`, `ip`, `sp`, `lr`, plus `pc` and `cpsr`. Numeric aliases `r10`–`r15` are not registered there. The names come from `ARM_REG_NAMES` in [cpu_arm.h](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/cpu_arm.h:59); `debugger_cmd_print()` uses the ordinary expression/settings lookup.
+- **Stepping:** `debugger_cmd_step()` supplies the step count; `arm_run_instr()` uses the shared single-instruction execution branch. Single-stepping suppresses instruction combining and ARM IRQ delivery, so it does not exercise all the same paths as free-running execution. See [debugger_cmds.c](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/debugger/debugger_cmds.c:1685) and [cpu_dyntrans.c](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1888).
+
+For machine construction, let **R** be the configured RAM size in bytes. `emul_machine_setup()` creates base physical RAM covering **[0, R)** before constructing CPUs and invoking machine setup. The default is **32 MiB**; the inspected `testarm`/`barearm` harnesses explicitly request **64 MiB**, giving base RAM at **0x00000000–0x03ffffff**. See [core/emul.c, `emul_machine_setup()`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/core/emul.c:451), [machine.c, `machine_memsize_fix()`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/machines/machine.c:611), and [memory.h](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/memory.h:41).
+
+Both default to **SA1110**, initially in ARM supervisor mode with the MMU disabled. `arm_translate_v2p()` then treats virtual addresses as physical addresses. Their construction differences are:
+
+| Machine | Setup |
+|---|---|
+| `testarm` | Retains the CPU constructor’s little-endian byte order. `default_test()` adds test devices. Sets SP to **R−4096**, LR to **SP+32**, and writes the 12-byte halt stub there. |
+| `barearm` | Sets big-endian byte order. Adds a **128 MiB mirror window at 0xa0000000–0xa7ffffff**, forwarding to addresses starting at zero. This aliases existing backing memory; it does not allocate another 128 MiB. It installs no test-machine halt stub. |
+
+These are `MACHINE_SETUP(testarm)`, `MACHINE_SETUP(barearm)`, and their default-CPU functions in [machine_test.c](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/machines/machine_test.c:172), together with [cpu_arm.c, `arm_cpu_new()`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c:112), [memory_arm.c, `arm_translate_v2p()`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_arm.c:48), and [dev_ram.c, `dev_ram_access()`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_ram.c:77).
+
+**Yes, ordinary base RAM exists away from that setup.** The constructors do not reserve it all for boot code. Availability after construction also depends on loaded images and subsequent stack use; there is no separately designated probe scratch region.
+
+**The specific `_scratchpad/gxprobe.py` question remains unverified under your reading scope.** That file is outside the permitted paths, so I did not read it and cannot classify it as ARM-capable or MIPS-specific. The eight inspected probes contain their own `pty.fork()`/command/readback machinery; none imports `gxprobe`. Existing ARM plumbing is therefore present in their local `session()` and `run()` functions.
+
+“Arbitrary word” has an execution-model limit. `arm_instr_to_be_translated()` fetches four bytes, interprets them in CPU byte order, and dispatches through the decoder. General translation failures reach the shared **`bad`** label: it reports an unimplemented instruction, requests debugging, sets `cpu->running = 0`, resets pending steps, and redirects execution to `nothing_call`. That path stops the virtual CPU; it contains no host `exit()`. See [cpu_arm_instr.c](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c:3868) and [cpu_dyntrans.c](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1983).
+
+**`#312` fixes one particular decoder fallback.** On actual execution it installs `cond_instr(und)` and records the instruction’s page offset. `arm_instr_und()` synchronizes PC and calls `arm_exception(ARM_EXCEPTION_UND)`. Consequently, the exception occurs only when the instruction’s condition passes. Read-ahead merely declines translation; non-permanently-undefined extension cases receive a warning once. This is not universal undefined routing for every unsupported encoding. See [the corrected branch](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c:4495) and [`arm_instr_und()`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c:1020).
+
+`arm_exception()` saves status, switches to the Undefined register bank, records the return address, clears Thumb mode, masks IRQs, and transfers PC to the Undefined vector—low or high according to the control register. The normal Undefined path does not exit the host. See [cpu_arm.c, `arm_exception()`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c:616).
+
+**Host-process exits nevertheless remain elsewhere in the ARM model:** `arm_coproc_15()` has active exits for unsupported operations, and the model-specific unknown-operation paths in `arm_coproc_i80321_6()` and `arm_coproc_xscale_14()` explicitly call `exit(1)`. See [cpu_arm_coproc.c](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_coproc.c:50), [its i80321 fallback](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_coproc.c:416), and [its XScale fallback](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_coproc.c:526). Also, `fatal()` itself only prints; its name does not imply termination ([debugmsg.c](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/core/debugmsg.c:384)).
+
+I found two additional relevant details:
+
+- With PROM emulation enabled, `arm_cpu_new()` also writes a hook at **R−8**, including before `barearm` changes byte order. That is an additional constructor write beyond the halt stub ([cpu_arm.c](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c:181)).
+- Direct `cpsr` settings access does not synchronize the separate execution-flags field. A debugger assignment does not update those flags, and a direct print can show stale NZCV bits. `arm_cpu_register_dump()` and the architectural status-read handler explicitly synchronize them ([register dump](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c:359), [status-read handler](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c:910)).
+
+This verdict comes from source inspection; I did not execute probes or read the excluded artifacts or ledger.

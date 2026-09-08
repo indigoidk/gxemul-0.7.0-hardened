@@ -1,0 +1,100 @@
+I'll verify the inlined claims against `GXEMUL-SEC/src/` and the probe rather than ratifying them, then answer the four questions from that reading.Decode line numbers in the brief already disagree with grep; I'll read the decoder, the m88k idiom, and the ARM ARM before trusting the arithmetic.I'll enumerate the mask arithmetic and the BFI width domain rather than taking those claims on trust.**VERDICT: RATIFY THE REPAIR; DO NOT RATIFY THE COMMENTS, THE “11/11 PINS BOTH HALVES” READING, OR THE 496-COUNT.** The mask/guard/`1U` form is correct at 1, 31 and 32, and the `sbfx` `&&` reorder does not change guest `x` for any width in `{1..32}`. The added comments, the brief’s `pc adv` claim, and the BFI census each state something the rows (or the arithmetic) do not establish.
+
+I read `GXEMUL-SEC/src/cpus/cpu_arm_instr.c` (handlers, decoder, `X(und)`), `cpu_m88k_instr.c` `X(clr)`/`X(set)`/`m88k_rot`, `regress/arm_bfx_width_probe.py`, and ARM’s UBFX/SBFX decode (`msbit > 31` → UNPREDICTABLE). Line numbers below are from the post-diff file. The brief’s decoder cites (`:4486` / `:4493`) are the pre-comment numbers; after this diff they are `:4525` / `:4532` — off by exactly the 39 lines this comment-heavy patch inserts. The formula is still `width = 1 + ((iword >> 16) & 31)`.
+
+---
+
+### 1. Premise audit
+
+**Repair at 1, 31, 32 — correct.** Walked, not argued. Decoder width is `{1..32}` (`:4525`, `:4532`). `unsigned int` is 32 bits on every host this tree builds on.
+
+| width | path | mask | extracted field of `0x89abcdef`, lsb=0 |
+|------:|------|------|----------------------------------------|
+| 1 | `(1U << 1) - 1` | `0x1` | `0x1` |
+| 31 | `(1U << 31) - 1` | `0x7fffffff` | `0x09abcdef` |
+| 32 | ternary, **not** `1U << 32` | `0xffffffffU` | `0x89abcdef` |
+
+`1U << 31` is defined (unsigned); `1 << 31` and `1 << 32` / `1U << 32` are not. The guard is what makes 32 defined; `1U` is what makes 31 defined. Probe `w1` / `w31` / `w32` match those three results.
+
+**`&&` reorder — guest-identical on `{1..32}`, definedness-not-identical.** Original is `if ((x & topBitMask) && (width < 32))` after always computing `1 << (width-1)`. New is `if (width < 32 && (x & (1U << (width - 1))))`.
+
+- Widths 1–31: `width < 32` is true both ways; `1 << (0..30)` and `1U << (0..30)` are the same bit. Body taken iff the field’s top bit is set.
+- Width 32: both skip the body. New never shifts. Old **always** evaluates `1 << 31` *before* the `if` (the guard cannot save a value already computed). Under a non-trapping lowering the stored `x` matches; under UBSAN the old form traps and the new one does not — that is the fix.
+
+The comment’s “ordinary locals with no side effects” is true of the *new* operands. It is false of the old form: the UB shift is a prior statement, not an `&&` operand. Also: with `1U` alone, `1U << (width-1)` is already defined at width 32 (`1U << 31`). The hoist is load-bearing for *signed* `1`, redundant for `1U`. Doing both is fine; calling them equivalent defences is not.
+
+**Comments claim things the rows do not establish.**
+
+1. *“the mask became 0”* — rows show `r0 == 0` on HEAD at width 32. They do not observe `mask`. `0` is the x86 `shl` lowering (`count & 31` → `1 << 0` → `1-1 = 0`), which is what was measured, not a C99 result.
+2. *“`1 << 31` gives `INT_MIN` … `INT_MAX`”* — same: this host’s wrap, which is why `w31` stayed green. Not a language value.
+3. *“`1U` is load-bearing and not style”* — true of C99, **false of this probe**. See Q2. The rows cannot establish it.
+4. The `sbfx` block is a verbatim copy of the `ubfx` measurement, including `` `UBFX r0,r1,#0,#32` of 0x89abcdef returned 0x0 ``. That sentence is about the other function. HEAD `s w32` is also `0x0`, but that is a different row, and it does not pin `topBitMask` (below).
+5. *“there is no sign to extend”* at width 32 — the 32-bit field *has* a sign bit; `x |= ~mask` with `mask == 0xffffffffU` is a no-op because `~mask == 0`. The original `width < 32` already skipped it. Harmless, slightly wrong reason.
+
+m88k transfer is real (`cpu_m88k_instr.c` `X(clr)` / `X(set)`): `w == 0 ? 0xffffffff : ((uint32_t)1 << w) - 1`. The ARM form is the same idea with a different spelling of “full width”. It is `1U`, not the cited `(uint32_t)1`; on this project’s 32-bit `int` they match.
+
+**Architecture (not in `_scratchpad/ddi0100i.txt` — that ARM ARM has no UBFX):** A32 UBFX/SBFX is UNPREDICTABLE iff `msbit > 31` (`msbit = lsbit + widthminus1`). `lsb=0, width=32` → `msbit=31`, legal. `#0,#32` is a defined full-register extract, not UNPREDICTABLE.
+
+---
+
+### 2. Smallest 11/11 escape
+
+**Delete one character: `1U` → `1` in the mask ternary.** Re-opens C99 6.5.7p4 at width 31. **`w31` stays green** — that is the wrap the comment itself describes. `w32` stays green because the `width == 32` arm never evaluates the shift.
+
+Two more one-line escapes, both 11/11:
+
+- **Restore `uint32_t topBitMask = 1 << (width-1);` above the `if`.** Re-opens the second UB. **`s w32` stays green**: with a correct 32-bit mask, `x |= ~mask` is `x |= 0` even if the guard is removed. `s w32` pins the *mask*, not `topBitMask` and not the hoist. The probe comment that calls `s w32` the second-UB row is wrong about what that row can see.
+- **`if (width < 32)` with no bit test** (always sign-extend for width &lt; 32). **`s mid` stays green** because `0xde` already has bit 7 set. No row has an SBFX field with the top bit *clear*.
+
+If this 11-row probe is the shipping detector, dropping `1U` is a clause-(d) hole the comment itself named as load-bearing. It is also **unobservable on this host**: `1 << 31` and `1U << 31` produce the same 31-bit mask after the `- 1`. A guest-value row cannot kill that mutant; UBSAN or a static pin can. That is a limit of the witness, not a reason to drop `1U` from the code.
+
+---
+
+### 3. Scope
+
+**Leaving `bfi` is a correct use of the one-site rule, not a partial repair sold as complete.** The legal cell `BFI #0,#32` *is* the same `(1 << 32) - 1` defect, and the same ternary would fix that cell. The rest of BFI’s domain is not that defect.
+
+The 496 figure is the wrong quantity. `msb, lsb ∈ {0..31}` independently = 1024 encodings. `width = msb - lsb + 1` ∈ `{-30..32}` is right. Then:
+
+| set | count | `1 << width` |
+|-----|------:|----------------|
+| `msb < lsb` (ARM UNPREDICTABLE) | **496** | mixed |
+| `lsb = msb + 1` → `width == 0` | **31** | `1 << 0`, **defined**; mask 0; destination unchanged (a no-op) |
+| `lsb ≥ msb + 2` → `width < 0` | **465** | negative count, UB |
+| `msb=31, lsb=0` → `width == 32` | **1** | same UB as this round |
+
+The brief’s “so 496 … NEGATIVE shift count” conflates `msb < lsb` with `width < 0`. 31 of those 496 are not a negative shift. That does **not** pull BFI into this round: the negative-width question is still unsettled, and a copied ternary would leave `1U << negative` undefined.
+
+**`X(und)` claim is true.** `X(und)` (`:1020`) does `cpu->pc &= 0xfffff000; cpu->pc += ic->arg[0];`. Both `cond_instr(und)` sites set `ic->arg[0] = addr & 0xfff`. `X(bfi)` sets `arg[0]` to `&cpu->cd.arm.r[rd]`. Pointing BFI at `und` without a decode-time rewrite would add a host pointer to PC.
+
+`is_userpage` is a different class (`1 << (index & 31)`, a bit test). Cites `:2685` / `:2823` are stale; the expressions are at `:2724` and `:2862` (same +39). `m88k_rot:513` really is `(1 << n) - 1` with `n ∈ {1..31}` behind `if (n != 0)` — the file that supplied the safe idiom still has the unsafe form twenty lines up. Filing it is right.
+
+---
+
+### 4. Witness honesty
+
+It drives UBFX widths **1, 8, 31, 32** and SBFX widths **8, 32**, all on **one** source `0x89abcdef`, mostly `lsb=0`. Controls `enc ok`, `live`, `mid`, `w32 pc` are real. HEAD 9/11 / FIX 11/11 is the two width-32 data rows.
+
+**Cell it should assert and does not: SBFX with the field’s top bit clear.**
+
+`0x89abcdef`: bit31=1, **bit30=0**, bit7 of the `#4,#8` field (`0xde`)=1, bit0=1. So:
+
+- `s mid` only sees the extend-*taken* path.
+- SBFX `#0,#31` of this source would be `0x09abcdef` with no extend — identical to UBFX `w31`, so adding it with this `r1` still would not pin SBFX.
+- SBFX `#0,#1` should be `0xffffffff`; UBFX `w1` is `0x1`. That cell is cheap and missing.
+
+Together with Q2, the probe cannot see (a) dropping `1U`, (b) restoring the pre-guard `topBitMask`, (c) “always sign-extend when `width < 32`”.
+
+**The brief overclaims `pc adv`.** The probe rows `pc` on the MOV (`pc adv`), on `mid pc`, and on `w32 pc`. It **reads** `pc` on `s w32` / `w31` / `w1` / `s mid` and **does not assert it**. The zero-vs-didn’t-execute story is why they added `w32 pc`; they did not add `s w32 pc`. `enc ok` plus the decoder’s else-if chain makes a mask-matching word take the `sbfx` arm, so this is weaker than a silent mis-encoding, but it is not “on EVERY row”.
+
+`testarm` is SA1110 (ARMv4). UBFX is v6T2. The witness is of *this decoder* (the `ubfx` arm sits above `#312`’s `und` fallback), not of a real SA1110. The probe is honest about the machine; the round record should not imply architectural v4 behaviour.
+
+---
+
+### Something else
+
+- **Stale line numbers, produced by this diff.** Decoder `:4486`/`:4493` → `:4525`/`:4532`; `is_userpage` `:2685`/`:2823` → `:2724`/`:2862`. The brief says those decoder lines were re-verified by reading. The formulas are right; the citations are the pre-comment file.
+- **`s w32` does not exercise the second UB** once the mask is correct (`~0xffffffffU == 0`). If the comment keeps claiming it does, that is a wrong record.
+- Legal **`BFI r0,r1,#0,#32`** is the same observable class and is not in the probe. Out of round is fine; it still wants a filed row, not only a “left alone” sentence.
+
+I did not run a gate or the battery. I did not rebuild; the 9/11 and 11/11 figures are the brief’s, and the encodings/`enc ok` checks I re-derived from the decoder match the probe.

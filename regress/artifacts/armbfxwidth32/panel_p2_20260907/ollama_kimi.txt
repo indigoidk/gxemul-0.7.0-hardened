@@ -1,0 +1,40 @@
+**VERDICT: The repair is correct at widths 1, 31, 32 and the `&&` reorder changes no behaviour at any value (enumerated below). But the SCOPE rationale for `bfi` contains a false premise — the msb=31/lsb=0 corner is architecturally DEFINED and settleable, contradicting "no seat could settle what the model should do there" — and two shipped-comment claims outrun the rows. The witness itself corroborates the load-bearing decode premise from inside the packet.**
+
+---
+
+## Q1 — Premise audit
+
+**Repair at 1/31/32, enumerated (READ + REASONED):**
+- width 1: new `(1U<<1)-1` = 1; old `(1<<1)-1` = 1. Identical, both defined. ✓
+- width 31: new `(1U<<31)-1` = 0x80000000−1 = 0x7fffffff, defined. ✓ Old wraps to the same value on this build: witness w31 = 0x9abcdef = 0x89abcdef & 0x7fffffff exactly (enumerate: 0x89 & 0x7f = 0x09). ✓ (READ)
+- width 32: new guard yields 0xffffffff; witness FIX w32 = 0x89abcdef. ✓ (READ)
+
+**The decode premise is provable from the packet, not just asserted** (REASONED): if width at the mask site were {0..31} (i.e., the `+1` lived in the exec function), the FIX w32 row would be `0x89abcdef & 0x7fffffff` = 0x09abcdef. Observed value is 0x89abcdef, which requires mask 0xffffffff, i.e., the guard fired at width==32. So "width reaches 32" is corroborated by the rows regardless of the unread :4486/:4493.
+
+**`&&` reorder (REASONED):** both operands are side-effect-free locals; `A && B` vs `B && A` is identical for every width in {1..32} under any defined reading, and at 32 both skip extension. Enumerated all 32 widths: no value changes. One strict-language nit: at width 32 the original is UB, so "semantically identical at every width" is meaningful only as observable-behaviour identity, not abstract-machine identity. The comment itself discloses the UB, so this is defensible.
+
+**Arithmetic side-claims, enumerated (READ):**
+- "496 of 1024 negative shift counts for `bfi`": Σ_{lsb=0}^{31} lsb = 496. ✓ Range −30..32: 0−31+1 = −30, 31−0+1 = 32. ✓
+- Diff line count: hunk 1 = 17 added + 1 removed = 18; hunk 2 = 26 added + 3 removed = 29; total 47. ✓ Hunk headers consistent (23−7=16, 35−12=23). ✓
+
+**Comment claims the rows do NOT establish (READ):**
+1. *"measured rather than argued: `UBFX r0,r1,#0,#32` … returned 0x0 … because the mask became 0."* The row measures the return value; "the mask became 0" is the inferred mechanism (x86 shift-count masking), asserted in the same breath as the measurement. Any defect producing 0x0 shows the same row. Same structure at 31 ("`1<<31` gives INT_MIN…"), also inferred.
+2. *"undefined at BOTH ends of that range… at 32 … and … at 31."* The ends of {1..32} are 1 and 32; width 1 is fully defined. "BOTH ends" is wrong; "the upper two widths" is right. Minor, but it is shipped-comment text making a range claim that contradicts the brief's own correct premise.
+
+## Q2 — Smallest re-opening edit that still scores 11/11
+
+**Delete the `U` in `(1U << width)` at one site** — one character. Signed-overflow UB returns at width 31, and the witness cannot see it because on this hardware it wraps back to 0x7fffffff (the brief's own premise). Row that stays green: **w31** — the row the brief flags as "must STAY right" stays right *while the UB is back*. This edit is the live demonstration of the witness's blindness. Second candidate: revert `sbfx` to computing `topBitMask` unconditionally before the guard (`1 << 31` at width 32); the hardware value 0x80000000 never affects the outcome because `width < 32` still kills the branch — row that stays green: **s w32**.
+
+## Q3 — SCOPE: deferral is fine, the stated rationale is partly wrong (REASONED)
+
+The brief concedes the key fact itself: only msb<lsb is UNPREDICTABLE, so the 528 encodings with msb≥lsb are architecturally defined, widths {1..32} — *exactly* the ubfx range. For the corner pair lsb=0, msb=31 (width 32), what the model should do (full-register insert) is settleable from the architecture; the premise "no seat could settle from the tree what the model should do there" is false for that corner and overbroad as written for the whole `bfi` encoding space. By the same mechanism the w32 row measured, `bfi` at that corner presumably computes mask 0 and inserts nothing — an observable-wrong behaviour that ships after this round, with no witness row. The second rationale (X(und)'s arg[0] contract) defeats one repair route, not all: a `width<=0 → no-op` guard plus the width==32 guard fixes the defined space while choosing nothing controversial about UNPREDICTABLE space. Not checkable from packet: bfi's body (to confirm the same mask expression and the observable failure) and X(und)'s arg[0] contract — settling fact: the bodies of `X(bfi)` and `X(und)`. The deferral itself is legitimate round-scoping (the brief never claims class-completeness and files the other CPUs); the justification text is the defect.
+
+## Q4 — Missing witness cell
+
+The shown rows never take the sign-extension branch after the reorder — the exact code path the second hunk rewrote. Cell to add (REASONED, enumerated): **SBFX #1,#31 of 0x89abcdef** → x = 0x44d5e6f7; & 0x7fffffff = 0x44d5e6f7; bit 30 = 1 → extend → **0xc4d5e6f7**. One row covers both holes at once: sign-extension taken, and lsb≠0 (no shown row shifts by a nonzero lsb, so the `x >>= lsb` interaction with the new mask is unasserted).
+
+## Other
+
+- READ: 9/11 vs 11/11 is internally consistent with the two w32 rows failing at HEAD, but the table inlines 5 rows of 11; the other ~6 are not in the packet. Not checkable; settling fact: the full witness table.
+- READ: the whole analysis presupposes 32-bit `int` (the 6.5.7p3 claim at `1<<32` requires it); never stated as a premise. True on any realistic target, worth one clause.
+- Not checkable: m88k idiom at :532/:539 (asserted only), and whether `arg[2] >> 16` can exceed 32 (the `& 31` mask is asserted, not shown); if it could, the `width == 32` exact-equality guard is insufficient. Settling fact: the decode expression at :4486/:4493.

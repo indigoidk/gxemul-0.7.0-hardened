@@ -16264,9 +16264,13 @@ below.**
 >     bfi        width = msb - lsb + 1               domain -30 .. 32
 >
 > **Every `msb < lsb` encoding gives a negative width, and `1 << negative` is undefined by the
-> same clause as the count-too-large case (C99 6.5.7p3).**  That is 496 of the 1024 (msb, lsb)
-> pairs -- **nearly half the encoding space**, against the two single values that are UB in
-> ubfx/sbfx.
+> same clause as the count-too-large case (C99 6.5.7p3).**
+>
+> *** THE COUNT WAS WRONG AND IS CORRECTED, 2026-09-07, BY THE PASS-2 glm SEAT, WHICH ENUMERATED IT FROM THE BRIEF'S OWN WIDTH FORMULA. ***  This said "496 of the 1024 (msb, lsb) pairs".  Walked:
+>
+>     width  < 0   465      width == 0   31      width <= 0   496      msb < lsb   496
+>
+> **496 is the `msb < lsb` population, not the negative-shift one.**  465 pairs give a strictly NEGATIVE count; the other 31 give width exactly 0, where `1 << 0` is DEFINED and the mask becomes 0 -- semantically wrong, not undefined.  *Still nearly half the encoding space, and still against the two single values that are UB in ubfx/sbfx -- the conclusion is unchanged and the number was wrong.*
 >
 > ARM specifies `msb >= lsb` for BFI and calls the rest UNPREDICTABLE, **and that is the point
 > rather than an excuse: an UNPREDICTABLE GUEST ENCODING MUST NOT PRODUCE UNDEFINED BEHAVIOUR IN
@@ -16662,3 +16666,82 @@ from a cutoff) rather than a re-run of everything.
 *Not built here. It changes what every commit must satisfy, which is an owner decision and owes
 two negative controls: prove it reds on a probe staged without its manifest entry, and prove it
 stays green when both are staged.*
+
+
+### `bugfilereverse` (med) -- filed 2026-09-07: the ledger/bugfile sync is one-directional, on a
+### warrant that has since decayed
+
+`check_bugfile_sync.py` verifies that every OPEN LEDGER ROW is findable here. It does **not**
+verify the reverse, and its docstring says why:
+
+> *"The reverse direction is already clean (no OUTSTANDING_BUGS header lacks a ledger row), which
+> is what the es438 fix bought. This closes the other direction."*
+
+*** THAT SENTENCE IS NOW FALSE. *** Measured 2026-09-07: **190 headings, 398 ledger rows, and 33
+headings with no ledger row** -- ten of them filed by me tonight.
+
+> **This is the carrier's own ABSENCE-RECORD-IS-TIME-INDEXED class, applied to a checker rather
+> than a mutant:** *an absence record must NAME ITS WARRANT, and any edit touching that warrant
+> RE-RUNS THE DEATH MEASUREMENT.* The warrant is named -- honestly, and in exactly the right place
+> -- and **nothing re-runs it**, so the check's scope quietly stopped matching its justification.
+
+**WHY IT IS NOT SYMMETRY FOR ITS OWN SAKE.** The checker's own reasoning transfers unchanged:
+*"ledger.json is the pipeline's source of truth -- per-seat, per-phase, machine-read by
+gen_dashboard.py and check_stage_panels.py. A round with no ledger row is invisible."* A row filed
+only here gets no dashboard cell, no stage tracking, no fable-queue visibility. **`armbfxwidth32`
+-- an active round with a measured witness and a held flagship stage -- was in exactly that state
+until tonight.**
+
+*** AND THE INSTANCE THAT PROVES THE POINT IS THIS ROW ITSELF. *** I created `bugfilereverse` in
+the LEDGER and not here, and the gate caught it -- **committing the documented error inside the
+record documenting it.** That is the fourth time tonight I have put a record in one place and not
+the other (`fable_queue 7g-5`, `gateworktree`, `armbfxwidth32`, this). *Knowing a rule and having
+it fire on the right object are different problems, and only the second is solved by writing more.*
+
+**SCOPE IF BUILT:** the same shape as the existing check -- open items only, forward-only from a
+dated cutoff, so the 23 PRE-EXISTING headings are reported and not failed. A rule that retro-fails
+23 rows blocks the next commit on reconstruction nobody scheduled, and *a rule that does that gets
+switched off*, which is worse than a rule that warns.
+
+*Not built here: it changes what every commit must satisfy, and owes two negative controls -- red
+on a heading with no row, green once the row exists.*
+
+
+### `ubsanshiftlane` (med) -- filed 2026-09-07: a UBSAN differential would pin the shift repairs a
+### value probe provably cannot
+
+`#510`'s pass 2 (grok) showed two one-line regressions that re-open real undefined behaviour and
+score FULL MARKS on a 12-row guest-value probe:
+
+    `1U' -> `1' in the mask ternary                     re-opens C99 6.5.7p4 at width 31
+    restore `topBitMask = 1 << (width-1)' above the if  re-opens the second UB
+
+**Neither is killable by any row, and the reason is structural rather than a gap in the row set:**
+both are DEFINEDNESS repairs, and definedness has no guest-visible value on a non-trapping host.
+`1 << 31` and `1U << 31` yield the same mask after the `- 1`; and with a correct 32-bit mask
+`x |= ~mask` is `x |= 0`, so `s w32` pins the MASK and not `topBitMask`.
+
+**BUT UBSAN IS ALREADY IN THIS TREE**, which I established after writing "unchecked" about it:
+
+    build-asan/Makefile      -fsanitize=address,undefined
+    build-asan/src/Makefile  -fsanitize=address,undefined
+    regress/gate_asan_sweep.sh   exists
+
+**THE SHAPE, and it is a differential rather than a row:**
+
+    build-asan/gxemul + FIXED source     -> expect NO shift diagnostic
+    build-asan/gxemul + `1U'->`1' mutant -> expect "shift exponent" / "left shift of" on stderr
+
+That is the two-direction control this project demands, and it converts a DISCLOSED escape into a
+COVERED one for a whole class -- `lcashiftub`, `sgirebufshiftub`, `m88k_rot:513`,
+`cpu_mips_instr.c:1757` and the two `is_userpage` sites are all the same species, and all of them
+are equally invisible to a value oracle.
+
+**WHY IT IS NOT BOLTED ONTO `#510`:** it is a NEW MEASUREMENT LANE -- a second binary, and a
+STDERR oracle instead of a value oracle -- and `#510`'s pass 2 has already run. A lane added after
+a pass is a lane nobody reviewed. It owes its own round, its own pass, and two negative controls.
+
+*Cost note, because it is the reason to want this: the shift-UB class now stands at EIGHT sites
+across three CPUs, and a value probe can see NONE of them directly. It sees only the consequences
+that happen to differ on this host's lowering -- which for width 32 was a wrong register value,
+and for width 31 was nothing at all.*

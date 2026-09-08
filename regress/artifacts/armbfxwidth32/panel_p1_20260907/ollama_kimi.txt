@@ -1,0 +1,45 @@
+**VERDICT: The core claim holds and is in fact understated — SITES 1 and 2 are UB not only at `width == 32` (shift-count UB, C99 6.5.7p3) but also at `width == 31` (signed-overflow UB, 6.5.7p4, `1 << 31` on `int`), reachable via the unquestionably legal `#0, #31` / `#1, #31` encodings. That kills F4 and the "UNPREDICTABLE changes disposition" escape hatch outright. SITE 3 is a genuine third, distinct UB. The m88k transfer is sound in shape but the brief's claim that "the cast is not what avoids the UB" is half-wrong: the cast is the only thing defending `w = 31` in m88k, and the same argument makes the `1U` in F1 load-bearing here. The guest-visible effect (claim 3) is not checkable from the packet and is correctly labeled by the author as a lowering guess.**
+
+---
+
+### 1. Premise audit (section 2, items 1–3)
+
+**1a. Is `1 << 32` UB here? Yes — and so is `1 << 31`. (REASONED)**
+No missed promotion: `1` is already `int`, integer promotions leave it `int`. Enumerating the producer's range: `width = 1 + ((iword >> 16) & 31)` gives exactly `width ∈ {1..32}` (READ, from the inlined decoder expression). Walking the tail:
+- `width == 32` → count-UB (6.5.7p3).
+- `width == 31` → signed value-overflow UB (6.5.7p4: `2^31` not representable in `int`). This is precisely the `lcashiftub` class the tree already treats as a defect (READ).
+- `width ∈ {1..30}` → fine.
+
+The brief's title frames this as a width-32 problem only; the defect is two values wide. One caveat, honest rather than pedantic: the premise "int is 32 bits on every build host" is asserted, not provable from the packet (C guarantees ≥16). A hypothetical 64-bit-`int` host would make both shifts defined. Settling fact: the host list's `int` widths. I accept it as stated.
+
+**1b. Is `UBFX rd, rn, #0, #32` a legal encoding? Decodable: yes, verifiable from the packet. Architecturally legal: per the brief's stated constraint, but that is the one claim whose normative source is not inlined.**
+The mask arithmetic I can do from the packet (READ + enumeration): `0x0fe00070` = bits 27:21 (nibble `0xe` at bits 23:20 leaves bit 20 unmasked) plus bits 6:4. So bits 20:16 — the whole `widthm1` field — are unconstrained; all 32 values match `0x07e00050`/`0x07a00050`. Bits 11:7 are likewise free. The shown decoder lines clamp nothing. What I cannot see: the elided `...` lines. Settling fact: confirm the elided lines are ic-setup and contain no `width`/`lsb` rejection. Beyond that, the ARM ARM legality claim (`lsb + width <= 32` ⇒ legal) is stated by the author and matches my understanding, but its text is not in the packet — settling fact: the ARM ARM UBFX/SBFX constraint line. Crucially, though, disposition no longer depends on this: even if `width=32` were UNPREDICTABLE, `width=31` is legal and is already signed-overflow UB. **F4 is dead regardless of 1b's answer.** (REASONED)
+
+**1c. Guest-observable behavior: not checkable from the packet, and the guess has two plausible outcomes, not one.**
+Mod-32 lowering gives `1 << 32 == 1`, mask 0, result 0 (wrong). A lowering through a wider type gives `1<<32 == 2^32`, truncation to `(2^32 - 1)`, mask `0xffffffff` — accidentally correct. UB means the witness is host/compiler-dependent; a behavioral probe can therefore pass on one build and fail on another. The measurement that settles it: execute `UBFX r0, r1, #0, #32` through an unmodified ARM machine — or better, a UBSan-instrumented execution, which witnesses the UB itself (both `width=31` and `width=32`) independent of lowering.
+
+### 2. Option set (section 4)
+
+- **F1 is correct as written** — note that the `1U` is essential: a naive `(width==32) ? ~0U : (1 << width) - 1` with a *signed* `1` fixes the count-UB and silently leaves the `width==31` signed overflow. F1's hoisting of `width < 32` correctly covers SITE 3.
+- **F2 is well-defined** (enumerate: shift counts {1..32} ⊂ {0..63}). Valid.
+- **F3/F4: wrong**, per 1b and the width-31 instance.
+- **Missing members:** **F5**, branchless `mask = ~0U >> (32 - width)` — enumerate: counts {31..0}, all < 32, all defined, values correct at both ends. Also a 33-entry table is a distinct family. Fork-wide grep for the idiom: I cannot run it; the two m88k hits are taken as READ from the brief.
+
+### 3. SITE 3 — distinct defect: yes (REASONED)
+
+Separate site, different UB rule (6.5.7p4), same root cause: the `width < 32` test sits one statement too late. Enumerate: `width=32` → `1 << 31` UB; `width=31` → `1 << 30` fine. A mask-only fix leaves it live. Cheap correct repairs: `1U << (width-1)` (defined for all `width ∈ {1..32}`) or hoisting the guard. Note the semantics are then right at `width=32`: no sign extension, `SBFX r0,r1,#0,#32 == r1`. ✓
+
+### 4. m88k transfer
+
+- **Shape: sound, with the exception value remapped.** m88k spells full-width as `w==0`; ARM's decoder has already decoded to `width`, so the guard must be `width == 32`. A literal copy of `w == 0 ? ...` would never fire (width ≥ 1) — an inert fix that compiles and looks right. This is exactly the trap worth naming.
+- **The `(uint32_t)` cast is load-bearing, not cargo.** The brief's aside — "the guard is what avoids the undefined shift, not the cast" — is true only about the count-equals-width case (`w==32` never occurs in m88k's branch; `(uint32_t)1 << 32` would indeed still be UB). But enumerate the branch that runs, `w ∈ {1..31}`: without the cast, `w == 31` is `1 << 31` on signed `int` — 6.5.7p4 UB. The guard defends 0-as-32 semantics; the cast defends 31. Both earn their keep, for different values of `w`. The same two-value analysis is what F1's `1U` provides here.
+
+### 5. Witness rung (Q5)
+
+READ (from the brief): `gate_arm.sh` performs 358 real-decode checks and none reach these handlers. REASONED: machinery that drives arbitrary ARM encodings through real decode on an unmodified machine evidently already exists for those 358; a `UBFX r0, r1, #0, #32` probe row is the same ladder rung, so the round is **not** documented-only. Because the behavioral result is lowering-dependent, the strong witness is the UBSan-instrumented run of that same probe (it also catches `width=31`). Not checkable from packet: the encoding schema used by the existing checks. Settling fact: how `gate_arm.sh` expresses a decode-check row.
+
+### 6. Found while verifying — three things beyond the assigned questions
+
+1. **The `width == 31` signed-overflow instance at SITES 1/2** (above) — the headline extra; it widens the defect, hardens the disposition, and constrains every acceptable fix to use unsigned shifts, not just a 32-guard.
+2. **The `uint8_t` cast on `lsb` is dead for the shown producer — and would not defend `x >>= lsb` anyway.** Decoder emits `lsb ∈ {0..31}` (READ), so the cast truncates nothing; and if some other producer wrote 32..255 into the low byte, the cast bounds the count at 255, not 31 — the right shift on a `uint32_t` would itself be UB. So the cast is neither defensive nor the reason the shift is safe; the shift is safe today solely because the shown decoder can't exceed 31. Whether another producer exists (a Thumb-2 decode path is the obvious suspect — T32 has its own UBFX/SBFX encodings) is not checkable from the packet. Settling fact: grep all sites that set `ic->f` to `cond_instr(ubfx)`/`cond_instr(sbfx)` and what each packs into `arg[2]`.
+3. **Possible unexamined sibling: the BFI handler.** The brief exonerates BFI's *decoder* (packs `msb`, never a width — READ), but the BFI *execution handler* is not inlined. If it constructs a mask from `msb` — e.g., `(1 << (msb+1)) - 1` — then `BFI r0, r1, #0, #31` (msb=31, legal) hits the identical `1 << 32` class. Deciding fact: the text of `arm_instr_bfi`. Given this bug survived *because nothing in `regress/` probes the handlers* (READ, and a fair lesson from the brief), it would not be surprising if the same is true of BFI.

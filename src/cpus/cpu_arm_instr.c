@@ -1313,7 +1313,30 @@ X(ubfx)
 	int lsb = (uint8_t)ic->arg[2];
 	int width = ic->arg[2] >> 16;
 
-	uint32_t mask = (1 << width) - 1;
+	/*  #510: was `(1 << width) - 1'.  `width' is `1 + ((iword >> 16) & 31)', so
+	    it reaches 32 -- and `1' is a plain int, so the old expression was
+	    undefined at BOTH ends of that range: a shift count equal to the type's
+	    width at 32 (C99 6.5.7p3), and a signed overflow at 31 (6.5.7p4).
+
+	    ONLY THE 32 CASE IS OBSERVABLE, and the probe measured it: `UBFX
+	    r0,r1,#0,#32' of 0x89abcdef returned 0x0 on the committed build, while
+	    `#0,#31' returned the correct 0x9abcdef.
+
+	    *** WHAT THAT MEASUREMENT IS, STATED PRECISELY, BECAUSE A PASS-2 SEAT
+	    CAUGHT AN EARLIER DRAFT OVERSTATING IT.  The rows observe the RESULT
+	    REGISTER, never the mask.  "The mask became 0", and "1 << 31 gives
+	    INT_MIN so INT_MIN - 1 gives INT_MAX", are THIS HOST'S LOWERING (shl
+	    takes its count mod 32) -- undefined behaviour has no defined result to
+	    measure.  They explain the observation; they are not the observation. ***
+
+	    The repair is owed by the LANGUAGE at both widths; only one was returning
+	    a wrong value on this host.  `1U' defends 31 and the guard defends 32 --
+	    but a guest-VALUE probe cannot establish that, because `1 << 31' and
+	    `1U << 31' yield the SAME mask after the `- 1'.  No row can kill a
+	    `1U' -> `1' regression; UBSAN or a source pin can.  This is
+	    `cpu_m88k_instr.c's idiom in X(clr) and X(set), where `w == 0' encodes 32
+	    for that architecture.  */
+	uint32_t mask = (width == 32) ? 0xffffffffU : ((1U << width) - 1);
 
 	x >>= lsb;
 	x &= mask;
@@ -1337,12 +1360,55 @@ X(sbfx)
 	int lsb = (uint8_t)ic->arg[2];
 	int width = ic->arg[2] >> 16;
 
-	uint32_t mask = (1 << width) - 1;
+	/*  #510: was `(1 << width) - 1'.  `width' is `1 + ((iword >> 16) & 31)', so
+	    it reaches 32 -- and `1' is a plain int, so the old expression was
+	    undefined at BOTH ends of that range: a shift count equal to the type's
+	    width at 32 (C99 6.5.7p3), and a signed overflow at 31 (6.5.7p4).
+
+	    ONLY THE 32 CASE IS OBSERVABLE, and the probe measured it HERE, on SBFX:
+	    the `s w32' row returned 0x0 on the committed build.  (An earlier draft
+	    of this block was a VERBATIM COPY of the ubfx one and quoted a UBFX
+	    measurement -- a sentence about the other function.)
+
+	    *** WHAT THAT MEASUREMENT IS, STATED PRECISELY, BECAUSE A PASS-2 SEAT
+	    CAUGHT AN EARLIER DRAFT OVERSTATING IT.  The rows observe the RESULT
+	    REGISTER, never the mask.  "The mask became 0", and "1 << 31 gives
+	    INT_MIN so INT_MIN - 1 gives INT_MAX", are THIS HOST'S LOWERING (shl
+	    takes its count mod 32) -- undefined behaviour has no defined result to
+	    measure.  They explain the observation; they are not the observation. ***
+
+	    The repair is owed by the LANGUAGE at both widths; only one was returning
+	    a wrong value on this host.  `1U' defends 31 and the guard defends 32 --
+	    but a guest-VALUE probe cannot establish that, because `1 << 31' and
+	    `1U << 31' yield the SAME mask after the `- 1'.  No row can kill a
+	    `1U' -> `1' regression; UBSAN or a source pin can.  This is
+	    `cpu_m88k_instr.c's idiom in X(clr) and X(set), where `w == 0' encodes 32
+	    for that architecture.  */
+	uint32_t mask = (width == 32) ? 0xffffffffU : ((1U << width) - 1);
 	x >>= lsb;
 	x &= mask;
 
-	uint32_t topBitMask = 1 << (width-1);
-	if (x & topBitMask && width < 32)
+	/*  #510: was `uint32_t topBitMask = 1 << (width-1);' followed by
+	    `if (x & topBitMask && width < 32)'.  A SECOND undefined shift, and the
+	    `width < 32' test that would have made it moot sat on the NEXT line.
+
+	    *** THAT IS NOT MERELY A REORDER, AND AN EARLIER DRAFT CALLED IT ONE. ***
+	    The old form computed `1 << (width-1)' as a PRIOR STATEMENT, and a guard
+	    never rescues an expression already evaluated.  The guest-visible `x' is
+	    identical for every width in {1..32}; what changes is DEFINEDNESS at 32,
+	    where the old form always evaluated `1 << 31'.  Under a non-trapping
+	    lowering the stored value matches either way; under UBSAN the old form
+	    traps and this one does not.  That IS the fix.
+
+	    And with `1U' the shift is already defined at 32 (`1U << 31'), so the
+	    hoist is load-bearing for a SIGNED `1' and redundant for `1U'.  Doing
+	    both is right; calling them equivalent defences is not.
+
+	    At width 32 the body is skipped, and would be a no-op anyway: with mask
+	    0xffffffffU, `x |= ~mask' is `x |= 0'.  (An earlier draft said "there is
+	    no sign to extend", which is the wrong reason -- a 32-bit field HAS a
+	    sign bit.)  */
+	if (width < 32 && (x & (1U << (width - 1))))
 		x |= ~mask;
 
 	reg(ic->arg[0]) = x;

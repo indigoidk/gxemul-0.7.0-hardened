@@ -163,11 +163,11 @@ MANIFEST = {
     #  classified WITNESS because nothing gates it, which is the same footing as the three
     #  above.  Wiring it is a separate decision and a separate round.
     "sgi_mte_fill_probe.py":      (CLASS_WITNESS,  "sgimtedepth4dead: `depth == 4' is unreachable so tiled MTE always took CI -- HEAD 10/14, fix 14/14"),
-    #  armbfxwidth32's `arm_bfx_width_probe.py` belongs here TOO -- it is written, run, and red
-    #  on the committed build at 9/11 -- but the entry lands in the SAME COMMIT as the file,
-    #  because this checker reads TRACKED files and a manifest naming an untracked probe is a
-    #  GHOST.  That is the mirror of the stale-exemption rule two hundred lines down: an entry
-    #  without its file is as wrong as a file without its entry.
+    #  #510.  The entry and the file are added to the INDEX in the same action, deliberately:
+    #  this checker reads TRACKED files, so a manifest naming an untracked probe is a GHOST,
+    #  and a tracked probe with no entry is UNCLASSIFIED.  Both are red, in opposite
+    #  directions, and `2956c7e' shipped the second one -- see [[gateworktree]].
+    "arm_bfx_width_probe.py":     (CLASS_WITNESS,  "armbfxwidth32: ubfx/sbfx build their mask with `1 << width' where width reaches 32 -- HEAD 9/11"),
     "arm_endian_probe.py":         (CLASS_DETECTOR, "ARM LDR rotation / endianness"),
     "arm_flags_probe.py":          (CLASS_DETECTOR, "ARM flag semantics"),
     "arm_fold_marker_probe.py":    (CLASS_DETECTOR, "instruction-combination markers"),

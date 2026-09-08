@@ -1,0 +1,24 @@
+VERDICT: Repair is arithmetically correct at 1/31/32 and the witness supports the 32-bit failure, but the added comment overclaims deterministic wrap at width 31 and falsely calls the `&&` reorder “semantically identical” when it actually removes UB; the witness also lacks a sign-extension case.
+
+**1. Premise audit**
+
+- READ: `width = 1 + ((iword >> 16) & 31)` ⇒ `width ∈ {1..32}`.
+- REASONED: The mask fix is correct.  
+  - width 1: `(1U << 1) - 1 = 1`  
+  - width 31: `(1U << 31) - 1 = 0x80000000 - 1 = 0x7fffffff`  
+  - width 32: guard returns `0xffffffffU`
+- REASONED: The `&&` reorder is **not** semantically identical for every width. At width 32 the original computes `topBitMask = 1 << 31` before the guard, which is UB; the new code short-circuits and never evaluates the shift. For width < 32 the boolean result is the same, but the evaluation order and UB status differ. The comment’s claim of “semantically identical for every width” is false.
+- REASONED: The comment also overclaims: “`1 << 31` gives INT_MIN and `INT_MIN - 1` gives INT_MAX” is not a language guarantee; `1 << 31` is undefined behavior. The witness row w31 shows one observed wrap on one build, not a deterministic rule.
+
+**2. Smallest edit that re-opens this and still scores 11/11**
+
+Change `1U` back to `1` in both mask expressions while keeping the `width == 32` guard.  
+Expected row to stay green: **w31** — on the test platform the UB still wraps to the correct mask, so the witness cannot detect the reintroduced undefined shift.
+
+**3. Scope**
+
+`bfi` is explicitly listed as out of scope, so this is not a hidden partial repair. However, it remains a known same-class undefined shift in the same file. Leaving it is defensible only if the round-scope rule permits deferring a defect with no clear model behavior; otherwise it is an incomplete repair.
+
+**4. Witness honesty**
+
+The witness does not test sign extension for `sbfx` at any width < 32. A missing cell: **SBFX width=1 with input `0x1`** — expected `0xffffffff` (sign bit set, all higher bits extended). Current rows only exercise mask correctness and the width-32 no-extension case.

@@ -1,0 +1,1616 @@
+Reading additional input from stdin...
+OpenAI Codex v0.153.4
+--------
+workdir: C:\DocumentNoSnc\CC\GXEMUL
+model: gpt-6-astra
+provider: openai
+approval: never
+sandbox: read-only
+reasoning effort: max
+reasoning summaries: none
+session id: 01a07e67-48b0-7c71-9a9f-c21abffc42ad
+--------
+user
+# PASS 2 — `#510` armbfxwidth32: UBFX/SBFX built their mask with an undefined shift
+
+## READ THIS FIRST — PLEASE DO NOT SIMPLY RATIFY
+
+Tonight's other two passes each found real defects in my briefs — a wrong line count, a
+false claim about mask equivalence, an overclaiming comment in shipped code. **Check the
+premises, not just the derivations.** Where I state something as fact, ask whether it is true.
+
+**THE TREE UNDER REVIEW IS `GXEMUL-SEC/src/`.** Three pristine-2021-upstream copies exist
+under the project root and are NOT this fork. Line numbers off by hundreds mean you are
+reading one of them.
+
+**If you cannot read files that is expected** — the entire product diff is inlined below,
+verbatim (2 hunks, 47 changed lines, counted before sending).
+
+**Where this brief states an ARITHMETIC claim, ENUMERATE it rather than reasoning about it.**
+
+**VERDICT LINE FIRST.**
+
+### If you can read files
+Scope your reading to `GXEMUL-SEC/src/` and `GXEMUL-SEC/regress/*.py`.
+**Do not read `regress/artifacts/` or `tools/pipeline/ledger.json`.**
+
+---
+
+## 1. PREMISES ALREADY SETTLED, RE-INLINED
+
+Settled by a six-seat pass 1 (`panel_20260907_174941`) and a codex fix-check, and re-verified
+by reading before this brief:
+
+* `ubfx` and `sbfx` decode `width = 1 + ((iword >> 16) & 31)` at `:4486` / `:4493`, so
+  **`width ∈ {1..32}`**.
+* `1` is a plain `int`. `1 << 32` shifts by the type's own width (C99 6.5.7p3); `1 << 31`
+  overflows a signed `int` (6.5.7p4). **Both are undefined.**
+* **ONLY THE 32 CASE IS OBSERVABLE, and that is MEASURED, not argued.** At 31 the expression
+  is undefined TWICE and wraps back to the correct answer: `1 << 31` gives `INT_MIN`,
+  `INT_MIN - 1` gives `INT_MAX` = `0x7fffffff`, which IS the right 31-bit mask.
+* The fork's own idiom is `cpu_m88k_instr.c:532` / `:539` (`X(clr)`, `X(set)`):
+  `w == 0 ? 0xffffffff : ((uint32_t)1 << w) - 1`, with `w ∈ {0..31}` — **the guard defends
+  the full-width case and the CAST defends 31.**
+* A codex fix-check examined 6/6 supplied sites, both m88k examples and 13 comparable
+  decisions, and ratified both halves of this repair at the boundaries 1, 31, 32.
+
+## 2. THE WITNESS, rung 3, unmodified `-E testarm`
+
+`regress/arm_bfx_width_probe.py`. A cold guest plants one instruction word with `put w`,
+sets `pc`, steps once, and reads `r0` and `pc` back.
+
+    HEAD   9/11    witness_HEAD_20260907.raw
+    FIX   11/11    witness_FIXED_20260907.raw     (same script)
+
+    row      HEAD        FIX         want
+    w32      0x0         0x89abcdef  0x89abcdef   UBFX #0,#32 must return the WHOLE register
+    s w32    0x0         0x89abcdef  0x89abcdef   SBFX #0,#32, and its topBitMask is the 2nd UB
+    w31      0x9abcdef   0x9abcdef   0x9abcdef    UB that WRAPS BACK to correct -- must STAY right
+    mid      0xde        0xde        0xde         small NONZERO anchor
+    pc adv   0x8004      0x8004      0x8004       on EVERY row, w32 included
+
+**`pc adv` is the load-bearing control.** The width-32 symptom is *exactly zero*, which is
+indistinguishable from a mis-encoded word that never executed — and this project has been
+bitten four times by hand-assembled encodings, once in a committed gate row that measured the
+wrong register for months. `pc adv = 0x8004` proves the instruction EXECUTED and returned a
+wrong value. `mid` = `0xde` is the second, independent anchor.
+
+## 3. THE DIFF
+
+```diff
+diff --git a/src/cpus/cpu_arm_instr.c b/src/cpus/cpu_arm_instr.c
+index 8059125..fa48a70 100644
+--- a/src/cpus/cpu_arm_instr.c
++++ b/src/cpus/cpu_arm_instr.c
+@@ -1313,7 +1313,23 @@ X(ubfx)
+ 	int lsb = (uint8_t)ic->arg[2];
+ 	int width = ic->arg[2] >> 16;
+ 
+-	uint32_t mask = (1 << width) - 1;
++	/*  #510: was `(1 << width) - 1'.  `width' is `1 + ((iword >> 16) & 31)', so
++	    it reaches 32 -- and `1' is a plain int, so the old expression was
++	    undefined at BOTH ends of that range: a shift count equal to the type's
++	    width at 32 (C99 6.5.7p3), and a signed overflow at 31 (6.5.7p4).
++
++	    ONLY THE 32 CASE IS OBSERVABLE, which is measured rather than argued:
++	    `UBFX r0,r1,#0,#32' of 0x89abcdef returned 0x0 on the committed build,
++	    because the mask became 0.  At 31 the expression is undefined TWICE and
++	    wraps back to the right answer -- `1 << 31' gives INT_MIN and
++	    `INT_MIN - 1' gives INT_MAX, which IS the correct 31-bit mask -- so it
++	    returned 0x9abcdef, correct.  The repair is owed by the language at both
++	    widths; only one of them was returning a wrong value.
++
++	    `1U' is load-bearing and not style: it is what defends width 31.  The
++	    guard defends 32.  This is `cpu_m88k_instr.c's own idiom in X(clr) and
++	    X(set), where `w == 0' encodes 32 for that architecture.  */
++	uint32_t mask = (width == 32) ? 0xffffffffU : ((1U << width) - 1);
+ 
+ 	x >>= lsb;
+ 	x &= mask;
+@@ -1337,12 +1353,35 @@ X(sbfx)
+ 	int lsb = (uint8_t)ic->arg[2];
+ 	int width = ic->arg[2] >> 16;
+ 
+-	uint32_t mask = (1 << width) - 1;
++	/*  #510: was `(1 << width) - 1'.  `width' is `1 + ((iword >> 16) & 31)', so
++	    it reaches 32 -- and `1' is a plain int, so the old expression was
++	    undefined at BOTH ends of that range: a shift count equal to the type's
++	    width at 32 (C99 6.5.7p3), and a signed overflow at 31 (6.5.7p4).
++
++	    ONLY THE 32 CASE IS OBSERVABLE, which is measured rather than argued:
++	    `UBFX r0,r1,#0,#32' of 0x89abcdef returned 0x0 on the committed build,
++	    because the mask became 0.  At 31 the expression is undefined TWICE and
++	    wraps back to the right answer -- `1 << 31' gives INT_MIN and
++	    `INT_MIN - 1' gives INT_MAX, which IS the correct 31-bit mask -- so it
++	    returned 0x9abcdef, correct.  The repair is owed by the language at both
++	    widths; only one of them was returning a wrong value.
++
++	    `1U' is load-bearing and not style: it is what defends width 31.  The
++	    guard defends 32.  This is `cpu_m88k_instr.c's own idiom in X(clr) and
++	    X(set), where `w == 0' encodes 32 for that architecture.  */
++	uint32_t mask = (width == 32) ? 0xffffffffU : ((1U << width) - 1);
+ 	x >>= lsb;
+ 	x &= mask;
+ 
+-	uint32_t topBitMask = 1 << (width-1);
+-	if (x & topBitMask && width < 32)
++	/*  #510: was `uint32_t topBitMask = 1 << (width-1);' followed by
++	    `if (x & topBitMask && width < 32)'.  A SECOND undefined shift, and the
++	    `width < 32' test that would have made it moot sat on the NEXT line --
++	    the operand was computed before the guard that excludes it.  Reordering
++	    the && is semantically identical for every width in {1..32} (both are
++	    ordinary locals with no side effects) and short-circuits before the
++	    shift.  At width 32 the field IS the whole register, so there is no sign
++	    to extend -- which is what the original test already said.  */
++	if (width < 32 && (x & (1U << (width - 1))))
+ 		x |= ~mask;
+ 
+ 	reg(ic->arg[0]) = x;
+```
+
+## 4. SCOPE — what is deliberately NOT in this round
+
+* **`bfi` (`:1409`)** — same class, same file, and **left alone**. Its `width = msb - lsb + 1`
+  spans **-30..32**, so 496 of 1024 encodings give a NEGATIVE shift count, which is undefined
+  by the same clause. ARM calls `msb < lsb` UNPREDICTABLE. **No seat could settle from the
+  tree what the model should do there**, and the obvious route is wrong as written: `X(und)`
+  expects `arg[0]` to hold a PC offset and `bfi`'s holds a register pointer.
+* **`:2685` / `:2823`** (`is_userpage`, `1 << (index & 31)`) — different semantic class, no row.
+* **`m88k_rot:513` and MIPS `X(ext):1757`** — different CPUs; found by the fix-check, filed.
+
+## 5. QUESTIONS
+
+1. **The premise audit.** Is the repair correct at 1, 31 and 32? Is the `&&` reorder in `sbfx`
+   semantically identical to the original for every width, or does it change behaviour at any
+   value? **Does the added comment claim anything the rows do not establish?**
+2. **What is the smallest edit that re-opens this and still scores 11/11?** Name the row you
+   expect to stay green. *(Codex seat: skip this one — answer 1, 3, 4 instead.)*
+3. **Is the SCOPE right?** `bfi` is the same expression in the same file and is untouched.
+   Is leaving it a correct application of the round-scope rule, or is it a partial repair
+   presented as complete?
+4. **Is the witness honest about what it does not cover?** It drives four widths on one
+   register value. Name a cell it should assert and does not.
+
+If, while verifying a claim, you found something ELSE — say so.
+
+
+## OPERATIONAL RULE FOR EVERY SEAT (appended by panel.sh, not by the author)
+
+**Do not run `run.sh`, any `gate_*.sh`, or the battery.** Every measurement you need is
+inlined above. A gate takes minutes -- longer than your response budget -- and a second
+concurrent invocation corrupts the operator run in progress, because the gates share one
+log directory. A seat that runs a gate produces no review AND may invalidate someone
+else s. Building and running a single detector or mutant in your own temp directory is
+fine and encouraged; driving the harness is not.
+
+If you want a measurement that is not inlined, NAME IT and say why. Naming it is worth
+far more to this panel than a timeout.
+codex
+VERDICT: The repair appears correct for widths 1–32, but the comment’s equivalence claim and the witness’s execution claim need checking. I’ll read the scoped files and enumerate the arithmetic; I’ll skip question 2 and won’t run the gates.
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'git -C GXEMUL-SEC diff --numstat -- src/cpus/cpu_arm_instr.c' in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "Get-Location; rg --files -g AGENTS.md -g cpu_arm_instr.c -g cpu_m88k_instr.c -g '*.py' GXEMUL-SEC/src GXEMUL-SEC/regress" in C:\DocumentNoSnc\CC\GXEMUL
+ succeeded in 73ms:
+43	4	src/cpus/cpu_arm_instr.c
+
+ succeeded in 130ms:
+
+GXEMUL-SEC/regress\wdc_latch_census.py
+GXEMUL-SEC/regress\wdc_flood_probe.py
+GXEMUL-SEC/regress\wdc_altoffset_sig_probe.py
+GXEMUL-SEC/regress\wdc_altoffset_probe.py
+GXEMUL-SEC/regress\wdc_altoffset_4bit_probe.py
+GXEMUL-SEC/regress\wdc_addtoinbuf_probe.py
+GXEMUL-SEC/regress\sh_tlbmulti_probe.py
+GXEMUL-SEC/regress\sh_rounding_probe.py
+GXEMUL-SEC/regress\sh_pclock_probe.py
+GXEMUL-SEC/regress\sh_iprbcd_probe.py
+GXEMUL-SEC/regress\sh_intprio_probe.py
+GXEMUL-SEC/regress\sh_halt_probe.py
+GXEMUL-SEC/regress\sh4_val_witness.py
+GXEMUL-SEC/regress\sh4_val_probe.py
+GXEMUL-SEC/regress\sh4_tlbda2_witness.py
+GXEMUL-SEC/regress\sh4_tlbda2_probe.py
+GXEMUL-SEC/regress\sh4_sci_witness.py
+GXEMUL-SEC/regress\sh4_sci_probe.py
+GXEMUL-SEC/regress\sh4_rtcsr_witness.py
+GXEMUL-SEC/regress\sh4_rtcsr_probe.py
+GXEMUL-SEC/regress\sh4_pcic_probe.py
+GXEMUL-SEC/regress\sh4_chcr_witness.py
+GXEMUL-SEC/regress\sh4_chcr_probe.py
+GXEMUL-SEC/regress\sh4_bsc_width_probe.py
+GXEMUL-SEC/regress\sh4pcic_witness.py
+GXEMUL-SEC/regress\sgi_re_width_probe.py
+GXEMUL-SEC/regress\sgi_re_unmapped_probe.py
+GXEMUL-SEC/regress\sgi_re_rgb_probe.py
+GXEMUL-SEC/regress\sgi_re_randompixel_probe.py
+GXEMUL-SEC/regress\sgi_mte_fill_probe.py
+GXEMUL-SEC/regress\sgi_eaddr_probe.py
+GXEMUL-SEC/regress\sgi_de_width_probe.py
+GXEMUL-SEC/regress\sgi_de_primop_probe.py
+GXEMUL-SEC/regress\selftest_logdir.py
+GXEMUL-SEC/regress\selftest_inactivity.py
+GXEMUL-SEC/regress\selftest_budget.py
+GXEMUL-SEC/regress\selftest_absorb.py
+GXEMUL-SEC/regress\selfmutant.py
+GXEMUL-SEC/regress\readiness_predicate_test.py
+GXEMUL-SEC/regress\ppc_rounding_probe.py
+GXEMUL-SEC/regress\ppc_halt_probe.py
+GXEMUL-SEC/regress\pit8253_latch_probe.py
+GXEMUL-SEC/regress\pcc2_width_witness.py
+GXEMUL-SEC/regress\pcc2_width_probe.py
+GXEMUL-SEC/regress\pcc2_default_probe.py
+GXEMUL-SEC/regress\mips_subnorm_probe.py
+GXEMUL-SEC/regress\mips_rounding_probe.py
+GXEMUL-SEC/regress\mips_fold_probe.py
+GXEMUL-SEC/regress\mips_fixedmode_probe.py
+GXEMUL-SEC/regress\m88k_rounding_probe.py
+GXEMUL-SEC/regress\m88k_idle_probe.py
+GXEMUL-SEC/regress\m88k_exc_probe.py
+GXEMUL-SEC/regress\m8820x_sites_probe.py
+GXEMUL-SEC/regress\luna_intmask_probe.py
+GXEMUL-SEC/regress\luna_absentcpu_probe.py
+GXEMUL-SEC/regress\lca_confwidth_probe.py
+GXEMUL-SEC/regress\hpcmips_ctor_probe.py
+GXEMUL-SEC/regress\hpcabort_witness.py
+GXEMUL-SEC/regress\gdrom_toclen_probe.py
+GXEMUL-SEC/regress\gdrom_default_probe.py
+GXEMUL-SEC/regress\gdrom_decline_probe.py
+GXEMUL-SEC/regress\gdrom_data_probe.py
+GXEMUL-SEC/regress\gdrom_cond_probe.py
+GXEMUL-SEC/regress\footbridge_sites_probe.py
+GXEMUL-SEC/regress\fbpending_witness.py
+GXEMUL-SEC/regress\fbpending_drain_probe.py
+GXEMUL-SEC/regress\drive_guest.py
+GXEMUL-SEC/regress\diag_div_sweep.py
+GXEMUL-SEC/regress\asic_badaddr_probe.py
+GXEMUL-SEC/regress\artifacts\widthkillclass\witness_20260830\sgi_re_width_witness.py
+GXEMUL-SEC/regress\artifacts\widthkillclass\witness_20260830\sgi_re_width_witness.earlier.py
+GXEMUL-SEC/regress\artifacts\gdrompionull\opus_p2_20260826\mutate.py
+GXEMUL-SEC/regress\artifacts\gdrompionull\opus_p2_20260826\mism_probe.py
+GXEMUL-SEC/regress\artifacts\landiskaux\census_20260827\watch_2c.py
+GXEMUL-SEC/regress\artifacts\landiskaux\census_20260827\mk_censusB.py
+GXEMUL-SEC/regress\artifacts\widthkillclass\opus_p1_20260830\opus497_read_probe.py
+GXEMUL-SEC/regress\artifacts\sgidewidth\opus_witness_20260831\gxdew_probe_frozen.py
+GXEMUL-SEC/regress\artifacts\widthkillclass\opus_p1_20260830\latch_probe.py
+GXEMUL-SEC/regress\artifacts\widthkillclass\opus_p1_20260830\apply_mutant.py
+GXEMUL-SEC/regress\artifacts\widthkillclass\opus_p1_20260830\apply_m2.py
+GXEMUL-SEC/regress\artifacts\widthkillclass\opus_p1_20260830\apply_fix.py
+GXEMUL-SEC/regress\artifacts\sgidewidth\opus_witness_20260831\gxdew_probe2_frozen.py
+GXEMUL-SEC/regress\artifacts\sgidewidth\opus_witness_20260831\gxdew_mz_frozen.py
+GXEMUL-SEC/regress\artifacts\sgidewidth\opus_witness_20260831\gxdew_mzp_frozen.py
+GXEMUL-SEC/regress\artifacts\sgidewidth\opus_witness_20260831\gxdew_mutate2_frozen.py
+GXEMUL-SEC/regress\artifacts\sgidewidth\opus_witness_20260831\gxdew_mr_frozen.py
+GXEMUL-SEC/regress\artifacts\sgidewidth\opus_witness_20260831\gxdew_kill_frozen.py
+GXEMUL-SEC/regress\artifacts\sgidewidth\opus_witness_20260831\gxdew_kill2_frozen.py
+GXEMUL-SEC/regress\artifacts\landiskaux\census_20260827\devlist.py
+GXEMUL-SEC/regress\artifacts\landiskaux\census_20260827\census.py
+GXEMUL-SEC/regress\artifacts\landiskaux\census_20260827\analyse_hook.py
+GXEMUL-SEC/regress\artifacts\makercfalse\hook_controls_20260830\clusterctl.py
+GXEMUL-SEC/regress\artifacts\gdrompionull\gdrom_pio_null_probe.py
+GXEMUL-SEC/src\cpus\cpu_m88k_instr.c
+GXEMUL-SEC/src\cpus\cpu_arm_instr.c
+GXEMUL-SEC/regress\artifacts\lunaabsentcpu\luna_absentcpu_probe.v3.py
+GXEMUL-SEC/regress\artifacts\lunaabsentcpu\luna_absentcpu_probe.v2.py
+GXEMUL-SEC/regress\artifacts\lunaabsentcpu\luna_absentcpu_probe.asrun.py
+GXEMUL-SEC/regress\artifacts\sgidewidth\opus_p2_20260831\probe_frozen.py
+GXEMUL-SEC/regress\artifacts\sgidewidth\opus_p2_20260831\mutate4.py
+GXEMUL-SEC/regress\artifacts\sgidewidth\opus_p2_20260831\mutate3.py
+GXEMUL-SEC/regress\artifacts\sgidewidth\opus_p2_20260831\mutate2.py
+GXEMUL-SEC/regress\artifacts\sgidewidth\opus_p2_20260831\mutate.py
+GXEMUL-SEC/regress\artifacts\sgidewidth\opus_p2_20260831\disc.py
+GXEMUL-SEC/regress\artifacts\makercfalse\hook_controls_20260829\hookctl.py
+GXEMUL-SEC/regress\artifacts\lunaabsentcpu\luna_absentcpu_probe.v7.frozen.py
+GXEMUL-SEC/regress\artifacts\lunaabsentcpu\luna_absentcpu_probe.v6.frozen.py
+GXEMUL-SEC/regress\artifacts\lunaabsentcpu\luna_absentcpu_probe.v5.py
+GXEMUL-SEC/regress\artifacts\lunaabsentcpu\luna_absentcpu_probe.v4.py
+GXEMUL-SEC/regress\artifacts\gdromexitsix\supp_p2_20260829\instrument_22row.frozen.py
+GXEMUL-SEC/regress\artifacts\gdromexitsix\supp_p2_20260829\extend.py
+GXEMUL-SEC/regress\artifacts\lunaabsentcpu\opus_p4_table_v5\probe_v5.py
+GXEMUL-SEC/regress\artifacts\lunaabsentcpu\opus_p4_table_v5\probe_v4.py
+GXEMUL-SEC/regress\artifacts\lunaabsentcpu\killtable5\luna_absentcpu_probe.frozen.py
+GXEMUL-SEC/regress\artifacts\widthkillclass\opus_impl_20260830\strengthen_comment.py
+GXEMUL-SEC/regress\artifacts\gdromexitsix\rot_20260829\probe.frozen.py
+GXEMUL-SEC/regress\artifacts\lunaabsentcpu\opus_p4_table\luna_absentcpu_probe.frozen.py
+GXEMUL-SEC/regress\artifacts\widthkillclass\opus_impl_20260830\sgi_re_width_probe.py
+GXEMUL-SEC/regress\artifacts\widthkillclass\opus_impl_20260830\mutate497_v2.py
+GXEMUL-SEC/regress\artifacts\widthkillclass\opus_impl_20260830\mutate497.py
+GXEMUL-SEC/regress\artifacts\widthkillclass\opus_impl_20260830\move_warned.py
+GXEMUL-SEC/regress\artifacts\widthkillclass\opus_impl_20260830\apply_fix497.py
+GXEMUL-SEC/regress\artifacts\lunaabsentcpu\luna_absentcpu_probe.v8.frozen.py
+GXEMUL-SEC/regress\artifacts\sgideprimop\killtable_20260903_table13_xfer\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\killtable12\m88k_exc_probe.frozen12.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\killtable5\mut_m88kexc.v5.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\killtable5\m88k_exc_probe.frozen5.py
+GXEMUL-SEC/regress\artifacts\sgideprimop\killtable_20260903_table12_regs\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\killtable11_attempt1_v13\m88k_exc_probe.frozen11.v13.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\killtable11_attempt1_v13\m88k_exc_probe.frozen11.py
+GXEMUL-SEC/regress\artifacts\lunaabsentcpu\killtable4\luna_absentcpu_probe.frozen.py
+GXEMUL-SEC/regress\artifacts\wdcringambig\rung3_20260827\wdcring_rung3_probe.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\killtable4\m88k_exc_probe.frozen4.py
+GXEMUL-SEC/regress\artifacts\wdcringambig\repro_20260827\author_repro484.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\killtable11\m88k_exc_probe.frozen11.v14.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\killtable11\m88k_exc_probe.frozen11.py
+GXEMUL-SEC/regress\artifacts\gdromexitsix\p2askagain_20260829\mut490p2.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\killtable3\m88k_exc_probe.frozen3.py
+GXEMUL-SEC/regress\artifacts\lunaabsentcpu\killtable3\mut_lunaabs.v4.py
+GXEMUL-SEC/regress\artifacts\lunaabsentcpu\killtable3\luna_absentcpu_probe.frozen.py
+GXEMUL-SEC/regress\artifacts\lunaabsentcpu\killtable3\fix_lunaabs.v2b.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\killtable2\m88k_exc_probe.frozen2.py
+GXEMUL-SEC/regress\artifacts\gdromexitsix\opus_r2table_20260828\tprobe2.py
+GXEMUL-SEC/regress\artifacts\gdromexitsix\opus_r2table_20260828\mkmut.py
+GXEMUL-SEC/regress\artifacts\gdromexitsix\opus_r2table_20260828\mkfix.py
+GXEMUL-SEC/regress\artifacts\lunaabsentcpu\killtable2\mut_lunaabs.v3.py
+GXEMUL-SEC/regress\artifacts\lunaabsentcpu\killtable2\luna_absentcpu_probe.frozen.py
+GXEMUL-SEC/regress\artifacts\lunaabsentcpu\killtable2\fix_lunaabs.v2.py
+GXEMUL-SEC/regress\artifacts\wdcoddstep\overtaken_20260827\author_odd.py
+GXEMUL-SEC/regress\artifacts\gdromexitsix\opus_r2full_20260828\tprobe3.py
+GXEMUL-SEC/regress\artifacts\gdromexitsix\opus_r2full_20260828\mkmut_brace.py
+GXEMUL-SEC/regress\artifacts\gdromexitsix\opus_r2full_20260828\mkmut3.py
+GXEMUL-SEC/regress\artifacts\gdromexitsix\opus_r2full_20260828\mkfix.py
+GXEMUL-SEC/regress\artifacts\lunaabsentcpu\killtable\mut_lunaabs.py
+GXEMUL-SEC/regress\artifacts\lunaabsentcpu\killtable\luna_absentcpu_probe.frozen.py
+GXEMUL-SEC/regress\artifacts\lunaabsentcpu\killtable\fix_lunaabs.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\killtable\m88k_exc_probe.frozen.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\derive_cells.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\killtable10\m88k_exc_probe.frozen10.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\killtable10\mut_m88kexc.v10.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\killtable14\m88k_exc_probe.frozen14.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\m88k_exc_probe.v17.frozen.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\m88k_exc_probe.v16.frozen.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\agy_p5\mutate.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\killtable13\m88k_exc_probe.frozen13.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\kimi_p5\m88k_exc_probe_v5p2.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\m88k_exc_probe.v21.frozen.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\m88k_exc_probe.v20.frozen.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\killtable6\m88k_exc_probe.frozen6.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\killtable6\mut_m88kexc.v6.py
+GXEMUL-SEC/regress\artifacts\wdcnoirq\witness_20260827\wdcnoirq_rung3_probe.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\killtable8\mut_m88kexc.v8.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\killtable8\m88k_exc_probe.frozen8.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\killtable_opus_p8\mutate_p8.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\killtable_opus_p8\m88k_exc_probe.frozenP8.py
+GXEMUL-SEC/regress\artifacts\wdcnoirq\repro_20260827\author_repro485.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\killtable_opus_p8\m88k_exc_probe.censusP8.py
+GXEMUL-SEC/regress\artifacts\sgideprimop\killtable_20260902_table4\negctl_n25_rectset_probe.py
+GXEMUL-SEC/regress\artifacts\gdromexitsix\killtable4_20260828\mut_common.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\killtable7\mut_m88kexc.v7.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\killtable7\m88k_exc_probe.frozen7.py
+GXEMUL-SEC/regress\artifacts\wdcnoirq\killtable_20260827\author_rows485.py
+GXEMUL-SEC/regress\artifacts\wdcnoirq\killtable_20260827\author_mut485.py
+GXEMUL-SEC/regress\artifacts\wdcnoirq\killtable_20260827\author_mut11.py
+GXEMUL-SEC/regress\artifacts\wdcnoirq\killtable_20260827\author_legs3.py
+GXEMUL-SEC/regress\artifacts\sgideprimop\killtable_20260902_table11_closure\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\gdromexitsix\gdrom_toclen_witness.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\pcc2_width_witness.asrun.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\pcc2_operator_reach.asrun.py
+GXEMUL-SEC/regress\artifacts\wdcfloodstale\measure_20260827\author_floodstale.py
+GXEMUL-SEC/regress\arm_flags_probe.py
+GXEMUL-SEC/regress\arm_endian_probe.py
+GXEMUL-SEC/regress\arm_bfx_width_probe.py
+GXEMUL-SEC/regress\arcbios_shift_probe.py
+GXEMUL-SEC/regress\alpha_pfnoffset_probe.py
+GXEMUL-SEC/regress\alpha_harness_probe.py
+GXEMUL-SEC/regress\absorb_census.py
+GXEMUL-SEC/regress\arm_memcpy_probe.py
+GXEMUL-SEC/regress\arm_idle_probe.py
+GXEMUL-SEC/regress\arm_fold_marker_probe.py
+GXEMUL-SEC/regress\arm_writeback_probe.py
+GXEMUL-SEC/regress\arm_strlen_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\pass9_seats_20260904\opus\mutate.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\pass9_seats_20260904\opus\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\pass9_seats_20260904\opus\cmp_names.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\pass9_seats_20260904\opus\audit_gate.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\killtable2_20260903\part9\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\gdromexitsix\asan_m0_20260828\apply_m0.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\pass8_seats_20260904\opus\mutate.py
+GXEMUL-SEC/regress\artifacts\sgideprimop\gapB_20260903\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\killtable2_20260903\part8\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\pass8_seats_20260904\opus\mk_f1.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\killtable2_20260903\part7b\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\pass7_seats_20260904\opus\gatecheck.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\killtable2_20260903\part7\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\killtable2_20260903\part6b\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\gdromcondlies\witness_20260830\gdrom_cond_witness.py
+GXEMUL-SEC/regress\artifacts\gdromcondlies\witness_20260830\gdrom_cond_extras.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\killtable2_20260903\part6\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\pass6_seats_20260903\opus\mutate.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\killtable2_20260903\part5b\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\killtable2_20260903\part5\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\shortread\round_20260827\shortread_witness.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\pass5_seats_20260903\opus_reader\xcheck.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\pass5_seats_20260903\opus_reader\mutate.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\pass5_seats_20260903\opus_reader\discriminator.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\killtable2_20260903\part4\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\sgirebufuninit\scan_len.py
+GXEMUL-SEC/regress\artifacts\sgirebufuninit\scan_fill.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\pass5_seats_20260903\opus_reader\artifacts\gxopus_p5_disc.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\killtable2_20260903\part3c\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\pass5_seats_20260903\opus_reader\artifacts\discriminator.py
+GXEMUL-SEC/regress\artifacts\wdcaltoffset\witness_20260829\wdcaltoff_rung3_probe.py
+GXEMUL-SEC/regress\artifacts\wdcdataoutdrain\killtable_20260827\wiprepro.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\pass5_seats_20260903\fable\pty_ret0_probe.py
+GXEMUL-SEC/regress\artifacts\wdcaltoffset\witness_20260829\mkfixleg.py
+GXEMUL-SEC/regress\artifacts\wdcdataoutdrain\killtable_20260827\mk478.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\pass5_seats_20260903\fable\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\killtable2_20260903\part3b\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\wdccdbmidxfer\killtable2_20260827\mk477b.py
+GXEMUL-SEC/regress\artifacts\wdcaltoffset\opus_p2_20260830\q2_mechanism.py
+GXEMUL-SEC/regress\artifacts\wdcdataoutdrain\killtable_20260827\drainvar.py
+GXEMUL-SEC/regress\artifacts\wdcaltoffset\opus_p2_20260830\PROPOSED_wdc_altoffset_4bit_probe.py
+GXEMUL-SEC/regress\artifacts\wdcaltoffset\opus_p2_20260830\mut494p2.py
+GXEMUL-SEC/regress\artifacts\wdcdataoutdrain\killtable_20260827\addpkt.py
+GXEMUL-SEC/regress\artifacts\wdcdataoutdrain\killtable_20260827\addphaserow.py
+GXEMUL-SEC/regress\artifacts\wdcdataoutdrain\killtable_20260827\addpartial.py
+GXEMUL-SEC/regress\artifacts\wdcdataoutdrain\killtable_20260827\addp5.py
+GXEMUL-SEC/regress\artifacts\wdcdataoutdrain\killtable_20260827\addlocal.py
+GXEMUL-SEC/regress\artifacts\wdcdataoutdrain\killtable_20260827\addflush.py
+GXEMUL-SEC/regress\artifacts\wdcdataoutdrain\killtable_20260827\addannounce.py
+GXEMUL-SEC/regress\artifacts\wdcdataoutdrain\killtable_20260827\addaltctl.py
+GXEMUL-SEC/regress\artifacts\wdcdataoutdrain\killtable_20260827\addaccept.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\killtable2_20260903\part3\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\sgirandompixel\witness_20260906\probe.frozen.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\pass4_seats_20260903\opus_reader\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\killtable2_20260903\part2\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\sgireunmapped\opus_witness_20260830\sgi_re_unmapped_probe.py
+GXEMUL-SEC/regress\artifacts\sgireunmapped\opus_witness_20260830\mkvariant.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\pass4_seats_20260903\fable\probe_dry.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\pass4_seats_20260903\fable\probe_copy.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\pass4_seats_20260903\fable\dump_names.py
+GXEMUL-SEC/regress\artifacts\wdccmdreset\killtable_20260827\repin479.py
+GXEMUL-SEC/regress\artifacts\wdccmdreset\killtable_20260827\port479.py
+GXEMUL-SEC/regress\artifacts\wdccmdreset\killtable_20260827\mk479.py
+GXEMUL-SEC/regress\artifacts\wdccmdreset\killtable_20260827\fix479.py
+GXEMUL-SEC/regress\artifacts\wdccmdreset\killtable_20260827\addwm.py
+GXEMUL-SEC/regress\artifacts\wdccmdreset\killtable_20260827\addmut479.py
+GXEMUL-SEC/regress\artifacts\wdccmdreset\killtable_20260827\addle.py
+GXEMUL-SEC/regress\artifacts\wdccmdreset\killtable_20260827\adddevctl.py
+GXEMUL-SEC/regress\artifacts\wdccmdreset\killtable_20260827\addbadlencdb.py
+GXEMUL-SEC/regress\artifacts\wdccmdreset\killtable_20260827\add479rows.py
+GXEMUL-SEC/regress\artifacts\wdccallsite\killtable_20260827\q4check.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\killtable2_20260903\part13_partial\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\wdccallsite\killtable_20260827\q3check.py
+GXEMUL-SEC/regress\artifacts\wdccallsite\killtable_20260827\mut480b.py
+GXEMUL-SEC/regress\artifacts\wdccallsite\killtable_20260827\mut480.py
+GXEMUL-SEC/regress\artifacts\wdccallsite\killtable_20260827\mk480b.py
+GXEMUL-SEC/regress\artifacts\wdccallsite\killtable_20260827\mk480.py
+GXEMUL-SEC/regress\artifacts\wdccallsite\killtable_20260827\gatename480.py
+GXEMUL-SEC/regress\artifacts\wdccallsite\killtable_20260827\fixrows480.py
+GXEMUL-SEC/regress\artifacts\sgirandompixel\killtable\probe.frozen.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\killtable2_20260903\part13_aborted\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\sgireunmapped\opus_witness_20260830\detector.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\killtable2_20260903\part10\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\wdcaltoffset\mutants_20260830\table_c.py
+GXEMUL-SEC/regress\artifacts\wdcaltoffset\mutants_20260830\table_b.py
+GXEMUL-SEC/regress\artifacts\wdcaltoffset\mutants_20260830\table_a.py
+GXEMUL-SEC/regress\artifacts\wdcaltoffset\mutants_20260830\mkmutants.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\pass3_seats_20260903\opus_reader\nonequiv_check.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\pass3_seats_20260903\opus_reader\mutate.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\killtable2_20260903\part13\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2defaultkill\witness_20260905\defaultkill_witness.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\killtable2_20260903\part10_aborted\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\killtable2_20260903\part12\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\wdcaltctrlfam\killtable_20260827\mk483.py
+GXEMUL-SEC/regress\artifacts\wdcaltctrlfam\killtable_20260827\author_mut483.py
+GXEMUL-SEC/regress\artifacts\wdcaltctrlfam\killtable_20260827\author_fix483c.py
+GXEMUL-SEC/regress\artifacts\wdcaltctrlfam\killtable_20260827\author_fix483b.py
+GXEMUL-SEC/regress\artifacts\wdcaltctrlfam\killtable_20260827\author_fix483.py
+GXEMUL-SEC/regress\artifacts\sgireunmapped\killtable_20260831\repin2\sgi_re_width_probe.repinned.py
+GXEMUL-SEC/regress\artifacts\sgireunmapped\killtable_20260831\repin2\score500b.py
+GXEMUL-SEC/regress\artifacts\sgireunmapped\killtable_20260831\repin2\score500.py
+GXEMUL-SEC/regress\artifacts\sgireunmapped\killtable_20260831\repin2\mk500.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\killtable2_20260903\part11\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\pass11_seats_20260904\opus\control_iclr.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\killtable_20260903\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\wdcaltctrlcov\killtable_20260827\mut482_RECONSTRUCTED.py
+GXEMUL-SEC/regress\artifacts\wdcaltctrlcov\killtable_20260827\mk482.py
+GXEMUL-SEC/regress\artifacts\sgireunmapped\killtable_20260831\port\repin.py
+GXEMUL-SEC/regress\artifacts\sgireunmapped\killtable_20260831\port\patch_mk2.py
+GXEMUL-SEC/regress\artifacts\sgireunmapped\killtable_20260831\port\patch_mk.py
+GXEMUL-SEC/regress\artifacts\sgireunmapped\killtable_20260831\port\mkvariant499.py
+GXEMUL-SEC/regress\artifacts\pcc2defaultkill\pass4_seats\opus_logs\offsets.py
+GXEMUL-SEC/regress\artifacts\pcc2defaultkill\pass4_seats\opus_logs\mutate.py
+GXEMUL-SEC/regress\artifacts\sgireunmapped\killtable_20260831\base_slot_probe.py
+GXEMUL-SEC/regress\artifacts\sgireunmapped\killtable_20260831\extra_rows.py
+GXEMUL-SEC/regress\artifacts\sgireunmapped\killtable_20260831\mkvariant499.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\pass10_seats_20260904\opus\mutate.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\pass10_seats_20260904\opus\diffcheck.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\pass10_seats_20260904\opus\cmpnames.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\opus_pass3_20260903\pass3c\probe82.frozen.py
+GXEMUL-SEC/regress\artifacts\sgireunmapped\killtable_20260831\pass4\e0_mut.py
+GXEMUL-SEC/regress\artifacts\sgireunmapped\killtable_20260831\l2repair\mkw.py
+GXEMUL-SEC/regress\artifacts\pcc2defaultkill\pass4_seats\opus_logs\logs\len4_witness.py
+GXEMUL-SEC/regress\artifacts\pcc2defaultkill\pass4_seats\opus_logs\len4_witness.py
+GXEMUL-SEC/regress\artifacts\pcc2defaultkill\pass4_seats\opus_logs\gatecheck.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\opus_pass3_20260903\pass3\probe.frozen.py
+GXEMUL-SEC/regress\artifacts\pcc2defaultkill\killtable_20260905\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\wdcaddtoinbufbound\rung3_20260830\mkfix.py
+GXEMUL-SEC/regress\artifacts\wdcaddtoinbufbound\rung3_20260830\mkcd.py
+GXEMUL-SEC/regress\artifacts\wdcaddtoinbufbound\rung3_20260830\frozen_wave_20260830_102209.py
+GXEMUL-SEC/regress\artifacts\wdcaddtoinbufbound\rung3_20260830\addtoinbuf_rung3_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2defaultkill\killtable3_20260905\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2defaultkill\killtable3_20260905\pcc2_width_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2defaultkill\killtable_20260905\pcc2_width_probe.py
+GXEMUL-SEC/regress\artifacts\wdcaltctrl\killtable_20260827\gatealt2.py
+GXEMUL-SEC/regress\artifacts\wdcaltctrl\killtable_20260827\gatealt.py
+GXEMUL-SEC/regress\artifacts\wdcaltctrl\killtable_20260827\fixwarrant481.py
+GXEMUL-SEC/regress\artifacts\wdcaltctrl\killtable_20260827\fixaltctrl.py
+GXEMUL-SEC/regress\artifacts\wdcaltctrl\killtable_20260827\mutalt.py
+GXEMUL-SEC/regress\artifacts\wdcaltctrl\killtable_20260827\mkaltctrl.py
+GXEMUL-SEC/regress\artifacts\wdcaltctrl\killtable_20260827\rows481b.py
+GXEMUL-SEC/regress\artifacts\pcc2defaultkill\pass3_seats\opus_logs\edit_M_LATCHOFF.py
+GXEMUL-SEC/regress\artifacts\pcc2defaultkill\pass3_seats\opus_logs\edit_M_LASTBYTE.py
+GXEMUL-SEC/regress\artifacts\pcc2defaultkill\pass3_seats\opus_logs\edit_M_BACKEDLOW.py
+GXEMUL-SEC/regress\artifacts\pcc2defaultkill\pass3_seats\opus_logs\edit_M_WRDATA0.py
+GXEMUL-SEC/regress\artifacts\pcc2defaultkill\pass3_seats\opus_logs\edit_M_RELOAD.py
+GXEMUL-SEC/regress\artifacts\pcc2defaultkill\pass3_seats\opus_logs\edit_M_WRVAL0.py
+GXEMUL-SEC/regress\artifacts\pcc2defaultkill\killtable4_20260905\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2defaultkill\killtable_20260905\run1_oldrowformat\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2defaultkill\killtable_20260905\run1_oldrowformat\pcc2_width_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2defaultkill\killtable3_20260905\old23\pcc2_width_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2defaultkill\killtable3_20260905\old23\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2defaultkill\killtable4_20260905\pcc2_width_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2defaultkill\killtable4_20260905\old36\pcc2_width_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2defaultkill\killtable4_20260905\old36\frozen_probe.py
+Path                      
+----                      
+C:\DocumentNoSnc\CC\GXEMUL
+
+
+
+web search: 
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$reviewLines = Get-Content -LiteralPath '"'GXEMUL-SEC/src/cpus/cpu_m88k_instr.c'; for ("'$reviewIndex = 495; $reviewIndex -lt 548; $reviewIndex++) { '"'{0}: {1}' -f ("'$reviewIndex + 1),$reviewLines[$reviewIndex] }' in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$reviewIndex = 0; Get-Content -LiteralPath '"'GXEMUL-SEC/regress/arm_bfx_width_probe.py' | ForEach-Object { "'$reviewIndex++; '"'{0}: {1}' -f "'$reviewIndex,$_ }' in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$reviewLines = Get-Content -LiteralPath '"'GXEMUL-SEC/src/cpus/cpu_arm_instr.c'; foreach ("'$reviewSpan in @(@(1288,1430), @(4460,4580))) { for ($reviewIndex = $reviewSpan[0] - 1; $reviewIndex -lt [Math]::Min($reviewSpan[1],$reviewLines.Length); $reviewIndex++) { '"'{0}: {1}' -f ("'$reviewIndex + 1),$reviewLines[$reviewIndex] } }' in C:\DocumentNoSnc\CC\GXEMUL
+ succeeded in 172ms:
+496: 	m88k_ext(cpu, ic, (reg(ic->arg[2]) >> 5) & 0x1f,
+497: 	    reg(ic->arg[2]) & 0x1f);
+498: }
+499: X(mak_imm)
+500: {
+501: 	m88k_mak(cpu, ic, ic->arg[2] >> 5, ic->arg[2] & 0x1f);
+502: }
+503: X(mak)
+504: {
+505: 	m88k_mak(cpu, ic, (reg(ic->arg[2]) >> 5) & 0x1f,
+506: 	    reg(ic->arg[2]) & 0x1f);
+507: }
+508: static void m88k_rot(struct cpu *cpu, struct m88k_instr_call *ic, int n)
+509: {
+510: 	uint32_t x = reg(ic->arg[1]);
+511: 
+512: 	if (n != 0) {
+513: 		uint32_t mask = (1 << n) - 1;
+514: 		uint32_t bits = x & mask;
+515: 		x >>= n;
+516: 		x |= (bits << (32-n));
+517: 	}
+518: 
+519: 	reg(ic->arg[0]) = x;
+520: }
+521: X(rot_imm)
+522: {
+523: 	m88k_rot(cpu, ic, ic->arg[2] & 0x1f);
+524: }
+525: X(rot)
+526: {
+527: 	m88k_rot(cpu, ic, reg(ic->arg[2]) & 0x1f);
+528: }
+529: X(clr)
+530: {
+531: 	int w = (reg(ic->arg[2]) >> 5) & 0x1f, o = reg(ic->arg[2]) & 0x1f;
+532: 	uint32_t x = w == 0? 0xffffffff : ((uint32_t)1 << w) - 1;
+533: 	x <<= o;
+534: 	reg(ic->arg[0]) = reg(ic->arg[1]) & ~x;
+535: }
+536: X(set)
+537: {
+538: 	int w = (reg(ic->arg[2]) >> 5) & 0x1f, o = reg(ic->arg[2]) & 0x1f;
+539: 	uint32_t x = w == 0? 0xffffffff : ((uint32_t)1 << w) - 1;
+540: 	x <<= o;
+541: 	reg(ic->arg[0]) = reg(ic->arg[1]) | x;
+542: }
+543: 
+544: 
+545: /*
+546:  *  or_r0_imm0: d = 0		(optimized case when s1 = r0, imm = 0)
+547:  *  or_r0_imm:  d = imm		(optimized case when s1 = r0)
+548:  *  or_imm:     d = s1 | imm
+
+ succeeded in 172ms:
+1: #!/usr/bin/env python3
+2: #
+3: #  armbfxwidth32 -- RUNG-3 WITNESS: UBFX/SBFX build their mask with a shift that is undefined
+4: #  at the top of the encoded width range.
+5: #
+6: #      cpu_arm_instr.c:4486  ubfx:  int width = 1 + ((iword >> 16) & 31);   -> {1..32}
+7: #      cpu_arm_instr.c:4493  sbfx:  int width = 1 + ((iword >> 16) & 31);   -> {1..32}
+8: #      cpu_arm_instr.c:1316  ubfx:  uint32_t mask = (1 << width) - 1;
+9: #      cpu_arm_instr.c:1340  sbfx:  uint32_t mask = (1 << width) - 1;
+10: #      cpu_arm_instr.c:1344  sbfx:  uint32_t topBitMask = 1 << (width-1);
+11: #      cpu_arm_instr.c:1370  bfi :  uint32_t mask = (1 << width) - 1;       (width = msb-lsb+1)
+12: #
+13: #  `1' is a plain int, so `1 << 32' shifts by the full width of the type (C99 6.5.7p3) and
+14: #  `1 << 31' is a signed overflow (6.5.7p4).
+15: #
+16: #  *** WHICH OF THOSE IS OBSERVABLE IS A DIFFERENT QUESTION, AND ONLY ONE IS. ***  Derived by
+17: #  walking the values, against the pass-1 panel's own framing of "two widths wide":
+18: #
+19: #      width  correct       predicted today   observable?
+20: #      32     0x89abcdef    0x00000000        YES -- the whole register becomes zero
+21: #      31     0x09abcdef    0x09abcdef        no -- `1<<31' gives INT_MIN and INT_MIN-1 wraps
+22: #                                             back to INT_MAX = 0x7fffffff, the CORRECT mask
+23: #       8     0x000000de    0x000000de        no
+24: #       1     0x00000001    0x00000001        no
+25: #
+26: #  So the RED row is width 32 alone.  The width-31 row is carried anyway, because it pins that a
+27: #  repair does not BREAK the case that currently works by accident.
+28: #
+29: #  ---------------------------------------------------------------------------------------------
+30: #  *** THE HAND-ASSEMBLED-ENCODING TRAP IS LOAD-BEARING HERE, NOT MERELY PRUDENT. ***
+31: #
+32: #  This project has been bitten four times by hand-assembled encodings, once in a COMMITTED gate
+33: #  row that measured the wrong register for months.  The signature is always the same: a wrong
+34: #  field yields 0, and any row that accepts 0 passes by accident.
+35: #
+36: #  **The width-32 symptom IS exactly zero.**  So a mis-encoded word that never executed is
+37: #  indistinguishable from the defect this probe exists to witness.  THREE independent controls,
+38: #  because one is not enough:
+39: #
+40: #    * `pc adv'  -- pc must advance by exactly 4.  An untranslatable word reaches the shared `bad'
+41: #                  label, which sets cpu->running = 0 and redirects to nothing_call (it does NOT
+42: #                  exit the host), so a bad encoding STOPS THE MACHINE and pc does not move.
+43: #    * `mid'     -- UBFX r0,r1,#4,#8 must give 0xde.  A small nonzero answer that only a correctly
+44: #                  encoded, correctly executed instruction produces.
+45: #    * `live'    -- a plain MOV proves plant/step/print works before any bitfield word is tried.
+46: #
+47: #  ---------------------------------------------------------------------------------------------
+48: #  MACHINERY, established from source by a codex capability pass rather than assumed:
+49: #
+50: #    * `put w' -> store_32bit_word() writes through cpu->byte_order and applies NO encoding
+51: #      whitelist; the CPU memory function calls invalidate_code_translation(), and ARM's
+52: #      invalidator resets the ENTIRE 4 KiB instruction page.  No guest cache maintenance needed.
+53: #    * testarm is LITTLE-endian, SA1110, supervisor mode, MMU DISABLED, so virtual == physical.
+54: #      Base RAM is [0, R) and `-M 64' gives 0x00000000-0x03ffffff.
+55: #    * *** r10-r15 ARE NOT REGISTERED DEBUGGER NAMES. ***  arm_cpu_new() exposes r0-r9, then
+56: #      sl, fp, ip, sp, lr, plus pc and cpsr.  `print r10' fails a lookup and returns nothing --
+57: #      so this probe uses r0 and r1 ONLY.
+58: #    * *** A DIRECT `cpsr' PRINT CAN SHOW STALE NZCV *** (the settings access does not sync the
+59: #      execution-flags field).  This probe therefore reads a GPR and never the flags.
+60: #    * The top of RAM is occupied -- a 12-byte halt stub at SP+32 with SP = R-4096, AND a PROM
+61: #      hook at R-8 written by arm_cpu_new().  CODE is planted low, at 0x10000.
+62: #    * Coprocessor encodings still exit(1) in arm_coproc_15 / i80321_6 / xscale_14.  Every word
+63: #      below is a data-processing media encoding; none touches CP space.
+64: #
+65: #  Usage:  arm_bfx_width_probe.py <gxemul-binary> [label]
+66: import os, sys, pty, select, time, re
+67: 
+68: BIN   = sys.argv[1]
+69: LABEL = sys.argv[2] if len(sys.argv) > 2 else "?"
+70: 
+71: rows = []
+72: def row(name, got, want, note=""):
+73:     ok = (got == want)
+74:     rows.append((name, ok))
+75:     print("%-12s %-14s %-14s %-56s %s" % (name, str(got), str(want), note, "ok" if ok else "FAIL"))
+76:     return ok
+77: 
+78: CODE = 0x8000                     # the address arm_flags_probe.py uses; low RAM, clear of the
+79:                                   # halt stub at SP+32 and the PROM hook at R-8
+80: 
+81: #  *** A LOAD FILE IS REQUIRED, NOT COSMETIC -- AND I REPRODUCED THE EXACT DEFECT A PANEL HAD
+82: #  CAUGHT IN A SIBLING PROBE HOURS EARLIER. ***  `main.c` with no loadfile and no `-d` prints
+83: #  "No filename given. Aborting." and exits, so EVERY session reports `died`.  The first run of
+84: #  this probe scored 1/11 with all ten measurement rows reading `died` -- and the `live` row is
+85: #  what named it as an apparatus failure instead of letting it read as a defect signal.
+86: #  Every ARM probe in this tree passes `"0x%x:%s" % (CODE, STUB)`; they take the stub path from
+87: #  their gate caller, so a standalone probe must make its own.  Contents are irrelevant -- every
+88: #  word is overwritten by `put w` before `pc` is set -- but the file must exist and be non-empty.
+89: STUB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "arm_bfx_stub.bin")
+90: if not os.path.exists(STUB):
+91:     with open(STUB, "wb") as f:
+92:         f.write(bytes(16))        # 16 zero bytes; no escape, so the heredoc trap cannot recur
+93: SRC  = 0x89abcdef                 # four distinct nibble groups, top bit SET on purpose:
+94:                                   # width 32 must return it WHOLE, and a mask of 0 returns 0.
+95: OP_MOV_R0_2A = 0xe3a0002a         # mov r0, #0x2a   -- the liveness word
+96: 
+97: #  UBFX/SBFX encodings, DERIVED from the decoder rather than recalled, and self-checked below
+98: #  against its own mask.  Field positions read out of X(to_be_translated):
+99: #      rd  = (iword >> 12) & 15
+100: #      *** THE SOURCE IS `rm' = iword & 15, NOT `rn' *** -- rn's bits 19:16 are occupied by
+101: #      widthm1, which is exactly why the ubfx block takes rm.  Getting that backwards IS the
+102: #      hand-assembled-encoding trap.
+103: def bfx(base, rd, rm, lsb, width):
+104:     return (0xe << 28) | base | (((width - 1) & 31) << 16) | ((rd & 15) << 12) \
+105:            | ((lsb & 31) << 7) | (rm & 15)
+106: 
+107: UBFX_BASE, SBFX_BASE = 0x07e00050, 0x07a00050
+108: UBFX_MASK, SBFX_MASK = 0x0fe00070, 0x0fe00070
+109: 
+110: def ubfx(lsb, width): return bfx(UBFX_BASE, 0, 1, lsb, width)
+111: def sbfx(lsb, width): return bfx(SBFX_BASE, 0, 1, lsb, width)
+112: 
+113: def session(cmds, settle=1.5, spin=1.5):
+114:     pid, fd = pty.fork()
+115:     if pid == 0:
+116:         os.execv(BIN, [BIN, "-V", "-A", "-E", "testarm", "-M", "64",
+117:                        "0x%x:%s" % (CODE, STUB)])
+118:         os._exit(127)
+119:     buf = ""
+120:     def rd(t):
+121:         nonlocal buf
+122:         end = time.time() + t
+123:         while time.time() < end:
+124:             r, _, _ = select.select([fd], [], [], 0.1)
+125:             if not r:
+126:                 continue
+127:             try:
+128:                 d = os.read(fd, 65536)
+129:                 if not d:
+130:                     return False
+131:                 buf += d.decode("latin-1", "replace")
+132:             except OSError:
+133:                 return False
+134:         return True
+135:     alive = rd(settle)
+136:     for i, c in enumerate(cmds):
+137:         try:
+138:             os.write(fd, (c + "\n").encode("latin-1"))
+139:         except OSError:
+140:             alive = False; break
+141:         if not rd(spin if i == len(cmds) - 1 else 0.22):
+142:             alive = False; break
+143:     try:
+144:         os.write(fd, b"quit\n"); rd(0.4)
+145:     except OSError:
+146:         pass
+147:     try:
+148:         os.close(fd)
+149:     except OSError:
+150:         pass
+151:     return buf.replace("\r", ""), alive
+152: 
+153: def printed(t, reg):
+154:     m = re.search(r"print\s+%s\s*\n\s*(0x[0-9a-f]+)" % reg, t)
+155:     return "absent" if not m else "0x%x" % int(m.group(1), 16)
+156: 
+157: def run_word(iw, src=SRC):
+158:     """Plant ONE instruction word, step it, and read r0 and pc back."""
+159:     cmds = ["r1=0x%x" % src, "r0=0x0",
+160:             "put w 0x%x, 0x%08x" % (CODE, iw),
+161:             "pc=0x%x" % CODE, "step 1", "print r0", "print pc"]
+162:     t, alive = session(cmds)
+163:     return t, alive, printed(t, "r0"), printed(t, "pc")
+164: 
+165: print("arm_bfx_width_probe -- binary=%s label=%s machine=testarm" % (BIN, LABEL))
+166: print("%-12s %-14s %-14s %-56s %s" % ("row", "got", "want", "note", ""))
+167: 
+168: #  ---- the encodings must satisfy the decoder's OWN mask, checked before anything is run -------
+169: enc_ok = all((w & UBFX_MASK) == UBFX_BASE for w in (ubfx(0, 32), ubfx(0, 31), ubfx(4, 8), ubfx(0, 1))) \
+170:      and all((w & SBFX_MASK) == SBFX_BASE for w in (sbfx(0, 32), sbfx(4, 8)))
+171: row("enc ok", "yes" if enc_ok else "no", "yes",
+172:     "every planted word matches the decoder's own mask -- checked before any run")
+173: 
+174: #  ---- CONTROL 1: the plant/step/print path works at all ---------------------------------------
+175: t, alive, r0, pc = run_word(OP_MOV_R0_2A)
+176: row("live", r0 if alive else "died", "0x2a",
+177:     "LIVENESS: a plain `mov r0,#0x2a' plants, steps and prints")
+178: row("pc adv", pc if alive else "died", "0x%x" % (CODE + 4),
+179:     "CONTROL: pc advanced exactly 4.  A bad encoding sets running=0 and pc does NOT move")
+180: 
+181: #  ---- CONTROL 2: a small NONZERO answer, because the defect's symptom is exactly zero ---------
+182: t, alive, r0, pc = run_word(ubfx(4, 8))
+183: row("mid", r0 if alive else "died", "0xde",
+184:     "UBFX #4,#8 of 0x89abcdef -- only a correct encoding AND execution gives 0xde")
+185: row("mid pc", pc if alive else "died", "0x%x" % (CODE + 4),
+186:     "CONTROL: the bitfield word really executed; it did not stop the machine")
+187: 
+188: t, alive, r0, pc = run_word(ubfx(0, 1))
+189: row("w1", r0 if alive else "died", "0x1",
+190:     "UBFX #0,#1 -- the narrowest field, nonzero")
+191: 
+192: #  ---- THE DEFECT ROW.  Asserts the CORRECT value and is expected to FAIL pre-fix. -------------
+193: #  `1 << 32' shifts by the type's own width, the mask becomes 0 on the common lowering, and the
+194: #  instruction returns 0 instead of the whole register.
+195: t, alive, r0, pc = run_word(ubfx(0, 32))
+196: row("w32", r0 if alive else "died", "0x89abcdef",
+197:     "UBFX #0,#32 must return the WHOLE register -- `1 << 32' is undefined")
+198: row("w32 pc", pc if alive else "died", "0x%x" % (CODE + 4),
+199:     "CONTROL: it EXECUTED and returned a wrong value; it did not fail to decode")
+200: 
+201: #  ---- the neighbour that currently works BY ACCIDENT, pinned so a repair does not break it ----
+202: t, alive, r0, pc = run_word(ubfx(0, 31))
+203: row("w31", r0 if alive else "died", "0x9abcdef",
+204:     "UBFX #0,#31 -- UB (1<<31 overflows int) but wraps to the right mask; must STAY right")
+205: 
+206: #  ---- SBFX: the same mask site, plus its own second shift at :1344 ----------------------------
+207: t, alive, r0, pc = run_word(sbfx(4, 8))
+208: row("s mid", r0 if alive else "died", "0xffffffde",
+209:     "SBFX #4,#8 of 0x89abcdef: field 0xde, top bit set, so sign-extended")
+210: 
+211: t, alive, r0, pc = run_word(sbfx(0, 32))
+212: row("s w32", r0 if alive else "died", "0x89abcdef",
+213:     "SBFX #0,#32: the whole register, and its topBitMask at :1344 is `1 << 31' -- a SECOND UB")
+214: 
+215: ok = sum(1 for _, o in rows if o)
+216: print()
+217: print("ARMBFX_RESULT=%d/%d" % (ok, len(rows)))
+218: print("ARMBFX_DONE")
+219: sys.exit(0 if ok == len(rows) else 1)
+
+ exited 1 in 217ms:
+Cannot invoke method. Method invocation is supported only on core types in this language mode.
+At line:2 char:177
++ ... pan[0] - 1; $reviewIndex -lt [Math]::Min($reviewSpan[1],$reviewLines. ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : InvalidOperation: (:) [], RuntimeException
+    + FullyQualifiedErrorId : MethodInvocationNotSupportedInConstrainedLanguage
+ 
+Cannot invoke method. Method invocation is supported only on core types in this language mode.
+At line:2 char:177
++ ... pan[0] - 1; $reviewIndex -lt [Math]::Min($reviewSpan[1],$reviewLines. ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : InvalidOperation: (:) [], RuntimeException
+    + FullyQualifiedErrorId : MethodInvocationNotSupportedInConstrainedLanguage
+ 
+
+web search: https://www.open-std.org/jtc1/sc22/wg14/www/docs/n1256.pdf
+codex
+Two premises are already wrong: the probe does not assert PC advance on every row, and `msb < lsb` includes zero widths as well as negative widths. I’m checking the exact counts and whether the SBFX comment distinguishes equal Boolean results from removing undefined evaluation.
+
+web search: 
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'git -C GXEMUL-SEC diff -- src/cpus/cpu_arm_instr.c' in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n 'X\\(und\\)|X\\(nop\\)|cond ==|condition|bad:|nothing_call|running = 0|is_userpage.*1 <<' GXEMUL-SEC/src/cpus/cpu_arm_instr.c" in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$reviewLines = Get-Content -LiteralPath '"'GXEMUL-SEC/src/cpus/cpu_arm_instr.c'; foreach ("'$reviewSpan in @(@(1290,1430), @(4480,4560))) { for ($reviewIndex = $reviewSpan[0] - 1; $reviewIndex -lt $reviewSpan[1]; $reviewIndex++) { '"'{0}: {1}' -f ("'$reviewIndex + 1),$reviewLines[$reviewIndex] } }' in C:\DocumentNoSnc\CC\GXEMUL
+ succeeded in 72ms:
+5: *  modification, are permitted provided that the following conditions are met:
+8: *     notice, this list of conditions and the following disclaimer.
+10: *     notice, this list of conditions and the following disclaimer in the 
+119: *  condition code. (The NV condition code is not included, and the AL code
+128:uint8_t condition_hi[16] = { 0,0,1,1, 0,0,0,0, 0,0,1,1, 0,0,0,0 };
+129:uint8_t condition_ge[16] = { 1,0,1,0, 1,0,1,0, 0,1,0,1, 0,1,0,1 };
+130:uint8_t condition_gt[16] = { 1,0,1,0, 0,0,0,0, 0,1,0,1, 0,0,0,0 };
+166:	{  if (condition_hi[cpu->cd.arm.flags])				\
+170:	{  if (!condition_hi[cpu->cd.arm.flags])			\
+174:	{  if (condition_ge[cpu->cd.arm.flags])				\
+178:	{  if (!condition_ge[cpu->cd.arm.flags])			\
+182:	{  if (condition_gt[cpu->cd.arm.flags])				\
+186:	{  if (!condition_gt[cpu->cd.arm.flags])			\
+199:#define cond_instr(n)	( arm_cond_instr_ ## n  [condition_code] )
+221:	cpu->cd.arm.next_ic = &nothing_call;
+227: *  (Those are the ones using the "0xf" condition prefix.)
+239:	cpu->cd.arm.next_ic = &nothing_call;
+246:X(nop)
+310:	cpu->cd.arm.next_ic = (condition_hi[cpu->cd.arm.flags])?
+316:	    ic->arg[condition_hi[cpu->cd.arm.flags]];
+319:	cpu->cd.arm.next_ic = (condition_ge[cpu->cd.arm.flags])?
+325:	    ic->arg[condition_ge[cpu->cd.arm.flags]];
+328:	cpu->cd.arm.next_ic = (condition_gt[cpu->cd.arm.flags])?
+334:	    ic->arg[condition_gt[cpu->cd.arm.flags]];
+363:		cpu->cd.arm.next_ic = &nothing_call;
+367:		cpu->running = 0;
+369:		cpu->cd.arm.next_ic = &nothing_call;
+394:		cpu->cd.arm.next_ic = &nothing_call;
+398:		cpu->running = 0;
+400:		cpu->cd.arm.next_ic = &nothing_call;
+451:		cpu->running = 0;
+453:		cpu->cd.arm.next_ic = &nothing_call;
+458:		cpu->cd.arm.next_ic = &nothing_call;
+462:		cpu->running = 0;
+464:		cpu->cd.arm.next_ic = &nothing_call;
+495:		cpu->cd.arm.next_ic = &nothing_call;
+499:		cpu->running = 0;
+501:		cpu->cd.arm.next_ic = &nothing_call;
+892:		cpu->running = 0;
+893:		cpu->cd.arm.next_ic = &nothing_call;
+935:		cpu->running = 0;
+936:		cpu->cd.arm.next_ic = &nothing_call;
+985:	cpu->running = 0;
+987:	cpu->cd.arm.next_ic = &nothing_call;
+1020:X(und)
+1171: *  The carry is CLEARED unconditionally, because bit 31 of a value at or below
+1683:			cpu->running = 0;
+1684:			cpu->cd.arm.next_ic = &nothing_call;
+1901:		cpu->running = 0;
+1902:		cpu->cd.arm.next_ic = &nothing_call;
+1946:		cpu->running = 0;
+1947:		cpu->cd.arm.next_ic = &nothing_call;
+2537:		cpu->cd.arm.next_ic = &nothing_call;
+2614:	 *  only one of the two is shipped. The (int) cast in the condition is
+2724:	int ok = cpu->cd.arm.is_userpage[index >> 5] & (1 << (index & 31));
+2728:	 *  guard tests, so the diagnosis cannot drift away from the condition it
+2862:	int ok = cpu->cd.arm.is_userpage[index >> 5] & (1 << (index & 31));
+3566:	    walk exits at the first NUL byte (the loop condition tests the local
+3764:			target never reached). All same-page conditional branches
+3828:	int condition_code)
+3851:	int condition_code)
+3874:	int condition_code)
+3912:	int condition_code, main_opcode, secondary_opcode, s_bit, rn, rd, r8;
+3954:	condition_code = iword >> 28;
+3972:		/*  The "never" condition is nowadays used for special encodings.  */
+4234:				    condition_code + (l_bit? 16 : 0)
+4251:				    condition_code + (l_bit? 16 : 0)
+4301:			arm_switch_clear(ic, rd, condition_code);
+4307:			arm_switch_mov1(ic, rd, condition_code);
+4314:			arm_switch_add1(ic, rd, condition_code);
+4454:			ic->f = arm_dpi_instr_regshort[condition_code +
+4457:			ic->f = arm_dpi_instr[condition_code +
+4541:				 *  cpu->running = 0. On the ARMv4 CPUs this
+4557:				 *  whose condition was false -- one the guest
+4561:				 *  condition passes.
+4603:			    & 0x3f0) + condition_code];
+4613:			    0x3f0) + condition_code];
+4638:				ic->f = arm_dpi_instr[condition_code + 16*0xd];
+4714:					    [i*16 + condition_code];
+4734:			/*  Abort read-ahead on unconditional branches:  */
+4735:			if (condition_code == 0xe &&
+4800:		if (main_opcode == 0xa && (condition_code <= 1
+4801:		    || condition_code == 3 || condition_code == 8
+4802:		    || condition_code == 12 || condition_code == 13))
+
+ succeeded in 106ms:
+diff --git a/src/cpus/cpu_arm_instr.c b/src/cpus/cpu_arm_instr.c
+index 8059125..fa48a70 100644
+--- a/src/cpus/cpu_arm_instr.c
++++ b/src/cpus/cpu_arm_instr.c
+@@ -1313,7 +1313,23 @@ X(ubfx)
+ 	int lsb = (uint8_t)ic->arg[2];
+ 	int width = ic->arg[2] >> 16;
+ 
+-	uint32_t mask = (1 << width) - 1;
++	/*  #510: was `(1 << width) - 1'.  `width' is `1 + ((iword >> 16) & 31)', so
++	    it reaches 32 -- and `1' is a plain int, so the old expression was
++	    undefined at BOTH ends of that range: a shift count equal to the type's
++	    width at 32 (C99 6.5.7p3), and a signed overflow at 31 (6.5.7p4).
++
++	    ONLY THE 32 CASE IS OBSERVABLE, which is measured rather than argued:
++	    `UBFX r0,r1,#0,#32' of 0x89abcdef returned 0x0 on the committed build,
++	    because the mask became 0.  At 31 the expression is undefined TWICE and
++	    wraps back to the right answer -- `1 << 31' gives INT_MIN and
++	    `INT_MIN - 1' gives INT_MAX, which IS the correct 31-bit mask -- so it
++	    returned 0x9abcdef, correct.  The repair is owed by the language at both
++	    widths; only one of them was returning a wrong value.
++
++	    `1U' is load-bearing and not style: it is what defends width 31.  The
++	    guard defends 32.  This is `cpu_m88k_instr.c's own idiom in X(clr) and
++	    X(set), where `w == 0' encodes 32 for that architecture.  */
++	uint32_t mask = (width == 32) ? 0xffffffffU : ((1U << width) - 1);
+ 
+ 	x >>= lsb;
+ 	x &= mask;
+@@ -1337,12 +1353,35 @@ X(sbfx)
+ 	int lsb = (uint8_t)ic->arg[2];
+ 	int width = ic->arg[2] >> 16;
+ 
+-	uint32_t mask = (1 << width) - 1;
++	/*  #510: was `(1 << width) - 1'.  `width' is `1 + ((iword >> 16) & 31)', so
++	    it reaches 32 -- and `1' is a plain int, so the old expression was
++	    undefined at BOTH ends of that range: a shift count equal to the type's
++	    width at 32 (C99 6.5.7p3), and a signed overflow at 31 (6.5.7p4).
++
++	    ONLY THE 32 CASE IS OBSERVABLE, which is measured rather than argued:
++	    `UBFX r0,r1,#0,#32' of 0x89abcdef returned 0x0 on the committed build,
++	    because the mask became 0.  At 31 the expression is undefined TWICE and
++	    wraps back to the right answer -- `1 << 31' gives INT_MIN and
++	    `INT_MIN - 1' gives INT_MAX, which IS the correct 31-bit mask -- so it
++	    returned 0x9abcdef, correct.  The repair is owed by the language at both
++	    widths; only one of them was returning a wrong value.
++
++	    `1U' is load-bearing and not style: it is what defends width 31.  The
++	    guard defends 32.  This is `cpu_m88k_instr.c's own idiom in X(clr) and
++	    X(set), where `w == 0' encodes 32 for that architecture.  */
++	uint32_t mask = (width == 32) ? 0xffffffffU : ((1U << width) - 1);
+ 	x >>= lsb;
+ 	x &= mask;
+ 
+-	uint32_t topBitMask = 1 << (width-1);
+-	if (x & topBitMask && width < 32)
++	/*  #510: was `uint32_t topBitMask = 1 << (width-1);' followed by
++	    `if (x & topBitMask && width < 32)'.  A SECOND undefined shift, and the
++	    `width < 32' test that would have made it moot sat on the NEXT line --
++	    the operand was computed before the guard that excludes it.  Reordering
++	    the && is semantically identical for every width in {1..32} (both are
++	    ordinary locals with no side effects) and short-circuits before the
++	    shift.  At width 32 the field IS the whole register, so there is no sign
++	    to extend -- which is what the original test already said.  */
++	if (width < 32 && (x & (1U << (width - 1))))
+ 		x |= ~mask;
+ 
+ 	reg(ic->arg[0]) = x;
+
+ succeeded in 169ms:
+1290: 
+1291: 	if (rot == 24)
+1292: 		x = (x >> 24) | ((x & 0xff) << 8);
+1293: 	else
+1294: 		x >>= rot;
+1295: 
+1296: 	cpu->cd.arm.r[(iw >> 12) & 15] = cpu->cd.arm.r[(iw >> 16) & 15]
+1297: 	    + (uint16_t)x;
+1298: }
+1299: Y(uxtah_rot)
+1300: 
+1301: 
+1302: /*
+1303:  *  ubfx:  Unsigned Bit-Field Extract.
+1304:  *
+1305:  *  arg[0] = ptr to rd
+1306:  *  arg[1] = ptr to rn
+1307:  *  arg[2] = (width << 16) + lsb
+1308:  */
+1309: X(ubfx)
+1310: {
+1311: 	uint32_t x = reg(ic->arg[1]);
+1312: 
+1313: 	int lsb = (uint8_t)ic->arg[2];
+1314: 	int width = ic->arg[2] >> 16;
+1315: 
+1316: 	/*  #510: was `(1 << width) - 1'.  `width' is `1 + ((iword >> 16) & 31)', so
+1317: 	    it reaches 32 -- and `1' is a plain int, so the old expression was
+1318: 	    undefined at BOTH ends of that range: a shift count equal to the type's
+1319: 	    width at 32 (C99 6.5.7p3), and a signed overflow at 31 (6.5.7p4).
+1320: 
+1321: 	    ONLY THE 32 CASE IS OBSERVABLE, which is measured rather than argued:
+1322: 	    `UBFX r0,r1,#0,#32' of 0x89abcdef returned 0x0 on the committed build,
+1323: 	    because the mask became 0.  At 31 the expression is undefined TWICE and
+1324: 	    wraps back to the right answer -- `1 << 31' gives INT_MIN and
+1325: 	    `INT_MIN - 1' gives INT_MAX, which IS the correct 31-bit mask -- so it
+1326: 	    returned 0x9abcdef, correct.  The repair is owed by the language at both
+1327: 	    widths; only one of them was returning a wrong value.
+1328: 
+1329: 	    `1U' is load-bearing and not style: it is what defends width 31.  The
+1330: 	    guard defends 32.  This is `cpu_m88k_instr.c's own idiom in X(clr) and
+1331: 	    X(set), where `w == 0' encodes 32 for that architecture.  */
+1332: 	uint32_t mask = (width == 32) ? 0xffffffffU : ((1U << width) - 1);
+1333: 
+1334: 	x >>= lsb;
+1335: 	x &= mask;
+1336: 
+1337: 	reg(ic->arg[0]) = x;
+1338: }
+1339: Y(ubfx)
+1340: 
+1341: 
+1342: /*
+1343:  *  sbfx:  Signed Bit-Field Extract.
+1344:  *
+1345:  *  arg[0] = ptr to rd
+1346:  *  arg[1] = ptr to rn
+1347:  *  arg[2] = (width << 16) + lsb
+1348:  */
+1349: X(sbfx)
+1350: {
+1351: 	uint32_t x = reg(ic->arg[1]);
+1352: 
+1353: 	int lsb = (uint8_t)ic->arg[2];
+1354: 	int width = ic->arg[2] >> 16;
+1355: 
+1356: 	/*  #510: was `(1 << width) - 1'.  `width' is `1 + ((iword >> 16) & 31)', so
+1357: 	    it reaches 32 -- and `1' is a plain int, so the old expression was
+1358: 	    undefined at BOTH ends of that range: a shift count equal to the type's
+1359: 	    width at 32 (C99 6.5.7p3), and a signed overflow at 31 (6.5.7p4).
+1360: 
+1361: 	    ONLY THE 32 CASE IS OBSERVABLE, which is measured rather than argued:
+1362: 	    `UBFX r0,r1,#0,#32' of 0x89abcdef returned 0x0 on the committed build,
+1363: 	    because the mask became 0.  At 31 the expression is undefined TWICE and
+1364: 	    wraps back to the right answer -- `1 << 31' gives INT_MIN and
+1365: 	    `INT_MIN - 1' gives INT_MAX, which IS the correct 31-bit mask -- so it
+1366: 	    returned 0x9abcdef, correct.  The repair is owed by the language at both
+1367: 	    widths; only one of them was returning a wrong value.
+1368: 
+1369: 	    `1U' is load-bearing and not style: it is what defends width 31.  The
+1370: 	    guard defends 32.  This is `cpu_m88k_instr.c's own idiom in X(clr) and
+1371: 	    X(set), where `w == 0' encodes 32 for that architecture.  */
+1372: 	uint32_t mask = (width == 32) ? 0xffffffffU : ((1U << width) - 1);
+1373: 	x >>= lsb;
+1374: 	x &= mask;
+1375: 
+1376: 	/*  #510: was `uint32_t topBitMask = 1 << (width-1);' followed by
+1377: 	    `if (x & topBitMask && width < 32)'.  A SECOND undefined shift, and the
+1378: 	    `width < 32' test that would have made it moot sat on the NEXT line --
+1379: 	    the operand was computed before the guard that excludes it.  Reordering
+1380: 	    the && is semantically identical for every width in {1..32} (both are
+1381: 	    ordinary locals with no side effects) and short-circuits before the
+1382: 	    shift.  At width 32 the field IS the whole register, so there is no sign
+1383: 	    to extend -- which is what the original test already said.  */
+1384: 	if (width < 32 && (x & (1U << (width - 1))))
+1385: 		x |= ~mask;
+1386: 
+1387: 	reg(ic->arg[0]) = x;
+1388: }
+1389: Y(sbfx)
+1390: 
+1391: 
+1392: /*
+1393:  *  bfi:  Bit-Field Insert.
+1394:  *
+1395:  *  arg[0] = ptr to rd
+1396:  *  arg[1] = ptr to rn
+1397:  *  arg[2] = (msb << 16) + lsb
+1398:  */
+1399: X(bfi)
+1400: {
+1401: 	uint32_t x = reg(ic->arg[1]);
+1402: 
+1403: 	int lsb = (uint8_t)ic->arg[2];
+1404: 	int msb = ic->arg[2] >> 16;
+1405: 	int width = msb - lsb + 1;
+1406: 
+1407: 	x <<= lsb;
+1408: 
+1409: 	uint32_t mask = (1 << width) - 1;
+1410: 
+1411: 	mask <<= lsb;
+1412: 
+1413: 	reg(ic->arg[0]) &= ~mask;
+1414: 	reg(ic->arg[0]) |= (x & mask);
+1415: }
+1416: Y(bfi)
+1417: 
+1418: 
+1419: /*
+1420:  *  swp, swpb:  Swap (word or byte).
+1421:  *
+1422:  *  arg[0] = ptr to rd
+1423:  *  arg[1] = ptr to rm
+1424:  *  arg[2] = ptr to rn
+1425:  */
+1426: X(swp)
+1427: {
+1428: 	uint32_t addr = reg(ic->arg[2]), data, data2;
+1429: 	/*  #386: an unaligned swp rotates the LOADED word right by 8*addr[1:0]
+1430: 	    (DDI 0100I A4.1.108 U==0, same as LDR p. A4-43); the shift is taken
+4480: 				ic->arg[1] = (size_t)(&cpu->cd.arm.r[rm]);
+4481: 				ic->arg[2] = ((iword & 0xc00) >> 10) << 3;
+4482: 			} else if ((iword & 0x0fff03f0) == 0x06ef0070) {
+4483: 				ic->f = cond_instr(uxtb);
+4484: 				ic->arg[0] = (size_t)(&cpu->cd.arm.r[rd]);
+4485: 				ic->arg[1] = (size_t)(&cpu->cd.arm.r[rm]);
+4486: 				ic->arg[2] = ((iword & 0xc00) >> 10) << 3;
+4487: 			} else if ((iword & 0x0ff003f0) == 0x06e00070) {
+4488: 				ic->arg[0] = (size_t)(&cpu->cd.arm.r[rd]);
+4489: 				ic->arg[1] = (size_t)(&cpu->cd.arm.r[rn]);
+4490: 				ic->arg[2] = (size_t)(&cpu->cd.arm.r[rm]);
+4491: 				ic->f = cond_instr(uxtab);
+4492: 				if (iword & 0xc00) {
+4493: 					/*  #319: a rotate is legal here; it
+4494: 					    used to stop the emulator.  */
+4495: 					ic->arg[0] = iword;
+4496: 					ic->f = cond_instr(uxtab_rot);
+4497: 				}
+4498: 			} else if ((iword & 0x0fff03f0) == 0x06ff0070) {
+4499: 				ic->f = cond_instr(uxth);
+4500: 				ic->arg[0] = (size_t)(&cpu->cd.arm.r[rd]);
+4501: 				ic->arg[1] = (size_t)(&cpu->cd.arm.r[rm]);
+4502: 				ic->arg[2] = ((iword & 0xc00) >> 10) << 3;
+4503: 			} else if ((iword & 0x0ff003f0) == 0x06f00070) {
+4504: 				ic->arg[0] = (size_t)(&cpu->cd.arm.r[rd]);
+4505: 				ic->arg[1] = (size_t)(&cpu->cd.arm.r[rn]);
+4506: 				ic->arg[2] = (size_t)(&cpu->cd.arm.r[rm]);
+4507: 				ic->f = cond_instr(uxtah);
+4508: 				if (iword & 0xc00) {
+4509: 					/*  #319  */
+4510: 					ic->arg[0] = iword;
+4511: 					ic->f = cond_instr(uxtah_rot);
+4512: 				}
+4513: 			} else if ((iword & 0x0fe00070) == 0x07c00010) {
+4514: 				ic->f = cond_instr(bfi);
+4515: 				ic->arg[0] = (size_t)(&cpu->cd.arm.r[rd]);
+4516: 				ic->arg[1] = (size_t)(&cpu->cd.arm.r[rm]);
+4517: 				int lsb = (iword >> 7) & 31;
+4518: 				int msb = (iword >> 16) & 31;
+4519: 				ic->arg[2] = (msb << 16) + lsb;
+4520: 			} else if ((iword & 0x0fe00070) == 0x07e00050) {
+4521: 				ic->f = cond_instr(ubfx);
+4522: 				ic->arg[0] = (size_t)(&cpu->cd.arm.r[rd]);
+4523: 				ic->arg[1] = (size_t)(&cpu->cd.arm.r[rm]);
+4524: 				int lsb = (iword >> 7) & 31;
+4525: 				int width = 1 + ((iword >> 16) & 31);
+4526: 				ic->arg[2] = (width << 16) + lsb;
+4527: 			} else if ((iword & 0x0fe00070) == 0x07a00050) {
+4528: 				ic->f = cond_instr(sbfx);
+4529: 				ic->arg[0] = (size_t)(&cpu->cd.arm.r[rd]);
+4530: 				ic->arg[1] = (size_t)(&cpu->cd.arm.r[rm]);
+4531: 				int lsb = (iword >> 7) & 31;
+4532: 				int width = 1 + ((iword >> 16) & 31);
+4533: 				ic->arg[2] = (width << 16) + lsb;
+4534: 			} else {
+4535: 				/*
+4536: 				 *  #312: a word reaching here takes the
+4537: 				 *  Undefined Instruction exception. It must not
+4538: 				 *  stop the emulator, which is what used to
+4539: 				 *  happen: `goto bad` reaches the shared label
+4540: 				 *  in cpu_dyntrans.c, which sets
+4541: 				 *  cpu->running = 0. On the ARMv4 CPUs this
+4542: 				 *  tree actually models, the whole space is
+4543: 				 *  architecturally undefined -- it holds ARM's
+4544: 				 *  permanently-undefined encoding and the word
+4545: 				 *  GDB plants for breakpoints -- so und is the
+4546: 				 *  faithful answer as well as the safe one.
+4547: 				 *  For the ARMv6 models that share this decoder
+4548: 				 *  some of these words are real instructions
+4549: 				 *  (REV16 and the rest of the media set) that
+4550: 				 *  nobody has implemented; und is then an
+4551: 				 *  approximation, which is what the warning
+4552: 				 *  below is for. Halting was never right for
+4553: 				 *  either.
+4554: 				 *
+4555: 				 *  Worse, the halt happened HERE, during
+4556: 				 *  decode, so a CONDITIONAL undefined word
+4557: 				 *  whose condition was false -- one the guest
+4558: 				 *  would never have executed -- stopped the
+4559: 				 *  emulator too. Routing to und fixes that as
+4560: 				 *  well: the exception is raised only if the
+
+web search: 'If the value of the right operand is negative'
+web search: 
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg --files GXEMUL-SEC/src -g AGENTS.md -g 'Makefile*' -g '*.mk'" in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$reviewLines = Get-Content -LiteralPath '"'GXEMUL-SEC/src/cpus/cpu_arm_instr.c'; foreach ("'$reviewSpan in @(@(132,149), @(240,255), @(1009,1062), @(3945,3995), @(4534,4591))) { for ($reviewIndex = $reviewSpan[0] - 1; $reviewIndex -lt $reviewSpan[1]; $reviewIndex++) { '"'{0}: {1}' -f ("'$reviewIndex + 1),$reviewLines[$reviewIndex] } }' in C:\DocumentNoSnc\CC\GXEMUL
+ succeeded in 124ms:
+GXEMUL-SEC/src\symbol\Makefile.skel
+GXEMUL-SEC/src\symbol\Makefile
+GXEMUL-SEC/src\promemul\Makefile.skel
+GXEMUL-SEC/src\promemul\Makefile
+GXEMUL-SEC/src\Makefile
+GXEMUL-SEC/src\file\Makefile.skel
+GXEMUL-SEC/src\file\Makefile
+GXEMUL-SEC/src\core\Makefile.skel
+GXEMUL-SEC/src\core\Makefile
+GXEMUL-SEC/src\console\Makefile.skel
+GXEMUL-SEC/src\console\Makefile
+GXEMUL-SEC/src\disk\Makefile.skel
+GXEMUL-SEC/src\disk\Makefile
+GXEMUL-SEC/src\Makefile.skel
+GXEMUL-SEC/src\debugger\Makefile.skel
+GXEMUL-SEC/src\debugger\Makefile
+GXEMUL-SEC/src\include\Makefile
+GXEMUL-SEC/src\machines\Makefile.skel
+GXEMUL-SEC/src\machines\Makefile
+GXEMUL-SEC/src\include\Makefile.skel
+GXEMUL-SEC/src\net\Makefile.skel
+GXEMUL-SEC/src\net\Makefile
+GXEMUL-SEC/src\cpus\Makefile
+GXEMUL-SEC/src\cpus\Makefile.skel
+GXEMUL-SEC/src\devices\Makefile.skel
+GXEMUL-SEC/src\devices\Makefile
+GXEMUL-SEC/src\devices\fonts\Makefile.skel
+GXEMUL-SEC/src\devices\fonts\Makefile
+
+ succeeded in 265ms:
+132: #define Y(n) void arm_instr_ ## n ## __eq(struct cpu *cpu,		\
+133: 			struct arm_instr_call *ic)			\
+134: 	{  if (cpu->cd.arm.flags & ARM_F_Z)				\
+135: 		arm_instr_ ## n (cpu, ic);		}		\
+136: 	void arm_instr_ ## n ## __ne(struct cpu *cpu,			\
+137: 			struct arm_instr_call *ic)			\
+138: 	{  if (!(cpu->cd.arm.flags & ARM_F_Z))				\
+139: 		arm_instr_ ## n (cpu, ic);		}		\
+140: 	void arm_instr_ ## n ## __cs(struct cpu *cpu,			\
+141: 			struct arm_instr_call *ic)			\
+142: 	{  if (cpu->cd.arm.flags & ARM_F_C)				\
+143: 		arm_instr_ ## n (cpu, ic);		}		\
+144: 	void arm_instr_ ## n ## __cc(struct cpu *cpu,			\
+145: 			struct arm_instr_call *ic)			\
+146: 	{  if (!(cpu->cd.arm.flags & ARM_F_C))				\
+147: 		arm_instr_ ## n (cpu, ic);		}		\
+148: 	void arm_instr_ ## n ## __mi(struct cpu *cpu,			\
+149: 			struct arm_instr_call *ic)			\
+240: }
+241: 
+242: 
+243: /*
+244:  *  nop:  Do nothing.
+245:  */
+246: X(nop)
+247: {
+248: }
+249: 
+250: 
+251: /*
+252:  *  b:  Branch (to a different translated page)
+253:  *
+254:  *  arg[0] = relative offset from start of page
+255:  */
+1009: 	/*  Synchronize the program counter first:  */
+1010: 	cpu->pc &= 0xfffff000;
+1011: 	cpu->pc += ic->arg[0];
+1012: 	arm_exception(cpu, ARM_EXCEPTION_PREF_ABT);
+1013: }
+1014: Y(bkpt)
+1015: 
+1016: 
+1017: /*
+1018:  *  und:  Undefined instruction.
+1019:  */
+1020: X(und)
+1021: {
+1022: 	/*  Synchronize the program counter first:  */
+1023: 	cpu->pc &= 0xfffff000;
+1024: 	cpu->pc += ic->arg[0];
+1025: 	arm_exception(cpu, ARM_EXCEPTION_UND);
+1026: }
+1027: Y(und)
+1028: 
+1029: 
+1030: /*
+1031:  *  movt:  Move Top.
+1032:  *
+1033:  *  arg[1] = 32-bit immediate value. Top 16 bits are those of interest.
+1034:  *  arg[2] = ptr to rd
+1035:  */
+1036: X(movt)
+1037: {
+1038: 	reg(ic->arg[2]) &= 0xffff;
+1039: 	reg(ic->arg[2]) |= ic->arg[1];
+1040: }
+1041: Y(movt)
+1042: 
+1043: 
+1044: /*
+1045:  *  movw:  Move (Word).
+1046:  *
+1047:  *  arg[1] = 32-bit immediate value.
+1048:  *  arg[2] = ptr to rd
+1049:  */
+1050: X(movw)
+1051: {
+1052: 	reg(ic->arg[2]) = ic->arg[1];
+1053: }
+1054: Y(movw)
+1055: 
+1056: 
+1057: /*
+1058:  *  rev:  Reverse endian.
+1059:  *
+1060:  *  arg[0] = ptr to rd
+1061:  *  arg[1] = ptr to rm
+1062:  */
+3945: 
+3946: 
+3947: #define DYNTRANS_TO_BE_TRANSLATED_HEAD
+3948: #include "cpu_dyntrans.c"
+3949: #undef  DYNTRANS_TO_BE_TRANSLATED_HEAD
+3950: 
+3951: 
+3952: 	/*  The idea of taking bits 27..24 was found here:
+3953: 	    http://armphetamine.sourceforge.net/oldinfo.html  */
+3954: 	condition_code = iword >> 28;
+3955: 	main_opcode = (iword >> 24) & 15;
+3956: 	secondary_opcode = (iword >> 21) & 15;
+3957: 	u_bit = iword & 0x00800000;
+3958: 	w_bit = iword & 0x00200000;
+3959: 	s_bit = l_bit = iword & 0x00100000;
+3960: 	rn    = (iword >> 16) & 15;
+3961: 	rd    = (iword >> 12) & 15;
+3962: 	r8    = (iword >> 8) & 15;
+3963: 	// c     = (iword >> 7) & 31;
+3964: 	// t     = (iword >> 4) & 7;
+3965: 	rm    = iword & 15;
+3966: 
+3967: 	/*
+3968: 	 *  Translate the instruction:
+3969: 	 */
+3970: 
+3971: 	if ((iword >> 28) == 0xf) {
+3972: 		/*  The "never" condition is nowadays used for special encodings.  */
+3973: 		if ((iword & 0xfc70f000) == 0xf450f000) {
+3974: 			/*  Preload:  TODO.  Treat as NOP for now.  */
+3975: 			ic->f = instr(nop);
+3976: 			goto okay;
+3977: 		}
+3978: 
+3979: 		if (iword == 0xf10c0040) {
+3980: 			/*  cpsid f. Treat as NOP for now.  */
+3981: 			ic->f = instr(nop);
+3982: 			goto okay;
+3983: 		}
+3984: 
+3985: 		if (iword == 0xf10c0080) {
+3986: 			/*  cpsid i. Treat as NOP for now.  */
+3987: 			ic->f = instr(nop);
+3988: 			goto okay;
+3989: 		}
+3990: 
+3991: 		if (iword == 0xf57ff04f) {
+3992: 			/*  dsb sy. Treat as NOP for now.  */
+3993: 			ic->f = instr(nop);
+3994: 			goto okay;
+3995: 		}
+4534: 			} else {
+4535: 				/*
+4536: 				 *  #312: a word reaching here takes the
+4537: 				 *  Undefined Instruction exception. It must not
+4538: 				 *  stop the emulator, which is what used to
+4539: 				 *  happen: `goto bad` reaches the shared label
+4540: 				 *  in cpu_dyntrans.c, which sets
+4541: 				 *  cpu->running = 0. On the ARMv4 CPUs this
+4542: 				 *  tree actually models, the whole space is
+4543: 				 *  architecturally undefined -- it holds ARM's
+4544: 				 *  permanently-undefined encoding and the word
+4545: 				 *  GDB plants for breakpoints -- so und is the
+4546: 				 *  faithful answer as well as the safe one.
+4547: 				 *  For the ARMv6 models that share this decoder
+4548: 				 *  some of these words are real instructions
+4549: 				 *  (REV16 and the rest of the media set) that
+4550: 				 *  nobody has implemented; und is then an
+4551: 				 *  approximation, which is what the warning
+4552: 				 *  below is for. Halting was never right for
+4553: 				 *  either.
+4554: 				 *
+4555: 				 *  Worse, the halt happened HERE, during
+4556: 				 *  decode, so a CONDITIONAL undefined word
+4557: 				 *  whose condition was false -- one the guest
+4558: 				 *  would never have executed -- stopped the
+4559: 				 *  emulator too. Routing to und fixes that as
+4560: 				 *  well: the exception is raised only if the
+4561: 				 *  condition passes.
+4562: 				 *
+4563: 				 *  This is where the und routing lives now. The
+4564: 				 *  copy that used to sit further down this case
+4565: 				 *  was unreachable -- its predicate was exactly
+4566: 				 *  this block's guard, and every path here ends
+4567: 				 *  in a break -- so it is gone.
+4568: 				 */
+4569: 				if (cpu->translation_readahead)
+4570: 					goto bad;
+4571: 				if ((iword & 0x0ff000f0) != 0x07f000f0) {
+4572: 					/*
+4573: 					 *  Not the permanently-undefined
+4574: 					 *  pattern, so it may instead be an
+4575: 					 *  extension nobody has implemented
+4576: 					 *  yet. Say so once -- a guest can sit
+4577: 					 *  in a loop on one of these.
+4578: 					 */
+4579: 					static int warned_undef = 0;
+4580: 					if (!warned_undef) {
+4581: 						warned_undef = 1;
+4582: 						debugmsg_cpu(cpu, SUBSYS_CPU,
+4583: 						    "opcode",
+4584: 						    VERBOSITY_WARNING,
+4585: 						    "unimplemented special "
+4586: 						    "non-loadstore encoding "
+4587: 						    "0x%08" PRIx32 " -- routing "
+4588: 						    "to Undefined Instruction. "
+4589: 						    "Only printing this once.",
+4590: 						    (uint32_t) iword);
+4591: 					}
+
+web search: site.developer.arm.com UBFX A1 "lsbit" "widthminus1" "UNPREDICTABLE" ...
+codex
+The enumeration confirms the repaired masks at all 32 widths. It also gives 465 negative BFI widths and 31 zero widths. The clearest missing assertion is `s w32 pc`; neither SBFX row checks PC. I also found that the probe’s “bad encoding stops the machine” explanation conflicts with this fork’s decoder, which routes that fallback to an Undefined Instruction exception.
+
+web search: 
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n '("'^CC|''^CXX|CFLAGS|CXXFLAGS|'"\\.c\\.o|cpu_arm_instr\\.o|std=)' GXEMUL-SEC/src/Makefile GXEMUL-SEC/src/cpus/Makefile GXEMUL-SEC/src/cpus/Makefile.skel" in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$reviewLines = Get-Content -LiteralPath '"'GXEMUL-SEC/src/cpus/cpu_arm_instr.c'; for ("'$reviewIndex = 4590; $reviewIndex -lt 4602; $reviewIndex++) { '"'{0}: {1}' -f ("'$reviewIndex + 1),$reviewLines[$reviewIndex] }' in C:\DocumentNoSnc\CC\GXEMUL
+ succeeded in 61ms:
+GXEMUL-SEC/src/cpus/Makefile.skel:5:CFLAGS=$(CWARNINGS) $(COPTIM) $(DINCLUDE)
+GXEMUL-SEC/src/cpus/Makefile:13:CC=cc
+GXEMUL-SEC/src/cpus/Makefile:25:CFLAGS=$(CWARNINGS) $(COPTIM) $(DINCLUDE)
+GXEMUL-SEC/src/Makefile:13:CC=cc
+
+ succeeded in 129ms:
+4591: 					}
+4592: 				}
+4593: 				ic->f = cond_instr(und);
+4594: 				ic->arg[0] = addr & 0xfff;
+4595: 			}
+4596: 			break;
+4597: 		}
+4598: 	
+4599: 		ic->arg[0] = (size_t)(&cpu->cd.arm.r[rn]);
+4600: 		ic->arg[2] = (size_t)(&cpu->cd.arm.r[rd]);
+4601: 		if (rd == ARM_PC || rn == ARM_PC) {
+4602: 			ic->f = arm_load_store_instr_pc[((iword >> 16)
+
+web search: https://documentation-service.arm.com/static/5f8daeb7f86e16515cdb8c4e
+web search: 
+web search: site:documentation-service.arm.com/static/5f8daeb7f86e16515cdb8c4e "msbit = lsbit + widthminus1" "if msbit <= 31" ...
+codex
+VERDICT: Approve the executable UBFX/SBFX repair; revise the comments and witness claims. Two factual premises are wrong.
+
+I verified the fork’s actual diff: **2 hunks, 43 additions, 4 deletions = 47 changed lines**. I enumerated the arithmetic; I did not rerun the witness or any gate. Question 2 is skipped as requested.
+
+**1. The repair is correct under the stated 32-bit-`int` model.** Enumerating all 32 widths produced the correct masks. These boundary results use `src = 0x89abcdef`, `lsb = 0`:
+
+| Width | Repaired mask | UBFX result | SBFX result | SBFX sign shift |
+|---:|---|---|---|---|
+| 1 | `0x00000001` | `0x00000001` | `0xffffffff` | Shift by 0 |
+| 31 | `0x7fffffff` | `0x09abcdef` | `0x09abcdef` | Shift by 30 |
+| 32 | `0xffffffff` | `0x89abcdef` | `0x89abcdef` | Skipped |
+
+For the `&&` question, enumerating 32 widths × two sign-bit states gives **zero Boolean-result differences**. But the complete transformation also moves the shift inside the condition and changes its type. At width 32, the old initializer evaluates undefined `1 << 31`; the replacement skips that evaluation. Therefore “semantically identical” needs qualification: it preserves the intended branch decision while removing undefined evaluation. The original mask also makes width 31 undefined. [C99 draft, §§6.5.7 and 6.5.13](https://www.open-std.org/jtc1/sc22/wg14/www/docs/n1256.pdf)
+
+The [added comments](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c:1316) overclaim:
+
+- **“ONLY THE 32 CASE IS OBSERVABLE”** exceeds the evidence. These runs establish two failing width-32 result rows and a passing **UBFX** width-31 row. They do not establish behavior across other builds or inputs; SBFX width 31 is untested.
+- The rows never inspect the mask or intermediate arithmetic. “Because the mask became 0” and the asserted wraparound sequence describe an explanation consistent with the results, not measured intermediates.
+- “BOTH ends” is inaccurate for `1..32`; 31 and 32 are its two highest values.
+- “Width 32 … the whole register” requires a legal field, hence `lsb = 0`. The decoder itself does not enforce the field-boundary constraint. [Arm’s UBFX constraint](https://documentation-service.arm.com/static/62f4d062e95b0a633aff7ad7)
+
+Prefer: “In these witness runs, only the width-32 result rows failed.” Describe the SBFX transformation as preserving intended sign extension and avoiding the old unconditional signed shift.
+
+**3. Leaving BFI is defensible for this explicitly UBFX/SBFX-scoped round.** It would be incomplete if presented as eliminating this expression’s UB throughout ARM bitfield instructions. Legal BFI widths 31 and 32 remain affected; uncertainty about invalid encodings does not prevent repairing those legal cases separately.
+
+Your BFI count is wrong. Exhaustively enumerating all 1,024 `(msb, lsb)` pairs gives:
+
+| Derived width | Count |
+|---|---:|
+| Negative: −30 through −1 | **465** |
+| Zero | **31** |
+| Positive: 1 through 32 | **528** |
+
+Thus **496 encodings have `msb < lsb`, but only 465 have negative shift counts**. The other 31 have `msb = lsb − 1`, yielding width zero and a defined shift by zero. ARM’s UNPREDICTABLE category includes both groups. [Arm BFI specification](https://documentation-service.arm.com/static/5f8daeb7f86e16515cdb8c4e)
+
+The `X(und)` argument-contract concern is real: [it consumes `arg[0]` as a PC offset](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c:1020).
+
+**4. The witness coverage claim is false as written.** PC is read after every instruction, but asserted only after **MOV, UBFX mid, and UBFX width 32**. Neither SBFX case checks PC. The clearest missing cell is **`s w32 pc == 0x8004`**, immediately after [the existing SBFX width-32 result](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/arm_bfx_width_probe.py:211).
+
+Also add a sign-clear SBFX cell: `src = 0x89abcdef`, `lsb = 0`, `width = 31` must yield **`0x09abcdef`**. Current SBFX coverage has no width-below-32 case where sign extension must remain inactive.
+
+PC advance alone establishes forward progress, not execution of the intended operation: a NOP or failed condition can also advance PC. Nevertheless, my enumeration confirmed that all six planted bitfield words have the intended fields and AL condition.
+
+Two additional findings:
+
+- The probe’s explanation that a bad encoding stops the machine is stale for this decoder fallback: [it now routes to `cond_instr(und)`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c:4593).
+- The m88k analogy needs precision: its `w == 0` guard selects the full-width mask instead of zero. It does **not** prevent a shift by 32; its encoded shift count never reaches 32.
+tokens used
+66,603
+VERDICT: Approve the executable UBFX/SBFX repair; revise the comments and witness claims. Two factual premises are wrong.
+
+I verified the fork’s actual diff: **2 hunks, 43 additions, 4 deletions = 47 changed lines**. I enumerated the arithmetic; I did not rerun the witness or any gate. Question 2 is skipped as requested.
+
+**1. The repair is correct under the stated 32-bit-`int` model.** Enumerating all 32 widths produced the correct masks. These boundary results use `src = 0x89abcdef`, `lsb = 0`:
+
+| Width | Repaired mask | UBFX result | SBFX result | SBFX sign shift |
+|---:|---|---|---|---|
+| 1 | `0x00000001` | `0x00000001` | `0xffffffff` | Shift by 0 |
+| 31 | `0x7fffffff` | `0x09abcdef` | `0x09abcdef` | Shift by 30 |
+| 32 | `0xffffffff` | `0x89abcdef` | `0x89abcdef` | Skipped |
+
+For the `&&` question, enumerating 32 widths × two sign-bit states gives **zero Boolean-result differences**. But the complete transformation also moves the shift inside the condition and changes its type. At width 32, the old initializer evaluates undefined `1 << 31`; the replacement skips that evaluation. Therefore “semantically identical” needs qualification: it preserves the intended branch decision while removing undefined evaluation. The original mask also makes width 31 undefined. [C99 draft, §§6.5.7 and 6.5.13](https://www.open-std.org/jtc1/sc22/wg14/www/docs/n1256.pdf)
+
+The [added comments](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c:1316) overclaim:
+
+- **“ONLY THE 32 CASE IS OBSERVABLE”** exceeds the evidence. These runs establish two failing width-32 result rows and a passing **UBFX** width-31 row. They do not establish behavior across other builds or inputs; SBFX width 31 is untested.
+- The rows never inspect the mask or intermediate arithmetic. “Because the mask became 0” and the asserted wraparound sequence describe an explanation consistent with the results, not measured intermediates.
+- “BOTH ends” is inaccurate for `1..32`; 31 and 32 are its two highest values.
+- “Width 32 … the whole register” requires a legal field, hence `lsb = 0`. The decoder itself does not enforce the field-boundary constraint. [Arm’s UBFX constraint](https://documentation-service.arm.com/static/62f4d062e95b0a633aff7ad7)
+
+Prefer: “In these witness runs, only the width-32 result rows failed.” Describe the SBFX transformation as preserving intended sign extension and avoiding the old unconditional signed shift.
+
+**3. Leaving BFI is defensible for this explicitly UBFX/SBFX-scoped round.** It would be incomplete if presented as eliminating this expression’s UB throughout ARM bitfield instructions. Legal BFI widths 31 and 32 remain affected; uncertainty about invalid encodings does not prevent repairing those legal cases separately.
+
+Your BFI count is wrong. Exhaustively enumerating all 1,024 `(msb, lsb)` pairs gives:
+
+| Derived width | Count |
+|---|---:|
+| Negative: −30 through −1 | **465** |
+| Zero | **31** |
+| Positive: 1 through 32 | **528** |
+
+Thus **496 encodings have `msb < lsb`, but only 465 have negative shift counts**. The other 31 have `msb = lsb − 1`, yielding width zero and a defined shift by zero. ARM’s UNPREDICTABLE category includes both groups. [Arm BFI specification](https://documentation-service.arm.com/static/5f8daeb7f86e16515cdb8c4e)
+
+The `X(und)` argument-contract concern is real: [it consumes `arg[0]` as a PC offset](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c:1020).
+
+**4. The witness coverage claim is false as written.** PC is read after every instruction, but asserted only after **MOV, UBFX mid, and UBFX width 32**. Neither SBFX case checks PC. The clearest missing cell is **`s w32 pc == 0x8004`**, immediately after [the existing SBFX width-32 result](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/arm_bfx_width_probe.py:211).
+
+Also add a sign-clear SBFX cell: `src = 0x89abcdef`, `lsb = 0`, `width = 31` must yield **`0x09abcdef`**. Current SBFX coverage has no width-below-32 case where sign extension must remain inactive.
+
+PC advance alone establishes forward progress, not execution of the intended operation: a NOP or failed condition can also advance PC. Nevertheless, my enumeration confirmed that all six planted bitfield words have the intended fields and AL condition.
+
+Two additional findings:
+
+- The probe’s explanation that a bad encoding stops the machine is stale for this decoder fallback: [it now routes to `cond_instr(und)`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c:4593).
+- The m88k analogy needs precision: its `w == 0` guard selects the full-width mask instead of zero. It does **not** prevent a shift by 32; its encoded shift count never reaches 32.

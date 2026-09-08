@@ -1,0 +1,52 @@
+VERDICT: The mask shift `(1 << width)` is UB at `width == 32`; `width == 32` is legal only if the ARM constraint is exactly `lsb + width <= 32` (not checkable from this packet); SITE 3 is a distinct UB; the m88k `(uint32_t)` cast is load-bearing for `w == 31`; witness achievability cannot be settled from the packet.
+
+---
+
+### 1. Premise audit (Section 2 questions)
+
+**Q1 — Is `1 << 32` undefined here?**  
+[REASONED] Yes. `1` is a plain `int`; `int` is 32 bits on the stated hosts. C99 6.5.7p3 makes a shift undefined when the right operand is ≥ the width of the promoted left operand. There is no promotion to a wider type because both operands are `int`. So `1 << 32` is UB. No promotion missed.
+
+**Q2 — Is `UBFX rd, rn, #0, #32` legal?**  
+[NOT CHECKABLE from packet] The brief states the architectural constraint is `lsb + width <= 32`. If that is the only constraint, then `lsb = 0`, `width = 32` satisfies it and the encoding is legal. However, that constraint is an external ARM spec claim, not inlined from the source. The single fact that would settle it: the ARM ARM description of `UBFX`/`SBFX`, specifically whether `widthm1 == 31` is permitted or UNPREDICTABLE. If it is UNPREDICTABLE, disposition changes entirely.
+
+**Q3 — What does the guest observe today?**  
+[NOT CHECKABLE from packet] The C code has undefined behavior, so there is no defined observation. The brief’s guess that common x86 lowering takes shift count mod 32, yielding `1 << 32 == 1`, `mask == 0`, and result zero, is plausible but not guaranteed. A compiler may assume no UB and produce anything. A measurement on a specific host/compiler would be needed.
+
+---
+
+### 2. Option-set completeness (Section 4)
+
+[REASONED] The four options cover the main space. F2 (`(uint32_t)((1ULL << width) - 1)`) is the cleanest: well-defined for all `width ∈ {1..32}`, no branch. F1 is also correct if the guard is `width == 32 ? 0xffffffffU : ((1U << width) - 1)`. F3 is wrong if the encoding is legal. F4 is only defensible if the encoding is UNPREDICTABLE.
+
+I cannot grep the fork for other idioms beyond the inlined m88k example. The m88k idiom is the only fork idiom present in the packet.
+
+---
+
+### 3. Is SITE 3 a distinct defect?
+
+[REASONED] Yes. SITE 3 is `uint32_t topBitMask = 1 << (width-1);`. At `width == 32`, this is `1 << 31` on a signed `int`, which is UB because `2^31` is not representable in `int`. The `width < 32` test appears after the shift, and because `&&` evaluates the left operand first, the shift is performed before the test can short-circuit. A fix to the mask alone leaves this UB live. Fix: use `1U << (width-1)` or hoist the `width < 32` check before computing `topBitMask`.
+
+---
+
+### 4. m88k transfer
+
+[REASONED] The m88k template is sound for ARM with the mapping `w == 0` → `width == 32`. The correct ARM form is:
+
+```c
+uint32_t mask = (width == 32) ? 0xffffffffU : ((1U << width) - 1);
+```
+
+The `(uint32_t)` cast in the m88k code is **load-bearing**, not cargo. The guard prevents `w == 32`, but it does not prevent `w == 31`. Without the cast, `1 << 31` is signed-overflow UB. The cast makes the left operand `uint32_t`, so `(uint32_t)1 << 31` is well-defined. Using `1U` in the ARM version achieves the same effect.
+
+---
+
+### 5. Witness achievability
+
+[NOT CHECKABLE from packet] The brief states that nothing in `regress/` reaches these handlers. Whether a cold-debugger probe is possible depends on whether an in-tree ARM machine can execute a crafted `UBFX` instruction through real decode. That fact is not in the packet. The single fact that would settle it: existence of an ARM machine model in `GXEMUL-SEC/src/` that can be driven to execute an arbitrary instruction stream. If such a machine exists, the probe is achievable; if not, the round is documented-only.
+
+---
+
+### Additional note on the `lsb` cast
+
+[READ from inlined decoder] The decoder packs `lsb = (iword >> 7) & 31`, so `lsb ∈ {0..31}`. The handler’s `(uint8_t)ic->arg[2]` cast is therefore dead for this producer. It is not protective: truncating to `{0..255}` still permits values ≥ 32, which would make `x >>= lsb` UB if another producer could set the low byte larger. No such producer is inlined.

@@ -1,0 +1,100 @@
+VERDICT: REPAIR CORRECT AT 1/31/32; `&&` REORDER OBSERVABLY EQUIVALENT AND IS A STRICT UB IMPROVEMENT AT W32 (not just a reorder); WITNESS UNDER-COVERS; SCOPE DEFENSIBLE; m88k LINE CITATIONS NOT CHECKABLE FROM PACKET.
+
+---
+
+## Premise audit (arithmetic, enumerated)
+
+All checks below are REASONED unless tagged READ.
+
+1. **`width ∈ {1..32}`** — REASONED from the settled decoder shape `1 + ((iword >> 16) & 31)`. Cannot independently verify the `:4486`/`:4493` lines; trusting the pass-1 settlement.
+2. **`1 << 32` UB** — REASONED (C99 6.5.7p3: shift count ≥ width of promoted left operand). ✓
+3. **`1 << 31` UB on signed `int`** — REASONED (C99 6.5.7p4: `1 × 2^31 = 2^31` is not representable in `int`; range is `[INT_MIN, INT_MAX] = [-2^31, 2^31−1]`). ✓ Brief's citation is right; the colloquial "signed overflow" is loose but not wrong.
+4. **`(INT_MIN) − 1` UB** — REASONED (signed overflow on subtraction; the brief does not cite a specific clause, only the shift clause, which is a minor citation gap, not a defect).
+5. **`INT_MIN − 1` wraps to `INT_MAX = 0x7FFFFFFF` on the committed toolchain** — REASONED for two's-complement wrap. The brief uses this as the explanation of why HEAD's w31 row passes; that is a description of *what the build does*, not a language-law claim. Internally consistent.
+6. **`1U << 31 = 0x80000000U`** — REASONED (unsigned shift, well-defined at 31).
+7. **`0x80000000U − 1U = 0x7FFFFFFFU`** — REASONED (unsigned subtraction, well-defined).
+8. **`(width == 32) ? 0xffffffffU : ((1U << width) − 1)` at width=32 yields `0xFFFFFFFFU`** — REASONED (guard fires).
+9. **`UBFX r0,r1,#0,#32` of `0x89abcdef` ⇒ `0x89abcdef`** — REASONED (whole-register extract, lsb=0).
+10. **`UBFX r0,r1,#0,#31` of `0x89abcdef` ⇒ `0x9abcdef`** — REASONED. *Self-check*: `0x89abcdef & 0x7FFFFFFF = 0x09abcdef`, and `0x9abcdef == 0x09abcdef` numerically (the leading zero is just not printed). The brief's hex does not drop a bit.
+11. **`SBFX r0,r1,#0,#31` of `0x89abcdef` ⇒ `0x9abcdef` (no sign extension)** — REASONED. Bit 30 of the 31-bit extracted field is 0 (`0x09abcdef` has its top nibble as `0`), so `x & (1U << 30) == 0`; `x |= ~mask` does not fire. The witness does not display an SBFX-w31 row, but it must exist and must be `0x9abcdef` on both builds. The "5 rows shown of 11" gap below makes this an inference, not a check.
+12. **`pc adv = 0x8004`** — READ. Load-bearing as argued.
+13. **`mid = 0xde` row** — READ, but **width and lsb are not stated**. Not checkable from the packet; cannot enumerate.
+
+The brief's claim that the UB is "TWICE" at width 31 is correct in count: `1 << 31` (per 6.5.7p4) and `INT_MIN − 1` (signed overflow). The brief cites only the first clause; the second is implicit. Minor citation gap, not an error.
+
+---
+
+## Q1 — Repair correctness and the added comment
+
+**At width=1.** `(1U << 1) − 1 = 1`. Original: `(1 << 1) − 1 = 1`. Same value, no UB. ✓
+**At width=31.** `(1U << 31) − 1 = 0x7FFFFFFFU`. Original UB twice, but wraps to the same mask on the committed toolchain, which is exactly what the w31 row shows. ✓
+**At width=32.** Guard returns `0xFFFFFFFFU`. Original UB, and on the toolchain `1 << 32` shifts by the type width and produces `0`, so mask = `0` and `x &= 0` gives `0` — which is what w32 HEAD shows. ✓
+
+**The `&&` reorder is observably identical for every width ∈ {1..32}** — REASONED.
+- Width 1..31: shift count in `[0, 30]`, both expressions evaluate to the same value, both branches of `&&` are evaluated, if-body fires iff original.
+- Width 32: in the original, `1 << 31` is UB but on the toolchain yields `0x80000000`; `x & 0x80000000` is computed; `width < 32` short-circuits the if. In the new code, `width < 32` short-circuits *before* the shift. The if-body never executes in either; r0 is the value forced by the mask alone. Same observable result.
+
+**But the reorder is not just cosmetic** — it eliminates the UB at width 32 in the SBFX operand. The comment in the diff is *slightly* misleading on this point: it says the reorder "is semantically identical for every width in {1..32}" and *separately* notes "short-circuits before the shift", which together read as "same behaviour, plus the shift doesn't run when guarded." That is accurate, but a future reader skimming will conclude "reorder only". Strictly: the reorder changes language-level behaviour at width 32 (UB → defined) while leaving observable behaviour identical. Worth tightening, not load-bearing.
+
+**Does the comment claim anything the rows do not establish?** REASONED.
+- "`UBFX r0,r1,#0,#32' of 0x89abcdef returned 0x0 ... because the mask became 0`" — w32 HEAD=0x0 (READ) supports this.
+- "At 31 ... wraps back ... returned 0x9abcdef, correct" — w31 HEAD=0x9abcdef (READ) supports this.
+- "`1U' is load-bearing and not style" — supported by 6.5.7p4 + 6.5.7p5 reasoning; the rows do not independently establish this (HEAD and FIX agree at w31 because the UB wraps back on this toolchain).
+- "The guard defends 32" — supported by the w32 rows and by source.
+
+No overclaim. The "load-bearing" claim is true but is not what the witness rows prove; the witness only proves the value. Flagging that for honesty.
+
+---
+
+## Q3 — Scope (bfi left alone)
+
+REASONED. The brief's argument is:
+- `bfi` shares the expression class but its width is `msb − lsb + 1 ∈ [−30, 32]`, so the failure modes are different (negative shift counts, not just the 32-boundary), and 496/1024 encodings are ARM-UNPREDICTABLE (`msb < lsb`).
+- The "obvious route" of routing UNPREDICTABLE encodings through `X(und)` does not compose because `bfi`'s `arg[0]` is a register pointer, not a PC offset as `X(und)` expects.
+
+That is a defensible reason to scope *this* round to the UBFX/SBFX width=32/31 defect and file bfi separately. Two reservations:
+
+- **bfi is the same expression class in the same file**. A reviewer reading the diff might reasonably read "the UBFX/SBFX width-mask defect is repaired" and assume the file is now clean; it is not. The brief does flag this clearly in §4 and says "filed", which is the right discipline.
+- The brief is not presenting a partial repair as complete; it is presenting a *bounded* repair. Correct round-scope.
+
+Verdict on scope: **defensible, correctly bounded, with the caveat that "fixed" must not be read as "the file is now UB-free at this expression class."**
+
+---
+
+## Q4 — Witness honesty: what it does not cover
+
+The witness as shown has 5 displayed rows out of 11. Cells it should assert and does not:
+
+1. **Width = 1.** The brief itself notes the codex fix-check ratified boundaries 1, 31, 32, but the *inlined witness* only covers 31 and 32. The width-1 case (mask = `0x1`, smallest field, sign-extension of the lowest bit for SBFX) is the natural symmetry to the width-32 case and is missing.
+2. **SBFX sign extension at a small width.** SBFX at width=32 cannot exercise sign extension (the field is the whole register, `~mask = 0`, `x |= 0` is a no-op). A row like `SBFX #0,#4` of a value whose bit 3 is set, expecting `0xFFFFFFFF`, would cover the `x |= ~mask` arm.
+3. **Initial register state.** The brief argues `pc adv = 0x8004` proves execution, which it does. But the witness does not, in what is shown, assert that `r0` started at a known value (presumably 0). Without that, "r0 = 0x0 after HEAD, 0x89abcdef after FIX" is consistent with the instruction never having executed *and* r0 happening to be 0x89abcdef before; the pc-adv row does exclude the latter, but a direct `r0 == 0 before` assertion would make the argument local rather than transitive.
+4. **Six rows are not shown.** The brief says 11/11; the table has 5. The other 6 are unspecified — particularly the SBFX-w31 row I had to infer in arithmetic item 11. The brief's "drives four widths on one register value" undercounts the SBFX twin of each width.
+5. **Non-zero lsb.** All visible rows are `lsb = 0`. UBFX with `lsb > 0` exercises the `x >>= lsb` half of the path; not covered.
+
+The single most valuable missing cell is **width=1**, because the brief explicitly cites it as a ratified boundary while the inlined evidence does not actually show it.
+
+---
+
+## Q2 (attempted; Codex instructed to skip) — Smallest edit that re-opens the class and still scores 11/11
+
+Two interpretations:
+
+**(a) Re-open the observable bug (width=32).** Drop the guard: `mask = ((1U << width) − 1);`. Then at width=32, `(1U << 32) − 1` — wait, `1U << 32` is still UB (C99 6.5.7p3: shift count equals type width, and `1U` is `unsigned int` of width 32). On typical toolchains unsigned `<< 32` reduces to `1U` (no shift), so `mask = 0`. That re-opens w32 UBFX *and* w32 SBFX: HEAD's behaviour is restored on those two rows, 9/11 again. **Not silent**, the witness catches it.
+
+**(b) Re-open the silent UB at width=31.** Change `1U` to `1` in either mask expression (one character deleted in each of two places, four characters total across the diff). At width=31, the expression is UB twice, but on the toolchain still wraps to `0x7FFFFFFF`. w31 rows stay `0x9abcdef` on both builds; w32 rows unaffected (guard still fires). **All 11 rows still pass.** This is the smallest re-opening of the *language-law* defect class that the witness cannot detect — exactly the regression the comment's "`1U` is load-bearing and not style" warning is meant to deter.
+
+If the question is the literal "`11/11` witness stays green", (b) is the answer and the row that stays green is **w31 (both UBFX and SBFX)**.
+
+---
+
+## Other observations
+
+- The cited `cpu_m88k_instr.c:532` / `:539` lines are **not checkable from the packet**. The idiom described (`w == 0 ? 0xffffffff : ((uint32_t)1 << w) − 1`, with `w ∈ {0..31}`) is plausible and self-consistent with ARM's `width ∈ {1..32}` under the substitution `w = width − 1`, so the analogy holds in shape even if the line numbers are wrong.
+- The brief's historical claim "this project has been bitten four times by hand-assembled encodings, once in a committed gate row that measured the wrong register for months" — **not checkable from the packet**. It is offered as motivation for the pc-adv control, which is sound regardless of whether the historical count is exact.
+- `regress/arm_bfx_width_probe.py` and the two `.raw` files — **not checkable from the packet**. Treated as given.
+- `bfi` (`:1409`) line number — **not checkable from the packet**. Treated as given for scope purposes only.
+- The `&&` reorder in `sbfx` is the second of two distinct repairs in the diff. The first (the mask guard + `1U`) is what the witness rows prove. The second (the `&&` reorder) is invisible to the witness because at width=32 the if-body never executes on either build. That invisibility is fine — the rows *cannot* refute the reorder — but it is worth noting that the witness ratifies the mask fix and is silent on the `&&` fix. The two changes are correctly bundled into one round because they are the same defect class in the same function.
+
+---
+
+**Net.** Repair correct. Reorder safe and slightly better than the comment lets on. Scope defensible. Witness would benefit from width=1, an SBFX sign-extension row, an initial-state assertion, and a display of the 6 rows it currently hides. No defect in the diff itself; one tightening opportunity in the comment ("reorder is semantically identical" → "reorder is observably identical *and* removes a second UB at width 32").

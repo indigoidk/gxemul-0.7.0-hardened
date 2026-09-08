@@ -1,0 +1,148 @@
+I'll treat this as a pass-1 design review: check the inlined premises against `GXEMUL-SEC/src/`, then answer the encoding, UB, and option-set questions from the source rather than from the brief.Session start matches the checkpoint. Next I’ll open the ARM handlers and decoder in `GXEMUL-SEC/src/` and check the ARM ARM for encoding legality.Handlers match the brief. Next I’ll read BFI (it uses the same mask form), the m88k idiom, and the ARM ARM for encoding legality.BFI also builds `(1 << width) - 1` after `width = msb - lsb + 1`, so the “BFI is correct” contrast may be wrong. Checking the ARM ARM and the rest of the mask idioms.I'll measure the host lowering of `(1 << width) - 1` at runtime — the brief guessed mod-32, and that needs a real compiler, not another guess.**VERDICT: defect is real and guest-reachable; F3/F4 are out; do not ship a width==32-only signed-shift fix.** `1 << width` is C99 UB at **both 32 (6.5.7p3) and 31 (6.5.7p4)**; `UBFX/SBFX rd,rn,#0,#32` is a legal A32 encoding; SITE 3 is a second live UB; BFI has the same mask expression. Prefer F1 with `1U` (or F2). Rung-3 is achievable. The guest-zero lowering is still unmeasured.
+
+I read `GXEMUL-SEC/src/cpus/cpu_arm_instr.c` (handlers and decoder), `cpu_m88k_instr.c`, `generate_arm_r.c`, `arm_cpu_types.h`, `cpu.h` (`uintptr_t arg[]`), `regress/*.py` (no `ubfx`/`sbfx` rows), and DDI 0100I (no UBFX/SBFX/BFI). Line numbers match the brief (fork, not `./src/`). `#510` is absent. I did not run a gate, a guest, or a host-shift binary.
+
+---
+
+## 1. Premise audit (section 2, three questions)
+
+### 1.1 Is `1 << 32` undefined here? **Yes. No missed promotion.**
+
+C99 6.5.7p3: integer promotions on each operand; result type is the promoted left operand; UB if the count is negative or `>=` the width of that type.
+
+- `1` is already `int`. Shifts do **not** do the usual arithmetic conversions. Nothing promotes it to `unsigned` or to `uint32_t` just because the result is stored in `uint32_t`.
+- `int` is 32 bits on every host this tree actually builds (LP64 / LLP64). `configure` never passes `-fwrapv`.
+- So `width == 32` is a p3 violation on SITES 1 and 2.
+
+**The brief understates the same expression.** 6.5.7p4: if the left operand is signed and `E1 × 2^E2` is not representable in the result type, that is also UB. `1 × 2^31 = 2147483648 > INT_MAX`. So **`(1 << 31)` is UB too**, even though 31 `<` 32.
+
+Width domain from the decoder, walked:
+
+`widthm1 = (iword >> 16) & 31` → `{0,1,…,31}`  
+`width = 1 + widthm1` → `{1,2,…,32}`
+
+| width | `1 << width` | clause | legal encodings (`lsb + width <= 32`) |
+|---|---|---|---|
+| 1..30 | defined | — | many |
+| **31** | **UB** | **p4** (`1<<31`) | **lsb ∈ {0,1}** — two legal cells |
+| **32** | **UB** | **p3** (count = width of `int`) | **lsb = 0 only** — one legal cell |
+
+This is the same class the brief already cited as `lcashiftub` (`1 << 31` in a signed `int`). A fix that special-cases only `width == 32` and leaves `(1 << width)` in the else still has UB on `UBFX rd,rn,#0,#31`.
+
+### 1.2 Is `UBFX rd,rn,#0,#32` legal? **Yes. Not UNPREDICTABLE.**
+
+DDI 0100I does **not** contain UBFX/SBFX/BFI (ARMv6T2 / ARMv7). Legality is from the ARMv7-A/R/M ARM, not from the local manual.
+
+A32 UBFX A1: `widthm1` in bits 20:16, `lsb` in 11:7. Assembler: width in `1 .. 32-lsb`. Pseudocode: `msbit = lsbit + widthminus1`; **UNPREDICTABLE iff `msbit > 31`**.
+
+For `#0,#32`: `widthm1=31`, `lsb=0`, `msbit=31`, which is `<= 31`. **Defined.** Same constraint on SBFX. Full-width SBFX is `SignExtend(R[n]<31:0>, 32)` = identity on a 32-bit register.
+
+Decoder match, enumerated:
+
+- mask `(iword & 0x0fe00070) == 0x07e00050` (UBFX) / `0x07a00050` (SBFX) — matches A1
+- 32×32 = **1024** `(lsb,width)` pairs per Rd,Rn,cond
+- legal: `lsb + width <= 32` → `Σ_{L=0..31}(32-L) = 528`
+- UNPREDICTABLE: 496. Decoder does **not** implement that check; those words still enter the handler. Out of scope for the mask fix; it does **not** make the legal `#0,#32` cell UNPREDICTABLE.
+
+F3 (reject the encoding) and F4 (leave it) are therefore wrong for this cell.
+
+Rd/Rn = 15 is a separate UNPREDICTABLE; also unchecked. Not this defect.
+
+### 1.3 What does the guest see today? **Unmeasured. The zero-mask story is a lowering, and it is not the only one.**
+
+I did not run a host binary. Name it as such.
+
+Two common lowerings of a 32-bit `SHL` by a runtime 32, with opposite guest results after the `- 1`:
+
+| host lowering of `1 << 32` | `(1<<32)-1` as `uint32_t` | UBFX `#0,#32` |
+|---|---|---|
+| count mod 32 (x86 32-bit `SHL`: 32 → 0) → `1` | `0` | **zeros Rd** |
+| shift yields `0` | `-1` → `0xffffffff` | **accidentally correct** |
+
+So “the guest sees zero” is **not** a C fact. It is one ISA’s wrapping. The defect to fix is the UB (and host-dependence), not a measured wrong constant. A detector must pin the architectural answer (`Rd = Rn` for `#0,#32`), not pin “today’s host returns 0”.
+
+---
+
+## 2. Option set — incomplete as written; F3/F4 out
+
+**Fork idioms, grepped, not assumed:**
+
+1. **m88k `clr`/`set`** (`cpu_m88k_instr.c`, `w == 0 ? 0xffffffff : ((uint32_t)1 << w) - 1`) — full-width **mask**.
+2. **m88k `ext`/`extu`/`mak`** — full-width as `w == 0` meaning skip the mask/shift-to-end. Closer **semantic** match for extract than clr/set.
+3. **This same CPU, `generate_arm_r.c`:** LSR/ASR-by-32 is **not emitted** as `x >>= 32`; it is `x = 0` / sign-fill. Carry bit is `(int)(1U << (c-1))`. Register LSL is `if (y > 31) return 0; else x <<= y`. The ARM shifter already refuses a C shift by 32.
+
+Members:
+
+| id | form | keep? |
+|---|---|---|
+| **F1** | `width==32 ? 0xffffffffU : ((1U << width)-1)` plus hoist SITE 3 | **Yes** — transferred m88k/ARM-shifter structure. The `1U` is load-bearing (width 31). A signed `1` in the else is a non-fix. |
+| **F2** | `(uint32_t)((1ULL << width) - 1)` | **Yes** — defined for every value in `{1..32}`, no branch. SITE 3 still needs `1U` or a hoist. |
+| **F3** | reject at decode | **No** for the legal cell. A *narrow* reject of `lsb+width>32` is a different member and does not close `#0,#32`. |
+| **F4** | document only | **No** — encoding is legal. |
+| **F5** (unnamed) | m88k `extu`: after `x >>= lsb`, if `width<32` then shift to the top and down (`x <<= 32-width; x >>= 32-width`); SBFX uses arithmetic right shift. Width 32 is identity. Avoids building a mask. | Valid transfer, bigger rewrite than the mask. |
+| **F6** (unnamed) | `mask = 0xffffffffU >> (32-width)` | Defined for `{1..32}` (`>>0` at width 32). No 64-bit type, no `1<<32`. |
+
+**Prefer F1-with-`1U` or F2.** F1 has the in-tree warrant; F2 is the smaller surface (one expression, no 32-predicate to get wrong). Do not invent a new mask style.
+
+---
+
+## 3. SITE 3 is a distinct defect
+
+```c
+uint32_t topBitMask = 1 << (width-1);   /* always runs */
+if (x & topBitMask && width < 32)
+    x |= ~mask;
+```
+
+At `width == 32` this is `1 << 31` — **p4, same class as SITE 1 at width 31**. The `width < 32` test sits **after** the shift, so it does not save it.
+
+A mask-only fix leaves this UB live. At width 32 the body is a no-op anyway (and `~mask` is 0 if the mask is all-ones), but the shift still executes.
+
+Repair: hoist `if (width < 32)` around SITE 3, **or** write `1U << (width-1)` (defined for `{1..32}` because the count is then 0..31). Hoist is the clearer one: at 32, SBFX is identity and should not compute a sign bit.
+
+---
+
+## 4. m88k transfer
+
+**Structure transfers; the predicate does not copy verbatim; the cast is not cargo.**
+
+- m88k spells full width as `w == 0` with `w ∈ {0..31}`. ARM spells it as `width == 32` with `width ∈ {1..32}`. `w == 0 ? …` on ARM would be dead (decoder never produces 0) and would still shift by 32.
+- Sound form: `width == 32 ? 0xffffffffU : ((uint32_t)1 << width) - 1`. Guard covers p3 at 32; unsigned left operand covers p4 at 31.
+- **`(uint32_t)1` is load-bearing given the guard.** The guarded branch still shifts by 31. `(uint32_t)1 << 31` is defined; `1 << 31` is not. Dropping the cast while keeping the `== 32` guard re-introduces `lcashiftub` on every legal width-31 encoding.
+
+m88k `ext` is the better *extract* analogue (SITE 3’s sign bit is `(uint32_t)1 << (w-1)` with `w != 0`, so the count is 0..30 there; ARM’s SITE 3 reaches 31).
+
+---
+
+## 5. Witness ladder — rung-3 is achievable. This is not documented-only.
+
+`regress/*.py` has **zero** `ubfx`/`sbfx` rows (the brief’s absence claim holds for probes; the only hits are a class-hunt log under `regress/artifacts/`). `gate_arm.sh`’s 358 checks do not reach these handlers. The filed queue note that “a decode row has an existing vehicle” is too strong: you owe a **new** probe, not a row spliced into an existing list.
+
+A cold-debugger probe **is** possible on an unmodified in-tree machine:
+
+- Decoder is architecture-ungated and already implements UBFX/SBFX as A32.
+- `arm_flags_probe.py` already plants ARMv6 encodings (`uxtab`/`uxtah`) on `testarm`/SA1110 (ARMv4) and reads a result register. Same shape: plant `UBFX r0,r1,#0,#32` (`0xe7ff0051` for AL,r0,r1), plus a width-8 liveness row, read `r0`.
+- In-tree ARMv7 CPU exists (`androidarm` → `CORTEX-A5` / Snapdragon S2). Architectural legality of UBFX is real on that type. The proven probe machine is still `testarm`; the handler is the same function.
+
+Rung-4 boot is not needed and is probably not available (no gate boots a v6T2/v7 image to a UBFX). Rung-1 `#include` of the handler is not a reproduction.
+
+---
+
+## Other findings (not ratification)
+
+**BFI contrast is false.** The brief and the `OUTSTANDING_BUGS.md` filing both say BFI “never shifts by a value reaching 32”. The handler does:
+
+```c
+int width = msb - lsb + 1;          /* msb,lsb ∈ {0..31} → width up to 32 */
+uint32_t mask = (1 << width) - 1;   /* :1370, same expression */
+```
+
+`BFI rd,rn,#0,#32` is the legal full-width insert (`msb=31,lsb=0`). Same p3/p4 UB. Symptom under the mod-32 lowering: mask 0 → Rd unchanged (not zeroed). Same file, same class, same detector can carry it. It should join, or be named as a same-round site, not held up as the clean neighbour.
+
+BFI also hits **negative `width`** when `msb < lsb` (architecturally UNPREDICTABLE, decoder still runs it) — `1 << (negative)` is a third UB. Separate from the legal `#0,#32` cell.
+
+**`(uint8_t)ic->arg[2]` is not a 5-bit bound.** Only producer is the decoder’s `(iword >> 7) & 31`. `arg[]` is `uintptr_t`. The cast yields `{0..255}`, not `{0..31}`. Identity on current packing; not load-bearing. If a future producer put 32..255 in the low byte, `x >>= lsb` on `uint32_t` is a third shift UB. No other `cond_instr(ubfx|sbfx|bfi)` site.
+
+**Do not write F1’s else with a signed `1`.** That is the one-character mutant this tree already treats as a floor breach on other rounds.
+
+I did not measure the host lowering of `1 << 32`. A first detector row should be architectural (`Rd == Rn` on `#0,#32` with `Rn != 0`), with a width-8/width-31 pair so a width==32-only repair still reds.

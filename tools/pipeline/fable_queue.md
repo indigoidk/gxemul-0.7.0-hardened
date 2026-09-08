@@ -41,7 +41,7 @@ those panels produced had six or seven seats behind it.
 <!-- BEGIN GENERATED: codex-wall -- edit gen_codex_wall.py, not this block -->
 ### HELD STAGES -- every row awaiting a seat, derived from the ledger
 
-`carrier` (regress:fable5) · `es438` (regress:fable5) · `gdromcondlies` (regress:fable5) · `holdmarkermulti` (regress:fable5) · `lcabadval` (assess:codex,fable5,grok,kimi,opus5; research:fable5) · `ns16550` (regress:fable5) · `pcc2widthkills` (assess:fable5,opus5) · `proberowsubset` (assess:codex) · `sgideprimop` (regress:fable5) · `sgidewidth` (regress:fable5) · `sgimtedepth4dead` (assess:fable5,opus5; review:fable5,opus5) · `sgirekills` (assess:codex,grok,kimi,opus5) · `sgireunmapped` (regress:fable5) · `sgitexindex` (assess:codex,fable5,grok,kimi,opus5) · `sh4sci` (regress:fable5) · `wdccdbmidxfer` (regress:fable5; research:opus5) · `wdcdataoutdrain` (regress:fable5)
+`armbfxwidth32` (assess:fable5,opus5; review:fable5,opus5) · `carrier` (regress:fable5) · `es438` (regress:fable5) · `gdromcondlies` (regress:fable5) · `holdmarkermulti` (regress:fable5) · `lcabadval` (assess:codex,fable5,grok,kimi,opus5; research:fable5) · `ns16550` (regress:fable5) · `pcc2widthkills` (assess:fable5,opus5) · `proberowsubset` (assess:codex) · `sgideprimop` (regress:fable5) · `sgidewidth` (regress:fable5) · `sgimtedepth4dead` (assess:fable5,opus5; review:fable5,opus5) · `sgirekills` (assess:codex,grok,kimi,opus5) · `sgireunmapped` (regress:fable5) · `sgitexindex` (assess:codex,fable5,grok,kimi,opus5) · `sh4sci` (regress:fable5) · `wdccdbmidxfer` (regress:fable5; research:opus5) · `wdcdataoutdrain` (regress:fable5)
 
 *** TWO DIFFERENT KINDS OF HOLD APPEAR BELOW AND THEY MUST NOT BE READ ALIKE. ***
 
@@ -60,7 +60,7 @@ marker can mask another gap* -- section H cannot see a shortfall that a differen
 **Neither kind is a blank.** A blank cell and a seat failure must not look alike, and an
 allocation is a third thing again: recorded by seat name, per row, with the reason.
 
-**This is ONE outage plus one allocation, not 17 decisions, and it is written once rather than once per panel.**
+**This is ONE outage plus one allocation, not 18 decisions, and it is written once rather than once per panel.**
 **THE CODEX HISTORY, kept because it calibrates what a wall looks like.** Across ten panels it
 produced the identical signature every time -- the echoed brief followed by the usage-limit
 error -- in files of 26,992 / 11,180 / 10,036 / 8,323 / 12,414 / 11,938 / 10,726 / 16,694 /
@@ -1941,3 +1941,90 @@ least work, which is why it wants an adjudication.**
 *If the form is refused, the fallback is to drop the three rows and accept that RGB-for-RGBA is
 undetectable at this site -- which three seats independently called this round's most dangerous
 escape. That is the cost, stated so the ruling can weigh it.*
+
+
+## 7h. ADDED 2026-09-07 (late) — `#510` armbfxwidth32: THREE QUESTIONS, one of them about whether
+## a round may ship a KNOWN-UNKILLABLE escape
+
+### `armbfxwidth32` -- the row these questions belong to
+
+Both stages stand at **7/9 awaiting opus5 and fable5**. `#510` fixed three sites in
+`cpu_arm_instr.c` where `(1 << width) - 1` was undefined at width 32 (and at 31), with a rung-3
+witness measured **9/11 pre-fix, 12/12 post-fix**.
+
+---
+
+### 7h-1. (HIGH) *** MAY A ROUND SHIP AN ESCAPE IT KNOWS IT CANNOT KILL, WHEN THE VEHICLE THAT
+### COULD KILL IT ALREADY EXISTS IN THE TREE? ***
+
+Pass 2 (grok) found two one-line regressions that re-open real undefined behaviour and score
+**full marks** on the 12-row witness:
+
+    `1U' -> `1' in the mask ternary                     re-opens C99 6.5.7p4 at width 31
+    restore `topBitMask = 1 << (width-1)' above the if  re-opens the second UB
+
+**Neither is killable by any row, and the reason is structural rather than a thin row set.** Both
+are DEFINEDNESS repairs, and definedness has no guest-visible value on a non-trapping host:
+`1 << 31` and `1U << 31` yield the same mask after the `- 1`, and with a correct 32-bit mask
+`x |= ~mask` is `x |= 0`. *This also means `s w32` pins the MASK and not `topBitMask` — the probe
+comment claimed otherwise and is corrected.*
+
+> **BUT THE TREE ALREADY HAS THE VEHICLE.** `build-asan` carries `-fsanitize=address,undefined`,
+> and `regress/gate_asan_sweep.sh` exists. A UBSAN DIFFERENTIAL pins both — fixed source produces
+> no shift diagnostic, the `1U`->`1` mutant produces one — and it would cover the whole class:
+> `lcashiftub`, `sgirebufshiftub`, `m88k_rot:513`, `cpu_mips_instr.c:1757` and the two
+> `is_userpage` sites. **Eight sites across three CPUs, none visible to a value oracle.**
+
+**I DID NOT BUILD IT, and the reason is the question.** It is a NEW MEASUREMENT LANE — a second
+binary and a STDERR oracle instead of a value oracle — and this round's pass 2 had already run.
+**A lane added after a pass is a lane nobody reviewed.** So I shipped with the escape disclosed in
+the probe header and filed the lane as `ubsanshiftlane`.
+
+> **The question, stated so it generalises past this round: when a floor-relevant escape is
+> unkillable by the round's instrument BUT killable by a lane the tree already has, is disclosing
+> it sufficient, or does the round owe the lane in-round?**
+>
+> The pull is real in both directions. *Owing it in-round* means every round that touches UB
+> acquires a second measurement lane and a second pass — which is the `#392` shape. *Disclosing*
+> means a clause-(d) escape ships with a full score beside it, and this project's own vacuity
+> floor exists because a full score beside a live escape is exactly what it refuses.
+>
+> **My disposition was DISCLOSE, and it is the one that costs less work, which is why it wants
+> adjudication rather than my say-so.**
+
+---
+
+### 7h-2. (MED) IS LEAVING `bfi` A CORRECT ONE-SITE SCOPING, OR A PARTIAL REPAIR? — kimi's challenge
+
+`#510` fixed `ubfx` and `sbfx` and **left `bfi` alone**, on the ground that its
+`width = msb - lsb + 1` spans **-30..32** (465 pairs strictly negative, 31 giving width 0) and
+that ARM calls `msb < lsb` UNPREDICTABLE, with the fork answering that class inconsistently.
+
+**The kimi substitute refused that rationale as too broad, and it is right:** `bfi`'s
+**`msb = 31, lsb = 0` cell is architecturally DEFINED**, gives width 32, and is **the same
+`(1 << 32) - 1` defect this round just fixed twice** — the same ternary would fix it. So the
+UNPREDICTABLE argument covers `msb < lsb` and does **not** cover bfi's width-32 cell.
+
+grok, independently, called leaving bfi *"a correct use of the one-site rule, not a partial repair
+sold as complete"* — while agreeing the legal cell is the same defect.
+
+> **So: does the one-site rule permit leaving a KNOWN, DEFINED, IDENTICAL-EXPRESSION cell unfixed
+> because its NEIGHBOURING cells raise a design question?** Or does "same defect, same file, same
+> one-token fix" oblige the round to take it, and confine the scoping argument to the
+> UNPREDICTABLE half?
+>
+> *Note the witness does not cover bfi either way — there is no bfi row — so taking it would also
+> have owed a row.*
+
+---
+
+### 7h-3. (MED) WHAT SHOULD `bfi` DO WHEN `msb < lsb`?  *(the row's `hold_question`)*
+
+496 encodings reach it. ARM says UNPREDICTABLE. **No seat could settle it from the tree**, and a
+codex pass examined 13 comparable decisions to say so: no-op has bitfield precedent, conditional
+UND has decoder precedent, `cpu_arm_instr_loadstore.c:204` picks another defined result for an
+UNPREDICTABLE halfword load, and **`#312`'s own comment argues AGAINST halting**.
+
+*** AND THE OBVIOUS ROUTE IS WRONG AS WRITTEN: `X(und)` expects `arg[0]` to hold a PC OFFSET, and
+`bfi`'s `arg[0]` is a REGISTER POINTER. *** Routing bfi's unchanged call record there would hand a
+pointer to code that reads an offset.

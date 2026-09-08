@@ -1,0 +1,3322 @@
+Reading additional input from stdin...
+OpenAI Codex v0.153.4
+--------
+workdir: C:\DocumentNoSnc\CC\GXEMUL
+model: gpt-6-astra
+provider: openai
+approval: never
+sandbox: read-only
+reasoning effort: max
+reasoning summaries: none
+session id: 01a07e10-2579-7162-9101-ce11d666e721
+--------
+user
+# PASS 1 DESIGN BRIEF — `armbfxwidth32`
+## `UBFX`/`SBFX` build a full-width mask with a shift equal to the type's width
+
+## READ THIS FIRST — PLEASE DO NOT SIMPLY RATIFY
+
+A recent panel had seven of nine seats confirm a premise this brief's author stated
+wrongly, and the panel one round ago found THREE errors in a brief of mine — including a
+count that two seats corrected independently.  **Check the premises, not just the
+derivations.**  A seat that re-derives a premise from something this brief did NOT give it
+is worth more than a seat that agrees.
+
+**THE TREE UNDER REVIEW IS `GXEMUL-SEC/src/`.**  There are THREE pristine-2021-upstream
+copies of GXemul under the project root (`./src/` and two under
+`_archive/audit-results-*/builds/`).  They are NOT this fork.  If your line numbers
+disagree with mine by hundreds you are reading one of them — say so rather than
+reconciling.
+
+**If you cannot read files that is expected** — every fact you need is inlined.  Name any
+premise you cannot settle from this packet rather than guessing at it.
+
+**Where this brief states an ARITHMETIC claim — a value range, a shift count, a set of
+reachable encodings — ENUMERATE it rather than reasoning about it.**  Walk the values.
+**And ENUMERATE THE RIGHT DOMAIN:** ask what the PRODUCER can actually emit before walking.
+
+**VERDICT LINE FIRST**, so your answer survives truncation.
+
+### If you can read files
+Scope your reading to `GXEMUL-SEC/src/` and `GXEMUL-SEC/regress/*.py`.
+**Do not read `regress/artifacts/` or `tools/pipeline/ledger.json`** — bulk historical
+records, not evidence for this question.
+
+---
+
+## 0. HAS THIS ROUND ALREADY SHIPPED?  No.
+`grep -n '#510' src/cpus/cpu_arm_instr.c` returns nothing.  The expressions below are
+unmodified upstream text.  The most recent correction tag in this file is `#312`, in the
+Undefined-Instruction arm a few lines below the decoder discussed here.
+
+---
+
+## 1. PREMISES ALREADY SETTLED, RE-INLINED
+
+Settled by a codex class-hunt of 2026-09-07 (224 files screened, 60 expression sites traced
+across 18 files) and **re-verified by direct reading before this brief was written**.  It was
+found while answering a different question — a hunt for bit-count/byte-count confusion — and
+the seat said plainly that this is NOT that class.
+
+* **`SBFX` and `UBFX` decode their width identically, and it reaches 32.**
+  `cpu_arm_instr.c:4486` (ubfx) and `:4493` (sbfx) both read
+  `int width = 1 + ((iword >> 16) & 31);` — a five-bit field plus one, so `width ∈ {1..32}`.
+  Both pack it as `ic->arg[2] = (width << 16) + lsb;`.
+* **Both handlers recover it and shift by it.**  `:1314`/`:1338` do
+  `int width = ic->arg[2] >> 16;`, and `:1316`/`:1340` do `uint32_t mask = (1 << width) - 1;`.
+* **`BFI`, two blocks up, is DIFFERENT and is correct.**  `:4474-4480` packs `msb`
+  (`int msb = (iword >> 16) & 31;`), not a width, and never shifts by a value reaching 32.
+  It is inlined below as the contrast case.
+* **This tree already treats a signed-shift overflow as a real defect**, filed as
+  `lcashiftub` (`0x800 << dev` reaching `1 << 31` in a signed `int`) and as
+  `sgirebufshiftub` (`buf[0] << 24` on a promoted `uint8_t`).  So the CLASS has precedent
+  here; what is new is the width-32 case and its architectural reachability.
+
+* *** THE FORK ALREADY SOLVES THIS EXACT PROBLEM, IN ANOTHER CPU.  Found by running the
+  grep-the-fork-for-the-idiom step BEFORE writing the questions, and it is inlined here
+  rather than left for a seat to rediscover: ***
+
+      src/cpus/cpu_m88k_instr.c:532   uint32_t x = w == 0? 0xffffffff : ((uint32_t)1 << w) - 1;
+      src/cpus/cpu_m88k_instr.c:539   uint32_t x = w == 0? 0xffffffff : ((uint32_t)1 << w) - 1;
+
+  These are `X(clr)` and `X(set)`, the m88k bit-field clear/set instructions.  Their width
+  comes from `int w = (reg(ic->arg[2]) >> 5) & 0x1f`, so **`w` is {0..31}** and the encoding
+  uses `w == 0` to MEAN 32 -- which is why the guarded branch only ever shifts by {1..31}.
+  **The guard is what avoids the undefined shift, not the cast** -- `(uint32_t)1 << 32` is
+  equally undefined, since 32 is the width of `uint32_t` too.
+  **QUESTION: does that transfer?**  m88k spells "full width" as `0`; ARM spells it as `32`.
+  The shapes look identical and I do not want that assumed -- say whether the transfer is
+  sound, and whether `(uint32_t)1` is doing anything at all given the guard.
+
+* *** MEASURED COVERAGE FACT, and it changes the round's shape: NOTHING IN `regress/` TESTS
+  `ubfx` OR `sbfx` TODAY. ***  `grep -rn -i 'ubfx|sbfx' regress/` returns hits in exactly two
+  files and **both are a codex log's own quotation of the source**, not a probe row.  So
+  `gate_arm.sh`'s 358 real-decode checks do NOT reach these handlers, and this round owes a
+  NEW witness rather than a row added to an existing one.  *An absence like this is worth as
+  much as the defect: it says how the defect survived.*
+
+---
+
+## 2. THE CLAIM, STATED AS A QUESTION
+
+`1` in `(1 << width)` is a plain `int`.  At `width == 32` that shifts by the full width of
+the type.  **Is that undefined behaviour, and is `width == 32` reachable from a legal guest
+instruction?**  Please settle both separately — I believe both, and the second is the one
+that decides whether this is a defect or a curiosity.
+
+Three things I would like checked rather than accepted:
+
+1. C99 6.5.7p3 makes a shift undefined when the right operand is >= the width of the
+   promoted left operand.  `int` is 32 bits on every host this project builds on.  **Does
+   that make `1 << 32` undefined here, or is there a promotion I have missed?**
+2. The ARM encoding for `UBFX`/`SBFX` carries `widthm1` in bits 20:16 and the architectural
+   constraint is `lsb + width <= 32`.  So `UBFX rd, rn, #0, #32` — `lsb = 0`,
+   `widthm1 = 31` — appears legal.  **Is it?**  If it is UNPREDICTABLE rather than legal,
+   this changes disposition entirely.
+3. **What does the guest actually observe today?**  I claim that on the common host
+   lowering (shift count taken mod 32) `1 << 32` yields `1`, so `mask` becomes `0` and
+   `x &= mask` returns **zero instead of the whole register**.  That is a guess about a
+   lowering, not a measurement, and I want it named as such.
+
+---
+
+## 3. THE FULL ENCLOSING FUNCTIONS
+
+**`arm_instr_ubfx`, `src/cpus/cpu_arm_instr.c`** — the whole handler:
+
+```c
+/*
+ *  ubfx:  Unsigned Bit-Field Extract.
+ *
+ *  arg[0] = ptr to rd
+ *  arg[1] = ptr to rn
+ *  arg[2] = (width << 16) + lsb
+ */
+X(ubfx)
+{
+	uint32_t x = reg(ic->arg[1]);
+
+	int lsb = (uint8_t)ic->arg[2];
+	int width = ic->arg[2] >> 16;
+
+	uint32_t mask = (1 << width) - 1;            /*  <<<< SITE 1  */
+
+	x >>= lsb;
+	x &= mask;
+
+	reg(ic->arg[0]) = x;
+}
+Y(ubfx)
+```
+
+**`arm_instr_sbfx`** — the same shape plus a sign-extension tail:
+
+```c
+/*
+ *  sbfx:  Signed Bit-Field Extract.
+ *
+ *  arg[0] = ptr to rd
+ *  arg[1] = ptr to rn
+ *  arg[2] = (width << 16) + lsb
+ */
+X(sbfx)
+{
+	uint32_t x = reg(ic->arg[1]);
+
+	int lsb = (uint8_t)ic->arg[2];
+	int width = ic->arg[2] >> 16;
+
+	uint32_t mask = (1 << width) - 1;            /*  <<<< SITE 2  */
+	x >>= lsb;
+	x &= mask;
+
+	uint32_t topBitMask = 1 << (width-1);        /*  <<<< SITE 3  */
+	if (x & topBitMask && width < 32)
+		x |= ~mask;
+
+	reg(ic->arg[0]) = x;
+}
+Y(sbfx)
+```
+
+*** THE TWO BLOCKS ABOVE ARE NOW VERBATIM.  An earlier draft of this brief RECONSTRUCTED them
+from a grep and got two things wrong: it wrote `lsb = ic->arg[2] & 0xffff` where the source has
+`(uint8_t)ic->arg[2]`, and it folded `x >>= lsb` into the initialiser, i.e. BEFORE the mask is
+built rather than after.  Corrected by opening the file before sending.  Flagging it because a
+brief that mis-inlines the function it asks about is this project's most expensive recurring
+defect, and the seats cannot detect it. ***
+
+**One consequence of the real text worth checking:** `lsb` is taken through a `uint8_t` cast,
+so it is `{0..255}` truncated -- while the decoder packs `(iword >> 7) & 31`, i.e. `{0..31}`.
+**Is the cast load-bearing, or is it dead defensive width-trimming?**  If some other producer
+could put a larger value in `arg[2]`'s low byte, `x >>= lsb` is a second shift question.
+
+**SITE 3 is a separate question and I want it answered separately.**  At `width == 32`,
+`1 << 31` on a signed `int` is `2^31`, which `int` cannot represent.  **And note the
+`width < 32` test that would have made it moot sits AFTER the shift, on the next line.**
+Is that a second instance, or does something make it benign?
+
+**The decoder, all three neighbours, so the contrast is visible:**
+
+```c
+			} else if ((iword & 0x0fe00070) == 0x07c00010) {
+				ic->f = cond_instr(bfi);
+				...
+				int lsb = (iword >> 7) & 31;
+				int msb = (iword >> 16) & 31;      /*  BFI packs msb  */
+				ic->arg[2] = (msb << 16) + lsb;
+			} else if ((iword & 0x0fe00070) == 0x07e00050) {
+				ic->f = cond_instr(ubfx);
+				...
+				int lsb = (iword >> 7) & 31;
+				int width = 1 + ((iword >> 16) & 31);   /*  UBFX packs width  */
+				ic->arg[2] = (width << 16) + lsb;
+			} else if ((iword & 0x0fe00070) == 0x07a00050) {
+				ic->f = cond_instr(sbfx);
+				...
+				int lsb = (iword >> 7) & 31;
+				int width = 1 + ((iword >> 16) & 31);   /*  SBFX packs width  */
+				ic->arg[2] = (width << 16) + lsb;
+			} else {
+```
+
+---
+
+## 4. THE OPTION SET I CAN SEE
+
+* **F1** `uint32_t mask = (width == 32) ? 0xffffffffU : ((1U << width) - 1);` at both sites,
+  and hoist the `width < 32` test above SITE 3.
+* **F2** `uint32_t mask = (uint32_t)((1ULL << width) - 1);` — 64-bit intermediate, no
+  branch, and it is well-defined for every value in `{1..32}`.
+* **F3** Reject the encoding at decode time.  Wrong if the encoding is legal.
+* **F4** Leave it and document.  Only defensible if `width == 32` is UNPREDICTABLE.
+
+**Please tell me if there is a member I have not named, and GREP THE FORK for how it already
+builds full-width masks** — this tree has an existing idiom question here and I have not
+looked.  That instruction has twice produced an option nobody argued for.
+
+---
+
+## 5. WHAT I AM NOT ASKING FOR
+
+Do not construct a guest program or an edit that reaches this.  **Answer what is TRUE**: the
+value range, the legality of the encoding, whether the C is undefined, whether SITE 3 is a
+second instance, and what the fork's existing idiom is.  I will build the witness separately.
+
+---
+
+## 6. QUESTIONS
+
+1. **The premise audit** — questions 1, 2 and 3 of section 2, each answered separately.
+2. **Option-set completeness** (section 4), with the fork's own idiom grepped.
+3. **Is SITE 3 a distinct defect from SITES 1 and 2**, i.e. would a fix to the mask alone
+   leave a live UB?
+4. **The m88k transfer** (settled-premise 5).  Is `w == 0 ? 0xffffffff : ((uint32_t)1 << w) - 1`
+   the right template here, given that ARM spells full-width as 32 rather than 0?  And is
+   the `(uint32_t)` cast load-bearing once the guard exists, or is it cargo?
+5. **Given that nothing in `regress/` reaches these handlers today** — which rung of the
+   witness ladder is achievable?  A cold-debugger probe would need a real `UBFX` encoding
+   executed through real decode on an unmodified in-tree ARM machine.  **Say whether that is
+   possible, not how to build one** — if it is not, this round is documented-only and I would
+   rather know that now.
+
+If, while verifying a claim, you found something ELSE — say so.
+
+
+## OPERATIONAL RULE FOR EVERY SEAT (appended by panel.sh, not by the author)
+
+**Do not run `run.sh`, any `gate_*.sh`, or the battery.** Every measurement you need is
+inlined above. A gate takes minutes -- longer than your response budget -- and a second
+concurrent invocation corrupts the operator run in progress, because the gates share one
+log directory. A seat that runs a gate produces no review AND may invalidate someone
+else s. Building and running a single detector or mutant in your own temp directory is
+fine and encouraged; driving the harness is not.
+
+If you want a measurement that is not inlined, NAME IT and say why. Naming it is worth
+far more to this panel than a timeout.
+codex
+I’ll read the fork under `GXEMUL-SEC/src/`, enumerate the decoder’s output domain, and verify the C and ARM rules against primary sources. I’ll also inspect the permitted regression scripts for coverage and probe feasibility.
+
+web search: 
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "Get-Location; rg --files GXEMUL-SEC/src GXEMUL-SEC/regress -g AGENTS.md -g '*.py' -g '*arm*' -g '*m88k*' -g '*configure*' -g '*Makefile*' -g 'include/types.h' -g '"'!artifacts/**'"'" in C:\DocumentNoSnc\CC\GXEMUL
+ succeeded in 192ms:
+
+GXEMUL-SEC/src\symbol\Makefile.skel
+GXEMUL-SEC/src\symbol\Makefile
+GXEMUL-SEC/regress\wdc_latch_census.py
+GXEMUL-SEC/regress\wdc_flood_probe.py
+GXEMUL-SEC/regress\wdc_altoffset_sig_probe.py
+GXEMUL-SEC/regress\wdc_altoffset_probe.py
+GXEMUL-SEC/regress\wdc_altoffset_4bit_probe.py
+GXEMUL-SEC/regress\wdc_addtoinbuf_probe.py
+GXEMUL-SEC/regress\sh_tlbmulti_probe.py
+GXEMUL-SEC/regress\sh_rounding_probe.py
+GXEMUL-SEC/regress\sh_pclock_probe.py
+GXEMUL-SEC/regress\sh_iprbcd_probe.py
+GXEMUL-SEC/regress\sh_intprio_probe.py
+GXEMUL-SEC/regress\sh_halt_probe.py
+GXEMUL-SEC/regress\sh4_val_witness.py
+GXEMUL-SEC/regress\sh4_val_probe.py
+GXEMUL-SEC/regress\sh4_tlbda2_witness.py
+GXEMUL-SEC/regress\sh4_tlbda2_probe.py
+GXEMUL-SEC/regress\sh4_sci_witness.py
+GXEMUL-SEC/regress\sh4_sci_probe.py
+GXEMUL-SEC/regress\sh4_rtcsr_witness.py
+GXEMUL-SEC/regress\sh4_rtcsr_probe.py
+GXEMUL-SEC/src\promemul\Makefile.skel
+GXEMUL-SEC/regress\sh4_pcic_probe.py
+GXEMUL-SEC/regress\sh4_chcr_witness.py
+GXEMUL-SEC/src\promemul\Makefile
+GXEMUL-SEC/regress\sh4_chcr_probe.py
+GXEMUL-SEC/regress\sh4_bsc_width_probe.py
+GXEMUL-SEC/regress\sh4pcic_witness.py
+GXEMUL-SEC/regress\sgi_re_width_probe.py
+GXEMUL-SEC/regress\sgi_re_unmapped_probe.py
+GXEMUL-SEC/regress\sgi_re_rgb_probe.py
+GXEMUL-SEC/regress\sgi_re_randompixel_probe.py
+GXEMUL-SEC/regress\sgi_mte_fill_probe.py
+GXEMUL-SEC/regress\sgi_eaddr_probe.py
+GXEMUL-SEC/regress\sgi_de_width_probe.py
+GXEMUL-SEC/regress\sgi_de_primop_probe.py
+GXEMUL-SEC/regress\selftest_logdir.py
+GXEMUL-SEC/regress\selftest_inactivity.py
+GXEMUL-SEC/regress\selftest_budget.py
+GXEMUL-SEC/regress\selftest_absorb.py
+GXEMUL-SEC/regress\gdrom_decline_probe.py
+GXEMUL-SEC/regress\gdrom_data_probe.py
+GXEMUL-SEC/regress\gdrom_cond_probe.py
+GXEMUL-SEC/regress\gate_m88k_rounding.sh
+GXEMUL-SEC/regress\gate_arm.sh
+GXEMUL-SEC/regress\footbridge_sites_probe.py
+GXEMUL-SEC/regress\fbpending_witness.py
+GXEMUL-SEC/regress\fbpending_drain_probe.py
+GXEMUL-SEC/regress\drive_guest.py
+GXEMUL-SEC/regress\diag_div_sweep.py
+GXEMUL-SEC/regress\asic_badaddr_probe.py
+GXEMUL-SEC/src\net\Makefile.skel
+GXEMUL-SEC/src\net\Makefile
+GXEMUL-SEC/src\Makefile.skel
+GXEMUL-SEC/src\Makefile
+GXEMUL-SEC/regress\selfmutant.py
+GXEMUL-SEC/regress\readiness_predicate_test.py
+GXEMUL-SEC/regress\ppc_rounding_probe.py
+GXEMUL-SEC/regress\ppc_halt_probe.py
+GXEMUL-SEC/regress\pit8253_latch_probe.py
+GXEMUL-SEC/regress\pcc2_width_witness.py
+GXEMUL-SEC/regress\pcc2_width_probe.py
+GXEMUL-SEC/regress\pcc2_default_probe.py
+GXEMUL-SEC/regress\mips_subnorm_probe.py
+GXEMUL-SEC/regress\mips_rounding_probe.py
+GXEMUL-SEC/regress\mips_fold_probe.py
+GXEMUL-SEC/regress\mips_fixedmode_probe.py
+GXEMUL-SEC/regress\m88k_rounding_probe.py
+GXEMUL-SEC/regress\m88k_idle_probe.py
+GXEMUL-SEC/regress\m88k_exc_probe.py
+GXEMUL-SEC/regress\m8820x_sites_probe.py
+GXEMUL-SEC/regress\luna_intmask_probe.py
+GXEMUL-SEC/regress\luna_absentcpu_probe.py
+GXEMUL-SEC/regress\lca_confwidth_probe.py
+GXEMUL-SEC/regress\hpcmips_ctor_probe.py
+GXEMUL-SEC/regress\hpcabort_witness.py
+GXEMUL-SEC/regress\gdrom_toclen_probe.py
+GXEMUL-SEC/regress\gdrom_default_probe.py
+GXEMUL-SEC/regress\arm_strlen_probe.py
+GXEMUL-SEC/regress\arm_memcpy_probe.py
+GXEMUL-SEC/regress\arm_idle_probe.py
+GXEMUL-SEC/regress\arm_fold_marker_probe.py
+GXEMUL-SEC/regress\arm_flags_probe.py
+GXEMUL-SEC/regress\arm_endian_probe.py
+GXEMUL-SEC/regress\arcbios_shift_probe.py
+GXEMUL-SEC/regress\alpha_pfnoffset_probe.py
+GXEMUL-SEC/regress\alpha_harness_probe.py
+GXEMUL-SEC/regress\absorb_census.py
+GXEMUL-SEC/src\machines\Makefile.skel
+GXEMUL-SEC/src\machines\Makefile
+GXEMUL-SEC/src\machines\machine_hpcarm.o
+GXEMUL-SEC/src\machines\machine_hpcarm.c
+GXEMUL-SEC/src\machines\machine_androidarm.o
+GXEMUL-SEC/src\machines\machine_androidarm.c
+GXEMUL-SEC/src\debugger\Makefile.skel
+GXEMUL-SEC/src\debugger\Makefile
+GXEMUL-SEC/src\console\Makefile.skel
+GXEMUL-SEC/src\console\Makefile
+GXEMUL-SEC/src\disk\Makefile.skel
+GXEMUL-SEC/src\disk\Makefile
+GXEMUL-SEC/src\core\Makefile.skel
+GXEMUL-SEC/src\core\Makefile
+GXEMUL-SEC/src\include\cpu_arm.h
+GXEMUL-SEC/src\include\arm_cpu_types.h
+GXEMUL-SEC/regress\arm_writeback_probe.py
+GXEMUL-SEC/src\file\Makefile.skel
+GXEMUL-SEC/src\file\Makefile
+GXEMUL-SEC/src\include\Makefile
+GXEMUL-SEC/src\include\cpu_m88k.h
+GXEMUL-SEC/src\include\Makefile.skel
+GXEMUL-SEC/src\cpus\memory_m88k.c
+GXEMUL-SEC/src\cpus\memory_arm.o
+GXEMUL-SEC/src\cpus\memory_arm.c
+GXEMUL-SEC/src\cpus\Makefile.skel
+GXEMUL-SEC/src\cpus\Makefile
+GXEMUL-SEC/src\cpus\generate_m88k_loadstore.c
+GXEMUL-SEC/src\cpus\generate_m88k_loadstore
+GXEMUL-SEC/src\cpus\generate_m88k_bcnd.c
+GXEMUL-SEC/src\cpus\generate_m88k_bcnd
+GXEMUL-SEC/src\cpus\generate_arm_r.c
+GXEMUL-SEC/src\cpus\generate_arm_r
+GXEMUL-SEC/src\cpus\generate_arm_multi.c
+GXEMUL-SEC/src\cpus\cpu_arm_multi.txt
+GXEMUL-SEC/src\cpus\tmp_m88k_tail.c
+GXEMUL-SEC/src\cpus\generate_arm_multi
+GXEMUL-SEC/src\cpus\cpu_arm_instr_misc.c
+GXEMUL-SEC/src\cpus\tmp_m88k_loadstore.c
+GXEMUL-SEC/src\cpus\cpu_arm_instr_loadstore.c
+GXEMUL-SEC/src\cpus\tmp_m88k_head.c
+GXEMUL-SEC/src\cpus\cpu_arm_instr_dpi.c
+GXEMUL-SEC/src\cpus\generate_arm_loadstore.c
+GXEMUL-SEC/src\cpus\cpu_arm_instr.c
+GXEMUL-SEC/src\cpus\tmp_m88k_bcnd.c
+GXEMUL-SEC/src\cpus\generate_arm_loadstore
+GXEMUL-SEC/src\cpus\cpu_arm_coproc.o
+GXEMUL-SEC/src\cpus\tmp_arm_tail.c
+GXEMUL-SEC/src\cpus\generate_arm_dpi.c
+GXEMUL-SEC/src\cpus\cpu_arm_coproc.c
+GXEMUL-SEC/src\cpus\tmp_arm_rf.o
+GXEMUL-SEC/src\cpus\generate_arm_dpi
+GXEMUL-SEC/src\cpus\cpu_arm.o
+GXEMUL-SEC/src\cpus\experiment_arm_multi.c
+GXEMUL-SEC/src\cpus\tmp_arm_rf.c
+GXEMUL-SEC/src\cpus\cpu_arm.c
+GXEMUL-SEC/src\cpus\cpu_m88k_instr_loadstore.c
+GXEMUL-SEC/src\cpus\arm_tmphead_1.h
+GXEMUL-SEC/src\cpus\tmp_arm_re.o
+GXEMUL-SEC/src\cpus\cpu_m88k_instr.c
+GXEMUL-SEC/src\cpus\cpu_m88k.c
+GXEMUL-SEC/src\cpus\cpu_m88k.o
+GXEMUL-SEC/src\cpus\tmp_arm_re.c
+GXEMUL-SEC/src\cpus\tmp_arm_rd.o
+GXEMUL-SEC/src\cpus\tmp_arm_rd.c
+GXEMUL-SEC/src\cpus\tmp_arm_rc.o
+GXEMUL-SEC/src\cpus\tmp_arm_multi.o
+GXEMUL-SEC/src\cpus\tmp_arm_multi.c
+GXEMUL-SEC/src\cpus\tmp_arm_loadstore_p1_u1_w1.o
+GXEMUL-SEC/src\cpus\tmp_arm_loadstore_p1_u1_w1.c
+GXEMUL-SEC/src\cpus\tmp_arm_loadstore_p1_u1_w0.o
+GXEMUL-SEC/src\cpus\tmp_arm_loadstore_p1_u1_w0.c
+GXEMUL-SEC/src\cpus\tmp_arm_loadstore_p1_u0_w1.o
+GXEMUL-SEC/src\cpus\tmp_arm_loadstore_p1_u0_w1.c
+GXEMUL-SEC/src\cpus\tmp_arm_loadstore_p1_u0_w0.o
+GXEMUL-SEC/src\cpus\tmp_arm_loadstore_p1_u0_w0.c
+GXEMUL-SEC/src\cpus\tmp_arm_loadstore_p0_u1_w1.o
+GXEMUL-SEC/src\cpus\tmp_arm_loadstore_p0_u1_w1.c
+GXEMUL-SEC/src\cpus\tmp_arm_r2.c
+GXEMUL-SEC/src\cpus\tmp_arm_rc.c
+GXEMUL-SEC/src\cpus\tmp_arm_r1.o
+GXEMUL-SEC/src\cpus\tmp_arm_rb.o
+GXEMUL-SEC/src\cpus\tmp_arm_r1.c
+GXEMUL-SEC/src\cpus\tmp_arm_rb.c
+GXEMUL-SEC/src\cpus\tmp_arm_r0.o
+GXEMUL-SEC/src\cpus\tmp_arm_ra.o
+GXEMUL-SEC/src\cpus\tmp_arm_r0.c
+GXEMUL-SEC/src\cpus\tmp_arm_ra.c
+GXEMUL-SEC/src\cpus\tmp_arm_r.o
+GXEMUL-SEC/src\cpus\tmp_arm_r9.o
+GXEMUL-SEC/src\cpus\tmp_arm_r.c
+GXEMUL-SEC/src\cpus\tmp_arm_r9.c
+GXEMUL-SEC/src\cpus\tmp_arm_r8.o
+GXEMUL-SEC/src\cpus\tmp_arm_r3.o
+GXEMUL-SEC/src\cpus\tmp_arm_r8.c
+GXEMUL-SEC/src\cpus\tmp_arm_r3.c
+GXEMUL-SEC/src\cpus\tmp_arm_r5.o
+GXEMUL-SEC/src\cpus\tmp_arm_r5.c
+GXEMUL-SEC/src\cpus\tmp_arm_r4.o
+GXEMUL-SEC/src\cpus\tmp_arm_r4.c
+GXEMUL-SEC/src\cpus\tmp_arm_r7.o
+GXEMUL-SEC/src\cpus\tmp_arm_r7.c
+GXEMUL-SEC/src\cpus\tmp_arm_r6.o
+GXEMUL-SEC/src\cpus\tmp_arm_loadstore_p0_u1_w0.o
+GXEMUL-SEC/src\cpus\tmp_arm_r6.c
+GXEMUL-SEC/src\cpus\tmp_arm_r2.o
+GXEMUL-SEC/src\cpus\tmp_arm_loadstore_p0_u1_w0.c
+GXEMUL-SEC/src\cpus\tmp_arm_loadstore_p0_u0_w1.o
+GXEMUL-SEC/src\cpus\tmp_arm_loadstore.o
+GXEMUL-SEC/src\cpus\tmp_arm_loadstore_p0_u0_w1.c
+GXEMUL-SEC/src\cpus\tmp_arm_loadstore.c
+GXEMUL-SEC/src\cpus\tmp_arm_loadstore_p0_u0_w0.o
+GXEMUL-SEC/src\cpus\tmp_arm_head.c
+GXEMUL-SEC/src\cpus\tmp_arm_loadstore_p0_u0_w0.c
+GXEMUL-SEC/src\cpus\tmp_arm_dpi.o
+GXEMUL-SEC/src\cpus\tmp_arm_dpi.c
+GXEMUL-SEC/src\cpus\memory_m88k.o
+GXEMUL-SEC/src\devices\Makefile.skel
+GXEMUL-SEC/src\devices\Makefile
+GXEMUL-SEC/src\devices\fonts\Makefile.skel
+GXEMUL-SEC/src\devices\fonts\Makefile
+GXEMUL-SEC/regress\artifacts\gdromcondlies\witness_20260830\gdrom_cond_witness.py
+GXEMUL-SEC/regress\artifacts\gdromcondlies\witness_20260830\gdrom_cond_extras.py
+GXEMUL-SEC/src\include\thirdparty\armreg.h
+GXEMUL-SEC/src\include\thirdparty\arm_cputypes.h
+GXEMUL-SEC/regress\artifacts\widthkillclass\witness_20260830\sgi_re_width_witness.py
+GXEMUL-SEC/regress\artifacts\widthkillclass\witness_20260830\sgi_re_width_witness.earlier.py
+GXEMUL-SEC/regress\artifacts\gdromexitsix\asan_m0_20260828\apply_m0.py
+GXEMUL-SEC/regress\artifacts\gdromexitsix\killtable4_20260828\mut_common.py
+GXEMUL-SEC/regress\artifacts\widthkillclass\opus_p1_20260830\opus497_read_probe.py
+GXEMUL-SEC/regress\artifacts\widthkillclass\opus_p1_20260830\latch_probe.py
+GXEMUL-SEC/regress\artifacts\widthkillclass\opus_p1_20260830\apply_mutant.py
+GXEMUL-SEC/regress\artifacts\widthkillclass\opus_p1_20260830\apply_m2.py
+GXEMUL-SEC/regress\artifacts\widthkillclass\opus_p1_20260830\apply_fix.py
+GXEMUL-SEC/src\include\thirdparty\m88k_psl.h
+GXEMUL-SEC/src\include\thirdparty\m88k_dmt.h
+GXEMUL-SEC/regress\artifacts\gdromexitsix\gdrom_toclen_witness.py
+GXEMUL-SEC/regress\artifacts\gdromexitsix\rot_20260829\probe.frozen.py
+GXEMUL-SEC/regress\artifacts\gdromexitsix\p2askagain_20260829\mut490p2.py
+GXEMUL-SEC/regress\artifacts\gdromexitsix\supp_p2_20260829\instrument_22row.frozen.py
+GXEMUL-SEC/regress\artifacts\gdromexitsix\supp_p2_20260829\extend.py
+GXEMUL-SEC/regress\artifacts\gdromexitsix\opus_r2table_20260828\tprobe2.py
+GXEMUL-SEC/regress\artifacts\gdromexitsix\opus_r2table_20260828\mkmut.py
+GXEMUL-SEC/regress\artifacts\gdromexitsix\opus_r2table_20260828\mkfix.py
+GXEMUL-SEC/regress\artifacts\gdromexitsix\opus_r2full_20260828\tprobe3.py
+GXEMUL-SEC/regress\artifacts\gdromexitsix\opus_r2full_20260828\mkmut_brace.py
+GXEMUL-SEC/regress\artifacts\gdromexitsix\opus_r2full_20260828\mkmut3.py
+GXEMUL-SEC/regress\artifacts\gdromexitsix\opus_r2full_20260828\mkfix.py
+GXEMUL-SEC/regress\artifacts\wdcdataoutdrain\killtable_20260827\wiprepro.py
+GXEMUL-SEC/regress\artifacts\wdcdataoutdrain\killtable_20260827\mk478.py
+GXEMUL-SEC/regress\artifacts\wdcaltctrlfam\killtable_20260827\mk483.py
+GXEMUL-SEC/regress\artifacts\wdcaltctrlfam\killtable_20260827\author_mut483.py
+GXEMUL-SEC/regress\artifacts\wdcaltctrlfam\killtable_20260827\author_fix483c.py
+GXEMUL-SEC/regress\artifacts\wdcaltctrlfam\killtable_20260827\author_fix483b.py
+GXEMUL-SEC/regress\artifacts\wdcaltctrlfam\killtable_20260827\author_fix483.py
+GXEMUL-SEC/regress\artifacts\wdcdataoutdrain\killtable_20260827\drainvar.py
+GXEMUL-SEC/regress\artifacts\wdcdataoutdrain\killtable_20260827\addpkt.py
+GXEMUL-SEC/regress\artifacts\wdcdataoutdrain\killtable_20260827\addphaserow.py
+GXEMUL-SEC/regress\artifacts\wdcdataoutdrain\killtable_20260827\addpartial.py
+GXEMUL-SEC/regress\artifacts\wdcdataoutdrain\killtable_20260827\addp5.py
+GXEMUL-SEC/regress\artifacts\wdcdataoutdrain\killtable_20260827\addlocal.py
+GXEMUL-SEC/regress\artifacts\wdcdataoutdrain\killtable_20260827\addflush.py
+GXEMUL-SEC/regress\artifacts\wdcdataoutdrain\killtable_20260827\addannounce.py
+GXEMUL-SEC/regress\artifacts\wdcdataoutdrain\killtable_20260827\addaltctl.py
+GXEMUL-SEC/regress\artifacts\wdcdataoutdrain\killtable_20260827\addaccept.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\pcc2_width_witness.asrun.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\pcc2_operator_reach.asrun.py
+GXEMUL-SEC/regress\artifacts\wdcaltctrlcov\killtable_20260827\mut482_RECONSTRUCTED.py
+GXEMUL-SEC/regress\artifacts\wdcaltctrlcov\killtable_20260827\mk482.py
+GXEMUL-SEC/regress\artifacts\wdccmdreset\killtable_20260827\repin479.py
+GXEMUL-SEC/regress\artifacts\wdccmdreset\killtable_20260827\port479.py
+GXEMUL-SEC/regress\artifacts\wdccmdreset\killtable_20260827\mk479.py
+GXEMUL-SEC/regress\artifacts\wdccmdreset\killtable_20260827\fix479.py
+GXEMUL-SEC/regress\artifacts\wdccmdreset\killtable_20260827\addwm.py
+GXEMUL-SEC/regress\artifacts\wdccmdreset\killtable_20260827\addmut479.py
+GXEMUL-SEC/regress\artifacts\wdccmdreset\killtable_20260827\addle.py
+GXEMUL-SEC/regress\artifacts\wdccmdreset\killtable_20260827\adddevctl.py
+GXEMUL-SEC/regress\artifacts\wdccmdreset\killtable_20260827\addbadlencdb.py
+GXEMUL-SEC/regress\artifacts\wdccmdreset\killtable_20260827\add479rows.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\pass9_seats_20260904\opus\mutate.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\pass9_seats_20260904\opus\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\pass9_seats_20260904\opus\cmp_names.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\pass9_seats_20260904\opus\audit_gate.py
+GXEMUL-SEC/regress\artifacts\wdcchunking\killtable_20260827\Md_widenarm.txt
+GXEMUL-SEC/regress\artifacts\wdcchunking\killtable_20260827\Md_armzero.txt
+GXEMUL-SEC/regress\artifacts\wdcchunking\killtable_20260827\Mb_rearm.txt
+GXEMUL-SEC/regress\artifacts\wdcchunking\killtable_20260827\Mb_arm.txt
+GXEMUL-SEC/regress\artifacts\makercfalse\hook_controls_20260830\clusterctl.py
+GXEMUL-SEC/regress\artifacts\makercfalse\hook_controls_20260829\hookctl.py
+GXEMUL-SEC/regress\artifacts\widthkillclass\opus_impl_20260830\strengthen_comment.py
+GXEMUL-SEC/regress\artifacts\widthkillclass\opus_impl_20260830\sgi_re_width_probe.py
+GXEMUL-SEC/regress\artifacts\widthkillclass\opus_impl_20260830\mutate497_v2.py
+GXEMUL-SEC/regress\artifacts\widthkillclass\opus_impl_20260830\mutate497.py
+GXEMUL-SEC/regress\artifacts\widthkillclass\opus_impl_20260830\move_warned.py
+GXEMUL-SEC/regress\artifacts\widthkillclass\opus_impl_20260830\apply_fix497.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\pass8_seats_20260904\opus\mutate.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\pass8_seats_20260904\opus\mk_f1.py
+GXEMUL-SEC/regress\artifacts\wdccdbmidxfer\killtable2_20260827\Mr_readarm.out
+GXEMUL-SEC/regress\artifacts\wdccdbmidxfer\killtable2_20260827\mk477b.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\opus_pass3_20260903\pass3c\probe82.frozen.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\pass7_seats_20260904\opus\gatecheck.py
+GXEMUL-SEC/regress\artifacts\wdcringambig\rung3_20260827\wdcring_rung3_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\opus_pass3_20260903\pass3\probe.frozen.py
+GXEMUL-SEC/regress\artifacts\wdcringambig\repro_20260827\author_repro484.py
+GXEMUL-SEC/regress\artifacts\wdccallsite\killtable_20260827\q4check.py
+GXEMUL-SEC/regress\artifacts\wdccallsite\killtable_20260827\q3check.py
+GXEMUL-SEC/regress\artifacts\wdccallsite\killtable_20260827\mut480b.py
+GXEMUL-SEC/regress\artifacts\wdccallsite\killtable_20260827\mut480.py
+GXEMUL-SEC/regress\artifacts\wdccallsite\killtable_20260827\mk480b.py
+GXEMUL-SEC/regress\artifacts\wdccallsite\killtable_20260827\mk480.py
+GXEMUL-SEC/regress\artifacts\wdccallsite\killtable_20260827\gatename480.py
+GXEMUL-SEC/regress\artifacts\wdccallsite\killtable_20260827\fixrows480.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\pass6_seats_20260903\opus\mutate.py
+GXEMUL-SEC/regress\artifacts\sgidewidth\opus_witness_20260831\gxdew_probe_frozen.py
+GXEMUL-SEC/regress\artifacts\sgidewidth\opus_witness_20260831\gxdew_probe2_frozen.py
+GXEMUL-SEC/regress\artifacts\sgidewidth\opus_witness_20260831\gxdew_mz_frozen.py
+GXEMUL-SEC/regress\artifacts\sgidewidth\opus_witness_20260831\gxdew_mzp_frozen.py
+GXEMUL-SEC/regress\artifacts\sgidewidth\opus_witness_20260831\gxdew_mutate2_frozen.py
+GXEMUL-SEC/regress\artifacts\sgidewidth\opus_witness_20260831\gxdew_mr_frozen.py
+GXEMUL-SEC/regress\artifacts\sgidewidth\opus_witness_20260831\gxdew_kill_frozen.py
+GXEMUL-SEC/regress\artifacts\sgidewidth\opus_witness_20260831\gxdew_kill2_frozen.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\killtable_20260903\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\wdcoddstep\overtaken_20260827\author_odd.py
+GXEMUL-SEC/regress\artifacts\sgidewidth\opus_p2_20260831\probe_frozen.py
+GXEMUL-SEC/regress\artifacts\sgidewidth\opus_p2_20260831\mutate4.py
+GXEMUL-SEC/regress\artifacts\sgidewidth\opus_p2_20260831\mutate3.py
+GXEMUL-SEC/regress\artifacts\sgidewidth\opus_p2_20260831\mutate2.py
+GXEMUL-SEC/regress\artifacts\sgidewidth\opus_p2_20260831\mutate.py
+GXEMUL-SEC/regress\artifacts\sgidewidth\opus_p2_20260831\disc.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\PRETABLE_OPUS_P8_m88kexc.out
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\PRETABLE_m88kexc.out
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\PRETABLE9_m88kexc.out
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\PRETABLE8_m88kexc.out
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\PRETABLE7_m88kexc.out
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\PRETABLE6_m88kexc.out
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\PRETABLE5_m88kexc.out
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\PRETABLE15_m88kexc.out
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\PRETABLE14_m88kexc.out
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\PRETABLE13_m88kexc.out
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\PRETABLE12_m88kexc.out
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\PRETABLE11_m88kexc.out
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\PRETABLE11_ADDENDUM3_m88kexc.out
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\PRETABLE11_ADDENDUM2_m88kexc.out
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\PRETABLE10_m88kexc.out
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\pass5_seats_20260903\opus_reader\xcheck.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\pass5_seats_20260903\opus_reader\mutate.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\pass5_seats_20260903\opus_reader\discriminator.py
+GXEMUL-SEC/regress\artifacts\wdcaltoffset\witness_20260829\wdcaltoff_rung3_probe.py
+GXEMUL-SEC/regress\artifacts\wdcaltoffset\witness_20260829\mkfixleg.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\pass5_seats_20260903\opus_reader\artifacts\gxopus_p5_disc.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\pass5_seats_20260903\opus_reader\artifacts\discriminator.py
+GXEMUL-SEC/regress\artifacts\wdcaltoffset\opus_p2_20260830\q2_mechanism.py
+GXEMUL-SEC/regress\artifacts\wdcaltoffset\opus_p2_20260830\PROPOSED_wdc_altoffset_4bit_probe.py
+GXEMUL-SEC/regress\artifacts\wdcaltoffset\opus_p2_20260830\mut494p2.py
+GXEMUL-SEC/regress\artifacts\wdcnoirq\witness_20260827\wdcnoirq_rung3_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\pass5_seats_20260903\fable\pty_ret0_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\pass5_seats_20260903\fable\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\wdcnoirq\repro_20260827\author_repro485.py
+GXEMUL-SEC/regress\artifacts\wdcaltoffset\mutants_20260830\table_c.py
+GXEMUL-SEC/regress\artifacts\wdcaltoffset\mutants_20260830\table_b.py
+GXEMUL-SEC/regress\artifacts\wdcaltoffset\mutants_20260830\table_a.py
+GXEMUL-SEC/regress\artifacts\wdcaltoffset\mutants_20260830\mkmutants.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\killtable2_20260903\part9\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\wdcnoirq\killtable_20260827\author_rows485.py
+GXEMUL-SEC/regress\artifacts\wdcnoirq\killtable_20260827\author_mut485.py
+GXEMUL-SEC/regress\artifacts\wdcnoirq\killtable_20260827\author_mut11.py
+GXEMUL-SEC/regress\artifacts\wdcnoirq\killtable_20260827\author_legs3.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\pass4_seats_20260903\opus_reader\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\sgideprimop\killtable_20260903_table13_xfer\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\killtable2_20260903\part8\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\pass4_seats_20260903\fable\probe_dry.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\pass4_seats_20260903\fable\probe_copy.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\pass4_seats_20260903\fable\dump_names.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\killtable2_20260903\part7b\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\sgideprimop\killtable_20260903_table12_regs\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\wdcfloodstale\measure_20260827\author_floodstale.py
+GXEMUL-SEC/regress\artifacts\gdrompionull\gdrom_pio_null_probe.py
+GXEMUL-SEC/regress\artifacts\wdcaltctrl\killtable_20260827\rows481b.py
+GXEMUL-SEC/regress\artifacts\gdrompionull\opus_p2_20260826\mutate.py
+GXEMUL-SEC/regress\artifacts\wdcaltctrl\killtable_20260827\mutalt.py
+GXEMUL-SEC/regress\artifacts\wdcaltctrl\killtable_20260827\mkaltctrl.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\killtable2_20260903\part7\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\wdcaltctrl\killtable_20260827\gatealt2.py
+GXEMUL-SEC/regress\artifacts\wdcaltctrl\killtable_20260827\gatealt.py
+GXEMUL-SEC/regress\artifacts\wdcaltctrl\killtable_20260827\fixwarrant481.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\pass3_seats_20260903\opus_reader\nonequiv_check.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\pass3_seats_20260903\opus_reader\mutate.py
+GXEMUL-SEC/regress\artifacts\wdcaltctrl\killtable_20260827\fixaltctrl.py
+GXEMUL-SEC/regress\artifacts\gdrompionull\opus_p2_20260826\mism_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\killtable2_20260903\part6b\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\pass1\brief_m88kexc_p1_v2.md
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\pass1\brief_m88kexc_p1.md
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\killtable2_20260903\part6\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\killtable13\m88k_exc_probe.frozen13.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\killtable2_20260903\part5b\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\killtable12\m88k_exc_probe.frozen12.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\killtable2_20260903\part5\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\pass11_seats_20260904\opus\control_iclr.py
+GXEMUL-SEC/regress\artifacts\wdcaddtoinbufbound\rung3_20260830\mkfix.py
+GXEMUL-SEC/regress\artifacts\wdcaddtoinbufbound\rung3_20260830\mkcd.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\killtable11_attempt1_v13\m88k_exc_probe.frozen11.v13.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\brief_m88kexc_p4.md
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\brief_m88kexc_p2.md
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\brief_m88kexc_p10.CORRECTION.md
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\brief_m88kexc_adj.md
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\derive_cells.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\brief_m88kexc_p8.md
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\brief_m88kexc_p7.md
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\brief_m88kexc_p6.md
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\brief_m88kexc_p5.md
+GXEMUL-SEC/regress\artifacts\wdcaddtoinbufbound\rung3_20260830\frozen_wave_20260830_102209.py
+GXEMUL-SEC/regress\artifacts\wdcaddtoinbufbound\rung3_20260830\addtoinbuf_rung3_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\killtable2_20260903\part4\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\m88k_exc_probe.v21.frozen.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\m88k_exc_probe.v20.frozen.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\m88k_exc_probe.v17.frozen.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\m88k_exc_probe.v16.frozen.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\killtable2_20260903\part3c\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\killtable10\mut_m88kexc.v10.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\killtable10\m88k_exc_probe.frozen10.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\killtable10\killtable10_m88kexc.sh
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\kimi_p5\m88k_exc_probe_v5p2.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\agy_p5\mutate.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\kimi_p5\cpu_m88k.c.m_sfrztbmis
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\kimi_p5\cpu_m88k.c.m_fbsuponly
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\kimi_p5\cpu_m88k.c.fix
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\pass10_seats_20260904\opus\mutate.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\pass10_seats_20260904\opus\diffcheck.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\pass10_seats_20260904\opus\cmpnames.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\killtable2_20260903\part3b\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\killtable\m88k_exc_probe.frozen.py
+GXEMUL-SEC/regress\artifacts\sgideprimop\killtable_20260902_table4\negctl_n25_rectset_probe.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\killtable_opus_p8\mutate_p8.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\killtable_opus_p8\m88k_exc_probe.frozenP8.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\killtable_opus_p8\m88k_exc_probe.censusP8.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\killtable_opus_p8\cpu_m88k.baseline.c
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\killtable2_20260903\part3\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\killtable8\mut_m88kexc.v8.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\killtable8\m88k_exc_probe.frozen8.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\killtable8\killtable8_m88kexc.sh
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\killtable11\m88k_exc_probe.frozen11.v14.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\killtable11\m88k_exc_probe.frozen11.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\killtable11_attempt1_v13\m88k_exc_probe.frozen11.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\killtable2_20260903\part2\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\killtable2_20260903\part13_partial\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\killtable7\mut_m88kexc.v7.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\killtable7\m88k_exc_probe.frozen7.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\killtable7\killtable7_m88kexc.sh
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\killtable3\m88k_exc_probe.frozen3.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\killtable2_20260903\part13_aborted\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\killtable4\m88k_exc_probe.frozen4.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\killtable2\m88k_exc_probe.frozen2.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\killtable6\mut_m88kexc.v6.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\killtable6\m88k_exc_probe.frozen6.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\killtable6\killtable6_m88kexc.sh
+GXEMUL-SEC/regress\artifacts\sgideprimop\killtable_20260902_table11_closure\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\killtable2_20260903\part13\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\killtable5\mut_m88kexc.v5.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\killtable5\m88k_exc_probe.frozen5.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\killtable5\killtable5_m88kexc.sh
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\killtable2_20260903\part12\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\lunaabsentcpu\opus_p4_table_v5\probe_v5.py
+GXEMUL-SEC/regress\artifacts\lunaabsentcpu\opus_p4_table_v5\probe_v4.py
+GXEMUL-SEC/regress\artifacts\sgideprimop\gapB_20260903\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\killtable2_20260903\part11\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\killtable2_20260903\part10\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2defaultkill\witness_20260905\defaultkill_witness.py
+GXEMUL-SEC/regress\artifacts\lunaabsentcpu\opus_p4_table\luna_absentcpu_probe.frozen.py
+GXEMUL-SEC/regress\artifacts\pcc2widthkills\killtable2_20260903\part10_aborted\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\lunaabsentcpu\luna_absentcpu_probe.v8.frozen.py
+GXEMUL-SEC/regress\artifacts\lunaabsentcpu\luna_absentcpu_probe.v7.frozen.py
+GXEMUL-SEC/regress\artifacts\lunaabsentcpu\luna_absentcpu_probe.v6.frozen.py
+GXEMUL-SEC/regress\artifacts\lunaabsentcpu\luna_absentcpu_probe.v5.py
+GXEMUL-SEC/regress\artifacts\lunaabsentcpu\luna_absentcpu_probe.v4.py
+GXEMUL-SEC/regress\artifacts\lunaabsentcpu\luna_absentcpu_probe.v3.py
+GXEMUL-SEC/regress\artifacts\lunaabsentcpu\luna_absentcpu_probe.v2.py
+GXEMUL-SEC/regress\artifacts\lunaabsentcpu\luna_absentcpu_probe.asrun.py
+GXEMUL-SEC/regress\artifacts\pcc2defaultkill\pass4_seats\opus_logs\offsets.py
+GXEMUL-SEC/regress\artifacts\pcc2defaultkill\pass4_seats\opus_logs\mutate.py
+GXEMUL-SEC/regress\artifacts\sgirandompixel\witness_20260906\probe.frozen.py
+GXEMUL-SEC/regress\artifacts\pcc2defaultkill\pass4_seats\opus_logs\logs\len4_witness.py
+GXEMUL-SEC/regress\artifacts\sgirandompixel\killtable\probe.frozen.py
+GXEMUL-SEC/regress\artifacts\pcc2defaultkill\pass4_seats\opus_logs\len4_witness.py
+GXEMUL-SEC/regress\artifacts\pcc2defaultkill\pass4_seats\opus_logs\gatecheck.py
+GXEMUL-SEC/regress\artifacts\m88kexcdeliver\killtable14\m88k_exc_probe.frozen14.py
+GXEMUL-SEC/regress\artifacts\sgirebufuninit\scan_len.py
+GXEMUL-SEC/regress\artifacts\sgirebufuninit\scan_fill.py
+GXEMUL-SEC/regress\artifacts\pcc2defaultkill\pass3_seats\opus_logs\edit_M_WRVAL0.py
+GXEMUL-SEC/regress\artifacts\pcc2defaultkill\pass3_seats\opus_logs\edit_M_WRDATA0.py
+GXEMUL-SEC/regress\artifacts\pcc2defaultkill\pass3_seats\opus_logs\edit_M_RELOAD.py
+GXEMUL-SEC/regress\artifacts\pcc2defaultkill\pass3_seats\opus_logs\edit_M_LATCHOFF.py
+GXEMUL-SEC/regress\artifacts\pcc2defaultkill\pass3_seats\opus_logs\edit_M_LASTBYTE.py
+GXEMUL-SEC/regress\artifacts\pcc2defaultkill\pass3_seats\opus_logs\edit_M_BACKEDLOW.py
+GXEMUL-SEC/regress\artifacts\pcc2defaultkill\killtable4_20260905\pcc2_width_probe.py
+GXEMUL-SEC/regress\artifacts\lunaabsentcpu\killtable5\luna_absentcpu_probe.frozen.py
+GXEMUL-SEC/regress\artifacts\shortread\round_20260827\shortread_witness.py
+GXEMUL-SEC/regress\artifacts\sgireunmapped\opus_witness_20260830\sgi_re_unmapped_probe.py
+GXEMUL-SEC/regress\artifacts\sgireunmapped\opus_witness_20260830\mkvariant.py
+GXEMUL-SEC/regress\artifacts\sgireunmapped\opus_witness_20260830\detector.py
+GXEMUL-SEC/regress\artifacts\pcc2defaultkill\killtable_20260905\run1_oldrowformat\pcc2_width_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2defaultkill\killtable_20260905\run1_oldrowformat\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2defaultkill\killtable_20260905\pcc2_width_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2defaultkill\killtable_20260905\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\lunaabsentcpu\killtable4\luna_absentcpu_probe.frozen.py
+GXEMUL-SEC/regress\artifacts\landiskaux\census_20260827\watch_2c.py
+GXEMUL-SEC/regress\artifacts\landiskaux\census_20260827\mk_censusB.py
+GXEMUL-SEC/regress\artifacts\lunaabsentcpu\killtable\mut_lunaabs.py
+GXEMUL-SEC/regress\artifacts\lunaabsentcpu\killtable\luna_absentcpu_probe.frozen.py
+GXEMUL-SEC/regress\artifacts\lunaabsentcpu\killtable\fix_lunaabs.py
+GXEMUL-SEC/regress\artifacts\landiskaux\census_20260827\devlist.py
+GXEMUL-SEC/regress\artifacts\landiskaux\census_20260827\census.py
+GXEMUL-SEC/regress\artifacts\landiskaux\census_20260827\analyse_hook.py
+GXEMUL-SEC/regress\artifacts\lunaabsentcpu\killtable3\mut_lunaabs.v4.py
+GXEMUL-SEC/regress\artifacts\lunaabsentcpu\killtable3\luna_absentcpu_probe.frozen.py
+GXEMUL-SEC/regress\artifacts\lunaabsentcpu\killtable3\fix_lunaabs.v2b.py
+GXEMUL-SEC/regress\artifacts\pcc2defaultkill\killtable4_20260905\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\sgireunmapped\killtable_20260831\base_slot_probe.py
+GXEMUL-SEC/regress\artifacts\sgireunmapped\killtable_20260831\l2repair\mkw.py
+GXEMUL-SEC/regress\artifacts\sgireunmapped\killtable_20260831\extra_rows.py
+GXEMUL-SEC/regress\artifacts\sgireunmapped\killtable_20260831\mkvariant499.py
+GXEMUL-SEC/regress\artifacts\sgireunmapped\killtable_20260831\repin2\mk500.py
+GXEMUL-SEC/regress\artifacts\sgireunmapped\killtable_20260831\repin2\gate_arm.patch
+GXEMUL-SEC/regress\artifacts\sgireunmapped\killtable_20260831\repin2\sgi_re_width_probe.repinned.py
+GXEMUL-SEC/regress\artifacts\sgireunmapped\killtable_20260831\repin2\score500b.py
+GXEMUL-SEC/regress\artifacts\sgireunmapped\killtable_20260831\repin2\score500.py
+GXEMUL-SEC/regress\artifacts\pcc2defaultkill\killtable3_20260905\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\lunaabsentcpu\killtable2\luna_absentcpu_probe.frozen.py
+GXEMUL-SEC/regress\artifacts\lunaabsentcpu\killtable2\fix_lunaabs.v2.py
+GXEMUL-SEC/regress\artifacts\lunaabsentcpu\killtable2\mut_lunaabs.v3.py
+GXEMUL-SEC/regress\artifacts\pcc2defaultkill\killtable4_20260905\old36\pcc2_width_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2defaultkill\killtable4_20260905\old36\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2defaultkill\killtable3_20260905\pcc2_width_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2defaultkill\killtable3_20260905\old23\pcc2_width_probe.py
+GXEMUL-SEC/regress\artifacts\pcc2defaultkill\killtable3_20260905\old23\frozen_probe.py
+GXEMUL-SEC/regress\artifacts\sgireunmapped\killtable_20260831\port\patch_mk.py
+GXEMUL-SEC/regress\artifacts\sgireunmapped\killtable_20260831\port\mkvariant499.py
+GXEMUL-SEC/regress\artifacts\sgireunmapped\killtable_20260831\port\patch_mk2.py
+GXEMUL-SEC/regress\artifacts\sgireunmapped\killtable_20260831\pass4\gate_arm_pass4_50rows.log
+GXEMUL-SEC/regress\artifacts\sgireunmapped\killtable_20260831\port\repin.py
+GXEMUL-SEC/regress\artifacts\sgireunmapped\killtable_20260831\pass4\gate_arm_pass4.log
+GXEMUL-SEC/regress\artifacts\sgireunmapped\killtable_20260831\pass4\e0_mut.py
+Path                      
+----                      
+C:\DocumentNoSnc\CC\GXEMUL
+
+
+
+web search: site.developer.arm.com UBFX A1 widthm1 msbit 31 ARMv7 ...
+web search: 
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n -g '*.c' -g '*.h' '0xffffffff[UuLl]*\\s*>>|UINT32_MAX\\s*>>|==\\s*(0|32)\\s*\\?\\s*(0xffffffff|UINT32_MAX)|0xffffffff\\s*:\\s*\\(\\(uint32_t\\)1|1ULL\\s*<<|1U\\s*<<\\s*(width|w)' GXEMUL-SEC/src; Get-Content -LiteralPath 'GXEMUL-SEC/src/cpus/Makefile' -TotalCount 105; Get-Content -LiteralPath 'GXEMUL-SEC/src/Makefile' -TotalCount 75; "'$probeFiles = @(Get-ChildItem -LiteralPath '"'GXEMUL-SEC/regress' -File -Filter '*.py' | ForEach-Object { "'$_.FullName }); rg -n -i '"'ubfx|sbfx' @probeFiles; rg -n 'cold|machine|subprocess|cmd|real.decode|358' GXEMUL-SEC/regress/arm_flags_probe.py GXEMUL-SEC/regress/arm_writeback_probe.py GXEMUL-SEC/regress/arm_endian_probe.py" in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg --files GXEMUL-SEC/src -g AGENTS.md; rg -n '#510|#312|ubfx|sbfx|X\\(bfi\\)' GXEMUL-SEC/src/cpus/cpu_arm_instr.c; "'$armLines = Get-Content -LiteralPath '"'GXEMUL-SEC/src/cpus/cpu_arm_instr.c'; foreach ("'$part in @(@(1250,1355),@(4435,4525))) { for ($ln = $part[0]; $ln -le $part[1]; $ln++) { '"'{0}: {1}' -f "'$ln,$armLines[$ln-1] } }; rg -n -g '"'*.c' -g '*.h' 'cond_instr\\((ubfx|sbfx)\\)|arm_instr_(ubfx|sbfx)|X\\((ubfx|sbfx)\\)' GXEMUL-SEC/src" in C:\DocumentNoSnc\CC\GXEMUL
+ succeeded in 246ms:
+1303: *  ubfx:  Unsigned Bit-Field Extract.
+1309:X(ubfx)
+1323:Y(ubfx)
+1327: *  sbfx:  Signed Bit-Field Extract.
+1333:X(sbfx)
+1350:Y(sbfx)
+1360:X(bfi)
+4482:				ic->f = cond_instr(ubfx);
+4489:				ic->f = cond_instr(sbfx);
+4497:				 *  #312: a word reaching here takes the
+1250: {
+1251: 	uint32_t iw = ic->arg[0];
+1252: 	uint32_t x = cpu->cd.arm.r[iw & 15];
+1253: 
+1254: 	cpu->cd.arm.r[(iw >> 12) & 15] = cpu->cd.arm.r[(iw >> 16) & 15]
+1255: 	    + (uint8_t)(x >> (((iw >> 10) & 3) * 8));
+1256: }
+1257: Y(uxtab_rot)
+1258: 
+1259: 
+1260: /*
+1261:  *  uxtah:  Unsigned Extend and Add Halfword.
+1262:  *
+1263:  *  arg[0] = ptr to rd
+1264:  *  arg[1] = ptr to rn
+1265:  *  arg[2] = ptr to rm
+1266:  */
+1267: X(uxtah)
+1268: {
+1269: 	reg(ic->arg[0]) = reg(ic->arg[1]) + (uint16_t)reg(ic->arg[2]);
+1270: }
+1271: Y(uxtah)
+1272: 
+1273: 
+1274: /*
+1275:  *  uxtah_rot:  Unsigned Extend and Add Halfword, with a non-zero rotation.
+1276:  *
+1277:  *  #319: as uxtab_rot above -- but a HALFWORD extract is not a shift at a
+1278:  *  rotate of 24. There the low byte of rm wraps into bits 15:8, which a
+1279:  *  plain shift would drop; the sibling uxth and sxth already spell that
+1280:  *  case out, and copying the byte form's shift here would have been silently
+1281:  *  wrong for exactly one of the four encodings.
+1282:  *
+1283:  *  arg[0] = the instruction word
+1284:  */
+1285: X(uxtah_rot)
+1286: {
+1287: 	uint32_t iw = ic->arg[0];
+1288: 	uint32_t x = cpu->cd.arm.r[iw & 15];
+1289: 	int rot = ((iw >> 10) & 3) * 8;
+1290: 
+1291: 	if (rot == 24)
+1292: 		x = (x >> 24) | ((x & 0xff) << 8);
+1293: 	else
+1294: 		x >>= rot;
+1295: 
+1296: 	cpu->cd.arm.r[(iw >> 12) & 15] = cpu->cd.arm.r[(iw >> 16) & 15]
+1297: 	    + (uint16_t)x;
+1298: }
+1299: Y(uxtah_rot)
+1300: 
+1301: 
+1302: /*
+1303:  *  ubfx:  Unsigned Bit-Field Extract.
+1304:  *
+1305:  *  arg[0] = ptr to rd
+1306:  *  arg[1] = ptr to rn
+1307:  *  arg[2] = (width << 16) + lsb
+1308:  */
+1309: X(ubfx)
+1310: {
+1311: 	uint32_t x = reg(ic->arg[1]);
+1312: 
+1313: 	int lsb = (uint8_t)ic->arg[2];
+1314: 	int width = ic->arg[2] >> 16;
+1315: 
+1316: 	uint32_t mask = (1 << width) - 1;
+1317: 
+1318: 	x >>= lsb;
+1319: 	x &= mask;
+1320: 
+1321: 	reg(ic->arg[0]) = x;
+1322: }
+1323: Y(ubfx)
+1324: 
+1325: 
+1326: /*
+1327:  *  sbfx:  Signed Bit-Field Extract.
+1328:  *
+1329:  *  arg[0] = ptr to rd
+1330:  *  arg[1] = ptr to rn
+1331:  *  arg[2] = (width << 16) + lsb
+1332:  */
+1333: X(sbfx)
+1334: {
+1335: 	uint32_t x = reg(ic->arg[1]);
+1336: 
+1337: 	int lsb = (uint8_t)ic->arg[2];
+1338: 	int width = ic->arg[2] >> 16;
+1339: 
+1340: 	uint32_t mask = (1 << width) - 1;
+1341: 	x >>= lsb;
+1342: 	x &= mask;
+1343: 
+1344: 	uint32_t topBitMask = 1 << (width-1);
+1345: 	if (x & topBitMask && width < 32)
+1346: 		x |= ~mask;
+1347: 
+1348: 	reg(ic->arg[0]) = x;
+1349: }
+1350: Y(sbfx)
+1351: 
+1352: 
+1353: /*
+1354:  *  bfi:  Bit-Field Insert.
+1355:  *
+4435: 				ic->f = cond_instr(rev);
+4436: 				ic->arg[0] = (size_t)(&cpu->cd.arm.r[rd]);
+4437: 				ic->arg[1] = (size_t)(&cpu->cd.arm.r[rm]);
+4438: 			} else if ((iword & 0x0fff03f0) == 0x06bf0070) {
+4439: 				ic->f = cond_instr(sxth);
+4440: 				ic->arg[0] = (size_t)(&cpu->cd.arm.r[rd]);
+4441: 				ic->arg[1] = (size_t)(&cpu->cd.arm.r[rm]);
+4442: 				ic->arg[2] = ((iword & 0xc00) >> 10) << 3;
+4443: 			} else if ((iword & 0x0fff03f0) == 0x06ef0070) {
+4444: 				ic->f = cond_instr(uxtb);
+4445: 				ic->arg[0] = (size_t)(&cpu->cd.arm.r[rd]);
+4446: 				ic->arg[1] = (size_t)(&cpu->cd.arm.r[rm]);
+4447: 				ic->arg[2] = ((iword & 0xc00) >> 10) << 3;
+4448: 			} else if ((iword & 0x0ff003f0) == 0x06e00070) {
+4449: 				ic->arg[0] = (size_t)(&cpu->cd.arm.r[rd]);
+4450: 				ic->arg[1] = (size_t)(&cpu->cd.arm.r[rn]);
+4451: 				ic->arg[2] = (size_t)(&cpu->cd.arm.r[rm]);
+4452: 				ic->f = cond_instr(uxtab);
+4453: 				if (iword & 0xc00) {
+4454: 					/*  #319: a rotate is legal here; it
+4455: 					    used to stop the emulator.  */
+4456: 					ic->arg[0] = iword;
+4457: 					ic->f = cond_instr(uxtab_rot);
+4458: 				}
+4459: 			} else if ((iword & 0x0fff03f0) == 0x06ff0070) {
+4460: 				ic->f = cond_instr(uxth);
+4461: 				ic->arg[0] = (size_t)(&cpu->cd.arm.r[rd]);
+4462: 				ic->arg[1] = (size_t)(&cpu->cd.arm.r[rm]);
+4463: 				ic->arg[2] = ((iword & 0xc00) >> 10) << 3;
+4464: 			} else if ((iword & 0x0ff003f0) == 0x06f00070) {
+4465: 				ic->arg[0] = (size_t)(&cpu->cd.arm.r[rd]);
+4466: 				ic->arg[1] = (size_t)(&cpu->cd.arm.r[rn]);
+4467: 				ic->arg[2] = (size_t)(&cpu->cd.arm.r[rm]);
+4468: 				ic->f = cond_instr(uxtah);
+4469: 				if (iword & 0xc00) {
+4470: 					/*  #319  */
+4471: 					ic->arg[0] = iword;
+4472: 					ic->f = cond_instr(uxtah_rot);
+4473: 				}
+4474: 			} else if ((iword & 0x0fe00070) == 0x07c00010) {
+4475: 				ic->f = cond_instr(bfi);
+4476: 				ic->arg[0] = (size_t)(&cpu->cd.arm.r[rd]);
+4477: 				ic->arg[1] = (size_t)(&cpu->cd.arm.r[rm]);
+4478: 				int lsb = (iword >> 7) & 31;
+4479: 				int msb = (iword >> 16) & 31;
+4480: 				ic->arg[2] = (msb << 16) + lsb;
+4481: 			} else if ((iword & 0x0fe00070) == 0x07e00050) {
+4482: 				ic->f = cond_instr(ubfx);
+4483: 				ic->arg[0] = (size_t)(&cpu->cd.arm.r[rd]);
+4484: 				ic->arg[1] = (size_t)(&cpu->cd.arm.r[rm]);
+4485: 				int lsb = (iword >> 7) & 31;
+4486: 				int width = 1 + ((iword >> 16) & 31);
+4487: 				ic->arg[2] = (width << 16) + lsb;
+4488: 			} else if ((iword & 0x0fe00070) == 0x07a00050) {
+4489: 				ic->f = cond_instr(sbfx);
+4490: 				ic->arg[0] = (size_t)(&cpu->cd.arm.r[rd]);
+4491: 				ic->arg[1] = (size_t)(&cpu->cd.arm.r[rm]);
+4492: 				int lsb = (iword >> 7) & 31;
+4493: 				int width = 1 + ((iword >> 16) & 31);
+4494: 				ic->arg[2] = (width << 16) + lsb;
+4495: 			} else {
+4496: 				/*
+4497: 				 *  #312: a word reaching here takes the
+4498: 				 *  Undefined Instruction exception. It must not
+4499: 				 *  stop the emulator, which is what used to
+4500: 				 *  happen: `goto bad` reaches the shared label
+4501: 				 *  in cpu_dyntrans.c, which sets
+4502: 				 *  cpu->running = 0. On the ARMv4 CPUs this
+4503: 				 *  tree actually models, the whole space is
+4504: 				 *  architecturally undefined -- it holds ARM's
+4505: 				 *  permanently-undefined encoding and the word
+4506: 				 *  GDB plants for breakpoints -- so und is the
+4507: 				 *  faithful answer as well as the safe one.
+4508: 				 *  For the ARMv6 models that share this decoder
+4509: 				 *  some of these words are real instructions
+4510: 				 *  (REV16 and the rest of the media set) that
+4511: 				 *  nobody has implemented; und is then an
+4512: 				 *  approximation, which is what the warning
+4513: 				 *  below is for. Halting was never right for
+4514: 				 *  either.
+4515: 				 *
+4516: 				 *  Worse, the halt happened HERE, during
+4517: 				 *  decode, so a CONDITIONAL undefined word
+4518: 				 *  whose condition was false -- one the guest
+4519: 				 *  would never have executed -- stopped the
+4520: 				 *  emulator too. Routing to und fixes that as
+4521: 				 *  well: the exception is raised only if the
+4522: 				 *  condition passes.
+4523: 				 *
+4524: 				 *  This is where the und routing lives now. The
+4525: 				 *  copy that used to sit further down this case
+GXEMUL-SEC/src\cpus\cpu_arm_instr.c:1309:X(ubfx)
+GXEMUL-SEC/src\cpus\cpu_arm_instr.c:1333:X(sbfx)
+GXEMUL-SEC/src\cpus\cpu_arm_instr.c:4482:				ic->f = cond_instr(ubfx);
+GXEMUL-SEC/src\cpus\cpu_arm_instr.c:4489:				ic->f = cond_instr(sbfx);
+
+ succeeded in 258ms:
+GXEMUL-SEC/src\include\cpu_ppc.h:156:#define	PPC_MSR_SF	(1ULL << 63)	/*  Sixty-Four-Bit Mode  */
+GXEMUL-SEC/src\include\cpu_ppc.h:158:#define	PPC_MSR_HV	(1ULL << 60)	/*  Hypervisor  */
+GXEMUL-SEC/src\cpus\cpu_m88k_instr.c:468:		x |= ~(0xffffffffU >> o);
+GXEMUL-SEC/src\cpus\cpu_m88k_instr.c:532:	uint32_t x = w == 0? 0xffffffff : ((uint32_t)1 << w) - 1;
+GXEMUL-SEC/src\cpus\cpu_m88k_instr.c:539:	uint32_t x = w == 0? 0xffffffff : ((uint32_t)1 << w) - 1;
+GXEMUL-SEC/src\cpus\cpu_m88k_instr.c:3512:					uint32_t x = w == 0? 0xffffffff
+GXEMUL-SEC/src\cpus\cpu_m88k_instr.c:3522:					uint32_t x = w == 0? 0xffffffff
+GXEMUL-SEC/src\cpus\cpu_ppc_instr.c:1396:	sig = (exp == 0) ? frac : (frac | (1ULL << 52));
+GXEMUL-SEC/src\cpus\cpu_ppc_instr.c:1417:	guard_sticky = sig & ((1ULL << shift) - 1);
+GXEMUL-SEC/src\cpus\cpu_ppc_instr.c:1423:			uint64_t half = 1ULL << (shift - 1);
+GXEMUL-SEC/src\cpus\cpu_ppc_instr.c:3418:		uint64_t sig = frac | (1ULL << 52);
+GXEMUL-SEC/src\cpus\memory_alpha.c:182:	    | (vaddr & ((1ULL << pageSizeShift) - 1));
+GXEMUL-SEC/src\devices\dev_pcc2.c:689:		if (!(d->warned_unimpl & (1ULL << relative_addr))) {
+GXEMUL-SEC/src\devices\dev_pcc2.c:690:			d->warned_unimpl |= 1ULL << relative_addr;
+#
+#  DO NOT EDIT THIS FILE! It is automagically created by
+#  the configure script, based on Makefile.skel.
+#
+
+XINCLUDE=-I/usr/X11R6/include
+XLIB=-L/usr/X11R6/lib -lX11 -Wl,-rpath,/usr/X11R6/lib
+CWARNINGS=-Wshadow -Wcast-align -Wstrict-aliasing -Wall  -Wextra -Wno-unused-parameter -Wno-cast-align
+COPTIM=-fstrict-aliasing -fomit-frame-pointer -fpeephole -fgnu89-inline -O3 -DNDEBUG 
+INCLUDE=-Iinclude/
+DINCLUDE=-I../include/
+INCLUDE2=-I../../include/
+CC=cc
+OTHERLIBS=-lm 
+CPU_ARCHS= cpu_alpha.o cpu_alpha_palcode.o memory_alpha.o cpu_arm.o cpu_arm_coproc.o memory_arm.o  tmp_arm_loadstore.o tmp_arm_loadstore_p0_u0_w0.o tmp_arm_loadstore_p0_u0_w1.o tmp_arm_loadstore_p0_u1_w0.o tmp_arm_loadstore_p0_u1_w1.o tmp_arm_loadstore_p1_u0_w0.o tmp_arm_loadstore_p1_u0_w1.o tmp_arm_loadstore_p1_u1_w0.o tmp_arm_loadstore_p1_u1_w1.o tmp_arm_dpi.o tmp_arm_r.o tmp_arm_r0.o tmp_arm_r1.o tmp_arm_r2.o tmp_arm_r3.o tmp_arm_r4.o tmp_arm_r5.o tmp_arm_r6.o tmp_arm_r7.o tmp_arm_r8.o tmp_arm_r9.o tmp_arm_ra.o tmp_arm_rb.o tmp_arm_rc.o tmp_arm_rd.o tmp_arm_re.o tmp_arm_rf.o tmp_arm_multi.o cpu_i960.o memory_i960.o cpu_m88k.o memory_m88k.o cpu_mips.o cpu_mips_coproc.o  cpu_mips_instr_unaligned.o cpu_ppc.o cpu_riscv.o memory_riscv.o cpu_sh.o memory_sh.o
+CPU_TOOLS= generate_alpha_misc generate_arm_dpi generate_arm_r generate_arm_loadstore generate_arm_multi generate_m88k_bcnd generate_m88k_loadstore generate_mips_loadstore generate_mips_loadstore_multi generate_ppc_loadstore
+PREFIX=/usr
+MANDIR=/usr/share/man
+DESTDIR=
+
+#
+#  Makefile for GXemul src/cpus
+#
+
+CFLAGS=$(CWARNINGS) $(COPTIM) $(DINCLUDE)
+
+OBJS=cpu.o $(CPU_ARCHS) $(CPU_BACKENDS)
+TOOLS=generate_head generate_tail $(CPU_TOOLS)
+
+
+all: $(TOOLS)
+	$(MAKE) buildobjs
+
+
+buildobjs: $(OBJS)
+
+
+$(OBJS): Makefile
+
+
+
+###############################################################################
+
+cpu_alpha.o: cpu_alpha.c cpu_alpha_instr.c cpu_dyntrans.c memory_rw.c \
+	tmp_alpha_head.c tmp_alpha_tail.c
+
+cpu_alpha_instr.c: cpu_alpha_instr_alu.c tmp_alpha_misc.c
+
+tmp_alpha_misc.c: cpu_alpha_instr_loadstore.c generate_alpha_misc
+	./generate_alpha_misc > tmp_alpha_misc.c
+
+tmp_alpha_head.c: generate_head
+	./generate_head alpha Alpha > tmp_alpha_head.c
+
+tmp_alpha_tail.c: generate_tail
+	./generate_tail alpha Alpha > tmp_alpha_tail.c
+
+
+###############################################################################
+
+cpu_arm.o: cpu_arm.c cpu_arm_instr.c cpu_dyntrans.c memory_rw.c \
+	tmp_arm_head.c tmp_arm_tail.c
+
+cpu_arm_instr.c: cpu_arm_instr_misc.c
+
+tmp_arm_loadstore.c: cpu_arm_instr_loadstore.c generate_arm_loadstore
+	./generate_arm_loadstore > tmp_arm_loadstore.c
+tmp_arm_loadstore_p0_u0_w0.c: cpu_arm_instr_loadstore.c generate_arm_loadstore
+	./generate_arm_loadstore 0 0 0 > tmp_arm_loadstore_p0_u0_w0.c
+tmp_arm_loadstore_p0_u0_w1.c: cpu_arm_instr_loadstore.c generate_arm_loadstore
+	./generate_arm_loadstore 0 0 1 > tmp_arm_loadstore_p0_u0_w1.c
+tmp_arm_loadstore_p0_u1_w0.c: cpu_arm_instr_loadstore.c generate_arm_loadstore
+	./generate_arm_loadstore 0 1 0 > tmp_arm_loadstore_p0_u1_w0.c
+tmp_arm_loadstore_p0_u1_w1.c: cpu_arm_instr_loadstore.c generate_arm_loadstore
+	./generate_arm_loadstore 0 1 1 > tmp_arm_loadstore_p0_u1_w1.c
+tmp_arm_loadstore_p1_u0_w0.c: cpu_arm_instr_loadstore.c generate_arm_loadstore
+	./generate_arm_loadstore 1 0 0 > tmp_arm_loadstore_p1_u0_w0.c
+tmp_arm_loadstore_p1_u0_w1.c: cpu_arm_instr_loadstore.c generate_arm_loadstore
+	./generate_arm_loadstore 1 0 1 > tmp_arm_loadstore_p1_u0_w1.c
+tmp_arm_loadstore_p1_u1_w0.c: cpu_arm_instr_loadstore.c generate_arm_loadstore
+	./generate_arm_loadstore 1 1 0 > tmp_arm_loadstore_p1_u1_w0.c
+tmp_arm_loadstore_p1_u1_w1.c: cpu_arm_instr_loadstore.c generate_arm_loadstore
+	./generate_arm_loadstore 1 1 1 > tmp_arm_loadstore_p1_u1_w1.c
+
+tmp_arm_multi.c: generate_arm_multi cpu_arm_multi.txt
+	./generate_arm_multi `cat cpu_arm_multi.txt` > tmp_arm_multi.c
+
+tmp_arm_dpi.c: cpu_arm_instr_dpi.c generate_arm_dpi
+	./generate_arm_dpi > tmp_arm_dpi.c
+
+tmp_arm_r0.c: generate_arm_r
+	./generate_arm_r 0x000 0x0ff > tmp_arm_r0.c
+tmp_arm_r1.c: generate_arm_r
+	./generate_arm_r 0x100 0x1ff > tmp_arm_r1.c
+tmp_arm_r2.c: generate_arm_r
+	./generate_arm_r 0x200 0x2ff > tmp_arm_r2.c
+tmp_arm_r3.c: generate_arm_r
+	./generate_arm_r 0x300 0x3ff > tmp_arm_r3.c
+tmp_arm_r4.c: generate_arm_r
+	./generate_arm_r 0x400 0x4ff > tmp_arm_r4.c
+tmp_arm_r5.c: generate_arm_r
+	./generate_arm_r 0x500 0x5ff > tmp_arm_r5.c
+tmp_arm_r6.c: generate_arm_r
+	./generate_arm_r 0x600 0x6ff > tmp_arm_r6.c
+tmp_arm_r7.c: generate_arm_r
+#
+#  DO NOT EDIT THIS FILE! It is automagically created by
+#  the configure script, based on Makefile.skel.
+#
+
+XINCLUDE=-I/usr/X11R6/include
+XLIB=-L/usr/X11R6/lib -lX11 -Wl,-rpath,/usr/X11R6/lib
+CWARNINGS=-Wshadow -Wcast-align -Wstrict-aliasing -Wall  -Wextra -Wno-unused-parameter -Wno-cast-align
+COPTIM=-fstrict-aliasing -fomit-frame-pointer -fpeephole -fgnu89-inline -O3 -DNDEBUG 
+INCLUDE=-Iinclude/
+DINCLUDE=-I../include/
+INCLUDE2=-I../../include/
+CC=cc
+OTHERLIBS=-lm 
+CPU_ARCHS= cpu_alpha.o cpu_alpha_palcode.o memory_alpha.o cpu_arm.o cpu_arm_coproc.o memory_arm.o  tmp_arm_loadstore.o tmp_arm_loadstore_p0_u0_w0.o tmp_arm_loadstore_p0_u0_w1.o tmp_arm_loadstore_p0_u1_w0.o tmp_arm_loadstore_p0_u1_w1.o tmp_arm_loadstore_p1_u0_w0.o tmp_arm_loadstore_p1_u0_w1.o tmp_arm_loadstore_p1_u1_w0.o tmp_arm_loadstore_p1_u1_w1.o tmp_arm_dpi.o tmp_arm_r.o tmp_arm_r0.o tmp_arm_r1.o tmp_arm_r2.o tmp_arm_r3.o tmp_arm_r4.o tmp_arm_r5.o tmp_arm_r6.o tmp_arm_r7.o tmp_arm_r8.o tmp_arm_r9.o tmp_arm_ra.o tmp_arm_rb.o tmp_arm_rc.o tmp_arm_rd.o tmp_arm_re.o tmp_arm_rf.o tmp_arm_multi.o cpu_i960.o memory_i960.o cpu_m88k.o memory_m88k.o cpu_mips.o cpu_mips_coproc.o  cpu_mips_instr_unaligned.o cpu_ppc.o cpu_riscv.o memory_riscv.o cpu_sh.o memory_sh.o
+CPU_TOOLS= generate_alpha_misc generate_arm_dpi generate_arm_r generate_arm_loadstore generate_arm_multi generate_m88k_bcnd generate_m88k_loadstore generate_mips_loadstore generate_mips_loadstore_multi generate_ppc_loadstore
+PREFIX=/usr
+MANDIR=/usr/share/man
+DESTDIR=
+
+#
+#  Makefile for GXemul src
+#
+
+all: do_include
+	$(MAKE) the_rest
+
+the_rest: do_console do_cpus do_debugger do_devices do_disk \
+	do_file do_machines do_net do_core do_promemul do_symbol
+
+do_include:
+	cd include; $(MAKE)
+
+do_console:
+	cd console; $(MAKE)
+
+do_cpus:
+	cd cpus; $(MAKE)
+
+do_debugger:
+	cd debugger; $(MAKE)
+
+do_devices:
+	cd devices; $(MAKE)
+
+do_disk:
+	cd disk; $(MAKE)
+
+do_file:
+	cd file; $(MAKE)
+
+do_machines:
+	cd machines; $(MAKE)
+
+do_net:
+	cd net; $(MAKE)
+
+do_core:
+	cd core; $(MAKE)
+
+do_promemul:
+	cd promemul; $(MAKE)
+
+do_symbol:
+	cd symbol; $(MAKE)
+
+
+$(OBJS): Makefile
+
+
+clean:
+	rm -f $(OBJS) *.core
+	cd include; $(MAKE) clean
+	cd console; $(MAKE) clean
+	cd cpus; $(MAKE) clean
+GXEMUL-SEC/regress/arm_writeback_probe.py:48:correction went wrong. A round of review found that draft claimed the new cold
+GXEMUL-SEC/regress/arm_writeback_probe.py:60:                         probe's `copyin cold` / `copyout cold` arms
+GXEMUL-SEC/regress/arm_writeback_probe.py:61:  general pre-index   -- `cold pre4 unal` (this probe), and the strlen probe's
+GXEMUL-SEC/regress/arm_writeback_probe.py:79:  the three `rot word cold` rows                 -- in the GENERAL function
+GXEMUL-SEC/regress/arm_writeback_probe.py:82:the one this round actually answers: the three `rot word cold` rows, and nothing
+GXEMUL-SEC/regress/arm_writeback_probe.py:94:That is what COLD/COLD1/COLD2/COLD3 are for, and the three `cold` rotation rows
+GXEMUL-SEC/regress/arm_writeback_probe.py:100:`put b` is not the ONLY cold seeding -- a review seat corrected an earlier draft
+GXEMUL-SEC/regress/arm_writeback_probe.py:102:`memory_rw` with `CACHE_NONE | NO_EXCEPTIONS` and leave a page equally cold. It
+GXEMUL-SEC/regress/arm_writeback_probe.py:121:    is never executed, but it means "put b leaves a page cold" is a statement
+GXEMUL-SEC/regress/arm_writeback_probe.py:185:and `#364` added three more from a cold page. Six rows now pin unaligned loaded
+GXEMUL-SEC/regress/arm_writeback_probe.py:250:#  cold page can be (see the device-arm and instruction-fetch notes above).
+GXEMUL-SEC/regress/arm_writeback_probe.py:278:#    put b  -> debugger_cmds.c  memory_rw(..., MEM_WRITE, CACHE_NONE|NO_EXCEPTIONS)
+GXEMUL-SEC/regress/arm_writeback_probe.py:279:#    put w  -> debugger_cmds.c  store_32bit_word()
+GXEMUL-SEC/regress/arm_writeback_probe.py:286:#  page cold and `put w` does not. Note the gate ALSO requires a full page, so
+GXEMUL-SEC/regress/arm_writeback_probe.py:287:#  a device-backed or partial-page target would stay cold under `put w` too --
+GXEMUL-SEC/regress/arm_writeback_probe.py:298:#  BEFORE `pc=` was sent -- and the three cold rows would still PASS, because the
+GXEMUL-SEC/regress/arm_writeback_probe.py:459:    ("A wb rot word cold plus1", "DISC",
+GXEMUL-SEC/regress/arm_writeback_probe.py:461:    ("A wb rot word cold plus2", "DISC",
+GXEMUL-SEC/regress/arm_writeback_probe.py:463:    ("A wb rot word cold plus3", "DISC",
+GXEMUL-SEC/regress/arm_writeback_probe.py:471:    #  fold-marker probe's `copyin cold` / `copyout cold` arms are six ldrt/strt
+GXEMUL-SEC/regress/arm_writeback_probe.py:483:    #  later can fold"). The count is ONE general entry per cold arm, not six.
+GXEMUL-SEC/regress/arm_writeback_probe.py:500:    #  only: the ldrt row red and the cold pre4 row green, which separates the
+GXEMUL-SEC/regress/arm_writeback_probe.py:505:    ("A wb word cold pre4 unal", "DISC",
+GXEMUL-SEC/regress/arm_writeback_probe.py:666:#    * the four `put b`-seeded cold rows are 1 -- one entry, which then warms;
+GXEMUL-SEC/regress/arm_writeback_probe.py:673:#  insertion is BLOCKED (a device page, a partial page, MMU-on unmapped). A cold
+GXEMUL-SEC/regress/arm_writeback_probe.py:678:    "A wb rot word cold plus1": 1,
+GXEMUL-SEC/regress/arm_writeback_probe.py:679:    "A wb rot word cold plus2": 1,
+GXEMUL-SEC/regress/arm_writeback_probe.py:680:    "A wb rot word cold plus3": 1,
+GXEMUL-SEC/regress/arm_writeback_probe.py:681:    "A wb word cold pre4 unal": 1,
+GXEMUL-SEC/regress/arm_endian_probe.py:15:Measured before the fix on -E barearm: a cold store of 0x11223344 read back
+GXEMUL-SEC/regress/arm_endian_probe.py:21:BOTH its warm and cold arms. So for multi-transfers the WARM rows discriminate
+GXEMUL-SEC/regress/arm_endian_probe.py:26:undecoded, and every other write is machine-setup-time), so post-fix a BE guest
+GXEMUL-SEC/regress/arm_endian_probe.py:27:takes bdt_* everywhere and warm == cold == architectural.
+GXEMUL-SEC/regress/arm_endian_probe.py:36:    outright (machine_test.c) -- no config file, no ELF, no stub-order wrinkle.
+GXEMUL-SEC/regress/arm_endian_probe.py:43:"cold in name", which #378's inverted polarity would have turned into a lie.
+GXEMUL-SEC/regress/arm_endian_probe.py:60:`put w` (a byte write has no order and does not un-warm). The cold LDM page
+GXEMUL-SEC/regress/arm_endian_probe.py:61:sees ONLY `put b`; the cold STM page is fully UNSEEDED (no access of any kind
+GXEMUL-SEC/regress/arm_endian_probe.py:62:-- unseeded RAM is zero); #372's cold rows stay fully unseeded as before. The
+GXEMUL-SEC/regress/arm_endian_probe.py:64:debugger_cmds.c and silently persists. #379: every put's echo is checked for
+GXEMUL-SEC/regress/arm_endian_probe.py:66:leave the warm pages cold and flip every warm DISC row to a FALSE GREEN on a
+GXEMUL-SEC/regress/arm_endian_probe.py:105:#  #386: swp/swpb. X(swp) goes through memory_rw directly (no warm/cold fast
+GXEMUL-SEC/regress/arm_endian_probe.py:270:def run(machine, prog, seeds, regs):
+GXEMUL-SEC/regress/arm_endian_probe.py:271:    #  A raw stub just makes the machine construct. barearm lays no LE halt stub
+GXEMUL-SEC/regress/arm_endian_probe.py:273:    stub = "/tmp/gx_endian_%s.bin" % machine
+GXEMUL-SEC/regress/arm_endian_probe.py:274:    order = ">I" if machine == "barearm" else "<I"
+GXEMUL-SEC/regress/arm_endian_probe.py:280:        os.execvp(BIN, [BIN, "-V", "-A", "-E", machine, "-M", "64",
+GXEMUL-SEC/regress/arm_endian_probe.py:337:    #  a silently failing put would leave it cold, route the transfer through
+GXEMUL-SEC/regress/arm_endian_probe.py:343:    #  that never completed is exactly the silently-cold-page case the comment
+GXEMUL-SEC/regress/arm_endian_probe.py:376:#  (group_label, machine, prog, seeds, [(row_name, reg, arch, buggy, kind)])
+GXEMUL-SEC/regress/arm_endian_probe.py:384:    ("372 be cold", "barearm", store_prog(MOV_R0_COLD), SEED_WARM_W, [
+GXEMUL-SEC/regress/arm_endian_probe.py:385:        ("be cold word", "r2", 0x11223344, 0x44332211, "DISC"),
+GXEMUL-SEC/regress/arm_endian_probe.py:386:        ("be cold byte0", "r3", 0x11, 0x44, "DISC"),
+GXEMUL-SEC/regress/arm_endian_probe.py:387:        ("be cold byte1", "r4", 0x22, 0x33, "DISC"),
+GXEMUL-SEC/regress/arm_endian_probe.py:388:        ("be cold byte2", "r5", 0x33, 0x22, "DISC"),
+GXEMUL-SEC/regress/arm_endian_probe.py:389:        ("be cold byte3", "r6", 0x44, 0x11, "DISC"),
+GXEMUL-SEC/regress/arm_endian_probe.py:394:    ("372 le cold", "testarm", store_prog(MOV_R0_COLD), SEED_WARM_W, [
+GXEMUL-SEC/regress/arm_endian_probe.py:395:        ("le cold word", "r2", 0x11223344, 0x11223344, "CTRL"),
+GXEMUL-SEC/regress/arm_endian_probe.py:396:        ("le cold byte0", "r3", 0x44, 0x44, "CTRL"),
+GXEMUL-SEC/regress/arm_endian_probe.py:397:        ("le cold byte1", "r4", 0x33, 0x33, "CTRL"),
+GXEMUL-SEC/regress/arm_endian_probe.py:398:        ("le cold byte2", "r5", 0x22, 0x22, "CTRL"),
+GXEMUL-SEC/regress/arm_endian_probe.py:399:        ("le cold byte3", "r6", 0x11, 0x11, "CTRL"),
+GXEMUL-SEC/regress/arm_endian_probe.py:412:    ("378 be stm cold", "barearm", stm_prog(MOV_R3_COLD), [], [
+GXEMUL-SEC/regress/arm_endian_probe.py:413:        ("be stm cold b0", "r4", 0x11, 0x11, "CTRL"),
+GXEMUL-SEC/regress/arm_endian_probe.py:414:        ("be stm cold b1", "r5", 0x22, 0x22, "CTRL"),
+GXEMUL-SEC/regress/arm_endian_probe.py:415:        ("be stm cold b2", "r6", 0x33, 0x33, "CTRL"),
+GXEMUL-SEC/regress/arm_endian_probe.py:416:        ("be stm cold b3", "r7", 0x44, 0x44, "CTRL"),
+GXEMUL-SEC/regress/arm_endian_probe.py:423:    ("378 be ldm cold", "barearm", ldm_prog(MOV_R3_COLD), seed_bytes(COLD), [
+GXEMUL-SEC/regress/arm_endian_probe.py:424:        ("be ldm cold r1", "r1", 0x11223344, 0x11223344, "CTRL"),
+GXEMUL-SEC/regress/arm_endian_probe.py:425:        ("be ldm cold r2", "r2", 0x55667788, 0x55667788, "CTRL"),
+GXEMUL-SEC/regress/arm_endian_probe.py:514:    #  chicken-out is unconditional for A__LDRD||A__STRD), so no warm/cold
+GXEMUL-SEC/regress/arm_endian_probe.py:631:#  Controls: `be warm word` proves the #372 machinery live (fast STR was always
+GXEMUL-SEC/regress/arm_endian_probe.py:632:#  order-aware). `be stm cold b0` + `be ldm cold r1` prove the #378 machinery
+GXEMUL-SEC/regress/arm_endian_probe.py:641:for glabel, machine, prog, seeds, rows in GROUPS:
+GXEMUL-SEC/regress/arm_endian_probe.py:643:    got = run(machine, prog, seeds, regs)
+GXEMUL-SEC/regress/arm_endian_probe.py:665:        if name in ("be stm cold b0", "be ldm cold r1"):
+GXEMUL-SEC/regress/arm_endian_probe.py:677:      % ("OK" if control378.get("be stm cold b0")
+GXEMUL-SEC/regress/arm_endian_probe.py:678:         and control378.get("be ldm cold r1") else "FAIL"))
+GXEMUL-SEC/regress/arm_flags_probe.py:10:Cold debugger on `testarm` (SA1110), RAM at 0. The machine needs A file to
+GXEMUL-SEC/regress/arm_flags_probe.py:111:def session(cmds, nwords):
+GXEMUL-SEC/regress/arm_flags_probe.py:112:    """Run one cold-debugger session; return (words, transcript)."""
+GXEMUL-SEC/regress/arm_flags_probe.py:163:    for c in cmds:
+GXEMUL-SEC/regress/arm_flags_probe.py:251:         `cpu->machine->breakpoints.n == 0` (:1939). Every probe in THIS file
+GXEMUL-SEC/regress/arm_flags_probe.py:420:#  1-machine 1-cpu rig the line is `[ cpu <name>: combined N iterations ]`
+GXEMUL-SEC/regress/arm_flags_probe.py:422:#  multiple machines/cpus). Anchoring on `cpu <name>: combined` survives
+GXEMUL-SEC/regress/arm_flags_probe.py:435:def verb_cmds():
+GXEMUL-SEC/regress/arm_flags_probe.py:540:    cmds = ["r9=0x1", "r7=0x%x" % DEST,
+GXEMUL-SEC/regress/arm_flags_probe.py:542:    cmds += ["put w 0x%x, 0xdeadbeef" % (DEST + 4 * i) for i in range(5)]
+GXEMUL-SEC/regress/arm_flags_probe.py:543:    cmds += ["put w 0x%x, 0x%08x" % (CODE + 4 * i, iw)
+GXEMUL-SEC/regress/arm_flags_probe.py:546:        cmds += verb_cmds()
+GXEMUL-SEC/regress/arm_flags_probe.py:547:    cmds += ["breakpoint add 0x%x" % (CODE + 4 * (len(prog) - 1)),
+GXEMUL-SEC/regress/arm_flags_probe.py:549:    w, buf = session(cmds, 5)
+GXEMUL-SEC/regress/arm_flags_probe.py:772:    cmds = ["r9=0x1",
+GXEMUL-SEC/regress/arm_flags_probe.py:774:    cmds += ["put w 0x%x, 0x%08x" % (CODE + 4 * i, iw)
+GXEMUL-SEC/regress/arm_flags_probe.py:776:    cmds += verb_cmds()
+GXEMUL-SEC/regress/arm_flags_probe.py:777:    cmds += ["breakpoint add 0x%x" % (CODE + 4 * (len(prog) - 1)),
+GXEMUL-SEC/regress/arm_flags_probe.py:779:    w, buf = session(cmds, 0)
+GXEMUL-SEC/regress/arm_flags_probe.py:907:    cmds = ["r9=0x1", "r7=0x%x" % DEST]
+GXEMUL-SEC/regress/arm_flags_probe.py:908:    cmds += ["put w 0x%x, 0xdeadbeef" % (DEST + 4 * i) for i in range(5)]
+GXEMUL-SEC/regress/arm_flags_probe.py:909:    cmds += ["put w 0x%x, 0x%08x" % (CODE + 4 * i, iw)
+GXEMUL-SEC/regress/arm_flags_probe.py:912:        cmds += verb_cmds()
+GXEMUL-SEC/regress/arm_flags_probe.py:913:    cmds += ["breakpoint add 0x%x" % (CODE + 4 * (len(prog) - 1)),
+GXEMUL-SEC/regress/arm_flags_probe.py:915:    w, buf = session(cmds, 5)
+GXEMUL-SEC/regress/arm_flags_probe.py:928:    machine. Returns (fallthrough_marker, handler_marker): the first must be
+GXEMUL-SEC/regress/arm_flags_probe.py:1030:    #  grounds that a cold handler could not reconstruct PC+8; that was simply
+GXEMUL-SEC/regress/arm_flags_probe.py:1051:    cmds = list(pre)
+GXEMUL-SEC/regress/arm_flags_probe.py:1057:        cmds = ["r6=%d" % r6, "r7=%d" % r7] + cmds
+GXEMUL-SEC/regress/arm_flags_probe.py:1059:    cmds += ["r4=0x%x" % DEST, "put w 0x%x, 0xdeadbeef" % DEST]
+GXEMUL-SEC/regress/arm_flags_probe.py:1061:        cmds.append("put w 0x%x, 0x%08x" % (CODE + 4 * i, w))
+GXEMUL-SEC/regress/arm_flags_probe.py:1062:    cmds += ["pc=0x%x" % CODE, "step %d" % len(code)]
+GXEMUL-SEC/regress/arm_flags_probe.py:1063:    w, _ = session(cmds, 1)
+GXEMUL-SEC/regress/arm_flags_probe.py:1164:#  0xfffff000 and this machine has not got any. What they do prove is that the
+GXEMUL-SEC/regress/arm_flags_probe.py:1230:#  raised -- distinguishes correct silence from a stopped machine.
+GXEMUL-SEC/regress/arm_flags_probe.py:1313:    machine starts with C clear, which makes two whole contracts unmeasurable:
+
+web search: https://www.open-std.org/jtc1/sc22/wg14/www/docs/n1256.pdf
+web search: 
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$armLines = Get-Content -LiteralPath '"'GXEMUL-SEC/src/cpus/cpu_arm_instr.c'; foreach ("'$part in @(@(1353,1390),@(3950,4025),@(4360,4435))) { for ($ln = $part[0]; $ln -le $part[1]; $ln++) { '"'{0}: {1}' -f "'$ln,$armLines[$ln-1] } }; rg -n '"'arm_type|ARM_V|ARM_ARCH|#define.*[XY]|#define.*cond_instr' GXEMUL-SEC/src/cpus/cpu_arm_instr.c GXEMUL-SEC/src/cpus/cpu_arm.c GXEMUL-SEC/src/include/cpu_arm.h; Get-Content -LiteralPath 'GXEMUL-SEC/src/include/arm_cpu_types.h' -TotalCount 180; rg -n '#[0-9]+' GXEMUL-SEC/src/cpus/cpu_arm_instr.c" in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$mkLines = Get-Content -LiteralPath '"'GXEMUL-SEC/src/cpus/cpu_m88k_instr.c'; foreach ("'$part in @(@(425,475),@(520,545),@(3497,3530))) { for ($ln = $part[0]; $ln -le $part[1]; $ln++) { '"'{0}: {1}' -f "'$ln,$mkLines[$ln-1] } }; rg -n -g '"'*.c' -g '*.h' '(0xffffffff|UINT32_MAX|~\\s*\\(\\s*(uint32_t|u_int32_t)\\s*\\)\\s*0|~0U).{0,32}>>|>>.{0,5}\\(32\\s*-|mask\\s*>>=' GXEMUL-SEC/src; rg -n 'cpu_name|CPU|MACHINE_|arm|RAM|ram|register' GXEMUL-SEC/src/machines/machine_iq80321.c GXEMUL-SEC/src/machines/machine_androidarm.c GXEMUL-SEC/src/machines/machine_hpcarm.c; rg -n 'subprocess|Popen|exe|gxemul|iq80321|steps|decode|register|argparse|r[0-9].*=' GXEMUL-SEC/regress/arm_flags_probe.py" in C:\DocumentNoSnc\CC\GXEMUL
+ succeeded in 286ms:
+425: 		else
+426: 			r |= M88K_CMP_LT | M88K_CMP_LE;
+427: 	}
+428: 
+429: 	reg(ic->arg[0]) = r;
+430: }
+431: X(cmp_imm) { m88k_cmp(cpu, ic, ic->arg[2]); }
+432: X(cmp)     { m88k_cmp(cpu, ic, reg(ic->arg[2])); }
+433: 
+434: 
+435: /*
+436:  *  extu_imm:  Extract bits, unsigned, immediate W<O>.
+437:  *  extu:      Extract bits, unsigned, W<O> taken from register s2.
+438:  *  ext_imm:   Extract bits, signed, immediate W<O>.
+439:  *  ext:       Extract bits, signed, W<O> taken from register s2.
+440:  *  mak_imm:   Make bit field, immediate W<O>.
+441:  *  mak:       Make bit field, W<O> taken from register s2.
+442:  *  rot:       Rotate s1 right, nr of steps taken from s2.
+443:  *  clr:       Clear bits, W<O> taken from register s2.
+444:  *  set:       Set bits, W<O> taken from register s2.
+445:  *
+446:  *  arg[0] = pointer to register d
+447:  *  arg[1] = pointer to register s1
+448:  *  arg[2] = pointer to register s2 or 10 bits wwwwwooooo
+449:  */
+450: static void m88k_extu(struct cpu *cpu, struct m88k_instr_call *ic, int w, int o)
+451: {
+452: 	uint32_t x = reg(ic->arg[1]) >> o;
+453: 	if (w != 0) {
+454: 		x <<= (32-w);
+455: 		x >>= (32-w);
+456: 	}
+457: 	reg(ic->arg[0]) = x;
+458: }
+459: static void m88k_ext(struct cpu *cpu, struct m88k_instr_call *ic, int w, int o)
+460: {
+461: 	uint32_t src = reg(ic->arg[1]), x = src >> o;
+462: 	if (w != 0) {
+463: 		uint32_t signbit = (uint32_t)1 << (w - 1);
+464: 		x &= ((uint32_t)1 << w) - 1;
+465: 		if (x & signbit)
+466: 			x |= ~(((uint32_t)1 << w) - 1);
+467: 	} else if (o != 0 && (src & 0x80000000)) {
+468: 		x |= ~(0xffffffffU >> o);
+469: 	}
+470: 	reg(ic->arg[0]) = x;
+471: }
+472: static void m88k_mak(struct cpu *cpu, struct m88k_instr_call *ic, int w, int o)
+473: {
+474: 	uint32_t x = reg(ic->arg[1]);
+475: 	if (w != 0) {
+520: }
+521: X(rot_imm)
+522: {
+523: 	m88k_rot(cpu, ic, ic->arg[2] & 0x1f);
+524: }
+525: X(rot)
+526: {
+527: 	m88k_rot(cpu, ic, reg(ic->arg[2]) & 0x1f);
+528: }
+529: X(clr)
+530: {
+531: 	int w = (reg(ic->arg[2]) >> 5) & 0x1f, o = reg(ic->arg[2]) & 0x1f;
+532: 	uint32_t x = w == 0? 0xffffffff : ((uint32_t)1 << w) - 1;
+533: 	x <<= o;
+534: 	reg(ic->arg[0]) = reg(ic->arg[1]) & ~x;
+535: }
+536: X(set)
+537: {
+538: 	int w = (reg(ic->arg[2]) >> 5) & 0x1f, o = reg(ic->arg[2]) & 0x1f;
+539: 	uint32_t x = w == 0? 0xffffffff : ((uint32_t)1 << w) - 1;
+540: 	x <<= o;
+541: 	reg(ic->arg[0]) = reg(ic->arg[1]) | x;
+542: }
+543: 
+544: 
+545: /*
+3497: 		case 0x20:	/*  clr  */
+3498: 		case 0x22:	/*  set  */
+3499: 		case 0x24:	/*  ext  */
+3500: 		case 0x26:	/*  extu  */
+3501: 		case 0x28:	/*  mak  */
+3502: 		case 0x2a:	/*  rot  */
+3503: 			ic->arg[0] = (size_t) &cpu->cd.m88k.r[d];
+3504: 			ic->arg[1] = (size_t) &cpu->cd.m88k.r[s1];
+3505: 			ic->arg[2] = iword & 0x3ff;
+3506: 
+3507: 			switch (op10) {
+3508: 			case 0x20: ic->f = instr(mask_imm);
+3509: 				   {
+3510: 					int w = ic->arg[2] >> 5;
+3511: 					int o = ic->arg[2] & 0x1f;
+3512: 					uint32_t x = w == 0? 0xffffffff
+3513: 					    : ((uint32_t)1 << w) - 1;
+3514: 					x <<= o;
+3515: 					ic->arg[2] = ~x;
+3516: 				   }
+3517: 				   break;
+3518: 			case 0x22: ic->f = instr(or_imm);
+3519: 				   {
+3520: 					int w = ic->arg[2] >> 5;
+3521: 					int o = ic->arg[2] & 0x1f;
+3522: 					uint32_t x = w == 0? 0xffffffff
+3523: 					    : ((uint32_t)1 << w) - 1;
+3524: 					x <<= o;
+3525: 					ic->arg[2] = x;
+3526: 				   }
+3527: 				   break;
+3528: 			case 0x24: ic->f = instr(ext_imm); break;
+3529: 			case 0x26: ic->f = instr(extu_imm); break;
+3530: 			case 0x28: ic->f = instr(mak_imm); break;
+GXEMUL-SEC/src\debugger\debugger_cmds.c:960:			if (data > 0xffffffff && (data >> 32) != 0
+GXEMUL-SEC/src\debugger\debugger_cmds.c:1538:		if (data > 0xffffffff && (data >> 32) != 0
+GXEMUL-SEC/src\cpus\cpu_alpha_instr_alu.c:145:		mask >>= (64 - r);
+GXEMUL-SEC/src\cpus\cpu_arm.c:1305:					tmp = (src >> (32 - imm6)) & 1;
+GXEMUL-SEC/src\cpus\cpu_sh_instr.c:2201:		rn >>= (32 - sa);
+GXEMUL-SEC/src\cpus\cpu_sh_instr.c:2218:		rn >>= (32 - sa);
+GXEMUL-SEC/src\cpus\cpu_m88k_instr.c:266:		mask >>= 1; n--;
+GXEMUL-SEC/src\cpus\cpu_m88k_instr.c:283:		mask >>= 1; n--;
+GXEMUL-SEC/src\cpus\cpu_m88k_instr.c:455:		x >>= (32-w);
+GXEMUL-SEC/src\cpus\cpu_m88k_instr.c:468:		x |= ~(0xffffffffU >> o);
+GXEMUL-SEC/src\cpus\cpu_m88k_instr.c:477:		x >>= (32-w);
+GXEMUL-SEC/src\cpus\cpu_ppc_instr.c:2526:	tmp = sh ? ((tmp << sh) | (tmp >> (32-sh))) : tmp;
+GXEMUL-SEC/src\cpus\cpu_ppc_instr.c:2546:	tmp = sh ? ((tmp << sh) | (tmp >> (32-sh))) : tmp;
+GXEMUL-SEC/src\cpus\cpu_ppc_instr.c:2569:	tmp = sh ? ((tmp << sh) | (tmp >> (32-sh))) : tmp;
+GXEMUL-SEC/src\cpus\cpu_mips_instr.c:1739:	mask >>= (32 - pos - size);
+GXEMUL-SEC/src\cpus\cpu_mips_instr.c:1757:	uint32_t x = (rs << (32-lsb-size)) >> (32-lsb-size);
+GXEMUL-SEC/src/machines/machine_iq80321.c:44:MACHINE_SETUP(iq80321)
+GXEMUL-SEC/src/machines/machine_iq80321.c:57:	cpu->cd.arm.coproc[6] = arm_coproc_i80321_6;
+GXEMUL-SEC/src/machines/machine_iq80321.c:68:	/*  0xa0000000 = physical ram, 0xc0000000 = uncached  */
+GXEMUL-SEC/src/machines/machine_iq80321.c:69:	dev_ram_init(machine, 0xa0000000, 0x20000000, DEV_RAM_MIRROR, 0x0, NULL);
+GXEMUL-SEC/src/machines/machine_iq80321.c:70:	dev_ram_init(machine, 0xc0000000, 0x20000000, DEV_RAM_MIRROR, 0x0, NULL);
+GXEMUL-SEC/src/machines/machine_iq80321.c:73:	dev_ram_init(machine, 0xe0000000, 0x100000, DEV_RAM_RAM, 0x0, NULL);
+GXEMUL-SEC/src/machines/machine_iq80321.c:74:	dev_ram_init(machine, 0xff000000, 0x100000, DEV_RAM_RAM, 0x0, NULL);
+GXEMUL-SEC/src/machines/machine_iq80321.c:89:	arm_setup_initial_translation_table(cpu, 0x4000);
+GXEMUL-SEC/src/machines/machine_iq80321.c:90:	arm_translation_table_set_l1(cpu, 0xa0000000, 0xa0000000);
+GXEMUL-SEC/src/machines/machine_iq80321.c:91:	arm_translation_table_set_l1(cpu, 0xc0000000, 0xa0000000);
+GXEMUL-SEC/src/machines/machine_iq80321.c:92:	arm_translation_table_set_l1(cpu, 0xe0000000, 0xe0000000);
+GXEMUL-SEC/src/machines/machine_iq80321.c:93:	arm_translation_table_set_l1(cpu, 0xf0000000, 0xf0000000);
+GXEMUL-SEC/src/machines/machine_iq80321.c:97:MACHINE_DEFAULT_CPU(iq80321)
+GXEMUL-SEC/src/machines/machine_iq80321.c:99:	machine->cpu_name = strdup("80321_600_2");
+GXEMUL-SEC/src/machines/machine_iq80321.c:103:MACHINE_REGISTER(iq80321)
+GXEMUL-SEC/src/machines/machine_iq80321.c:105:	MR_DEFAULT(iq80321, "Intel IQ80321", MACHINE_IQ80321);
+GXEMUL-SEC/src/machines/machine_androidarm.c:59:MACHINE_SETUP(androidarm)
+GXEMUL-SEC/src/machines/machine_androidarm.c:68:	case MACHINE_ANDROIDARM_FINOWX5AIR:
+GXEMUL-SEC/src/machines/machine_androidarm.c:71:		// 2 GB ram at 0x80000000? Mirrored at 0 maybe? (But in GXemul's legacy
+GXEMUL-SEC/src/machines/machine_androidarm.c:72:		// framework, we have to make the mirror the other way around.)
+GXEMUL-SEC/src/machines/machine_androidarm.c:73:		dev_ram_init(machine, 0x80000000, 0x10000000, DEV_RAM_MIRROR, 0x0, NULL);
+GXEMUL-SEC/src/machines/machine_androidarm.c:74:		dev_ram_init(machine, 0x90000000, 0x70000000, DEV_RAM_RAM, 0x0, NULL);
+GXEMUL-SEC/src/machines/machine_androidarm.c:77:		dev_ram_init(machine, 0x40000000, 0x10000000, DEV_RAM_MIRROR, 0x0, NULL);
+GXEMUL-SEC/src/machines/machine_androidarm.c:79:		// See https://github.com/torvalds/linux/blob/master/arch/arm/boot/dts/mt6580.dtsi
+GXEMUL-SEC/src/machines/machine_androidarm.c:87:		// See https://github.com/torvalds/linux/blob/master/include/dt-bindings/interrupt-controller/arm-gic.h
+GXEMUL-SEC/src/machines/machine_androidarm.c:105:	case MACHINE_ANDROIDARM_SONYXPERIAMINI:
+GXEMUL-SEC/src/machines/machine_androidarm.c:109:		dev_ram_init(machine, 0x40000000, 0x20000000, DEV_RAM_MIRROR, 0x0, NULL);
+GXEMUL-SEC/src/machines/machine_androidarm.c:123:	default:printf("Unimplemented android-arm machine number.\n");
+GXEMUL-SEC/src/machines/machine_androidarm.c:127:	// See https://www.kernel.org/doc/Documentation/arm/Booting
+GXEMUL-SEC/src/machines/machine_androidarm.c:128:	cpu->cd.arm.r[0] = 0x00000000;
+GXEMUL-SEC/src/machines/machine_androidarm.c:129:	cpu->cd.arm.r[1] = 0xffffffff;	// architecture ID. 0xffffffff = use DT (device tree)?
+GXEMUL-SEC/src/machines/machine_androidarm.c:133:		cpu->cd.arm.r[2] = 0x00002000;	// ATAGs at 8KB from start of low RAM.
+GXEMUL-SEC/src/machines/machine_androidarm.c:137:		cpu->cd.arm.r[2] = 0x08000000;	// Device Tree at 128 MB from start of RAM.
+GXEMUL-SEC/src/machines/machine_androidarm.c:139:		store_32bit_word(cpu, cpu->cd.arm.r[2], swap_if_little_endian(0xd00dfeed, cpu));
+GXEMUL-SEC/src/machines/machine_androidarm.c:144:MACHINE_DEFAULT_CPU(androidarm)
+GXEMUL-SEC/src/machines/machine_androidarm.c:148:	case MACHINE_ANDROIDARM_FINOWX5AIR:
+GXEMUL-SEC/src/machines/machine_androidarm.c:150:		machine->cpu_name = strdup("CORTEX-A5");
+GXEMUL-SEC/src/machines/machine_androidarm.c:153:	case MACHINE_ANDROIDARM_SONYXPERIAMINI:
+GXEMUL-SEC/src/machines/machine_androidarm.c:156:		// [    0.000000] CPU: ARMv7 Processor [511f00f2] revision 2 (ARMv7), cr=10c53c7d
+GXEMUL-SEC/src/machines/machine_androidarm.c:157:		machine->cpu_name = strdup("SnapdragonS2");
+GXEMUL-SEC/src/machines/machine_androidarm.c:161:		machine->cpu_name = strdup("CORTEX-A5");
+GXEMUL-SEC/src/machines/machine_androidarm.c:166:MACHINE_DEFAULT_RAM(androidarm)
+GXEMUL-SEC/src/machines/machine_androidarm.c:170:	case MACHINE_ANDROIDARM_FINOWX5AIR:
+GXEMUL-SEC/src/machines/machine_androidarm.c:172:		machine->physical_ram_in_mb = 256;
+GXEMUL-SEC/src/machines/machine_androidarm.c:175:	case MACHINE_ANDROIDARM_SONYXPERIAMINI:
+GXEMUL-SEC/src/machines/machine_androidarm.c:176:		machine->physical_ram_in_mb = 512;
+GXEMUL-SEC/src/machines/machine_androidarm.c:180:		machine->physical_ram_in_mb = 512;
+GXEMUL-SEC/src/machines/machine_androidarm.c:185:MACHINE_REGISTER(androidarm)
+GXEMUL-SEC/src/machines/machine_androidarm.c:187:	MR_DEFAULT(androidarm, "ARM-based \"Android\" machines", MACHINE_ANDROIDARM);
+GXEMUL-SEC/src/machines/machine_androidarm.c:189:	machine_entry_add_alias(me, "android-arm");
+GXEMUL-SEC/src/machines/machine_androidarm.c:191:	machine_entry_add_subtype(me, "Finow X5 Air", MACHINE_ANDROIDARM_FINOWX5AIR,
+GXEMUL-SEC/src/machines/machine_androidarm.c:194:	machine_entry_add_subtype(me, "Sony Xperia Mini", MACHINE_ANDROIDARM_SONYXPERIAMINI,
+GXEMUL-SEC/src/machines/machine_androidarm.c:197:	me->set_default_ram = machine_default_ram_androidarm;
+GXEMUL-SEC/src/machines/machine_hpcarm.c:46:MACHINE_SETUP(hpcarm)
+GXEMUL-SEC/src/machines/machine_hpcarm.c:67:	case MACHINE_HPCARM_IPAQ:
+GXEMUL-SEC/src/machines/machine_hpcarm.c:87:	case MACHINE_HPCARM_JORNADA720:
+GXEMUL-SEC/src/machines/machine_hpcarm.c:88:	case MACHINE_HPCARM_JORNADA728:
+GXEMUL-SEC/src/machines/machine_hpcarm.c:91:		    ((machine->machine_subtype == MACHINE_HPCARM_JORNADA720) ?
+GXEMUL-SEC/src/machines/machine_hpcarm.c:110:	default:printf("Unimplemented hpcarm machine number.\n");
+GXEMUL-SEC/src/machines/machine_hpcarm.c:122:	/*  Physical RAM at 0xc0000000:  */
+GXEMUL-SEC/src/machines/machine_hpcarm.c:123:	dev_ram_init(machine, 0xc0000000, 0x20000000,
+GXEMUL-SEC/src/machines/machine_hpcarm.c:124:	    DEV_RAM_MIRROR, 0x0, NULL);
+GXEMUL-SEC/src/machines/machine_hpcarm.c:127:	dev_ram_init(machine, 0xe0000000, 0x10000, DEV_RAM_RAM, 0x0, NULL);
+GXEMUL-SEC/src/machines/machine_hpcarm.c:140:	/*  NetBSD/hpcarm and possibly others expects the following:  */
+GXEMUL-SEC/src/machines/machine_hpcarm.c:142:	cpu->cd.arm.r[0] = 1;	/*  argc  */
+GXEMUL-SEC/src/machines/machine_hpcarm.c:143:	cpu->cd.arm.r[1] = machine->physical_ram_in_mb * 1048576 - 512;	/*argv*/
+GXEMUL-SEC/src/machines/machine_hpcarm.c:144:	cpu->cd.arm.r[2] = machine->physical_ram_in_mb * 1048576 - 256;
+GXEMUL-SEC/src/machines/machine_hpcarm.c:148:	store_32bit_word(cpu, machine->physical_ram_in_mb * 1048576 - 512,
+GXEMUL-SEC/src/machines/machine_hpcarm.c:149:	    machine->physical_ram_in_mb * 1048576 - 512 + 16);
+GXEMUL-SEC/src/machines/machine_hpcarm.c:150:	store_32bit_word(cpu, machine->physical_ram_in_mb * 1048576 - 512 +4,0);
+GXEMUL-SEC/src/machines/machine_hpcarm.c:151:	store_string(cpu, machine->physical_ram_in_mb * 1048576 - 512 + 16,
+GXEMUL-SEC/src/machines/machine_hpcarm.c:155:		cpu->cd.arm.r[0] ++;	/*  argc  */
+GXEMUL-SEC/src/machines/machine_hpcarm.c:157:		store_32bit_word(cpu, machine->physical_ram_in_mb * 1048576 -
+GXEMUL-SEC/src/machines/machine_hpcarm.c:158:		    512 + 4, machine->physical_ram_in_mb * 1048576 - 512 + 64);
+GXEMUL-SEC/src/machines/machine_hpcarm.c:159:		store_32bit_word(cpu, machine->physical_ram_in_mb * 1048576 -
+GXEMUL-SEC/src/machines/machine_hpcarm.c:162:		store_string(cpu, machine->physical_ram_in_mb * 1048576 - 512
+GXEMUL-SEC/src/machines/machine_hpcarm.c:186:	store_buf(cpu, machine->physical_ram_in_mb * 1048576 - 256,
+GXEMUL-SEC/src/machines/machine_hpcarm.c:190:	/*  I.e. what does hpcboot.exe for NetBSD/hpcarm usually use?  */
+GXEMUL-SEC/src/machines/machine_hpcarm.c:191:	cpu->cd.arm.r[ARM_SP] = 0xc02dfff0;
+GXEMUL-SEC/src/machines/machine_hpcarm.c:195:MACHINE_DEFAULT_CPU(hpcarm)
+GXEMUL-SEC/src/machines/machine_hpcarm.c:197:	machine->cpu_name = strdup("SA1110");
+GXEMUL-SEC/src/machines/machine_hpcarm.c:201:MACHINE_DEFAULT_RAM(hpcarm)
+GXEMUL-SEC/src/machines/machine_hpcarm.c:204:	case MACHINE_HPCARM_JORNADA728:
+GXEMUL-SEC/src/machines/machine_hpcarm.c:206:		machine->physical_ram_in_mb = 64;
+GXEMUL-SEC/src/machines/machine_hpcarm.c:210:		machine->physical_ram_in_mb = 32;
+GXEMUL-SEC/src/machines/machine_hpcarm.c:215:MACHINE_REGISTER(hpcarm)
+GXEMUL-SEC/src/machines/machine_hpcarm.c:217:	MR_DEFAULT(hpcarm, "Handhelp ARM (HPCarm)", MACHINE_HPCARM);
+GXEMUL-SEC/src/machines/machine_hpcarm.c:219:	machine_entry_add_alias(me, "hpcarm");
+GXEMUL-SEC/src/machines/machine_hpcarm.c:221:	machine_entry_add_subtype(me, "Ipaq", MACHINE_HPCARM_IPAQ,
+GXEMUL-SEC/src/machines/machine_hpcarm.c:224:	machine_entry_add_subtype(me, "Jornada 720", MACHINE_HPCARM_JORNADA720,
+GXEMUL-SEC/src/machines/machine_hpcarm.c:227:	machine_entry_add_subtype(me, "Jornada 728", MACHINE_HPCARM_JORNADA728,
+GXEMUL-SEC/src/machines/machine_hpcarm.c:230:	me->set_default_ram = machine_default_ram_hpcarm;
+13:row before anything executes. LITTLE-endian, so `dump` renders bytes in memory
+18:register print: `mrs` is the architectural read, and it is the same path a real
+19:kernel uses. The result register is stored alongside, because these two defects
+85:#  Instruction words. Rd=r0, Rn=r1, Rm=r2 throughout; r3 carries cpsr.
+97:RSCS = 0xE0F10002               # rscs r0,r1,r2   (rd = r2 - r1 - !C)
+99:RSBS = 0xE0710002               # rsbs r0,r1,r2   (rd = r2 - r1)
+120:        os.execvp(BIN, [BIN, "-V", "-A", "-E", "testarm", "-M", "64",
+136:        buf += d.decode("latin1", "replace")
+200:    r6, r7 = (1, 0) if cin else (0, 1)      # 1-0 => no borrow => C=1
+202:        "r1=0x%x" % rn, "r2=0x%x" % rm,
+203:        "r6=0x%x" % r6, "r7=0x%x" % r7,
+204:        "r4=0x%x" % DEST, "r5=0x%x" % (DEST + 4),
+227:SUBS_R8_R9 = 0xE0588009         # subs r8,r8,r9  -- r9 = 1
+238:         single_step is set, so a stepped probe exercises the STANDALONE
+239:         handler while appearing to exercise the combined one.
+244:         compare has already executed. The combined handler therefore exists
+250:         of execution and runs the combiner for each) is separately gated on
+254:         so the fold installs AHEAD of execution and a single forward pass
+256:         so they can exercise that path (its register-alias and forward-beq
+258:         install pre-writes the register the fold would otherwise read stale).
+266:    r7 = 0, so `subs r6,r6,r7` re-establishes C=1 on BOTH passes without
+273:    r6, r7 = (1, 0) if cin else (0, 1)
+275:        "r1=0x%x" % rn, "r0=0x0",
+276:        "r6=0x%x" % r6, "r7=0x%x" % r7, "r9=0x1",
+277:        "r4=0x%x" % DEST,
+302:#  The first version of this control emitted `eor r0,r0,r1`, which is Rn == Rd,
+304:#  EORs while claiming to exercise the fold. A review seat caught it. The
+305:#  same-register row is unaffected -- every operand collapses to one register,
+309:EOR_R0_R1_R0 = 0xE0210000       # eor r0,r1,r0  -- r0 ^= r1
+310:EOR_R1_R0_R1 = 0xE0201001       # eor r1,r0,r1  -- r1 ^= r0
+321:    swaps the two registers -- but its match has NO a != b guard, so three
+337:        "r0=0x0", "r1=0x0", "r9=0x1",
+338:        "r4=0x%x" % DEST, "r5=0x%x" % (DEST + 4),
+342:        #  BOTH registers are re-seeded at the loop top, and to DISTINCT
+344:        #  same review finding: pass 1 would leave r1 == r0, so on pass 2 a
+367:#  only the SHAPE of the loop -- a post-indexed word load, `subs rX,rX,#32`, a
+369:#  `r[0] += r[1]; r[1] = 0`. #345 pinned the two registers the handler WRITES;
+404:MOV_R1_0     = 0xE3A01000       # mov  r1,#0    -- the #347 r1==0 disjunct
+409:CMP_R9_HI    = 0xE3590208       # cmp  r9,#0x80000000 (0x08 ror 4; r9=1 ->
+414:CMP_R9_1     = 0xE3590001       # cmp  r9,#1 (r9=1 -> 0 -> Z1 C1 = 0x6)
+452:    """LDR Rd,[Rn],#imm -- post-indexed, immediate, U=1 W=0 (add, no writeback
+454:    arg[2]=&r[Rd] (the load/store decode in cpu_arm_instr.c's main-opcode-4
+467:    counter would produce bit-identical registers AND flags, and no row could
+469:    correct code answers r1 = 0 with flags Z|C; a missing preload answers
+470:    r1 = 0x20 with C alone. What must happen twice is entry to the whole
+484:          answers r0 = 0x11 + 0x22 = 0x33 and r1 = 0; architecturally r0 and r1
+540:    cmds = ["r9=0x1", "r7=0x%x" % DEST,
+561:    pass, then re-enters the SAME translated slot once with r1 = 0x21:
+572:              9  subs r8,r9              1->0 Z=1 first time, 0->-1 Z=0 after
+577:    UNGUARDED: the fold consumes r1 = 0x21, r0 += 0x21 = 0x9141 (odd), falls
+583:    catch): r1 mod 32 == 1 (the residue invariant), r0 a multiple of 0x20,
+592:    logs `memory READ: from non-existant paddr=...` per access and execution
+595:    also the live proof the guard's fallback path executes real loads). The
+621:        os.execvp(BIN, [BIN, "-V", "-A", "-E", "testarm", "-M", "64",
+637:        buf += d.decode("latin1", "replace")
+663:    send("r9=0x1")
+664:    send("r7=0x%x" % DEST)
+722:    if ((regs["r1"] & 0x1f) == 1 and (regs["r0"] & 0x1f) == 0
+723:            and regs["r0"] != 0x9120):
+729:    """#350's r1 == 0 arm: gate the HONEST iteration count via the marker.
+731:    For a zero counter the fold's registers and flags are identical whether
+732:    n is 2^27 or a reverted `r1 >> 5` (= 0) -- only the marker text and the
+737:    Installing the fold by genuinely executing a zero-counter loop is
+741:    with r1 = r10 = 0x20 (one iteration, installs the fold), r10 is then
+742:    cleared, and pass 2 re-enters with r1 = r10 = 0 -- the fold computes
+772:    cmds = ["r9=0x1",
+794:#  only for `rn == rd` and an immediate of 32 -- ANY register -- while the
+795:#  handler updated NO registers at all. Both halves are measured below.
+798:#  reaches ZERO; the borrow (0x30) and zero (0) counters exercise the other
+805:CMP_R9_2   = 0xE3590002         # cmp  r9,#2  (r9 == 1) -> N=1 Z=0 C=0 V=0
+822:    one that matters: it re-seeds every register and enters the block with
+844:          and r[1] by name behind a matcher that still accepts any register.
+849:          an unguarded fold reading r1 = 0x22 computes 0x9140 too, so it cannot
+853:          reaching zero, and owes N alone (0x8) with r0 = 0x9140 and
+854:          r1 = 0xfffffff0. The registers pin #347's closed form on the borrow
+858:      "zero"      -- counter 0: the one input where #347's `(r1 == 0 ||`
+861:          owes r0 = 0x9120, r1 = 0xffffffe0, flags 0x8.
+865:    architecturally transparent folded or unfolded, and no register or flag
+907:    cmds = ["r9=0x1", "r7=0x%x" % DEST]
+926:    so the emulator stops even though the instruction would never have executed
+927:    -- the guest does not have to semantically execute anything to stop the
+931:        "r6=5", "r7=3",                      # subs => Z=0, so EQ fails
+932:        "r4=0x%x" % DEST, "r5=0x%x" % (DEST + 4),
+956:    both hard-coded to a 4KB instruction page. Offset 0 exercises none of that
+961:        "r4=0x%x" % DEST, "r5=0x%x" % (DEST + 4), "r6=0x%x" % (DEST + 8),
+977:#  ---- round 78: rotations the decoder used to reject, and MVNS's carry ------
+990:#  exempted an imm8 of zero, so that case shipped with the wrong carry instead
+994:#  The MVNS rows cover all four bands. The decoder rewrites `mvn #imm` into
+1004:    #  (name, register presets, instruction, want, carry-in or None, read_flag)
+1005:    ("uxtab ROR 8",   ["r1=0", "r2=0x11223344"], 0xe6e10472, 0x33, None, False),
+1006:    ("uxtab ROR 16",  ["r1=0", "r2=0x11223344"], 0xe6e10872, 0x22, None, False),
+1007:    ("uxtab ROR 24",  ["r1=0", "r2=0x11223344"], 0xe6e10c72, 0x11, None, False),
+1008:    ("uxtah ROR 8",   ["r1=0", "r2=0x11223344"], 0xe6f10472, 0x2233, None, False),
+1009:    ("uxtah ROR 16",  ["r1=0", "r2=0x11223344"], 0xe6f10872, 0x1122, None, False),
+1010:    ("uxtah ROR 24",  ["r1=0", "r2=0x11223344"], 0xe6f10c72, 0x4411, None, False),
+1011:    ("uxtab ROR 0",   ["r1=0", "r2=0x11223344"], 0xe6e10072, 0x44, None, False),
+1015:    ("rotc ands C",   ["r1=0xffffffff"], 0xe2110104, 0, 1, True),
+1016:    ("rotc orrs val", ["r1=0x10"], 0xe3910104, 0x11, None, False),
+1017:    ("rotc bics val", ["r1=0xff"], 0xe3d10104, 0xfe, None, False),
+1018:    ("rotc tst C",    ["r1=0xffffffff"], 0xe3110104, 0, 1, True),
+1056:        r6, r7 = (1, 0) if cin else (0, 1)
+1057:        cmds = ["r6=%d" % r6, "r7=%d" % r7] + cmds
+1059:    cmds += ["r4=0x%x" % DEST, "put w 0x%x, 0xdeadbeef" % DEST]
+1102:#  Nothing below may be believed unless the rig executes guest code at all.
+1155:#  is the one operand path that is not plainly a 32-bit register read: when Rn
+1222:#  because `goto bad` runs at DECODE time -- the guest never had to execute the
+1229:#  point. Only the conjunction -- execution continued AND no exception was
+1309:def run_thumb(tiw, r0=0, r1=0, r2=0, r3=0, cin=None, pub=0):
+1320:    `pub` selects which register is published. Every row used to write and read
+1323:    the flags came from a register chosen by the shift amount.
+1330:        pre = ["r8=0x%x" % a, "r9=0x%x" % b,
+1335:        "r0=0x%x" % r0, "r1=0x%x" % r1, "r2=0x%x" % r2, "r3=0x%x" % r3,
+1336:        "r4=0x%x" % DEST, "r5=0x%x" % (DEST + 4),
+1337:        "r6=0x%x" % (THUMB_AT | 1), "r7=0x%x" % THUMB_RET,
+1355:    broke only because this file executes top to bottom and the first one has
+1364:T_ADD, T_SUB = 0x1800, 0x1A00           # format 2, register operand
+1427:    #  register instead of the imm3 field, or inverted isSub only where it
+1439:    #    - the V rows were all register CMP, so a SUBS with the same operand
+1440:    #      pins the OTHER register form,
+1467:#       register the instruction does not name. LSL and LSR never had this.
+1469:#       writing r0 is accidentally the right register.
+1474:#       They executed as no-ops with C untouched. LSL #0 IS a real no-op and
+1500:    #  1. flags from the result, not from a register named by the shift count.
+1577:#  PIN: the distinct-register swap, in the shape the matcher actually accepts
+1578:#  (Rm == Rd). It exercises the FOLDED handler on pass 2 and pins that the swap
+1629:#  The #350 verdict is a state word, not a register value: "fold" = the fold
+1630:#  consumed the 0x21 counter (prompt reached unaided, r0 odd), "live" = the
+1632:#  (^C-interrupted; r1 mod 32 == 1 and r0 even, the loop's two invariants).
+1646:#  #350's r1 == 0 arm: no register or flag can assert the honest n -- a
+1653:#  registers AND no register update whatsoever. #348 added the exit flags by
+
+ succeeded in 299ms:
+1353: /*
+1354:  *  bfi:  Bit-Field Insert.
+1355:  *
+1356:  *  arg[0] = ptr to rd
+1357:  *  arg[1] = ptr to rn
+1358:  *  arg[2] = (msb << 16) + lsb
+1359:  */
+1360: X(bfi)
+1361: {
+1362: 	uint32_t x = reg(ic->arg[1]);
+1363: 
+1364: 	int lsb = (uint8_t)ic->arg[2];
+1365: 	int msb = ic->arg[2] >> 16;
+1366: 	int width = msb - lsb + 1;
+1367: 
+1368: 	x <<= lsb;
+1369: 
+1370: 	uint32_t mask = (1 << width) - 1;
+1371: 
+1372: 	mask <<= lsb;
+1373: 
+1374: 	reg(ic->arg[0]) &= ~mask;
+1375: 	reg(ic->arg[0]) |= (x & mask);
+1376: }
+1377: Y(bfi)
+1378: 
+1379: 
+1380: /*
+1381:  *  swp, swpb:  Swap (word or byte).
+1382:  *
+1383:  *  arg[0] = ptr to rd
+1384:  *  arg[1] = ptr to rm
+1385:  *  arg[2] = ptr to rn
+1386:  */
+1387: X(swp)
+1388: {
+1389: 	uint32_t addr = reg(ic->arg[2]), data, data2;
+1390: 	/*  #386: an unaligned swp rotates the LOADED word right by 8*addr[1:0]
+3950: 		}
+3951: 
+3952: 		if (iword == 0xf57ff04f) {
+3953: 			/*  dsb sy. Treat as NOP for now.  */
+3954: 			ic->f = instr(nop);
+3955: 			goto okay;
+3956: 		}
+3957: 
+3958: 		if (iword == 0xf57ff05f) {
+3959: 			/*  dmb sy. Treat as NOP for now.  */
+3960: 			ic->f = instr(nop);
+3961: 			goto okay;
+3962: 		}
+3963: 
+3964: 		if (iword == 0xf57ff06f) {
+3965: 			/*  isb sy. Treat as NOP for now.  */
+3966: 			ic->f = instr(nop);
+3967: 			goto okay;
+3968: 		}
+3969: 
+3970: 		switch (main_opcode) {
+3971: 		case 0xa:
+3972: 		case 0xb:
+3973: 			ic->f = instr(blx_imm);
+3974: 
+3975: 			/*  arg 1 = offset of current instruction  */
+3976: 			ic->arg[1] = addr & 0xffc;
+3977: 
+3978: 			/*  arg 0 = relative jump distance + 1 (to enable THUMB)  */
+3979: 			ic->arg[0] = (iword & 0x00ffffff) << 2;
+3980: 			/*  Sign-extend:  */
+3981: 			if (ic->arg[0] & 0x02000000)
+3982: 				ic->arg[0] |= 0xfc000000;
+3983: 			if (main_opcode == 0xb)
+3984: 				ic->arg[0] += 2;
+3985: 			ic->arg[0] = (int32_t)(ic->arg[0] + 8 + 1);
+3986: 			break;
+3987: 		default:
+3988: 			goto bad;
+3989: 		}
+3990: 		goto okay;
+3991: 	}
+3992: 
+3993: 	switch (main_opcode) {
+3994: 
+3995: 	case 0x0:
+3996: 	case 0x1:
+3997: 	case 0x2:
+3998: 	case 0x3:
+3999: 		/*  Check special cases first:  */
+4000: 		if ((iword & 0x0ff00fff) == 0x01900f9f) {
+4001: 			ic->arg[0] = (size_t)(&cpu->cd.arm.r[rd]);
+4002: 			ic->arg[1] = (size_t)(&cpu->cd.arm.r[rn]);
+4003: 			ic->arg[2] = 0;
+4004: 
+4005: 			if (rd == ARM_PC || rn == ARM_PC) {
+4006: 				if (!cpu->translation_readahead)
+4007: 					fatal("ldrex with pc register: TODO\n");
+4008: 				goto bad;
+4009: 			}
+4010: 			
+4011: 			ic->f = cond_instr(ldrex);
+4012: 			break;
+4013: 		}
+4014: 
+4015: 		if ((iword & 0x0ff00ff0) == 0x01800f90) {
+4016: 			ic->arg[0] = (size_t)(&cpu->cd.arm.r[rd]);
+4017: 			ic->arg[1] = (size_t)(&cpu->cd.arm.r[rn]);
+4018: 			ic->arg[2] = (size_t)(&cpu->cd.arm.r[rm]);
+4019: 
+4020: 			if (rd == ARM_PC || rm == ARM_PC || rn == ARM_PC ||
+4021: 			    rd == rm || rd == rn) {
+4022: 				if (!cpu->translation_readahead)
+4023: 					fatal("strex with bad register: TODO\n");
+4024: 				goto bad;
+4025: 			}
+4360: 				 *  handler reconstructs PC+8 itself. Three
+4361: 				 *  independent diff-review seats named the
+4362: 				 *  rn == PC carve-out as this round's one
+4363: 				 *  remaining defect and one supplied the
+4364: 				 *  witness (`tst pc, #4 ROR 2`, measured
+4365: 				 *  leaving the carry set where the
+4366: 				 *  architecture clears it), which is what
+4367: 				 *  overturned the decision to leave it.
+4368: 				 *
+4369: 				 *  rd == PC stays out: writing the PC with the
+4370: 				 *  S bit set is an exception return, and the
+4371: 				 *  existing handler restores the flags from
+4372: 				 *  SPSR afterwards -- so the shifter carry
+4373: 				 *  there is overwritten rather than lost, and
+4374: 				 *  routing it would break the return.
+4375: 				 */
+4376: 				ic->arg[0] = iword;
+4377: 				ic->f = cond_instr(dpis_imm_rotc);
+4378: 				break;
+4379: 			}
+4380: 		}
+4381: 
+4382: 		/*
+4383: 		 *  mvn #imm ==> mov #~imm
+4384: 		 *
+4385: 		 *  #321: only when the S bit is CLEAR. The rewrite complements
+4386: 		 *  the operand here, at decode time, and the dpi template then
+4387: 		 *  judges the shifter carry from whatever value it is handed --
+4388: 		 *  so with S set it was reading the carry off the COMPLEMENT,
+4389: 		 *  which inverts the answer in every band. Measured on the
+4390: 		 *  committed build: `mvns r0,#1` set the carry where the
+4391: 		 *  architecture leaves it alone, `mvns r0,#0x3fc` set it where
+4392: 		 *  the architecture clears it, and `mvns r0,#0xff000000`
+4393: 		 *  cleared it where the architecture sets it.
+4394: 		 *
+4395: 		 *  The flag-setting form has its own table entries already --
+4396: 		 *  the generator emits all sixteen opcodes for S=1, and the
+4397: 		 *  immediate mvns slots were simply unreachable because this
+4398: 		 *  rewrite always fired first. The template's own MVN arm
+4399: 		 *  computes ~b and runs the carry test on the TRUE operand,
+4400: 		 *  which is what the architecture asks for.
+4401: 		 */
+4402: 		if (secondary_opcode == 0xf && !regform && !s_bit) {
+4403: 			secondary_opcode = 0xd;
+4404: 			ic->arg[1] = ~ic->arg[1];
+4405: 		}
+4406: 
+4407: 		ic->arg[0] = (size_t)(&cpu->cd.arm.r[rn]);
+4408: 		ic->arg[2] = (size_t)(&cpu->cd.arm.r[rd]);
+4409: 		any_pc_reg = 0;
+4410: 		if (rn == ARM_PC || rd == ARM_PC)
+4411: 			any_pc_reg = 1;
+4412: 
+4413: 		if (!any_pc_reg && regform && (iword & 0xfff) < ARM_PC) {
+4414: 			ic->arg[1] = (size_t)(&cpu->cd.arm.r[rm]);
+4415: 			ic->f = arm_dpi_instr_regshort[condition_code +
+4416: 			    16 * secondary_opcode + (s_bit? 256 : 0)];
+4417: 		} else
+4418: 			ic->f = arm_dpi_instr[condition_code +
+4419: 			    16 * secondary_opcode + (s_bit? 256 : 0) +
+4420: 			    (any_pc_reg? 512 : 0) + (regform? 1024 : 0)];
+4421: 
+4422: 		if (ic->f == instr(eor_regshort))
+4423: 			cpu->cd.arm.combination_check = COMBINE(xchg);
+4424: 		if (iword == 0xe113000c)
+4425: 			cpu->cd.arm.combination_check = COMBINE(netbsd_scanc);
+4426: 		break;
+4427: 
+4428: 	case 0x4:	/*  Load and store...  */
+4429: 	case 0x5:	/*  xxxx010P UBWLnnnn ddddoooo oooooooo  Immediate  */
+4430: 	case 0x6:	/*  xxxx011P UBWLnnnn ddddcccc ctt0mmmm  Register  */
+4431: 	case 0x7:
+4432: 		// Special non-loadstore encodings:
+4433: 		if (main_opcode >= 6 && iword & 0x10) {
+4434: 			if ((iword & 0x0fff0ff0) == 0x06bf0f30) {
+4435: 				ic->f = cond_instr(rev);
+GXEMUL-SEC/src/include/cpu_arm.h:81:#define	ARM_PC_TO_IC_ENTRY(a)		(((a)>>ARM_INSTR_ALIGNMENT_SHIFT) \
+GXEMUL-SEC/src/include/cpu_arm.h:96:#define	ARM_FLAG_J	0x01000000	/*  Java flag (BXJ instruction ARMv5J)  */
+GXEMUL-SEC/src/include/cpu_arm.h:114:#define	ARM_MODE_SYS32	      0x1f
+GXEMUL-SEC/src/include/cpu_arm.h:116:#define ARM_EXCEPTION_TO_MODE	{	\
+GXEMUL-SEC/src/include/cpu_arm.h:120:#define	N_ARM_EXCEPTIONS	8
+GXEMUL-SEC/src/include/cpu_arm.h:122:#define	ARM_EXCEPTION_RESET	0
+GXEMUL-SEC/src/include/cpu_arm.h:123:#define	ARM_EXCEPTION_UND	1
+GXEMUL-SEC/src/include/cpu_arm.h:124:#define	ARM_EXCEPTION_SWI	2
+GXEMUL-SEC/src/include/cpu_arm.h:125:#define	ARM_EXCEPTION_PREF_ABT	3
+GXEMUL-SEC/src/include/cpu_arm.h:126:#define	ARM_EXCEPTION_DATA_ABT	4
+GXEMUL-SEC/src/include/cpu_arm.h:128:#define	ARM_EXCEPTION_IRQ	6
+GXEMUL-SEC/src/include/cpu_arm.h:129:#define	ARM_EXCEPTION_FIQ	7
+GXEMUL-SEC/src/include/cpu_arm.h:133:#define	ARM_MAX_VPH_TLB_ENTRIES		384
+GXEMUL-SEC/src/include/cpu_arm.h:309:#define	ARM_AUXCTRL_MD		0x30	/*  MiniData Cache Attribute  */
+GXEMUL-SEC/src/include/cpu_arm.h:310:#define	ARM_AUXCTRL_MD_SHIFT	4
+GXEMUL-SEC/src/include/cpu_arm.h:311:#define	ARM_AUXCTRL_P		0x02	/*  Page Table Memory Attribute  */
+GXEMUL-SEC/src/include/cpu_arm.h:312:#define	ARM_AUXCTRL_K		0x01	/*  Write Buffer Coalescing Disable  */
+GXEMUL-SEC/src/include/cpu_arm.h:315:#define	ARM_CACHETYPE_CLASS		0x1e000000
+GXEMUL-SEC/src/include/cpu_arm.h:316:#define	ARM_CACHETYPE_CLASS_SHIFT	25
+GXEMUL-SEC/src/include/cpu_arm.h:317:#define	ARM_CACHETYPE_HARVARD		0x01000000
+GXEMUL-SEC/src/include/cpu_arm.h:318:#define	ARM_CACHETYPE_HARVARD_SHIFT	24
+GXEMUL-SEC/src/include/cpu_arm.h:319:#define	ARM_CACHETYPE_DSIZE		0x001c0000
+GXEMUL-SEC/src/include/cpu_arm.h:320:#define	ARM_CACHETYPE_DSIZE_SHIFT	18
+GXEMUL-SEC/src/include/cpu_arm.h:321:#define	ARM_CACHETYPE_DASSOC		0x00038000
+GXEMUL-SEC/src/include/cpu_arm.h:322:#define	ARM_CACHETYPE_DASSOC_SHIFT	15
+GXEMUL-SEC/src/include/cpu_arm.h:323:#define	ARM_CACHETYPE_DLINE		0x00003000
+GXEMUL-SEC/src/include/cpu_arm.h:324:#define	ARM_CACHETYPE_DLINE_SHIFT	12
+GXEMUL-SEC/src/include/cpu_arm.h:325:#define	ARM_CACHETYPE_ISIZE		0x000001c0
+GXEMUL-SEC/src/include/cpu_arm.h:326:#define	ARM_CACHETYPE_ISIZE_SHIFT	6
+GXEMUL-SEC/src/include/cpu_arm.h:327:#define	ARM_CACHETYPE_IASSOC		0x00000038
+GXEMUL-SEC/src/include/cpu_arm.h:328:#define	ARM_CACHETYPE_IASSOC_SHIFT	3
+GXEMUL-SEC/src/include/cpu_arm.h:329:#define	ARM_CACHETYPE_ILINE		0x00000003
+GXEMUL-SEC/src/include/cpu_arm.h:330:#define	ARM_CACHETYPE_ILINE_SHIFT	0
+GXEMUL-SEC/src/cpus/cpu_arm.c:59:#define DYNTRANS_32
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:132:#define Y(n) void arm_instr_ ## n ## __eq(struct cpu *cpu,		\
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:199:#define cond_instr(n)	( arm_cond_instr_ ## n  [condition_code] )
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:3194:#define ARM_COMBINED_SHIFTER_CARRY_INCLUDED
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:3908:#define DYNTRANS_TO_BE_TRANSLATED_HEAD
+GXEMUL-SEC/src/cpus/cpu_arm_instr.c:4852:#define	DYNTRANS_TO_BE_TRANSLATED_TAIL
+#ifndef	ARM_CPU_TYPES_H
+#define	ARM_CPU_TYPES_H
+
+/*
+ *  Copyright (C) 2005-2018  Anders Gavare.  All rights reserved.
+ *
+ *  Redistribution and use in source and binary forms, with or without
+ *  modification, are permitted provided that the following conditions are met:
+ *
+ *  1. Redistributions of source code must retain the above copyright
+ *     notice, this list of conditions and the following disclaimer.
+ *  2. Redistributions in binary form must reproduce the above copyright  
+ *     notice, this list of conditions and the following disclaimer in the 
+ *     documentation and/or other materials provided with the distribution.
+ *  3. The name of the author may not be used to endorse or promote products
+ *     derived from this software without specific prior written permission.
+ *
+ *  THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+ *  ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ *  IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ *  ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE   
+ *  FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ *  DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+ *  OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+ *  HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+ *  LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+ *  OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+ *  SUCH DAMAGE.
+ */
+
+/*  See cpu_arm.h for struct arm_cpu_type_def.  */
+/*  See arm_cputypes.h for CPU_ID_xxx defines.  */
+
+/*  TODO: Refactor these flags  */
+
+/*  TODO: Include "ARM level", i.e. ARMv5  */
+
+
+/*  Flags:  */
+#define	ARM_NO_MMU		1
+#define	ARM_DUAL_ENDIAN		2
+#define	ARM_XSCALE		4
+
+#include "thirdparty/arm_cputypes.h"
+
+/*
+ *  NOTE: Most of these are bogus!
+ */
+
+#define	ARM_CPU_TYPE_DEFS					      {	 \
+	{ "ARM3",	CPU_ID_ARM3,	ARM_DUAL_ENDIAN,12, 1,  0, 1 }, \
+	{ "ARM610",	CPU_ID_ARM600,	ARM_DUAL_ENDIAN,12, 1,  0, 1 }, \
+	{ "ARM610",	CPU_ID_ARM610,	ARM_DUAL_ENDIAN,12, 1,  0, 1 }, \
+	{ "ARM620",	CPU_ID_ARM620,	ARM_DUAL_ENDIAN,12, 1,  0, 1 }, \
+	\
+	{ "ARM700",	CPU_ID_ARM700,	0,		12, 1,  0, 1 }, \
+	{ "ARM710",	CPU_ID_ARM710,	0,		12, 1,  0, 1 }, \
+	{ "ARM710A",	CPU_ID_ARM710A,	0,		12, 1,  0, 1 }, \
+	{ "ARM720T",	CPU_ID_ARM720T,	0,		12, 1,  0, 1 }, \
+	{ "ARM740T4K",	CPU_ID_ARM740T4K,ARM_NO_MMU,	12, 1,  0, 1 }, \
+	{ "ARM740T8K",	CPU_ID_ARM740T8K,ARM_NO_MMU,	13, 1,  0, 1 }, \
+	{ "ARM7500",	CPU_ID_ARM7500,	0,		12, 1,  0, 1 }, \
+	{ "ARM7500FE",	CPU_ID_ARM7500FE,0,		12, 1,  0, 1 }, \
+	\
+	{ "ARM810",	CPU_ID_ARM810,	0,		12, 1,  0, 1 }, \
+	{ "ARM920T",	CPU_ID_ARM920T,	0,		14, 1, 14, 1 }, \
+	{ "ARM922T",	CPU_ID_ARM922T,	0,		12, 1,  0, 1 }, \
+	{ "ARM940T",	CPU_ID_ARM940T,	ARM_NO_MMU,	12, 1,  0, 1 }, \
+	\
+	{ "ARM946ES",	CPU_ID_ARM946ES,ARM_NO_MMU,	12, 1,  0, 1 }, \
+	{ "ARM966ES",	CPU_ID_ARM966ES,ARM_NO_MMU,	12, 1,  0, 1 }, \
+	{ "ARM966ESR1",	CPU_ID_ARM966ESR1,ARM_NO_MMU,	12, 1,  0, 1 }, \
+	\
+	{ "ARM1020E",	CPU_ID_ARM1020E,0,		12, 1,  0, 1 }, \
+	{ "ARM1022ES",	CPU_ID_ARM1022ES,0,		12, 1,  0, 1 }, \
+	{ "ARM1026EJS",	CPU_ID_ARM1026EJS,0,		12, 1,  0, 1 }, \
+	{ "ARM1136JS",	CPU_ID_ARM1136JS,0,		12, 1,  0, 1 }, \
+	{ "ARM1136JSR1",CPU_ID_ARM1136JSR1,0,		12, 1,  0, 1 }, \
+	\
+	{ "SA110",	CPU_ID_SA110 | 3, 0,		14, 1, 14, 1 }, \
+	{ "SA1100",	CPU_ID_SA1100,	0,		14, 1, 14, 1 }, \
+	{ "SA1110",	CPU_ID_SA1110,	0,		14, 1, 14, 1 }, \
+	\
+	{ "TI925T",	CPU_ID_TI925T,	0,		14, 1, 14, 1 }, \
+	{ "IXP1200",	CPU_ID_IXP1200,	0,		14, 1, 14, 1 }, \
+	{ "80200",	CPU_ID_80200,	0,		14, 1, 14, 1 }, \
+	\
+	{ "PXA210",	CPU_ID_PXA210,	ARM_XSCALE,	16, 1,  0, 1 }, \
+	{ "PXA210A",	CPU_ID_PXA210A,	ARM_XSCALE,	16, 1,  0, 1 }, \
+	{ "PXA210B",	CPU_ID_PXA210B,	ARM_XSCALE,	16, 1,  0, 1 }, \
+	{ "PXA210C",	CPU_ID_PXA210C,	ARM_XSCALE,	16, 1,  0, 1 }, \
+	{ "PXA250",	CPU_ID_PXA250,	ARM_XSCALE,	16, 1,  0, 1 }, \
+	{ "PXA250A",	CPU_ID_PXA250A,	ARM_XSCALE,	16, 1,  0, 1 }, \
+	{ "PXA250B",	CPU_ID_PXA250B,	ARM_XSCALE,	16, 1,  0, 1 }, \
+	{ "PXA250C",	CPU_ID_PXA250C,	ARM_XSCALE,	16, 1,  0, 1 }, \
+	{ "PXA27X",	CPU_ID_PXA27X,	ARM_XSCALE,	16, 1,  0, 1 }, \
+	\
+	{ "IXP425_255",	CPU_ID_IXP425_266,ARM_XSCALE,	15, 1, 15, 1 }, \
+	{ "IXP425_400",	CPU_ID_IXP425_400,ARM_XSCALE,	15, 1, 15, 1 }, \
+	{ "IXP425_533",	CPU_ID_IXP425_533,ARM_XSCALE,	15, 1, 15, 1 }, \
+	\
+	{ "CORTEX-A5",	CPU_ID_CORTEXA5R0,0/*TODO*/,	15, 1, 15, 1 }, \
+	{ "SnapdragonS2",0x511f00f2,	0/*TODO*/,	15, 1, 15, 1 }, \
+	\
+	{ "80219_400",	CPU_ID_80219_400,ARM_XSCALE,	15, 1, 15, 1 }, \
+	{ "80219_600",	CPU_ID_80219_600,ARM_XSCALE,	15, 1, 15, 1 }, \
+	{ "80321_400",	CPU_ID_80321_400,ARM_XSCALE,	15, 1, 15, 1 }, \
+	{ "80321_400_B0",CPU_ID_80321_400_B0,ARM_XSCALE,15, 1, 15, 1 }, \
+	{ "80321_600",	CPU_ID_80321_600,ARM_XSCALE,	15, 1, 15, 1 }, \
+	{ "80321_600_B0",CPU_ID_80321_600_B0,ARM_XSCALE,15, 1, 15, 1 }, \
+	{ "80321_600_2",CPU_ID_80321_600_2,ARM_XSCALE,15, 1, 15, 1 }, \
+	\
+	{ NULL, 0, 0, 0,0, 0,0 } }
+
+#endif	/*  ARM_CPU_TYPES_H  */
+1158: *  #320: ARM's shifter carry-out for an immediate operand is "unchanged if the
+1165: *  ignored both the S bit and the opcode, so even `mov r0, #4 ROR 2`, which
+1191:		 *  #322: reading the PC as the source yields this
+1238: *  #319: a rotate used to reach `goto bad`, which stops the emulator on an
+1277: *  #319: as uxtab_rot above -- but a HALFWORD extract is not a shift at a
+1390:	/*  #386: an unaligned swp rotates the LOADED word right by 8*addr[1:0]
+1402:	/*  #386: Memory[address,4] is the ALIGNED word for BOTH accesses
+1405:	    masking in place loses nothing. Like the #362 template this models
+1413:	/*  #386: assemble and emit per cpu->byte_order, mirroring ldrex/strex;
+1973: *  f01bc420:  e25XX080     subs    rX,rX,#0x80
+2036: *  f01bc540:  e2522020     subs    r2,r2,#0x20
+2044:	 *  #358: count the 32-byte iterations this call actually folded, so the
+2079:			if (n_iter)			/*  #358  */
+2093:			if (n_iter)			/*  #358  */
+2101:		/*  #354: the real `ldmia r1!,{r3,r4,ip,lr}` leaves those four
+2140:		    #378: "NO byteswap" above is safe ONLY because this matcher
+2149:		    -- exactly the class the #354 invariant above forbids.  */
+2163:		n_iter ++;				/*  #358  */
+2175:	/*  #358: normal exit -- summarise. Unguarded, because reaching here means
+2192: *  f015f88c:  e4902020     ldr     r2,[r0],#32
+2193: *  f015f890:  e2511020     subs    r1,r1,#0x20
+2202:	/*  #350: a counter that is not a multiple of 32 never reaches zero,
+2218:	/*  #349: fold-fired marker. Once #348 made this fold write the
+2223:	    ENOUGH_VERBOSITY(), per the #278 convention: a pre-gate would
+2229:	/*  #350: bill the skipped instructions against the batch budget,
+2233:	    signed overflow -- the #169 class, sharpened by this round. A
+2234:	    #169-style bail would disable the fold for every counter above
+2246:	/*  #348: the loop ends on `subs r1,r1,#0x20` reaching zero, which
+2250:	    (r1, #0x20, r1). Every terminating counter's final operand is
+2268: *  f015f944:  e2800020     add     r0,r0,#0x20
+2269: *  f015f948:  e2511020     subs    r1,r1,#0x20
+2275:	 *  #347: this handler used to update NO GUEST REGISTERS AT ALL. It
+2308:	 *  #348: the flags. The subs that ends the loop owes N/Z/C/V; the
+2312:	 *  (r1, #0x20, r1). r1 is left at the final iteration's operand,
+2320:	 *  #349: the marker. That delegation makes the genuine sequence
+2325:	 *  #278 convention: a pre-gate would hide it under -V step and
+2334:	/*  #350: clamped for the same reason as netbsd_cacheclean above --
+2364:	 *  #361: name the reason this fold declined, in the SAME expression the
+2365:	 *  guard tests -- the #360 shape. Unlike copyin/copyout, the two bail-outs
+2391:	/*  #358: fold-fired marker. Transparent otherwise -- byte loads need no
+2422: *	teqs    rX,#0
+2424: *	teqs    rZ,#0
+2451:	/*  #351: both fast paths below are reached only with rX == 0, and the
+2453:	    `teqs rZ,#0` (writing N/Z) before either exit -- the fold wrote
+2502:	/*  #352: fold-fired marker on the EXIT path only. This path became
+2503:	    architecturally transparent once #351 wrote the dest and flags, so
+2508:	    Not pre-gated with ENOUGH_VERBOSITY(), per the #278 convention, so
+2510:	    #351: the exit stands in for five architectural instructions and
+2522: *  S: e5f03001   ldrb  rY,[rX,#1]!
+2523: *     e3530000   cmps  rY,#0
+2532:	 *  #356: the walk used to run to the end of the string with no bound,
+2574:	 *  more -- the bound SUBSUMES a #350-style min(add, room) clamp, so
+2604:		 *  #356: budget exhausted mid-walk. Yield to the dispatcher so
+2623:		 *  per the #278 convention, so `breakpoint subsystem cpu`
+2653:	/*  #358: fold-fired marker. No bail-out, so anywhere in the body is
+2656:	    replaced. Post-#342's `a != b` guard the fold and three real EORs are
+2673: *  e4b0a004     ldrt    sl,[r0],#4
+2674: *  e4b0b004     ldrt    fp,[r0],#4
+2675: *  e4b06004     ldrt    r6,[r0],#4
+2676: *  e4b07004     ldrt    r7,[r0],#4
+2677: *  e4b08004     ldrt    r8,[r0],#4
+2678: *  e4b09004     ldrt    r9,[r0],#4
+2688:	 *  #360: name the reason this fold declined, in the SAME expression the
+2694:	 *  Why a bail marker at all: with only the #358 fire marker, a red row is
+2720:	 *  #358: fold-fired marker. This fold is otherwise UNOBSERVABLE: its
+2723:	 *  result passes whether or not the fold ever fires. #357 removed the one
+2734:	 *  the #278 convention, so `breakpoint subsystem cpu` catches a fold in
+2755:	 *  #383 copyin-order: the six moves above are raw HOST words. The general
+2757:	 *  (cpu_arm_instr_loadstore.c load word arm, order-aware since #372), so on
+2758:	 *  a big-endian guest they were byte-reversed -- the #342/#355 self-
+2759:	 *  contradiction class, and the divergence the #354 invariant forbids.
+2762:	 *  paths cannot drift. BEFORE the #362 rotation: DDI 0100I p. A4-44 rotates
+2781:	 *  #362: the six ldrt's this replaces are word LOADS, so an unaligned base
+2788:	 *  loop, which is the #342/#355 class.
+2811: *  e4a18004     strt    r8,[r1],#4
+2812: *  e4a19004     strt    r9,[r1],#4
+2813: *  e4a1a004     strt    sl,[r1],#4
+2814: *  e4a1b004     strt    fp,[r1],#4
+2815: *  e4a16004     strt    r6,[r1],#4
+2816: *  e4a17004     strt    r7,[r1],#4
+2825:	/*  #360: see X(netbsd_copyin) above for why the reason is computed in the
+2829:	    ANY configuration. (#382 correction: the older claim that "a load-only
+2846:	/*  #358: fold-fired marker -- see X(netbsd_copyin) above for why this
+2856:		 *  #383 copyout-order: capture the six source words FIRST. q32 = &r[6]
+2860:		 *  guest (the store template is order-aware since #372) and store. The
+3171: *  arm_combined_shifter_carry():  #340
+3377:		/*  #345: the register checks are REQUIRED, and their absence was
+3379:		    post-indexed word load, `subs rX,rX,#32`, a branch back -- and
+3386:		    #342's missing `a != b`, and worse in consequence -- that one
+3389:		/*  #346: #345 checked the two registers the handler WRITES and
+3396:		    `ldr r2,[r0],#4 / subs r1,r1,#32 / bne / mcr`: r0 came back
+3433:		/*  #347: the register checks are REQUIRED, for the same reason
+3440:		    `add rX,rX,#32` and `subs rY,rY,#32` select them for ANY X
+3451:		      add r5,r5,#32 / subs r1,r1,#32 -> folded; r5 stayed at its
+3454:		      add r0,r0,#32 / subs r6,r6,#32 -> folded; r6 stayed at 0x40
+3459:		    those two in a loop that never mentions them -- #345's defect
+3503:		debugmsg_cpu(cpu, SUBSYS_CPU, "netbsd_scanc",   /*  #361  */
+3521:	/*  #355: the load's base and destination must DIFFER. This is not a
+3522:	    wrong-answer fix -- `ldrb r3,[r3,#1]!` is UNPREDICTABLE in the
+3541:	    chain, the shape #342 used; note that #342 is precedent for the
+3578:	/*  #342: a != b is REQUIRED, and its absence was guest-visible. The XOR
+3594:		/*  #361: one line per TRANSLATION. X(xchg) has no bail path, so
+3632:		/*  #360: one line per TRANSLATION, not per execution, so this is
+3669:		debugmsg_cpu(cpu, SUBSYS_CPU, "netbsd_copyout",   /*  #360  */
+3720:		    /*  #353: the beq MUST target the ldr, or this is not an idle
+4204:				/*  #390: the DATA role gets its own word;
+4260:		/*  "mov reg,#0":  */
+4266:		/*  "mov reg,#1":  */
+4272:		/*  "add reg,reg,#1":  */
+4334:			 *  #320: a rotate whose result came out at or below
+4359:				 *  #322: rn == PC is allowed through -- the
+4364:				 *  witness (`tst pc, #4 ROR 2`, measured
+4385:		 *  #321: only when the S bit is CLEAR. The rewrite complements
+4390:		 *  committed build: `mvns r0,#1` set the carry where the
+4391:		 *  architecture leaves it alone, `mvns r0,#0x3fc` set it where
+4392:		 *  the architecture clears it, and `mvns r0,#0xff000000`
+4454:					/*  #319: a rotate is legal here; it
+4470:					/*  #319  */
+4497:				 *  #312: a word reaching here takes the
+4567:			/*  #390: DATA role -> its own word (see the mode-3
+4644:		 *  #378: nor do they support a big-endian guest -- the emitted
+4659:		 *  (S4 in the round-119/#378 records) rather than re-open this
+4662:		 *  matcher fired, i.e. never on BE; see the #354 comment.
+
+web search: UBFX width 32 lsb ARMv6T2 site:developer.arm.com/documentation ...
+codex
+The fork contradicts the brief’s BFI premise: its handler computes `width = msb - lsb + 1`, then uses the same `(1 << width) - 1` expression. I also found that the UBFX/SBFX masks have signed-shift UB at width 31. I’m enumerating those cases and checking the remaining architecture and probe-feasibility claims.
+
+web search: 
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n '"'^'"\\s*\\{ \"|CPU_ID_CORTEXA5|ARM_DEFAULT_CPU|cpu_name|MACHINE_|register' GXEMUL-SEC/src/include/arm_cpu_types.h GXEMUL-SEC/src/machines/machine_androidarm.c GXEMUL-SEC/src/machines/machine_iq80321.c; Get-Content -LiteralPath 'GXEMUL-SEC/regress/arm_flags_probe.py' -TotalCount 90; Get-Content -LiteralPath 'GXEMUL-SEC/src/machines/machine_androidarm.c' -TotalCount 130; rg -n 'CORTEX|ARM1136|cpu_type|cpu_id|cpu_new|arm_cpu_types|ARM_CPU_TYPES' GXEMUL-SEC/src/cpus/cpu_arm.c" in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$mkLines = Get-Content -LiteralPath '"'GXEMUL-SEC/src/cpus/cpu_m88k_instr.c'; foreach ("'$part in @(@(445,475),@(525,543),@(3504,3529))) { for ($ln = $part[0]; $ln -le $part[1]; $ln++) { '"'{0}: {1}' -f "'$ln,$mkLines[$ln-1] } }; rg -n -g '"'*.c' -g '*.h' '(0xffffffff|UINT32_MAX|~0U).{0,32}>>|>>.{0,5}\\(32\\s*-|mask\\s*>>=' GXEMUL-SEC/src; rg -n 'sizeof\\(int\\)|SIZEOF_INT|INT_MAX|int.*32.bit|32.bit.*int' GXEMUL-SEC/src/include GXEMUL-SEC/src/core -g '*.h' -g '*.c'" in C:\DocumentNoSnc\CC\GXEMUL
+ succeeded in 355ms:
+#!/usr/bin/env python3
+"""Gate 14's measuring instrument: ARM subtract-carry flags and undefined routing.
+
+Prints one line per row:  <name> <got> <want> ok|FAIL
+then ARM_FLAGS_CONTROL=OK|DEAD and ARM_FLAGS_RESULT=<passed>/<total>.
+gate_arm.sh does the asserting.
+
+How it measures
+---------------
+Cold debugger on `testarm` (SA1110), RAM at 0. The machine needs A file to
+construct -- it prints usage and exits without one -- so a four-byte raw stub is
+loaded at the code address purely to satisfy that; it is overwritten by every
+row before anything executes. LITTLE-endian, so `dump` renders bytes in memory
+order and every word read here is byte-swapped back (the PowerPC rig is the
+opposite case, and mixing the two up silently transposes every answer).
+
+The flags are read by the guest's OWN `mrs r3,cpsr`, never by a debugger
+register print: `mrs` is the architectural read, and it is the same path a real
+kernel uses. The result register is stored alongside, because these two defects
+are FLAG defects -- the computed value was already right -- and a row that
+checked only the flag could not tell a fixed flag from a broken result.
+
+The carry contract (ARM ARM, DDI 0100, subtract family)
+-------------------------------------------------------
+For SUB/CMP/RSB the carry-out is NOT-BORROW: set iff the 32-bit subtraction did
+not borrow. For SBC/RSC the operation is `a - b - NOT(C)` and the carry-out must
+account for that borrow-in term.
+
+#311 computed the flag as `a >= b` for all five. That is correct for the three
+that have no borrow-in, and WRONG for SBC/RSC exactly when `a == b` and the
+carry-in is clear: `a - a - 1` borrows, so carry must be CLEAR, and `a >= b`
+reports it SET. The fix computes the flag from the full 64-bit result that the
+file already has in hand (`c32 == c64`), which is the same answer as `a >= b`
+whenever there is no borrow-in -- hence the many PIN rows here, which exist to
+prove the fix did NOT disturb the three instructions that were already right.
+
+The carry-in for each row is established by a plain SUBS, never by a debugger
+write to cpsr: a debugger write sets cpsr but not the separate `flags` field the
+dyntrans handlers actually read, so it would preset nothing. SUBS is the correct
+choice because it is the one member of the family whose carry both the committed
+build and the fix compute identically -- the preset cannot itself be the bug.
+
+The undefined contract
+----------------------
+#312: ARM's permanently-undefined space must raise the Undefined Instruction
+exception. The committed build reached `goto bad`, which sets cpu->running = 0
+(cpu_dyntrans.c:2014) -- a legal-to-attempt encoding stopping the whole
+emulator, the same halt class as #264/#309/#310. GDB's breakpoint instruction
+lives in this space, which is why the tree already contained an `und` routing
+for it at cpu_arm_instr.c -- unreachable, because the block above it matches the
+identical encodings first and breaks.
+
+The witness is the HANDLER, not the absence of a message: code planted at the
+UND vector (0x04) stores a marker, the mode, and the return address. A row that
+merely checked "the emulator did not halt" would pass if the instruction were
+silently treated as a nop.
+
+Row classes
+-----------
+  PIN  -- correct today and must stay. Most of this table is pins, on purpose:
+          the fix rewrites a line shared by five instructions and two of them
+          are the ones that were already right.
+  DISC -- discriminator: the committed byte is the measured defect, and the
+          want flips when the fix lands.
+"""
+import os
+import pty
+import re
+import select
+import sys
+import time
+
+BIN = sys.argv[1]
+STUB = sys.argv[2]
+
+CODE = 0x8000
+DEST = 0x9000
+VECT = 0x0004                   # ARM_EXCEPTION_UND * 4, low vectors
+#  Last instruction slot of a 4KB ic page. Deliberately NOT the page holding
+#  CODE: there, pc+4 would land exactly on DEST and the expected lr would be
+#  numerically equal to the witness address, which reads as a coincidence
+#  rather than a measurement.
+PAGE_END = 0xAFFC
+
+#  Instruction words. Rd=r0, Rn=r1, Rm=r2 throughout; r3 carries cpsr.
+SUBS_R6_R6_R7 = 0xE0566007      # subs r6,r6,r7   -- the carry preset
+MRS_R3_CPSR   = 0xE10F3000      # mrs  r3,cpsr
+STR_R3_R4     = 0xE5843000      # str  r3,[r4]
+STR_R0_R4     = 0xE5840000      # str  r0,[r4]
+STR_R0_R5     = 0xE5850000      # str  r0,[r5]
+/*
+ *  Copyright (C) 2018-2021  Anders Gavare.  All rights reserved.
+ *
+ *  Redistribution and use in source and binary forms, with or without
+ *  modification, are permitted provided that the following conditions are met:
+ *
+ *  1. Redistributions of source code must retain the above copyright
+ *     notice, this list of conditions and the following disclaimer.
+ *  2. Redistributions in binary form must reproduce the above copyright  
+ *     notice, this list of conditions and the following disclaimer in the 
+ *     documentation and/or other materials provided with the distribution.
+ *  3. The name of the author may not be used to endorse or promote products
+ *     derived from this software without specific prior written permission.
+ *
+ *  THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+ *  ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ *  IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ *  ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE   
+ *  FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ *  DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+ *  OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+ *  HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+ *  LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+ *  OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+ *  SUCH DAMAGE.
+ *   
+ *
+ *  COMMENT: ARM-based "Android" machines
+ *
+ *  TODO. This is bogus so far, only enough to see the Linux kernel start
+ *  executing instructions.
+ *
+ *  gxemul -e sony-xperia-mini -tvvK boot.img 
+ *  gxemul -e finow-x5-air -tvvK boot.img 
+ */
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "cpu.h"
+#include "device.h"
+#include "devices.h"
+#include "machine.h"
+#include "memory.h"
+#include "misc.h"
+
+
+uint32_t swap_if_little_endian(uint32_t v, struct cpu* cpu)
+{
+	if (cpu->byte_order == EMUL_BIG_ENDIAN)
+		return v;
+
+	return (v >> 24) | ((v & 0x00ff0000) >> 8)
+		| ((v & 0x0000ff00) << 8) | ((v & 0xff) << 24);
+}
+
+
+MACHINE_SETUP(androidarm)
+{
+	char tmpstr[1000];
+	int use_atags = 0;
+
+	cpu->byte_order = EMUL_LITTLE_ENDIAN;
+
+	switch (machine->machine_subtype) {
+
+	case MACHINE_ANDROIDARM_FINOWX5AIR:
+		machine->machine_name = strdup("Finow X5 Air");
+
+		// 2 GB ram at 0x80000000? Mirrored at 0 maybe? (But in GXemul's legacy
+		// framework, we have to make the mirror the other way around.)
+		dev_ram_init(machine, 0x80000000, 0x10000000, DEV_RAM_MIRROR, 0x0, NULL);
+		dev_ram_init(machine, 0x90000000, 0x70000000, DEV_RAM_RAM, 0x0, NULL);
+
+		// Yet another mirror at 0x40000000?
+		dev_ram_init(machine, 0x40000000, 0x10000000, DEV_RAM_MIRROR, 0x0, NULL);
+
+		// See https://github.com/torvalds/linux/blob/master/arch/arm/boot/dts/mt6580.dtsi
+		//	timer: timer@10008000
+		//	sysirq: interrupt-controller@10200100
+		//	gic: interrupt-controller@10211000
+		//	uart0: serial@11005000
+		//	uart1: serial@11006000
+
+		// "gic" interrupt controller:
+		// See https://github.com/torvalds/linux/blob/master/include/dt-bindings/interrupt-controller/arm-gic.h
+
+		// TODO: interrupt "GIC_SPI 44"
+		snprintf(tmpstr, sizeof(tmpstr), "ns16550 irq=%s.cpu[%i].irq"
+		    " addr=0x11005000 addr_mult=4 in_use=%i",
+		    machine->path, machine->bootstrap_cpu, !machine->x11_md.in_use);
+		machine->main_console_handle = (size_t)
+		    device_add(machine, tmpstr);
+
+		dev_fb_init(machine, machine->memory,
+			0x12340000 /*  TODO addr  */, 
+			VFB_GENERIC,
+			400, 400,
+			400, 400,
+			24, machine->machine_name);
+
+		break;
+
+	case MACHINE_ANDROIDARM_SONYXPERIAMINI:
+		machine->machine_name = strdup("Sony Xperia Mini");
+
+		// Mirror at 0x40000000?
+		dev_ram_init(machine, 0x40000000, 0x20000000, DEV_RAM_MIRROR, 0x0, NULL);
+
+		// Perhaps https://talk.sonymobile.com/t5/Xperia-mini-pro/Sk17i-in-continous-boot-loop/td-p/281671#gref
+		// could be of some help.
+
+		dev_fb_init(machine, machine->memory,
+			0x23450000 /*  TODO addr  */, 
+			VFB_GENERIC,
+			320, 480,
+			320, 480,
+			24, machine->machine_name);
+
+		break;
+
+	default:printf("Unimplemented android-arm machine number.\n");
+		exit(1);
+	}
+
+	// See https://www.kernel.org/doc/Documentation/arm/Booting
+	cpu->cd.arm.r[0] = 0x00000000;
+	cpu->cd.arm.r[1] = 0xffffffff;	// architecture ID. 0xffffffff = use DT (device tree)?
+
+49:#include "arm_cpu_types.h"
+89: *  arm_cpu_new():
+92: *  Return 1 on success, 0 if cpu_type_name isn't a valid ARM processor.
+94:int arm_cpu_new(struct cpu *cpu, struct memory *mem,
+95:	struct machine *machine, int cpu_id, char *cpu_type_name)
+98:	struct arm_cpu_type_def cpu_type_defs[] = ARM_CPU_TYPE_DEFS;
+102:	while (i >= 0 && cpu_type_defs[i].name != NULL) {
+103:		if (strcasecmp(cpu_type_defs[i].name, cpu_type_name) == 0) {
+120:	cpu->cd.arm.cpu_type = cpu_type_defs[found];
+121:	cpu->name            = strdup(cpu->cd.arm.cpu_type.name);
+141:	    log2(bytes) - 9, but 32 of the entries in arm_cpu_types.h leave
+142:	    dcache_shift at 0 (ARM1136JSR1, which the rpi machine selects, is
+148:	    its 3-bit field. ARM1136JSR1 yielded 0xffdea0ea where 0x0b02a0ea
+158:	uint32_t dsize = cpu->cd.arm.cpu_type.dcache_shift >= 9 ?
+159:	    (uint32_t) (cpu->cd.arm.cpu_type.dcache_shift - 9) : 0;
+160:	uint32_t isize = cpu->cd.arm.cpu_type.icache_shift >= 9 ?
+161:	    (uint32_t) (cpu->cd.arm.cpu_type.icache_shift - 9) : 0;
+178:	if (cpu->cd.arm.cpu_type.flags & ARM_XSCALE)
+320:	struct arm_cpu_type_def *ct = &cpu->cd.arm.cpu_type;
+337:	struct arm_cpu_type_def tdefs[] = ARM_CPU_TYPE_DEFS;
+364:	int i, x = cpu->cpu_id;
+498:		if (cpu->cd.arm.cpu_type.flags & ARM_XSCALE) {
+761:	debug("cpu%i: arm.ls_general = %" PRIu64 "\n", cpu->cpu_id,
+777:				    cpu->cpu_id);
+782:			    cpu->cpu_id, (int) (i << 12),
+1239:			debug("cpu%i:\t", cpu->cpu_id);
+1850:		debug("cpu%i:\t", cpu->cpu_id);
+
+ succeeded in 393ms:
+445:  *
+446:  *  arg[0] = pointer to register d
+447:  *  arg[1] = pointer to register s1
+448:  *  arg[2] = pointer to register s2 or 10 bits wwwwwooooo
+449:  */
+450: static void m88k_extu(struct cpu *cpu, struct m88k_instr_call *ic, int w, int o)
+451: {
+452: 	uint32_t x = reg(ic->arg[1]) >> o;
+453: 	if (w != 0) {
+454: 		x <<= (32-w);
+455: 		x >>= (32-w);
+456: 	}
+457: 	reg(ic->arg[0]) = x;
+458: }
+459: static void m88k_ext(struct cpu *cpu, struct m88k_instr_call *ic, int w, int o)
+460: {
+461: 	uint32_t src = reg(ic->arg[1]), x = src >> o;
+462: 	if (w != 0) {
+463: 		uint32_t signbit = (uint32_t)1 << (w - 1);
+464: 		x &= ((uint32_t)1 << w) - 1;
+465: 		if (x & signbit)
+466: 			x |= ~(((uint32_t)1 << w) - 1);
+467: 	} else if (o != 0 && (src & 0x80000000)) {
+468: 		x |= ~(0xffffffffU >> o);
+469: 	}
+470: 	reg(ic->arg[0]) = x;
+471: }
+472: static void m88k_mak(struct cpu *cpu, struct m88k_instr_call *ic, int w, int o)
+473: {
+474: 	uint32_t x = reg(ic->arg[1]);
+475: 	if (w != 0) {
+525: X(rot)
+526: {
+527: 	m88k_rot(cpu, ic, reg(ic->arg[2]) & 0x1f);
+528: }
+529: X(clr)
+530: {
+531: 	int w = (reg(ic->arg[2]) >> 5) & 0x1f, o = reg(ic->arg[2]) & 0x1f;
+532: 	uint32_t x = w == 0? 0xffffffff : ((uint32_t)1 << w) - 1;
+533: 	x <<= o;
+534: 	reg(ic->arg[0]) = reg(ic->arg[1]) & ~x;
+535: }
+536: X(set)
+537: {
+538: 	int w = (reg(ic->arg[2]) >> 5) & 0x1f, o = reg(ic->arg[2]) & 0x1f;
+539: 	uint32_t x = w == 0? 0xffffffff : ((uint32_t)1 << w) - 1;
+540: 	x <<= o;
+541: 	reg(ic->arg[0]) = reg(ic->arg[1]) | x;
+542: }
+543: 
+3504: 			ic->arg[1] = (size_t) &cpu->cd.m88k.r[s1];
+3505: 			ic->arg[2] = iword & 0x3ff;
+3506: 
+3507: 			switch (op10) {
+3508: 			case 0x20: ic->f = instr(mask_imm);
+3509: 				   {
+3510: 					int w = ic->arg[2] >> 5;
+3511: 					int o = ic->arg[2] & 0x1f;
+3512: 					uint32_t x = w == 0? 0xffffffff
+3513: 					    : ((uint32_t)1 << w) - 1;
+3514: 					x <<= o;
+3515: 					ic->arg[2] = ~x;
+3516: 				   }
+3517: 				   break;
+3518: 			case 0x22: ic->f = instr(or_imm);
+3519: 				   {
+3520: 					int w = ic->arg[2] >> 5;
+3521: 					int o = ic->arg[2] & 0x1f;
+3522: 					uint32_t x = w == 0? 0xffffffff
+3523: 					    : ((uint32_t)1 << w) - 1;
+3524: 					x <<= o;
+3525: 					ic->arg[2] = x;
+3526: 				   }
+3527: 				   break;
+3528: 			case 0x24: ic->f = instr(ext_imm); break;
+3529: 			case 0x26: ic->f = instr(extu_imm); break;
+GXEMUL-SEC/src\debugger\debugger_cmds.c:960:			if (data > 0xffffffff && (data >> 32) != 0
+GXEMUL-SEC/src\debugger\debugger_cmds.c:1538:		if (data > 0xffffffff && (data >> 32) != 0
+GXEMUL-SEC/src\cpus\cpu_arm.c:1305:					tmp = (src >> (32 - imm6)) & 1;
+GXEMUL-SEC/src\cpus\cpu_alpha_instr_alu.c:145:		mask >>= (64 - r);
+GXEMUL-SEC/src\cpus\cpu_m88k_instr.c:266:		mask >>= 1; n--;
+GXEMUL-SEC/src\cpus\cpu_m88k_instr.c:283:		mask >>= 1; n--;
+GXEMUL-SEC/src\cpus\cpu_m88k_instr.c:455:		x >>= (32-w);
+GXEMUL-SEC/src\cpus\cpu_m88k_instr.c:468:		x |= ~(0xffffffffU >> o);
+GXEMUL-SEC/src\cpus\cpu_m88k_instr.c:477:		x >>= (32-w);
+GXEMUL-SEC/src\cpus\cpu_sh_instr.c:2201:		rn >>= (32 - sa);
+GXEMUL-SEC/src\cpus\cpu_sh_instr.c:2218:		rn >>= (32 - sa);
+GXEMUL-SEC/src\cpus\cpu_ppc_instr.c:2526:	tmp = sh ? ((tmp << sh) | (tmp >> (32-sh))) : tmp;
+GXEMUL-SEC/src\cpus\cpu_ppc_instr.c:2546:	tmp = sh ? ((tmp << sh) | (tmp >> (32-sh))) : tmp;
+GXEMUL-SEC/src\cpus\cpu_ppc_instr.c:2569:	tmp = sh ? ((tmp << sh) | (tmp >> (32-sh))) : tmp;
+GXEMUL-SEC/src\cpus\cpu_mips_instr.c:1739:	mask >>= (32 - pos - size);
+GXEMUL-SEC/src\cpus\cpu_mips_instr.c:1757:	uint32_t x = (rs << (32-lsb-size)) >> (32-lsb-size);
+GXEMUL-SEC/src/core\settings.c:349:	    settings->n_settings * sizeof(int)));
+GXEMUL-SEC/src/core\settings.c:351:	    settings->storage_type, settings->n_settings * sizeof(int)));
+GXEMUL-SEC/src/core\settings.c:353:	    presentation_format, settings->n_settings * sizeof(int)));
+GXEMUL-SEC/src/core\debugmsg.c:442:	    sizeof(int) * debugmsg_nr_of_subsystems);;
+GXEMUL-SEC/src/core\debugmsg.c:444:	    sizeof(int) * debugmsg_nr_of_subsystems);
+GXEMUL-SEC/src/core\debugmsg.c:676:	debugmsg_current_verbosity = malloc(sizeof(int) * debugmsg_nr_of_subsystems);;
+GXEMUL-SEC/src/core\debugmsg.c:677:	debugmsg_breakpoint_level = malloc(sizeof(int) * debugmsg_nr_of_subsystems);
+GXEMUL-SEC/src/core\memory.c:790: *  Stores a 32-bit word in emulated RAM.  Byte order is taken into account.
+GXEMUL-SEC/src/core\memory.c:863: *  Stores a 32-bit or 64-bit pointer in emulated RAM, and advances the
+GXEMUL-SEC/src/include\cpu_i960.h:85:	 *  Instruction translation cache, internal TLB structure, and 32-bit
+GXEMUL-SEC/src/include\cpu_m88k.h:292:	 *  Instruction translation cache, internal TLB structure, and 32-bit
+GXEMUL-SEC/src/include\cpu_riscv.h:107:	 *  Instruction translation cache, internal TLB structure, and 32-bit
+GXEMUL-SEC/src/include\float_emul.h:45:#define	IEEE_FMT_W		3	/*  word, 32-bit integer  */
+GXEMUL-SEC/src/include\timer.h:41: *  not chosen: machine->emulated_hz is an int (machine.h), so INT_MAX bounds every
+GXEMUL-SEC/src/include\timer.h:81:#define	TIMER_MAX_FREQUENCY	2147483647.0	/*  Hz; INT_MAX, see above  */
+GXEMUL-SEC/src/include\thirdparty\crimereg.h:85:/* Offset 0x010 -- interrupt status register.  All 32 bits valid */
+GXEMUL-SEC/src/include\thirdparty\mips_cpuregs.h:67: * 32-bit mips CPUS partition their 32-bit address space into four segments:
+
+web search: https://www.open-std.org/jtc1/sc22/wg14/www/docs/n1256.pdf
+web search: 
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n 'cpu_name|CORTEX|Snapdragon|MACHINE_DEFAULT|MACHINE_REGISTER|ARM_CPU_TYPE_DEFS' GXEMUL-SEC/src/machines/machine_androidarm.c GXEMUL-SEC/src/include/arm_cpu_types.h; rg --files GXEMUL-SEC/src/machines -g '*test*'; rg -n 'testarm|SA1110|ARCH_ARM' GXEMUL-SEC/src/machines/machine_testarm.c; "'$cpuLines = Get-Content -LiteralPath '"'GXEMUL-SEC/src/cpus/cpu_arm.c'; for ("'$ln=94;$ln -le 134;$ln++) { '"'{0}: {1}' -f "'$ln,$cpuLines[$ln-1] }; $instrLines = Get-Content -LiteralPath '"'GXEMUL-SEC/src/cpus/cpu_arm_instr.c'; for ("'$ln=132;$ln -le 205;$ln++) { '"'{0}: {1}' -f "'$ln,$instrLines[$ln-1] }; rg -n -g '"'*.h' 'arm_instr_call|size_t arg|arg\\[3\\]' GXEMUL-SEC/src/include" in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$mipsLines = Get-Content -LiteralPath '"'GXEMUL-SEC/src/cpus/cpu_mips_instr.c'; for ("'$ln=1705;$ln -le 1766;$ln++) { '"'{0}: {1}' -f "'$ln,$mipsLines[$ln-1] }; $alphaLines = Get-Content -LiteralPath '"'GXEMUL-SEC/src/cpus/cpu_alpha_instr_alu.c'; for ("'$ln=128;$ln -le 150;$ln++) { '"'{0}: {1}' -f "'$ln,$alphaLines[$ln-1] }; $probeFiles = @(Get-ChildItem -LiteralPath '"'GXEMUL-SEC/regress' -File -Filter '*.py' | ForEach-Object { "'$_.FullName }); rg -n -i '"'\\bbfi\\b|\\bbfx\\b|bit.?field.?extract|ubfx|sbfx' @probeFiles; rg -n -i 'ubfx|sbfx|\\bbfi\\b' GXEMUL-SEC/src -g '*.c' -g '*.h' -g '*.txt'" in C:\DocumentNoSnc\CC\GXEMUL
+ succeeded in 195ms:
+1705: }
+1706: X(tnei)
+1707: {
+1708: 	MODE_uint_t rs = reg(ic->arg[0]);
+1709: 	MODE_uint_t imm = ic->arg[2];
+1710: 
+1711: 	if (rs != imm) {
+1712: 		/*  Synchronize the PC and cause an exception:  */
+1713: 		int low_pc = ((size_t)ic - (size_t)cpu->cd.mips.cur_ic_page)
+1714: 		    / sizeof(struct mips_instr_call);
+1715: 		cpu->pc &= ~((MIPS_IC_ENTRIES_PER_PAGE-1)
+1716: 		    << MIPS_INSTR_ALIGNMENT_SHIFT);
+1717: 		cpu->pc += (low_pc << MIPS_INSTR_ALIGNMENT_SHIFT);
+1718: 		mips_cpu_exception(cpu, EXCEPTION_TR, 0, 0, 0, 0, 0, 0);
+1719: 	}
+1720: }
+1721: 
+1722: 
+1723: /*
+1724:  *  ins: Insert bitfield.
+1725:  *
+1726:  *  arg[0] = pointer to rt
+1727:  *  arg[1] = pointer to rs
+1728:  *  arg[2] = (msb << 5) + lsb
+1729:  */
+1730: X(ins)
+1731: {
+1732: 	int msb = ic->arg[2] >> 5, pos = ic->arg[2] & 0x1f;
+1733: 	int size = msb + 1 - pos;
+1734: 	uint32_t rt = reg(ic->arg[0]);
+1735: 	uint32_t rs = reg(ic->arg[1]);
+1736: 	uint32_t mask = (uint32_t)(-1) << pos;
+1737: 
+1738: 	mask <<= (32 - pos - size);
+1739: 	mask >>= (32 - pos - size);
+1740: 
+1741: 	reg(ic->arg[0]) = (int32_t) ((rt & ~mask) | ((rs << pos) & mask));
+1742: }
+1743: 
+1744: 
+1745: /*
+1746:  *  ext:  Extract bitfield.
+1747:  *
+1748:  *  arg[0] = pointer to rt
+1749:  *  arg[1] = pointer to rs
+1750:  *  arg[2] = (msbd << 5) + lsb
+1751:  */
+1752: X(ext)
+1753: {
+1754: 	int msbd = ic->arg[2] >> 5, lsb = ic->arg[2] & 0x1f;
+1755: 	int size = msbd + 1;
+1756: 	uint32_t rs = reg(ic->arg[1]);
+1757: 	uint32_t x = (rs << (32-lsb-size)) >> (32-lsb-size);
+1758: 	reg(ic->arg[0]) = (int32_t) (x >> lsb);
+1759: }
+1760: 
+1761: 
+1762: /*
+1763:  *  dext:  Extract bitfield (64-bit).
+1764:  *
+1765:  *  arg[0] = pointer to rt
+1766:  *  arg[1] = pointer to rs
+128: #ifdef ALU_Q
+129: 	uint64_t mask = 0xffffffffffffffffULL;
+130: #endif
+131: 	int r = (
+132: #ifdef ALU_IMM
+133: 	    ic->arg[2]
+134: #else
+135: 	    (*((uint64_t *)ic->arg[2]))
+136: #endif
+137: 	    & 7) * 8;
+138: 
+139: #ifdef ALU_LO
+140: 	mask <<= r;
+141: #else
+142: 	if (r == 0)
+143: 		mask = 0;
+144: 	else
+145: 		mask >>= (64 - r);
+146: #endif
+147: 
+148: 	*((uint64_t *)ic->arg[0]) = x & ~mask;
+149: 
+150: #else	/*  !MSK  */
+GXEMUL-SEC/src\cpus\cpu_arm.c:2361:			/*  bfi rd,rn,#lsb,#width:  */
+GXEMUL-SEC/src\cpus\cpu_arm.c:2362:			debug("bfi%s\t%s,%s",
+GXEMUL-SEC/src\cpus\cpu_arm.c:2376:			/*  ubfx rd,rn,#lsb,#width:  */
+GXEMUL-SEC/src\cpus\cpu_arm.c:2377:			debug("ubfx%s\t%s,%s",
+GXEMUL-SEC/src\cpus\cpu_arm.c:2388:			/*  sbfx rd,rn,#lsb,#width:  */
+GXEMUL-SEC/src\cpus\cpu_arm.c:2389:			debug("sbfx%s\t%s,%s",
+GXEMUL-SEC/src\cpus\cpu_arm_instr.c:1303: *  ubfx:  Unsigned Bit-Field Extract.
+GXEMUL-SEC/src\cpus\cpu_arm_instr.c:1309:X(ubfx)
+GXEMUL-SEC/src\cpus\cpu_arm_instr.c:1323:Y(ubfx)
+GXEMUL-SEC/src\cpus\cpu_arm_instr.c:1327: *  sbfx:  Signed Bit-Field Extract.
+GXEMUL-SEC/src\cpus\cpu_arm_instr.c:1333:X(sbfx)
+GXEMUL-SEC/src\cpus\cpu_arm_instr.c:1350:Y(sbfx)
+GXEMUL-SEC/src\cpus\cpu_arm_instr.c:1354: *  bfi:  Bit-Field Insert.
+GXEMUL-SEC/src\cpus\cpu_arm_instr.c:1360:X(bfi)
+GXEMUL-SEC/src\cpus\cpu_arm_instr.c:1377:Y(bfi)
+GXEMUL-SEC/src\cpus\cpu_arm_instr.c:4475:				ic->f = cond_instr(bfi);
+GXEMUL-SEC/src\cpus\cpu_arm_instr.c:4482:				ic->f = cond_instr(ubfx);
+GXEMUL-SEC/src\cpus\cpu_arm_instr.c:4489:				ic->f = cond_instr(sbfx);
+
+ exited 1 in 215ms:
+GXEMUL-SEC/src/include/arm_cpu_types.h:50:#define	ARM_CPU_TYPE_DEFS					      {	 \
+GXEMUL-SEC/src/include/arm_cpu_types.h:102:	{ "CORTEX-A5",	CPU_ID_CORTEXA5R0,0/*TODO*/,	15, 1, 15, 1 }, \
+GXEMUL-SEC/src/include/arm_cpu_types.h:103:	{ "SnapdragonS2",0x511f00f2,	0/*TODO*/,	15, 1, 15, 1 }, \
+GXEMUL-SEC/src/machines/machine_androidarm.c:144:MACHINE_DEFAULT_CPU(androidarm)
+GXEMUL-SEC/src/machines/machine_androidarm.c:150:		machine->cpu_name = strdup("CORTEX-A5");
+GXEMUL-SEC/src/machines/machine_androidarm.c:154:		// "Qualcomm MSM8255 Snapdragon S2"
+GXEMUL-SEC/src/machines/machine_androidarm.c:157:		machine->cpu_name = strdup("SnapdragonS2");
+GXEMUL-SEC/src/machines/machine_androidarm.c:161:		machine->cpu_name = strdup("CORTEX-A5");
+GXEMUL-SEC/src/machines/machine_androidarm.c:166:MACHINE_DEFAULT_RAM(androidarm)
+GXEMUL-SEC/src/machines/machine_androidarm.c:185:MACHINE_REGISTER(androidarm)
+GXEMUL-SEC/src/machines\machine_test.o
+GXEMUL-SEC/src/machines\machine_test.c
+rg: GXEMUL-SEC/src/machines/machine_testarm.c: IO error for operation on GXEMUL-SEC/src/machines/machine_testarm.c: The system cannot find the file specified. (os error 2)
+94: int arm_cpu_new(struct cpu *cpu, struct memory *mem,
+95: 	struct machine *machine, int cpu_id, char *cpu_type_name)
+96: {
+97: 	int i, found;
+98: 	struct arm_cpu_type_def cpu_type_defs[] = ARM_CPU_TYPE_DEFS;
+99: 
+100: 	/*  Scan the list for this cpu type:  */
+101: 	i = 0; found = -1;
+102: 	while (i >= 0 && cpu_type_defs[i].name != NULL) {
+103: 		if (strcasecmp(cpu_type_defs[i].name, cpu_type_name) == 0) {
+104: 			found = i;
+105: 			break;
+106: 		}
+107: 		i++;
+108: 	}
+109: 	if (found == -1)
+110: 		return 0;
+111: 
+112: 	cpu->run_instr = arm_run_instr;
+113: 	cpu->memory_rw = arm_memory_rw;
+114: 	cpu->update_translation_table = arm_update_translation_table;
+115: 	cpu->invalidate_translation_caches =
+116: 	    arm_invalidate_translation_caches;
+117: 	cpu->invalidate_code_translation = arm_invalidate_code_translation;
+118: 	cpu->translate_v2p = arm_translate_v2p;
+119: 
+120: 	cpu->cd.arm.cpu_type = cpu_type_defs[found];
+121: 	cpu->name            = strdup(cpu->cd.arm.cpu_type.name);
+122: 	cpu->is_32bit        = 1;
+123: 	cpu->byte_order      = EMUL_LITTLE_ENDIAN;
+124: 
+125: 	cpu->vaddr_mask = 0x00000000ffffffffULL;
+126: 
+127: 	cpu->cd.arm.cpsr = ARM_FLAG_I | ARM_FLAG_F;
+128: 	cpu->cd.arm.control = ARM_CONTROL_PROG32 | ARM_CONTROL_DATA32
+129: 	    | ARM_CONTROL_CACHE | ARM_CONTROL_ICACHE | ARM_CONTROL_ALIGN;
+130: 	/*  TODO: default auxctrl contents  */
+131: 
+132: 	if (cpu->machine->prom_emulation) {
+133: 		cpu->cd.arm.cpsr |= ARM_MODE_SVC32;
+134: 		cpu->cd.arm.control |= ARM_CONTROL_S;
+132: #define Y(n) void arm_instr_ ## n ## __eq(struct cpu *cpu,		\
+133: 			struct arm_instr_call *ic)			\
+134: 	{  if (cpu->cd.arm.flags & ARM_F_Z)				\
+135: 		arm_instr_ ## n (cpu, ic);		}		\
+136: 	void arm_instr_ ## n ## __ne(struct cpu *cpu,			\
+137: 			struct arm_instr_call *ic)			\
+138: 	{  if (!(cpu->cd.arm.flags & ARM_F_Z))				\
+139: 		arm_instr_ ## n (cpu, ic);		}		\
+140: 	void arm_instr_ ## n ## __cs(struct cpu *cpu,			\
+141: 			struct arm_instr_call *ic)			\
+142: 	{  if (cpu->cd.arm.flags & ARM_F_C)				\
+143: 		arm_instr_ ## n (cpu, ic);		}		\
+144: 	void arm_instr_ ## n ## __cc(struct cpu *cpu,			\
+145: 			struct arm_instr_call *ic)			\
+146: 	{  if (!(cpu->cd.arm.flags & ARM_F_C))				\
+147: 		arm_instr_ ## n (cpu, ic);		}		\
+148: 	void arm_instr_ ## n ## __mi(struct cpu *cpu,			\
+149: 			struct arm_instr_call *ic)			\
+150: 	{  if (cpu->cd.arm.flags & ARM_F_N)				\
+151: 		arm_instr_ ## n (cpu, ic);		}		\
+152: 	void arm_instr_ ## n ## __pl(struct cpu *cpu,			\
+153: 			struct arm_instr_call *ic)			\
+154: 	{  if (!(cpu->cd.arm.flags & ARM_F_N))				\
+155: 		arm_instr_ ## n (cpu, ic);		}		\
+156: 	void arm_instr_ ## n ## __vs(struct cpu *cpu,			\
+157: 			struct arm_instr_call *ic)			\
+158: 	{  if (cpu->cd.arm.flags & ARM_F_V)				\
+159: 		arm_instr_ ## n (cpu, ic);		}		\
+160: 	void arm_instr_ ## n ## __vc(struct cpu *cpu,			\
+161: 			struct arm_instr_call *ic)			\
+162: 	{  if (!(cpu->cd.arm.flags & ARM_F_V))				\
+163: 		arm_instr_ ## n (cpu, ic);		}		\
+164: 	void arm_instr_ ## n ## __hi(struct cpu *cpu,			\
+165: 			struct arm_instr_call *ic)			\
+166: 	{  if (condition_hi[cpu->cd.arm.flags])				\
+167: 		arm_instr_ ## n (cpu, ic);		}		\
+168: 	void arm_instr_ ## n ## __ls(struct cpu *cpu,			\
+169: 			struct arm_instr_call *ic)			\
+170: 	{  if (!condition_hi[cpu->cd.arm.flags])			\
+171: 		arm_instr_ ## n (cpu, ic);		}		\
+172: 	void arm_instr_ ## n ## __ge(struct cpu *cpu,			\
+173: 			struct arm_instr_call *ic)			\
+174: 	{  if (condition_ge[cpu->cd.arm.flags])				\
+175: 		arm_instr_ ## n (cpu, ic);		}		\
+176: 	void arm_instr_ ## n ## __lt(struct cpu *cpu,			\
+177: 			struct arm_instr_call *ic)			\
+178: 	{  if (!condition_ge[cpu->cd.arm.flags])			\
+179: 		arm_instr_ ## n (cpu, ic);		}		\
+180: 	void arm_instr_ ## n ## __gt(struct cpu *cpu,			\
+181: 			struct arm_instr_call *ic)			\
+182: 	{  if (condition_gt[cpu->cd.arm.flags])				\
+183: 		arm_instr_ ## n (cpu, ic);		}		\
+184: 	void arm_instr_ ## n ## __le(struct cpu *cpu,			\
+185: 			struct arm_instr_call *ic)			\
+186: 	{  if (!condition_gt[cpu->cd.arm.flags])			\
+187: 		arm_instr_ ## n (cpu, ic);		}		\
+188: 	void (*arm_cond_instr_ ## n  [16])(struct cpu *,		\
+189: 			struct arm_instr_call *) = {			\
+190: 		arm_instr_ ## n ## __eq, arm_instr_ ## n ## __ne,	\
+191: 		arm_instr_ ## n ## __cs, arm_instr_ ## n ## __cc,	\
+192: 		arm_instr_ ## n ## __mi, arm_instr_ ## n ## __pl,	\
+193: 		arm_instr_ ## n ## __vs, arm_instr_ ## n ## __vc,	\
+194: 		arm_instr_ ## n ## __hi, arm_instr_ ## n ## __ls,	\
+195: 		arm_instr_ ## n ## __ge, arm_instr_ ## n ## __lt,	\
+196: 		arm_instr_ ## n ## __gt, arm_instr_ ## n ## __le,	\
+197: 		arm_instr_ ## n , arm_instr_never };
+198: 
+199: #define cond_instr(n)	( arm_cond_instr_ ## n  [condition_code] )
+200: 
+201: 
+202: /*****************************************************************************/
+203: 
+204: 
+205: /*
+
+web search: "SBFX and UBFX" "width" ...
+web search: 
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n 'testarm|SA1110|ARCH_ARM|MACHINE_DEFAULT_CPU|MACHINE_REGISTER|physical_ram' GXEMUL-SEC/src/machines/machine_test.c; "'$aLines = Get-Content -LiteralPath '"'GXEMUL-SEC/src/machines/machine_androidarm.c'; for ("'$ln=144;$ln -le 208;$ln++) { '"'{0}: {1}' -f "'$ln,$aLines[$ln-1] }; rg -n '"'cpu_name.*NULL|set_default_cpu|default_cpu|cpu_name' GXEMUL-SEC/src/core/machine.c; rg -n 'struct arm_instr_call|DYNTRANS.*CALL|arg\\[|struct.*instr_call' GXEMUL-SEC/src/include/cpu_arm.h GXEMUL-SEC/src/include/cpu_dyntrans.h GXEMUL-SEC/src/cpus/tmp_arm_head.c; rg -n 'cpu_type|condition_code|main_opcode|iword =' GXEMUL-SEC/src/cpus/cpu_arm_instr.c | Select-Object -Last 35" in C:\DocumentNoSnc\CC\GXEMUL
+ succeeded in 182ms:
+93:	case ARCH_ARM:
+187:MACHINE_SETUP(testarm)
+198:	cpu->cd.arm.r[ARM_SP] = machine->physical_ram_in_mb * 1048576 - 4096;
+206:MACHINE_DEFAULT_CPU(barearm)
+208:	machine->cpu_name = strdup("SA1110");
+212:MACHINE_DEFAULT_CPU(testarm)
+214:	machine->cpu_name = strdup("SA1110");
+218:MACHINE_REGISTER(barearm)
+226:MACHINE_REGISTER(testarm)
+228:	MR_DEFAULT(testarm, "Test-machine for ARM", MACHINE_TESTARM);
+230:	machine_entry_add_alias(me, "testarm");
+241:MACHINE_DEFAULT_CPU(barei960)
+247:MACHINE_REGISTER(barei960)
+269:MACHINE_DEFAULT_CPU(barem88k)
+275:MACHINE_DEFAULT_CPU(testm88k)
+281:MACHINE_REGISTER(barem88k)
+290:MACHINE_REGISTER(testm88k)
+385:	if (machine->physical_ram_in_mb > 256) {
+388:		    machine->physical_ram_in_mb);
+396:		    + physical_ram_in_mb one contiguous RAM block:  */
+398:		    ((uint64_t) machine->physical_ram_in_mb - 256) * 1048576,
+404:MACHINE_DEFAULT_CPU(baremips)
+410:MACHINE_DEFAULT_CPU(testmips)
+416:MACHINE_REGISTER(baremips)
+425:MACHINE_REGISTER(testmips)
+448:MACHINE_DEFAULT_CPU(bareppc)
+454:MACHINE_DEFAULT_CPU(testppc)
+460:MACHINE_REGISTER(bareppc)
+469:MACHINE_REGISTER(testppc)
+491:MACHINE_DEFAULT_CPU(bareriscv)
+497:MACHINE_DEFAULT_CPU(testriscv)
+503:MACHINE_REGISTER(bareriscv)
+511:MACHINE_REGISTER(testriscv)
+533:MACHINE_DEFAULT_CPU(baresh)
+539:MACHINE_DEFAULT_CPU(testsh)
+545:MACHINE_REGISTER(baresh)
+554:MACHINE_REGISTER(testsh)
+144: MACHINE_DEFAULT_CPU(androidarm)
+145: {
+146: 	switch (machine->machine_subtype) {
+147: 
+148: 	case MACHINE_ANDROIDARM_FINOWX5AIR:
+149: 		// Cortex-A7?  MTK6580 at 1.3 GHz? Quadcore?
+150: 		machine->cpu_name = strdup("CORTEX-A5");
+151: 		break;
+152: 
+153: 	case MACHINE_ANDROIDARM_SONYXPERIAMINI:
+154: 		// "Qualcomm MSM8255 Snapdragon S2"
+155: 		// My real Xperia Mini says the following when booting the Linux kernel:
+156: 		// [    0.000000] CPU: ARMv7 Processor [511f00f2] revision 2 (ARMv7), cr=10c53c7d
+157: 		machine->cpu_name = strdup("SnapdragonS2");
+158: 		break;
+159: 
+160: 	default:
+161: 		machine->cpu_name = strdup("CORTEX-A5");
+162: 	}
+163: }
+164: 
+165: 
+166: MACHINE_DEFAULT_RAM(androidarm)
+167: {
+168: 	switch (machine->machine_subtype) {
+169: 
+170: 	case MACHINE_ANDROIDARM_FINOWX5AIR:
+171: 		// Ram is at 0x80000000?
+172: 		machine->physical_ram_in_mb = 256;
+173: 		break;
+174: 
+175: 	case MACHINE_ANDROIDARM_SONYXPERIAMINI:
+176: 		machine->physical_ram_in_mb = 512;
+177: 		break;
+178: 
+179: 	default:
+180: 		machine->physical_ram_in_mb = 512;
+181: 	}
+182: }
+183: 
+184: 
+185: MACHINE_REGISTER(androidarm)
+186: {
+187: 	MR_DEFAULT(androidarm, "ARM-based \"Android\" machines", MACHINE_ANDROIDARM);
+188: 
+189: 	machine_entry_add_alias(me, "android-arm");
+190: 
+191: 	machine_entry_add_subtype(me, "Finow X5 Air", MACHINE_ANDROIDARM_FINOWX5AIR,
+192: 	    "finow-x5-air", NULL);
+193: 
+194: 	machine_entry_add_subtype(me, "Sony Xperia Mini", MACHINE_ANDROIDARM_SONYXPERIAMINI,
+195: 	    "sony-xperia-mini", NULL);
+196: 
+197: 	me->set_default_ram = machine_default_ram_androidarm;
+198: }
+199: 
+200: 
+201: 
+202: 
+203: 
+204: 
+205: 
+206: 
+207: 
+208: 
+rg: GXEMUL-SEC/src/core/machine.c: IO error for operation on GXEMUL-SEC/src/core/machine.c: The system cannot find the file specified. (os error 2)
+rg: GXEMUL-SEC/src/include/cpu_dyntrans.h: The system cannot find the file specified. (os error 2)
+GXEMUL-SEC/src/cpus/tmp_arm_head.c:51: struct arm_instr_call *ic)
+GXEMUL-SEC/src/cpus/tmp_arm_head.c:66:static struct arm_instr_call nothing_call = { instr(nothing), {0,0,0} };
+GXEMUL-SEC/src/include/cpu_arm.h:175:	 *  [2], not a scalar: LDRD/STRD reach arg[2]+1, and with a scalar here
+3983:			if (main_opcode == 0xb)
+3993:	switch (main_opcode) {
+4190:			p_bit = main_opcode & 1;
+4195:				    condition_code + (l_bit? 16 : 0)
+4212:				    condition_code + (l_bit? 16 : 0)
+4225:		if (iword & 0x80 && !(main_opcode & 2) && iword & 0x10) {
+4262:			arm_switch_clear(ic, rd, condition_code);
+4268:			arm_switch_mov1(ic, rd, condition_code);
+4275:			arm_switch_add1(ic, rd, condition_code);
+4306:		if ((main_opcode & 2) == 0)
+4415:			ic->f = arm_dpi_instr_regshort[condition_code +
+4418:			ic->f = arm_dpi_instr[condition_code +
+4424:		if (iword == 0xe113000c)
+4433:		if (main_opcode >= 6 && iword & 0x10) {
+4564:			    & 0x3f0) + condition_code];
+4574:			    0x3f0) + condition_code];
+4577:		if (main_opcode < 6)
+4582:		if (rn == ARM_PC && rd != ARM_PC && main_opcode < 6 && l_bit) {
+4599:				ic->f = arm_dpi_instr[condition_code + 16*0xd];
+4618:		if (iword == 0xe4b09004)
+4620:		if (iword == 0xe4a17004)
+4675:					    [i*16 + condition_code];
+4691:		if (main_opcode == 0x0a) {
+4696:			if (condition_code == 0xe &&
+4700:			if (iword == 0xcaffffed)
+4703:			if (iword == 0xaafffff9)
+4755:			} else if (main_opcode == 0x0a) {
+4761:		if (main_opcode == 0xa && (condition_code <= 1
+4762:		    || condition_code == 3 || condition_code == 8
+4763:		    || condition_code == 12 || condition_code == 13))
+4766:		if (iword == 0x1afffffc)
+4770:		if (iword == 0x8afffffa)
+4828:		if (iword == 0xee070f9a)
+4838:		if (iword == 0xef8c64eb) {
+4841:		} else if (iword == 0xef8c64be) {
+
+web search: "UBFX" "msbit" "32-<lsb>" ...
+web search: 
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg --files GXEMUL-SEC/src -g '*machine*.c' -g '*dyntrans*.h'; rg -n -g '*.h' 'size_t[[:space:]]+arg|arg\\[3\\]|arm_instr_call' GXEMUL-SEC/src/include | Select-Object -First 18; "'$testLines = Get-Content -LiteralPath '"'GXEMUL-SEC/src/machines/machine_test.c'; for ("'$ln=175;$ln -le 234;$ln++) { '"'{0}: {1}' -f "'$ln,$testLines[$ln-1] }; $armLines = Get-Content -LiteralPath '"'GXEMUL-SEC/src/cpus/cpu_arm_instr.c'; for ("'$ln=4535;$ln -le 4549;$ln++) { '"'{0}: {1}' -f "'$ln,$armLines[$ln-1] }; rg -n '"'#510|#386' GXEMUL-SEC/src/cpus/cpu_arm_instr.c" in C:\DocumentNoSnc\CC\GXEMUL
+ succeeded in 174ms:
+GXEMUL-SEC/src\machines\machine_androidarm.c
+GXEMUL-SEC/src\machines\machine_alpha.c
+GXEMUL-SEC/src\machines\machine_algor.c
+GXEMUL-SEC/src\machines\machine.c
+GXEMUL-SEC/src\machines\automachine_tail.c
+GXEMUL-SEC/src\machines\automachine_middle.c
+GXEMUL-SEC/src\machines\automachine_head.c
+GXEMUL-SEC/src\machines\automachine.c
+GXEMUL-SEC/src\machines\machine_vocore.c
+GXEMUL-SEC/src\machines\machine_test.c
+GXEMUL-SEC/src\machines\machine_sgi.c
+GXEMUL-SEC/src\machines\machine_rpi.c
+GXEMUL-SEC/src\machines\machine_prep.c
+GXEMUL-SEC/src\machines\machine_pmppc.c
+GXEMUL-SEC/src\machines\machine_pmax.c
+GXEMUL-SEC/src\machines\machine_playstation2.c
+GXEMUL-SEC/src\machines\machine_netwinder.c
+GXEMUL-SEC/src\machines\machine_mvmeppc.c
+GXEMUL-SEC/src\machines\machine_mvme88k.c
+GXEMUL-SEC/src\machines\machine_macppc.c
+GXEMUL-SEC/src\machines\machine_luna88k.c
+GXEMUL-SEC/src\machines\machine_landisk.c
+GXEMUL-SEC/src\machines\machine_iyonix.c
+GXEMUL-SEC/src\machines\machine_iq80321.c
+GXEMUL-SEC/src\machines\machine_hpcsh.c
+GXEMUL-SEC/src\machines\machine_hpcmips.c
+GXEMUL-SEC/src\machines\machine_hpcarm.c
+GXEMUL-SEC/src\machines\machine_hp700rx.c
+GXEMUL-SEC/src\machines\machine_evbmips.c
+GXEMUL-SEC/src\machines\machine_dreamcast.c
+GXEMUL-SEC/src\machines\machine_cyclonevh.c
+GXEMUL-SEC/src\machines\machine_cobalt.c
+GXEMUL-SEC/src\machines\machine_cats.c
+GXEMUL-SEC/src\machines\machine_arc.c
+175: 
+176: #if 1
+177: 	// An experiment with running a particular firmware image on a device;
+178: 	// move some other place when/if it works?
+179: 	cpu->byte_order = EMUL_BIG_ENDIAN;
+180: 
+181: 	dev_ram_init(machine, 0xa0000000, 128 * 1048576, DEV_RAM_MIRROR
+182: 		| DEV_RAM_MIGHT_POINT_TO_DEVICES, 0x00000000, "ram_mirror");
+183: #endif
+184: }
+185: 
+186: 
+187: MACHINE_SETUP(testarm)
+188: {
+189: 	machine->machine_name = strdup("ARM test machine");
+190: 
+191: 	default_test(machine, cpu);
+192: 
+193: 	/*
+194: 	 *  Place a tiny stub at end of memory, and set the link register to
+195: 	 *  point to it. This stub halts the machine (making it easy to try
+196: 	 *  out simple stand-alone C functions).
+197: 	 */
+198: 	cpu->cd.arm.r[ARM_SP] = machine->physical_ram_in_mb * 1048576 - 4096;
+199: 	cpu->cd.arm.r[ARM_LR] = cpu->cd.arm.r[ARM_SP] + 32;
+200: 	store_32bit_word(cpu, cpu->cd.arm.r[ARM_LR] + 0, 0xe3a00201);
+201: 	store_32bit_word(cpu, cpu->cd.arm.r[ARM_LR] + 4, 0xe5c00010);
+202: 	store_32bit_word(cpu, cpu->cd.arm.r[ARM_LR] + 8, 0xeafffffe);
+203: }
+204: 
+205: 
+206: MACHINE_DEFAULT_CPU(barearm)
+207: {
+208: 	machine->cpu_name = strdup("SA1110");
+209: }
+210: 
+211: 
+212: MACHINE_DEFAULT_CPU(testarm)
+213: {
+214: 	machine->cpu_name = strdup("SA1110");
+215: }
+216: 
+217: 
+218: MACHINE_REGISTER(barearm)
+219: {
+220: 	MR_DEFAULT(barearm, "Generic \"bare\" ARM machine", MACHINE_BAREARM);
+221: 
+222: 	machine_entry_add_alias(me, "barearm");
+223: }
+224: 
+225: 
+226: MACHINE_REGISTER(testarm)
+227: {
+228: 	MR_DEFAULT(testarm, "Test-machine for ARM", MACHINE_TESTARM);
+229: 
+230: 	machine_entry_add_alias(me, "testarm");
+231: }
+232: 
+233: 
+234: 
+4535: 					 *  pattern, so it may instead be an
+4536: 					 *  extension nobody has implemented
+4537: 					 *  yet. Say so once -- a guest can sit
+4538: 					 *  in a loop on one of these.
+4539: 					 */
+4540: 					static int warned_undef = 0;
+4541: 					if (!warned_undef) {
+4542: 						warned_undef = 1;
+4543: 						debugmsg_cpu(cpu, SUBSYS_CPU,
+4544: 						    "opcode",
+4545: 						    VERBOSITY_WARNING,
+4546: 						    "unimplemented special "
+4547: 						    "non-loadstore encoding "
+4548: 						    "0x%08" PRIx32 " -- routing "
+4549: 						    "to Undefined Instruction. "
+1390:	/*  #386: an unaligned swp rotates the LOADED word right by 8*addr[1:0]
+1402:	/*  #386: Memory[address,4] is the ALIGNED word for BOTH accesses
+1413:	/*  #386: assemble and emit per cpu->byte_order, mirroring ldrex/strex;
+
+web search: "A8.8" "UBFX" "ZeroExtend" "widthminus1"
+codex
+Enumeration found 1,024 width/LSB pairs per extractor, with 528 satisfying ARM’s field constraint. Width 32 has one valid placement, LSB 0; width 31 has two, LSB 0 and 1. ARM’s manual confirms full-width extraction is legal. The fork also has a Cortex-A5 entry using this decoder, which supports probe feasibility by source inspection; the reported zero result remains unmeasured.
+
+web search: 
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n 'cpu_name.*NULL|set_default_cpu|default_cpu|cpu_name' GXEMUL-SEC/src/machines/machine.c | Select-Object -First 35; rg -n 'instr_call|arg\\[' GXEMUL-SEC/src/include/cpu.h | Select-Object -First 18; "'$armLines = Get-Content -LiteralPath '"'GXEMUL-SEC/src/cpus/cpu_arm_instr.c'; foreach ("'$part in @(@(3900,3950),@(4547,4561))) { for ($ln=$part[0];$ln -le $part[1];$ln++) { '"'{0}: {1}' -f "'$ln,$armLines[$ln-1] } }; rg -n '"'cpu_type|ARM_XSCALE|CPU_ID_' GXEMUL-SEC/src/cpus/cpu_arm_instr.c; rg -n 'testarm|os.execl|step|GXemul' GXEMUL-SEC/regress/arm_flags_probe.py | Select-Object -First 12; rg -n -g '*.c' -g '*.h' '0xffffffff[UuLl]*|UINT32_MAX|~0U' GXEMUL-SEC/src/cpus/cpu_arm_instr.c | Select-Object -First 12" in C:\DocumentNoSnc\CC\GXEMUL
+ succeeded in 204ms:
+652: *  machine_default_cputype():
+654: *  Sets m->cpu_name, if it isn't already set, depending on the machine type.
+656:void machine_default_cputype(struct machine *m)
+661:		fatal("machine_default_cputype(): m == NULL?\n");
+666:	if (m->cpu_name != NULL)
+672:		    me->set_default_cpu != NULL) {
+673:			me->set_default_cpu(m);
+679:	if (m->cpu_name == NULL) {
+680:		fprintf(stderr, "machine_default_cputype(): no default"
+74:	arch ## _instr_call {					\
+75:		void	(*f)(struct cpu *, struct arch ## _instr_call *); \
+76:		uintptr_t arg[ARCH ## _N_IC_ARGS];			\
+81:		struct arch ## _instr_call ics[ARCH ## _IC_ENTRIES_PER_PAGE+2];\
+145:				struct arch ## _instr_call  *cur_ic_page;   \
+146:				struct arch ## _instr_call  *next_ic;       \
+149:				    struct arch ## _instr_call *, int low_addr);
+3900: 	}
+3901: 
+3902: 	if (cpu->byte_order == EMUL_LITTLE_ENDIAN)
+3903: 		iword = READ_WORD_LE(ib);
+3904: 	else
+3905: 		iword = READ_WORD_BE(ib);
+3906: 
+3907: 
+3908: #define DYNTRANS_TO_BE_TRANSLATED_HEAD
+3909: #include "cpu_dyntrans.c"
+3910: #undef  DYNTRANS_TO_BE_TRANSLATED_HEAD
+3911: 
+3912: 
+3913: 	/*  The idea of taking bits 27..24 was found here:
+3914: 	    http://armphetamine.sourceforge.net/oldinfo.html  */
+3915: 	condition_code = iword >> 28;
+3916: 	main_opcode = (iword >> 24) & 15;
+3917: 	secondary_opcode = (iword >> 21) & 15;
+3918: 	u_bit = iword & 0x00800000;
+3919: 	w_bit = iword & 0x00200000;
+3920: 	s_bit = l_bit = iword & 0x00100000;
+3921: 	rn    = (iword >> 16) & 15;
+3922: 	rd    = (iword >> 12) & 15;
+3923: 	r8    = (iword >> 8) & 15;
+3924: 	// c     = (iword >> 7) & 31;
+3925: 	// t     = (iword >> 4) & 7;
+3926: 	rm    = iword & 15;
+3927: 
+3928: 	/*
+3929: 	 *  Translate the instruction:
+3930: 	 */
+3931: 
+3932: 	if ((iword >> 28) == 0xf) {
+3933: 		/*  The "never" condition is nowadays used for special encodings.  */
+3934: 		if ((iword & 0xfc70f000) == 0xf450f000) {
+3935: 			/*  Preload:  TODO.  Treat as NOP for now.  */
+3936: 			ic->f = instr(nop);
+3937: 			goto okay;
+3938: 		}
+3939: 
+3940: 		if (iword == 0xf10c0040) {
+3941: 			/*  cpsid f. Treat as NOP for now.  */
+3942: 			ic->f = instr(nop);
+3943: 			goto okay;
+3944: 		}
+3945: 
+3946: 		if (iword == 0xf10c0080) {
+3947: 			/*  cpsid i. Treat as NOP for now.  */
+3948: 			ic->f = instr(nop);
+3949: 			goto okay;
+3950: 		}
+4547: 						    "non-loadstore encoding "
+4548: 						    "0x%08" PRIx32 " -- routing "
+4549: 						    "to Undefined Instruction. "
+4550: 						    "Only printing this once.",
+4551: 						    (uint32_t) iword);
+4552: 					}
+4553: 				}
+4554: 				ic->f = cond_instr(und);
+4555: 				ic->arg[0] = addr & 0xfff;
+4556: 			}
+4557: 			break;
+4558: 		}
+4559: 	
+4560: 		ic->arg[0] = (size_t)(&cpu->cd.arm.r[rn]);
+4561: 		ic->arg[2] = (size_t)(&cpu->cd.arm.r[rd]);
+10:Cold debugger on `testarm` (SA1110), RAM at 0. The machine needs A file to
+120:        os.execvp(BIN, [BIN, "-V", "-A", "-E", "testarm", "-M", "64",
+144:            if buf.rstrip().endswith("GXemul>"):
+212:        "pc=0x%x" % CODE, "step 5"], 2)
+237:      1. `step` cannot work. cpu_dyntrans.c:1888 disables combining whenever
+238:         single_step is set, so a stepped probe exercises the STANDALONE
+269:    The breakpoint goes after the loop, never on the pair: single_step_breakpoint
+621:        os.execvp(BIN, [BIN, "-V", "-A", "-E", "testarm", "-M", "64",
+645:            if buf.rstrip().endswith("GXemul>"):
+683:            if len(buf) > mark0 and buf[mark0:].rstrip().endswith("GXemul>"):
+942:        "pc=0x%x" % CODE, "step 6"], 2)
+971:        "pc=0x%x" % at, "step 8"], 3)
+2304:	 *  The wraparound is deliberate. At r1 = 0xffffffff, n is 0x8000000 and
+
+web search: "Cortex-A5" "ARMv7-A" "UBFX" ...
+web search: 
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "@'
+import ast
+from pathlib import Path
+root = Path('GXEMUL-SEC/regress')
+files = sorted(root.glob('*.py'))
+hits = []
+errors = []
+for path in files:
+    try:
+        tree = ast.parse(path.read_text(encoding='utf-8-sig'), filename=str(path))
+    except Exception as error:
+        errors.append((path.name, type(error).__name__))
+        continue
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Constant) or type(node.value) is not int:
+            continue
+        value = node.value
+        if not 0 <= value <= 0xffffffff or value >> 28 == 15:
+            continue
+        for name, pattern in (('ubfx', 0x07e00050), ('sbfx', 0x07a00050)):
+            if value & 0x0fe00070 == pattern:
+                hits.append((path.name, node.lineno, name))
+print({'scope': 'top-level regress/*.py', 'integer_literal_matches': hits, 'parse_errors': errors})
+'@ | python -B -" in C:\DocumentNoSnc\CC\GXEMUL
+ succeeded in 397ms:
+{'scope': 'top-level regress/*.py', 'integer_literal_matches': [], 'parse_errors': []}
+
+web search: "Cortex-A5" "ARMv7-A architecture"
+codex
+**VERDICT: Confirmed, with major premise corrections: legal full-width UBFX/SBFX reach C undefined behavior; width 31 is also affected, and BFI has the same mask defect.**
+
+I read `GXEMUL-SEC/src/`; the quoted handler locations match.
+
+**The BFI premise is false.** Its [actual handler](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c:1360) computes `width = msb - lsb + 1`, then evaluates `(1 << width) - 1` at line 1370. Enumerating all producer pairs finds these architecturally valid problem cases:
+
+| `msb` | `lsb` | Reconstructed width |
+|---:|---:|---:|
+| 30 | 0 | 31 |
+| 31 | 1 | 31 |
+| 31 | 0 | 32 |
+
+Packing `msb` safely does not establish that the consuming handler shifts safely.
+
+1. **Premise audit: C behavior.** With 32-bit `int`, `1` remains signed `int`; assignment to `uint32_t` does not change the expression’s evaluation type. C99 §6.5.7p3 makes shifting by 32 undefined, and p4 makes signed `1 << 31` undefined. There is no rescuing promotion. [C99 consolidated draft](https://www.open-std.org/jtc1/sc22/wg14/www/docs/n1256.pdf)
+
+   I enumerated all 1,024 `(widthm1, lsb)` combinations from the [decoder’s actual five-bit fields](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c:4481), including packing and recovery. Every width from 1 through 32 and every LSB from 0 through 31 survives exactly.
+
+   | Recovered width | Mask expression, sites 1/2 | Sign-bit expression, site 3 |
+   |---|---|---|
+   | 1–30 | Defined | Defined |
+   | 31 | Signed-shift UB | Defined |
+   | 32 | Shift-count UB | Signed-shift UB |
+
+   The “every supported host has 32-bit `int`” assertion is not established by the permitted source files. The conclusions above explicitly use that ABI premise.
+
+2. **Premise audit: architectural legality.** Yes: full-width extraction at LSB 0 is legal for both instructions, with permitted registers and an ordinary conditional A1 encoding on an architecture supporting them. ARM specifies A1 availability in ARMv6T2/ARMv7 and permits widths through `32 − lsb`. Full-width extraction preserves the source register’s entire bit pattern for both instructions. [ARM architecture manual, SBFX and UBFX](https://documentation-service.arm.com/static/5f8daeb7f86e16515cdb8c4e)
+
+   Exhaustive field enumeration gives **528 valid width/LSB pairs and 496 exceeding the field boundary**, per instruction. The valid pairs affected by the mask UB are exactly:
+
+   - `(width, lsb) = (31, 0)`
+   - `(31, 1)`
+   - `(32, 0)`
+
+3. **Premise audit: observed guest result.** Zero is an **unmeasured lowering hypothesis**. Under the hypothesized count-modulo-32 lowering, the arithmetic is indeed `1 → mask 0 → result 0`. C does not guarantee that lowering or result.
+
+   The missing measurement is the destination value through real decode in the particular current build, with its compiler and flags identified. Correct-looking output would not disprove the source UB.
+
+4. **Option completeness and the fork’s idiom.**
+
+   | Option | Assessment |
+   |---|---|
+   | F1 | Sound for both masks; the unsigned operand also handles width 31. SITE 3 needs its stated separate treatment. |
+   | F2 | Sound for both masks across every produced width; SITE 3 still needs correction. |
+   | **F5: `UINT32_MAX >> (32 - width)`** | Additional sound option. Enumeration gives shift counts 31 down through 0 and the correct mask at every width. |
+   | F3/F4 | Rejecting or retaining these legal cases is unjustified. Guest UNPREDICTABLE behavior would not itself justify host C UB either. |
+
+   The fork contains the exact guarded m88k idiom at [lines 532/539](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_m88k_instr.c:529), **and also in its immediate decoder at lines 3512/3522**. A related unsigned all-ones right-shift expression appears at line 468; that supports the technique behind F5, although it is not the identical width-mask expression.
+
+   **The m88k transfer is sound when its sentinel changes from 0 to 32. The cast is load-bearing.** Enumerating m88k’s guarded branch leaves counts 1–31: removing unsignedness reintroduces signed-shift UB at 31. The guard prevents an excessive count; unsignedness prevents signed overflow. The conditional’s other branch does not repair the shift’s type.
+
+5. **SITE 3 is independently defective.** Fixing the masks alone leaves `1 << 31` at width 32. Its initializer executes before the condition. Merely reversing operands in the following `&&` does not protect that initializer: either its evaluation must be guarded, or its left operand must be unsigned.
+
+6. **The `uint8_t` cast performs necessary unpacking.** It removes the width stored in the upper bits; deleting it would turn the packed argument into the shift count. Choosing eight extracted bits rather than five is unnecessary latitude, but extraction itself is essential.
+
+   I found only the two relevant decoder producers; conditional wrappers forward their arguments unchanged. Across every enumerated producer value, the cast recovers LSB 0–31. There is no demonstrated additional oversized right shift here.
+
+7. **A cold-debugger witness through real decode is feasible by source inspection.** The permitted [ARM regression probe](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/arm_flags_probe.py:10) already establishes the debugger execution mechanism. The fork also includes a `CORTEX-A5` CPU entry, selected by an [in-tree Android machine](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/machines/machine_androidarm.c:144), using the shared decoder. Cortex-A5 implements ARMv7-A. [Cortex-A5 reference manual](https://documentation-service.arm.com/static/602f9ee883844146ae0444d8?token=)
+
+   Thus this need not be documented-only. That establishes feasibility, not a measured failing witness.
+
+Two further audit corrections matter:
+
+- **Coverage:** proper alternation searches found no UBFX/SBFX mnemonics in permitted top-level regression scripts; parsing those scripts also found no matching integer instruction literals. This supports the missing-probe finding, but does not prove absence of computed instructions or dynamic coverage. The printed plain `grep 'ubfx|sbfx'` command treats `|` literally unless extended expressions are enabled. I did not independently verify the two-log count or 358-check count.
+- **Other source findings:** BFI’s unchecked producer domain also yields negative widths in **465 pairs**. And although `#510` is absent, `#312` is not the highest correction tag present: `#386` appears in this file.
+
+No files were changed, and no guest program, gate, or battery was run.
+tokens used
+107,861
+**VERDICT: Confirmed, with major premise corrections: legal full-width UBFX/SBFX reach C undefined behavior; width 31 is also affected, and BFI has the same mask defect.**
+
+I read `GXEMUL-SEC/src/`; the quoted handler locations match.
+
+**The BFI premise is false.** Its [actual handler](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c:1360) computes `width = msb - lsb + 1`, then evaluates `(1 << width) - 1` at line 1370. Enumerating all producer pairs finds these architecturally valid problem cases:
+
+| `msb` | `lsb` | Reconstructed width |
+|---:|---:|---:|
+| 30 | 0 | 31 |
+| 31 | 1 | 31 |
+| 31 | 0 | 32 |
+
+Packing `msb` safely does not establish that the consuming handler shifts safely.
+
+1. **Premise audit: C behavior.** With 32-bit `int`, `1` remains signed `int`; assignment to `uint32_t` does not change the expression’s evaluation type. C99 §6.5.7p3 makes shifting by 32 undefined, and p4 makes signed `1 << 31` undefined. There is no rescuing promotion. [C99 consolidated draft](https://www.open-std.org/jtc1/sc22/wg14/www/docs/n1256.pdf)
+
+   I enumerated all 1,024 `(widthm1, lsb)` combinations from the [decoder’s actual five-bit fields](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c:4481), including packing and recovery. Every width from 1 through 32 and every LSB from 0 through 31 survives exactly.
+
+   | Recovered width | Mask expression, sites 1/2 | Sign-bit expression, site 3 |
+   |---|---|---|
+   | 1–30 | Defined | Defined |
+   | 31 | Signed-shift UB | Defined |
+   | 32 | Shift-count UB | Signed-shift UB |
+
+   The “every supported host has 32-bit `int`” assertion is not established by the permitted source files. The conclusions above explicitly use that ABI premise.
+
+2. **Premise audit: architectural legality.** Yes: full-width extraction at LSB 0 is legal for both instructions, with permitted registers and an ordinary conditional A1 encoding on an architecture supporting them. ARM specifies A1 availability in ARMv6T2/ARMv7 and permits widths through `32 − lsb`. Full-width extraction preserves the source register’s entire bit pattern for both instructions. [ARM architecture manual, SBFX and UBFX](https://documentation-service.arm.com/static/5f8daeb7f86e16515cdb8c4e)
+
+   Exhaustive field enumeration gives **528 valid width/LSB pairs and 496 exceeding the field boundary**, per instruction. The valid pairs affected by the mask UB are exactly:
+
+   - `(width, lsb) = (31, 0)`
+   - `(31, 1)`
+   - `(32, 0)`
+
+3. **Premise audit: observed guest result.** Zero is an **unmeasured lowering hypothesis**. Under the hypothesized count-modulo-32 lowering, the arithmetic is indeed `1 → mask 0 → result 0`. C does not guarantee that lowering or result.
+
+   The missing measurement is the destination value through real decode in the particular current build, with its compiler and flags identified. Correct-looking output would not disprove the source UB.
+
+4. **Option completeness and the fork’s idiom.**
+
+   | Option | Assessment |
+   |---|---|
+   | F1 | Sound for both masks; the unsigned operand also handles width 31. SITE 3 needs its stated separate treatment. |
+   | F2 | Sound for both masks across every produced width; SITE 3 still needs correction. |
+   | **F5: `UINT32_MAX >> (32 - width)`** | Additional sound option. Enumeration gives shift counts 31 down through 0 and the correct mask at every width. |
+   | F3/F4 | Rejecting or retaining these legal cases is unjustified. Guest UNPREDICTABLE behavior would not itself justify host C UB either. |
+
+   The fork contains the exact guarded m88k idiom at [lines 532/539](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_m88k_instr.c:529), **and also in its immediate decoder at lines 3512/3522**. A related unsigned all-ones right-shift expression appears at line 468; that supports the technique behind F5, although it is not the identical width-mask expression.
+
+   **The m88k transfer is sound when its sentinel changes from 0 to 32. The cast is load-bearing.** Enumerating m88k’s guarded branch leaves counts 1–31: removing unsignedness reintroduces signed-shift UB at 31. The guard prevents an excessive count; unsignedness prevents signed overflow. The conditional’s other branch does not repair the shift’s type.
+
+5. **SITE 3 is independently defective.** Fixing the masks alone leaves `1 << 31` at width 32. Its initializer executes before the condition. Merely reversing operands in the following `&&` does not protect that initializer: either its evaluation must be guarded, or its left operand must be unsigned.
+
+6. **The `uint8_t` cast performs necessary unpacking.** It removes the width stored in the upper bits; deleting it would turn the packed argument into the shift count. Choosing eight extracted bits rather than five is unnecessary latitude, but extraction itself is essential.
+
+   I found only the two relevant decoder producers; conditional wrappers forward their arguments unchanged. Across every enumerated producer value, the cast recovers LSB 0–31. There is no demonstrated additional oversized right shift here.
+
+7. **A cold-debugger witness through real decode is feasible by source inspection.** The permitted [ARM regression probe](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/arm_flags_probe.py:10) already establishes the debugger execution mechanism. The fork also includes a `CORTEX-A5` CPU entry, selected by an [in-tree Android machine](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/machines/machine_androidarm.c:144), using the shared decoder. Cortex-A5 implements ARMv7-A. [Cortex-A5 reference manual](https://documentation-service.arm.com/static/602f9ee883844146ae0444d8?token=)
+
+   Thus this need not be documented-only. That establishes feasibility, not a measured failing witness.
+
+Two further audit corrections matter:
+
+- **Coverage:** proper alternation searches found no UBFX/SBFX mnemonics in permitted top-level regression scripts; parsing those scripts also found no matching integer instruction literals. This supports the missing-probe finding, but does not prove absence of computed instructions or dynamic coverage. The printed plain `grep 'ubfx|sbfx'` command treats `|` literally unless extended expressions are enabled. I did not independently verify the two-log count or 358-check count.
+- **Other source findings:** BFI’s unchecked producer domain also yields negative widths in **465 pairs**. And although `#510` is absent, `#312` is not the highest correction tag present: `#386` appears in this file.
+
+No files were changed, and no guest program, gate, or battery was run.

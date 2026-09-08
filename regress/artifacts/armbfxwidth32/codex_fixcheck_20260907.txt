@@ -1,0 +1,55 @@
+VERDICT: A is correct for widths 1–32 but leaves negative BFI shifts undefined. B preserves the intended condition; width 32 changes from undefined to defined evaluation. The fork supports several responses, without settling BFI’s policy uniquely.
+
+Examined **6/6 supplied shift sites**, both supplied M88K mask examples, and the **13 comparison decisions** described below. Reading stayed within `GXEMUL-SEC/src/`.
+
+1. **A: yes, for every width in `{1..32}`.**
+
+   This applies to the masks in `X(ubfx)`, `X(sbfx)`, and `X(bfi)` in [cpu_arm_instr.c](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c:1309).
+
+   | Width | Evaluation | Mask |
+   |---|---|---|
+   | 1 | `2U - 1` | `0x00000001` |
+   | 31 | `0x80000000U - 1` | `0x7fffffff` |
+   | 32 | Selects the constant; shift arm is unevaluated | `0xffffffff` |
+
+   At 31, both the shift and subtraction use unsigned arithmetic. At 32, `?:` prevents the excessive shift count. This follows the unsigned-mask/full-width-special-case approach in [cpu_m88k_instr.c, `X(clr)` and `X(set)`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_m88k_instr.c:529).
+
+2. **B: the intended branch condition is unchanged throughout `{1..32}`, with a C-semantics qualification.**
+
+   In [cpu_arm_instr.c, `X(sbfx)`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c:1333), `x` and `width` are ordinary local variables without evaluation side effects.
+
+   - Width 1: both test bit 0.
+   - Width 31: both test bit 30.
+   - Width 32: the new condition immediately evaluates false.
+
+   Strictly, the original block has **no defined behavior to preserve at width 32**: its initializer already evaluates signed `1 << 31`. The old `&&` cannot protect that earlier initializer.
+
+   Also, the count there is **31, not an excessive count**; the problem is the signed result. Changing that literal to `1U` alone would make this particular shift defined over the supplied domain. Your reordering additionally skips its evaluation at 32. B still needs A to repair the preceding mask.
+
+3. **A leaves undefined shifts in BFI: yes.**
+
+   Your explanation is correct; the stated “NO” reverses the answer. In [cpu_arm_instr.c, `X(bfi)`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c:1360), negative widths select `1U << width`, which remains undefined. Unsignedness does not legalize a negative count.
+
+   **Width zero is different:** A produces a zero mask, and the handler leaves the destination value unchanged.
+
+   The count correction is **465 negative-width pairs plus 31 zero-width pairs = 496 pairs with `msb < lsb`**, out of 1024.
+
+For the design question, the closest precedent supports a no-op, but the broader practice is mixed:
+
+| Response | Source behavior actually found |
+|---|---|
+| **No-op / preserve destination** — 1 decision | [cpu_mips_instr.c, `X(ins)`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_mips_instr.c:1730) is the closest bitfield analogue. Its shift count `32 - pos - size` simplifies to `31 - msb`, always 0–31. When `msb < pos`, the mask becomes zero. It preserves the destination’s low 32 bits; the final `int32_t` conversion means this is not necessarily a whole-register no-op in the 64-bit variant. This behavior follows from the code, rather than an explicit policy comment. |
+| **Undefined Instruction exception** — 2 decisions | ARM `X(to_be_translated)` installs `cond_instr(und)` for [the #312 unknown-special case](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c:4495) and [unimplemented LDC/STC](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c:4795). These establish an ARM fallback mechanism, but neither establishes that every UNPREDICTABLE instruction must use it. |
+| **Clamp** — 2 decisions | [cpu_arm_instr.c, `X(netbsd_cacheclean)`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c:2229) and [`X(netbsd_cacheclean2)`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c:2334) clamp host instruction accounting to avoid overflow. That supplies no precedent for clamping an invalid guest bitfield width. |
+| **Decline during decode; potentially halt** — 3 decisions | ARM `X(to_be_translated)` sends [MSR using PC](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c:4146), [MOVW to PC, and MOVT to PC](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c:4279) to `bad`. The included [cpu_dyntrans.c translation tail](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1983) merely returns during read-ahead; during execution it diagnoses the failure and sets `cpu->running = 0`. Thus decode rejection alone does not specify a guest outcome. **Diagnose and stop emulation is a fifth member.** |
+| **Choose another defined result** — 2 decisions | [cpu_arm_instr_loadstore.c, `A__NAME__general`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr_loadstore.c:204) explicitly accepts aligned-down, unrotated data for an UNPREDICTABLE halfword load. [memory_arm.c, `arm_check_access`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_arm.c:84) diagnoses an UNPREDICTABLE control-bit combination and returns “no access.” |
+| **Decline an optimization or defer execution** — 3 decisions | [ARM `COMBINE(strlen)`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c:3521) rejects the fold while preserving ordinary instruction execution. [MIPS `X(beq)`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_mips_instr.c:182) and [SH `X(bra)`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_sh_instr.c:2241) defer nested delayed branches for subsequent normal execution. These are additional responses beyond your four. |
+
+**Nothing examined settles BFI’s choice uniquely.** No-op has direct bitfield precedent; conditional UND has explicit ARM decoder precedent. The #312 comment specifically argues against halting for its case, so existing halt paths should not be mistaken for a consistent policy.
+
+The UND mechanism also has an argument contract: [ARM `X(und)`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c:1020) expects `arg[0]` to contain a PC offset before calling `arm_exception()`. BFI’s `arg[0]` is a register pointer; passing its unchanged call record to `arm_instr_und()` would be incorrect.
+
+Two remaining points:
+
+- **A+B address four of the six supplied sites.** [`X(netbsd_copyin)`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c:2685) and [`X(netbsd_copyout)`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c:2823) retain signed shifts at bit 31; `1U` fixes those shift expressions.
+- **Additional source findings:** [M88K `m88k_rot`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_m88k_instr.c:508) retains the signed-mask expression, and [MIPS `X(ext)`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_mips_instr.c:1752) shifts by `32 - lsb - size` without guarding against a negative count. These are reading findings, not measurements.

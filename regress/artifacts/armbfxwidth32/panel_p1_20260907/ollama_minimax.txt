@@ -1,0 +1,224 @@
+```
+VERDICT: Brief's core claim is sound — UB at width==32 is reachable via a
+single legal encoding (lsb=0, widthm1=31), SITE 3 is a distinct second UB at
+the same width, the m88k transfer works with `(uint32_t)` cast load-bearing,
+and the option set is essentially complete (F1+cast is the fork's own
+idiom). Coverage gap and witness-ladder reachability are not checkable from
+the packet. One thing the brief did not ask about: BFI's "correct" claim is
+decoder-only — the handler could plausibly hit the same class.
+```
+
+---
+
+## 1. Premise audit — Section 2 questions
+
+### Q1 — Is `1 << 32` undefined? [REASONED]
+
+Yes. `1` is `int`, `width` is `int`, both already at int rank so integer
+promotions change neither. Result type is the promoted-left type, i.e., `int`
+(32-bit on every host this project builds on). Per C99 6.5.7p3, the right
+operand being `>=` the width of the promoted left operand is UB; 32 >= 32.
+The brief's quote is correct and there is no missed promotion. At width=31
+the shift count is fine (31 < 32) but C99 6.5.7p4 then trips:
+`1 × 2^31 = 2^31` is not representable in signed 32-bit int — so `1 << 31`
+is **also** UB on signed `int`. This is why the cast matters (see Q4).
+
+### Q2 — Is `UBFX rd, rn, #0, #32` legal? [REASONED from inlined decode]
+
+Yes, and it is the **only** legal encoding that reaches width=32. Constraint
+on the field is `lsb + widthm1 ≤ 31`. At widthm1=31 that forces `lsb ≤ 0`,
+hence `lsb = 0`. The reachable set is therefore exactly one instruction
+form: `UBFX/SBFX rd, rn, #0, #32`. (`lsb=1, widthm1=31` gives 32 > 31 and
+is UNPREDICTABLE — which the brief correctly notes would change disposition,
+but it is **not** the case here.) So the bug is narrow but real.
+
+### Q3 — What does the guest observe today? [REASONED — labelled guess]
+
+The brief correctly tags this as a guess, not a measurement. On x86 the
+32-bit shift count is masked to 5 bits, so `1 << 32` lowers to `1 << 0 = 1`,
+mask becomes 0, `x &= 0` → 0. That is consistent with the brief's stated
+guess. On other host lowerings (or under `-fwrapv`/`-fsanitize=undefined`)
+the behaviour differs; the C says UB and the architectural truth is "varies".
+Settling what the in-tree binary actually does requires measurement — name
+it as a needed probe, not as a settled fact.
+
+---
+
+## 2. Option-set completeness — Section 4 [REASONED + READ for inlined idiom]
+
+The fork's own idiom is **already inlined** in settled-premise E:
+`w == 0 ? 0xffffffff : ((uint32_t)1 << w) - 1`. That is F1 with the cast.
+Nothing the brief lists is missing in spirit:
+
+- **F1 + cast** (the fork idiom, ARM-flavoured): `width == 32 ? 0xffffffffU
+  : ((uint32_t)1 << width) - 1`. Defined for all `{1..32}`.
+- **F2** (`1ULL << width`): sound, no branch, well-defined for `{1..32}`;
+  trades a 64-bit op for the branch.
+- **F3** (reject at decode): wrong — encoding is legal (Q2 above).
+- **F4** (document): wrong — guest gets `0` instead of `rn` on the common
+  lowering (Q3 above), which is a silent wrong answer, not a curiosity.
+
+I cannot grep the fork from this seat, so I cannot name any idiom the
+brief hasn't already inlined. The brief itself admits ("this tree has an
+existing idiom question here and I have not looked") that it did not grep
+beyond m88k. **This is the one thing the brief flags as worth a grep that
+this seat cannot supply.** Name it as a needed measurement if the panel
+wants option-set completeness verified against the fork as a whole.
+
+A missing option the brief did **not** name: hoist the guard with the mask
+in a wider local and skip the branch entirely, e.g.
+
+```c
+uint32_t mask_lo = (uint32_t)((1ULL << width) - 1);   /* defined 1..32 */
+```
+
+— which is just F2. So the brief has it under another name.
+
+---
+
+## 3. Is SITE 3 a distinct defect? [REASONED]
+
+Yes, and the brief is right that the `width < 32` test sits too late.
+
+At `width == 32`, `topBitMask = 1 << 31`. Per C99 6.5.7p4, signed-left-shift
+whose mathematical result is not representable is UB; `1 × 2^31` is not
+representable in 32-bit signed `int`. The UB is committed on the assignment
+to `topBitMask` — the very next statement, `if (x & topBitMask && width
+< 32)`, is reached **after** the UB. The test cannot rescue it.
+
+Crucially, **SITE 3 is UB even at width=31** (`1 << 30` is fine, but
+`width-1 == 30` at width=31, so wait — `1 << 30` is fine, that is
+representable). Let me re-enumerate: SITE 3 is `1 << (width-1)`. At width=1,
+shift by 0 = 1, defined. At width=32, shift by 31, **UB** (signed
+overflow). Width-31 is fine. So SITE 3 fires only at width=32 — same
+trigger as SITES 1/2 — but it is a **second UB instance on the same
+instruction**. A fix to the mask alone (F1/F2) at SITES 1/2 leaves SITE 3
+as live UB. **Distinct defect. Confirmed.**
+
+Note that SITE 3's UB is structurally identical to SITES 1/2 (the same kind
+of shift, the same width sentinel), so a single guard at the top of the
+function that pre-handles width=32 fixes all three:
+
+```c
+if (width == 32) { /* full-register fast path */ }
+```
+
+That is a fifth option the brief did not enumerate, and it is the natural
+shape of the fix.
+
+---
+
+## 4. The m88k transfer [REASONED]
+
+**Does the guard shape transfer?** Yes. m88k encodes width as `{0..31}` with
+sentinel `0 ⇒ 32`; ARM encodes width as `{1..32}` with sentinel `32 ⇒ 32`.
+Total domain of widths is the same. The guard becomes `width == 32 ? all-ones
+: ((uint32_t)1 << width) - 1`, which shifts only by `{1..31}` in the tail —
+exactly the property that avoids UB. The transfer is sound.
+
+**Is `(uint32_t)` load-bearing once the guard exists, or cargo?**
+
+Load-bearing. The guard removes width=32 from the shift, but width=31 still
+sends `1 << 31` through the shift. With the cast, `(uint32_t)1 << 31 ==
+0x80000000`, defined. Without it, `1 << 31` is UB on signed `int` per
+6.5.7p4. So the cast does real work; it is **not** cargo. Removing it would
+turn width=31 from a defined operation into UB.
+
+(Strictly: the cast is also load-bearing *before* the guard, for the same
+reason — it does nothing for the `1 << 32` case because right-operand-≥-width
+is UB regardless of the left operand's signedness — so the guard is what
+removes that case, and the cast is what removes the width=31 signed-overflow
+case. They are complementary, not redundant.)
+
+---
+
+## 5. Coverage gap and witness ladder [READ for the claim; not checkable]
+
+The brief's claim that nothing in `regress/` exercises UBFX/SBFX is **READ
+from the packet** — I cannot independently verify a grep I have not run. It
+is internally consistent with the brief's stated grep result (only two hits,
+both in a codex log quoting the source). Treat the coverage gap as
+**plausible and likely true**, not as confirmed by this seat.
+
+**Witness ladder reachability:** in principle, an unmodified in-tree ARM
+machine driven with a real `UBFX rd, rn, #0, #32` encoding reaches the
+handler, fires SITE 1 (and SITE 3 for SBFX), and returns a measurable
+wrong value. Whether the existing test harness can drive an ARM machine
+with arbitrary instruction streams is **not checkable from this packet**.
+The brief's framing — "say whether that is possible, not how to build one"
+— is asking the right question, but the answer has to be split:
+
+- Decoder/handler path: reachable in principle.
+- Test-harness path: cannot confirm without reading `regress/` infrastructure.
+
+If the harness cannot be coaxed into emitting that one specific encoding on
+an in-tree ARM machine, this round is documented-only. That is a real
+possibility the brief should plan for; do not promise a measured witness
+before checking.
+
+---
+
+## Things this seat found that the brief did not ask about
+
+### (a) BFI's "is correct" claim is decoder-only [READ from packet]
+
+The brief shows the BFI decoder packing `msb ∈ {0..31}` and concludes BFI
+"is DIFFERENT and is correct". The **decoder** is fine: msb is in `{0..31}`
+so the packed value never reaches 32. But the brief does **not** show the
+BFI handler. A natural BFI mask is `((1U << (msb - lsb + 1)) - 1) << lsb`,
+and `msb - lsb + 1` can reach 32 (when `msb == lsb + 31`, i.e., the full
+register), at which point `1U << 32` is UB on `unsigned int` (right
+operand 32 ≥ width 32). The same class of bug, in the same file, two
+blocks up, in the very instruction the brief uses as a contrast. **The
+contrast is not yet established from the packet.** Either show the BFI
+handler, or weaken the claim to "BFI's decoder avoids the packed-width=32
+shape; the handler is not in this packet".
+
+### (b) The `lsb` cast is dead defensive, and not properly defensive either [REASONED]
+
+For current producers (the inlined ARM decoder), `lsb ∈ {0..31}` from
+`(iword >> 7) & 31`, so `(uint8_t)ic->arg[2]` does not change the value.
+The cast is **not load-bearing** for the current code path.
+
+If a hypothetical bad producer put a larger value in arg[2]'s low byte,
+`(uint8_t)` would only truncate to `{0..255}`, **not** to `{0..31}`, so
+`x >>= lsb` at lsb ∈ {32..255} is still UB on signed `int`. So the cast
+isn't a real defence either — it's defensive-looking cargo. The correct
+defensive move, if one were wanted, is `lsb &= 31` or equivalent at
+decode time, which the decoder already does.
+
+### (c) Encoding-level enumeration the brief asked for [READ]
+
+The reachable domain at SITE 1 is exactly one encoding pair:
+
+| lsb | widthm1 | width | legal? |
+|-----|---------|-------|--------|
+| 0   | 31      | 32    | yes    |
+| 1   | 31      | 32    | no (UNPREDICTABLE) |
+| other | 31    | 32    | no |
+
+The single legal hit is `UBFX/SBFX rd, rn, #0, #32`. That makes the
+witness-narrowing real: there is exactly one guest-visible instruction
+form to test. Useful to know when building the witness; not a measurement,
+just arithmetic on the inlined decode.
+
+---
+
+## Summary of unsettled items
+
+These need measurements this seat cannot make. Each is one fact, named:
+
+1. **BFI handler** — show the body to confirm the "is correct" claim. One
+   file path is enough.
+2. **Fork-wide idiom grep** for "how does this tree build full-width masks
+   outside m88k". The brief asked for this and did not perform it.
+3. **Coverage confirmation** — re-run the `grep -rn -i 'ubfx|sbfx' regress/`
+   against the actual tree to settle "nothing reaches these handlers".
+4. **Test-harness capability** — can `regress/` drive an ARM machine with
+   the encoding `UBFX rd, rn, #0, #32`? Determines whether the witness
+   rung exists or this is documented-only.
+5. **Host-lowering observation** — what does the in-tree binary actually
+   compute at width=32 on the build host? Settles Q3 from guess to fact.
+
+Items 1–5 are checkable by seats that can read; this seat has named them
+and stopped.

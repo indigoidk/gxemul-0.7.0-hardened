@@ -1,3 +1,190 @@
+# `#510` armbfxwidth32: UBFX and SBFX built their mask with an undefined shift
+
+**THE DEFECT.** `cpu_arm_instr.c`. The decoder gives both handlers
+`width = 1 + ((iword >> 16) & 31)` (`:4486`, `:4493`), so **`width` reaches 32** — and `1` is a
+plain `int`:
+
+    :1316  ubfx   uint32_t mask = (1 << width) - 1;
+    :1340  sbfx   uint32_t mask = (1 << width) - 1;
+    :1344  sbfx   uint32_t topBitMask = 1 << (width-1);
+
+`1 << 32` shifts by the full width of the type (C99 6.5.7p3); `1 << 31` overflows a signed `int`
+(6.5.7p4). Both are undefined. `UBFX rd, rn, #0, #32` is a legal A32 encoding — the architectural
+constraint is `lsb + width <= 32`, which `lsb = 0, width = 32` satisfies — so this is
+guest-reachable, not a decoder curiosity.
+
+> ### *** ONLY THE WIDTH-32 CASE IS OBSERVABLE, AND THAT IS MEASURED RATHER THAN ARGUED. ***
+>
+> Three pass-1 seats said the defect is "two widths wide". That is right about the LANGUAGE and
+> needs a qualifier about the SYMPTOM. With `r1 = 0x89abcdef`:
+>
+>     width  correct       on the committed build   observable?
+>     32     0x89abcdef    0x00000000               YES -- the whole register becomes zero
+>     31     0x09abcdef    0x09abcdef               no  -- same answer
+>
+> **At 31 the expression is undefined TWICE and wraps back to the right answer:** `1 << 31` gives
+> `INT_MIN`, and `INT_MIN - 1` gives `INT_MAX` = `0x7fffffff`, which IS the correct 31-bit mask.
+> **The repair is owed by the language at both widths; only one of them was returning a wrong
+> value**, and the round's severity sentence says so rather than claiming both.
+
+**THE FIX**, at all three sites:
+
+    uint32_t mask = (width == 32) ? 0xffffffffU : ((1U << width) - 1);
+
+    if (width < 32 && (x & (1U << (width - 1))))       /*  sbfx, hoisted above the shift  */
+            x |= ~mask;
+
+**`1U` is load-bearing and not style: it is what defends width 31; the guard defends 32.** That
+distinction was itself a correction — the round's own brief claimed the m88k idiom is safe because
+of its GUARD, and three seats pointed out the CAST is what covers `w == 31` there.
+
+At `sbfx`, the `width < 32` test that would have made `topBitMask` moot **sat on the line after
+the shift that needed it**. Reordering the `&&` is semantically identical for every width in
+`{1..32}` — both operands are ordinary locals with no side effects — and short-circuits before
+the shift.
+
+**THE FORK'S OWN IDIOM**, found by running the grep-the-fork step before writing the questions
+rather than after: `cpu_m88k_instr.c:532` and `:539`, in `X(clr)` and `X(set)` —
+`w == 0 ? 0xffffffff : ((uint32_t)1 << w) - 1`, where the m88k encoding spells full width as `0`.
+
+**WITNESS, rung 3, unmodified `-E testarm`:** `regress/arm_bfx_width_probe.py`. A cold guest
+plants one instruction word with `put w`, sets `pc`, steps once, and reads `r0` and `pc` back.
+
+    HEAD  9/11   witness_HEAD_20260907.raw      FIX  11/11  witness_FIXED_20260907.raw
+                                                  FIX  12/12  witness_FIXED12_20260907.raw
+                                                               (after pass 2 added `s clear')
+
+    row      HEAD        FIX          want
+    w32      0x0         0x89abcdef   0x89abcdef  UBFX #0,#32 must return the WHOLE register
+    s w32    0x0         0x89abcdef   0x89abcdef  SBFX #0,#32 -- pins the MASK, see pass 2
+    w31      0x9abcdef   0x9abcdef    0x9abcdef   UB that WRAPS BACK to correct -- must STAY right
+    mid      0xde        0xde         0xde        small NONZERO anchor
+    s clear  --          0x7          0x7         ADDED BY PASS 2: top bit CLEAR, must not extend
+    pc adv   0x8004      0x8004       0x8004      on EVERY row, w32 included
+
+> ### `pc adv` IS THE LOAD-BEARING CONTROL, AND THE REASON IS THIS ROUND'S OWN SYMPTOM.
+>
+> The width-32 failure returns **exactly zero** — indistinguishable from a mis-encoded word that
+> never executed. This project has been bitten four times by hand-assembled encodings, once in a
+> COMMITTED gate row that measured the wrong register for months. `pc adv = 0x8004` proves the
+> instruction EXECUTED and returned a wrong value; `mid = 0xde` is a second, independent anchor
+> that only a correct encoding AND execution can produce.
+>
+> **And the encodings are DERIVED from the decoder, not recalled.** Field positions read out of
+> `X(to_be_translated)`: `rd = (iword>>12)&15`, and **the source is `rm` = `iword & 15`, NOT
+> `rn`** — `rn`'s bits 19:16 are occupied by `widthm1`, which is exactly why the ubfx block takes
+> `rm`. Every planted word is checked against the decoder's own mask `0x0fe00070` by an `enc ok`
+> row before anything runs.
+
+## WHAT THIS ROUND DELIBERATELY DOES NOT FIX
+
+The round-scope rule takes ONE site, and a second joins only if it is WITNESSED, in the same
+semantic class, and covered by the SAME detector with no new oracle. Three sites qualify. These
+do not, each for a stated reason:
+
+* **`bfi` (`:1409`) — the same expression, in the same file, left alone.** Its
+  `width = msb - lsb + 1` takes `msb` and `lsb` from INDEPENDENT five-bit fields, so it spans
+  **-30..32**. **465 of the 1024 (msb, lsb) pairs give a strictly NEGATIVE shift count**, undefined by the same clause as the count-too-large case (C99 6.5.7p3), and a further **31 give width exactly 0**, where `1 << 0` is DEFINED but the mask becomes 0 -- semantically wrong rather than undefined. **496 is the `msb < lsb` population, i.e. width <= 0, and an earlier draft of this record used it for the NEGATIVE count. Corrected 2026-09-07 after the pass-2 glm seat enumerated it from the brief's own width formula.** ARM calls `msb < lsb` UNPREDICTABLE. **No seat could settle from the tree what the model
+  should do there** — the fork answers that class inconsistently (`cpu_arm_instr_loadstore.c:204`
+  picks a defined result for an UNPREDICTABLE halfword load, while `#312`'s own comment argues
+  AGAINST halting) — **and the obvious route is wrong as written: `X(und)` expects `arg[0]` to
+  hold a PC OFFSET and `bfi`'s holds a REGISTER POINTER.** That is a design question for the
+  flagship adjudication, not for whoever writes the diff.
+* **`:2685` / `:2823`** — `is_userpage[index >> 5] & (1 << (index & 31))`, reaching `1 << 31`.
+  A different semantic class and no row here.
+* **`cpu_m88k_instr.c:513`** (`m88k_rot`, `(1 << n) - 1` with `n ∈ {1..31}`) and
+  **`cpu_mips_instr.c:1757`** (MIPS `X(ext)`, `(rs << (32-lsb-size))` where that count spans
+  `-31..31`) — different CPUs. Both READING findings, neither measured.
+
+> **The m88k one is the sharpest thing the fix-check produced, and it weakens this round's own
+> warrant:** `cpu_m88k_instr.c` is the file cited above as carrying the SAFE idiom, at `:532` and
+> `:539`. **`:513`, twenty lines up, is the unsafe form.** One file, two neighbouring functions,
+> opposite outcomes. *"The fork already knows how to do this" is a weaker warrant than it sounds
+> when the same file contains both answers.*
+
+**Site count is EIGHT across three CPUs, in three UB regions** (count >= width, `1 << 31` signed
+overflow, negative count). This round closes three.
+
+## Pass 2 ratified the repair and refused the comments
+
+`panel_20260907_192452`, six seats. **grok's verdict: RATIFY THE REPAIR; DO NOT RATIFY THE
+COMMENTS, THE "11/11 PINS BOTH HALVES" READING, OR THE 496-COUNT.** All four packet-fed seats
+independently confirmed the mask is correct at 1, 31 and 32 and that the `&&` reorder changes no
+guest value.
+
+*** THREE ONE-LINE ESCAPES, AND THE VALUABLE PART IS WHY TWO OF THEM CANNOT BE CLOSED. ***
+
+| escape | why it survived a full score |
+|---|---|
+| `1U` -> `1` in the ternary | `w31` stays green — **it is the very wrap this round's own comment describes** — and `w32` never evaluates the shift. `1 << 31` and `1U << 31` give the SAME mask after the `- 1`. |
+| restore `topBitMask` above the `if` | `s w32` stays green: with a correct 32-bit mask `x \|= ~mask` is `x \|= 0`. **`s w32` pins the MASK, not `topBitMask` and not the hoist** — the probe comment calling it "the second-UB row" was wrong about what that row can see. |
+| `if (width < 32)` with no bit test | `s mid` stays green because **every byte field of `0x89abcdef` has bit 7 set** (`0x89 0xab 0xcd 0xef`). No row had an SBFX field with the top bit CLEAR. |
+
+**The third is closed in-round** by `s clear` — `SBFX #1,#4` gives field `0x7`, bit 3 clear, so a
+correct build returns `0x7` and an always-extend regression returns `0xfffffff7`.
+
+**The first two are DISCLOSED, because they are unkillable by a guest-value row on principle:**
+both are DEFINEDNESS repairs, and definedness has no guest-visible value on a non-trapping host.
+*** THEY ARE NOT UNKILLABLE IN PRINCIPLE: `build-asan` carries `-fsanitize=address,undefined`, so
+a UBSAN DIFFERENTIAL pins both — fixed source produces no shift diagnostic, the `1U`->`1` mutant
+produces one. That is a second binary and a STDERR oracle, i.e. a new measurement lane, so it is
+filed as `ubsanshiftlane` for its own round rather than bolted onto one whose pass 2 has run. ***
+
+**AND ONE CLAIMED BREACH WAS REFUTED BY MEASUREMENT.** glm asserted *"no row ever takes the
+sign-extension branch, so deleting `x |= ~mask` still scores 11/11."* The mutant was built with a
+pre-registered prediction and measured **10/11, killed by `s mid` alone** — `s mid`'s field is
+`0xde`, whose bit 7 IS set, so the branch is taken. Restore verified, sentinel cleared.
+
+### Five comment overclaims, corrected in place
+
+1. *"the mask became 0"* and *"`1 << 31` gives INT_MIN"* — these are **this host's lowering**
+   (`shl` takes its count mod 32), not C99 values. Undefined behaviour has no defined result to
+   measure. The rows observe the RESULT REGISTER, never the mask.
+2. The `sbfx` block was a **verbatim copy of the ubfx one** and quoted a UBFX measurement — a
+   sentence about the other function.
+3. *"the `&&` reorder is semantically identical"* **understates it.** The old form computed
+   `1 << (width-1)` as a PRIOR STATEMENT, and a guard never rescues an expression already
+   evaluated. The guest value is identical; DEFINEDNESS at 32 is not. **And with `1U` the shift is
+   already defined at 32, so the hoist is load-bearing for a signed `1` and redundant for `1U` —
+   calling them equivalent defences was wrong.**
+4. *"there is no sign to extend"* at width 32 is the wrong reason — a 32-bit field HAS a sign bit;
+   the body is a no-op because `~mask == 0`.
+5. **The 496 count** — see below.
+
+### The count was wrong, and two seats caught it independently
+
+This round claimed *"496 of 1024 encodings give a NEGATIVE shift count"* for `bfi`. Enumerated:
+
+    width < 0   465      width == 0   31      width <= 0   496      msb < lsb   496
+
+**496 is the `msb < lsb` population.** 465 are strictly negative; the other 31 give width exactly
+0, where `1 << 0` is DEFINED and the mask becomes 0 — semantically wrong, not undefined. glm
+derived it from the brief's own width formula and grok reached it separately. *The conclusion is
+unchanged; the number was wrong, and it had already propagated into four records.*
+
+### And my own patch invalidated my own citations
+
+grok: the brief's decoder cites `:4486`/`:4493` were the PRE-comment numbers; after the diff they
+were `:4525`/`:4532`, off by exactly the lines this comment-heavy patch inserts. After the pass-2
+edits they moved again, to `:4540`/`:4547`. **Three values in one evening for one unchanged
+expression** — which is why the carrier's rule is to cite by CONSTRUCT, not by line, and why no
+line number for that expression appears in this block.
+
+## Provenance
+
+Pass 1: `panel_20260907_174941`, six seats. **kimi CLI WALLED (403 weekly) with its seat COVERED
+by the `kimi-k3:cloud` substitute; agy DELIBERATELY NOT FIRED (measurement reserve); opus5 and
+fable5 DELIBERATELY NOT FIRED, held for the 2026-09-09 adjudication.** glm's first shot was a
+THINKING BURN — an empty response beside 113,201 chars of hidden reasoning, `done_reason=stop`,
+the signature every size check scores as the best answer in the panel — and `panel_ollama.py`
+detected it and re-fired with `think=False`, recovering a 102 KB answer.
+
+**Three of this round's facts came from seats correcting me:** that `width == 31` is also UB
+(three seats, independently); that the `(uint32_t)` cast rather than the guard is what defends it;
+and that **`bfi` has the identical expression** — which my own pass-1 brief had inlined as *the
+contrast case, the one that is correct*, having checked only its decoder. grok reached that from
+the source independently of codex.
+
 # `#509` sgimtedepth4dead: a bit-count compared against a byte-count, so the branch never ran
 
 **THE DEFECT.** `dev_sgi_re.c`, `do_mte_transfer()`, in the block shared by the `MTE_TLB_A/B/C`

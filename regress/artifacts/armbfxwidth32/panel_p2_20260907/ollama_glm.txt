@@ -1,0 +1,30 @@
+**VERDICT: The fix itself is CORRECT as inlined — enumerated at widths 1, 31, 32 the new mask is right, and the `&&` reorder changes no value in {1..32}. But the brief carries one arithmetic error (§4's "496 negative-shift encodings" is 465 by the brief's own width formula; 496 is the msb<lsb count), one shipped-comment overclaim (the sbfx block asserts a width-31 measurement that no sbfx row made), and a witness hole exactly where the sbfx hunk's second edit lives: no row ever takes the sign-extension branch, so deleting `x |= ~mask` still scores 11/11.**
+
+## Q1 — Premise audit of the repair (enumerated)
+
+READ: `width = 1 + ((iword>>16)&31)` ⟹ width ∈ {1..32}; `1` is plain int. REASONED, by enumeration:
+
+* **width=1**: `(1U<<1)-1 = 1` ✓; sbfx sign bit `1U<<0` = bit 0, extension via `~1` ✓.
+* **width=31**: `1U<<31 = 0x80000000` (defined, unsigned) − 1 = `0x7fffffff` ✓. The old path was UB twice (6.5.7p4 on `1<<31`, then 6.5p5 on `INT_MIN−1`) wrapping to the same bits — consistent with the READ w31 row (HEAD green at 31).
+* **width=32**: guard gives `0xffffffff` ✓; note `1U<<32` would be UB by the same 6.5.7p3, so **both** the `1U` and the guard are individually load-bearing, exactly as the comment claims.
+* **Reorder**: old code computed `1<<(width-1)` unconditionally (UB at 32) before a guard that forced the condition false; new code short-circuits. For widths 1–31 the condition value is identical (READ from the diff: `x` and `width` are plain locals, both operands pure reads); at 32 the outcome (no extension) is unchanged and `~mask` would be 0 anyway. No width in {1..32} behaves differently.
+
+**Comment vs rows**: the sbfx comment block repeats "so it returned 0x9abcdef, correct" — the 31-width row (READ) is a **UBFX** row; no sbfx-31 row exists. The identical mask expression makes it a sound inference, but the sbfx copy states it as measured fact for a function the witness never measured at 31. That is the answer to "does the comment claim anything the rows do not establish": yes, one sentence. ("Because the mask became 0" is fine — READ: x=0x89abcdef, lsb=0, result 0x0 ⟹ mask=0 is the unique mask producing it.) The `w == 0` encodes 32 m88k provenance line is **not checkable from the packet** (settling fact: `cpu_m88k_instr.c:532/539` in `GXEMUL-SEC/src/`). Minor: "At width 32 the field IS the whole register" holds only at lsb=0 (lsb>0+width=32 is UNPREDICTABLE territory); conclusion unaffected.
+
+## Q2 — Smallest re-open that still scores 11/11 (not codex)
+
+Delete `x |= ~mask;`. SBFX silently stops sign-extending at every width <32 and every visible row stays green — **s w32 is the row I expect to stay green** (it never sign-extends, by design). Even smaller, UB-only: `1U`→`1` — the 31 case wraps to correct on this build (the packet's own w31 row proves HEAD's 31 was green), so 11/11, with **w31** staying green. That is expected — the packet says only the 32 case is observable — but it means w31's greenness under FIX is wrap-luck on this toolchain, not evidence the `1U` is present.
+
+## Q3 — Scope
+
+READ: msb,lsb are 5-bit; width = msb−lsb+1 ∈ {−30..32} ✓ (−30 = 0−31+1, 32 = 31−0+1). **Arithmetic defect**: negative width ⟺ msb ≤ lsb−2 ⟶ Σₗₛᵦ₌₂..³¹(lsb−1) = **465**, not 496. 496 = Σₖ₌₁..³¹ k is the count of msb<lsb, which includes 31 width=0 encodings — and a shift by 0 is *defined*. §4's own width formula contradicts its own count; which is right depends on bfi's actual expression, **not checkable from the packet** (code not inlined). On the decision itself: deferring the UNPREDICTABLE msb<lsb encodings is sound (the X(und)/arg[0] blocker is stated, not checkable), but "no seat could settle from the tree what the model should do there" is **false as a blanket claim**: the msb≥lsb half is defined-encoding territory, including msb=31,lsb=0 → width=32, which — if bfi shares the idiom, as "same class" asserts — is the exact #510 signature and is settleable by the same plant-step-read witness. Not a partial repair presented as complete (§4 discloses it), but the justification overstates the unknowable territory.
+
+## Q4 — Witness honesty
+
+* **Missing cell**: SBFX at a width <32 whose field top bit is set — e.g. SBFX #4,#8 of 0x89abcdef → field 0xde → want `0xffffffde`. No row ever takes the `x |= ~mask` branch, in either build. (Secondarily: an sbfx-31 row, and the width=1 boundary.)
+* **Count**: READ claims 9/11 → 11/11, but the visible rows support at most 10 assertions (5 values + 5 pc). The 11th check is unnamed — **not checkable from the packet**; settling fact: the assertion list in `regress/arm_bfx_width_probe.py`.
+* **pc adv**: READ calls it proof the instruction EXECUTED. REASONED: it proves a step executed; a mis-decoded or UNDEFINED word also advances pc by 4 in a typical emulator. The `mid` anchor (shared encoder, correct value) partially closes this; a planted-word readback would close it fully. Good control, but "proves" is one notch strong.
+
+## Housekeeping (found while verifying)
+
+READ-verified by enumeration: the "47 changed lines" claim is exact (hunk 1: 17 adds + 1 del = 18; hunk 2: 26 adds + 3 dels = 29); hunk offsets are internally consistent (unseen gap 1320–1336 old ↔ 1336–1352 new, both 17 lines ✓). The guard is `width == 32`, not `width >= 32` — it leans wholly on the decode premise, but the original did too; not a regression.
