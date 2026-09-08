@@ -17700,3 +17700,73 @@ new.
 cost is a reader being told a guard is fatal when it declines -- the misreading that makes someone
 re-fix a fixed defect.  *This session already had a stale ROW send me to design a round around an
 already-repaired bug, so the harm model is real; it has not been paid here.*
+
+## 2026-09-08 — `gateworktree` UPDATE: codex audited all 21 sections, and section D is VACUOUS ON A CORRECTLY-STAGED COMMIT
+
+`regress/artifacts/gateworktree/codex_assess_20260908.txt` (14,102 b).  **The row was filed as
+"validates the working tree, not the staged content".  That is right and it is not the worst of
+it.**
+
+**THE GATE SELECTS FILES FROM THE INDEX AND READS THEIR CONTENTS FROM THE FILESYSTEM.**  There is
+no `git show :<path>` anywhere in the invoked checking paths; `git ls-files` tests MEMBERSHIP, not
+content.  codex marks 18 of 21 sections false-green/false-reject on content.
+
+*** SECTION D FAILS IN THE OPPOSITE DIRECTION AND IT WAS MEASURED ON `#513` ITSELF. ***  Its input
+is `git diff -U0` — **UNSTAGED** additions — so the more completely you stage, the less it checks.
+At `#513`'s gate run the only tracked-modified-but-unstaged file was `regress/sgi_de_primop_probe.py`,
+which is deliberately excluded from every commit; `git show --stat e302c98 | grep -c
+sgi_de_primop_probe` is **0**.  **D's two green rows were computed entirely from a file that is not
+in the commit, while 129 staged files were invisible to it.**
+
+**A SHIPPED INSTANCE, from history rather than from argument:** commit `2956c7e` added
+`regress/sgi_mte_fill_probe.py` while its own `check_probe_wiring.py` carried **zero** manifest
+entries for it.  (codex did not verify the historical gate output; the violation is established
+from the commit contents.)
+
+**TWO CORRECTIONS TO MY OWN FILING, both load-bearing for section J:** the project-root carrier
+originals are **outside the git repository**, so J compares an UNTRACKED external file against a
+tracked copy — update both and omit the copy from staging and J passes while the commit keeps the
+old carrier; and J's tracked-copy existence test is a bare `-f`, which does not check index
+membership.
+
+**THE FIX IS NOT A FLAG.** Replacing reads with `git show ":$path"` inspects the WRONG version
+before staging, because *"nothing staged" means the index equals HEAD, not that it is empty*.  The
+shape: announce a SNAPSHOT MODE (index vs working-tree preview) before the first pipeline
+invocation; keep the deliberately external inputs separate; and note the helpers derive paths from
+`__file__`, so redirecting `ROOT` is insufficient — an isolated worktree carrying unchanged
+dependencies is the practical route.
+
+**SEVERITY LEFT AT `med`, DELIBERATELY, AND THE QUESTION IS REFERRED RATHER THAN DECIDED.**  It
+changes no product behaviour; what it changes is what a GREEN GATE MEANS on every round on record.
+*I raised one row's severity myself today and flagged it as my judgment; raising a second on one
+seat's reading, in the same session, is exactly the habit the panel exists to check.*  It goes to
+the 2026-09-09 adjudication with the evidence above.
+
+**Negative controls this owes when it is built, in both directions:** prove a staged-only defect
+REDS in index mode, and prove a working-tree-only artefact does NOT.
+
+## 2026-09-08 — `codexcyberflag` (MED, filed): a codex seat-failure class the carrier does not list
+
+`ERROR: This content was flagged for possible cybersecurity risk.` — a **platform content filter**,
+not a model refusal, and the only codex failure here that leaves a ZERO-BYTE `.txt` behind a large
+`.err`.
+
+**Census: 21 `.err` files carry it; 8 lost their answer; 5 answered in FULL anyway** (up to
+14,102 b). **So the flag's presence proves nothing — the `.txt` size is the discriminator**, which
+is the rule already on record for refusal lines and never connected to this filter.
+
+**The trigger is this project's own vocabulary.** Row ids `sgirekills`, `lcaconfbus1kill`,
+`lcairqstubkill`, `pcc2c040kill`, `alphavmkill`; probe rows named `tlb_a ld kill`; briefs speaking
+of *death rows* and *host kills*. A brief that merely NAMES its row carries the trigger.
+`regress/artifacts/sgirekills/refusals/` grades four attempts: 5,906 / 6,572 / 6,829 early flags,
+then **382,773 b that completed the whole analysis and was flagged at the end**.
+
+**The recovery already works and is written down nowhere** — `_RETRY_`, `_reworded_`, and a
+next-day re-fire each recovered a lost job (6,868 / 10,557 / 5,091 b). Applied by hand three times,
+promoted to a rule zero times.
+
+**Also found:** `lcaconfwidth` preserved no brief file, so its flagged job cannot be re-fired or
+audited without reconstructing the brief. **A brief that is not preserved is not re-runnable.**
+
+**PROPOSED, NOT ADOPTED:** a neutral-vocabulary convention for codex briefs plus preserving every
+brief beside its answer. It changes every future brief, so it is the owner's call, not a round's.

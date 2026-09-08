@@ -411,3 +411,36 @@ starve the question.**
   CHECKPOINT.md with the remedy; owed before any ASan measurement and before `#513` closes;**
 * **did not fire agy, Opus 5 or Fable 5**;
 * **did not raise any severity except `alphatbinegsel`**, and that one is flagged as my judgment.
+
+---
+
+## Z. `gateworktree` -- *** A SEVERITY QUESTION I AM DELIBERATELY NOT ANSWERING MYSELF ***
+
+**This one is about what the EVIDENCE BASE means, not about emulator behaviour, and it landed
+after the rest of this packet was written.**
+
+codex audited all 21 precommit sections against their actual inputs.  The gate picks files from
+the INDEX and reads their CONTENTS from the FILESYSTEM -- there is no `git show :<path>` in any
+invoked checking path -- so 18 of 21 sections can go green on a working-tree correction that is
+not in the commit.  **Section D fails the other way: its input is `git diff -U0`, UNSTAGED
+additions, so the more correctly you stage, the less it inspects.**
+
+*** MEASURED ON THIS SESSION'S OWN COMMIT: at `#513`'s gate run, D's two green rows were computed
+entirely from `regress/sgi_de_primop_probe.py` -- a file deliberately kept out of every commit and
+absent from `e302c98` -- while the 129 staged files were invisible to it. ***  And codex found a
+SHIPPED instance in history: `2956c7e` added a probe while its own `check_probe_wiring.py` carried
+zero manifest entries for it.
+
+**QUESTION Z1 (severity):** the row sits at `med`.  It changes no product code.  It changes what a
+GREEN GATE MEANS on every round this project has recorded, and this session produced both a
+measured vacuous check and a shipped invariant violation.  **Does it go to high?**
+
+*I have deliberately NOT raised it.*  I raised `alphatbinegsel` med -> high myself today and
+flagged that as my judgment; raising a second severity on ONE seat's reading in the same session is
+the habit the panel exists to check.  **So this is referred, not decided.**
+
+**QUESTION Z2 (scope):** codex's prescription is a snapshot MODE announced before the first
+pipeline invocation, with an isolated worktree as the practical route because the helpers derive
+paths from `__file__`.  That is a change to the script every commit runs, owing negative controls
+in both directions.  **Is that the right size of round, or is there a cheaper partial -- e.g.
+fixing section D alone, whose input is one command -- that buys most of it?**
