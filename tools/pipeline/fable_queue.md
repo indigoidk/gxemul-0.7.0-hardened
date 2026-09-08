@@ -41,7 +41,7 @@ those panels produced had six or seven seats behind it.
 <!-- BEGIN GENERATED: codex-wall -- edit gen_codex_wall.py, not this block -->
 ### HELD STAGES -- every row awaiting a seat, derived from the ledger
 
-`armbfxwidth32` (assess:fable5,opus5; review:fable5,opus5) · `carrier` (regress:fable5) · `es438` (regress:fable5) · `gdromcondlies` (regress:fable5) · `holdmarkermulti` (regress:fable5) · `lcabadval` (assess:codex,fable5,grok,kimi,opus5; design:fable5; research:fable5) · `ns16550` (regress:fable5) · `pcc2widthkills` (assess:fable5,opus5) · `proberowsubset` (assess:codex) · `sgideprimop` (regress:fable5) · `sgidewidth` (regress:fable5) · `sgimtedepth4dead` (assess:fable5,opus5; review:fable5,opus5) · `sgirekills` (assess:codex,grok,kimi,opus5) · `sgireunmapped` (regress:fable5) · `sgitexindex` (assess:codex,fable5,grok,kimi,opus5) · `sh4sci` (regress:fable5) · `wdccdbmidxfer` (regress:fable5; research:opus5) · `wdcdataoutdrain` (regress:fable5)
+`armbfxwidth32` (assess:fable5,opus5; review:fable5,opus5) · `carrier` (regress:fable5) · `es438` (regress:fable5) · `gdromcondlies` (regress:fable5) · `holdmarkermulti` (regress:fable5) · `lcabadval` (assess:codex,fable5,grok,kimi,opus5; design:fable5; research:fable5) · `lcairqstubkill` (design:fable5) · `m88kexcdetectorl2` (design:fable5) · `ns16550` (regress:fable5) · `pcc2widthkills` (assess:fable5,opus5) · `proberowsubset` (assess:codex) · `sgideprimop` (regress:fable5) · `sgidewidth` (regress:fable5) · `sgimtedepth4dead` (assess:fable5,opus5; review:fable5,opus5) · `sgirekills` (assess:codex,grok,kimi,opus5) · `sgireunmapped` (regress:fable5) · `sgitexindex` (assess:codex,fable5,grok,kimi,opus5) · `sh4sci` (regress:fable5) · `wdccdbmidxfer` (regress:fable5; research:opus5) · `wdcdataoutdrain` (regress:fable5)
 
 *** TWO DIFFERENT KINDS OF HOLD APPEAR BELOW AND THEY MUST NOT BE READ ALIKE. ***
 
@@ -60,7 +60,7 @@ marker can mask another gap* -- section H cannot see a shortfall that a differen
 **Neither kind is a blank.** A blank cell and a seat failure must not look alike, and an
 allocation is a third thing again: recorded by seat name, per row, with the reason.
 
-**This is ONE outage plus one allocation, not 18 decisions, and it is written once rather than once per panel.**
+**This is ONE outage plus one allocation, not 20 decisions, and it is written once rather than once per panel.**
 **THE CODEX HISTORY, kept because it calibrates what a wall looks like.** Across ten panels it
 produced the identical signature every time -- the echoed brief followed by the usage-limit
 error -- in files of 26,992 / 11,180 / 10,036 / 8,323 / 12,414 / 11,938 / 10,726 / 16,694 /
@@ -2103,3 +2103,75 @@ Is that a real rule worth carrying, or is the existing premise-audit instruction
 *Related and already filed: `refilingclass` (six findings re-derived this session that were already
 recorded), and `lcaconfbus1kill` (a HIGH row split out of this one's own eleven-kill census, with a
 witness design reviewed SOUND by grok).*
+
+
+---
+
+## 7j. `lcairqstubkill` — FOUR GUEST INSTRUCTIONS END THE HOST, and the fix is a disposition choice
+
+*Witness: `regress/lca_irqstub_probe.py`, 3/4 on the committed build
+(`regress/artifacts/lcairqstubkill/witness_HEAD_20260907.raw`). No flagship seat, by the standing
+directive reserving opus5/fable5 for this adjudication.*
+
+**MEASURED, not argued.** A store of `0xAA` — the standard 8042 self-test — to `0x1d0000064` on
+unmodified `alphabook1` reaches `lca_interrupt_assert`, whose entire body is
+`fatal("...TODO"); exit(1);`. Four guest instructions. No disk image, no OS, no host timer, no
+driver setup, no unusual value. The matched control stores the **same value** one port away at the
+LPT port (which never asserts) and survives, so the death is attributable to the device reached.
+
+The PIC mask is **open at reset** (`dev_8259.c` memsets, and `ier` is written only by a guest
+store), so nothing has to be configured first.
+
+**CENSUS: 2 of 70.** Every function registered as an interrupt handler in the fork — 70, all bodies
+located — and exactly two call `exit()`. Both are these. **68 handlers manage without terminating.**
+
+### 7j-1. (HIGH) IS A LATCHED DECLINE ACCEPTABLE FOR AN INTERRUPT PATH? *(the row's `hold_question`)*
+
+The option set's members 1–6 all presume a VALUE is being refused; here there is none — it is a
+whole path stubbed out, which is why member 7 (IMPLEMENT) was added to the set **from these very
+functions**. But IMPLEMENT means delivering an Alpha interrupt, which is a large job.
+
+> **The cheap interim is a latched decline: return without asserting, announce once.** That trades a
+> host kill for a **silently lost interrupt** — every ISA interrupt on this machine, forever, after
+> one message. Is that an improvement or a different lie? It is the same readback-versus-reality
+> tension `lcabadval` is held on (§7i), arriving on a delivery path instead of a register.
+
+### 7j-2. (HIGH) WHAT OBSERVABLE DISCRIMINATES THE FIX MEMBERS?
+
+**The witness cannot.** "Host survives" greens equally for a silent return, a latched announce, and
+a real implementation. A fix round owes a row that tells them apart, and I do not have one. A codex
+job is out on exactly this question; if it returns "none from a stepped probe", the round needs a
+capability it does not have.
+
+### 7j-3. (MED) THE DEASSERT STUB IS ON THE SAME PATH
+
+`isa_interrupt_common` calls `INTERRUPT_DEASSERT(d->irq)` when the last unmasked IRR bit clears, and
+`lca_interrupt_deassert` is the same bare kill. **A fix that de-fatalises only the assert converts
+"dies on the first interrupt" into "dies on the first interrupt ACK"** and passes any test that
+never acknowledges. Does the deassert side need the same disposition, or a different one?
+
+---
+
+## 7k. `m88kexcdetectorl2` — a MEASURED L2, and the repair's cost is the question
+
+*agy measurement: BASELINE 59/59, MUTANT `implemented = (ncpus < 2)` 59/59, zero rows reddened
+(`regress/artifacts/m88kexcdetectorl2/agy_measure_20260907.txt`).*
+
+The clean sweep is **explained**: `m88k_exc_probe.py` never passes `-n`, so every row runs at one
+CPU and the mutant's condition is true throughout. The repair is one session at `-n 2` asserting the
+exception is still delivered — **de-risked by reading**: `-n` is validated to 1..256, the CPUs are
+created in the generic path (so bare `-E testm88k` gets them), and `bootstrap_cpu` is deterministic
+because `machine_test.c` never sets `use_random_bootstrap_cpu`. That last one would have been a
+`random() % 2` flake.
+
+### 7k-1. (MED) HOW MUCH RE-MEASUREMENT DOES ONE ADDED ROW OWE? *(the row's `hold_question`)*
+
+This project's standing caution is that added rows perturb the scores of every mutant already
+measured. **Does adding one row to a 59-row detector oblige a full re-table, or is a targeted run —
+baseline plus the mutants whose kill sets could plausibly move — sufficient?** The difference is a
+full table versus a few runs, and the answer governs every future L2 repair, not just this one.
+
+*Also worth a line: the row said the mutant applies to SEVEN arms; agy derived ELEVEN and explained
+the gap — the "seven" counted only arms carrying a `/* m88kexcdeliver */` annotation, silently
+excluding four pre-existing vectors in the same switch. A count keyed on an annotation rather than
+on what defines the class.*
