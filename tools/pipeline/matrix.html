@@ -8729,7 +8729,57 @@ in-tree warrant.  **The safe path contains UB.**
 LOW: `0x800U &lt;&lt; dev&#x27; fixes it, and on every compiler this project targets the emitted code is already what
 was intended.  Recorded because a UB shift is exactly what a sanitiser build exists to catch, and
 build-asan/ is kept clean -- **so the first question is whether a UBSan sweep already flags it, and if not,
-why not.**</span></span><span class="state st-open">open</span></span></th></tr><tr class="ph st-open"><th scope="row" class="phlabel">Assessment (initial problem)</th><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td></tr><tr class="ph st-open"><th scope="row" class="phlabel">Research (fix proposals)</th><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td></tr><tr class="ph st-open"><th scope="row" class="phlabel">Final review (flagship adjudication)</th><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td></tr><tr class="ph st-open"><th scope="row" class="phlabel">Regression testing</th><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td></tr><tr class="fixhead st-in work"><th colspan="10"><span class="hline"><span class="wrap" tabindex="0"><span class="rid">alphapfnoffset</span><span class="ttl">memory_alpha.c alpha_translate_v2p(): the page-table walk returns PFN &lt;&lt; pageSizeShift, dropping the within-page offset, while memory_rw derives its offset from that value -- every walked access would land at its page base</span><span class="tip">memory_alpha.c alpha_translate_v2p(): the page-table walk returns PFN &lt;&lt; pageSizeShift, dropping the within-page offset, while memory_rw derives its offset from that value -- every walked access would land at its page base — witness: probe:regress/alpha_pfnoffset_probe.py -- RUNG 3, unmodified `-E alpha -e alphabook1&#x27;. HEAD 5/7, fix 7/7, same script.  Two cold walked loads at different VPNs and offsets, five controls.  regress/artifacts/alphapfnoffset/probe_{head7,fix}_20260907.out — note: FILED 2026-09-07, raised by the codex seat (regress/artifacts/lcabadval/codex_scoping_20260907.txt) while scoping an unrelated device, and
+why not.**
+
+*** THE FILED QUESTION IS ANSWERED, AND THE ANSWER COMES WITH A FREE VEHICLE: THE PROBE SHIPPED FOR
+[[lcaconfbus1kill]] ALREADY EVALUATES THIS EXPRESSION ON EVERY RUN. ***
+
+This row asks *&quot;whether a UBSan sweep already flags it, and if not, why not.&quot;*  Both halves settled
+by reading, 2026-09-07.
+
+**UBSAN IS PRESENT.**  `build-asan/Makefile:9` carries
+`-fsanitize=address,undefined -fno-omit-frame-pointer -g`.
+
+**BUT THE SWEEP CANNOT REACH THIS SITE, AND THE REASON IS STRUCTURAL RATHER THAN AN OVERSIGHT.**
+`gate_asan_sweep.sh` runs, per machine type and subtype:
+
+    timeout 25 stdbuf -o0 -e0 &quot;$bin&quot; -V -E &quot;$t&quot; -e &quot;$s&quot; &quot;$DUMMY&quot; &lt;/dev/null
+
+That is a **CONSTRUCTION** sweep -- it builds each machine and lets it start.  The shift lives in
+`DEVICE_ACCESS(lca_pci_conf)`&#x27;s device-scan loop, which runs only when a guest performs a PCI
+CONFIG-SPACE ACCESS.  **Constructing `alphabook1` never executes that loop**, so no amount of
+sweeping flags it.  *This is the witness-ladder distinction one level down: rung 2 (construction)
+cannot reach an access-path defect, which is exactly what the ladder says about registration
+proving presence and not reachability.*
+
+*** AND THE VEHICLE ALREADY EXISTS, WHICH IS THE PART WORTH ACTING ON. ***
+`regress/lca_confbus_probe.py` (shipped 2026-09-07 as the witness for [[lcaconfbus1kill]]) drives a
+guest `ldq` into the PCI config window with `ioc_conf == 0`.  That takes the `bus == 0` branch:
+
+    for (dev=0; dev&lt;21; dev++)
+            if (tag &amp; (0x800 &lt;&lt; dev))
+                    break;
+
+Its control read uses `relative_addr == 0`, so `tag = (relative_addr &gt;&gt; 5) &amp; ~0xff` is **0**, the
+`if` is never true, and **the loop runs all 21 iterations** -- evaluating `0x800 &lt;&lt; 20` at the last
+one.  `0x800` is `2^11` and a plain `int`, so `0x800 &lt;&lt; 20` is `2^31`: **signed overflow, C99
+6.5.7p4, undefined behaviour, on every single run of that probe.**
+
+&gt; **SO THE MEASUREMENT IS: run the existing `lca_confbus_probe.py` against `build-asan/gxemul` and
+&gt; read stderr for a UBSAN shift diagnostic.  No new probe, no new row, no new apparatus.**  The
+&gt; expected diagnostic names `dev_lca.c` and a left-shift of a signed value.
+
+**NOT RUN YET** -- a probe run must not overlap the codex census currently in flight.  Queued.
+
+**IF IT FIRES**, this row gains a measured witness and its one-token repair (`0x800U &lt;&lt; dev`) can be
+graded properly.  **IF IT DOES NOT**, that is itself a finding about
+[[ubsanshiftlane]] -- it would mean the ASAN build is not reporting a shift UB that is provably
+evaluated, and the whole proposed UBSAN differential lane rests on an assumption that does not hold.
+**Either outcome is worth the one run**, which is the argument for doing it before designing the lane.
+
+*Found while answering this row&#x27;s own filed question rather than by looking for it -- and note the
+irony the row already recorded: this loop is the file&#x27;s OWN graceful-degradation precedent, cited by
+[[lcabadval]] as a transferable warrant.  The safe path contains the UB.*</span></span><span class="state st-open">open</span></span></th></tr><tr class="ph st-open"><th scope="row" class="phlabel">Assessment (initial problem)</th><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td></tr><tr class="ph st-open"><th scope="row" class="phlabel">Research (fix proposals)</th><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td></tr><tr class="ph st-open"><th scope="row" class="phlabel">Final review (flagship adjudication)</th><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td></tr><tr class="ph st-open"><th scope="row" class="phlabel">Regression testing</th><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td></tr><tr class="fixhead st-in work"><th colspan="10"><span class="hline"><span class="wrap" tabindex="0"><span class="rid">alphapfnoffset</span><span class="ttl">memory_alpha.c alpha_translate_v2p(): the page-table walk returns PFN &lt;&lt; pageSizeShift, dropping the within-page offset, while memory_rw derives its offset from that value -- every walked access would land at its page base</span><span class="tip">memory_alpha.c alpha_translate_v2p(): the page-table walk returns PFN &lt;&lt; pageSizeShift, dropping the within-page offset, while memory_rw derives its offset from that value -- every walked access would land at its page base — witness: probe:regress/alpha_pfnoffset_probe.py -- RUNG 3, unmodified `-E alpha -e alphabook1&#x27;. HEAD 5/7, fix 7/7, same script.  Two cold walked loads at different VPNs and offsets, five controls.  regress/artifacts/alphapfnoffset/probe_{head7,fix}_20260907.out — note: FILED 2026-09-07, raised by the codex seat (regress/artifacts/lcabadval/codex_scoping_20260907.txt) while scoping an unrelated device, and
 verified at both ends.
 
     memory_alpha.c   (*return_paddr) = ALPHA_PTE_TO_PFN(pte3) &lt;&lt; pageSizeShift;
@@ -10193,7 +10243,57 @@ grok showed two one-line regressions that re-open real UB and score FULL MARKS o
 
 **Not bolted onto #510**: a second binary and a STDERR oracle is a new measurement lane, and #510&#x27;s pass 2 had already run.  A lane added after a pass is a lane nobody reviewed.
 
-Covers the same species at [[lcashiftub]], [[sgirebufshiftub]], m88k_rot:513, cpu_mips_instr.c:1757 and the two is_userpage sites -- EIGHT sites across three CPUs, none directly visible to a value oracle.</span></span><span class="state st-open">open</span></span></th></tr><tr class="ph st-open"><th scope="row" class="phlabel">Assessment (initial problem)</th><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td></tr><tr class="ph st-open"><th scope="row" class="phlabel">Research (fix proposals)</th><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td></tr><tr class="ph st-open"><th scope="row" class="phlabel">Final review (flagship adjudication)</th><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td></tr><tr class="ph st-open"><th scope="row" class="phlabel">Regression testing</th><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td></tr><tr class="fixhead st-open"><th colspan="10"><span class="hline"><span class="wrap" tabindex="0"><span class="rid">refilingclass</span><span class="ttl">the main loop re-derived FIVE already-recorded findings in one session and filed one as a duplicate row -- the unread-review class, but the unread things are COMMITTED artifacts and OPEN queue rows, not panel files</span><span class="tip">the main loop re-derived FIVE already-recorded findings in one session and filed one as a duplicate row -- the unread-review class, but the unread things are COMMITTED artifacts and OPEN queue rows, not panel files — witness: harness: the five instances, each with the committed artifact or open row that already held it — note: FILED 2026-09-07 by the main loop, about the main loop.  **FIVE instances in ONE session**, every one
+Covers the same species at [[lcashiftub]], [[sgirebufshiftub]], m88k_rot:513, cpu_mips_instr.c:1757 and the two is_userpage sites -- EIGHT sites across three CPUs, none directly visible to a value oracle.
+
+*** THE FILED QUESTION IS ANSWERED, AND THE ANSWER COMES WITH A FREE VEHICLE: THE PROBE SHIPPED FOR
+[[lcaconfbus1kill]] ALREADY EVALUATES THIS EXPRESSION ON EVERY RUN. ***
+
+This row asks *&quot;whether a UBSan sweep already flags it, and if not, why not.&quot;*  Both halves settled
+by reading, 2026-09-07.
+
+**UBSAN IS PRESENT.**  `build-asan/Makefile:9` carries
+`-fsanitize=address,undefined -fno-omit-frame-pointer -g`.
+
+**BUT THE SWEEP CANNOT REACH THIS SITE, AND THE REASON IS STRUCTURAL RATHER THAN AN OVERSIGHT.**
+`gate_asan_sweep.sh` runs, per machine type and subtype:
+
+    timeout 25 stdbuf -o0 -e0 &quot;$bin&quot; -V -E &quot;$t&quot; -e &quot;$s&quot; &quot;$DUMMY&quot; &lt;/dev/null
+
+That is a **CONSTRUCTION** sweep -- it builds each machine and lets it start.  The shift lives in
+`DEVICE_ACCESS(lca_pci_conf)`&#x27;s device-scan loop, which runs only when a guest performs a PCI
+CONFIG-SPACE ACCESS.  **Constructing `alphabook1` never executes that loop**, so no amount of
+sweeping flags it.  *This is the witness-ladder distinction one level down: rung 2 (construction)
+cannot reach an access-path defect, which is exactly what the ladder says about registration
+proving presence and not reachability.*
+
+*** AND THE VEHICLE ALREADY EXISTS, WHICH IS THE PART WORTH ACTING ON. ***
+`regress/lca_confbus_probe.py` (shipped 2026-09-07 as the witness for [[lcaconfbus1kill]]) drives a
+guest `ldq` into the PCI config window with `ioc_conf == 0`.  That takes the `bus == 0` branch:
+
+    for (dev=0; dev&lt;21; dev++)
+            if (tag &amp; (0x800 &lt;&lt; dev))
+                    break;
+
+Its control read uses `relative_addr == 0`, so `tag = (relative_addr &gt;&gt; 5) &amp; ~0xff` is **0**, the
+`if` is never true, and **the loop runs all 21 iterations** -- evaluating `0x800 &lt;&lt; 20` at the last
+one.  `0x800` is `2^11` and a plain `int`, so `0x800 &lt;&lt; 20` is `2^31`: **signed overflow, C99
+6.5.7p4, undefined behaviour, on every single run of that probe.**
+
+&gt; **SO THE MEASUREMENT IS: run the existing `lca_confbus_probe.py` against `build-asan/gxemul` and
+&gt; read stderr for a UBSAN shift diagnostic.  No new probe, no new row, no new apparatus.**  The
+&gt; expected diagnostic names `dev_lca.c` and a left-shift of a signed value.
+
+**NOT RUN YET** -- a probe run must not overlap the codex census currently in flight.  Queued.
+
+**IF IT FIRES**, this row gains a measured witness and its one-token repair (`0x800U &lt;&lt; dev`) can be
+graded properly.  **IF IT DOES NOT**, that is itself a finding about
+[[ubsanshiftlane]] -- it would mean the ASAN build is not reporting a shift UB that is provably
+evaluated, and the whole proposed UBSAN differential lane rests on an assumption that does not hold.
+**Either outcome is worth the one run**, which is the argument for doing it before designing the lane.
+
+*Found while answering this row&#x27;s own filed question rather than by looking for it -- and note the
+irony the row already recorded: this loop is the file&#x27;s OWN graceful-degradation precedent, cited by
+[[lcabadval]] as a transferable warrant.  The safe path contains the UB.*</span></span><span class="state st-open">open</span></span></th></tr><tr class="ph st-open"><th scope="row" class="phlabel">Assessment (initial problem)</th><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td></tr><tr class="ph st-open"><th scope="row" class="phlabel">Research (fix proposals)</th><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td></tr><tr class="ph st-open"><th scope="row" class="phlabel">Final review (flagship adjudication)</th><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td></tr><tr class="ph st-open"><th scope="row" class="phlabel">Regression testing</th><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td></tr><tr class="fixhead st-open"><th colspan="10"><span class="hline"><span class="wrap" tabindex="0"><span class="rid">refilingclass</span><span class="ttl">the main loop re-derived FIVE already-recorded findings in one session and filed one as a duplicate row -- the unread-review class, but the unread things are COMMITTED artifacts and OPEN queue rows, not panel files</span><span class="tip">the main loop re-derived FIVE already-recorded findings in one session and filed one as a duplicate row -- the unread-review class, but the unread things are COMMITTED artifacts and OPEN queue rows, not panel files — witness: harness: the five instances, each with the committed artifact or open row that already held it — note: FILED 2026-09-07 by the main loop, about the main loop.  **FIVE instances in ONE session**, every one
 of them work that was already recorded, and I found none of them by checking -- I found them by
 accidentally tripping over the record afterwards.
 
