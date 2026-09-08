@@ -1,0 +1,20 @@
+VERDICT: Premise 6 is not sound; the distinction from RCR1 fails because the guard defines the supported-value contract, and B is the correct disposition (move store below guard, remove exit).
+
+**Premise audit**
+- Premises 1–5 are READ from the packet and internally consistent.
+- Premise 6 is REASONED and flawed. The strongest counterargument: the guard’s accepted-value set is the model’s contract. Storing a rejected value and returning it on readback creates a new false belief that the value is supported, even if accepted values are also unimplemented. The existing lie for accepted values does not license expanding the set of lies. This reasoning would justify removing any store-before-guard exit where the field has no functional consumer, which is exactly the #447 warning.
+
+**1. Is premise 6 sound?**  
+No. The fact that the window registers have no functional consumer does not erase the distinction between “accepted but unimplemented” and “rejected as unsupported.” The guard’s accepted-value set is the only set the model pretends to support. Removing `exit(1)` while keeping the store silently expands that set to all values, creating a new false belief: the guest writes an unsupported value, reads it back, and may infer the model accepted it as a valid configuration. That is a different lie from the pre-existing one about accepted values.
+
+**2. A or B?**  
+**B.** The one deciding fact: readback is guest-visible and returns the stored field. Therefore storing a rejected value makes the guest observe a value the model has declared unsupported as if accepted. B prevents that by moving the store below the guard, so a rejected write never lands and readback returns the last accepted value.
+
+**3. Is the option set complete?**  
+Mostly complete. Missing variants: per-write announce without exit (a non-latched version of C), and “make the register read-only / ignore writes entirely” (which is essentially B). No other option is obviously right; B is the most consistent with the tree’s own #447 precedent.
+
+**4. What does this NOT close?**  
+Yes, that is right. The `default:` arm still diagnoses and exits for both reads and writes; `LCA_IOC_STAT0` and `LCA_IOC_STAT1` have no case; and explicit exits remain in `DEVICE_ACCESS(lca_pci_conf)`, `DEVICE_ACCESS(lca_isa)`, and the interrupt assert/deassert functions. Nothing else from the packet.
+
+**5. A witness.**  
+Not checkable from the packet. To settle it, one would need the in-tree Alpha machine that maps the LCA IOC base and the value of `LCA_IOC_BASE`. Without that, no machine or address can be named.

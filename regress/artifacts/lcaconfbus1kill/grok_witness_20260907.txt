@@ -1,0 +1,107 @@
+I'll check the construction against the actual LCA handlers and the existing probe, starting with the repo state and then reading both functions in full.Checkpoint matches HEAD. Next I’ll read both LCA handlers in full, then the existing probe and the alphabook1 mapping.I have the file map. Next I’ll read both LCA handlers end-to-end, then the existing probe and the alphabook1 registration.The PCI-config handler has no early return before the bus check. Next I’ll read `bus_pci` empty-slot behavior, Alpha K0SEG translation, and whether anything writes `ioc_conf` before the debugger prompt.**VERDICT: SOUND.** The construction distinguishes the two code states it claims to distinguish. S2 reaches `bus = d->ioc_conf & 1` for any access in the `lca_pci_conf` window; `LCA_PCI_CONF+0` is not a HAE-style silent success; a guest `ldq` is the right S2; the matched surviving control plus the unique `TODO. Non-zero bus.` string attributes the kill to the stored value. It does **not** fail at S1 or S2. The weaker claim is correctly scoped. One named control is mislabeled, and post-fix “session completes” does not pin a fix member.
+
+Denominator: all of `GXEMUL-SEC/src/devices/dev_lca.c` (390 lines — both handlers, `DEVINIT`, ISA, interrupt stubs); `DEVICE_ACCESS(lca_pci_conf)` 89–149 in full; `DEVICE_ACCESS(lca_ioc)` 182–331 in full, CONF arm 196–218; `bus_pci_data_access` / `bus_pci_setaddr` in `bus_pci.c`; `alpha_translate_v2p` K0SEG in `memory_alpha.c`; `MEMORY_RW_ONE_PAGE` device + unmapped paths in `memory_rw.c`; `LS_GENERIC_N` / `LS_N` in `cpu_alpha_instr_loadstore.c`; `fatal()` in `debugmsg.c`; `ST_ALPHABOOK1` in `machine_alpha.c`; constants in `alpha_lcareg.h`; all of `regress/lca_confwidth_probe.py`.
+
+---
+
+### 1. Yes. S2 reaches `bus = d->ioc_conf & 1`.
+
+`DEVICE_ACCESS(lca_pci_conf)` (`dev_lca.c`) in full, in order:
+
+1. Locals, including `struct lca_data *d`.
+2. `if (writeflag == MEM_WRITE) idata = memory_readmax64(...)` — not taken on a read; not a return on a write.
+3. `reg = (relative_addr >> 5) & 0xfc;` and `tag = (relative_addr >> 5) & ~0xff;` — arithmetic only.
+4. `bus = d->ioc_conf & 1;`
+5. Then the `bus == 0` / `else` split. The `else` is `fatal("TODO. Non-zero bus.\n"); exit(1);`.
+
+There is no `switch` on `relative_addr`, no `len` test, no `writeflag` test that can skip step 4, and no early `return`. The `DEVICE_ACCESS` macro (`memory.h`) is only a function signature.
+
+`len` is first used in `bus_pci_data_access` / `memory_writemax64`, **after** the kill. `memory_rw.c` may shorten `len` on a window-end clip before calling the handler; it still calls the handler. Guest `ldq` is `LS_Q` → `sizeof(data)==8` through `cpu->memory_rw` (`cpu_alpha_instr_loadstore.c`).
+
+Dispatch is the same class the existing probe already uses for CONF: `-V` starts `single_step` (`main.c`); K0SEG hits `alpha_translate_v2p` (`vaddr >= ALPHA_K0SEG_BASE`, paddr = `vaddr & 0x000003ffffffffff`); `DEVINIT(lca)` registers `"lca_pci_conf"` at `LCA_PCI_CONF` size `0x20000000` with `DM_DEFAULT` (0), so a guest access is not skipped the way debugger `dump` is. `device_add(machine, "lca")` is `ST_ALPHABOOK1` only (`machine_alpha.c`).
+
+Premise correction: between entry and `bus =` there is also the writeflag-conditional `idata` fill. It is not a guard and cannot skip the line.
+
+---
+
+### 2. `LCA_PCI_CONF+0` is a clean offset. It does **not** have HAE’s property.
+
+HAE is `case LCA_IOC_BASE:` in **`lca_ioc`**: an exact-address `break` with no store and no kill. `lca_pci_conf` has no per-offset special case. Offset 0 is `relative_addr==0` → `tag==0`, `reg==0`.
+
+On the **armed** session that never matters: `bus==1` exits before `tag`/`dev` are used, so every offset in the `0x20000000` window is equivalent.
+
+On the **surviving control** (`ioc_conf==0`): tag 0 matches no IDSEL bit, the `dev>=21` body is already the commented-out kill with `dev=0;`, then `bus_pci_setaddr(..., bus=0, dev=0, func=0, reg=0)` and `bus_pci_data_access` of an empty slot. A **read** of `cur_reg==0` with no device sets `*data = (uint64_t)-1` and returns; it does not `exit`. That is a live PCI ID probe of a missing function, not a silent `break`.
+
+Offset 0 is also 8-byte aligned, so `ldq` does not take the unaligned `LS_GENERIC_N` path for alignment reasons (it still goes there because I/O pages have `host_load==NULL`, which is what you want).
+
+`0x18` is the NetBSD encoding (`| 0x3 << 3`) and yields the same `tag`/`reg` (`24>>5==0`). Same PCI transaction. No reason to move.
+
+Do **not** pick `relative_addr = 0x800000` unless you intend to talk to the registered `i82378zb` at device 7. Offset 0 is the quieter control.
+
+---
+
+### 3. The matched surviving control is sufficient to attribute the kill to the value.
+
+S1’s write arm (`lca_ioc`, `case LCA_IOC_CONF`) does one thing on `0x1`: `d->ioc_conf = idata;` then `idata & ~1` is 0, so no `fatal`/`exit`. An 8-byte store at `+0x020` does not overlap `STAT0` at `+0x040`. Tree-wide, `ioc_conf` is written only there and read only there (readback) and at `lca_pci_conf`’s `bus = d->ioc_conf & 1`. Nothing else can be armed by S1.
+
+So the two sessions differ by one field, and only one later arm consumes that field as a kill.
+
+What the pair rules out:
+
+| Alternative | Why it dies |
+|---|---|
+| Address / width / “touched the window” | Same `ldq`, same address, same width on the control |
+| Unmapped / missed the device | Unmapped Alpha read is zero-fill and survive (`memory_rw.c`); it cannot print `TODO. Non-zero bus.` |
+| Unconditional kill in `lca_pci_conf` or `bus_pci_*` | Control would die too. Empty-slot **read** does not exit. `bus_pci_setaddr` exits only on NULL `cpu`/`pci_data`, which `DEVINIT` does not leave NULL |
+| `lca_interrupt_assert` / `_deassert` | Different `fatal` text; also `cpu_dyntrans.c` skips interrupt delivery while `single_step` |
+
+`fatal()` itself does not terminate (`debugmsg.c`: `va_debug` only). The `exit(1)` does. The literal is unique in `src/` (one site, `dev_lca.c`). That is a real device signature. RAM and unmapped cannot emit it.
+
+Residual, not a hole: separate `session()` processes could in principle differ by something that ran before the debugger prompt. `-V` sets `single_step` from startup, and `DEVINIT` `memset`s `ioc_conf` to 0. A tighter variant is one process: control `ldq` (survive), then S1, then armed `ldq` (die) — only `ioc_conf` changes between the two loads. Separate sessions are still adequate.
+
+**Liveness is mislabeled.** `ioc rt` proves the **writer** (`lca_ioc` CONF) round-trips `0x1`. It does not prove S2’s window. PCI_CONF liveness is the armed session’s unique message (handler ran) plus the control surviving (same access is not an unconditional kill). If you want a positive signature on the control, the empty-slot read returns `0xffffffffffffffff` via `memory_writemax64`; unmapped returns 0. Not required for attribution.
+
+---
+
+### 4. A read is the right S2. The write path reaches the same line.
+
+The only `writeflag` use before `bus =` is filling `idata`. A store also reaches the kill.
+
+Use a read anyway:
+
+- Empty-slot **write** in `bus_pci_data_access` prints `[ bus_pci_data_access(): write to non-existant device ... ]` and still does **not** `exit`. The control would survive but stderr would carry a second `fatal()`.
+- Empty-slot **read** of reg 0 is the architectural ID probe and is silent.
+- A write that accidentally selected device 7 would enter `i82378zb` config-write, which is a worse control.
+
+Guest `ldq` is required (the file’s trap 2): `dump` uses `NO_EXCEPTIONS` against `DM_DEFAULT`, skips the handler, and returns the `#95` pre-zero. That would make both sessions look like unmapped.
+
+---
+
+### 5. What this does **not** establish — weaker claim is correctly scoped.
+
+It **does** establish: on unmodified `alphabook1`, two ordinary guest accesses — an **accepted** `stq 0x1` to CONF, then any access in the PCI config window — produce a host `exit(1)` whose diagnostic is this arm. No rejected value sits on that path. No shipped guest is required for that sentence.
+
+The same construction **also** supports a stronger architectural sentence you did not claim: bit 0 is the implemented bus selector (comment in the CONF arm), so this is type-1 config as the model defines it, and that sequence is a host kill. Still not “firmware does this.”
+
+It does **not** establish:
+
+- That NetBSD, Linux, or SRM on `alphabook1` ever writes CONF=`1` and then config-cycles.
+- Which fix member is right (decline the config access vs implement `bus != 0`). “Host survives, session completes” greens for a silent `return 1` that skips `bus_pci_*` and `memory_writemax64`, for a latched announce, and for falling through into existing `bus_pci` with `cur_bus=1` (empty type-1 also survives). That is a witness of **this** `exit(1)`, not a detector of the repair.
+- Width of S2 as load-bearing (any `len` reaches the line).
+- `STAT0`/`STAT1` error reporting (those offsets hit `lca_ioc`’s `default:` `exit(1)`).
+- The interrupt-stub kills (`lca_interrupt_assert` / `_deassert`), which are a different member-7 pair.
+
+Keep the new session on `step`, like the rest of this file. `continue` would make the interrupt stubs a confounder.
+
+---
+
+### 6. Other things in these handlers.
+
+- **`dev >= 21` is already de-fatalised** in the same function, five lines above the live kill. Offset 0’s control **uses** that path (`tag==0` → `dev=0`). If that `exit(1)` were still live, the control would die and you would misread PCI_CONF as unconditionally fatal. The file already contains the decline precedent the `else` lacks.
+- **`ioc_conf` has exactly two readers.** There is no third arming path.
+- **Empty-slot write fatals without exiting.** Another reason S2 should be a read.
+- **Member 5 (FAULT) is not available on Alpha.** `memory_rw.c` delivers a failed device access as an exception only under `MEM_MIPS` / `MEM_M88K`. `lca_pci_conf` always `return 1` on the live path; the kill is `exit(1)`, not `return 0`. Relevant to a later option-set choice, not to this witness.
+- **`lca_isa`’s `ofs > len` kill** is a different window (`LCA_PCI_SIO`). ISA `bus_isa_init` mappings sit at `LCA_ISA_BASE` (`0x1d0000000` + legacy ports) and `LCA_ISA_MEMBASE+0xa0000`; they do not cover `0x1e0000000`.
+- Post-fix, if someone **implements** type-1 by falling through to `bus_pci_setaddr(bus=1, ...)`, empty bus 1 is a non-killing miss today. The witness would go green for that too. Do not read that green as “type-1 is modelled.”
+
+The three traps the file already paid for do not recur here: S1/S2 are guest `stq`/`ldq`; S2 is not `dump`; S2 is not `LCA_IOC_BASE+0`.

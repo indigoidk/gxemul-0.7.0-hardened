@@ -1,0 +1,47 @@
+**VERDICT: Premise 6 is sound for five of the six arms and FALSE for `LCA_IOC_CONF` — the packet's own premise 2 names a live consumer (`d->ioc_conf & 1` in `lca_pci_conf`), which makes CONF exactly RCR1-shaped and settles CONF → B from the packet alone. For the other five the fork is NOT settleable here: premise 2's counts are asserted, not inlined; one scoped tree grep decides them. If it holds, take accept-plus-announce-once, not bare A — A as specified deletes the model's only runtime record that out-of-set values are unmodelled.**
+
+## Premise audit
+
+- **P1 — READ, confirmed.** I checked all six arms of the inlined function myself: store precedes guard in every one, and the accepted-value list matches the code. No generalisation involved.
+- **P2 — stated, NOT CHECKABLE from the packet.** Only `lca_ioc` is inlined; the tree-wide counts and the `lca_pci_conf` consumer line are asserted. The `ioc_conf` count of 4 is internally coherent with the packet (2 inlined uses + declaration + 1 consumer); the fives' counts of 3 are coherent but unproven. Settling fact: a scoped search for reads of `window_base_0/1`, `window_mask_0/1`, `tlb_enable`. One caveat the panel should not skip: a bare grep for `tlb_enable` may hit other devices' fields, so "exactly 3, whole tree" is only meaningful if scoped to `struct lca_data`. Re-run with the scoping stated — this is exactly the class of count this panel ratified wrongly before.
+- **P3 — READ/REASONED, follows.** The inlined readback lines echo the stored field verbatim; masking the store therefore changes readback policy. Sound.
+- **P4 — not inlined, but READ-corroborated.** The `default:` arm calls `fatal()` three times in sequence before `exit(1)` — code that only makes sense if `fatal()` returns. Definitive check: `fatal()`'s body, not in the packet.
+- **P5 — READ.** Both precedents decline the rejected write (RCR1 by moving the store, `#443` by restore). Neither lets a rejected value stay resident.
+
+## Q1 — premise 6
+
+Strongest counter-argument:
+
+1. **Risk asymmetry.** A's safety at five sites rests entirely on P2. B is safe whether P2 holds or not. If the count is wrong at one field, A installs the exact #447 defect at five sites in a single round. A decision that is only correct if an uncheckable count is exact should lose to one that needs no count — unless the count is nailed.
+2. **Policy uniformity.** Nothing in #447's rationale conditions on consumer-existence; its invariant is "readback must not vouch for a value the model rejected." Under A the device's readback contradicts its own guard — a per-site waiver of written policy.
+3. **Diagnostic loss.** "Nothing else changes" deletes the six `fatal()` texts — currently the only runtime admission that values outside the traced set do anything at all. After bare A, an off-script OS writes `0x700001` and the failure surfaces later as diffuse untranslated-DMA weirdness instead of an immediate, located halt.
+
+My ruling: counters 2 and 3 do not defeat P6 *where it applies*. On a consumer-free field the #447 harm sentence cannot be instantiated — "believes the window is programmed; it never will be" is already true of the accepted value, so the change extends a pre-existing lie to more values rather than creating a new kind. And the same switch already contains the policy A converges to: `W_T_BASE0/1` accept-and-store anything, unguarded, for the same unimplemented window state. Counter 1 is the real one, and it is epistemic, not logical: it demands P2 be nailed first, not that A be wrong. So no, this is not "excusing a new instance because an old one exists" — P6 shows the lie is the same kind and consequence-free — *for five arms*.
+
+But the blanket form is refuted by the packet itself. P2's fourth occurrence is a consumer. For CONF, accepted-value readback is TRUE (bit 0 selects the bus), so "the readback is already a lie for the accepted value" is false there. Under A, a rejected write's upper bits land and are echoed in a register the guest knows is partly real — A destroys the only signal separating implemented bits from unimplemented ones. That is the RCR1 sentence word for word. P6 proves too much by covering six.
+
+## Q2 — disposition
+
+Split; the packet forces it:
+
+- **`LCA_IOC_CONF` → B.** Deciding fact, in the packet (as stated): `bus = d->ioc_conf & 1;`. Honest dependency: this inherits P2; if the consumer were wrong, CONF joins the five. Cost worth weighing: B declines whole writes, so `0x3` discards a legitimate bit-0 request; MASK (store `idata & 1`, announce the rest) avoids that but changes readback policy (P3) and has no precedent here. #447 chose whole-write decline for exactly this shape.
+- **The other five — NOT SETTLEABLE from this packet.** The one fact: the scoped no-consumer grep (P2 caveat above). If it holds: accept, keep the store, keep a once-latched downgraded announce — hardware fidelity is the tiebreak the author names, and no hardware declines these writes. If the panel will not re-verify the count, B-uniform is the fact-free default. Either way, land the per-arm rationale in the tree the way #447 did, so the exemption (if taken) is explicit policy, not a silent one.
+
+## Q3 — option set
+
+Missing: **safe kill** — move the store below the guard and *keep* `fatal()+exit(1)`. Both precedents' shape-fixes are compatible with keeping the kill; it removes the corruption, keeps the tripwire, costs nothing. The set assumes the kill must go in the same edit. Also missing: the unlatched debug downgrade (spam-prone variant, presumably excluded deliberately); the split-per-arm disposition (the set assumes uniformity, which the packet refutes). FAULT's transferability is not checkable — `memory_rw.c` is not inlined; the author already flags the Alpha gap. No listed option is right for all six uniformly.
+
+## Q4 — what this does not close
+
+- **READ:** `default:` still prints and exits for reads AND writes (inlined). "Firmware can still terminate" is trivially right via any unhandled offset — `lca_ioc` itself stays lethal.
+- **NOT CHECKABLE:** STAT0/STAT1 having no case (no enum inlined; settling fact: the `LCA_IOC_*` enum vs the case list); the exits in `lca_pci_conf`, `lca_isa`, and the interrupt functions (not inlined — asserted only).
+- Within `lca_ioc` the six guards plus `default:` are all exit paths, so pass 1 does close the value guards inside this one function.
+
+## Q5 — witness
+
+**NOT CHECKABLE from the packet.** No machine list, no `LCA_IOC_BASE` value, no address map, no debugger capability is inlined. Three facts settle it: the numeric value of `LCA_IOC_BASE`; the bus address at which the in-tree Alpha machine registers the IOC (wherever `dev_lca` init is called); whether a rung-3 probe can issue a physical store on Alpha. Outside-packet hardware lore, flagged as such and not to be treated as fact: Linux's `core_lca.h` maps IOC_CONF at physical 0x180000000, so *if* the tree wires the IOC at hardware addresses, a store to 0x180000000 plus the per-register offsets reaches the arms. Whether that "if" holds is precisely the grep above.
+
+## Else found
+
+- The `default:` arm still narrows the *offset* print — `0x%x`, `(int)relative_addr` — while the #506 parenthetical covers only the `idata` cast ("the default arm below has the same cast, and this round fixes it too" is true only of the `idata` cast). Benign iff device-relative offsets stay under 2^31, which the switch structure makes near-certain.
+- The switch keys on `relative_addr + LCA_IOC_BASE`, so the enum constants double as device-relative offsets and `default:` prints a small relative offset, not an IOC enum value — anyone diffing trip diagnostics should know that.

@@ -1,0 +1,59 @@
+**VERDICT: Premise 6 does not survive contact with Premise 2. The author's own field census gives `ioc_conf` exactly one honored consumer, so "the model consumes these fields for nothing" is false for one arm and A-as-uniform is not licensed. For the other five arms Premise 6 is sound — but the sound version is "#447's ICR cell: no honored state to corrupt," not "the lie is pre-existing." The fork as posed (one answer for the file) repeats the exact error the #447 census inlines a warning against. Disposition: split per arm — decline or mask-and-accept for `LCA_IOC_CONF`; drop-exit-plus-announce for the five pure-storage arms. B is dominated for the five: it makes the register file lie (write X, read back old) while fixing nothing, since the accepted-value lie survives B too.**
+
+**Premise audit**
+
+- P1 (store before guard, all six): READ — confirmed against the inlined function; all six arms store then guard.
+- P2 (five fields pure storage, `ioc_conf` consumed once): cannot be settled from the packet. The inlined function shows each field's readback+store (2 of 3 occurrences) but not the declaration counts or the fourth `ioc_conf` occurrence. Settling fact: a tree-wide occurrence count per field, or inlining `bus = d->ioc_conf & 1;` from `DEVICE_ACCESS(lca_pci_conf)` in `dev_lca.c`.
+- P3 (masking the store changes readback policy): REASONED — true in this model (readback returns stored value); but see Q3: it cuts both ways against the anti-B argument.
+- P4 (`fatal()` returns): corroborated inside the packet — the `default:` arm assembles one message across three sequential `fatal()` calls (READ); if `fatal()` terminated, calls two and three would be dead. Callee bodies are not inlined, so the claim "`fatal()` cannot be silenced by -q" remains READ-stated, not verified.
+- P5 (RCR1 / #443 precedents): READ-stated as inlined quotes. One thing the packet does NOT state: what #447 left in DMATCR and ICR — "nothing to move" does not say whether `exit(1)` was dropped with store downstream (which would let a rejected value land unless the guard arm returns). Settling fact: the post-#447 text of the DMATCR arm in `dev_sh4.c`.
+
+**Q1 — Premise 6, attacked**
+
+REASONED. Three layers:
+
+(a) *Internal contradiction.* P2 says `ioc_conf` is consumed: `bus = d->ioc_conf & 1` drives PCI bus selection. CONF's guard condition is `idata & ~1`, so every rejected value has bit 0 equal to the opposite of some accepted value. Concrete case, from the packet's own #506 example: guest writes `0x2` — under A, `ioc_conf = 2` lands, `bus = 0`, PCI routing flips, readback returns `0x2`. The model has now *acted* on a value the implementation explicitly disclaims. That is RCR1's shape: stored state diverges from honored state. Premise 6 ("the model implements window translation for NO value") covers at most the four window registers plus `tlb_enable`. It cannot carry CONF, and A is specified "from all six."
+
+(b) *The sound restatement.* For the five pure-storage arms, the argument works, but the "the lie is pre-existing and value-independent" version is the weak version — as the author suspects, it proves too much (it would license keeping every store before every guard in any partially-implemented device). The strong version, using the tree's own taxonomy from the inlined #447 census: RCR1's danger criterion is divergence between stored state and *state the model otherwise honors*. ICR's cell is "no state to corrupt." The five arms sit in a cell the census doesn't name — stored, readback-able, never consumed — but the corruption criterion is vacuous there because honored state is the empty set. The consumer test is the firewall that keeps the reasoning from generalizing; any formulation that skips per-field consumer counts is the unsound one.
+
+(c) *Even where sound, it licenses less than A claims.* A specifies "nothing else changes — no mask, no default, no new state." The argument above licenses dropping the host-kill; it does not license dropping the announcement. The guard's values are not "implemented values" (P2: nothing is implemented) — they are values *observed from real guest traffic*, which is what a tripwire guarding an untested envelope looks like. Deleting it silently converts "untested divergence → host stops" into "untested divergence → invisible." The same logic supports A-plus-announce, which is identical in guest-visible state and strictly better on signal.
+
+**Q2 — A or B?**
+
+REASONED (decidable from the packet *if* P2 is taken as given; the one fact that decides it locally is whether any rejected value reaches an honored consumer — and the one packet-unverifiable fact behind *that* is the `bus = d->ioc_conf & 1` consumer in `lca_pci_conf`, named above).
+
+- **CONF: B, or mask-and-accept.** Rejected values drive a live consumer (bit 0). This is the RCR1 cell; #447 already wrote this project's answer.
+- **The five: A-plus-announce.** B is dominated. B's only benefit is envelope-signaling, which an announce provides without cost; B's cost is that readback stops being truthful about the register file — and B does **not** remove the lie the author worries about: write `0x700000`, read `0x700000`, window inactive — that survives B unchanged. Only IMPLEMENT removes it. The inlined `W_T_BASE0/1` siblings (READ: store, TODO, no guard) already behave as A would make all eight behave: store any value, return it, no effect. That is the faithful partial model of registers whose function is unimplemented. The author's stated cost of B is real and is the deciding asymmetry: write X / read back old-value is a brand-new observable that no hardware exhibits, whereas A's "register truthful, effect absent" is what partially-implemented hardware actually looks like.
+
+The fork as posed — A-uniform vs B-uniform — is a false dichotomy for this file. The brief quotes the census line "Check it per site" and then asks for one answer per file.
+
+**Q3 — Option set**
+
+REASONED. Omissions:
+
+1. **The #443 idiom** — store first, *restore* on reject — is named in Premise 5 and absent from the enumeration. Functionally ≈ B with more code; include it for completeness, recommend against.
+2. **Per-arm disposition** (the real omission): different answers for different arms, per Q2.
+3. **Guest-visible error has a local home the author half-names:** Q4 states `LCA_IOC_STAT0`/`LCA_IOC_STAT1` exist as addresses with no case. A modeled status register with an error bit is exactly where a wdc-style completion would live here. Beyond packet: what real LCA hardware records in STAT0 — name the hardware doc as settler; do not assume.
+4. Tension worth surfacing: P3 (masking changes readback policy) is used defensively, but the anti-B argument leans on "real hardware reads back what was written." For *undefined bits* of CONF those two claims collide — hardware typically does not read back undefined bits as written. If real IOC_CONF undefined bits read as zero, mask-store for CONF is *more* hardware-faithful than both A and B, and P3 stops being an objection to it. Settling fact: hardware readback behavior of undefined CONF bits. Not in the packet; name it.
+5. FAULT as listed is blocked on Alpha per the brief (READ-stated: `memory_rw.c` dispatches failed-access exceptions for MIPS/M88K only). Also: even on MIPS/M88K it models unmapped space, which is the wrong fiction for an existing-but-unimplemented register block.
+
+Nothing is "obviously right" as a single uniform answer; the per-arm split in Q2 is the recommendation. The once-only latched announce costs new state (one flag bitmask in `struct lca_data`) — A's "no new state" is a self-imposed constraint, not a property of the code.
+
+**Q4 — What this does not close**
+
+READ (against the inlined function) and READ-stated beyond it:
+
+- Confirmed: `default:` diagnoses and `exit(1)`s for reads *and* writes (visible in the tail). The switch as inlined has exactly ten cases — BASE, CONF, TBIA, TB_ENA, W_BASE0, W_MASK0, W_T_BASE0, W_BASE1, W_MASK1, W_T_BASE1 — so STAT0/STAT1 reads fall into `default`. That is a **live host kill on a plain read**, no exotic value required; an ordinary firmware status-register probe reaches it. Arguably easier to hit than any of the six guards.
+- READ-stated (bodies not inlined): exits in `lca_pci_conf`, `lca_isa`, `lca_interrupt_assert/deassert`. Settling fact: those function bodies.
+- Not closed under any option except IMPLEMENT: the accepted-value lie (window programmed, nothing translates). Neither A nor B touches it; the author should say so in the commit, because B in particular *looks* like it addresses the #447 class and does not.
+- Confirmed correct as stated: firmware can still terminate the emulator after pass 1 lands, via at least the STAT0 read path.
+
+**Q5 — Witness**
+
+REASONED from the packet; addresses not computable from it. The packet contains evidence the device is reached by real traffic — the `LCA_IOC_BASE` arm's comment reads "Linux reads from the base at startup" (READ from inlined code), and the guard values (`0x700000`, `0x300800000`, …) have the shape of observed boot streams rather than spec constants. So at least one in-tree machine plausibly boots an OS through this device. But no machine name, no `LCA_IOC_BASE` numeric value, and no per-register offsets are inlined, so I cannot name the machine or the probe address and will not guess either.
+
+Two facts settle it, both cheap: (1) which machine file under `GXEMUL-SEC/src/` instantiates `dev_lca` and at what physical base (one grep for the init call); (2) the values of `LCA_IOC_BASE` and `LCA_IOC_W_MASK0` (the header). If both exist, a rung-3 debugger store of any value `!= 0x700000` to `machine_base + (LCA_IOC_W_MASK0 - LCA_IOC_BASE)` reaches the arm through real decode; the probe need not match any real guest's value stream, so envelope violation is free. If no machine instantiates the device, it is documented-only.
+
+**Something else found while checking**
+
+READ: the W_BASE0 guard accepts **two** values (`0` and `0x300800000`) while every sibling accepts one — asymmetric, not a defect, but worth noting since it undercuts "the only implemented value" phrasing. And REASONED: the arms' comments uniformly say "the only implemented value(s)" while P2 establishes nothing is implemented — the comments misstate what the guards are. If pass 1 keeps an announce, the message should say "value outside the observed envelope," not "differs from the only implemented value," because the current wording invites exactly the overconfident reading Premise 6 had to fight.

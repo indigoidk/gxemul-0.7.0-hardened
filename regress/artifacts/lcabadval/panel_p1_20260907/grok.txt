@@ -1,0 +1,123 @@
+I'll verify the brief's premises against `GXEMUL-SEC/src/` rather than ratify them, then answer the fork. First stop is the repo, checkpoint, and the LCA handler itself.Checkpoint is one commit behind HEAD (`01a0339`). Next I’ll read the LCA handler, field consumers, and the Alpha machine mapping rather than take the packet’s census as given.The header’s documented encodings may kill the host; I’ll check those next, plus how LCA is mapped on Alpha and whether CONF’s consumer really makes that arm different.**VERDICT: Premise 6 is sound for five of the six arms and does not license the sixth; the fork is A, not B, and the one fact that decides it is that the guards whitelist firmware values the model never implemented.** B copies RCR1’s *edit* without RCR1’s *reason*. CONF is the arm that actually has a consumer — treat it as a bit-mask leftover, not a window.
+
+I re-derived this from `GXEMUL-SEC/src/devices/dev_lca.c`, `GXEMUL-SEC/src/include/thirdparty/alpha_lcareg.h`, `GXEMUL-SEC/src/machines/machine_alpha.c`, and `GXEMUL-SEC/src/cpus/memory_rw.c`. Flagged below where that goes past the packet.
+
+---
+
+## Q1 — Is premise 6 sound?
+
+**For the four window registers and `TB_ENA`: yes.** **For `IOC_CONF`: no, and lumping it in is the brief’s load-bearing error.**
+
+The feared counter — *“you are excusing a new instance of a defect because an old instance already exists”* — is the wrong counter. Here is the strongest version that is actually about this code.
+
+**Strongest counter**
+
+`#447`’s harm is a **guest-visible false belief about a modelled capability**. RCR1’s model *does* honour `rtc_rcr1` on the accepted path; a rejected `CIE|AIE` write that still lands tells the guest the RTC will interrupt, and it never will. The consumer is not “some DMA engine.” It is **the guest, via readback, about a feature the model otherwise implements.**
+
+On that reading, “the model also fails to honour the *accepted* window value” does not make a rejected value landing harmless. It means you already have the lie for one encoding, and A extends it to every encoding. If a later round implements translation, A’s stored junk is what DMA will use. B would have kept the register at the one value the original author tested. Check-it-per-site was written specifically to stop “the store already ran, so leave it.”
+
+`IOC_CONF` is the existence proof that “no consumer” is already false for 1 of 6: `bus = d->ioc_conf & 1` in `DEVICE_ACCESS(lca_pci_conf)`. Under A, a write of `0x2` (rejected extra bit, implemented bit clear) **clears the live bus bit**. Under B it would not. That is the RCR1 shape: a write the guard refuses still mutates implemented state.
+
+**Why that counter loses on the five no-consumer arms, and why it does not lose by waving at “already a lie.”**
+
+1. **`#447` refused A where the rejected bits *were* the consumed feature.** I went past the packet to the actual RCR1 arm in `dev_sh4.c`. The shipped fix is not “move a whitelist below the store.” It is: if `CIE|AIE` are set, decline the whole write; **every other value still stores.** The refused bits are the unimplemented interrupt enables in an otherwise-live register. LCA’s window guards are the opposite shape: equality against one (or two) observed firmware constants, with `TODO: Actually implement this` on the same arm. Premise 5 is true as history and **false as a transfer**. Applying RCR1’s edit here is warrant-transfer without the warrant.
+
+2. **The discriminator `#447` actually stated is the consumer test, and you ran it.** “Saying the store is upstream once for the file would have been wrong three times out of four.” Premise 6 is that test applied per site, not a licence to keep every upstream store. RCR1 fails it. The windows and `tlb_enable` pass it: tree-wide, each of those five fields occurs three times (decl / readback / store). I re-grep’d `GXEMUL-SEC/src` for `window_base_*`, `window_mask_*`, `window_t_base_*`, `tlb_enable` — no DMA-translation consumer. Jazz has a real translation table (`dev_jazz.c`); LCA does not.
+
+3. **The “future IMPLEMENT round” half of the counter actually favours A.** Firmware’s last write is what that round should honour. B would hide it behind a 2006 whitelist. A is what makes a later implementation correct-by-default.
+
+4. **B’s readback lie is the one hardware never tells, and it fires on documented encodings.** Past the packet, `alpha_lcareg.h` defines `IOC_W_MASK_1M` as `0x0` and `IOC_W_BASE_WEN` as bit 33. The model accepts:
+
+   | arm | accepted | what that is |
+   |---|---|---|
+   | `W_MASK0` | `0x700000` | `IOC_W_MASK_8M` only |
+   | `W_MASK1` | `0x3ff00000` | `IOC_W_MASK_1G` only |
+   | `W_BASE0` | `0` or `0x300800000` | disabled, or `WEN\|SG\|0x800000` |
+   | `W_BASE1` | `0x240000000` | `WEN\|0x40000000` only |
+
+   Writing the documented 1 MB mask, or **disabling window 1** (WEN clear, including the `memset` reset value `0`), currently kills the host. After an accepted 8 MB program, B would refuse `0` and keep reading back 8 MB. A would store `0` and read `0` back. Reset is itself a “rejected” encoding for `MASK0`, `MASK1`, and `BASE1` — B’s “last accepted value” is undefined until the first whitelist hit.
+
+5. **The accepted values already carry the “window is on” belief.** Both accepted WEN=1 constants tell firmware the window is enabled. The untranslated-DMA tripwire the counter wants is already gone on the path the author *did* implement. A does not create that belief; it stops killing on the other twelve documented mask sizes.
+
+**CONF is the one arm where the counter has teeth**, and even there it does not pick B. Extra bits are unused for bus selection (premise 3 holds: `bus = d->ioc_conf & 1`, readback is the full stored value). A write of `0x3` under A sets bus 1 — which is what bit 0 asked for — and then `lca_pci_conf` still `exit(1)`s on `bus != 0`. A write of `0x2` under A *does* clear a previously-set bus bit. That is a real A-vs-B delta. It is still closer to a stored register file than to RCR1: the implemented bit is doing what the write said, and the extra bits are unimplemented-feature residue. B would refuse to update bit 0 because an unrelated bit was set.
+
+**So premise 6 is not the reasoning that lets every store-before-guard site keep its store.** It is the reasoning that lets a site keep its store **when no accepted value of that field is consumed.** That is `#447`’s own per-site rule, not an evasion of it.
+
+---
+
+## Q2 — A or B?
+
+**A for all six. The one fact:** these guards are not architectural refusals. They are “firmware wrote a constant I have not seen” tripwires on registers whose comments still say the function is unimplemented.
+
+That is visible without leaving the inlined function: every window/TB arm stores, then checks, then `TODO: Actually implement this`. The T_BASE siblings in the same switch already do A — store, no guard. That does not *settle* the fork by itself (the brief is right), but it is the file’s own idiom for the same unimplemented window class, and the BASE/MASK guards exist because the author had a snapshot of one guest’s writes, not because those encodings are illegal.
+
+B’s cost is the deciding cost, not a side issue: hardware reads back what was written; B invents “write X, read last whitelist hit.” For a field nobody consumes, that is a new guest-visible lie with no corresponding model behaviour to protect.
+
+Do **not** mask the CONF store. Premise 3 is right: that changes readback policy. No 21066 datasheet is in the inlined packet (and none is named in the tracked scratchpad PDF list this project uses); RAZ/WI vs store-full is not settleable from this tree. Masking would be an unlicensed addition.
+
+A latched announce is compatible with A and is a separate sentence, not a third fork. If you announce, the current text is a wrong record: it says “the only implemented value” about a value that is not implemented. The honest once-message is “window translation / extra CONF bits not implemented,” not “illegal encoding.”
+
+---
+
+## Q3 — Is the option set complete?
+
+Almost. Missed or mis-grouped:
+
+- **`#443` restore** (store, then undo). Observationally B for readback; nothing in this function re-enters between the store and `break`, so it is B wearing extra lines. Not worth a member here.
+- **This file’s own two precedents, which split:** `dev >= 21` already deletes a kill and substitutes a default (`dev = 0`) — that is A’s cousin for a *range* site, not a warrant to invent a default window encoding. `LCA_IOC_BASE` (HAE) and `TBIA` already silently ignore. T_BASE already accept-and-store. The value guards are the outliers in *this* switch, not the house style.
+- **STAT0 as the architectural error path.** `IOC_STAT0_ERR` is R/W1C in the header. “Guest-visible device error” for LCA is not WDC’s `WDCE_ABRT`; it is STAT0. **Blocked:** `STAT0`/`STAT1` have no case and hit `default:` `exit(1)`. You cannot report an error through a register that currently kills the host. That member owes a STAT0 implementation first, which is a different round.
+- **FAULT** is unavailable. Past the packet: `memory_rw.c` raises on `res <= 0` only under `MEM_MIPS` and `MEM_M88K`. Alpha compiles this file with `MEM_ALPHA` (`cpu_alpha.c`) and there is no Alpha arm. `return 0` would fail the access with no guest exception. The brief’s caution is correct.
+- **IMPLEMENT** is the right long-term member for the windows and is out of scope. It is DMA map, SGMAP, TBIA, TB_ENA — not a de-fatalisation.
+
+Nothing in that list is “obviously right” *instead of* A. The obviously *wrong* one is B, and the obviously *later* one is IMPLEMENT.
+
+---
+
+## Q4 — What this does not close
+
+Your list is right and slightly short. After A, firmware can still kill the host at:
+
+| site | how |
+|---|---|
+| `default:` | **both** reads and writes, including `LCA_IOC_STAT0` / `STAT1` and every other offset in the 512 MB `lca_ioc` window |
+| `lca_pci_conf` | `bus != 0` — **newly reachable from a CONF extra-bit write that also sets bit 0**; today that write dies in the CONF guard first |
+| `lca_isa` | `ofs > len` (guest address bits 5–6; filed separately as `lcaisalane`) |
+| `lca_interrupt_assert` / `_deassert` | bare `TODO` + `exit(1)`, no predicate — member 7, not this round |
+
+Also still there, not kills of this class: HAE writes discarded with no storage; TBIA ignored; `default:` still narrows `relative_addr` through `(int)` (`#506` fixed the *idata* half only); `lcashiftub` (`0x800 << dev` as signed `int`).
+
+Eleven live `exit(1)`s in the file today; A removes six; five remain, plus the whole unmapped remainder of the IOC window.
+
+---
+
+## Q5 — A witness
+
+**Rung-3 is possible. Not documented-only.** Do not write one; the recipe already exists.
+
+- **Machine:** `alphabook1` only. `machine_alpha.c` `device_add(machine, "lca")` is `ST_ALPHABOOK1` and no other subtype.
+- **Addresses** (K0SEG `|` physical, because `alpha_translate_v2p` identity-maps K0SEG in kernel mode):
+
+  `0xfffffc0180000020` CONF, `...00a0` TB_ENA, `...0100` BASE0, `...0120` BASE1, `...0140` MASK0, `...0160` MASK1.
+
+Past the packet: `regress/lca_confwidth_probe.py` already issued a guest `stq`/`ldq` through that decode at CONF on unmodified `alphabook1`. The other five are other cases of the same `DEVICE_ACCESS(lca_ioc)` on the same mapping. Three probe traps that file already paid for, so a new one does not rediscover them: debugger `dump` skips `DM_DEFAULT` handlers; debugger `put d` of a killing value *is* a host kill but is not a guest instruction; HAE at window offset 0 silently succeeds, so a miss control must not use `LCA_IOC_BASE+0`.
+
+---
+
+## Premises, scored
+
+| # | holds? |
+|---|---|
+| 1 store-before-guard, all six | **Yes.** Read all six else-arms. |
+| 2 five pure storage; `ioc_conf` one consumer | **Yes as a field-count.** Readback is a consumer of all six in the guest-visible sense; CONF bit 0 is the only *model* consumer. |
+| 3 extra CONF bits unused for bus, stored for readback | **Yes.** |
+| 4 `fatal()` does not terminate | **Yes** (carrier-settled; not re-opened). |
+| 5 the tree refused A twice | **The comments exist. The transfer does not.** RCR1 refuses consumed feature bits; these guards whitelist unimplemented constants. |
+| 6 LCA is different because nothing consumes the windows | **Yes for five arms. No as a claim about all six.** |
+
+---
+
+## Something else
+
+The six-as-one fork is the same class of census error the opener warned about. Two predicate shapes live in that function: bit-masks (`CONF`, `TB_ENA`) and equality whitelists (the four windows, with `BASE0` accepting *two* values — the queue title “four registers accept exactly one value each” is already false of `BASE0`). One design still covers all six (delete the `exit`, keep the store, optional latch). One design does **not** cover them if you pick B: B is a coherent answer only for a consumed field, which five of these are not.
+
+The diagnostic string “only implemented value” will become a wrong record the moment A lands unless it is rewritten or deleted with the `exit`.

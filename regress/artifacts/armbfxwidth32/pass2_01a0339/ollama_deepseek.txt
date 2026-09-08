@@ -1,0 +1,52 @@
+RED: floor breach remains — `width < 32` → `width <= 32` is a clause-(d) mutant that passes all 14 rows; `s w31` adds no kill; `s w32 pc` is a control, not a kill.
+
+---
+
+### 1. CHANNEL for the two added rows
+
+**`s w32 pc`**  
+- **READ** from diff: it reuses the `pc` and `alive` from the immediately preceding `s w32` run; it does not execute a new word.  
+- **REASONED**: No mutant in the repair space (mask construction, sign-extension guard) can cause `pc != 0x8004` while `r0` is correct. The existing `s w32` row already fails if the word does not execute, because its expected `r0` is nonzero (`0x89abcdef`).  
+- **Verdict**: **Control, not a kill.** It adds no coverage against any clause-(d) mutant of the fix.
+
+**`s w31`**  
+- **READ** from diff: drives `SBFX #0,#31` on `0x89abcdef`; expected `r0 = 0x9abcdef`; top bit of field (bit 30) is clear, so correct build must not sign-extend.  
+- **REASONED**: The only difference from the existing `w31` (UBFX width 31) is the sign-extension path. The in-scope predicate `width < 32` is true for width 31 under every weakening that still reads as the same check (`<=32`, removal). The top-bit test is not one of the two named predicates. Therefore no clause-(d) mutant of the fix can make `s w31` fail while `w31` passes.  
+- **Verdict**: **Vacuous for this mutant space.** It does not kill any mutant that `w31` does not already kill.
+
+---
+
+### 2. FLOOR QUESTION — clause-(d) mutant that sweeps clean
+
+**Yes.**  
+Mutant: **change `width < 32` to `width <= 32`** in the sign-extend guard.  
+- For `width == 32`, the mask is `0xffffffff`, so `x |= ~mask` becomes `x |= 0` — no effect.  
+- For `width < 32`, behaviour is unchanged.  
+- All 14 rows pass.  
+This is **distinct** from the disclosed `1U`→`1` and `topBitMask` hoist escapes. It is a third, unreported clause-(d) breach.
+
+---
+
+### 3. Is `s w31` load-bearing?
+
+**No.**  
+`w31` already covers width-31 mask construction for UBFX. The only new code path exercised by `s w31` is SBFX sign extension, but no in-scope mutant can make SBFX width 31 fail while UBFX width 31 passes.  
+The round’s claim that SBFX width 31 was untested is **true as a coverage gap**, but the added row does **not** close a gap for the mutants under review. It adds a name and no coverage.
+
+---
+
+### 4. Did the correction go far enough?
+
+**No.**  
+Two overstatements remain in the diff’s prose:
+
+- **`s w31` “pins SBFX at width 31 at all”** — false; it pins no mutant in the stated space.  
+- **“Either way pc does not land on CODE+4 with r0 set”** for all untranslatable words — **not checkable from the packet** and potentially false. The und route’s behaviour is not inlined; a single measurement of an untranslatable word that routes to `und` and leaves `r0` set to the expected value with `pc = CODE+4` would refute it. This is a candidate fourth false statement.
+
+---
+
+### 5. Records question
+
+**Not sufficient.**  
+The commit message is permanently false and cannot be edited. A future reader following the commit message alone will be misled. The correction in the CHANGELOG and probe comment is not discoverable enough.  
+**Required:** an errata file or `git notes` attached to the commit hash, or a prominent CHANGELOG entry that explicitly states the commit message is false and points to the correction. The probe comment is not a substitute.

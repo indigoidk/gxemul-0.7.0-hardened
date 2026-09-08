@@ -1,0 +1,43 @@
+**VERDICT: RED — two findings, both closable in-round, no measurement run (none was possible from this seat).** (1) The diff's own added prose ships the fourth false statement: "the SBFX rows are exactly the ones whose expected FAILURE value is also EXACTLY ZERO" is refuted by this same packet's record that the **UBFX** `w32` row also returned exactly 0x0. (2) One clause-(d) mutant — keep `if (width < 32 && …)`, delete its body `x |= ~mask` — is green against **every row the packet names**, because no named row requires SBFX sign-extension to *happen*; whether an unnamed row kills it is not checkable from the packet. The comment-only claim verifies against the inlined diff; `s w31` is load-bearing; `s w32 pc` is a control, not a kill.
+
+## Q1 — channels
+
+**`s w32 pc`** (REASONED): **a control, not a kill — and the packet's own model proves no unique kill exists.** For `s w32` to stay green, the word must have executed with the correct mask; under the packet's model (READ: any translated word leaves pc = CODE+4; non-translation stops the machine or routes to und), executed-with-correct-r0 forces pc = 0x8004. So every edit that REDs `s w32 pc` — e.g., a decoder that rejects the SBFX/w32 encoding, a plausible wrong future "fix" for exactly this UB — also REDs `s w32` (r0 stays 0 or prints "died" against expected 0x89abcdef); and every value-level edit leaves it GREEN. Answer: none. It is not vacuous — its channel does vary under non-translation — and its job is attribution: `s w32`'s failure value 0x0 equals the never-executed value, so on the pre-fix build "s w32 pc green + s w32 red" is the witness signature. The one conceivable unique kill (SBFX-only pc break with correct r0) exists only if X(sbfx) owns a pc-update site; under the shared-translator model the packet describes, `w32 pc`/`mid pc` would co-catch it anyway. **Not checkable; settling fact: the pc-update site for translated BFX words.**
+
+**`s w31`** (REASONED): **a kill.** Named mutant: an X(sbfx)-*only* mask defect at width 31 — concrete: weaken that copy's ternary `width == 32` → `width >= 31`. Observable: r0 = 0x89abcdef (full register; bit 30 clear, no extension) vs expected 0x09abcdef — a **sole** RED: `w31` watches X(ubfx)'s separate ternary (READ: the diff shows two independent copies), `s clear` pins width 4, `s w32` pins 32. Channel varies, so not vacuous. Row arithmetic verified: 0x89abcdef & 0x7fffffff = 0x09abcdef; bit 30 clear; `"0x%x"` of it = "0x9abcdef" ✓.
+
+## Q2 — the floor question
+
+Premise catch first (READ): width ∈ {1..32} always. On that domain the least-restrictive "same-looking" weakenings — `width == 32` → `width >= 32`; `width < 32` → `width != 32` — are **behaviorally equivalent**, and `width <= 32` admits 32 into a body that is `x |= ~0xffffffff` = `x |= 0`, value-identical. A clean sweep of an *equivalent* mutant is not an L2 breach or the floor is unsatisfiable; the floor is live only for mutants value-distinguishable from shipped code.
+
+Ternary side: every value-visible weakening lands on a tested width — always-full mask → `w31`/`s w31` RED; never-true guard → mask 0 at width 32 on the host the packet evidences (REASONED from the recorded pre-fix 0x0) → `w32`/`s w32` RED; null to 0 → w32 rows RED. No sweep.
+
+Sign-guard side: the live candidate is **keep the guard, delete `x |= ~mask`** (equivalently `x |= 0`). It is value-visible exactly when a field's top bit is SET at width < 32. Against every named row it is GREEN: `s clear` → 0x7 *requires no* extension; `s w31` → 0x09abcdef *requires no* extension; `s w32` → 0x89abcdef is green and **provably blind — at width 32 extension is the identity `x |= 0`, so the row looks like it exercises extension (field top bit SET) but cannot**; UBFX rows never extend. So the mutant sweeps every row inlined in this packet. I can name 11 of the 14 rows; the other three decide it. **Not checkable; settling fact: does any shipped row expect an SBFX result exceeding its field mask at width < 32 (e.g. 0xffffffde from SBFX #4,#8)?** Or measure: run the 14-row probe against `x |= ~mask` deleted. If 14/14 — L2 breach; the in-round repair is a must-extend row: SBFX #4,#8 of 0x89abcdef gives field 0xde, bit 7 SET → 0xffffffde (mirrors `mid`; green under shipped code and always-extend; failure value 0xde ≠ 0, so it needs no pc companion). Note this is **not** the disclosed topBitMask escape — that is definedness; this is value coverage, and the `ubsanshiftlane` filing does not cover it.
+
+## Q3 — `s w31` vs `w31`
+
+The round is right; the co-green criterion is wrong. Coverage is the existence of an edit where exactly one REDs, and I exhibited one (sbfx-only `width >= 31`: `w31` green, `s w31` sole RED). The two ternaries are separately editable, and this project has already demonstrated divergence between these twin blocks (READ: the sbfx block confesses a verbatim-copy defect about the other function). One honest limit (REASONED): `s w31` is also green under the old `(1 << width) - 1` (host UB yields the right mask at 31), so it pins VALUE at 31, not definedness — no one should later count it against the `1U` escape.
+
+## Q4 — the fourth statement
+
+**Found, in the added `s w32 pc` comment** (and repeated as premise 2 of this brief): "the SBFX rows are exactly the ones whose expected FAILURE value is also EXACTLY ZERO." Refuted by the packet's own record, in the *other file of this same diff*: "`UBFX r0,r1,#0,#32' of 0x89abcdef returned 0x0 on the committed build." The zero-failure set is {w32, s w32} — one UBFX, one SBFX — not "the SBFX rows," and within SBFX only one row qualifies. True sentence: "both width-32 rows fail to 0x0, the same value a never-executed word leaves; `w32` had a pc control, `s w32` had none." Same disease as the prior three — a universal ("exactly") outrunning the recorded runs — committed inside the correction for the third.
+
+## Q5 — records
+
+Not sufficient, on two grounds. (a) The reader "following the commit message alone" reads `git log`: the only text guaranteed to sit next to c0c7f55's false claim is **01a0339's own commit message**, which the packet never inlines. If it lacks a one-line retraction, the log narrative still misleads; `git notes` on c0c7f55 is the one mechanism attaching durable text to an unamendable commit. (b) Verification gap: the packet says the diff is "the whole of it, both files," and it contains **no CHANGELOG hunk** — so the CHANGELOG correction either landed in the earlier commit, or the claim it exists is false statement #5.
+
+## Disclosed escapes (challenged as instructed)
+
+Upheld (REASONED): `1U`→`1` is value-invisible at every evaluated width — the conditional operator evaluates only the selected branch, so the shift never runs at 32, and at 31 the host's `1 << 31` yields the same mask after `- 1`. topBitMask above the `if` is harmless *iff the ternary is correct* (`x |= 0`), and any ternary break is caught by the w32 rows — the composite catches every harmful combination. Record that scope condition.
+
+## Comment-only claim
+
+Verified against the inlined diff (READ): every `+`/`-` line in the four `cpu_arm_instr.c` hunks is comment prose; the only code lines shown (the ternary, `x >>= lsb;`, `x &= mask;`) appear as unchanged context; hunk offsets chain exactly (1315+19 → 1340 → 1374 → 1400). The no-remeasure justification holds as far as the packet shows.
+
+## Not checkable from the packet — settling facts
+
+1. Full 14-row list: is there a must-extend SBFX row? (decides Q2; alternatively the named measurement)
+2. Text of 01a0339's commit message — does it retract c0c7f55's claim? (decides Q5a)
+3. Which commit carried the CHANGELOG correction, and what the c0c7f55 block now says (decides Q5b)
+4. Read-checks: the quoted und-routing strings in cpu_arm_instr.c; the m88k claims (`w == 0` encodes full width; encoded count never reaches 32) in cpu_m88k_instr.c X(clr)/X(set); "the decoder does not enforce lsb = 0 at width 32."
+5. Whether X(sbfx) carries its own pc update (would give `s w32 pc` a unique kill; the packet's model says no).

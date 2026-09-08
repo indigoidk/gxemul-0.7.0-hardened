@@ -1,0 +1,109 @@
+**VERDICT: The diff is a sound repair. The comment-only claim in `src/cpus/cpu_arm_instr.c` is verified by the diff itself (all four hunks are inside `/* … */` blocks; the two `uint32_t mask = …` lines are unchanged context). However, three real defects survive in this round, and the records correction is incomplete.**
+
+---
+
+## Q1 — CHANNEL for each added row
+
+### `s w32 pc` — CONTROL, not a kill. [REASONED]
+
+The channel is `pc`; the mutant class is "the SBFX word does not execute." Under that mutant:
+- `pc` does not advance to `0x8004`, so `s w32 pc` is RED.
+- But `r0` also retains its prior-row value (the row before `s w32` is a UBFX row, not `0x89abcdef`), so `s w32` is RED on the same observable (r0 ≠ 0x89abcdef).
+
+Under any other mutant class ("executes but produces wrong r0"), `s w32` is RED and `s w32 pc` is GREEN (pc advances). So `s w32 pc` adds **no unique kill**. The only theoretical mutant where `s w32 pc` would be the sole catcher is "word does not execute AND r0 happens to equal 0x89abcdef from a prior row" — the probe does not preload that value, so this is not a realistic mutant.
+
+The row is correctly labeled `CONTROL` in the diff. It documents the invariant but does not catch a mutant the other rows miss.
+
+### `s w31` — kills SBFX sign-extension / mask mutants at width 31. [REASONED]
+
+Drives `SBFX #0,#31` on `0x89abcdef`. With the fix:
+- `mask = (1U << 31) - 1 = 0x7fffffff`
+- `x = 0x89abcdef & 0x7fffffff = 0x09abcdef`
+- Sign-bit test: `width < 32` is true, but `x & (1U << 30) = 0` (bit 30 is clear in `0x09abcdef`). No extension.
+- Result: `0x09abcdef`, formats as `"0x9abcdef"`.
+
+Mutants it catches that `w31` (UBFX) does not:
+- "Always sign-extend": `s w31` gets `0x89abcdef` instead of `0x09abcdef`. RED. (`w31` is GREEN — UBFX has no sign-extension code path.)
+- Width-31-specific bugs in the SBFX sign-bit test or guard.
+
+Mutants it does **not** catch (because bit 30 is clear and bit 31 is also clear in `0x09abcdef`):
+- "Check bit 31 instead of bit width-1": both bits are 0 here, so the result is identical.
+- "Sign-extend when bit 31 is set": bit 31 is 0, no extension triggered.
+
+So `s w31` is load-bearing relative to `w31` (Q3 below), but the chosen value (`0x89abcdef`) makes it test the **no-sign-extension** path at width 31 — the same path UBFX takes. It does not exercise the trigger. A value with bit 30 SET (e.g., `0xC9abcdef`) would exercise the trigger and catch "check wrong bit" mutants.
+
+---
+
+## Q2 — FLOOR: clause-(d) mutant exists. [REASONED]
+
+**Yes.** The predicate `width < 32` in the sign-extend guard can be weakened to `width <= 32` (or `1`, or simply removed), which is the least-restrictive form that still reads like a comparison involving `width` and `32`. Since `width ∈ {1..32}`, `width <= 32` is tautologically true.
+
+Under this mutant:
+- **width = 32** (SBFX, `s w32`): the guard no longer suppresses the test. `1U << 31 = 0x80000000` (defined, unsigned). `x = 0x89abcdef` (mask is still `0xffffffffU` from the ternary). `x & 0x80000000` is true. Then `x |= ~mask = x | ~0xffffffffU = x | 0 = x`. **No-op.** Result `0x89abcdef`. GREEN.
+- **width < 32**: the original guard was already true, so behavior is unchanged.
+
+All 14 rows remain green. This is a clean sweep and per the brief's own rule is an **L2 breach**.
+
+The ternary predicate `width == 32` cannot be weakened to a less-restrictive form that still reads like the same check — `width >= 32`, `width > 31`, `width < 33` are all equivalent on the domain `{1..32}`. Only the sign-extend guard is vulnerable.
+
+**This must be repaired in-round** by adding a row that fails under this mutant. A row that asserts `pc` does NOT advance on an encoding the decoder rejects would do it — except the SBFX widths in scope are all legal encodings. The realistic defense is a row on an **illegal** encoding that should route to UND/bad, asserting `pc` lands on the UND vector — but that is a different probe. Alternatively, a comment pinning the guard against future "simplification" is the only in-round defense, since no value row can kill it. **The round has no such row and no such pin.**
+
+---
+
+## Q3 — `s w31` load-bearing? [REASONED]
+
+**Yes, relative to `w31` (UBFX).** `w31` does not sign-extend; `s w31` does (conditionally). A mutant in SBFX's sign-extension logic (e.g., always extend, or check the wrong bit) makes `s w31` RED while `w31` stays GREEN. So `s w31` is not green under every edit that `w31` is green under.
+
+**Caveat:** the chosen value has bit 30 clear, so the sign-extension trigger is false. `s w31` exercises the same code path UBFX takes (mask + no-extension) for this specific value. It catches mask errors and "always sign-extend" mutants, but not "check bit 31 instead of bit 30" mutants (bit 31 is also 0 here). The existing `s clear` row already catches "always sign-extend." So `s w31` is load-bearing in the sense of "exercises SBFX at width 31 with a different instruction than UBFX," but the coverage delta over `w31` + `s clear` combined is narrow.
+
+The round's claim "SBFX at width 31 was untested" is correct (no row exercised SBFX's sign-bit test at width 31). The round's claim "generalising `w31` to SBFX was unwarranted" is correct. But "`s w31` now pins it" overstates — it pins the no-extension path, not the extension trigger.
+
+---
+
+## Q4 — Did the correction go far enough? [REASONED + READ]
+
+The pc-correction is now precise (names the three rows that assert pc). But other claims in the diff are unverified or imprecise:
+
+1. **`#312` added an UNDEFINED-INSTRUCTION route.** The probe comment asserts this as fact. Not checkable from the packet — requires reading `cpu_arm_instr.c` dispatch or git history. If false, the comment misleads.
+
+2. **`s w31` "now covers" SBFX at width 31.** It covers the no-sign-extension path only, because the chosen value has bit 30 clear. A reader who assumes `s w31` tests sign extension at width 31 will be wrong. The diff does not say "exercises the trigger," but the implication of "pins it" is loose.
+
+3. **"The SBFX rows are exactly the ones whose expected FAILURE value is also exactly zero."** This is in the pass-2 prose and is imprecise: `s clear` (SBFX #1,#4) has expected failure value `0x7`, not zero. Only `s w32` (width 32) has expected failure value zero pre-fix. The generalization to "the SBFX rows" is loose.
+
+4. **"Note also that a width-32 extract returns the whole register only for a LEGAL field, i.e. lsb = 0; the decoder does not enforce that."** Claim about the decoder. Not checkable from the packet.
+
+5. **"`s w31' now pins it" (in cpu_arm_instr.c comment).** As above — pins the no-extension path only.
+
+Given the pattern (three false statements about the probe's own rows in two commits), a fourth is likely. The `#312` claim and the "`s w31` pins it" phrasing are the strongest candidates.
+
+---
+
+## Q5 — Records: is CHANGELOG + probe comment sufficient? [REASONED]
+
+**No.** A future reader who encounters `c0c7f55` via `git show` or `git log` will see the false claim ("on EVERY row, w32 included") with no correction visible, because commit messages cannot be amended and the correction lives in working-tree files (CHANGELOG, probe). The repair commit (`01a0339`) is the natural place to carry an explicit correction — something like "the commit message of c0c7f55 overstated the pc coverage; only `pc adv`, `mid pc`, and `w32 pc` asserted pc, and all three are MOV/UBFX rows; see CHANGELOG." Whether `01a0339`'s commit message does this is **not checkable from the packet** (the message is not inlined; only the diff is).
+
+In principle, to prevent a reader following only the commit message from being misled, the repair commit's message must carry the correction. The CHANGELOG and probe comment help readers who look at those files, but `git log` and `git show c0c7f55` remain uncorrected.
+
+---
+
+## Other findings
+
+- **Comment-only claim: VERIFIED.** All four hunks in `src/cpus/cpu_arm_instr.c` are inside `/* … */` blocks; the two `uint32_t mask = …` lines appear as unchanged context. Stripping comments yields byte-identical files (consistent with the diff).
+
+- **`s w32 pc` label.** The diff labels it `CONTROL`. Accurate. But it is redundant with `s w32` for all realistic mutants. It documents the invariant; it does not kill.
+
+- **Order of `s w32 pc`.** It is placed immediately after `row("s w32", …)`, reading `pc` from the same `run_word` call. Correct placement.
+
+- **`s w31` value choice.** The diff comment correctly computes the masked field as `0x09abcdef` and notes bit 30 is clear. The row expects `"0x9abcdef"`, which is `str(0x09abcdef)` in `"0x%x"` format. Correct.
+
+---
+
+## Summary of defects the round must address
+
+1. **L2 breach** (Q2): the sign-extend guard `width < 32` can be weakened to `width <= 32` with no test detecting it. Either add a row that catches it (hard, since no value row does) or pin the guard in a comment that survives future "simplification."
+
+2. **`s w31` is half a test.** It covers SBFX width-31 no-extension but not the sign-extension trigger. A second row with bit 30 SET (e.g., `0xC9abcdef`) would close the gap.
+
+3. **Records correction is incomplete** without an explicit correction in the commit message of `01a0339`. Not checkable from this packet whether that message exists.
+
+4. **Loose claims** in the diff prose (`#312` route, "pins it," "the SBFX rows," decoder note) are either uncheckable from the packet or imprecise. The `#312` claim is the strongest candidate for a fourth false statement.

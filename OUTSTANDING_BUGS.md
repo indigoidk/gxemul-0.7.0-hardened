@@ -16745,3 +16745,212 @@ a pass is a lane nobody reviewed. It owes its own round, its own pass, and two n
 across three CPUs, and a value probe can see NONE of them directly. It sees only the consequences
 that happen to differ on this host's lowering -- which for width 32 was a wrong register value,
 and for width 31 was nothing at all.*
+
+
+### `ledgersevmissing` (WITHDRAWN 2026-09-07, same day) -- DUPLICATE of `queueunrated`
+###
+### *** Filed and withdrawn within the hour.  `queueunrated` was already open with the same
+### finding, sharper numbers (73 rows UNRATED **and already witnessed**) and a better
+### diagnosis -- that a keyword scan over titles is a CORRELATE, since what makes a row high
+### is reachability and no keyword tests that.  The one thing this added -- that rows are
+### STILL being created without a rating, so the writer-side check must land BEFORE the
+### backfill -- is folded into `queueunrated`.  Kept as a heading rather than deleted so the
+### record shows the duplicate was made, not that it never existed. ***
+
+FILED 2026-09-07 by the main loop, from a survey run while picking the next round -- NOT from a
+seat.  Found by trying to sort the open queue by severity and having the sort DIE on a KeyError.
+
+**THE NUMBERS, DERIVED (re-run the deriver; do not quote these):**
+
+    C:/.../python.exe -c "import json,io; L=json.load(io.open('tools/pipeline/ledger.json',encoding='utf-8'));
+      rows=L['rows']; m=[r['id'] for r in rows if 'sev' not in r];
+      print(len(rows), len(m), len([i for i in m if next(x for x in rows if x['id']==i)['state'] in ('open','in work')]))"
+
+On the day of filing that printed **410 rows, 261 with no `sev` field at all, 78 of them open or in
+work** -- against 62 low + 54 med + 11 high that DO carry one.  So the severity-bearing population
+is a MINORITY of the live queue.
+
+**WHY IT MATTERS, and it is not tidiness.**  Every triage this project runs -- "what is the next
+round", "what are the critical bugs", the owner's own standing instruction to *prioritise critical
+bugs and easy ones* -- is a severity sort.  A row with no `sev` is not sorted LAST; depending on
+the tool it is **omitted entirely or crashes the sort**.  Both were observed on the day of filing.
+That is the seat-failure-counted-as-agreement shape moved into triage: the row does not appear as
+low-priority, it does not appear at all, so nothing ever says it was skipped.
+
+**AND IT IS NOT A UNIFORM LEGACY BLOCK, which is what makes it worth a row rather than a sweep.**
+The missing set spans the whole history -- `d1`/`a4`/`n1`..`n6` from the earliest rounds, but also
+`wdcdataoutdrain`, `gdromlatchcross`, `divratchetband` and other rows opened in the last fortnight.
+So it is not "old rows used an old schema"; **rows are STILL being created without it today**,
+which means a one-off backfill fixes the past and not the cause.
+
+The same survey found `witness` missing on a smaller set and `opened` missing on a large one; those
+are recorded here but are NOT the same severity, because nothing sorts on them.
+
+**DELIBERATELY NOT FIXED IN THE ROUND THAT FOUND IT.**  Assigning a severity to 78 rows is a
+judgment call per row, not a mechanical default -- and defaulting them all to `med` would be worse
+than the gap, because it would make 78 unassessed rows indistinguishable from assessed ones.  That
+is this project's oldest rule about blanks: an unrun check and an inapplicable one must not render
+the same.
+
+**THE SHAPE OF A FIX, for whoever takes it:** (1) a writer-side check, the `check_cited_artifacts`
+idiom -- forward-only from a cutoff, so a NEW row without `sev` fails and the 78 legacy ones warn;
+(2) the backfill as its own pass, severity by severity, with the unassessable ones marked
+explicitly rather than guessed.  (1) before (2), because (1) stops the bleeding and (2) without it
+just refills.
+
+*Not escalated to high: no measured decision has yet been lost to it -- the rows I have picked this
+week came from OUTSTANDING_BUGS's dated tail and from panel residuals, not from a severity sort.
+But that is luck about my habits, not a property of the ledger.*
+
+
+### `refilingclass` (med) -- filed 2026-09-07: five already-recorded findings re-derived in one
+### session, one of them filed as a duplicate row
+
+FILED 2026-09-07 by the main loop, about the main loop.  **FIVE instances in ONE session**, every one
+of them work that was already recorded, and I found none of them by checking -- I found them by
+accidentally tripping over the record afterwards.
+
+    1  "twelve of sixteen colour encodings reach the random arm"   already in a COMMITTED artifact,
+                                                                   regress/artifacts/sgirandomcolour/
+                                                                   codex_design_20260907.txt, with a full table
+    2  "depth 8 transmits uninitialised stack bytes"               already in codex_pass1_20260907.txt AND
+                                                                   already an open row, [[sgirebufuninit]]
+    3  "`lin_b diag once' does not assert the (once) marker"       already an open row, [[randompixdiagonce]]
+    4  "half the queue carries no severity"                        already an open row, [[queueunrated]] --
+                                                                   and I FILED A DUPLICATE, [[ledgersevmissing]],
+                                                                   into the ledger AND OUTSTANDING_BUGS before
+                                                                   noticing.  Withdrawn same day.
+    5  "the GET half consumes more bytes than it reads"            already in [[sgirebufuninit]]'s own note,
+                                                                   almost verbatim
+
+**THIS IS THE UNREAD-REVIEW CLASS, BUT NOT THE VERSION THE CARRIER DESCRIBES.**  That class is about
+PANEL ANSWERS NOBODY OPENED -- a seat file sitting in a panel dir.  Every instance here is different and
+worse: the knowledge was in **committed files** and **open queue rows**, i.e. in the two places this
+project treats as its own memory.  Instance 4 is the sharpest, because the duplicate row PASSED THE
+PRECOMMIT GATE and would have sat in the queue indefinitely as a second entry for one defect.
+
+**THE COST IS NOT ONLY TIME.**  Instance 1 and 2 consumed a codex invocation on questions a committed
+artifact had already answered -- against a standing directive to spend codex on the queue.  And a
+duplicate row inflates the backlog the owner is trying to prioritise, which is the opposite of what
+[[queueunrated]] is for.
+
+*** WHAT MAKES IT A CLASS RATHER THAN CARELESSNESS: THE INVESTIGATION IS WHAT HIDES THE RECORD. ***
+In every instance I reached the finding by READING SOURCE, and a source reading gives no signal that a
+row exists.  The record lives under a row id I would only search for if I already suspected the answer.
+Instance 3 is the clean demonstration: I derived the `(once)` gap from the probe, wrote it up as new,
+and the row `randompixdiagonce` had been filed EARLIER THE SAME DAY under a name I would never have
+guessed from the code.
+
+**PROPOSED STRUCTURAL FIX, and it is deliberately two things because they catch different halves:**
+
+* **(a) WRITER-SIDE, mechanical -- a duplicate check on ADDED ledger rows.**  When a commit adds a row,
+  compare its title's content words against every open/in-work row's title and REPORT the nearest
+  matches for a human to dismiss.  It cannot auto-reject (titles are prose and near-misses are real
+  rows), so it warns; the value is that it fires at the moment of filing.  Forward-only from a cutoff,
+  the `check_cited_artifacts` idiom.  **Owes two negative controls -- a genuine near-miss pair must NOT
+  be reported as a duplicate, and an actual duplicate MUST be -- so it ships as its own harness round,
+  not as a rider.**
+* **(b) READER-SIDE, a habit with a command -- before investigating a device or a probe, list what is
+  already open against that FILE.**  This is the half that would have caught instances 1, 2 and 5,
+  which were never going to be caught at filing time because I never filed them.  The command is one
+  line and the artifacts directory is the other half of it:
+
+      grep -l "<file>" regress/artifacts/*/*.txt
+      python -c "...print rows whose title or note names <file>..."
+
+**HONEST LIMIT: (b) IS PROSE, AND THIS FILE'S OWN FINDING IS THAT PROSE DOES NOT FIRE.**  I am not
+claiming it will.  It is recorded because (a) genuinely cannot catch instances 1, 2 and 5 -- there is no
+filing event to hook -- and saying "no structure reaches this half" is more useful than pretending a
+habit is a control.  If a later session finds a mechanical trigger for the reader side, that supersedes
+this.
+
+*Severity med, not high: nothing shipped wrong.  Every instance was caught, four of them within the
+hour, and the one that reached the ledger was withdrawn the same day.  The cost is wasted effort and an
+inflated backlog, not a defect in the emulator.*
+
+
+### `lcaconfbus1kill` (high) -- filed 2026-09-07: an ACCEPTED write to LCA_IOC_CONF arms a
+### host kill in a different function
+
+FILED 2026-09-07.  Surfaced while verifying a claim in the grok seat's `lcabadval` pass-1 BODY (its
+verdict line did not carry it) -- and **verified to be sharper than the seat stated it**, by opening
+both functions.
+
+**THE DEFECT: an ACCEPTED write to one register arms a host kill in a DIFFERENT function.**
+
+`DEVICE_ACCESS(lca_ioc)`, `case LCA_IOC_CONF`:
+
+    d->ioc_conf = idata;
+    /*  Only bit 0 is implemented so far, the PCI bus 0 vs
+        bus non-0 selection bit.  */
+    if (idata & ~1) {
+            fatal("TODO: Write to unimplemented bit of IOC_CONF: 0x%" PRIx64 "\n", ...);
+            exit(1);
+    }
+
+**`0x1` PASSES that guard.**  `idata & ~1` is 0, so the write is accepted, stored, and the arm's own
+comment describes bit 0 as the implemented selector.
+
+`DEVICE_ACCESS(lca_pci_conf)` then consumes it:
+
+    bus = d->ioc_conf & 1;
+    if (bus == 0) {
+            for (dev=0; dev<21; dev++)
+                    if (tag & (0x800 << dev))
+                            break;
+            if (dev >= 21) {
+                    /*  fatal("[ LCA: No bus 0 device? TODO ]\n");
+                    exit(1);  */
+                    dev = 0;
+            }
+    } else {
+            fatal("TODO. Non-zero bus.\n");
+            exit(1);
+    }
+
+So: **guest writes 1 to IOC_CONF (accepted), then performs any PCI configuration-space access, and
+the host process exits.**  Two guest accesses, both to registers the model implements, neither of
+them rejected.
+
+*** WHY IT IS ITS OWN ROW AND NOT PART OF [[lcabadval]]. ***  Every kill `lcabadval` covers is a
+guard REFUSING a value it does not recognise.  **This one fires on a value the guard ACCEPTS**, in a
+different function, on a later access.  The acceptance and the kill are separated in both code and
+time, which is why a per-arm audit of `lca_ioc` walks straight past it -- as mine did, twice.
+
+*** AND THE SEAT'S FRAMING NEEDED CORRECTING, WHICH IS THE PART WORTH RECORDING. ***  grok wrote
+that this exit becomes *"newly reachable from a CONF extra-bit write that also sets bit 0; today
+that write dies in the CONF guard first."*  That is true of an EXTRA-BIT write (e.g. `0x3`), and it
+made the kill sound like a CONSEQUENCE of adopting option A.  **It is not: `0x1` alone reaches it
+today, with no fix applied.**  A widens which CONF values arrive here; it does not open the door.
+The door is open now.  *Checked by reading both arms rather than by accepting the seat's sentence --
+which is this project's own rule, and the seat was right about the site while being wrong about the
+timing.*
+
+**THE IRONY, and it is a design signal rather than a joke:** the `bus == 0` branch is the file's own
+graceful-degradation PRECEDENT -- a commented-out `fatal()`/`exit(1)` with `dev = 0;` substituted --
+and [[lcabadval]] cites that very loop as a transferable in-tree warrant.  **The `else` five lines
+below it is a bare kill.**  Same function, opposite dispositions, no comment explaining why.
+
+**REACHABILITY, stated honestly rather than assumed.**  Bit 0 is a bus SELECTOR, so a guest reaches
+this by selecting a bus the model does not implement and then doing config access -- plausible for
+firmware or an OS that probes beyond bus 0, and trivially reachable by a probe.  **Whether any
+shipped guest on `alphabook1` actually does it is NOT established here**, and the row does not claim
+it.  What is established is that no guard stands between an accepted write and the kill.
+
+**WITNESS: a rung-3 probe is available and most of it already exists.**  `device_add(machine, "lca")`
+is `ST_ALPHABOOK1` ONLY (`machine_alpha.c`), and `regress/lca_confwidth_probe.py` ALREADY drives a
+guest `stq`/`ldq` at `LCA_IOC_CONF` (`0xfffffc0180000020`, K0SEG | physical) on unmodified
+`alphabook1`.  This row needs one more session: `stq 0x1` to CONF, then a PCI config-space access.
+**Three traps that probe already paid for:** debugger `dump` skips `DM_DEFAULT` handlers; a debugger
+`put d` of a killing value IS a host kill but is NOT a guest instruction, so it does not witness; and
+HAE at window offset 0 silently succeeds, so a miss control must not use `LCA_IOC_BASE+0`.
+
+**DISPOSITION, not yet adjudicated:** it is the same de-fatalisation family, but the option set
+differs because the kill is not a value refusal -- the honest members here are DECLINE THE CONFIG
+ACCESS (return without dispatching, with a latched announce) or IMPLEMENT bus != 0.  **Note the
+architecturally correct error path is blocked for the same reason grok gave on the sibling row:
+`LCA_IOC_STAT0`/`STAT1` have no case at all and hit the `default:` arm's `exit(1)`, so LCA cannot
+report a device error through the register the header designates for it.**
+
+sev HIGH: a guest-drivable host kill, reached by two ordinary accesses with no rejected value
+anywhere on the path.

@@ -1,0 +1,165 @@
+I'll review the repair diff against the probe and ARM bitfield handlers rather than ratify the packet. First I'll read the live source, the 14-row probe, and the surrounding comments.The probe and commit messages are in. Next I’ll read the two handlers, the 14-row witness log, and the CHANGELOG block so the channel and floor questions can be checked against the code.The CHANGELOG still describes an `&&` reorder that the source comment now retracts. I’ll pull the pre-fix `sbfx` body and measure the clause-(d) mutants rather than argue from the packet.**VERDICT: RATIFY THE TWO ROWS. DO NOT RATIFY THE COMMENT HALF. CLOSE THE CHAIN ON THE FLOOR QUESTION** — no in-rule clause-(d) mutant of `width == 32` or `width < 32` sweeps the 14-row detector except the two definedness escapes already disclosed. `s w32 pc` is a control, not a kill. `s w31` is load-bearing for a SBFX-only `>= 31` bound-relax and is **not** a duplicate of `w31`. The comment-only claim holds against the inlined diff; the comments themselves are not finished.
+
+I did not run the probe or any mutant (panel rule: no harness; shell was not available for a scratch build). Predictions below are derived from the handlers and the probe, not scored.
+
+---
+
+## Comment-only claim — checked against the inlined diff
+
+All four `cpu_arm_instr.c` hunks sit inside existing `/* */` blocks. The two `uint32_t mask = (width == 32) ? 0xffffffffU : ((1U << width) - 1);` lines appear only as context. No hunk retouches `if (width < 32 && …)`, `x >>= lsb`, or `x &= mask`. I did not re-run the strip-comments proof; the inlined diff is enough to say **no code token moved**.
+
+That is not the same as “the comments are true.” See Q4.
+
+---
+
+## Q1 — CHANNEL
+
+### `s w32 pc`
+
+**Control, not a kill.** It reuses `pc` from the same `run_word(sbfx(0, 32))` as `s w32` and asserts `pc == CODE+4`.
+
+Under the original defect the SBFX width-32 **success** value is `0x89abcdef` and the **failure** value is `0`. A word that never ran leaves `r0 = 0` (the probe zeroes it). That **reds `s w32`**, it does not green it. So this row does not stop a false pass of the value oracle.
+
+What it does is **attribute** a red `s w32`: executed-and-wrong (`pc` advanced) versus never-ran (`pc` stuck or vectored). `w32 pc` already does that for UBFX. This is sibling parity, and it is correctly labelled `CONTROL` in the row note.
+
+The settled-premise wording that “the SBFX rows” (plural) have expected failure value zero is too wide. Only `s w32` has that shape for the original mask-zeroing. `s clear` fails to `0xfffffff7`, `s mid` to a non-extended `0xde`, `s w31` to `0x89abcdef` under mask-widening. A pc control on those rows is not doing the zero-vs-zero job.
+
+**No edit named here reds `s w32 pc` while leaving `s w32` and `w32 pc` green.** If SBFX #0,#32 fails to decode, `r0` stays `0` and `s w32` already fails.
+
+### `s w31`
+
+Drives `SBFX #0,#31` of `0x89abcdef`. Arithmetic, from `X(sbfx)`:
+
+- `x >>= 0` → `0x89abcdef`
+- `mask = (1U << 31) - 1` → `0x7fffffff`
+- `x &= mask` → `0x09abcdef`
+- bit 30 of that field is clear (`0x09abcdef & 0x40000000 == 0`) → no sign-extend
+- printed with `%x` as `0x9abcdef`, which matches the want and the 14/14 log
+
+**Mutant it kills that `w31` cannot see:** SBFX-only bound-relax of the ternary,
+
+```c
+(width >= 31) ? 0xffffffffU : ((1U << width) - 1)
+```
+
+leaving UBFX alone. Then `s w31` gets the whole register `0x89abcdef` against want `0x9abcdef`. `w31` stays green (different function). `s w32` stays green (width 32 still takes the full mask, which is correct). `s mid` / `s clear` never hit 31.
+
+That is the `#509` shape (`== K` → `>=` next legal value) applied to one of two sites. Observable: `r0`. Predicted score **13/14**, killed by this row alone.
+
+It also reds always-extend (`if (width < 32)` with no bit test): `0x09abcdef | 0x80000000` → `0x89abcdef`. **`s clear` already kills that** (`0x7` vs `0xfffffff7`). So always-extend is not this row’s unique work.
+
+**Channel hole on the row as written:** bit 30 is clear, so `s w31` **cannot** see `width < 32` → `width < 31` (sign-extend skipped at 31). Correct and mutant both leave the field unextended. See Q2.
+
+---
+
+## Q2 — FLOOR, asked of the 14-row composite
+
+Predicates in scope: `width == 32` in the ternary (both handlers) and `width < 32` in the sign-extend guard.
+
+| (d) form | What it does | 14-row result (derived, not measured) |
+|---|---|---|
+| `width == 32` → `width >= 31` at **both** sites | full mask at 31 | **12/14** — `w31` and `s w31` both red |
+| same, **SBFX only** | full mask at SBFX 31 | **13/14** — `s w31` alone |
+| same, **UBFX only** | full mask at UBFX 31 | **13/14** — `w31` alone |
+| `width == 32` → `width >= 32` / `> 31` | domain max is 32 | equivalent, no guest delta |
+| `width < 32` → `width <= 32` / `< 33` | bit-test also runs at 32 | `1U << 31` is defined; `x \|= ~0xffffffffU` is `x \|= 0`. **14/14**. This is the disclosed hoist / `topBitMask` restore |
+| `width < 32` → `width < 31` | no sign-extend at 31 | **14/14 on this row set** — `s w31` has bit 30 clear; `s mid`/`s clear` are width 8 and 4 |
+| `1U` → `1` | re-opens 6.5.7p4 at 31 | **14/14** on this host: `(1 << 31) - 1` wraps to the same mask. Disclosed |
+| restore `topBitMask = 1 << (width-1)` above the `if` | second UB at 32 | **14/14**. Disclosed |
+
+**No in-rule clean sweep that is new.** The two definedness mutants still sweep; that claim holds for a **guest-value** row on a non-trapping host. I am not re-reporting them. A UBSAN stderr differential is a different oracle, which is why `ubsanshiftlane` is the right filing.
+
+Why `width < 31` is not L2 under the body-tested-partition reading (going past the packet, into `X(sbfx)`): the guarded body tests `width < 32` and `x & (1U << (width-1))`, not `width == 31` as a case. Floor cells are `{<32, ==32} × {top clear, top set}`. `s mid` holds `<32` + top set; `s clear` holds `<32` + top clear; both width-32 cells are no-ops with a correct mask. Width 31 is a sub-sample of `<32`, not a distinguished cell. That is clause (e) if you want a width-31 top-bit-**set** SBFX row, not a floor breach.
+
+`width == 32 && lsb == 0` would also sweep (every current width-32 row uses `lsb = 0`). The body does `x >>= lsb` and never tests `lsb`. Same (e) bucket. The new ubfx comment already names that legal fields need `lsb = 0` and that the decoder does not enforce it.
+
+**Named measurements, if anyone builds them** (scratch clone, not `build/`):
+
+1. SBFX-only `width >= 31` — predict `s w31` red, 13/14. This is the warrant for the row existing.
+2. `width < 31` on the sign-extend `if` — predict 14/14. Settles (e) vs L2 if that reading is disputed.
+3. 14-row probe on the pre-fix binary — predict `w32`/`s w32` red, `s w31` and `s w32 pc` **green**, 12/14. Proves `s w31` does not witness the original UB.
+
+---
+
+## Q3 — is `s w31` load-bearing, or does `w31` already cover it?
+
+**The “untested” half is right. The “therefore the headline might have been wrong about SBFX” half is not.**
+
+`w31` is UBFX. `s w31` is SBFX. They do not cover each other’s site:
+
+- UBFX-only `>= 31`: `w31` red, `s w31` green
+- SBFX-only `>= 31`: `s w31` red, `w31` green
+
+Generalising `w31` to SBFX was unwarranted as a **measurement**. Adding the row is the right repair for that.
+
+It was **not** unwarranted as a **prediction about the original defect**. Both handlers used `(1 << width) - 1`. At width 31 that wraps to the correct mask on this host for UBFX **and** SBFX. `s w31` would have been green on the committed pre-fix build. It does not make the width-31 UB observable, and it does not support a claim that “only width 32 is observable” was false of SBFX. It was unmeasured, not untrue, for that specific claim.
+
+`s w31` is still load-bearing: it is the only row on the SBFX ternary’s width-31 cell. That is coverage, not a second witness of `#510`’s red.
+
+---
+
+## Q4 — did the correction go far enough?
+
+No. The fourth false statement is in this diff. Several more sit next to it.
+
+**Introduced by this diff**
+
+1. **Broken sentence, both handlers** (ubfx ~1342, sbfx ~1402):
+
+   > `No row can kill a UBSAN or a source pin can.`
+
+   The old line was ``No row can kill a `1U' -> `1' regression; UBSAN or a source pin can.`` Deleting the regression clause left a fragment. Comment-only, so not a behaviour change; it is a new wrong record in the file the round just “corrected.”
+
+2. **`enc ok` still does not check every planted word.** The row note and CHANGELOG say it does. The list is `ubfx(0,32/31/4,8/0,1)` and `sbfx(0,32)` / `sbfx(4,8)`. This commit plants `sbfx(0, 31)` and does not add it. `sbfx(1, 4)` (`s clear`) was already missing. The encoder is one function and both encodings will match the mask; the **claim** is still false, and this diff made it false about one more word.
+
+3. **Header vs row note on `pc adv`, in the same file this diff edited.** The hunk rewrites the header to retract “always reaches `bad` / `running = 0`” (`#312` und route, `cpu_arm_instr.c` around the `else` after the sbfx decode). The `row("pc adv", …)` note still says *“A bad encoding sets running=0 and pc does NOT move.”* They were looking at this control and did not walk 170 lines to the call.
+
+**Left live in the same commit’s CHANGELOG (going past the inlined pair of files)**
+
+4. CHANGELOG still says *“Reordering the `&&` is semantically identical for every width in {1..32}.”* The source comment in **this same commit** says that is false: `topBitMask` was a **prior statement**, and a later guard does not rescue it. One copy corrected, the sibling left — the defect this round already named for the sbfx block copying ubfx.
+
+5. Line citations this commit’s own comment insertion invalidated, still in CHANGELOG / probe header:
+
+   | cite | opens today at |
+   |---|---|
+   | decoder `:4486`, `:4493` | `X(to_be_translated)` ubfx/sbfx at **4572 / 4579** |
+   | defect mask `:1316` / `:1340` / `:1344` | middle of the new comment; live mask is **1351 / 1411** |
+   | `bfi` `:1409` | `X(bfi)` at **1450**, mask at **1460** |
+   | `is_userpage` `:2685` / `:2823` | **2775 / 2913** |
+
+   The previous pass already told them comment growth moves these. They grew the comments again and kept the numbers.
+
+**Pre-existing, not this hunk, but still false next to the new rows**
+
+6. Probe header: *“CODE is planted low, at 0x10000.”* `CODE = 0x8000`. The 14/14 log prints `0x8004`. The header and the constant disagree.
+7. `w32 pc` note still says *“it EXECUTED and returned a wrong value”* in the present tense on a post-fix green row.
+
+The pattern did not stop. The pc-on-every-row correction is real; it was not applied to siblings of the same claims.
+
+---
+
+## Q5 — is CHANGELOG + probe comment enough for `c0c7f55`’s false commit message?
+
+**Yes, for this project. Do not add a third copy.**
+
+A commit message cannot be amended. The durable round record is the CHANGELOG block, and it now quotes the false sentence and names the three rows that actually asserted `pc`. `01a0339`’s own message does the same, so `git log` on the probe / CHANGELOG points at the correction without rewriting `c0c7f55`.
+
+A reader who only runs `git show c0c7f55` will still be misled. That is the cost of immutability, not a missing file. Another paragraph in OUTSTANDING_BUGS or a git-note would drift independently; this round has already shown that two copies of one claim do not stay in sync.
+
+---
+
+## Premises that did not survive contact
+
+- **“SBFX rows’ expected failure value is exactly zero, and that is why they needed a pc control to avoid a false pass.”** Failure-is-zero is true of `s w32` for the original defect. A never-executed word cannot **green** `s w32` because the want is `0x89abcdef`. The pc row is attribution of a red, sibling to `w32 pc`.
+- **“`s w31` closes the observability claim for SBFX at 31.”** It closes the *measurement gap*. The original UB at 31 is still unobservable there. See Q3.
+- **Definedness escapes unkillable by a row.** Holds for this probe’s value oracle on a non-trapping host. Does not hold for a UBSAN differential; they already filed that. I am not asking for a value row against `1U`→`1`.
+
+m88k analogy correction is true (opened `cpu_m88k_instr.c` `X(clr)`/`X(set)`): `w = (reg >> 5) & 0x1f` is `{0..31}`, and `w == 0` **encodes** full width. The encoded count never reaches 32. Same shape, different reason. Flagged as past the packet.
+
+---
+
+## What else
+
+Nothing in this diff re-measures behaviour, and it does not need to if comment-only holds. The 14/14 log matches the 14 `row()` calls and ends `ARMBFX_DONE`.
+
+I would not hold the chain open for L4. I **would** fix the broken `"No row can kill a UBSAN"` sentence before treating the comment half as the correction it claims to be — this project has already shipped a records correction that was itself wrong, in this round, twice.

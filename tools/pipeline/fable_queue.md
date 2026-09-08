@@ -41,7 +41,7 @@ those panels produced had six or seven seats behind it.
 <!-- BEGIN GENERATED: codex-wall -- edit gen_codex_wall.py, not this block -->
 ### HELD STAGES -- every row awaiting a seat, derived from the ledger
 
-`armbfxwidth32` (assess:fable5,opus5; review:fable5,opus5) · `carrier` (regress:fable5) · `es438` (regress:fable5) · `gdromcondlies` (regress:fable5) · `holdmarkermulti` (regress:fable5) · `lcabadval` (assess:codex,fable5,grok,kimi,opus5; research:fable5) · `ns16550` (regress:fable5) · `pcc2widthkills` (assess:fable5,opus5) · `proberowsubset` (assess:codex) · `sgideprimop` (regress:fable5) · `sgidewidth` (regress:fable5) · `sgimtedepth4dead` (assess:fable5,opus5; review:fable5,opus5) · `sgirekills` (assess:codex,grok,kimi,opus5) · `sgireunmapped` (regress:fable5) · `sgitexindex` (assess:codex,fable5,grok,kimi,opus5) · `sh4sci` (regress:fable5) · `wdccdbmidxfer` (regress:fable5; research:opus5) · `wdcdataoutdrain` (regress:fable5)
+`armbfxwidth32` (assess:fable5,opus5; review:fable5,opus5) · `carrier` (regress:fable5) · `es438` (regress:fable5) · `gdromcondlies` (regress:fable5) · `holdmarkermulti` (regress:fable5) · `lcabadval` (assess:codex,fable5,grok,kimi,opus5; design:fable5; research:fable5) · `ns16550` (regress:fable5) · `pcc2widthkills` (assess:fable5,opus5) · `proberowsubset` (assess:codex) · `sgideprimop` (regress:fable5) · `sgidewidth` (regress:fable5) · `sgimtedepth4dead` (assess:fable5,opus5; review:fable5,opus5) · `sgirekills` (assess:codex,grok,kimi,opus5) · `sgireunmapped` (regress:fable5) · `sgitexindex` (assess:codex,fable5,grok,kimi,opus5) · `sh4sci` (regress:fable5) · `wdccdbmidxfer` (regress:fable5; research:opus5) · `wdcdataoutdrain` (regress:fable5)
 
 *** TWO DIFFERENT KINDS OF HOLD APPEAR BELOW AND THEY MUST NOT BE READ ALIKE. ***
 
@@ -2028,3 +2028,78 @@ UNPREDICTABLE halfword load, and **`#312`'s own comment argues AGAINST halting**
 *** AND THE OBVIOUS ROUTE IS WRONG AS WRITTEN: `X(und)` expects `arg[0]` to hold a PC OFFSET, and
 `bfi`'s `arg[0]` is a REGISTER POINTER. *** Routing bfi's unchanged call record there would hand a
 pointer to code that reads an offset.
+
+
+---
+
+## 7i. `lcabadval` — THE ROUND REVERSED THREE TIMES AND ITS CENTRAL PREMISE DIED TO ONE GREP
+
+*Design stage: `regress/artifacts/lcabadval/panel_p1_20260907/` — six seats (codex, grok, glm,
+deepseek, minimax, the kimi-k3:cloud substitute). The kimi CLI walled on a 403 weekly limit, so that
+seat is covered. agy deliberately not fired (measurement reserve). **No flagship seat, by the
+standing directive reserving opus5 and fable5 for this adjudication.** No product code is committed.*
+
+**THE FORK AS PUT TO THE PANEL:**
+
+    A  delete fatal()+exit(1) from all six arms, KEEP the store that already ran
+    B  DECLINE — move the store BELOW the guard, as #447 did for SH4's RCR1
+
+**WHAT THE PANEL DID TO IT.** Four of five landed seats said the fork was **mis-posed**: one
+disposition for six arms is the wrong question, because `LCA_IOC_CONF` is the only field with a
+consumer (`bus = d->ioc_conf & 1`) and the other five are pure storage. The kimi substitute named
+the self-inflicted part — the brief **quoted `#447`'s own "check it per site" as a settled premise
+and then asked for one answer across six arms.**
+
+*** THEN codex LANDED LAST AND KILLED THE PREMISE UNDER BOTH SIDES. ***
+
+My premise 6 was that LCA differs from RCR1 because RCR1's stored value "has a meaning the model
+honours". **Verified in one grep:** `rtc_rcr1` has four occurrences — declaration, readback, store,
+and one *inside the comment*. **Zero functional consumers.** `ioc_conf` also has four, but its
+fourth is a real consumer. **So RCR1 is consumed LESS than LCA's CONF, not more.**
+
+That also falsifies grok's formulation, which I had recorded as the keeper: *"B copies RCR1's edit
+without RCR1's reason"* — the reason it names (consumed feature bits) does not exist.
+
+### 7i-1. (HIGH) DOES `#447`'s PRECEDENT NOW SUPPORT **B**?  *(the row's `hold_question`)*
+
+`#447` faced a store-before-guard field with **no functional consumer** and chose to move the store
+below the guard. That is the LCA shape, arm for arm. codex, deepseek and glm all reached B; grok and
+minimax reached A, **and both A positions rest on the consumed/unconsumed distinction that is now
+measured false.**
+
+*Count the arguments, not the seats: the load-bearing premise under A has been refuted by a grep.*
+
+### 7i-2. (HIGH) IS **B** EVEN WELL-DEFINED AT RESET?
+
+codex: `W_MASK0`, `W_BASE1` and `W_MASK1` **reset to zero**, which is **not in their accepted sets**
+(they accept `0x700000`, `0x240000000`, `0x3ff00000`). So B's "retain the last accepted value" has no
+defined meaning before the first accepted write. Retain the zero? Force the reset value? Decline only
+the guarded bits? **B cannot ship without an answer**, and no seat supplied one.
+
+And minimax's measurable objection to B stands unanswered: under B a rejected CONF write retains the
+previous value, so **if it differs in bit 0 the PCI bus selection silently changes**, where A leaves
+the consumer correct.
+
+### 7i-3. (MED) DOES THE READBACK ARGUMENT SETTLE IT INDEPENDENTLY?
+
+deepseek raised it and codex sharpened it: *"Previously, a rejected write ended execution before
+subsequent guest code could observe that value. A creates that observation and allows the guest to
+make further decisions from it."* **This does not depend on a model consumer at all** — and it is
+exactly what `#447`'s comment means by *"the guest writes CIE|AIE, reads CIE|AIE back, and believes
+the RTC will interrupt it."* If it is sound, it decides the round without needing 7i-1 at all.
+
+### 7i-4. (MED) A BRIEF-CONSTRUCTION RULE, MINTED FROM THIS ROUND'S OWN FAILURE
+
+The brief inlined `#447`'s comment **verbatim**, and that comment argues purely from readback — it
+never claims a model consumer. The consumed/unconsumed gloss was mine, and **grok adopted my gloss
+over the quotation sitting directly above it.**
+
+> **Proposed rule: a premise that RESTATES an inlined quotation is the most dangerous kind, because
+> it looks already verified.** Inlining the primary source does not protect against a wrong summary
+> beside it — a seat reads the summary as the question and the quote as supporting material.
+
+Is that a real rule worth carrying, or is the existing premise-audit instruction enough?
+
+*Related and already filed: `refilingclass` (six findings re-derived this session that were already
+recorded), and `lcaconfbus1kill` (a HIGH row split out of this one's own eleven-kill census, with a
+witness design reviewed SOUND by grok).*

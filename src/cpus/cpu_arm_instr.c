@@ -1340,7 +1340,7 @@ X(ubfx)
 	    a wrong value on this host.  `1U' defends 31 and the guard defends 32 --
 	    but a guest-VALUE probe cannot establish that, because `1 << 31' and
 	    `1U << 31' yield the SAME mask after the `- 1'.  No row can kill a
-	    UBSAN or a source pin can.
+	    `1U' -> `1' regression; UBSAN or a source pin can.
 
 	    The SHAPE comes from `cpu_m88k_instr.c's X(clr)/X(set), but the analogy
 	    needs care and an earlier draft ran the two together: there `w == 0'
@@ -1400,7 +1400,7 @@ X(sbfx)
 	    a wrong value on this host.  `1U' defends 31 and the guard defends 32 --
 	    but a guest-VALUE probe cannot establish that, because `1 << 31' and
 	    `1U << 31' yield the SAME mask after the `- 1'.  No row can kill a
-	    UBSAN or a source pin can.
+	    `1U' -> `1' regression; UBSAN or a source pin can.
 
 	    The SHAPE comes from `cpu_m88k_instr.c's X(clr)/X(set), but the analogy
 	    needs care and an earlier draft ran the two together: there `w == 0'

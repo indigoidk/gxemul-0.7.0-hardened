@@ -1,0 +1,3165 @@
+Reading additional input from stdin...
+OpenAI Codex v0.153.4
+--------
+workdir: C:\DocumentNoSnc\CC\GXEMUL
+model: gpt-6-astra
+provider: openai
+approval: never
+sandbox: read-only
+reasoning effort: max
+reasoning summaries: none
+session id: 01a07e9c-0d7d-7480-868d-fd048f7a170e
+--------
+user
+# DESIGN BRIEF -- `lcabadval` pass 1: six value guards in `dev_lca.c` that end the host process
+
+**VERDICT LINE FIRST**, then the body.
+
+## PLEASE DO NOT SIMPLY RATIFY
+
+A recent panel here had seven of nine seats confirm a premise the brief stated wrongly -- the true
+number was four times larger. **Check the premises, not just the derivations.** Several premises
+below are stated as questions on purpose. If you cannot settle one from this packet, say so plainly
+and name it; an honest "not checkable from here" is worth more than a guess.
+
+**This brief carries a FORK, not a proposal. I have an argument for one side and I want it
+attacked.** A clean "your argument for A is wrong because X" is the most useful answer you can give.
+
+## The tree
+
+The tree under review is **`GXEMUL-SEC/src/`**. Ignore any other `src/` you can reach -- there are
+three pristine 2021 upstream copies under the project root, and reading one gives line numbers off
+by hundreds and a different set of arms.
+
+---
+
+# SETTLED PREMISES -- verified this session, inlined so you need not read files
+
+Established by a codex fix-check with a full denominator (all 10 cases plus `default:`, all six
+guarded arms, both translated siblings, all nine field-read sites) and, where noted, re-verified
+independently by me. **Premise 6 is the one I most want challenged.**
+
+**1. All six arms share one shape, and THE STORE RUNS BEFORE THE GUARD.** Verbatim, using
+`LCA_IOC_W_MASK0`:
+
+```c
+	case LCA_IOC_W_MASK0:
+		if (writeflag == MEM_READ) {
+			odata = d->window_mask_0;
+		} else {
+			d->window_mask_0 = idata;
+
+			if (idata != 0x700000ULL) {
+				fatal("TODO: LCA_IOC_W_MASK0 value differs ...");
+				exit(1);
+			}
+		}
+		break;
+```
+
+The six, with the value each accepts:
+
+    LCA_IOC_CONF     idata & ~1                 accepts 0 and 1
+    LCA_IOC_TB_ENA   idata & ~IOC_TB_ENA_TEN    accepts 0 and the TEN bit
+    LCA_IOC_W_BASE0  idata != 0 && != 0x300800000
+    LCA_IOC_W_MASK0  idata != 0x700000
+    LCA_IOC_W_BASE1  idata != 0x240000000
+    LCA_IOC_W_MASK1  idata != 0x3ff00000
+
+Codex confirmed store-before-guard in **all six**, with a per-arm table of readback/store/guard
+lines. This is not a generalisation from one arm.
+
+**2. Five of the six fields are PURE STORAGE; `ioc_conf` has exactly ONE functional consumer.**
+I re-verified this over the whole tree and the counts are decisive -- each field occurs exactly
+three times (declaration, readback, store):
+
+    window_base_0  3    window_mask_0  3    tlb_enable  3
+    window_base_1  3    window_mask_1  3    ioc_conf    4
+
+`ioc_conf`'s fourth occurrence is `bus = d->ioc_conf & 1;` in `DEVICE_ACCESS(lca_pci_conf)`.
+**There is NO DMA-translation consumer anywhere in the tree** -- nothing reads a window base or
+mask to translate an address. The window registers are write-to-nowhere plus a readback.
+
+**3. Codex's sharpening of my own wording, which I had blurred.** Extra CONF bits are discarded
+*for bus selection*, but **the IOC readback returns the STORED value**. So masking the store would
+not merely be an unlicensed addition -- it would change READBACK POLICY, which is guest-visible.
+
+**4. `fatal()` does NOT terminate.** It calls the returning printer `va_debug()`; the explicit
+`exit(1)` ends the process. `debug()` additionally applies verbosity filtering and can be silenced
+by `-q`; `fatal()` cannot.
+
+**5. THIS PROJECT ALREADY REFUSED PROPOSAL A, TWICE, IN WRITING.** Round `#447` fixed four value
+guards in `dev_sh4.c` and left this census in the tree, verbatim:
+
+```
+ *  #447: four value guards in the switch below ended the host process with exit(1) on
+ *  ONE ordinary guest store -- TCR, DMATCR, ICR and RCR1.  ...
+ *    RCR1    the store was UPSTREAM of the guard.  Dropping exit(1) alone would have
+ *            turned a host kill into SILENT STATE CORRUPTION.  Moved below the guard.
+ *    TCR     `timer_hz` was set from `idata & 3` BEFORE the guard and the debug() line
+ *            had already announced it, so the naive fix installs a timer frequency the
+ *            guest never asked for.  The guard moved ABOVE the prescaler switch.
+ *    DMATCR  the store is already downstream; nothing to move.
+ *    ICR     nothing is stored on any path, so there is no state to corrupt.
+ *
+ *  Saying "the store is upstream" once for the file would have been wrong three times
+ *  out of four.  Check it per site.
+```
+
+And the RCR1 arm's own comment:
+
+```
+ *  #447: *** THE STORE WAS UPSTREAM OF THE GUARD. ***  It ran first and the guard second,
+ *  so a rejected value had ALREADY landed in rtc_rcr1 and exit(1) was the only thing
+ *  stopping the guest reading it back.  Dropping the exit and nothing else turns a host
+ *  kill into SILENT STATE CORRUPTION -- the guest writes CIE|AIE, reads CIE|AIE back, and
+ *  believes the RTC will interrupt it.  It never will.  Same shape as #443 found in
+ *  dev_sh4_pcic_access(), and the ONLY one of #447's four sites that has it.  The store
+ *  therefore moved below.
+```
+
+A third site says it from the other direction -- DMATCR's comment notes its store is downstream
+*"unlike RCR1 and unlike every arm of `dev_sh4_pcic_access()`, where the store runs first and a
+restore is needed."*
+
+**So the tree holds two precedents where store-runs-first means the fix is NOT "just drop the
+exit": RCR1 MOVED THE STORE BELOW THE GUARD, and `#443` ADDED A RESTORE.**
+
+**6. MY ARGUMENT THAT LCA IS NEVERTHELESS DIFFERENT -- ATTACK THIS.**
+
+RCR1's stored value has a meaning the model otherwise honours: for accepted values the model acts
+on `rtc_rcr1`, so reading back `CIE|AIE` tells the guest something specific and false.
+
+I claim LCA is not like that, because **the model implements window translation for NO value at
+all**. If that is right then:
+
+* the guest ALREADY writes `0x700000`, reads `0x700000` back, and believes the window is
+  programmed -- and it is not, because nothing consumes it;
+* so the silent state corruption `#447` warns about is **PRE-EXISTING and VALUE-INDEPENDENT**;
+* removing `exit(1)` therefore does not CREATE a false belief. It stops killing the host over one
+  wrong value while continuing to tell the same lie about the accepted one.
+
+**Is that sound, or am I excusing a new instance of a defect because an old instance already
+exists?** I can see the shape of the counter-argument and cannot tell how strong it is.
+
+---
+
+# THE FORK
+
+    A  DELETE fatal()+exit(1) from all six arms, KEEP the store that already ran.
+       (What premise 6 argues for.  Nothing else changes -- no mask, no default, no new state.)
+
+    B  DECLINE the write: move the store BELOW the guard, exactly as #447 did for RCR1, so a
+       rejected value never lands and the readback returns the last accepted value.
+
+The sibling registers `LCA_IOC_W_T_BASE0` and `LCA_IOC_W_T_BASE1` -- the TRANSLATED-window
+registers -- have the identical read/store shape and **no value guard at all**. Codex's caution,
+which I accept: that may be evidence that accepting is correct, **or** merely that nobody wrote a
+guard. It does not settle the fork by itself.
+
+**A cost of B I want weighed:** real hardware reads back what was written. B makes the readback lie
+in a DIFFERENT way -- write `X`, read back the old value -- which no hardware does. A keeps the
+readback truthful about the register file and false about the window being active.
+
+---
+
+# THE FULL ENCLOSING FUNCTION
+
+Four readers here once independently proposed `if (r == 3) return;` for a function whose last three
+lines were the common tail that services the read; an early return would have handed the guest an
+untouched buffer. **So: the whole function, every exit path and the tail, verbatim.**
+
+```c
+DEVICE_ACCESS(lca_ioc)
+{
+	uint64_t idata = 0, odata = 0;
+	struct lca_data *d = (struct lca_data *) extra;
+
+	if (writeflag == MEM_WRITE)
+		idata = memory_readmax64(cpu, data, len);
+
+	switch (relative_addr + LCA_IOC_BASE) {
+
+	case LCA_IOC_BASE:
+		/*  Ignore? Linux reads from the base at startup.  */
+		break;
+
+	case LCA_IOC_CONF:
+		if (writeflag == MEM_READ) {
+			odata = d->ioc_conf;
+		} else {
+			d->ioc_conf = idata;
+			/*  Only bit 0 is implemented so far, the PCI bus 0 vs
+			    bus non-0 selection bit.  */
+			if (idata & ~1) {
+				/*  #506: was `0x%x', (int)idata -- a 64-bit guarded value
+				    narrowed to 32 in the KILL diagnostic, so a write of
+				    0x100000000 trips `idata & ~1' and then reports "0x0",
+				    which is a value this same guard ACCEPTS.  The five
+				    sibling arms below already print the full width this
+				    way; this arm was the outlier among the VALUE-guard
+				    diagnostics.  (Not the file's only narrowing site --
+				    the default arm below has the same cast, and this
+				    round fixes it too.)  */
+				fatal("TODO: Write to unimplemented bit of"
+				    " IOC_CONF: 0x%" PRIx64 "\n", (uint64_t)idata);
+				exit(1);
+			}
+		}
+		break;
+
+	case LCA_IOC_TBIA:
+		/*  TLB Invalidate All.  */
+		/*  TODO: For now, let's just ignore it.  */
+		break;
+
+	case LCA_IOC_TB_ENA:
+		if (writeflag == MEM_READ) {
+			odata = d->tlb_enable;
+		} else {
+			d->tlb_enable = idata;
+			/*  TODO: Actually implement this.  */
+			if (idata & ~IOC_TB_ENA_TEN) {
+				fatal("TODO: LCA_IOC_TB_ENA value "
+				    " (0x%" PRIx64") has unimplemented "
+				    "bits.\n", (uint64_t)idata);
+				exit(1);
+			}
+		}
+		break;
+
+	case LCA_IOC_W_BASE0:
+		if (writeflag == MEM_READ) {
+			odata = d->window_base_0;
+		} else {
+			d->window_base_0 = idata;
+			/*  TODO: Actually implement this.  */
+			if (idata != 0ULL && idata != 0x300800000ULL) {
+				fatal("TODO: LCA_IOC_W_BASE0 value differs"
+				    " (0x%" PRIx64") from the only implemented"
+				    " values\n", (uint64_t)idata);
+				exit(1);
+			}
+		}
+		break;
+
+	case LCA_IOC_W_MASK0:
+		if (writeflag == MEM_READ) {
+			odata = d->window_mask_0;
+		} else {
+			d->window_mask_0 = idata;
+			/*  TODO: Actually implement this.  */
+			if (idata != 0x700000ULL) {
+				fatal("TODO: LCA_IOC_W_MASK0 value differs"
+				    " (0x%" PRIx64") from the only implemented"
+				    " value\n", (uint64_t)idata);
+				exit(1);
+			}
+		}
+		break;
+
+	case LCA_IOC_W_T_BASE0:
+		if (writeflag == MEM_READ) {
+			odata = d->window_t_base_0;
+		} else {
+			d->window_t_base_0 = idata;
+			/*  TODO: Actually implement this.  */
+		}
+		break;
+
+	case LCA_IOC_W_BASE1:
+		if (writeflag == MEM_READ) {
+			odata = d->window_base_1;
+		} else {
+			d->window_base_1 = idata;
+			/*  TODO: Actually implement this.  */
+			if (idata != 0x240000000ULL) {
+				fatal("TODO: LCA_IOC_W_BASE1 value differs"
+				    " (0x%" PRIx64") from the only implemented"
+				    " value\n", (uint64_t)idata);
+				exit(1);
+			}
+		}
+		break;
+
+	case LCA_IOC_W_MASK1:
+		if (writeflag == MEM_READ) {
+			odata = d->window_mask_1;
+		} else {
+			d->window_mask_1 = idata;
+			/*  TODO: Actually implement this.  */
+			if (idata != 0x3ff00000ULL) {
+				fatal("TODO: LCA_IOC_W_MASK1 value differs"
+				    " (0x%" PRIx64") from the only implemented"
+				    " value\n", (uint64_t)idata);
+				exit(1);
+			}
+		}
+		break;
+
+	case LCA_IOC_W_T_BASE1:
+		if (writeflag == MEM_READ) {
+			odata = d->window_t_base_1;
+		} else {
+			d->window_t_base_1 = idata;
+			/*  TODO: Actually implement this.  */
+		}
+		break;
+
+	default:fatal("[ lca_ioc: unimplemented %s to offset 0x%x",
+		    writeflag == MEM_WRITE? "write" : "read", (int)
+		    relative_addr);
+		if (writeflag == MEM_WRITE)
+			fatal(": 0x%" PRIx64, (uint64_t)idata);	/*  #506  */
+		fatal(" ]\n");
+		exit(1);
+	}
+
+	if (writeflag == MEM_READ)
+		memory_writemax64(cpu, data, len, odata);
+
+	return 1;
+}
+```
+
+---
+
+# QUESTIONS
+
+1. **Is premise 6 sound?** Does "the model consumes these fields for nothing, so the readback is
+   already a lie for the accepted value" genuinely distinguish LCA from RCR1 -- or is it the
+   reasoning that would let every store-before-guard site keep its store? **Give the strongest
+   version of the counter-argument even if you end up agreeing with me.**
+
+2. **A or B?** Answer with the disposition and the ONE fact that decides it. If the honest answer is
+   "this packet cannot settle it, and here is the single thing to look at", say that instead.
+
+3. **Is the option set complete?** What I can see, drawn from this tree's own idioms: delete the
+   exit and keep the store (A); decline silently by moving the store (B); decline with a once-only
+   LATCHED announce; ACCEPT and announce once; MASK the stored value and announce the excluded bits
+   (`dev_pcc2.c` VECBASE does this); complete with a **guest-visible device error** (`dev_wdc.c`
+   sets `WDCE_ABRT` and requests an interrupt for every unsupported command); FAULT by modelling the
+   space unmapped (`dev_unreadable.c`); or IMPLEMENT the windows. **Which have I missed, and is any
+   obviously right here?** Note FAULT may not transfer: `memory_rw.c` dispatches an exception on a
+   failed device access for MIPS and M88K, and there is no Alpha equivalent.
+
+4. **What does this NOT close?** My understanding: the `default:` arm still diagnoses and exits **for
+   both reads and writes**; neither `LCA_IOC_STAT0` nor `LCA_IOC_STAT1` has a case at all; and
+   explicit exits remain in `DEVICE_ACCESS(lca_pci_conf)`, `DEVICE_ACCESS(lca_isa)` and
+   `lca_interrupt_assert()`/`lca_interrupt_deassert()`. **So firmware can still terminate the
+   emulator after this lands.** Is that right, and is there anything else?
+
+5. **A witness.** This is Alpha and there is no Alpha rig here. Can any of the six be reached by a
+   rung-3 cold-debugger probe -- a real guest store through real address decode on an unmodified
+   in-tree machine -- or is this documented-only? **If you think a probe is possible, name the
+   machine and the address; do NOT write one.**
+
+## Rules
+
+* Answer from the packet. Where you assert tree behaviour beyond it, name the file and function and
+  flag that you are going past what was inlined.
+* Disagreements here are settled by measurement, never by vote -- prefer "measure X" to "I think X".
+* If, while checking this, you found something ELSE -- say so.
+
+
+## OPERATIONAL RULE FOR EVERY SEAT (appended by panel.sh, not by the author)
+
+**Do not run `run.sh`, any `gate_*.sh`, or the battery.** Every measurement you need is
+inlined above. A gate takes minutes -- longer than your response budget -- and a second
+concurrent invocation corrupts the operator run in progress, because the gates share one
+log directory. A seat that runs a gate produces no review AND may invalidate someone
+else s. Building and running a single detector or mutant in your own temp directory is
+fine and encouraged; driving the harness is not.
+
+If you want a measurement that is not inlined, NAME IT and say why. Naming it is worth
+far more to this panel than a timeout.
+codex
+Verdict: premise 6 identifies a real difference from RCR1, but it does not establish A. I’ll check what the packet proves and name the missing measurement; I won’t run a probe or harness.
+
+codex
+The missing check is whether a fixed DMA mapping already matches the accepted register values. No reads of the window fields would rule out programmable translation, but could still leave those settings working implicitly. I’ll check that distinction in `GXEMUL-SEC/src/`.
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg --files GXEMUL-SEC -g AGENTS.md -g dev_lca.c -g '*alpha*' -g '*pci*' -g '*lca*' -g '*dma*'" in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$reviewPaths = @('"'C:\\AGENTS.md','C:\\DocumentNoSnc\\AGENTS.md','C:\\DocumentNoSnc\\CC\\AGENTS.md','C:\\DocumentNoSnc\\CC\\GXEMUL\\AGENTS.md'); foreach ("'$reviewPath in $reviewPaths) { if (Test-Path -LiteralPath $reviewPath) { Write-Output $reviewPath; Get-Content -LiteralPath $reviewPath } }' in C:\DocumentNoSnc\CC\GXEMUL
+ succeeded in 69ms:
+GXEMUL-SEC\src\machines\machine_alpha.o
+GXEMUL-SEC\src\machines\machine_alpha.c
+GXEMUL-SEC\regress\alpha_harness_probe.py
+GXEMUL-SEC\regress\alpha_dummy.bin
+GXEMUL-SEC\regress\alpha_pfnoffset_probe.py
+GXEMUL-SEC\src\include\cpu_alpha.h
+GXEMUL-SEC\src\include\bus_pci.h
+GXEMUL-SEC\src\include\sh4_dmacreg.h
+GXEMUL-SEC\src\cpus\cpu_alpha_instr_alu.c
+GXEMUL-SEC\src\cpus\cpu_alpha_instr.c
+GXEMUL-SEC\src\cpus\cpu_alpha.o
+GXEMUL-SEC\src\cpus\cpu_alpha.c
+GXEMUL-SEC\src\cpus\cpu_alpha_palcode.c
+GXEMUL-SEC\src\cpus\cpu_alpha_instr_loadstore.c
+GXEMUL-SEC\src\cpus\cpu_alpha_palcode.o
+GXEMUL-SEC\regress\lca_confwidth_probe.py
+GXEMUL-SEC\src\devices\bus_pci.c
+GXEMUL-SEC\src\devices\bus_pci.o
+GXEMUL-SEC\regress\sh4_pcic_probe.py
+GXEMUL-SEC\regress\sh4pcic_witness.py
+GXEMUL-SEC\regress\artifacts\ctorabortclass\alpha_census_20260907.txt
+GXEMUL-SEC\src\cpus\tmp_alpha_tail.c
+GXEMUL-SEC\src\cpus\tmp_alpha_misc.c
+GXEMUL-SEC\src\cpus\tmp_alpha_head.c
+GXEMUL-SEC\src\cpus\memory_alpha.o
+GXEMUL-SEC\src\cpus\memory_alpha.c
+GXEMUL-SEC\src\cpus\generate_alpha_misc.c
+GXEMUL-SEC\src\cpus\generate_alpha_misc
+GXEMUL-SEC\src\include\thirdparty\sh4_pcicreg.h
+GXEMUL-SEC\src\include\thirdparty\ps2_dmacreg.h
+GXEMUL-SEC\src\include\thirdparty\pcireg.h
+GXEMUL-SEC\src\include\thirdparty\jazz_r4030_dma.h
+GXEMUL-SEC\src\include\thirdparty\alpha_rpb.h
+GXEMUL-SEC\src\include\thirdparty\alpha_prom.h
+GXEMUL-SEC\src\include\thirdparty\alpha_lcareg.h
+GXEMUL-SEC\src\include\thirdparty\alpha_cpu.h
+GXEMUL-SEC\src\include\thirdparty\alpha_autoconf.h
+GXEMUL-SEC\src\devices\dev_lca.o
+GXEMUL-SEC\src\devices\dev_lca.c
+GXEMUL-SEC\src\devices\dev_pcic.c
+GXEMUL-SEC\src\devices\dev_pcic.o
+GXEMUL-SEC\regress\artifacts\fbclearread\killtable2_20260827\Mf3_foldmask.txt
+
+ succeeded in 102ms:
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -LiteralPath GXEMUL-SEC/src/devices/dev_lca.c' in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg --files --hidden GXEMUL-SEC -g AGENTS.md; rg -n 'pci_d[a-z_]*offset|pci_[a-z_]*offset|dma|DMA|40000000|300800000|240000000|3ff00000|700000' GXEMUL-SEC/src/devices/bus_pci.c GXEMUL-SEC/src/include/bus_pci.h GXEMUL-SEC/src/machines/machine_alpha.c GXEMUL-SEC/src/memory.c GXEMUL-SEC/src/memory_rw.c" in C:\DocumentNoSnc\CC\GXEMUL
+ exited 1 in 80ms:
+rg: GXEMUL-SEC/src/memory.c: The system cannot find the file specified. (os error 2)
+rg: GXEMUL-SEC/src/memory_rw.c: The system cannot find the file specified. (os error 2)
+GXEMUL-SEC/src/devices/bus_pci.c:313:	*portp = port + pd->pcibus->pci_actual_io_offset;
+GXEMUL-SEC/src/devices/bus_pci.c:314:	*memp  = mem  + pd->pcibus->pci_actual_mem_offset;
+GXEMUL-SEC/src/devices/bus_pci.c:345: *  pci_actual_io_offset and pci_actual_mem_offset are the offset from
+GXEMUL-SEC/src/devices/bus_pci.c:352:	uint64_t pci_actual_io_offset, uint64_t pci_actual_mem_offset,
+GXEMUL-SEC/src/devices/bus_pci.c:365:	d->pci_actual_io_offset  = pci_actual_io_offset;
+GXEMUL-SEC/src/devices/bus_pci.c:366:	d->pci_actual_mem_offset = pci_actual_mem_offset;
+GXEMUL-SEC/src/devices/bus_pci.c:451: *  Acer Labs M5229 PCI-IDE (UDMA) controller.
+GXEMUL-SEC/src/devices/bus_pci.c:650:	 *  a wrapper for dev_le + all the DMA magic and whatever is required.
+GXEMUL-SEC/src/devices/bus_pci.c:705:		    (long long)(pd->pcibus->pci_actual_io_offset + 0),
+GXEMUL-SEC/src/include/bus_pci.h:70:	uint64_t	pci_actual_io_offset;
+GXEMUL-SEC/src/include/bus_pci.h:71:	uint64_t	pci_actual_mem_offset;
+GXEMUL-SEC/src/include/bus_pci.h:155:	uint64_t pci_actual_io_offset, uint64_t pci_actual_mem_offset,
+
+ succeeded in 117ms:
+/*
+ *  Copyright (C) 2006-2011  Anders Gavare.  All rights reserved.
+ *
+ *  Redistribution and use in source and binary forms, with or without
+ *  modification, are permitted provided that the following conditions are met:
+ *
+ *  1. Redistributions of source code must retain the above copyright
+ *     notice, this list of conditions and the following disclaimer.
+ *  2. Redistributions in binary form must reproduce the above copyright  
+ *     notice, this list of conditions and the following disclaimer in the 
+ *     documentation and/or other materials provided with the distribution.
+ *  3. The name of the author may not be used to endorse or promote products
+ *     derived from this software without specific prior written permission.
+ *
+ *  THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+ *  ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ *  IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ *  ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE   
+ *  FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ *  DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+ *  OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+ *  HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+ *  LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+ *  OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+ *  SUCH DAMAGE.
+ *
+ *
+ *  COMMENT: LCA PCI bus, for Alpha machines
+ */
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "bus_isa.h"
+#include "bus_pci.h"
+#include "cpu.h"
+#include "device.h"
+#include "emul.h"
+#include "interrupt.h"
+#include "machine.h"
+#include "memory.h"
+#include "misc.h"
+
+#include "thirdparty/alpha_lcareg.h"
+
+#define	LCA_ISA_BASE	(LCA_PCI_SIO + 0x10000000)
+#define	LCA_ISA_MEMBASE	(LCA_PCI_SIO + 0x18000000)
+
+
+struct lca_data {
+	struct pci_data		*pci_data;
+
+	uint64_t		ioc_conf;
+	uint64_t		tlb_enable;
+	uint64_t		window_base_0;
+	uint64_t		window_mask_0;
+	uint64_t		window_t_base_0;
+	uint64_t		window_base_1;
+	uint64_t		window_mask_1;
+	uint64_t		window_t_base_1;
+};
+
+
+/*
+ *  lca_interrupt_assert():
+ *
+ *  Line 0 = ISA interrupt.
+ */
+void lca_interrupt_assert(struct interrupt *interrupt)
+{
+	fatal("lca_interrupt_assert: TODO\n");
+	exit(1);
+}
+
+
+/*
+ *  lca_interrupt_deassert():
+ *
+ *  Line 0 = ISA interrupt.
+ */
+void lca_interrupt_deassert(struct interrupt *interrupt)
+{
+	fatal("lca_interrupt_deassert: TODO\n");
+	exit(1);
+}
+
+
+DEVICE_ACCESS(lca_pci_conf)
+{
+	uint64_t idata = 0, odata = 0;
+	int tag, bus, dev, func, reg;
+	struct lca_data *d = (struct lca_data *) extra;
+
+	if (writeflag == MEM_WRITE)
+		idata = memory_readmax64(cpu, data, len);
+
+	/*
+	 *  1. Decompose the address into a tag.
+	 *
+	 *  According to NetBSD's lca_pci.c, the address is composed like this:
+	 *
+	 *	addr = tag << 5 | (regoffset & ~0x03) << 5 | 0x3 << 3
+	 */
+	reg = (relative_addr >> 5) & 0xfc;
+	tag = (relative_addr >> 5) & ~0xff;
+
+	/*
+	 *  2. Decompose the tag into bus, dev, and func.
+	 *
+	 *  The tag can be constructed in one of two ways. On the primary
+	 *  bus (nr 0):
+	 *
+	 *	tag = (1 << (device + 11)) | (function << 8);
+	 *
+	 *  and on other busses, the tag is a normal:
+	 *
+	 *	tag = (bus << 16) | (device << 11) | (function << 8)
+	 */
+	/*  printf("tag = 0x%x\n", (int)tag);  */
+	bus = d->ioc_conf & 1;
+
+	if (bus == 0) {
+		for (dev=0; dev<21; dev++)
+			if (tag & (0x800 << dev))
+				break;
+		if (dev >= 21) {
+			/*  fatal("[ LCA: No bus 0 device? TODO ]\n");
+			exit(1);  */
+			dev = 0;
+		}
+	} else {
+		fatal("TODO. Non-zero bus.\n");
+		exit(1);
+	}
+
+	func = (tag >> 8) & 7;
+	/*  printf("bus=%i dev=%i func=%i reg=%i\n", bus,dev,func,reg);  */
+
+	/*  Pass PCI accesses onto bus_pci:  */
+	bus_pci_setaddr(cpu, d->pci_data, bus, dev, func, reg);
+	bus_pci_data_access(cpu, d->pci_data, writeflag == MEM_READ?
+	    &odata : &idata, len, writeflag);
+
+	if (writeflag == MEM_READ)
+		memory_writemax64(cpu, data, len, odata);
+
+	return 1;
+}
+
+
+DEVICE_ACCESS(lca_isa)
+{
+	unsigned int ofs, i;
+	uint8_t byte;
+
+	relative_addr >>= 5;
+
+	ofs = relative_addr & 3;
+	if (ofs > len) {
+		fatal("[ ofs=%i len=%i in lca_isa access function. "
+		    "aborting ]\n", ofs, len);
+		exit(1);
+	}
+
+	if (writeflag == MEM_WRITE) {
+		byte = data[ofs % len];
+		return cpu->memory_rw(cpu, cpu->mem, LCA_ISA_BASE +
+		    relative_addr, &byte, 1, writeflag, CACHE_NONE);
+	}
+
+	cpu->memory_rw(cpu, cpu->mem, LCA_ISA_BASE + relative_addr,
+	    &byte, 1, MEM_READ, CACHE_NONE);
+
+	for (i=0; i<len; i++)
+		data[i] = i == ofs? byte : 0x00;
+
+	return 1;
+}
+
+
+DEVICE_ACCESS(lca_ioc)
+{
+	uint64_t idata = 0, odata = 0;
+	struct lca_data *d = (struct lca_data *) extra;
+
+	if (writeflag == MEM_WRITE)
+		idata = memory_readmax64(cpu, data, len);
+
+	switch (relative_addr + LCA_IOC_BASE) {
+
+	case LCA_IOC_BASE:
+		/*  Ignore? Linux reads from the base at startup.  */
+		break;
+
+	case LCA_IOC_CONF:
+		if (writeflag == MEM_READ) {
+			odata = d->ioc_conf;
+		} else {
+			d->ioc_conf = idata;
+			/*  Only bit 0 is implemented so far, the PCI bus 0 vs
+			    bus non-0 selection bit.  */
+			if (idata & ~1) {
+				/*  #506: was `0x%x', (int)idata -- a 64-bit guarded value
+				    narrowed to 32 in the KILL diagnostic, so a write of
+				    0x100000000 trips `idata & ~1' and then reports "0x0",
+				    which is a value this same guard ACCEPTS.  The five
+				    sibling arms below already print the full width this
+				    way; this arm was the outlier among the VALUE-guard
+				    diagnostics.  (Not the file's only narrowing site --
+				    the default arm below has the same cast, and this
+				    round fixes it too.)  */
+				fatal("TODO: Write to unimplemented bit of"
+				    " IOC_CONF: 0x%" PRIx64 "\n", (uint64_t)idata);
+				exit(1);
+			}
+		}
+		break;
+
+	case LCA_IOC_TBIA:
+		/*  TLB Invalidate All.  */
+		/*  TODO: For now, let's just ignore it.  */
+		break;
+
+	case LCA_IOC_TB_ENA:
+		if (writeflag == MEM_READ) {
+			odata = d->tlb_enable;
+		} else {
+			d->tlb_enable = idata;
+			/*  TODO: Actually implement this.  */
+			if (idata & ~IOC_TB_ENA_TEN) {
+				fatal("TODO: LCA_IOC_TB_ENA value "
+				    " (0x%" PRIx64") has unimplemented "
+				    "bits.\n", (uint64_t)idata);
+				exit(1);
+			}
+		}
+		break;
+
+	case LCA_IOC_W_BASE0:
+		if (writeflag == MEM_READ) {
+			odata = d->window_base_0;
+		} else {
+			d->window_base_0 = idata;
+			/*  TODO: Actually implement this.  */
+			if (idata != 0ULL && idata != 0x300800000ULL) {
+				fatal("TODO: LCA_IOC_W_BASE0 value differs"
+				    " (0x%" PRIx64") from the only implemented"
+				    " values\n", (uint64_t)idata);
+				exit(1);
+			}
+		}
+		break;
+
+	case LCA_IOC_W_MASK0:
+		if (writeflag == MEM_READ) {
+			odata = d->window_mask_0;
+		} else {
+			d->window_mask_0 = idata;
+			/*  TODO: Actually implement this.  */
+			if (idata != 0x700000ULL) {
+				fatal("TODO: LCA_IOC_W_MASK0 value differs"
+				    " (0x%" PRIx64") from the only implemented"
+				    " value\n", (uint64_t)idata);
+				exit(1);
+			}
+		}
+		break;
+
+	case LCA_IOC_W_T_BASE0:
+		if (writeflag == MEM_READ) {
+			odata = d->window_t_base_0;
+		} else {
+			d->window_t_base_0 = idata;
+			/*  TODO: Actually implement this.  */
+		}
+		break;
+
+	case LCA_IOC_W_BASE1:
+		if (writeflag == MEM_READ) {
+			odata = d->window_base_1;
+		} else {
+			d->window_base_1 = idata;
+			/*  TODO: Actually implement this.  */
+			if (idata != 0x240000000ULL) {
+				fatal("TODO: LCA_IOC_W_BASE1 value differs"
+				    " (0x%" PRIx64") from the only implemented"
+				    " value\n", (uint64_t)idata);
+				exit(1);
+			}
+		}
+		break;
+
+	case LCA_IOC_W_MASK1:
+		if (writeflag == MEM_READ) {
+			odata = d->window_mask_1;
+		} else {
+			d->window_mask_1 = idata;
+			/*  TODO: Actually implement this.  */
+			if (idata != 0x3ff00000ULL) {
+				fatal("TODO: LCA_IOC_W_MASK1 value differs"
+				    " (0x%" PRIx64") from the only implemented"
+				    " value\n", (uint64_t)idata);
+				exit(1);
+			}
+		}
+		break;
+
+	case LCA_IOC_W_T_BASE1:
+		if (writeflag == MEM_READ) {
+			odata = d->window_t_base_1;
+		} else {
+			d->window_t_base_1 = idata;
+			/*  TODO: Actually implement this.  */
+		}
+		break;
+
+	default:fatal("[ lca_ioc: unimplemented %s to offset 0x%x",
+		    writeflag == MEM_WRITE? "write" : "read", (int)
+		    relative_addr);
+		if (writeflag == MEM_WRITE)
+			fatal(": 0x%" PRIx64, (uint64_t)idata);	/*  #506  */
+		fatal(" ]\n");
+		exit(1);
+	}
+
+	if (writeflag == MEM_READ)
+		memory_writemax64(cpu, data, len, odata);
+
+	return 1;
+}
+
+
+DEVINIT(lca)
+{
+	char *interrupt_path;
+	struct interrupt interrupt_template;
+	struct lca_data *d;
+
+	CHECK_ALLOCATION(d = (struct lca_data *) malloc(sizeof(struct lca_data)));
+	memset(d, 0, sizeof(struct lca_data));
+
+	/*  Register a PCI bus:  */
+	d->pci_data = bus_pci_init(
+	    devinit->machine,
+	    "TODO: irq"		/*  pciirq: TODO  */,
+	    LCA_PCI_SIO,	/*  pci device io offset  */
+	    0x00000000,		/*  pci device mem offset: TODO  */
+	    0x00000000,		/*  PCI portbase: TODO  */
+	    0x00000000,		/*  PCI membase: TODO  */
+	    "TODO: pci irq base",	/*  PCI irqbase: TODO  */
+	    LCA_ISA_BASE,	/*  ISA portbase  */
+	    LCA_ISA_MEMBASE,	/*  ISA membase  */
+	    "TODO: irqbase isa");                /*  ISA irqbase: TODO  */
+
+	/*  Add the "sio0" controller (as seen by NetBSD):  */
+	bus_pci_add(devinit->machine, d->pci_data, devinit->machine->memory,
+	    0, 7, 0, "i82378zb");
+
+	memory_device_register(devinit->machine->memory, "lca_pci_conf",
+	    LCA_PCI_CONF, 0x20000000, dev_lca_pci_conf_access, (void *)d,
+	    DM_DEFAULT, NULL);
+
+	memory_device_register(devinit->machine->memory, "lca_isa",
+	    LCA_PCI_SIO, 0x10000 << 5, dev_lca_isa_access, (void *)d,
+	    DM_DEFAULT, NULL);
+
+	memory_device_register(devinit->machine->memory, "lca_ioc",
+	    LCA_IOC_BASE, 0x20000000, dev_lca_ioc_access, (void *)d,
+	    DM_DEFAULT, NULL);
+
+	CHECK_ALLOCATION(interrupt_path = (char *)
+	    malloc(strlen(devinit->machine->path) + 10));
+	snprintf(interrupt_path, strlen(devinit->machine->path) + 10,
+	    "%s.lca", devinit->machine->path);
+
+	memset(&interrupt_template, 0, sizeof(interrupt_template));
+	interrupt_template.line = 0;
+	interrupt_template.name = interrupt_path;
+	interrupt_template.extra = d;
+	interrupt_template.interrupt_assert = lca_interrupt_assert;
+	interrupt_template.interrupt_deassert = lca_interrupt_deassert;
+	interrupt_handler_register(&interrupt_template);
+
+	bus_isa_init(devinit->machine, interrupt_path,
+	    BUS_ISA_IDE0 | BUS_ISA_IDE1, LCA_ISA_BASE, LCA_ISA_MEMBASE);
+
+	return 1;
+}
+
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n 'window_base_0|window_mask_0|window_base_1|window_mask_1|tlb_enable|ioc_conf|0x300800000|0x240000000|0x3ff00000|0x700000|alpha.*dma|dma.*alpha|DMA.*Alpha|Alpha.*DMA' GXEMUL-SEC/src -g '*.c' -g '*.h'" in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -LiteralPath GXEMUL-SEC/src/machines/machine_alpha.c' in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg --files GXEMUL-SEC/src -g 'memory*.c' -g bus_isa.c -g interrupt.c -g '*8237*' -g dev_wdc.c -g debugger.c" in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -LiteralPath GXEMUL-SEC/src/include/thirdparty/alpha_lcareg.h' in C:\DocumentNoSnc\CC\GXEMUL
+ succeeded in 156ms:
+GXEMUL-SEC/src\machines\machine_androidarm.c:74:		dev_ram_init(machine, 0x90000000, 0x70000000, DEV_RAM_RAM, 0x0, NULL);
+GXEMUL-SEC/src\devices\dev_lca.c:54:	uint64_t		ioc_conf;
+GXEMUL-SEC/src\devices\dev_lca.c:55:	uint64_t		tlb_enable;
+GXEMUL-SEC/src\devices\dev_lca.c:56:	uint64_t		window_base_0;
+GXEMUL-SEC/src\devices\dev_lca.c:57:	uint64_t		window_mask_0;
+GXEMUL-SEC/src\devices\dev_lca.c:59:	uint64_t		window_base_1;
+GXEMUL-SEC/src\devices\dev_lca.c:60:	uint64_t		window_mask_1;
+GXEMUL-SEC/src\devices\dev_lca.c:121:	bus = d->ioc_conf & 1;
+GXEMUL-SEC/src\devices\dev_lca.c:198:			odata = d->ioc_conf;
+GXEMUL-SEC/src\devices\dev_lca.c:200:			d->ioc_conf = idata;
+GXEMUL-SEC/src\devices\dev_lca.c:227:			odata = d->tlb_enable;
+GXEMUL-SEC/src\devices\dev_lca.c:229:			d->tlb_enable = idata;
+GXEMUL-SEC/src\devices\dev_lca.c:242:			odata = d->window_base_0;
+GXEMUL-SEC/src\devices\dev_lca.c:244:			d->window_base_0 = idata;
+GXEMUL-SEC/src\devices\dev_lca.c:246:			if (idata != 0ULL && idata != 0x300800000ULL) {
+GXEMUL-SEC/src\devices\dev_lca.c:257:			odata = d->window_mask_0;
+GXEMUL-SEC/src\devices\dev_lca.c:259:			d->window_mask_0 = idata;
+GXEMUL-SEC/src\devices\dev_lca.c:261:			if (idata != 0x700000ULL) {
+GXEMUL-SEC/src\devices\dev_lca.c:281:			odata = d->window_base_1;
+GXEMUL-SEC/src\devices\dev_lca.c:283:			d->window_base_1 = idata;
+GXEMUL-SEC/src\devices\dev_lca.c:285:			if (idata != 0x240000000ULL) {
+GXEMUL-SEC/src\devices\dev_lca.c:296:			odata = d->window_mask_1;
+GXEMUL-SEC/src\devices\dev_lca.c:298:			d->window_mask_1 = idata;
+GXEMUL-SEC/src\devices\dev_lca.c:300:			if (idata != 0x3ff00000ULL) {
+GXEMUL-SEC/src\include\thirdparty\exec_elf.h:353:#define	PT_LOPROC	0x70000000	/* Processor-specific range */
+GXEMUL-SEC/src\include\thirdparty\exec_elf.h:356:#define	PT_MIPS_REGINFO	0x70000000
+GXEMUL-SEC/src\include\thirdparty\exec_elf.h:404:#define	SHT_LOPROC	0x70000000	/* Processor-specific range */
+GXEMUL-SEC/src\include\thirdparty\exec_elf.h:582:#define	DT_LOPROC	0x70000000	/* Processor-specific range */
+GXEMUL-SEC/src\include\thirdparty\mips_cpuregs.h:357:#define	MIPS3_CONFIG_EC_MASK	0x70000000
+GXEMUL-SEC/src\include\thirdparty\pmppc.h:47:#define PMPPC_FLASH_BASE	0x70000000
+GXEMUL-SEC/src\include\thirdparty\rtl81x9reg.h:165:#define RL_HWREV_8139A		0x70000000
+
+ succeeded in 141ms:
+GXEMUL-SEC/src\core\memory.c
+GXEMUL-SEC/src\core\interrupt.c
+GXEMUL-SEC/src\devices\bus_isa.c
+GXEMUL-SEC/src\debugger\debugger.c
+GXEMUL-SEC/src\devices\dev_wdc.c
+GXEMUL-SEC/src\cpus\memory_mips.c
+GXEMUL-SEC/src\cpus\memory_m88k.c
+GXEMUL-SEC/src\cpus\memory_arm.c
+GXEMUL-SEC/src\cpus\memory_alpha.c
+GXEMUL-SEC/src\cpus\memory_ppc.c
+GXEMUL-SEC/src\cpus\memory_mips_v2p.c
+GXEMUL-SEC/src\cpus\memory_rw.c
+GXEMUL-SEC/src\cpus\memory_sh.c
+
+ succeeded in 177ms:
+/* GXemul: $Id: alpha_lcareg.h,v 1.2 2006-06-16 18:31:26 debug Exp $ */
+/* $NetBSD: lcareg.h,v 1.8 1997/09/05 02:14:31 thorpej Exp $ */
+
+#ifndef ALPHA_LCAREG_H
+#define	ALPHA_LCAREG_H
+
+/*
+ * Copyright (c) 1995 Carnegie-Mellon University.
+ * All rights reserved.
+ *
+ * Authors: Jeffrey Hsu, Jason R. Thorpe
+ * 
+ * Permission to use, copy, modify and distribute this software and
+ * its documentation is hereby granted, provided that both the copyright
+ * notice and this permission notice appear in all copies of the
+ * software, derivative works or modified versions, and any portions
+ * thereof, and that both notices appear in supporting documentation.
+ * 
+ * CARNEGIE MELLON ALLOWS FREE USE OF THIS SOFTWARE IN ITS "AS IS" 
+ * CONDITION.  CARNEGIE MELLON DISCLAIMS ANY LIABILITY OF ANY KIND 
+ * FOR ANY DAMAGES WHATSOEVER RESULTING FROM THE USE OF THIS SOFTWARE.
+ * 
+ * Carnegie Mellon requests users of this software to return to
+ *
+ *  Software Distribution Coordinator  or  Software.Distribution@CS.CMU.EDU
+ *  School of Computer Science
+ *  Carnegie Mellon University
+ *  Pittsburgh PA 15213-3890
+ *
+ * any improvements or extensions that they make and grant Carnegie the
+ * rights to redistribute these changes.
+ */
+
+/*
+ * 21066 chip registers
+ */
+
+#define REGVAL(r)	(*(volatile int32_t *)ALPHA_PHYS_TO_K0SEG(r))
+#define REGVAL64(r)	(*(volatile int64_t *)ALPHA_PHYS_TO_K0SEG(r))
+
+/*
+ * Base addresses
+ */
+#define LCA_IOC_BASE	0x180000000ULL		/* LCA IOC Regs */
+#define LCA_PCI_SIO	0x1c0000000ULL		/* PCI Sp. I/O Space */
+#define LCA_PCI_CONF	0x1e0000000ULL		/* PCI Conf. Space */
+#define LCA_PCI_SPARSE	0x200000000ULL		/* PCI Sparse Space */
+#define LCA_PCI_DENSE	0x300000000ULL		/* PCI Dense Space */
+
+#define LCA_IOC_HAE	LCA_IOC_BASE		/* Host Address Ext. (64) */
+#define	IOC_HAE_ADDREXT	0x00000000f8000000ULL
+#define	IOC_HAE_RSVSD	0xffffffff07ffffffULL
+
+#define LCA_IOC_CONF	(LCA_IOC_BASE + 0x020)	/* Configuration Cycle Type */
+
+#define LCA_IOC_STAT0	(LCA_IOC_BASE + 0x040)	/* Status 0 */
+#define	IOC_STAT0_CMD	0x000000000000000fULL	/* PCI command mask */
+#define	IOC_STAT0_ERR	0x0000000000000010ULL	/* IOC error indicator R/W1C */
+#define	IOC_STAT0_LOST	0x0000000000000020ULL	/* IOC lose error info R/W1C */
+#define	IOC_STAT0_THIT	0x0000000000000040ULL	/* test hit */
+#define	IOC_STAT0_TREF	0x0000000000000080ULL	/* test reference */
+#define	IOC_STAT0_CODE	0x0000000000000700ULL	/* code mask */
+#define	IOC_STAT0_CODESHIFT 8
+#define	IOC_STAT0_P_NBR	0x00000000ffffe000ULL	/* page number mask */
+
+#define LCA_IOC_STAT1	(LCA_IOC_BASE + 0x060)	/* Status 1 */
+#define	IOC_STAT1_ADDR	0x00000000ffffffffULL	/* PCI address mask */
+
+#define	LCA_IOC_TBIA	(LCA_IOC_BASE + 0x080)	/* TLB Invalidate All */
+#define	LCA_IOC_TB_ENA	(LCA_IOC_BASE + 0x0a0)	/* TLB Enable */
+#define	IOC_TB_ENA_TEN	0x0000000000000080ULL
+
+#define LCA_IOC_W_BASE0	(LCA_IOC_BASE + 0x100)	/* Window Base */
+#define LCA_IOC_W_MASK0	(LCA_IOC_BASE + 0x140)	/* Window Mask */
+#define LCA_IOC_W_T_BASE0 (LCA_IOC_BASE + 0x180) /* Translated Base */
+
+#define LCA_IOC_W_BASE1	(LCA_IOC_BASE + 0x120)	/* Window Base */
+#define LCA_IOC_W_MASK1	(LCA_IOC_BASE + 0x160)	/* Window Mask */
+#define LCA_IOC_W_T_BASE1 (LCA_IOC_BASE + 0x1a0) /* Translated Base */
+
+#define	IOC_W_BASE_W_BASE 0x00000000fff00000ULL	/* Window base value */
+#define	IOC_W_BASE_SG	  0x0000000100000000ULL	/* Window uses SGMAPs */
+#define	IOC_W_BASE_WEN	  0x0000000200000000ULL	/* Window enable */
+
+#define	IOC_W_MASK_1M	0x0000000000000000ULL	/* 1MB window */
+#define	IOC_W_MASK_2M	0x0000000000100000ULL	/* 2MB window */
+#define	IOC_W_MASK_4M	0x0000000000300000ULL	/* 4MB window */
+#define	IOC_W_MASK_8M	0x0000000000700000ULL	/* 8MB window */
+#define	IOC_W_MASK_16M	0x0000000000f00000ULL	/* 16MB window */
+#define	IOC_W_MASK_32M	0x0000000001f00000ULL	/* 32MB window */
+#define	IOC_W_MASK_64M	0x0000000003f00000ULL	/* 64MB window */
+#define	IOC_W_MASK_128M	0x0000000007f00000ULL	/* 128M window */
+#define	IOC_W_MASK_256M	0x000000000ff00000ULL	/* 256M window */
+#define	IOC_W_MASK_512M	0x000000001ff00000ULL	/* 512M window */
+#define	IOC_W_MASK_1G	0x000000003ff00000ULL	/* 1GB window */
+#define	IOC_W_MASK_2G	0x000000007ff00000ULL	/* 2GB window */
+#define	IOC_W_MASK_4G	0x00000000fff00000ULL	/* 4GB window */
+
+#define	IOC_W_T_BASE	0x00000000fffffc00ULL	/* page table base */
+
+#endif	/*  ALPHA_LCAREG_H  */
+
+ succeeded in 202ms:
+/*
+ *  Copyright (C) 2005-2021  Anders Gavare.  All rights reserved.
+ *
+ *  Redistribution and use in source and binary forms, with or without
+ *  modification, are permitted provided that the following conditions are met:
+ *
+ *  1. Redistributions of source code must retain the above copyright
+ *     notice, this list of conditions and the following disclaimer.
+ *  2. Redistributions in binary form must reproduce the above copyright  
+ *     notice, this list of conditions and the following disclaimer in the 
+ *     documentation and/or other materials provided with the distribution.
+ *  3. The name of the author may not be used to endorse or promote products
+ *     derived from this software without specific prior written permission.
+ *
+ *  THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+ *  ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ *  IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ *  ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE   
+ *  FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ *  DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+ *  OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+ *  HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+ *  LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+ *  OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+ *  SUCH DAMAGE.
+ *   
+ *
+ *  COMMENT: DEC Alpha machines
+ */
+
+#include <stdio.h>
+#include <string.h>
+#include <stdlib.h>
+
+#include "cpu.h"
+#include "device.h"
+#include "devices.h"
+#include "machine.h"
+#include "memory.h"
+#include "misc.h"
+
+#include "thirdparty/alpha_autoconf.h"
+#include "thirdparty/alpha_rpb.h"
+
+
+MACHINE_SETUP(alpha)
+{
+	struct rpb rpb;
+	struct crb crb;
+	struct ctb ctb;
+	struct mddt mddt;
+	struct pcs *pcs = (struct pcs *) malloc(sizeof(struct pcs) * machine->ncpus);
+	int i;
+
+	switch (machine->machine_subtype) {
+
+	case ST_ALPHABOOK1:
+		machine->machine_name = strdup("AlphaBook 1");
+		if (machine->emulated_hz == 0)
+			machine->emulated_hz = 233000000;
+		device_add(machine, "lca");
+		break;
+
+	case ST_DEC_4100:
+		machine->machine_name = strdup("AlphaServer 4100");
+		break;
+
+	case ST_DEC_3000_300:
+		machine->machine_name = strdup("DEC 3000/300");
+		machine->main_console_handle = (size_t)device_add(machine,
+		    "z8530 addr=0x1b0200000 irq=0 addr_mult=4");
+		break;
+
+	case ST_EB164:
+		machine->machine_name = strdup("EB164");
+		break;
+
+	default:fatal("Unimplemented Alpha machine type %i\n",
+		    machine->machine_subtype);
+		exit(1);
+	}
+
+	if (!machine->prom_emulation)
+		return;
+
+	/*  These are used by NetBSD/alpha:  */
+	/*  a0 = First free Page Frame Number  */
+	/*  a1 = PFN of current Level 1 page table  */
+	/*  a2 = Bootinfo magic  */
+	/*  a3 = Bootinfo pointer  */
+	/*  a4 = Bootinfo version  */
+	cpu->cd.alpha.r[ALPHA_A0] = 16*1024*1024 / 8192;
+	cpu->cd.alpha.r[ALPHA_A1] = 0;	/*  TODO  */
+	cpu->cd.alpha.r[ALPHA_A2] = 0;	/*  Note: NOT ALPHA_BOOTINFO_MAGIC  */
+	cpu->cd.alpha.r[ALPHA_A3] = 0;	/*  TODO  */
+	cpu->cd.alpha.r[ALPHA_A4] = 1;
+
+	/*
+	 *  HWRPB: Hardware Restart Parameter Block
+	 *
+	 *  TODO: Almost everything.
+	 */
+	memset(&rpb, 0, sizeof(struct rpb));
+	store_64bit_word_in_host(cpu, (unsigned char *)
+	    &(rpb.rpb_phys), 0x14000);
+	strlcpy((char *)&(rpb.rpb_magic), "HWRPB", 8);
+	store_64bit_word_in_host(cpu, (unsigned char *)
+	    &(rpb.rpb_version), HWRPB_DSRDB_MINVERS);
+	store_64bit_word_in_host(cpu, (unsigned char *)
+	    &(rpb.rpb_size), sizeof(struct rpb));
+	store_64bit_word_in_host(cpu, (unsigned char *)
+	    &(rpb.rpb_page_size), 8192);
+	strlcpy((char *)&(rpb.rpb_ssn), "123456789", 10);
+	store_64bit_word_in_host(cpu, (unsigned char *)
+	    &(rpb.rpb_type), machine->machine_subtype);
+	store_64bit_word_in_host(cpu, (unsigned char *)
+	    &(rpb.rpb_cc_freq), machine->emulated_hz);
+	store_64bit_word_in_host(cpu, (unsigned char *)
+	    &(rpb.rpb_intr_freq), 1024 << 12);
+	store_64bit_word_in_host(cpu, (unsigned char *)
+	    &(rpb.rpb_pcs_cnt), machine->ncpus);
+	store_64bit_word_in_host(cpu, (unsigned char *)
+	    &(rpb.rpb_pcs_size), sizeof(struct pcs));
+	store_64bit_word_in_host(cpu, (unsigned char *)
+	    &(rpb.rpb_pcs_off), PCS_ADDR - HWRPB_ADDR);
+	store_64bit_word_in_host(cpu, (unsigned char *)
+	    &(rpb.rpb_ctb_off), CTB_ADDR - HWRPB_ADDR);
+	store_64bit_word_in_host(cpu, (unsigned char *)
+	    &(rpb.rpb_crb_off), CRB_ADDR - HWRPB_ADDR);
+	store_64bit_word_in_host(cpu, (unsigned char *)
+	    &(rpb.rpb_memdat_off), MEMDAT_ADDR - HWRPB_ADDR);
+
+	/*  CTB: Console Terminal Block  */
+	memset(&ctb, 0, sizeof(struct ctb));
+	store_64bit_word_in_host(cpu, (unsigned char *)
+	    &(ctb.ctb_term_type), machine->x11_md.in_use?
+	    CTB_GRAPHICS : CTB_PRINTERPORT);
+
+	/*  CRB: Console Routine Block  */
+	memset(&crb, 0, sizeof(struct crb));
+	store_64bit_word_in_host(cpu, (unsigned char *)
+	    &(crb.crb_v_dispatch), CRB_ADDR - 0x100);
+	store_64bit_word(cpu, CRB_ADDR - 0x100 + 8, PROM_ENTRY_PADDR);
+	store_64bit_word_in_host(cpu, (unsigned char *)
+	    &(crb.crb_v_fixup), CRB_ADDR - 0x80);
+	store_64bit_word(cpu, CRB_ADDR - 0x80 + 8, PROM_ENTRY_PADDR + 0x800);
+
+	/*  PCS: Processor ID etc.  */
+	for (i=0; i<machine->ncpus; i++) {
+		memset(&pcs[i], 0, sizeof(struct pcs));
+		store_64bit_word_in_host(cpu, (unsigned char *)
+		    &(pcs[i].pcs_flags), PCS_RC | PCS_PA | PCS_PP |
+		    PCS_CV | PCS_PV | PCS_PMV | PCS_PL);
+		store_64bit_word_in_host(cpu, (unsigned char *)
+		    &(pcs[i].pcs_proc_type),
+		    machine->cpus[i]->cd.alpha.cpu_type.pcs_type);
+	}
+
+	/*
+	 *  MDDT: Memory Data Descriptor Table. For now, it is a simple
+	 *  two-entry table with half of the available RAM in each entry.
+	 *  (The values are in number of 8K pages.)
+	 *  The first 16 MB are not included (the kernel lives there).
+	 *  The last 1 MB is not included either, it is reserved for bootup
+	 *  and similar.
+	 */
+	memset(&mddt, 0, sizeof(struct mddt));
+	memset(&mddt.mddt_clusters[0], 0, sizeof(struct mddt_cluster));
+	memset(&mddt.mddt_clusters[1], 0, sizeof(struct mddt_cluster));
+	store_64bit_word_in_host(cpu, (unsigned char *)
+	    &(mddt.mddt_cluster_cnt), 2);
+	store_64bit_word_in_host(cpu, (unsigned char *)
+	    &(mddt.mddt_clusters[0].mddt_pfn), 16 * 128);
+	store_64bit_word_in_host(cpu, (unsigned char *)
+	    &(mddt.mddt_clusters[0].mddt_pg_cnt),
+	    (machine->physical_ram_in_mb/2 - 16) * 128);
+	store_64bit_word_in_host(cpu, (unsigned char *)
+	    &(mddt.mddt_clusters[1].mddt_pfn),
+	    machine->physical_ram_in_mb/2 * 128);
+	store_64bit_word_in_host(cpu, (unsigned char *)
+	    &(mddt.mddt_clusters[1].mddt_pg_cnt),
+	    (machine->physical_ram_in_mb/2) * 128);
+
+	/*
+	 *  Place a special "hack" palcode call at PROM_ENTRY_PADDR and
+	 *  PROM_ENTRY_PADDR + 0x800:
+	 *  (Hopefully nothing else will be there.)
+	 */
+	store_32bit_word(cpu, PROM_ENTRY_PADDR, 0x3fffffe);
+	store_32bit_word(cpu, PROM_ENTRY_PADDR + 0x800, 0x3fffffd);
+
+	store_buf(cpu, HWRPB_ADDR, (char *)&rpb, sizeof(struct rpb));
+	store_buf(cpu, CTB_ADDR, (char *)&ctb, sizeof(struct ctb));
+	store_buf(cpu, CRB_ADDR, (char *)&crb, sizeof(struct crb));
+	store_buf(cpu, MEMDAT_ADDR, (char *)&mddt, sizeof(struct mddt));
+	store_buf(cpu, PCS_ADDR, (char *)pcs, sizeof(struct pcs) *
+	    machine->ncpus);
+
+	free(pcs);
+}
+
+
+MACHINE_DEFAULT_CPU(alpha)
+{
+	switch (machine->machine_subtype) {
+
+	case ST_ALPHABOOK1:
+		machine->cpu_name = strdup("21066");
+		break;
+
+	case ST_DEC_4100:
+		machine->cpu_name = strdup("21164A-2");
+		break;
+
+	case ST_DEC_3000_300:
+		machine->cpu_name = strdup("21064");
+		break;
+
+	case ST_EB164:
+		machine->cpu_name = strdup("21164PC");
+		break;
+
+	default:fatal("Unimplemented Alpha machine type %i\n",
+		    machine->machine_subtype);
+		exit(1);
+	}
+}
+
+
+MACHINE_DEFAULT_RAM(alpha)
+{
+	machine->physical_ram_in_mb = 128;
+}
+
+
+MACHINE_REGISTER(alpha)
+{
+	MR_DEFAULT(alpha, "Alpha", MACHINE_ALPHA);
+
+	machine_entry_add_alias(me, "alpha");
+
+	machine_entry_add_subtype(me, "AlphaBook 1", ST_ALPHABOOK1,
+	    "alphabook1", NULL);
+
+	machine_entry_add_subtype(me, "AlphaServer 4100", ST_DEC_4100,
+	    "alphaserver4100", NULL);
+
+	machine_entry_add_subtype(me, "DEC 3000/300", ST_DEC_3000_300,
+	    "3000/300", NULL);
+
+	machine_entry_add_subtype(me, "EB164", ST_EB164,
+	    "eb164", NULL);
+
+	me->set_default_ram = machine_default_ram_alpha;
+}
+
+
+codex
+The LCA field counts match the packet. Two claims still need separating: whether accepted settings work implicitly, and whether RCR1 actually has a functional consumer. I’m checking the RCR1 comparison and startup path before choosing a disposition.
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n -C 5 'bus_isa_init|interrupt_connect|irqbase|exit\\(|TODO|dma|DMA' GXEMUL-SEC/src/devices/bus_isa.c" in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n -C 8 'i82378zb|bus_pci_init|bus_pci_add' GXEMUL-SEC/src/devices/bus_pci.c" in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n -C 8 'rtc_rcr1|#447|#443' GXEMUL-SEC/src/devices/dev_sh4.c" in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n -C 6 'interrupt_connect|not found|could not|exit\\(' GXEMUL-SEC/src/core/interrupt.c" in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n 'rtc_rcr1|\\blca\\b|LCA_PCI_DENSE|LCA_PCI_SPARSE' GXEMUL-SEC/src -g '*.c' -g '*.h'" in C:\DocumentNoSnc\CC\GXEMUL
+ succeeded in 139ms:
+200-	pci_data->cur_bus = bus;
+201-	pci_data->cur_device = device;
+202-	pci_data->cur_func = function;
+203-	pci_data->cur_reg = reg;
+204-}
+205-
+206-
+207-/*
+208: *  bus_pci_add():
+209- *
+210- *  Add a PCI device to a bus_pci device.
+211- */
+212:void bus_pci_add(struct machine *machine, struct pci_data *pci_data,
+213-	struct memory *mem, int bus, int device, int function,
+214-	const char *name)
+215-{
+216-	struct pci_device *pd;
+217-	int ofs;
+218-	void (*init)(struct machine *, struct memory *, struct pci_device *);
+219-
+220-	if (pci_data == NULL) {
+221:		fatal("bus_pci_add(): pci_data == NULL!\n");
+222-		abort();
+223-	}
+224-
+225-	/*  Find the PCI device:  */
+226-	init = pci_lookup_initf(name);
+227-
+228-	/*  Make sure this bus/device/function number isn't already in use:  */
+229-	pd = pci_data->first_device;
+230-	while (pd != NULL) {
+231-		if (pd->bus == bus && pd->device == device &&
+232-		    pd->function == function) {
+233:			fatal("bus_pci_add(): (bus %i, device %i, function"
+234-			    " %i) already in use\n", bus, device, function);
+235-			exit(1);
+236-		}
+237-		pd = pd->next;
+238-	}
+239-
+240-	CHECK_ALLOCATION(pd = (struct pci_device *) malloc(sizeof(struct pci_device)));
+241-	memset(pd, 0, sizeof(struct pci_device));
+--
+327-	}
+328-
+329-	pd->pcibus->cur_pci_portbase += portsize;
+330-	pd->pcibus->cur_pci_membase += memsize;
+331-}
+332-
+333-
+334-/*
+335: *  bus_pci_init():
+336- *
+337- *  This doesn't register a device, but instead returns a pointer to a struct
+338- *  which should be passed to other bus_pci functions when accessing the bus.
+339- *
+340- *  irq_path is the interrupt path to the PCI controller.
+341- *
+342- *  pci_portbase, pci_membase, and pci_irqbase are the port, memory, and
+343- *  interrupt bases for PCI devices (as found in the configuration registers).
+344- *
+345- *  pci_actual_io_offset and pci_actual_mem_offset are the offset from
+346- *  the values in the configuration registers to the actual (emulated) device.
+347- *
+348- *  isa_portbase, isa_membase, and isa_irqbase are the port, memory, and
+349- *  interrupt bases for legacy ISA devices.
+350- */
+351:struct pci_data *bus_pci_init(struct machine *machine, const char *irq_path,
+352-	uint64_t pci_actual_io_offset, uint64_t pci_actual_mem_offset,
+353-	uint64_t pci_portbase, uint64_t pci_membase, const char *pci_irqbase,
+354-	uint64_t isa_portbase, uint64_t isa_membase, const char *isa_irqbase)
+355-{
+356-	struct pci_data *d;
+357-
+358-	CHECK_ALLOCATION(d = (struct pci_data *) malloc(sizeof(struct pci_data)));
+359-	memset(d, 0, sizeof(struct pci_data));
+--
+745-	    PCI_SUBCLASS_BRIDGE_ISA, 0) + 0x01);	/*  Rev 1  */
+746-
+747-	PCI_SET_DATA(PCI_BHLC_REG,
+748-	    PCI_BHLC_CODE(0,0, 1 /* multi-function */, 0x40,0));
+749-
+750-	pd->cfg_reg_write = piix_isa_cfg_reg_write;
+751-}
+752-
+753:PCIINIT(i82378zb)
+754-{
+755-	PCI_SET_DATA(PCI_ID_REG, PCI_ID_CODE(PCI_VENDOR_INTEL,
+756-	    PCI_PRODUCT_INTEL_SIO));
+757-
+758-	PCI_SET_DATA(PCI_CLASS_REG, PCI_CLASS_CODE(PCI_CLASS_BRIDGE,
+759-	    PCI_SUBCLASS_BRIDGE_ISA, 0) + 0x43);
+760-
+761-	PCI_SET_DATA(PCI_BHLC_REG,
+
+ succeeded in 160ms:
+52-void isa_interrupt_common(struct bus_isa_data *d, int old_isa_assert)
+53-{
+54-	int new_isa_assert, x;
+55-
+56-	/*  Any interrupt assertions on PIC2 go to irq 2 on PIC1  */
+57:	/*  (TODO: don't hardcode this here)  */
+58-	if (d->pic2->irr & ~d->pic2->ier)
+59-		d->pic1->irr |= 0x04;
+60-	else
+61-		d->pic1->irr &= ~0x04;
+62-
+--
+140-	isa_interrupt_common(d, old_isa_assert);
+141-}
+142-
+143-
+144-/*
+145: *  bus_isa_init():
+146- *
+147- *  Flags are zero or more of the following, ORed together:
+148- *
+149- *  BUS_ISA_EXTERNAL_PIC	Don't register/use isa_interrupt_*().
+150- *  BUS_ISA_IDE0		Include wdc0.
+--
+169- *
+170- *  The interrupt_base_path is the name of the bus, CPU, or controller onto
+171- *  which this ISA bus will be attached, e.g. "machine[0].lca" or
+172- *  "machine[0].cpu[0].pic1".
+173- */
+174:struct bus_isa_data *bus_isa_init(struct machine *machine,
+175-	char *interrupt_base_path, uint32_t bus_isa_flags,
+176-	uint64_t isa_portbase, uint64_t isa_membase)
+177-{
+178-	struct bus_isa_data *d;
+179-	char tmpstr[300], tmpstr2[300];
+
+ succeeded in 174ms:
+GXEMUL-SEC/src\machines\machine_alpha.c:61:		device_add(machine, "lca");
+GXEMUL-SEC/src\devices\bus_isa.c:171: *  which this ISA bus will be attached, e.g. "machine[0].lca" or
+GXEMUL-SEC/src\devices\autodev.c:193:	device_register("lca", devinit_lca);
+GXEMUL-SEC/src\devices\dev_lca.c:334:DEVINIT(lca)
+GXEMUL-SEC/src\devices\dev_lca.c:375:	    "%s.lca", devinit->machine->path);
+GXEMUL-SEC/src\devices\dev_sh4.c:388:	uint8_t		rtc_rcr1;
+GXEMUL-SEC/src\devices\dev_sh4.c:2776:			odata = d->rtc_rcr1;
+GXEMUL-SEC/src\devices\dev_sh4.c:2781:			 *  landed in rtc_rcr1 and exit(1) was the only thing stopping
+GXEMUL-SEC/src\devices\dev_sh4.c:2805:				d->rtc_rcr1 = idata;
+GXEMUL-SEC/src\include\thirdparty\alpha_lcareg.h:47:#define LCA_PCI_SPARSE	0x200000000ULL		/* PCI Sparse Space */
+GXEMUL-SEC/src\include\thirdparty\alpha_lcareg.h:48:#define LCA_PCI_DENSE	0x300000000ULL		/* PCI Dense Space */
+
+ succeeded in 177ms:
+92-		    interrupt_handlers[i].templ.name) != 0)
+93-			continue;
+94-
+95-		fatal("\ninterrupt_handler_register(): An interrupt handler"
+96-		    " using the name '%s' is already registered.\n",
+97-		    templ->name);
+98:		exit(1);
+99-	}
+100-
+101-	nr_of_interrupt_handlers ++;
+102-	CHECK_ALLOCATION(interrupt_handlers = 
+103-	    (struct interrupt_handler *) realloc(interrupt_handlers,
+104-	    nr_of_interrupt_handlers * sizeof(struct interrupt_handler)));
+--
+135-		    interrupt_handlers[i].nr_of_nonexclusive_users > 0) {
+136-			fatal("interrupt_handler_remove(): Attempt to "
+137-			    "remove interrupt handler '%s' which has %i "
+138-			    "exclusive and %i non-exclusive users. Aborting.\n",
+139-			    name, interrupt_handlers[i].nr_of_exclusive_users,
+140-			    interrupt_handlers[i].nr_of_nonexclusive_users);
+141:			exit(1);
+142-		}
+143-
+144-		if (i != nr_of_interrupt_handlers-1)
+145-			memcpy(&interrupt_handlers[i],
+146-			    &interrupt_handlers[i + 1],
+147-			    nr_of_interrupt_handlers - i - 1);
+148-
+149-		nr_of_interrupt_handlers --;
+150-
+151-		return;
+152-	}
+153-
+154:	fatal("interrupt_handler_remove(): '%s' not found? Aborting.\n", name);
+155:	exit(1);
+156-}
+157-
+158-
+159-/*
+160- *  interrupt_handler_lookup():
+161- *
+162- *  Scans the list of registered interrupt handlers for a given name. If the
+163- *  name is found, the template is filled with valid data, and 1 is returned.
+164: *  If the name is not found, 0 is returned.
+165- */
+166-int interrupt_handler_lookup(const char *name, struct interrupt *templ)
+167-{
+168-	int i;
+169-
+170-#ifdef INTERRUPT_DEBUG
+--
+200-
+201-	return 0;
+202-}
+203-
+204-
+205-/*
+206: *  interrupt_connect():
+207- *
+208- *  Increases the exclusive or nonexclusive nr or users of an interrupt.
+209- */
+210:void interrupt_connect(struct interrupt *in, int exclusive)
+211-{
+212-	int i;
+213-
+214-#ifdef INTERRUPT_DEBUG
+215:	printf("interrupt_connect(\"%s\")\n", in->name);
+216-#endif
+217-
+218-	if (in->name == NULL || in->name[0] == '\0')
+219-		return;
+220-
+221-	for (i=0; i<nr_of_interrupt_handlers; i++) {
+222-		if (strcmp(in->name, interrupt_handlers[i].templ.name) != 0)
+223-			continue;
+224-
+225-		if (exclusive) {
+226-			interrupt_handlers[i].nr_of_exclusive_users ++;
+227-			if (interrupt_handlers[i].nr_of_exclusive_users > 1) {
+228:				fatal("Fatal error in interrupt_connect(): "
+229-				    "more than 1 exclusive user. Dumping "
+230-				    "core for backtrace.\n");
+231-				abort();
+232-			}
+233-		} else {
+234-			interrupt_handlers[i].nr_of_nonexclusive_users ++;
+235-		}
+236-
+237-		return;
+238-	}
+239-
+240:	fatal("Internal error in interrupt_connect(): name '%s' not "
+241-	    "found? Dumping core for debugging.\n", in->name);
+242-	abort();
+243-}
+244-
+245-
+246-/*
+--
+261-
+262-		if (exclusive) {
+263-			interrupt_handlers[i].nr_of_exclusive_users --;
+264-			if (interrupt_handlers[i].nr_of_exclusive_users < 0) {
+265-				fatal("Fatal error in interrupt_disconnect():"
+266-				    "nr of exclusive users < 0?\n");
+267:				exit(1);
+268-			}
+269-		} else {
+270-			interrupt_handlers[i].nr_of_nonexclusive_users --;
+271-			if (interrupt_handlers[i].nr_of_nonexclusive_users<0) {
+272-				fatal("Fatal error in interrupt_disconnect():"
+273-				    "nr of non-exclusive users < 0?\n");
+274:				exit(1);
+275-			}
+276-		}
+277-
+278-		return;
+279-	}
+280-
+281-	fatal("Internal error in interrupt_disconnect(): name '%s' not "
+282-	    "found?\n", in->name);
+283:	exit(1);
+284-}
+285-
+286-
+
+ succeeded in 194ms:
+69-#define	N_SH4_TIMERS		3
+70-
+71-/*  PCI stuff:  */
+72-#define	N_PCIC_REGS			(0x224 / sizeof(uint32_t))
+73-#define	N_PCIC_IRQS			16
+74-#define	PCIC_REG(addr)			((addr - SH4_PCIC) / sizeof(uint32_t))
+75-
+76-/*
+77: *  #443 pass 2: the latch's FAULT CLASSES.  One offset can produce two genuinely
+78- *  different complaints -- an unimplemented-offset access and a known register
+79- *  rejecting a value -- and a single flag per offset reports whichever came first
+80- *  and silently swallows the other.
+81- */
+82-#define	SH4_PCIC_UNIMPL			0	/*  offset this device does not implement  */
+83-#define	SH4_PCIC_BADVAL			1	/*  known register, unexpected value      */
+84-#define	SH4_PCIC_NOCPU			2	/*  known register, CPU type not modelled */
+85-#define	SH4_PCIC_NCLASS			3
+86-/*
+87: *  #447: DEVICE_ACCESS(sh4)'s OWN value guards -- a separate cluster from the PCIC
+88: *  one above, in the switch #443 did not touch.  Four of them called exit(1) on one
+89- *  ordinary guest store; the witness is regress/sh4_val_witness.py.
+90- *
+91- *  The latch key is (class, INSTANCE, offending BIT).  All three parts are load-bearing
+92- *  and each was arrived at by a failure this project has already paid for:
+93- *
+94: *    - the CLASS is the kind of COMPLAINT, per #443's pass-2 finding.
+95- *    - the INSTANCE is which register raised it.  Three TCRs reach one `case` through
+96- *      fall-through and eight DMATCRs reach another, so a latch keyed on the class
+97: *      alone would report timer 0 and silence timers 1 and 2 -- #443's measured half
+98- *      fix, one level down and in a new dress.
+99- *    - the BIT is which unimplemented feature was asked for.  RCR1's single guard
+100- *      covers TWO independent features (SH_RCR1_CIE and SH_RCR1_AIE) and TCR's covers
+101- *      SIX, so a latch keyed on (class, instance) reports the first feature a guest
+102- *      asks for and silently swallows every other one at the same register.
+103- *
+104- *  Bounded by construction -- at most one line per (class, instance, bit) -- so a guest
+105- *  looping on a rejected write cannot burn host CPU.  That bound is the reason the
+--
+124-enum {
+125-	SH4_VAL_TCRBITS,		/*  TCR: control bits not modelled       */
+126-	SH4_VAL_DMATCR,			/*  DMATCR: count wider than 24 bits     */
+127-	SH4_VAL_ICRIRLM,		/*  ICR: IRLM mode not modelled          */
+128-	SH4_VAL_RCR1INT,		/*  RCR1: RTC interrupt enable not modelled  */
+129-/*
+130- *  #448: the four CHCR field decoders in sh4_dmac_transfer().  Each guarded a `default:`
+131- *  arm that called exit(1), so ONE ordinary guest store ended the host process -- and it
+132: *  was EASIER TO REACH THAN ANY #447 SITE, because only `case 0x200:` survives the RS
+133- *  switch.  A wholly legal configuration (4-byte transfers, both addresses incrementing)
+134- *  still died, on its resource-select alone.
+135- *
+136- *  *** THE KEY IS A NORMALISED FIELD VALUE, NOT A BIT AND NOT THE WHOLE REGISTER. ***
+137- *  TS, DM, SM and RS are ENCODINGS: `TS=5` is one value, not three set bits, so a per-bit
+138- *  latch would report the same rejected encoding several times over.  The other extreme is
+139- *  worse: latching the whole CHCR word lets a guest walk 32-bit values with TD set and
+140- *  draw a fresh unsilenceable line for each -- the flood this latch exists to prevent.
+--
+264-};
+265-
+266-#define	SH4_VAL_TLBDA2_ITLB		(1u << 0)
+267-#define	SH4_VAL_TLBDA2_UTLB		(1u << 1)
+268-/*  Instances per class: 8 DMA channels is the widest.  N_SH4_TIMERS is 3.  */
+269-#define	N_SH4_VAL_INST			N_SH4_DMA_CHANNELS
+270-
+271-
+272:/*  #447: the six TCR bits this device does not model, spelled ONCE so the guard and
+273-    its diagnostic cannot drift apart.  thirdparty/sh4_tmureg.h:75-82.  */
+274-#define	TCR_UNIMPLEMENTED		(TCR_ICPF | TCR_ICPE1 | TCR_ICPE0 | \
+275-					 TCR_CKEG1 | TCR_CKEG0 | TCR_TPSC2)
+276-
+277-#define	PCI_VENDOR_HITACHI		0x1054
+278-#define	PCI_PRODUCT_HITACHI_SH7751	0x3505
+279-#define	PCI_PRODUCT_HITACHI_SH7751R	0x350e   
+280-
+--
+341-	uint32_t	pctrb;		/*  Port Control Register B  */
+342-	uint32_t	pdtrb;		/*  Port Data Register B  */
+343-	uint16_t	bsc_gpioic;
+344-
+345-	/*  PCIC (PCI controller):  */
+346-	struct pci_data	*pci_data;
+347-	struct interrupt cpu_pcic_interrupt[N_PCIC_IRQS];
+348-	uint32_t	pcic_reg[N_PCIC_REGS];
+349:	/*  #443: one bit per word offset, so each unsupported transaction is reported
+350-	    ONCE and a second, DIFFERENT one is not hidden behind the first.  A
+351-	    per-device flag would hide it (the "1 of 4 kinds" hazard #438 recorded);
+352-	    137 named flags would be absurd.  This is five words.  */
+353:	/*  #443 pass 2: [fault class][word].  THREE classes -- UNIMPL, BADVAL and
+354-	    NOCPU; see sh4_pcic_first().  (This comment said TWO for months, beside
+355-	    an array dimensioned SH4_PCIC_NCLASS == 3.  A seat reading it for the
+356-	    gdromdefault round caught the mismatch: the third class was added and
+357-	    the count in the comment was not.)  */
+358-	uint32_t	pcic_reported[SH4_PCIC_NCLASS][(N_PCIC_REGS + 31) / 32];
+359-
+360-	/*  SCI (serial interface):  */
+361-	int		sci_bits_outputed;
+--
+374-	uint32_t	tocr;
+375-	uint32_t	tstr;
+376-	uint32_t	tcnt[N_SH4_TIMERS];
+377-	uint32_t	tcor[N_SH4_TIMERS];
+378-	uint32_t	tcr[N_SH4_TIMERS];
+379-	int		timer_interrupts_pending[N_SH4_TIMERS];
+380-	double		timer_hz[N_SH4_TIMERS];
+381-
+382:	/*  #447: [class][instance] -> the offending bits already reported.  See the
+383-	    SH4_VAL_* block near the top of this file for why the key has three parts.  */
+384-	uint32_t	val_reported[SH4_VAL_NCLASS][N_SH4_VAL_INST];
+385-
+386-	/*  RTC:  */
+387-	uint32_t	rtc_reg[14];	/*  Excluding rcr1 and rcr2  */
+388:	uint8_t		rtc_rcr1;
+389-	uint8_t		rtc_rcr2;
+390-};
+391-
+392-
+393-#define	SH4_PSEUDO_TIMER_HZ	110.0
+394-
+395-
+396-/*  #448/#449: the latch helper is defined far below, and BOTH sh4_timer_tick() and
+--
+1268-		memory_writemax64(cpu, data, len, odata);
+1269-	}
+1270-
+1271-	return 1;
+1272-}
+1273-
+1274-
+1275-/*
+1276: *  #443: an unsupported PCIC transaction called exit(1) -- ELEVEN sites.  A MEASURED
+1277- *  census of all 137 word offsets in both directions (274 emulator processes) found
+1278- *  116 of them kill the host on a plain 32-bit READ and 125 on a write.  ONE guest
+1279- *  instruction, no store required.  Rung-3 witness: _scratchpad/sh4pcic_witness.py,
+1280- *  30/30 on an unmodified -E landisk.  Guest-KERNEL reachable only: with SR.MD clear
+1281- *  the same instruction takes an SH exception and the host survives.
+1282- *
+1283- *  Fixed in the #438/#441 shape -- keep the diagnostic, drop the exit(1) -- with two
+1284- *  things about HOW that are load-bearing and would look like tidy-up to a later reader.
+--
+1334- *  re-opened silent corruption on the second offence at all ten arms, and passed every
+1335- *  detector row.
+1336- */
+1337-static int sh4_pcic_first(struct sh4_data *d, uint32_t addr, int cls)
+1338-{
+1339-	size_t idx = PCIC_REG(addr);
+1340-	uint32_t bit;
+1341-
+1342:	/*  #443 pass 2: this bounds check is NOT what protects the arrays, and a
+1343-	    reader should not take it for that.  pcic_reg[] is indexed with the same
+1344-	    expression at the top of dev_sh4_pcic_access() with NO check, so if the
+1345-	    registered window ever grew, THAT out-of-range access would happen first
+1346-	    and this one would never get the chance.  Kept because it is correct and
+1347-	    free; the real guarantee is that memory_device_register() registers
+1348-	    exactly N_PCIC_REGS words, MEASURED max index 136 of 137 across the full
+1349-	    census plus byte/halfword/word accesses at the window's last bytes.  */
+1350-	if (idx >= N_PCIC_REGS)
+--
+1366-	uint32_t pcic_old;
+1367-
+1368-	if (writeflag == MEM_WRITE)
+1369-		idata = memory_readmax64(cpu, data, len);
+1370-
+1371-	relative_addr += SH4_PCIC;
+1372-
+1373-	/*  Register read/write:  */
+1374:	/*  #443: keep the previous word, so a rejecting arm below can put it back.  The
+1375-	    store happens HERE, before any guard runs.  */
+1376-	pcic_old = d->pcic_reg[PCIC_REG(relative_addr)];
+1377-	if (writeflag == MEM_WRITE)
+1378-		d->pcic_reg[PCIC_REG(relative_addr)] = idata;
+1379-	else
+1380-		odata = d->pcic_reg[PCIC_REG(relative_addr)];
+1381-
+1382-	/*  Special cases:  */
+--
+1536-		break;
+1537-
+1538-	case SH4_PCIPDR:
+1539-		/*  PCI bus access Data Register:  */
+1540-		bus_pci_data_access(cpu, d->pci_data, writeflag == MEM_READ?
+1541-		    &odata : &idata, len, writeflag);
+1542-		break;
+1543-
+1544:	default:/*  #443: an offset this device does not implement.  Reads answer 0 and
+1545-		    writes are dropped -- deliberately NOT "let pcic_reg[] act as
+1546-		    anonymous storage", which would invent read/write registers that
+1547-		    no modelled behaviour consumes and let a guest build state
+1548-		    meaning nothing.  Zero-and-ignore is deterministic and has no
+1549-		    side effect.  */
+1550-		if (sh4_pcic_first(d, relative_addr, SH4_PCIC_UNIMPL)) {
+1551-			if (writeflag == MEM_READ)
+1552-				fatal("[ sh4_pcic: read from unimplemented"
+--
+1711-	fresh = bits & ~d->val_reported[cls][instance];
+1712-	d->val_reported[cls][instance] |= bits;
+1713-
+1714-	return fresh != 0;
+1715-}
+1716-
+1717-
+1718-/*
+1719: *  #447: four value guards in the switch below ended the host process with exit(1) on
+1720- *  ONE ordinary guest store -- TCR, DMATCR, ICR and RCR1.  MEASURED on an unmodified
+1721- *  -E landisk, each with a matched surviving control at the SAME address and the SAME
+1722- *  width, so it is the VALUE that kills and not the address or the access width.
+1723- *
+1724: *  Fixed in the #438/#441/#443 shape -- keep the diagnostic, drop the exit(1), ignore
+1725- *  the write -- and the four arms differ in a way that is invisible at the call site:
+1726- *
+1727- *    RCR1    the store was UPSTREAM of the guard.  Dropping exit(1) alone would have
+1728- *            turned a host kill into SILENT STATE CORRUPTION.  Moved below the guard.
+1729- *    TCR     `timer_hz` was set from `idata & 3` BEFORE the guard and the debug() line
+1730- *            had already announced it, so the naive fix installs a timer frequency the
+1731- *            guest never asked for.  The guard moved ABOVE the prescaler switch.
+1732- *    DMATCR  the store is already downstream; nothing to move.
+--
+2003-			 *  brings the TMU and the BOARD brings the clock, and nothing checks
+2004-			 *  that the two agree.  MEASURED dead on -e jornada680, -E baresh and
+2005-			 *  -E testsh.  Five registered SH machine types name an arch-4 CPU and
+2006-			 *  only machine_dreamcast.c:51 and machine_landisk.c:81 assign pclock.
+2007-			 *  Every future arch-4 machine inherits the same trap unless its author
+2008-			 *  knows a rule written down nowhere -- which is why the fix is here, at
+2009-			 *  the guard, and not in the three machine files.
+2010-			 *
+2011:			 *  DECLINE THE WHOLE WRITE, exactly as the #447 arm below already does
+2012-			 *  for unmodelled TCR bits, and for its stated reason: "substituting a
+2013-			 *  prescaler for a clock source we cannot provide would be inventing a
+2014-			 *  rate".  Assigning a plausible clock would be worse than the crash --
+2015-			 *  a fabricated rate makes every timer-using guest subtly wrong with no
+2016-			 *  row able to see it, and loud-broken outranks silent-wrong.
+2017-			 *
+2018-			 *  PANEL, STATED EXACTLY -- because an earlier draft of this comment said
+2019-			 *  "a panel of nine seats reached this 8-1", and that was WRONG IN THREE
+--
+2062-			 *  seat measured the third option (store idata, skip the prescaler switch,
+2063-			 *  leave timer_hz at 0) as SAFE -- no division by zero, no UNF, no pending
+2064-			 *  interrupt -- so this is a choice between two wrongs, made deliberately.
+2065-			 *
+2066-			 *  *** THE GUARD STAYS HERE, ABOVE THE PRESCALER SWITCH -- BUT FOR A
+2067-			 *  SMALLER REASON THAN AN EARLIER DRAFT CLAIMED. ***
+2068-			 *
+2069-			 *  That draft said moving it lower would install "a frequency the guest
+2070:			 *  never asked for", citing #447.  A pass-2 seat MEASURED that this cannot
+2071-			 *  happen AT THIS PREDICATE: pclock == 0 makes all four prescaler cases
+2072-			 *  yield 0.0, and timer_hz[] is ALREADY 0.0 -- DEVINIT memsets the whole
+2073-			 *  struct, and those four cases are the only writes to it in this file.
+2074:			 *  No frequency is installed; nothing changes.  #447's hazard is real where
+2075-			 *  pclock is NON-ZERO, and it does not transfer here.
+2076-			 *
+2077-			 *  The real reason is diagnostic consistency.  Lower, the debug() line
+2078-			 *  below announces "clock set to 0.000000 Hz" on a write that is then
+2079-			 *  refused -- and it is UNLATCHED, so it prints once per STORE where this
+2080-			 *  decline prints once per TIMER.  A seat built that mutant and it scores
+2081-			 *  16/16: four stores produce four announcements of a rate that was never
+2082-			 *  installed, and no row sees it.  FILED as sh4pclockquiet.
+--
+2091-					fatal("[ sh4: timer %i: no peripheral"
+2092-					    " clock configured for this machine"
+2093-					    " -- TCR write ignored.  (once per"
+2094-					    " timer) ]\n", timer_nr);
+2095-				break;
+2096-			}
+2097-
+2098-			/*
+2099:			 *  #447: THIS GUARD MOVED UP, above the prescaler switch,
+2100-			 *  and that is not tidy-up.  It used to sit below, by which
+2101-			 *  time `timer_hz` had already been set from `idata & 3` --
+2102-			 *  a divisor the guest did not ask for, because TPSC2 selects
+2103-			 *  a clock source outside the two bits that switch decodes --
+2104-			 *  and the debug() line had already announced it.  exit(1)
+2105-			 *  hid that.  Drop the exit and leave the guard where it was
+2106-			 *  and the write installs a WRONG timer frequency instead,
+2107-			 *  which is a silent fault where the old one was loud.
+--
+2216-			// fall through
+2217-	case SH4_DMATCR1: dma_channel ++;
+2218-			// fall through
+2219-	case SH4_DMATCR0:
+2220-		if (writeflag == MEM_READ)
+2221-			odata = cpu->cd.sh.dmac_tcr[dma_channel] & 0x00ffffff;
+2222-		else {
+2223-			/*
+2224:			 *  #447: the store below is DOWNSTREAM of this guard, so
+2225-			 *  dropping exit(1) already rejects the value -- unlike RCR1
+2226-			 *  and unlike every arm of dev_sh4_pcic_access(), where the
+2227-			 *  store runs first and a restore is needed.  Recorded because
+2228-			 *  the difference is invisible at the call site and a reader
+2229:			 *  generalising from #443 would add a restore that is not
+2230-			 *  merely redundant but wrong.
+2231-			 *
+2232-			 *  A GUEST READ-BACK CANNOT SEE THIS REJECTION BY ITSELF: the
+2233-			 *  read arm above masks with 0x00ffffff, so the top bits are
+2234-			 *  invisible whether they were stored or not.  The consumer
+2235-			 *  that would see them is sh4_dmac_transfer(), which masks with
+2236-			 *  0x1fffffff -- FIVE BITS WIDER than the read arm.  A detector
+2237-			 *  row here has to compare the LOW 24 bits against a value the
+--
+2483-		break;
+2484-
+2485-
+2486-	/*********************************/
+2487-	/*  INTC:  Interrupt Controller  */
+2488-
+2489-	case SH4_ICR:
+2490-		/*
+2491:		 *  #447: ICR is not modelled on ANY path -- no arm of this case
+2492-		 *  stores anything, and a read answers the odata this function was
+2493-		 *  entered with, i.e. 0.  So there is no state to corrupt and none
+2494-		 *  to restore, and a detector row that writes ICR and reads it back
+2495-		 *  is VACUOUS here by construction: it answers 0 before the fix,
+2496-		 *  after it, and under every mutant.  The diagnostic is the only
+2497-		 *  observable this arm has.
+2498-		 *
+2499-		 *  #458: THIS REFUSAL IS WHY cpu_sh.c DECLINES TO READ IPRD.  The two
+--
+2768-		} else {
+2769-			/*  TODO: Update rtc_reg based on host's date/time.  */
+2770-			odata = d->rtc_reg[(relative_addr - 0xffc80000) / 4];
+2771-		}
+2772-		break;
+2773-
+2774-	case SH4_RCR1:
+2775-		if (writeflag == MEM_READ)
+2776:			odata = d->rtc_rcr1;
+2777-		else {
+2778-			/*
+2779:			 *  #447: *** THE STORE WAS UPSTREAM OF THE GUARD. ***  It ran
+2780-			 *  first and the guard second, so a rejected value had ALREADY
+2781:			 *  landed in rtc_rcr1 and exit(1) was the only thing stopping
+2782-			 *  the guest reading it back.  Dropping the exit and nothing
+2783-			 *  else turns a host kill into SILENT STATE CORRUPTION -- the
+2784-			 *  guest writes CIE|AIE, reads CIE|AIE back, and believes the
+2785:			 *  RTC will interrupt it.  It never will.  Same shape as #443
+2786:			 *  found in dev_sh4_pcic_access(), and the ONLY one of #447's
+2787-			 *  four sites that has it.  The store therefore moved below.
+2788-			 *
+2789-			 *  The mask is spelled from the header (thirdparty/sh4_rtcreg.h
+2790-			 *  :72-73) rather than as 0x18, because it is TWO independent
+2791-			 *  features and the latch keys on which one was asked for.
+2792-			 *
+2793-			 *  Values outside those two bits are accepted exactly as before.
+2794-			 */
+--
+2797-				    (uint32_t) (idata &
+2798-				    (SH_RCR1_CIE | SH_RCR1_AIE))))
+2799-					fatal("[ sh4: RTC: RCR1 interrupt enable"
+2800-					    " 0x%02x not implemented -- write"
+2801-					    " ignored.  (once per bit) ]\n",
+2802-					    (int) (idata &
+2803-					    (SH_RCR1_CIE | SH_RCR1_AIE)));
+2804-			} else
+2805:				d->rtc_rcr1 = idata;
+2806-		}
+2807-		break;
+2808-
+2809-	case SH4_RCR2:
+2810-		if (writeflag == MEM_READ)
+2811-			odata = d->rtc_rcr2;
+2812-		else {
+2813-			d->rtc_rcr2 = idata;
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n 'dma|DMA|memory_rw|40000000|ALPHA|alpha' GXEMUL-SEC/src/devices/dev_wdc.c GXEMUL-SEC/src/cpus/memory_alpha.c GXEMUL-SEC/src/core/memory.c GXEMUL-SEC/src/cpus/cpu_alpha.c" in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$reviewLines = Get-Content -LiteralPath GXEMUL-SEC/src/devices/bus_pci.c; $reviewLines[752..810]' in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$reviewLines = Get-Content -LiteralPath GXEMUL-SEC/src/devices/bus_isa.c; $reviewLines[173..335]' in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n -C 8 'failed|res ==|result|ARCH_ALPHA|ARCH_MIPS|ARCH_M88K|exception|dev.*access' GXEMUL-SEC/src/cpus/memory_rw.c" in C:\DocumentNoSnc\CC\GXEMUL
+ succeeded in 106ms:
+229-
+230-static int MEMORY_RW_ONE_PAGE(struct cpu *cpu, struct memory *mem, uint64_t vaddr,
+231-	unsigned char *data, size_t len, int writeflag, int misc_flags)
+232-{
+233-	const int offset_mask = MRW_OFFSET_MASK;
+234-
+235-	int ok = 2;
+236-	uint64_t paddr;
+237:	int cache, no_exceptions, offset;
+238-	unsigned char *memblock;
+239-	int dyntrans_device_danger = 0;
+240-
+241:	no_exceptions = misc_flags & NO_EXCEPTIONS;
+242-	cache = misc_flags & CACHE_FLAGS_MASK;
+243-
+244-
+245-	if (misc_flags & PHYSICAL || cpu->translate_v2p == NULL) {
+246-		paddr = vaddr;
+247-	} else {
+248-		ok = cpu->translate_v2p(cpu, vaddr, &paddr,
+249-		    (writeflag? FLAG_WRITEFLAG : 0) +
+250:		    (no_exceptions? FLAG_NOEXCEPTIONS : 0)
+251-		    + (misc_flags & MEMORY_USER_ACCESS)
+252-		    + (cache==CACHE_INSTRUCTION? FLAG_INSTR : 0));
+253-
+254-		/*
+255:		 *  If the translation caused an exception, or was invalid in
+256-		 *  some way, then simply return without doing the memory
+257-		 *  access:
+258-		 */
+259-		if (!ok) {
+260:			/*  #244: A failed (or NO_EXCEPTIONS) translation leaves
+261-			    the caller's read buffer untouched; zero it so
+262-			    callers that ignore the return value (e.g. the DEC
+263-			    PROM string helpers) consume deterministic 0 bytes
+264-			    instead of uninitialised host stack. Same zero-fill
+265:			    ethos as the failed-device-read path (#95).  */
+266-			if (writeflag == MEM_READ)
+267-				memset(data, 0, len);
+268-			return MEMORY_ACCESS_FAILED;
+269-		}
+270-	}
+271-
+272-	/*
+273-	 *  #250: data write-watchpoint. Checked here, before the device /
+--
+452-		 *
+453-		 *	1) a read is done from offset 0x100. the page is
+454-		 *	   added to the dyntrans system as a "RAM" page
+455-		 *	2) a dyntranslated read is done from offset 0x200,
+456-		 *	   which should access the device, but since the
+457-		 *	   entire page is added, it will access non-existant
+458-		 *	   RAM instead, without warning.
+459-		 *
+460:		 *  Setting dyntrans_device_danger = 1 on accesses which are
+461-		 *  on _any_ offset on pages that are device mapped avoids
+462-		 *  this problem, but it is probably not very fast.
+463-		 *
+464-		 *  TODO: Convert this into a quick (multi-level, 64-bit)
+465-		 *  address space lookup, to find dangerous pages.
+466-		 */
+467-		for (i=0; i<mem->n_mmapped_devices; i++)
+468-			if (paddr >= (mem->devices[i].baseaddr & ~offset_mask)&&
+--
+474-
+475-		start = 0; end = mem->n_mmapped_devices - 1;
+476-		i = mem->last_accessed_device;
+477-
+478-		/*  Scan through all devices:  */
+479-		do {
+480-			if (paddr >= mem->devices[i].baseaddr &&
+481-			    paddr < mem->devices[i].endaddr) {
+482:				/*  Found a device, let's access it:  */
+483-				mem->last_accessed_device = i;
+484-
+485-				/*  #95: zero the caller's buffer up front on a read
+486-				    so a device handler that fills only part of it --
+487-				    or whose access is len-clamped just below -- can
+488-				    never hand back uninitialised host memory to the
+489-				    guest.  Root-cause fix for the uninit-read class
+490-				    (cf. per-device #91/#93/#94).  */
+--
+576-					if (host_addr != NULL)
+577-						cpu->update_translation_table(
+578-						    cpu, vaddr & ~offset_mask,
+579-						    host_addr, wf,
+580-						    orig_paddr & ~offset_mask);
+581-				}
+582-
+583-				res = 0;
+584:				if (!no_exceptions || (mem->devices[i].flags &
+585-				    DM_READS_HAVE_NO_SIDE_EFFECTS)) {
+586:					bool running_before_device_access = cpu->running;
+587-					res = mem->devices[i].f(cpu, mem, paddr,
+588-					    data, len, writeflag,
+589-					    mem->devices[i].extra);
+590-
+591:					if (running_before_device_access && !cpu->running)
+592-						return MEMORY_ACCESS_FAILED;
+593-				}
+594-
+595:				if (res == 0)
+596-					res = -1;
+597-
+598-				/*
+599-				 *  If accessing the memory mapped device
+600:				 *  failed, then return with an exception.
+601-				 *  (Architecture specific.)
+602-				 */
+603:				if (res <= 0 && !no_exceptions) {
+604-					debug("[ %s device '%s' addr %08lx "
+605:					    "failed ]\n", writeflag?
+606-					    "writing to" : "reading from",
+607-					    mem->devices[i].name, (long)paddr);
+608-#ifdef MEM_MIPS
+609:					mips_cpu_exception(cpu,
+610-					    cache == CACHE_INSTRUCTION?
+611-					    EXCEPTION_IBE : EXCEPTION_DBE,
+612-					    0, vaddr, 0, 0, 0, 0);
+613-#endif
+614-#ifdef MEM_M88K
+615-					/*  TODO: This is enough for
+616-					    OpenBSD/mvme88k's badaddr()
+617-					    implementation... but the
+618-					    faulting address should probably
+619-					    be included somewhere too!  */
+620:					m88k_exception(cpu, cache == CACHE_INSTRUCTION
+621-					    ? M88K_EXCEPTION_INSTRUCTION_ACCESS
+622-					    : M88K_EXCEPTION_DATA_ACCESS, 0);
+623-#endif
+624-					return MEMORY_ACCESS_FAILED;
+625-				}
+626-				goto do_return_ok;
+627-			}
+628-
+--
+668-			/*  Sprite reads from this area of memory...  */
+669-			/*  TODO: is this still correct?  */
+670-			if (writeflag == MEM_READ)
+671-				memset(data, 0, len);
+672-			goto do_return_ok;
+673-		} else
+674-#endif /* MIPS */
+675-		{
+676:			if (paddr >= mem->physical_max && !no_exceptions)
+677-				if (memory_warn_about_unimplemented_addr
+678-				    (cpu, mem, writeflag, paddr, len))
+679-					return MEMORY_ACCESS_FAILED;
+680-
+681-			if (writeflag == MEM_READ) {
+682-				/*  Return all zeroes? (Or 0xff? TODO)  */
+683-				memset(data, 0, len);
+684-
+--
+688- *  I think I introduced it because it was how some guest OS (NetBSD?) detected
+689- *  the amount of RAM on some machine.
+690- *
+691- *  TODO: Figure out if it is not needed anymore, and remove it completely.
+692- */
+693-#ifdef MEM_MIPS
+694-				/*
+695-				 *  For real data/instruction accesses, cause
+696:				 *  an exceptions on an illegal read:
+697-				 */
+698:				if (cache != CACHE_NONE && !no_exceptions &&
+699-				    paddr >= mem->physical_max &&
+700-				    paddr < mem->physical_max+1048576) {
+701:					mips_cpu_exception(cpu,
+702-					    EXCEPTION_DBE, 0, vaddr, 0,
+703-					    0, 0, 0);
+704-				}
+705-#endif  /*  MEM_MIPS  */
+706-#endif
+707-			}
+708-
+709:			/*  Hm? Shouldn't there be a DBE exception for
+710-			    invalid writes as well?  TODO  */
+711-
+712-			goto do_return_ok;
+713-		}
+714-	}
+715-
+716-
+717-	/*
+--
+737-
+738-	if (cpu->update_translation_table != NULL && !dyntrans_device_danger
+739-#ifdef MEM_MIPS
+740-	    /*  Ugly hack for R2000/R3000 caches:  */
+741-	    && (cpu->cd.mips.cpu_type.mmu_model != MMU3K ||
+742-            !(cpu->cd.mips.coproc[0]->reg[COP0_STATUS] & MIPS1_ISOL_CACHES))
+743-#endif
+744-	    && !(ok & MEMORY_NOT_FULL_PAGE)
+745:	    && !no_exceptions)
+746-		cpu->update_translation_table(cpu, vaddr & ~offset_mask,
+747-		    memblock, (misc_flags & MEMORY_USER_ACCESS) |
+748-		    (cache == CACHE_INSTRUCTION?
+749-			(writeflag == MEM_WRITE? 1 : 0) : ok - 1),
+750-		    paddr & ~offset_mask);
+751-
+752-	/*
+753-	 *  If writing, or if mapping a page where writing is ok later on,
+
+ succeeded in 116ms:
+GXEMUL-SEC/src/cpus/cpu_alpha.c:32: *  See http://www.eecs.harvard.edu/~nr/toolkit/specs/alpha.html for info
+GXEMUL-SEC/src/cpus/cpu_alpha.c:52:#include "tmp_alpha_head.c"
+GXEMUL-SEC/src/cpus/cpu_alpha.c:56:static const char *alpha_regname[N_ALPHA_REGS] = ALPHA_REG_NAMES; 
+GXEMUL-SEC/src/cpus/cpu_alpha.c:58:void alpha_irq_interrupt_assert(struct interrupt *interrupt);
+GXEMUL-SEC/src/cpus/cpu_alpha.c:59:void alpha_irq_interrupt_deassert(struct interrupt *interrupt);
+GXEMUL-SEC/src/cpus/cpu_alpha.c:63: *  alpha_cpu_new():
+GXEMUL-SEC/src/cpus/cpu_alpha.c:68:int alpha_cpu_new(struct cpu *cpu, struct memory *mem,
+GXEMUL-SEC/src/cpus/cpu_alpha.c:72:	struct alpha_cpu_type_def cpu_type_defs[] = ALPHA_CPU_TYPE_DEFS;
+GXEMUL-SEC/src/cpus/cpu_alpha.c:87:	cpu->memory_rw = alpha_memory_rw;
+GXEMUL-SEC/src/cpus/cpu_alpha.c:88:	cpu->run_instr = alpha_run_instr;
+GXEMUL-SEC/src/cpus/cpu_alpha.c:89:	cpu->translate_v2p = alpha_translate_v2p;
+GXEMUL-SEC/src/cpus/cpu_alpha.c:90:	cpu->update_translation_table = alpha_update_translation_table;
+GXEMUL-SEC/src/cpus/cpu_alpha.c:92:	    alpha_invalidate_translation_caches;
+GXEMUL-SEC/src/cpus/cpu_alpha.c:93:	cpu->invalidate_code_translation = alpha_invalidate_code_translation;
+GXEMUL-SEC/src/cpus/cpu_alpha.c:95:	cpu->cd.alpha.cpu_type = cpu_type_defs[i];
+GXEMUL-SEC/src/cpus/cpu_alpha.c:97:	cpu->cd.alpha.r[ALPHA_SP] = 0xfffffc000000ff00ULL;
+GXEMUL-SEC/src/cpus/cpu_alpha.c:102:	for (i=0; i<N_ALPHA_KENTRY; i++)
+GXEMUL-SEC/src/cpus/cpu_alpha.c:103:		cpu->cd.alpha.kentry[i] = 0x10010;
+GXEMUL-SEC/src/cpus/cpu_alpha.c:107:	cpu->cd.alpha.ctx = 0x10100;
+GXEMUL-SEC/src/cpus/cpu_alpha.c:110:	for (i=0; i<N_ALPHA_REGS; i++)
+GXEMUL-SEC/src/cpus/cpu_alpha.c:111:		CPU_SETTINGS_ADD_REGISTER64(alpha_regname[i],
+GXEMUL-SEC/src/cpus/cpu_alpha.c:112:		    cpu->cd.alpha.r[i]);
+GXEMUL-SEC/src/cpus/cpu_alpha.c:122:		templ.interrupt_assert = alpha_irq_interrupt_assert; 
+GXEMUL-SEC/src/cpus/cpu_alpha.c:123:		templ.interrupt_deassert = alpha_irq_interrupt_deassert; 
+GXEMUL-SEC/src/cpus/cpu_alpha.c:132: *  alpha_cpu_dumpinfo():
+GXEMUL-SEC/src/cpus/cpu_alpha.c:134:void alpha_cpu_dumpinfo(struct cpu *cpu, bool verbose)
+GXEMUL-SEC/src/cpus/cpu_alpha.c:141: *  alpha_cpu_list_available_types():
+GXEMUL-SEC/src/cpus/cpu_alpha.c:145:void alpha_cpu_list_available_types(void)
+GXEMUL-SEC/src/cpus/cpu_alpha.c:148:	struct alpha_cpu_type_def tdefs[] = ALPHA_CPU_TYPE_DEFS;
+GXEMUL-SEC/src/cpus/cpu_alpha.c:163: *  alpha_cpu_register_dump():
+GXEMUL-SEC/src/cpus/cpu_alpha.c:170:void alpha_cpu_register_dump(struct cpu *cpu, int gprs, int coprocs)
+GXEMUL-SEC/src/cpus/cpu_alpha.c:181:		for (i=0; i<N_ALPHA_REGS; i++) {
+GXEMUL-SEC/src/cpus/cpu_alpha.c:185:			if (r != ALPHA_ZERO)
+GXEMUL-SEC/src/cpus/cpu_alpha.c:186:				debug("%3s = 0x%016" PRIx64, alpha_regname[r],
+GXEMUL-SEC/src/cpus/cpu_alpha.c:187:				    (uint64_t) cpu->cd.alpha.r[r]);
+GXEMUL-SEC/src/cpus/cpu_alpha.c:198: *  alpha_cpu_tlbdump():
+GXEMUL-SEC/src/cpus/cpu_alpha.c:206:void alpha_cpu_tlbdump(struct cpu* cpu, int rawflag)
+GXEMUL-SEC/src/cpus/cpu_alpha.c:212: *  alpha_irq_interrupt_assert():
+GXEMUL-SEC/src/cpus/cpu_alpha.c:213: *  alpha_irq_interrupt_deassert():
+GXEMUL-SEC/src/cpus/cpu_alpha.c:215:void alpha_irq_interrupt_assert(struct interrupt *interrupt)
+GXEMUL-SEC/src/cpus/cpu_alpha.c:218:	cpu->cd.alpha.irq_asserted = 1;
+GXEMUL-SEC/src/cpus/cpu_alpha.c:220:void alpha_irq_interrupt_deassert(struct interrupt *interrupt)
+GXEMUL-SEC/src/cpus/cpu_alpha.c:223:	cpu->cd.alpha.irq_asserted = 0;
+GXEMUL-SEC/src/cpus/cpu_alpha.c:228: *  alpha_print_imm16_disp():
+GXEMUL-SEC/src/cpus/cpu_alpha.c:230: *  Used internally by alpha_cpu_disassemble_instr().
+GXEMUL-SEC/src/cpus/cpu_alpha.c:232:static void alpha_print_imm16_disp(int imm, int rb)
+GXEMUL-SEC/src/cpus/cpu_alpha.c:244:	if (rb != ALPHA_ZERO)
+GXEMUL-SEC/src/cpus/cpu_alpha.c:245:		debug("(%s)", alpha_regname[rb]);
+GXEMUL-SEC/src/cpus/cpu_alpha.c:250: *  alpha_cpu_disassemble_instr():
+GXEMUL-SEC/src/cpus/cpu_alpha.c:261:int alpha_cpu_disassemble_instr(struct cpu *cpu, unsigned char *ib,
+GXEMUL-SEC/src/cpus/cpu_alpha.c:297:		alpha_palcode_name(iw & 0x3ffffff, palcode_name,
+GXEMUL-SEC/src/cpus/cpu_alpha.c:303:		debug("lda%s\t%s,", opcode == 9? "h" : "", alpha_regname[ra]);
+GXEMUL-SEC/src/cpus/cpu_alpha.c:304:		alpha_print_imm16_disp(imm, rb);
+GXEMUL-SEC/src/cpus/cpu_alpha.c:354:		if (opcode == 0x0b && ra == ALPHA_ZERO) {
+GXEMUL-SEC/src/cpus/cpu_alpha.c:361:				debug("%s,", alpha_regname[ra]);
+GXEMUL-SEC/src/cpus/cpu_alpha.c:362:			alpha_print_imm16_disp(imm, rb);
+GXEMUL-SEC/src/cpus/cpu_alpha.c:397:			    alpha_regname[ra], (rb << 3) + (func >> 8),
+GXEMUL-SEC/src/cpus/cpu_alpha.c:398:			    alpha_regname[rc]);
+GXEMUL-SEC/src/cpus/cpu_alpha.c:400:			debug("%s\t%s,%s,%s\n", mnem, alpha_regname[ra],
+GXEMUL-SEC/src/cpus/cpu_alpha.c:401:			    alpha_regname[rb], alpha_regname[rc]);
+GXEMUL-SEC/src/cpus/cpu_alpha.c:427:		if (func == 0x020 && rc == ALPHA_ZERO)
+GXEMUL-SEC/src/cpus/cpu_alpha.c:429:		else if (func == 0x020 && (ra == ALPHA_ZERO
+GXEMUL-SEC/src/cpus/cpu_alpha.c:430:		    || rb == ALPHA_ZERO)) {
+GXEMUL-SEC/src/cpus/cpu_alpha.c:431:			if (ra == ALPHA_ZERO && rb == ALPHA_ZERO)
+GXEMUL-SEC/src/cpus/cpu_alpha.c:432:				debug("clr\t%s\n", alpha_regname[rc]);
+GXEMUL-SEC/src/cpus/cpu_alpha.c:433:			else if (ra == ALPHA_ZERO)
+GXEMUL-SEC/src/cpus/cpu_alpha.c:434:				debug("mov\t%s,%s\n", alpha_regname[rb],
+GXEMUL-SEC/src/cpus/cpu_alpha.c:435:				    alpha_regname[rc]);
+GXEMUL-SEC/src/cpus/cpu_alpha.c:437:				debug("mov\t%s,%s\n", alpha_regname[ra],
+GXEMUL-SEC/src/cpus/cpu_alpha.c:438:				    alpha_regname[rc]);
+GXEMUL-SEC/src/cpus/cpu_alpha.c:441:			debug("%s\t%s\n", mnem, alpha_regname[rc]);
+GXEMUL-SEC/src/cpus/cpu_alpha.c:444:			    alpha_regname[ra], (rb << 3) + (func >> 8),
+GXEMUL-SEC/src/cpus/cpu_alpha.c:445:			    alpha_regname[rc]);
+GXEMUL-SEC/src/cpus/cpu_alpha.c:447:			debug("%s\t%s,%s,%s\n", mnem, alpha_regname[ra],
+GXEMUL-SEC/src/cpus/cpu_alpha.c:448:			    alpha_regname[rb], alpha_regname[rc]);
+GXEMUL-SEC/src/cpus/cpu_alpha.c:485:			    alpha_regname[ra], (rb << 3) + (func >> 8),
+GXEMUL-SEC/src/cpus/cpu_alpha.c:486:			    alpha_regname[rc]);
+GXEMUL-SEC/src/cpus/cpu_alpha.c:488:			debug("%s\t%s,%s,%s\n", mnem, alpha_regname[ra],
+GXEMUL-SEC/src/cpus/cpu_alpha.c:489:			    alpha_regname[rb], alpha_regname[rc]);
+GXEMUL-SEC/src/cpus/cpu_alpha.c:505:			    alpha_regname[ra], (rb << 3) + (func >> 8),
+GXEMUL-SEC/src/cpus/cpu_alpha.c:506:			    alpha_regname[rc]);
+GXEMUL-SEC/src/cpus/cpu_alpha.c:508:			debug("%s\t%s,%s,%s\n", mnem, alpha_regname[ra],
+GXEMUL-SEC/src/cpus/cpu_alpha.c:509:			    alpha_regname[rb], alpha_regname[rc]);
+GXEMUL-SEC/src/cpus/cpu_alpha.c:574:				debug("(%s)", alpha_regname[rb]);
+GXEMUL-SEC/src/cpus/cpu_alpha.c:576:				debug("%s", alpha_regname[ra]);
+GXEMUL-SEC/src/cpus/cpu_alpha.c:592:			debug("\t%s,", alpha_regname[ra]);
+GXEMUL-SEC/src/cpus/cpu_alpha.c:593:			debug("(%s),", alpha_regname[rb]);
+GXEMUL-SEC/src/cpus/cpu_alpha.c:614:		if (ra != ALPHA_ZERO)
+GXEMUL-SEC/src/cpus/cpu_alpha.c:615:			debug("%s,", alpha_regname[ra]);
+GXEMUL-SEC/src/cpus/cpu_alpha.c:655:			debug("%s,", alpha_regname[ra]);
+GXEMUL-SEC/src/cpus/cpu_alpha.c:670:#define MEMORY_RW       alpha_userland_memory_rw
+GXEMUL-SEC/src/cpus/cpu_alpha.c:671:#define MEM_ALPHA
+GXEMUL-SEC/src/cpus/cpu_alpha.c:673:#include "memory_rw.c"
+GXEMUL-SEC/src/cpus/cpu_alpha.c:675:#undef MEM_ALPHA
+GXEMUL-SEC/src/cpus/cpu_alpha.c:679:#include "tmp_alpha_tail.c"
+GXEMUL-SEC/src/cpus/memory_alpha.c:37:#include "thirdparty/alpha_rpb.h"
+GXEMUL-SEC/src/cpus/memory_alpha.c:41: *  alpha_translate_v2p():
+GXEMUL-SEC/src/cpus/memory_alpha.c:43:int alpha_translate_v2p(struct cpu *cpu, uint64_t vaddr,
+GXEMUL-SEC/src/cpus/memory_alpha.c:46:	uint64_t base = cpu->cd.alpha.pcb.apcb_ptbr << ALPHA_PAGESHIFT;
+GXEMUL-SEC/src/cpus/memory_alpha.c:47:	uint64_t userMode = cpu->cd.alpha.ps & ALPHA_PSL_USERMODE;
+GXEMUL-SEC/src/cpus/memory_alpha.c:48:	// uint64_t vptptr = cpu->cd.alpha.vptptr;
+GXEMUL-SEC/src/cpus/memory_alpha.c:62:	if (!userMode && (vaddr >= ALPHA_K0SEG_BASE && vaddr <= ALPHA_K0SEG_END)) {
+GXEMUL-SEC/src/cpus/memory_alpha.c:120:	if (!(pte1 & ALPHA_PTE_VALID)) {
+GXEMUL-SEC/src/cpus/memory_alpha.c:131:	addr = ((pte1 >> 32) << ALPHA_PAGESHIFT) + (i2 * sizeof(uint64_t));
+GXEMUL-SEC/src/cpus/memory_alpha.c:141:	if (!(pte2 & ALPHA_PTE_VALID)) {
+GXEMUL-SEC/src/cpus/memory_alpha.c:152:	addr = ((pte2 >> 32) << ALPHA_PAGESHIFT) + (i3 * sizeof(uint64_t));
+GXEMUL-SEC/src/cpus/memory_alpha.c:163:	if (!(pte3 & ALPHA_PTE_VALID)) {
+GXEMUL-SEC/src/cpus/memory_alpha.c:168:	/*  #508: was just `PFN << pageSizeShift' -- a PAGE BASE.  memory_rw then takes
+GXEMUL-SEC/src/cpus/memory_alpha.c:180:	    function already has TWO names for 13 (ALPHA_PAGESHIFT and this local), and a
+GXEMUL-SEC/src/cpus/memory_alpha.c:186:	(*return_paddr) = (ALPHA_PTE_TO_PFN(pte3) << pageSizeShift)
+GXEMUL-SEC/src/cpus/memory_alpha.c:197:	fatal("[ alpha_translate_v2p: 0x%016" PRIx64" wasn't found ]\n", vaddr);
+GXEMUL-SEC/src/core/memory.c:48: *  memory_readmax64():
+GXEMUL-SEC/src/core/memory.c:55:uint64_t memory_readmax64(struct cpu *cpu, unsigned char *buf, int len)
+GXEMUL-SEC/src/core/memory.c:200:		cpu->memory_rw(cpu, mem, addr+cur_length,
+GXEMUL-SEC/src/core/memory.c:231:		cpu->memory_rw(cpu, mem, addr+len, &c, sizeof(c), MEM_READ,
+GXEMUL-SEC/src/core/memory.c:345: *  memory_rw.c still trusts the ORIGINAL (larger) length and installs a
+GXEMUL-SEC/src/core/memory.c:595: *  Called from memory_rw whenever memory outside of the physical address space
+GXEMUL-SEC/src/core/memory.c:673:		cpu->memory_rw(cpu, cpu->mem, addr + i, &ch, sizeof(ch),
+GXEMUL-SEC/src/core/memory.c:694:	cpu->memory_rw(cpu, cpu->mem,
+GXEMUL-SEC/src/core/memory.c:782:	return cpu->memory_rw(cpu, cpu->mem,
+GXEMUL-SEC/src/core/memory.c:806:	return cpu->memory_rw(cpu, cpu->mem,
+GXEMUL-SEC/src/core/memory.c:827:	return cpu->memory_rw(cpu, cpu->mem,
+GXEMUL-SEC/src/core/memory.c:844:				cpu->memory_rw(cpu, cpu->mem, addr,
+GXEMUL-SEC/src/core/memory.c:890:	cpu->memory_rw(cpu, cpu->mem,
+GXEMUL-SEC/src/core/memory.c:917:	cpu->memory_rw(cpu, cpu->mem,
+GXEMUL-SEC/src/core/memory.c:938:	cpu->memory_rw(cpu, cpu->mem,
+GXEMUL-SEC/src/devices/dev_wdc.c:375:	/*  (0x200 = LBA, 0x100 = DMA support.)  */
+GXEMUL-SEC/src/devices/dev_wdc.c:658:		    device is REGISTERED, so a 0 never reaches that path.  memory_rw sets
+GXEMUL-SEC/src/devices/dev_wdc.c:905:			debug("[ wdc: WDSF_SET_MODE drive %i, pio/dma flags "
+GXEMUL-SEC/src/devices/dev_wdc.c:1089:			idata = memory_readmax64(cpu, data, len);
+
+ succeeded in 158ms:
+struct bus_isa_data *bus_isa_init(struct machine *machine,
+	char *interrupt_base_path, uint32_t bus_isa_flags,
+	uint64_t isa_portbase, uint64_t isa_membase)
+{
+	struct bus_isa_data *d;
+	char tmpstr[300], tmpstr2[300];
+	int wdc0_irq = 14, wdc1_irq = 15;
+	int i, tmp_handle, kbd_in_use;
+	int lptbase = 0x378;
+
+	CHECK_ALLOCATION(d = (struct bus_isa_data *) malloc(sizeof(struct bus_isa_data)));
+	memset(d, 0, sizeof(struct bus_isa_data));
+
+	d->isa_portbase = isa_portbase;
+	d->isa_membase  = isa_membase;
+
+	if (!(bus_isa_flags & BUS_ISA_EXTERNAL_PIC)) {
+		/*  Connect to the interrupt which we're interrupting
+		    at (usually a CPU):  */
+		INTERRUPT_CONNECT(interrupt_base_path, d->irq);
+
+		/*  Register the 16 possible ISA interrupts:  */
+		for (i=0; i<16; i++) {
+			struct interrupt templ;
+			char name[300];
+			snprintf(name, sizeof(name),
+			    "%s.isa.%i", interrupt_base_path, i);
+			memset(&templ, 0, sizeof(templ));
+			templ.line = i;
+			templ.name = name;
+			templ.extra = d;
+			templ.interrupt_assert = isa_interrupt_assert;
+			templ.interrupt_deassert = isa_interrupt_deassert;
+			interrupt_handler_register(&templ);
+		}
+	}
+
+	kbd_in_use = ((bus_isa_flags & BUS_ISA_PCKBC_FORCE_USE) ||
+	    (machine->x11_md.in_use))? 1 : 0;
+
+	if (machine->machine_type == MACHINE_PREP) {
+		/*  PReP with obio controller has both WDCs on irq 13!  */
+		wdc0_irq = wdc1_irq = 13;
+	}
+
+	if (!(bus_isa_flags & BUS_ISA_EXTERNAL_PIC)) {
+		snprintf(tmpstr, sizeof(tmpstr), "8259 irq=%s addr=0x%llx",
+		    interrupt_base_path, (long long)(isa_portbase + 0x20));
+		d->pic1 = machine->isa_pic_data.pic1 = (struct pic8259_data *)
+		    device_add(machine, tmpstr);
+		d->ptr_to_pending_timer_interrupts =
+		    machine->isa_pic_data.pending_timer_interrupts;
+		d->ptr_to_last_int = &machine->isa_pic_data.last_int;
+
+		if (bus_isa_flags & BUS_ISA_NO_SECOND_PIC)
+			bus_isa_flags &= ~BUS_ISA_NO_SECOND_PIC;
+		else {
+			snprintf(tmpstr, sizeof(tmpstr),
+			    "8259 irq=%s.isa.2 addr=0x%llx",
+			    interrupt_base_path,(long long)(isa_portbase+0xa0));
+			d->pic2 = machine->isa_pic_data.pic2 = (struct pic8259_data *)
+			    device_add(machine, tmpstr);
+		}
+	} else {
+		bus_isa_flags &= ~BUS_ISA_EXTERNAL_PIC;
+	}
+
+	snprintf(tmpstr, sizeof(tmpstr), "8253 irq=%s.isa.%i addr=0x%llx "
+	    "in_use=0", interrupt_base_path, 0,
+	    (long long)(isa_portbase + 0x40));
+	device_add(machine, tmpstr);
+
+	snprintf(tmpstr, sizeof(tmpstr), "pccmos irq=%s.isa.%i addr=0x%llx",
+	    interrupt_base_path, 8, (long long)(isa_portbase + 0x70));
+	device_add(machine, tmpstr);
+
+	snprintf(tmpstr, sizeof(tmpstr), "ns16550 irq=%s.isa.%i addr=0x%llx "
+	    "name2=tty0 in_use=%i", interrupt_base_path, 4,
+	    (long long)(isa_portbase + 0x3f8), 1 - kbd_in_use);
+	machine->main_console_handle = (size_t)device_add(machine, tmpstr);
+
+	snprintf(tmpstr, sizeof(tmpstr), "ns16550 irq=%s.isa.%i addr=0x%llx "
+	    "name2=tty1 in_use=0", interrupt_base_path, 3,
+	    (long long)(isa_portbase + 0x2f8));
+	device_add(machine, tmpstr);
+
+	if (bus_isa_flags & BUS_ISA_LPTBASE_3BC) {
+		bus_isa_flags &= ~BUS_ISA_LPTBASE_3BC;
+		lptbase = 0x3bc;
+	}
+
+	snprintf(tmpstr, sizeof(tmpstr), "lpt irq=%s.isa.%i addr=0x%llx "
+	    "name2=lpt in_use=0", interrupt_base_path, 7,
+	    (long long)(isa_portbase + lptbase));
+	device_add(machine, tmpstr);
+
+	if (bus_isa_flags & BUS_ISA_IDE0) {
+		bus_isa_flags &= ~BUS_ISA_IDE0;
+		snprintf(tmpstr, sizeof(tmpstr), "wdc irq=%s.isa.%i "
+		    "addr=0x%llx", interrupt_base_path, wdc0_irq,
+		    (long long)(isa_portbase + 0x1f0));
+		if (diskimage_exist(machine, 0, DISKIMAGE_IDE) ||
+		    diskimage_exist(machine, 1, DISKIMAGE_IDE))
+			device_add(machine, tmpstr);
+	}
+
+	if (bus_isa_flags & BUS_ISA_IDE1) {
+		bus_isa_flags &= ~BUS_ISA_IDE1;
+		snprintf(tmpstr, sizeof(tmpstr), "wdc irq=%s.isa.%i "
+		    "addr=0x%llx", interrupt_base_path, wdc1_irq,
+		    (long long)(isa_portbase + 0x170));
+		if (diskimage_exist(machine, 2, DISKIMAGE_IDE) ||
+		    diskimage_exist(machine, 3, DISKIMAGE_IDE))
+			device_add(machine, tmpstr);
+	}
+
+	if (bus_isa_flags & BUS_ISA_FDC) {
+		bus_isa_flags &= ~BUS_ISA_FDC;
+		snprintf(tmpstr, sizeof(tmpstr), "fdc irq=%s.isa.%i "
+		    "addr=0x%llx", interrupt_base_path, 6,
+		    (long long)(isa_portbase + 0x3f0));
+		device_add(machine, tmpstr);
+	}
+
+	if (bus_isa_flags & BUS_ISA_VGA) {
+		if (machine->x11_md.in_use || bus_isa_flags & BUS_ISA_VGA_FORCE)
+			dev_vga_init(machine, machine->memory,
+			    isa_membase + 0xa0000, isa_portbase + 0x3c0,
+			    machine->machine_name);
+		bus_isa_flags &= ~(BUS_ISA_VGA | BUS_ISA_VGA_FORCE);
+	}
+
+	snprintf(tmpstr, sizeof(tmpstr), "%s.isa.1", interrupt_base_path);
+	snprintf(tmpstr2, sizeof(tmpstr2), "%s.isa.12", interrupt_base_path);
+	tmp_handle = dev_pckbc_init(machine, machine->memory,
+	    isa_portbase + 0x60, PCKBC_8042, tmpstr, tmpstr2,
+	    kbd_in_use, bus_isa_flags & BUS_ISA_PCKBC_NONPCSTYLE? 0 : 1);
+
+	if (kbd_in_use)
+		machine->main_console_handle = tmp_handle;
+
+	bus_isa_flags &= ~(BUS_ISA_PCKBC_NONPCSTYLE | BUS_ISA_PCKBC_FORCE_USE);
+
+	if (bus_isa_flags != 0)
+		fatal("WARNING! bus_isa(): unimplemented bus_isa_flags 0x%x\n",
+		    bus_isa_flags);
+
+	return d;
+}
+
+
+ succeeded in 164ms:
+PCIINIT(i82378zb)
+{
+	PCI_SET_DATA(PCI_ID_REG, PCI_ID_CODE(PCI_VENDOR_INTEL,
+	    PCI_PRODUCT_INTEL_SIO));
+
+	PCI_SET_DATA(PCI_CLASS_REG, PCI_CLASS_CODE(PCI_CLASS_BRIDGE,
+	    PCI_SUBCLASS_BRIDGE_ISA, 0) + 0x43);
+
+	PCI_SET_DATA(PCI_BHLC_REG,
+	    PCI_BHLC_CODE(0,0, 1 /* multi-function */, 0x40,0));
+
+	PCI_SET_DATA(0x40, 0x20);
+
+	/*  PIRQ[0]=10 PIRQ[1]=11 PIRQ[2]=14 PIRQ[3]=15  */
+	PCI_SET_DATA(0x60, 0x0f0e0b0a);
+}
+
+struct piix_ide_extra {
+	void	*wdc0;
+	void	*wdc1;
+};
+
+int piix_ide_cfg_reg_write(struct pci_device *pd, int reg, uint32_t value)
+{
+	void *wdc0 = ((struct piix_ide_extra *)pd->extra)->wdc0;
+	void *wdc1 = ((struct piix_ide_extra *)pd->extra)->wdc1;
+	int enabled = 0;
+
+	PCI_SET_DATA(reg, value);
+
+	switch (reg) {
+	case PCI_COMMAND_STATUS_REG:
+		if (value & PCI_COMMAND_IO_ENABLE)
+			enabled = 1;
+		if (wdc0 != NULL)
+			wdc_set_io_enabled((struct wdc_data *) wdc0, enabled);
+		if (wdc1 != NULL)
+			wdc_set_io_enabled((struct wdc_data *) wdc1, enabled);
+		return 1;
+	case PCI_MAPREG_START:
+	case PCI_MAPREG_START + 4:
+	case PCI_MAPREG_START + 8:
+	case PCI_MAPREG_START + 12:
+	case PCI_MAPREG_START + 16:
+	case PCI_MAPREG_START + 20:
+		return 1;
+	}
+
+	return 0;
+}
+
+PCIINIT(piix3_ide)
+{
+	char tmpstr[2000];
+
+	PCI_SET_DATA(PCI_ID_REG, PCI_ID_CODE(PCI_VENDOR_INTEL,
+	    PCI_PRODUCT_INTEL_82371SB_IDE));
+
+	/*  Possibly not correct:  */
+
+codex
+I found a false premise: RCR1 also has only declaration, readback, and store uses in the source, plus a comment mentioning its name. It has no functional consumer. That defeats the stated consumer-based distinction from RCR1, though it does not by itself prove B is hardware-correct.
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n -C 3 '21066|ALPHA_CPU_TYPE_DEFS' GXEMUL-SEC/src/include/cpu_alpha.h; rg -n '"'^void |''^int |''^static |''^DEVINIT|exit'"\\(|abort\\(' GXEMUL-SEC/src/devices/dev_lca.c" in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n -C 6 'dev_pckbc_init|MACHINE_ALPHA|machine_type|exit\\(|abort\\(' GXEMUL-SEC/src/devices/dev_pckbc.c" in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n -C 7 'DEVINIT|MACHINE_ALPHA|machine_type|exit\\(|abort\\(' GXEMUL-SEC/src/devices/dev_pccmos.c GXEMUL-SEC/src/devices/dev_8253.c GXEMUL-SEC/src/devices/dev_8259.c GXEMUL-SEC/src/devices/dev_ns16550.c" in C:\DocumentNoSnc\CC\GXEMUL
+ succeeded in 72ms:
+1192-
+1193-	return 1;
+1194-}
+1195-
+1196-
+1197-/*
+1198: *  dev_pckbc_init():
+1199- *
+1200- *  Type should be PCKBC_8042 or PCKBC_8242.
+1201- */
+1202:int dev_pckbc_init(struct machine *machine, struct memory *mem,
+1203-	uint64_t baseaddr, int type, char *keyboard_irqpath,
+1204-	char *mouse_irqpath, int in_use, int pc_style_flag)
+1205-{
+1206-	struct pckbc_data *d;
+1207-	int len = DEV_PCKBC_LENGTH;
+1208-
+
+ succeeded in 77ms:
+GXEMUL-SEC/src/devices/dev_ns16550.c-313-	if (writeflag == MEM_READ)
+GXEMUL-SEC/src/devices/dev_ns16550.c-314-		memory_writemax64(cpu, data, len, odata);
+GXEMUL-SEC/src/devices/dev_ns16550.c-315-
+GXEMUL-SEC/src/devices/dev_ns16550.c-316-	return 1;
+GXEMUL-SEC/src/devices/dev_ns16550.c-317-}
+GXEMUL-SEC/src/devices/dev_ns16550.c-318-
+GXEMUL-SEC/src/devices/dev_ns16550.c-319-
+GXEMUL-SEC/src/devices/dev_ns16550.c:320:DEVINIT(ns16550)
+GXEMUL-SEC/src/devices/dev_ns16550.c-321-{
+GXEMUL-SEC/src/devices/dev_ns16550.c-322-	struct ns_data *d;
+GXEMUL-SEC/src/devices/dev_ns16550.c-323-	size_t nlen;
+GXEMUL-SEC/src/devices/dev_ns16550.c-324-	char *name;
+GXEMUL-SEC/src/devices/dev_ns16550.c-325-
+GXEMUL-SEC/src/devices/dev_ns16550.c-326-	CHECK_ALLOCATION(d = (struct ns_data *) malloc(sizeof(struct ns_data)));
+GXEMUL-SEC/src/devices/dev_ns16550.c-327-	memset(d, 0, sizeof(struct ns_data));
+--
+GXEMUL-SEC/src/devices/dev_8259.c-252- *	    as separate devices.
+GXEMUL-SEC/src/devices/dev_8259.c-253- *
+GXEMUL-SEC/src/devices/dev_8259.c-254- *	x)  The irq number specified is the number used to re-calculate
+GXEMUL-SEC/src/devices/dev_8259.c-255- *	    CPU interrupt assertions.  It is _not_ the irq number at
+GXEMUL-SEC/src/devices/dev_8259.c-256- *	    which the PIC is connected. (That is left to machine specific
+GXEMUL-SEC/src/devices/dev_8259.c-257- *	    code in src/machine.c.)
+GXEMUL-SEC/src/devices/dev_8259.c-258- */
+GXEMUL-SEC/src/devices/dev_8259.c:259:DEVINIT(8259)
+GXEMUL-SEC/src/devices/dev_8259.c-260-{
+GXEMUL-SEC/src/devices/dev_8259.c-261-	struct pic8259_data *d;
+GXEMUL-SEC/src/devices/dev_8259.c-262-	char *name2;
+GXEMUL-SEC/src/devices/dev_8259.c-263-	size_t nlen = strlen(devinit->name) + 20;
+GXEMUL-SEC/src/devices/dev_8259.c-264-
+GXEMUL-SEC/src/devices/dev_8259.c-265-	CHECK_ALLOCATION(d = (struct pic8259_data *) malloc(sizeof(struct pic8259_data)));
+GXEMUL-SEC/src/devices/dev_8259.c-266-	memset(d, 0, sizeof(struct pic8259_data));
+--
+GXEMUL-SEC/src/devices/dev_8253.c-192-						d->timer0 = timer_add(
+GXEMUL-SEC/src/devices/dev_8253.c-193-						    d->hz[0], timer0_tick, d);
+GXEMUL-SEC/src/devices/dev_8253.c-194-					else
+GXEMUL-SEC/src/devices/dev_8253.c-195-						timer_update_frequency(
+GXEMUL-SEC/src/devices/dev_8253.c-196-						    d->timer0, d->hz[0]);
+GXEMUL-SEC/src/devices/dev_8253.c-197-					break;
+GXEMUL-SEC/src/devices/dev_8253.c-198-				case 1:	fatal("TODO: DMA refresh?\n");
+GXEMUL-SEC/src/devices/dev_8253.c:199:					break;	/*  #223: (Codex/Fable) warn+ignore, don't exit() the host  */
+GXEMUL-SEC/src/devices/dev_8253.c-200-				case 2:	fatal("TODO: 8253 tone generation?\n");
+GXEMUL-SEC/src/devices/dev_8253.c-201-					break;
+GXEMUL-SEC/src/devices/dev_8253.c-202-				}
+GXEMUL-SEC/src/devices/dev_8253.c-203-				break;
+GXEMUL-SEC/src/devices/dev_8253.c-204-			default:fatal("[ 8253: huh? writing to counter"
+GXEMUL-SEC/src/devices/dev_8253.c-205-				    " %i but neither from msb nor lsb? ]\n",
+GXEMUL-SEC/src/devices/dev_8253.c-206-				    relative_addr);
+GXEMUL-SEC/src/devices/dev_8253.c:207:				break;	/*  #223: (Codex/Fable) don't exit() the host  */
+GXEMUL-SEC/src/devices/dev_8253.c-208-			}
+GXEMUL-SEC/src/devices/dev_8253.c-209-		} else if (d->latched[relative_addr]) {
+GXEMUL-SEC/src/devices/dev_8253.c-210-			/*  #439: Reading a counter that the latch
+GXEMUL-SEC/src/devices/dev_8253.c-211-			    command latched.  gxemul models this timer's
+GXEMUL-SEC/src/devices/dev_8253.c-212-			    RATE, not a count that decrements (see the
+GXEMUL-SEC/src/devices/dev_8253.c-213-			    TODO at the top of this file), so there is no
+GXEMUL-SEC/src/devices/dev_8253.c-214-			    captured count to hand back.  Return 0 to say
+--
+GXEMUL-SEC/src/devices/dev_8253.c-266-				break;
+GXEMUL-SEC/src/devices/dev_8253.c-267-			case I8253_TIMER_MSB:
+GXEMUL-SEC/src/devices/dev_8253.c-268-				odata = (d->counter[relative_addr] >> 8) & 0xff;
+GXEMUL-SEC/src/devices/dev_8253.c-269-				break;
+GXEMUL-SEC/src/devices/dev_8253.c-270-			default:fatal("[ 8253: huh? reading from counter"
+GXEMUL-SEC/src/devices/dev_8253.c-271-				    " %i but neither from msb nor lsb? ]\n",
+GXEMUL-SEC/src/devices/dev_8253.c-272-				    relative_addr);
+GXEMUL-SEC/src/devices/dev_8253.c:273:				break;	/*  #223: (Codex/Fable) don't exit() the host  */
+GXEMUL-SEC/src/devices/dev_8253.c-274-			}
+GXEMUL-SEC/src/devices/dev_8253.c-275-		}
+GXEMUL-SEC/src/devices/dev_8253.c-276-
+GXEMUL-SEC/src/devices/dev_8253.c-277-		/*  #440: advance the flip-flop -- ALTERNATE, never latch.  This
+GXEMUL-SEC/src/devices/dev_8253.c-278-		    used to be `d->mode_byte &= ~I8253_TIMER_LSB', a one-way
+GXEMUL-SEC/src/devices/dev_8253.c-279-		    clear that also destroyed the programmed format.  */
+GXEMUL-SEC/src/devices/dev_8253.c-280-		if ((d->mode_byte & 0x30) == I8253_TIMER_16BIT) {
+--
+GXEMUL-SEC/src/devices/dev_8253.c-334-					debug("MSB ");
+GXEMUL-SEC/src/devices/dev_8253.c-335-				}
+GXEMUL-SEC/src/devices/dev_8253.c-336-			}
+GXEMUL-SEC/src/devices/dev_8253.c-337-			debug("]\n");
+GXEMUL-SEC/src/devices/dev_8253.c-338-
+GXEMUL-SEC/src/devices/dev_8253.c-339-			if (idata & I8253_TIMER_BCD) {
+GXEMUL-SEC/src/devices/dev_8253.c-340-				/*  #223: (Codex/Fable) warn+ignore BCD mode instead of
+GXEMUL-SEC/src/devices/dev_8253.c:341:				    exit()ing the host.  */
+GXEMUL-SEC/src/devices/dev_8253.c-342-				fatal("[ 8253: BCD not yet implemented ]\n");
+GXEMUL-SEC/src/devices/dev_8253.c-343-			}
+GXEMUL-SEC/src/devices/dev_8253.c-344-		} else {
+GXEMUL-SEC/src/devices/dev_8253.c-345-			debug("[ 8253: read; can this actually happen? ]\n");
+GXEMUL-SEC/src/devices/dev_8253.c-346-			odata = d->mode_byte;
+GXEMUL-SEC/src/devices/dev_8253.c-347-		}
+GXEMUL-SEC/src/devices/dev_8253.c-348-		break;
+--
+GXEMUL-SEC/src/devices/dev_8253.c-350-	default:if (writeflag == MEM_WRITE) {
+GXEMUL-SEC/src/devices/dev_8253.c-351-			fatal("[ 8253: unimplemented write to address 0x%x"
+GXEMUL-SEC/src/devices/dev_8253.c-352-			    " data=0x%02x ]\n", (int)relative_addr, (int)idata);
+GXEMUL-SEC/src/devices/dev_8253.c-353-		} else {
+GXEMUL-SEC/src/devices/dev_8253.c-354-			fatal("[ 8253: unimplemented read from address 0x%x "
+GXEMUL-SEC/src/devices/dev_8253.c-355-			    "]\n", (int)relative_addr);
+GXEMUL-SEC/src/devices/dev_8253.c-356-		}
+GXEMUL-SEC/src/devices/dev_8253.c:357:		break;	/*  #223: (Codex/Fable) warn+ignore, don't exit() the host  */
+GXEMUL-SEC/src/devices/dev_8253.c-358-	}
+GXEMUL-SEC/src/devices/dev_8253.c-359-
+GXEMUL-SEC/src/devices/dev_8253.c-360-	if (writeflag == MEM_READ)
+GXEMUL-SEC/src/devices/dev_8253.c-361-		memory_writemax64(cpu, data, len, odata);
+GXEMUL-SEC/src/devices/dev_8253.c-362-
+GXEMUL-SEC/src/devices/dev_8253.c-363-	return 1;
+GXEMUL-SEC/src/devices/dev_8253.c-364-}
+GXEMUL-SEC/src/devices/dev_8253.c-365-
+GXEMUL-SEC/src/devices/dev_8253.c-366-
+GXEMUL-SEC/src/devices/dev_8253.c:367:DEVINIT(8253)
+GXEMUL-SEC/src/devices/dev_8253.c-368-{
+GXEMUL-SEC/src/devices/dev_8253.c-369-	struct pit8253_data *d;
+GXEMUL-SEC/src/devices/dev_8253.c-370-
+GXEMUL-SEC/src/devices/dev_8253.c-371-	CHECK_ALLOCATION(d = (struct pit8253_data *) malloc(sizeof(struct pit8253_data)));
+GXEMUL-SEC/src/devices/dev_8253.c-372-	memset(d, 0, sizeof(struct pit8253_data));
+GXEMUL-SEC/src/devices/dev_8253.c-373-
+GXEMUL-SEC/src/devices/dev_8253.c-374-	d->in_use = devinit->in_use;
+--
+GXEMUL-SEC/src/devices/dev_pccmos.c-105-	if (writeflag == MEM_READ)
+GXEMUL-SEC/src/devices/dev_pccmos.c-106-		memory_writemax64(cpu, data, len, odata);
+GXEMUL-SEC/src/devices/dev_pccmos.c-107-
+GXEMUL-SEC/src/devices/dev_pccmos.c-108-	return 1;
+GXEMUL-SEC/src/devices/dev_pccmos.c-109-}
+GXEMUL-SEC/src/devices/dev_pccmos.c-110-
+GXEMUL-SEC/src/devices/dev_pccmos.c-111-
+GXEMUL-SEC/src/devices/dev_pccmos.c:112:DEVINIT(pccmos)
+GXEMUL-SEC/src/devices/dev_pccmos.c-113-{
+GXEMUL-SEC/src/devices/dev_pccmos.c-114-	int type = MC146818_PC_CMOS, len = DEV_PCCMOS_LENGTH;
+GXEMUL-SEC/src/devices/dev_pccmos.c-115-	struct pccmos_data *d;
+GXEMUL-SEC/src/devices/dev_pccmos.c-116-
+GXEMUL-SEC/src/devices/dev_pccmos.c-117-	CHECK_ALLOCATION(d = (struct pccmos_data *) malloc(sizeof(struct pccmos_data)));
+GXEMUL-SEC/src/devices/dev_pccmos.c-118-	memset(d, 0, sizeof(struct pccmos_data));
+GXEMUL-SEC/src/devices/dev_pccmos.c-119-
+GXEMUL-SEC/src/devices/dev_pccmos.c:120:	switch (devinit->machine->machine_type) {
+GXEMUL-SEC/src/devices/dev_pccmos.c-121-	case MACHINE_CATS:
+GXEMUL-SEC/src/devices/dev_pccmos.c-122-	case MACHINE_NETWINDER:
+GXEMUL-SEC/src/devices/dev_pccmos.c-123-		type = MC146818_CATS;
+GXEMUL-SEC/src/devices/dev_pccmos.c-124-		d->ram[0x48] = 20;		/*  century  */
+GXEMUL-SEC/src/devices/dev_pccmos.c-125-		len = DEV_PCCMOS_LENGTH * 2;
+GXEMUL-SEC/src/devices/dev_pccmos.c-126-		break;
+GXEMUL-SEC/src/devices/dev_pccmos.c-127-	case MACHINE_ALGOR:
+--
+GXEMUL-SEC/src/devices/dev_pccmos.c-134-	case MACHINE_EVBMIPS:
+GXEMUL-SEC/src/devices/dev_pccmos.c-135-		/*  Malta etc.  */
+GXEMUL-SEC/src/devices/dev_pccmos.c-136-		type = MC146818_ALGOR;
+GXEMUL-SEC/src/devices/dev_pccmos.c-137-		break;
+GXEMUL-SEC/src/devices/dev_pccmos.c-138-	case MACHINE_COBALT:
+GXEMUL-SEC/src/devices/dev_pccmos.c-139-	case MACHINE_PREP:
+GXEMUL-SEC/src/devices/dev_pccmos.c-140-	case MACHINE_MVMEPPC:
+GXEMUL-SEC/src/devices/dev_pccmos.c:141:	case MACHINE_ALPHA:
+GXEMUL-SEC/src/devices/dev_pccmos.c-142-	case MACHINE_IYONIX:	// TODO: not sure about exact type.
+GXEMUL-SEC/src/devices/dev_pccmos.c-143-		break;
+GXEMUL-SEC/src/devices/dev_pccmos.c-144-	default:fatal("devinit_pccmos(): unimplemented machine type"
+GXEMUL-SEC/src/devices/dev_pccmos.c:145:		    " %i\n", devinit->machine->machine_type);
+GXEMUL-SEC/src/devices/dev_pccmos.c:146:		exit(1);
+GXEMUL-SEC/src/devices/dev_pccmos.c-147-	}
+GXEMUL-SEC/src/devices/dev_pccmos.c-148-
+GXEMUL-SEC/src/devices/dev_pccmos.c-149-	memory_device_register(devinit->machine->memory, devinit->name,
+GXEMUL-SEC/src/devices/dev_pccmos.c-150-	    devinit->addr, len, dev_pccmos_access, (void *)d,
+GXEMUL-SEC/src/devices/dev_pccmos.c-151-	    DM_DEFAULT, NULL);
+GXEMUL-SEC/src/devices/dev_pccmos.c-152-
+GXEMUL-SEC/src/devices/dev_pccmos.c-153-	dev_mc146818_init(devinit->machine, devinit->machine->memory,
+
+ succeeded in 82ms:
+56-/*  TODO: More features  */
+57-#define	ALPHA_FEATURE_BWX		1
+58-
+59:#define ALPHA_CPU_TYPE_DEFS	{					\
+60-	{ "21064",	0x000000002ULL, 0, 0, 16,5,2, 16,5,2,  0,0,0 },	\
+61:	{ "21066",	0x200000004ULL, 0, 0, 16,5,2, 16,5,2,  0,0,0 },	\
+62-	{ "21164",	0x000000005ULL, 0, 1, 16,5,2, 16,5,2,  0,0,0 },	\
+63-	{ "21164A-2",	0x000000007ULL, 0, 1, 16,5,2, 16,5,2,  0,0,0 },	\
+64-	{ "21164PC",	0x000000009ULL, 0, 1, 16,5,2, 16,5,2,  0,0,0 },	\
+70:void lca_interrupt_assert(struct interrupt *interrupt)
+73:	exit(1);
+82:void lca_interrupt_deassert(struct interrupt *interrupt)
+85:	exit(1);
+129:			exit(1);  */
+134:		exit(1);
+163:		exit(1);
+215:				exit(1);
+235:				exit(1);
+250:				exit(1);
+265:				exit(1);
+289:				exit(1);
+304:				exit(1);
+324:		exit(1);
+334:DEVINIT(lca)
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$reviewLines = Get-Content -LiteralPath GXEMUL-SEC/src/devices/bus_pci.c; $reviewLines[350..382]' in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n -C 7 'dev_mc146818_init|case MACHINE_ALPHA|switch \\(machine->machine_type\\)|unimplemented machine|exit\\(|abort\\(' GXEMUL-SEC/src/devices/dev_mc146818.c" in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$reviewLines = Get-Content -LiteralPath GXEMUL-SEC/src/devices/dev_pccmos.c; $reviewLines[146..175]' in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n -C 4 'RCR1|RCR2' GXEMUL-SEC/src/include/thirdparty/sh4_rtcreg.h" in C:\DocumentNoSnc\CC\GXEMUL
+ succeeded in 105ms:
+577-#endif
+578-
+579-	return 1;
+580-}
+581-
+582-
+583-/*
+584: *  dev_mc146818_init():
+585- *
+586- *  This needs to work for both DECstation emulation and other machine types,
+587- *  so it contains both rtc related stuff and the station's Ethernet address.
+588- */
+589:void dev_mc146818_init(struct machine *machine, struct memory *mem,
+590-	uint64_t baseaddr, char *irq_path, int access_style, int addrdiv)
+591-{
+592-	unsigned char ether_address[6];
+593-	int i, dev_len;
+594-	struct mc_data *d;
+595-
+596-	CHECK_ALLOCATION(d = (struct mc_data *) malloc(sizeof(struct mc_data)));
+
+ succeeded in 114ms:
+47-#define	SH3_RHRAR			0xfffffed4
+48-#define	SH3_RWKAR			0xfffffed6
+49-#define	SH3_RDAYAR			0xfffffed8
+50-#define	SH3_RMONAR			0xfffffeda
+51:#define	SH3_RCR1			0xfffffedc
+52:#define	SH3_RCR2			0xfffffede
+53-
+54-#define	SH4_R64CNT			0xffc80000
+55-#define	SH4_RSECCNT			0xffc80004
+56-#define	SH4_RMINCNT			0xffc80008
+--
+64-#define	SH4_RHRAR			0xffc80028
+65-#define	SH4_RWKAR			0xffc8002c
+66-#define	SH4_RDAYAR			0xffc80030
+67-#define	SH4_RMONAR			0xffc80034
+68:#define	SH4_RCR1			0xffc80038
+69:#define	SH4_RCR2			0xffc8003c
+70-
+71:#define	  SH_RCR1_CF			  0x80
+72:#define	  SH_RCR1_CIE			  0x10
+73:#define	  SH_RCR1_AIE			  0x08
+74:#define	  SH_RCR1_AF			  0x01
+75:#define	  SH_RCR2_PEF			  0x80
+76:#define	  SH_RCR2_PES2			  0x40
+77:#define	  SH_RCR2_PES1			  0x20
+78:#define	  SH_RCR2_PES0			  0x10
+79:#define	  SH_RCR2_ENABLE		  0x08
+80:#define	  SH_RCR2_ADJ			  0x04
+81:#define	  SH_RCR2_RESET			  0x02
+82:#define	  SH_RCR2_START			  0x01
+83-
+84-#ifndef _LOCORE
+85-#if defined(SH3) && defined(SH4)
+86-extern uint32_t __sh_R64CNT;
+--
+96-extern uint32_t __sh_RHRAR;
+97-extern uint32_t __sh_RWKAR;
+98-extern uint32_t __sh_RDAYAR;
+99-extern uint32_t __sh_RMONAR;
+100:extern uint32_t __sh_RCR1;
+101:extern uint32_t __sh_RCR2;
+102-#endif /* SH3 && SH4 */
+103-#endif /* !_LOCORE */
+104-
+105-#endif	/*  SH4_RTCREG_H  */
+
+ succeeded in 166ms:
+struct pci_data *bus_pci_init(struct machine *machine, const char *irq_path,
+	uint64_t pci_actual_io_offset, uint64_t pci_actual_mem_offset,
+	uint64_t pci_portbase, uint64_t pci_membase, const char *pci_irqbase,
+	uint64_t isa_portbase, uint64_t isa_membase, const char *isa_irqbase)
+{
+	struct pci_data *d;
+
+	CHECK_ALLOCATION(d = (struct pci_data *) malloc(sizeof(struct pci_data)));
+	memset(d, 0, sizeof(struct pci_data));
+
+	CHECK_ALLOCATION(d->irq_path     = strdup(irq_path));
+	CHECK_ALLOCATION(d->irq_path_isa = strdup(isa_irqbase));
+	CHECK_ALLOCATION(d->irq_path_pci = strdup(pci_irqbase));
+
+	d->pci_actual_io_offset  = pci_actual_io_offset;
+	d->pci_actual_mem_offset = pci_actual_mem_offset;
+	d->pci_portbase          = pci_portbase;
+	d->pci_membase           = pci_membase;
+	d->isa_portbase          = isa_portbase;
+	d->isa_membase           = isa_membase;
+
+	d->cur_pci_portbase = d->pci_portbase;
+	d->cur_pci_membase  = d->pci_membase;
+
+	/*  Assume that the first 64KB could be used by legacy ISA devices:  */
+	if (d->isa_portbase != 0 || d->isa_membase != 0) {
+		d->cur_pci_portbase += 0x10000;
+		d->cur_pci_membase  += 0x10000;
+	}
+
+	return d;
+}
+
+
+ succeeded in 168ms:
+	}
+
+	memory_device_register(devinit->machine->memory, devinit->name,
+	    devinit->addr, len, dev_pccmos_access, (void *)d,
+	    DM_DEFAULT, NULL);
+
+	dev_mc146818_init(devinit->machine, devinit->machine->memory,
+	    PCCMOS_MC146818_FAKE_ADDR, devinit->interrupt_path, type, 1);
+
+	return 1;
+}
+
+
+ERROR: Reconnecting... 2/5
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$reviewLines = Get-Content -LiteralPath GXEMUL-SEC/src/devices/dev_mc146818.c; $reviewLines[588..($reviewLines.Length - 1)]' in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$reviewLines = Get-Content -LiteralPath GXEMUL-SEC/src/devices/dev_8259.c; $reviewLines[258..($reviewLines.Length - 1)]' in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$reviewLines = Get-Content -LiteralPath GXEMUL-SEC/src/devices/dev_pckbc.c; $reviewLines[1201..($reviewLines.Length - 1)]' in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$reviewLines = Get-Content -LiteralPath GXEMUL-SEC/src/devices/dev_ns16550.c; $reviewLines[319..($reviewLines.Length - 1)]' in C:\DocumentNoSnc\CC\GXEMUL
+ succeeded in 167ms:
+DEVINIT(ns16550)
+{
+	struct ns_data *d;
+	size_t nlen;
+	char *name;
+
+	CHECK_ALLOCATION(d = (struct ns_data *) malloc(sizeof(struct ns_data)));
+	memset(d, 0, sizeof(struct ns_data));
+
+	d->addrmult	= devinit->addr_mult;
+	d->in_use	= devinit->in_use;
+	d->enable_fifo	= 1;
+	d->dlab		= 0;
+	d->divisor	= 115200 / 9600;
+	d->databits	= 8;
+	d->parity	= 'N';
+	d->stopbits	= "1";
+	d->name		= devinit->name2 != NULL? devinit->name2 : "";
+	d->console_handle =
+	    console_start_slave(devinit->machine, devinit->name2 != NULL?
+	    devinit->name2 : devinit->name, d->in_use);
+
+	INTERRUPT_CONNECT(devinit->interrupt_path, d->irq);
+
+	nlen = strlen(devinit->name) + 10;
+	if (devinit->name2 != NULL)
+		nlen += strlen(devinit->name2);
+	CHECK_ALLOCATION(name = (char *) malloc(nlen));
+	if (devinit->name2 != NULL && devinit->name2[0])
+		snprintf(name, nlen, "%s [%s]", devinit->name, devinit->name2);
+	else
+		snprintf(name, nlen, "%s", devinit->name);
+
+	memory_device_register(devinit->machine->memory, name, devinit->addr,
+	    DEV_NS16550_LENGTH * d->addrmult, dev_ns16550_access, d,
+	    DM_DEFAULT, NULL);
+	machine_add_tickfunction(devinit->machine,
+	    dev_ns16550_tick, d, TICK_SHIFT);
+
+	/*
+	 *  NOTE:  Ugly cast into a pointer, because this is a convenient way
+	 *         to return the console handle to code in src/machines/.
+	 */
+	devinit->return_ptr = (void *)(size_t)d->console_handle;
+
+	return 1;
+}
+
+
+ succeeded in 177ms:
+void dev_mc146818_init(struct machine *machine, struct memory *mem,
+	uint64_t baseaddr, char *irq_path, int access_style, int addrdiv)
+{
+	unsigned char ether_address[6];
+	int i, dev_len;
+	struct mc_data *d;
+
+	CHECK_ALLOCATION(d = (struct mc_data *) malloc(sizeof(struct mc_data)));
+	memset(d, 0, sizeof(struct mc_data));
+
+	d->access_style  = access_style;
+	d->addrdiv       = addrdiv;
+
+	INTERRUPT_CONNECT(irq_path, d->irq);
+
+	d->use_bcd = 0;
+	switch (access_style) {
+	case MC146818_SGI:
+	case MC146818_PC_CMOS:
+	case MC146818_PMPPC:
+		d->use_bcd = 1;
+	}
+
+	if (machine->machine_type != MACHINE_PREP) {
+		/*  NetBSD/prep has a really ugly clock detection code;
+		    no other machines/OSes don't need this.  */
+		d->ugly_netbsd_prep_hack_done = NETBSD_HACK_DONE;
+	}
+
+	if (access_style == MC146818_DEC) {
+		/*  Station Ethernet Address, on DECstation 3100:  */
+		for (i=0; i<6; i++)
+			ether_address[i] = 0x10 * (i+1);
+
+		d->reg[0x01] = ether_address[0];
+		d->reg[0x05] = ether_address[1];
+		d->reg[0x09] = ether_address[2];
+		d->reg[0x0d] = ether_address[3];
+		d->reg[0x11] = ether_address[4];
+		d->reg[0x15] = ether_address[5];
+		/*  TODO:  19, 1d, 21, 25 = checksum bytes 1,2,2,1 resp. */
+		d->reg[0x29] = ether_address[5];
+		d->reg[0x2d] = ether_address[4];
+		d->reg[0x31] = ether_address[3];
+		d->reg[0x35] = ether_address[2];
+		d->reg[0x39] = ether_address[1];
+		d->reg[0x3d] = ether_address[1];
+		d->reg[0x41] = ether_address[0];
+		d->reg[0x45] = ether_address[1];
+		d->reg[0x49] = ether_address[2];
+		d->reg[0x4d] = ether_address[3];
+		d->reg[0x51] = ether_address[4];
+		d->reg[0x55] = ether_address[5];
+		/*  TODO:  59, 5d = checksum bytes 1,2 resp. */
+		d->reg[0x61] = 0xff;
+		d->reg[0x65] = 0x00;
+		d->reg[0x69] = 0x55;
+		d->reg[0x6d] = 0xaa;
+		d->reg[0x71] = 0xff;
+		d->reg[0x75] = 0x00;
+		d->reg[0x79] = 0x55;
+		d->reg[0x7d] = 0xaa;
+
+		/*  Battery valid, for DECstations  */
+		d->reg[0xf8] = 1;
+	}
+
+	/*
+	 *  uip_threshold should ideally be 1, but when Linux polls the UIP bit
+	 *  it looses speed. This hack gives Linux the impression that the cpu
+	 *  is uip_threshold times faster than the slow clock it would
+	 *  otherwise detect.
+	 *
+	 *  TODO:  Find out if this messes up Sprite emulation; if so, then
+	 *         this hack has to be removed.
+	 */
+	d->uip_threshold = 8;
+
+	if (access_style == MC146818_ARC_JAZZ)
+		memory_device_register(mem, "mc146818_jazz", 0x90000070ULL,
+		    1, dev_mc146818_jazz_access, d, DM_DEFAULT, NULL);
+
+	dev_len = DEV_MC146818_LENGTH;
+	switch (access_style) {
+	case MC146818_CATS:
+	case MC146818_PC_CMOS:
+		dev_len = 2;
+		break;
+	case MC146818_SGI:
+		dev_len = 0x400;
+	}
+
+	memory_device_register(mem, "mc146818", baseaddr,
+	    dev_len * addrdiv, dev_mc146818_access,
+	    d, DM_DEFAULT, NULL);
+
+	mc146818_update_time(d);
+
+	machine_add_tickfunction(machine, dev_mc146818_tick, d,
+	    MC146818_TICK_SHIFT);
+}
+
+
+ succeeded in 182ms:
+DEVINIT(8259)
+{
+	struct pic8259_data *d;
+	char *name2;
+	size_t nlen = strlen(devinit->name) + 20;
+
+	CHECK_ALLOCATION(d = (struct pic8259_data *) malloc(sizeof(struct pic8259_data)));
+	memset(d, 0, sizeof(struct pic8259_data));
+
+	INTERRUPT_CONNECT(devinit->interrupt_path, d->irq);
+
+	CHECK_ALLOCATION(name2 = (char *) malloc(nlen));
+	snprintf(name2, nlen, "%s", devinit->name);
+	if ((devinit->addr & 0xfff) == 0xa0) {
+		strlcat(name2, " [secondary]", nlen);
+		d->irq_base = 8;
+	}
+
+	memory_device_register(devinit->machine->memory, name2,
+	    devinit->addr, DEV_8259_LENGTH, dev_8259_access, d,
+	    DM_DEFAULT, NULL);
+
+	devinit->return_ptr = d;
+	return 1;
+}
+
+
+ succeeded in 194ms:
+int dev_pckbc_init(struct machine *machine, struct memory *mem,
+	uint64_t baseaddr, int type, char *keyboard_irqpath,
+	char *mouse_irqpath, int in_use, int pc_style_flag)
+{
+	struct pckbc_data *d;
+	int len = DEV_PCKBC_LENGTH;
+
+	CHECK_ALLOCATION(d = (struct pckbc_data *) malloc(sizeof(struct pckbc_data)));
+	memset(d, 0, sizeof(struct pckbc_data));
+
+	d->translation_table = 2;
+
+	if (type == PCKBC_8242) {
+		len = 0x40;
+		d->translation_table = 3;
+	}
+	
+	if (type == PCKBC_JAZZ) {
+		type = PCKBC_8042;
+		len = DEV_PCKBC_LENGTH + 0x60;
+	}
+
+	INTERRUPT_CONNECT(keyboard_irqpath, d->irq_keyboard);
+	INTERRUPT_CONNECT(mouse_irqpath, d->irq_mouse);
+
+	d->type              = type;
+	d->in_use            = in_use;
+	d->pc_style_flag     = pc_style_flag;
+	d->rx_int_enable[0]  = 1;
+	d->rx_int_enable[1]  = 0;
+	d->output_byte       = 0x02;	/*  A20 enable on PCs  */
+
+	// Default is ENABLE keyboard but DISABLE mouse port:
+	d->scanning_enabled[0] = 1;
+	d->scanning_enabled[1] = 0;
+
+	d->console_handle = console_start_slave_inputonly(
+	    machine, "pckbc", d->in_use);
+
+	memory_device_register(mem, "pckbc", baseaddr,
+	    len, dev_pckbc_access, d, DM_DEFAULT, NULL);
+	machine_add_tickfunction(machine, dev_pckbc_tick, d,
+	    PCKBC_TICKSHIFT);
+
+	return d->console_handle;
+}
+
+
+codex
+The review supports two narrower conclusions: B follows the project’s existing rejection policy, but neither choice has established hardware semantics here; and removing the six guards leaves five active `exit(1)` sites in `dev_lca.c`. I also found that “last accepted value” needs qualification: initialization sets the fields to zero, which three guards reject on writes.
+
+codex
+**VERDICT: Your argument for A fails as written: RCR1 also has no functional consumer. I recommend B for pass 1 as a conservative policy choice; hardware-correct write/readback behavior remains unproved.**
+
+This was a read-only source review of `GXEMUL-SEC/src/`. No emulator, probe, gate, or battery was run.
+
+1. **Premise 6 contains a false premise, and its conclusion is too strong.**
+
+   **Beyond the packet:** searching the source for `rtc_rcr1` finds exactly three non-comment occurrences: its declaration, readback, and assignment. The fourth textual occurrence is in the quoted comment. There is no functional consumer in `DEVICE_ACCESS(sh4)` or elsewhere found by that search. See [dev_sh4.c](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sh4.c:2774).
+
+   Thus “RCR1 acts on accepted stored values, whereas LCA merely stores them” does **not** distinguish these implementations. RCR1 can nevertheless agree with interrupts being disabled without needing a consumer: absence of a consumer and correctness for some settings are compatible.
+
+   The strongest counterargument to A is this: **a guest is itself a consumer of readback.** Previously, a rejected write ended execution before subsequent guest code could observe that value. A creates that observation and allows the guest to make further decisions from it. Existing incomplete behavior for accepted settings does not establish that these newly admitted executions are equally harmless.
+
+   There are two further gaps:
+
+   - No field reads rules out translation *controlled by those fields*. It does not, by itself, exclude fixed address handling that happens to agree with particular settings. My targeted checks did not establish such an implicit implementation.
+   - Reading back a programmed register is not proof that an operation using it has worked. Calling every accepted readback a pre-existing “lie” conflates register storage with operational behavior.
+
+   The defensible distinction is narrower: five LCA fields have no direct device-side effects beyond readback. That limits one kind of risk; it does not prove value-independent behavior.
+
+2. **B for this pass. The deciding fact: A expands the register values observable by a continuing guest.**
+
+   B avoids that expansion while removing the six process exits. That fits the project’s stated rejection policy. Both choices introduce continuation where execution previously terminated; B is therefore a deliberate recovery policy, not preservation of an already implemented successful transaction.
+
+   **Hardware fidelity cannot be settled from this packet.** The single missing reference is the 21066/LCA specification’s write and readback semantics for these six registers, including valid configurations outside the emulator’s accepted set and reserved bits. The assertion that hardware necessarily echoes every written value is not established here.
+
+   Also, `IOC_CONF` needs its own justification: it has a functional consumer. A can change its bus-selection bit during a write that B declines entirely. The window argument does not cover that difference.
+
+   For B, moving the assignment textually below the guard is insufficient unless rejection actually skips it. Preserve the enclosing switch’s common tail. B still returns successful completion for an ignored write; it does not deliver a guest-visible error.
+
+3. **The option set misses controlled guest stopping and deferred validation.**
+
+   Additional choices include:
+
+   - Stop or pause the affected emulated machine while retaining the host process.
+   - Accept register programming, then reject an operation when it actually requires unsupported translation.
+   - Apply different policies to different registers or fields.
+
+   These are design alternatives, not claims that suitable helpers already exist here. Controlled stopping is particularly relevant if host survival is required but continuing with unsupported behavior is unacceptable. Deferred validation requires an actual consumer and failure path.
+
+   Announcement policy is a separate decision from acceptance policy. A bounded, latched diagnostic can accompany either A or B; it does not make either semantically correct.
+
+   Nothing makes masking, an invented status error, or an unmapped-space fault automatically correct here. WDC’s command-abort protocol does not establish an LCA register-write error protocol. **Beyond the packet’s code excerpt:** the failed-device branch in `MEMORY_RW_ONE_PAGE`, [memory_rw.c](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:603), confirms the cited MIPS/M88K exception handling and absence of an Alpha equivalent there.
+
+4. **Yes: five active explicit exit sites remain in `dev_lca.c`.**
+
+   **Beyond the packet, verified in [dev_lca.c](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:70):** after removing the six value-guard exits, the remaining sites are the IOC default, PCI-configuration handler, ISA handler, and the two interrupt callbacks. The commented-out PCI exit is not an additional active site.
+
+   The IOC default terminates on both reads and writes. Neither status register has a case. These changes therefore do not establish that firmware execution can no longer terminate the host. Conversely, counting those sites does not prove runtime reachability of every one.
+
+   Window behavior, the passive translated-base registers, and ignored TBIA operations also remain incomplete.
+
+   **Another finding:** “readback returns the last accepted value” needs qualification. `DEVINIT(lca)` zeroes the structure. Until an accepted write occurs, B retains that initial zero. Three guards reject zero on writes: `W_MASK0`, `W_BASE1`, and `W_MASK1`. Thus retaining existing state does not invariably mean retaining a guard-accepted value.
+
+5. **No demonstrated rung-3 witness from this review.**
+
+   **Beyond the packet:** `MACHINE_SETUP(alpha)` in [machine_alpha.c](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/machines/machine_alpha.c:54) instantiates LCA for **AlphaBook 1**. `DEVINIT(lca)` registers the IOC handler. That establishes a source-level machine candidate, not a validated cold-debugger guest-store witness.
+
+   I would record **“static registration confirmed; runtime witness pending,”** rather than claim either demonstrated reachability or inherent impossibility. The missing benign measurement is successful cold-debugger initialization followed by an accepted IOC write/readback through guest execution and real decode. I have no validated machine/address witness to report.
+tokens used
+59,039
+**VERDICT: Your argument for A fails as written: RCR1 also has no functional consumer. I recommend B for pass 1 as a conservative policy choice; hardware-correct write/readback behavior remains unproved.**
+
+This was a read-only source review of `GXEMUL-SEC/src/`. No emulator, probe, gate, or battery was run.
+
+1. **Premise 6 contains a false premise, and its conclusion is too strong.**
+
+   **Beyond the packet:** searching the source for `rtc_rcr1` finds exactly three non-comment occurrences: its declaration, readback, and assignment. The fourth textual occurrence is in the quoted comment. There is no functional consumer in `DEVICE_ACCESS(sh4)` or elsewhere found by that search. See [dev_sh4.c](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sh4.c:2774).
+
+   Thus “RCR1 acts on accepted stored values, whereas LCA merely stores them” does **not** distinguish these implementations. RCR1 can nevertheless agree with interrupts being disabled without needing a consumer: absence of a consumer and correctness for some settings are compatible.
+
+   The strongest counterargument to A is this: **a guest is itself a consumer of readback.** Previously, a rejected write ended execution before subsequent guest code could observe that value. A creates that observation and allows the guest to make further decisions from it. Existing incomplete behavior for accepted settings does not establish that these newly admitted executions are equally harmless.
+
+   There are two further gaps:
+
+   - No field reads rules out translation *controlled by those fields*. It does not, by itself, exclude fixed address handling that happens to agree with particular settings. My targeted checks did not establish such an implicit implementation.
+   - Reading back a programmed register is not proof that an operation using it has worked. Calling every accepted readback a pre-existing “lie” conflates register storage with operational behavior.
+
+   The defensible distinction is narrower: five LCA fields have no direct device-side effects beyond readback. That limits one kind of risk; it does not prove value-independent behavior.
+
+2. **B for this pass. The deciding fact: A expands the register values observable by a continuing guest.**
+
+   B avoids that expansion while removing the six process exits. That fits the project’s stated rejection policy. Both choices introduce continuation where execution previously terminated; B is therefore a deliberate recovery policy, not preservation of an already implemented successful transaction.
+
+   **Hardware fidelity cannot be settled from this packet.** The single missing reference is the 21066/LCA specification’s write and readback semantics for these six registers, including valid configurations outside the emulator’s accepted set and reserved bits. The assertion that hardware necessarily echoes every written value is not established here.
+
+   Also, `IOC_CONF` needs its own justification: it has a functional consumer. A can change its bus-selection bit during a write that B declines entirely. The window argument does not cover that difference.
+
+   For B, moving the assignment textually below the guard is insufficient unless rejection actually skips it. Preserve the enclosing switch’s common tail. B still returns successful completion for an ignored write; it does not deliver a guest-visible error.
+
+3. **The option set misses controlled guest stopping and deferred validation.**
+
+   Additional choices include:
+
+   - Stop or pause the affected emulated machine while retaining the host process.
+   - Accept register programming, then reject an operation when it actually requires unsupported translation.
+   - Apply different policies to different registers or fields.
+
+   These are design alternatives, not claims that suitable helpers already exist here. Controlled stopping is particularly relevant if host survival is required but continuing with unsupported behavior is unacceptable. Deferred validation requires an actual consumer and failure path.
+
+   Announcement policy is a separate decision from acceptance policy. A bounded, latched diagnostic can accompany either A or B; it does not make either semantically correct.
+
+   Nothing makes masking, an invented status error, or an unmapped-space fault automatically correct here. WDC’s command-abort protocol does not establish an LCA register-write error protocol. **Beyond the packet’s code excerpt:** the failed-device branch in `MEMORY_RW_ONE_PAGE`, [memory_rw.c](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:603), confirms the cited MIPS/M88K exception handling and absence of an Alpha equivalent there.
+
+4. **Yes: five active explicit exit sites remain in `dev_lca.c`.**
+
+   **Beyond the packet, verified in [dev_lca.c](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:70):** after removing the six value-guard exits, the remaining sites are the IOC default, PCI-configuration handler, ISA handler, and the two interrupt callbacks. The commented-out PCI exit is not an additional active site.
+
+   The IOC default terminates on both reads and writes. Neither status register has a case. These changes therefore do not establish that firmware execution can no longer terminate the host. Conversely, counting those sites does not prove runtime reachability of every one.
+
+   Window behavior, the passive translated-base registers, and ignored TBIA operations also remain incomplete.
+
+   **Another finding:** “readback returns the last accepted value” needs qualification. `DEVINIT(lca)` zeroes the structure. Until an accepted write occurs, B retains that initial zero. Three guards reject zero on writes: `W_MASK0`, `W_BASE1`, and `W_MASK1`. Thus retaining existing state does not invariably mean retaining a guard-accepted value.
+
+5. **No demonstrated rung-3 witness from this review.**
+
+   **Beyond the packet:** `MACHINE_SETUP(alpha)` in [machine_alpha.c](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/machines/machine_alpha.c:54) instantiates LCA for **AlphaBook 1**. `DEVINIT(lca)` registers the IOC handler. That establishes a source-level machine candidate, not a validated cold-debugger guest-store witness.
+
+   I would record **“static registration confirmed; runtime witness pending,”** rather than claim either demonstrated reachability or inherent impossibility. The missing benign measurement is successful cold-debugger initialization followed by an accepted IOC write/readback through guest execution and real decode. I have no validated machine/address witness to report.

@@ -1,0 +1,96 @@
+**VERDICT**: **A for all six.** Premise 6 is conditionally sound — it holds IF premise 2 holds (no fourth read of the five window/TB_ENA fields). The brief treats all six as one block, but **CONF is structurally different** (it has a consumer: `bus = d->ioc_conf & 1` in `DEVICE_ACCESS(lca_pci_conf)`), and the argument for the five doesn't transfer cleanly. For the five, A is right because there is no consumer to protect and A preserves register-file fidelity (write X, read X, which hardware does). For CONF, A is *even more clearly* right: the consumer uses only bit 0, so storing a rejected value leaves the consumer correct; **B can silently break the consumer** if the old `ioc_conf` had a different bit 0. B is the wrong fix everywhere. The single fact that decides the fork is premise 2 — whether any tree code reads the five fields outside their readback sites.
+
+---
+
+## Premise audit
+
+| # | Claim | Label | Notes |
+|---|-------|-------|-------|
+| 1 | All six arms: store runs before guard | **READ** | The three fully inlined arms (`W_MASK0`, `W_BASE0`, `W_BASE1`, `W_MASK1`, `TB_ENA`, `CONF`) all show `d->field = idata;` before the `if (...)`. The shape is identical across the six. |
+| 2 | Five fields pure storage; `ioc_conf` has one consumer | **REASONED** | The counts (3 each for the five; 4 for `ioc_conf`, with the fourth being `bus = d->ioc_conf & 1`) are stated by the author as re-verified with a full denominator. The negative claim "no DMA-translation consumer" follows from the count but is not independently checkable from this packet. |
+| 3 | IOC readback returns the stored value | **READ** | `odata = d->ioc_conf;` is in the packet. Masking the store would change what the guest reads back. |
+| 4 | `fatal()` doesn't terminate; `debug()` can be silenced by `-q` | **PARTIALLY READ** | The `fatal(); exit(1);` pairing is visible in every guard arm. The claim that `fatal()` calls `va_debug()` and that `debug()` is `-q`-silenceable is **REASONED** (the packet asserts it; I can't see `va_debug()` or the `-q` path). |
+| 5 | `#447` and `#443` precedents | **READ** | Both block-comments are inlined verbatim. The RCR1 arm's own comment is also inlined. |
+| 6 | LCA is unlike RCR1 because no value is consumed | **REASONED** | Logically valid given premise 2, but the RCR1 analogy is weaker than the brief assumes — see Q1 below. |
+
+**One premise I cannot settle from the packet, and the single fact that would**: premise 2's negative claim ("no DMA-translation consumer for any of the five fields"). Settled by: `grep -rn 'window_base_0\|window_mask_0\|window_base_1\|window_mask_1\|tlb_enable' GXEMUL-SEC/src/` and inspecting every hit that is not declaration/readback/store. The author claims a count of 3 per field; if any field shows a fourth hit that reads (not assigns) it, premise 6 collapses for that field.
+
+---
+
+## Q1 — Is premise 6 sound? (with the strongest counter)
+
+**Conditionally yes, but the brief overclaims the analogy to RCR1.**
+
+The argument's core is: *if no code consumes the stored value, then storing a rejected value creates no new false belief about model behavior, because the model doesn't act on the stored value at all.* That is sound *given premise 2*. The brief correctly notes that this avoids the slippery-slope retort ("this reasoning would excuse every store-before-guard site") because the reasoning is conditional on the premise — check the premise per site.
+
+**Strongest counter-argument the brief is missing**: the `#447` RCR1 comment says *"the guest writes CIE|AIE, reads CIE|AIE back, and believes the RTC will interrupt it. It never will."* Read carefully, "it never will" is in the context of a **rejected** value being stored. If the RTC interrupt logic ignores reserved bits in `rtc_rcr1` (as LCA's bus-selection consumer ignores bits other than bit 0), then storing a rejected value would *also* not cause interrupts to fire, and B for RCR1 would be unnecessary by the brief's own logic. The `#447` decision to use B for RCR1 may be **validation philosophy** (reject any value with reserved bits, period) rather than **functional-consumer protection**. The brief assumes the latter without establishing it. **The single fact that would settle this**: does the RTC interrupt path check reserved bits of `rtc_rcr1`, or does it only look at CIE/AIE/AF/PF/etc.? If it only looks at the defined bits, RCR1 and CONF are structurally analogous, and B's protection is philosophical, not functional.
+
+A second, independent counter: **register-file fidelity is a model property in its own right.** A preserves "write X, read X" (which hardware does); B produces "write X, read old Y" (which no hardware does). The brief raises this for the cost-of-B weighing, but doesn't draw the consequence: even if there *were* a consumer, B's "protection" comes at the cost of a readback lie that no real LCA chip produces. That tilts the default toward A whenever the consumer, like the LCA bus-selection logic, is insensitive to the rejected bits.
+
+**Where premise 6 is genuinely on solid ground**: for the five non-CONS arms, the count of 3 (declaration, readback, store) is mechanical and, if true, means there is no fourth site. The "the model acts on these for nothing" claim is then a direct reading of the code shape, not an inference.
+
+---
+
+## Q2 — A or B?
+
+**A, for all six, but the reasoning splits.**
+
+- **For the five (`W_BASE0`, `W_MASK0`, `W_BASE1`, `W_MASK1`, `TB_ENA`)**: A. No consumer to protect (premise 2). A preserves register-file fidelity. B would make the file internally inconsistent with the unguarded `W_T_BASE0`/`W_T_BASE1` siblings, which already behave as A would make the guarded arms behave. B's only effect on these five is to make the guest's readback lie about what it wrote.
+
+- **For `CONF`**: A, and the case is even stronger. The consumer is `bus = d->ioc_conf & 1` — it looks at bit 0 only. The guard is `idata & ~1` — it fires on any non-bit-0 bit. Under A, a rejected value with reserved bits set is stored, and `bus` correctly reflects bit 0 of what the guest wrote. Under B, the old `ioc_conf` is kept, and `bus` reflects bit 0 of the *previous* write — which may not be what the guest intended. **B can silently corrupt the PCI bus selection.** This is exactly the "silent state corruption" `#447` warns about, but caused *by B itself*, not by A. The brief does not address this asymmetry.
+
+**The single fact that decides it**: premise 2 — whether any fourth read of the five fields exists. If yes, B becomes defensible for that field. If no (the author's claim), A wins. CONF should use A regardless, because of the bit-0-only consumer.
+
+---
+
+## Q3 — Is the option set complete?
+
+The set is substantially complete. Two additions worth naming:
+
+1. **Print once per arm, latched, then accept silently.** Catches the first sighting of a guest bug (the diagnostic value the original `fatal()` provided) without log spam and without `exit(1)`. This is the closest thing to "obviously right" if you want both bug-catching and host-survival. The `default:` arm's exit is independent and unaffected.
+
+2. **Keep the guard, delete only `exit(1)`.** Loud but non-fatal. Every bad value prints the full-width diagnostic. This is what the brief's #506 cast fix already half-does for `CONF` and the `default:` arm (fixing the cast, leaving the exit). Worth considering as a less aggressive middle ground than A, and more aggressive than the latched variant.
+
+The `dev_pcc2.c` mask style is *not* transferable here without changing readback policy (premise 3). The `dev_wdc.c` device-error style may not transfer to Alpha (the brief notes no Alpha equivalent in `memory_rw.c`; **REASONED — I can't verify from the packet**). The `dev_unreadable.c` fault style is unavailable for the same reason. "Implement the windows" is the real fix and is out of scope for a value-guard cleanup.
+
+**Nothing in the set is obviously right in isolation**; the right choice is a project-philosophy call. The `#447` precedent is mixed (strict for some, permissive for others), so it doesn't force one answer.
+
+---
+
+## Q4 — What does this NOT close?
+
+The brief's list is correct as far as the packet lets me check, with these notes:
+
+- **`default:` arm**: still diagnoses and `exit(1)`s for both reads and writes. **READ** from the packet.
+- **`LCA_IOC_STAT0` / `LCA_IOC_STAT1`**: no case, fall through to `default:`. **READ**.
+- **`DEVICE_ACCESS(lca_pci_conf)`, `DEVICE_ACCESS(lca_isa)`, `lca_interrupt_assert()`, `lca_interrupt_deassert()`**: stated to still have `exit(1)` sites. **REASONED** — not inlined; I cannot check.
+
+Two additions:
+- **`LCA_IOC_BASE`** and **`LCA_IOC_TBIA`** are already unguarded (just `break;`). If A is chosen, they need no change; they are already in the A state.
+- The `default:` arm's `(int)idata` narrowing (the same `#506` cast bug) is being fixed in this round per the inlined comment, but the `exit(1)` is not. So a guest write to an unhandled offset will still terminate the host, just with a correctly-widthed diagnostic.
+
+**So: yes, firmware can still terminate the emulator after this lands**, via the `default:` arm (any unhandled IOC offset, including `STAT0`/`STAT1`), and via the four other functions named. Anything else is not checkable from this packet.
+
+---
+
+## Q5 — A witness?
+
+**Not nameable from this packet.** The LCA chipset (DECchip 21171/21172) is associated with certain Alpha machines; the inlined comment "Linux reads from the base at startup" on `LCA_IOC_BASE` confirms a real guest *read* path exists, but says nothing about which of the six guarded arms a cold boot hits. Whether Linux on an LCA machine writes `0x700000` to `W_MASK0` (or any of the other five) during PCI setup is a question about the kernel's Alpha PCI init, which the packet does not inline.
+
+**The single measurement that would settle this**: pick an Alpha machine config in `GXEMUL-SEC/src/` that uses LCA, boot Linux on it under a debugger or instruction trace, and watch for stores to the six offsets. Name the machine and address, then the probe is reproducible. Until that is done, this is documented-only and any "guest can hit it" claim is REASONED.
+
+---
+
+## Anything else found
+
+- **Internal consistency of the file argues for A.** `LCA_IOC_W_T_BASE0` and `LCA_IOC_W_T_BASE1` (the translated-window registers) already have *no* guard — they store any value. If A is chosen, the six guarded arms become consistent with these two siblings (all eight accept any value). If B is chosen, the file becomes *less* consistent: six arms silently reject, two arms silently accept. The brief notes this could be "nobody wrote a guard" — true, but it is also true that no one wrote a guard *because* the author of those arms judged any value acceptable. That is mild precedent-within-file for A.
+
+- **`#506` is a half-fix on the `default:` arm.** The cast is corrected but `exit(1)` remains. If the goal of this round is "no `exit(1)` on a guest store in this file," the `default:` arm is still in scope for writes to unknown offsets. The brief acknowledges this in Q4 but does not propose a fix; if the round's charter is the six value guards specifically, that is fine, but it should be explicit so a follow-up round knows the `default:` is intentional.
+
+- **The `CONF` arm's consumer is bit-0-only, but the guard is "any non-bit-0."** This decoupling is exactly the shape that makes A safe and B dangerous for CONF, as argued in Q2. The brief does not draw this out; it treats CONF as one of six. A reviewer who applies B uniformly to all six will introduce a silent-corruption path in the PCI bus selection that does not exist today (because today the host dies before the guest can observe the wrong readback).
+
+- **Premise 6's RCR1 analogy is weaker than the brief assumes** (see Q1). The brief's strongest available argument is actually independent of RCR1: register-file fidelity. "Write X, read X" is what hardware does; B violates it; A preserves it. That argument needs no comparison to `#447`.
+
+---
+
+**Final disposition**: A for all six, with the understanding that CONF's case for A is *stronger* than the five windows' case, and B is wrong for CONF outright (it can corrupt `bus = d->ioc_conf & 1`). The latched-once-print variant of A is worth considering if first-sighting diagnostics matter to the project. The deciding measurement is premise 2 — a grep for fourth reads of the five fields — and that measurement was performed by the author, not by me, and is recorded as REASONED.

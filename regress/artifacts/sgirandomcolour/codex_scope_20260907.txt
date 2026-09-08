@@ -1,0 +1,62 @@
+**VERDICT: Claim 1 is correct: 12 of 16 color-type encodings reach the default arm. Claim 2 is also supported by the source: guest-driven PUT paths can copy uninitialised bytes into guest RAM, including implemented color modes.**
+
+I inspected `GXEMUL-SEC/src/` only. These are source-derived findings; actual leaked contents remain unmeasured.
+
+I examined **all seven call sites in two caller functions: four GETs and three PUTs**. All device references below refer to `GXEMUL-SEC/src/devices/dev_sgi_re.c`.
+
+| Caller and loop | GET call lines | PUT call lines |
+|---|---:|---:|
+| [`draw_primitive()`, line loop](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:809) | 817 | 863 |
+| [`draw_primitive()`, nested rectangle loops](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:871) | 878, 883 | 929 |
+| [`do_mte_transfer()`, nested tiled-transfer loops](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:1392) | 1397 | 1402 |
+
+For mode provenance, I examined **both argument-producing functions**, **two direct register-writer functions containing six store statements**, and **one device initializer**:
+
+- **`dev_sgi_de_access()`** writes `de_reg`: two stores for an eight-byte access, one for a four-byte access, at lines 1003, 1004 and 1010. These preserve the relevant mode bits. The `CRIME_DE_MODE_SRC` and `CRIME_DE_MODE_DST` switch arms only print diagnostics. [`draw_primitive()` loads both registers unchanged](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:702) and never modifies those local modes. [Writer and register handling](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:982).
+- **`dev_sgi_mte_access()`** writes `mte_reg` through three stores, at lines 1539, 1544 and 1545; its mode-register arm also only prints. [`do_mte_transfer()` constructs the two helper arguments](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:1365) from the MTE addressing and depth fields, then conditionally adds RGBA. [MTE writer](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:1516).
+- **[`dev_sgi_re_init()`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:675)** zeroes the device structure. That initialization does not cover the helper’s separate automatic `buf`.
+
+Claim 1 follows from the **unrestricted DE path**, not merely from arithmetic on the quoted switch. The [header’s mask](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/thirdparty/crmfbreg.h:328) admits sixteen encodings; [`horrible_getputpixel()`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:284) handles four explicitly. The other twelve—`0x40` through `0xf0` in increments of `0x10`—select `default:`. Nothing in the DE writer or `draw_primitive()` restricts these to the five named types.
+
+There **are earlier returns** in [`horrible_getputpixel()`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:196): coordinate bounds, tile-index bounds, unsupported addressing modes and the tile-pointer validity check. These restrict whether a pixel operation proceeds; they do not validate the color-type field. The twelve-count applies when those addressing checks pass.
+
+One denominator correction: a YCRCB-only check covers **1/12 of the default-arm encodings**, and **1/16 of the entire color-type field**.
+
+For claim 2, **eight-byte depth is reachable, and CI is not restricted to one-byte depth**. The DE writer preserves bits 9:8, and the helper evaluates `1 << ((mode >> 8) & 3)` without rejecting the fourth encoding. The [header names only three buffer-depth encodings](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/thirdparty/crmfbreg.h:325); that naming imposes no runtime restriction.
+
+The MTE path independently confirms that these mismatches survive actual argument construction. In [`do_mte_transfer()`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:1300), the depth field produces 8/16/32/64 **bits**, and is carried into the helper’s byte-depth field. The current code adds RGBA **only when `depth == 32`**:
+
+| MTE depth in bits | Helper color type | Helper `bufdepth` |
+|---:|---|---:|
+| 8 | CI | 1 |
+| 16 | CI | 2 |
+| 32 | RGBA | 4 |
+| 64 | CI | 8 |
+
+This follows from the live [mode-construction and conditional assignments](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:1365), independently of the `#509` comment. Its 32-bit repair is present. The later depth rejection belongs to the **linear-MTE branch**, not the tiled branch calling this helper.
+
+Consequently, the PUT initialization census in [`horrible_getputpixel()`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:284) is exactly:
+
+| PUT arm | Bytes assigned | Depths transmitting unassigned bytes |
+|---|---:|---|
+| CI | 1 | 2, 4, 8: respectively **1, 3, 7** unassigned bytes |
+| RGB / RGBA / ABGR | 4 | 8: **4** unassigned bytes |
+| Default | 4 | 8: **4** unassigned bytes |
+
+The callee **does copy the requested length on an ordinary RAM write**. [`mips_cpu_new()`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_mips.c:110) installs `mips_memory_rw`; [the generated MIPS inclusion](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/tmp_mips_tail.c:38) instantiates `cpus/memory_rw.c`.
+
+In that implementation:
+
+- [`mips_memory_rw()` and its worker](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:183) bypass virtual translation for `PHYSICAL` and retain `len`.
+- The worker’s RAM write is literally [`memcpy(memblock + offset, data, len)`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:779). Crossing a memory-block boundary splits the transfer and forwards the remaining bytes; it does not truncate the total.
+- There **is device-boundary clamping**, and `NO_EXCEPTIONS` can suppress device-handler calls. Those are [MMIO-dispatch behaviors](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:480), not padding or sanitization of a RAM-write source buffer. The nearby zero-fill operations apply to reads.
+
+Guest reachability also survives the caller audit. [`dev_sgi_de_access()` invokes `draw_primitive()`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:1267), and [`dev_sgi_mte_access()` invokes `do_mte_transfer()`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:1639). [`dev_sgi_re_access()` accepts guest-written tile mappings](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:428). These are registered device paths, with normal addressing preconditions; no firmware-only assignment set restricts the modes.
+
+Your `fatal()` premise is correct too. [`fatal()` in `core/debugmsg.c`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/core/debugmsg.c:384) calls the returning [`va_debug()` printer](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/core/debugmsg.c:118). The helper’s color-default diagnostic has no latch or verbosity guard, and execution continues into the memory write.
+
+Therefore **the DE line and rectangle loops can produce a guest-driven per-pixel output flood**. The GET color-default arm also prints on every invocation. The earlier `SGIRE_W_BADMODE` latch guards the addressing-mode diagnostic only. Although MTE also calls the helper per pixel, its current CI/RGBA construction does **not** reach the color-default diagnostic.
+
+I found an additional issue in the GET half: **it can consume more bytes than it reads**. [`horrible_getputpixel()` GET](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:319) requests `bufdepth` bytes, but RGB consumes `buf[0..2]`, while RGBA, ABGR and default consume `buf[0..3]`. At depths one or two, those arms use uninitialised trailing bytes. CI GET has no such mismatch. The source GET result feeds the later PUT in `draw_primitive()`’s rectangle loop, so this can also propagate into guest memory.
+
+The current RGB GET expression does incorporate the `#505` layout correction. That correction leaves the GET length mismatch intact.

@@ -202,17 +202,24 @@ print("arm_bfx_width_probe -- binary=%s label=%s machine=testarm" % (BIN, LABEL)
 print("%-12s %-14s %-14s %-56s %s" % ("row", "got", "want", "note", ""))
 
 #  ---- the encodings must satisfy the decoder's OWN mask, checked before anything is run -------
-enc_ok = all((w & UBFX_MASK) == UBFX_BASE for w in (ubfx(0, 32), ubfx(0, 31), ubfx(4, 8), ubfx(0, 1))) \
-     and all((w & SBFX_MASK) == SBFX_BASE for w in (sbfx(0, 32), sbfx(4, 8)))
+#  *** THE WORD LIST MUST MATCH THE WORDS ACTUALLY PLANTED.  A pass-2 seat found this claim
+#  broader than its check: `sbfx(1, 4)' (the `s clear' row) and `sbfx(0, 31)' (`s w31') were
+#  planted and NOT checked, while the note said "every planted word".  Both satisfy the mask, so
+#  widening the CHECK costs no score and makes the sentence true; narrowing the CLAIM would have
+#  left two unchecked words.  **When a new row plants a new word, add it here.** ***
+enc_ok = all((w & UBFX_MASK) == UBFX_BASE
+             for w in (ubfx(0, 32), ubfx(0, 31), ubfx(4, 8), ubfx(0, 1))) \
+     and all((w & SBFX_MASK) == SBFX_BASE
+             for w in (sbfx(0, 32), sbfx(4, 8), sbfx(1, 4), sbfx(0, 31)))
 row("enc ok", "yes" if enc_ok else "no", "yes",
-    "every planted word matches the decoder's own mask -- checked before any run")
+    "ALL EIGHT planted words match the decoder's own mask -- checked before any run")
 
 #  ---- CONTROL 1: the plant/step/print path works at all ---------------------------------------
 t, alive, r0, pc = run_word(OP_MOV_R0_2A)
 row("live", r0 if alive else "died", "0x2a",
     "LIVENESS: a plain `mov r0,#0x2a' plants, steps and prints")
 row("pc adv", pc if alive else "died", "0x%x" % (CODE + 4),
-    "CONTROL: pc advanced exactly 4.  A bad encoding sets running=0 and pc does NOT move")
+    "CONTROL: pc advanced exactly 4 -- see the header on what an untranslatable word does")
 
 #  ---- CONTROL 2: a small NONZERO answer, because the defect's symptom is exactly zero ---------
 t, alive, r0, pc = run_word(ubfx(4, 8))
