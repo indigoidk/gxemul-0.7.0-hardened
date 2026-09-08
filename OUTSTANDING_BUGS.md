@@ -17292,6 +17292,21 @@ FILED 2026-09-08 from the codex `armbfiwidth` design answer.  **BFC is BFI with 
 **NOT VERIFIED HERE.**  It comes from one seat's source reading, and neither the decoder arm's exact guard nor the architectural claim has been re-derived by me. *The round-scope rule keeps it separate from `armbfiwidth`: same file and adjacent lines, but a different defect with a different fix and a different oracle, so it is a candidate ROUND rather than a rider.*
 
 
+### `codexcontentfilter` (WITHDRAWN 2026-09-08) -- DUPLICATE of `codexsubjectrefusal`
+
+**DO NOT ACT ON THIS ENTRY.**  `codexsubjectrefusal` already carried this class across SEVEN
+measured runs with THREE identified triggers (vocabulary, archive-reading, chain shape) and
+negative controls on each.  Its ARCHIVE-READING trigger also EXPLAINS the "non-determinism"
+this entry claimed: the filter fires partway through a run, at whatever point the seat has
+read enough of the archive, so two firings of one brief diverge on what they happen to read.
+The remedy recorded there is a FIX -- neutral engineering language plus reading scoped to
+`src/` and `regress/*.py` -- rather than the retry this entry proposed.
+
+The one measurement worth keeping (a byte-identical brief refused then answered) has been
+folded into `codexsubjectrefusal`.
+
+*Original text follows, kept rather than deleted so the withdrawal is checkable:*
+
 ### `codexcontentfilter` (med) -- filed 2026-09-08
 
 a codex job returns ZERO BYTES and exit 1 when the provider's CONTENT FILTER refuses the brief -- and the refusal is NON-DETERMINISTIC: the SAME brief, byte-for-byte, was refused then answered.  Re-fire once, exactly like a walled seat; the 'benign rewording' remedy is NOT established
