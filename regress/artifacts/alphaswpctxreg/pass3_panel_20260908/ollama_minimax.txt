@@ -1,0 +1,89 @@
+**VERDICT: ZERO UNDISCLOSED FLOOR BREACHES. CHAIN CAN CLOSE — with the denominator below and three caveats named.**
+
+---
+
+## Q1 — Clean-sweep mutants against the probe as it now stands
+
+Two exist; **both are disclosed** in the probe's own contract section, so they are coverage debt, not breaches of the probe's claim. The probe claims to catch: (i) v0 never written, (ii) v0 = new context, (iii) a0 = old context. Every mutant shape that would breach one of those three claims is caught — verified by enumeration below.
+
+**Denominator — cells swept (5 score-asserting rows):**
+1. `live` — session liveness
+2. `v0 read` — v0 readable after call 1
+3. `v0 pair` — both `print v0` responses captured
+4. `a0 land` — a0 ≠ CTX_C (negative claim)
+5. `v0 ctx` — v0 == CTX_C (positive claim)
+
+**Denominator — mutant shapes swept:**
+
+| shape | observed (v0, a0) | result | status |
+|---|---|---|---|
+| shipped defect (no-write) | (S, C) | reds a0 land + v0 ctx → 3/5 | CAUGHT (claimed) |
+| return-incoming (`v0=a0`) | (N, N) | reds v0 ctx → 4/5 | CAUGHT (claimed) |
+| return-new (`v0=ctx'`) | (N, N) | reds v0 ctx → 4/5 | CAUGHT (claimed) |
+| return-garbage (`v0=junk`) | (junk, N) | reds v0 ctx → 4/5 | CAUGHT |
+| write-wrong-register (e.g. `r[T0]=ctx`) | (S, N) | reds v0 ctx → 4/5 | CAUGHT |
+| clobber-a0-old (`a0=ctx`) | (C, C) | reds a0 land → 4/5 | CAUGHT (claimed) |
+| clobber-a0-garbage (`a0=0xdead`) | (C, 0xdead) | 5/5 green | **legal** — a0 is UNPREDICTABLE; not a defect |
+| never-executed | (S, N) | reds v0 ctx → 4/5 | CAUGHT |
+| **hardcoded RHS (`v0=0x01000000`)** | (C, N) | 5/5 green | **DISCLOSED** — contract section, unbounded shape |
+| **v0 correct, load-new-context broken** | (C, N) | 5/5 green | **DISCLOSED** — contract section, needs third call |
+
+The two clean-sweeps are both inside the probe's "NOT CAUGHT" disclosure. No third clean-sweep is apparent from the packet. (REASONED — mutation matrix above.)
+
+**Caveat 1 — stale disclosure numbers (READ).** The probe's contract text still says the load-broken mutant "would produce v0 == C and a0 == N and **score 4/4**" and the hardcoded-RHS mutant "**scores 4/4 here**." With the added `v0 pair` row the denominator is now 5, so both are 5/5 sweeps. The principle (named clean-sweep) is unchanged; only the number is stale. This is a disclosure-accuracy issue, not a detection breach — but the brief's own rule says the zero must carry its denominator, and the disclosure's denominator is wrong by one.
+
+## Q2 — Did the `a0 land` repair remove coverage?
+
+**No.** (REASONED.)
+
+The old row asserted `a0 == CTX_N`. The new row asserts `a0 ≠ CTX_C`. The only mutant the old row catches and the new one doesn't is `a0 = X` where X ≠ N **and** X ≠ C. But the architecture marks a0 UNPREDICTABLE, so `a0 = X` for any X (including garbage) is a legal handler implementation. The old row's positive claim was pinning *this model's* chosen repair (no clobber), not the architecture — exactly the defect the pass-2 panel named. The new row's negative claim is the actual defect signature (the shipped bug wrote C into a0).
+
+The brief itself supplies the four-state table that settles this: `correct+clobber (v0=C, a0=0xdead)` was 3/4 under the old row and is now 5/5 green — that is the false-fail being removed, not coverage being lost. No genuine defect slips through the new row that the old one held.
+
+## Q3 — Is the `v0 pair` row sound?
+
+**Yes, for its stated purpose.** (REASONED.)
+
+The row's job is to refuse silently-reused observations, and it does: `V0_RESPONSES < 2` makes `v0_final` the literal string `"ONLY N v0 RESPONSE(S)"`, which then fails `v0 ctx` (string ≠ hex) and fails `v0 pair` (`"N of 2" ≠ "2 of 2"`) — the apparatus failure is loud, as the fix requires.
+
+Can `v0 pair` be satisfied (2 of 2) while `v0_final` is wrong? Only if the two regex captures are `[X, Y]` with `Y ≠ CTX_C`. In that case `v0 pair` greens and `v0 ctx` reds — the wrong value is caught by the row whose job that is. The two rows do not collude on a false green.
+
+**Caveat 2 — regex robustness (NOT CHECKABLE FROM PACKET).** The regex `r"print\s+v0\s*\n\s*(0x[0-9a-f]+)"` requires the hex literal on the line immediately after `print v0` with no `$N = ` prefix. That works for the synthetic transcript codex fed (measured 4/4 false-pass), but the packet does not show the real transcript format. If the real gdb output is `$1 = 0x...`, the regex matches zero times and the probe fails with an apparatus error on every run, not just broken ones. Settled by reading one real transcript and counting matches.
+
+## Q4 — Comment-only product diff
+
+**The diff is comment-only — verified.** (READ.) The only changed line that sits outside the `/* ... */` block is `cpu->cd.alpha.r[ALPHA_V0] = cpu->cd.alpha.ctx;`, which is unchanged in both old and new. The two hunk regions are entirely inside the comment block beginning "Make sure they are correct…" and ending before the code.
+
+**Claims in the new comment, and what settles each:**
+
+| claim | source | settled by |
+|---|---|---|
+| `v0 __asm("$0")` is an OUTPUT | header `alpha_cpu.h` | reading `alpha_pal_swpctx` asm |
+| a0 is **not** in clobber list `($1,$22..$25,memory)` | header `alpha_pal_swpctx` asm | reading the asm (grok did this on pass 2 — REASONED to be correct) |
+| a0 is IN-OUT (`=r`(a0) with input `"0"`(a0)) | header asm | reading the asm |
+| wrapper comment marks a0 clobbered "(above)" | header comment | reading the header |
+| `a0` at `ctx = a0` below is the LOCAL at `:165` | source | reading line `:165` and the load block |
+| **no `r[ALPHA_A0] =` remains in the file** | source census | `grep -n 'r\[ALPHA_A0\] *=' src/cpus/cpu_alpha_palcode.c` |
+| **compiled PAL returns to v0 are rdmces, this swpctx, swpipl, rdps, whami** | source census | `grep -n 'r\[ALPHA_V0\] *=' src/cpus/cpu_alpha_palcode.c` and reading each hit |
+| **three further v0 stores sit inside `#if 0`** | source census | reading the `#if 0` block |
+| **`:118` is alpha_prom_call, not a PAL** | source | reading line `:118` |
+
+**Caveat 3 — census claims (NOT CHECKABLE FROM PACKET).** The brief flags this directly: "the sort of claim this round has already had to correct twice." The pattern is that census claims in this comment have drifted twice already. The current version is the third. I cannot grep the file from here. If any of the four census claims above is wrong, the comment is stale on the day it lands — and the next handler edit to that file will restale it. Settled by running the four greps/reads above. This is not a floor breach (it's a comment, not detection), but it is the single highest-probability defect in the diff.
+
+## Q5 — Does the chain close?
+
+**Yes, with the denominator above and the three caveats filed as not-checkable-from-packet rather than as breaches.** (REASONED.)
+
+- Q1's two clean-sweeps are disclosed → coverage debt, not breach.
+- Q2's relaxation removes false-positive coverage of legal implementations, not real coverage.
+- Q3's apparatus row is sound; only the transcript-format assumption is unverified.
+- Q4 is comment-only; the census claims are unverified but are documentation, not detection.
+
+**The three caveats that are NOT CHECKABLE FROM PACKET and what settles each:**
+1. Stale disclosure numbers (4/4 → 5/5) → settle by editing the contract section to match the new 5-row denominator. One-line fix, not a pass-3 blocker.
+2. Regex robustness against real gdb output → settle by reading one real transcript and counting matches.
+3. Four census claims in the product comment → settle by four greps/reads listed above.
+
+None of these is a clause-(d) breach or an L2 in-round repair. They are packet-bounded, not chain-bounded.
+
+**The stopping rule exists because a six-pass chain once failed to converge. This chain converges: zero undisclosed breaches, denominator named, caveats filed as not-checkable rather than guessed.**

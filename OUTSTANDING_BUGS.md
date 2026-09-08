@@ -17789,3 +17789,27 @@ flush** — `git diff --format= 3031a30^ 3031a30 -- src/cpus/cpu_alpha_palcode.c
 '^[+-].*invalidate_translation_caches'` is **0**. The pass-1 warning was conditional on a round that
 MOVED the flush observable; this round did not, and I applied its conclusion without re-checking
 its condition.
+
+## 2026-09-08 — a probe-writing hazard: debugger `put` is a NO-OP against a `DM_DEFAULT` device
+
+Found while diagnosing why a witness attempt did not fire. The mechanism, three lines:
+
+    debugger_cmds.c:1461, :1507   memory_rw(..., MEM_WRITE, CACHE_NONE | NO_EXCEPTIONS)
+    memory_rw.c:584               if (!no_exceptions || (flags & DM_READS_HAVE_NO_SIDE_EFFECTS))
+    dev_ns16550.c:353             memory_device_register(..., DM_DEFAULT, NULL)
+
+`DM_DEFAULT` is 0, the debugger passes `NO_EXCEPTIONS`, so **the device handler is never called**.
+The write is absorbed and the debugger still echoes it back, which is what makes this look like it
+worked.
+
+**The carrier already records the READ half** — `dump` bypasses a `DM_DEFAULT` handler, hence
+"read SH4 device state with guest loads". **The WRITE half is the same line of `memory_rw.c` and
+was not written down.**
+
+> **RULE: device access in a probe must be made by GUEST INSTRUCTIONS. `put` is for RAM only.**
+
+**Population checked before filing: the in-tree probes already do this correctly.**
+`lca_confbus_probe.py` seeds RAM with `put d` and reaches the device with guest `STQ`/`LDQ`;
+`alpha_swpctx_v0_probe.py` uses `put` for RAM and `call_pal` only. The one violation was my own
+un-shipped attempt, preserved as evidence and classified NOT a detector. **So this is filed as a
+hazard for future probe authors, not as a live defect in anything committed.**

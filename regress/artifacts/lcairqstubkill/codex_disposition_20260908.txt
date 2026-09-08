@@ -1,0 +1,103 @@
+**VERDICT: I would take bounded announcement plus level forwarding as a partial repair, while leaving Alpha interrupt delivery explicitly unresolved. The proposed repair is not yet validated.**
+
+**Q1. The strongest case against your lean is that it preserves the guest’s failure while weakening its visibility.** An interrupt-dependent guest can still hang; a warning can disappear into logs; an automation wrapper can mistake continued process life for success. Forwarding adds no presently functioning guest capability because nothing consumes the flag. An announced drop would achieve the same immediate containment with less plumbing. “Preparation for later” alone would not justify forwarding.
+
+That objection defeats a claim of **“fixed Alpha interrupts.”** It does not defeat the narrower improvement of removing these two process exits. I support forwarding because the existing CPU endpoint and [Footbridge’s connection-and-propagation pattern](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c:794) provide a specific transferred warrant. Separately, [PCC2 already announces an unavailable interrupt-delivery mode once](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_pcc2.c:369). Neither precedent warrants claiming completed delivery.
+
+The menu needs two scopes: the LCA callbacks can implement propagation while the machine still declines to provide interrupt service. These callbacks return `void`; their caller receives no refusal indication. The missing Alpha memory-fault machinery is therefore secondary: that machinery would not give an asynchronous callback a memory-access-failure return channel.
+
+**Q2. The minimum forwarding implementation needs a connection, a shared announcement latch, and both level transitions.**
+
+Add `struct interrupt irq;` and `int irq_delivery_warned;` to `lca_data`. Its existing `memset` initializes the latch. Immediately afterward, before creating downstream devices, add:
+
+```c
+INTERRUPT_CONNECT(devinit->interrupt_path, d->irq);
+```
+
+That path [already defaults to the bootstrap CPU](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/device.c:278). The callback implementation should be:
+
+```c
+static void lca_interrupt_notice(struct lca_data *d)
+{
+	if (d->irq_delivery_warned)
+		return;
+
+	d->irq_delivery_warned = 1;
+	fatal("[ lca: Alpha interrupt delivery is unimplemented; "
+	    "forwarding ISA input levels only (once) ]\n");
+}
+
+void lca_interrupt_assert(struct interrupt *interrupt)
+{
+	struct lca_data *d = (struct lca_data *) interrupt->extra;
+
+	lca_interrupt_notice(d);
+	INTERRUPT_ASSERT(d->irq);
+}
+
+void lca_interrupt_deassert(struct interrupt *interrupt)
+{
+	struct lca_data *d = (struct lca_data *) interrupt->extra;
+
+	lca_interrupt_notice(d);
+	INTERRUPT_DEASSERT(d->irq);
+}
+```
+
+The latch bounds **printing**, never forwarding. It is shared across both callbacks and belongs to each LCA instance. The wording remains accurate even if deassertion arrives first.
+
+No additional pending bitmap is needed for the sole, already aggregated input. In particular, `interrupt->line == 0` must not become a mask. The upstream CPU flag represents the current level; it does not preserve withdrawn requests for eventual service.
+
+Once implemented and verified, the CHANGELOG sentence should be:
+
+> Removed the unconditional process exits from LCA ISA interrupt assert/deassert callbacks and forwarded the aggregate ISA input level to the connected CPU, with one warning per LCA instance that Alpha interrupt delivery remains unimplemented; Alpha CPU/PAL interrupt dispatch and LCA interrupt acknowledgement remain unsupported.
+
+The round may close the callback-termination defect. The delivery limitation must retain its own open record. Neither a warning nor a surviving process establishes a working machine.
+
+**Q3. Queue the Alpha delivery work as a separate compatibility round.**
+
+There is more missing than a conditional in `cpu_dyntrans.c`: the tree writes `kentry[]` but never consumes it, and `PAL_OSF1_rti` has a printable name without an execution implementation. The [PAL dispatcher](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_alpha_palcode.c:344) therefore cannot presently supply the required interrupt-entry/return lifecycle.
+
+That round needs a specified Alpha/PAL contract covering qualification, entry state, return state, and the acknowledgement path used by its guest. The [DEC manual’s interrupt and acknowledgement semantics](https://openwatcom.org/ftp/devel/docs/21066_66a_hrm.pdf) provide architectural requirements; they do not establish that a particular shipped guest exercises them.
+
+For the addition licence, a concrete measured delta would be: on the partial-repair baseline, an independently confirmed, eligible asserted input leaves a guest handler counter unchanged; the implementation makes the handler execute and return correctly. Alternatively, name a transferred implementation warrant and delimit exactly what transfers. Footbridge supplies no Alpha PAL entry convention.
+
+The current evidence warrants queuing that investigation. It does not automatically expand this termination round into it.
+
+**Q4. My previous four-row table overstated what could immediately become passing coverage.**
+
+Here “buildable today” distinguishes a runnable requirement test from a test that can pass without implementing the missing subsystem.
+
+| Previous row | Required observable | Status today |
+|---|---|---|
+| Callback forwarding | Connected CPU’s `cd.alpha.irq_asserted` follows `0 → 1 → 1 → 0`, with other sources inactive. | Buildable as a host-side test now. Original callbacks fail; the proposed small repair can pass. Alpha does not expose this field as a debugger register setting. |
+| Masking and release | Input remains asserted while CPU acceptance is masked; unmasking permits entry; withdrawal before acceptance removes the input. | Split this row. Level retention/withdrawal can pass after the small repair. Correct masked-versus-unmasked **entry** requires CPU delivery. No entry in either case proves nothing about masking. |
+| Vector acknowledgement | Read returns the selected PIC’s configured vector, with the required acknowledgement state changes. | Missing LCA acknowledgement support prevents a passing integration row. This can be implemented/tested independently of CPU dispatch; it is a separate missing dependency. |
+| Guest execution | Interrupt handler increments a guest RAM counter, services and clears the source, returns, and interrupted code writes a progress marker. | Cannot pass with forwarding alone. Requires the entry, service and return lifecycle. |
+
+For the proposed partial repair, additionally assert:
+
+- No callback terminates the process.
+- Repeated assert/deassert activity produces exactly one announcement per instance; a second instance has its own allowance.
+- Forwarding continues after the announcement latch is set, including a later fresh assertion.
+- Initialization without interrupt callbacks emits no announcement.
+
+The existing assert witness does not independently reproduce a deassert-first termination. Deassertion still needs coverage.
+
+The decisive completion observable is **handler execution followed by correct return and continued guest progress**. For a single serviced-and-cleared event, require one counter increment and no further increments during subsequent execution. A second event must remain serviceable.
+
+CPU-entry tests must also allow normal execution: the [shared dispatch check suppresses interrupts during single stepping](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c:204). Keep missing-delivery rows explicitly unresolved or expected-failing; a green “handler never runs” assertion would certify the deficiency.
+
+**Q5. A guest-path witness does not require the Alpha dispatch arm. The debugger uncertainty is now resolvable from this tree.**
+
+[Debugger byte writes](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/debugger/debugger_cmds.c:1502) print the requested value and call memory access with `NO_EXCEPTIONS`. The [memory layer](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:584) then skips device callbacks unless `DM_READS_HAVE_NO_SIDE_EFFECTS` is set. The [UART registers with `DM_DEFAULT`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_ns16550.c:353), so those debugger writes do not change its device state through `DEVICE_ACCESS(ns16550)`. The skipped path can still return `MEMORY_ACCESS_OK`.
+
+Consequently, **“the writes visibly land” should be withdrawn**. The preserved attempt’s `devsig` row checks survival, not an actual device signature. Its inconclusive classification remains appropriate; the reason is now identified.
+
+For a guest-path witness, the device-changing operations must execute through ordinary guest MMIO. Device assertion precedes CPU interrupt acceptance, so missing acceptance cannot prevent reaching the LCA callback.
+
+There is also newer evidence now present in the workspace: [WITNESS_HEAD_20260908.out](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/lcairqstubkill/WITNESS_HEAD_20260908.out:1) reports both controls alive, the UART session dead, and the stub diagnostic present—`2/4` because its expectations describe repaired behavior. Those red rows are positive witness evidence on the labelled build. I did not execute that run or establish its exact binary revision. Its [probe also documents a BWX dependency](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/lca_irqstub_probe.py:25), limiting what it says about a hardware-faithful driver sequence.
+
+That result still cannot distinguish silent dropping, announced dropping, or forwarding. It supports reachability; it does not validate the proposed disposition.
+
+This was a read-only review. The implementation above is proposed; I made no edits and ran no build or probes.

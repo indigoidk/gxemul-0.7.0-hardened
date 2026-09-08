@@ -182,7 +182,11 @@ line names both wrappers independently.
     verified by me:  ALPHA_TBIA macro passes a1=0; the a0 >= 1 dispatch; vaddr_mask defaults to
                      (int64_t)-1 on 64-bit; the alpha binding site
     repair           if (a0 >= 1 && a0 <= 3)   -- COARSE: it does not give TBIAP its ASM=0 semantics
-    witness          DESIGNED by grok, NOT BUILT
+    witness          *** BUILT AND MEASURED 2026-09-08, AFTER THIS SECTION WAS WRITTEN ***
+                     regress/artifacts/alphatbinegsel/witness_agy_20260908/
+                     committed 5/7  ->  fixed 7/7, same script, both selectors
+                     built by agy (measurement reserve); RE-RUN BY ME against build/
+                     and it reproduced 5/7 with the identical two failing rows
 
 **QUESTION 1 (severity):** the facts are the seats'; the med -> high raise is mine.  A documented
 *invalidate everything* primitive clearing one page, silently, with a guest reaching stale physical
@@ -193,8 +197,27 @@ judgment, not a claim that it has the greatest potential severity"* -- explicitl
 consequences were then unverified.
 
 *** AN EARLIER DRAFT SAID "THEY ARE NOW VERIFIED".  THAT OVERCLAIMED, and the assess panel caught
-it: what is verified is the DISPATCH; the witness is DESIGNED, NOT BUILT, and codex's own status
-line was "source-confirmed functional defect; witness unvalidated". ***  glm: *"'witness
+it: what was verified then was the DISPATCH, and the witness was DESIGNED but NOT BUILT -- codex's
+own status line was "source-confirmed functional defect; witness unvalidated". ***
+
+*** AND THAT CONDITION HAS SINCE BEEN MET, WHICH IS THE ONE FACT IN THIS SECTION THAT CHANGES YOUR
+DECISION. ***  The witness was **built and measured on 2026-09-08**: committed **5/7**, fixed
+**7/7**, same script, on unmodified `-E alpha -e alphabook1`.  It exercises **both** selectors --
+`ALPHA_TBIA(-2)` and `ALPHA_TBIAP(-1)` on separate pages, both showing the same misdispatch -- and
+carries a **positive-selector control that is green on both builds**, so the VADDR path itself is
+proven working and the two failures are attributable to the misdispatch rather than to a broken
+flush.  It avoids all five vacuity traps (no page zero; distinct fill and remap patterns; one
+interaction).
+
+Built by **agy** as the measurement reserve, and **re-run by me against `build/`, where it
+reproduced 5/7 with the identical two failing rows** -- verified, not trusted.
+
+> **SO THE ORDERING QUESTION'S STATED CONDITION IS SATISFIED FOR TWO OF THE THREE DISSENTS, AND THE
+> THIRD IS ALSO ANSWERABLE NOW.**  minimax and glm wanted the witness RUN; it has been.  deepseek
+> wanted the COMPARATOR's severity, and `alphaswpctxreg` has since shipped as `#514` with its own
+> six-seat panel keeping it at `med`.  **Both inputs the panel asked for now exist**, so this is no
+> longer "promote on a promise" -- it is an ordinary severity comparison, high versus med, with
+> both rows characterised and both witnessed.  glm: *"'witness
 constructible, shape known' is not verification -- do not promote this row to first on the packet
 as written."*
 

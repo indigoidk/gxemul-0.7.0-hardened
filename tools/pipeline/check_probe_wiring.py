@@ -162,6 +162,10 @@ MANIFEST = {
     "lca_irqstub_probe.py":       (CLASS_WITNESS,  "lcairqstubkill: ONE guest store to the 8042 command port reaches lca_interrupt_assert and ends the host -- HEAD 3/4, the RED row is the defect; post-fix green PENDING"),
     "pcc2_c040_probe.py":         (CLASS_WITNESS,  "pcc2c040kill: ONE legal guest st.b of 0x04 to PCC2 GENCTL runs reassert_interrupts() in the same access and ends the host -- HEAD 3/4, the RED row is the defect; post-fix green PENDING"),
     "alpha_pfnoffset_probe.py":   (CLASS_WITNESS,  "alphapfnoffset: the page-table walk drops the within-page offset -- HEAD 5/7, fix 7/7"),
+    #  A SECOND, INDEPENDENT path to the same two stubs, through a DIFFERENT device.  The row's
+    #  witness of record is `lca_irqstub_probe.py' above (8042, shipped 7c2f8e4); this one is a
+    #  supplement.  Not gated -- there is no fix yet, so a gate row would be permanently red.
+    "lca_irqstub_uart_probe.py":  (CLASS_WITNESS,  "lcairqstubkill (SECOND PATH): three guest byte stores to the ns16550 (IER, MCR, THR) reach lca_interrupt_assert() on IRQ 4 -- HEAD 2/4, with an identical-sequence-against-RAM control green"),
     "alpha_swpctx_v0_probe.py":   (CLASS_WITNESS,  "alphaswpctxreg (#514): swpctx published the old context into a0, the register the ABI wrapper calls clobbered, leaving v0 untouched -- HEAD 3/5, fix 5/5 after the pass-2 repair added the `v0 pair' apparatus row"),
     #  agy built this one as the measurement seat; I re-ran it against build/ and it reproduced
     #  5/7 with the identical two failing rows.  Preserved as the round's evidence, and it is a
@@ -253,6 +257,12 @@ MANIFEST = {
     #  negative result, because whether a debugger `put' reaches DEVICE_ACCESS(ns16550) at all is
     #  still open.  A file that pins nothing must not be wired into a gate: it would be a green
     #  row that means nothing, which is the vacuity this whole layer exists to refuse.
+    #  Not a probe of the emulator at all: it exercises the SHIPPED regex of
+    #  alpha_swpctx_v0_probe.py -- extracted from that file, not retyped -- against the three
+    #  synthetic transcripts a pass-3 seat used to measure three parser escapes.  Evidence that
+    #  the repair works, which is why it is preserved; it runs no emulator and gates nothing.
+    "artifacts/alphaswpctxreg/attack_parser.asrun.py":
+        (CLASS_RESEARCH, "alphaswpctxreg (#514) pass 3: the seat's three synthetic parser attacks re-run against the SHIPPED regex -- 5/5, all rejected, both genuine shapes still parsed"),
     "artifacts/lcairqstubkill/lcairq_probe.asrun.py":
         (CLASS_RESEARCH, "lcairqstubkill: the as-run witness ATTEMPT, preserved as evidence -- it did NOT fire, and it is not a detector"),
     "artifacts/lunaabsentcpu/killtable/fix_lunaabs.py":
