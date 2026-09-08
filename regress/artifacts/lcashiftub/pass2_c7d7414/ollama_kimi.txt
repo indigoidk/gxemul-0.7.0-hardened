@@ -1,0 +1,39 @@
+**VERDICT: CONDITIONAL PASS — the fix is arithmetically correct and "exactly one iteration overflows" is right, but the load-bearing premise "the `&` and its truth value are unchanged at every one of the 21 iterations" is NOT checkable from the packet, and I can show it FAILS in C semantics if `tag` is wider than 32 bits — which the author himself asserts. It holds iff `tag` is 32-bit or provably always < 2^32. Settling fact: the declaration of `tag` in `DEVICE_ACCESS(lca_pci_conf)`.**
+
+## 1. Is `0x800U` sufficient, and is anything else perturbed?
+
+**REASONED — sufficiency: yes.** `0x800U` is unsigned; C99 6.5.7p4 defines unsigned `<<` as ×2^E2 mod 2^width. Values 2^11..2^31 all fit in 32-bit unsigned; shift counts 0..20 < 32. No residual UB in this expression.
+
+**READ — `tag`'s type is not in the packet.** Nothing inlined declares it. The brief asserts "already a wider unsigned quantity." Now apply the promotion rules, as requested:
+
+- **REASONED: if `tag` is 32-bit** (`uint32_t` or `int`): usual arithmetic conversions give identical bit patterns for old-as-compiled and new masks at all 21 iterations. The claim is literally true. (But then "wider" in the comment is false — it's same-width.)
+- **REASONED: if `tag` is 64-bit (either signedness)**: at dev 0..19 the positive int mask and the unsigned mask both convert value-preservingly — identical. At dev == 20 the old code is UB, so "unchanged" can only mean unchanged from *as-compiled* behavior; as compiled on two's complement, `0x800 << 20` is `INT_MIN`, which under `&` with a 64-bit `tag` converts per 6.3.1.3p2 by adding 2^64 → mask `0xFFFFFFFF80000000`. The new mask converts value-preservingly → `0x0000000080000000`. **The tested bit-set differs** (bits 31–63 vs bit 31 only), observable iff tag has bits 11–30 and 31 clear but some bit ≥32 set.
+
+So the author's two sentences — "tag is a *wider* unsigned quantity" and "truth value unchanged at *every* iteration" — are jointly true only under an **unstated runtime invariant `tag < 2^32`**. This does not block the fix (old behavior at dev==20 was UB, so any defined replacement is permissible); it blocks the *flat phrasing* of the premise, in both the brief and the comment. **Not checkable from the packet; the one fact that settles it is `tag`'s declaration** (plus, if 64-bit, whether bits ≥32 are ever written — presumably never, since `ioc_conf` appears register-sourced, but that is a tree fact).
+
+## 2. "Exactly one iteration overflows"
+
+**REASONED: correct.** 0x800 = 2^11; result representable in int iff 2^(11+dev) ≤ 2^31 − 1, i.e. dev ≤ 19. Loop covers dev ∈ {0..20}; counts all < 31 (no count-UB); E1 positive throughout. Exactly one overflowing iteration: dev == 20. **READ:** the UBSan text "left shift of 2048 by 20 places" matches. Minor caveat: *per execution*, early `break` paths may overflow zero times; the claim is about the iteration space, and the probe (tag == 0) forces the worst case. Consistent.
+
+## 3. Unwired differential vs. vacuity floor
+
+**REASONED (no measurement settles this from the packet):** Ship the fix, but the round is deferring the vacuity floor, not dissolving it — and its own control data proves the exposure: build/ scores 3/4 BEFORE *and* AFTER, i.e. **everything currently wired is invariant under this defect class**. After this round, nothing wired observes a silent revert of the token. The two-direction run demonstrates the detector is *live today* — genuinely stronger than a source pin as correctness evidence — but a detector file nobody runs is vacuous from t+1 until `ubsanshiftlane` lands. Given the round's own (defensible) rule against wiring an unreviewed lane inside a fix round, the missing move is a **bounded stopgap**: either a grep-level pin on the token with an owner and an explicit expiry = `ubsanshiftlane` landing, or that expiry/owner recorded in the row. A text pin is brittle (it will false-fire on legitimate refactors — which is why it's a bridge, not a destination). Not a blocker; the ask is that the bound be enforced, not implied.
+
+## 4. Comment: honest? Too long?
+
+- **READ — internal consistency good:** the quoted diagnostic matches premise 2 verbatim, and its 125:21 position is consistent with the pre-image line in the hunk. Artifact existence: not verifiable from the packet.
+- **REASONED — honesty defects:** "tag is already a wider unsigned quantity" is asserted without support and, per Q1, *undercuts* the adjacent "unchanged at every one of the 21 iterations" claim unless tag < 2^32; "on every compiler this project targets" is an empirical universal nothing in the packet measures; "(repair) owed by the LANGUAGE" is fine rhetoric but the truth is narrower — behavior is unchanged *only* on the 32-bit-tag / tag<2^32 reading.
+- **REASONED — venue/length:** ~20 lines (+20 per the hunk header 8→28) for one token violates the project's stated terse/minimal values. The 4–5 lines explaining the UB and why `U` suffices earn their place. The MEASURED citation with raw-artifact path is provenance → commit message/CHANGELOG. The starred "*** GRACEFUL-DEGRADATION PRECEDENT / `lcabadval` transferable warrant ***" block is panel litigation about a *different row* and premise 3 (`fatal()` non-terminating) is load-bearing for nothing here — delete it from source entirely.
+
+## 5. Siblings
+
+**NOT CHECKABLE from the packet.** No other `<<` appears anywhere in the inlined text. **Named measurement:** `grep -n '<<' GXEMUL-SEC/src/devices/dev_lca.c` plus the LCA's machine-file neighbour; the class pattern is a signed hex literal of value 2^k shifted by more than (width − k). `shiftubcensus` is the right filing; I will not guess hits.
+
+## 6. Else found
+
+1. **READ/REASONED — the control data double-cuts** (used in Q3): the invariant 3/4 score should be quoted in the `ubsanshiftlane` row as evidence it is non-redundant, so it isn't later closed as duplicative.
+2. **REASONED — provenance is single-operator:** one script, one artifacts path, both directions, operator-run. "Settled by measurement" applies here too: the cheapest corroboration is a second seat rerunning `regress/lca_confbus_probe.py` HEAD-vs-`c7d7414` under UBSan in their own temp dir. Requested, not demanded.
+3. **REASONED — duplicate cross-reference:** the trailing `/*  #511  */` on the fixed line plus issue citation inside the big block; keep one.
+4. **REASONED — pedantic, non-blocking:** the comment's "inside unsigned int" quietly assumes 32-bit int (true on every realistic target here); a hypothetical ≥16-bit-int portability claim would make shift *count* 20 itself UB. Not live; but it's the unstated term inside "every compiler this project targets."
+
+**What settles Q1 (the only open technical question): one line — the declaration of `tag`.** If it is `uint32_t`/`int`, the round passes clean except for comment length. If it is wider, the fix still stands (old behavior was UB), but the comment and the brief both need rewording from "unchanged at every iteration" to "unchanged wherever defined; at the formerly-undefined iteration the mask change is unobservable because tag never exceeds 32 bits" — *if* that invariant is true in the tree, which is the second line to check.

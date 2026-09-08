@@ -1,0 +1,19 @@
+VERDICT: NOT RATIFY — the one-token shift repair is arithmetically correct for the stated loop, but the packet does not inline `tag`’s type, the only measurement exercises `tag==0` (so it cannot support the “nothing else moves” claim), and the unwired differential leaves no ongoing regression protection.
+
+1. **Is `0x800U` sufficient and is anything else perturbed?**  
+   READ/REASONED: The change makes the left operand unsigned, so `0x800U << dev` is defined for all `dev` 0..20. For `dev<20` the value is identical to the old defined behaviour. For `dev==20` the old expression was UB, so “unchanged” is not meaningful; the new expression is defined. Whether the `&` and truth value are unchanged depends on `tag`’s type, which is **not inlined in the packet**. The comment asserts `tag` is a wider unsigned quantity, but that is not proven. If `tag` is `uint32_t` or wider unsigned, usual arithmetic conversions zero-extend the shift result and the comparison is unchanged for all defined iterations. If `tag` were signed or narrower, the result could differ. **Need the declaration of `tag` to settle.**
+
+2. **Is the “exactly one iteration overflows” claim right?**  
+   READ: Yes. `0x800` = 2^11. Shift by `dev`: max `dev=20` gives 2^31, which exceeds `INT_MAX` (2^31−1). `dev=19` gives 2^30, which fits. Loop bound `dev<21`, so only `dev==20` overflows.
+
+3. **Is shipping a fix whose only detector is an unwired differential acceptable?**  
+   REASONED: No. The packet states the differential is **not gate-wired**, so a regression would be caught by nothing until `ubsanshiftlane` lands. A source pin (e.g., a static check for `0x800 <<` or a UBSan suppression) would be wired and cheap. The round’s argument that a measured differential beats a source pin is undermined by the fact that this differential is not part of the gate. **Should have shipped a source pin or wired the differential.**
+
+4. **Is the comment honest and is it too long?**  
+   REASONED: The comment is too long for a one-token change. The essential fact is one line: `0x800U` avoids signed overflow at `dev==20`. The measurement details, artifact path, and precedent belong in the CHANGELOG or commit message. The claim “NOTHING ELSE MOVES” is **not supported by the measurement** (which only covers `tag==0`) and is not checkable from the packet. The comment’s length violates the project’s stated preference for terse, minimal changes.
+
+5. **Did I miss a sibling?**  
+   NOT CHECKABLE from packet. The packet does not inline other occurrences; the round admits no tree-wide census. Need a grep for `0x800 <<` or signed left shift with variable shift in `dev_lca.c` and immediate neighbours. The filed `shiftubcensus` row indicates this is open.
+
+6. **Something else:**  
+   The measurement only drives `tag==0` (`ioc_conf==0`), so the condition `tag & (0x800U << dev)` is always false. It detects the UB via UBSan but **cannot detect any change in truth value for nonzero `tag`**. Therefore the claim “no guest-visible value moves” is untested. This is a significant gap in the differential.

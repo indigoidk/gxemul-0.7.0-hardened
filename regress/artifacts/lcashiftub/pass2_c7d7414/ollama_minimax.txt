@@ -1,0 +1,105 @@
+**VERDICT: ACCEPT the fix (one-token `U`) as correct and sufficient — but the source comment is too long and conflates this row with `lcabadval`/`lcaconfbus1kill`, and the type of `tag` plus any sibling `0x800<<` sites are not checkable from this packet. Q3 is defensible only because the fix is mechanically trivial and the round actually ran a one-shot detector; it must not set a precedent.**
+
+---
+
+### Q1 — Is `0x800U` sufficient and is anything else perturbed?
+
+**REASONED.** The fix's correctness rests on a single fact the packet asserts but does not prove: the **declared type of `tag`**. The brief's wording — *"tag is already a wider unsigned quantity"* — is doing two jobs and only one is needed.
+
+Walking the usual-arithmetic-conversions cases for `tag & (0x800U << dev)`:
+
+| `tag` type | result of `&` at every iteration |
+|---|---|
+| `unsigned int` (same width as RHS) | identity on the bit pattern; truth value depends only on `tag` bits 11..31. |
+| `uint32_t` / `uint64_t` (wider unsigned) | RHS is converted to the wider type; bit pattern is unchanged; truth value depends only on `tag` bits 11..31. |
+| `unsigned short` / `unsigned char` (narrower unsigned) | `tag` promotes to `int`, then `int & unsigned int` → `unsigned int`; same bit pattern for the bits that matter. |
+| signed `int`/`long`, **non-negative** | conversion to `unsigned int` is identity on bit pattern. |
+| signed `int`/`long`, **negative** | conversion to `unsigned` is a bit-flip — truth value COULD change. Not a hardware-register scenario in practice. |
+
+So the *correct* claim is "`tag` is unsigned (or non-negative signed of at least `int` width)", not "wider". The brief is sloppy about "wider" but the conclusion holds for any unsigned `tag`.
+
+**Defect in the brief:** the type of `tag` is not inlined. The single fact that settles Q1 is the declaration of `tag` in `DEVICE_ACCESS(lca_pci_conf)`'s parameter list (the macro is almost certainly defined in `src/devices/dev_lca.c` near the diff, but the packet doesn't show it). A seat that opens "let me check the declaration" is the seat this panel has been warned off; I name the fact and stop.
+
+**Independent concern about the differential:** the probe in `regress/lca_confbus_probe.py` runs with `tag == 0`, so the loop's `&` always yields 0 at all 21 iterations. That means the differential proves "no UBSan fires after the fix" and "the tag==0 path is unchanged" — it does **not** independently prove the truth value is preserved at every iteration for arbitrary `tag`. The bit-pattern argument above is what carries the load, and that argument depends on `tag` being unsigned. The brief's sentence "no guest-visible value moves" is therefore weaker than advertised if `tag` is signed — still fine in practice, but not airtight from the packet alone.
+
+---
+
+### Q2 — Exactly one iteration overflows?
+
+**VERIFIED (READ).** Loop bound is `dev < 21`, so `dev ∈ {0,1,…,20}`.
+
+- `dev = 19`: `0x800 << 19 = 0x40000000 = 1073741824`. `INT_MAX = 0x7FFFFFFF = 2147483647`. Fits.
+- `dev = 20`: `0x800 << 20 = 0x80000000 = 2147483648 > INT_MAX`. Signed overflow.
+
+Shift count of 20 is below the 32-bit `int` width on every host this project targets, so only the *value* overflows, not the count. Exactly one iteration. The claim is right.
+
+---
+
+### Q3 — The one to attack: unwired differential as sole detector
+
+**REASONED.** The author flags this themselves and is right to. Let me steelman each side.
+
+**Why this round is acceptable despite the gap:**
+1. The fix is one token. A regression to `0x800 << dev` would be visible in `git blame`/`git diff` on the next code review of this file — not catchable by UBSan, but catchable by a human reading the diff.
+2. The detector was actually *run*, not asserted-in-passing. The round produced `ubsan_HEAD_20260907.raw` with 1 diagnostic; that's not a vacuous measurement — it's a measurement whose lane isn't in the gate.
+3. Wiring a new lane inside a fix round mixes process artefacts (the lane) with the artefact under review (the fix). Keeping them in separate rows (`ubsanshiftlane`) is correct separation of concerns.
+4. A source pin (regex on `\b0x[0-9a-fA-F]+\s*<<`) would be cheaper to add but only catches the *literal pattern*, not other signed-shift overflows in the same file (`shiftubcensus` is the right row for that).
+
+**Why this must NOT set precedent:**
+- The argument "measured two-direction differential beats a source pin because it tests behaviour not text" only holds when the measurement is **actually re-runnable on every future commit**. Here it isn't. The differential is a one-shot artifact in `artifacts/lcashiftub/`, not a CI step.
+- The vacuity-floor concern is real: if this round's pattern is ratified (fix + unwired one-shot + "trust the diff"), the next round with a less-trivial fix could ship the same shape with a much weaker differential — and the panel has no mechanical backstop.
+- A source pin would have caught *this* defect (it is a literal-pattern defect) at near-zero cost.
+
+**My read:** acceptable here because the fix is mechanically trivial, the measurement was actually executed, and the panel retains `ubsanshiftlane` as a gate-side follow-up. The right answer for the next similar-but-non-trivial fix is "wired lane or it doesn't ship". I would record this as a panel precedent, not bless it as a general rule.
+
+---
+
+### Q4 — Comment honest? Too long?
+
+**REASONED.** Honest: yes, technically accurate. Too long: yes, and it conflates rows.
+
+Defects in the comment block as written:
+
+1. **It mixes this row's narrative with `lcabadval`'s.** The "*** THE LOOP THIS SITS IN IS THIS FILE'S OWN GRACEFUL-DEGRADATION PRECEDENT … and `lcabadval' cites it as a transferable warrant ***" paragraph is editorial about *another* row's argument. That belongs in the round notes / `lcabadval`'s own packet, not in source code that future maintainers will read in isolation.
+2. **It asserts an empirical compiler claim ("The emitted code on every compiler this project targets was already what was intended") as if it were self-evident.** The differential only proves the `tag == 0` path; the rest is an inference about every targeted compiler. True in practice, but the source comment presents it as established fact.
+3. **~20 lines for a one-token change violates the project's stated value of "terse portable C99 / minimal surgical changes".** A future reader does not need the C99 section number, the diagnostic text verbatim, the date, and the artifact path inline at the change site.
+
+A trimmed version that earns its length:
+
+```c
+/* #511: was `0x800 << dev'; dev reaches 20, which is signed overflow
+   (C99 6.5.7p4).  `U' makes the operand unsigned; bit pattern and
+   `&' truth value unchanged for every unsigned `tag' at all 21
+   iterations.  See regress/lca_confbus_probe.py + ubsan_HEAD_20260907. */
+```
+
+That is ~5 lines, keeps the ticket number, the C99 anchor, the correctness argument, and the measurement pointer. The cross-reference to `lcabadval` and the "transferable warrant" rhetoric goes to the round notes.
+
+---
+
+### Q5 — Sibling `0x800 <<` / signed-shift overflow?
+
+**NOT CHECKABLE FROM THE PACKET.** The packet does not inline the rest of `dev_lca.c` or its neighbours, and I cannot `grep`. The single fact that settles Q5 is a literal search of `src/devices/dev_lca.c` (and arguably the wider `src/devices/`) for `\b0x[0-9A-Fa-f]+\s*<<` and for any `int` literal operand with shift count that can reach its sign bit. The author has filed `shiftubcensus` for this; that is the right row.
+
+---
+
+### Q6 — Anything else?
+
+Three things, ordered by importance:
+
+1. **The cross-reference to `lcabadval` in the source comment is the most consequential defect in this round.** It is the kind of artefact that survives only because the diff is small and "obviously correct". A future maintainer reading `dev_lca.c` will find a paragraph that names another row (`lcabadval`) by handle and argues a warrant-transfer case that has nothing to do with the one-token change. Strip it (see Q4).
+
+2. **The comment's "no guest-visible value changes" claim is weaker than the brief realises** (see Q1) — the differential's `tag == 0` probe does not exercise any non-zero-bit iteration. The bit-pattern argument is correct, but only if `tag` is unsigned; the packet asserts but does not prove that.
+
+3. **Minor — the `0x800U << dev` is well-defined only if `unsigned int` is at least 32 bits.** Every host this project targets meets that, and the original `0x800 << dev` would have been UB on a 16-bit `int` host for shift-count reasons too (dev=20 ≥ 16), so the fix doesn't introduce a new platform assumption. Noted for completeness, not a defect.
+
+---
+
+### Labels summary
+
+- Q1: REASONED (C promotion rules); one inlined fact missing (`tag`'s declared type).
+- Q2: READ (arithmetic from the packet is exact).
+- Q3: REASONED (process judgement; defensible here, not as precedent).
+- Q4: REASONED (style/concern-mixing judgement against stated project values).
+- Q5: NOT CHECKABLE FROM PACKET.
+- Q6: REASONED on items 2–3; item 1 is a READ defect in the comment text.

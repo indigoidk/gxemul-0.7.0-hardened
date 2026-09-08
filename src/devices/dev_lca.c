@@ -131,11 +131,24 @@ DEVICE_ACCESS(lca_pci_conf)
 		    build-asan; artifacts/lcashiftub/ubsan_HEAD_20260907.raw).
 
 		    `0x800U' makes the operand unsigned, so 2048U << 20 is 0x80000000U --
-		    inside unsigned int -- and NOTHING ELSE MOVES: `tag' is already a
-		    wider unsigned quantity, so the `&' and its truth value are unchanged
-		    at every one of the 21 iterations.  The emitted code on every compiler
-		    this project targets was already what was intended; the repair is owed
-		    by the LANGUAGE, which is why no guest-visible value changes.
+		    inside unsigned int -- and NOTHING ELSE MOVES.
+
+		    *** THE REASON, CORRECTED: AN EARLIER DRAFT SAID `tag' IS "ALREADY A
+		    WIDER UNSIGNED QUANTITY".  THAT IS FALSE -- `tag' is a plain signed
+		    `int' (:92) -- AND FOUR PASS-2 SEATS CAUGHT IT.  Worse, the claim was
+		    backwards: being WIDER is what would CREATE a difference, not remove
+		    one.  Had `tag' been `uint64_t', the old `int' 0x80000000 is NEGATIVE
+		    and would SIGN-EXTEND to 0xffffffff80000000 for the `&', while
+		    `0x800U << 20' zero-extends to 0x0000000080000000 -- two different
+		    masks.  The seats were right about the mechanism and it does not fire
+		    here only because of the type.
+
+		    WHAT ACTUALLY HOLDS: both operands are 32-bit, so the `&' is performed
+		    at 32 bits either way -- `int & int' before, and after, `tag' converted
+		    to `unsigned int' by the usual arithmetic conversions.  The RESULT'S
+		    BIT PATTERN IS IDENTICAL; only its type changes, and it is consumed
+		    solely as a truth test in `if (...)'.  So no guest-visible value moves,
+		    and the repair is owed purely by the LANGUAGE. ***
 
 		    *** THE LOOP THIS SITS IN IS THIS FILE'S OWN GRACEFUL-DEGRADATION
 		    PRECEDENT -- the `dev >= 21' arm below has a commented-out

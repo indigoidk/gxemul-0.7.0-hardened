@@ -1,0 +1,131 @@
+I'll verify the premises against `GXEMUL-SEC/src/` rather than ratify the packet: `tag`'s type and the shift arithmetic first, then siblings and the unwired-detector question.Checkpoint HEAD is stale versus git; I'll review `c7d7414` itself — `tag`'s type, the loop, and nearby shifts.`tag` is declared `int`, which already contradicts the comment’s “wider unsigned” claim. I’ll confirm promotions, then hunt siblings and the detector artifacts.**VERDICT: RATIFY the `0x800U` token. DO NOT RATIFY the load-bearing type claim, and DO NOT RATIFY “the measurement is the detector.”** The shift arithmetic is right and no defined iteration changes its truth value. `tag` is a signed `int`, not “a wider unsigned quantity” — that sentence is false in the product comment and in the CHANGELOG. The unwired UBSAN run is a witness, not a detector. Two other PCI IDSEL scanners still evaluate `1 << 31`.
+
+---
+
+## 1. `0x800U` is sufficient. The type premise is false. No defined iteration changes.
+
+Checked in `DEVICE_ACCESS(lca_pci_conf)`, not taken from the packet:
+
+```c
+int tag, bus, dev, func, reg;
+...
+tag = (relative_addr >> 5) & ~0xff;
+...
+if (tag & (0x800U << dev))
+```
+
+`DEVICE_ACCESS` (`memory.h`) gives `uint64_t relative_addr`. `tag` is a 32-bit signed `int` (the UBSAN line “cannot be represented in type `int`” for `2048 << 20` is itself the width proof). It is neither unsigned nor wider than the mask.
+
+**Promotions (C99 6.5.7 / 6.3.1.8), not the comment’s story:**
+
+| piece | type |
+|---|---|
+| `0x800` | `int` (2048 fits) |
+| `0x800U` | `unsigned int` |
+| `0x800U << dev` | type of the promoted left operand → `unsigned int` |
+| `tag & (unsigned)` | same rank → `tag` converts to `unsigned int`, AND is unsigned |
+
+For `dev = 0..19` the old mask is a **positive** `int` (`0x800` .. `0x40000000`). On two’s-complement 32-bit, converting a nonnegative `tag` to `unsigned int` is identity, and converting a negative `tag` preserves bits 0–30, so the `if` truth value is unchanged at every **defined** iteration.
+
+`dev == 20` was undefined, so “unchanged” there is a claim about this host’s lowering, not about the abstract machine. The guest-visible control supports it: `build/` stays `3/4` with the same three greens (`ubsan_HEAD_20260907.raw` / `ubsan_FIXED_20260907.raw`; I re-read both — 1 diagnostic vs 0).
+
+**Nothing guest-visible moves on this mapping, for a stronger reason than the brief gave** (derived from the same function + `DEVINIT(lca)`, flagged as past the inlined hunk): the window is `0x20000000` bytes, so `relative_addr >> 5` is at most `0x00ffffff`. Bit 31 of `tag` cannot be set. `0x800U << 20` therefore never matches a reachable tag. The overflowing iteration is the miss-scan cost of an empty IDSEL walk, never a successful device-20 decode.
+
+`0x800UL` / `1U << (dev + 11)` would also be defined. They are not required. Do **not** “fix” the type claim by widening `tag` in this round — that is a new conversion of the PCI tag, licensed separately.
+
+---
+
+## 2. Exactly one overflowing iteration: yes, on this platform.
+
+Loop is `dev = 0,1,…,20` (21 iterations). C99 6.5.7p4: `E1 × 2^E2` must be representable in the result type.
+
+- `0x800 << n` = `2^(11+n)`
+- representable in 32-bit `int` iff `11+n <= 30`, i.e. `n <= 19`
+- `n = 19`: `2^30 = 0x40000000` ≤ `INT_MAX`
+- `n = 20`: `2^31 = 2147483648 > INT_MAX` → UB
+- `n = 21` would also overflow and is **not executed** (`dev < 21`)
+
+Shift **count** is fine: 20 < 32, so 6.5.7p3 does not fire. The UBSAN text (“left shift of **2048** by **20** places”) is that one cell, not a family inside the loop.
+
+This is 32-bit-`int` arithmetic. A 64-bit `int` would not overflow at all; a 16-bit `int` would overflow from `n = 4`. The diagnostic settles which machine this is.
+
+---
+
+## 3. Not the vacuity floor. It is calling a witness a detector.
+
+The floor binds **kill-table-backed** detectors. This round ships none, so it cannot fail clauses (a)–(d) and cannot hide behind them either. The vacuity-floor analogy is the wrong clothes.
+
+What is actually wrong is the CHANGELOG sentence:
+
+> The two-direction measurement above **is** the detector
+
+No. That run is the **witness** (rung 3, clause (i), same script, opposite colour). A detector is something that will fail later when the token is reverted. A dated `raw` file will not. That is the frozen-number class’s cousin: a measurement that will not re-run, cited as if it will.
+
+The honest half of the same block is the part to keep: *“NO GATE ROW. A regression would be caught by `ubsanshiftlane` when that lands, and by nothing before then.”* That is disclosed coverage debt, ranked below live host kills. It is an acceptable trade **for this class**, because `#510` already measured that definedness has **no guest-visible value** on a non-trapping host. A value row cannot pin `0x800U` → `0x800`.
+
+**Should this round have shipped a source pin as well?** No, as the living pin for the instance — with a qualifier.
+
+- `#510`’s product comment names “UBSAN or a source pin” because a **value** probe is blind. It does not say a one-shot UBSAN run discharges the pin.
+- A naive grep for `0x800 <<` is now **poisoned by this round’s own comment**, which quotes the old spelling for twenty lines. A text pin that matches a comment is the quoted-marker class.
+- Wiring UBSAN as a second binary + stderr oracle **is** a new measurement lane. Filing `ubsanshiftlane` instead of bolting it onto a pass-2 that has already run is the right process call.
+
+So: **do not add a source pin to make the “shipped a detector” sentence true.** Strike that sentence. The witness licenses the token; the detector is the filed row; until that row lands this is an honest gap, not a vacuous detector.
+
+If someone wants a living pin *before* `ubsanshiftlane` without a new lane, the existing probe pointed at `build-asan` is already the apparatus — that is the filed row, not a grep.
+
+---
+
+## 4. The comment is too long, and its load-bearing sentence is false.
+
+~20 lines for one token. The project’s C99 ethos is not the main problem. The main problem is that the long comment **states a wrong type in product code**. A short lie is L4; a twenty-line lie is L4 that future seats will re-derive from.
+
+What belongs at the site (3–4 lines):
+
+- was `0x800 << dev`, signed overflow at `dev == 20` (C99 6.5.7p4)
+- `0x800U` makes the left operand unsigned
+- `#511`
+
+What belongs in the CHANGELOG (and is already there): the UBSAN quote, the artifact path, the “emitted code was already what was intended” claim, the graceful-degradation irony, the `lcabadval` warrant. A product comment must not cite a queue id. The quoted `dev_lca.c:125:21` is a HEAD diagnostic; this insertion moved the shift to line 145. Quoting the sanitizer message is fair; a reader who opens `:125` now hits the comment.
+
+“The emitted code on every compiler this project targets” is a universal I did not re-measure. The 3/4 control is one host. Keep it in the CHANGELOG as that host’s lowering, or drop it.
+
+---
+
+## 5. No second `0x800 <<` in `src/`. Two IDSEL scanners still do `1 << 31`.
+
+`0x800 <<` as code: only this site (plus the new comment quoting it). Same file, not this class: `0x10000 << 5` at `DEVINIT(lca)` is `2^21`, fits. The NetBSD formula in the comment, `1 << (device + 11)`, is documentation; it is the dual of `0x800 << device` and would be the same UB if copied into code without `U`.
+
+**The same algorithm, still live** — `for (dev` over `src/devices/` hits exactly three loops:
+
+```c
+/* dev_uninorth.c, DEVICE_ACCESS(uninorth_addr) */
+for (dev=11; dev<32; dev++)
+    if (idata & (1 << dev))     /* dev==31 → 1 << 31, C99 6.5.7p4 */
+        break;
+```
+
+```c
+/* dev_v3.c, DEVICE_ACCESS(v3_pci) */
+for (dev=24; dev<32; dev++)
+    if (relative_addr & (1 << dev))  /* same last-iteration UB */
+        break;
+dev -= 24;
+if (dev == 8) { /* NO DEVICE? */ dev = 0; }
+```
+
+Uni-North is the same bit-range as LCA (`bits 11..31`, 21 steps) with `1 << dev` instead of `0x800 << (dev-11)`. V3 is the closer *disposition* sibling: last-iteration signed overflow, then substitute `dev = 0` — LCA’s own graceful-degradation precedent, still containing the UB.
+
+These are not `0x800 <<`, so they are not a miss of that spelling. They **are** a miss of “the same `0x800 <<` shape.” `shiftubcensus` examined 8 of 7,067 lexical left shifts and never looked at these two. File them onto that row (or a named pair); do not grow `#511`.
+
+Extra hazard those two have that LCA does not (past the packet, from the AND’s other operand): `idata` / `relative_addr` are `uint64_t`. If `1 << 31` wraps to `INT_MIN`, usual arithmetic conversions sign-extend it to `0xffffffff80000000ULL` before the AND. LCA’s `tag` is `int`, so it does not take that conversion. Another reason `1U` is the repair there, not merely cosmetics.
+
+---
+
+## 6. Else
+
+- **L4, in place:** “`tag` is already a wider unsigned quantity” in `dev_lca.c` and in `CHANGELOG.md` `#511`. Same sentence, two files. `unsigned int` is also not *wider* than `int`; “wider” names `relative_addr`.
+- **Luna is the same species, not an LCA neighbour.** `dev_luna88k.c`: `templ.line = i` for `i = 1..6`, then `1 << (interrupt->line + 25)` and `1 << (25 + i)` both hit `1 << 31` at line 6. Same 6.5.7p4 cell. Mention for `shiftubcensus`; not this diff.
+- **Artifacts match the packet.** HEAD raw line 19 is the quoted diagnostic; FIXED raw has no `runtime error` / `left shift` after the same `step 5`. I did not re-run the probe (operational rule).
+- **`fatal()` / `exit(1)`:** settled premise 3 holds here. The `dev >= 21` arm’s kill is already commented out; the `bus != 0` arm still `exit(1)`s — that is `lcaconfbus1kill`, and the control row staying RED is the right non-claim.
+
+**What I would change in a follow-up records commit, not in the token:** delete the type sentence; shrink the product comment; stop calling the `raw` files a detector. The one-token repair can stay.

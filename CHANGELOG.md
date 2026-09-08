@@ -11,9 +11,28 @@ signed 32-bit int** — undefined by C99 6.5.7p4, not merely implementation-defi
 iteration overflows; `0x800 << 19` is `0x40000000` and fits.
 
 **THE FIX, one token:** `0x800U << dev`. The operand becomes `unsigned int`, so `2048U << 20` is
-`0x80000000U` — inside range — and **nothing else moves**: `tag` is already a wider unsigned
-quantity, so the `&` and its truth value are unchanged at every one of the 21 iterations. The
-emitted code on every compiler this project targets was already what was intended; the repair is
+`0x80000000U` — inside range — and **nothing else moves**.
+
+> ### *** THE REASON FIRST GIVEN HERE WAS FALSE, AND FOUR PASS-2 SEATS CAUGHT IT. ***
+>
+> This paragraph said *"`tag` is already a wider unsigned quantity"*. **`tag` is a plain signed
+> `int`** (`dev_lca.c:92`: `int tag, bus, dev, func, reg;`). Worse, the claim was **backwards**:
+> being *wider* is what would CREATE a difference, not remove one. Had `tag` been `uint64_t`, the
+> old `int` `0x80000000` is NEGATIVE and would **sign-extend** to `0xffffffff80000000` for the `&`,
+> while `0x800U << 20` **zero-extends** to `0x0000000080000000` — two different masks. glm stated it
+> exactly; minimax, deepseek and the kimi substitute each independently refused to ratify the claim
+> and named the declaration of `tag` as the settling fact.
+>
+> **WHAT ACTUALLY HOLDS:** both operands are 32 bits, so the `&` is performed at 32 bits either way
+> — `int & int` before, and after, `tag` converted to `unsigned int` by the usual arithmetic
+> conversions. **The result's bit pattern is identical**; only its type changes, and it is consumed
+> solely as a truth test in `if (...)`. grok, having read the tree: *"The shift arithmetic is right
+> and no defined iteration changes its truth value."*
+>
+> *A wrong reason attached to a right conclusion — and a wrong reason gets reused, which is why it
+> is corrected here and in the product comment rather than quietly dropped.*
+
+The emitted code on every compiler this project targets was already what was intended; the repair is
 owed by the LANGUAGE, which is why no guest-visible value changes.
 
 ## WITNESS — rung 3, and the vehicle already existed
@@ -83,6 +102,43 @@ ROW.** A regression would be caught by `ubsanshiftlane` when that lands, and by 
 has a commented-out `fatal()`/`exit(1)` with `dev = 0;` substituted, and `lcabadval` cites that very
 loop as a transferable in-tree warrant for deleting a host kill. **The safe path contained the
 undefined behaviour.**
+
+## PASS 2 — the panel ratified the token and refused two of the round's claims
+
+`_scratchpad/panel_20260907_221353`, preserved at `regress/artifacts/lcashiftub/pass2_c7d7414/`.
+SEATS: codex, grok, glm, deepseek, minimax and the kimi-k3:cloud SUBSTITUTE answered (6); the kimi
+CLI WALLED on its 403 weekly limit so that seat is COVERED, not lost; agy DELIBERATELY NOT FIRED
+(measurement reserve); opus5 and fable5 NOT FIRED, reserved for the 2026-09-09 adjudication.
+
+**grok's verdict:** *"RATIFY the `0x800U` token. DO NOT RATIFY the load-bearing type claim, and DO
+NOT RATIFY 'the measurement is the detector.' The shift arithmetic is right and no defined iteration
+changes its truth value. `tag` is a signed `int` … Two other PCI IDSEL scanners still evaluate
+`1 << 31`."*
+
+**1. The type claim — corrected above, in both places it appeared.**
+
+**2. *** "THE MEASUREMENT IS THE DETECTOR" IS REFUSED, AND THE CORRECTION IS A CATEGORY ONE. ***
+An unwired one-shot UBSAN run is a **WITNESS** — it shows the defect and shows it gone. A
+**DETECTOR** defends against regression, and nothing here does: no gate runs it, so a future edit
+reintroducing `0x800` is caught by nothing. This round's own text called it "the detector" while
+also admitting no gate row exists; those two sentences cannot both stand. **It ships with a witness
+and no detector**, and gate-wiring remains `ubsanshiftlane`.
+
+**3. *** TWO SIBLINGS, AND MY SIBLING CENSUS'S FILTER IS WHAT HID THEM. ***
+
+    dev_uninorth.c:70   for (dev=11; dev<32; dev++)  if (idata & (1 << dev))
+    dev_v3.c:164        for (dev=24; dev<32; dev++)  if (relative_addr & (1 << dev))
+
+Both reach `dev == 31`, so both evaluate `1 << 31` = `0x80000000` — the same signed overflow, in the
+same PCI IDSEL-scanner idiom, in two more chipsets. **My census excluded literal `1` as "the
+ordinary bitmask idiom".** That exclusion is exactly backwards: `1` has the MOST headroom and is
+therefore the ONLY literal that overflows at the maximum shift a `< 32` loop produces. The absence
+record it produced is retracted; both sites are filed to `shiftubcensus`.
+
+**Note the repair may NOT transfer unchanged**: `#511`'s "nothing else moves" turned on `tag` being
+a 32-bit `int`. `dev_uninorth.c` ands against `idata`, which in that handler is plausibly 64-bit —
+**precisely the case where the old sign-extension and the new zero-extension differ.** Each site
+needs its own type check.
 
 ## Provenance
 
