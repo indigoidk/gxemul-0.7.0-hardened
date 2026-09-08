@@ -1,3 +1,94 @@
+# `#511` lcashiftub: `0x800 << dev` overflows a signed int on the last iteration
+
+**THE DEFECT.** `dev_lca.c`, in `DEVICE_ACCESS(lca_pci_conf)`'s device-scan loop:
+
+    for (dev=0; dev<21; dev++)
+            if (tag & (0x800 << dev))
+                    break;
+
+`0x800` is `2^11` and a plain `int`. At `dev == 20` the expression is `2^31`, which **overflows a
+signed 32-bit int** — undefined by C99 6.5.7p4, not merely implementation-defined. Exactly one
+iteration overflows; `0x800 << 19` is `0x40000000` and fits.
+
+**THE FIX, one token:** `0x800U << dev`. The operand becomes `unsigned int`, so `2048U << 20` is
+`0x80000000U` — inside range — and **nothing else moves**: `tag` is already a wider unsigned
+quantity, so the `&` and its truth value are unchanged at every one of the 21 iterations. The
+emitted code on every compiler this project targets was already what was intended; the repair is
+owed by the LANGUAGE, which is why no guest-visible value changes.
+
+## WITNESS — rung 3, and the vehicle already existed
+
+**No new apparatus was built.** `regress/lca_confbus_probe.py` was shipped earlier the same day as
+the witness for a *different* row (`lcaconfbus1kill`). Its control read drives a guest `ldq` into
+the PCI config window with `ioc_conf == 0`, which takes the `bus == 0` branch with `tag == 0` — so
+the scan loop runs all 21 iterations and reaches the overflow **on every run**. Pointing that probe
+at `build-asan/gxemul` instead of `build/gxemul` is the whole measurement.
+
+    HEAD    dev_lca.c:125:21: runtime error: left shift of 2048 by 20 places
+                              cannot be represented in type 'int'
+            artifacts/lcashiftub/ubsan_HEAD_20260907.raw          1 diagnostic
+
+    FIXED   (none)
+            artifacts/lcashiftub/ubsan_FIXED_20260907.raw         0 diagnostics
+
+**Same script, opposite outcome — clause (i) exactly.** And the control: the plain `build/` binary
+scores `3/4` before and after, with the same three rows green and `bus kill` still RED, because that
+is a different defect. **Nothing else moved.**
+
+> ### *** THE ASAN SWEEP COULD NOT HAVE FOUND THIS, AND THE REASON IS STRUCTURAL. ***
+>
+> `build-asan` has carried `-fsanitize=address,undefined` all along, and `gate_asan_sweep.sh` runs
+> every machine type and subtype. But it runs them as
+> `"$bin" -V -E "$t" -e "$s" "$DUMMY" </dev/null` — a **CONSTRUCTION** sweep. This shift lives in an
+> **access path** that only a guest PCI config cycle reaches, and constructing `alphabook1` never
+> executes it. *That is the witness ladder's own rung-2 limit one level down: registration proves
+> presence, not reachability.*
+
+> ### *** THE FIRST MEASUREMENT WAS A FALSE NEGATIVE OF MY OWN MAKING, and it is the more useful
+> ### half of this round. ***
+>
+> Run 1 reported **no diagnostic** and I nearly filed that as a finding against `ubsanshiftlane` —
+> that the ASAN build fails to report a shift UB it provably evaluates. The cause: **I grepped the
+> PROBE's stdout, and a UBSAN message goes to the EMULATOR's stderr**, which lands in the probe's
+> internal pty buffer and is never echoed.
+>
+> **That is the same defect this session had already fixed one level down** — a green row whose
+> evidence never reaches the artifact — recurring on the *harness* rather than on a row.
+>
+> **A PROBE ONLY SHOWS WHAT IT CHOOSES TO PRINT. When looking for output the probe was not written
+> to surface, DUMP THE BUFFER; do not grep the summary.** Re-run from a frozen copy in `/tmp` — the
+> shipped probe is not edited for a measurement — and the diagnostic was in the first ten lines.
+>
+> *The wrong answer REASSURED: "no diagnostic" is exactly what a clean build looks like.*
+
+## DETECTOR — stated honestly rather than claimed
+
+The two-direction measurement above **is** the detector, and it is a UBSAN DIFFERENTIAL: a second
+binary and a STDERR oracle rather than a value oracle. **It is not wired into a gate**, and wiring it
+is `ubsanshiftlane`, filed separately because a new measurement lane added inside a fix round is a
+lane nobody reviewed.
+
+The alternative considered and rejected was a SOURCE PIN asserting the expression reads `0x800U`.
+`#510`'s own product comments name a source pin as legitimate for this class ("No row can kill a
+`1U` -> `1` regression; UBSAN or a source pin can"). It was rejected here because **the differential
+already exists and is measured in both directions**, while a source pin would test the text rather
+than the behaviour — and this round has the behaviour.
+
+**So the honest statement is: this fix ships with a MEASURED two-direction differential and NO GATE
+ROW.** A regression would be caught by `ubsanshiftlane` when that lands, and by nothing before then.
+
+## The irony, which is the reason this site was worth reading twice
+
+**The loop containing the UB is this file's own graceful-degradation PRECEDENT.** Its `dev >= 21` arm
+has a commented-out `fatal()`/`exit(1)` with `dev = 0;` substituted, and `lcabadval` cites that very
+loop as a transferable in-tree warrant for deleting a host kill. **The safe path contained the
+undefined behaviour.**
+
+## Provenance
+
+Filed by the codex seat during `lcabadval` scoping and verified then; witnessed and fixed
+2026-09-07. All four trees cleared two-part after the propagate (`est/`: source tree, part 2 N/A).
+
 # `#510` armbfxwidth32: UBFX and SBFX built their mask with an undefined shift
 
 **THE DEFECT.** `cpu_arm_instr.c`. The decoder gives both handlers
