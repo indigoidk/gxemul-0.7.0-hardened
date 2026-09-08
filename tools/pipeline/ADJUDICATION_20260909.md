@@ -211,6 +211,28 @@ So the honest disclosure is not *"we shipped a coarse repair and deferred the fi
 implemented in"**, and over-invalidation is conservative in the safe direction: it costs re-walks,
 never stale data.  **Confirm that this is the sentence the CHANGELOG should carry.**
 
+*** AND SINCE THAT WAS WRITTEN, BOTH HALVES HAVE BEEN NAILED DOWN -- ONE FROM A PRIMARY SOURCE
+THAT ARRIVED ON A DIFFERENT ROW, ONE FROM A ONE-LINE GREP. ***
+
+**Hardware.**  The Alpha 21066 Hardware Reference Manual (fetched at codex's citation while
+reviewing `lcaconfbus1kill`; `machine_alpha.c:61` installs the LCA, so it is this machine's
+chipset) says at `21066_66a_hrm.txt:1486` and `:1685`, read locally:
+
+> *"Write operations to the ITBASM register invalidate all entries that do not have the ASM bit
+> set."*
+
+So the selectivity `ALPHA_TBIAP()` is supposed to have is real, documented, and the repair is
+genuinely coarse rather than merely conservative.
+
+**Tree.**  `grep -rn ALPHA_PTE_ASM src/` returns **ONE hit -- the `#define` at
+`alpha_cpu.h:223`.**  Nothing consumes it.  `apcb_asn` is written by `swpctx` and read by a debug
+print, and no translation lookup consults it.
+
+**So the disclosure sentence writes itself, and it is stronger than "deferred": the finer
+semantics have no representation in this emulator's translation cache at all.**  Q3 is, I think,
+answered -- but the sentence is yours to ratify, because it is the one that will stand in the
+CHANGELOG.
+
 ### B2. `alphaswpctxreg` -- the easiest resolvable HIGH-adjacent item in the queue
 
 One character.  `cpu->cd.alpha.r[ALPHA_A0] = ctx` should be `ALPHA_V0`; the comment directly above
