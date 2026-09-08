@@ -1,0 +1,43 @@
+**VERDICT: The §3 arithmetic is right — I re-derived every step and found no defect. Both hard-coded masks are Table-6-6 rows (8 MB, 1 GB), the table is 13 values, so 12 legal values terminate per mask register and 24 across the two; the severity claim stands on the packet's premises. The proposed guard is exactly correct on the extracted 12-bit field and exactly wrong on the raw register word. All six arms should accept with backing storage; no guest-written value may exit the process. Terminating on legal values is the more dangerous direction, unconditionally.**
+
+## Premise audit
+
+Verified (READ + REASONED):
+
+- (READ) The inlined table has 13 rows. (REASONED) Corroborated beyond counting rows: the sizes are the complete power-of-two run 2^20…2^32 — 13 values, no gaps — so the quoted "1 MB to 4 GB" *forces* the count; a dropped row would leave a hole in a documented contiguous sequence.
+- (REASONED) All 13 rows are consistent with the quoted XOR/AND rule: k masked bits ⇒ window 2^(20+k) bytes. Checks for every row.
+- (REASONED) The two accepted (base, mask) pairs are internally coherent: base0 0x300800000 is 8 MB-aligned, base1 0x240000000 is 1 GB-aligned. The code and manual transcriptions agree with each other at least to this depth.
+
+Not checkable from the packet — with the single fact that settles each:
+
+1. The code transcription, and what the arms do on the **accept path** (store? readback?). Settled only by the verbatim arm bodies.
+2. The manual transcription (table complete/verbatim). Settled only by the Table 6-6 page itself. The power-of-two completeness corroborates but does not prove.
+3. That `exit(1)` exists and is reachable. Settled by the arm bodies. (`fatal()` being print-only is *not* load-bearing — `exit(1)` alone does the killing.)
+4. That Table 6-6 governs both W_MASK0 and W_MASK1 — the quote names "IOC_W_MASK" generically. Settled by the manual's per-register text.
+5. (READ + REASONED, a real tension) Both accepted **bases carry bits above 31**: 0x300800000 sets bits 33,32; 0x240000000 sets bit 33. The quoted mask field covers only <31:20>, so those bits participate in no comparison. Not a contradiction — the quote is silent on W_BASE's field — but either W_BASE is wider than the mask field or one transcription is lossy. Settled by the manual's IOC_W_BASE description.
+
+## Q1 — derivation
+
+Every step checks (READ for inputs, REASONED for the work): 0x700000 = 0b111 << 20 → field 0x007 = 8 MB row ✓; 0x3ff00000 → 0x3ff = 1 GB row ✓; 13 legal per register, one accepted per register ⇒ 12 kill, 24 total ✓; the invariant holds on all 13 ✓. One nit in the THEREFORE's *phrasing* (READ): "any window size other than 8 MB / 1 GB" is loose — the safe value is **per register** (8 MB only on window 0, 1 GB only on window 1). Writing the legal 1 GB value to W_MASK0 still kills. The count is unaffected.
+
+## Q2 — the guard
+
+On the extracted field `f = (idata >> 20) & 0xfff`: **exactly bijective with Table 6-6**. f & (f+1) == 0 ⟺ f = 2^k − 1; over 12 bits that is k = 0..12 — precisely the 13 rows. No counterexample exists in either direction at field level. On the **raw word** it fails both ways: admits 0xFFFFF (bits <19:0> set) and 0xFFFFFFFFFFFFFFFF (f+1 wraps to 0); excludes every legal nonzero value (0x700000 & 0x700001 = 0x700000 ≠ 0). Second gap: the guard says nothing about bits outside <31:20>; whether they must read back zero is a manual question the packet does not answer.
+
+## Q3 — the six arms
+
+Principle: hardware cannot `exit(1)`. "Unsupported" in a data sheet bounds a *guarantee*; it is not a trap. Process death is for host-side invariants, never guest data.
+
+- **W_MASK0/1** — accept with backing storage; honor the XOR/AND rule for *any* value (the quoted rule is total over all 4096 field values; the table lists supported values, not the only decodable ones); `(once)` log for out-of-table values as a fidelity diagnostic, never fatal.
+- **W_BASE0/1** — accept with backing storage, no legality gate. The manual (as quoted) enumerates nothing for base, and the matching rule is total in base too; terminating on any base except the one the reference image wrote is per-image hard-coding.
+- **CONF, TB_ENA** — accept with backing storage; the field masks survive at most as `(once)` diagnostics. No manual basis is quoted for these two masks at all (READ).
+
+Backing storage (not bare accept-and-store) for all six: firmware verifies registers by write-then-readback.
+
+## Q4 — error direction
+
+**Terminating on legal values**, as the code stands: a deterministic, guest-triggered host abort on documented behavior — it fires in the field for any OS that sizes windows differently, and in a service context is a guest-triggerable availability failure. The silent-accept hazard is **conditional**: it presupposes a decode that consults these registers, which the packet itself says is unknown; if the decode ignores them, acceptance is inert. If it does consult them, accept-but-ignore-with-readback becomes the classic silent-corruption worst case. So: "never fatal" is unconditional; the second hazard is conditional on exactly the fact worth establishing first.
+
+## Q5 — the plausible wrong fix
+
+`if (idata & (idata + 1))` — the right invariant applied to the wrong operand. It looks like the textbook fix (it *is* the invariant, just not on the field) and it terminates on all 13 legal values *including the two currently accepted*. Runner-up: patching W_MASK0's arm and leaving W_MASK1's equality test — 12 legal values still kill. Fixing the masks but leaving the W_BASE arms fatal also leaves kills, but whether those values are "documented-legal" is precisely what premise 5 blocks.

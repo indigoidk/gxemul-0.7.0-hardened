@@ -1,0 +1,83 @@
+**VERDICT: Your mask count is correct—12/13 rejected per register—but the blanket configuration-legality claim needs alignment and nonoverlap qualifications. The six guards do not implement the manual’s value rules.**
+
+I checked `GXEMUL-SEC/src/`. All six arms store before testing, and the `default` terminates on reads as well as writes. Your statement about [`fatal()`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/core/debugmsg.c:384) is correct: it prints and returns; the explicit `exit(1)` terminates.
+
+**Q1: Table 6-6 is self-calibrating here.** I parsed all thirteen rows and checked the adjacent runs 4/8/16 MB and 512 MB/1 GB/2 GB. Each bit field and size occupy the same line and agree arithmetically. Your displayed excerpt omits the **32 MB, `0x01f`** row, which exists at line 9591. [Table 6-6](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/21066_66a_hrm.txt:9581)
+
+For the twelve-bit field:
+
+- `f = 2^k − 1`, for `k = 0…12`.
+- Equivalently, `0 ≤ f ≤ 0xfff` and `(f & (f + 1)) == 0`.
+- Size is `(f + 1) × 2^20` bytes.
+
+Consequently, `0x700000` means 8 MB and `0x3ff00000` means 1 GB. Each guard rejects **12/13 canonical mask encodings**, totaling **24/26 register/value pairs**.
+
+The qualification appears immediately after your quoted matching algorithm: bases must align naturally to window size, and responding windows must not overlap. §6.4.9 repeats both requirements. [Alignment and overlap note](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/21066_66a_hrm.txt:9618), [§6.4.9](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/21066_66a_hrm.txt:10533)
+
+With the two accepted enabled bases held fixed, window 0 permits only the four sizes through 8 MB; window 1 permits the eleven sizes through 1 GB. Their mask guards then reject **3/4** and **10/11**, respectively. All thirteen sizes are supported, but changing size can require changing the surrounding configuration.
+
+**Q2: Count defined fields separately from ignored bits.** The following denominators use zero in reserved fields and, for bases, range over compatible window configurations.
+
+| Register | Manual-defined field settings | Canonical settings rejected |
+|---|---|---:|
+| `IOC_CONF` | Two-bit `CFG AD<1:0>`: `{0,1,2,3}` | **2/4** |
+| `IOC_TB_ENA` | Bit 7, TEN: `{0,0x80}` | **0/2** |
+| `IOC_W_BASE0` | Twelve-bit base plus independent SG and WEN bits | **16,382/16,384** |
+| `IOC_W_BASE1` | Same fields | **16,383/16,384** |
+
+The CONF field is **two bits**, not one. The HRM does not enumerate a smaller register-write set. This does **not** establish four valid PCI configuration-cycle types: §6.2.9 separately refers transaction-address restrictions to the PCI specification. [CONF description](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/21066_66a_hrm.txt:10226), [configuration-cycle restrictions](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/21066_66a_hrm.txt:9224)
+
+TEN has exactly two states, both accepted. Clearing TEN disables TLB caching; it does **not** disable scatter-gather translation. [TEN description](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/21066_66a_hrm.txt:10439)
+
+For W_BASE, there is no enumerated whitelist, but there **are** constraints. The 16,384 denominator is `4096 × 2 × 2`: every combination can occur with a 1 MB mask and the other window disabled. It is not the count for an arbitrary fixed mask. With mask field `2^k−1`, there are `4 × 2^(12−k)` aligned encodings before applying overlap restrictions. For example, with the other window disabled:
+
+- W_BASE0 at 8 MB: rejects **2,046/2,048** aligned encodings.
+- W_BASE1 at 1 GB: rejects **15/16**.
+
+More directly, the manual explicitly requires initializing **both** base registers to zero; W_BASE1 rejects that initialization. [§6.4.14](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/21066_66a_hrm.txt:10788)
+
+The reserved-bit premise also matters. These registers mark their remaining bits `RES`, type **X**. X means ignored on writes and unpredictable on reads—not MBZ. The preface also says reserved fields should not be used. Thus distinguish recommended software settings from hardware-defined handling of write operands. [RES definition](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/21066_66a_hrm.txt:955), [X definition](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/21066_66a_hrm.txt:985)
+
+Counting raw 64-bit operands under that ignored-write rule:
+
+- CONF and TB_ENA each reject **`(2^64−2)/2^64`** operands.
+- Across compatible configurations, W_BASE0 rejects **`(2^64−2)/2^64`**, and W_BASE1 **`(2^64−1)/2^64`**.
+- Each mask rejects **`(13×2^52−1)/(13×2^52)`** operands whose meaningful field is supported.
+
+These are operand counts, not additional functional settings. In particular, TB_ENA’s defect concerns ignored bits, despite its **0/2** functional-state rejection count.
+
+**Q3: The registers are 64-bit, accessed as quadwords.** Section 6.4 explicitly excludes longword access, and the format diagrams extend through bit 63. [Access requirements](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/21066_66a_hrm.txt:10175)
+
+W_BASE contains:
+
+| Bits | Meaning |
+|---|---|
+| 33 | WEN: window enable |
+| 32 | SG: scatter-gather selection |
+| 31:20 | PCI window base |
+| 63:34, 19:0 | Reserved, type X |
+
+The staggered field table is resolved by Figure 6-9 and by following the WEN, SG, W_BASE and final reserved descriptions in order. The fork’s header independently agrees. [Figure/table](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/21066_66a_hrm.txt:10554), [header definitions](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/thirdparty/alpha_lcareg.h:81)
+
+| Accepted constant | Base field | PCI base | SG | WEN |
+|---|---:|---:|---:|---:|
+| `0x300800000` | `0x008` | 8 MB | 1 | 1 |
+| `0x240000000` | `0x400` | 1 GB | 0 | 1 |
+
+Extract the field as `(value >> 20) & 0xfff`. The high bits are control flags, so both constants are coherent register encodings.
+
+**Q4: Use “accept and store” for documented fields, and “decline with a once-only announcement” for unsupported operations and the catch-all.**
+
+The six registers already have [backing members](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:51). Accept supported field settings into those members and ignore X bits. Unsupported mask encodings can be declined before mutation, with a bounded announcement. Arbitrary offsets should not acquire generic backing storage: omitted registers can have status, clearing or command semantics.
+
+For the `default`, discard writes, return a defined zero for reads, and complete the access successfully. The fork already demonstrates this disposition in [SH4’s unimplemented array handler](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sh4.c:1059). Its [SGI catch-all](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:779) supplies separate per-instance read/write latches with `(once)`. Those are stronger precedents than the same-file, silently substituted `dev = 0` fallback.
+
+Merely deleting termination leaves repeatable `fatal()` output. Retained diagnostics should describe what happened—stored, ignored or declined—and use bounded per-device/site latches.
+
+This remains a limited emulation policy. The manual marks the meaningful fields WO; its readback is unpredictable. The fork’s stored-value readback is a compatibility behavior. Moreover, the window and TEN members currently have no functional consumers beyond storage/readback; accepting them does not implement DMA translation. CONF does have a consumer, which currently examines only bit 0 and needs separate attention. [IOC implementation](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:215), [CONF consumer](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:121)
+
+Your architectural-fault premise is verified: the [device-failure block](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:603) has only MIPS and M88K delivery arms; `ALPHA_KENTRY_MM` has only its definition. Returning failure would not deliver the proposed Alpha fault.
+
+**Q5: Source reachability is established; current-fork reproduction was not independently established here.** AlphaBook1 installs LCA, and LCA registers the IOC handler. [Machine setup](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/machines/machine_alpha.c:57), [IOC registration](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:401)
+
+I also found an archived AlphaBook1 regression result reporting an attributed IOC_CONF termination. I did not rerun it or verify that archived binary against the current fork, and it does not establish witnesses for all six guards or the alternate legal window sizes. I can assess that evidence, but cannot provide a guest sequence designed to terminate the host process.

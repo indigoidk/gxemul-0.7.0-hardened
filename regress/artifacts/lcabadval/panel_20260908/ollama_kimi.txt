@@ -1,0 +1,53 @@
+**VERDICT: Your derivation is right.** The shift, both field decodings, the thirteen-count, and the `(f & (f+1)) == 0` invariant all check out against the quoted Table 6-6, so the severity claim stands: twelve documented-legal values terminate the host per mask register, 24 across the two — contingent on two premises the packet can't settle (below). The invariant is the correct guard, but only if applied to the shifted-down 12-bit field; applied to the raw register value it inverts the current behavior.
+
+## Q1 — The derivation
+
+- [REASONED] `0x700000 >> 20 = 0x007` → `0000 0000 0111` → Table row = 8 MB. Correct.
+- [REASONED] `0x3ff00000 >> 20 = 0x3ff` → `0011 1111 1111` → Table row = 1 GB. Correct.
+- [READ/REASONED] The table as quoted has 13 rows, sizes 1 MB through 4 GB doubling. Count is right.
+- [REASONED] The 13 field values are exactly {2^k − 1, k = 0..12}. `f & (f+1) == 0` ⇔ f is a contiguous run of low ones ⇔ f = 2^k − 1. Holds for all 13 rows, and no other 12-bit value satisfies it. The characterization is exact, and 13 − 1 accepted = 12 killed, ×2 registers = 24. Arithmetic sound.
+
+Two premises keep the severity claim from being airtight: see the not-checkable list, items 1 and 2. Both are plausible; neither is derivable from the packet.
+
+## Q2 — The guard
+
+- [REASONED] On the 12-bit field, `f & (f+1) == 0` admits exactly Table 6-6: no false accepts, no false rejects. No counter-example exists within the field.
+- [REASONED] Two ways to ship it wrong: (a) **forget the shift/mask** — `f = idata >> 20` from a 64-bit `idata` with no `& 0xfff` admits f = 0x1fff, 0x3fff… (register values with bits above 31), which are not in the table and outside the field; (b) **no policy on bits <19:0>** — the current code's strict equality forces them to zero; a shipped guard must either require `(idata & 0xFFFFF) == 0` and no bits ≥ 32, or mask them off — which one hardware does is **not checkable from the packet**.
+
+## Q3 — Per-arm fixes
+
+- **W_MASK0 / W_MASK1: accept and store; `(once)` when the field fails the table test.** The manual enumerates, so validation is legitimate — but "unsupported" describes decode behavior, not "host dies." Store even off-table values; if decode ever uses the masks, apply them as the XOR/ANDN rule does.
+- **W_BASE0 / W_BASE1: accept with backing storage so reads return it.** No enumeration exists; bases are address-map-specific, so *any* equality whitelist is guaranteed wrong for some legal configuration. Drivers read back what they wrote — honor that.
+- **CONF: accept and store, silently.** The packet contains no legal-set information for this register; the `& ~1` guard is an unverifiable assumption, and terminating is never the right response to a register write.
+- **TB_ENA: accept, store, `(once)` if `idata & ~IOC_TB_ENA_TEN`.** The guard's shape says the defined-bit set is known; excess bits are evidence of a model gap or probing driver — exactly what a once-only line is for.
+
+`exit(1)` belongs in none of the six. [REASONED]
+
+## Q4 — Dangerous direction
+
+Terminating on a legal value. [REASONED] It is a guest-triggerable host-process kill on *hardware-documented behavior* — the worst failure class for an emulator, and it fires regardless of whether the window is ever used. Silent accept without honored decode produces a guest-visible malfunction (bad window, failing PCI access), survivable and debuggable. And per your own caveat, if the decode ignores these registers entirely, the death buys literally nothing. The one argument for the other side — accepting a mask the decode then mishandles can misroute DMA — is an argument for honoring the registers in decode, not for `exit(1)`. Whether decode uses them is **not checkable from the packet**; the conclusion holds either way.
+
+## Q5 — The fake fix
+
+Concretely, the one-liner that resolves the reporter's crash and changes nothing structural:
+
+```c
+case LCA_IOC_W_MASK0: if (idata != 0x700000ULL && idata != 0xfff00000ULL) -> fatal + exit(1)
+```
+
+Eleven legal values still kill on W_MASK0, twelve on W_MASK1, and it lands as "fixed the OS I tested."
+
+The insidious variant — the one that survives review because it *looks* like Q2's answer:
+
+```c
+if ((idata & (idata + 1)) != 0) -> fatal + exit(1)
+```
+
+[REASONED] `0x700000 & 0x700001 = 0x700000 ≠ 0` — this terminates on the 8 MB value the code currently accepts, and on every table row except `idata == 0`. Correct test, wrong operand.
+
+## Not checkable from the packet
+
+1. **The encoding premise** "register value = field << 20 with low 20 bits zero." Both accepted values landing exactly on table rows is consistent with it but doesn't prove it; the packet quotes no register-format line covering bits <19:0> or ≥ 32. **Settles with:** the manual's IOC_W_MASK register-format paragraph (reserved-bit policy).
+2. **Whether Table 6-6 governs both windows.** The quote says "IOC_W_MASK", singular; the 24-count assumes it applies to each window's mask. **Settles with:** the manual's register list showing W_MASK0/W_MASK1 formats.
+3. **Whether the model's decode reads W_MASK/W_BASE** (your Q4 caveat). **Settles with:** one sentence from you on whether the window-match logic references the stored values.
+4. **Defined bits of CONF and TB_ENA.** Needed to decide whether my "silent" for CONF should instead be `(once)`. **Settles with:** the manual's CONF/TB_ENA descriptions.

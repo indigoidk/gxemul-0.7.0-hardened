@@ -1,0 +1,61 @@
+**VERDICT: Confirmed guest-reachable process termination on AlphaBook1. Forwarding these callbacks would repair this boundary, but would leave Alpha interrupt delivery incomplete.**
+
+I reviewed only `GXEMUL-SEC/src/`. The unconditional exits, returning [`fatal()`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/core/debugmsg.c:384), missing Alpha [device-failure exception branch](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:603), and definition-only occurrences of `ALPHA_KENTRY_MM` and `ALPHA_PTE_ASM` check out. The refusal-disposition menu does not fit these callbacks.
+
+**Q1. Yes—ordinary guest device operation can reach the assert handler.**
+
+The decisive wiring is immediately after the registration: [`devinit_lca()` passes the same interrupt path to `bus_isa_init()`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:405). That function [connects its upstream interrupt to the supplied template](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/bus_isa.c:190) and unconditionally installs the [first UART on ISA IRQ 4](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/bus_isa.c:250).
+
+The source-level call path is:
+
+`dev_ns16550_access()` / scheduled UART tick → `dev_ns16550_tick()` → `isa_interrupt_assert()` → `isa_interrupt_common()` → `lca_interrupt_assert()` → `exit(1)`.
+
+The [UART’s interrupt logic](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_ns16550.c:74) asserts for enabled pending serial events. The [ISA logic](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/bus_isa.c:52) records the request, applies PIC masks, records `last_int`, and forwards an unmasked request. This requires ordinary guest driver/MMIO operation, with no machine-description modification. It does not establish an unprivileged guest-application trigger.
+
+LCA’s **line 0 means the aggregate ISA input**, not ISA IRQ 0. Missing Alpha CPU dispatch does not prevent reaching this callback: the process exits before CPU acceptance matters.
+
+The deassert wiring also exists, but this ordinary lifecycle dies on its first assert. I found no independent fresh-guest deassert-first path; I would not count this trace as two independently reproduced termination sites.
+
+**Q2. The hardware requires level propagation, interrupt qualification, and separate acknowledgement.**
+
+One citation correction: the local manual is at `GXEMUL/_scratchpad/21066_66a_hrm.txt`; lines `175` and `510` are contents entries. The body sections begin at [`4459`](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/21066_66a_hrm.txt:4459) and [`10729`](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/21066_66a_hrm.txt:10729).
+
+The manual states:
+
+- External interrupts arrive through three level-sensitive `irq<2:0>` pins. HIRR reports requests; HIER qualifies them. Enabled requests outside PALmode cause interrupt PAL entry, preserving a restart address.
+- Deassertion matters: HIRR can report zero after passive release. SIRR and ASTRR describe separate software/AST request mechanisms.
+- Reading `IOC_IACK_SC` generates a PCI interrupt-acknowledge cycle and returns the externally supplied vector. Writing it generates a PCI special cycle. These accesses have different purposes from asserting or clearing the input level.
+
+These statements are in [§2.2.3](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/21066_66a_hrm.txt:1494), [§4.1.13.1](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/21066_66a_hrm.txt:4737), and §6.4.13 of the [DEC manual](https://openwatcom.org/ftp/devel/docs/21066_66a_hrm.pdf). They do not establish AlphaBook1’s particular physical pin assignment from the emulator’s logical `line == 0`.
+
+My implementation inference is that the **minimum useful callback repair** is an upstream `struct interrupt` stored in `lca_data`, connected during initialization to `devinit->interrupt_path`, with assert/deassert forwarding the corresponding level. The [default path already names the bootstrap CPU](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/device.c:278).
+
+However, the [Alpha CPU callbacks only set and clear `cpu->cd.alpha.irq_asserted`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_alpha.c:215). That field has no reader, and the [execution-loop interrupt checks have no Alpha arm](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c:195). LCA also does not register the acknowledgement window.
+
+Consequently, complete delivery requires additional CPU/PAL dispatch, interrupt qualification, and acknowledgement support. Forwarding is an explicitly partial repair. An explicit unsupported-feature stop of the affected emulated CPU could provide containment meanwhile, but would not implement delivery.
+
+**Q3. Footbridge is the closest useful bridge analogue.**
+
+Its [assert/deassert handlers](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c:375) update request state and propagate the qualified level upstream; [initialization connects that upstream interrupt](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c:794). That connection-and-propagation shape transfers.
+
+Two details prevent literal copying:
+
+- Footbridge registers `interrupt->line` as a **bit mask**. LCA registers the **index zero**. Copying `status |= interrupt->line` would record nothing.
+- Footbridge has its own status/enable registers. LCA’s existing input is already aggregated by the ISA PIC model; the manual’s HIER belongs to the processor. Footbridge does not justify inventing equivalent LCA registers.
+
+Its [ISA vector-read function](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c:411) also provides a useful vector-selection precedent, though its body does not implement the PIC acknowledgement state changes suggested by its comment.
+
+**Q4. Regression checks must distinguish forwarding from completed delivery.**
+
+| Check | Required observation |
+|---|---|
+| Callback forwarding | With other sources inactive, the connected CPU’s `irq_asserted` follows `0 → 1 → 0`; repeated assertions preserve the level. |
+| Masking and release | CPU masking prevents handler entry while retaining an asserted input; enabling permits delivery. Withdrawal before acceptance removes the pending input. |
+| Vector acknowledgement | The acknowledgement read returns the selected PIC’s configured vector, including its vector base, with appropriate PIC state transitions. |
+| Guest execution | A serviced-and-cleared request increments a guest interrupt-handler counter, returns to interrupted execution, and permits subsequent guest progress without stale repeated delivery. |
+
+**A passing `irq_asserted` check alone certifies forwarding.** Process survival—or continued polling—does not prove guest interrupt delivery.
+
+**Q5. Reachability is supported by static analysis; I did not run a reproducer.**
+
+I can’t provide a guest instruction sequence designed to terminate the host emulator. The ordinary UART delivery path above establishes why “not reachable from a guest” would be incorrect; the post-repair checks provide a safe validation target.

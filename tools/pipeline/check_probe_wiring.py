@@ -241,6 +241,14 @@ MANIFEST = {
     #  detector m88k_exc_probe.py is the one entry here that is NOT evidence and is classified as a detector,
     #  because the checker's own header warns that a detector misfiled as anything else silences the
     #  requirement; its gate wiring is DERIVED below, not asserted here.
+    #  lcairqstubkill (2026-09-08): a WITNESS ATTEMPT, and it did NOT fire.  It is classified as
+    #  evidence rather than as a detector because that is what it is -- three controls green, the
+    #  assertion never reached the stub, and the round records it as an ATTEMPT rather than as a
+    #  negative result, because whether a debugger `put' reaches DEVICE_ACCESS(ns16550) at all is
+    #  still open.  A file that pins nothing must not be wired into a gate: it would be a green
+    #  row that means nothing, which is the vacuity this whole layer exists to refuse.
+    "artifacts/lcairqstubkill/lcairq_probe.asrun.py":
+        (CLASS_RESEARCH, "lcairqstubkill: the as-run witness ATTEMPT, preserved as evidence -- it did NOT fire, and it is not a detector"),
     "artifacts/lunaabsentcpu/killtable/fix_lunaabs.py":
         (CLASS_RESEARCH, "lunaabsentcpu (#503) table 1: the frozen fix script the baseline was derived from, preserved as evidence"),
     "artifacts/lunaabsentcpu/killtable/luna_absentcpu_probe.frozen.py":

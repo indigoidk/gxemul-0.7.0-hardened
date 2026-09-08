@@ -1,0 +1,173 @@
+I'll verify the LCA IOC accepted-value arms against the local HRM and the fork's code, starting with the cited table, the six write arms, and existing diagnostic idioms.There's already a `panel_lcabadval` scratchpad; I'll read the device code and the HRM table together so the stagger calibration isn't a single-row guess.The cited HRM path missed; I'll locate the local manual and then read §6.4 around the mask table.The HRM lives one directory up from this tree. I'll read §6.4 there and pull the matching header and device idioms in parallel.Table 6-6 is a clean two-column doubling run; next I’ll read the §6.4 register definitions for width, reserved bits, and legal sets.Type X reserved bits are ignored on write, and SROM init writes zero to both window bases — I'll check whether alphabook1 (or in-tree LCA guests) actually hit those paths.**VERDICT: The 12-of-13 W_MASK reading is right, and the fork does kill the host on 24 documented window sizes. The other four arms are not that shape — `TB_ENA` already accepts both documented TEN encodings (0 of 2 rejected); `IOC_CONF` already accepts both PCI cycle types and the manual does not enumerate a closed set; `W_BASE` has no enumerated legal set, and `W_BASE1` rejects the SROM-required 0. Right disposition is accept-and-store (backing storage already exists; the same switch already does this for `T_BASE`). A `(once)` latch is for unsupported mask encodings and unlisted offsets, not for the twelve legal sizes.**
+
+Read against `_scratchpad/21066_66a_hrm.txt` (EC-QC4GB-TE) and `GXEMUL-SEC/src/` only. `fatal()` at `src/core/debugmsg.c:384` prints and returns; only the explicit `exit(1)` ends the process.
+
+---
+
+## Q1. Table 6-6 is right, and it is not staggered
+
+The extract at `:9583-9598` is a clean two-column table, not a `pdftotext -layout` stagger. Thirteen data rows, each a contiguous low-ones run in `<31:20>` beside a doubling size:
+
+| `<31:20>` | size | `<31:20>` | size |
+|---|---|---|---|
+| `0000 0000 0000` | 1 MB | `0000 0111 1111` | 128 MB |
+| `0000 0000 0001` | 2 MB | `0000 1111 1111` | 256 MB |
+| `0000 0000 0011` | 4 MB | `0001 1111 1111` | 512 MB |
+| `0000 0000 0111` | **8 MB** | `0011 1111 1111` | **1 GB** |
+| `0000 0000 1111` | 16 MB | `0111 1111 1111` | 2 GB |
+| `0000 0001 1111` | 32 MB | `1111 1111 1111` | 4 GB |
+| `0000 0011 1111` | 64 MB | | |
+
+**Calibration, not a single point.** The 8 MB row (`:9589`, `0000 0000 0111`) is straddled by 4 MB above and 16 MB below — bit-run and size both double. The 32 MB row (`:9591`, `0000 0001 1111`) is the one the three-column reconstruction dropped; Table 6-7 (`:9660-9672`) has the same twelve-bit patterns, and that 32 MB pattern concatenates `T_BASE<31:25>` with `PCI<24:0>` (`2^25` = 32 MB). The 8 MB pattern in 6-7 is `T_BASE<31:23>|PCI<22:0>` (`2^23` = 8 MB). Independent check: `alpha_lcareg.h:85-97` defines all thirteen encodings, including `IOC_W_MASK_32M`.
+
+The stagger hazard is real in this extract — Table 6-8 (`:9710`) prints `26 KB` in the 16 KB slot — but it does not apply to 6-6.
+
+**Arithmetic holds.** `0x700000 >> 20 = 0x007` = `0000 0000 0111` = 8 MB. `0x3ff00000 >> 20 = 0x3ff` = `0011 1111 1111` = 1 GB. The thirteen field values are exactly `{0,1,3,7,…,0xfff}`, i.e. `(f & (f+1)) == 0`.
+
+**The 12/13 conclusion holds, and is slightly understated.** Each mask arm is an equality against one 64-bit constant, not “field in Table 6-6”. Per register that kills:
+
+- **12 of 13** documented-supported field encodings (reserved bits clear);
+- including **the other register’s accepted size** — 8 MB on `W_MASK1`, or 1 GB on `W_MASK0`, is still a Table 6-6 encoding and still dies;
+- plus every Type-X combination, including the “accepted” size with ignored bits set.
+
+“A guest that programs any window size other than 8 MB / 1 GB is not doing anything unsupported” is true. So is the stronger statement: a guest that programs 8 MB on window 1, or 1 GB on window 0, or 1 MB on either (`IOC_W_MASK_1M` is `0`), is also not doing anything unsupported, and still dies. **24 documented-legal sizes across the two registers.**
+
+`:9577-9578` is as quoted: those thirteen encodings of bits `<31:20>` are supported; **other values of that field are unsupported**. That is the only IOC window register with a closed legal set.
+
+---
+
+## Q2. The other four arms, per the manual
+
+Preface (`:984-988`): Type **X** “return UNPREDICTABLE results when read and **are ignored on write operations**.” Every `RES` column in these tables is Type X. Writing 1s there is not an illegal operand; hardware ignores them. MBZ (which *would* raise an illegal-operand exception) is not used on these registers.
+
+`§6.4` intro (`:10180-10181`): the registers are **64-bit**; “All references to the IOC registers must allow for quadword access; longword access is not supported.”
+
+### `IOC_CONF` — rejects 2 of 4 field encodings; the manual does not close the set
+
+`§6.4.2` / Figure 6-3 / Table 6-10 (`:10226-10253`):
+
+| bits | field | type | meaning |
+|---|---|---|---|
+| 63:2 | RES | X | ignored on write |
+| 1:0 | CFG AD | WO | driven onto PCI `ad<1:0>` during CPU-initiated config cycles |
+
+`§6.2.9` (`:9216-9218`) says the same: `ad<1:0>` come from `IOC_CONF<1:0>`. That is a **cycle-type** field, not a bus number. The arm’s comment (“PCI bus 0 vs bus non-0 selection bit”) is a misreading of this page.
+
+The manual does **not** enumerate unsupported encodings of `<1:0>`. PCI 2.0 uses `00` (type 0) and `01` (type 1). The fork’s `idata & ~1` **accepts both of those** (`0` and `1`) and rejects `2` and `3` (bit 1 set) plus any Type-X bit.
+
+| | count |
+|---|---|
+| Implemented field encodings | 4 (`00,01,10,11`) |
+| Fork accepts | 2 (`0`,`1`) |
+| Fork rejects of that field | **2 / 4** |
+| Documented “unsupported” list | **none** |
+| Type-X bits set | hardware ignores; fork kills |
+
+Bit 1 is not an unimplemented extra. It is the high bit of the documented CFG field. (Writing `1`, which this arm **accepts**, then doing a PCI config access is a different kill — `lca_pci_conf`’s `TODO. Non-zero bus` — and is not this arm.)
+
+### `IOC_TB_ENA` — rejects 0 of 2 documented TEN encodings
+
+`§6.4.6` / Figure 6-6 / Table 6-13 (`:10422-10452`):
+
+| bits | field | type | meaning |
+|---|---|---|---|
+| 63:8 | RES | X | ignored on write |
+| 7 | TEN | WO | 0 disables the scatter-gather TLB; 1 enables it. Disabling the TLB does not disable SG translations. |
+| 6:0 | RES | X | ignored on write |
+
+`IOC_TB_ENA_TEN` is `0x80` = bit 7. The guard `idata & ~IOC_TB_ENA_TEN` accepts `{0, 0x80}` — **both documented TEN values**.
+
+| | count |
+|---|---|
+| Documented TEN encodings | 2 |
+| Fork accepts | **2 / 2** |
+| Fork rejects of the documented field | **0 / 2** |
+| Type-X bits set | hardware ignores; fork kills |
+
+This arm is not a “one legal size, kill on the rest” whitelist. It is a Type-X-bits-are-fatal check on a field it already fully implements as storage.
+
+### `IOC_W_BASE0` / `IOC_W_BASE1` — no enumerated legal set; `W_BASE1` rejects a required value
+
+`§6.4.9` / Figure 6-9 / Table 6-16 (`:10533-10583`), plus the matching note at `:9618-9624`:
+
+| bits | field | type | meaning |
+|---|---|---|---|
+| 63:34 | RES | X | ignored on write |
+| 33 | WEN | WO | window enable |
+| 32 | SG | WO | scatter-gather vs direct map |
+| 31:20 | W_BASE | WO | PCI-space start, bits `<31:20>` |
+| 19:0 | RES | X | ignored on write |
+
+Constraints, not a table of constants:
+
+1. Base must be **naturally aligned to the window size** (the paired mask).
+2. The two windows must **not overlap**.
+3. WEN and SG are independently writable.
+4. **`§6.4.14` step 3 (`:10791-10792`): SROM “Prevents the IOC from responding to itself by writing zero to the IOC_W_BASE1 and IOC_W_BASE0 registers.”** Writing 0 to both bases is required after reset.
+
+I will not invent a denominator. Fourteen implemented bits give 16384 reserved-bits-clear combinations, then alignment and non-overlap cut that relative to the paired mask; that is a programming rule, not a closed legal list.
+
+| arm | fork accepts | of what | documented-required value 0 |
+|---|---|---|---|
+| `W_BASE0` | 2 (`0`, `0x300800000`) | an open set | accepted |
+| `W_BASE1` | 1 (`0x240000000`) | an open set | **rejected** |
+
+`W_BASE1`’s equality kills the documented disable encoding, including the SROM init write. `W_BASE0` at least accepts 0; `W_BASE1` does not. That asymmetry is in the fork, not the manual.
+
+---
+
+## Q3. The registers are 64-bit; bits above 31 are WEN and SG, not a 34-bit PCI address
+
+CPU physical addresses on the 21066 are 34 bits (`:9563`). These **registers** are 64-bit quadwords (`:10180`). Figure 6-9 places **WEN at bit 33 and SG at bit 32**. Translated CPU address bits `<33:32>` are always zero (`:9643`); those are not what the fork’s constants are setting.
+
+| constant | bit 33 WEN | bit 32 SG | bits 31:20 (`W_BASE`) | PCI start |
+|---|---|---|---|---|
+| `0` | 0 | 0 | 0 | disabled window at 0 |
+| `0x300800000` | 1 | 1 | `0x008` | 8 MB, scatter-gather, enabled |
+| `0x240000000` | 1 | 0 | `0x400` | 1 GB, direct-map, enabled |
+
+`0x300800000 = IOC_W_BASE_WEN \| IOC_W_BASE_SG \| 0x800000`. `0x240000000 = IOC_W_BASE_WEN \| 0x40000000`. They **do** contain a `<31:20>` field, plus the two control bits above 31. They are not “34-bit PCI addresses.” They are the Linux/NetBSD LCA init pair (8 MB SG at 8 MB, 1 GB direct at 1 GB) — `core_lca.c` writes `dma_base | (3UL << 32)` and `__direct_map_base | (2UL << 32)` with masks `(size-1) & 0xfff00000`, which evaluate to exactly these four constants, then `TB_ENA = 0x80`.
+
+The `<31:20>` halves (`0x00800000`, `0x40000000`) are aligned to the accepted masks (8 MB and 1 GB). That makes them *one* legal programming, not *the* legal programming.
+
+---
+
+## Q4. Accept-and-store for documented fields; `(once)` only for unsupported encodings and unlisted offsets
+
+Architectural fault is unavailable, as stated. `memory_rw.c:608-623` raises only under `#ifdef MEM_MIPS` and `#ifdef MEM_M88K`. `ALPHA_KENTRY_MM` is a PAL wrent slot (`cpu_alpha.h:169`, filled by `cpu_alpha_palcode.c:329`); nothing in this tree uses it to raise a device fault.
+
+**Same-function precedent, before house style at large:** the two `T_BASE` arms in this switch already store the written value, leave a `TODO: Actually implement this`, and do not kill. Window translation is unimplemented for the *accepted* 8 MB / 1 GB encodings too. The six value guards are the outliers in this switch, not the idiom. `LCA_IOC_BASE` (HAE) and `TBIA` ignore. `struct lca_data` already has backing storage for all eight window/CONF/TB fields, and every one of these arms **stores before it kills** — so “decline” that keeps the store is an accept with a complaint.
+
+**House style for a guest-drivable diagnostic** is a once-only latch with `(once)` in the message: `dev_sgi_re.c`, `dev_pcc2.c`, `dev_dreamcast_gdrom.c`, `dev_sh4.c`, `dev_wdc.c`. Closest sibling for *unlisted offsets* is `dev_jazz.c` `#179` (ignore writes, read 0, warn once). That is the right shape for this function’s `default:` arm (STAT0, SFT_RST, PAR_DIS, TB_TAG, …), which is a different question from these six value checks.
+
+Per arm, against the menu:
+
+| arm | disposition | why |
+|---|---|---|
+| `W_MASK0/1`, the 13 Table 6-6 encodings | **accept with backing storage** = keep the store, **delete the `exit(1)`** | they are documented-supported sizes; T_BASE already does this for the same unimplemented translator |
+| `W_MASK0/1`, other `<31:20>` encodings | **decline with a once-only announcement** (optional: still store the field, since “unsupported” is not MBZ) | `:9578` is the only closed “unsupported” sentence in this chapter |
+| `W_BASE0/1` | **accept with backing storage; delete the `exit(1)`** | no closed legal set; 0 is required init; alignment is a programming rule |
+| `IOC_CONF` | **accept and store bits `<1:0>`; ignore Type X; delete the `exit(1)`** | both CFG bits are implemented in hardware; Type X is ignored, not fatal |
+| `IOC_TB_ENA` | **delete the `exit(1)`** (TEN already accepted; ignore Type X) | killing on ignored bits is the whole defect here |
+
+A `(once)` on every legal 16 MB / 1 MB / 8 MB-on-window-1 write would treat a documented size as a diagnostic event, and would also fire on Linux’s own init if aimed at “windows are not translated.” If a DMA-unimplemented announcement is wanted, latch it once on first `WEN=1`, not on value mismatch. Do not decline a legal write.
+
+Do not mask Type-X bits as a substitute for deleting the kill unless a later round is writing a RAZ/WI policy; WO readback is already UNPREDICTABLE (`:981-982`), and the current code stores the full `idata`.
+
+---
+
+## Q5. A synthetic guest on unmodified `-E alpha -e alphabook1` can hit these; a shipped OS in this tree that does, I did not find
+
+`device_add(machine, "lca")` is `ST_ALPHABOOK1` only (`machine_alpha.c:57-61`). The IOC is mapped at `0x180000000`, reachable from a guest via K0SEG (`0xfffffc0000000000 | phys`) with an ordinary `stq`. `regress/lca_irqstub_probe.py` already does that on this machine (it even names `LCA_IOC_CONF` at `K0SEG|0x180000020`).
+
+What it would look like, same harness, no emulator patch:
+
+- `stq 0` to `0xfffffc0180000140` (`W_MASK0`) — Table 6-6 1 MB, `IOC_W_MASK_1M`. Host prints `TODO: LCA_IOC_W_MASK0 value differs (0x0) from the only implemented value` and `exit(1)`. Control: `stq 0x700000` to the same address survives the arm.
+- `stq 0xf00000` (`IOC_W_MASK_16M`) to the same address — another documented size, same death.
+- `stq 0` to `0xfffffc0180000120` (`W_BASE1`) — the `§6.4.14` required init write. Host prints the `W_BASE1` “only implemented value” line and `exit(1)`.
+- `stq 2` to `0xfffffc0180000020` (`IOC_CONF`) — documented CFG bit 1. Host prints `TODO: Write to unimplemented bit of IOC_CONF`.
+- `stq 1` to `0xfffffc01800000a0` (`TB_ENA`) — TEN is bit 7; this sets a Type-X bit. Host prints the `TB_ENA` unimplemented-bits line.
+
+**I could not find a shipped guest in this tree that would hit these six arms.** Linux `core_lca.c` (and the NetBSD header this file vendor-copied) programs exactly the four accepted window constants and `TB_ENA = 0x80`. Those writes **pass** the value guards. A Linux LCA boot would then die on a *different* arm: `IOC_PAR_DIS` at `+0x0E0` and `IOC_STAT0` at `+0x040` have no `case` and hit `default: … exit(1)`. GXemul does not run SROM, so the documented write-zero-to-both-bases sequence is not issued for free. AlphaBook1 interrupt handlers are still `fatal`+`exit(1)`, so a real OS dies there even if the windows were the accepted constants.
+
+The value-arm kills are guest-reachable on stock `alphabook1` by a handful of `stq`s; they are not what a stock Linux/NetBSD LCA init would trip first.

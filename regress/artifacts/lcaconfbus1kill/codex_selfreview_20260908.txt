@@ -1,0 +1,75 @@
+**VERDICT: REVISE my prescription. The eight-bit bus extraction is correct. The proposed fixture is unavailable on unchanged `alphabook1`, and the two-line replacement is insufficient as a complete fix.**
+
+All source references below are to `GXEMUL-SEC/src/`.
+
+**Your citation narrowing is partly wrong.** I checked the rendered local PDF: Table 6-1, printed page 6-4, explicitly gives these mappings for configuration reads and writes:
+
+- PCI `AD[31:24] = 0`.
+- PCI `AD[23:2] = CPU A[28:7]`.
+- PCI `AD[1:0] = IOC_CONF[1:0]`.
+
+Thus my narrower wiring range **does appear in the LCA manual**, and applies to configuration cycles generally. It was not merely inferred from the type-1 format. Your distinction remains correct for the **meanings of the fields**: identifying bus/device/function/register within those wires requires the PCI specification. Cite the configuration-specific table for wiring and PCI Figure 3-1 for field interpretation. [LCA Table 6-1](https://openwatcom.org/ftp/devel/docs/21066_66a_hrm.pdf#page=194), [PCI specification, §3.2.2.3.1](https://e2e.ti.com/cfs-file.ashx/__key/communityserver-discussions-components-files/639/1016.PCI.Local.Bus.Specification.Revision.3.0.pdf#page=48)
+
+**Q1. There is no existing mechanism to populate that synthetic bus on unchanged `alphabook1`.**
+
+`MACHINE_SETUP(alpha)` adds `lca`. Its initializer retains the PCI-state pointer inside `lca_data` and adds only `i82378zb` at **0:7:0**. The generic `device_add()` parameter parser provides no attachment mechanism for adding a PCI function to that existing LCA bus. The debugger’s `device add` command calls that same function. [`machine_alpha.c:57`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/machines/machine_alpha.c:57), [`dev_lca.c:376`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:376), [`device.c:293`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/device.c:293)
+
+`pci_register()` and `bus_pci_add()` supply ingredients for a **new standalone C fixture**. Attaching its test-owned PCI state to the handler would require harness access to LCA’s private state or a new test seam. I had neither located nor built that fixture. Adding devices through such wiring—or through debugger mutation—would not establish the required unchanged-machine witness. **I withdraw the synthetic-device fixture as a prerequisite for this round.**
+
+A concrete alternative is **passive host-debugger observation** at `bus_pci_setaddr()` and `bus_pci_data_access()` during accesses through the existing machine. Record the outgoing tuple, corresponding PCI-state pointer, direction, width, and data argument. This tree already uses host GDB argument observation in [`sgi_eaddr_probe.py:35`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/sgi_eaddr_probe.py:35).
+
+That can distinguish correct bus extraction from hardcoded bus 1 even when both destinations are empty. It proves forwarding at that boundary; it does **not** prove a populated secondary device’s response or write callback. My prescription should have stated that evidence boundary.
+
+**Q2. Yes: `(tag >> 16) & 0xff` has the correct position and width.**
+
+PCI type-1 assigns bus to `AD[23:16]`: eight bits, representing 256 bus numbers. Device occupies `[15:11]`, function `[10:8]`, and register number `[7:2]`. [PCI Figure 3-1 and accompanying definitions](https://e2e.ti.com/cfs-file.ashx/__key/communityserver-discussions-components-files/639/1016.PCI.Local.Bus.Specification.Revision.3.0.pdf#page=48)
+
+The backend can represent and distinguish the entire bus range:
+
+- `bus_pci_decompose_1()` already uses precisely that mask and shift.
+- `cur_bus` and each device’s `bus` are plain `int`.
+- `bus_pci_setaddr()` stores the supplied number unchanged.
+- `bus_pci_data_access()` performs exact bus/device/function equality against a linked list.
+
+There is no one-bit bus representation or bus-indexed array imposing a smaller range. [`bus_pci.c:72`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/bus_pci.c:72), [`bus_pci.h:83`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/bus_pci.h:83), [`bus_pci.c:192`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/bus_pci.c:192)
+
+That establishes numeric capacity, not populated buses or bridge routing. Cycle-format selection must still precede extraction and remain based on the accepted `IOC_CONF` mode.
+
+**Q3. Yes, forwarding can be worse on a guest-observable axis: it manufactures successful completion. That prevents an unqualified IMPLEMENT approval.**
+
+The strongest case against my recommendation is that hardware reports a failed transaction, whereas the replacement updates the destination register and continues ordinary execution. The mandatory error indication matters: “arbitrary data” could happen to be all-ones, but it is accompanied by an instruction exception, internal interrupt, and error logging. [LCA §6.2.18](https://openwatcom.org/ftp/devel/docs/21066_66a_hrm.pdf#page=211)
+
+There is a concrete software consequence. The historical OpenBSD `lca_conf_read()` initializes its result to all-ones and reads the register only if `badaddr()` succeeds. Consequently, hardware absence is normalized to all-ones **at any register offset**. A faultless backend zero at a nonzero offset can change that result. This is a source-derived consequence, not a claimed emulator boot measurement. [`lca_pci.c:142`](C:/DocumentNoSnc/CC/GXEMUL/_guest-src-openbsd22/sys/arch/alpha/pci/lca_pci.c:142)
+
+There is also a routing defect requiring **no synthetic device**: unconditional forwarding of type-1 with bus zero can select the existing primary-bus `i82378zb`. The backend receives no cycle type and therefore cannot reject that alias. Ordinary PCI targets ignore type-1 transactions; the installed function is a PCI-to-ISA bridge, not a PCI-to-PCI forwarding bridge. My earlier caveat identified this, but **identifying it did not repair the proposed fix**. [`bus_pci.c:99`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/bus_pci.c:99), [`bus_pci.c:753`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/bus_pci.c:753), [PCI transaction-routing rules](https://e2e.ti.com/cfs-file.ashx/__key/communityserver-discussions-components-files/639/1016.PCI.Local.Bus.Specification.Revision.3.0.pdf#page=49)
+
+The rebuttal has limits too:
+
+- The existing host exit does not deliver the required guest exception or permit guest recovery.
+- Handler `return 0` does not supply it either: the device-failure path has no Alpha exception arm, and the Alpha load returns before updating its destination. [`memory_rw.c:603`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:603), [`cpu_alpha_instr_loadstore.c:68`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_alpha_instr_loadstore.c:68)
+- Forwarding improves host survival, but that improvement does not establish architectural correctness.
+
+Therefore **IMPLEMENT remains defensible only as explicitly limited translation into this flat PCI model**, with a defined absence-completion contract and prevention of the type-1/bus-zero alias. It is not a complete LCA transaction implementation. If complete hardware behavior is the acceptance criterion, this prescription cannot satisfy it.
+
+Two further limits must remain explicit: missing-target writes print on every access, and reading `IOC_STAT0/STAT1` still reaches `lca_ioc`’s terminating default; the patch supplies no usable error-status interface. [`bus_pci.c:109`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/bus_pci.c:109), [`dev_lca.c:351`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:351)
+
+**Q4. Weakest among findings 1–5: finding 3, my preference for IMPLEMENT.**
+
+The arithmetic and lookup observations establish what the code would do. They do not establish that this is the right completion policy.
+
+A supported guest’s dependence on fault completion, or forwarding to a device that should not receive the transaction, would defeat that recommendation. The primary-bus alias already supplies the latter at source level and refutes the two-line replacement as a complete fix. The manual defeats any stronger hardware-fidelity claim. **I withdraw approval of the prescription as sufficient; the mask’s correctness survives independently.**
+
+**Q5. None of those four remaining exits belongs in this round.**
+
+This round covers the configuration-handler termination and the destination/routing policy necessary to replace it coherently. Sharing `dev_lca.c` does not make the other sites the same semantic class.
+
+My ordering would be:
+
+1. **Interrupt assertion:** next, because an unchanged-machine witness already attributes a failure to it.
+2. **Interrupt deassertion:** evaluate immediately alongside assertion, but establish its own eligibility. The available raw witness demonstrates assertion, not both handlers. Combining them requires the rule’s shared-design/shared-detector conditions; a matching function name is insufficient. [IRQ witness](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/lcairqstubkill/witness_HEAD_20260907.raw)
+3. **`lca_ioc` default:** a separate round based on identified registers and their contracts. Status-register implementation matters for future error reporting, but needs new state and observables.
+4. **`lca_isa` guard:** separately establish the offset/width contract and reachability. Its bounds-related obligations are different from supplying a missing configuration decoder.
+
+The rule makes additional witnessed sites eligible for additional rounds; it does not automatically enlarge this one. [Round-scope rule](C:/DocumentNoSnc/CC/GXEMUL/CLAUDE.md:2631)
+
+This was a source and document review. I did not build a fixture, rerun the emulator, or modify files.

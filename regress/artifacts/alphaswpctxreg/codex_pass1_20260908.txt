@@ -1,0 +1,35 @@
+VERDICT: The one-identifier fix is correct and sufficient for this return-register defect. Keep `med`; exclude the cache TODO. Guest-probe reachability is supported, but this row still has no return-value witness or established OS-boot consequence.
+
+I read the designated `GXEMUL-SEC` tree. These conclusions use source inspection and existing records; I made no changes or new execution measurements.
+
+1. **Q1 — Fix and premise corrections.** Change `ALPHA_A0` to `ALPHA_V0`. The handler captures the incoming a0 in a local at entry, so the later `ctx = a0` still receives the new context. **After that change, architectural a0 retains the incoming context address—not the old context.** [Handler source](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_alpha_palcode.c:165)
+
+   No additional a0 write is required. The architecture specifies the old PCBB in v0 and marks a0 `UNPREDICTABLE`; its definition explicitly permits a register to remain unchanged. “Clobbered” removes a preservation guarantee—it does not require destruction or randomization. Also, **“unobservable by construction” is too strong:** software can read a0, but cannot require a particular post-call value. This is no second architectural fidelity defect. [Alpha Architecture Reference Manual, §§1.6.3 and 16.2.9](https://docs.alexrp.com/alpha/alpha_4th.pdf)
+
+   Your census is accurate **textually**, but three v0 assignments—306, 356 and 383—are inside `#if 0`; line 118 belongs to `alpha_prom_call`. That leaves five compiled assignments file-wide, four in `alpha_palcode`. This qualification does not weaken the decisive ABI evidence: the full wrapper explicitly returns v0 at [line 460](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/thirdparty/alpha_cpu.h:460).
+
+2. **Q2 — Keep `med` as a functional-correctness rating.** Returning stale register contents violates a defined primitive and merits repair. Silence makes detection harder, but does not independently establish high impact. No demonstrated consumer, resulting corruption, or isolation failure supports a raise here.
+
+   Conversely, “wrong value rather than a crash” describes the immediate effect only: a consumer could crash later. Neither that consequence nor harmlessness is established.
+
+3. **Q3 — Yes for a synthetic privileged guest; OS-boot consumption remains open.** The packet alone could not settle this. The checked source provides the route:
+
+   `Alpha instruction decoder → alpha_instr_call_pal → alpha_palcode → swpctx arm`.
+
+   The decoder installs the PAL handler, which calls `alpha_palcode`; that function permits this operation in kernel mode and rejects it in user mode. [Instruction dispatch](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:839), [PAL invocation](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:53)
+
+   There is also prior execution evidence: the existing **#507 `alphabook1` result** records two completed `swpctx` calls and successful PCB checks. It supports reaching and returning from this primitive, but does not test v0. [Recorded result](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/alphaswpctxptbr/probe_fix_20260907.out:1)
+
+   I cannot name a verified supported OS boot that consumes this return value. **That gap does not establish unreachability or rule out a rung-3 witness.**
+
+4. **Q4 — The decisive oracle requires `seed ≠ old_context`.** At the regression-contract level, establish an independently known old context `C`, a distinct incoming context `N`, and seed v0 with a distinctive sentinel `S`, with all three distinguishable.
+
+   The exact expected result is **v0 = C**. The current assignment leaves **v0 = S**; an incorrect repair returning the new context gives **v0 = N**. Merely checking “v0 changed” would admit that last error. Nonzero expected values also help distinguish results from failed observations that read as zero.
+
+   One observed invocation suffices once the old context is independently established; otherwise setup is needed first. Capture the guest result before another operation overwrites v0, and retain your single-`step N` discipline. Require completed guest execution and a valid observation—not merely debugger survival.
+
+   This specifies the oracle; it is not a measured witness. Keep `witness=None` pending that evidence.
+
+5. **Q5 — Separate row, if warranted.** The broad-flush TODO concerns translation invalidation policy; this site concerns a defined return register. A register-value detector cannot establish invalidation selectivity or its consequences without a new oracle. Your inclusion rule therefore excludes it.
+
+   The TODO alone also does not prove a correctness defect. Re-baselining the later round with the earlier fix present is sensible validation, and does not justify merging their scope.

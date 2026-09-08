@@ -1,0 +1,41 @@
+**Verdict:** The arithmetic in Q1 is correct for the 12-bit field **if** lower 20 bits must be zero, but that zero-lower-bits premise is not established by the quoted manual; the proposed `(f & (f+1)) == 0` guard is correct only when applied to `idata >> 20`, not to the full register.
+
+## Q1 — Is the derivation right?
+
+**READ:** The table has 13 rows.  
+**READ:** `0x700000 >> 20 = 0x007` and `0x3ff00000 >> 20 = 0x3ff`.  
+**READ:** Both `0x007` and `0x3ff` appear in the table.  
+**REASONED:** The listed 12-bit field values are exactly `0x000, 0x001, 0x003, ..., 0xfff` — i.e. all values of the form `2^k - 1` for `k = 0..12`. That set satisfies `(f & (f+1)) == 0`.
+
+**Caveat:** The derivation assumes bits `<19:0>` of the register must be zero. The quoted manual only enumerates bits `<31:20>`; it does not say lower bits are reserved or must be zero. If lower bits are ignored/don’t-care, then the number of legal register values is much larger than 13 per mask, and the code is even more restrictive. That premise is **not checkable from this packet**.
+
+## Q2 — Is `(f & (f+1)) == 0` the right guard?
+
+**REASONED:** Yes, **if** `f = idata >> 20` and `f` is a 12-bit field. It exactly matches the 13 listed field values; no counter-example within that field.
+
+**Counter-example if misapplied:** If the guard is applied to the full 32-bit `idata` as `(idata & (idata + 1)) == 0`, then legal `0x700000` fails because `0x700000 & 0x700001 = 0x700000 != 0`. So the guard must be on the shifted field, with lower bits handled separately.
+
+## Q3 — What should the six arms do instead?
+
+**REASONED:** The common theme: stop terminating the process on guest writes. Use the house style `(once)` decline for unsupported values, and accept/store values the manual or existing code already treats as legal.
+
+- `LCA_IOC_CONF`: **accept with backing storage** when `idata & ~1 == 0`; otherwise **decline once**.
+- `LCA_IOC_TB_ENA`: **accept with backing storage** when `idata & ~IOC_TB_ENA_TEN == 0`; otherwise **decline once**.
+- `LCA_IOC_W_BASE0`: **accept with backing storage** for the two values already accepted (`0` and `0x300800000`); otherwise **decline once**. The manual does not enumerate legal base values, so do not expand the set without evidence.
+- `LCA_IOC_W_MASK0`: **accept with backing storage** for all 13 legal field values, i.e. `(idata & 0xfffff) == 0` and `f = idata >> 20` satisfies `(f & (f+1)) == 0`; otherwise **decline once**. If lower bits are later found to be ignored, drop the lower-bits check.
+- `LCA_IOC_W_BASE1`: same policy as `W_BASE0` for its existing accepted value `0x240000000`.
+- `LCA_IOC_W_MASK1`: same policy as `W_MASK0`.
+
+## Q4 — Which error direction is more dangerous?
+
+**REASONED:** Silently accepting a value the model does not honour is more dangerous. Termination is fail-stop and immediately visible; silent acceptance can let a guest believe a window is configured when it is not, leading to incorrect memory access or data corruption without any error. That said, terminating on a documented-legal value is a serious compatibility bug and should also be fixed.
+
+## Q5 — Smallest plausible “fix” that still leaves a legal value terminating
+
+**REASONED:** Change the W_MASK guard to:
+
+```c
+if ((idata & (idata + 1)) != 0) -> fatal + exit(1)
+```
+
+without shifting `idata` right by 20. This looks like the contiguous-low-ones check, but it applies to the full 32-bit value. For legal `0x700000`, `0x700000 & 0x700001 = 0x700000 != 0`, so the process still terminates on a documented-legal value.
