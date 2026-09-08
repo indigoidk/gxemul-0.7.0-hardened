@@ -17533,3 +17533,56 @@ FILED 2026-09-08.  **`#512` verified `PCC2_C040 = 0x04` against the MVME187 boar
 **NOT A LIVE DEFECT: a fork-wide grep finds ZERO consumers of the 0x03 alias.** It is upstream residue, inherited from OpenBSD's own `mvme88k/include/pcctworeg.h`, which carries the same wrong value.
 
 *The disposition question -- DELETE the dead alias, or CORRECT it to 0x04 -- is an option-set question and is not settled here.  Deleting is the additions-licence-consistent move (a dead define is not load-bearing); correcting it leaves a second spelling for a future edit to pick.*
+
+
+### `rulingnotinrow` (med) -- filed 2026-09-08
+
+a STANDING flagship DO-NOT-CODE ruling lived in the CHANGELOG and another row's artifact but not in the row it governs, and a full round was designed against it before a seat caught it -- the population is NOT mechanically enumerable (two greps gave 0 and 9, the 9 mostly noise)
+
+FILED 2026-09-08, from a MEASURED near-miss: I spent a round preparing to code `sgitexindex` against a
+STANDING FLAGSHIP RULING that said DO NOT CODE, and a seat stopped it by opening a record I had not
+read.
+
+*** THE DEFECT IS NOT THAT THE RULING WAS UNRECORDED.  IT IS THAT IT WAS RECORDED SOMEWHERE THE
+DECIDER DOES NOT LOOK. ***
+
+    where the ruling was   CHANGELOG.md, and an artifact under ANOTHER row's directory
+                           (regress/artifacts/pcc2widthkills/fable_adjudication_20260902.md)
+    where I looked         the LEDGER ROW, which said `state: open, sev: low` and carried no note
+    result                 a full round of design, a nine-seat brief, and a panel fired against a
+                           question that had been adjudicated six days earlier
+
+**The ruling even contained the finding I re-derived**: *"the proposed `>> 1` fix would IMPORT the
+siblings' overrun."*  I enumerated that from scratch and wrote it up as new.
+
+> **A STANDING DISPOSITION THAT LIVES ANYWHERE EXCEPT THE ROW IT GOVERNS WILL BE RE-OPENED BY THE
+> NEXT PERSON WHO READS THE ROW -- which is exactly the population that might re-open it.**
+
+*** THE POPULATION IS NOT MECHANICALLY ENUMERABLE, AND I TRIED. ***  Two greps disagreed:
+
+    narrow (a close-word within ~120 chars AFTER the row id)      0 rows
+    broad  (any ruling word within 400 chars either side)         9 rows
+
+Spot-reading three of the nine: `wdcbeoddtail`'s hit is a SEVERITY assignment in an audit table
+(noise); `sgirandomskipput`'s is a FILING decision (*"filed as X rather than dropped"*), not a
+do-not-code; `m88kmxmkill`, `m88ktbnd` and `m88kexctaildefault` are *"filed now as documented-only
+LOW rows"*, which IS a disposition worth carrying.  **So the broad check is a CORRELATE -- "a ruling
+word near the row id" -- and not the class**, which is *a disposition decided elsewhere that the row
+does not carry*.  That distinction needs READING, not grepping.
+
+*This is the deriver rule landing on my own audit within the hour of my citing it: before writing a
+deriver, ask what makes a member a member.  Here the answer is a property no regex tests.*
+
+**NAMED CANDIDATES for a proper read, not a claim about them:** `m88kmxmkill`, `m88ktbnd`,
+`m88kexctaildefault` -- all three cited in one sentence as filed documented-only, none carrying that
+in the row.  **The other six flagged rows are probably noise and are NOT claimed.**
+
+**NO CHECKER PROPOSED.**  A proximity grep would fire on ~9 rows with a majority false-positive rate,
+which is how a check gets switched off -- this project's own recorded reason for declining the
+stale-count checker.  What is cheap and reliable is a HABIT at the point of decision: **before
+opening a round on any row, grep the CHANGELOG and `regress/artifacts/*/` for the row id and read
+what comes back.**  It cost one command here and would have saved the round.
+
+*Related in shape, one row over: `sgilinearoob` carried a bare title and an EMPTY note while the
+2026-09-02 adjudication referred to "the siblings' overrun" as known -- the class was known to the
+adjudication and not findable from the row that carries it.*
