@@ -1,0 +1,76 @@
+**C — decline out-of-set writes, preserve the previous register value, and report once.** I recommend this for the six-arm termination-removal pass. Hardware-correct behavior remains unsettled.
+
+Your reconstructed **A and B overlap**: both store the written value and continue. With the existing reads retained, B describes **shadow storage with readback**, not a write-only register. It supplies no distinct state-transition policy. Moreover, `IOC_CONF` already affects PCI decoding through `d->ioc_conf & 1`. [Consumer](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:121).
+
+**Q1. The actual `#447` implementation supports C.**
+
+I confirmed exactly four `rtc_rcr1` occurrences: declaration, readback, comment, and store. There is no additional functional consumer. But the decisive detail is **where that store occurs**:
+
+```c
+if (idata & (SH_RCR1_CIE | SH_RCR1_AIE)) {
+        /* bounded diagnostic */
+} else
+        d->rtc_rcr1 = idata;
+```
+
+Unsupported writes preserve the previous value. They are not accepted into backing storage. [RCR1 implementation](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sh4.c:2774).
+
+The comment records a readback concern: echoing interrupt-enable flags could suggest functionality the model does not provide. **Readback remains guest-observable even without another device-model consumer.** Therefore, absence of consumers neither disqualifies decline-and-preserve nor proves that accepting everything is preferable.
+
+If the earlier panel called decline-and-preserve “B,” its letter assignment differs from your reconstruction. The quoted verdict alone cannot resolve that historical naming. Its implemented precedent is unambiguous.
+
+**Q2. Reset makes neither storage nor decline-and-preserve incoherent.**
+
+The constructor zeroes the structure. The actual accepted write sets are:
+
+| Register | Writes that pass the current guard | Reset zero passes? |
+|---|---|---|
+| `CONF` | `{0, 1}` | Yes |
+| `TB_ENA` | `{0, 0x80}` | Yes |
+| `W_BASE0` | `{0, 0x300800000}` | Yes |
+| `W_MASK0` | `{0x700000}` | No |
+| `W_BASE1` | `{0x240000000}` | No |
+| `W_MASK1` | `{0x3ff00000}` | No |
+
+These follow from the [six arms](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:229), the [enable-bit definition](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/thirdparty/alpha_lcareg.h:71), and [initialization](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:373).
+
+The crucial distinction is that **the predicates govern writes, not all possible stored states**:
+
+- Initialization assigns zero without evaluating a guard.
+- Reads return the stored value without evaluating a guard.
+- Writes assign the new value **before** evaluating the guard.
+
+Consequently, the current model can return zero at reset while refusing a subsequent write of zero. That asymmetry is established; it is not a logical contradiction.
+
+Under reconstructed B, reset is zero and each write replaces the stored value. Under C, reset is zero and a declined write leaves that zero unchanged. Both are well-defined. For C, the correct description is **“previous value,”** not “last accepted value,” because initially there has been no accepted write.
+
+Reset alone does not establish that the guard misstates hardware behavior. There is additional local evidence against interpreting it as hardware validity: the header explicitly names zero as `IOC_W_MASK_1M`. That demonstrates a declared encoding beyond the mask guards’ accepted values; it does not establish complete register semantics. [Window-mask definitions](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/thirdparty/alpha_lcareg.h:85).
+
+**Q3. The missing member is discard/decline, without storing the unsupported write.**
+
+The same switch already contains different policies:
+
+| Arms | Actual behavior |
+|---|---|
+| `LCA_IOC_BASE`, `LCA_IOC_TBIA` | Discard writes; reads return initialized `odata == 0`; return success. |
+| `LCA_IOC_W_T_BASE0/1` | Store writes and return them on reads; no functional consumer found. |
+| `default:` | Diagnose and terminate for unmatched reads and writes; no backing storage. |
+
+[Base handling](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:225), [translation-base handling](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:303), [default and common return](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:351).
+
+Thus the sibling evidence supports **both** discarding writes and retaining shadow state. It does not select a universal policy.
+
+C applies discard behavior conditionally: accepted writes keep their existing behavior; out-of-set writes preserve prior state. That requires moving each store behind its guard, as RCR1 does. I prefer it for the narrow repair because it preserves existing successful accesses without extending storage acceptance to every value. The old whitelist’s correctness remains open.
+
+Changing `default:` would require a separate decision: it has no previous register value to preserve. Removing its exit would leave zero reads and discarded writes, alongside its diagnostics.
+
+**Q4. I found no incorrect claim in section 2. The census survives this audit.**
+
+In the reviewed `dev_lca.c`, the eleven live explicit calls are:
+
+- Six value exits: **248, 268, 283, 298, 322, 337**.
+- Five others: **73, 85, 167, 196, 357**.
+
+`rg -n '\bexit\s*\(' GXEMUL-SEC/src/devices/dev_lca.c` produces thirteen matching lines. Two are comments: the explanatory mention at 155 and the disabled call at 162. The latter’s live fallback is `dev = 0`. [Comment boundaries and fallback](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:153).
+
+I also checked the whole-file control flow, searched the reviewed source for every relevant field, and verified the header and registration. The IOC mapping is `0x20000000` bytes—512 MiB; `STAT0/STAT1` have no matching cases; offset zero explicitly succeeds. This was a static source audit.

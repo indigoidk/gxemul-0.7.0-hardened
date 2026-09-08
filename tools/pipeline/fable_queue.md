@@ -41,7 +41,7 @@ those panels produced had six or seven seats behind it.
 <!-- BEGIN GENERATED: codex-wall -- edit gen_codex_wall.py, not this block -->
 ### HELD STAGES -- every row awaiting a seat, derived from the ledger
 
-`armbfxwidth32` (assess:fable5,opus5; review:fable5,opus5) · `carrier` (regress:fable5) · `es438` (regress:fable5) · `gdromcondlies` (regress:fable5) · `holdmarkermulti` (regress:fable5) · `lcabadval` (assess:codex,fable5,grok,kimi,opus5; design:fable5; research:fable5) · `lcaconfbus1kill` (design:fable5) · `lcairqstubkill` (design:fable5) · `m88kexcdetectorl2` (design:fable5) · `ns16550` (regress:fable5) · `pcc2widthkills` (assess:fable5,opus5) · `proberowsubset` (assess:codex) · `sgideprimop` (regress:fable5) · `sgidewidth` (regress:fable5) · `sgimtedepth4dead` (assess:fable5,opus5; review:fable5,opus5) · `sgirekills` (assess:codex,grok,kimi,opus5) · `sgireunmapped` (regress:fable5) · `sgitexindex` (assess:codex,fable5,grok,kimi,opus5) · `sh4sci` (regress:fable5) · `wdccdbmidxfer` (regress:fable5; research:opus5) · `wdcdataoutdrain` (regress:fable5)
+`armbfxwidth32` (assess:fable5,opus5; review:fable5,opus5) · `carrier` (regress:fable5) · `es438` (regress:fable5) · `gdromcondlies` (regress:fable5) · `holdmarkermulti` (regress:fable5) · `lcabadval` (assess:codex,fable5,grok,kimi,opus5; design:fable5; research:fable5) · `lcaconfbus1kill` (design:fable5) · `lcairqstubkill` (design:fable5) · `m88kexcdetectorl2` (design:fable5) · `ns16550` (regress:fable5) · `pcc2c040kill` (assess:fable5; design:fable5; review:fable5) · `pcc2widthkills` (assess:fable5,opus5) · `proberowsubset` (assess:codex) · `sgideprimop` (regress:fable5) · `sgidewidth` (regress:fable5) · `sgimtedepth4dead` (assess:fable5,opus5; review:fable5,opus5) · `sgirekills` (assess:codex,grok,kimi,opus5) · `sgireunmapped` (regress:fable5) · `sgitexindex` (assess:codex,fable5,grok,kimi,opus5) · `sh4sci` (regress:fable5) · `wdccdbmidxfer` (regress:fable5; research:opus5) · `wdcdataoutdrain` (regress:fable5)
 
 *** TWO DIFFERENT KINDS OF HOLD APPEAR BELOW AND THEY MUST NOT BE READ ALIKE. ***
 
@@ -60,7 +60,7 @@ marker can mask another gap* -- section H cannot see a shortfall that a differen
 **Neither kind is a blank.** A blank cell and a seat failure must not look alike, and an
 allocation is a third thing again: recorded by seat name, per row, with the reason.
 
-**This is ONE outage plus one allocation, not 21 decisions, and it is written once rather than once per panel.**
+**This is ONE outage plus one allocation, not 22 decisions, and it is written once rather than once per panel.**
 **THE CODEX HISTORY, kept because it calibrates what a wall looks like.** Across ten panels it
 produced the identical signature every time -- the echoed brief followed by the usage-limit
 error -- in files of 26,992 / 11,180 / 10,036 / 8,323 / 12,414 / 11,938 / 10,726 / 16,694 /
@@ -2240,3 +2240,37 @@ tracked copy, so: **is the analogous line wanted, and in what words?**
 *With the caution that belongs beside it: OpenBSD 2.2 is ONE guest at ONE version. Cite it as "the
 OpenBSD 2.2 driver does X", never as "the hardware does X" — the models are obliged to match the
 hardware, of which this is a well-informed second-hand reading.*
+
+
+---
+
+### `pcc2c040kill` — `#512` SHIPPED, and I declared a state axis CLOSED twice and was refused twice
+
+*Three stages (assess, design, review) ran without a flagship seat, by the standing directive
+reserving opus5 and fable5 for this adjudication. Panel dirs `_scratchpad/panel_20260907_233310/`
+and `_scratchpad/panel_20260908_010245/`.*
+
+**WHAT SHIPPED.** A one-instruction host kill removed; witness 3/4 red → 4/4 green on the same
+script; a **16-row** detector killing **nine mutants across five tables**.
+
+**WHAT I WANT ADJUDICATED IS NOT THE FIX.** It is that I graded floor-shaped holes as contract debt
+**twice in one round**:
+
+1. Table 1's escape (`assert = 0` removed, 7/7) — I graded it a breach correctly, then **shipped
+   with it declared and the repair filed**. Pass 2: *"that is the (e) remedy applied to a (d)
+   grade."* Four seats' worth of argument, and the CHANGELOG and ledger were saying contradictory
+   things about it for about an hour.
+2. Then, in the repair, I declared the **encounter axis closed** on two cells — while the C040
+   block reads TWO lvalues, so the product is four. The empty cell (C040 cleared after the latch
+   fired) went into the residual list as debt. **Four of six seats refused it**; the fifth defended
+   it only conditionally and named its own condition. That cell's mutant swept all eleven rows.
+
+### 7m-1. (HIGH) Is the enumeration now complete — and is there a WRITING-TIME rule that catches this?
+
+Both refusals were correct and both arrived at pass 2. The carrier already says DEPENDS-ON
+enumerates joint cells over the guard's operands where the body distinguishes them. **So either the
+rule exists and I did not apply it, or it does not say what I think it says.** Which?
+
+*Secondary, and cheap: is the 16-row enumeration complete over `GENCTL & C040` × `warned`, or is
+there a fifth cell? Three rows past the product came from seats — collateral state (three seats,
+independently) and per-session liveness (the substitute seat, alone).*

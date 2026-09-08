@@ -1,0 +1,65 @@
+IMPLEMENT-WITH-REVISIONS
+
+**P2 and P4 contain errors; P6 needs a host-model qualification.** The proposed no-op policy is reasonable. I checked the handler and decoder in `GXEMUL-SEC/src/`, including their surrounding control flow.
+
+**P2: zero is not a negative shift count.** `(1 << 0) - 1` is defined and equals zero. My independent enumeration gives:
+
+| Width | Pairs | Original expression, with 32-bit `int` |
+|---|---:|---|
+| Negative | 465 | Undefined: negative count |
+| Zero | 31 | Defined: zero mask |
+| 1–30 | 525 | Defined |
+| 31 | 2 | Undefined: signed left-shift result |
+| 32 | 1 | Undefined: excessive count |
+
+Thus **468 pairs**, not 499, encounter undefined behavior under that host model. Separately, **496 pairs** have architecturally invalid field ordering. These are different counts. C99 does not require 32-bit `int`. [C99, §6.5.7](https://www.open-std.org/jtc1/sc22/wg14/www/docs/n1256.pdf#page=96)
+
+The other premises check out as follows:
+
+- **P1: confirmed.** The [actual decoder](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c:4564) extracts the two fields independently, without an ordering check.
+- **P3: confirmed, with the same zero correction.** Both sibling repairs are present, and their decoded widths are 1–32. Copying their expression into BFI would already handle zero correctly, but would leave all 465 negative-width cases exposed.
+- **P4: partly wrong.** I verified zero `BFI` and `BFC` occurrences in the named text. However, its [architecture list explicitly includes ARMv6](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ddi0100i.txt:402). Calling it the ARMv5 manual is inaccurate. BFI/BFC arrive with ARMv6T2, as documented in Arm’s assembler reference, §§3.27.5 and 3.28.5. The broader claim that *no other local reference exists* remains unestablished. [Arm assembler reference](https://documentation-service.arm.com/static/5ea68b849931941038ded96e#page=153)
+- **P5: confirmed externally.** Arm’s BFI A1 description explicitly makes `msbit < lsbit` UNPREDICTABLE. Its later constrained behavior permits an undefined instruction, NOP, or an unknown destination value. Normal assembler operand restrictions do not prevent raw instruction data from reaching a simulator. [Arm BFI specification, printed page 56](https://documentation-service.arm.com/static/66054b941bc22b03bca913ed#page=59)
+- **P6: correct for conventional 32-bit-`int` hosts.** It is not universally guaranteed by C99: `uint32_t` can promote to a wider signed `int` whose range still cannot hold the shifted value. For example, a 40-bit `int` can create that problem. Universal portability would also require reviewing the decoder’s `msb << 16`.
+- **P7: confirmed for the bit-field cases.** The existing probe exercises UBFX/SBFX, plus a MOV control. Its output handling needs attention before using it as a sanitizer oracle.
+
+For **Q1**, choose `mask = 0` and document it as the simulator’s **NOP policy for invalid field ordering**. Valid BFI replaces an ordered interval of destination bits with low source bits. A reversed interval has no defined BFI insertion semantics; “inserts no bits” is a sensible policy, rather than a uniquely mandated architectural result.
+
+An early return immediately after calculating `width` is also sound here. I checked the macros: `X` declares a void function, and `Y` generates separate conditional wrappers. There is no handler epilogue that such a return would skip. Clamping invents an insertion; a diagnostic is optional and does not itself resolve the arithmetic.
+
+For the mask expression’s C99 portability, I recommend this small revision:
+
+```c
+uint32_t mask = (width <= 0) ? 0 :
+    (width == 32) ? 0xffffffffUL : ((1UL << width) - 1UL);
+```
+
+`1U` has type `unsigned int`, which can have only 16 bits. `unsigned long` is guaranteed sufficient range for this expression. This makes the **mask construction** portable across the stated width domain; it does not certify the surrounding function on every C99 implementation.
+
+For **Q2**, negative and excessive counts use the same UBSan shift-handler entry point, but the full runtime produces different messages:
+
+```text
+shift exponent -1 is negative
+shift exponent 32 is too large for 32-bit type 'int'
+```
+
+Width 31 instead concerns the signed shift result. [UBSan implementation](https://raw.githubusercontent.com/llvm/llvm-project/main/compiler-rt/lib/ubsan/ubsan_handlers.cpp)
+
+**One instruction encoding cannot exercise both count failures:** its immediate fields fix `width`; changing register contents cannot change that. A zero-width case cannot demonstrate repair of a negative shift.
+
+The cheapest useful coverage is:
+
+1. **Arithmetic checks:** exercise negative, zero, ordinary, 31, and 32 widths. All 1,024 field pairs are inexpensive to compare against an independent per-bit mask oracle.
+2. **Sanitizer checks:** distinguish negative-count, excessive-count, and signed-result failures in separate cases. Compile as C99 with `-fsanitize=shift`, or use the existing undefined sanitizer instrumentation. Shift-exponent checking alone misses the signed-result case. [GCC instrumentation options](https://gcc.gnu.org/onlinedocs/gcc/Instrumentation-Options.html)
+3. **Integration controls:** reuse the existing vehicle with a nonzero destination sentinel, valid BFI cases that demonstrably change it, and PC/completion checks. Scope the source pin specifically to `X(bfi)`.
+
+Two concrete traps matter here:
+
+- **Inspect the captured transcript.** [`session()` consumes child output through its PTY](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/arm_bfx_width_probe.py:149), while callers print parsed results. Grepping the Python process’s stderr can miss the sanitizer messages completely.
+- **Keep cases in fresh processes**, as the current helper already does. Recovering UBSan suppresses subsequent reports at an already-reported instrumentation location. Therefore, diagnostic totals are not execution counts. With full undefined checking, width 31 can also produce a subtraction-overflow report; require the intended site and diagnostic class rather than exactly one total warning. [UBSan location handling](https://raw.githubusercontent.com/llvm/llvm-project/main/compiler-rt/lib/ubsan/ubsan_value.h)
+
+For **Q3’s reachability question**, the source establishes a runnable route: [registered `testarm` defaults to SA1110](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/machines/machine_test.c:212), and ARM CPU initialization selects the shared execution engine. The BFI decoder branch has **no CPU-model or architecture-version gate**. Normal instruction-condition handling still applies. This establishes simulator reachability despite the selected CPU model predating BFI.
+
+One separate architectural gap also surfaced: the decoder accepts source-field 15 and passes `r[15]` to this handler, while the architecture assigns that encoding to BFC. The mask correction does not settle that issue.
+
+**Validation performed:** source inspection and an in-memory comparison of all 1,024 mathematical masks against an independent oracle; all matched. **Still outstanding before landing:** a fresh BFI sanitizer differential and integration results from binaries tied to this exact tree. I have not measured those or established any host-visible wrong BFI result.

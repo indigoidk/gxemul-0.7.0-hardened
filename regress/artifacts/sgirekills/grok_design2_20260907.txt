@@ -1,0 +1,156 @@
+I'll treat this as a premise audit, not a ratification: first I'll check HEAD and the live `dev_sgi_re.c` arms against the brief's class split, then answer Q1–Q5 from the source.HEAD in the checkpoint disagrees with the brief, so I’ll verify the live `dev_sgi_re.c` arms and the related rows before treating S1–S5 as settled.The live `exit(1)` set is 12 statements, but I’m reading the arms themselves next — one of them was already recorded as dead, which is the class-count error the brief asked me to look for.**VERDICT:** Five RE read arms are one member-4 round; TEX splits (decline, do not mirror); MTE stays out; S3’s `lw` is the floor-(a) miss you asked about. S1’s “twelve live / two classes” over-counts by one dead site and under-describes a third leftover shape. Do not patch.
+
+I read `GXEMUL-SEC/src/devices/dev_sgi_re.c`, `crmfbreg.h`, `sgi_re_width_probe.py`, `sgi_re_rgb_probe.py`, the `sgirekills` ledger row, and the `sgitexindex` / `sgimtedepth4dead` notes. Checkpoint HEAD is `a264a34` with uncommitted `#505` in this file; the brief says `7a41b3f`. The six read kills and six MTE `exit(1)`s sit below the RGB edit, so the arms themselves match S1’s line numbers in the tree I opened.
+
+---
+
+## The three `lcabadval`-shaped errors (they are here)
+
+**1. Class count is wrong in the headline.**  
+`grep -cE '^[[:space:]]+exit\(1\);'` is 12 *statements*. One of them cannot run. `:1537` is the trailing `else` of `if (len == 4) … else if (len != 4) … else { fatal; exit(1); }` in `DEVICE_ACCESS(sgi_mte)`. That is already `sgimtewidth`. Operationally **11 guest-reachable kills, in two classes** (6 direction + 5 MTE-feature). Calling the dead one “live” is the same comment-blind census this row already burned on 21 → 19 → 12.
+
+Two more shapes sit next to the MTE five and are *not* in the twelve: `dst_y_step` fatals with `exit` commented out; `dst_tlb` `default:` fatals and **continues**. Same unimplemented-feature class, different severity. CLIP_IDS at `0x16e0` is a seventh *named* RE window and is already the `#499` catch-all, not a seventh read kill.
+
+**2. Accept-row count under-counts, and the instruction is the wrong one.**  
+S3 says a guest `lw` kills. The shipped detector already has the counter-example: `load()` defaults to `OP_LW_V0_AT`, and every `lw surv` row wants `exit0/0x0`. Width is checked first (`len != 8` decline). The kill is **`ld` (len=8)**. Counting “one read per register” as six `lw`s gives a detector that is **green on HEAD**.
+
+What is actually owed, if the round is five ACCEPT + TEX decline:
+
+| row kind | why |
+|---|---|
+| 5 packed `ld` round-trips, one per ACCEPT arm | floor (b)/(d), `#508`-style packing |
+| those five at a slot with bit 3 set *and* at the window’s last 8-byte slot | near and far bound; `+8` alone is the `#497` write-accept, not a read far bound |
+| 5 pre-write `ld` → 0 | memset ABI; distinct from “stored value came back” |
+| TEX: 3-channel decline (`how` / contiguous `TODO` or new latch text / sentinel→0) | different member |
+| re-pin of all six existing `ld kill` rows **first** | oracle-correction; today they *want* `exit1+txt` |
+
+That is not “six survival rows.” Survival-only is enough for verbatim `exit(1)` reinstatement and **not** enough for the null-repair.
+
+**3. The cited in-file precedent is a filed defect.**  
+S2: “the model already stores the right thing” for all six. For TEX that warrant *is* `sgitexindex`: `re_tex` is written with `((relative_addr & 0xff) >> 3) & 0xff`, consecutive `sd`s overlap by three, 81 of 112 cells unreachable, **zero consumers** (declaration, store, debug print). Backing state exists; the correct answer does not.
+
+S4 cites `sgi_re_rgb_probe.py`. That file is uncommitted `#505` work, writes `re_tlb_a[0]` / `re_linear_a[0]`, and never issues an RE register read. The committed vehicle is `sgi_re_width_probe.py`, whose six `ld kill` rows **are** the witness — and they invert the day this round succeeds. Citing RGB is citing the wrong probe; citing the width probe as a detector without re-pinning is citing a filed oracle-correction obligation as if it were already the accept suite.
+
+S2’s `lcabadval` analogy is the wrong class: those are **write value-guards** (legal writes already survive). These are **direction kills on a legal-width read**. That is why S3 can even *look* like the opposite of the `lcabadval` miss until you put `lw` in the sentence.
+
+`#508` is `alphapfnoffset` (page walk returned a base, dropped the offset). The packing hazard here is real; that citation is a different defect.
+
+---
+
+## Q1 — five ACCEPT, TEX splits; a five-arm-only claim cannot say “the RE read arms no longer kill”
+
+One **semantic class** (legal `ld` into an implemented window dies). Two **members**. Round-scope joins on one fix design, so:
+
+- **TLB_A/B/C and LINEAR_A/B:** member 4 (ACCEPT). Stores already land; consumers exist (`horrible_getputpixel` for the three TLBs and LINEAR_A; MTE linear fill for LINEAR_A/B). One round, one detector, five value rows.
+- **TEX:** not member 4 on current stores. Packet-fed seats on this row already converged: **do not mirror**. Independently: a mirrored `>> 3` read is identity only for “write one slot, read it back, touch nothing else.” A store at `+8` writes `[1..4]`, a store at `+16` writes `[2..5]`; a mirrored read at `+8` returns a mix. Mirroring also plants a green round-trip that `sgitexindex` must later invert.
+
+A five-arm ACCEPT that **leaves TEX fatal** cannot honestly say “the RE read arms no longer kill.” One of six still does, and it is still this queue’s ceiling.
+
+A five-arm ACCEPT **plus TEX decline** (latched `(once)`, fall through to the existing tail so `odata` stays 0) *can* say they no longer kill, if the sentence continues: five return stored state; TEX is a defined 0 until `sgitexindex`. That is two members in one detector, which the joining clause only barely allows; it is still better than leaving a host kill. `sgitexindex` then stops being a prerequisite and becomes the round that turns the TEX decline into ACCEPT with `>> 1`.
+
+Do not expand the TEX window toward `+0x100` to “match siblings”: `CRIME_RE_TEX + 0xe0` is `CRIME_RE_CLIP_IDS`. That 32-byte hole is already `#499`.
+
+---
+
+## Q2 — each ACCEPT read returns the store’s inverse; the read path does not index today
+
+`odata` is already `= 0` at handler entry. SGI is `EMUL_BIG_ENDIAN`. Deleting `exit(1)` and falling through is **member 2** (silent 0), not member 4.
+
+Index is computed **only on WRITE**. A guest `ld` never reaches it. Out-of-range on the read-kill path: there is no index, so there is no OOB behaviour to preserve. Guest `len==8` writes are in bounds at every window (8-byte alignment is supplied by the MIPS core / unaligned helper). Debugger `put d` is the `sgilinearoob` / TLB-loop exception and is not a guest path.
+
+**TLB_A/B/C** — `uint16_t[256]`, `tlbi = ((relative_addr & 0x1ff) >> 1) & 0xff`, four BE halfwords per `sd`:
+
+```c
+i = ((relative_addr & 0x1ff) >> 1) & 0xff;
+odata = ((uint64_t)d->re_tlb_a[i]     << 48) |
+        ((uint64_t)d->re_tlb_a[i + 1] << 32) |
+        ((uint64_t)d->re_tlb_a[i + 2] << 16) |
+         (uint64_t)d->re_tlb_a[i + 3];
+```
+
+Same for `_b` / `_c`. Last guest slot `+0x1f8` → indices 252..255, in range. Naive `odata = d->re_tlb_a[i]` keeps 16 of 64 bits.
+
+The store uses `data[hwi]*256 + data[hwi+1]` (bus bytes), not `idata`. On this BE machine they agree; the packing above is the inverse of that byte loop through `memory_writemax64`.
+
+**LINEAR_A/B** — `uint32_t[32]`, `tlbi = ((relative_addr & 0x7f) >> 2) & 0x1f`, split of `idata`:
+
+```c
+i = ((relative_addr & 0x7f) >> 2) & 0x1f;
+odata = ((uint64_t)d->re_linear_a[i] << 32) | d->re_linear_a[i + 1];
+```
+
+Last guest slot `+0x78` → 30 and 31, in range. Naive `odata = d->re_linear_a[i]` drops `[i+1]`. Claim scope: *returns what the store recorded*, including the PROM’s sign-extended pattern the comments already describe. Not “hardware-faithful LINEAR readback.”
+
+**TEX** — if declined: `odata` stays 0, tail runs (same as a `#497` `lw`). If ACCEPT after `sgitexindex`: same four-halfword pack with `i = ((relative_addr & 0xff) >> 1)` over `[0x1600, 0x16e0)`. Mirrored `>> 3` is the form already rejected.
+
+---
+
+## Q3 — the `lcabadval` asymmetry is real for `ld` value rows, false for `lw` / survival / inherited `ld kill`
+
+`lcabadval`: legal writes survive with the guards in place, so an accept-only suite is green on HEAD *and* under verbatim reinstatement.
+
+Here, a legal **`ld`** hits `exit(1)` at every still-fatal arm. So:
+
+- New `ld` + packed-value row: **red on HEAD** (host dies vs want stored word). Floor (a) holds.
+- Same row under reinstatement of that one `exit(1)`: red. Floor (b) holds.
+- `lw` row: **green on HEAD** (`lw surv` already is). That is the miss S3 is lined up to repeat.
+- Inherited `ld kill` with want `exit1+txt`: **green on HEAD**, red after a correct fix. Re-pin first, measure the committed binary red, then edit.
+
+**Reinstating any one of the six reddens the detector only if that arm has its own row.** One row per arm is required. A single “any RE `ld` survived” session can miss a site-omission mutant.
+
+**Survival plus one row per arm is not enough.** It catches floor (b) (verbatim death). It does not catch clause (d):
+
+- delete `exit(1)`, do not assign `odata` → host lives, guest sees 0  
+- `odata = d->re_tlb_a[i]` or LINEAR without `[i+1]` → host lives, high lanes wrong  
+- shrink one window so those `ld`s fall into the catch-all → host lives, 0, `#499` text  
+
+All three leave a survival oracle green. Distinctive non-zero bits in **every packed lane**, plus the sentinel so “tail wrote 0” ≠ “load never completed,” are the channel. The `#497` `d_returnzero` 35/35 escape is the in-tree proof that survival at a refusal-effect site is vacuous; ACCEPT is a success-effect site for the five, so the oracle is the **value**, not `alive`.
+
+TEX decline is the refusal-effect case: survival + contiguous announce + sentinel→0, copied from the `#499` three-channel shape, not from a round-trip.
+
+---
+
+## Q4 — MTE does not belong in this round (the split is right)
+
+They are not “implemented but unreadable.” `do_mte_transfer()` runs only when `DEVICE_ACCESS(sgi_mte)` sees `startFlag`. The five live kills are unimplemented transfer features (member 7 / decline-the-transfer, not member 4):
+
+| site | what actually dies |
+|---|---|
+| `:1330` STIPPLE | any dest, before the `dst_tlb` switch |
+| `:1338` SRC | `src > MTE_TLB_C` — TEX, LIN_A/B, CLIP, and 7, not one mode |
+| `:1399` COPY | **linear dest only**; tiled COPY is implemented |
+| `:1404` DEPTH | linear dest, `depth != 8` (so 16/32/64) |
+| `:1415` bytemask | linear dest, `!= 0xffffffff` |
+| `:1537` | dead; `sgimtewidth` |
+
+`:1404` is adjacent to `sgimtedepth4dead` and must not merge with it. `depth = 8 << field` is 8/16/32/64, never 4. The dead `if (depth == 4)` is on the **tiled** path and is the missing RGBA construction (now HIGH because MTE then always runs CI and leaks `buf[1..]` at documented depths). Declining linear `depth != 8` does not repair that; “fixing” `depth == 4` alone would mask the depth-32 leak and leave depth 16.
+
+Against putting MTE in this round: different function, different trigger, different member, different detector (START + mode bits, not `ld` of an RE window), and the cheap ranking already filed them as the expensive group (new latch bits, new sessions). A “finish this file’s `exit(1)`s” round would also “fix” `:1537` with a detector that can never have a row.
+
+---
+
+## Q5 — site omission is real; the subtler green rows are silent 0, packing, and catch-all swallow
+
+**Site omission (your expectation):** leave LINEAR_B’s `else` as `fatal; exit(1)`. Every TLB/LINEAR_A/TEX row stays green. That is the `lcabadval` “one of six guards omitted” analogue. It is why the detector needs six (five value + TEX decline), not five.
+
+**Quieter than leaving `exit(1)` — window shrink / catch-all swallow:** change LINEAR_B’s bound so those `ld`s miss the arm and hit `#499`. Host lives. Survival-only `linear_b ld surv` stays **green**. Value row reds (0 vs stored). `TODO: read from CRIME_RE_LINEAR_B` text row reds. This is disjunct-dropping on the cascade, not an operand swap.
+
+**Null-repair (clause d), survival stays green:**
+
+- delete `exit(1)` only → `odata` remains 0  
+- `odata = d->re_tlb_a[i]` (16 of 64 bits)  
+- LINEAR `odata = (uint64_t)d->re_linear_a[i] << 32` (drops `[i+1]`)  
+- ACCEPT only at the window **base** (`relative_addr == CRIME_RE_TLB_A`) while the probe `ld`s at base, as `ld kill` does today  
+
+Rows expected to stay green under those: any **survival-only** row, and any value row whose stored word is 0 in the dropped lanes (e.g. `0x0000000000001122` hides a 16-bit pack). Use `0x1122334455667788` (already `ACC_VAL`) so every halfword/word lane is load-bearing.
+
+**Not the first mutant to build:** operand-swap on a field the body does not distinguish. The body of an ACCEPT arm *is* the packing. The generating set is window × direction × width × (all four halfwords / both LINEAR words).
+
+---
+
+## Something else
+
+- Opening LINEAR reads makes `sgilinearoob` *observable* from a guest (`re_linear_a[32]` aliases `re_linear_b[0]`). That is a residual witness, not this round’s fix, and must not be used as a `put d` reproduction.
+- `re_linear_b` is not a `horrible_getputpixel` case (tlb_mode 5 is the `sgirandompixel` default). MTE still consumes it. Member 4 still holds for the register read.
+- The six `ld kill` rows are already rung-3 at all six windows on unmodified `-E sgi -e ip32`. The witness obligation for the read class is discharged; the remaining obligation is oracle-correction order, not “build a probe from the RGB session.”
+- Flagship still owns S5 on the 9th. Independent of that seat: mirrored ACCEPT is the worst of the three TEX options, and a five-arm commit that leaves TEX fatal cannot take the headline.

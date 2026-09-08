@@ -1,0 +1,64 @@
+**Run five-window ACCEPT for TLB_A/B/C and LINEAR_A/B; handle TEX DECLINE in a separate round, with TEX indexing and MTE excluded.**
+
+C4 contains a false correction: **the RGB probe is committed.** The proposed mixed round also fails my reading of your scope rule.
+
+I reviewed `GXEMUL-SEC` at `HEAD 717e7c6242160e5aa5c070f18b9020d74438d9f7`. The device source and both probes have no differences from HEAD.
+
+For Q1, the five ACCEPT sites share one contract: reconstruct the complete stored value. TEX DECLINE introduces a different contract: completed read returning zero, a specific diagnostic, and independent once-only suppression. Putting both contracts in one Python file does not establish “same detector, no new oracle.” Your [scope rule](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/tools/CLAUDE.md:2631) also requires one fix design.
+
+I would therefore proceed with five ACCEPT sites now and schedule TEX DECLINE separately. Waiting for the TEX index repair unnecessarily couples read termination to backing-state corruption. Conversely, declining TEX does not close `sgitexindex`.
+
+For Q2, let `r` denote `relative_addr` **after** the handler’s existing adjustment. The packing is:
+
+| Windows | Backing array | Starting index | Complete result |
+|---|---|---|---|
+| TLB_A/B/C | Corresponding `uint16_t H[256]` | `((r & 0x1ff) >> 1) & 0xff` | Four halfwords, highest first |
+| LINEAR_A/B | Corresponding `uint32_t W[32]` | `((r & 0x7f) >> 2) & 0x1f` | Two words, highest first |
+| TEX, separate DECLINE round | No array read | None | Leave `odata == 0`; announce through its own latch |
+
+The numeric reconstruction is:
+
+```c
+/* TLB_A/B/C */
+odata = ((uint64_t)H[i]     << 48) |
+        ((uint64_t)H[i + 1] << 32) |
+        ((uint64_t)H[i + 2] << 16) |
+         (uint64_t)H[i + 3];
+
+/* LINEAR_A/B */
+odata = ((uint64_t)W[i] << 32) |
+         (uint64_t)W[i + 1];
+```
+
+Cast **before** shifting. These formulas invert the stores for this SGI machine’s configured big-endian ordering. Preserve the [common tail](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:665), which serializes `odata` and returns success. Writing `data` directly without changing that tail would let the tail overwrite the result.
+
+For aligned accesses, TLB starts range through 252 and LINEAR starts through 30, so the complete groups fit. Length alone does not establish those bounds for arbitrary callback callers. Also, your single-element warning needs a small qualification: it preserves **16 bits for TLB, 32 bits for LINEAR**.
+
+There is no unique “smallest escaping edit” without specifying the row’s address, value and surrounding state. Concrete weaknesses are:
+
+| Check or mutation | What one round-trip row establishes—or misses |
+|---|---|
+| Omit a packed lane | Distinct, nonzero expected lanes expose this; zero-filled lanes can conceal it. |
+| Read starting at `i + 1` | Distinct adjacent lanes expose the read-only indexing error. |
+| Change TLB read mask `0x1ff` to `0xff` | A one-token defect passes a row at `+8`, while aliasing the upper half of the window. LINEAR has the analogous `0x7f` → `0x3f` escape. |
+| Change store and read indexing consistently | Round trips can remain correct despite wrong cell placement. Even numerous round trips cannot disprove a shared permutation without an independent position anchor. |
+| Move the tested address into the catch-all | A completed read returns zero. A nonzero full-value expectation catches this; survival or zero-only expectations do not. |
+| Shrink a boundary away from the tested address | An interior row remains green; boundary coverage is needed. |
+
+The existing `ACC_VAL`, `0x1122334455667788`, also leaves every halfword’s highest bit clear. A repair that clears bit 63 passes that value. Use varied values, including high bits, distinct adjacent groups, and retain independent cell-position checks. These are arithmetic/source-derived outcomes, not measured emulator mutation results.
+
+For Q3:
+
+- **C1’s central correction is right.** The width guards precede the read arms, and [`load()` defaults to the narrower operation](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/sgi_re_width_probe.py:196). The six existing witness rows explicitly override it. “Rows using `lw` would be green” needs the qualification **under survival/zero-only expectations**: a nonzero round-trip expectation would fail, but would exercise the wrong branch.
+
+- **C2 is right, with a file-wide denominator.** I counted 12 active statements, then inspected their enclosing control flow: six RE read exits, five exits in `do_mte_transfer`, and one unreachable exit in `DEVICE_ACCESS(sgi_mte)`. Its [width chain](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:1537) really is `len == 4`, then `len != 4`, then `else`. Thus **11 reachable exit sites across the file; six in the RE handler**. This is source-derived reachability, not eleven fresh demonstrations.
+
+- **C3 checks out.** Enumeration of all 28 aligned TEX positions gives starting indices 0–27 and touched cells 0–30: **31 touched, 81 untouched**. Searching `GXEMUL-SEC/src/` finds the declaration, assignment and debug observation, with no functional consumer of `re_tex`. The [write indexing](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:486) still overlaps consecutive groups.
+
+- **C4 is partly wrong.** `git ls-tree HEAD` lists **both** probes; RGB was last changed in commit `7a41b3f` on September 7. Its operations still support your other claim: it writes RE state and observes framebuffer memory, without reading RE registers. The committed [six `ld kill` rows](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/sgi_re_width_probe.py:269) remain the relevant witness.
+
+- **C5’s ordering is right; its six-row scope depends on the chosen round.** For five ACCEPT sites, re-pin those five first; retain TEX’s existing expectation until its separate round. Baseline failure under the revised expectations remains owed. Also update the gate alongside detector changes: [`gate_arm.sh`](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gate_arm.sh:1181) explicitly names all six `ld kill` rows and pins a 35-row denominator. A successful probe edit can otherwise leave the gate red.
+
+There **is a seventh named RE region**: [`CRIME_RE_CLIP_IDS`](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/thirdparty/crmfbreg.h:234). It has no dedicated handler arm and falls into the existing catch-all. Thus “six dedicated read-kill arms” is correct; “only six named RE regions” would be false.
+
+I also checked the cited MIPS alignment guard, all three aligned-address calls in the unaligned helper, and the debugger’s warning-only path. Those support the stated instruction-path distinction. This was a source and design audit; I made no edits and performed no fresh emulator or baseline runs.

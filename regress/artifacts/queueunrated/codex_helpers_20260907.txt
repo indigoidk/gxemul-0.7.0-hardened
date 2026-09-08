@@ -1,0 +1,91 @@
+**VERDICT: Static false-green paths found in 13 of 25 examined files—10 gated, 3 ungated. No shipped first-match before/after misuse found in the `printed()` callers checked.**
+
+I screened the original **79 top-level Python files**, then reviewed relevant helpers and callers in **25/79**, including **20/20 definitions of `printed()`**. I additionally reviewed the nested, gated GD-ROM PIO detector. The remaining 54 files received screening only; this is not coverage of all ~95 helpers.
+
+These are source-derived counterexamples, **not executed mutant results**. “False-green” below means the named row accepts the specified wrong product edit; it does not mean every row is an unconditional tautology or the entire gate escapes. No probes, gates, tests, or product binaries were run, and no files were changed.
+
+The findings, ranked with gated cases first:
+
+1. **Gated, ARM: PCC2 diagnostic values accept longer numbers.**  
+   In [pcc2_default_probe.py](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/pcc2_default_probe.py:225), `srvd val text` and `srvd half text` use inline `t.count()` followed by `row()` equality. Their needles end at `0x34` and `0x56`, without terminating the value.
+
+   **Concrete product edit:** change the diagnostic’s `data[0]` argument to `data[0] << 8` in [dev_pcc2.c](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_pcc2.c:701). Reports of `0x3400` and `0x5600` still satisfy both rows. Guest data remains unchanged. **By inspection, this can preserve all 46 row predicates on an otherwise passing build.**
+
+   `wide rd srvd` has the zero mirror: appending literal `abc` after `%02x` in that format produces `0x00abc`, which still satisfies its `0x00` needle. That edit also preserves the two nonzero prefix checks.
+
+2. **Gated, SH: a tenfold wrong clock satisfies V22.**  
+   [sh4_val_probe.py](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/sh4_val_probe.py:683), row `V22 TCR timer_hz`, uses `clklines()` and then `clocks[0].startswith("520833")`.
+
+   **Concrete product edit:** change the P64 calculation from `pclock/64.0` to `pclock/6.4` in [dev_sh4.c](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sh4.c:2135). `5208333.281250` Hz is ten times wrong, but retains the expected prefix and does not contain the forbidden P4 string `8333333`. Unlike the repaired LCA example, this row prints the observed clock; the defect is its comparison.
+
+3. **Gated, SH: host death becomes successful interrupt refusal.**  
+   [sh_intprio_probe.py](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/sh_intprio_probe.py:307), row `irq14 imask`, converts `session()` failure into `"refused"`. [sh_iprbcd_probe.py](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/sh_iprbcd_probe.py:138), through `run_deliver()` and `run_deliver2()`, does the same for rows including `iprc_lo`, `raise_lo`, and `lower`.
+
+   **Concrete product edit:** at the [SH interrupt-dispatch condition](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c:247), terminate the host when an interrupt is pending, BL is clear, and IMASK masks its priority. Those negative rows still report `"refused"` despite the crash.
+
+   **Something else found while tracing this:** both `session()` verifiers accept `"0x1234"` anywhere after sending `print 0x1234`, and ignore the final read’s return value. The debugger [echoes command characters](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/debugger/debugger.c:597). Removing the numeric response at [debugger_cmds.c:1344](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/debugger/debugger_cmds.c:1344) still satisfies that verification through the echo alone.
+
+4. **Gated, m88k: eight-digit captures silently truncate longer output values.**  
+   [m88k_exc_probe.py](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/m88k_exc_probe.py:522), helpers `Sess.cr()`, `gpr()`, and `pc()`, use `[0-9a-f]{8}` without a right boundary.
+
+   **Concrete product edit:** append a literal `0` after the control-register numeric format in [cpu_m88k.c](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_m88k.c:302). The `div0` row’s SXIP report becomes `0x000100060`; `cr()` reads `0x00010006`, retaining the expected value. This establishes acceptance of a **wrong diagnostic value**, not an independently demonstrated CPU-state escape.
+
+5. **Gated, SH: four `gdrom map` controls manufacture mapping evidence from any numeric print.**  
+   Present in [gdrom_data_probe.py](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gdrom_data_probe.py:196), [gdrom_decline_probe.py](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gdrom_decline_probe.py:369), [gdrom_toclen_probe.py](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gdrom_toclen_probe.py:256), and the additional [nested PIO detector](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/gdrompionull/gdrom_pio_null_probe.py:315). Each uses `printed()` and converts any `0x...` result to `"mapped"`.
+
+   **Concrete product edit:** remove the main GD-ROM window’s [device registration](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_dreamcast_gdrom.c:1692). The address can receive the memory fallback’s [zero-filled successful read](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:728); `0x0` still becomes `"mapped"`. These controls do not prove that the GD-ROM handler served the access. Other device-behaviour rows can reject this edit.
+
+6. **Two gated and three ungated probes score missing observations green.**  
+   Their `row(..., negate=True)` helpers compare error strings unequal to legitimate values:
+
+   | Probe | Rows checked | Gate |
+   |---|---|---|
+   | [sgi_re_rgb_probe.py](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/sgi_re_rgb_probe.py:350) | `rgb not corrupt` | ARM |
+   | [sgi_re_randompixel_probe.py](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/sgi_re_randompixel_probe.py:231) | `lin_b not src` | ARM |
+   | [alpha_harness_probe.py](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/alpha_harness_probe.py:334) | `swpctx notflags`, `swpctx mapped` | Ungated witness |
+   | [alpha_pfnoffset_probe.py](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/alpha_pfnoffset_probe.py:236) | `walk stored`, `walk mapped` | Ungated witness |
+   | [lca_confwidth_probe.py](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/lca_confwidth_probe.py:209) | `kill notzero` | Ungated witness |
+
+   **Concrete product edits:** for the first four, make [debugger_cmd_print()](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/debugger/debugger_cmds.c:1313) return without emitting its result. `printed()` returns `"absent"`, which satisfies these inequalities. For LCA, remove the [IOC_CONF diagnostic](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:213) while retaining `exit(1)`; `shown == "absent"` passes `kill notzero`.
+
+   Equality siblings reject these missing observations. These are misleading green rows, **not whole-detector escapes**. LCA’s previously repaired numeric comparison and reported `got` remain repaired.
+
+For **Q3**, I checked classifications and actual invocation sites. The affected originals comprise three in [gate_arm.sh](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gate_arm.sh:1269) (invocations at 1269, 1323, 1422), six in [gate_sh_rounding.sh](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gate_sh_rounding.sh:279) (279, 323, 438, 757, 1088, 1159), and one in [gate_m88k_rounding.sh](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gate_m88k_rounding.sh:334). The nested PIO detector is additionally invoked at SH line 1024. The three ungated files are explicitly [classified as witnesses](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/tools/pipeline/check_probe_wiring.py:156).
+
+For **Q2**, I found **no existing before/after pair that calls the first-match helper for both samples**, among the 20 original definitions and their callers, plus the nested detector. Important near misses were sound:
+
+- [PCC2 `rb4`/`rbq`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/pcc2_width_probe.py:839) intentionally uses the first sample for `rb4`, then explicitly indexes the second for `rbq`.
+- [WDC `w16 value`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/wdc_flood_probe.py:620) uses `printed_all()` and checks `0x41,0x42`.
+- [GD-ROM `R7b cond st`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gdrom_cond_probe.py:678) uses distinct registers before and after, and explicitly prevents missing samples from comparing equal.
+
+For **Q4**, extraction is worthwhile because the copies have materially different contracts:
+
+| Behaviour | Copies among the original 20 |
+|---|---:|
+| First match, original hexadecimal spelling | 7 |
+| First match, integer-normalized hexadecimal, full width | 10 |
+| First match, normalized **and masked to 32 bits** | 2 |
+| **Last** match, original hexadecimal spelling | 1 |
+
+The masked copies are `sgi_re_rgb` and `sgi_re_randompixel`; the last-match copy is `gdrom_cond`. All 20 return `"absent"` on a miss.
+
+I also found documentation drift: both masked SGI helpers describe their normalization as matching `sgi_re_width`, whose `printed()` does **not** mask. `sgi_de_width` separately exposes `printed32()` and retains full-width reads elsewhere. A shared helper therefore needs explicit sample selection, missing-result handling, and width policy. Globally replacing “first” with “last” would break legitimate callers.
+
+For **Q5**, **I would not build a class-wide gating checker from this sweep.** My broad signal screen selected 79/79 files. The 13/25 findings are a deliberately selected sample, not checker precision or class prevalence; recall across ~95 helpers remains unmeasured.
+
+Several suggested signals also have legitimate uses: `got if alive else "died"` can fail correctly; first-match selection can be intentional; greedy hexadecimal `+` consumes extra hexadecimal digits, unlike `{8}`. `gdrom_default`’s boolean `accept dma` asserts arming and has a separate data-value row.
+
+A useful mechanical check would have a narrower claim: test an extracted parser against missing output, echo-only output, longer numeric tokens, duplicate samples, and distinct before/after samples. Before making anything a gate, evaluate it on frozen positive and negative examples and report misses by class. An AST search could help rank candidates; it should not certify absence of vacuity.
+
+My complete risk ranking follows. **Ties are intentional.** Names omit `_probe.py` unless another suffix is shown.
+
+| Priority | Population and review status | Files |
+|---|---|---|
+| 1–5 | Highest-risk gated value/conditional helpers; **5 reviewed** | `pcc2_default`, `sh4_val`, `m88k_exc`, `sh_intprio`, `sh_iprbcd` |
+| 6–21 | Gated repeated-sample, sentinel and helper-copy candidates; **16 reviewed** | `asic_badaddr`, `gdrom_cond`, `gdrom_data`, `gdrom_decline`, `gdrom_default`, `gdrom_toclen`, `pcc2_width`, `sgi_de_primop`, `sgi_de_width`, `sgi_re_randompixel`, `sgi_re_rgb`, `sgi_re_unmapped`, `sgi_re_width`, `sh4_pcic`, `sh_pclock`, `wdc_flood` |
+| 22–58 | Other gated candidates; **37 screened only** | `arcbios_shift`, `arm_endian`, `arm_flags`, `arm_fold_marker`, `arm_idle`, `arm_memcpy`, `arm_strlen`, `arm_writeback`, `diag_div_sweep.py`, `footbridge_sites`, `luna_absentcpu`, `luna_intmask`, `m8820x_sites`, `m88k_idle`, `m88k_rounding`, `mips_fixedmode`, `mips_fold`, `mips_rounding`, `mips_subnorm`, `pit8253_latch`, `ppc_halt`, `ppc_rounding`, `readiness_predicate_test.py`, `selftest_absorb.py`, `selftest_budget.py`, `selftest_inactivity.py`, `selftest_logdir.py`, `sgi_eaddr`, `sh4_bsc_width`, `sh4_chcr`, `sh4_rtcsr`, `sh4_sci`, `sh4_tlbda2`, `sh_halt`, `sh_rounding`, `sh_tlbmulti`, `wdc_latch_census.py` |
+| 59–62 | Ungated high-risk comparators; **4 reviewed** | `alpha_harness`, `alpha_pfnoffset`, `lca_confwidth`, `pcc2_width_witness.py` |
+| 63–76 | Other ungated witnesses/exempt detectors; **14 screened only** | `fbpending_drain`, `fbpending_witness.py`, `hpcabort_witness.py`, `hpcmips_ctor`, `sh4_chcr_witness.py`, `sh4_rtcsr_witness.py`, `sh4_sci_witness.py`, `sh4_tlbda2_witness.py`, `sh4_val_witness.py`, `sh4pcic_witness.py`, `wdc_addtoinbuf`, `wdc_altoffset_4bit`, `wdc_altoffset`, `wdc_altoffset_sig` |
+| 77–79 | Supporting tools; **3 screened only** | `absorb_census.py`, `drive_guest.py`, `selfmutant.py` |
+
+One scope change occurred during inspection: `sgi_mte_fill_probe.py` appeared, increasing the top-level population to 80 while HEAD remained `7a41b3f`. It is excluded from the original denominator. I checked its `printed()` callers separately: its paint/fill comparison uses separate sessions, so it adds no first-match pair finding.

@@ -1,0 +1,51 @@
+**FIX-WITH-DETECTOR — with a host-side state regression and an explicit bounds policy.** Your 31/81 arithmetic survives. Your claim that zero consumers leaves no meaningful detector does not.
+
+**Q1: `>> 1` is right for this representation, but “under nothing else” is wrong.**
+
+Your alternative interpretation partly matches the hardware: SGI’s CRIME specification lists `TLB.tex[28]` as **28 separate 64-bit registers**, followed immediately by the clip-ID registers. The packet alone does not establish that; the external specification supplies stronger evidence than sibling similarity. [CRIME specification, Table 7-2, printed page 7-8](https://ftp.netbsd.org/pub/NetBSD/misc/macallan/sgimips/crime.pdf#page=164).
+
+However, that interpretation does **not** rescue the existing loop. For aligned byte offset `o`:
+
+- Register number: `o / 8`.
+- First cell in a flat halfword array: `4 * (o / 8)`, equivalent to `o / 2`.
+
+`>> 3` would fit a `uint64_t[28]` representation, or indexing the first dimension of `uint16_t[28][4]`. The current code indexes a flat `uint16_t[112]` and increments once per halfword. It is missing the factor of four between register number and backing-cell number.
+
+This supports correcting the storage mapping. It does not establish complete texture semantics or demonstrate a guest-visible defect.
+
+**Q3: the overlap and 31/81 split are correct; the alignment premise needs repair.**
+
+I checked that [`CRIME_RE_TEX` is `0x1600`](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/thirdparty/crmfbreg.h:233), so the low-byte mask really does extract the offset within this window.
+
+For the 28 aligned stores:
+
+| TEX offset | Existing cells written | Cells with `>> 1` |
+|---|---|---|
+| `0x00` | `0..3` | `0..3` |
+| `0x08` | `1..4` | `4..7` |
+| `0xd8` | `27..30` | `108..111` |
+
+The loop runs at `hwi = 0, 2, 4, 6`. Its final increment does not perform another write. Thus the existing arm reaches exactly **31 distinct cells**, leaving **81 inaccessible through TEX writes**. Initialization still zeroes the whole array, so “never written” would be too broad.
+
+The consequential flaw is treating every offset through `0xdf` as an admissible starting address when evaluating the proposed fix. **An eight-byte length does not establish eight-byte alignment or whole-transfer containment.** Under `>> 1`, an unchecked start near the window’s end can make the four-cell write exceed the array.
+
+The inspected MIPS instruction paths supply alignment, but the device callback itself does not enforce it; the host debugger also has a path that merely warns about misalignment and continues. Therefore I would not ship the isolated shift replacement without addressing the handler’s accepted domain. See the [instruction alignment check](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_mips_instr_loadstore.c:59) and [debugger handling](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/debugger/debugger_cmds.c:1548).
+
+**Q2: the missing option is inspecting actual private state after executing the production handler.**
+
+A detector need not obtain its observations through guest MMIO. This repository already has that testing pattern: [`diff_rtc_range.c`](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/diff_rtc_range.c:101) includes the actual device source and calls its handler directly.
+
+For TEX, the useful regression would:
+
+1. Execute the actual `dev_sgi_re_access` against a fixture containing `sgi_re_data`, accounting for the callback’s address adjustment.
+2. Write distinct halfwords into neighboring aligned registers; inspect the array and require both groups to retain their respective values.
+3. Exercise all 28 registers and compare all 112 cells against an independently specified expected sequence, including preservation of neighboring state.
+4. Require the test to fail with the original shift restored and with writes suppressed, and pass with the corrected implementation.
+
+Those assertions inspect stored values, not diagnostic text or a copied index calculation. They would establish **backing-store mapping coverage**. They would establish neither guest rendering correctness nor a guest round-trip witness.
+
+The source supports your zero-functional-consumer premise. Consequently, a guest-output test cannot distinguish these mappings today. Scoring `debug()` would measure a diagnostic; implementing readback would expand the work into another row.
+
+If the project requires a guest witness specifically, record that witness as **none** even alongside the host regression. Until the regression is implemented and demonstrated to discriminate, it remains a proposed detector—not claimed coverage.
+
+I inspected the source and independently enumerated the arithmetic; I did not modify files or execute a device regression.

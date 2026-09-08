@@ -1,0 +1,84 @@
+**VERDICT: The defect and shipped-oracle conflict are real. Re-pin to `(OVERREAD, NODATA) = (0, 1)`, but that alone is insufficient. Q5’s literal equality is not a surviving mutant.**
+
+This was a static review of `GXEMUL-SEC`; no edits, builds, probes, or tests were executed. The colours below are predictions, **not the committed-build RED measurement required by S5**.
+
+**Q1: Replace `overread x1` with a paired diagnostic row**, named something like `exhaust says`, expecting `"0,1"` in OVERREAD,NODATA order. Retain the survival row.
+
+| Diagnostic | HEAD, existing stimulus | Preferred repair |
+|---|---:|---:|
+| OVERREAD: `read past the end of the GDROM_DATA buffer` | 1 | 0 |
+| NODATA: `read from GDROM_DATA with no data` | 0 | 1 |
+
+**N is 1**, because NODATA has its own once-only latch. Multiple excess reads do not produce multiple diagnostics in this fresh session. The count follows directly from the [NODATA and exhaustion branches](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_dreamcast_gdrom.c:1052).
+
+Your zero-OVERREAD expectation would indeed make HEAD RED. But zero alone also accepts complete silence. The pair preserves an affirmative announcement obligation while distinguishing HEAD from the repair. It supplies the right *candidate* oracle; S5 still requires its later measurement before the implementation changes.
+
+**Q2: Re-pinning this stimulus is correct; abandoning its announcement is not.**
+
+The old row pins entry into OVERREAD through the very stale-availability state being repaired. After the repair, subsequent reads reach the existing, diagnostic-bearing NODATA branch. The announcement changes category; it does not disappear in this session. The final **valid** read should itself remain quiet.
+
+The rewritten comment can use two verbatim, searchable source anchors:
+
+- `read when there is nothing to give` — the [family rationale](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_dreamcast_gdrom.c:1088).
+- `DIAGNOSTIC is the truthfulness channel` — the [returned-value collision rationale](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_dreamcast_gdrom.c:1062).
+
+Correct the [old row and its explanatory block](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gdrom_data_probe.py:374) in place: record that its OVERREAD expectation depended on stale availability and is being overturned. Those source statements warrant retaining an announcement; the repaired state transition determines its category.
+
+There is a limitation: if NODATA already latched earlier in the same device instance, later exhaustion reads will not announce again. Therefore this re-pin does **not** establish a separate announcement per transfer or preserve an independent exhaustion-specific diagnostic history. Claiming that stronger property would require a mixed-history oracle and an explicit design decision.
+
+**Q3: Specify which build “after the re-pin” means.**
+
+On unchanged HEAD, the paired diagnostic row still fails. On the proposed repaired build, that mismatch disappears, while the existing data probe supplies no observation of availability **at exhaustion**.
+
+Add `exhaust cond`, using the inconsistent-count transfer:
+
+- Immediately before the final valid halfword: GDROM_COND is `0xa8`.
+- The final halfword still returns the synthesized payload, `0x41e6`.
+- Immediately afterwards, **before another DATA read**: GDROM_COND is `0xa0`.
+
+HEAD predicts `0xa8 → 0xa8`; the repair predicts `0xa8 → 0xa0`. The final payload is independently anchored by the [TOC’s last two bytes](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_dreamcast_gdrom.c:775).
+
+The before/after pair rejects premature clearing, while the immediate after-sample rejects clearing one read late. This covers the narrow exhaustion-timing claim. **It is insufficient for the combined repair**, because it cannot establish the event or correct re-arming.
+
+A practical oracle detail: [`printed()` returns the first matching print](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gdrom_data_probe.py:167). Before/after observations must remain distinguishable; repeatedly printing the same register and calling that helper twice would not retrieve two samples.
+
+**Q4: Yes—add an independently discriminating `exhaust event` row.**
+
+The observable is **SYSASIC pending word 1, bit 0**, read at `0xa05f6904`: GD-ROM event 32. Existing `bad event`, `fmt event`, and `unk event` rows observe command-dispatch completion paths, not the final PIO read.
+
+The crucial qualification is that [command dispatch already raises this event](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_dreamcast_gdrom.c:940). Its pending bit is sticky. Reading “set” after exhaustion without acknowledging that earlier event proves nothing about exhaustion.
+
+The event oracle therefore needs:
+
+1. A demonstrated dispatch event.
+2. Its acknowledgement using the register’s 32-bit write-one-to-clear semantics, followed by a verified clear reading.
+3. A clear reading immediately before the final valid halfword.
+4. A set reading immediately afterwards, before any excess DATA read.
+
+The [existing regression commentary](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gdrom_decline_probe.py:433) already explains why writing zero clears nothing; the [ASIC implementation](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_dreamcast_asic.c:195) confirms it.
+
+Leaving the event behind the old count gate then fails independently of `exhaust cond`. Checking that it remains clear during ordinary intervening reads also rejects premature notification.
+
+This observes pending status, **not CPU interrupt delivery**. Multiple event calls before acknowledgement coalesce into one bit, so this is not an exact event-call-count oracle.
+
+**Q5: The equality needs correction, and there are genuine segmented-transfer escapes.**
+
+If `d->cur_cnt == d->cur_data_offset` is meant literally as the exhaustion predicate, it holds after the **first** unsegmented halfword: both are 2. That edit clears availability immediately and fails the existing `accept d1`. No segmented transfer is needed.
+
+If you meant the equality as shorthand for why substituting one counter for the other escapes, that reasoning is sound. The actual candidates are:
+
+| Edit | Why unsegmented observations miss it | Required discriminator |
+|---|---|---|
+| Use `cur_cnt` instead of `cur_data_offset` in the comparison with `data_len` | Both counters reach 408 together | Exhaustion after a re-arm has reset only `cur_cnt` |
+| Remove the re-arm’s `cur_cnt = 0` | That assignment never executes in the unsegmented case | Intermediate count/event observations after a re-arm |
+
+The second edit can retain correct final payload and availability while producing premature subsequent count-boundary notifications. **A segmented transfer checked only at its endpoint still misses that distinction.**
+
+Use an unequal split and observe the advertised remainder, continued availability and payload, and event timing between boundaries. Keep the TOC’s required 408-byte count at command dispatch; its [length guard](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_dreamcast_gdrom.c:734) otherwise rejects staging before segmentation exists.
+
+Both genuine counter/re-arm candidates need segmentation. The omitted final event from Q4 does not.
+
+I found two additional matters:
+
+- **OVERREAD does not become globally unreachable.** The [accepted ROM-control arm](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_dreamcast_gdrom.c:1282) can assert availability without providing a buffer. Clearing on the final valid read does not cover that path. Re-pinning this stimulus therefore does not justify deleting the fallback or claiming every false-availability state repaired; its separate diagnostic coverage remains an obligation.
+- The [source’s width-exemption paragraph](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_dreamcast_gdrom.c:1032) is already stale: it claims an exemption from an accept row, while [`accept w8`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gdrom_data_probe.py:396) explicitly supplies that row. That record needs correction in place.

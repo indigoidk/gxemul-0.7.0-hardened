@@ -1,0 +1,30 @@
+**VERDICT: Partial census only. Eight selected left-shift sites are positively cleared; the remaining shifts are not settled.**
+
+I can provide source counts and safety checks, but I can’t supply a ranked discovery of guest-triggerable vulnerabilities and their triggering domains.
+
+The denominator is **224 C/H files screened lexically**, with **eight selected left-shift expressions examined semantically**:
+
+| Directory | Files | `<<` | `<<=` | `>>` | `>>=` |
+|---|---:|---:|---:|---:|---:|
+| `src/cpus/` | 102 | 4,410 | 2,081 | 7,031 | 2,570 |
+| `src/devices/` | 122 | 562 | 14 | 462 | 20 |
+| **Total** | **224** | **4,972** | **2,095** | **7,493** | **2,590** |
+
+These are **17,150 lexical operator occurrences**, including 7,067 left shifts. Comments and string/character literals were excluded; generated files were counted separately. Conditional compilation and macro expansion were not evaluated. These counts do **not** represent 17,150 semantic examinations.
+
+The eight cleared sites, under the stated 32-bit `int` model:
+
+| File and enclosing function | Exact shift expression | Derived count; guest control; protection |
+|---|---|---|
+| [cpu_m88k_instr.c:532](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_m88k_instr.c:532), `X(clr)`; [539](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_m88k_instr.c:539), `X(set)` | `(uint32_t)1 << w` | `w = (reg(ic->arg[2]) >> 5) & 0x1f` gives **0–31**. Guest register controls it. The ternary evaluates the shift only for **1–31**; the unsigned cast makes 31 safe. |
+| [cpu_m88k_instr.c:3513](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_m88k_instr.c:3513), [3523](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_m88k_instr.c:3523), `X(to_be_translated)` | `(uint32_t)1 << w` | `ic->arg[2] = iword & 0x3ff`, then `w = ic->arg[2] >> 5`, gives **0–31**. Guest instruction controls it. Same ternary and unsigned protection. |
+| [cpu_arm_instr.c:2216](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c:2216), `X(netbsd_cacheclean)` | `(uint32_t)1 << 27` | Count is the literal **27**, independent of guest input. Unsigned operand; no count guard needed. |
+| [dev_bebox.c:232](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_bebox.c:232), `DEVINIT(bebox)` | `(uint32_t)1 << i` | Initialization loop `for (i=0; i<32; i++)` gives **0–31**. Internal count; unsigned operand. |
+| [dev_cpc700.c:203](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_cpc700.c:203), `DEVINIT(cpc700)` | `(uint32_t)1 << i` | Same **0–31** initialization-loop bound; internal count; unsigned operand. |
+| [dev_footbridge.c:817](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c:817), `DEVINIT(footbridge)` | `(uint32_t)1 << i` | Same **0–31** initialization-loop bound; internal count; unsigned operand. |
+
+The m88k `w == 0` branch supplies the all-ones mask. **The cast and bounded count establish shift safety**; shifting unsigned one by zero would itself be defined.
+
+One correction to the supplied arithmetic: `msb - lsb + 1 < 0` requires `lsb ≥ msb + 2`, giving **465 negative widths**. Another **31** pairs produce zero; **496** is the number of nonpositive widths.
+
+`lcashiftub` and `sgirebufshiftub` were excluded from semantic review. All reading stayed within `GXEMUL-SEC/src/`; neither prohibited location was read. No files were changed.

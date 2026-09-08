@@ -1,0 +1,58 @@
+BUILD-WITH-REVISIONS
+
+**The proposed defect row still passes the `return` mutant.** You have established that a pending interrupt is reachable, but the proposed sequence never first asserts the CPU line. There is also a separate problem with the proposed prompt oracle.
+
+**The missing precondition is an already asserted CPU line.** GENCTL resets to zero. Your SCCTX and clmpcc writes therefore create a pending request while MIEN remains clear, and every completed recalculation deasserts the CPU line. When the final GENCTL write selects C040:
+
+- The shipped repair deasserts the line.
+- Deleting `assert = 0` asserts the line.
+- Replacing it with `return` leaves the previously deasserted line unchanged.
+
+The callbacks simply assign `irq_asserted = 1` or `0`; returning invokes neither callback. See [PCC2 initialization and output gating](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_pcc2.c:772) and [the CPU callbacks](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_m88k.c:412).
+
+With reliable observation, the **source-predicted** results for your original sequence are:
+
+| Implementation | `irq live` | `c040 noassert` | Pair |
+|---|---|---|---|
+| Shipped repair | Interrupt | No interrupt | Pass |
+| Assignment deleted | Interrupt | Interrupt | Fail |
+| Assignment replaced by `return` | Interrupt | No interrupt | **Pass** |
+
+This is the consequential error in §3’s first bullet: the two mutants are not interchangeable. Deleting the assignment permits assertion; returning preserves the incoming line state.
+
+**Q1: The positive control’s hardware setup checks out in this tree**, provided the IER value has at least one of its bottom two bits set.
+
+- **PSR:** `0x80000000` retains supervisor mode, clears IND and SFRZ, and preserves this CPU’s big-endian setting. The asynchronous dispatch condition is `irq_asserted && !(PSR & IND)`, outside single-stepping. I also checked the supplied instruction word against the decoder: it selects `stcr r5,cr1`. See [dispatch](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c:204) and [PSR handling](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_m88k.c:522).
+- **VBR:** Zero is correct for this launch. The stronger reason is that [MVME PROM initialization explicitly sets it to zero](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/promemul/mvmeprom.c:59), rather than an assumed hardware reset value.
+- **Entry:** Interrupt is implemented as vector 1, and exception entry sets PC to `VBR + 8 * vector`. Thus `0x8` is correct. [Exception handling](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_m88k.c:703).
+- **Source and priority:** SCCTX receives `0x13`; a qualifying IER write synchronously asserts SCC TX, setting SCCTX’s INT bit and making it `0x33`. Recalculation selects IPL 3. MASK starts at zero, so the comparison succeeds. GENCTL `0x02` then permits CPU assertion. [clmpcc access](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_clmpcc.c:183), [PCC2 callback](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_pcc2.c:398), [priority calculation](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_pcc2.c:303).
+
+**The other faulty premise is the interpretation of `session()` support.** Its tuple mechanism exists, but `rd()` tests `until in buf` against the **entire accumulated transcript**. An ordinary `GXemul>` token already exists before `continue`. I exercised the extracted reader in memory: with only an earlier prompt buffered, it returned `True` with **zero reads**. [Reader implementation](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/pcc2_c040_probe.py:109).
+
+A first-occurrence breakpoint-hit token can avoid that particular problem. A generic prompt cannot establish breakpoint attribution even when fresh: this emulator also enters the debugger when all machines stop. [Stop handling](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/core/emul.c:1052).
+
+Furthermore, **`how == "no-breakpoint"` establishes a missing token, not successful guest execution without delivery**. The runner deliberately preserves that status through cleanup, including forced termination and unreaped outcomes. A C040-specific hang or unexpected guest halt can therefore satisfy a timeout-only negative oracle. [Status handling](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/pcc2_c040_probe.py:151).
+
+The revised pair should work as follows:
+
+1. Use a fresh machine for each row and perform setup while stepping.
+2. After establishing the pending SCC TX request, write MIEN-only GENCTL **in both rows**. This establishes the asserted CPU line before the operation under test.
+3. Perform the final GENCTL write: MIEN-only for the control, MIEN|C040 for the defect. Avoid rewriting SCCTX after creating the request: its write arm clears INT.
+4. Continue into a finite guest execution path with a separate normal-completion breakpoint. The control must stop at the interrupt entry; the defect must reach normal completion without hitting the interrupt entry.
+5. Attribute stops using fresh breakpoint evidence and PC. Treat timeout, unexpected stop, or death as failure.
+
+For the two named mutants, the line is already asserted before `continue`; the dispatch check precedes ordinary guest instruction execution. The completion breakpoint therefore supplies affirmative evidence for the negative case.
+
+**Q2: Several classes still escape delivery-only coverage.**
+
+- C040-specific suppression that corrupts other state: disabling CPU interrupts, changing MASK or MIEN, destroying pending state, or breaking IPL/vector bookkeeping. Add state observations where those invariants belong to the repair contract.
+- Suppression that remains stuck after C040 clears. A recovery observation tests this.
+- Suppression that works only for the tested source, priority, or first invocation. These two rows do not establish other cases.
+
+But suppressing through another implementation route is **not inherently incorrect**. A behaviorally equivalent implementation should pass. The defect is violated behavior or collateral state changes, not failure to use the local variable named `assert`.
+
+Your other expected escape—both rows failing to deliver—is **not a green pair under the stated assertions**. The required outcomes are `(interrupt, no interrupt)`; `(no interrupt, no interrupt)` fails the positive control. It becomes an escape only if the grader omits or neutralizes that control failure.
+
+The remaining §3 premises about direct ICR writes, synchronous clmpcc reachability, the pre-suppression debug message, and single-step dispatch suppression hold for the paths inspected. The revised reasoning must distinguish **pending source state**, **existing CPU line state**, and **evidence of execution**.
+
+This was a source review plus the isolated reader check; I did not build or run emulator mutants. The proposed pair cannot yet discharge the named `return` escape.

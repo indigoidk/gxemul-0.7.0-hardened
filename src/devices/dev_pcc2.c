@@ -129,6 +129,7 @@ enum {
 	PCC2_W_SCSIICR_LEN,
 	PCC2_W_IPL_LEN,		/*  was a #119 function-static: process-global  */
 	PCC2_W_MASK_LEN,	/*  was a #119 function-static: process-global  */
+	PCC2_W_C040,		/*  #512: not a _LEN -- the C040 delivery decline  */
 	PCC2_W_NBITS
 };
 
@@ -268,13 +269,10 @@ static void reassert_interrupts(struct pcc2_data *d)
 {
 	int assert = 0;
 
-	if (d->pcctwo_reg[PCCTWO_GENCTL] & PCC2_C040) {
-		/*  The M68000 interrupt mechanism involves outputting
-		    interrupt level on pins EIPL<2..0>. Not implemented
-		    yet.  */
-		fatal("pcc2: C040 interrupt assertions... TODO\n");
-		exit(1);
-	}
+	/*  #512: the C040 test used to sit HERE and was a fatal()+exit(1), so one
+	    legal guest byte write of 0x04 to GENCTL ended the host.  It now lives
+	    beside the MIEN test at the foot of this function, where declining to
+	    assert does not skip the recalculation below.  */
 
 	/*
 	 *  Recalculate current interrupt level:
@@ -340,6 +338,42 @@ static void reassert_interrupts(struct pcc2_data *d)
 	/*  ... but only allow interrupts if Master Interrupt Enable is on:  */
 	if (!(d->pcctwo_reg[PCCTWO_GENCTL] & PCC2_MIEN))
 		assert = 0;
+
+	/*  #512: ... and not while C040 selects a delivery pin this model does not
+	    have.  This was a fatal()+exit(1) at the TOP of this function, and
+	    reassert_interrupts() is called from ten sites -- the GENCTL write arm
+	    calls it in the SAME access -- so ONE legal guest `st.b' of 0x04 to
+	    GENCTL ended the host, with no driver and no interrupt involved
+	    (witness: regress/pcc2_c040_probe.py).
+
+	    DECLINING TO ASSERT, rather than returning, is what the MIEN test above
+	    already does for the other GENCTL interrupt-control bit.  A `return' AT
+	    THIS SITE would skip only the INTERRUPT_DEASSERT below -- the IPL
+	    recalculation and the cur_int_vec[] updates have already run by here.
+	    (It is a return at the OLD site, above the recalculation, that would skip
+	    all three; an earlier draft of this comment attached that reason to this
+	    placement, which is a wrong reason for a right position, and a wrong
+	    reason gets reused -- `assert = 0' -> `return' at THIS line is a
+	    one-token mutant every shipped row passes.)
+
+	    VMESBCP2 (the MVME187 board manual) settles the shape in two places.
+	    The General Control Register page ($FFF42002) puts C040 at bit 10 of the
+	    word view -- 0x04, matching this fork's header -- and says a set C040
+	    sends the request "via the EIPL* pins at the level that is programmed
+	    ... in the SCSI Interrupt Control Register"; the Interrupt Priority
+	    Level Register page adds that IPL2-IPL0 "always reflect the encoded
+	    request level".  So C040 selects the DELIVERY PIN and not the level,
+	    which is why the recalculation above must stay.  MIEN, by contrast,
+	    disables "both the EIPL* pins and the INT pin" -- so the two tests are
+	    siblings gating one output, not a nest.  */
+	if (d->pcctwo_reg[PCCTWO_GENCTL] & PCC2_C040) {
+		if (!(d->warned & (1u << PCC2_W_C040))) {
+			d->warned |= (1u << PCC2_W_C040);
+			fatal("[ pcc2: C040 (MC68040 EIPL) interrupt delivery not "
+			    "implemented; assertion suppressed  (once) ]\n");
+		}
+		assert = 0;
+	}
 
 	if (assert)
 		INTERRUPT_ASSERT(d->cpu_irq);

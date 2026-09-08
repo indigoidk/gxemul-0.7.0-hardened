@@ -1,3 +1,180 @@
+# `#512` pcc2c040kill: one legal guest byte store ended the host
+
+**THE DEFECT.** `dev_pcc2.c`, `reassert_interrupts()`:
+
+    if (d->pcctwo_reg[PCCTWO_GENCTL] & PCC2_C040) {
+            fatal("pcc2: C040 interrupt assertions... TODO\n");
+            exit(1);
+    }
+
+`PCCTWO_GENCTL` is offset 0x02, `PCC2_C040` is 0x04, and the GENCTL write arm stores `idata`
+UNMASKED and then calls this helper **in the same access**.  So a single guest `st.b` of `0x04` on
+an unmodified `-E mvme88k -e mvme187` terminated the emulator.  No driver, no second access, no
+interrupt.
+
+## WITNESS — rung 3, red before and green after with the SAME script
+
+`regress/pcc2_c040_probe.py`.  Committed build **3/4**, the RED row being the defect; after the fix
+**4/4**.  Artifacts `witness_HEAD_20260907.raw` and `witness_FIX512_20260907.raw`.
+
+    c040 kill    died(exit1) -> alive     THE DEFECT
+    EVIDENCE:    pcc2: C040 interrupt assertions... TODO
+
+The witness carries a same-decode CONTROL (the identical `st.b` to the identical register with a
+benign `0x10`, which must survive) and a SITE-ATTRIBUTION row.  Both were required by the grok seat,
+which **refused the first design**: *"Survival-only, in pcc2_width_probe.py, with no same-decode
+preset and no site-attribution, is not [a witness]."*
+
+## THE FIX — and the site is not where the brief first put it
+
+`reassert_interrupts()` is a void helper called from **ten** sites.  The kill was the FIRST thing in
+it, so the repair is not in the GENCTL write arm.  **The file's own idiom for a GENCTL bit that
+suppresses interrupt assertion sits seventy lines below the kill, in the same function** -- the
+`PCC2_MIEN` test clears `assert` and falls through to the common tail.  The C040 test now sits
+beside it, latched with the house `(once)` marker and a new `PCC2_W_C040` enumerator appended to the
+existing warn-bit enum (appended at the END, so no existing bit renumbers).
+
+**An early `return` at the old site would have been wrong** and four independent readers proposed
+one: it skips `PCCTWO_IPL = 0`, the whole IPL recalculation, the `cur_int_vec[]` updates and the
+`INTERRUPT_ASSERT`/`INTERRUPT_DEASSERT` tail.
+
+## THE PRIMARY SOURCE SETTLED TWO QUESTIONS THE PANEL COULD NOT
+
+The minimax seat held the round conditional on the bit value and named the missing artifact exactly:
+*"One fact needed: an authoritative PCC2 GENCTL bit map."*  **`_scratchpad/vmesbcp2.txt` -- the
+MVME187 board manual -- has been in this project since 2026-09-05, and the carrier says in terms to
+open it for a PCC2/MVME187 round.  I had not.**
+
+    ADR/SIZ  $FFF42002 (8 bits)
+    DIR      15    14  13  12  11    10    9     8
+    NAME     DR0                     C040  MIEN  FAST
+
+Mapping the manual's word-view numbering to the byte (15->7, 10->2, 9->1, 8->0) gives
+DR0/C040/MIEN/FAST = **0x80 / 0x04 / 0x02 / 0x01**, all four matching this fork's header.  So
+OpenBSD's `mvme88k/include/pcctworeg.h`, which says `C040 0x03`, is a buggy overlapping mask
+(`0x03 == FAST|MIEN`) and the fork follows the correct `dev/` header.
+
+**And the same page settles the structure**: a set C040 sends the request *"via the EIPL\* pins **at
+the level that is programmed ... in the SCSI Interrupt Control Register**"*, and the IPL register
+page adds that IPL2-IPL0 *"always reflect the encoded request level"*.  **C040 selects the DELIVERY
+PIN, not the level** -- so the recalculation must stay and only the assertion is suppressed.  MIEN,
+by contrast, disables *"both the EIPL\* pins and the INT pin"*, which is why the two tests are
+siblings gating one output rather than a nest.
+
+## DETECTOR — the floor breach was found, and then CLOSED IN-ROUND
+
+**TABLE 1** (7 rows), scratch clone, `regress/artifacts/pcc2c040kill/killtable_20260907/`:
+
+    BASE                                   7/7
+    M_b_reinstate   the verbatim exit(1)   3/7   floor (b) -- KILLED
+    M_d2_silent     announce deleted       4/7   floor (d) -- KILLED
+    M_d3_nolatch    announce every call    6/7   floor (d) -- KILLED
+    M_d4_collide    latch bit reused       6/7   floor (d) -- KILLED
+    M_d1_noassert   `assert = 0' removed   7/7   *** ESCAPED -- CLEAN SWEEP ***
+
+`assert = 0` IS the repair's effect, so removing it is clause (d)'s canonical "keep the guard, null
+the repair" — **inside** the DEPENDS-ON closure.  The round therefore graded it a FLOOR BREACH
+rather than clause-(e) contract debt, which would have used the contract as an escape hatch.
+
+*** PASS 2 THEN REFUSED THE ROUND'S RESPONSE TO ITS OWN GRADE, AND WAS RIGHT. ***  This block first
+said *"THE ROUND DOES NOT CLAIM A FLOOR-MEETING DETECTOR"* and shipped, filing the repair.  grok:
+*"1 and 2 cannot both stand … 2 is the (e) REMEDY applied to a (d) GRADE.  L2 says replace the
+detector in-round.  Honesty about the breach does not create an exception L2 does not have."*
+
+**TABLE 2** (10 rows), `killtable_20260908/`, after building the repair:
+
+    M_d1_noassert    9/10  `assert = 0' removed                     KILLED
+    M_return         9/10  `assert = 0' -> `return;'                KILLED
+    M_latchinside   10/10  `assert = 0' INSIDE the latch  *** ESCAPED ***
+
+**TABLE 3** (11 rows), after `c040 noassert2`:   M_latchinside 10/11  KILLED
+**TABLE 4** (12 rows), after `c040 recover`:     M_sticky      11/12  KILLED
+**TABLE 5** (13 rows), after `c040 genctl`:      M_mienclobber 12/13  KILLED
+
+The five tables are kept SEPARATE because each names a different instrument.  Merging them would
+name the wrong denominator for most rows and would hide the two escapes that are the whole reason
+tables 3 and 4 exist.  Final detector: SIXTEEN rows — the three per-session liveness readbacks were
+added after table 5 and cost no extra session.
+
+*** THE REPAIR'S OWN PASS 2 REFUSED ITS CLOSURE CLAIM — THE SAME ERROR TWICE IN ONE ROUND. ***  I
+declared the encounter axis closed on two cells.  The C040 block reads TWO device-state lvalues, so
+their product is FOUR, and the empty cell — C040 CLEARED AFTER THE LATCH FIRED — was again filed as
+contract debt.  **Four of six seats refused it**; the fifth defended it only conditionally and named
+its own condition.  `c040 recover` holds that cell and kills `M_sticky`.
+
+**`M_mienclobber` shows why the collateral row was owed:** `irq live` and `c040 noassert` BOTH stay
+green under it — every delivery row passes a fix that suppresses by disabling all interrupts — and
+only the GENCTL readback fails, reading `0x04` instead of `0x06`.  Three seats named that mutant
+independently.
+
+**And the substitute seat found what no other did:** the liveness control existed for ONE session of
+FOUR, so `c040 noassert` reaching completion was consistent with "suppressed correctly" AND with
+"no request was ever pending".  Three SCCTX readbacks close it.
+
+**FOUR ROWS DID IT**, and the two design corrections that made them work came from the panel, not
+from me:
+
+* **`irq pending` / `irq live`** — a guest store to the CLMPCC IER asserts SCC TX synchronously,
+  `pcctwo_interrupt_common` ORs `PCC2_IRQ_INT` into SCCTX, and with C040 CLEAR the interrupt IS
+  delivered (pc = 0x8).  **Without the positive control, "no interrupt" is indistinguishable from
+  "no request was ever created".**
+* **`c040 noassert`** — the same sequence with C040 SET must reach COMPLETION.  **The precondition
+  is what makes it work: both rows write MIEN-only GENCTL FIRST, so the line is ALREADY ASSERTED.**
+  My first design wrote C040 into a reset GENCTL, leaving the line deasserted — and `return`, which
+  merely preserves the incoming line state, would have PASSED.  *Found by a design review before a
+  line was written.*
+* **`c040 noassert2`** — the SECOND C040 encounter.  `assert = 0` moved inside the latch suppresses
+  correctly the first time and skips it afterwards, so a single-encounter row scores 10/10 against
+  it.  **Closing the ENCOUNTER AXIS beat adding a row per mutant** — the class-closure rule.
+
+*** A CORRECTION TO THIS BLOCK'S OWN EARLIER TEXT. ***  It said the escape was *"not repairable in
+this probe shape, verified two ways"*: that a guest cannot set an ICR INT bit, and that the bit's
+only producer is a host-timer callback `step` stops.  **The first is true; the SECOND IS FALSE.**  A
+guest store to a DIFFERENT DEVICE — the CLMPCC IER — sets it through the interrupt callback,
+synchronously.  *I had checked which stores write the field and concluded no store can cause it to
+change; those are different questions.*  The repair needed no new probe shape: `session()`'s
+`(cmd, wait, until)` form already existed.
+
+**THE ORACLE IS AFFIRMATIVE, NOT A TIMEOUT.**  Both outcomes stop at a breakpoint and the
+discriminator is WHICH PC.  The two obvious oracles are both unusable and both were tried: the
+`debug("[ pcc2: IPL … => %s ]")` line executes BEFORE the MIEN and C040 suppressions, so it is green
+under the mutant it would be chosen to catch; and `("continue", grace, "GXemul>")` returns True with
+ZERO READS, because `rd()` matches `until` against the whole accumulated buffer, which already holds
+a prompt from the boot drain.
+
+**RESIDUAL, disclosed under clause (e):** these rows establish delivery under one source, one
+priority and two encounters.  They do not cover suppression that corrupts MASK/MIEN/pending state,
+suppression that stays stuck after C040 clears, or other sources and priorities.  Note also that
+suppression by a *different implementation route* is not a defect — the contract is behaviour, not
+the use of a particular local variable.
+
+## PASS 1 — six seats, unanimous IMPLEMENT-WITH-REVISIONS, and both revisions were real
+
+Panel `_scratchpad/panel_20260907_233310/`.  **agy DELIBERATELY NOT FIRED** (reserved for
+measurement); **opus5 and fable5 DELIBERATELY NOT FIRED** (reserved for the 2026-09-09
+adjudication).  The kimi CLI is 403-walled and its seat was COVERED by the `kimi-k3:cloud`
+substitute -- packet-fed, so recorded as attack reasoning and not a repo-fact reading.
+
+* **Four seats independently caught that the proposal never STATED the deletion of the old block.**
+  kimi: *"an insertion-only patch is a silent no-op."*  The comment said "used to be", which implies
+  the removal without stating it.  *When four independent readers make the same inference, the brief
+  is the defect.*
+* **grok caught that the sketch would not compile** -- `PCC2_W_C040` was not in the enum.
+* **deepseek supplied the once-only row** -- *"the once-only check is essential; presence alone is
+  not enough"* -- which `M_d3` confirms: without it, an announce-every-call mutant is invisible.
+
+## TWO APPARATUS ERRORS OF MINE, both caught by measurement rather than by review
+
+* `c040 predirty` reddened on a CORRECT fix.  The pre-dirty was a WORD store to offset 0x02, which
+  raises `exception MISALIGNED_ACCESS` before reaching the device -- the row was mis-cut, not the
+  fix.  `ST_H` at an even offset is aligned, reaches the handler and trips the width decline.
+* An earlier draft of the probe's contract claimed the assert-decision channel was ABSENT at default
+  verbosity.  **It is present** -- `debug()` prints while single-stepping.  The "0 occurrences" came
+  from grepping the probe's own STDOUT ARTIFACT instead of the captured pty text, which is this
+  project's recurring wrong-buffer error and produced a confident wrong REASON for a conclusion that
+  happened to be right.
+
+
 # `#511` lcashiftub: `0x800 << dev` overflows a signed int on the last iteration
 
 **THE DEFECT.** `dev_lca.c`, in `DEVICE_ACCESS(lca_pci_conf)`'s device-scan loop:

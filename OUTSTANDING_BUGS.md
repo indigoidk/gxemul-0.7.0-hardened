@@ -17142,3 +17142,394 @@ evidence that a real driver does it; what it does NOT do is not evidence that no
 the fork's models are not obliged to match this driver -- they are obliged to match the HARDWARE, of
 which this is a well-informed second-hand reading.  *Cite it as "the OpenBSD 2.2 driver does X", never
 as "the hardware does X".*
+
+
+### `armbfiwidth` (med) -- filed 2026-09-07
+
+cpu_arm_instr.c X(bfi): `(1 << width) - 1' where width = msb - lsb + 1 ranges [-30,32] -- 468 of 1024 encodable (msb,lsb) pairs reach an undefined shift on a 32-bit-int host (a DIFFERENT 496 have architecturally invalid field ordering).  #510 fixed the SAME expression at UBFX and SBFX and left this third site fifty lines below, and its `== 32' form covers none of the negative widths
+
+FILED 2026-09-07.  **`#510` fixed TWO of THREE sites of one idiom and left the third, whose undefined
+domain is WIDER than either it repaired.**  Found by reading an UNREAD codex answer
+(`regress/artifacts/queueunrated/codex_bitsbytes_20260907.txt`) that had been sitting on disk,
+cited nowhere.  Every element below was VERIFIED by opening the file, not taken from the seat.
+
+*** THE DEFECT. ***  `src/cpus/cpu_arm_instr.c`, `X(bfi)` (Bit-Field Insert):
+
+    int lsb = (uint8_t)ic->arg[2];
+    int msb = ic->arg[2] >> 16;
+    int width = msb - lsb + 1;
+    x <<= lsb;
+    uint32_t mask = (1 << width) - 1;        <-- UNDEFINED over most of its domain
+
+**THE DECODE GIVES msb AND lsb INDEPENDENTLY, each 0..31** (verified at the `bfi` arm of the
+decoder, `(iword & 0x0fe00070) == 0x07c00010`):
+
+    int lsb = (iword >>  7) & 31;
+    int msb = (iword >> 16) & 31;
+    ic->arg[2] = (msb << 16) + lsb;
+
+so **`width` ranges over [-30, 32]** and `1 << width` is undefined three separate ways:
+
+    width <= 0    negative shift count                       C99 6.5.7p3
+    width == 32   count >= width of the promoted type        C99 6.5.7p3
+    width == 31   1 is `int'; 2^31 is not representable       C99 6.5.7p4 (signed overflow)
+
+*** THE DENOMINATOR, and it is nearly half. ***  Of the **1024** encodable (msb, lsb) pairs:
+
+    496   nonpositive width  (lsb >= msb + 1)   -- of which 465 are strictly negative
+      1   width == 32        (msb=31, lsb=0)
+      2   width == 31        (msb=lsb+30)
+    ---
+    499   of 1024 pairs reach an undefined shift
+
+**That arithmetic was INDEPENDENTLY DERIVED TWICE and the first attempt was mine and wrong.**  A
+codex answer on a different brief (`codex_shiftub_20260907.txt`) corrected it: *"`msb - lsb + 1 < 0`
+requires `lsb >= msb + 2`, giving 465 negative widths.  Another 31 pairs produce zero; 496 is the
+number of nonpositive widths."*  Recomputed here from the decode: pairs with `lsb >= msb+1` sum to
+31+30+...+1 = **496**, and `lsb >= msb+2` sums to 30+29+...+1 = **465**.  *The seat was right.*
+
+*** WHY THIS IS A SIBLING MISS AND NOT A NEW CLASS. ***  `#510` repaired the identical expression at
+the UBFX and SBFX handlers, which now read:
+
+    uint32_t mask = (width == 32) ? 0xffffffffU : ((1U << width) - 1);
+
+**`X(bfi)` sits about fifty lines below the second of those, in the same file, and was not touched.**
+The carrier's mechanical rule 2 -- *when correcting a claim, grep for its siblings before calling it
+fixed* -- is exactly the rule that was missed, and it is recorded there with a prior instance where
+an "un-fakeable" claim was corrected in one place and survived in three.  **The BFX round's own
+detector cannot see this**: `regress/arm_bfx_width_probe.py` plants UBFX/SBFX words only.
+
+**AND THE BFX FIX DOES NOT TRANSFER UNCHANGED.**  BFX decodes `width = 1 + ((iword >> 16) & 31)`, so
+its domain is {1..32} and a `width == 32` special case is sufficient.  **BFI's width can be zero or
+negative, which no `== 32` test catches.**  A repair copied from the sibling would close one third of
+this site's undefined domain and look right.
+
+*** WHAT IS NOT ESTABLISHED, and it is the next step rather than a caveat. ***  **No witness has been
+built and no host misbehaviour has been measured.**  UB is not by itself a defect this project ships
+a fix for without a measurement -- `#510` shipped on a UBSAN differential (1 diagnostic pre-fix, 0
+post-fix) plus a source pin, and this row owes the same.  The vehicle is cheap and already exists:
+`arm_bfx_width_probe.py` plants instruction words and executes them on an unmodified machine, so the
+witness is a planted `bfi` with `msb < lsb` under a UBSAN build.
+
+**ARM architecturally leaves `msb < lsb` UNPREDICTABLE for BFI**, so a conforming guest does not emit
+it.  *That is an argument about which guests reach it, not about whether the emulator may invoke host
+UB when one does* -- which is the same argument `#510` made and shipped on.
+
+**PROPOSED FIX (not adjudicated -- no panel has seen this):**
+
+    uint32_t mask = (width <= 0) ? 0 :
+        (width == 32) ? 0xffffffffU : ((1U << width) - 1);
+
+with `mask = 0` for the nonpositive case leaving `rd` unchanged, which is a defensible reading of
+UNPREDICTABLE and the only one that inserts no bits.  **The `x <<= lsb` on the line above is SAFE**
+(`lsb <= 31` by construction) and must not be "fixed" alongside it.
+
+*** CORRECTED 2026-09-08 BY THE codex SEAT, AND THE ERROR WAS MINE.  Re-verified by brute force
+before this edit. ***
+
+**499 WAS WRONG.  THE TRUE FIGURE IS 468, AND I HAD CONFLATED TWO DIFFERENT QUANTITIES.**
+
+    width < 0     465   UNDEFINED -- negative shift count
+    width == 0     31   *** DEFINED.  `(1 << 0) - 1' is 0.  A shift count of ZERO is legal. ***
+    width 1..30   525   defined
+    width == 31     2   UNDEFINED -- signed left-shift result, 6.5.7p4
+    width == 32     1   UNDEFINED -- count >= width, 6.5.7p3
+    ----
+                  468   pairs reaching UNDEFINED BEHAVIOUR
+                  496   pairs with ARCHITECTURALLY INVALID field ordering (msb < lsb)
+
+**Those are different sets and I summed the wrong one.**  Every nonpositive width is an invalid
+BFI encoding, but only the strictly NEGATIVE ones are undefined C.  *Three derivations agreed on 496
+earlier -- and 496 was the right answer to a question I was not asking.*
+
+**FOUR MORE CORRECTIONS FROM THE SAME ANSWER:**
+
+* **P4 was partly wrong.**  `ddi0100i.txt` DOES contain zero `BFI`/`BFC` occurrences, but **its own
+  architecture list includes ARMv6** (verified: *"ARMv4, ARMv4T, ARMv5T, (ARMv5TExP), ARMv5TE,
+  ARMv5TEJ, and ARMv6"*), so calling it "the ARMv5 manual" is inaccurate.  BFI/BFC arrive with
+  ARMv6**T2**, which is why they are absent.  And *"the broader claim that no other local reference
+  exists remains unestablished."*
+* **P5 CONFIRMED from the architecture, externally.**  ARM's BFI A1 description makes
+  `msbit < lsbit` UNPREDICTABLE, and its constrained behaviour permits **an undefined instruction, a
+  NOP, or an unknown destination value** -- so `mask = 0` is architecturally PERMITTED, not merely
+  defensible.  **That settles Q1.**
+* **P6 needs a host qualification, and it improves the FIX.**  `1U` is `unsigned int`, which C99
+  permits to be 16 bits, so `(1U << width)` is not universally portable either.  codex recommends
+  **`1UL` / `0xffffffffUL`**.  *** NOTE THIS MAKES `#510`'s SHIPPED REPAIR SUBOPTIMAL TOO -- it uses
+  `1U` -- though harmless on every host this project builds on. ***
+* **An early `return` IS sound here**, unlike the case the sketch rule was minted from: codex checked
+  the macros -- `X` declares a void function and `Y` generates separate conditional wrappers -- so
+  **there is no handler epilogue for a return to skip.**  *The sketch rule says to check the
+  enclosing control flow, not that early returns are always wrong; here the check comes back clean.*
+
+*** REACHABILITY IS ESTABLISHED: the BFI decoder branch has NO CPU-model or architecture-version
+gate ***, and `machine_test.c` registers `testarm` defaulting to SA1110 -- so the site is reachable
+in the simulator even though that CPU model predates the instruction.
+
+**THE WITNESS DESIGN, from Q2, and it kills my one-word plan:**
+* negative and excessive counts produce **DIFFERENT UBSan messages** (`shift exponent -1 is
+  negative` vs `shift exponent 32 is too large for 32-bit type 'int'`), and width 31 is a *signed
+  result* failure that plain shift-exponent checking MISSES;
+* **one instruction encoding cannot exercise both count failures** -- the immediate fields fix
+  `width`, and no register contents change it.  So the probe needs SEPARATE planted words per class.
+* **Two apparatus traps, and the first is the error I made twice this session:** *"`session()`
+  consumes child output through its PTY, while callers print parsed results.  Grepping the Python
+  process's stderr can miss the sanitizer messages completely."*  And: UBSan suppresses repeat
+  reports at an already-reported location, **so diagnostic totals are not execution counts** --
+  require the intended site and diagnostic CLASS, not a total.
+
+*Still outstanding before this can land, in codex's own words: "a fresh BFI sanitizer differential
+and integration results from binaries tied to this exact tree.  I have not measured those or
+established any host-visible wrong BFI result."*
+
+
+### `armbfcdecode` (low) -- filed 2026-09-08
+
+cpu_arm_instr.c: the bfi decoder accepts source field 15 and passes r[15] to X(bfi), but the architecture assigns that encoding to BFC (Bit Field Clear) -- so BFC is decoded as `BFI with Rn = PC'
+
+FILED 2026-09-08 from the codex `armbfiwidth` design answer.  **BFC is BFI with Rn = 15**, and the architecture defines it as clearing the field rather than inserting from a register.  This fork's decoder does not distinguish them, so a BFC would insert bits taken from `r[15]` -- the PC -- instead of clearing.
+
+**NOT VERIFIED HERE.**  It comes from one seat's source reading, and neither the decoder arm's exact guard nor the architectural claim has been re-derived by me. *The round-scope rule keeps it separate from `armbfiwidth`: same file and adjacent lines, but a different defect with a different fix and a different oracle, so it is a candidate ROUND rather than a rider.*
+
+
+### `codexcontentfilter` (med) -- filed 2026-09-08
+
+a codex job returns ZERO BYTES and exit 1 when the provider's CONTENT FILTER refuses the brief -- and the refusal is NON-DETERMINISTIC: the SAME brief, byte-for-byte, was refused then answered.  Re-fire once, exactly like a walled seat; the 'benign rewording' remedy is NOT established
+
+FILED 2026-09-08.  **A SEAT-FAILURE CLASS THIS PROJECT HAS NOT RECORDED FOR THIS SEAT: the codex CLI
+returned NOTHING because its provider's CONTENT FILTER refused the brief.**
+
+*** THE OBSERVATION. ***  Two codex jobs, same seat, same model, same effort, ~20 minutes apart:
+
+    pcc2c040kill FIXDESIGN     -> 296,312 bytes, a full substantive review
+    armbfiwidth  FIXDESIGN     -> exit 1, `.txt' ZERO BYTES, and in the `.err':
+
+        ERROR: This content was flagged for possible cybersecurity risk.  If this seems
+        wrong, try rephrasing your request.  To get authorized for security work, join
+        the Trusted Access for Cyber program: <url>
+
+(the message appears TWICE, i.e. it retried internally and was refused again).
+
+*** IT IS NONE OF THE RECORDED CLASSES. ***  No quota or rate text, so the WALL rule passes it.
+Nothing echoed, so the echo-only rule passes it.  The transport is fine -- the same binary answered
+minutes earlier and again after rewording -- so neither the REFUSED-CONNECTION nor the
+SHARED-TRANSPORT class applies.  `response` is not empty-behind-a-thinking-burn; there is no
+response object at all.  And it is not the ALTERNATE-TRANSPORT case, because the seat is reachable:
+**it is the BRIEF that is refused, not the seat.**
+
+> *** THE DIAGNOSTIC IS THE `.err`, AND EVERY OTHER SIGNAL MISLEADS. ***  Zero bytes plus a nonzero
+> exit reads as a launcher bug.  Worse, this carrier's agy rule says in terms that **a zero-byte
+> `.out` is the NORMAL mid-run state** for a non-streaming seat -- so a reader applying that rule to
+> this observation concludes the job is still running.  `panel.sh` writes an `.err` per seat and
+> THIS is what it is for.  *Second time in one session that reading the `.err` rather than the size
+> or the exit code was decisive.*
+
+*** THE REMEDY ALREADY EXISTS IN THE CARRIER AND WAS SCOPED TO THE WRONG SEATS. ***  The standing
+rule is recorded for the Anthropic seats only -- *"offensive-security-worded briefs get
+flagged/refused; write device-bounds rounds as ordinary bounds-correctness review (keep the
+adversarial instruction, aimed at the engineering claim)."*  **It applies to codex too.**
+
+**WHAT THE TWO BRIEFS DIFFER BY**, measured by grepping both:
+
+    term                v1 (refused)   v2 (accepted-for-retry)
+    "guest-drivable"          1                 0
+    "host UB"                 1                 0
+
+Both briefs inline the SAME 32 source lines and ask the SAME three questions.  The v2 rewrite keeps
+every technical claim and the *do not ratify* instruction, and reframes the subject as **C99
+conformance and portability** -- which is what it honestly is: a shift whose right operand can be
+negative or >= the promoted type's width.
+
+*** WHY IT MATTERS BEYOND ONE JOB, and it is the seat-ledger's core worry: a refused brief is
+INVISIBLE AS A REFUSAL. ***  It produces no answer, and if the round does not check the `.err` it
+records a seat that never spoke.  **A seat that was refused is not a seat that disagreed and not a
+seat that was walled** -- and this project's whole seat discipline exists to keep those three apart.
+
+**NOT ESTABLISHED:** which term actually tripped the filter.  The two removed phrases are the
+plausible candidates and the correlation is from ONE pair of briefs; the `.err` also shows the seat
+had been reading around the filesystem (it lists a `binutils/gas/testsuite` path), so a flag on
+CONTENT IT READ rather than on the prompt is not excluded.  *One pair is a hypothesis, not a
+finding.*
+
+**PROPOSED, NOT DONE:** widen the carrier's benign-framing rule from the Anthropic seats to ALL
+seats, and add the `.err` check to the seat-failure list.  Both are carrier edits, so they are filed
+for the 2026-09-09 adjudication rather than made unilaterally.
+
+*** THE REMEDY IS MEASURED, NOT PROPOSED.  Re-fired 2026-09-08 with the benign rewrite: CODEX EXIT
+= 0, 7,308 bytes, a full substantive review that verified ALL 1,024 masks against an independent
+oracle and CORRECTED THE ROUND'S ARITHMETIC (499 -> 468). ***
+
+Same seat, same model, same effort, same 32 inlined source lines, same three questions, same *do not
+ratify* instruction.  **The only differences were the two removed phrases and the reframing of the
+subject as C99 conformance.**  So the pair is now a controlled experiment in both directions:
+refused with them, answered without them.
+
+**AND THE RECOVERED ANSWER WAS THE MOST VALUABLE OF THE DAY** -- it corrected my count, corrected P4
+and P6, settled Q1 from the architecture, and raised a separate defect (`armbfcdecode`).  *A refused
+brief does not cost a formality; it cost this round its best reviewer for several hours.*
+
+**STILL NOT ESTABLISHED:** which term tripped the filter.  Two phrases changed together, so the
+experiment does not isolate one.
+
+*** A FOOTNOTE ABOUT HOW THIS VERY NOTE WAS DAMAGED, because the class is one this project has
+already recorded and I reproduced it anyway. ***
+
+The paragraph above was first written through `python -c "..."` from bash.  **Bash performed COMMAND
+SUBSTITUTION on the backticks inside the double-quoted string**, tried to run `armbfcdecode` as a
+command, printed `command not found` -- and **the write still succeeded**, leaving an empty pair of
+parentheses where the row id should have been.
+
+The carrier records this exact failure (backticks inside `python -c` eating `exit(1)` and `default:`
+from a ledger note, with bash erring and the write completing).  **The standing remedy is that prose
+destined for a record goes in a SCRIPT FILE, never through `python -c`** -- and every other record
+this session obeyed it.  This one did not, because it felt like a two-line edit.
+
+*The damage was silent in the artifact and loud in the terminal, which is the wrong way round: a
+reader of the ledger would have seen only a sentence with a hole in it.*
+
+*** THE REMEDY CLAIM IS REFUTED BY MY OWN CONTROL.  THE FILTER IS NON-DETERMINISTIC.  2026-09-08. ***
+
+I recorded above that the benign rewrite was *"the remedy MEASURED, not proposed"*, on a pair of
+briefs that differed in two phrases.  **Then a third brief (`sgirekills`) was refused while
+containing NEITHER phrase, so I ran the control I should have run first:**
+
+    md5 21c440bc6746d1e6bb6d52f703f847bb   ROUNDDESIGN_brief.md
+      firing 1   CODEX EXIT = 1    .txt 0 bytes        REFUSED
+      firing 2   CODEX EXIT = 0    .txt 6,868 bytes    ANSWERED, substantively
+
+**IDENTICAL INPUT.  BYTE-FOR-BYTE.  OPPOSITE OUTCOMES.**
+
+> **SO THE BENIGN-REWRITE "REMEDY" IS UNESTABLISHED.**  The v2 BFI brief succeeded where v1 failed,
+> and that is now equally explained by *it was a second firing*.  **A rewrite and a retry were
+> confounded in every observation I had, and I reported the rewrite as the cause.**
+
+*** THE OPERATIONAL RULE, and this project already had it for a different failure: RE-FIRE A REFUSED
+BRIEF ONCE BEFORE CHANGING ANYTHING. ***  The carrier's wall rule says *a wall is a MOMENT, not a
+state -- do not reason about why a seat might be back, TEST IT*.  A content refusal behaves the same
+way, and the test costs one invocation.
+
+**WHAT SURVIVES, and it is the part that matters operationally:**
+
+* the DETECTION is unchanged and still correct -- **zero-byte `.txt` + nonzero exit + the message in
+  the `.err`**, invisible to any size or exit-status check that does not read the `.err`;
+* a refused brief is still **invisible as a refusal** and still gets silently recorded as a seat that
+  never spoke, which is the seat-ledger's core worry;
+* the four vocabulary counts stand as DATA and refute both of my hypotheses on their own: the
+  `pcc2c040kill` brief carries the same "kill"/"ends the host" register and was ANSWERED, and the
+  refused BFI v1 carried neither phrase.
+
+**WHAT DOES NOT SURVIVE:** *"the only differences were the two removed phrases"* as a causal claim,
+and the framing of the pair as *"a controlled experiment in both directions"*.  **It was not
+controlled: the retry variable was never held fixed.**
+
+*This is the third wrong record I have written about this one seat failure in a day -- first "the
+trigger is the two phrases", then "the trigger is the kill vocabulary", now "there may be no trigger
+at all".  Each was minted from a single new observation without a control, which is exactly the
+freshly-minted-exemplar failure this project keeps recording.  The control cost one invocation and
+should have been the FIRST thing run.*
+
+
+### `guardfailsopen` (med) -- filed 2026-09-08
+
+the brief-launch guard FAILS OPEN on a missing file: `[ "$N" -lt 3 ]` with an empty N is a bash syntax ERROR, which `if` grades as FALSE, so the refusal branch is unreachable in exactly the case it exists for -- and the stale panel dir was pass 1's, so pass 1 could have been graded as pass 2
+
+FILED 2026-09-08.  **A guard written SPECIFICALLY to stop a panel launching on an empty brief launched
+a panel on a brief that did not exist** -- and it is a NEW MECHANISM for the check-that-cannot-fail
+class, not another instance of the recorded one.
+
+*** THE CASCADE, in order. ***
+
+1.  The diff was written to git-bash's `/tmp/d512.diff` and READ by **Windows** python
+    (`C:/Users/.../Python312/python.exe`), which resolves a DIFFERENT `/tmp`.  *The carrier already
+    records `git-bash /tmp != WSL /tmp`; this is the same trap with a third interpreter.*
+2.  The brief generator raised `FileNotFoundError`, so **no brief was written**.
+3.  *** THE GUARD FAILED OPEN. ***  It read:
+
+        N=$(grep -cE '^@@' "$BRIEF")
+        if [ "$N" -lt 3 ]; then echo "REFUSING TO LAUNCH"; exit 1; fi
+        echo "ok -- launching"
+
+    On a MISSING file `grep -c` prints nothing, so `N` is the EMPTY STRING.  `[ "" -lt 3 ]` is not
+    false -- it is a **bash syntax error**, `integer expression expected`, which exits NON-ZERO, and
+    an `if` reads a non-zero exit as FALSE.  **So the else-branch ran and printed "ok -- launching".**
+4.  `panel.sh` printed `no such brief` and launched **nothing** -- and exited 0, so the background
+    task reported SUCCESS.
+
+*** WHY IT IS WORSE THAN A WASTED RUN: the newest panel dir was still PASS 1's. ***  Had the seat
+files been read without checking the directory timestamp, **pass 1's answers would have been graded
+as pass 2** -- a whole review stage discharged by the stage before it.  That is the carrier's own
+warning about a relative `./panel.sh` launch ("a SILENT zero-seat failure that looks like a completed
+run, so you review the previous round's stale seat files by mistake") reached by a different road.
+
+> *** THE CLASS EXTENSION, and it contradicts something the carrier asserts. ***  The
+> check-that-cannot-fail section concludes that in this project such a check *"is almost never a
+> badly-written assertion -- it is a claim that some cheap observable stands in for an expensive
+> one"*, and reports a hunt over 251 gate rows that found ZERO unguarded self-comparisons.
+>
+> **This is a badly-written assertion, and it is in a guard whose entire purpose was to prevent the
+> failure it permitted.**  The mechanism is specific to shell: **a comparison against an EMPTY
+> variable is an ERROR, not a FALSE, and `if` grades an error as false -- so the guard's refusal
+> branch is unreachable in exactly the case it exists for.**
+>
+> The generalisation: **test EXISTENCE before you test a PROPERTY.**  A property test on a
+> non-existent object cannot fail closed, because there is nothing to measure.
+
+**THE FIXED FORM, used on the relaunch:**
+
+    [ -s "$B" ] || { echo "REFUSING: brief missing or empty"; exit 1; }
+    N=$(grep -cE '^@@' "$B" 2>/dev/null)
+    [ "${N:-0}" -ge 3 ] || { echo "REFUSING: only ${N:-0} hunk markers"; exit 1; }
+    grep -q "<a token from the diff body>" "$B" || { echo "REFUSING: diff body absent"; exit 1; }
+
+Three properties, and each is load-bearing: `-s` catches missing AND empty; `${N:-0}` makes the
+comparison well-formed whatever grep did; and the CONTENT grep catches a brief that has hunk markers
+but lost the body.
+
+**NOT MECHANISED, deliberately.**  This guard is written ad hoc at each launch rather than living in
+`panel.sh`, and moving it there is a change to the script every panel runs -- which owes two negative
+controls (prove it refuses a missing brief, prove it does NOT refuse a good one).  **That is its own
+harness round.**  Note `panel.sh` ALREADY refuses correctly (`no such brief`); what is missing is
+that the CALLER believes it launched.
+
+*Provenance: my own guard, written earlier in the same session, in the same shell block, on the
+belief that it made the launch safe.  It had worked on three previous briefs -- because they
+existed.*
+
+*** THE FIXED GUARD CAUGHT A REAL DEFECT ON ITS FIRST USE, AND IT WAS THE **CONTENT** CHECK THAT
+FIRED -- not the existence test and not the count.  2026-09-08. ***
+
+Building the `sgirekills` round-design brief, I inlined the arm cascade as lines 420-545 and the
+guard refused:
+
+    REFUSING: cascade truncated before LINEAR_B
+
+**The range was wrong.**  `LINEAR_A`'s arm alone runs to line 585 and `LINEAR_B` starts at 588, so
+the true cascade is 420-660 -- **241 lines, not 126.**  The brief would have said *"the FULL arm
+cascade, VERBATIM"* while omitting the sixth of the six windows it was about, and the seat would
+have answered a question about five arms believing it had seen six.
+
+> **THE COUNT CHECK WOULD HAVE PASSED IT.**  126 inlined lines is a perfectly healthy-looking
+> number; the file existed and was 11 KB.  **Only asking "is the thing I claim to have inlined
+> actually in here?" could fail.**
+>
+> That is the denominator rule's own limit, restated: a denominator proves the apparatus SELECTED
+> something, never that it selected the RIGHT something.  A content assertion is the only check that
+> distinguishes them.
+
+**So the three-part guard has now earned each of its parts by a different failure:** `-s` was minted
+by the missing-file cascade that filed this row; `${N:-0}` by the empty-variable comparison; and the
+CONTENT grep by this truncation, which the other two pass cleanly.
+
+*Recorded because the guard was written defensively an hour earlier with no expectation of firing,
+and the thing it caught was mine.*
+
+
+### `pcc2genctlc040alias` (low) -- filed 2026-09-08
+
+mvme_pcctworeg.h defines C040 TWICE with DIFFERENT values -- PCC2_C040 = 0x04 (right, and what the model uses) and PCC2_GENCTL_C040 = 0x03 (wrong; 0x03 is FAST|MIEN).  The wrong alias has no consumers today, so it is a loaded trap rather than a live defect
+
+FILED 2026-09-08.  **`#512` verified `PCC2_C040 = 0x04` against the MVME187 board manual and shipped on it.  The header ALSO carries `PCC2_GENCTL_C040 = 0x03` sixty lines down.**  0x03 is `FAST|MIEN` -- two unrelated control bits -- so an edit reaching for the second spelling would test the wrong bits entirely and would look plausible doing it.
+
+**NOT A LIVE DEFECT: a fork-wide grep finds ZERO consumers of the 0x03 alias.** It is upstream residue, inherited from OpenBSD's own `mvme88k/include/pcctworeg.h`, which carries the same wrong value.
+
+*The disposition question -- DELETE the dead alias, or CORRECT it to 0x04 -- is an option-set question and is not settled here.  Deleting is the additions-licence-consistent move (a dead define is not load-bearing); correcting it leaves a second spelling for a future edit to pick.*
