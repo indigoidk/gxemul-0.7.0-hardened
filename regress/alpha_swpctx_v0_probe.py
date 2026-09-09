@@ -55,6 +55,21 @@ and the reason is the bound: the contract is "the OLD context in v0", the plante
 context, and rowing every RHS that happens to equal C for this one pair is the unbounded shape.
 The hole is NAMED so a later escape is "outside the contract" rather than a surprise.
 
+*** THE ANCHOR WAS ALSO CHECKED FOR BEING TOO STRICT -- AND MY FIRST CHECK OF THAT WAS AN
+OVERCLAIM, REFUTED BY A SEAT WITH A MEASUREMENT. ***  I captured ONE live session
+(REGEX_REALSHAPE_20260908.out), found the plain response shape, saw the anchored and loose forms
+return the SAME three responses, and wrote that the anchor "rejects nothing genuine that this
+debugger emits today".
+
+**That was true of ONE ENVIRONMENT and I stated it universally.**  With CLICOLOR set the prompt is
+wrapped in ANSI escapes and the anchor matches NOTHING -- measured at 53 escapes and ZERO parsed
+responses, a CORRECT build scoring 1/5.  The seat's phrasing is the one to keep: the artifact
+establishes the plain response shape; it does not support the accompanying universal claim.
+
+**Closed by passing `-A` at launch**, which removes the dependence rather than widening the
+pattern to chase it.  Whitespace and hex case are widened too, because a parser that fails CLOSED
+on a genuine response is still a defect.
+
 THIS PROBE DOES NOT SCORE a0's VALUE AT ALL.  `a0 obs' scores only that the observation was
 MADE; the value is printed as diagnostic.  Two measured findings forced that: scoring `a0 != C'
 passed a MISSING observation, and it also failed a PERMITTED implementation that copies the
@@ -127,7 +142,14 @@ if not os.path.exists(DUMMY):
 def session(cmds, settle=1.6, spin=2.2):
     pid, fd = pty.fork()
     if pid == 0:
-        os.execv(BIN, [BIN, "-V", "-x", "-E", "alpha", "-e", MACH, "-M", "64",
+        #  *** `-A' IS LOAD-BEARING FOR THE PARSER, AND ITS ABSENCE WAS A MEASURED FALSE
+        #  FAIL. ***  `use_colorized_output()' (core/misc.c) gates on isatty(STDIN) &&
+        #  isatty(STDOUT), and a pty satisfies BOTH -- so with CLICOLOR set the prompt
+        #  arrives wrapped in ANSI escapes and no anchor beginning "^GXemul>" can match.
+        #  MEASURED: CLICOLOR=1 without `-A' gives 53 escapes and ZERO parsed responses,
+        #  so a CORRECT build scores 1/5; with `-A' it is 0 escapes and 5/5.  `-A' sets
+        #  enable_colorized_output = false (core/main.c:317).  Found by a pass-4 seat.
+        os.execv(BIN, [BIN, "-V", "-x", "-A", "-E", "alpha", "-e", MACH, "-M", "64",
                        "0x20000000:" + DUMMY])
         os._exit(127)
     buf = ""
@@ -175,7 +197,11 @@ def session(cmds, settle=1.6, spin=2.2):
 #
 #  Anchoring on the PROMPT and requiring the value to be the whole line rejects all three: a real
 #  response is always `GXemul> print <reg>' followed by a line that is exactly a hex number.
-RESP = r"^GXemul> print +%s *\n *(0x[0-9a-f]+) *$"
+#  Whitespace is [ \t] and hex is case-insensitive: two pass-4 seats named those
+#  independently as over-tight.  Neither occurs in this debugger today, but a parser
+#  that fails CLOSED on a genuine response is still a defect, and widening costs
+#  nothing -- the prompt anchor and the whole-line requirement do the real work.
+RESP = r"^GXemul>[ \t]+print[ \t]+%s[ \t]*\n[ \t]*(0[xX][0-9a-fA-F]+)[ \t]*$"
 
 def responses(t, reg):
     """Every genuine `print <reg>' response, in order.  Anchored, so a trace line or a

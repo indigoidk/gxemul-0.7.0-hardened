@@ -1,0 +1,111 @@
+I'll measure the pass-3 repair against the shipped probe and the attack corpus, not re-assert the comments. First I need the current tree, the regex as extracted, and the three attack transcripts.Prior pass briefs, the shipped probe, and the attack harness are the measurement surface. I'll read those next, then score the regex against the transcripts.I have the probe text; next I’ll extract the shipped regex, score it on the attack corpus, and check how GXemul actually prints register values.`print` collapses to a bare `0x…` line through `PARSE_NUMBER`, so the regex can match that path. Color codes on a pty and the exact prompt bytes are the remaining genuine-shape risk.I'll extract the shipped regex and score it with the real row logic, not just match counts — that's how pass 3's false passes showed up.I’ll run the shipped scorer against an expanded transcript matrix, including the colorized prompt GXemul actually emits when `CLICOLOR` is set.**VERDICT: THE CHAIN CLOSES.** Zero unnamed floor breaches. The pass-3 apparatus false passes are gone on the cells they were measured on; the two named coverage debts are still the two named coverage debts.
+
+---
+
+## Q1. Yes — the chain closes, with this denominator
+
+A bare “5/5 on the attack file” is not the zero. The zero is: **no unnamed clean-sweep of an in-contract mutant, and no remaining apparatus false-pass of the class pass 3 measured.**
+
+**On-disk, same script, three build states**
+
+| build | file | score | reds |
+|---|---|---|---|
+| FIXED | `FIXED_v3_20260908.out` | **5/5** | none |
+| PREFIX (identifier reverted) | `PREFIX_v3_20260908.out` | **4/5** | `v0 ctx` alone (`0xab0000` = S) |
+| correct + clobbers a0 | `CLOBBER_v3_20260908.out` | **5/5** | none (`a0 = 0xdeadbeef`, diagnostic only) |
+
+**Parser, shipped `RESP` extracted not retyped** — `ATTACK_20260908.out` is **5/5**: both genuine shapes parse; the three pass-3 substitutes are rejected.
+
+**Full 5-row scorer** (the attack file only counts matches; pass 3’s false passes were in the *rows*). Walked from the shipped functions against the same transcripts:
+
+| cell | score | what reds |
+|---|---|---|
+| FIXED shape `v0=(C,C) a0=N` | 5/5 | — |
+| PREFIX shape `v0=(C,S) a0=C` | 4/5 | `v0 ctx` |
+| CLOBBER shape `v0=(C,C) a0=0xdeadbeef` | 5/5 | — |
+| permitted copy `v0=(C,C) a0=C` | 5/5 | — (the pass-3 false fail) |
+| missing `print a0` | 4/5 | `a0 obs` (the pass-3 regression; was 5/5 under `a0 != C`) |
+| missing 2nd `print v0` | 3/5 | `v0 pair` + `v0 ctx` |
+| no responses | 1/5 | everything but `live` |
+| session died, values present | 4/5 | `live` |
+| third genuine `print v0` | 3/5 | `v0 pair` + `v0 ctx` (exactly-2 is loud) |
+| `v0 = a0` / return-NEW (`v0=N`) | 4/5 | `v0 ctx` |
+| delete the store (`v0=S`, a0=N) | 4/5 | `v0 ctx` |
+| wrong constant `v0=0` | 4/5 | `v0 ctx` |
+| codex A/B/C (trace / `sprint` / trailing text) | 3/5 each | `v0 pair` + `v0 ctx` — **not** 5/5 |
+
+**Mutant shapes of the one-identifier site** `r[ALPHA_V0] = ctx`:
+
+| shape | result |
+|---|---|
+| revert to `ALPHA_A0` | PREFIX **4/5**, measured |
+| RHS `= a0` (incoming N) | `v0 ctx` red |
+| delete the store | `v0 ctx` red (S) |
+| write v0 after `ctx = a0` (return NEW) | `v0 ctx` red (N) |
+| extra a0 write, any value including C | 5/5, permitted (UNPREDICTABLE) |
+| hardcode `0x01000000` | 5/5, **named debt** |
+| wholesale delete of the load-new-context block | `v0 ctx` red (stale `ctx`; kimi’s correction, source-derived from `ctx = a0` being the first statement in that block) |
+| partial break that spares `ctx = a0` (PCB field loads only) | 5/5, **named debt** |
+
+`(d)` is still empty: this is an unguarded register-index substitution. The three-value oracle `{C, N, S}` is the coverage. Nothing in that set now greens on a broken in-contract edit.
+
+The two 5/5 product escapes that remain are the two the probe already names. They are coverage debt with bounds, not unnamed floor.
+
+---
+
+## Q2. Yes — one genuine shape, fail-closed, not a floor breach
+
+The producer of a successful `print <reg>` is not the dead `PARSE_SETTINGS` arm (`"%s = 0x…"`). `debugger_parse_expression` returns `PARSE_NUMBER` on every success (`TODO: BETTER RETURN VALUE!` in `debugger_expr.c`), so `debugger_cmd_print` always emits a bare `0x%"PRIx64"\n"`. That is why FIXED_v3 can be 5/5 under `^GXemul> print +<reg> *\n *(0x[0-9a-f]+) *$`. Unpadded lowercase hex, `GXemul> ` with a space, CRLF then the session’s `\r` strip, trailing spaces — all still parse.
+
+**The genuine shape it now rejects** is the colorized prompt this debugger actually emits when `CLICOLOR` is set (`main.c` overwrites the file-scope default with `getenv("CLICOLOR") != NULL`; `color_prompt` / `color_normal` then wrap every prompt):
+
+```text
+<ESC>[34;1mGXemul> <ESC>[0mprint v0
+0x1000000
+```
+
+The reset sits **between** `GXemul> ` and `print`. `^GXemul> print` therefore misses. The old unanchored `print\s+v0\s*\n\s*(0x…)` still saw the command. Source-derived from `debugger.c` + `misc.c`, not re-run with `CLICOLOR=1`. The v3 5/5 runs did not have that variable; they cannot settle this cell.
+
+GXemul has no continuation prompt. The prompt string is only ever `GXemul> ` (four `printf`s in `debugger.c`, all the same). Trailing spaces are already allowed. Those three example shapes are not this producer’s.
+
+Fail-closed: a CLICOLOR session would red `v0 pair` / `v0 read` / `a0 obs` on **both** PREFIX and FIXED, so it cannot green a broken build. Safer; still a parser that rejects a real observation. I am not holding the chain open for it and I am not inventing an `-A` pass.
+
+---
+
+## Q3. No in-contract defect coverage was lost
+
+PREFIX now reds on `v0 ctx` alone, measured. That is the defect row, and it is sufficient.
+
+The old `a0 != C` row’s **unique** reds are the observations where `v0 == C` **and** `a0 == C`. That set is:
+
+1. **Correct v0 plus a copy into a0.** Architecturally permitted (UNPREDICTABLE may be derived from accessible state; C is already the required return). This was the false fail that forced the repair. Losing it is the point.
+2. **Hardcode v0 = C, leftover `r[A0] = ctx`.** The old row caught this only as a side-effect of a0 still holding C. It is a member of the already-disclosed unbounded-RHS hole, which greens `v0 ctx` by construction.
+
+Every in-contract product edit the old row caught is still red on `v0 ctx`: revert (v0=S), incoming (v0=N), delete-store (v0=S), never-executed (v0=S, a0=N). Attribution of the shipped defect — “the handler ran and published to the wrong register” — is still **printed** on PREFIX (`a0 = 0x1000000  <- the OLD context…`); it is no longer a scored claim, which is what UNPREDICTABLE requires.
+
+---
+
+## Q4. Yes — against this producer, `v0 pair` is sound
+
+`v0_final` is `allv0[1]` gated on `len == 2`. `v0 ctx` cannot green unless that holds **and** `[1] == C`. A third genuine-shaped match is `3 of 2`, loud. Fewer than two is loud. The three pass-3 substitutes no longer occupy a slot.
+
+`v0_final` is the wrong observation only if the **second genuine-shaped exchange is not call 2’s**. That requires a byte-identical extra `GXemul> print v0\n0x…` plus a missing real response. I walked that crafted transcript: it does 5/5. It is not a regex miss; it is “the parser matches a genuine response.”
+
+This producer does not emit that extra exchange. `GXemul>` is printed only as the debugger prompt. `print v0` is echoed only when that command is typed. The cmds list types it twice, in order, into one `buf`. Cardinality 2 plus positional `[1]` is call 2.
+
+PTY double-echo of the form `GXemul> print v0\nGXemul> print v0\n0x…` does **not** create an extra match: the first pair’s next line is not hex. Two commands still yield two matches, the right ones. A full duplicated exchange would be 4 of 2, fail-closed.
+
+So: satisfied-while-wrong is possible on a synthetic extra genuine exchange. It is not a shape this session produces. Not a floor breach.
+
+---
+
+## Q5. Close it. Do not invent a fifth pass.
+
+The pass-3 repairs hold on the cells they were written for. Disclosed debts (hardcode-C; partial load-block break that spares `ctx = a0`) remain disclosed, with the bounds already on the probe. Q2’s colorized prompt fails closed. Q4’s remaining hole is “a genuine response looks like a genuine response.”
+
+Two comments are now stale and I am **not** treating them as floor:
+
+- The contract line still says the probe catches “any repair that publishes the OLD context into a0.” It does not, once v0 is also C. That is the permitted implementation.
+- The `a0 obs` block still says the shipped defect is “RED here.” PREFIX_v3 measured that row **green**; only `v0 ctx` reds.
+
+Those are wrong records in the direction that overstates coverage. They do not green a mutant. A six-pass chain failed to converge by turning comment drift into work. This is the fourth pass on one identifier. Stop.

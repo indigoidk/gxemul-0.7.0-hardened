@@ -1,0 +1,22 @@
+**VERDICT: PASS with two reservations.** Chain closes on the stated denominator; the regex is probably over-tight on hex case; one diagnostic string is slightly misleading.
+
+---
+
+**Q1. Chain closes — with the denominator.** Stated as 7 cells: FIXED × {3 probe-attack mutants, 2 genuine shapes} = 5 cells at 5/5; then three build states on the shipped attack = FIXED 5/5, PREFIX 4/5 (reds `v0 ctx`, which is the *correct* row to red on a partial repair), correct-but-clobbers-a0 5/5. Six greens + one expected red = **0 floor breaches**. The expected red on PREFIX is what makes the zero meaningful — it proves `v0 ctx` still fires on a broken build. **Cannot independently verify the synthetic harness ran all 5 mutants through all 3 build states** (the packet asserts it; the file `ATTACK_20260908.out` is not shown). One fact that would settle: the contents of `ATTACK_20260908.out` showing per-cell pass/fail.
+
+**Q2. Yes, probably too strict on hex case.** The regex `(0x[0-9a-f]+)` is case-sensitive on both the `0x` prefix and the digits. Two plausible genuine rejections if GXemul's `print` ever emits uppercase:
+
+- **`0X10000000`** (capital X) — `0x` literal fails.
+- **`0x10000000AB`** (capital A-F) — `[0-9a-f]` fails.
+
+Also: `print +%s` requires ASCII space, so **`print\tv0`** with a tab would be rejected. The trailing-space and prompt-spell risks the question names are handled (` *` allows variable spaces; `^GXemul>` is exact). The three measured escapes (trace substitution, `sprint`, value-with-trailer) are correctly blocked. **The case-sensitivity is the live risk**; one fact that would settle: a hex sample from GXemul's actual `print` output.
+
+**Q3. No coverage lost.** The old `a0 != C` row had a structural defect: it scored an *architecturally permitted* state (UNPREDICTABLE a0 = C with v0 correct) as a fail. The correct-but-clobbers-a0 build going from 4/5 to 5/5 is a *fix*, not a coverage loss. The defect that *should* red — v0 not written — reds on `v0 ctx` alone, which is the row that has always caught it. The `a0 == C` reading is preserved as diagnostic text. No product edit that reds the old row now goes uncaught by `v0 ctx`, because the only thing the old row caught that wasn't a false fail was the handler publishing C *and* failing to write v0, which `v0 ctx` catches.
+
+**Q4. `v0 pair` is sound, contingent on one unverified premise.** With the anchor in place, the only way `len(allv0) == 2` and `allv0[1]` is wrong is if (a) the cmds list issues ≠ 2 `print v0` commands, or (b) the emulator emits an extra `^GXemul> print v0` line that isn't a response. The script's design (separate `v0_after1` and `v0_final`) **implies** exactly two prints in cmds — this is REASONED, not READ from the diff (the cmds list is not in the hunk). If a third print is ever added for diagnostics, the row reds loudly, which is the right behavior. **One fact that would settle: the cmds list.**
+
+---
+
+**One non-defect note (Q5 territory).** The `a0 obs` diagnostic says `"<- the OLD context: the handler ran and published to the wrong register"` whenever `a0 == C`. In the correct-but-clobbers-a0 build — which now scores 5/5 — a0 *is* C and the diagnostic fires, telling the reader the handler "published to the wrong register." That's permitted under UNPREDICTABLE. The row doesn't score it (correct), but the diagnostic string reads as an accusation in a green row. Worth softening to `"a0 = C (UNPREDICTABLE; also holds the OLD context)"` — not a defect, a wording miss.
+
+**Disclosure-correction audit (REASONED, not checkable).** The claim that a *wholesale* break of the load-new-context block still reds `v0 ctx` because `ctx = a0` is the first statement — this depends on the actual source layout of the handler block, which I cannot read. If the real layout has `ctx = a0` *after* the PCB loads, the corrected disclosure is wrong and the hole is as wide as first stated. **One fact that would settle: the handler's load-new-context block, in source order.**

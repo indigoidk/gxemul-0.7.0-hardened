@@ -17813,3 +17813,26 @@ was not written down.**
 `alpha_swpctx_v0_probe.py` uses `put` for RAM and `call_pal` only. The one violation was my own
 un-shipped attempt, preserved as evidence and classified NOT a detector. **So this is filed as a
 hazard for future probe authors, not as a live defect in anything committed.**
+
+## 2026-09-08 — `probecolorprompt` (MED, filed): 53 of 61 pty probes omit `-A`, and a coloured prompt defeats every anchored parser
+
+`use_colorized_output()` gates colour on `isatty(STDIN) && isatty(STDOUT)` — **a pty satisfies
+both**, so every probe in this tree is the case where colour turns on. With `CLICOLOR` set the
+prompt arrives as `\x1b[34;1mGXemul> \x1b[0m...` and no `^GXemul>` anchor matches.
+
+**MEASURED both ways, same probe and binary:** `CLICOLOR=1` without `-A` → **53 escapes, zero
+parsed responses, a CORRECT build scoring 1/5**; with `-A` → 0 escapes, 5/5. `-A` sets
+`enable_colorized_output = false` (`main.c:317`).
+
+**Population derived, not estimated: 61 probes call `pty.fork()`, 53 omit `-A`, and the 8 that
+pass it are all the ARM ones.** The tree already holds the defence; it was applied to one family
+and never carried.
+
+**It does not fire on this machine** — `CLICOLOR` is unset, measured at 0 escapes — so no current
+gate result is wrong. It is a latent environment dependence. **And the failure shape differs by
+parser: a prompt-anchored parser fails CLOSED and is loud; a loose one may still match and
+mis-attribute, silently.** The loose ones are the more dangerous half.
+
+**Fixed only in `#514`'s own probe**, which that round owns. The other 52 are a separate harness
+round: one argument per file, but it changes what every probe launches and owes a re-parse check
+on each.

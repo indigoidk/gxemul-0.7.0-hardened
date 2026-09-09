@@ -1,77 +1,88 @@
-# armbfiwidth -- apply `#510`'s repair to the third site, and check that it is the right one
+# `armbfiwidth` fix design — the third site of an idiom `#510` fixed twice
 
-## 0. READING SCOPE
+**VERDICT LINE FIRST.**  **The tree is `GXEMUL-SEC/src/`** — ignore the 2021 copy at the project root.
 
-`GXEMUL-SEC/src/cpus/cpu_arm_instr.c` -- the `ubfx`, `sbfx` and `bfi` handlers and their decoder
-arms. Please avoid `regress/artifacts/` and `tools/pipeline/ledger.json`.
+**Please do not simply ratify.** Section 2 states a difference between this site and the two already
+fixed; if that difference is wrong, the whole design question dissolves. **Check it.**
 
-Tree: `GXEMUL-SEC/src/`. Ignore the pristine 2021 `src/` at the project root -- it will disagree by
-hundreds of lines.
+## 1. THE SITE
 
-**This is a C-semantics and code-consistency review.** Nothing here needs a guest sequence.
+`src/cpus/cpu_arm_instr.c`, `X(bfi)` at `:1450`:
 
-## 1. THE SITUATION
+```c
+X(bfi)
+{
+	uint32_t x = reg(ic->arg[1]);
 
-`#510` repaired an undefined shift in TWO handlers and left a third. The repaired form is:
+	int lsb = (uint8_t)ic->arg[2];
+	int msb = ic->arg[2] >> 16;
+	int width = msb - lsb + 1;
 
-    uint32_t mask = (width == 32) ? 0xffffffffU : ((1U << width) - 1);
+	x <<= lsb;
 
-`X(bfi)`, about fifty lines below the second repair, still reads:
+	uint32_t mask = (1 << width) - 1;      /*  <-- undefined over most of its domain  */
 
-    uint32_t mask = (1 << width) - 1;
+	mask <<= lsb;
+```
 
-with `int width = msb - lsb + 1;` and `msb`, `lsb` each decoded independently as 0..31.
+The decoder gives `msb` and `lsb` **independently, each 0..31**, so `width` ranges over
+**[-30, 32]** and `1 << width` is undefined three separate ways: a negative count and a count `>=`
+the promoted width (C99 6.5.7p3), and at `width == 31`, `1` is `int` so `2^31` is not representable
+(6.5.7p4).
 
-## 2. SETTLED PREMISES -- re-derived by enumeration, not asserted
+## 2. THE DIFFERENCE FROM THE TWO SITES `#510` ALREADY FIXED — verify this
 
-Over all **1024** encodable `(msb, lsb)` pairs:
+`#510` repaired the SAME expression at `X(ubfx)` and `X(sbfx)` fifty lines above, shipping:
 
-    width < 0     465   UNDEFINED  (negative shift count)
-    width == 0     31   DEFINED    -- 1 << 0 is 1; mask becomes 0
-    width 1..30   525   DEFINED
-    width == 31     2   UNDEFINED  (1 is `int`; 2^31 not representable -- signed overflow)
-    width == 32     1   UNDEFINED  (count >= width of the promoted type)
-    ------------------
-    UNDEFINED     468
+```c
+	uint32_t mask = (width == 32) ? 0xffffffffU : ((1U << width) - 1);
+```
 
-The 496 pairs with `msb < lsb` (architecturally invalid field ordering) OVERLAP this set by 465 --
-they are not disjoint populations. **You corrected an earlier version of this row that said 499;
-check the 468 too.**
+`1U` defends `width == 31`; the `== 32` guard defends `width == 32`.
 
-## 3. QUESTIONS -- VERDICT LINE FIRST
+> **BUT AT THOSE TWO SITES `width` CANNOT BE NEGATIVE, AND AT `bfi` IT CAN.**  UBFX/SBFX encode
+> **widthm1**, so width is `1 + ((iword >> 16) & 31)` ∈ [1, 32] — confirmed in the disassembler at
+> `cpu_arm.c:2382`, `debug(",%i", 1 + ((iw >> 16) & 31))`. **BFI encodes MSB**, so
+> `width = msb - lsb + 1` and `msb < lsb` gives a nonpositive width.
 
-**Please do not simply ratify.** You have refuted premises of mine on four briefs tonight. **Check
-the premises, not just the derivations.**
+**So `#510`'s form does NOT transfer unchanged: its `== 32` guard covers none of the negative
+widths.**  `#510` deliberately left this site out of scope under the one-site rule and disclosed it.
 
-**Q1. Quote all three sites** as they stand, and confirm the two repaired ones use the form above
-and the third does not.
+**THE DENOMINATOR:** of the **1024** encodable (msb, lsb) pairs, **468** reach an undefined shift,
+and **465 of those also have architecturally invalid field ordering** (`msb < lsb`) — the two sets
+**overlap** rather than being disjoint.
 
-**Q2. Does `#510`'s form actually cover `X(bfi)`'s domain?** This is the load-bearing question.
-That form special-cases `width == 32` -- but `bfi`'s width can be **negative** and can be **31**,
-and I do not believe `ubfx`/`sbfx` can produce either. **If their decoders constrain width to
-1..32, then `#510`'s repair is correct THERE and insufficient HERE**, and transferring it verbatim
-would leave 467 of the 468 undefined pairs undefined. Derive each handler's width domain from its
-own decoder arm and say whether the three domains differ.
+## 3. A LIMIT I CANNOT REMOVE, and it bounds what this brief can ask
 
-**Q3. What SHOULD `bfi` do for `width <= 0`?** The architecture presumably leaves `msb < lsb`
-UNPREDICTABLE. **If you cannot establish that from a manual present in this tree, say so** --
-`_scratchpad/` holds sixteen PDFs and BFI/BFC are in none of them, as you established on the
-`armbfcdecode` brief. An honest "the architecture is not locally citable, so pick a defined
-behaviour and document it as a choice" is the answer I want if that is the case; this project has
-shipped model-sourced page citations before and is trying not to again.
+**There is NO local manual covering BFI.**  `_scratchpad/ddi0100i.txt` is DDI 0100I, which predates
+ARMv6T2 — `grep -c -w BFI` returns **0**. So *what value BFI should produce when `msb < lsb`* is
+**not answerable from any primary source I hold**, and I will not take it from recollection.
 
-**Q4. Give the smallest repair that makes every one of the 1024 pairs defined**, in the style of the
-two repaired siblings so it reads as one family. State what it does for each of the four domains
-above, and whether it changes behaviour for any pair that is currently DEFINED -- **that last part
-matters more than the fix**, because a repair that alters the 525 well-defined widths is a
-behavioural change wearing a UB-fix's clothes.
+**What IS fully settled without a manual: the shift must be made DEFINED.** That is a C99 question
+and the tree has already answered it twice, fifty lines up.
 
-**Q5. What ORACLE distinguishes fixed from unfixed?** Not a guest sequence -- name the observable.
-Note that undefined behaviour may compile to something that *looks* right on this host, so a row
-asserting a particular wrong value is pinning the compiler, not the code. Is a UBSan build the only
-honest detector here? If so, say it -- `build-asan/` exists and is currently clean and freshly
-built.
+## 4. QUESTIONS
 
-**Q6. Is `armbfcdecode` entangled with this?** That row says the same handler dispatches BFC (source
-field 15) as BFI. **You ruled last pass that they are two rounds.** Does anything in the repair you
-propose here make that separation harder or easier?
+**Q1. What is the minimal defined-shift repair here?** Give the expression. It must cover
+`width <= 0`, `width == 31` and `width == 32`. **Does it change any guest-visible value for the
+architecturally VALID pairs (`msb >= lsb`)?** If it does, that is a behaviour change and not a
+definedness repair, and the round must say so.
+
+**Q2. For `msb < lsb` — what should the model DO?** ARM calls that encoding UNPREDICTABLE, and I
+have no local text to cite. **Options: produce no change to the destination; produce whatever the
+defined arithmetic yields; or announce once.** Say which, and **say plainly if you cannot settle it
+without the ARM ARM** — that is a real answer and it makes this a definedness-only round with the
+value question disclosed.
+
+**Q3. Does the tree's own precedent settle Q2?** `#510`'s sites cannot reach the case, so they say
+nothing about it. **Is there another ARM handler in this file that faces an UNPREDICTABLE encoding,
+and what does it do?** Grep before reasoning.
+
+**Q4. What observable distinguishes a correct repair from an incomplete one?** Note `#510`'s own
+finding: `1 << 31` and `1U << 31` give the SAME mask after `- 1`, so **no guest-value row can kill a
+`1U` → `1` regression** — only UBSAN or a source pin can. **What should a regression row assert
+here, given that?**
+
+**Q5. Is a witness achievable?** `#510` shipped with definedness escapes disclosed for exactly this
+reason. **Say plainly if the honest answer is "no guest-value witness is possible; this needs the
+sanitizer lane".**

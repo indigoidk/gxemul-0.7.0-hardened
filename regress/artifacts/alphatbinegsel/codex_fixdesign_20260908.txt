@@ -1,0 +1,90 @@
+**VERDICT: the range guard repairs the witnessed defect, but I recommend explicit handling of −1/−2 and a no-op default. ASM selectivity is absent; 7/7 does not establish it.**
+
+I checked `GXEMUL-SEC/src/`, the witness’s encoded instruction sequence, and all three saved run logs. The unsigned capture, five wrapper selectors, 5/7 → 7/7 results, and independent 5/7 result check out. The `3031a30` diff contains **zero** changed invalidation calls. This was source and artifact review, without another emulator run.
+
+Two premises need correction:
+
+- **`apcb_asn` is read during the outgoing PCB save**, not merely by a debug print; it is subsequently assigned the incoming ASN. That is real context-state handling, although it provides no ASN-tagged translation lookup. [PAL handler](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_alpha_palcode.c:237)
+- **`kentry[]` is initialized and written by `wrent`**, rather than merely declared. There is no consumer dispatching through those vectors. The memory-fault limitation therefore stands, despite comments claiming that a fault has already been signalled. [Initialization](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_alpha.c:99), [failed walk](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_alpha.c:192)
+
+The ASM conclusion survives stronger inspection than the symbol census: the actual cache-entry structure contains validity, writeability, addresses and a host pointer, with no ASM or ASN metadata; the fill interface carries neither. **Selectivity requires a representation change; a guard edit cannot supply it.** Missing ASN support alone would not prove this—a single-context cache could still retain an ASM bit. [Cache structures](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/cpu.h:88), [fill interface](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1493)
+
+**Q1. The range test is right for selecting the address branch; its blanket `else` is a separate policy decision.**
+
+There is a material architectural fact missing from the brief: the TBI pseudocode explicitly ends with **`otherwise: break;`**. Zero and unlisted selectors therefore request no invalidation. They are not documented fault cases. [Alpha Architecture Reference Manual, §16.2.12](https://docs.alexrp.com/alpha/alpha_4th.pdf#page=490)
+
+I would ship:
+
+```c
+if (a0 >= 1 && a0 <= 3)
+	cpu->invalidate_translation_caches(cpu, a1, INVALIDATE_VADDR);
+else if (a0 == (uint64_t)-1 || a0 == (uint64_t)-2)
+	cpu->invalidate_translation_caches(cpu, 0, INVALIDATE_ALL);
+/* Other selectors request no action. */
+```
+
+That changes the existing zero-selector behavior, which already flushes everything. Make that change explicit in the review.
+
+Over-invalidation is conservative against stale translations, but that argument does not establish the meaning of an unknown selector. A blanket all-flush fallback could be retained as a disclosed emulator policy; **my preference is the documented no-op default**. An optional debug diagnostic is reasonable. A mandatory warning or halt is unnecessary.
+
+Also replace the existing “a0 is ignored for now” comment—it contradicts the implementation.
+
+**Q2. Keep the bounded comparison unsigned.**
+
+For GCC’s documented conversion behavior, the signed and unsigned versions select **exactly the same three register values**, across all 64-bit inputs. High-bit-set values become negative under the signed conversion and fail its lower bound; they fail the unsigned upper bound. [GCC integer conversions](https://gcc.gnu.org/onlinedocs/gcc/Integers-implementation.html)
+
+The unsigned form states the accepted encodings directly and avoids an out-of-range signed conversion that older C standards leave implementation-defined.
+
+There is one maintenance advantage to signed interpretation: accidentally dropping its upper bound would still exclude −1 and −2. But it would incorrectly admit other positive selectors. I would protect the complete dispatch contract with checks; repeated casts are weak protection against later edits.
+
+**Q3. A one-character deletion escapes the witness.**
+
+Change:
+
+```c
+a0 <= 3
+```
+
+to:
+
+```c
+a0 < 3
+```
+
+Selector 3 now takes `INVALIDATE_ALL`. All seven existing rows still pass.
+
+Furthermore, **adding a selector-3 row that only expects fresh target data would still miss it**: both page invalidation and full invalidation produce that result. The existing positive control supports attribution when combined with the inspected source; it does not measure invalidation scope.
+
+This is worth a small **dispatch-contract check** using a recording invalidation callback:
+
+| Input | Expected callback |
+|---|---|
+| 1, 2, 3 | `(a1, INVALIDATE_VADDR)` |
+| Encodings of −1, −2 | `(0, INVALIDATE_ALL)` |
+| 0, 4, −3 and representative large values | None, under the recommended default |
+
+That checks an observable interface rather than matching source text. Keep the guest witness as the coherence regression. Disclose its current coverage: data loads, ASM=0 mappings, selectors −2/−1/2, and no proof of instruction-side behavior or retention of unrelated translations.
+
+**Q4. Measure invalidation and retention separately.**
+
+Every witness PTE is constructed from PFN plus VALID; none sets ASM. Consequently, the current witness cannot detect a future implementation that mistakenly treats TBIA like selective TBIAP and preserves global translations. [Witness PTE construction](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/alphatbinegsel/witness_agy_20260908/alphatbi_probe.asrun.py:82)
+
+The useful contract is:
+
+| Observation | Current coarse repair | Claimed selective implementation |
+|---|---|---|
+| TBIAP removes cached ASM=0 translations | Required | Required |
+| TBIA removes cached ASM=1 translations too | Required | Required |
+| TBIAP retains cached ASM=1 translations under controlled conditions | Unsupported | Required to substantiate selectivity |
+
+**The smallest additional correctness row is TBIA invalidating an ASM=1 mapping.** A separate retention check distinguishes coarse TBIAP from an implementation claiming selectivity.
+
+Use cache-state inspection or walk instrumentation with unchanged valid mappings for retention. Identical loaded bytes cannot distinguish a cache hit from a re-walk. Conversely, requiring an old value after changing an uninvalidate­​d mapping would make a poor architectural oracle.
+
+Label retention as a **cache-model precision requirement**. The architecture manual expressly permits over-invalidation in its OpenVMS TB descriptions; the quoted 21066 register behavior does not establish a universal guarantee of cache residency. [Architecture manual, §13.3.21](https://docs.alexrp.com/alpha/alpha_4th.pdf#page=416)
+
+Report selectivity as unsupported separately from the witness’s pass count. Before promoting it to supported, check both instruction and data paths, cached ASM metadata, and any retained ASN contexts.
+
+**Q5. Use the stronger present-tense claim, scoped to Alpha’s current cache.**
+
+> Fixed Alpha PAL TBI dispatch so TBIA and TBIAP invalidate all cached translations; TBIAP remains coarse because the current Alpha translation cache does not record the per-entry ASM metadata needed for selective invalidation.

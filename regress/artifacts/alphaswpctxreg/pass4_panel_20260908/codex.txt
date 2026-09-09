@@ -1,0 +1,54 @@
+**VERDICT: NOT CLOSED — a genuine parser regression and wrong attribution remain. Tested 45 transcript cases across all five scored rows; two synthetic observation-identity variants also sweep 5/5.**
+
+**Q1 — Denominator.** I executed the shipped parser and post-session scorer extracted through Python’s AST.
+
+| Cases | Denominator | Result |
+|---|---:|---|
+| Final `v0 ∈ {C,N,S,0}` × `a0 ∈ {C,N,0,deadbeef,absent}` | 20 | All expected outcomes |
+| Missing/dead observations; 3–4 v0 responses; trace, `sprint`, suffix and malformed-value substitutions | 18 | Zero clean sweeps |
+| Plain, normalized CRLF, spaces, padded hex, colored prompts | 5 | Colored genuine response falsely rejected |
+| Second read moved before second step; first response replayed as second | 2 | Both falsely score 5/5 |
+
+That is **225 row decisions** across `live`, `v0 read`, `v0 pair`, `a0 obs`, and `v0 ctx`. The return-state cells cover the original wrong-register defect, omitted/misdirected return, incoming-context RHS, zero return, and permitted a0 clobbers.
+
+I also reran `attack_parser.asrun.py`: **5/5**. The three binary results are inspected artifacts; I did not rebuild those binaries.
+
+**Q2 — Yes: the genuine colored prompt is rejected.**
+
+With `CLICOLOR` present, this debugger emits the following bytes, shown escaped:
+
+```text
+\x1b[34;1mGXemul> \x1b[0mprint v0\n0x1000000\n
+```
+
+Color depends on `CLICOLOR` and terminal file descriptors; the probe uses a PTY and inherits the environment. Its launch omits the existing `-A` option that disables color. See [environment handling](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/core/main.c:646), [color generation](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/core/misc.c:47), and [probe launch](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/alpha_swpctx_v0_probe.py:141).
+
+**Measured against both source versions:** the same otherwise-correct colored transcript scores **5/5 before → 1/5 after**, with zero parsed register responses. Adding `-A` to the child arguments addresses this without weakening the anchor.
+
+The new `REGEX_REALSHAPE` artifact establishes the plain response shape. It does not support the accompanying universal claim that genuine responses are never rejected.
+
+**Q3 — Moving a0 to apparatus-only preserves detection of the return-register defect.**
+
+With correctly associated observations, every wrong final v0 still fails `v0 ctx`. The only newly accepted complete state is **`v0=C, a0=C`**, which is permitted. Missing a0 correctly changes from a false pass to failure.
+
+But that permitted state now prints:
+
+> the handler ran and published to the wrong register
+
+I measured **5/5 with that false diagnostic**. Make the diagnostic factual—“a0 equals the old context”—and remove the stale claims that a0 must differ from C. The offending condition checks only a0. [Diagnostic](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/alpha_swpctx_v0_probe.py:302)
+
+**Q4 — Exactly two matches establishes count, not command identity.**
+
+For the incoming-context RHS mutant, move the second print before the second step:
+
+```text
+step 3 → print v0: C → print v0: C → step 4 → print a0: N
+```
+
+Both readings genuinely precede call 2. Nevertheless, the scorer reports **`v0 pair=2 of 2`, `v0_final=C`, 5/5**; the unobserved final v0 would be N. Replaying the first response in the second slot also scores 5/5.
+
+These are **synthetic apparatus mutations**. The shipped command list currently has the correct order, and I found no evidence that its PTY loop spontaneously duplicates responses. The unconditional claim that two matches prove call-2 identity nevertheless exceeds what [the scorer checks](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/alpha_swpctx_v0_probe.py:251).
+
+One further record correction: a third call returning N would verify context bookkeeping; it would **not** detect the disclosed PCB-load omission that preserves `ctx = a0`. That proposed closure remains overstated. [Disclosure](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/alpha_swpctx_v0_probe.py:35)
+
+The concurrent comment addition changed no executable AST relative to supplied blob `af746f5`. I changed no files.

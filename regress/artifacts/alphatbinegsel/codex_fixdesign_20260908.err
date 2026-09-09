@@ -1,0 +1,2946 @@
+Reading additional input from stdin...
+OpenAI Codex v0.153.4
+--------
+workdir: C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+model: gpt-6-astra
+provider: openai
+approval: never
+sandbox: read-only
+reasoning effort: max
+reasoning summaries: none
+session id: 01a0816d-1763-7022-8e2a-a35adba426af
+--------
+user
+# `alphatbinegsel` fix design — the witness is built, so this is about the guard and the detector
+
+**VERDICT LINE FIRST.**
+
+**The tree is `GXEMUL-SEC/src/`** — ignore the pristine 2021 copy at the project root.
+
+**Please do not simply ratify.** Every fact in section 2 was corrected at least once on the way
+here, and one of them was corrected by a seat reading the asm rather than the comment beside it.
+**Check the premises, not just the derivations.**
+
+## 1. THE DEFECT — settled, and now WITNESSED
+
+`src/cpus/cpu_alpha_palcode.c`, `case 0x33 /* PAL_OSF1_tbi */`:
+
+```c
+	if (a0 >= 1)
+		cpu->invalidate_translation_caches(cpu, a1, INVALIDATE_VADDR);
+	else
+		cpu->invalidate_translation_caches(cpu, 0, INVALIDATE_ALL);
+```
+
+`a0` is a **`uint64_t`** captured at `:165`. `ALPHA_TBIA()` is `alpha_pal_tbi(-2, 0)` and
+`ALPHA_TBIAP()` is `alpha_pal_tbi(-1, 0)`, so both compare `>= 1` as TRUE and take the **VADDR**
+branch with `a1 = 0` — invalidating cached virtual page **zero** and nothing else.
+
+**THE WITNESS IS BUILT AND RE-VERIFIED**
+(`regress/artifacts/alphatbinegsel/witness_agy_20260908/`):
+
+    row          got               want              note
+    live         alive             alive             CONTROL: session survives              ok
+    tbia fill    0xaaaa0000aaaa    0xaaaa0000aaaa    CONTROL: initial walked load cached    ok
+    tbia obs     0xaaaa0000aaaa    0xbbbb0000bbbb    TBIA (a0=-2) must flush and re-walk   FAIL
+    tbiap fill   0xcccc0000cccc    0xcccc0000cccc    CONTROL: initial walked load cached    ok
+    tbiap obs    0xcccc0000cccc    0xdddd0000dddd    TBIAP (a0=-1) must flush and re-walk  FAIL
+    pos fill     0xeeee0000eeee    0xeeee0000eeee    CONTROL: initial walked load cached    ok
+    pos obs      0xffff0000ffff    0xffff0000ffff    CONTROL: a POSITIVE selector (a0=2)    ok
+
+**committed 5/7 → fixed 7/7**, same script, unmodified `-E alpha -e alphabook1`. Built by the
+measurement seat and **re-run independently against `build/`, reproducing 5/7 with the identical
+two failures**. `pos obs` is the attribution control: a positive selector flushes correctly on
+**both** builds, so the VADDR path works and the failures are the misdispatch.
+
+## 2. WHAT IS SETTLED — say if any of it is wrong
+
+* **The proposed fix is `if (a0 >= 1 && a0 <= 3)`**, sending both negative selectors to
+  `INVALIDATE_ALL`. Confirmed 4/4 by the assess panel and measured 7/7 by the witness.
+* **It is COARSE and cannot be otherwise in this tree.** The manual documents the real semantics —
+  `21066_66a_hrm.txt:1486`: *"Write operations to the ITBASM register invalidate all entries that
+  do not have the ASM bit set."* But `grep -rn ALPHA_PTE_ASM src/` returns **ONE hit, the `#define`
+  at `alpha_cpu.h:223`** — nothing consumes it, and `apcb_asn` is written by `swpctx` and read by a
+  debug print only. **So ASM=0 selectivity has no representation in the translation cache at all.**
+* **The five documented selectors** are `TBIA(-2)`, `TBIAP(-1)`, `TBISI(1)`, `TBISD(2)`, `TBIS(3)`.
+* **`#514` did NOT touch this flush** — `git diff --format= 3031a30^ 3031a30 -- <file> | grep -cE
+  '^[+-].*invalidate_translation_caches'` is **0**. An earlier claim that this row owed a
+  re-baselined witness was withdrawn.
+* **The architectural FAULT disposition is unavailable on Alpha**, and `ALPHA_KENTRY_MM`,
+  `ALPHA_FEATURE_BWX` and `kentry[]` are all declared-but-unconsumed in this layer — so do not
+  assume a mechanism exists because a constant names it.
+
+## 3. QUESTIONS
+
+**Q1. IS `a0 >= 1 && a0 <= 3` THE RIGHT GUARD?** In particular: what should happen for `a0 == 0`,
+and for `a0 >= 4` or other undocumented values? The proposed guard sends all of them to
+`INVALIDATE_ALL`. **Is over-invalidation the right default for an undocumented selector, or should
+an unknown selector be announced?** Note the error direction: over-invalidation costs re-walks and
+never stale data — the exact opposite of the defect.
+
+**Q2. SHOULD THE GUARD BE WRITTEN AGAINST THE SIGNED VALUE INSTEAD?** `(int64_t)a0 >= 1 &&
+(int64_t)a0 <= 3` reads closer to the architecture's own description and makes the negative
+selectors obviously negative. **Which form is less likely to be broken by a later edit**, and does
+either change behaviour for any input?
+
+**Q3. WHAT DOES THE DETECTOR OWE BEYOND THE WITNESS?** The witness has three fill/observe pairs and
+a positive-selector control. **Name the smallest edit to the repaired guard that the witness would
+NOT catch** — and say whether it is worth a row or belongs in a disclosed contract.
+
+**Q4. WHAT OBSERVABLE DISTINGUISHES A CORRECT FIX FROM AN INCOMPLETE ONE?** Specifically: the fix
+does not implement ASM selectivity. **What should a regression row assert so that a later partial
+ASM implementation does not read as complete?**
+
+**Q5. THE CHANGELOG SENTENCE.** Given the ASM finding, is the honest claim *"we shipped a coarse
+repair and deferred the finer semantics"*, or the stronger *"the finer semantics have no
+representation in this emulator's translation cache"*? **Write the sentence you would ship.**
+codex
+Verdict: the range guard looks appropriate for a coarse repair, but the witness alone does not establish selector coverage or ASM semantics. I’ll check the active `src/` tree, witness artifacts, and selector definitions before answering each question.
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "git status --short; git rev-parse --show-toplevel; rg -n 'case 0x33|uint64_t.*a0|invalidate_translation_caches|ALPHA_PTE_ASM|apcb_asn|ALPHA_KENTRY_MM|ALPHA_FEATURE_BWX|kentry\\[' src" in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "Get-Location; rg --files -g AGENTS.md -g '*alphatbinegsel*' -g '*21066*' -g '*alpha*' -g '*tbi*' -g '*CHANGELOG*' -g '*ChangeLog*' -g '"'!**/.git/**'"'" in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+ succeeded in 128ms:
+ M regress/sgi_de_primop_probe.py
+ M tools/pipeline/ledger.json
+?? _scratchpad/
+?? regress/alpha_dummy.bin
+?? regress/arm_bfx_stub.bin
+?? regress/artifacts/alphaswpctxreg/PASS4_brief.md
+?? regress/artifacts/alphatbinegsel/FIXDESIGN_brief.md
+?? regress/artifacts/alphatbinegsel/codex_fixdesign_20260908.err
+?? regress/artifacts/alphatbinegsel/codex_fixdesign_20260908.txt
+?? regress/artifacts/gdromdefault_461/
+?? regress/sgi_mte_dummy.bin
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC
+src\core\memory.c:296:			if (cpu->invalidate_translation_caches != NULL) {
+src\core\memory.c:299:					cpu->invalidate_translation_caches
+src\cpus\cpu_arm_coproc.c:170:			    setting byte_order: invalidate_translation_caches(
+src\cpus\cpu_arm_coproc.c:238:			cpu->invalidate_translation_caches(cpu, 0,
+src\cpus\cpu_arm_coproc.c:241:			cpu->invalidate_translation_caches(cpu,
+src\cpus\cpu_arm.c:115:	cpu->invalidate_translation_caches =
+src\cpus\cpu_arm.c:116:	    arm_invalidate_translation_caches;
+src\cpus\cpu_alpha.c:91:	cpu->invalidate_translation_caches =
+src\cpus\cpu_alpha.c:92:	    alpha_invalidate_translation_caches;
+src\cpus\cpu_alpha.c:103:		cpu->cd.alpha.kentry[i] = 0x10010;
+src\cpus\cpu_alpha_palcode.c:71:	case 0x33: snprintf(buf, buflen, "PAL_OSF1_tbi"); break;
+src\cpus\cpu_alpha_palcode.c:165:	uint64_t a0 = cpu->cd.alpha.r[ALPHA_A0], a1 = cpu->cd.alpha.r[ALPHA_A1];
+src\cpus\cpu_alpha_palcode.c:240:		    cpu->cd.alpha.pcb.apcb_asn);
+src\cpus\cpu_alpha_palcode.c:298:			cpu->cd.alpha.pcb.apcb_asn = new_asn;
+src\cpus\cpu_alpha_palcode.c:314:			cpu->invalidate_translation_caches(cpu, 0, INVALIDATE_ALL);
+src\cpus\cpu_alpha_palcode.c:327:	case 0x33:	/*  PAL_OSF1_tbi  */
+src\cpus\cpu_alpha_palcode.c:340:			cpu->invalidate_translation_caches(cpu, a1, INVALIDATE_VADDR);
+src\cpus\cpu_alpha_palcode.c:342:			cpu->invalidate_translation_caches(cpu, 0, INVALIDATE_ALL);
+src\cpus\cpu_alpha_palcode.c:347:			cpu->cd.alpha.kentry[a1] = a0;
+src\cpus\cpu_ppc.c:125:		cpu->invalidate_translation_caches =
+src\cpus\cpu_ppc.c:126:		    ppc32_invalidate_translation_caches;
+src\cpus\cpu_ppc.c:132:		cpu->invalidate_translation_caches =
+src\cpus\cpu_ppc.c:133:		    ppc_invalidate_translation_caches;
+src\debugger\debugger_cmds.c:417:			if (m->cpus[i]->invalidate_translation_caches != NULL)
+src\debugger\debugger_cmds.c:418:				m->cpus[i]->invalidate_translation_caches(
+src\debugger\debugger_cmds.c:490:			if (m->cpus[i]->invalidate_translation_caches != NULL)
+src\debugger\debugger_cmds.c:491:				m->cpus[i]->invalidate_translation_caches(
+src\cpus\cpu_mips.c:123:		cpu->invalidate_translation_caches =
+src\cpus\cpu_mips.c:124:		    mips32_invalidate_translation_caches;
+src\cpus\cpu_mips.c:130:		cpu->invalidate_translation_caches =
+src\cpus\cpu_mips.c:131:		    mips_invalidate_translation_caches;
+src\cpus\cpu_dyntrans.c:826:		cpu->invalidate_translation_caches(cpu, physaddr,
+src\cpus\cpu_dyntrans.c:1196: *  XXX_invalidate_translation_caches():
+src\debugger\debugger.c:795:			    invalidate_translation_caches(
+src\cpus\cpu_m88k_instr.c:3387:	case 0x33:	/*  bsr.n  */
+src\cpus\cpu_m88k_instr.c:3404:		case 0x33:
+src\cpus\cpu_mips_coproc.c:523:				cpu->invalidate_translation_caches(cpu,
+src\cpus\cpu_mips_coproc.c:562:					cpu->invalidate_translation_caches(cpu, oldvaddr + ofs, INVALIDATE_VADDR);
+src\cpus\cpu_mips_coproc.c:566:					cpu->invalidate_translation_caches(cpu, oldvaddr + ofs + pagesize, INVALIDATE_VADDR);
+src\cpus\cpu_mips_coproc.c:928:				cpu->invalidate_translation_caches(cpu, 0, INVALIDATE_ALL);
+src\cpus\cpu_mips_coproc.c:943:					cpu->invalidate_translation_caches(
+src\cpus\cpu_mips_coproc.c:2010:			cpu->invalidate_translation_caches(cpu, oldvaddr,
+src\cpus\cpu_mips_coproc.c:2056:					cpu->invalidate_translation_caches(cpu, oldvaddr + ofs, INVALIDATE_VADDR);
+src\cpus\cpu_mips_coproc.c:2060:					cpu->invalidate_translation_caches(cpu, oldvaddr + ofs + pagesize, INVALIDATE_VADDR);
+src\cpus\cpu_m88k.c:122:	cpu->invalidate_translation_caches =
+src\cpus\cpu_m88k.c:123:	    m88k_invalidate_translation_caches;
+src\cpus\cpu_m88k.c:242:	case 0x33:	/*  bsr.n  */
+src\cpus\cpu_m88k.c:550:			cpu->invalidate_translation_caches(
+src\cpus\cpu_m88k.c:1318:	case 0x33:
+src\cpus\cpu_i960.c:214:	cpu->invalidate_translation_caches = i960_invalidate_translation_caches;
+src\cpus\cpu_sh_instr.c:2795:			cpu->invalidate_translation_caches(cpu,
+src\cpus\cpu_sh_instr.c:2798:			cpu->invalidate_translation_caches(cpu,
+src\cpus\cpu_sh_instr.c:4565:			case 0x33:	/*  STC.L SSR,@-Rn  */
+src\cpus\cpu_riscv.c:138:		cpu->invalidate_translation_caches = riscv32_invalidate_translation_caches;
+src\cpus\cpu_riscv.c:145:		cpu->invalidate_translation_caches = riscv_invalidate_translation_caches;
+src\cpus\cpu_sh.c:110:	cpu->invalidate_translation_caches =
+src\cpus\cpu_sh.c:111:	    sh_invalidate_translation_caches;
+src\cpus\cpu_ppc_instr.c:2392:		cpu->invalidate_translation_caches(cpu, ic->arg[0] << 28,
+src\cpus\cpu_ppc_instr.c:2402:		cpu->invalidate_translation_caches(cpu, sr_num << 28,
+src\cpus\cpu_ppc_instr.c:3852:	cpu->invalidate_translation_caches(cpu, 0, INVALIDATE_ALL);
+src\cpus\cpu_ppc_instr.c:3862:	cpu->invalidate_translation_caches(cpu, reg(ic->arg[0]),
+src\cpus\cpu_ppc_instr.c:3920:	cpu->invalidate_translation_caches(cpu, 0, INVALIDATE_ALL);
+src\cpus\cpu_ppc_instr.c:3933:	cpu->invalidate_translation_caches(cpu, 0, INVALIDATE_ALL);
+src\cpus\generate_tail.c:92:	    "%s_invalidate_translation_caches\n", a);
+src\cpus\generate_tail.c:163:	    "%s32_invalidate_translation_caches\n", a);
+src\cpus\memory_m88k.c:324:			cpu->invalidate_translation_caches(cpu,
+src\cpus\tmp_alpha_tail.c:26:#define DYNTRANS_INVALIDATE_TC alpha_invalidate_translation_caches
+src\cpus\tmp_alpha_tail.c:94:#define DYNTRANS_INVALIDATE_TC alpha32_invalidate_translation_caches
+src\cpus\memory_sh.c:183:			cpu->invalidate_translation_caches(cpu,
+src\devices\dev_fbctrl.c:83:			cpu->machine->cpus[i]->invalidate_translation_caches(
+src\devices\dev_fb.c:221:			d->machine->cpus[i]->invalidate_translation_caches(
+src\cpus\tmp_arm_tail.c:26:#define DYNTRANS_INVALIDATE_TC arm_invalidate_translation_caches
+src\cpus\tmp_arm_tail.c:94:#define DYNTRANS_INVALIDATE_TC arm32_invalidate_translation_caches
+src\cpus\tmp_i960_tail.c:26:#define DYNTRANS_INVALIDATE_TC i960_invalidate_translation_caches
+src\cpus\tmp_i960_tail.c:94:#define DYNTRANS_INVALIDATE_TC i96032_invalidate_translation_caches
+src\devices\dev_m8820x.c:187:		cpu->invalidate_translation_caches(cpu, 0, INVALIDATE_ALL);
+src\devices\dev_m8820x.c:432:			c->invalidate_translation_caches(c, 0, INVALIDATE_ALL);
+src\devices\dev_m8820x.c:482:				c->invalidate_translation_caches(
+src\cpus\tmp_m88k_tail.c:26:#define DYNTRANS_INVALIDATE_TC m88k_invalidate_translation_caches
+src\cpus\tmp_m88k_tail.c:94:#define DYNTRANS_INVALIDATE_TC m88k32_invalidate_translation_caches
+src\cpus\tmp_mips_tail.c:26:#define DYNTRANS_INVALIDATE_TC mips_invalidate_translation_caches
+src\cpus\tmp_mips_tail.c:94:#define DYNTRANS_INVALIDATE_TC mips32_invalidate_translation_caches
+src\cpus\tmp_riscv_tail.c:26:#define DYNTRANS_INVALIDATE_TC riscv_invalidate_translation_caches
+src\cpus\tmp_riscv_tail.c:94:#define DYNTRANS_INVALIDATE_TC riscv32_invalidate_translation_caches
+src\cpus\tmp_ppc_tail.c:26:#define DYNTRANS_INVALIDATE_TC ppc_invalidate_translation_caches
+src\cpus\tmp_ppc_tail.c:94:#define DYNTRANS_INVALIDATE_TC ppc32_invalidate_translation_caches
+src\cpus\tmp_sh_tail.c:26:#define DYNTRANS_INVALIDATE_TC sh_invalidate_translation_caches
+src\cpus\tmp_sh_tail.c:94:#define DYNTRANS_INVALIDATE_TC sh32_invalidate_translation_caches
+src\devices\dev_sh4.c:999:				cpu->invalidate_translation_caches(cpu,
+src\devices\dev_sh4.c:1002:				cpu->invalidate_translation_caches(cpu,
+src\devices\dev_sh4.c:1088:				cpu->invalidate_translation_caches(cpu,
+src\devices\dev_sh4.c:1092:				cpu->invalidate_translation_caches(cpu,
+src\devices\dev_sh4.c:1201:			cpu->invalidate_translation_caches(cpu,
+src\devices\dev_sh4.c:1204:			cpu->invalidate_translation_caches(cpu, 0,
+src\devices\dev_sh4.c:1259:				cpu->invalidate_translation_caches(cpu,
+src\devices\dev_sh4.c:1263:				cpu->invalidate_translation_caches(cpu,
+src\devices\dev_sh4.c:1789:				cpu->invalidate_translation_caches(
+src\devices\dev_sh4.c:1838:				cpu->invalidate_translation_caches(cpu,
+src\devices\dev_sh4.c:2481:		cpu->invalidate_translation_caches(cpu, 0, INVALIDATE_ALL);
+src\include\cpu_riscv.h:126:void riscv_invalidate_translation_caches(struct cpu *cpu, uint64_t, int);
+src\include\cpu_riscv.h:132:void riscv32_invalidate_translation_caches(struct cpu *cpu, uint64_t, int);
+src\include\cpu_ppc.h:273:void ppc_invalidate_translation_caches(struct cpu *cpu, uint64_t, int);
+src\include\cpu_ppc.h:274:void ppc32_invalidate_translation_caches(struct cpu *cpu, uint64_t, int);
+src\include\cpu_mips.h:418:void mips_invalidate_translation_caches(struct cpu *cpu, uint64_t, int);
+src\include\cpu_mips.h:423:void mips32_invalidate_translation_caches(struct cpu *cpu, uint64_t, int);
+src\include\cpu_m88k.h:309:void m88k_invalidate_translation_caches(struct cpu *cpu, uint64_t, int);
+src\include\cpu_alpha.h:57:#define	ALPHA_FEATURE_BWX		1
+src\include\cpu_alpha.h:169:	uint64_t		kentry[N_ALPHA_KENTRY];
+src\include\cpu_alpha.h:187:void alpha_invalidate_translation_caches(struct cpu *cpu, uint64_t, int);
+src\include\cpu_i960.h:99:void i960_invalidate_translation_caches(struct cpu *cpu, uint64_t, int);
+src\devices\dev_vga.c:934:			machine->cpus[i]->invalidate_translation_caches(
+src\include\cpu.h:400:	void		(*invalidate_translation_caches)(struct cpu *,
+src\include\cpu_arm.h:343:void arm_invalidate_translation_caches(struct cpu *cpu, uint64_t, int);
+src\include\thirdparty\alpha_cpu.h:66:	uint32_t	apcb_asn;	/* address space number */
+src\include\thirdparty\alpha_cpu.h:223:#define	ALPHA_PTE_ASM			0x0010		/* addr. space match */
+src\include\thirdparty\alpha_cpu.h:250:#define	ALPHA_KENTRY_MM		2
+src\include\cpu_sh.h:233:void sh_invalidate_translation_caches(struct cpu *cpu, uint64_t, int);
+
+ succeeded in 117ms:
+
+CHANGELOG.md
+regress\alpha_harness_probe.py
+regress\alpha_dummy.bin
+regress\alpha_pfnoffset_probe.py
+regress\alpha_swpctx_v0_probe.py
+src\include\cpu_alpha.h
+src\machines\machine_alpha.c
+src\machines\machine_alpha.o
+src\cpus\cpu_alpha.c
+src\cpus\cpu_alpha.o
+src\cpus\cpu_alpha_instr.c
+src\cpus\cpu_alpha_instr_alu.c
+src\cpus\cpu_alpha_instr_loadstore.c
+src\cpus\cpu_alpha_palcode.c
+src\cpus\cpu_alpha_palcode.o
+src\cpus\memory_alpha.o
+src\cpus\memory_alpha.c
+src\cpus\generate_alpha_misc.c
+src\cpus\generate_alpha_misc
+src\cpus\tmp_alpha_misc.c
+src\cpus\tmp_alpha_head.c
+src\cpus\tmp_alpha_tail.c
+src\include\thirdparty\alpha_lcareg.h
+src\include\thirdparty\alpha_cpu.h
+src\include\thirdparty\alpha_autoconf.h
+src\include\thirdparty\alpha_prom.h
+src\include\thirdparty\alpha_rpb.h
+regress\artifacts\alphatbinegsel\witness_agy_20260908\alphatbi_probe.asrun.py
+regress\artifacts\alphatbinegsel\witness_agy_20260908\alphatbi_fixed.out
+regress\artifacts\alphatbinegsel\witness_agy_20260908\alphatbi_committed.out
+regress\artifacts\ctorabortclass\alpha_census_20260907.txt
+Path                                 
+----                                 
+C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+
+
+
+web search: 
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-ChildItem -LiteralPath regress/artifacts/alphatbinegsel/witness_agy_20260908 -Force | Select-Object Name,Length; $p='"'regress/artifacts/alphatbinegsel/witness_agy_20260908/alphatbi_probe.asrun.py'; "'$s=Get-Content -LiteralPath $p; for($i=0;$i -lt $s.Length;$i++){ '"'{0}:{1}' -f ("'$i+1),$s[$i] }; Get-Content -LiteralPath regress/artifacts/alphatbinegsel/witness_agy_20260908/alphatbi_committed.out; Get-Content -LiteralPath regress/artifacts/alphatbinegsel/witness_agy_20260908/alphatbi_fixed.out; git show --no-patch --format=fuller 3031a30; git diff --format= '"'3031a30"'^'"' 3031a30 -- src/cpus/cpu_alpha_palcode.c" in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$p='"'src/cpus/cpu_alpha_palcode.c'; "'$s=Get-Content -LiteralPath $p; for($i=140;$i -lt 400;$i++){ '"'{0}:{1}' -f ("'$i+1),$s[$i] }; $p='"'src/cpus/memory_alpha.c'; "'$s=Get-Content -LiteralPath $p; for($i=0;$i -lt $s.Length;$i++){ '"'{0}:{1}' -f ("'$i+1),$s[$i] }' in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$paths = @('"'C:\\AGENTS.md','C:\\DocumentNoSnc\\AGENTS.md','C:\\DocumentNoSnc\\CC\\AGENTS.md','C:\\DocumentNoSnc\\CC\\GXEMUL\\AGENTS.md','C:\\DocumentNoSnc\\CC\\GXEMUL\\GXEMUL-SEC\\AGENTS.md'); foreach ("'$p in $paths) { if (Test-Path -LiteralPath $p) { Get-Item -LiteralPath $p | Select-Object FullName; Get-Content -LiteralPath $p } }; rg --files --hidden -g AGENTS.md -g '"'"'!**/.git/**'"'; Get-ChildItem -LiteralPath .. -Force | Select-Object Name,Mode; rg --files .. -g '*21066*' -g '*pal*' -g '*Pal*' -g '*architecture*' -g '"'!**/.git/**'"'" in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+ succeeded in 179ms:
+141:		len = a3;
+142:		if (strlen(s) < len)
+143:			len = strlen(s) + 1;
+144:		store_buf(cpu, a2, s, len);
+145:		break;
+146:
+147:	default:fatal("[ Alpha PALcode: GXemul PROM call, a0=0x%" PRIx64" ]\n",
+148:		    (uint64_t) cpu->cd.alpha.r[ALPHA_A0]);
+149:		cpu->running = 0;
+150:	}
+151:
+152:	/*  Return from the PROM call.  */
+153:	cpu->pc = cpu->cd.alpha.r[ALPHA_RA];
+154:}
+155:
+156:
+157:/*
+158: *  alpha_palcode():
+159: *
+160: *  Execute an Alpha PALcode instruction. (Most of these correspond to
+161: *  OSF1 palcodes, used by for example NetBSD/alpha.)
+162: */
+163:void alpha_palcode(struct cpu *cpu, uint32_t palcode)
+164:{
+165:	uint64_t a0 = cpu->cd.alpha.r[ALPHA_A0], a1 = cpu->cd.alpha.r[ALPHA_A1];
+166:	uint64_t userMode = cpu->cd.alpha.ps & ALPHA_PSL_USERMODE;
+167:
+168:	/*
+169:	 *  Only these are unprivileged, i.e. can be invoked in user mode,
+170:	 *  according to the manual:
+171:	 *
+172:	 *	bpt		kernel and user
+173:	 *	bugchk		kernel and user
+174:	 *	callsys		user
+175:	 *	clrfen		user
+176:	 *	gentrap		kernel and user
+177:	 *	imb		kernel and user
+178:	 *	rdunique	kernel and user
+179:	 *	urti		user
+180:	 *	wrunique	kernel and user
+181:	 */
+182:
+183:	if (userMode && !(
+184:	    palcode == 0x80 || palcode == 0x81 || palcode == 0x83 ||
+185:	    palcode == 0xae || palcode == 0xaa || palcode == 0x86 ||
+186:	    palcode == 0x9e || palcode == 0x92 || palcode == 0x9f)) {
+187:		// opDec fault.
+188:		fatal("[ Privileged Alpha PALcode called from user mode: TODO ]");
+189:		cpu->running = 0;
+190:		return;
+191:	}
+192:
+193:	switch (palcode) {
+194:#if 0
+195:TODO: Uncomment more again, as I progress with the emulation...
+196:Make sure they are correct, as documented in the Manual.
+197:
+198:	case 0x02:	/*  PAL_draina  */
+199:		/*  TODO?  */
+200:		break;
+201:#endif
+202:	case 0x10:	/*  PAL_OSF1_rdmces  */
+203:		/*  Return Machine Check status in v0.  */
+204:		cpu->cd.alpha.r[ALPHA_V0] = cpu->cd.alpha.mces;
+205:		break;
+206:	case 0x11:	/*  PAL_OSF1_wrmces  */
+207:		/*  Clear bits 0, 1, and 2 of the Machine Check and Error status.  */
+208:		cpu->cd.alpha.mces = ~(cpu->cd.alpha.r[ALPHA_A0] & 7);
+209:
+210:		/*  Set bits 3 and 4 of the Machine Check and Error status.  */
+211:		cpu->cd.alpha.mces &= ~0x18;
+212:		cpu->cd.alpha.mces |= (cpu->cd.alpha.r[ALPHA_A0] & 0x18);
+213:		break;
+214:	case 0x2b:	/*  PAL_OSF1_wrfen  */
+215:		/*  Floating point enable: a0 = 1 or 0.  */
+216:		/*  TODO. Since clrfen is documented as:
+217:			FEN �+? 0
+218:			(PCBB+40)<0> �+? 0
+219:		    then most likely wrfen should do the reverse.
+220:		 */
+221:		cpu->cd.alpha.pcb.apcb_flags = cpu->cd.alpha.r[ALPHA_A0];
+222:		store_64bit_word(cpu, cpu->cd.alpha.ctx + 40,
+223:		    cpu->cd.alpha.pcb.apcb_flags);
+224:		break;
+225:	case 0x2d:	/*  PAL_OSF1_wrvptptr  */
+226:		/*  Write Virtual Page Table Pointer. a0 = value  */
+227:		cpu->cd.alpha.vptptr = a0;
+228:		break;
+229:	case 0x30:	/*  PAL_OSF1_swpctx  */
+230:		/*  Save old context:  */
+231:		store_64bit_word(cpu, cpu->cd.alpha.ctx + 0,
+232:		    cpu->cd.alpha.pcb.apcb_ksp);
+233:		store_64bit_word(cpu, cpu->cd.alpha.ctx + 8,
+234:		    cpu->cd.alpha.pcb.apcb_usp);
+235:		store_64bit_word(cpu, cpu->cd.alpha.ctx + 16,
+236:		    cpu->cd.alpha.pcb.apcb_ptbr);
+237:		store_32bit_word(cpu, cpu->cd.alpha.ctx + 24,
+238:		    cpu->cd.alpha.pcb.apcb_cpc);
+239:		store_32bit_word(cpu, cpu->cd.alpha.ctx + 28,
+240:		    cpu->cd.alpha.pcb.apcb_asn);
+241:		store_64bit_word(cpu, cpu->cd.alpha.ctx + 32,
+242:		    cpu->cd.alpha.pcb.apcb_unique);
+243:		store_64bit_word(cpu, cpu->cd.alpha.ctx + 40,
+244:		    cpu->cd.alpha.pcb.apcb_flags);
+245:		store_64bit_word(cpu, cpu->cd.alpha.ctx + 48,
+246:		    cpu->cd.alpha.pcb.apcb_decrsv0);
+247:		store_64bit_word(cpu, cpu->cd.alpha.ctx + 56,
+248:		    cpu->cd.alpha.pcb.apcb_decrsv1);
+249:
+250:		/*  Return old context in v0.  */
+251:		/*  #514: was ALPHA_A0, contradicting the comment directly above and the
+252:		    third-party ABI wrapper.  `alpha_pal_swpctx' (alpha_cpu.h) declares
+253:		    `v0 __asm("$0")' as an OUTPUT, so a correct caller reads the result
+254:		    from v0.  a0 is NOT in that asm's clobber list ($1,$22..$25,memory) --
+255:		    it is an IN-OUT OPERAND ("=r" (a0) with input "0" (a0)), and the
+256:		    wrapper's own comment marks it clobbered "(above)", i.e. handled as
+257:		    that operand.  Either way the caller may not rely on a0, so the model
+258:		    was publishing into the register the caller discards and leaving
+259:		    untouched the one it reads.  (An earlier draft of this comment said the
+260:		    wrapper "lists a0 as clobbered"; a pass-2 seat read the asm and showed
+261:		    it does not.)  No a0 write is added: the architecture marks a0
+262:		    UNPREDICTABLE, which permits it to remain unchanged.  Ordering is
+263:		    unaffected -- `a0' at the `ctx = a0' below is the LOCAL captured at
+264:		    function entry (`:165'), not a live register read.  Census, corrected
+265:		    twice and stated as of AFTER this fix: no `r[ALPHA_A0] =' remains in the
+266:		    file, and the compiled PAL returns to v0 are rdmces, this swpctx,
+267:		    swpipl, rdps and whami -- three further v0 stores sit inside `#if 0' and
+268:		    `:118' is alpha_prom_call, not a PAL.  */
+269:		cpu->cd.alpha.r[ALPHA_V0] = cpu->cd.alpha.ctx;	/*  #514  */
+270:
+271:		/*  Load new context:  */
+272:		{
+273:			cpu->cd.alpha.ctx = a0;
+274:			uint64_t new_ksp =
+275:			    load_64bit_word(cpu, cpu->cd.alpha.ctx + 0);
+276:			uint64_t new_usp =
+277:			    load_64bit_word(cpu, cpu->cd.alpha.ctx + 8);
+278:			uint64_t new_ptbr =
+279:			    load_64bit_word(cpu, cpu->cd.alpha.ctx + 16);
+280:			uint64_t new_cpc =
+281:			    load_32bit_word(cpu, cpu->cd.alpha.ctx + 24);
+282:			uint64_t new_asn =
+283:			    load_32bit_word(cpu, cpu->cd.alpha.ctx + 28);
+284:			uint64_t new_unique =
+285:			    load_64bit_word(cpu, cpu->cd.alpha.ctx + 32);
+286:			uint64_t new_flags =
+287:			    load_64bit_word(cpu, cpu->cd.alpha.ctx + 40);
+288:			uint64_t new_decrsv0 =
+289:			    load_64bit_word(cpu, cpu->cd.alpha.ctx + 48);
+290:			uint64_t new_decrsv1 =
+291:			    load_64bit_word(cpu, cpu->cd.alpha.ctx + 56);
+292:
+293:			// Update all variables in the pcb simultaneously:
+294:			cpu->cd.alpha.pcb.apcb_ksp = new_ksp;
+295:			cpu->cd.alpha.pcb.apcb_usp = new_usp;
+296:			cpu->cd.alpha.pcb.apcb_ptbr = new_ptbr;
+297:			cpu->cd.alpha.pcb.apcb_cpc = new_cpc;
+298:			cpu->cd.alpha.pcb.apcb_asn = new_asn;
+299:			cpu->cd.alpha.pcb.apcb_unique = new_unique;
+300:			/*  #507: was `apcb_ptbr = new_flags' -- a field-name transposition that
+301:			    assigned apcb_ptbr TWICE (here and at the `apcb_ptbr = new_ptbr' four
+302:			    lines above -- "three lines up" until 2026-09-07, corrected
+303:			    after a pass-2 seat derived the true distance from the hunk
+304:			    header alone and called the phrasing inconsistent) and apcb_flags NEVER,
+305:			    while every other field in this block is assigned exactly once.  Two
+306:			    consequences: apcb_ptbr ended up holding the flags word, and the incoming
+307:			    context's flags were dropped -- so the NEXT save published a never-loaded
+308:			    word back into the outgoing PCB, wiping what the guest planted.  */
+309:			cpu->cd.alpha.pcb.apcb_flags = new_flags;	/*  #507  */
+310:			cpu->cd.alpha.pcb.apcb_decrsv0 = new_decrsv0;
+311:			cpu->cd.alpha.pcb.apcb_decrsv1 = new_decrsv1;
+312:
+313:			// TODO: Don't invalidate EVERYTHING!
+314:			cpu->invalidate_translation_caches(cpu, 0, INVALIDATE_ALL);
+315:		}
+316:		break;
+317:#if 0
+318:	case 0x31:	/*  PAL_OSF1_wrval  */
+319:		/*  a0 = value  */
+320:		cpu->cd.alpha.sysvalue = a0;
+321:		break;
+322:	case 0x32:	/*  PAL_OSF1_rdval  */
+323:		/*  return: v0 = value  */
+324:		cpu->cd.alpha.r[ALPHA_V0] = cpu->cd.alpha.sysvalue;
+325:		break;
+326:#endif
+327:	case 0x33:	/*  PAL_OSF1_tbi  */
+328:		/*
+329:		 *  a0 = op, a1 = vaddr
+330:		 *  a0 is ignored for now. TODO.
+331:		 *	a0 = 1: ITB invalidate
+332:		 *	a0 = 2: DTB invalidate
+333:		 *	a0 = 3: both ITB and DTB
+334:		 *	a0 = -1: invalidate everything with ASM=0.
+335:		 *	a0 = -2: invalidate everything
+336:		 */
+337:		// debug("[ Alpha PALcode: PAL_OSF1_tbi: a0=%" PRIi64" a1=0x%"
+338:		//    PRIx64" ]\n", (int64_t)a0, (uint64_t)a1);
+339:		if (a0 >= 1)
+340:			cpu->invalidate_translation_caches(cpu, a1, INVALIDATE_VADDR);
+341:		else
+342:			cpu->invalidate_translation_caches(cpu, 0, INVALIDATE_ALL);
+343:		break;
+344:	case 0x34:	/*  PAL_OSF1_wrent (Write System Entry Address)  */
+345:		/*  a0 = new vector, a1 = vector selector  */
+346:		if (a1 < N_ALPHA_KENTRY)
+347:			cpu->cd.alpha.kentry[a1] = a0;
+348:		else {
+349:			fatal("[ Alpha PALcode: PAL_OSF1_wrent: attempt to "
+350:			    "write to non-implemented selector %i ]\n",
+351:			    (int)a1);
+352:			cpu->running = 0;
+353:		}
+354:		break;
+355:	case 0x35:	/*  PAL_OSF1_swpipl  */
+356:		/*  a0 = new ipl, v0 = return old ipl  */
+357:		cpu->cd.alpha.r[ALPHA_V0] = cpu->cd.alpha.ps & ALPHA_PSL_IPL_MASK;
+358:		cpu->cd.alpha.ps &= ~ALPHA_PSL_IPL_MASK;
+359:		cpu->cd.alpha.ps |= (a0 & ALPHA_PSL_IPL_MASK);
+360:		break;
+361:	case 0x36:	/*  PAL_rdps  */
+362:		cpu->cd.alpha.r[ALPHA_V0] = cpu->cd.alpha.ps;
+363:		break;
+364:	case 0x37:	/*  PAL_OSF1_wrkgp  */
+365:		cpu->cd.alpha.kgp = a0;
+366:		break;
+367:#if 0
+368:	case 0x38:	/*  PAL_OSF1_wrusp  */
+369:		/*  a0 = value  */
+370:		cpu->cd.alpha.pcb.apcb_usp = a0;
+371:		break;
+372:	case 0x3a:	/*  PAL_OSF1_rdusp  */
+373:		/*  return: v0 = value  */
+374:		cpu->cd.alpha.r[ALPHA_V0] = cpu->cd.alpha.pcb.apcb_usp;
+375:		break;
+376:#endif
+377:	case 0x3c:	/*  PAL_whami  */
+378:		/*  Returns CPU id in v0:  */
+379:		cpu->cd.alpha.r[ALPHA_V0] = cpu->cpu_id;
+380:		break;
+381:#if 0
+382:	case 0x81:	/*  PAL_bugchk  */
+383:		cpu->running = 0;
+384:		break;
+385:	case 0x83:	/*  PAL_OSF1_syscall  */
+386:		fatal("[ Alpha PALcode: syscall, but no syscall handler ]\n");
+387:		cpu->running = 0;
+388:		break;
+389:#endif
+390:	case 0x86:	/*  PAL_imb  */
+391:		/*  TODO  */
+392:		break;
+393:#if 0
+394:	case 0x3fffffc:
+395:		fatal("[ Alpha: KENTRY not set! Halting. ]");
+396:		cpu->running = 0;
+397:		break;
+398:	case 0x3fffffd:
+399:		fatal("[ Alpha PALcode: Fixup: TODO ]\n");
+400:		/*  Return from the fixup call.  */
+1:/*
+2: *  Copyright (C) 2006-2021  Anders Gavare.  All rights reserved.
+3: *
+4: *  Redistribution and use in source and binary forms, with or without
+5: *  modification, are permitted provided that the following conditions are met:
+6: *
+7: *  1. Redistributions of source code must retain the above copyright
+8: *     notice, this list of conditions and the following disclaimer.
+9: *  2. Redistributions in binary form must reproduce the above copyright  
+10: *     notice, this list of conditions and the following disclaimer in the 
+11: *     documentation and/or other materials provided with the distribution.
+12: *  3. The name of the author may not be used to endorse or promote products
+13: *     derived from this software without specific prior written permission.
+14: *
+15: *  THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+16: *  ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+17: *  IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+18: *  ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE   
+19: *  FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+20: *  DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+21: *  OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+22: *  HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+23: *  LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+24: *  OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+25: *  SUCH DAMAGE.
+26: */
+27:
+28:#include <stdio.h>
+29:#include <stdlib.h>
+30:#include <string.h>
+31:
+32:#include "cpu.h"
+33:#include "machine.h"
+34:#include "memory.h"
+35:#include "misc.h"
+36:
+37:#include "thirdparty/alpha_rpb.h"
+38:
+39:
+40:/*
+41: *  alpha_translate_v2p():
+42: */
+43:int alpha_translate_v2p(struct cpu *cpu, uint64_t vaddr,
+44:	uint64_t *return_paddr, int flags)
+45:{
+46:	uint64_t base = cpu->cd.alpha.pcb.apcb_ptbr << ALPHA_PAGESHIFT;
+47:	uint64_t userMode = cpu->cd.alpha.ps & ALPHA_PSL_USERMODE;
+48:	// uint64_t vptptr = cpu->cd.alpha.vptptr;
+49:	
+50:	// TODO: From the Alpha "arm_book.book":
+51:	// IF {SEXT(VA<63:VA_SIZE>) NEQ SEXT(VA<VA_SIZE-1>} THEN
+52:	// 	{initiate Access Violation fault}
+53:	// IF (VIRBND in use) THEN
+54:	//   IF (VA LTU VIRBND) THEN
+55:	//     ptbr_value <- PTBR
+56:	//   ELSE
+57:	//     ptbr_value <- SYSPTBR
+58:	// ELSE
+59:	//   ptbr_value <- PTBR
+60:
+61:	/*  Kernel direct-mapped space (OSF/1, NetBSD):  */
+62:	if (!userMode && (vaddr >= ALPHA_K0SEG_BASE && vaddr <= ALPHA_K0SEG_END)) {
+63:		*return_paddr = vaddr & 0x000003ffffffffffULL;
+64:		return 2;
+65:	}
+66:
+67:	/*
+68:	 *  UGLY hack for now:
+69:	 *
+70:	 *  Before virtual memory has been set up, ptbr is most likely zero.
+71:	 *  In that case, simply map everything vaddr == paddr.
+72:	 */
+73:	if (!userMode && base == 0) {
+74:		*return_paddr = vaddr & 0x000003ffffffffffULL;
+75:if (vaddr == 0xfffffffd80000000ULL) {
+76:	fatal("Alpha kernel virtual memory seems to want to be used. Not yet implemented.\n");
+77:	exit(1);
+78:}
+79:#if 1
+80:		if ((vaddr & ~0x7fff) == 0x0000000010000000ULL)
+81:			*return_paddr = (vaddr & 0x7fff) + HWRPB_PADDR;
+82:
+83:		if ((vaddr & ~0xffffff) == 0xfffffe0000000000ULL)
+84:			*return_paddr = 0x7efa000 + (vaddr & 0xffffff);
+85:
+86:		/*  At 0x20000000, NetBSD stores 8KB temp prom data  */
+87:		if ((vaddr & ~0x1fff) == 0x0000000020000000ULL)
+88:			*return_paddr = (vaddr & 0x1fff) + PROM_ARGSPACE_PADDR;
+89:#endif
+90:		return 2;
+91:	}
+92:
+93:	// debug("base = 0x%016"PRIx64"\n", base);
+94:if (vaddr == 0xfffffffd80000000ULL) fatal("AYONA3\n");
+95:
+96:	uint64_t addr, pte1, pte2, pte3;
+97:	int i1, i2, i3;
+98:	unsigned char *pt_entry_ptr;
+99:	const int pageSizeShift = 13;
+100:	// const int pageSize = 1 << pageSizeShift;
+101:	const int bitsPerLevel = 10;
+102:	const int maskPerLevel = (1 << bitsPerLevel) - 1;
+103:
+104:	i1 = (vaddr >> (pageSizeShift + 2 * bitsPerLevel)) & maskPerLevel;
+105:	i2 = (vaddr >> (pageSizeShift + 1 * bitsPerLevel)) & maskPerLevel;
+106:	i3 = (vaddr >> (pageSizeShift + 0 * bitsPerLevel)) & maskPerLevel;
+107:
+108:	// debug("vaddr=%016llx i1=0x%x i2=0x%x i3=0x%x\n", (long long)vaddr, i1, i2, i3);
+109:
+110:	addr = base + i1 * sizeof(uint64_t);
+111:	
+112:	pt_entry_ptr = memory_paddr_to_hostaddr(cpu->mem, addr, 0);
+113:	if (pt_entry_ptr == NULL)
+114:		goto not_found;
+115:
+116:	pte1 = *(uint64_t *)(pt_entry_ptr);
+117:	pte1 = LE64_TO_HOST(pte1);
+118:
+119:	// debug("pte1 = 0x%016"PRIx64"\n", pte1);
+120:	if (!(pte1 & ALPHA_PTE_VALID)) {
+121:		// TODO:
+122:		// IF level1_pte<KRE> EQ 0 THEN
+123:		//   {initiate Access Violation fault}
+124:		// ELSE
+125:		//   {initiate Translation Not Valid fault}
+126:
+127:		// fatal("TODO: pte1 not valid.\n");
+128:		goto not_found;
+129:	}
+130:
+131:	addr = ((pte1 >> 32) << ALPHA_PAGESHIFT) + (i2 * sizeof(uint64_t));
+132:
+133:	pt_entry_ptr = memory_paddr_to_hostaddr(cpu->mem, addr, 0);
+134:	if (pt_entry_ptr == NULL)
+135:		goto not_found;
+136:
+137:	pte2 = *(uint64_t *)(pt_entry_ptr);
+138:	pte2 = LE64_TO_HOST(pte2);
+139:
+140:	// debug("pte2 = 0x%016"PRIx64"\n", pte2);
+141:	if (!(pte2 & ALPHA_PTE_VALID)) {
+142:		// TODO:
+143:		// IF level2_pte<KRE> EQ 0 THEN
+144:		//   {initiate Access Violation fault}
+145:		// ELSE
+146:		//   {initiate Translation Not Valid fault}
+147:
+148:		fatal("TODO: pte2 not valid.\n");
+149:		goto not_found;
+150:	}
+151:
+152:	addr = ((pte2 >> 32) << ALPHA_PAGESHIFT) + (i3 * sizeof(uint64_t));
+153:
+154:	pt_entry_ptr = memory_paddr_to_hostaddr(cpu->mem, addr, 0);
+155:	if (pt_entry_ptr == NULL)
+156:		goto not_found;
+157:
+158:	pte3 = *(uint64_t *)(pt_entry_ptr);
+159:	pte3 = LE64_TO_HOST(pte3);
+160:
+161:	// debug("pte3 = 0x%016"PRIx64"\n", pte3);
+162:
+163:	if (!(pte3 & ALPHA_PTE_VALID)) {
+164:		fatal("TODO: pte3 not valid.\n");
+165:		goto not_found;
+166:	}
+167:
+168:	/*  #508: was just `PFN << pageSizeShift' -- a PAGE BASE.  memory_rw then takes
+169:	    `offset = paddr & offset_mask', which was therefore always zero, so every
+170:	    walked access FILLED THE TRANSLATION FROM the page's first bytes.  ("every
+171:	    walked access resolved to" until 2026-09-07: a pass-2 seat noted that the
+172:	    Alpha FAST PATH recomputes `addr & 8191' itself, so a later cache HIT reads
+173:	    the right bytes.  The corruption is the SLOW-PATH FILL, which is also why a
+174:	    watchpoint -- which keeps a page off the fast store table -- makes it
+175:	    reproducible.)  Measured: a cold guest ldq
+176:	    of vaddr+8 returned the vaddr+0 value.  A debugger watchpoint on a walked page
+177:	    landed at the base for the same reason.
+178:	
+179:	    The mask is derived from pageSizeShift rather than written as 0x1fff: this
+180:	    function already has TWO names for 13 (ALPHA_PAGESHIFT and this local), and a
+181:	    literal beside the shift is how the two drift.  `|' rather than `+' because
+182:	    that is what every other CPU's walk in this tree writes; here they are equal,
+183:	    the shifted PFN having bits 12:0 clear.  The TODO below STAYS: `flags' is
+184:	    still ignored, the protection bits untested, and `return 2' still reports
+185:	    every walked page writable.  */
+186:	(*return_paddr) = (ALPHA_PTE_TO_PFN(pte3) << pageSizeShift)
+187:	    | (vaddr & ((1ULL << pageSizeShift) - 1));
+188:
+189:	// TODO.
+190:	return 2;
+191:
+192:not_found:
+193:	/*  No match.  */
+194:	/*  #194: (Codex/Fable) a failed guest page-table walk must not
+195:	    abort()/exit() the host; report no-translation (0) so the caller
+196:	    raises the fault (keeps the emulator alive and debuggable).  */
+197:	fatal("[ alpha_translate_v2p: 0x%016" PRIx64" wasn't found ]\n", vaddr);
+198:	return 0;
+199:}
+200:
+
+ succeeded in 386ms:
+
+..\est\src\devices\dev_palmbus.c
+..\est\src\cpus\cpu_alpha_palcode.c
+..\src\devices\dev_palmbus.c
+..\src\cpus\cpu_alpha_palcode.c
+..\GXEMUL-SEC\src\devices\dev_palmbus.o
+..\GXEMUL-SEC\src\devices\dev_palmbus.c
+..\build-asan\src\devices\dev_palmbus.o
+..\build-asan\src\devices\dev_palmbus.c
+..\build-asan\src\cpus\cpu_alpha_palcode.o
+..\build-asan\src\cpus\cpu_alpha_palcode.c
+..\GXEMUL-SEC\src\cpus\cpu_alpha_palcode.o
+..\GXEMUL-SEC\src\cpus\cpu_alpha_palcode.c
+..\build\src\devices\dev_palmbus.o
+..\build\src\devices\dev_palmbus.c
+..\build\src\cpus\cpu_alpha_palcode.o
+..\build\src\cpus\cpu_alpha_palcode.c
+..\_scratchpad\seat500_p9\tree\src\devices\dev_palmbus.o
+..\_scratchpad\seat500_p9\tree\src\devices\dev_palmbus.c
+..\_scratchpad\seat500_p9\tree\src\cpus\cpu_alpha_palcode.o
+..\_scratchpad\seat500_p9\tree\src\cpus\cpu_alpha_palcode.c
+..\_archive\audit-results-20260625_223818\analysis\clang-tidy\root\src__devices__dev_palmbus.c.log
+..\_archive\audit-results-20260625_223818\analysis\clang-tidy\root\src__cpus__cpu_alpha_palcode.c.log
+..\_archive\audit-results-20260625_223818\analysis\clang-tidy\est\src__devices__dev_palmbus.c.log
+..\_archive\audit-results-20260625_223818\analysis\clang-tidy\est\src__cpus__cpu_alpha_palcode.c.log
+..\_scratchpad\panel_20260830_214609\kimi_q1\build_mutant\src\devices\dev_palmbus.o
+..\_scratchpad\panel_20260830_214609\kimi_q1\build_mutant\src\devices\dev_palmbus.c
+..\_scratchpad\panel_20260830_214609\kimi_q1\build_mutant\src\cpus\cpu_alpha_palcode.o
+..\_scratchpad\panel_20260830_214609\kimi_q1\build_mutant\src\cpus\cpu_alpha_palcode.c
+..\GXEMUL-SEC\regress\artifacts\mrwstore2\ppc_architecture_20260829.md
+..\_scratchpad\21066_66a_hrm.txt
+..\_scratchpad\21066_66a_hrm.pdf
+..\_archive\audit-results-20260625_203645\builds\orig-asan\src\devices\dev_palmbus.c
+..\_archive\audit-results-20260625_203645\builds\orig-asan\src\cpus\cpu_alpha_palcode.c
+..\_archive\audit-results-20260625_203645\builds\est-asanonly\src\devices\dev_palmbus.c
+..\_archive\audit-results-20260625_203645\builds\est-asanonly\src\cpus\cpu_alpha_palcode.c
+..\_guest-src-openbsd22\sys\arch\alpha\stand\OSFpal.c
+..\_guest-src-openbsd22\sys\arch\alpha\alpha\pal.s
+..\_guest-src-openbsd22\sys\arch\alpha\stand\boot\prom_swpal.S
+..\_guest-src-openbsd22\gnu\usr.bin\gcc\cppalloc.c
+Name                  Mode  
+----                  ----  
+.claude               d-----
+.vs                   d-----
+build                 d-----
+build-asan            d-----
+demos                 d-----
+doc                   d-----
+est                   d-----
+experiments           d-----
+GXEMUL-SEC            d-----
+gxemul_arc_rig        d-----
+gxemul_pmax_rig       d-----
+harness               d-----
+man                   d-----
+pipeline              d-----
+src                   d-----
+test                  d-----
+_archive              d-----
+_claude-memory        d-----
+_guest-src-openbsd22  d-----
+_images               d-----
+_scratchpad           d-----
+_tmpnone              d-----
+_wsl-gentoo           d-----
+--disasm              -a----
+.loop_stop_stamp      -a----
+.loop_wakeup_stamp    -a----
+=                     -a----
+adjudicate.sh         -a----
+base.out              -a----
+cd.arm.tmp_pc_data[0] -a----
+CLAUDE.md             -a----
+configure             -a----
+diff_dis_sync_ovl     -a----
+diff_dis_sync_ovl.map -a----
+FIRST-RUN-CHECK.sh    -a----
+grep.exe.stackdump    -a----
+HISTORY               -a----
+LICENSE               -a----
+Makefile.skel         -a----
+nightly_battery.sh    -a----
+nightly_check.sh      -a----
+panel.sh              -a----
+panel_ollama.py       -a----
+PIPELINE.md           -a----
+postfix.txt           -a----
+precommit_check.sh    -a----
+README                -a----
+regress-matrix.html   -a----
+RESUME.md             -a----
+summary.md            -a----
+unasm_tmp.txt         -a----
+
+
+
+ succeeded in 387ms:
+
+commit 3031a3067b3a3c5b7a8ca82e995fd3e8e87e39db
+Author:     indigoidk <indigoidk@users.noreply.github.com>
+AuthorDate: Tue Sep 8 08:38:00 2026 -0500
+Commit:     indigoidk <indigoidk@users.noreply.github.com>
+CommitDate: Tue Sep 8 08:38:00 2026 -0500
+
+    #514 alphaswpctxreg: the context-switch primitive returned its result in the
+    register the ABI tells the caller to discard -- one identifier, rung-3 witnessed
+    
+    cpu_alpha_palcode.c:250-251 read:
+    
+        /*  Return old context in v0.  */
+        cpu->cd.alpha.r[ALPHA_A0] = cpu->cd.alpha.ctx;
+    
+    The comment says v0 and the code writes a0.  The third-party ABI wrapper settles
+    the intent independently: alpha_pal_swpctx declares `v0 __asm("$0")' an OUTPUT and
+    lists a0 among the clobbers.  So the model published into the register the caller is
+    told to throw away and left untouched the one it reads.
+    
+    THE WITNESS IS RUNG 3 AND IT WENT RED FIRST.  regress/alpha_swpctx_v0_probe.py, on
+    unmodified -E alpha -e alphabook1 with real call_pal 0x30 instructions:
+    
+        PREFIX_20260908.out    2/4    measured on fc687db, file UNMODIFIED
+        POSTFIX_20260908.out   4/4    same script, after the one-identifier change
+    
+    THE ORACLE CARRIES THREE DISTINGUISHABLE VALUES, which is what makes it more than a
+    value check: an old context C, a new context N, and a sentinel S seeded into v0
+    before the second call.  v0 == C is correct; v0 == S is the shipped defect and is
+    what HEAD measured; v0 == N would be an INCORRECT repair returning the new context
+    instead of the old.  A row asserting only "v0 changed" would pass that third case.
+    The design is codex's, from the pass-1 brief's Q4.
+    
+    AND THE ATTRIBUTION CONTROL IS WHAT MAKES IT A WITNESS RATHER THAN A READING.  The
+    `a0 land' row reads a0 after the second call: pre-fix it holds C, proving THE
+    HANDLER RAN AND WROTE THE WRONG REGISTER, where a handler that never executed would
+    have left a0 holding N.  One observation, two hypotheses separated, and both rows
+    flipped together.
+    
+    No a0 write is added.  The architecture marks a0 UNPREDICTABLE and that definition
+    explicitly permits a register to remain unchanged.  An earlier draft of mine called
+    a0 "unobservable by construction"; codex refused that as too strong -- software CAN
+    read a0, it simply cannot require a value.
+    
+    PASS 1: SIX SEATS, UNANIMOUS on the fix, the severity and the scope -- codex, grok,
+    glm, kimi, deepseek, minimax.  opus5 and fable5 are HELD for the 2026-09-09
+    adjudication and agy is the measurement reserve; all three are recorded BY NAME as
+    deliberate non-firings, which is neither a seat failure nor agreement.
+    
+    *** THE PANEL CAUGHT A PREMISE I ASSERTED AND NEVER EXHIBITED, AND THREE SEATS FOUND
+    IT INDEPENDENTLY. ***  My brief said "ordering in the handler is correct" while
+    showing only :251 and :255.  glm, kimi and minimax all refused to grant it, and kimi
+    named the fork exactly: if :255 read the REGISTER rather than a captured local, then
+    :251 would clobber it and the live defect would be "swpctx is a silent no-op" -- a
+    larger bug that the same one-token fix repairs.  Verified by opening the file: :165
+    is `uint64_t a0 = cpu->cd.alpha.r[ALPHA_A0]', a local captured at entry, so the fork
+    does not exist.  The premise was true, and true by luck of my having read it earlier
+    rather than by anything the brief showed.
+    
+    *** MY CENSUS WAS TEXTUALLY RIGHT AND MISLEADING, AND TWO SEATS FOUND IT
+    SEPARATELY. ***  I reported EIGHT ALPHA_V0 return sites.  Three are inside `#if 0'
+    and one is alpha_prom_call, so it is FIVE compiled, four live PAL returns -- codex
+    and grok reached that independently.  I grepped for textual presence and reported it
+    as compiled code.
+    
+    glm's triangulation point is the one worth keeping: the verdict holds EVEN IF both
+    greps were wrong, because comment, code and third-party wrapper agree independently.
+    The census was corroboration, never the load-bearing evidence, which is why an
+    inflated count did not change the answer.
+    
+    SCOPE, deliberately narrow: the `// TODO: Don't invalidate EVERYTHING!' at :296 in
+    the same arm is EXCLUDED -- every seat called it a separate row.  It bears on
+    alphatbinegsel, which is open on the same flush behaviour, and since #514 landed
+    first that row now owes a witness re-baselined with this fix present.  Queued for
+    the flagship seat rather than answered here.
+    
+    Propagated to est, build, build-asan and /tmp/gxsec-build, all cmp-clean;
+    build/ rebuilt and the two-part clearance re-run (binary 08:29:21 newer than source).
+    The probe is registered CLASS_WITNESS, which section R accepts ungated.
+    
+    Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+diff --git a/src/cpus/cpu_alpha_palcode.c b/src/cpus/cpu_alpha_palcode.c
+index 7c66cd0..b511768 100644
+--- a/src/cpus/cpu_alpha_palcode.c
++++ b/src/cpus/cpu_alpha_palcode.c
+@@ -248,7 +248,18 @@ Make sure they are correct, as documented in the Manual.
+ 		    cpu->cd.alpha.pcb.apcb_decrsv1);
+ 
+ 		/*  Return old context in v0.  */
+-		cpu->cd.alpha.r[ALPHA_A0] = cpu->cd.alpha.ctx;
++		/*  #514: was ALPHA_A0, contradicting the comment directly above and the
++		    third-party ABI wrapper.  `alpha_pal_swpctx' (alpha_cpu.h) declares
++		    `v0 __asm("$0")' as an OUTPUT and lists a0 as CLOBBERED, so a correct
++		    caller reads the result from v0 and may not rely on a0 -- the model was
++		    publishing into the register the caller is told to discard and leaving
++		    untouched the one it reads.  `:251' was the only `r[ALPHA_A0] =' in this
++		    file; every compiled return here uses ALPHA_V0.  No a0 write is added:
++		    the architecture marks a0 UNPREDICTABLE, which permits it to remain
++		    unchanged, so there is nothing further owed.  Ordering is unaffected --
++		    `a0' at the `ctx = a0' below is the LOCAL captured at function entry
++		    (`:165'), not a live register read, so this store cannot perturb it.  */
++		cpu->cd.alpha.r[ALPHA_V0] = cpu->cd.alpha.ctx;	/*  #514  */
+ 
+ 		/*  Load new context:  */
+ 		{
+Name                           Length
+----                           ------
+alphatbi_committed.out           1174
+alphatbi_fixed.out               1134
+alphatbi_probe.asrun.py         12331
+REVERIFY_mainloop_20260908.out   1078
+1:#!/usr/bin/env python3
+2:"""alphatbi_probe.py -- witness for Alpha PAL_OSF1_tbi negative selector defect (alphatbinegsel)
+3:
+4:    usage:  alphatbi_probe.py <gxemul-binary> [label]
+5:
+6:WHAT THIS PINS.
+7:In src/cpus/cpu_alpha_palcode.c, case 0x33 /* PAL_OSF1_tbi */:
+8:    if (a0 >= 1)
+9:        cpu->invalidate_translation_caches(cpu, a1, INVALIDATE_VADDR);
+10:    else
+11:        cpu->invalidate_translation_caches(cpu, 0, INVALIDATE_ALL);
+12:
+13:a0 is uint64_t.
+14:ALPHA_TBIA() is defined as alpha_pal_tbi(-2, 0), passing a0 = -2 (0xfffffffffffffffe).
+15:ALPHA_TBIAP() is defined as alpha_pal_tbi(-1, 0), passing a0 = -1 (0xffffffffffffffff).
+16:Because a0 is unsigned uint64_t without a signed cast or upper bound check:
+17:    (uint64_t)-2 >= 1 is TRUE  -> takes INVALIDATE_VADDR branch with a1 = 0
+18:    (uint64_t)-1 >= 1 is TRUE  -> takes INVALIDATE_VADDR branch with a1 = 0
+19:INVALIDATE_VADDR invalidates only the entry matching virtual page (a1 & vaddr_mask) == 0.
+20:INVALIDATE_ALL invalidates every translation cache entry.
+21:
+22:Therefore, TBIA/TBIAP on HEAD flushes virtual page ZERO and NOTHING ELSE.
+23:
+24:FIVE TRAPS HANDLED:
+25:1. Debugger all-flushes between interactions:
+26:   The fill (initial load caching VPN), remap (PTE update via K0SEG store),
+27:   tbi (call_pal 0x33), and observing load are ALL executed within a SINGLE 'step N'.
+28:2. K0SEG is checked before ptbr:
+29:   The test addresses (0x2000, 0x4000, 0x6000) are in user virtual memory and consult
+30:   the 3-level page table, warming and testing the dynamic translation cache.
+31:3. Page 0 is flushed by the defect:
+32:   We use non-zero VPNs (0x2000 = VPN 1, 0x4000 = VPN 2, 0x6000 = VPN 3).
+33:4. Zero a1 explicitly before call_pal 0x33:
+34:   LDA a1, 0(zero) is executed before TBIA/TBIAP palcalls.
+35:5. Remap must change observed bytes:
+36:   Initial pages hold VAL_A/VAL_C/VAL_E; remapped pages hold VAL_B/VAL_D/VAL_F.
+37:
+38:ORACLE POLARITY:
+39:Asserts the CORRECT behavior (re-walks and loads remapped data VAL_B / VAL_D).
+40:Pre-fix committed build: RED (stale cached data VAL_A / VAL_C observed).
+41:Post-fix build: GREEN (re-walked data VAL_B / VAL_D observed).
+42:"""
+43:import os, sys, pty, select, time, re
+44:
+45:BIN   = sys.argv[1]
+46:LABEL = sys.argv[2] if len(sys.argv) > 2 else "?"
+47:MACH  = "alphabook1"
+48:
+49:rows = []
+50:def row(name, got, want, note=""):
+51:    ok = (got == want)
+52:    rows.append((name, ok))
+53:    print("%-16s %-20s %-20s %-50s %s" % (name, str(got), str(want), note,
+54:                                          "ok" if ok else "FAIL"))
+55:    return ok
+56:
+57:# ---------------------------------------------------------------- encoder
+58:ZERO, T0, T1, T2, T3, T4, T5 = 31, 1, 2, 3, 4, 5, 6
+59:A0, A1 = 16, 17
+60:
+61:def mem(op, ra, rb, disp):
+62:    assert -32768 <= disp <= 32767, "displacement %d out of range" % disp
+63:    return ((op & 0x3f) << 26) | ((ra & 31) << 21) | ((rb & 31) << 16) | (disp & 0xffff)
+64:
+65:def LDA (ra, disp, rb=ZERO): return mem(0x08, ra, rb, disp)
+66:def LDAH(ra, disp, rb=ZERO): return mem(0x09, ra, rb, disp)
+67:def LDQ (ra, disp, rb):      return mem(0x29, ra, rb, disp)
+68:def STQ (ra, disp, rb):      return mem(0x2d, ra, rb, disp)
+69:def CALL_PAL(func):          return (0x00 << 26) | (func & 0x3ffffff)
+70:
+71:def load_const(reg, val):
+72:    hi, lo = (val >> 16) & 0xffff, val & 0xffff
+73:    if lo & 0x8000:
+74:        hi = (hi + 1) & 0xffff
+75:    return [LDAH(reg, hi - 0x10000 if hi & 0x8000 else hi, ZERO),
+76:            LDA (reg, lo - 0x10000 if lo & 0x8000 else lo, reg)]
+77:
+78:# ---------------------------------------------------------------- addresses & map
+79:K0SEG      = 0xfffffc0000000000
+80:def k0(p): return K0SEG | p
+81:
+82:PAGESHIFT  = 13
+83:PTE_VALID  = 0x1
+84:def pte(pfn): return (pfn << 32) | PTE_VALID
+85:
+86:P_L1       = 0x01050000
+87:P_L2       = 0x01052000
+88:P_L3       = 0x01054000
+89:P_DATA1    = 0x01056000  # TBIA initial page (VPN 1 = 0x2000)
+90:P_DATA2    = 0x01058000  # TBIA remapped page
+91:P_DATA3    = 0x0105a000  # TBIAP initial page (VPN 2 = 0x4000)
+92:P_DATA4    = 0x0105c000  # TBIAP remapped page
+93:P_DATA5    = 0x0105e000  # POSITIVE selector initial page (VPN 3 = 0x6000)
+94:P_DATA6    = 0x01060000  # POSITIVE selector remapped page
+95:P_PCB      = 0x01062000
+96:P_PTRV     = 0x01064000
+97:P_CODE     = 0x01066000
+98:
+99:L1_PFN     = P_L1 >> PAGESHIFT
+100:
+101:assert max(P_L1, P_L2, P_L3, P_DATA1, P_DATA2, P_DATA3, P_DATA4, P_DATA5, P_DATA6,
+102:           P_PCB, P_PTRV, P_CODE) < 64 * 1024 * 1024, "addresses must fit in RAM"
+103:
+104:VAL_A = 0xaaaa0000aaaa
+105:VAL_B = 0xbbbb0000bbbb
+106:VAL_C = 0xcccc0000cccc
+107:VAL_D = 0xdddd0000dddd
+108:VAL_E = 0xeeee0000eeee
+109:VAL_F = 0xffff0000ffff
+110:VAL_S = 0x55000055
+111:
+112:DUMMY = os.path.join(os.path.dirname(os.path.abspath(__file__)), "alpha_dummy.bin")
+113:if not os.path.exists(DUMMY):
+114:    with open(DUMMY, "wb") as f:
+115:        f.write(b"\0" * 8)
+116:
+117:# ---------------------------------------------------------------- session
+118:def session(cmds, timeout=6.0):
+119:    pid, fd = pty.fork()
+120:    if pid == 0:
+121:        os.execv(BIN, [BIN, "-V", "-x", "-E", "alpha", "-e", MACH, "-M", "64",
+122:                       "0x20000000:" + DUMMY])
+123:        os._exit(127)
+124:    buf = ""
+125:    def wait_prompt(t=6.0):
+126:        nonlocal buf
+127:        last_pos = len(buf)
+128:        end = time.time() + t
+129:        while time.time() < end:
+130:            r, _, _ = select.select([fd], [], [], 0.02)
+131:            if not r:
+132:                continue
+133:            try:
+134:                d = os.read(fd, 65536)
+135:                if not d:
+136:                    return False
+137:                buf += d.decode("latin-1", "replace")
+138:                if "gxemul>" in buf[last_pos:].lower():
+139:                    return True
+140:            except OSError:
+141:                return False
+142:        return False
+143:
+144:    alive = wait_prompt(timeout)
+145:    for c in cmds:
+146:        try:
+147:            os.write(fd, (c + "\n").encode("latin-1"))
+148:        except OSError:
+149:            alive = False; break
+150:        if not wait_prompt(timeout):
+151:            alive = False; break
+152:    try:
+153:        os.write(fd, b"quit\n")
+154:        time.sleep(0.05)
+155:    except OSError:
+156:        pass
+157:    try:
+158:        os.close(fd)
+159:    except OSError:
+160:        pass
+161:    return buf.replace("\r", ""), alive
+162:
+163:def printed(t, reg):
+164:    m = re.search(r"print\s+%s\s*\n\s*(0x[0-9a-f]+)" % reg, t)
+165:    return "absent" if not m else "0x%x" % int(m.group(1), 16)
+166:
+167:# ---------------------------------------------------------------- table setup
+168:setup = [
+169:    # L1 and L2 tables
+170:    "put d 0x%x, 0x%x" % (k0(P_L1),        pte(P_L2 >> PAGESHIFT)),
+171:    "put d 0x%x, 0x%x" % (k0(P_L2),        pte(P_L3 >> PAGESHIFT)),
+172:    # Initial L3 entries: L3[1] -> DATA1, L3[2] -> DATA3, L3[3] -> DATA5
+173:    "put d 0x%x, 0x%x" % (k0(P_L3 + 8),    pte(P_DATA1 >> PAGESHIFT)),
+174:    "put d 0x%x, 0x%x" % (k0(P_L3 + 16),   pte(P_DATA3 >> PAGESHIFT)),
+175:    "put d 0x%x, 0x%x" % (k0(P_L3 + 24),   pte(P_DATA5 >> PAGESHIFT)),
+176:    # Data pages
+177:    "put d 0x%x, 0x%x" % (k0(P_DATA1 + 0), VAL_A),
+178:    "put d 0x%x, 0x%x" % (k0(P_DATA2 + 0), VAL_B),
+179:    "put d 0x%x, 0x%x" % (k0(P_DATA3 + 0), VAL_C),
+180:    "put d 0x%x, 0x%x" % (k0(P_DATA4 + 0), VAL_D),
+181:    "put d 0x%x, 0x%x" % (k0(P_DATA5 + 0), VAL_E),
+182:    "put d 0x%x, 0x%x" % (k0(P_DATA6 + 0), VAL_F),
+183:    # PCB setup (ptbr & flags)
+184:    "put d 0x%x, 0x%x" % (k0(P_PCB + 16),  L1_PFN),
+185:    "put d 0x%x, 0x%x" % (k0(P_PCB + 40),  L1_PFN),
+186:    # Pointer vector
+187:    "put d 0x%x, 0x%x" % (k0(P_PTRV + 0),  k0(P_PCB)),
+188:    "put d 0x%x, 0x%x" % (k0(P_PTRV + 8),  k0(P_L3 + 8)),
+189:    "put d 0x%x, 0x%x" % (k0(P_PTRV + 16), pte(P_DATA2 >> PAGESHIFT)),
+190:    "put d 0x%x, 0x%x" % (k0(P_PTRV + 24), k0(P_L3 + 16)),
+191:    "put d 0x%x, 0x%x" % (k0(P_PTRV + 32), pte(P_DATA4 >> PAGESHIFT)),
+192:    "put d 0x%x, 0x%x" % (k0(P_PTRV + 40), k0(P_L3 + 24)),
+193:    "put d 0x%x, 0x%x" % (k0(P_PTRV + 48), pte(P_DATA6 >> PAGESHIFT)),
+194:    "put d 0x%x, 0x%x" % (k0(P_PTRV + 56), k0(P_PTRV)),
+195:]
+196:
+197:print("alphatbi_probe -- binary=%s label=%s machine=%s" % (BIN, LABEL, MACH))
+198:print("%-16s %-20s %-20s %-50s %s" % ("row", "got", "want", "note", ""))
+199:
+200:# ================================================================
+201:# SESSION 1: TBIA (a0 = -2, a1 = 0) on VPN 1 (0x2000)
+202:# ================================================================
+203:prog1 = (load_const(T0, P_PTRV) +
+204:         [LDQ(T0, 56, T0),      # t0 = k0(P_PTRV)
+205:          LDQ(A0, 0, T0),       # a0 = k0(P_PCB)
+206:          LDQ(T1, 8, T0),       # t1 = k0(P_L3 + 8) (PTE addr)
+207:          LDQ(T2, 16, T0),      # t2 = pte(P_DATA2 >> 13) (new PTE)
+208:          CALL_PAL(0x30)] +     # swpctx -> installs ptbr
+209:         load_const(T3, 0x2000) +
+210:         [LDQ(T4, 0, T3),       # WARM TRANSLATION CACHE: loads VAL_A from 0x2000
+211:          STQ(T2, 0, T1),       # REMAP: L3[1] -> P_DATA2 (holding VAL_B)
+212:          LDA(A0, -2, ZERO),    # a0 = -2 (ALPHA_TBIA)
+213:          LDA(A1, 0, ZERO),     # a1 = 0 (TRAP 4: explicit zero)
+214:          CALL_PAL(0x33)] +     # PAL_OSF1_tbi
+215:         load_const(T5, VAL_S) +
+216:         [LDQ(T5, 0, T3)])      # OBSERVING LOAD: reads 0x2000
+217:
+218:cmds1 = setup + ["put w 0x%x, 0x%08x" % (k0(P_CODE) + 4 * i, op) for i, op in enumerate(prog1)]
+219:cmds1 += ["pc=0x%x" % k0(P_CODE), "step %d" % len(prog1), "print t4", "print t5"]
+220:t1txt, alive1 = session(cmds1)
+221:
+222:t4_1 = printed(t1txt, "t4")
+223:t5_1 = printed(t1txt, "t5")
+224:
+225:row("live", "alive" if alive1 else "died", "alive",
+226:    "CONTROL: emulator session survives sequence")
+227:row("tbia fill", t4_1, "0x%x" % VAL_A,
+228:    "CONTROL: initial walked load cached VAL_A")
+229:row("tbia obs", t5_1, "0x%x" % VAL_B,
+230:    "TBIA (a0=-2) must flush TLB and read remapped VAL_B")
+231:
+232:# ================================================================
+233:# SESSION 2: TBIAP (a0 = -1, a1 = 0) on VPN 2 (0x4000)
+234:# ================================================================
+235:prog2 = (load_const(T0, P_PTRV) +
+236:         [LDQ(T0, 56, T0),      # t0 = k0(P_PTRV)
+237:          LDQ(A0, 0, T0),       # a0 = k0(P_PCB)
+238:          LDQ(T1, 24, T0),      # t1 = k0(P_L3 + 16) (PTE addr)
+239:          LDQ(T2, 32, T0),      # t2 = pte(P_DATA4 >> 13) (new PTE)
+240:          CALL_PAL(0x30)] +     # swpctx -> installs ptbr
+241:         load_const(T3, 0x4000) +
+242:         [LDQ(T4, 0, T3),       # WARM TRANSLATION CACHE: loads VAL_C from 0x4000
+243:          STQ(T2, 0, T1),       # REMAP: L3[2] -> P_DATA4 (holding VAL_D)
+244:          LDA(A0, -1, ZERO),    # a0 = -1 (ALPHA_TBIAP)
+245:          LDA(A1, 0, ZERO),     # a1 = 0 (TRAP 4: explicit zero)
+246:          CALL_PAL(0x33)] +     # PAL_OSF1_tbi
+247:         load_const(T5, VAL_S) +
+248:         [LDQ(T5, 0, T3)])      # OBSERVING LOAD: reads 0x4000
+249:
+250:cmds2 = setup + ["put w 0x%x, 0x%08x" % (k0(P_CODE) + 4 * i, op) for i, op in enumerate(prog2)]
+251:cmds2 += ["pc=0x%x" % k0(P_CODE), "step %d" % len(prog2), "print t4", "print t5"]
+252:t2txt, alive2 = session(cmds2)
+253:
+254:t4_2 = printed(t2txt, "t4")
+255:t5_2 = printed(t2txt, "t5")
+256:
+257:row("tbiap fill", t4_2, "0x%x" % VAL_C,
+258:    "CONTROL: initial walked load cached VAL_C")
+259:row("tbiap obs", t5_2, "0x%x" % VAL_D,
+260:    "TBIAP (a0=-1) must flush TLB and read remapped VAL_D")
+261:
+262:# ================================================================
+263:# SESSION 3: Positive Selector Control (a0 = 2 DTB, a1 = 0x6000)
+264:# ================================================================
+265:prog3 = (load_const(T0, P_PTRV) +
+266:         [LDQ(T0, 56, T0),      # t0 = k0(P_PTRV)
+267:          LDQ(A0, 0, T0),       # a0 = k0(P_PCB)
+268:          LDQ(T1, 40, T0),      # t1 = k0(P_L3 + 24) (PTE addr)
+269:          LDQ(T2, 48, T0),      # t2 = pte(P_DATA6 >> 13) (new PTE)
+270:          CALL_PAL(0x30)] +     # swpctx -> installs ptbr
+271:         load_const(T3, 0x6000) +
+272:         [LDQ(T4, 0, T3),       # WARM TRANSLATION CACHE: loads VAL_E from 0x6000
+273:          STQ(T2, 0, T1),       # REMAP: L3[3] -> P_DATA6 (holding VAL_F)
+274:          LDA(A0, 2, ZERO)] +   # a0 = 2 (PAL_tbi DTB)
+275:         load_const(A1, 0x6000) + # a1 = 0x6000
+276:         [CALL_PAL(0x33)] +     # PAL_OSF1_tbi
+277:         load_const(T5, VAL_S) +
+278:         [LDQ(T5, 0, T3)])      # OBSERVING LOAD: reads 0x6000
+279:
+280:cmds3 = setup + ["put w 0x%x, 0x%08x" % (k0(P_CODE) + 4 * i, op) for i, op in enumerate(prog3)]
+281:cmds3 += ["pc=0x%x" % k0(P_CODE), "step %d" % len(prog3), "print t4", "print t5"]
+282:t3txt, alive3 = session(cmds3)
+283:
+284:t4_3 = printed(t3txt, "t4")
+285:t5_3 = printed(t3txt, "t5")
+286:
+287:row("pos fill", t4_3, "0x%x" % VAL_E,
+288:    "CONTROL: initial walked load cached VAL_E")
+289:row("pos obs", t5_3, "0x%x" % VAL_F,
+290:    "CONTROL: positive selector (a0=2, a1=0x6000) flushes vaddr on both builds")
+291:
+292:bad = [n for n, ok in rows if not ok]
+293:print("\nALPHATBI_RESULT=%d/%d" % (len(rows) - len(bad), len(rows)))
+294:if bad:
+295:    print("FAILING: " + " ".join(bad))
+296:print("ALPHATBI_DONE")
+297:sys.exit(0 if not bad else 1)
+alphatbi_probe -- binary=/mnt/c/Users/User00/.gemini/antigravity-cli/brain/b2543357-2db4-4f86-befe-2d70a6ad7eb2/scratch/gxemul_committed/gxemul label=committed machine=alphabook1
+row              got                  want                 note                                               
+live             alive                alive                CONTROL: emulator session survives sequence        ok
+tbia fill        0xaaaa0000aaaa       0xaaaa0000aaaa       CONTROL: initial walked load cached VAL_A          ok
+tbia obs         0xaaaa0000aaaa       0xbbbb0000bbbb       TBIA (a0=-2) must flush TLB and read remapped VAL_B FAIL
+tbiap fill       0xcccc0000cccc       0xcccc0000cccc       CONTROL: initial walked load cached VAL_C          ok
+tbiap obs        0xcccc0000cccc       0xdddd0000dddd       TBIAP (a0=-1) must flush TLB and read remapped VAL_D FAIL
+pos fill         0xeeee0000eeee       0xeeee0000eeee       CONTROL: initial walked load cached VAL_E          ok
+pos obs          0xffff0000ffff       0xffff0000ffff       CONTROL: positive selector (a0=2, a1=0x6000) flushes vaddr on both builds ok
+
+ALPHATBI_RESULT=5/7
+FAILING: tbia obs tbiap obs
+ALPHATBI_DONE
+alphatbi_probe -- binary=/mnt/c/Users/User00/.gemini/antigravity-cli/brain/b2543357-2db4-4f86-befe-2d70a6ad7eb2/scratch/gxemul_fixed/gxemul label=fixed machine=alphabook1
+row              got                  want                 note                                               
+live             alive                alive                CONTROL: emulator session survives sequence        ok
+tbia fill        0xaaaa0000aaaa       0xaaaa0000aaaa       CONTROL: initial walked load cached VAL_A          ok
+tbia obs         0xbbbb0000bbbb       0xbbbb0000bbbb       TBIA (a0=-2) must flush TLB and read remapped VAL_B ok
+tbiap fill       0xcccc0000cccc       0xcccc0000cccc       CONTROL: initial walked load cached VAL_C          ok
+tbiap obs        0xdddd0000dddd       0xdddd0000dddd       TBIAP (a0=-1) must flush TLB and read remapped VAL_D ok
+pos fill         0xeeee0000eeee       0xeeee0000eeee       CONTROL: initial walked load cached VAL_E          ok
+pos obs          0xffff0000ffff       0xffff0000ffff       CONTROL: positive selector (a0=2, a1=0x6000) flushes vaddr on both builds ok
+
+ALPHATBI_RESULT=7/7
+ALPHATBI_DONE
+
+
+
+web search: Alpha OSF PALcode TBI -2 -1 1 2 3 invalid function code ...
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$p='"'regress/artifacts/alphatbinegsel/witness_agy_20260908/alphatbi_probe.asrun.py'; "'$s=Get-Content -LiteralPath $p; for($i=0;$i -lt $s.Length;$i++){ '"'{0}:{1}' -f ("'$i+1),$s[$i] }; Get-Content -LiteralPath regress/artifacts/alphatbinegsel/witness_agy_20260908/alphatbi_committed.out; Get-Content -LiteralPath regress/artifacts/alphatbinegsel/witness_agy_20260908/alphatbi_fixed.out' in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "git show --no-patch --format=fuller 3031a30; git diff --format= '3031a30"'^'"' 3031a30 -- src/cpus/cpu_alpha_palcode.c; "'$p='"'../_scratchpad/21066_66a_hrm.txt'; "'$s=Get-Content -LiteralPath $p; for($i=1459;$i -lt 1510;$i++){ '"'{0}:{1}' -f ("'$i+1),$s[$i] }; rg --files ../_scratchpad -g '"'*alpha*' -g '*arm*book*' -g '*arch*' -g '*pal*' -g '*.pdf' -g '"'!**/tree/**'"' -g '"'!**/build_mutant/**'"' -g '"'!**/.git/**'"' | Select-Object -First 75; rg -n '"'^(CC|CXX|CXXFLAGS|CFLAGS)|std=c'"' Makefile config.h src/cpus/Makefile configure" in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$p='"'src/cpus/memory_alpha.c'; "'$s=Get-Content -LiteralPath $p; for($i=90;$i -lt $s.Length;$i++){ '"'{0}:{1}' -f ("'$i+1),$s[$i] }; rg -n '"'ALPHA_TBI|alpha_pal_tbi|apcb_asn|ASM|ASN|itb|dtb|tlb|exception|[Ff]ault|feature' src/include/cpu_alpha.h src/include/thirdparty/alpha_cpu.h src/cpus/cpu_alpha.c src/cpus/cpu_alpha_instr.c src/cpus/cpu_alpha_instr_loadstore.c; rg -n 'DYNTRANS_INVALIDATE_TC|struct.*tlb|struct.*vph|struct.*table|VADDR|INVALIDATE_ALL|vaddr|paddr' src/cpus/cpu_dyntrans.c src/include/cpu.h src/include/cpu_dyntrans.h" in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+ succeeded in 173ms:
+1:#!/usr/bin/env python3
+2:"""alphatbi_probe.py -- witness for Alpha PAL_OSF1_tbi negative selector defect (alphatbinegsel)
+3:
+4:    usage:  alphatbi_probe.py <gxemul-binary> [label]
+5:
+6:WHAT THIS PINS.
+7:In src/cpus/cpu_alpha_palcode.c, case 0x33 /* PAL_OSF1_tbi */:
+8:    if (a0 >= 1)
+9:        cpu->invalidate_translation_caches(cpu, a1, INVALIDATE_VADDR);
+10:    else
+11:        cpu->invalidate_translation_caches(cpu, 0, INVALIDATE_ALL);
+12:
+13:a0 is uint64_t.
+14:ALPHA_TBIA() is defined as alpha_pal_tbi(-2, 0), passing a0 = -2 (0xfffffffffffffffe).
+15:ALPHA_TBIAP() is defined as alpha_pal_tbi(-1, 0), passing a0 = -1 (0xffffffffffffffff).
+16:Because a0 is unsigned uint64_t without a signed cast or upper bound check:
+17:    (uint64_t)-2 >= 1 is TRUE  -> takes INVALIDATE_VADDR branch with a1 = 0
+18:    (uint64_t)-1 >= 1 is TRUE  -> takes INVALIDATE_VADDR branch with a1 = 0
+19:INVALIDATE_VADDR invalidates only the entry matching virtual page (a1 & vaddr_mask) == 0.
+20:INVALIDATE_ALL invalidates every translation cache entry.
+21:
+22:Therefore, TBIA/TBIAP on HEAD flushes virtual page ZERO and NOTHING ELSE.
+23:
+24:FIVE TRAPS HANDLED:
+25:1. Debugger all-flushes between interactions:
+26:   The fill (initial load caching VPN), remap (PTE update via K0SEG store),
+27:   tbi (call_pal 0x33), and observing load are ALL executed within a SINGLE 'step N'.
+28:2. K0SEG is checked before ptbr:
+29:   The test addresses (0x2000, 0x4000, 0x6000) are in user virtual memory and consult
+30:   the 3-level page table, warming and testing the dynamic translation cache.
+31:3. Page 0 is flushed by the defect:
+32:   We use non-zero VPNs (0x2000 = VPN 1, 0x4000 = VPN 2, 0x6000 = VPN 3).
+33:4. Zero a1 explicitly before call_pal 0x33:
+34:   LDA a1, 0(zero) is executed before TBIA/TBIAP palcalls.
+35:5. Remap must change observed bytes:
+36:   Initial pages hold VAL_A/VAL_C/VAL_E; remapped pages hold VAL_B/VAL_D/VAL_F.
+37:
+38:ORACLE POLARITY:
+39:Asserts the CORRECT behavior (re-walks and loads remapped data VAL_B / VAL_D).
+40:Pre-fix committed build: RED (stale cached data VAL_A / VAL_C observed).
+41:Post-fix build: GREEN (re-walked data VAL_B / VAL_D observed).
+42:"""
+43:import os, sys, pty, select, time, re
+44:
+45:BIN   = sys.argv[1]
+46:LABEL = sys.argv[2] if len(sys.argv) > 2 else "?"
+47:MACH  = "alphabook1"
+48:
+49:rows = []
+50:def row(name, got, want, note=""):
+51:    ok = (got == want)
+52:    rows.append((name, ok))
+53:    print("%-16s %-20s %-20s %-50s %s" % (name, str(got), str(want), note,
+54:                                          "ok" if ok else "FAIL"))
+55:    return ok
+56:
+57:# ---------------------------------------------------------------- encoder
+58:ZERO, T0, T1, T2, T3, T4, T5 = 31, 1, 2, 3, 4, 5, 6
+59:A0, A1 = 16, 17
+60:
+61:def mem(op, ra, rb, disp):
+62:    assert -32768 <= disp <= 32767, "displacement %d out of range" % disp
+63:    return ((op & 0x3f) << 26) | ((ra & 31) << 21) | ((rb & 31) << 16) | (disp & 0xffff)
+64:
+65:def LDA (ra, disp, rb=ZERO): return mem(0x08, ra, rb, disp)
+66:def LDAH(ra, disp, rb=ZERO): return mem(0x09, ra, rb, disp)
+67:def LDQ (ra, disp, rb):      return mem(0x29, ra, rb, disp)
+68:def STQ (ra, disp, rb):      return mem(0x2d, ra, rb, disp)
+69:def CALL_PAL(func):          return (0x00 << 26) | (func & 0x3ffffff)
+70:
+71:def load_const(reg, val):
+72:    hi, lo = (val >> 16) & 0xffff, val & 0xffff
+73:    if lo & 0x8000:
+74:        hi = (hi + 1) & 0xffff
+75:    return [LDAH(reg, hi - 0x10000 if hi & 0x8000 else hi, ZERO),
+76:            LDA (reg, lo - 0x10000 if lo & 0x8000 else lo, reg)]
+77:
+78:# ---------------------------------------------------------------- addresses & map
+79:K0SEG      = 0xfffffc0000000000
+80:def k0(p): return K0SEG | p
+81:
+82:PAGESHIFT  = 13
+83:PTE_VALID  = 0x1
+84:def pte(pfn): return (pfn << 32) | PTE_VALID
+85:
+86:P_L1       = 0x01050000
+87:P_L2       = 0x01052000
+88:P_L3       = 0x01054000
+89:P_DATA1    = 0x01056000  # TBIA initial page (VPN 1 = 0x2000)
+90:P_DATA2    = 0x01058000  # TBIA remapped page
+91:P_DATA3    = 0x0105a000  # TBIAP initial page (VPN 2 = 0x4000)
+92:P_DATA4    = 0x0105c000  # TBIAP remapped page
+93:P_DATA5    = 0x0105e000  # POSITIVE selector initial page (VPN 3 = 0x6000)
+94:P_DATA6    = 0x01060000  # POSITIVE selector remapped page
+95:P_PCB      = 0x01062000
+96:P_PTRV     = 0x01064000
+97:P_CODE     = 0x01066000
+98:
+99:L1_PFN     = P_L1 >> PAGESHIFT
+100:
+101:assert max(P_L1, P_L2, P_L3, P_DATA1, P_DATA2, P_DATA3, P_DATA4, P_DATA5, P_DATA6,
+102:           P_PCB, P_PTRV, P_CODE) < 64 * 1024 * 1024, "addresses must fit in RAM"
+103:
+104:VAL_A = 0xaaaa0000aaaa
+105:VAL_B = 0xbbbb0000bbbb
+106:VAL_C = 0xcccc0000cccc
+107:VAL_D = 0xdddd0000dddd
+108:VAL_E = 0xeeee0000eeee
+109:VAL_F = 0xffff0000ffff
+110:VAL_S = 0x55000055
+111:
+112:DUMMY = os.path.join(os.path.dirname(os.path.abspath(__file__)), "alpha_dummy.bin")
+113:if not os.path.exists(DUMMY):
+114:    with open(DUMMY, "wb") as f:
+115:        f.write(b"\0" * 8)
+116:
+117:# ---------------------------------------------------------------- session
+118:def session(cmds, timeout=6.0):
+119:    pid, fd = pty.fork()
+120:    if pid == 0:
+121:        os.execv(BIN, [BIN, "-V", "-x", "-E", "alpha", "-e", MACH, "-M", "64",
+122:                       "0x20000000:" + DUMMY])
+123:        os._exit(127)
+124:    buf = ""
+125:    def wait_prompt(t=6.0):
+126:        nonlocal buf
+127:        last_pos = len(buf)
+128:        end = time.time() + t
+129:        while time.time() < end:
+130:            r, _, _ = select.select([fd], [], [], 0.02)
+131:            if not r:
+132:                continue
+133:            try:
+134:                d = os.read(fd, 65536)
+135:                if not d:
+136:                    return False
+137:                buf += d.decode("latin-1", "replace")
+138:                if "gxemul>" in buf[last_pos:].lower():
+139:                    return True
+140:            except OSError:
+141:                return False
+142:        return False
+143:
+144:    alive = wait_prompt(timeout)
+145:    for c in cmds:
+146:        try:
+147:            os.write(fd, (c + "\n").encode("latin-1"))
+148:        except OSError:
+149:            alive = False; break
+150:        if not wait_prompt(timeout):
+151:            alive = False; break
+152:    try:
+153:        os.write(fd, b"quit\n")
+154:        time.sleep(0.05)
+155:    except OSError:
+156:        pass
+157:    try:
+158:        os.close(fd)
+159:    except OSError:
+160:        pass
+161:    return buf.replace("\r", ""), alive
+162:
+163:def printed(t, reg):
+164:    m = re.search(r"print\s+%s\s*\n\s*(0x[0-9a-f]+)" % reg, t)
+165:    return "absent" if not m else "0x%x" % int(m.group(1), 16)
+166:
+167:# ---------------------------------------------------------------- table setup
+168:setup = [
+169:    # L1 and L2 tables
+170:    "put d 0x%x, 0x%x" % (k0(P_L1),        pte(P_L2 >> PAGESHIFT)),
+171:    "put d 0x%x, 0x%x" % (k0(P_L2),        pte(P_L3 >> PAGESHIFT)),
+172:    # Initial L3 entries: L3[1] -> DATA1, L3[2] -> DATA3, L3[3] -> DATA5
+173:    "put d 0x%x, 0x%x" % (k0(P_L3 + 8),    pte(P_DATA1 >> PAGESHIFT)),
+174:    "put d 0x%x, 0x%x" % (k0(P_L3 + 16),   pte(P_DATA3 >> PAGESHIFT)),
+175:    "put d 0x%x, 0x%x" % (k0(P_L3 + 24),   pte(P_DATA5 >> PAGESHIFT)),
+176:    # Data pages
+177:    "put d 0x%x, 0x%x" % (k0(P_DATA1 + 0), VAL_A),
+178:    "put d 0x%x, 0x%x" % (k0(P_DATA2 + 0), VAL_B),
+179:    "put d 0x%x, 0x%x" % (k0(P_DATA3 + 0), VAL_C),
+180:    "put d 0x%x, 0x%x" % (k0(P_DATA4 + 0), VAL_D),
+181:    "put d 0x%x, 0x%x" % (k0(P_DATA5 + 0), VAL_E),
+182:    "put d 0x%x, 0x%x" % (k0(P_DATA6 + 0), VAL_F),
+183:    # PCB setup (ptbr & flags)
+184:    "put d 0x%x, 0x%x" % (k0(P_PCB + 16),  L1_PFN),
+185:    "put d 0x%x, 0x%x" % (k0(P_PCB + 40),  L1_PFN),
+186:    # Pointer vector
+187:    "put d 0x%x, 0x%x" % (k0(P_PTRV + 0),  k0(P_PCB)),
+188:    "put d 0x%x, 0x%x" % (k0(P_PTRV + 8),  k0(P_L3 + 8)),
+189:    "put d 0x%x, 0x%x" % (k0(P_PTRV + 16), pte(P_DATA2 >> PAGESHIFT)),
+190:    "put d 0x%x, 0x%x" % (k0(P_PTRV + 24), k0(P_L3 + 16)),
+191:    "put d 0x%x, 0x%x" % (k0(P_PTRV + 32), pte(P_DATA4 >> PAGESHIFT)),
+192:    "put d 0x%x, 0x%x" % (k0(P_PTRV + 40), k0(P_L3 + 24)),
+193:    "put d 0x%x, 0x%x" % (k0(P_PTRV + 48), pte(P_DATA6 >> PAGESHIFT)),
+194:    "put d 0x%x, 0x%x" % (k0(P_PTRV + 56), k0(P_PTRV)),
+195:]
+196:
+197:print("alphatbi_probe -- binary=%s label=%s machine=%s" % (BIN, LABEL, MACH))
+198:print("%-16s %-20s %-20s %-50s %s" % ("row", "got", "want", "note", ""))
+199:
+200:# ================================================================
+201:# SESSION 1: TBIA (a0 = -2, a1 = 0) on VPN 1 (0x2000)
+202:# ================================================================
+203:prog1 = (load_const(T0, P_PTRV) +
+204:         [LDQ(T0, 56, T0),      # t0 = k0(P_PTRV)
+205:          LDQ(A0, 0, T0),       # a0 = k0(P_PCB)
+206:          LDQ(T1, 8, T0),       # t1 = k0(P_L3 + 8) (PTE addr)
+207:          LDQ(T2, 16, T0),      # t2 = pte(P_DATA2 >> 13) (new PTE)
+208:          CALL_PAL(0x30)] +     # swpctx -> installs ptbr
+209:         load_const(T3, 0x2000) +
+210:         [LDQ(T4, 0, T3),       # WARM TRANSLATION CACHE: loads VAL_A from 0x2000
+211:          STQ(T2, 0, T1),       # REMAP: L3[1] -> P_DATA2 (holding VAL_B)
+212:          LDA(A0, -2, ZERO),    # a0 = -2 (ALPHA_TBIA)
+213:          LDA(A1, 0, ZERO),     # a1 = 0 (TRAP 4: explicit zero)
+214:          CALL_PAL(0x33)] +     # PAL_OSF1_tbi
+215:         load_const(T5, VAL_S) +
+216:         [LDQ(T5, 0, T3)])      # OBSERVING LOAD: reads 0x2000
+217:
+218:cmds1 = setup + ["put w 0x%x, 0x%08x" % (k0(P_CODE) + 4 * i, op) for i, op in enumerate(prog1)]
+219:cmds1 += ["pc=0x%x" % k0(P_CODE), "step %d" % len(prog1), "print t4", "print t5"]
+220:t1txt, alive1 = session(cmds1)
+221:
+222:t4_1 = printed(t1txt, "t4")
+223:t5_1 = printed(t1txt, "t5")
+224:
+225:row("live", "alive" if alive1 else "died", "alive",
+226:    "CONTROL: emulator session survives sequence")
+227:row("tbia fill", t4_1, "0x%x" % VAL_A,
+228:    "CONTROL: initial walked load cached VAL_A")
+229:row("tbia obs", t5_1, "0x%x" % VAL_B,
+230:    "TBIA (a0=-2) must flush TLB and read remapped VAL_B")
+231:
+232:# ================================================================
+233:# SESSION 2: TBIAP (a0 = -1, a1 = 0) on VPN 2 (0x4000)
+234:# ================================================================
+235:prog2 = (load_const(T0, P_PTRV) +
+236:         [LDQ(T0, 56, T0),      # t0 = k0(P_PTRV)
+237:          LDQ(A0, 0, T0),       # a0 = k0(P_PCB)
+238:          LDQ(T1, 24, T0),      # t1 = k0(P_L3 + 16) (PTE addr)
+239:          LDQ(T2, 32, T0),      # t2 = pte(P_DATA4 >> 13) (new PTE)
+240:          CALL_PAL(0x30)] +     # swpctx -> installs ptbr
+241:         load_const(T3, 0x4000) +
+242:         [LDQ(T4, 0, T3),       # WARM TRANSLATION CACHE: loads VAL_C from 0x4000
+243:          STQ(T2, 0, T1),       # REMAP: L3[2] -> P_DATA4 (holding VAL_D)
+244:          LDA(A0, -1, ZERO),    # a0 = -1 (ALPHA_TBIAP)
+245:          LDA(A1, 0, ZERO),     # a1 = 0 (TRAP 4: explicit zero)
+246:          CALL_PAL(0x33)] +     # PAL_OSF1_tbi
+247:         load_const(T5, VAL_S) +
+248:         [LDQ(T5, 0, T3)])      # OBSERVING LOAD: reads 0x4000
+249:
+250:cmds2 = setup + ["put w 0x%x, 0x%08x" % (k0(P_CODE) + 4 * i, op) for i, op in enumerate(prog2)]
+251:cmds2 += ["pc=0x%x" % k0(P_CODE), "step %d" % len(prog2), "print t4", "print t5"]
+252:t2txt, alive2 = session(cmds2)
+253:
+254:t4_2 = printed(t2txt, "t4")
+255:t5_2 = printed(t2txt, "t5")
+256:
+257:row("tbiap fill", t4_2, "0x%x" % VAL_C,
+258:    "CONTROL: initial walked load cached VAL_C")
+259:row("tbiap obs", t5_2, "0x%x" % VAL_D,
+260:    "TBIAP (a0=-1) must flush TLB and read remapped VAL_D")
+261:
+262:# ================================================================
+263:# SESSION 3: Positive Selector Control (a0 = 2 DTB, a1 = 0x6000)
+264:# ================================================================
+265:prog3 = (load_const(T0, P_PTRV) +
+266:         [LDQ(T0, 56, T0),      # t0 = k0(P_PTRV)
+267:          LDQ(A0, 0, T0),       # a0 = k0(P_PCB)
+268:          LDQ(T1, 40, T0),      # t1 = k0(P_L3 + 24) (PTE addr)
+269:          LDQ(T2, 48, T0),      # t2 = pte(P_DATA6 >> 13) (new PTE)
+270:          CALL_PAL(0x30)] +     # swpctx -> installs ptbr
+271:         load_const(T3, 0x6000) +
+272:         [LDQ(T4, 0, T3),       # WARM TRANSLATION CACHE: loads VAL_E from 0x6000
+273:          STQ(T2, 0, T1),       # REMAP: L3[3] -> P_DATA6 (holding VAL_F)
+274:          LDA(A0, 2, ZERO)] +   # a0 = 2 (PAL_tbi DTB)
+275:         load_const(A1, 0x6000) + # a1 = 0x6000
+276:         [CALL_PAL(0x33)] +     # PAL_OSF1_tbi
+277:         load_const(T5, VAL_S) +
+278:         [LDQ(T5, 0, T3)])      # OBSERVING LOAD: reads 0x6000
+279:
+280:cmds3 = setup + ["put w 0x%x, 0x%08x" % (k0(P_CODE) + 4 * i, op) for i, op in enumerate(prog3)]
+281:cmds3 += ["pc=0x%x" % k0(P_CODE), "step %d" % len(prog3), "print t4", "print t5"]
+282:t3txt, alive3 = session(cmds3)
+283:
+284:t4_3 = printed(t3txt, "t4")
+285:t5_3 = printed(t3txt, "t5")
+286:
+287:row("pos fill", t4_3, "0x%x" % VAL_E,
+288:    "CONTROL: initial walked load cached VAL_E")
+289:row("pos obs", t5_3, "0x%x" % VAL_F,
+290:    "CONTROL: positive selector (a0=2, a1=0x6000) flushes vaddr on both builds")
+291:
+292:bad = [n for n, ok in rows if not ok]
+293:print("\nALPHATBI_RESULT=%d/%d" % (len(rows) - len(bad), len(rows)))
+294:if bad:
+295:    print("FAILING: " + " ".join(bad))
+296:print("ALPHATBI_DONE")
+297:sys.exit(0 if not bad else 1)
+alphatbi_probe -- binary=/mnt/c/Users/User00/.gemini/antigravity-cli/brain/b2543357-2db4-4f86-befe-2d70a6ad7eb2/scratch/gxemul_committed/gxemul label=committed machine=alphabook1
+row              got                  want                 note                                               
+live             alive                alive                CONTROL: emulator session survives sequence        ok
+tbia fill        0xaaaa0000aaaa       0xaaaa0000aaaa       CONTROL: initial walked load cached VAL_A          ok
+tbia obs         0xaaaa0000aaaa       0xbbbb0000bbbb       TBIA (a0=-2) must flush TLB and read remapped VAL_B FAIL
+tbiap fill       0xcccc0000cccc       0xcccc0000cccc       CONTROL: initial walked load cached VAL_C          ok
+tbiap obs        0xcccc0000cccc       0xdddd0000dddd       TBIAP (a0=-1) must flush TLB and read remapped VAL_D FAIL
+pos fill         0xeeee0000eeee       0xeeee0000eeee       CONTROL: initial walked load cached VAL_E          ok
+pos obs          0xffff0000ffff       0xffff0000ffff       CONTROL: positive selector (a0=2, a1=0x6000) flushes vaddr on both builds ok
+
+ALPHATBI_RESULT=5/7
+FAILING: tbia obs tbiap obs
+ALPHATBI_DONE
+alphatbi_probe -- binary=/mnt/c/Users/User00/.gemini/antigravity-cli/brain/b2543357-2db4-4f86-befe-2d70a6ad7eb2/scratch/gxemul_fixed/gxemul label=fixed machine=alphabook1
+row              got                  want                 note                                               
+live             alive                alive                CONTROL: emulator session survives sequence        ok
+tbia fill        0xaaaa0000aaaa       0xaaaa0000aaaa       CONTROL: initial walked load cached VAL_A          ok
+tbia obs         0xbbbb0000bbbb       0xbbbb0000bbbb       TBIA (a0=-2) must flush TLB and read remapped VAL_B ok
+tbiap fill       0xcccc0000cccc       0xcccc0000cccc       CONTROL: initial walked load cached VAL_C          ok
+tbiap obs        0xdddd0000dddd       0xdddd0000dddd       TBIAP (a0=-1) must flush TLB and read remapped VAL_D ok
+pos fill         0xeeee0000eeee       0xeeee0000eeee       CONTROL: initial walked load cached VAL_E          ok
+pos obs          0xffff0000ffff       0xffff0000ffff       CONTROL: positive selector (a0=2, a1=0x6000) flushes vaddr on both builds ok
+
+ALPHATBI_RESULT=7/7
+ALPHATBI_DONE
+
+ exited 1 in 184ms:
+91:	}
+92:
+93:	// debug("base = 0x%016"PRIx64"\n", base);
+94:if (vaddr == 0xfffffffd80000000ULL) fatal("AYONA3\n");
+95:
+96:	uint64_t addr, pte1, pte2, pte3;
+97:	int i1, i2, i3;
+98:	unsigned char *pt_entry_ptr;
+99:	const int pageSizeShift = 13;
+100:	// const int pageSize = 1 << pageSizeShift;
+101:	const int bitsPerLevel = 10;
+102:	const int maskPerLevel = (1 << bitsPerLevel) - 1;
+103:
+104:	i1 = (vaddr >> (pageSizeShift + 2 * bitsPerLevel)) & maskPerLevel;
+105:	i2 = (vaddr >> (pageSizeShift + 1 * bitsPerLevel)) & maskPerLevel;
+106:	i3 = (vaddr >> (pageSizeShift + 0 * bitsPerLevel)) & maskPerLevel;
+107:
+108:	// debug("vaddr=%016llx i1=0x%x i2=0x%x i3=0x%x\n", (long long)vaddr, i1, i2, i3);
+109:
+110:	addr = base + i1 * sizeof(uint64_t);
+111:	
+112:	pt_entry_ptr = memory_paddr_to_hostaddr(cpu->mem, addr, 0);
+113:	if (pt_entry_ptr == NULL)
+114:		goto not_found;
+115:
+116:	pte1 = *(uint64_t *)(pt_entry_ptr);
+117:	pte1 = LE64_TO_HOST(pte1);
+118:
+119:	// debug("pte1 = 0x%016"PRIx64"\n", pte1);
+120:	if (!(pte1 & ALPHA_PTE_VALID)) {
+121:		// TODO:
+122:		// IF level1_pte<KRE> EQ 0 THEN
+123:		//   {initiate Access Violation fault}
+124:		// ELSE
+125:		//   {initiate Translation Not Valid fault}
+126:
+127:		// fatal("TODO: pte1 not valid.\n");
+128:		goto not_found;
+129:	}
+130:
+131:	addr = ((pte1 >> 32) << ALPHA_PAGESHIFT) + (i2 * sizeof(uint64_t));
+132:
+133:	pt_entry_ptr = memory_paddr_to_hostaddr(cpu->mem, addr, 0);
+134:	if (pt_entry_ptr == NULL)
+135:		goto not_found;
+136:
+137:	pte2 = *(uint64_t *)(pt_entry_ptr);
+138:	pte2 = LE64_TO_HOST(pte2);
+139:
+140:	// debug("pte2 = 0x%016"PRIx64"\n", pte2);
+141:	if (!(pte2 & ALPHA_PTE_VALID)) {
+142:		// TODO:
+143:		// IF level2_pte<KRE> EQ 0 THEN
+144:		//   {initiate Access Violation fault}
+145:		// ELSE
+146:		//   {initiate Translation Not Valid fault}
+147:
+148:		fatal("TODO: pte2 not valid.\n");
+149:		goto not_found;
+150:	}
+151:
+152:	addr = ((pte2 >> 32) << ALPHA_PAGESHIFT) + (i3 * sizeof(uint64_t));
+153:
+154:	pt_entry_ptr = memory_paddr_to_hostaddr(cpu->mem, addr, 0);
+155:	if (pt_entry_ptr == NULL)
+156:		goto not_found;
+157:
+158:	pte3 = *(uint64_t *)(pt_entry_ptr);
+159:	pte3 = LE64_TO_HOST(pte3);
+160:
+161:	// debug("pte3 = 0x%016"PRIx64"\n", pte3);
+162:
+163:	if (!(pte3 & ALPHA_PTE_VALID)) {
+164:		fatal("TODO: pte3 not valid.\n");
+165:		goto not_found;
+166:	}
+167:
+168:	/*  #508: was just `PFN << pageSizeShift' -- a PAGE BASE.  memory_rw then takes
+169:	    `offset = paddr & offset_mask', which was therefore always zero, so every
+170:	    walked access FILLED THE TRANSLATION FROM the page's first bytes.  ("every
+171:	    walked access resolved to" until 2026-09-07: a pass-2 seat noted that the
+172:	    Alpha FAST PATH recomputes `addr & 8191' itself, so a later cache HIT reads
+173:	    the right bytes.  The corruption is the SLOW-PATH FILL, which is also why a
+174:	    watchpoint -- which keeps a page off the fast store table -- makes it
+175:	    reproducible.)  Measured: a cold guest ldq
+176:	    of vaddr+8 returned the vaddr+0 value.  A debugger watchpoint on a walked page
+177:	    landed at the base for the same reason.
+178:	
+179:	    The mask is derived from pageSizeShift rather than written as 0x1fff: this
+180:	    function already has TWO names for 13 (ALPHA_PAGESHIFT and this local), and a
+181:	    literal beside the shift is how the two drift.  `|' rather than `+' because
+182:	    that is what every other CPU's walk in this tree writes; here they are equal,
+183:	    the shifted PFN having bits 12:0 clear.  The TODO below STAYS: `flags' is
+184:	    still ignored, the protection bits untested, and `return 2' still reports
+185:	    every walked page writable.  */
+186:	(*return_paddr) = (ALPHA_PTE_TO_PFN(pte3) << pageSizeShift)
+187:	    | (vaddr & ((1ULL << pageSizeShift) - 1));
+188:
+189:	// TODO.
+190:	return 2;
+191:
+192:not_found:
+193:	/*  No match.  */
+194:	/*  #194: (Codex/Fable) a failed guest page-table walk must not
+195:	    abort()/exit() the host; report no-translation (0) so the caller
+196:	    raises the fault (keeps the emulator alive and debuggable).  */
+197:	fatal("[ alpha_translate_v2p: 0x%016" PRIx64" wasn't found ]\n", vaddr);
+198:	return 0;
+199:}
+200:
+src/cpus/cpu_alpha_instr_loadstore.c:71:		    already signalled a fault (cf. #194's no-translation return);
+src/cpus/cpu_alpha_instr_loadstore.c:115:		    already signalled a fault (cf. #194's no-translation return);
+src/cpus/cpu_alpha.c:198: *  alpha_cpu_tlbdump():
+src/cpus/cpu_alpha.c:206:void alpha_cpu_tlbdump(struct cpu* cpu, int rawflag)
+src/cpus/cpu_alpha.c:390:		default:debug("UNIMPLEMENTED opcode 0x%x func 0x%x\n",
+src/cpus/cpu_alpha.c:421:		default:debug("UNIMPLEMENTED opcode 0x%x func 0x%x\n",
+src/cpus/cpu_alpha.c:478:		default:debug("UNIMPLEMENTED opcode 0x%x func 0x%x\n",
+src/cpus/cpu_alpha.c:498:		default:debug("UNIMPLEMENTED opcode 0x%x func 0x%x\n",
+src/cpus/cpu_alpha.c:526:		default:debug("UNIMPLEMENTED opcode 0x%x func 0x%x\n",
+src/cpus/cpu_alpha.c:540:		default:debug("UNIMPLEMENTED opcode 0x%x func 0x%x\n",
+src/cpus/cpu_alpha.c:565:		default:debug("UNIMPLEMENTED opcode 0x%x func 0x%x\n",
+src/cpus/cpu_alpha.c:602:		default:fatal("unimpl JSR!");
+src/cpus/cpu_alpha.c:663:	default:debug("UNIMPLEMENTED opcode 0x%x\n", opcode);
+src/include/cpu_alpha.h:43:	int		features;
+src/include/cpu_alpha.h:56:/*  TODO: More features  */
+src/cpus/cpu_alpha_instr.c:505: *  but never consulted).  Alpha's default, non-trapping underflow behaviour
+src/cpus/cpu_alpha_instr.c:976:		default:if (!cpu->translation_readahead)
+src/cpus/cpu_alpha_instr.c:1029:		default:if (!cpu->translation_readahead)
+src/cpus/cpu_alpha_instr.c:1099:		default:if (!cpu->translation_readahead)
+src/cpus/cpu_alpha_instr.c:1124:		default:if (!cpu->translation_readahead)
+src/cpus/cpu_alpha_instr.c:1148:		default:if (!cpu->translation_readahead)
+src/cpus/cpu_alpha_instr.c:1173:		default:if (!cpu->translation_readahead)
+src/cpus/cpu_alpha_instr.c:1193:		default:if (!cpu->translation_readahead)
+src/cpus/cpu_alpha_instr.c:1219:		default:if (!cpu->translation_readahead)
+src/cpus/cpu_alpha_instr.c:1314:	default:if (!cpu->translation_readahead)
+src/include/thirdparty/alpha_cpu.h:47: *	MMCSR Fault Type Codes
+src/include/thirdparty/alpha_cpu.h:66:	uint32_t	apcb_asn;	/* address space number */
+src/include/thirdparty/alpha_cpu.h:223:#define	ALPHA_PTE_ASM			0x0010		/* addr. space match */
+src/include/thirdparty/alpha_cpu.h:256: * MMCSR Fault Type Codes.  [OSF/1 PALcode Specific]
+src/include/thirdparty/alpha_cpu.h:266: * Instruction Fault Type Codes.  [OSF/1 PALcode Specific]
+src/include/thirdparty/alpha_cpu.h:281:#define	ALPHA_TBIA()	alpha_pal_tbi(-2, 0)		/* all TB entries */
+src/include/thirdparty/alpha_cpu.h:282:#define	ALPHA_TBIAP()	alpha_pal_tbi(-1, 0)		/* all per-process */
+src/include/thirdparty/alpha_cpu.h:283:#define	ALPHA_TBISI(va)	alpha_pal_tbi(1, (va))		/* ITB entry for va */
+src/include/thirdparty/alpha_cpu.h:284:#define	ALPHA_TBISD(va)	alpha_pal_tbi(2, (va))		/* DTB entry for va */
+src/include/thirdparty/alpha_cpu.h:285:#define	ALPHA_TBIS(va)	alpha_pal_tbi(3, (va))		/* all for va */
+src/include/thirdparty/alpha_cpu.h:479:alpha_pal_tbi(unsigned long op, vaddr_t va)
+rg: src/include/cpu_dyntrans.h: The system cannot find the file specified. (os error 2)
+src/include/cpu.h:88:	struct arch ## _vpg_tlb_entry {					\
+src/include/cpu.h:91:		addrtype	vaddr_page;				\
+src/include/cpu.h:92:		addrtype	paddr_page;				\
+src/include/cpu.h:97:	struct arch ## _l3_64_table {					\
+src/include/cpu.h:101:		tlbindextype	vaddr_to_tlbindex[1 << ARCH ## _L3N];	\
+src/include/cpu.h:103:		struct arch ## _l3_64_table	*next;			\
+src/include/cpu.h:106:	struct arch ## _l2_64_table {					\
+src/include/cpu.h:107:		struct arch ## _l3_64_table	*l3[1 << ARCH ## _L2N];	\
+src/include/cpu.h:108:		struct arch ## _l2_64_table	*next;			\
+src/include/cpu.h:159:	struct arch ## _vpg_tlb_entry					\
+src/include/cpu.h:181: *  vaddr_to_tlbindex is a virtual address to tlb index hint table.
+src/include/cpu.h:195:	uint8_t			vaddr_to_tlbindex[N_VPH32_ENTRIES];
+src/include/cpu.h:201:	uint16_t		vaddr_to_tlbindex[N_VPH32_ENTRIES];
+src/include/cpu.h:207:	uint8_t			vaddr_to_tlbindex_ ## ex[N_VPH32_ENTRIES];
+src/include/cpu.h:225:	struct arch ## _l3_64_table	*l3_64_dummy;			\
+src/include/cpu.h:226:	struct arch ## _l3_64_table	*next_free_l3;			\
+src/include/cpu.h:227:	struct arch ## _l2_64_table	*l2_64_dummy;			\
+src/include/cpu.h:228:	struct arch ## _l2_64_table	*next_free_l2;			\
+src/include/cpu.h:229:	struct arch ## _l2_64_table	*l1_64[1 << DYNTRANS_L1N];
+src/include/cpu.h:296:				    uint64_t dumpaddr);
+src/include/cpu.h:388:	uint64_t	vaddr_mask;
+src/include/cpu.h:392:			    struct memory *mem, uint64_t vaddr,
+src/include/cpu.h:395:	int		(*translate_v2p)(struct cpu *, uint64_t vaddr,
+src/include/cpu.h:396:			    uint64_t *return_paddr, int flags);
+src/include/cpu.h:398:			    uint64_t vaddr_page, unsigned char *host_page,
+src/include/cpu.h:399:			    int writeflag, uint64_t paddr_page);
+src/include/cpu.h:401:			    uint64_t paddr, int flags);
+src/include/cpu.h:403:			    uint64_t paddr, int flags);
+src/include/cpu.h:517:void cpu_print_pc_indicator_in_disassembly(struct cpu *cpu, int running, uint64_t dumpaddr);
+src/include/cpu.h:523:#define	INVALIDATE_ALL			2
+src/include/cpu.h:525:#define	INVALIDATE_VADDR		8
+src/include/cpu.h:526:#define	INVALIDATE_VADDR_UPPER4		16	/*  useful for PPC emulation  */
+src/cpus/cpu_dyntrans.c:671:		uint64_t paddr;
+src/cpus/cpu_dyntrans.c:673:			uint64_t vaddr =
+src/cpus/cpu_dyntrans.c:680:			    cpu, vaddr, &paddr, FLAG_INSTR);
+src/cpus/cpu_dyntrans.c:682:			paddr = cached_pc;
+src/cpus/cpu_dyntrans.c:688:			 *  Try to find the paddr in the translation arrays,
+src/cpus/cpu_dyntrans.c:692:			/*  fatal("TODO: instruction vaddr=>paddr translation "
+src/cpus/cpu_dyntrans.c:693:			    "failed. vaddr=0x%" PRIx64"\n", (uint64_t)cached_pc);
+src/cpus/cpu_dyntrans.c:703:				paddr = cpu->cd.DYNTRANS_ARCH.phys_addr[index];
+src/cpus/cpu_dyntrans.c:715:				paddr = l3->phys_addr[x3];
+src/cpus/cpu_dyntrans.c:721:				ok = cpu->translate_v2p(cpu, cpu->pc, &paddr,
+src/cpus/cpu_dyntrans.c:725:			/*  printf("EXCEPTION HANDLER: vaddr = 0x%x ==> "
+src/cpus/cpu_dyntrans.c:726:			    "paddr = 0x%x\n", (int)cpu->pc, (int)paddr);
+src/cpus/cpu_dyntrans.c:736:		physaddr = paddr;
+src/cpus/cpu_dyntrans.c:747:		unsigned char *host_page = memory_paddr_to_hostaddr(cpu->mem,
+src/cpus/cpu_dyntrans.c:1013:	vaddr_page, int flags)
+src/cpus/cpu_dyntrans.c:1016:	uint32_t index = DYNTRANS_ADDR_TO_PAGENR(vaddr_page);
+src/cpus/cpu_dyntrans.c:1023:		/*  printf("JUST MARKING NON-W: vaddr 0x%08x\n",
+src/cpus/cpu_dyntrans.c:1024:		    (int)vaddr_page);  */
+src/cpus/cpu_dyntrans.c:1027:		int tlbi = cpu->cd.DYNTRANS_ARCH.vaddr_to_tlbindex[index];
+src/cpus/cpu_dyntrans.c:1034:		cpu->cd.DYNTRANS_ARCH.vaddr_to_tlbindex[index] = 0;
+src/cpus/cpu_dyntrans.c:1045:	x1 = (vaddr_page >> (64-DYNTRANS_L1N)) & mask1;
+src/cpus/cpu_dyntrans.c:1046:	x2 = (vaddr_page >> (64-DYNTRANS_L1N-DYNTRANS_L2N)) & mask2;
+src/cpus/cpu_dyntrans.c:1047:	x3 = (vaddr_page >> (64-DYNTRANS_L1N-DYNTRANS_L2N-DYNTRANS_L3N))& mask3;
+src/cpus/cpu_dyntrans.c:1088:		if (l3->vaddr_to_tlbindex[i])
+src/cpus/cpu_dyntrans.c:1110:		if (cpu->cd.DYNTRANS_ARCH.vph_tlb_entry[q].vaddr_page == vaddr_page &&
+src/cpus/cpu_dyntrans.c:1118:				printf("vaddr=%016llx\n", (long long)cpu->cd.DYNTRANS_ARCH.vph_tlb_entry[zz].vaddr_page);
+src/cpus/cpu_dyntrans.c:1123:				printf("vaddr=%016llx\n", (long long)cpu->cd.DYNTRANS_ARCH.vph_tlb_entry[zz].vaddr_page);
+src/cpus/cpu_dyntrans.c:1138:	if (l3->vaddr_to_tlbindex[x3] != 0) {
+src/cpus/cpu_dyntrans.c:1140:		    l3->vaddr_to_tlbindex[x3] - 1].valid = 0;
+src/cpus/cpu_dyntrans.c:1143:		printf("APA: vaddr_page=%016llx l3->refcount = %i\n", (long long)vaddr_page, l3->refcount);
+src/cpus/cpu_dyntrans.c:1147:			printf("vaddr=%016llx\n", (long long)cpu->cd.DYNTRANS_ARCH.vph_tlb_entry[zz].vaddr_page);
+src/cpus/cpu_dyntrans.c:1153:	l3->vaddr_to_tlbindex[x3] = 0;
+src/cpus/cpu_dyntrans.c:1194:#ifdef DYNTRANS_INVALIDATE_TC
+src/cpus/cpu_dyntrans.c:1202: *	INVALIDATE_PADDR  INVALIDATE_VADDR  or  INVALIDATE_ALL
+src/cpus/cpu_dyntrans.c:1204: *  In addition, for INVALIDATE_ALL, INVALIDATE_VADDR_UPPER4 may be set and
+src/cpus/cpu_dyntrans.c:1208: *  In the case when all translations are invalidated, paddr doesn't need
+src/cpus/cpu_dyntrans.c:1215:void DYNTRANS_INVALIDATE_TC(struct cpu *cpu, uint64_t addr, int flags)
+src/cpus/cpu_dyntrans.c:1228:	if (flags & INVALIDATE_VADDR) {
+src/cpus/cpu_dyntrans.c:1229:		/*  fatal("vaddr 0x%08x\n", (int)addr_page);  */
+src/cpus/cpu_dyntrans.c:1236:		// using vaddr 0x00A0000012345678 and 0x00B000001234567c
+src/cpus/cpu_dyntrans.c:1243:			    (cpu->cd.DYNTRANS_ARCH.vph_tlb_entry[r].vaddr_page
+src/cpus/cpu_dyntrans.c:1244:			    & cpu->vaddr_mask) == (addr_page & cpu->vaddr_mask)) {
+src/cpus/cpu_dyntrans.c:1245:				DYNTRANS_INVALIDATE_TLB_ENTRY(cpu, cpu->cd.DYNTRANS_ARCH.vph_tlb_entry[r].vaddr_page, flags);
+src/cpus/cpu_dyntrans.c:1250:			debug("[ DYNTRANS_INVALIDATE_TC: CACHE COLLISION vaddr 0x%016llx! ]\n",
+src/cpus/cpu_dyntrans.c:1259:	if (flags & INVALIDATE_ALL && flags & INVALIDATE_VADDR_UPPER4) {
+src/cpus/cpu_dyntrans.c:1263:			    (cpu->cd.DYNTRANS_ARCH.vph_tlb_entry[r].vaddr_page
+src/cpus/cpu_dyntrans.c:1266:				    DYNTRANS_ARCH.vph_tlb_entry[r].vaddr_page,
+src/cpus/cpu_dyntrans.c:1276:	if (flags & INVALIDATE_ALL) {
+src/cpus/cpu_dyntrans.c:1281:				    DYNTRANS_ARCH.vph_tlb_entry[r].vaddr_page,
+src/cpus/cpu_dyntrans.c:1294:		fatal("HUH? Invalidate: Not vaddr, all, or paddr?\n");
+src/cpus/cpu_dyntrans.c:1300:		    == cpu->cd.DYNTRANS_ARCH.vph_tlb_entry[r].paddr_page) {
+src/cpus/cpu_dyntrans.c:1302:			    cpu->cd.DYNTRANS_ARCH.vph_tlb_entry[r].vaddr_page,
+src/cpus/cpu_dyntrans.c:1313:#endif	/*  DYNTRANS_INVALIDATE_TC  */
+src/cpus/cpu_dyntrans.c:1317:#ifdef DYNTRANS_INVALIDATE_TC_CODE
+src/cpus/cpu_dyntrans.c:1324:void DYNTRANS_INVALIDATE_TC_CODE(struct cpu *cpu, uint64_t addr, int flags)
+src/cpus/cpu_dyntrans.c:1332:	    vaddr_page, paddr_page;
+src/cpus/cpu_dyntrans.c:1336:	/*  printf("DYNTRANS_INVALIDATE_TC_CODE addr=0x%08x flags=%i\n",
+src/cpus/cpu_dyntrans.c:1450:			vaddr_page = cpu->cd.DYNTRANS_ARCH.vph_tlb_entry[r]
+src/cpus/cpu_dyntrans.c:1451:			    .vaddr_page & ~(DYNTRANS_PAGESIZE-1);
+src/cpus/cpu_dyntrans.c:1452:			paddr_page = cpu->cd.DYNTRANS_ARCH.vph_tlb_entry[r]
+src/cpus/cpu_dyntrans.c:1453:			    .paddr_page & ~(DYNTRANS_PAGESIZE-1);
+src/cpus/cpu_dyntrans.c:1455:			if (flags & INVALIDATE_ALL ||
+src/cpus/cpu_dyntrans.c:1456:			    (flags & INVALIDATE_PADDR && paddr_page == addr) ||
+src/cpus/cpu_dyntrans.c:1457:			    (flags & INVALIDATE_VADDR && vaddr_page == addr)) {
+src/cpus/cpu_dyntrans.c:1460:				    DYNTRANS_ADDR_TO_PAGENR(vaddr_page);
+src/cpus/cpu_dyntrans.c:1470:				x1 = (vaddr_page >> (64-DYNTRANS_L1N)) & mask1;
+src/cpus/cpu_dyntrans.c:1471:				x2 = (vaddr_page >> (64-DYNTRANS_L1N -
+src/cpus/cpu_dyntrans.c:1473:				x3 = (vaddr_page >> (64-DYNTRANS_L1N -
+src/cpus/cpu_dyntrans.c:1483:#endif	/*  DYNTRANS_INVALIDATE_TC_CODE  */
+src/cpus/cpu_dyntrans.c:1493:void DYNTRANS_UPDATE_TRANSLATION_TABLE(struct cpu *cpu, uint64_t vaddr_page,
+src/cpus/cpu_dyntrans.c:1494:	unsigned char *host_page, int writeflag, uint64_t paddr_page)
+src/cpus/cpu_dyntrans.c:1500:	vaddr_page &= 0xffffffffULL;
+src/cpus/cpu_dyntrans.c:1502:	if (paddr_page > 0xffffffffULL) {
+src/cpus/cpu_dyntrans.c:1504:		    " p=0x%016" PRIx64"\n", vaddr_page, host_page, writeflag,
+src/cpus/cpu_dyntrans.c:1505:		    paddr_page);
+src/cpus/cpu_dyntrans.c:1510:	    " p=0x%x\n", (int)vaddr_page, host_page, writeflag,
+src/cpus/cpu_dyntrans.c:1511:	    (int)paddr_page);  */
+src/cpus/cpu_dyntrans.c:1521:	    " p=0x%016" PRIx64"\n", (uint64_t)vaddr_page, host_page, writeflag,
+src/cpus/cpu_dyntrans.c:1522:	    (uint64_t)paddr_page);  */
+src/cpus/cpu_dyntrans.c:1525:	assert((vaddr_page & (DYNTRANS_PAGESIZE-1)) == 0);
+src/cpus/cpu_dyntrans.c:1526:	assert((paddr_page & (DYNTRANS_PAGESIZE-1)) == 0);
+src/cpus/cpu_dyntrans.c:1545:	 *  NOTE 1: vaddr_to_tlbindex is one more than the index, so that
+src/cpus/cpu_dyntrans.c:1552:	found = (int)cpu->cd.DYNTRANS_ARCH.vaddr_to_tlbindex[
+src/cpus/cpu_dyntrans.c:1553:	    DYNTRANS_ADDR_TO_PAGENR(vaddr_page)] - 1;
+src/cpus/cpu_dyntrans.c:1555:	x1 = (vaddr_page >> (64-DYNTRANS_L1N)) & mask1;
+src/cpus/cpu_dyntrans.c:1556:	x2 = (vaddr_page >> (64-DYNTRANS_L1N-DYNTRANS_L2N)) & mask2;
+src/cpus/cpu_dyntrans.c:1557:	x3 = (vaddr_page >> (64-DYNTRANS_L1N-DYNTRANS_L2N-DYNTRANS_L3N))
+src/cpus/cpu_dyntrans.c:1568:			found = (int)l3->vaddr_to_tlbindex[x3] - 1;
+src/cpus/cpu_dyntrans.c:1580:			    cpu->cd.DYNTRANS_ARCH.vph_tlb_entry[r].vaddr_page,
+src/cpus/cpu_dyntrans.c:1586:		cpu->cd.DYNTRANS_ARCH.vph_tlb_entry[r].paddr_page = paddr_page;
+src/cpus/cpu_dyntrans.c:1587:		cpu->cd.DYNTRANS_ARCH.vph_tlb_entry[r].vaddr_page = vaddr_page;
+src/cpus/cpu_dyntrans.c:1593:		index = DYNTRANS_ADDR_TO_PAGENR(vaddr_page);
+src/cpus/cpu_dyntrans.c:1597:		cpu->cd.DYNTRANS_ARCH.phys_addr[index] = paddr_page;
+src/cpus/cpu_dyntrans.c:1599:		cpu->cd.DYNTRANS_ARCH.vaddr_to_tlbindex[index] = r + 1;
+src/cpus/cpu_dyntrans.c:1656:		l3->phys_addr[x3] = paddr_page;
+src/cpus/cpu_dyntrans.c:1658:		l3->vaddr_to_tlbindex[x3] = r + 1;
+src/cpus/cpu_dyntrans.c:1666:		if (l3->vaddr_to_tlbindex[i])
+src/cpus/cpu_dyntrans.c:1698:		index = DYNTRANS_ADDR_TO_PAGENR(vaddr_page);
+src/cpus/cpu_dyntrans.c:1706:		if (cpu->cd.DYNTRANS_ARCH.phys_addr[index] == paddr_page) {
+src/cpus/cpu_dyntrans.c:1717:			cpu->cd.DYNTRANS_ARCH.phys_addr[index] = paddr_page;
+src/cpus/cpu_dyntrans.c:1720:		x1 = (vaddr_page >> (64-DYNTRANS_L1N)) & mask1;
+src/cpus/cpu_dyntrans.c:1721:		x2 = (vaddr_page >> (64-DYNTRANS_L1N-DYNTRANS_L2N)) & mask2;
+src/cpus/cpu_dyntrans.c:1722:		x3 = (vaddr_page >> (64-DYNTRANS_L1N-DYNTRANS_L2N-DYNTRANS_L3N))
+src/cpus/cpu_dyntrans.c:1726:		if (l3->phys_addr[x3] == paddr_page) {
+src/cpus/cpu_dyntrans.c:1735:			l3->phys_addr[x3] = paddr_page;
+src/cpus/cpu_dyntrans.c:1747:		if (l3->vaddr_to_tlbindex[i])
+src/cpus/cpu_dyntrans.c:1780:	    machine_watchpoint_match(cpu->machine, paddr_page,
+
+ succeeded in 333ms:
+commit 3031a3067b3a3c5b7a8ca82e995fd3e8e87e39db
+Author:     indigoidk <indigoidk@users.noreply.github.com>
+AuthorDate: Tue Sep 8 08:38:00 2026 -0500
+Commit:     indigoidk <indigoidk@users.noreply.github.com>
+CommitDate: Tue Sep 8 08:38:00 2026 -0500
+
+    #514 alphaswpctxreg: the context-switch primitive returned its result in the
+    register the ABI tells the caller to discard -- one identifier, rung-3 witnessed
+    
+    cpu_alpha_palcode.c:250-251 read:
+    
+        /*  Return old context in v0.  */
+        cpu->cd.alpha.r[ALPHA_A0] = cpu->cd.alpha.ctx;
+    
+    The comment says v0 and the code writes a0.  The third-party ABI wrapper settles
+    the intent independently: alpha_pal_swpctx declares `v0 __asm("$0")' an OUTPUT and
+    lists a0 among the clobbers.  So the model published into the register the caller is
+    told to throw away and left untouched the one it reads.
+    
+    THE WITNESS IS RUNG 3 AND IT WENT RED FIRST.  regress/alpha_swpctx_v0_probe.py, on
+    unmodified -E alpha -e alphabook1 with real call_pal 0x30 instructions:
+    
+        PREFIX_20260908.out    2/4    measured on fc687db, file UNMODIFIED
+        POSTFIX_20260908.out   4/4    same script, after the one-identifier change
+    
+    THE ORACLE CARRIES THREE DISTINGUISHABLE VALUES, which is what makes it more than a
+    value check: an old context C, a new context N, and a sentinel S seeded into v0
+    before the second call.  v0 == C is correct; v0 == S is the shipped defect and is
+    what HEAD measured; v0 == N would be an INCORRECT repair returning the new context
+    instead of the old.  A row asserting only "v0 changed" would pass that third case.
+    The design is codex's, from the pass-1 brief's Q4.
+    
+    AND THE ATTRIBUTION CONTROL IS WHAT MAKES IT A WITNESS RATHER THAN A READING.  The
+    `a0 land' row reads a0 after the second call: pre-fix it holds C, proving THE
+    HANDLER RAN AND WROTE THE WRONG REGISTER, where a handler that never executed would
+    have left a0 holding N.  One observation, two hypotheses separated, and both rows
+    flipped together.
+    
+    No a0 write is added.  The architecture marks a0 UNPREDICTABLE and that definition
+    explicitly permits a register to remain unchanged.  An earlier draft of mine called
+    a0 "unobservable by construction"; codex refused that as too strong -- software CAN
+    read a0, it simply cannot require a value.
+    
+    PASS 1: SIX SEATS, UNANIMOUS on the fix, the severity and the scope -- codex, grok,
+    glm, kimi, deepseek, minimax.  opus5 and fable5 are HELD for the 2026-09-09
+    adjudication and agy is the measurement reserve; all three are recorded BY NAME as
+    deliberate non-firings, which is neither a seat failure nor agreement.
+    
+    *** THE PANEL CAUGHT A PREMISE I ASSERTED AND NEVER EXHIBITED, AND THREE SEATS FOUND
+    IT INDEPENDENTLY. ***  My brief said "ordering in the handler is correct" while
+    showing only :251 and :255.  glm, kimi and minimax all refused to grant it, and kimi
+    named the fork exactly: if :255 read the REGISTER rather than a captured local, then
+    :251 would clobber it and the live defect would be "swpctx is a silent no-op" -- a
+    larger bug that the same one-token fix repairs.  Verified by opening the file: :165
+    is `uint64_t a0 = cpu->cd.alpha.r[ALPHA_A0]', a local captured at entry, so the fork
+    does not exist.  The premise was true, and true by luck of my having read it earlier
+    rather than by anything the brief showed.
+    
+    *** MY CENSUS WAS TEXTUALLY RIGHT AND MISLEADING, AND TWO SEATS FOUND IT
+    SEPARATELY. ***  I reported EIGHT ALPHA_V0 return sites.  Three are inside `#if 0'
+    and one is alpha_prom_call, so it is FIVE compiled, four live PAL returns -- codex
+    and grok reached that independently.  I grepped for textual presence and reported it
+    as compiled code.
+    
+    glm's triangulation point is the one worth keeping: the verdict holds EVEN IF both
+    greps were wrong, because comment, code and third-party wrapper agree independently.
+    The census was corroboration, never the load-bearing evidence, which is why an
+    inflated count did not change the answer.
+    
+    SCOPE, deliberately narrow: the `// TODO: Don't invalidate EVERYTHING!' at :296 in
+    the same arm is EXCLUDED -- every seat called it a separate row.  It bears on
+    alphatbinegsel, which is open on the same flush behaviour, and since #514 landed
+    first that row now owes a witness re-baselined with this fix present.  Queued for
+    the flagship seat rather than answered here.
+    
+    Propagated to est, build, build-asan and /tmp/gxsec-build, all cmp-clean;
+    build/ rebuilt and the two-part clearance re-run (binary 08:29:21 newer than source).
+    The probe is registered CLASS_WITNESS, which section R accepts ungated.
+    
+    Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
+diff --git a/src/cpus/cpu_alpha_palcode.c b/src/cpus/cpu_alpha_palcode.c
+index 7c66cd0..b511768 100644
+--- a/src/cpus/cpu_alpha_palcode.c
++++ b/src/cpus/cpu_alpha_palcode.c
+@@ -248,7 +248,18 @@ Make sure they are correct, as documented in the Manual.
+ 		    cpu->cd.alpha.pcb.apcb_decrsv1);
+ 
+ 		/*  Return old context in v0.  */
+-		cpu->cd.alpha.r[ALPHA_A0] = cpu->cd.alpha.ctx;
++		/*  #514: was ALPHA_A0, contradicting the comment directly above and the
++		    third-party ABI wrapper.  `alpha_pal_swpctx' (alpha_cpu.h) declares
++		    `v0 __asm("$0")' as an OUTPUT and lists a0 as CLOBBERED, so a correct
++		    caller reads the result from v0 and may not rely on a0 -- the model was
++		    publishing into the register the caller is told to discard and leaving
++		    untouched the one it reads.  `:251' was the only `r[ALPHA_A0] =' in this
++		    file; every compiled return here uses ALPHA_V0.  No a0 write is added:
++		    the architecture marks a0 UNPREDICTABLE, which permits it to remain
++		    unchanged, so there is nothing further owed.  Ordering is unaffected --
++		    `a0' at the `ctx = a0' below is the LOCAL captured at function entry
++		    (`:165'), not a live register read, so this store cannot perturb it.  */
++		cpu->cd.alpha.r[ALPHA_V0] = cpu->cd.alpha.ctx;	/*  #514  */
+ 
+ 		/*  Load new context:  */
+ 		{
+1460:
+1461:            Both translation buffers (TBs) store recently used, instruction stream (Istream)
+1462:            page-table entries and use a not-last-used replacement algorithm.
+1463:
+1464:            In addition, both ITBs support a register-enabled extension called the
+1465:            superpage. The ITB superpage mappings provide one-to-one translation
+1466:            from virtual program counter bits <33:13> to physical program counter bits
+1467:            <33:13> when virtual address bits <42:41> = 2. When translating through the
+1468:            superpage, the address space match (ASM) bit is always set in the PTE used in
+1469:            the Icache. Access to the superpage mapping is allowed only while executing
+1470:            in kernel mode.
+1471:
+1472:2-4 Internal Architecture
+1473:            PALcode fills and maintains the ITBs. The operating system, through PALcode,
+1474:            is responsible for ensuring that virtual addresses can be mapped only through
+1475:            a single ITB entry (in the large page, small page, or superpage) at the same
+1476:            time.
+1477:
+1478:            The IDU presents the 43-bit virtual program counter (VPC) to the ITB each
+1479:            cycle while not executing in PALmode. If the PTE associated with the VPC is
+1480:            cached in the ITB, the IDU uses the page frame number (PFN) and protection
+1481:            bits for the page that contains the VPC to complete the address translation
+1482:            and access checks.
+1483:
+1484:            The ITBs support a single address space number (ASN) through the PTE ASM
+1485:            bit. Each PTE entry in the ITB contains an ASM bit. Write operations to
+1486:            the ITBASM register invalidate all entries that do not have the ASM bit set.
+1487:            This is a simple way to preserve entries that map operating system regions
+1488:            while invalidating all other entries. (The ITBASM register is described in
+1489:            Section 4.1.5.)
+1490:
+1491:            For more information about TBs and PTEs, see the Alpha Architecture
+1492:            Reference Manual.
+1493:
+1494:2.2.3 Interrupt Logic
+1495:
+1496:            The IDU exception logic supports three sources of interrupts:
+1497:
+1498:            � Hardware interrupts
+1499:
+1500:                  - Three level-sensitive hardware interrupts are sourced by pins irq<2:0>.
+1501:
+1502:                  - Two internally generated interrupts respond to external interface error
+1503:                       conditions. These are sourced by the memory controller error status
+1504:                       register (ESR, Section 5.6.6) and the I/O controller status register 0
+1505:                       (IOC_STAT0, Section 6.4.3).
+1506:
+1507:            � Software interrupts
+1508:                  The 15 prioritized software interrupts are sourced by the software interrupt
+1509:                  request register (SIRR, Section 4.1.13.2).
+1510:
+../_scratchpad\21066_66a_hrm.pdf
+../_scratchpad\.last_463research
+../_scratchpad\brief_research_r1.packet.md
+../_scratchpad\brief_research_r1.md
+../_scratchpad\brief_research_r4.packet.md
+../_scratchpad\brief_research_r4.md
+../_scratchpad\brief_research_r3.packet.md
+../_scratchpad\brief_research_r3.md
+../_scratchpad\brief_research_r2.packet.md
+../_scratchpad\brief_research_r2.md
+../_scratchpad\dc21285.pdf
+../_scratchpad\ddi0100i.pdf
+../_scratchpad\codex_par_20260813\codex_7_archgating.txt
+../_scratchpad\i8254.pdf
+../_scratchpad\idt_r30xx.pdf
+../_scratchpad\lance\TM1986.pdf
+../_scratchpad\lance\refguide.pdf
+../_scratchpad\lance\am79c90_mit.pdf
+../_scratchpad\lance\am79c90_bitsavers.pdf
+../_scratchpad\lance\Am7990_ds.pdf
+../_scratchpad\lance\am7990_ardent.pdf
+../_scratchpad\alphachk.sh
+../_scratchpad\mips64_volII.pdf
+../_scratchpad\mips32_volII.pdf
+../_scratchpad\mips-iv.pdf
+../_scratchpad\mc88100.pdf
+../_scratchpad\mips_r4000.pdf
+../_scratchpad\vmesbcp2.pdf
+../_scratchpad\sh7750_hardware.pdf
+../_scratchpad\sh4_programming.pdf
+../_scratchpad\ppc_pem32_rev2_2001.pdf
+../_scratchpad\ppc_oea_book3_v201.pdf
+../_scratchpad\ppc_pem_32and64_2005.pdf
+../_scratchpad\ppc_vea_book2_v201.pdf
+src/cpus/Makefile:13:CC=cc
+src/cpus/Makefile:25:CFLAGS=$(CWARNINGS) $(COPTIM) $(DINCLUDE)
+configure:301:	printf " for that compiler (e.g. -std=c99 if needed).\n"
+Makefile:13:CC=cc
+
+codex
+One premise is wrong: `swpctx` reads `apcb_asn` when saving the outgoing PCB, then loads the incoming ASN. That is real state handling, although it does not establish ASN-tagged caching. The logs match 5/7 → 7/7; I’m checking the cache structures and what the positive control can actually distinguish.
+web search: 
+web search: "Alpha Architecture" "TBI" "UNPREDICTABLE" ...
+web search: 
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$sections=@(@('"'src/include/cpu.h',76,110),@('src/include/cpu_alpha.h',135,180),@('src/cpus/cpu_dyntrans.c',1010,1075),@('src/cpus/cpu_dyntrans.c',1100,1168),@('src/cpus/cpu_dyntrans.c',1196,1313),@('src/cpus/cpu_dyntrans.c',1490,1500),@('src/include/thirdparty/alpha_cpu.h',475,498),@('src/cpus/cpu_alpha.c',80,111)); foreach("'$section in $sections){$p=$section[0]; $s=Get-Content -LiteralPath $p; Write-Output $p; for($i=($section[1]-1);$i -lt $section[2];$i++){ '"'{0}:{1}' -f ("'$i+1),$s[$i] }}; rg -n '"'ARCH_ALPHA|alpha|ok == 0|"'!ok|no-exception|exception|fault'"' src/core/memory_rw.c src/cpus/memory_rw.c src/cpus/cpu_alpha_instr_loadstore.c; rg -n 'ITB|DTB|ASM|ASN|\\basm\\b|\\basn\\b|0x0010|0x10' src/cpus/memory_alpha.c src/cpus/cpu_dyntrans.c src/include/cpu.h src/include/cpu_alpha.h" in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+ exited 1 in 200ms:
+src/include/cpu.h
+76:		uintptr_t arg[ARCH ## _N_IC_ARGS];			\
+77:	};								\
+78:									\
+79:	/*  Translation cache struct for each physical page:  */	\
+80:	struct arch ## _tc_physpage {					\
+81:		struct arch ## _instr_call ics[ARCH ## _IC_ENTRIES_PER_PAGE+2];\
+82:		uint32_t	next_ofs;	/*  (0 for end of chain)  */ \
+83:		uint32_t	translations_bitmap;			\
+84:		uint32_t	translation_ranges_ofs;			\
+85:		addrtype	physaddr;				\
+86:	};								\
+87:									\
+88:	struct arch ## _vpg_tlb_entry {					\
+89:		uint8_t		valid;					\
+90:		uint8_t		writeflag;				\
+91:		addrtype	vaddr_page;				\
+92:		addrtype	paddr_page;				\
+93:		unsigned char	*host_page;				\
+94:	};
+95:
+96:#define	DYNTRANS_MISC64_DECLARATIONS(arch,ARCH,tlbindextype)		\
+97:	struct arch ## _l3_64_table {					\
+98:		unsigned char	*host_load[1 << ARCH ## _L3N];		\
+99:		unsigned char	*host_store[1 << ARCH ## _L3N];		\
+100:		uint64_t	phys_addr[1 << ARCH ## _L3N];		\
+101:		tlbindextype	vaddr_to_tlbindex[1 << ARCH ## _L3N];	\
+102:		struct arch ## _tc_physpage *phys_page[1 << ARCH ## _L3N]; \
+103:		struct arch ## _l3_64_table	*next;			\
+104:		int		refcount;				\
+105:	};								\
+106:	struct arch ## _l2_64_table {					\
+107:		struct arch ## _l3_64_table	*l3[1 << ARCH ## _L2N];	\
+108:		struct arch ## _l2_64_table	*next;			\
+109:		int				refcount;		\
+110:	};
+src/include/cpu_alpha.h
+135:
+136:DYNTRANS_MISC_DECLARATIONS(alpha,ALPHA,uint64_t)
+137:DYNTRANS_MISC64_DECLARATIONS(alpha,ALPHA,uint8_t)
+138:
+139:
+140:#define	ALPHA_PAGESHIFT		13
+141:
+142:
+143:struct alpha_cpu {
+144:	struct alpha_cpu_type_def	cpu_type;
+145:
+146:
+147:	/*
+148:	 *  General Purpose Registers:
+149:	 */
+150:
+151:	uint64_t		r[N_ALPHA_REGS];	/*  Integer  */
+152:	uint64_t		f[N_ALPHA_REGS];	/*  Floating Point  */
+153:
+154:	uint64_t		fpcr;			/*  FP Control Reg.  */
+155:
+156:	/*  Misc.:  */
+157:	uint64_t		pcc;			/*  Cycle Counter  */
+158:	uint64_t		load_linked_addr;
+159:	int			ll_flag;
+160:
+161:	int			irq_asserted;
+162:
+163:	/*  OSF1 PALcode specific:  */
+164:	uint64_t		ps;		/*  Processor Status  */
+165:	uint64_t		vptptr;		/*  Virtual Page Table Ptr  */
+166:	uint64_t		sysvalue;
+167:	uint64_t		mces;		/*  Machine Check Error Summary  */
+168:	uint64_t		kgp;		/*  Kernel GP  */
+169:	uint64_t		kentry[N_ALPHA_KENTRY];
+170:	uint64_t		ctx;		/*  Ptr to current PCB (?)  */
+171:	struct alpha_pcb	pcb;		/*  Process Control Block  */
+172:
+173:
+174:	/*
+175:	 *  Instruction translation cache and Virtual->Physical->Host
+176:	 *  address translation:
+177:	 */
+178:	DYNTRANS_ITC(alpha)
+179:	VPH_TLBS(alpha,ALPHA)
+180:	VPH64(alpha,ALPHA)
+src/cpus/cpu_dyntrans.c
+1010:#else
+1011:	uint64_t
+1012:#endif
+1013:	vaddr_page, int flags)
+1014:{
+1015:#ifdef MODE32
+1016:	uint32_t index = DYNTRANS_ADDR_TO_PAGENR(vaddr_page);
+1017:
+1018:#ifdef DYNTRANS_ARM
+1019:	cpu->cd.DYNTRANS_ARCH.is_userpage[index >> 5] &= ~((uint32_t)1 << (index & 31));
+1020:#endif
+1021:
+1022:	if (flags & JUST_MARK_AS_NON_WRITABLE) {
+1023:		/*  printf("JUST MARKING NON-W: vaddr 0x%08x\n",
+1024:		    (int)vaddr_page);  */
+1025:		cpu->cd.DYNTRANS_ARCH.host_store[index] = NULL;
+1026:	} else {
+1027:		int tlbi = cpu->cd.DYNTRANS_ARCH.vaddr_to_tlbindex[index];
+1028:		cpu->cd.DYNTRANS_ARCH.host_load[index] = NULL;
+1029:		cpu->cd.DYNTRANS_ARCH.host_store[index] = NULL;
+1030:		cpu->cd.DYNTRANS_ARCH.phys_addr[index] = 0;
+1031:		cpu->cd.DYNTRANS_ARCH.phys_page[index] = NULL;
+1032:		if (tlbi > 0)
+1033:			cpu->cd.DYNTRANS_ARCH.vph_tlb_entry[tlbi-1].valid = 0;
+1034:		cpu->cd.DYNTRANS_ARCH.vaddr_to_tlbindex[index] = 0;
+1035:	}
+1036:#else
+1037:	// 64-bit:
+1038:	const uint32_t mask1 = (1 << DYNTRANS_L1N) - 1;
+1039:	const uint32_t mask2 = (1 << DYNTRANS_L2N) - 1;
+1040:	const uint32_t mask3 = (1 << DYNTRANS_L3N) - 1;
+1041:	uint32_t x1, x2, x3;
+1042:	struct DYNTRANS_L2_64_TABLE *l2;
+1043:	struct DYNTRANS_L3_64_TABLE *l3;
+1044:
+1045:	x1 = (vaddr_page >> (64-DYNTRANS_L1N)) & mask1;
+1046:	x2 = (vaddr_page >> (64-DYNTRANS_L1N-DYNTRANS_L2N)) & mask2;
+1047:	x3 = (vaddr_page >> (64-DYNTRANS_L1N-DYNTRANS_L2N-DYNTRANS_L3N))& mask3;
+1048:
+1049:	l2 = cpu->cd.DYNTRANS_ARCH.l1_64[x1];
+1050:	if (l2 == cpu->cd.DYNTRANS_ARCH.l2_64_dummy)
+1051:		return;
+1052:
+1053:	l3 = l2->l3[x2];
+1054:	if (l3 == cpu->cd.DYNTRANS_ARCH.l3_64_dummy)
+1055:		return;
+1056:
+1057:	if (flags & JUST_MARK_AS_NON_WRITABLE) {
+1058:		l3->host_store[x3] = NULL;
+1059:		return;
+1060:	}
+1061:
+1062:#ifdef BUGHUNT
+1063:
+1064:{
+1065:	/*  Consistency check, for debugging:  */
+1066:	int x1, x1b; // x2, x3;
+1067:	struct DYNTRANS_L2_64_TABLE *l2;
+1068:	//struct DYNTRANS_L3_64_TABLE *l3;
+1069:
+1070:	for (x1 = 0; x1 <= mask1; x1 ++) {
+1071:		l2 = cpu->cd.DYNTRANS_ARCH.l1_64[x1];
+1072:		if (l2 == cpu->cd.DYNTRANS_ARCH.l2_64_dummy)
+1073:			continue;
+1074:		/*  Make sure that this l2 isn't used more than 1 time!  */
+1075:		for (x1b = 0; x1b <= mask1; x1b ++)
+src/cpus/cpu_dyntrans.c
+1100:		printf("ZHL: %i in use, but refcount = %i!\n", n, l3->refcount);
+1101:		exit(1);
+1102:	}
+1103:}
+1104:#endif
+1105:
+1106:/*
+1107:	int found = -1;
+1108:	for (int q = 0; q < 192; ++q)
+1109:	{
+1110:		if (cpu->cd.DYNTRANS_ARCH.vph_tlb_entry[q].vaddr_page == vaddr_page &&
+1111:			cpu->cd.DYNTRANS_ARCH.vph_tlb_entry[q].valid)
+1112:		{
+1113:			if (found >= 0)
+1114:			{
+1115:				printf("ALREADY FOUND = %i\n", found);
+1116:				int zz = found;
+1117:				printf("%03i: ", zz);
+1118:				printf("vaddr=%016llx\n", (long long)cpu->cd.DYNTRANS_ARCH.vph_tlb_entry[zz].vaddr_page);
+1119:				printf("valid=%i\n", cpu->cd.DYNTRANS_ARCH.vph_tlb_entry[zz].valid);
+1120:
+1121:				zz = q;
+1122:				printf("%03i: ", zz);
+1123:				printf("vaddr=%016llx\n", (long long)cpu->cd.DYNTRANS_ARCH.vph_tlb_entry[zz].vaddr_page);
+1124:				printf("valid=%i\n", cpu->cd.DYNTRANS_ARCH.vph_tlb_entry[zz].valid);
+1125:
+1126:				exit(1);
+1127:			}
+1128:			
+1129:			found = q;
+1130:		}
+1131:	}
+1132:*/
+1133:
+1134:	l3->host_load[x3] = NULL;
+1135:	l3->host_store[x3] = NULL;
+1136:	l3->phys_addr[x3] = 0;
+1137:	l3->phys_page[x3] = NULL;
+1138:	if (l3->vaddr_to_tlbindex[x3] != 0) {
+1139:		cpu->cd.DYNTRANS_ARCH.vph_tlb_entry[
+1140:		    l3->vaddr_to_tlbindex[x3] - 1].valid = 0;
+1141:		l3->refcount --;
+1142:	} else {/*
+1143:		printf("APA: vaddr_page=%016llx l3->refcount = %i\n", (long long)vaddr_page, l3->refcount);
+1144:		for (int zz = 0; zz < 128; ++zz)
+1145:		{
+1146:			printf("%03i: ", zz);
+1147:			printf("vaddr=%016llx\n", (long long)cpu->cd.DYNTRANS_ARCH.vph_tlb_entry[zz].vaddr_page);
+1148:			printf("valid=%i\n", cpu->cd.DYNTRANS_ARCH.vph_tlb_entry[zz].valid);
+1149:		}
+1150:		
+1151:		exit(1);*/
+1152:	}
+1153:	l3->vaddr_to_tlbindex[x3] = 0;
+1154:
+1155:	if (l3->refcount < 0) {
+1156:		fatal("xxx_invalidate_tlb_entry(): huh? Refcount bug.\n");
+1157:		exit(1);
+1158:	}
+1159:
+1160:	if (l3->refcount == 0) {
+1161:		l3->next = cpu->cd.DYNTRANS_ARCH.next_free_l3;
+1162:		cpu->cd.DYNTRANS_ARCH.next_free_l3 = l3;
+1163:		l2->l3[x2] = cpu->cd.DYNTRANS_ARCH.l3_64_dummy;
+1164:
+1165:#ifdef BUGHUNT
+1166:/*  Make sure that we're placing a CLEAN page on the
+1167:    freelist:  */
+1168:{
+src/cpus/cpu_dyntrans.c
+1196: *  XXX_invalidate_translation_caches():
+1197: *
+1198: *  Invalidate all entries matching a specific physical address, a specific
+1199: *  virtual address, or ALL entries.
+1200: *
+1201: *  flags should be one of
+1202: *	INVALIDATE_PADDR  INVALIDATE_VADDR  or  INVALIDATE_ALL
+1203: *
+1204: *  In addition, for INVALIDATE_ALL, INVALIDATE_VADDR_UPPER4 may be set and
+1205: *  bit 31..28 of addr are used to select the virtual addresses to invalidate.
+1206: *  (This is useful for PowerPC emulation, when segment registers are updated.)
+1207: *
+1208: *  In the case when all translations are invalidated, paddr doesn't need
+1209: *  to be supplied.
+1210: *
+1211: *  NOTE/TODO: When invalidating a virtual address, it is only cleared from
+1212: *             the quick translation array, not from the linear
+1213: *             vph_tlb_entry[] array.  Hopefully this is enough anyway.
+1214: */
+1215:void DYNTRANS_INVALIDATE_TC(struct cpu *cpu, uint64_t addr, int flags)
+1216:{
+1217:	int r;
+1218:#ifdef MODE32
+1219:	uint32_t
+1220:#else
+1221:	uint64_t
+1222:#endif
+1223:	    addr_page = addr & ~(DYNTRANS_PAGESIZE - 1);
+1224:
+1225:	/*  fatal("invalidate(): ");  */
+1226:
+1227:	/*  Quick case for _one_ virtual addresses: see note above.  */
+1228:	if (flags & INVALIDATE_VADDR) {
+1229:		/*  fatal("vaddr 0x%08x\n", (int)addr_page);  */
+1230:
+1231:#ifdef MODE32
+1232:		DYNTRANS_INVALIDATE_TLB_ENTRY(cpu, addr_page, flags);
+1233:#else
+1234:		// In principle, there can be multiple entries, and they must
+1235:		// be invalidated based on the bits that matter. For example,
+1236:		// using vaddr 0x00A0000012345678 and 0x00B000001234567c
+1237:		// actually point to the same physical page, and if then
+1238:		// the virtual address 0x0000000012345000 is to be invalidated,
+1239:		// then both of those should be invalidated!
+1240:		int n = 0;
+1241:		for (r=0; r<DYNTRANS_MAX_VPH_TLB_ENTRIES; r++)
+1242:			if (cpu->cd.DYNTRANS_ARCH.vph_tlb_entry[r].valid &&
+1243:			    (cpu->cd.DYNTRANS_ARCH.vph_tlb_entry[r].vaddr_page
+1244:			    & cpu->vaddr_mask) == (addr_page & cpu->vaddr_mask)) {
+1245:				DYNTRANS_INVALIDATE_TLB_ENTRY(cpu, cpu->cd.DYNTRANS_ARCH.vph_tlb_entry[r].vaddr_page, flags);
+1246:				n ++;
+1247:			}
+1248:
+1249:		if (n > 1)
+1250:			debug("[ DYNTRANS_INVALIDATE_TC: CACHE COLLISION vaddr 0x%016llx! ]\n",
+1251:				(long long)addr_page);
+1252:#endif
+1253:
+1254:		return;
+1255:	}
+1256:
+1257:	/*  Invalidate everything:  */
+1258:#ifdef DYNTRANS_PPC
+1259:	if (flags & INVALIDATE_ALL && flags & INVALIDATE_VADDR_UPPER4) {
+1260:		/*  fatal("all, upper4 (PowerPC segment)\n");  */
+1261:		for (r=0; r<DYNTRANS_MAX_VPH_TLB_ENTRIES; r++) {
+1262:			if (cpu->cd.DYNTRANS_ARCH.vph_tlb_entry[r].valid &&
+1263:			    (cpu->cd.DYNTRANS_ARCH.vph_tlb_entry[r].vaddr_page
+1264:			    & 0xf0000000) == addr_page) {
+1265:				DYNTRANS_INVALIDATE_TLB_ENTRY(cpu, cpu->cd.
+1266:				    DYNTRANS_ARCH.vph_tlb_entry[r].vaddr_page,
+1267:				    0);
+1268:				// Not needed: DYNTRANS_INVALIDATE_TLB_ENTRY should
+1269:				// set valid to 0 anyway.
+1270:				// cpu->cd.DYNTRANS_ARCH.vph_tlb_entry[r].valid=0;
+1271:			}
+1272:		}
+1273:		return;
+1274:	}
+1275:#endif
+1276:	if (flags & INVALIDATE_ALL) {
+1277:		/*  fatal("all\n");  */
+1278:		for (r=0; r<DYNTRANS_MAX_VPH_TLB_ENTRIES; r++) {
+1279:			if (cpu->cd.DYNTRANS_ARCH.vph_tlb_entry[r].valid) {
+1280:				DYNTRANS_INVALIDATE_TLB_ENTRY(cpu, cpu->cd.
+1281:				    DYNTRANS_ARCH.vph_tlb_entry[r].vaddr_page,
+1282:				    0);
+1283:				// Not needed: DYNTRANS_INVALIDATE_TLB_ENTRY should
+1284:				// set valid to 0 anyway.
+1285:				// cpu->cd.DYNTRANS_ARCH.vph_tlb_entry[r].valid=0;
+1286:			}
+1287:		}
+1288:		return;
+1289:	}
+1290:
+1291:	/*  Invalidate a physical page:  */
+1292:
+1293:	if (!(flags & INVALIDATE_PADDR))
+1294:		fatal("HUH? Invalidate: Not vaddr, all, or paddr?\n");
+1295:
+1296:	/*  fatal("addr 0x%08x\n", (int)addr_page);  */
+1297:
+1298:	for (r=0; r<DYNTRANS_MAX_VPH_TLB_ENTRIES; r++) {
+1299:		if (cpu->cd.DYNTRANS_ARCH.vph_tlb_entry[r].valid && addr_page
+1300:		    == cpu->cd.DYNTRANS_ARCH.vph_tlb_entry[r].paddr_page) {
+1301:			DYNTRANS_INVALIDATE_TLB_ENTRY(cpu,
+1302:			    cpu->cd.DYNTRANS_ARCH.vph_tlb_entry[r].vaddr_page,
+1303:			    flags);
+1304:			if (flags & JUST_MARK_AS_NON_WRITABLE)
+1305:				cpu->cd.DYNTRANS_ARCH.vph_tlb_entry[r]
+1306:				    .writeflag = 0;
+1307:			else
+1308:				cpu->cd.DYNTRANS_ARCH.vph_tlb_entry[r]
+1309:				    .valid = 0;
+1310:		}
+1311:	}
+1312:}
+1313:#endif	/*  DYNTRANS_INVALIDATE_TC  */
+src/cpus/cpu_dyntrans.c
+1490: *
+1491: *  Update the virtual memory translation tables.
+1492: */
+1493:void DYNTRANS_UPDATE_TRANSLATION_TABLE(struct cpu *cpu, uint64_t vaddr_page,
+1494:	unsigned char *host_page, int writeflag, uint64_t paddr_page)
+1495:{
+1496:	int found, r, useraccess = 0;
+1497:
+1498:#ifdef MODE32
+1499:	uint32_t index;
+1500:	vaddr_page &= 0xffffffffULL;
+src/include/thirdparty/alpha_cpu.h
+475:	return (v0);
+476:}
+477:
+478:static __inline void
+479:alpha_pal_tbi(unsigned long op, vaddr_t va)
+480:{
+481:	register unsigned long a0 __asm("$16") = op;
+482:	register unsigned long a1 __asm("$17") = va;
+483:
+484:	__asm volatile("call_pal %2 # PAL_OSF1_tbi"
+485:		: "=r" (a0), "=r" (a1)
+486:		: "i" (PAL_OSF1_tbi), "0" (a0), "1" (a1)
+487:		/* clobbers t0, t8..t11, a0 (above), a1 (above) */
+488:		: "$1", "$22", "$23", "$24", "$25");
+489:}
+490:
+491:static __inline unsigned long
+492:alpha_pal_whami(void)
+493:{
+494:	register unsigned long v0 __asm("$0");
+495:
+496:	__asm volatile("call_pal %1 # PAL_OSF1_whami"
+497:		: "=r" (v0)
+498:		: "i" (PAL_OSF1_whami)
+src/cpus/cpu_alpha.c
+80:	}
+81:	if (cpu_type_defs[i].name == NULL)
+82:		return 0;
+83:
+84:	cpu->is_32bit = 0;
+85:	cpu->byte_order = EMUL_LITTLE_ENDIAN;
+86:
+87:	cpu->memory_rw = alpha_memory_rw;
+88:	cpu->run_instr = alpha_run_instr;
+89:	cpu->translate_v2p = alpha_translate_v2p;
+90:	cpu->update_translation_table = alpha_update_translation_table;
+91:	cpu->invalidate_translation_caches =
+92:	    alpha_invalidate_translation_caches;
+93:	cpu->invalidate_code_translation = alpha_invalidate_code_translation;
+94:
+95:	cpu->cd.alpha.cpu_type = cpu_type_defs[i];
+96:
+97:	cpu->cd.alpha.r[ALPHA_SP] = 0xfffffc000000ff00ULL;
+98:
+99:	/*  Set up dummy kentry pointers to something which crashes
+100:	    the machine:  */
+101:	store_32bit_word(cpu, 0x10010, 0x3fffffc);
+102:	for (i=0; i<N_ALPHA_KENTRY; i++)
+103:		cpu->cd.alpha.kentry[i] = 0x10010;
+104:
+105:	/*  Bogus initial context (will be overwritten on first
+106:	    context switch):  */
+107:	cpu->cd.alpha.ctx = 0x10100;
+108:
+109:	CPU_SETTINGS_ADD_REGISTER64("pc", cpu->pc);
+110:	for (i=0; i<N_ALPHA_REGS; i++)
+111:		CPU_SETTINGS_ADD_REGISTER64(alpha_regname[i],
+rg: src/core/memory_rw.c: The system cannot find the file specified. (os error 2)
+src/cpus/cpu_alpha_instr_loadstore.c:28: *  Alpha load/store instructions.  (Included from cpu_alpha_instr_inc.c.)
+src/cpus/cpu_alpha_instr_loadstore.c:44:static void LS_GENERIC_N(struct cpu *cpu, struct alpha_instr_call *ic)
+src/cpus/cpu_alpha_instr_loadstore.c:71:		    already signalled a fault (cf. #194's no-translation return);
+src/cpus/cpu_alpha_instr_loadstore.c:115:		    already signalled a fault (cf. #194's no-translation return);
+src/cpus/cpu_alpha_instr_loadstore.c:131:static void LS_N(struct cpu *cpu, struct alpha_instr_call *ic)
+src/cpus/cpu_alpha_instr_loadstore.c:168:	cpu->cd.alpha.load_linked_addr = addr & ~63;
+src/cpus/cpu_alpha_instr_loadstore.c:169:	cpu->cd.alpha.ll_flag = 1;
+src/cpus/cpu_alpha_instr_loadstore.c:172:	if (cpu->cd.alpha.ll_flag == 1) {
+src/cpus/cpu_alpha_instr_loadstore.c:175:			cpu->machine->cpus[i]->cd.alpha.ll_flag = 0;
+src/cpus/memory_rw.c:106:/*  The one-page worker; its name is derived from MEMORY_RW because cpu_alpha.c includes
+src/cpus/memory_rw.c:107:    this file TWICE in one translation unit (alpha_userland_memory_rw, then alpha_memory_rw
+src/cpus/memory_rw.c:108:    via tmp_alpha_tail.c), so a plainly named static would be a redefinition.  */
+src/cpus/memory_rw.c:237:	int cache, no_exceptions, offset;
+src/cpus/memory_rw.c:241:	no_exceptions = misc_flags & NO_EXCEPTIONS;
+src/cpus/memory_rw.c:250:		    (no_exceptions? FLAG_NOEXCEPTIONS : 0)
+src/cpus/memory_rw.c:255:		 *  If the translation caused an exception, or was invalid in
+src/cpus/memory_rw.c:259:		if (!ok) {
+src/cpus/memory_rw.c:584:				if (!no_exceptions || (mem->devices[i].flags &
+src/cpus/memory_rw.c:600:				 *  failed, then return with an exception.
+src/cpus/memory_rw.c:603:				if (res <= 0 && !no_exceptions) {
+src/cpus/memory_rw.c:609:					mips_cpu_exception(cpu,
+src/cpus/memory_rw.c:618:					    faulting address should probably
+src/cpus/memory_rw.c:620:					m88k_exception(cpu, cache == CACHE_INSTRUCTION
+src/cpus/memory_rw.c:654:	default:
+src/cpus/memory_rw.c:676:			if (paddr >= mem->physical_max && !no_exceptions)
+src/cpus/memory_rw.c:696:				 *  an exceptions on an illegal read:
+src/cpus/memory_rw.c:698:				if (cache != CACHE_NONE && !no_exceptions &&
+src/cpus/memory_rw.c:701:					mips_cpu_exception(cpu,
+src/cpus/memory_rw.c:709:			/*  Hm? Shouldn't there be a DBE exception for
+src/cpus/memory_rw.c:745:	    && !no_exceptions)
+src/cpus/memory_rw.c:788:/*  #430: this file is included more than once per translation unit (see cpu_alpha.c), so
+
+web search: 
+web search: 
+web search: "Alpha Architecture Reference Manual" "tbi" ...
+web search: 
+web search: https://docs.alexrp.com/alpha/alpha_4th.pdf
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$sections=@(@('"'src/cpus/memory_rw.c',234,277),@('src/cpus/cpu_alpha_instr_loadstore.c',50,79),@('src/cpus/cpu_alpha_instr_loadstore.c',102,124),@('src/cpus/cpu_alpha_instr.c',290,312),@('src/cpus/cpu_dyntrans.c',660,734)); foreach("'$section in $sections){$p=$section[0]; $s=Get-Content -LiteralPath $p; Write-Output $p; for($i=($section[1]-1);$i -lt $section[2];$i++){ '"'{0}:{1}' -f ("'$i+1),$s[$i] }}; rg -n '"'vaddr_mask|LDA|lda|sext|int16_t' src/cpus/cpu_alpha.c src/cpus/cpu_alpha_instr.c src/cpus/tmp_alpha_head.c; (git diff --format= '3031a30"'^'"' 3031a30 -- src/cpus/cpu_alpha_palcode.c | Select-String -Pattern '"'^[+-].*invalidate_translation_caches'"').Count; Get-ChildItem -LiteralPath regress/artifacts/alphatbinegsel/witness_agy_20260908 -Force | Select-Object Name,Length" in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+ succeeded in 183ms:
+src/cpus/memory_rw.c
+234:
+235:	int ok = 2;
+236:	uint64_t paddr;
+237:	int cache, no_exceptions, offset;
+238:	unsigned char *memblock;
+239:	int dyntrans_device_danger = 0;
+240:
+241:	no_exceptions = misc_flags & NO_EXCEPTIONS;
+242:	cache = misc_flags & CACHE_FLAGS_MASK;
+243:
+244:
+245:	if (misc_flags & PHYSICAL || cpu->translate_v2p == NULL) {
+246:		paddr = vaddr;
+247:	} else {
+248:		ok = cpu->translate_v2p(cpu, vaddr, &paddr,
+249:		    (writeflag? FLAG_WRITEFLAG : 0) +
+250:		    (no_exceptions? FLAG_NOEXCEPTIONS : 0)
+251:		    + (misc_flags & MEMORY_USER_ACCESS)
+252:		    + (cache==CACHE_INSTRUCTION? FLAG_INSTR : 0));
+253:
+254:		/*
+255:		 *  If the translation caused an exception, or was invalid in
+256:		 *  some way, then simply return without doing the memory
+257:		 *  access:
+258:		 */
+259:		if (!ok) {
+260:			/*  #244: A failed (or NO_EXCEPTIONS) translation leaves
+261:			    the caller's read buffer untouched; zero it so
+262:			    callers that ignore the return value (e.g. the DEC
+263:			    PROM string helpers) consume deterministic 0 bytes
+264:			    instead of uninitialised host stack. Same zero-fill
+265:			    ethos as the failed-device-read path (#95).  */
+266:			if (writeflag == MEM_READ)
+267:				memset(data, 0, len);
+268:			return MEMORY_ACCESS_FAILED;
+269:		}
+270:	}
+271:
+272:	/*
+273:	 *  #250: data write-watchpoint. Checked here, before the device /
+274:	 *  cache / RAM dispatch (several of which return early �?" notably the
+275:	 *  R3000 cached path via memory_cache_R3000()), so every store that
+276:	 *  reaches this slow path is covered. Watched pages are kept off the
+277:	 *  fast store table by update_translation_table(), and R3000 cached
+src/cpus/cpu_alpha_instr_loadstore.c
+50:	unsigned char data[2];
+51:#endif
+52:#ifdef LS_L
+53:	unsigned char data[4];
+54:#endif
+55:#ifdef LS_Q
+56:	unsigned char data[8];
+57:#endif
+58:	uint64_t addr = *((uint64_t *)ic->arg[1]);
+59:	uint64_t data_x;
+60:
+61:	addr += (int32_t)ic->arg[2];
+62:#ifdef LS_UNALIGNED
+63:	addr &= ~7;
+64:#endif
+65:
+66:#ifdef LS_LOAD
+67:	/*  Load:  */
+68:	if (!cpu->memory_rw(cpu, cpu->mem, addr, data, sizeof(data),
+69:	    MEM_READ, CACHE_DATA)) {
+70:		/*  #215: (Codex/Fable) memory_rw() returned 0 = the translator
+71:		    already signalled a fault (cf. #194's no-translation return);
+72:		    abandon the access instead of exit()ing the host.  */
+73:		return;
+74:	}
+75:
+76:	data_x = data[0];
+77:#ifndef LS_B
+78:	data_x += (data[1] << 8);
+79:#ifndef LS_W
+src/cpus/cpu_alpha_instr_loadstore.c
+102:	data[3] = data_x >> 24;
+103:#ifndef LS_L
+104:	data[4] = data_x >> 32;
+105:	data[5] = data_x >> 40;
+106:	data[6] = data_x >> 48;
+107:	data[7] = data_x >> 56;
+108:#endif
+109:#endif
+110:#endif
+111:
+112:	if (!cpu->memory_rw(cpu, cpu->mem, addr, data, sizeof(data),
+113:	    MEM_WRITE, CACHE_DATA)) {
+114:		/*  #215: (Codex/Fable) memory_rw() returned 0 = the translator
+115:		    already signalled a fault (cf. #194's no-translation return);
+116:		    abandon the access instead of exit()ing the host.  */
+117:		return;
+118:	}
+119:
+120:#ifdef LS_LLSC
+121:#ifndef LS_LOAD
+122:	*((uint64_t *)ic->arg[0]) = 1;
+123:#endif
+124:#endif
+src/cpus/cpu_alpha_instr.c
+290:}
+291:
+292:
+293:/*
+294: *  bge:  Branch (to a different translated page) if Greater or Equal
+295: *
+296: *  arg[0] = relative offset (as an int32_t)
+297: *  arg[1] = pointer to int64_t register
+298: */
+299:X(bge)
+300:{
+301:	if (*((int64_t *)ic->arg[1]) >= 0)
+302:		instr(br)(cpu, ic);
+303:}
+304:
+305:
+306:/*
+307: *  bgt:  Branch (to a different translated page) if Greater Than
+308: *
+309: *  arg[0] = relative offset (as an int32_t)
+310: *  arg[1] = pointer to int64_t register
+311: */
+312:X(bgt)
+src/cpus/cpu_dyntrans.c
+660:		physaddr = cpu->cd.DYNTRANS_ARCH.phys_addr[index];
+661:		ok = 1;
+662:	}
+663:#else
+664:	if (l3->host_load[x3] != NULL) {
+665:		physaddr = l3->phys_addr[x3];
+666:		ok = 1;
+667:	}
+668:#endif
+669:
+670:	if (!ok) {
+671:		uint64_t paddr;
+672:		if (cpu->translate_v2p != NULL) {
+673:			uint64_t vaddr =
+674:#if defined(MODE32) && defined(DYNTRANS_MIPS)
+675:			/*  32-bit MIPS is _sign_ extend, not zero.  */
+676:			    (int32_t)
+677:#endif
+678:			    cached_pc;
+679:			ok = cpu->translate_v2p(
+680:			    cpu, vaddr, &paddr, FLAG_INSTR);
+681:		} else {
+682:			paddr = cached_pc;
+683:			ok = 1;
+684:		}
+685:		if (!ok) {
+686:			/*
+687:			 *  The PC is now set to the exception handler.
+688:			 *  Try to find the paddr in the translation arrays,
+689:			 *  or if that fails, call translate_v2p for the
+690:			 *  exception handler.
+691:			 */
+692:			/*  fatal("TODO: instruction vaddr=>paddr translation "
+693:			    "failed. vaddr=0x%" PRIx64"\n", (uint64_t)cached_pc);
+694:			fatal("!! cpu->pc=0x%" PRIx64"\n", (uint64_t)cpu->pc); */
+695:
+696:			/*  If there was an exception, the PC has changed.
+697:			    Update cached_pc:  */
+698:			cached_pc = cpu->pc;
+699:
+700:#ifdef MODE32
+701:			index = DYNTRANS_ADDR_TO_PAGENR(cached_pc);
+702:			if (cpu->cd.DYNTRANS_ARCH.host_load[index] != NULL) {
+703:				paddr = cpu->cd.DYNTRANS_ARCH.phys_addr[index];
+704:				ok = 1;
+705:			}
+706:#else
+707:			x1 = (cached_pc >> (64-DYNTRANS_L1N)) & mask1;
+708:			x2 = (cached_pc >> (64-DYNTRANS_L1N-DYNTRANS_L2N))
+709:			    & mask2;
+710:			x3 = (cached_pc >> (64-DYNTRANS_L1N-DYNTRANS_L2N
+711:			    - DYNTRANS_L3N)) & mask3;
+712:			l2 = cpu->cd.DYNTRANS_ARCH.l1_64[x1];
+713:			l3 = l2->l3[x2];
+714:			if (l3->host_load[x3] != NULL) {
+715:				paddr = l3->phys_addr[x3];
+716:				ok = 1;
+717:			}
+718:#endif
+719:
+720:			if (!ok) {
+721:				ok = cpu->translate_v2p(cpu, cpu->pc, &paddr,
+722:				    FLAG_INSTR);
+723:			}
+724:
+725:			/*  printf("EXCEPTION HANDLER: vaddr = 0x%x ==> "
+726:			    "paddr = 0x%x\n", (int)cpu->pc, (int)paddr);
+727:			fatal("!? cpu->pc=0x%" PRIx64"\n", (uint64_t)cpu->pc); */
+728:
+729:			if (!ok) {
+730:				fatal("FATAL: could not find physical"
+731:				    " address of the exception handler?");
+732:				exit(1);
+733:			}
+734:		}
+src/cpus/cpu_alpha.c:234:	imm = (int16_t)imm;
+src/cpus/cpu_alpha.c:303:		debug("lda%s\t%s,", opcode == 9? "h" : "", alpha_regname[ra]);
+src/cpus/cpu_alpha_instr.c:692: *  lda:  Load address.
+src/cpus/cpu_alpha_instr.c:698:X(lda)
+src/cpus/cpu_alpha_instr.c:705: *  lda_0:  Load address compared to the zero register.
+src/cpus/cpu_alpha_instr.c:711:X(lda_0)
+src/cpus/cpu_alpha_instr.c:843:	case 0x08:						/*  LDA  */
+src/cpus/cpu_alpha_instr.c:844:	case 0x09:						/*  LDAH  */
+src/cpus/cpu_alpha_instr.c:851:		ic->f = instr(lda);
+src/cpus/cpu_alpha_instr.c:855:			ic->f = instr(lda_0);
+src/cpus/cpu_alpha_instr.c:856:		ic->arg[2] = (ssize_t)(int16_t)imm;
+src/cpus/cpu_alpha_instr.c:872:		ic->arg[2] = (ssize_t)(int16_t)imm;
+src/cpus/cpu_alpha_instr.c:923:		ic->arg[2] = (ssize_t)(int16_t)imm;
+0
+
+Name                           Length
+----                           ------
+alphatbi_committed.out           1174
+alphatbi_fixed.out               1134
+alphatbi_probe.asrun.py         12331
+REVERIFY_mainloop_20260908.out   1078
+
+
+
+codex
+The architecture manual changes the answer on unknown selectors: TBI explicitly has `otherwise: break`, so zero and other unlisted values have no requested invalidation. I’m checking the broader TB rules before deciding whether an all-flush fallback is permissible, and whether retaining ASM=1 entries is an architectural requirement or a cache-model precision claim.
+web search: 
+web search: '16.2.12 TB Invalidate'
+web search: 
+web search: 
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -LiteralPath regress/artifacts/alphatbinegsel/witness_agy_20260908/REVERIFY_mainloop_20260908.out; $p='"'src/cpus/cpu_alpha_instr.c'; "'$s=Get-Content -LiteralPath $p; for($i=689;$i -lt 718;$i++){ '"'{0}:{1}' -f ("'$i+1),$s[$i] }; rg -n '"'vaddr_mask|ALPHA_KENTRY_MM|ALPHA_FEATURE_BWX|ALPHA_PTE_ASM|apcb_asn|cd\\.alpha\\.kentry' src" in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+ succeeded in 89ms:
+alphatbi_probe -- binary=./build/gxemul label=REVERIFY_mainloop machine=alphabook1
+row              got                  want                 note                                               
+live             alive                alive                CONTROL: emulator session survives sequence        ok
+tbia fill        0xaaaa0000aaaa       0xaaaa0000aaaa       CONTROL: initial walked load cached VAL_A          ok
+tbia obs         0xaaaa0000aaaa       0xbbbb0000bbbb       TBIA (a0=-2) must flush TLB and read remapped VAL_B FAIL
+tbiap fill       0xcccc0000cccc       0xcccc0000cccc       CONTROL: initial walked load cached VAL_C          ok
+tbiap obs        0xcccc0000cccc       0xdddd0000dddd       TBIAP (a0=-1) must flush TLB and read remapped VAL_D FAIL
+pos fill         0xeeee0000eeee       0xeeee0000eeee       CONTROL: initial walked load cached VAL_E          ok
+pos obs          0xffff0000ffff       0xffff0000ffff       CONTROL: positive selector (a0=2, a1=0x6000) flushes vaddr on both builds ok
+
+ALPHATBI_RESULT=5/7
+FAILING: tbia obs tbiap obs
+ALPHATBI_DONE
+690:
+691:/*
+692: *  lda:  Load address.
+693: *
+694: *  arg[0] = pointer to destination uint64_t
+695: *  arg[1] = pointer to source uint64_t
+696: *  arg[2] = offset (possibly as an int32_t)
+697: */
+698:X(lda)
+699:{
+700:	reg(ic->arg[0]) = reg(ic->arg[1]) + (int64_t)(int32_t)ic->arg[2];
+701:}
+702:
+703:
+704:/*
+705: *  lda_0:  Load address compared to the zero register.
+706: *
+707: *  arg[0] = pointer to destination uint64_t
+708: *  arg[1] = ignored
+709: *  arg[2] = offset (possibly as an int32_t)
+710: */
+711:X(lda_0)
+712:{
+713:	reg(ic->arg[0]) = (int64_t)(int32_t)ic->arg[2];
+714:}
+715:
+716:
+717:/*
+718: *  clear:  Clear a 64-bit register.
+src\cpus\cpu_alpha_palcode.c:240:		    cpu->cd.alpha.pcb.apcb_asn);
+src\cpus\cpu_alpha_palcode.c:298:			cpu->cd.alpha.pcb.apcb_asn = new_asn;
+src\cpus\cpu_alpha_palcode.c:347:			cpu->cd.alpha.kentry[a1] = a0;
+src\cpus\cpu_alpha.c:103:		cpu->cd.alpha.kentry[i] = 0x10010;
+src\cpus\cpu.c:140:	if (cpu->vaddr_mask == 0) {
+src\cpus\cpu.c:142:			cpu->vaddr_mask = 0x00000000ffffffffULL;
+src\cpus\cpu.c:144:			cpu->vaddr_mask = (int64_t)-1;
+src\cpus\cpu.c:146:		debugmsg_cpu(cpu, SUBSYS_CPU, "vaddr_mask", VERBOSITY_DEBUG,
+src\cpus\cpu.c:147:		    "Warning: vaddr_mask should be set in the CPU family's "
+src\cpus\cpu.c:148:		    "cpu_new()! Assuming 0x%16llx", (long long)cpu->vaddr_mask);
+src\cpus\cpu_arm.c:125:	cpu->vaddr_mask = 0x00000000ffffffffULL;
+src\cpus\cpu_m88k.c:134:	cpu->vaddr_mask = 0x00000000ffffffffULL;
+src\cpus\cpu_dyntrans.c:1244:			    & cpu->vaddr_mask) == (addr_page & cpu->vaddr_mask)) {
+src\cpus\cpu_i960.c:221:	cpu->vaddr_mask = 0x00000000ffffffffULL;
+src\cpus\cpu_ppc.c:212:		cpu->vaddr_mask = 0x00000000ffffffffULL;
+src\cpus\cpu_mips.c:267:		cpu->vaddr_mask = 0x00000000ffffffffULL;
+src\cpus\cpu_mips.c:274:		cpu->vaddr_mask = ENTRYHI_R_MASK | ENTRYHI_VPN2_MASK_R10K | 0x1fff;
+src\cpus\cpu_mips.c:279:			cpu->vaddr_mask = 0x00000000ffffffffULL;
+src\cpus\cpu_mips.c:281:			cpu->vaddr_mask = ENTRYHI_R_MASK | ENTRYHI_VPN2_MASK | 0x1fff;
+src\cpus\cpu_riscv.c:135:		cpu->vaddr_mask = 0x00000000ffffffffULL;
+src\cpus\cpu_riscv.c:142:		cpu->vaddr_mask = 0xffffffffffffffffULL;
+src\include\cpu.h:388:	uint64_t	vaddr_mask;
+src\include\cpu_alpha.h:57:#define	ALPHA_FEATURE_BWX		1
+src\include\thirdparty\alpha_cpu.h:66:	uint32_t	apcb_asn;	/* address space number */
+src\include\thirdparty\alpha_cpu.h:223:#define	ALPHA_PTE_ASM			0x0010		/* addr. space match */
+src\include\thirdparty\alpha_cpu.h:250:#define	ALPHA_KENTRY_MM		2
+
+web search: 
+web search: 'invalidated at'
+codex
+The positive control confirms fresh data at the requested address, but it cannot distinguish a page flush from an all-flush. Deleting the `=` from `a0 <= 3` would still leave all seven rows passing. I recommend a small dispatch check for the selector contract and separate cache-state checks for any future ASM-selectivity claim.
+codex
+**VERDICT: the range guard repairs the witnessed defect, but I recommend explicit handling of −1/−2 and a no-op default. ASM selectivity is absent; 7/7 does not establish it.**
+
+I checked `GXEMUL-SEC/src/`, the witness’s encoded instruction sequence, and all three saved run logs. The unsigned capture, five wrapper selectors, 5/7 → 7/7 results, and independent 5/7 result check out. The `3031a30` diff contains **zero** changed invalidation calls. This was source and artifact review, without another emulator run.
+
+Two premises need correction:
+
+- **`apcb_asn` is read during the outgoing PCB save**, not merely by a debug print; it is subsequently assigned the incoming ASN. That is real context-state handling, although it provides no ASN-tagged translation lookup. [PAL handler](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_alpha_palcode.c:237)
+- **`kentry[]` is initialized and written by `wrent`**, rather than merely declared. There is no consumer dispatching through those vectors. The memory-fault limitation therefore stands, despite comments claiming that a fault has already been signalled. [Initialization](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_alpha.c:99), [failed walk](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_alpha.c:192)
+
+The ASM conclusion survives stronger inspection than the symbol census: the actual cache-entry structure contains validity, writeability, addresses and a host pointer, with no ASM or ASN metadata; the fill interface carries neither. **Selectivity requires a representation change; a guard edit cannot supply it.** Missing ASN support alone would not prove this—a single-context cache could still retain an ASM bit. [Cache structures](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/cpu.h:88), [fill interface](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1493)
+
+**Q1. The range test is right for selecting the address branch; its blanket `else` is a separate policy decision.**
+
+There is a material architectural fact missing from the brief: the TBI pseudocode explicitly ends with **`otherwise: break;`**. Zero and unlisted selectors therefore request no invalidation. They are not documented fault cases. [Alpha Architecture Reference Manual, §16.2.12](https://docs.alexrp.com/alpha/alpha_4th.pdf#page=490)
+
+I would ship:
+
+```c
+if (a0 >= 1 && a0 <= 3)
+	cpu->invalidate_translation_caches(cpu, a1, INVALIDATE_VADDR);
+else if (a0 == (uint64_t)-1 || a0 == (uint64_t)-2)
+	cpu->invalidate_translation_caches(cpu, 0, INVALIDATE_ALL);
+/* Other selectors request no action. */
+```
+
+That changes the existing zero-selector behavior, which already flushes everything. Make that change explicit in the review.
+
+Over-invalidation is conservative against stale translations, but that argument does not establish the meaning of an unknown selector. A blanket all-flush fallback could be retained as a disclosed emulator policy; **my preference is the documented no-op default**. An optional debug diagnostic is reasonable. A mandatory warning or halt is unnecessary.
+
+Also replace the existing “a0 is ignored for now” comment—it contradicts the implementation.
+
+**Q2. Keep the bounded comparison unsigned.**
+
+For GCC’s documented conversion behavior, the signed and unsigned versions select **exactly the same three register values**, across all 64-bit inputs. High-bit-set values become negative under the signed conversion and fail its lower bound; they fail the unsigned upper bound. [GCC integer conversions](https://gcc.gnu.org/onlinedocs/gcc/Integers-implementation.html)
+
+The unsigned form states the accepted encodings directly and avoids an out-of-range signed conversion that older C standards leave implementation-defined.
+
+There is one maintenance advantage to signed interpretation: accidentally dropping its upper bound would still exclude −1 and −2. But it would incorrectly admit other positive selectors. I would protect the complete dispatch contract with checks; repeated casts are weak protection against later edits.
+
+**Q3. A one-character deletion escapes the witness.**
+
+Change:
+
+```c
+a0 <= 3
+```
+
+to:
+
+```c
+a0 < 3
+```
+
+Selector 3 now takes `INVALIDATE_ALL`. All seven existing rows still pass.
+
+Furthermore, **adding a selector-3 row that only expects fresh target data would still miss it**: both page invalidation and full invalidation produce that result. The existing positive control supports attribution when combined with the inspected source; it does not measure invalidation scope.
+
+This is worth a small **dispatch-contract check** using a recording invalidation callback:
+
+| Input | Expected callback |
+|---|---|
+| 1, 2, 3 | `(a1, INVALIDATE_VADDR)` |
+| Encodings of −1, −2 | `(0, INVALIDATE_ALL)` |
+| 0, 4, −3 and representative large values | None, under the recommended default |
+
+That checks an observable interface rather than matching source text. Keep the guest witness as the coherence regression. Disclose its current coverage: data loads, ASM=0 mappings, selectors −2/−1/2, and no proof of instruction-side behavior or retention of unrelated translations.
+
+**Q4. Measure invalidation and retention separately.**
+
+Every witness PTE is constructed from PFN plus VALID; none sets ASM. Consequently, the current witness cannot detect a future implementation that mistakenly treats TBIA like selective TBIAP and preserves global translations. [Witness PTE construction](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/alphatbinegsel/witness_agy_20260908/alphatbi_probe.asrun.py:82)
+
+The useful contract is:
+
+| Observation | Current coarse repair | Claimed selective implementation |
+|---|---|---|
+| TBIAP removes cached ASM=0 translations | Required | Required |
+| TBIA removes cached ASM=1 translations too | Required | Required |
+| TBIAP retains cached ASM=1 translations under controlled conditions | Unsupported | Required to substantiate selectivity |
+
+**The smallest additional correctness row is TBIA invalidating an ASM=1 mapping.** A separate retention check distinguishes coarse TBIAP from an implementation claiming selectivity.
+
+Use cache-state inspection or walk instrumentation with unchanged valid mappings for retention. Identical loaded bytes cannot distinguish a cache hit from a re-walk. Conversely, requiring an old value after changing an uninvalidate­​d mapping would make a poor architectural oracle.
+
+Label retention as a **cache-model precision requirement**. The architecture manual expressly permits over-invalidation in its OpenVMS TB descriptions; the quoted 21066 register behavior does not establish a universal guarantee of cache residency. [Architecture manual, §13.3.21](https://docs.alexrp.com/alpha/alpha_4th.pdf#page=416)
+
+Report selectivity as unsupported separately from the witness’s pass count. Before promoting it to supported, check both instruction and data paths, cached ASM metadata, and any retained ASN contexts.
+
+**Q5. Use the stronger present-tense claim, scoped to Alpha’s current cache.**
+
+> Fixed Alpha PAL TBI dispatch so TBIA and TBIAP invalidate all cached translations; TBIAP remains coarse because the current Alpha translation cache does not record the per-entry ASM metadata needed for selective invalidation.
+tokens used
+133,726

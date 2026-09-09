@@ -679,3 +679,49 @@ about the generic device-failure dispatcher.
 > **THE HONEST SUMMARY: this packet is a useful summary and it is NOT a complete docket.  Rule from
 > it together with `fable_queue.md`, and treat every number in it as author-reported unless it
 > names its deriver.**
+
+---
+
+## W. STATE AT HAND-OFF — what shipped, what is round-ready, and the one structural finding
+
+*Appended last, after everything above. Where this contradicts an earlier section, THIS is later.*
+
+### Shipped today, all local, gate green on each
+
+    e302c98   #513 sgirekills   six host terminations removed from dev_sgi_re read arms
+    3031a30   #514 alphaswpctxreg   swpctx returned its result in the wrong register
+    2ab3d2f   #514 pass 2   four repairs, one claim withdrawn from three files
+    fa5e4e3   #514 pass 3   two MEASURED apparatus false passes repaired, one I introduced
+
+`#514`'s chain is at **pass 4**, which is unresolved as this is written. **Do not read the chain as
+closed.**
+
+### THE ONE STRUCTURAL FINDING, and it should shape how you spend the session
+
+Censused across every open row:
+
+    open rows                          194
+    ALREADY carrying a witness         119
+    witness naming a MISSING file        0
+    HIGH rows carrying a witness       8 of 8
+
+> **THE TOP OF THIS QUEUE IS NOT SHORT OF EVIDENCE.  IT IS SHORT OF DISPOSITIONS.**  Every
+> high-severity open row is witnessed. What blocks them is a decision about WHAT THE CODE SHOULD
+> DO — which is your role, and it is why the questions in this packet are disposition questions
+> rather than requests for more measurement.
+
+### Round-ready, in the order I would take them — argue with this
+
+| row | sev | what it has | what it lacks |
+|---|---|---|---|
+| `alphatbinegsel` | high | witness **5/7 → 7/7**, both selectors, attribution control; fix `a0 >= 1 && a0 <= 3` confirmed 4/4; ASM question settled from the manual | a fix-design panel (fired, not yet returned) |
+| `lcairqstubkill` | high | **two independent witnesses** (8042 and ns16550); disposition designed with two in-tree transferred warrants | your ruling on whether a partial repair ships — **section Y2** |
+| `lcabadval` | high | six-seat panel; fix design in; the manual's own required init is rejected by the code | scope: one round or several — **section Y1** |
+| `lcaconfbus1kill` | high | codex REVISE with a concrete decode correction | a revised design; its own held question is in `fable_queue.md`, not here |
+
+### What I would ask you to look at first
+
+**Not the rows — the two questions where I am least confident I am right**: `Y2` (does a repair that
+converts termination into a silent drop ship?) and `Y4` (am I over-fitting to a manual that arrived
+this morning?). Both are judgment calls I have leaned on all day, and neither is settled by
+anything I can measure.
