@@ -2354,6 +2354,13 @@ architecturally invalid ordering. Prescribed fix:
 uint32_t mask = (width <= 0) ? 0U : ((width == 32) ? 0xffffffffU : ((1U << width) - 1));
 ```
 
+*** A CORRECTION CARRIED FROM `alphatbinegsel`, because the same over-read may colour how you read
+its questions: I cited the 21066 manual as documenting `ALPHA_TBIAP()`'s selectivity.  TBIAP does
+not appear in the 21066 manual at all -- the quoted sentence describes writes to the ITBASM
+hardware register, which is the MECHANISM a PALcode TBIAP would use, not the selector's architected
+scope.  The conclusion (ASM has no representation in this translation cache) is unaffected: it rests
+on the cache entry's STRUCTURE, established by codex. ***
+
 **The ARM manual is now local and read** — `ddi0406.txt:18066` (A8.8.20 BFI): `if msbit >= lsbit
 ... else UNPREDICTABLE`, with **no required destination value**.
 

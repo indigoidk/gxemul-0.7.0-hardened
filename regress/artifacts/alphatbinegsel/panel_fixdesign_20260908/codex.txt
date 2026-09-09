@@ -1,0 +1,66 @@
+**VERDICT: The bounded guard repairs the witnessed misdispatch. I would retain it, explicitly recognize `-1/-2`, and give other selectors a no-invalidation default. The witness establishes freshness, not dispatch scope or ASM selectivity.**
+
+Several premises need correction in the active tree:
+
+- The ASM finding holds beyond the symbol census: the [cache entry structure](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/cpu.h:88) retains validity, writability, addresses, and a host pointer—no ASM or ASN metadata. Selectivity requires additional cache plumbing; it cannot come from this guard alone.
+- `apcb_asn` is **saved and restored** by `swpctx`, including an actual read when saving the outgoing PCB. “Read by a debug print only” is incorrect. Likewise, `kentry[]` is initialized and written by `wrent`, but has no dispatch reader. The two named constants have no consumers. See [PALcode implementation](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_alpha_palcode.c:229).
+- The missing memory-fault delivery conclusion holds: the [walker’s failure path](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_alpha.c:192) reports failure; its comment about the caller raising a fault does not establish an implemented Alpha exception path.
+- The five macros and actual assembly operands agree. `3031a30` changes **zero** invalidation-call lines. The saved witness outputs match the stated **5/7 → 7/7**, with the independent saved rerun at **5/7**; these are artifact checks, not a new execution.
+
+**Q1. The positive guard is right; the catch-all default needs a separate decision.**
+
+The architecture supplies a default: the Tru64/OSF-compatible TBI pseudocode ends with `otherwise: break;`. Thus `0`, `4`, and other unnamed values have a documented no-invalidation path. An unknown selector does not demand an architectural fault. [Alpha Architecture Reference Manual, §16.2.12](https://docs.alexrp.com/alpha/alpha_4th.pdf#page=490)
+
+I would ship:
+
+```c
+if (a0 >= 1 && a0 <= 3)
+	cpu->invalidate_translation_caches(cpu, a1, INVALIDATE_VADDR);
+else if (a0 == (uint64_t)-2 || a0 == (uint64_t)-1)
+	cpu->invalidate_translation_caches(cpu, 0, INVALIDATE_ALL);
+```
+
+A full flush for everything else is a conservative emulator policy, but it is not the manual’s literal dispatch. Avoiding under-invalidation alone does not choose that policy. Moving `0` from its existing full flush to no invalidation should be recorded as an intentional behavior change.
+
+An optional debug trace is reasonable; a mandatory warning or halt is unnecessary. Also replace the existing false comment that “a0 is ignored.”
+
+**Q2. Prefer the unsigned bounded expression.**
+
+On GCC’s documented conversion rules, both expressions accept exactly `{1, 2, 3}` across all 64-bit inputs. Values with the high bit set become negative after conversion and fail the signed lower bound; unsigned, they fail the upper bound. [GCC integer conversions](https://gcc.gnu.org/onlinedocs/gcc/Integers-implementation.html)
+
+The unsigned form avoids the implementation-defined out-of-range signed conversion permitted by older C standards. A comment naming the accepted selectors makes its purpose clear. Neither spelling protects against later edits as effectively as a dispatch-contract test.
+
+**Q3. A one-character mutation survives all seven rows.**
+
+Replace the first `>` with `<`:
+
+```c
+if (a0 <= 1 && a0 <= 3)
+```
+
+With the proposed unconditional `else INVALIDATE_ALL`, both negative selectors still flush everything, and the tested positive selector `2` **also flushes everything**. All observed values still match.
+
+That is worth a small test of the invalidation callback: assert the requested **flags and address** for all five selectors, plus representative default values such as `0`, `4`, and encoded `-3`. This checks the chosen emulator dispatch contract.
+
+Adding value-only pairs for selectors `1` and `3` would not establish locality either: a full flush can satisfy those observations too.
+
+**Q4. Assert freshness and selectivity separately.**
+
+The witness constructs PTEs with only `VALID` set and observes data loads. It exercises neither ASM=1 nor instruction-translation behavior.
+
+For a claim of exact 21066-style selectivity, use this matrix for both instruction and data translations:
+
+| Operation | Cached ASM=0 entry | Cached ASM=1 entry |
+|---|---|---|
+| TBIA | Invalidated | Invalidated |
+| TBIAP | Invalidated | Preserved by selective invalidation |
+
+The hardware manual describes separate ASM-filtered instruction and data invalidation operations. [21066/21066A Hardware Reference Manual, §§4.1.5 and 4.2.6](https://openwatcom.org/ftp/devel/docs/21066_66a_hrm.pdf)
+
+Use controlled cache-state or invalidation-event observations: identical loaded bytes cannot distinguish preservation from eviction followed by a successful re-walk. Classification must use **ASM captured when the translation was cached**, not a newly read PTE.
+
+Today, report the preservation requirement as **unimplemented**, separately from the passing freshness witness. A later implementation must satisfy the whole matrix before earning the selectivity claim. In particular, preserving globals during TBIAP must not accidentally preserve them during TBIA. This measures emulator selectivity, not a general promise that software can rely on cache residency.
+
+**Q5. Ship the stronger, precisely scoped statement.**
+
+> Fixed Alpha TBIA/TBIAP negative-selector dispatch to invalidate cached translations; TBIAP uses a coarse full flush because the emulator’s current translation cache does not retain the PTE ASM state needed for selective invalidation.

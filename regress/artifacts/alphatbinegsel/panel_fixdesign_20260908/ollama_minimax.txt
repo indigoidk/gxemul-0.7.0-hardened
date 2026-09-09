@@ -1,0 +1,44 @@
+**VERDICT: The proposed fix is correct. The witness has a real coverage hole on `a0 == 1` and `a0 == 3`. The brief conflates writes to the ITBASM register with the TB PALcall in section 2 — that quote does not establish "coarseness" for TBISD/TBISI/TBIS. All other claims hold from the packet.**
+
+---
+
+### Defects named
+
+1. **Witness coverage hole (real).** The positive control exercises `a0 == 2` only. The proposed guard covers `a0 ∈ {1, 2, 3}`. Smallest edit the witness would NOT catch: `if (a0 >= 1 && a0 <= 3)` → `if (a0 >= 2 && a0 <= 3)`. This drops TBISI (`a0 == 1`) silently to `INVALIDATE_ALL`. TBISD still passes; TBIS still passes. Witness stays 7/7. The mirror case (`if (a0 >= 1 && a0 <= 2)`) drops TBIS. Both selectors are documented and the fix claims to handle them. **This is the answer to Q3.** Worth disclosing in the contract ("guard covers {1,2,3} inclusive"), not worth a regression row — over-invalidation is safe.
+
+2. **ITBASM register vs. TB PALcall conflation (real, in section 2).** The quote from `21066_66a_hrm.txt:1486` is about *writes to the ITBASM register*, not the TB PALcall. **TBISD/TBISI/TBIS are documented to invalidate the entry for the supplied VA regardless of ASM** — `INVALIDATE_VADDR(a1)` is exactly correct for those selectors, not a coarse approximation. The "finer semantics" the brief says are deferred don't exist *for the TB PALcall*; they exist only for the separate ITBASM-write mechanism. The fix isn't coarse for what it implements — it's complete for the TB PALcall. The unmodelled piece is ITBASM-register emulation, which is a different operation entirely. Calling it a "coarse repair that defers finer semantics" (Q5 candidate A) overstates the defect.
+
+3. **Undocumented-selector contract not nailed down (real, in Q1).** The witness doesn't exercise `a0 == 0` or `a0 ≥ 4`. The proposed guard sends both ranges to `INVALIDATE_ALL`. That is the *safe* default and is the right call (over-invalidation costs re-walks; under-invalidation risks stale data — exact opposite of the defect). But no row says so. If the project later decides "unknown selector → log + ALL" or "unknown selector → counter", the witness won't catch the change. **Disclose the contract; don't write a row.**
+
+---
+
+### Other observations
+
+- **Q2.** `(int64_t)a0 >= 1 && (int64_t)a0 <= 3` and the unsigned form are **behaviourally equivalent for every `uint64_t` input**. The set `{a0 : (int64_t)a0 ∈ [1,3]}` is exactly `{1, 2, 3}`, which is the same set satisfying the unsigned form's `[1,3]` range. **Neither changes behaviour for any input.** The signed form is preferable for documentation — it makes the negative selectors read as obviously negative — and is less likely to be broken by a later edit that adds a fourth branch without thinking about sign.
+
+- **Q4.** In this tree, **no observable distinguishes "full ASM support" from "no ASM support"**, because the translation cache carries no ASM bit (`grep` shows one hit, the `#define`). A regression row for ASM selectivity cannot be authored until ASM tracking exists — any row written now would be theatre. The honest contract: *"TB PALcall is correct; ASM-bit mechanisms (ITBASM register writes) are intentionally not modelled, not deferred as a refinement of TBISD."*
+
+- **Q5 — sentence I would ship (READ):**
+
+  > PAL_OSF1_tbi now dispatches the five documented Alpha TB selectors (TBIA, TBIAP, TBISI, TBISD, TBIS) correctly; the two negative selectors no longer mis-flush a single virtual page. The emulator's translation cache does not track the PTE ASM bit and never has; selective ASM=0 invalidation, which is performed by writes to the ITBASM register (a separate mechanism from the TB PALcall), is intentionally not modelled and is not on the roadmap.
+
+  This is closer to candidate (B), but tightened: it names the *separate* missing mechanism (ITBASM), not a deferred refinement of TBISD.
+
+---
+
+### Not checkable from the packet
+
+- That `a0` is `uint64_t` at `:165` (the brief asserts it; the defect analysis collapses if it isn't).
+- That `grep -rn ALPHA_PTE_ASM src/` truly has only the `#define` hit.
+- That commit `#514` truly added zero `invalidate_translation_caches` lines.
+- That `kentry[]`, `ALPHA_KENTRY_MM`, `ALPHA_FEATURE_BWX` are all unconsumed at this layer.
+
+Each is consistent with the brief's argument and is a single grep away. None changes the verdict.
+
+---
+
+### Ambiguity to tighten
+
+> "Built by the measurement seat and re-run independently against `build/`, reproducing 5/7 with the identical two failures."
+
+This does not say whether `build/` holds the **fixed** or the **unfixed** binary. If `build/` holds the fix, 5/7 is impossible. The most plausible reading is "control reproduction against the unmodified committed binary", in which case the sentence should say so explicitly. If `build/` actually does hold the fix and 5/7 came from somewhere else, the sentence is wrong.

@@ -1,0 +1,158 @@
+I'll check the premises in the source tree first — PAL TBI dispatch, ASM/ASN usage, and the witness — then answer the five questions from those facts rather than from the write-up.The PAL case and the macros match the write-up so far. Next I’ll read the TBI handler, ASN/ASM usage, and the witness so the guard questions rest on the actual code.The PAL comment already lists the five selectors; next I’ll verify ASM/ASN consumption, kentry, the `#514` diff, and the hardware/manual text those claims rest on.Section 2 has at least one ASN claim that already looks wrong. I’ll check `#514`, kentry/fault delivery, the hardware quote, and the witness rows before answering the guard questions.**VERDICT: ship `{1,2,3} → INVALIDATE_VADDR`, else `INVALIDATE_ALL`.** That is the right membership test for this tree’s unified cache. Do not announce unknown selectors. Two section-2 premises are wrong; the rest survive, one of them on stronger evidence than the grep.
+
+I read `GXEMUL-SEC/src/` (not the 2021 copy), the three saved witness logs, `git diff 3031a30^ 3031a30` on the PAL file, and the OSF/1 `tbi` pseudocode in the Alpha Architecture Reference Manual, 4th ed. I did not re-run the probe.
+
+## Premise audit — two corrections, one tightening
+
+**Wrong: “`apcb_asn` is written by `swpctx` and read by a debug print only.”** There is no debug print. `src/` has three hits: the struct field, the outgoing PCB save (`store_32bit_word(..., pcb.apcb_asn)` at `cpu_alpha_palcode.c:239–240`), and the incoming load (`pcb.apcb_asn = new_asn` at `:298`). That is real context-state round-trip. It is still unused for translation lookup.
+
+**Wrong as stated: “`kentry[]` is declared-but-unconsumed.”** It is initialised to a dummy crash PAL (`cpu_alpha.c:99–103`) and written by `wrent` (`cpu_alpha_palcode.c:346–347`). Nothing ever *reads* it to deliver an exception. The consequence in the brief is right; the census is not.
+
+**Tightening, not a reversal: ASM selectivity.** `grep` of `ALPHA_PTE_ASM` is one hit, the `#define` at `alpha_cpu.h:223`. That is necessary but not the load-bearing fact. The cache entry is:
+
+```88:94:src/include/cpu.h
+	struct arch ## _vpg_tlb_entry {					\
+		uint8_t		valid;					\
+		uint8_t		writeflag;				\
+		addrtype	vaddr_page;				\
+		addrtype	paddr_page;				\
+		unsigned char	*host_page;				\
+	};
+```
+
+Fill (`cpu_dyntrans.c:1584–1589`) writes exactly those five fields. No ASM, no ASN, no I/D tag. Selectivity is not “deferred onto an existing bit”; there is no field to test.
+
+**The ITBASM quote is the 21066 mechanism for TBIAP, not a second guest-visible operation.** PAL `tbi(a0=-1)` is specified as “invalidate all TB entries with ASM=0”. On a 21066, PALcode does that by writing ITBASM. Missing ITBASM emulation is the same gap as coarse TBIAP, not a separate unmodelled device.
+
+**The rest of section 2 holds**, checked against source rather than the write-up:
+
+| Claim | Check |
+|---|---|
+| `a0` is `uint64_t` at `:165`; `-2`/`-1` take VADDR with `a1=0` | Yes. `r[]` is `uint64_t`. `(uint64_t)-2 >= 1` is true. |
+| Five selectors TBIA(−2), TBIAP(−1), TBISI(1), TBISD(2), TBIS(3) | Yes. In-tree NetBSD header `alpha_cpu.h:281–285`, Linux `tbisi(1)/tbisd(2)/tbis(3)`, and the ARM OSF case statement all agree. (A panel note that 1 and 3 are swapped is false.) |
+| `#514` did not touch this flush | Yes. `3031a30` on this file is the `ALPHA_A0` → `ALPHA_V0` store plus comment. Zero `invalidate_translation_caches` lines changed. |
+| No Alpha MM-fault delivery | Yes. Failed walk returns 0 (`memory_alpha.c:192–198`). `memory_rw.c:259–268` then zeros the buffer and returns `MEMORY_ACCESS_FAILED`. The only architecture-specific exception arms in that file are `MEM_MIPS` and `MEM_M88K`. `ALPHA_KENTRY_MM` is a `#define`; `ALPHA_FEATURE_BWX` is a `#define` and every CPU type has `features = 0`. |
+| Witness 5/7 → 7/7, pos obs green on both | Matches the three saved logs. I did not re-execute. |
+
+The PAL comment at `:330` (“a0 is ignored for now”) is already a lie. Replace it when the guard lands.
+
+---
+
+## Q1. The range test is right. Else-ALL is emulator policy, not the ARM default. Do not announce.
+
+`a0 >= 1 && a0 <= 3` sends the three documented VA selectors to `INVALIDATE_VADDR` and everything else, including both negatives, to `INVALIDATE_ALL`. On this cache that is the correct split: I-only vs D-only is unrepresentable (one `vph_tlb_entry[]`, `INVALIDATE_VADDR` nulls load and store together), so 1, 2 and 3 are the same call.
+
+**`a0 == 0`:** already takes ALL today (`0 >= 1` is false). The proposed guard does not change it.
+
+**`a0 >= 4` and other undocumented values, including `a0 == -3` etc.:** today they take VADDR, because every encoding except 0 satisfies unsigned `>= 1`. That is the same defect class as TBIA/TBIAP. The proposed guard changes them to ALL.
+
+The ARM OSF/1 `tbi` operation is a `case a0` with five arms and **`otherwise: break`** — a no-op, not a fault, not a flush. gem5’s OSF palcode matches: the `a0==0` table slot is `hw_rei`. So else-ALL is **not** what the architecture writes for unused encodings.
+
+It is still the right product default **in this tree**, of the two options the question named:
+
+- **Do not announce, and do not halt.** `wrent` stops the CPU on a bad selector because a bogus kentry would lose exception vectors. A reserved `tbi` encoding is not that. `fatal` + `cpu->running = 0` on a guest-triggerable PAL is a halt primitive. A debug-gated note is optional and not owed.
+- **Over-invalidation over no-op.** The failure mode just witnessed is stale translations. Unknown selector → ALL costs re-walks and cannot serve stale data. The OpenVMS TB notes in the same manual explicitly allow extra invalidation (“some implementations may flush the entire TB on a TBIAP”). Treating unused encodings the same way is consistent with that permission and with a0=0’s existing behaviour.
+
+Write the comment so the policy is named, not implied to be the ARM otherwise-clause.
+
+---
+
+## Q2. The two `if` spellings are identical on every input. Prefer a `switch` on 1/2/3.
+
+Let `u = a0` as `uint64_t` and `s = (int64_t)a0`.
+
+- `u >= 1 && u <= 3` is true exactly on `{1,2,3}`.
+- `s >= 1 && s <= 3` is true exactly when `s ∈ {1,2,3}`. Bit 63 set ⇒ `s < 0` ⇒ fails `>= 1`. Bit 63 clear ⇒ `s == u`. Symmetric difference is empty.
+
+On GCC/MSVC the out-of-range unsigned→signed conversion wraps, so they match for all 2^64 encodings. Pre-C23 that conversion is implementation-defined; the unsigned spelling does not depend on it.
+
+**Later-edit risk is symmetric if you keep an `if`:**
+
+- Drop the upper bound from the **unsigned** form → `a0 >= 1` → the original bug.
+- Drop the upper bound from the **signed** form → negatives still ALL; only `a0 >= 4` regresses to VADDR.
+- Drop the lower bound from the **signed** form → negatives go to VADDR → the original bug.
+- Drop the lower bound from the **unsigned** form → `a0 == 0` becomes VADDR; TBIA/TBIAP still ALL.
+
+The historically demonstrated mistake is unsigned `>= 1`. Signed survives *that* simplification. Unsigned survives dropping the lower bound and avoids the conversion.
+
+**Neither `if` is the form least likely to be broken.** The ARM is a `case`. Spell it that way, on the unsigned encodings, so there is no bound to drop:
+
+```c
+switch (a0) {
+case 1: /* TBISI */
+case 2: /* TBISD */
+case 3: /* TBIS */
+	cpu->invalidate_translation_caches(cpu, a1, INVALIDATE_VADDR);
+	break;
+default: /* TBIA (-2), TBIAP (-1), and undocumented: ALL */
+	cpu->invalidate_translation_caches(cpu, 0, INVALIDATE_ALL);
+	break;
+}
+```
+
+That is behaviour-identical to `a0 >= 1 && a0 <= 3`. Cases 1/2/3 can later grow I/D bodies if the cache ever splits. The original `>= 1` cannot be reintroduced by deleting a conjunct.
+
+If the patch stays an `if`, either spelling is correct. I would then pick unsigned `a0 >= 1 && a0 <= 3` to avoid the conversion, and put the five selector names in the comment so `<= 3` does not look arbitrary.
+
+---
+
+## Q3. Smallest uncaught edit: `<= 3` → `<= 2` (one character). The detector owed is a bystander VPN, not another fill/obs of the current shape.
+
+The witness exercises **a0 ∈ {−2, −1, 2}** on **one VPN per session**, and every observe row asserts “this VPN re-walked.”
+
+`INVALIDATE_ALL` and `INVALIDATE_VADDR(that VPN)` produce the same loaded bytes. Therefore:
+
+- `a0 <= 3` → `a0 <= 2` (or `a0 < 3`): TBIS becomes ALL. All seven rows still pass.
+- `a0 >= 1` → `a0 >= 2`: TBISI becomes ALL. Still 7/7.
+- Replace the condition with `0`: **always ALL**. Still 7/7, including `pos obs`.
+
+`pos obs` attributes the *defect* (VADDR works for a positive selector on the broken build). It does not pin the *repair* to VADDR rather than ALL.
+
+A same-shape TBIS or TBISI row would not close that hole either: ALL still refreshes the target.
+
+**Worth one row:** a bystander. Fill and remap VPN-A and VPN-B, `tbi(a0=2, a1=A)`, assert A is NEW and B is OLD. Under VADDR, B’s entry survives (stale-by-design). Under ALL, B re-walks. That is the smallest guest-visible check that the positive arm is not “flush everything.” Put it on a0=2, which the witness already uses.
+
+**Disclosed contract, not more fill/obs pairs:** a0=1 and a0=3 membership (same branch as 2 until I/D exists), a0=0 / a0≥4 → ALL, and TBISI not being I-only. A recording invalidate callback can check those as a dispatch table; it is not a rung-3 coherence witness.
+
+A mutant the current witness *would* catch: `if (a0 & 3)` dressed as I/D decode. `(-2) & 3 == 2` and `(-1) & 3 == 3`, so TBIA/TBIAP become VADDR(0) again.
+
+---
+
+## Q4. The row that stops a partial ASM implementation reading as complete is TBIA of an ASM=1 mapping still flushing. TBIAP-retention is a future claim, not a green test today.
+
+Every witness PTE is `PFN | VALID`. `ALPHA_PTE_ASM` is never set. TBIA and TBIAP are observationally identical after the coarse repair.
+
+Architecture:
+
+- TBIA: flush all.
+- TBIAP: flush ASM=0; **more entries may be invalidated** (the same manual, TBIAP notes). Coarse TBIAP≡TBIA is permitted over-invalidation, not a missing MUST.
+
+A green “TBIAP leaves an ASM=1 page cached” row would **fail the repair you are shipping**. Do not add it as a passing test.
+
+The partial implementation that looks complete if you only have “TBIAP flushes ASM=0” (already `tbiap obs`) is “ASM pages are immortal”: both TBIA and TBIAP skip them. The row that refuses that is:
+
+**TBIA + a mapping whose PTE has `ALPHA_PTE_ASM` set → observing load is NEW.**
+
+That is green on the coarse repair (ALL still flushes it) and red if someone later makes ASM entries un-flushable. Cheap: same shape as `tbia obs`, bit 4 set in the PTE.
+
+The selectivity claim, when someone stores ASM on the TLB entry, is a **pair**:
+
+| Observation | Coarse repair (now) | Claimed selectivity |
+|---|---|---|
+| TBIAP flushes ASM=0 | required (`tbiap obs`) | required |
+| TBIA flushes ASM=1 | required (add this row) | required |
+| TBIAP retains ASM=1 | unsupported (would fail now) | required to substantiate selectivity |
+
+Until the entry structure grows the bit, the third row is contract / expected-fail. Identical loaded bytes cannot distinguish a cache hit from a re-walk of an unchanged PTE; retention needs a remap of a mapping that must *not* have been invalidated, or cache-state inspection.
+
+Do not write a passing row that says “TBIA ≡ TBIAP”. That would be true today and would fire when real selectivity lands — the opposite of a completeness check.
+
+---
+
+## Q5. Ship the stronger present-tense claim, scoped to this cache, with the permitted extra-invalidation note.
+
+“Deferred the finer semantics” implies there is a representation waiting. There is not. “No representation” is the fact. The architecture also *permits* the coarse TBIAP, so do not write it as a spec violation.
+
+**Sentence:**
+
+> PAL_OSF1_tbi dispatched on `if (a0 >= 1)` with `a0` a `uint64_t`, so TBIA(−2) and TBIAP(−1) took `INVALIDATE_VADDR` with `a1 = 0` and flushed only virtual page zero. Selectors 1/2/3 now invalidate by address; every other encoding, including both negatives, takes `INVALIDATE_ALL`. TBIAP’s ASM=0 selectivity is not implemented: a translation-cache entry holds valid, writeflag, vaddr, paddr and a host pointer, `ALPHA_PTE_ASM` is defined and never consumed, and `apcb_asn` is PCB save/restore state only. The architecture permits extra invalidation on TBIAP; this emulator has nothing to be selective with.

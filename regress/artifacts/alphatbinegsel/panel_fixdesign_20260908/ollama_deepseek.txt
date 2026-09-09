@@ -1,0 +1,31 @@
+VERDICT: The proposed guard is correct for the five documented selectors and over-invalidation is the right default given no fault mechanism; the signed form is clearer but behaviorally identical; the witness lacks boundary coverage for `a0=1` and `a0=3` and cannot detect a later partial ASM implementation.
+
+**Audit note (READ/REASONED):** The witness re-run sentence is ambiguous: “committed 5/7 → fixed 7/7” followed by “reproducing 5/7 with the identical two failures” needs a subject. I read it as re-running the unfixed build, but the packet does not say so explicitly.
+
+### Q1 — Is `a0 >= 1 && a0 <= 3` the right guard?
+READ: The five documented selectors are `-2, -1, 1, 2, 3`.  
+REASONED: The guard sends `-2` and `-1` (as `uint64_t` huge values) to `INVALIDATE_ALL`, and `1,2,3` to `INVALIDATE_VADDR`.  
+- `a0 == 0` already went to `INVALIDATE_ALL` in the old `else`; the proposed guard preserves that.  
+- `a0 >= 4` changes from the old VADDR branch to `INVALIDATE_ALL`. That is safer: over-invalidation costs re-walks but never stale data.  
+- Since the brief states architectural fault disposition is unavailable on Alpha, announcing an unknown selector is not an option. Over-invalidation is the correct conservative default.
+
+### Q2 — Signed vs unsigned guard?
+REASONED: On any two’s-complement platform, `(int64_t)a0 >= 1 && (int64_t)a0 <= 3` behaves identically to the unsigned form for all `uint64_t` inputs. The only values that pass are `1,2,3`; negative selectors cast to negative and fail.  
+The signed form is clearer and less likely to be broken by a later edit because it makes the negative selectors visibly negative. If portability to non-two’s-complement is a concern, use explicit `a0 == 1 || a0 == 2 || a0 == 3` instead.
+
+### Q3 — What does the detector owe beyond the witness?
+REASONED: The witness tests only `a0=2` as a positive selector. The smallest edit to the repaired guard that the witness would not catch is changing `>= 1` to `> 1` (excludes `TBISI=1`) or changing `<= 3` to `< 3` (excludes `TBIS=3`).  
+This is worth a regression row because `1` and `3` are documented selectors. A later edit that accidentally drops one of them would otherwise go unnoticed.
+
+### Q4 — Observable distinguishing correct fix from incomplete ASM implementation?
+READ: The packet states `ALPHA_PTE_ASM` is defined but never consumed, and `apcb_asn` is written/read only by debug code.  
+REASONED: No current test can distinguish coarse `INVALIDATE_ALL` from ASM-selective invalidation because there is no way to create an ASM-tagged translation.  
+A later partial ASM implementation would need a row that:  
+1. creates a translation with ASM set,  
+2. creates one without ASM,  
+3. executes `TBIA`/`TBIAP`,  
+4. asserts the ASM-tagged entry survives and the non-ASM entry is invalidated.  
+Until ASM state exists, the contract must explicitly state that negative selectors are coarse and flush all.
+
+### Q5 — Changelog sentence
+“Fix Alpha TBIA/TBIAP dispatch: negative selectors now invalidate all cached translations; ASM-selective invalidation is not implemented because the translation cache has no ASM state.”
