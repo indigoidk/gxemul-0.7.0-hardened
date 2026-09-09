@@ -1,1 +1,102 @@
-I'll treat this as a scoped review of the shipped composite: load the review skill, then sweep the probe, product comment, and mutant shapes against the floor.This is a repair-chain floor pass, not a generic PR review. I'll read the probe, the product handler, and the pass-2 ledger next so the composite is judged as shipped.Next I’ll verify the census and wrapper claims against source, and reconstruct the floor clauses from the pass-2 record.The census claim and the floor text are next; I’ll also pin down how the debugger’s `print` actually formats a response.I’ll exercise the scorer the way pass 2 did, and I’ll confirm the debugger’s `print` format plus the A0/V0 census against the tree.The print path is `PARSE_NUMBER` (bare `0x…`), so the regex can match. Next I’ll run the scorer on synthetic transcripts and confirm the product hunk is still comment-only.The working tree may have moved past the brief’s inlined hunks. I’ll re-read the probe and the product file as they sit on disk.
+I'll treat this as a scoped review of the shipped composite: load the review skill, then sweep the probe, product comment, and mutant shapes against the floor.This is a repair-chain floor pass, not a generic PR review. I'll read the probe, the product handler, and the pass-2 ledger next so the composite is judged as shipped.Next I’ll verify the census and wrapper claims against source, and reconstruct the floor clauses from the pass-2 record.The census claim and the floor text are next; I’ll also pin down how the debugger’s `print` actually formats a response.I’ll exercise the scorer the way pass 2 did, and I’ll confirm the debugger’s `print` format plus the A0/V0 census against the tree.The print path is `PARSE_NUMBER` (bare `0x…`), so the regex can match. Next I’ll run the scorer on synthetic transcripts and confirm the product hunk is still comment-only.The working tree may have moved past the brief’s inlined hunks. I’ll re-read the probe and the product file as they sit on disk.The inline scorer was blocked, so I’ll write a small script and run that instead.**VERDICT: CHAIN CLOSES.** Zero floor breaches on the shipped composite. Denominator below. Do not open a product mutant, a third `swpctx`, or another pass to chase apparatus hypotheticals this binary does not emit.
+
+I read the handler, the wrapper, `debugger_cmd_print` / `debugger_parse_expression`, `cpu_alpha.c`’s initial `ctx`, the floor text, and the three-state artifacts (`PREFIX_v2` 3/5, `POSTFIX_v2` 5/5, `M_a0clobber_v2` 5/5). Tree is `GXEMUL-SEC/src/`. I did not re-run the guest (this host is not the pty rig); scorer polarities below are from the comparison the script actually performs, which for `absent` is arithmetic on the source.
+
+---
+
+### Q1. No in-contract clean-sweep on a faithful transcript. Disclosed holes named. `(d)` empty.
+
+**(d) enumerated the empty set.** Dominating predicates at the hunk are the function-entry `userMode` gate and `switch (palcode)` / `case 0x30`. The hunk is an unguarded register-index substitution. The two written “fix adds none” shapes (de-fatalisation operand-swap, pure deletion re-introduced under a different predicate) are neither. Settled; not re-opened.
+
+**Cells scored (5):** `live`, `v0 read`, `v0 pair`, `a0 land`, `v0 ctx`.
+
+**Oracle cells:** `v0 ∈ {C, N, S}` with `C=0x01000000`, `N=0x01010000`, `S=0x00ab0000`; `a0` observed as C, N, other, or absent.
+
+**Product shapes swept against a captured transcript:**
+
+| shape | what it is | score | floor |
+|---|---|---|---|
+| verbatim `r[ALPHA_A0] = ctx` | (b) reinstatement; PREFIX_v2 | **3/5** (`a0 land`, `v0 ctx`) | killed |
+| delete / wrong destination | v0 stays S | `v0 ctx` red | killed |
+| `r[ALPHA_V0] = a0` | incoming; call 2 yields N | `v0 ctx` red | killed (RHS coverage, not (d)) |
+| store after `ctx = a0` | order swap; yields N | `v0 ctx` red | killed |
+| write both (`v0` and `a0` get `ctx`) | publishes C into a0 | `a0 land` red | killed *by their contract* |
+| correct + clobber a0 to `0xdeadbeef` | measured M_a0clobber_v2 | **5/5** | not a mutant: UNPREDICTABLE |
+| hardcoded `r[ALPHA_V0] = 0x01000000` | one RHS that equals this C | **5/5** | **disclosed**, unbounded RHS, file |
+| `v0 = a0 - 0x10000` | call 2: N−0x10000 = C | **5/5** | same disclosed class as hardcoded C |
+| wholesale delete of the load-new-context **block** | `ctx = a0` is the **first** statement in it (`cpu_alpha_palcode.c` after the v0 store). Init `ctx` is `0x10100` (`cpu_alpha.c`). Call 2 then publishes `0x10100`, not C | `v0 ctx` **red** | not an escape |
+| partial break that **keeps** `ctx = a0` and drops PCB field loads | v0==C, a0==N | **5/5** | **disclosed**, different site, file |
+
+The CONTRACT paragraph as inlined overstates the install hole: it said a broken load-new-context block scores full marks. That is false of a wholesale delete. Only the partial form that spares `ctx = a0` does. Wrong record in the humble direction; not a mutant. (The worktree has already started writing that down. I am not holding the chain for it.)
+
+Stale `/4` in that same paragraph: the composite is `/5` after `v0 pair`. Records, not floor.
+
+---
+
+### Q2. Product coverage: no. Apparatus polarity: yes, and it does not 5/5 a broken build.
+
+`a0 == N` → `a0 != C` drops every post-fix a0 **except C**. The edits the old row uniquely killed, with `v0 == C`, are:
+
+- a0 = `0xdeadbeef` / 0 / S / init `0x10100` / anything-but-C — **intentional**. Architecture UNPREDICTABLE. Measured: clobber 5/5, false fail gone.
+- `a0_final == "absent"` — **unintentional polarity**. `"absent" != "0x1000000"` is true, so the row returns `yes`. The old equality to N treated absence as fail.
+
+On a **faithful** transcript, no in-contract incorrect product edit is uniquely lost. Write-both is still red (`a0 == C`). Shipped defect still reds both `a0 land` and `v0 ctx` (PREFIX_v2: observed a0 = `0x1000000`). Never-executed is still `v0 ctx` red.
+
+On a **truncated** transcript (no `print a0` response): attribution greens. That does **not** 5/5 the shipped defect (`v0 ctx` still wants C, gets S) and does **not** 5/5 `v0 = a0` (gets N). It 5/5s a *correct* build without having seen a0. Different class from the pass-2 harness false pass, which greened the **broken** incoming-context repair.
+
+`print a0` is also the last command and gets the 2.2s spin; the v0-pair hole was a mid-sequence print with 0.35s. I would fail `a0 land` (or add an `a0 read` row) when the observation is `absent`, as hygiene. I am **not** calling it L2. Holding the chain for a negative claim’s treatment of missing data, when that miss cannot 5/5 the defect the round closed, is the non-convergence pattern.
+
+Leftover pin, named not re-opened: UNPREDICTABLE includes C, so write-both is a legal PAL and still reds `a0 land`. They kept that on purpose as “do not publish the old context into a0.” Q2 asked about coverage *removed*, not whether to drop the row.
+
+---
+
+### Q3. When the row is green, `v0_final` is the second match. This session has no other producer of that match.
+
+`debugger_parse_expression` returns `PARSE_NUMBER` on every success (`return_ok` in `debugger_expr.c`), so `print v0` emits a bare `0x…` line. That is the path the regex is written for. `PARSE_SETTINGS` / `v0 = 0x…` is dead for this command; if it were live, `v0 pair` would go `0 of 2` and fail loud. PREFIX_v2 already proves the bare-hex path: it parsed `0xab0000`.
+
+`v0 pair` wants **exactly** `"2 of 2"`. Then, in the inlined repair, `v0_final = allv0[-1]` under `>= 2`. When the pair row is green, the count **is** 2, so `[-1]` **is** `[1]`. Switching to positional `[1]` with `== 2` (already in the uncommitted tree) changes `v0 ctx`’s failure string when the count is wrong; it does not change any 5/5.
+
+A third match fails the pair row (`3 of 2`). Too few fails it. The original false pass — one response of C, scored as call 2 — is now `1 of 2` plus `ONLY 1 v0 RESPONSE(S)` on `v0 ctx`. Closed.
+
+**Can the pair row be green while `v0_final` is the wrong observation?** Only if one of the two regex hits is not a response to the two issued `print v0` commands. I grepped `src/` for `print v0`: **no matches**. Help is `syntax: print expr`. `-x` is xterms, not instruction trace (`-i` is). `debugger_cmd_print` prints the value and returns; nothing else is inserted between the echoed command and the hex. If the hex is delayed past the next command echo (`step …` / `print a0`), the next line is not whitespace, the delayed `print v0` does **not** match, the count drops, the pair row reds. Conservative.
+
+Unanchored `print\s+v0` would match `sprint v0`. That string is not a command this binary emits. A suffix `0x1000000: diagnostic` would capture C; `print` does not emit a suffix (`0x%" PRIx64"\n"`). Those are regex properties without a producer. A synthetic transcript that *plants* `trace: print v0` can 5/5; that is an answer to the hypothetical in the question, not a clean-sweep of this probe as it runs.
+
+---
+
+### Q4. Comment-only. Census checks out as compiled code. One leftover wrong sentence is in the probe header, not in this product hunk.
+
+`cpu_alpha_palcode.c` is unmodified in the worktree versus HEAD. The executable line is still
+
+```c
+cpu->cd.alpha.r[ALPHA_V0] = cpu->cd.alpha.ctx;	/*  #514  */
+```
+
+No a0 write was added. `ctx = a0` still consumes the local captured at function entry (`uint64_t a0 = cpu->cd.alpha.r[ALPHA_A0], …`).
+
+**Census, walked, as of after this fix:**
+
+| population | count | sites |
+|---|---:|---|
+| compiled PAL stores to v0 | 5 | `rdmces` 0x10, this `swpctx` 0x30, `swpipl` 0x35, `rdps` 0x36, `whami` 0x3c |
+| compiled PROM store to v0 | 1 | `alpha_prom_call` (`PROM_R_PUTS`) |
+| `#if 0` stores to v0 | 3 | `rdval` 0x32, `rdusp` 0x3a, fixup stub `0x3fffffd` |
+| compiled `r[ALPHA_A0] =` | 0 | every remaining `r[ALPHA_A0]` in the file is a **read** (switch, `fatal`, capture, `wrmces`, `wrfen`) |
+
+The comment’s claim “no `r[ALPHA_A0] =` remains in the file” is true of assignments. A literal grep still hits **this comment**. Same trap as pass 1’s textual census; not a wrong count of compiled code.
+
+Wrapper (`alpha_pal_swpctx`): outputs `"=r" (a0), "=r" (v0)`; input `"0" (a0)` ties the incoming PCB to operand 0; clobbers `"$1", "$22", "$23", "$24", "$25", "memory"`. a0 is `$16`, not in that list. The wrapper comment’s “a0 (above)” is the operand. The product comment now says this. Correct.
+
+**Still wrong, not in this product hunk:** the probe module docstring still says the wrapper “lists a0 as clobbered”. Pass 2 corrected the product comment and the CHANGELOG; this header was left. File it. It is not a floor breach and it is not a reason for another pass on `#514`.
+
+---
+
+### Q5. Close.
+
+Zero floor breaches: no clean-sweep mutant inside `(d)` (empty) or inside the in-contract RHS shapes on a captured transcript; no vacuous row (`a0 land` still reds PREFIX; `v0 pair` is an identity row that is 2/2 on the three measured product states); no non-varying channel (PREFIX 3/5, fix 5/5, clobber 5/5, same script).
+
+**Not owed:** a built `v0 = a0` mutant, a third `swpctx`, restoring `a0 == N`, an a0 clobber in the product, merging the flush / `alphatbinegsel`.
+
+**File, do not repair-chain:** hardcoded-C / `a0 - 0x10000` (unbounded RHS); partial load-block that keeps `ctx = a0`; tighten `a0 land` on `absent` if you want the apparatus discipline to be symmetric; probe-header clobber sentence; stale `/4` and the wholesale-vs-partial wording in the CONTRACT blurb.
+
+A pass that names those and finds nothing in the floor’s three closers is the stop. This is that pass.

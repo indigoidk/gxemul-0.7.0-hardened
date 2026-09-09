@@ -17863,3 +17863,34 @@ successful. This row does not guess.
 verdict line — no newline, no body — is mechanically detectable, and reporting it as TRUNCATED
 rather than as a verdict costs one test in `seat_verdicts.py`. That tool is read by every panel, so
 it owes negative controls in both directions and ships as its own harness round.
+
+## 2026-09-08 — two seat answers preserved while the seat was still streaming, and one held the stopping answer
+
+A truncation census over **200 seat answers written today** flagged 11. Six are the known
+`codexcyberflag` zero-byte class (two of those still in flight), two are the `seattruncverdict`
+glm fragment, and **three were grok answers preserved mid-stream**:
+
+    pass 3   1,017 of 10,649 bytes preserved   (10%)
+    pass 5   1,340 of 11,718 bytes preserved   (11%)
+    pass 4 and 6                                complete -- grok had finished
+
+**The live `_scratchpad` copies were also incomplete when I read them** (709 and 1,030 bytes), which
+is why the verdicts never reached the record.
+
+**grok's pass-3 verdict was `CHAIN CLOSES` with an explicit stopping rule** — *"do not open another
+pass to chase apparatus hypotheticals this binary does not emit"* — **three passes before I asked
+the panel for exactly that rule.** Its pass-5 verdict independently confirmed codex's finding, while
+my receipt called that pass "unanimous among the landed seats".
+
+**Passes 4–6 were not wasted** — each bought a real defect, and one (the coloured prompt) is
+something the binary *does* emit. What was lost is that grok's discriminator was sharper and
+earlier: it separates the colour case (emitted, worth a pass) from the order variants (synthetic
+transcripts the pty never produces).
+
+**Repaired:** both artifacts re-copied at full length and verified by their closing sentences, and
+both verdicts recorded as ANSWERED.
+
+**The general defect is a copy timed against nothing.** The carrier already requires a completion
+sentinel before citing a preserved log; a panel dir has no single sentinel, and the seats finish at
+different times. **Proposed, not built:** the panel launcher already `wait`s for all seats — copying
+after that wait, rather than when the main loop next looks, removes the window entirely.

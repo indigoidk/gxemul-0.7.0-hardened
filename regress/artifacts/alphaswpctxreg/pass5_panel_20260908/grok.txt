@@ -1,1 +1,148 @@
-I'll inspect the probe, the pass-4 order escapes, and `response_after` against the actual transcript so the chain either closes with a measured zero or names what's left.The probe, the order-attack transcript, and the pass briefs are next — those are what Q1–Q4 actually turn on.I’ll measure the marker against real transcripts and the debugger’s echo, and compute whether `len(first)` can equal `len(second)`.I’ll compute the two step counts, check marker uniqueness against a real transcript, and exercise `response_after` on the equal-count and prefix cases.I’ll run the encoder and the shipped `response_after` against the equal-count, prefix, and full six-row cases so the uniqueness claim is measured, not inferred.I'll start by reading the probe encoder, `response_after`, and the Alpha CPU context constants so the measurement can be run against the shipped code.There's already a wiring check around `response_after`. I'll read that, the Alpha CPU initial context, and any existing measurement artifacts next.I'll inspect the shipped transcripts, the existing attack script, and every `printf("GXemul> ")` site so the synthetic cases match real echo shape.I have the encoder, the shipped binder, and the debugger prompt sites. Next I’ll add a temporary measurement script and run the encoder plus the synthetic cases.
+I'll inspect the probe, the pass-4 order escapes, and `response_after` against the actual transcript so the chain either closes with a measured zero or names what's left.The probe, the order-attack transcript, and the pass briefs are next — those are what Q1–Q4 actually turn on.I’ll measure the marker against real transcripts and the debugger’s echo, and compute whether `len(first)` can equal `len(second)`.I’ll compute the two step counts, check marker uniqueness against a real transcript, and exercise `response_after` on the equal-count and prefix cases.I’ll run the encoder and the shipped `response_after` against the equal-count, prefix, and full six-row cases so the uniqueness claim is measured, not inferred.I'll start by reading the probe encoder, `response_after`, and the Alpha CPU context constants so the measurement can be run against the shipped code.There's already a wiring check around `response_after`. I'll read that, the Alpha CPU initial context, and any existing measurement artifacts next.I'll inspect the shipped transcripts, the existing attack script, and every `printf("GXemul> ")` site so the synthetic cases match real echo shape.I have the encoder, the shipped binder, and the debugger prompt sites. Next I’ll add a temporary measurement script and run the encoder plus the synthetic cases.The probe on disk no longer matches the brief’s `t.find` hunk — I’m re-reading the binder before judging uniqueness.Write and shell were blocked; I’ll retry both so the measurement can still run against the shipped encoder.Shipped encoder and `response_after` were taken from `regress/alpha_swpctx_v0_probe.py` (prefix up to `txt, alive = session(cmds)`; `RESP` not retyped). `sys.argv=['probe','DUMMY','m']`. Product/probe source was not edited.
+
+## 1. Encoder
+
+| item | value |
+|---|---|
+| `len(first)` | **3** |
+| `len(second)` | **4** |
+| equal? | **False** (`first != second`, lengths unequal) |
+| `step %d % len(first)` | **`step 3`** |
+| `step %d % len(second)` | **`step 4`** |
+| `cmds` starting with `"step "` | **`['step 3', 'step 4']`** |
+| `str(len(second))` prefix of `str(len(first))`? | **False** (`'4'` vs `'3'`) |
+| `str(len(first))` prefix of `str(len(second))`? | **False** (`'3'` vs `'4'`) |
+
+`load_const(T0, SCRATCH=0x01020000)` is one `LDAH` (`lo==0`). `second` is that plus one `LDAH(V0, SENT>>16)` plus the `LDQ`/`CALL_PAL` pair.
+
+## 2. Synthetic scores
+
+Binder = shipped `response_after(t, "v0", nsteps)` (first `RESP` v0 **after** first whole-line `^GXemul>[ \t]+step[ \t]+N[ \t]*$`). Old = `allv0[1]` if exactly 2 else `"%d v0 RESPONSE(S), WANTED EXACTLY 2"`. Rows: live=alive, v0read=first v0 present, v0pair=exactly 2, v0bound=bound is not None, a0obs=a0 present, v0ctx=(**new** `v0_final == 0x1000000`). Hex: C=`0x1000000`, N=`0x1010000`, S=`0xab0000`, C1=`0x10100`.
+
+nsteps = `len(second)=4` except e/f/g, which force marker `GXemul> step 4`.
+
+| id | case | new bound | new v0_final | old v0_final | live | v0read | v0pair | v0bound | a0obs | v0ctx | n/6 |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| a | GENUINE | `0x1000000` | `0x1000000` | `0x1000000` | ok | ok | ok | ok | ok | ok | **6/6** |
+| b | PREFIX | `0xab0000` | `0xab0000` | `0xab0000` | ok | ok | ok | ok | ok | FAIL | **5/6** |
+| c | seat A | `None**VERDICT: NOT CLOSED.** The four binaries still score as advertised. The helper does not. `response_after` + `t.find` lost coverage the positional rule had, on a transcript this pass’s own Q2 names.
+
+I did not re-run gxemul. Lengths, prompt sites, and initial `ctx` are from source. The 24 binary cells are from the existing artifacts. The false-pass transcript is constructed from those plus the shipped binder.
+
+---
+
+## Q1. Zero floor breaches, with the denominator
+
+**24 binary cells — zero breaches.** Inspected, not re-executed:
+
+| state | live | v0 read | v0 pair | v0 bound | a0 obs | v0 ctx | score |
+|---|---|---|---|---|---|---|---|
+| FIXED | ok | ok | 2 of 2 | yes | seen (`a0=0x1010000`) | `0x1000000` | **6/6** (`FIXED_v3_20260908.out`) |
+| PREFIX | ok | ok | 2 of 2 | yes | seen (`a0=0x1000000`) | `0xab0000` **FAIL** | **5/6**, red `v0 ctx` alone (`PREFIX_v3`) |
+| correct+clobber a0 | ok | ok | 2 of 2 | yes | seen (`a0=0xdeadbeef`) | `0x1000000` | **6/6** (`CLOBBER_v3`) |
+| CLICOLOR=1 (with `-A`) | ok | ok | 2 of 2 | yes | seen | `0x1000000` | **6/6** (`CLICOLOR_v4`) |
+
+**Order attacks on the binder** (`ORDER_ATTACK_20260908.out`): seat A / seat B → `None` (rejected); old count rule → `2 of 2` would have passed. Those two are closed.
+
+**Named filed debt, unchanged:** hardcoded `v0=C`; partial PCB-load break that spares `ctx=a0`. Outside this diff.
+
+**The cell that does not close it:** incoming-context (`v0=a0`) **plus a non-unique `GXemul> step 4`**. Binding scores call 1’s `C` and greens `v0 ctx`. The positional rule on the same transcript scores call 2’s `N` and reds. That is a 6/6 of an in-contract mutant (`v0 == N` is the probe’s own “incorrect repair returning the new context”). Details under Q2/Q3. It is not in the four binary artifacts because those transcripts have one `step 4`.
+
+FIXED 6/6 with `v0 ctx = 0x1000000` is still useful: call 1 on a correct build returns initial `ctx` `0x10100` (`cpu_alpha.c:107`, `r[]` zeroed at `cpu_new`). If `t.find` had hit an earlier marker on that run, the row would have been `0x10100` and FIXED would have failed. So the genuine producer did bind to call 2. That does not make the helper unique by construction.
+
+---
+
+## Q2. `response_after` is not sound
+
+`t.find("GXemul> step %d" % len(second))` takes the **first** substring. That is “that command’s own echo” only if the string occurs once, as a whole token.
+
+**What this producer actually emits**
+
+- `first = load_const(T0, SCRATCH) + [LDQ, CALL_PAL]`
+- `second = load_const(T0, SCRATCH) + [LDAH(V0, SENT>>16), LDQ, CALL_PAL]`
+- `SCRATCH = 0x01020000` → `lo=0` → one `LDAH`. So **`len(first)=3`, `len(second)=4`**.
+- Structurally **`len(second) = len(first) + 1`** for any `load_const` length. Equal counts cannot appear unless that extra `LDAH` is removed or first is padded.
+- `str(4)` is not a prefix of `str(3)`. Searching for `GXemul> step 4` cannot hit `GXemul> step 3`.
+- `printf("GXemul> ")` exists only in `debugger_readline` (four sites, all prompts). The banner is `GXemul ` + VERSION, no `>`. Help is `syntax: step [n | call]\n`, no prompt. The probe never issues `help`, tab, or a third `step`.
+
+So: **no banner hit, no equal-count hit, no prefix hit against the other step, on this encoder.** The genuine `cmds` list is `step 3` then `step 4`. One `STEP2` string.
+
+**Where the helper is still unsound**
+
+1. **Equal counts.** Two `GXemul> step 4` echos. `find` binds the first. First v0 after that is call 1. (rfind would pick the last echo; it would not enforce uniqueness and still treats `step 4` as a prefix of `step 40`.)
+2. **Unanchored `find`.** `"GXemul> step 4"` is a prefix of `"GXemul> step 40"` and `"GXemul> step 4 extra"`. Not emitted today; the helper still accepts them.
+3. **Any earlier exact echo of `GXemul> step 4`.** Same bind-to-call-1. Not in `cmds`. One inserted line is enough.
+
+The session loop writes a command, then reads, then writes the next, on one PTY. Bytes are not reordered. A delayed call-1 print cannot land after the step-2 echo unless the cmds list itself is reordered or a line is spliced in. The hole is the helper’s uniqueness assumption, not PTY merging.
+
+The `v0 bound` row cannot see (1)–(3): `v0_bound` is still non-`None`, the row stays `yes`, and its note (“the scored v0 is the response FOLLOWING the second `step`”) is false.
+
+---
+
+## Q3. Binding lost coverage — named transcript
+
+On the genuine `cmds` list, “second response” and “first response after step 2” coincide (`print`, `step`, `print`, with `rd()` between). They differ here:
+
+```text
+GXemul> step 4
+GXemul> print v0
+0x1000000
+GXemul> step 4
+GXemul> print v0
+0x1010000
+GXemul> print a0
+0x1010000
+```
+
+Incoming-context (`v0 = a0`): call 1 returns `C`, call 2 returns `N`.
+
+| rule | scored v0 | `v0 ctx` |
+|---|---|---|
+| pass-4 positional (`allv0[1]` iff exactly 2) | `0x1010000` = N | **FAIL** (correct) |
+| this repair (`response_after` / first after `find`) | `0x1000000` = C | **PASS** — **6/6 false pass** |
+
+Same shape with an extra leading `GXemul> step 4` and the real counts 3 then 4: `find` still binds the extra echo, same 6/6.
+
+A third genuine v0 line between step 2 and the intended print: new rule takes the extra, old rule refuses (`3 of 2`). `v0 pair` still reds, so that one is not a sweep; identity of `v0_final` is still wrong.
+
+**Not a loss, and better than positional:** first print missing, second present after step 2. Old rule refuses `v0 ctx` on a correct value. New rule scores it; `v0 pair` / `v0 read` still red. Fail-closed on the composite.
+
+The equal-count / extra-echo case is the one that matters: **the repair relocates the pass-3/4 identity bug** (count of 2 is not call-2) into “first `find` hit is not step 2”.
+
+---
+
+## Q4. No vacuous row, two weaker than their notes
+
+Six rows. None is constant across A/B + the four binaries + a missing-response mutant.
+
+| row | varies? | caveat |
+|---|---|---|
+| `live` | by construction (`died`) | green on every product state in the enum |
+| `v0 read` | zero v0 responses | note says “after call 1”; if the first print is dropped and the second remains, this row is still `yes`. `v0 pair` catches the count. Description overclaim, not a sweep |
+| `v0 pair` | count ≠ 2 | green on A/B (that is why `v0 bound` exists). Still the row that makes a third match loud |
+| `v0 bound` | A/B → `no` | **cannot be the sole red**: `v0_final` is derived from the same `None`, so `v0 ctx` falls with it. Label, not independent coverage. **Does not go red** on the Q3 transcript (bound is truthy, just the wrong observation) |
+| `a0 obs` | lost `print a0` / seat B | green on clobber **by design** after the pass-3 false fail. Mutant it now kills is a missing a0 observation, which this pass’s four binaries do not include. Not vacuous; the enum doesn’t exercise it |
+| `v0 ctx` | PREFIX; incoming when correctly bound | the product row |
+
+`v0 pair` is not vacuous. It is green under every mutant **this** diff was written to catch, which is expected.
+
+---
+
+## Q5. What is left
+
+One in-round item, then this chain can close:
+
+**The marker must be a unique whole-token echo of `step len(second)`, and the scored value must still be the second response.** `t.find` provides neither. `rfind` is not enough (still unanchored, still silent on two identical echos). The composition is: line-anchored `^GXemul>[ \t]+step[ \t]+N[ \t]*$`, demand exactly one match, demand exactly two v0 responses, demand `allv0[1]` sits after that match; otherwise refuse.
+
+That is the same species pass 3 already treated as in-round: the last repair relocated identity instead of pinning it.
+
+Not in-round, named:
+
+- Well-placed replay of `C` after a unique step 2 is byte-identical to a genuine call-2 response. Order cannot catch it. The row proves order, not provenance.
+- `a0 == C` still prints “published to the wrong register” on the permitted `(v0=C, a0=C)` state. Diagnostic, not scored.
+- Comment immediately above `v0_final` still says “THE SECOND RESPONSE”. Under this diff that is false.
+- `order_attack.asrun.py` retypes `response_after` and only extracts `RESP`. It cannot see a probe-side helper going to `return None`.
+
+I am not holding the chain open for those.
+
+The four binaries, seats A and B, and CLICOLOR-with-`-A` are fine. The helper’s uniqueness claim is not. That is the pass-5 finding; it is not an invented sixth axis.
