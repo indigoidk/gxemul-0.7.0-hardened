@@ -717,7 +717,8 @@ Censused across every open row:
 | `alphatbinegsel` | high | witness **5/7 → 7/7**, both selectors, attribution control; fix `a0 >= 1 && a0 <= 3` confirmed 4/4; ASM question settled from the manual | a fix-design panel (fired, not yet returned) |
 | `lcairqstubkill` | high | **two independent witnesses** (8042 and ns16550); disposition designed with two in-tree transferred warrants | your ruling on whether a partial repair ships — **section Y2** |
 | `lcabadval` | high | six-seat panel; fix design in; the manual's own required init is rejected by the code | scope: one round or several — **section Y1** |
-| `lcaconfbus1kill` | high | codex REVISE with a concrete decode correction | a revised design; its own held question is in `fable_queue.md`, not here |
+| `lcaconfbus1kill` | high | **an APPLIABLE diff** that passes `git apply --check`, separating cycle-type from destination bus and closing the bus-zero alias | it is UNAPPLIED and UNCOMPILED, and its observer is unvalidated |
+| `armbfiwidth` | med | six seats confirming the site differs from `#510`'s two; the ARM manual now local and read | a ruling on whether it may call itself definedness-only |
 
 ### What I would ask you to look at first
 
@@ -725,3 +726,35 @@ Censused across every open row:
 converts termination into a silent drop ship?) and `Y4` (am I over-fitting to a manual that arrived
 this morning?). Both are judgment calls I have leaned on all day, and neither is settled by
 anything I can measure.
+
+### LATE ADDITIONS — after section W was first written
+
+**`#514`'s chain reached SIX passes and I have put the STOPPING QUESTION to the panel rather than
+ruling on it.** The pattern that worries me, stated so you can test it:
+
+    pass 2   four findings              product comment + one row
+    pass 3   two measured false passes  THE PROBE'S PARSER  (one of them I introduced)
+    pass 4   a coloured prompt makes a correct build score 1/5;  THE PROBE'S PARSER
+             two order escapes
+    pass 5   my binding repair LOST coverage the positional     THE PROBE'S PARSER
+             rule had -- measured, 6/6 false pass where the
+             old rule correctly scored 4/5
+
+> **THE PRODUCT FIX — one identifier — HAS BEEN RATIFIED SINCE PASS 2 AND UNCHALLENGED SINCE, AND
+> THE FLOOR HAS ANSWERED "NO UNDISCLOSED BREACHES" SINCE PASS 3.** Everything after that is in the
+> test apparatus, found by running synthetic transcripts against a parser — **an unbounded space,
+> which is what the stopping rule exists to refuse.** But pass 5's finding was real and important,
+> so the passes are still buying something. **That is the tension, and I could not resolve it from
+> inside.**
+
+Pass 6 (in flight as this is written) is split so far: kimi and minimax say CLOSE, deepseek says the
+composition needs distinct step counts. **I measured deepseek's premise rather than arguing it: with
+equal counts the marker appears twice, the uniqueness test fires, and the run is REJECTED LOUDLY —
+so the composition FAILS CLOSED on exactly the premise it could not check.** kimi's CRLF concern is
+answered the same way: `session()` strips CR before any parsing.
+
+**WHAT I WANT FROM YOU ON THIS is not a verdict on the diff — it is a rule.** After how many passes,
+and on what evidence, does a chain whose PRODUCT is settled but whose APPARATUS keeps yielding stop
+being worth a panel? The stopping rule as written keys on floor breaches, and these are not floor
+breaches; they are a detector getting better. **I do not think "keep going until nobody finds
+anything" is the right answer, and I do not have a better one.**
