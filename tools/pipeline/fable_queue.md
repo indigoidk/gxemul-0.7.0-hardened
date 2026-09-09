@@ -41,7 +41,7 @@ those panels produced had six or seven seats behind it.
 <!-- BEGIN GENERATED: codex-wall -- edit gen_codex_wall.py, not this block -->
 ### HELD STAGES -- every row awaiting a seat, derived from the ledger
 
-`alphaswpctxreg` (design:fable5,opus5) · `alphatbinegsel` (assess:fable5,opus5) · `armbfxwidth32` (assess:fable5,opus5; review:fable5,opus5) · `carrier` (regress:fable5) · `es438` (regress:fable5) · `gdromcondlies` (regress:fable5) · `holdmarkermulti` (regress:fable5) · `lcabadval` (assess:codex,fable5,grok,kimi,opus5; design:fable5; research:fable5) · `lcaconfbus1kill` (design:fable5) · `lcairqstubkill` (design:fable5) · `m88kexcdetectorl2` (design:fable5) · `ns16550` (regress:fable5) · `pcc2c040kill` (assess:fable5; design:fable5; review:fable5) · `pcc2widthkills` (assess:fable5,opus5) · `proberowsubset` (assess:codex) · `sgideprimop` (regress:fable5) · `sgidewidth` (regress:fable5) · `sgimtedepth4dead` (assess:fable5,opus5; review:fable5,opus5) · `sgirekills` (assess:codex,grok,kimi,opus5) · `sgireunmapped` (regress:fable5) · `sgitexindex` (assess:codex,fable5,grok,kimi,opus5) · `sh4sci` (regress:fable5) · `wdccdbmidxfer` (regress:fable5; research:opus5) · `wdcdataoutdrain` (regress:fable5)
+`alphaswpctxreg` (design:fable5,opus5) · `alphatbinegsel` (assess:fable5,opus5) · `armbfiwidth` (design:fable5,opus5) · `armbfxwidth32` (assess:fable5,opus5; review:fable5,opus5) · `carrier` (regress:fable5) · `es438` (regress:fable5) · `gdromcondlies` (regress:fable5) · `holdmarkermulti` (regress:fable5) · `lcabadval` (assess:codex,fable5,grok,kimi,opus5; design:fable5; research:fable5) · `lcaconfbus1kill` (design:fable5) · `lcairqstubkill` (design:fable5) · `m88kexcdetectorl2` (design:fable5) · `ns16550` (regress:fable5) · `pcc2c040kill` (assess:fable5; design:fable5; review:fable5) · `pcc2widthkills` (assess:fable5,opus5) · `proberowsubset` (assess:codex) · `sgideprimop` (regress:fable5) · `sgidewidth` (regress:fable5) · `sgimtedepth4dead` (assess:fable5,opus5; review:fable5,opus5) · `sgirekills` (assess:codex,grok,kimi,opus5) · `sgireunmapped` (regress:fable5) · `sgitexindex` (assess:codex,fable5,grok,kimi,opus5) · `sh4sci` (regress:fable5) · `wdccdbmidxfer` (regress:fable5; research:opus5) · `wdcdataoutdrain` (regress:fable5)
 
 *** TWO DIFFERENT KINDS OF HOLD APPEAR BELOW AND THEY MUST NOT BE READ ALIKE. ***
 
@@ -60,7 +60,7 @@ marker can mask another gap* -- section H cannot see a shortfall that a differen
 **Neither kind is a blank.** A blank cell and a seat failure must not look alike, and an
 allocation is a third thing again: recorded by seat name, per row, with the reason.
 
-**This is ONE outage plus one allocation, not 24 decisions, and it is written once rather than once per panel.**
+**This is ONE outage plus one allocation, not 25 decisions, and it is written once rather than once per panel.**
 **THE CODEX HISTORY, kept because it calibrates what a wall looks like.** Across ten panels it
 produced the identical signature every time -- the echoed brief followed by the usage-limit
 error -- in files of 26,992 / 11,180 / 10,036 / 8,323 / 12,414 / 11,938 / 10,726 / 16,694 /
@@ -2342,3 +2342,39 @@ first.**
 *Stage state: design ran SIX seats — codex, grok, glm, kimi, deepseek, minimax — all confirming.
 opus5 and fable5 are preserved for this adjudication and agy is the measurement reserve, so no
 flagship seat could run. Held and queued as one action.*
+
+### `armbfiwidth` — the third site of an idiom `#510` fixed at two, and the claim is the question
+
+**Six seats agree `#510`'s form does not transfer.** UBFX/SBFX encode *widthm1* so their width is
+never negative; **BFI encodes MSB**, so `width = msb - lsb + 1` reaches **[-30, 32]**. Of 1024
+encodable (msb, lsb) pairs, **468 reach an undefined shift** and 465 of those also have
+architecturally invalid ordering. Prescribed fix:
+
+```c
+uint32_t mask = (width <= 0) ? 0U : ((width == 32) ? 0xffffffffU : ((1U << width) - 1));
+```
+
+**The ARM manual is now local and read** — `ddi0406.txt:18066` (A8.8.20 BFI): `if msbit >= lsbit
+... else UNPREDICTABLE`, with **no required destination value**.
+
+#### 1. (HIGH) Is this definedness-only, or is a behaviour correction hiding inside it?
+
+codex warns it is **not** definedness-only: at width 32 the manual has BFI copy the whole register,
+while under the count-masked host lowering `#510` describes, the **old** mask would be zero and
+leave the destination unchanged. **Neither of us has measured that lowering at BFI.** Does the round
+owe the measurement before shipping, or is an explicit disclosure enough?
+
+#### 2. (MED) Policy or architecture?
+
+For `msbit < lsbit` the manual mandates nothing, so `mask = 0` is an **emulator policy choice**.
+Silently preserve, or announce once? The tree has precedent for both and no universal policy.
+
+#### 3. (MED) What may the detector honestly claim?
+
+`#510`'s own finding: `1 << 31` and `1U << 31` give the **same** mask after the `- 1`, so **no
+guest-value row can kill a `1U` → `1` regression** — only UBSAN or a source pin can. Must the
+disclosed `ubsanshiftlane` debt land first?
+
+*Stage state: design ran SIX seats — codex, grok, glm, kimi, deepseek, minimax — all confirming.
+opus5 and fable5 preserved for this adjudication; agy is the measurement reserve. Held and queued
+as one action.*

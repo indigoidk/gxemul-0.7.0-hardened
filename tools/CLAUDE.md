@@ -2928,6 +2928,23 @@ FIFTEEN PDFs ARE PRESENT AND THE PROSE ABOVE NAMED ABOUT SEVEN. ***
                        never a hardware contract. ***  `file` reports this PDF as "10 page(s)" and that is
                        WRONG -- the real count is in a linearized trailer, and `pdftotext -layout` yields
                        713 KB / 13,876 lines.  An LCA/Alpha-PCI round opens THIS first.)
+  ddi0406.pdf         (ADDED 2026-09-08: ARM Architecture Reference Manual, ARMv7-A/R edition, ARM DDI
+                       0406C.d (ID040418), 18.6 MB -> `ddi0406.txt' 8.4 MB / 143,260 lines.  *** THIS IS
+                       NOT ddi0100i.  THE OLDER ONE PREDATES ARMv6T2 AND CONTAINS NO BFI, BFC, UBFX OR
+                       SBFX AT ALL -- `grep -c -w BFI ddi0100i.txt' is ZERO, which is how two ARM rows
+                       came to be blocked for want of a source that was simply the wrong manual. ***
+                       Fetched at the GPT-6 Astra seat's citation on this list's own vmesbcp2 and 21066
+                       precedents, and then VERIFIED LOCALLY rather than taken from the seat's page
+                       anchor -- THREE candidate URLs of mine had returned JSON or HTML and only the
+                       seat's object id served the PDF.  `ddi0406.txt:18066' (A8.8.20, BFI) reads
+                       `if msbit >= lsbit then R[d]<msbit:lsbit> = R[n]<(msbit-lsbit):0>; // Other bits
+                       of R[d] are unchanged  else UNPREDICTABLE;' and `:17995' (A8.8.19, BFC) is
+                       identical in structure.  So `msbit < lsbit' is UNPREDICTABLE WITH NO REQUIRED
+                       DESTINATION VALUE -- preserving the destination is an emulator POLICY choice and
+                       may not be described as architecture -- and the VALID case is constrained by
+                       "other bits unchanged", which is what a mask must respect.  `<width>' is "in the
+                       range 1 to 32-<lsb>", so width 32 implies lsb 0 and copies the whole register.
+                       An ARM bitfield round opens THIS, never ddi0100i.)
 ```
 
 **SIX were undocumented**, and two of them are load-bearing for work in flight the day this was

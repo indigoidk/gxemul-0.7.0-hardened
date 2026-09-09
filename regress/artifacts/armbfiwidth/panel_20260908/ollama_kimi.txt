@@ -1,0 +1,35 @@
+**VERDICT: The Section 2 difference survives audit — #510's form genuinely does not transfer to `bfi`.** The claimed difference (negative `width` reachable here, never at ubfx/sbfx) is consistent with every premise stated, and the denominator arithmetic checks out exactly. Two premises are **not checkable from the packet**; both are named below with their settling facts. Q3 is honestly unanswerable from the packet. Q5's answer is yes: no guest-value witness exists; the sanitizer lane is the witness.
+
+## Premise audit
+
+- **[READ/REASONED] The 468/465/3 split is internally consistent.** Assuming msb, lsb each ∈ [0,31] independently: negative width (lsb ≥ msb+2) occurs for 30+29+…+1 = **465** pairs, all of which have msb < lsb. `width == 31` occurs only for (msb,lsb) ∈ {(30,0),(31,1)} — **2 pairs, valid ordering**. `width == 32` occurs only for (31,0) — **1 pair, valid ordering**. Total undefined = 465+2+1 = **468**, of which 465 have invalid ordering. The sets overlap exactly as stated (the negative-width set is strictly inside the msb<lsb set; the remaining 31 invalid-ordering pairs have width == 0 and are *defined* today, since `1<<0` is legal). The brief passes its own arithmetic.
+- **[READ] Minor imprecision, not a defect:** "undefined **over most** of its domain" is true only counting width *values* (32 of 63); per encodable pair it is 468/1024 ≈ 46% — a plurality. Cosmetic.
+- **[NOT CHECKABLE FROM PACKET] P1: the decoder hands `bfi` msb and lsb independently, each unconstrained 0..31.** The snippet is consistent (`(uint8_t)` masks lsb; `arg[2] >> 16` is unmasked, so it relies on arg[2] carrying exactly 5 bits above bit 16), but nothing in the packet proves all 1024 pairs reach the handler or that msb ≤ 31. **Settling fact: the decoder row / arg-packing line for `bfi`.**
+- **[NOT CHECKABLE FROM PACKET] P2: BFI encodes msb directly rather than widthm1.** The packet's only evidence is the *ubfx* disasm line (`:2382`). Consistent with the architecture, but **settling fact: the analogous disasm/decoder line for `bfi`.**
+- **[NOT CHECKABLE FROM PACKET] P3: "grep -c -w BFI returns 0" in `_scratchpad/ddi0100i.txt`.** Stated, plausible (DDI 0100I predates ARMv6T2), unverifiable by me. **Settling fact: existence of any BFI description in any manual actually in the tree.**
+
+## Q1 — minimal repair
+
+```c
+uint32_t mask = (width <= 0) ? 0 :
+                (width == 32) ? 0xffffffffU :
+                ((1U << width) - 1);
+```
+
+This is #510's form plus one clause. **[REASONED] No guest-visible value changes for valid pairs (msb ≥ lsb):** for width ∈ [1,30] the formula is arithmetically identical to the old code; at width 31/32 the old code had *no defined value* to preserve, and the chosen values (0x7fffffff, 0xffffffff) are the architecturally intended masks. The `width <= 0` clause also preserves the already-defined width == 0 case (old code yields mask 0 there; new code yields 0 — identical). Only genuine negative widths gain a value where none was defined; that is a *choice* on invalid encodings, disclosed as such, not a behaviour change on valid ones.
+
+## Q2 — msb < lsb semantics
+
+**[READ] Not settleable from the packet — this requires an ARM ARM text none of the local sources provide, and I confirm the brief's Section 3 on that.** **[REASONED] Recommendation: "no change to destination",** because it is the only option that is already forced by the existing defined case (width == 0 ⇒ mask 0 ⇒ destination untouched), so the minimal definedness repair and the conservative UNPREDICTABLE resolution collapse into one clause. "Announce once" is a debugging nicety, not a semantic requirement. This makes the round honestly *definedness-only with the value choice disclosed* — which is exactly what the repair above does.
+
+## Q3 — tree precedent
+
+**[READ] Not answerable from the packet.** The only precedent cited is #510, which by construction cannot reach the case; whether another ARM handler in the file confronts an UNPREDICTABLE encoding is a fact about the tree I cannot inspect. **Settling fact: one cited excerpt from any such handler.** I decline to guess at its idiom.
+
+## Q4 — distinguishing observable
+
+**[REASONED] The brief's own finding is correct and generalizes:** `1 << 31` and `1U << 31` yield the same mask after `- 1` on any platform in practice, and a negative-width UB produces compiler-dependent values with no portable oracle — so **no guest-value row can catch either regression class** (a `1U` → `1` slip, or deletion of the `width <= 0` guard, is value-invisible or value-unstable by turns). The regression row must therefore be: **(a)** a UBSAN-clean sweep executing all 1024 encodable (msb, lsb) pairs of BFI (re-running ubfx/sbfx is nearly free); **(b)** a source pin on the guarded expression; optionally **(c)** guest-value rows asserting the *chosen* msb < lsb semantics (destination unchanged) — those document the Q2 choice, they do not prove definedness.
+
+## Q5 — witness
+
+**[READ/REASONED] Plainly: no guest-value witness is possible for the definedness property itself; this needs the sanitizer lane.** A witness *is* achievable, just not a value one: build with `-fsanitize=undefined`, execute the 1024-pair BFI encoding sweep, expect zero shift reports — where the pre-fix build reports on 468 of them.

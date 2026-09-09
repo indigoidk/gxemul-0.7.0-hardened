@@ -1,0 +1,37 @@
+**VERDICT: Section 2 is correct. Extend `#510` with a lower-bound guard, but do not certify unchanged guest values for every valid pair or complete coverage from value tests alone.**
+
+The [execution decoder](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c:4564) confirms the difference: BFI receives independent MSB/LSB fields; UBFX/SBFX receive `1 + widthm1`. Exhaustive enumeration confirms **468 UB pairs = 465 negative-width pairs + two width-31 pairs + one width-32 pair**. Invalid ordering covers 496 pairs, including **31 width-zero pairs whose original shift is defined**.
+
+**Q1.** The minimal extension of the existing repair is:
+
+```c
+uint32_t mask = (width <= 0) ? 0U :
+    ((width == 32) ? 0xffffffffU : ((1U << width) - 1));
+```
+
+The unsigned shift executes only for widths 1–31. The subsequent shifts by `lsb` remain within 0–31. This addresses the C99 requirements. [C99 §6.5.7](https://www.open-std.org/jtc1/sc22/wg14/www/docs/n1256.pdf)
+
+It preserves the existing defined results for valid widths 1–30. **There is no C-defined old result to preserve at widths 31 and 32.** In particular, width 32 must copy the whole source into the destination. Under the count-masked host lowering described by `#510`, the old BFI mask would instead be zero, leaving the destination unchanged. With different source and destination values, that is a **guest-visible behavior correction as well as a definedness repair**. I have not measured that lowering at BFI itself.
+
+**Q2.** I recommend **silently preserving the destination for `width <= 0`**, explicitly documented as emulator policy. The zero mask implements that choice and preserves the already-defined width-zero result. “Announce once” is an additional logging choice; it does not settle the register result.
+
+The local manual does have zero BFI matches. However, I found an online primary source: ARM DDI 0406C.d, A8.8.20, explicitly makes `msbit < lsbit` UNPREDICTABLE. It supplies no unique required destination value. Thus the classification is now sourced; preserving the destination remains a policy choice, not an ARM-mandated result. [ARM ARM, BFI](https://documentation-service.arm.com/static/5f8daeb7f86e16515cdb8c4e)
+
+**Q3.** The tree supplies precedent, but no universal policy:
+
+- [`X(mrs_spsr)`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c:924) silently **writes zero** in User/System mode. The [local manual](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ddi0100i.txt:9517) explicitly calls that execution UNPREDICTABLE.
+- The literal `UNPREDICTABLE` grep finds [`#355`’s strlen combiner](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c:3611). It rejects the problematic fold and retains ordinary load/writeback execution.
+- The [once-only warning](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c:4622) concerns unimplemented encodings routed to Undefined Instruction. It does not establish BFI’s invalid-field policy.
+
+**Q4.** Regression assertions should distinguish value correctness from definedness:
+
+- **Valid fields:** correct insertion and preservation of surrounding bits; cover ordinary widths, both width-31 positions, and width 32. For width 32, initialize distinct source/destination values and assert destination equals source.
+- **Nonpositive widths:** assert destination unchanged under the chosen policy. Include zero and strictly negative widths; zero alone cannot exercise the missing negative-count defense.
+- **Execution controls:** use a known-passing condition and check instruction completion/PC advancement, especially for rows expecting an unchanged destination.
+- **Definedness:** require successful execution without shift diagnostics under UBSan. Confirm the signed-literal regression fails that check, or pin the unsigned operand and guards in the actual handler source.
+
+The signed/unsigned mask equivalence reported by `#510` describes its host lowering; it is not a C99 equality involving defined expressions.
+
+**Q5.** A **width-32 guest-value witness is achievable on an affected build**, subject to measurement. A guest-value witness that establishes the **entire definedness repair is not**: the `1U → 1` escape needs the sanitizer lane or a source pin.
+
+I checked the proposed arithmetic independently across all 1,024 field pairs. No emulator or UBSan execution was performed.

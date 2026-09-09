@@ -1,0 +1,27 @@
+**VERDICT:** Section 2's difference claim stands on the packet's own artifacts — I re-derived the 1024/468/465 arithmetic and it is correct, including the overlap (3 of the 468 UB pairs are architecturally *valid*, so this is a real definedness bug, not UNPREDICTABLE hygiene). The minimal repair is one guard line feeding `#510`'s shipped expression verbatim; it preserves every currently-defined value but *must* pin a new value at exactly one valid encoding (msb=31, lsb=0 → `Rd := Rn`), which the round should disclose — the brief's "behaviour change, therefore not a definedness repair" dichotomy is unsatisfiable there, because UB had no behaviour to change. Q2 and Q3 cannot be settled from the packet (settling facts named below). The witness is partial: two of three UB legs are guest-visible; only the width-31 signedness leg strictly requires the sanitizer lane.
+
+## Premise audit
+
+- (READ) The handler computes `width = msb − lsb + 1` with no clamp. (REASONED) With both fields 0–31, width ∈ [−30, 32] and `1 << width` is defined exactly for width ∈ [0, 30] on a 32-bit `int`: negative and ≥32 exponents UB by 6.5.7p3; width==31 is signed-overflow UB by 6.5.7p4. The brief's "three separate ways" is correct.
+- (REASONED, recount of READ premises) UB pairs = 465 (width ≤ −1, i.e. lsb−msb ∈ [2,31]) + 2 (width 31: (30,0),(31,1)) + 1 (width 32: (31,0)) = **468** ✓; all 465 negative-width pairs have msb < lsb; the other 3 are valid ✓; 1024 total ✓. Neither set contains the other — the overlap framing is right.
+- (REASONED) Unstated complement worth recording: the 31 pairs with msb = lsb−1 (width 0) are architecturally invalid yet **C-defined today** (mask 0 → no-op). Any repair must leave them no-op or it smuggles in an undisclosed change; both forms below do.
+- (READ, quoted disassembler line) UBFX/SBFX width = `1 + ((iw>>16)&31)` ∈ [1,32], never ≤ 0 ⇒ (REASONED) "#510's sites cannot reach the case" and "the `== 32` guard covers none of the negative widths" both follow from the packet's own quotes. Verbatim transfer of #510's form to `bfi` would leave exactly 465 pairs UB.
+
+**Not settleable from the packet** (premise → single settling fact):
+
+1. "Decoder gives msb/lsb independently, each 0..31, in the assumed positions" → the BFI decode line assigning `ic->arg[2]`. This premise is load-bearing **beyond `1 << width`**: the shown `(uint8_t)` cast admits lsb 0..255 and `>>16` msb is unmasked (and `>>` on a signed `arg[2]` would be implementation-defined), so if it fails, `x <<= lsb` and `mask <<= lsb` are also UB and a mask-only repair is insufficient.
+2. "mask ⇒ destination insert" → the unseen tail of `X(bfi)` (packet truncates at `mask <<= lsb;`). Every guest-value claim below assumes the standard `Rd = (Rd & ~mask) | (x & mask)`.
+3. "ARM calls msb < lsb UNPREDICTABLE for BFI" → the ARM ARM (DDI 0406) BFI/BFC restrictions line; the packet holds no citation, by its own admission.
+4. Q3's premise (an in-file handler facing an UNPREDICTABLE encoding) → a quoted such handler plus what it does. Nothing inlined bears on it.
+
+## Q1 — minimal repair
+
+```c
+if (width < 0)
+	width = 0;	/* msb < lsb: UNPREDICTABLE; insert nothing (policy pin, see Q2) */
+uint32_t mask = (width == 32) ? 0xffffffffU : ((1U << width) - 1);
+```
+
+(REASONED) One added guard plus #510's shipped expression byte-for-byte — strongest precedent position, and it lets one source-pin pattern cover all three sites. Equivalent one-liner: `(width <= 0) ? 0U : (width == 32) ? 0xffffffffU : ((1U << width) - 1)`. Coverage per the checklist: ≤0 → mask 0; 31 → `1U`; 32 → guard; post-clamp the unsigned shift sees only exponents 0..31.
+
+Does it change guest-visible values for valid pairs (

@@ -1,0 +1,174 @@
+I'll verify the claimed difference first — if UBFX/SBFX cannot produce a negative width and BFI can, that decides whether `#510`'s form transfers. Then I'll check the site, the decoder, and any UNPREDICTABLE precedent in the ARM handlers.The handlers and decoder are in `cpu_arm_instr.c`; next I’ll read those sites plus the disassembler encoding so the width-domain claim is checked against the tree, not the brief.Section 2’s encoding split looks real in the decoder; I’ll now count the 1024 pairs, grep UNPREDICTABLE handling, and check whether width-32 BFI is actually guest-visible like `#510`.The encoding split is confirmed; next I’ll brute-force the 468/465 counts, read the UNPREDICTABLE handlers, and check whether width-32 BFI is already a guest-visible miss like `#510`.**Verdict: Section 2 is true — `#510`’s form does not transfer. Extend it with a nonpositive-width guard. This is a definedness repair for the negative-width half (the ARM value is unsettleable from this tree) and, for one valid pair, the same width-32 wrong-answer fix `#510` already shipped.**
+
+I did not ratify the brief. I opened `GXEMUL-SEC/src/cpus/cpu_arm_instr.c` (handler, decoder, `#510` comments), `cpu_arm.c` (disassembler), grepped this file for UNPREDICTABLE handling, and opened DDI 0100I. I did not run a guest or a sanitizer binary.
+
+---
+
+## Section 2 — checked, and it holds
+
+The difference is real. It is not a comment artefact.
+
+| Site | Decoder packing | Handler `width` |
+|---|---|---|
+| `X(ubfx)` `:4571` | `width = 1 + ((iword >> 16) & 31)` | `{1..32}` |
+| `X(sbfx)` `:4578` | same | `{1..32}` |
+| `X(bfi)` `:4564` | independent `lsb = (iword >> 7) & 31`, `msb = (iword >> 16) & 31`; `arg[2] = (msb << 16) + lsb` | `width = msb - lsb + 1` ∈ `[-30, 32]` |
+
+The disassembler agrees: UBFX/SBFX print `1 + ((iw >> 16) & 31)` (`cpu_arm.c:2382`, `:2394`); BFI prints `msb - lsb + 1` (`:2366–2370`).
+
+`#510`’s shipped line is still the one at `:1351` and `:1411`:
+
+```c
+uint32_t mask = (width == 32) ? 0xffffffffU : ((1U << width) - 1);
+```
+
+`1U` makes `width == 31` defined. The `== 32` guard makes `width == 32` defined. **Neither clause is evaluated in a way that skips `1U << width` when `width` is negative.** C99 6.5.7p3 is unsigned-agnostic: a negative count is undefined for `1U` too. Copying `#510` verbatim repairs **3 of 468** undefined pairs and leaves **465**.
+
+The 31 `width == 0` pairs (`msb = lsb - 1`) are **defined** today: `(1 << 0) - 1` is 0. They are architecturally invalid (`msb < lsb`) and they are not in the 468. The brief’s denominator already has this right.
+
+Closed-form count, not a program:
+
+| Class | Condition | Pairs |
+|---|---|---:|
+| `width < 0` | `lsb ≥ msb + 2` | **465** — UB (p3), and `msb < lsb` |
+| `width == 0` | `lsb = msb + 1` | **31** — defined C, `msb < lsb` |
+| `width ∈ [1,30]` | | **525** — defined C, `msb ≥ lsb` |
+| `width == 31` | `(30,0)`, `(31,1)` | **2** — UB (p4), **valid ordering** |
+| `width == 32` | `(31,0)` | **1** — UB (p3), **valid ordering** |
+| **UB total** | | **468** |
+| **`msb < lsb`** | | **496** |
+| **overlap** | negative widths | **465** |
+
+468 and 496 overlap; they are not a partition of 1024. The 31 zero-width pairs are the invalid-ordering pairs that are *not* undefined C.
+
+BFI is the unrepaired third site of the same idiom. `#510`’s comments still describe `width` as `1 + ((iword >> 16) & 31)` — true of the two sites they touched, false of this one.
+
+---
+
+## Q1. Minimal defined-shift repair
+
+```c
+uint32_t mask = (width <= 0) ? 0U :
+    (width == 32) ? 0xffffffffU : ((1U << width) - 1);
+```
+
+That is `#510` plus one clause. The ternary (or an equivalent `if`/`else`) is load-bearing: a post-hoc overwrite after evaluating `(1U << width)` would still be undefined, which is the lesson `#510` already wrote on `X(sbfx)`’s old `topBitMask` line.
+
+The shift is then evaluated only for `width ∈ {1..31}`. Do not touch `x <<= lsb` or `mask <<= lsb`: `lsb` is in `0..31` by construction and those operands are `uint32_t`.
+
+**Does it change a guest-visible value on architecturally valid pairs (`msb ≥ lsb`)?**
+
+Split that question. The brief’s dichotomy (“if it does, it is a behaviour change and not a definedness repair”) is too sharp.
+
+| Valid `width` | Old C | New mask | Observed dest on this host |
+|---|---|---|---|
+| 1..30 (525 pairs) | defined | identical | **no change** |
+| 31 (2 pairs) | UB (p4) | `0x7fffffffU` | **no observed change** — `#510` already measured that `1 << 31` and `1U << 31` give the same mask after `- 1` |
+| 32 (1 pair: msb=31, lsb=0) | UB (p3) | `0xffffffffU` | **yes, a change** |
+
+`msb ≥ lsb` includes `(31, 0)`. That encoding is a 32-bit insert at bit 0: Rd becomes Rn. Under the same lowering `#510` measured on this exact expression in this file, `(1 << 32) - 1` became 0, so BFI currently does:
+
+```c
+reg(ic->arg[0]) &= ~0;
+reg(ic->arg[0]) |= (x & 0);
+```
+
+Destination **unchanged**. After the repair it is a full-register copy. Different symptom from UBFX (which wrote 0); same root; same class of correction `#510` already shipped for `UBFX/SBFX #0,#32`.
+
+So: **no change on any pair whose old shift was defined C (the 525).** **A guest-visible correction on the one valid pair whose old shift was undefined and, on this host, produced the wrong architectural answer.** That is a definedness repair that also fixes a wrong answer, not a spec deviation, and not a reason to preserve mask 0 at width 32.
+
+I did not re-plant a BFI word this session. The width-32 lowering is transferred from `#510`’s measurement of `(1 << width) - 1` in the same translation unit, not re-measured on `X(bfi)`.
+
+`1UL` vs `1U`: C99 allows `unsigned int` to be 16 bits. Every host this project builds on has 32-bit `int`, and `#510` shipped `1U`. Matching that is the right consistency for this round; widening the literal here while leaving the siblings on `1U` is a different change.
+
+---
+
+## Q2. `msb < lsb` — cannot settle from a primary source in this tree
+
+**I cannot settle the guest-visible value without the ARM ARM.** That is the answer, not a deferral.
+
+DDI 0100I is at `_scratchpad/ddi0100i.txt`. It is ARM DDI 0100I. A word search for `BFI` / `BFC` returns nothing. The instruction is ARMv6T2. There is no local text that says what BFI must store when `msb < lsb`. Recollection is not a source.
+
+What *is* settled without that manual:
+
+1. The shift must be defined. That is C99, and the tree has already answered it twice, fifty lines up.
+2. “Produce whatever the defined arithmetic yields” is **empty** for `width < 0`. There is no defined continuation of `1 << negative`. After a guard you are choosing a value, not recovering one.
+3. `width == 0` is already defined C and already leaves the destination unchanged (mask 0). Grouping `width <= 0` as mask 0 makes the whole `msb < lsb` set behave the way **this handler already behaves on the 31 defined members of that set**. That is in-tree consistency, not an ARM citation.
+4. Do not route these words to `X(und)`. The decoder has already matched them as BFI (`:4564`). `X(und)` is the `#312` path for encodings that *do not* match.
+5. Do not `fatal`. `memory_arm.c:92` does that for an UNPREDICTABLE CP15 `s+r` value; it is a host kill, and it is not this file’s model for an implemented instruction.
+
+So this is a **definedness-only round for the `msb < lsb` half**, with the value choice disclosed: mask 0, destination unchanged, as emulator policy aligned with the existing `width == 0` case. If a later ARM ARM reading wants a different permitted behaviour, that is a different round with a different oracle.
+
+---
+
+## Q3. Tree precedent does **not** settle Q2
+
+`#510` cannot reach negative width. That part of the brief is right. It is not the whole story, because those two handlers **do** face a different UNPREDICTABLE, and they do not NOP it.
+
+Grep of `UNPREDICTABLE` / `unpredictable` under `src/cpus/cpu_arm*` hits four places. In **this file**, the word appears once.
+
+**1. The sibling bitfield handlers, fifty lines up (no `lsb + width` check anywhere in this file).** `#510`’s own comment: a width-32 extract returns the whole register only for a legal field (`lsb = 0`); “the decoder does not enforce that.” Architecturally, `lsb + width > 32` is the UBFX/SBFX analogue of BFI’s `msb < lsb`. The model executes the shift-and-mask and writes Rd. **UNPREDICTABLE here does not mean “leave dest unchanged.”**
+
+**2. `COMBINE(strlen)` `:3611` — the only `UNPREDICTABLE` in this file.** `ldrb r3,[r3,#1]!` is UNPREDICTABLE. The fold is refused so two emulator paths do not disagree. The comment then **rejects** making the handler faithful. The handler still runs. Precedent: do not special-case UNPREDICTABLE in the handler; do not take `und`; do not NOP.
+
+**3. `#312` `:4622` — announce-once, then `X(und)`.** That is for encodings that **miss** the BFI/UBFX/SBFX matches (“unimplemented special non-loadstore encoding”). `msb < lsb` does not miss. This is the in-tree “announce once” idiom, and it is the wrong bucket.
+
+**4. `cpu_arm_instr_loadstore.c` (not this file).** Unaligned halfword load is UNPREDICTABLE, so “masking without rotating is permitted” — they pick the cheap permitted behaviour. `Rn == PC` writeback forms are named as UNPREDICTABLE in order to implement the *defined* forms correctly. Different file, different problem.
+
+**SWP** in this file (`:1477`) does not check Rd==Rn / Rm==Rn (also UNPREDICTABLE in ARM). It just runs.
+
+None of this yields a dest value for BFI with `msb < lsb`. It does yield a negative: **do not invent a general “UNPREDICTABLE ⇒ dest unchanged” rule from this tree.** UBFX’s UNPREDICTABLE cases still write Rd. Mask 0 for BFI is an empty-field / `width == 0` consistency choice, not that rule.
+
+---
+
+## Q4. What a regression row can and cannot kill
+
+`#510`’s finding transfers: **`1 << 31` and `1U << 31` give the same mask after `- 1`.** A guest-value row at width 31 stays green if someone reverts `1U` → `1`. Only UBSAN or a source pin kills that.
+
+A value row also cannot portably kill deletion of the `width <= 0` guard. Negative-shift lowering is compiler-defined garbage. On an x86 host it may even look like a width-31 insert (count masked to 5 bits). That is not an oracle.
+
+What *can* be asserted, and what each assertion is for:
+
+| Row | What it pins | What it does **not** pin |
+|---|---|---|
+| **BFI msb=31, lsb=0** (valid width 32), dest ≠ src, expect dest = src | Missing `== 32` guard, on this host | `1U` → `1`; missing `<= 0` |
+| **BFI width 31** (e.g. msb=30, lsb=0), 31-bit insert | Repair did not break the coincidentally-correct case | `1U` → `1` (stays green) |
+| **Mid valid field** (encoding/liveness, like `#510`’s `mid`) | The planted word really executed | any of the three UB edges |
+| **Width 0** (`msb = lsb - 1`), dest unchanged | Did not start inserting on the already-defined invalid-ordering subset | missing negative-width guard (already true pre-fix) |
+| **UBSAN** on planted words at `width ∈ {-1, 31, 32}` | All three undefined edges, including `1U` → `1` and missing `<= 0` | guest architectural values |
+| **Source pin** on `1U` and both guards | The expression text | runtime behaviour |
+
+A value-only probe that only plants valid pairs will **pass a verbatim `#510` copy** and leave 465 undefined shifts. That is the detector shape this site does not share with `#510`.
+
+If dest starts at 0 and source is nonzero, width-32 BFI’s buggy answer is also 0 — the same trap `#510` wrote the `pc adv` / `mid` controls for. Start dest ≠ 0, or keep those controls.
+
+---
+
+## Q5. A guest-value witness **is** possible — but not for the definedness property, and not for most of the UB domain
+
+The honest answer is **not** “no guest-value witness is possible; this needs the sanitizer lane.”
+
+It is:
+
+- **Width 32, valid pair `(31, 0)`:** a guest-value witness is available, of the same kind `#510` shipped. Plant BFI, dest ≠ src, expect dest = src. Pre-fix, on this host, dest is unchanged. That is 1 of 468 undefined pairs, and it is the only valid-pair value witness.
+- **Width 31:** no guest-value witness for `1U` vs `1`. `#510` already said so.
+- **Negative width (465 pairs, the bulk of the UB domain):** no portable guest-value witness for definedness. A “dest unchanged” row would pin the Q2 *policy*, not the C definedness. The sanitizer lane (or a source pin) is the honest detector for those pairs and for a `1U` → `1` regression.
+
+`#510` shipped with exactly this split: one observable wrong answer (width 32) plus disclosed definedness escapes (width 31, `1U`). This site is the same split **plus** a third escape that `#510` never had — the negative-width majority — which a valid-pair value probe cannot see.
+
+`build-asan` already carries `-fsanitize=address,undefined`. Wiring that as a gate is `ubsanshiftlane`, a different lane; do not bolt a new STDERR oracle onto a value probe and call the probe complete.
+
+---
+
+## What this round is, and what it is not
+
+**In scope:** make `(1 << width)` defined on the whole `[-30, 32]` domain, with `#510`’s values on `{1..32}` and mask 0 on `{..0}`.
+
+**Out of scope, named so they are not riders:**
+
+- **BFC** (`Rn = 15` decoded as BFI reading `r[15]`). Different defect, different oracle (`armbfcdecode`).
+- Decoder-side `msb >= lsb` rejection. The handler must still be defined C if anything produces `arg[2]`.
+- Announcing UNPREDICTABLE. This file’s announce-once is for unmatched encodings, not for BFI.
+- Retouching `#510`’s `1U` to `1UL`.
+
+The `Y(bfi)` wrappers only test the condition code and call `X(bfi)`. There is no handler epilogue an early `return` would skip; the mask ternary is still the smaller change and the one that matches the siblings.

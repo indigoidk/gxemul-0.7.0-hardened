@@ -1,0 +1,43 @@
+VERDICT: Section 2’s distinction is sound as stated; the `#510` form does not transfer unchanged. The main defect in the brief is that it treats `width == 0` as a C undefined shift, but `1 << 0` is defined in C99. Q2, Q3, and Q5 cannot be settled from the packet.
+
+**Audit of premises**
+
+- READ: `msb` and `lsb` are each independently 0..31, so `width = msb - lsb + 1` ranges over `[-30, 32]`.
+- REASONED: Undefined shifts occur for `width < 0` (465 pairs), `width == 31` (2 pairs), and `width == 32` (1 pair), totaling 468. This matches the brief.
+- READ: UBFX/SBFX encode `widthm1`, so their width is `1 + ((iword >> 16) & 31)` ∈ `[1, 32]`; BFI encodes `msb`, so `width` can be nonpositive. The distinction follows.
+- REASONED: `width == 0` is not a C undefined shift. `1 << 0` is defined and yields `1`, so `mask` becomes `0`. The brief’s Q1 phrase “cover `width <= 0`” is broader than the C definedness issue.
+
+**Q1 — Minimal defined-shift repair**
+
+```c
+uint32_t mask = (width <= 0) ? 0 :
+                (width >= 32) ? 0xffffffffU :
+                ((1U << width) - 1);
+```
+
+This covers negative `width`, `width == 31`, and `width == 32`.
+
+For architecturally valid pairs (`msb >= lsb`), `width` is 1..32.  
+- For `width` 1..30, the result is identical to the original defined behavior.  
+- For `width == 31` and `width == 32`, the original was undefined, so there is no defined guest-visible value to preserve.  
+- For `width == 0`, the original was defined and produced `0`; the new expression also produces `0`.
+
+So this does not change any guest-visible value for any originally defined case.
+
+**Q2 — Behavior for `msb < lsb`**
+
+Cannot be settled from the packet. The brief states there is no local manual covering BFI and that ARM calls the encoding UNPREDICTABLE. The single fact that would settle it is the ARM ARM text for BFI with `msb < lsb`. Without that, any choice is a value decision, not a definedness repair.
+
+**Q3 — Does tree precedent settle Q2?**
+
+Not checkable from the packet. No other ARM handler facing an UNPREDICTABLE encoding is quoted. The single fact that would settle it is a quoted handler in the same file and its action for such an encoding.
+
+**Q4 — Observable distinguishing correct from incomplete repair**
+
+A guest-value row cannot distinguish `1U` from `1` for `width == 31`, because both produce the same mask `0x7fffffffU` after `- 1`. A row for `width == 32` expecting `0xffffffffU` can catch some regressions, but it cannot catch a `1U` → `1` regression at `width == 31`.
+
+The regression must assert the source expression uses an unsigned shift and explicit guards, or run under UBSAN with `width == 31`, `width == 32`, and negative `width`.
+
+**Q5 — Is a guest-value witness achievable?**
+
+No. For the C undefinedness itself, no guest-value witness is possible; this needs the sanitizer lane or a source-level pin. A `width == 32` guest-value row is not a reliable witness because the original behavior is undefined.

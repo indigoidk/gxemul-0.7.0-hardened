@@ -1,0 +1,52 @@
+**VERDICT:** The premise holds — `#510`'s form does **not** transfer unchanged because BFI's `width` can be ≤0, and `#510`'s `==32` arm covers none of the negative widths. The minimal repair adds a `width≤0` arm. The fix changes guest-visible value at two VALID pairs (`width==31`, `width==32`), from UB to the architecturally correct value — the round must disclose this. For UNPREDICTABLE `msb<lsb`, no local text settles the value question. No guest-value witness is achievable; this is a sanitizer-lane fix, as `#510` already disclosed.
+
+---
+
+### Q1
+
+Minimal expression [REASONED]:
+```c
+uint32_t mask = (width <= 0) ? 0U
+              : (width == 32) ? 0xFFFFFFFFU
+              : (1U << width) - 1;
+```
+(Guard order is fungible; the predicate set is what matters.)
+
+For VALID pairs (`msb≥lsb`, `width∈[1,32]`):
+- `width∈[1,30]`: unchanged — both forms produce the same value. [REASONED]
+- `width==31` (`msb=30,lsb=0`): changes from UB (`(1<<31)-1` has signed-overflow in the subtraction) to defined `0x7FFFFFFF`. Architecturally correct. [REASONED]
+- `width==32` (`msb=31,lsb=0`): changes from UB (`1<<32` UB by C99 6.5.7p3; on x86 the 5-bit shift-amount mask yields `1<<0`=1, then `1-1`=0) to `0xFFFFFFFF`. **Different observable value.** [REASONED]
+
+**Yes — guest-visible value changes at two VALID pairs.** The brief's stated criterion is met, and the round must say so. The change is FROM UB TO CORRECT, so it is a definedness-cum-correctness repair, not a regression — but the disclosure is required.
+
+### Q2
+
+Cannot settle from the packet. [READ] The ARM ARM is the only primary source for UNPREDICTABLE BFI; the brief discloses it is not held. Most conservative definedness-only choice: **option 1, produce no change to destination** (mask=0 for the UNPREDICTABLE case). This is the standard emulator convention and matches the brief's "no change" option. Disclose the value question is open. [REASONED]
+
+### Q3
+
+**Not checkable from the packet.** [READ] `#510`'s sites handle `width∈[1,32]` only after the fix — they cannot reach the case. Whether another handler in `cpu_arm_instr.c` faces UNPREDICTABLE and what it does requires a grep, which I cannot perform. **Single fact that would settle it:** the contents of `cpu_arm_instr.c` for any handler that branches on an UNPREDICTABLE encoding.
+
+### Q4
+
+For BFI:
+- `width==31`: `1<<31` and `1U<<31` give the **same** mask after `-1` (both yield `0x7FFFFFFF` on platforms where signed left-shift produces INT_MIN and `-1` wraps). [REASONED, consistent with brief's own `#510` finding — READ] **No guest-value row can kill a `1`→`1U` regression here.**
+- `width==32`: both `1<<32` and `1U<<32` are UB (`32 ≥ width of unsigned int = 32`, C99 6.5.7p3). The `==32 ? 0xFFFFFFFF : ...` arm is the only distinguisher. **Only UBSAN or a source pin catches the unguarded form.** [REASONED]
+- `width<=0`: both `1<<w` and `1U<<w` are UB for negative `w` (C99 6.5.7p3, E2 negative). **Only UBSAN or a source pin catches the unguarded form.** [REASONED]
+
+A regression row should assert:
+1. UBSAN / `-fsanitize=undefined` clean for the encodings reaching `width≤0`, `width==31`, `width==32`.
+2. For `width∈[1,30]`, a guest-value test asserting the architecturally correct mask is inserted into the destination.
+3. For `width==31`, **no guest-value distinguisher exists** — disclose and rely on sanitizer or source pin (consistent with `#510`'s own disclosure).
+
+### Q5
+
+**No.** [REASONED] The `width==31` case has no guest-value witness (per `#510`'s own disclosure, which the brief already cites). For `width≤0` and `width==32`, the unguarded form is UB, and a guard is required — sanitizer lane or source pin, not guest value. The honest answer is: **sanitizer-lane fix, no guest-value witness possible** — exactly the situation `#510` disclosed for its own sites.
+
+---
+
+### Issues I noticed in the packet
+
+**1. Citation 6.5.7p4 for `1<<31` being UB is incorrect.** [REASONED] C99/C11 6.5.7p4 does not make `1<<31` UB: with 32-bit `int`, E2=31 < 32 (not UB by p3), E1=1 is non-negative (not UB by p4). The shifted value `0x80000000` is `INT_MIN`, representable. The actual UB at `width==31` arises from the **subtraction**: `(1<<31) - 1` is signed integer overflow on the `- 1`. **The conclusion (`width==31` needs fixing) is correct; the cited clause is wrong.** This matters only for citation hygiene, not for the fix.
+
+**2. Denominator does not reconcile cleanly.** [REASONED] Brief claims 1024 encodable pairs, 468 reaching UB, 465 of those with `msb<lsb`. My count: 496 pairs have `msb<lsb`; 30 of those have `width=0` (defined, since `1<<0`=1); 466 have `width<0` (UB). Plus 1 pair at `width==32` (UB by p3). Plus 2 pairs at `width==31` (shift defined per standard, but `(1<<31)-1` UB from the subtraction). Total UB-class: 467 (excluding the subtraction-UB at width==31) or 469 (including). The brief's 468 is off by 1–2 from either count. **The qualitative conclusion (most UB is `msb<lsb`) is sound; the number is approximate.** [REASONED]
