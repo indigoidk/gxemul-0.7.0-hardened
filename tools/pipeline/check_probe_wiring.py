@@ -265,6 +265,12 @@ MANIFEST = {
     #  its ORDER, so a pass-4 seat reported two variants that still swept.  This exercises the
     #  shipped `response_after' against both, and additionally shows the OLD count rule passing
     #  them -- which is what makes it evidence rather than a green row.
+    #  The FULL escape corpus: all four variants reported across passes 4 and 5, run against the
+    #  shipped composed rule.  It exists because neither the positional nor the binding rule alone
+    #  was sufficient -- each let the other's escapes through -- so a test of either alone would
+    #  have been the green row that means nothing.
+    "artifacts/alphaswpctxreg/full_corpus.asrun.py":
+        (CLASS_RESEARCH, "alphaswpctxreg (#514) pass 5: all four reported escapes plus the genuine shape, against the SHIPPED composed rule -- 5/5, each rejection naming its own reason"),
     "artifacts/alphaswpctxreg/order_attack.asrun.py":
         (CLASS_RESEARCH, "alphaswpctxreg (#514) pass 4: the two ORDER variants (read moved before the step; first response replayed as the second) re-run against the shipped step-binding -- 3/3, both rejected, and the old count rule shown passing both"),
     "artifacts/alphaswpctxreg/attack_parser.asrun.py":

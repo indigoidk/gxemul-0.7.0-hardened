@@ -1,0 +1,61 @@
+**VERDICT: NOT CLOSED — measured binding false passes remain, including with the working-tree anchor repair.**
+
+I executed AST-extracted helpers and scoring code against **65 synthetic transcripts per version: 390 row decisions each**. I checked both the pasted diff and the working tree. The four binary results were inspected artifacts; I did not rebuild binaries.
+
+**Q1. Denominator and results.**
+
+| Enumeration | Cases | Working-tree result |
+|---|---:|---|
+| `v0 ∈ {C,N,S,0}` × `a0 ∈ {C,N,0,deadbeef,absent}` | 20 | All expected outcomes |
+| Missing/dead observations, 3–4 responses, malformed/lookalike responses, missing/wrong step, original before-step cases | 23 | All rejected |
+| Plain, CRLF-normalized, tabs, horizontal padding, uppercase hex, padded hex | 6 | All accepted |
+| Six orderings of first response, second step, second response | 6 | **Two false 6/6 passes** |
+| Five earlier-marker shapes × correct/incoming-context return | 10 | **One false 6/6 pass; one wrong rejection** |
+
+The return cells cover the original wrong-register write, omitted/misdirected return, incoming-context RHS, zero return, and permitted a0 clobbers. No wrong-return cell passed with correctly associated observations. Previously disclosed hardcoded-C and PCB-load coverage debt remains outside this enumeration.
+
+**Q2. The pasted helper is unsound; anchoring fixes only part of it.**
+
+`t.find("GXemul> step 4")` accepts an earlier banner/echo substring, `step 40`, or `step 4 extra`. All misbound in my tests. The [working-tree helper](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/alpha_swpctx_v0_probe.py:224) rejects those lookalikes, but still selects the **first identical complete command**, without checking uniqueness or sequence.
+
+Equal counts cannot arise from the [current program construction](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/alpha_swpctx_v0_probe.py:253): `len(second) = len(first) + 1`; today they are **3 and 4**. If generalized to equal counts, both implementations would bind to the first step.
+
+**Q3. Yes, binding lost coverage. Here is a measured counterexample.**
+
+Treat the initial `step 4` line as an unrelated earlier echo:
+
+```text
+GXemul> step 4
+GXemul> step 3
+GXemul> print v0
+0x1000000
+GXemul> step 4
+GXemul> print v0
+0x1010000
+GXemul> print a0
+0x1010000
+```
+
+For the incoming-context RHS mutant, call 1 returns C and call 2 returns N.
+
+| Scorer | Selected value | Score |
+|---|---|---:|
+| Previous positional rule | N | **4/5**, correctly failing `v0 ctx` |
+| Pasted binding rule | C | **6/6**, false pass |
+| Working-tree anchored rule | C | **6/6**, false pass |
+
+There is also a unique-marker escape: move the first response past step 2, producing `step3 → step4 → response1(C) → response2(N) → a0(N)`. Both binding versions score **6/6**; the previous positional rule rejects it.
+
+These are measured **synthetic transcript mutations**, under the apparatus criterion used in pass 4. I found no evidence that the current PTY session spontaneously produces them.
+
+**Q4. None of the six predicates is constant across the enumeration.**
+
+Failure counts out of 65 were: `live` **2**, `v0 read` **3**, `v0 pair` **16**, `v0 bound` **19**, `a0 obs` **9**, `v0 ctx` **41**.
+
+However, `v0 read` does not establish its “after call 1” description: deleting the first response leaves it green. `v0 pair` catches that omission, so it is not another clean-sweep escape.
+
+**The measurement driver also needs correction.** [order_attack.asrun.py](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/alphaswpctxreg/order_attack.asrun.py:22) copies `response_after`; only `RESP` is extracted. Replacing the probe’s helper with `return None` **in memory** leaves its result at **3/3**, while the extracted real scorer drops to **4/6** on a correct transcript. Its claim to test the shipped helper is therefore false.
+
+The previously reported [wrong-register diagnostic](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/alpha_swpctx_v0_probe.py:355) also remains: permitted `(v0=C, a0=C)` scores 6/6 while printing that diagnosis.
+
+**Q5. What remains is bounded:** validate the prescribed step/read sequence while retaining the second response as the scored observation; reject ambiguous step echoes; make the measurement driver execute the actual helper/scorer; correct the carried diagnostic. No additional product change is indicated. I changed no files.

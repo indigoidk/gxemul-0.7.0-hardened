@@ -1,0 +1,24 @@
+VERDICT: **The chain does not close.** Q2 identifies a marker-ambiguity defect in `response_after` that the four presented mutants do not exercise but that is logically present whenever `len(first) == len(second)`.
+
+---
+
+**Q1. Does the chain close?** **No.** The four mutants in the table (FIXED 6/6, PREFIX 5/6, correct-but-clobbers-a0 6/6, CLICOLOR=1 6/6) are build variants, not transcript-pattern mutants. The order mutants (Seat A, Seat B) are tested separately in the MEASURED block, and v0 bound rejects them. But the marker defect below is not exercised by any of the six tests presented. The chain cannot be declared closed with an unexercised logical defect in the binding function. **REASONED.**
+
+**Q2. Is `response_after` itself sound?** **No — it is unsound when `len(first) == len(second)`.** The marker is constructed as `"GXemul> step %d" % len(second)`. If `len(first) == len(second)`, both step commands produce **byte-identical** echo strings in the transcript. `t.find(marker)` returns the offset of the **first** occurrence (the first step's echo), and `response_after` then returns the first genuine v0 response after that offset — which is the response to the **first** step, not the second. The fix is one character: `t.rfind(marker)` would find the last occurrence, which is the correct one. Or the marker could include the step ordinal. **REASONED.**
+
+A banner or echo from an unrelated reason is a separate concern the brief raises; the equal-counts case is the concrete, reachable one, and the brief explicitly asks about it.
+
+**Q3. Did binding lose coverage?** **Yes — when `len(first) == len(second)`, the new rule is the wrong one.** The old rule (second response) gives the value after the actual second step. The new rule (first response after the first step's echo) gives the value after the first step. They differ, and the new rule is wrong because the test's purpose is to verify the state **after the second step**, not the first. This is a genuine transcript where binding loses correctness. **REASONED.**
+
+**Q4. Are any of the six rows vacuous?** **Not fully checkable from the packet, but the discriminating power on the four presented mutants is uneven.** Five of the six rows are green on all four build variants; only `v0 ctx` fails, and only on PREFIX. This is consistent with the mutants being targeted (PREFIX targets context), but it means the four-mutant enumeration does not exercise `v0 bound`, `v0 pair`, `v0 read`, or `live` as failure detectors. `v0 bound` is exercised by the order mutants (Seats A, B) in the MEASURED block, so it is not vacuous overall. `live` and `v0 pair` are liveness/structural controls; they would fail on mutants that break execution or response count, but no such mutant is in the four presented. The sixth row is below the diff cut-off and cannot be assessed.
+
+One specific concern: **"correct-but-clobbers-a0" passes 6/6.** If the a0 attribution row is among the six, it is not catching a0 clobbering on this mutant. The diff comment ("THIS ROW WANTED `a0 == CTX_N' UNTIL 2026-09-08, AND THAT WAS A MEASURED FALSE FAIL") suggests the row was loosened, which would explain the pass — but a loosened a0 row that cannot fail on a0-clobber mutants is itself a form of vacuity on the mutant it nominally targets. **Cannot settle from the packet without seeing the current a0 row's expected value.** **REASONED + not-checkable.**
+
+**Q5. If nothing is left, say so.** **Something is left.** The marker-ambiguity defect in `response_after` is a one-character fix (`t.find` → `t.rfind`) and is exactly the sort of thing that will surface later as a "why did the test pass on a broken build" postmortem. Until that is repaired and a mutant exercising the equal-counts case is added to the enumeration, the chain has not closed.
+
+---
+
+**Summary of what is left:**
+1. `response_after` uses `t.find`; should use `t.rfind` (or a more specific marker) to handle `len(first) == len(second)`. **REASONED defect, READ from diff.**
+2. A mutant exercising the equal-counts case is not in the four-mutant enumeration. **Not checkable whether one exists outside the packet.**
+3. The a0 row's current expected value is below the diff cut-off; cannot confirm whether "correct-but-clobbers-a0" passing 6/6 reflects a loosened row or a misnamed mutant. **Not checkable.**
