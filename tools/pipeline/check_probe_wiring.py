@@ -261,6 +261,12 @@ MANIFEST = {
     #  alpha_swpctx_v0_probe.py -- extracted from that file, not retyped -- against the three
     #  synthetic transcripts a pass-3 seat used to measure three parser escapes.  Evidence that
     #  the repair works, which is why it is preserved; it runs no emulator and gates nothing.
+    #  The ORDER half of the same evidence: anchoring fixed a response's SHAPE and could not fix
+    #  its ORDER, so a pass-4 seat reported two variants that still swept.  This exercises the
+    #  shipped `response_after' against both, and additionally shows the OLD count rule passing
+    #  them -- which is what makes it evidence rather than a green row.
+    "artifacts/alphaswpctxreg/order_attack.asrun.py":
+        (CLASS_RESEARCH, "alphaswpctxreg (#514) pass 4: the two ORDER variants (read moved before the step; first response replayed as the second) re-run against the shipped step-binding -- 3/3, both rejected, and the old count rule shown passing both"),
     "artifacts/alphaswpctxreg/attack_parser.asrun.py":
         (CLASS_RESEARCH, "alphaswpctxreg (#514) pass 3: the seat's three synthetic parser attacks re-run against the SHIPPED regex -- 5/5, all rejected, both genuine shapes still parsed"),
     "artifacts/lcairqstubkill/lcairq_probe.asrun.py":
