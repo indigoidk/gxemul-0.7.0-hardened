@@ -1,0 +1,85 @@
+**VERDICT LINE: CLOSE.** The composition in pass 6 closes both the pass-4 (positional rebind) and pass-5 (binding lost coverage) escape classes; the product fix has been settled for four passes; the floor has answered "no" for four passes; the parser is the unbounded space the stopping rule exists to refuse. Below I argue the case for continuing, then hold against it, then answer Q2–Q5. Labels are READ (from packet) or REASONED. Nothing MEASURED — I am blind to the tree.
+
+---
+
+## Q1 — SHOULD THIS CHAIN CLOSE?
+
+**Case for CONTINUING, steelmanned:**
+
+1. *Pass 5 was real and important.* My own repair genuinely lost coverage the positional rule had. That is exactly the kind of finding that justifies a panel seat — a parser defect a self-review would have missed.
+2. *The parser's failure mode is the worst kind.* A red row on a correct build produces alert fatigue, and alert fatigue compounds. The cost of a future false-negative on a genuine read is not zero.
+3. *No principled stopping rule has been articulated.* "Pass 6 closes both known classes" is what pass 5 said about its binding repair, and pass 6 then found that repair was wrong. By induction, pass 7 might find pass 6's composition is also wrong in some unanticipated way.
+4. *The product's settled state is itself a reason to keep going.* When the only remaining work is in the apparatus, that is when the apparatus gets the most attention — not less.
+
+**Case for CLOSING, which I hold:**
+
+1. *Pass 6 is not pass 5.* Pass 5 was a repair that lost coverage; pass 6 is a *composition* of the two rules that each let the other's escapes through. A composition is more constrained than either conjunct, so it cannot lose coverage that either alone had — it can only reject cases both would have accepted. The packet reports 5/5 on the full escape corpus and 6/6, 5/6, 6/6, 6/6 on the four build states, so the composition has *measured* (you measured, not I) no genuine regression.
+2. *The parser is unbounded by construction.* Synthetic transcripts are infinite. There is no N for which "tested N transcripts" implies "tested all transcripts". The stopping rule exists for exactly this case.
+3. *Pass 5 was caught by the next pass.* That is the system working. Pass 7 would be caught by pass 8 if it had a defect. But that argument is symmetric and proves too much — it justifies an infinite chain.
+4. *Each subsequent pass has lower expected value.* Pass 5 found something because there was a specific defect to find (a binding repair that lost coverage). Pass 6 found something because there was a specific composition to write. Pass 7 would need a *specific hypothesis* to test against; without one, it is fishing.
+
+**I hold: CLOSE.** Not because pass 6 is provably correct, but because the expected value of pass 7 is below the panel-seat cost without a concrete hypothesis to test. The composition is the natural endpoint of this line of work.
+
+---
+
+## Q2 — Is the composition actually sound, or does it create a new genuine rejection?
+
+**REASONED.** Walking the composition:
+
+- `step_marker(t, nsteps)` returns offsets of `^GXemul>[ \t]+step[ \t]+<nsteps>[ \t]*$` lines. The trailing `[ \t]*$` is what the old `find()` lacked, so this regex correctly rejects `step 40` when looking for `step 4`, and rejects `step 4 extra`. (READ from packet — the comment in the diff explicitly says "a plain find() also matches `step 40' and `step 4 extra'".)
+- `bound_second` requires `len(marks) == 1`. This is the *new* constraint that closes pass-5's defect.
+- `bound_second` requires `len(resp) == 2` and `resp[1].pos > marks[0][1]`. This is the positional rule pass-4 measured.
+- The composition rejects a transcript if *either* constraint fails, with a specific reason.
+
+**Could the composition reject a genuine transcript that either rule alone would accept?**
+
+Yes, by construction. A genuine transcript where `step N` legitimately appears twice in the session — say, the user backs up and re-runs step 2 — would now be rejected with "2 `step 2' echoes, wanted exactly 1". The positional rule alone would have accepted it (the second response still follows *some* `step 2` echo). The binding rule alone would also have accepted it.
+
+**Is this rejection a defect?** READ: the brief says the test session is controlled — the user types a fixed sequence of step commands. In the current test structure, `step N` appears once. The packet reports the four build states at 6/6, 5/6, 6/6, 6/6, which means the measured genuine transcripts have exactly one `step N` echo and pass the composition. (REASONED — I cannot verify the build states, but I take the packet's word for it.)
+
+**Verdict on Q2:** Sound for the current test session. There is a latent maintenance hazard: if the test ever grows a second `step N` for legitimate reasons (replay, multi-stage debugging), the parser will reject it loudly rather than silently re-index. Loud failure is the correct failure mode, so this is a feature, not a bug — but it is the thing a future maintainer will trip over. **No defect from the packet alone.**
+
+---
+
+## Q3 — Is `a0 obs`'s named mutant the right one? One job or two?
+
+**REASONED.** The row scores `a0_final != "absent"` against expected `"seen"`. The named mutant is "the a0 observation is lost — the final `print a0' deleted, its response missed by a short read, or the register unreadable". The observable is "a0_final is `absent` rather than a hex value".
+
+That is one job: confirm the observation was made. The diagnostic print of `a0_final` is information for the reader, not a second score.
+
+**Is there a cheaper row that kills the same mutant?**
+
+- `v0 ctx` does not — it scores v0, not a0.
+- `v0 pair`, `v0 bound`, `live` — none touch a0.
+- `a0 ctx` — if it still exists as a scored row, what does it score? READ from the diff comment: "the value became diagnostic". So `a0 ctx` is no longer scored; it's printed. Therefore `a0 ctx` cannot, in its current form, kill the lost-observation mutant.
+- `a0 final` — same: diagnostic, not scored.
+
+So `a0 obs` is the *only* scored row that can detect a lost observation. The named mutant is precisely what the row kills. **Right mutant, one job.** The CHANNEL line earns its keep.
+
+---
+
+## Q4 — What would you STOP measuring?
+
+**REASONED.** If forced to spend another pass, I would NOT look at:
+
+1. **The parser's escape corpus for *new* synthetic transcripts.** The space is unbounded. Pass 5 found something because there was a specific defect; pass 6 found something because there was a specific composition to write. Pass 7 needs a hypothesis.
+2. **The product identifier `ALPHA_V0`.** Settled four passes.
+3. **The floor question.** Answered "no" four passes.
+4. **The original mutants** (the handler publishing old context into a0, etc.). Ratified or made diagnostic in earlier passes.
+5. **Build-state regression.** Four build states already measured and preserved.
+
+**Does the list include the parser?** Yes — *broadly*. It does not include the parser under a specific hypothesis. The hypothesis that would justify one more pass is: "the test session will grow a legitimate second `step N` echo, and the composition's unique-marker rule will reject it". That is a real hypothesis and a real maintenance hazard (Q2). But it is a future test, not a current defect, and it does not need a panel seat to spot — a one-line test addition would surface it.
+
+---
+
+## Q5 — CLOSE. Denominator.
+
+**Closes**, with denominator: **the composition rule rejects both pass-4 escape classes (positional rebind, two order escapes) on `2nd response precedes 2nd step`, and rejects the pass-5 defect (codex rebinding case) on `2 step 4 echoes, wanted exactly 1`. It accepts the genuine transcript and the codex unique-marker case. The four measured build states are preserved at 6/6, 5/6, 6/6, 6/6.** Denominator is the 5-transcript escape corpus and the four build states reported in the packet.
+
+If I held the opposite, I would name: a defect in the composition's rejection of a genuine transcript that the packet's 5-transcript corpus did not cover. The packet gives no such defect; the composition is sound on what was measured. Beyond what was measured is the unbounded space, and the stopping rule refuses that.
+
+---
+
+**Summary of defects found from the packet alone:** none. The composition is sound for the current test session, the named mutant for `a0 obs` is correct, and the chain has reached its natural endpoint on the parser.
+
+**One thing the packet cannot settle, flagged honestly:** whether the test session will *ever* legitimately produce two echoes of `step N` where N equals the step count. The current tests do not (READ — preserved build states). If a future test does, the parser will reject it loudly. A single fact — "is `step N` ever typed twice in any planned future test" — would settle it. Until that fact changes, the composition closes the known space.

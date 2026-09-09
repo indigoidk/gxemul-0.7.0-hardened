@@ -17836,3 +17836,30 @@ mis-attribute, silently.** The loose ones are the more dangerous half.
 **Fixed only in `#514`'s own probe**, which that round owns. The other 52 are a separate harness
 round: one argument per file, but it changes what every probe launches and owes a re-parse check
 on each.
+
+## 2026-09-08 — `seattruncverdict` (MED, filed): a seat truncated MID-VERDICT reads as agreement
+
+glm returned exactly **21 bytes**, cut mid-word:
+
+    **VERDICT: RATIFY THE
+
+**None of the five recorded seat-failure classes fits.** Daemon up and the model in `api/tags` (not
+a refused connection); no quota text (not a wall); the response is non-empty (not a thinking burn);
+and it is a verdict line rather than an opening intention (not the minimax stall).
+
+> **The danger is the word it stopped on.** This project's own VERDICT-LINE-FIRST policy exists so
+> an answer survives truncation — and that is exactly what makes this shape harmful: the surviving
+> fragment is `RATIFY`. A verdict-line extractor scores agreement; a size check scores a tiny file
+> whose content reads positive. Neither can tell it from a seat that ratified in one line.
+
+**The re-fire caught it and changed the answer's shape, not just its length:** 6,425 bytes, verdict
+*"CLOSES AT PASS 6 ... fund no pass 7"* **with a stated contingency**. A contingent close is not the
+unqualified ratification the fragment implied.
+
+**Cause NOT established** — one occurrence, daemon healthy either side, re-fire immediately
+successful. This row does not guess.
+
+**Cheap defence, proposed not built:** a seat file whose entire content is shorter than its own
+verdict line — no newline, no body — is mechanically detectable, and reporting it as TRUNCATED
+rather than as a verdict costs one test in `seat_verdicts.py`. That tool is read by every panel, so
+it owes negative controls in both directions and ships as its own harness round.
