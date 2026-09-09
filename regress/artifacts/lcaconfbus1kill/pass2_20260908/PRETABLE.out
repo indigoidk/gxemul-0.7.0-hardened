@@ -1,0 +1,274 @@
+#515 / lcaconfbus1kill -- PRE-TABLE CHECK
+Written BEFORE table 1 runs; its mtime is the order proof.
+
+================================================================================
+1. SIBLING PARITY -- the arms this diff touches vs their nearest siblings
+================================================================================
+
+The diff de-fatalises ONE arm (`else { fatal("TODO. Non-zero bus."); exit(1); }`) and adds one
+refusal arm.  Its nearest siblings are the OTHER exits in the same file:
+
+  lca_pci_conf   dev >= 21 scan miss   ALREADY de-fatalised upstream: the fatal()/exit(1) is
+                                       COMMENTED OUT and `dev = 0' substituted.  This file's own
+                                       graceful-degradation precedent -- and the arm under review
+                                       was the outlier, not the policy.
+  lca_isa        ofs > len             fatal()+exit(1), STILL LIVE.  Out of scope (separate row).
+  lca_ioc        default read/write    fatal()+exit(1), STILL LIVE.  Out of scope (`lcabadval').
+  lca_interrupt_assert / _deassert     bare fatal()+exit(1), NO GUARD.  Out of scope
+                                       (`lcairqstubkill', separately witnessed).
+
+ASYMMETRY FOUND, and it is DELIBERATE and disclosed rather than repaired here: the de-fatalised
+scan-miss sibling substitutes a VALUE (dev = 0) and announces nothing.  This diff's refusal arm
+does the same -- synthesises a value, announces nothing.  So the two arms are PARITY-MATCHED.
+  -> no row owed for parity; the matching sibling is cited in the code comment.
+
+A SECOND asymmetry IS live and is question Q2(b) to the panel: forwarding to an empty slot PRINTS
+`[ bus_pci_data_access(): write to non-existant device ... ]', while the refusal is silent.  The
+fix therefore makes the alias case QUIETER than the neighbouring empty-slot case.
+  -> NOT a row.  It is a DISPOSITION question, put to the panel explicitly.
+
+================================================================================
+2. CLAIM -> ROW  (every added sentence asserting an OBSERVABLE CONSEQUENCE)
+================================================================================
+
+  "IOC_CONF bit 0 selects the cycle type only ... does NOT carry a bus number"
+        -> ROW `t1 anchor': a type-1 write lands at the bus taken FROM THE ADDRESS (bus 1),
+           not at the bus implied by ioc_conf.
+  "a type-1 cycle carries its destination in the address"
+        -> ROW `t1 anchor' (bus AND dev AND func all read back in the printed tuple).
+  "a type-1 cycle whose bus field is zero selects NOTHING"
+        -> ROW `t1 alias' (no forwarding diagnostic) AND ROW `t1 rdval' (the synthesised value).
+  "Forwarding this case would ... hand the access to whichever primary-bus device matched"
+        -> COUNTERFACTUAL-CONSEQUENCE claim.  It contains none of the five claim VERBS, and the
+           verb list is NOT the test -- the test is semantic: does this sentence assert something
+           a row could observe?  It does.  ROW `t1 alias' reds under M3_aliasoff, which IS that
+           forwarding.
+  "matching bus_pci_data_access's own empty-slot contract (all-ones at register 0, zero elsewhere)"
+        -> ROW `t1 rdval' pins the all-ones half.  *** THE `zero elsewhere' HALF IS NOT ROWED. ***
+           DISCLOSED, not silently skipped: the value 0 is also what an unmapped read returns, so
+           such a row needs its own liveness control to be non-vacuous.  Coverage debt, clause (e).
+  "Writes are discarded, which leaves backend state untouched"
+        -> NOT ROWED and DISCLOSED.  `bus_pci_data_access' is never called on this arm, so
+           "untouched" is true by construction rather than by observation; a row would test the
+           absence of a call, which `t1 alias' already covers via the absent diagnostic.
+  "MEASURED: two ordinary guest accesses, nothing refused anywhere on the path"
+        -> the witness itself, 3/4 pre-fix; raws preserved beside this file.
+
+================================================================================
+3. GUARD FIELD vs BODY FIELD
+================================================================================
+
+  guard reads:   type1 (= d->ioc_conf & 1),  bus (post-decode),  writeflag (sibling arm)
+  body  reads:   bus, dev, func, reg, d->pci_data, writeflag, len, tag
+
+DIFFERING FIELDS: `dev', `func', `reg', `tag' are read by the body and by neither guard.  Are they
+written at the same sites as the guard's field?  NO -- and that is the interesting part:
+
+  d->ioc_conf        written ONLY in lca_ioc's LCA_IOC_CONF case (one site)
+  tag/dev/func/reg   derived from `relative_addr' INSIDE this function, on every call
+
+So the guard's operand and the body's operands have ENTIRELY DIFFERENT PRODUCERS: one is sticky
+device state set by an earlier store, the others are recomputed per access.  A state where they
+DISAGREE is therefore not merely possible, it is the NORMAL case -- ioc_conf stays 1 while every
+access carries a different address.
+  -> ROW OWED and BUILT: `t1 anchor' (ioc_conf == 1, address selects bus 1) and `t1 alias'
+     (ioc_conf == 1, address selects bus 0) are the two disagreeing states, and they take
+     DIFFERENT arms.  That is the pair this check exists to demand.
+
+================================================================================
+4. CHANNEL -- per row, the mutant it kills and the observable that differs
+================================================================================
+
+  row          kills                         observable that differs under it
+  ----------   ---------------------------   ------------------------------------------------
+  bus ctl      (liveness control)            N/A -- control.  Recorded as N/A, not blank.
+  bus ctlsig   (device-signature control)    N/A -- control.
+  bus kill     M1_reinstate                  host alive vs dead
+  bus attrib   (attribution control)         N/A -- control.
+  t1 alive     M1_reinstate                  host alive vs dead
+  t1 anchor    M6_busshift, M7_devshift,     the PRINTED TUPLE `bus 1 func 2 device 3'
+               M8_busmask, M5_typeswap
+  t1 alias     M3_aliasoff, M4_condwrite     PRESENCE of `bus 0 func 0 device 0'
+  t1 rdval     M2_nullval                    the synthesised value 0xffff..ffff vs 0
+  t0 alive     M9_null                       host alive
+  t0 real      M9_null                       a real ID vs empty-slot/unmapped
+  t0 accept    M9_null, M5_typeswap          the exact value 0x304848086
+
+*** NO ROW HAS A NON-VARYING CHANNEL.  Every row names a mutant under which its own observable
+CHANGES, except the three explicitly marked N/A as controls. ***
+
+*** AND THE CHANNEL LINE EARNED ITS KEEP HERE, BEFORE ANY TABLE RAN -- WHICH IS THE CLAIM THE
+CARRIER ASKED THE FIRST MANDATED APPLICATION TO CHECK RATHER THAN OBEY. ***
+
+The carrier says a row's channel-under-its-mutant is knowable at WRITING time.  IT WAS, AND IT
+FOUND A FLOOR BREACH BEFORE MEASUREMENT: walking row-by-row for "which mutant makes this differ?"
+showed the refusal's own repair expression -- `odata = reg == 0? (uint64_t) -1 : 0' -> `odata = 0'
+-- had NO row at all.  It sweeps a 10-row detector clean, because the alias was exercised only by
+a WRITE (whose odata is never read) and both control reads take the type-0 path.  `t1 rdval' was
+added in response, and my own pass-2 brief had asserted that cell was unobservable.  It is not.
+
+So: the CHANNEL line's claim HELD on its first mandated application, and it caught something the
+brief had reasoned wrongly about.  Recorded as a measurement of the rule, not as praise for it.
+
+================================================================================
+5. PRESCRIBED ROWS -- diff any later row list against THIS list, do not merely extend it
+================================================================================
+
+  t1 rdval                                      ADDED (the refusal's VALUE; kills M2_nullval)
+  reg != 0 half of the empty-slot contract       NOT BUILT -- coverage debt, clause (e), disclosed
+  type-1 forwarding to a REGISTERED device       NOT BUILDABLE -- no device exists on any bus but
+                                                 0, and adding one to reach the site is laundering
+                                                 under the witness ladder.  Put to the panel as Q3.
+
+================================================================================
+6. AMENDMENT after pass 2, BEFORE table 1.  Written as a DIFF against section 5,
+   because the rule is that a row list rewritten from a panel's findings is DIFFED
+   against this block's own prescribed rows, never merely extended with the new ones.
+================================================================================
+
+  CARRIED FORWARD FROM SECTION 5 -- none dropped:
+    t1 rdval                                   ADDED, still present   (kills M2_nullval)
+    reg != 0 half of the empty-slot contract   still NOT BUILT, still disclosed as clause-(e) debt
+    type-1 forwarding to a REGISTERED device   still NOT BUILDABLE, still put to the panel as Q3
+
+  ADDED BY THE PASS-2 PANEL:
+    t0 write    ADDED.  *** A FLOOR CELL, prescribed by the deepseek seat. ***
+                My Q1 enumeration listed the two type-1 READ cells as unrowed and MISSED that
+                (type-0, WRITE) was unrowed as well.  It is inside the clause-(d) closure, not
+                outside it: the guard's dominating predicates are `type1' and `bus == 0', and the
+                guarded body TESTS `writeflag' twice in its own code, so the body-tested
+                cross-product is {type-0, type-1} x {bus 0, bus != 0} x {read, write}.
+                ESCAPE IT CLOSES, enumerated:
+                    if ((type1 && bus == 0) || (!type1 && writeflag == MEM_WRITE))
+                leaves `t1 anchor' green (a type-1 WRITE still forwards and prints its tuple) and
+                leaves `t0 accept' green (a type-0 READ still returns real config data).  Without
+                this row it SWEEPS THE TABLE.
+
+  RESOLVED AS UNROWABLE, with the derivation rather than a shrug:
+    type-1, bus != 0, READ    NOT ROWABLE ON THIS MACHINE, and deepseek independently reached the
+                same conclusion.  No device exists on any bus but 0, so this read is served by
+                `bus_pci_data_access''s empty-slot arm and returns all-ones at register 0 --
+                BYTE-IDENTICAL to what the refusal arm synthesises for the alias.  A value oracle
+                therefore cannot separate them, and no other channel exists (reads print nothing;
+                `bus_pci_setaddr' prints nothing).  Disclosed under clause (e).
+
+  A CORRECTION TO THIS ROUND'S OWN RECORD, found by the minimax seat (see the round block):
+    the addresses now carry the driver-side byte-enable bits `0x3 << 3'.  The decode is UNCHANGED
+    -- re-derived independently: tag 0x11a00 / 0x00000 / 0x40000, and 0x10000 for the new row --
+    because the handler discards bits 4..0 with `>> 5'.  What changes is that the probe now drives
+    the address form a real driver emits, so the round's claim about what the printed tuple
+    confirms is true rather than merely harmless.
+
+  ROW COUNT: 10 at the time of section 5 -> 12 now.  BOTH ADDITIONS ARE L1 CONSTRUCTION
+  (pre-ship), not reopenings of shipped material.
+
+================================================================================
+7. *** A WRONG CHANNEL LINE IN SECTION 4, FOUND BY THE grok SEAT ON PASS 2.
+   THE CHANNEL CHECK CATCHING ITS OWN TABLE. Still before table 1. ***
+================================================================================
+
+SECTION 4 ASSERTED:  `t1 alias'  kills  M4_condwrite  via presence of `bus 0 func 0 device 0'.
+THAT IS FALSE IN THE MIRROR POLARITY, and grok walked it rather than arguing it:
+
+    if (type1 && bus == 0 && writeflag == MEM_WRITE)
+        t1 alias   a WRITE at 0:0:0  -> still refused                        -> GREEN
+        t1 rdval   a READ  at 0:0:0  -> forwarded to an EMPTY slot, all-ones -> GREEN
+        t1 anchor  bus 1             -> untouched                            -> GREEN
+    ==> CLEAN SWEEP OF THE ELEVEN-ROW PROBE.
+
+My own M4 used the OPPOSITE polarity (`== MEM_READ'), which `t1 alias' does kill.  **So I had
+covered the cell at exactly the address my own mutant used and left the symmetric cell open** --
+the `#499' shape, reproduced inside the very table built to prevent it, by someone who had just
+written the paragraph about it.
+
+*** THE ROOT CAUSE IS THE ADDRESS, NOT THE POLARITY, AND THAT IS THE GENERAL LESSON HERE: EVERY
+ALIAS ROW USED dev 0, AN EMPTY SLOT. ***  Forwarding to an empty slot returns the SAME all-ones the
+refusal synthesises, so NO dev-0 row can EVER observe the misrouting -- for any mutant, in any
+polarity.  The rows were blind by construction, not by bad luck.
+
+**The fix's own comment names the right address and no row used it:** *"would ... hand the access to
+whichever primary-bus device matched -- `i82378zb' is registered at 0:7:0"*.  At 0:7:0 the two
+outcomes differ ABSOLUTELY: a refusal gives all-ones, a misroute gives the device's real config
+data, 0x304848086.
+
+  ROWS ADDED (both L1 construction, pre-ship):
+    t1 dev7rd   type-1 READ  at bus 0 / dev 7 -- want 0xffffffffffffffff, ANTI-want the real data.
+                ANCHORED in clause (f)'s sense: it names WHICH cell was reached, by a value only
+                that one device can produce.  Kills M4 in the MEM_WRITE polarity.
+    t1 dev7wr   type-1 WRITE at bus 0 / dev 7 -- want no `bus 0 func 0 device 7'.  Checkpointed on
+                the following read's `print t2', so no-checkpoint renders differently from refused.
+                Kills M4 in the MEM_READ polarity.
+
+  SECTION 4's CHANNEL LINE IS SUPERSEDED FOR `t1 alias':
+    t1 alias    kills M3_aliasoff ONLY.  It does NOT kill M4 in either polarity, and section 4's
+                claim that it did is CORRECTED HERE rather than left to be read as true.
+    t1 dev7rd/wr  kill M4 in both polarities.
+
+  AND THE TABLE ITSELF GAINS THE MIRROR MUTANT: M4 is now run in BOTH polarities
+  (M4a `== MEM_READ', M4b `== MEM_WRITE'), because running only the one my own repair anticipated
+  is exactly what produced this defect.
+
+  ROW COUNT: 10 -> 12 -> 14.
+
+*** THE HONEST SCORE FOR THE CHANNEL RULE, since section 4 claimed its first mandated application
+as a success: IT FOUND ONE FLOOR BREACH (t1 rdval) AND MISSED ANOTHER (this one). ***  The
+difference between the two is instructive and is the part worth carrying: for `t1 rdval' I asked
+"which mutant makes this row's observable differ?" and got a real answer.  For `t1 alias' I asked
+the same question, ANSWERED IT FROM THE MUTANT I HAD ALREADY WRITTEN, and never asked whether a
+DIFFERENT mutant of the same predicate would also be caught.  **The check is only as good as the
+mutant set you bring to it, and an author's own mutant set is exactly the one shaped by the repair
+the author just made.**  That is an argument for the ask-again and for the panel, not against the
+rule -- but section 4's self-congratulation was premature and is withdrawn.
+
+================================================================================
+8. *** A THIRD CHANNEL FAILURE, AND THIS ONE THE TABLE CAUGHT RATHER THAN A SEAT.
+   `t1 dev7wr' WAS VACUOUS BY CONSTRUCTION -- the row added to close a floor
+   breach could not fire under the mutant it was written for. ***
+================================================================================
+
+Section 7 added `t1 dev7wr' with its channel named as the EMPTY-SLOT write diagnostic,
+`bus %i func %i device %i ]'.  That message comes from `bus_pci_data_access''s `dev == NULL' arm.
+
+**0:7:0 IS THE ONE ADDRESS IN THIS DEVICE WHERE `dev' IS NOT NULL.**  It is the registered
+i82378zb -- which is the entire reason section 7 chose it.  So the row's channel cannot fire at its
+own address, under any mutant, ever.  **The row added to close a vacuity was itself vacuous, at the
+address chosen to make the defect observable.**
+
+WHAT A FORWARDED WRITE ACTUALLY PRINTS, from the M4a_condread run's evidence echo:
+
+    [ bus_pci: write to PCI DATA: data = 0x00000001 (current value = 0x304848086);
+      NOT YET SUPPORTED. bus 0, device 7, function 0 (i82378zb) register 0x00 ]
+
+A REGISTERED device answers on a different path with a different message -- and that message is a
+STRICTLY BETTER oracle than the one it replaces: it names the device BY NAME and quotes the config
+data the write landed on.  Nothing but a real forward to the real i82378zb can produce it.
+`D7W' is now `"device 7, function 0 (i82378zb)"'.
+
+*** WHAT CAUGHT IT IS THE PART WORTH KEEPING, BECAUSE IT WAS NOT THE ROW AND NOT A SEAT. ***
+Under M4a the row scored GREEN -- `refused' -- while the log directly above it printed the
+misrouting in full.  **The probe's habit of ECHOING ITS EVIDENCE LINES INTO THE LOG is what made
+the contradiction visible**, and that habit exists because of an earlier round where a green row's
+evidence was tested in a pty buffer and never printed, leaving a preserved artifact that a later
+reader could not check.
+
+  A row said "refused".  Four lines above it, the log said the write reached the device.
+  A contradiction is the cheapest signal there is, and it was only available because the
+  evidence was echoed rather than merely tested.
+
+*** THE HONEST TALLY FOR THE CHANNEL RULE ON ITS FIRST MANDATED APPLICATION IS NOW 1 FOUND, 2
+MISSED. ***  It found `t1 rdval'.  It missed `t1 alias' vs the mirror mutant (grok), and it missed
+`t1 dev7wr''s dead channel (the table).  Section 4 called the rule a success and section 7 withdrew
+that; this withdraws it further.
+
+**The pattern across all three is ONE mistake made three times: I named each channel by asking what
+the code prints on the path I HAD IN MIND, never by asking what it prints on the path the MUTANT
+takes.**  For `t1 alias' the mutant took the other polarity; for `t1 dev7wr' the mutant reached a
+non-NULL device and a different printf entirely.
+
+  > **THE CHANNEL LINE NEEDS A SECOND HALF: name the observable, then TRACE THE MUTANT'S OWN
+  > CONTROL FLOW to the print it reaches.  A channel is only established when you can point at
+  > the exact statement that emits it UNDER THE MUTANT -- not under the fix.**
+
+That is a proposal about the carrier's own rule, so it is FILED for the flagship adjudication rather
+than written into the carrier here -- three instances in one round is evidence, but a change to a
+mandated check is an owner decision.

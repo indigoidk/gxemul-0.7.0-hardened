@@ -1,3 +1,206 @@
+# `#515` lcaconfbus1kill: one variable meant two things, and a value the register's own guard ACCEPTS armed a host kill in a different handler
+
+**THE DEFECT.** `DEVICE_ACCESS(lca_pci_conf)` in `dev_lca.c` used a single `bus` for two unrelated
+quantities -- the configuration CYCLE TYPE selected by `d->ioc_conf & 1`, and the DESTINATION BUS:
+
+    bus = d->ioc_conf & 1;
+    if (bus == 0) { ...IDSEL scan... } else { fatal("TODO. Non-zero bus."); exit(1); }
+
+The `LCA_IOC_CONF` guard is `if (idata & ~1) { fatal(); exit(1); }`, so **`0x1` is ACCEPTED and
+stored**. A guest then needs no unusual value anywhere: store 1 to IOC_CONF, make any access in the
+PCI config window, and the host process ends. Two ordinary accesses, nothing refused on the path.
+
+**THE FIX SPLITS THE TWO QUANTITIES AND IMPLEMENTS THE MISSING BRANCH** -- option-set member 7 for
+the type-1 decode, member 2 for the alias:
+
+    type1 = d->ioc_conf & 1;   bus = 0;
+    if (!type1) { ...IDSEL scan, unchanged... }
+    else { bus = (tag >> 16) & 0xff;  dev = (tag >> 11) & 0x1f; }
+    ...
+    if (type1 && bus == 0)  odata = reg == 0? (uint64_t) -1 : 0;
+    else                    { bus_pci_setaddr(...); bus_pci_data_access(...); }
+
+**THE ALIAS ARM IS NOT TIDINESS -- WITHOUT IT THE FIX SHIPS A NEW MISROUTING.** A type-1 cycle whose
+bus field is zero selects nothing (type-1 is how a bridge is asked to reach a bus *behind* it).
+Forwarding it would set `cur_bus = 0` and hand the access to whichever primary-bus device matched --
+`i82378zb` is registered at 0:7:0 -- so decoding `bus` and stopping there replaces a host kill with a
+silent wrong destination. The refusal returns `bus_pci_data_access`'s own empty-slot values, read
+from `bus_pci.c` rather than assumed.
+
+**PRIMARY SOURCE, read locally and cited narrowly.** 21066/21066A HRM S6.2.9: *"PCI address bits
+ad<1:0> come directly from configuration cycle type register (IOC_CONF, Section 6.4.2) bits <1:0>"* --
+IOC_CONF selects the CYCLE TYPE and carries no bus number. The type-1 FIELD POSITIONS come from the
+PCI Local Bus specification, which S6.2.9 defers to explicitly, **not** from this manual.
+
+**THE FUNCTION TAIL IS PRESERVED ON BOTH ARMS** -- `memory_writemax64` and `return 1` are still
+reached. Checked by reading the whole function after the edit, not the diff.
+
+## The witness went red first, and the detector grew 4 rows -> 18
+
+    PRE-FIX    8/18    killtable_20260908/table4_targeted/probe_prefix18.raw
+    POST-FIX  18/18    killtable_20260908/table3_shipped/probe_base.raw
+
+**ONE INSTRUMENT, both directions.** An earlier 7/14 was taken with the 14-row probe before the
+ask-again added four rows; it is preserved (`pass2_20260908/lca_pre14.raw`) but is NOT the
+before-figure, because quoting it beside an 18-row post-fix score would put two instruments in one
+comparison. The 8/18 was measured by rebuilding `git show HEAD:src/devices/dev_lca.c` in the clone
+and running the SHIPPED probe against it.
+
+Scratch clone `/tmp/gxlca` (`cp -a` of `build/`), baseline NAMED as HEAD `5d3f82c`, `cmp`-clean
+before mutant 1, baseline binary rebuilt IN THE CLONE with `[ binary -nt source ]` checked. No
+project tree was mutated at any point.
+
+**KILL TABLE, FOURTEEN variants across two tables, ZERO ESCAPES** (`killtable_20260908/table3_shipped/`):
+
+    base            18/18    M5_typeswap     16/18    M10_len8        17/18
+    M1_reinstate     8/18    M6_busshift     16/18    M11_func3       17/18
+    M2_nullval      14/18    M7_devshift     16/18    M12_regnull     17/18
+    M3_aliasoff     12/18    M8_busmask      16/18
+    M4a_condread    16/18    M9_null          0/18
+    M4b_condwrite   13/18
+
+`M9_null` is the null medium at 0/18. Every clause-(d) null-repair variant is killed.
+
+**A FOURTEENTH VARIANT, MEASURED SEPARATELY** (`table4_targeted/`), because grok's ask-again answer
+arrived after table 3 was frozen and its shape is NOT covered by `M12`:
+
+    base    18/18        M13_regconj    17/18        prefix18    8/18
+
+`M13_regconj` hoists the test into the guard -- `if (type1 && bus == 0 && reg == 0)` -- so a non-zero
+register is not refused at all but FORWARDED. `M12_regnull` only corrupts the refused *value*; this
+one re-opens the misrouting itself.
+
+*** ITS EVIDENCE IS THE STRONGEST SINGLE DATUM IN THE ROUND. *** Under the variant, row `t1 reg4`
+reads back **`0x601004300000003`** against a want of `0x0`. That is the real `i82378zb`:
+`0x00000003` is its command/status at register 4 and `0x06010043` its class register at 8 -- exactly
+what `PCIINIT(i82378zb)` writes (`PCI_CLASS_CODE(PCI_CLASS_BRIDGE, PCI_SUBCLASS_BRIDGE_ISA, 0)
++ 0x43`). **Nothing but a genuine forward to the genuine device produces that number**, so the row
+does not merely detect a difference -- it names where the access landed.
+
+*** IT WAS RECORDED AS A PREDICTION FIRST AND MEASURED SECOND. *** The round wrote down that
+`t1 reg4` should kill it and marked that PREDICTED, NOT MEASURED -- a prediction written into a
+measured column is the frozen-number class. Table 4 is the discharge of that.
+
+*** THE LAST THREE ARE THE ASK-AGAIN'S OWN ESCAPES, AND EACH NOW DIES BY EXACTLY ONE ROW. ***
+`M10`/`M11`/`M12` each swept the 14-row table clean; at 18 rows each scores 17/18. **A one-row margin
+is the tightest possible evidence that the added row does precisely the job it was added for** --
+a larger margin would mean the row was catching something incidental as well.
+
+*** TWO EARLIER TABLES ARE PRESERVED BESIDE IT AND NEITHER IS CITED. ***
+`table1_preliminary/` (10 variants, a stale instrument) and `table2_shipped/` (10 variants, 14 rows,
+zero escapes) are kept only so the three can be compared. **A comparison owes ONE instrument**, and
+the progression is itself the record: the detector got strictly stricter at each step, and the
+escapes that motivated each step are visible in the table that preceded it.
+
+## THE ASK-AGAIN: one query, three escapes, all of them one family
+
+Table 2 came back clean at ten variants, so the round spent its single capped adversarial query.
+**The cap counts ASKS, never FINDINGS**, so all three were disposed of in-round rather than one
+taken and two filed.
+
+    deepseek   `if (type1 && bus == 0 && len == 8)`      every row used an 8-byte access
+    kimi       `func = (tag >> 8) & 7`  ->  `& 3`        the only func probe was the anchor's func 2
+    codex      the `reg != 0` branch of the refusal       every row used register 0
+
+> **ONE FAMILY: AN AXIS EVERY EXISTING ROW HELD CONSTANT.** Fourteen rows that reinforced each other
+> on the axes they *did* vary, and were blind on three they did not. That is what a frozen axis looks
+> like from outside, and it is invisible from inside precisely because the rows agree.
+
+**codex ranked its own above the other two and it was right:** `len` and `func` are *values no row
+varies*, but `reg != 0` is a **whole branch of the repair's own expression** — `odata = reg == 0?
+(uint64_t) -1 : 0` — that nothing reached. Killing `M2_nullval` proves sensitivity to the
+register-zero result and establishes nothing about the required zero elsewhere.
+
+*** AND THAT THIRD ONE WAS ALREADY WRITTEN DOWN IN THIS ROUND'S OWN PRE-TABLE BLOCK. ***
+`PRETABLE.out` section 2 says, in its own words: *"THE `zero elsewhere' HALF IS NOT ROWED …
+DISCLOSED, not silently skipped … Coverage debt, clause (e)."* **A disclosure is an honest record and
+it is not a row.** The seat found in one query what the round had identified hours earlier and
+deferred — the unread-review shape aimed at a round's own artifact rather than at a seat's answer.
+
+**grok and minimax landed after the panel was first read** (230 b and absent at that moment) and were
+NOT scored as failures. grok's arrived as a **fourth shape on the same axis and a worse one**:
+`if (type1 && bus == 0 && reg == 0)` hoists the test into the *guard*, so a non-zero register is not
+refused at all but FORWARDED — reaching the real `i82378zb` at 0:7:0. Its warrant is what makes it
+realistic: *"other registers already return 0 for a missing device"* — true at every empty slot,
+**false at the one populated one**. Measured separately in `table4_targeted/`.
+
+**Four rows added, 14 -> 18** (`t1 len4`, `t0 func4`, `t1 reg0`, `t1 reg4`), all L1 construction.
+The register pair shares one session deliberately: a bare *"reg 4 returns 0"* row would be vacuous
+because unmapped space also reads 0, so the PAIR is the oracle — all-ones then zero, same window,
+only the register changing.
+
+**DISPOSITION, stated rather than assumed.** None of the three is a floor breach under the
+body-tested-partition reading: `lca_pci_conf` tests `writeflag` in its own code but never branches on
+`len`, `func` or `reg`, so they induce no partition and fall to clause (e). **They were closed anyway
+on the CLAIM -> ROW check**, because each falsifies a sentence the round's own comment asserts.
+
+**TWO RESIDUALS ARE DISCLOSED AND NOT BUILT**, on grok's own reasoning: the WRITE direction at a
+non-zero register, and any bus value other than 0 or 1 (a hardcoded `bus = 1` collapses the decode
+but does not reach 0:7:0 — grok named it while declining to propose it, *"this one does not need that
+row to be a defect"*). The detector ships with both named in its header, so a later escape is
+*outside the contract, as stated* rather than an argument about overclaiming.
+
+## NINE defects in this round's own detector, and I found ONE of them unaided
+
+Recorded by finder, because the pattern is the point: **the author's mutants are shaped by the
+repair the author just made.**
+
+* **the pre-fix RUN** -- `t1 alias` scored GREEN on the pre-fix build, where the host had already
+  died and the access never executed. An absence-of-text oracle cannot tell *"ran and was refused"*
+  from *"never ran"*.
+* **me, walking the CHANNEL line** -- the refusal's own repair (`odata = reg == 0? -1 : 0` ->
+  `odata = 0`) had NO row: it sweeps a 10-row detector clean. Row `t1 rdval` added.
+* **deepseek** -- (type-0, WRITE) was an unrowed FLOOR cell; the guarded body tests `writeflag`
+  twice, so it is inside the clause-(d) closure. Row `t0 write` added.
+* **minimax** -- the addresses omitted the driver-side byte enables `0x3 << 3`, so *"confirmed by the
+  printed tuple"* overstated what was confirmed: **the tuple confirms the TAG DECODE, not the address
+  construction.** And the pass-2 brief's own table marked `t1 alias` FAIL pre-fix while the preserved
+  raw says `ok` -- **written from intent rather than from the log.**
+* **kimi (via the `kimi-k3:cloud` substitute -- the CLI is 403-walled)** -- binding `t1 alias` to
+  `alive2` was INSUFFICIENT: `alive2` means the host survived, not that the guest executed the store.
+  Fixed by running the alias FIRST so the later anchor's tuple is a checkpoint that had to be retired.
+* **grok** -- *** the round's most valuable finding: `M4b_condwrite`, the MIRROR polarity, sweeps the
+  11-row probe CLEAN, and my own PRETABLE claimed `t1 alias` killed it. *** Root cause is the ADDRESS,
+  not the polarity: **every alias row used dev 0, an EMPTY slot, where forwarding returns the same
+  all-ones the refusal synthesises** -- blind by construction, for any mutant. Rows `t1 dev7rd` /
+  `t1 dev7wr` added at 0:7:0, where the two outcomes differ absolutely.
+* **the kill table's own evidence echo** -- `t1 dev7wr`, the row added to close grok's finding, was
+  itself VACUOUS: it matched the EMPTY-SLOT diagnostic at the one address where the slot is NOT
+  empty. Under `M4a` it scored `refused` while four lines above it the log printed
+  `NOT YET SUPPORTED. bus 0, device 7, function 0 (i82378zb)`. Re-aimed at that message, which names
+  the device and quotes the data the write landed on.
+* **codex** (on a benign re-fire; the first firing was content-filtered) -- a FALSE-GREEN in the
+  anchor: `"bus 1 func 2 device 3"` is a SUBSTRING of `"device 30"` and `"device 31"`, both reachable
+  from `dev = (tag >> 11) & 0x1f`. All four diagnostic matches now carry a closing `" ]"`.
+
+## The CHANNEL check's first mandated application: 1 found, 2 missed
+
+The carrier asked the first mandated PRE-TABLE application to **check** the CHANNEL line rather than
+obey it, on the ground that a freshly minted rule's exemplar is a hypothesis. The honest score is
+above, and all three misses are ONE mistake:
+
+> **I named each channel by asking what the code prints on the path I HAD IN MIND, never what it
+> prints on the path THE MUTANT takes.**
+
+A proposed second half -- *trace the mutant's own control flow to the statement that emits the
+observable* -- is **FILED for the flagship adjudication, not written into the carrier here**: three
+instances in one round is evidence, but amending a mandated check is an owner decision. The
+counter-argument is recorded with it: all three misses WERE caught, two by seats and one by the
+table, so the existing machinery worked and the amendment may buy nothing.
+
+## Scope, and what this round does NOT close
+
+`dev_lca.c` still holds **ten active `exit(1)` calls** -- two unconditional interrupt callbacks
+(`lcairqstubkill`, separately witnessed), the `lca_isa` `ofs > len` guard, six `lca_ioc` value guards
+and the shared `lca_ioc` default (`lcabadval`). This round removes the eleventh, in `lca_pci_conf`.
+
+**SEATS.** Six answered pass 2: codex (benign re-fire only), grok, glm (a thinking burn
+auto-recovered by `panel_ollama.py`), kimi via its substitute transport, deepseek, minimax. The kimi
+CLI is 403-walled and its seat is COVERED, not lost. **agy was DELIBERATELY NOT FIRED** (measurement
+reserve -- a kill table was in flight, which is the case that reservation exists for), and **opus5
+and fable5 were DELIBERATELY NOT FIRED**, preserved for the 2026-09-09 adjudication. Those are three
+distinct states and none of them is agreement.
+
 # `#514` alphaswpctxreg: the OS's context-switch primitive returned its result in the register the ABI tells the caller to discard
 
 **THE DEFECT, and it contradicts the comment directly above it.**  `cpu_alpha_palcode.c:250-251`:

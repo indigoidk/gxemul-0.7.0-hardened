@@ -1,0 +1,70 @@
+VERDICT: **The code change itself is ratified** — the anchor/alias/type-0 decodes all enumerate correctly from the handler's own two lines, and no residual `exit()` remains in this handler. **Refused ratification of four packet-level claims:** (1) §F's pre-fix score is arithmetically inconsistent with its own table (I count 5 ok, not 6/10); (2) `t0 accept`'s pre-fix FAIL is not derivable from its stated description; (3) Q1's "indistinguishable" claim is correct on the value and stderr channels but misses the `pci_data->cur_*` state-mutation channel; (4) the diff's anti-misrouting safety argument silently depends on `bus_pci` matching on `cur_bus` — a premise nowhere in this packet — and there IS a constructible row to test it, which makes Q3's "not constructible" framing weaker than it needs to be.
+
+---
+
+## Enumerated arithmetic (the instruction says walk it, so I walked it)
+
+**Anchor decode, REASONED from P5's two lines:** bus 1 dev 3 func 2 reg 0 → tag = (1<<16)|(3<<11)|(2<<8) = 0x10000 + 0x1800 + 0x200 = `0x11A00`. rel = tag<<5 = `0x234000` ✓ matches §F. Reverse: tag = (0x234000>>5) & ~0xFF = 0x11A00 ✓; bus = (0x11A00>>16)&0xff = **1** ✓; dev = (0x11A00>>11)&0x1f = 0x23&0x1f = **3** ✓; func = (0x11A00>>8)&7 = 0x11A&7 = **2** ✓. reg = 0x11A00&0xfc = 0 ✓. The printed tuple `bus 1 func 2 device 3` is consistent with the decode.
+
+**Alias:** rel=0 → tag=0 → type-1, bus=0 → refused ✓. **Type-0 dev 7:** tag=0x40000 = bit 18; 18−11=7 ✓; rel = 0x40000<<5 = 0x800000 ✓. Signed-shift concern: `tag` is signed int, but every consumer of `tag` in the type-1 arm masks after shifting, so the sign cannot leak into bus/dev/func. READ: correct as written.
+
+**The count that FAILS:** §F's ten-row table, pre column — ok cells are `bus ctl`, `bus ctlsig`, `bus attrib`, `t0 alive`, `t0 real` = **5 ok, 5 FAIL**. The header claims `LCACONFBUS_RESULT=6/10`. One of these is wrong (or an eleventh scorer exists that the table doesn't show). Not reconcilable from the packet. READ.
+
+---
+
+## Defects found in the brief's own claims
+
+**D1 (READ, arithmetic):** the 6/10-vs-5-ok discrepancy above.
+
+**D2 (READ, underivable cell):** `t0 accept` is described as "the exact pre-fix value `0x304848086` is unchanged." A row asserting a value is *unchanged* should pass on the pre-fix build by construction, yet it shows pre=FAIL. That requires a mechanism the table doesn't disclose — most plausibly execution-order/liveness coupling within one guest session (dies at `bus kill`, accept never runs). But note `t0 alive`/`t0 real`, listed *after* `bus kill` in the table, show pre=ok — so either execution order differs from table order, or the row bundles a liveness term. Either way, the packet does not derive the cell, and a pre-fix FAIL on an "is unchanged" row means that cell carries ordering information, not value information. **The single settling fact: the probe's actual execution order and each row's liveness term.**
+
+**D3 (REASONED):** §D's "3/4 pre-fix" is never defined (3 of 4 stages reached, then died? or a score?). It sits next to 6/10 and 10/10 scoring with no stated relation to §F's ten rows. Minor, but undefined units in a measurement section are a premise smell.
+
+**D4 (the alias binding, answering §F's own question): NOT sufficient as described.** "Bound to `alive2`" rules out died-before-E, but the row still passes if the alias store was *never issued* while the host stayed up (a guest-side skip, an early probe bail on a different branch). Absence-of-print plus host-alive is exactly the vacuity shape §F confesses to, one level up. **Fix:** the positive term must be a *guest-emitted* marker retired after the alias `stq` (a console/UART checkpoint written after the store). If `alive2` is already defined as "guest printed its post-E checkpoint" rather than "host process still exists," then the binding is sufficient — the packet does not say which. READ: not stated. REASONED: insufficient unless that definition holds.
+
+---
+
+## Q1 — the cross-product, enumerated
+
+The partition has 8 cells, but **two are unreachable, which the brief does not say**: in the type-0 arm `bus` is initialized to 0 and never assigned, so (type-0, bus≠0, {R,W}) cannot occur. REASONED from §E2.
+
+| cell | status | rows |
+|---|---|---|
+| type-0, bus 0, read | rowed, value oracles | ctl, ctlsig, t0 alive, t0 real, t0 accept |
+| type-0, bus 0, write | **unrowed** | none inlined (the kill's stq targets `lca_ioc`, not pci_conf) — defensible only because this path is byte-identical pre/post |
+| type-1, bus 0, read | unrowed with a value oracle | — |
+| type-1, bus 0, write | rowed | t1 alias |
+| type-1, bus≠0, read | unrowed with a value oracle | — |
+| type-1, bus≠0, write | rowed, strongest oracle | t1 alive, t1 anchor |
+
+So the author is *almost* right about the two unrowed read cells, with two amendments: (a) `bus kill`'s ldq may already *traverse* one of them — whether it lands in (type-1, bus 0, R) or (type-1, bus≠0, R) depends on its address, which is not inlined — but a liveness-only traversal is not a row; (b) (type-0, bus 0, write) is also unrowed and should be on record.
+
+**On indistinguishability: the author is right about value and stderr, and has missed one channel.** Read value: refused returns all-ones-at-reg-0 / 0-elsewhere; forwarded-to-NULL returns the same (P1); type-0 empty-slot the same. Print: the NULL-arm read path prints nothing (P1). **The missed channel is `pci_data->cur_bus/cur_device/cur_func/cur_reg`:** the forwarded read latches them via `bus_pci_setaddr`; the refused read leaves them stale. P2 says setaddr has no observable *of its own* — true — but the mutation exists, and any backend consumer of `cur_*` that reads it without a preceding setaddr would distinguish the cells. No such consumer is shown in the packet, so the cells are indistinguishable *as far as this packet proves*. That should be disclosed as an assumption, not asserted as "no channel." REASONED.
+
+## Q2
+
+(a) **Silence is defensible; a `(once)` latched announce on the discarded write only is better.** Type-1 probing of bus 0 is legitimate guest behavior; per-access spam on reads would be wrong. But writes are rare and almost always a driver bug, so a once-announce there costs nothing and restores the debuggability the deleted `fatal()` provided.
+
+(b) **The asymmetry is real but defensible; sibling-parity is only half-breached.** `bus_pci`'s own contract (P1) is already asymmetric — reads silent, writes noisy. The refuse arm is silent in both directions, so it matches the read half and diverges from the write half. Given a 255-bus probe sweep would print the neighboring diagnostic 255 times anyway, silence on the structurally-invalid bus-0 case is the smaller sin. Non-blocking; `(once)` on the write-discard closes it.
+
+(c) **Yes, disclose — and the premise underneath is not checkable from the packet.** The brief asserts `memory_rw.c` has no Alpha bus-error dispatch; the packet contains no line of `memory_rw.c`, so "FAULT is unavailable" is READ-as-asserted. Settling fact: presence/absence of an Alpha machine-check/buserror arm in the memory_rw dispatch. Given the hardware contract per the quoted §6.2.18 is *arbitrary data + error status → instruction exception*, the all-ones answer is an emulation convention twice over (the `0`-at-reg≠0 half of P1 is also convention, not hardware). A guest that probes config space by *catching the exception* will behave differently on model vs metal; that belongs in the CHANGELOG entry. The diff's comment currently claims the refusal "matches the empty-slot contract" — true — and should add "and diverges from real-hardware master-abort semantics" to stay honest.
+
+## Q3
+
+The registered-device-behind-type-1 row is **not owed**, and the "can't construct without laundering" argument is sound — *but the briefing stops one step early.* The anchor proves decode + forward lands at the right tuple; `t0 accept` proves the found-device arm works. The conjunction risk reduces entirely to one unverified premise: **that `bus_pci_data_access`'s matching keys on `cur_bus`.** P1 shows only the `dev == NULL` arm; the match loop is not inlined, so this is not checkable from the packet.
+
+And it doesn't need a new device to test: **a type-1 read of (bus 1, dev 7, func 0, reg 0) must return all-ones, not `0x04848086`.** The anchor deliberately picks dev 3 func 2 — which cannot collide with 0:7:0 even if the matcher *ignores bus entirely* — so the anchor is blind to a bus-insensitive matcher. That matcher would be exactly the "NEW MISROUTING" the diff's comment claims to prevent. This row is constructible today, on the stock machine, with a value oracle. Ship it, and then "no registered-device state exists" is an acceptable disclosure for the remaining found-arm-via-type-1 gap.
+
+## Q4
+
+**The coupling is the only channel in this packet, and it is acceptable — but weaken it.** Confirmed: reads are value-indistinguishable (Q1), `bus_pci_setaddr` prints nothing (P2), so the write-diagnostic string is the only absolute-position oracle available without adding scaffolding to a file this round doesn't touch. Two mitigations: (1) the current match on `bus 1 func 2 device 3` already avoids the "non-existant" fragility, but matching the three labeled numbers with a label-tolerant pattern (or three separate number assertions) survives rewording and reordering; (2) declare the dependency in the row's comment so a `bus_pci.c` reword reads as a *probe* maintenance event, not a regression. The residual risk the author names — "red while nothing is wrong" — is the right kind of failure for an anchor row: it fails loud, at the instrumentation layer, never green-on-defect. Also worth recording: the post-fix run reaching its 10/10 completion sentinel *after* the anchor's print is packet-internal corroboration that `fatal()` returns (P1's mechanism) — the witness witnessed its own premise.
+
+## Premises I cannot settle from the packet (named, with settling facts)
+
+1. **`fatal()` does not exit** — asserted, corroborated indirectly (10/10 after the print), but not shown. Settling fact: body of `fatal()` in `debugmsg.c`.
+2. **`bus_pci_data_access` matches on `cur_bus`** — load-bearing for the entire anti-misroute argument. Settling fact: the device-walk condition in `bus_pci.c`.
+3. **No Alpha bus-error dispatch in `memory_rw.c`** (Q2c). Settling fact: the dispatch table.
+4. **`bus kill`'s ldq address** — determines which read cell it traverses (Q1).
+5. **Definition of `alive2`** — host-alive vs guest-checkpoint; decides whether §F's repair is sound (D4).
+6. **Probe execution order vs table order** — needed to derive `t0 accept`'s pre-fix FAIL (D2).
+7. **The config window's size / what `relative_addr` values the guest can actually emit** — the producer's domain; limits which bus values are reachable at all. No defect rides on it here, but "bus 0..255 all reachable" is assumed, not shown.

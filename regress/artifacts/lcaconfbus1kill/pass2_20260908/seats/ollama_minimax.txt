@@ -1,0 +1,74 @@
+**VERDICT: DIFF IS LOGICALLY CORRECT ON THE TEXT GIVEN. FOUR PREMISES ARE NOT SETTLEABLE FROM THE PACKET. THREE MINOR DEFECTS IN THE BRIEF ITSELF, NONE LOAD-BEARING.**
+
+---
+
+## Premise audit (READ = inlined; REASONED = derived; UNVERIFIABLE = needs the tree)
+
+| ID | Claim | Status |
+|---|---|---|
+| P1a | `bus_pci_data_access` dev==NULL arm returns all-ones/zero on read, `fatal()` on write | **READ** (verbatim) |
+| P1b | `fatal()` in this fork does NOT exit | **UNVERIFIABLE** — stated, not inlined; the diagnostic in §F (`"write to non-existant device, bus 1 func 2 device 3"`) is only consistent with this claim if `fatal()` returned, so the measurement depends on it |
+| P2 | `bus_pci_setaddr` prints nothing | **UNVERIFIABLE** — asserted, not inlined; §F's anchor depends on it |
+| P3 | exactly one PCI device on this machine | **REASONED with gap** — one `bus_pci_add` call inlined; "exactly one" requires no other call exists in the tree |
+| P4 | i82378zb config header value `0x0000000304848086` | **REASONED** for the derivation (PCIINIT + PCI_ID_CODE matches), **UNVERIFIABLE** for the MEASURED half |
+| P5 | the two decode lines | **READ** |
+| P6 | 21066/66A HRM §6.2.9 quote and §6.2.6 shift | **UNVERIFIABLE** — manual is local to the author, not inlined; load-bearing for the whole "IOC_CONF has no bus field" premise |
+| §D | CONF guard is `if (idata & ~1) { fatal(); exit(1); }` | **UNVERIFIABLE** — not inlined; if the guard is wider/narrower, "0x1 is accepted" fails |
+| §F | pre-fix 6/10, post-fix 10/10 | **UNVERIFIABLE** (all MEASURED) |
+
+If P1b, P2, P6, or §D's CONF guard is wrong, the diff's correctness is not refuted but the **witness ladder collapses** — `t1 anchor` would not produce its diagnostic, `t1 alias` would not distinguish "ran and refused" from anything, and the accept rows would not be anchored to a known machine state.
+
+---
+
+## Defects in the brief itself
+
+**D1 — Arithmetic off by 0x18 on every test address.** The handler's own comment says the address is constructed as `addr = (tag << 5) | ((regoffset & ~0x03) << 5) | (0x3 << 3)`. For reg=0 this is `tag << 5 | 0x18`. The brief computes `tag << 5` only:
+- type-1 anchor: brief says `0x234000`, correct is `0x234018`
+- type-1 alias: brief says `0`, correct is `0x18`
+- type-0 dev 7: brief says `0x800000`, correct is `0x800018`
+
+The tests still work because the handler discards `addr & 0x1f` via `>> 5`, so the mask `& 0xfc` and `& ~0xff` see the same values. **Not load-bearing, but the brief's "derived from the handler's own two lines, then confirmed by that printed tuple" is false — the printed tuple confirms `tag`, not `relative_addr`.**
+
+**D2 — `t0 accept` table entry contradicts the 6/10 figure.** Four pre-fix FAILs are enumerated (bus kill, t1 alive, t1 anchor, t1 alias). Adding `t0 accept` as a fifth FAIL gives 5/10. The brief states 6/10. Either the bold `FAIL` is a typo (should be `ok`) or the count is wrong. The row's stated semantics ("the exact pre-fix value `0x304848086` is unchanged") is consistent with `ok | ok` — the diff does not touch the type-0 forwarding path. Likely a typo.
+
+**D3 — `0x304848086` vs `0x0000000304848086`.** These are the same number (leading zeros dropped). Not a defect, just a notational switch between P4 and §F.
+
+---
+
+## Q1 — Vacuity floor, clause (d)
+
+**Agree.** The two unrowed cells are `(type1=1, bus≠0, read)` and `(type1=1, bus==0, read)`. Both return `reg==0 ? -1 : 0`, identical to `bus ctlsig`'s output. No guest-observable channel distinguishes them:
+
+- `cur_bus` is set by `bus_pci_setaddr` in the `bus≠0` cell and left at its prior value in the `bus==0` cell, but `cur_bus` is only re-read through this same handler, which overwrites it on the next access. Not guest-observable.
+- Timing differences (if any) are below the guest's resolution in a config-space probe.
+- The WRITE cells ARE distinguishable (D3 of §G, t1 anchor prints, t1 alias does not) and are rowed.
+
+The brief's closure is correct.
+
+## Q2 — Refusal disposition
+
+**(a) Silence is defensible.** A guest probing type-1 space is not in error — it is asking "is there a bridge?" The empty-slot all-ones answer is the correct PCI-semantic reply. A `(once)` latched announce would be appropriate if the refusal were unexpected from the guest's view; it isn't.
+
+**(b) The asymmetry is defensible but should be disclosed in the round's commit message.** "Forwarding prints a diagnostic; refusing does not" is not a sibling-parity breach — they are different operations ("I tried and failed" vs "I declined to try"). But the round should say it.
+
+**(c) Yes — disclose the convention.** §6.2.18 master-abort behavior is real hardware. The all-ones answer is an emulator-compatibility choice. The round should state this in one sentence; not disclosing it leaves a reader who knows the HRM to wonder why no MASTER_ABORT path exists.
+
+## Q3 — De-escalation accept rows
+
+**"No such state is constructible" is acceptable as written, with disclosure.** The forwarding mechanics (`bus_pci_setaddr` + `bus_pci_data_access` with the bus/dev/func tuple) are exercised by `t1 anchor`, which forwards to a NON-existent device and confirms the tuple reaches `bus_pci_data_access`'s `dev == NULL` arm with the right fields. The "device exists on bus>0" case adds nothing the forwarding mechanics don't already cover — `bus_pci`'s device lookup is the same code path as type-0 to a registered device (`t0 alive`/`t0 real`/`t0 accept`). The disclosure should say so explicitly.
+
+## Q4 — Anchor row's fragility
+
+**String coupling is the only available oracle, and it is acceptable with disclosure.** The brief's check is correct: `bus_pci_setaddr` prints nothing (per P2, itself UNVERIFIABLE — see above), `bus_pci_data_access`'s write-to-nonexistent arm prints exactly one diagnostic (READ), and there is no return-value, register, or status channel in the shown code. The diagnostic string is the only side effect.
+
+Two ways the anchor could silently rot:
+1. The diagnostic is reworded but still printed — the regex would need updating; a "still printed" check (e.g., count of `bus_pci_data_access` lines in the log) would be more robust.
+2. `fatal()` is changed to actually exit — the diagnostic still prints, so the anchor still fires, but the host now dies on the type-1 anchor instead of surviving. This is a strictly worse defect, not a silent regression.
+
+A more robust oracle would parse for the presence of *any* `bus_pci_data_access` line rather than the exact tuple. The brief should consider this; it does not invalidate the round.
+
+---
+
+## One thing the brief gets exactly right that deserves naming
+
+The §F confession + repair of `t1 alias` is the most valuable paragraph in the packet. An absence-of-text oracle on a process that has already died is structurally incapable of distinguishing "the access was serviced and refused" from "the access never executed". Binding the alias row to `alive2` so the row renders `died-before-E` instead of green-on-accident is the correct fix, and the brief naming it as a defect it found in its own row is exactly what pass-2 review should look like.

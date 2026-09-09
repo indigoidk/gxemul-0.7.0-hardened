@@ -1,0 +1,49 @@
+codex_answer: regress/artifacts/sgirandomcolour/codex_analysis_20260908.err
+  stream bytes   221618
+  prose blocks   4
+  refusal marker 0 occurrence(s)
+  verdict blocks 1
+
+  --------------------------------------------------------------------
+  I’ll trace how the register value reaches each switch, then enumerate the format values, cases, and default behavior using only the three permitted files.
+
+  --------------------------------------------------------------------
+  The two switches have identical four-case sets. The register writer preserves all four format bits, so the drawing path permits 16 encodings and leaves 12 unhandled. I’m checking the other callers and the file’s unsupported-case idioms; the restriction to three files limits Q4’s tree-wide usage claim.
+
+  --------------------------------------------------------------------
+  The MTE caller constructs only CI or RGBA, so neither colour default is reachable through that caller. The drawing-engine caller retains all 16 encodings. The local buffer is also eight bytes, although the write default assigns only its first four bytes from `random()`.
+
+  --------------------------------------------------------------------
+  **VERDICT: The two colour switches have identical four-case sets. Both defaults are reachable through the drawing engine, and each covers 12 encodings, including YCRCB.**
+  
+  Q1: There are exactly two switches on `color_mode` in `horrible_getputpixel()`. Walking the [PUT switch](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:309) gives CI, RGB, RGBA, ABGR: four explicit cases. Walking the [GET switch](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:345) gives CI, RGB, RGBA, ABGR: four explicit cases. Each additionally has one `default` label. The case sets are identical; there is no case-set asymmetry supporting the suggested driver-history explanation.
+  
+  Q2: The producer permits more than the named formats. [`DEVICE_ACCESS(sgi_de)`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:1134) stores incoming register words without filtering their colour-format bits. Its source-mode and destination-mode cases only log the access. [`draw_primitive()`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:835) retrieves those stored modes and passes them to the pixel helper without narrowing their format fields.
+  
+  The header defines five format constants: `DE_MODE_TYPE_CI = 0x00000000`, `DE_MODE_TYPE_RGB = 0x00000010`, `DE_MODE_TYPE_RGBA = 0x00000020`, `DE_MODE_TYPE_ABGR = 0x00000030`, and `DE_MODE_TYPE_YCRCB = 0x000000f0`. Both switches explicitly handle the first four; neither explicitly handles YCRCB. `DE_MODE_TYPE_MASK = 0x000000f0` is the mask, not a sixth format. These definitions are together in [crmfbreg.h](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/thirdparty/crmfbreg.h:328).
+  
+  The actual [extraction](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:210) is `mode & DE_MODE_TYPE_MASK`, with **no shift**. It preserves bits 4–7; shifting right by four would normalize the field, but the switches compare the unshifted encodings. Walking the complete domain gives `0x00, 0x10, 0x20, 0x30, 0x40, 0x50, 0x60, 0x70, 0x80, 0x90, 0xa0, 0xb0, 0xc0, 0xd0, 0xe0, 0xf0`: **16 values**. The unhandled set is `0x40, 0x50, 0x60, 0x70, 0x80, 0x90, 0xa0, 0xb0, 0xc0, 0xd0, 0xe0, 0xf0`: **12 values**, comprising eleven unnamed encodings and the named YCRCB encoding.
+  
+  Q3: The local allocation is `uint8_t buf[8]`: **eight bytes**. The [PUT default](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:307) makes four separate `random()` calls and assigns their results, converted to bytes, to `buf[0]`, `buf[1]`, `buf[2]`, and `buf[3]`. Those four bytes are explicitly assigned pseudorandom values. It then calls `fatal` with the colour mode. There is no local exit, early return, or warning latch before the ordinary `cpu->memory_rw` call writes from `buf` to `tileptr + ofs`, using `MEM_WRITE` and `NO_EXCEPTIONS | PHYSICAL`.
+  
+  The transfer length comes independently from `1 << ((mode >> 8) & 3)`. Walking its selector gives 0→1 byte, 1→2 bytes, 2→4 bytes, and 3→8 bytes: four possible lengths. Consequently, the PUT default can write fewer than its four assigned bytes or, at length eight, include the four remaining uninitialized bytes.
+  
+  The [GET path](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:342) first calls `cpu->memory_rw` with `MEM_READ` into its local buffer; it does not check the call’s return value. Its default assigns `*color` using `(buf[3] << 24) + (buf[2] << 16) + (buf[1] << 8) + buf[0]`, exactly the expression used by its ABGR case, then calls `fatal`. It performs no format conversion or rejection. A one- or two-byte read leaves part of that four-byte assembly uninitialized.
+  
+  The direct write destination is **guest physical pixel memory**, potentially framebuffer backing tiles. This helper contains no separate host framebuffer-update call. Its RGB comment describes GBE scanout consuming the same tile memory; that scanout implementation is outside the permitted files. GET itself reads memory and updates the caller’s colour variable. In [`draw_primitive()`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:1007), that value can feed copying or raster operations and subsequently reach destination memory through another pixel-helper PUT.
+  
+  Q4: YCRCB is documented **as a name and register encoding**, without a format-specific explanatory comment. The [header’s provenance and introduction](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/thirdparty/crmfbreg.h:1) identify it as imported from NetBSD and as SGI-CRM/O2 framebuffer register definitions. Its placement under `CRIME_DE_MODE_*` supplies register context, but there is no accompanying description of YCRCB’s layout, conversion, or use.
+  
+  Across the three permitted files, the YCRCB symbol occurs exactly once—its definition—with zero other references. A tree-wide usage claim cannot be established under the three-file restriction. The available evidence establishes a named, unimplemented format; it does not establish that nobody uses it.
+  
+  Q5: The closest precedent is the earlier [TLB-mode default in `horrible_getputpixel()`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:258). It uses `SGIRE_W_BADMODE` to announce the unsupported mode once per device instance, leaves `*color` unchanged, and returns before pixel memory access. Because the helper returns no success indication, that return does not itself cancel a caller’s subsequent PUT. Another close precedent is [`draw_primitive()`’s unsupported-operation default](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:1104): `SGIRE_W_PRIM_OP` latches its diagnostic, then `break` leads to the function’s end without drawing.
+  
+  The RE access handler also has six width-decline sites: TLB_A at line 457, TLB_B at 496, TLB_C at 520, TEX at 544, LINEAR_A at 629, and LINEAR_B at 742. Each has its own warning bit. Unsupported [TEX reads](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:581) use `SGIRE_W_TEX_RD`; [unmatched addresses](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:779) use separate write/read warning bits. These declines leave writes unapplied and deliver zero for reads through the common `memory_writemax64` tail, returning 1. The [DE width decline](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:1179) likewise announces once, but uses `goto de_declined` to skip both register dispatch and drawing before answering the access.
+  
+  The file also contains different idioms. The LINE and RECTANGLE raster-operation defaults, at lines 974 and 1040, announce once per low-byte operation value and continue drawing. Unknown DE/MTE register defaults, at 1390 and 1762, diagnose and continue. The unsupported MTE destination-TLB default at 1644 diagnoses and finishes the function. MTE stippling, unsupported source selection, linear copy, linear depth, and linear bytemask checks explicitly call `exit(1)` after diagnostics, at 1463, 1471, 1547, 1552, and 1563. Thus the file has substantial decline-and-continue precedent, but its handling is not uniform.
+  
+  Q6: **Neither colour default is globally unreachable.** The drawing-engine register producer preserves the entire format nibble. The helper’s preceding coordinate, TLB, and tile-validity checks can reject individual operations, but none restricts that nibble to the four implemented formats. Initialization clears the registers, making CI the initial format; subsequent register writes remove that initial-state restriction. [Machine initialization](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/machines/machine_sgi.c:499) installs the RE and GBE for the O2.
+  
+  There is, however, a constrained producer: [`do_mte_transfer()`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:1498) constructs helper modes from TLB and masked depth fields, initially leaving the format nibble zero, then adds RGBA only when depth equals 32 bits. Walking its depth selectors gives 0→8 bits→CI, 1→16 bits→CI, 2→32 bits→RGBA, and 3→64 bits→CI. Its distinct format set therefore contains exactly **two values: `0x00` and `0x20`**, both handled. Neither colour default is reachable through that MTE caller; the drawing-engine caller supplies the broader domain.
+  tokens used
+  80,170

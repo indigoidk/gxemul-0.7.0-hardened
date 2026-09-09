@@ -1,0 +1,28 @@
+I'll start from the actual `lca_pci_conf` handler and the 14-row detector, then hunt one smallest realistic edit the table cannot see.The probe and `bus_pci` channels next — those decide which edits the 14 rows can actually see.**M10_regconj: `if (type1 && bus == 0)` → `if (type1 && bus == 0 && reg == 0)` — predicted 14/14; re-opens the 0:7:0 misrouting at every non-zero register.**
+
+That is the same extra-conjunct shape as M4a/M4b, on the one predicate the refusal body already tests and no row holds false.
+
+```diff
+@@
+ 	func = (tag >> 8) & 7;
+ 
+-	if (type1 && bus == 0) {		/*  #515  */
++	if (type1 && bus == 0 && reg == 0) {	/*  #515  */
+ 		odata = reg == 0? (uint64_t) -1 : 0;
+ 	} else {
+ 		bus_pci_setaddr(cpu, d->pci_data, bus, dev, func, reg);
+```
+
+One token. A maintainer looking at the ternary and at `bus_pci_data_access`'s `dev == NULL` arm will hoist `reg == 0` into the guard: “the special case is only the ID register; other registers already return 0 for a missing device.” On an empty slot that is even true for reads. On `i82378zb` it is not.
+
+Why every row stays green: every access in the 14-row set is register 0 (and 8 bytes). The conjunct is a no-op on that set. Type-0 is untouched (`type1` is false). Type-1 bus 0 at reg 0 is still refused, so `t1 rdval` still sees all-ones, `t1 alias` still prints nothing, and `t1 dev7rd` / `t1 dev7wr` still miss the real device. Type-1 bus 1 is still forwarded, so `t1 anchor` still prints `bus 1 func 2 device 3 ]`.
+
+What it re-opens: a type-1 cycle with bus field 0, **register 4**, device 7, function 0. The fix's own comment names that destination. At register 0 the table already pins it (`t1 dev7rd` / `t1 dev7wr`). At register 4 the extra conjunct takes the `else` arm, calls `bus_pci_setaddr(..., 0, 7, 0, 4)`, and reads or writes the ISA bridge's command/status register. That is the misrouting the refusal exists to prevent, one dword up from the cell M2/M4 used.
+
+This is not the “zero elsewhere” half already disclosed as clause (e). That disclosure is a **value** gap on the refusal arm (`odata = -1` for every register). Empty-slot forwarding of a non-zero register still returns 0, so a row at 0:0:0 register 4 cannot see this mutant — the same empty-slot blindness that hid M4b behind `t1 alias`. The cell that distinguishes refusal from forward is again 0:7:0, just not at register 0.
+
+`func` and `len` are real holes and I am not spending the shot on them. `& 7` → `& 3` (or `& 6`, or `& 2`) preserves every sampled function ({0, 2}) and would also go 14/14, but the registered device is function 0, which those masks keep, so they never deliver an access onto `i82378zb`. `&& len == 8` would also sweep — every row is `ldq`/`stq` — but the body never tests `len`, so that conjunct is not a hoist, just an invention. `reg == 0` is already in the arm; lifting it is the edit someone writes while cleaning up.
+
+Not proposing: `bus = 1` in the type-1 branch (collapses every non-zero bus onto the one `t1 anchor` samples). That also sweeps, and it is the original cycle-type/bus conflation without the `exit(1)`. It does not hit 0:7:0 — those tags get bus 1, which is empty — so it is a decode collapse, not a reopening of the misrouting. A later bus-2 tuple row would catch it; this one does not need that row to be a defect.
+
+If M10_regconj comes back 14/14, the row it wants is a type-1 access at 0:7:0 **register 4**, both directions, with the same anti-wants as `t1 dev7rd` / `t1 dev7wr` (real config data / `device 7, function 0 (i82378zb)`). A value-0 row at an empty slot will not do.

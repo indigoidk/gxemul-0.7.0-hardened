@@ -89,7 +89,7 @@ void lca_interrupt_deassert(struct interrupt *interrupt)
 DEVICE_ACCESS(lca_pci_conf)
 {
 	uint64_t idata = 0, odata = 0;
-	int tag, bus, dev, func, reg;
+	int tag, type1, bus, dev, func, reg;	/*  #515  */
 	struct lca_data *d = (struct lca_data *) extra;
 
 	if (writeflag == MEM_WRITE)
@@ -118,9 +118,25 @@ DEVICE_ACCESS(lca_pci_conf)
 	 *	tag = (bus << 16) | (device << 11) | (function << 8)
 	 */
 	/*  printf("tag = 0x%x\n", (int)tag);  */
-	bus = d->ioc_conf & 1;
 
-	if (bus == 0) {
+	/*  #515: `bus' used to be BOTH the configuration CYCLE TYPE and the
+	    DESTINATION BUS, and conflating them is the whole defect.  IOC_CONF bit 0
+	    selects the cycle type only -- 21066/21066A HRM S6.2.9: "PCI address bits
+	    ad<1:0> come directly from configuration cycle type register (IOC_CONF,
+	    Section 6.4.2) bits <1:0>" -- and it does NOT carry a bus number.  The
+	    destination bus of a type-1 cycle lives in the ADDRESS, per the PCI Local
+	    Bus specification's type-1 layout (bus 23..16, dev 15..11, fn 10..8,
+	    reg 7..2), which S6.2.9 defers to explicitly.
+
+	    Before this, a guest that merely SET bit 0 -- a value the CONF guard
+	    ACCEPTS -- made any subsequent access in this window reach
+	    `fatal("TODO. Non-zero bus."); exit(1)'.  MEASURED: two ordinary guest
+	    accesses, nothing refused anywhere on the path
+	    (regress/lca_confbus_probe.py, 3/4 pre-fix; artifacts/lcaconfbus1kill/).  */
+	type1 = d->ioc_conf & 1;	/*  #515  */
+	bus = 0;			/*  #515  */
+
+	if (!type1) {			/*  #515  */
 		/*  #511: was `0x800 << dev'.  `0x800' is a plain int (2^11) and `dev'
 		    reaches 20, so the last iteration evaluates 2^31 -- a SIGNED
 		    OVERFLOW, undefined by C99 6.5.7p4, not merely
@@ -163,17 +179,32 @@ DEVICE_ACCESS(lca_pci_conf)
 			dev = 0;
 		}
 	} else {
-		fatal("TODO. Non-zero bus.\n");
-		exit(1);
+		/*  #515: a type-1 cycle carries its destination in the address.  */
+		bus = (tag >> 16) & 0xff;	/*  #515  */
+		dev = (tag >> 11) & 0x1f;	/*  #515  */
 	}
 
 	func = (tag >> 8) & 7;
 	/*  printf("bus=%i dev=%i func=%i reg=%i\n", bus,dev,func,reg);  */
 
-	/*  Pass PCI accesses onto bus_pci:  */
-	bus_pci_setaddr(cpu, d->pci_data, bus, dev, func, reg);
-	bus_pci_data_access(cpu, d->pci_data, writeflag == MEM_READ?
-	    &odata : &idata, len, writeflag);
+	/*  #515: a type-1 cycle whose bus field is zero selects NOTHING.  Type-1 is
+	    how a bridge is asked to reach a bus BEHIND it; the primary bus is reached
+	    with type-0 cycles, whose IDSEL encoding is decoded above.  Forwarding this
+	    case would set cur_bus = 0 and hand the access to whichever primary-bus
+	    device matched -- `i82378zb' is registered at 0:7:0 by DEVINIT below -- so
+	    simply decoding `bus' and stopping there would replace a host kill with a
+	    NEW MISROUTING.  Refuse it instead, matching `bus_pci_data_access''s own
+	    empty-slot contract (bus_pci.c, the `dev == NULL' arm: all-ones at register
+	    0, zero elsewhere) so the guest sees the ordinary "nothing there" answer.
+	    Writes are discarded, which leaves backend state untouched.  */
+	if (type1 && bus == 0) {		/*  #515  */
+		odata = reg == 0? (uint64_t) -1 : 0;
+	} else {
+		/*  Pass PCI accesses onto bus_pci:  */
+		bus_pci_setaddr(cpu, d->pci_data, bus, dev, func, reg);
+		bus_pci_data_access(cpu, d->pci_data, writeflag == MEM_READ?
+		    &odata : &idata, len, writeflag);
+	}
 
 	if (writeflag == MEM_READ)
 		memory_writemax64(cpu, data, len, odata);

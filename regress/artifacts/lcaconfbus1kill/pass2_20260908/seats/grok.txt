@@ -1,0 +1,137 @@
+I'll verify the brief against `GXEMUL-SEC/src/` rather than ratify it, starting with HEAD, the checkpoint, and the live handler.Shell is blocked in this seat, so I’ll use file reads and greps against the fork tree.The handler matches the inlined diff. Next I’ll re-derive the PCI contract, the probe oracles, and the IOC_CONF path from the fork sources.The live probe already has an eleventh row the brief does not list. I’ll check the measurement logs, `bus_pci` width handling, and the IOC_CONF guard against that.The pre-fix log still scores `t1 alias` green, and the IOC_CONF comment still describes the old conflation. I’ll verify those against the manual, PCIINIT, and pass-1 findings.A pre-table block already names mutants the brief’s 10-row score cannot see. I’ll read that next.**VERDICT: RATIFY THE FIX, DO NOT SHIP THE DETECTOR.** The product diff is member 7 (type-1 decode) plus member 2 (type-1/bus-0 refuse), common tail intact, extracts matching `bus_pci_decompose_1`. The 10-row score the brief cites is a wrong record of its own log, and the live 11-row probe still does not pin the misrouting the new comment names. One retargeted row kills that hole; the IOC_CONF comment is an L4 wrong record in the same file.
+
+I read `GXEMUL-SEC/src/` (not `./src/`). Line numbers match the inlined function. I did not run a gate or rebuild.
+
+---
+
+## Premises I checked rather than ratified
+
+| claim | result |
+|---|---|
+| P1 empty-slot contract | **Holds.** `bus_pci.c` `dev == NULL` arm: read `cur_reg == 0` → `(uint64_t)-1`, else 0; write prints the diagnostic. `fatal()` in `debugmsg.c` has no early-out and no `exit`. |
+| P2 `bus_pci_setaddr` silent | **Holds.** NULL check + four assignments. No other print at any of the 10 `setaddr` sites. |
+| P3 one PCI device | **Holds.** `DEVINIT(lca)` one `bus_pci_add(..., 0, 7, 0, "i82378zb")`. LCA is `ST_ALPHABOOK1` only. |
+| P4 ID `0x304848086` | **Holds, and I re-derived the high dword.** `PCI_ID_CODE(0x8086, 0x0484) = 0x04848086`. Command `0x00000003` is **not** from `PCIINIT(i82378zb)` — that init never writes offset 4. It comes from `bus_pci_add`'s default `PCI_COMMAND_IO_ENABLE \| PCI_COMMAND_MEM_ENABLE`. 8-byte LE assemble of those two dwords is `0x0000000304848086`. |
+| P5 decode | **Holds.** Walked: bus 1 / dev 3 / func 2 / reg 0 → tag `0x11a00` → `relative_addr = 0x234000`. Type-0 dev 7 → tag `0x40000` → `0x800000`. Alias → 0. Window is `0x20000000`; all three fit. |
+| P6 HRM | **Holds, narrowly as stated.** `_scratchpad/21066_66a_hrm.txt:9216-9218` and `:10227-10254`: IOC_CONF supplies PCI `ad<1:0>` only. Header agrees: `LCA_IOC_CONF /* Configuration Cycle Type */`. `:9481-9489` is master-abort → arbitrary data + instruction exception + interrupt + STAT0 log. |
+| Brief table: `t1 alias` **FAIL** pre-fix | **FALSE.** `lca_pre.raw` line 10: `t1 alias  refused  refused  … ok`. |
+| Brief: alias repair done before the cited 6/10 | **FALSE of that artifact.** Pre-fix `t1 alive` is `dead` and `t1 alias` is still `refused`. The `alive2` binding is in today's probe and was **not** the instrument that produced 6/10. |
+| Brief Q1: 10 rows, two type-1 reads unrowed | **Stale.** Live `lca_confbus_probe.py` already has `t1 rdval` (11 rows). The cited 10/10 does not contain it (`LCACONFBUS_T1READ` is absent from both raws). |
+| Author's 8-cell product includes (type-0, bus ≠ 0) | **Unreachable.** Type-0 does `bus = 0` and never overwrites it. |
+
+---
+
+## Q1 — DEPENDS-ON closure; you aimed the new row at the cell that cannot discriminate
+
+Reachable product, walking the post-fix function (not the 8-cell grid as drawn):
+
+**Guard predicates the diff adds:** `!type1` and `type1 && bus == 0`.
+
+**Type-0 forces `bus = 0`.** Cells (type-0, bus ≠ 0, ·) do not exist.
+
+| cell | rowed by | notes |
+|---|---|---|
+| type-0, bus=0, read, empty (PCI_CONF+0) | `bus ctl` / `bus ctlsig` / `bus kill` | kill is the old `exit(1)` |
+| type-0, bus=0, read, **dev 7** | `t0 alive` / `t0 real` / `t0 accept` | accept side of the old guard |
+| type-0, bus=0, write | **unrowed** | not in this diff's (d) list |
+| type-1, bus ≠ 0, write | `t1 alive` / `t1 anchor` | forwarding + absolute tuple |
+| type-1, bus ≠ 0, read | **unrowed** | you are right: empty-slot read at reg 0 is all-ones, same as the type-0 control. No guest-visible channel. Disclose, clause (e). The **write** already pins that this path calls `bus_pci`. |
+| type-1, bus=0, write, **dev 0** | `t1 alias` | absence of `bus 0 func 0 device 0` |
+| type-1, bus=0, read, **dev 0**, reg 0 | `t1 rdval` (live probe only) | all-ones |
+| type-1, bus=0, ·, **dev 7** | **UNROWED** | this is the comment's own misrouting |
+| type-1, bus=0, read, reg ≠ 0 | **unrowed** | PRETABLE already disclosed the “zero elsewhere” half as (e) |
+
+The two type-1 **dev-0 / reg-0** reads are **not** indistinguishable from the type-0 control (different arm; `odata = 0` would sweep the 10-row set). They **are** indistinguishable from **forwarding to empty 0:0:0**, which is also all-ones at register 0.
+
+Walk the (d) mutant the carrier names by example — qualify the new guard:
+
+```c
+if (type1 && bus == 0 && writeflag == MEM_WRITE)   /* M4_condwrite */
+```
+
+- `t1 alias` is a **write** at 0:0:0 → still refused → still green.
+- `t1 rdval` is a **read** at 0:0:0 → forwarded to empty 0:0:0 → still all-ones → still green.
+- `t1 anchor` is type-1 bus 1 → unchanged.
+
+**Clean sweep of even the 11-row probe.** PRETABLE's CHANNEL line that says `t1 alias` kills `M4_condwrite` via presence of `bus 0 func 0 device 0` is false at writing time: under that mutant the write never reaches `bus_pci`, so the string stays absent. That is the CHANNEL check catching its own table.
+
+The discriminating address is the one the new comment already names. Enumerated:
+
+```
+tag  = (0 << 16) | (7 << 11) | (0 << 8) = 0x3800
+relative_addr = 0x3800 << 5             = 0x70000
+reg = 0, bus = 0, dev = 7, func = 0
+```
+
+- **Refuse:** all-ones (empty-slot signature).
+- **Forward:** lookup 0:7:0 hits `i82378zb` → `0x304848086`.
+
+That single `ldq` is a presence oracle. It kills M4 (read forwarded), kills a dropped refusal that lands on the SIO (no empty-slot print, so today's `t1 alias` would go **green**), and does not couple to a `fatal()` string. It is also the CLAIM→ROW for *“hand the access to whichever primary-bus device matched”* — PRETABLE mapped that sentence onto `t1 alias` at **0:0:0**, which never selects device 7.
+
+`t1 rdval` as written is the right *cell* (type-1, bus=0, read) aimed at the wrong *point* (empty 0:0:0). Retarget it to `LCA_PCI_CONF+0x70000` (or add `t1 nosio` and keep `t1 rdval` for M2_nullval). That is L1 construction, in-round.
+
+`(type-1, bus ≠ 0, read)` I agree is unobservable at reg 0. Disclose it; do not invent a row whose got and want are the same all-ones.
+
+---
+
+## Q2 — Refusal is the right member; disclose two things, do not announce
+
+**(a) Silence, not `(once)`.** Type-1 cycles are how a guest scans behind a host bridge. A latched announce on bus-field-0 would fire on the first such probe and then lie in the log forever. Empty-slot **reads** in `bus_pci` are already silent. Match that. Hardware does not print a host diagnostic.
+
+**(b) The write-half mismatch is real and the comment overclaims.** Empty-slot **writes** print; the refusal discards. That is sibling-parity with `bus_pci`'s `dev == NULL` write arm, not with `dev >= 21` (PRETABLE compared the wrong sibling for Q2(b) — that one is also silent, so of course it “matches”). Defensible: the `bus_pci` write `fatal()` is itself an emulator-ism, unlatched, guest-drivable. Do not add a second one. **Do** stop saying the refusal matches the empty-slot contract *wholesale*; it matches the read half only.
+
+**(c) Yes, disclose.** FAULT is not available on Alpha (`memory_rw` bus-error delivery is MIPS/M88K). HRM §6.2.18 is not “return all-ones”. It is arbitrary data + instruction exception + internal interrupt + STAT0 CODE=1. All-ones is `bus_pci`'s empty-slot convention, already used by the type-0 path this machine actually boots through. Shipping the refuse arm on that convention is right; calling it the hardware contract is not. One CHANGELOG/header sentence.
+
+Member 7 for the old `else { fatal; exit(1); }` is correct: no decode, no value being refused. Member 4 does not apply. UniNorth/SH4 `PCIPAR` forward type-1 including bus 0 into the same lookup — that is the emulator's logical PCI model, and it is exactly the misrouting this comment is preventing. Do not copy them.
+
+---
+
+## Q3 — No third row on a fictitious bus-1 device. The registered device you can already reach is unrowed.
+
+“No such state is constructible on this machine” is an acceptable disclosure **for a device on bus 1.** Adding one to witness type-1 service would be laundering for a *witness*; for a *detector* it is legal and still unnecessary.
+
+`t1 anchor` already proves `setaddr` was called with `(bus=1, dev=3, func=2)`. `bus_pci_data_access` matches on those three fields. A device registered at that tuple would be found by the same call. The present-device data path is the same function `t0 accept` already exercises.
+
+The accept row that **is** owed, and is constructible without adding hardware, is type-1 encoding of the device that **does** exist: 0:7:0 at `relative_addr = 0x70000`. That is Q1's retarget, not a new machine topology. De-escalation's type-0 accept side is `t0 accept` (pin measured on the pre-fix binary, then locked — correct order, even though the pre-fix FAIL is `PIN_UNSET`, i.e. apparatus, not a broken type-0 path).
+
+---
+
+## Q4 — Coupling is acceptable for the **anchor**. It is not acceptable as the **alias** oracle.
+
+P2 holds: `bus_pci_setaddr` prints nothing. Empty-slot **read** is silent. Found-device `debug()` lines require a device on bus 1, which this machine does not have. For `t1 anchor`'s tuple, the write `fatal()` in `bus_pci.c` is the only absolute-position channel that exists today.
+
+A reword makes `t1 anchor` **red** (false fail — conservative). The same reword makes `t1 alias` **green while forwarding** (false pass), because alias is still an absence oracle. That is the bad half.
+
+Do not look for a second string. Split the jobs:
+
+- Keep `t1 anchor` on `bus 1 func 2 device 3`. Disclose the coupling. A red row on a reword is a broken detector, not a silent miss.
+- Move the alias proof off that string and onto the SIO ID vs all-ones at `+0x70000`. Guest-visible, no foreign-file literal.
+
+The `alive2` binding: **necessary and not sufficient.** It repairs the death-before-E vacuity the confession named (unrun vs refused now render differently). It does **not** prove [E] was serviced. Remaining false-pass shapes: host alive but [E] never executed; [E] serviced as a write to a **present** device (no `non-existant` print — this is the SIO case); diagnostic reworded. The cited `lca_pre.raw` still has the unrepaired green, so clause (a) has not been shown for the bound form.
+
+---
+
+## Fix nits (product code)
+
+The handler itself: no early `return`; `memory_writemax64` + `return 1` still run. Type-1 `bus`/`dev` extracts are the same shifts as `bus_pci_decompose_1` (do **not** call that helper on `tag` — it would set `reg = tag & 0xff == 0` and clobber the sparse-space `reg` already computed). `tag` is a 24-bit quantity inside a 0x20000000 window, so the signed `>>` does not fire.
+
+**L4, same file, same conflation this round exists to remove:**
+
+```c
+/*  Only bit 0 is implemented so far, the PCI bus 0 vs
+    bus non-0 selection bit.  */
+```
+
+in `DEVICE_ACCESS(lca_ioc)`, `LCA_IOC_CONF`. The header and the HRM say cycle type. Leaving that comment next to the new `lca_pci_conf` comment is a wrong record.
+
+---
+
+## What I would require before a green gate
+
+1. Retarget (or add) a type-1 bus-0 **dev 7** read at `LCA_PCI_CONF+0x70000`, want `0xffffffffffffffff`, fail on `0x304848086`. That is the (d) cell and the comment's claim.
+2. Re-measure pre-fix with the `alive2`-bound `t1 alias` (must be `died-before-E`, not `refused`) and with `t1 rdval` in the RESULT line. Do not cite 6/10 or 10/10 for an 11-row instrument.
+3. Correct the brief table / PRETABLE CHANNEL line for `M4_condwrite`.
+4. Rewrite the IOC_CONF comment.
+5. Disclose: all-ones ≠ HRM master-abort; refusal matches empty-slot **reads** only; (type-1, bus ≠ 0, read) unrowed.
+
+The kill of `exit(1)` on an accepted `ioc_conf = 1` is the right fix. The detector is not yet a detector of that fix's repair.

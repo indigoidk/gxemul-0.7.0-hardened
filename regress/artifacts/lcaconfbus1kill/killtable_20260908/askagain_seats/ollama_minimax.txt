@@ -1,0 +1,39 @@
+**VERDICT:** Replace `odata = reg == 0? (uint64_t) -1 : 0;` with `odata = (uint64_t) -1;` — this collapses the refusal arm's synthesised response to all-ones at every register, which is not exercised by any of the 14 rows (every row reads reg 0), so every row stays green. It introduces a new defect: the `reg != 0` branch no longer returns 0, so the refusal-arm response is now indistinguishable from a valid empty PCI slot at every register, not just at the vendor-ID register. A guest probing past register 0 to distinguish "error" from "valid empty device" can no longer do so.
+
+```diff
+--- a/src/devices/dev_lca.c
++++ b/src/devices/dev_lca.c
+@@ ... @@
+ 	if (type1 && bus == 0) {		/*  #515  */
+-		odata = reg == 0? (uint64_t) -1 : 0;
++		odata = (uint64_t) -1;	/*  #515  */
+ 	} else {
+```
+
+---
+
+**Why this escapes (READ from the packet, every row traced):**
+
+Every one of the 14 rows uses reg 0. The ternary's `reg == 0` branch is the only one any row touches; the `reg != 0` branch is dead as far as the kill table is concerned.
+
+- `bus ctl`, `bus ctlsig`, `bus kill`, `bus attrib`, `t0 write`, `t0 alive`, `t0 real`, `t0 accept`: all type0 (or the empty type0 fallback at window+0). They never enter the refusal arm. Unaffected. **REASONED from the diff's `if (type1 && bus == 0)`.**
+- `t1 alive`, `t1 anchor`: type1 with bus != 0. Same — not in the refusal arm. Unaffected. **REASONED.**
+- `t1 alias`, `t1 dev7wr`: type1 writes at bus 0. Enter the refusal arm, but it's a write, so `odata` is never read and `bus_pci_data_access` is never called either way. No print is produced. The rows check for the *absence* of a print (and `t1 alias` is checkpointed by the later anchor). Unaffected. **REASONED.**
+- `t1 rdval`: type1 read at bus 0. Refusal arm returns `-1`. Row expects `0xffffffffffffffff`. Unchanged. **REASONED.**
+- `t1 dev7rd`: type1 read at bus 0 / dev 7. Refusal arm returns `-1`. Row expects all-ones and explicitly NOT `0x304848086`. The real device is never touched. Unchanged. **REASONED.**
+
+**Why this is a plausible maintainer edit:** A future maintainer, looking at `odata = reg == 0? -1 : 0` in the refusal arm, sees no test coverage for the `reg != 0` half and "simplifies" it to a constant. It is the natural simplification of an expression whose only tested input is the constant branch.
+
+**Why it introduces a new defect rather than being harmless:** The fix's `-1 : 0` split was deliberate — `-1` at register 0 is the PCI "empty slot" vendor-ID signature, while `0` at any other register signals "this is not a device, do not probe further." Collapsing to `-1` for every register makes the refusal-arm response look like a valid empty slot at every offset. A guest that probes multiple registers to disambiguate "error / refused" from "valid device present but empty" loses that signal.
+
+---
+
+**Dismissing the two offered directions:**
+
+- **`func`.** I cannot construct an edit to `func` that the anchor cannot see. The anchor is the *only* row whose printed func value is asserted (it asserts `func 2`); every other row uses func 0. Any shift/mask change that perturbs the extraction of 0 also perturbs the extraction of 2 (e.g. `>> 7`, `>> 9`, `& 3`, `& 0xf`, XOR, +1 mod 8 all turn the anchor's `2` into `1`/`4`/`0`/etc.). A non-linear transform that fixes `f(2)=2, f(0)≠0` exists (`f(x)=2x+6 mod 8`) but is not a realistic maintainer edit. **No escape here.**
+
+- **`len`.** Every row that reaches `bus_pci_data_access` depends on `len` being correct to produce the expected 64-bit return values (e.g. `t0 alive`/`t0 real`/`t0 accept` expect exactly `0x304848086` from the i82378zb at bus 0 / dev 7 / func 0; any mutation of `len` before that call risks returning a truncated or mis-sized value). **No clean escape here either.**
+
+The `reg != 0` half of the ternary is the one place in the fix that is provably uncovered by the table, and collapsing it is the smallest realistic edit that exploits it.
+
+**One thing I cannot check from the packet:** whether the value `0` at `reg != 0` in the refusal arm is load-bearing for any guest the project cares about (i.e. whether this is a *real* defect or merely a cosmetic deviation from the spec'd `-1 : 0`). The kill table cannot tell us — that is the whole point of the table being clean. If the panel wants certainty about guest-visible impact, the only way to get it is to build, run a guest that probes past register 0 in this configuration, and observe. Naming this is what the packet asks for; I name `odata = -1`.

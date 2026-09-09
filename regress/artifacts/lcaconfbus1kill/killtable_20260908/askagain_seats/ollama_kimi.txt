@@ -1,0 +1,21 @@
+**VERDICT: `func = (tag >> 8) & 7;` → `func = (tag >> 8) & 3;` — all 14 rows stay green because the table's only func probe is anchor's func 2 (binary 010), which never exercises the top bit of the field; the edit silently aliases PCI functions 4–7 onto 0–3, so a type-0 read of dev 7 func 4 returns the real i82378zb ID instead of the empty slot.**
+
+```diff
+@@ DEVICE_ACCESS(lca_pci_conf), src/devices/dev_lca.c @@
+ 		    bus = (tag >> 16) & 0xff;	/*  #515  */
+ 		    dev = (tag >> 11) & 0x1f;	/*  #515  */
+ 	}
+
+-	func = (tag >> 8) & 7;
++	func = (tag >> 8) & 3;
+
+ 	if (type1 && bus == 0) {		/*  #515  */
+```
+
+**Why it escapes — row by row (READ):** The packet states every row uses func 0 except `t1 anchor`, which uses func 2. `2 & 3 == 2`; `0 & 3 == 0`. Concretely: `t1 anchor` still prints `bus 1 func 2 device 3 ]`; `t1 alias`/`rdval`/`dev7rd`/`dev7wr` all short-circuit in the `type1 && bus == 0` refusal arm where func is never consumed; `t0 write` still prints `bus 0 func 0 device 5 ]`; `t0 real/accept` still read func 0 and return `0x304848086`; nothing in the edit can kill the host, so `bus kill`/`attrib`/`t1 alive`/`bus ctl` are untouched. 14/14, all derivable from the inlined rows.
+
+**Why it is a real defect, not a cosmetic one (REASONED):** The packet states exactly one device is registered — i82378zb at bus 0, device 7, **func 0** — and that absent devices return all-ones. With the narrowed mask, a type-0 config cycle aimed at dev 7 **func 4** computes func `4 & 3 = 0`, matches the registered device, and returns `0x304848086` where hardware (and the unmutated code) must return all-ones. That is a phantom-multifunction aliasing of exactly the family this table is built to police — `t1 dev7rd` guards precisely this "real ID vs empty slot" distinction, but only on the type-1 path where the refusal arm makes func irrelevant, and `t0 real` checks func 0 only. The hole sits in the gap between those two green rows. On the type-1 non-zero-bus path, writes to func ≥ 4 also mis-target func & 3 at the host PCI layer.
+
+**Why this is the smallest realistic edit (REASONED):** one literal, same mutation family as the already-measured M6–M8 extraction tweaks, but aimed at the one extraction whose *probed* value space ({0, 2}) is narrower than the field (0–7). M8 (`& 0x00`) was caught instantly because it collapsed the probed value; `& 3` is the narrow-but-not-too-narrow mask a maintainer writes when they "know" only four functions are wired — and binary 010 survives it. The sibling `dev = (tag >> 11) & 0x1f;` → `& 0x0f` also escapes (anchor's dev 3 survives), but its only visible effect is a wrong number in a non-existent-device diagnostic — strictly weaker than this one. I passed on the `reg`/`len` hint: the refusal arm's `reg != 0` half can be mutated green but yields no meaningful defect, and any `len` narrowing is caught by `t0 real` because `0x304848086` needs the full 8-byte access.
+
+**The single fact that would settle severity — named, not run:** one added detector row, `t0 dev7 func4rd` — a type-0 read of dev 7, func 4, asserting all-ones. On the base fix it passes; on this variant it returns `0x304848086` and fails. Equivalently, moving the anchor's func from 2 to any value with bit 2 set (4–7) pins the extraction forever.

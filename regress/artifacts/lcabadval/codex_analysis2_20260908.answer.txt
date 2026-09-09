@@ -1,0 +1,68 @@
+codex_answer: regress/artifacts/lcabadval/codex_analysis2_20260908.err
+  stream bytes   183579
+  prose blocks   7
+  refusal marker 0 occurrence(s)
+  verdict blocks 1
+
+  --------------------------------------------------------------------
+  I’ll read the three source files and the permitted manual, enumerate the address mappings, and check each termination path against its producer and documented behavior.
+
+  --------------------------------------------------------------------
+  The source has one shared `default:` arm for reads and writes. It registers a 512 MiB IOC region and applies no shift or mask before the switch. The permitted manual is missing at the supplied path, so I’m continuing the source analysis while checking that gap.
+
+  --------------------------------------------------------------------
+  The file `_scratchpad/21066_66a_hrm.txt` is missing from this workspace. Is the same manual available at another local path?
+
+  --------------------------------------------------------------------
+  I found the permitted manual one directory above the workspace and can use it without expanding the file scope. The byte-offset enumeration found ten named cases and 536,870,902 offsets routed to the shared default; I’ll distinguish that coverage count from hardware-valid register accesses.
+
+  --------------------------------------------------------------------
+  The manual documents operations that the handler rejects, including status access, reset control, parity control, and TLB-tag writes. It also specifies that reserved fields marked `X` are ignored on writes. For the ISA guard, the producer matters: its lane value is only 0–3, so the manual’s ordinary longword and quadword accesses cannot satisfy `ofs > len`.
+
+  --------------------------------------------------------------------
+  The remaining distinction is between unsupported register operations and values the hardware explicitly ignores. I also found conflicting TLB-tag addresses in the manual text; both listed blocks fall inside the registered IOC region and reach the shared default. I’ll preserve that uncertainty in the answer.
+
+  --------------------------------------------------------------------
+  VERDICT: The claimed default-arm asymmetry is false: `lca_ioc` has one shared terminating `default:`. Its refusals nevertheless include documented hardware operations and writes that hardware explicitly ignores.
+  
+  Q1. The ten recognized relative offsets are `0x000` (`BASE`, also `HAE`), `0x020` (`CONF`), `0x080` (`TBIA`), `0x0a0` (`TB_ENA`), `0x100` (`W_BASE0`), `0x120` (`W_BASE1`), `0x140` (`W_MASK0`), `0x160` (`W_MASK1`), `0x180` (`W_T_BASE0`), and `0x1a0` (`W_T_BASE1`). “Recognized” is more accurate than “implemented”: several cases only ignore or store values. These follow directly from the [switch](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:254) and [register definitions](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/thirdparty/alpha_lcareg.h:44).
+  
+  The [registration](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:432) starts at `0x180000000` and has length `0x20000000`: exactly 536,870,912 bytes, or 512 MiB, ending at `0x19fffffff`. I enumerated every integer relative offset from `0x00000000` through `0x1fffffff`; ten matched cases and **536,870,902 reached the default classification**. Equivalently, `0x20000000 − 10 = 0x1ffffff6`.
+  
+  That is a count of registered **byte offsets**, with a necessary reachability qualification. This handler adds the base without shifting, masking, or checking alignment. A supplied unaligned offset therefore reaches default unchanged. The permitted files do not contain the CPU or memory dispatcher that produces callback arguments, so they cannot establish that every such offset is actually delivered by a guest instruction. Enumerating only quadword-aligned offsets still gives **67,108,854** default offsets. The manual requires quadword IOC accesses; unaligned delivery is unnecessary to establish ordinary-access failures. ([§6.4](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/21066_66a_hrm.txt:10175))
+  
+  Q2. There are **ten active `exit(1)` calls**: two interrupt callbacks, one ISA guard, six IOC value guards, and the shared IOC default.
+  
+  The [interrupt exits](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:70), at lines 73 and 85, are unconditional upon entry to `lca_interrupt_assert` and `lca_interrupt_deassert`. Neither has a register, address, or data predicate. Initialization installs these callbacks on the ISA interrupt connection. They are stubs for ordinary interrupt operations; the manual documents assertion and removal of level-sensitive interrupt requests. ([Interrupt description](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/21066_66a_hrm.txt:1580))
+  
+  The [ISA exit](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:216), at line 227, requires `ofs > len`, where the producer is exactly `(relative_addr >> 5) & 3`. Walking that producer yields `ofs = 0, 1, 2, 3`. For positive lengths, `len = 1` rejects lanes 2 and 3; `len = 2` rejects lane 3; lengths 3, 4, and 8 reject none. Equality passes. Crucially, a sparse PCI byte transfer does **not** imply a one-byte CPU callback: the manual describes longword/quadword CPU accesses with the smaller transfer encoded in the address. Consequently, this exit requires an unusual short callback relative to that documented access mechanism. Whether another emulator path produces one cannot be established from the permitted files. ([Sparse transfers](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/21066_66a_hrm.txt:8900))
+  
+  The six IOC exits are write-value dependent. Enumerating their complete accepted sets: `CONF` accepts `0` and `1` (exit at line 279); `TB_ENA` accepts `0` and `0x80` (299); `W_BASE0` accepts `0` and `0x300800000` (314); `W_MASK0` accepts only `0x700000` (329); `W_BASE1` accepts only `0x240000000` (353); and `W_MASK1` accepts only `0x3ff00000` (368). Other values terminate. Reads at these offsets bypass these guards. Each write stores `idata` before checking it. Ordinary quadword writes can encounter these restrictions; no unusual alignment or transfer length is necessary. ([Value guards](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:260))
+  
+  The tenth exit, at [line 388](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:382), follows the shared default. Any read or write delivered at an unrecognized offset takes it, independently of the written value. Ordinary accesses to documented missing registers suffice. The `exit(1)` at line 178 is commented out; the former nonzero-bus exit also appears only in commentary.
+  
+  Q3. I located the permitted manual in the parent directory’s `_scratchpad`. It documents several different categories of behavior.
+  
+  The shared default catches `STAT0` at `0x040`, whose status fields are readable and whose `ERR` and `LOST` bits are write-one-to-clear; `STAT1` at `0x060`, whose address field is read-only; `SFT_RST` at `0x0c0`, whose write-only bit controls PCI reset; and `PAR_DIS` at `0x0e0`, whose write-only bit controls parity checking. These are documented registers. The manual’s access conventions specify that read-only fields ignore writes, while reads of write-only IOC fields are unpredictable. Thus the documented behavior depends on access direction even though this handler’s default does not. ([Register descriptions](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/21066_66a_hrm.txt:10256), [access conventions](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/21066_66a_hrm.txt:955))
+  
+  The manual also documents eight write-only TLB-tag registers. Section 6.4.12 enumerates their relative offsets as `0x08000000`, `0x08000020`, `0x08000040`, `0x08000060`, `0x08000080`, `0x080000a0`, `0x080000c0`, and `0x080000e0`. All reach default. There is an unresolved inconsistency in the supplied text: [§6.4.12](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/21066_66a_hrm.txt:10675) gives physical base `0x188000000`, while [Table C-3](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/21066_66a_hrm.txt:12701) prints `0x181000000`. Both blocks fall inside this registration and lack cases.
+  
+  For `CONF`, the documented writable field is **bits 1:0**, whose patterns enumerate as `00`, `01`, `10`, and `11`. The model accepts the first two and rejects the latter two. Bit 1 is therefore a documented field, not a reserved bit. That does not establish that every pattern denotes a valid PCI configuration transaction: §6.2.9 separately subjects configuration cycles to PCI encoding restrictions. Bits 63:2 are reserved **type `X`**. ([CONF definition](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/21066_66a_hrm.txt:10226), [configuration restrictions](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/21066_66a_hrm.txt:9224))
+  
+  That `X` designation matters: the manual explicitly specifies **ignored writes** and unpredictable reads. `TB_ENA` has only the documented `TEN` bit 7; all other bits are `X`. Its accepted meaningful settings enumerate as `0` and `0x80`, but its terminating guard rejects writes for setting bits that hardware ignores. The reserved-bit part of the `CONF` guard has the same discrepancy. ([Conventions](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/21066_66a_hrm.txt:985), [TB_ENA](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/21066_66a_hrm.txt:10422))
+  
+  The window-base registers document programmable base addresses, window enable, and direct/scatter-gather selection, subject to alignment and nonoverlap requirements. Their permitted behavior is substantially broader than the hardcoded accepted sets. In particular, the manual expressly requires zero initialization of both window-base registers, while `W_BASE1` rejects zero. ([Window bases](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/21066_66a_hrm.txt:10533), [initialization requirement](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/21066_66a_hrm.txt:10791))
+  
+  The thirteen documented window-mask encodings enumerate as `0x00000000`, `0x00100000`, `0x00300000`, `0x00700000`, `0x00f00000`, `0x01f00000`, `0x03f00000`, `0x07f00000`, `0x0ff00000`, `0x1ff00000`, `0x3ff00000`, `0x7ff00000`, and `0xfff00000`. Each model guard accepts one and rejects the other twelve. The manual expressly calls other mask-field encodings unsupported; reserved `X` bits still have ignored-write semantics. ([Table 6-6](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/21066_66a_hrm.txt:9572))
+  
+  Unlisted addresses have no specified register operation established by these passages. Moreover, Appendix C mentions partial address decoding, so labeling every remaining offset “genuinely undefined” would overstate the evidence. `IOC_IACK_SC`, despite being documented, starts at `0x1a0000000`, outside this handler’s registered interval. ([Address-decoding note](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/21066_66a_hrm.txt:12653), [IACK address](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/21066_66a_hrm.txt:10740))
+  
+  Q4. The defaults are symmetric because they are the same arm. Their address sets differ by **zero offsets**. Writes additionally print their data before the common exit. The handler does have six additional write-value guards, but those are inside named cases and do not establish default-arm asymmetry.
+  
+  Q5. The file already uses several non-terminating treatments. `BASE/HAE` and `TBIA` ignore writes and return zero on reads. Both translated-base cases accept stored values and return them on reads, while leaving translation behavior marked TODO. The accepted TLB-enable and window settings likewise retain state without implementing the corresponding hardware machinery.
+  
+  In [PCI configuration handling](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:173), the no-device-select branch has its fatal/exit pair commented out and substitutes `dev = 0`, then continues ordinary PCI servicing. That can select an actual device zero if present; it does not inherently mean “empty slot.”
+  
+  The current code also separates configuration cycle type from the destination bus encoded in the address. Type-1 accesses with bus zero take a local empty-slot path: after the producer computes `reg = (relative_addr >> 5) & 0xfc`, reads return all ones at register zero and zero elsewhere, and writes are discarded. Other decoded accesses proceed to the backend. This matches the backend’s [absent-device read convention](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/bus_pci.c:109). The full-width diagnostic edits and unsigned-shift edit do not themselves remove any active termination arm.
+  tokens used
+  93,016

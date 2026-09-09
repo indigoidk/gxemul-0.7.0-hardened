@@ -275,6 +275,18 @@ MANIFEST = {
         (CLASS_RESEARCH, "alphaswpctxreg (#514) pass 4: the two ORDER variants (read moved before the step; first response replayed as the second) re-run against the shipped step-binding -- 3/3, both rejected, and the old count rule shown passing both"),
     "artifacts/alphaswpctxreg/attack_parser.asrun.py":
         (CLASS_RESEARCH, "alphaswpctxreg (#514) pass 3: the seat's three synthetic parser attacks re-run against the SHIPPED regex -- 5/5, all rejected, both genuine shapes still parsed"),
+    #  #515 lcaconfbus1kill: four FROZEN copies of `lca_confbus_probe.py', one per kill table,
+    #  preserved so each table's scores can be re-read against the exact instrument that produced
+    #  them.  They are EVIDENCE, not detectors -- the live probe is `regress/lca_confbus_probe.py'.
+    #  Table 1 used a stale instrument and is explicitly NOT cited; tables 2-4 are.
+    "artifacts/lcaconfbus1kill/killtable_20260908/table1_preliminary/lca_confbus_probe.asrun.py":
+        (CLASS_RESEARCH, "lcaconfbus1kill (#515) table 1: the PRELIMINARY instrument, 14 rows before two oracle repairs -- preserved for comparison and deliberately not cited as a score claim"),
+    "artifacts/lcaconfbus1kill/killtable_20260908/table2_shipped/lca_confbus_probe.asrun.py":
+        (CLASS_RESEARCH, "lcaconfbus1kill (#515) table 2: the 14-row instrument, 10 variants zero escapes -- superseded by table 3 once the ask-again added four rows"),
+    "artifacts/lcaconfbus1kill/killtable_20260908/table3_shipped/lca_confbus_probe.asrun.py":
+        (CLASS_RESEARCH, "lcaconfbus1kill (#515) table 3: the SHIPPED 18-row instrument, 13 variants zero escapes -- code-identical to the live probe (verified by stripping comments)"),
+    "artifacts/lcaconfbus1kill/killtable_20260908/table4_targeted/lca_confbus_probe.asrun.py":
+        (CLASS_RESEARCH, "lcaconfbus1kill (#515) table 4: the same 18-row instrument for the targeted run -- grok's M13_regconj plus the 18-row PRE-FIX baseline, so the round's before/after uses one instrument"),
     "artifacts/lcairqstubkill/lcairq_probe.asrun.py":
         (CLASS_RESEARCH, "lcairqstubkill: the as-run witness ATTEMPT, preserved as evidence -- it did NOT fire, and it is not a detector"),
     "artifacts/lunaabsentcpu/killtable/fix_lunaabs.py":

@@ -1,0 +1,1396 @@
+Reading additional input from stdin...
+OpenAI Codex v0.153.4
+--------
+workdir: C:\DocumentNoSnc\CC\GXEMUL
+model: gpt-6-astra
+provider: openai
+approval: never
+sandbox: read-only
+reasoning effort: max
+reasoning summaries: none
+session id: 01a08402-468d-7fb0-9a9f-de2ddc17802e
+--------
+user
+# `lcaconfbus1kill` / `#515` — PASS 2 ON THE REAL DIFF
+
+## READ THIS FIRST — PLEASE DO NOT SIMPLY RATIFY
+
+A recent panel had seven of nine seats confirm a premise this brief's author stated wrongly.
+**Check the premises, not just the derivations.** Where I state something as fact, ask whether it
+is true. A seat that re-derives a premise from something this brief did NOT give it is worth more
+than a seat that agrees.
+
+**THE TREE UNDER REVIEW IS `GXEMUL-SEC/src/`.** There are THREE pristine-2021-upstream copies of
+GXemul under the project root (`./src/` and two under `_archive/audit-results-*/builds/`). They are
+NOT this fork. If your line numbers disagree with mine by hundreds you are reading one of them —
+say so rather than reconciling.
+
+**If you cannot read files that is expected** — every fact you need is inlined. Name any premise
+you cannot settle from this packet rather than guessing at it.
+
+**Where this brief states an ARITHMETIC claim — an index range, an offset, a count of reachable
+addresses — ENUMERATE it rather than reasoning about it.** Walk the values. A derivation that skips
+one masking line reads exactly like a correct one.
+
+**And ENUMERATE THE RIGHT DOMAIN — a domain is itself a premise.** Ask what the PRODUCER of these
+values can actually emit before you walk them.
+
+**VERDICT LINE FIRST**, so your answer survives truncation.
+
+---
+
+## §C0 — HAS THIS ROUND ALREADY SHIPPED?  Checked, both commands, before writing this.
+
+```
+git log -1 --oneline -- src/devices/dev_lca.c
+  aedd072 #511 pass 2: the token is ratified, two claims are refused, ...
+
+grep -n lcaconfbus1kill CHANGELOG.md
+  520: (a #511 paragraph REFERRING to this row's probe -- not a shipped round for it)
+
+highest round number in CHANGELOG.md:  514        ->  #515 is free
+```
+
+**The round has NOT shipped.** `#511` fixed a signed-overflow UB *inside* the `bus == 0` scan loop
+of this same handler and cited this row's probe; it did not touch the guard under review.
+
+---
+
+## §C — SETTLED PREMISES (each VERIFIED LOCALLY for this brief, not carried from memory)
+
+**P1 — `bus_pci_data_access`'s empty-slot contract.** Read from `src/devices/bus_pci.c`, the
+`dev == NULL` arm, verbatim:
+
+```c
+	/*  No device? Then return emptiness.  */
+	if (dev == NULL) {
+		if (writeflag == MEM_READ) {
+			if (pci_data->cur_reg == 0)
+				*data = (uint64_t) -1;
+			else
+				*data = 0;
+		} else {
+			fatal("[ bus_pci_data_access(): write to non-existant"
+			    " device, bus %i func %i device %i ]\n",
+			    pci_data->cur_bus, pci_data->cur_func,
+			    pci_data->cur_device);
+		}
+		return;
+	}
+```
+
+So: **reads** return all-ones at register 0 and zero elsewhere; **writes** print a diagnostic
+naming `cur_bus`, `cur_func`, `cur_device`. `fatal()` in this fork does NOT exit
+(`src/core/debugmsg.c`, `fatal()` has no early-out and no `exit`), so that write path is a
+diagnostic, not a kill.
+
+**P2 — `bus_pci_setaddr` has no observable of its own.** Verbatim: it validates two pointers and
+assigns `cur_bus`/`cur_device`/`cur_func`/`cur_reg`. Nothing is printed. **This is why the
+discriminating oracle in the detector had to be a WRITE and not a read.**
+
+**P3 — exactly one PCI device is registered on this machine.**
+`bus_pci_add(devinit->machine, d->pci_data, devinit->machine->memory, 0, 7, 0, "i82378zb");`
+— bus 0, device 7, function 0.
+
+**P4 — the i82378zb's configuration header, DERIVED and then MEASURED, and the two agree.**
+`PCIINIT(i82378zb)` sets `PCI_ID_REG = PCI_ID_CODE(PCI_VENDOR_INTEL, PCI_PRODUCT_INTEL_SIO)`.
+An 8-byte guest `ldq` of registers 0..7 measured **`0x0000000304848086`** on the pre-fix build:
+reg 0 = `0x04848086` (vendor 0x8086 Intel, product 0x0484 SIO), reg 4 = `0x00000003`
+(command 0x0003, status 0x0000).
+
+**P5 — the address decode, from the handler's own two lines.**
+```c
+	reg = (relative_addr >> 5) & 0xfc;
+	tag = (relative_addr >> 5) & ~0xff;
+```
+**P6 — the 21066/21066A Hardware Reference Manual is LOCAL and was read for this claim**
+(`_scratchpad/21066_66a_hrm.txt`, 13,876 lines). §6.2.9: *"PCI address bits ad<1:0> come directly
+from configuration cycle type register (IOC_CONF, Section 6.4.2) bits <1:0>"* — so **IOC_CONF
+selects the CYCLE TYPE and does not carry a bus number.** §6.2.6 gives the sparse-space mapping
+`<31:7> -> <26:2>`, i.e. the shift of 5.
+*Stated narrowly on purpose: the type-1 FIELD POSITIONS (bus 23..16, dev 15..11, fn 10..8,
+reg 7..2) come from the PCI Local Bus specification, which §6.2.9 defers to explicitly — NOT from
+this manual. A sibling row of mine over-read this same manual last week and a seat caught it.*
+
+---
+
+## §D — THE DEFECT, AND THE WITNESS THAT ALREADY EXISTS
+
+`DEVICE_ACCESS(lca_pci_conf)` used ONE variable, `bus`, for TWO different things: the cycle type
+selected by `d->ioc_conf & 1`, and the destination bus. Pre-fix:
+
+```c
+	bus = d->ioc_conf & 1;
+
+	if (bus == 0) {
+		... IDSEL scan, already de-fatalised ...
+	} else {
+		fatal("TODO. Non-zero bus.\n");
+		exit(1);
+	}
+```
+
+The `lca_ioc` CONF guard is `if (idata & ~1) { fatal(...); exit(1); }` — so **`0x1` is ACCEPTED and
+stored.** A guest then needs no unusual value anywhere: store 1 to IOC_CONF, then make any access
+in the config window, and the host process ends.
+
+**RUNG-3 WITNESS, MEASURED:** `regress/lca_confbus_probe.py` on unmodified `alphabook1`,
+**3/4 pre-fix** (`artifacts/lcaconfbus1kill/witness_HEAD_20260907.raw`), with a liveness control
+(the identical read at `ioc_conf == 0` completes) and a device-signature control (it returns the
+empty-slot `0xffff...ffff`, where unmapped would read 0).
+
+---
+
+## §E — THE DIFF UNDER REVIEW (the real one, `git diff`, message suppressed)
+
+```diff
+diff --git a/src/devices/dev_lca.c b/src/devices/dev_lca.c
+index d3c2488..97c2e6b 100644
+--- a/src/devices/dev_lca.c
++++ b/src/devices/dev_lca.c
+@@ -89,7 +89,7 @@ void lca_interrupt_deassert(struct interrupt *interrupt)
+ DEVICE_ACCESS(lca_pci_conf)
+ {
+ 	uint64_t idata = 0, odata = 0;
+-	int tag, bus, dev, func, reg;
++	int tag, type1, bus, dev, func, reg;	/*  #515  */
+ 	struct lca_data *d = (struct lca_data *) extra;
+ 
+ 	if (writeflag == MEM_WRITE)
+@@ -118,9 +118,25 @@ DEVICE_ACCESS(lca_pci_conf)
+ 	 *	tag = (bus << 16) | (device << 11) | (function << 8)
+ 	 */
+ 	/*  printf("tag = 0x%x\n", (int)tag);  */
+-	bus = d->ioc_conf & 1;
+ 
+-	if (bus == 0) {
++	/*  #515: `bus' used to be BOTH the configuration CYCLE TYPE and the
++	    DESTINATION BUS, and conflating them is the whole defect.  IOC_CONF bit 0
++	    selects the cycle type only -- 21066/21066A HRM S6.2.9: "PCI address bits
++	    ad<1:0> come directly from configuration cycle type register (IOC_CONF,
++	    Section 6.4.2) bits <1:0>" -- and it does NOT carry a bus number.  The
++	    destination bus of a type-1 cycle lives in the ADDRESS, per the PCI Local
++	    Bus specification's type-1 layout (bus 23..16, dev 15..11, fn 10..8,
++	    reg 7..2), which S6.2.9 defers to explicitly.
++
++	    Before this, a guest that merely SET bit 0 -- a value the CONF guard
++	    ACCEPTS -- made any subsequent access in this window reach
++	    `fatal("TODO. Non-zero bus."); exit(1)'.  MEASURED: two ordinary guest
++	    accesses, nothing refused anywhere on the path
++	    (regress/lca_confbus_probe.py, 3/4 pre-fix; artifacts/lcaconfbus1kill/).  */
++	type1 = d->ioc_conf & 1;	/*  #515  */
++	bus = 0;			/*  #515  */
++
++	if (!type1) {			/*  #515  */
+ 		/*  #511: was `0x800 << dev'.  `0x800' is a plain int (2^11) and `dev'
+ 		    reaches 20, so the last iteration evaluates 2^31 -- a SIGNED
+ 		    OVERFLOW, undefined by C99 6.5.7p4, not merely
+@@ -163,17 +179,32 @@ DEVICE_ACCESS(lca_pci_conf)
+ 			dev = 0;
+ 		}
+ 	} else {
+-		fatal("TODO. Non-zero bus.\n");
+-		exit(1);
++		/*  #515: a type-1 cycle carries its destination in the address.  */
++		bus = (tag >> 16) & 0xff;	/*  #515  */
++		dev = (tag >> 11) & 0x1f;	/*  #515  */
+ 	}
+ 
+ 	func = (tag >> 8) & 7;
+ 	/*  printf("bus=%i dev=%i func=%i reg=%i\n", bus,dev,func,reg);  */
+ 
+-	/*  Pass PCI accesses onto bus_pci:  */
+-	bus_pci_setaddr(cpu, d->pci_data, bus, dev, func, reg);
+-	bus_pci_data_access(cpu, d->pci_data, writeflag == MEM_READ?
+-	    &odata : &idata, len, writeflag);
++	/*  #515: a type-1 cycle whose bus field is zero selects NOTHING.  Type-1 is
++	    how a bridge is asked to reach a bus BEHIND it; the primary bus is reached
++	    with type-0 cycles, whose IDSEL encoding is decoded above.  Forwarding this
++	    case would set cur_bus = 0 and hand the access to whichever primary-bus
++	    device matched -- `i82378zb' is registered at 0:7:0 by DEVINIT below -- so
++	    simply decoding `bus' and stopping there would replace a host kill with a
++	    NEW MISROUTING.  Refuse it instead, matching `bus_pci_data_access''s own
++	    empty-slot contract (bus_pci.c, the `dev == NULL' arm: all-ones at register
++	    0, zero elsewhere) so the guest sees the ordinary "nothing there" answer.
++	    Writes are discarded, which leaves backend state untouched.  */
++	if (type1 && bus == 0) {		/*  #515  */
++		odata = reg == 0? (uint64_t) -1 : 0;
++	} else {
++		/*  Pass PCI accesses onto bus_pci:  */
++		bus_pci_setaddr(cpu, d->pci_data, bus, dev, func, reg);
++		bus_pci_data_access(cpu, d->pci_data, writeflag == MEM_READ?
++		    &odata : &idata, len, writeflag);
++	}
+ 
+ 	if (writeflag == MEM_READ)
+ 		memory_writemax64(cpu, data, len, odata);
+```
+
+## §E2 — THE FULL ENCLOSING FUNCTION, POST-FIX
+
+*Inlined because a brief that solicits or evaluates edits must show every exit path and the
+common tail: four independent readers once proposed an early `return` into a function whose
+last three lines they had not read.*
+
+```c
+DEVICE_ACCESS(lca_pci_conf)
+{
+	uint64_t idata = 0, odata = 0;
+	int tag, type1, bus, dev, func, reg;	/*  #515  */
+	struct lca_data *d = (struct lca_data *) extra;
+
+	if (writeflag == MEM_WRITE)
+		idata = memory_readmax64(cpu, data, len);
+
+	/*
+	 *  1. Decompose the address into a tag.
+	 *
+	 *  According to NetBSD's lca_pci.c, the address is composed like this:
+	 *
+	 *	addr = tag << 5 | (regoffset & ~0x03) << 5 | 0x3 << 3
+	 */
+	reg = (relative_addr >> 5) & 0xfc;
+	tag = (relative_addr >> 5) & ~0xff;
+
+	/*
+	 *  2. Decompose the tag into bus, dev, and func.
+	 *
+	 *  The tag can be constructed in one of two ways. On the primary
+	 *  bus (nr 0):
+	 *
+	 *	tag = (1 << (device + 11)) | (function << 8);
+	 *
+	 *  and on other busses, the tag is a normal:
+	 *
+	 *	tag = (bus << 16) | (device << 11) | (function << 8)
+	 */
+	/*  printf("tag = 0x%x\n", (int)tag);  */
+
+	/*  #515: `bus' used to be BOTH the configuration CYCLE TYPE and the
+	    DESTINATION BUS, and conflating them is the whole defect.  IOC_CONF bit 0
+	    selects the cycle type only -- 21066/21066A HRM S6.2.9: "PCI address bits
+	    ad<1:0> come directly from configuration cycle type register (IOC_CONF,
+	    Section 6.4.2) bits <1:0>" -- and it does NOT carry a bus number.  The
+	    destination bus of a type-1 cycle lives in the ADDRESS, per the PCI Local
+	    Bus specification's type-1 layout (bus 23..16, dev 15..11, fn 10..8,
+	    reg 7..2), which S6.2.9 defers to explicitly.
+
+	    Before this, a guest that merely SET bit 0 -- a value the CONF guard
+	    ACCEPTS -- made any subsequent access in this window reach
+	    `fatal("TODO. Non-zero bus."); exit(1)'.  MEASURED: two ordinary guest
+	    accesses, nothing refused anywhere on the path
+	    (regress/lca_confbus_probe.py, 3/4 pre-fix; artifacts/lcaconfbus1kill/).  */
+	type1 = d->ioc_conf & 1;	/*  #515  */
+	bus = 0;			/*  #515  */
+
+	if (!type1) {			/*  #515  */
+		/*  #511: was `0x800 << dev'.  `0x800' is a plain int (2^11) and `dev'
+		    reaches 20, so the last iteration evaluates 2^31 -- a SIGNED
+		    OVERFLOW, undefined by C99 6.5.7p4, not merely
+		    implementation-defined.  MEASURED under UBSAN before the change:
+		    "dev_lca.c:125:21: runtime error: left shift of 2048 by 20 places
+		    cannot be represented in type 'int'", reached by an ordinary guest
+		    ldq into the PCI config window (regress/lca_confbus_probe.py against
+		    build-asan; artifacts/lcashiftub/ubsan_HEAD_20260907.raw).
+
+		    `0x800U' makes the operand unsigned, so 2048U << 20 is 0x80000000U --
+		    inside unsigned int -- and NOTHING ELSE MOVES.
+
+		    *** THE REASON, CORRECTED: AN EARLIER DRAFT SAID `tag' IS "ALREADY A
+		    WIDER UNSIGNED QUANTITY".  THAT IS FALSE -- `tag' is a plain signed
+		    `int' (:92) -- AND FOUR PASS-2 SEATS CAUGHT IT.  Worse, the claim was
+		    backwards: being WIDER is what would CREATE a difference, not remove
+		    one.  Had `tag' been `uint64_t', the old `int' 0x80000000 is NEGATIVE
+		    and would SIGN-EXTEND to 0xffffffff80000000 for the `&', while
+		    `0x800U << 20' zero-extends to 0x0000000080000000 -- two different
+		    masks.  The seats were right about the mechanism and it does not fire
+		    here only because of the type.
+
+		    WHAT ACTUALLY HOLDS: both operands are 32-bit, so the `&' is performed
+		    at 32 bits either way -- `int & int' before, and after, `tag' converted
+		    to `unsigned int' by the usual arithmetic conversions.  The RESULT'S
+		    BIT PATTERN IS IDENTICAL; only its type changes, and it is consumed
+		    solely as a truth test in `if (...)'.  So no guest-visible value moves,
+		    and the repair is owed purely by the LANGUAGE. ***
+
+		    *** THE LOOP THIS SITS IN IS THIS FILE'S OWN GRACEFUL-DEGRADATION
+		    PRECEDENT -- the `dev >= 21' arm below has a commented-out
+		    fatal()/exit(1) and substitutes `dev = 0' instead, and `lcabadval'
+		    cites it as a transferable warrant.  The safe path contained the UB. ***  */
+		for (dev=0; dev<21; dev++)
+			if (tag & (0x800U << dev))	/*  #511  */
+				break;
+		if (dev >= 21) {
+			/*  fatal("[ LCA: No bus 0 device? TODO ]\n");
+			exit(1);  */
+			dev = 0;
+		}
+	} else {
+		/*  #515: a type-1 cycle carries its destination in the address.  */
+		bus = (tag >> 16) & 0xff;	/*  #515  */
+		dev = (tag >> 11) & 0x1f;	/*  #515  */
+	}
+
+	func = (tag >> 8) & 7;
+	/*  printf("bus=%i dev=%i func=%i reg=%i\n", bus,dev,func,reg);  */
+
+	/*  #515: a type-1 cycle whose bus field is zero selects NOTHING.  Type-1 is
+	    how a bridge is asked to reach a bus BEHIND it; the primary bus is reached
+	    with type-0 cycles, whose IDSEL encoding is decoded above.  Forwarding this
+	    case would set cur_bus = 0 and hand the access to whichever primary-bus
+	    device matched -- `i82378zb' is registered at 0:7:0 by DEVINIT below -- so
+	    simply decoding `bus' and stopping there would replace a host kill with a
+	    NEW MISROUTING.  Refuse it instead, matching `bus_pci_data_access''s own
+	    empty-slot contract (bus_pci.c, the `dev == NULL' arm: all-ones at register
+	    0, zero elsewhere) so the guest sees the ordinary "nothing there" answer.
+	    Writes are discarded, which leaves backend state untouched.  */
+	if (type1 && bus == 0) {		/*  #515  */
+		odata = reg == 0? (uint64_t) -1 : 0;
+	} else {
+		/*  Pass PCI accesses onto bus_pci:  */
+		bus_pci_setaddr(cpu, d->pci_data, bus, dev, func, reg);
+		bus_pci_data_access(cpu, d->pci_data, writeflag == MEM_READ?
+		    &odata : &idata, len, writeflag);
+	}
+
+	if (writeflag == MEM_READ)
+		memory_writemax64(cpu, data, len, odata);
+
+	return 1;
+}
+```
+
+---
+
+## §F — THE MEASUREMENT (both runs preserved; each verified by its completion sentinel)
+
+Scratch clone `/tmp/gxlca`, a relocatable `cp -a` of `build/`, baseline named as git HEAD `5d3f82c`;
+`dev_lca.c` `cmp`-clean against the baseline before mutant 1; the baseline binary REBUILT in the
+clone with `[ binary -nt source ]` checked. `build/`, `est/`, `build-asan/` and the WSL tree were
+NOT touched.
+
+```
+PRE-FIX   LCACONFBUS_RESULT=6/10     (artifacts/lcaconfbus1kill/pass2_20260908/lca_pre.raw)
+POST-FIX  LCACONFBUS_RESULT=10/10    (.../lca_post.raw)
+```
+
+| row | pre | post | what it is |
+|---|---|---|---|
+| `bus ctl` | ok | ok | LIVENESS: the identical read at `ioc_conf == 0` completes |
+| `bus ctlsig` | ok | ok | DEVICE SIGNATURE: empty-slot `0xffff…ffff`; unmapped would read 0 |
+| `bus kill` | **FAIL** | ok | the defect row: an accepted `stq 1` then an ordinary `ldq` must not end the host |
+| `bus attrib` | ok | ok | ATTRIBUTION: a death here must carry this arm's unique diagnostic |
+| `t1 alive` | **FAIL** | ok | a type-1 write to a NON-zero bus must not end the host |
+| `t1 anchor` | **FAIL** | ok | **ANCHOR**: forwarding happened AND landed at bus 1 dev 3 func 2 |
+| `t1 alias` | **FAIL** | ok | type-1 with bus 0 must NOT be forwarded onto the primary bus |
+| `t0 alive` | ok | ok | ACCEPT: the type-0 path still reaches a registered device |
+| `t0 real` | ok | ok | ACCEPT: dev 7 is neither empty-slot nor unmapped |
+| `t0 accept` | **FAIL** | ok | ACCEPT: the exact pre-fix value `0x304848086` is unchanged |
+
+The anchor's evidence line, echoed into the log by the probe itself:
+
+```
+  EVIDENCE(S2): [ bus_pci_data_access(): write to non-existant device, bus 1 func 2 device 3 ]
+```
+
+**Addresses derived from the handler's own two lines, then confirmed by that printed tuple:**
+`bus 1 dev 3 func 2 reg 0` -> `tag = 0x11a00` -> `relative_addr = 0x234000`; the alias ->
+`relative_addr = 0`; type-0 dev 7 -> `tag = 0x40000` -> `relative_addr = 0x800000`. The three
+fields are deliberately DISTINCT and non-zero so a swapped field cannot pass by coincidence.
+
+**A DEFECT I FOUND IN MY OWN ROW AND FIXED BEFORE THIS BRIEF — please check the repair, not just
+the confession.** `t1 alias` first read `refused if ALIAS not in txt2`, and scored **GREEN on the
+pre-fix build** — where the host had already died at the previous access and the alias write NEVER
+EXECUTED. An absence-of-text oracle cannot distinguish "ran and was refused" from "never ran". It
+is now bound to `alive2` and renders `died-before-E`. **Is that binding sufficient, or can the row
+still pass without the access having been serviced?**
+
+---
+
+## §G — THE QUESTIONS
+
+**Q1 — THE VACUITY FLOOR, CLAUSE (d): what is the DEPENDS-ON closure of this diff, and is any cell
+unrowed?** The diff adds two predicates — `!type1` (replacing `bus == 0`) and `type1 && bus == 0`.
+The guarded body reads `bus`, `dev`, `func`, `reg`, `type1`, `d->pci_data`, `writeflag` and `len`.
+The body's own tests induce the partitions {type-0, type-1} × {bus == 0, bus != 0} ×
+{read, write}. **Enumerate the cross-product and say which cells the ten rows hold and which they
+do not.** I believe the unrowed cells are (type-1, bus != 0, read) and (type-1, bus == 0, read) —
+both of which return the same all-ones value as the control, so a read oracle cannot see them.
+**Am I right that they are indistinguishable, or is there a channel I have missed?**
+
+**Q2 — IS THE REFUSAL THE RIGHT DISPOSITION, and does it need an announce?** The option set has
+seven members (DELETE / DECLINE / DECLINE+LATCHED ANNOUNCE / ACCEPT / FAULT / BACKED ACCEPT /
+IMPLEMENT). This diff is member 2 for the alias and member 7 for the type-1 decode. **Three
+sub-questions.** (a) Should the alias arm carry the house `(once)` latched announce, or is silence
+right given a guest may legitimately probe type-1 space? (b) The refusal DISCARDS writes silently,
+whereas forwarding an empty slot PRINTS a diagnostic — so the fix makes one case quieter than the
+neighbouring one. Is that asymmetry defensible or is it a sibling-parity breach? (c) **FAULT is
+member 5 and is NOT available here** — `memory_rw.c` dispatches a bus error for MIPS and M88K and
+there is no Alpha equivalent — but the 21066 manual §6.2.18 says real hardware returns *"arbitrary
+data with error status to the CPU, which causes an instruction exception"* on a master abort.
+**Should the round disclose that the model's all-ones answer is an emulator-compatibility
+convention rather than the hardware contract?**
+
+**Q3 — THE DE-ESCALATION CLAUSE: are the accept rows complete?** This diff DELETES `exit(` from a
+device, so every predicate that used to gate death owes an accept row proving legal traffic still
+lands. I have shipped `t0 accept` (a registered device on the type-0 path still returns its exact
+pre-fix config data) and `t1 anchor` (type-1 to a real bus still forwards, to the right tuple).
+**Is a third row owed for the type-1 path reaching a REGISTERED device?** No device exists on any
+bus but 0, so I cannot build that state without adding one — and adding a device to reach a site is
+the laundering the witness ladder forbids. **Is "no such state is constructible on this machine" an
+acceptable disclosure, or does it mean the forwarding path is untested where it matters most?**
+
+**Q4 — THE ANCHOR ROW'S OWN FRAGILITY.** `t1 anchor` matches the literal
+`bus 1 func 2 device 3` in `bus_pci_data_access`'s diagnostic. That string is a `fatal()` in a file
+this round does not touch. **If someone reworded that diagnostic, my anchor row goes silently
+green-to-red — or worse, a reworded-but-still-printed message could make it red while nothing is
+wrong. Is that an acceptable coupling for the only absolute-position oracle in this detector, and
+is there a better channel I have not found?** (I checked: `bus_pci_setaddr` prints nothing, so I
+believe this is the only one. Please refute that if you can.)
+
+
+## OPERATIONAL RULE FOR EVERY SEAT (appended by panel.sh, not by the author)
+
+**Do not run `run.sh`, any `gate_*.sh`, or the battery.** Every measurement you need is
+inlined above. A gate takes minutes -- longer than your response budget -- and a second
+concurrent invocation corrupts the operator run in progress, because the gates share one
+log directory. A seat that runs a gate produces no review AND may invalidate someone
+else s. Building and running a single detector or mutant in your own temp directory is
+fine and encouraged; driving the harness is not.
+
+If you want a measurement that is not inlined, NAME IT and say why. Naming it is worth
+far more to this panel than a timeout.
+codex
+I’ll check the fork’s diff, address producer, and detector against the packet, then enumerate the reachable cases. I’ll keep this read-only and avoid the harness.
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "Get-Location; rg --files -g AGENTS.md -g dev_lca.c -g bus_pci.c -g lca_confbus_probe.py -g CHANGELOG.md -g 21066_66a_hrm.txt -g memory_rw.c -g debugmsg.c -g '*515*' -g '*lcaconfbus*'" in C:\DocumentNoSnc\CC\GXEMUL
+ succeeded in 214ms:
+
+build\src\cpus\memory_rw.c
+build\src\core\debugmsg.c
+src\devices\dev_lca.c
+src\devices\bus_pci.c
+est\src\devices\dev_lca.c
+est\src\devices\bus_pci.c
+est\CHANGELOG.md
+est\src\core\debugmsg.c
+src\cpus\memory_rw.c
+src\core\debugmsg.c
+build-asan\src\devices\dev_lca.c
+build-asan\src\devices\bus_pci.c
+build\src\devices\dev_lca.c
+build\src\devices\bus_pci.c
+est\src\cpus\memory_rw.c
+build-asan\src\cpus\memory_rw.c
+build-asan\src\core\debugmsg.c
+_scratchpad\21066_66a_hrm.txt
+_scratchpad\brief_lcaconfbus1_witness.md
+GXEMUL-SEC\src\devices\dev_lca.c
+GXEMUL-SEC\src\devices\bus_pci.c
+GXEMUL-SEC\src\cpus\memory_rw.c
+GXEMUL-SEC\src\core\debugmsg.c
+GXEMUL-SEC\regress\lca_confbus_probe.py
+_scratchpad\seat500_p9\tree\src\devices\dev_lca.c
+_scratchpad\seat500_p9\tree\src\devices\bus_pci.c
+_scratchpad\seat500_p9\tree\src\cpus\memory_rw.c
+_scratchpad\seat500_p9\tree\src\core\debugmsg.c
+GXEMUL-SEC\CHANGELOG.md
+_scratchpad\panel_20260830_214609\kimi_q1\build_mutant\src\core\debugmsg.c
+_scratchpad\panel_20260830_214609\kimi_q1\build_mutant\src\cpus\memory_rw.c
+_scratchpad\panel_20260830_214609\kimi_q1\build_mutant\src\devices\dev_lca.c
+_scratchpad\panel_20260830_214609\kimi_q1\build_mutant\src\devices\bus_pci.c
+_archive\audit-results-20260625_203645\builds\orig-asan\src\devices\dev_lca.c
+_archive\audit-results-20260625_203645\builds\orig-asan\src\devices\bus_pci.c
+_archive\audit-results-20260625_203645\builds\orig-asan\src\cpus\memory_rw.c
+_archive\audit-results-20260625_203645\builds\orig-asan\src\core\debugmsg.c
+_archive\audit-results-20260625_203645\builds\est-asanonly\src\devices\dev_lca.c
+_archive\audit-results-20260625_203645\builds\est-asanonly\src\devices\bus_pci.c
+_archive\audit-results-20260625_203645\builds\est-asanonly\src\cpus\memory_rw.c
+_archive\audit-results-20260625_203645\builds\est-asanonly\src\core\debugmsg.c
+Path                      
+----                      
+C:\DocumentNoSnc\CC\GXEMUL
+
+
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "git log -1 --oneline -- src/devices/dev_lca.c
+git status --short --untracked-files=no
+git diff -- src/devices/dev_lca.c
+rg -n 'lcaconfbus1kill|#51[1-9]' CHANGELOG.md" in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$line = 0
+Get-Content -LiteralPath '"'GXEMUL-SEC\\src\\devices\\dev_lca.c' | ForEach-Object { "'$line++; if ($line -le 255 -or $_ -match '"'CONF|bus_pci_add|memory_device_register|LCA_PCI_CONF') { '{0}:{1}' -f "'$line, $_ } }
+rg -n '"'"'^'"' GXEMUL-SEC/regress/lca_confbus_probe.py" in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$instructionPaths = @('"'C:\\AGENTS.md','C:\\DocumentNoSnc\\AGENTS.md','C:\\DocumentNoSnc\\CC\\AGENTS.md','C:\\DocumentNoSnc\\CC\\GXEMUL\\AGENTS.md','C:\\DocumentNoSnc\\CC\\GXEMUL\\GXEMUL-SEC\\AGENTS.md')
+foreach ("'$instructionPath in $instructionPaths) { if (Test-Path -LiteralPath $instructionPath) { Write-Output $instructionPath; Get-Content -LiteralPath $instructionPath } }
+rg --files --hidden -g AGENTS.md GXEMUL-SEC' in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n 'bus_pci_setaddr|bus_pci_data_access|No device|cur_reg|cur_bus|cur_device|cur_func|PCIINIT\\(i82378zb\\)|PCI_ID_CODE|PCI_COMMAND_STATUS_REG|PCI_ID_REG' GXEMUL-SEC/src/devices/bus_pci.c
+rg -n 'fatal\\(|exit\\(|quiet' GXEMUL-SEC/src/core/debugmsg.c
+rg -n 'lca_pci_conf|LCA_PCI_CONF|LCA_CONF|LCA_IOC_CONF|LCABOOK|alphabook1' GXEMUL-SEC/src
+rg -n '6\\.2\\.9|6\\.2\\.18|arbitrary data|ad<1:0>|31:7|26:2|6\\.4\\.2' _scratchpad/21066_66a_hrm.txt" in C:\DocumentNoSnc\CC\GXEMUL
+ succeeded in 210ms:
+87: *  bus_pci_data_access():
+91:void bus_pci_data_access(struct cpu *cpu, struct pci_data *pci_data,
+102:		if (dev->bus      == pci_data->cur_bus &&
+103:		    dev->function == pci_data->cur_func &&
+104:		    dev->device   == pci_data->cur_device)
+109:	/*  No device? Then return emptiness.  */
+112:			if (pci_data->cur_reg == 0)
+117:			fatal("[ bus_pci_data_access(): write to non-existant"
+119:			    pci_data->cur_bus, pci_data->cur_func,
+120:			    pci_data->cur_device);
+127:	    pci_data->cur_reg >= PCI_MAPREG_START &&
+128:	    pci_data->cur_reg <= PCI_MAPREG_END - 4)
+136:		int ofs = pci_data->cur_reg + i;
+146:		    pci_data->cur_reg >= PCI_MAPREG_START &&
+147:		    pci_data->cur_reg <= PCI_MAPREG_END - 4) {
+153:		    dev->cfg_reg_write(dev, pci_data->cur_reg, *data) == 0) {
+159:			    (long long)x, pci_data->cur_bus,
+160:			    pci_data->cur_device, pci_data->cur_func,
+161:			    dev->name, pci_data->cur_reg);
+165:			if (pci_data->cur_reg == PCI_COMMAND_STATUS_REG
+182:	    pci_data->cur_bus, pci_data->cur_device, pci_data->cur_func,
+183:	    dev->name, pci_data->cur_reg, len, (long)*data);
+188: *  bus_pci_setaddr():
+192:void bus_pci_setaddr(struct cpu *cpu, struct pci_data *pci_data,
+196:		fatal("bus_pci_setaddr(): NULL ptr\n");
+200:	pci_data->cur_bus = bus;
+201:	pci_data->cur_device = device;
+202:	pci_data->cur_func = function;
+203:	pci_data->cur_reg = reg;
+259:	PCI_SET_DATA(PCI_COMMAND_STATUS_REG,
+408:	PCI_SET_DATA(PCI_ID_REG,
+409:	    PCI_ID_CODE(PCI_VENDOR_INTEGRAPHICS, 0x2010));
+437:	PCI_SET_DATA(PCI_ID_REG,
+438:	    PCI_ID_CODE(PCI_VENDOR_S3, PCI_PRODUCT_S3_VIRGE_DX));
+461:	PCI_SET_DATA(PCI_ID_REG,
+462:	    PCI_ID_CODE(PCI_VENDOR_ALI, PCI_PRODUCT_ALI_M1543));
+489:	PCI_SET_DATA(PCI_ID_REG,
+490:	    PCI_ID_CODE(PCI_VENDOR_ALI, PCI_PRODUCT_ALI_M5229));
+527:	PCI_SET_DATA(PCI_ID_REG, PCI_ID_CODE(PCI_VENDOR_ADP,
+530:	PCI_SET_DATA(PCI_COMMAND_STATUS_REG, 0x02800046);
+583:	PCI_SET_DATA(PCI_ID_REG, PCI_ID_CODE(PCI_VENDOR_GALILEO,
+592:	PCI_SET_DATA(PCI_ID_REG, PCI_ID_CODE(PCI_VENDOR_GALILEO,
+607:	PCI_SET_DATA(PCI_ID_REG, PCI_ID_CODE(PCI_VENDOR_GALILEO,
+629:	PCI_SET_DATA(PCI_ID_REG, PCI_ID_CODE(PCI_VENDOR_AMD,
+679:	PCI_SET_DATA(PCI_ID_REG, PCI_ID_CODE(PCI_VENDOR_INTEL,
+729:	PCI_SET_DATA(PCI_ID_REG, PCI_ID_CODE(PCI_VENDOR_INTEL,
+741:	PCI_SET_DATA(PCI_ID_REG, PCI_ID_CODE(PCI_VENDOR_INTEL,
+753:PCIINIT(i82378zb)
+755:	PCI_SET_DATA(PCI_ID_REG, PCI_ID_CODE(PCI_VENDOR_INTEL,
+784:	case PCI_COMMAND_STATUS_REG:
+808:	PCI_SET_DATA(PCI_ID_REG, PCI_ID_CODE(PCI_VENDOR_INTEL,
+848:	PCI_SET_DATA(PCI_ID_REG, PCI_ID_CODE(PCI_VENDOR_INTEL,
+900:	PCI_SET_DATA(PCI_ID_REG, PCI_ID_CODE(PCI_VENDOR_IBM,
+921:	PCI_SET_DATA(PCI_ID_REG, PCI_ID_CODE(PCI_VENDOR_HEURICON,
+950:	PCI_SET_DATA(PCI_ID_REG, PCI_ID_CODE(PCI_VENDOR_VIATECH,
+983:	case PCI_COMMAND_STATUS_REG:
+1000:	PCI_SET_DATA(PCI_ID_REG, PCI_ID_CODE(PCI_VENDOR_VIATECH,
+1049:	PCI_SET_DATA(PCI_ID_REG, PCI_ID_CODE(PCI_VENDOR_SYMPHONY,
+1082:	case PCI_COMMAND_STATUS_REG:
+1110:	PCI_SET_DATA(PCI_ID_REG, PCI_ID_CODE(PCI_VENDOR_SYMPHONY,
+1166:	PCI_SET_DATA(PCI_ID_REG, PCI_ID_CODE(PCI_VENDOR_REALTEK,
+1211:	PCI_SET_DATA(PCI_ID_REG, PCI_ID_CODE(PCI_VENDOR_DEC,
+1214:	PCI_SET_DATA(PCI_COMMAND_STATUS_REG, 0x02000017);
+1285:	PCI_SET_DATA(PCI_ID_REG, PCI_ID_CODE(PCI_VENDOR_DEC,
+1288:	PCI_SET_DATA(PCI_COMMAND_STATUS_REG, 0x02800087);  /*  TODO  */
+1338:	PCI_SET_DATA(PCI_ID_REG, PCI_ID_CODE(PCI_VENDOR_MOT,
+1365:	PCI_SET_DATA(PCI_ID_REG, PCI_ID_CODE(PCI_VENDOR_APPLE,
+1383:	PCI_SET_DATA(PCI_ID_REG, PCI_ID_CODE(PCI_VENDOR_APPLE,
+1409:	PCI_SET_DATA(PCI_ID_REG, PCI_ID_CODE(PCI_VENDOR_ATI,
+56: *	Convert existing debug() and fatal() calls to the new debugmsg() call.
+76:int quiet_mode = 0;
+116: *  Used internally by the old debug() and fatal() functions.
+174:			fatal("[ subsystem breakpoint: %s ]\n",
+342: *  This affects both the older debug() and fatal() functions, and the new
+357: *  debug() and fatal():
+361: *  at the default level, and fatal() is used to always print stuff. With some
+375:	if ((quiet_mode && !ss) || v < 0)
+384:void fatal(const char *fmt, ...)
+GXEMUL-SEC/src\machines\machine_alpha.c:243:	    "alphabook1", NULL);
+GXEMUL-SEC/src\devices\dev_lca.c:89:DEVICE_ACCESS(lca_pci_conf)
+GXEMUL-SEC/src\devices\dev_lca.c:260:	case LCA_IOC_CONF:
+GXEMUL-SEC/src\devices\dev_lca.c:424:	memory_device_register(devinit->machine->memory, "lca_pci_conf",
+GXEMUL-SEC/src\devices\dev_lca.c:425:	    LCA_PCI_CONF, 0x20000000, dev_lca_pci_conf_access, (void *)d,
+GXEMUL-SEC/src\include\thirdparty\alpha_lcareg.h:46:#define LCA_PCI_CONF	0x1e0000000ULL		/* PCI Conf. Space */
+GXEMUL-SEC/src\include\thirdparty\alpha_lcareg.h:54:#define LCA_IOC_CONF	(LCA_IOC_BASE + 0x020)	/* Configuration Cycle Type */
+411:      6.2.9     Configuration Cycles . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .     6�18
+437:      6.2.18    PCI Master Abort . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . .   6�34
+488:6.4.2     Configuration Cycle Type Register . . . . . . . . . . . . . . . . . . . . .                        6�38
+4101:26:25 PCEN  RW
+8659:Write a<33:32 31:29> ad<31:27           26:24  23:2 1:0>     <3:0>   Transaction
+8661:Write  11 XXX          a<31:27> a<26:24> a<23:2> 00          0111    DMW
+8663:Write                  a<31:27> a<26:24> a<23:2> 00          0110    SMW
+8840:            CPU physical address bits <31:7> are used for PCI address bits <26:2>. To
+8862:                                         ad<1:0>      ad<1:0>
+9131:            address bits ad<1:0> to 00. This indicates to the target device that the transfer
+9192:            � PCI address bits ad<1:0> come directly from physical address bits a<6:5>
+9201:6.2.9 Configuration Cycles
+9216:            � PCI address bits ad<1:0> come directly from configuration cycle type
+9217:                  register (IOC_CONF, Section 6.4.2) bits <1:0> during CPU-initiated PCI
+9452:            IOC returns arbitrary data with error status to the CPU, which causes an
+9481:6.2.18 PCI Master Abort
+9486:            initiated access was a read operation, the IOC returns arbitrary data with
+10226:6.4.2 Configuration Cycle Type Register
+10229:            type (IOC_CONF) register supplies PCI address bits ad<1:0>.
+10252:     AD<1:0>      address bits ad<1:0> during CPU-initiated PCI
+
+ exited 1 in 235ms:
+ succeeded in 255ms:
+aedd072 #511 pass 2: the token is ratified, two claims are refused, and my sibling census had a backwards filter
+ M regress/lca_confbus_probe.py
+ M regress/sgi_de_primop_probe.py
+ M src/devices/dev_lca.c
+ M tools/pipeline/fable_queue.md
+ M tools/pipeline/ledger.json
+diff --git a/src/devices/dev_lca.c b/src/devices/dev_lca.c
+index d3c2488..97c2e6b 100644
+--- a/src/devices/dev_lca.c
++++ b/src/devices/dev_lca.c
+@@ -89,7 +89,7 @@ void lca_interrupt_deassert(struct interrupt *interrupt)
+ DEVICE_ACCESS(lca_pci_conf)
+ {
+ 	uint64_t idata = 0, odata = 0;
+-	int tag, bus, dev, func, reg;
++	int tag, type1, bus, dev, func, reg;	/*  #515  */
+ 	struct lca_data *d = (struct lca_data *) extra;
+ 
+ 	if (writeflag == MEM_WRITE)
+@@ -118,9 +118,25 @@ DEVICE_ACCESS(lca_pci_conf)
+ 	 *	tag = (bus << 16) | (device << 11) | (function << 8)
+ 	 */
+ 	/*  printf("tag = 0x%x\n", (int)tag);  */
+-	bus = d->ioc_conf & 1;
+ 
+-	if (bus == 0) {
++	/*  #515: `bus' used to be BOTH the configuration CYCLE TYPE and the
++	    DESTINATION BUS, and conflating them is the whole defect.  IOC_CONF bit 0
++	    selects the cycle type only -- 21066/21066A HRM S6.2.9: "PCI address bits
++	    ad<1:0> come directly from configuration cycle type register (IOC_CONF,
++	    Section 6.4.2) bits <1:0>" -- and it does NOT carry a bus number.  The
++	    destination bus of a type-1 cycle lives in the ADDRESS, per the PCI Local
++	    Bus specification's type-1 layout (bus 23..16, dev 15..11, fn 10..8,
++	    reg 7..2), which S6.2.9 defers to explicitly.
++
++	    Before this, a guest that merely SET bit 0 -- a value the CONF guard
++	    ACCEPTS -- made any subsequent access in this window reach
++	    `fatal("TODO. Non-zero bus."); exit(1)'.  MEASURED: two ordinary guest
++	    accesses, nothing refused anywhere on the path
++	    (regress/lca_confbus_probe.py, 3/4 pre-fix; artifacts/lcaconfbus1kill/).  */
++	type1 = d->ioc_conf & 1;	/*  #515  */
++	bus = 0;			/*  #515  */
++
++	if (!type1) {			/*  #515  */
+ 		/*  #511: was `0x800 << dev'.  `0x800' is a plain int (2^11) and `dev'
+ 		    reaches 20, so the last iteration evaluates 2^31 -- a SIGNED
+ 		    OVERFLOW, undefined by C99 6.5.7p4, not merely
+@@ -163,17 +179,32 @@ DEVICE_ACCESS(lca_pci_conf)
+ 			dev = 0;
+ 		}
+ 	} else {
+-		fatal("TODO. Non-zero bus.\n");
+-		exit(1);
++		/*  #515: a type-1 cycle carries its destination in the address.  */
++		bus = (tag >> 16) & 0xff;	/*  #515  */
++		dev = (tag >> 11) & 0x1f;	/*  #515  */
+ 	}
+ 
+ 	func = (tag >> 8) & 7;
+ 	/*  printf("bus=%i dev=%i func=%i reg=%i\n", bus,dev,func,reg);  */
+ 
+-	/*  Pass PCI accesses onto bus_pci:  */
+-	bus_pci_setaddr(cpu, d->pci_data, bus, dev, func, reg);
+-	bus_pci_data_access(cpu, d->pci_data, writeflag == MEM_READ?
+-	    &odata : &idata, len, writeflag);
++	/*  #515: a type-1 cycle whose bus field is zero selects NOTHING.  Type-1 is
++	    how a bridge is asked to reach a bus BEHIND it; the primary bus is reached
++	    with type-0 cycles, whose IDSEL encoding is decoded above.  Forwarding this
++	    case would set cur_bus = 0 and hand the access to whichever primary-bus
++	    device matched -- `i82378zb' is registered at 0:7:0 by DEVINIT below -- so
++	    simply decoding `bus' and stopping there would replace a host kill with a
++	    NEW MISROUTING.  Refuse it instead, matching `bus_pci_data_access''s own
++	    empty-slot contract (bus_pci.c, the `dev == NULL' arm: all-ones at register
++	    0, zero elsewhere) so the guest sees the ordinary "nothing there" answer.
++	    Writes are discarded, which leaves backend state untouched.  */
++	if (type1 && bus == 0) {		/*  #515  */
++		odata = reg == 0? (uint64_t) -1 : 0;
++	} else {
++		/*  Pass PCI accesses onto bus_pci:  */
++		bus_pci_setaddr(cpu, d->pci_data, bus, dev, func, reg);
++		bus_pci_data_access(cpu, d->pci_data, writeflag == MEM_READ?
++		    &odata : &idata, len, writeflag);
++	}
+ 
+ 	if (writeflag == MEM_READ)
+ 		memory_writemax64(cpu, data, len, odata);
+1:# `#514` alphaswpctxreg: the OS's context-switch primitive returned its result in the register the ABI tells the caller to discard
+88:wrote that *"`#514` has now landed first, so that row owes a re-baselined witness"*, carrying
+90:`#514` did not touch the flush at all:**
+100:# `#513` sgirekills: five modelled registers ended the host when read back -- and four adversarial passes, three of which found something
+171:# #513 sgirekills -- kill table 1   (scratch clone /tmp/gx513, frozen instrument)
+208:# #513 pass-2 L2 verification  (scratch clone /tmp/gx513b, frozen instrument)
+221:# #513 pass 3 -- LATCH-COLLISION CLASS CLOSURE  (clone /tmp/gx513e)
+259:# #513 pass 4 -- ELEVEN ALIASES, ONE PROBE VERSION  (clone /tmp/gx513f)
+303:# `#512` pcc2c040kill: one legal guest byte store ended the host
+480:# `#511` lcashiftub: `0x800 << dev` overflows a signed int on the last iteration
+520:the witness for a *different* row (`lcaconfbus1kill`). Its control read drives a guest `ldq` into
+617:**Note the repair may NOT transfer unchanged**: `#511`'s "nothing else moves" turned on `tag` being
+
+ succeeded in 255ms:
+1:/*
+2: *  Copyright (C) 2006-2011  Anders Gavare.  All rights reserved.
+3: *
+4: *  Redistribution and use in source and binary forms, with or without
+5: *  modification, are permitted provided that the following conditions are met:
+6: *
+7: *  1. Redistributions of source code must retain the above copyright
+8: *     notice, this list of conditions and the following disclaimer.
+9: *  2. Redistributions in binary form must reproduce the above copyright  
+10: *     notice, this list of conditions and the following disclaimer in the 
+11: *     documentation and/or other materials provided with the distribution.
+12: *  3. The name of the author may not be used to endorse or promote products
+13: *     derived from this software without specific prior written permission.
+14: *
+15: *  THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+16: *  ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+17: *  IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+18: *  ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE   
+19: *  FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+20: *  DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+21: *  OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+22: *  HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+23: *  LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+24: *  OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+25: *  SUCH DAMAGE.
+26: *
+27: *
+28: *  COMMENT: LCA PCI bus, for Alpha machines
+29: */
+30:
+31:#include <stdio.h>
+32:#include <stdlib.h>
+33:#include <string.h>
+34:
+35:#include "bus_isa.h"
+36:#include "bus_pci.h"
+37:#include "cpu.h"
+38:#include "device.h"
+39:#include "emul.h"
+40:#include "interrupt.h"
+41:#include "machine.h"
+42:#include "memory.h"
+43:#include "misc.h"
+44:
+45:#include "thirdparty/alpha_lcareg.h"
+46:
+47:#define	LCA_ISA_BASE	(LCA_PCI_SIO + 0x10000000)
+48:#define	LCA_ISA_MEMBASE	(LCA_PCI_SIO + 0x18000000)
+49:
+50:
+51:struct lca_data {
+52:	struct pci_data		*pci_data;
+53:
+54:	uint64_t		ioc_conf;
+55:	uint64_t		tlb_enable;
+56:	uint64_t		window_base_0;
+57:	uint64_t		window_mask_0;
+58:	uint64_t		window_t_base_0;
+59:	uint64_t		window_base_1;
+60:	uint64_t		window_mask_1;
+61:	uint64_t		window_t_base_1;
+62:};
+63:
+64:
+65:/*
+66: *  lca_interrupt_assert():
+67: *
+68: *  Line 0 = ISA interrupt.
+69: */
+70:void lca_interrupt_assert(struct interrupt *interrupt)
+71:{
+72:	fatal("lca_interrupt_assert: TODO\n");
+73:	exit(1);
+74:}
+75:
+76:
+77:/*
+78: *  lca_interrupt_deassert():
+79: *
+80: *  Line 0 = ISA interrupt.
+81: */
+82:void lca_interrupt_deassert(struct interrupt *interrupt)
+83:{
+84:	fatal("lca_interrupt_deassert: TODO\n");
+85:	exit(1);
+86:}
+87:
+88:
+89:DEVICE_ACCESS(lca_pci_conf)
+90:{
+91:	uint64_t idata = 0, odata = 0;
+92:	int tag, type1, bus, dev, func, reg;	/*  #515  */
+93:	struct lca_data *d = (struct lca_data *) extra;
+94:
+95:	if (writeflag == MEM_WRITE)
+96:		idata = memory_readmax64(cpu, data, len);
+97:
+98:	/*
+99:	 *  1. Decompose the address into a tag.
+100:	 *
+101:	 *  According to NetBSD's lca_pci.c, the address is composed like this:
+102:	 *
+103:	 *	addr = tag << 5 | (regoffset & ~0x03) << 5 | 0x3 << 3
+104:	 */
+105:	reg = (relative_addr >> 5) & 0xfc;
+106:	tag = (relative_addr >> 5) & ~0xff;
+107:
+108:	/*
+109:	 *  2. Decompose the tag into bus, dev, and func.
+110:	 *
+111:	 *  The tag can be constructed in one of two ways. On the primary
+112:	 *  bus (nr 0):
+113:	 *
+114:	 *	tag = (1 << (device + 11)) | (function << 8);
+115:	 *
+116:	 *  and on other busses, the tag is a normal:
+117:	 *
+118:	 *	tag = (bus << 16) | (device << 11) | (function << 8)
+119:	 */
+120:	/*  printf("tag = 0x%x\n", (int)tag);  */
+121:
+122:	/*  #515: `bus' used to be BOTH the configuration CYCLE TYPE and the
+123:	    DESTINATION BUS, and conflating them is the whole defect.  IOC_CONF bit 0
+124:	    selects the cycle type only -- 21066/21066A HRM S6.2.9: "PCI address bits
+125:	    ad<1:0> come directly from configuration cycle type register (IOC_CONF,
+126:	    Section 6.4.2) bits <1:0>" -- and it does NOT carry a bus number.  The
+127:	    destination bus of a type-1 cycle lives in the ADDRESS, per the PCI Local
+128:	    Bus specification's type-1 layout (bus 23..16, dev 15..11, fn 10..8,
+129:	    reg 7..2), which S6.2.9 defers to explicitly.
+130:
+131:	    Before this, a guest that merely SET bit 0 -- a value the CONF guard
+132:	    ACCEPTS -- made any subsequent access in this window reach
+133:	    `fatal("TODO. Non-zero bus."); exit(1)'.  MEASURED: two ordinary guest
+134:	    accesses, nothing refused anywhere on the path
+135:	    (regress/lca_confbus_probe.py, 3/4 pre-fix; artifacts/lcaconfbus1kill/).  */
+136:	type1 = d->ioc_conf & 1;	/*  #515  */
+137:	bus = 0;			/*  #515  */
+138:
+139:	if (!type1) {			/*  #515  */
+140:		/*  #511: was `0x800 << dev'.  `0x800' is a plain int (2^11) and `dev'
+141:		    reaches 20, so the last iteration evaluates 2^31 -- a SIGNED
+142:		    OVERFLOW, undefined by C99 6.5.7p4, not merely
+143:		    implementation-defined.  MEASURED under UBSAN before the change:
+144:		    "dev_lca.c:125:21: runtime error: left shift of 2048 by 20 places
+145:		    cannot be represented in type 'int'", reached by an ordinary guest
+146:		    ldq into the PCI config window (regress/lca_confbus_probe.py against
+147:		    build-asan; artifacts/lcashiftub/ubsan_HEAD_20260907.raw).
+148:
+149:		    `0x800U' makes the operand unsigned, so 2048U << 20 is 0x80000000U --
+150:		    inside unsigned int -- and NOTHING ELSE MOVES.
+151:
+152:		    *** THE REASON, CORRECTED: AN EARLIER DRAFT SAID `tag' IS "ALREADY A
+153:		    WIDER UNSIGNED QUANTITY".  THAT IS FALSE -- `tag' is a plain signed
+154:		    `int' (:92) -- AND FOUR PASS-2 SEATS CAUGHT IT.  Worse, the claim was
+155:		    backwards: being WIDER is what would CREATE a difference, not remove
+156:		    one.  Had `tag' been `uint64_t', the old `int' 0x80000000 is NEGATIVE
+157:		    and would SIGN-EXTEND to 0xffffffff80000000 for the `&', while
+158:		    `0x800U << 20' zero-extends to 0x0000000080000000 -- two different
+159:		    masks.  The seats were right about the mechanism and it does not fire
+160:		    here only because of the type.
+161:
+162:		    WHAT ACTUALLY HOLDS: both operands are 32-bit, so the `&' is performed
+163:		    at 32 bits either way -- `int & int' before, and after, `tag' converted
+164:		    to `unsigned int' by the usual arithmetic conversions.  The RESULT'S
+165:		    BIT PATTERN IS IDENTICAL; only its type changes, and it is consumed
+166:		    solely as a truth test in `if (...)'.  So no guest-visible value moves,
+167:		    and the repair is owed purely by the LANGUAGE. ***
+168:
+169:		    *** THE LOOP THIS SITS IN IS THIS FILE'S OWN GRACEFUL-DEGRADATION
+170:		    PRECEDENT -- the `dev >= 21' arm below has a commented-out
+171:		    fatal()/exit(1) and substitutes `dev = 0' instead, and `lcabadval'
+172:		    cites it as a transferable warrant.  The safe path contained the UB. ***  */
+173:		for (dev=0; dev<21; dev++)
+174:			if (tag & (0x800U << dev))	/*  #511  */
+175:				break;
+176:		if (dev >= 21) {
+177:			/*  fatal("[ LCA: No bus 0 device? TODO ]\n");
+178:			exit(1);  */
+179:			dev = 0;
+180:		}
+181:	} else {
+182:		/*  #515: a type-1 cycle carries its destination in the address.  */
+183:		bus = (tag >> 16) & 0xff;	/*  #515  */
+184:		dev = (tag >> 11) & 0x1f;	/*  #515  */
+185:	}
+186:
+187:	func = (tag >> 8) & 7;
+188:	/*  printf("bus=%i dev=%i func=%i reg=%i\n", bus,dev,func,reg);  */
+189:
+190:	/*  #515: a type-1 cycle whose bus field is zero selects NOTHING.  Type-1 is
+191:	    how a bridge is asked to reach a bus BEHIND it; the primary bus is reached
+192:	    with type-0 cycles, whose IDSEL encoding is decoded above.  Forwarding this
+193:	    case would set cur_bus = 0 and hand the access to whichever primary-bus
+194:	    device matched -- `i82378zb' is registered at 0:7:0 by DEVINIT below -- so
+195:	    simply decoding `bus' and stopping there would replace a host kill with a
+196:	    NEW MISROUTING.  Refuse it instead, matching `bus_pci_data_access''s own
+197:	    empty-slot contract (bus_pci.c, the `dev == NULL' arm: all-ones at register
+198:	    0, zero elsewhere) so the guest sees the ordinary "nothing there" answer.
+199:	    Writes are discarded, which leaves backend state untouched.  */
+200:	if (type1 && bus == 0) {		/*  #515  */
+201:		odata = reg == 0? (uint64_t) -1 : 0;
+202:	} else {
+203:		/*  Pass PCI accesses onto bus_pci:  */
+204:		bus_pci_setaddr(cpu, d->pci_data, bus, dev, func, reg);
+205:		bus_pci_data_access(cpu, d->pci_data, writeflag == MEM_READ?
+206:		    &odata : &idata, len, writeflag);
+207:	}
+208:
+209:	if (writeflag == MEM_READ)
+210:		memory_writemax64(cpu, data, len, odata);
+211:
+212:	return 1;
+213:}
+214:
+215:
+216:DEVICE_ACCESS(lca_isa)
+217:{
+218:	unsigned int ofs, i;
+219:	uint8_t byte;
+220:
+221:	relative_addr >>= 5;
+222:
+223:	ofs = relative_addr & 3;
+224:	if (ofs > len) {
+225:		fatal("[ ofs=%i len=%i in lca_isa access function. "
+226:		    "aborting ]\n", ofs, len);
+227:		exit(1);
+228:	}
+229:
+230:	if (writeflag == MEM_WRITE) {
+231:		byte = data[ofs % len];
+232:		return cpu->memory_rw(cpu, cpu->mem, LCA_ISA_BASE +
+233:		    relative_addr, &byte, 1, writeflag, CACHE_NONE);
+234:	}
+235:
+236:	cpu->memory_rw(cpu, cpu->mem, LCA_ISA_BASE + relative_addr,
+237:	    &byte, 1, MEM_READ, CACHE_NONE);
+238:
+239:	for (i=0; i<len; i++)
+240:		data[i] = i == ofs? byte : 0x00;
+241:
+242:	return 1;
+243:}
+244:
+245:
+246:DEVICE_ACCESS(lca_ioc)
+247:{
+248:	uint64_t idata = 0, odata = 0;
+249:	struct lca_data *d = (struct lca_data *) extra;
+250:
+251:	if (writeflag == MEM_WRITE)
+252:		idata = memory_readmax64(cpu, data, len);
+253:
+254:	switch (relative_addr + LCA_IOC_BASE) {
+255:
+260:	case LCA_IOC_CONF:
+262:			odata = d->ioc_conf;
+264:			d->ioc_conf = idata;
+278:				    " IOC_CONF: 0x%" PRIx64 "\n", (uint64_t)idata);
+421:	bus_pci_add(devinit->machine, d->pci_data, devinit->machine->memory,
+424:	memory_device_register(devinit->machine->memory, "lca_pci_conf",
+425:	    LCA_PCI_CONF, 0x20000000, dev_lca_pci_conf_access, (void *)d,
+428:	memory_device_register(devinit->machine->memory, "lca_isa",
+432:	memory_device_register(devinit->machine->memory, "lca_ioc",
+1:#!/usr/bin/env python3
+2:#
+3:#  lcaconfbus1kill -- RUNG-3 WITNESS: an ACCEPTED write to LCA_IOC_CONF arms a host kill in a
+4:#  DIFFERENT handler, reached by an ordinary guest load with no rejected value anywhere on the path.
+5:#
+6:#  THE DEFECT, two handlers in `dev_lca.c':
+7:#
+8:#      DEVICE_ACCESS(lca_ioc), case LCA_IOC_CONF:
+9:#              d->ioc_conf = idata;
+10:#              /*  Only bit 0 is implemented so far, the PCI bus 0 vs bus non-0 selection bit.  */
+11:#              if (idata & ~1) { fatal(...); exit(1); }     <-- 0x1 PASSES.  Accepted and stored.
+12:#
+13:#      DEVICE_ACCESS(lca_pci_conf):
+14:#              bus = d->ioc_conf & 1;
+15:#              if (bus == 0) { ...dev scan, already de-fatalised... }
+16:#              else { fatal("TODO. Non-zero bus.\n"); exit(1); }
+17:#
+18:#  So: guest stores 0x1 to IOC_CONF (accepted), then ANY access in the PCI config window ends the
+19:#  host.  Two ordinary accesses; nothing is refused.
+20:#
+21:#  *** WHY THIS IS A SEPARATE FILE AND NOT A SESSION IN lca_confwidth_probe.py. ***  That probe is a
+22:#  SHIPPED witness with its own contract (HEAD 4/6, fix 6/6) recorded in the wiring manifest.  Adding
+23:#  rows to a shipped detector perturbs its RESULT line and its recorded scores, and this defect is a
+24:#  separate queue row with a separate disposition.  The ENCODERS and the session driver are copied
+25:#  deliberately -- probes in this tree are standalone by design.
+26:#
+27:#  ---------------------------------------------------------------------------------------------
+28:#  DESIGN REVIEWED BY THE grok SEAT, 2026-09-07, AFTER codex REFUSED THE BRIEF ON A CONTENT FILTER
+29:#  (regress/artifacts/lcaconfbus1kill/grok_witness_20260907.txt).  VERDICT: SOUND.  Four corrections
+30:#  from that review are built in here and are NOT optional:
+31:#
+32:#    1.  ONE PROCESS, NOT TWO SESSIONS.  The control read and the armed read happen in the SAME
+33:#        emulator run, so ONLY `ioc_conf' differs between them.  Two separate sessions would leave a
+34:#        residual that something else differed before the debugger prompt.
+35:#    2.  S2 IS A READ, NOT A WRITE.  Both reach the kill.  But an empty-slot WRITE makes
+36:#        `bus_pci_data_access' print "[ ... write to non-existant device ... ]", so the CONTROL
+37:#        would carry a second fatal() on stderr.  An empty-slot READ of reg 0 is the architectural
+38:#        ID probe and is silent.
+39:#    3.  LIVENESS IS NOT `ioc rt'.  That row (in the sibling probe) proves the WRITER round-trips;
+40:#        it says nothing about THIS window.  Liveness here is the control read SURVIVING and
+41:#        returning the empty-slot signature.
+42:#    4.  STAY ON `step'.  `continue' would make `lca_interrupt_assert'/`_deassert' -- bare
+43:#        fatal()+exit(1) stubs with no guard -- a confounder.
+44:#
+45:#  THREE TRAPS THE SIBLING PROBE ALREADY PAID FOR, and none recurs here:
+46:#    *  debugger `dump' skips DM_DEFAULT handlers and would return the #95 pre-zero, making both
+47:#       reads look unmapped.  Every access below is a guest instruction.
+48:#    *  a debugger `put d' of a killing value IS a host kill but is NOT a guest instruction, so it
+49:#       witnesses nothing.  The arming store is a guest `stq'.
+50:#    *  HAE at window offset 0 silently succeeds -- but that is `LCA_IOC_BASE+0' in `lca_ioc'.
+51:#       `lca_pci_conf' has NO per-offset special case, so `LCA_PCI_CONF+0' is a clean control.
+52:#
+53:#  *** CONTRACT -- WHAT THIS WITNESSES AND WHAT IT DOES NOT. ***
+54:#  It establishes: on unmodified `alphabook1', an ACCEPTED `stq 0x1' to CONF followed by ANY access
+55:#  in the PCI config window produces a host exit(1) whose diagnostic is this arm, with no rejected
+56:#  value on the path.  It does NOT establish that any shipped guest does this, and it is NOT a
+57:#  detector of the repair: "host survives" greens equally for a silent return, for a latched
+58:#  announce, and for falling through into bus_pci with cur_bus=1 (empty type-1 also survives).  A
+59:#  fix round owes a row that discriminates those.  Do not read a green here as "type-1 is modelled".
+60:#
+61:#  Usage:  lca_confbus_probe.py <gxemul-binary> [label]
+62:import os, sys, pty, select, time, re
+63:
+64:BIN   = sys.argv[1]
+65:LABEL = sys.argv[2] if len(sys.argv) > 2 else "?"
+66:MACH  = "alphabook1"          #  device_add(machine, "lca") is ST_ALPHABOOK1 ONLY
+67:
+68:rows = []
+69:def row(name, got, want, note=""):
+70:    ok = (got == want)
+71:    rows.append((name, ok))
+72:    print("%-14s %-24s %-24s %-52s %s" % (name, str(got), str(want), note, "ok" if ok else "FAIL"))
+73:    return ok
+74:
+75:# ---------------------------------------------------------------- encoder (memory format only)
+76:ZERO, T0, T1, T2, T3 = 31, 1, 2, 3, 4
+77:
+78:def mem(op, ra, rb, disp):
+79:    assert -32768 <= disp <= 32767, "displacement %d out of range" % disp
+80:    return (op << 26) | (ra << 21) | (rb << 16) | (disp & 0xffff)
+81:
+82:def LDA (ra, disp, rb=ZERO): return mem(0x08, ra, rb, disp)
+83:def LDAH(ra, disp, rb=ZERO): return mem(0x09, ra, rb, disp)
+84:def LDQ (ra, disp, rb):      return mem(0x29, ra, rb, disp)
+85:def STQ (ra, disp, rb):      return mem(0x2d, ra, rb, disp)
+86:
+87:def load_const(reg, val):
+88:    #  32-bit only, and deliberately so: this builds the SCRATCH pointer, never a 64-bit operand.
+89:    lo = val & 0xffff
+90:    hi = (val >> 16) & 0xffff
+91:    if lo >= 0x8000:
+92:        hi = (hi + 1) & 0xffff
+93:    ops = [LDAH(reg, hi if hi < 0x8000 else hi - 0x10000)]
+94:    if lo:
+95:        ops.append(LDA(reg, lo if lo < 0x8000 else lo - 0x10000, reg))
+96:    return ops
+97:
+98:# ---------------------------------------------------------------- addresses (ALL RAM < 64 MB)
+99:K0SEG        = 0xfffffc0000000000
+100:def k0(p):   return K0SEG | p
+101:
+102:LCA_IOC_BASE = 0x180000000
+103:LCA_IOC_CONF = LCA_IOC_BASE + 0x020      # alpha_lcareg.h
+104:LCA_PCI_CONF = 0x1e0000000               # alpha_lcareg.h; DEVINIT maps 0x20000000 bytes here
+105:SCRATCH      = 0x01020000
+106:CODE         = 0x01040000
+107:LEGAL        = 0x1                       # `idata & ~1' == 0 -> ACCEPTED by the CONF guard
+108:
+109:assert max(SCRATCH, CODE) < 64 * 1024 * 1024, "scratch/code must be inside RAM"
+110:
+111:DUMMY = os.path.join(os.path.dirname(os.path.abspath(__file__)), "alpha_dummy.bin")
+112:if not os.path.exists(DUMMY):
+113:    with open(DUMMY, "wb") as f:
+114:        f.write(b"\0" * 8)
+115:
+116:# ---------------------------------------------------------------- session
+117:def session(cmds, settle=1.6, spin=2.2):
+118:    pid, fd = pty.fork()
+119:    if pid == 0:
+120:        os.execv(BIN, [BIN, "-V", "-x", "-E", "alpha", "-e", MACH, "-M", "64",
+121:                       "0x20000000:" + DUMMY])
+122:        os._exit(127)
+123:    buf = ""
+124:    def rd(t):
+125:        nonlocal buf
+126:        end = time.time() + t
+127:        while time.time() < end:
+128:            r, _, _ = select.select([fd], [], [], 0.1)
+129:            if not r:
+130:                continue
+131:            try:
+132:                d = os.read(fd, 65536)
+133:                if not d:
+134:                    return False
+135:                buf += d.decode("latin-1", "replace")
+136:            except OSError:
+137:                return False
+138:        return True
+139:    alive = rd(settle)
+140:    for i, c in enumerate(cmds):
+141:        try:
+142:            os.write(fd, (c + "\n").encode("latin-1"))
+143:        except OSError:
+144:            alive = False; break
+145:        if not rd(spin if i == len(cmds) - 1 else 0.35):
+146:            alive = False; break
+147:    try:
+148:        os.write(fd, b"quit\n"); rd(0.4)
+149:    except OSError:
+150:        pass
+151:    try:
+152:        os.close(fd)
+153:    except OSError:
+154:        pass
+155:    return buf.replace("\r", ""), alive
+156:
+157:def printed(t, reg):
+158:    m = re.search(r"print\s+%s\s*\n\s*(0x[0-9a-f]+)" % reg, t)
+159:    return "absent" if not m else "0x%x" % int(m.group(1), 16)
+160:
+161:print("lca_confbus_probe -- binary=%s label=%s machine=%s" % (BIN, LABEL, MACH))
+162:print("%-14s %-24s %-24s %-52s %s" % ("row", "got", "want", "note", ""))
+163:
+164:# ---------------------------------------------------------------- the single session
+165:#  Register discipline: T0 holds the SCRATCH base and is CLOBBERED last, after both pointers are
+166:#  loaded, so only four temporaries are needed.
+167:setup = ["put d 0x%x, 0x%x" % (SCRATCH + 0,  k0(LCA_IOC_CONF)),
+168:         "put d 0x%x, 0x%x" % (SCRATCH + 8,  LEGAL),
+169:         "put d 0x%x, 0x%x" % (SCRATCH + 16, k0(LCA_PCI_CONF))]
+170:
+171:lc      = load_const(T0, SCRATCH)
+172:prologue = lc + [LDQ(T1, 16, T0),   # t1 = k0(LCA_PCI_CONF)
+173:                 LDQ(T3, 0,  T0),   # t3 = k0(LCA_IOC_CONF)
+174:                 LDQ(T0, 8,  T0),   # t0 = 0x1   (base clobbered LAST -- both pointers are loaded)
+175:                 LDQ(T2, 0,  T1)]   # [A] CONTROL read of PCI config, with ioc_conf == 0
+176:armed    = [STQ(T0, 0, T3),         # [B] the ACCEPTED store: ioc_conf = 1
+177:            LDQ(T2, 0, T1)]         # [C] the SAME read again -- now bus == 1
+178:
+179:prog = prologue + armed
+180:cmds = setup + ["put w 0x%x, 0x%08x" % (k0(CODE) + 4 * i, op) for i, op in enumerate(prog)]
+181:cmds += ["pc=0x%x" % k0(CODE),
+182:         "step %d" % len(prologue),    # run up to and including the CONTROL read
+183:         "print t2",                   # its value, while the host is certainly still alive
+184:         "step %d" % len(armed)]       # the accepted store, then the armed read
+185:txt, alive = session(cmds)
+186:
+187:ctl = printed(txt, "t2")
+188:
+189:#  ---- CONTROL 1: the same access, same address, same width, SURVIVES with ioc_conf == 0 --------
+190:#  This is what attributes any later death to the VALUE and not to the address, the width, or the
+191:#  fact that the window was touched at all.
+192:row("bus ctl", "yes" if ctl != "absent" else "absent", "yes",
+193:    "CONTROL: identical read at ioc_conf==0 completed and printed")
+194:
+195:#  ---- CONTROL 2: DEVICE SIGNATURE on the control -----------------------------------------------
+196:#  grok: an empty-slot read returns 0xffffffffffffffff via memory_writemax64; UNMAPPED returns 0.
+197:#  So this distinguishes "reached lca_pci_conf and probed an absent device" from "missed the device".
+198:row("bus ctlsig", ctl, "0xffffffffffffffff",
+199:    "DEVICE SIGNATURE: empty-slot ID probe; unmapped would read 0")
+200:
+201:#  ---- THE DEFECT ROW ---------------------------------------------------------------------------
+202:#  ORACLE POLARITY: the ladder requires the witness to show the symptom on the PRE-FIX build and go
+203:#  GREEN post-fix with the SAME script, so this asserts the CORRECT behaviour.
+204:#  PRE-FIX  -> "dead"  -> RED.        POST-FIX -> "alive" -> GREEN.
+205:row("bus kill", "alive" if alive else "dead", "alive",
+206:    "an ACCEPTED stq 0x1 then an ordinary ldq must NOT end the host")
+207:
+208:#  ---- ATTRIBUTION: if it died, it died HERE ----------------------------------------------------
+209:#  Green in BOTH directions by construction, and RED only if the host dies WITHOUT this arm's
+210:#  diagnostic -- i.e. if something else killed it.  The literal is unique in src/ (one site).
+211:sig = ("TODO. Non-zero bus." in txt)
+212:row("bus attrib", "yes" if (alive or sig) else "died-elsewhere", "yes",
+213:    "ATTRIBUTION: a death here must carry THIS arm's unique diagnostic")
+214:
+215:#  *** ECHO THE EVIDENCE INTO THIS LOG. ***  The first run of this probe passed `bus attrib' by
+216:#  testing the PTY buffer and printing nothing, so the PRESERVED artifact carried no trace of the
+217:#  diagnostic the row rests on -- a green row whose evidence a later reader cannot check.  The
+218:#  literal is unique in src/ (one site, dev_lca.c:133; a second grep hit is the .o).
+219:for _l in txt.split(chr(10)):
+220:    if "Non-zero bus" in _l or "lca_ioc: unimplemented" in _l:
+221:        print("  EVIDENCE: %s" % _l.strip())
+222:
+223:# ================================================================================================
+224:#  #515: THE DISCRIMINATING ROWS THIS PROBE'S OWN CONTRACT SAYS THE FIX ROUND OWES.
+225:#
+226:#  The contract at the top of this file states the blind spot in its own words: *"host survives"
+227:#  greens equally for a silent return, for a latched announce, and for falling through into bus_pci
+228:#  with cur_bus=1 (empty type-1 also survives).  A fix round owes a row that discriminates those.*
+229:#
+230:#  IT IS RIGHT, AND THE REASON IS EXACT: the chosen repair's refusal arm returns the empty-slot
+231:#  signature ITSELF -- all-ones at register 0, zero elsewhere -- because that is what
+232:#  `bus_pci_data_access' returns from its own `dev == NULL' arm (bus_pci.c, VERIFIED by reading it,
+233:#  not taken from a seat).  So a READ cannot tell a refusal from a forward to an empty bus-1 slot:
+234:#  both produce 0xffff...ffff.
+235:#
+236:#  *** THE DISCRIMINATOR IS A WRITE. ***  An empty-slot WRITE is not silent -- it prints
+237:#
+238:#      [ bus_pci_data_access(): write to non-existant device, bus %i func %i device %i ]
+239:#
+240:#  naming `cur_bus', `cur_func' and `cur_device'.  That ONE channel does three separate jobs:
+241:#
+242:#    *  it proves FORWARDING HAPPENED at all (a refusal prints nothing);
+243:#    *  it names WHERE the decode landed -- so this is an ANCHORED row in the carrier's clause-(f)
+244:#       sense, absolute rather than relative.  "If every address in this device shifted, which row
+245:#       reds?"  THIS one: the printed tuple changes.  A distinctness or survival oracle cannot see
+246:#       a translation at all;
+247:#    *  its ABSENCE at the bus-zero address proves the type-1/bus-0 alias is REFUSED rather than
+248:#       forwarded onto the primary bus -- which is the misrouting the repair exists to prevent, and
+249:#       which no survival oracle can observe because a misroute survives happily.
+250:#
+251:#  ADDRESS DERIVATION, from the handler's own two lines rather than from a table:
+252:#
+253:#      reg = (relative_addr >> 5) & 0xfc          tag = (relative_addr >> 5) & ~0xff
+254:#      type-1:  bus = (tag >> 16) & 0xff   dev = (tag >> 11) & 0x1f   func = (tag >> 8) & 7
+255:#      type-0:  dev = first d with tag & (0x800U << d)
+256:#
+257:#      bus 1, dev 3, func 2, reg 0  ->  tag = 0x11a00  ->  relative_addr = 0x234000
+258:#      bus 0 (the alias)            ->  tag = 0x00000  ->  relative_addr = 0x000000
+259:#      type-0 dev 7 (i82378zb)      ->  tag = 0x40000  ->  relative_addr = 0x800000
+260:#
+261:#  dev/func/bus are deliberately DISTINCT and non-zero (1/3/2) so a swapped field cannot pass by
+262:#  coincidence -- the hand-assembled-encoding trap in its address-decode form.
+263:
+264:T1_ADDR = LCA_PCI_CONF + 0x234000    # type-1 -> bus 1, dev 3, func 2, reg 0
+265:T1_ZERO = LCA_PCI_CONF + 0x000000    # type-1 -> bus 0  == THE ALIAS, must be refused
+266:T0_DEV7 = LCA_PCI_CONF + 0x800000    # type-0 -> dev 7  == the registered i82378zb
+267:
+268:#  *** PINNED FROM THE PRE-FIX BUILD, AND THAT IS THE CORRECT POLARITY FOR AN ACCEPT ROW. ***
+269:#  The fix does not intend to change type-0 service at all, so the PRE-FIX build is the authority on
+270:#  what a real device read returns.  Pinning it here is not fitting the oracle to the binary -- it is
+271:#  the accept side of the predicate the fix ADDS, which the de-escalation clause requires, and its
+272:#  kill is a mutant that routes type-0 into the refusal arm.  Measured on /tmp/gxlca (baseline
+273:#  5d3f82c) before the fix was written; see artifacts/lcaconfbus1kill/.
+274:T0_PIN = "0x304848086"   # MEASURED on /tmp/gxlca (baseline 5d3f82c), pre-fix
+275:#  0x0000_0003_0484_8086 -- an 8-byte read spans config registers 0 and 4:
+276:#      reg 0  0x04848086 = PCI_ID_CODE(0x8086 Intel, 0x0484 SIO)  -- the i82378zb
+277:#      reg 4  0x00000003             = command 0x0003, status 0x0000
+278:#  Derived independently from bus_pci.c's PCIINIT(i82378zb) and then MEASURED; the two
+279:#  agree, which is the check the hand-assembled-encoding trap asks for.
+280:
+281:# ---- SESSION 2: type-1 forwarding, and the bus-zero alias ---------------------------------------
+282:#  Register discipline as in session 1: the SCRATCH base in T0 is clobbered LAST, after every
+283:#  pointer is loaded, so four temporaries suffice.
+284:setup2 = ["put d 0x%x, 0x%x" % (SCRATCH + 0,  k0(LCA_IOC_CONF)),
+285:          "put d 0x%x, 0x%x" % (SCRATCH + 8,  LEGAL),
+286:          "put d 0x%x, 0x%x" % (SCRATCH + 16, k0(T1_ADDR)),
+287:          "put d 0x%x, 0x%x" % (SCRATCH + 24, k0(T1_ZERO))]
+288:
+289:prog2 = load_const(T0, SCRATCH) + [
+290:    LDQ(T1, 16, T0),      # t1 = k0(T1_ADDR)
+291:    LDQ(T2, 24, T0),      # t2 = k0(T1_ZERO)
+292:    LDQ(T3, 0,  T0),      # t3 = k0(LCA_IOC_CONF)
+293:    LDQ(T0, 8,  T0),      # t0 = 1        (base clobbered LAST)
+294:    STQ(T0, 0,  T3),      # ioc_conf = 1  -- ACCEPTED by the CONF guard
+295:    STQ(T0, 0,  T1),      # [D] type-1 write, bus 1  -> must FORWARD and name the tuple
+296:    STQ(T0, 0,  T2)]      # [E] type-1 write, bus 0  -> must be REFUSED and name nothing
+297:
+298:cmds2 = setup2 + ["put w 0x%x, 0x%08x" % (k0(CODE) + 4 * i, op) for i, op in enumerate(prog2)]
+299:cmds2 += ["pc=0x%x" % k0(CODE), "step %d" % len(prog2)]
+300:txt2, alive2 = session(cmds2)
+301:
+302:FWD = "bus 1 func 2 device 3"
+303:ALIAS = "bus 0 func 0 device 0"
+304:
+305:row("t1 alive", "alive" if alive2 else "dead", "alive",
+306:    "a type-1 write to a NON-zero bus must not end the host")
+307:
+308:row("t1 anchor", "yes" if FWD in txt2 else "no", "yes",
+309:    "ANCHOR: forwarding happened AND landed at bus 1 dev 3 func 2")
+310:
+311:#  *** THIS ROW WAS VACUOUS AS FIRST WRITTEN, AND THE PRE-FIX RUN IS WHAT SAID SO. ***  It read
+312:#  `refused if ALIAS not in txt2', which scored GREEN on the pre-fix build -- where the host had
+313:#  already died at [D] and access [E] NEVER EXECUTED.  An absence-of-text oracle cannot tell "the
+314:#  access ran and was refused" from "the access never ran", which is this project's
+315:#  pattern-that-matched-nothing class in its purest form: a phantom absence read as a result.
+316:#  Binding it to `alive2' makes the two states render differently, per the oldest rule here --
+317:#  an unrun check and a passing one must never look the same.
+318:row("t1 alias",
+319:    ("refused" if ALIAS not in txt2 else "forwarded") if alive2 else "died-before-E",
+320:    "refused",
+321:    "type-1 with bus 0 must NOT be forwarded onto the primary bus")
+322:
+323:for _l in txt2.split(chr(10)):
+324:    if "non-existant" in _l:
+325:        print("  EVIDENCE(S2): %s" % _l.strip())
+326:
+327:# ---- SESSION 2b: the REFUSAL'S RETURN VALUE ------------------------------------------------------
+328:#  *** THIS ROW EXISTS BECAUSE I ENUMERATED THE CLAUSE-(d) CLOSURE AND FOUND MY OWN ANSWER WRONG. ***
+329:#  Writing the pass-2 brief I claimed the (type-1, bus == 0, READ) cell was unobservable, "because it
+330:#  returns the same all-ones value as the control".  That reasoning conflates two different accesses:
+331:#  the control is a TYPE-0 empty-slot read, and this is the REFUSAL arm's own synthesised value.  They
+332:#  agree on the fix and they do NOT agree under a mutant.
+333:#
+334:#  The refusal's repair is one expression -- `odata = reg == 0? (uint64_t) -1 : 0'.  NULL IT
+335:#  (`odata = 0') and every row above still passes: the alias is otherwise exercised only by a WRITE,
+336:#  whose `odata' is never read, and the two control reads take the type-0 path.  So the canonical
+337:#  clause-(d) mutant on the refusal's own repair SWEEPS the detector clean without this row.
+338:#
+339:#  A type-1 READ at the alias is therefore the cell that pins the refusal's VALUE, as distinct from
+340:#  `t1 alias', which pins only that forwarding did not happen.
+341:setup2b = ["put d 0x%x, 0x%x" % (SCRATCH + 0, k0(LCA_IOC_CONF)),
+342:           "put d 0x%x, 0x%x" % (SCRATCH + 8, LEGAL),
+343:           "put d 0x%x, 0x%x" % (SCRATCH + 16, k0(T1_ZERO))]
+344:prog2b = load_const(T0, SCRATCH) + [
+345:    LDQ(T1, 16, T0),      # t1 = k0(T1_ZERO)
+346:    LDQ(T3, 0,  T0),      # t3 = k0(LCA_IOC_CONF)
+347:    LDQ(T0, 8,  T0),      # t0 = 1     (base clobbered LAST)
+348:    STQ(T0, 0,  T3),      # ioc_conf = 1
+349:    LDQ(T2, 0,  T1)]      # [F] type-1 READ at the alias -> the refusal's synthesised value
+350:cmds2b = setup2b + ["put w 0x%x, 0x%08x" % (k0(CODE) + 4 * i, op) for i, op in enumerate(prog2b)]
+351:cmds2b += ["pc=0x%x" % k0(CODE), "step %d" % len(prog2b), "print t2"]
+352:txt2b, alive2b = session(cmds2b)
+353:t1rd = printed(txt2b, "t2")
+354:
+355:row("t1 rdval", t1rd if alive2b else "died", "0xffffffffffffffff",
+356:    "the refusal must synthesise the empty-slot signature at register 0")
+357:
+358:# ---- SESSION 3: the ACCEPT side -- type-0 service of a REGISTERED device is unchanged -----------
+359:#  ioc_conf is left at its reset value, so this is the `!type1' arm.  A read, not a write: reading a
+360:#  PRESENT device is silent and returns real config data, so this row additionally carries the
+361:#  small-nonzero discipline -- a wrong field yields 0 or all-ones, both of which this rejects.
+362:setup3 = ["put d 0x%x, 0x%x" % (SCRATCH + 0, k0(T0_DEV7))]
+363:prog3 = load_const(T0, SCRATCH) + [LDQ(T1, 0, T0), LDQ(T2, 0, T1)]
+364:cmds3 = setup3 + ["put w 0x%x, 0x%08x" % (k0(CODE) + 4 * i, op) for i, op in enumerate(prog3)]
+365:cmds3 += ["pc=0x%x" % k0(CODE), "step %d" % len(prog3), "print t2"]
+366:txt3, alive3 = session(cmds3)
+367:t0val = printed(txt3, "t2")
+368:
+369:row("t0 alive", "alive" if alive3 else "dead", "alive",
+370:    "ACCEPT: the type-0 path must still reach a registered device")
+371:
+372:row("t0 real", "real" if t0val not in ("absent", "0x0", "0xffffffffffffffff") else t0val, "real",
+373:    "ACCEPT: dev 7 is the i82378zb -- neither empty-slot nor unmapped")
+374:
+375:row("t0 accept", t0val, T0_PIN,
+376:    "ACCEPT: the exact value type-0 service returned before the fix")
+377:
+378:ok = sum(1 for _, o in rows if o)
+379:print("")
+380:print("LCACONFBUS_T1ANCHOR=%s" % ("yes" if FWD in txt2 else "no"))
+381:print("LCACONFBUS_T1READ=%s" % t1rd)
+382:print("LCACONFBUS_T0VAL=%s" % t0val)
+383:print("LCACONFBUS_RESULT=%d/%d" % (ok, len(rows)))
+384:print("LCACONFBUS_WITNESS=%s" % ("PASS" if ok == len(rows) else "FAIL"))
+385:print("LCACONFBUS_DONE")
+
+ERROR: This content was flagged for possible cybersecurity risk. If this seems wrong, try rephrasing your request. To get authorized for security work, join the Trusted Access for Cyber program: https://chatgpt.com/cyber
+ERROR: This content was flagged for possible cybersecurity risk. If this seems wrong, try rephrasing your request. To get authorized for security work, join the Trusted Access for Cyber program: https://chatgpt.com/cyber
+tokens used
+24,984

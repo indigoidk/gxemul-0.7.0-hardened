@@ -1,0 +1,12 @@
+VERDICT: `if (type1 && bus == 0 && len == 8)` — all 14 rows stay green because every row uses an 8-byte access, but type-1 bus-0 accesses with `len != 8` now bypass the refusal and reach `bus_pci_data_access`.
+
+The packet states (READ) that every row uses register 0 and an 8-byte access. The current refusal arm is unconditional for `type1 && bus == 0`. Adding `len == 8` to that condition leaves the tested type-1 bus-0 cases (all `len == 8`) inside the refusal arm, so `t1 alias`, `t1 rdval`, `t1 dev7rd`, and `t1 dev7wr` still pass. Type-1 non-zero bus (`t1 alive`, `t1 anchor`) and all type-0 rows are unaffected because the condition is false for them.
+
+The new defect (REASONED) is that a guest can now use a 1-, 2-, or 4-byte type-1 access with bus 0 to reach `bus_pci_data_access`. That bypasses the intended refusal for type-1 bus-0 cycles, potentially touching the registered `i82378zb` device at bus 0 / dev 7 / func 0 or causing side effects on absent devices. No row exercises `len != 8`, so the battery remains green.
+
+```diff
+-	if (type1 && bus == 0) {		/*  #515  */
++	if (type1 && bus == 0 && len == 8) {	/*  #515  */
+ 		odata = reg == 0? (uint64_t) -1 : 0;
+ 	} else {
+```

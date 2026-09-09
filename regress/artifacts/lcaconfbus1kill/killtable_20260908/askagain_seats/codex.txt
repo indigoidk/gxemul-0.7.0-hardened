@@ -1,0 +1,131 @@
+Reading additional input from stdin...
+OpenAI Codex v0.153.4
+--------
+workdir: C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+model: gpt-6-astra
+provider: openai
+approval: never
+sandbox: read-only
+reasoning effort: max
+reasoning summaries: none
+session id: 01a08422-b816-75b3-9834-0de1c0ec837a
+--------
+user
+# `#515` — THE ASK-AGAIN. The table is clean. Find me one more variant that escapes it.
+
+**This is the single capped adversarial query this project allows once a kill table comes back
+green.** It is capped at one per detector per round, and the cap is the whole safety: anything found
+past it is FILED, not fixed. So make this one count.
+
+**Answer in prose and give me the exact source edit as a diff hunk against the code below. Do not
+write a probe and do not construct any guest instruction sequence** — I will build and measure
+whatever you name.
+
+**VERDICT LINE FIRST**: name your single best variant in the first line.
+
+## What was fixed
+
+`DEVICE_ACCESS(lca_pci_conf)` in `src/devices/dev_lca.c` used ONE variable for two things — the
+configuration CYCLE TYPE (`d->ioc_conf & 1`) and the DESTINATION BUS. A guest storing `0x1` to
+IOC_CONF (a value the register's own guard ACCEPTS) then made any access in the PCI config window
+reach `fatal("TODO. Non-zero bus."); exit(1)`.
+
+The fix, in full:
+
+```c
+	type1 = d->ioc_conf & 1;	/*  #515  */
+	bus = 0;			/*  #515  */
+
+	if (!type1) {			/*  #515  */
+		for (dev=0; dev<21; dev++)
+			if (tag & (0x800U << dev))
+				break;
+		if (dev >= 21)
+			dev = 0;
+	} else {
+		bus = (tag >> 16) & 0xff;	/*  #515  */
+		dev = (tag >> 11) & 0x1f;	/*  #515  */
+	}
+
+	func = (tag >> 8) & 7;
+
+	if (type1 && bus == 0) {		/*  #515  */
+		odata = reg == 0? (uint64_t) -1 : 0;
+	} else {
+		bus_pci_setaddr(cpu, d->pci_data, bus, dev, func, reg);
+		bus_pci_data_access(cpu, d->pci_data, writeflag == MEM_READ?
+		    &odata : &idata, len, writeflag);
+	}
+
+	if (writeflag == MEM_READ)
+		memory_writemax64(cpu, data, len, odata);
+
+	return 1;
+```
+
+Decode above it: `reg = (relative_addr >> 5) & 0xfc;` and `tag = (relative_addr >> 5) & ~0xff;`.
+`bus_pci_data_access` on an absent device returns all-ones at register 0 and zero elsewhere for
+READS, and for WRITES prints `[ ... write to non-existant device, bus %i func %i device %i ]`.
+A write to a REGISTERED device instead prints `... NOT YET SUPPORTED. bus %i, device %i, function
+%i (%s) register 0x%02x`. Exactly one device is registered: `i82378zb` at bus 0, device 7, func 0.
+
+## The 14 rows, and what each one detects
+
+| row | what it asserts |
+|---|---|
+| `bus ctl` / `bus ctlsig` | LIVENESS + DEVICE SIGNATURE: a type-0 read at window+0 returns the empty-slot all-ones |
+| `bus kill` / `bus attrib` | the host survives the armed access; a death must carry this arm's own diagnostic |
+| `t1 alive` | a type-1 write to a non-zero bus does not end the host |
+| `t1 anchor` | that write prints exactly `bus 1 func 2 device 3 ]` — ANCHORED, absolute position |
+| `t1 alias` | a type-1 write with bus 0 prints no `bus 0 func 0 device 0 ]`, checkpointed by a LATER anchor store so "never executed" cannot pass as "refused" |
+| `t1 rdval` | a type-1 read at bus 0 returns `0xffffffffffffffff` — pins the refusal's synthesised VALUE |
+| `t1 dev7rd` | a type-1 read at bus 0 / **dev 7** returns all-ones and NOT the real device's `0x304848086` |
+| `t1 dev7wr` | a type-1 write at bus 0 / dev 7 does not print `device 7, function 0 (i82378zb)` |
+| `t0 write` | a type-0 write still reaches bus_pci and prints `bus 0 func 0 device 5 ]` |
+| `t0 alive` / `t0 real` / `t0 accept` | a type-0 read of dev 7 still returns exactly `0x304848086` |
+
+## The ten variants already measured — do NOT propose these again
+
+```
+base            14/14     the fix itself, clean sweep
+M1_reinstate     7/14     the original fatal()+exit(1) restored verbatim
+M2_nullval      12/14     odata = reg == 0? -1 : 0     ->  odata = 0
+M3_aliasoff     11/14     if (type1 && bus == 0)       ->  if (0)
+M4a_condread    12/14     ... && writeflag == MEM_READ
+M4b_condwrite   12/14     ... && writeflag == MEM_WRITE
+M5_typeswap     12/14     if (!type1)                  ->  if (!type1 || bus == 0)
+M6_busshift     12/14     bus = (tag >> 16)            ->  (tag >> 17)
+M7_devshift     12/14     dev = (tag >> 11)            ->  (tag >> 12)
+M8_busmask      12/14     bus = (tag >> 16) & 0xff     ->  & 0x00
+M9_null          0/14     the whole file replaced by a comment
+```
+
+## What I want
+
+**ONE variant — the smallest realistic edit — that a future maintainer could plausibly write, which
+leaves all 14 rows GREEN while re-opening the defect or introducing a new one.**
+
+Two directions I have deliberately not explored, offered so you can dismiss or exploit them:
+
+* **`func`.** No row varies it: every row uses func 0 except `t1 anchor` (func 2). Is there an edit
+  to the `func` extraction that the anchor's single value cannot see?
+* **`reg` and `len`.** Every row uses register 0 and an 8-byte access. The refusal arm's
+  `reg == 0? -1 : 0` has a whole `reg != 0` half that no row exercises, and `len` is passed to
+  `bus_pci_data_access` untouched.
+
+Say plainly if you think no such variant exists — that is a real answer and it closes the round.
+
+
+## OPERATIONAL RULE FOR EVERY SEAT (appended by panel.sh, not by the author)
+
+**Do not run `run.sh`, any `gate_*.sh`, or the battery.** Every measurement you need is
+inlined above. A gate takes minutes -- longer than your response budget -- and a second
+concurrent invocation corrupts the operator run in progress, because the gates share one
+log directory. A seat that runs a gate produces no review AND may invalidate someone
+else s. Building and running a single detector or mutant in your own temp directory is
+fine and encouraged; driving the harness is not.
+
+If you want a measurement that is not inlined, NAME IT and say why. Naming it is worth
+far more to this panel than a timeout.
+ERROR: This content was flagged for possible cybersecurity risk. If this seems wrong, try rephrasing your request. To get authorized for security work, join the Trusted Access for Cyber program: https://chatgpt.com/cyber
+ERROR: This content was flagged for possible cybersecurity risk. If this seems wrong, try rephrasing your request. To get authorized for security work, join the Trusted Access for Cyber program: https://chatgpt.com/cyber

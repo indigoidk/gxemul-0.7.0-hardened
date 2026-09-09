@@ -41,7 +41,7 @@ those panels produced had six or seven seats behind it.
 <!-- BEGIN GENERATED: codex-wall -- edit gen_codex_wall.py, not this block -->
 ### HELD STAGES -- every row awaiting a seat, derived from the ledger
 
-`alphaswpctxreg` (design:fable5,opus5) · `alphatbinegsel` (assess:fable5,opus5) · `armbfiwidth` (design:fable5,opus5) · `armbfxwidth32` (assess:fable5,opus5; review:fable5,opus5) · `carrier` (regress:fable5) · `es438` (regress:fable5) · `gdromcondlies` (regress:fable5) · `holdmarkermulti` (regress:fable5) · `lcabadval` (assess:codex,fable5,grok,kimi,opus5; design:fable5; research:fable5) · `lcaconfbus1kill` (design:fable5) · `lcairqstubkill` (design:fable5) · `m88kexcdetectorl2` (design:fable5) · `ns16550` (regress:fable5) · `pcc2c040kill` (assess:fable5; design:fable5; review:fable5) · `pcc2widthkills` (assess:fable5,opus5) · `proberowsubset` (assess:codex) · `sgideprimop` (regress:fable5) · `sgidewidth` (regress:fable5) · `sgimtedepth4dead` (assess:fable5,opus5; review:fable5,opus5) · `sgirekills` (assess:codex,grok,kimi,opus5) · `sgireunmapped` (regress:fable5) · `sgitexindex` (assess:codex,fable5,grok,kimi,opus5) · `sh4sci` (regress:fable5) · `wdccdbmidxfer` (regress:fable5; research:opus5) · `wdcdataoutdrain` (regress:fable5)
+`alphaswpctxreg` (design:fable5,opus5) · `alphatbinegsel` (assess:fable5,opus5; design:fable5,opus5) · `armbfiwidth` (design:fable5,opus5) · `armbfxwidth32` (assess:fable5,opus5; review:fable5,opus5) · `carrier` (regress:fable5) · `es438` (regress:fable5) · `gdromcondlies` (regress:fable5) · `holdmarkermulti` (regress:fable5) · `lcabadval` (assess:codex,fable5,grok,kimi,opus5; design:fable5; research:fable5) · `lcaconfbus1kill` (design:fable5; review:fable5,opus5) · `lcairqstubkill` (design:fable5) · `m88kexcdetectorl2` (design:fable5) · `ns16550` (regress:fable5) · `pcc2c040kill` (assess:fable5; design:fable5; review:fable5) · `pcc2widthkills` (assess:fable5,opus5) · `proberowsubset` (assess:codex) · `sgideprimop` (regress:fable5) · `sgidewidth` (regress:fable5) · `sgimtedepth4dead` (assess:fable5,opus5; review:fable5,opus5) · `sgirekills` (assess:codex,grok,kimi,opus5) · `sgireunmapped` (regress:fable5) · `sgitexindex` (assess:codex,fable5,grok,kimi,opus5) · `sh4sci` (regress:fable5) · `wdccdbmidxfer` (regress:fable5; research:opus5) · `wdcdataoutdrain` (regress:fable5)
 
 *** TWO DIFFERENT KINDS OF HOLD APPEAR BELOW AND THEY MUST NOT BE READ ALIKE. ***
 
@@ -2385,3 +2385,38 @@ disclosed `ubsanshiftlane` debt land first?
 *Stage state: design ran SIX seats — codex, grok, glm, kimi, deepseek, minimax — all confirming.
 opus5 and fable5 preserved for this adjudication; agy is the measurement reserve. Held and queued
 as one action.*
+
+### `alphatbinegsel` — witnessed, ratified 6/6, and the questions are about what the round OWES
+
+**Witness 5/7 → 7/7, both selectors, with a positive-selector control green on both builds.**
+Six seats ratify the guard: grok *"ship `{1,2,3} → INVALIDATE_VADDR, else INVALIDATE_ALL`"*; codex
+*"retain the bounded guard, recognise -1/-2 explicitly"*; deepseek, kimi, minimax and glm concur.
+
+#### 1. (HIGH) The accept rows the de-escalation clause demands
+
+minimax found the witness drives only `a0 ∈ {-2, -1, 2}` — **never `a0 == 1` or `a0 == 3`, the
+boundaries the fix introduces.** I enumerated it: every bound-moving mutant (`>= 2`, `<= 2`, `<= 4`)
+**differs on none of the driven values and escapes.**
+
+The rows are subtle. At `a0 == 1` pre- and post-fix behave **identically**, so these are ACCEPT rows
+that cannot red on HEAD; their kill is a bound-moving mutant, observed as an **unrelated page's
+cached translation surviving** (because `>= 2` would send selector 1 to `INVALIDATE_ALL`).
+**Does the round owe both rows before shipping, and is that the right oracle?**
+
+#### 2. (MED) A citation of mine was over-read, and a seat caught it
+
+I cited the 21066 manual as documenting `ALPHA_TBIAP()`'s selectivity. **`TBIAP` appears zero times
+in it**; the quoted sentence describes writes to the **ITBASM hardware register** — the mechanism a
+PALcode TBIAP would use, not the selector's architected scope. The conclusion survives on the cache
+entry's **structure** (no ASM or ASN metadata). **Is the disclosure sentence now "the finer semantics
+have no representation in this translation cache", with the manual cited only for the mechanism?**
+
+#### 3. (MED) Undocumented selectors
+
+`a0 == 0` and `a0 >= 4` are not among the five wrappers; the guard sends them to `INVALIDATE_ALL`.
+glm argues the stakes are performance-only — over-invalidation cannot serve stale data and TB
+contents are never architected state, so the fix *"can't be wrong, only conservative"*. **Is a
+debug-level announce worth its line, or is silence right?**
+
+*Stage state: design ran SIX seats. opus5 and fable5 preserved for this adjudication; agy is the
+measurement reserve. Held and queued as one action.*

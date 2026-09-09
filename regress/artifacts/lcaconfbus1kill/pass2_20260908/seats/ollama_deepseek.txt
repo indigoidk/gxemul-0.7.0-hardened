@@ -1,0 +1,63 @@
+VERDICT: The diff is internally consistent and fixes the kill; however Q1’s unrowed-cell claim is wrong — type-0 write is unrowed, and type-1 bus=0 read is exercised by `bus kill`/`bus attrib` as liveness/diagnostic rows, not value-checked. Q2’s refusal is defensible but the round should disclose the hardware deviation. Q3’s disclosure is acceptable. Q4’s diagnostic coupling is acceptable but fragile.
+
+---
+
+### Q1 — Vacuity floor, cross-product
+
+READ from inlined code: type-0 path always has `bus = 0`; type-1 path decodes `bus` from `tag`.  
+READ from table: the ten rows are as listed.
+
+Cells and rows:
+
+| cell | rows holding it |
+|---|---|
+| type-0, bus=0, read | `bus ctl`, `bus ctlsig`, `t0 alive`, `t0 real`, `t0 accept` |
+| type-0, bus=0, write | **none** |
+| type-1, bus=0, read | `bus kill` (liveness only), `bus attrib` (diagnostic only) — no value check |
+| type-1, bus=0, write | `t1 alias` |
+| type-1, bus≠0, read | **none** |
+| type-1, bus≠0, write | `t1 alive`, `t1 anchor` |
+
+So the unrowed cells are **type-0 write** and **type-1 bus≠0 read**.  
+The brief’s claim that type-1 bus=0 read is unrowed is false if “rowed” means any row exercises that cell; it is rowed by liveness/diagnostic rows but not by a value-returning read oracle.
+
+Indistinguishability: on this machine, type-1 bus=0 read and type-1 bus≠0 read both return all-ones at reg 0 and zero elsewhere, because no device exists on bus≠0 (P3) and reads do not print (P1). So a read value oracle cannot distinguish them. If a device existed on bus≠0, they would differ. Therefore the brief’s “indistinguishable” conclusion is correct for the current machine, but the unrowed-cell list is incomplete.
+
+---
+
+### Q2 — Refusal disposition
+
+(a) **Silence vs latched announce:** No house rule is inlined. REASONED: type-1 bus=0 is a legitimate probe; silence matches the empty-slot read contract. A latched announce is not required.
+
+(b) **Asymmetry with forwarding empty slot:** Defensible. Type-1 bus=0 is a master abort / invalid cycle for the primary bus, not an ordinary empty slot. Forwarding an empty slot prints a diagnostic because it indicates a device absence on a valid bus; discarding the type-1 bus=0 write avoids misrouting. The two cases are not siblings.
+
+(c) **Disclose hardware deviation:** Yes. The comment says “matching `bus_pci_data_access`’s own empty-slot contract”, but that contract is itself an emulator convention. The 21066 manual (P6) says real hardware returns arbitrary data with error status and causes an exception. The round should state that all-ones is an emulator-compatibility choice, not hardware behaviour.
+
+---
+
+### Q3 — De-escalation accept rows
+
+The accept rows cover:
+- type-0 registered device (`t0 accept`)
+- type-1 forwarding to a non-existent device (`t1 anchor`)
+
+No type-1 success branch is constructible because no device exists on bus≠0 (P3).  
+REASONED: “No such state is constructible on this machine” is an acceptable disclosure, but it means the type-1 success branch is untested. The risk is mitigated because the same `bus_pci_data_access` success path is tested by `t0 accept`, and the decode is tested by `t1 anchor`. The limitation should be stated.
+
+---
+
+### Q4 — Anchor row fragility
+
+The anchor row matches the literal diagnostic substring `bus 1 func 2 device 3`. If that string is reworded, the row goes red even if behaviour is correct.  
+REASONED: From the packet, `bus_pci_setaddr` prints nothing, so the diagnostic is the only observable channel for absolute position. A read to a non-existent device would only prove empty-slot, not the tuple. Therefore the coupling is acceptable but fragile. Mitigation: pin the exact substring as a test API contract, or add a comment in `bus_pci.c` that the diagnostic is part of the detector’s oracle.
+
+---
+
+### Uncheckable premises (named, not guessed)
+
+- `fatal()` does not exit — stated but not inlined.
+- `lca_ioc` CONF guard accepts `0x1` — stated but not inlined.
+- `bus_pci_setaddr` has no observable — stated as verbatim but not fully inlined.
+- 21066 manual quote — quoted but not independently verifiable from packet.
+- Measured artifacts and results — cannot be verified by this seat.
+- Claim that type-1 bus=0 selects nothing — PCI spec not inlined; plausible but not checkable from packet.

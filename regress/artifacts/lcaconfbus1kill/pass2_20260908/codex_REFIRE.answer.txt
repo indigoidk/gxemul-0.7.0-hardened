@@ -1,0 +1,138 @@
+codex_answer: regress/artifacts/lcaconfbus1kill/pass2_20260908/codex_REFIRE.err
+  stream bytes   234232
+  prose blocks   6
+  refusal marker 0 occurrence(s)
+  verdict blocks 1
+
+  --------------------------------------------------------------------
+  I’ll check the fork’s handler and regression probe, verify the address domain, and map what each row actually proves. I’ll also look for independent support for the type-1 bus-zero premise.
+
+  --------------------------------------------------------------------
+  The fork is readable, and I found a material mismatch: the current probe has an eleventh row, `t1 rdval`, but the cited logs contain ten rows. The pre-fix log also shows the old alias check passing and `t0 accept` failing against `PIN_UNSET`, so it does not substantiate the table as written. I’m checking the remaining coverage against the producer’s address bounds and the probe’s completion logic.
+  web search:
+
+  --------------------------------------------------------------------
+  The decode masks agree with the independent PCI layout, and the registered window bounds keep `tag` nonnegative. The test coverage has two clear gaps: no type-0 configuration write, and no type-1 read to a nonzero bus. Also, `alive2` only means the PTY stayed open until a timeout; it does not confirm that the alias access completed.
+  web search:
+
+  --------------------------------------------------------------------
+  The probe changed during the review. The latest version adds `t0 write`, includes the sparse byte-enable bits, and moves the alias write before the anchor so the anchor provides a later progress check. Those address parts of the earlier findings, but the cited logs still reflect the older test. The remaining gaps include nonzero-bus reads, refusal reads at nonzero registers, and checking refusal against the existing device at `0:7:0`.
+
+  --------------------------------------------------------------------
+  I found a false-green case in the anchor itself. Enumerating the diagnostic over every reachable type-1 tuple shows that `FWD in txt2` accepts device 3, 30, or 31. The final numeric field needs a boundary or an exact parsed comparison; otherwise a wrong device decode can pass.
+
+  --------------------------------------------------------------------
+  **VERDICT: The handler change looks correct for this machine; the regression and preserved evidence need corrections before sign-off.**
+  
+  I read the fork at `C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/`, including the producer, dispatcher, PCI backend, and probe. C0’s history checks agree. The probe changed during this review; my last snapshot, SHA-256 prefix `13bb8d96`, contains **12 rows**. The cited artifacts still contain ten. I performed source inspection and arithmetic/oracle enumeration, without running the emulator.
+  
+  **Q4 has a concrete false-green problem beyond diagnostic rewording.** The [anchor uses substring matching](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/lca_confbus_probe.py:329). I enumerated the diagnostic over every reachable type-1 bus/device/function tuple. `"bus 1 func 2 device 3"` matches:
+  
+  | Bus | Function | Device |
+  |---:|---:|---:|
+  | 1 | 2 | 3 |
+  | 1 | 2 | 30 |
+  | 1 | 2 | 31 |
+  
+  Consequently, the purported absolute-position oracle accepts two wrong devices. Parse a complete diagnostic record and compare numeric fields exactly.
+  
+  Coupling a regression to an existing diagnostic is defensible if acknowledged and maintained: rewording produces a visible test failure requiring investigation. However, this diagnostic does not report `reg`, `len`, or write data, so it cannot anchor those quantities. I found no existing guest-visible channel that exposes the exact tuple of an empty-slot read. A test-only observer of `bus_pci_setaddr`/`bus_pci_data_access` would provide a stronger interface-level oracle.
+  
+  **The preserved measurement also differs materially from the brief.** In [lca_pre.raw](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/lcaconfbus1kill/pass2_20260908/lca_pre.raw:10):
+  
+  - `t1 alias` passes using the old absence-only oracle.
+  - `t0 accept` receives the correct `0x304848086` but fails against `PIN_UNSET`.
+  
+  Thus its `6/10` is not evidence for the corrected ten-row table. The current twelve-row probe adds `t1 rdval` and `t0 write`, changes address constants, and changes alias ordering. Preserve a comparison using one frozen probe version. The completion sentinel establishes that the Python script reached its end; it does not establish that every guest operation completed.
+  
+  For **Q1**, the producer constrains the domain before any Cartesian product is formed. [Device registration](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:424) and the [dispatcher](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:480) restrict `relative_addr` to `[0, 0x20000000)`.
+  
+  I walked all **4,194,304 decoder-distinct address representatives**, applying both masking lines, and separately enumerated all **128 discarded low-bit residues**. The results were:
+  
+  | Quantity | Enumerated result |
+  |---|---|
+  | Maximum `tag` | `0x00ffff00` |
+  | Type-1 bus | Every value 0–255 |
+  | Type-1 device | Every value 0–31 |
+  | Function | Every value 0–7 |
+  | Register | Every multiple of four from `0x00` through `0xfc` |
+  | Type-0 destination bus | Always zero |
+  
+  Therefore, signed `tag` does **not** introduce a negative-right-shift issue in the added branch under this mapping.
+  
+  The packet’s address examples also decode as claimed:
+  
+  | Relative address | Tag | Interpretation | Register |
+  |---|---:|---|---:|
+  | `0x234000` | `0x11a00` | Type 1: `1:3:2` | 0 |
+  | `0` | `0` | Type 1: `0:0:0` | 0 |
+  | `0x800000` | `0x40000` | Type 0: `0:7:0` | 0 |
+  
+  Adding the driver’s `0x18` byte-enable encoding leaves these handler results unchanged. The original measurements therefore confirmed tag decoding, but did not validate the complete driver-side address construction.
+  
+  The requested eight cells are:
+  
+  | Cycle | Decoded bus | Operation | Packet’s ten rows | Latest twelve-row snapshot |
+  |---|---|---|---|---|
+  | Type 0 | Zero | Read | Controls and `t0` rows | Same |
+  | Type 0 | Zero | Write | **Uncovered** | `t0 write`: empty-slot forwarding |
+  | Type 0 | Nonzero | Read | **Unreachable** | Unreachable |
+  | Type 0 | Nonzero | Write | **Unreachable** | Unreachable |
+  | Type 1 | Zero | Read | `bus detect`: survival only | Also `t1 rdval`, at register zero |
+  | Type 1 | Zero | Write | `t1 alias`: weak negative oracle | Later anchor strengthens progress evidence |
+  | Type 1 | Nonzero | Read | **Uncovered** | **Still uncovered** |
+  | Type 1 | Nonzero | Write | `t1 alive` / `t1 anchor` | Same |
+  
+  An IOC_CONF write does not cover a configuration-window write cell. Conversely, the original armed read already *executes* the type-1/bus-zero/read cell; it simply does not check that read’s value.
+  
+  The dependency closure also includes:
+  
+  - IOC_CONF’s initialization and accepted writes;
+  - address production, window dispatch, and both address masks;
+  - device registration and PCI backend selection;
+  - `idata`, `odata`, operation width, byte order, and the common read-output tail;
+  - the newly added **`reg == 0` predicate**, which is missing from the proposed partitioning.
+  
+  Every current configuration access uses register zero and width eight. The refusal’s nonzero-register branch remains untested, and one tuple does not establish all bus/device/function bit positions.
+  
+  For the bounds question, I also walked the backend’s actual indexing expression. At `reg=0xfc`, `len=8`, its descending loop computes raw offsets:
+  
+  `259, 258, 257, 256, 255, 254, 253, 252`
+  
+  After its existing `& 255`, the indices are:
+  
+  `3, 2, 1, 0, 255, 254, 253, 252`
+  
+  That is wrapping behavior, not an out-of-bounds access. The indexing mask must remain part of the analysis.
+  
+  **The read cases are not generally indistinguishable.** You missed the already registered `0:7:0` device as an oracle:
+  
+  - A type-1 read addressed to `0:7:0`, register zero, must return the synthesized empty value.
+  - Incorrect primary-bus forwarding returns its real configuration header.
+  - A four-byte read at register four distinguishes synthesized zero from command value `3`.
+  
+  I independently reconstructed the header bytes as `86 80 84 04 03 00 00 00`, agreeing with `0x0000000304848086`. This needs no added device.
+  
+  For a nonzero bus containing no devices, a correctly forwarded read and an equivalent synthesized empty response cannot reveal their internal routing through returned data alone. Nevertheless, checking that read still detects wrong returned data, widths, or register handling. Observing routing and observing read results are separate obligations.
+  
+  **The §F `alive2` binding is insufficient.** [The session reader](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/lca_confbus_probe.py:124) returns true when its timeout expires without EOF, even if the guest stopped progressing.
+  
+  The latest ordering—alias first, anchor second—improves this, but its claim that only the later access can print `FWD` assumes correct decoding. If the alias is itself misrouted to the anchor tuple, it can print that marker too. I evaluated the current oracle against a trace containing **two anchor diagnostics**: both `t1 anchor` and `t1 alias` pass.
+  
+  Use an independent progress check and validate complete diagnostic records, their count, and their position relative to the accesses. Merely excluding the literal `0:0:0` diagnostic does not establish absence of forwarding elsewhere.
+  
+  For **Q2**, declining access to primary-bus devices is appropriate for this topology. Independently, PCI specifies local selection through type-0 transactions; ordinary endpoints ignore type-1 transactions, which bridges route to other bus segments. That supports protecting this machine’s bus-zero devices from direct type-1 backend selection. It is a topology-based conclusion, not a universal assertion that bus number zero is reserved. [PCI Local Bus Specification, §3.2.2.3.1](https://e2e.ti.com/cfs-file/__key/communityserver-discussions-components-files/639/1016.PCI.Local.Bus.Specification.Revision.3.0.pdf)
+  
+  My answers to the three disposition questions are:
+  
+  - **(a)** Silence is reasonable for an absent-target result. I would not require a latched warning solely because this replaces an abort.
+  - **(b)** The logging asymmetry is real and defensible, but the comment should say it matches the backend’s **read-result convention**, rather than implying complete behavioral parity. Nothing supplied establishes a mandatory house rule requiring identical diagnostics.
+  - **(c)** **Yes, disclose the hardware difference.** I found the manual in the parent project’s `_scratchpad`; [§6.2.18](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/21066_66a_hrm.txt:9481) specifies exception/error reporting and status logging. Synthesized data with successful completion and discarded writes is an emulator convention. The dispatcher lacks a ready Alpha exception path here; simply returning failure would not implement that hardware contract.
+  
+  For **Q3**, no stock-machine witness can demonstrate a registered secondary-bus device when none exists. That is an acceptable feasibility disclosure, but describe `t1 anchor` accurately: it proves backend forwarding to a requested tuple whose device is absent. It does not reach a “real bus” or a registered device.
+  
+  A separate unit fixture with a registered secondary device or backend observer is legitimate implementation testing. It must not be presented as evidence of stock-machine reachability. Such a fixture can check routing and data transfer without changing the original witness’s claims. The existing registered primary device already supplies the stronger alias-read test described above.
+  
+  I could verify the source and preserved logs, but not the claimed `/tmp/gxlca` binary identity and rebuild provenance from those logs alone.
+  tokens used
+  140,719
