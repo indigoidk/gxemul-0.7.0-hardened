@@ -1,0 +1,120 @@
+**VERDICT: Include the bus-zero alias in this round. A single-handler diff can fix it without changing the backend API. My earlier proposal was incomplete; the replacement observer remains unvalidated here.**
+
+**Q1. Reject type-1 bus zero before either backend call.** Keep cycle type separate from the decoded destination bus.
+
+This exact diff targets the current [configuration handler](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:89). It passes `git apply --check` from `GXEMUL-SEC/`. It is unapplied and uncompiled; this session has read-only filesystem access.
+
+```diff
+--- a/src/devices/dev_lca.c
++++ b/src/devices/dev_lca.c
+@@ -89,7 +89,7 @@
+ DEVICE_ACCESS(lca_pci_conf)
+ {
+ 	uint64_t idata = 0, odata = 0;
+-	int tag, bus, dev, func, reg;
++	int tag, type1, bus, dev, func, reg;
+ 	struct lca_data *d = (struct lca_data *) extra;
+ 
+ 	if (writeflag == MEM_WRITE)
+@@ -118,9 +118,10 @@
+ 	 *	tag = (bus << 16) | (device << 11) | (function << 8)
+ 	 */
+ 	/*  printf("tag = 0x%x\n", (int)tag);  */
+-	bus = d->ioc_conf & 1;
+-
+-	if (bus == 0) {
++	type1 = d->ioc_conf & 1;
++	bus = 0;
++
++	if (!type1) {
+ 		/*  #511: was `0x800 << dev'.  `0x800' is a plain int (2^11) and `dev'
+ 		    reaches 20, so the last iteration evaluates 2^31 -- a SIGNED
+ 		    OVERFLOW, undefined by C99 6.5.7p4, not merely
+@@ -163,17 +164,25 @@
+ 			dev = 0;
+ 		}
+ 	} else {
+-		fatal("TODO. Non-zero bus.\n");
+-		exit(1);
++		bus = (tag >> 16) & 0xff;
++		dev = (tag >> 11) & 0x1f;
+ 	}
+ 
+ 	func = (tag >> 8) & 7;
+ 	/*  printf("bus=%i dev=%i func=%i reg=%i\n", bus,dev,func,reg);  */
+ 
+-	/*  Pass PCI accesses onto bus_pci:  */
+-	bus_pci_setaddr(cpu, d->pci_data, bus, dev, func, reg);
+-	bus_pci_data_access(cpu, d->pci_data, writeflag == MEM_READ?
+-	    &odata : &idata, len, writeflag);
++	if (type1 && bus == 0) {
++		/*
++		 *  Type-1 cycles do not select primary-bus devices.
++		 *  Match bus_pci's empty-slot reads; discard writes.
++		 */
++		odata = reg == 0 ? (uint64_t) -1 : 0;
++	} else {
++		/*  Pass PCI accesses onto bus_pci:  */
++		bus_pci_setaddr(cpu, d->pci_data, bus, dev, func, reg);
++		bus_pci_data_access(cpu, d->pci_data, writeflag == MEM_READ?
++		    &odata : &idata, len, writeflag);
++	}
+ 
+ 	if (writeflag == MEM_READ)
+ 		memory_writemax64(cpu, data, len, odata);
+```
+
+The rejection covers reads **and writes**, and leaves backend state untouched. Rejected bus-zero writes are deliberately silent. Reads follow the existing [backend miss convention](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/bus_pci.c:109): all-ones at register zero, zero elsewhere. This implements an emulator policy; hardware master-abort status and exceptions remain separate work.
+
+**Q2. The observation technique transfers, but I cannot build or execute its regression here.**
+
+No native GDB, LLDB, or C compiler was found on PATH. Both WSL enumeration and a direct `Gentoo` GDB invocation returned `E_ACCESSDENIED`. I cannot establish whether GDB is installed inside that inaccessible environment.
+
+I inspected the available binaries directly: `../build/gxemul` and `../build-asan/gxemul` are x86-64 ELF files, retain both backend symbols, and contain actual calls from the configuration handler to both functions. The normal binary has a symbol table without DWARF; the ASan binary has DWARF.
+
+The [SGI precedent](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/sgi_eaddr_probe.py:35) therefore supplies a usable **argument-observation technique**, but its construction-only driver is insufficient here. An LCA observer must reach guest execution and associate its observations with individual completed accesses.
+
+Use explicit function-entry breakpoints, `break *bus_pci_setaddr` and `break *bus_pci_data_access`, so argument registers are observed before the prologue. [GDB documents that distinction.](https://sourceware.org/gdb/current/onlinedocs/gdb.html/Address-Locations.html)
+
+| Entry | Values available under SysV AMD64 |
+|---|---|
+| `bus_pci_setaddr` | PCI object in `RSI`; bus, device, function, register in `EDX`, `ECX`, `R8D`, `R9D` |
+| `bus_pci_data_access` | PCI object in `RSI`; data pointer in `RDX`; length in `ECX`; direction in `R8D` |
+
+These mappings follow the signatures and [SysV AMD64 argument rules](https://gitlab.com/x86-psABIs/x86-64-ABI/-/raw/master/x86-64-ABI/low-level-sys-info.tex). **The second entry does not receive a BDF tuple in registers.** Inspecting its stored `cur_*` fields requires debug types or a separately verified structure layout.
+
+For each permitted access, assert the exact requested tuple at the setter, followed by data access on the same PCI object with the expected length and direction. For reads, save the data pointer and inspect its contents after return: the function returns `void`, so `RAX` is not the result.
+
+Routing rows must include distinct nonzero buses and high-bit bus values. Identical empty-slot results cannot prove correct routing. Missing breakpoints, missing tools, or an unfinished access must fail the observation, not count as successful rejection. GDB output also needs separation from the emulator’s debugger stream.
+
+**Q3. The wrapper claim is correct; the claimed ordinary-enumeration consequence was overstated.**
+
+In local [lca_pci.c](C:/DocumentNoSnc/CC/GXEMUL/_guest-src-openbsd22/sys/arch/alpha/pci/lca_pci.c:142), the supplied offset contributes to `datap`; `data` starts at `(pcireg_t)-1`; and only successful `badaddr()` permits `data = *datap`. There is no register-zero restriction.
+
+Moreover, [badaddr()](C:/DocumentNoSnc/CC/GXEMUL/_guest-src-openbsd22/sys/arch/alpha/alpha/interrupt.c:179) returns whether a machine check occurred. It does not classify zero or all-ones data as a fault. Thus a faultless nonzero-register read returning zero would reach a caller as zero.
+
+But [pciattach()](C:/DocumentNoSnc/CC/GXEMUL/_guest-src-openbsd22/sys/dev/pci/pci.c:138) reads `PCI_ID_REG` first and immediately skips IDs of zero or `0xffffffff`. It reads the header register only afterward, and repeats the ID guard before reading each function’s class and interrupt registers.
+
+**Consequently, ordinary enumeration never reads nonzero registers of an absent function.** A direct configuration read there could observe the difference; this source trace does not establish an actual enumeration consequence. The normal LCA wrapper also selects type 1 only for a nonzero bus, so it does not itself generate the bus-zero/type-1 combination.
+
+**Q4. Require both the absence result and evidence that rejection occurred.**
+
+For this frontend-rejection diff, the decisive row should require:
+
+| Observation | Required result |
+|---|---|
+| Ordinary type-0 control for the installed primary function | Its configured identity is returned |
+| Type-1 access whose decoded destination names that primary function | Handler reached and completed successfully |
+| Its register-zero read result | Exactly all-ones at the tested width |
+| Backend calls during that rejected invocation | Zero setter calls and zero data-access calls |
+| Subsequent type-0 control | Installed function remains accessible |
+
+Unconditional forwarding fails by reaching the backend and returning the primary device’s identity. Merely checking “survived,” or merely checking that some value differs from the identity, is insufficient.
+
+Require the same absence of backend calls for rejected writes. **Unchanged register contents alone are weak evidence:** the [i82378zb initializer](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/bus_pci.c:753) installs no configuration-write callback, and the backend already ignores many writes.
+
+Pair this rejection row with the nonzero-bus forwarding rows from Q2. Otherwise, dropping every type-1 access could pass.
+
+**Q5. The case for the narrower round is legitimate:** the shipped witness establishes host termination, and removing that termination while decoding valid secondary destinations is independently reviewable. Full abort emulation and global absent-device return policy would substantially enlarge that task.
+
+**I nevertheless hold that the bus-zero rejection belongs in the same diff.** Replacing termination with unconditional forwarding makes a previously unreachable primary-device alias operational. Preventing that consequence is part of making this replacement correct. The local guard supplies that protection without a backend API change or synthetic devices. Dynamic regression evidence is still owed; the checked diff is not evidence that those rows have passed.

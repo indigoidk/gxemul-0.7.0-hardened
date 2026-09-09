@@ -14414,7 +14414,55 @@ re-derivation.
 
 *The `guestsrcunknown` row deliberately FILED its proposed carrier line for the 2026-09-09
 adjudication rather than editing the carrier unilaterally.  I have honoured that: today&#x27;s two
-carrier edits were INVENTORY entries in an existing PDF list, not a new behavioural rule.*</span></span><span class="state st-open">open</span></span></th></tr><tr class="ph st-open"><th scope="row" class="phlabel">Assessment (initial problem)</th><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td></tr><tr class="ph st-open"><th scope="row" class="phlabel">Research (fix proposals)</th><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td></tr><tr class="ph st-open"><th scope="row" class="phlabel">Final review (flagship adjudication)</th><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td></tr><tr class="ph st-open"><th scope="row" class="phlabel">Regression testing</th><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td></tr><tr class="fixhead st-open"><th colspan="10"><span class="hline"><span class="wrap" tabindex="0"><span class="rid">lcairqstubkill</span><span class="ttl">dev_lca.c: lca_interrupt_assert/_deassert are bare fatal()+exit(1) with NO GUARD, and DEVINIT registers them as the handlers that bus_isa_init wires to BUS_ISA_IDE0|IDE1 -- so an ISA/IDE interrupt ends the host, needing no unusual value at all</span><span class="tip">dev_lca.c: lca_interrupt_assert/_deassert are bare fatal()+exit(1) with NO GUARD, and DEVINIT registers them as the handlers that bus_isa_init wires to BUS_ISA_IDE0|IDE1 -- so an ISA/IDE interrupt ends the host, needing no unusual value at all — commits: 7c2f8e4 — witness: probe:regress/lca_irqstub_probe.py -- rung 3, MEASURED 3/4 on the committed build (witness_HEAD_20260907.raw); ONE guest store to the 8042 command port ends the host. Post-fix half PENDING (no fix chosen).  SECOND, INDEPENDENT PATH added 2026-09-08: probe:regress/lca_irqstub_uart_probe.py, 2/4, three guest byte stores to the ns16550 on IRQ 4 (UART_WITNESS_20260908.out). — note: FILED 2026-09-07.  **NOT a new discovery of the SITE** -- [[lcabadval]]&#x27;s eleven-kill census already
+carrier edits were INVENTORY entries in an existing PDF list, not a new behavioural rule.*
+
+*** THE REVISED DESIGN IS A DIFF, NOT A SHAPE -- AND IT REVERSES ITS OWN EARLIER SCOPE POSITION. ***
+
+**VERDICT:** *&quot;Include the bus-zero alias in this round.  A single-handler diff can fix it without
+changing the backend API.  My earlier proposal was incomplete; the replacement observer remains
+unvalidated here.&quot;*
+
+**THE KEY CORRECTION IS ONE VARIABLE, AND IT IS THE WHOLE DEFECT IN MINIATURE:** the handler used a
+single `bus` for two different things -- the CYCLE TYPE selected by `ioc_conf &amp; 1`, and the
+DESTINATION bus.  The diff splits them:
+
+    -	int tag, bus, dev, func, reg;
+    +	int tag, type1, bus, dev, func, reg;
+    ...
+    -	bus = d-&gt;ioc_conf &amp; 1;
+    -	if (bus == 0) {
+    +	type1 = d-&gt;ioc_conf &amp; 1;
+    +	bus = 0;
+    +	if (!type1) {
+
+then decodes the real destination on the type-1 arm -- `bus = (tag &gt;&gt; 16) &amp; 0xff; dev = (tag &gt;&gt; 11)
+&amp; 0x1f;` -- replacing the `fatal(); exit(1)`.
+
+*** AND IT CLOSES THE ALIAS IT ITSELF FOUND, WHICH THE EARLIER &quot;MINIMUM CORRECTION&quot; DID NOT: ***
+
+    +	if (type1 &amp;&amp; bus == 0) {
+    +		/*  Type-1 cycles do not select primary-bus devices.
+    +		    Match bus_pci&#x27;s empty-slot reads; discard writes.  */
+    +		odata = reg == 0 ? (uint64_t) -1 : 0;
+    +	} else {
+    		bus_pci_setaddr(...); bus_pci_data_access(...);
+    +	}
+
+**The refusal covers reads AND writes and leaves backend state untouched**, and its return values
+match `bus_pci_data_access`&#x27;s own empty-slot contract -- all-ones at register 0, zero elsewhere --
+which is the contract I stated WRONGLY as a premise two passes ago and which codex corrected.
+
+&gt; **SO THE ROUND&#x27;S SCOPE QUESTION IS ANSWERED AGAINST MY NARROWER FRAMING.**  I asked it to argue
+&gt; the narrower round first; it did, and then held that the alias must land in the same diff -- on
+&gt; the ground that forwarding a type-1 cycle with bus zero would select the existing primary-bus
+&gt; `i82378zb`, so a round that decodes `bus` and stops there ships a NEW misrouting in place of a
+&gt; termination.
+
+**HONEST LIMITS, stated by the seat rather than extracted from it:** the diff is **unapplied and
+uncompiled** -- it passes `git apply --check` and nothing more, because that session is read-only --
+and **the replacement observer remains unvalidated**, so the round still has no measurement lane
+beyond the existing 3/4 witness.  *A design that says which of its parts are untested is worth more
+than one that does not, and this round must not present the diff as measured.*</span></span><span class="state st-open">open</span></span></th></tr><tr class="ph st-open"><th scope="row" class="phlabel">Assessment (initial problem)</th><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td></tr><tr class="ph st-open"><th scope="row" class="phlabel">Research (fix proposals)</th><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td></tr><tr class="ph st-open"><th scope="row" class="phlabel">Final review (flagship adjudication)</th><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td></tr><tr class="ph st-open"><th scope="row" class="phlabel">Regression testing</th><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td><td class="c none"><span class="g">·</span></td></tr><tr class="fixhead st-open"><th colspan="10"><span class="hline"><span class="wrap" tabindex="0"><span class="rid">lcairqstubkill</span><span class="ttl">dev_lca.c: lca_interrupt_assert/_deassert are bare fatal()+exit(1) with NO GUARD, and DEVINIT registers them as the handlers that bus_isa_init wires to BUS_ISA_IDE0|IDE1 -- so an ISA/IDE interrupt ends the host, needing no unusual value at all</span><span class="tip">dev_lca.c: lca_interrupt_assert/_deassert are bare fatal()+exit(1) with NO GUARD, and DEVINIT registers them as the handlers that bus_isa_init wires to BUS_ISA_IDE0|IDE1 -- so an ISA/IDE interrupt ends the host, needing no unusual value at all — commits: 7c2f8e4 — witness: probe:regress/lca_irqstub_probe.py -- rung 3, MEASURED 3/4 on the committed build (witness_HEAD_20260907.raw); ONE guest store to the 8042 command port ends the host. Post-fix half PENDING (no fix chosen).  SECOND, INDEPENDENT PATH added 2026-09-08: probe:regress/lca_irqstub_uart_probe.py, 2/4, three guest byte stores to the ns16550 on IRQ 4 (UART_WITNESS_20260908.out). — note: FILED 2026-09-07.  **NOT a new discovery of the SITE** -- [[lcabadval]]&#x27;s eleven-kill census already
 enumerated `:73` and `:85` and called them *&quot;plausibly the most severe of the eleven&quot;*.  What was
 missing is a ROW: the census names them inside a row titled for VALUE GUARDS, which is the census&#x27;s
 own closing lesson (*a row named after one class hides the members of the others*), and
