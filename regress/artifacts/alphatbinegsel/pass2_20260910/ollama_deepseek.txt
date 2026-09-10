@@ -1,0 +1,28 @@
+NOT RATIFY — the 13-row suite still misses the signed-cast width axis: a mutant changing `(int64_t)a0` to `(int32_t)a0` passes all rows, and the comment asserts hardware ASM/ASN exactness no row observes.
+
+**1. Premises as questions**
+
+- **S2 — READ from packet.** `a0` is `uint64_t`; `a0 >= 1` is an unsigned compare. `-1` and `-2` as `uint64_t` are large positive values, so both satisfy `>= 1` and took the single-page branch. The header table is the only in-packet authority for what `-1`/`-2` must do; external spec not checkable from this packet. Single fact that would settle it: the Alpha PALcode specification for `PAL_OSF1_tbi`.
+
+- **S6 — NOT CHECKABLE from packet.** The claim that `cpu_alpha.c` never sets `vaddr_mask` and that `cpu.c` defaults to identity is not inlined. Single fact: the value of `vaddr_mask` for the Alpha CPU. If a future CPU sets a non-identity mask, the selective arm may flush more than the target page, making the bound rows vacuous or failing.
+
+- **S5 — READ from diff.** The condition groups selectors 1, 2, 3 into the same call with the same arguments; no instruction/data TLB split is visible. The diff comment does not claim per-selector model differences; it does claim “1, 2 and 3 are the only selective ops the architecture defines,” which is an external architecture claim not checkable from the packet.
+
+**2. Smallest edit that breaks the fix and still passes the 13 rows**
+
+Change `(int64_t)a0` to `(int32_t)a0` (or any narrower signed cast). This truncates high bits. For example, `a0 = 0x1_00000001` (4294967297) is `> 3` under 64-bit signed compare and should go to invalidate-all, but `(int32_t)a0` becomes `1` and takes the selective branch. No row drives such a value. The existing `a0=2` positive control (`pos obs`) stays green because its low 32 bits are unchanged. The unrowed axis is **cast width / truncation**.
+
+**3. Option-set completeness**
+
+The ruling named silent preservation and announce; it did not name a **debug/trace-only diagnostic**. The diff contains a commented `debug(` line, indicating the tree has a debug idiom. Whether that is permitted by the addition licence is not in the packet. Single fact: whether the debug macro is compiled out in release builds and whether the licence allows debug-only output.
+
+**4. The comment**
+
+The sentence  
+> “-1 and -2 differ on hardware only in whether GLOBAL entries survive: -1 invalidates the ASM=0 entries and SPARES the ASM=1 ones, -2 invalidates both. This model's translation cache carries no ASM/ASN metadata to spare anything BY, so both map to INVALIDATE_ALL -- EXACT for -2 and CONSERVATIVE for -1”
+
+asserts a hardware distinction and an exact/conservative correctness claim that no row observes, because the model has no ASM/ASN metadata. That is an overclaim. Also, “1, 2 and 3 are the only selective ops the architecture defines” is an external architecture claim not checkable from the packet.
+
+**5. Other finding**
+
+The cast-width axis above is the main additional defect. The measurement claim “MEASURED at rung 3” is plausible but not checkable from the packet.

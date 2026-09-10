@@ -15632,7 +15632,7 @@ two wrong-destination assignments in one function a **third was "more likely tha
 whole handler and the surrounding PALcode cases to be read.  They were.  **There is no third.**  A predicted
 class that does not materialise is a result, and it stops the next round hunting for one.
 
-**`alphatbinegsel` (MED).**  `tbi`'s selector is compared as **unsigned**, so enumerating gives
+**`alphatbinegsel` (MED) -- *** FIXED AND CLOSED 2026-09-10 AS `#520`; see the CHANGELOG round block. The reading below stands and was CONFIRMED at rung 3 before the edit (5/7 committed, 7/7 fixed); it is kept because it is what the round was reproduced from. *** ** `tbi`'s selector is compared as **unsigned**, so enumerating gives
 `-2 → VADDR, -1 → VADDR, 0 → ALL, 1..3 → VADDR`, while the header requires all-entry and all-per-process
 invalidation for the negative selectors.  So `tbi(-1)` — the OS saying *invalidate everything* — invalidates
 one address.  **A TLB flush that silently flushes almost nothing is the dangerous direction**: the guest

@@ -369,6 +369,41 @@ MANIFEST = {
         (CLASS_RESEARCH, "lcabadval (#518): the table-1 mutator's second generation, for the mutants added after the round-one repair"),
     "artifacts/lcabadval/killtable_20260910/summarize518.py":
         (CLASS_RESEARCH, "lcabadval (#518): the table-1 summariser -- reads scores out of the .raw logs rather than accepting any typed number"),
+
+    # -- #520 alphatbinegsel -----------------------------------------------------------
+    #  The SHIPPED detector.  It is CLASS_DETECTOR and it is EXEMPT below rather than
+    #  wired, for a reason that is a fact about the battery and not a preference: NO GATE
+    #  IN THIS TREE RUNS AN ALPHA MACHINE.  `gate_crossfamily.sh' is the only gate that
+    #  mentions alpha at all and is therefore the named home; giving it one is a gate
+    #  change owing its own negative controls, which is a harness round, not a rider on a
+    #  CPU fix.  Filed to `wiringcliff', the row for exactly that question -- not left as
+    #  a silent third state.
+    "alpha_tbi_probe.py":
+        (CLASS_DETECTOR, "alphatbinegsel (#520): 15 rows closing the tbi selector guard's NINE axes -- the window's four sides, the interior, the negative selectors, a1 zero-vs-nonzero, a1 magnitude and a0 magnitude.  BASE 15/15, null medium 11/15, nine mutants 12-14/15 (killtable_20260910/t3/SCORES.txt); every accept row carries a measured kill, checked by tally_kills.py"),
+
+    #  The three FROZEN copies are the instruments as-run, one per table.  They are
+    #  evidence, not live detectors: a citation into the live probe decays the moment the
+    #  probe grows, which is exactly what happened here -- it went from 7 rows to 15 and a
+    #  comment citing it for "5/7" came to CONTRADICT its own artifact.
+    "artifacts/alphatbinegsel/killtable_20260910/t1/alpha_tbi_probe.frozen.py":
+        (CLASS_RESEARCH, "alphatbinegsel (#520) table 1: the as-run 10-row instrument -- M_D and M_E swept it, which is what the bound rows were added for"),
+    "artifacts/alphatbinegsel/killtable_20260910/t2/alpha_tbi_probe.frozen.py":
+        (CLASS_RESEARCH, "alphatbinegsel (#520) table 2: the as-run 13-row instrument (probe_HEAD.raw 10/13, probe_BASE.raw 13/13) -- superseded when the pass-2 panel found the cast-width axis unrowed"),
+    "artifacts/alphatbinegsel/killtable_20260910/t3/alpha_tbi_probe.frozen.py":
+        (CLASS_RESEARCH, "alphatbinegsel (#520) table 3: the CLOSING 15-row instrument, byte-identical to the shipped regress/alpha_tbi_probe.py -- one instrument for all eleven legs"),
+
+    #  Kill-table drivers.  CLASS_TOOL: they mutate and score, they assert nothing about
+    #  the emulator, and no gate should ever run them.
+    "artifacts/alphatbinegsel/killtable_20260910/mutate.py":
+        (CLASS_TOOL, "alphatbinegsel (#520): the mutator -- one named find/replace per mutant, with MUTANT-TEXT-NOT-FOUND a hard failure, so every edit doubles as a presence pin on the fix's own text"),
+    "artifacts/alphatbinegsel/killtable_20260910/t1/mutate.asrun.py":
+        (CLASS_TOOL, "alphatbinegsel (#520): the table-1 mutator as run"),
+    "artifacts/alphatbinegsel/killtable_20260910/t2/mutate.asrun.py":
+        (CLASS_TOOL, "alphatbinegsel (#520): the table-2 mutator as run"),
+    "artifacts/alphatbinegsel/killtable_20260910/t3/mutate.asrun.py":
+        (CLASS_TOOL, "alphatbinegsel (#520): the table-3 mutator as run, carrying M_G/M_H/M_I -- the cast-width and a1-magnitude mutants the pass-2 panel demanded"),
+    "artifacts/alphatbinegsel/killtable_20260910/tally_kills.py":
+        (CLASS_TOOL, "alphatbinegsel (#520): computes the kill count FROM the logs and exits non-zero if any accept row lacks one -- so `every accept row carries a measured kill' is a check rather than a claim"),
     "artifacts/lcabadval/killtable_20260910/t2/gen_table2.py":
         (CLASS_RESEARCH, "lcabadval (#518): the table-2 driver, the second measuring seat's own, in its own scratch clone with its own sentinel"),
     "artifacts/lcabadval/killtable_20260910/t2/mutate518_t2.py":
@@ -1479,6 +1514,14 @@ EXEMPT = {
     "wdc_addtoinbuf_probe.py":     ("2026-09-20",
                                     "two-leg differential AND needs a poisoned CD "
                                     "image the battery does not build"),
+    #  #520's detector.  NOT a two-leg differential and not awaiting a design -- it is a
+    #  single-leg 15-row instrument that runs green on the fix today.  What it lacks is a
+    #  HOME: no gate in this tree runs an Alpha machine at all.  Dated to fall due with
+    #  the others so the cliff stays one date rather than becoming a rolling excuse.
+    "alpha_tbi_probe.py":          ("2026-09-20",
+                                    "no gate runs an Alpha machine; gate_crossfamily.sh "
+                                    "is the named home and giving it one is a harness "
+                                    "round, filed to wiringcliff"),
 }
 
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")

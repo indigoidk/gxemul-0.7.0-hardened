@@ -327,7 +327,9 @@ Make sure they are correct, as documented in the Manual.
 	case 0x33:	/*  PAL_OSF1_tbi  */
 		/*
 		 *  a0 = op, a1 = vaddr
-		 *  a0 is ignored for now. TODO.
+		 *  (#520: a0 was ignored -- "a0 is ignored for now. TODO." --
+		 *  until the selector test below was corrected.  It is read now,
+		 *  so that line is removed rather than left to mislead.)
 		 *	a0 = 1: ITB invalidate
 		 *	a0 = 2: DTB invalidate
 		 *	a0 = 3: both ITB and DTB
@@ -336,7 +338,96 @@ Make sure they are correct, as documented in the Manual.
 		 */
 		// debug("[ Alpha PALcode: PAL_OSF1_tbi: a0=%" PRIi64" a1=0x%"
 		//    PRIx64" ]\n", (int64_t)a0, (uint64_t)a1);
-		if (a0 >= 1)
+		/*  #520 (alphatbinegsel): `a0' is a uint64_t, so the old `a0 >= 1'
+		    was an UNSIGNED compare and BOTH negative selectors named in the
+		    header above -- -1 and -2, the two documented as invalidate-
+		    EVERYTHING -- compared GREATER than 1 and took the single-VADDR
+		    branch.  A guest TBIA/TBIAP therefore flushed ONE page and left
+		    every other cached translation live.  MEASURED at rung 3 BEFORE
+		    this edit.  The citation names the FROZEN 7-row witness, NOT the
+		    live probe, because the live probe has since grown to 13 rows and
+		    a citation into a file that changes under you decays silently:
+		        artifacts/alphatbinegsel/witness_agy_20260908/
+		            alphatbi_probe.asrun.py  -- the 7-row instrument
+		            alphatbi_committed.out   -- 5/7, both negatives RED
+		            alphatbi_fixed.out       -- 7/7
+		        artifacts/alphatbinegsel/fix_20260910/{HEAD,FIX520}_run1.out
+		            -- the same pair replicated on a second build
+		    The SHIPPED 13-row detector scores 10/13 and 13/13 on those two
+		    builds (killtable_20260910/t2/probe_{HEAD,BASE}.raw).  An earlier
+		    draft cited the LIVE path for the 5/7 pair, and the pass-2 review
+		    caught that the named artifact had come to CONTRADICT the number
+		    beside it -- the reused-log-name decay, inside product code.
+
+		    1, 2 and 3 are the only selective ops the architecture defines,
+		    so 0 and 4.. are undefined and fall to the conservative arm with
+		    the negatives.  Over-invalidation cannot serve a stale
+		    translation; under-invalidation can, which is this defect.
+
+		    *** THE LOAD-BEARING PROPERTY IS THE TWO-SIDEDNESS, NOT THE
+		    SIGNEDNESS, and the pass-2 panel corrected me on that. ***  The
+		    casts are MEASURED REDUNDANT: `a0 >= 1 && a0 <= 3' unsigned
+		    agrees with the signed form on every input, because a negative
+		    selector is a huge unsigned value that fails the UPPER bound
+		    exactly where the signed reading fails the LOWER one.  Checked
+		    over every boundary class and 300,000 random 64-bit values,
+		    zero disagreements (the kimi substitute raised it; enumerated
+		    rather than argued).  The casts are KEPT because they state the
+		    selector's signedness to a reader, not because they repair
+		    anything -- so do not describe them as the fix.
+
+		    WHAT THE COMPARISON'S WIDTH DOES buy is real and is ROWED:
+		    narrowing either cast to 32 bits passes every selector the
+		    detector drives, and diverges first at a0 = 0x100000001, where
+		    the 64-bit reading invalidates everything and a 32-bit one
+		    truncates to 1 and flushes a single page (deepseek, pass 2).
+
+		    -1 and -2 differ on hardware only in whether GLOBAL entries
+		    survive: -1 invalidates the ASM=0 entries and SPARES the ASM=1
+		    ones, -2 invalidates both.  This model's translation cache
+		    carries no ASM/ASN metadata to spare anything BY, so both map
+		    to INVALIDATE_ALL -- EXACT for -2 and CONSERVATIVE for -1,
+		    which is the safe direction and is not the same claim.
+
+		    THE WINDOW'S UPPER BOUND IS NOT THIS COMMENT'S TO ASSERT.  It
+		    comes from imported third-party material this round does not
+		    touch -- alpha_cpu.h defines EXACTLY five selectors, and the
+		    three selective ones are TBISI(1), TBISD(2) and TBIS(3), so 3
+		    is the largest.  That is a better authority than the header
+		    above, which this round is editing: a comment you are rewriting
+		    cannot be the warrant for the rewrite.
+
+		    NO ANNOUNCE, deliberately -- and the in-file warrant is
+		    `swpipl' (case 0x35) and `wrmces' (case 0x11), NOT #514.  Those
+		    two take a guest value the model cannot honour exactly and
+		    SILENTLY NORMALISE it (`ps |= a0 & ALPHA_PSL_IPL_MASK', `mces
+		    &= ~0x18'): same file, same function, same act -- an
+		    unrepresentable guest INPUT, quietly narrowed, no diagnostic.
+		    The addition licence carries the rest: an announce here has no
+		    measured delta, and no OSF/1-ABI guest can even reach the
+		    unrecognised region, because every caller goes through those
+		    five macros.
+
+		    AND THE DEPARTURE IS STATED RATHER THAN HIDDEN: this file has
+		    FOUR sites that meet an unrecognised selector with `fatal()'
+		    and `cpu->running = 0' -- the two GXemul-PROM `default:' arms,
+		    the privileged-from-user check, and `wrent', which is the
+		    closest structural sibling of all (an out-of-range selector in
+		    a guest register, guarded by a bound, in this same switch).
+		    This arm deliberately does NOT follow them, in the fork's
+		    de-fatalising direction.  A reader must not conclude the file
+		    has no contrary practice; it has four instances of it.
+
+		    (Two earlier drafts of this paragraph were wrong and are
+		    recorded because a wrong warrant gets reused.  The first
+		    appealed to "the house latched-announce idiom", which is a
+		    DEVICES one -- `(once)' appears 40 times under src/devices and
+		    NOT ONCE under src/cpus.  The second cited #514, which is about
+		    an architecturally UNPREDICTABLE OUTPUT the model declines to
+		    define -- leaving a register nobody may read alone is not the
+		    same act as silently re-interpreting a request a guest made.
+		    The conclusion survived both; the warrant did not.)  */
+		if ((int64_t)a0 >= 1 && (int64_t)a0 <= 3)
 			cpu->invalidate_translation_caches(cpu, a1, INVALIDATE_VADDR);
 		else
 			cpu->invalidate_translation_caches(cpu, 0, INVALIDATE_ALL);

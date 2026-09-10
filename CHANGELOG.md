@@ -1,3 +1,208 @@
+# `#520` (alphatbinegsel): a guest TBIA flushed ONE page and left every other translation live -- `uint64_t a0` made `if (a0 >= 1)` an UNSIGNED compare, so both documented invalidate-everything selectors took the single-page branch
+
+**THE DEFECT, and it is one character of type rather than one of logic.** `PAL_OSF1_tbi` (`case 0x33` in
+`src/cpus/cpu_alpha_palcode.c`) takes its selector in `a0`, declared `uint64_t`. The Alpha PALcode contract
+gives that selector two NEGATIVE values, and they are the two that matter most: **-1 invalidates everything
+with ASM=0 (sparing ASM=1) and -2 invalidates everything**. Under an unsigned compare both are enormous
+positive numbers, so both compared GREATER than 1, both took the single-VADDR branch, and both flushed
+exactly ONE page using `a1` as the address. **A guest issuing TBIA or TBIAP got one page invalidated and
+every other cached translation left live** -- the direction that hands a guest stale translations, which is
+silent rather than loud.
+
+**WITNESSED AT RUNG 3 BEFORE THE EDIT**, on an unmodified in-tree machine description, and replicated on a
+second build: `artifacts/alphatbinegsel/witness_agy_20260908/` scores **5/7 committed, 7/7 fixed** with
+both negative selectors RED pre-fix, and `fix_20260910/{HEAD,FIX520}_run1.out` reproduces that same pair.
+
+**THE FIX IS ONE EXECUTABLE LINE** -- a two-sided window in place of a one-sided test:
+
+```c
+if ((int64_t)a0 >= 1 && (int64_t)a0 <= 3)
+        cpu->invalidate_translation_caches(cpu, a1, INVALIDATE_VADDR);
+else
+        cpu->invalidate_translation_caches(cpu, 0, INVALIDATE_ALL);
+```
+
+The `else` arm is the conservative one, which is why the two-sidedness is the load-bearing property: every
+selector the window does not name -- negative, zero, or above 3 -- now invalidates everything rather than
+guessing at a page.
+
+**AND THE CASTS ARE MEASURED REDUNDANT, WHICH THE COMMENT ORIGINALLY GOT WRONG (L4, corrected in the
+source).** Raised by the kimi substitute on pass 2 -- *"the load-bearing property of the one executable line
+is its TWO-SIDEDNESS, not its SIGNEDNESS"* -- and then CHECKED rather than judged: the unsigned form
+`a0 >= 1 && a0 <= 3` agrees with the shipped signed form on **300,037 values with ZERO disagreements**
+(every boundary class, the 32-bit and 63-bit boundaries and their neighbours, plus 300,000 random 64-bit
+values). The reason is structural rather than lucky -- a negative selector is a huge unsigned value that
+fails the UPPER bound exactly where the signed reading fails the LOWER one, so both arrive at the
+conservative arm by different routes. **The casts are KEPT** (they state the selector's signedness to a
+reader and cost nothing) and the comment no longer claims they are the repair. *A fix whose stated reason is
+wrong gets that reason reused.*
+
+## THE CLASS CLOSURE -- nine axes in ONE diff, because three consecutive passes had each bought one cell
+
+This round is the class-closure amendment's second application and its clearest case. **Three consecutive
+review passes each found ONE more axis of the SAME guard**: the window's four sides, then the body's other
+lvalue (`a1`), then operand magnitude. Buying one cell per pass converges linearly and does not terminate,
+so the detector now carries the guard's full axis set enumerated in its own header and closed together:
+
+| axis | cell | row | mutant it kills |
+|---|---|---|---|
+| lower bound, accept | `a0 = 1` | `bnd lo` | `>=1` -> `>=2` |
+| lower bound, reject | `a0 = 0` | `bnd zero` | `>=1` -> `>=0` |
+| upper bound, accept | `a0 = 3` | `bnd hi` | `<=3` -> `<=2` |
+| upper bound, reject | `a0 = 4` | `bnd out` | `<=3` -> `<=4` |
+| interior | `a0 = 2` | `bnd mid` | `&& a0 != 2` |
+| negative selectors | `a0 = -1, -2` | `tbia obs` / `tbiap obs` | the original defect |
+| `a1`, zero vs non-zero | `a0 = 2, a1 = 0` | `bnd a1z` | `&& a1 != 0` |
+| `a1`, magnitude | `a0 = 2, a1 = 0x8000` | `bnd a1hi` | `&& a1 < 0x8000` |
+| `a0`, magnitude | `a0 = 0x100000001` | `bnd wide` | `(int32_t)` cast, and `<=3` -> `!=4` |
+
+**THE MAGNITUDE AXIS IS THE ONE THAT WOULD HAVE ESCAPED A FOURTH PASS**, and it was found by deepseek --
+the panel's only NOT-RATIFY. `a0` was sampled only in `[-2,4]` and `a1` only at `{0, 0x6000}`, so narrowing
+either cast to 32 bits is **invisible at all seven selector values the other rows drive** (verified by
+enumeration, zero disagreements: for any small value `(int32_t)a0 == (int64_t)a0`). It is nonetheless a real
+behaviour change, and the smallest discriminating input is `a0 = 0x0000000100000001` -- the shipped fix sees
+4294967297, fails `<= 3` and invalidates everything, while a narrowed cast truncates to 1 and flushes a
+single page. `load_const()` builds only sign-extended 32-bit constants and CANNOT make that value, so the
+row loads `a0` from memory with an LDQ off the pointer vector; **no new instruction encoding is introduced
+anywhere in the file.**
+
+## MEASURED
+
+`artifacts/alphatbinegsel/killtable_20260910/t3/SCORES.txt` -- scratch clone `/tmp/gx520`, baseline
+`cpu_alpha_palcode.c` from GXEMUL-SEC (the repo source, never a script's own backup), ONE frozen instrument
+(`alpha_tbi_probe.frozen.py`, byte-identical to the shipped `regress/alpha_tbi_probe.py`) for every leg, and
+all twelve logs ending `ALPHATBI_DONE`. Sentinel dropped before mutant 1 and cleared only after BOTH parts
+verified.
+
+| leg | mutant | score | reddens |
+|---|---|---|---|
+| BASE | the fix, unmutated | **15/15** | -- |
+| M_A | `>=1` -> `>=2` | 14/15 | `bnd lo` |
+| M_B | `<=3` -> `<=2` | 14/15 | `bnd hi` |
+| M_C | `<=3` -> `<=4` | 14/15 | `bnd out` |
+| M_D | `>=1` -> `>=0` | 14/15 | `bnd zero` |
+| M_E | `&& a1 != 0` | 14/15 | `bnd a1z` |
+| M_F | `&& a0 != 2` | 12/15 | `bnd mid`, `bnd a1z`, `bnd a1hi` |
+| M_G | `(int32_t)` cast | 14/15 | **`bnd wide`** |
+| M_H | `<=3` -> `!=4` | 14/15 | **`bnd wide`** |
+| M_I | `&& a1 < 0x8000` | 14/15 | `bnd a1hi` |
+| HEAD | null medium (`7d7e055`) | 11/15 | `tbia obs`, `tbiap obs`, `bnd out`, `bnd wide` |
+| RESTORED | restore verified | **15/15** | -- |
+
+**BOTH OF THE PRE-TABLE'S PREDICTED CLEAN SWEEPS ARE NOW DEAD.** `PRETABLE.out` (written 10:34, an hour
+before the first t3 log at 11:39, so its own mtime proves the order) predicted M_D at 10/10 as a floor
+breach and M_E at 10/10 as clause-(e) debt. The rows they demanded were added and both mutants now fall at
+14/15. The mandated diff of the shipped row list against the block's own PRESCRIBED rows is clean: `bnd lo`,
+`bnd hi`, `bnd out` and the owed `bnd zero` all shipped, and the DISCLOSED joint (`&& a1 != 0`) was promoted
+from debt to a row rather than dropped in a rewrite.
+
+`tally_kills.py` ships beside the table and exits non-zero if any accept row lacks a measured kill. **Every
+accept row carries one**; the sole row that names no mutant it can kill is `pos obs`, and it is recorded in
+`PRETABLE.out` as what it is -- a liveness control whose channel does not vary between the two arms -- rather
+than counted as coverage.
+
+## THE CONTRACT (clause (e))
+
+The detector catches: any edit to either bound of the window, in either direction; loss of either reject
+side; an added conjunct on `a0` or on `a1`; and a narrowing of either comparison's width. **It does NOT
+observe ASM/ASN granularity** -- this model's translation cache has no ASM concept, so no row can separate
+`-1` from `-2`, and a row claiming to would be vacuous by construction. That is stated in the probe header
+rather than glossed. Multi-axis joints over `a0` and `a1` together remain disclosed debt.
+
+## PASS 2 -- EIGHT SEATS, AND TWO MISSES NAMED BY NAME RATHER THAN COUNTED AS AGREEMENT
+
+Panel dir `artifacts/alphatbinegsel/pass2_20260910/`; findings and dispositions in
+`PASS2_FINDINGS_20260910.md`. **`fable5` WALLED** on a per-model quota (`HTTP 429 ... You've reached your
+Fable limit`) -- a GENUINE SEAT FAILURE, and unlike the kimi CLI it has **no substitute transport**, so it
+cannot be recovered on another road; it was re-fired once before this round closed, per the
+re-fire-a-walled-seat rule, and was still walled. The Opus seat launched in the same minute answered
+normally, so this is the per-model wall class and not the shared-transport one. **`agy` DELIBERATELY NOT
+FIRED** (measurement reserve). **`kimi` CLI walled on its weekly 403 and COVERED** by `kimi-k3:cloud`.
+Answering: codex, grok, glm, deepseek, the kimi substitute, minimax, Opus.
+
+**No seat disputed the defect, the fix, or any measured score.** Both findings that changed the round are
+about what the ROUND CLAIMED and what the DETECTOR COVERED, and both were settled by enumeration rather than
+by vote.
+
+**A THIRD L4, and it is the decayed-citation class caught inside its own repair.** The fix comment cited
+`regress/alpha_tbi_probe.py` for the `5/7 -> 7/7` witness pair. That probe has since grown from 7 rows to
+15, so the named artifact now scores 10/13 and then 15/15 and **CONTRADICTED the number written beside it**.
+The citation is re-pointed at the FROZEN witness (`witness_agy_20260908/`), which cannot change under a
+reader. *A citation into a file that changes under you decays silently.*
+
+## THE ASSESS STAGE, HELD FOR THE FLAGSHIP SEAT SINCE 2026-09-08, AND IT FOUND FOUR MORE WRONG RECORDS
+
+The assess stage carried a live hold for the Opus seat from a deliberate conservation, and a review-phase
+answer may not discharge an assess-phase hold. Fired and landed: `artifacts/alphatbinegsel/opus_assess_20260910.md`.
+
+**It RATIFIED the defect reading, the disposition, the `<= 3` bound and every measured score** -- deriving
+all twelve legs from the source by hand rather than reading `RESULTS.txt`, and reconciling each one. It
+settled the ASM direction from a source the round had not used for that purpose (`21066_66a_hrm.txt:1486`,
+on the ITBASM register: writes *"invalidate all entries that do not have the ASM bit set"*), which is
+independent of the header comment the round was simultaneously editing. **It also found the `<= 3` bound's
+proper authority: `alpha_cpu.h:281-285` defines exactly five selectors and the three selective ones are 1,
+2 and 3** -- imported third-party material this round does not touch, and therefore a better warrant than a
+header being rewritten in the same diff. Cited in the source now.
+
+**Four L4 corrections, none touching the executable line, none requiring a re-table:**
+
+1. **The detector's own CONTRACT had two false entries in its ROWED list, and the CLAIM -> ROW check never
+   looked at it.** `loss of the signed cast` names an edit that is **UNKILLABLE** -- apply it to the
+   shipped line and you get exactly the unsigned form measured equivalent over 300,037 values, so it
+   scores 15/15 by construction. Worse, it *misdirects*: the unsigned form is the more portable of the
+   two, since converting a `uint64_t` above `INT64_MAX` to `int64_t` is implementation-defined under C99
+   6.3.1.3p3, so the bullet told a future simplifier they were reinstating the original defect when they
+   were improving portability. And `omission of the invalidation entirely` was listed as MEASURED while
+   **no mutant in any of the three tables touches the invalidation call** -- nine mutants, every one a text
+   replacement on the guard. Both bullets deleted. *The pre-table CLAIM -> ROW check was run, and run well,
+   against the product comment only; nothing applied it to the detector's own contract, which is itself a
+   set of observable-consequence claims.*
+2. **The NO-ANNOUNCE warrant cited the wrong precedent, and the seat was correcting a finding of its own
+   that this round had adopted.** `#514` is about an architecturally UNPREDICTABLE OUTPUT the model
+   declines to define; leaving a register nobody may read alone is not the same act as silently
+   re-interpreting a request a guest made. The real in-file precedent is `swpipl` (case 0x35) and `wrmces`
+   (case 0x11), which take a guest value the model cannot honour exactly and silently normalise it.
+   **And the file has FOUR sites that meet an unrecognised selector with `fatal()` and `cpu->running = 0`**
+   -- including `wrent`, the closest structural sibling of all -- none of which the comment mentioned, so a
+   reader concluded the file had no contrary practice. The departure is now stated rather than hidden.
+3. **The ITB/DTB conflation was undisclosed and two rows silently depend on its absence.** `a0` = 1, 2 and
+   3 are architecturally different requests; this model has one unified cache and services all three
+   identically. `bnd lo` and `bnd mid` were labelled "ITB selective" and "DTB selective" -- and would go
+   **RED ON A CORRECT IMPLEMENTATION** of the split, since each flushes with one selector and observes
+   with an ordinary data load. That is the oracle-correction rule's setup being built into a fresh
+   detector. Disclosed, with the re-pin-first obligation written into the contract for whoever implements
+   the split.
+4. **The disclosed multi-axis joint understated its own size.** It read as a corner; it is a predicted
+   **total sweep**, and the seat named the discriminator (`&& !((int64_t)a0 == 1 && a1 == 0)`), which no
+   row enters because `bnd lo` drives `a1 = 0x6000` and both `a1 = 0` rows drive `a0 = 2`. Clause (e) only
+   lets a later escape land as *"outside the contract, as stated"* if the statement conveys the size.
+
+**The shipped probe therefore differs from the frozen t3 instrument by 27 lines, and the difference is
+COMMENT-ONLY** -- checked rather than asserted: every changed line is inside the module docstring or inside
+a row's display-only note string, which `row()` prints and never compares. The table's scores describe the
+shipped probe's behaviour unchanged.
+
+**One finding RECORDED and not acted on**, because it is a tooling question rather than this round's:
+`tally_kills.py` decides what an accept row is by the name prefix `bnd `, which is a correlate rather than
+the defining property -- and three of the eight rows it grades that way are reject-side. Not live here
+(every `bnd` row carries a real mutant kill), but the check would not say so if it were.
+
+## CLEARANCE
+
+Run, not asserted, at the round boundary. `cpu_alpha_palcode.c` is NOT in the derived divergence set, so a
+`cmp` against GXEMUL-SEC is the right comparison for every tree:
+
+```
+build/            part1=CLEAN  part2=FRESH
+build-asan/       part1=CLEAN  part2=FRESH
+/tmp/gxsec-build  part1=CLEAN  part2=FRESH
+est/              part1=CLEAN  part2=N/A -- source tree, no binary exists
+```
+
+Verified additionally by GREPPING THE PREDICATE in all four trees (1 occurrence each) rather than by reading
+timestamps -- an earlier comment rewrite in this round landed AFTER a propagation, which the measuring seat
+caught and which a timestamp check would have shown as fresh.
+
 # `#509` follow-up (sgimtelabelcells): the detector was blind at two of three dispatch labels -- two rows close the floor breach the 7g-1 ruling found, measured 14/16 and 15/16 where both mutants had swept 14/14
 
 **THE BREACH, ruled 2026-09-09 (7g-1) and measured the same evening**: every transfer row of

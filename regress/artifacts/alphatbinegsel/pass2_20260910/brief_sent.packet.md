@@ -1,0 +1,171 @@
+# `#520` alphatbinegsel -- PASS 2 ON THE REAL DIFF: a translation-invalidate selector compared as unsigned sent both "invalidate everything" requests down the single-page branch
+
+## READ THIS FIRST — PLEASE DO NOT SIMPLY RATIFY
+
+A recent panel had seven of nine seats confirm a premise the brief stated wrongly, and TWICE TODAY a seat
+corrected THIS author's own factual base -- once on a whole design ruling, once on a claim in the brief
+that opened this very round.  **Check the premises, not just the derivations.**  A seat that re-derives a
+premise from something this brief did NOT give it is worth more than a seat that agrees.
+
+**THE TREE UNDER REVIEW IS `GXEMUL-SEC/src/`.**  Three pristine-2021-upstream copies of GXemul sit
+elsewhere under the project root and are NOT this fork; line numbers off by hundreds mean you are in one.
+
+**If you cannot read files that is expected** -- the diff and every score are inlined.  Name any premise
+you cannot settle from this packet rather than guessing.
+
+**Where this brief states an ARITHMETIC claim, ENUMERATE it rather than reasoning about it.**
+
+**VERDICT LINE FIRST.**
+
+## §C0 -- HAS THIS ROUND SHIPPED?  NO.
+HEAD is `4eac0b1`.  `src/cpus/cpu_alpha_palcode.c` and `regress/alpha_tbi_probe.py` are UNCOMMITTED.
+Two OTHER rounds are also held in this working tree (`dev_lca.c`, `dev_sgi_re.c`) and neither touches
+Alpha, so this diff is independent of both.
+
+*** A CORRECTION THIS BRIEF OWES ITS OWN PANEL: the brief that opened this round claimed "this row has
+never had a fix design panel".  THAT WAS FALSE and a seat caught it -- a SIX-SEAT design panel ran on
+2026-09-08 and a ruling followed on 2026-09-09.  This round IMPLEMENTS that ruling; it did not re-decide
+it. ***
+
+## §C -- SETTLED PREMISES (re-inlined; say which you cannot settle from this packet)
+S1. `fatal()` RETURNS (`src/core/debugmsg.c`, grep `void fatal(`): no early-out, no exit.  Not used here.
+S2. THE DEFECT.  In `alpha_palcode()`, `uint64_t a0 = cpu->cd.alpha.r[ALPHA_A0]`.  The `PAL_OSF1_tbi` arm
+    (`case 0x33`) tested `if (a0 >= 1)` -- an UNSIGNED compare.  The arm's own header documents
+    `a0 = -1` as "invalidate everything with ASM=0" and `a0 = -2` as "invalidate everything", and both
+    compare GREATER than 1 when unsigned, so both took the single-address branch with `a1`.  A guest
+    asking to flush the whole translation cache flushed ONE page.
+S3. THE RULING BEING IMPLEMENTED (2026-09-09, six seats + adjudication): a two-sided SIGNED range;
+    PRESERVE SILENTLY with no announce (an undefined selector is not a guest-drivable DEFECT, and the
+    addition licence forbids a diagnostic with no measured delta); and THREE accept rows, because every
+    bound-moving mutant escapes a suite whose only positive selector is `a0 = 2`.
+S4. WHAT A DECLINE LOOKS LIKE ON ALPHA, verified by reading: `memory_rw.c` delivers a failed-device
+    exception only under `MEM_MIPS` / `MEM_M88K`, so on Alpha a failure returns `MEMORY_ACCESS_FAILED`
+    and `cpu_alpha_instr_loadstore.c`'s `LS_GENERIC_N` returns BEFORE the register write.  Not used by
+    this fix, which never declines -- included because two rows' oracles depend on it.
+S5. THE MODEL TREATS SELECTORS 1, 2 AND 3 IDENTICALLY -- one arm, same arguments, no instruction/data TLB
+    split.  So the new bound rows pin the BOUNDS, not per-selector semantics, and their comments say so.
+S6. `cpu_alpha.c` NEVER SETS `vaddr_mask`, so `cpu.c` defaults a 64-bit CPU to an identity mask.  That is
+    LOAD-BEARING for this round: had it been degenerate, the selective arm would flush everything and the
+    bound rows would be VACUOUS.  Found by the measuring seat; it notes the property is untested elsewhere.
+
+## THE DIFF -- product code, verbatim and complete
+```diff
+diff --git a/src/cpus/cpu_alpha_palcode.c b/src/cpus/cpu_alpha_palcode.c
+index 97aa499..db5cc39 100644
+--- a/src/cpus/cpu_alpha_palcode.c
++++ b/src/cpus/cpu_alpha_palcode.c
+@@ -327,7 +327,9 @@ Make sure they are correct, as documented in the Manual.
+ 	case 0x33:	/*  PAL_OSF1_tbi  */
+ 		/*
+ 		 *  a0 = op, a1 = vaddr
+-		 *  a0 is ignored for now. TODO.
++		 *  (#520: a0 was ignored -- "a0 is ignored for now. TODO." --
++		 *  until the selector test below was corrected.  It is read now,
++		 *  so that line is removed rather than left to mislead.)
+ 		 *	a0 = 1: ITB invalidate
+ 		 *	a0 = 2: DTB invalidate
+ 		 *	a0 = 3: both ITB and DTB
+@@ -336,7 +338,36 @@ Make sure they are correct, as documented in the Manual.
+ 		 */
+ 		// debug("[ Alpha PALcode: PAL_OSF1_tbi: a0=%" PRIi64" a1=0x%"
+ 		//    PRIx64" ]\n", (int64_t)a0, (uint64_t)a1);
+-		if (a0 >= 1)
++		/*  #520 (alphatbinegsel): `a0' is a uint64_t, so the old `a0 >= 1'
++		    was an UNSIGNED compare and BOTH negative selectors named in the
++		    header above -- -1 and -2, the two documented as invalidate-
++		    EVERYTHING -- compared GREATER than 1 and took the single-VADDR
++		    branch.  A guest TBIA/TBIAP therefore flushed ONE page and left
++		    every other cached translation live.  MEASURED at rung 3 BEFORE
++		    this edit (regress/alpha_tbi_probe.py, artifacts under
++		    regress/artifacts/alphatbinegsel/): 5/7 on the committed build
++		    with both negative-selector rows RED, 7/7 on this fix.
++
++		    The test is a two-sided SIGNED range rather than a bare cast: 1,
++		    2 and 3 are the only selective ops the architecture defines, so 0
++		    and 4.. are undefined and fall to the conservative arm with the
++		    negatives.  Over-invalidation cannot serve a stale translation;
++		    under-invalidation can, which is this defect.
++
++		    -1 and -2 differ on hardware only in whether GLOBAL entries
++		    survive: -1 invalidates the ASM=0 entries and SPARES the ASM=1
++		    ones, -2 invalidates both.  This model's translation cache
++		    carries no ASM/ASN metadata to spare anything BY, so both map
++		    to INVALIDATE_ALL -- EXACT for -2 and CONSERVATIVE for -1,
++		    which is the safe direction and is not the same claim.
++
++		    NO ANNOUNCE, deliberately: every selector now takes a
++		    conservative-correct arm, so there is no event to report.  The
++		    house latched-announce idiom is for guest-drivable DEFECTS; a
++		    diagnostic here would be a check that cannot fail in the state
++		    that matters, and the addition licence forbids one with no
++		    measured delta.  */
++		if ((int64_t)a0 >= 1 && (int64_t)a0 <= 3)
+ 			cpu->invalidate_translation_caches(cpu, a1, INVALIDATE_VADDR);
+ 		else
+ 			cpu->invalidate_translation_caches(cpu, 0, INVALIDATE_ALL);
+```
+
+## THE MEASURED KILL TABLE (the measuring seat, scratch clone `/tmp/gx520`, frozen instrument per table,
+## every log ending `ALPHATBI_DONE`, clone restored and `cmp`-CLEAN against SEC at the end)
+
+The pre-table check was written BEFORE table 1 ran (mtime 10:34:50 against a first build at 10:37:27) and
+is deliberately NOT edited afterwards.  It PREDICTED both of the sweeps below.
+
+```
+ leg                                     table 1 (10 rows)  table 2 (13 rows)  reddens
+ BASE                                          10/10             13/13         --
+ M_A  >= 2 (lower bound raised)                 9/10             12/13         bnd lo
+ M_B  <= 2 (upper bound lowered)                9/10             12/13         bnd hi
+ M_C  <= 4 (upper bound raised)                 9/10             12/13         bnd out
+ M_D  >= 0 (lower bound LOWERED)           10/10 SWEEP           12/13         bnd zero
+ M_E  && a1 != 0 (conjunct on a body lvalue)   10/10 SWEEP       12/13         bnd a1z
+ M_F  && a0 != 2 (window excludes interior)      --              11/13         bnd mid, bnd a1z
+ HEAD (null medium, pre-fix whole file)         7/10             10/13         tbia obs, tbiap obs, bnd out
+ RESTORED                                      10/10             13/13         --
+```
+M_D and M_E did not merely SCORE the same as BASE: their probe output is BYTE-IDENTICAL to BASE's apart
+from the label line.  The 10-row detector could not see either edit at all.
+
+## THE TWO ESCAPES AND THEIR DISPOSITION
+* **M_D is a clause-(d) FLOOR BREACH (L2), repaired in-round.**  The guard is a TWO-SIDED WINDOW, so it has
+  FOUR sides, and the three-row design covered three: `a0 = 0`, the lower bound's REJECT side, had no row.
+  "A bound relaxed" is named explicitly by the clause.  *Counting rows is not the same as counting sides.*
+* **M_E is clause-(e) debt, closed anyway.**  The guard reads `a0`; the guarded body reads `a1`.  Every
+  selective row drives `a1 = 0x6000`, and the two rows that DO set `a1 = 0` take the conservative arm where
+  `a1` is ignored -- so the conjunct changes no observable anywhere.  The body never TESTS `a1`, so this is
+  not floor; it was closed because the round was re-tabling for M_D regardless (the class-closure amendment).
+* **M_F** (`&& a0 != 2`) is the unrowed INTERIOR cell, found while closing the other two.
+
+## A SHIPPED ROW THAT IS KILLED BY NOTHING, disclosed rather than left for a later reader
+`pos obs` (the pre-existing `a0 = 2` control) is killed by NO mutant in either table.  Its channel does not
+vary between the two arms -- both flush the target page -- so it can see an OMITTED invalidation but not an
+over-invalidation, and no bound edit at all.  It is a LIVENESS control, not a bound row.  That is precisely
+why the three accept rows were owed, and it is recorded in the pre-table.
+
+## §E -- THE QUESTIONS (verdict line first; cite by grep anchor, never by line number)
+1. **PREMISES AS QUESTIONS.**  Is S2's account of the unsigned compare right, and is the arm's header table
+   the right authority for what -1 and -2 must do?  Is S6 right that `vaddr_mask` defaults to an identity
+   mask, and what happens to this round's rows if some future CPU sets it?  Is S5 right that 1, 2 and 3 are
+   indistinguishable in this model -- and if so, does any comment in the diff CLAIM more than that?
+2. **WHAT IS THE SMALLEST EDIT THAT BREAKS THIS FIX AND STILL PASSES THE 13 ROWS?**  Name the row you
+   expect to stay green.  The four-sides lesson above is the shape I am most worried about repeating: the
+   guard now has two bounds and a signed cast, so name the axis I have STILL not rowed.
+3. **OPTION-SET COMPLETENESS.**  The ruling chose silent preservation.  Is there a member it did not name
+   for an undefined selector value -- and does the tree already have an idiom for one?  Grep the fork.
+4. **THE COMMENT.**  The diff is 33 added lines of which ONE is executable.  Does any sentence in it assert
+   something no row observes, or attribute to the architecture something that is an emulator policy choice?
+   One sentence was already corrected once for reversing which entries a selector spares.
+5. **If, while verifying a claim, you found something ELSE -- say so.**
+
+
+## OPERATIONAL RULE FOR EVERY SEAT (appended by panel.sh, not by the author)
+
+**Do not run `run.sh`, any `gate_*.sh`, or the battery.** Every measurement you need is
+inlined above. A gate takes minutes -- longer than your response budget -- and a second
+concurrent invocation corrupts the operator run in progress, because the gates share one
+log directory. A seat that runs a gate produces no review AND may invalidate someone
+else s. Building and running a single detector or mutant in your own temp directory is
+fine and encouraged; driving the harness is not.
+
+If you want a measurement that is not inlined, NAME IT and say why. Naming it is worth
+far more to this panel than a timeout.

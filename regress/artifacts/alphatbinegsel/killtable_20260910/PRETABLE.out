@@ -1,0 +1,129 @@
+PRE-TABLE CHECK -- #520 alphatbinegsel, ACCEPT ROWS (sessions 4-6)
+Written BEFORE table 1 ran; this file's mtime is the order proof.
+Seat: Opus 5 measuring seat.  Date: 2026-09-10.
+
+BASELINE NAMED
+  Baseline = the round's post-fix working set, i.e. GXEMUL-SEC/src/cpus/cpu_alpha_palcode.c
+  as it stands uncommitted (HEAD 7d7e055 + the #520 one-line fix).
+  Clone: /tmp/gx520 (relocatable cp -a of the build tree).
+  cmp /tmp/gx520/src/cpus/cpu_alpha_palcode.c  GXEMUL-SEC/src/cpus/cpu_alpha_palcode.c -> IDENTICAL
+  [ /tmp/gx520/gxemul -nt /tmp/gx520/src/cpus/cpu_alpha_palcode.c ] -> BINARY FRESH
+  Baseline binary is rebuilt in the clone as leg 1 of the table (BASE), which doubles
+  as the freshness proof.
+  NO project build tree is written: build/, build-asan/ and /tmp/gxsec-build are
+  untouched, and GXEMUL-SEC/src is untouched.  Only GXEMUL-SEC/regress/alpha_tbi_probe.py
+  (the detector, this round's own deliverable) and this artifacts dir are written on
+  the project side.
+
+THE DIFF UNDER TEST (one executable line)
+  -  if (a0 >= 1)
+  +  if ((int64_t)a0 >= 1 && (int64_t)a0 <= 3)
+        cpu->invalidate_translation_caches(cpu, a1, INVALIDATE_VADDR);
+     else
+        cpu->invalidate_translation_caches(cpu, 0, INVALIDATE_ALL);
+
+SIBLING PARITY  -- compare the two arms' observable channels
+  arm S (selective, INVALIDATE_VADDR, addr=a1): flushes ONLY the entry whose
+        vaddr_page matches a1's page.  Observable: an unrelated warmed page keeps
+        its stale translation.
+  arm C (conservative, INVALIDATE_ALL, addr=0): flushes every valid entry.
+        Observable: an unrelated warmed page loses its translation and re-walks.
+
+  ASYMMETRY 1, and it is the reason these rows exist: the SHIPPED 7-row witness has
+  NO row that can tell arm S from arm C.  Every one of its rows observes only the
+  TARGET page, and the target is flushed by both arms.  Rows owed: at least one row
+  observing a NON-target page, per side of each bound.
+
+  ASYMMETRY 2, and it is a row the 3-row design does not contain.
+  The fix's guard is a TWO-SIDED window [1,3].  Enumerating the four sides:
+        lower bound, accept side (a0=1, must be arm S)   -> row "bnd lo"    PLANNED
+        lower bound, reject side (a0=0, must be arm C)   -> NO ROW PLANNED  <-- GAP
+        upper bound, accept side (a0=3, must be arm S)   -> row "bnd hi"    PLANNED
+        upper bound, reject side (a0=4, must be arm C)   -> row "bnd out"   PLANNED
+  Three of the four sides are covered.  The missing one admits the clause-(d) mutant
+  `>= 1' -> `>= 0' (a bound RELAXED -- squarely inside the (d) enumeration), which is
+  PREDICTED to be a CLEAN SWEEP of the 10-row detector: a0=0 is the only selector
+  whose arm it changes, and no row drives a0=0.
+  DISPOSITION: build it (M_D) and MEASURE.  If it sweeps, that is an L2 floor breach,
+  and the row is added and re-measured IN-ROUND rather than filed.
+  This instantiates the near/far-bound lesson one level down: an accept row pins the
+  bound it SITS ON, so a window needs a row on each side of each bound.  Counting
+  rows is not the same as counting sides.
+
+CLAIM -> ROW  (added comment sentences asserting an observable consequence)
+  "A guest TBIA/TBIAP therefore flushed ONE page and left every other cached
+   translation live."
+      -> rows "tbia obs", "tbiap obs" (shipped) observe the TARGET page only.  The
+         "left every other cached translation live" half was rowed by NOTHING until
+         these accept rows; "bnd lo"/"bnd hi" are what observe an OTHER page.
+  "1, 2 and 3 are the only selective ops ... 0 and 4.. are undefined and fall to the
+   conservative arm with the negatives."
+      -> a0=1 "bnd lo"; a0=2 "pos obs" (shipped, but see the vacuity note below --
+         it cannot see which arm ran); a0=3 "bnd hi"; a0=4 "bnd out";
+         a0=0 OWED (asymmetry 2); a0=-1/-2 "tbiap obs"/"tbia obs".
+  "Over-invalidation cannot serve a stale translation; under-invalidation can."
+      -> N/A with reason: a statement about the SAFETY ORDERING of the two arms, not
+         about an observable of this build.  No row owed.
+  "both map to INVALIDATE_ALL -- EXACT for -2 and CONSERVATIVE for -1"
+      -> NO ROW POSSIBLE, stated rather than glossed: this model's translation cache
+         carries no ASM/ASN metadata, so -1 and -2 are INDISTINGUISHABLE by any probe
+         against this model.  A row claiming to separate them would be vacuous by
+         construction.
+  "NO ANNOUNCE, deliberately"
+      -> an absence claim; discharged by reading the hunk (no debugmsg/fatal added),
+         not by a row.  N/A with reason recorded.
+
+GUARD FIELD vs BODY FIELD
+  guard predicate reads:  a0            (only)
+  guarded body reads:     a1, INVALIDATE_VADDR      (arm S)
+                          literal 0, INVALIDATE_ALL (arm C)
+  THEY DIFFER: the guard reads a0 and the body reads a1.  Both are guest registers
+  written by the guest immediately before CALL_PAL, at independent sites, so a
+  DISAGREEING state (a0 inside [1,3] while a1 names an unexpected page, a1=0
+  included) is freely reachable.
+  Body-induced partition of a1: NONE -- the body does not TEST a1, it passes it as an
+  argument.  Under the joint-cell rule, a value the body never tests as a case is
+  clause-(e) DISCLOSURE, not floor.
+  DISCLOSED, and measured rather than argued: the conjunct `&& a1 != 0' is predicted
+  to escape, because every row drives a1=0x6000 on the selective arm, and the two
+  negative-selector rows that do set a1=0 take arm C, where a1 is ignored.  Built as
+  M_E.  The direction of the resulting error is CONSERVATIVE (tbi(1,0) would
+  over-invalidate), so it is coverage debt rather than a live defect -- recorded
+  either way.
+
+CHANNEL  -- per row: the mutant it kills, and the observable that differs under it
+  row        mutant killed                      observable that differs under it
+  ---------  ---------------------------------  -----------------------------------
+  bnd lo     `>= 1' -> `>= 2'                   obs Y (VA 0x4000): VAL_C -> VAL_D
+                                                (a0=1 wrongly takes arm C, Y flushed)
+  bnd hi     `<= 3' -> `<= 2'                   obs Y: VAL_C -> VAL_D
+                                                (a0=3 wrongly takes arm C, Y flushed)
+  bnd out    `<= 3' -> `<= 4'                   obs Y: VAL_D -> VAL_C
+                                                (a0=4 wrongly takes arm S, Y spared)
+  bnd zero   `>= 1' -> `>= 0'                   obs Y: VAL_D -> VAL_C
+             [ROW OWED -- asymmetry 2]          (a0=0 wrongly takes arm S, Y spared)
+
+  Each named channel CAN vary under its named mutant, because obs Y is the one cell
+  the two arms disagree about.  obs X is a CONTROL: it is VAL_F under BOTH arms by
+  construction, so no row rests on it varying, and it is deliberately not the
+  discriminator.  It is carried in the row so that a session which silently failed to
+  run, or failed to invalidate the target at all, cannot present as green.
+
+  VACUITY NOTE ON A SHIPPED ROW: "pos obs" (a0=2) names no mutant it can kill.  Its
+  channel -- the target page's own value -- does not vary between the arms, so it
+  cannot see any bound edit.  It is a liveness/positive control, not a bound row,
+  which is precisely why sessions 4-6 are owed.  Recorded here rather than silently
+  relied on.
+
+TABLE PLAN  (predictions, to be compared against measurement)
+  BASE   the fix, unmutated                        predict 10/10
+  M_A    `>= 1' -> `>= 2'                          predict  9/10, kills "bnd lo"
+  M_B    `<= 3' -> `<= 2'                          predict  9/10, kills "bnd hi"
+  M_C    `<= 3' -> `<= 4'                          predict  9/10, kills "bnd out"
+  HEAD   `if (a0 >= 1)' (null medium, 7d7e055)     predict  7/10, kills "tbia obs",
+                                                   "tbiap obs", "bnd out"
+  M_D    `>= 1' -> `>= 0'   (the predicted SWEEP)  predict 10/10 -> floor breach
+  M_E    `&& a1 != 0' appended (disclosed joint)   predict 10/10 -> clause (e) debt
+
+  Every mutant is applied by literal text replacement, with MUTANT-TEXT-NOT-FOUND
+  treated as a hard FAIL, so each mutant doubles as a presence pin on the fix's text.

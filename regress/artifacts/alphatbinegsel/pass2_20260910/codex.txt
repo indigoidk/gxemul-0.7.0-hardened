@@ -1,0 +1,3060 @@
+Reading additional input from stdin...
+OpenAI Codex v0.153.4
+--------
+workdir: C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+model: gpt-6-astra
+provider: openai
+approval: never
+sandbox: read-only
+reasoning effort: max
+reasoning summaries: none
+session id: 01a08c0a-8ce0-73d2-b9b7-a4a586fe4229
+--------
+user
+# `#520` alphatbinegsel -- PASS 2 ON THE REAL DIFF: a translation-invalidate selector compared as unsigned sent both "invalidate everything" requests down the single-page branch
+
+## READ THIS FIRST — PLEASE DO NOT SIMPLY RATIFY
+
+A recent panel had seven of nine seats confirm a premise the brief stated wrongly, and TWICE TODAY a seat
+corrected THIS author's own factual base -- once on a whole design ruling, once on a claim in the brief
+that opened this very round.  **Check the premises, not just the derivations.**  A seat that re-derives a
+premise from something this brief did NOT give it is worth more than a seat that agrees.
+
+**THE TREE UNDER REVIEW IS `GXEMUL-SEC/src/`.**  Three pristine-2021-upstream copies of GXemul sit
+elsewhere under the project root and are NOT this fork; line numbers off by hundreds mean you are in one.
+
+**If you cannot read files that is expected** -- the diff and every score are inlined.  Name any premise
+you cannot settle from this packet rather than guessing.
+
+**Where this brief states an ARITHMETIC claim, ENUMERATE it rather than reasoning about it.**
+
+**VERDICT LINE FIRST.**
+
+## §C0 -- HAS THIS ROUND SHIPPED?  NO.
+HEAD is `4eac0b1`.  `src/cpus/cpu_alpha_palcode.c` and `regress/alpha_tbi_probe.py` are UNCOMMITTED.
+Two OTHER rounds are also held in this working tree (`dev_lca.c`, `dev_sgi_re.c`) and neither touches
+Alpha, so this diff is independent of both.
+
+*** A CORRECTION THIS BRIEF OWES ITS OWN PANEL: the brief that opened this round claimed "this row has
+never had a fix design panel".  THAT WAS FALSE and a seat caught it -- a SIX-SEAT design panel ran on
+2026-09-08 and a ruling followed on 2026-09-09.  This round IMPLEMENTS that ruling; it did not re-decide
+it. ***
+
+## §C -- SETTLED PREMISES (re-inlined; say which you cannot settle from this packet)
+S1. `fatal()` RETURNS (`src/core/debugmsg.c`, grep `void fatal(`): no early-out, no exit.  Not used here.
+S2. THE DEFECT.  In `alpha_palcode()`, `uint64_t a0 = cpu->cd.alpha.r[ALPHA_A0]`.  The `PAL_OSF1_tbi` arm
+    (`case 0x33`) tested `if (a0 >= 1)` -- an UNSIGNED compare.  The arm's own header documents
+    `a0 = -1` as "invalidate everything with ASM=0" and `a0 = -2` as "invalidate everything", and both
+    compare GREATER than 1 when unsigned, so both took the single-address branch with `a1`.  A guest
+    asking to flush the whole translation cache flushed ONE page.
+S3. THE RULING BEING IMPLEMENTED (2026-09-09, six seats + adjudication): a two-sided SIGNED range;
+    PRESERVE SILENTLY with no announce (an undefined selector is not a guest-drivable DEFECT, and the
+    addition licence forbids a diagnostic with no measured delta); and THREE accept rows, because every
+    bound-moving mutant escapes a suite whose only positive selector is `a0 = 2`.
+S4. WHAT A DECLINE LOOKS LIKE ON ALPHA, verified by reading: `memory_rw.c` delivers a failed-device
+    exception only under `MEM_MIPS` / `MEM_M88K`, so on Alpha a failure returns `MEMORY_ACCESS_FAILED`
+    and `cpu_alpha_instr_loadstore.c`'s `LS_GENERIC_N` returns BEFORE the register write.  Not used by
+    this fix, which never declines -- included because two rows' oracles depend on it.
+S5. THE MODEL TREATS SELECTORS 1, 2 AND 3 IDENTICALLY -- one arm, same arguments, no instruction/data TLB
+    split.  So the new bound rows pin the BOUNDS, not per-selector semantics, and their comments say so.
+S6. `cpu_alpha.c` NEVER SETS `vaddr_mask`, so `cpu.c` defaults a 64-bit CPU to an identity mask.  That is
+    LOAD-BEARING for this round: had it been degenerate, the selective arm would flush everything and the
+    bound rows would be VACUOUS.  Found by the measuring seat; it notes the property is untested elsewhere.
+
+## THE DIFF -- product code, verbatim and complete
+```diff
+diff --git a/src/cpus/cpu_alpha_palcode.c b/src/cpus/cpu_alpha_palcode.c
+index 97aa499..db5cc39 100644
+--- a/src/cpus/cpu_alpha_palcode.c
++++ b/src/cpus/cpu_alpha_palcode.c
+@@ -327,7 +327,9 @@ Make sure they are correct, as documented in the Manual.
+ 	case 0x33:	/*  PAL_OSF1_tbi  */
+ 		/*
+ 		 *  a0 = op, a1 = vaddr
+-		 *  a0 is ignored for now. TODO.
++		 *  (#520: a0 was ignored -- "a0 is ignored for now. TODO." --
++		 *  until the selector test below was corrected.  It is read now,
++		 *  so that line is removed rather than left to mislead.)
+ 		 *	a0 = 1: ITB invalidate
+ 		 *	a0 = 2: DTB invalidate
+ 		 *	a0 = 3: both ITB and DTB
+@@ -336,7 +338,36 @@ Make sure they are correct, as documented in the Manual.
+ 		 */
+ 		// debug("[ Alpha PALcode: PAL_OSF1_tbi: a0=%" PRIi64" a1=0x%"
+ 		//    PRIx64" ]\n", (int64_t)a0, (uint64_t)a1);
+-		if (a0 >= 1)
++		/*  #520 (alphatbinegsel): `a0' is a uint64_t, so the old `a0 >= 1'
++		    was an UNSIGNED compare and BOTH negative selectors named in the
++		    header above -- -1 and -2, the two documented as invalidate-
++		    EVERYTHING -- compared GREATER than 1 and took the single-VADDR
++		    branch.  A guest TBIA/TBIAP therefore flushed ONE page and left
++		    every other cached translation live.  MEASURED at rung 3 BEFORE
++		    this edit (regress/alpha_tbi_probe.py, artifacts under
++		    regress/artifacts/alphatbinegsel/): 5/7 on the committed build
++		    with both negative-selector rows RED, 7/7 on this fix.
++
++		    The test is a two-sided SIGNED range rather than a bare cast: 1,
++		    2 and 3 are the only selective ops the architecture defines, so 0
++		    and 4.. are undefined and fall to the conservative arm with the
++		    negatives.  Over-invalidation cannot serve a stale translation;
++		    under-invalidation can, which is this defect.
++
++		    -1 and -2 differ on hardware only in whether GLOBAL entries
++		    survive: -1 invalidates the ASM=0 entries and SPARES the ASM=1
++		    ones, -2 invalidates both.  This model's translation cache
++		    carries no ASM/ASN metadata to spare anything BY, so both map
++		    to INVALIDATE_ALL -- EXACT for -2 and CONSERVATIVE for -1,
++		    which is the safe direction and is not the same claim.
++
++		    NO ANNOUNCE, deliberately: every selector now takes a
++		    conservative-correct arm, so there is no event to report.  The
++		    house latched-announce idiom is for guest-drivable DEFECTS; a
++		    diagnostic here would be a check that cannot fail in the state
++		    that matters, and the addition licence forbids one with no
++		    measured delta.  */
++		if ((int64_t)a0 >= 1 && (int64_t)a0 <= 3)
+ 			cpu->invalidate_translation_caches(cpu, a1, INVALIDATE_VADDR);
+ 		else
+ 			cpu->invalidate_translation_caches(cpu, 0, INVALIDATE_ALL);
+```
+
+## THE MEASURED KILL TABLE (the measuring seat, scratch clone `/tmp/gx520`, frozen instrument per table,
+## every log ending `ALPHATBI_DONE`, clone restored and `cmp`-CLEAN against SEC at the end)
+
+The pre-table check was written BEFORE table 1 ran (mtime 10:34:50 against a first build at 10:37:27) and
+is deliberately NOT edited afterwards.  It PREDICTED both of the sweeps below.
+
+```
+ leg                                     table 1 (10 rows)  table 2 (13 rows)  reddens
+ BASE                                          10/10             13/13         --
+ M_A  >= 2 (lower bound raised)                 9/10             12/13         bnd lo
+ M_B  <= 2 (upper bound lowered)                9/10             12/13         bnd hi
+ M_C  <= 4 (upper bound raised)                 9/10             12/13         bnd out
+ M_D  >= 0 (lower bound LOWERED)           10/10 SWEEP           12/13         bnd zero
+ M_E  && a1 != 0 (conjunct on a body lvalue)   10/10 SWEEP       12/13         bnd a1z
+ M_F  && a0 != 2 (window excludes interior)      --              11/13         bnd mid, bnd a1z
+ HEAD (null medium, pre-fix whole file)         7/10             10/13         tbia obs, tbiap obs, bnd out
+ RESTORED                                      10/10             13/13         --
+```
+M_D and M_E did not merely SCORE the same as BASE: their probe output is BYTE-IDENTICAL to BASE's apart
+from the label line.  The 10-row detector could not see either edit at all.
+
+## THE TWO ESCAPES AND THEIR DISPOSITION
+* **M_D is a clause-(d) FLOOR BREACH (L2), repaired in-round.**  The guard is a TWO-SIDED WINDOW, so it has
+  FOUR sides, and the three-row design covered three: `a0 = 0`, the lower bound's REJECT side, had no row.
+  "A bound relaxed" is named explicitly by the clause.  *Counting rows is not the same as counting sides.*
+* **M_E is clause-(e) debt, closed anyway.**  The guard reads `a0`; the guarded body reads `a1`.  Every
+  selective row drives `a1 = 0x6000`, and the two rows that DO set `a1 = 0` take the conservative arm where
+  `a1` is ignored -- so the conjunct changes no observable anywhere.  The body never TESTS `a1`, so this is
+  not floor; it was closed because the round was re-tabling for M_D regardless (the class-closure amendment).
+* **M_F** (`&& a0 != 2`) is the unrowed INTERIOR cell, found while closing the other two.
+
+## A SHIPPED ROW THAT IS KILLED BY NOTHING, disclosed rather than left for a later reader
+`pos obs` (the pre-existing `a0 = 2` control) is killed by NO mutant in either table.  Its channel does not
+vary between the two arms -- both flush the target page -- so it can see an OMITTED invalidation but not an
+over-invalidation, and no bound edit at all.  It is a LIVENESS control, not a bound row.  That is precisely
+why the three accept rows were owed, and it is recorded in the pre-table.
+
+## §E -- THE QUESTIONS (verdict line first; cite by grep anchor, never by line number)
+1. **PREMISES AS QUESTIONS.**  Is S2's account of the unsigned compare right, and is the arm's header table
+   the right authority for what -1 and -2 must do?  Is S6 right that `vaddr_mask` defaults to an identity
+   mask, and what happens to this round's rows if some future CPU sets it?  Is S5 right that 1, 2 and 3 are
+   indistinguishable in this model -- and if so, does any comment in the diff CLAIM more than that?
+2. **WHAT IS THE SMALLEST EDIT THAT BREAKS THIS FIX AND STILL PASSES THE 13 ROWS?**  Name the row you
+   expect to stay green.  The four-sides lesson above is the shape I am most worried about repeating: the
+   guard now has two bounds and a signed cast, so name the axis I have STILL not rowed.
+3. **OPTION-SET COMPLETENESS.**  The ruling chose silent preservation.  Is there a member it did not name
+   for an undefined selector value -- and does the tree already have an idiom for one?  Grep the fork.
+4. **THE COMMENT.**  The diff is 33 added lines of which ONE is executable.  Does any sentence in it assert
+   something no row observes, or attribute to the architecture something that is an emulator policy choice?
+   One sentence was already corrected once for reversing which entries a selector spares.
+5. **If, while verifying a claim, you found something ELSE -- say so.**
+
+
+## OPERATIONAL RULE FOR EVERY SEAT (appended by panel.sh, not by the author)
+
+**Do not run `run.sh`, any `gate_*.sh`, or the battery.** Every measurement you need is
+inlined above. A gate takes minutes -- longer than your response budget -- and a second
+concurrent invocation corrupts the operator run in progress, because the gates share one
+log directory. A seat that runs a gate produces no review AND may invalidate someone
+else s. Building and running a single detector or mutant in your own temp directory is
+fine and encouraged; driving the harness is not.
+
+If you want a measurement that is not inlined, NAME IT and say why. Naming it is worth
+far more to this panel than a timeout.
+codex
+Verdict: pending independent review of the fork and the 13-row probe. I’ll trace the selector, mask, and undefined-operation paths without running the gates or battery.
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "Get-Location; rg --files -g AGENTS.md -g '*alpha*tbi*' -g '*520*' -g '*alphatbinegsel*' -g '*alpha*palcode*' -g 'cpu.c' -g 'cpu_alpha.c' -g 'debugmsg.c' -g 'memory_rw.c' -g 'cpu_alpha_instr_loadstore.c'" in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'git status --short; git rev-parse --short HEAD; git diff -- src/cpus/cpu_alpha_palcode.c regress/alpha_tbi_probe.py' in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+ succeeded in 148ms:
+ M regress/sgi_de_primop_probe.py
+ M src/cpus/cpu_alpha_palcode.c
+ M src/devices/dev_lca.c
+ M src/devices/dev_sgi_re.c
+ M tools/pipeline/ledger.json
+?? _scratchpad/
+?? regress/alpha_dummy.bin
+?? regress/alpha_tbi_probe.py
+?? regress/arm_bfx_stub.bin
+?? regress/artifacts/alphatbinegsel/PASS2_brief_20260910.md
+?? regress/artifacts/alphatbinegsel/fix_20260910/propagate520.out
+?? regress/artifacts/alphatbinegsel/killtable_20260910/
+?? regress/artifacts/armbfiwidth/codex_fixdesign_20260910.err
+?? regress/artifacts/armbfiwidth/codex_fixdesign_20260910.txt
+?? regress/artifacts/gdromdefault_461/
+?? regress/lca_badval_probe.py
+?? regress/lca_isalane_probe.py
+?? regress/sgi_mte_dummy.bin
+?? regress/sgi_re_colourdefault_probe.py
+4eac0b1
+diff --git a/src/cpus/cpu_alpha_palcode.c b/src/cpus/cpu_alpha_palcode.c
+index 97aa499..db5cc39 100644
+--- a/src/cpus/cpu_alpha_palcode.c
++++ b/src/cpus/cpu_alpha_palcode.c
+@@ -327,7 +327,9 @@ Make sure they are correct, as documented in the Manual.
+ 	case 0x33:	/*  PAL_OSF1_tbi  */
+ 		/*
+ 		 *  a0 = op, a1 = vaddr
+-		 *  a0 is ignored for now. TODO.
++		 *  (#520: a0 was ignored -- "a0 is ignored for now. TODO." --
++		 *  until the selector test below was corrected.  It is read now,
++		 *  so that line is removed rather than left to mislead.)
+ 		 *	a0 = 1: ITB invalidate
+ 		 *	a0 = 2: DTB invalidate
+ 		 *	a0 = 3: both ITB and DTB
+@@ -336,7 +338,36 @@ Make sure they are correct, as documented in the Manual.
+ 		 */
+ 		// debug("[ Alpha PALcode: PAL_OSF1_tbi: a0=%" PRIi64" a1=0x%"
+ 		//    PRIx64" ]\n", (int64_t)a0, (uint64_t)a1);
+-		if (a0 >= 1)
++		/*  #520 (alphatbinegsel): `a0' is a uint64_t, so the old `a0 >= 1'
++		    was an UNSIGNED compare and BOTH negative selectors named in the
++		    header above -- -1 and -2, the two documented as invalidate-
++		    EVERYTHING -- compared GREATER than 1 and took the single-VADDR
++		    branch.  A guest TBIA/TBIAP therefore flushed ONE page and left
++		    every other cached translation live.  MEASURED at rung 3 BEFORE
++		    this edit (regress/alpha_tbi_probe.py, artifacts under
++		    regress/artifacts/alphatbinegsel/): 5/7 on the committed build
++		    with both negative-selector rows RED, 7/7 on this fix.
++
++		    The test is a two-sided SIGNED range rather than a bare cast: 1,
++		    2 and 3 are the only selective ops the architecture defines, so 0
++		    and 4.. are undefined and fall to the conservative arm with the
++		    negatives.  Over-invalidation cannot serve a stale translation;
++		    under-invalidation can, which is this defect.
++
++		    -1 and -2 differ on hardware only in whether GLOBAL entries
++		    survive: -1 invalidates the ASM=0 entries and SPARES the ASM=1
++		    ones, -2 invalidates both.  This model's translation cache
++		    carries no ASM/ASN metadata to spare anything BY, so both map
++		    to INVALIDATE_ALL -- EXACT for -2 and CONSERVATIVE for -1,
++		    which is the safe direction and is not the same claim.
++
++		    NO ANNOUNCE, deliberately: every selector now takes a
++		    conservative-correct arm, so there is no event to report.  The
++		    house latched-announce idiom is for guest-drivable DEFECTS; a
++		    diagnostic here would be a check that cannot fail in the state
++		    that matters, and the addition licence forbids one with no
++		    measured delta.  */
++		if ((int64_t)a0 >= 1 && (int64_t)a0 <= 3)
+ 			cpu->invalidate_translation_caches(cpu, a1, INVALIDATE_VADDR);
+ 		else
+ 			cpu->invalidate_translation_caches(cpu, 0, INVALIDATE_ALL);
+
+ succeeded in 161ms:
+
+regress\alpha_tbi_probe.py
+src\core\debugmsg.c
+regress\artifacts\alphatbinegsel\witness_agy_20260908\alphatbi_probe.asrun.py
+regress\artifacts\alphatbinegsel\witness_agy_20260908\alphatbi_fixed.out
+regress\artifacts\alphatbinegsel\witness_agy_20260908\alphatbi_committed.out
+regress\artifacts\alphatbinegsel\fix_20260910\propagate520.out
+regress\artifacts\alphatbinegsel\fix_20260910\FIX520_run1.out
+src\cpus\memory_rw.c
+src\cpus\cpu_alpha_palcode.o
+src\cpus\cpu_alpha_palcode.c
+src\cpus\cpu_alpha_instr_loadstore.c
+src\cpus\cpu_alpha.c
+src\cpus\cpu.c
+regress\artifacts\alphatbinegsel\killtable_20260910\t2\alpha_tbi_probe.frozen.py
+regress\artifacts\alphatbinegsel\killtable_20260910\head_cpu_alpha_palcode.c
+regress\artifacts\alphatbinegsel\killtable_20260910\t1\alpha_tbi_probe.frozen.py
+Path                                 
+----                                 
+C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+
+
+
+web search: 
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -LiteralPath regress/alpha_tbi_probe.py; Get-Content -LiteralPath src/cpus/cpu_alpha_palcode.c' in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n 'vaddr_mask|INVALIDATE_VADDR|INVALIDATE_ALL|invalidate_translation_caches' src/cpus/cpu.c src/cpus/cpu_alpha.c src/include/cpu* src/cpus/cpu_dyntrans*; rg -n -C 12 'void fatal\\(' src/core/debugmsg.c; rg --files regress/artifacts/alphatbinegsel" in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$paths = @('"'C:\\AGENTS.md','C:\\DocumentNoSnc\\AGENTS.md','C:\\DocumentNoSnc\\CC\\AGENTS.md','C:\\DocumentNoSnc\\CC\\GXEMUL\\AGENTS.md','C:\\DocumentNoSnc\\CC\\GXEMUL\\GXEMUL-SEC\\AGENTS.md'); foreach ("'$path in $paths) { if (Test-Path -LiteralPath $path) { Write-Output $path; Get-Content -LiteralPath $path } }; rg --files --hidden -g AGENTS.md -g '"'"'!'"\\.git' src regress" in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+ succeeded in 119ms:
+rg: src/include/cpu*: The filename, directory name, or volume label syntax is incorrect. (os error 123)
+rg: src/cpus/cpu_dyntrans*: The filename, directory name, or volume label syntax is incorrect. (os error 123)
+src/cpus/cpu.c:140:	if (cpu->vaddr_mask == 0) {
+src/cpus/cpu.c:142:			cpu->vaddr_mask = 0x00000000ffffffffULL;
+src/cpus/cpu.c:144:			cpu->vaddr_mask = (int64_t)-1;
+src/cpus/cpu.c:146:		debugmsg_cpu(cpu, SUBSYS_CPU, "vaddr_mask", VERBOSITY_DEBUG,
+src/cpus/cpu.c:147:		    "Warning: vaddr_mask should be set in the CPU family's "
+src/cpus/cpu.c:148:		    "cpu_new()! Assuming 0x%16llx", (long long)cpu->vaddr_mask);
+src/cpus/cpu.c:331:		cpu->invalidate_code_translation(cpu, 0, INVALIDATE_ALL);
+src/cpus/cpu_alpha.c:91:	cpu->invalidate_translation_caches =
+src/cpus/cpu_alpha.c:92:	    alpha_invalidate_translation_caches;
+372-	if (ss)
+373-		v++;
+374-
+375-	if ((quiet_mode && !ss) || v < 0)
+376-		return;
+377-
+378-	va_start(argp, fmt);
+379-	va_debug(argp, fmt);
+380-	va_end(argp);
+381-}
+382-
+383-
+384:void fatal(const char *fmt, ...)
+385-{
+386-	va_list argp;
+387-
+388-	va_start(argp, fmt);
+389-	va_debug(argp, fmt);
+390-	va_end(argp);
+391-}
+392-
+393-
+394-void debugmsg_set_verbosity_level(int subsystem, int verbosity)
+395-{
+396-	if (subsystem != SUBSYS_ALL)
+regress/artifacts/alphatbinegsel\WITNESS_BUILD_brief.md
+regress/artifacts/alphatbinegsel\WITNESS_brief.md
+regress/artifacts/alphatbinegsel\witness_agy_20260908\REVERIFY_mainloop_20260908.out
+regress/artifacts/alphatbinegsel\witness_agy_20260908\alpha_dummy.bin
+regress/artifacts/alphatbinegsel\witness_agy_20260908\alphatbi_probe.asrun.py
+regress/artifacts/alphatbinegsel\witness_agy_20260908\alphatbi_fixed.out
+regress/artifacts/alphatbinegsel\witness_agy_20260908\alphatbi_committed.out
+regress/artifacts/alphatbinegsel\VERIFY_brief.md
+regress/artifacts/alphatbinegsel\Q3_brief.md
+regress/artifacts/alphatbinegsel\PASS2_brief_20260910.md
+regress/artifacts/alphatbinegsel\grok_witness_20260908.err
+regress/artifacts/alphatbinegsel\panel_fixdesign_20260908\ollama_minimax.txt
+regress/artifacts/alphatbinegsel\panel_fixdesign_20260908\ollama_kimi.txt
+regress/artifacts/alphatbinegsel\panel_fixdesign_20260908\ollama_glm.txt
+regress/artifacts/alphatbinegsel\panel_fixdesign_20260908\ollama_deepseek.txt
+regress/artifacts/alphatbinegsel\panel_fixdesign_20260908\grok.txt
+regress/artifacts/alphatbinegsel\panel_fixdesign_20260908\codex.txt
+regress/artifacts/alphatbinegsel\PANEL_brief.md
+regress/artifacts/alphatbinegsel\fix_20260910\propagate520.out
+regress/artifacts/alphatbinegsel\fix_20260910\HEAD_run1.out
+regress/artifacts/alphatbinegsel\fix_20260910\FIX520_run1.out
+regress/artifacts/alphatbinegsel\fix_20260910\build_head.log
+regress/artifacts/alphatbinegsel\fix_20260910\build_fix.log
+regress/artifacts/alphatbinegsel\FIXDESIGN_brief.md
+regress/artifacts/alphatbinegsel\codex_witness_20260908.txt
+regress/artifacts/alphatbinegsel\codex_witness_20260908.err
+regress/artifacts/alphatbinegsel\codex_verify_20260908.txt
+regress/artifacts/alphatbinegsel\codex_verify_20260908.err
+regress/artifacts/alphatbinegsel\codex_rows_20260910.txt
+regress/artifacts/alphatbinegsel\codex_rows_20260910.err
+regress/artifacts/alphatbinegsel\codex_q3_20260908.txt
+regress/artifacts/alphatbinegsel\codex_q3_20260908.err
+regress/artifacts/alphatbinegsel\codex_fixdesign_20260908.txt
+regress/artifacts/alphatbinegsel\codex_fixdesign_20260908.err
+regress/artifacts/alphatbinegsel\grok_witness_20260908.txt
+regress/artifacts/alphatbinegsel\panel_assess_20260908\ollama_minimax.txt
+regress/artifacts/alphatbinegsel\panel_assess_20260908\ollama_kimi.txt
+regress/artifacts/alphatbinegsel\panel_assess_20260908\ollama_glm.txt
+regress/artifacts/alphatbinegsel\panel_assess_20260908\ollama_deepseek.txt
+regress/artifacts/alphatbinegsel\panel_assess_20260908\agy.txt
+regress/artifacts/alphatbinegsel\killtable_20260910\t2\SCORES.txt
+regress/artifacts/alphatbinegsel\killtable_20260910\t2\probe_RESTORED.raw
+regress/artifacts/alphatbinegsel\killtable_20260910\t2\probe_M_F.raw
+regress/artifacts/alphatbinegsel\killtable_20260910\t2\probe_M_E.raw
+regress/artifacts/alphatbinegsel\killtable_20260910\t2\probe_M_D.raw
+regress/artifacts/alphatbinegsel\killtable_20260910\t2\probe_M_C.raw
+regress/artifacts/alphatbinegsel\killtable_20260910\t2\probe_M_B.raw
+regress/artifacts/alphatbinegsel\killtable_20260910\t2\probe_M_A.raw
+regress/artifacts/alphatbinegsel\killtable_20260910\t2\probe_HEAD.raw
+regress/artifacts/alphatbinegsel\killtable_20260910\t2\probe_BASE.raw
+regress/artifacts/alphatbinegsel\killtable_20260910\t2\mutate_M_F.txt
+regress/artifacts/alphatbinegsel\killtable_20260910\t2\mutate_M_E.txt
+regress/artifacts/alphatbinegsel\killtable_20260910\t2\mutate_M_D.txt
+regress/artifacts/alphatbinegsel\killtable_20260910\t2\mutate_M_C.txt
+regress/artifacts/alphatbinegsel\killtable_20260910\t2\mutate_M_B.txt
+regress/artifacts/alphatbinegsel\killtable_20260910\t2\mutate_M_A.txt
+regress/artifacts/alphatbinegsel\killtable_20260910\t2\mutate_HEAD.txt
+regress/artifacts/alphatbinegsel\killtable_20260910\t2\mutate_BASE.txt
+regress/artifacts/alphatbinegsel\killtable_20260910\t2\mutate.asrun.py
+regress/artifacts/alphatbinegsel\killtable_20260910\t2\build_RESTORE.log
+regress/artifacts/alphatbinegsel\killtable_20260910\t2\build_M_F.log
+regress/artifacts/alphatbinegsel\killtable_20260910\t2\build_M_E.log
+regress/artifacts/alphatbinegsel\killtable_20260910\t2\build_M_D.log
+regress/artifacts/alphatbinegsel\killtable_20260910\t2\build_M_C.log
+regress/artifacts/alphatbinegsel\killtable_20260910\t2\build_M_B.log
+regress/artifacts/alphatbinegsel\killtable_20260910\t2\build_M_A.log
+regress/artifacts/alphatbinegsel\killtable_20260910\t2\build_HEAD.log
+regress/artifacts/alphatbinegsel\killtable_20260910\t2\build_BASE.log
+regress/artifacts/alphatbinegsel\killtable_20260910\t2\alpha_tbi_probe.frozen.py
+regress/artifacts/alphatbinegsel\killtable_20260910\t2\alpha_dummy.bin
+regress/artifacts/alphatbinegsel\killtable_20260910\launch.sh
+regress/artifacts/alphatbinegsel\killtable_20260910\PRETABLE.out
+regress/artifacts/alphatbinegsel\killtable_20260910\killtable.sh
+regress/artifacts/alphatbinegsel\killtable_20260910\mutate.py
+regress/artifacts/alphatbinegsel\killtable_20260910\head_cpu_alpha_palcode.c
+regress/artifacts/alphatbinegsel\killtable_20260910\RESULTS.txt
+regress/artifacts/alphatbinegsel\killtable_20260910\alpha_dummy.bin
+regress/artifacts/alphatbinegsel\killtable_20260910\t1\SCORES.txt
+regress/artifacts/alphatbinegsel\killtable_20260910\t1\probe_RESTORED.raw
+regress/artifacts/alphatbinegsel\killtable_20260910\t1\probe_M_E.raw
+regress/artifacts/alphatbinegsel\killtable_20260910\t1\probe_M_D.raw
+regress/artifacts/alphatbinegsel\killtable_20260910\t1\probe_M_C.raw
+regress/artifacts/alphatbinegsel\killtable_20260910\t1\probe_M_B.raw
+regress/artifacts/alphatbinegsel\killtable_20260910\t1\probe_M_A.raw
+regress/artifacts/alphatbinegsel\killtable_20260910\t1\probe_HEAD.raw
+regress/artifacts/alphatbinegsel\killtable_20260910\t1\probe_BASE.raw
+regress/artifacts/alphatbinegsel\killtable_20260910\t1\mutate_M_E.txt
+regress/artifacts/alphatbinegsel\killtable_20260910\t1\mutate_M_D.txt
+regress/artifacts/alphatbinegsel\killtable_20260910\t1\mutate_M_C.txt
+regress/artifacts/alphatbinegsel\killtable_20260910\t1\mutate_M_B.txt
+regress/artifacts/alphatbinegsel\killtable_20260910\t1\mutate_M_A.txt
+regress/artifacts/alphatbinegsel\killtable_20260910\t1\mutate_HEAD.txt
+regress/artifacts/alphatbinegsel\killtable_20260910\t1\mutate_BASE.txt
+regress/artifacts/alphatbinegsel\killtable_20260910\t1\mutate.asrun.py
+regress/artifacts/alphatbinegsel\killtable_20260910\t1\build_RESTORE.log
+regress/artifacts/alphatbinegsel\killtable_20260910\t1\build_M_E.log
+regress/artifacts/alphatbinegsel\killtable_20260910\t1\build_M_D.log
+regress/artifacts/alphatbinegsel\killtable_20260910\t1\build_M_C.log
+regress/artifacts/alphatbinegsel\killtable_20260910\t1\build_M_B.log
+regress/artifacts/alphatbinegsel\killtable_20260910\t1\build_M_A.log
+regress/artifacts/alphatbinegsel\killtable_20260910\t1\build_HEAD.log
+regress/artifacts/alphatbinegsel\killtable_20260910\t1\build_BASE.log
+regress/artifacts/alphatbinegsel\killtable_20260910\t1\alpha_tbi_probe.frozen.py
+
+ exited 1 in 165ms:
+ succeeded in 213ms:
+#!/usr/bin/env python3
+"""alphatbi_probe.py -- witness for Alpha PAL_OSF1_tbi negative selector defect (alphatbinegsel)
+
+    usage:  alphatbi_probe.py <gxemul-binary> [label]
+
+WHAT THIS PINS.
+In src/cpus/cpu_alpha_palcode.c, case 0x33 /* PAL_OSF1_tbi */:
+    if (a0 >= 1)
+        cpu->invalidate_translation_caches(cpu, a1, INVALIDATE_VADDR);
+    else
+        cpu->invalidate_translation_caches(cpu, 0, INVALIDATE_ALL);
+
+a0 is uint64_t.
+ALPHA_TBIA() is defined as alpha_pal_tbi(-2, 0), passing a0 = -2 (0xfffffffffffffffe).
+ALPHA_TBIAP() is defined as alpha_pal_tbi(-1, 0), passing a0 = -1 (0xffffffffffffffff).
+Because a0 is unsigned uint64_t without a signed cast or upper bound check:
+    (uint64_t)-2 >= 1 is TRUE  -> takes INVALIDATE_VADDR branch with a1 = 0
+    (uint64_t)-1 >= 1 is TRUE  -> takes INVALIDATE_VADDR branch with a1 = 0
+INVALIDATE_VADDR invalidates only the entry matching virtual page (a1 & vaddr_mask) == 0.
+INVALIDATE_ALL invalidates every translation cache entry.
+
+Therefore, TBIA/TBIAP on HEAD flushes virtual page ZERO and NOTHING ELSE.
+
+FIVE TRAPS HANDLED:
+1. Debugger all-flushes between interactions:
+   The fill (initial load caching VPN), remap (PTE update via K0SEG store),
+   tbi (call_pal 0x33), and observing load are ALL executed within a SINGLE 'step N'.
+2. K0SEG is checked before ptbr:
+   The test addresses (0x2000, 0x4000, 0x6000) are in user virtual memory and consult
+   the 3-level page table, warming and testing the dynamic translation cache.
+3. Page 0 is flushed by the defect:
+   We use non-zero VPNs (0x2000 = VPN 1, 0x4000 = VPN 2, 0x6000 = VPN 3).
+4. Zero a1 explicitly before call_pal 0x33:
+   LDA a1, 0(zero) is executed before TBIA/TBIAP palcalls.
+5. Remap must change observed bytes:
+   Initial pages hold VAL_A/VAL_C/VAL_E; remapped pages hold VAL_B/VAL_D/VAL_F.
+
+ORACLE POLARITY:
+Asserts the CORRECT behavior (re-walks and loads remapped data VAL_B / VAL_D).
+Pre-fix committed build: RED (stale cached data VAL_A / VAL_C observed).
+Post-fix build: GREEN (re-walked data VAL_B / VAL_D observed).
+
+THIRTEEN ROWS.  Rows 1-7 (sessions 1-3) are the witness above.  Rows 8-13
+are the #520 ACCEPT ROWS: the fix ADDS a predicate, so every bound-moving
+edit owes a row that reddens under it.  They use a TWO-PAGE composite -- an
+invalidated target and an unrelated page that must survive a selective
+invalidate -- because the single-page positive control cannot tell the two
+arms apart at all.  See the long comment above session 4.
+
+CONTRACT (what this detector is designed to catch, and what it is not):
+  CATCHES  either bound of the [1,3] selector window moving in either
+           direction (>=1 -> >=0 or >=2; <=3 -> <=2 or <=4); the window
+           narrowing to exclude its interior; loss of the signed cast, i.e.
+           the original unsigned compare that admitted -1/-2; omission of
+           the invalidation entirely; and a conjunct added on a1, the one
+           lvalue the guarded body reads that the guard does not.
+           Each is MEASURED, one mutant per row, in
+           regress/artifacts/alphatbinegsel/killtable_20260910/.
+  DOES NOT CATCH, disclosed rather than discovered later:
+           * the -1 vs -2 distinction.  On hardware they differ only in
+             whether ASM=1 (global) entries survive; this model's
+             translation cache carries no ASM/ASN metadata, so the two are
+             INDISTINGUISHABLE by any probe against it.  A row claiming to
+             separate them would be vacuous by construction.
+           * selector values above 4 individually.  a0=5.. lie in the same
+             guard cell as a0=4 and are covered by "bnd out", not by rows
+             of their own.
+           * multi-axis joints (a0 and a1 both perturbed in one edit).
+"""
+import os, sys, pty, select, time, re
+
+BIN   = sys.argv[1]
+LABEL = sys.argv[2] if len(sys.argv) > 2 else "?"
+MACH  = "alphabook1"
+
+rows = []
+def row(name, got, want, note=""):
+    ok = (got == want)
+    rows.append((name, ok))
+    print("%-16s %-20s %-20s %-50s %s" % (name, str(got), str(want), note,
+                                          "ok" if ok else "FAIL"))
+    return ok
+
+# ---------------------------------------------------------------- encoder
+ZERO, T0, T1, T2, T3, T4, T5 = 31, 1, 2, 3, 4, 5, 6
+A0, A1 = 16, 17
+
+def mem(op, ra, rb, disp):
+    assert -32768 <= disp <= 32767, "displacement %d out of range" % disp
+    return ((op & 0x3f) << 26) | ((ra & 31) << 21) | ((rb & 31) << 16) | (disp & 0xffff)
+
+def LDA (ra, disp, rb=ZERO): return mem(0x08, ra, rb, disp)
+def LDAH(ra, disp, rb=ZERO): return mem(0x09, ra, rb, disp)
+def LDQ (ra, disp, rb):      return mem(0x29, ra, rb, disp)
+def STQ (ra, disp, rb):      return mem(0x2d, ra, rb, disp)
+def CALL_PAL(func):          return (0x00 << 26) | (func & 0x3ffffff)
+
+def load_const(reg, val):
+    hi, lo = (val >> 16) & 0xffff, val & 0xffff
+    if lo & 0x8000:
+        hi = (hi + 1) & 0xffff
+    return [LDAH(reg, hi - 0x10000 if hi & 0x8000 else hi, ZERO),
+            LDA (reg, lo - 0x10000 if lo & 0x8000 else lo, reg)]
+
+# ---------------------------------------------------------------- addresses & map
+K0SEG      = 0xfffffc0000000000
+def k0(p): return K0SEG | p
+
+PAGESHIFT  = 13
+PTE_VALID  = 0x1
+def pte(pfn): return (pfn << 32) | PTE_VALID
+
+P_L1       = 0x01050000
+P_L2       = 0x01052000
+P_L3       = 0x01054000
+P_DATA1    = 0x01056000  # TBIA initial page (VPN 1 = 0x2000)
+P_DATA2    = 0x01058000  # TBIA remapped page
+P_DATA3    = 0x0105a000  # TBIAP initial page (VPN 2 = 0x4000)
+P_DATA4    = 0x0105c000  # TBIAP remapped page
+P_DATA5    = 0x0105e000  # POSITIVE selector initial page (VPN 3 = 0x6000)
+P_DATA6    = 0x01060000  # POSITIVE selector remapped page
+P_PCB      = 0x01062000
+P_PTRV     = 0x01064000
+P_CODE     = 0x01066000
+
+L1_PFN     = P_L1 >> PAGESHIFT
+
+assert max(P_L1, P_L2, P_L3, P_DATA1, P_DATA2, P_DATA3, P_DATA4, P_DATA5, P_DATA6,
+           P_PCB, P_PTRV, P_CODE) < 64 * 1024 * 1024, "addresses must fit in RAM"
+
+VAL_A = 0xaaaa0000aaaa
+VAL_B = 0xbbbb0000bbbb
+VAL_C = 0xcccc0000cccc
+VAL_D = 0xdddd0000dddd
+VAL_E = 0xeeee0000eeee
+VAL_F = 0xffff0000ffff
+VAL_S = 0x55000055
+
+DUMMY = os.path.join(os.path.dirname(os.path.abspath(__file__)), "alpha_dummy.bin")
+if not os.path.exists(DUMMY):
+    with open(DUMMY, "wb") as f:
+        f.write(b"\0" * 8)
+
+# ---------------------------------------------------------------- session
+def session(cmds, timeout=6.0):
+    pid, fd = pty.fork()
+    if pid == 0:
+        os.execv(BIN, [BIN, "-V", "-x", "-E", "alpha", "-e", MACH, "-M", "64",
+                       "0x20000000:" + DUMMY])
+        os._exit(127)
+    buf = ""
+    def wait_prompt(t=6.0):
+        nonlocal buf
+        last_pos = len(buf)
+        end = time.time() + t
+        while time.time() < end:
+            r, _, _ = select.select([fd], [], [], 0.02)
+            if not r:
+                continue
+            try:
+                d = os.read(fd, 65536)
+                if not d:
+                    return False
+                buf += d.decode("latin-1", "replace")
+                if "gxemul>" in buf[last_pos:].lower():
+                    return True
+            except OSError:
+                return False
+        return False
+
+    alive = wait_prompt(timeout)
+    for c in cmds:
+        try:
+            os.write(fd, (c + "\n").encode("latin-1"))
+        except OSError:
+            alive = False; break
+        if not wait_prompt(timeout):
+            alive = False; break
+    try:
+        os.write(fd, b"quit\n")
+        time.sleep(0.05)
+    except OSError:
+        pass
+    try:
+        os.close(fd)
+    except OSError:
+        pass
+    return buf.replace("\r", ""), alive
+
+def printed(t, reg):
+    m = re.search(r"print\s+%s\s*\n\s*(0x[0-9a-f]+)" % reg, t)
+    return "absent" if not m else "0x%x" % int(m.group(1), 16)
+
+# ---------------------------------------------------------------- table setup
+setup = [
+    # L1 and L2 tables
+    "put d 0x%x, 0x%x" % (k0(P_L1),        pte(P_L2 >> PAGESHIFT)),
+    "put d 0x%x, 0x%x" % (k0(P_L2),        pte(P_L3 >> PAGESHIFT)),
+    # Initial L3 entries: L3[1] -> DATA1, L3[2] -> DATA3, L3[3] -> DATA5
+    "put d 0x%x, 0x%x" % (k0(P_L3 + 8),    pte(P_DATA1 >> PAGESHIFT)),
+    "put d 0x%x, 0x%x" % (k0(P_L3 + 16),   pte(P_DATA3 >> PAGESHIFT)),
+    "put d 0x%x, 0x%x" % (k0(P_L3 + 24),   pte(P_DATA5 >> PAGESHIFT)),
+    # Data pages
+    "put d 0x%x, 0x%x" % (k0(P_DATA1 + 0), VAL_A),
+    "put d 0x%x, 0x%x" % (k0(P_DATA2 + 0), VAL_B),
+    "put d 0x%x, 0x%x" % (k0(P_DATA3 + 0), VAL_C),
+    "put d 0x%x, 0x%x" % (k0(P_DATA4 + 0), VAL_D),
+    "put d 0x%x, 0x%x" % (k0(P_DATA5 + 0), VAL_E),
+    "put d 0x%x, 0x%x" % (k0(P_DATA6 + 0), VAL_F),
+    # PCB setup (ptbr & flags)
+    "put d 0x%x, 0x%x" % (k0(P_PCB + 16),  L1_PFN),
+    "put d 0x%x, 0x%x" % (k0(P_PCB + 40),  L1_PFN),
+    # Pointer vector
+    "put d 0x%x, 0x%x" % (k0(P_PTRV + 0),  k0(P_PCB)),
+    "put d 0x%x, 0x%x" % (k0(P_PTRV + 8),  k0(P_L3 + 8)),
+    "put d 0x%x, 0x%x" % (k0(P_PTRV + 16), pte(P_DATA2 >> PAGESHIFT)),
+    "put d 0x%x, 0x%x" % (k0(P_PTRV + 24), k0(P_L3 + 16)),
+    "put d 0x%x, 0x%x" % (k0(P_PTRV + 32), pte(P_DATA4 >> PAGESHIFT)),
+    "put d 0x%x, 0x%x" % (k0(P_PTRV + 40), k0(P_L3 + 24)),
+    "put d 0x%x, 0x%x" % (k0(P_PTRV + 48), pte(P_DATA6 >> PAGESHIFT)),
+    "put d 0x%x, 0x%x" % (k0(P_PTRV + 56), k0(P_PTRV)),
+]
+
+print("alphatbi_probe -- binary=%s label=%s machine=%s" % (BIN, LABEL, MACH))
+print("%-16s %-20s %-20s %-50s %s" % ("row", "got", "want", "note", ""))
+
+# ================================================================
+# SESSION 1: TBIA (a0 = -2, a1 = 0) on VPN 1 (0x2000)
+# ================================================================
+prog1 = (load_const(T0, P_PTRV) +
+         [LDQ(T0, 56, T0),      # t0 = k0(P_PTRV)
+          LDQ(A0, 0, T0),       # a0 = k0(P_PCB)
+          LDQ(T1, 8, T0),       # t1 = k0(P_L3 + 8) (PTE addr)
+          LDQ(T2, 16, T0),      # t2 = pte(P_DATA2 >> 13) (new PTE)
+          CALL_PAL(0x30)] +     # swpctx -> installs ptbr
+         load_const(T3, 0x2000) +
+         [LDQ(T4, 0, T3),       # WARM TRANSLATION CACHE: loads VAL_A from 0x2000
+          STQ(T2, 0, T1),       # REMAP: L3[1] -> P_DATA2 (holding VAL_B)
+          LDA(A0, -2, ZERO),    # a0 = -2 (ALPHA_TBIA)
+          LDA(A1, 0, ZERO),     # a1 = 0 (TRAP 4: explicit zero)
+          CALL_PAL(0x33)] +     # PAL_OSF1_tbi
+         load_const(T5, VAL_S) +
+         [LDQ(T5, 0, T3)])      # OBSERVING LOAD: reads 0x2000
+
+cmds1 = setup + ["put w 0x%x, 0x%08x" % (k0(P_CODE) + 4 * i, op) for i, op in enumerate(prog1)]
+cmds1 += ["pc=0x%x" % k0(P_CODE), "step %d" % len(prog1), "print t4", "print t5"]
+t1txt, alive1 = session(cmds1)
+
+t4_1 = printed(t1txt, "t4")
+t5_1 = printed(t1txt, "t5")
+
+row("live", "alive" if alive1 else "died", "alive",
+    "CONTROL: emulator session survives sequence")
+row("tbia fill", t4_1, "0x%x" % VAL_A,
+    "CONTROL: initial walked load cached VAL_A")
+row("tbia obs", t5_1, "0x%x" % VAL_B,
+    "TBIA (a0=-2) must flush TLB and read remapped VAL_B")
+
+# ================================================================
+# SESSION 2: TBIAP (a0 = -1, a1 = 0) on VPN 2 (0x4000)
+# ================================================================
+prog2 = (load_const(T0, P_PTRV) +
+         [LDQ(T0, 56, T0),      # t0 = k0(P_PTRV)
+          LDQ(A0, 0, T0),       # a0 = k0(P_PCB)
+          LDQ(T1, 24, T0),      # t1 = k0(P_L3 + 16) (PTE addr)
+          LDQ(T2, 32, T0),      # t2 = pte(P_DATA4 >> 13) (new PTE)
+          CALL_PAL(0x30)] +     # swpctx -> installs ptbr
+         load_const(T3, 0x4000) +
+         [LDQ(T4, 0, T3),       # WARM TRANSLATION CACHE: loads VAL_C from 0x4000
+          STQ(T2, 0, T1),       # REMAP: L3[2] -> P_DATA4 (holding VAL_D)
+          LDA(A0, -1, ZERO),    # a0 = -1 (ALPHA_TBIAP)
+          LDA(A1, 0, ZERO),     # a1 = 0 (TRAP 4: explicit zero)
+          CALL_PAL(0x33)] +     # PAL_OSF1_tbi
+         load_const(T5, VAL_S) +
+         [LDQ(T5, 0, T3)])      # OBSERVING LOAD: reads 0x4000
+
+cmds2 = setup + ["put w 0x%x, 0x%08x" % (k0(P_CODE) + 4 * i, op) for i, op in enumerate(prog2)]
+cmds2 += ["pc=0x%x" % k0(P_CODE), "step %d" % len(prog2), "print t4", "print t5"]
+t2txt, alive2 = session(cmds2)
+
+t4_2 = printed(t2txt, "t4")
+t5_2 = printed(t2txt, "t5")
+
+row("tbiap fill", t4_2, "0x%x" % VAL_C,
+    "CONTROL: initial walked load cached VAL_C")
+row("tbiap obs", t5_2, "0x%x" % VAL_D,
+    "TBIAP (a0=-1) must flush TLB and read remapped VAL_D")
+
+# ================================================================
+# SESSION 3: Positive Selector Control (a0 = 2 DTB, a1 = 0x6000)
+# ================================================================
+prog3 = (load_const(T0, P_PTRV) +
+         [LDQ(T0, 56, T0),      # t0 = k0(P_PTRV)
+          LDQ(A0, 0, T0),       # a0 = k0(P_PCB)
+          LDQ(T1, 40, T0),      # t1 = k0(P_L3 + 24) (PTE addr)
+          LDQ(T2, 48, T0),      # t2 = pte(P_DATA6 >> 13) (new PTE)
+          CALL_PAL(0x30)] +     # swpctx -> installs ptbr
+         load_const(T3, 0x6000) +
+         [LDQ(T4, 0, T3),       # WARM TRANSLATION CACHE: loads VAL_E from 0x6000
+          STQ(T2, 0, T1),       # REMAP: L3[3] -> P_DATA6 (holding VAL_F)
+          LDA(A0, 2, ZERO)] +   # a0 = 2 (PAL_tbi DTB)
+         load_const(A1, 0x6000) + # a1 = 0x6000
+         [CALL_PAL(0x33)] +     # PAL_OSF1_tbi
+         load_const(T5, VAL_S) +
+         [LDQ(T5, 0, T3)])      # OBSERVING LOAD: reads 0x6000
+
+cmds3 = setup + ["put w 0x%x, 0x%08x" % (k0(P_CODE) + 4 * i, op) for i, op in enumerate(prog3)]
+cmds3 += ["pc=0x%x" % k0(P_CODE), "step %d" % len(prog3), "print t4", "print t5"]
+t3txt, alive3 = session(cmds3)
+
+t4_3 = printed(t3txt, "t4")
+t5_3 = printed(t3txt, "t5")
+
+row("pos fill", t4_3, "0x%x" % VAL_E,
+    "CONTROL: initial walked load cached VAL_E")
+row("pos obs", t5_3, "0x%x" % VAL_F,
+    "CONTROL: positive selector (a0=2, a1=0x6000) flushes vaddr on both builds")
+
+# ================================================================
+# SESSIONS 4+ (#520 ACCEPT ROWS): two-page composite bound rows.
+#
+# WHY THESE EXIST.  The #520 fix ADDS a predicate:
+#     if (a0 >= 1)  ->  if ((int64_t)a0 >= 1 && (int64_t)a0 <= 3)
+# The de-escalation clause says a bound-moving edit owes rows that pin the
+# ACCEPT side, and the existing positive control (session 3, a0=2) CANNOT
+# do it: its oracle is "the observing load returns the remapped value",
+# and BOTH arms produce that.  An INVALIDATE_ALL flushes the target page
+# too, so session 3 detects an OMITTED invalidation and is blind to an
+# OVER-invalidation.  It cannot tell the two arms apart at all.
+#
+# THE DISCRIMINATOR IS A SECOND, UNRELATED PAGE.
+#   Page X (target)     the page named by a1; invalidated by BOTH arms
+#   Page Y (unrelated)  VA 0x4000, PTE k0(P_L3+16), P_DATA3 (VAL_C) -> P_DATA4 (VAL_D)
+# BOTH are warmed, then BOTH PTEs are rewritten, then tbi is called naming
+# page X only.  So:
+#     selective arm (INVALIDATE_VADDR, addr=a1): X flushed, Y SURVIVES -> obs Y = VAL_C
+#     conservative arm (INVALIDATE_ALL):         X and Y both flushed  -> obs Y = VAL_D
+# X reads its remapped value under BOTH arms, so X is the CONTROL (it proves
+# the session ran and the target really was invalidated); Y is the ONE
+# DISCRIMINATING OBSERVATION -- the only cell whose value differs between the
+# arms, and therefore the only thing that can pin the bound.
+#
+# WHY THE MODEL SUPPORTS THE DISTINCTION (verified in the source, not assumed):
+#   cpu_dyntrans.c DYNTRANS_INVALIDATE_TC(), non-MODE32 arm: INVALIDATE_VADDR
+#   walks vph_tlb_entry[] and invalidates only entries whose
+#   (vaddr_page & cpu->vaddr_mask) == (addr_page & cpu->vaddr_mask);
+#   INVALIDATE_ALL walks the same array and invalidates every valid entry.
+#   cpu_alpha.c does NOT set vaddr_mask, so cpu.c's default gives a 64-bit
+#   CPU (int64_t)-1 -- an identity mask -- and 0x4000 != 0x6000 keeps Y.
+#
+# THE ROW SET IS THE GUARD'S OWN PARTITION OF a0, CLOSED.
+# The guard is a two-sided window [1,3], so it has FOUR sides, and an accept
+# row pins only the bound it SITS ON.  Counting rows is not the same as
+# counting sides.  Enumerated from the function's own header comment, which
+# documents exactly which selectors the architecture defines:
+#     a0 = 0   undefined -> arm C   row "bnd zero"   catches  >= 1  ->  >= 0
+#     a0 = 1   ITB        -> arm S   row "bnd lo"     catches  >= 1  ->  >= 2
+#     a0 = 2   DTB        -> arm S   row "bnd mid"    catches  a window that
+#                                                     excludes the interior
+#     a0 = 3   both       -> arm S   row "bnd hi"     catches  <= 3  ->  <= 2
+#     a0 = 4   undefined -> arm C   row "bnd out"    catches  <= 3  ->  <= 4
+#     a0 = -1, -2                    rows "tbiap obs", "tbia obs" (sessions 1-2)
+# plus one row for the guard/body field disagreement:
+#     a0 = 2 with a1 = 0             row "bnd a1z"    catches a conjunct on a1
+#
+# WHY "bnd a1z" IS HERE.  The guard reads a0; the guarded body reads a1.  They
+# are written by the guest at independent sites, so a state where they DISAGREE
+# -- a selective selector naming page zero -- is freely reachable.  Every other
+# selective row drives a1=0x6000, and the two rows that do set a1=0 (TBIA/TBIAP)
+# take arm C, where a1 is ignored.  So without this row the conjunct
+# `&& a1 != 0' changes no observable in the whole detector.  It uses VPN 0 as
+# its target page, which is why the sessions below carry their own extra map
+# entries rather than sharing the witness sessions' `setup'.
+#
+# TRAP HANDLED (same as sessions 1-3): the whole guest sequence -- warm X,
+# warm Y, remap X, remap Y, tbi, observe X, observe Y -- runs inside ONE
+# `step N'.  Debugger interaction flushes the caches, so splitting it would
+# destroy exactly what these rows measure.
+#
+# TRAP HANDLED (new): both observation registers are pre-seeded with VAL_S
+# before the observing loads, so a load that never executes reads back as
+# VAL_S rather than as a stale value that might coincide with a wanted one.
+#
+# TRAP HANDLED (new): the extra page-table entries these rows need are added
+# to a LOCAL copy of `setup', so sessions 1-3 run on the byte-identical map
+# they were witnessed against and rows 1-7 cannot be perturbed by this block.
+# ================================================================
+
+# Extra pages, used only by the a1=0 row (target page = VPN 0).
+P_DATA7    = 0x01068000  # a1=0 target, initial backing
+P_DATA8    = 0x0106a000  # a1=0 target, remapped backing
+VAL_G = 0x999900009999
+VAL_H = 0x888800008888
+
+assert max(P_DATA7, P_DATA8) < 64 * 1024 * 1024, "addresses must fit in RAM"
+
+# Sessions 4+ map VPN 0 as well, and publish its PTE address / new PTE in two
+# further pointer-vector slots.  Sessions 1-3 keep the original `setup'.
+bsetup = setup + [
+    "put d 0x%x, 0x%x" % (k0(P_L3 + 0),    pte(P_DATA7 >> PAGESHIFT)),
+    "put d 0x%x, 0x%x" % (k0(P_DATA7 + 0), VAL_G),
+    "put d 0x%x, 0x%x" % (k0(P_DATA8 + 0), VAL_H),
+    "put d 0x%x, 0x%x" % (k0(P_PTRV + 64), k0(P_L3 + 0)),
+    "put d 0x%x, 0x%x" % (k0(P_PTRV + 72), pte(P_DATA8 >> PAGESHIFT)),
+]
+
+SYMBOL = {VAL_A: "A", VAL_B: "B", VAL_C: "C", VAL_D: "D", VAL_E: "E",
+          VAL_F: "F", VAL_G: "G", VAL_H: "H", VAL_S: "S"}
+
+def sym(hexstr):
+    """Render an observed register as its VAL_* letter, or raw hex if unknown."""
+    if hexstr == "absent":
+        return "absent"
+    return SYMBOL.get(int(hexstr, 16), hexstr)
+
+# Registers beyond the ones sessions 1-3 use.  Names must match
+# ALPHA_REG_NAMES in src/include/cpu_alpha.h, because the rows read them
+# back with the debugger's `print' command.
+T6, T7, T8, T9, T10 = 7, 8, 22, 23, 24     # t6, t7, t8, t9, t10
+
+VA_Y = 0x4000                # unrelated page: the DISCRIMINATOR
+Y_PTE_SLOT, Y_NEW_SLOT = 24, 32
+
+# Target-page descriptors: (VA, pointer-vector slot holding its PTE address,
+#                           slot holding its new PTE, initial value, remapped value)
+X_AT_6000 = (0x6000, 40, 48, VAL_E, VAL_F)
+X_AT_0000 = (0x0000, 64, 72, VAL_G, VAL_H)
+
+def bound_session(sel, xspec, a1val):
+    """Warm X and Y, remap both, tbi(sel, a1val), observe both.  One `step'."""
+    va_x, x_pte_slot, x_new_slot, _x_init, _x_new = xspec
+    prog = (load_const(T0, P_PTRV) +
+             LDQ(T6, Y_PTE_SLOT, T0),      # t6 = PTE address, page Y
+             LDQ(T7, Y_NEW_SLOT, T0),      # t7 = new PTE,     page Y
+             CALL_PAL(0x30)] +             # swpctx -> installs ptbr (and ALL-flushes)
+            load_const(T3, va_x) +
+            load_const(T8, VA_Y) +
+            [LDQ(T4, 0, T3),               # WARM X
+             LDQ(T9, 0, T8),               # WARM Y
+             STQ(T2, 0, T1),               # REMAP X
+             STQ(T7, 0, T6),               # REMAP Y
+             LDA(A0, sel, ZERO)] +         # a0 = selector under test
+            load_const(A1, a1val) +        # a1 = the page X is at (names X only)
+            [CALL_PAL(0x33)] +             # PAL_OSF1_tbi
+            load_const(T5,  VAL_S) +       # pre-seed observation X
+            load_const(T10, VAL_S) +       # pre-seed observation Y
+            [LDQ(T5,  0, T3),              # OBSERVE X (control)
+             LDQ(T10, 0, T8)])             # OBSERVE Y (DISCRIMINATOR)
+
+    cmds = bsetup + ["put w 0x%x, 0x%08x" % (k0(P_CODE) + 4 * i, op)
+                     for i, op in enumerate(prog)]
+    cmds += ["pc=0x%x" % k0(P_CODE), "step %d" % len(prog),
+             "print t4", "print t9", "print t5", "print t10"]
+    txt, alive = session(cmds)
+    return (alive,
+            printed(txt, "t4"),    # fill X
+            printed(txt, "t9"),    # fill Y
+            printed(txt, "t5"),    # observe X
+            printed(txt, "t10"))   # observe Y
+
+# (a0, a1, target-page, row name, expected Y after the call, note)
+# Expected Y is VAL_C when the selective arm must run (Y survives) and VAL_D
+# when the conservative arm must run (Y is flushed and re-walks).
+BOUND_ROWS = [
+    (0, 0x6000, X_AT_6000, "bnd zero", VAL_D,
+     "ACCEPT: a0=0 undefined -> ALL, Y must DIE (catches >=1 grown to >=0)"),
+    (1, 0x6000, X_AT_6000, "bnd lo",   VAL_C,
+     "ACCEPT: a0=1 ITB selective, Y must SURVIVE (catches >=1 grown to >=2)"),
+    (2, 0x6000, X_AT_6000, "bnd mid",  VAL_C,
+     "ACCEPT: a0=2 DTB selective, Y must SURVIVE (catches a window excluding 2)"),
+    (3, 0x6000, X_AT_6000, "bnd hi",   VAL_C,
+     "ACCEPT: a0=3 both selective, Y must SURVIVE (catches <=3 shrunk to <=2)"),
+    (4, 0x6000, X_AT_6000, "bnd out",  VAL_D,
+     "ACCEPT: a0=4 undefined -> ALL, Y must DIE (catches <=3 grown to <=4)"),
+    (2, 0x0000, X_AT_0000, "bnd a1z",  VAL_C,
+     "ACCEPT: a0=2 with a1=0 still selective, Y must SURVIVE (catches a conjunct on a1)"),
+]
+
+for sel, a1val, xspec, name, want_y, note in BOUND_ROWS:
+    x_init, x_new = xspec[3], xspec[4]
+    alive_b, fill_x, fill_y, obs_x, obs_y = bound_session(sel, xspec, a1val)
+    got  = "%s %s %s %s %s" % ("alive" if alive_b else "died",
+                               sym(fill_x), sym(fill_y), sym(obs_x), sym(obs_y))
+    want = "alive %s %s %s %s" % (SYMBOL[x_init], SYMBOL[VAL_C],
+                                  SYMBOL[x_new], SYMBOL[want_y])
+    row(name, got, want, note)
+    # Raw values kept in the log so a future reader can re-derive the row
+    # without trusting the symbol table above.
+    print("%-16s %s" % ("", "  raw: fillX=%s fillY=%s obsX=%s obsY=%s  (live=%s, a0=%d, a1=0x%x, VA_X=0x%x)"
+                        % (fill_x, fill_y, obs_x, obs_y, alive_b, sel, a1val, xspec[0])))
+
+bad = [n for n, ok in rows if not ok]
+print("\nALPHATBI_RESULT=%d/%d" % (len(rows) - len(bad), len(rows)))
+if bad:
+    print("FAILING: " + " ".join(bad))
+print("ALPHATBI_DONE")
+sys.exit(0 if not bad else 1)
+/*
+ *  Copyright (C) 2005-2021  Anders Gavare.  All rights reserved.
+ *
+ *  Redistribution and use in source and binary forms, with or without
+ *  modification, are permitted provided that the following conditions are met:
+ *
+ *  1. Redistributions of source code must retain the above copyright
+ *     notice, this list of conditions and the following disclaimer.
+ *  2. Redistributions in binary form must reproduce the above copyright  
+ *     notice, this list of conditions and the following disclaimer in the 
+ *     documentation and/or other materials provided with the distribution.
+ *  3. The name of the author may not be used to endorse or promote products
+ *     derived from this software without specific prior written permission.
+ *
+ *  THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+ *  ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ *  IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ *  ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE   
+ *  FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ *  DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+ *  OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+ *  HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+ *  LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+ *  OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+ *  SUCH DAMAGE.
+ *
+ *
+ *  Alpha PALcode-related functionality.
+ *
+ *  (See http://www.alphalinux.org/docs/alphaahb.html for good descriptions
+ *  of many PALcode functions.)
+ */
+
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <ctype.h>
+
+#include "console.h"
+#include "cpu.h"
+#include "machine.h"
+#include "memory.h"
+#include "misc.h"
+#include "symbol.h"
+
+#include "thirdparty/alpha_prom.h"
+
+
+/*
+ *  alpha_palcode_name():
+ *
+ *  Return the name of a PALcode number, as a string.
+ */
+void alpha_palcode_name(uint32_t palcode, char *buf, size_t buflen)
+{
+	switch (palcode) {
+	case 0x00: snprintf(buf, buflen, "PAL_halt"); break;
+	case 0x01: snprintf(buf, buflen, "PAL_cflush"); break;
+	case 0x02: snprintf(buf, buflen, "PAL_draina"); break;
+	case 0x09: snprintf(buf, buflen, "PAL_cserve"); break;
+	case 0x0a: snprintf(buf, buflen, "PAL_swppal"); break;
+	case 0x0d: snprintf(buf, buflen, "PAL_ipir"); break;
+	case 0x10: snprintf(buf, buflen, "PAL_OSF1_rdmces"); break;
+	case 0x11: snprintf(buf, buflen, "PAL_OSF1_wrmces"); break;
+	case 0x2b: snprintf(buf, buflen, "PAL_OSF1_wrfen"); break;
+	case 0x2d: snprintf(buf, buflen, "PAL_OSF1_wrvptptr"); break;
+	case 0x30: snprintf(buf, buflen, "PAL_OSF1_swpctx"); break;
+	case 0x31: snprintf(buf, buflen, "PAL_OSF1_wrval"); break;
+	case 0x32: snprintf(buf, buflen, "PAL_OSF1_rdval"); break;
+	case 0x33: snprintf(buf, buflen, "PAL_OSF1_tbi"); break;
+	case 0x34: snprintf(buf, buflen, "PAL_OSF1_wrent"); break;
+	case 0x35: snprintf(buf, buflen, "PAL_OSF1_swpipl"); break;
+	case 0x36: snprintf(buf, buflen, "PAL_rdps"); break;
+	case 0x37: snprintf(buf, buflen, "PAL_OSF1_wrkgp"); break;
+	case 0x38: snprintf(buf, buflen, "PAL_OSF1_wrusp"); break;
+	case 0x39: snprintf(buf, buflen, "PAL_OSF1_wrperfmon"); break;
+	case 0x3a: snprintf(buf, buflen, "PAL_OSF1_rdusp"); break;
+	case 0x3c: snprintf(buf, buflen, "PAL_whami"); break;
+	case 0x3d: snprintf(buf, buflen, "PAL_OSF1_retsys"); break;
+	case 0x3e: snprintf(buf, buflen, "PAL_wtint"); break;
+	case 0x3f: snprintf(buf, buflen, "PAL_OSF1_rti"); break;
+	case 0x80: snprintf(buf, buflen, "PAL_bpt"); break;
+	case 0x81: snprintf(buf, buflen, "PAL_bugchk"); break;
+	case 0x83: snprintf(buf, buflen, "PAL_OSF1_callsys"); break;
+	case 0x86: snprintf(buf, buflen, "PAL_imb"); break;
+	case 0x92: snprintf(buf, buflen, "PAL_OSF1_urti"); break;
+	case 0x9e: snprintf(buf, buflen, "PAL_rdunique"); break;
+	case 0x9f: snprintf(buf, buflen, "PAL_wrunique"); break;
+	case 0xaa: snprintf(buf, buflen, "PAL_gentrap"); break;
+	case 0xae: snprintf(buf, buflen, "PAL_clrfen"); break;
+	case 0x3fffffe: snprintf(buf, buflen, "GXemul_PROM"); break;
+	default:snprintf(buf, buflen, "UNKNOWN 0x%" PRIx32, palcode);
+	}
+}
+
+
+/*
+ *  alpha_prom_call():
+ */
+void alpha_prom_call(struct cpu *cpu)
+{
+	uint64_t addr, a1 = cpu->cd.alpha.r[ALPHA_A1];
+	uint64_t a2 = cpu->cd.alpha.r[ALPHA_A2], a3 = cpu->cd.alpha.r[ALPHA_A3];
+	uint64_t len;
+	const char *s = "";
+
+	switch (cpu->cd.alpha.r[ALPHA_A0]) {
+
+	case PROM_R_PUTS:
+		/*  a1 = channel, a2 = ptr to buf, a3 = len  */
+		for (addr = a2; addr < a2 + a3; addr ++) {
+			unsigned char ch;
+			cpu->memory_rw(cpu, cpu->mem, addr, &ch, sizeof(ch),
+			    MEM_READ, CACHE_DATA | NO_EXCEPTIONS);
+			console_putchar(cpu->machine->main_console_handle, ch);
+		}
+		cpu->cd.alpha.r[ALPHA_V0] = a3;
+		break;
+
+	case PROM_R_GETENV:
+		/*  a1 = variable id, a2 = char *buf, a3 = bufsize  */
+		switch (a1) {
+		case PROM_E_BOOTED_DEV:
+			s = "";		/*  TODO  */
+			break;
+		case PROM_E_BOOTED_FILE:
+			s = cpu->machine->boot_kernel_filename;
+			break;
+		case PROM_E_BOOTED_OSFLAGS:
+			s = cpu->machine->boot_string_argument;
+			break;
+		case PROM_E_TTY_DEV:
+			s = "";		/*  TODO  */
+			break;
+		default:fatal("[ Alpha PALcode: GXemul PROM getenv %i: TODO "
+			    "]\n", cpu->cd.alpha.r[ALPHA_A1]);
+			cpu->running = 0;
+		}
+		/*  Copy at most a3 bytes.  */
+		len = a3;
+		if (strlen(s) < len)
+			len = strlen(s) + 1;
+		store_buf(cpu, a2, s, len);
+		break;
+
+	default:fatal("[ Alpha PALcode: GXemul PROM call, a0=0x%" PRIx64" ]\n",
+		    (uint64_t) cpu->cd.alpha.r[ALPHA_A0]);
+		cpu->running = 0;
+	}
+
+	/*  Return from the PROM call.  */
+	cpu->pc = cpu->cd.alpha.r[ALPHA_RA];
+}
+
+
+/*
+ *  alpha_palcode():
+ *
+ *  Execute an Alpha PALcode instruction. (Most of these correspond to
+ *  OSF1 palcodes, used by for example NetBSD/alpha.)
+ */
+void alpha_palcode(struct cpu *cpu, uint32_t palcode)
+{
+	uint64_t a0 = cpu->cd.alpha.r[ALPHA_A0], a1 = cpu->cd.alpha.r[ALPHA_A1];
+	uint64_t userMode = cpu->cd.alpha.ps & ALPHA_PSL_USERMODE;
+
+	/*
+	 *  Only these are unprivileged, i.e. can be invoked in user mode,
+	 *  according to the manual:
+	 *
+	 *	bpt		kernel and user
+	 *	bugchk		kernel and user
+	 *	callsys		user
+	 *	clrfen		user
+	 *	gentrap		kernel and user
+	 *	imb		kernel and user
+	 *	rdunique	kernel and user
+	 *	urti		user
+	 *	wrunique	kernel and user
+	 */
+
+	if (userMode && !(
+	    palcode == 0x80 || palcode == 0x81 || palcode == 0x83 ||
+	    palcode == 0xae || palcode == 0xaa || palcode == 0x86 ||
+	    palcode == 0x9e || palcode == 0x92 || palcode == 0x9f)) {
+		// opDec fault.
+		fatal("[ Privileged Alpha PALcode called from user mode: TODO ]");
+		cpu->running = 0;
+		return;
+	}
+
+	switch (palcode) {
+#if 0
+TODO: Uncomment more again, as I progress with the emulation...
+Make sure they are correct, as documented in the Manual.
+
+	case 0x02:	/*  PAL_draina  */
+		/*  TODO?  */
+		break;
+#endif
+	case 0x10:	/*  PAL_OSF1_rdmces  */
+		/*  Return Machine Check status in v0.  */
+		cpu->cd.alpha.r[ALPHA_V0] = cpu->cd.alpha.mces;
+		break;
+	case 0x11:	/*  PAL_OSF1_wrmces  */
+		/*  Clear bits 0, 1, and 2 of the Machine Check and Error status.  */
+		cpu->cd.alpha.mces = ~(cpu->cd.alpha.r[ALPHA_A0] & 7);
+
+		/*  Set bits 3 and 4 of the Machine Check and Error status.  */
+		cpu->cd.alpha.mces &= ~0x18;
+		cpu->cd.alpha.mces |= (cpu->cd.alpha.r[ALPHA_A0] & 0x18);
+		break;
+	case 0x2b:	/*  PAL_OSF1_wrfen  */
+		/*  Floating point enable: a0 = 1 or 0.  */
+		/*  TODO. Since clrfen is documented as:
+			FEN �+? 0
+			(PCBB+40)<0> �+? 0
+		    then most likely wrfen should do the reverse.
+		 */
+		cpu->cd.alpha.pcb.apcb_flags = cpu->cd.alpha.r[ALPHA_A0];
+		store_64bit_word(cpu, cpu->cd.alpha.ctx + 40,
+		    cpu->cd.alpha.pcb.apcb_flags);
+		break;
+	case 0x2d:	/*  PAL_OSF1_wrvptptr  */
+		/*  Write Virtual Page Table Pointer. a0 = value  */
+		cpu->cd.alpha.vptptr = a0;
+		break;
+	case 0x30:	/*  PAL_OSF1_swpctx  */
+		/*  Save old context:  */
+		store_64bit_word(cpu, cpu->cd.alpha.ctx + 0,
+		    cpu->cd.alpha.pcb.apcb_ksp);
+		store_64bit_word(cpu, cpu->cd.alpha.ctx + 8,
+		    cpu->cd.alpha.pcb.apcb_usp);
+		store_64bit_word(cpu, cpu->cd.alpha.ctx + 16,
+		    cpu->cd.alpha.pcb.apcb_ptbr);
+		store_32bit_word(cpu, cpu->cd.alpha.ctx + 24,
+		    cpu->cd.alpha.pcb.apcb_cpc);
+		store_32bit_word(cpu, cpu->cd.alpha.ctx + 28,
+		    cpu->cd.alpha.pcb.apcb_asn);
+		store_64bit_word(cpu, cpu->cd.alpha.ctx + 32,
+		    cpu->cd.alpha.pcb.apcb_unique);
+		store_64bit_word(cpu, cpu->cd.alpha.ctx + 40,
+		    cpu->cd.alpha.pcb.apcb_flags);
+		store_64bit_word(cpu, cpu->cd.alpha.ctx + 48,
+		    cpu->cd.alpha.pcb.apcb_decrsv0);
+		store_64bit_word(cpu, cpu->cd.alpha.ctx + 56,
+		    cpu->cd.alpha.pcb.apcb_decrsv1);
+
+		/*  Return old context in v0.  */
+		/*  #514: was ALPHA_A0, contradicting the comment directly above and the
+		    third-party ABI wrapper.  `alpha_pal_swpctx' (alpha_cpu.h) declares
+		    `v0 __asm("$0")' as an OUTPUT, so a correct caller reads the result
+		    from v0.  a0 is NOT in that asm's clobber list ($1,$22..$25,memory) --
+		    it is an IN-OUT OPERAND ("=r" (a0) with input "0" (a0)), and the
+		    wrapper's own comment marks it clobbered "(above)", i.e. handled as
+		    that operand.  Either way the caller may not rely on a0, so the model
+		    was publishing into the register the caller discards and leaving
+		    untouched the one it reads.  (An earlier draft of this comment said the
+		    wrapper "lists a0 as clobbered"; a pass-2 seat read the asm and showed
+		    it does not.)  No a0 write is added: the architecture marks a0
+		    UNPREDICTABLE, which permits it to remain unchanged.  Ordering is
+		    unaffected -- `a0' at the `ctx = a0' below is the LOCAL captured at
+		    function entry (`:165'), not a live register read.  Census, corrected
+		    twice and stated as of AFTER this fix: no `r[ALPHA_A0] =' remains in the
+		    file, and the compiled PAL returns to v0 are rdmces, this swpctx,
+		    swpipl, rdps and whami -- three further v0 stores sit inside `#if 0' and
+		    `:118' is alpha_prom_call, not a PAL.  */
+		cpu->cd.alpha.r[ALPHA_V0] = cpu->cd.alpha.ctx;	/*  #514  */
+
+		/*  Load new context:  */
+		{
+			cpu->cd.alpha.ctx = a0;
+			uint64_t new_ksp =
+			    load_64bit_word(cpu, cpu->cd.alpha.ctx + 0);
+			uint64_t new_usp =
+			    load_64bit_word(cpu, cpu->cd.alpha.ctx + 8);
+			uint64_t new_ptbr =
+			    load_64bit_word(cpu, cpu->cd.alpha.ctx + 16);
+			uint64_t new_cpc =
+			    load_32bit_word(cpu, cpu->cd.alpha.ctx + 24);
+			uint64_t new_asn =
+			    load_32bit_word(cpu, cpu->cd.alpha.ctx + 28);
+			uint64_t new_unique =
+			    load_64bit_word(cpu, cpu->cd.alpha.ctx + 32);
+			uint64_t new_flags =
+			    load_64bit_word(cpu, cpu->cd.alpha.ctx + 40);
+			uint64_t new_decrsv0 =
+			    load_64bit_word(cpu, cpu->cd.alpha.ctx + 48);
+			uint64_t new_decrsv1 =
+			    load_64bit_word(cpu, cpu->cd.alpha.ctx + 56);
+
+			// Update all variables in the pcb simultaneously:
+			cpu->cd.alpha.pcb.apcb_ksp = new_ksp;
+			cpu->cd.alpha.pcb.apcb_usp = new_usp;
+			cpu->cd.alpha.pcb.apcb_ptbr = new_ptbr;
+			cpu->cd.alpha.pcb.apcb_cpc = new_cpc;
+			cpu->cd.alpha.pcb.apcb_asn = new_asn;
+			cpu->cd.alpha.pcb.apcb_unique = new_unique;
+			/*  #507: was `apcb_ptbr = new_flags' -- a field-name transposition that
+			    assigned apcb_ptbr TWICE (here and at the `apcb_ptbr = new_ptbr' four
+			    lines above -- "three lines up" until 2026-09-07, corrected
+			    after a pass-2 seat derived the true distance from the hunk
+			    header alone and called the phrasing inconsistent) and apcb_flags NEVER,
+			    while every other field in this block is assigned exactly once.  Two
+			    consequences: apcb_ptbr ended up holding the flags word, and the incoming
+			    context's flags were dropped -- so the NEXT save published a never-loaded
+			    word back into the outgoing PCB, wiping what the guest planted.  */
+			cpu->cd.alpha.pcb.apcb_flags = new_flags;	/*  #507  */
+			cpu->cd.alpha.pcb.apcb_decrsv0 = new_decrsv0;
+			cpu->cd.alpha.pcb.apcb_decrsv1 = new_decrsv1;
+
+			// TODO: Don't invalidate EVERYTHING!
+			cpu->invalidate_translation_caches(cpu, 0, INVALIDATE_ALL);
+		}
+		break;
+#if 0
+	case 0x31:	/*  PAL_OSF1_wrval  */
+		/*  a0 = value  */
+		cpu->cd.alpha.sysvalue = a0;
+		break;
+	case 0x32:	/*  PAL_OSF1_rdval  */
+		/*  return: v0 = value  */
+		cpu->cd.alpha.r[ALPHA_V0] = cpu->cd.alpha.sysvalue;
+		break;
+#endif
+	case 0x33:	/*  PAL_OSF1_tbi  */
+		/*
+		 *  a0 = op, a1 = vaddr
+		 *  (#520: a0 was ignored -- "a0 is ignored for now. TODO." --
+		 *  until the selector test below was corrected.  It is read now,
+		 *  so that line is removed rather than left to mislead.)
+		 *	a0 = 1: ITB invalidate
+		 *	a0 = 2: DTB invalidate
+		 *	a0 = 3: both ITB and DTB
+		 *	a0 = -1: invalidate everything with ASM=0.
+		 *	a0 = -2: invalidate everything
+		 */
+		// debug("[ Alpha PALcode: PAL_OSF1_tbi: a0=%" PRIi64" a1=0x%"
+		//    PRIx64" ]\n", (int64_t)a0, (uint64_t)a1);
+		/*  #520 (alphatbinegsel): `a0' is a uint64_t, so the old `a0 >= 1'
+		    was an UNSIGNED compare and BOTH negative selectors named in the
+		    header above -- -1 and -2, the two documented as invalidate-
+		    EVERYTHING -- compared GREATER than 1 and took the single-VADDR
+		    branch.  A guest TBIA/TBIAP therefore flushed ONE page and left
+		    every other cached translation live.  MEASURED at rung 3 BEFORE
+		    this edit (regress/alpha_tbi_probe.py, artifacts under
+		    regress/artifacts/alphatbinegsel/): 5/7 on the committed build
+		    with both negative-selector rows RED, 7/7 on this fix.
+
+		    The test is a two-sided SIGNED range rather than a bare cast: 1,
+		    2 and 3 are the only selective ops the architecture defines, so 0
+		    and 4.. are undefined and fall to the conservative arm with the
+		    negatives.  Over-invalidation cannot serve a stale translation;
+		    under-invalidation can, which is this defect.
+
+		    -1 and -2 differ on hardware only in whether GLOBAL entries
+		    survive: -1 invalidates the ASM=0 entries and SPARES the ASM=1
+		    ones, -2 invalidates both.  This model's translation cache
+		    carries no ASM/ASN metadata to spare anything BY, so both map
+		    to INVALIDATE_ALL -- EXACT for -2 and CONSERVATIVE for -1,
+		    which is the safe direction and is not the same claim.
+
+		    NO ANNOUNCE, deliberately: every selector now takes a
+		    conservative-correct arm, so there is no event to report.  The
+		    house latched-announce idiom is for guest-drivable DEFECTS; a
+		    diagnostic here would be a check that cannot fail in the state
+		    that matters, and the addition licence forbids one with no
+		    measured delta.  */
+		if ((int64_t)a0 >= 1 && (int64_t)a0 <= 3)
+			cpu->invalidate_translation_caches(cpu, a1, INVALIDATE_VADDR);
+		else
+			cpu->invalidate_translation_caches(cpu, 0, INVALIDATE_ALL);
+		break;
+	case 0x34:	/*  PAL_OSF1_wrent (Write System Entry Address)  */
+		/*  a0 = new vector, a1 = vector selector  */
+		if (a1 < N_ALPHA_KENTRY)
+			cpu->cd.alpha.kentry[a1] = a0;
+		else {
+			fatal("[ Alpha PALcode: PAL_OSF1_wrent: attempt to "
+			    "write to non-implemented selector %i ]\n",
+			    (int)a1);
+			cpu->running = 0;
+		}
+		break;
+	case 0x35:	/*  PAL_OSF1_swpipl  */
+		/*  a0 = new ipl, v0 = return old ipl  */
+		cpu->cd.alpha.r[ALPHA_V0] = cpu->cd.alpha.ps & ALPHA_PSL_IPL_MASK;
+		cpu->cd.alpha.ps &= ~ALPHA_PSL_IPL_MASK;
+		cpu->cd.alpha.ps |= (a0 & ALPHA_PSL_IPL_MASK);
+		break;
+	case 0x36:	/*  PAL_rdps  */
+		cpu->cd.alpha.r[ALPHA_V0] = cpu->cd.alpha.ps;
+		break;
+	case 0x37:	/*  PAL_OSF1_wrkgp  */
+		cpu->cd.alpha.kgp = a0;
+		break;
+#if 0
+	case 0x38:	/*  PAL_OSF1_wrusp  */
+		/*  a0 = value  */
+		cpu->cd.alpha.pcb.apcb_usp = a0;
+		break;
+	case 0x3a:	/*  PAL_OSF1_rdusp  */
+		/*  return: v0 = value  */
+		cpu->cd.alpha.r[ALPHA_V0] = cpu->cd.alpha.pcb.apcb_usp;
+		break;
+#endif
+	case 0x3c:	/*  PAL_whami  */
+		/*  Returns CPU id in v0:  */
+		cpu->cd.alpha.r[ALPHA_V0] = cpu->cpu_id;
+		break;
+#if 0
+	case 0x81:	/*  PAL_bugchk  */
+		cpu->running = 0;
+		break;
+	case 0x83:	/*  PAL_OSF1_syscall  */
+		fatal("[ Alpha PALcode: syscall, but no syscall handler ]\n");
+		cpu->running = 0;
+		break;
+#endif
+	case 0x86:	/*  PAL_imb  */
+		/*  TODO  */
+		break;
+#if 0
+	case 0x3fffffc:
+		fatal("[ Alpha: KENTRY not set! Halting. ]");
+		cpu->running = 0;
+		break;
+	case 0x3fffffd:
+		fatal("[ Alpha PALcode: Fixup: TODO ]\n");
+		/*  Return from the fixup call.  */
+		cpu->cd.alpha.r[ALPHA_V0] = 0;	/*  Success?  */
+		cpu->pc = cpu->cd.alpha.r[ALPHA_RA];
+		break;
+#endif
+	case 0x3fffffe:
+		alpha_prom_call(cpu);
+		break;
+	default:fatal("[ Alpha PALcode 0x%x unimplemented! ]\n", palcode);
+		cpu->running = 0;
+	}
+
+	/*
+	 *  Many PALcode instructions in the Alpha manual (and in NetBSD/Alpha
+	 *  source code) are described with "clobbers t0, t8-t11", some also
+	 *  with a0, and some also with a1 included.
+	 *
+	 *  However, it's easier to just leave the registers as they are.
+	 */
+}
+
+
+web search: Alpha OSF PALcode TBI operation undefined -1 -2 ASM reserved no operation
+web search: 
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n -C 5 'void fatal\\(' src/core/debugmsg.c; rg -n 'LS_GENERIC_N|MEMORY_ACCESS_FAILED|MEM_MIPS|MEM_M88K' src/cpus/cpu_alpha_instr_loadstore.c src/cpus/memory_rw.c; rg -n 'uint64_t a0|case 0x33|default:|unimplemented|unknown|reserved|running =|exit\\(|exception' src/cpus/cpu_alpha_palcode.c; rg --files regress/artifacts/alphatbinegsel/killtable_20260910" in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n -i 'undefined selector|undefined.*(ignored|nop|no.op|halt|stop)|reserved.*(ignored|nop|no.op)|no.op.*(undefined|reserved)|unimplemented PALcode|PALcode.*unimplemented|silent.*preserv|diagnostic.*halt' src; rg -n -i 'alphatbinegsel|#520|clause.?.?\\([de]\\)|class.closure' tools/pipeline --glob '*.md'; rg --files --hidden -g AGENTS.md -g '"'!**/.git/**'"' ." in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "Get-Content -LiteralPath regress/alpha_tbi_probe.py | Select-Object -Skip 415; rg -n -C 8 'vaddr_mask|is_32bit|cpu_family|DYNTRANS' src/cpus/cpu.c src/cpus/cpu_alpha.c; rg -n 'vaddr_mask|INVALIDATE_VADDR|INVALIDATE_ALL|DYNTRANS_INVALIDATE_TC|ASM|ASN' src/cpus/cpu_dyntrans.c src/include/cpu.h src/include/cpu_alpha.h src/cpus/cpu_alpha_mmu.c" in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+ succeeded in 135ms:
+379-	va_debug(argp, fmt);
+380-	va_end(argp);
+381-}
+382-
+383-
+384:void fatal(const char *fmt, ...)
+385-{
+386-	va_list argp;
+387-
+388-	va_start(argp, fmt);
+389-	va_debug(argp, fmt);
+src/cpus/cpu_alpha_instr_loadstore.c:44:static void LS_GENERIC_N(struct cpu *cpu, struct alpha_instr_call *ic)
+src/cpus/cpu_alpha_instr_loadstore.c:197:		LS_GENERIC_N(cpu, ic);
+src/cpus/cpu_alpha_instr_loadstore.c:288:		LS_GENERIC_N(cpu, ic);
+src/cpus/memory_rw.c:33: *	MEM_MIPS should be defined
+src/cpus/memory_rw.c:60: *	MEMORY_ACCESS_FAILED
+src/cpus/memory_rw.c:63: *  (MEMORY_ACCESS_FAILED is 0.)
+src/cpus/memory_rw.c:216:				return MEMORY_ACCESS_FAILED;
+src/cpus/memory_rw.c:268:			return MEMORY_ACCESS_FAILED;
+src/cpus/memory_rw.c:592:						return MEMORY_ACCESS_FAILED;
+src/cpus/memory_rw.c:608:#ifdef MEM_MIPS
+src/cpus/memory_rw.c:614:#ifdef MEM_M88K
+src/cpus/memory_rw.c:624:					return MEMORY_ACCESS_FAILED;
+src/cpus/memory_rw.c:638:#ifdef MEM_MIPS
+src/cpus/memory_rw.c:659:#endif	/*  MEM_MIPS  */
+src/cpus/memory_rw.c:664:#ifdef MEM_MIPS
+src/cpus/memory_rw.c:679:					return MEMORY_ACCESS_FAILED;
+src/cpus/memory_rw.c:693:#ifdef MEM_MIPS
+src/cpus/memory_rw.c:705:#endif  /*  MEM_MIPS  */
+src/cpus/memory_rw.c:739:#ifdef MEM_MIPS
+2: *  Copyright (C) 2005-2021  Anders Gavare.  All rights reserved.
+71:	case 0x33: snprintf(buf, buflen, "PAL_OSF1_tbi"); break;
+93:	default:snprintf(buf, buflen, "UNKNOWN 0x%" PRIx32, palcode);
+136:		default:fatal("[ Alpha PALcode: GXemul PROM getenv %i: TODO "
+138:			cpu->running = 0;
+147:	default:fatal("[ Alpha PALcode: GXemul PROM call, a0=0x%" PRIx64" ]\n",
+149:		cpu->running = 0;
+165:	uint64_t a0 = cpu->cd.alpha.r[ALPHA_A0], a1 = cpu->cd.alpha.r[ALPHA_A1];
+189:		cpu->running = 0;
+327:	case 0x33:	/*  PAL_OSF1_tbi  */
+383:			cpu->running = 0;
+414:		cpu->running = 0;
+418:		cpu->running = 0;
+427:		cpu->running = 0;
+439:	default:fatal("[ Alpha PALcode 0x%x unimplemented! ]\n", palcode);
+440:		cpu->running = 0;
+regress/artifacts/alphatbinegsel/killtable_20260910\t2\SCORES.txt
+regress/artifacts/alphatbinegsel/killtable_20260910\t2\probe_RESTORED.raw
+regress/artifacts/alphatbinegsel/killtable_20260910\t2\probe_M_F.raw
+regress/artifacts/alphatbinegsel/killtable_20260910\t2\probe_M_E.raw
+regress/artifacts/alphatbinegsel/killtable_20260910\t2\probe_M_D.raw
+regress/artifacts/alphatbinegsel/killtable_20260910\t2\probe_M_C.raw
+regress/artifacts/alphatbinegsel/killtable_20260910\t2\probe_M_B.raw
+regress/artifacts/alphatbinegsel/killtable_20260910\t2\probe_M_A.raw
+regress/artifacts/alphatbinegsel/killtable_20260910\t2\probe_HEAD.raw
+regress/artifacts/alphatbinegsel/killtable_20260910\t2\probe_BASE.raw
+regress/artifacts/alphatbinegsel/killtable_20260910\t2\mutate_M_F.txt
+regress/artifacts/alphatbinegsel/killtable_20260910\t2\mutate_M_E.txt
+regress/artifacts/alphatbinegsel/killtable_20260910\t2\mutate_M_D.txt
+regress/artifacts/alphatbinegsel/killtable_20260910\t2\mutate_M_C.txt
+regress/artifacts/alphatbinegsel/killtable_20260910\t2\mutate_M_B.txt
+regress/artifacts/alphatbinegsel/killtable_20260910\t2\mutate_M_A.txt
+regress/artifacts/alphatbinegsel/killtable_20260910\t2\mutate_HEAD.txt
+regress/artifacts/alphatbinegsel/killtable_20260910\t2\mutate_BASE.txt
+regress/artifacts/alphatbinegsel/killtable_20260910\t2\mutate.asrun.py
+regress/artifacts/alphatbinegsel/killtable_20260910\t2\build_RESTORE.log
+regress/artifacts/alphatbinegsel/killtable_20260910\t2\build_M_F.log
+regress/artifacts/alphatbinegsel/killtable_20260910\t2\build_M_E.log
+regress/artifacts/alphatbinegsel/killtable_20260910\t2\build_M_D.log
+regress/artifacts/alphatbinegsel/killtable_20260910\t2\build_M_C.log
+regress/artifacts/alphatbinegsel/killtable_20260910\t2\build_M_B.log
+regress/artifacts/alphatbinegsel/killtable_20260910\t2\build_M_A.log
+regress/artifacts/alphatbinegsel/killtable_20260910\t2\build_HEAD.log
+regress/artifacts/alphatbinegsel/killtable_20260910\t2\build_BASE.log
+regress/artifacts/alphatbinegsel/killtable_20260910\t2\alpha_tbi_probe.frozen.py
+regress/artifacts/alphatbinegsel/killtable_20260910\t2\alpha_dummy.bin
+regress/artifacts/alphatbinegsel/killtable_20260910\launch.sh
+regress/artifacts/alphatbinegsel/killtable_20260910\killtable.sh
+regress/artifacts/alphatbinegsel/killtable_20260910\head_cpu_alpha_palcode.c
+regress/artifacts/alphatbinegsel/killtable_20260910\alpha_dummy.bin
+regress/artifacts/alphatbinegsel/killtable_20260910\PRETABLE.out
+regress/artifacts/alphatbinegsel/killtable_20260910\mutate.py
+regress/artifacts/alphatbinegsel/killtable_20260910\RESULTS.txt
+regress/artifacts/alphatbinegsel/killtable_20260910\t1\SCORES.txt
+regress/artifacts/alphatbinegsel/killtable_20260910\t1\probe_RESTORED.raw
+regress/artifacts/alphatbinegsel/killtable_20260910\t1\probe_M_E.raw
+regress/artifacts/alphatbinegsel/killtable_20260910\t1\probe_M_D.raw
+regress/artifacts/alphatbinegsel/killtable_20260910\t1\probe_M_C.raw
+regress/artifacts/alphatbinegsel/killtable_20260910\t1\probe_M_B.raw
+regress/artifacts/alphatbinegsel/killtable_20260910\t1\probe_M_A.raw
+regress/artifacts/alphatbinegsel/killtable_20260910\t1\probe_HEAD.raw
+regress/artifacts/alphatbinegsel/killtable_20260910\t1\probe_BASE.raw
+regress/artifacts/alphatbinegsel/killtable_20260910\t1\mutate_M_E.txt
+regress/artifacts/alphatbinegsel/killtable_20260910\t1\mutate_M_D.txt
+regress/artifacts/alphatbinegsel/killtable_20260910\t1\mutate_M_C.txt
+regress/artifacts/alphatbinegsel/killtable_20260910\t1\mutate_M_B.txt
+regress/artifacts/alphatbinegsel/killtable_20260910\t1\mutate_M_A.txt
+regress/artifacts/alphatbinegsel/killtable_20260910\t1\mutate_HEAD.txt
+regress/artifacts/alphatbinegsel/killtable_20260910\t1\mutate_BASE.txt
+regress/artifacts/alphatbinegsel/killtable_20260910\t1\mutate.asrun.py
+regress/artifacts/alphatbinegsel/killtable_20260910\t1\build_RESTORE.log
+regress/artifacts/alphatbinegsel/killtable_20260910\t1\build_M_E.log
+regress/artifacts/alphatbinegsel/killtable_20260910\t1\build_M_D.log
+regress/artifacts/alphatbinegsel/killtable_20260910\t1\build_M_C.log
+regress/artifacts/alphatbinegsel/killtable_20260910\t1\build_M_B.log
+regress/artifacts/alphatbinegsel/killtable_20260910\t1\build_M_A.log
+regress/artifacts/alphatbinegsel/killtable_20260910\t1\build_HEAD.log
+regress/artifacts/alphatbinegsel/killtable_20260910\t1\build_BASE.log
+regress/artifacts/alphatbinegsel/killtable_20260910\t1\alpha_tbi_probe.frozen.py
+
+ exited 1 in 160ms:
+src\cpus\cpu_alpha_palcode.c:439:	default:fatal("[ Alpha PALcode 0x%x unimplemented! ]\n", palcode);
+src\devices\dev_lca.c:347:			    TYPE; everything above is reserved and is IGNORED, not
+tools/pipeline\fable_queue.md:44:`alphaswpctxreg` (design:fable5,opus5) · `alphatbinegsel` (assess:fable5,opus5; design:fable5,opus5) · `armbfiwidth` (design:fable5,opus5) · `armbfxwidth32` (assess:fable5,opus5; review:fable5,opus5) · `carrier` (regress:fable5) · `es438` (regress:fable5) · `gdromcondlies` (regress:fable5) · `holdmarkermulti` (regress:fable5) · `lcabadval` (assess:codex,fable5,grok,kimi,opus5; design:fable5; research:fable5) · `lcaconfbus1kill` (design:fable5; review:fable5,opus5) · `lcairqstubkill` (design:fable5) · `m88kexcdetectorl2` (design:fable5) · `ns16550` (regress:fable5) · `pcc2c040kill` (assess:fable5; design:fable5; review:fable5) · `pcc2widthkills` (assess:fable5,opus5) · `proberowsubset` (assess:codex) · `sgideprimop` (regress:fable5) · `sgidewidth` (regress:fable5) · `sgimtedepth4dead` (assess:fable5,opus5; review:fable5,opus5) · `sgirekills` (assess:codex,grok,kimi,opus5) · `sgireunmapped` (regress:fable5) · `sgitexindex` (assess:codex,fable5,grok,kimi,opus5) · `sh4sci` (regress:fable5) · `wdccdbmidxfer` (regress:fable5; research:opus5) · `wdcdataoutdrain` (regress:fable5)
+tools/pipeline\fable_queue.md:1082:* `M10` -- an invented predicate at the SEC arm, which you ruled **outside** clause (d)'s bound;
+tools/pipeline\fable_queue.md:1117:dominating predicate is the canonical clause-(d) form, so it was a floor breach repaired
+tools/pipeline\fable_queue.md:1278:> remaining {arm} × {C, IND, SFD1} surface clause-(e) debt rather than a floor breach. Is it
+tools/pipeline\fable_queue.md:1298:> **THE QUESTION: pass 4 found a clause-(d) floor breach that pass 3's own repair CREATED —
+tools/pipeline\fable_queue.md:1303:> CLASS closure rather than a cell. Is the class enumerated correctly — every per-cpu array
+tools/pipeline\fable_queue.md:1362:   for.  Is clause-(e) disclosure the right disposition here, or is this a row the round owed?
+tools/pipeline\fable_queue.md:1389:### `m88kexcdetectorl2` (HIGH) — is a MEASURED clean sweep an L2 floor breach, or clause-(e) debt?
+tools/pipeline\fable_queue.md:1397:**The question is the GRADE.** The floor says a clause-(d) mutant that sweeps a detector clean is an
+tools/pipeline\fable_queue.md:1400:the round's own diff, does not reach them. Under the strict reading they are clause-(e) coverage debt
+tools/pipeline\fable_queue.md:1410:**COST OF EACH RULING:** L2 means two rows and a re-table on a closed round. Clause-(e) means a
+tools/pipeline\fable_queue.md:1743:> In pass 2 grok reclassified `M4` from clause (d) to clause (e), and its reason is exact:
+tools/pipeline\fable_queue.md:1747:> -- never reads it.  Both clauses fail; clause (e).  **I verified that by reading and adopted it.**
+tools/pipeline\fable_queue.md:1752:>     mode & MTE_MODE_COPY   dominates? NO   body reads it? NO    -> clause (e).  Agreed.
+tools/pipeline\fable_queue.md:1765:> floor cells it is an L2 breach and `#509` owes two more rows; if they are clause-(e) debt the
+tools/pipeline\fable_queue.md:1933:   no copy-local four-byte signal that is not those bytes themselves.** Disclosed as clause-(e)
+tools/pipeline\fable_queue.md:1991:> means a clause-(d) escape ships with a full score beside it, and this project's own vacuity
+tools/pipeline\fable_queue.md:2220:> **(a)** ship the fix and DISCLOSE the non-discriminating detector under clause (e); or
+tools/pipeline\fable_queue.md:2280:### `alphatbinegsel` — the OS's "invalidate everything" clears ONE page, and the severity raise is mine
+tools/pipeline\fable_queue.md:2322:#### 1. (HIGH) Is the detector above the vacuity floor — and is clause (d) *by construction* enough?
+tools/pipeline\fable_queue.md:2327:adds no predicate to weaken. **Is a clause-(d) satisfied by construction acceptable, or does the
+tools/pipeline\fable_queue.md:2337:#### 3. (MED) ~~`#514` landed first, so what does `alphatbinegsel` now owe?~~ — **WITHDRAWN, and the withdrawal is the answer**
+tools/pipeline\fable_queue.md:2340:it. But `alphatbinegsel` is open on the **same** flush behaviour, and glm warned that whichever of
+tools/pipeline\fable_queue.md:2359:*** A CORRECTION CARRIED FROM `alphatbinegsel`, because the same over-read may colour how you read
+tools/pipeline\fable_queue.md:2391:### `alphatbinegsel` — witnessed, ratified 6/6, and the questions are about what the round OWES
+tools/pipeline\ADJUDICATION_20260909.md:140:  (the class-closure amendment permits disclosure; kimi and grok held that an in-closure cell on
+tools/pipeline\ADJUDICATION_20260909.md:167:### B1. `alphatbinegsel` -- *** I RAISED THIS med -> high AND THE RANKING IS MY JUDGMENT ***
+tools/pipeline\ADJUDICATION_20260909.md:186:                     regress/artifacts/alphatbinegsel/witness_agy_20260908/
+tools/pipeline\ADJUDICATION_20260909.md:339:next, or does `alphatbinegsel` / `alphaswpctxreg` outrank it?**
+tools/pipeline\ADJUDICATION_20260909.md:430:    alphatbinegsel VERIFY        20,210   many         ANSWERED
+tools/pipeline\ADJUDICATION_20260909.md:431:    alphatbinegsel Q3           167,085   many         ANSWERED
+tools/pipeline\ADJUDICATION_20260909.md:432:    alphatbinegsel WITNESS        6,291   *** ZERO *** REFUSED (0-byte txt)
+tools/pipeline\ADJUDICATION_20260909.md:473:other seats all answered it, and grok additionally prescribed the one-row class closure that I
+tools/pipeline\ADJUDICATION_20260909.md:498:* **did not raise any severity except `alphatbinegsel`**, and that one is flagged as my judgment.
+tools/pipeline\ADJUDICATION_20260909.md:523:*I have deliberately NOT raised it.*  I raised `alphatbinegsel` med -> high myself today and
+tools/pipeline\ADJUDICATION_20260909.md:578:`alphatbinegsel`'s coarse repair is right *because* the translation cache carries no ASM tag
+tools/pipeline\ADJUDICATION_20260909.md:588:different claims -- the same conflation the `alphatbinegsel` panel caught me making about
+tools/pipeline\ADJUDICATION_20260909.md:638:   **Treat B3's HIGH as MY JUDGMENT, dated 7 September**, exactly as `alphatbinegsel`'s raise is
+tools/pipeline\ADJUDICATION_20260909.md:717:| `alphatbinegsel` | high | witness **5/7 → 7/7**, both selectors, attribution control; fix `a0 >= 1 && a0 <= 3` confirmed 4/4; ASM question settled from the manual | a fix-design panel (fired, not yet returned) |
+
+ exited 1 in 241ms:
+# Registers beyond the ones sessions 1-3 use.  Names must match
+# ALPHA_REG_NAMES in src/include/cpu_alpha.h, because the rows read them
+# back with the debugger's `print' command.
+T6, T7, T8, T9, T10 = 7, 8, 22, 23, 24     # t6, t7, t8, t9, t10
+
+VA_Y = 0x4000                # unrelated page: the DISCRIMINATOR
+Y_PTE_SLOT, Y_NEW_SLOT = 24, 32
+
+# Target-page descriptors: (VA, pointer-vector slot holding its PTE address,
+#                           slot holding its new PTE, initial value, remapped value)
+X_AT_6000 = (0x6000, 40, 48, VAL_E, VAL_F)
+X_AT_0000 = (0x0000, 64, 72, VAL_G, VAL_H)
+
+def bound_session(sel, xspec, a1val):
+    """Warm X and Y, remap both, tbi(sel, a1val), observe both.  One `step'."""
+    va_x, x_pte_slot, x_new_slot, _x_init, _x_new = xspec
+    prog = (load_const(T0, P_PTRV) +
+            [LDQ(T0, 56, T0),              # t0 = k0(P_PTRV)
+             LDQ(A0, 0,  T0),              # a0 = k0(P_PCB)   (swpctx argument)
+             LDQ(T1, x_pte_slot, T0),      # t1 = PTE address, page X
+             LDQ(T2, x_new_slot, T0),      # t2 = new PTE,     page X
+             LDQ(T6, Y_PTE_SLOT, T0),      # t6 = PTE address, page Y
+             LDQ(T7, Y_NEW_SLOT, T0),      # t7 = new PTE,     page Y
+             CALL_PAL(0x30)] +             # swpctx -> installs ptbr (and ALL-flushes)
+            load_const(T3, va_x) +
+            load_const(T8, VA_Y) +
+            [LDQ(T4, 0, T3),               # WARM X
+             LDQ(T9, 0, T8),               # WARM Y
+             STQ(T2, 0, T1),               # REMAP X
+             STQ(T7, 0, T6),               # REMAP Y
+             LDA(A0, sel, ZERO)] +         # a0 = selector under test
+            load_const(A1, a1val) +        # a1 = the page X is at (names X only)
+            [CALL_PAL(0x33)] +             # PAL_OSF1_tbi
+            load_const(T5,  VAL_S) +       # pre-seed observation X
+            load_const(T10, VAL_S) +       # pre-seed observation Y
+            [LDQ(T5,  0, T3),              # OBSERVE X (control)
+             LDQ(T10, 0, T8)])             # OBSERVE Y (DISCRIMINATOR)
+
+    cmds = bsetup + ["put w 0x%x, 0x%08x" % (k0(P_CODE) + 4 * i, op)
+                     for i, op in enumerate(prog)]
+    cmds += ["pc=0x%x" % k0(P_CODE), "step %d" % len(prog),
+             "print t4", "print t9", "print t5", "print t10"]
+    txt, alive = session(cmds)
+    return (alive,
+            printed(txt, "t4"),    # fill X
+            printed(txt, "t9"),    # fill Y
+            printed(txt, "t5"),    # observe X
+            printed(txt, "t10"))   # observe Y
+
+# (a0, a1, target-page, row name, expected Y after the call, note)
+# Expected Y is VAL_C when the selective arm must run (Y survives) and VAL_D
+# when the conservative arm must run (Y is flushed and re-walks).
+BOUND_ROWS = [
+    (0, 0x6000, X_AT_6000, "bnd zero", VAL_D,
+     "ACCEPT: a0=0 undefined -> ALL, Y must DIE (catches >=1 grown to >=0)"),
+    (1, 0x6000, X_AT_6000, "bnd lo",   VAL_C,
+     "ACCEPT: a0=1 ITB selective, Y must SURVIVE (catches >=1 grown to >=2)"),
+    (2, 0x6000, X_AT_6000, "bnd mid",  VAL_C,
+     "ACCEPT: a0=2 DTB selective, Y must SURVIVE (catches a window excluding 2)"),
+    (3, 0x6000, X_AT_6000, "bnd hi",   VAL_C,
+     "ACCEPT: a0=3 both selective, Y must SURVIVE (catches <=3 shrunk to <=2)"),
+    (4, 0x6000, X_AT_6000, "bnd out",  VAL_D,
+     "ACCEPT: a0=4 undefined -> ALL, Y must DIE (catches <=3 grown to <=4)"),
+    (2, 0x0000, X_AT_0000, "bnd a1z",  VAL_C,
+     "ACCEPT: a0=2 with a1=0 still selective, Y must SURVIVE (catches a conjunct on a1)"),
+]
+
+for sel, a1val, xspec, name, want_y, note in BOUND_ROWS:
+    x_init, x_new = xspec[3], xspec[4]
+    alive_b, fill_x, fill_y, obs_x, obs_y = bound_session(sel, xspec, a1val)
+    got  = "%s %s %s %s %s" % ("alive" if alive_b else "died",
+                               sym(fill_x), sym(fill_y), sym(obs_x), sym(obs_y))
+    want = "alive %s %s %s %s" % (SYMBOL[x_init], SYMBOL[VAL_C],
+                                  SYMBOL[x_new], SYMBOL[want_y])
+    row(name, got, want, note)
+    # Raw values kept in the log so a future reader can re-derive the row
+    # without trusting the symbol table above.
+    print("%-16s %s" % ("", "  raw: fillX=%s fillY=%s obsX=%s obsY=%s  (live=%s, a0=%d, a1=0x%x, VA_X=0x%x)"
+                        % (fill_x, fill_y, obs_x, obs_y, alive_b, sel, a1val, xspec[0])))
+
+bad = [n for n, ok in rows if not ok]
+print("\nALPHATBI_RESULT=%d/%d" % (len(rows) - len(bad), len(rows)))
+if bad:
+    print("FAILING: " + " ".join(bad))
+print("ALPHATBI_DONE")
+sys.exit(0 if not bad else 1)
+src/cpus/cpu_alpha.c-42-#include "cpu.h"
+src/cpus/cpu_alpha.c-43-#include "interrupt.h"
+src/cpus/cpu_alpha.c-44-#include "machine.h"
+src/cpus/cpu_alpha.c-45-#include "memory.h"
+src/cpus/cpu_alpha.c-46-#include "misc.h"
+src/cpus/cpu_alpha.c-47-#include "settings.h"
+src/cpus/cpu_alpha.c-48-#include "symbol.h"
+src/cpus/cpu_alpha.c-49-
+src/cpus/cpu_alpha.c:50:#define	DYNTRANS_8K
+src/cpus/cpu_alpha.c:51:#define	DYNTRANS_PAGESIZE	8192
+src/cpus/cpu_alpha.c-52-#include "tmp_alpha_head.c"
+src/cpus/cpu_alpha.c-53-
+src/cpus/cpu_alpha.c-54-
+src/cpus/cpu_alpha.c-55-/*  Alpha symbolic register names:  */
+src/cpus/cpu_alpha.c-56-static const char *alpha_regname[N_ALPHA_REGS] = ALPHA_REG_NAMES; 
+src/cpus/cpu_alpha.c-57-
+src/cpus/cpu_alpha.c-58-void alpha_irq_interrupt_assert(struct interrupt *interrupt);
+src/cpus/cpu_alpha.c-59-void alpha_irq_interrupt_deassert(struct interrupt *interrupt);
+--
+src/cpus/cpu_alpha.c-76-		if (strcasecmp(cpu_type_defs[i].name, cpu_type_name) == 0) {
+src/cpus/cpu_alpha.c-77-			break;
+src/cpus/cpu_alpha.c-78-		}
+src/cpus/cpu_alpha.c-79-		i++;
+src/cpus/cpu_alpha.c-80-	}
+src/cpus/cpu_alpha.c-81-	if (cpu_type_defs[i].name == NULL)
+src/cpus/cpu_alpha.c-82-		return 0;
+src/cpus/cpu_alpha.c-83-
+src/cpus/cpu_alpha.c:84:	cpu->is_32bit = 0;
+src/cpus/cpu_alpha.c-85-	cpu->byte_order = EMUL_LITTLE_ENDIAN;
+src/cpus/cpu_alpha.c-86-
+src/cpus/cpu_alpha.c-87-	cpu->memory_rw = alpha_memory_rw;
+src/cpus/cpu_alpha.c-88-	cpu->run_instr = alpha_run_instr;
+src/cpus/cpu_alpha.c-89-	cpu->translate_v2p = alpha_translate_v2p;
+src/cpus/cpu_alpha.c-90-	cpu->update_translation_table = alpha_update_translation_table;
+src/cpus/cpu_alpha.c-91-	cpu->invalidate_translation_caches =
+src/cpus/cpu_alpha.c-92-	    alpha_invalidate_translation_caches;
+--
+src/cpus/cpu.c-38-#include "machine.h"
+src/cpus/cpu.c-39-#include "memory.h"
+src/cpus/cpu.c-40-#include "settings.h"
+src/cpus/cpu.c-41-#include "timer.h"
+src/cpus/cpu.c-42-
+src/cpus/cpu.c-43-
+src/cpus/cpu.c-44-extern size_t dyntrans_cache_size;
+src/cpus/cpu.c-45-
+src/cpus/cpu.c:46:static struct cpu_family *first_cpu_family = NULL;
+src/cpus/cpu.c-47-
+src/cpus/cpu.c-48-
+src/cpus/cpu.c-49-/*
+src/cpus/cpu.c-50- *  cpu_new():
+src/cpus/cpu.c-51- *
+src/cpus/cpu.c-52- *  Create a new cpu object.  Each family is tried in sequence until a
+src/cpus/cpu.c-53- *  CPU family recognizes the cpu_type_name.
+src/cpus/cpu.c-54- *
+--
+src/cpus/cpu.c-90-
+src/cpus/cpu.c-91-	settings_add(cpu->settings, "name", 0, SETTINGS_TYPE_STRING,
+src/cpus/cpu.c-92-	    SETTINGS_FORMAT_STRING, (void *) &cpu->name);
+src/cpus/cpu.c-93-	settings_add(cpu->settings, "running", 0, SETTINGS_TYPE_UINT8,
+src/cpus/cpu.c-94-	    SETTINGS_FORMAT_YESNO, (void *) &cpu->running);
+src/cpus/cpu.c-95-
+src/cpus/cpu.c-96-	cpu_create_or_reset_tc(cpu);
+src/cpus/cpu.c-97-
+src/cpus/cpu.c:98:	struct cpu_family *fp = first_cpu_family;
+src/cpus/cpu.c-99-
+src/cpus/cpu.c-100-	while (fp != NULL) {
+src/cpus/cpu.c-101-		if (fp->cpu_new != NULL) {
+src/cpus/cpu.c-102-			if (fp->cpu_new(cpu, mem, machine, cpu_id, cpu_type_name))
+src/cpus/cpu.c-103-				break;
+src/cpus/cpu.c-104-		}
+src/cpus/cpu.c-105-
+src/cpus/cpu.c-106-		fp = fp->next;
+--
+src/cpus/cpu.c-110-		debugmsg(SUBSYS_CPU, "", VERBOSITY_ERROR,
+src/cpus/cpu.c-111-		    "unknown cpu type '%s'", cpu_type_name);
+src/cpus/cpu.c-112-		/*  cpu was allocated with zeroed_alloc() (mmap), so it
+src/cpus/cpu.c-113-		    must be munmap()ed, not free()d; cf. cpu_destroy().  */
+src/cpus/cpu.c-114-		munmap((void *)cpu, sizeof(struct cpu));
+src/cpus/cpu.c-115-		return NULL;
+src/cpus/cpu.c-116-	}
+src/cpus/cpu.c-117-
+src/cpus/cpu.c:118:	cpu->cpu_family = fp;
+src/cpus/cpu.c-119-
+src/cpus/cpu.c-120-	if (cpu->memory_rw == NULL) {
+src/cpus/cpu.c-121-		debugmsg_cpu(cpu, SUBSYS_CPU, "", VERBOSITY_ERROR,
+src/cpus/cpu.c-122-		    "memory_rw == NULL");
+src/cpus/cpu.c-123-		/*  cpu was allocated with zeroed_alloc() (mmap), so it
+src/cpus/cpu.c-124-		    must be munmap()ed, not free()d; cf. cpu_destroy().  */
+src/cpus/cpu.c-125-		munmap((void *)cpu, sizeof(struct cpu));
+src/cpus/cpu.c-126-		return NULL;
+--
+src/cpus/cpu.c-132-		debugmsg_cpu(cpu, SUBSYS_CPU, "endianness", VERBOSITY_ERROR,
+src/cpus/cpu.c-133-		    "Internal bug: Endianness not set!");
+src/cpus/cpu.c-134-		/*  cpu was allocated with zeroed_alloc() (mmap), so it
+src/cpus/cpu.c-135-		    must be munmap()ed, not free()d; cf. cpu_destroy().  */
+src/cpus/cpu.c-136-		munmap((void *)cpu, sizeof(struct cpu));
+src/cpus/cpu.c-137-		return NULL;
+src/cpus/cpu.c-138-	}
+src/cpus/cpu.c-139-	
+src/cpus/cpu.c:140:	if (cpu->vaddr_mask == 0) {
+src/cpus/cpu.c:141:		if (cpu->is_32bit)
+src/cpus/cpu.c:142:			cpu->vaddr_mask = 0x00000000ffffffffULL;
+src/cpus/cpu.c-143-		else
+src/cpus/cpu.c:144:			cpu->vaddr_mask = (int64_t)-1;
+src/cpus/cpu.c-145-
+src/cpus/cpu.c:146:		debugmsg_cpu(cpu, SUBSYS_CPU, "vaddr_mask", VERBOSITY_DEBUG,
+src/cpus/cpu.c:147:		    "Warning: vaddr_mask should be set in the CPU family's "
+src/cpus/cpu.c:148:		    "cpu_new()! Assuming 0x%16llx", (long long)cpu->vaddr_mask);
+src/cpus/cpu.c-149-	}
+src/cpus/cpu.c-150-
+src/cpus/cpu.c-151-	return cpu;
+src/cpus/cpu.c-152-}
+src/cpus/cpu.c-153-
+src/cpus/cpu.c-154-
+src/cpus/cpu.c-155-/*
+src/cpus/cpu.c-156- *  cpu_destroy():
+--
+src/cpus/cpu.c-182- *  Called from the debugger to dump the TLB in a readable format.
+src/cpus/cpu.c-183- *  x is the cpu number to dump, or -1 to dump all CPUs.
+src/cpus/cpu.c-184- *                                              
+src/cpus/cpu.c-185- *  If rawflag is nonzero, then the TLB contents isn't formated nicely,
+src/cpus/cpu.c-186- *  just dumped.
+src/cpus/cpu.c-187- */
+src/cpus/cpu.c-188-void cpu_tlbdump(struct cpu *cpu, int rawflag)
+src/cpus/cpu.c-189-{
+src/cpus/cpu.c:190:	if (cpu->cpu_family == NULL || cpu->cpu_family->tlbdump == NULL)
+src/cpus/cpu.c-191-		fatal("cpu_tlbdump(): NULL\n");
+src/cpus/cpu.c-192-	else
+src/cpus/cpu.c:193:		cpu->cpu_family->tlbdump(cpu, rawflag);
+src/cpus/cpu.c-194-}
+src/cpus/cpu.c-195-
+src/cpus/cpu.c-196-
+src/cpus/cpu.c-197-/*
+src/cpus/cpu.c-198- *  cpu_disassemble_instr():
+src/cpus/cpu.c-199- *
+src/cpus/cpu.c-200- *  Convert an instruction word into human readable format, for instruction
+src/cpus/cpu.c-201- *  tracing.
+src/cpus/cpu.c-202- */
+src/cpus/cpu.c-203-int cpu_disassemble_instr(struct machine *m, struct cpu *cpu,
+src/cpus/cpu.c-204-	unsigned char *instr, int running, uint64_t addr)
+src/cpus/cpu.c-205-{
+src/cpus/cpu.c:206:	if (cpu->cpu_family == NULL || cpu->cpu_family->disassemble_instr == NULL) {
+src/cpus/cpu.c-207-		fatal("cpu_disassemble_instr(): NULL\n");
+src/cpus/cpu.c-208-		return 0;
+src/cpus/cpu.c-209-	} else
+src/cpus/cpu.c:210:		return cpu->cpu_family->disassemble_instr(cpu, instr,
+src/cpus/cpu.c-211-		    running, addr);
+src/cpus/cpu.c-212-}
+src/cpus/cpu.c-213-
+src/cpus/cpu.c-214-
+src/cpus/cpu.c-215-/*                       
+src/cpus/cpu.c-216- *  cpu_register_dump():
+src/cpus/cpu.c-217- *
+src/cpus/cpu.c-218- *  Dump cpu registers in a relatively readable format.
+src/cpus/cpu.c-219- *
+src/cpus/cpu.c-220- *  gprs: set to non-zero to dump GPRs. (CPU dependent.)
+src/cpus/cpu.c-221- *  coprocs: set bit 0..x to dump registers in coproc 0..x. (CPU dependent.)
+src/cpus/cpu.c-222- */
+src/cpus/cpu.c-223-void cpu_register_dump(struct machine *m, struct cpu *cpu,
+src/cpus/cpu.c-224-	int gprs, int coprocs)
+src/cpus/cpu.c-225-{
+src/cpus/cpu.c:226:	if (cpu->cpu_family == NULL || cpu->cpu_family->register_dump == NULL)
+src/cpus/cpu.c-227-		fatal("cpu_register_dump(): NULL\n");
+src/cpus/cpu.c-228-	else
+src/cpus/cpu.c:229:		cpu->cpu_family->register_dump(cpu, gprs, coprocs);
+src/cpus/cpu.c-230-}
+src/cpus/cpu.c-231-
+src/cpus/cpu.c-232-
+src/cpus/cpu.c-233-/*
+src/cpus/cpu.c-234- *  cpu_functioncall_trace():
+src/cpus/cpu.c-235- *
+src/cpus/cpu.c-236- *  This function should be called if machine->show_trace_tree is enabled, and
+src/cpus/cpu.c-237- *  a function call is being made. f contains the address of the function.
+--
+src/cpus/cpu.c-243-	char *symbol;
+src/cpus/cpu.c-244-	uint64_t offset;
+src/cpus/cpu.c-245-
+src/cpus/cpu.c-246-	/*  Let the debugger's "step call" command know that a function
+src/cpus/cpu.c-247-	    call has just been traced:  */
+src/cpus/cpu.c-248-	cpu->last_was_function_transition = 1;
+src/cpus/cpu.c-249-
+src/cpus/cpu.c-250-	/*  Special hack for M88K userspace:  */
+src/cpus/cpu.c:251:	if (cpu->cpu_family->arch == ARCH_M88K &&
+src/cpus/cpu.c-252-	    !(cpu->cd.m88k.cr[M88K_CR_PSR] & M88K_PSR_MODE))
+src/cpus/cpu.c-253-		show_symbolic_function_name = 0;
+src/cpus/cpu.c-254-
+src/cpus/cpu.c-255-	if (cpu->machine->ncpus > 1)
+src/cpus/cpu.c-256-		fatal("cpu%i:\t", cpu->cpu_id);
+src/cpus/cpu.c-257-
+src/cpus/cpu.c-258-	if (cpu->trace_tree_depth > 100)
+src/cpus/cpu.c-259-		cpu->trace_tree_depth = 100;
+--
+src/cpus/cpu.c-263-	cpu->trace_tree_depth ++;
+src/cpus/cpu.c-264-
+src/cpus/cpu.c-265-	fatal("<");
+src/cpus/cpu.c-266-	symbol = get_symbol_name_and_n_args(&cpu->machine->symbol_context,
+src/cpus/cpu.c-267-	    f, &offset, &n_args);
+src/cpus/cpu.c-268-	if (symbol != NULL && show_symbolic_function_name && offset == 0)
+src/cpus/cpu.c-269-		fatal("%s", symbol);
+src/cpus/cpu.c-270-	else {
+src/cpus/cpu.c:271:		if (cpu->is_32bit)
+src/cpus/cpu.c-272-			fatal("0x%" PRIx32, (uint32_t) f);
+src/cpus/cpu.c-273-		else
+src/cpus/cpu.c-274-			fatal("0x%" PRIx64, (uint64_t) f);
+src/cpus/cpu.c-275-	}
+src/cpus/cpu.c-276-	fatal("(");
+src/cpus/cpu.c-277-
+src/cpus/cpu.c:278:	if (cpu->cpu_family->functioncall_trace != NULL)
+src/cpus/cpu.c:279:		cpu->cpu_family->functioncall_trace(cpu, n_args);
+src/cpus/cpu.c-280-
+src/cpus/cpu.c-281-	fatal(")>\n");
+src/cpus/cpu.c-282-}
+src/cpus/cpu.c-283-
+src/cpus/cpu.c-284-
+src/cpus/cpu.c-285-/*
+src/cpus/cpu.c-286- *  cpu_functioncall_trace_return():
+src/cpus/cpu.c-287- *
+--
+src/cpus/cpu.c-306-/*
+src/cpus/cpu.c-307- *  cpu_create_or_reset_tc():
+src/cpus/cpu.c-308- *
+src/cpus/cpu.c-309- *  Create the translation cache in memory (ie allocate memory for it), if
+src/cpus/cpu.c-310- *  necessary, and then reset it to an initial state.
+src/cpus/cpu.c-311- */
+src/cpus/cpu.c-312-void cpu_create_or_reset_tc(struct cpu *cpu)
+src/cpus/cpu.c-313-{
+src/cpus/cpu.c:314:	size_t s = dyntrans_cache_size + DYNTRANS_CACHE_MARGIN;
+src/cpus/cpu.c-315-
+src/cpus/cpu.c-316-	if (cpu->translation_cache == NULL)
+src/cpus/cpu.c-317-		cpu->translation_cache = (unsigned char *) zeroed_alloc(s);
+src/cpus/cpu.c-318-
+src/cpus/cpu.c-319-	/*  Create an empty table at the beginning of the translation cache:  */
+src/cpus/cpu.c-320-	memset(cpu->translation_cache, 0, sizeof(uint32_t)
+src/cpus/cpu.c-321-	    * N_BASE_TABLE_ENTRIES);
+src/cpus/cpu.c-322-
+--
+src/cpus/cpu.c-342-{
+src/cpus/cpu.c-343-	char cpuname[100];
+src/cpus/cpu.c-344-	snprintf(cpuname, sizeof(cpuname), "cpu%i", cpu->cpu_id);
+src/cpus/cpu.c-345-
+src/cpus/cpu.c-346-	if (verbose)
+src/cpus/cpu.c-347-		debugmsg(SUBSYS_MACHINE, cpuname, VERBOSITY_INFO,
+src/cpus/cpu.c-348-		    "%s", cpu->running? "running" : "stopped");
+src/cpus/cpu.c-349-
+src/cpus/cpu.c:350:	if (cpu->cpu_family == NULL || cpu->cpu_family->dumpinfo == NULL) {
+src/cpus/cpu.c-351-		debugmsg(SUBSYS_MACHINE, cpuname, VERBOSITY_ERROR,
+src/cpus/cpu.c-352-		    "cpu_dumpinfo(): NULL");
+src/cpus/cpu.c-353-	} else {
+src/cpus/cpu.c-354-		if (verbose)
+src/cpus/cpu.c-355-			debug_indentation(1);
+src/cpus/cpu.c-356-
+src/cpus/cpu.c:357:		cpu->cpu_family->dumpinfo(cpu, verbose);
+src/cpus/cpu.c-358-
+src/cpus/cpu.c-359-		if (verbose)
+src/cpus/cpu.c-360-			debug_indentation(-1);
+src/cpus/cpu.c-361-	}
+src/cpus/cpu.c-362-}
+src/cpus/cpu.c-363-
+src/cpus/cpu.c-364-
+src/cpus/cpu.c-365-/*
+src/cpus/cpu.c-366- *  cpu_list_available_types():
+src/cpus/cpu.c-367- *
+src/cpus/cpu.c-368- *  Print a list of available CPU types for each cpu family.
+src/cpus/cpu.c-369- */
+src/cpus/cpu.c-370-void cpu_list_available_types(void)
+src/cpus/cpu.c-371-{
+src/cpus/cpu.c:372:	struct cpu_family *fp = first_cpu_family;
+src/cpus/cpu.c-373-
+src/cpus/cpu.c-374-	if (fp == NULL) {
+src/cpus/cpu.c-375-		debug("No CPUs defined!\n");
+src/cpus/cpu.c-376-		return;
+src/cpus/cpu.c-377-	}
+src/cpus/cpu.c-378-
+src/cpus/cpu.c-379-	while (fp != NULL) {
+src/cpus/cpu.c-380-		debug("%s:\n", fp->name);
+--
+src/cpus/cpu.c-489-		printf("; idling");
+src/cpus/cpu.c-490-		cpu->has_been_idling = false;
+src/cpus/cpu.c-491-	} else
+src/cpus/cpu.c-492-		printf("; i/s=%" PRIi64" avg=%" PRIi64, is, avg);
+src/cpus/cpu.c-493-
+src/cpus/cpu.c-494-	symbol = get_symbol_name(&machine->symbol_context, pc, &offset);
+src/cpus/cpu.c-495-
+src/cpus/cpu.c-496-	if (machine->ncpus == 1) {
+src/cpus/cpu.c:497:		if (cpu->is_32bit)
+src/cpus/cpu.c-498-			printf("; pc=0x%08" PRIx32, (uint32_t) pc);
+src/cpus/cpu.c-499-		else
+src/cpus/cpu.c-500-			printf("; pc=0x%016" PRIx64, (uint64_t) pc);
+src/cpus/cpu.c-501-	}
+src/cpus/cpu.c-502-
+src/cpus/cpu.c-503-	/*  Special hack for M88K userland:  (Don't show symbols.)  */
+src/cpus/cpu.c:504:	if (cpu->cpu_family->arch == ARCH_M88K &&
+src/cpus/cpu.c-505-	    !(cpu->cd.m88k.cr[M88K_CR_PSR] & M88K_PSR_MODE))
+src/cpus/cpu.c-506-		symbol = NULL;
+src/cpus/cpu.c-507-
+src/cpus/cpu.c-508-	if (symbol != NULL)
+src/cpus/cpu.c-509-		printf(" <%s>", symbol);
+src/cpus/cpu.c-510-	printf(" ]\n");
+src/cpus/cpu.c-511-
+src/cpus/cpu.c-512-do_return:
+--
+src/cpus/cpu.c-540-		/*  For performance measurement:  */
+src/cpus/cpu.c-541-		gettimeofday(&cpu->starttime, NULL);
+src/cpus/cpu.c-542-		cpu->ninstrs_since_gettimeofday = 0;
+src/cpus/cpu.c-543-	}
+src/cpus/cpu.c-544-}
+src/cpus/cpu.c-545-
+src/cpus/cpu.c-546-
+src/cpus/cpu.c-547-/*
+src/cpus/cpu.c:548: *  add_cpu_family():
+src/cpus/cpu.c-549- *
+src/cpus/cpu.c:550: *  Allocates a cpu_family struct and calls an init function for the
+src/cpus/cpu.c-551- *  family to fill in reasonable data and pointers.
+src/cpus/cpu.c-552- */
+src/cpus/cpu.c:553:static void add_cpu_family(void (*family_init)(struct cpu_family *), int arch)
+src/cpus/cpu.c-554-{
+src/cpus/cpu.c:555:	struct cpu_family *fp;
+src/cpus/cpu.c-556-
+src/cpus/cpu.c:557:	CHECK_ALLOCATION(fp = (struct cpu_family *) malloc(sizeof(struct cpu_family)));
+src/cpus/cpu.c:558:	memset(fp, 0, sizeof(struct cpu_family));
+src/cpus/cpu.c-559-
+src/cpus/cpu.c-560-	family_init(fp);
+src/cpus/cpu.c-561-
+src/cpus/cpu.c-562-	fp->arch = arch;
+src/cpus/cpu.c-563-	fp->next = NULL;
+src/cpus/cpu.c-564-
+src/cpus/cpu.c-565-	/*  Add last in family chain:  */
+src/cpus/cpu.c:566:	struct cpu_family* tmp = first_cpu_family;
+src/cpus/cpu.c-567-	if (tmp == NULL) {
+src/cpus/cpu.c:568:		first_cpu_family = fp;
+src/cpus/cpu.c-569-	} else {
+src/cpus/cpu.c-570-		while (tmp->next != NULL)
+src/cpus/cpu.c-571-			tmp = tmp->next;
+src/cpus/cpu.c-572-		tmp->next = fp;
+src/cpus/cpu.c-573-	}
+src/cpus/cpu.c-574-}
+src/cpus/cpu.c-575-
+src/cpus/cpu.c-576-
+src/cpus/cpu.c-577-/*
+src/cpus/cpu.c-578- *  cpu_init():
+src/cpus/cpu.c-579- *
+src/cpus/cpu.c-580- *  Should be called before any other cpu_*() function.
+src/cpus/cpu.c-581- *
+src/cpus/cpu.c:582: *  This function calls add_cpu_family() for each processor architecture.
+src/cpus/cpu.c-583- *  ADD_ALL_CPU_FAMILIES is defined in the config.h file generated by the
+src/cpus/cpu.c-584- *  configure script.
+src/cpus/cpu.c-585- */
+src/cpus/cpu.c-586-void cpu_init(void)
+src/cpus/cpu.c-587-{
+src/cpus/cpu.c-588-	ADD_ALL_CPU_FAMILIES;
+src/cpus/cpu.c-589-}
+src/cpus/cpu.c-590-
+rg: src/cpus/cpu_alpha_mmu.c: The system cannot find the file specified. (os error 2)
+src/include/cpu.h:388:	uint64_t	vaddr_mask;
+src/include/cpu.h:523:#define	INVALIDATE_ALL			2
+src/include/cpu.h:525:#define	INVALIDATE_VADDR		8
+src/include/cpu.h:526:#define	INVALIDATE_VADDR_UPPER4		16	/*  useful for PPC emulation  */
+src/cpus/cpu_dyntrans.c:1194:#ifdef DYNTRANS_INVALIDATE_TC
+src/cpus/cpu_dyntrans.c:1202: *	INVALIDATE_PADDR  INVALIDATE_VADDR  or  INVALIDATE_ALL
+src/cpus/cpu_dyntrans.c:1204: *  In addition, for INVALIDATE_ALL, INVALIDATE_VADDR_UPPER4 may be set and
+src/cpus/cpu_dyntrans.c:1215:void DYNTRANS_INVALIDATE_TC(struct cpu *cpu, uint64_t addr, int flags)
+src/cpus/cpu_dyntrans.c:1228:	if (flags & INVALIDATE_VADDR) {
+src/cpus/cpu_dyntrans.c:1244:			    & cpu->vaddr_mask) == (addr_page & cpu->vaddr_mask)) {
+src/cpus/cpu_dyntrans.c:1250:			debug("[ DYNTRANS_INVALIDATE_TC: CACHE COLLISION vaddr 0x%016llx! ]\n",
+src/cpus/cpu_dyntrans.c:1259:	if (flags & INVALIDATE_ALL && flags & INVALIDATE_VADDR_UPPER4) {
+src/cpus/cpu_dyntrans.c:1276:	if (flags & INVALIDATE_ALL) {
+src/cpus/cpu_dyntrans.c:1313:#endif	/*  DYNTRANS_INVALIDATE_TC  */
+src/cpus/cpu_dyntrans.c:1317:#ifdef DYNTRANS_INVALIDATE_TC_CODE
+src/cpus/cpu_dyntrans.c:1324:void DYNTRANS_INVALIDATE_TC_CODE(struct cpu *cpu, uint64_t addr, int flags)
+src/cpus/cpu_dyntrans.c:1336:	/*  printf("DYNTRANS_INVALIDATE_TC_CODE addr=0x%08x flags=%i\n",
+src/cpus/cpu_dyntrans.c:1455:			if (flags & INVALIDATE_ALL ||
+src/cpus/cpu_dyntrans.c:1457:			    (flags & INVALIDATE_VADDR && vaddr_page == addr)) {
+src/cpus/cpu_dyntrans.c:1483:#endif	/*  DYNTRANS_INVALIDATE_TC_CODE  */
+
+web search: https://bitsavers.trailing-edge.com/pdf/dec/alpha/Sites_AlphaArchitectureReferenceManual_1992.pdf
+codex
+The fork matches the supplied diff. I confirmed the unsigned comparison bug and Alpha’s identity-mask default. The probe has no selectors exercising high bits, so cast width is a likely coverage gap. Its claim that losing the signed casts restores the original defect also needs correction: the upper bound changes that arithmetic.
+web search: 
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n 'vaddr_mask\\s*=' src; rg -n -C 4 'ALPHA_TBIA|ALPHA_TBIAP|ALPHA_PTE_ASM|ALPHA_PTE_ASN|PAL_tbi|TBIAP|TBIA' src/include; rg -n 'vph_tlb_entry|struct.*tlb|struct.*vph' src/include/cpu.h src/include/*.h; Get-Content -LiteralPath tools/pipeline/ADJUDICATION_20260909.md | Select-Object -Skip 166 -First 94; Get-Content -LiteralPath regress/artifacts/alphatbinegsel/killtable_20260910/PRETABLE.out; Get-Content -LiteralPath regress/artifacts/alphatbinegsel/killtable_20260910/RESULTS.txt" in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "Get-Content -LiteralPath src/cpus/cpu_dyntrans.c | Select-Object -Skip 1193 -First 121; Get-Content -LiteralPath src/cpus/cpu_alpha_palcode.c | Select-Object -Skip 367 -First 85; Get-Content -LiteralPath src/core/debugmsg.c | Select-Object -Skip 383 -First 16; Get-Content -LiteralPath src/cpus/cpu_alpha_instr_loadstore.c | Select-Object -Skip 42 -First 112; Get-Content -LiteralPath src/cpus/memory_rw.c | Select-Object -Skip 565 -First 67; rg --files src | rg '(alpha|dyntrans)'" in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n -i 'undefined|unsupported|reserved|ignored|ignore|no.op|unimplemented|warned|announc' src/cpus/cpu_alpha*.c src/cpus/memory_alpha.c; rg -n -C 3 'unexpected.*(value|selector)|invalid.*selector|unknown.*selector|bad.*selector' src/cpus src/devices --glob '*.c'" in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+ succeeded in 124ms:
+rg: src/cpus/cpu_alpha*.c: The filename, directory name, or volume label syntax is incorrect. (os error 123)
+src/cpus/memory_alpha.c:2: *  Copyright (C) 2006-2021  Anders Gavare.  All rights reserved.
+src/cpus/memory_alpha.c:184:	    still ignored, the protection bits untested, and `return 2' still reports
+src/devices\dev_sh4.c-80- *  and silently swallows the other.
+src/devices\dev_sh4.c-81- */
+src/devices\dev_sh4.c-82-#define	SH4_PCIC_UNIMPL			0	/*  offset this device does not implement  */
+src/devices\dev_sh4.c:83:#define	SH4_PCIC_BADVAL			1	/*  known register, unexpected value      */
+src/devices\dev_sh4.c-84-#define	SH4_PCIC_NOCPU			2	/*  known register, CPU type not modelled */
+src/devices\dev_sh4.c-85-#define	SH4_PCIC_NCLASS			3
+src/devices\dev_sh4.c-86-/*
+
+ succeeded in 270ms:
+src\cpus\cpu.c:140:	if (cpu->vaddr_mask == 0) {
+src\cpus\cpu.c:142:			cpu->vaddr_mask = 0x00000000ffffffffULL;
+src\cpus\cpu.c:144:			cpu->vaddr_mask = (int64_t)-1;
+src\cpus\cpu_arm.c:125:	cpu->vaddr_mask = 0x00000000ffffffffULL;
+src\cpus\cpu_mips.c:267:		cpu->vaddr_mask = 0x00000000ffffffffULL;
+src\cpus\cpu_mips.c:274:		cpu->vaddr_mask = ENTRYHI_R_MASK | ENTRYHI_VPN2_MASK_R10K | 0x1fff;
+src\cpus\cpu_mips.c:279:			cpu->vaddr_mask = 0x00000000ffffffffULL;
+src\cpus\cpu_mips.c:281:			cpu->vaddr_mask = ENTRYHI_R_MASK | ENTRYHI_VPN2_MASK | 0x1fff;
+src\cpus\cpu_m88k.c:134:	cpu->vaddr_mask = 0x00000000ffffffffULL;
+src\cpus\cpu_i960.c:221:	cpu->vaddr_mask = 0x00000000ffffffffULL;
+src\cpus\cpu_riscv.c:135:		cpu->vaddr_mask = 0x00000000ffffffffULL;
+src\cpus\cpu_riscv.c:142:		cpu->vaddr_mask = 0xffffffffffffffffULL;
+src\cpus\cpu_ppc.c:212:		cpu->vaddr_mask = 0x00000000ffffffffULL;
+src/include\thirdparty\alpha_lcareg.h-65-
+src/include\thirdparty\alpha_lcareg.h-66-#define LCA_IOC_STAT1	(LCA_IOC_BASE + 0x060)	/* Status 1 */
+src/include\thirdparty\alpha_lcareg.h-67-#define	IOC_STAT1_ADDR	0x00000000ffffffffULL	/* PCI address mask */
+src/include\thirdparty\alpha_lcareg.h-68-
+src/include\thirdparty\alpha_lcareg.h:69:#define	LCA_IOC_TBIA	(LCA_IOC_BASE + 0x080)	/* TLB Invalidate All */
+src/include\thirdparty\alpha_lcareg.h-70-#define	LCA_IOC_TB_ENA	(LCA_IOC_BASE + 0x0a0)	/* TLB Enable */
+src/include\thirdparty\alpha_lcareg.h-71-#define	IOC_TB_ENA_TEN	0x0000000000000080ULL
+src/include\thirdparty\alpha_lcareg.h-72-
+src/include\thirdparty\alpha_lcareg.h-73-#define LCA_IOC_W_BASE0	(LCA_IOC_BASE + 0x100)	/* Window Base */
+--
+src/include\thirdparty\alpha_cpu.h-219-#define	ALPHA_PTE_FAULT_ON_READ		0x0002
+src/include\thirdparty\alpha_cpu.h-220-#define	ALPHA_PTE_FAULT_ON_WRITE	0x0004
+src/include\thirdparty\alpha_cpu.h-221-#define	ALPHA_PTE_FAULT_ON_EXECUTE	0x0008
+src/include\thirdparty\alpha_cpu.h-222-
+src/include\thirdparty\alpha_cpu.h:223:#define	ALPHA_PTE_ASM			0x0010		/* addr. space match */
+src/include\thirdparty\alpha_cpu.h-224-#define	ALPHA_PTE_GRANULARITY		0x0060		/* granularity hint */
+src/include\thirdparty\alpha_cpu.h-225-
+src/include\thirdparty\alpha_cpu.h-226-#define	ALPHA_PTE_PROT			0xff00
+src/include\thirdparty\alpha_cpu.h-227-#define	ALPHA_PTE_KR			0x0100
+--
+src/include\thirdparty\alpha_cpu.h-277-/*
+src/include\thirdparty\alpha_cpu.h-278- * Translation Buffer Invalidation definitions [OSF/1 PALcode Specific]
+src/include\thirdparty\alpha_cpu.h-279- */
+src/include\thirdparty\alpha_cpu.h-280-
+src/include\thirdparty\alpha_cpu.h:281:#define	ALPHA_TBIA()	alpha_pal_tbi(-2, 0)		/* all TB entries */
+src/include\thirdparty\alpha_cpu.h:282:#define	ALPHA_TBIAP()	alpha_pal_tbi(-1, 0)		/* all per-process */
+src/include\thirdparty\alpha_cpu.h-283-#define	ALPHA_TBISI(va)	alpha_pal_tbi(1, (va))		/* ITB entry for va */
+src/include\thirdparty\alpha_cpu.h-284-#define	ALPHA_TBISD(va)	alpha_pal_tbi(2, (va))		/* DTB entry for va */
+src/include\thirdparty\alpha_cpu.h-285-#define	ALPHA_TBIS(va)	alpha_pal_tbi(3, (va))		/* all for va */
+src/include\thirdparty\alpha_cpu.h-286-
+rg: src/include/*.h: The filename, directory name, or volume label syntax is incorrect. (os error 123)
+src/include/cpu.h:88:	struct arch ## _vpg_tlb_entry {					\
+src/include/cpu.h:159:	struct arch ## _vpg_tlb_entry					\
+src/include/cpu.h:160:	    vph_tlb_entry[ARCH ## _MAX_VPH_TLB_ENTRIES];
+src/include/cpu.h:174: *  The vph_tlb_entry entries are cpu dependent tlb entries.
+### B1. `alphatbinegsel` -- *** I RAISED THIS med -> high AND THE RANKING IS MY JUDGMENT ***
+
+**The defect is source-confirmed by two seats independently, with citations I re-verified myself:**
+`ALPHA_TBIA()` -- the OS primitive meaning *invalidate every TLB entry* -- is
+`alpha_pal_tbi(-2, 0)`.  `a0` is `uint64_t`, the dispatch is `if (a0 >= 1)`, so `-2` compares as
+`0xff..fe` and takes the **VADDR** branch with `a1 = 0`.  **It therefore invalidates cached virtual
+page ZERO and nothing else.**  Every other mapping survives a flush the guest OS believes succeeded,
+and the Alpha fast path keeps consuming the surviving `host_load`/`host_store` pointers.
+
+*** AND MY OWN SENTENCE UNDERSTATED IT, WHICH THE ASSESS PANEL CAUGHT: `ALPHA_TBIAP()` IS
+`alpha_pal_tbi(-1, 0)` AND MISDISPATCHES IDENTICALLY. ***  So it is not one primitive but two, and
+the second is the **per-process flush used on context switch** -- glm: *"the context-switch
+primitive is equally broken; this strengthens Q1 and matters for the ordering."*  agy's verdict
+line names both wrappers independently.
+
+    verified by me:  ALPHA_TBIA macro passes a1=0; the a0 >= 1 dispatch; vaddr_mask defaults to
+                     (int64_t)-1 on 64-bit; the alpha binding site
+    repair           if (a0 >= 1 && a0 <= 3)   -- COARSE: it does not give TBIAP its ASM=0 semantics
+    witness          *** BUILT AND MEASURED 2026-09-08, AFTER THIS SECTION WAS WRITTEN ***
+                     regress/artifacts/alphatbinegsel/witness_agy_20260908/
+                     committed 5/7  ->  fixed 7/7, same script, both selectors
+                     built by agy (measurement reserve); RE-RUN BY ME against build/
+                     and it reproduced 5/7 with the identical two failing rows
+
+**QUESTION 1 (severity):** the facts are the seats'; the med -> high raise is mine.  A documented
+*invalidate everything* primitive clearing one page, silently, with a guest reaching stale physical
+backing -- I put that in the same class as the other HIGH rows.  **Confirm or correct.**
+
+**QUESTION 2 (ordering):** codex ranked `alphaswpctxreg` FIRST and labelled that *"a confidence
+judgment, not a claim that it has the greatest potential severity"* -- explicitly because this row's
+consequences were then unverified.
+
+*** AN EARLIER DRAFT SAID "THEY ARE NOW VERIFIED".  THAT OVERCLAIMED, and the assess panel caught
+it: what was verified then was the DISPATCH, and the witness was DESIGNED but NOT BUILT -- codex's
+own status line was "source-confirmed functional defect; witness unvalidated". ***
+
+*** AND THAT CONDITION HAS SINCE BEEN MET, WHICH IS THE ONE FACT IN THIS SECTION THAT CHANGES YOUR
+DECISION. ***  The witness was **built and measured on 2026-09-08**: committed **5/7**, fixed
+**7/7**, same script, on unmodified `-E alpha -e alphabook1`.  It exercises **both** selectors --
+`ALPHA_TBIA(-2)` and `ALPHA_TBIAP(-1)` on separate pages, both showing the same misdispatch -- and
+carries a **positive-selector control that is green on both builds**, so the VADDR path itself is
+proven working and the two failures are attributable to the misdispatch rather than to a broken
+flush.  It avoids all five vacuity traps (no page zero; distinct fill and remap patterns; one
+interaction).
+
+Built by **agy** as the measurement reserve, and **re-run by me against `build/`, where it
+reproduced 5/7 with the identical two failing rows** -- verified, not trusted.
+
+> **SO THE ORDERING QUESTION'S STATED CONDITION IS SATISFIED FOR TWO OF THE THREE DISSENTS, AND THE
+> THIRD IS ALSO ANSWERABLE NOW.**  minimax and glm wanted the witness RUN; it has been.  deepseek
+> wanted the COMPARATOR's severity, and `alphaswpctxreg` has since shipped as `#514` with its own
+> six-seat panel keeping it at `med`.  **Both inputs the panel asked for now exist**, so this is no
+> longer "promote on a promise" -- it is an ordinary severity comparison, high versus med, with
+> both rows characterised and both witnessed.  glm: *"'witness
+constructible, shape known' is not verification -- do not promote this row to first on the packet
+as written."*
+
+*** THE FIVE ASSESS SEATS SPLIT 2-3 AGAINST PROMOTION -- AND I FIRST WROTE THAT TALLY AS "3-1 IN
+FAVOUR", FROM MEMORY RATHER THAN FROM THE FILES.  Corrected before this packet shipped. ***
+
+    kimi        THIS ROW FIRST    "the ranking variable was uncertainty; it is now zero"
+    agy         THIS ROW FIRST    on a severity comparison it made itself from source
+    glm         NOT YET           "constructibility is not verification"
+    deepseek    NOT ESTABLISHED   cannot rank without alphaswpctxreg's severity
+    minimax     NOT YET           "ready to elevate once the witness actually RUNS"
+
+*** I WROTE THAT ALL THREE DISSENTS GIVE ONE REASON.  THEY DO NOT.  Refuted by a later audit and
+then verified by me against the three answers themselves. ***
+
+    minimax   THE WITNESS HAS NOT RUN            "ready to elevate once the witness actually runs"
+    glm       BOTH                               the witness has not run, AND "I cannot see the
+                                                 other five rows' defects, so I cannot compare
+                                                 severities -- five one-line descriptions would
+                                                 settle it"
+    deepseek  THE COMPARATOR, NOT THE WITNESS    "cannot rank without that fact.  Need one fact:
+                                                 relative severity/impact of alphaswpctxreg"
+
+**deepseek's reason is not the witness at all.**  So there is no unanimous condition, and
+*"promote it once the witness runs red-then-green"* is **MY PROPOSED ORDERING RULE, not the panel's
+finding.**  Two of the three additionally want the comparator's severity, which a witness run does
+not supply.
+
+> **AND THE COMPARATOR IS NOW KNOWN, which changes the question you are being asked.**
+> `alphaswpctxreg` shipped as `#514` and its own six-seat panel said **keep `med`**.  So the
+> ranking is no longer high-versus-unknown; it is high-versus-med with both rows characterised.
+> *An earlier line in this packet called `alphaswpctxreg` "HIGH-adjacent", which obscures exactly
+> the comparator these seats asked for.*
+
+**What survives unchanged is minimax's warning, and it is the reason I am not ruling on this
+myself:** *"the previous ranking was honest; flipping it on the strength of 'constructible in
+principle' is the same shape of error in reverse."*
+
+**So the question for you is narrower than "which row first": is CONDITIONAL promotion -- first
+once the witness runs red-then-green, not before -- the right disposition, or does the med -> high
+PRE-TABLE CHECK -- #520 alphatbinegsel, ACCEPT ROWS (sessions 4-6)
+Written BEFORE table 1 ran; this file's mtime is the order proof.
+Seat: Opus 5 measuring seat.  Date: 2026-09-10.
+
+BASELINE NAMED
+  Baseline = the round's post-fix working set, i.e. GXEMUL-SEC/src/cpus/cpu_alpha_palcode.c
+  as it stands uncommitted (HEAD 7d7e055 + the #520 one-line fix).
+  Clone: /tmp/gx520 (relocatable cp -a of the build tree).
+  cmp /tmp/gx520/src/cpus/cpu_alpha_palcode.c  GXEMUL-SEC/src/cpus/cpu_alpha_palcode.c -> IDENTICAL
+  [ /tmp/gx520/gxemul -nt /tmp/gx520/src/cpus/cpu_alpha_palcode.c ] -> BINARY FRESH
+  Baseline binary is rebuilt in the clone as leg 1 of the table (BASE), which doubles
+  as the freshness proof.
+  NO project build tree is written: build/, build-asan/ and /tmp/gxsec-build are
+  untouched, and GXEMUL-SEC/src is untouched.  Only GXEMUL-SEC/regress/alpha_tbi_probe.py
+  (the detector, this round's own deliverable) and this artifacts dir are written on
+  the project side.
+
+THE DIFF UNDER TEST (one executable line)
+  -  if (a0 >= 1)
+  +  if ((int64_t)a0 >= 1 && (int64_t)a0 <= 3)
+        cpu->invalidate_translation_caches(cpu, a1, INVALIDATE_VADDR);
+     else
+        cpu->invalidate_translation_caches(cpu, 0, INVALIDATE_ALL);
+
+SIBLING PARITY  -- compare the two arms' observable channels
+  arm S (selective, INVALIDATE_VADDR, addr=a1): flushes ONLY the entry whose
+        vaddr_page matches a1's page.  Observable: an unrelated warmed page keeps
+        its stale translation.
+  arm C (conservative, INVALIDATE_ALL, addr=0): flushes every valid entry.
+        Observable: an unrelated warmed page loses its translation and re-walks.
+
+  ASYMMETRY 1, and it is the reason these rows exist: the SHIPPED 7-row witness has
+  NO row that can tell arm S from arm C.  Every one of its rows observes only the
+  TARGET page, and the target is flushed by both arms.  Rows owed: at least one row
+  observing a NON-target page, per side of each bound.
+
+  ASYMMETRY 2, and it is a row the 3-row design does not contain.
+  The fix's guard is a TWO-SIDED window [1,3].  Enumerating the four sides:
+        lower bound, accept side (a0=1, must be arm S)   -> row "bnd lo"    PLANNED
+        lower bound, reject side (a0=0, must be arm C)   -> NO ROW PLANNED  <-- GAP
+        upper bound, accept side (a0=3, must be arm S)   -> row "bnd hi"    PLANNED
+        upper bound, reject side (a0=4, must be arm C)   -> row "bnd out"   PLANNED
+  Three of the four sides are covered.  The missing one admits the clause-(d) mutant
+  `>= 1' -> `>= 0' (a bound RELAXED -- squarely inside the (d) enumeration), which is
+  PREDICTED to be a CLEAN SWEEP of the 10-row detector: a0=0 is the only selector
+  whose arm it changes, and no row drives a0=0.
+  DISPOSITION: build it (M_D) and MEASURE.  If it sweeps, that is an L2 floor breach,
+  and the row is added and re-measured IN-ROUND rather than filed.
+  This instantiates the near/far-bound lesson one level down: an accept row pins the
+  bound it SITS ON, so a window needs a row on each side of each bound.  Counting
+  rows is not the same as counting sides.
+
+CLAIM -> ROW  (added comment sentences asserting an observable consequence)
+  "A guest TBIA/TBIAP therefore flushed ONE page and left every other cached
+   translation live."
+      -> rows "tbia obs", "tbiap obs" (shipped) observe the TARGET page only.  The
+         "left every other cached translation live" half was rowed by NOTHING until
+         these accept rows; "bnd lo"/"bnd hi" are what observe an OTHER page.
+  "1, 2 and 3 are the only selective ops ... 0 and 4.. are undefined and fall to the
+   conservative arm with the negatives."
+      -> a0=1 "bnd lo"; a0=2 "pos obs" (shipped, but see the vacuity note below --
+         it cannot see which arm ran); a0=3 "bnd hi"; a0=4 "bnd out";
+         a0=0 OWED (asymmetry 2); a0=-1/-2 "tbiap obs"/"tbia obs".
+  "Over-invalidation cannot serve a stale translation; under-invalidation can."
+      -> N/A with reason: a statement about the SAFETY ORDERING of the two arms, not
+         about an observable of this build.  No row owed.
+  "both map to INVALIDATE_ALL -- EXACT for -2 and CONSERVATIVE for -1"
+      -> NO ROW POSSIBLE, stated rather than glossed: this model's translation cache
+         carries no ASM/ASN metadata, so -1 and -2 are INDISTINGUISHABLE by any probe
+         against this model.  A row claiming to separate them would be vacuous by
+         construction.
+  "NO ANNOUNCE, deliberately"
+      -> an absence claim; discharged by reading the hunk (no debugmsg/fatal added),
+         not by a row.  N/A with reason recorded.
+
+GUARD FIELD vs BODY FIELD
+  guard predicate reads:  a0            (only)
+  guarded body reads:     a1, INVALIDATE_VADDR      (arm S)
+                          literal 0, INVALIDATE_ALL (arm C)
+  THEY DIFFER: the guard reads a0 and the body reads a1.  Both are guest registers
+  written by the guest immediately before CALL_PAL, at independent sites, so a
+  DISAGREEING state (a0 inside [1,3] while a1 names an unexpected page, a1=0
+  included) is freely reachable.
+  Body-induced partition of a1: NONE -- the body does not TEST a1, it passes it as an
+  argument.  Under the joint-cell rule, a value the body never tests as a case is
+  clause-(e) DISCLOSURE, not floor.
+  DISCLOSED, and measured rather than argued: the conjunct `&& a1 != 0' is predicted
+  to escape, because every row drives a1=0x6000 on the selective arm, and the two
+  negative-selector rows that do set a1=0 take arm C, where a1 is ignored.  Built as
+  M_E.  The direction of the resulting error is CONSERVATIVE (tbi(1,0) would
+  over-invalidate), so it is coverage debt rather than a live defect -- recorded
+  either way.
+
+CHANNEL  -- per row: the mutant it kills, and the observable that differs under it
+  row        mutant killed                      observable that differs under it
+  ---------  ---------------------------------  -----------------------------------
+  bnd lo     `>= 1' -> `>= 2'                   obs Y (VA 0x4000): VAL_C -> VAL_D
+                                                (a0=1 wrongly takes arm C, Y flushed)
+  bnd hi     `<= 3' -> `<= 2'                   obs Y: VAL_C -> VAL_D
+                                                (a0=3 wrongly takes arm C, Y flushed)
+  bnd out    `<= 3' -> `<= 4'                   obs Y: VAL_D -> VAL_C
+                                                (a0=4 wrongly takes arm S, Y spared)
+  bnd zero   `>= 1' -> `>= 0'                   obs Y: VAL_D -> VAL_C
+             [ROW OWED -- asymmetry 2]          (a0=0 wrongly takes arm S, Y spared)
+
+  Each named channel CAN vary under its named mutant, because obs Y is the one cell
+  the two arms disagree about.  obs X is a CONTROL: it is VAL_F under BOTH arms by
+  construction, so no row rests on it varying, and it is deliberately not the
+  discriminator.  It is carried in the row so that a session which silently failed to
+  run, or failed to invalidate the target at all, cannot present as green.
+
+  VACUITY NOTE ON A SHIPPED ROW: "pos obs" (a0=2) names no mutant it can kill.  Its
+  channel -- the target page's own value -- does not vary between the arms, so it
+  cannot see any bound edit.  It is a liveness/positive control, not a bound row,
+  which is precisely why sessions 4-6 are owed.  Recorded here rather than silently
+  relied on.
+
+TABLE PLAN  (predictions, to be compared against measurement)
+  BASE   the fix, unmutated                        predict 10/10
+  M_A    `>= 1' -> `>= 2'                          predict  9/10, kills "bnd lo"
+  M_B    `<= 3' -> `<= 2'                          predict  9/10, kills "bnd hi"
+  M_C    `<= 3' -> `<= 4'                          predict  9/10, kills "bnd out"
+  HEAD   `if (a0 >= 1)' (null medium, 7d7e055)     predict  7/10, kills "tbia obs",
+                                                   "tbiap obs", "bnd out"
+  M_D    `>= 1' -> `>= 0'   (the predicted SWEEP)  predict 10/10 -> floor breach
+  M_E    `&& a1 != 0' appended (disclosed joint)   predict 10/10 -> clause (e) debt
+
+  Every mutant is applied by literal text replacement, with MUTANT-TEXT-NOT-FOUND
+  treated as a hard FAIL, so each mutant doubles as a presence pin on the fix's text.
+#520 alphatbinegsel -- KILL TABLE RESULTS
+Measured 2026-09-10 by the Opus 5 measuring seat, in the scratch clone /tmp/gx520.
+PRETABLE.out is the PREDICTION, written before table 1 ran; this file is the
+MEASUREMENT.  PRETABLE.out is deliberately NOT edited after the fact -- its mtime
+is the order proof, and a prediction rewritten to match its outcome is worthless.
+
+WHAT WAS MUTATED, in every case by literal text replacement of
+    (int64_t)a0 >= 1 && (int64_t)a0 <= 3
+with MUTANT-TEXT-NOT-FOUND a hard failure, so every leg doubles as a presence pin:
+  M_A   (int64_t)a0 >= 2 && (int64_t)a0 <= 3            lower bound raised
+  M_B   (int64_t)a0 >= 1 && (int64_t)a0 <= 2            upper bound lowered
+  M_C   (int64_t)a0 >= 1 && (int64_t)a0 <= 4            upper bound raised
+  M_D   (int64_t)a0 >= 0 && (int64_t)a0 <= 3            lower bound lowered
+  M_E   ... && a1 != 0                                  conjunct on the body's lvalue
+  M_F   ... && a0 != 2                                  window excludes its interior
+  HEAD  whole-file pre-fix source from commit 7d7e055   the null medium
+
+TABLE 1 -- the 10-row detector (7 witness rows + the 3 rows as designed)
+Logs: t1/  (SCORES.txt, probe_<leg>.raw, build_<leg>.log, mutate_<leg>.txt)
+Instrument: t1/alpha_tbi_probe.frozen.py
+
+  leg    score   rows reddened                         predicted   verdict
+  BASE   10/10   --                                    10/10       AS PREDICTED
+  M_A     9/10   bnd lo                                 9/10       AS PREDICTED
+  M_B     9/10   bnd hi                                 9/10       AS PREDICTED
+  M_C     9/10   bnd out                                9/10       AS PREDICTED
+  HEAD    7/10   tbia obs, tbiap obs, bnd out           7/10       AS PREDICTED
+  M_D    10/10   NONE -- TOTAL ESCAPE                   sweep       AS PREDICTED
+  M_E    10/10   NONE -- TOTAL ESCAPE                   sweep       AS PREDICTED
+  RESTORED 10/10 --                                                 clone verified
+
+  M_D and M_E are not merely equal in score.  Their probe output is BYTE-IDENTICAL
+  to BASE's apart from the label line:
+      diff <(tail -n +2 t1/probe_BASE.raw) <(tail -n +2 t1/probe_M_D.raw)  -> empty
+      diff <(tail -n +2 t1/probe_BASE.raw) <(tail -n +2 t1/probe_M_E.raw)  -> empty
+  The 10-row detector cannot see either edit at all.
+
+DISPOSITION OF THE TWO ESCAPES
+  M_D is a VACUITY-FLOOR clause-(d) breach: `>= 1' -> `>= 0' is a BOUND RELAXED,
+  which the clause names explicitly, and it swept a detector that had just come
+  back clean.  The floor grades that L2 -- repair IN-ROUND however late it is
+  found -- so a row was added and everything re-measured rather than filed.
+  Cause: the guard is a two-sided window and therefore has FOUR sides, but the
+  3-row design covered three of them.  a0=0 (the lower bound's REJECT side) had
+  no row.  Counting rows is not the same as counting sides.
+
+  M_E is clause-(e) coverage debt under the joint-cell rule, not a floor breach:
+  the guarded body does not TEST a1, it passes it as an argument, so a1 induces
+  no partition and `&& a1 != 0' is a disclosed joint rather than an owed cell.
+  It was closed anyway, because the round was re-tabling for M_D regardless and
+  the class-closure amendment says to close the space in ONE diff rather than
+  buy one cell per pass.  Direction of the error it admits is CONSERVATIVE
+  (tbi(1,0) would over-invalidate), so it was never a live defect.
+
+TABLE 2 -- the 13-row closed detector
+Logs: t2/    Instrument: t2/alpha_tbi_probe.frozen.py
+Rows added: bnd zero (a0=0), bnd mid (a0=2), bnd a1z (a0=2 with a1=0, target VPN 0)
+
+  leg    score   rows reddened
+  BASE   13/13   --
+  M_A    12/13   bnd lo
+  M_B    12/13   bnd hi
+  M_C    12/13   bnd out
+  M_D    12/13   bnd zero          <-- the table-1 sweep, now killed
+  M_E    12/13   bnd a1z           <-- the table-1 sweep, now killed
+  M_F    11/13   bnd mid, bnd a1z
+  HEAD   10/13   tbia obs, tbiap obs, bnd out
+  RESTORED 13/13
+
+  EVERY ROW HAS A MEASURED KILL.  No row ships green-under-everything:
+      tbia obs, tbiap obs  <- HEAD
+      bnd lo               <- M_A
+      bnd hi               <- M_B
+      bnd out              <- M_C, HEAD
+      bnd zero             <- M_D
+      bnd mid              <- M_F
+      bnd a1z              <- M_E, M_F
+  The shipped row "pos obs" (a0=2, target page only) is killed by NOTHING here and
+  is recorded as a liveness/positive control rather than a bound row -- its channel
+  does not vary between the two arms, so it cannot see a bound edit.  That is the
+  reason these accept rows were owed in the first place, and it is stated rather
+  than left for a later reader to discover.
+
+  KNOWN REDUNDANCY, recorded rather than glossed: M_F reddens two rows, because
+  "bnd a1z" drives a0=2 and M_F excludes a0=2.  This is unavoidable by
+  construction -- an a1-axis row must use SOME selector inside [1,3], and every
+  such selector already has a cell row.  It leaves no hole: bnd mid and bnd a1z
+  each independently kill M_F, and bnd a1z is the only row that kills M_E.
+
+HYGIENE
+  * Every one of the 17 raw probe logs ends in the completion sentinel
+    ALPHATBI_DONE; verified by tail, not by existence.
+  * Every leg in both tables reported build rc=0 AND [ binary -nt source ] FRESH.
+    No leg was measured on a stale binary.
+  * One FROZEN instrument per table (t1/ and t2/ hold the exact probe each ran),
+    so neither comparison spans two versions of the detector.
+  * Sentinel /tmp/gx520/.MUTANT dropped before the first edit and cleared only
+    after the two-part clearance: source cmp CLEAN against GXEMUL-SEC (the repo,
+    never the script's own backup) AND binary FRESH.  Final state: no sentinel,
+    cmp CLEAN, binary FRESH, restored-tree probe 13/13.
+  * NO project build tree was written: build/, build-asan/, est/ and
+    /tmp/gxsec-build were never opened for writing, and GXEMUL-SEC/src is
+    unchanged (git status shows only the three pre-existing held files).
+
+ succeeded in 272ms:
+#ifdef DYNTRANS_INVALIDATE_TC
+/*
+ *  XXX_invalidate_translation_caches():
+ *
+ *  Invalidate all entries matching a specific physical address, a specific
+ *  virtual address, or ALL entries.
+ *
+ *  flags should be one of
+ *	INVALIDATE_PADDR  INVALIDATE_VADDR  or  INVALIDATE_ALL
+ *
+ *  In addition, for INVALIDATE_ALL, INVALIDATE_VADDR_UPPER4 may be set and
+ *  bit 31..28 of addr are used to select the virtual addresses to invalidate.
+ *  (This is useful for PowerPC emulation, when segment registers are updated.)
+ *
+ *  In the case when all translations are invalidated, paddr doesn't need
+ *  to be supplied.
+ *
+ *  NOTE/TODO: When invalidating a virtual address, it is only cleared from
+ *             the quick translation array, not from the linear
+ *             vph_tlb_entry[] array.  Hopefully this is enough anyway.
+ */
+void DYNTRANS_INVALIDATE_TC(struct cpu *cpu, uint64_t addr, int flags)
+{
+	int r;
+#ifdef MODE32
+	uint32_t
+#else
+	uint64_t
+#endif
+	    addr_page = addr & ~(DYNTRANS_PAGESIZE - 1);
+
+	/*  fatal("invalidate(): ");  */
+
+	/*  Quick case for _one_ virtual addresses: see note above.  */
+	if (flags & INVALIDATE_VADDR) {
+		/*  fatal("vaddr 0x%08x\n", (int)addr_page);  */
+
+#ifdef MODE32
+		DYNTRANS_INVALIDATE_TLB_ENTRY(cpu, addr_page, flags);
+#else
+		// In principle, there can be multiple entries, and they must
+		// be invalidated based on the bits that matter. For example,
+		// using vaddr 0x00A0000012345678 and 0x00B000001234567c
+		// actually point to the same physical page, and if then
+		// the virtual address 0x0000000012345000 is to be invalidated,
+		// then both of those should be invalidated!
+		int n = 0;
+		for (r=0; r<DYNTRANS_MAX_VPH_TLB_ENTRIES; r++)
+			if (cpu->cd.DYNTRANS_ARCH.vph_tlb_entry[r].valid &&
+			    (cpu->cd.DYNTRANS_ARCH.vph_tlb_entry[r].vaddr_page
+			    & cpu->vaddr_mask) == (addr_page & cpu->vaddr_mask)) {
+				DYNTRANS_INVALIDATE_TLB_ENTRY(cpu, cpu->cd.DYNTRANS_ARCH.vph_tlb_entry[r].vaddr_page, flags);
+				n ++;
+			}
+
+		if (n > 1)
+			debug("[ DYNTRANS_INVALIDATE_TC: CACHE COLLISION vaddr 0x%016llx! ]\n",
+				(long long)addr_page);
+#endif
+
+		return;
+	}
+
+	/*  Invalidate everything:  */
+#ifdef DYNTRANS_PPC
+	if (flags & INVALIDATE_ALL && flags & INVALIDATE_VADDR_UPPER4) {
+		/*  fatal("all, upper4 (PowerPC segment)\n");  */
+		for (r=0; r<DYNTRANS_MAX_VPH_TLB_ENTRIES; r++) {
+			if (cpu->cd.DYNTRANS_ARCH.vph_tlb_entry[r].valid &&
+			    (cpu->cd.DYNTRANS_ARCH.vph_tlb_entry[r].vaddr_page
+			    & 0xf0000000) == addr_page) {
+				DYNTRANS_INVALIDATE_TLB_ENTRY(cpu, cpu->cd.
+				    DYNTRANS_ARCH.vph_tlb_entry[r].vaddr_page,
+				    0);
+				// Not needed: DYNTRANS_INVALIDATE_TLB_ENTRY should
+				// set valid to 0 anyway.
+				// cpu->cd.DYNTRANS_ARCH.vph_tlb_entry[r].valid=0;
+			}
+		}
+		return;
+	}
+#endif
+	if (flags & INVALIDATE_ALL) {
+		/*  fatal("all\n");  */
+		for (r=0; r<DYNTRANS_MAX_VPH_TLB_ENTRIES; r++) {
+			if (cpu->cd.DYNTRANS_ARCH.vph_tlb_entry[r].valid) {
+				DYNTRANS_INVALIDATE_TLB_ENTRY(cpu, cpu->cd.
+				    DYNTRANS_ARCH.vph_tlb_entry[r].vaddr_page,
+				    0);
+				// Not needed: DYNTRANS_INVALIDATE_TLB_ENTRY should
+				// set valid to 0 anyway.
+				// cpu->cd.DYNTRANS_ARCH.vph_tlb_entry[r].valid=0;
+			}
+		}
+		return;
+	}
+
+	/*  Invalidate a physical page:  */
+
+	if (!(flags & INVALIDATE_PADDR))
+		fatal("HUH? Invalidate: Not vaddr, all, or paddr?\n");
+
+	/*  fatal("addr 0x%08x\n", (int)addr_page);  */
+
+	for (r=0; r<DYNTRANS_MAX_VPH_TLB_ENTRIES; r++) {
+		if (cpu->cd.DYNTRANS_ARCH.vph_tlb_entry[r].valid && addr_page
+		    == cpu->cd.DYNTRANS_ARCH.vph_tlb_entry[r].paddr_page) {
+			DYNTRANS_INVALIDATE_TLB_ENTRY(cpu,
+			    cpu->cd.DYNTRANS_ARCH.vph_tlb_entry[r].vaddr_page,
+			    flags);
+			if (flags & JUST_MARK_AS_NON_WRITABLE)
+				cpu->cd.DYNTRANS_ARCH.vph_tlb_entry[r]
+				    .writeflag = 0;
+			else
+				cpu->cd.DYNTRANS_ARCH.vph_tlb_entry[r]
+				    .valid = 0;
+		}
+	}
+}
+#endif	/*  DYNTRANS_INVALIDATE_TC  */
+
+		    that matters, and the addition licence forbids one with no
+		    measured delta.  */
+		if ((int64_t)a0 >= 1 && (int64_t)a0 <= 3)
+			cpu->invalidate_translation_caches(cpu, a1, INVALIDATE_VADDR);
+		else
+			cpu->invalidate_translation_caches(cpu, 0, INVALIDATE_ALL);
+		break;
+	case 0x34:	/*  PAL_OSF1_wrent (Write System Entry Address)  */
+		/*  a0 = new vector, a1 = vector selector  */
+		if (a1 < N_ALPHA_KENTRY)
+			cpu->cd.alpha.kentry[a1] = a0;
+		else {
+			fatal("[ Alpha PALcode: PAL_OSF1_wrent: attempt to "
+			    "write to non-implemented selector %i ]\n",
+			    (int)a1);
+			cpu->running = 0;
+		}
+		break;
+	case 0x35:	/*  PAL_OSF1_swpipl  */
+		/*  a0 = new ipl, v0 = return old ipl  */
+		cpu->cd.alpha.r[ALPHA_V0] = cpu->cd.alpha.ps & ALPHA_PSL_IPL_MASK;
+		cpu->cd.alpha.ps &= ~ALPHA_PSL_IPL_MASK;
+		cpu->cd.alpha.ps |= (a0 & ALPHA_PSL_IPL_MASK);
+		break;
+	case 0x36:	/*  PAL_rdps  */
+		cpu->cd.alpha.r[ALPHA_V0] = cpu->cd.alpha.ps;
+		break;
+	case 0x37:	/*  PAL_OSF1_wrkgp  */
+		cpu->cd.alpha.kgp = a0;
+		break;
+#if 0
+	case 0x38:	/*  PAL_OSF1_wrusp  */
+		/*  a0 = value  */
+		cpu->cd.alpha.pcb.apcb_usp = a0;
+		break;
+	case 0x3a:	/*  PAL_OSF1_rdusp  */
+		/*  return: v0 = value  */
+		cpu->cd.alpha.r[ALPHA_V0] = cpu->cd.alpha.pcb.apcb_usp;
+		break;
+#endif
+	case 0x3c:	/*  PAL_whami  */
+		/*  Returns CPU id in v0:  */
+		cpu->cd.alpha.r[ALPHA_V0] = cpu->cpu_id;
+		break;
+#if 0
+	case 0x81:	/*  PAL_bugchk  */
+		cpu->running = 0;
+		break;
+	case 0x83:	/*  PAL_OSF1_syscall  */
+		fatal("[ Alpha PALcode: syscall, but no syscall handler ]\n");
+		cpu->running = 0;
+		break;
+#endif
+	case 0x86:	/*  PAL_imb  */
+		/*  TODO  */
+		break;
+#if 0
+	case 0x3fffffc:
+		fatal("[ Alpha: KENTRY not set! Halting. ]");
+		cpu->running = 0;
+		break;
+	case 0x3fffffd:
+		fatal("[ Alpha PALcode: Fixup: TODO ]\n");
+		/*  Return from the fixup call.  */
+		cpu->cd.alpha.r[ALPHA_V0] = 0;	/*  Success?  */
+		cpu->pc = cpu->cd.alpha.r[ALPHA_RA];
+		break;
+#endif
+	case 0x3fffffe:
+		alpha_prom_call(cpu);
+		break;
+	default:fatal("[ Alpha PALcode 0x%x unimplemented! ]\n", palcode);
+		cpu->running = 0;
+	}
+
+	/*
+	 *  Many PALcode instructions in the Alpha manual (and in NetBSD/Alpha
+	 *  source code) are described with "clobbers t0, t8-t11", some also
+	 *  with a0, and some also with a1 included.
+	 *
+	 *  However, it's easier to just leave the registers as they are.
+	 */
+}
+
+void fatal(const char *fmt, ...)
+{
+	va_list argp;
+
+	va_start(argp, fmt);
+	va_debug(argp, fmt);
+	va_end(argp);
+}
+
+
+void debugmsg_set_verbosity_level(int subsystem, int verbosity)
+{
+	if (subsystem != SUBSYS_ALL)
+		debugmsg_current_verbosity[subsystem] = verbosity;
+	else
+		for (size_t i = 0; i < debugmsg_nr_of_subsystems; ++i)
+#ifndef LS_IGNORE_OFFSET
+static void LS_GENERIC_N(struct cpu *cpu, struct alpha_instr_call *ic)
+{
+#ifdef LS_B
+	unsigned char data[1];
+#endif
+#ifdef LS_W
+	unsigned char data[2];
+#endif
+#ifdef LS_L
+	unsigned char data[4];
+#endif
+#ifdef LS_Q
+	unsigned char data[8];
+#endif
+	uint64_t addr = *((uint64_t *)ic->arg[1]);
+	uint64_t data_x;
+
+	addr += (int32_t)ic->arg[2];
+#ifdef LS_UNALIGNED
+	addr &= ~7;
+#endif
+
+#ifdef LS_LOAD
+	/*  Load:  */
+	if (!cpu->memory_rw(cpu, cpu->mem, addr, data, sizeof(data),
+	    MEM_READ, CACHE_DATA)) {
+		/*  #215: (Codex/Fable) memory_rw() returned 0 = the translator
+		    already signalled a fault (cf. #194's no-translation return);
+		    abandon the access instead of exit()ing the host.  */
+		return;
+	}
+
+	data_x = data[0];
+#ifndef LS_B
+	data_x += (data[1] << 8);
+#ifndef LS_W
+	data_x += (data[2] << 16);
+	data_x += ((uint64_t)data[3] << 24);
+#ifdef LS_L
+	data_x = (int64_t)(int32_t)data_x;
+#endif
+#ifndef LS_L
+	data_x += ((uint64_t)data[4] << 32);
+	data_x += ((uint64_t)data[5] << 40);
+	data_x += ((uint64_t)data[6] << 48);
+	data_x += ((uint64_t)data[7] << 56);
+#endif
+#endif
+#endif
+	*((uint64_t *)ic->arg[0]) = data_x;
+#else
+	/*  Store:  */
+	data_x = *((uint64_t *)ic->arg[0]);
+	data[0] = data_x;
+#ifndef LS_B
+	data[1] = data_x >> 8;
+#ifndef LS_W
+	data[2] = data_x >> 16;
+	data[3] = data_x >> 24;
+#ifndef LS_L
+	data[4] = data_x >> 32;
+	data[5] = data_x >> 40;
+	data[6] = data_x >> 48;
+	data[7] = data_x >> 56;
+#endif
+#endif
+#endif
+
+	if (!cpu->memory_rw(cpu, cpu->mem, addr, data, sizeof(data),
+	    MEM_WRITE, CACHE_DATA)) {
+		/*  #215: (Codex/Fable) memory_rw() returned 0 = the translator
+		    already signalled a fault (cf. #194's no-translation return);
+		    abandon the access instead of exit()ing the host.  */
+		return;
+	}
+
+#ifdef LS_LLSC
+#ifndef LS_LOAD
+	*((uint64_t *)ic->arg[0]) = 1;
+#endif
+#endif
+
+#endif
+}
+#endif
+
+
+static void LS_N(struct cpu *cpu, struct alpha_instr_call *ic)
+{
+	unsigned char *page;
+	uint64_t addr = (*((uint64_t *)ic->arg[1]))
+#ifndef LS_IGNORE_OFFSET
+	    + (int32_t)ic->arg[2]
+#endif
+	    ;
+
+	const uint32_t mask1 = (1 << DYNTRANS_L1N) - 1;
+	const uint32_t mask2 = (1 << DYNTRANS_L2N) - 1;
+	const uint32_t mask3 = (1 << DYNTRANS_L3N) - 1;
+	uint32_t x1, x2, x3, c;
+	struct DYNTRANS_L2_64_TABLE *l2;
+	struct DYNTRANS_L3_64_TABLE *l3;
+	x1 = (addr >> (64-DYNTRANS_L1N)) & mask1;
+	x2 = (addr >> (64-DYNTRANS_L1N-DYNTRANS_L2N)) & mask2;
+	x3 = (addr >> (64-DYNTRANS_L1N-DYNTRANS_L2N-DYNTRANS_L3N)) & mask3;
+	/*  fatal("X3: addr=%016" PRIx64" x1=%x x2=%x x3=%x\n",
+	    (uint64_t) addr, (int) x1, (int) x2, (int) x3);  */
+	l2 = cpu->cd.DYNTRANS_ARCH.l1_64[x1];
+	/*  fatal("  l2 = %p\n", l2);  */
+	l3 = l2->l3[x2];
+	/*  fatal("  l3 = %p\n", l3);  */
+					} else {
+						/*  #155: (Codex/Fable)
+						    don't install dyntrans
+						    fast-path access to a
+						    device page that is not
+						    fully backed; keep it on
+						    the bounded slow path.  */
+						host_addr = NULL;
+					}
+
+					if (host_addr != NULL)
+						cpu->update_translation_table(
+						    cpu, vaddr & ~offset_mask,
+						    host_addr, wf,
+						    orig_paddr & ~offset_mask);
+				}
+
+				res = 0;
+				if (!no_exceptions || (mem->devices[i].flags &
+				    DM_READS_HAVE_NO_SIDE_EFFECTS)) {
+					bool running_before_device_access = cpu->running;
+					res = mem->devices[i].f(cpu, mem, paddr,
+					    data, len, writeflag,
+					    mem->devices[i].extra);
+
+					if (running_before_device_access && !cpu->running)
+						return MEMORY_ACCESS_FAILED;
+				}
+
+				if (res == 0)
+					res = -1;
+
+				/*
+				 *  If accessing the memory mapped device
+				 *  failed, then return with an exception.
+				 *  (Architecture specific.)
+				 */
+				if (res <= 0 && !no_exceptions) {
+					debug("[ %s device '%s' addr %08lx "
+					    "failed ]\n", writeflag?
+					    "writing to" : "reading from",
+					    mem->devices[i].name, (long)paddr);
+#ifdef MEM_MIPS
+					mips_cpu_exception(cpu,
+					    cache == CACHE_INSTRUCTION?
+					    EXCEPTION_IBE : EXCEPTION_DBE,
+					    0, vaddr, 0, 0, 0, 0);
+#endif
+#ifdef MEM_M88K
+					/*  TODO: This is enough for
+					    OpenBSD/mvme88k's badaddr()
+					    implementation... but the
+					    faulting address should probably
+					    be included somewhere too!  */
+					m88k_exception(cpu, cache == CACHE_INSTRUCTION
+					    ? M88K_EXCEPTION_INSTRUCTION_ACCESS
+					    : M88K_EXCEPTION_DATA_ACCESS, 0);
+#endif
+					return MEMORY_ACCESS_FAILED;
+				}
+				goto do_return_ok;
+			}
+
+			if (paddr < mem->devices[i].baseaddr)
+				end = i - 1;
+			if (paddr >= mem->devices[i].endaddr)
+				start = i + 1;
+src\machines\machine_alpha.c
+src\include\cpu_alpha.h
+src\cpus\tmp_alpha_tail.c
+src\cpus\tmp_alpha_misc.c
+src\cpus\tmp_alpha_head.c
+src\cpus\memory_alpha.c
+src\cpus\generate_alpha_misc.c
+src\cpus\cpu_dyntrans.c
+src\cpus\cpu_alpha_palcode.c
+src\cpus\cpu_alpha_instr_loadstore.c
+src\cpus\cpu_alpha_instr_alu.c
+src\cpus\cpu_alpha_instr.c
+src\cpus\cpu_alpha.c
+src\include\thirdparty\alpha_rpb.h
+src\include\thirdparty\alpha_prom.h
+src\include\thirdparty\alpha_lcareg.h
+src\include\thirdparty\alpha_cpu.h
+src\include\thirdparty\alpha_autoconf.h
+
+web search: "Alpha" "TBI" "Argument" "R16" ...
+web search: 
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "Get-Content -LiteralPath src/include/cpu.h | Select-Object -Skip 71 -First 103; rg -n -i 'asm|asn|pte|invalidate|exception' src/cpus/memory_alpha.c; rg -n -i 'undefined|unsupported|reserved|ignored|ignore|no.op|unimplemented|warned|announc' src/cpus -g '*alpha*.c'; rg -n -i 'fix.design|silent|two.sided|signed|preserv|announce' tools/pipeline/ADJUDICATION_20260909.md; rg --files regress/artifacts/alphatbinegsel | rg '(design|rul|panel|decision|assess)'; rg --files --hidden -g '*.md' -g '"'!**/.git/**'"' | rg '(AGENT|CLAUDE|RULE|POLIC|LICEN|DEESC|ADJUD|govern|vacu)'" in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+ succeeded in 272ms:
+ */
+#define DYNTRANS_MISC_DECLARATIONS(arch,ARCH,addrtype)  struct \
+	arch ## _instr_call {					\
+		void	(*f)(struct cpu *, struct arch ## _instr_call *); \
+		uintptr_t arg[ARCH ## _N_IC_ARGS];			\
+	};								\
+									\
+	/*  Translation cache struct for each physical page:  */	\
+	struct arch ## _tc_physpage {					\
+		struct arch ## _instr_call ics[ARCH ## _IC_ENTRIES_PER_PAGE+2];\
+		uint32_t	next_ofs;	/*  (0 for end of chain)  */ \
+		uint32_t	translations_bitmap;			\
+		uint32_t	translation_ranges_ofs;			\
+		addrtype	physaddr;				\
+	};								\
+									\
+	struct arch ## _vpg_tlb_entry {					\
+		uint8_t		valid;					\
+		uint8_t		writeflag;				\
+		addrtype	vaddr_page;				\
+		addrtype	paddr_page;				\
+		unsigned char	*host_page;				\
+	};
+
+#define	DYNTRANS_MISC64_DECLARATIONS(arch,ARCH,tlbindextype)		\
+	struct arch ## _l3_64_table {					\
+		unsigned char	*host_load[1 << ARCH ## _L3N];		\
+		unsigned char	*host_store[1 << ARCH ## _L3N];		\
+		uint64_t	phys_addr[1 << ARCH ## _L3N];		\
+		tlbindextype	vaddr_to_tlbindex[1 << ARCH ## _L3N];	\
+		struct arch ## _tc_physpage *phys_page[1 << ARCH ## _L3N]; \
+		struct arch ## _l3_64_table	*next;			\
+		int		refcount;				\
+	};								\
+	struct arch ## _l2_64_table {					\
+		struct arch ## _l3_64_table	*l3[1 << ARCH ## _L2N];	\
+		struct arch ## _l2_64_table	*next;			\
+		int				refcount;		\
+	};
+
+
+/*
+ *  This structure contains a list of ranges within an emulated
+ *  physical page that contain translatable code.
+ */
+#define	PHYSPAGE_RANGES_ENTRIES_PER_LIST		20
+struct physpage_ranges {
+	uint32_t	next_ofs;	/*  0 for end of chain  */
+	uint32_t	n_entries_used;
+	uint16_t	base[PHYSPAGE_RANGES_ENTRIES_PER_LIST];
+	uint16_t	length[PHYSPAGE_RANGES_ENTRIES_PER_LIST];
+	uint16_t	count[PHYSPAGE_RANGES_ENTRIES_PER_LIST];
+};
+
+
+/*
+ *  Dyntrans "Instruction Translation Cache":
+ *
+ *  cur_physpage is a pointer to the current physpage. (It _HAPPENS_ to
+ *  be the same as cur_ic_page, because all the instrcalls should be placed
+ *  first in the physpage struct!)
+ *
+ *  cur_ic_page is a pointer to an array of xxx_IC_ENTRIES_PER_PAGE
+ *  instruction call entries.
+ *
+ *  next_ic points to the next such instruction call to be executed.
+ *
+ *  combination_check, when set to non-NULL, is executed automatically after
+ *  an instruction has been translated. (It check for combinations of
+ *  instructions; low_addr is the offset of the translated instruction in the
+ *  current page, NOT shifted right.)
+ */
+#define DYNTRANS_ITC(arch)	struct arch ## _tc_physpage *cur_physpage;  \
+				struct arch ## _instr_call  *cur_ic_page;   \
+				struct arch ## _instr_call  *next_ic;       \
+				struct arch ## _tc_physpage *physpage_template;\
+				void (*combination_check)(struct cpu *,     \
+				    struct arch ## _instr_call *, int low_addr);
+
+/*
+ *  Virtual -> physical -> host address translation TLB entries:
+ *  ------------------------------------------------------------
+ *
+ *  Regardless of whether 32-bit or 64-bit address translation is used, the
+ *  same TLB entry structure is used.
+ */
+#define	VPH_TLBS(arch,ARCH)						\
+	struct arch ## _vpg_tlb_entry					\
+	    vph_tlb_entry[ARCH ## _MAX_VPH_TLB_ENTRIES];
+
+/*
+ *  32-bit dyntrans emulated Virtual -> physical -> host address translation:
+ *  -------------------------------------------------------------------------
+ *
+ *  This stuff assumes that 4 KB pages are used. 20 bits to select a page
+ *  means just 1 M entries needed. This is small enough that a couple of
+ *  full-size tables can fit in virtual memory on modern hosts (both 32-bit
+ *  and 64-bit hosts). :-)
+ *
+ *  Usage: e.g. VPH32(arm,ARM)
+ *           or VPH32(sparc,SPARC)
+ *
+ *  The vph_tlb_entry entries are cpu dependent tlb entries.
+96:	uint64_t addr, pte1, pte2, pte3;
+116:	pte1 = *(uint64_t *)(pt_entry_ptr);
+117:	pte1 = LE64_TO_HOST(pte1);
+119:	// debug("pte1 = 0x%016"PRIx64"\n", pte1);
+120:	if (!(pte1 & ALPHA_PTE_VALID)) {
+122:		// IF level1_pte<KRE> EQ 0 THEN
+127:		// fatal("TODO: pte1 not valid.\n");
+131:	addr = ((pte1 >> 32) << ALPHA_PAGESHIFT) + (i2 * sizeof(uint64_t));
+137:	pte2 = *(uint64_t *)(pt_entry_ptr);
+138:	pte2 = LE64_TO_HOST(pte2);
+140:	// debug("pte2 = 0x%016"PRIx64"\n", pte2);
+141:	if (!(pte2 & ALPHA_PTE_VALID)) {
+143:		// IF level2_pte<KRE> EQ 0 THEN
+148:		fatal("TODO: pte2 not valid.\n");
+152:	addr = ((pte2 >> 32) << ALPHA_PAGESHIFT) + (i3 * sizeof(uint64_t));
+158:	pte3 = *(uint64_t *)(pt_entry_ptr);
+159:	pte3 = LE64_TO_HOST(pte3);
+161:	// debug("pte3 = 0x%016"PRIx64"\n", pte3);
+163:	if (!(pte3 & ALPHA_PTE_VALID)) {
+164:		fatal("TODO: pte3 not valid.\n");
+186:	(*return_paddr) = (ALPHA_PTE_TO_PFN(pte3) << pageSizeShift)
+197:	fatal("[ alpha_translate_v2p: 0x%016" PRIx64" wasn't found ]\n", vaddr);
+src/cpus\cpu_alpha_instr_loadstore.c:2: *  Copyright (C) 2005-2018  Anders Gavare.  All rights reserved.
+src/cpus\cpu_alpha_instr_loadstore.c:43:#ifndef LS_IGNORE_OFFSET
+src/cpus\cpu_alpha_instr_loadstore.c:135:#ifndef LS_IGNORE_OFFSET
+src/cpus\generate_alpha_misc.c:2: *  Copyright (C) 2005-2011  Anders Gavare.  All rights reserved.
+src/cpus\generate_alpha_misc.c:273:				printf("#define LS_IGNORE_OFFSET\n");
+src/cpus\generate_alpha_misc.c:318:				printf("#undef LS_IGNORE_OFFSET\n");
+src/cpus\cpu_alpha_instr_alu.c:2: *  Copyright (C) 2005-2011  Anders Gavare.  All rights reserved.
+src/cpus\memory_alpha.c:2: *  Copyright (C) 2006-2021  Anders Gavare.  All rights reserved.
+src/cpus\memory_alpha.c:184:	    still ignored, the protection bits untested, and `return 2' still reports
+src/cpus\cpu_alpha_palcode.c:2: *  Copyright (C) 2005-2021  Anders Gavare.  All rights reserved.
+src/cpus\cpu_alpha_palcode.c:330:		 *  (#520: a0 was ignored -- "a0 is ignored for now. TODO." --
+src/cpus\cpu_alpha_palcode.c:353:		    and 4.. are undefined and fall to the conservative arm with the
+src/cpus\cpu_alpha_palcode.c:364:		    NO ANNOUNCE, deliberately: every selector now takes a
+src/cpus\cpu_alpha_palcode.c:366:		    house latched-announce idiom is for guest-drivable DEFECTS; a
+src/cpus\cpu_alpha_palcode.c:439:	default:fatal("[ Alpha PALcode 0x%x unimplemented! ]\n", palcode);
+src/cpus\cpu_alpha_instr.c:2: *  Copyright (C) 2005-2020  Anders Gavare.  All rights reserved.
+src/cpus\cpu_alpha_instr.c:128: *  arg[0] = ignored
+src/cpus\cpu_alpha_instr.c:708: *  arg[1] = ignored
+src/cpus\cpu_alpha_instr.c:913:		    hint. It is ignored here.  */
+src/cpus\cpu_alpha_instr.c:977:				fatal("[ Alpha: unimplemented function 0x%03x "
+src/cpus\cpu_alpha_instr.c:1030:				fatal("[ Alpha: unimplemented function 0x%03x "
+src/cpus\cpu_alpha_instr.c:1100:				fatal("[ Alpha: unimplemented function 0x%03x "
+src/cpus\cpu_alpha_instr.c:1125:				fatal("[ Alpha: unimplemented function 0x%03x "
+src/cpus\cpu_alpha_instr.c:1149:				fatal("[ Alpha: unimplemented function 0x%03x "
+src/cpus\cpu_alpha_instr.c:1174:				fatal("[ Alpha: unimplemented function 0x%03x "
+src/cpus\cpu_alpha_instr.c:1194:				fatal("[ Alpha: unimplemented function 0x%03x "
+src/cpus\cpu_alpha_instr.c:1315:			fatal("[ UNIMPLEMENTED Alpha opcode 0x%x ]\n", opcode);
+src/cpus\cpu_alpha.c:2: *  Copyright (C) 2005-2021  Anders Gavare.  All rights reserved.
+src/cpus\cpu_alpha.c:390:		default:debug("UNIMPLEMENTED opcode 0x%x func 0x%x\n",
+src/cpus\cpu_alpha.c:421:		default:debug("UNIMPLEMENTED opcode 0x%x func 0x%x\n",
+src/cpus\cpu_alpha.c:478:		default:debug("UNIMPLEMENTED opcode 0x%x func 0x%x\n",
+src/cpus\cpu_alpha.c:498:		default:debug("UNIMPLEMENTED opcode 0x%x func 0x%x\n",
+src/cpus\cpu_alpha.c:526:		default:debug("UNIMPLEMENTED opcode 0x%x func 0x%x\n",
+src/cpus\cpu_alpha.c:540:		default:debug("UNIMPLEMENTED opcode 0x%x func 0x%x\n",
+src/cpus\cpu_alpha.c:565:		default:debug("UNIMPLEMENTED opcode 0x%x func 0x%x\n",
+src/cpus\cpu_alpha.c:663:	default:debug("UNIMPLEMENTED opcode 0x%x\n", opcode);
+src/cpus\tmp_alpha_misc.c:942:#define LS_IGNORE_OFFSET
+src/cpus\tmp_alpha_misc.c:950:#undef LS_IGNORE_OFFSET
+src/cpus\tmp_alpha_misc.c:951:#define LS_IGNORE_OFFSET
+src/cpus\tmp_alpha_misc.c:959:#undef LS_IGNORE_OFFSET
+src/cpus\tmp_alpha_misc.c:960:#define LS_IGNORE_OFFSET
+src/cpus\tmp_alpha_misc.c:968:#undef LS_IGNORE_OFFSET
+src/cpus\tmp_alpha_misc.c:969:#define LS_IGNORE_OFFSET
+src/cpus\tmp_alpha_misc.c:977:#undef LS_IGNORE_OFFSET
+src/cpus\tmp_alpha_misc.c:1014:#define LS_IGNORE_OFFSET
+src/cpus\tmp_alpha_misc.c:1024:#undef LS_IGNORE_OFFSET
+src/cpus\tmp_alpha_misc.c:1025:#define LS_IGNORE_OFFSET
+src/cpus\tmp_alpha_misc.c:1035:#undef LS_IGNORE_OFFSET
+src/cpus\tmp_alpha_misc.c:1036:#define LS_IGNORE_OFFSET
+src/cpus\tmp_alpha_misc.c:1046:#undef LS_IGNORE_OFFSET
+src/cpus\tmp_alpha_misc.c:1047:#define LS_IGNORE_OFFSET
+src/cpus\tmp_alpha_misc.c:1057:#undef LS_IGNORE_OFFSET
+src/cpus\tmp_alpha_misc.c:1076:#define LS_IGNORE_OFFSET
+src/cpus\tmp_alpha_misc.c:1086:#undef LS_IGNORE_OFFSET
+src/cpus\tmp_alpha_misc.c:1087:#define LS_IGNORE_OFFSET
+src/cpus\tmp_alpha_misc.c:1097:#undef LS_IGNORE_OFFSET
+src/cpus\tmp_alpha_misc.c:1120:#define LS_IGNORE_OFFSET
+src/cpus\tmp_alpha_misc.c:1132:#undef LS_IGNORE_OFFSET
+src/cpus\tmp_alpha_misc.c:1133:#define LS_IGNORE_OFFSET
+src/cpus\tmp_alpha_misc.c:1145:#undef LS_IGNORE_OFFSET
+52:    Opus 5, Fable 5           DELIBERATELY NOT FIRED -- preserved for THIS adjudication
+98:are store-first** (`tex ld lo`, `tex ld hi`); the other two are announcement-count rows and fail M8
+100:its two value rows also lose the announcement, so it cannot isolate what I said it isolated.  That
+117:             SELF-CHECKING (it wants `1/11`: the TEX decline once AND all eleven other announces).
+192:*invalidate everything* primitive clearing one page, silently, with a guest reaching stale physical
+200:it: what was verified then was the DISPATCH, and the witness was DESIGNED but NOT BUILT -- codex's
+322:    disposition   member 3 (decline + latched announce) via candidate (b) -- skip the PUT's
+371:**`fbfiqsilent` -- both arms are member 4 ACCEPT, in separate rounds.**  The IRQ arm reads
+374:returns a silent zero, which *"is correct when disabled, but not for every configured state"*.
+491:* **did not implement `alphaswpctxreg`**, though it is one character and fully designed -- `#513` is
+527:**QUESTION Z2 (scope):** codex's prescription is a snapshot MODE announced before the first
+568:terminates"* into *"the interrupt is silently dropped"*.
+570:**Is that an improvement worth shipping, or does it launder a missing feature into a silent one?**
+571:The option set has a member for this -- a bounded, latched announcement that the interrupt was
+572:dropped -- which preserves the diagnostic while removing the termination. **I lean that way and I
+717:| `alphatbinegsel` | high | witness **5/7 → 7/7**, both selectors, attribution control; fix `a0 >= 1 && a0 <= 3` confirmed 4/4; ASM question settled from the manual | a fix-design panel (fired, not yet returned) |
+718:| `lcairqstubkill` | high | **two independent witnesses** (8042 and ns16550); disposition designed with two in-tree transferred warrants | your ruling on whether a partial repair ships — **section Y2** |
+719:| `lcabadval` | high | six-seat panel; fix design in; the manual's own required init is rejected by the code | scope: one round or several — **section Y1** |
+726:converts termination into a silent drop ship?) and `Y4` (am I over-fitting to a manual that arrived
+regress/artifacts/alphatbinegsel\panel_fixdesign_20260908\ollama_minimax.txt
+regress/artifacts/alphatbinegsel\panel_fixdesign_20260908\ollama_kimi.txt
+regress/artifacts/alphatbinegsel\panel_fixdesign_20260908\ollama_glm.txt
+regress/artifacts/alphatbinegsel\panel_fixdesign_20260908\ollama_deepseek.txt
+regress/artifacts/alphatbinegsel\panel_fixdesign_20260908\grok.txt
+regress/artifacts/alphatbinegsel\panel_fixdesign_20260908\codex.txt
+regress/artifacts/alphatbinegsel\panel_assess_20260908\ollama_minimax.txt
+regress/artifacts/alphatbinegsel\panel_assess_20260908\ollama_kimi.txt
+regress/artifacts/alphatbinegsel\panel_assess_20260908\ollama_glm.txt
+regress/artifacts/alphatbinegsel\panel_assess_20260908\ollama_deepseek.txt
+regress/artifacts/alphatbinegsel\panel_assess_20260908\agy.txt
+regress/artifacts/alphatbinegsel\codex_fixdesign_20260908.txt
+regress/artifacts/alphatbinegsel\codex_fixdesign_20260908.err
+tools\pipeline\ADJUDICATION_20260909.md
+tools\CLAUDE.md
+regress\artifacts\pcc2widthkills\pass7_seats_20260904\opus\ADJUDICATION_NOTE.md
+
+web search: https://docs.alexrp.com/alpha/alpha_4th.pdf
+ERROR: This content was flagged for possible cybersecurity risk. If this seems wrong, try rephrasing your request. To get authorized for security work, join the Trusted Access for Cyber program: https://chatgpt.com/cyber
+ERROR: This content was flagged for possible cybersecurity risk. If this seems wrong, try rephrasing your request. To get authorized for security work, join the Trusted Access for Cyber program: https://chatgpt.com/cyber
+tokens used
+67,751

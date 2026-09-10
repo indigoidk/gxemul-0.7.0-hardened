@@ -1,0 +1,104 @@
+I'll verify the unsigned-compare defect, the signed-range fix, and the 13-row kill table against the tree rather than ratifying the brief. Starting with the product code, the probe, and the premises the round depends on.The checkpoint still says three accept rows are owed; I'll treat that as stale and check the probe, Alpha invalidate path, and `vaddr_mask` default against the tree.The two-sided window may make the signed cast a no-op; I'll enumerate that, then check PAL siblings, ASM metadata, and whether the comment overclaims architecture.**VERDICT: RATIFY the executable line and the 13-row table.** No remaining clause-(d) hole in the rowed selector window. Do not spend a row on “delete the signed casts.” The axis still unrowed is **cast width** (and, separately, an `a1` conjunct at a VA no row uses). L4 on two sentences in the product comment, not on the fix.
+
+I did not run the probe or any gate. Scores below are from `t2/SCORES.txt` and `t2/probe_HEAD.raw` (both end `ALPHATBI_DONE`). HEAD is `4eac0b1`; the palcode hunk matches the working tree.
+
+---
+
+### 1. Premises
+
+**S2, enumerated, not reasoned.** `a0` is `uint64_t` at `uint64_t a0 = cpu->cd.alpha.r[ALPHA_A0]`. Old test `a0 >= 1`:
+
+| bit pattern | as signed | `>= 1` unsigned | old arm | new `(int64_t)a0` in `[1,3]` |
+|---|---|---|---|---|
+| `0` | 0 | F | ALL | ALL |
+| `1` | 1 | T | VADDR | VADDR |
+| `2` | 2 | T | VADDR | VADDR |
+| `3` | 3 | T | VADDR | VADDR |
+| `4` | 4 | T | **VADDR** | ALL |
+| `2^64-1` (`LDA -1`) | −1 | T | **VADDR** | ALL |
+| `2^64-2` (`LDA -2`) | −2 | T | **VADDR** | ALL |
+
+Both PAL “invalidate everything” encodings took VADDR with `a1`. `t2/probe_HEAD.raw` still shows that: `tbia obs` and `tbiap obs` stay on the pre-remap value.
+
+**The arm header is a copy, not the authority.** The independent source in this tree is the NetBSD import, labelled `[OSF/1 PALcode Specific]`:
+
+```
+ALPHA_TBIA()  alpha_pal_tbi(-2, 0)   /* all TB entries */
+ALPHA_TBIAP() alpha_pal_tbi(-1, 0)   /* all per-process */
+ALPHA_TBISI   1   /* ITB entry for va */
+ALPHA_TBISD   2   /* DTB entry for va */
+ALPHA_TBIS    3   /* all for va */
+```
+
+That matches the header table. It is **OSF/1 PAL**, not the Alpha ARM. `21066_66a_hrm.txt` has `ITBASM`/`DTBASM`/`IOC_TBIA` and **zero** `TBIAP`/`PAL_OSF1_tbi` selector encodings — the same over-read the 2026-09-09 adjudication already caught.
+
+**S5 is right in the model, and the product comment does not overclaim I-vs-D.** One `if`, same `INVALIDATE_VADDR`/`a1` for 1, 2 and 3. The probe notes (`ACCEPT: a0=1 ITB selective`) do claim more than the model has: those sessions only `LDQ`. That pins the unified-cache collapse. An edit that made `a0==1` ITB-only (a no-op on data) would redden `bnd lo` on `obs X`, not on Y.
+
+**S6 is right on the default, slightly wrong on the failure mode.** `cpu_alpha.c` never assigns `vaddr_mask`; `is_32bit = 0`; `cpu.c` then does `cpu->vaddr_mask = (int64_t)-1`. The 64-bit *unset* path is identity, not degenerate. If a later Alpha `cpu_new` installed a collapsing mask, the survive-side rows (`bnd lo`/`mid`/`hi`/`a1z`) would **false-fail on BASE**, not go vacuous. Vacuous is the die-side rows, whose Y-dies oracle would then be true under both arms.
+
+**S4** holds and is unused: `memory_rw.c` raises only under `MEM_MIPS` / `MEM_M88K`; Alpha returns `MEMORY_ACCESS_FAILED`; `LS_GENERIC_N` returns before the register write.
+
+**Premise this brief did not give me:** `(int64_t)a0` when `a0 > INT64_MAX` is C99 6.3.1.3 implementation-defined. That set **includes both PAL negatives**. On two’s-complement wrap (this project’s hosts) they become −1/−2 and the table above holds. An implementation that converted out-of-range to `1` would restore the defect. The unsigned two-sided form `a0 >= 1 && a0 <= 3` is well-defined for every `uint64_t` and, on wrap, **selects exactly `{1,2,3}`** — same partition as the signed window over the full domain. I enumerated that rather than taking the comment’s “two-sided SIGNED range rather than a bare cast” as load-bearing.
+
+---
+
+### 2. Smallest edit that breaks the fix and still passes 13/13
+
+**Not the signed-cast axis you are worried about.**
+
+- Delete both `(int64_t)` casts: `if (a0 >= 1 && a0 <= 3)` — **13/13, and not a break.** Same three values, including `LDA -1`/`-2` (they fail `<= 3` unsigned).
+- Mixed form `if (a0 >= 1 && (int64_t)a0 <= 3)` — **does** restore TBIA/TBIAP, and is already killed by `tbia obs` / `tbiap obs`. That is the signedness mutant that matters; it is rowed.
+- Drop the upper bound, keep the signed lower: `if ((int64_t)a0 >= 1)` — killed by `bnd out` (HEAD’s 10/13 already shows that row red).
+
+**The unrowed axis of the cast is WIDTH, not signedness.**
+
+```c
+if ((int32_t)a0 >= 1 && (int32_t)a0 <= 3)
+```
+
+(or `(int8_t)`). Every driven selector is in `[-2, 4]` and survives 8-bit truncation, so **all 13 stay green**, including `tbia obs` and `bnd out`. `a0 = 0x101` would then compare as `1` and take VADDR: under-invalidation, the dangerous direction, on an undefined encoding. Expected-green: the whole table; `bnd out` in particular still only drives `4`.
+
+That is clause (e), not a floor breach: the body’s partition of `a0` is the signed window `{<1, 1, 2, 3, >3}`; truncation is a new decode, and the contract already discloses individual values above 4. Still the one-token answer to “what did I not row.”
+
+**Second 13/13 escape, also (e):** `&& a1 != 0x4000`. No row names Y as `a1`. `bnd a1z` uses `a1=0`, so it stays green. Conservative (over-invalidate when the guest names VA `0x4000`). The contract’s “conjunct on `a1`” is the `a1==0` cell only.
+
+`|| a0 == 5` is the disclosed `a0=5..` cell; not interesting.
+
+---
+
+### 3. Option set
+
+Silent ALL for undefined selectors is the right member (conservative ACCEPT). Two members the ruling did not name, both found by grepping this file rather than arguing:
+
+**HALT — the sibling idiom, one case down.** `PAL_OSF1_wrent` on `a1 >= N_ALPHA_KENTRY` does `fatal(...)` then `cpu->running = 0`. The `default:` arm of `alpha_palcode()` is the same. That is this file’s handling of an out-of-range PAL selector. It should be named so it can be rejected: a bad `tbi` op from a guest OS would stop the emulator. Over-invalidation is strictly cheaper.
+
+**Silent no-op (DECLINE).** Under-invalidation; worse than the defect. No PAL precedent for it here.
+
+FAULT is not available: S4 is a *device* path, and `tbi` never goes through `memory_rw`. Latched announce is the device-house idiom (`(once)`), not the PAL-house idiom (unlatched `fatal` + halt). IMPLEMENT of ASM-selective TBIAP is blocked by the cache entry: `arch_vpg_tlb_entry` is `valid`, `writeflag`, `vaddr_page`, `paddr_page`, `host_page`. `ALPHA_PTE_ASM` is the `#define` at `alpha_cpu.h` only; `apcb_asn` is PCB save/restore in `swpctx`, not a cache tag. The comment’s “no ASM/ASN metadata to spare anything BY” is right as a *struct* claim.
+
+---
+
+### 4. The comment
+
+One executable line, 32 lines of comment. Most of it is the warrant and belongs. Three sentences do not:
+
+1. **`5/7` / `7/7` in product code.** The cited path is `regress/alpha_tbi_probe.py`, which is now 13 rows. Re-running that path on HEAD is `10/13`, not `5/7` (`t2/probe_HEAD.raw`). The 5/7 figure is the 7-row witness under `regress/artifacts/alphatbinegsel/witness_agy_20260908/`. A score in product code that the shipping probe can no longer print is a wrong record waiting. Drop the ratio; keep “both negative-selector rows red on the committed build.”
+
+2. **“the only selective ops the architecture defines.”** They are the only ops the **OSF/1 PAL wrappers** define. Same file’s own header: “Most of these correspond to OSF1 palcodes.”
+
+3. **“differ on hardware only in whether GLOBAL entries survive.”** Right PAL meaning (TBIAP vs TBIA), wrong authority if “hardware” is read as the 21066 HRM. That manual describes `ITBASM`/`DTBASM` writes, not these encodings. The spare/invalidate polarity in the current text is correct (the reversal you already fixed).
+
+“NO ANNOUNCE” / “no event to report” is accurate: every encoding takes a conservative-correct arm. “Over-invalidation cannot serve a stale translation” is policy, and PRETABLE already marked it N/A. Fine.
+
+`pos obs` killed by nothing: confirmed. HEAD leaves it green; `M_F` (`&& a0 != 2`) still flushes the target via ALL. It is a liveness control. The comment does not claim otherwise.
+
+---
+
+### 5. Found while checking
+
+- **Probe docstring still quotes the pre-fix `if (a0 >= 1)` as the code under test.** The contract block below it is current; the opening is not.
+- **`bnd lo`’s note says “ITB selective” while the session only issues `LDQ`.** That will fight a later I/D split. S5 said the comments would not claim per-selector semantics; the product comment doesn’t; the probe does.
+- **`swpctx` still carries `// TODO: Don't invalidate EVERYTHING!`** immediately above this arm. Opposite polarity (over-flush). Not this round; do not let a future edit “fix” it by copying this selector test.
+- PRETABLE predicted both table-1 sweeps and was left unedited. That part of the process is clean.
+
+Ship the line. Trim the two comment attributions and the stale 5/7 before commit. File cast-width / unrowed-`a1` as disclosed (e), not as in-round rows.
