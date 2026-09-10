@@ -1,0 +1,69 @@
+VERDICT: File, in priority order: register default; redundant table-MOVE equality check; MOVE phase mismatch; transfer-control handling; MOVE addressing modes; SELECT validation; WAIT RESELECT; register/ALU instructions; MEMORY MOVE. Nine repair rows covering fourteen reachable exits. `CODEX_OSIOP_20260910`
+
+I checked HEAD `fa7463133e20643995d5d2477562b9421b99c58b` in the specified tree. The relevant source files match HEAD. No builds, probes, edits or patches were performed.
+
+**The fourteen cited lines are still executable `exit(1)` calls.** However, [dev_osiop.c](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_osiop.c) contains **sixteen** explicit calls altogether. The two omitted calls are unreachable at HEAD.
+
+| Population | Count | Finding |
+|---|---:|---|
+| (i) Guest register access or guest-started SCRIPTS | **14** | All fourteen cited sites: one register-default exit and thirteen sequencer exits. |
+| (ii) Unconstructible state or impossible branch | **2** | Reserved-phase MOVE default; outer instruction-class default. |
+| (iii) Internal consistency failures requiring termination | **0** | None of these sixteen checks establishes corrupted host ownership or another condition requiring host termination. |
+
+The live sequencer checks inspect guest-supplied instruction fields or descriptors. Their diagnostic wording—especially “cannot be combined”—does not turn them into internal assertions. `DEVICE_ACCESS(osiop)` starts execution through its DSP case; subsequent execution also occurs through the registered machine tick.
+
+The following table gives grep anchors and the proposed round split. Each anchor belongs to `dev_osiop.c`; the duplicated diagnostic is distinguished by its enclosing comment.
+
+| Priority / proposed row | Sites | Grep anchors | What the repair must preserve |
+|---|---:|---|---|
+| **1. Register default** | 1 | `osiop: read from`; `osiop: write to` | Read response, register contents and access-width handling. Refusing an access need not terminate a command or manufacture an interrupt. Generic stores have already occurred before this exit. |
+| **2. Redundant table-MOVE equality check** | 1 | `move ofs1!=ofs2` | The existing descriptor lookup and subsequent MOVE execution. This is a candidate for **delete**, with no new refusal protocol. |
+| **3. MOVE phase mismatch** | 1 | `move: wait for phase.` | Controller error status, sequencer halt, recovery position/residuals, retained transfer state and interrupt delivery subject to masking. Never fall through as a completed MOVE. |
+| **4. Transfer-control handling** | 4 | `Transfer Control` + `UNIMPLEMENTED dcmd=0x%02x opcode=%i`; `test_carry cannot be`; `osiop: TODO: test_carry\n`; `osiop: TODO: compare_data\n` | Distinguish illegal encodings from supported-but-unimplemented tests. Preserve conditional branches, return state and conditional SCRIPTS interrupts. Invalid-instruction status belongs to actual illegal encodings. |
+| **5. MOVE addressing modes** | 2 | `TODO: indirect_addressing move`; `TODO: !table_indirect_addressing move` | Correct descriptor/address interpretation, transfer count and the existing phase-specific command/data/status/message handling. Deleting these guards would execute the wrong addressing algorithm. |
+| **6. SELECT validation** | 2 | `scsi_ids_to_select = 0!`; `multiselect?` | Selection failure reporting, ATN state, selected-target state, existing transfer ownership and masked interrupt behavior. The failing SELECT has not allocated its new transfer. |
+| **7. WAIT RESELECT** | 1 | `TODO: wait reselect` | Waiting and resumption semantics. Executing the instruction is reachable even though this model lacks a reselection producer. Falling through would invent an event. |
+| **8. Register/ALU instructions** | 1 | `I/O or Read/Write` + `UNIMPLEMENTED dcmd=0x%02x opcode=%i` | Register effects, SFBR/carry state and applicable register side effects. This default includes real instruction operations, not merely invalid encodings. |
+| **9. MEMORY MOVE** | 1 | `MEMORY MOVE`; `TODO: third instruction word!` | Complete instruction decoding, memory effects, progress and register state. Merely advancing past the current two fetched words cannot accept this instruction. |
+| **Total** | **14** | | |
+
+The manual supports the distinction between legal unimplemented operations and illegal transfer-control combinations. Treating every unsupported instruction as hardware IID would therefore conflate two different conditions. [SYM53C710 manual, chapter 5](https://datasheet4u.com/pdf/1312314/SYM53C710.pdf)
+
+The status obligations need one qualification: **status and interrupt are overlapping obligations, not separate populations.** The existing `osiop_update_sip_and_dip()` exposes pending controller status even when interrupts are masked; `osiop_reassert_interrupts()` applies the masks. A repair must preserve both polling and interrupt-driven observation.
+
+Conversely, **none of the fourteen exits intrinsically owes a fabricated SCSI target status byte or COMMAND COMPLETE message.** A sequencer error can require controller-level recovery while a command remains outstanding. It must preserve that command’s state or terminate it through an explicit recovery contract. It must not report GOOD, free the transfer as successfully completed, or continue with invented results.
+
+The actual target-status and completion sequence lives in `STATUS_PHASE` and `MSG_IN_PHASE`. The backend-failure branches marked `#118/#119` are already de-fatalized and are outside this fourteen-site census. Thus the audit’s blanket E3 description overstates the obligation for the register default and redundant equality check.
+
+For the top two, these are the smallest honest fixes:
+
+| Row | Option-set member | Available here? | Required scope |
+|---|---|---|---|
+| **Register default** | **Decline + latched announce** for unsupported writes; preserve existing read responses with an explicit fallback policy | **Yes**, but not through a bare deletion | Reject writes before mutation, or restore the complete affected value. Preserve computed `odata` and its serialization. A readable backing value does not prove that every corresponding write implements the register’s behavior. |
+| **Redundant table-MOVE equality check** | **Delete** | **Yes** | Remove the equality restriction and its now-unused `ofs1` local. Continue through the existing table-descriptor path. |
+
+The first row has a concrete trap: the generic byte path stores before dispatch, and the word path also stores to registers such as DNAD and ADDER before reaching the unhandled-register default. Restoring only `oldreg` would not undo those word stores. A blanket backed-accept repair would also enable SOCL writes and change the reserved-phase reachability finding below.
+
+For the second row, the manual identifies the first word’s table-MOVE count field as unused and takes the descriptor displacement from the second word. The implementation already uses that second-word displacement. The equality check supplies neither address validation nor a transfer bound. [SYM53C710 manual, pp. 5-5–5-7](https://datasheet4u.com/pdf/1312314/SYM53C710.pdf)
+
+**FAULT is technically deliverable on M88K but is the wrong disposition for both top rows.** [memory_rw.c](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c) converts failed device callbacks into M88K access exceptions. That does not justify treating an implemented controller’s unsupported register as absent. The same reasoning from the previous reviews applies. A SCRIPTS decoding limitation also is not a failed CPU access; execution can occur later through the controller tick.
+
+These are the two results I would record **without repair rows**:
+
+| Grep anchor | Warrant for population (ii) |
+|---|---|
+| `TODO: unimplemented move,` | The phase switch’s missing values are the two reserved phases. An earlier equality check requires the instruction phase to match SOCL. Initialization and every implemented phase transition produce only handled phases. SET/CLEAR do not change the phase bits. A direct SOCL write terminates at the register default before another SCRIPTS execution. OSIOP’s machine tick runs after CPU execution, rather than through PCC2’s asynchronous timer callback. |
+| `UNIMPLEMENTED dcmd 0x%02x` | The outer switch evaluates `dcmd & 0xc0` and explicitly handles every possible result. Its default is mathematically unreachable. |
+
+The first warrant is **HEAD-specific**: accepting SOCL writes or implementing register-writing SCRIPTS can invalidate it. That dependency belongs in the record. Calling the outer default an essential consistency check would add no useful distinction; there is no reachable failing condition to recover from.
+
+**I found no in-tree runnable workload that drives this controller’s register/SCRIPTS interface.** The MVME187 clock and PCC2 probes instantiate the machine and controller, but target other devices. Construction and idle ticks are not SCSI coverage.
+
+There is historical evidence of a real guest using it: [machine_mvme88k.html](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/doc/machine_mvme88k.html) includes an OpenBSD 4.4 installation transcript with `osiop0`, `sd0` and `cd0`, while its instructions require externally downloaded OpenBSD files. [machine_mvme88k.c](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/machines/machine_mvme88k.c) confirms the attachment. This establishes a documented consumer, not current HEAD workload coverage.
+
+There is also a false coverage attribution: [TEST_BATTERY.md](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/battery/TEST_BATTERY.md) calls PMAX disk testing “osiop” coverage. PMAX’s PMAZ-AA attachment resolves to `dev_asc_init()` in [dev_turbochannel.c](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_turbochannel.c). Those tests cover another controller and the shared disk backend. I would rank these findings as source-established guest-to-host termination on enabled wiring, below otherwise comparable kills demonstrated by current workloads.
+
+Two further findings belong in the proposed rounds:
+
+- **SELECT fault propagation:** its descriptor read lacks the immediate stopped-engine check used by MOVE. Include that propagation defect in the SELECT row.
+- **Transfer-control prerequisites:** SFBR is not maintained in this file, and CALL does not save a return address into TEMP. Implementing comparisons alone would leave those dependent semantics incomplete.

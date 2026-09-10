@@ -1,0 +1,90 @@
+VERDICT: File in this order: CP6 `unknown`, CP14 `unknown`, CP15 nonzero PID, CP6 nonzero ISTEER, CP15 endian change, CP6 ISRC write, CP15 `rd == ARM_PC`. CODEX_ARMCOPROC_20260910
+
+Reviewed HEAD `fa7463133e20643995d5d2477562b9421b99c58b` in the specified tree. The relevant source files match HEAD. This is static analysis; no builds, probes, edits, or patches.
+
+The census is correct: **eight active exits, plus six commented-out exits** in [cpu_arm_coproc.c](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_coproc.c). However, **none of the other seven has the same warranted two-line ACCEPT repair as `xscaleinten`.**
+
+| Priority | Coprocessor and grep anchor | Exact branch containing or feeding the exit |
+|---|---|---|
+| 7 | CP15 — `arm_coproc_15: rd = PC` | Entry guard `if (rd == ARM_PC)`, before the switch; both directions. **Neither a case nor a default.** |
+| 5 | CP15 — `Trying to switch endianness` | Specific `case 1`, normal-control WRITE; requested endian bit disagrees with `cpu->byte_order`. |
+| 3 | CP15 — `ARM TODO: pid!=0. Fast Context Switch` | Specific `case 13`; nonzero-PID check **after both direction arms**. |
+| Already filed | CP6 — `TODO: XScale read from inten?` | Specific `crm` case 0 / `crn` case 0, READ only. |
+| 4 | CP6 — `ARM xscale interrupt steering` | Specific `crm` case 0 / `crn` case 4, WRITE of any nonzero value. |
+| 6 | CP6 — `TODO: XScale int ack?` | Specific `crm` case 0 / `crn` case 8, every WRITE, including zero. |
+| 1 | CP6 — `arm_coproc_i80321_6: unimplemented` | Shared `unknown:` label, reached from **three defaults**: the outer `crm` switch and its two nested `crn` switches. Both directions. |
+| 2 | CP14 — `arm_coproc_xscale_14: unimplemented` | Shared `unknown:` label, reached from **four defaults** and the separate `if (opcode2 != 0)` guard. Both directions. |
+
+That is **three CP15 sites, four CP6 sites, one CP14 site**; structurally, five specific-case sites, two default-fed endpoints, and one entry guard. CP15’s default-arm exits are commented out.
+
+**Reachability counts are (i) 8, (ii) 0, (iii) 0**, counting exit sites. Excluding the existing filing, that becomes **7 / 0 / 0**.
+
+The installation evidence is:
+
+| Constructor | Handler installation |
+|---|---|
+| `arm_cpu_new()` in [cpu_arm.c](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c) | Installs `arm_coproc_15` unconditionally; installs `arm_coproc_xscale_14` when `cpu_type.flags & ARM_XSCALE`. |
+| `MACHINE_SETUP(iq80321)` in [machine_iq80321.c](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/machines/machine_iq80321.c) | Explicitly installs `arm_coproc_i80321_6`. Default CPU is `80321_600_2`, which has `ARM_XSCALE`; therefore CP6, CP14 and CP15 are present. |
+| `MACHINE_SETUP(iyonix)` in [machine_iyonix.c](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/machines/machine_iyonix.c) | Explicitly installs the same CP6 handler. Default CPU is `80321_600_B0`, also flagged `ARM_XSCALE`; all three handlers are present. |
+| Other ARM machine constructors | No additional ARM coprocessor-handler assignments. In particular, the gate’s default `testarm`, `barearm`, and `cats` CPUs have CP15, without these CP6/CP14 handlers. |
+
+Both IQ80321 and Iyonix appear in `src/machines/Makefile.skel`, and generated `automachine.c` registers them. Their CPU flags are explicit in [arm_cpu_types.h](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/arm_cpu_types.h).
+
+The execution path is the decoder’s `cond_instr(mcr_mrc)`, then `X(mcr_mrc)`, `arm_mcr_mrc()`, and the installed callback. There is no intervening general-register restriction that makes the CP15 entry exit unreachable. Ordinary condition-passing coprocessor instructions reach every listed site.
+
+There **is one useful unreachable directional subpath**: the PID exit following a READ. CPU allocation starts PID at zero; the only guest writer is this case; any write making PID nonzero immediately encounters `if (cpu->cd.arm.pid != 0)` and exits. Consequently, an ordinary surviving guest cannot subsequently read a nonzero PID at HEAD. Record that warrant, but retain the **site** in population (i), because its WRITE direction is reachable.
+
+Likewise, CP15’s `if (rd == ARM_PC)` prevents R15 accesses from reaching later CP15 cases. It makes those particular downstream paths unreachable; it does not make any listed exit dead.
+
+**The completed-value distinction changes the repairs.** `xscaleinten` returns an already modelled value to a general register. The other assignments either precede missing behavior or alter state whose ownership matters:
+
+| Site | Why deleting the diagnostic and exit is insufficient | Smallest defensible direction |
+|---|---|---|
+| CP15 PID | The field is stored, but ARM address translation never consumes it. Storing a PID does not implement FCSE. | Reject unsupported writes **before assignment**, using the CPU exception path; preserve supported reads/writes. Full acceptance requires address-translation support. |
+| CP6 ISTEER | No interrupt-routing code consumes `i80321_isteer`; CPU initialization also contains `FIQ: TODO`. | Reject unsupported steering before storing it, or implement routing. Retaining the store would merely advertise unimplemented state. |
+| CP15 endian change | `control` has already changed, and an MMU-bit change may already have changed `translate_v2p`. | Validate against actual `cpu->byte_order` **before either mutation**, then refuse the unsupported transition. Actual endian switching requires the translation work documented beside the exit. |
+| CP6 ISRC write | `dev_i80321` aliases this field through `d->status`. Replacing interrupt-source state is not an implemented acknowledgement. | Preserve source-owned status while applying an explicit write-refusal policy. Hardware-equivalent ignore versus fault needs register-spec confirmation; the TODO does not establish acknowledgement semantics. |
+| CP15 R15 guard | There is no completed result yet. Removing the guard exposes ordinary array assignments and potentially stale R15 source state. | Handle direction and CPU-specific R15 semantics deliberately; use a guest exception for unsupported forms. |
+
+For ISRC and steering, the decisive local anchors are `d->status = &cpu->cd.arm.i80321_isrc`, `i80321_assert`, and `i80321_deassert` in [dev_i80321.c](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_i80321.c). The controller uses source status and enable state, and does not consult steering.
+
+The endian exit’s `#378: this exit is LOAD-BEARING` comment is substantiated by the LDM/STM installation gate in `cpu_arm_instr.c`. A precommit refusal preserves that invariant. Merely replacing the existing, late exit with an exception would leave partially committed control state.
+
+R15 also needs an architectural qualification: permitted MRC-to-R15 forms transfer condition flags. An ordinary write to `r[ARM_PC]` does not implement that behavior. Restrictions vary by coprocessor/model. [Arm Architecture Reference Manual](https://documentation-service.arm.com/static/5f8dacc8f86e16515cdb865a)
+
+**FAULT is available here, and none of these eight sites currently uses it.** The direct neighbouring precedent is `arm_cdp()` in `cpu_arm.c`: it diagnoses an unimplemented coprocessor operation and calls `arm_exception(cpu, ARM_EXCEPTION_UND)`.
+
+That mechanism is usable from these callbacks because:
+
+- `X(mcr_mrc)` synchronizes `cpu->pc` before calling the dispatcher.
+- `ARM_EXCEPTION_UND` maps to the implemented `ARM_MODE_UND32` exception arm.
+- `arm_exception()` saves status, installs the exception register bank and return address, selects the vector, and redirects translated execution.
+- The caller performs no subsequent result assignment that would overwrite the exception outcome.
+
+The failed-device behavior in `memory_rw.c` is therefore irrelevant to this disposition.
+
+**For priorities 1 and 2, the smallest honest repair is one executable-statement replacement per endpoint:** replace the terminal exit with the undefined-instruction exception call. Both `unknown:` labels end their functions, and every path reaching them precedes register mutation. The existing diagnostic can remain for that minimal change; `fatal()` itself only prints. No latch is necessary for exception delivery.
+
+These rank first because they share a small, established refusal mechanism and require no rollback. The remaining sites require either precommit validation or a more specific architectural contract.
+
+The proposed detector contracts below are **unmeasured**. They need an IQ80321 or Iyonix session with established RAM/vector mappings. The existing [arm_flags_probe.py](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/arm_flags_probe.py), grep anchors `def run_und` and `def run_und_condfailed`, supplies the observation pattern.
+
+For each refusal row, require fresh exception-handler output, UND32 mode, saved incoming status, and the correct ARM return address. Observe operand/coprocessor state before the handler overwrites any test registers.
+
+| Proposed row family | Coverage | Observation that distinguishes the arms |
+|---|---|---|
+| CP6 default refusal | Each of its three default origins, READ and WRITE: **six cases** | Correct exception-entry record; read destination retains its seed; relevant coprocessor state remains unchanged. A quiet return cannot produce the exception record. |
+| CP14 default refusal | Each of its four default origins, both directions: **eight cases** | Same exception and state contract. |
+| CP14 opcode2 refusal | Both directions, with the remaining fields selecting an otherwise implemented register | Exception record and preserved register state. Using an otherwise valid selection ensures another default cannot conceal a missing opcode2 guard. |
+| CP6 accepted READ/WRITE controls | A modelled register such as `trr0`; avoid the still-broken INTEN read | READ returns the expected patterned value; WRITE changes readback from its old value to the requested value. Also require normal completion without a fault. |
+| CP14 accepted READ/WRITE controls | A modelled PMU register such as `xsc1_pmnc` | The corresponding exact-value/readback checks. These reject a blanket “fault every operation” repair. |
+| Condition-failed controls | Both handlers | Fresh normal-completion output **and** untouched exception output/state. Absence of a fault alone earns no pass. |
+| Exception PC and repetition controls | Both handlers | Correct return address at a nontrivial instruction-page offset; each repeated refusal produces a fresh exception record. |
+
+The accepted controls establish actual handler installation and useful behavior. The refusal records distinguish architectural rejection from silent completion. Pin every emitted row by name and require a completion sentinel and literal denominator, following [gate_arm.sh](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gate_arm.sh).
+
+I would **not file** another `xscaleinten` row, a separate “nonzero PID read kills” row, or any of the six commented-out exits. I would record the PID-read reachability warrant alongside its write-side filing. All seven remaining active sites deserve filings; none warrants classification as uninstalled or wholly unreachable.
+
+Two additional findings matter. First, `arm_mcr_mrc()`’s **missing-handler** branch has its exception call commented out and returns after logging, leaving a coprocessor read without an architectural result or fault. Second, its dispatch and these callbacks enforce neither a supervisor-mode check nor CPAR permissions. Those are separate architectural-correctness issues.
+
+Finally, `OUTSTANDING_BUGS.md` still contains the `xscaleinten` claim that FAULT is unavailable. Correct that explanation while retaining its settled ACCEPT disposition.
