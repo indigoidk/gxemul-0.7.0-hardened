@@ -1,0 +1,64 @@
+VERDICT: No self-contradiction found in the packet; the diff as inlined is internally consistent. Q4: none/36. Q2: changing `SGIRE_W_BADCOLOR` to any other existing warn bit not exercised by the rows (e.g., `SGIRE_W_TEX_RD`) passes all 14 rows; `latch indep` stays green.
+
+---
+
+### Q1 — Premise audit
+
+**(a)** READ from diff: `ok` gates the only store in the PUT branch; the GET branch is unchanged in the shown hunk. Full function not inlined, so cannot settle beyond the hunk, but the structure strongly implies no other store in PUT.
+
+**(b)** REASONED: with `ok == 0`, `buf` is not read in the shown path — the store is skipped and no other read appears. Cannot settle if code after the hunk reads `buf`, but the function likely ends immediately after the `if/else`.
+
+**(c)** Not checkable from packet. The diff context shows bit 12 was previously free (last enumerator was `1 << 11`, comment said next free is `1 << 12`), but I cannot grep `dev_sgi_re.c` for other users of bit 12. Would need a search for `1 << 12` or `warned` bit 12.
+
+**(d)** Not checkable from packet. Would need to grep `regress/` for `"color mode ="` to see if any other probe keys on the old per-pixel text. The witness rows check the old literal prefix, but other probes may exist.
+
+**(e)** READ/REASONED: the expected `0xdd223344` is consistent with big-endian word read and one-byte store. `bufdepth` for 8 bpp is 1 (from `mode` bits), and the CI case assigns only `buf[0] = *color`. Endianness is a premise stated in the packet; not independently verified.
+
+---
+
+### Q2 — Smallest edit that breaks the fix but passes all 14 rows
+
+Change `SGIRE_W_BADCOLOR` to any other existing warn bit that is **not** fired by the test sessions — e.g., `SGIRE_W_TEX_RD` (`1 << 11`).  
+All rows still pass because:
+
+- `once` still sees exactly one announce (latch works).
+- `latch indep` only checks sharing with `SGIRE_W_BADMODE`; sharing with a different bit is not tested.
+- No row sets the other bit, so the latch is never silenced in the tests.
+
+The row that stays green is **`latch indep`** (and all others). This breaks the design’s “own bit” requirement because real traffic on that other site could silence the colour decline.
+
+---
+
+### Q3 — Option-set completeness
+
+No unnamed member is apparent from the packet.  
+Member 7 (IMPLEMENT YCRCB) remains correctly refused: no packing specification is given, and guessing a packing would risk publishing wrong colour data. The current options — skip store, zero-fill, implement — cover the space; skip store is the only one that does not publish unrequested data.
+
+---
+
+### Q4 — Floor coverage
+
+**None.**  
+Denominator = 36 cells (2 × 3 × 3 × 2). Every cell has at least one row whose channel varies under its corresponding mutant.  
+- Default stores → `ycrcb put` / `reserved put` fail.  
+- Guard removed → `ycrcb put` fails.  
+- Latch removed → `once` fails.  
+- Latch shared with BADMODE → `latch indep` fails.  
+- Supported type dropped → its accept row fails.  
+- Combinations are covered by the same rows.
+
+---
+
+### Q5 — Accept-row failability
+
+- `live` → **M8_declineall** (all types declined → announce appears, `live silent` count becomes 1).  
+- `ci8 put` → **M9_dropcase_ci** (CI case removed → falls to default → paint remains, expected `0xdd223344` fails).  
+- `rgb put` → **M8_declineall** (or a `dropcase_rgb` mutant not explicitly listed; M8 is the listed one that reddens it).  
+- `abgr put` → **M10_dropcase_abgr**.
+
+---
+
+### Q6 — Claim → row
+
+**None.**  
+All added comment sentences asserting observable consequences are either directly rowed or explicitly marked as SENTENCE in PRETABLE §2. No uncovered observable claim found.

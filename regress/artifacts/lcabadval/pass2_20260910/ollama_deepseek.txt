@@ -1,0 +1,74 @@
+VERDICT: NOT RATIFY — Q2 finds an uncaught SG-drop mutant; Q6 finds an unrowed reserved-bit claim.
+
+---
+
+**Q1. PREMISE AUDIT**
+
+(a) **READ** from packet: Table 6-6 lists thirteen legal W_MASK<31:20> encodings, the contiguous low-ones values 0x000..0xfff.  
+**REASONED**: Over the 12-bit field `f` (0..4095), `(f & (f + 1)) == 0` is true exactly for  
+`f ∈ {0, 1, 3, 7, 15, 31, 63, 127, 255, 511, 1023, 2047, 4095}`.  
+All other 4083 values make the expression non-zero. This matches the thirteen encodings and nothing else.
+
+(b) **READ** from packet: `lca_pci_conf` reads bit 0 of `ioc_conf`.  
+**REASONED**: `idata & 0x3` preserves bit 0 exactly; dropping bits above 1 does not change what `lca_pci_conf` reads. No change.
+
+(c) **REASONED**: `0x240000000 = 2^33 + 2^30`. Bit 33 is set, so WEN is set. The rows `wbase1 wen` and `wen once` test what they claim.
+
+(d) **READ** from packet: the detector block states “+0x1e0 is inside DEVINIT's window and names no register in alpha_lcareg.h”.  
+**REASONED**: If that premise is true, the access reaches `lca_ioc`’s switch, no case matches, and the default arm answers. Cannot independently verify the file contents from this packet.
+
+(e) **REASONED**: No regression for any previously accepted value.  
+Enumerating old accepted sets and new masks:
+- IOC_CONF {0,1} → `& 0x3` preserves both.
+- TB_ENA {0,0x80} → `& IOC_TB_ENA_TEN` preserves both.
+- W_BASE0 {0,0x300800000} → mask keeps bits 33,32,23; both preserved.
+- W_MASK0 {0x700000} → field rule accepts f=7; stored as 0x700000.
+- W_BASE1 {0x240000000} → mask keeps bits 33,30; preserved.
+- W_MASK1 {0x3ff00000} → field rule accepts f=0x3ff; stored as 0x3ff00000.
+
+Default arm changes from fatal to decline/zero, but those offsets were not accepted by the old code; they killed the process. Not a regression for a working guest.
+
+---
+
+**Q2. SMALLEST EDIT THAT PASSES ALL 40 ROWS**
+
+Remove `IOC_W_BASE_SG` from the W_BASE mask.  
+Row expected to stay green: **`wbase1 wen`** (value `0x240000000` has no SG bit).  
+All 40 rows pass because no row writes a W_BASE value with SG set and then reads it back expecting SG preserved. The `wbase0 stored` row writes accepted `0x300800000` (SG set) but immediately overwrites with legal `0x280000000` (SG clear) before reading, so the SG loss is masked. This is a sub-case of `M_base_mask` not covered by the enumeration.
+
+---
+
+**Q3. OPTION-SET COMPLETENESS**
+
+Yes, a member is missing.  
+For **W_MASK**: the design declines invalid encodings and keeps the previous value. An unnamed option is to **store the raw or masked value without field validation** and announce once that window translation is not modelled. Since translation is not modelled anyway, the field rule is not behaviourally necessary; declining is a policy choice, not required by the manual.  
+For **default arm**: the design declines writes and answers reads with zero. An unnamed option is to **store writes to a per-offset dummy register and return reads from that dummy**, announcing once per offset. The precedents named on pass 1 (`dev_gt.c` stored-but-unused address-decode registers, `dev_footbridge.c` SDRAM_BA_MASK) suggest this stored-but-unused idiom.
+
+---
+
+**Q4. FLOOR — UNCOVERED CELL**
+
+The **W_BASE mask-narrowed cell**, specifically the **SG-drop** sub-case, has no row whose channel varies under it.  
+Denominator: 6 arms × 3 mask states × 2 store states = 36, plus W_MASK rule/store-order 3×2 = 6, plus latches 3 = 45 cells. One sub-cell (SG drop) is uncovered.
+
+---
+
+**Q5. ACCEPT-ROW FAILABILITY**
+
+- `conf legal` → `M1_conf_kill`
+- `tbena legal` → `M2_tbena_kill`
+- `wbase0 legal` → `M23_accept_narrow` (old whitelist re-added under new mask) or `M3_base0_kill`
+- `wmask0 legal` → `M4_mask0_kill`
+- `wbase1 legal` → `M5_base1_kill`
+- `wmask1 legal` → `M6_mask1_kill`
+- `wbase0 zero` → `M_base0_nonzero` (a `!= 0` decline)
+- `wbase1 wen` → `M_base_mask` (WEN dropped from mask)
+
+---
+
+**Q6. CLAIM → ROW GAP**
+
+Quote from the diff comment on W_BASE0/1:  
+**“Store the fields (reserved bits dropped); the window is not translated by this model, which is announced once when any window is ENABLED.”**
+
+The phrase **“reserved bits dropped”** asserts an observable consequence for reserved bits **above bit 33** of W_BASE. No row tests a W_BASE value with bits above 33 set and reads back the normalized value. PRETABLE §2 does not contain a sentence acknowledging this gap; the detector block’s contract discloses it as “not rowed, disclosed”, but that is not a claim→row mapping.

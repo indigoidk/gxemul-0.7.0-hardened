@@ -1,0 +1,64 @@
+VERDICT: **PASS WITH ONE UNCAUGHT CELL.** The fix is correct for every value the 40 rows exercise and for every mutant in PRETABLE §5, but the design's mask-cell enumeration is {kept, narrowed, dropped} — a 4th cell, **widened**, has no row. A 1-character edit `& 0x3ULL` → `& 0x7ULL` at the IOC_CONF store line stores reserved bit 2 (HRM S6.2.9 makes IOC_CONF<1:0> a 2-bit field), and **passes all 40 rows** because no test value exercises bit 2. Everything else audited below is sound.
+
+---
+
+**Q1. Premise audit.**
+
+(a) `(f & (f+1)) == 0` over f ∈ [0, 0xFFF] — **REASONED, TRUE.** Enumerated: f=0 ✓ (0&1=0); f=1 ✓; f=2 reject (2&3=2); f=3 ✓ (3&4=0); f=4 reject; f=5 reject (5&6=4); f=6 reject (6&7=6); f=7 ✓ (7&8=0); f=8..0xE reject (each has two adjacent bits); f=0xF ✓; continuing through 0xFF, 0x1FF, 0x3FF, 0x7FF, 0xFFF — exactly 13 contiguous-low-ones values. Matches Table 6-6.
+
+(b) `lca_pci_conf` reads bit 0 — **NOT SETTLED FROM PACKET.** The function body is not inlined; only the brief's assertion is available. Settling fact: the body of `lca_pci_conf` in the same file.
+
+(c) `0x240000000` has bit 33 set — **REASONED, TRUE.** 2^33 = 0x200000000; 0x240000000 = 0x200000000 + 0x40000000 (bit 30 also set, within W_BASE). WEN bit is set. ✓
+
+(d) +0x1e0 is inside DEVINIT's mapped window and absent from `alpha_lcareg.h` — **NOT SETTLED FROM PACKET.** Neither the address map nor the header is inlined. Settling fact: the contents of `alpha_lcareg.h` and the DEVINIT window definition in this fork.
+
+(e) Regression for an accepted value — **REASONED, NONE.** Walked each old accepted set:
+- IOC_CONF {0,1}: `0&0x3=0`, `1&0x3=1` — identical to old store.
+- TB_ENA {0,0x80}: `0&0x80=0`, `0x80&0x80=0x80` — identical.
+- W_BASE0 {0, 0x300800000}: mask = W_BASE|SG|WEN = 0x3FFF00000; 0x300800000 & mask = 0x300800000 — identical.
+- W_MASK0 {0x700000}: field=7, (7&8)=0, accept, store 0x700000 — identical.
+- W_BASE1 {0x240000000}: bit 33 + bit 30, both in mask — identical.
+- W_MASK1 {0x3ff00000}: field=0x3FF, (0x3FF&0x400)=0, accept — identical.
+- Default arm: listed offsets unchanged; behaviour change is only on unlisted offsets.
+
+**Q2. Smallest edit that breaks and passes all 40 rows — REASONED.**
+
+Edit: `d->ioc_conf = idata & 0x3ULL;` → `d->ioc_conf = idata & 0x7ULL;` (one character).
+Why it breaks: HRM S6.2.9 defines IOC_CONF<1:0> as a 2-bit field; bit 2 is reserved. The fix's stated contract is "store the ARCHITECTED FIELDS, ignore reserved bits." Storing bit 2 violates that contract.
+Why it passes: every CONF test value in the detector is 0x100000002 (bit 32 set, bits 0–31 zero). `0x100000002 & 0x7 = 0x2`; `0x100000002 & 0x3 = 0x2`. The `conf stored` row reads back 0x2 in both cases. `conf reserved` reads 0x2. `conf once` counts "IOC_CONF<1> set" — the bit-1 condition is unchanged, count stays 1. No witness row exercises bit 2 either (the accepted set is {0,1}).
+The row that stays green: `conf stored` (and, by the same arithmetic, every other row).
+The author's PRETABLE §5 enumeration lists `{mask kept / narrowed / dropped}` — **widened is absent**, and this is the cell with no row. (Widening to `& 0xFFFFFFFF` *is* caught — `conf reserved` would read 0x100000002, expect 0x2. The gap is specifically for widening that doesn't reach the highest reserved bit tested.)
+
+**Q3. Option-set completeness — REASONED.**
+Default arm: design names {decline write, answer read with zero, announce each direction once}. Complete for the stated intent.
+W_MASK: design names {validate field, store when legal, decline once, keep previous}. Complete for the rule and the store order.
+The named precedents (dev_gt.c stored-but-unused address-decode registers; dev_footbridge.c SDRAM_BA_MASK) concern scope, not this diff's option set. The real gap is the mask cell — see Q2.
+
+**Q4. Floor — cell with no row — REASONED.**
+Within the author's enumeration (`{kept, narrowed, dropped}` × `{store, no store}` × `{rule × store-order}` × `{latch states}`), every cell has at least one row whose channel varies under it.
+Denominator: 6 arms × 9 mask/store cells + 2 W_MASK arms × 9 rule/store-order cells + 6 latches × 3 states = 54 + 18 + 18 = **90 cells, 0 uncovered.**
+But the enumeration omits "widened" — see Q2. If widened is counted as a 4th mask cell, IOC_CONF has no row for it.
+
+**Q5. Accept-row failability — REASONED.**
+- `conf live` (test value includes 0x100000002): re-add `if (idata & ~0x3ULL) { decline; }` — `0x100000002 & ~0x3 = 0x100000000 ≠ 0`, declined. REDDEN.
+- `tbena live` (0x81): re-add `if (idata & ~IOC_TB_ENA_TEN) { decline; }` — `0x81 & ~0x80 = 0x1 ≠ 0`, declined. REDDEN.
+- `wbase0 live` (0x280000000): re-add `if (masked != 0 && masked != 0x300800000ULL) { decline; }`. REDDEN.
+- `wmask0 live` (0x100000): re-add `if (masked != 0x700000ULL) { decline; }`. REDDEN.
+- `wbase1 live` (0x0): re-add `if (masked != 0x240000000ULL) { decline; }`. REDDEN.
+- `wmask1 live` (0xfff00000): re-add `if (masked != 0x3ff00000ULL) { decline; }`. REDDEN.
+- `wbase0 zero`: M_base0_nonzero (`if (masked == 0) { decline; }`) — the previous value 0x280000000 is kept, read-back = 0x280000000, row expects 0x0. REDDEN.
+- `wbase1 wen`: M_base_nowen (mask drops WEN) — stored = 0x40000000, row expects 0x240000000. REDDEN.
+
+The author's M23_accept_narrow works for W_BASE and W_MASK arms; for CONF and TB_ENA the old guards were mask checks, not whitelists, so the correct growth mutant is mask-check reinstatement.
+
+**Q6. Claim → row — REASONED.**
+Every added comment sentence asserting an observable consequence has a row or is explicitly marked SENTENCE in PRETABLE §2. None uncovered.
+
+---
+
+**Something ELSE found while verifying:**
+
+1. **Q2 finding (stated above).** Mask-widening for IOC_CONF is uncaught.
+2. **SG bit has no dedicated row.** A mutant dropping SG from the W_BASE mask (e.g., `& (W_BASE | WEN)`) passes all rows — `wbase1 wen` writes 0x240000000 (bit 30 in W_BASE, bit 33 WEN), read-back is unchanged. No row writes a value where SG (bit 32) is the only field set. The brief discloses SG has no consumer, so this is cosmetic, not functional.
+3. **W_MASK mask-width widening.** `& 0xfff00000` → `& 0xfffff000` (adding bits 19:12) passes all rows — no test value has those bits set. Same cosmetic class as the CONF widening.
+4. **Q1b and Q1d cannot be settled from this packet** (flagged above). The brief's assertions about `lca_pci_conf` reading bit 0 and +0x1e0 being inside DEVINIT's window but unnamed in `alpha_lcareg.h` are load-bearing for the fix's correctness but are not inlined. Single settling fact for each named above.

@@ -1,0 +1,63 @@
+VERDICT: The brief's derivations are mostly sound. Two real defects. Several premises not checkable from the packet.
+
+**DEFECT 1 — PRETABLE §1 mis-attributes what `two declined` pins.** The brief states "the `two declined' row is what pins 'skipped' rather than 'returned early' for the second PUT." This is wrong. Walk the row:
+
+- Fix (`ok = 0` + `if (ok)` guard): second PUT sets `ok = 0`, guard skips `memory_rw`, destination = paint. Row expects paint. **Pass.**
+- Early `return` placed AFTER the latch block (announce + latch still fire, then return): second PUT finds latch set, no announce, returns before the store, destination = paint. Row expects paint. **Pass.**
+
+The two mutants are observationally indistinguishable on this row. `two declined` catches `M4_okinlatch` (where the second PUT's `ok` is left at 1 and the store runs with an unassigned `buf`), but it does NOT catch early return.
+
+**DEFECT 2 — Q2 falls out of Defect 1.** The smallest edit that violates the design's "never an early `return`: the common tail is that store" rule and still passes all 14 rows is to move `return;` to after the latch block in the default arm (and drop the now-dead `ok = 0;`). All 14 rows stay green. No row reddens. The PRETABLE's claim that `two declined` would redden it is the trap; it does not.
+
+---
+
+**Q1 — premise audit, extensionally**
+
+(a) `ok` gates the only store in the PUT branch, GET byte-identical: **TRUE, READ.** The diff's only `memory_rw(..., MEM_WRITE, ...)` is the one wrapped in `if (ok)`. The `else` arm (GET) is untouched in the hunk.
+
+(b) With `ok == 0`, is `buf` read before return: **TRUE, READ.** After the switch the only consumer of `buf` is the guarded `memory_rw(..., buf, bufdepth, ...)`. `fatal`'s arguments are `color_mode, x, y` — no `buf`.
+
+(c) Bit 12 free in `enum`: **NOT CHECKABLE.** The diff shows the enum up through `SGIRE_W_TEX_RD = 1 << 11` and adds `SGIRE_W_BADCOLOR = 1 << 12`. I cannot grep `dev_sgi_re.c` for other writers to `d->warned & (1<<12)`. Single fact that would settle: a grep of `dev_sgi_re.c` for `(1 << 12)` / `0x1000` / `BIT(12)` returning no hits.
+
+(d) Keeping the old literal as a prefix: any regress probe keyed on the old per-pixel text now silent: **NOT CHECKABLE.** I cannot grep `regress/` for `color mode =`. Single fact: the grep result. (Note: the *frequency* drops from per-pixel to once-per-instance, so any probe that counted occurrences would change — but I have no list of such probes.)
+
+(e) `ci8 put` wants `0xdd223344`, ip32 big-endian, 8-bpp stores one byte: **TRUE, READ.** Pre-paint `0x11223344` → byte0 = `0x11` (top byte, big-endian). `MODE_CI8 = 0x1000` ⇒ `bufdepth = 1<<0 = 1`. CI arm writes `buf[0] = *color = 0xdd` (low byte of `0xaabbccdd`). Store writes one byte over byte0. Result: `0xdd223344`. Matches.
+
+**Q2 — smallest edit, all 14 rows green:** early `return` after the latch block in the default arm (drop `ok = 0;`). The PRETABLE's nominated pinner (`two declined`) does NOT redden. **No row reddens.** This is a real coverage gap the PRETABLE mis-stated as closed.
+
+**Q3 — option-set completeness at this arm:** **NOT CHECKABLE.** The packet inlines only member 3 (candidates (a) zero-fill-and-store rejected, (b) skip-the-store chosen). Members 1, 2, 4, 5, 6, 7 are not inlined. The parenthetical "member 7 IMPLEMENT YCRCB was refused for want of a packing spec — is that still right?" cannot be answered without (i) the packing spec for YCRCB and (ii) the rest of the option set. Single fact that would settle: the full design ruling for members 1, 2, 4, 5, 6, 7, plus the YCRCB packing the design would have implemented.
+
+**Q4 — the floor:** Walking the cells. `default stores` is the original broken behavior (the pre-fix file); it is caught by `ycrcb put` / `reserved put` / `indep paint` (word ≠ paint) and is orthogonal to the latch/guard sub-axes (which are no-ops there). `default declines` × {latch kept/removed/shared} × {guard kept/removed/inside-latch} × {types kept/one dropped}: every non-baseline cell is hit by at least one of `ycrcb put`, `reserved put`, `two declined`, `once`, `latch indep`, `indep paint`, `announce text`, `live silent`, `ci8 put`, `rgb put`, `abgr put`. **NONE, denominator 36** (or 24 if you exclude the impossible composites `{guard removed, inside-latch}` and the `default stores` × {guard removed, inside-latch} cells where the sub-axis is vacuous).
+
+**Q5 — accept-row failability:**
+- `live` (RGBA packing): **M8_declineall** (`ok = 0` for every type ⇒ RGBA store skipped ⇒ word = paint, not the expected `0xaabbccdd`).
+- `ci8 put`: **M9_dropcase_ci** (CI case removed ⇒ falls to default ⇒ store skipped ⇒ word = paint, not `0xdd223344`).
+- `rgb put`: the mutant **M_dropcase_rgb** is implied by the pattern (M9, M10) but is NOT in the listed mutant set — the brief's mutant list is incomplete relative to the (d) cell enumeration. With it: RGB falls to default, store skipped, word = paint.
+- `abgr put`: **M10_dropcase_abgr**.
+
+**Q6 — claim → row coverage of added-comment sentences:** Every observable claim in the added comments maps to PRETABLE §2:
+- "STORE IS SKIPPED, destination keeps what the guest had" → `ycrcb put`, `reserved put`, `two declined`, `indep paint`.
+- "not a zero fill" → `ycrcb put` (0 would be a distinguishable value).
+- "announce is latched on its own bit because this helper is per-pixel" → `once`, `latch indep`.
+- "old literal kept as prefix: witness attributes on it" → `ycrcb attrib` (witness row, not inlined), `announce text`.
+- "A declined PUT never reads buf" → SENTENCE (no row, not observable).
+- "Twelve of the sixteen type nibbles reach here, YCRCB among them" → SENTENCE (two driven, arm doesn't read value).
+- "different each run because main.c seeds random() per process" → witness determinism row (not inlined).
+
+**NONE uncovered.** But two SENTENCE rows are load-bearing on witness rows that are referenced but not inlined — I cannot verify those rows exist as described.
+
+---
+
+**Other things I found while verifying**
+
+1. **MODE_RESERVED is used but not defined in the inlined detector rows.** `setup_put(A, MODE_RESERVED)` appears in `two declined`; `MODE_RESERVED` is not defined anywhere in the inlined detector section. It presumably lives in the un-inlined upper half of the probe file (or in a shared header). Not a defect in the diff under review, but the detector section as inlined would not run.
+
+2. **The 5 witness rows are referenced but not inlined.** The "5/5 on the fix, 2/5 on HEAD" count and the `SGICOLOUR_RESULT` numbers depend on rows I cannot read. The detector's "9 rows" + "5 witness" = 14 total arithmetic is consistent, but I cannot verify the witness rows individually.
+
+3. **`M_dropcase_rgb` is missing from the listed mutant set.** Q5 needs it; the (d) enumeration in PRETABLE §5 lists `M9_dropcase_ci` and `M10_dropcase_abgr` but not the RGB analogue. If the panel intends `rgb put` to be defended, the mutant set is incomplete by one.
+
+4. **The comment "(This comment used to end ... Demoted, not deleted, for the same reason as the two demotions above it.)"** references "the two demotions above it" — I can see `SGIRE_W_BADMODE`'s demotion referenced in the brief (S4: "#513 had to demote SGIRE_W_BADMODE's") but the second demotion above is not enumerated in the packet. Not a defect, just a context I cannot verify.
+
+5. **The announce has two closing brackets.** `"[ put: color mode = 0x%x ] sgi_re: unimplemented colour type in horrible_getputpixel, x=%i y=%i; store declined (once) ]\n"` — one after the `%x`, one at the end. Likely intentional (the old literal was `[ put: color mode = 0x%x ]\n`, and the new text appends after it), but cosmetically odd. Not a bug.
+
+**What I read versus what I took from the packet.** Everything labeled READ is from the inlined diff, PRETABLE, and detector rows. Everything labeled REASONED is my derivation from those inlined facts (the `two declined`/early-return analysis, the cell coverage walk, the Q5 mutant assignments). Everything labeled NOT CHECKABLE is a premise the packet does not settle, named with the single fact that would.

@@ -1,0 +1,131 @@
+#519 sgirandomcolour -- KILL TABLE 1.  Opus 5 measuring seat, 2026-09-10 04:06-05:12.
+Instrument: sgi_re_colourdefault_probe.FROZEN.py (14 rows: 5 witness + 9 detector), frozen 04:06,
+run only from the frozen copy.  Clone: /tmp/gxopus519 (cp -a of build/), sentinel held for the table.
+Baseline: BASELINE_FIX519.c (SEC's dev_sgi_re.c frozen 04:06).  SEE README.txt -- SEC MOVED AT 04:26.
+Every .raw below ends in SGICOLOUR_DONE (verified); every build passed [ gxemul -nt dev_sgi_re.c ].
+
+ mutant                 edit (one per mutant, applied by mut519.py / mut519b.py)                     score   reddening rows                                        log
+ ---------------------  --------------------------------------------------------------------------  ------  ----------------------------------------------------  -------------------------
+ BASE                   none -- the fix as frozen at 04:06                                           14/14   (none)                                                BASE.raw
+ M1_reinstate    (b)    the whole decline arm -> the PRE-FIX arm verbatim: buf[0..3] = random();      6/14    ycrcb put, reserved put, determinism,                 M1_reinstate.raw
+                        "// TODO."; fatal("[ put: color mode = 0x%x ]\n", color_mode);   -- ok                announce text, two declined, once,
+                        stays 1, so the common store is taken again                                          latch indep, indep paint
+ M2_noguard      (d)    the store guard deleted:   if (ok)  /* #519: ... */   ->   (nothing)          9/14    ycrcb put, reserved put, determinism,                 M2_noguard.raw
+                                                                                                             two declined, indep paint
+ M3_zerofill     (d)    ok = 0;   ->   buf[0] = buf[1] = buf[2] = buf[3] = 0;   -- guard kept, the    10/14   ycrcb put, reserved put, two declined,                M3_zerofill.raw
+                        repair replaced by the zero fill the fix's own comment rejects                       indep paint
+ M4_okinlatch    (d)    ok = 0;  MOVED INSIDE the latch body, so only the FIRST declined PUT in a     13/14   two declined                                          M4_okinlatch.raw
+                        process skips its store
+ M5_nolatch             if (!(d->warned & SGIRE_W_BADCOLOR)) {   ->   if (1) {                        13/14   once   (got 2, want 1)                               M5_nolatch.raw
+ M6_sharedbit           the latch test+set keyed on SGIRE_W_BADMODE instead of SGIRE_W_BADCOLOR       13/14   latch indep   (got 0, want 1)                        M6_sharedbit.raw
+ M7_silent              the three-line fatal() deleted (latch kept, bit still set)                    10/14   ycrcb attrib, announce text, once,                    M7_silent.raw
+                                                                                                             latch indep
+ M8_declineall          int ok = 1;   ->   int ok = 0;   (every type declines)                        10/14   live, ci8 put, rgb put, abgr put                      M8_declineall.raw
+ M9_dropcase_ci         case DE_MODE_TYPE_CI: buf[0] = *color; break;  removed -> CI falls to         13/14   ci8 put                                               M9_dropcase_ci.raw
+                        default and is declined
+ M10_dropcase_abgr      the whole case DE_MODE_TYPE_ABGR: block removed -> ABGR declined              13/14   abgr put                                              M10_dropcase_abgr.raw
+ M11_null        (c)    the PRE-FIX FILE WHOLESALE (scratchpad/dev_sgi_re.pre519.c)                   6/14    same eight rows as M1                                 M11_null.raw
+ M12_prefix_reworded    the kept prefix reworded:  [ put: color mode = 0x%x ]  ->                     13/14   ycrcb attrib   (got no, want yes)                     M12_prefix_reworded.raw
+                        [ put: colour mode = 0x%x ]    -- an L4-shaped mutant: the witness
+                        attributes on that literal
+ ---------------------  --------------------------------------------------------------------------  ------  ----------------------------------------------------  -------------------------
+ *** THE MEASURING SEAT'S OWN MUTANTS -- BOTH TOTAL ESCAPES ***
+ M13_widthdecline (d)   ok = 0;   ->   if (bufdepth == 4)  ok = 0;                                    14/14   *** NONE -- CLEAN SWEEP ***                           M13_widthdecline.raw
+ M14_lineardecline (d)  ok = 0;   ->   if (linear)  ok = 0;                                           14/14   *** NONE -- CLEAN SWEEP ***                           M14_lineardecline.raw
+ ---------------------  --------------------------------------------------------------------------  ------  ----------------------------------------------------  -------------------------
+ BASE2_currentSEC       none -- SEC's dev_sgi_re.c as of 05:08, i.e. WITH the 04:26 announce edit     14/14   (none)                                                BASE2_currentSEC.raw
+
+ *** AND AGAINST THE MAIN LOOP'S **REPAIRED 19-ROW** INSTRUMENT (t2/...REPAIRED19.asrun.py, md5
+ 2662ef3a -- the one its own table 2c is running).  Measured, not inferred; serialised behind that
+ table (60 s quiet before the first build) so no build of mine loaded the host while its pty-timed
+ probe held wall-clock oracles: ***
+ BASE19                 none -- SEC's dev_sgi_re.c, 19-row instrument                                19/19   (none)   [matches their BASE_19 exactly]              BASE19.raw
+ M13w_widthdecline_vs19 the M13 edit, scored on the 19-row instrument                                19/19   *** NONE -- STILL A CLEAN SWEEP ***                   M13w_widthdecline_vs19.raw
+ M14l_lineardecline_vs19 the M14 edit, scored on the 19-row instrument                               19/19   *** NONE -- STILL A CLEAN SWEEP ***                   M14l_lineardecline_vs19.raw
+
+   So the two escapes are NOT an artifact of the 14-row table-1 instrument.  The five rows added
+   between 14 and 19 -- a position row (`ycrcb x4y1', vertex 4,1) and the RE-window priming rows --
+   move the x/y and window axes, and every one of them still drives its DECLINED type at
+   MODE_YCRCB 0x12f0 or MODE_RESERVED 0x1250, i.e. BUFDEPTH_32 on LIN_A.  The width axis and the
+   tiled axis are untouched by the repair, so both cells stay empty and both mutants stay invisible.
+
+Reference points, for the floor clauses:
+  (a) pre-fix build       HEAD 1ce8296 scored 6/14   -- ../fix_20260910/HEAD_detector_run1.out
+  (c) null medium         M11_null    scored 6/14    -- identical score AND identical eight red rows.
+  fix, main loop's run    14/14                      -- ../fix_20260910/FIX519_detector_run1.out
+
+
+WHY M13 AND M14 ESCAPE -- BY READING, NOT BY RE-AIMING
+------------------------------------------------------
+Both are the clause-(d) operand-swap form.  The guarded body is ONE statement,
+
+    cpu->memory_rw(cpu, cpu->mem, tileptr + ofs, buf, bufdepth, MEM_WRITE, NO_EXCEPTIONS | PHYSICAL);
+
+and its read-set is { cpu, cpu->mem, tileptr, ofs, buf, bufdepth }.  M13 conditions the repair on
+bufdepth -- the store's own LENGTH argument.  M14 conditions it on `linear', which is what selects
+between the tileptr the tiled arms compute and the one the LIN_A arm computes.  Neither is a remote
+lvalue: each is an operand of the very call that `if (ok)' guards.  So both fall out of the
+DEPENDS-ON clause-(2) enumeration mechanically, the way #462's M11 fell out of `data_len'.
+
+THE ROWS I EXPECTED TO REDDEN were, in each case, the four decline-observing rows -- `ycrcb put',
+`reserved put', `two declined', `indep paint' -- plus `determinism'.  None of them CAN:
+
+  * WIDTH.  bufdepth = 1 << ((mode >> 8) & 3).  Every row that drives a DECLINED type uses
+    MODE_YCRCB = 0x12f0 or MODE_RESERVED = 0x1250, both carrying DE_MODE_BUFDEPTH_32 (0x200), so
+    (mode >> 8) & 3 == 2 and bufdepth == 4 in every one of them.  The cell that M13 exempts --
+    {declined type} x {bufdepth != 4} -- is entered by no row, so `ok = 0' still fires everywhere
+    the instrument looks.
+      The sharp part: the probe DOES drive BUFDEPTH_8 -- `ci8 put' uses MODE_CI8 = 0x1000 -- but
+      only at a SUPPORTED type, where `ok' is never cleared anyway.  The width axis is exercised and
+      the declined-type axis is exercised; their JOINT cell is not.  That is the #499 width-axis
+      shape recurring, and it is invisible to a per-axis reading of the row list.
+
+  * ADDRESSING.  Every row drives LIN_A (tlb_mode 4, so linear == 1) except `latch indep' /
+    `indep paint', which drive LIN_B (tlb_mode 5) -- and LIN_B returns from the tlb switch's OWN
+    default arm (SGIRE_W_BADMODE) long before the colour switch, so it contributes no observation
+    of the colour decline's store at all.  The cell {declined type} x {tiled, tlb_mode 0-2} is
+    entered by no row.
+
+REACHABILITY -- both cells are guest-reachable through committed dispatch, established by reading:
+
+  * M13: the guest writes `mode' to DE_MODE_DST.  crmfbreg.h gives DE_MODE_BUFDEPTH_8 = 0x000, so
+    mode 0x10f0 (LIN_A | BUFDEPTH_8 | TYPE_YCRCB) reaches the default arm at bufdepth 1 -- ONE HEX
+    DIGIT from the row's own MODE_YCRCB = 0x12f0.
+  * M14: d->re_tlb_a[tlbi] is written by an ordinary guest store inside DEVICE_ACCESS
+    (grep 'd->re_tlb_a\[tlbi\] = data\[hwi\]').  Setting bit 15 makes tileptr bit 31 set, which is
+    what the !(tileptr & 0x80000000) check requires; a PUT with mode 0x02f0 (TLB_A | BUFDEPTH_32 |
+    TYPE_YCRCB) then reaches the store on the tiled path.  Two guest stores.
+
+WHAT THEY STORE -- measured in this same table rather than asserted.  The fix DELETED the random()
+fills, so a store re-admitted by M13/M14 writes UNASSIGNED `uint8_t buf[8]' stack bytes, not host
+PRNG output.  M2_noguard is exactly that channel, and it reads 0x70630072 / 0x70630069 / 0x70630006
+/ 0x70630021 across four sessions with `determinism' RED.  So an unassigned buf is guest-visible AND
+non-deterministic, measured; M13 and M14 re-open that on the cells no row visits.
+
+
+CHANNEL-LINE CHECK -- the mandate asks the first application to CHECK the line, not merely obey it
+--------------------------------------------------------------------------------------------------
+PRETABLE section 4 named, per row, the mutant it kills and the observable that differs, and claimed
+that is knowable at WRITING time before any table runs.  MEASURED: it held for ELEVEN of its twelve
+assignments and MIS-ASSIGNED ONE.  For the single-row kills the prediction was EXACT -- M4 -> `two
+declined', M5 -> `once', M6 -> `latch indep', M9 -> `ci8 put', M10 -> `abgr put', M12 -> `ycrcb
+attrib'.  The one row PRETABLE declared VACUOUS BY CONSTRUCTION under a named mutant (`indep paint'
+is fixed under M_sharedbit, and is a CONTROL for `latch indep') measured exactly so: M6 reddens
+`latch indep' alone.  That is the honest disclosure working rather than failing.
+
+  *** THE MIS-ASSIGNMENT, AND MY FIRST DRAFT OF THIS PARAGRAPH SAID "HELD, 12 FOR 12" -- corrected
+  in place. ***  Section 4 assigned M_declineall to `live silent'.  It is wrong, and PRETABLE's own
+  appended section 6a (added ~04:3x by the pass-2 panel, codex) had already corrected it while this
+  table was running: `ok = 0' for every type declines the RGBA accept PUT, so the destination keeps
+  the PAINT and the row that reds is `live'; the announce lives in the default arm only, so `live
+  silent' keeps its 0.  MY M8 MEASUREMENT IS THE INDEPENDENT CONFIRMATION -- M8_declineall reddens
+  live, ci8 put, rgb put, abgr put, and NOT `live silent'.  Measured here, corrected there, agreeing.
+
+  So the honest verdict on the CHANNEL line's founding claim -- that a row's channel-under-its-mutant
+  is knowable before any table runs -- is: MOSTLY YES, and the one error it made was caught by a
+  READING SEAT one pass later rather than by the table.  The line is worth keeping and is not
+  self-checking; it wants a second reader, which is exactly what it got.
+
+  The check's LIMIT, which this table also measures: the channel line validates ROWS THAT EXIST
+  against MUTANTS ALREADY ENUMERATED.  It said nothing about M13/M14, and could not have -- those
+  are generator-side gaps, and the channel line is explicitly a filter, not a demander of rows.

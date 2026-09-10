@@ -1,0 +1,65 @@
+**VERDICT: REVISE the proposed member-6 round. STAT1 is RO; only STAT0.ERR/LOST are W1C; SFT_RST is a persistent WO reset control, and PAR_DIS is WO. Uniform storage and readback would establish the wrong contract.**
+
+I read the working-tree handler and its uncommitted diff, the complete LCA header, the relevant local HRM sections, PCI interfaces/backend, and Alpha boot setup; I searched only the specified `src/`. S1 is verified, with two qualifications: diagnostic latch state changes, and the announces are shared across default offsets, once per direction per instance. S2’s register/documentation claims are verified; the grok attribution is present in the comment, but I did not independently audit that report. [Handler:326–501](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:326)
+
+I take S3’s option names from your packet. Its fault restriction holds for this fork’s MMIO failure path, which has no Alpha exception-delivery arm; it is not an architectural property of Alpha. The HRM explicitly describes IOC errors causing instruction exceptions. [Memory path:603–624](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:603), [HRM:9483–9489](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/21066_66a_hrm.txt:9483)
+
+For Q1, **WO must be added to the offered type vocabulary**. WO reads are UNPREDICTABLE; RO writes are ignored; X reads are UNPREDICTABLE and writes ignored. Consequently, echoing a WO value can be an emulator convention, but cannot prove hardware fidelity. [HRM:959–988](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/21066_66a_hrm.txt:959)
+
+| Register | Fields and access types | Reset state; SROM action |
+|---|---|---|
+| **STAT0, +0x040** | **RO:** P_NBR[31:13], CODE[10:8], TREF[7], THIT[6], CMD[3:0]. **R/W1C:** LOST[5], ERR[4]. **X:** [63:32], [12:11]. [HRM:10287–10370](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/21066_66a_hrm.txt:10287) | All bits **UNDEFINED** after reset; zero is a possible model initialization, not the specified reset value. SROM writes ones to ERR/LOST, effective clearing mask **0x30**. [HRM:10271–10272](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/21066_66a_hrm.txt:10271), [10788–10789](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/21066_66a_hrm.txt:10788) |
+| **STAT1, +0x060** | **RO:** ADDR[31:0]. **X:** [63:32]. **No W1C fields.** [HRM:10392–10409](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/21066_66a_hrm.txt:10392) | All bits **UNDEFINED** after reset. §6.4.14 specifies **no write** to STAT1. [HRM:10374–10379](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/21066_66a_hrm.txt:10374) |
+| **SFT_RST, +0x0c0** | **WO:** RST[6], mask **0x40**. **X:** [63:7], [5:0]. A written one asserts PCI reset; it remains asserted until a written zero. [HRM:10474–10489](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/21066_66a_hrm.txt:10474) | **RST=1** after reset; reserved bits have no promised value. SROM writes **zero**, releasing PCI reset. Software times the assertion duration. [HRM:10457–10462](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/21066_66a_hrm.txt:10457) |
+| **PAR_DIS, +0x0e0** | **WO:** PAR[5], mask **0x20**. **X:** [63:6], [4:0]. One disables IOC parity checking and its associated reporting/logging. [HRM:10509–10531](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/21066_66a_hrm.txt:10509) | **PAR=0**, enabling checking. §6.4.14 specifies **no write** to PAR_DIS. [HRM:10493–10497](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/21066_66a_hrm.txt:10493) |
+
+STAT0 is also more than an error log: TREF describes whether the last PCI transaction referenced a target window; THIT describes the TLB result of the last window-referencing transaction. Error capture freezes the logged fields while ERR is set, except TREF/THIT/LOST. Another error sets LOST. Clearing ERR does not itself erase the RO information or clear LOST. [HRM:10258–10269](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/21066_66a_hrm.txt:10258), [10320–10359](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/21066_66a_hrm.txt:10320)
+
+CODE values 0–7 mean retry limit, no device, bad data parity, target abort, bad address parity, page-table read error, invalid page, and data error. P_NBR records address bits for the page-table errors; CMD records the relevant PCI command; STAT1 supplies the error address for the other cases, with the burst/errant-longword qualifications described in its table. [HRM:10293–10318](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/21066_66a_hrm.txt:10293), [10361–10409](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/21066_66a_hrm.txt:10361)
+
+The requested §6.4.14 quotations are:
+
+> “Deasserts the rst_l signal by writing zero (0) to the IOC_SFT_RST register”  
+> “Clears the ERR and LOST bits by writing ones (1's) to IOC_STAT0 register bits <5:4>”  
+> [HRM:10784–10789](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/21066_66a_hrm.txt:10784)
+
+The section requires initialization following power-on or `reset_in_l`; its remaining items initialize W_BASE0/1 and HAE. There are no STAT1 or PAR_DIS writes in that enumeration. Its stated result is sufficient initialization for CPU-initiated transfers; DMA needs additional initialization. [HRM:10777–10798](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/21066_66a_hrm.txt:10777)
+
+I calibrated the staggered summary against the following mnemonic rows: the address at line 12665 belongs to HAE on 12666, and the address on 12666 belongs to CONF on 12667, agreeing with their prose addresses. For ERR/LOST, the explicit clearing prose resolves the staggered type column. [HRM:12664–12669](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/21066_66a_hrm.txt:12664), [10200](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/21066_66a_hrm.txt:10200), [10231](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/21066_66a_hrm.txt:10231)
+
+The consumer search found **no other fork code consuming any of these four LCA registers**. Relevant matches are the default-arm comment and STAT0/STAT1 header definitions; other status-name matches concern unrelated devices. The header lacks **both SFT_RST and PAR_DIS**. There is no corresponding state in `lca_data`, and no LCA `pcictl`/reset/parity consumer emerged. [Header:56–79](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/thirdparty/alpha_lcareg.h:56), [State:62–75](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:62)
+
+For Q2, my recommendation for substantive work is **7 for STAT0/STAT1 together, retaining 3 for SFT_RST/PAR_DIS until their effects are supported**:
+
+| Register | Disposition and cost |
+|---|---|
+| **STAT0** | **7:** hardware-owned status plus correctly limited W1C behavior, first-error capture, LOST handling and diagnostic updates. Useful nonzero behavior requires producers. Complete HRM behavior also requires error interrupt/exception integration. Member 6 can provide scaffolding, but guest writes must never manufacture RO status or set W1C flags. |
+| **STAT1** | **7, coupled to STAT0:** capture the corresponding address and preserve it while the error record is frozen; ignore software writes. A software-writable echo register would be incorrect. |
+| **SFT_RST** | **3 now; 7 for functional acceptance.** A persistent internal bit is appropriate, but must control assertion/release of PCI reset and affected device state. A member-6 shadow without a consumer implements no reset effect. |
+| **PAR_DIS** | **3 now; 7 when parity behavior exists.** A member-6 shadow can retain the requested setting, but changes no parity behavior today. Future gating must preserve target-reported `perr_l` errors on CPU-initiated writes: PAR explicitly does **not** suppress those. [HRM:10523–10527](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/21066_66a_hrm.txt:10523) |
+
+`bus_pci` has **no reset entry point or device reset callback**. Its device callback handles configuration writes; its runtime API provides address selection and data access. Reset support therefore costs an interface and device lifecycle work, not merely calling an existing function. [PCI device interface:92–114](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/bus_pci.h:92), [API:146–162](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/bus_pci.h:146)
+
+The absence of status producers is verified, but does **not** establish member 6 as the honest floor. An initially zero W1C latch that nothing sets remains zero under every software write; adding backing storage does not distinguish it from ignored writes. STAT1 has no software mutation at all.
+
+I found something further here: the PCI backend already recognizes an absent device, returning its “emptiness” response, but supplies no error result to LCA. Hardware must log this condition in STAT0/STAT1. Thus “nothing sets the logs” describes missing integration, not an absence of relevant conditions. [PCI backend:109–122](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/bus_pci.c:109), [HRM:9494–9513](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/21066_66a_hrm.txt:9494)
+
+For Q3, **the fork does not establish whether NetBSD/alpha or Linux/alpha writes SFT_RST or reads STAT0**. Its NetBSD comment documents configuration-address construction; its Linux comment says Linux reads **BASE**, at offset zero. Neither proves access to these four offsets, nor proves its absence. I did not substitute upstream kernel assumptions for that evidence. [NetBSD comment:160–162](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:160), [Linux comment:336–337](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:336)
+
+Direct boot loads a file and assigns its entry point to the CPU; Alpha setup constructs firmware-facing data and emulated PROM calls. That path does not execute the quoted SROM initialization. The sequence remains relevant to defining a post-firmware starting state: a future functional reset model must arrange released PCI reset for direct boot, rather than leave the hardware reset value asserted indefinitely. It does not demonstrate an existing guest access. [Loader:638–660](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/core/emul.c:638), [Alpha setup:83–197](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/machines/machine_alpha.c:83)
+
+Two additional findings affect precedent: **BASE is documented IOC_HAE**, whose initialization is required by SROM item 4, despite the handler ignoring it; and **CONF and TB_ENA are WO too**. Their existing readback behavior cannot serve as an architectural readback oracle. [HRM:10193–10224](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/21066_66a_hrm.txt:10193), [10250–10254](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/21066_66a_hrm.txt:10250), [10445–10453](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/21066_66a_hrm.txt:10445)
+
+For Q4, a corrected storage-round detector needs **host-fixture state inspection/seeding**, because neither software-created RO values nor WO readback is an architectural oracle. Use quadword accesses; the HRM excludes longword IOC access. [HRM:10180–10185](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/21066_66a_hrm.txt:10180)
+
+- **STAT0 — Rows:** chosen initialization; nondestructive reads; ignored RO/X writes; independently seeded ERR/LOST cleared only by their respective written ones, preserving logged fields.  
+  **(d) Mutants:** store/echo, W1S, clear-on-read, unconditional/both-flag clear, discarded W1C writes. The last mutant survives an all-zero fixture.
+
+- **STAT1 — Rows:** seeded hardware address reads intact; software writes leave it intact; STAT0 acknowledgement does not erase it. No W1C row applies.  
+  **(d) Mutants:** writable echo, W1C/clear-on-write, clear-on-read, cross-register clearing, constant-zero reads; nonzero fixture state distinguishes them.
+
+- **SFT_RST — Rows:** internal reset value and persistent assertion/release obey bit 6; X bits have no effect; any read result is tested only as an explicit model convention.  
+  **(d) Mutants:** wrong bit/polarity/reset value, self-clearing pulse, ignored writes; an echo-only implementation requires an actual reset-effect oracle to reject.
+
+- **PAR_DIS — Rows:** internal PAR starts clear and follows bit 5; X writes have no effect; readback is only a model convention; functional tests require parity producers.  
+  **(d) Mutants:** wrong bit/polarity/reset value, ignored writes, suppression of target-reported errors; storage checks alone cannot distinguish functioning parity control from an unused shadow.

@@ -1,0 +1,50 @@
+VERDICT: The core defect is real and the candidate fix is sound, but several premises (especially 1(d) register value on Alpha) cannot be settled from the packet. The lane decode matches hardware; size handling is a separate defect.
+
+**1(a) — READ/REASONED.**  
+Walk `(0x3fd << 5)`: original relative_addr = `0x7FA0`. After `>>= 5`, `relative_addr = 0x3fd`. `ofs = 0x3fd & 3 = 1`.  
+Lane = 1, port = 0x3fd, PCI I/O ad<1:0> = 01.  
+This matches Table 6-3: a<6:5> = 01 → PCI I/O ad<1:0> = 01. **Confirmed.**
+
+**1(b) — REASONED.**  
+For LDL with a<6:5>=01, a<4:3>=00, len=4, ofs=1: the packing loop places `byte` at `data[1]`, zeros elsewhere. That is correct for a byte read on lane 1.  
+Hardware-legal encodings served wrongly today: **Word** (a<4:3>=01) and **Tribyte** (a<4:3>=10). The model always fetches exactly one byte and zeros the rest, so word/tribyte transfers lose data. Byte encodings (all four lanes) are served correctly. This is a separate row (`lcaisasize`).
+
+**1(c) — READ.**  
+Yes. S4 states the Alpha decoder has no CPU-type gate for BWX instructions, and the witness issued LDBU from guest code. No gate stops it.
+
+**1(d) — CANNOT SETTLE FROM PACKET.**  
+S3 says no fault path on Alpha, but the register value after a `return 0` is not established. The packet quotes Codex saying the destination register is left unchanged, but that is not verified here.  
+Single fact that would settle: whether `cpu_alpha_instr_loadstore.c` writes the destination register when `memory_rw` returns 0.
+
+**1(e) — Table (READ/REASONED).**  
+Status today (read / write) and after candidate fix.
+
+| len | ofs | Today (read) | Today (write) | After candidate |
+|-----|-----|--------------|---------------|-----------------|
+| 1   | 0   | served correctly | served correctly | still served |
+| 1   | 1   | false success (zero) | false success (writes data[0]) | declined |
+| 1   | 2   | exit | exit | declined |
+| 1   | 3   | exit | exit | declined |
+| 2   | 0   | served correctly | served correctly | still served |
+| 2   | 1   | served correctly | served correctly | still served |
+| 2   | 2   | false success (zero) | false success (writes data[0]) | declined |
+| 2   | 3   | exit | exit | declined |
+| 4   | 0–3 | served correctly | served correctly | still served |
+| 8   | 0–3 | served correctly | served correctly | still served |
+
+**2 — New mutant not listed.**  
+Change the guard to `if (ofs >= len && len != 2)`. This exempts the `(len=2, ofs=2)` equality cell, leaving it served (false success) while all other declined cells still decline.  
+Row that stays green: **decline row for `(len=1, ofs=1)`** (or any other declined cell).
+
+**3 — Option-set completeness.**  
+Member 4 (ACCEPT) is **not** available for `ofs == len` equality cells: placing the byte at `data[ofs]` would write out of bounds because `data` has length `len`. Accept would require extending the buffer or redefining the access width.  
+Member 7 (honour a<4:3>) is the right disposition for (b), but it is a separate, larger change. No new option beyond S3 is apparent.
+
+**4 — Vacuous row.**  
+The **(b) reinstatement** row is vacuous by construction. The candidate fix does not touch a<4:3> handling; no mutant of the lane guard or failure propagation can affect whether the model still discards a<4:3>. That row will always pass and provides no discrimination.
+
+**5 — Additional observations.**  
+- The `fatal()` call uses `%i` for `size_t len`; should be `%zu` or cast.  
+- Both downstream `memory_rw` calls lack `PHYSICAL` (noted by Codex).  
+- The write arm’s `data[ofs % len]` is wrong for `ofs >= len`; the candidate fix removes the modulo by rejecting those cells.  
+- The read loop zeros all bytes except `data[ofs]`; this is correct for byte transfers but wrong for word/tribyte (already covered under 1(b)).

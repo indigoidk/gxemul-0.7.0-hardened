@@ -1,0 +1,140 @@
+I'll start from the full offloaded brief, then check the uncommitted `dev_lca.c` diff and detector against the LCA manual and the tree rather than ratifying the packet.HEAD matches the brief. Next I’ll re-derive the six register predicates from `dev_lca.c`, the LCA header, and the HRM rather than taking the packet’s sets as given.I’ll enumerate the W_MASK field and walk the HRM tables next, then check `lca_pci_conf` and the probe against those encodings rather than the brief’s count.The CONF bit-1 comment already looks wrong against `lca_pci_conf`. I’ll confirm the remaining HRM registers, STAT0/IACK addresses, and the two named precedents before scoring the floor cells.**NOT RATIFY the detector as floor-complete.** The six store-masks match the HRM field layouts I re-derived; the CONF announce names bit 1 as type-1 (it is not); three one-token (d) edits are predicted **40/40**; author’s M23 does not red the `live` rows.
+
+I read `GXEMUL-SEC/src/devices/dev_lca.c` (working tree, `lca_ioc` at 326, `lca_pci_conf` at 148), `alpha_lcareg.h`, `debugmsg.c:365-390`, `regress/lca_badval_probe.py`, `PRETABLE.out`, `FIX518_detector_run1.out` (40/40), `HEAD_74daefd.out` (14/20; banner actually says HEAD `54a2eb4` — #517 did not touch this file), `_scratchpad/21066_66a_hrm.txt` at the cited tables **and** the register-address list at 10200–10646, `dev_gt.c:107-125`, `dev_footbridge.c:709-732`. Line numbers match the fork, not the 2021 `./src/` copy.
+
+---
+
+### Q1 — premises, walked
+
+**(a) YES — 13 of 4096, and they are exactly Table 6-6.**  
+Domain is the code’s producer: `v = idata & 0xfff00000`, `f = v >> 20`, so `f ∈ {0…4095}` for every guest word. `(f & (f+1)) == 0` iff `f+1` is a power of two in `1…4096`:
+
+`f = 0,1,3,7,0xf,0x1f,0x3f,0x7f,0xff,0x1ff,0x3ff,0x7ff,0xfff` (13 values).
+
+Table 6-6 (:9586–9598) is those same 13 bit-strings. Header `IOC_W_MASK_1M`…`_4G` is the same 13 immediates. Non-members fail the test (walked, not guessed): `2&3=2`, `5&6=4` (the probe’s `0x500000`), `6&7=6`, `0xaaa&0xaab≠0`, `4094&4095=4094`. No 14th; no Table 6-6 encoding excluded. Table 6-17 (:10610–10621) is W_MASK `<31:20>` plus RES type X on both sides, so dropping everything except `0xfff00000` is the field, not a second invention.
+
+**(b) NO change to what `lca_pci_conf` reads.** It does `type1 = d->ioc_conf & 1` (`dev_lca.c:195`). For every `idata`, `(idata & 0x3) & 1 == idata & 1`. Bit 1 is stored and never consumed. Nothing else in `GXEMUL-SEC/src` reads `ioc_conf`.
+
+**(c) YES, bit 33 is set.** `IOC_W_BASE_WEN = 0x200000000` (`1<<33`). `0x240000000 & 0x200000000 = 0x200000000`. Residual `0x40000000` is `W_BASE<30>`. SG is clear. `wbase1 wen` / `wen once` therefore do write WEN. Confirmed in `FIX518_detector_run1.out:20` (announce on `0x240000000`) and `:45–48`.
+
+**(d) YES for `+0x1e0` as a hole; the window is bigger than the brief’s story.**  
+`DEVINIT` maps `LCA_IOC_BASE`, length `0x20000000` (`dev_lca.c:529–531`). `relative_addr = 0x1e0` is inside. `alpha_lcareg.h` has no `+0x1e0`. HRM “accessed at address” list (10200–10646) ends IOC-space at T_BASE1 `1800001A0`; IACK_SC lives at `1A0000000` (outside this mapping). Switch cases I grepped: no `STAT0`/`STAT1`/`SFT_RST`/`PAR_DIS`. So `+0x1e0` does hit `default:`.  
+**The same `default:` also swallows documented registers the brief never named:** STAT0 `+0x040`, STAT1 `+0x060`, SFT_RST `+0x0C0` (`:10461`), PAR_DIS `+0x0E0` (`:10496`). S6.4.14 items 1–2 **require** SROM to write SFT_RST and STAT0. Header defines STAT0/STAT1 with full field masks and no SFT_RST. TB_TAG0…7 at `188000000` (`:10697`) are also inside the `0x20000000` window.
+
+**(e) Register state: no. Log channel: yes, on two old-accepted values.**  
+Old accepted sets from the **removed** predicates in the diff, walked through the new stores:
+
+| arm | old accepted | new store | guest Δ |
+|---|---|---|---|
+| CONF | `{0,1}` | `& 0x3` → `{0,1}` | none |
+| TB_ENA | `{0,0x80}` | `& TEN` → `{0,0x80}` | none |
+| W_BASE0 | `{0, 0x300800000}` | `& (BASE\|SG\|WEN)` → same (that value is WEN\|SG\|`0x800000`) | none |
+| W_MASK0 | `{0x700000}` | field 7, stored | none |
+| W_BASE1 | `{0x240000000}` | same (WEN\|`0x40000000`) | none |
+| W_MASK1 | `{0x3ff00000}` | field `0x3ff`, stored | none |
+
+`FIX518_detector_run1.out:13` and `:20` show the **new** WEN announce on `0x300800000` and `0x240000000` — values the old whitelist **accepted silently**. Guest MMIO is unchanged; `fatal()` now prints once. That is a host-log change on a previously-accepted write, not a stored-value regression.
+
+**False premise in the diff itself (not in the packet’s S-list):** comment + announce string at the CONF arm say bit 1 is “type-1 configuration cycles”. PCI type-1 is `AD<1:0>=01` = **bit 0**, which `#515` already models (`type1 = d->ioc_conf & 1`). Encoding `0x2` is `AD<1:0>=10`, a legal write to a two-bit field, not type-1. The witness value `0x2` was the right *killing* value under `idata & ~1`; the fix then misnamed it. `FIX518_detector_run1.out:4` prints that wrong parenthetical on a write of `0x2`.
+
+`fatal()` prints and returns: `debugmsg.c:384-390`, no early-out, no `exit`. Latch vs `-q` holds.
+
+---
+
+### Q2 — smallest edit that stays 40/40 (predicted; not built)
+
+PRETABLE §5 does **not** contain the CONF announce operand. Dominating predicate on the edited line: `if (idata & 0x2ULL)`.
+
+**One hex digit: `0x2` → `0x1`.**  
+D3 writes `0x1` first (`seq` consts: `0x1`, then `0x100000002`, then `0x2`). Either condition latches on the first or second write; `conf once` still wants `1`. `conf reserved` still stores `0x2`. No other session counts `IOC_CONF<1> set` without that leading `0x1`. Expected green: **`conf once`** (and every `live`/`stored` row).
+
+That edit makes the diagnostic fire on type-1 (which **is** modelled) and stay silent on CFG=10 (which is not). It is the comment’s confusion compiled.
+
+Two more one-token 40/40s, also absent as planned mutants:
+
+1. **`d->window_mask_0 = v` → `= idata`** (and/or MASK1). Every valid mask the probe writes already has only bits 31:20. `wmask0 declined` still keeps `0x100000` because the rule still refuses `0x500000`.
+2. **Delete the WEN announce at W_BASE1 only** (keep BASE0’s). D4 always enables BASE0 first; `wen once` still gets 1. Symmetric: delete BASE0’s, keep BASE1’s — still 1. (`M19` removes **both**, which would red; the missing cell is one label.)
+
+I did not build these. The row walk is the warrant; a scratch clone would settle them in one table.
+
+---
+
+### Q3 — option set
+
+Named: member 3 (decline + latched `fatal()`).
+
+**Not named at `default:`:** member **6 BACKED ACCEPT** and member **7 IMPLEMENT**, and they are the ones the HRM actually uses on offsets this arm now owns.
+
+- `dev_gt.c:107-125` **stores** the decode registers it does not translate (`d->decode[...] = idata` plus a TODO `fatal`). That is 6.
+- `dev_footbridge.c:709-732` (`SDRAM_BA_MASK`) is a size whitelist that **stores nothing on success or failure** and `exit(1)`s on read — not a store-if-valid mask, and not transferable as “decline the encoding”.
+- STAT0 / SFT_RST are not “unlisted”. S6.4.14 items 1–2 require writes there. After this diff those writes survive as “unimplemented … declined” and a later read is 0, not the written bits. Member 7 for SFT_RST (PCI `rst_l`) and STAT0 (the error log the rest of ch.6 writes) was never on the table.
+- Member **5 FAULT** is **not available** on Alpha (`#516` already measured: no dyntrans delivery). The set is a menu of dispositions, not of things this CPU can do.
+
+**Not named at W_MASK:** member 6 again — store bits 31:20 even when Table 6-6 says “unsupported”, because **nothing consumes the mask** (S5: translation not modelled). “Unsupported” in the HRM is not “keep previous”. The detector *commits* to decline-not-store (`wmask0 declined`); that is a design choice, not a hardware obligation. Silent accept of all 12-bit fields (member 4 on the field, no 13-encoding gate) was also unnamed.
+
+`+0x1e0` itself is a real hole; member 3 is the right member **there**. The defect is treating STAT0/SFT_RST as the same hole.
+
+---
+
+### Q4 — floor cells with no varying row
+
+Not “none”. Author’s grid, cells whose channel does **not** move under the one-edit mutant (predicted):
+
+| cell | why nothing reds |
+|---|---|
+| W_BASE0/1 **mask dropped × store** (raw `= idata`) | every W_BASE value driven is already in `{BASE,SG,WEN}` |
+| W_MASK0/1 **mask dropped × store** (`= idata` on success) | every *legal* mask driven has no extra bits; illegal ones still take the else-arm |
+| CONF **announce operand** `idata & 0x2` (not in §5 at all) | D3’s leading `0x1` makes `0x2` and `0x1` both count as 1 |
+| WEN announce **at one label** | shared latch + BASE0-first session; 7g-1 shape, and §5 said 7g-1 “does not fire” because there is no fall-through — the join is the **shared bit**, not fall-through |
+| DEF_R **latch removed** | D5 issues **one** read; count stays 1. `def r once` pins independence from DEF_W (`M21`), not the (once) property of DEF_R |
+| CONF latch **shared with WEN** | never co-observed in one `seq()` |
+
+CHANNEL §4 names `M_nolatch_defw` and `M_base0_nonzero` and `M_mask_field` and `M_wen_perreg`; §5’s planned list does not contain `M_nolatch_defw`, `M_base0_nonzero`, a W_MASK extract-mask mutant, or per-label WEN. That is the block’s own “prescribed row dropped at rewrite” shape, inside one file.
+
+`conf stored` / `tbena stored` / M8 / M10 / M11 / M13 / M15 / M16 / M17 / M18 / M20 / M21 **do** vary for the cells they name. The holes are the ones above, not a clean sweep.
+
+---
+
+### Q5 — accept-row failability
+
+Author’s M23 is the **wrong polarity** and covers **one** of eight rows. Re-adding `{0, 0x300800000}` still **accepts** `0x300800000`; `wbase0 live` stays green. “Rejecting `0x300800000`” is a different mutant and is not “the old whitelist”.
+
+De-escalation is the **old** accept set. Growth = refuse a value that used to live:
+
+| row | value | mutant that reds it | does author’s M23? |
+|---|---|---|---|
+| `conf live` | `0x1` | `& 0x3` → `& 0x2` (drop **bit 0**), or refuse `idata & 1` | no. **M8 (`& 0x1`) keeps bit 0** and does not red this |
+| `tbena live` | `0x80` | `& TEN` → `& 0`, or refuse TEN | no. **M10 (raw) still stores `0x80`** |
+| `wbase0 live` | `0x300800000` | M11 drop WEN / M12 `& 0xffffffff` / drop SG | not via “re-add whitelist” |
+| `wmask0 live` | `0x700000` | M14 `f==1` (7≠1), or refuse `0x700000` | no |
+| `wbase1 live` | `0x240000000` | M11 / M12 | no (M23 is BASE0) |
+| `wmask1 live` | `0x3ff00000` | M14 `f==1` | no |
+| `wbase0 zero` | `0` | `M_base0_nonzero` (`!= 0` decline) — in §4, **not in §5** | no. (b) at BASE0 **accepts** 0 |
+| `wbase1 wen` | `0x240000000` | M11 / M12 | no |
+
+`wbase0 live` is failability-covered as a **side effect of M11/M12**, not of M23. `conf live` and `tbena live` are the two accept rows whose planned (d) mutants leave them green.
+
+---
+
+### Q6 — claim → row
+
+PRETABLE §2 maps the true half of the CONF comment and misses the false half.
+
+**Unrowed observable claims:**
+
+1. **“bit 1 (type-1 cycles) is stored and announced once, not modelled”** (`dev_lca.c` CONF arm). `conf stored` / `conf once` pin that `0x2` is stored and that a CFG<1> needle prints once. They do **not** pin “is type-1” or “not modelled as type-1”. Type-1 **is** modelled. Product string is a wrong record (L4), cheap to correct.
+2. **“announced once when any window is ENABLED.”** `wen once` pins “at least one of two WEN writes in a BASE0-first session”. “Any” (BASE1 alone, BASE0 alone) has no row. Same cell as Q2/Q4.
+3. Default-arm **“no state changes”** is untested against STAT0/SFT_RST (documented registers, required SROM writes). `def alive` is `+0x1e0` only.
+
+§2’s explicit no-row sentences (diagnostic width; TB_ENA silent drop; W_T_BASE raw) are honest.
+
+---
+
+### Else (read, not taken from the packet)
+
+- W_MASK / CONF / TEN / W_BASE fields are **WO**; hardware readback is UNPREDICTABLE (`:980–988`). Echoing stored values is emulator policy and pre-existed. The detector’s oracles are that policy. Not a ship-blocker; do not call the readbacks architectural.
+- `HEAD_74daefd.out` is labelled `74daefd` and stamped `54a2eb4`. The 14/20 figure is still the six `<arm> legal` deaths with the right diagnostics.
+- `lca_badval_probe.asrun.py` is the **20-row** witness (ends at the summary). Current `regress/lca_badval_probe.py` is 40 rows. The HEAD log’s “byte-identical” hash is of the witness-era file.
+- `d->warned` is now bits 0–7; IRQ stubs still own 0–1; no site writes the whole word. That part of §3 holds.
+
+**Disposition:** correct the type-1 string/comment in-round (L4). Do not ship the detector as satisfying (d) until at least one of: a CFG=10-only announce-count row (no leading `0x1`), a W_MASK reserved-bit keep row, a BASE1-only WEN row, a second default-read, and a `conf live` growth mutant that drops bit 0. STAT0/SFT_RST as member 6/7 is a **new queue item**, not this round’s six-arm fix — but it is not “unlisted offset” either, and the default-arm comment should not say that it is.

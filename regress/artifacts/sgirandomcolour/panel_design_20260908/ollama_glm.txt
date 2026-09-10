@@ -1,0 +1,38 @@
+**VERDICT: Member 3 — DECLINE + latched announce. Delete the four `random()` stores and the `fatal()`; latch-announce once; zero-fill `buf` *inside the declined arm* (not at its declaration) and let the `memory_rw` proceed. `sgirebufuninit` stays a separate round. Witness constructible only if two premises hold that this packet cannot settle: whether `fatal()` is noreturn, and whether undefined color-type bits survive the register-write path to this helper.**
+
+## Premise audit
+
+* **Mask arithmetic — confirmed (REASONED).** Mask `0xf0` covers 4 bits → 16 masked values {0x00, 0x10, …, 0xF0}; the snippet shows 4 case labels; 16 − 4 = 12 reach `default:`; 0xf0 is one of the 12 and is the fifth documented type. "12, one documented" is correct.
+* **The grep premise is weaker than stated (READ + REASONED).** `grep -c YCRCB == 0` proves token-absence, not unhandled-ness — a numeric `case 0xf0:` would evade it. The inlined switch independently shows no 0xf0 case, so the conclusion holds *for this helper*; "handled nowhere else in the file" rests on the grep alone.
+* **UNSETTLED PREMISE #1 — `fatal()` semantics.** Nothing in the packet says whether `fatal()` returns. If it is noreturn (filling `buf[0..3]` before dying is otherwise pointless), the default arm today writes **nothing**: the emulator dies. Then every statement about "what the declined fill leaves in guest memory" describes only the *post-fix* world. **Settling fact: the declaration/definition of `fatal()` (a noreturn attribute or trailing `exit()`).** Note the chosen fix is correct under either resolution; what changes is the witness's *red* (early exit vs. garbage write).
+* **UNSETTLED PREMISE #2 — mode passthrough.** Whether a guest store of, say, color-type 0x40 reaches this helper intact, or is masked/rejected upstream. **Settling fact: the DE-mode register write handler (and any validation between register and helper).** This decides Q5.
+* **Micro-premise:** #504 already consumes "a `d->warned` latch bit" (READ). If the PUT announce reuses that bit, the first declined GET silences it forever. The packet does not say whether a second bit is free.
+
+## Q1 — disposition and buffer content
+
+**(a), instantiated arm-locally, ranks first; (b) second; (d) third; (c) last — the brief's rejection of (c) is right.**
+
+* **(a), arm-local memset** (call it a2): post-fix, `buf[0..7]` are zero and the tile receives `bufdepth` zero bytes. Deterministic, no host-stack leak, no new control flow, and — critically — it does **not** zero-init at declaration, so `sgirebufuninit` stays red for its own round (see Q3). The brief's objection — "publishes a colour the guest never asked for" — is already adjudicated by precedent: #504's shipped fix published `fg`, a colour the guest's GET never asked for either, and the project recorded that as the improvement over noise (READ, quoted). A put engine that always writes `bufdepth` defined bytes is also the smaller semantic invention: a silent no-op put leaves a guest that "cleared" a region with stale pixels and no signal but a latch.
+* **(b)** is the defensible runner-up: "the destination's prior content stands" is the strict structural analogue of #504's "the caller's prior stands." But it requires new control flow next to a hazard the project has already been burned by (Q2), and #504's shipped outcome was "the effect still occurs, with a defined substitute," not "the effect is suppressed."
+* **(d)** (write `*color` raw, or GET-then-rewrite) invents an encoding for undefined modes — that drifts toward IMPLEMENT with no spec in the packet.
+* **(c)** is dominated by (a): identical write shape, but nondeterministic, seed-irreproducible, a host-stack disclosure into the guest, and — the neat point — it *reintroduces the exact defect class of `sgirebufuninit`* into the arm this round is fixing.
+
+Not FAULT: per-pixel `fatal()` is the thing being removed; #504 declined the mirror case (READ). Not ACCEPT/IMPLEMENT: the packet contains no hardware semantics for undefined modes to accept.
+
+## Q2 — control flow if (b)
+
+Skipped statement: exactly one — the `cpu->memory_rw(cpu, cpu->mem, tileptr + ofs, buf, bufdepth, MEM_WRITE, NO_EXCEPTIONS | PHYSICAL);` call. Mechanism: `int do_write = 1;` before the switch; default arm sets `do_write = 0;` and breaks; after the switch, `if (do_write) cpu->memory_rw(...)`. Afterwards control falls to the end of the `if (put)` block; the GET `else` is dead (put is true); then the function's tail. **The tail is not in the packet — I cannot certify an early `return`, and I say so rather than guess.** The flag-guard is the only form certifiable from here precisely because it provably removes one statement's execution and nothing else, making the unseen tail's content irrelevant. This is the direct answer to the four-readers failure.
+
+## Q3 — two rounds
+
+Two. The brief's unification claim is weaker than it looks: declaration-init alone does **not** fix this round — the `fatal()` still kills the emulator — so site 1's fix is fatal-removal + latch + fill, a strict superset of site 2's fix, not one design. Root causes also differ (dispatch on undefined mode vs. fill-width < `bufdepth`). And declaration-init would pre-green `sgirebufuninit`'s already-filed row, destroying its red before its round ran. If forced to name the one oracle a merged round would need: "no indeterminate byte crosses this `memory_rw`" — but the latch announce is a new channel, violating "no new oracle." Hence arm-local memset here; declaration-init belongs to `sgirebufuninit`'s round.
+
+## Q4 — detector and mutants
+
+Channel: guest-visible destination bytes (the channel #504's witness already used — READ that it exists; its mechanism is not in the packet) plus exit status, with this script: (1) pre-seed the target bytes **nonzero** via a defined-mode put (this doubles as the before-liveness control); (2) declined put, color-type 0x40, `*color ≠ 0`, at one offset; repeat at a second offset with color-type 0xf0; (3) read back; (4) assert targets all-zero, adjacent bytes unchanged (the write is only `bufdepth` bytes at `ofs`), normal exit; (5) run twice, assert identical transcripts. Green is unambiguous under either resolution of the `fatal()` premise.
+
+Mutants: **M1, "keeps the latch, nulls the effect"** — announce fires, write skipped — escapes *only* if the destination wasn't pre-seeded; the pre-seed plus zeros-assert kills it. **M2** keeps `fatal()` after the fill — killed by the survival assert. **M3** treats unknown modes as RGBA of `*color` — deterministic and nonzero; killed by the zeros-assert with `*color ≠ 0`. **Smallest genuine escape:** a mutant special-casing exactly the tested (mode, offset) tuples to write zeros while staying random elsewhere — defeated by exercising two modes at two offsets, i.e., keeping the test set strictly larger than any special case smaller than the real fix.
+
+## Q5 — witness
+
+Likely constructible in #504's shape (`-E sgi -e ip32`, real dispatch, same script red/green): pre-seed, declined put, read back, post-op defined-mode control proving the device isn't wedged. The packet names `draw_primitive()` as a caller that writes to the destination (READ), so a PUT through this helper is plausibly driven the same way. The single blocking premise is UNSETTLED #2: if the register-write path masks mode bits to defined types or rejects the store upstream, **no witness exists**, the round is documented-only, and "12 of 16" then describes host-reachable states no real guest can reach. The readback channel's mechanism is likewise not shown; I rely on #504's witness having observed destination bytes, which the packet asserts.

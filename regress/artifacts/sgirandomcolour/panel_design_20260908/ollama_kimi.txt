@@ -1,0 +1,45 @@
+**VERDICT:** Member 3 — DECLINE + latched announce, implemented as candidate (b) with a one-local guard (`ok`) around the single `memory_rw` statement (not an early return), as a round SEPARATE from `sgirebufuninit`; and one premise is load-bearing yet not checkable from this packet: whether `fatal()` returns.
+
+## Premise audit (this is where the round nearly wobbles)
+
+* [READ] The arithmetic in §2 checks out: mask `0xf0` is one nibble = 16 values; the switch shown has 4 case labels + default; 16 − 4 = 12 unhandled, `0xf0` among them. No defect.
+* [READ] The inlined switch has exactly four case arms and none touches `buf[4..7]`; CI writes only `buf[0]`. The `sgirebufuninit` premise is consistent with the shown code.
+* [READ] The default arm as inlined is: four `random()` stores, `// TODO.`, **then `fatal(...)`**. The brief's framing — "what does a DECLINED buffer fill leave behind," i.e. the premise that random bytes are handed to `memory_rw` — silently assumes control reaches the write past `fatal()`.
+* **NOT CHECKABLE FROM PACKET:** does `fatal()` return? This is the pivotal premise. If `fatal()` exits (as upstream gxemul's does), the four `random()` stores are dead code, `memory_rw` never runs for a declined mode, and the actual current defect is *guest-triggerable emulator termination* (a documented register value, YCRCB, kills the process) — not a random colour. If `fatal()` returns, the defect is as framed. **The single settling fact: the definition/declaration of `fatal()` (noreturn/exit vs. returning).**
+* [REASONED] §3's `#504` note says random GET values were observed arriving at the destination. That proves the GET-side default *completed* pre-fix, but is consistent with both "GET had no `fatal()`" and "`fatal()` returns." It does not settle the PUT branch. Note also `#504`'s destination write may have been done by `draw_primitive()` directly rather than via this helper's PUT, so even that is ambiguous.
+* [REASONED] The recommended fix is identical in both forks (decline + latch + no write); only the witness's "red" signal differs. So the round survives the uncertainty, but its *stated mechanism* may be wrong.
+
+## Q1 — ranking
+
+**(b) > (a) > (c)** [REASONED throughout]
+
+* **(b) skip the write** — correct analogue of `#504`. There, "leave it alone" worked because a *deterministic thing already stood* (caller's `color = fg`). Here the pre-existing deterministic thing is **the guest's own memory**, not `buf`. Declining the write lets guest memory stand; nothing fabricated; same disposition as the shipped sibling fix in the same helper (uniform model semantics).
+* **(a) zero-fill and write** — deterministic, but publishes bytes (black/transparent) the guest's mode never defined, and only for *this* arm; CI with `bufdepth=8` would still leak until the sibling round lands, leaving the file in an inconsistent state where one arm was incidentally patched. Acceptable fallback if control flow is forbidden, otherwise strictly second.
+* **(c) leave `buf`** — the brief's rejection stands. As a fix design it deliberately publishes uninitialised host stack; the only world where it is harmless is the world where `fatal()` exits, and there it is unreachable — so it wins in no world.
+* **(d) IMPLEMENT YCRCB** — rejected for this round: 11 of the 12 unhandled values are undefined and *cannot* be implemented, so a decline arm is needed regardless; and a correct YCRCB conversion needs a spec not in this packet. Separate candidate round at best.
+
+## Q2 — exact control flow [partly READ, construction REASONED]
+
+* New `int ok = 1;`; in `default:`: the latched announce (`d->warned`, one shot, because the helper is per-pixel — [READ] from the `#504` comment) instead of the `random()` stores and `fatal()`, plus `ok = 0;`.
+* The **only statement skipped** is the single `cpu->memory_rw(cpu, cpu->mem, tileptr + ofs, buf, bufdepth, MEM_WRITE, NO_EXCEPTIONS | PHYSICAL);`, guarded as `if (ok)`.
+* Afterward: the `if (put)` branch closes (the write is [READ] its last shown statement), the `else` is not entered, and the function continues to whatever follows the if/else.
+* **Not visible from packet: everything after the `else` body.** I therefore do not propose any early `return`; the `if (ok)` guard preserves any unseen tail by construction — this is the recorded failure the brief cites, and the guard pattern is the only proposal safe against it. With the write skipped, `buf` is never handed to the host memory subsystem, so its uninitialised state is irrelevant on this path.
+
+## Q3 — two rounds [REASONED]
+
+Two, and the shared-fix illusion fails on a hard fact: **if `fatal()` exits, a declaration-time `memset(buf,0,8)` does nothing for the default arm — the process dies before `buf` is ever read.** One fix demonstrably cannot cover both. Even in the fatal-returns fork: semantic classes differ (handling of an invalid guest mode vs. host-stack disclosure on *valid* modes), minimal fixes differ (guard+latch vs. initialiser), and no single oracle exists — this round's oracle is behavioural (nothing written, one announce), the sibling's is an undefined-read detector (MSan class), which says nothing about whether a write *should* have happened. The memset camouflage is exactly a "bigger round" smuggled in as a finding. Ordering is unconstrained, but this round's guard must not presume the sibling's memset has landed.
+
+## Q4 — detector: three channels, and the mutants [REASONED]
+
+Channels (one script):
+1. **Sentinel-unchanged in guest memory:** guest PUTs a distinctive sentinel with a valid mode (e.g. RGB), re-PUTs the same pixels with a declined mode (YCRCB), reads back with a valid-mode GET, compares. Post-fix = sentinel intact. Single-run sound; equality with a fabricated/leaked value is a fluke, not a draw (per-byte sentinel for small `bufdepth`).
+2. **Announce count == exactly 1** per run (proves the latch, kills silent drop).
+3. **Process completion** (under fatal-exits this *is* the red→green signal; otherwise a free control). Two-run byte-identity as liveness/determinism control.
+
+Mutants I would build, and why each dies: **M1** keep guard but zero-fill `buf` so the write still happens (evades determinism-only oracles; killed by channel 1 — destination ≠ sentinel); **M2** skip the write but drop the announce (killed by channel 2); **M3** keep `fatal()` (killed by channel 3); **M4** reset `ok` back to 1 on the line before the write (killed by channel 1 — `buf` then contains random/zero/uninit, none equal to the guest-only sentinel a.s.). The smallest edit defeating all three is the real fix.
+
+## Q5 — witness [REASONED + two NOT-CHECKABLEs]
+
+Same shape as `#504`: `-E sgi -e ip32`, real XFER/fill through real dispatch, mode = **YCRCB** chosen over e.g. `0x40` because a header-documented mode is the one a real guest plausibly selects. Red pre-fix: process death with the fatal message (fatal-exits fork) or sentinel overwritten with run-varying bytes (fatal-returns fork) — the *same script* is red either way; green post-fix: completion, one announce, sentinel intact; liveness control: same script with the declined PUT step swapped to CI, which must be byte-identical and announce-free before and after.
+
+Not checkable from packet: (i) whether any mode validation masks/rejects these values *before* this helper — settling fact: existence of a mode whitelist in the dispatch/register path; (ii) whether `#504`'s witness actually selected a declined mode (the packet never states its mode). If it did *and* that XFER also PUTs, then either `fatal()` returns or that path never PUT with the bad mode — a conditional that would also settle the pivotal premise above. If validation rejects all 12 values upstream, the round is documented-only — but the `#504` precedent makes that unlikely.

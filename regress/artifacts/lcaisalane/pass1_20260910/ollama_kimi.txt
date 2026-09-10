@@ -1,0 +1,98 @@
+**VERDICT: The candidate fix (S3 member 3, `ofs >= len`, latched decline, downstream-read check before packing) is internally consistent and the witness arithmetic all re-derives correctly — but the brief itself states one premise in §1(e) falsely (len=2/ofs=3 never reaches the write arm today; `3 > 2` exits at the guard, so `data[3 % 2]` is dead code, not live behavior), the entire register-observable half of the detector is blocked on question 1(d) which this packet cannot settle, and the inlined Table 6-3's byte-enable column is internally inconsistent in exactly the row the probe exercises. File `lcaisasize` separately — yes it's real. Member 4 (accept) is genuinely available for the equality cells, and today's write arm already implements it.**
+
+---
+
+## The planted wrong premise (§1(e))
+
+READ: the guard is `if (ofs > len) { fatal(...); exit(1); }`. REASONED: for (len=2, ofs=3), `3 > 2` is **true** — that cell exits before either arm. The write arm's `data[ofs % len]` is only ever reached when `ofs <= len`, and `ofs % len` differs from `ofs` **only** at `ofs == len` (cells (1,1) and (2,2), where it clamps to `data[0]`). So the modulo is not "tribyte/word lane semantics"; it is a clamp that exists solely to serve the two equality cells, and it does so on the write side only. The brief's parenthetical is the kind of statement seven seats would ratify without walking the guard.
+
+A corollary nobody stated: today the arms are **asymmetric** at the equality cells. (1,1) and (2,2) **writes** already forward `data[0]` to the device and return its status — they work. The same cells on **read** drop the byte and return false success. Whatever option ships, the current state is not a defensible instance of any of S3's seven members; it's two different ones welded together.
+
+## 1(a) — the walk, enumerated
+
+READ/REASONED: offset `0x3fd << 5 = 0x7FA0` (32672 — checked). `0x7FA0 >> 5 = 0x3FD`; `ofs = 0x3FD & 3 = 1`; `len = 4`; `1 > 4` false → served; downstream port = `0x3FD` = COM1 LSR (0x3F8+5 ✓; MSR 0x3FE ✓ lane 2 ✓; scratch 0x3FF ✓ lane 3 ✓). Hardware side: a<6:5> of 0x7FA0 = 01, a<4:3> = 00, so Table 6-3's PCI I/O ad<1:0> = 01, and the reconstructed PCI byte address is `((0x7FA0 >> 7) << 2) | 01 = 0x3FC | 1 = 0x3FD`. `(x>>5) == ((x>>7)<<2) | ((x>>5)&3)` is an arithmetic identity, so the model's port *including lane bits* exactly reconstructs the hardware PCI I/O address. **Confirmed: model lane = a<6:5> = hardware ad<1:0>, port matches**, and this matches the witness's green `ofs1 wide` (0x60), `ofs2/3 devsig` rows.
+
+**BUT — Table 6-3 anomaly (cannot settle from packet):** for a<6:5>=01, a<4:3>=00, Byte, the inlined byte-enables read `1011 / 0111`. A lane-1 byte should be `1101` (active-low; the a<6:5>=00 row's `1110` is lane 0, consistent). `1011` is lane 2, `0111` is lane 3. Either the extractor mangled a data row (contradicting the brief's claim that only the header was staggered), or the table says something non-obvious. The PCI ad<1:0> column — the only column the model depends on — is self-consistent across all nine rows (00/01/10/11 tracks a<6:5> in both Size classes), so this does **not** refute 1(a); it does mean I would not quote the c_be column in any future `lcaisasize` brief. Single settling fact: a clean extraction of the a<6:5>=01 byte row of Table 6-3.
+
+## 1(b)
+
+REASONED from the function: LDL at (0x3FD<<5): len 4, ofs 1, guard passes, downstream read, loop places `data[1] = byte`, zeros elsewhere. **Served correctly today** (hardware's masked read puts the byte in the enabled lane; identical). This is the witness's green `ofs1 wide`.
+
+Served **wrongly** today, in hardware terms: every encoding with a<4:3> ≠ 00 that lands `ofs < len` — word (a<4:3>=01) and tribyte (=10) at lanes 0/1 get one byte instead of two/three, because the model reads exactly 1 byte downstream whatever `len` and whatever a<4:3> was. In the model's *own* terms (len-as-size), (2,0) and (2,1) LDWU reads also fetch only one byte and zero the other — the device is registered as answering bytes, so half the word is fabricated silence. A "word at lane 3" per se is not a model defect: no lane-2/3 word row appears in the extracted table, i.e. hardware doesn't define it either. **Not settleable from the packet:** whether Table 6-3 has a<4:3>=11 rows at all — that bounds `lcaisasize`'s scope. Single fact: the full bottom of Table 6-3.
+
+Agreed: separate row, `lcaisasize` is real. One implementation note for that row's future author (REASONED): a<4:3> is destroyed by `relative_addr >>= 5`, so it must be captured *before* the shift; the same is true of any diagnostic that wants the guest address.
+
+## 1(c)
+
+Yes, reachable from guest code. READ: the witness header says the probe runs "Guest LDBU/LDL/STB instructions" and produced live device data (0x55, 0x60 through the model) — guest code executing LDBU is the instrument that generated the green rows. S4's decode anchors (`case 0x0a:`/`0x0c:`/`0x0e:` with no gate) are consistent. Narrow honesty: from the packet alone I cannot exclude an execute-stage cpu-type check the brief didn't quote — but the witness results exclude it empirically. Nothing stops a guest `stb`/`ldbu`.
+
+## 1(d) — NOT SETTLEABLE FROM THE PACKET
+
+This is my named premise, and it gates more than the brief admits. Two sub-facts, neither inlined:
+
+1. What `mem->devices[i].f(...)` returning 0 does in `memory_rw`: continue to the next registered device (dual-registration fall-through, double service), break, or fall to a post-loop failure path — and whether the read buffer is pre-zeroed before dispatch. This also settles S3 member 5's Alpha-half and any "no device accepted" behavior in the flat region.
+2. Whether the Alpha loadstore template writes the destination register unconditionally or skips it on failure.
+
+Codex's "destination register left unchanged" cannot be ratified here. One weak in-packet signal (REASONED, not proof): today's `ctl` lane-0 read of a device-less port returns a *deterministic 0x0 across two runs* even though `byte` is declared uninitialized — consistent with memory_rw zeroing the read buffer (or an in-tree default handler answering 0), and *in*consistent with stack garbage, which would be flaky. If the buffer-zeroing reading is true, then on Alpha a declined read likely hands the guest **0x00 with success-looking control flow** — i.e., "decline" is register-indistinguishable from the false-success defect this round exists to kill, and the detector's channel must be the console text plus the *downstream-call count*, not the register. Single measurement that settles 1(d), S3-m5, the `ctl` deterministic-zero observation, and the candidate's failure-propagation semantics all at once: the body of the device-dispatch loop in `memory_rw.c` (buffer initialization + `res == 0` handling + post-loop path) and the register-write site in the Alpha load template.
+
+## 1(e) — the full cell table
+
+Domain as given by S5: len ∈ {1,2,4,8}, ofs ∈ {0,1,2,3} — 16 cells (domain premise itself flagged below).
+
+| cell (len,ofs) | guard `ofs>len` | read today | write today | after candidate |
+|---|---|---|---|---|
+| (1,0) | pass | **served** (`data[0]=byte`) | served (`data[0]`) | served |
+| (1,1) | pass (`1>1` F) | **FALSE SUCCESS** (loop `i<1`, `i==1` never; zero, return 1) | **served** (`data[0]` forwarded) | **declined** |
+| (1,2) | **exit** | — | — | declined |
+| (1,3) | **exit** | — | — | declined |
+| (2,0) | pass | served, size-caveat (1 byte fetched, `data[1]=0`) | served (`data[0]`) | served |
+| (2,1) | pass | served (`data[1]=byte`) | served (`data[1]`) | served |
+| (2,2) | pass (`2>2` F) | **FALSE SUCCESS** (`i==2` never) | **served** (`data[0]`) | **declined** |
+| (2,3) | **exit** | — (the brief's `data[3%2]` claim is dead code) | — | declined |
+| (4,0..3) | pass (`3>4` F) | served correctly, all lanes | served (`data[ofs]`) | served |
+| (8,0..3) | pass | served correctly, all lanes | served | served |
+
+Counts: today 3 exit cells, 2 false-success cells, 11 served. After candidate: 5 declined, 11 served, 0 exits, 0 false successes. Downstream-failure cells (`ctl`) flip from false-zero-success to decline — see Q4.
+
+## 2 — smallest breaking edits, and the row that falsely stays green
+
+The brief's six, plus these I can add:
+
+1. **`return 0` → `return 1` in the decline branch** (text kept, byte not packed). Every liveness row stays green (`live`, sentinel, once-text); only the register/downstream-count channel catches it — a channel currently blocked on 1(d). This is the most dangerous one-character mutant on the list.
+2. **Guard evaluated on the pre-shift address** (`relative_addr & 3` before `>>= 5`): sparse addresses are `<<5`, so low bits are always 0, `ofs'` is always 0, nothing ever declines. `live`, all accept rows, even `devsig` stay green; only decline rows catch it.
+3. **Downstream read-result check polarity inverted** (`if (ok) return 0`): caught *for free* by `live` — every served read declines. Name it so nobody spends a row on it.
+4. **Failed-write status swallowed to `return 1`** in the write arm: on Alpha a store has no result register, so with the latch already spent there is *no guest-observable channel at all* — vacuous without host-side observation (see Q4).
+5. **The one-character `>` → `>=` *keeping* `exit(1)`**: equality cells convert from false success to death. Everything before the first refused access stays green; only the `LCAISALANE_DONE` sentinel row catches it. Concur with Codex: this mutant must be in the kill table precisely because it's the obvious patch.
+6. **`data[ofs % len]` → `data[ofs]` alone, without the write-side decline**: out-of-bounds read of the caller's 1- or 2-byte buffer at refusal cells. Caught by the decline rows plus any sanitizer build; worth naming because it's the "tidy-up" a tired author applies.
+
+## 3 — option set
+
+REASONED: S3's seven members are **complete in kind** for this site — the only unstated disposition I can construct is "rewrite the downstream access using the un-shifted address," which is just member 7 dressed up. But two members deserve sharper treatment:
+
+- **Member 4 is available for the equality cells, and the write arm is the proof of concept.** Today (1,1) and (2,2) writes already forward `data[0]` and return the device's status — they *work*. The read-side mirror is `data[i] = (i == ofs % len) ? byte : 0`, i.e. one index expression. It makes LDBU-at-LSR return 0x60 — the witness's own "want" column becomes literally green instead of a decline channel. The honest trade-off: it defines wrap semantics (a len-2 word at lane 2 returns the byte in lane 0 of the word) that no hardware ever had, whereas member 3 refuses what the buffer can't express. I am not overturning the adjudication — member 3 is simpler to specify and the guest has a flat-mapping workaround that the witness establishes exists — but "accept is not available for the equality cells" is false; it was rejected, not foreclosed.
+- **Member 7 is the right disposition for (b)** and costs little: capture `size = (relative_addr >> 3) & 3` before the shift, fetch `min(1 << size, len)` bytes downstream, pack lanes. Byte case (the only green witness case) is unchanged. Scope caveat: only lanes 0/1 have word/tribyte rows in the extracted table, and whether a<4:3>=11 rows exist is unsettled (above).
+
+Not settleable from packet: the sibling idioms (`lca_ioc`'s #518 default arm, `lca_pci_conf`). I can reason about what consistency requires — if #518's default arm is latched-decline, member 3 here is the house line; if `lca_pci_conf` *accepts* out-of-range config offsets with a clamp, member 4 gains support — but I will not assert either. Single fact: the return statements of those two arms.
+
+## 4 — detector rows, and which are vacuous
+
+Rows that are constructible **now** (channels that survive 1(d) being unresolved):
+
+- **Accept pins:** (1,0) `live` ✓ exists; STB lane 0 ✓ exists via probe; LDL (4,1..3) `devsig`/`wide` ✓ exist. **New:** (4,0) LDL at 0x60 → byte in `data[0]`, lanes 1–3 zero; (2,0)/(2,1) LDWU — pin the single-byte-fetch behavior explicitly so `lcaisasize` changes are deliberate; (8,0..3) LDQ; STL lane 3 to scratch 0x3FF with byte at lane 3 + readback (write-arm accept pin at a non-zero lane).
+- **Refusal rows, five cells (1,1),(1,2),(1,3),(2,2),(2,3):** (i) process reaches `LCAISALANE_DONE` — kills the `>=`+exit mutant; (ii) exactly one `(once)` text across *two distinct* refused cells — kills latch-keyed-on-(ofs,len) mutants; (iii) refuse twice, assert no second text — kills nothing alone but pairs with (iv); (iv) **blocked on 1(d):** register-channel (preload 0xAA; expect unchanged) and downstream-call-count channel (second refused access must not forward — kills the `return 0`-inside-latch-branch mutant; if the second access *does* forward, the guest register becomes 0x60, so this row is guest-visible *if* 1(d) resolves to unchanged-register semantics).
+- **Failure propagation:** `ctl` **changes meaning** — today's green `ctl zero` (false zero with success) becomes a decline row; rename it `ctl decline`, preload 0xAA, expect decline channel. Failed-write row (STB lane 0, device-less port, downstream returns 0, arm propagates): **vacuous from the guest** on Alpha — stores have no result register, and if the latch is already spent there is no text. Either give it host-side observation or drop it; a row whose channel cannot vary under its mutant is exactly what the brief asked me to name. This is the clearest **vacuous-by-construction** row.
+- **`latch indep` vs #518:** refuse `lca_isa` (text fires), then trip an `LCA_W_IOC_*` guard (its text must still fire); reverse order. Constructible now.
+- **(b) reinstatement pin:** `ofs1 wide` must stay 0x60.
+- **Vacuous/weak besides the above (REASONED):** every register-channel decline row is vacuous *until 1(d) is settled* — its expected value is an unproven premise; the per-instance latch (vs global static) mutant is untestable on alphabook1, which has exactly one LCA instance — no row can distinguish them; a PHYSICAL-flag row is very likely vacuous (CACHE_NONE already selects the physical path — but this is REASONED from the flag semantics I know, not from this packet; the settling fact is the translation branch of `memory_rw`).
+
+## 5 — other things found while verifying
+
+1. The §1(e) `data[3 % 2]` premise error, above — the round's sharpest defect.
+2. Table 6-3 c_be column anomaly (1(a)).
+3. Post-fix, `ofs < len` is guaranteed, so `data[ofs % len]` becomes dead modulo — simplify or annotate; today's read/write asymmetry at equality cells is the actual seed of the false-success bug.
+4. **len == 0**: write arm computes `ofs % len` — division by zero if any producer ever emits len 0, and the guard `ofs > len` (= `0 > 0`, false) lets it through. The candidate's `ofs >= len` incidentally refuses all len-0 accesses. I cannot settle from the packet whether len 0 (or any len outside {1,2,4,8}) is reachable — and note Codex's "S3's length census is incomplete in this tree" corroborates that S5's domain is an *unproven premise*, which matters because my 16-cell table enumerates exactly that domain. Single fact: census of `memory_rw` callers' len on alphabook1-class paths (debugger device inspection is the usual extra producer).
+5. The deterministic zero in `ctl`/`ctl zero` from an uninitialized `byte` (two runs) is in-packet evidence *for* buffer-zeroing in memory_rw — the same single fact that settles 1(d) settles this and Codex's "uninitialized-byte claim is conditional."
+6. The handler destroys `relative_addr` before any diagnostic; the decline text can never name the guest address. Capture before `>>= 5` — required by `lcaisasize` anyway.
+7. S2's "LAST executable exit" census is asserted, not demonstrated, in this packet; the witness attrib rows prove *this* text is the observed kill, nothing about the rest of the file. Not settleable here. Single fact: grep `exit(` / `fatal` across `dev_lca.c` post-#516/#518.
+
+Premises I re-derived rather than ratified, stated plainly: guard arithmetic, lane/port reconstruction, table counts, witness predicate results — all check out against the packet. Premises I refuse to ratify from this packet: 1(d)'s register semantics (with S3-m5 and the dispatch contract), S2's census, S5's len domain, Table 6-3's c_be column, and the sibling-file idioms.

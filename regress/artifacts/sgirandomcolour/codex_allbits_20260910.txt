@@ -1,0 +1,60 @@
+VERDICT: NO-GO (1 item)
+Nonce: CODEX_519_ALLBITS_20260910
+
+The priming sequence and collision oracle are sound on this tree. The one issue is **transcript completion: a healthy but delayed emulator can produce a false red on the FIX**.
+
+1. **All twelve priming stimuli reach their intended sites.** In [the RE dispatch](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:428), anchor `relative_addr += 0x1000`, the six width predicates precede the `writeflag` branches. The addresses therefore select these arms:
+
+| Access, in execution order | Selected arm | Bit / grep anchor |
+|---|---|---|
+| SB `0xb5001000` | `[0x1000,0x1200)`, `len != 8` | 0: `SGIRE_W_TLBA_LEN` |
+| SB `0xb5001200` | `[0x1200,0x1400)`, `len != 8` | 1: `SGIRE_W_TLBB_LEN` |
+| SB `0xb5001400` | `[0x1400,0x1600)`, `len != 8` | 2: `SGIRE_W_TLBC_LEN` |
+| SB `0xb5001600` | `[0x1600,0x16e0)`, `len != 8` | 3: `SGIRE_W_TEX_LEN` |
+| SB `0xb5001700` | `[0x1700,0x1780)`, `len != 8` | 4: `SGIRE_W_LINA_LEN` |
+| SB `0xb5001780` | `[0x1780,0x1800)`, `len != 8` | 5: `SGIRE_W_LINB_LEN` |
+| SB `0xb5002000` | `DEVICE_ACCESS(sgi_de)`, neither `len == 8` nor `len == 4`; `goto de_declined` | 6: `SGIRE_W_DE_LEN` |
+| SB `0xb5001800` | RE catch-all, `writeflag == MEM_WRITE` | 7: `SGIRE_W_UNMAP_WR` |
+| LW `0xb5001800` | RE catch-all, read branch | 8: `SGIRE_W_UNMAP_RD` |
+| `setup_put(A, MODE_LINB_RGBA)` | Rectangle PUT; `tlb_mode == 5`, mode-switch default | 10: `SGIRE_W_BADMODE` |
+| SW `PRIM_BAD` to `0xb5002860` | START stripped; primitive register written; drawing-op default for `0x05000000` | 9: `SGIRE_W_PRIM_OP` |
+| LD `0xb5001600` | TEX, `len == 8`, read branch | 11: `SGIRE_W_TEX_RD` |
+
+Each site is findable with `d->warned & <symbol>`. None of these accesses dies on this source. The RE and DE handlers return `1`; declined reads receive zero through their common tails.
+
+At [probe anchors `def store`, `def loadop`, `PRIME_LIT`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/sgi_re_colourdefault_probe.py:142), values and opcodes are passed correctly. The width probe’s positional-argument mistake was not copied.
+
+**Every `PRIME_LIT` entry matches the emitted text exactly as a substring.** The six width entries are `for CRIME_RE_<name> -- declined.` with the correct uppercase names. The remaining entries are:
+
+```text
+[ sgi_de: unimplemented len=
+unimplemented write to address 0x1800
+unimplemented read from address 0x1800
+UNIMPLEMENTED drawing op
+unimplemented dst_mode
+unimplemented read from CRIME_RE_TEX -- declined.
+```
+
+Capitalization and spaces match the concatenated C strings. The width and TEX-read entries include the exact ` -- declined.` suffix; the other five intentionally match shorter prefixes. TEX’s width diagnostic cannot substitute for its read diagnostic. A missing site therefore reduces `fired_all` below 12 on this tree.
+
+2. **Priming does not obstruct the subsequent YCRCB PUT.** At [anchor `CRIME_RE_LINEAR_A`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:622), the byte store never reaches the array assignments. Each later `setup_put()` uses an aligned SD that writes `re_linear_a[0] = 0x10` and `[1] = 0`.
+
+At [anchors `endx`, `endy`, `case DE_PRIM_RECTANGLE`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:959), zero vertices with `PRIM_RECT = 0x03020000` give `dx = dy = 1`, `endx = endy = 1`: **one iteration really executes**. The width precedent’s taller rectangle is unnecessary here.
+
+Drawing changes local iteration state, not persistent DE registers. The later setup rewrites destination mode, drawmode, foreground, both vertices and primitive. Its `0xf8` drawmode disables XFER, ROP and stippling, so unreprogrammed source/ROP/stipple registers cannot prevent the PUT.
+
+The TEX LD sets bit 11 and returns zero into `v0`; it changes no drawing configuration. At [anchor `case 4:` in `horrible_getputpixel`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:264), YCRCB reaches linear slot zero, physical `0x10000`, offset zero, depth four, colour type `0xf0`, and then the PUT default.
+
+3. **No primed bit is clear when that default executes.** The mask progresses through `0x1ff → 0x5ff → 0x7ff → 0xfff`. Initialization zeroes the shared device once; subsequent warning writes only OR bits. Neither setup clears them.
+
+Consequently, aliasing BADCOLOR to **any bit 0–11** suppresses ANN and gives count **0**. With its own bit 12, the source predicts **12/12, 1, `0x11223344`** for the three rows, assuming a complete transcript.
+
+4. **The one finding is at [`def session` / `def rd`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/sgi_re_colourdefault_probe.py:85).** This session sends 197 debugger commands. The first 196 receive fixed `0.22`-second read windows; only the final `print v0` receives `4.0` seconds.
+
+`rd()` uses an absolute `time.time()` deadline. It neither waits for a prompt/completion marker nor extends its deadline when output arrives. After the final window, the parent sends `quit`, drains for another `0.4` seconds, then closes the PTY regardless of completion.
+
+Startup delay, sustained command backlog or a late scheduling stall can therefore leave the final result unread while the emulator is healthy. **Deadline expiry itself returns `True`**, so this ordinarily produces `allbits paint = absent`, potentially with incomplete diagnostic counts. `died` instead records a pre-cleanup EOF or read/write `OSError`; no process-status check establishes actual death. Increasing `spin` reduces this load sensitivity but does not establish completion.
+
+5. **No additional escape exists for the declared shared-bit mutation class.** Two limits matter when interpreting results: `allbits primed` checks substring presence across the whole transcript, not temporal ordering—the source trace establishes the order here—and these three rows contain only one colour decline. A mutation changing only the `|=` setter can leave them green; the existing `once` row catches the resulting repeated announcement. That is distinct from aliasing the latch bit.
+
+No builds or probes were run, and no files were changed.

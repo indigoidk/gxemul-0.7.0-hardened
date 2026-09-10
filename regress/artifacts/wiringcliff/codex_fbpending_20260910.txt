@@ -1,0 +1,228 @@
+VERDICT: NOT READY TO DISCHARGE. The packet conflates two probes, and adding a selfmutant call alone cannot work: the helper does not recognize this differential’s verdict tokens.
+
+S1 is only partly correct. [fbpending_witness.py](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/fbpending_witness.py:121) defaults to **23 × 5 = 115 seconds** for arm A, plus a five-second arm T. Coverage requires approximately **90.9 seconds**, not 86. Its twelve control rows are R0, C1, C2, A1, A2, E, K, T, D1, L1, L2 and L3. It has no report-only mode; `--learn` adds disassembly output without changing the verdict contract. `--expect-cap` and the eleven-row report-only contract belong to **fbpending_drain_probe.py**.
+
+The witness’s actual exit contract agrees with the packet: controls OK, coverage OK and symptom ABSENT produce PASS and exit zero.
+
+For Q1, [selfmutant_one](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gate_offline.sh:891) takes:
+
+```text
+harness subject stem row-id [extra-cc-flags]
+```
+
+Two existing calls, quoted exactly:
+
+```sh
+selfmutant_one diff_memory_rw.c  src/cpus/memory_rw.c        memory_rw  "G1 " "-fno-optimize-sibling-calls"
+selfmutant_one diff_footbridge.c src/devices/dev_footbridge.c footbridge "A1 "
+```
+
+The stem selects `.old` and `.new`; the function does not consume `.why`. The fragment contents, using escaped tabs and newline to show their exact bytes, are:
+
+```text
+.old: "\t\td->pending_timer_interrupts[nr] = 1;\n"
+.new: "\t\td->pending_timer_interrupts[nr] = 0;\n"
+```
+
+I verified that the old fragment matches the current subject exactly once.
+
+[fbpending_bound.why](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/selfmutants/fbpending_bound.why:3) chooses reset-to-zero because it preserves the bound while discarding the remaining interrupt debt. It explicitly prefers this over deleting the bound. It specifies **`R4 every case bounded`** as the pin because R3 appears seven times and the helper requires exactly one matching row. It contains **no compiler-flag warning**.
+
+One sentence in `.why` is itself misleading: its claim that a “verdict-only” assertion would accept this mutant contradicts the implementation. Failing R3 increments `failures` and makes the overall verdict FAIL.
+
+The build question needs three distinctions:
+
+- The ordinary differential command at line 1265 supplies the device include directory, build objects and X11 linkage. I counted **221 qualifying objects**, excluding `main.o` and `dev_footbridge.o`. **I did not verify a successful link.**
+- A bare four-argument selfmutant call lacks that compilation setup.
+- Even with correct linking, [selfmutant.py](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/selfmutant.py:273) recognizes `_PASS` and `_FAIL`, whereas the differential emits `FBBOUND_VERDICT=PASS/FAIL`. I exercised those exact regexes: neither existing verdict matches.
+
+These are the proposed edits necessary for the lane.
+
+Immediately after the existing verdict `printf` in [diff_fbpending_bound.c](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/diff_fbpending_bound.c:361), add:
+
+```c
+	printf("FBBOUND_%s\n", failures ? "FAIL" : "PASS");
+```
+
+This preserves the gate’s existing token and supplies the helper’s token. It adds no counted `row()`.
+
+Delete this literal stray line at `gate_offline.sh:1049`:
+
+```text
+' ' ') -lm -L/usr/X11R6/lib -lX11"
+```
+
+After the existing `rtc_range` selfmutant call, insert:
+
+```sh
+FBSMOBJS=$(find "$SEC/../build/src" -name '*.o' ! -name 'main.o' ! -name 'dev_footbridge.o' 2>/dev/null | sort | tr '\n' ' ')
+if [ -z "$FBSMOBJS" ]; then
+    degrade "fbpending selfmutant: build objects missing -- lane did not run"
+else
+selfmutant_one diff_fbpending_bound.c src/devices/dev_footbridge.c fbpending_bound "R4 every case bounded" "-std=gnu99 -I../src/devices -Wl,--no-gc-sections $FBSMOBJS -L/usr/X11R6/lib -lX11"
+fi
+```
+
+The call deliberately starts at column zero: the manifest’s backing-call regex requires that. Flattening object-list newlines matters because the helper interpolates the flags into shell command text. The relative device include path selects the **mirrored subject**. `--no-gc-sections` overrides the helper’s default to match the ordinary gate’s link policy; the helper already appends `-lm`.
+
+Replace the two manifest assignments at their respective locations with:
+
+```sh
+SM_COVERED="timer memory_rw footbridge m8820x m8invread diskimage_sync diskimage_parse wdc_identify diskimage_io diskimage_geom sh4_tmu rtc_range fbpending_bound"
+```
+
+```sh
+SM_EXEMPT="ieee_store:2099-01-01"
+```
+
+Replace the obsolete fbpending exemption explanation at lines 1068–1083 with:
+
+```sh
+# fbpending_bound: reset-to-zero must fail "R4 every case bounded".
+# The lane compiles the mirrored device and links the supporting build objects.
+# FBBOUND_PASS/FAIL supplies the selfmutant helper's verdict contract.
+```
+
+Also replace the ordinary differential’s missing-object `note` at line 1263 with:
+
+```sh
+    degrade "fbpending bound: build objects missing -- differential did not run"
+```
+
+Otherwise that section can omit the supposed value gate while merely printing a note.
+
+The selfmutant helper runs its binary **without arguments**, so its R2 remains skipped; R3 and the aggregate R4 exercise this mutant. The ordinary gate retains its deep invocation with `2147487744`.
+
+S2’s quoted “wiring job” comment and manifest checks exist. They do not establish that the lane works. No expiry-count adjustment is needed: `exempt_expired` checks entries individually, with strict `<` comparison; a September 20 exemption first expires September 21.
+
+For Q2, **none of the three candidates literally satisfies S3**:
+
+| Gate | What the current file actually does |
+|---|---|
+| `gate_hygiene.sh` | Scans source and existing boot logs. It runs no long guest and has no emulator binary or stub variable. Its fbpending comment concerns readiness bookkeeping. |
+| `gate_offline.sh` | Runs offline differentials, not emulator guests; it also has early exit paths. |
+| `gate_ab.sh` | Runs long guests, but retains wall-clock stall/backstop decisions and a HEAD-versus-prebatch backstop assertion. |
+
+My proposed existing-gate host is **gate_ab.sh, serialized after all existing A/B work**. That prevents the new workload from perturbing earlier measurements. It is an explicit correction to the literal “gate has no wall-clock oracle” premise.
+
+There is another necessary edit: [gate_ab.sh:66](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gate_ab.sh:66) calls `need_exec`, which exits through `gate_skip`. An appended witness would otherwise disappear whenever a baseline binary is missing.
+
+Replace:
+
+```sh
+need_exec "$PRISTINE_DIR/gxemul" "$PREBATCH_DIR/gxemul" "$ROOT/build/gxemul"
+```
+
+with:
+
+```sh
+if [ -x "$PRISTINE_DIR/gxemul" ] &&
+   [ -x "$PREBATCH_DIR/gxemul" ] &&
+   [ -x "$ROOT/build/gxemul" ]; then
+```
+
+Leave the existing baseline work inside that conditional. The final existing section is the machine-alias comparison, ending with these exact lines:
+
+```sh
+check_min "upstream alias list is non-trivial"   "$n_pri" 40
+check     "machines upstream had that HEAD lost" "$n_lost" "0"
+```
+
+Immediately **after those lines**, close the new conditional:
+
+```sh
+else
+    degrade "A/B baseline or HEAD binary missing -- baseline checks did not run"
+fi
+```
+
+Then insert this section, before the existing `gate_end`:
+
+```sh
+# ---- #442: fbpending APPARATUS-ROT, no cap ------------------------------
+# The bound's value is checked by the offline differential's R5 equality.
+# Run synchronously after the A/B measurements have finished.
+FBPENDING_STUB=$LOGDIR/fbpending_stub.bin
+FBPENDING_LOG=$LOGDIR/fbpending_witness.log
+
+if [ ! -x "$ROOT/build/gxemul" ]; then
+    degrade "fbpending: HEAD binary missing or not executable"
+elif ! command -v python3 >/dev/null 2>&1; then
+    degrade "fbpending: python3 missing"
+elif ! printf '\000\000\240\341' > "$FBPENDING_STUB" ||
+     [ ! -r "$FBPENDING_STUB" ] ||
+     [ "$(wc -c < "$FBPENDING_STUB")" != "4" ]; then
+    degrade "fbpending: four-byte raw stub missing or could not be prepared"
+else
+    FBPENDING_RC=0
+    python3 "$HERE/fbpending_witness.py" "$ROOT/build/gxemul" "$FBPENDING_STUB" > "$FBPENDING_LOG" 2>&1 || FBPENDING_RC=$?
+    sed 's/^/       /' "$FBPENDING_LOG"
+
+    check "fbpending: probe exit status" "$FBPENDING_RC" "0"
+    check_min "fbpending: control rows actually reported" \
+        "$(grep -cE '^  (ok|FAIL) ' "$FBPENDING_LOG")" 12
+    check "fbpending: controls" \
+        "$(grep -oE '^FBPENDING_CONTROL=[^[:space:]]+' "$FBPENDING_LOG")" \
+        "FBPENDING_CONTROL=OK"
+    check "fbpending: coverage" \
+        "$(grep -oE '^FBPENDING_COVERAGE=[^[:space:]]+' "$FBPENDING_LOG")" \
+        "FBPENDING_COVERAGE=OK"
+    check "fbpending: symptom absent" \
+        "$(grep -cFx 'FBPENDING_SYMPTOM=ABSENT' "$FBPENDING_LOG")" "1"
+    check "fbpending: verdict" \
+        "$(grep -cFx 'FBPENDING_VERDICT=PASS' "$FBPENDING_LOG")" "1"
+fi
+```
+
+`"$ROOT/build/gxemul"` is the gate’s existing HEAD-binary expression; there is no existing `BIN` variable to reuse. Neither this gate nor the witness creates an existing four-byte fixture. The proposed gate section creates a little-endian ARM NOP; the witness subsequently plants its program through the debugger.
+
+Coverage extraction deliberately permits the report’s explanatory suffix. An exact whole-line match against only `FBPENDING_COVERAGE=OK` would always fail.
+
+Budget **120 seconds of requested free-run plus startup/debugger overhead**, approximately two minutes or more. These are source-derived costs, not measurements from this session.
+
+[lib.sh](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/lib.sh:79) confirms that `check` compares strings and `check_min` compares integers. `degrade` continues execution and makes an otherwise successful gate SKIP at `gate_end`; recorded failures still take precedence. `gate_skip` exits immediately.
+
+For Q3, **there is no witness EXEMPT entry to delete**. The real entry is:
+
+```python
+    "fbpending_drain_probe.py": ("2026-09-20",
+                                 "REPORT-ONLY by default: EXPECT_CAP must be set before a "
+                                 "gate row can mean anything, so wiring is a design step first"),
+```
+
+Wiring the witness does not discharge that separate obligation. Keep this entry unless the drain probe receives its own disposition.
+
+The required checker edit is instead to replace and move this [MANIFEST entry](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/tools/pipeline/check_probe_wiring.py:1274):
+
+```python
+    "fbpending_witness.py":        (CLASS_WITNESS, "#442 pre-fix: the clock stops 42.9s in 85.9s"),
+```
+
+into the detector group as:
+
+```python
+    "fbpending_witness.py":        (CLASS_DETECTOR,
+                                   "#442 post-fix apparatus: controls, coverage, no clock freeze"),
+```
+
+Its executable PASS contract supports that classification. Leaving `CLASS_WITNESS` unchanged produces **GATED WITNESS** when the invocation is added.
+
+The checker does more than grep `regress/*.sh`:
+
+- It derives scripts from `run.sh`’s `GATES` array, plus `run.sh` and `lib.sh`.
+- It recognizes a Python interpreter in command position, then the first `.py` argument, including limited variable resolution.
+- It recognizes `$HERE` paths and excludes comments and heredoc bodies.
+
+**Yes, the quoted `python3 "$HERE/fbpending_witness.py"` invocation is found.** I verified this using the actual scanner with shell text supplied in memory. I also verified that `if false; then …` is counted: the checker does not prove reachability or protect against an earlier `gate_skip`.
+
+For Q4, a fixture existence test alone cannot establish emulator behavior. But a stub that normally exists does **not** make the proposed behavioral checks vacuous: the witness must execute and produce current results.
+
+Concrete false-green risks include grading stale or aggregate gate logs, accepting echoed grep commands, treating missing output as success, ignoring a nonzero exit after a PASS token, or placing the invocation behind an unrelated early exit. The proposed section uses a freshly redirected probe log, anchored tokens, explicit exit status and separate control/coverage results.
+
+The behavioral negative control is **the pre-fix restoration of unbounded signed pending-counter accumulation in `dev_footbridge.c`**, preserving device access and tick delivery. Its acceptance target is working controls, sufficient coverage, `FBPENDING_SYMPTOM=PRESENT`, FAIL and nonzero exit. Reset-to-zero is a different mutant.
+
+The differential contains R1/R2 checks intended to reject that pre-fix behavior and comments recording historical kills. It does **not** automatically construct or run that mutant against this guest witness. Its committed `.old/.new` pair is reset-to-zero, so discharging that lane does not establish the guest witness’s negative control.
+
+There are also limits to “must”: signed overflow has undefined behavior, and the witness’s coverage calculation measures elapsed time, not independently counted producer callbacks. Host starvation can undermine the timing premise. A negative-control result therefore needs verification on the actual supported build and execution conditions.
+
+I read the requested files, `gate_ab.sh`, `selfmutant.py`, the differential, relevant device/machine code, and the local wiringcliff derivation record. I could not independently verify the packet’s September 9 **NO CAP / APPARATUS-ROT ruling**. No files were edited and no builds or guest runs were performed. Read-only Python checks verified the control count, unique mutation anchor, verdict-token mismatch and invocation recognition; Bash/MSYS and WSL launches were denied by this environment.

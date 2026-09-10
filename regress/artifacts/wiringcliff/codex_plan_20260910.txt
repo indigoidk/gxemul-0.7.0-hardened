@@ -1,0 +1,133 @@
+VERDICT: NO-GO (6 items)
+CODEX_WIRINGCLIFF_PLAN_20260910
+
+The two wirings can be sketched concretely, but they are not yet verified, and two wirings plus four re-dates do not close the separate `fbpending_bound` deadline. This review ran only Git, text, and AST derivations; no gates, builds, probes, or edits.
+
+1. **The six exemptions and the two-versus-four exit-status split still hold.**
+
+   HEAD is `1ce8296`. I repeated the date grep, `sys.exit` search, terminal-file reads, and AST counts, and compared the named files against `b4d4177`. The six probes and named gates/helpers are unchanged. The manifest changed by **55 insertions and one deletion**, but its `EXEMPT` dictionary is unchanged.
+
+   All six entries still expire **after September 20**: `d < today` is false on September 20 and true on **September 21**. The pre-commit consumer still treats checker failure as failure. Anchors: `EXEMPT`, `d < today` in [check_probe_wiring.py](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/tools/pipeline/check_probe_wiring.py:1403); `PWCHK=` in [precommit_check.sh](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/tools/precommit_check.sh:513).
+
+   | Probe | Current completed-measurement exit behavior |
+   |---|---|
+   | [fbpending_drain_probe.py](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/fbpending_drain_probe.py:715) | Enforceable with a cap: `sys.exit(0 if good else 1)`. Otherwise `sys.exit(0 if ok else 1)` grades controls and can report `REPORT-ONLY`. |
+   | [hpcmips_ctor_probe.py](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/hpcmips_ctor_probe.py:746) | `sys.exit(main())`; `finish()` returns `1 if fails else 0`. |
+   | [wdc_altoffset_probe.py](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/wdc_altoffset_probe.py:682) | Computes `ok`, writes results, then bare `main()` returns normally. |
+   | [wdc_altoffset_sig_probe.py](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/wdc_altoffset_sig_probe.py:246) | Prints classifications and writes `TABLE_C.txt`; no measurement-dependent exit. |
+   | [wdc_altoffset_4bit_probe.py](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/wdc_altoffset_4bit_probe.py:222) | Prints classifications and writes `TABLE_4BIT.txt`; no measurement-dependent exit. |
+   | [wdc_addtoinbuf_probe.py](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/wdc_addtoinbuf_probe.py:824) | Counts failed predictions, prints completion, then returns normally. |
+
+   Thus “always zero” needs the existing qualification: **measurement failures do not control these four exits; uncaught apparatus exceptions can still exit nonzero.** Also, fbpending’s two expressions use `good` and `ok`, not `ok` twice.
+
+   Other source-derived figures still hold: main altoffset has **18 rows / 36 predictions**, **18 distinct registers**, maximum label width **53**, and **four** differing rows (`s4`, `s5`, `t5`, `t6`); addtoinbuf has **15 rows / 30 predictions**. `GATES=(` in [run.sh](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/run.sh:10) still names **16 gates**, and `gate_wdc.sh` remains absent. Current hpcmips has **28 row calls**, agreeing with `EXPECT_ROWS = 28`; the manifest’s introductory historical counts are unsuitable as its gate denominator.
+
+2. **hpcmips belongs immediately after `gate_begin`, before the ASan-build skip.**
+
+   The anchor `[ -x "$ASAN_HEAD" ] || gate_skip` in [gate_asan_sweep.sh](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gate_asan_sweep.sh:97) guards availability of the optional `/tmp/gx-asan-head/gxemul` build. It exits the entire script. Placing the ordinary-binary construction probe below it would unnecessarily make its coverage depend on that build.
+
+   Hoist the existing `ulimit -c 0` there too: this probe deliberately exercises aborting controls.
+
+   ```bash
+   # SKETCH: after gate_begin, before the ASAN_HEAD availability check.
+   ulimit -c 0 2>/dev/null || true
+
+   HPCLOG=$LOGDIR/gate_hpcmips_ctor.log
+   hpc_rc=0
+   python3 -u "$HERE/hpcmips_ctor_probe.py" \
+       --binary "$ROOT/build/gxemul" \
+       --source "$HERE/../src/machines/machine_hpcmips.c" \
+       > "$HPCLOG" 2>&1 || hpc_rc=$?
+
+   check "hpcmips: probe exit" "$hpc_rc" 0
+   check "hpcmips: complete, correct 28-row result" \
+       "$(grep -a '^HPCMIPS_CTOR_RESULT=' "$HPCLOG")" \
+       "HPCMIPS_CTOR_RESULT=28/28"
+   check "hpcmips: PASS marker" \
+       "$(count "$HPCLOG" '^HPCMIPS_CTOR_PASS$')" 1
+   ```
+
+   Exact comparison against the complete result line pins **both numerator and denominator**, and fails on missing, malformed, or duplicated summaries. This follows the purpose of the `wfres` parsing and literal denominator in [gate_sh_rounding.sh](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gate_sh_rounding.sh:1396), without comparing two potentially empty expansions. The source argument explicitly selects **GXEMUL-SEC/src**, and must match the tested build.
+
+   **Mutant-red control — `HPC_BE300_IRQ26`:** within `case MACHINE_HPCMIPS_CASIO_BE300`, replace the actual `snprintf` argument `VRIP_INTR_SIU,` with `26,`. Anchors: that case and `machine->bootstrap_cpu, VRIP_INTR_SIU` in [machine_hpcmips.c](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/machines/machine_hpcmips.c:109). Against the matching mutant binary/source, require the new gate section to fail with construction rows such as `A3`, `A4`, and `B1` red; the matched source should also red `S1`. This is a predicted control, not a newly measured kill.
+
+   **HEAD-green control — `HPC_HEAD_1ce8296`:** run the same gate with a clean, attributable HEAD binary/source and its existing ASan prerequisites satisfied; require **28/28**, probe exit **0**, and **whole-gate exit 0**. With ASan absent, successful hpcmips checks followed by exit **77** establish partial coverage, not this green control. Conversely, `gate_skip()` preserves earlier failures—anchor `if [ "${_fails:-0}" != 0 ]` in [lib.sh](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/lib.sh:137).
+
+   **Cost:** the exemption’s **≈8 seconds** is historical, not remeasured at this HEAD. The actual configured limit is **40 seconds per subprocess**, not an eight-second total deadline; anchor `--timeout` in the probe.
+
+3. **fbpending can live at the tail of `gate_ab.sh`, with an explicit cap and full verdict checks.**
+
+   Use **762**, derived from CATS’ `50,000,000 / (256 × 256) = 762.939… Hz` and the integer conversion in `d->pending_bound[timer_nr] = (int) bound`. Anchors: `machine->emulated_hz = 50000000` in [machine_cats.c](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/machines/machine_cats.c:56), and `double bound = freq` in [dev_footbridge.c](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c:318). Pin the independently derived literal; do not extract the expected value from a potentially mutated implementation.
+
+   Put this after the alias comparison, immediately before `gate_end` in [gate_ab.sh](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gate_ab.sh:336):
+
+   ```bash
+   # SKETCH: all LUNA runs and comparisons have finished.
+   FBLOG=$LOGDIR/gate_fbpending_drain.log
+   FBSTUB=$LOGDIR/fbpending_stub.bin
+   printf '\000\000\240\341' > "$FBSTUB" ||
+       check "fbpending: create ARM load stub" failed written
+
+   fb_rc=0
+   python3 -u "$HERE/fbpending_drain_probe.py" \
+       "$ROOT/build/gxemul" "$FBSTUB" \
+       --timer 0 --accrue 4 --expect-cap 762 \
+       > "$FBLOG" 2>&1 || fb_rc=$?
+
+   check "fbpending: probe exit" "$fb_rc" 0
+   check "fbpending: all 11 controls pass" \
+       "$(count "$FBLOG" '^  ok ')" 11
+   check "fbpending: control verdict" \
+       "$(count "$FBLOG" '^FBDRAIN_CONTROL=OK$')" 1
+   check "fbpending: explicit bound passes" \
+       "$(grep -a '^FBDRAIN_BOUNDED=' "$FBLOG")" \
+       "FBDRAIN_BOUNDED=YES  (cap asserted: 762)"
+   check "fbpending: enforcing verdict" \
+       "$(count "$FBLOG" '^FBDRAIN_VERDICT=PASS$')" 1
+   ```
+
+   There is **no `_RESULT=n/m`** here. AST derives **11 controls**, while the final checks reject report-only mode and require both D/X backlogs to satisfy the cap with neither clock dead. Anchors: `def row`, `FBDRAIN_CONTROL=`, and `if EXPECT_CAP >= 0` in [fbpending_drain_probe.py](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/fbpending_drain_probe.py:628).
+
+   **Mutant-red control — `FB_UNBOUNDED_CALLBACK`:** at `static void footbridge_pending`, replace its conditional reset/increment body with only `d->pending_timer_interrupts[nr] ++;`. Source anchor: [dev_footbridge.c](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_footbridge.c:114). Require live controls and completed drains, but `FBDRAIN_BOUNDED=NO`, `FBDRAIN_VERDICT=FAIL`, nonzero probe status, and the wired gate section red. Approximately **3,052** pending ticks after four seconds is the uncapped prediction, not a required measured equality.
+
+   **HEAD-green control — `FB_HEAD_1ce8296`:** unchanged invocation against clean HEAD, with all existing A/B prerequisites present; require the new checks and **whole-gate exit 0**. The probe’s internal K/T controls do not replace this external mutant/HEAD pair.
+
+   **LUNA interaction:** this foreground tail placement adds total gate time but does not consume LUNA’s instruction allowance or either deadline. `run_emu_progress()` initializes its counters and `t0` per invocation and reaps its process before returning; anchors `local t0 last_n=0` and `wait "$pid"` in [lib.sh](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/lib.sh:227). Running the probe concurrently could perturb the wall-based stall/backstop observations. Keep `LUNA_BUDGET`, `LUNA_STALL`, and `LUNA_BACKSTOP` unchanged. An alternative home is [gate_arm.sh](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gate_arm.sh:79), immediately after its existing ARM stub creation, which also removes dependence on A/B baseline availability.
+
+   **Cost and scope:** the probe header’s **≈10 seconds** is unverified historical guidance. Requested accrual alone is **9 seconds** across D/X/T, plus setup, stepping, draining, and teardown; D/X each allow a nominal **30-second** drain. It has no simple ten-second total bound. Its enforcing branch also exits before `PROBE_WALL` prints, so measure elapsed time externally during verification. This row observes timer index 0 and an upper bound; the bound’s actual value and per-timer/re-arm behavior remain the `R5`/`R6` obligations in [diff_fbpending_bound.c](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/diff_fbpending_bound.c:196).
+
+4. **The four WDC probes need different changes; “four new oracles” and “four single-leg implementations” are both inaccurate.**
+
+   | Probe | Smallest meaningful exit change and remaining work |
+   |---|---|
+   | Main altoffset | Add **one line inside `main()`, after writing `RESULTS.txt`**: `sys.exit(0 if ok else 1)`. The existing `ok` already requires zero prediction failures, both breakpoint observations, and complete instruction-word agreement. It does not include mnemonic or entry-PC agreement. Gate readiness still needs a mode scoring the **18 fixed-side wants** against one HEAD binary. Merely changing the outer call to `sys.exit(main())` would accomplish nothing while `main()` returns `None`. |
+   | Addtoinbuf | A one-line `sys.exit(0 if nfail == 0 and hit_s and hit_f else 1)` makes its existing **30 predictions** and completion observations enforceable. However, `run_one()` currently discards its encoding-validity counters when returning—anchor `return got, elapsed, hit, diags`. Expose and aggregate that apparatus validity, add a fixed-leg mode, and generate/validate the known-content media before gating. **No new device-value oracle is necessary.** |
+   | 4-bit companion | A new aggregate is needed. `nfail == 0` alone scores only **seven common cells per leg**, excluding the decisive P5 pair. For a fixed leg require those cells, complete words, `parked`, and exact `declined` values **58/71**; a declared defective baseline instead expects `reset` **50/ff**. Aggregate every required leg and reject empty/duplicate leg specifications. Anchors: `NAMES`, `declined`, `accept_ok`, `armed_ok`. |
+   | Signature companion | Needs a combined oracle requiring RAM **55**, L1 **55/66**, L2 **14/eb**, successful apparatus/CD observation, and fixed D exactly **55/66**. `not sig` is insufficient: missing or unrelated values currently print “declined.” The fixed values already appear beside the loads; the design work is adopting them into an enforcing decision. Keep deliberately unscored `a3` diagnostic unless that round explicitly adopts its expectation. Anchors: `sig =`, `live =`, `rt =`. |
+
+   The latter two already accept **one tagged binary** through `LEGS = ... sys.argv[3:]`; their missing piece is an enforcing expectation contract. The signature media reason is also false: `W.DISK_PREFIX = "ciR:"` supplies CD classification, and `prefix_c` sets `is_a_cdrom` in [diskimage.c](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/disk/diskimage.c:1964). I statted the existing battery scratch image: **67,108,864 bytes**, matching the recipe in [images.md](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/images.md:130). Addtoinbuf still needs its particular poisoned contents.
+
+   These are **proposed last-valid dates**; each becomes red the following day. The reason strings name both work and completion evidence:
+
+   | Probe | Date | Proposed manifest reason/comment |
+   |---|---|---|
+   | `wdc_altoffset_probe.py` | **2026-09-24** | `wiringcliff/altoffset-fixed: adapt existing 18-row oracle to one fixed binary; propagate ok to exit; wire gate_sh_rounding after mutant-red and HEAD-green controls by Sep 24.` |
+   | `wdc_altoffset_4bit_probe.py` | **2026-09-28** | `wiringcliff/altoffset-4bit-oracle, after altoffset-fixed: aggregate common cells, exact P5/P6 outcomes and apparatus validity for a declared fixed leg; complete both gate controls by Sep 28.` |
+   | `wdc_altoffset_sig_probe.py` | **2026-10-01** | `wiringcliff/altoffset-signature-oracle: require exact fixed D=55/66 plus RAM/L1/L2 and apparatus controls; reuse scratch image via ciR; wire and verify both gate controls by Oct 1.` |
+   | `wdc_addtoinbuf_probe.py` | **2026-10-08** | `wiringcliff/addtoinbuf-fixture-oracle: generate and validate poisoned media, expose encoding validity, score 15 fixed-side rows, and complete gate wiring plus mutant/HEAD controls by Oct 8.` |
+
+   Delete the two discharged exemptions in the same eventual change as their verified wirings: the manifest explicitly fails `STALE EXEMPTION` when a wired detector remains exempt.
+
+5. **The seventh September deadline is still live and independent.**
+
+   `SM_EXEMPT="ieee_store:2099-01-01 fbpending_bound:2026-09-20"` remains in [gate_offline.sh](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gate_offline.sh:1084). Its `exempt_expired` comparison also uses `<`, and `sm_expired=` feeds a hard check: **first red September 21**.
+
+   Wiring the Python drain probe does not discharge this self-mutant lane. Its own comment still identifies the concrete blocker: the mirrored pristine build does not emit the required PASS token. The round must resolve that lane, establish its pristine acceptance and mutant failures, and remove this separate exemption—or explicitly schedule this debt separately. The six-entry re-date plan cannot silently stand in for it.
+
+6. **The intervening commits strengthened the evidence for the classification problem.**
+
+   At `"lca_irqstub_probe.py"` in [check_probe_wiring.py](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/tools/pipeline/check_probe_wiring.py:162), the new reason explicitly retains `CLASS_WITNESS` because reclassification would require a gate home, while describing post-fix-green detector behavior. The checker still renders an unwired witness as `not run (correct)`.
+
+   AST derives **12 current row calls**, versus **4 at `b4d4177`**; the reason’s “11” is already stale. Anchor `LCAIRQ_RESULT=` in [lca_irqstub_probe.py](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/lca_irqstub_probe.py:383). Thus the unchanged six exemptions do not establish that all wiring debt is contained in those six.
+
+   The record’s **18-witness** census also cannot be carried forward: both compared manifests contain **25 `CLASS_WITNESS` entries, 19 top-level**. I have not revalidated the semantic “at least eight” classification claim across that population. The LCA instance is directly supported and still needs the separately named `witnessclassdoor` disposition.

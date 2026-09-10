@@ -1,0 +1,219 @@
+I'll verify the inlined premises against `GXEMUL-SEC/src/` rather than ratify them, then answer the five questions from those readings.The handler and Alpha decoder are where the brief said. Next I’ll read the access path, `return 0` on Alpha, and the sibling LCA arms.**VERDICT: Adopt Codex’s candidate — `ofs >= len`, member 3, `return 0` both directions, check the downstream read before packing, new latch bit (not 0–7), `PHYSICAL` on both forwards — and do not treat the witness `ofs1 zero` oracle as the repair’s accept row.** Member 4 is **not** available for the equality cells under the packing loop that exists. `lcaisasize` is real and separate. Three of the brief’s proposed detector rows are vacuous on Alpha once `return 0` is the decline.
+
+Tree: `GXEMUL-SEC/src/`. Line numbers below match that tree (handler at `DEVICE_ACCESS(lca_isa)`, not the 2021 `./src/`).
+
+---
+
+## Premises I re-derived (not from the packet’s word)
+
+| claim | result |
+|---|---|
+| S1 `fatal()` returns | **Holds.** `void fatal(` in `debugmsg.c` has no early-out and no `exit`. |
+| S2 last executable `exit(1)` in `dev_lca.c` | **Holds on the working tree.** The only live `exit(1)` is the `ofs > len` arm. Every other hit is a comment (`/* exit(1); */` in the `dev >= 21` arm; `#516`/`#518` comments). |
+| S4 no BWX gate | **Holds, and is stronger than the packet.** `case 0x0a:` / `0x0c:` / `0x0e:` in `cpu_alpha_instr.c` set `loadstore_type` with no CPU-type test. `ALPHA_FEATURE_BWX` is defined and **never read**; every `ALPHA_CPU_TYPE_DEFS` row including `"21066"` has `features = 0`. Alphabook1’s default CPU is `"21066"` (`MACHINE_DEFAULT_CPU(alpha)`). |
+| S5 alphabook1 only | **Holds.** `device_add(machine, "lca")` is only under `ST_ALPHABOOK1`. Window is `memory_device_register(..., "lca_isa", LCA_PCI_SIO, 0x10000 << 5, ...)`. |
+| S3 member 5 unavailable on Alpha | **Holds.** After `res == 0` → `res = -1`, `memory_rw.c` dispatches exceptions only under `MEM_MIPS` / `MEM_M88K`, then `return MEMORY_ACCESS_FAILED`. |
+| Lane = a\<6:5\> | **Holds.** Walk is below. |
+
+---
+
+## 1. Premises as questions
+
+### (a) Lane decode — confirmed by walking `(0x3fd << 5)`
+
+`0x3fd << 5 = 0x7fa0`.
+
+| field | bits of `0x7fa0` | value |
+|---|---|---|
+| a\<2:0\> | 000 | 0 (hardware-required) |
+| a\<4:3\> | 00 | Size = Byte (Table 6-3) |
+| a\<6:5\> | 01 | lane 1 |
+
+Model: `relative_addr >>= 5` → `0x3fd`; `ofs = 0x3fd & 3` → **1**. That is a\<6:5\>.
+
+Hardware I/O: Table 6-3 row `01 00 Byte` gives PCI I/O ad\<1:0\> = `01`. Offset bits \<20:7\> = `0x7fa0 >> 7 = 0xff` → PCI `<26:2>` low bits `0xff`, ad\<1:0\>=01 → port **`0x3fd`**. Same port the model forwards to (`LCA_ISA_BASE + relative_addr` after the shift).
+
+**The model’s lane is the hardware lane.** The witness is right that lane is a function of the port, not an independent field.
+
+### (b) Discarded a\<4:3\> — 21066 byte-of-LSR via LDL is already correct; under-copy of wider encodings is a **separate** row
+
+A real 21066 has no BWX. Alphabook1 is a 21066. The driver issues **LDL** (`len == 4`) with size in a\<4:3\>.
+
+LDL at `0x7fa0`: `len=4`, `ofs=1`, `1 > 4` is false. Packing writes `data[1] = byte`. Guest LDL is little-endian plus sign-extend; byte lane 1 is bits 15:8. **That is the hardware byte-in-lane result.** The witness’s `ofs1 wide` already measures it green.
+
+I walked Table 6-3’s **listed I/O rows** (not the unspecified holes). On a 21066 they all arrive as `len ∈ {4,8}`:
+
+| a\<6:5\> a\<4:3\> | hw size | model |
+|---|---|---|
+| 00/01/10/11 + 00 (Byte) | 1 byte at that port | 1-byte forward to that port — **correct** |
+| 00/01/10 + 01 (Word) | 2 bytes | 1-byte forward — **under-copy** |
+| 00/01 + 10 (Tribyte) | 3 bytes | 1-byte forward — **under-copy** |
+| 00 + 11 (Longword) | 4 bytes, ad=00 | 1-byte forward — **under-copy** |
+| 11 + 11 (Quadword) | 8 bytes (LDQ) | 1-byte forward — **under-copy** |
+
+**“Word at lane 3” (a\<6:5\>=11, a\<4:3\>=01) is not in Table 6-3.** The HRM says combinations not shown are unspecified. Do not file it as a listed miss.
+
+`ofs > len` **never fires** on hardware-legal 21066 LDL/LDQ: `ofs ∈ {0,1,2,3}`, `len ∈ {4,8}`. The host kill and the silent-zero are **BWX-width** (`len` 1 or 2), which this emulator accepts because the decoder has no gate.
+
+**Agree: file `lcaisasize`, do not swallow it here.** This round’s defect is the `len`-as-size / `ofs > len` mix on containers smaller than 4, not Table 6-3.
+
+### (c) Can a guest issue `ldbu`/`stb`? **Yes. Nothing stops it.**
+
+The witness **does**: `LDBU = mem(0x0a, ...)` into RAM via `put w`, then `step`. `cpu_alpha_instr.c` maps that opcode to the 1-byte template with no `features` test. `ALPHA_FEATURE_BWX` is dead. The debugger is not required.
+
+What *would* stop it on a real 21066 is an illegal-instruction PAL path. That path is not wired here. That is a CPU-model row, not a reason this handler is unreachable.
+
+### (d) `DEVICE_ACCESS` `return 0` on Alpha — Codex is right, and this decides the detector
+
+Walk:
+
+1. Handler returns 0.
+2. `memory_rw.c`: `if (res == 0) res = -1;` then `if (res <= 0 && !no_exceptions)` prints `debug("[ ... device 'lca_isa' ... failed ]")` — **`debug()`, so it vanishes at default verbosity while `emul_executing`** — then `return MEMORY_ACCESS_FAILED` (**0**). No `MEM_ALPHA` exception arm.
+3. `cpu_alpha_instr_loadstore.c` `LS_GENERIC_N`: `if (!cpu->memory_rw(...)) return;` **before** `*((uint64_t *)ic->arg[0]) = data_x`.
+
+**Guest load: destination register is unchanged. CPU keeps running. No fault.**  
+**Guest store: handler returns before the 1-byte forward, so the ISA byte does not change.**
+
+`#95` still zeroes the **template’s local `data[]`** on the way in. That buffer is not written back on failure. A guest that sees `0` saw a **successful** pack of zeros (`return 1`), not a decline.
+
+So “decline” **is** observable, but the channel is **sentinel preserved**, not zero, and not `debug()`. The witness already seeds `SENT = 0x0bad1dea` for this. `fatal()` on a latch **is** visible (`fatal()` has no quiet early-out).
+
+### (e) Every `(len, ofs)` cell — producer first, then the 16
+
+**Producer for this round:** Alpha load/store templates emit `len ∈ {1,2,4,8}`. Sparse guest encodings used by the witness are `(port << 5)`, so a\<2:0\>=0, 32-byte aligned. A 4- or 8-byte access on that alignment **cannot straddle** `MRW_SPLIT_MASK` (1024). Codex’s extra lengths 3/5/6/7 need an unaligned, non-sparse address. `ofs >= len` would refuse `(3,3)` too; **disclose, do not floor-row them**.
+
+`ofs = (relative_addr >> 5) & 3` ∈ {0,1,2,3} always.
+
+Read vs write differ at the equality cells. `B[j]` = len-byte buffer with the downstream byte at index `j`, others 0.
+
+| (len, ofs) | today R | today W | after `>=` + decline |
+|---|---|---|---|
+| (1,0) | served `B[0]` | served `data[0]` | **still served** |
+| (1,1) | **false success** (loop never hits `i==1`; guest gets 0, `return 1`) | **accidental serve**: `data[1 % 1] = data[0]` — STB of LSR **does land** | **declined** both ways |
+| (1,2) | **exit** | **exit** | declined |
+| (1,3) | **exit** | **exit** | declined |
+| (2,0) | served `B[0]` | served `data[0]` | still served |
+| (2,1) | served `B[1]` | served `data[1]` | still served |
+| (2,2) | **false success** (zeros, `return 1`) | **wrap**: `data[2 % 2] = data[0]` — low halfword byte, not a 3rd lane | declined |
+| (2,3) | **exit** | **exit** | declined |
+| (4,0..3) | served `B[ofs]` | served `data[ofs]` | **still served** (ofs never ≥ 4) |
+| (8,0..3) | served `B[ofs]` | served `data[ofs]` | **still served** |
+
+`(2,3)` write today never reaches `data[3 % 2]`; that expression is dead. After `>=` it stays dead (declined). It is not hardware tribyte/word semantics; it is an out-of-range index the `%` would have folded onto `data[1]`.
+
+`(1,0)` with `len==0` is not in the CPU domain. If it arrived, `ofs > len` lets `(0,0)` through and **`ofs % len` divides by zero** on write. `ofs >= len` closes that. Disclose, don’t row it.
+
+This 16-cell table **is** the (d) DEPENDS-ON enumeration: dominating predicate `ofs ? len`, body-tested partitions `{ofs 0–3} × {len 1,2,4,8} × {R,W}`.
+
+---
+
+## 2. Smallest edits that break the candidate and still pass naive rows
+
+Author’s list is real. Ones **not** named:
+
+| mutant | what it does | row that must redden | naive row that stays green |
+|---|---|---|---|
+| **`if (ofs >= len && writeflag == MEM_WRITE)`** — canonical (d) qualify | reads of (1,2)/(1,3) still die or still false-succeed | `ofs2 exit` / `ofs3 exit` as **reads** | write-only decline rows |
+| **`if (ofs >= len && len == 1)`** | (2,2)/(2,3) unchanged | a **len=2** equality/kill row | all LDBU/STB rows |
+| **`i == (ofs % len)` in the pack** | (1,1) read becomes `data[0]=byte` — silent member-4 | decline-channel on (1,1) (sentinel / no-forward) | `ofs1 zero` **if you copy the witness want=LSR** |
+| **refuse path `return 1` instead of `0`** | `#95` zeros; guest load writes 0; host lives | sentinel row on (1,1)/(1,2) | `alive`, `ofs1 zero` want=0 |
+| **`>>= 5` after `& 3`** | ofs = a\<1:0\> = 0 on every sparse encoding; never refuses; LDL lane packing collapses to lane 0 | `ofs1 wide` (byte must sit in lane 1) | `alive`, any ofs-0 row |
+| **`ofs > len - 1` with unsigned `len`** | `len==0` wraps | only if you have a len=0 row (you won’t) | everything in the 16-cell table |
+| **announce then fall through** (return not taken) | second half of the old body runs | second-refuse / no-forward | first-access latch text |
+| **no `extra` / latch on a NULL `d`** | `lca_isa` today **does not even use `extra`** | `latch indep` / (once) text | functional decline if `return 0` is outside the `d` check |
+
+**`PHYSICAL` dropped again is vacuous on this witness.** `alpha_translate_v2p` identity-maps when `ptbr==0` (`!userMode && base == 0`). Alphabook1 probes never set PTBR. A guest row cannot see the flag. Pin it with a grep/identity row, or don’t claim a kill-table cell for it.
+
+**Failure-check moved below packing is vacuous on the guest load path** given 1(d): both shapes `return 0`, so the template does not write the register. Packing into `data[]` is invisible. That row only works for a caller that **ignores** `memory_rw`’s status and reads the buffer (rung 1 / ignore-return). Do not put it in the rung-3 table.
+
+Equivalent, not a break: `data[ofs]` vs `data[ofs % len]` inside the accepted domain (`ofs < len`).
+
+---
+
+## 3. Option-set completeness
+
+**No eighth disposition.** Two things the seven-member list already contains, applied more carefully:
+
+**Member 4 (ACCEPT) for `ofs == len`:** **No**, not with this packing loop. Valid indices are `0 .. len-1`. `(1,1)` and `(2,2)` have **no slot at `ofs`**. Writing `data[ofs]` is a host OOB. The only “place the byte” repair is `data[0] = byte`, which is a **different contract** (BWX: the address already selected the port; the 1-byte template only consumes `data[0]`). That is **member 7 on the width axis**, not ACCEPT of the LDL-lane-insertion contract.
+
+If you did adopt BWX-byte serve (`len==1` → always `data[0]`, never refuse on ofs), **all four** byte lanes would have to be served, not just the equality cell — otherwise (1,2)/(1,3) decline while (1,1) works. That is a behaviour expansion, and it **regresses** today’s accidental STB-to-LSR only if you decline instead. Warrant is thin: a 21066 driver uses LDL (already correct); BWX sparse I/O is underspecified.
+
+**Member 7 honouring a\<4:3\>:** right disposition for **(b) / `lcaisasize`**, wrong for this round. Cost is a Table 6-3 decoder plus 1/2/3/4-byte forwards and byte-enable packing. The `len` field would still exist for BWX. Do not do it as a rider.
+
+**Sibling grep, same file:**
+
+- `lca_ioc` default arm (**#518**): latched `fatal` `(once per direction)`, **writes discarded, reads answered with zero, `return 1`**. That is member 3’s announce with **member 2’s completion**.
+- `lca_pci_conf`: empty-slot contract, **`return 1`**, never `return 0`.
+
+**Deliberate departure from that sibling:** if this arm `return 1` and zeros, **(1,1) read is observationally the bug** (guest 0, success). The only guest-visible discriminator for the equality false-success is **`return 0` → sentinel**. That is why Codex’s `return 0` is right **here** even though #518 returns 1. State it as a departure so a later seat does not “correct” it back to the sibling and empty the channel.
+
+**Member 5** stays unavailable. `ALPHA_KENTRY_MM` is another unused `#define`; do not invent a fault path in this round.
+
+Latch: bits 0–7 are live (`LCA_W_IRQ_*`, `LCA_W_IOC_*`). Use **bit 8**, a new `LCA_W_ISA_LANE`. Sharing any of 0–7 is the `latch indep` mutant. One bit is enough (one predicate, both directions); #516’s two bits were two different events.
+
+---
+
+## 4. Detector the fix must ship with
+
+**Do not reuse the witness oracles as detector oracles.** `ofs1 zero` wants the LSR byte; `ofs1 answer` wants `completed` (not sentinel). Both **stay red** under member 3, by design of the witness (it says a decline would red `ofs1 zero`). A detector that copies them cannot go green on the candidate.
+
+**Decline channel, from 1(d):** pre-seed sentinel → refused load still holds it; refused store does not appear on the **flat** mapping; exactly one latched `fatal` containing `lca_isa` and `(once)`; **no** downstream ISA side effect. Not guest-zero. Not `debug("[ ... failed ]")` (quiet while executing).
+
+Rows I would ship (names are labels, not a probe yet):
+
+**Accept (de-escalation — the old `exit` was the tripwire):**
+
+| row | cell | channel |
+|---|---|---|
+| `lane0 byte` | (1,0) | 8042 `0x55` through sparse LDBU (`live`) |
+| `lane1 word` | (2,1) | LSR bits in byte 1 of LDWU |
+| `lane1 long` | (4,1) | LSR in bits 15:8 of LDL (`ofs1 wide`) |
+| `lane2 long` | (4,2) | MSR in bits 23:16 |
+| `lane3 long` | (4,3) | scratch in bits 31:24 — **far slot of the len=4 window** |
+| `lane0 st` | (1,0) STB | store visible on flat mapping |
+
+**Decline (refused cells of the 16):**
+
+| row | cell | channel |
+|---|---|---|
+| `eq1 sent` | (1,1) LDBU | **sentinel**, not 0 — this is the `>` mutant’s kill |
+| `eq1 nofwd` | (1,1) STB | flat LSR **unchanged** (today STB **does** land) |
+| `ofs2 sent` / `ofs3 sent` | (1,2) (1,3) | sentinel + host **alive** + attrib text |
+| `eq2 sent` | (2,2) | sentinel (the other `>` cell) |
+| `ofs3h sent` | (2,3) | sentinel |
+| `latch once` | second refuse | no second announce, still declined |
+| `latch indep` | IOC default-arm write, then ISA refuse | ISA text still appears — **#518 bit not shared** |
+
+**(b) reinstatement:** `ofs > len` restored at the site → (1,2) dies with the old `[ ofs=%i len=%i in lca_isa access function. aborting ]` string.
+
+**Failed-read `return 0`:** only if you can make the **nested** `memory_rw` fail **without** `cpu->running=0` (Codex already noted a halt-path row is inadequate). Empty ISA port currently **succeeds** with zeros (`goto do_return_ok` past RAM). This row may need a scratch-clone stub; if you cannot build it at rung 3, **disclose it**, don’t fake it.
+
+**Vacuous by construction given 1(d):**
+
+1. **Guest `== 0` as decline** — decline is unchanged register; 0 is the **bug**.
+2. **Packing-then-`return 0` vs `return 0` first**, scored on the guest register — both skip writeback.
+3. **`PHYSICAL` dropped**, scored on alphabook1 with `ptbr==0` — identity map.
+4. **`alive` alone on (1,1)** — bug and decline both survive.
+5. **Witness `ofs1 answer` want=`completed`** as a repair row — it asserts the false success.
+
+---
+
+## 5. Something else
+
+1. **`lca_isa` does not mention `extra` today.** Member 3 requires `struct lca_data *d = extra` (DEVINIT already passes `d`). A sketch that latches without that cast does not compile against a bit in `d->warned`.
+
+2. **Write (1,1) is a behaviour change the title does not mention.** STB to LSR (0x3fd) **works on HEAD** via `%`. Member 3 **stops** it. That is correct under the buffer-lane contract and is a regression under a BWX-byte contract. Record it so pass 2 does not treat a red `eq1 nofwd` as a mistake.
+
+3. **`%i` for `size_t len`** is a real diagnostic bug. Use `%u` / `%zu` on the new `fatal`. Changing only `>` to `>=` **and keeping `exit(1)`** expands host death to (1,1) and (2,2) — Codex is right; that one-character “fix” is worse.
+
+4. **Missing `PHYSICAL` is a real forward bug** (`cpu->translate_v2p = alpha_translate_v2p`; `LCA_ISA_BASE` is not K0SEG). It is invisible until PTBR is set. Add the flag with the edit; **do not claim a guest kill** for it on this machine.
+
+5. **The round title overstates 21066 “ordinary byte access.”** Ordinary on this machine is LDL + a\<4:3\>=00, which already works for all four UART registers. The kill and the silent zero are the ungated BWX path. Still a host kill; still this round; the title should not imply the 21066 console path is dead.
+
+### Sketch (not applied)
+
+Keep the decode. New bit `LCA_W_ISA_LANE` (8). `ofs >= len`: latch + `fatal` with `(once)` + **`return 0` outside the latch**. Writes: `data[ofs]`, forward with `CACHE_NONE | PHYSICAL`, return that result. Reads: if nested `memory_rw` fails, `return 0` **before** the loop; only success packs `data[i] = (i==ofs) ? byte : 0` and `return 1`. Do not pack BWX bytes into `data[0]` in this round.
+
+---
+
+**Seat:** Grok 4.6, file-reading, no builds, no probes, no gates. `agy` not fired (measurement reserved; this pass is design).

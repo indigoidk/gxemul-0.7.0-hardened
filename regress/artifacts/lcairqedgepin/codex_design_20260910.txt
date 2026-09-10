@@ -1,0 +1,84 @@
+VERDICT: Add the row as a PIC-pending control for the filed dead-UART case. Its `0x12` expectation is sound; an unconditional claim about LCA stub entry, and the stated 16-cell totals, are not.
+
+**Q1.** Write **`0x0a` to PIC1’s command port, `0x20`**, then byte-load that same port. The model implements these specific OCW3 values. Its write handler tests `if (idata == 0x0a)` and assigns `d->current_command = 0x0a;`. Readback dispatch is literally:
+
+```c
+case 0x0a:
+	odata = d->irr;
+	break;
+case 0x0b:
+	odata = d->isr;
+	break;
+```
+
+Thus IRR readback is **unmasked**: there is no `& ~d->ier` in that read arm. Selecting IRR and reading it neither acknowledges an interrupt nor clears pending bits. [dev_8259.c](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_8259.c:96)
+
+With `current_command == 0x0c`, or its reset/default value, command-port reads instead return zero when nothing is pending, otherwise `0x80 | i` for the lowest pending bit. The source calls this “Buffered mode,” but the returned value is poll-style. **Both `irr == 0x02` and `irr == 0x12` therefore return `0x81`** through that path: omitting the selector would destroy this row’s discrimination.
+
+Outside initialization, reading `0x21` returns `d->ier`, the **IMR**, initially zero. That exposes masks, not the pending set.
+
+**Q2.** I would leave the existing prologue intact and add these definitions and the extra SCRATCH operand before constructing `cmds`:
+
+```python
+def LDBU(ra, disp, rb): return mem(0x0a, ra, rb, disp)
+
+PIC1_CMD = ISA_BASE + 0x20
+setup += ["put d 0x%x, 0x%x" % (SCRATCH + 48, k0(PIC1_CMD))]
+
+edgepin = [LDQ(T1, 48, T7),       # retired LPT pointer becomes PIC1 command pointer
+           LDA(T6, 0x0a),
+           STB(T6, 0, T1),       # [E'] select IRR
+           LDBU(T7, 0, T1)]      # SCRATCH base is now retired; retain pending byte
+```
+
+Insert `edgepin` between `second` and `clear2` in `prog`. Between their corresponding `cmds` entries, insert:
+
+```python
+         "step %d" % len(edgepin),
+         "print t7",
+```
+
+The execution order becomes **[A], [B], [E], [E′], [F], [C], [D], [G]**. Add exactly this row beside `uart live`, before the final score calculation:
+
+```python
+row("uart pending", printed(txt, "t7"), "0x12",
+    "CONTROL: after [E], PIC1 IRR contains IRQ 1 and IRQ 4")
+```
+
+The register allocation is safe: `T1`’s LPT pointer is dead after [A]; [C] later overwrites it with the keyboard reply. `T6` is disposable between [E] and [F]. `T7` still holds SCRATCH until the first instruction above and has no subsequent original use. Preserve `T0`, `T2`, `T3`, `T4`, and `T5`.
+
+Using a distinct printed register matters: `printed()` takes the **first** matching print, so printing `t1` or `t6` here would corrupt an existing oracle’s interpretation. [Probe register use and parser](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/lca_irqstub_probe.py:206) The Alpha decoder supports unsigned byte-load opcode `0x0a`. [cpu_alpha_instr.c](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_alpha_instr.c:892)
+
+The expected value is `(1 << 1) | (1 << 4) == 0x12`. [B] leaves the keyboard reply queued and IRQ 1 asserted; **[C] has not executed yet**. [E] enables the UART’s transmit-ready interrupt and its MCR interrupt gate; the inline tick asserts IRQ 4. ISA assertion ORs the corresponding bit into IRR, while deassertion clears it. Nothing in [E′] drains the keyboard or clears either bit. [Keyboard queue logic](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_pckbc.c:606), [UART tick](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_ns16550.c:92), [ISA IRR updates](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/bus_isa.c:98)
+
+**Q3.** This supplies independent control coverage; it adds no unique kill among the existing single-site LCA mutants.
+
+A precise double mutant is **M12 plus removal of only `INTERRUPT_ASSERT(d->irq);` from `dev_ns16550_tick`**, retaining the inline tick calls, register writes/readbacks, `int_asserted` assignment, and deassert logic. M12 still tests the deassert latch bit while setting the assert latch bit.
+
+For that double mutant, the source-derived prediction is:
+
+- `uart live` still reads `0x8`.
+- The UART never sets PIC1 bit 4; [F] consequently causes no aggregate change.
+- `assert once` returns to `1`, and the existing twelve rows pass.
+- The new row reads **`0x2` instead of `0x12`** and fails.
+
+The same row fails with that UART change and an otherwise correct LCA stub. That is its value as a control.
+
+Its limit follows directly from Q1: raw IRR does not prove propagation through `irr & ~ier`. Masking IRQ 4, or breaking the callback above the PIC state update, could leave IRR at `0x12` without the intended LCA entry. With this probe’s reset-zero masks and the inspected aggregate-change logic, the pending-state observation supports the filed edge inference. It is not itself an entry counter. [isa_interrupt_common](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/bus_isa.c:52)
+
+**Q4.** Every numeric row score needs updating because the denominator becomes thirteen. Assuming the proposed instrumentation works as derived, existing kill/survival classifications remain unchanged:
+
+| Case | Old score → predicted new score |
+|---|---|
+| Base | `12/12 → 13/13` |
+| M2a, assert-side termination | `3/12 → 3/13`; [E′] is never reached |
+| M2d, deassert-side termination | `6/12 → 7/13`; [E′] precedes [C] |
+| Every other individual LCA cell | `n/12 → (n+1)/13`; the pending control passes |
+
+M12 specifically becomes `12/13`, still killed by `assert once`. M10 and M14 are the other assert-count cases involving [E]/[F]; their preserved raws report four asserts. Those three cases do not exhaust the changed instrument’s possible interactions.
+
+I would rerun **base plus the complete sixteen-cell enumeration**, with the null-guard edits separated by site. Base/M12/M10/M14 would be a useful preliminary check, insufficient to publish a fully measured replacement table. The UART-suppression case and its M12 combination should also validate the new control’s claimed discrimination.
+
+There is an additional accounting defect. [TABLE_G](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/lcairqstubkill/killtable_20260909/TABLE_G.out:6) plus [TABLE_H](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/lcairqstubkill/killtable_20260909/TABLE_H.out:7), excluding the null medium and two composites, contain **15 named runs: 13 killed and two passing**. One passing run, `M_nonull`, changes both sites jointly. Counting it as two site cells yields **13 killed and three equivalent cells**, including M8; it does not yield “14 killed, two equivalent.” The two null-guard cells were not measured separately.
+
+I read the five requested sources, supporting keyboard/Alpha/memory paths, and the frozen mutators and saved results. **S1 is supported** by source and preserved evidence: the old [M12 run](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/lcairqstubkill/killtable_opus_20260909b/SHIP_M12.raw:17) passes `11/11`; the later [M12 raw](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/lcairqstubkill/killtable_20260909/G/probe_M12_assertguard_swap.raw:16) records `assert once = 3`. **S2 is verified as a feasible proposal**, with the table obligation also present in the filing. **S3 is verified for this probe**, not universally for every probe in the tree. I ran no emulator or mutants and wrote no files; all proposed new scores above are predictions.

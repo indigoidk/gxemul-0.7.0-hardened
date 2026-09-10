@@ -1,0 +1,51 @@
+**VERDICT:** The derivation follows from the inlined diff and I reproduce its two enumerations (12-of-16 nibbles; 6/14 on HEAD) without contradiction; the guarded-decline logic itself is sound. Three premises are NOT settleable from this packet (full PUT arm bodies between the hunks, other writers of `d->warned`, other `regress/` probes keyed on the old text — settling facts named in Q1). Sharpest findings: the planned mutant list has **no drop-RGB** (Q5), and the M2_noguard channel is probabilistic, not a proof (Q4).
+
+## Q1 — premise audit
+
+**(a)** (READ) In the shown PUT region the only MEM_WRITE is the now-guarded common tail; hunk 1 shows only `int ok = 1;` between `if (put) {` and the switch. GET byte-identical: (REASONED) yes, by diff mechanics — the else branch appears only as context lines, and anything outside a hunk is unchanged by definition of `git diff`. NOT SETTLEABLE: the RGB/RGBA/ABGR arm bodies between the two hunks are only partially inlined; a direct `memory_rw` inside an unshown arm would bypass `ok`. *Settles it:* the full text of the PUT switch arms.
+
+**(b)** (READ) After `ok = 0`, `buf` is referenced nowhere before the guarded store; the announce reads `color_mode, x, y`. NOT SETTLEABLE: any code after the else-block (function tail). PRETABLE asserts the store is "the only thing after the switch" — asserted, not shown. *Settles it:* the body from the else-block to the closing brace.
+
+**(c)** (READ) Enum tail shows `TEX_RD = 1<<11`, then `BADCOLOR = 1<<12` as last enumerator; the demotion narrative is internally consistent with the convention. NOT SETTLEABLE: non-enum writers of bit 12, occupancy of bits 0–3 (§3's "thirteen bits"), and the **width** of `d->warned`. Note: width < 13 bits is self-pinning (latch never sets → `once` reds); a collision with an unrowed site is not pinned. *Settles it:* `grep -n "warned" src/devices/dev_sgi_re.c` plus the struct definition.
+
+**(d)** (READ) The old literal is kept verbatim *as a prefix*, including its ` ]`, so substring greps survive. (REASONED) But the new line continues " `] sgi_re: …`", so any probe anchored on end-of-line after `]`, or any probe counting per-pixel occurrences (now once per process, by design), goes silent. NOT SETTLEABLE: whether such probes exist. *Settles it:* `grep -rn "color mode" regress/`.
+
+**(e)** ENUMERATED: `MODE_CI8 = 0x1000` → `(0x1000>>8)&3 = 0x10&3 = 0` → `bufdepth = 1<<0 = 1` byte (matches the `#100` comment's formula). `buf[0] = *color` truncates fg `0xaabbccdd` to `0xdd` at tile byte 0; under the detector's stated big-endian convention, byte 0 = top byte → `0xdd223344` ✓. The endianness itself is (REASONED) asserted by the packet and consistent with GXemul's ip32 being a big-endian MIPS machine, but not derived here. Cross-checks on fg `0xaabbccdd`: RGB `[R,G,B,0]` → `0xaabbcc00` ✓; ABGR byte-reversed → `0xddccbbaa` ✓.
+
+## Q2 — smallest breaking edit that stays 14/14
+
+Delete the `x=%i y=%i` conversions and the `x, y` arguments from the announce — the contract itself discloses x/y as unrowed. Every row keys on substrings (ANN, DECL), the old-literal prefix, or the destination word. Row that stays green that looks like it shouldn't: **`announce text`** (it counts only the DECL substring). (Same-shape alternative: renumber `BADCOLOR` to `1<<13` and fix the comments — bit identity is unobservable except versus shared-with-BADMODE, so all rows pass while the enum's documented next-free invariant silently shifts. The x/y deletion is a smaller true regression.)
+
+## Q3 — option-set completeness
+
+(REASONED) Two unnamed members. (i) Latch **granularity**: `once` quietly pins once-per-device-instance over once-per-nibble (under per-type latching `two declined` announces twice and reds) — a load-bearing choice never recorded as a decision. (ii) On member 7: YCRCB is per S1 a *documented* mode, so hardware has a defined behaviour; "refused for want of a packing spec" is an absence-of-spec premise I cannot check from this packet. Refusal is right **this round** (skip+announce is reversible and strictly better than PRNG; the announce is the mechanism that surfaces future demand) but member 7 should remain OPEN, not closed. Additionally: a guest-visible error/status member exists only if the RE has such a channel — not settleable here.
+
+## Q4 — the floor (enumerated)
+
+Six single-edit cells off baseline (declines/kept/kept/kept):
+1. **stores/…** → `ycrcb put`, `reserved put` (PRNG ≠ paint), `announce text` (no DECL) ✓
+2. **latch removed** → `once` (count 2) ✓
+3. **latch shared** → `latch indep` (count 0 after BADMODE) ✓
+4. **guard removed** → `ycrcb put` (unassigned `buf` ≠ paint) — *soft, below*
+5. **guard inside-latch** → `two declined` (second PUT stores) ✓
+6. **one case dropped** → `ci8 put` / `abgr put` (and `rgb put` by the same channel, though its mutant is unplanned — Q5) ✓
+
+**None — 0 of 6 single-edit cells lacks a varying row.** Over the full 2×3×3×2 = **36**-cell product, all 35 off-baseline compounds contain one of the six and inherit its row; I found no fully masked compound. Two softenings: (i) cell 4's channel is probabilistic — uninitialised stack could equal the paint (p ≈ 2⁻³², or hold the previous pixel's packed bytes); a detector, not a proof. (ii) cell 3 is instantiated only as shared-with-BADMODE.
+
+## Q5 — accept-row failable mutants
+
+`live` → **M8_declineall** (also an unlisted drop-RGBA); `ci8 put` → **M9_dropcase_ci**; `rgb put` → **NO PLANNED MUTANT** — the list has M9 (CI) and M10 (ABGR) but no `M_dropcase_rgb`; the row *would* red by the same channel, but the battery never builds it. **This is the accept-failability gap.** `abgr put` → **M10_dropcase_abgr**. (M11_null greens all four — correct, the accept arms are untouched by the fix.)
+
+## Q6 — claim → row gaps in added comments
+
+1. "**the struct is shared by four handlers**" (BADCOLOR enum comment): the silencing-by-other-traffic clause is rowed (`latch indep`), but the *count four* has no row and no §2 sentence; this packet names only one handler.
+2. "**the two demotions above it**" (hunk-1 comment): asserts two prior demotions in the elided enum region; no row, no §2, unverifiable here.
+
+(The MEASURED rung-3 values, "twelve of sixteen", and "seeds random() per process" DO have §2 sentences; x/y is disclosed in the contract.)
+
+## Something else, found while verifying
+
+- ENUMERATIONS THAT PASS: 12-of-16 = {0x40,50,60,70,80,90,a0,b0,c0,d0,e0,f0} ✓; the HEAD total 6/14 reconstructs exactly (detector greens on HEAD: `live silent`, `ci8`, `rgb`, `abgr` = 4, plus 2 witness greens = 6) ✓; format conversions (3: `%x,%i,%i`) match args ✓; `default:` is the last arm, so no `break` is needed ✓.
+- `latch indep` is self-pinning: its green requires LIN_B RGBA to actually fire BADMODE, and `indep paint` reds otherwise — good.
+- Detector mode-bit arithmetic checks against `1<<((mode>>8)&3)`: 0x1000→1 byte; 0x1210/0x1230/0x1620→4 bytes; 0x1620 carries bit 0x400, consistent with "LIN_B".
+- Not settleable from the packet (settling fact): the unshown switch arms (file text); function tail after the else (file text); `warned` writers/width (grep); other probes on the old text (grep `regress/`); which 3 of 5 witness rows pass on HEAD (witness half not inlined — but 2/5 is consistent with the 6/14 reconstruction).

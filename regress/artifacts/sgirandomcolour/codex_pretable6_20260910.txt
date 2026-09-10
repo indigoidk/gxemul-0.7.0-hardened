@@ -1,0 +1,45 @@
+VERDICT: NO-GO (6 items)
+Nonce: CODEX_519_PRETABLE6_20260910
+
+The offset is correct. In [dev_sgi_re.c](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c), anchors `CRIME_DE_X_VERTEX_0 - 0x2000`, `int linear = tlb_mode > 3;` and `case 4:` establish one PUT at (4,1), `bufdepth = 4`, and `tile_nr = 0`. `tileptr` becomes `0x80010000`, then `0x10000` after `tileptr &= ~0x80000000;`; `ofs = x & 4095;` overwrites the earlier tiled calculation with **4**. The destination is **physical `0x10004`**, matching the new row’s load.
+
+Under `int ok = 0`, the full expected red set is **`live`, `ci8 put`, `rgb put`, `abgr put`**. `live silent` remains **0**; the other twelve rows remain green. See [the probe](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/sgi_re_colourdefault_probe.py), anchors `row("live"`, `row("ci8 put"`, `row("rgb put"`, `row("abgr put"` and `row("live silent"`.
+
+The remaining record errors are:
+
+1. **§6.f’s disclosure rests on a false cost premise.** Anchor in [PRETABLE.out](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/sgirandomcolour/killtable_20260910/PRETABLE.out): `session per bit is the unbounded shape`. One session can prime all twelve other bits before exercising BADCOLOR. An exact sequence, using the probe’s existing setup operations, is:
+
+   ```text
+   SW zero to each:
+       0xb5001000, 0xb5001200, 0xb5001400,
+       0xb5001600, 0xb5001700, 0xb5001780  # six RE width latches
+   SB zero to 0xb5002000                  # DE_LEN
+   SW zero to 0xb5001800                  # UNMAP_WR
+   LW from    0xb5001800                  # UNMAP_RD
+   setup_put(A, MODE_LINB_RGBA)           # BADMODE
+   store(A, DE_PRIM_START, 0)             # PRIM_OP: unsupported POINT
+   LD from    0xb5001600                  # TEX_RD; must be 64-bit
+   setup_put(A, MODE_YCRCB)
+   setup_put(A, MODE_RESERVED)
+   load(A, DST_KSEG1); print v0
+   ```
+
+   SW/LW are 32-bit; SB is 8-bit; LD is 64-bit. `store(op=...)` and `run_ops` accommodate the additional instructions. Before the colour declines, bits 0–11 are set and bit 12 is clear. Require all twelve prerequisite announcements, exactly one `ANN`, and the retained paint. Sharing **any** existing bit suppresses the colour announcement and reds that row.
+
+   There is already a direct precedent: [sgi_re_width_probe.py](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/sgi_re_width_probe.py), anchors `CLASS CLOSURE ON THE LATCH-COLLISION AXIS`, `SETUP_LIT` and `row("tex xbit"`. M15’s expected escape from the present sixteen rows is plausible; disclosure as an unavoidable testing cost is not.
+
+2. **§6.g confuses rows with sessions.** Anchor: `The fourteen pre-existing sessions'`. There are **nine** old sessions: `t_live`, `t_ycrcb1`, `t_resv`, `t_ycrcb2`, `t_ci`, `t_rgb`, `t_abgr`, `t_two`, `t_ind`. The repair produces ten sessions and sixteen rows.
+
+   **No old session’s commands differ.** At probe anchors `def setup_put`, `if vertex:`, `def store`, `def run_ops` and `class Addr`, every old call retains zero vertices and skips the additional store. Allocation calls remain identical; `A = Addr(CODE)` before `t_ind` prevents the inserted session from shifting its instruction addresses. The command-identity premise survives the count correction.
+
+3. **§6.g identifies the wrong overlapping byte.** Anchor: `word 1's low`. A four-byte store starting at byte 1 spans bytes 1–4. Byte 4 is the second word’s **most significant byte**, consistent with probe anchor `The destination word is read big-endian`. Also, overlap establishes a possible change, not a guaranteed red: the stored byte could equal the painted byte. This historical explanation needs correction; the current (4,1) target is sound.
+
+4. **The chronology remains contradictory.** PRETABLE anchors `written 2026-09-10 ~04:2x BEFORE table 1 runs`, `started at 04:06` and `as written at 03:51` cannot describe one consistent original writing time. §6 does not explicitly withdraw the header’s timestamp/order claim. Moreover, after appending, the current mtime cannot itself prove when the original sections were written.
+
+5. **§6.f’s bounds-check argument does not establish its claimed partition.** Anchor: `{origin, non-origin} is a body-induced partition`. Both (0,0) and (4,1) pass the same bounds decisions; the linear address calculation ignores y. Those checks distinguish permitted from rejected coordinates, rather than zero from nonzero coordinates. The new row usefully exercises the introduced `|| x`/`|| y` predicates, but that is a different justification. The actual linear rejection predicate is `(x >> 12) >= 32`, implemented through `tile_nr`, rather than the unparenthesized expression quoted there.
+
+6. **The newly appended §6.h names the wrong preceding demotion.** This subsection appeared during my read. Anchor: `SGIRE_W_PRIM_OP and SGIRE_W_TEX_RD`. In the source, `the two demotions above it` occurs inside the TEX_RD comment and refers to **SGIRE_W_PRIM_OP and SGIRE_W_BADMODE**. TEX_RD is the current demotion, not one of the preceding two.
+
+§6.b’s counts check against `1ce8296`: **3 hunks, 48 additions including 3 blanks, 13 deletions; 61 total and 58 nonblank**. The named scratch baseline was unavailable. The width-qualified probe header and §6.c–e’s corrections also check out.
+
+`t2/mut519x.py` remained absent; its session-scratchpad copy is unreachable. I audited §6.f’s mutant descriptions, without claiming measured scores. No builds or probes were run, and no files were changed.

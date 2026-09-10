@@ -1,0 +1,105 @@
+I'll verify the uncommitted `#519` diff against `GXEMUL-SEC/src/` rather than the packet, then answer Q1–Q6 from what the files actually do.Git is blocked from this seat, so I'll read `GXEMUL-SEC` files and greps next to check each premise against the tree.The enum and latch look as claimed; next I’ll read the full PUT/GET helper, the probe, and the `color mode` greps that could go silent.The helper and probe match the packet so far; I’ll now check endianness, BYTEMASK, the GET arm vs pre-fix, and whether any live probe still keys on the old per-pixel text.**VERDICT: NOT RATIFY the detector as complete; the product fix is sound.** Premises (a)–(e) hold on the tree. Q2 names two one-token edits that keep all 14 rows green. Fix those (or disclose them) before table 1; do not ship the 14-row contract as written.
+
+Read from `GXEMUL-SEC/src/devices/dev_sgi_re.c` (PUT default at the `ok = 0` arm, GET `else` immediately below, enum ending `SGIRE_W_BADCOLOR = 1 << 12`), `crmfbreg.h` (`DE_MODE_TYPE_*`), `debugmsg.c` (`fatal` has no early-out), `machine_sgi.c` (`EMUL_BIG_ENDIAN`), `regress/sgi_re_colourdefault_probe.py`, `PRETABLE.out`, and the `fix_20260910` / `witness_20260910` logs. Line numbers match the working tree, not the 2021 `./src/`. Git was denied here; scores below are from those logs, not a re-run.
+
+---
+
+### Q1 — premises
+
+**(a) Yes, and yes.** In the `if (put)` arm the only `memory_rw(..., MEM_WRITE ...)` is the one behind `if (ok)`. Named cases only fill `buf`. The GET arm is the `else` of `if (put)` and is not in the diff: it still does the unguarded READ, the four-case unpack, and the unlatched `fatal("[ get: color mode = 0x%x ]\n", color_mode)`. Byte-identical to the pre-fix GET as far as the two hunks show.
+
+**(b) No.** With `ok == 0` the WRITE is skipped and the function returns. Nothing in the PUT arm reads `buf` after the switch. (The GET arm is the other branch.)
+
+**(c) Yes, it was free; it is now this bit.** Walked every `d->warned` user in `dev_sgi_re.c`. Bits in use: `1<<0` … `1<<11` (LEN ×6, DE_LEN, UNMAP_WR/RD, PRIM_OP, BADMODE, TEX_RD), then `SGIRE_W_BADCOLOR = 1 << 12` at the two sites (test + `|=`). No other `1 << 12` on `warned`. The hits on `0x1000` are `relative_addr += 0x1000` / `baseaddr + 0x1000`, not the latch. `warned` is `uint32_t`. Next-free sentence now sits on this enumerator as `1 << 13`.
+
+**(d) No live probe or gate goes silent.** Grep of `regress/*.py` and `regress/*.sh` (not artifact copies) for `color mode =`: only this probe. It keys on the prefix substring `[ put: color mode = 0xf0 ]`, which the new `fatal` still emits. GET keeps the old spelling. Artifact clones of pre-fix `dev_sgi_re.c` are not live oracles.
+
+**(e) Yes, and yes — and the 14/14 log already measured it.** `MODE_CI8 = 0x1000` → `bufdepth = 1 << ((0x1000 >> 8) & 3) = 1`. CI stores `buf[0] = *color` → `0xdd`. LIN_A PUT at vertex (0,0) writes that one byte at tile offset 0. `machine_sgi.c` sets `EMUL_BIG_ENDIAN`, so a word load of paint `0x11223344` with byte 0 replaced is `0xdd223344`. `FIX519_detector_run1.out` has `ci8 put 0xdd223344 ok`.
+
+**Type-nibble domain (enumerated, not counted):** `color_mode = mode & 0xf0` produces exactly `{0x00,0x10,…,0xf0}` (16). Cases: CI `0x00`, RGB `0x10`, RGBA `0x20`, ABGR `0x30`. Default: the other 12, including documented `DE_MODE_TYPE_YCRCB = 0xf0`. `DEVICE_ACCESS` does not mask `de_reg`; a guest store can produce every nibble. Packet’s “twelve of sixteen” holds.
+
+Witness logs match the packet: HEAD `2/5` (`0x56e8857a` / `0x38abc4e1` on YCRCB), detector HEAD `6/14`, fix `14/14`. `fatal()` returns (`debugmsg.c`, no `exit`). No live `random()` call remains in this file (five hits, all comments).
+
+---
+
+### Q2 — smallest edit that still passes all 14
+
+**`if (ok)` → `if (ok || x)`** (one extra disjunct). Every PUT in the probe is a 1×1 rectangle at vertex `(0,0)`, so `x == 0` and the guard still equals `ok`. A YCRCB PUT at `(1,0)` stores again (unassigned `buf` / the old PRNG shape if reinstated). **Every row stays green**, including `ycrcb put`. Same family: `if (ok || y)`, `if (ok || !linear)` (probe colour PUTs are LIN_A; tiled TLB_A is unrowed).
+
+Second one-token form, different property: **`SGIRE_W_BADCOLOR` → `SGIRE_W_TEX_RD` (or any bit except BADMODE) in the test and the `|=`.** `latch indep` only pre-fires BADMODE via LIN_B (`MODE_LINB_RGBA = 0x1620` → `tlb_mode = 5` → `#504` return). Ordinary TEX/width traffic would then silence the colour announce; all 14 stay green.
+
+Third, announce-only: **`fatal` → `debug` on the new string.** This probe `step`s every store, so `debug()` prints (`single_step` raises `v`). Free-running, `debug()` is silent at default verbosity and the announce vanishes. All 14 still green.
+
+I did not build these (git denied; no gate/harness run). They are readings of the probe’s coordinates + the latch partner + `debug()` vs `fatal()` under `step`.
+
+---
+
+### Q3 — option set
+
+**Member 7 IMPLEMENT YCRCB is still refused, correctly.** `YCRCB` in `GXEMUL-SEC/src/` is the `crmfbreg.h` `#define` plus this comment. No packing, subsample, or byte-order anywhere in the helper or the DE/MTE callers. Eleven of the twelve default nibbles are unnamed. Implementing `0xf0` in the same round as declining the rest is two designs.
+
+Named here: **3** (chosen: skip store + own-bit latched announce), **zero-fill-and-store** (rejected; not 4 — 4 is “model already computes the right value”; this arm computed `random()`).
+
+**Not named, and not available at this site:**
+
+- **4 ACCEPT** — nothing correct is computed and then discarded.
+- **5 FAULT** — `horrible_getputpixel` is `void`; the WRITE uses `NO_EXCEPTIONS | PHYSICAL`. There is no bus-error return to `memory_rw` from a drawing-helper pixel. Same “check the member is available on this path” limit as Alpha FAULT.
+- **6 BACKED ACCEPT** — invent YCbCr storage. That is 7 without a spec.
+- **2 silent decline** — skip store, no announce. Distinct from 3; not argued.
+- **ALIAS to RGBA** — a packing guess. `ycrcb put` would go red (`0xaabbccdd` ≠ paint), so the rows catch it if someone ships it.
+
+No missing *available* member that should have displaced 3.
+
+---
+
+### Q4 — floor cells
+
+Stated product: `{default declines, stores} × {latch kept, removed, shared} × {guard kept, removed, inside-latch} × {types kept, one dropped}` = **36**.
+
+**Inside that product: none unrowed for a single-edit occupant** (denominator 36). `ycrcb put`/`reserved put` cover default-stores; `two declined` covers inside-latch; `once` covers latch-removed; `latch indep` covers shared-with-BADMODE; `live`/`ci8 put`/`rgb put`/`abgr put` cover one-type-dropped.
+
+**Holes sit outside that product, and the product is the wrong bound:**
+
+1. Guard axis is only {kept, removed, inside-latch}. It does not include **qualified** `if (ok || x)` (Q2). The body’s WRITE does not `if`-test `x`, so under the letter-over-demanded rule this is clause-(e) debt, not a 37th floor cell — but then the 36-cell list is not the (d) enumeration either.
+2. **“Shared” was rowed only vs BADMODE.** Share-with-TEX_RD is the same operand-swap on `d->warned` and does not move `latch indep`.
+3. **`indep paint` does not vary under M_sharedbit** (PRETABLE already says so). It also does **not** observe a LIN_B store: the second `setup_put` **repaints** `DST_KSEG1` before the YCRCB PUT. The comment “neither declined PUT stored” is false about LIN_B; only the YCRCB skip is in the oracle.
+4. **`two declined` does not pin skip-store vs early `return`.** After the PUT switch the only remaining statement is the guarded WRITE. `return` in `default:` after `ok = 0` + latch is observationally identical for every current row. PRETABLE sibling-parity claims the opposite (L4 in the check, not in product code).
+
+Table-1 mutant list omits **M_dropcase_rgb** and **M_dropcase_rgba** even though those cells have rows (`rgb put`, `live`). Add them; do not pretend M8 (decline-all) is the discriminating growth form for each type.
+
+---
+
+### Q5 — accept-row failability
+
+| row | growth mutant that reddens it | want → got |
+|---|---|---|
+| `live` (RGBA) | **drop the RGBA case** (not in the planned 12) or `ok = 0` before the switch (M8) | `0xaabbccdd` → paint `0x11223344` |
+| `ci8 put` | **M9 drop CI** | `0xdd223344` → `0x11223344` |
+| `rgb put` | **drop RGB** (not in the planned 12); M8 also reddens it, but it also reddens the other three accept rows | `0xaabbcc00` → paint |
+| `abgr put` | **M10 drop ABGR** | `0xddccbbaa` → paint |
+| `live silent` | **M_announceall** (announce on the accept path). **Not** the `ok = 0` initializer form of M8: that skips every store **without** hitting `default:`’s `fatal`, so `ANN` stays 0 and this row stays green while `live` goes red. PRETABLE’s pairing of `live silent` with M_declineall is form-dependent. |
+
+Each of the four packing rows *is* failable under drop-that-case. Two of those mutants are missing from the table plan. `live silent` is failable only under an announce-on-accept mutant.
+
+---
+
+### Q6 — claim → row
+
+**No added product-code sentence asserting an observable consequence lacks both a row and a PRETABLE §2 sentence.** Walked: enum `SGIRE_W_BADCOLOR` comment (own bit / BADMODE distinct → `once`, `latch indep`); default-arm “STORE IS SKIPPED” / “not a zero fill” / prefix / “never reads buf” / “twelve nibbles” (rows or §2 SENTENCE); `if (ok)` “stores nothing” (same skip).
+
+**Wrong records, not missing rows:**
+
+- PRETABLE §1: `two declined` “pins skipped rather than returned early” — false (Q4.4).
+- `indep paint` note: “neither declined PUT stored” — LIN_B half unobservable (Q4.3).
+- Contract discloses “per-instance latching (one RE instance exists)” and “ten undriven nibbles”; those are not §2 misses.
+
+Cosmetic: the new `fatal` prints `[ put: color mode = 0xf0 ] … (once) ]` — two closing brackets. Prefix match still works.
+
+---
+
+### Something else
+
+- **GET default is still an unlatched per-pixel `fatal` + raw unpack.** Correctly left to `sgirebufuninit`. Confirmed by reading the `else` arm, not only the packet.
+- **`random()` is gone from executable code in this file** (comment-only). A “no `random()` call” oracle would still be the wrong pin (an LCG would evade it); the destination-word rows are the right ones.
+- **`DRAWMODE_SOLID = 0xf8`** is full `PLANEMASK|BYTEMASK`; the partial-bytemask path is a `printf` TODO and does not alter these PUTs.
+- I did not run `run.sh`, any `gate_*.sh`, or a mutant rebuild. Named measurements that would settle Q2: `if (ok || x)` and `SGIRE_W_BADCOLOR`→`SGIRE_W_TEX_RD` against the frozen 14-row probe.

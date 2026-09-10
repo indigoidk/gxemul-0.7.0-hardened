@@ -1,0 +1,94 @@
+VERDICT: Use `ofs >= len` with member 3, and return downstream failure before packing the byte. S3’s length census is incomplete in this tree; the uninitialized-byte claim is conditional.
+
+I read the working-tree [dev_lca.c](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:275), its uncommitted diff, the [earlier assessment](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/lcaisalane/codex_assess_20260908.txt), and the relevant Alpha, memory-dispatch, ISA-device and probe code. The inlined function matches. Its exit is the file’s sole remaining executable `exit(1)`. The diff leaves this handler unchanged; strictly, it also adds IOC-related definitions and a helper outside `lca_ioc`.
+
+I take the adjudication date and option taxonomy from your packet. Assignment of this exit to `lcaisalane` is corroborated by `lca_badval_probe.py:349`. This was source review plus arithmetic enumeration, without changes or emulator execution.
+
+For Q1, distinguish the incoming sparse offset `r` from the decoded port `p = r >> 5`: **`ofs = p & 3`, hence incoming address bits 5–6.**
+
+The carrier’s 8201-to-6144 example concerns **MIPS** alignment exceptions. Alpha’s apparent alignment gate calls the generic helper on misalignment; that helper calls `memory_rw`. It does not reject the access. Furthermore, even enforcing width alignment would leave all four `ofs` values possible, because widths through eight constrain lower address bits. See the [Alpha helper](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_alpha_instr_loadstore.c:183) and [carrier example](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/tools/BRIEF_TEMPLATE.md:75).
+
+For the four lengths stipulated in S3, the complete table is below. `B[j]` means a `len`-byte buffer containing downstream byte `b` at index `j`, with every other byte zero. Read results assume successful downstream completion.
+
+| `(len, ofs)` | Today | Write selects | Read produces |
+|---|---|---|---|
+| `(1,0)` | Accepted | `data[0]` | `B[0]` |
+| `(1,1)` | Accepted | `data[0]` | All zeros |
+| `(1,2)` | Process exit | Nothing | No completion |
+| `(1,3)` | Process exit | Nothing | No completion |
+| `(2,0)` | Accepted | `data[0]` | `B[0]` |
+| `(2,1)` | Accepted | `data[1]` | `B[1]` |
+| `(2,2)` | Accepted | `data[0]` | All zeros |
+| `(2,3)` | Process exit | Nothing | No completion |
+| `(4,0)` | Accepted | `data[0]` | `B[0]` |
+| `(4,1)` | Accepted | `data[1]` | `B[1]` |
+| `(4,2)` | Accepted | `data[2]` | `B[2]` |
+| `(4,3)` | Accepted | `data[3]` | `B[3]` |
+| `(8,0)` | Accepted | `data[0]` | `B[0]` |
+| `(8,1)` | Accepted | `data[1]` | `B[1]` |
+| `(8,2)` | Accepted | `data[2]` | `B[2]` |
+| `(8,3)` | Accepted | `data[3]` | `B[3]` |
+
+Every accepted operation attempts **one downstream byte**, regardless of container width. For unsplit integer loads, the guest receives the corresponding little-endian value; four-byte loads additionally sign-extend. Writes return downstream status.
+
+**But those sixteen pairs are not the whole dispatcher domain.** The [memory wrapper](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:183) splits translated accesses at 1024-byte boundaries. With Alpha permitting misaligned accesses:
+
+- Starts inside the window additionally deliver `(3,0)`, `(3,3)`, `(5,0)`, `(5,3)`, `(6,3)` and `(7,3)`.
+- Accesses straddling into the window can additionally deliver `(6,0)` and `(7,0)`. For starts already inside it, the old exit prevents the corresponding short first chunks from continuing.
+- These additional pairs are accepted today. `(3,3)` selects `data[0]` on writes and produces zeros on reads. Every other additional pair selects `data[ofs]` and produces `B[ofs]`.
+
+For split accesses, these buffers are chunks of the instruction’s buffer; the whole guest result depends on the other chunks and their completion. S3 is therefore usable as an explicitly restricted subdomain, not an unconditional repository fact.
+
+Neither the modulo write nor the bounded read loop establishes an out-of-bounds access for these positive lengths. Also, **at equality the ternary never evaluates `byte`**: the equality defect and failed-byte consumption occur on different paths.
+
+For Q2(a), **`ofs >= len` is the correct rejection predicate for this handler’s existing contract that the selected lane must exist in the supplied buffer.** That is a model-support boundary, not proof of complete LCA hardware semantics.
+
+I recommend **member 3: decline plus a latched announcement**. Before any downstream call, reject the unavailable lane, leave device state untouched, and return `0` for either direction. Define the read buffer as zero on failure. Announce once per LCA instance using a fresh bit in its existing `warned` field; bit 8 is currently available. The unconditional decline must sit **outside** the announcement’s latch condition, so subsequent refusals cannot fall through. Use `%u` for `ofs` and `%zu` for `len`.
+
+Changing only `>` to `>=` while retaining the exit expands termination to the equality cases.
+
+For Q2(b), a failed downstream read must return **`0`**, matching the existing write arm’s propagation. On this Alpha path, that is failed completion/decline, **not an architectural device fault**. The [dispatcher](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:595) delivers the relevant exceptions only for MIPS and M88K. The [Alpha load helper](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_alpha_instr_loadstore.c:66) returns before destination-register writeback on failure.
+
+Consequently, a zero-filled failure buffer does **not** mean the guest successfully loaded zero: its destination register remains unchanged. Propagating failure also cannot undo side effects of the downstream operation already attempted.
+
+For Q2(c), prefer **restructuring so a failed result is never consumed**. Initializing `byte` alone would retain the false-success defect.
+
+A concrete prose sketch against the whole function is:
+
+1. Preserve the declarations and address decoding; clear the caller’s buffer for reads only.
+2. Apply `ofs >= len`; announce through the per-instance latch and return `0`.
+3. Preserve the write arm’s immediate downstream return. Its indexing may now use `data[ofs]`; retaining modulo is equivalent within the accepted domain.
+4. Check the downstream read immediately. Return `0` on failure, before the packing loop.
+5. Allow only successful reads into the existing loop and final `return 1`.
+
+That accounts for the common tail: refused accesses and failed reads cannot reach it, and writes retain their separate return.
+
+The qualification from September 8 survives inspection. Translation failures and device-dispatch reads already receive zero-filled buffers. The remaining gap is the nonexistent-memory halt path, which can return before filling `byte`. The outer dispatcher detects the running-to-stopped transition and suppresses normal Alpha writeback. Thus retain **conditional failed-byte consumption**, without claiming a demonstrated guest disclosure. With the checked-read structure, leaving the local declaration uninitialized is sufficient because successful one-byte `memory_rw` paths define it.
+
+For Q3, these are proposed regression rows, not measured results:
+
+| Fix obligation | Small regression that looks plausible | Row that distinguishes it |
+|---|---|---|
+| Equality rejection | Change `>=` back to `>` | Both equality cases: failure status and zero downstream calls, for reads and writes. Include `(3,3)` if covering actual split dispatch. |
+| Nonterminating, persistent decline | Put `return 0` inside the announcement’s “not yet warned” condition | Repeat a refused access: both attempts decline without forwarding; one attributable announcement. |
+| Failure propagation | Change the failed-read `return 0` to `return 1` | A backend that fails while leaving the CPU running: handler returns failure; an integrated load preserves a nonzero destination sentinel. |
+| No failed-byte consumption | Move the failure check below packing | A failing backend supplies a distinctive nonzero byte: failure output must remain zero. Packing that byte before returning failure fails this row. An unwritten-byte variant additionally checks definedness. |
+
+The valid side also needs coverage: successful reads place the byte in each supported lane, and writes select distinguishable input bytes. Otherwise an overbroad refusal passes all rejection rows. A second LCA instance should announce independently.
+
+With the chosen control-flow repair, deleting an optional `byte = 0` initializer is **equivalent**, not a mutation that breaks the fix. And a failure row that stops the CPU is inadequate for isolating lost status: the outer dispatcher already converts that transition to failure.
+
+For Q4, I can provide the regression oracle, but cannot supply an unfixed-build guest-trigger recipe. No committed-build witness was measured here.
+
+Two premises about the suggested devices need correction. The named 8042 ports and UART base all have `ofs == 0`, so those offsets themselves cannot demonstrate the equality defect. Moreover, the [existing IRQ probe](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/lca_irqstub_probe.py:213) accesses the downstream ISA mapping directly and bypasses `lca_isa`.
+
+A rung-3 row would need actual guest execution through the sparse handler, an independently established nonzero downstream value, and observable completion. For the proposed repair, it should assert:
+
+- The refused load preserves a nonzero destination sentinel and reaches the next guest marker.
+- The refused operation does not affect downstream state.
+- Repetition produces one site-specific announcement per instance.
+- A matched supported access still returns the correctly packed downstream byte.
+
+**Zero readback alone cannot distinguish the defect from a zero-filled fallback.** Callback mocks can verify status, byte consumption and call counts, but those rows do not become rung 3.
+
+Two additional issues from the earlier assessment also remain: both forwarding calls lack `PHYSICAL` despite targeting registered physical ISA addresses, and the old diagnostic mismatches `size_t` with `%i`. Physical forwarding deserves separate validation; neither initialization nor the new guard repairs it.

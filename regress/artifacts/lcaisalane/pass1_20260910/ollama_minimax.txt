@@ -1,0 +1,112 @@
+**VERDICT: The three defects are REAL and CONFIRMED by code inspection and the inlined witness; the lane decode matches hardware; the model discarding a<4:3> is FORCED by the sparse window so `lcaisasize` is a phantom row; the candidate fix corrects the exit/false-success cells but has an unreported asymmetry on writes at (len=1, ofs=1) which were actually correct; `return 0` semantics on Alpha cannot be settled from this packet.**
+
+---
+
+## Premise audit (READ = from packet, REASONED = derived)
+
+**S1 (fatal returns) — NOT CHECKABLE.** The packet inlines the call site (`fatal(...); exit(1);`) so the *behaviour* (process terminates) is settled regardless of fatal()'s internals. The premise about fatal() being "a diagnostic" is a code-style claim that would need `src/core/debugmsg.c`. **Irrelevant to the bug** because exit(1) follows.
+
+**S2 (last exit in dev_lca.c) — NOT CHECKABLE.** Requires grep of dev_lca.c for `exit(`/`fatal(` outside this function. The packet does not provide it. **Name the fact that would settle it:** the set of other `exit(` and `fatal(` sites in dev_lca.c after #516/#518 land.
+
+**S3 (option set, 7 members) — NOT CHECKABLE for completeness.** The seven members are inlined. Member 5's exclusion (no failed-device exception on Alpha) is a claim about `memory_rw.c` that cannot be verified from the packet. **Name the fact:** the dispatch table in memory_rw.c showing which CPU types get the exception path.
+
+**S4 (BWX decode without CPU-type gate) — SETTLED by the inlined witness, not by the grep claim.** The witness `lca_isalane_probe.py` reaches lane 0/1/2/3 with `len==1` (the `live`, `ofs1 zero`, `ofs2 exit`, `ofs3 exit` rows), which is only possible if the guest issued `ldbu` and it reached the handler. The grep anchors in `cpu_alpha_instr.c` are not checkable from the packet, but the *reachability* they are offered to prove is proven by the witness itself.
+
+**S5 (registration on alphabook1 only) — NOT CHECKABLE.** Requires dev_lca.c.
+
+**S6 (hardware table) — READ, REASONED.** The table is inlined. The lane decode `(relative_addr >> 5) & 3` equals original bits <6:5> = a<6:5>. Walking `0x3fd << 5`: relative_addr = 0x7fa0, >>= 5 → 0x3fd, & 3 → 1. From the table, a<6:5>=01 → PCI I/O ad<1:0>=01. **Lane decode matches hardware.**
+
+**Critical premise on a<4:3> — REASONED FALSE for "lcaisasize".** The sparse window stride is 32 (`>>= 5`), so the guest can only place accesses at 32-byte-aligned offsets. Bits <4:0> of relative_addr are FORCED to zero by the window design; therefore a<4:3> is always 00 on every access that reaches this handler. The model "discarding" a<4:3> is not a divergence — it is the only possible behaviour. A hardware-legal Word (a<4:3>=01) or Tribyte (a<4:3>=10) encoding **cannot be emitted through this window**, so the model cannot "serve it wrongly". The `lcaisasize` row is not real; it describes an access pattern the sparse window cannot produce.
+
+---
+
+## §E Question 1(e) — enumeration of all 16 cells (REASONED)
+
+`len ∈ {1,2,4,8}`, `ofs ∈ {0,1,2,3}`. Current behaviour per the inlined code (read arm packing loop `data[i]=(i==ofs)?byte:0`; write arm `byte=data[ofs%len]`; guard `ofs > len`):
+
+| len\ofs | 0 | 1 | 2 | 3 |
+|---|---|---|---|---|
+| 1 | **correct** (r:data[0]=byte; w:data[0]) | **FALSE SUCCESS** (r:data[0]=0, byte lost; w:data[0]→device@lane1 — actually correct) | **exit** | **exit** |
+| 2 | **correct** | **correct** | **WRONG** (r:data[0..1]=0, byte lost; w:data[0]→device, data[1] lost — partial) | **exit** |
+| 4 | **correct** | **correct** | **correct** | **correct** (r/w but w is 1-byte only — model simplification, not flagged) |
+| 8 | **correct** | **correct** | **correct** | **correct** (same caveat) |
+
+After candidate fix (`ofs >= len`, decline, `return 0`):
+
+| len\ofs | 0 | 1 | 2 | 3 |
+|---|---|---|---|---|
+| 1 | accepted, correct | **declined** (was false-success r / correct w — see asymmetry below) | declined (was exit) | declined (was exit) |
+| 2 | accepted, correct | accepted, correct | declined (was wrong) | declined (was exit) |
+| 4 | accepted, correct | accepted, correct | accepted, correct | accepted, correct |
+| 8 | accepted, correct | accepted, correct | accepted, correct | accepted, correct |
+
+The candidate correctly handles every cell. **But** see the asymmetry finding below.
+
+---
+
+## §E Question 1 — other parts
+
+**(a) Lane decode.** Confirmed by walk above. **REASONED.**
+
+**(b) a<4:3> discard.** As argued above, the sparse window forces a<4:3>=00 always. No hardware-legal Word/Tribyte encoding is reachable. `lcaisasize` is a phantom. The multi-byte `len` behaviour (1 byte from device, rest zero on read; 1 byte from data[ofs%len] on write) is a model simplification, not a divergence from hardware that the sparse window can express. **REASONED.**
+
+**(c) Guest can issue ldbu/ldwu/stb.** Settled by the inlined witness (len=1 reaches the handler, lanes 0–3 all probed). **READ via witness.**
+
+**(d) What does `return 0` do on Alpha — NOT CHECKABLE.** Requires reading the device dispatch in memory_rw.c (grep anchor `mem->devices[i].f(`) and the Alpha load template in cpu_alpha_loadstore.c. The Codex claim "destination register left UNCHANGED" is a specific claim that would be settled by those two reads. **This decides the detector channel:** if return 0 leaves the register unchanged, the decline is *not* observable as a zero in the guest register — the detector must use the once-latched text or the unchanged-register probe; if return 0 writes zero, the detector's `ofs1 zero` row is still meaningful but for a different reason.
+
+**(e) Enumeration above.** The cell I cannot cleanly label is **(len=1, ofs=1) for writes** — see asymmetry.
+
+---
+
+## §E Question 2 — smallest edits that break the candidate (REASONED)
+
+The brief lists six. I add:
+
+- **Remove `exit(1)` without adding the decline branch.** Trap: with `fatal()` returning per S1, control falls through to the read/write arm after fatal(). For (1,2)/(1,3)/(2,3) the read packing loop would then silently produce all-zero data with `return 1` — exactly the false-success channel the fix is meant to close, just at different lanes.
+- **Fix only the read packing loop (e.g. special-case len==1) but leave the write arm's `data[ofs%len]` for ofs >= len.** The (2,2) write would still emit a partial 1-byte write when it should be declined.
+- **Move the decline check to *after* the read/write arms but before `return`.** Same trap as removing exit(1): the arms have already mutated the device or the caller's buffer.
+- **Change the latch's "once" predicate to `>1` instead of `>=1`.** Second declined access prints the text twice.
+
+---
+
+## §E Question 3 — option set completeness (REASONED)
+
+**Member 4 (ACCEPT) IS available for (len=1, ofs=1).** That cell is hardware-valid: a<6:5>=01, a<4:3>=00 is a Byte access at PCI I/O ad<1:0>=01 (Table 6-3). The model already reads the correct device byte (the PCI address carries the lane). The only thing wrong is the read packing loop discarding it. The correct serve is `data[0]=byte; for(i=1;i<len;i++)data[i]=0;` for the len==1 case (lane consumed by address, not by data placement). This is a *third* option distinct from the brief's binary decline/accept framing: **fix the loop, don't decline.**
+
+**Member 7 (honour a<4:3>) is moot** — the sparse window cannot emit a<4:3>!=00, so there is nothing to honour. The cost is zero because the work is impossible.
+
+---
+
+## §E Question 4 — detector shape (REASONED, conditional on 1(d))
+
+The (1,d) answer changes which rows are vacuous:
+- If `return 0` leaves the register unchanged: the "decline row per refused cell reading the DECLINE CHANNEL" is the unchanged-register probe, **not** a zero read. The `ofs1 zero` witness row is meaningful *only* for the pre-fix false-success behaviour and becomes vacuous for the post-fix decline.
+- If `return 0` writes zero: the `ofs1 zero` channel is reused, but the old false-success zero and the new decline zero are observationally identical from the guest — the detector cannot distinguish "bug" from "fix" by the zero alone, and must rely on the latched text or the death/undeath transition.
+
+**Rows that are vacuous by construction regardless of 1(d):** the `latch indep` row against a #518 bit, unless #518's bit is itself reachable through `lca_isa`'s dispatch (it is not — the two `LCA_W_IOC_*` bits live in a different register window).
+
+---
+
+## §E Question 5 — things found while verifying
+
+1. **Write-arm asymmetry at (len=1, ofs=1).** The write arm today does `byte = data[1%1] = data[0]` and writes it to the device at lane 1 (the lane is carried by the PCI address from relative_addr). That is *correct* — a 1-byte store at lane 1 puts the guest's only data byte at the addressed lane. The candidate's blanket decline of all `ofs >= len` therefore *regresses* this working write to a refusal. The brief's witness does not exercise stb at lane 1, so this regression is invisible to the inlined evidence but real. The fix should either (a) accept writes at (1,1) while declining reads (asymmetric, ugly), or (b) fix the read packing loop to place the byte at `data[0]` for `len==1` regardless of ofs, accepting the cell in both directions. The brief does not mention this.
+
+2. **`(len=2, ofs=2)` write is partial, not just wrong-placed.** Today's code writes `data[2%2]=data[0]` to the device at lane 2 and drops `data[1]` entirely. The candidate declines it, which is strictly better, but a reader of the brief might think the only bug at (2,2) is the read zero — the write bug is a silent 1-byte-when-2-meant, which is worse than the decline.
+
+3. **`(len=4, ofs=3)` and all `(len=8, ofs=*)` writes are also 1-byte-only.** The model writes only `data[ofs%len]` and drops the rest. Not flagged by the brief, not exercised by the witness. Out of scope for this round but worth noting in `lcaisalane`'s ledger row as "model is byte-lane for writes, multi-lane for reads — asymmetric by design."
+
+4. **The format string `%i` for `size_t len`** is a real but minor defect, independent of the bounds bug. Codex noted it; it should be in the patch.
+
+5. **The two downstream `memory_rw` calls lack `PHYSICAL`.** Codex noted; not checkable from the packet, but if true it means the calls go through the same sparse-window translate again — for ISA-space targets behind `LCA_ISA_BASE` this is probably fine since that base is itself a physical address, but worth confirming against memory_rw.c.
+
+---
+
+## What I cannot settle from this packet (named, with the single fact that would settle each)
+
+1. **`fatal()`'s return semantics** — read `void fatal(` in src/core/debugmsg.c. (Low value: exit(1) makes it moot.)
+2. **Last-exit-in-dev_lca.c claim (S2)** — grep `exit(` and `fatal(` in dev_lca.c outside DEVICE_ACCESS(lca_isa).
+3. **memory_rw.c failed-device dispatch table** (member 5 availability on Alpha) — grep `case EXCEPTION_*` near the device-dispatch arm.
+4. **Alpha `return 0` from device dispatch semantics** (1(d)) — read the path from `mem->devices[i].f(` through the load template in cpu_alpha_loadstore.c. This is the single most consequential unknown for the detector design.
+5. **Whether `lca_isa`'s `ofs>=len` check should be a per-instance latch shared with anything in #518** — requires reading #518's `LCA_W_IOC_*` bit definitions to confirm there is no shared state.
+6. **`PHYSICAL` absence claim** — read the two downstream `memory_rw` call sites in context; memory_rw.c signature.
+7. **The three pristine-2021 copies vs the fork** — I cannot read either, so I cannot confirm the brief's claim that `GXEMUL-SEC/src/` differs from `_archive/audit-results-*/builds/src/`. I take it on faith from the brief.

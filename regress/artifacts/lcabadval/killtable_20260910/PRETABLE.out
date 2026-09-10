@@ -1,0 +1,232 @@
+#518 lcabadval -- PRE-TABLE CHECK, written 2026-09-10 ~00:1x BEFORE table 1 runs (mtime is the proof).
+Instrument: regress/lca_badval_probe.py, 40 rows (20 witness + 20 detector), 40/40 on the fixed
+build/gxemul (FIX518_detector_run1.out); 14/20 on HEAD 74daefd with the 20-row witness form
+(HEAD_74daefd.out).  Diff under review: src/devices/dev_lca.c (scratchpad/patch_lcabadval.py, 166
+changed lines), lca_ioc_announce() helper + six arms + the default arm + six latch bits.
+
+1. SIBLING PARITY
+   The six de-fatalised arms sit in one switch beside FOUR untouched siblings: BASE (ignored),
+   TBIA (ignored), W_T_BASE0, W_T_BASE1 (store + echo, no guard).  Channels per de-fatalised arm:
+   survival, read-back of the normalized value, announce text, announce count.  The siblings
+   have: survival + read-back (W_T_BASE0 is the negative control, `ctl noguard'/`ctl echo').
+   ASYMMETRY 1: the six arms now DROP reserved bits; the W_T_BASE arms store raw.  Deliberate --
+   the manual's T_BASE layout was not audited this round; SENTENCE OWED (in the probe contract),
+   no row.
+   ASYMMETRY 2: W_BASE0/1 share ONE WEN latch (`wen once' rows it); W_MASK0/1 have SEPARATE
+   latches (`wmask1 indep' rows it).  Both directions of the default arm have separate latches
+   (`def r once' rows it).  Each asymmetry has a row.
+   ASYMMETRY 3: CONF announces on bit 1; TB_ENA announces on nothing (reserved bits silently
+   dropped).  A TB_ENA announce would be per the manual's "ignored on write" -- nothing to
+   announce.  SENTENCE, no row.
+
+2. CLAIM -> ROW (every added comment sentence asserting an observable consequence)
+   "IOC_CONF<1:0> select the cycle TYPE; everything above is reserved and is IGNORED"  -> conf reserved
+   "bit 1 is stored and announced once"                                                -> conf stored, conf once
+   "TEN is the only architected bit; the rest are type X -- IGNORED on write"          -> tbena stored (0x81 -> 0x80)
+   "Store the fields (reserved bits dropped)" (W_BASE)                                 -> wbase0 stored, wbase1 wen
+   "announced once when any window is ENABLED"                                          -> wen once
+   "S6.4.14 REQUIRES SROM to write zero"                                                -> wbase1 legal/stored, wbase0 zero
+   "Validate the field, store only when legal, decline once, previous value kept"       -> wmask{0,1} declined/once/kept2/indep
+   "Decline the write (no state changes), answer a read with zero, announce each
+    direction once"                                                                     -> def alive, def w once, def read0, def r once
+   "The value keeps #506's full width" (default-arm diagnostic)                        -> no row: a diagnostic FORMAT claim;
+                                                                                          checked by reading the EVIDENCE line
+                                                                                          (0x5a5a5a5a printed in full).  SENTENCE.
+   "fatal() prints and returns" (helper comment)                                       -> every `stored' row is alive after an
+                                                                                          announce: rowed by construction.
+
+3. GUARD FIELD vs BODY FIELD
+   Guards read: idata (all arms), the field f (masks).  Bodies read/write: d->ioc_conf,
+   d->tlb_enable, d->window_base_{0,1}, d->window_mask_{0,1}, d->warned.  The shared field is
+   d->warned: now EIGHT bits, six of them set inside DEVICE_ACCESS(lca_ioc) by ordinary guest
+   writes.  "Who else writes this field, and can they set my bit?" -- #516's two IRQ bits are set
+   by the interrupt stubs; the six new bits by this handler; no site writes the whole word.  A
+   collision (two reasons on one bit) is what the `indep' rows and `def r once' pin.  The
+   DISAGREEING state the rule asks for: a latch bit set by a DIFFERENT reason before this one
+   fires -- built in-session by `wmask1 indep' (MASK0's bit set first) and `def r once' (the
+   write bit set first).  W_MASK: guard reads f, body writes v -- same derivation from idata,
+   no disagreeing state possible.
+
+4. CHANNEL -- per row, the mutant it kills and the observable that differs.  (b) = verbatim
+   reinstatement of the kill at that arm; (d) = DEPENDS-ON weakening; each (d) mutant is one edit.
+   row              kills                                        observable
+   <arm> legal      (b) at that arm                              alive vs dead
+   <arm> stored     (b); M_conf_mask (`& 0x3' -> `& 0x1');       read-back value
+                    M_tbena_raw (`& TEN' removed); M_base_mask
+                    (WEN or SG dropped from the mask, or `& 0xffffffff');
+                    M_mask_field (`& 0xfff00000' -> `& 0xfff' etc.)
+   wmask0 declined  M_rule_weak (`(f & (f+1)) == 0' -> `f != 0');  read-back 0x500000 vs 0x100000
+                    M_store_first (store v before the test)
+   wmask0 once      M_nolatch_mask0 (guard on the bit removed)     announce count 2 vs 1
+   wmask0 kept2     M_store_first                                  read-back
+   wmask1 declined  M_rule_weak at MASK1; M_store_first at MASK1   read-back
+   wmask1 indep     M_shared_masklatch (MASK1 uses MASK0's bit)    MASK1 announce count 0 vs 1
+   conf reserved    M_conf_mask; M_conf_raw (`& 0x3' removed)      read-back 0x0/0x1/0x100000002 vs 0x2
+   conf once        M_nolatch_conf                                 count 2 vs 1
+   wen once         M_wen_perreg (two latch bits) / M_nolatch_wen  count 2 vs 1
+   wbase1 wen       M_base_mask (WEN dropped)                      read-back 0x40000000 vs 0x240000000
+   wbase0 zero      (b) at BASE0 would NOT kill zero (accepted there): this row pins the SROM
+                    value at BASE0 for the record; its mutant is M_base0_nonzero (a `!= 0'
+                    decline) -- read-back 0x280000000 vs 0x0
+   def alive        (b) at default                                alive vs dead
+   def w once       M_nolatch_defw                                 count 2 vs 1
+   def read0        M_def_echo (default reads return idata/last)  0x5a5a5a5a vs 0x0
+   def r once       M_shared_deflatch (one bit for both)          read count 0 vs 1
+   ctl noguard/echo (control) no mutant; reddens only if the window or width breaks.
+   VACUOUS-BY-CONSTRUCTION CHECK: no row's channel is fixed under its named mutant.  The one
+   row whose value is 0 on both a correct build and a store-skipping mutant is `wbase1 stored'
+   AFTER the accepted write -- which is why every `stored' session writes the accepted value
+   FIRST, so a skipped store reads 0x240000000, not 0.
+
+5. THE (d) ENUMERATION FOR TABLE 1 (DEPENDS-ON, bounded to the diff's own hunks):
+   predicates dominating the edited lines: writeflag == MEM_WRITE (unchanged; not mutated),
+   the switch label (each arm its own case, no fall-through group -- the 7g-1 discriminator
+   does not fire), the mask/field tests introduced by the fix.  Cells: per arm {mask kept,
+   mask narrowed, mask dropped} x {store, no store}; masks {rule kept, weakened, strengthened}
+   x {store order}; latches {kept, removed, shared}.  Planned mutants (one edit each):
+   M1_conf_kill (b)   M2_tbena_kill (b)   M3_base0_kill (b)   M4_mask0_kill (b)
+   M5_base1_kill (b)  M6_mask1_kill (b)   M7_def_kill (b)     M8_conf_mask1 (& 0x1)
+   M9_conf_raw        M10_tbena_raw       M11_base_nowen (mask drops WEN)
+   M12_base_32 (& 0xffffffff)             M13_rule_weak (f != 0)   M14_rule_strong (f == 1)
+   M15_store_first (mask0)                M16_nolatch_mask0        M17_shared_masklatch
+   M18_nolatch_conf   M19_nolatch_wen     M20_def_echo (read returns idata-ish)
+   M21_shared_deflatch                    M22_null (a 217-byte comment-only dev_lca.c is not
+   buildable; the null medium here is the PRE-FIX file, i.e. all seven kills at once = HEAD)
+   ACCEPT rows (de-escalation): the `live' rows (6) plus `wbase0 zero', `wbase1 wen'.  Their
+   growth mutant: M23_accept_narrow (W_BASE0 rejecting 0x300800000, i.e. the old whitelist
+   re-added under the new mask) -- reddens `wbase0 live' -- built as the failability check.
+
+6. PASS-2 ADDITIONS (2026-09-10 ~00:5x, after panel_20260910_000223's packet-fed seats; appended,
+   never rewritten -- the rows above stay prescribed).  L1, pre-ship construction:
+   BUG   `def read0' read nth(vals,0), the STALE t3 printed after the store-only phase; M20_def_echo
+         would have passed.  Index 1 now (kimi substitute).  Table 1 on the 40-row instrument stands
+         for its rows and is expected to show M20 as a 40/40 escape -- a MEASURED confirmation.
+   ROWS  wmask1 once (latch REMOVED at MASK1: glm); def r once now two reads (latch REMOVED at DEF_R:
+         glm, kimi); conf widen (`& 0x3' -> `& 0x7': minimax); tbena clear (no-store at TB_ENA: kimi);
+         wbase0 sg (SG dropped: deepseek/kimi/minimax); wbase0 widen (reserved bits above 33 -- the
+         "reserved bits dropped" claim, deepseek Q6); wmask0 widen (bits 19:12); wmask0 hif (glm's
+         `f = idata >> 20'); all conf/wen/m0/m1/defw/defr (cross-arm latch sharing: kimi Q4.5).
+   MUTANTS for table 2, one edit each: M24_base_nosg; M25_conf_widen (& 0x7); M26_base_widen (mask
+         | 1<<34); M27_mask_widen (& 0xfffff000); M28_field_idata (f = idata >> 20); M29_tbena_nostore;
+         M30_nolatch_mask1; M31_nolatch_defr; M32_shared_conf_wen; M33_shared_m0_defw.
+   SENTENCES (claim -> row, kimi Q6): "cannot be silenced by -q" is the carrier's measured fact about
+         fatal() (debugmsg.c:384), not this diff's claim -- no row, disclosed; "Bit 0 ... is what
+         lca_pci_conf reads (#515)" is a consumer claim pinned by regress/lca_confbus_probe.py's
+         type-1 routing rows, not re-rowed here.
+   L4    the CONF comment and announce said bit 1 selects type-1 cycles; `type1 = d->ioc_conf & 1'
+         (#515) says bit 0 does.  Reworded in the diff (grok).
+
+7. PASS-2 ADDITIONS, ROUND 2 (2026-09-10 ~01:0x, grok's file-reading answer; appended).  L1:
+   ROWS  wen base0 (D6: BASE0 alone enables twice, announce once) and wen base1 / wbase1 alone (D8:
+         BASE1 alone) -- the per-label WEN announce; `wen once' pinned only "at least one of two in a
+         BASE0-first session", so deleting either label's announce passed.  The join here is the
+         SHARED LATCH BIT, not a fall-through label: the 7g-1 discriminator's shape reached by
+         another door, and §5 said it "does not fire" -- true of the labels, false of the bit.
+   COVERED ALREADY by §6 (grok named them independently, which is the corroboration):
+         CONF announce operand `0x2' -> `0x1'  -> `all conf' (D7 writes 0x2 with NO leading 0x1);
+         `window_mask = idata' on success       -> `wmask0 widen' / `wmask0 hif';
+         DEF_R latch removed                     -> `def r once' (two reads);
+         CONF latch shared with WEN              -> D7.
+   MUTANTS for table 2 (added to §6's list): M34_conf_dropbit0 (`& 0x3' -> `& 0x2': the `conf live'
+         growth mutant, grok Q5); M35_tbena_dropten (`& TEN' -> `& 0': the `tbena live' growth mutant);
+         M36_nolatch_defw; M37_base0_nonzero (a `!= 0' decline re-added at BASE0); M38_wen_base1_off
+         (BASE1's announce call deleted); M39_wen_base0_off; M40_conf_ann_bit0 (`idata & 0x2' ->
+         `idata & 0x1'); M41_mask_raw_store (`= v' -> `= idata').  §4 named M_nolatch_defw,
+         M_base0_nonzero, M_mask_field and M_wen_perreg and §5's list dropped them -- the block's own
+         "prescribed rows lost in a rewrite" shape, caught by grok; they are restored here.
+   L4    the default-arm comment called every non-switch offset "unlisted"; STAT0 +0x040, STAT1
+         +0x060, SFT_RST +0x0c0, PAR_DIS +0x0e0 are DOCUMENTED registers this model never had, and
+         S6.4.14 items 1-2 require SROM to write SFT_RST and STAT0.  Reworded in the diff; FILED as
+         `lcaiocstat0' (member 7 there, not this round's six-arm fix).  `def alive' is +0x1e0 only
+         and says so.
+   SENTENCE  the read-back oracles test the model's ECHO POLICY (the registers are WO on hardware,
+         readback UNPREDICTABLE, HRM :980-988); written into the probe's contract header.
+   RECORD  HEAD_74daefd.out's banner stamps 54a2eb4 (HEAD moved during the witness run; the Opus
+         seat checked `git diff 74daefd..HEAD -- src/devices/dev_lca.c' empty).  Noted, not relabelled.
+
+8. ROUND 3 (2026-09-10 ~01:1x), FROM THE SEATS' OWN MUTANTS -- and the seats' wall.  Both Opus agents
+   died mid-table on a session-limit 429 (resets 03:00 America/Chicago; the shared-transport class).
+   What they measured stands: every .raw carries its sentinel.
+   EQUIVALENT BY CONSTRUCTION: M20_def_echo (`odata = idata' on a default-arm READ, where idata is 0 --
+         the mutator's text) scores 58/58 in both tables because it is the fixed code; the table-1
+         seat saw it and built the WORKING form M29_def_allones (a nonzero default read): 57/58,
+         killed by `def read0'.  A mutant that will not die is a result: case 1, mis-built.
+   FOUR VACUOUS ROWS, exposed by the table-1 seat's own additions against the 58-row instrument:
+     `wmask0 hif'   prior value 0x100000 == wanted 0x100000, so a DECLINE reads the same as a store:
+                    blind to M26 (`& 0xffff00000') and M35 (`f = idata >> 20').  -> store 0x700000 first.
+     tbena rows     drove only reserved bit 0: blind to M27 (`& ~1ULL').  -> `tbena b1' (0x82 -> 0x80).
+     WEN announce   no session wrote W_BASE WITHOUT WEN and asserted silence: blind to M32 (`|').
+     CFG1 announce  no session wrote CONF without bit 1 and asserted silence (M33 `|'), nor a bit-1
+                    value other than 0x2 alone (M37 `== 0x2').
+                    -> D9, TWO sessions (the first draft put 0x6 in the silence session and `conf
+                    silent' read 1 on the correct build, 63/64: announces() counts the whole
+                    transcript).  Rows: wen silent, wbase0 nowen, conf silent | conf ann6, conf 6 stored.
+   Instrument now 64 rows, 64/64 on the fix (FIX518_detector_run4.out).  TABLE 3 (main loop, the seats'
+   clones and frozen baselines, killtable_20260910/t3/): BASE, M20, t2's M25..M47, t1's six sweepers.
+   Kills measured on the 58-row instrument (t2/ M1..M24, SCORES.txt) stand for those mutants: added
+   rows can only add reds.
+
+9. ROUND 4 AND THE RECORDS AUDIT (2026-09-10 ~04:5x).  The codex seat audited the CHANGELOG DRAFT
+   against the artifacts before commit (regress/artifacts/lcabadval/codex_audit_20260910.err, NO-GO,
+   27 items).  Every item is disposed here or in the block; the ones that changed the instrument:
+   VACUOUS  `def width' matched 0x5a5a5a5a5a5a ANYWHERE in the transcript -- the debugger echoes the
+            `put d' that supplies it, so the row could not fail.  Keyed now on the announce's own
+            form (`: 0x5a5a5a5a5a5a -- declined').  A check that cannot fail, inside the repair for
+            one (item 20).
+   ABSENT   legal ZERO at W_MASK after a nonzero (f = 0 is Table 6-6's 1 MB encoding) -> `wmask0
+            zero'; SG kept at BASE1 (`wbase0 live' pins SG at BASE0 only; t2's M45 named it) ->
+            `wbase1 sg'; a named register's state across a DEFAULT-arm write (the observation behind
+            "no state change") -> `def state' (items 10, 11, 14, 18).
+   L4       dev_lca.c:55's define comment still read "type-1 cycles not modelled" after round 2
+            reworded the arm; the D6 comment still repeated "no row drove bit 32" (items 11, 12).
+   WORDING the block will carry (each a sentence the draft got wrong):
+   - "no state change" at the default arm is "no IOC REGISTER-VALUE change": d->warned moves on the
+     first announce per direction (item 14).
+   - the 63/64 score of the unsplit D9 draft had NO preserved log (run3 overwrote it); it is
+     RE-MEASURED from the backed-up instrument as FIX518_detector_run3_D9unsplit.out (item 1).
+   - "every log carries its sentinel" EXCLUDES the quarantined first table-1 attempt
+     (killtable_20260910/pre_repair_aborted/, invalidated when the fix changed under it -- README) (5).
+   - "kills on the 58-row instrument stand": the 64-row instrument CHANGED an existing session
+     (D6's last phase, `wmask0 hif', prior value and ops), so the slogan "added rows only add reds"
+     is not the argument.  The argument: every 58-row kill was carried by a row whose session is
+     byte-identical between the two frozen instruments -- `wmask0 hif' never reddened on any 58-row
+     mutant (it was the vacuous row), so no kill rested on it.  Deriver: diff the two .asrun.py
+     copies; the only changed session is D6 (item 6).
+   - table 1's own sweepers are SIX non-equivalent mutants (M26, M27, M32, M33, M35, M37) plus the
+     equivalent M20, grouped by PRETABLE into FOUR coverage problems; the silence rows were ABSENT
+     rows, not vacuous ones -- only `wmask0 hif' and the tbena pair were vacuous (item 7).
+   - S6.4's quadword requirement is at :10180-10181; :10175 is the heading (item 8).  IOC_CONF<1:0>
+     is a writable two-bit FIELD; only encodings 00/01 are PCI configuration-cycle types, so 2 is a
+     legal REGISTER value, not a valid cycle type (item 8).
+   - the pass-2 roster: SIX of SEVEN scriptable transports answered (kimi CLI 403, covered by the
+     substitute; agy deliberately not fired) -- not "eight transports"; and in the seats' own words:
+     codex NO-GO, grok NOT RATIFY, deepseek NOT RATIFY, glm "the floor is NOT complete", minimax
+     "PASS WITH ONE UNCAUGHT CELL", the kimi substitute "one LIVE defect" (item 9).
+   - the fix's SCOPE: the 2026-09-09 ruling named FOUR arms (W_BASE0/1, W_MASK0/1), assigned CONF
+     to member 4 (ACCEPT) and assessed TB_ENA outside the round; the witness then MEASURED TB_ENA's
+     0x81 as a live kill and CONF's reserved bits likewise, and the implementation grew to SIX arms:
+     CONF and TB_ENA are member 4 (accept the architected field, reserved bits ignored) with CONF
+     carrying a once-announce for the not-modelled encodings; the four window arms are member 3
+     where a value is declined (unsupported masks) and member 4 where it is stored.  "Member 3
+     throughout" was wrong; the scope revision is recorded here and in the block (item 13).
+   - the 40-row instrument's mask rows were FIVE (wmask0 declined/once/kept2, wmask1 declined/indep);
+     `wmask1 once' arrived in round 1 (item 16).
+   - PRETABLE's mtime is NOT proof of order (this file has been appended eight times); what proves
+     §1-§5 predate table 1 is their verbatim copy inside PASS2_brief_20260910.md, sent 00:02, before
+     the first mutant log (item 17).
+   - "once per device instance" is UNTESTED (one LCA instance exists), not untestable; disclosed
+     here (item 18).  The helper comment's "-q cannot silence fatal()" IS this diff's claim: source-
+     supported by debugmsg.c:384-390, NOT measured by this probe, which never runs with -q (item 19).
+   - round 3's D9 is ONE silence session and ONE announcing session, not two silence sessions (23).
+   - the two HEAD witness logs differ in timestamp AND recorded HEAD, dev_lca.c identical across the
+     named commits -- not "byte-identical but for the recorded HEAD" (item 27).
+   - M20's 58/58 sweep cannot measure the `def read0' index defect (its edit returns zero either way);
+     kimi's finding stands on the code reading and the repaired row's M29 kill (57/58) (item 22).
+   - §4's `M_wen_perreg' (TWO WEN latch bits) is implemented by NEITHER mutator; disabling one arm's
+     announce is a different edit -- added as M48_wen_perreg for table 4 (item 21).
+   - lcaiocstat0 is FILED in this commit's ledger batch (the audit ran before the batch): member 7 for
+     STAT0/STAT1, member 3 with a persistent bit for SFT_RST/PAR_DIS, per codex's REVISE (item 24).
+   - the Opus wall's evidence is the two Agent task notifications (HTTP 429, "session limit, resets
+     3am America/Chicago"), quoted in the ledger's seat entries; no artifact on disk records them (25).
+   TABLE 4 owed on the final instrument: BASE, M43..M47 (t2), M48_wen_perreg, and a diagnostic-
+   narrowing mutant for `def width' ((int) cast) -- the rows this round added and the seat's cells.

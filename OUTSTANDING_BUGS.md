@@ -18021,3 +18021,27 @@ under `pcc2c040kill`. Also carried: an ANNOUNCE row at MIEN-SET as clause-(e) de
 only the announce on `!MIEN` is predicted 16/16; the killing row reads the already-bound `td` at zero
 sessions), and the latent `t2`/`t3` shadowing at `:464`/`:488`. The parent row's count is 16 rows, not
 17: `grep -c 'row("'` also matches the four `assert_row("` sites.
+
+### `lcaiocstat0` (med) -- filed 2026-09-10
+
+`dev_lca.c` `DEVICE_ACCESS(lca_ioc)` has no arm for four DOCUMENTED IOC registers -- STAT0 (`+0x040`),
+STAT1 (`+0x060`), SFT_RST (`+0x0c0`), PAR_DIS (`+0x0e0`; `_scratchpad/21066_66a_hrm.txt:10461`,
+`:10496`) -- and S6.4.14 items 1-2 REQUIRE the SROM initialisation sequence to write SFT_RST and STAT0.
+Before `#518` those writes ended the emulator process in the `default:` arm; after `#518` they survive
+as a once-announced declined write, and a later read answers zero rather than the written bits. That
+is a strict improvement and still not the register: the disposition owed is option-set member 7,
+IMPLEMENT (SFT_RST drives PCI `rst_l`; STAT0/STAT1 are the error log the rest of HRM chapter 6
+writes). `alpha_lcareg.h` defines STAT0/STAT1 with full field masks and has no SFT_RST. Found by the
+grok seat on `#518`'s pass 2, which also caught the default-arm comment calling these "unlisted"
+offsets -- corrected in the diff. Rung-3 witness constructible from `regress/lca_badval_probe.py`'s
+session shape (a quadword store to `+0x0c0`, read back); no guest that needs the registers has been
+measured.
+
+### `sgimtetlbdefault` (low) -- filed 2026-09-10
+
+`dev_sgi_re.c` `do_mte_transfer()`: the `switch (dst_tlb)` `default:` arm is a guest-drivable, UNLATCHED
+`fatal()` -- `dst_tlb` values 3, 6 and 7 come straight from a guest `MTE_MODE` write (the DST_BUF field),
+one message per transfer, unbounded. A READING by the Opus seat during the `sgimtelabelcells` table, not a
+measurement. Not a host kill (`fatal()` returns); a `floodclass` member. The fix shape is settled by the
+file's own ten-bit `SGIRE_W_*` latch enum and its "own bit, never shared" precedent; the measurement is one
+session in the shape `fill_at(A, RE_TLB_A, 3 << 2)` from the repaired `regress/sgi_mte_fill_probe.py`.

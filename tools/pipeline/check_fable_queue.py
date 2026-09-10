@@ -130,11 +130,15 @@ def main(argv):
                 short.append((rid, state, ph, len(d["seats"])))
 
         #  Rule 3: a closed row that changed code owes a regression review.
-        if state == "closed" and row.get("commits", "").strip():
+        #  `or ""` NOT `.get(..., "")`: a row closed on a MEASURED ZERO carries `commits: null`
+        #  (it changed no code, so it names no commit), and the default only covers an ABSENT key.
+        #  `multilabelfloor` was the first, and it crashed this checker with an AttributeError --
+        #  taking the whole precommit gate down rather than failing one row.  2026-09-10.
+        if state == "closed" and (row.get("commits") or "").strip():
             newest = max([e.get("date", "") for e in row.get("entries", [])] or [""])
             if "regress" not in phases_seen and newest >= CUTOFF_REGRESS_FABLE:
                 if rid not in queue:
-                    unreviewed.append((rid, row.get("commits", "")[:24]))
+                    unreviewed.append((rid, (row.get("commits") or "")[:24]))
                 elif listing:
                     print("  ok    %-14s regress   owed and queued" % rid)
 

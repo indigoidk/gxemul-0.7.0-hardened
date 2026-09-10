@@ -1,0 +1,71 @@
+VERDICT LINE FIRST: I would pick **(b) skip the `memory_rw` entirely for a declined mode, with a latched announce**, and treat `sgirebufuninit` as a **separate round**.
+
+## Premises audit
+
+- **READ** from packet: the `horrible_getputpixel` PUT switch, `buf[8]` uninitialised, `bufdepth = 1 << ((mode >> 8) & 3)`, `color_mode = mode & DE_MODE_TYPE_MASK`, the five `DE_MODE_TYPE_*` values, `YCRCB` grep count 0, the `#504` precedent, the seven-member option set.
+- **REASONED** and correct: the mask `0x000000f0` admits 16 values; four are implemented; 12 reach the `default:` arm, one of which is documented `YCRCB 0xf0`. Arithmetic checks out.
+- **NOT CHECKABLE from packet**: whether `fatal()` is `noreturn` or returns. The code shows `fatal(...)` inside the `default:` arm before `memory_rw`. If `fatal` aborts, the write never happens; if it returns, the write proceeds. This matters for Q1 but does not change the recommended fix.
+- **NOT CHECKABLE from packet**: whether there is a common tail after the `if (put) ... else ...` that must run. The proposed control flow below avoids early return, so any such tail would still execute.
+
+## Q1 — Which member, and what does the buffer contain afterwards?
+
+Ranking:
+
+1. **(b) Skip the `memory_rw` entirely for a declined mode** — this is the correct DECLINE + latched announce. The buffer contents become irrelevant because they are never consumed. This matches the `#504` precedent: decline means no guest-visible effect.
+2. **(a) Zero-fill `buf` and let the write proceed** — deterministic but wrong: it publishes a colour the guest never asked for. It also does not address the fact that the mode is unsupported.
+3. **(c) Leave `buf` untouched** — only acceptable if the write is skipped. If the write proceeds, it is strictly worse than (a) because it leaks uninitialised host stack. So (c) is not a standalone fix.
+4. **(d) Something else** — no better candidate visible.
+
+If `fatal()` is `noreturn`, the current code already skips the write by aborting, but that is not a controlled decline and should not be relied upon.
+
+## Q2 — Exact control flow for (b)
+
+Use a local flag, not an early `return`:
+
+```c
+bool declined = false;
+switch (color_mode) {
+    case DE_MODE_TYPE_CI: ... break;
+    case DE_MODE_TYPE_RGB: ... break;
+    case DE_MODE_TYPE_RGBA: ... break;
+    case DE_MODE_TYPE_ABGR: ... break;
+    default:
+        if (!d->warned) {
+            announce(...);
+            d->warned = true;
+        }
+        declined = true;
+        break;
+}
+if (!declined) {
+    cpu->memory_rw(cpu, cpu->mem, tileptr + ofs,
+                   buf, bufdepth, MEM_WRITE, NO_EXCEPTIONS | PHYSICAL);
+}
+```
+
+The `if (put)` branch then ends normally; the `else` GET branch is unaffected. No early return, so any common tail after the `if/else` still runs. I cannot see that tail from the packet, but this structure does not skip it.
+
+## Q3 — Round scope: one round or two?
+
+**Two rounds.**
+
+- The declined-mode defect is about **control flow**: unsupported modes should not write at all.
+- `sgirebufuninit` is about **initialisation**: supported modes with `bufdepth` larger than the bytes written leak uninitialised stack.
+
+A zero-fill at declaration would mask `sgirebufuninit` but would not correctly fix the declined-mode row — it would still write zeros for a mode the guest never asked for. The two have different oracles: one checks “no write for declined mode”, the other checks “no uninitialised bytes for supported mode with large `bufdepth`”. So they are separate rounds.
+
+## Q4 — Detector and smallest defeating mutant
+
+**Detector:** a witness script selects an unsupported mode, e.g. `YCRCB 0xf0`, with `bufdepth` 4, performs a PUT to a known tile, then reads the tile back.  
+**Oracle:** the tile bytes are unchanged from before the PUT, and the emulator log contains exactly one declined-mode announce.  
+**Liveness control:** the same script with a supported mode, e.g. `RGBA`, changes the tile.
+
+This avoids the “value is not random” trap because it checks for **absence of any write**, not a specific value.
+
+**Smallest defeating mutant:** change `declined = true;` to `declined = false;` in the `default:` arm. The guard remains, but the write proceeds, the tile changes, and the detector fails. Equally, changing `if (!declined)` to `if (1)` defeats it.
+
+## Q5 — Is there a WITNESS?
+
+Likely **yes**, with one caveat. The packet states the guest chooses `color_mode` and that `YCRCB` lands on the `default:` arm, implying no earlier rejection. A witness can be shaped like `#504`’s but on the PUT path: select `YCRCB 0xf0`, perform a PUT, and observe that the destination tile is unchanged after the fix.
+
+The single fact that would settle it: **does the device’s mode-register write path accept `0xf0` and pass it through to `horrible_getputpixel`, or does it mask/reject it earlier?** From the packet alone I cannot see that earlier validation, but the stated premise says `YCRCB` is handled nowhere, which suggests it reaches the `default:` arm.

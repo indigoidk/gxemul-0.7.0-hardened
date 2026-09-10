@@ -1,0 +1,160 @@
+**VERDICT: 3 DECLINE + LATCHED ANNOUNCE; skip only the PUT `memory_rw` (never `return`); dest stands; do not join `sgirebufuninit`.**
+
+This is not a rubber stamp of `#504`. The GET fix left an already-initialised *output* alone. Doing the same thing to `buf` here is a different, worse operation.
+
+---
+
+## Premises — what holds, what does not
+
+**Mask arithmetic holds.** `DE_MODE_TYPE_MASK = 0x000000f0` is bits 4–7. `color_mode = mode & that` therefore has exactly the 16 values `0x00, 0x10, … 0xf0`. Four `case`s are shown. The other 12 fall through `default:` in *this* switch. That count is just `16 - 4`; it does not need the header.
+
+**What that does *not* prove:** that 12 values are guest-reachable, or that a documented `YCRCB` is a mode this helper is required to paint. Those are claims about other code. Not in the packet.
+
+**`YCRCB` → `default:` in this file** is given as `grep -c YCRCB = 0`. I cannot re-run that. *If* that count is right, `0xf0` is one of the 12 here. A header enum is not a packing spec; it does not make `IMPLEMENT` the member for this round.
+
+**`sgirebufuninit` as a separate row** is a real, distinct fact from the code you quoted: no arm writes `buf[4..7]`, `CI` writes only `buf[0]`, `bufdepth` is guest-chosen in `{1,2,4,8}`. I am not re-finding it. I will not smuggle its fix into this round either (Q3).
+
+**`random()` is a host PRNG.** Agreed. It is not a model of the pixel.
+
+**`fatal()` after the fill:** the packet does not say whether `fatal()` returns. `#504` *measured* later guest bytes, so in this helper a default arm is not process-ending. I am treating the PUT `memory_rw` as reachable on `default:`. If `fatal()` actually aborts, the random fill is dead and the guest-visible row collapses — **not checkable here**.
+
+**The current arm is already confused.** It announces unimplemented (`TODO` + `fatal`) and then *implements* with noise. The announce is the right instinct (unlatched, per-pixel, therefore wrong shape). The fill is the defect.
+
+---
+
+## Q1. Member 3, candidate (b). `buf` is not the thing you leave alone.
+
+Ranked:
+
+1. **(b) skip that `memory_rw`.** Destination of a PUT is guest memory at `tileptr + ofs`, not `buf`. `#504` declined the helper’s *output*. The PUT output is the store. Skipping the store leaves whatever the guest already had — deterministic, no invented colour, no host bytes. `buf` can stay uninitialised because it is not sent. That is not (c).
+2. **(a) zero `buf[0..bufdepth)` (all of it, not four bytes) and still store.** Deterministic, no control-flow risk, no leak. It *does* publish a colour the guest did not ask for (black / zero). That is the same class of lie as `random()`, with the entropy stripped. Runner-up if and only if a function tail you have not shown consumes `buf` or assumes the store happened.
+3. **(d) pack `*color` as RGBA/CI “anyway”.** That is `ACCEPT`/`IMPLEMENT` without a spec. Not this round. Treating unknown as CI is a hardware guess **not in the packet**.
+4. **(c) leave `buf` untouched and still store.** You are not wrong. It is strictly worse: host stack into guest RAM. `#504` is not a defence of this. The GET output was the caller’s `uint32_t color = fg`. `buf` is not that. If someone zero-initialises `buf` at declaration, (c) *becomes* (a); that is a different edit (and it is the Q3 trap).
+
+**Rejected members, briefly.**
+- **1 DELETE** of the four `random()` lines with no other change *is* (c).
+- **2 silent DECLINE** repeats `#504`’s reason to latch: this helper is per-pixel. Also, an announce already exists; it should be latched, not deleted and not left on the hot path.
+- **4 ACCEPT** — the model does not compute a pixel here.
+- **5 FAULT** — a bad type field is not an unmapped tile. A bus error would be a new lie.
+- **6 BACKED ACCEPT** — inventing a mode table is a different project.
+- **7 IMPLEMENT** — no YCbCr packing, subsample, or byte order in this packet; 11 of the 12 values are not even named. Do not special-case `0xf0` in the same round as declining the rest (two designs).
+
+Zero-filling only `buf[0..3]` to mirror the current `random()` shape is not (a). `bufdepth` can be 8; that is this arm already instantiating `sgirebufuninit`. If you ever take (a), define the whole payload.
+
+---
+
+## Q2. Exact control flow — and what I cannot see
+
+From this packet the PUT branch is:
+
+```text
+if (put) {
+    switch (color_mode) { ... default: random fill; fatal; }
+    cpu->memory_rw(..., buf, bufdepth, MEM_WRITE, ...);
+} else {
+    /* GET */
+}
+```
+
+**Skip that one `memory_rw` call, and only when this PUT `switch` took `default:`.** Do not `return`. Do not `break` out of the `if (put)` by returning from the function. The recorded failure mode is exactly an early `return` that skips a common tail.
+
+Shape:
+
+```c
+int put_ok = 1;
+switch (color_mode) {
+case DE_MODE_TYPE_CI:    /* pack */ break;
+case DE_MODE_TYPE_RGB:   /* pack */ break;
+case DE_MODE_TYPE_RGBA:  /* pack */ break;
+case DE_MODE_TYPE_ABGR:  /* pack */ break;
+default:
+    put_ok = 0;
+    /* latched announce; no store into buf */
+    break;
+}
+if (put_ok)
+    cpu->memory_rw(cpu, cpu->mem, tileptr + ofs,
+        buf, bufdepth, MEM_WRITE, NO_EXCEPTIONS | PHYSICAL);
+```
+
+After a skipped write: the `if (put)` branch ends; the GET `else` is not taken; **then whatever follows the `if/else`.**
+
+**That tail is not in the packet.** I will not guess `x++`, a dirty bit, a return value, or a use of `buf`. I cannot certify (b) against “nine lines down.” If an implementer finds a tail that requires the store or reads `buf`, stop; the fallback is (a) (`memset(buf, 0, sizeof buf)` in `default:` only, then the existing `memory_rw`), still member 3, still no `return`.
+
+Do not reuse “empty `default:` plus fall through to `memory_rw`.” That is (c).
+
+---
+
+## Q3. Two rounds. Not one.
+
+They sit in the same `switch`. That is not the test.
+
+| | `sgirandomcolour` | `sgirebufuninit` |
+|---|---|---|
+| Predicate | `color_mode` is not one of the four | `bufdepth` exceeds bytes that arm assigned |
+| Happens on | the 12 `default:` values | *implemented* arms too (`CI` @ 2/4/8, all arms @ 8) |
+| Bad bytes | host PRNG | host stack |
+| Fix if (b) | skip the store; `buf` unused | does not touch `CI`/RGB/… |
+
+**Same semantic class?** No. Invented entropy on an unimplemented type vs disclosure of unwritten payload bytes on a *valid* type.
+
+**One fix design?** `uint8_t buf[8] = {0};` plus deleting `random()` is two behaviours glued by a C initializer. It would make (b) impossible to express cleanly (you would still store zeros unless you also skip). The standing rule you quoted forbids growing a round because a nearby initializer is convenient.
+
+**One detector, no new oracle?** A unified oracle (“every byte of the `MEM_WRITE` was assigned from `*color` or a named constant”) is a *new* oracle. It would green a mutant that still calls `random()` and then overwrites with zeros, or red a skip-the-write fix that never builds a payload. Each row already has an oracle; do not replace both with a third.
+
+`(b)` keeps the rows from colliding: default no longer sends `buf`, so this arm stops being an uninit witness, and `CI` with `bufdepth>1` remains for the other round.
+
+If someone takes (a) via zero at *declaration*, they will “fix” both and have built a bigger round. Don’t.
+
+**This round’s one oracle:** a PUT whose `color_mode` lands in `default:` does not store a payload this arm composed. Guest bytes at `tileptr+ofs` are the pre-PUT bytes.
+
+---
+
+## Q4. Detector: dest canary, not “looks non-random.”
+
+**Channel.** Guest physical memory at the PUT address (the same channel `#504` used on the XFER dest, but the property is different).
+
+**Oracle.** Pre-fill `bufdepth` bytes with a non-zero canary (`0xa5` repeating). Execute one PUT with a `default:` mode. Read back. **Pass iff the canary is bit-identical.** That is not “the value is not random”; it is “the store did not happen.” A lucky `random()` matching `0xa5a5a5a5` is `2^{-32}` per 4-byte pixel; more importantly, the property does not care what PRNG would have produced.
+
+**Liveness (same script).** Repeat with `DE_MODE_TYPE_RGBA` (or `CI`) and a contrasting `*color`. The canary **must** change. Without this, a dead PUT path greens the round.
+
+**Do not pin the test to `0xf0` alone.** A mutant `case 0xf0: put_ok = 0; break;` with `default:` still random would escape. Use at least one *undocumented* value (`0x40` is the first hole) as the primary; `0xf0` can be a second vector, not the only one. Vary `bufdepth` at least `{1,4,8}` so a mutant that skips only when `bufdepth==4` dies.
+
+**Smallest mutant I would build to escape.**
+
+- **Nullified guard (must stay red):** `if (0) put_ok = 0;` or `if (color_mode == 0x9999) put_ok = 0;` then the existing random fill and store. Canary changes → detector fails. Good.
+- **`random()` replaced by `0` and still stored (must stay red):** dest becomes zeros, canary was `0xa5` → red. This is why dest-preservation is stronger than “not random,” and why (a) is a *different* spec: (a) would need a zeros oracle, which a single short run *can* confuse with a lucky draw; I will not use that oracle.
+- **Actual escape of a dest-only oracle:** keep `buf[i] = random()`, set `put_ok = 0` (skip the store). Canary intact, PRNG still runs. Guest-visible defect is gone; leftover `random()` is dead code. I am willing to call that a successful (b), not an escape, **provided the patch also deletes the four `random()` calls** (same edit, not a second oracle). If a later seat wants “`random()` is not called” as a host-side check, that is extra; it is also defeated by `rand()` / an LCG, so I would not make it the oracle.
+- **Elaborate escape:** `memory_rw` the existing dest bytes back onto themselves (optional unused `random()`). Canary intact, a store still occurs. I would not accept that patch; the detector as stated would green it. If you want to kill it, the channel needs to be “no `MEM_WRITE` to that address,” which this packet does not give you as a harness. **Not checkable from here** whether the emulator exposes that trace.
+
+A source grep for `random()` is not the detector. `rand()`, `lrand48()`, or `buf[0] = 1;` all beat it, and `buf[0] = 1;` must remain **red** under (b).
+
+---
+
+## Q5. Witness: not constructible from this packet. Do not pretend otherwise.
+
+`#504` proved *this helper* is reachable on `-E sgi -e ip32` through a real XFER, and that `draw_primitive()` will write a colour the GET side produced. That does **not** automatically give a PUT-`default:` witness.
+
+In fact `#504`’s post-fix dest being *deterministic `fg`* is evidence the **PUT side of that witness used an implemented packing**. If GET and PUT had shared one unknown `color_mode`, the still-random PUT fill would have kept dest noisy after the GET fix. So either src/dst modes differ, or the write-out does not go through this PUT `switch` with the same mode. **Which of those is true is not in the packet.**
+
+What I would need and do not have:
+
+- Whether a guest-writable mode register (or dest-mode half of it) can hold `0x40`/`0xf0` and still reach `horrible_getputpixel(..., put=1)`.
+- Whether `draw_primitive` / fill / XFER rejects unknown types *before* this switch (the “surrounding code rejects earlier” fork you named).
+- Whether `fatal()` returns (above).
+
+**If an earlier gate drops unknown types, there is no guest witness and the round is documented-only.** That is a real answer, not a hedge. A documented-only round can still take member 3 + (b); it cannot claim a red/green pair on an unmodified in-tree machine.
+
+If a later seat *does* find a path, the script shape is the Q4 canary: same machine as `#504`, paint dest, PUT once with `0x40`, read dest, plus a legal-mode liveness PUT. Reuse of the XFER script with only the GET-side mode twiddled is the wrong shape unless dest mode is shown to be the field this PUT `switch` sees.
+
+---
+
+## What I want the patch to be, if this round proceeds
+
+- Member **3**, same reason as `#504` (per-pixel helper → latch; reuse `d->warned` only if you are willing to let the first GET-or-PUT warning suppress the other — **whether that bit is exclusive is not in the packet**; a distinct latch is cleaner, not required by anything I can check).
+- `default:` does not touch `buf`, does not call `random()`, sets “do not store.”
+- The only skipped statement is that PUT `memory_rw`.
+- No `uint8_t buf[8] = {0}` in this round.
+- Treat all 12 `default:` values the same; no YCRCB sidecar.
+
+I would change my mind to **(a)** on one fact, and only one: a common tail after the `if (put) … else …` that requires the store or reads `buf`. That fact is **not checkable from this packet.**

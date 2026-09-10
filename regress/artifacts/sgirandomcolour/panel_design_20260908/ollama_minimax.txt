@@ -1,0 +1,89 @@
+**VERDICT**: Member 3 (DECLINE + LATCHED ANNOUNCE), skipping `memory_rw` in the default arm; once the write is skipped, `buf`'s contents are unobservable and the uninitialised-bytes concern collapses. Two rounds, not one with `sgirebufuninit`.
+
+---
+
+## Premise audit (all READ unless noted)
+
+- **Mask arithmetic**: 0xf0 isolates bits 4-7, admitting 0x00, 0x10, …, 0xf0 — 16 values. Four explicit cases (CI/RGB/RGBA/ABGR), so 12 reach `default:`. Of those 12, exactly one (0xf0/YCRCB) is named in `crmfbreg.h`. Arithmetic checks out. READ
+- **`buf` uninitialised**: the declaration is `uint8_t buf[8];` with no initializer, and no arm touches `buf[4..7]`. Correct. READ
+- **`random()` is C library**: the code shows `random()`, the C library PRNG. The brief's "not a hardware entropy source" follows. READ
+- **`bufdepth` is guest-chosen**: `1 << ((mode >> 8) & 3)` ∈ {1,2,4,8}. Correct. READ
+- **#504 shipped as decline + latched announce**: stated as fact, not independently verifiable from this packet. READ-on-assertion; a seat that could read the tree should confirm.
+- **`sgirebufuninit` already filed separately**: stated as fact. READ-on-assertion.
+- **A premise the brief does *not* state but relies on**: that `fatal()` in the current `default:` arm does not return. If `fatal()` *does* return, the current code reaches `memory_rw` with `buf[0..3]=random()` and `buf[4..7]` uninitialised — which changes the baseline the fix must beat. **Not checkable from this packet; one fact (does `fatal()` return in this build?) would settle it.**
+
+---
+
+## Q1 — member and buffer contents
+
+Member **3 (DECLINE + LATCHED ANNOUNCE)**, with control flow **(b)** — skip `memory_rw` for the declined mode. Once the write is skipped, `buf`'s post-state is unobservable: no consumer reads it, so "what does the buffer contain" is the wrong question.
+
+The brief's rejection of (c) "leave `buf` untouched" is correct **only under the assumption that `memory_rw` is still called**. If we skip the write, (b) and (c) collapse to the same observable outcome — the difference is whether `buf[4..7]` were ever written by the host, and since they aren't read, they aren't. The reason (c) is worse *as stated* is that the brief is implicitly assuming the write still happens; under that assumption (c) leaks stack, (a) leaks a synthetic colour, only (b) leaks nothing.
+
+**(a) zero-fill and proceed** is a legitimate alternative (member 4-ish: deterministic, but publishes a colour the guest never asked for — a quieter lie). **(d) "implement YCRCB"** is member 7 and out of scope for a decline round; flag as a follow-up if YCRCB is a mode real guests use.
+
+## Q2 — exact control flow if (b)
+
+```c
+if (put) {
+    bool declined = false;
+    switch (color_mode) {
+    case DE_MODE_TYPE_CI:    /* fill buf[0] */ break;
+    case DE_MODE_TYPE_RGB:   /* fill buf[0..3] */ break;
+    case DE_MODE_TYPE_RGBA:  /* fill buf[0..3] */ break;
+    case DE_MODE_TYPE_ABGR:  /* fill buf[0..3] */ break;
+    default:
+        d->warned |= <latch bit>;   /* latched announce, one-shot */
+        declined = true;
+        break;
+    }
+    if (!declined) {
+        cpu->memory_rw(cpu, cpu->mem, tileptr + ofs,
+            buf, bufdepth, MEM_WRITE, NO_EXCEPTIONS | PHYSICAL);
+    }
+} else {
+    /* GET */
+}
+```
+
+Skipped statement: the `cpu->memory_rw(...)` call. I deliberately use a **conditional around the existing call**, not an early `return` or `goto` — this is the failure mode the brief warns about ("four readers proposed an early `return`, none looked nine lines down"). A conditional cannot skip a common tail because there is no early exit to skip from.
+
+**Not checkable from the packet**: what the function does *after* the `if (put) / else` block. If there is cleanup, a return-value computation, or a common tail that runs in both arms, the conditional above preserves it; an early-`return` rewrite would not. The brief shows the function up to the `else` for GET and stops. A seat with the tree must confirm there is no post-block work that the decline path must still execute (and there is no `return` value the caller inspects that would change semantics).
+
+## Q3 — round scope: one or two?
+
+**Two rounds.** The semantic classes differ:
+
+| | trigger | fix shape | detector |
+|---|---|---|---|
+| `sgirebufuninit` | implemented arm writes fewer bytes than `bufdepth` (e.g. CI with depth 8) | track per-arm byte count, or zero-fill at declaration, or narrow the write length | uninitialised bytes in `memory_rw` payload for *implemented* modes |
+| this round | `color_mode` matches no case and falls into `default:` | skip the write, or implement, or fault | unknown mode reaching `default:` AND no `memory_rw` fired for that pixel |
+
+A zero-fill at declaration would *prevent both symptoms*, but it does not unify the triggers or the detectors. A guest can trip `sgirebufuninit` (CI + depth 8) without ever entering the `default:` arm, and a guest can trip this round (YCRCB) without leaving `buf[4..7]` uninitialised in any implemented arm. Two independent invariants, two detectors — the project's rule "more findings create more candidate rounds, never bigger rounds" governs. Joining them under one oracle ("no uninitialised byte ever reaches guest memory") would be a *meta-oracle* that erases the distinction between the two failure modes and makes regressions in either indistinguishable in the test suite.
+
+If you insist on one round, name the oracle explicitly and accept that a regression in the CI/depth-8 path and a regression in the YCRCB path produce the same test failure.
+
+## Q4 — detector and smallest defeating mutant
+
+**Oracle (must satisfy both conjuncts):**
+1. `d->warned & <latch bit>` transitioned from 0 to 1 *during the pixel that triggered the unknown mode* (record pre-state; reject pre-set latches).
+2. `memory_rw` was **not called** for that pixel — count calls, or assert `bufdepth == 0` was passed, or hook the write and observe no write to `tileptr + ofs`.
+
+A mutant that satisfies only one conjunct is caught:
+- keeps guard, sets latch, but still calls `memory_rw` → caught by (2).
+- keeps guard, skips write, but doesn't set latch → caught by (1).
+- keeps guard, sets latch, calls `memory_rw(buf, 0, …)` → caught by (2) if the detector counts non-zero-length calls.
+- removes the `default:` arm entirely → caught by (1) (latch never set) and by (2) (memory_rw called with whatever `buf` holds).
+
+**Smallest edit that defeats a naive single-conjunct detector**: drop the `d->warned |= …` line. The skip still happens, but the announce doesn't fire and the latch stays clear. This is exactly the "keeps the guard and nulls its effect" failure mode the brief forbids, and it is why the oracle is conjunctive.
+
+A subtler mutant: pre-set the latch at init (`d->warned = 0xFF` somewhere) so the detector sees the bit set without the decline path running. The "record pre-state" requirement defeats this.
+
+## Q5 — witness
+
+**Not checkable from this packet.** The packet shows `horrible_getputpixel()` and its callee `memory_rw`, but not the *callers* — the dispatch path that decides which color_mode reaches this helper. Two possibilities:
+
+- **Upstream validates `color_mode` and rejects unknown values before calling the helper.** Then the `default:` arm is unreachable in practice on real guests, no witness is constructible, and the round is documented-only with the detector being a coverage assertion (the `default:` arm is exercised by a unit-style harness, not a live guest).
+- **Upstream does not validate.** Then a witness is constructible along the same shape as #504's XFER copy: drive a PUT through this helper on `-E sgi -e ip32` with a guest-programmed `mode` whose type field is 0xf0 (YCRCB). Before fix: `fatal()` aborts the run (red). After fix: emulator survives, latch fires once, no write to `tileptr + ofs` (green). Same script both runs; liveness control = the guest continues past the PUT and exits cleanly.
+
+**Single fact that would settle it**: whether any caller of `horrible_getputpixel()` filters `color_mode` against the four implemented values before invoking the PUT arm. A seat with the tree must answer this; without it, the round is at risk of being documented-only, which is a legitimate outcome but should be decided consciously, not by default.

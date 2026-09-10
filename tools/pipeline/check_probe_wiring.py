@@ -343,6 +343,64 @@ MANIFEST = {
         (CLASS_RESEARCH, "lcairqstubkill (#516) pass-2 repair, measuring seat: the Q3 mutators (the `kbc attrib' widening question); scratch clone only"),
     "artifacts/lcairqstubkill/killtable_opus_20260909b/mut516s.py":
         (CLASS_RESEARCH, "lcairqstubkill (#516) pass-2 repair, measuring seat: re-builds of the round's own mutants so the proposed repair probe could be shown to lose none of their kills; scratch clone only"),
+    #  #518 lcabadval and #519 sgirandomcolour (2026-09-10): both rounds are HELD -- #518 on three mutants
+    #  that still escape its 67-row instrument, #519 on two clause-(d) operand swaps the measuring seat
+    #  built itself after every planned mutant had died.  The evidence commit lands their ARTIFACTS while
+    #  the fixes and the live probes stay out of the tree, so every file below is CLASS_RESEARCH and none
+    #  is wired to a gate.  When a round ships, its live probe gets its own detector entry; these frozen
+    #  copies stay evidence forever, because their whole purpose is that a table's scores can be re-read
+    #  against the exact instrument that produced them.
+    #  lcaisalane's is a WITNESS as-run copy, red on HEAD by design and not a green row anyone may wire.
+    "artifacts/lcabadval/killtable_20260910/lca_badval_probe.asrun.py":
+        (CLASS_RESEARCH, "lcabadval (#518) table 1: the as-run 40-row instrument, the measuring seat's first table -- superseded by the repaired 58-row copy, kept so table 1's scores stay re-readable"),
+    "artifacts/lcabadval/killtable_20260910/lca_badval_probe.asrun2.py":
+        (CLASS_RESEARCH, "lcabadval (#518) table 1 continuation: the same instrument after the round-one repair, preserved separately because the scores either side of it are not comparable"),
+    "artifacts/lcabadval/killtable_20260910/lca_badval_probe.REPAIRED58.asrun.py":
+        (CLASS_RESEARCH, "lcabadval (#518) table 2: the 58-row instrument, the round-two repair -- six of its own mutants swept it and exposed two vacuous and two absent rows, which is what round three was for"),
+    "artifacts/lcabadval/killtable_20260910/t3/lca_badval_probe.REPAIRED64.asrun.py":
+        (CLASS_RESEARCH, "lcabadval (#518) table 3: the 64-row instrument (t3/SCORES3.txt, BASE 64/64) -- M43/M44/M45/M47 escaped it and became round four's rows"),
+    "artifacts/lcabadval/killtable_20260910/t4/lca_badval_probe.REPAIRED67.asrun.py":
+        (CLASS_RESEARCH, "lcabadval (#518) table 4: the FINAL 67-row instrument (t4/SCORES4.txt, BASE 67/67) -- three mutants STILL escape it (M43, M44, M47), which is why the round is held"),
+    "artifacts/lcabadval/killtable_20260910/gen_table1.py":
+        (CLASS_RESEARCH, "lcabadval (#518): the measuring seat's table-1 driver -- reads every log after its LCABADVAL_DONE sentinel and transcribes nothing"),
+    "artifacts/lcabadval/killtable_20260910/mutate518.py":
+        (CLASS_RESEARCH, "lcabadval (#518): the table-1 mutator, one named find/replace per mutant; MUTANT-TEXT-NOT-FOUND is a hard failure, so every edit doubles as a presence pin"),
+    "artifacts/lcabadval/killtable_20260910/mutate518b.py":
+        (CLASS_RESEARCH, "lcabadval (#518): the table-1 mutator's second generation, for the mutants added after the round-one repair"),
+    "artifacts/lcabadval/killtable_20260910/summarize518.py":
+        (CLASS_RESEARCH, "lcabadval (#518): the table-1 summariser -- reads scores out of the .raw logs rather than accepting any typed number"),
+    "artifacts/lcabadval/killtable_20260910/t2/gen_table2.py":
+        (CLASS_RESEARCH, "lcabadval (#518): the table-2 driver, the second measuring seat's own, in its own scratch clone with its own sentinel"),
+    "artifacts/lcabadval/killtable_20260910/t2/mutate518_t2.py":
+        (CLASS_RESEARCH, "lcabadval (#518): the table-2 mutator (M1..M24, and M43..M47 re-used by table 4)"),
+    "artifacts/lcabadval/killtable_20260910/t2/summarize_t2.py":
+        (CLASS_RESEARCH, "lcabadval (#518): the table-2 summariser"),
+    "artifacts/lcabadval/killtable_20260910/t4/mut518x.py":
+        (CLASS_RESEARCH, "lcabadval (#518) table 4: the mutator for M48_wen_perreg (PRETABLE 4's own prescribed two-bit mutant, which neither seat's mutator had implemented) and M49_def_narrow -- both killed, 66/67"),
+    "artifacts/lcabadval/witness_20260909/lca_badval_probe.asrun.py":
+        (CLASS_RESEARCH, "lcabadval (#518): the as-run RUNG-3 WITNESS, 14/20 on the committed build 74daefd and 20/20 on the fix -- evidence, red on HEAD by design; the live probe is uncommitted with its held fix"),
+    "artifacts/lcabadval/witness_20260909/lca_badval_probe.D9unsplit.asrun.py":
+        (CLASS_RESEARCH, "lcabadval (#518): the D9-unsplit variant, preserved because the 63/64 score the records cite was re-measured against THIS copy and not against the split one"),
+    "artifacts/lcaisalane/witness_20260910/lca_isalane_probe.asrun.py":
+        (CLASS_RESEARCH, "lcaisalane: the as-run RUNG-3 WITNESS, 13/16 on HEAD 1ce8296 across two runs -- a WITNESS, red by design, and its `ofs1 zero' oracle is additionally known to alias its own sentinel (both Agent seats, pass 1), so it must never be wired to a gate"),
+    "artifacts/sgirandomcolour/killtable_20260910/sgi_re_colourdefault_probe.FROZEN.py":
+        (CLASS_RESEARCH, "sgirandomcolour (#519) table 1: the FROZEN 14-row instrument the measuring seat ran, BASE 14/14 -- the copy every table-1 score is re-readable against"),
+    "artifacts/sgirandomcolour/killtable_20260910/sgi_re_colourdefault_probe.REPAIRED19.OPUSFROZEN.py":
+        (CLASS_RESEARCH, "sgirandomcolour (#519): the measuring seat's own frozen copy of the repaired 19-row instrument, on which it re-ran its two escapes and measured them STILL escaping at 19/19"),
+    "artifacts/sgirandomcolour/killtable_20260910/mut519.py":
+        (CLASS_RESEARCH, "sgirandomcolour (#519) table 1: the mutator for M1..M12 (M11 copies the pre-fix file wholesale as the null medium); its M1/M7/M12 find-strings quote the pre-bracket literal and will not apply to the current source, which the round records rather than silently repairs"),
+    "artifacts/sgirandomcolour/killtable_20260910/mut519b.py":
+        (CLASS_RESEARCH, "sgirandomcolour (#519): the measuring seat's own mutator, for the two clause-(d) operand swaps it built after every planned mutant had died -- M13_widthdecline and M14_lineardecline, both TOTAL ESCAPES"),
+    "artifacts/sgirandomcolour/killtable_20260910/t2/mut519x.py":
+        (CLASS_RESEARCH, "sgirandomcolour (#519) tables 2/2b/2c: the mutator for the vertex-qualified guards (M13_okorx, M14_okory), the shared-latch-bit escapes (M15_texrd, M18_sharedbit_tlba) and the two drop-case growth mutants (M16, M17)"),
+    "artifacts/sgirandomcolour/killtable_20260910/t2/sgi_re_colourdefault_probe.REPAIRED16.asrun.py":
+        (CLASS_RESEARCH, "sgirandomcolour (#519) table 2: the 16-row instrument -- M15_texrd escaped it 16/16, the predicted escape that motivated the latch-collision class closure"),
+    "artifacts/sgirandomcolour/killtable_20260910/t2/sgi_re_colourdefault_probe.REPAIRED16b.asrun.py":
+        (CLASS_RESEARCH, "sgirandomcolour (#519) table 2b: the same 16 rows re-frozen against the bracket-edited source, so BASE_final's 19/19 is attributable to a named baseline"),
+    "artifacts/sgirandomcolour/killtable_20260910/t2/sgi_re_colourdefault_probe.REPAIRED19.asrun.py":
+        (CLASS_RESEARCH, "sgirandomcolour (#519) table 2c: the 19-row instrument carrying the class closure -- M15_texrd and M18_sharedbit_tlba both die 18/19 to `allbits announce'"),
+    "artifacts/sgirandomcolour/witness_20260910/sgi_re_colourdefault_probe.asrun.py":
+        (CLASS_RESEARCH, "sgirandomcolour (#519): the as-run RUNG-3 WITNESS agy built as the independent-transport fallback while both Anthropic seats were walled -- 2/5 on HEAD, 5/5 on the fix; evidence, red on HEAD by design"),
     "artifacts/lunaabsentcpu/killtable/fix_lunaabs.py":
         (CLASS_RESEARCH, "lunaabsentcpu (#503) table 1: the frozen fix script the baseline was derived from, preserved as evidence"),
     "artifacts/lunaabsentcpu/killtable/luna_absentcpu_probe.frozen.py":
