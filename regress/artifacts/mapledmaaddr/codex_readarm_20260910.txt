@@ -1,0 +1,149 @@
+VERDICT: The read-arm correction can proceed independently. §3’s state trace is correct; its observability claim needs qualification, and the proposed detector is insufficient.
+CODEX_MAPLE_20260910
+
+I read only the two specified files and made no changes. Device line numbers below refer to [the specified dev_dreamcast_maple.c](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_dreamcast_maple.c:74). These are source-review conclusions; I did not run tests.
+
+1. **Yes: DMA completion updates the field, with more arithmetic than the quoted payload increment alone.**
+
+   The trace is:
+
+   - Initialization zeroes the entire device structure, including `dmaaddr` (649).
+   - A write at `0x04` assigns `idata` to the `uint32_t` field (559). Thus the stored value is the input converted to 32 bits, with no alignment masking.
+   - DMA starts by copying that field into local `uint32_t addr` (382).
+   - Each processed descriptor advances local `addr` by **8 bytes for the control words**, **4 bytes for the command word**, and **`4 * datalen_cmd` bytes for command data** (417, 440, 532).
+   - After processing the last descriptor, the routine assigns local `addr` back to `d->dmaaddr` (540), before invoking the DMA-done event macro (543).
+
+   Consequently, for a transfer reaching that tail, with starting field value \(P\) and command-data lengths \(D_i\), the committed value is:
+
+   `C = (P + Σ(12 + 4*D_i)) modulo 2^32`
+
+   Before any completed DMA, the field holds the last programmed value, or zero if nothing has programmed it. After completion it holds `C`, until another writer changes it.
+
+   “Advanced” therefore describes the implemented cursor arithmetic, not necessarily a numerically larger value: unsigned wraparound is possible. Nor does every conceivable completed chain necessarily produce `C != P`.
+
+2. **There are two explicit field-assignment sites, plus initialization. The cursor is published at the tail, not incrementally.**
+
+   The writers visible in these files are:
+
+   - Structure initialization at 649.
+   - The register write at 559.
+   - The DMA completion assignment at 540.
+
+   Neither reset register clears `dmaaddr`; the `MAPLE_RESET` write clears `enable` (614). The tick function updates input queues, not the DMA address.
+
+   For the early exits, let `E` be the field value on entry:
+
+   | Path | Field afterward | Reaches DMA-done invocation? |
+   |---|---|---|
+   | `!d->enable` | `E`, unchanged | No |
+   | Enabled, but `addr & 0x1f` | `E`, including its unaligned bits | No |
+   | Descriptor loop reaches completion tail | Computed `C` | Yes |
+   | Explicit `exit(1)` inside descriptor processing | No tail assignment; execution terminates | No |
+
+   The enable check comes first. A disabled, unaligned address takes the disabled return without reaching the alignment diagnostic.
+
+   An early return preserves the **entry value**, which could itself be a previous transfer’s cursor. It does not restore some separately retained programmed address.
+
+   The ordinary trigger is synchronous: writing `1` to `MAPLE_STATE` directly calls `maple_do_dma_xfer()` (586). There is no scheduled, incremental DMA worker in this file. The local arithmetic therefore cannot expose a partially advanced `d->dmaaddr`.
+
+   There is a scope qualification: the routine calls `cpu->memory_rw` while processing requests and responses. These two files do not establish that those callbacks can never reenter device access, or establish global threading guarantees. If a callback reenters the read arm before the completion store, it sees the previously committed field, absent an intervening writer. That is older than the local cursor, but it is the field’s actual value.
+
+   Likewise, a reentrant register write would use the existing write site; the outer DMA’s eventual tail assignment would overwrite it with the result derived from its original local snapshot. The files support **no incremental publication by this routine**, rather than an unconditional claim about every possible external callback or concurrent access.
+
+3. **The implementation questions are separable, but the observable behavior is connected.**
+
+   Removing the termination does introduce a new observable result: a guest read that previously stopped execution can now obtain the current field, including its existing DMA update.
+
+   Thus, “the edit does not change cursor computation” is correct. “The edit does not change the observability of that computation” would be incorrect.
+
+   That distinction does not require combining the fixes. The read correction implements a separately testable rule: return the stored register field. The cursor item determines what the transfer routine should store there.
+
+   The cursor policy already affects execution beyond this read arm: another DMA starts from `d->dmaaddr` (382). Starting another transfer without reprogramming therefore already consumes the previously advanced value, including any consequences of the alignment check.
+
+   I would accept the read correction on that bounded basis. These files cannot establish whether real hardware exposes this cursor, a programmed-address latch, or another value. That architectural question remains open.
+
+4. **The file establishes an internally consistent field-reporting contract, while explicitly leaving the hardware update policy uncertain.**
+
+   The evidence has different strengths:
+
+   - **Write arm:** It stores the supplied value, converted to `uint32_t`, without clearing low bits. Alignment rejection happens when attempting DMA, not when programming the register.
+   - **Transfer arithmetic:** It walks the request list using the command word’s `datalen_cmd`. The alternative length calculation from the control word is commented out at 419. The executable completion assignment publishes the resulting cursor.
+   - **Existing read assignment:** `odata = d->dmaaddr` at 564 identifies the value the existing read arm prepares. Today that value never reaches the common serialization tail because of the termination.
+   - **Commented diagnostics:** The setter and transfer-start debug statements describe stored and starting addresses. They have no runtime effect and supply no proof of architectural readback semantics.
+   - **The TODO at 539:** It explicitly questions whether the address should be updated. It does not disable the assignment immediately below it.
+
+   The common tail serializes `odata` at 638 and returns success at 640. Deleting the diagnostic and explicit exit connects the existing read assignment to that delivery path.
+
+   Attachment is unconditional in [machine_dreamcast.c:149](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/machines/machine_dreamcast.c:149), before the `prom_emulation` early return.
+
+   “Fully modelled write direction” is justified as a description of this executable storage branch. It does not independently establish hardware correctness.
+
+5. **The direct change boundary is exact register offset `0x04` in the non-write branch.**
+
+   For the normal read/write interface:
+
+   | Input | Effect of the proposed correction |
+   |---|---|
+   | `relative_addr == 0x04`, `MEM_READ` | Removes the diagnostic and explicit termination; reaches the existing serialization path with `odata = d->dmaaddr`. |
+   | `relative_addr == 0x04`, `MEM_WRITE` | Unchanged: stores the converted input value. |
+   | Any other offset, `MEM_READ` | Its own handling and output assignment remain unchanged. |
+   | Any other offset, `MEM_WRITE` | Its own handling and side effects remain unchanged. |
+
+   The changed read class includes **all field values and histories**: initial zero, newly programmed addresses, unaligned addresses, completed-DMA cursors, values preserved by disabled or unaligned attempts, and values retained across reset writes. There is no enable or alignment condition on the corrected read.
+
+   The edit adds no length validation, masking, byte-lane interpretation, or special handling for neighboring offsets. It passes the existing `len` to the existing serialization helper. The permitted files do not define that helper, so this is not a claim that every arbitrary length is supported.
+
+   Strictly at the C branch level, `else` also includes a direction flag unequal to **both** `MEM_WRITE` and `MEM_READ`. Such a call previously reached the termination; afterward it assigns `odata` and returns without serializing it. That is outside the ordinary two-direction interface, but belongs in the syntactic partition.
+
+   DMA arithmetic, transfer diagnostics, early returns, completion signaling, and other register logic remain unchanged. A larger execution can naturally diverge after encountering a newly accepted read, including one reached through a callback.
+
+6. **The proposed pair is useful, but insufficient to establish exact reporting of the live field.**
+
+   **Assertion (i), exact readback without DMA, tests the storage/read connection.** Its strength depends on the inputs:
+
+   - A constant can pass a single matching test value.
+   - Constant zero passes an initial-zero-only test.
+   - Alignment masking passes every test using only aligned values.
+   - A separate snapshot of the last programmed address passes this assertion even if it never tracks DMA updates.
+
+   Use several distinct values, including nonzero high bits and nonzero low five bits, and verify successive writes replace what reads report. No DMA is needed for the unaligned-value cases.
+
+   **Assertion (ii), post-transfer inequality, proves only that the returned value differs from `P`.** Even with independent proof that DMA happened, both assertions could be satisfied by an implementation that reads correctly before DMA but afterward returns:
+
+   - Zero, when the tested `P` is nonzero.
+   - A fabricated `P + 4`.
+   - A stale cursor from an earlier transfer that differs from the current `P`.
+   - A masked or otherwise transformed current field that still differs from `P`.
+
+   Independent DMA evidence rules out a skipped transfer; it does not validate the relationship between the returned value and the field. The inequality rejects an unchanged snapshot of that particular `P`, not every stale or fabricated answer.
+
+   To test the read arm without certifying the architectural cursor value, a harness with state access should capture the actual field value `S` immediately before the read and assert:
+
+   - The delivered register value equals `S` exactly.
+   - The read leaves the field unchanged.
+   - The access returns normally and invokes no read-side diagnostic.
+
+   Apply that check both after ordinary programming and after an independently demonstrated transfer. For the chosen transfer fixture, `S != P` can additionally demonstrate that the fixture exercised the existing field update. It remains a property of that fixture and current implementation.
+
+   For independent DMA evidence, use a supported command and verify a fresh expected response in a receive buffer initialized to distinguishable contents. A newly observed completion event can supplement that. **`MAPLE_STATE == 0` is insufficient:** its read arm always returns zero (592–593), including after an early return. An event alone also establishes less than a valid response, because the descriptor loop can reach completion through paths that do not implement the requested operation fully.
+
+   Finally, value assertions alone do not reject candidate **(c)** if `fatal()` returns. Silence and normal completion must be checked separately.
+
+   Without access to the field or another exact oracle, the proposed pair establishes readback before DMA and change after DMA; it cannot establish exact live-field reporting. Its advancement assertion would also need reconsideration if the separately reviewed cursor policy legitimately changes.
+
+7. **The four candidates differ along these boundaries.**
+
+   The examples below use ordinary 32-bit reads.
+
+   | Candidate | Classification | First distinguishing input in a minimal example |
+   |---|---|---|
+   | **(a)** `odata = d->dmaaddr & ~0x1f;` | **DIFFERENT.** It discards stored low bits. | Write `1` to `0x04`, then read `0x04` without DMA. Corrected form returns `1`; candidate returns `0`. |
+   | **(b)** Unconditionally move `odata = d->dmaaddr;` before the switch | **EQUIVALENT for the isolated `0x04` read; DIFFERENT as a whole-handler edit.** | Write `1` to `0x04`, then read `MAPLE_RESET2` at `0x10`. Corrected handler returns its default `0`; the unconditional hoist returns `1`. |
+   | **(c)** Remove `exit(1)`, retain `fatal(...)` | **DIFFERENT under the requested silent behavior.** Returned data is equivalent if `fatal()` returns. | The first `0x04` read, even immediately after initialization, invokes the retained diagnostic. The corrected form does not. |
+   | **(d)** `odata = 0;` | **DIFFERENT.** | Write `1` to `0x04`, then read `0x04`. Corrected form returns `1`; candidate returns `0`. |
+
+   For **(b)**, the subtlety is that `odata` currently starts at zero. Reads of `0x10`, `0x8c`, and `0xe8` leave it untouched; an unconditional hoist changes their outputs. Default-offset reads also retain that changed value if their diagnostic returns. Reads of enable, state, and speed explicitly overwrite `odata`, so those values are unaffected.
+
+   Within the `0x04` read itself, there is no intervening field-changing operation between the proposed earlier load and the existing load position in the shown sequential path. Taking a fresh snapshot on each callback entry is not a stale snapshot across transfers. A separate temporary used only by the `0x04` read, or an appropriately guarded hoist, is equivalent on that basis; a detector should not demand a counterexample where none exists.
+
+   For **(c)**, neither permitted file defines `fatal()`. Its use for warnings and alongside separate exits supports the intended distinction between diagnosis and termination, but does not prove its implementation. The firm finding is the retained diagnostic call: if it returns, the candidate delivers the same value with the unwanted diagnostic; if it terminates, successful readback remains broken.

@@ -18662,3 +18662,49 @@ whose low word is negative but whose full value is positive records GT where LT 
 function — which is why it is filed separately rather than inside either rotate row. LOW only because
 reachability is unestablished in the sharpest possible way: it needs a 64-bit PowerPC CPU running with SF
 clear, and no gate in this tree executes any 64-bit PowerPC instruction and checks the result.
+
+
+### `mapledmaaddr` -- REVIEWED 2026-09-10: *** THE ROUND IS UNBLOCKED, AND MY DETECTOR WAS THE WEAK PART, NOT THE FIX ***
+
+`regress/artifacts/mapledmaaddr/codex_readarm_20260910.txt` (GPT-6 Astra at max, zero content flags).
+**Verdict: the read-arm correction may proceed independently of the cursor question.** The read arm
+implements a separately testable rule -- *return the stored register field* -- while the cursor item
+decides what the transfer routine should store there. The cursor policy already affects execution
+regardless: a subsequent transfer starts from `d->dmaaddr`, so it already consumes the advanced value
+whether or not any guest reads it.
+
+**One claim of mine was too strong and the correction is exact.** "The edit does not change cursor
+computation" is right; "the edit does not change the *observability* of that computation" would be
+wrong -- a guest read that previously stopped execution can now obtain the field. The round must state
+that as a new observable rather than call the diff behaviour-preserving.
+
+**THREE CORRECTIONS TO WHAT I RECORDED EARLIER TODAY:**
+
+1. The advance is **more than the payload term I quoted**: each descriptor advances by 8 bytes of
+   control words + 4 bytes of command word + `4 * datalen_cmd` of data, so
+   `C = (P + Σ(12 + 4*D_i)) mod 2^32`.
+2. **"Advanced" does not mean numerically larger** -- the sum is modulo 2^32, and `C != P` is not
+   guaranteed.
+3. **My early-exit claim was wrong.** After an aborted transfer the field holds its **entry value**,
+   which may be a *previous* transfer's cursor -- an early return preserves what was there rather than
+   restoring a programmed address. The `!d->enable` test also precedes the alignment test, so a
+   disabled *and* unaligned address never reaches the alignment diagnostic.
+
+*** THE DETECTOR I PROPOSED IS INSUFFICIENT, and that is what changes the round. ***
+
+* **Exact readback with no DMA is passed by four wrong implementations**: a constant equal to the one
+  test value; constant zero against an initial-zero-only test; **alignment masking** against any test
+  using only aligned values; and a snapshot of the last programmed address that never tracks DMA.
+  Remedy: several distinct values including nonzero **high** bits and nonzero **low five** bits, with
+  successive writes shown to replace what reads report.
+* **Post-transfer inequality proves only that the answer differs from `P`** -- satisfied by zero, a
+  fabricated `P + 4`, a stale cursor from an earlier transfer, or any masked transform. Independent DMA
+  evidence rules out a *skipped* transfer; it says nothing about the value's relationship to the field.
+* **The form that works**: capture the field value `S` immediately before the read; assert the delivered
+  value equals `S` exactly, that the read leaves the field unchanged, and that the access returns
+  normally with **no read-side diagnostic**.
+* *** `MAPLE_STATE == 0` is not DMA evidence -- its read arm always returns zero, including after an
+  early return. *** Use a supported command and verify a fresh expected response in a receive buffer
+  pre-filled with distinguishable contents.
+* **Keeping `fatal()` and deleting only `exit(1)` is rejected by no value assertion** if `fatal()`
+  returns. Silence must be checked separately.

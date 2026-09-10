@@ -383,6 +383,28 @@ honest record of DEFENSIVE work, and its own vocabulary is what makes the seat r
 > does not resolve and the seat goes hunting.  **Cite anything outside the repo by ABSOLUTE path**, or
 > a brief that merely mentions a file becomes a brief that browses the archive.)*
 >
+> #### *** AND THE SECOND BRIEF, CARRYING THE SAME TWO DEFECTS, CAME BACK CLEAN.  So the pair is a
+> #### CONTROL, and it says the trigger here was the BROWSING and not the construction ask. ***
+>
+> I predicted the second would be refused too.  It returned **13,496 bytes with ZERO flags**, and the
+> measured difference between the two runs is where they spent their budget:
+>
+>     brief   scoping   construction ask   `regress/artifacts` hits in stderr   outcome
+>     MIPS    none      yes                thousands (it enumerated the tree)   REFUSED, 0 bytes
+>     PPC     none      yes                one                                  CLEAN, 13,496 bytes
+>
+> **Both broke rule 2 and rule 3; only one browsed; only one was refused.**  So on this pair the
+> archive-reading trigger has evidence and the construction-ask trigger does not fire on its own.
+>
+> **THAT DOES NOT REPEAL RULE 3** -- the four-run experiment above isolated it deliberately, with a
+> control, and two briefs are not an experiment.  What it does is fix the STRENGTH of each: rule 2 is
+> the one that decided both outcomes here, and **the cheapest form of rule 2 is not the paragraph but
+> the PATH** -- the MIPS brief only went browsing because it named a file it could not resolve.
+>
+> *Recorded because the prediction was mine and it was wrong.  A block minted from one refusal that
+> then implies the sibling would also have been refused is the freshly-minted-exemplar failure this
+> file names elsewhere: the instruction survives, the story around it has to match what happened.*
+
 > **THE FIX IS NOT MORE PROHIBITION.  A rule that bans an ask without supplying the replacement gets
 > broken by whoever actually needs the thing.**  Rule 3's own sentence already names the clean forms --
 > *check a construction you supply*, or *say whether one is possible* -- but naming a form is not the

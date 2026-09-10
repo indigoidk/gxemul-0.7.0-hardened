@@ -1,0 +1,1152 @@
+Reading additional input from stdin...
+OpenAI Codex v0.153.4
+--------
+workdir: C:\Users\User00\AppData\Local\Temp\claude\C--DocumentNoSnc-CC-GXEMUL\8e474f41-4d47-4c99-bf11-3406a84c4fcd\scratchpad
+model: gpt-6-astra
+provider: openai
+approval: never
+sandbox: read-only
+reasoning effort: max
+reasoning summaries: none
+session id: 01a08d20-2248-7cb1-b655-34e5957e1e28
+--------
+user
+# Dreamcast Maple DMA-address register: can the read arm be corrected independently of the cursor question?
+
+VERDICT line first, then the liveness token `CODEX_MAPLE_20260910`.
+
+## SCOPE YOUR READING. DO NOT BROWSE.
+
+Open only:
+
+```
+C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\src\devices\dev_dreamcast_maple.c
+C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\src\machines\machine_dreamcast.c
+```
+
+**Do not read `regress/artifacts/`, `tools/pipeline/ledger.json`, `CHANGELOG.md`, or any directory
+listing.** Everything needed is inlined below.
+
+Ordinary interface-correctness review of a device model in an open-source emulator written in C99.
+Three unrelated 2021-vintage copies of `src/` exist elsewhere on this machine and would give line
+numbers off by hundreds; the path above is the one under review.
+
+**Please check the premises rather than confirming them** — a recent review here had seven of nine
+readers confirm a premise stated wrongly, and the specific premise I most want tested is the one in
+§3 below, which is my own and which I reached ten minutes ago.
+
+## §1 — THE SITE
+
+`DEVICE_ACCESS(dreamcast_maple)`, register offset `0x04` (`MAPLE_DMAADDR`):
+
+```c
+	case 0x04:	/*  MAPLE_DMAADDR  */
+		if (writeflag == MEM_WRITE) {
+			d->dmaaddr = idata;
+			/* debug("[ dreamcast_maple: dmaaddr set to 0x%08x"
+			    " ]\n", d->dmaaddr);  */
+		} else {
+			fatal("[ dreamcast_maple: TODO: read from dmaaddr ]\n");
+			odata = d->dmaaddr;
+			exit(1);
+		}
+		break;
+```
+
+The function's common tail, **after** the switch, is where the value would be delivered:
+
+```c
+	if (writeflag == MEM_READ)
+		memory_writemax64(cpu, data, len, odata);
+
+	return 1;
+```
+
+`machine_dreamcast.c` attaches this device unconditionally. The write direction is fully modelled.
+
+**The proposed correction is to delete the two lines `fatal(...)` and `exit(1)`**, leaving the
+assignment, with no diagnostic added: the read is implemented and is not being ignored, so a message
+saying otherwise would be a false statement in product code.
+
+## §2 — THE OBJECTION THAT PUT THIS ROUND ON HOLD
+
+An earlier review held it, reasoning: real Maple hardware may advance a DMA cursor, so a read after a
+transfer should perhaps return the ADVANCED address rather than the one the guest programmed. If the
+model returns only what was written, then accepting the read ships a *plausible wrong value* where
+today there is a loud stop — the worse outcome. It concluded the round owes a settled hardware
+contract first.
+
+## §3 — MY ANSWER, WHICH IS THE THING I WANT CHECKED
+
+That objection assumes the model stores only what was written. **I believe it does not.**
+`maple_do_dma_xfer()` accumulates `addr += datalen_cmd * 4;` per command and then, at its tail,
+immediately before asserting the DMA-done event:
+
+```c
+	// TODO: Should the DMA address be updated?
+	d->dmaaddr = addr;
+
+	/*  Assert the SYSASIC_EVENT_MAPLE_DMADONE event:  */
+	SYSASIC_TRIGGER_EVENT(SYSASIC_EVENT_MAPLE_DMADONE);
+```
+
+So an advancing cursor appears to be modelled already, with the file flagging its own uncertainty
+about it one line above.
+
+**If that is right, I claim the two questions live on different sites:** the read arm is a pure
+reporter of a field that `maple_do_dma_xfer()` owns, so deleting the read-side termination neither
+creates nor resolves the question of whether the advance is correct — that is a pre-existing open
+question at a different site, which I have filed as its own item.
+
+**Questions:**
+
+1. **Is §3 right?** Does `d->dmaaddr` hold the post-transfer address after a completed DMA, and the
+   programmed address before any? Trace it; do not take my word for it.
+2. Are there any **other** writers of `d->dmaaddr`, and any path on which a read arm could observe a
+   partially-updated or stale value? The `addr & 0x1f` alignment early return and the `!d->enable`
+   early return both leave the function before the tail — what does the field hold then?
+3. **Does the separation in §3 hold?** Or does correcting the read arm change the observable
+   behaviour of the advance question in a way that makes them one item after all?
+4. What does the file itself establish about the intended contract — the write arm, the transfer
+   routine's arithmetic, the commented-out debug lines, the `TODO`? I am not asking you to source a
+   datasheet; I am asking what THIS CODE commits to.
+5. **Which inputs does the proposed two-line correction change the answer for, and which does it
+   leave alone?** Enumerate the partition. I want the boundary stated rather than a summary.
+6. A detector for this must not certify the advanced value as architecturally right, since this
+   change does not establish that. My plan is to pin the READ ARM'S contract instead: (i) a stored
+   value reads back exactly with no transfer in between, and (ii) the value read after a transfer
+   DIFFERS from the programmed one, proving the read reports the live field rather than a constant
+   or a stale snapshot, with independent evidence that the transfer happened so a skipped DMA cannot
+   manufacture a pass. **Is that pair sufficient, and is either half satisfied by an implementation
+   that is wrong in a way I have not considered?**
+7. Here are four candidate weakenings of the corrected read arm. For each, say whether it is
+   EQUIVALENT to the corrected form or gives a different answer, and name the first input at which
+   the two differ:
+   * (a) `odata = d->dmaaddr & ~0x1f;`
+   * (b) `odata = d->dmaaddr;` moved to before the switch, reading the field once on entry;
+   * (c) deleting `exit(1)` but keeping the `fatal(...)` line;
+   * (d) `odata = 0;`
+
+Answer in full. Do not write any file; return the whole answer and I will save it.
+
+codex
+I’ll read only the two named files and trace the register state, DMA exits, and read path against each premise.
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$n = 0; Get-Content -LiteralPath '"'C:\\DocumentNoSnc\\CC\\GXEMUL\\GXEMUL-SEC\\src\\machines\\machine_dreamcast.c' | ForEach-Object { "'$n++; '"'{0,5}: {1}' -f "'$n, $_ }' in C:\Users\User00\AppData\Local\Temp\claude\C--DocumentNoSnc-CC-GXEMUL\8e474f41-4d47-4c99-bf11-3406a84c4fcd\scratchpad
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$n = 0; Get-Content -LiteralPath '"'C:\\DocumentNoSnc\\CC\\GXEMUL\\GXEMUL-SEC\\src\\devices\\dev_dreamcast_maple.c' | ForEach-Object { "'$n++; '"'{0,5}: {1}' -f "'$n, $_ }' in C:\Users\User00\AppData\Local\Temp\claude\C--DocumentNoSnc-CC-GXEMUL\8e474f41-4d47-4c99-bf11-3406a84c4fcd\scratchpad
+ succeeded in 131ms:
+    1: /*
+    2:  *  Copyright (C) 2006-2021  Anders Gavare.  All rights reserved.
+    3:  *
+    4:  *  Redistribution and use in source and binary forms, with or without
+    5:  *  modification, are permitted provided that the following conditions are met:
+    6:  *
+    7:  *  1. Redistributions of source code must retain the above copyright
+    8:  *     notice, this list of conditions and the following disclaimer.
+    9:  *  2. Redistributions in binary form must reproduce the above copyright  
+   10:  *     notice, this list of conditions and the following disclaimer in the 
+   11:  *     documentation and/or other materials provided with the distribution.
+   12:  *  3. The name of the author may not be used to endorse or promote products
+   13:  *     derived from this software without specific prior written permission.
+   14:  *
+   15:  *  THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+   16:  *  ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+   17:  *  IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+   18:  *  ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE   
+   19:  *  FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+   20:  *  DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+   21:  *  OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+   22:  *  HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+   23:  *  LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+   24:  *  OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+   25:  *  SUCH DAMAGE.
+   26:  *   
+   27:  *
+   28:  *  COMMENT: SEGA Dreamcast
+   29:  */
+   30: 
+   31: #include <stdio.h>
+   32: #include <stdlib.h>
+   33: #include <string.h>
+   34: 
+   35: #include "cpu.h"
+   36: #include "device.h"
+   37: #include "devices.h"
+   38: #include "machine.h"
+   39: #include "memory.h"
+   40: #include "misc.h"
+   41: 
+   42: 
+   43: MACHINE_SETUP(dreamcast)
+   44: {
+   45: 	machine->machine_name = strdup("Dreamcast");
+   46: 
+   47: 	if (machine->emulated_hz == 0)
+   48: 		machine->emulated_hz = 200000000;
+   49: 
+   50: 	/*  50 MHz SH4 PCLOCK:  */
+   51: 	machine->cpus[0]->cd.sh.pclock = 50000000;
+   52: 
+   53: 	if (!machine->x11_md.in_use)
+   54: 		fprintf(stderr, "-------------------------------------"
+   55: 		    "------------------------------------------\n"
+   56: 		    "\n  WARNING!  You are emulating a Dreamcast without -X."
+   57: 		    "\n            You will miss graphical output!\n\n"
+   58: 		    "-------------------------------------"
+   59: 		    "------------------------------------------\n");
+   60: 
+   61: 	/*
+   62: 	 *  Physical address layout on the Dreamcast, according to a
+   63: 	 *  combination of sources:  NetBSD sources, KallistiOS sources,
+   64: 	 *  http://www.boob.co.uk/docs/Dreamcast_memory.txt, and
+   65: 	 *  http://www.ludd.luth.se/~jlo/dc/memory.txt, and possibly some
+   66: 	 *  others:
+   67: 	 *
+   68: 	 *  0x00000000 - 0x001fffff	Boot ROM (2 MB)
+   69: 	 *  0x00200000 - 0x0021ffff	Flash (128 KB) (perhaps multiple images afterwards?)
+   70: 	 *				The bytes read by the Dreamcast PROM during
+   71: 	 *				boot are:
+   72: 	 *				    Offset 0x1a000 .. 0x1a004 = 5 bytes debug/startup state?
+   73: 	 *					hex digits (maybe limited to 0x30, 0x31, 0x32, or 0x33)
+   74: 	 *				    Offset 0x1a02d .. 0x1a037 = date/time values.
+   75: 	 *				    Offset 0x1a056 .. 0x1a05d = 8 bytes serial number / machine ID.
+   76: 	 *  0x005f0000 - ...            ???
+   77: 	 *  0x005f6800 - ...		PowerVR2 DMA registers
+   78: 	 *  0x005f6900 - ...		ASIC registers
+   79: 	 *  0x005f6c00 - ...		Maple registers (controller ports)
+   80: 	 *  0x005f7000 - ...		GDROM registers
+   81: 	 *  0x005f7400 - ...		(G2 External DMA registers? Or GDROM?)
+   82: 	 *  0x005f74e4 - ...		GDROM re-enable disabled drive (?)
+   83: 	 *  0x005f7800 - ...		G2 External DMA registers
+   84: 	 *  0x005f7c00 - ...		DMA (?) for some device (PVR related?)
+   85: 	 *  0x005f8000 - 0x005f9fff	PVR registers (graphics)
+   86: 	 *  0x00600000 - 0x006007ff	G2 bus: Modem
+   87: 	 *  0x00600400 - 0x0060047f	G2 bus: LAN Adapter (MB86967) registers?
+   88: 	 *  0x00620000 - 0x00623fff	G2 bus: Expansion port?
+   89: 	 *  0x00606900 - ...		???
+   90: 	 *  0x00700000 - ...		SPU registers (sound)
+   91: 	 *  0x00702800 - 0x007028ff	???
+   92: 	 *  0x00702c00 -		Cable select and AICA (?) (*3)
+   93: 	 *  0x00703xxx - ...		AICA something
+   94: 	 *  0x00710000 - 0x00710007	RTC registers
+   95: 	 *  0x00800000 - 0x009fffff	AICA (Sound) RAM (2 MB) (*4)
+   96: 	 *  0x01000000 - 0x01ffffff	G2 bus or Parallel port registers?
+   97: 	 *  0x02000000 - ...		CD-ROM port registers
+   98: 	 *  0x03000000 - 0x03ffffff	G2 bus (?)
+   99: 	 *  0x04000000 - 0x047fffff	Video RAM (*)     (64-bit)
+  100: 	 *  0x05000000 - 0x057fffff	Video RAM (8 MB)  (32-bit)
+  101: 	 *  0x06000000 - 0x067fffff	Video RAM (*)     (64-bit) (copy)
+  102: 	 *  0x07000000 - 0x077fffff	Video RAM (8 MB)  (32-bit) (copy)
+  103: 	 *  0x0c000000 - 0x0cffffff	RAM (16 MB)
+  104: 	 *  0x0e000000 - 0x0effffff	Copy of RAM? (*2)
+  105: 	 *  0x10000000 - 0x107fffff	Tile Accelerator: command area
+  106: 	 *  0x10800000 - 0x10ffffff	Tile Accelerator: YUV data
+  107: 	 *  0x11000000 - 0x11ffffff	Tile Accelerator: Texture data
+  108: 	 *  0x14000000 - 0x17ffffff	G2 bus (?)
+  109: 	 *
+  110: 	 *  (*1) = with banks 0 and 1 switched; 64-bit read/write access...
+  111: 	 *  (*2) The "luftvarg" 4KB intro uses memory at paddr 0x0ef00000...
+  112: 	 *  (*3) = See VOUTC in Linux' drivers/video/pvr2fb.c.
+  113: 	 *  (*4) = It seems that ARM machine code is placed here.
+  114: 	 */
+  115: 
+  116: 	dev_ram_init(machine, 0x00000000, 2 * 1024 * 1024,
+  117: 	    DEV_RAM_RAM /* | DEV_RAM_TRACE_ALL_ACCESSES */, 0x0, "bootrom");
+  118: 
+  119: 	dev_ram_init(machine, 0x00200000, 128 * 1024,
+  120: 	    DEV_RAM_RAM /* | DEV_RAM_TRACE_ALL_ACCESSES */, 0x0, "flash");
+  121: 
+  122: 	dev_ram_init(machine, 0x00600004, 4, DEV_RAM_RAM, 0, NULL);
+  123: 	dev_ram_init(machine, 0x00700000, 0x27ff, DEV_RAM_RAM, 0, NULL);
+  124: 	dev_ram_init(machine, 0x00702800, 256, DEV_RAM_RAM, 0, NULL);
+  125: 	dev_ram_init(machine, 0x00702c00, 4, DEV_RAM_RAM, 0, NULL);
+  126: 	dev_ram_init(machine, 0x00703000, 0x1fff, DEV_RAM_RAM, 0, NULL);
+  127: 
+  128: 	/*  Sound RAM:  */
+  129: 	dev_ram_init(machine, 0x00800000, 2 * 1048576, DEV_RAM_RAM, 0, "sound_ram");
+  130: 
+  131: 	/*
+  132: 	 *  HACK!  TODO: Remove this device at 0x00a00000 once NetBSD has
+  133: 	 *  been fixed to not clear 6 MB beyound the sound RAM area.
+  134: 	 */
+  135: 	dev_ram_init(machine, 0x00a00000, 6 * 1048576, DEV_RAM_RAM, 0, "hack_for_netbsd");
+  136: 
+  137: 	/*  RAM:  */
+  138: 	dev_ram_init(machine, 0x0c000000, 16 * 1048576, DEV_RAM_RAM, 0x0, NULL);
+  139: 
+  140: 	/*  Image of RAM:  */
+  141: 	dev_ram_init(machine, 0x0e000000, 16 * 1048576, DEV_RAM_MIRROR
+  142: 		| DEV_RAM_MIGHT_POINT_TO_DEVICES, 0x0c000000, "ram_mirror");
+  143: 
+  144: 	device_add(machine, "pvr");
+  145: /*	device_add(machine, "mb8696x addr=0x600400 addr_mult=4");  */
+  146: 	device_add(machine, "dreamcast_asic");
+  147: 	device_add(machine, "dreamcast_g2");
+  148: 	device_add(machine, "dreamcast_gdrom");
+  149: 	device_add(machine, "dreamcast_maple");
+  150: 	device_add(machine, "dreamcast_rtc");
+  151: 
+  152: 	machine_add_devices_as_symbols(machine, 0x80000000U);
+  153: 	machine_add_devices_as_symbols(machine, 0xa0000000U);
+  154: 
+  155: 	if (!machine->prom_emulation)
+  156: 		return;
+  157: 
+  158: 	dreamcast_machine_setup(machine);
+  159: }
+  160: 
+  161: 
+  162: MACHINE_DEFAULT_CPU(dreamcast)
+  163: {
+  164: 	// Hitachi SH4, 200 MHz.  (Or probably an "SH4a".)
+  165: 	machine->cpu_name = strdup("SH7750");
+  166: }
+  167: 
+  168: 
+  169: MACHINE_DEFAULT_RAM(dreamcast)
+  170: {
+  171: 	// Note: This is the size of the boot ROM area, since the
+  172: 	// Dreamcast's RAM isn't located at physical address zero.
+  173: 	machine->physical_ram_in_mb = 2;
+  174: }
+  175: 
+  176: 
+  177: MACHINE_REGISTER(dreamcast)
+  178: {
+  179: 	MR_DEFAULT(dreamcast, "Dreamcast", MACHINE_DREAMCAST);
+  180: 	me->set_default_ram = machine_default_ram_dreamcast;
+  181: 	machine_entry_add_alias(me, "dreamcast");
+  182: }
+  183: 
+
+ succeeded in 173ms:
+    1: /*
+    2:  *  Copyright (C) 2006-2020  Anders Gavare.  All rights reserved.
+    3:  *
+    4:  *  Redistribution and use in source and binary forms, with or without
+    5:  *  modification, are permitted provided that the following conditions are met:
+    6:  *
+    7:  *  1. Redistributions of source code must retain the above copyright
+    8:  *     notice, this list of conditions and the following disclaimer.
+    9:  *  2. Redistributions in binary form must reproduce the above copyright  
+   10:  *     notice, this list of conditions and the following disclaimer in the 
+   11:  *     documentation and/or other materials provided with the distribution.
+   12:  *  3. The name of the author may not be used to endorse or promote products
+   13:  *     derived from this software without specific prior written permission.
+   14:  *
+   15:  *  THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+   16:  *  ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+   17:  *  IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+   18:  *  ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE   
+   19:  *  FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+   20:  *  DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+   21:  *  OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+   22:  *  HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+   23:  *  LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+   24:  *  OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+   25:  *  SUCH DAMAGE.
+   26:  *   
+   27:  *
+   28:  *  COMMENT: Dreamcast Maple bus controller
+   29:  *
+   30:  *  The Maple bus has 4 ports (A-D), and each port has up to 6 possible "units"
+   31:  *  (where unit 0 is the main unit). Communication is done using DMA; each
+   32:  *  DMA transfer sends one or more requests, and for each of these requests
+   33:  *  a response is generated (or a timeout if there was no device at the
+   34:  *  specific port).
+   35:  *
+   36:  *  See Marcus Comstedt's page (http://mc.pp.se/dc/maplebus.html) for more
+   37:  *  details about the DMA request/responses.
+   38:  *
+   39:  *
+   40:  *  TODO:
+   41:  *	Unit numbers / IDs for real Maple devices.
+   42:  *	The Controller (up/down/left/right, buttons, etc).
+   43:  */
+   44: 
+   45: #include <stdio.h>
+   46: #include <stdlib.h>
+   47: #include <string.h>
+   48: #include <sys/time.h>
+   49: 
+   50: #include "console.h"
+   51: #include "cpu.h"
+   52: #include "device.h"
+   53: #include "machine.h"
+   54: #include "memory.h"
+   55: #include "misc.h"
+   56: 
+   57: #include "thirdparty/dreamcast_maple.h"
+   58: #include "thirdparty/dreamcast_sysasicvar.h"
+   59: 
+   60: 
+   61: // #define debug fatal
+   62: 
+   63: #define	N_MAPLE_PORTS		4
+   64: 
+   65: #define	MAX_CHARS		8192
+   66: #define	MAX_CONTROLLER_DATA	4096
+   67: 
+   68: #define	MAPLE_TICK_SHIFT	17
+   69: 
+   70: struct maple_device {
+   71: 	struct maple_devinfo devinfo;
+   72: };
+   73: 
+   74: struct dreamcast_maple_data {
+   75: 	/*  Registers:  */
+   76: 	uint32_t	dmaaddr;
+   77: 	int		enable;
+   78: 	int		timeout;
+   79: 
+   80: 	/*  Attached devices:  */
+   81: 	struct maple_device *device[N_MAPLE_PORTS];
+   82: 
+   83: 	/*  For keyboard/controller input:  */
+   84: 	int		console_handle;
+   85: 	uint8_t		char_queue[MAX_CHARS];
+   86: 	uint16_t	controller_queue[MAX_CONTROLLER_DATA];
+   87: 	int		char_queue_head, char_queue_tail;
+   88: 	int		controller_queue_head, controller_queue_tail;
+   89: };
+   90: 
+   91: 
+   92: /*
+   93:  *  Maple devices:
+   94:  *
+   95:  *  TODO: Figure out strings and numbers of _real_ Maple devices.
+   96:  */
+   97: struct maple_device maple_device_controller = {
+   98: 	{
+   99: 		BE32_TO_HOST(MAPLE_FUNC(MAPLE_FN_CONTROLLER)),	/*  di_func  */
+  100: 		{ LE32_TO_HOST(0xfe060f00),0,0 },/* di_function_data[3]  */
+  101: 		0xff,				/*  di_area_code  */
+  102: 		0,				/*  di_connector_direction  */
+  103: 		"Dreamcast Controller",		/*  di_product_name  */
+  104: 		"di_product_license",		/*  di_product_license  */
+  105: 		LE16_TO_HOST(0x01ae),		/*  di_standby_power  */
+  106: 		LE16_TO_HOST(0x01f4)		/*  di_max_power  */
+  107: 	}
+  108: };
+  109: struct maple_device maple_device_keyboard = {
+  110: 	{
+  111: 		BE32_TO_HOST(MAPLE_FUNC(MAPLE_FN_KEYBOARD)),/*  di_func  */
+  112: 		{ LE32_TO_HOST(2),0,0 },	/*  di_function_data[3]  */
+  113: 		0xff,				/*  di_area_code  */
+  114: 		0,				/*  di_connector_direction  */
+  115: 		"Keyboard",			/*  di_product_name  */
+  116: 		"di_product_license",		/*  di_product_license  */
+  117: 		LE16_TO_HOST(100),		/*  di_standby_power  */
+  118: 		LE16_TO_HOST(100)		/*  di_max_power  */
+  119: 	}
+  120: };
+  121: struct maple_device maple_device_mouse = {
+  122: 	{
+  123: 		BE32_TO_HOST(MAPLE_FUNC(MAPLE_FN_MOUSE)),/*  di_func  */
+  124: 		{ LE32_TO_HOST(0xfe060f00),0,0 },/* di_function_data[3]  */
+  125: 		0xff,				/*  di_area_code  */
+  126: 		0,				/*  di_connector_direction  */
+  127: 		"Dreamcast Mouse",		/*  di_product_name  */
+  128: 		"di_product_license",		/*  di_product_license  */
+  129: 		LE16_TO_HOST(0x0069),		/*  di_standby_power  */
+  130: 		LE16_TO_HOST(0x0120)		/*  di_max_power  */
+  131: 	}
+  132: };
+  133: 
+  134: 
+  135: DEVICE_TICK(maple)
+  136: {
+  137: 	struct dreamcast_maple_data *d = (struct dreamcast_maple_data *) extra;
+  138: 	int key;
+  139: 
+  140: 	while ((key = console_readchar(d->console_handle)) >= 0) {
+  141: 		/*  Add to the keyboard queue:  */
+  142: 		d->char_queue[d->char_queue_head] = key;
+  143: 		d->char_queue_head = (d->char_queue_head + 1) % MAX_CHARS;
+  144: 		if (d->char_queue_head == d->char_queue_tail)
+  145: 			fatal("[ dreamcast_maple: KEYBOARD QUEUE OVERRUN! ]\n");
+  146: 
+  147: 		/*
+  148: 		 *  NOTE/TODO:
+  149: 		 *
+  150: 		 *  Implement the controller in a reasonable way!
+  151: 		 *  Theoretically, there are all of these buttons: ABCD XYZ Start
+  152: 		 *  and two digital pads, two analog joysticks, and two
+  153: 		 *  analog fire buttons (left and right).
+  154: 		 */
+  155: 
+  156: 		int control_bits = 0;
+  157: 		switch (key) {
+  158: 		case 'a':
+  159: 		case 'A':
+  160: 			control_bits = 0x0004;
+  161: 			break;
+  162: 		case 'b':
+  163: 		case 'B':
+  164: 			control_bits = 0x0002;
+  165: 			break;
+  166: 		case 'c':
+  167: 		case 'C':
+  168: 			control_bits = 0x0001;
+  169: 			break;
+  170: 		case 'd':
+  171: 		case 'D':
+  172: 			control_bits = 0x0800;
+  173: 			break;
+  174: 
+  175: 		case 'x':
+  176: 		case 'X':
+  177: 			control_bits = 0x0400;
+  178: 			break;
+  179: 		case 'y':
+  180: 		case 'Y':
+  181: 			control_bits = 0x0200;
+  182: 			break;
+  183: 		case 'z':
+  184: 		case 'Z':
+  185: 			control_bits = 0x0100;
+  186: 			break;
+  187: 
+  188: 		case 's':
+  189: 		case 'S':	/*  Start  */
+  190: 			control_bits = 0x0008;
+  191: 			break;
+  192: 
+  193: 		case '8':	/*  up  */
+  194: 			control_bits = 0x0010;
+  195: 			break;
+  196: 		case '2':	/*  down  */
+  197: 		case 'k':
+  198: 			control_bits = 0x0020;
+  199: 			break;
+  200: 		case '4':	/*  left  */
+  201: 		case 'u':
+  202: 			control_bits = 0x0040;
+  203: 			break;
+  204: 		case '6':	/*  right  */
+  205: 		case 'o':
+  206: 			control_bits = 0x0080;
+  207: 			break;
+  208: 		}
+  209: 
+  210: 		if (control_bits != 0) {
+  211: 			/*  Add to the controller queue:  */
+  212: 			d->controller_queue[d->controller_queue_head] = control_bits;
+  213: 			d->controller_queue_head =
+  214: 			    (d->controller_queue_head + 1) % MAX_CONTROLLER_DATA;
+  215: 			if (d->controller_queue_head == d->controller_queue_tail)
+  216: 				fatal("[ dreamcast_maple: CONTROLLER QUEUE "
+  217: 				    "OVERRUN! ]\n");
+  218: 		}
+  219: 	}
+  220: }
+  221: 
+  222: 
+  223: static int get_key(struct dreamcast_maple_data *d)
+  224: {
+  225: 	int key = d->char_queue[d->char_queue_tail];
+  226: 	if (d->char_queue_head == d->char_queue_tail)
+  227: 		return -1;
+  228: 
+  229: 	d->char_queue_tail = (d->char_queue_tail + 1) % MAX_CHARS;
+  230: 	return key;
+  231: }
+  232: 
+  233: 
+  234: static int get_controller(struct dreamcast_maple_data *d)
+  235: {
+  236: 	int c = d->controller_queue[d->controller_queue_tail];
+  237: 	if (d->controller_queue_head == d->controller_queue_tail)
+  238: 		return 0;
+  239: 
+  240: 	d->controller_queue_tail = (d->controller_queue_tail + 1)
+  241: 	    % MAX_CONTROLLER_DATA;
+  242: 	return c;
+  243: }
+  244: 
+  245: 
+  246: /*
+  247:  *  maple_getcond_controller_response():
+  248:  *
+  249:  *  Generate a controller response. Based on info from Marcus
+  250:  *  Comstedt's page: http://mc.pp.se/dc/controller.html
+  251:  */
+  252: static void maple_getcond_controller_response(struct dreamcast_maple_data *d,
+  253: 	struct cpu *cpu, int port, uint32_t receive_addr)
+  254: {
+  255: 	uint8_t buf[8];
+  256: 	uint32_t response_code, transfer_code;
+  257: 	int c;
+  258: 
+  259: 	transfer_code = (MAPLE_RESPONSE_DATATRF << 24) |
+  260: 	    (((port << 6) | 0x20) << 16) |
+  261: 	    ((port << 6) << 8) |
+  262: 	    3  /*  Transfer length in 32-bit words  */;
+  263: 	transfer_code = BE32_TO_HOST(transfer_code);
+  264: 	cpu->memory_rw(cpu, cpu->mem, receive_addr, (unsigned char *) (void *) &transfer_code,
+  265: 	    4, MEM_WRITE, NO_EXCEPTIONS | PHYSICAL);
+  266: 	receive_addr += 4;
+  267: 
+  268: 	response_code = BE32_TO_HOST(MAPLE_FUNC(MAPLE_FN_CONTROLLER));
+  269: 	cpu->memory_rw(cpu, cpu->mem, receive_addr, (unsigned char *) (void *) &response_code,
+  270: 	    4, MEM_WRITE, NO_EXCEPTIONS | PHYSICAL);
+  271: 	receive_addr += 4;
+  272: 
+  273: 	/*  NOTE: Inverse of the buttons pressed!  */
+  274: 	c = ~get_controller(d);
+  275: 
+  276: 	/*
+  277: 	 *  buf[0..1] = little endian button bitfield
+  278: 	 *  buf[2] = right analogue trigger (0-255)
+  279: 	 *  buf[3] = left analogue trigger (0-255)
+  280: 	 *  buf[4] = analogue joystick X (0-255)
+  281: 	 *  buf[5] = analogue joystick Y (0-255)
+  282: 	 *  buf[6] = second analogue joystick X (0-255)
+  283: 	 *  buf[7] = second analogue joystick Y (0-255)
+  284: 	 */
+  285: 	memset(buf, 0, 8);
+  286: 	buf[0] = c & 0xff;
+  287: 	buf[1] = c >> 8;
+  288: 	buf[2] = buf[3] = 0;				// 0 = not pressed
+  289: 	buf[4] = buf[5] = buf[6] = buf[7] = 128;	// 128 = centered
+  290: 
+  291: 	cpu->memory_rw(cpu, cpu->mem, receive_addr, (unsigned char *) (void *) &buf, 8,
+  292: 	    MEM_WRITE, NO_EXCEPTIONS | PHYSICAL);
+  293: }
+  294: 
+  295: 
+  296: /*
+  297:  *  maple_getcond_keyboard_response():
+  298:  *
+  299:  *  Generate a keyboard key-press response. Based on info from Marcus
+  300:  *  Comstedt's page: http://mc.pp.se/dc/kbd.html
+  301:  */
+  302: static void maple_getcond_keyboard_response(struct dreamcast_maple_data *d,
+  303: 	struct cpu *cpu, int port, uint32_t receive_addr)
+  304: {
+  305: 	int key;
+  306: 	uint8_t buf[8];
+  307: 	uint32_t response_code, transfer_code;
+  308: 
+  309: 	transfer_code = (MAPLE_RESPONSE_DATATRF << 24) |
+  310: 	    (((port << 6) | 0x20) << 16) |
+  311: 	    ((port << 6) << 8) |
+  312: 	    3  /*  Transfer length in 32-bit words  */;
+  313: 	transfer_code = BE32_TO_HOST(transfer_code);
+  314: 	cpu->memory_rw(cpu, cpu->mem, receive_addr, (unsigned char *) (void *) &transfer_code,
+  315: 	    4, MEM_WRITE, NO_EXCEPTIONS | PHYSICAL);
+  316: 	receive_addr += 4;
+  317: 
+  318: 	response_code = BE32_TO_HOST(MAPLE_FUNC(MAPLE_FN_KEYBOARD));
+  319: 	cpu->memory_rw(cpu, cpu->mem, receive_addr, (unsigned char *) (void *) &response_code,
+  320: 	    4, MEM_WRITE, NO_EXCEPTIONS | PHYSICAL);
+  321: 	receive_addr += 4;
+  322: 
+  323: 	key = get_key(d);
+  324: 
+  325: 	/*
+  326: 	 *  buf[0] = shift keys (1 = left ctrl, 2 = shift, 0x10 = right ctrl)
+  327: 	 *  buf[1] = led state
+  328: 	 *  buf[2] = key
+  329: 	 */
+  330: 	memset(buf, 0, 8);
+  331: 
+  332: 	if (key >= 'a' && key <= 'z')	buf[2] = 4 + key - 'a';
+  333: 	if (key >= 'A' && key <= 'Z')	buf[0] = 2, buf[2] = 4 + key - 'A';
+  334: 	if (key >= 1 && key <= 26)	buf[0] = 1, buf[2] = 4 + key - 1;
+  335: 	if (key >= '1' && key <= '9')	buf[2] = 0x1e + key - '1';
+  336: 	if (key == '!')			buf[0] = 2, buf[2] = 0x1e;
+  337: 	if (key == '"')			buf[0] = 2, buf[2] = 0x1f;
+  338: 	if (key == '#')			buf[0] = 2, buf[2] = 0x20;
+  339: 	if (key == '$')			buf[0] = 2, buf[2] = 0x21;
+  340: 	if (key == '%')			buf[0] = 2, buf[2] = 0x22;
+  341: 	if (key == '^')			buf[0] = 2, buf[2] = 0x23;
+  342: 	if (key == '&')			buf[0] = 2, buf[2] = 0x24;
+  343: 	if (key == '*')			buf[0] = 2, buf[2] = 0x25;
+  344: 	if (key == '(')			buf[0] = 2, buf[2] = 0x26;
+  345: 	if (key == '@')			buf[0] = 2, buf[2] = 0x1f;
+  346: 	if (key == '\n' || key == '\r')	buf[0] = 0, buf[2] = 0x28;
+  347: 	if (key == ')')			buf[0] = 2, buf[2] = 0x27;
+  348: 	if (key == '\b')		buf[0] = 0, buf[2] = 0x2a;
+  349: 	if (key == '\t')		buf[0] = 0, buf[2] = 0x2b;
+  350: 	if (key == ' ')			buf[0] = 0, buf[2] = 0x2c;
+  351: 	if (key == '0')			buf[2] = 0x27;
+  352: 	if (key == 27)			buf[2] = 0x29;
+  353: 	if (key == '-')			buf[2] = 0x2d;
+  354: 	if (key == '=')			buf[2] = 0x2e;
+  355: 	if (key == '[')			buf[2] = 0x2f;
+  356: 	if (key == '\\')		buf[2] = 0x31;
+  357: 	if (key == '|')			buf[2] = 0x31, buf[0] = 2;
+  358: 	if (key == ']')			buf[2] = 0x32;
+  359: 	if (key == ';')			buf[2] = 0x33;
+  360: 	if (key == ':')			buf[2] = 0x34;
+  361: 	if (key == ',')			buf[2] = 0x36;
+  362: 	if (key == '.')			buf[2] = 0x37;
+  363: 	if (key == '/')			buf[2] = 0x38;
+  364: 	if (key == '<')			buf[2] = 0x36, buf[0] = 2;
+  365: 	if (key == '>')			buf[2] = 0x37, buf[0] = 2;
+  366: 	if (key == '?')			buf[2] = 0x38, buf[0] = 2;
+  367: 	if (key == '+')			buf[2] = 0x57;
+  368: 
+  369: 	cpu->memory_rw(cpu, cpu->mem, receive_addr, (unsigned char *) (void *) &buf, 8,
+  370: 	    MEM_WRITE, NO_EXCEPTIONS | PHYSICAL);
+  371: }
+  372: 
+  373: 
+  374: /*
+  375:  *  maple_do_dma_xfer():
+  376:  *
+  377:  *  Perform a DMA transfer. enable should be 1, and dmaaddr should point to
+  378:  *  the memory to transfer.
+  379:  */
+  380: void maple_do_dma_xfer(struct cpu *cpu, struct dreamcast_maple_data *d)
+  381: {
+  382: 	uint32_t addr = d->dmaaddr;
+  383: 
+  384: 	if (!d->enable) {
+  385: 		debug("[ maple_do_dma_xfer: not enabled? ]\n");
+  386: 		return;
+  387: 	}
+  388: 
+  389: 	/*  debug("[ dreamcast_maple: DMA transfer, dmaaddr = "
+  390: 	    "0x%08" PRIx32" ]\n", addr);  */
+  391: 
+  392: 	/*
+  393: 	 *  DMA transfers must be 32-byte aligned, according to Marcus
+  394: 	 *   Comstedt's Maple demo program.
+  395: 	 */
+  396: 	if (addr & 0x1f) {
+  397: 		fatal("[ dreamcast_maple: dmaaddr 0x%08" PRIx32" is NOT"
+  398: 		    " 32-byte aligned; aborting ]\n", addr);
+  399: 		return;
+  400: 	}
+  401: 
+  402: 	/*
+  403: 	 *  Handle one or more requests/responses:
+  404: 	 *
+  405: 	 *  (This is "reverse engineered" from Comstedt's maple demo program;
+  406: 	 *  it might not be good enough to emulate how the Maple is being
+  407: 	 *  used by other programs.)
+  408: 	 */
+  409: 	for (;;) {
+  410: 		uint32_t receive_addr, response_code, cond;
+  411: 		int port, last_message, cmd, to, datalen_cmd, unit;
+  412: 		uint8_t buf[8];
+  413: 
+  414: 		/*  Read the message' two control words:  */
+  415: 		cpu->memory_rw(cpu, cpu->mem, addr, (unsigned char *) (void *) &buf, 8, MEM_READ,
+  416: 		    NO_EXCEPTIONS | PHYSICAL);
+  417: 		addr += 8;
+  418: 
+  419: 		// int datalen = buf[0] * sizeof(uint32_t);
+  420: 
+  421: 		if (buf[1] & 2) {
+  422: 			fatal("[ dreamcast_maple: TODO: GUN bit. ]\n");
+  423: 			/*  TODO: Set some bits in A05F80C4 to indicate
+  424: 			    which raster position a lightgun is pointing
+  425: 			    at!  */
+  426: 			exit(1);
+  427: 		}
+  428: 		port = buf[2];
+  429: 		last_message = buf[3] & 0x80;
+  430: 		receive_addr = buf[4] + (buf[5] << 8) + (buf[6] << 16)
+  431: 		    + (buf[7] << 24);
+  432: 
+  433: 		if (receive_addr & 0xe000001f)
+  434: 			fatal("[ dreamcast_maple: WARNING! receive address 0x"
+  435: 			    "%08" PRIx32" isn't valid! ]\n", receive_addr);
+  436: 
+  437: 		/*  Read the command word for this message:  */
+  438: 		cpu->memory_rw(cpu, cpu->mem, addr, (unsigned char *) (void *) &buf, 4, MEM_READ,
+  439: 		    NO_EXCEPTIONS | PHYSICAL);
+  440: 		addr += 4;
+  441: 
+  442: 		cmd = buf[0];
+  443: 		to = buf[1];
+  444: 		// int from = buf[2];
+  445: 		datalen_cmd = buf[3];
+  446: 
+  447: 		/*  Decode the unit number:  */
+  448: 		unit = 0;
+  449: 		switch (to & 0x3f) {
+  450: 		case 0x00:
+  451: 		case 0x20: unit = 0; break;
+  452: 		case 0x01: unit = 1; break;
+  453: 		case 0x02: unit = 2; break;
+  454: 		case 0x04: unit = 3; break;
+  455: 		case 0x08: unit = 4; break;
+  456: 		case 0x10: unit = 5; break;
+  457: 		default: fatal("[ dreamcast_maple: ERROR! multiple "
+  458: 			    "units? Not yet implemented. to = 0x%02x ]\n", to);
+  459: 			exit(1);
+  460: 		}
+  461: 
+  462: 		/*  fatal("[ dreamcast_maple: cmd=0x%02x, port=%c, unit=%i"
+  463: 		    ", datalen=%i words. receive_addr=0x%08x ]\n",
+  464: 		    cmd, port+'A', unit, datalen_cmd, receive_addr);  */
+  465: 
+  466: 		/*
+  467: 		 *  Handle the command:
+  468: 		 */
+  469: 		switch (cmd) {
+  470: 
+  471: 		case MAPLE_COMMAND_DEVINFO:
+  472: 			if (port < 0 || port >= N_MAPLE_PORTS ||
+  473: 			    d->device[port] == NULL || unit != 0) {
+  474: 				/*  No device present: Timeout.  */
+  475: 				/*  debug("[ dreamcast_maple: response="
+  476: 				    "timeout ]\n");  */
+  477: 				response_code = (uint32_t) -1;
+  478: 				response_code = LE32_TO_HOST(response_code);
+  479: 				cpu->memory_rw(cpu, cpu->mem, receive_addr,
+  480: 				    (unsigned char *) (void *) &response_code, 4, MEM_WRITE,
+  481: 				    NO_EXCEPTIONS | PHYSICAL);
+  482: 			} else {
+  483: 				/*  Device present:  */
+  484: 				unsigned int i;
+  485: 				struct maple_devinfo *di =
+  486: 				    &d->device[port]->devinfo;
+  487: 				/*  debug("[ dreamcast_maple: response="
+  488: 				    "\"%s\" ]\n", di->di_product_name);  */
+  489: 				response_code = MAPLE_RESPONSE_DEVINFO |
+  490: 				    (((port << 6) | 0x20) << 8) |
+  491: 				    ((port << 6) << 16) |
+  492: 				    ((sizeof(struct maple_devinfo) /
+  493: 				    sizeof(uint32_t)) << 24);
+  494: 				response_code = LE32_TO_HOST(response_code);
+  495: 				cpu->memory_rw(cpu, cpu->mem, receive_addr,
+  496: 				    (unsigned char *) (void *) &response_code, 4, MEM_WRITE,
+  497: 				    NO_EXCEPTIONS | PHYSICAL);
+  498: 				for (i=0; i<sizeof(struct maple_devinfo); i++)
+  499: 					cpu->memory_rw(cpu, cpu->mem,
+  500: 					    receive_addr + 4 + i, (unsigned
+  501: 					    char *) di + i, 1, MEM_WRITE,
+  502: 					    NO_EXCEPTIONS | PHYSICAL);
+  503: 			}
+  504: 			break;
+  505: 
+  506: 		case MAPLE_COMMAND_GETCOND:
+  507: 			cpu->memory_rw(cpu, cpu->mem, addr, (unsigned char *) (void *) &buf, 4,
+  508: 			    MEM_READ, NO_EXCEPTIONS | PHYSICAL);
+  509: 			cond = buf[3] + (buf[2] << 8) + (buf[1] << 16)
+  510: 			    + (buf[0] << 24);
+  511: 			if (cond & MAPLE_FUNC(MAPLE_FN_CONTROLLER)) {
+  512: 				maple_getcond_controller_response(
+  513: 				    d, cpu, port, receive_addr);
+  514: 			} else if (cond & MAPLE_FUNC(MAPLE_FN_KEYBOARD)) {
+  515: 				maple_getcond_keyboard_response(
+  516: 				    d, cpu, port, receive_addr);
+  517: 			} else {
+  518: 				fatal("[ dreamcast_maple: WARNING: GETCOND: "
+  519: 				    "UNIMPLEMENTED 0x%08" PRIx32" ]\n", cond);
+  520: 				exit(1);
+  521: 			}
+  522: 			break;
+  523: 
+  524: 		case MAPLE_COMMAND_BWRITE:
+  525: 			fatal("[ dreamcast_maple: BWRITE: TODO ]\n");
+  526: 			break;
+  527: 
+  528: 		default:fatal("[ dreamcast_maple: command %i: TODO ]\n", cmd);
+  529: 			exit(1);
+  530: 		}
+  531: 
+  532: 		addr += datalen_cmd * 4;
+  533: 
+  534: 		/*  Last request? Then stop.  */
+  535: 		if (last_message)
+  536: 			break;
+  537: 	}
+  538: 
+  539: 	// TODO: Should the DMA address be updated?
+  540: 	d->dmaaddr = addr;
+  541: 
+  542: 	/*  Assert the SYSASIC_EVENT_MAPLE_DMADONE event:  */
+  543: 	SYSASIC_TRIGGER_EVENT(SYSASIC_EVENT_MAPLE_DMADONE);
+  544: }
+  545: 
+  546: 
+  547: DEVICE_ACCESS(dreamcast_maple)
+  548: {
+  549: 	struct dreamcast_maple_data *d = (struct dreamcast_maple_data *) extra;
+  550: 	uint64_t idata = 0, odata = 0;
+  551: 
+  552: 	if (writeflag == MEM_WRITE)
+  553: 		idata = memory_readmax64(cpu, data, len);
+  554: 
+  555: 	switch (relative_addr) {
+  556: 
+  557: 	case 0x04:	/*  MAPLE_DMAADDR  */
+  558: 		if (writeflag == MEM_WRITE) {
+  559: 			d->dmaaddr = idata;
+  560: 			/* debug("[ dreamcast_maple: dmaaddr set to 0x%08x"
+  561: 			    " ]\n", d->dmaaddr);  */
+  562: 		} else {
+  563: 			fatal("[ dreamcast_maple: TODO: read from dmaaddr ]\n");
+  564: 			odata = d->dmaaddr;
+  565: 			exit(1);
+  566: 		}
+  567: 		break;
+  568: 
+  569: 	case 0x10:	/*  MAPLE_RESET2  */
+  570: 		if (writeflag == MEM_WRITE && idata != 0)
+  571: 			fatal("[ dreamcast_maple: UNIMPLEMENTED reset2 value"
+  572: 			    " 0x%08x ]\n", (int)idata);
+  573: 		break;
+  574: 
+  575: 	case 0x14:	/*  MAPLE_ENABLE  */
+  576: 		if (writeflag == MEM_WRITE)
+  577: 			d->enable = idata;
+  578: 		else
+  579: 			odata = d->enable;
+  580: 		break;
+  581: 
+  582: 	case 0x18:	/*  MAPLE_STATE  */
+  583: 		if (writeflag == MEM_WRITE) {
+  584: 			switch (idata) {
+  585: 			case 0:	break;
+  586: 			case 1:	maple_do_dma_xfer(cpu, d);
+  587: 				break;
+  588: 			default:fatal("[ dreamcast_maple: UNIMPLEMENTED "
+  589: 				    "state value %i ]\n", (int)idata);
+  590: 			}
+  591: 		} else {
+  592: 			/*  Always return 0 to indicate DMA xfer complete.  */
+  593: 			odata = 0;
+  594: 		}
+  595: 		break;
+  596: 
+  597: 	case 0x80:	/*  MAPLE_SPEED  */
+  598: 		if (writeflag == MEM_WRITE) {
+  599: 			d->timeout = (idata >> 16) & 0xffff;
+  600: 			/*  TODO: Bits 8..9 are "speed", but only the value
+  601: 			    0 (indicating 2 Mbit/s) should be used.  */
+  602: 			debug("[ dreamcast_maple: timeout set to %i ]\n",
+  603: 			    d->timeout);
+  604: 		} else {
+  605: 			odata = d->timeout << 16;
+  606: 		}
+  607: 		break;
+  608: 
+  609: 	case 0x8c:	/*  MAPLE_RESET  */
+  610: 		if (writeflag == MEM_WRITE) {
+  611: 			if (idata != 0x6155404f && idata != 0x61557f00)
+  612: 				fatal("[ dreamcast_maple: UNIMPLEMENTED reset "
+  613: 				    "value 0x%08x ]\n", (int)idata);
+  614: 			d->enable = 0;
+  615: 		}
+  616: 		break;
+  617: 
+  618: 	case 0xe8:	/*  UNKNOWN_0xe8  */
+  619: 		if (writeflag == MEM_WRITE) {
+  620: 			// The Dreamcast PROM writes 1 here.
+  621: 			if (idata != 1) {
+  622: 				fatal("[ dreamcast_maple: UNIMPLEMENTED 0xe8 "
+  623: 				    "value 0x%08x ]\n", (int)idata);
+  624: 			}
+  625: 		}
+  626: 		break;
+  627: 
+  628: 	default:if (writeflag == MEM_READ) {
+  629: 			fatal("[ dreamcast_maple: UNIMPLEMENTED read from "
+  630: 			    "addr 0x%x ]\n", (int)relative_addr);
+  631: 		} else {
+  632: 			fatal("[ dreamcast_maple: UNIMPLEMENTED write to addr "
+  633: 			    "0x%x: 0x%x ]\n", (int)relative_addr, (int)idata);
+  634: 		}
+  635: 	}
+  636: 
+  637: 	if (writeflag == MEM_READ)
+  638: 		memory_writemax64(cpu, data, len, odata);
+  639: 
+  640: 	return 1;
+  641: }
+  642: 
+  643: 
+  644: DEVINIT(dreamcast_maple)
+  645: {
+  646: 	struct dreamcast_maple_data *d;
+  647: 
+  648: 	CHECK_ALLOCATION(d = (struct dreamcast_maple_data *) malloc(sizeof(struct dreamcast_maple_data)));
+  649: 	memset(d, 0, sizeof(struct dreamcast_maple_data));
+  650: 
+  651: 	memory_device_register(devinit->machine->memory, devinit->name,
+  652: 	    0x5f6c00, 0x100, dev_dreamcast_maple_access, d, DM_DEFAULT, NULL);
+  653: 
+  654: 	/*  Devices connected to port A..D:  */
+  655: 	d->device[0] = &maple_device_controller;
+  656: 	d->device[1] = NULL;
+  657: 	d->device[2] = &maple_device_keyboard;
+  658: 	d->device[3] = NULL;	/*  TODO:  &maple_device_mouse;  */
+  659: 
+  660: 	d->console_handle = console_start_slave_inputonly(
+  661: 	    devinit->machine, "maple", 1);
+  662: 	devinit->machine->main_console_handle = d->console_handle;
+  663: 
+  664: 	machine_add_tickfunction(devinit->machine, dev_maple_tick, d,
+  665: 	    MAPLE_TICK_SHIFT);
+  666: 
+  667: 	return 1;
+  668: }
+  669: 
+
+codex
+§3 is right on the main fact: DMA updates `d->dmaaddr` at completion, after advancing by 12 bytes plus the payload length per command. Two details matter for the rest of the review: “differs from the programmed value” does not prove exact field reporting, and an unconditional `odata` assignment before the switch would also change other registers’ default read values.
+
+codex
+The proposed detector also needs to check normal return and absence of the read diagnostic. Keeping `fatal(...)` can pass both value checks if it returns. `MAPLE_STATE == 0` cannot independently prove DMA completion: that register always reads zero, including after an early return.
+
+codex
+VERDICT: The read-arm correction can proceed independently. §3’s state trace is correct; its observability claim needs qualification, and the proposed detector is insufficient.
+CODEX_MAPLE_20260910
+
+I read only the two specified files and made no changes. Device line numbers below refer to [the specified dev_dreamcast_maple.c](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_dreamcast_maple.c:74). These are source-review conclusions; I did not run tests.
+
+1. **Yes: DMA completion updates the field, with more arithmetic than the quoted payload increment alone.**
+
+   The trace is:
+
+   - Initialization zeroes the entire device structure, including `dmaaddr` (649).
+   - A write at `0x04` assigns `idata` to the `uint32_t` field (559). Thus the stored value is the input converted to 32 bits, with no alignment masking.
+   - DMA starts by copying that field into local `uint32_t addr` (382).
+   - Each processed descriptor advances local `addr` by **8 bytes for the control words**, **4 bytes for the command word**, and **`4 * datalen_cmd` bytes for command data** (417, 440, 532).
+   - After processing the last descriptor, the routine assigns local `addr` back to `d->dmaaddr` (540), before invoking the DMA-done event macro (543).
+
+   Consequently, for a transfer reaching that tail, with starting field value \(P\) and command-data lengths \(D_i\), the committed value is:
+
+   `C = (P + Σ(12 + 4*D_i)) modulo 2^32`
+
+   Before any completed DMA, the field holds the last programmed value, or zero if nothing has programmed it. After completion it holds `C`, until another writer changes it.
+
+   “Advanced” therefore describes the implemented cursor arithmetic, not necessarily a numerically larger value: unsigned wraparound is possible. Nor does every conceivable completed chain necessarily produce `C != P`.
+
+2. **There are two explicit field-assignment sites, plus initialization. The cursor is published at the tail, not incrementally.**
+
+   The writers visible in these files are:
+
+   - Structure initialization at 649.
+   - The register write at 559.
+   - The DMA completion assignment at 540.
+
+   Neither reset register clears `dmaaddr`; the `MAPLE_RESET` write clears `enable` (614). The tick function updates input queues, not the DMA address.
+
+   For the early exits, let `E` be the field value on entry:
+
+   | Path | Field afterward | Reaches DMA-done invocation? |
+   |---|---|---|
+   | `!d->enable` | `E`, unchanged | No |
+   | Enabled, but `addr & 0x1f` | `E`, including its unaligned bits | No |
+   | Descriptor loop reaches completion tail | Computed `C` | Yes |
+   | Explicit `exit(1)` inside descriptor processing | No tail assignment; execution terminates | No |
+
+   The enable check comes first. A disabled, unaligned address takes the disabled return without reaching the alignment diagnostic.
+
+   An early return preserves the **entry value**, which could itself be a previous transfer’s cursor. It does not restore some separately retained programmed address.
+
+   The ordinary trigger is synchronous: writing `1` to `MAPLE_STATE` directly calls `maple_do_dma_xfer()` (586). There is no scheduled, incremental DMA worker in this file. The local arithmetic therefore cannot expose a partially advanced `d->dmaaddr`.
+
+   There is a scope qualification: the routine calls `cpu->memory_rw` while processing requests and responses. These two files do not establish that those callbacks can never reenter device access, or establish global threading guarantees. If a callback reenters the read arm before the completion store, it sees the previously committed field, absent an intervening writer. That is older than the local cursor, but it is the field’s actual value.
+
+   Likewise, a reentrant register write would use the existing write site; the outer DMA’s eventual tail assignment would overwrite it with the result derived from its original local snapshot. The files support **no incremental publication by this routine**, rather than an unconditional claim about every possible external callback or concurrent access.
+
+3. **The implementation questions are separable, but the observable behavior is connected.**
+
+   Removing the termination does introduce a new observable result: a guest read that previously stopped execution can now obtain the current field, including its existing DMA update.
+
+   Thus, “the edit does not change cursor computation” is correct. “The edit does not change the observability of that computation” would be incorrect.
+
+   That distinction does not require combining the fixes. The read correction implements a separately testable rule: return the stored register field. The cursor item determines what the transfer routine should store there.
+
+   The cursor policy already affects execution beyond this read arm: another DMA starts from `d->dmaaddr` (382). Starting another transfer without reprogramming therefore already consumes the previously advanced value, including any consequences of the alignment check.
+
+   I would accept the read correction on that bounded basis. These files cannot establish whether real hardware exposes this cursor, a programmed-address latch, or another value. That architectural question remains open.
+
+4. **The file establishes an internally consistent field-reporting contract, while explicitly leaving the hardware update policy uncertain.**
+
+   The evidence has different strengths:
+
+   - **Write arm:** It stores the supplied value, converted to `uint32_t`, without clearing low bits. Alignment rejection happens when attempting DMA, not when programming the register.
+   - **Transfer arithmetic:** It walks the request list using the command word’s `datalen_cmd`. The alternative length calculation from the control word is commented out at 419. The executable completion assignment publishes the resulting cursor.
+   - **Existing read assignment:** `odata = d->dmaaddr` at 564 identifies the value the existing read arm prepares. Today that value never reaches the common serialization tail because of the termination.
+   - **Commented diagnostics:** The setter and transfer-start debug statements describe stored and starting addresses. They have no runtime effect and supply no proof of architectural readback semantics.
+   - **The TODO at 539:** It explicitly questions whether the address should be updated. It does not disable the assignment immediately below it.
+
+   The common tail serializes `odata` at 638 and returns success at 640. Deleting the diagnostic and explicit exit connects the existing read assignment to that delivery path.
+
+   Attachment is unconditional in [machine_dreamcast.c:149](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/machines/machine_dreamcast.c:149), before the `prom_emulation` early return.
+
+   “Fully modelled write direction” is justified as a description of this executable storage branch. It does not independently establish hardware correctness.
+
+5. **The direct change boundary is exact register offset `0x04` in the non-write branch.**
+
+   For the normal read/write interface:
+
+   | Input | Effect of the proposed correction |
+   |---|---|
+   | `relative_addr == 0x04`, `MEM_READ` | Removes the diagnostic and explicit termination; reaches the existing serialization path with `odata = d->dmaaddr`. |
+   | `relative_addr == 0x04`, `MEM_WRITE` | Unchanged: stores the converted input value. |
+   | Any other offset, `MEM_READ` | Its own handling and output assignment remain unchanged. |
+   | Any other offset, `MEM_WRITE` | Its own handling and side effects remain unchanged. |
+
+   The changed read class includes **all field values and histories**: initial zero, newly programmed addresses, unaligned addresses, completed-DMA cursors, values preserved by disabled or unaligned attempts, and values retained across reset writes. There is no enable or alignment condition on the corrected read.
+
+   The edit adds no length validation, masking, byte-lane interpretation, or special handling for neighboring offsets. It passes the existing `len` to the existing serialization helper. The permitted files do not define that helper, so this is not a claim that every arbitrary length is supported.
+
+   Strictly at the C branch level, `else` also includes a direction flag unequal to **both** `MEM_WRITE` and `MEM_READ`. Such a call previously reached the termination; afterward it assigns `odata` and returns without serializing it. That is outside the ordinary two-direction interface, but belongs in the syntactic partition.
+
+   DMA arithmetic, transfer diagnostics, early returns, completion signaling, and other register logic remain unchanged. A larger execution can naturally diverge after encountering a newly accepted read, including one reached through a callback.
+
+6. **The proposed pair is useful, but insufficient to establish exact reporting of the live field.**
+
+   **Assertion (i), exact readback without DMA, tests the storage/read connection.** Its strength depends on the inputs:
+
+   - A constant can pass a single matching test value.
+   - Constant zero passes an initial-zero-only test.
+   - Alignment masking passes every test using only aligned values.
+   - A separate snapshot of the last programmed address passes this assertion even if it never tracks DMA updates.
+
+   Use several distinct values, including nonzero high bits and nonzero low five bits, and verify successive writes replace what reads report. No DMA is needed for the unaligned-value cases.
+
+   **Assertion (ii), post-transfer inequality, proves only that the returned value differs from `P`.** Even with independent proof that DMA happened, both assertions could be satisfied by an implementation that reads correctly before DMA but afterward returns:
+
+   - Zero, when the tested `P` is nonzero.
+   - A fabricated `P + 4`.
+   - A stale cursor from an earlier transfer that differs from the current `P`.
+   - A masked or otherwise transformed current field that still differs from `P`.
+
+   Independent DMA evidence rules out a skipped transfer; it does not validate the relationship between the returned value and the field. The inequality rejects an unchanged snapshot of that particular `P`, not every stale or fabricated answer.
+
+   To test the read arm without certifying the architectural cursor value, a harness with state access should capture the actual field value `S` immediately before the read and assert:
+
+   - The delivered register value equals `S` exactly.
+   - The read leaves the field unchanged.
+   - The access returns normally and invokes no read-side diagnostic.
+
+   Apply that check both after ordinary programming and after an independently demonstrated transfer. For the chosen transfer fixture, `S != P` can additionally demonstrate that the fixture exercised the existing field update. It remains a property of that fixture and current implementation.
+
+   For independent DMA evidence, use a supported command and verify a fresh expected response in a receive buffer initialized to distinguishable contents. A newly observed completion event can supplement that. **`MAPLE_STATE == 0` is insufficient:** its read arm always returns zero (592–593), including after an early return. An event alone also establishes less than a valid response, because the descriptor loop can reach completion through paths that do not implement the requested operation fully.
+
+   Finally, value assertions alone do not reject candidate **(c)** if `fatal()` returns. Silence and normal completion must be checked separately.
+
+   Without access to the field or another exact oracle, the proposed pair establishes readback before DMA and change after DMA; it cannot establish exact live-field reporting. Its advancement assertion would also need reconsideration if the separately reviewed cursor policy legitimately changes.
+
+7. **The four candidates differ along these boundaries.**
+
+   The examples below use ordinary 32-bit reads.
+
+   | Candidate | Classification | First distinguishing input in a minimal example |
+   |---|---|---|
+   | **(a)** `odata = d->dmaaddr & ~0x1f;` | **DIFFERENT.** It discards stored low bits. | Write `1` to `0x04`, then read `0x04` without DMA. Corrected form returns `1`; candidate returns `0`. |
+   | **(b)** Unconditionally move `odata = d->dmaaddr;` before the switch | **EQUIVALENT for the isolated `0x04` read; DIFFERENT as a whole-handler edit.** | Write `1` to `0x04`, then read `MAPLE_RESET2` at `0x10`. Corrected handler returns its default `0`; the unconditional hoist returns `1`. |
+   | **(c)** Remove `exit(1)`, retain `fatal(...)` | **DIFFERENT under the requested silent behavior.** Returned data is equivalent if `fatal()` returns. | The first `0x04` read, even immediately after initialization, invokes the retained diagnostic. The corrected form does not. |
+   | **(d)** `odata = 0;` | **DIFFERENT.** | Write `1` to `0x04`, then read `0x04`. Corrected form returns `1`; candidate returns `0`. |
+
+   For **(b)**, the subtlety is that `odata` currently starts at zero. Reads of `0x10`, `0x8c`, and `0xe8` leave it untouched; an unconditional hoist changes their outputs. Default-offset reads also retain that changed value if their diagnostic returns. Reads of enable, state, and speed explicitly overwrite `odata`, so those values are unaffected.
+
+   Within the `0x04` read itself, there is no intervening field-changing operation between the proposed earlier load and the existing load position in the shown sequential path. Taking a fresh snapshot on each callback entry is not a stale snapshot across transfers. A separate temporary used only by the `0x04` read, or an appropriately guarded hoist, is equivalent on that basis; a detector should not demand a counterexample where none exists.
+
+   For **(c)**, neither permitted file defines `fatal()`. Its use for warnings and alongside separate exits supports the intended distinction between diagnosis and termination, but does not prove its implementation. The firm finding is the retained diagnostic call: if it returns, the candidate delivers the same value with the unwanted diagnostic; if it terminates, successful readback remains broken.
+tokens used
+28,191
