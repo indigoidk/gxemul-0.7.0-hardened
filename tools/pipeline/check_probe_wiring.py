@@ -289,6 +289,16 @@ MANIFEST = {
         (CLASS_RESEARCH, "lcaconfbus1kill (#515) table 4: the same 18-row instrument for the targeted run -- grok's M13_regconj plus the 18-row PRE-FIX baseline, so the round's before/after uses one instrument"),
     "artifacts/lcairqstubkill/lcairq_probe.asrun.py":
         (CLASS_RESEARCH, "lcairqstubkill: the as-run witness ATTEMPT, preserved as evidence -- it did NOT fire, and it is not a detector"),
+    "artifacts/sgimtedepth4dead/repair_20260909/sgi_mte_fill_probe.REPAIRED.py":
+        (CLASS_RESEARCH, "sgimtelabelcells (#509 follow-up, 2026-09-09/10): the REPAIRED 16-row instrument as the Opus seat delivered it, identical to the shipped regress/sgi_mte_fill_probe.py after the loop applied it (md5 348f5312); the measured copy"),
+    "artifacts/sgimtedepth4dead/repair_20260909/sgi_mte_fill_probe.AS_MEASURED.py":
+        (CLASS_RESEARCH, "sgimtelabelcells: the frozen copy the table actually ran (differs from REPAIRED only in a comment correction proved static and empirical, BASE_corrected.raw); evidence"),
+    "artifacts/sgimtedepth4dead/repair_20260909/drivers/mk_repaired_probe.py":
+        (CLASS_RESEARCH, "sgimtelabelcells: the script that produced the REPAIRED probe from the shipped 14-row one (two label rows, fill_at helper, contract text); provenance"),
+    "artifacts/sgimtedepth4dead/repair_20260909/drivers/mk_table.py":
+        (CLASS_RESEARCH, "sgimtelabelcells: the table generator -- READS every log after its sentinel, transcribes nothing; its verdict lines are negative-controlled (verdict_negative_control.out) after a first draft printed YES unconditionally"),
+    "artifacts/sgimtedepth4dead/repair_20260909/drivers/op7b_mutate.py":
+        (CLASS_RESEARCH, "sgimtelabelcells: mutator for M_tlbA, M_tlbAB and the nine preserved M1..M9 (killtable2_20260907 edits re-applied); scratch clone only"),
     "artifacts/pcc2c040kill/ctlq_20260909/pcc2_c040_probe.REPAIRED.py":
         (CLASS_RESEARCH, "pcc2c040ctlq (#512 follow-up, 2026-09-09): the REPAIRED 16-row instrument as the Opus seat delivered it -- identical to the shipped regress/pcc2_c040_probe.py after the loop applied it; preserved as the measured copy (md5 cbe1945c)"),
     "artifacts/pcc2c040kill/ctlq_20260909/mutate.py":

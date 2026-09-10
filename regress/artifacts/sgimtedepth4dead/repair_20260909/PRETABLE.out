@@ -1,0 +1,159 @@
+==========================================================================================
+PRE-TABLE CHECK + PRE-REGISTERED PREDICTIONS
+sgimtelabelcells -- the L2 repair the 7g-1 ruling owes on #509's detector
+Written 2026-09-09/10 BEFORE table 1 runs, so this file's own mtime proves the order.
+Seat: Opus 5 measuring seat.  Clone /tmp/gxopus7g1b.  Baseline: GXEMUL-SEC/src/devices/
+dev_sgi_re.c at HEAD e73623a, md5 8479c1eaeb39f006ef0b21cb3b46531a, cmp-verified before
+mutant 1.  Frozen instrument: sgi_mte_fill_probe.REPAIRED.py, md5 739b4efb46e36a6338cfd
+9f12369241f, 16 row() call sites.
+==========================================================================================
+
+0.  WHAT CHANGED, AND WHAT DID NOT
+------------------------------------------------------------------------------------------
+Two rows added -- `fill b top' and `fill c top' -- plus a CONTRACT block and constants.
+All fourteen existing row() calls are BYTE-IDENTICAL: verified mechanically by extracting
+every `^row(' call from both files with a paren-matching walk and testing set membership.
+    ORIGINAL row() calls: 14   REPAIRED: 16   (delta +2)
+    ORIGINAL calls NOT byte-identically present in REPAIRED: 0
+The whole diff is 4 removed lines (the stale "IS NOW A 14-ROW DETECTOR ... scores 14/14"
+banner, which the row addition falsifies) and 120 added.  Both files are LF-only, 0 CRLF.
+
+
+1.  SIBLING PARITY
+------------------------------------------------------------------------------------------
+The siblings here are the CASE LABELS of `switch (dst_tlb)', which is the reading the
+pcc2widthkills adjudication settled: "at a block that serves TWO case labels the siblings
+are the LABELS".  This block serves THREE -- MTE_TLB_A, MTE_TLB_B, MTE_TLB_C -- and they
+share one body, so parity is exact rather than analogical.
+
+    label        row before this repair      row after
+    MTE_TLB_A    `fill top'                  `fill top'          (unchanged)
+    MTE_TLB_B    *** NONE ***                `fill b top'
+    MTE_TLB_C    *** NONE ***                `fill c top'
+
+ASYMMETRY FOUND AND CLOSED: it was 1 of 3.  A census over the ROW NAMES -- the thing the
+pcc2widthkills corollary says would have shown the gap before the table ran -- shows no
+row name in the 14-row set contains a label token at all, which is the tell.
+
+The OTHER label-shaped predicate in the same function, `if (src > MTE_TLB_C)', induces a
+TWO-valued partition of which exactly ONE value reaches the edited line, so it owes ONE
+cell and that cell is already rowed (`copy top' etc. all drive src_tlb == MTE_TLB_A).
+It is NOT three cells.  Recording that here because it is what stops the label rule from
+demanding a source-label row set as well.
+
+The LINEAR labels (MTE_TLB_LIN_A/B) are a DIFFERENT block, not siblings of this one, and
+they terminate the process at depth 32 -- so a row there would be host death, not a red
+row.  N/A with its reason, not a blank.
+
+
+2.  CLAIM -> ROW  (semantic trigger: does this sentence assert something a row could
+    observe?  The five-verb grep is an EXAMPLE, not the test.)
+------------------------------------------------------------------------------------------
+The #509 comment's load-bearing sentence is a UNIVERSAL over this block's three labels:
+
+    "So both assignments were dead, EVERY TILED TRANSFER took the CI arm, and at 32 bits
+     CI assigns buf[0] alone while memory_rw copies four -- publishing three bytes of host
+     stack into guest memory."
+
+Before this repair the row set instantiated that universal at ONE label of three.  After
+it, at three of three, at the depth the repair changes.  That is the claim this repair
+discharges, and it is the reason the repair is two rows and not one.
+
+Sentences added by THIS change and where each lands:
+
+  "the `dst_tlb' axis is CLOSED at depth 32 across all three labels"
+        -> rows `fill top', `fill b top', `fill c top'.
+  "THE TILE VALUE IS THE SAME 0x8002 IN ALL THREE, so DEST does not move"
+        -> observable: all three rows read the SAME address; if it moved, the paint
+           (0x99) would survive at the read address and the row would red naming it.
+  "NEITHER ROW IS GATED ... dest[0] is buf[0], which BOTH colour arms assign"
+        -> observable under M1/M2/M4, where the new rows must report 0x44 (a DEFINED
+           CI byte) and not "n/a".  A gate would have made them report n/a instead;
+           the table below distinguishes those two outcomes.
+  "A source-side label condition escapes: every copy row drives src_tlb == MTE_TLB_A"
+        -> deliberately NO ROW.  Explicit no-row sentence, in the CONTRACT, under
+           clause (e).  Stated so the next reader does not have to rediscover it.
+
+
+3.  GUARD FIELD vs BODY FIELD
+------------------------------------------------------------------------------------------
+GUARD (the repaired comparison):     `depth'
+DOMINATING GUARD (the switch):       `dst_tlb'
+BODY (the two guarded assignments):  `src_mode', `dst_mode'  (lvalues written)
+BODY, values read to build them:     `src_tlb', `dst_tlb', `mode & MTE_MODE_DEPTH_MASK'
+
+WHERE THEY DIFFER: `dst_tlb' is read by the BODY -- `dst_mode = (dst_tlb << 10) + ...',
+four lines above the guard -- and is ALSO the operand of the dominating switch.  That is
+precisely the joint the DEPENDS-ON closure names, and it is why the 7g-1 ruling is FLOOR
+rather than clause-(e) debt.
+
+WRITERS, because reachability of a joint cell is derived from the WRITERS of each lvalue
+and never from a steady-state invariant:
+    `dst_tlb'  <- (mode & MTE_MODE_DST_BUF_MASK 0x1c) >> 2, i.e. a guest MTE_MODE write.
+    `re_tlb_b' <- dev_sgi_re.c's `relative_addr >= CRIME_RE_TLB_B' arm, the exact mirror
+                  of the TLB_A arm the shipped probe already drives.
+    `re_tlb_c' <- likewise at CRIME_RE_TLB_C.
+So the disagreeing state (dst_tlb != 0 while the repair is conditioned on dst_tlb == 0) is
+guest-constructible with two constants changed, and was MEASURED so at rung 3 on
+2026-09-09: killtable3_20260909/reach_M_tlbA.raw reads A=RGBA, B=CI, C=CI.
+
+
+4.  CHANNEL -- per NEW row, the mutant it kills and the observable that differs under it
+------------------------------------------------------------------------------------------
+  fill b top   kills M_tlbA (`&& dst_tlb == MTE_TLB_A') and M_tlbAB is NOT killed by it
+               (M_tlbAB admits B).  Channel: dest[0] of a tiled 32-bit fill whose mode
+               word carries MTE_MODE_DST_BUF = 1.  0x11 (RGBA, repaired) vs 0x44 (CI,
+               defect live).  CAN IT VARY UNDER ITS NAMED MUTANT?  Yes, measured already:
+               reach_M_tlbA.raw shows B = CI under exactly this mutant, against a base of
+               RGBA.  This row is NOT a survival oracle and NOT a distinctness assertion.
+  fill c top   kills M_tlbA AND M_tlbAB.  Same channel at DST_BUF = 2.  Varies under both:
+               reach_M_tlbA.raw and reach_M_tlbAB.raw both show C = CI.
+
+NO NEW ROW HAS A CHANNEL THAT CANNOT VARY UNDER ITS NAMED MUTANT, and unusually the proof
+is not a prediction: the channel was measured on 2026-09-09 by a separate instrument
+(tlb_reach_control.py) before either row existed.
+
+ANCHOR RULE (clause (f)) NOTE.  These are not distinctness rows -- each asserts an ABSOLUTE
+value (0x11) produced by a channel outside the decode under test (the colour arm, not the
+address), so they do not have the relative-suite blindness.  They are also not accept rows
+at a window base or top, so the far-bound blindness does not apply either.  What they do
+NOT pin is WHERE the destination lands: all three read the same address by construction, so
+a translation of the tile lookup is invisible to them, exactly as it is to `fill top'.
+That is unchanged by this repair and is not claimed to be closed.
+
+
+5.  PRE-REGISTERED PREDICTIONS  (written before the table; a prediction copied into a
+    measured column afterwards is the frozen-number class in a new coat)
+------------------------------------------------------------------------------------------
+BASE is already MEASURED at 16/16 (BASE.raw, sentinel MTEFILL_DONE, PROBE_RC=0) and is the
+only number in this section that is not a prediction.  Every other line is a claim this
+table may refute.  The 14-row column is the MEASURED score from killtable2_20260907.
+
+    mutant          edit at the #509 site                        14-row  predict  reasoning
+    M_tlbA          && dst_tlb == MTE_TLB_A                      14/14    14/16   both new rows red
+    M_tlbAB         && dst_tlb != MTE_TLB_C                      14/14    15/16   only `fill c top' red
+    M1_reinstate    depth == 32 -> depth == 4                    10/14    10/16   +2 red (CI at every label)
+    M2_nodst        delete dst_mode |= RGBA                       9/14     9/16   +2 red (dst never RGBA)
+    M3_nosrc        delete src_mode |= RGBA                      11/14    13/16   +0: a FILL never reads src_mode
+    M4_copyonly     && (mode & MTE_MODE_COPY)                    10/14    10/16   +2 red (the new rows are fills)
+    M5_dstrgb       dst_mode |= RGB                              12/14    14/16   +0: RGB writes bg>>24 at dest[0]
+    M6_ge16         depth >= 16                                  12/14    14/16   +0: true at 32, so RGBA
+    M7_ne8          depth != 8                                   12/14    14/16   +0: same, equivalent to M6
+    M8_srcrgb       src_mode |= RGB                              13/14    15/16   +0: a FILL never reads src_mode
+    M9_ge32         depth >= 32                                  13/14    15/16   +0: true at 32, so RGBA
+    NULL_dead       (no build -- probe run against /bin/true)      n/a      0/16   identity rows must all red
+
+THE PREDICTION THAT MATTERS FOR THE FLOOR is the first two: both must land BELOW 16/16, and
+each must be killed by exactly the rows the CHANNEL section names.  A score below 16 killed
+by some OTHER row would be a wrong-reason kill and would not discharge the obligation.
+
+THE PREDICTION THAT MATTERS FOR "THE REPAIR LOSES NO EXISTING KILL" is M1..M9: each must
+red the SAME existing rows it reddened at 14, and no existing row may go green.
+
+NULL MEDIUM: *** NONE WAS DEFINED IN killtable_20260907 OR killtable2_20260907. ***  That is
+a real gap in the original tables and is recorded rather than glossed.  One is added here
+(NULL_dead) because clause (c) asks for it: it costs no build, and it is the cheapest
+demonstration that the three identity rows (`live', `devsig', `paint ok') are load-bearing.
+It is NOT a substitute for a comment-only-file null medium, which is not run here.
+
+==========================================================================================

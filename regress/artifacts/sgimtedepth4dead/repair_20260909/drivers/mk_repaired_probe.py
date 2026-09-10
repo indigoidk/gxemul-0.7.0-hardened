@@ -1,0 +1,203 @@
+#!/usr/bin/env python3
+"""Build sgi_mte_fill_probe.REPAIRED.py from the SHIPPED probe by SURGICAL INSERTION.
+
+Every existing row stays byte-identical: this script only INSERTS blocks and replaces the
+one stale identity banner.  It refuses to write if any anchor is missing or ambiguous -- a
+replacement that matched nothing would otherwise produce a clean, confident, wrong file,
+which is the pattern-that-matched-nothing class.
+"""
+import sys
+
+SRC = sys.argv[1]
+DST = sys.argv[2]
+
+t = open(SRC, encoding="utf-8").read()
+orig = t
+
+
+def once(hay, needle, what):
+    n = hay.count(needle)
+    print("ANCHOR %-22s occurrences=%d" % (what, n))
+    if n != 1:
+        print("MK-FAIL: anchor %r occurs %d times, want exactly 1" % (what, n))
+        sys.exit(9)
+
+
+# ---------------------------------------------------------------- 1. the identity banner
+OLD_BANNER = """#  *** IT BEGAN AS A 6-ROW WITNESS AND IS NOW A 14-ROW DETECTOR.  The banner that used to stand
+#  here -- "a witness, not a detector; its rows are expected to FAIL; it must not be gated" --
+#  was true of the 6-row version against HEAD and is FALSE of this one, which scores 14/14 on the
+#  fix and 10/14 on a verbatim reinstatement.  The pass-2 codex seat caught the staleness. ***
+"""
+NEW_BANNER = """#  *** IT BEGAN AS A 6-ROW WITNESS, BECAME A 14-ROW DETECTOR, AND IS 16 ROWS AS OF 2026-09-09.
+#  The banner that used to stand here -- "a witness, not a detector; its rows are expected to
+#  FAIL; it must not be gated" -- was true of the 6-row version against HEAD and is FALSE of this
+#  one.  The pass-2 codex seat caught that staleness; the ROW COUNT in the replacement then went
+#  stale in its turn, on the very next round to touch the file.
+#
+#  *** SO NO SCORE IS TRANSCRIBED HERE ANY MORE.  Every table this instrument has produced sits
+#  under regress/artifacts/sgimtedepth4dead/ -- killtable_20260907 (13 rows), killtable2_20260907
+#  (14), killtable3_20260909 (14, the label-blindness measurement), repair_20260909 (16, the
+#  table that shipped the two label rows) -- and each log carries its own MTEFILL_RESULT line and
+#  a MTEFILL_DONE sentinel.  Read the log.  A count in a header decays the moment a row is added,
+#  and this one already did, twice. ***
+"""
+once(t, OLD_BANNER, "identity banner")
+t = t.replace(OLD_BANNER, NEW_BANNER)
+
+# ---------------------------------------------------------------- 2. the CONTRACT block
+CONTRACT_ANCHOR = "#  Usage:  sgi_mte_fill_probe.py <gxemul-binary> [label]\n"
+CONTRACT = """#  ---------------------------------------------------------------------------------------------
+#  CONTRACT (vacuity-floor clause (e)) -- WHAT THIS DETECTOR IS DESIGNED TO CATCH.
+#  Added 2026-09-09 with the two destination-label rows.  A detector that says what it covers is
+#  falsifiable; one that claims completeness is not.
+#
+#  IT CATCHES edits to the `#509' comparison and to the two type-bit assignments it guards:
+#  verbatim reinstatement (`depth == 4'), over-reach on the same operand (`>= 16', `!= 8',
+#  `>= 32'), deletion of either assignment, an RGB-for-RGBA substitution on either side, and --
+#  as of 2026-09-09 -- a repair CONDITIONED ON THE DESTINATION TLB LABEL.
+#
+#  CELLS NOW ROWED.  The `dst_tlb' axis is CLOSED at depth 32 across all three labels that share
+#  the block the repaired line sits in: MTE_TLB_A (`fill top'), MTE_TLB_B (`fill b top'),
+#  MTE_TLB_C (`fill c top').  The `depth' axis is driven at all four reachable field values
+#  (8, 16, 32, 64) at label A, and the fill/copy axis at both values at label A.
+#
+#  *** WHY THE LABEL AXIS IS ROWED AND THE CROSS-PRODUCT IS NOT. ***  `depth' x `label' x
+#  {fill, copy} x {src, dst} is 48 cells, and demanding them would be the row growth the floor
+#  rules forbid.  What the 7g-1 adjudication ruled FLOOR is the LABEL axis crossed with the ONE
+#  observable the repair controls at the ONE depth the repair changes -- three cells, of which one
+#  was already rowed.  Everything else stays disclosed below.
+#
+#  CELLS STILL DISCLOSED, NOT ROWED (clause (e) debt; the 2026-09-09 repair does not change these):
+#    * `depth == 32 && !(mode & MTE_MODE_COPY)' -- provably unkillable by this instrument; the
+#      derivation is at `fill bot' below, limit (b).
+#    * The label axis at depths 8, 16 and 64, and the SOURCE label (`src_tlb') at every depth.
+#      A source-side label condition escapes: every copy row here drives src_tlb == MTE_TLB_A.
+#    * The LINEAR arm (MTE_TLB_LIN_A/B): it terminates the process on COPY and on any depth other
+#      than 8, so a depth-32 linear row would be host death, not a red row.
+#    * The `dst_tlb' default arm (values 3, 6, 7), which diagnoses and continues.
+#    * The uninitialised-buffer class at 16 bits and at field value 3 -- [[sgirebufuninit]].
+#      `#509' fills buf[0..3] at depth 32, so it ACCIDENTALLY MASKS that sibling's 32-bit tiled
+#      cell.  A later round that rows only depth 32 on this path WILL LOOK FIXED AND WILL NOT BE.
+#    * [[sgirebufshiftub]] -- `buf[0] << 24' on a promoted uint8_t.  This detector must not stand
+#      on it, which is why SRC_WORD's first byte is 0x1a.
+#
+#  *** THIS ROW WAS PROPOSED ON 2026-09-07, ARGUED DOWN, DROPPED -- AND THEN A LATER BRIEF
+#  DESCRIBED IT AS SHIPPED.  The name has been in the record for two days without ever naming a
+#  row, so it earns a sentence here. ***
+#
+#  `#509''s OWN pass-1 brief proposed it, in a table headed "Proposed additional rows":
+#  `| `fill b top` | TLB_B, depth 32, fill | the label axis |'.  Three seats engaged with it.
+#  codex: "`fill b top` covers B but leaves C uncovered ... the proposed rows are not exhaustive."
+#  grok: "`fill b top` is sibling parity on packing, not a floor cell of the comparison.  Cheap,
+#  not required."  glm listed it among "all nine rows".  THE ROUND TOOK GROK'S READING AND SHIPPED
+#  FOURTEEN ROWS WITHOUT IT -- at 2956c7e the string appears nowhere in this file.
+#
+#  Two days later the 7g-1 brief's premise 3 asserted that the shipped detector's rows all drive
+#  MTE_TLB_A "plus one `fill b top' row that pins packing on TLB_B" -- a DROPPED PROPOSAL promoted
+#  to a shipped fact by nothing but repetition, and the strongest argument on the coverage-debt
+#  side rested on it ("B is already covered, so only C is exposed").  Two seats caught that
+#  independently while answering 7g-1.
+#
+#  THE MEASUREMENT THEN WENT AGAINST THE READING THAT DROPPED THE ROW.  `dst_tlb' flows into
+#  `dst_mode', which is the operand the repair reads, so the label is a floor cell and not sibling
+#  parity -- and the row the round proposed and declined is the row that closes the breach.  It
+#  exists now.  *A row argued down as "cheap, not required" is worth re-reading when the thing it
+#  was said not to pin turns out to be a floor axis.*
+#
+"""
+once(t, CONTRACT_ANCHOR, "usage line")
+t = t.replace(CONTRACT_ANCHOR, CONTRACT + CONTRACT_ANCHOR)
+
+# ---------------------------------------------------------------- 3. the constants
+CONST_ANCHOR = """RE_TLB_A   = 0xb5001000
+TLBA_TILE  = 0x8002               # re_tlb_a[0].  BIT 15 IS THE VALID BIT.
+"""
+CONST_NEW = """RE_TLB_A   = 0xb5001000
+TLBA_TILE  = 0x8002               # re_tlb_a[0].  BIT 15 IS THE VALID BIT.
+#  *** THE DESTINATION-LABEL AXIS, added 2026-09-09.  CRIME_RE_TLB_A/B/C are 0x1000/0x1200/0x1400
+#  and MTE_DST_TLB_SHIFT is 2, so the mode word's DST_BUF field selects which of re_tlb_a/b/c
+#  horrible_getputpixel() reads: `dst_mode = (dst_tlb << 10) + ...', and that helper's
+#  `switch (tlb_mode)' cases 0/1/2 are the three arrays.  THE TILE VALUE IS THE SAME 0x8002 IN ALL
+#  THREE, so DEST does not move -- only the array the lookup walks to find it.  That is
+#  deliberate: it keeps the oracle address identical to `fill top''s, so the three rows differ in
+#  exactly one variable. ***
+RE_TLB_B   = 0xb5001200           # CRIME_RE_TLB_B -- re_tlb_b[0]
+RE_TLB_C   = 0xb5001400           # CRIME_RE_TLB_C -- re_tlb_c[0]
+DSTSEL_B   = 1 << 2               # MTE_TLB_B << MTE_DST_TLB_SHIFT
+DSTSEL_C   = 2 << 2               # MTE_TLB_C << MTE_DST_TLB_SHIFT
+"""
+once(t, CONST_ANCHOR, "RE_TLB_A block")
+t = t.replace(CONST_ANCHOR, CONST_NEW)
+
+# ---------------------------------------------------------------- 4. the fill_at() helper
+FILL_ANCHOR = "def copy(A):\n"
+FILL_AT = (
+    "def fill_at(A, tlbreg, dstsel):\n"
+    '    """`fill()\' at a NON-DEFAULT destination TLB label.  Added 2026-09-09.\n'
+    "\n"
+    "    Byte for byte the same instruction sequence as fill(depth=MODE_D32), with two constants\n"
+    "    changed: the tile goes into re_tlb_b[0] or re_tlb_c[0] instead of re_tlb_a[0], and the\n"
+    "    mode word carries MTE_MODE_DST_BUF so do_mte_transfer()'s `dst_tlb' is 1 or 2, not 0.\n"
+    "\n"
+    "    The oracle address is UNCHANGED, because the tile value is the same.  So `fill top',\n"
+    "    `fill b top' and `fill c top' read the same byte of the same address after the same\n"
+    "    transfer, and differ in exactly one variable -- which is what makes them a closure of\n"
+    '    the label axis rather than three unrelated rows."""\n'
+    "    c  = store(A, tlbreg, TLBA_TILE << 48, op=OP_SD_T0_A3)\n"
+    "    c += store(A, DEST, PAINT)                     # pre-paint: a silent no-op reports 0x99\n"
+    "    c += store(A, MTE_MODE, MODE_D32 | dstsel)\n"
+    "    c += store(A, MTE_BG,   BG_VAL)\n"
+    "    c += store(A, MTE_DST0, DST0)\n"
+    "    c += store(A, MTE_DST1_START, DST1)            # START fires do_mte_transfer()\n"
+    "    return c\n"
+    "\n"
+    "\n"
+    "def copy(A):\n"
+)
+once(t, FILL_ANCHOR, "def copy(A)")
+t = t.replace(FILL_ANCHOR, FILL_AT)
+
+# ---------------------------------------------------------------- 5. the two rows
+ROW_ANCHOR = "#  ---- THE DEPTH AXIS.  Both rows want the CI byte, because at 8 and 16 bits CI is CORRECT and\n"
+ROWS = """#  ---- THE DESTINATION-LABEL AXIS.  *** ADDED 2026-09-09 AS AN L2 FLOOR REPAIR, AFTER A MEASURED
+#  TOTAL ESCAPE. ***  `if (depth == 32) {' -> `if (depth == 32 && dst_tlb == MTE_TLB_A) {' scored
+#  14/14 against a 14/14 base -- not merely an equal score, an IDENTICAL log but for the label on
+#  line 1 -- and so did the weaker `&& dst_tlb != MTE_TLB_C'  (killtable3_20260909/M_tlbA.raw,
+#  M_tlbAB.raw).  Every one of the eleven rows above that performs a transfer drives
+#  dst_tlb == MTE_TLB_A, because no mode word any of them writes has a bit of
+#  MTE_MODE_DST_BUF_MASK (0x1c) set.  The detector could not observe the label at all.
+#
+#  `switch (dst_tlb)' DOMINATES the repaired line inside the enclosing function and admits three
+#  labels, so `if (X)' -> `if (X && dst_tlb == <one of them>)' is clause (d)'s canonical form on a
+#  dominating predicate.  The exempted cells are REACHABLE and the defect is observable in them,
+#  measured at rung 3 by the same guest sequence these two rows use:
+#  killtable3_20260909/reach_M_tlbA.raw reads A=RGBA, B=CI, C=CI against a base of RGBA at all
+#  three.  A mutant exempting a cell whose reachability is MEASURED is a floor breach.
+#
+#  NEITHER ROW IS GATED, and that is not an oversight: dest[0] is buf[0], which BOTH colour arms
+#  assign, so it is defined before the fix as well as after.  Only dest[1..3] need the gate.
+#  Stated POSITIVELY (want 0x11) rather than as an inequality, so every non-outcome names itself
+#  in the got column: 0x44 is the #509 defect live at that label, 0x99 is the paint surviving --
+#  the transfer did not run, which is an INVALID cell and not a result -- and "died"/"absent" are
+#  a dead session and a missed print.
+A = Addr(CODE)
+tb, aliveb = session(fill_at(A, RE_TLB_B, DSTSEL_B) + load(A, DEST) + ["print v0"])
+row("fill b top", byte_n(printed(tb, "v0"), 0) if aliveb else "died", "0x%02x" % RGBA_TOP,
+    "TLB_B: the same fill at dst_tlb=1.  0x%02x = defect LIVE there; 0x%02x = no transfer"
+    % (CI_TOP, PAINT_TOP))
+
+A = Addr(CODE)
+tcc, alivecc = session(fill_at(A, RE_TLB_C, DSTSEL_C) + load(A, DEST) + ["print v0"])
+row("fill c top", byte_n(printed(tcc, "v0"), 0) if alivecc else "died", "0x%02x" % RGBA_TOP,
+    "TLB_C: the same fill at dst_tlb=2.  0x%02x = defect LIVE there; 0x%02x = no transfer"
+    % (CI_TOP, PAINT_TOP))
+
+#  ---- THE DEPTH AXIS.  Both rows want the CI byte, because at 8 and 16 bits CI is CORRECT and
+"""
+once(t, ROW_ANCHOR, "depth axis header")
+t = t.replace(ROW_ANCHOR, ROWS)
+
+open(DST, "w", encoding="utf-8", newline="\n").write(t)
+print()
+print("WROTE %s  (%d bytes, was %d)" % (DST, len(t), len(orig)))
