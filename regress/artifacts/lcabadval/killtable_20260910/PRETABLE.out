@@ -230,3 +230,60 @@ changed lines), lca_ioc_announce() helper + six arms + the default arm + six lat
      3am America/Chicago"), quoted in the ledger's seat entries; no artifact on disk records them (25).
    TABLE 4 owed on the final instrument: BASE, M43..M47 (t2), M48_wen_perreg, and a diagnostic-
    narrowing mutant for `def width' ((int) cast) -- the rows this round added and the seat's cells.
+
+10. THE DISPOSITION OF TABLE 4's THREE ESCAPES (codex_escapes_20260910.txt, appended 2026-09-10 ~10:5x,
+    AFTER table 4; this section PRESCRIBES rows and no table has run on them).
+    *** VERDICT: FLOOR BREACH (L2) ON ALL THREE.  NONE IS EQUIVALENT.  KEEP THE ROUND HELD. ***
+
+    MY PREMISE WAS WRONG IN THE SAME DIRECTION FOR ALL THREE, and the correction changes what the rows must
+    observe.  I had them as weakenings of the ACCEPTANCE GUARD.  They are not:
+      * M43 -- `idata & 0xfff00000' -> `idata & 0xfffff000' inside W_MASK1.  It preserves bits 12..19 in the
+        STORED value `v'.  It changes neither `f' nor the acceptance decision at all -- codex enumerated the
+        full 4096 fields x 256 low-bit combinations to establish that.  It is a STORED-FIELD FILTERING
+        weakening: the guard is kept and the repair's MASK is partly nulled, which is clause (d)'s
+        repair-mask case squarely.
+      * M44 -- `f = v >> 20' -> `f = idata >> 20' inside W_MASK1.  `v' stays correctly masked; the
+        VALIDATION now sees input bits 63:32 that the fix deliberately strips before testing, so it can
+        DECLINE a legal normalised field and leave the previous register value standing.  An operand
+        substitution on a value the edited path already reads -- inside (d)'s enumeration.
+      * M47 -- the BASE1 store mask gains `(1ULL << 34)', 0x3fff00000 -> 0x7fff00000, so reserved bit 34 is
+        stored.  Same class as M43, at the other register.
+
+    THEY ARE ALL GUEST-OBSERVABLE, so none is disposed of as equivalent: the handler reads `window_mask_1' /
+    `window_base_1' straight into `odata' and returns it through `memory_writemax64', and a guest quadword
+    read sees it.  (The HRM makes WO readback unpredictable on hardware; these rows test the MODEL's echo
+    policy, which the instrument's contract already says.)
+
+    WHY THE 67 ROWS MISS THEM -- the frozen instrument's complete window-1 write sets:
+        W_MASK1  <- 0x500000, 0x900000, 0x3ff00000, 0xfff00000
+        W_BASE1  <- 0, 0x240000000, 0x340000000
+    MASK1 is never given a low OR a high reserved bit; BASE1 is never given bit 34.  The values simply do
+    not reach the cells the mutants change.
+
+    TWO ROWS KILL ALL THREE (seed, then a second write, both guest quadwords, both readbacks asserted):
+        W_MASK1 (IOC +0x160): seed 0x700000, then write 0x1001f0000
+            fixed reads 0x100000 | M43 reads 0x1f0000 | M44 DECLINES and reads back the seed 0x700000
+        W_BASE1 (IOC +0x120): seed 0x240000000, then write 0x680000000
+            fixed reads 0x280000000 | M47 reads 0x680000000
+    Both registers are needed: M47 moves only BASE1, M43/M44 move only MASK1.
+    *** AN ARITHMETIC TRAP CODEX CHECKED AND I WOULD NOT HAVE: 0x1fff00000 does NOT distinguish M44 ***,
+    because its raw shifted field is 0x1fff and `0x1fff & 0x2000 == 0'.  The value must be chosen so the
+    unstripped high bit lands where `f & (f + 1)' can see it; 0x1001f0000 does, 0x1fff00000 does not.
+
+    *** AND THE TWO-ROW REPAIR IS ITSELF THE `#499' TRAP -- PREDICTED, NOT MEASURED. ***  Two same-class
+    mutants are predicted to sweep the resulting 69-row instrument clean:
+      * at MASK1, `(f & (f + 1)) == 0' -> `<= 2', which admits exactly one extra field, f = 2 (enumerated);
+        no existing or proposed MASK1 value has f = 2.
+      * at MASK0, the store mask -> 0xfff01000, preserving reserved bit 12 -- every existing MASK0 input has
+        bit 12 clear and the two new rows are at window 1, so the MIRROR REGISTER re-opens the moment this
+        one closes.  This is the third generation of the same asymmetry in this round.
+    SO THE REPAIR OWED IS A CLASS CLOSURE, NOT TWO ROWS: a matrix over {window 0, window 1} x {stored-bit
+    filtering, field-source selection, zero acceptance, invalid-field rejection}, closed in ONE diff, with
+    the uncovered cells named in the contract.  Two rows would buy one pass and produce a fourth.
+
+    TWO RECORD CORRECTIONS, both L4 and both mine:
+      * the warn-bit count: there are SIX IOC bits, numbered 2-7, plus the two earlier IRQ bits -- eight in
+        total.  The round's records say "eight warn bits" as though all eight were IOC's.
+      * the contract's disclosure that BASE reserved bits above 33 are unrowed is STALE: the shipped
+        `wbase0 widen' row exercises bit 34 already.  The disclosure must go; the missing SIBLING coverage
+        at window 1 is the real gap and is what the closure above addresses.

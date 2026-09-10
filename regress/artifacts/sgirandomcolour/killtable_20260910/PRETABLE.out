@@ -196,3 +196,52 @@ otherwise untouched; the GET default arm is NOT in scope (sgirebufuninit).
       says so.  Codex's other caution -- `allbits primed' checks presence, not order -- is answered by the
       source trace it gave (the order is fixed by the command list) and by `once', which covers a setter
       mutation the three rows alone would not.
+
+   k. THE CLASS CLOSURE DESIGN (codex_coverage_20260910.txt, appended 2026-09-10 ~10:4x, AFTER every table
+      -- this section PRESCRIBES the rows the round still owes and NO table has run on them).  The question
+      was re-fired in neutral test-design language after the first form was CONTENT-FILTER REFUSED by codex
+      (the documented refusal class; the .err carries the flag text and no answer).  Findings, in the order
+      they change the design:
+
+      1. *** MY OWN TWO-ROW PLAN IS THE SYMMETRIC TRAP, AND CODEX BUILT THE MUTANT THAT PROVES IT. ***  I
+         intended one bufdepth-1 row (mode 0x10f0, depth 1 LINEAR) and one tiled row (0x02f0, depth 4
+         TILED).  Against those, `ok = 0;' -> `if (bufdepth == 4 || linear) ok = 0;' is TRUE at the existing
+         depth-4/linear cell, TRUE at depth-1/linear and TRUE at depth-4/tiled -- so all three rows stay
+         green and the disjunctive mutant escapes.  It is FALSE only at depth 1 AND tiled.  This is exactly
+         the `#499' repaired-at-the-mutant's-address shape the seat warned about, and I had walked into it.
+      2. THE MINIMUM IS ONE ROW, NOT TWO, AND IT IS THE JOINT CORNER: **mode 0x00f0 -- YCRCB, bufdepth 1,
+         tlb_mode 0 (TLB_A, tiled)**.  One session at the corner detects M13_widthdecline, M14_lineardecline,
+         the disjunctive form above, and any single-value equality restriction.  Two rows at two edges do
+         not; one row at the corner does.
+      3. ADDRESSING VERIFIED, cell by cell, and my S6 derivation holds: at vertex (0,0) every bufdepth gives
+         tile_nr 0 and ofs 0; tiled with `re_tlb_a[0] = 0x8001' gives 0x8001 << 16 = 0x80010000, bit 31 set
+         so the validity gate passes, `&= ~0x80000000' leaves 0x00010000 -- the SAME physical word the
+         linear rows use (`0x80000000 | (0x10 << 12)' -> 0x00010000).  Modes 1 and 2 are identical through
+         re_tlb_b / re_tlb_c.  All write extents (1, 2, 4 and 8 bytes from 0x10000) sit inside the rig's
+         64 MiB.
+      4. AN IMPLEMENTATION DETAIL THE ROWS MUST HONOUR: the TLB register handlers require EIGHT-BYTE writes,
+         so the guest setup for a tiled row is an aligned doubleword store of 0x8001000000000000, not the
+         word store the existing rows use for re_linear_a.  A word store would silently not arm the row.
+      5. *** THE ORACLE CANNOT BE MADE DETERMINISTIC BY ANY CHOICE OF FILL, AND THAT IS A REAL LIMIT. ***
+         At bufdepth 1 a wrongly-permitted store moves ONE byte over the top byte of the sentinel.  If that
+         byte happens to equal 0x11 the word is unchanged and the row PASSES when it should fail.  Codex
+         disposed of all three repairs I would have reached for: a different fill only moves which value
+         collides; a wider read adds bytes a one-byte store never touches; and two fills guarantee nothing
+         because the source byte need not be stable between operations.  The deterministic instrument it
+         names is a RECORDING WRAPPER around the helper's memory_rw -- count write calls, assert ZERO for an
+         unsupported format -- which is a harness-level change and rung 1, not a guest row.  DISPOSITION
+         OWED: either accept a row with a bounded false-pass probability and SAY SO in the contract, or
+         build the counting instrument and grade it as the rung-1 detector it is.  What the round may NOT do
+         is ship the row while calling its oracle deterministic.
+      6. COVERAGE ACCOUNTING, to be written into the contract rather than implied: with the one corner row
+         added, 2 of the 16 {bufdepth} x {tlb_mode} cells are covered and 14 are not.  Adding codex's two
+         further suggestions (0x05f0 = depth 2 / TLB_B, 0x0bf0 = depth 8 / TLB_C, each needing its own
+         re_tlb_b / re_tlb_c setup, and the depth-8 row needing a second prefilled word) reaches 4 of 16.
+         Every uncovered cell is clause-(e) debt and must be listed, not glossed.
+      7. TWO HEADER CORRECTIONS TO THE PROBE, both L4: the sentinel comment's "distinct from ... random
+         values" is unsupportable as written, and a "16 combinations" claim in the contract is wrong.
+      8. FOUND WHILE VERIFYING, and FILED as its own row `sgiretlbshiftub' (med): the three TLB arrays are
+         `uint16_t', so `d->re_tlb_a[tile_nr] << 16' is a SIGNED shift of a promoted int and every value
+         with bit 15 set overflows INT_MAX -- undefined behaviour.  It is not a corner: bit 31 of the result
+         can only come from bit 15, so EVERY tile pointer the model accepts as valid is exactly one that
+         overflows.  Guest-drivable.  Not this round; `re_linear_a' is uint32_t and is unaffected.

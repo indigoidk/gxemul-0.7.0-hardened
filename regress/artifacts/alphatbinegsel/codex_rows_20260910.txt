@@ -1,0 +1,66 @@
+VERDICT: Add `a0=1` selective-retention, `a0=3` selective-retention, and `a0=4` full-invalidation fallback rows.
+CODEX_520_ROWS_20260910
+
+Your reading of session 3 is right: **it cannot distinguish the two arms.** The [actual sequence](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/alphatbinegsel/witness_agy_20260908/alphatbi_probe.asrun.py:265) loads `VAL_E` through `0x6000`, changes its PTE, invalidates, then loads again. Selective invalidation removes that translation; full invalidation also removes it. Both produce `(t4,t5) = (VAL_E,VAL_F)`.
+
+It still distinguishes successful target invalidation from an omitted invalidate or an invalidate of another page, which would leave `VAL_E`. Its limitation is detecting **over-invalidation**.
+
+Enumerating the predicates gives:
+
+| Signed `a0` | Edited predicate | Variant A | Variant B | Variant C |
+|---:|---|---|---|---|
+| −2 | ALL | ALL | ALL | ALL |
+| −1 | ALL | ALL | ALL | ALL |
+| 0 | ALL | ALL | ALL | ALL |
+| 1 | VADDR | ALL | VADDR | VADDR |
+| 2 | VADDR | VADDR | VADDR | VADDR |
+| 3 | VADDR | VADDR | ALL | VADDR |
+| 4 | ALL | ALL | ALL | VADDR |
+
+For each new row, use a fresh session and reuse these existing mappings:
+
+| Page | Virtual address | PTE physical address | Initial backing/value | Remapped backing/value |
+|---|---|---|---|---|
+| X, targeted | `0x6000` | `0x01054018` (`P_L3 + 24`) | `0x0105e000`, `VAL_E` | `0x01060000`, `VAL_F` |
+| Y, unrelated | `0x4000` | `0x01054010` (`P_L3 + 16`) | `0x0105a000`, `VAL_C` | `0x0105c000`, `VAL_D` |
+
+The common session structure is:
+
+1. Install PTBR before warming either page; retain the existing K0SEG code and pointer setup.
+2. Load X and Y into separate fill-result registers, expecting `VAL_E` and `VAL_C`.
+3. Rewrite **both** PTEs through guest K0SEG stores. Leave the old backing-page contents intact.
+4. Set the row’s `a0`, set `a1=0x6000`, and execute `call_pal 0x33`.
+5. Load X and Y into separate observation registers, each initialized beforehand to a sentinel distinct from every expected value.
+
+Keep this entire guest sequence inside one `step N`; print the saved registers afterward. Debugger interaction [flushes the caches](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/debugger/debugger.c:781), so debugger memory reads cannot supply the retention oracle.
+
+Make each addition one composite accept row checking session completion, both fill results, and both observations:
+
+| Added row | Expected observations `(X,Y)` | Edited build | Edited + A | Edited + B | Edited + C |
+|---|---|---|---|---|---|
+| `a0=1` | `(VAL_F, VAL_C)` | green | **red** | green | green |
+| `a0=3` | `(VAL_F, VAL_C)` | green | green | **red** | green |
+| `a0=4` | `(VAL_F, VAL_D)` | green | green | green | **red** |
+
+A and B incorrectly produce `VAL_D` on Y; C incorrectly preserves `VAL_C` on Y. X returns `VAL_F` in every listed case. **Remapping Y is essential:** an unchanged Y mapping would return identical bytes after either retention or re-walking.
+
+The cache implementation supports this distinction. In [cpu_dyntrans.c](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1228), `INVALIDATE_VADDR` scans for matching masked virtual page addresses and returns after invalidating those matches. Alpha receives an all-ones `vaddr_mask` through [CPU initialization](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu.c:140).
+
+The enumerated address arithmetic is:
+
+| Calculation | X | Y |
+|---|---:|---:|
+| `VA & ~0x1fff` | `0x6000` | `0x4000` |
+| `VA >> 13` | 3 | 2 |
+| Guest walk indices: shifts 33, 23, 13; mask `0x3ff` | `(0,0,3)` | `(0,0,2)` |
+| Dyntrans indices: shifts 47, 30, 13; mask `0x1ffff` | `(0,0,3)` | `(0,0,2)` |
+
+Thus they share tables but occupy different slots. The invalidation helper clears only the selected slot’s `host_load`, `host_store`, physical mapping and VPH validity. It releases the table only when its reference count reaches zero: with X and Y present, removing X leaves `2−1=1` entry. `INVALIDATE_ALL`, conversely, processes every valid entry.
+
+The [Alpha load path](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_alpha_instr_loadstore.c:146) uses the retained `host_load` pointer on a hit. A miss reaches the [page-table walk](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_alpha.c:99), which reads the rewritten PTE. These short sessions also stay comfortably below the 128-entry replacement capacity.
+
+Selectors **1, 2 and 3 have identical invalidation behavior here**: [PAL dispatch](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_alpha_palcode.c:366) passes precisely the same arguments for each. Instruction fetch and data access share the address-translation tables; the walker ignores the instruction/data flag. Comments should therefore claim predicate-bound and unified-cache-scope coverage. The `a0=4` row pins the chosen fallback policy for an undefined selector.
+
+Two comment corrections also stood out: “a0 is ignored” is stale, and the new ASM explanation reverses the spared set—`−1` invalidates ASM=0 entries, sparing ASM=1 entries.
+
+With exactly three composite additions, predicted totals are **10/10 edited**, **9/10 for each individual variant**, and **7/10 committed**. These are source-derived predictions; no builds, test runs, or edits were performed.

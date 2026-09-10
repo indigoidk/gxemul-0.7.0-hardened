@@ -1,0 +1,94 @@
+VERDICT: add `0x00f0` (YCRCB, depth 1, TLB_A). That is the minimum for your stated equality-only variants. I would also add `0x05f0` and `0x0bf0` to exercise every depth and TLB-bank value. Deterministic detection requires observing writes, not just unchanged bytes. CODEX_519_COVERAGE_20260910.
+
+Read-only inspection confirms 19 assertions and the saved **19/19** results for [variant A](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/sgirandomcolour/killtable_20260910/M13w_widthdecline_vs19.raw:23) and [variant B](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/sgirandomcolour/killtable_20260910/M14l_lineardecline_vs19.raw:23). Two premises need correcting:
+
+- The existing alternative mode is `0x1620`: depth 4, TLB mode **5**, `linear == true`. It returns through the addressing default before colour dispatch. **No existing PUT exercises tiled addressing.**
+- The previous default explicitly initialized four bytes with `random()`. At depths 1, 2 and 4, those bytes were initialized. Your mutations of the current default instead expose an **entirely uninitialized buffer**.
+
+At `(0,0)`, the [address calculations](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:224) enumerate as follows:
+
+| `bufdepth` | Depth field | `512 / bufdepth` | `x / tilewidth` | `tile_nr` | `ofs` |
+|---:|---:|---:|---:|---:|---:|
+| 1 | 0 | 512 | 0 | 0 | 0 |
+| 2 | 1 | 256 | 0 | 0 | 0 |
+| 4 | 2 | 128 | 0 | 0 | 0 |
+| 8 | 3 | 64 | 0 | 0 | 0 |
+
+For tiled mode 0:
+
+1. The coordinate rejection is false: both coordinates lie within `[0,2047]`.
+2. The array-bound rejection is false: `tlb_mode <= 2` is true, but `0 >= 256` is false.
+3. The intended bit calculation gives `0x8001 << 16 = 0x80010000`.
+4. The valid-bit rejection is false because bit 31 is set.
+5. Clearing that bit gives `0x00010000`; adding offset zero preserves it.
+
+Modes 1 and 2 give the same calculation using their respective B/C entries.
+
+For linear mode 4, the initial calculations above still occur, but the tiled array-bound check does not apply. Its replacement tile number is `0 >> 12 = 0`; `0 >= 32` is false. Then:
+
+```text
+tileptr = 0x80000000 | (0x10 << 12) = 0x80010000
+ofs     = 0 & 4095                 = 0
+final destination                 = 0x00010000
+```
+
+Specifically, `0x10f0` decodes to **depth 1, TLB mode 4, linear true, colour `0xf0`**. A mistakenly permitted store writes **one byte at physical `0x10000`**. The correct build performs no store.
+
+The possible write extents at the origin are `0x10000`, `0x10000–0x10001`, `0x10000–0x10003`, and `0x10000–0x10007`. All are inside the IP32 rig’s 64 MiB RAM: `0x00000000–0x03ffffff`.
+
+There is a C portability qualification: the TLB entries are `uint16_t`. With 32-bit `int`, they promote to signed `int` before shifting. Here `32769 × 65536 = 2147549184`, exceeding `INT_MAX = 2147483647`; ISO C therefore does not guarantee that shift’s result. An unsigned cast **before** the shift removes this issue. The addresses above describe the intended bit arithmetic, not a runtime verification. [C11 draft, §§6.3.1.1 and 6.5.7](https://www.open-std.org/jtc1/sc22/wg14/www/docs/n1570.pdf#page=113)
+
+For the minimum row, combine both missing conditions in **one operation**. With a write-sensitive oracle, `0x00f0` detects A, B and `if (tlb_mode == 4) ok = 0;`. More generally, the old/new rows have depth values `{4,1}`, TLB values `{4,0}`, and linear values `{true,false}`: no single equality constant can select both values of any axis. Existing unsupported colours `{0xf0,0x50}` already provide that distinction for `color_mode`.
+
+The concrete row choices are:
+
+| Row | Mode | Depth / TLB mode | Register setup | Correct readback | Purpose |
+|---|---|---|---|---|---|
+| Minimum | `0x00f0` | 1 / 0 | `re_tlb_a[0] = 0x8001` | `0x11223344` | Detects A, B and singleton equality restrictions |
+| Additional depth/bank coverage | `0x05f0` | 2 / 1 | `re_tlb_b[0] = 0x8001` | `0x11223344` | Also exposes exclusions specific to depth 2 or TLB_B |
+| Additional depth/bank coverage | `0x0bf0` | 8 / 2 | `re_tlb_c[0] = 0x8001` | Both prefilled words unchanged | Also exposes exclusions specific to depth 8 or TLB_C |
+
+For every row, set **both vertices to `(0,0)`**, use the existing solid draw mode `0xf8`, foreground `0xaabbccdd`, and rectangle trigger `0x03020000`. Prefill/read through `0xa0010000`. For depth 8, also prefill/read `0xa0010004`, for example with `0x55667788`.
+
+The [TLB register handlers](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:489) require **eight-byte writes**. An aligned guest doubleword write of `0x8001000000000000` to respectively `0xb5001000`, `0xb5001200`, or `0xb5001400` sets entry zero to `0x8001` and the next three entries to zero. Merely changing `dst_mode` in the current helper would leave the tiled entry unprogrammed.
+
+Require the colour-decline diagnostic in each fresh session as well: otherwise an invalid tile could leave the sentinel unchanged without reaching colour dispatch.
+
+Here are the uncovered combinations, with unsupported colour treated as one equivalence class:
+
+| Depth | Uncovered TLB modes after minimum addition | Uncovered TLB modes after all three additions |
+|---:|---|---|
+| 1 | 1, 2, 4 | 1, 2, 4 |
+| 2 | 0, 1, 2, 4 | 0, 2, 4 |
+| 4 | 0, 1, 2 | 0, 1, 2 |
+| 8 | 0, 1, 2, 4 | 0, 1, 4 |
+| **Total** | **14 uncovered; 2 covered** | **12 uncovered; 4 covered** |
+
+Three additions are minimal for exercising **every value individually**: the three missing depths each require an operation, and the three missing TLB modes can be paired with them. This still does not cover every interaction.
+
+The symmetric trap appears if your separate additions are `0x10f0`—depth 1, linear—and `0x02f0`—depth 4, tiled. This edit remains undetected:
+
+```c
+ok = 0;  ->  if (bufdepth == 4 || linear) ok = 0;
+```
+
+Its condition is true at all three sampled configurations:
+
+| Configuration | Condition |
+|---|---|
+| Existing depth 4 / linear | true |
+| Added depth 1 / linear | true |
+| Added depth 4 / tiled | true |
+| Missing depth 1 / tiled, `0x00f0` | **false** |
+
+Even after adding `0x00f0`, `if (bufdepth != 2) ok = 0;` remains outside the literal equality-only guarantee. A depth-2 unsupported row such as `0x05f0` exposes it.
+
+Finally, **the unchanged-word oracle cannot guarantee detection**. At depth 1, if the uninitialized byte happens to be `0x11`, the erroneous store preserves `0x11223344`.
+
+- Changing the fill changes the coincidentally matching value; it provides no guarantee.
+- Reading wider adds bytes that a one-byte store never touches.
+- Two different fills guarantee detection only if the erroneous output byte stays identical across both operations. Uninitialized storage provides no such guarantee.
+
+The deterministic sketch is a recording `memory_rw` callback around the helper operation: record write calls without reading their payload, and assert **zero writes** for an unsupported format. A supported control verifies that the recorder observes an expected write. This detects even a same-value store and avoids consuming the uninitialized bytes. With only the current final-memory comparison, **no row set has the unconditional detection guarantee you requested**.
+
+Two header corrections follow: “distinct from … random values” at [line 67](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/sgi_re_colourdefault_probe.py:67) is unsupportable, and “16 combinations” collapses the unsupported-format axis. The unsupported nibbles are `40,50,60,70,80,90,a0,b0,c0,d0,e0,f0`; distinguishing them gives **12 × 4 × 4 = 192** combinations.

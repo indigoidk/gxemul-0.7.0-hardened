@@ -1,0 +1,2245 @@
+Reading additional input from stdin...
+OpenAI Codex v0.153.4
+--------
+workdir: C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+model: gpt-6-astra
+provider: openai
+approval: never
+sandbox: read-only
+reasoning effort: max
+reasoning summaries: none
+session id: 01a08be0-d056-74a1-b432-9e1e3b0b5d56
+--------
+user
+# Regression-test coverage question: a pixel-format dispatch table, and two parameter axes our rows do not vary together
+
+Nonce: CODEX_519_COVERAGE_20260910.  Open with `VERDICT:` naming the ROWS YOU WOULD ADD, then echo the nonce.
+
+This is ordinary test-design work on a graphics device model in an emulator, and on the Python regression
+instrument that covers it.  Nothing here is about security; the question is whether a table of test rows
+spans a two-dimensional parameter space or only one point of it.
+
+## Please do not simply ratify
+Check the premises, not just the derivations.  Where I state something as fact, ask whether it is true.
+**The tree under review is `C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\src\`** -- three unrelated 2021-vintage
+copies of this project sit elsewhere under the project root; if your line numbers differ from mine by
+hundreds you are reading one of those.  **Enumerate arithmetic claims rather than reasoning about them.**
+**Verdict line first.**
+
+## The code
+`src/devices/dev_sgi_re.c`, function `horrible_getputpixel()`.  It converts one pixel into a destination
+tile.  Its PUT branch switches on a colour-format nibble; four formats are implemented and twelve are not.
+
+Recent change (uncommitted, in the working tree): the unimplemented arm previously produced an undefined
+result and let the common store run.  It now sets a local flag `ok = 0`, emits one diagnostic per device
+instance, and the common store is guarded `if (ok)`.  So an unimplemented format now leaves the
+destination as the caller left it.
+
+The guarded store is, verbatim:
+
+```c
+        if (ok) /*  #519: a declined type stores nothing  */
+                cpu->memory_rw(cpu, cpu->mem, tileptr + ofs,
+                    buf, bufdepth, MEM_WRITE, NO_EXCEPTIONS | PHYSICAL);
+```
+
+so `bufdepth` is that call's LENGTH argument and `tileptr`/`ofs` are its DESTINATION.
+
+## The coverage gap I want checked
+Our Python instrument `regress/sgi_re_colourdefault_probe.py` has 19 rows and passes 19/19.  A colleague
+building variant binaries to test the instrument's sensitivity made two one-line edits, and **the
+instrument scored 19/19 on both, i.e. it could not tell them from the correct build**:
+
+```
+    variant A:   ok = 0;   ->   if (bufdepth == 4) ok = 0;
+    variant B:   ok = 0;   ->   if (linear)        ok = 0;
+```
+
+My reading of why: every row that exercises an UNIMPLEMENTED format uses mode `0x12f0` or `0x1250`, and
+both of those decode to `bufdepth == 4` with `linear` true.  The instrument does exercise `bufdepth == 1`
+(mode `0x1000`) and does exercise the other addressing mode, but only at IMPLEMENTED formats, where the
+flag is never cleared.  So each axis is covered on its own and the two are never combined with the
+unimplemented case.
+
+## The decoding, which is what I most want checked
+```
+    bufdepth   = 1 << ((mode >> 8) & 3)
+    tlb_mode   = (mode >> 10) & 7
+    linear     = tlb_mode > 3
+    color_mode = mode & DE_MODE_TYPE_MASK
+```
+Two addressing paths, and I believe they can be made to reach the SAME destination word:
+
+* **Linear** (`case 4:`): `tile_nr = x >> 12`, rejected if `>= 32`;
+  `tileptr = 0x80000000 | (d->re_linear_a[tile_nr] << 12)`; `ofs = x & 4095`.
+  With `re_linear_a[0] = 0x10` and vertex (0,0) I make that `tileptr = 0x80010000`, `ofs = 0`.
+* **Tiled** (`case 0:`): `tileptr = d->re_tlb_a[tile_nr] << 16`, where
+  `tile_nr = (y >> 7) * 16 + x / (512 / bufdepth)`, rejected by `if (tlb_mode <= 2 && tile_nr >= 256)`;
+  `ofs = 512 * (y & 127) + (x % tilewidth_in_pixels) * bufdepth`.
+  With `re_tlb_a[0] = 0x8001` and vertex (0,0) I make that `tileptr = 0x80010000`, `ofs = 0`.
+* Both then pass `if (!(tileptr & 0x80000000)) return;` and then **`tileptr &= ~0x80000000;`**, so both
+  should resolve to `0x00010000` -- the same word every existing row pre-fills and reads back.
+
+## The rig
+`-E sgi -e ip32 -M 64`.  A short guest program writes the device registers, fills the destination word
+with `0x11223344`, issues one one-pixel rectangle, and reads the word back.  `re_tlb_a` and
+`re_linear_a` are both written by ordinary guest register writes to this device, so the tiled path needs
+no new machinery in the harness.
+
+## Questions
+1. **Check the addressing.**  Does a tiled one-pixel operation at vertex (0,0) with `re_tlb_a[0] = 0x8001`
+   really reach physical `0x10000`?  Walk it including both rejection checks and the
+   `tilewidth_in_pixels` division at each `bufdepth`.  If it reaches some other address, say which, and
+   whether that address is inside 64 MB of guest RAM.  Then the same for an unimplemented format at mode
+   `0x10f0`: what is `bufdepth`, what is the destination, and how many bytes would the store move?
+2. **The smallest sufficient row set.**  The full space is
+   `{unimplemented format} x {bufdepth 1,2,4,8} x {tlb_mode 0,1,2,4}` -- sixteen combinations, of which our
+   rows occupy one.  I do not want sixteen rows.  **What is the smallest set that makes both variants
+   above detectable, and also any variant of the form `if (<one of these decoded values equals the value
+   our rows happen to use>) ok = 0;`?**  For each row give the mode constant, the vertex, the register
+   setup, what it reads back, and which variant it catches.  Then list which of the sixteen combinations
+   remain uncovered, so I can say so explicitly in the instrument's header rather than implying they are
+   covered.
+3. **The symmetric-gap trap.**  This project has a recorded pattern where a fix is made at exactly the
+   configuration a test variant used, leaving the mirror-image configuration still undetectable.  If I add
+   one `bufdepth == 1` row and one tiled row, **what is the next one-line variant that the enlarged
+   instrument still cannot detect?**  Name it as an edit and name the row that would be needed.
+4. **Is the oracle reliable?**  Each new row asserts that the pre-filled word came back unchanged.  Under
+   variant A at `bufdepth == 1` the store would move a single byte over the top byte of that word.  Is
+   there any way that byte equals the byte it replaces, making the row pass when it should fail?  If so,
+   what makes it deterministic instead -- a different fill value, a wider read, a second observation?  A
+   row that passes by coincidence is worse than no row, so I would rather know now.
+5. If, while checking any of this, you noticed something else worth saying, say it.
+
+Read-only please: no builds, no runs, no patch to apply.  A row list and a short sketch is what I need.
+codex
+VERDICT: provisionally add unsupported-format rows at each missing depth (1, 2, 8) and TLB mode (0, 1, 2), pairing them in three rows; I’ll check the source and oracle before treating that set as sufficient. CODEX_519_COVERAGE_20260910.
+
+I’ll inspect the specified `src` tree and regression script read-only, and enumerate the addressing arithmetic.
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "Get-Location; rg --files -g AGENTS.md -g dev_sgi_re.c -g sgi_re_colourdefault_probe.py -g '*519*' -g '*colourdefault*'" in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+ succeeded in 299ms:
+
+regress\sgi_re_colourdefault_probe.py
+src\devices\dev_sgi_re.c
+regress\artifacts\sgirandomcolour\witness_20260910\sgi_re_colourdefault_probe.asrun.py
+regress\artifacts\sgirandomcolour\killtable_20260910\t2\table519_2c.asrun.sh
+regress\artifacts\sgirandomcolour\killtable_20260910\t2\table519_2b.asrun.sh
+regress\artifacts\sgirandomcolour\killtable_20260910\t2\sgi_re_colourdefault_probe.REPAIRED19.asrun.py
+regress\artifacts\sgirandomcolour\killtable_20260910\t2\sgi_re_colourdefault_probe.REPAIRED16b.asrun.py
+regress\artifacts\sgirandomcolour\killtable_20260910\t2\sgi_re_colourdefault_probe.REPAIRED16.asrun.py
+regress\artifacts\sgirandomcolour\killtable_20260910\t2\run519c.asrun.sh
+regress\artifacts\sgirandomcolour\killtable_20260910\t2\mut519x.py
+regress\artifacts\sgirandomcolour\killtable_20260910\t2\BASELINE_FIX519_final.c
+regress\artifacts\sgirandomcolour\killtable_20260910\t2\BASELINE_FIX519.c
+regress\artifacts\sgirandomcolour\killtable_20260910\sgi_re_colourdefault_probe.REPAIRED19.OPUSFROZEN.py
+regress\artifacts\sgirandomcolour\killtable_20260910\sgi_re_colourdefault_probe.FROZEN.py
+regress\artifacts\sgirandomcolour\killtable_20260910\mut519b.py
+regress\artifacts\sgirandomcolour\killtable_20260910\mut519.py
+regress\artifacts\sgirandomcolour\killtable_20260910\BASELINE_FIX519_v2.c
+regress\artifacts\sgirandomcolour\killtable_20260910\BASELINE_FIX519.c
+regress\artifacts\sgirandomcolour\records_20260910\DRAFT_changelog_519.md
+regress\artifacts\sgirandomcolour\fix_20260910\FIX519_run1.out
+regress\artifacts\sgirandomcolour\fix_20260910\FIX519_detector_run3.out
+regress\artifacts\sgirandomcolour\fix_20260910\FIX519_detector_run2.out
+regress\artifacts\sgirandomcolour\fix_20260910\FIX519_detector_run1.out
+Path                                 
+----                                 
+C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+
+
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$paths = @('"'C:\\AGENTS.md','C:\\DocumentNoSnc\\AGENTS.md','C:\\DocumentNoSnc\\CC\\AGENTS.md','C:\\DocumentNoSnc\\CC\\GXEMUL\\AGENTS.md','C:\\DocumentNoSnc\\CC\\GXEMUL\\GXEMUL-SEC\\AGENTS.md'); foreach ("'$path in $paths) { if (Test-Path -LiteralPath $path) { Write-Output $path; Get-Content -LiteralPath $path } }' in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$i = 0; Get-Content -LiteralPath regress/sgi_re_colourdefault_probe.py | ForEach-Object { $i++; '"'{0,5}: {1}' -f "'$i, $_ }' in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n -C 10 'horrible_getputpixel|bufdepth|tilewidth_in_pixels|tlb_mode|DE_MODE_TYPE_MASK|if \\(ok\\)|ok = 0|re_linear_a|re_tlb_a' src/devices/dev_sgi_re.c" in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'git diff -- src/devices/dev_sgi_re.c regress/sgi_re_colourdefault_probe.py' in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+ succeeded in 413ms:
+113-	    ends HERE on purpose so that a maintainer scanning to the last
+114-	    enumerator finds it."  BOTH HALVES WENT FALSE when sgirandompixel
+115-	    added SGIRE_W_BADMODE = 1 << 10 BELOW this line.  Demoted rather
+116-	    than deleted, because the REASONING is still why the convention
+117-	    exists -- and leaving it live would have pointed the next reader at
+118-	    a taken bit, which is the duplicate-enumerator collision #499
+119-	    already paid for and warns about four lines up.  The live
+120-	    next-free claim is on the LAST enumerator, where it belongs.)  */
+121-	SGIRE_W_PRIM_OP   = 1 << 9,
+122-
+123:	/*  sgirandompixel: horrible_getputpixel()'s unimplemented-mode arm.  ITS
+124-	    OWN BIT, for the reason #498 measured and #500 repeated -- the four
+125-	    handlers share one malloc'd struct, so a latch shared with another
+126-	    site is silenced by that site's ordinary traffic and the announce
+127-	    never fires.  This one matters more than most: the helper is
+128-	    PER-PIXEL, called inside line, rectangle and tiled-MTE loops, so an
+129-	    UNLATCHED announce is a per-pixel flood rather than a diagnostic.
+130-
+131-	    (This comment used to end "The next free bit is 1 << 11; the enum
+132-	    ends HERE on purpose, as above."  BOTH HALVES WENT FALSE when #513
+133-	    added SGIRE_W_TEX_RD = 1 << 11 BELOW this line -- the SAME failure,
+--
+148-
+149-	    (This comment used to end "THE NEXT FREE BIT IS 1 << 12, AND THIS
+150-	    IS THE LAST ENUMERATOR".  #519 added SGIRE_W_BADCOLOR = 1 << 12
+151-	    BELOW this line and moved the sentence with it, as this comment
+152-	    itself instructed.  Demoted, not deleted, for the same reason as
+153-	    the two demotions above it.)
+154-	 */
+155-	SGIRE_W_TEX_RD    = 1 << 11,
+156-
+157-	/*  #519 (sgirandomcolour): the colour-type PUT decline in
+158:	    horrible_getputpixel() gets its OWN bit, per the rule every entry
+159-	    above records: the helper is per-pixel, the struct is shared by
+160-	    four handlers, and a latch shared with any other site is silenced
+161-	    by that site's ordinary traffic.  SGIRE_W_BADMODE (1 << 10) is the
+162-	    TLB/mode switch's decline in the same function and is a different
+163-	    event with a different text; sharing it would collapse the two.
+164-
+165-	    THE NEXT FREE BIT IS 1 << 13, AND THIS IS THE LAST ENUMERATOR --
+166-	    which is where that claim belongs, per the convention above.  A
+167-	    maintainer adding a bit BELOW this line must move this sentence
+168-	    with it and demote the copy here.  */
+169-	SGIRE_W_BADCOLOR  = 1 << 12,
+170-};
+171-
+172-struct sgi_re_data {
+173-	// Rendering engine registers:
+174:	uint16_t	re_tlb_a[256];
+175-	uint16_t	re_tlb_b[256];
+176-	uint16_t	re_tlb_c[256];
+177-	uint16_t	re_tex[112];
+178-	// todo: clip_ids registers.
+179:	uint32_t	re_linear_a[32];
+180-	uint32_t	re_linear_b[32];
+181-
+182-	// Drawing engine registers:
+183-	uint32_t	de_reg[DEV_SGI_DE_LENGTH / sizeof(uint32_t)];
+184-
+185-	// Memory transfer engine registers:
+186-	uint32_t	mte_reg[DEV_SGI_MTE_LENGTH / sizeof(uint32_t)];
+187-
+188-	/*
+189-	 *  #497: width-guard decline latches; see the enum above.
+190-	 *
+191-	 *  PLACED LAST, DELIBERATELY, AND THE ORDER IS LOAD-BEARING.
+192:	 *  re_linear_a/b are written at [tlbi] AND [tlbi+1] with tlbi able to
+193-	 *  reach 31, so index 32 of either array lands on whichever field
+194-	 *  FOLLOWS it.  An earlier draft of this change put `warned' between
+195-	 *  re_linear_b and de_reg; measured with offsetof, that made
+196-	 *  re_linear_b[32] alias `warned' rather than de_reg[0] -- which both
+197-	 *  falsified the adjacency the two LINEAR site comments cite, and made
+198-	 *  an over-run SET WARNING LATCH BITS and silence this device's own
+199-	 *  diagnostics.  Keeping the latch after mte_reg restores the
+200:	 *  documented adjacency: re_linear_a[32] is re_linear_b[0] and
+201-	 *  re_linear_b[32] is de_reg[0].
+202-	 */
+203-	uint32_t	warned;
+204-};
+205-
+206-
+207-/*
+208: *  horrible_getputpixel():
+209- *
+210- *  This routine gets/puts a pixel in one of the tiles, from the perspective of
+211- *  the rendering/drawing engine. Given x and y, it figures out which tile
+212- *  number it is, and then finally does a slow read/write to get/put the pixel
+213- *  at the correct sub-coordinates within the tile.
+214- *
+215- *  Tiles are always 512 _bytes_ wide, and 128 pixels high. For 32-bit color
+216- *  modes, for example, that means 128 x 128 pixels.
+217- *
+218- *  For "linear" modes, y is ignored and x is an offset to select which linear
+219- *  TLB entry to use.
+220- */
+221:void horrible_getputpixel(int put, struct cpu* cpu, struct sgi_re_data* d,
+222-	int x, int y, uint32_t* color, int mode)
+223-{
+224:	uint32_t color_mode = mode & DE_MODE_TYPE_MASK;
+225:	int bufdepth = 1 << ((mode >> 8) & 3); 
+226-
+227-	// dst_mode (see NetBSD's crmfbreg.h):
+228-	// #define DE_MODE_TLB_A           0x00000000
+229-	// #define DE_MODE_TLB_B           0x00000400
+230-	// #define DE_MODE_TLB_C           0x00000800
+231-	// #define DE_MODE_LIN_A           0x00001000
+232-	// #define DE_MODE_LIN_B           0x00001400
+233:	uint32_t tlb_mode = (mode >> 10) & 0x7;
+234:	int linear = tlb_mode > 3;
+235-
+236-	if (!linear && (x < 0 || y < 0 || x >= 2048 || y >= 2048))
+237-		return;
+238-
+239:	int tilewidth_in_pixels = 512 / bufdepth;
+240-	
+241:	int tile_nr_x = x / tilewidth_in_pixels;
+242-	int tile_nr_y = y >> 7;
+243-
+244-	unsigned int tile_nr = tile_nr_y * 16 + tile_nr_x;
+245-
+246-	y &= 127;
+247:	int xofs = (x % tilewidth_in_pixels) * bufdepth;
+248-	int ofs = 512 * y + xofs;
+249-
+250-	uint32_t tileptr = 0;
+251-
+252-	/*  #100: cases 0-2 index re_tlb_[abc][256] with a guest-derived
+253-	    tile_nr = (y>>7)*16 + x/tilewidth; bound it (case 4 self-checks).  */
+254:	if (tlb_mode <= 2 && tile_nr >= 256)
+255-		return;
+256-
+257:	switch (tlb_mode) {
+258:	case 0:	tileptr = d->re_tlb_a[tile_nr] << 16;
+259-		break;
+260-	case 1:	tileptr = d->re_tlb_b[tile_nr] << 16;
+261-		break;
+262-	case 2:	tileptr = d->re_tlb_c[tile_nr] << 16;
+263-		break;
+264-	case 4:	tile_nr = x >> 12;
+265-		if (tile_nr >= 32)
+266-			return;
+267:		tileptr = 0x80000000 | (d->re_linear_a[tile_nr] << 12);
+268-		ofs = x & 4095;
+269-		// TODO... probably not correct!
+270-		// printf("tileptr = %08x x = %i y = %i tile_nr = %i ofs = %i\n", tileptr, x, y, tile_nr, ofs);
+271-		break;
+272-	default:/*  sgirandompixel: this arm used to assign `*color = random()' -- with
+273-		    its exit(1) commented out -- so a failed GET handed the CALLER a
+274-		    random value, and draw_primitive() then wrote it to the destination
+275-		    in the same loop iteration, since `color' is shared by the XFER GET
+276-		    and the PUT.  DE_MODE_LIN_B (0x1400) is one of the FIVE modes
+277:		    crmfbreg.h documents and extracts to tlb_mode 5, so this was
+278-		    reachable with a DOCUMENTED mode, not only with a junk one.
+279-		    MEASURED, rung 3: the destination received 0x4b1763a1, 0x2ee4b4df
+280-		    and 0x7433cdc1 on successive runs of
+281-		    regress/sgi_re_randompixel_probe.py.
+282-
+283-		    NOW DECLINED: `*color' is left alone, so the caller's own
+284-		    `uint32_t color = fg' stands and what lands is at least
+285-		    DETERMINISTIC.  The announce is latched because this helper is
+286-		    per-pixel.
+287-
+--
+295-		    random() shape at its own default (row sgirandomcolour).  */
+296-		if (!(d->warned & SGIRE_W_BADMODE)) {
+297-			d->warned |= SGIRE_W_BADMODE;
+298-			/*  `dst_mode' is kept from the original text although the
+299-			    parameter is also passed as src_mode on a GET: the probe
+300-			    anchors on this literal, and rewording it here would be
+301-			    scope creep AND would move an oracle anchor mid-round,
+302-			    which is the laundering shape whatever the intent.
+303-			    Filed as sgirenamedstmode.  */
+304-			fatal("[ sgi_re: unimplemented dst_mode %i for "
+305:			    "horrible_getputpixel (%s), x=%i y=%i; declined "
+306-			    "(once) ]\n", mode, put ? "put" : "get", x, y);
+307-		}
+308-		return;
+309-	}
+310-
+311-	// The highest bit seems to be set for a "valid" tile pointer.
+312-	if (!(tileptr & 0x80000000)) {
+313-		//printf("dst_mode %i, tile_nr = %i,  tileptr = 0x%llx\n", dst_mode, tile_nr, (long long)tileptr);
+314:		//fatal("sgi gbe horrible_getputpixel: unexpected non-set high bit of tileptr?\n");
+315-		//exit(1);
+316-		return;
+317-	}
+318-	
+319-	tileptr &= ~0x80000000;
+320-
+321:	uint8_t buf[8];		/* #100: bufdepth can be 8 = 1<<((mode>>8)&3) */
+322-	if (put) {
+323-		int ok = 1;	/*  #519: cleared by the default arm below  */
+324-		switch (color_mode) {
+325-		case DE_MODE_TYPE_CI:
+326-			buf[0] = *color;
+327-			break;
+328-		case DE_MODE_TYPE_RGB:
+329-			buf[0] = *color >> 24;
+330-			buf[1] = *color >> 16;
+331-			buf[2] = *color >> 8;
+--
+354-			    different each run because main.c seeds random() per process.
+355-
+356-			    NOW DECLINED, member 3: the STORE IS SKIPPED, so the
+357-			    destination keeps what the guest had -- not a zero fill, which
+358-			    would publish a colour the guest never asked for (random() with
+359-			    the entropy stripped) -- and the announce is latched on its own
+360-			    bit because this helper is per-pixel.  The old literal is kept
+361-			    as the prefix: the witness attributes on it.  A declined PUT
+362-			    never reads buf, so the width question (sgirebufuninit) is a
+363-			    separate row, and the GET default below is untouched.  */
+364:			ok = 0;
+365-			if (!(d->warned & SGIRE_W_BADCOLOR)) {
+366-				d->warned |= SGIRE_W_BADCOLOR;
+367-				fatal("[ put: color mode = 0x%x ] [ sgi_re: unimplemented "
+368:				    "colour type in horrible_getputpixel, x=%i y=%i; store "
+369-				    "declined (once) ]\n", color_mode, x, y);
+370-			}
+371-		}
+372-
+373:		if (ok)	/*  #519: a declined type stores nothing  */
+374-			cpu->memory_rw(cpu, cpu->mem, tileptr + ofs,
+375:			    buf, bufdepth, MEM_WRITE, NO_EXCEPTIONS | PHYSICAL);
+376-	} else {
+377-		cpu->memory_rw(cpu, cpu->mem, tileptr + ofs,
+378:		    buf, bufdepth, MEM_READ, NO_EXCEPTIONS | PHYSICAL);
+379-
+380-		switch (color_mode) {
+381-		case DE_MODE_TYPE_CI:
+382-			*color = buf[0];
+383-			break;
+384-		case DE_MODE_TYPE_RGB:
+385-			/*  #505: this read buf[1..3] while the PUT arm above
+386-			    writes the three channels at buf[0..2] and an
+387-			    explicit pad at buf[3] -- so an RGB pixel did not
+388-			    survive its own round trip, shifting one byte left
+--
+491-		if (len != 8) {
+492-			if (!(d->warned & SGIRE_W_TLBA_LEN)) {
+493-				d->warned |= SGIRE_W_TLBA_LEN;
+494-				fatal("[ sgi_re: unimplemented len=%i for "
+495-				    "CRIME_RE_TLB_A -- declined.  (once) ]\n",
+496-				    (int) len);
+497-			}
+498-		} else if (writeflag == MEM_WRITE) {
+499-			int tlbi = ((relative_addr & 0x1ff) >> 1) & 0xff;
+500-			for (size_t hwi = 0; hwi < len; hwi += sizeof(uint16_t)) {
+501:				d->re_tlb_a[tlbi] = data[hwi]*256 + data[hwi+1];
+502:				debug("d->re_tlb_a[%i] = 0x%04x\n", tlbi, d->re_tlb_a[tlbi]);
+503-				tlbi++;
+504-			}
+505-		} else {
+506-			/*
+507-			 *  #513: ACCEPT.  A guest read of a len == 8 TLB slot ended
+508-			 *  the host.  The write arm directly above already computes
+509-			 *  and stores the value, so the disposition is member 4 of
+510-			 *  the option set -- delete the kill and RETURN THE VALUE --
+511-			 *  rather than a decline: nothing is unimplemented here.
+512-			 *  This loop is the exact inverse of the write loop, cell for
+--
+515-			 *  *** IT MUST WRITE odata, NOT data[]. ***  The function's
+516-			 *  common tail is
+517-			 *      if (writeflag == MEM_READ)
+518-			 *              memory_writemax64(cpu, data, len, odata);
+519-			 *  so anything stored into data[] here is overwritten before
+520-			 *  it reaches the guest.  A first draft of this fix filled
+521-			 *  data[] and would have returned zeroes while looking right.
+522-			 */
+523-			int tlbi = ((relative_addr & 0x1ff) >> 1) & 0xff;
+524-			for (size_t hwi = 0; hwi < len; hwi += sizeof(uint16_t)) {
+525:				odata = (odata << 16) | d->re_tlb_a[tlbi];
+526-				tlbi++;
+527-			}
+528-		}
+529-	} else if (relative_addr >= CRIME_RE_TLB_B && relative_addr < CRIME_RE_TLB_C) {
+530-		if (len != 8) {
+531-			if (!(d->warned & SGIRE_W_TLBB_LEN)) {
+532-				d->warned |= SGIRE_W_TLBB_LEN;
+533-				fatal("[ sgi_re: unimplemented len=%i for "
+534-				    "CRIME_RE_TLB_B -- declined.  (once) ]\n",
+535-				    (int) len);
+--
+647-			 *  PROCEEDS -- the warning is a printf, not a guard -- so it can
+648-			 *  hand an unaligned len == 8 straight to memory_rw.  That is why
+649-			 *  the invariant above is stated for GUEST paths only.  It also
+650-			 *  means `put d' must NOT be used to "witness" the over-run:
+651-			 *  it bypasses the guest instruction path, so a reproduction
+652-			 *  built on it would be laundering rather than witnessing.
+653-			 *  The over-run itself stays filed as sgilinearoob, and it is
+654-			 *  NOT guest-reachable while this guard stands.
+655-			 *
+656-			 *  Measured, not assumed: the over-run stays INSIDE the struct --
+657:			 *  re_linear_a[32] IS re_linear_b[0] and re_linear_b[32] IS
+658-			 *  de_reg[0] (offsetof: 1760/1888/2016).  So this is undefined
+659-			 *  behaviour and a SILENT clobber of the adjacent register array,
+660-			 *  reaching a DRAWING-engine register from a rendering-engine
+661-			 *  write -- not a wild write outside the allocation, and not
+662-			 *  something plain ASAN would flag.  Declining keeps it shut.
+663-			 */
+664-			if (!(d->warned & SGIRE_W_LINA_LEN)) {
+665-				d->warned |= SGIRE_W_LINA_LEN;
+666-				fatal("[ sgi_re: unimplemented len=%i for "
+667-				    "CRIME_RE_LINEAR_A -- declined.  (once) ]\n",
+--
+696-			 *  one or more instructions in the emulator while coming up
+697-			 *  with those values, but debugging the PROM so far has NOT
+698-			 *  revealed any such bug. It may even be that the PROM code
+699-			 *  is buggy (?) and never really set the LINEAR entries
+700-			 *  correctly. Perhaps the hardware simply ignores the
+701-			 *  weird values and does not fill it (using the MTE)
+702-			 *  when asked to.
+703-			 */
+704-			// printf("CRIME_RE_LINEAR_A IDATA = %016llx\n", (long long)idata);
+705-			int tlbi = ((relative_addr & 0x7f) >> 2) & 0x1f;
+706:			d->re_linear_a[tlbi] = idata >> 32ULL;
+707:			d->re_linear_a[tlbi+1] = idata;
+708:			debug("[ d->re_linear_a[%i] = 0x%08x, [%i] = 0x%08x ]\n",
+709:				tlbi, d->re_linear_a[tlbi], tlbi+1, d->re_linear_a[tlbi+1]);
+710-		} else {
+711-			/*
+712-			 *  #513: ACCEPT -- the inverse of the fixed-arity write
+713-			 *  directly above.  See CRIME_RE_TLB_A for the odata note.
+714-			 *
+715-			 *  The [tlbi+1] here has the SAME exposure as the write's
+716-			 *  [tlbi+1] and no more, which is `sgilinearoob'.
+717-			 *
+718-			 *  *** AN EARLIER WORDING OF THIS SENTENCE SAID THE TWO ARE
+719-			 *  "bounded only by the len == 8 guard keeping tlbi even".
+--
+722-			 *  alignment described at the write arm above -- ld/sd raise
+723-			 *  ADES/ADEL before memory_rw, and the unaligned helper masks
+724-			 *  the address itself.  Corrected on this round's pass 2;
+725-			 *  the older surrounding comment had it right and my new one
+726-			 *  did not. ***  This fix
+727-			 *  deliberately does NOT add a clamp -- an unlicensed addition
+728-			 *  here would change the index behaviour that sgilinearoob is
+729-			 *  filed to fix across all five arms with ONE design.
+730-			 */
+731-			int tlbi = ((relative_addr & 0x7f) >> 2) & 0x1f;
+732:			odata = ((uint64_t) d->re_linear_a[tlbi] << 32)
+733:			    | d->re_linear_a[tlbi+1];
+734-		}
+735-	} else if (relative_addr >= CRIME_RE_LINEAR_B && relative_addr < CRIME_RE_LINEAR_B + 0x80) {
+736-		if (len != 8) {
+737-			/*
+738-			 *  #497: THIS GUARD IS ALSO THE ONLY BOUNDS CHECK.  Unlike the
+739-			 *  TLB/TEX arms, the store below is FIXED ARITY -- it ignores len
+740-			 *  and always writes [tlbi] and [tlbi+1].  tlbi is
+741-			 *  ((relative_addr & 0x7f) >> 2) & 0x1f, so it reaches 31 and
+742-			 *  [tlbi+1] indexes 32 of a [32] array.  Only 8-byte ALIGNMENT
+743-			 *  keeps tlbi even and thus <= 30.  On the GUEST paths that
+--
+760-			 *  PROCEEDS -- the warning is a printf, not a guard -- so it can
+761-			 *  hand an unaligned len == 8 straight to memory_rw.  That is why
+762-			 *  the invariant above is stated for GUEST paths only.  It also
+763-			 *  means `put d' must NOT be used to "witness" the over-run:
+764-			 *  it bypasses the guest instruction path, so a reproduction
+765-			 *  built on it would be laundering rather than witnessing.
+766-			 *  The over-run itself stays filed as sgilinearoob, and it is
+767-			 *  NOT guest-reachable while this guard stands.
+768-			 *
+769-			 *  Measured, not assumed: the over-run stays INSIDE the struct --
+770:			 *  re_linear_a[32] IS re_linear_b[0] and re_linear_b[32] IS
+771-			 *  de_reg[0] (offsetof: 1760/1888/2016).  So this is undefined
+772-			 *  behaviour and a SILENT clobber of the adjacent register array,
+773-			 *  reaching a DRAWING-engine register from a rendering-engine
+774-			 *  write -- not a wild write outside the allocation, and not
+775-			 *  something plain ASAN would flag.  Declining keeps it shut.
+776-			 */
+777-			if (!(d->warned & SGIRE_W_LINB_LEN)) {
+778-				d->warned |= SGIRE_W_LINB_LEN;
+779-				fatal("[ sgi_re: unimplemented len=%i for "
+780-				    "CRIME_RE_LINEAR_B -- declined.  (once) ]\n",
+--
+890-	uint32_t y1 = d->de_reg[(CRIME_DE_X_VERTEX_0 - 0x2000) / sizeof(uint32_t)]& 0x7ff;
+891-	uint32_t x2 = (d->de_reg[(CRIME_DE_X_VERTEX_1 - 0x2000) / sizeof(uint32_t)] >> 16) & 0x7ff;
+892-	uint32_t y2 = d->de_reg[(CRIME_DE_X_VERTEX_1 - 0x2000) / sizeof(uint32_t)]& 0x7ff;
+893-	size_t x, y;
+894-
+895-	debug("[ sgi_de: STARTING DRAWING COMMAND: op = 0x%08x,"
+896-	    " drawmode=0x%x src_mode=0x%x dst_mode=0x%x x1=%i y1=%i"
+897-	    " x2=%i y2=%i fg=0x%x bg=0x%x pattern=0x%08x ]\n",
+898-	    op, drawmode, src_mode, dst_mode, x1, y1, x2, y2, fg, bg, pattern);
+899-
+900:	// bufdepth = 1, 2, or 4.
+901:	// int dst_bufdepth = 1 << ((dst_mode >> 8) & 3);
+902:	int src_bufdepth = 1 << ((src_mode >> 8) & 3);
+903-
+904-	int src_is_linear = 0;
+905-	int src_x = -1, src_y = -1;
+906-	int32_t step_x = 0;
+907-	if (drawmode & DE_DRAWMODE_XFER_EN) {
+908-		uint32_t addr_src = d->de_reg[(CRIME_DE_XFER_ADDR_SRC - 0x2000) / sizeof(uint32_t)];
+909-		uint32_t strd_src = d->de_reg[(CRIME_DE_XFER_STRD_SRC - 0x2000) / sizeof(uint32_t)];
+910-		step_x = d->de_reg[(CRIME_DE_XFER_STEP_X - 0x2000) / sizeof(uint32_t)];
+911-		int32_t step_y = d->de_reg[(CRIME_DE_XFER_STEP_Y - 0x2000) / sizeof(uint32_t)];
+912-		uint32_t addr_dst = d->de_reg[(CRIME_DE_XFER_ADDR_DST - 0x2000) / sizeof(uint32_t)];
+--
+915-		src_is_linear = ((src_mode & 0x00001c00) >> 10) > 3;
+916-
+917-		if (src_is_linear) {
+918-			src_x = addr_src;
+919-			src_y = 0;
+920-		} else {
+921-			src_x = (addr_src >> 16) & 0x7ff;
+922-			src_y = addr_src & 0x7ff;
+923-		}
+924-
+925:		if (step_x != src_bufdepth || (step_y != 0 && step_y != 1)) {
+926:			fatal("[ sgi_de: unimplemented XFER addr_src=0x%x src_bufdepth=%i "
+927-				"strd_src=0x%x step_x=0x%x step_y=0x%x "
+928-				"addr_dst=0x%x strd_dst=0x%x ]\n",
+929:				addr_src, src_bufdepth, strd_src, step_x, step_y, addr_dst, strd_dst);
+930-
+931-			// exit(1);
+932-		}
+933-	}
+934-
+935-	if (!(drawmode & DE_DRAWMODE_PLANEMASK)) {
+936-		printf("!DE_DRAWMODE_PLANEMASK: TODO\n");
+937-	}
+938-	
+939-	if ((drawmode & DE_DRAWMODE_BYTEMASK) != DE_DRAWMODE_BYTEMASK) {
+--
+975-			linelen ++;
+976-
+977-		for (int i = 0; i < ((op & DE_PRIM_LINE_SKIP_END)? linelen : linelen+1); ++i) {
+978-			x = (x2 * i + x1 * (linelen-i)) / linelen;
+979-			y = (y2 * i + y1 * (linelen-i)) / linelen;
+980-
+981-			uint32_t color = fg;
+982-			uint32_t oldcolor = fg;
+983-
+984-			if (drawmode & DE_DRAWMODE_ROP && rop != OPENGL_LOGIC_OP_COPY)
+985:				horrible_getputpixel(0, cpu, d, x, y, &oldcolor, dst_mode);
+986-
+987-			int draw = 1;
+988-			if (drawmode & DE_DRAWMODE_LINE_STIP) {
+989-				if (drawmode & DE_DRAWMODE_OPAQUE_STIP)
+990-					color = (pattern & 0x80000000UL) ? fg : bg;
+991-				else
+992-					draw = (pattern & 0x80000000UL)? 1 : 0;
+993-			}
+994-
+995-			// Raster-OP.
+--
+1021-						}
+1022-
+1023-						if (rop >> 8) {
+1024-							fatal("[ sgi_de: LINE: rop > 255: 0x%08x ]\n", rop);
+1025-						}
+1026-					}
+1027-				}
+1028-			}
+1029-
+1030-			if (draw)
+1031:				horrible_getputpixel(1, cpu, d, x, y, &color, dst_mode);
+1032-
+1033-			// Rotate the stipple pattern:
+1034-			pattern = (pattern << 1) | (pattern >> (nr_of_bits_in_the_middle-1));
+1035-		}
+1036-		break;
+1037-
+1038-	case DE_PRIM_RECTANGLE:
+1039-		for (y = y1; y != endy; y = (y + dy) & 0x7ff) {
+1040-			src_x = saved_src_x;
+1041-			for (x = x1; x != endx; x = (x + dx) & 0x7ff) {
+1042-				uint32_t color = fg;
+1043-				uint32_t oldcolor = fg;
+1044-
+1045-				if (drawmode & DE_DRAWMODE_ROP && rop != OPENGL_LOGIC_OP_COPY)
+1046:					horrible_getputpixel(0, cpu, d, x, y, &oldcolor, dst_mode);
+1047-
+1048-				// Pixel colors copied from another source.
+1049-				// (OpenBSD draws characters using this mechanism.)
+1050-				if (drawmode & DE_DRAWMODE_XFER_EN)
+1051:					horrible_getputpixel(0, cpu, d,	src_x, src_y, &color, src_mode);
+1052-
+1053-				int draw = 1;
+1054-				if (drawmode & DE_DRAWMODE_POLY_STIP) {
+1055-					if (drawmode & DE_DRAWMODE_OPAQUE_STIP)
+1056-						color = (pattern & 0x80000000UL) ? fg : bg;
+1057-					else
+1058-						draw = (pattern & 0x80000000UL)? 1 : 0;
+1059-				}
+1060-
+1061-				// Raster-OP.
+--
+1087-							}
+1088-
+1089-							if (rop >> 8) {
+1090-								fatal("[ sgi_de: RECT: rop > 255: 0x%08x ]\n", rop);
+1091-							}
+1092-						}
+1093-					}
+1094-				}
+1095-
+1096-				if (draw)
+1097:					horrible_getputpixel(1, cpu, d, x, y, &color, dst_mode);
+1098-
+1099-				// Rotate the stipple pattern:
+1100-				pattern = (pattern << 1) | (pattern >> (nr_of_bits_in_the_middle-1));
+1101-
+1102-				if (src_is_linear)
+1103-					src_x += step_x;
+1104-				else
+1105-					src_x = (src_x + dx) & 0x7ff;
+1106-			}
+1107-			
+--
+1555-				src_mode |= DE_MODE_TYPE_RGBA;
+1556-				dst_mode |= DE_MODE_TYPE_RGBA;
+1557-			}
+1558-
+1559-			int src_y = src_y1;
+1560-			for (int y = y1; y != y2+dy; y += dy) {
+1561-				int src_x = src_x1;
+1562-				
+1563-				for  (int x = x1; x != x2+dx; x += dx) {
+1564-					if (mode & MTE_MODE_COPY) {
+1565:						horrible_getputpixel(0, cpu, d,
+1566-							src_x, src_y, &bg, src_mode);
+1567-						src_x += dx;
+1568-					}
+1569-
+1570:					horrible_getputpixel(1, cpu, d, x, y, &bg, dst_mode);
+1571-				}
+1572-				
+1573-				src_y += dy;
+1574-			}
+1575-		}
+1576-		break;
+1577-	case MTE_TLB_LIN_A:
+1578-	case MTE_TLB_LIN_B:
+1579-		// Used by the PROM to zero-fill memory (?).
+1580-		if (mode & MTE_MODE_COPY) {
+--
+1644-				fill_len = dstlen;
+1645-
+1646-			uint64_t starting_page = fill_addr & ~0xfff;
+1647-			uint64_t ending_page = (fill_addr + fill_len - 1) & ~0xfff;
+1648-			if (starting_page != ending_page) {
+1649-				fill_len = starting_page + 4096 - fill_addr;
+1650-			}
+1651-
+1652-			// Find starting_page in the TLB in question.
+1653-			starting_page >>= 12;
+1654:			uint32_t *tlb = dst_tlb == MTE_TLB_LIN_A ? d->re_linear_a : d->re_linear_b;
+1655-			int match = 0;
+1656-			for (int i = 0; i < 32; ++i) {
+1657-				uint32_t entry = tlb[i];
+1658-				if (entry & 0x80000000) {
+1659-					entry &= ~0x80000000;
+1660-					if (entry == starting_page) {
+1661-						match = 1;
+1662-						break;
+1663-					}
+1664-				}
+
+ succeeded in 470ms:
+diff --git a/src/devices/dev_sgi_re.c b/src/devices/dev_sgi_re.c
+index 4d4f356..8e9727d 100644
+--- a/src/devices/dev_sgi_re.c
++++ b/src/devices/dev_sgi_re.c
+@@ -146,13 +146,27 @@ enum {
+ 	    has a row for exactly this (`tex xbit', which fires all six width
+ 	    latches before reading).
+ 
+-	    THE NEXT FREE BIT IS 1 << 12, AND THIS IS THE LAST ENUMERATOR --
+-	    which is where that claim belongs, per the convention two comments
+-	    up.  A maintainer adding a bit BELOW this line must move this
+-	    sentence with it and demote the copy here, exactly as #513 had to
+-	    demote SGIRE_W_BADMODE's.
++	    (This comment used to end "THE NEXT FREE BIT IS 1 << 12, AND THIS
++	    IS THE LAST ENUMERATOR".  #519 added SGIRE_W_BADCOLOR = 1 << 12
++	    BELOW this line and moved the sentence with it, as this comment
++	    itself instructed.  Demoted, not deleted, for the same reason as
++	    the two demotions above it.)
+ 	 */
+ 	SGIRE_W_TEX_RD    = 1 << 11,
++
++	/*  #519 (sgirandomcolour): the colour-type PUT decline in
++	    horrible_getputpixel() gets its OWN bit, per the rule every entry
++	    above records: the helper is per-pixel, the struct is shared by
++	    four handlers, and a latch shared with any other site is silenced
++	    by that site's ordinary traffic.  SGIRE_W_BADMODE (1 << 10) is the
++	    TLB/mode switch's decline in the same function and is a different
++	    event with a different text; sharing it would collapse the two.
++
++	    THE NEXT FREE BIT IS 1 << 13, AND THIS IS THE LAST ENUMERATOR --
++	    which is where that claim belongs, per the convention above.  A
++	    maintainer adding a bit BELOW this line must move this sentence
++	    with it and demote the copy here.  */
++	SGIRE_W_BADCOLOR  = 1 << 12,
+ };
+ 
+ struct sgi_re_data {
+@@ -306,6 +320,7 @@ void horrible_getputpixel(int put, struct cpu* cpu, struct sgi_re_data* d,
+ 
+ 	uint8_t buf[8];		/* #100: bufdepth can be 8 = 1<<((mode>>8)&3) */
+ 	if (put) {
++		int ok = 1;	/*  #519: cleared by the default arm below  */
+ 		switch (color_mode) {
+ 		case DE_MODE_TYPE_CI:
+ 			buf[0] = *color;
+@@ -328,16 +343,36 @@ void horrible_getputpixel(int put, struct cpu* cpu, struct sgi_re_data* d,
+ 			buf[2] = *color >> 16;
+ 			buf[3] = *color >> 24;
+ 			break;
+-		default:buf[0] = random();
+-			buf[1] = random();
+-			buf[2] = random();
+-			buf[3] = random();
+-			// TODO.
+-			fatal("[ put: color mode = 0x%x ]\n", color_mode);
++		default:/*  #519 (sgirandomcolour): this arm was `buf[0..3] = random()'
++			    and an UNLATCHED per-pixel fatal(), after which the common
++			    store below wrote four HOST-PRNG bytes into guest memory.
++			    Twelve of the sixteen type nibbles reach here, the documented
++			    DE_MODE_TYPE_YCRCB among them.  MEASURED at rung 3
++			    (regress/sgi_re_colourdefault_probe.py): a destination
++			    pre-painted 0x11223344 read 0x56e8857a and 0x38abc4e1 on two
++			    runs -- neither the paint nor any packing of the colour, and
++			    different each run because main.c seeds random() per process.
++
++			    NOW DECLINED, member 3: the STORE IS SKIPPED, so the
++			    destination keeps what the guest had -- not a zero fill, which
++			    would publish a colour the guest never asked for (random() with
++			    the entropy stripped) -- and the announce is latched on its own
++			    bit because this helper is per-pixel.  The old literal is kept
++			    as the prefix: the witness attributes on it.  A declined PUT
++			    never reads buf, so the width question (sgirebufuninit) is a
++			    separate row, and the GET default below is untouched.  */
++			ok = 0;
++			if (!(d->warned & SGIRE_W_BADCOLOR)) {
++				d->warned |= SGIRE_W_BADCOLOR;
++				fatal("[ put: color mode = 0x%x ] [ sgi_re: unimplemented "
++				    "colour type in horrible_getputpixel, x=%i y=%i; store "
++				    "declined (once) ]\n", color_mode, x, y);
++			}
+ 		}
+ 
+-		cpu->memory_rw(cpu, cpu->mem, tileptr + ofs,
+-		    buf, bufdepth, MEM_WRITE, NO_EXCEPTIONS | PHYSICAL);
++		if (ok)	/*  #519: a declined type stores nothing  */
++			cpu->memory_rw(cpu, cpu->mem, tileptr + ofs,
++			    buf, bufdepth, MEM_WRITE, NO_EXCEPTIONS | PHYSICAL);
+ 	} else {
+ 		cpu->memory_rw(cpu, cpu->mem, tileptr + ofs,
+ 		    buf, bufdepth, MEM_READ, NO_EXCEPTIONS | PHYSICAL);
+
+ succeeded in 503ms:
+ succeeded in 630ms:
+    1: #!/usr/bin/env python3
+    2: #
+    3: #  sgirandomcolour -- RUNG-3 WITNESS for dev_sgi_re.c horrible_getputpixel() colour-mode default.
+    4: #
+    5: #  THE DEFECT.  horrible_getputpixel() extracts `color_mode = mode & DE_MODE_TYPE_MASK' (mask 0xf0)
+    6: #  and switches on it during a PUT.  Four cases are implemented:
+    7: #    case DE_MODE_TYPE_CI:   buf[0] = *color;
+    8: #    case DE_MODE_TYPE_RGB:  buf[0] = *color >> 24; buf[1] = *color >> 16; buf[2] = *color >> 8; buf[3] = 0;
+    9: #    case DE_MODE_TYPE_RGBA: buf[0] = *color >> 24; buf[1] = *color >> 16; buf[2] = *color >> 8; buf[3] = *color;
+   10: #    case DE_MODE_TYPE_ABGR: buf[0] = *color; buf[1] = *color >> 8; buf[2] = *color >> 16; buf[3] = *color >> 24;
+   11: #  The `default:' arm executes:
+   12: #    buf[0] = random(); buf[1] = random(); buf[2] = random(); buf[3] = random();
+   13: #    fatal("[ put: color mode = 0x%x ]\n", color_mode);
+   14: #  and then allows the common tail to execute:
+   15: #    cpu->memory_rw(cpu, cpu->mem, tileptr + ofs, buf, bufdepth, MEM_WRITE, NO_EXCEPTIONS | PHYSICAL);
+   16: #  which writes bufdepth bytes of that buffer to guest memory -- the four random() fills at 32 bpp, one
+   17: #  of them at 8 bpp, and at bufdepth 8 those four plus an uninitialised tail (sgirebufuninit).  fatal()
+   18: #  does not exit.
+   19: #
+   20: #  REACHABILITY: 12 of the 16 nibbles reach default:, including the documented DE_MODE_TYPE_YCRCB
+   21: #  (0x000000f0 per crmfbreg.h) and reserved encodings such as 0x50.
+   22: #
+   23: #  POST-FIX BEHAVIOUR: an unhandled / unimplemented colour mode during a PUT declines and skips
+   24: #  writing to memory, leaving the destination pre-paint intact.
+   25: #
+   26: #  CONTRACT (vacuity-floor clause (e)) -- what this witness catches and what it does NOT:
+   27: #    CATCHES   the default arm assigning random() and storing it: `ycrcb put' and `reserved put'
+   28: #              expect the destination to remain unchanged (post-fix honest decline); on HEAD they
+   29: #              fail because host random() bytes overwrite the pre-painted sentinel.
+   30: #    DOES NOT  implement YCRCB colour space conversion or other colour modes; it witnesses the defect
+   31: #              on unhandled modes under ordinary bounds-correctness engineering.
+   32: #
+   33: #  usage: sgi_re_colourdefault_probe.py <gxemul-binary> [label]
+   34: import os, pty, re, select, sys, time
+   35: 
+   36: BIN   = sys.argv[1]
+   37: LABEL = sys.argv[2] if len(sys.argv) > 2 else "?"
+   38: DUMMY = "/tmp/dummy_sgirand.bin"
+   39: if not os.path.exists(DUMMY):
+   40:     with open(DUMMY, "wb") as f:
+   41:         f.write(b"\0" * 16)
+   42: 
+   43: CODE      = 0x80001000
+   44: SCRATCH   = 0xa0001800
+   45: LIVE_VAL  = 0x5a5a5a5a
+   46: 
+   47: RE_LINEAR_A   = 0xb5001700
+   48: DE_MODE_SRC   = 0xb5002000
+   49: DE_MODE_DST   = 0xb5002008
+   50: DE_DRAWMODE   = 0xb5002018
+   51: DE_XVERTEX_0  = 0xb5002070
+   52: DE_XVERTEX_1  = 0xb5002074
+   53: DE_XFER_ADDR  = 0xb50020a0
+   54: DE_FG         = 0xb50020d0
+   55: DE_XFER_STEPX = 0xb50020a8
+   56: DE_PRIM_START = 0xb5002860
+   57: 
+   58: MODE_RGBA     = 0x1220        # LIN_A 0x1000 | BUFDEPTH_32 0x200 | TYPE_RGBA  0x20
+   59: MODE_YCRCB    = 0x12f0        # LIN_A 0x1000 | BUFDEPTH_32 0x200 | TYPE_YCRCB 0xf0
+   60: MODE_RESERVED = 0x1250        # LIN_A 0x1000 | BUFDEPTH_32 0x200 | TYPE_RESV  0x50
+   61: DRAWMODE_SOLID = 0x000000f8   # PLANEMASK 0x80 | BYTEMASK 0x78 (solid fill, no XFER/ROP/STIP)
+   62: PRIM_RECT     = 0x03020000    # DE_PRIM_RECTANGLE 0x03000000 | DE_PRIM_TB 0x00020000
+   63: 
+   64: TILE_PHYS     = 0x10000       # re_linear_a[0] = 0x10 -> physical 0x10000
+   65: DST_KSEG1     = 0xa0000000 + TILE_PHYS
+   66: FG_VAL        = 0xaabbccdd    # distinctive foreground colour
+   67: DST_PAINT     = 0x11223344    # sentinel pattern: distinct from FG_VAL and random values
+   68: 
+   69: OP_NOP        = 0x00000000
+   70: OP_B_SELF     = 0x1000ffff
+   71: OP_SW_T0_A3   = 0xace80000    # sw $t0, 0($a3)
+   72: OP_SD_T0_A3   = 0xfce80000    # sd $t0, 0($a3)
+   73: OP_LW_V0_AT   = 0x8c220000    # lw $v0, 0($at)
+   74: OP_SB_T0_A3   = 0xa0e80000    # sb $t0, 0($a3)   -- a NARROW store: fires a *_LEN / DE_LEN latch
+   75: OP_LD_V0_AT   = 0xdc220000    # ld $v0, 0($at)   -- a 64-bit read: the TEX read decline (#513)
+   76: 
+   77: rows = []
+   78: def row(name, got, want, note="", negate=False):
+   79:     ok = (got != want) if negate else (got == want)
+   80:     rows.append((name, ok))
+   81:     shown = ("NOT " + str(want)) if negate else str(want)
+   82:     print("%-16s %-14s %-16s %-52s %s" % (name, str(got), shown, note, "ok" if ok else "FAIL"))
+   83:     return ok
+   84: 
+   85: def session(cmds, settle=1.5, spin=1.6):
+   86:     pid, fd = pty.fork()
+   87:     if pid == 0:
+   88:         os.execv(BIN, [BIN, "-V", "-x", "-E", "sgi", "-e", "ip32", "-M", "64",
+   89:                        "0x80001000:" + DUMMY])
+   90:         os._exit(127)
+   91:     buf = ""
+   92:     def rd(t):
+   93:         nonlocal buf
+   94:         end = time.time() + t
+   95:         while time.time() < end:
+   96:             r, _, _ = select.select([fd], [], [], 0.1)
+   97:             if not r:
+   98:                 continue
+   99:             try:
+  100:                 d = os.read(fd, 65536)
+  101:                 if not d:
+  102:                     return False
+  103:                 buf += d.decode("latin-1", "replace")
+  104:             except OSError:
+  105:                 return False
+  106:         return True
+  107:     alive = rd(settle)
+  108:     for i, c in enumerate(cmds):
+  109:         try:
+  110:             os.write(fd, (c + "\n").encode("latin-1"))
+  111:         except OSError:
+  112:             alive = False
+  113:             break
+  114:         if not rd(spin if i == len(cmds) - 1 else 0.22):
+  115:             alive = False
+  116:             break
+  117:     try:
+  118:         os.write(fd, b"quit\n"); rd(0.4)
+  119:     except OSError:
+  120:         pass
+  121:     try:
+  122:         os.close(fd)
+  123:     except OSError:
+  124:         pass
+  125:     return buf.replace("\r", ""), alive
+  126: 
+  127: def printed(t, reg):
+  128:     m = re.search(r"print\s+%s\s*\n\s*(0x[0-9a-f]+)" % reg, t)
+  129:     return "absent" if not m else "0x%08x" % (int(m.group(1), 16) & 0xffffffff)
+  130: 
+  131: class Addr(object):
+  132:     def __init__(self, base): self.a = base
+  133:     def take(self, n):
+  134:         got = self.a; self.a += 4 * (n + 2) + 0x20; return got
+  135: 
+  136: def run_ops(ops, at):
+  137:     put = ["put w 0x%x, 0x%08x" % (at + 4 * i, op) for i, op in enumerate(ops)]
+  138:     put += ["put w 0x%x, 0x%08x" % (at + 4 * len(ops), OP_B_SELF),
+  139:             "put w 0x%x, 0x%08x" % (at + 4 * len(ops) + 4, OP_NOP)]
+  140:     return put + ["pc=0x%x" % at, "step %d" % len(ops)]
+  141: 
+  142: def store(A, addr, val, op=OP_SW_T0_A3):
+  143:     return ["a3=0x%x" % addr, "t0=0x%x" % val] + run_ops([op], A.take(1))
+  144: 
+  145: SENTINEL = 0xdeadbeef
+  146: def load(A, addr):
+  147:     return ["at=0x%x" % addr, "v0=0x%x" % SENTINEL] + run_ops([OP_LW_V0_AT], A.take(1))
+  148: def loadop(A, addr, op):
+  149:     return ["at=0x%x" % addr, "v0=0x%x" % SENTINEL] + run_ops([op], A.take(1))
+  150: 
+  151: def setup_put(A, dst_mode, fg=FG_VAL, paint=DST_PAINT, vertex=0x00000000):
+  152:     """Program the engine, paint destination with sentinel, then fire one pixel PUT.
+  153:     vertex packs (x << 16) | y for XVERTEX_0/1 (draw_primitive: `>> 16) & 0x7ff' / `& 0x7ff'); the
+  154:     default is (0,0).  Added on pass 2 (grok): every PUT sat at (0,0), so a guard qualified
+  155:     `if (ok || x)' kept every row green.  The second-word paint is emitted ONLY for a non-origin
+  156:     vertex, so every pre-existing session's command stream is unchanged by this parameter."""
+  157:     c  = store(A, RE_LINEAR_A, 0x0000001000000000, op=OP_SD_T0_A3)  # re_linear_a[0] = 0x10 -> phys 0x10000
+  158:     c += store(A, DST_KSEG1, paint)
+  159:     if vertex:
+  160:         c += store(A, DST_KSEG1 + 4, paint)            # the word a (4,y) PUT reaches: linear ofs = x & 4095
+  161:     c += store(A, DE_MODE_DST, dst_mode)
+  162:     c += store(A, DE_DRAWMODE, DRAWMODE_SOLID)
+  163:     c += store(A, DE_FG, fg)
+  164:     c += store(A, DE_XVERTEX_0, vertex)
+  165:     c += store(A, DE_XVERTEX_1, vertex)
+  166:     c += store(A, DE_PRIM_START, PRIM_RECT)
+  167:     return c
+  168: 
+  169: print("sgirandomcolour RUNG-3 WITNESS -- binary=%s label=%s" % (BIN, LABEL))
+  170: print("%-16s %-14s %-16s %-52s %s" % ("row", "got", "want", "note", ""))
+  171: 
+  172: # ---------------------------------------------------------------- row 1: live
+  173: A = Addr(CODE)
+  174: t_live, alive_live = session(setup_put(A, MODE_RGBA) + load(A, DST_KSEG1) + ["print v0"])
+  175: got_live = printed(t_live, "v0") if alive_live else "died"
+  176: row("live", got_live, "0x%08x" % FG_VAL,
+  177:     "LIVENESS: supported RGBA DE PUT lands known colour in destination")
+  178: 
+  179: # ---------------------------------------------------------------- row 2: ycrcb put
+  180: A = Addr(CODE)
+  181: t_ycrcb1, alive_ycrcb1 = session(setup_put(A, MODE_YCRCB) + load(A, DST_KSEG1) + ["print v0"])
+  182: got_ycrcb1 = printed(t_ycrcb1, "v0") if alive_ycrcb1 else "died"
+  183: want_sentinel = "0x%08x" % DST_PAINT
+  184: row("ycrcb put", got_ycrcb1, want_sentinel,
+  185:     "DEFECT: YCRCB (0xf0) PUT must leave sentinel unchanged; on HEAD clobbered")
+  186: 
+  187: # ---------------------------------------------------------------- row 3: ycrcb attrib
+  188: diag_ycrcb = "[ put: color mode = 0xf0 ]" in t_ycrcb1
+  189: row("ycrcb attrib", "yes" if diag_ycrcb else "no", "yes",
+  190:     "ATTRIBUTION: transcript carries `[ put: color mode = 0xf0 ]`")
+  191: 
+  192: # ---------------------------------------------------------------- row 4: reserved put
+  193: A = Addr(CODE)
+  194: t_resv, alive_resv = session(setup_put(A, MODE_RESERVED) + load(A, DST_KSEG1) + ["print v0"])
+  195: got_resv = printed(t_resv, "v0") if alive_resv else "died"
+  196: row("reserved put", got_resv, want_sentinel,
+  197:     "RESERVED: unsupported 0x50 PUT must leave sentinel unchanged; on HEAD clobbered")
+  198: 
+  199: # ---------------------------------------------------------------- row 5: determinism
+  200: A = Addr(CODE)
+  201: t_ycrcb2, alive_ycrcb2 = session(setup_put(A, MODE_YCRCB) + load(A, DST_KSEG1) + ["print v0"])
+  202: got_ycrcb2 = printed(t_ycrcb2, "v0") if alive_ycrcb2 else "died"
+  203: identical = (got_ycrcb1 == got_ycrcb2 and got_ycrcb1 != "died")
+  204: got_det = "identical" if identical else "differ"
+  205: row("determinism", got_det, "identical",
+  206:     "DETERMINISM: repeat YCRCB put; post-fix identical (sentinel), pre-fix differs across runs")
+  207: 
+  208: # ================================================================ #519 DETECTOR ROWS
+  209: #  The five rows above are the WITNESS (2/5 on HEAD 1ce8296 -- both unsupported-type PUTs landed host
+  210: #  PRNG bytes -- and 5/5 on the fix with the same script).  The rows below DEFEND the fix.
+  211: #
+  212: #  CONTRACT (clause (e)).  Designed to catch: (b) the verbatim arm reinstated (random fills + an
+  213: #  unlatched fatal, the store still taken -- `ycrcb put', `reserved put', `announce text'); (d) the
+  214: #  `ok' guard REMOVED (the store taken with an unassigned buf -- `ycrcb put'); the decline turned
+  215: #  into a ZERO FILL and a store (`ycrcb put' reads 0); `ok = 0' MOVED INSIDE THE LATCH so only the
+  216: #  first declined PUT skips its store (`two declined'); the latch REMOVED (`once' reads 2); the latch
+  217: #  SHARED with SGIRE_W_BADMODE (`latch indep' reads 0 after a bad TLB mode fired that bit); the
+  218: #  announce SILENCED (`announce text' reads 0); a supported type dropped from the switch (its accept
+  219: #  row); the accept side announcing (`live silent').  NOT rowed, disclosed: the GET default arm (a
+  220: #  separate row, sgirebufuninit); 16-bit depth (the three 32-bit-type PUT arms assign four bytes, CI
+  221: #  one, and a 16-bit store takes two -- the same row's question); `x`/`y` in the announce (the (4,1)
+  222: #  row pins them once; other vertices are format only); per-instance latching
+  223: #  (one RE instance exists); the YCRCB/reserved values other than 0xf0/0x50 (twelve nibbles reach the
+  224: #  arm; two are driven, and the arm's DECISION does not depend on the nibble's value -- the announce
+  225: #  prints it, which is the only read); the latch's independence is ROWED against ALL TWELVE other bits in
+  226: #  ONE session (`allbits announce', with `allbits primed' proving every priming announce fired -- the
+  227: #  class closure sgi_re_width_probe.py's `tex xbit' row established; a first cut of this contract
+  228: #  DISCLOSED the eleven non-BADMODE bits as unrowed on a cost premise codex refuted: the cost is one
+  229: #  session, not one per bit); a bit added to the enum AFTER this probe cannot be primed here and is the
+  230: #  enum's own last-enumerator convention's business;
+  231: #  and `two declined' does NOT distinguish the skipped store from an early `return' -- after the PUT
+  232: #  switch the guarded store is the only statement, so the two are observationally identical (grok,
+  233: #  minimax); the guard form is a readability choice, not an observable one.
+  234: #
+  235: #  The destination word is read big-endian (ip32): byte 0 of the tile is the word's top byte.
+  236: 
+  237: ANN = "unimplemented colour type in horrible_getputpixel"     # the post-fix announce, distinctive part
+  238: DECL = "store declined (once)"
+  239: MODE_CI8  = 0x1000            # LIN_A | BUFDEPTH_8  | TYPE_CI   -- one byte stored
+  240: MODE_RGB  = 0x1210            # LIN_A | BUFDEPTH_32 | TYPE_RGB
+  241: MODE_ABGR = 0x1230            # LIN_A | BUFDEPTH_32 | TYPE_ABGR
+  242: MODE_LINB_RGBA = 0x1620       # LIN_B | BUFDEPTH_32 | TYPE_RGBA -- the TLB/mode switch's own default (BADMODE)
+  243: 
+  244: #  ---- accept rows: the other three supported types land their packing (de-escalation) -----------
+  245: A = Addr(CODE)
+  246: t_ci, alive_ci = session(setup_put(A, MODE_CI8) + load(A, DST_KSEG1) + ["print v0"])
+  247: row("ci8 put", printed(t_ci, "v0") if alive_ci else "died", "0xdd223344",
+  248:     "CI at 8 bpp stores ONE byte (fg & 0xff) over the paint's top byte")
+  249: A = Addr(CODE)
+  250: t_rgb, alive_rgb = session(setup_put(A, MODE_RGB) + load(A, DST_KSEG1) + ["print v0"])
+  251: row("rgb put", printed(t_rgb, "v0") if alive_rgb else "died", "0xaabbcc00",
+  252:     "RGB stores [R,G,B,pad]: three channels and a zero pad (#505's authoritative arm)")
+  253: A = Addr(CODE)
+  254: t_abgr, alive_abgr = session(setup_put(A, MODE_ABGR) + load(A, DST_KSEG1) + ["print v0"])
+  255: row("abgr put", printed(t_abgr, "v0") if alive_abgr else "died", "0xddccbbaa",
+  256:     "ABGR stores the register word byte-reversed")
+  257: row("live silent", t_live.count(ANN) if alive_live else "died", 0,
+  258:     "the RGBA accept session carries NO colour-type announce (the accept side stays silent)")
+  259: 
+  260: #  ---- the announce: present once, with the post-fix text, in the witness's ycrcb session --------
+  261: row("announce text", t_ycrcb1.count(DECL) if alive_ycrcb1 else "died", 1,
+  262:     "the declined PUT announces with the post-fix text ONCE (a reinstated arm or a silenced decline reads 0)")
+  263: 
+  264: #  ---- two declined PUTs in ONE process: the second also skips its store, and one announce -------
+  265: A = Addr(CODE)
+  266: t_two, alive_two = session(setup_put(A, MODE_YCRCB) + setup_put(A, MODE_RESERVED)
+  267:                            + load(A, DST_KSEG1) + ["print v0"])
+  268: row("two declined", printed(t_two, "v0") if alive_two else "died", "0x%08x" % DST_PAINT,
+  269:     "YCRCB then RESERVED in one process: the SECOND declined PUT leaves the paint too (`ok = 0' inside the latch would store)")
+  270: row("once", t_two.count(ANN) if alive_two else "died", 1,
+  271:     "two declined PUTs announce EXACTLY ONCE -- the (once) latch")
+  272: 
+  273: #  ---- a declined PUT away from the origin (pass 2, grok): the guard qualified on the vertex ---------
+  274: #  Every other PUT is at (0,0), so `if (ok || x)' (or `|| y') is invisible to them.  In the LINEAR
+  275: #  path (tlb_mode 4) horrible_getputpixel computes `ofs = x & 4095' -- a BYTE offset, y ignored -- so
+  276: #  this PUT at (4,1) would land whole on the second pre-painted word (ofs 4) if it stored; both
+  277: #  coordinates are non-zero so either one-token qualifier lets the store through.  A first cut of
+  278: #  this row used (1,0) and claimed `ofs = 1 * bufdepth': wrong for the linear path (byte 1, straddling
+  279: #  two words) -- corrected before any table ran on it.
+  280: A = Addr(CODE)
+  281: VTX41 = (4 << 16) | 1
+  282: t_x1, alive_x1 = session(setup_put(A, MODE_YCRCB, vertex=VTX41) + load(A, DST_KSEG1 + 4) + ["print v0"])
+  283: row("ycrcb x4y1", printed(t_x1, "v0") if alive_x1 else "died", "0x%08x" % DST_PAINT,
+  284:     "a declined PUT at (4,1) leaves the second word (linear ofs = x & 4095): kills `if (ok || x)' and `|| y'")
+  285: row("x4y1 announce", t_x1.count("horrible_getputpixel, x=4 y=1") if alive_x1 else "died", 1,
+  286:     "and the one announce names that vertex in its own text (x=4 y=1)")
+  287: 
+  288: #  ---- CLASS CLOSURE on the latch-collision axis: every other bit set FIRST, then the colour decline -----
+  289: #  sgi_re_width_probe.py's `tex xbit' row proved this priming sequence fires bits 0-10 (bits 0-5 by a byte
+  290: #  store to each RE window; 6 a byte store to the DE window; 7/8 a store to and a load from the straggler
+  291: #  offset 0x1800; 9 an unimplemented drawing op; 10 a LIN_B rectangle) and its `tex rd lat1' row that a
+  292: #  64-bit read of CRIME_RE_TEX fires bit 11.  With bits 0-11 all set, a BADCOLOR latch that SHARES any of
+  293: #  them is already silenced when the YCRCB PUT arrives and `allbits announce' reads 0.  `allbits primed'
+  294: #  counts the twelve priming announces so a priming access that silently stops firing reds the row
+  295: #  instead of leaving a hole (the width probe's own repair for the same vacuity).  One session; the
+  296: #  paint row is the decline control.  Added on the pass-2 repair chain at codex's finding.  LOAD
+  297: #  SENSITIVITY (codex, by reading session()): 197 commands at fixed 0.22 s windows and a 4.0 s final
+  298: #  spin -- a delayed-but-healthy emulator can leave `print v0' unread and the paint row reads `absent'.
+  299: #  That is a loud false RED on the fix, never a false green; re-run alone before believing it.
+  300: A = Addr(CODE)
+  301: RE_WINDOWS = (0xb5001000, 0xb5001200, 0xb5001400, 0xb5001600, 0xb5001700, 0xb5001780)  # TLB_A..LINEAR_B
+  302: DE_BASE   = 0xb5002000            # DEVICE_ACCESS(sgi_de): a byte access fires SGIRE_W_DE_LEN
+  303: OUTSIDE   = 0xb5001800            # past LINEAR_B: the straggler arm (UNMAP_WR / UNMAP_RD)
+  304: PRIM_BAD  = 0x05020000            # an UNIMPLEMENTED drawing op (only LINE and RECTANGLE exist)
+  305: TEX_BASE  = 0xb5001600
+  306: prime = []
+  307: for _w in RE_WINDOWS:
+  308:     prime += store(A, _w, 0x1, op=OP_SB_T0_A3)             # bits 0-5
+  309: prime += store(A, DE_BASE, 0x1, op=OP_SB_T0_A3)            # bit 6
+  310: prime += store(A, OUTSIDE, 0x1, op=OP_SB_T0_A3)            # bit 7
+  311: prime += loadop(A, OUTSIDE, OP_LW_V0_AT)                   # bit 8
+  312: prime += setup_put(A, MODE_LINB_RGBA)                      # bit 10 (a real 1x1 rectangle into LIN_B)
+  313: prime += store(A, DE_PRIM_START, PRIM_BAD)                 # bit 9
+  314: prime += loadop(A, TEX_BASE, OP_LD_V0_AT)                  # bit 11
+  315: PRIME_LIT = ["for CRIME_RE_%s -- declined." % _n for _n in ("TLB_A", "TLB_B", "TLB_C", "TEX", "LINEAR_A", "LINEAR_B")] + [
+  316:     "[ sgi_de: unimplemented len=",                       # bit 6  DE_LEN
+  317:     "unimplemented write to address 0x1800",              # bit 7  UNMAP_WR
+  318:     "unimplemented read from address 0x1800",             # bit 8  UNMAP_RD
+  319:     "UNIMPLEMENTED drawing op",                           # bit 9  PRIM_OP
+  320:     "unimplemented dst_mode",                             # bit 10 BADMODE
+  321:     "unimplemented read from CRIME_RE_TEX -- declined."]  # bit 11 TEX_RD
+  322: t_all, alive_all = session(prime + setup_put(A, MODE_YCRCB) + load(A, DST_KSEG1) + ["print v0"], spin=4.0)
+  323: fired_all = sum(1 for _lit in PRIME_LIT if _lit in t_all)
+  324: row("allbits primed", "%i/%i" % (fired_all, len(PRIME_LIT)) if alive_all else "died", "%i/%i" % (len(PRIME_LIT), len(PRIME_LIT)),
+  325:     "all twelve other latches PROVEN fired before the colour decline (the row proves its own setup)")
+  326: row("allbits announce", t_all.count(ANN) if alive_all else "died", 1,
+  327:     "with every other bit set, the colour decline still announces once: a latch sharing ANY bit reads 0")
+  328: row("allbits paint", printed(t_all, "v0") if alive_all else "died", "0x%08x" % DST_PAINT,
+  329:     "and the declined PUT stored nothing (control)")
+  330: 
+  331: #  ---- the latch bit is its own: a BADMODE decline first, then a colour decline still announces --
+  332: A = Addr(CODE)
+  333: t_ind, alive_ind = session(setup_put(A, MODE_LINB_RGBA) + setup_put(A, MODE_YCRCB)
+  334:                            + load(A, DST_KSEG1) + ["print v0"])
+  335: row("latch indep", t_ind.count(ANN) if alive_ind else "died", 1,
+  336:     "LIN_B fires SGIRE_W_BADMODE first; the colour decline still announces once (a shared bit reads 0)")
+  337: row("indep paint", printed(t_ind, "v0") if alive_ind else "died", "0x%08x" % DST_PAINT,
+  338:     "the YCRCB PUT after the LIN_B decline stored nothing (the LIN_B half is re-painted over and NOT observed here -- grok)")
+  339: 
+  340: 
+  341: ok = sum(1 for _, o in rows if o)
+  342: print()
+  343: print("SGICOLOUR_RESULT=%d/%d" % (ok, len(rows)))
+  344: print("SGICOLOUR_DONE")
+  345: sys.exit(0 if ok == len(rows) else 1)
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$n=0; Get-Content -LiteralPath regress/sgi_re_colourdefault_probe.py | ForEach-Object { $n++; if ($n -le 170) { '"'{0,4}: {1}' -f "'$n, $_ } }; rg -n '"'"'^row'"\\(' regress/sgi_re_colourdefault_probe.py" in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$n=0; Get-Content -LiteralPath src/devices/dev_sgi_re.c | ForEach-Object { $n++; if (($n -ge 321 -and $n -le 347) -or ($n -ge 529 -and $n -le 592) -or ($n -ge 875 -and $n -le 895) -or ($n -ge 1110 -and $n -le 1180)) { '"'{0,4}: {1}' -f "'$n, $_ } }; rg -n '"'DE_MODE_TYPE_|DE_MODE_BUFDEPTH|CRIME_RE_TLB_[ABC]|DE_PRIM_RECTANGLE|DE_DRAWMODE' src/include/thirdparty/crmfbreg.h; rg -n 'ip32|physical_ram_in_mb|MEMORY_ACCESS_FLAGS|byte_order|dev_ram_init' src/machines/machine_sgi.c" in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+ succeeded in 298ms:
+   1: #!/usr/bin/env python3
+   2: #
+   3: #  sgirandomcolour -- RUNG-3 WITNESS for dev_sgi_re.c horrible_getputpixel() colour-mode default.
+   4: #
+   5: #  THE DEFECT.  horrible_getputpixel() extracts `color_mode = mode & DE_MODE_TYPE_MASK' (mask 0xf0)
+   6: #  and switches on it during a PUT.  Four cases are implemented:
+   7: #    case DE_MODE_TYPE_CI:   buf[0] = *color;
+   8: #    case DE_MODE_TYPE_RGB:  buf[0] = *color >> 24; buf[1] = *color >> 16; buf[2] = *color >> 8; buf[3] = 0;
+   9: #    case DE_MODE_TYPE_RGBA: buf[0] = *color >> 24; buf[1] = *color >> 16; buf[2] = *color >> 8; buf[3] = *color;
+  10: #    case DE_MODE_TYPE_ABGR: buf[0] = *color; buf[1] = *color >> 8; buf[2] = *color >> 16; buf[3] = *color >> 24;
+  11: #  The `default:' arm executes:
+  12: #    buf[0] = random(); buf[1] = random(); buf[2] = random(); buf[3] = random();
+  13: #    fatal("[ put: color mode = 0x%x ]\n", color_mode);
+  14: #  and then allows the common tail to execute:
+  15: #    cpu->memory_rw(cpu, cpu->mem, tileptr + ofs, buf, bufdepth, MEM_WRITE, NO_EXCEPTIONS | PHYSICAL);
+  16: #  which writes bufdepth bytes of that buffer to guest memory -- the four random() fills at 32 bpp, one
+  17: #  of them at 8 bpp, and at bufdepth 8 those four plus an uninitialised tail (sgirebufuninit).  fatal()
+  18: #  does not exit.
+  19: #
+  20: #  REACHABILITY: 12 of the 16 nibbles reach default:, including the documented DE_MODE_TYPE_YCRCB
+  21: #  (0x000000f0 per crmfbreg.h) and reserved encodings such as 0x50.
+  22: #
+  23: #  POST-FIX BEHAVIOUR: an unhandled / unimplemented colour mode during a PUT declines and skips
+  24: #  writing to memory, leaving the destination pre-paint intact.
+  25: #
+  26: #  CONTRACT (vacuity-floor clause (e)) -- what this witness catches and what it does NOT:
+  27: #    CATCHES   the default arm assigning random() and storing it: `ycrcb put' and `reserved put'
+  28: #              expect the destination to remain unchanged (post-fix honest decline); on HEAD they
+  29: #              fail because host random() bytes overwrite the pre-painted sentinel.
+  30: #    DOES NOT  implement YCRCB colour space conversion or other colour modes; it witnesses the defect
+  31: #              on unhandled modes under ordinary bounds-correctness engineering.
+  32: #
+  33: #  usage: sgi_re_colourdefault_probe.py <gxemul-binary> [label]
+  34: import os, pty, re, select, sys, time
+  35: 
+  36: BIN   = sys.argv[1]
+  37: LABEL = sys.argv[2] if len(sys.argv) > 2 else "?"
+  38: DUMMY = "/tmp/dummy_sgirand.bin"
+  39: if not os.path.exists(DUMMY):
+  40:     with open(DUMMY, "wb") as f:
+  41:         f.write(b"\0" * 16)
+  42: 
+  43: CODE      = 0x80001000
+  44: SCRATCH   = 0xa0001800
+  45: LIVE_VAL  = 0x5a5a5a5a
+  46: 
+  47: RE_LINEAR_A   = 0xb5001700
+  48: DE_MODE_SRC   = 0xb5002000
+  49: DE_MODE_DST   = 0xb5002008
+  50: DE_DRAWMODE   = 0xb5002018
+  51: DE_XVERTEX_0  = 0xb5002070
+  52: DE_XVERTEX_1  = 0xb5002074
+  53: DE_XFER_ADDR  = 0xb50020a0
+  54: DE_FG         = 0xb50020d0
+  55: DE_XFER_STEPX = 0xb50020a8
+  56: DE_PRIM_START = 0xb5002860
+  57: 
+  58: MODE_RGBA     = 0x1220        # LIN_A 0x1000 | BUFDEPTH_32 0x200 | TYPE_RGBA  0x20
+  59: MODE_YCRCB    = 0x12f0        # LIN_A 0x1000 | BUFDEPTH_32 0x200 | TYPE_YCRCB 0xf0
+  60: MODE_RESERVED = 0x1250        # LIN_A 0x1000 | BUFDEPTH_32 0x200 | TYPE_RESV  0x50
+  61: DRAWMODE_SOLID = 0x000000f8   # PLANEMASK 0x80 | BYTEMASK 0x78 (solid fill, no XFER/ROP/STIP)
+  62: PRIM_RECT     = 0x03020000    # DE_PRIM_RECTANGLE 0x03000000 | DE_PRIM_TB 0x00020000
+  63: 
+  64: TILE_PHYS     = 0x10000       # re_linear_a[0] = 0x10 -> physical 0x10000
+  65: DST_KSEG1     = 0xa0000000 + TILE_PHYS
+  66: FG_VAL        = 0xaabbccdd    # distinctive foreground colour
+  67: DST_PAINT     = 0x11223344    # sentinel pattern: distinct from FG_VAL and random values
+  68: 
+  69: OP_NOP        = 0x00000000
+  70: OP_B_SELF     = 0x1000ffff
+  71: OP_SW_T0_A3   = 0xace80000    # sw $t0, 0($a3)
+  72: OP_SD_T0_A3   = 0xfce80000    # sd $t0, 0($a3)
+  73: OP_LW_V0_AT   = 0x8c220000    # lw $v0, 0($at)
+  74: OP_SB_T0_A3   = 0xa0e80000    # sb $t0, 0($a3)   -- a NARROW store: fires a *_LEN / DE_LEN latch
+  75: OP_LD_V0_AT   = 0xdc220000    # ld $v0, 0($at)   -- a 64-bit read: the TEX read decline (#513)
+  76: 
+  77: rows = []
+  78: def row(name, got, want, note="", negate=False):
+  79:     ok = (got != want) if negate else (got == want)
+  80:     rows.append((name, ok))
+  81:     shown = ("NOT " + str(want)) if negate else str(want)
+  82:     print("%-16s %-14s %-16s %-52s %s" % (name, str(got), shown, note, "ok" if ok else "FAIL"))
+  83:     return ok
+  84: 
+  85: def session(cmds, settle=1.5, spin=1.6):
+  86:     pid, fd = pty.fork()
+  87:     if pid == 0:
+  88:         os.execv(BIN, [BIN, "-V", "-x", "-E", "sgi", "-e", "ip32", "-M", "64",
+  89:                        "0x80001000:" + DUMMY])
+  90:         os._exit(127)
+  91:     buf = ""
+  92:     def rd(t):
+  93:         nonlocal buf
+  94:         end = time.time() + t
+  95:         while time.time() < end:
+  96:             r, _, _ = select.select([fd], [], [], 0.1)
+  97:             if not r:
+  98:                 continue
+  99:             try:
+ 100:                 d = os.read(fd, 65536)
+ 101:                 if not d:
+ 102:                     return False
+ 103:                 buf += d.decode("latin-1", "replace")
+ 104:             except OSError:
+ 105:                 return False
+ 106:         return True
+ 107:     alive = rd(settle)
+ 108:     for i, c in enumerate(cmds):
+ 109:         try:
+ 110:             os.write(fd, (c + "\n").encode("latin-1"))
+ 111:         except OSError:
+ 112:             alive = False
+ 113:             break
+ 114:         if not rd(spin if i == len(cmds) - 1 else 0.22):
+ 115:             alive = False
+ 116:             break
+ 117:     try:
+ 118:         os.write(fd, b"quit\n"); rd(0.4)
+ 119:     except OSError:
+ 120:         pass
+ 121:     try:
+ 122:         os.close(fd)
+ 123:     except OSError:
+ 124:         pass
+ 125:     return buf.replace("\r", ""), alive
+ 126: 
+ 127: def printed(t, reg):
+ 128:     m = re.search(r"print\s+%s\s*\n\s*(0x[0-9a-f]+)" % reg, t)
+ 129:     return "absent" if not m else "0x%08x" % (int(m.group(1), 16) & 0xffffffff)
+ 130: 
+ 131: class Addr(object):
+ 132:     def __init__(self, base): self.a = base
+ 133:     def take(self, n):
+ 134:         got = self.a; self.a += 4 * (n + 2) + 0x20; return got
+ 135: 
+ 136: def run_ops(ops, at):
+ 137:     put = ["put w 0x%x, 0x%08x" % (at + 4 * i, op) for i, op in enumerate(ops)]
+ 138:     put += ["put w 0x%x, 0x%08x" % (at + 4 * len(ops), OP_B_SELF),
+ 139:             "put w 0x%x, 0x%08x" % (at + 4 * len(ops) + 4, OP_NOP)]
+ 140:     return put + ["pc=0x%x" % at, "step %d" % len(ops)]
+ 141: 
+ 142: def store(A, addr, val, op=OP_SW_T0_A3):
+ 143:     return ["a3=0x%x" % addr, "t0=0x%x" % val] + run_ops([op], A.take(1))
+ 144: 
+ 145: SENTINEL = 0xdeadbeef
+ 146: def load(A, addr):
+ 147:     return ["at=0x%x" % addr, "v0=0x%x" % SENTINEL] + run_ops([OP_LW_V0_AT], A.take(1))
+ 148: def loadop(A, addr, op):
+ 149:     return ["at=0x%x" % addr, "v0=0x%x" % SENTINEL] + run_ops([op], A.take(1))
+ 150: 
+ 151: def setup_put(A, dst_mode, fg=FG_VAL, paint=DST_PAINT, vertex=0x00000000):
+ 152:     """Program the engine, paint destination with sentinel, then fire one pixel PUT.
+ 153:     vertex packs (x << 16) | y for XVERTEX_0/1 (draw_primitive: `>> 16) & 0x7ff' / `& 0x7ff'); the
+ 154:     default is (0,0).  Added on pass 2 (grok): every PUT sat at (0,0), so a guard qualified
+ 155:     `if (ok || x)' kept every row green.  The second-word paint is emitted ONLY for a non-origin
+ 156:     vertex, so every pre-existing session's command stream is unchanged by this parameter."""
+ 157:     c  = store(A, RE_LINEAR_A, 0x0000001000000000, op=OP_SD_T0_A3)  # re_linear_a[0] = 0x10 -> phys 0x10000
+ 158:     c += store(A, DST_KSEG1, paint)
+ 159:     if vertex:
+ 160:         c += store(A, DST_KSEG1 + 4, paint)            # the word a (4,y) PUT reaches: linear ofs = x & 4095
+ 161:     c += store(A, DE_MODE_DST, dst_mode)
+ 162:     c += store(A, DE_DRAWMODE, DRAWMODE_SOLID)
+ 163:     c += store(A, DE_FG, fg)
+ 164:     c += store(A, DE_XVERTEX_0, vertex)
+ 165:     c += store(A, DE_XVERTEX_1, vertex)
+ 166:     c += store(A, DE_PRIM_START, PRIM_RECT)
+ 167:     return c
+ 168: 
+ 169: print("sgirandomcolour RUNG-3 WITNESS -- binary=%s label=%s" % (BIN, LABEL))
+ 170: print("%-16s %-14s %-16s %-52s %s" % ("row", "got", "want", "note", ""))
+176:row("live", got_live, "0x%08x" % FG_VAL,
+184:row("ycrcb put", got_ycrcb1, want_sentinel,
+189:row("ycrcb attrib", "yes" if diag_ycrcb else "no", "yes",
+196:row("reserved put", got_resv, want_sentinel,
+205:row("determinism", got_det, "identical",
+247:row("ci8 put", printed(t_ci, "v0") if alive_ci else "died", "0xdd223344",
+251:row("rgb put", printed(t_rgb, "v0") if alive_rgb else "died", "0xaabbcc00",
+255:row("abgr put", printed(t_abgr, "v0") if alive_abgr else "died", "0xddccbbaa",
+257:row("live silent", t_live.count(ANN) if alive_live else "died", 0,
+261:row("announce text", t_ycrcb1.count(DECL) if alive_ycrcb1 else "died", 1,
+268:row("two declined", printed(t_two, "v0") if alive_two else "died", "0x%08x" % DST_PAINT,
+270:row("once", t_two.count(ANN) if alive_two else "died", 1,
+283:row("ycrcb x4y1", printed(t_x1, "v0") if alive_x1 else "died", "0x%08x" % DST_PAINT,
+285:row("x4y1 announce", t_x1.count("horrible_getputpixel, x=4 y=1") if alive_x1 else "died", 1,
+324:row("allbits primed", "%i/%i" % (fired_all, len(PRIME_LIT)) if alive_all else "died", "%i/%i" % (len(PRIME_LIT), len(PRIME_LIT)),
+326:row("allbits announce", t_all.count(ANN) if alive_all else "died", 1,
+328:row("allbits paint", printed(t_all, "v0") if alive_all else "died", "0x%08x" % DST_PAINT,
+335:row("latch indep", t_ind.count(ANN) if alive_ind else "died", 1,
+337:row("indep paint", printed(t_ind, "v0") if alive_ind else "died", "0x%08x" % DST_PAINT,
+
+ succeeded in 328ms:
+ 321: 	uint8_t buf[8];		/* #100: bufdepth can be 8 = 1<<((mode>>8)&3) */
+ 322: 	if (put) {
+ 323: 		int ok = 1;	/*  #519: cleared by the default arm below  */
+ 324: 		switch (color_mode) {
+ 325: 		case DE_MODE_TYPE_CI:
+ 326: 			buf[0] = *color;
+ 327: 			break;
+ 328: 		case DE_MODE_TYPE_RGB:
+ 329: 			buf[0] = *color >> 24;
+ 330: 			buf[1] = *color >> 16;
+ 331: 			buf[2] = *color >> 8;
+ 332: 			buf[3] = 0;
+ 333: 			break;
+ 334: 		case DE_MODE_TYPE_RGBA:
+ 335: 			buf[0] = *color >> 24;
+ 336: 			buf[1] = *color >> 16;
+ 337: 			buf[2] = *color >> 8;
+ 338: 			buf[3] = *color;
+ 339: 			break;
+ 340: 		case DE_MODE_TYPE_ABGR:
+ 341: 			buf[0] = *color;
+ 342: 			buf[1] = *color >> 8;
+ 343: 			buf[2] = *color >> 16;
+ 344: 			buf[3] = *color >> 24;
+ 345: 			break;
+ 346: 		default:/*  #519 (sgirandomcolour): this arm was `buf[0..3] = random()'
+ 347: 			    and an UNLATCHED per-pixel fatal(), after which the common
+ 529: 	} else if (relative_addr >= CRIME_RE_TLB_B && relative_addr < CRIME_RE_TLB_C) {
+ 530: 		if (len != 8) {
+ 531: 			if (!(d->warned & SGIRE_W_TLBB_LEN)) {
+ 532: 				d->warned |= SGIRE_W_TLBB_LEN;
+ 533: 				fatal("[ sgi_re: unimplemented len=%i for "
+ 534: 				    "CRIME_RE_TLB_B -- declined.  (once) ]\n",
+ 535: 				    (int) len);
+ 536: 			}
+ 537: 		} else if (writeflag == MEM_WRITE) {
+ 538: 			int tlbi = ((relative_addr & 0x1ff) >> 1) & 0xff;
+ 539: 			for (size_t hwi = 0; hwi < len; hwi += sizeof(uint16_t)) {
+ 540: 				d->re_tlb_b[tlbi] = data[hwi]*256 + data[hwi+1];
+ 541: 				debug("d->re_tlb_b[%i] = 0x%04x\n", tlbi, d->re_tlb_b[tlbi]);
+ 542: 				tlbi++;
+ 543: 			}
+ 544: 		} else {
+ 545: 			/*  #513: ACCEPT -- the inverse of the write loop.  See the
+ 546: 			    CRIME_RE_TLB_A arm for why this sets odata, not data[].  */
+ 547: 			int tlbi = ((relative_addr & 0x1ff) >> 1) & 0xff;
+ 548: 			for (size_t hwi = 0; hwi < len; hwi += sizeof(uint16_t)) {
+ 549: 				odata = (odata << 16) | d->re_tlb_b[tlbi];
+ 550: 				tlbi++;
+ 551: 			}
+ 552: 		}
+ 553: 	} else if (relative_addr >= CRIME_RE_TLB_C && relative_addr < CRIME_RE_TLB_C + 0x200) {
+ 554: 		if (len != 8) {
+ 555: 			if (!(d->warned & SGIRE_W_TLBC_LEN)) {
+ 556: 				d->warned |= SGIRE_W_TLBC_LEN;
+ 557: 				fatal("[ sgi_re: unimplemented len=%i for "
+ 558: 				    "CRIME_RE_TLB_C -- declined.  (once) ]\n",
+ 559: 				    (int) len);
+ 560: 			}
+ 561: 		} else if (writeflag == MEM_WRITE) {
+ 562: 			int tlbi = ((relative_addr & 0x1ff) >> 1) & 0xff;
+ 563: 			for (size_t hwi = 0; hwi < len; hwi += sizeof(uint16_t)) {
+ 564: 				d->re_tlb_c[tlbi] = data[hwi]*256 + data[hwi+1];
+ 565: 				debug("d->re_tlb_c[%i] = 0x%04x\n", tlbi, d->re_tlb_c[tlbi]);
+ 566: 				tlbi++;
+ 567: 			}
+ 568: 		} else {
+ 569: 			/*  #513: ACCEPT -- the inverse of the write loop.  See the
+ 570: 			    CRIME_RE_TLB_A arm for why this sets odata, not data[].  */
+ 571: 			int tlbi = ((relative_addr & 0x1ff) >> 1) & 0xff;
+ 572: 			for (size_t hwi = 0; hwi < len; hwi += sizeof(uint16_t)) {
+ 573: 				odata = (odata << 16) | d->re_tlb_c[tlbi];
+ 574: 				tlbi++;
+ 575: 			}
+ 576: 		}
+ 577: 	} else if (relative_addr >= CRIME_RE_TEX && relative_addr < CRIME_RE_TEX + 0xe0) {
+ 578: 		if (len != 8) {
+ 579: 			if (!(d->warned & SGIRE_W_TEX_LEN)) {
+ 580: 				d->warned |= SGIRE_W_TEX_LEN;
+ 581: 				fatal("[ sgi_re: unimplemented len=%i for "
+ 582: 				    "CRIME_RE_TEX -- declined.  (once) ]\n",
+ 583: 				    (int) len);
+ 584: 			}
+ 585: 		} else if (writeflag == MEM_WRITE) {
+ 586: 			int tlbi = ((relative_addr & 0xff) >> 3) & 0xff;
+ 587: 			for (size_t hwi = 0; hwi < len; hwi += sizeof(uint16_t)) {
+ 588: 				d->re_tex[tlbi] = data[hwi]*256 + data[hwi+1];
+ 589: 				debug("d->re_tex[%i] = 0x%04x\n", tlbi, d->re_tex[tlbi]);
+ 590: 				tlbi++;
+ 591: 			}
+ 592: 		} else {
+ 875: 
+ 876: 	uint32_t stipple_mode = d->de_reg[(CRIME_DE_STIPPLE_MODE - 0x2000) / sizeof(uint32_t)];
+ 877: 	uint32_t pattern = d->de_reg[(CRIME_DE_STIPPLE_PAT - 0x2000) / sizeof(uint32_t)];
+ 878: 	int nr_of_bits_to_strip_to_the_left = (stipple_mode >> DE_STIP_STRTIDX_SHIFT) & 31;
+ 879: 	int nr_of_bits_to_strip_to_the_right = 31 - ((stipple_mode >> DE_STIP_MAXIDX_SHIFT) & 31);
+ 880: 	pattern >>= nr_of_bits_to_strip_to_the_right;
+ 881: 	pattern <<= nr_of_bits_to_strip_to_the_right;
+ 882: 	pattern <<= nr_of_bits_to_strip_to_the_left;
+ 883: 
+ 884: 	int nr_of_bits_in_the_middle = 32 - nr_of_bits_to_strip_to_the_left - nr_of_bits_to_strip_to_the_right;
+ 885: 
+ 886: 	if (stipple_mode & 0xe0e0ffff)
+ 887: 		fatal("[ sgi_de: UNIMPLEMENTED stipple_mode bits: 0x%08x ]\n", stipple_mode);
+ 888: 
+ 889: 	uint32_t x1 = (d->de_reg[(CRIME_DE_X_VERTEX_0 - 0x2000) / sizeof(uint32_t)] >> 16) & 0x7ff;
+ 890: 	uint32_t y1 = d->de_reg[(CRIME_DE_X_VERTEX_0 - 0x2000) / sizeof(uint32_t)]& 0x7ff;
+ 891: 	uint32_t x2 = (d->de_reg[(CRIME_DE_X_VERTEX_1 - 0x2000) / sizeof(uint32_t)] >> 16) & 0x7ff;
+ 892: 	uint32_t y2 = d->de_reg[(CRIME_DE_X_VERTEX_1 - 0x2000) / sizeof(uint32_t)]& 0x7ff;
+ 893: 	size_t x, y;
+ 894: 
+ 895: 	debug("[ sgi_de: STARTING DRAWING COMMAND: op = 0x%08x,"
+1110: 		break;
+1111: 
+1112: 	default:
+1113: 		/*  #500: a GUEST-WRITTEN drawing op ended the host process.
+1114: 		    The switch discriminates on the TOP BYTE only, so the domain
+1115: 		    is 256 values and only two are implemented -- DE_PRIM_LINE
+1116: 		    (0x01) and DE_PRIM_RECTANGLE (0x03).
+1117: 
+1118: 		    *** THE TWO KILLERS THAT MATTER ARE NOT EXOTIC VALUES: THEY
+1119: 		    ARE NAMED PRIMITIVES, AND ONE OF THEM IS THE RESET STATE. ***
+1120: 		    crmfbreg.h defines them as FULL 32-BIT VALUES, not top-byte
+1121: 		    indices: DE_PRIM_POINT 0x00000000, LINE 0x01000000,
+1122: 		    TRIANGLE 0x02000000, RECTANGLE 0x03000000.  Writing them
+1123: 		    as "0x01" invites a `case 0x02:' that can NEVER match,
+1124: 		    since the switch compares `op & 0xff000000'.  POINT and
+1125: 		    TRIANGLE land
+1126: 		    here.  And dev_sgi_re_init memsets the whole device struct,
+1127: 		    so CRIME_DE_PRIMITIVE reads 0 -- which IS POINT -- until a
+1128: 		    guest writes it.  A guest that sets the START bit having
+1129: 		    never written the primitive register at all therefore died
+1130: 		    here.  It need not choose a bad value; it need only omit a
+1131: 		    good one.
+1132: 
+1133: 		    Now a LATCHED DECLINE that falls out of the switch and
+1134: 		    returns.  The diagnostic is kept in full -- it names the op
+1135: 		    and the vertices, which is what a maintainer implementing
+1136: 		    the primitive would want -- and gains `-- declined.  (once)'
+1137: 		    so it cannot be mistaken for the old host kill and cannot
+1138: 		    flood a guest loop.  */
+1139: 		if (!(d->warned & SGIRE_W_PRIM_OP)) {
+1140: 			d->warned |= SGIRE_W_PRIM_OP;
+1141: 			fatal("[ sgi_de: UNIMPLEMENTED drawing op = 0x%08x,"
+1142: 			    " x1=%i y1=%i x2=%i y2=%i fg=0x%x bg=0x%x"
+1143: 			    " pattern=0x%08x -- declined.  (once) ]\n",
+1144: 			    op, x1, y1, x2, y2, fg, bg, pattern);
+1145: 		}
+1146: 		break;
+1147: 	}
+1148: }
+1149: 
+1150: DEVICE_ACCESS(sgi_de)
+1151: {
+1152: 	struct sgi_re_data *d = (struct sgi_re_data *) extra;
+1153: 	uint64_t idata = 0, odata = 0;
+1154: 	int regnr;
+1155: 	int startFlag = relative_addr & CRIME_DE_START;
+1156: 
+1157: 	relative_addr &= ~CRIME_DE_START;
+1158: 
+1159: 	idata = memory_readmax64(cpu, data, len);
+1160: 	regnr = relative_addr / sizeof(uint32_t);
+1161: 
+1162: 	relative_addr += 0x2000;
+1163: 
+1164: 	/*
+1165: 	 *  Treat all registers as read/write, by default.  Sometimes these
+1166: 	 *  are accessed as 32-bit words, sometimes as 64-bit words to access
+1167: 	 *  two adjacent registers in one operation.
+1168: 	 */
+1169: 	if (len == 8) {
+1170: 		if (writeflag == MEM_WRITE) {
+1171: 			d->de_reg[regnr] = idata >> 32ULL;
+1172: 			d->de_reg[regnr+1] = idata;
+1173: 		} else
+1174: 			odata = ((uint64_t)d->de_reg[regnr] << 32ULL) +
+1175: 			    d->de_reg[regnr+1];
+1176: 	} else if (len == 4) {
+1177: 		if (writeflag == MEM_WRITE)
+1178: 			d->de_reg[regnr] = idata;
+1179: 		else
+1180: 			odata = d->de_reg[regnr];
+230:#define CRIME_RE_TLB_A		0x1000
+231:#define CRIME_RE_TLB_B		0x1200
+232:#define CRIME_RE_TLB_C		0x1400
+279:#define CRIME_DE_DRAWMODE	0x2018
+325:#define DE_MODE_BUFDEPTH_8	0x00000000
+326:#define DE_MODE_BUFDEPTH_16	0x00000100
+327:#define DE_MODE_BUFDEPTH_32	0x00000200
+328:#define DE_MODE_TYPE_CI		0x00000000
+329:#define DE_MODE_TYPE_RGB	0x00000010
+330:#define DE_MODE_TYPE_RGBA	0x00000020
+331:#define DE_MODE_TYPE_ABGR	0x00000030
+332:#define DE_MODE_TYPE_YCRCB	0x000000f0
+333:#define DE_MODE_TYPE_MASK	0x000000f0
+356:#define DE_DRAWMODE_NO_CONF	0x00800000	/* disable coherency testing */
+357:#define DE_DRAWMODE_X11		0x00000000
+358:#define DE_DRAWMODE_GL		0x00400000
+359:#define DE_DRAWMODE_XFER_EN	0x00200000
+360:#define DE_DRAWMODE_SCISSOR_EN	0x00100000
+361:#define DE_DRAWMODE_LINE_STIP	0x00080000
+362:#define DE_DRAWMODE_POLY_STIP	0x00040000
+363:#define DE_DRAWMODE_OPAQUE_STIP	0x00020000
+364:#define DE_DRAWMODE_SHADE	0x00010000	/* smooth shading enable */
+365:#define DE_DRAWMODE_TEXTURE	0x00008000
+366:#define DE_DRAWMODE_FOG		0x00004000
+367:#define DE_DRAWMODE_COVERAGE	0x00002000
+368:#define DE_DRAWMODE_LINE_AA	0x00001000
+369:#define DE_DRAWMODE_ALPHA_TEST	0x00000800
+370:#define DE_DRAWMODE_ALPHA_BLEND	0x00000400
+371:#define DE_DRAWMODE_ROP		0x00000200
+372:#define DE_DRAWMODE_DITHER	0x00000100
+373:#define DE_DRAWMODE_PLANEMASK	0x00000080
+374:#define DE_DRAWMODE_BYTEMASK	0x00000078
+375:#define DE_DRAWMODE_DEPTH_TEST	0x00000004
+376:#define DE_DRAWMODE_DEPTH_MASK	0x00000002
+377:#define DE_DRAWMODE_STENCIL	0x00000001
+383:#define DE_PRIM_RECTANGLE	0x03000000
+74:	cpu->byte_order = EMUL_BIG_ENDIAN;
+83:		dev_ram_init(machine, 0x00000000, 0x10000, DEV_RAM_MIRROR
+85:		dev_ram_init(machine, 0x00050000, sgi_ram_offset-0x50000,
+93:		dev_ram_init(machine, 0x00000000, 128*1048576, DEV_RAM_MIRROR
+103:	 *  #446: FILL IT HERE, not only in the ip32 arm.
+106:	 *  arm (ip32, below) ever wrote to it -- yet the arcbios_init() call after
+111:	 *  anywhere in the region.  ip32 is correct today only because its own arm
+190:		  /* (machine->physical_ram_in_mb - 16) * (1048576 / 256));  */
+283:		dev_ram_init(machine, 0x88000000ULL,
+374:		    30000);  /* (machine->physical_ram_in_mb - 16)
+420:		dev_ram_init(machine, 0xa0000000ULL, 128 * 1048576,
+424:		dev_ram_init(machine,    0x80000000ULL,
+479:		if (machine->physical_ram_in_mb > 1024) {
+488:			int mirrorInMB = machine->physical_ram_in_mb < 256 ? machine->physical_ram_in_mb : 256;
+489:			dev_ram_init(machine, 0x40000000ULL, mirrorInMB * 1048576, DEV_RAM_MIRROR, 0, NULL);
+490:			if (machine->physical_ram_in_mb > 256)
+491:				dev_ram_init(machine, 0x50000000ULL, (machine->physical_ram_in_mb - 256) * 1048576, DEV_RAM_RAM, 0, NULL);
+631:		dev_ram_init(machine, 0x280000000ULL, 0x01000000, DEV_RAM_MIRROR, 0x18000000, NULL);
+716:	machine->physical_ram_in_mb = 128;
+746:	machine_entry_add_subtype(me, "IP32", 32, "ip32", "o2", NULL); 
+
+codex
+The origin address calculation checks out. Two premises need correcting: the existing LIN_B rows still have `linear == true` and return before colour dispatch, so they do not exercise tiled addressing. Also, one combined row is enough for the equality-only mutation class you specified.
+
+The oracle is the larger issue: the changed default arm leaves `buf` uninitialized. A mistaken store can therefore leave the sentinel unchanged by coincidence.
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n -F -e 'if (bufdepth == 4) ok = 0' -e 'if (linear)' -e '19/19' -e 'symmetric' regress/artifacts/sgirandomcolour/killtable_20260910/t2 regress/artifacts/sgirandomcolour/records_20260910; rg -n -g 'Makefile*' -g 'configure*' 'CXX|x c\\+\\+|std=|\\.c\\.o|CC =' ." in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$n=0; Get-Content -LiteralPath src/devices/dev_sgi_re.c | ForEach-Object { $n++; if (($n -ge 1025 -and $n -le 1110) -or ($n -ge 1190 -and $n -le 1215)) { '"'{0,4}: {1}' -f "'$n, $_ } }; $n=0; Get-Content -LiteralPath src/machines/machine_sgi.c | ForEach-Object { $n++; if (($n -ge 56 -and $n -le 101) -or ($n -ge 456 -and $n -le 503)) { '"'{0,4}: {1}' -f "'$n, $_ } }; rg -n '"'physical_ram_in_mb.*1048576|physical_ram_in_mb.*1024|dev_ram_init\\(machine' src/core/machine.c src/core/memory.c src/machines/machine_sgi.c" in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+ succeeded in 243ms:
+regress/artifacts/sgirandomcolour/records_20260910\DRAFT_changelog_519.md:15:              M13_widthdecline   `ok = 0;' -> `if (bufdepth == 4) ok = 0;'   14/14 AND 19/19
+regress/artifacts/sgirandomcolour/records_20260910\DRAFT_changelog_519.md:16:              M14_lineardecline  `ok = 0;' -> `if (linear) ok = 0;'          14/14 AND 19/19
+regress/artifacts/sgirandomcolour/records_20260910\DRAFT_changelog_519.md:50:         BASE_final 19/19;  M16_dropcase_rgb 18/19 (rgb put);  M17_dropcase_rgba 17/19 (live,
+regress/artifacts/sgirandomcolour/records_20260910\DRAFT_changelog_519.md:54:         BASE_19 19/19;  M15_texrd_19 18/19 and M18_sharedbit_tlba 18/19, BOTH killed by
+regress/artifacts/sgirandomcolour/records_20260910\DRAFT_changelog_519.md:204:2/5 -> 5/5 -> 16/16 `FIX519_detector_run3.out` -> 19/19 OWED).
+regress/artifacts/sgirandomcolour/killtable_20260910/t2\BASE_19.raw:23:SGICOLOUR_RESULT=19/19
+regress/artifacts/sgirandomcolour/killtable_20260910/t2\BASE_final.raw:23:SGICOLOUR_RESULT=19/19
+regress/artifacts/sgirandomcolour/killtable_20260910/t2\SCORES2.txt:11:BASE_final         19/19    sentinel=SGICOLOUR_DONE   reds=
+regress/artifacts/sgirandomcolour/killtable_20260910/t2\SCORES2.txt:18:BASE_19              19/19    sentinel=SGICOLOUR_DONE   reds=
+.\configure:301:	printf " for that compiler (e.g. -std=c99 if needed).\n"
+
+ exited 1 in 401ms:
+1025: 						}
+1026: 					}
+1027: 				}
+1028: 			}
+1029: 
+1030: 			if (draw)
+1031: 				horrible_getputpixel(1, cpu, d, x, y, &color, dst_mode);
+1032: 
+1033: 			// Rotate the stipple pattern:
+1034: 			pattern = (pattern << 1) | (pattern >> (nr_of_bits_in_the_middle-1));
+1035: 		}
+1036: 		break;
+1037: 
+1038: 	case DE_PRIM_RECTANGLE:
+1039: 		for (y = y1; y != endy; y = (y + dy) & 0x7ff) {
+1040: 			src_x = saved_src_x;
+1041: 			for (x = x1; x != endx; x = (x + dx) & 0x7ff) {
+1042: 				uint32_t color = fg;
+1043: 				uint32_t oldcolor = fg;
+1044: 
+1045: 				if (drawmode & DE_DRAWMODE_ROP && rop != OPENGL_LOGIC_OP_COPY)
+1046: 					horrible_getputpixel(0, cpu, d, x, y, &oldcolor, dst_mode);
+1047: 
+1048: 				// Pixel colors copied from another source.
+1049: 				// (OpenBSD draws characters using this mechanism.)
+1050: 				if (drawmode & DE_DRAWMODE_XFER_EN)
+1051: 					horrible_getputpixel(0, cpu, d,	src_x, src_y, &color, src_mode);
+1052: 
+1053: 				int draw = 1;
+1054: 				if (drawmode & DE_DRAWMODE_POLY_STIP) {
+1055: 					if (drawmode & DE_DRAWMODE_OPAQUE_STIP)
+1056: 						color = (pattern & 0x80000000UL) ? fg : bg;
+1057: 					else
+1058: 						draw = (pattern & 0x80000000UL)? 1 : 0;
+1059: 				}
+1060: 
+1061: 				// Raster-OP.
+1062: 				// TODO: Other ops.
+1063: 				// TODO: Should this be before or after other things?
+1064: 				if (drawmode & DE_DRAWMODE_ROP) {
+1065: 					switch (rop) {
+1066: 					case OPENGL_LOGIC_OP_COPY:
+1067: 						// color = color;
+1068: 						break;
+1069: 					case OPENGL_LOGIC_OP_XOR:
+1070: 						color = oldcolor ^ color;
+1071: 						break;
+1072: 					case OPENGL_LOGIC_OP_COPY_INVERTED:
+1073: 						color = 0xffffffff - oldcolor;
+1074: 						break;
+1075: 					default:{
+1076: 							static char rop_used[256];
+1077: 							static int first = 1;
+1078: 
+1079: 							if (first) {
+1080: 								memset(rop_used, 0, sizeof(rop_used));
+1081: 								first = 0;
+1082: 							}
+1083: 
+1084: 							if (!rop_used[rop & 255]) {
+1085: 								rop_used[rop & 255] = 1;
+1086: 								fatal("[ sgi_de: RECT: rop[0x%02x] used! ]\n", rop & 255);
+1087: 							}
+1088: 
+1089: 							if (rop >> 8) {
+1090: 								fatal("[ sgi_de: RECT: rop > 255: 0x%08x ]\n", rop);
+1091: 							}
+1092: 						}
+1093: 					}
+1094: 				}
+1095: 
+1096: 				if (draw)
+1097: 					horrible_getputpixel(1, cpu, d, x, y, &color, dst_mode);
+1098: 
+1099: 				// Rotate the stipple pattern:
+1100: 				pattern = (pattern << 1) | (pattern >> (nr_of_bits_in_the_middle-1));
+1101: 
+1102: 				if (src_is_linear)
+1103: 					src_x += step_x;
+1104: 				else
+1105: 					src_x = (src_x + dx) & 0x7ff;
+1106: 			}
+1107: 			
+1108: 			src_y = (src_y + dy) & 0x7ff;
+1109: 		}
+1110: 		break;
+1190: 		 *  MEASURED, NOT STYLISTIC. ***  #497's tail only answered a read.
+1191: 		 *  THIS function's tail also calls draw_primitive() when the guest
+1192: 		 *  set CRIME_DE_START, so falling through would run a rendering
+1193: 		 *  primitive for an access we just refused.
+1194: 		 *
+1195: 		 *  Clearing startFlag and falling through -- the obvious repair --
+1196: 		 *  scores 24/25: the declined access still reaches the switch
+1197: 		 *  below, which announces e.g. "TODO: non-zero CRIME_DE_SCISSOR"
+1198: 		 *  about a write THAT NEVER HAPPENED, from an idata this arm
+1199: 		 *  discarded.  Shipping a wrong record inside a diagnostic is the
+1200: 		 *  same class the ACCEPT member of the option set was found
+1201: 		 *  through.  The goto form scores 25/25.
+1202: 		 *
+1203: 		 *  `goto <label>' to a common exit is house idiom, not an
+1204: 		 *  invention: 10 device files use goto and 8 of those use it
+1205: 		 *  inside a DEVICE_ACCESS body (dc7085, i80321, le, mk48txx,
+1206: 		 *  ne2000, pvr, vr41xx, wdc).
+1207: 		 *
+1208: 		 *  It is not an early `return' either.  Control still reaches the
+1209: 		 *  common exit, so a declined READ is answered with odata (0) via
+1210: 		 *  memory_writemax64 and the function still returns 1.  `return 0'
+1211: 		 *  would be coerced to -1 by cpus/memory_rw.c and raise
+1212: 		 *  EXCEPTION_DBE -- turning a refusal into a guest bus error.
+1213: 		 */
+1214: 		if (!(d->warned & SGIRE_W_DE_LEN)) {
+1215: 			d->warned |= SGIRE_W_DE_LEN;
+  56: #define	MACHINE_NAME_MAXBUF		100
+  57: 
+  58: 
+  59: MACHINE_SETUP(sgi)
+  60: {
+  61: 	uint64_t sgi_ram_offset = 0;
+  62: 	int arc_wordlen = sizeof(uint32_t);
+  63: 	struct memory *mem = machine->memory;
+  64: 	char tmpstr[1000];
+  65: 	int i, j;
+  66: 	unsigned char macaddr[6];
+  67: 	char *machineName;
+  68: 
+  69: 	struct pci_data *pci_data = NULL;
+  70: 
+  71: 	CHECK_ALLOCATION(machineName = (char *) malloc(MACHINE_NAME_MAXBUF));
+  72: 	machine->machine_name = machineName;
+  73: 
+  74: 	cpu->byte_order = EMUL_BIG_ENDIAN;
+  75: 	snprintf(machineName, MACHINE_NAME_MAXBUF,
+  76: 	    "SGI-IP%i", machine->machine_subtype);
+  77: 
+  78: 	sgi_ram_offset = 1048576 * machine->memory_offset_in_mb;
+  79: 
+  80: 	/*  Special cases for IP20,22,24,26 memory offset:  */
+  81: 	if (machine->machine_subtype == 20 || machine->machine_subtype == 22 ||
+  82: 	    machine->machine_subtype == 24 || machine->machine_subtype == 26) {
+  83: 		dev_ram_init(machine, 0x00000000, 0x10000, DEV_RAM_MIRROR
+  84: 		    | DEV_RAM_MIGHT_POINT_TO_DEVICES, sgi_ram_offset, NULL);
+  85: 		dev_ram_init(machine, 0x00050000, sgi_ram_offset-0x50000,
+  86: 		    DEV_RAM_MIRROR | DEV_RAM_MIGHT_POINT_TO_DEVICES,
+  87: 		    sgi_ram_offset + 0x50000, NULL);
+  88: 	}
+  89: 
+  90: 	/*  Special cases for IP28,30 memory offset:  */
+  91: 	if (machine->machine_subtype == 28 || machine->machine_subtype == 30) {
+  92: 		/*  TODO: length below should maybe not be 128MB?  */
+  93: 		dev_ram_init(machine, 0x00000000, 128*1048576, DEV_RAM_MIRROR
+  94: 		    | DEV_RAM_MIGHT_POINT_TO_DEVICES, sgi_ram_offset, NULL);
+  95: 	}
+  96: 
+  97: 	net_generate_unique_mac(machine, macaddr);
+  98: 
+  99: 	char *eaddr_string;
+ 100: 	CHECK_ALLOCATION(eaddr_string = (char *) malloc(ETHERNET_STRING_MAXLEN));
+ 101: 
+ 456: 
+ 457: 		break;
+ 458: 
+ 459: 	case 32:
+ 460: 		strlcat(machineName, " (O2)", MACHINE_NAME_MAXBUF);
+ 461: 
+ 462: 		/*
+ 463: 		 *  The IP32 prom probes "bank 0" with the following
+ 464: 		 *  TLB entries:
+ 465: 		 *
+ 466: 		 *  00: vaddr=0000000000000000 (global):  p0=0x040000000 D p1=0x041000000 D (16MB)
+ 467: 		 *  01: vaddr=0000000002000000 (global):  p0=0x042000000 D p1=0x043000000 D (16MB)
+ 468: 		 *  02: vaddr=0000000004000000 (global):  p0=0x044000000 D p1=0x045000000 D (16MB)
+ 469: 		 *  03: vaddr=0000000006000000 (global):  p0=0x046000000 D p1=0x047000000 D (16MB)
+ 470: 		 *
+ 471: 		 *  In other words, it uses real memory at 0x40000000 and up.
+ 472: 		 *  However, it is _also_ accessible at physical address 0x0.
+ 473: 		 *
+ 474: 		 *  Max amount of RAM in an O2 is 1 GB. However, devices start at
+ 475: 		 *  0x14000000 (or below that), so 256 MB is the most that the legacy GXemul
+ 476: 		 *  framework can handle. Memory above that must be accessed from 0x40000000 and up.
+ 477:  		 */
+ 478: 
+ 479: 		if (machine->physical_ram_in_mb > 1024) {
+ 480: 			fatal("SGI O2 cannot have more than 1 GB of RAM.\n");
+ 481: 			exit(1);
+ 482: 		}
+ 483: 
+ 484: 		/*  In the new framework, this would be the other way around :-), i.e.
+ 485: 		    actual memory at 0x40000000 and the first 256 MB would be mirrored
+ 486: 		    to address 0.  */
+ 487: 		{
+ 488: 			int mirrorInMB = machine->physical_ram_in_mb < 256 ? machine->physical_ram_in_mb : 256;
+ 489: 			dev_ram_init(machine, 0x40000000ULL, mirrorInMB * 1048576, DEV_RAM_MIRROR, 0, NULL);
+ 490: 			if (machine->physical_ram_in_mb > 256)
+ 491: 				dev_ram_init(machine, 0x50000000ULL, (machine->physical_ram_in_mb - 256) * 1048576, DEV_RAM_RAM, 0, NULL);
+ 492: 		}
+ 493: 		
+ 494: 		/*  Connect CRIME (Interrupt Controller) to MIPS irq 2:  */
+ 495: 		snprintf(tmpstr, sizeof(tmpstr), "%s.cpu[%i].2",
+ 496: 		    machine->path, machine->bootstrap_cpu);
+ 497: 		dev_crime_init(machine, mem, 0x14000000, tmpstr, machine->x11_md.in_use);
+ 498: 
+ 499: 		/*  Rendering Engine  */
+ 500: 		dev_sgi_re_init(machine, mem, 0x15000000);
+ 501: 
+ 502: 		/*  Graphics Back End  */
+ 503: 		dev_sgi_gbe_init(machine, mem, 0x16000000);
+rg: src/core/machine.c: The system cannot find the file specified. (os error 2)
+src/machines/machine_sgi.c:83:		dev_ram_init(machine, 0x00000000, 0x10000, DEV_RAM_MIRROR
+src/machines/machine_sgi.c:85:		dev_ram_init(machine, 0x00050000, sgi_ram_offset-0x50000,
+src/machines/machine_sgi.c:93:		dev_ram_init(machine, 0x00000000, 128*1048576, DEV_RAM_MIRROR
+src/machines/machine_sgi.c:190:		  /* (machine->physical_ram_in_mb - 16) * (1048576 / 256));  */
+src/machines/machine_sgi.c:283:		dev_ram_init(machine, 0x88000000ULL,
+src/machines/machine_sgi.c:420:		dev_ram_init(machine, 0xa0000000ULL, 128 * 1048576,
+src/machines/machine_sgi.c:424:		dev_ram_init(machine,    0x80000000ULL,
+src/machines/machine_sgi.c:479:		if (machine->physical_ram_in_mb > 1024) {
+src/machines/machine_sgi.c:489:			dev_ram_init(machine, 0x40000000ULL, mirrorInMB * 1048576, DEV_RAM_MIRROR, 0, NULL);
+src/machines/machine_sgi.c:491:				dev_ram_init(machine, 0x50000000ULL, (machine->physical_ram_in_mb - 256) * 1048576, DEV_RAM_RAM, 0, NULL);
+src/machines/machine_sgi.c:631:		dev_ram_init(machine, 0x280000000ULL, 0x01000000, DEV_RAM_MIRROR, 0x18000000, NULL);
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$n=0; Get-Content -LiteralPath regress/artifacts/sgirandomcolour/records_20260910/DRAFT_changelog_519.md | ForEach-Object { $n++; if ($n -le 82) { '"'{0,4}: {1}' -f "'$n, $_ } }; rg --files regress/artifacts/sgirandomcolour/killtable_20260910 | rg '"'M13|M14|SCORES|RESULT|[Rr]ecord'" in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg --files src | rg '("'^|['"\\\\/])(machine|memory|emul|main)\\.(c|cc|h)"'$'"'; "'$paths = @('"'Makefile','Makefile.mk','src/Makefile','src/devices/Makefile'); foreach ("'$path in $paths) { if (Test-Path -LiteralPath $path) { rg -n '"'CC|CXX|CFLAGS|CXXFLAGS|\\.c\\.o|std=' "'$path } }; $n=0; Get-Content -LiteralPath configure | ForEach-Object { $n++; if ($n -ge 220 -and $n -le 306) { '"'{0,4}: {1}' -f "'$n, $_ } }; rg -n '"'physical_ram_in_mb|memory_offset_in_mb' src/core/memory.c src/machines/machine.c src/machines/machine_sgi.c" in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+ succeeded in 386ms:
+   1: <!-- ================================================================================
+   2:      DRAFT ROUND BLOCK -- NOT THE SHIPPED CHANGELOG TEXT.  #519 IS HELD.
+   3: 
+   4:      Rescued out of the session scratchpad (Windows Temp, volatile) on 2026-09-10.
+   5: 
+   6:        1. THE RECORDS AUDIT IS AT NO-GO.  codex_records_20260910.txt returned
+   7:           `VERDICT: NO-GO (13 items)', undisposed.  It did independently CONFIRM several of the
+   8:           draft's numbers against the artifacts (the hunk and line counts, the nibble and warn-bit
+   9:           counts, the four functions using d->warned, nine original sessions, the 03:51 / 04:00:19 /
+  10:           04:06 ordering metadata, and that M11's saved pre-fix file and HEAD's blob hash equal).
+  11: 
+  12:        2. TWO MUTANTS SWEEP THE INSTRUMENT CLEAN, and they are clause-(d) operand swaps on the
+  13:           guarded body's own read set.  The Opus measuring seat built them itself, after every
+  14:           planned mutant had been killed:
+  15:               M13_widthdecline   `ok = 0;' -> `if (bufdepth == 4) ok = 0;'   14/14 AND 19/19
+  16:               M14_lineardecline  `ok = 0;' -> `if (linear) ok = 0;'          14/14 AND 19/19
+  17:           Every declined-type row drives a 32-bit LIN_A mode, so the exempted joint cells
+  18:           {declined type} x {bufdepth != 4} and {declined type} x {tiled} are entered by no row.
+  19:           Both axes ARE exercised elsewhere in the probe, at a SUPPORTED type where `ok' is never
+  20:           cleared -- so the axes are covered and their JOINT with the decline is not.  Reachable:
+  21:           mode 0x10f0 reaches the arm at bufdepth 1, one hex digit from the row's own constant.
+  22:           THE ROUND IS HELD ON THIS.  The seat did not grade it; row demand and the L1/L2
+  23:           disposition are the round's call, and the joint space it names is
+  24:           {declined type} x {bufdepth 1,2,4,8} x {tlb_mode 0,1,2,4}, of which today's rows occupy
+  25:           one cell.  Closing only at bufdepth 1 is the `#499' repaired-at-the-mutant's-address trap.
+  26: 
+  27:      THE INLINE `*** OWED ***' MARKERS BELOW ARE SUPERSEDED BY THIS BLOCK.  Every score is read
+  28:      from a log ending `SGICOLOUR_DONE'.
+  29: 
+  30:      TABLE 1 -- Opus seat, FROZEN 14-row instrument + frozen baseline, /tmp/gxopus519,
+  31:      killtable_20260910/TABLE1.out and 19 .raw logs:
+  32:          BASE 14/14   (HEAD 6/14, null medium 6/14, fix 14/14)
+  33:          M1_reinstate       6/14 (b)      M2_noguard          9/14 (d)
+  34:          M3_zerofill       10/14 (d)      M4_okinlatch       13/14 (d)
+  35:          M5_nolatch        13/14          M6_sharedbit       13/14
+  36:          M7_silent         10/14          M8_declineall      10/14  reds live/ci8/rgb/abgr
+  37:          M9_dropcase_ci    13/14          M10_dropcase_abgr  13/14
+  38:          M11_null           6/14 (c)      M12_prefix_reworded 13/14
+  39:          M13_widthdecline  14/14 *** TOTAL ESCAPE ***
+  40:          M14_lineardecline 14/14 *** TOTAL ESCAPE ***
+  41:      M8's reds independently CONFIRM the PRETABLE 6.a correction: the all-declined mutant reds
+  42:      `live', not `live silent'.
+  43: 
+  44:      TABLE 2 -- 16-row instrument, main loop, /tmp/gx519, t2/SCORES2.txt:
+  45:          BASE 16/16;  M13_okorx 15/16 and M14_okory 15/16, each killed by `ycrcb x4y1' ALONE --
+  46:          the row grok's one-token edit demanded;  M15_texrd 16/16, the PREDICTED escape, measured
+  47:          rather than disclosed as a prediction.
+  48: 
+  49:      TABLE 2b -- 19-row instrument on the bracket-edited source:
+  50:          BASE_final 19/19;  M16_dropcase_rgb 18/19 (rgb put);  M17_dropcase_rgba 17/19 (live,
+  51:          live silent).  The two accept rows that had only the all-declined mutant now have their own.
+  52: 
+  53:      TABLE 2c -- 19-row instrument, the latch-collision CLASS CLOSURE:
+  54:          BASE_19 19/19;  M15_texrd_19 18/19 and M18_sharedbit_tlba 18/19, BOTH killed by
+  55:          `allbits announce'.  The mutant that escaped table 2 is killed by the closure, which is
+  56:          the measurement the disclosure was replaced with.
+  57: 
+  58:      The clone was restored from SEC, rebuilt, and its sentinel cleared.
+  59: ================================================================================ -->
+  60: 
+  61: # `#519` sgirandomcolour: the colour-type PUT default wrote four host-PRNG bytes into guest memory, and a DOCUMENTED colour type reached it
+  62: 
+  63: **THE DEFECT.** `horrible_getputpixel()` in `src/devices/dev_sgi_re.c` packs one pixel for the drawing
+  64: engine's PUT by switching on the destination mode's TYPE nibble. Four of the sixteen nibbles are
+  65: implemented (CI, RGB, RGBA, ABGR); the `default:` arm did `buf[0..3] = random()` and an UNLATCHED per-pixel
+  66: `fatal()`, after which the common store below wrote the buffer into the destination. `fatal()` returns
+  67: (`src/core/debugmsg.c`, `void fatal(`: no early-out, no exit), so the fill was live. Twelve nibbles reach
+  68: the arm, `DE_MODE_TYPE_YCRCB` (0xf0) -- a mode `crmfbreg.h` documents -- among them, so a guest driving a
+  69: documented mode received the HOST's PRNG output in its framebuffer, per pixel, differently on every run.
+  70: Filed 2026-09-06 by the grok seat on the `sgirandompixel` (#504) design panel as the same class at a second
+  71: site ("`default:` of the COLOUR-mode switch still does `buf[n] = random()` and then writes those bytes"),
+  72: verified by reading before filing; nobody else on that panel saw it.
+  73: 
+  74: **WITNESSED AT RUNG 3 BEFORE ANY EDIT** (`regress/sgi_re_colourdefault_probe.py`, unmodified `-E sgi -e ip32`,
+  75: built by agy as the INDEPENDENT-TRANSPORT FALLBACK while both Anthropic seats were walled -- HTTP 429
+  76: "session limit, resets 3am" on the Agent tool, the shared-transport class; `regress/artifacts/sgirandomcolour/
+  77: WITNESS_brief_agy_20260910.md`, transcript `agy_witness_20260910.md`): a guest programs the DE for a LIN_A
+  78: 32-bpp destination at physical 0x10000 (`re_linear_a[0] = 0x10`), pre-paints the word 0x11223344, fires one
+  79: RECT PUT at (0,0) with type YCRCB and again with a reserved nibble (0x50), and reads the word back through
+  80: KSEG1. On HEAD `1ce8296` BOTH unsupported-type PUTs replaced the paint with bytes that are neither the paint
+  81: nor any packing of the colour (0x56e8857a and 0x38abc4e1 on two runs -- `witness_20260910/HEAD_run1.out`,
+  82: `HEAD_run2.out`), the `determinism` row differs across runs, and the supported RGBA control lands
+regress/artifacts/sgirandomcolour/killtable_20260910\t2\SCORES2.txt
+regress/artifacts/sgirandomcolour/killtable_20260910\t2\mutate_M14_okory.log
+regress/artifacts/sgirandomcolour/killtable_20260910\t2\mutate_M13_okorx.log
+regress/artifacts/sgirandomcolour/killtable_20260910\t2\M14_okory.raw
+regress/artifacts/sgirandomcolour/killtable_20260910\t2\M13_okorx.raw
+regress/artifacts/sgirandomcolour/killtable_20260910\t2\build_M14_okory.log
+regress/artifacts/sgirandomcolour/killtable_20260910\t2\build_M13_okorx.log
+regress/artifacts/sgirandomcolour/killtable_20260910\M14_lineardecline.raw
+regress/artifacts/sgirandomcolour/killtable_20260910\M14l_lineardecline_vs19.raw
+regress/artifacts/sgirandomcolour/killtable_20260910\M13_widthdecline.raw
+regress/artifacts/sgirandomcolour/killtable_20260910\M13w_widthdecline_vs19.raw
+
+ succeeded in 519ms:
+13:CC=cc
+31:	$(CC) $(COPTIM) src/console/*.o src/cpus/*.o src/debugger/*.o src/devices/*.o src/disk/*.o src/file/*.o src/machines/*.o src/net/*.o src/core/*.o src/promemul/*.o src/symbol/*.o $(LIBS) -o $(BIN)
+13:CC=cc
+13:CC=cc
+25:CFLAGS=$(CWARNINGS) $(COPTIM) $(XINCLUDE) $(DINCLUDE)
+ 220: 
+ 221: printf "\n" >> config.h
+ 222: 
+ 223: 
+ 224: ###############################################################################
+ 225: #
+ 226: #  Create the Makefile header:
+ 227: #
+ 228: ###############################################################################
+ 229: 
+ 230: rm -f _Makefile.header
+ 231: 
+ 232: printf "#
+ 233: #  DO NOT EDIT THIS FILE! It is automagically created by
+ 234: #  the configure script, based on Makefile.skel.
+ 235: #\n\n" >> _Makefile.header
+ 236: 
+ 237: 
+ 238: #  Try with the simplest possible test program. Actually, test static variables
+ 239: #  as well, because GXemul uses things like NULL-initialized global pointers,
+ 240: #  and it is important that they work. (Some versions of GCC on Solaris are
+ 241: #  known to be completely broken, for instance.)
+ 242: 
+ 243: echo '#include <stdio.h>
+ 244: #include <stdbool.h>
+ 245: 
+ 246: int main(int argc, char* argv[])
+ 247: {
+ 248: 	static int s = 0;
+ 249: 	int x = 2;	// make sure that BCPL style comments work,
+ 250: 	x ++;		// that code and variable declarations can be
+ 251: 	int y = -2;	// mixed, and that the bool type behaves
+ 252: 	bool a = x;	// reasonably.
+ 253: 	bool b = y;
+ 254: 	bool c = a + b;
+ 255: 	int d = a + b;
+ 256: 	printf("%i,%i,%i,%i,%i", s, a, b, c, d);
+ 257: 	for (int i = 0; i < 10; ++i) ;
+ 258: 	return 0;
+ 259: }
+ 260: ' > _testprog.c
+ 261: 
+ 262: 
+ 263: #  Try to detect which C compiler to use, if CC is not set:
+ 264: printf "checking which C compiler to use... "
+ 265: rm -f _testprog
+ 266: if [ z"$CC" = z ]; then
+ 267: 	CC=cc
+ 268: fi
+ 269: 
+ 270: printf "#!/bin/sh\n$CC $CFLAGS _testprog.c -o _testprog >" > _test.sh
+ 271: printf " /dev/null 2> /dev/null\n" >> _test.sh
+ 272: chmod 755 _test.sh
+ 273: ./_test.sh > /dev/null 2> /dev/null
+ 274: OK=0
+ 275: if [ -x _testprog ]; then
+ 276: 	OK=1
+ 277: 	if [ z`./_testprog` = z0,1,1,1,2 ]; then
+ 278: 		OK=2
+ 279: 	fi
+ 280: fi
+ 281: 
+ 282: if [ z$OK = z0 ]; then
+ 283: 	printf "broken cc detected: $CC $CFLAGS\n"
+ 284: 	printf "The test program:\n\n"
+ 285: 	cat _testprog.c
+ 286: 	printf "could not be compiled at all.\n"
+ 287: fi
+ 288: 
+ 289: if [ z$OK = z1 ]; then
+ 290: 	printf "broken cc detected: $CC $CFLAGS\n"
+ 291: 	printf "The test program:\n\n"
+ 292: 	cat _testprog.c
+ 293: 	printf "should have resulted in  0,1,1,1,2  but the result was: "
+ 294: 	./_testprog
+ 295: fi
+ 296: 
+ 297: if [ z$OK != z2 ]; then
+ 298: 	printf "\nPlease set the CC environment variable to a working C "
+ 299: 	printf "compiler before running\nthe configure script, and make"
+ 300: 	printf " sure that the CFLAGS environment variable is\nalso valid"
+ 301: 	printf " for that compiler (e.g. -std=c99 if needed).\n"
+ 302: 	exit
+ 303: fi
+ 304: 
+ 305: rm -f _testprog
+ 306: rm -f _test.sh
+src/machines/machine.c:450:	snprintf(meminfo, sizeof(meminfo), "%i MB", m->physical_ram_in_mb);
+src/machines/machine.c:452:	if (m->memory_offset_in_mb != 0)
+src/machines/machine.c:454:		    " (offset by %i MB)", m->memory_offset_in_mb);
+src/machines/machine.c:608: *  Sets physical_ram_in_mb (if not already set), and memory_offset_in_mb,
+src/machines/machine.c:618:	if (m->physical_ram_in_mb == 0) {
+src/machines/machine.c:637:			m->memory_offset_in_mb = 128;
+src/machines/machine.c:641:			m->memory_offset_in_mb = 512;
+src/machines/machine.c:646:	if (m->physical_ram_in_mb == 0)
+src/machines/machine.c:647:		m->physical_ram_in_mb = DEFAULT_RAM_IN_MB;
+src/machines/machine_sgi.c:78:	sgi_ram_offset = 1048576 * machine->memory_offset_in_mb;
+src/machines/machine_sgi.c:190:		  /* (machine->physical_ram_in_mb - 16) * (1048576 / 256));  */
+src/machines/machine_sgi.c:374:		    30000);  /* (machine->physical_ram_in_mb - 16)
+src/machines/machine_sgi.c:479:		if (machine->physical_ram_in_mb > 1024) {
+src/machines/machine_sgi.c:488:			int mirrorInMB = machine->physical_ram_in_mb < 256 ? machine->physical_ram_in_mb : 256;
+src/machines/machine_sgi.c:490:			if (machine->physical_ram_in_mb > 256)
+src/machines/machine_sgi.c:491:				dev_ram_init(machine, 0x50000000ULL, (machine->physical_ram_in_mb - 256) * 1048576, DEV_RAM_RAM, 0, NULL);
+src/machines/machine_sgi.c:716:	machine->physical_ram_in_mb = 128;
+
+codex
+The 16-cell enumeration confirms that `0x00f0` combines depth 1 with TLB_A and targets `0x10000`. It also exposes the gap left by separate depth-only and tiled-only additions: `if (bufdepth == 4 || linear) ok = 0;` would still satisfy all three sampled configurations.
+
+I’m checking the remaining source details, including the required register-write width and whether the tiled pointer shift has a C portability caveat.
+
+web search: 
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n 'SGICOLOUR_RESULT|SGICOLOUR_DONE' regress/artifacts/sgirandomcolour/killtable_20260910/M13w_widthdecline_vs19.raw regress/artifacts/sgirandomcolour/killtable_20260910/M14l_lineardecline_vs19.raw; "'$n=0; Get-Content -LiteralPath src/devices/dev_sgi_re.c | ForEach-Object { $n++; if ($n -ge 935 -and $n -le 968) { '"'{0,4}: {1}' -f "'$n, $_ } }; $n=0; Get-Content -LiteralPath src/machines/machine.c | ForEach-Object { $n++; if ($n -ge 614 -and $n -le 649) { '"'{0,4}: {1}' -f "'$n, $_ } }; rg -n '"'physical_ram_in_mb|dev_ram_init|memory_offset_in_mb' src/core/emul.c; rg -n 'CC=|COPTIM=|CWARNINGS=' Makefile src/devices/Makefile" in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+ succeeded in 342ms:
+regress/artifacts/sgirandomcolour/killtable_20260910/M13w_widthdecline_vs19.raw:23:SGICOLOUR_RESULT=19/19
+regress/artifacts/sgirandomcolour/killtable_20260910/M13w_widthdecline_vs19.raw:24:SGICOLOUR_DONE
+regress/artifacts/sgirandomcolour/killtable_20260910/M14l_lineardecline_vs19.raw:23:SGICOLOUR_RESULT=19/19
+regress/artifacts/sgirandomcolour/killtable_20260910/M14l_lineardecline_vs19.raw:24:SGICOLOUR_DONE
+ 935: 	if (!(drawmode & DE_DRAWMODE_PLANEMASK)) {
+ 936: 		printf("!DE_DRAWMODE_PLANEMASK: TODO\n");
+ 937: 	}
+ 938: 	
+ 939: 	if ((drawmode & DE_DRAWMODE_BYTEMASK) != DE_DRAWMODE_BYTEMASK) {
+ 940: 		printf("not all DE_DRAWMODE_BYTEMASK set: TODO\n");
+ 941: 	}
+ 942: 	
+ 943: 	// primitive rendering direction (not for Lines? and presumably
+ 944: 	// not for Points either :-)
+ 945: 	int dx = op & DE_PRIM_RL ? -1 :  1;
+ 946: 	int dy = op & DE_PRIM_TB ?  1 : -1;
+ 947: 
+ 948: 	uint16_t saved_src_x = src_x;
+ 949: 
+ 950: 	/*
+ 951: 	 *  Drawing is limited to 2048 x 2048 pixel space.
+ 952: 	 *
+ 953: 	 *  TODO: MAYBE it is really -2048 to 2027, i.e. 12 bits of
+ 954: 	 *  pixel space. Perhaps it is possible to figure out
+ 955: 	 *  experimentally some day, e.g. by drawing lines from
+ 956: 	 *  -10,10 to 500,20 and see whether the real hardware
+ 957: 	 *  interprets -10 as -10 or 0x800 - 10.
+ 958: 	 */
+ 959: 	uint16_t endx = (x2 + dx) & 0x7ff;
+ 960: 	uint16_t endy = (y2 + dy) & 0x7ff;
+ 961: 
+ 962: 	int lx = abs((int)(x2 - x1)), ly = abs((int)(y2 - y1));
+ 963: 	int linelen = lx > ly ? lx : ly;
+ 964: 
+ 965: 	switch (op & 0xff000000) {
+ 966: 	case DE_PRIM_LINE:
+ 967: 		if (drawmode & DE_DRAWMODE_XFER_EN)
+ 968: 			fatal("[ sgi_de: XFER_EN for LINE op? ]\n");
+ 614: 		fatal("machine_defaultmemsize(): m == NULL?\n");
+ 615: 		exit(1);
+ 616: 	}
+ 617: 
+ 618: 	if (m->physical_ram_in_mb == 0) {
+ 619: 		struct machine_entry *me = first_machine_entry;
+ 620: 		while (me != NULL) {
+ 621: 			if (m->machine_type == me->machine_type &&
+ 622: 			    me->set_default_ram != NULL) {
+ 623: 				me->set_default_ram(m);
+ 624: 				break;
+ 625: 			}
+ 626: 			me = me->next;
+ 627: 		}
+ 628: 	}
+ 629: 
+ 630: 	/*  Special SGI memory offsets:  (TODO: move this somewhere else)  */
+ 631: 	if (m->machine_type == MACHINE_SGI) {
+ 632: 		switch (m->machine_subtype) {
+ 633: 		case 20:
+ 634: 		case 22:
+ 635: 		case 24:
+ 636: 		case 26:
+ 637: 			m->memory_offset_in_mb = 128;
+ 638: 			break;
+ 639: 		case 28:
+ 640: 		case 30:
+ 641: 			m->memory_offset_in_mb = 512;
+ 642: 			break;
+ 643: 		}
+ 644: 	}
+ 645: 
+ 646: 	if (m->physical_ram_in_mb == 0)
+ 647: 		m->physical_ram_in_mb = DEFAULT_RAM_IN_MB;
+ 648: }
+ 649: 
+324:	len += 1048576 * m->memory_offset_in_mb;
+333:	    0x60000 + m->memory_offset_in_mb * 1048576,
+334:	    start-0x60000 - m->memory_offset_in_mb * 1048576,
+457:	snprintf(meminfo, sizeof(meminfo), "%i MB", m->physical_ram_in_mb);
+459:	memory_amount = (uint64_t)m->physical_ram_in_mb * 1048576;
+460:	if (m->memory_offset_in_mb > 0) {
+467:		    " (offset by %i MB)", m->memory_offset_in_mb);
+469:		memory_amount += 1048576 * m->memory_offset_in_mb;
+src/devices/Makefile:8:CWARNINGS=-Wshadow -Wcast-align -Wstrict-aliasing -Wall  -Wextra -Wno-unused-parameter -Wno-cast-align
+src/devices/Makefile:9:COPTIM=-fstrict-aliasing -fomit-frame-pointer -fpeephole -fgnu89-inline -O3 -DNDEBUG 
+src/devices/Makefile:13:CC=cc
+Makefile:8:CWARNINGS=-Wshadow -Wcast-align -Wstrict-aliasing -Wall  -Wextra -Wno-unused-parameter -Wno-cast-align
+Makefile:9:COPTIM=-fstrict-aliasing -fomit-frame-pointer -fpeephole -fgnu89-inline -O3 -DNDEBUG 
+Makefile:13:CC=cc
+
+web search: https://www.open-std.org/jtc1/sc22/wg14/www/docs/n1570.pdf
+web search: 
+web search: 'representable in the result type'
+codex
+VERDICT: add `0x00f0` (YCRCB, depth 1, TLB_A). That is the minimum for your stated equality-only variants. I would also add `0x05f0` and `0x0bf0` to exercise every depth and TLB-bank value. Deterministic detection requires observing writes, not just unchanged bytes. CODEX_519_COVERAGE_20260910.
+
+Read-only inspection confirms 19 assertions and the saved **19/19** results for [variant A](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/sgirandomcolour/killtable_20260910/M13w_widthdecline_vs19.raw:23) and [variant B](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/sgirandomcolour/killtable_20260910/M14l_lineardecline_vs19.raw:23). Two premises need correcting:
+
+- The existing alternative mode is `0x1620`: depth 4, TLB mode **5**, `linear == true`. It returns through the addressing default before colour dispatch. **No existing PUT exercises tiled addressing.**
+- The previous default explicitly initialized four bytes with `random()`. At depths 1, 2 and 4, those bytes were initialized. Your mutations of the current default instead expose an **entirely uninitialized buffer**.
+
+At `(0,0)`, the [address calculations](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:224) enumerate as follows:
+
+| `bufdepth` | Depth field | `512 / bufdepth` | `x / tilewidth` | `tile_nr` | `ofs` |
+|---:|---:|---:|---:|---:|---:|
+| 1 | 0 | 512 | 0 | 0 | 0 |
+| 2 | 1 | 256 | 0 | 0 | 0 |
+| 4 | 2 | 128 | 0 | 0 | 0 |
+| 8 | 3 | 64 | 0 | 0 | 0 |
+
+For tiled mode 0:
+
+1. The coordinate rejection is false: both coordinates lie within `[0,2047]`.
+2. The array-bound rejection is false: `tlb_mode <= 2` is true, but `0 >= 256` is false.
+3. The intended bit calculation gives `0x8001 << 16 = 0x80010000`.
+4. The valid-bit rejection is false because bit 31 is set.
+5. Clearing that bit gives `0x00010000`; adding offset zero preserves it.
+
+Modes 1 and 2 give the same calculation using their respective B/C entries.
+
+For linear mode 4, the initial calculations above still occur, but the tiled array-bound check does not apply. Its replacement tile number is `0 >> 12 = 0`; `0 >= 32` is false. Then:
+
+```text
+tileptr = 0x80000000 | (0x10 << 12) = 0x80010000
+ofs     = 0 & 4095                 = 0
+final destination                 = 0x00010000
+```
+
+Specifically, `0x10f0` decodes to **depth 1, TLB mode 4, linear true, colour `0xf0`**. A mistakenly permitted store writes **one byte at physical `0x10000`**. The correct build performs no store.
+
+The possible write extents at the origin are `0x10000`, `0x10000–0x10001`, `0x10000–0x10003`, and `0x10000–0x10007`. All are inside the IP32 rig’s 64 MiB RAM: `0x00000000–0x03ffffff`.
+
+There is a C portability qualification: the TLB entries are `uint16_t`. With 32-bit `int`, they promote to signed `int` before shifting. Here `32769 × 65536 = 2147549184`, exceeding `INT_MAX = 2147483647`; ISO C therefore does not guarantee that shift’s result. An unsigned cast **before** the shift removes this issue. The addresses above describe the intended bit arithmetic, not a runtime verification. [C11 draft, §§6.3.1.1 and 6.5.7](https://www.open-std.org/jtc1/sc22/wg14/www/docs/n1570.pdf#page=113)
+
+For the minimum row, combine both missing conditions in **one operation**. With a write-sensitive oracle, `0x00f0` detects A, B and `if (tlb_mode == 4) ok = 0;`. More generally, the old/new rows have depth values `{4,1}`, TLB values `{4,0}`, and linear values `{true,false}`: no single equality constant can select both values of any axis. Existing unsupported colours `{0xf0,0x50}` already provide that distinction for `color_mode`.
+
+The concrete row choices are:
+
+| Row | Mode | Depth / TLB mode | Register setup | Correct readback | Purpose |
+|---|---|---|---|---|---|
+| Minimum | `0x00f0` | 1 / 0 | `re_tlb_a[0] = 0x8001` | `0x11223344` | Detects A, B and singleton equality restrictions |
+| Additional depth/bank coverage | `0x05f0` | 2 / 1 | `re_tlb_b[0] = 0x8001` | `0x11223344` | Also exposes exclusions specific to depth 2 or TLB_B |
+| Additional depth/bank coverage | `0x0bf0` | 8 / 2 | `re_tlb_c[0] = 0x8001` | Both prefilled words unchanged | Also exposes exclusions specific to depth 8 or TLB_C |
+
+For every row, set **both vertices to `(0,0)`**, use the existing solid draw mode `0xf8`, foreground `0xaabbccdd`, and rectangle trigger `0x03020000`. Prefill/read through `0xa0010000`. For depth 8, also prefill/read `0xa0010004`, for example with `0x55667788`.
+
+The [TLB register handlers](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:489) require **eight-byte writes**. An aligned guest doubleword write of `0x8001000000000000` to respectively `0xb5001000`, `0xb5001200`, or `0xb5001400` sets entry zero to `0x8001` and the next three entries to zero. Merely changing `dst_mode` in the current helper would leave the tiled entry unprogrammed.
+
+Require the colour-decline diagnostic in each fresh session as well: otherwise an invalid tile could leave the sentinel unchanged without reaching colour dispatch.
+
+Here are the uncovered combinations, with unsupported colour treated as one equivalence class:
+
+| Depth | Uncovered TLB modes after minimum addition | Uncovered TLB modes after all three additions |
+|---:|---|---|
+| 1 | 1, 2, 4 | 1, 2, 4 |
+| 2 | 0, 1, 2, 4 | 0, 2, 4 |
+| 4 | 0, 1, 2 | 0, 1, 2 |
+| 8 | 0, 1, 2, 4 | 0, 1, 4 |
+| **Total** | **14 uncovered; 2 covered** | **12 uncovered; 4 covered** |
+
+Three additions are minimal for exercising **every value individually**: the three missing depths each require an operation, and the three missing TLB modes can be paired with them. This still does not cover every interaction.
+
+The symmetric trap appears if your separate additions are `0x10f0`—depth 1, linear—and `0x02f0`—depth 4, tiled. This edit remains undetected:
+
+```c
+ok = 0;  ->  if (bufdepth == 4 || linear) ok = 0;
+```
+
+Its condition is true at all three sampled configurations:
+
+| Configuration | Condition |
+|---|---|
+| Existing depth 4 / linear | true |
+| Added depth 1 / linear | true |
+| Added depth 4 / tiled | true |
+| Missing depth 1 / tiled, `0x00f0` | **false** |
+
+Even after adding `0x00f0`, `if (bufdepth != 2) ok = 0;` remains outside the literal equality-only guarantee. A depth-2 unsupported row such as `0x05f0` exposes it.
+
+Finally, **the unchanged-word oracle cannot guarantee detection**. At depth 1, if the uninitialized byte happens to be `0x11`, the erroneous store preserves `0x11223344`.
+
+- Changing the fill changes the coincidentally matching value; it provides no guarantee.
+- Reading wider adds bytes that a one-byte store never touches.
+- Two different fills guarantee detection only if the erroneous output byte stays identical across both operations. Uninitialized storage provides no such guarantee.
+
+The deterministic sketch is a recording `memory_rw` callback around the helper operation: record write calls without reading their payload, and assert **zero writes** for an unsupported format. A supported control verifies that the recorder observes an expected write. This detects even a same-value store and avoids consuming the uninitialized bytes. With only the current final-memory comparison, **no row set has the unconditional detection guarantee you requested**.
+
+Two header corrections follow: “distinct from … random values” at [line 67](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/sgi_re_colourdefault_probe.py:67) is unsupportable, and “16 combinations” collapses the unsupported-format axis. The unsupported nibbles are `40,50,60,70,80,90,a0,b0,c0,d0,e0,f0`; distinguishing them gives **12 × 4 × 4 = 192** combinations.
+tokens used
+83,701

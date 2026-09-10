@@ -1,0 +1,105 @@
+VERDICT: FLOOR BREACH (L2) — M43: L2; M44: L2; M47: L2. None is equivalent.
+Nonce: CODEX_518_ESCAPES_20260910.
+
+**Keep the round held.** S6 identifies the registers correctly, but mischaracterizes the edits. M43 and M47 weaken **stored-field filtering**; M44 changes the validation operand and can **reject a write the fix accepts**. All three alter repair code introduced by `#518`.
+
+I verified HEAD `7d7e055`, the uncommitted diff, and byte equality between the live source/probe and their round-four frozen copies. The t2 baseline differs by one comment only. The eight saved logs independently contain 67 scored rows and end with `LCABADVAL_DONE`. New results below are static arithmetic and source analysis; no builds or probes were run.
+
+The exact edits come from [mutate518_t2.py](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/lcabadval/killtable_20260910/t2/mutate518_t2.py:187):
+
+- **M43 — L2.** At the second occurrence, inside `W_MASK1`:
+
+  ```c
+  /* Before */
+  uint64_t v = idata & 0xfff00000ULL, f = v >> 20;
+  /* After */
+  uint64_t v = idata & 0xfffff000ULL, f = v >> 20;
+  ```
+
+  This additionally preserves bits **12, 13, 14, 15, 16, 17, 18, 19** in `v`. It changes neither `f` nor the acceptance decision. I enumerated all **4,096 fields × 256 combinations of those eight bits: 1,048,576 cases, zero field differences**.
+
+  Its observable defect is the extra bits in stored readback. The acceptance guard remains, while filtering of the `v` its body stores is partly nulled: clause (d)’s repair-mask case.
+
+- **M44 — L2.** At the second occurrence:
+
+  ```c
+  /* Before */
+  f = v >> 20;
+  /* After */
+  f = idata >> 20;
+  ```
+
+  `v` remains correctly masked. Validation now includes input bits **63:32**, which the fix deliberately removes before testing. This can decline a valid normalized field and retain the previous register value.
+
+  This is an operand substitution within the edited write path: `idata` is already read there, including by the decline body. The field predicate still controls the repaired store. It is inside (d), although describing its effect as “widening acceptance” would be wrong.
+
+- **M47 — L2.**
+
+  ```c
+  /* Before */
+  d->window_base_1 = idata & (IOC_W_BASE_W_BASE | IOC_W_BASE_SG | IOC_W_BASE_WEN);
+  /* After */
+  d->window_base_1 = idata & (IOC_W_BASE_W_BASE | IOC_W_BASE_SG | IOC_W_BASE_WEN | (1ULL << 34));
+  ```
+
+  The combined mask changes from **`0x3fff00000` to `0x7fff00000`**. Reserved bit 34 becomes stored.
+
+  The new filtering repair is weakened under the existing BASE1 write branch. The WEN announcement condition is unchanged—and occurs **after** the store, so that condition is not the justification for inclusion.
+
+These classifications follow the “guard kept, repair nulled” rule and this instrument’s explicit per-arm store-mask contract. They do not require treating every edited statement as a predicate. None touches an unchanged `W_T_BASE` arm. See the [repair implementation](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:377), [clause (d)](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/tools/CLAUDE.md:1287), and [frozen contract](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/lcabadval/killtable_20260910/t4/lca_badval_probe.REPAIRED67.asrun.py:338).
+
+**All three have guest-visible discriminators.** The handler reads `window_mask_1` or `window_base_1` directly into `odata`, then returns its bytes through `memory_writemax64`. Guest quadword reads therefore expose the changed state. Unimplemented DMA translation does not erase that channel.
+
+The HRM specifies unpredictable hardware readback for WO registers. These rows test the emulator’s explicit echo behavior, as the instrument itself acknowledges; hardware unpredictability does not make two different emulator readbacks equivalent.
+
+I exhaustively enumerated the field predicate over `0..4095`. Its 13 accepted fields, in hexadecimal, are:
+
+```text
+0, 1, 3, 7, f, 1f, 3f, 7f, ff, 1ff, 3ff, 7ff, fff
+```
+
+They match [HRM Table 6-6](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/21066_66a_hrm.txt:9581).
+
+The frozen instrument’s complete window-1 write-value sets explain the escapes:
+
+| Register | Values actually written |
+|---|---|
+| `W_MASK1` | `0x500000`, `0x900000`, `0x3ff00000`, `0xfff00000` |
+| `W_BASE1` | `0`, `0x240000000`, `0x340000000` |
+
+MASK1 receives neither low reserved bits nor high reserved bits; BASE1 never receives bit 34.
+
+**Two register/readback rows suffice for the three named mutants**, counting one register oracle per row. Use guest quadword accesses and check both the seed readback and the subsequent transition.
+
+| Register | Seed | Subsequent write | Fixed readback | Mutant readback |
+|---|---:|---:|---:|---|
+| `W_MASK1`, IOC `+0x160` | `0x700000` | `0x1001f0000` | `0x100000` | M43: `0x1f0000`; M44: `0x700000` |
+| `W_BASE1`, IOC `+0x120` | `0x240000000` | `0x680000000` | `0x280000000` | M47: `0x680000000` |
+
+For the first row, the arithmetic is:
+
+| Build | Stored candidate `v` | Tested `f` | `f & (f + 1)` |
+|---|---:|---:|---:|
+| Fixed | `0x100000` | `0x1` | `0` |
+| M43 | `0x1f0000` | `0x1` | `0` |
+| M44 | `0x100000` | `0x1001` | `0x1000` |
+
+Thus M44 declines and retains the distinct seed. Both register observables are necessary because M47 changes only BASE1, while M43/M44 change only MASK1.
+
+There is an additional arithmetic trap: **`0x1fff00000` does not distinguish M44.** Its raw shifted field is `0x1fff`, and `0x1fff & 0x2000 == 0`. Enumerating all 13 legal fields with bit 32 added showed that `fff` alone remains accepted by M44.
+
+**The two-row addition still leaves same-class escapes.** Two concrete next candidates are:
+
+- At **MASK1**, change `if ((f & (f + 1)) == 0)` to `if ((f & (f + 1)) <= 2)`. Exhaustive enumeration finds exactly one additional accepted field: **`f = 2`**. Existing MASK1 fields are `{5, 9, 3ff, fff}`; the proposed row adds `{7, 1}`. None distinguishes the conditions. A row that seeds `0x700000`, writes `0x200000`, and expects the seed retained would distinguish them. MASK0 already has its `f2` row.
+- Back at **MASK0**, change its mask to **`0xfff01000ULL`**, preserving reserved bit 12. Every existing MASK0 input has bit 12 clear, and the proposed rows exercise window 1. A `0x101000 → 0x100000` normalization oracle would distinguish this edit.
+
+Both are **predicted complete escapes of the resulting 69-row instrument**, not measured scores. The second is precisely the smaller mask-widening edit that the existing broad-widening row misses.
+
+The closure review therefore needs a matrix covering **both window labels against each repair class**, including stored-bit filtering, field-source selection, zero acceptance, invalid-field rejection, and WEN announcement/silence. Merely copying three mutant-specific examples does not establish that enumeration.
+
+Two other record corrections surfaced:
+
+- S3’s count is wrong: there are **six IOC warning bits, numbered 2–7**, plus two earlier IRQ bits, giving eight total.
+- The frozen contract says BASE reserved bits above 33 are unrowed, but its own `wbase0 widen` row explicitly exercises bit 34. That disclosure is stale; the missing sibling coverage remains real.
+
+No files were changed.

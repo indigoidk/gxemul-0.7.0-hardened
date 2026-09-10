@@ -18045,3 +18045,17 @@ one message per transfer, unbounded. A READING by the Opus seat during the `sgim
 measurement. Not a host kill (`fatal()` returns); a `floodclass` member. The fix shape is settled by the
 file's own ten-bit `SGIRE_W_*` latch enum and its "own bit, never shared" precedent; the measurement is one
 session in the shape `fill_at(A, RE_TLB_A, 3 << 2)` from the repaired `regress/sgi_mte_fill_probe.py`.
+
+### `sgiretlbshiftub` (med) -- filed 2026-09-10
+
+`dev_sgi_re.c` `horrible_getputpixel()`, anchor `tileptr = d->re_tlb_a[tile_nr] << 16`: the three TLB
+arrays are `uint16_t`, which promotes to `int`, so this is a SIGNED left shift and any entry with bit 15
+set overflows `INT_MAX` -- undefined behaviour. **It is the only path that works**: two lines below, the
+model accepts a tile pointer only `if (tileptr & 0x80000000)`, and bit 31 can only come from bit 15 of
+the `uint16_t`, so every ACCEPTED pointer overflows and every non-overflowing one is REJECTED. The three
+arrays are written by ordinary guest register writes, so the guest picks the value. `re_linear_a` is
+`uint32_t` and is NOT affected (unsigned wrap, defined). Fix: three casts to `uint32_t`. Found by the
+codex seat under the found-something-else licence while answering a `#519` test-coverage question
+(`regress/artifacts/sgirandomcolour/codex_coverage_20260910.txt`); verified by reading before filing.
+Witness OWED as an ATTEMPT: a `-fsanitize=undefined` build in `build-asan/` is the first thing to try,
+since a rung-3 guest witness may be impossible for UB that behaves as intended on every compiler here.

@@ -1,0 +1,103 @@
+Reading additional input from stdin...
+OpenAI Codex v0.153.4
+--------
+workdir: C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+model: gpt-6-astra
+provider: openai
+approval: never
+sandbox: read-only
+reasoning effort: max
+reasoning summaries: none
+session id: 01a08bdf-39d3-7a01-b726-09681397b737
+--------
+user
+# `#519` sgirandomcolour -- THE CLASS CLOSURE: two clause-(d) mutants sweep the 19-row instrument, and the round is held on them
+
+Nonce: CODEX_519_CLOSURE_20260910.  Open with `VERDICT:` naming the ROWS YOU WOULD SHIP, then echo the nonce.
+
+## READ THIS FIRST — PLEASE DO NOT SIMPLY RATIFY
+
+Yesterday a panel had seven of nine seats confirm a premise the brief stated wrongly.  **Check the
+premises, not just the derivations.**  Where I state something as fact, ask whether it is true.  A seat
+that re-derives a premise from something this brief did NOT give it is worth more than one that agrees.
+
+**THE TREE UNDER REVIEW IS `C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\src\`.**  There are three
+pristine-2021-upstream copies of GXemul under the project root; they are NOT this fork.  If your line
+numbers disagree with mine by hundreds you are reading one of them -- say so rather than reconciling.
+
+**Where this brief states an ARITHMETIC claim -- an offset, a mask, a reachable value -- ENUMERATE it
+rather than reasoning about it.**  Walk the values.  A derivation that skips one masking line reads
+exactly like a correct one.
+
+**VERDICT LINE FIRST.**
+
+## §C0 -- state, true as of sending
+HEAD is `7d7e055` (records+evidence).  `src/devices/dev_sgi_re.c` carries the `#519` fix UNCOMMITTED and
+the round is HELD on exactly the two mutants below.  The 19-row instrument
+`regress/sgi_re_colourdefault_probe.py` is uncommitted too; its frozen copies and every table are
+committed under `regress/artifacts/sgirandomcolour/killtable_20260910/`.
+
+## §C -- SETTLED PREMISES (re-inlined; say which you cannot settle from this packet)
+S1. `fatal()` RETURNS (`src/core/debugmsg.c`, grep `void fatal(`): no early-out, no exit.
+S2. THE FIX: in `horrible_getputpixel()`'s PUT branch, `int ok = 1;` at the top; the colour-type
+    `switch`'s `default:` arm sets `ok = 0` and announces ONCE on its own bit `SGIRE_W_BADCOLOR = 1 << 12`;
+    the common store is `if (ok) cpu->memory_rw(...)`.  Before the fix the arm assigned four `random()`
+    bytes into `buf` and the store wrote them to guest memory.
+S3. THE TWO MUTANTS, built by the Opus measuring seat AFTER all twelve planned mutants had been killed
+    (BASE 14/14; artifacts `killtable_20260910/TABLE1.out`):
+        `M13_widthdecline`   `ok = 0;` -> `if (bufdepth == 4) ok = 0;`   **14/14 and 19/19 -- TOTAL ESCAPE**
+        `M14_lineardecline`  `ok = 0;` -> `if (linear) ok = 0;`          **14/14 and 19/19 -- TOTAL ESCAPE**
+    Both are clause-(d) operand swaps onto lvalues the GUARDED BODY reads: the store is
+    `cpu->memory_rw(cpu, cpu->mem, tileptr + ofs, buf, bufdepth, MEM_WRITE, NO_EXCEPTIONS | PHYSICAL)`,
+    so `bufdepth` is its LENGTH argument and `linear`/`tileptr` select its ADDRESS.
+S4. WHY NO ROW SEES THEM: every row that drives a DECLINED colour type uses `MODE_YCRCB 0x12f0` or
+    `MODE_RESERVED 0x1250`, both of which are BUFDEPTH_32 (`bufdepth == 4`) on LIN_A (`linear` true).  The
+    probe DOES drive `bufdepth == 1` (`ci8 put`, mode `0x1000`) and it DOES drive LIN_B, but only at
+    SUPPORTED types where `ok` is never cleared.  **Both axes are exercised; their JOINT with the decline
+    is not.**
+S5. THE DERIVATIONS (check them):
+    `bufdepth = 1 << ((mode >> 8) & 3)`;  `tlb_mode = (mode >> 10) & 7`;  `linear = tlb_mode > 3`;
+    `color_mode = mode & DE_MODE_TYPE_MASK`.  Twelve of the sixteen type nibbles reach the `default:` arm.
+S6. THE ADDRESSING, both paths, and I believe they can be made to land on the SAME physical word:
+    * LINEAR (`case 4:`): `tile_nr = x >> 12`; `if (tile_nr >= 32) return;`
+      `tileptr = 0x80000000 | (d->re_linear_a[tile_nr] << 12)`; `ofs = x & 4095`.
+      With `re_linear_a[0] = 0x10` and vertex (0,0): `tileptr = 0x80010000`, `ofs = 0`.
+    * TILED (`case 0:`): `tileptr = d->re_tlb_a[tile_nr] << 16` where
+      `tile_nr = (y >> 7) * 16 + x / (512 / bufdepth)`; guarded by `if (tlb_mode <= 2 && tile_nr >= 256) return;`
+      With `re_tlb_a[0] = 0x8001` and vertex (0,0): `tileptr = 0x80010000`, and
+      `ofs = 512 * (y & 127) + (x % tilewidth) * bufdepth = 0`.
+    * BOTH then pass `if (!(tileptr & 0x80000000)) return;` and then **`tileptr &= ~0x80000000;`**, so both
+      resolve to physical `0x00010000` -- the SAME word every existing row pre-paints and reads back.
+S7. THE RIG: `-E sgi -e ip32 -M 64`, guest stores through KSEG1, destination pre-painted `0x11223344`,
+    read back with a guest load.  `re_tlb_a` is written by ordinary guest register writes inside
+    `DEVICE_ACCESS(sgi_re)`, so the tiled path needs no new capability.
+
+## THE QUESTIONS
+1. **PREMISES AS QUESTIONS.**  Is S6 right that a TILED PUT at vertex (0,0) with `re_tlb_a[0] = 0x8001`
+   lands on physical `0x10000`, the same word as the linear rows?  Walk it, including the bound checks and
+   the `tilewidth_in_pixels` division at each bufdepth.  If it does NOT, say what address it does reach and
+   whether that address is inside a 64 MB guest RAM.  Same question for a declined PUT at `mode 0x10f0`
+   (bufdepth 1, LIN_A): what exactly does the store write, and how many bytes?
+2. **THE MINIMUM CLOSURE, and its bound.**  The joint space the measuring seat named is
+   `{declined type} x {bufdepth 1,2,4,8} x {tlb_mode 0,1,2,4}` -- sixteen cells, of which today's rows
+   occupy ONE.  I do NOT want sixteen rows; that is the `#392` shape.  **What is the smallest row set that
+   makes BOTH named mutants red AND makes the whole single-axis generating set red** -- i.e. any mutant of
+   the form `if (<one body-read lvalue compares equal to its currently-driven value>) ok = 0;`?  Name each
+   row: the mode constant, the vertex, what it reads back, and the mutant it kills.  Then say explicitly
+   which of the sixteen cells remain UNROWED and therefore belong in the contract as clause-(e) debt.
+3. **THE TRAP I AM MOST LIKELY TO FALL INTO.**  The carrier's `#499` lesson is that a repair made at
+   exactly the address the mutant used leaves the symmetric cell open, and the seat warned that "closing
+   only at bufdepth 1" is that trap here.  If I add one bufdepth-1 row and one tiled row, **what is the
+   next mutant that sweeps the result?**  Name it as an edit and name the row that would have to exist.
+4. **ORACLE VALIDITY.**  Each new row's oracle is "the pre-painted word is unchanged".  Under `M13` at
+   bufdepth 1 the store writes ONE byte from an unassigned `buf`.  Can that byte be equal to the paint
+   byte it overwrites, and if so with what probability -- i.e. is the row FLAKY?  `buf` is
+   `uint8_t buf[8]` on the stack, and before the fix the arm filled it with `random()`.  If the row can
+   pass by coincidence, say what makes it deterministic (a second read? a different paint? a wider read?).
+   **A row that passes by luck is worse than no row.**
+5. **If, while verifying a claim, you found something ELSE -- say so.**
+
+Do not propose a patch to apply; a sketch plus the row list is what is wanted.  Do not run builds or
+probes.  Read-only.
+ERROR: This content was flagged for possible cybersecurity risk. If this seems wrong, try rephrasing your request. To get authorized for security work, join the Trusted Access for Cyber program: https://chatgpt.com/cyber
+ERROR: This content was flagged for possible cybersecurity risk. If this seems wrong, try rephrasing your request. To get authorized for security work, join the Trusted Access for Cyber program: https://chatgpt.com/cyber
