@@ -18130,3 +18130,69 @@ re-derived here.
 **Distinct from `shiftubcensus`**, which is the SIGNED-1 family (`1 << n` with a plain-`int` literal). This
 is the NEGATIVE-COUNT family: a different C99 clause and a different fix shape. Found by the GPT-6 Astra
 fix-design review on `armbfiwidth` while looking for siblings of that round's idiom outside ARM.
+
+### `mapledmaaddr` (HIGH) -- filed 2026-09-10
+
+`dev_dreamcast_maple.c`, grep anchor `case 0x04:	/*  MAPLE_DMAADDR  */`: **the read arm computes the
+correct value and then throws it away by terminating the process.** In order:
+
+```c
+fatal("[ dreamcast_maple: TODO: read from dmaaddr ]\n");
+odata = d->dmaaddr;
+exit(1);
+```
+
+The WRITE arm two lines above stores `d->dmaaddr = idata`, so the register is **fully modelled in both
+directions**. A guest that writes the DMA address and reads it back -- the ordinary way to confirm a
+controller programming step -- is killed on the read. `machine_dreamcast.c` adds `dreamcast_maple`
+unconditionally, and nothing has to start DMA or build a command list to get there.
+
+**This is option-set member 4 (ACCEPT) in its textbook shape**: the model already computes the right
+answer and then discards it, so the disposition is to delete the kill and KEEP THE VALUE, with **no
+latch** -- there is no event to announce, and a bounded announce would ship a wrong record in product code
+(*"unimplemented; ignored"* about a read that is implemented and is not ignored). **Two deleted lines.**
+FAULT is neither available nor appropriate: `memory_rw.c` converts a failed device callback into an
+architectural exception for MIPS and M88K only, and this device is on an SH4 machine -- but the access is
+implemented, so refusing it would be wrong even if the machinery existed.
+
+Test carrier already exists: `regress/gdrom_default_probe.py` supplies a Dreamcast session with guest
+load/store helpers. **The oracle must assert that a separately STORED value reads back EXACTLY and that
+execution continues** -- observing a zero, or a surviving debugger prompt, is vacuous, since both are true
+of several wrong implementations. Not measured, no witness built; the rung-3 attempt is owed.
+
+### `xscaleinten` (HIGH) -- filed 2026-09-10
+
+`cpu_arm_coproc.c`, grep anchor `void arm_coproc_i80321_6`, crm 0 / crn 0: the load arm reads
+
+```c
+cpu->cd.arm.r[rd] = cpu->cd.arm.i80321_inten;
+fatal("TODO: XScale read from inten?\n");
+exit(1);
+```
+
+The destination register receives the modelled value and the process then dies. The store arm immediately
+below writes the same field and the i80321 interrupt controller consumes it, so the register is fully
+modelled both ways.
+
+*** THE DECISIVE EVIDENCE IS THE SIBLING CASE IN THE SAME SWITCH, one screen away. *** `case 4:`
+(`i80321_isteer`) has the **identical structure** -- load arm assigns from the modelled field, store arm
+writes it -- and carries **no `fatal()` and no `exit()`**. So `crn 0`'s kill is an OUTLIER inside its own
+switch rather than a policy: the upstream-residue pattern this project has now found several times, where
+the author hit the exit he happened to reach while developing and not the sibling he did not. *That is a
+far stronger warrant than "it is a host kill", and it is one grep away* -- which is exactly what the
+option-set rule's sibling check is for.
+
+Reachability is explicit rather than inferred: `machine_iq80321.c` installs it with
+`cpu->cd.arm.coproc[6] = arm_coproc_i80321_6;`, and Iyonix does the same. Emulated firmware reading its
+own interrupt-enable register is the natural consumer, and the generic coprocessor dispatcher enforces no
+supervisor-only precondition.
+
+Disposition: **member 4 (ACCEPT)**, two lines deleted, no latch, for the same reason as `mapledmaaddr`.
+FAULT is unavailable regardless -- the failed-device exception path is MIPS and M88K only, and this is
+ARM. Not measured, no witness built. Note the witness needs a **coprocessor read from an ARM guest**,
+which is a different vehicle from the device probes this project mostly writes; `gate_arm.sh`'s decode
+checks are the nearest existing machinery.
+
+*Both rows came from the GPT-6 Astra exit audit's top three (`regress/artifacts/queuetriage/`), which
+ranked them I1/E1 out of 76 unowned runtime error-exit sites across 24 files. Every element above was
+re-derived locally by opening the files.*
