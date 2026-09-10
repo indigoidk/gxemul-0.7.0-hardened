@@ -1,0 +1,199 @@
+VERDICT: 1. Maple `MAPLE_DMAADDR` readback; 2. XScale `INTEN` readback; 3. MK48T08 NVRAM boundary.
+CODEX_EXITAUDIT_20260910
+
+**Seven entries are ready to file.** The re-derived inventory contains **76 unowned runtime error-exit sites in 24 files**, after accounting for existing ownership, enabled device attachments, and reachability exclusions.
+
+I inspected committed blobs at **`4eac0b1ff822d6f8f4b3d6ea3066adbdab3c0a95`**, using the specified repository. All line numbers below refer to that commit. No builds, emulator executions, regression runs, edits, or patches were performed. Test-carrier assessments are based on source inspection.
+
+The earlier figures reproduce, but their description was wrong: **370 and 240 count `exit(1)`, not every `exit()` call.**
+
+The matching scope is immediate tracked `*.c` files in `src/devices/`, `src/cpus/`, and `src/machines/`. It is not a whole-repository count. I enumerated committed files, removed comments and string/character literals while preserving line positions, then located `\bexit\s*\(`. An independent character-state lexer returned exactly the same call positions. This counts physical source sites without expanding macros or eliminating conditional compilation.
+
+| Directory | Literal `exit(` | Literal `exit(1)` | Calls after lexical filtering | Of those, `exit(1)` |
+|---|---:|---:|---:|---:|
+| `src/devices` | 263 | 241 | 135 | 132 |
+| `src/cpus` | 112 | 94 | 74 | 74 |
+| `src/machines` | 35 | 35 | 34 | 34 |
+| **Total** | **410** | **370** | **243** | **240** |
+
+The three additional executable calls are `dev_cons.c:80` (`exit(0)`, console halt), `dev_pmagja.c:223`, and `dev_px.c:811` (both `exit(2)`, initialization allocation failures).
+
+The location classification, enumerated from those 243 positions, is:
+
+| Population | Sites |
+|---|---:|
+| Runtime handlers and their helpers | **150** |
+| Initialization/configuration: 41 device, 5 CPU, 34 machine sites | **80** |
+| CPU generators and standalone experiment | **13** |
+| **Total** | **243** |
+
+Being inside a runtime function does not establish an outstanding guest-input defect. The 150 divide as follows:
+
+| Runtime-function population | Sites |
+|---|---:|
+| Input-reachable error exits through enabled in-tree wiring | **98** |
+| Dead/precluded paths, absent producers, or internal failures not established reachable | **33** |
+| Optional instrumentation | **10** |
+| Unattached or disabled device attachments | **6** |
+| Intentional halt/reboot handling | **2** |
+| Host-selected RAM configuration check misplaced in an access handler | **1** |
+| **Total** | **150** |
+
+The debugger is outside the earlier census scope. Its **three** additional sites are `debugger.c:223,883` and `debugger_expr.c:101`. Thus population **(b) is 80 within the original scope, or 83 including the debugger**; the corresponding expanded denominator is 246.
+
+Tracker coverage is an overlay, not another disjoint population. I checked both [ledger.json](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/tools/pipeline/ledger.json) and [OUTSTANDING_BUGS.md](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/OUTSTANDING_BUGS.md).
+
+| Owning row | State at HEAD | Covered physical sites |
+|---|---|---|
+| `n6` | held | Footbridge: **565,574,589,604,613,622,712,737** — eight live |
+| `alphavmkill` | open | `memory_alpha.c:77` — one live |
+| `sgirekills`; overlapping `sgimtewidth` | open | `dev_sgi_re.c:1463,1471,1547,1552,1563` — five live; **1685** — dead exit |
+| `m88kexit` | held | `memory_m88k.c:394,413` — two dead exits |
+| `lcaiocstat0` | open | Part of the input domain reaching `dev_lca.c:441` |
+| `lcaisalane` | in work | `dev_lca.c:280` |
+| `lcabadval` | in work | `dev_lca.c:332,352,367,382,406,421,441` |
+
+Deduplicating source positions gives:
+
+| Coverage | Live error exits | Other exits | Total |
+|---|---:|---:|---:|
+| Open/held rows | **15** | **3** | **18** |
+| Additional coverage from in-work rows | **7** | **0** | **7** |
+| **Active ownership combined** | **22** | **3** | **25** |
+
+A strict open/held filter leaves 83 live sites, but seven already belong to in-work LCA repairs. **The actual unowned remainder is 76 sites.**
+
+The earlier SGI MTE qualification was too aggressive: lacking a separate child repair ID does not mean lacking an open owning row. `sgirekills` explicitly retains those five command exits. Conversely, incidental mentions in census prose do not constitute a specific repair row.
+
+For ranking, all confirmed sites have the same immediate consequence: **process termination**. I distinguish their input scope rather than claim measured workload frequency:
+
+- **I1:** already-supported value or RAM access is terminated.
+- **I2:** an unimplemented device operation or CPU feature terminates execution.
+- **I3:** rejection, invalid-state, or fault-recovery handling terminates execution.
+
+Effort is independent:
+
+- **E1:** an identified predicate has a one-to-five-line product change and an existing test carrier.
+- **E2:** localized work, but validation, diagnostics, or an adequate assertion prevents certifying E1.
+- **E3:** feature, state-machine, or shared execution-flow work.
+
+Ranks are tied within these classes. The following is the complete unowned inventory, grouped by file for counting; mixed files explicitly separate their cheap predicate from their remaining work. Device filenames are under `src/devices/`; CPU filenames are under `src/cpus/`.
+
+| File; enumerated exit lines | Count | IMPACT rank and reason | EFFORT rank and reason |
+|---|---:|---|---|
+| `dev_dreamcast_maple.c`: 426,459,520,529,565 | 5 | **I1 at 565:** stored DMA address readback; **I2** for commands | **E1 at 565**; **E3** for DMA response/completion handling |
+| `cpu_arm_coproc.c`: 62,177,264,313,324,333,419,530 | 8 | **I1 at 313:** modeled INTEN readback; **I2** elsewhere | **E1 at 313**; remaining control/interrupt/feature paths require separate validation |
+| `dev_mk48txx.c`: 118 | 1 | **I1:** ordinary MK48T08 RAM bytes reach default | **E1:** correct the RAM boundary |
+| `memory_ppc.c`: 265,275,288 | 3 | **I2:** 601 translation, unsuccessful BAT translation, 64-bit translation | **E3:** translation/fault semantics |
+| `memory_arm.c`: 79,254 | 2 | **I2:** domain and descriptor handling | **E2** for domain rejection; **E3** for unsupported descriptor support |
+| `dev_i80321.c`: 384 | 1 | **I2:** controller probing reaches default, including pre-served reads | **E2:** distinguish existing MCU/I2C backing from unsupported accesses |
+| `dev_pvr.c`: 868,1084,1245,1419 | 4 | **I2:** Dreamcast rendering/texture operations | **E3:** renderer state and completion need defined outcomes |
+| `dev_osiop.c`: 406,411,419,426,656,668,715,727,791,821,825,830,870,1152 | 14 | **I2:** MVME187 SCRIPTS execution and controller accesses | **E3:** preserve command termination, status, and interrupt behavior |
+| `dev_adb.c`: 169,203,208,214,244,250,428 | 7 | **I2:** MacPPC controller command processing | **E3:** transaction response/state cannot be fixed by arbitrary returns |
+| `dev_igsfb.c`: 154,233,243,253,393 | 5 | **I2:** NetWinder graphics commands and registers | **E3:** distinguish declined commands from accepted display state |
+| `dev_dreamcast_g2.c`: 164,175,188,215,228,260 | 6 | **I2:** Dreamcast DMA controls and miscellaneous register handling | **E3 as a group:** readback, rejected writes, and DMA state need separate dispositions |
+| `dev_clmpcc.c`: 164,252 | 2 | **I2:** MVME187 serial-controller commands/default | **E2:** register writes occur before rejection |
+| `dev_vme.c`: 143 | 1 | **I2:** MVME187 bus/register probing | **E1:** existing M88K access-exception delivery |
+| `dev_mvme187.c`: 80,90 | 2 | **I2:** memory-controller writes/default accesses | **E2:** audit pre-switch access and define unsupported-register behavior |
+| `cpu_mips_coproc.c`: 2169 | 1 | **I2:** unsupported small-page TLB installation on the relevant CPU model | **E3:** validate before altering TLB state or implement the format |
+| `memory_sh.c`: 381,400 | 2 | **I2:** unsupported instruction/address translations | **E2:** use the CPU’s direct exception path appropriately |
+| `dev_sgi_ip32.c`: 292 | 1 | **I3:** unsupported CRIME access width | **E1:** failed callback becomes a MIPS access exception |
+| `dev_fbctrl.c`: 101,131,147 | 3 | **I3** for selector/address rejection; **I2** for commands | **E1 at 131**; other predicates need their own disposition |
+| `dev_iq80321_7seg.c`: 87 | 1 | **I3:** accesses in the mapped window outside implemented register cases | **E2:** bounded diagnostic plus defined read/write decline |
+| `cpu_arm.c`: 608 | 1 | **I3:** unsupported register-bank mode | **E2:** reject before committing the mode |
+| `cpu_mips_instr.c`: 2650 | 1 | **I3:** PROM-operation handler on unsupported machine types | **E2:** decoder/architectural rejection handling |
+| `cpu_sh_instr.c`: 3834 | 1 | **I3:** corresponding SH PROM-operation default | **E2:** architectural rejection handling |
+| `cpu_ppc_instr.c`: 2307,2333,4048 | 3 | **I3:** invalid LL/SC encoding fields and failed instruction fetch | **E2:** precise PC/exception or failure propagation |
+| `cpu_dyntrans.c`: 732 | 1 | **I3:** the retry translation also fails | **E3:** shared execution-flow assumptions must change |
+
+**Overlap:** all three verdict entries lead the impact ranking and qualify for E1. CRIME width, FBCTRL selector rejection, and VME default handling also qualify for E1 despite their narrower rejection-path impact. These are the six E1 predicates; that does not make their entire source files E1 repairs.
+
+One handling constraint applies throughout: [memory_rw.c:595](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:595) converts a failed device callback into an architectural access exception only for **MIPS and M88K**. Returning zero from an ARM or SH device callback does not provide the equivalent bus-error delivery. CPU translation/instruction handlers can have their own direct exception mechanisms; that is a separate question.
+
+The top three are fully scoped as follows.
+
+**`mapledmaaddr` — severity `high`.**  
+**Title:** `DEVICE_ACCESS(dreamcast_maple) terminates the emulator after computing MAPLE_DMAADDR readback.
+
+The grep anchor is [`DEVICE_ACCESS(dreamcast_maple)`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_dreamcast_maple.c:547); the exit is at **565**. An ordinary emulated read of `MAPLE_DMAADDR` enters a branch that assigns `odata = d->dmaaddr` and then exits. Starting DMA or constructing a command list is unnecessary. The Dreamcast machine constructor installs this device on its SH4 machine.
+
+Choose **accept the value**. The storage and read result already exist. Remove the diagnostic at 563 and the exit at 565, retaining the assignment and normal response completion: **two deleted lines**. No new storage or feature implementation is needed. SH lacks the generic device bus-error conversion described above, and a bus error would be inappropriate for this implemented read anyway.
+
+[`regress/gdrom_default_probe.py`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gdrom_default_probe.py:289) already supplies a Dreamcast session and guest load/store helpers. It can carry assertions that separately stored values read back exactly and execution continues. Merely observing zero or a surviving debugger prompt would be insufficient.
+
+**`xscaleinten` — severity `high`.**  
+**Title:** `arm_coproc_i80321_6` terminates the emulator after returning the modeled interrupt-enable value.
+
+The grep anchor is [`void arm_coproc_i80321_6`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_coproc.c:304); the exit is at **313**. Emulated firmware reading the modeled CP6 interrupt-enable register receives `i80321_inten` in its destination register, immediately followed by termination. The corresponding write path already stores that register, and the i80321 interrupt controller uses it.
+
+This is installed by real constructors: [IQ80321](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/machines/machine_iq80321.c:57) and Iyonix. It is not an unattached coprocessor helper. Firmware is the natural consumer; the current generic coprocessor dispatcher does not itself enforce a supervisor-only precondition.
+
+Choose **accept the value**. Delete the diagnostic and exit at 312–313: **two lines**. Preserve the existing assignment. This is a CPU instruction handler, and generic ARM device-failure bus-error delivery is unavailable in any event.
+
+[`regress/arm_endian_probe.py`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/arm_endian_probe.py:270) has a machine-parameterized ARM runner, program installation, register seeding, and result extraction. An IQ80321 case can assert distinct INTEN write/read values and subsequent execution without a new harness.
+
+**`mk48nvram` — severity `high`.**  
+**Title:** `DEVICE_ACCESS(mk48txx) misclassifies MK48T08 NVRAM bytes as unsupported registers and terminates ordinary RAM accesses.
+
+The grep anchor is [`DEVICE_ACCESS(mk48txx)`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_mk48txx.c:76); the exit is at **118**. The actual [MVME187 constructor](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/machines/machine_mvme88k.c:114) explicitly attaches an **MK48T08**.
+
+The range bypass leaves bank-relative positions **0,1,2,3,4,5,6,7,8** entering the switch. Its sole case handles **8**, `MK48TXX_ICSR`. Thus the eight positions **0,1,2,3,4,5,6,7** reach default. An ordinary NVRAM scan can encounter them. The [included register header](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/thirdparty/mk48txxreg.h:43) distinguishes the older part’s RAM from the extra register bank on newer variants.
+
+Choose **accept the value using existing storage**. Extend the RAM bypass through the byte preceding `MK48TXX_ICSR`: **one boundary-condition change**. The existing RAM read/write path and `reg[]` storage then handle these bytes. The switch receives only its implemented CSR case; its default exit becomes unreachable. Removing that dead diagnostic tail is optional cleanup, not necessary to close the live defect.
+
+M88K can receive a device access exception, but reporting one for these RAM bytes would choose the wrong behavior.
+
+[`regress/pcc2_default_probe.py`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/pcc2_default_probe.py:128) already uses the MVME187 session and guest byte-access helpers. Extend it with write/readback checks across the eight bytes, a neighboring RAM control, and a CSR control. No clock-value oracle or new device storage is required.
+
+The remaining four proposed rows complete the filing batch. Their IDs, like the three above, are absent from both queue files.
+
+| ID / severity | One-sentence title | Behavior, route, and smallest sensible change | Existing assertion carrier |
+|---|---|---|---|
+| **`crimewidth` / `med`** | `DEVICE_ACCESS(crime)` terminates the emulator on unsupported access widths instead of reporting an access error. | At `dev_sgi_ip32.c:292`, a byte or halfword access reaches the terminating width arm on the instantiated SGI/IP32 O2 CRIME device. Choose **report a bus error**: replace the diagnostic/exit pair with callback failure. MIPS delivers the exception; supported word/doubleword handling remains the control. | `regress/sgi_de_width_probe.py`: assert exception entry and unchanged destination/register state, alongside a supported-width control. |
+| **`fbctrlport` / `med`** | `DEVICE_ACCESS(fbctrl)` terminates the emulator when its guest-selected port is outside the implemented array. | At `dev_fbctrl.c:131`, the selector write records the value; its warning does not reject it. A later DATA access reaches the guard. Test-machine constructors install FBCTRL even without graphical output. Choose **return quietly**: retain the bounds check and leave the switch through the existing zero-read/dropped-write completion path. Do not remove the guard or substitute an array index. | `regress/arm_endian_probe.py` on `testarm`: invalid-selector read/write behavior, followed by a valid-port control. |
+| **`vmedefault` / `med`** | `DEVICE_ACCESS(vme)` terminates the emulator when MVME187 software probes an unimplemented mapped register. | At `dev_vme.c:143`, an uncased access in the registered VME window exits. Choose **report a bus error**: replace the exit with callback failure. M88K has the required access-exception path. This is a one-line product change; complete hardware fault metadata is a separate limitation already acknowledged by the memory layer. | `regress/pcc2_default_probe.py`: use its MVME187 session to inspect access-exception entry and a handled-register control. |
+| **`iq7segdefault` / `med`** | `DEVICE_ACCESS(iq80321_7seg)` terminates the emulator on accesses outside its implemented display-register cases. | At `dev_iq80321_7seg.c:87`, the registered window contains addresses beyond its two implemented cases. IQ80321 actually installs it. Choose **return with a once-only diagnostic**: preserve zero read completion, drop unsupported writes, and latch the rejection diagnostic per device/rejection class. ARM callback failure cannot supply the desired bus error. This is E2 once diagnostic state is included. | `regress/arm_endian_probe.py` with an IQ80321 case: establish an actual I/O mapping or disable translation for the fixture, then assert zero/drop behavior, bounded reporting, and both implemented-register controls. |
+
+For these entries, the proposed `high`/`med` distinction reflects supported-operation failure versus rejection of unsupported input. It does not depend on implementation effort. Their IDs, titles, and bodies should be mirrored into both queue files; neither file was changed here.
+
+Several exclusions deserve an explicit record. These are **dead or precluded at this HEAD**, not merely overlooked exits:
+
+| Site | Reason |
+|---|---|
+| `memory_m88k.c:394,413` | All **seven** jumps to `exception`—173,213,267,275,300,309,341—have an immediately preceding fault-status assignment. The assigned statuses are WRITE, SFAULT, SUPER, and PFAULT, all handled by the switch. Successful translation returns at 370, preventing fallthrough with SUCCESS. |
+| `dev_sgi_re.c:1685` | Earlier branches test `len == 4` and `len != 4`; the final width tail cannot execute. The separate wrong-width behavior remains tracked by `sgimtewidth`. |
+| `dev_dreamcast_gdrom.c:1108` | While command reception is active, the pre-access counts are **0,2,4,6,8,10**. Reaching twelve clears reception state; the subsequent busy/count guard cannot see twelve. |
+| `dev_osiop.c:874` | The outer command discriminator is masked to four values, and all four have cases. |
+| `dev_osiop.c:610` | Current phase producers generate the handled phases. A direct unsupported phase-register write first exits at 1152; the earlier phase-mismatch check also prevents treating arbitrary instruction phase bits as the current bus phase. |
+| `cpu_mips_coproc.c:2041` | The old-entry small-page case has no independent producer: installing the relevant entry first terminates at 2169. |
+| `memory_ppc.c:94,98` | The helper’s sole caller supplies 32-bit mode; its 601 path is preceded by the caller’s terminating 601 check at 265. |
+| `dev_ram.c:132` | Unsupported RAM modes are rejected during initialization, and the mode is not subsequently guest-written. |
+| `dev_sgi_ip32.c:240` | The O2 constructor already rejects RAM sizes above its limit before this access-time check. |
+| `lk201.c:210` | The only assigned mouse modes are zero and incremental mode; both are handled. |
+| `cpu_arm.c:561,686` | Normal mode-changing paths encounter invalid-mode loading at 608 first; the exception path’s active producers select handled bank modes. |
+| `cpu_mips_coproc.c:1518,2489` | Current instruction dispatch excludes these legacy coprocessor fallbacks; disassembly returns before them. |
+
+Some of that deadness depends on an earlier terminating check. **Converting the earlier check requires rechecking the downstream branch**, particularly OSIOP phase handling and MIPS TLB installation.
+
+I would also **not file new runtime conversion rows** for:
+
+| Exclusion | Reason |
+|---|---|
+| `dev_mb8696x.c:155,194,229` | The Dreamcast attachment is commented out. Registration in the device catalogue is not machine attachment. |
+| `dev_rtl8139c.c:99,175,188` | The Landisk attachment is conditional on `INCLUDE_LANDISK_NIC`; its definition is commented out, and no enabled definition was found in the tracked source/build scripts. These are conditional candidates if that attachment is enabled, not current enabled-machine findings. |
+| `dev_pcc2.c:435` | Current external producers use handled SCSI/TX/RX interrupt lines. Connected receive-error/modem endpoints have no asserting producer. |
+| `cpu_arm.c:661`; `cpu_sh.c:1085` | No current producer supplies the unsupported reset/exception case. |
+| `dev_fb.c:359` | Current fill callers select supported framebuffer depths. |
+| `dev_adb.c:241`; `dev_cons.c:80` | Explicit reboot and halt handling. Improving lifecycle handling is separate from declining unsupported input. |
+| `dev_sgi_ip32.c:253` | The controlling value is host-selected RAM size. Move validation into setup if addressed; do not report it as a guest-selected register value. |
+| The 80 initialization and 13 generator/experiment exits | Outside the requested runtime conversion population. |
+
+The **13 internal guards whose failure I have not established** are `cpu_arm.c:623`; `cpu_dyntrans.c:1157,1180,1506,1625,1630,1645,1651`; `cpu_mips_instr.c:123,3798`; `cpu_ppc_instr.c:244`; `cpu_sh_instr.c:4004`; and `bus_pci.c:197`. I am not calling those mathematically dead. In particular, the end-of-page returns are conditional; their presence alone proves nothing.
+
+The ten instrumentation sites are `cpu_arm_instr.c:72`, `cpu_dyntrans.c:1079,1092,1101,1173,1670,1679,1751,1763`, and `dev_sh4.c:2833`.
+
+Conversely, several suspicious-looking candidates **survive** the reachability check: FBCTRL’s selector warning does not reject the value; MK48’s earlier bypass leaves the eight-byte gap; the MIPS/SH PROM instruction decoders do not restrict dispatch to the machine types their handlers support; and PVR command data can enter the render queue before later command filtering.
+
+I would defer the other live candidates from this first filing batch until their dispositions are adequately scoped. The clearest example is **i80321**: its MCU/I2C paths read or write backing arrays before reaching default. Likewise, CLMPCC writes its register array before rejection, and ARM control/PID handlers commit state before several exits. A replacement return can therefore preserve an unsupported write or introduce incorrect continuing behavior. These remain live backlog candidates, with the effort ranking above; they are not reachability exclusions.
+
+One incidental finding: `dev_i80321.c:390` logs `idata` on reads, although the returned value is `odata`. Consequently, its read diagnostic can print zero for a nonzero register result. That is separate diagnostic debt, outside the exit census.

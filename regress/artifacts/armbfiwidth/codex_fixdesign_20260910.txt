@@ -1,0 +1,127 @@
+VERDICT: use a three-way mask: zero for invalid ordering, then #510’s full-width/unsigned-shift expression. Require full-width, both width-31, negative-width, zero-width, interior, and one-bit boundary rows. The 468/465 counts are correct; another unsafe mask site remains outside ARM.
+CODEX_ARMBFI_20260910
+
+I checked HEAD `4eac0b1` and the specified `GXEMUL-SEC/src` tree. ARM source matches HEAD. No builds, probe runs, or file changes were made.
+
+**C0 needs correction:** the committed [queue record](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/tools/pipeline/fable_queue.md:2387) says a six-seat BFI design panel already ran. The tracked dirty files also include `regress/sgi_de_primop_probe.py`, beyond the three named C files.
+
+S1 and S2 match the [handler](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c:1450) and [decoder](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c:4564).
+
+I enumerated all 1,024 pairs with two nested loops over `0..31`, calculating and classifying `msb - lsb + 1` without evaluating an undefined C shift:
+
+| Width | Pairs | Ordering | Original signed shift |
+|---|---:|---|---|
+| −30 through −1 | 465 | Invalid | Undefined |
+| 0 | 31 | Invalid | Defined |
+| 1 through 30 | 525 | Valid | Defined |
+| 31 | 2 | Valid | Undefined |
+| 32 | 1 | Valid | Undefined |
+| **Total** | **1,024** | **528 valid; 496 invalid** | **468 undefined** |
+
+The exact valid-but-undefined subset is:
+
+- `(msb, lsb) = (30, 0)`: width 31.
+- `(31, 1)`: width 31.
+- `(31, 0)`: width 32.
+
+Thus **465 invalid-order pairs plus three valid pairs** reach undefined shifts. Width zero contributes none. These counts assume the packet’s 32-bit `int` implementation; C itself does not require that size. Width 31 violates signed representability, while negative counts and count 32 violate the shift-count restriction. [C99, §6.5.7](https://www.open-std.org/jtc1/sc22/wg14/www/docs/n1256.pdf)
+
+The manual is local, but its absolute location is **one directory above the repository**. I read [DDI 0406C.d, A8.8.20](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ddi0406.txt:18066):
+
+```text
+if msbit >= lsbit then
+      R[d]<msbit:lsbit> = R[n]<(msbit-lsbit):0>;
+      // Other bits of R[d] are unchanged
+else
+      UNPREDICTABLE;
+```
+
+The older DDI 0100I text has no whole-word BFI/BFC/UBFX/SBFX matches. S5 is therefore substantiated, with that path correction.
+
+The history search returned `c0c7f55`, `01a0339`, and `eb83992`. At both repaired mask sites, #510’s operative line is **verbatim**:
+
+```c
+uint32_t mask = (width == 32) ? 0xffffffffU : ((1U << width) - 1);
+```
+
+SBFX additionally has:
+
+```c
+if (width < 32 && (x & (1U << (width - 1))))
+        x |= ~mask;
+```
+
+See the [#510 changelog block](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/CHANGELOG.md:1248).
+
+**Copy the mask expression as the positive-width branch, not as the entire BFI repair.** The smallest clear replacement sketch is:
+
+```c
+/*
+ * ARMv7-A/R A8.8.20 makes msb < lsb UNPREDICTABLE.
+ * Emulator policy: preserve the destination for those encodings.
+ */
+uint32_t mask = (width <= 0) ? 0U :
+    ((width == 32) ? 0xffffffffU : ((1U << width) - 1));
+```
+
+The existing subsequent mask shift and destination merge can remain. The decoder bounds `lsb` to `0..31`; `x` and `mask` are unsigned 32-bit values. Enumeration gives 496 zero-mask selections, one full-mask selection, and 527 unsigned shifts with counts `1..31`.
+
+This policy silently preserves the destination and continues execution. The comment may attribute **UNPREDICTABLE** to ARM; it must attribute **destination preservation** to the emulator. Also, width zero already produced a zero mask without C UB. It is not an architectural “wrong result” merely because its ordering is invalid.
+
+I compared the proposed mathematical operation against an independent, bit-by-bit insertion specification for all 1,024 pairs and five source/destination patterns: **5,120 comparisons, zero disagreements**. This checks the sketch’s arithmetic, not compiled behavior.
+
+**The essential coverage gap is full width independently of invalid ordering.** A repair addressing nonpositive widths can still leave width 32 unprotected. The indispensable row is `(31,0)` with different source and destination values, expecting the entire source.
+
+A separate, narrower gap is **unsignedness at width 31**. Correct register results cannot establish that the mask calculation used unsigned arithmetic. A value-only suite can remain green while this definedness property regresses.
+
+I can provide source-level regression contracts and coverage analysis; I’m omitting executable guest trigger encodings and edits deliberately reintroducing the defect.
+
+For the existing probe, these are the decoded-operation rows I would require. Source and destination correspond to its ordinary `r1` and `r0` roles:
+
+| Row | `(msb, lsb)` | Source | Initial destination | Expected destination | Coverage |
+|---|---|---|---|---|---|
+| Full width | `(31,0)` | `89abcdef` | `76543210` | `89abcdef` | Missing full-width handling; incomplete replacement |
+| Width 31, low | `(30,0)` | `89abcdef` | `76543210` | `09abcdef` | Preserve excluded top bit; overly broad full-mask handling |
+| Width 31, high | `(31,1)` | `89abcdef` | `76543211` | `13579bdf` | Preserve excluded low bit; correct positioning |
+| Interior insertion | `(15,8)` | `89abcdef` | `76543210` | `7654ef10` | Positioning, clearing overwritten bits, preserving surrounding bits |
+| Lowest bit, clear | `(0,0)` | `00000000` | `ffffffff` | `fffffffe` | One-bit boundary; overbroad invalid-order guard |
+| Highest bit, set | `(31,31)` | `89abcdef` | `76543210` | `f6543210` | Highest destination bit; positioning |
+| Zero width | `(0,1)` | `00000000` | `ffffffff` | `ffffffff` | Documented invalid-order policy at its boundary |
+| Negative width boundary | `(0,2)` | `00000000` | `ffffffff` | `ffffffff` | Missing negative-width protection/policy |
+| Most negative width | `(0,31)` | `00000000` | `ffffffff` | `ffffffff` | Lower endpoint of the computed-width domain |
+
+All numbers are hexadecimal. An additional aliasing control can use the same source/destination register, initially `12345678`, with `(11,4)`, expecting `12345788`; that protects the existing snapshot-before-write behavior.
+
+**The vacuity distinctions matter:**
+
+- Both width-31 rows commonly return the correct value even with the original signed expression. They protect semantics but **do not detect the signedness defect**.
+- The zero-width row passes the original implementation because its mask is already zero. It is a policy boundary check, not a negative-shift detector.
+- Interior and one-bit rows also pass the original implementation. Their purpose is to catch damage introduced by a repair.
+- A full-width row seeded with equal source and destination values is vacuous against a zero-mask/no-op outcome. This includes zero/zero and full-width source/destination aliasing.
+- Invalid-order rows with zero source and zero destination can likewise pass despite the defect. The contrasting seeds above avoid that particular weakness under the count-masked lowering discussed by #510.
+- **None of those lowering predictions is a BFI measurement from this review.** Undefined C behavior provides no portable defective-result oracle.
+
+A compatibility row has value when its claim is explicit. Calling it proof that the original UB is detected would be the mistake.
+
+S6 is substantially correct, with modest plumbing work required. [The existing runner](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/arm_bfx_width_probe.py:193) hardcodes the destination to zero. It needs configurable destination seeding, BFI encoding validation, and inclusion of every added case in that validation. Check decoded endpoints and register fields as well as the opcode mask: BFI encodes an absolute `msb`, whereas the existing BFX helper handles width-minus-one.
+
+Require successful execution and `pc == CODE + 4` for each added case. These are execution controls; destination preservation plus PC advancement alone cannot distinguish the chosen invalid-order policy from a no-op.
+
+The project-root [sanitizer Makefile](C:/DocumentNoSnc/CC/GXEMUL/build-asan/Makefile:9) contains `-fsanitize=address,undefined`. However, the current probe does not assert absence of sanitizer diagnostics in its captured transcript. **Using that binary alone does not turn its register-value assertions into a definedness check.** That requires a diagnostic oracle or an explicit static check.
+
+**There is a fourth unsafe mask site—and the broader search finds more computed-width shifts.** I searched the specified `src` tree for width/count shifts and low-mask constructions, including alternate variable names and casts, then checked their bounds.
+
+| Site | Finding |
+|---|---|
+| [ARM BFI](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c:1460) | Only unrepaired executable `1 << width` mask among the three ARM handlers. |
+| [m88k `m88k_rot`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_m88k_instr.c:513) | Exact sibling: `(1 << n) - 1`. The nonzero guard permits `n == 31`; signed-shift UB remains. #510 already explicitly recorded this. |
+| [MIPS `ext` and `dext`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_mips_instr.c:1752) | Computed complementary shift counts remain unsafe. Enumeration finds 496 negative counts for EXT, and 496 each for DEXTM/DEXTU. Casting a negative count to `uint64_t` does not make it valid. |
+| [IPv4 mask construction](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/net/net_ip.c:1258) | `(1 << xl) - 1`, with `xl = 32 - prefix_length`. Accepted prefix lengths include a case yielding 31. Another signed-mask sibling remains. |
+| Nearby safe matches | m88k CLR/SET use unsigned operands; RTL8139’s address width is fixed at 8; Alpha’s mask width is 10. MIPS INS’s computed count enumerates to `0..31`, despite its potentially nonpositive field size. |
+
+ARM also retains the separate signed bitmap shifts at lines 2775 and 2913. Consequently, **“third of three” describes the ARM mask subset, not a tree-wide absence of remaining shift defects**. The history also shows BFI was explicitly deferred by #510, rather than unnoticed.
+
+Two further findings deserve recording:
+
+- [The filed row’s body](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/OUTSTANDING_BUGS.md:17173) still labels `width <= 0` a negative count and totals **499**, contradicting its corrected opening sentence. Its “most of its domain” wording is also unsupported by 468/1,024.
+- The manual assigns source-register field 15 to **BFC**, but the current decoder passes `r[15]` into BFI. The mask repair does not correct that separate decode issue, already filed as `armbfcdecode`.

@@ -18059,3 +18059,74 @@ codex seat under the found-something-else licence while answering a `#519` test-
 (`regress/artifacts/sgirandomcolour/codex_coverage_20260910.txt`); verified by reading before filing.
 Witness OWED as an ATTEMPT: a `-fsanitize=undefined` build in `build-asan/` is the first thing to try,
 since a rung-3 guest witness may be impossible for UB that behaves as intended on every compiler here.
+
+### `mk48nvramkill` (HIGH) -- filed 2026-09-10
+
+`dev_mk48txx.c`, anchor `default:if (writeflag == MEM_READ)`: **EIGHT offsets inside the device's own
+mapped range end the emulator process, and a guest reaches them by reading ordinary NVRAM.**
+
+Enumerated rather than reasoned. The device registers `MK48TXX_LEN` = `MK48T08_CLKSZ` = **8192** bytes, so
+`relative_addr` spans `[0, 0x2000)`. The accept block passes everything OUTSIDE
+`[MK48T08_CLKOFF, MK48T08_CLKOFF + MK48TXX_ISEC)` straight to the RAM path with a `goto ret`. With
+`CLKOFF = 0x1ff0` and `ISEC = 9`, the `switch` is reached for exactly nine offsets, `0x1ff0..0x1ff8` -- and
+it has exactly ONE case, `CLKOFF + MK48TXX_ICSR` = `0x1ff8`. **The other eight, `0x1ff0` through `0x1ff7`,
+fall to `default:` and call `exit(1)`.**
+
+**Reachability is not theoretical.** `machine_mvme88k.c` attaches it unconditionally --
+`mk48txx addr=0xfffc0000` -- in the same block as the PCC2 SCSI this project has been running rounds
+against all week. Those eight are ORDINARY BYTES of the chip's clock/NVRAM page; nothing unusual is
+required to touch them, and firmware that checksums or dumps the NVRAM sweeps the whole 8 KB and walks
+straight in. No guard, no validation, and no way for a guest to learn the region is fatal first.
+
+**AND THE BOUNDARY LOOKS DELIBERATE, WHICH IS WHY IT SURVIVED.** The accept block's own comment says
+*"Reads and writes to the RAM part of the mk48txx, or the clock registers, are OK"*, and the test reads as
+though it means *everything except the clock registers*. But its upper bound is `CLKOFF + ISEC`, the
+SECONDS register -- so it hands the real time-of-day registers (`ISEC..IYEAR`, `0x1ff9..0x1fff`) to the RAM
+path, which is harmless because `mk48txx_update_regs()` writes into that same `d->reg[]` array, and it
+captures `0x1ff0..0x1ff7` into the fatal switch, which is not. *The bound is one constant away from correct
+in the direction nobody checks.*
+
+Fix shape NOT adjudicated -- no panel has seen this. Members 3 (decline + latched announce) and 6 (backed
+accept) both fit, and BACKED ACCEPT is probably right because **`d->reg[]` already has storage for those
+offsets**: the array is `MK48TXX_LEN` bytes, so the bytes exist and the handler simply refuses to use them.
+That makes this closer to a boundary correction than to a new policy. The round owes a check of WHICH
+constant is right against `mk48txxreg.h` rather than assuming. **Witness OWED as an ATTEMPT**: mvme88k is
+an in-tree machine and a debugger byte read at `0xfffc1ff0` looks like a cheap rung-3 probe, but none has
+been built and this entry claims none.
+
+Found by the GPT-6 Astra exit audit (`regress/artifacts/queuetriage/codex_exitaudit_20260910.txt`), which
+ranked it first on BOTH axes out of 76 unowned runtime error-exit sites across 24 files. Every element
+above was re-derived locally by opening the files.
+
+### `mipsextshift` (MED) -- filed 2026-09-10
+
+`cpu_mips_instr.c`, anchors `X(ext)` and `X(dext)`: the extraction shift count is computed from two
+independently decoded instruction fields and **goes NEGATIVE for 496 of 1024 encodable pairs**.
+
+`X(ext)` computes `int size = msbd + 1;` then `x = (rs << (32-lsb-size)) >> (32-lsb-size);`, with `msbd`
+and `lsb` each decoded from the instruction word in `0..31`. Enumerating all 1024 pairs gives **496 with a
+negative count** -- undefined, C99 6.5.7p3. `rs` is `uint32_t`, so the left operand is unsigned and the
+signed-`1` form does not arise; **that is the trap**, because a reader checking *"is this unsigned?"* passes
+the site, and a negative COUNT is undefined whatever the operand's type.
+
+`X(dext)` is the same shape at 64 bits and is worse in a way that reads as a precaution: the count is CAST,
+`(rs << (uint64_t)(64-lsb-size))`. **The cast does not rescue it** -- a negative `int` converted to
+`uint64_t` becomes an enormous positive value, so the count is then at or beyond the width of the type.
+*A cast that converts one undefined form into another while reading as a fix is worth recording as a
+pattern.*
+
+**This is a FIELD-VALIDATION defect, not a cast defect, and that decides the fix.** MIPS requires
+`lsb + size <= 32` for EXT and the corresponding bound for the `dext` family; an encoding violating it is
+architecturally invalid. So the repair is probably to DECLINE or to raise the architectural exception, not
+to paper the shift over -- a mask repair would give a defined answer to a question the guest was not
+entitled to ask, and would make invalid encodings look supported. That is a panel question, which is why
+this is filed MED rather than as an easy one-token repair.
+
+Reachability: MIPS is this project's primary architecture with the most exercised rigs, and the count comes
+straight from the instruction word with no CPU-model gate, so a guest need only execute one malformed EXT.
+**Not measured, no witness built** -- what is established is the domain arithmetic and the decode, both
+re-derived here.
+
+**Distinct from `shiftubcensus`**, which is the SIGNED-1 family (`1 << n` with a plain-`int` literal). This
+is the NEGATIVE-COUNT family: a different C99 clause and a different fix shape. Found by the GPT-6 Astra
+fix-design review on `armbfiwidth` while looking for siblings of that round's idiom outside ARM.

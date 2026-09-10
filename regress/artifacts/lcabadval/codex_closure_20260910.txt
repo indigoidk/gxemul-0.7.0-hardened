@@ -1,0 +1,60 @@
+VERDICT: Ship R1–R6 below: five class-closure transition rows plus one WEN-silence row—73 scored rows in 24 sessions.
+CODEX_518_CLOSURE_20260910
+
+S1–S4 check out. HEAD is `4eac0b1`; the live source and probe are byte-identical to their Table-4 frozen copies. Independently counting all eight saved logs reproduces [SCORES4.txt](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/lcabadval/killtable_20260910/t4/SCORES4.txt): BASE and M43/M44/M47 pass 67/67, and every log ends with `LCABADVAL_DONE`. Their L2 disposition stands. Everything below is static enumeration, **not a measured new kill table**.
+
+Both S5 predictions are correct:
+
+- Enumerating **all 4,096 fields** gives legal fields `{0,1,3,7,f,1f,3f,7f,ff,1ff,3ff,7ff,fff}`. Changing the predicate to `<= 2` adds **exactly `{2}`**.
+- Existing MASK1 fields are `{5,9,3ff,fff}`. The two proposed rows add MASK1 fields `{7,1}`. None is `2`.
+- The complete existing MASK0 write set, including seeds, is `{0,100000,1f0000,200000,500000,700000,900000,100100000}` in hexadecimal. **Every value clears bit 12.**
+
+Thus neither prediction was secretly killed by an overlooked input.
+
+The matrix needs a stronger definition of filtering than “one widened-mask example.” These are its eight cells; existing row names refer to the [frozen detector](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/lcabadval/killtable_20260910/t4/lca_badval_probe.REPAIRED67.asrun.py:393).
+
+| Repair class | Window 0 | Window 1 |
+|---|---|---|
+| Stored-bit filtering, MASK and BASE | `wmask0 widen` and `wbase0 widen` cover particular bits only. **R1 + R4 owed.** | `wmask1 stored`, `wbase1 sg` and `wbase1 wen` cover retained fields, but reserved-bit filtering is missing. **R2 + R5 owed.** |
+| MASK field-source selection | Existing **`wmask0 hif`**; R1 reinforces it. | **R2 owed.** |
+| Zero acceptance | Existing **`wmask0 zero`**, **`wbase0 zero`**. | **R2 owes normalized MASK field-zero acceptance**; BASE literal zero already has **`wbase1 stored`**. |
+| MASK invalid-field rejection | Existing **`wmask0 declined`**, **`wmask0 kept2`**, **`wmask0 f2`**. | Existing **`wmask1 declined`** exercises fields 5 and 9; **R3 owes field 2**. |
+
+Use these five transitions. **Each scored row checks the pair `(seed readback, final readback)`**, so the seed check adds no separate scored row.
+
+| Row | Register / IOC offset | Seed, also expected seed readback | Subsequent write | Fixed final readback | Discriminating mutant result |
+|---|---|---:|---:|---:|---|
+| **R1 `wmask0 filter`** | MASK0 `+0x140` | `0xfff00000` | `0xffffffff000fffff` | `0` | Mask `0xfff01000`: **`0x1000`**. Mask `0x7ff00000`: seed reads **`0x7ff00000`**. |
+| **R2 `wmask1 filter-zero`** | MASK1 `+0x160` | `0xfff00000` | `0xffffffff000fffff` | `0` | M43: **`0xff000`**. M44 or normalized-zero rejection: retains **`0xfff00000`**. |
+| **R3 `wmask1 f2`** | MASK1 `+0x160` | `0x700000` | `0x200000` | `0x700000` | Predicate `<= 2`: **`0x200000`**. |
+| **R4 `wbase0 filter`** | BASE0 `+0x100` | `0x1fff00000` | `0xfffffffc000fffff` | `0` | Store mask additionally preserving bit 0: **`1`**; other reserved bits are exercised too. |
+| **R5 `wbase1 filter`** | BASE1 `+0x120` | `0x1fff00000` | `0xfffffffc000fffff` | `0` | M47: **`0x400000000`**; other reserved bits are exercised too. |
+
+**R6 `wen silent both`** adds no writes: assert **zero WEN announcements across this new session**. Both BASE seeds and subsequent writes clear WEN. This kills the previously unrowed BASE1 `idata & WEN` → `idata | WEN` mutation, and its BASE0 sibling. The existing silence row touches BASE0 only; this is another real sibling gap, not clause-(e) debt.
+
+The arithmetic behind the choices is:
+
+- **R1/R2:** `0xffffffff000fffff` is the 64-bit complement of `0xfff00000`. Enumeration gives normalized `v=0`, `f=0`, and `f & (f+1)=0`. With raw-input validation, however, `f=0xffffffff000` and **`f & (f+1)=0xffffffff000`**: reserved input bits 32–63 survive as deciding field bits 12–43. Declining therefore retains the distinct, checked seed. Reserved input bits 0–19 are all set, exposing low-bit storage leaks. The seed sets every architected MASK bit, exposing narrowing. **R2 closes filtering, source selection, and normalized-zero acceptance together.**
+- **R3:** field `2` gives **`2 & 3 = 2`**. Bit 1 of the predicate result distinguishes `== 0` from `<= 2`; the changed stored value differs from the checked seed.
+- **R4/R5:** the write is the 64-bit complement of BASE’s `0x3fff00000` mask. Bits **0–19 and 34–63** are set; architected bits **20–33** are clear. M47 consequently retains exactly bit 34. The seed checks retention of bits 20–32; existing WEN readbacks already check bit 33.
+
+The earlier trap remains a trap: `0x1fff00000 >> 20 = 0x1fff`, and `0x1fff & 0x2000 = 0`. That value does **not** distinguish MASK raw-field validation. Its use here as a **BASE seed** involves no MASK predicate.
+
+Five transitions are minimal **under the stated convention of one checked seed/target transition per register row**: each of the four registers has filtering gaps requiring its own observable, and MASK1 additionally needs the invalid-field-2 transition. Combining all assertions into one aggregate Boolean would reduce the printed denominator without reducing coverage work.
+
+For the fourth-pass test, I would defend this boundary: **unconditional constant-mask filtering edits; MASK `v`→`idata` field-source substitution; fixed shift-count changes; normalized-zero exclusion; and comparison/bound changes to `g=f&(f+1)`**, independently at either window.
+
+Static checks found:
+
+- **256 single-bit storage-mask edits** across four registers: no survivors.
+- All **4,096 MASK narrowing submasks** and **16,384 BASE narrowing submasks**, per window: only the original masks survive.
+- All **64 shift counts**: only 20 survives.
+- All six comparisons against constants `0..4096`, evaluated over all fields and against existing plus proposed observations: **no nonequivalent survivor**. Larger unsigned thresholds introduce no additional behavior on this field domain.
+
+That is **not every conceivable predicate**. For example, `P(f) || f == 6` still escapes: enumeration adds exactly field 6, which these rows never drive. Likewise, R2 tests **normalized zero**, not literal MASK1 input zero; `P(f) && idata != 0` would escape there. Exact-value exceptions, new cross-bit conditions, and compensating combinations of edits must be disclosed under the [body-partition boundary](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/tools/CLAUDE.md:1378). They are not covered by calling the matrix “complete.”
+
+Cost is **one new session**, appended independently: the frozen instrument has **23 sessions**, not 67. Five paired readback assertions plus R6 make **73 rows / 24 sessions**. Existing sessions and their assertions need no modification, so these additions introduce no shared-state or transcript-count interference with existing rows. Aggregate mutant scores change, and the full re-table remains necessary; no runtime percentage is claimed.
+
+One additional escape explains why R1 uses the larger seed: MASK0’s existing inputs all clear bit 31, so narrowing its mask to **`0x7ff00000`** also escapes the original two-row proposal. R1 catches it immediately at the seed readback.
+
+No builds, probe runs, or file changes were made.

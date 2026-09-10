@@ -1,0 +1,84 @@
+VERDICT: ship **TLB_A/B/C × {CI8, RGB32, RGBA32, ABGR32, YCRCB8-first, YCRCB8-repeat}**: 18 new readback cells in three sessions. **One corner closes the three named predicates, not the complete store-guard class.**
+CODEX_519_CORNER_20260910
+
+Checked HEAD `4eac0b1`, the uncommitted fix, and the committed instruments in the specified SEC tree. These are static findings and predictions; no builds, probes, or edits were performed.
+
+**S3 and S6’s field arithmetic are correct.** The [header definitions](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/thirdparty/crmfbreg.h:319) and [helper](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:224) give:
+
+| Depth field | `bufdepth`, bytes | `512 / bufdepth`, pixels |
+|---:|---:|---:|
+| 0 | 1 | 512 |
+| 1 | 2 | 256 |
+| 2 | 4 | 128 |
+| 3 | 8 | 64 |
+
+The transfer length is in bytes. Type mask `0x00f0`, depth mask `0x0300`, TLB mask `0x1c00`, and the low pixel/select bits do not overlap.
+
+For `0x00f0`, the actual results are `type=0xf0`, depth field `0`, `bufdepth=1`, TLB field `0`, and `linear=false`. That establishes documented field encodings and helper reachability—not that this particular combination is the most realistic driver input.
+
+**S4 misidentifies the mutants’ direction; S6 misidentifies their payload.** The [actual mutator](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/sgirandomcolour/killtable_20260910/mut519b.py:10) replaces unconditional `ok = 0` **inside the unsupported default** with a conditional decline. Those mutants wrongly **permit unsupported writes**. Their permitted stores consume uninitialized `buf`; the random fills were deleted.
+
+A genuinely additional decline after the switch would instead reject supported writes, and existing accept rows already detect that.
+
+S5 is correct for the actual replacement form:
+
+| Unsupported mode | Bytes | `linear` | `bufdepth == 4 || linear` |
+|---|---:|---:|---:|
+| Existing `0x12f0` | 4 | true | true |
+| Tiled edge `0x02f0` | 4 | false | true |
+| Linear edge `0x10f0` | 1 | true | true |
+| Corner `0x00f0` | 1 | false | **false** |
+
+Thus both edges preserve the mutant’s decline. The corner permits its erroneous store; whether the current readback detects that store is a separate oracle question.
+
+**The source-induced product is more specific than “width × tiled/linear.”** The [function’s tests](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:236) distinguish:
+
+- Addressing cases **TLB_A, TLB_B, TLB_C, LIN_A**. Other TLB values return before colour dispatch.
+- Colour cases **CI, RGB, RGBA, ABGR, default**.
+- Within default, **BADCOLOR clear/set**.
+- Bounds and pointer validity, whose rejecting outcomes cannot witness the colour repair.
+
+There is **no conditional test partitioning depth** into `{4, other}`, or into four separate widths. Division, multiplication, and passing a length do not introduce those tests. The project’s [joint-cell rule and dispatch-label amendment](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/tools/CLAUDE.md:1378) also prevent collapsing the three separately selected tiled arrays into one addressing case.
+
+For the new store guard on **both acceptance and decline**, the feasible product is:
+
+`4 addressing cases × (4 supported colour cases + 2 default-latch states) = 24 cells`.
+
+The instruments hold the six LIN_A cells. LIN_B contributes none: it returns earlier. Therefore **18 readback cells remain**. Restricting the claim to default-arm conditioning alone reduces this to six missing decline observations; restricting it to the three named predicates reduces it to one.
+
+Use these three fresh-session blocks, repainting and reading immediately after **each** operation:
+
+| New readback row | TLB_A mode | TLB_B mode | TLB_C mode | Expected word |
+|---|---|---|---|---|
+| CI8 accept | `0x0000` | `0x0400` | `0x0800` | `0xdd223344` |
+| RGB32 accept | `0x0210` | `0x0610` | `0x0a10` | `0xaabbcc00` |
+| RGBA32 accept | `0x0220` | `0x0620` | `0x0a20` | `0xaabbccdd` |
+| ABGR32 accept | `0x0230` | `0x0630` | `0x0a30` | `0xddccbbaa` |
+| YCRCB8, latch clear | `0x00f0` | `0x04f0` | `0x08f0` | `0x11223344` |
+| YCRCB8, latch set | `0x00f0` | `0x04f0` | `0x08f0` | `0x11223344` |
+
+The supported rows also prove that each mapping actually reaches the observed destination. Require silence before YCRCB, the colour announcement after its first operation, and a cumulative count of one after its repeat.
+
+**The corner’s real reachability trap is its mapping.** The [existing setup](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/sgirandomcolour/killtable_20260910/t2/sgi_re_colourdefault_probe.REPAIRED19.asrun.py:151) programs only LIN_A. Merely substituting `0x00f0` leaves TLB_A invalid.
+
+For each new bank, use both vertices `(0,0)` and a valid entry mapping the prepainted destination. Then the enumerated bounds/address quantities are:
+
+`x=y=0; tile_nr_x=tile_nr_y=tile_nr=0; xofs=ofs=0`.
+
+Every coordinate rejection is false; `tile_nr >= 256` is false. At `(4,1)`, however, tiled depth-1 addressing gives `ofs=512+4=516`, not the existing linear row’s offset `4`.
+
+**The defensible class boundary** is store-eligibility misrouting among those existing addressing/colour cases, including conditioning decline on the existing BADCOLOR state, with address generation and packing computations preserved. Every cell has an observation after this addition.
+
+A concrete remaining escape is conditioning default’s decline on:
+
+`bufdepth == 4 || !linear`
+
+It remains true for existing LIN_A declines and all proposed tiled declines, but fails for unrowed depth-1 LIN_A. That is disclosed **clause-(e) depth/address interaction debt**: the new width distinction is not a partition the original body tests. Likewise disclose individual default-nibble specializations, arbitrary coordinate/address constants, additional width combinations, and changes to addressing or packing computations. Do not claim arbitrary Boolean closure over every read value.
+
+**The shared readback channel is sound; its implication is limited.** Accepted rows expect changed, correctly packed bytes; declined rows expect paint. Opposite expectations are appropriate. But unchanged paint does not prove absence of a store: at depth 1, an erroneous byte equal to `0x11` passes.
+
+The announcement proves entry into default, not store suppression; M13/M14 retain it. Consequently, “no further unvisited cell” is defensible, while **guaranteed mutation kills require a write-event oracle**. The existing [watchpoint](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:283) is disabled during single-stepping, so it is not a drop-in solution for this instrument.
+
+**Cost:** three additional sessions: **11→14** for the 19-row instrument, or **9→12** for the 14-row instrument. Eighteen composite rows make **19→37**; separate diagnostic assertions increase that count. Appending fresh sessions preserves existing command streams and device state isolation, but cannot certify unchanged numerical scores given timing and indeterminate-data oracles. A complete frozen re-table remains necessary.
+
+One further qualification is already filed as [sgiretlbshiftub](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/OUTSTANDING_BUGS.md:18049): valid tiled entries undergo signed left-shift overflow under the usual C99 integer promotions. The tiled address derivation therefore describes intended bit arithmetic, not a portable runtime guarantee.
