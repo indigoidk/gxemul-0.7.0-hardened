@@ -18323,7 +18323,7 @@ Returning zero from an ARM or SH device callback gives no bus-error delivery, so
 unavailable there and a round reaching for it owes the exception path first. CPU translation and
 instruction handlers have their own direct mechanisms, which is a separate question.
 
-### `ppcrldiclzero` (HIGH) -- filed 2026-09-10
+### `ppcrldiclzero` (HIGH) -- filed 2026-09-10 -- *** FIXED AND SHIPPED AS `#522`; see the CHANGELOG round block. The reading below stands and was CONFIRMED at rung 3 before the edit (19/27 -> 24/27, 190 of 190 census cells wrong pre-fix and none after). ***
 
 `cpu_ppc_instr.c`, grep anchor `X(rldicl)`: **the handler always writes ZERO to its destination
 register, for every operand, every rotate amount and every mask begin.**
@@ -18429,7 +18429,7 @@ reachable on a real machine model, not only synthetic ones.
 
 **The gate finding is structural and stronger than "no gate covers it":** both PowerPC gates drive a
 32-bit processor, and the decoder sends the whole 64-bit instruction group to its bad path in 32-bit mode.
-**No gate has ever instantiated a 64-bit PowerPC CPU at all**, so that group is invisible by construction
+**No gate has ever instantiated a 64-bit PowerPC CPU at all** -- *** FALSE, AND CORRECTED AT THE END OF THIS FILE (search `MY GATE CLAIM WAS FALSE'): a gate DOES construct them; what no gate does is CHECK THEIR INSTRUCTION RESULTS. The sentence is kept because it is what two commit messages say. *** -- so that group is invisible by construction
 rather than by omission -- one coverage hole with one cause, closed by a single 64-bit probe. Severity
 ceiling stated honestly: nothing in-tree BOOTS a 64-bit PowerPC guest, which is why the witness is rung 3.
 
@@ -18458,3 +18458,26 @@ EXT and `> 64` for the shared DEXT/DEXTM/DEXTU case **after** the variant adjust
 the `$zero` NOP shortcut** -- the ordering matters, because a NOP taken first would swallow the rejection.
 That places the bound where the fields are normalised, which is the only point at which one bound serves
 all three variants.
+
+### `ppcrldiclzero` / `ppcrldimimask` / `ppcrlwimiwidth` -- *** MY GATE CLAIM WAS FALSE. Corrected 2026-09-10. ***
+
+I wrote, into three rows, a queue entry and two commit messages, that **"no gate in this tree instantiates
+a 64-bit PowerPC CPU at all, so the whole 64-bit-only instruction group is invisible BY CONSTRUCTION."**
+**The first half is false.** Gate 9 enumerates every advertised machine type and subtype, including three
+that default to the PPC970, so 64-bit PowerPC CPUs are constructed by a gate today and always have been.
+
+**The correct and narrower finding is that NO GATE CHECKS THEIR INSTRUCTION RESULTS.** Gate 9 is a
+construction check with no PowerPC result oracle, and both PowerPC gates drive a 32-bit part, selected
+*explicitly* in their probes rather than inherited by default. The defects were invisible because nothing
+executes these instructions and inspects the answer — not because nothing builds the processor.
+
+*** That distinction is this project's own witness ladder one level up, and I walked straight past it. ***
+The ladder's rung-2 clause says in as many words that machine construction proves presence and **not**
+reachability, and is a reproduction only for defects construction itself executes. I applied that rule
+carefully to witnesses all day and then made exactly the error it warns about while reasoning about gates.
+A gate that constructs a CPU is a rung-2 gate; these defects need a rung-3 one.
+
+**The closure is smaller than my framing implied:** wire the existing 19-row probe into the PowerPC gate,
+asserting its score *and* its completion sentinel. That closes the missing instruction-result check. It
+does **not** close all 64-bit PowerPC coverage, and the review says so explicitly rather than letting the
+round claim it does.

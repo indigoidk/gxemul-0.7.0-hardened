@@ -1,0 +1,317 @@
+PRE-TABLE CHECK -- #522 ppcrldiclzero
+Written BEFORE table 1 runs, so this file's own mtime proves the order.
+
+THE DIFF UNDER TEST is ONE token: `tmp |=` becomes `tmp2 |=` in X(rldicl)'s mask loop.
+Everything else in the hunk is comment.
+
+--------------------------------------------------------------------- SIBLING PARITY
+
+The sibling is X(rldicr), immediately below, and the two are DELIBERATELY ASYMMETRIC in
+shape rather than accidentally so:
+
+    rldicl   BUILD a mask in a second variable, then AND      <- the shape this fix restores
+    rldicr   CLEAR bits in the rotated value, assign it       <- correct as written
+
+So there is no parity defect to repair: the two handlers implement complementary operations
+and the tree's own rldicr is the evidence that the build-then-AND shape was intended here.
+NO ROW OWED on parity.  The witness already carries rldicr as its DISCRIMINATING control,
+in the same session and from the same encoder, which is what attributes the failure to this
+one handler rather than to the apparatus.
+
+*** BUT THE FAMILY IS NOT CLEAN, AND THE DETECTOR'S SCOPE DEPENDS ON SAYING SO. ***
+X(rldimi) and X(rlwimi) carry their OWN measured defects.  They are NOT this round's and
+their rows are deliberately NOT in the shipped detector: a detector carrying permanently
+red rows is one nobody reads.  Recorded here so the scope is a decision rather than an
+oversight.
+
+--------------------------------------------------------------------- CLAIM -> ROW
+
+Added comment sentences asserting an observable consequence:
+
+  "the destination was set to ZERO on every execution, for every source, rotate amount
+   and mask begin"
+      -> ROWED, and by a CENSUS rather than a sample: 190 (SH,MB) cells, all measured.
+         `census zero' counts cells returning exactly zero; `census wrong' counts cells
+         differing from the architectural answer.  Both want 0 after the fix.
+  "the `|=' also destroyed the rotated data"
+      -> NO SEPARATE ROW, and the reason is stated rather than glossed: it is UNOBSERVABLE
+         while the AND with zero stands, so no channel can distinguish it on the broken
+         build.  It becomes visible only under M_NAIVE below, where it IS rowed.
+  "rldicl rA,rS,0,32 is the standard 32-bit zero-extend"
+      -> ROWED as `zx32 rldicl', the exact encoding a compiler emits.
+  "DO NOT fix this by deleting the `& tmp2'"
+      -> ROWED as the M_NAIVE leg.  **A warning in a comment that no mutant tests is a
+         claim nobody has checked**, and this one is load-bearing enough to test.
+
+--------------------------------------------------------- GUARD FIELD vs BODY FIELD
+
+There is no guard here -- this is a pure computation, not a refusal -- so the check is
+adapted rather than skipped, and the adaptation is stated:
+
+  inputs the result depends on:   gpr[rs], sh, mb
+  lvalues written:                gpr[ra], and CR0 when the record bit is set
+
+`sh` and `mb` are decoded independently from the instruction word, so the input space is
+their cross-product and the census walks it: the MB sweep, the SH sweep, and the diagonal.
+**CR0 IS A SECOND WRITTEN LVALUE AND IT IS A SECOND CHANNEL**, measured: the record form
+reports EQ on every execution because update_cr0 is fed the always-zero destination.  That
+is disclosed below rather than rowed in this round's detector.
+
+------------------------------------------------------------------------- CHANNEL
+
+  row                mutant it kills                    observable that differs
+  -----------------  ---------------------------------  ------------------------------
+  zx32 rldicl        M_ORIG (the defect verbatim)       destination: 0xcafef00d vs 0x0
+                     M_NAIVE (delete the AND)           0xcafef00d vs 0xdeadbeefffffffff
+  rot8 rldicl        the same, on a pure rotate         a rotate whose mask is all-ones,
+                                                        so it separates the ROTATE from
+                                                        the MASK
+  census wrong       M_ORIG, M_NAIVE, M_MASKEND         count of disagreeing cells, 0 vs
+                                                        190 / 126 / a mask-dependent count
+  census zero        M_ORIG                             count of exactly-zero cells, 0 vs 190
+                                                        -- and this row is what makes
+                                                        "always zero" a MEASURED universal
+                                                        rather than a sampled one
+  vac neighbour      M_ORIG                             a cell whose correct answer is
+                                                        NON-zero, adjacent to one whose
+                                                        correct answer IS zero
+  vacuous cell       *** NAMES NO MUTANT IT CAN KILL, DELIBERATELY. ***  Its correct answer
+                     is itself 0, so it is GREEN on the broken build.  It is carried to show
+                     WHERE the vacuity boundary is, and is recorded here rather than counted
+                     as coverage -- the `pos obs' disposition from #520.
+  live / seed holds  the apparatus                      *** `seed holds' IS THE ROW THAT
+                                                        MAKES A ZERO MEAN ANYTHING: every
+                                                        destination is pre-seeded, so a
+                                                        register that is stepped over but
+                                                        never written still holds the
+                                                        sentinel.  Without it the whole
+                                                        instrument is consistent with the
+                                                        instruction never having executed.
+  neg apparatus      the apparatus                      asserts a RED under a bogus machine,
+                                                        so `live' is failable
+  disasm total       a mis-built encoder                every placed word re-read by the
+                                                        tree's OWN disassembler -- a
+                                                        different code path from the execute
+                                                        handler, and the defence against the
+                                                        hand-assembled-encoding trap, which
+                                                        matters here because a wrong register
+                                                        field yields ZERO and zero is the
+                                                        symptom under test
+
+  *** EVERY NAMED CHANNEL CAN VARY UNDER ITS NAMED MUTANT, except `vacuous cell', which is
+  declared above as carried-not-counted with its reason. ***
+
+--------------------------------------------------------------- VACUITY FLOOR PLAN
+
+  (a) fails on the pre-fix build        -> HEAD leg, and ALREADY MEASURED: 19/27 on the
+                                           witness, of which the five rows kept in the
+                                           shipped detector are the flipped ones
+  (b) VERBATIM REINSTATEMENT            -> M_ORIG, and unlike #521 this clause IS
+                                           satisfiable literally: this diff changes a
+                                           STATEMENT, so putting it back restores the
+                                           defect exactly
+  (c) null medium                       -> HEAD leg
+  (d) NULLED REPAIR                     -> M_MASKEND: the corrected `tmp2 |=' KEPT and its
+                                           effect weakened, so the mask is built into the
+                                           right variable and is the WRONG MASK
+
+------------------------------------------------------ TABLE PLAN (predictions)
+
+  BASE      the fix, unmutated                      predict 19/19
+  M_ORIG    `tmp2 |=' -> `tmp |='                   predict 14/19 -- the defect verbatim
+  M_NAIVE   drop the `& tmp2'                       predict 16/19.  *** THE MOST VALUABLE
+                                                    LEG: it is the repair a future reader is
+                                                    most likely to reach for, it was BUILT
+                                                    AND MEASURED WRONG (126/190 cells), and
+                                                    a detector that passes it would bless
+                                                    exactly the wrong edit. ***
+  M_MASKEND `(63-mb)' -> `(62-mb)'                  predict a large red -- the mask is off
+                                                    by one bit at every cell
+  M_NOAND   `tmp & tmp2' -> `tmp2'                  predict a large red: the mask alone,
+                                                    with the rotated data discarded
+  HEAD      whole-file pre-fix (null medium)        predict 14/19
+
+  Every mutant is applied by LITERAL TEXT REPLACEMENT with MUTANT-TEXT-NOT-FOUND treated as
+  a hard failure, so each doubles as a presence pin on the fix's own text.  *That pin has
+  already earned its keep twice in #521 -- an ambiguous anchor and a comment-for-statement
+  substitution -- so the anchors here are checked for uniqueness before the table runs.*
+
+--------------------------------------------------------------------------------------
+TABLE 0 WAS AN APPARATUS FAILURE, PRESERVED AT t0_apparatus_failure/ RATHER THAN DELETED.
+
+The driver was DERIVED BY SED from #521's, and the substitution list missed one line: the
+hardcoded path to that round's MUTATOR.  So every leg called the WRONG TOOL, which replied
+`unknown mutant M_ORIG' and exited 9.
+
+*** THE HARD-FAIL DID ITS JOB -- the driver refused rather than building and measuring an
+unmutated tree and reporting it as a kill. ***  That is the MUTANT-TEXT-NOT-FOUND rule
+paying for itself a third time in two rounds (an ambiguous anchor and a
+comment-for-statement in #521, a wrong tool here).
+
+*** BUT THE SHAPE IS NEW AND WORTH NAMING: THE TABLE LOOKED HALF-HEALTHY, NOT DEAD. ***
+BASE scored 19/19 and RESTORED scored 19/19, because **BOTH mutators define a mutant called
+BASE** and both answer it the same way -- "baseline installed unmutated".  The two tools
+share part of their namespace, so calling the wrong one produced a real-looking score on
+the two legs that bracket the table and blanks in between.
+
+  A SUMMARY WITH TWO GOOD SCORES AND FOUR BLANKS READS LIKE A RUN THAT PARTLY WORKED.  It
+  was a run that entirely did not.  The discriminator is that a BLANK is not a score: this
+  project's rule is that an unrun check and a failed one must not render the same, and here
+  four blanks in a score column were the only signal that anything was wrong.
+
+  THE CHEAP GUARD, and it is the denominator rule again: a table driver should assert that
+  every leg produced a score before it prints a summary, rather than printing whatever it
+  found.  Filed as a tooling note rather than built here -- it is a change to a driver
+  shared by future rounds and owes its own controls.
+
+Nothing was measured in table 0, so no number from it is cited anywhere.  Table 1 below is
+the first real run.
+
+--------------------------------------------------------------------------------------
+TABLE 1 (SCORES.txt).  ZERO ESCAPES.
+
+  BASE      19/19
+  M_ORIG    14/19   zx32, rot8, vac neighbour, census wrong, census zero
+  M_NAIVE   14/19   zx32, rot8, vacuous cell, vac neighbour, census wrong
+  M_MASKEND 16/19   zx32, vacuous cell, census wrong
+  M_NOAND   15/19   zx32, rot8, vacuous cell, vac neighbour
+  HEAD      14/19   as M_ORIG -- the whole-file null medium
+  RESTORED  19/19   cmp-vs-SEC CLEAN, binary FRESH, sentinel cleared on both parts
+
+*** THE CHANNEL BLOCK ABOVE WAS WRONG ABOUT ONE ROW, AND THE TABLE CORRECTED IT. ***
+I declared `vacuous cell' as "NAMES NO MUTANT IT CAN KILL, DELIBERATELY", carried to show
+where the vacuity boundary is and not counted as coverage.  **It reddens under THREE of
+the five mutants** -- M_NAIVE, M_MASKEND and M_NOAND.
+
+The claim was true of exactly ONE mutant and I generalised it to all of them.  That cell's
+correct answer is zero, so it cannot see the ORIGINAL defect, whose symptom is also zero --
+but every other mutant here makes it return something NON-zero, and the row then fires.
+
+  **VACUITY IS A PROPERTY OF (ROW, MUTANT) PAIRS, NOT OF ROWS.**  A row is vacuous
+  AGAINST A NAMED MUTANT, and this project's CHANNEL rule says exactly that -- "a row whose
+  named channel cannot vary UNDER ITS NAMED MUTANT" -- while my block wrote the weaker,
+  wrong sentence "names no mutant it can kill".  The same slip in the other direction cost
+  #521 a floor breach, where I asserted a channel for two rows that turned out not to vary.
+  Both errors are the same one: reasoning about a row in isolation instead of against a
+  specific edit.
+
+TWO RESULTS THAT WENT EXACTLY AS PREDICTED AND ARE WORTH KEEPING:
+  * `census zero' reds under M_ORIG and HEAD AND NOWHERE ELSE.  That is precisely right --
+    it is the row that turns "always zero" into a MEASURED universal, and only the
+    always-zero forms trip it.  Under the other three mutants the answer is wrong but not
+    zero, so the row correctly stays green and `census wrong' does the work instead.
+  * M_MASKEND, the NULLED REPAIR, is the HARDEST mutant at 16/19 -- it keeps the corrected
+    `tmp2 |=' and merely shifts the mask by one bit, so the result is non-zero and only
+    three rows notice.  A detector built to catch "returns zero" and nothing else would
+    pass it.  That is what clause (d) is for and it is discharged here rather than assumed.
+
+*** AND M_NAIVE -- THE REPAIR THE PRODUCT COMMENT WARNS AGAINST -- IS KILLED AT 14/19. ***
+The warning is now a tested claim rather than an assertion.  A future reader who takes that
+edit reds five rows immediately.
+
+--------------------------------------------------------------------------------------
+A HONEST NOTE ON TWO LEGS THAT COINCIDE, raised by the grok seat mid-answer during pass 2
+and recorded before it finished, because the point stands on its own.
+
+**HEAD AND M_ORIG SCORE IDENTICALLY -- 14/19 EACH, WITH THE SAME FIVE FAILING ROWS -- AND
+THAT IS NOT A COINCIDENCE, IT IS A PROPERTY OF THIS ROUND.**
+
+  HEAD    is the whole committed pre-fix FILE, the null medium for clause (c).
+  M_ORIG  is the verbatim reinstatement of the removed defect, clause (b).
+
+For a diff of ONE TOKEN in one function, those two media are THE SAME PROGRAM.  The
+committed file differs from the fixed one only by that token, so installing the committed
+file and reinstating the token produce byte-equivalent behaviour.
+
+  *** SO CLAUSES (b) AND (c) ARE SATISFIED BY WHAT IS EFFECTIVELY ONE MEASUREMENT, AND THE
+  ROUND MUST SAY SO RATHER THAN PRESENT TWO LEGS AS TWO INDEPENDENT CHECKS. ***
+
+That is DISCLOSED rather than defended.  The two legs are still worth running separately --
+they are produced by DIFFERENT MECHANISMS (a git checkout of the whole file versus a
+literal text replacement), so running both cross-checks the mutator against the repository
+and would catch a mutator that silently edited the wrong thing.  **That cross-check is what
+the pair actually buys here, and it is a smaller claim than "the floor has two independent
+witnesses".**
+
+  Note the general shape: **a null medium and a verbatim reinstatement diverge only when
+  the diff touches more than the one thing the reinstatement puts back.**  #521's diff was
+  also one token and its HEAD and M_OLD legs likewise coincided at 16/57; nobody noticed
+  there either.  For a round with a multi-part fix they would differ, and then the pair
+  really would be two checks.
+
+*Recorded from a seat's WORKING NOTES rather than its verdict, which is worth its own line:
+this project's rule is to read the body of any seat whose verdict merely agrees, and here
+the useful sentence appeared before there was a verdict at all.*
+
+--------------------------------------------------------------------------------------
+PASS 2 CORRECTED THIS BLOCK TWICE (grok, RATIFY-with-residuals).  Both are corrections to
+MY record rather than to the fix, and both are the same species: a claim about the WHOLE
+input space that is true of most of it.
+
+*** (1) "THE CENSUS WALKS THE CROSS-PRODUCT OF sh AND mb" -- OVERCLAIMED.  THE SH SWEEP
+DOES NOT TEST SH. ***  The census drives an ALL-ONES source, deliberately, so that every
+mask window is non-empty and "190 of 190" is a real number.  But with an all-ones source
+ROTL64 IS THE IDENTITY -- so the 63 cells of the SH sweep all sit at MB=0, all want
+all-ones, and are **63 copies of (0,0) for mask purposes**.
+
+  **THE CENSUS PINS MASK(MB,63).  IT DOES NOT PIN THE ROTATE.**  The rotate is pinned by
+  the two VALUE rows -- `zx32 rldicl' and `rot8 rldicl' -- which drive a source whose bits
+  differ, and `rot8' in particular uses an all-ones MASK so that it is a PURE rotate.  That
+  is adequate coverage and it is a smaller claim than the one this block made.  A round
+  wanting a genuine two-axis census would need a second source value.
+
+*** (2) "M_MASKEND IS OFF BY ONE BIT AT EVERY CELL" -- FALSE OF MB=0, AND THE MUTANT IS
+ITSELF UNDEFINED. ***  `(63-mb)' -> `(62-mb)' evaluates `1 << -1' on the final iteration,
+which is UB, not a clean shift.  Measured, `zx32' returned 0x800000004afef00d -- bit 63
+WRAPPED IN.  And `census wrong' is 126, i.e. 190 - 64: **every MB=0 cell comes out
+CORRECT**, because the wrap plus the shifted bits happen to fill all 64 bits.
+
+  The mutant is still KILLED at 16/19 and clause (d) is discharged, so nothing about the
+  floor changes.  **But a nulled-repair mutant that is itself undefined is sloppy**: it
+  measures a compiler's treatment of UB rather than the repair's own weakening.  The clean
+  form was `mb <= 62' -- weaken the LOOP BOUND, not the shift count.  Recorded rather than
+  re-run, because the clause is discharged either way and re-tabling to make a mutant
+  tidier is not a good use of the machine.
+
+*** AND ONE RESIDUAL THAT IS A DISPOSITION RATHER THAN A CORRECTION: DO NOT "SAVE sh" HERE.
+***  That repair belongs to the sibling row.  `rldicl' never re-reads `sh' after its rotate
+loop, so saving it would be a change with no observable and no warrant -- the addition
+licence refusing an edit that "cannot hurt".
+
+--------------------------------------------------------------------------------------
+TABLE 2 (t2/SCORES.txt), the 24-row instrument after pass 2's repairs.  ZERO ESCAPES
+ACROSS NINE MUTANTS.
+
+  BASE      24/24
+  M_ORIG    16/24   M_NAIVE  16/24   M_MASKEND 20/24   M_NOAND 18/24
+  M_SH5     22/24   M_MB5    19/24   M_CR0     23/24   M_NOMASK 19/24
+  HEAD      16/24   RESTORED 24/24   (cmp-vs-SEC CLEAN, binary FRESH, sentinel cleared)
+
+*** BOTH TOTAL ESCAPES ARE CLOSED, AND EACH IS KILLED ONLY BY THE ROWS ADDED FOR IT. ***
+
+  M_SH5  22/24, red on `sh63 rldicl' and `sh32 rldicl' AND NOTHING ELSE.  Nineteen rows
+         could not see it; the two new ones are its sole killers.  That is the test of
+         whether an added row is necessary rather than decoration, and it passes.
+  M_CR0  23/24, red on `rc cr0' ALONE.  Same test, same answer.
+
+*** AND THE THREE NEW ROWS SATISFY FLOOR (a) AND (b) AS WELL, which is why they are not
+single-purpose additions: *** all three redden under M_ORIG and under the HEAD null medium,
+so each carries the original defect as well as the mutant it was written for.  M_ORIG and
+HEAD moved 14/19 -> 16/24, i.e. they gained three reds and five rows.
+
+THIS REPRODUCES THE MEASURING SEAT'S OWN NUMBERS EXACTLY.  It predicted 24/24 base, 22/24
+for M_SH5 and 23/24 for M_CR0 from its candidate probe, in its own clone, with its own
+mutator.  Two independent tables, same figures.  *That is the strongest form of agreement
+available here, and it is worth more than either table alone -- the seat's mutator and mine
+were written separately and the literals were reused verbatim precisely so the legs would
+be comparable.*
+
+TWO THINGS THE WIDER TABLE SHOWS THAT THE 19-ROW ONE COULD NOT:
+
+  * `sh32 rldicl' is the single most productive row in the instrument -- it reds under
+    SEVEN of the nine mutants.  A row added to close one escape turned out to carry a large
+    share of the whole table.
+  * M_MB5 and M_NOMASK now score IDENTICALLY (19/24) with IDENTICAL failing lists.  They
+    are different edits with the same observable footprint on this instrument.  Not a
+    defect -- neither escapes -- but recorded, because a future reader comparing scores
+    might otherwise think one leg had been run twice.

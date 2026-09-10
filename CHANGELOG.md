@@ -1,3 +1,135 @@
+# `#522` (ppcrldiclzero): `rldicl` wrote ZERO to its destination on every execution — the mask was accumulated into the rotated value and ANDed with a variable that was never anything but zero
+
+**THE DEFECT.** `X(rldicl)` rotates its source, then builds a mask. The mask was ORed into **`tmp`** — the
+rotated value — while `tmp2` was assigned `0` immediately above and never assigned again. The destination
+got `tmp & tmp2`. **So the register was set to ZERO on every execution, for every source, every rotate
+amount and every mask begin.**
+
+`rldicl` is the canonical 64-bit PowerPC masking and zero-extension instruction. `rldicl rA,rS,0,32` *is*
+`clrldi`, the standard 32-bit zero-extend that compilers emit constantly, and the manual's own simplified
+mnemonics make `srdi rA,rS,n` equal to `rldicl rA,rS,64-n,n`. **This was wrong on the ordinary path, for
+ordinary compiler output.**
+
+**THE FIX IS ONE TOKEN**: the mask goes into `tmp2`. The `|=` had *also* destroyed the rotated data by
+forcing every mask bit to 1, which is unobservable only because the result was ANDed with zero — so the
+one character repairs both.
+
+## WITNESSED AT RUNG 3 BEFORE THE EDIT
+
+`artifacts/ppcrldiclzero/opus_ppc_rldicl_witness_20260910.py`, on unmodified `-E bareppc`, with nothing
+added to reach the site: **19/27 committed, 24/27 fixed**, and a **190-cell census** in which every cell
+was wrong and every cell returned exactly zero pre-fix, and none did after. A separate log
+(`pass2_20260910/opus_threemachine.log`) carries the same pair on `testppc` and on `macppc -e g5` — the
+Power Mac G5 model, a PPC970 and therefore 64-bit.
+
+The wants come from the manual's own RTL, not from this tree, and **every encoded word was re-read by the
+tree's own disassembler** — a different code path from the execute handler. That matters more than usual
+here: a wrong register field yields zero, and zero is the symptom under test, so an unchecked encoder
+could have manufactured the entire finding.
+
+**AND THE OBVIOUS REPAIR IS A TRAP, BUILT AND MEASURED.** Replacing the `&` with `|` ships
+`ROTL64 | MASK` — an OR where the architecture says AND — and gets **126 of 190 cells wrong**. Deleting
+the `& tmp2` outright, *on the fixed code*, ships the rotate alone with the mask ignored. Both are worse
+than the original defect in one specific way: they remove the always-zero signature that makes it easy to
+spot while leaving the value wrong. Both now have kill-table legs, because **a warning in a comment that
+no mutant tests is a claim nobody has checked.**
+
+## THE DETECTOR WAS WRONG TWICE, AND PASS 2 MEASURED BOTH
+
+`regress/ppc_rldicl_probe.py`, **24 rows**, scoped to this one instruction. It deliberately excludes rows
+for two sibling defects the witness also found, because a detector carrying permanently red rows is one
+nobody reads.
+
+The measuring seat did not answer from the packet. It built seven binaries and ran thirteen probe legs in
+its own clone, with its own mutator, and returned **BREACH-FOUND with two total escapes** of the 19-row
+instrument:
+
+**`M_SH5` — drop one bit of the shift decode. 19/19.** Every `rldicl` with a shift of 32 or more then
+rotates by shift minus 32. *** THE INSTRUMENT WAS BLIND BY CONSTRUCTION. *** The census uses an all-ones
+source so that every mask window is non-empty — and rotating all-ones is the identity, so all 126
+shift-varying cells compute the same value whatever the rotate amount. The only rotate-sensitive rows
+drove shifts of 0 and 8, **both below 32**. Since every logical right shift by 1 to 32 has a shift of 32
+or more, **the one form the detector pinned is the one form the mutant gets right.**
+
+**`M_CR0` — feed the condition register the unmasked value. 19/19.** *** NOT AN INVENTED MUTANT: it is
+the token the sibling handler ships, correctly, ten lines below, where that variable really is the
+destination. *** A future editor harmonising the two writes exactly this. The old instrument could not see
+it because it emitted a zero record bit on every encoding, leaving the whole record-form path unexecuted.
+
+**Repaired with three rows and one control**, all measured by the seat before I applied them: two rows at
+shifts of 63 and 32, and one on the condition register — which is a three-valued channel here, since the
+fix gives greater-than, the defect gives equal, and the mutant gives less-than.
+
+## MEASURED (`killtable_20260910/t2/SCORES.txt`)
+
+Scratch clone, one frozen instrument per leg, sentinel cleared only after both clearance parts verified.
+
+| leg | score | | leg | score |
+|---|---|---|---|---|
+| BASE | **24/24** | | M_SH5 | 22/24 |
+| M_ORIG | 16/24 | | M_MB5 | 19/24 |
+| M_NAIVE | 16/24 | | M_CR0 | 23/24 |
+| M_MASKEND | 20/24 | | M_NOMASK | 19/24 |
+| M_NOAND | 18/24 | | HEAD | 16/24 |
+| | | | RESTORED | **24/24** |
+
+**ZERO ESCAPES across nine mutants.** `M_SH5` is red on the two shift rows and nothing else; `M_CR0` is
+red on the condition-register row alone. **Each added row is the sole killer of the mutant it was written
+for**, which is the test of whether a row is necessary rather than decoration. All three also redden under
+the original defect and the null medium, so they satisfy the floor's first two clauses as well.
+
+**This reproduces the measuring seat's own numbers exactly** — two independently written mutators, two
+clones, same figures.
+
+## FIVE RECORDS WERE WRONG AND ARE CORRECTED
+
+1. **A wrong citation in PRODUCT CODE.** The comment claimed measurement on three machines while naming
+   artifacts that show only one. The seat re-measured rather than merely reporting, so the claim is true
+   and the pointer was wrong; it now cites the log that shows it.
+2. **A detector row that CANNOT FAIL.** `naive fix` is arithmetic over the probe's own constants and never
+   touches the binary — the check-that-cannot-fail shape, inside a detector whose whole purpose is to be
+   failable. The docstring called it a measurement. It is now declared carried-not-counted, the
+   disposition already invented for a row in `#520`.
+3. **A coverage claim refuted by my own table.** The pre-table said the census "walks the cross-product"
+   of the two fields. It does not: with an all-ones source it is a function of the mask field alone, and
+   its 63 shift cells are 63 copies of one case.
+4. **A superseded wording that survived in two more places** after the product comment was corrected —
+   the grep-for-siblings rule, live, in the same hour.
+5. **The score log named the previous round**, because the driver was derived by substitution and the
+   banner was not in the list.
+
+## THE APPARATUS FAILED TWICE AND BOTH ARE PRESERVED
+
+**Table 0 called the previous round's mutator**, which replied "unknown mutant" and exited. The hard-fail
+refused rather than measuring an unmutated tree. *** But the failure had a shape worth naming: the table
+looked HALF-HEALTHY, not dead. *** Both bracketing legs scored full marks, because both mutators define a
+mutant called BASE and answer it identically. Four blanks in a score column were the only signal.
+
+**And building the mutator through a shell heredoc ate a backslash level**, turning every escape into a
+real newline — the exact trap the carrier documents, with the documented remedy, which I then used.
+
+The measuring seat preserved its own apparatus failure too: a regex built through a non-raw string turned
+`\b` into a literal backspace, so the pattern matched nothing and failed a row on **every** leg including
+the baseline. It added a negative control so the regex cannot silently match nothing again.
+
+## CONTRACT (clause (e)) AND WHAT IS FILED
+
+The probe now carries a measured boundary. **Not caught:** source-register edits that are the identity on
+the one register every row uses; edits conditioned on a zero destination; and rotate-amount edits that are
+the identity at all four rowed shift values.
+
+**Two sibling defects in the same family are filed and unfixed**, both measured: one overwrites
+destination bits the architecture requires preserved, for every non-zero shift; the other performs a
+32-bit rotate at 64-bit width so high-half data leaks into the result. A design review rejected my
+proposed repair for both while confirming both defects. Three further instructions in the family are not
+implemented at all.
+
+**A claim of mine about the gates was false and is corrected in place.** I wrote that no gate instantiates
+a 64-bit PowerPC processor. One does — it enumerates every advertised machine type, three of which default
+to that processor. The correct, narrower finding is that **no gate checks their instruction results**.
+That distinction is this project's own witness ladder one level up: construction proves presence, not
+reachability. Closing it is its own harness round, and this detector is exempt until then.
+
 # `#521` (mk48nvramkill): EIGHT ordinary NVRAM bytes inside a device's own mapped range ended the emulator, and the accept block's lower bound was one term short
 
 **THE DEFECT.** `dev_mk48txx.c` registers the MK48T08 for `MK48TXX_LEN` = `MK48T08_CLKSZ` = **8192**

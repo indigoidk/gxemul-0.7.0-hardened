@@ -402,6 +402,43 @@ MANIFEST = {
     #  contract needs stating carefully before any part of it is promoted to a detector.
     "artifacts/ppcrldiclzero/opus_ppc_rldicl_witness_20260910.py":
         (CLASS_WITNESS, "ppcrldiclzero: X(rldicl) writes ZERO on every execution -- rung 3 on unmodified -E bareppc / testppc / macppc -e g5, 190 of 190 census cells wrong on the committed build and 0 of 190 under the one-character repair (committed 19/27, fix 24/27).  Also carries a SECOND channel (the record form reports EQ always, so control flow is corrupted too) and rows for the two sibling defects it found"),
+    # -- #522 ppcrldiclzero -------------------------------------------------------------
+    #  CLASS_DETECTOR, EXEMPT below rather than wired.  It runs green on the fix in 0.2 s and
+    #  COULD be gated -- what it needs is a gate that instantiates a 64-bit PowerPC CPU, and
+    #  the two PowerPC gates both drive a 32-bit part, selected explicitly in their probes.
+    #  (A gate DOES construct 64-bit PowerPC CPUs -- gate 9 enumerates every machine subtype
+    #  -- but that is a CONSTRUCTION check with no result oracle.  Recorded because I had the
+    #  stronger, false version of this claim in three rows before a seat checked it.)
+    "ppc_rldicl_probe.py":
+        (CLASS_DETECTOR, "ppcrldiclzero (#522): 24 rows on unmodified -E bareppc.  A 190-cell (SH,MB) census, value rows at SH 0/8/32/63, a record-form CR0 row, a deliberately-vacuous cell showing where the vacuity boundary is, a negative-apparatus control asserting its own liveness oracle CAN go red, and a disassembler cross-check of every placed word.  BASE 24/24, null medium 16/24, EIGHT mutants 16-23/24, ZERO ESCAPES (killtable_20260910/t2/SCORES.txt)"),
+
+    #  The frozen copies are the instruments as-run.  t1 is the 19-row form that pass 2
+    #  escaped TWICE; t2 is the 24-row closure; t0 is an apparatus failure kept on purpose.
+    "artifacts/ppcrldiclzero/killtable_20260910/t1/ppc_rldicl_probe.frozen.py":
+        (CLASS_RESEARCH, "ppcrldiclzero (#522) table 1: the as-run 19-row instrument -- pass 2 escaped it TWICE at 19/19 (a shift-decode mutant it was blind to BY CONSTRUCTION, and a CR0 mutant that is the sibling handler's own shipping token)"),
+    "artifacts/ppcrldiclzero/killtable_20260910/t2/ppc_rldicl_probe.frozen.py":
+        (CLASS_RESEARCH, "ppcrldiclzero (#522) table 2: the CLOSING 24-row instrument, byte-identical to the shipped regress/ppc_rldicl_probe.py"),
+    "artifacts/ppcrldiclzero/killtable_20260910/t0_apparatus_failure/ppc_rldicl_probe.frozen.py":
+        (CLASS_RESEARCH, "ppcrldiclzero (#522) table 0: an APPARATUS FAILURE preserved rather than deleted -- the driver was derived by substitution from #521 and called THAT round's mutator, which replied `unknown mutant'.  The hard-fail refused rather than measuring an unmutated tree, but the table looked HALF-HEALTHY because both mutators define BASE and answered it identically.  No number from it is cited anywhere"),
+
+    "artifacts/ppcrldiclzero/killtable_20260910/mutate.py":
+        (CLASS_TOOL, "ppcrldiclzero (#522): the mutator, nine mutants including the two that escaped pass 2.  Written with an editor rather than generated, because building it through a shell heredoc ate a backslash level and turned every escape into a real newline -- the carrier's documented trap, with its documented remedy"),
+
+    #  The measuring seat's own apparatus, preserved with its answer.  Its mutator and mine
+    #  were written independently and produced the SAME figures, which is why the literals
+    #  were then reused verbatim -- so the legs stay comparable across the two tables.
+    "artifacts/ppcrldiclzero/pass2_20260910/opus_mutate.py":
+        (CLASS_TOOL, "ppcrldiclzero (#522) pass 2: the measuring seat's INDEPENDENT mutator -- six legs in its own clone, and the source of M_SH5 / M_MB5 / M_CR0"),
+    "artifacts/ppcrldiclzero/pass2_20260910/opus_probe_plus3.py":
+        (CLASS_RESEARCH, "ppcrldiclzero (#522) pass 2: the candidate probe with the three repair rows, MEASURED by the seat at 24/24 base, 22/24 M_SH5, 23/24 M_CR0 before I applied them"),
+    #  Named `*_probe.py' but it is a PATCHER, not a probe -- it edits the probe rather than
+    #  asserting anything.  The checker's filename tooth is right to refuse `tool' here and I
+    #  am not renaming a seat's preserved artifact to satisfy it; RESEARCH is the honest class
+    #  for a script kept as evidence of how the candidate rows were produced.
+    "artifacts/ppcrldiclzero/pass2_20260910/opus_patch_probe.py":
+        (CLASS_RESEARCH, "ppcrldiclzero (#522) pass 2: the seat's PATCHER for the candidate rows -- despite the name it asserts nothing; kept as evidence of how opus_probe_plus3.py was produced"),
+    "artifacts/ppcrldiclzero/pass2_20260910/t0_backslash_apparatus_failure/probe_plus3.BROKEN.py":
+        (CLASS_RESEARCH, "ppcrldiclzero (#522) pass 2: THE SEAT'S OWN APPARATUS FAILURE, preserved rather than deleted -- a regex built through a non-raw string turned a backslash-b into a literal BACKSPACE, so the pattern matched nothing and failed a row on EVERY leg including BASE.  Two documented traps stacked into a confident wrong answer; the corrected run added a negative control so the regex cannot silently match nothing again"),
     "mk48_nvram_probe.py":
         (CLASS_DETECTOR, "mk48nvramkill (#521): 57 rows on unmodified -E mvme88k -e mvme187.  Sixteen kill cells (eight offsets x read/write), nine round-trip rows closing the survive-only class, a CSR rising-edge row for the control case's side effect, four device-signature controls in two encodings, and a negative-apparatus control that asserts its own liveness oracle CAN go red.  BASE 57/57, null medium 16/57, five mutants 16-56/57, ZERO ESCAPES (killtable_20260910/t3/SCORES.txt)"),
 
@@ -1560,6 +1597,13 @@ EXEMPT = {
     #  #521's detector.  Single-leg, fast, green on the fix -- it lacks a HOME, not a design:
     #  the only gate on this CPU family drives luna88k, not mvme88k/mvme187.  Dated to fall
     #  due with the others so the cliff stays one date rather than a rolling excuse.
+    #  #522's detector.  Single-leg, 0.2 s, green on the fix.  It lacks a gate that RUNS a
+    #  64-bit PowerPC CPU: gate 9 constructs them but has no result oracle, and both PowerPC
+    #  gates drive a 32-bit part.  Closing that is a harness round, filed to wiringcliff.
+    "ppc_rldicl_probe.py":         ("2026-09-20",
+                                    "no gate EXECUTES a 64-bit PowerPC CPU -- gate 9 "
+                                    "constructs them with no result oracle; gate_ppc.sh "
+                                    "is the named home, filed to wiringcliff"),
     "mk48_nvram_probe.py":         ("2026-09-20",
                                     "no gate drives mvme88k/mvme187; gate_m88k_rounding.sh "
                                     "is the named home and giving it an mvme187 leg is a "
