@@ -367,6 +367,47 @@ honest record of DEFENSIVE work, and its own vocabulary is what makes the seat r
 > **The archive-scoping finding stands and is NOT superseded** -- it demonstrably carried a run past the
 > exact byte where an unscoped one died.  There are TWO triggers, and the earlier text implied one.
 
+> ### *** RULE 3 TOOK ITS SECOND INSTANCE ON 2026-09-10, THREE DAYS AFTER IT WAS MINTED, FROM ITS OWN
+> ### AUTHOR, IN TWO BRIEFS AT ONCE -- AND THE DIAGNOSIS IS THAT THE RULE FORBIDS WITHOUT SUBSTITUTING. ***
+>
+> Two briefs were written FROM MEMORY instead of from this file.  Neither carried the scoping paragraph,
+> and both closed with a question of exactly the forbidden shape:
+>
+>     "What is the smallest edit to your guard that keeps it compiling and lets a bad pair
+>      through?  Name the encoding and the wrong value it produces, so I can build that mutant."
+>
+> The first was refused with the flag on its **last two lines** after spending its entire budget
+> enumerating `regress/artifacts/**` -- it never opened the source file it was asked about.  *(The
+> reason it went there at all is worth its own line: the brief cited a manual as `_scratchpad/<file>`,
+> and `_scratchpad/` sits one level ABOVE the repository root, so a relative path from the seat's cwd
+> does not resolve and the seat goes hunting.  **Cite anything outside the repo by ABSOLUTE path**, or
+> a brief that merely mentions a file becomes a brief that browses the archive.)*
+>
+> **THE FIX IS NOT MORE PROHIBITION.  A rule that bans an ask without supplying the replacement gets
+> broken by whoever actually needs the thing.**  Rule 3's own sentence already names the clean forms --
+> *check a construction you supply*, or *say whether one is possible* -- but naming a form is not the
+> same as being able to paste it, and at the moment of writing a brief what you need is the sentence.
+>
+> **SO HERE ARE THE THREE SUBSTITUTES, WRITTEN OUT TO BE COPIED:**
+>
+> | you want | do NOT write | write instead |
+> |---|---|---|
+> | a mutant for the kill table | *"what is the smallest edit that still compiles and gets this wrong?"* | *"Here are four candidate weakenings: (a) ... (b) ... (c) ... (d) ....  For each, say whether it is EQUIVALENT to the shipped form or produces a different result, and at which input the two first differ."* |
+> | a witness program | *"what is the smallest guest program that reaches this?"* | *"Is this path reachable by an ordinary program on an unmodified in-tree machine?  Name the machine and the selector, or say plainly that none exists."* |
+> | coverage of a repair | *"what edit re-opens the defect?"* | *"Which inputs does the repair change the answer for, and which does it leave alone?  Enumerate the partition."* |
+>
+> **THE ENUMERATE-THE-CANDIDATES FORM IS STRICTLY BETTER, NOT MERELY PERMITTED**, and that is the part
+> that makes this cheap rather than a concession: an answer saying *(b) and (d) are non-equivalent and
+> first differ at SH=32* is directly buildable, whereas *"the smallest edit"* returns ONE and gives no
+> way to know what else was in the space.  The four-run experiment above already showed the seat answers
+> the reachability question at length and cleanly; **what it will not do is hand you the aimed
+> construction, and it turns out you did not want a single aimed construction anyway.**
+>
+> *Recorded against myself.  The structure existed, it was correct, it was three days old, and I did
+> not open it -- which is this project's own finding that knowing a rule and having it fire on the right
+> object are different problems.  The one change that addresses THAT is making the substitute
+> copy-pasteable, so the path of least effort leads through this file instead of around it.*
+
 **THIS IS NOT A LICENCE TO SOFTEN WHAT IS BEING REVIEWED.**  The rewritten brief kept every technical
 claim, every site, every count, and the same adversarial questions — the answers it produced were
 harder, not softer.  Rewording a defect out of existence would be a records defect; **rewording the
