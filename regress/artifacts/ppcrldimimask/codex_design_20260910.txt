@@ -1,0 +1,133 @@
+VERDICT: **Site A:** preserve decoded `sh`, rotate with a separate `int n = sh` and `while (n-- != 0)`, replace `m ++` with `m = (m + 1) & 63`, and change the mask-loop condition to `m != ((64 - sh) & 63)`. **Site B:** replace the combined declaration with `uint32_t tmp = (uint32_t)reg(ic->arg[0]);` and `MODE_uint_t ra = reg(ic->arg[1]);`. For complete wrapping-mask behavior, also add `if (mb > me) ra = (ra & 0xffffffffULL) | ((uint64_t)tmp << 32);` **after rotation, before the existing mask loop**.
+
+`CODEX_PPCSIBS_20260910`
+
+Both central defect premises hold. However, saving `sh` alone is insufficient, truncation alone leaves another defect, and **`rlwinm` and `rlwnm` are not universally correct**.
+
+I inspected the specified `GXEMUL-SEC` tree. The manual is actually in its parent directory’s `_scratchpad`. No builds, probes, edits, or patches were performed. The detector results below are source-derived predictions; the existing [witness recording](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/ppcrldiclzero/witness_committed.out:24) agrees with the three quoted measurements.
+
+**For Site A, the post-decrement premise is exact.** [The handler](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc_instr.c:2521) decodes a signed `int sh` in `0..63`. Its final condition evaluates the old value zero and then decrements it to −1. This happens even for `SH=0`. Consequently, the existing mask always covers architectural bits `MB..63`.
+
+The [rldimix RTL](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ppc_pem_32and64_2005.txt:29908) requires `MASK(MB,63-SH)`. The manual’s [mask definition](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ppc_pem_32and64_2005.txt:6878) makes both endpoints inclusive and wraps through bit 63 to bit 0 when the beginning exceeds the end.
+
+That exposes two problems with “save `sh`, then retain the mask loop”:
+
+- Its condition compares the **incremented** position with the inclusive endpoint. It stops one bit early where it terminates normally.
+- It never wraps. Other operand combinations can run beyond bit 63 and evaluate invalid shift counts.
+
+The verdict’s condition uses the position **after** the endpoint, modulo 64. Together with the modulo increment and existing `do` body, it handles ordinary, singleton, wrapping, and full-width masks in 1–64 iterations.
+
+I favor keeping the architectural operand intact—preferably declaring `sh` as `const`—and consuming a separate counter. Merely saving another copy while continuing to destroy `sh` leaves the future-reader hazard you identified. Applying the separate-counter change to `rldicl` and `rldicr` would preserve their current results: neither uses `sh` afterward. It is optional cleanup, not a necessary repair at those sites.
+
+`SH=0` is the only shift for which the current **mask is correct for every source and destination**. Other shifts can still produce coincidentally correct values.
+
+**For Site B, the width premise also holds.** [cpu_ppc.c](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc.c:53) enables the dual compilation. [tmp_ppc_tail.c](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/tmp_ppc_tail.c:51) explicitly defines both `reg` and `MODE_uint_t` as 64-bit for the first inclusion, then supplies their 32-bit versions for the second. CPU initialization selects the corresponding execution path.
+
+The offending expression has 64-bit operands while retaining the complementary shift `32-sh`. For nonzero shift `n`, source halves `H:L`, and correct rotated low word `w`, its low-word result is:
+
+`w | ((H << n) & 0xffffffff)`
+
+With your source and shift, `w=0x000000f0`, while the extra contribution is `0xaaaaaaa0`. Thus the quoted `0xaaaaaaf0` low word follows directly.
+
+The split declaration fixes that contamination. Narrowing **after** the expression does not. Keeping `ra` as `MODE_uint_t` is essential: changing both variables to `uint32_t` would discard destination bits that must survive.
+
+There is also a separate **wrapping-mask defect**. The [rlwimix RTL](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ppc_pem_32and64_2005.txt:29989) combines:
+
+- A rotated word duplicated into both halves of a 64-bit intermediate.
+- `MASK(MB+32,ME+32)` over 64 positions.
+
+When `MB>ME`, that mask includes **the entire upper word**. The current loop only visits the lower word. The additional verdict edit supplies precisely the missing upper-word insertion; its condition must precede the loop because the loop changes `mb`. The existing lower-word merge can remain.
+
+The local PEM contains a conflicting blanket upper-clearing sentence in its `rlwinm` prose. Its RTL and general definitions agree with IBM’s contemporary Book I, which specifies the duplicated rotation and wrapping 64-bit mask without that blanket statement. That is the interpretation used here. [PowerPC UISA v2.02, pp. 71–76](https://powerpc.dev/general/PPC_Vers202_Book1_public.pdf)
+
+The six sibling findings are therefore:
+
+| Instruction | Source-derived finding |
+|---|---|
+| `rldicr` | Its rotation and destination value are correct. The clearing loop removes bits `ME+1..63`, including the boundary cases. Record-form qualification appears below. |
+| `rlwnm` | Correct low-word rotation, including extraction of the low five shift bits. **Incorrect upper word for wrapping masks on a 64-bit implementation.** |
+| `rlwinm` | Correct low-word rotation. **The same wrapping-mask upper-word defect.** |
+| `rldic` | Unimplemented: MD secondary opcode 2 reaches the decoder default. |
+| `rldcl` | Unimplemented: MDS secondary opcode 8 becomes 4 under the current three-bit extraction and reaches default. |
+| `rldcr` | Unimplemented: MDS secondary opcode 9 also becomes 4 and reaches default. |
+
+The word siblings truncate the rotation result, apply a lower-word mask, and write a zero-extended result. Their shared [decoder mask construction](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc_instr.c:4499) cannot represent the required upper bits.
+
+A concrete counterexample for **each** is source `0xaaaaaaaa0000000f`, shift zero, `MB=31, ME=0`: the architectural result is `0x0000000f00000001`; the implementation produces `0x0000000000000001`.
+
+The missing doubleword instructions reach [the default at line 4573](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc_instr.c:4553). They are not silently executed as no-ops: the shared [bad path](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1983) reports `UNIMPLEMENTED` and stops the emulated CPU.
+
+Ordinary compiler generation is directly supported for `rldic` by [LLVM’s selector](https://raw.githubusercontent.com/llvm/llvm-project/main/llvm/lib/Target/PowerPC/PPCISelDAGToDAG.cpp), and for `rldcl` by its variable-rotate [selection pattern](https://raw.githubusercontent.com/llvm/llvm-project/main/llvm/lib/Target/PowerPC/PPCInstr64Bit.td). I verified `rldcr`’s architectural definition and missing implementation; its presence in compiler instruction descriptions alone does not establish routine compiler emission.
+
+**I would split the filings as follows.**
+
+| Filing | Scope and reason |
+|---|---|
+| `ppcrldimimask` | Preserve the shift operand and implement the inclusive, wrapping doubleword mask. |
+| `ppcrlwimiwidth` | Truncate the source before word rotation. Different cause and discriminator from Site A. |
+| Word-mask wrap defect | The upper-word omission shared by `rlwimi`, `rlwinm`, and `rlwnm`. These three qualify for consideration together under one full-width rotation/mask design and detector. |
+| Missing instructions | Separate implementation filings from the value defects. |
+| PPC64 harness coverage | Separate harness round, with each repair contributing its own regression rows. |
+
+Thus **A and B are two rounds**. For bookkeeping, the declaration edit and additional upper-word edit in the verdict belong to the width and wrap filings respectively.
+
+**The detector needs mutant-specific observability.** The proposed “vacuous exactly when the selected source window is zero” rule does not hold generally for insert instructions.
+
+For correct mask `M`, rotated source `R`, and initial destination `D`:
+
+- A no-op differs precisely when `((R ^ D) & M) != 0`.
+- A wrong-mask mutant using `N` differs precisely when `((R ^ D) & (M ^ N)) != 0`.
+- A zero-writing mutant differs when the correct complete destination is nonzero.
+
+A zero source window can therefore be useful when the operation should **clear seeded destination bits**. Conversely, a nonzero window can be useless against a no-op when the destination already matches it.
+
+For Site B’s contamination, differing source halves are necessary but insufficient. The extra high-half contribution must set a selected bit that the correct rotated word leaves clear. In particular, no single source can both make every possible singleton low-word window nonzero and discriminate this contamination: that would require an all-ones rotated low word.
+
+Here is a concrete floor. Hexadecimal results use `high32_low32`. Define `F=ffffffff_ffffffff` and `Z=5a5a5a5a_5a5a5a5a`.
+
+For A, use `S=F, D=0` except where specified:
+
+| Row | Operands | Architectural destination | Mutant and differing observable |
+|---|---|---|---|
+| `A8` | `SH=8, MB=0` | `ffffffff_ffffff00` | Pre-fix, verbatim reinstatement, or repaired counter with mask end forced back to 63: `ffffffff_ffffffff`. |
+| `A32` | `SH=32, MB=0` | `ffffffff_00000000` | Same mutants: `ffffffff_ffffffff`; also detects loss of the high shift-encoding bit. |
+| `A0_LAST` | `SH=0, MB=0` | `ffffffff_ffffffff` | Save-only repair retaining the old termination expression: `ffffffff_fffffffe`. |
+| `A_SINGLE` | `SH=8, MB=55` | `00000000_00000100` | Treating equal endpoints as an empty mask gives zero; original gives `00000000_000001ff`. |
+| `A_WRAP` | `SH=8, MB=60` | `ffffffff_ffffff0f` | Original/nonwrapping tail gives `00000000_0000000f`; the witness’s intersection oracle gives zero. |
+| `A_DATA` | `S=01234567_89abcdef, D=Z; SH=8, MB=16` | `5a5a6789_abcdef5a` | Removing rotation gives `5a5a4567_89abcd5a`; discarding destination preservation gives `00006789_abcdef00`. |
+
+For B, use `D=Z`:
+
+| Row | Source; `SH,MB,ME` | Architectural destination | Mutant and differing observable |
+|---|---|---|---|
+| `B_BLEED` | `aaaaaaaa_0000000f`; `4,0,31` | `5a5a5a5a_000000f0` | Pre-fix, verbatim reinstatement, or narrowing only after rotating the original source: `5a5a5a5a_aaaaaaf0`. Narrowing `ra` loses the upper sentinel. |
+| `B_SHIFT31` | `ffffffff_00000002`; `31,0,31` | `5a5a5a5a_00000001` | Untruncated rotation gives `5a5a5a5a_80000001`. |
+| `B_PARTIAL` | `aaaaaaaa_f0f0f0f0`; `4,8,15` | `5a5a5a5a_5a0f5a5a` | Untruncated rotation gives `5a5a5a5a_5aaf5a5a`; replacing the whole low word destroys the surrounding `5a` bytes. |
+| `B_WRAP0` | `aaaaaaaa_0000000f`; `0,31,0` | `0000000f_5a5a5a5b` | Original and truncation-only repair retain upper word `5a5a5a5a`. This isolates the wrap defect without rotation contamination. |
+| `B_WRAP4` | `aaaaaaaa_f0f0f0f0`; `4,24,7` | `0f0f0f0f_0f5a5a0f` | Truncation-only repair retains upper word `5a5a5a5a`; copying the unrotated low word upward gives `f0f0f0f0`. |
+
+Every listed correct destination is nonzero and differs from its seed. Thus the value rows also reject **nulled repairs** that retain the new declarations/counter but remove the destination update or substitute a zero result. `A_DATA` additionally prevents an all-ones mask census from blessing a deleted rotation.
+
+The apparatus needs its own rows and acceptance rules:
+
+| Row/control | Mutant or failure it rejects | Required observable |
+|---|---|---|
+| `LIVE` | Null execution medium | A separate `li` changes a seeded register to `0x1234`. |
+| `SEED_HOLDS` | Readback that fabricates zeros | An untouched register retains `Z` across an unrelated instruction. |
+| `NULL_MEDIUM` | Empty transcript, absent machine, or absent execution | Feeding that medium to the same detector returns failure; missing registers never default to expected values. |
+| `ROW_MANIFEST` | Deleted rows, early termination, empty census | Every required named row occurs exactly once, with valid readback and completion. |
+| `ENCODING` | Wrong instruction or operands | Instruction bytes and decoded operands match the intended row. |
+
+Also include nonwrapping `SH=0` pins, source/destination alias cases, Rc-clear preservation, Rc-set CR0 checks, and the word rows on a 32-bit CPU. Those distinguish repairs that fix one result while breaking adjacent behavior.
+
+**The gate premise is too broad literally, but the correctness gap is real.** Both dedicated PowerPC probes select `macppc/g4`, whose default is the 32-bit MPC7400. However, [gate_asan_sweep.sh](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gate_asan_sweep.sh:339) enumerates machine types and subtypes. That includes 64-bit configurations such as `bareppc`, whose [default CPU is PPC970](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/machines/machine_test.c:448), and `macppc/g5`. Construction and sanitizer observations provide no architectural-value oracle for these instructions.
+
+The smallest sound change is **one additional mandatory PPC970 session called by an existing PowerPC gate**, using `bareppc` and an offline instruction stream. Keep the existing G4 session. Merely selecting G5 for the floating-point probes would still leave this family untested. Also, `-M 64` specifies RAM, not CPU width.
+
+That session should execute a fixed table covering all nine instructions, wrapping and nonwrapping masks, boundary shifts, and record forms. Check CPU identity, explicitly establish/read back `MSR[SF]` for mode-sensitive expectations, and require the manifest above. The three missing instructions and newly identified wrap defects will initially fail their architectural rows; they cannot be counted as covered passing functionality.
+
+Two further findings matter:
+
+First, the existing [witness oracle](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/ppcrldiclzero/opus_ppc_rldicl_witness_20260910.py:129) computes `rldimi`’s mask by intersecting two nonwrapping masks, returning zero for wrapping cases. Its `mask32` also excludes the upper word from wrapping word masks. **Its quoted measurements remain valid because those rows use nonwrapping masks; its oracle should not be reused unchanged for the expanded audit.**
+
+Second, [update_cr0](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc.c:1803) chooses comparison width from CPU-model `bits`, rather than `MSR[SF]`. On PPC970 with `SF=0`, source `0x0000000080000000`, `rlwinm.` with `SH=0, MB=0, ME=31`, and `XER.SO=0`, the destination is correct but the helper predicts CR0=`4` (GT), whereas 32-bit computation mode requires CR0=`8` (LT). This is a separate shared record-form defect, including a qualification on otherwise-correct `rldicr`. The architectural mode distinction is explicit in the [local manual](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ppc_pem_32and64_2005.txt:6698).
