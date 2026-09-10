@@ -1,0 +1,86 @@
+VERDICT: REVISE — **decline + latched announce**: move `d->current_port = idata` into the valid-value `else` of the PORT range check, add a per-instance `warned_bad_port` latch, and leave DATA unchanged.
+CODEX_FBCTRL_20260910
+
+The PORT-only repair is sound. A simple reorder is insufficient, and the requested “verbatim reinstatement of the removed kill” floor is incompatible with retaining that kill.
+
+This was a read-only source review. No builds, probes, edits, or patches were performed; detector outcomes below are reasoned expectations.
+
+The main premises are confirmed in [dev_fbctrl.c](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_fbctrl.c:48):
+
+| Premise | Finding |
+|---|---|
+| PORT precedes DATA | Yes: PORT starts at line 116; DATA at 127. Both cases break. Their textual order does not cause the defect; storing before validation does. |
+| The warning follows the store | Yes: assignment at 120, check at 121. |
+| `current_port` is signed | Yes: plain `int`, line 50. |
+| PORT can read the selector back | Yes: line 118 returns `d->current_port`. |
+| The range contains eight ports | Yes: [DEV_FBCTRL_NPORTS](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/testmachine/dev_fb.h:35) is 8. |
+| `fatal()` alone terminates | No. [Its implementation](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/core/debugmsg.c:384) prints and returns. The explicit `exit(1)` terminates. |
+
+There is a qualification to the truncation premise: **signed `int` alone does not prove the conversion result**. C99 permits an implementation-defined result or signal when converting an unrepresentable value to a signed type. Your two examples have the stated results under GCC with 32-bit `int`; GCC documents reduction modulo the destination width. Under that contract, the negative half is live. The unsigned input declaration does not make it dead. [C99 §6.3.1.3](https://www.open-std.org/JTC1/SC22/WG14/www/docs/n1256.pdf), [GCC integer conversions](https://gcc.gnu.org/onlinedocs/gcc/Integers-implementation.html).
+
+The two attachment sites are real: [shared setup](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/machines/machine_test.c:154) and [MIPS setup](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/machines/machine_test.c:337). Shared setup also serves `testm88k`, `testppc`, `testriscv`, and `testsh`. Gate paths include [the MIPS fold probe](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/mips_fold_probe.py:393) and [the ARM flags probe](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/arm_flags_probe.py:120). That establishes source wiring, without establishing which source revision an existing gate binary contains.
+
+The exact repair should make the PORT write transactional:
+
+- For `idata >= DEV_FBCTRL_NPORTS`, preserve the selector and announce the refusal once per device instance.
+- Otherwise, assign `idata` to `current_port`.
+- Complete through the existing successful callback return.
+
+Moving the assignment below a warning that returns would still accept the invalid value. It must become conditional. Likewise, the refusal must operate on every invalid write, independently of whether its warning has already been latched. The existing initialization `memset` would initialize the new latch; set it before printing, and do not clear it on valid selections. [The LCA helper](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:316) supplies the corresponding per-instance house pattern.
+
+The invariant argument is complete within normal device operations: initialization selects zero, and the PORT arm contains the only subsequent selector assignment. Restrict that assignment to `[0,7]`, and **both halves of the DATA range guard become unreachable after the repair**. That is a defensible dead-path finding with a warrant.
+
+A refused PORT write remains observable: PORT readback returns the previous selection, and DATA continues to address that selection. Preserving established state is preferable to retaining an unusable index. It does mean a guest that ignores the failed selection can act on its previous port. There is no valid new destination corresponding to the refused index.
+
+The selected option is available on both principal machines. Fault delivery is different:
+
+| Machine | Returning device failure |
+|---|---|
+| `testmips` | The memory layer delivers a MIPS access exception; a data access receives DBE. |
+| `testarm` | The memory layer returns failure without delivering an ARM exception through this branch. |
+| `testm88k` | The other explicit exception-delivery branch serves M88K. |
+
+These branches are in [memory_rw.c](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:595). ARM’s store caller assumes an exception was generated and simply returns on failure; it does not supply the missing delivery. Thus `return 0` is not an available uniform guest-fault policy here.
+
+Silent decline is also available. I prefer the latched member because it preserves the existing diagnostic purpose with bounded output. Accepting aliases or adding backing for nonexistent ports needs a new protocol justification. Deleting only the DATA termination is insufficient: the following array access still requires a valid index.
+
+The other kills remain separate:
+
+| Site | Disposition for this round |
+|---|---|
+| DATA selector-range termination | In scope; prevent the invalid selector state at its writer. |
+| `fbctrl_command()` default | Separate command-support contract and detector. |
+| `DEVICE_ACCESS(fbctrl)` offset default | Separate register-decoding contract and detector. |
+
+There is an interaction worth recording: **zero is COMMAND and is also the initial selection**. Preserving a previous COMMAND selection preserves command execution on subsequent DATA writes, including its separate termination path. This repair closes the selector-range failure; it does not establish that every later DATA write is harmless.
+
+The intended input policy should be explicit:
+
+| Received value | Model decision |
+|---|---|
+| Bit pattern representing a negative guest integer | Decode the transferred bytes as unsigned, as today; decline if outside `[0,7]`. |
+| Huge unsigned value outside `[0,7]` | Decline before conversion to `int`. |
+| Out-of-range value whose narrowed representation is a valid selector | Also decline; do not infer an alias from narrowing. |
+
+The third case is the compatibility ambiguity. Today some such values select usable ports despite the warning. Rejecting them deliberately changes that accidental behavior. The header describes port indices and supplies no high-bit aliasing rule, so full-value validation is the more defensible contract. Also, `uint64_t idata` is an accumulator type: the device can validate only the bytes actually transferred, not high bits already discarded by the guest.
+
+For the detector, use **state and routing assertions**, with distinct nonzero contents in ordinary data ports. These are contract-level rows, not a host-termination reproduction procedure:
+
+| Row | Mutant it targets | Observable difference |
+|---|---|---|
+| `valid-selection` | Null medium, no-op handler, refusal of every selection, zero-only readback | Exact selector readback reflects supported selections, including nonzero selections and the upper valid boundary. |
+| `decline-preserves-selector` | Pre-fix assignment order; nulled refusal guard | PORT readback retains the previously established selector. The mutant changes it. |
+| `decline-after-announcement` | Refusal accidentally limited to the first warning | Later invalid selections still preserve the established selector. |
+| `full-value-validation` | Validation after narrowing; masking or wrapping; nulled repair even with DATA termination absent | A value outside the selector domain cannot replace the previous selection with its valid narrowed alias. Both implementations can complete, but readback differs. |
+| `data-read-routing` | Wrong-port reads; fabricated or zero-only DATA results | DATA returns the distinct contents of the retained port. |
+| `data-write-confinement` | Dropped writes; writes redirected to another port | The retained port changes to the expected value; independently initialized other ports retain their contents. |
+| `valid-selection-recovery` | Refusal state that permanently blocks later valid selections | A later valid selection takes effect, with matching DATA routing. |
+| `announce-first` | Deleted announcement; latch initially set | Exactly one refusal diagnostic appears for the first declined write. |
+| `announce-repeat` | Unlatched logging; latch reset by valid access | Further declined writes do not increase that instance’s diagnostic count. |
+| `announce-instance` | Process-global latch | Each independent device instance can emit its own first announcement. |
+
+Missing or malformed results must fail equality checks. Completion markers support result integrity; they cannot substitute for those observations. The original build can already fail on selector readback, without using host survival as the discriminator.
+
+**The reinstatement requirement cannot honestly receive a passing entry.** Under the recommended edit, the DATA kill was never removed, so reinstating it changes nothing. Removing it while retaining the selector invariant would still leave its reinstatement unreachable through the normal interface. Restoring the old PORT arm is a meaningful mutation caught above, but it is not reinstatement of a removed DATA kill. If that literal fourth-state requirement is mandatory, this design cannot satisfy the floor as written.
+
+Finally, there is another detector trap in this tree: framebuffer control registers use `DM_DEFAULT`, while ordinary debugger dumps use `NO_EXCEPTIONS`. [Device dispatch](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:583) can therefore skip this handler and return the pre-zeroed read buffer. Such a dump is not selector readback. The rows need observations from actual device accesses.

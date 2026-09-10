@@ -18413,3 +18413,22 @@ corrected the row rather than shipping it green.*
 **Adjacent, not a defect but recorded so a round does not rediscover it:** `rldic`, `rldcl` and `rldcr` are
 not implemented at all -- the decoder's default swallows them. `rldic` in particular is documented and
 compiler-emitted.
+
+### `ppcrldiclzero` -- *** WITNESSED AT RUNG 3 2026-09-10, AND IT IS A CLASS. ***
+
+Confirmed on three unmodified in-tree machines including the Power Mac G5 model: **190 of 190 census
+cells return zero** on the committed build and 0 of 190 under the one-character repair (19/27 -> 24/27,
+logs `witness_committed.out` / `witness_fix.out`).
+
+**Three ways the original filing understated it.** (a) **Two tokens are wrong, not one**, and the obvious
+repair -- deleting the AND -- was BUILT AND MEASURED STILL WRONG on 126 of 190 cells; it ships an OR where
+the architecture says AND, and is worse in one specific way because it removes the always-zero signature
+while leaving the value wrong. (b) **A second channel: it corrupts CONTROL FLOW.** The record form reports
+equal-to-zero on every execution, so any branch on a masked compare takes the wrong arm. (c) It is
+reachable on a real machine model, not only synthetic ones.
+
+**The gate finding is structural and stronger than "no gate covers it":** both PowerPC gates drive a
+32-bit processor, and the decoder sends the whole 64-bit instruction group to its bad path in 32-bit mode.
+**No gate has ever instantiated a 64-bit PowerPC CPU at all**, so that group is invisible by construction
+rather than by omission -- one coverage hole with one cause, closed by a single 64-bit probe. Severity
+ceiling stated honestly: nothing in-tree BOOTS a 64-bit PowerPC guest, which is why the witness is rung 3.

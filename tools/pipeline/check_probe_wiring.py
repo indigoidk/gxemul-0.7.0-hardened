@@ -394,6 +394,14 @@ MANIFEST = {
     #  it drives luna88k, not mvme88k/mvme187.  Giving it an mvme187 leg is a gate change
     #  owing its own negative controls, i.e. a harness round, not a rider on a device fix.
     #  Filed to `wiringcliff'.
+    # -- ppcrldiclzero + siblings ------------------------------------------------------
+    #  CLASS_WITNESS and correctly ungated: RED on the committed build by design (19/27),
+    #  so a gate row would be permanently red until the fix ships.  It is also a FAMILY
+    #  instrument rather than a single-defect one -- it already reds on ppcrldimimask and
+    #  ppcrlwimiwidth, two further measured defects in the same handler family -- so its
+    #  contract needs stating carefully before any part of it is promoted to a detector.
+    "artifacts/ppcrldiclzero/opus_ppc_rldicl_witness_20260910.py":
+        (CLASS_WITNESS, "ppcrldiclzero: X(rldicl) writes ZERO on every execution -- rung 3 on unmodified -E bareppc / testppc / macppc -e g5, 190 of 190 census cells wrong on the committed build and 0 of 190 under the one-character repair (committed 19/27, fix 24/27).  Also carries a SECOND channel (the record form reports EQ always, so control flow is corrupted too) and rows for the two sibling defects it found"),
     "mk48_nvram_probe.py":
         (CLASS_DETECTOR, "mk48nvramkill (#521): 57 rows on unmodified -E mvme88k -e mvme187.  Sixteen kill cells (eight offsets x read/write), nine round-trip rows closing the survive-only class, a CSR rising-edge row for the control case's side effect, four device-signature controls in two encodings, and a negative-apparatus control that asserts its own liveness oracle CAN go red.  BASE 57/57, null medium 16/57, five mutants 16-56/57, ZERO ESCAPES (killtable_20260910/t3/SCORES.txt)"),
 
