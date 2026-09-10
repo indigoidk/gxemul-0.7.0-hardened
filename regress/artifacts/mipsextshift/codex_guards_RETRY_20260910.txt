@@ -1,0 +1,220 @@
+VERDICT: The unchecked ranges are real for EXT, DEXTM, and DEXTU. Plain DEXT is safe for this shift-count issue; its specified sum bound is 63, not 32. Runnable machine reachability remains unverified.
+CODEX_MIPSEXT2_20260910
+
+I read only the two specified files. No directories were listed or searched, and no files were written. Specification citations below refer to physical lines in the supplied extraction of Volume II, revision 2.50.
+
+**1. The field adjustments are correct. One architectural constraint in your table is wrong.**
+
+Let `m = rd` and `b = (iword >> 6) & 31`, both **raw five-bit fields**.
+
+| Opcode | Actual `pos` | Actual `size` | Specified sum constraint | Out-of-range pairs | Reference line |
+|---|---:|---:|---|---:|---|
+| EXT | `b`, 0–31 | `m + 1`, 1–32 | `0 < pos + size <= 32` | 496 | [746](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/mips64_volII.txt:746) |
+| DEXT | `b`, 0–31 | `m + 1`, 1–32 | **`0 < pos + size <= 63`** | 0 | [550](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/mips64_volII.txt:550) |
+| DEXTM | `b`, 0–31 | `m + 33`, 33–64 | `32 < pos + size <= 64` | 496 | [558](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/mips64_volII.txt:558) |
+| DEXTU | `b + 32`, 32–63 | `m + 1`, 1–32 | `32 < pos + size <= 64` | 496 | [566](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/mips64_volII.txt:566) |
+
+For DEXTM, the specification calls the encoded field `msbdminus32`, with `msbd = msbdminus32 + 32`. Thus the decoder’s `msbd += 32`, followed by the handler’s `size = msbd + 1`, is correct.
+
+For DEXTU, the encoded position field is `lsbminus32`, and the specification explicitly adds 32. That adjustment is also correct.
+
+The missing validation concerns the range, not these adjustments. Also, plain DEXT can extract a field crossing bit 31; it is not restricted to fields contained in the lower word.
+
+**2. Plain DEXT is genuinely safe for this particular arithmetic.**
+
+Its shift count is
+
+```text
+64 - b - (m + 1) = 63 - (b + m).
+```
+
+Since `0 <= b + m <= 62`, the count is **1–63 inclusive**. Its final right shift uses `b`, which is 0–31. Neither shift has an invalid count.
+
+The other handler’s range check is still needed for EXT. This conclusion about DEXT is specifically about the field ranges and shifts, not a certification of every aspect of instruction support.
+
+**3. The 496 count is correct for each affected opcode.**
+
+For EXT:
+
+```text
+32 - b - (m + 1) = 31 - (b + m).
+```
+
+For DEXTM:
+
+```text
+64 - b - (m + 33) = 31 - (b + m).
+```
+
+For DEXTU:
+
+```text
+64 - (b + 32) - (m + 1) = 31 - (b + m).
+```
+
+All three therefore have a negative expression exactly when `b + m >= 32`.
+
+For each fixed `m`, the invalid `b` values run from `32 - m` through 31, giving exactly `m` invalid values. Hence:
+
+```text
+0 + 1 + … + 31 = 31 × 32 / 2 = 496.
+```
+
+Each affected opcode has 528 valid pairs and 496 invalid pairs. I independently enumerated all 1,024 pairs per opcode using integer arithmetic and obtained those counts.
+
+These are **field-pair counts**. Actual execution also depends on reaching this decoder and selecting the handler; the current `rt == zero` rewrite avoids handler execution.
+
+Your C description needs two qualifications:
+
+- In `X(ext)`, the negative count directly causes undefined behavior.
+- In `X(dext)`, the negative `int` expression is converted to `uint64_t`, producing an enormous unsigned count. That count exceeds the operand width and still causes undefined behavior.
+
+C99 does **not** guarantee modulo-width masking. A particular generated host instruction may mask its count, but neither that outcome nor silent continuation is guaranteed by the C program.
+
+**4. The specification says UNPREDICTABLE for the invalid ranges.**
+
+These quotations preserve the extraction’s spacing.
+
+EXT, [line 746](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/mips64_volII.txt:746):
+
+> The operation isUNPREDICTABLE iflsb+msbd > 31.
+
+DEXTM, [line 562](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/mips64_volII.txt:562), and DEXTU, [line 570](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/mips64_volII.txt:570), contain the same sentence:
+
+> The operation isUNPREDICTABLE if (lsb + msbd+ 1) > 64.
+
+Plain DEXT, [line 554](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/mips64_volII.txt:554):
+
+> Because of the limits on the values ofmsbd andlsb, there is noUNPREDICTABLE case for this instruction.
+
+Thus these invalid ranges have no specified extraction result. The instruction pages’ “Exceptions: Reserved Instruction” entries do not change the explicit range classification into a mandatory RI exception.
+
+EXT additionally has a separate restriction requiring a sign-extended 32-bit source value, stated at line 746 and reflected in its operation at [line 750](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/mips64_volII.txt:750). The proposed range checks do not address that separate condition.
+
+**5. Put the checks in the decoder, with the shared check after normalization.**
+
+Your placement argument is correct for a common `> 64` predicate. More precisely, after the adjustments, `lsb` is the actual position and `msbd` is **size minus one**. The `+ 1` remains necessary.
+
+The complete proposed replacement blocks are:
+
+```c
+		case SPECIAL3_EXT:
+			{
+				int msbd = rd, lsb = (iword >> 6) & 0x1f;
+				if (lsb + msbd + 1 > 32) {
+					ic->f = instr(reserved);
+					break;
+				}
+				ic->arg[0] = (size_t)&cpu->cd.mips.gpr[rt];
+				ic->arg[1] = (size_t)&cpu->cd.mips.gpr[rs];
+				ic->arg[2] = (msbd << 5) + lsb;
+				ic->f = instr(ext);
+				if (rt == MIPS_GPR_ZERO)
+					ic->f = instr(nop);
+			}
+			break;
+
+		case SPECIAL3_DEXT:
+		case SPECIAL3_DEXTM:
+		case SPECIAL3_DEXTU:
+			{
+				int msbd = rd, lsb = (iword >> 6) & 0x1f;
+				if (s6 == SPECIAL3_DEXTM)
+					msbd += 32;
+				if (s6 == SPECIAL3_DEXTU)
+					lsb += 32;
+				if (lsb + msbd + 1 > 64) {
+					ic->f = instr(reserved);
+					break;
+				}
+				ic->arg[0] = (size_t)&cpu->cd.mips.gpr[rt];
+				ic->arg[1] = (size_t)&cpu->cd.mips.gpr[rs];
+				ic->arg[2] = (msbd << 6) + lsb;
+				ic->f = instr(dext);
+				if (rt == MIPS_GPR_ZERO)
+					ic->f = instr(nop);
+			}
+			break;
+```
+
+These replace the blocks starting at [source line 5601](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_mips_instr.c:5601).
+
+No lower-bound checks are needed: field widths and opcode adjustments already establish those bounds. Equality with the source width is valid and produces a zero shift count.
+
+The inner `break` exits `switch (s6)`. It prevents the later assignments—including the zero-register no-op rewrite—from overwriting `instr(reserved)`. Under this proposed policy, an invalid pair targeting register zero also selects RI.
+
+**6. Choose “raise the architectural Reserved Instruction exception.”**
+
+The immediately preceding ISA-support check uses `ic->f = instr(reserved);` followed by `break`, at [lines 5595 onward](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_mips_instr.c:5595). That supports the same selection here.
+
+There is also explicit specification support for choosing an exception as the implementation’s response. [Reference line 44](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/mips64_volII.txt:44) says:
+
+> UNPREDICTABLE operations may cause arbitrary exceptions.
+
+This makes RI a supported implementation choice, although the range restriction does not mandate that particular exception.
+
+[`X(reserved)`, source line 131](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_mips_instr.c:131), synchronizes `cpu->pc` to the instruction and calls:
+
+```c
+mips_cpu_exception(cpu, EXCEPTION_RI, 0, 0, 0, 0, 0, 0);
+```
+
+The guest instruction therefore takes a guest exception instead of performing the extraction. Subsequent handling belongs to the guest exception handler or operating system. This function does not itself call `exit()` or establish that the guest process must terminate.
+
+**7. No additional handler check is necessary for the construction paths demonstrated in this file.**
+
+The only explicit installations of these handlers are `instr(ext)` at line 5607 and `instr(dext)` at line 5625. I found no direct calls to either handler and no separate extract-specific combined handler in this file.
+
+There are other execution contexts: for example, branch delay-slot dispatch calls `ic[1].f(cpu, ic+1)` at [line 192](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_mips_instr.c:192). That invokes an instruction’s stored function pointer; it does not itself construct unchecked extract arguments.
+
+Consequently, decoder validation establishes the needed handler precondition for the paths shown here. A duplicate production check is not justified by an alternate constructor found in this review.
+
+**That is not a repository-wide proof.** This file includes other source files, and their contents were outside your permitted paths. I cannot exclude another constructor or direct caller elsewhere without reading it.
+
+**8. A one-character mutation can weaken either check; placement before normalization also fails.**
+
+Changing the final `+ 1` to `+ 0` is a one-character edit that remains valid C and admits the first forbidden endpoint, `pos + size == width + 1`. It misses 31 invalid pairs per affected opcode.
+
+By contrast, changing `>` to `>=` incorrectly rejects legal equality cases. The regression should distinguish those two mistakes.
+
+For the placement error, consider the unchanged shared predicate:
+
+```c
+if (lsb + msbd + 1 > 64)
+```
+
+Before either adjustment, its left-hand side is at most 63. It therefore rejects **nothing**, admitting all 496 invalid DEXTM pairs and all 496 invalid DEXTU pairs. Moving that predicate before normalization completely defeats its purpose. A deliberately opcode-aware predicate could work before normalization, but this predicate cannot.
+
+I can provide regression criteria for the corrected decoder, but not a crafted guest instruction or executable trigger for the unchecked path. Also, the requested “wrong value” is not a sound portable oracle: the architecture declares these cases UNPREDICTABLE, and the original C has undefined behavior. No host execution was performed to establish a particular observed value.
+
+Use decoder-selection assertions instead:
+
+- Invalid fields select `instr(reserved)` before any extraction executes.
+- All valid fields retain the appropriate handler, or `instr(nop)` for a zero destination.
+- Equality with the permitted endpoint remains accepted.
+- Invalid fields targeting register zero still select `instr(reserved)`.
+- Exhaustive classification produces 496 rejections for each affected opcode and zero for DEXT.
+
+**9. Two changes by default on the evidence available—not three.**
+
+DEXTM and DEXTU share one decoder site, one normalization/check design, and one handler. They belong together; DEXT accompanies them in that existing block.
+
+EXT is the second decoder site. Both sites meet your same-file, same-class, and common-design conditions. However, coverage by one shared runnable test has **not** been demonstrated in this review.
+
+One combined change could qualify under your exception if you implement and run a single parameterized decoder-selection test across all four opcodes. Its common oracle would be whether every requested source-bit position lies within the source width, followed by the expected handler selection. That requires no separate extraction-value oracle.
+
+Different handler widths alone do not prohibit that grouping. Until the shared coverage is demonstrated, your default gives two changes.
+
+**10. No runnable reproduction on a named in-tree machine has been established.**
+
+EXT is identified as **MIPS32 Release 2** at reference line 746. The doubleword extract instructions are identified as **MIPS64 Release 2** at lines 550, 558, and 566. EXT is not an original/base MIPS instruction available merely because an emulator boots a MIPS machine.
+
+The source enforces an ISA gate before reaching these blocks: [lines 5584 onward](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_mips_instr.c:5584) reject CPUs whose `isa_level < 32` or `isa_revision < 2`. Such CPUs do not reach the unchecked extract handlers through this switch.
+
+Neither permitted file supplies the machine registrations, selectable CPU inventory, or command-line mappings needed to verify a machine and `-E` selector. Therefore:
+
+- **Verified machine and selector:** none established.
+- **Proof that no suitable in-tree machine exists:** also not established.
+- **Ordinary guest reachability on an unmodified configured machine:** unresolved.
+
+The arithmetic defect is demonstrated, but your runnable-reproduction prerequisite remains unmet. I performed arithmetic enumeration only; I did not compile the proposed edit or run GXemul.

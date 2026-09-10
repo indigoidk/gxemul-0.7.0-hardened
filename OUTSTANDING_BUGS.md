@@ -18481,3 +18481,184 @@ A gate that constructs a CPU is a rung-2 gate; these defects need a rung-3 one.
 asserting its score *and* its completion sentinel. That closes the missing instruction-result check. It
 does **not** close all 64-bit PowerPC coverage, and the review says so explicitly rather than letting the
 round claim it does.
+
+
+### `mipsextshift` -- DESIGNED 2026-09-10, and the design CONFIRMED the placement already prescribed here while correcting two of my premises
+
+The entry above prescribes two decoder guards placed after the variant adjustments and before the
+`$zero` NOP shortcut. **A design review (`regress/artifacts/mipsextshift/codex_guards_RETRY_20260910.txt`,
+GPT-6 Astra at max, zero content flags) confirms that placement and supplies the proof the entry did not
+have** -- the shared predicate moved BEFORE the adjustments has a left-hand side of at most 63, so it is
+never `> 64` and **rejects nothing whatever**: a guard that reads correctly, compiles, and is identically
+inert. That is the ordering mutant the detector owes.
+
+    EXT block:                if (lsb + msbd + 1 > 32) { ic->f = instr(reserved); break; }
+    DEXT/DEXTM/DEXTU block:   if (lsb + msbd + 1 > 64) { ic->f = instr(reserved); break; }
+
+The inner `break` leaves `switch (s6)`, which is what keeps the later `rt == MIPS_GPR_ZERO` rewrite from
+overwriting the refusal -- so an invalid pair targeting register zero still takes the exception. That is
+deliberate rather than incidental.
+
+**TWO PREMISES OF MINE WERE WRONG.** I gave plain `DEXT` the constraint `pos + size <= 32`; the
+specification says **63**, because `DEXT` may extract a field crossing bit 31. The conclusion that `DEXT`
+is safe survives; the reason I gave for it did not. And I wrote that a negative shift count is "in
+practice reduced modulo the width" -- **C99 guarantees no such thing**, and the two handlers do not even
+fail alike: `X(ext)` uses the negative `int` directly, while `X(dext)` converts it to `uint64_t` first,
+giving an enormous unsigned count. Two routes to undefined behaviour, one of which my description did not
+contain.
+
+The 496 figure is confirmed three times over, and more cleanly than I derived it: all three expressions
+reduce to `31 - (b + m)`, negative exactly when `b + m >= 32`.
+
+**DISPOSITION: raise the architectural Reserved Instruction exception** (`ic->f = instr(reserved);`), on
+this file's own precedent -- the ISA-support check immediately above the switch already does exactly that.
+`X(reserved)` syncs the pc and calls `mips_cpu_exception(..., EXCEPTION_RI, ...)`; it does **not** call
+`exit()`. The specification permits the choice: *"UNPREDICTABLE operations may cause arbitrary
+exceptions."*
+
+*** THE BLOCKER IS REACHABILITY, NOT DESIGN. *** `EXT` is MIPS32 Release 2 and the doubleword forms are
+MIPS64 Release 2, so they are not available merely because this tree boots a MIPS machine, and **no
+machine has been named that runs them.** The rung-3 attempt is owed before this may be recorded
+documented-only. **Scope is TWO changes, not three** -- `DEXTM`/`DEXTU`/`DEXT` share a site, a predicate
+and a handler; `EXT` is the second -- and they combine into one only if a single parameterised
+decoder-selection test covers all four opcodes.
+
+### `mipsextsignext` (LOW) -- filed 2026-09-10
+
+`X(ext)` reads `uint32_t rs = reg(ic->arg[1]);`, truncating to 32 bits and asking nothing about the upper
+half. **MIPS64 Volume II requires `EXT`'s source to be a properly sign-extended 32-bit value**, so a
+64-bit register holding a value that is not a sign-extension of its low word is accepted and extracted
+from silently.
+
+Found by the `mipsextshift` design review while answering a different question, which said so plainly:
+*"The proposed range checks do not address that separate condition."*
+
+**Filed separately rather than folded in**, because the fix shape differs: `mipsextshift`'s guards are a
+decode-time predicate over two instruction fields, decidable when the instruction is translated, while
+this is a **run-time property of a register value** and cannot be checked in the decoder at all. Same
+instruction, different mechanism.
+
+**LOW, and the reason matters:** like the range case this is UNPREDICTABLE-on-violation, but unlike it
+there is **no undefined behaviour in the host** -- the truncation is well-defined C. The cost is a wrong
+guest answer in a state a correct guest does not reach. It inherits the same reachability blocker.
+
+### `mapledmaadvance` (MED) -- filed 2026-09-10, split out of `mapledmaaddr` so that round can proceed
+
+`maple_do_dma_xfer()` accumulates `addr += datalen_cmd * 4;` across the command list and then, at its
+tail, immediately before asserting the DMA-done event:
+
+    // TODO: Should the DMA address be updated?
+    d->dmaaddr = addr;
+
+**The comment is the finding.** An advancing cursor is modelled, and the author recorded that they did not
+know whether it should be. This is not a defect anyone has established -- it is an unresolved semantic
+question sitting in shipped code with no test either way.
+
+**Two early returns leave the function before that tail and belong to the same question:** the
+`!d->enable` path and the `addr & 0x1f` alignment refusal both return without touching `d->dmaaddr`, so
+after an aborted transfer the field holds the programmed address while after a completed one it holds the
+advanced one. Any settled contract has to cover both.
+
+Settling it needs real Maple hardware behaviour, and **no Dreamcast or Maple documentation is present** --
+established by `ls _scratchpad/*.pdf`, not assumed. So it needs a source fetched first, on the
+`vmesbcp2` / `21066_66a_hrm` / `ddi0406` precedent where a seat's citation was obtained and then verified
+locally rather than trusted.
+
+*** THIS MUST NOT BLOCK `mapledmaaddr`, AND THE EARLIER HOLD ON THAT ROUND WAS AIMED AT THE WRONG ARM. ***
+That round deletes a terminating call in the register's READ arm, which is a pure reporter of this field.
+It neither creates nor resolves the question above -- and the same unverified address is **already** handed
+to the DMA engine on every transfer, whether or not a guest ever reads it back. The dependency runs the
+other way: whatever is settled here becomes the expected value of that round's disclosed after-DMA row,
+which is precisely why that row is written to pin the read arm's contract rather than to certify the
+advanced value as correct.
+
+
+### `ppcrldimimask` / `ppcrlwimiwidth` -- DESIGNED 2026-09-10, and the review found a SECOND defect plus THREE new rows
+
+`regress/artifacts/ppcrldimimask/codex_repair_20260910.txt` (GPT-6 Astra at max, zero content flags,
+13,496 bytes). It confirmed every premise about `rldimi`, **refuted my premise about `rlwimi`**, and
+turned up three defects nobody had asked about.
+
+**`rldimi` -- FOUR coordinated edits, and my sketch had one of them.** `sh` really is `-1` on exit for
+every SH including zero, the rotate body really is a correct `ROTL64`, and the mask really does always
+run to bit 63. But saving SH is not enough: the comparison happens *after* the increment, so the bound
+is the endpoint's **successor**, and the counter must be **circular** because `MASK(MB, 63-SH)` wraps.
+
+    int m, n = sh;                       /*  1: keep SH  */
+    while (n-- != 0) { ... }             /*  2: consume the copy  */
+    do {
+            tmp |= ((uint64_t)1 << (63-m));
+            m = (m + 1) & 63;            /*  3: circular increment  */
+    } while (m != ((64 - sh) & 63));     /*  4: successor, modulo 64  */
+
+**My description of the defect was half of it.** For non-wrapping masks the handler overwrites the low
+SH bits that must survive; for **wrapping** masks it *omits* the required insertion into positions
+`0..63-SH`, leaving those destination bits unchanged. A repair validated only on non-wrapping encodings
+fixes one direction and leaves the other.
+
+A partial repair that saves SH and fixes only the bound reaches `(uint64_t)1 << -1` at `MB=40, SH=40`.
+**The seat declined to call that an infinite loop**, on the ground that doing so would assign defined
+behaviour to an undefined program — which is the right discipline and is what my brief's question got
+wrong.
+
+**`rlwimi` -- a cast alone is NOT the repair.** The width contamination is confirmed as filed, but there
+is a second defect at the same site: `ROTL32` is defined as rotating `x || x`, the low word **duplicated**,
+and when `MB > ME` the mask wraps to cover every architectural position `0..31` — the whole high half. So
+`RA`'s high 32 bits must be **replaced** with the rotated word, and this implementation preserves them
+unconditionally.
+
+**Scope: TWO rounds, not one.** One repairs operand lifetime and a circular inclusive traversal; the other
+repairs source width and a missing high-word insertion, and validating it needs expectations outside the
+doubleword detector's contract.
+
+Both replacements were validated offline against an independent bit-membership oracle — 40,960 `rldimi`
+cases and 655,360 `rlwimi` cases. **Neither was compiled**: the seat had no native compiler and WSL
+returned `E_ACCESSDENIED`. This is a reading plus a model, not a measurement of this tree.
+
+### `ppcwitnessmaskoracle` (MED) -- filed 2026-09-10. *** The oracle and the defect share the same misreading of the same sentence. ***
+
+`regress/artifacts/ppcrldiclzero/opus_ppc_rldicl_witness_20260910.py` is a **committed** artifact of
+`#522`. Two of its model oracles are wrong for wrapping masks, named by the review and then verified here
+by opening the file:
+
+* `want_rldimi()` computes the **intersection** of `bits mb..63` with `bits 0..63-sh`. Correct when
+  `mb <= 63-sh`; when `mb > 63-sh` the two ranges are **disjoint and the intersection is empty**, so it
+  returns the untouched destination for every wrapping encoding. Its own docstring shows how: it cites the
+  manual's *prose* ("1 bits from bit MB through bit 63 - SH"), which is the non-wrapping reading, rather
+  than the `MASK` definition that wraps.
+* `mask32()` is documented "confined to the low 32 bits". Its companion `rotl32()` correctly returns the
+  duplicated `(r32 << 32) | r32` — so the model *has* the duplication and then masks it away.
+
+**This does not invalidate `#522`**, which is `rldicl` and uses neither oracle. The exposure is forward:
+both sibling rows are filed on measurements this witness produced, and **the wrapping encodings are exactly
+where both repairs do their new work**. An uncorrected oracle would score a correct repair wrong, or agree
+with a repair that fixes only the non-wrapping half — a check that cannot fail, because the oracle omits
+the wrap in the same way the implementation does.
+
+### `ppcrlwhighhalf` (MED) -- filed 2026-09-10, and it is a DISPUTE rather than a defect
+
+I told the review that `rlwinm` and `rlwnm` are the correct idiom `rlwimi` fails to follow. **They are
+correct about the low word and, on the RTL reading, wrong about the high one.** The decoder builds a
+32-bit mask with a correct wrap; `X(rlwinm)` then holds `tmp` as `uint32_t` and assigns it into a 64-bit
+register, which **zero-extends**, so the high half is unconditionally 0 where the RTL would put the
+rotated word.
+
+*** Filed as a dispute because the manual contradicts itself, and the seat said so rather than letting its
+own reading stand unqualified: *** one line asserts blanket upper-half clearing for `rlwinm`, conflicting
+with that instruction's RTL and with the general duplicated-rotation / wrapping-mask definitions. **This
+row adopts neither reading.** Three further PowerPC manuals sit unconsulted in `_scratchpad/`, and
+compiler expectations are the strong practical argument either way.
+
+It must not block `ppcrlwimiwidth`'s narrowing half, which is wrong under every reading.
+
+### `ppccr0modewidth` (LOW) -- filed 2026-09-10
+
+`update_cr0()` branches on `cpu->cd.ppc.bits == 64` — the configured CPU **model** width, which never
+changes while the guest runs — where the architecture selects the comparison width from the current
+**mode** (the MSR SF bit, which can change at run time). On a 64-bit CPU executing in 32-bit mode, a result
+whose low word is negative but whose full value is positive records GT where LT is required.
+
+**Scope is the whole record form, not one instruction** — every `_dot` handler routes through this
+function — which is why it is filed separately rather than inside either rotate row. LOW only because
+reachability is unestablished in the sharpest possible way: it needs a 64-bit PowerPC CPU running with SF
+clear, and no gate in this tree executes any 64-bit PowerPC instruction and checks the result.

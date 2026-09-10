@@ -1,0 +1,2692 @@
+Reading additional input from stdin...
+OpenAI Codex v0.153.4
+--------
+workdir: C:\Users\User00\AppData\Local\Temp\claude\C--DocumentNoSnc-CC-GXEMUL\8e474f41-4d47-4c99-bf11-3406a84c4fcd\scratchpad
+model: gpt-6-astra
+provider: openai
+approval: never
+sandbox: read-only
+reasoning effort: max
+reasoning summaries: none
+session id: 01a08d13-7004-79e2-a05e-8fbd77e77f00
+--------
+user
+# Two PowerPC rotate-and-mask handlers: write the REPAIRS, because my sketches were rejected
+
+VERDICT line first, then the liveness token `CODEX_PPCROT_20260910`.
+
+**Please do not simply ratify.** A recent panel here had seven of nine seats confirm a premise the brief
+stated wrongly. **Check the premises, not just the derivations** — every load-bearing claim below is
+written as a question for that reason. And this brief exists BECAUSE a design review of yours already
+rejected my proposed repair for both of these as insufficient; I do not want a second insufficient sketch,
+I want the repair.
+
+Ordinary correctness engineering on an instruction interpreter in an emulator written in C99. The tree is
+`C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\src\cpus\cpu_ppc_instr.c`; three unrelated 2021-vintage copies of
+`src/` sit elsewhere under the project root and will give you line numbers off by hundreds.
+
+## SETTLED PREMISES (established, cite rather than re-derive)
+
+* A sibling handler in this same file, `X(rldicl)`, was shipped fixed today as `#522`: its mask was being
+  accumulated into the ROTATED value and ANDed with a variable that was never anything but zero, so the
+  destination was set to ZERO on every execution. Witnessed at rung 3 on unmodified `-E bareppc`,
+  190-cell census, 24-row detector, nine mutants, zero escapes.
+* **`DYNTRANS_DUALMODE_32` means this file is compiled TWICE**, and both PowerPC gates drive a 32-bit part
+  selected explicitly in their probes. Gate 9 CONSTRUCTS 64-bit PowerPC CPUs (three machine subtypes
+  default to the PPC970) but is a construction check with **no result oracle**. So no gate in this tree
+  checks any 64-bit instruction result. That is why these two have gone unnoticed.
+* `MODE_uint_t` is `uint64_t` in the 64-bit compilation and `uint32_t` in the 32-bit one.
+* `_scratchpad/` holds four local PowerPC manuals as extracted text — `ppc_oea_book3_v201.txt`,
+  `ppc_pem32_rev2_2001.txt`, `ppc_pem_32and64_2005.txt`, `ppc_vea_book2_v201.txt`. **Cite only what you
+  have read in those files**; this project has shipped page numbers that came from model output rather
+  than a manual.
+
+## SITE 1 — `X(rldimi)`: the mask always runs to bit 63
+
+```c
+X(rldimi)
+{
+	uint32_t iw = ic->arg[0];
+	int rs = (iw >> 21) & 31, ra = (iw >> 16) & 31;
+	int sh = ((iw >> 11) & 31) | ((iw & 2) << 4);
+	int mb = ((iw >> 6) & 31) | (iw & 0x20);
+	int rc = ic->arg[0] & 1;
+	int m;
+	uint64_t tmp, s = cpu->cd.ppc.gpr[rs];
+	/*  TODO: Fix this, its performance is awful:  */
+	while (sh-- != 0) {
+		int b = (s >> 63) & 1;
+		s = (s << 1) | b;
+	}
+	m = mb; tmp = 0;
+	do {
+		tmp |= ((uint64_t)1 << (63-m));
+		m ++;
+	} while (m != 63 - sh);
+	cpu->cd.ppc.gpr[ra] &= ~tmp;
+	cpu->cd.ppc.gpr[ra] |= (tmp & s);
+	if (rc)
+		update_cr0(cpu, cpu->cd.ppc.gpr[ra]);
+}
+```
+
+**MY READING, WHICH I WANT CHECKED RATHER THAN CONFIRMED.** `while (sh-- != 0)` post-decrements, so `sh`
+is **`-1` when the loop exits — including when `sh` was 0 and the body never ran.** The termination test is
+therefore always `m != 64`, so the mask is always bits `mb..63` (PowerPC numbering) rather than
+`mb..63-SH`, and `rldimi` **overwrites the SH destination bits it is required to preserve.**
+
+**Questions, and the last two are the ones my rejected sketch missed:**
+
+1. Is `sh == -1` on exit for **every** SH including 0? Is the rotate loop itself (`b = (s>>63)&1;
+   s = (s<<1)|b;`) a correct ROTL64?
+2. What does the manual's RTL actually say — quote it from one of the four local `.txt` files with its
+   line number. Is the mask `MASK(MB, 63-SH)`, and is `MASK` **inclusive of both endpoints**?
+3. The `do {...} while (m != X)` form is **exclusive of `m == X`**. So even with SH saved correctly, does
+   the loop stop one bit SHORT? State what `X` must be.
+4. **`MASK(x,y)` in this architecture WRAPS when `x > y`.** `MB=40, SH=40` gives `63-SH = 23 < MB`. What
+   does the corrected `do/while` do at that encoding — and is it UB (`1 << (63-m)` with `m > 63`), an
+   infinite loop, or fine? **This is the case my sketch had no answer for.** Is that encoding legal, or is
+   it reserved/undefined so a guard is the right disposition?
+5. **Write the repair.** Whole function, compiling C99, matching this file's idiom. If it needs four
+   coordinated changes, make all four and say what each is for. Keep the performance TODO honest: I am not
+   asking you to optimise, only to be correct.
+
+## SITE 2 — `X(rlwimi)`: a 32-bit rotate performed at 64-bit width
+
+```c
+X(rlwimi)
+{
+	MODE_uint_t tmp = reg(ic->arg[0]), ra = reg(ic->arg[1]);
+	uint32_t iword = ic->arg[2];
+	int sh = (iword >> 11) & 31;
+	int mb = (iword >> 6) & 31;
+	int me = (iword >> 1) & 31;
+	int rc = iword & 1;
+
+	tmp = sh ? ((tmp << sh) | (tmp >> (32-sh))) : tmp;
+
+	for (;;) {
+		uint64_t mask;
+		mask = (uint64_t)1 << (31-mb);
+		ra &= ~mask;
+		ra |= (tmp & mask);
+		if (mb == me)
+			break;
+		mb ++;
+		if (mb == 32)
+			mb = 0;
+	}
+	reg(ic->arg[1]) = ra;
+	if (rc)
+		update_cr0(cpu, ra);
+}
+```
+
+Its two siblings in the same file both truncate first and this one never does:
+
+```c
+X(rlwinm) { uint32_t tmp, iword = ic->arg[2]; ... tmp = (uint32_t)cpu->cd.ppc.gpr[rs];
+            tmp = sh ? ((tmp << sh) | (tmp >> (32-sh))) : tmp; tmp &= (uint32_t)ic->arg[1];
+            reg(ic->arg[0]) = tmp; }
+X(rlwnm)  { /* identical shape, sh from a register */ }
+```
+
+**Questions:**
+
+6. In the 64-bit compilation, `tmp` is 64 bits, so `tmp >> (32-sh)` brings **high-half** source bits down
+   into the low 32. Is that right, and does the low-32 mask let those bits reach the destination?
+7. What does the manual say `ROTL32` means in the 64-bit ISA — quote it with a line number. My
+   understanding is `ROTL64(x32 || x32, n)`, i.e. the 32-bit value **duplicated**. If so, does the
+   duplication matter here given `MASK(MB+32, ME+32)` confines the mask to the low 32?
+8. **Does `rlwimi` in 64-bit mode leave RA's HIGH 32 bits unchanged?** The loop only clears bits inside
+   the low 32, so this code preserves them. Confirm from the manual, because if the architecture instead
+   requires something else the repair is bigger than a cast.
+9. **Write the repair**, and say plainly whether it is the one-token `(uint32_t)` cast that makes it match
+   its siblings, or more. Does `rlwinm`'s own idiom have a defect this would inherit?
+10. `mb`/`me` come from a guest instruction word and the `for(;;)` walks `mb` around to `me`. Can any
+    encoding make that loop not terminate? Show the argument, do not assert it.
+
+## THE LAST TWO QUESTIONS, AND THEY DECIDE HOW THESE SHIP
+
+11. **Are these ONE round or TWO?** This project's rule: a round takes one site; a second joins only if it
+    is in the same file, the same semantic class so **one fix design covers both**, and is covered by the
+    **same detector with no new oracle**. Rule on it, with the reason.
+12. **What is the smallest edit to your repair that keeps it compiling and still produces a wrong result?**
+    Name the encoding it goes wrong at and the value it produces, so I can build that mutant.
+
+Answer in full. Write to `regress/artifacts/ppcrldimimask/codex_repair_20260910.md` if you can; if the
+sandbox is read-only, return the whole answer and I will land it.
+
+codex
+VERDICT: I’ll check the local manual and active source before ruling on either repair.
+CODEX_PPCROT_20260910
+
+I’ll verify the wrap and 64-bit semantics, then provide both complete handlers, the shipping-round decision, and concrete mutants. The workspace is read-only, so I’ll return the full artifact here.
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "Get-Location
+Get-Item -LiteralPath 'C:\\DocumentNoSnc\\CC\\GXEMUL\\GXEMUL-SEC\\src\\cpus\\cpu_ppc_instr.c'
+rg --files -g AGENTS.md -g ppc_oea_book3_v201.txt -g ppc_pem32_rev2_2001.txt -g ppc_pem_32and64_2005.txt -g ppc_vea_book2_v201.txt -g '*ppcrldimi*' 'C:\\DocumentNoSnc\\CC\\GXEMUL' 'C:\\Users\\User00\\AppData\\Local\\Temp\\claude\\C--DocumentNoSnc-CC-GXEMUL\\8e474f41-4d47-4c99-bf11-3406a84c4fcd\\scratchpad'" in C:\Users\User00\AppData\Local\Temp\claude\C--DocumentNoSnc-CC-GXEMUL\8e474f41-4d47-4c99-bf11-3406a84c4fcd\scratchpad
+ succeeded in 304ms:
+
+C:\DocumentNoSnc\CC\GXEMUL\_scratchpad\ppc_vea_book2_v201.txt
+C:\DocumentNoSnc\CC\GXEMUL\_scratchpad\ppc_pem_32and64_2005.txt
+C:\DocumentNoSnc\CC\GXEMUL\_scratchpad\ppc_pem32_rev2_2001.txt
+C:\DocumentNoSnc\CC\GXEMUL\_scratchpad\ppc_oea_book3_v201.txt
+Path                                                                                                                
+----                                                                                                                
+C:\Users\User00\AppData\Local\Temp\claude\C--DocumentNoSnc-CC-GXEMUL\8e474f41-4d47-4c99-bf11-3406a84c4fcd\scratchpad
+
+LastWriteTime : 9/10/2026 3:17:12 PM
+Length        : 149816
+Name          : cpu_ppc_instr.c
+
+
+
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n 'rldimi|rlwimi|ROTL32|MASK\\(x|MASK \\(x|MASK\\(MB|MASK\\(MB\\+32|Rotate Left Doubleword Immediate then Mask Insert|Rotate Left Word Immediate then Mask Insert' 'C:\\DocumentNoSnc\\CC\\GXEMUL\\_scratchpad\\ppc_pem_32and64_2005.txt' 'C:\\DocumentNoSnc\\CC\\GXEMUL\\_scratchpad\\ppc_pem32_rev2_2001.txt' 'C:\\DocumentNoSnc\\CC\\GXEMUL\\_scratchpad\\ppc_oea_book3_v201.txt' 'C:\\DocumentNoSnc\\CC\\GXEMUL\\_scratchpad\\ppc_vea_book2_v201.txt'" in C:\Users\User00\AppData\Local\Temp\claude\C--DocumentNoSnc-CC-GXEMUL\8e474f41-4d47-4c99-bf11-3406a84c4fcd\scratchpad
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "Get-Command clang,gcc,cc,python,python3,cl -ErrorAction SilentlyContinue | Select-Object Name,Source
+rg --files 'C:\\DocumentNoSnc\\CC\\GXEMUL\\GXEMUL-SEC\\regress\\artifacts\\ppcrldimimask'" in C:\Users\User00\AppData\Local\Temp\claude\C--DocumentNoSnc-CC-GXEMUL\8e474f41-4d47-4c99-bf11-3406a84c4fcd\scratchpad
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$targets = @('"'C:\\AGENTS.md','C:\\DocumentNoSnc\\AGENTS.md','C:\\DocumentNoSnc\\CC\\AGENTS.md','C:\\DocumentNoSnc\\CC\\GXEMUL\\AGENTS.md','C:\\DocumentNoSnc\\CC\\GXEMUL\\GXEMUL-SEC\\AGENTS.md','C:\\DocumentNoSnc\\CC\\GXEMUL\\GXEMUL-SEC\\src\\AGENTS.md','C:\\DocumentNoSnc\\CC\\GXEMUL\\GXEMUL-SEC\\src\\cpus\\AGENTS.md','C:\\DocumentNoSnc\\CC\\GXEMUL\\_scratchpad\\AGENTS.md')
+foreach ("'$target in $targets) { if (Test-Path -LiteralPath $target) { Write-Output $target; Get-Content -LiteralPath $target } }
+rg -n '"'X\\((rldimi|rlwimi|rlwinm|rlwnm|rldicl)\\)|DYNTRANS_DUALMODE_32|define reg|update_cr0|MODE_uint_t' 'C:\\DocumentNoSnc\\CC\\GXEMUL\\GXEMUL-SEC\\src\\cpus\\cpu_ppc_instr.c'" in C:\Users\User00\AppData\Local\Temp\claude\C--DocumentNoSnc-CC-GXEMUL\8e474f41-4d47-4c99-bf11-3406a84c4fcd\scratchpad
+ succeeded in 91ms:
+C:\DocumentNoSnc\CC\GXEMUL\_scratchpad\ppc_pem32_rev2_2001.txt:7573:Rotate Left Word Immediate then Mask Insert
+C:\DocumentNoSnc\CC\GXEMUL\_scratchpad\ppc_pem32_rev2_2001.txt:7575:rlwimi rlwimi.
+C:\DocumentNoSnc\CC\GXEMUL\_scratchpad\ppc_pem32_rev2_2001.txt:7589:The contents of rS are rotated left by the number of bits specified by operand SH. A mask is generated having 1 bits from the bit specified by operand MB through the bit specified by operand ME and 0 bits elsewhere. The rotated word is inserted into rA under control of the generated mask. rlwimi Rotate Left Word Immediate then Mask rlwimi. Rotate Left Word Immediate then Mask Insert with CR
+C:\DocumentNoSnc\CC\GXEMUL\_scratchpad\ppc_pem32_rev2_2001.txt:15539:Leave MASK(x, y) MEM(x, y)
+C:\DocumentNoSnc\CC\GXEMUL\_scratchpad\ppc_pem32_rev2_2001.txt:25816:rlwimix
+C:\DocumentNoSnc\CC\GXEMUL\_scratchpad\ppc_pem32_rev2_2001.txt:25817:Rotate Left Word Immediate then Mask Insert
+C:\DocumentNoSnc\CC\GXEMUL\_scratchpad\ppc_pem32_rev2_2001.txt:25819:rlwimi rlwimi.
+C:\DocumentNoSnc\CC\GXEMUL\_scratchpad\ppc_pem32_rev2_2001.txt:25827:rlwimix
+C:\DocumentNoSnc\CC\GXEMUL\_scratchpad\ppc_pem32_rev2_2001.txt:25857:n  SH r  ROTL(rS, n) m  MASK(MB, ME) rA  (r & m) | (rA & � m)
+C:\DocumentNoSnc\CC\GXEMUL\_scratchpad\ppc_pem32_rev2_2001.txt:25861:Note that rlwimi can be used to insert a bit field into the contents of rA using the methods shown below:
+C:\DocumentNoSnc\CC\GXEMUL\_scratchpad\ppc_pem32_rev2_2001.txt:25873:equivalent to rlwimi
+C:\DocumentNoSnc\CC\GXEMUL\_scratchpad\ppc_pem32_rev2_2001.txt:25875:insrwi rA,rS,n,b (n > 0) equivalent to rlwimi
+C:\DocumentNoSnc\CC\GXEMUL\_scratchpad\ppc_pem32_rev2_2001.txt:25934:n  SH r  ROTL(rS, n) m  MASK(MB, ME) rA  r & m
+C:\DocumentNoSnc\CC\GXEMUL\_scratchpad\ppc_pem32_rev2_2001.txt:26009:n  rB[27-31] r  ROTL(rS, n) m  MASK(MB, ME) rA  r & m
+C:\DocumentNoSnc\CC\GXEMUL\_scratchpad\ppc_pem32_rev2_2001.txt:30115:orx orcx ori2 oris rfi 2 rlwimix rlwinmx rlwnmx
+C:\DocumentNoSnc\CC\GXEMUL\_scratchpad\ppc_pem32_rev2_2001.txt:31149:cror bcctrx rlwimix rlwinmx rlwnmx
+C:\DocumentNoSnc\CC\GXEMUL\_scratchpad\ppc_pem32_rev2_2001.txt:34847:rlwimix rlwinmx rlwnmx
+C:\DocumentNoSnc\CC\GXEMUL\_scratchpad\ppc_pem32_rev2_2001.txt:35435:Mnemonic 0 addic. addi addis bcx sc bx mcrf bclrx crnor rfi 1 crandc isync crxor crnand crand creqv crorc cror bcctrx rlwimix
+C:\DocumentNoSnc\CC\GXEMUL\_scratchpad\ppc_pem32_rev2_2001.txt:37872:Mnemonic 0 rlwimix rlwinmx rlwnmx
+C:\DocumentNoSnc\CC\GXEMUL\_scratchpad\ppc_pem32_rev2_2001.txt:43079:Mnemonic 0 rlwimix rlwinmx rlwnmx
+C:\DocumentNoSnc\CC\GXEMUL\_scratchpad\ppc_pem32_rev2_2001.txt:43307:mtmsr mtspr 2 mtsr mtsrin mulhwx mulhwux mulli mullwx nandx negx norx orx orcx ori oris rfi rlwimix rlwinmx rlwnmx sc slwx srawx srawix srwx stb stbu stbux stbx stfd stfdu stfdux stfdx stfiwx stfs
+C:\DocumentNoSnc\CC\GXEMUL\_scratchpad\ppc_pem32_rev2_2001.txt:45064:Rotate Left Immediate then Mask Insert rlwimix
+C:\DocumentNoSnc\CC\GXEMUL\_scratchpad\ppc_pem32_rev2_2001.txt:45142:Load String Word Immediate Load String Word Indexed Load Word and Zero with Update Load Word and Zero with Update Indexed Load Word and Zero Indexed Move to Segment Register Indirect * Multiply Low Immediate Multiply Low OR Immediate OR Immediate Shifted Rotate Left Word Immediate then Mask Insert Rotate Left Word Immediate then AND with Mask Rotate Left Word then AND with Mask Subtract from Carrying Subtract from Extended Subtract from Immediate Carrying Subtract from Minus One Extended Subtract from Zero Extended Shift Left Word Shift Right Word Shift Right Algebraic Word Shift Right Algebraic Word Immediate Store Word Store Word Byte-Reverse Indexed Store Multiple Word Store String Word Immediate Store String Word Indexed Store Word with Update Store Word with Update Indexed Store Word Indexed System Call
+C:\DocumentNoSnc\CC\GXEMUL\_scratchpad\ppc_pem32_rev2_2001.txt:45206:rlwinm rlwimi rlwinm rlwimi rlwinm
+C:\DocumentNoSnc\CC\GXEMUL\_scratchpad\ppc_pem32_rev2_2001.txt:45232:rlwinm rlwimi rlwinm rlwimi rlwinm
+C:\DocumentNoSnc\CC\GXEMUL\_scratchpad\ppc_pem32_rev2_2001.txt:45249:rlwinm r4,r4,32 � sh,sh,31 rlwimi r4,r3,32 � sh,0,sh � 1 rlwinm r3,r3,32 � sh,sh,31
+C:\DocumentNoSnc\CC\GXEMUL\_scratchpad\ppc_pem32_rev2_2001.txt:45259:rlwimi r3,r2,32 � sh,0,sh � 1 srawi r2,r2,sh
+C:\DocumentNoSnc\CC\GXEMUL\_scratchpad\ppc_pem32_rev2_2001.txt:46381:Equivalent to: rlwinm rA,rS,b,0,n � 1 rlwinm rA,rS,b + n, 32 � n,31 rlwimi rA,rS,32 � b,b,(b + n) � 1 rlwimi rA,rS,32 � (b + n),b,(b + n) � 1 rlwinm rA,rS,n,0,31 rlwinm rA,rS,32 � n,0,31 rlwnm rA,rS,rB,0,31 rlwinm rA,rS,n,0,31 � n rlwinm rA,rS,32 � n,n,31 rlwinm rA,rS,0,n,31 rlwinm rA,rS,0,0,31 � n rlwinm rA,rS,n,b � n,31 � n
+C:\DocumentNoSnc\CC\GXEMUL\_scratchpad\ppc_pem32_rev2_2001.txt:46395:equivalent to rlwimi rB,rA,31,0,0
+C:\DocumentNoSnc\CC\GXEMUL\_scratchpad\ppc_pem32_rev2_2001.txt:48779:CR, 2-5 CTR, 2-11 FPR0�FPR31, 2-4 FPSCR, 2-7 GPR0�GPR31, 2-3 LR, 2-11 TBL/TBU, 2-31 XER, 2-10, B-4 VEA register set, 2-12 Reserved instruction class, 4-6 Reset exception, 6-3, 6-7, 6-18 Return from exception handler, 6-16 rfi (64-bit bridge), 4-61, 8-155 rlwimi, 4-18, 8-156 rlwinm, 4-18, 8-157 rlwnm, 4-18, 8-158 Rotate/shift instructions, 4-17�4-18, A-45, F-3 Rounding, floating-point operations, 3-20 Rounding/conversion instructions, FP, 4-23 RTC (real time clock), B-8
+C:\DocumentNoSnc\CC\GXEMUL\_scratchpad\ppc_pem_32and64_2005.txt:6878:Two types of rotation operation are supported: 1. ROTL64 or rotate64 � the value rotated is the given 64-bit value. The rotate64 operation is used to rotate a given 64-bit quantity. 2. ROTL32 or rotate32 � the value rotated consists of two copies of bits [32-63] of the given 64-bit value, one copy in bits [0-31] and the other in bits [32-63]. The rotate32 operation is used to rotate a given 32-bit quantity.
+C:\DocumentNoSnc\CC\GXEMUL\_scratchpad\ppc_pem_32and64_2005.txt:6999:Rotate Left Word rlwimi
+C:\DocumentNoSnc\CC\GXEMUL\_scratchpad\ppc_pem_32and64_2005.txt:7005:rlwimi.
+C:\DocumentNoSnc\CC\GXEMUL\_scratchpad\ppc_pem_32and64_2005.txt:7010:rldimi rldimi.
+C:\DocumentNoSnc\CC\GXEMUL\_scratchpad\ppc_pem_32and64_2005.txt:7023:rlwimi Rotate Left Word Immediate then Mask
+C:\DocumentNoSnc\CC\GXEMUL\_scratchpad\ppc_pem_32and64_2005.txt:7024:rlwimi. Rotate Left Word Immediate then Mask Insert with CR Update. The dot suffix enables the update of the CR.
+C:\DocumentNoSnc\CC\GXEMUL\_scratchpad\ppc_pem_32and64_2005.txt:7029:rldimi Rotate Left Word Immediate then Mask
+C:\DocumentNoSnc\CC\GXEMUL\_scratchpad\ppc_pem_32and64_2005.txt:7030:rldimi. Rotate Left Word Immediate then Mask Insert with CR Update. The dot suffix enables the update of the CR.
+C:\DocumentNoSnc\CC\GXEMUL\_scratchpad\ppc_pem_32and64_2005.txt:17119:Leave MASK(x, y) MEM(x, y)
+C:\DocumentNoSnc\CC\GXEMUL\_scratchpad\ppc_pem_32and64_2005.txt:29864:rldimix
+C:\DocumentNoSnc\CC\GXEMUL\_scratchpad\ppc_pem_32and64_2005.txt:29870:rldimi rldimi.
+C:\DocumentNoSnc\CC\GXEMUL\_scratchpad\ppc_pem_32and64_2005.txt:29876:rldimix
+C:\DocumentNoSnc\CC\GXEMUL\_scratchpad\ppc_pem_32and64_2005.txt:29913:Note: rldimi can be used to insert an n-bit field, that is right-justified in rS, into rA starting at bit position b, by setting SH = 64 � (b + n) and MB = b.
+C:\DocumentNoSnc\CC\GXEMUL\_scratchpad\ppc_pem_32and64_2005.txt:29926:equivalent to rldimi
+C:\DocumentNoSnc\CC\GXEMUL\_scratchpad\ppc_pem_32and64_2005.txt:29930:For a more detailed list of simplified mnemonics for the rldimi instruction, refer to Appendix E Simplified Mnemonics.
+C:\DocumentNoSnc\CC\GXEMUL\_scratchpad\ppc_pem_32and64_2005.txt:29950:rlwimix
+C:\DocumentNoSnc\CC\GXEMUL\_scratchpad\ppc_pem_32and64_2005.txt:29951:Rotate Left Word Immediate then Mask Insert (x'5000 0000')
+C:\DocumentNoSnc\CC\GXEMUL\_scratchpad\ppc_pem_32and64_2005.txt:29953:rlwimix
+C:\DocumentNoSnc\CC\GXEMUL\_scratchpad\ppc_pem_32and64_2005.txt:29955:rlwimi rlwimi.
+C:\DocumentNoSnc\CC\GXEMUL\_scratchpad\ppc_pem_32and64_2005.txt:29989:n  SH r  ROTL[32](rS[32-63], n) m  MASK(MB + 32, ME + 32) rA  (r & m) | (rA & � m)
+C:\DocumentNoSnc\CC\GXEMUL\_scratchpad\ppc_pem_32and64_2005.txt:29992:Note: rlwimi can be used to insert a bit field into the contents of rA using the methods shown below:
+C:\DocumentNoSnc\CC\GXEMUL\_scratchpad\ppc_pem_32and64_2005.txt:30005:equivalent to rlwimi rA,rS,32 � b,b,b + n � 1
+C:\DocumentNoSnc\CC\GXEMUL\_scratchpad\ppc_pem_32and64_2005.txt:30007:insrwi rA,rS,n,b (n > 0) equivalent to rlwimi rA,rS,32 � (b + n),b,(b + n) � 1
+C:\DocumentNoSnc\CC\GXEMUL\_scratchpad\ppc_pem_32and64_2005.txt:30064:n  SH r  ROTL[32](rS[32-63], n) m  MASK(MB + 32, ME + 32) rA  r & m
+C:\DocumentNoSnc\CC\GXEMUL\_scratchpad\ppc_pem_32and64_2005.txt:30142:n  rB[59-6327-31] r  ROTL[32](rS[32-63], n) m  MASK(MB + 32, ME + 32) rA  r & m
+C:\DocumentNoSnc\CC\GXEMUL\_scratchpad\ppc_pem_32and64_2005.txt:36458:rldimix 1
+C:\DocumentNoSnc\CC\GXEMUL\_scratchpad\ppc_pem_32and64_2005.txt:36493:rlwimix
+C:\DocumentNoSnc\CC\GXEMUL\_scratchpad\ppc_pem_32and64_2005.txt:37802:rlwimix
+C:\DocumentNoSnc\CC\GXEMUL\_scratchpad\ppc_pem_32and64_2005.txt:37924:rldimix 1
+C:\DocumentNoSnc\CC\GXEMUL\_scratchpad\ppc_pem_32and64_2005.txt:41277:rldimix 1
+C:\DocumentNoSnc\CC\GXEMUL\_scratchpad\ppc_pem_32and64_2005.txt:41281:rlwimix
+C:\DocumentNoSnc\CC\GXEMUL\_scratchpad\ppc_pem_32and64_2005.txt:47579:rlwimix
+C:\DocumentNoSnc\CC\GXEMUL\_scratchpad\ppc_pem_32and64_2005.txt:47655:Name 0 rldicx 1 rldiclx 1 rldicrx 1 rldimix 1
+C:\DocumentNoSnc\CC\GXEMUL\_scratchpad\ppc_pem_32and64_2005.txt:48624:rldimix
+C:\DocumentNoSnc\CC\GXEMUL\_scratchpad\ppc_pem_32and64_2005.txt:48655:rlwimix
+C:\DocumentNoSnc\CC\GXEMUL\_scratchpad\ppc_pem_32and64_2005.txt:49049:rldicr rldimi rldicl rldimi rldicl
+C:\DocumentNoSnc\CC\GXEMUL\_scratchpad\ppc_pem_32and64_2005.txt:49055:rlwinm rlwimi rlwinm rlwimi rlwinm
+C:\DocumentNoSnc\CC\GXEMUL\_scratchpad\ppc_pem_32and64_2005.txt:49085:rldimi rldicl rldimi rldicl rldicl
+C:\DocumentNoSnc\CC\GXEMUL\_scratchpad\ppc_pem_32and64_2005.txt:49091:rlwinm rlwimi rlwinm rlwimi rlwinm
+C:\DocumentNoSnc\CC\GXEMUL\_scratchpad\ppc_pem_32and64_2005.txt:49129:rldimi rldicl rldimi rldicl sradi
+C:\DocumentNoSnc\CC\GXEMUL\_scratchpad\ppc_pem_32and64_2005.txt:49135:rlwinm rlwimi rlwinm rlwimi srawi
+C:\DocumentNoSnc\CC\GXEMUL\_scratchpad\ppc_pem_32and64_2005.txt:50489:Equivalent to: rldicr rA,rS,b,n � 1 rldicl rA,rS,b + n, 64 � n rldimi rA,rS,64 � (b + n),b rldicl rA,rS,n,0 rldicl rA,rS,64 � n,0 rldcl rA,rS,rB,0 rldicr rA,rS,n,63 � n rldicl rA,rS,64 � n,n rldicl rA,rS,0,n rldicr rA,rS,0,63 � n rldic rA,rS,n,b � n
+C:\DocumentNoSnc\CC\GXEMUL\_scratchpad\ppc_pem_32and64_2005.txt:50507:(equivalent to rldimi rB,rA,63,0)
+C:\DocumentNoSnc\CC\GXEMUL\_scratchpad\ppc_pem_32and64_2005.txt:50528:Equivalent to: rlwinm rA,rS,b,0,n � 1 rlwinm rA,rS,b + n, 32 � n,31 rlwimi rA,rS,32 � b,b,(b + n) � 1 rlwimi rA,rS,32 � (b + n),b,(b + n) � 1 rlwinm rA,rS,n,0,31 rlwinm rA,rS,32 � n,0,31 rlwnm rA,rS,rB,0,31 rlwinm rA,rS,n,0,31 � n rlwinm rA,rS,32 � n,n,31 rlwinm rA,rS,0,n,31 rlwinm rA,rS,0,0,31 � n rlwinm rA,rS,n,b � n,31 � n
+C:\DocumentNoSnc\CC\GXEMUL\_scratchpad\ppc_pem_32and64_2005.txt:50540:(equivalent to rlwimi rB,rA,31,0,0)
+
+ succeeded in 136ms:
+209:	update_cr0(cpu, reg(ic->arg[0])); }
+211:	update_cr0(cpu, reg(ic->arg[1])); }
+213:	update_cr0(cpu, reg(ic->arg[2])); }
+278:	MODE_uint_t tmp = reg(ic->arg[0]) & (uint32_t)ic->arg[1];
+280:	update_cr0(cpu, tmp);
+313:	MODE_uint_t tmp = (int64_t)(int32_t)ic->arg[1];
+338:	update_cr0(cpu, (uint32_t)tmp2);
+354:	MODE_uint_t tmp, addr = cpu->cd.ppc.spr[SPR_LR];
+392:	MODE_uint_t tmp, addr = cpu->cd.ppc.spr[SPR_LR];
+443:	MODE_uint_t addr = cpu->cd.ppc.spr[SPR_CTR];
+470:	MODE_uint_t addr = cpu->cd.ppc.spr[SPR_CTR];
+532:	MODE_uint_t tmp;
+547:	MODE_uint_t tmp;
+591:	MODE_uint_t tmp;
+618:	MODE_uint_t tmp;
+988:	MODE_uint_t addr = reg(ic->arg[0]) + reg(ic->arg[1]);
+2431:X(rldicl)
+2499:		update_cr0(cpu, cpu->cd.ppc.gpr[ra]);
+2525:		update_cr0(cpu, tmp);
+2534:X(rldimi)
+2556:		update_cr0(cpu, cpu->cd.ppc.gpr[ra]);
+2567:X(rlwnm)
+2588:X(rlwinm)
+2608:X(rlwimi)
+2610:	MODE_uint_t tmp = reg(ic->arg[0]), ra = reg(ic->arg[1]);
+2632:		update_cr0(cpu, ra);
+2867:	MODE_uint_t old_pc;
+2889:	if ((MODE_uint_t)cpu->pc == old_pc)
+2946:	MODE_uint_t addr = reg(ic->arg[1]) + (int32_t)ic->arg[2];
+2975:	MODE_uint_t addr = reg(ic->arg[1]) + (int32_t)ic->arg[2];
+3015:	MODE_uint_t addr = reg(ic->arg[1]);
+3048:	MODE_uint_t addr = reg(ic->arg[1]);
+3819:	MODE_uint_t addr = reg(ic->arg[1]) + reg(ic->arg[2]);
+3852:	MODE_uint_t addr = reg(ic->arg[1]) + reg(ic->arg[2]);
+3977:	/*  MODE_uint_t vaddr = reg(ic->arg[0]);
+3978:	    MODE_uint_t paddr = cpu->cd.ppc.spr[SPR_RPA];  */
+
+ succeeded in 316ms:
+
+C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\regress\artifacts\ppcrldimimask\codex_design_20260910.txt
+C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\regress\artifacts\ppcrldimimask\codex_design_20260910.err
+C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\regress\artifacts\ppcrldimimask\brief_ppcsibs.md
+Name        Source                                                            
+----        ------                                                            
+python.exe  C:\Users\User00\AppData\Local\Programs\Python\Python312\python.exe
+python3.exe C:\Users\User00\AppData\Local\Microsoft\WindowsApps\python3.exe   
+
+
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n 'DYNTRANS_DUALMODE_32|define[ \\t]+reg\\(|define[ \\t]+MODE_uint_t|void update_cr0|update_cr0\\(' 'C:\\DocumentNoSnc\\CC\\GXEMUL\\GXEMUL-SEC\\src\\include\\cpu_ppc.h' 'C:\\DocumentNoSnc\\CC\\GXEMUL\\GXEMUL-SEC\\src\\cpus\\cpu_ppc.c' 'C:\\DocumentNoSnc\\CC\\GXEMUL\\GXEMUL-SEC\\src\\include\\cpu_dyntrans.h'
+Get-ChildItem -LiteralPath 'C:\\' -Name
+Get-ChildItem -LiteralPath 'C:\\Program Files' -Name
+Get-ChildItem -LiteralPath 'C:\\DocumentNoSnc\\CC\\GXEMUL\\GXEMUL-SEC' -Name" in C:\Users\User00\AppData\Local\Temp\claude\C--DocumentNoSnc-CC-GXEMUL\8e474f41-4d47-4c99-bf11-3406a84c4fcd\scratchpad
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$p = '"'C:\\DocumentNoSnc\\CC\\GXEMUL\\GXEMUL-SEC\\src\\cpus\\cpu_ppc_instr.c'
+"'$lines = Get-Content -LiteralPath $p
+foreach ($range in @(@(1,110),@(2405,2640))) { for ($n = $range[0]; $n -le $range[1]; $n++) { '"'{0}:{1}' -f "'$n,$lines[$n-1] } }
+rg -n '"'rlwimi|rlwinm|rlwnm|rldimi|MODE32|MASK' "'$p
+Get-Content -LiteralPath '"'C:\\DocumentNoSnc\\CC\\GXEMUL\\GXEMUL-SEC\\regress\\artifacts\\ppcrldimimask\\brief_ppcsibs.md'
+Get-Content -LiteralPath 'C:\\DocumentNoSnc\\CC\\GXEMUL\\GXEMUL-SEC\\regress\\artifacts\\ppcrldimimask\\codex_design_20260910.txt'" in C:\Users\User00\AppData\Local\Temp\claude\C--DocumentNoSnc-CC-GXEMUL\8e474f41-4d47-4c99-bf11-3406a84c4fcd\scratchpad
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$p = '"'C:\\DocumentNoSnc\\CC\\GXEMUL\\_scratchpad\\ppc_pem_32and64_2005.txt'
+"'$lines = Get-Content -LiteralPath $p
+foreach ($range in @(@(6850,6905),@(17085,17185),@(29850,30027),@(30050,30090),@(30128,30173))) { for ($n = $range[0]; $n -le $range[1]; $n++) { '"'{0}:{1}' -f "'$n,$lines[$n-1] } }' in C:\Users\User00\AppData\Local\Temp\claude\C--DocumentNoSnc-CC-GXEMUL\8e474f41-4d47-4c99-bf11-3406a84c4fcd\scratchpad
+ succeeded in 153ms:
+rg: C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\src\include\cpu_dyntrans.h: The system cannot find the file specified. (os error 2)
+C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\src\cpus\cpu_ppc.c:53:#define	DYNTRANS_DUALMODE_32
+C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\src\cpus\cpu_ppc.c:1799: *  update_cr0():
+C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\src\cpus\cpu_ppc.c:1803:void update_cr0(struct cpu *cpu, uint64_t value)
+C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\src\cpus\cpu_ppc.c:1842: *  cpu_ppc_instr.c: that file is compiled twice (DYNTRANS_DUALMODE_32), so a
+DocumentNoSnc
+games
+Intel
+PerfLogs
+Program Files
+Program Files (x86)
+tmp
+Users
+Windows
+WSL
+DumpStack.log
+Android
+Cloudflare
+Common Files
+CPUID
+dotnet
+Geeks3D
+Git
+HP
+HWiNFO64
+Intel
+Internet Explorer
+LevelZeroSDK
+Microsoft
+Microsoft GameInput
+Microsoft Office
+Microsoft Office 15
+Microsoft OneDrive
+Microsoft Update Health Tools
+ModifiableWindowsApps
+Mozilla Firefox
+MSBuild
+PuTTY
+Reference Assemblies
+Tailscale
+TAP-Windows
+TeamViewer
+VS Revo Group
+Windows Defender
+Windows Defender Advanced Threat Protection
+Windows Mail
+Windows Media Player
+Windows NT
+Windows Photo Viewer
+WindowsPowerShell
+WSL
+.git
+battery
+demos
+doc
+experiments
+GXEMUL-SEC
+man
+regress
+src
+test
+tools
+_scratchpad
+.gitignore
+CHANGELOG.md
+CHANGES.patch
+config.h
+configure
+diff_dis_sync_ovl
+diff_dis_sync_ovl.map
+grep.exe.stackdump
+gxemul
+HISTORY
+LICENSE
+Makefile
+Makefile.skel
+OUTSTANDING_BUGS.md
+README
+README.md
+REVIEW_FINDINGS.md
+
+ succeeded in 217ms:
+1:/*
+2: *  Copyright (C) 2005-2021  Anders Gavare.  All rights reserved.
+3: *
+4: *  Redistribution and use in source and binary forms, with or without
+5: *  modification, are permitted provided that the following conditions are met:
+6: *
+7: *  1. Redistributions of source code must retain the above copyright
+8: *     notice, this list of conditions and the following disclaimer.
+9: *  2. Redistributions in binary form must reproduce the above copyright  
+10: *     notice, this list of conditions and the following disclaimer in the 
+11: *     documentation and/or other materials provided with the distribution.
+12: *  3. The name of the author may not be used to endorse or promote products
+13: *     derived from this software without specific prior written permission.
+14: *
+15: *  THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+16: *  ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+17: *  IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+18: *  ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE   
+19: *  FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+20: *  DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+21: *  OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+22: *  HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+23: *  LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+24: *  OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+25: *  SUCH DAMAGE.
+26: *
+27: *
+28: *  POWER/PowerPC instructions.
+29: *
+30: *  Individual functions should keep track of cpu->n_translated_instrs.
+31: *  (If no instruction was executed, then it should be decreased. If, say, 4
+32: *  instructions were combined into one function and executed, then it should
+33: *  be increased by 3.)
+34: */
+35:
+36:
+37:#include "float_emul.h"
+38:
+39:/*  #330: which invalid-operation rule a two-operand op follows.  */
+40:#define	PPC_INVOP_ADD	0
+41:#define	PPC_INVOP_SUB	1
+42:#define	PPC_INVOP_MUL	2
+43:#define	PPC_INVOP_DIV	3
+44:
+45:#ifndef PPC_FP_CLASSIFY_INCLUDED
+46:#define PPC_FP_CLASSIFY_INCLUDED
+47:/*
+48: *  #330: operand CLASSIFICATION for the exception causes.
+49: *
+50: *  These read the RAW 64-bit pattern, never `struct ieee_float_value`, and
+51: *  that is forced rather than preferred: ieee_interpret_float_value() collapses
+52: *  every NaN to the host's NAN and takes a path that skips the sign, so the
+53: *  struct cannot tell a signalling NaN from a quiet one -- taking VXSNAN from
+54: *  its `nan` field would raise on every quiet NaN.
+55: *
+56: *  ppc_is_snan() also carries its own NaN-class guard. frsp tests the quiet
+57: *  bit bare, which is correct only because it sits inside an already-NaN
+58: *  branch; copied out of that context the same test calls INFINITY a
+59: *  signalling NaN, since Inf has an all-ones exponent and a clear bit 51.
+60: */
+61:static int ppc_is_nan(uint64_t x)
+62:{
+63:	return (x & 0x7ff0000000000000ULL) == 0x7ff0000000000000ULL
+64:	    && (x & 0x000fffffffffffffULL) != 0;
+65:}
+66:
+67:static int ppc_is_snan(uint64_t x)
+68:{
+69:	return ppc_is_nan(x) && !(x & 0x0008000000000000ULL);
+70:}
+71:
+72:static int ppc_is_inf(uint64_t x)
+73:{
+74:	return (x & 0x7fffffffffffffffULL) == 0x7ff0000000000000ULL;
+75:}
+76:
+77:static int ppc_is_zero(uint64_t x)
+78:{
+79:	return (x & 0x7fffffffffffffffULL) == 0;
+80:}
+81:
+82:/*
+83: *  The invalid-operation cause owed by a two-operand arithmetic instruction,
+84: *  as a mask for ppc_fpscr_raise(). Detection is from the OPERANDS, never from
+85: *  the host result: for an fmadd whose product overflows the host, the host
+86: *  computes a NaN while the ISA's unrounded intermediate is an infinity and no
+87: *  exception is owed at all, so a result-driven test would invent one.
+88: *
+89: *  A signalling operand takes precedence and is the only cause in that case
+90: *  for add/sub/mul; the class-specific causes apply to numerically invalid
+91: *  combinations of non-signalling operands.
+92: */
+93:static uint32_t ppc_invalid_cause(uint64_t a, uint64_t b, int op)
+94:{
+95:	if (ppc_is_snan(a) || ppc_is_snan(b))
+96:		return PPC_FPSCR_VXNAN;
+97:
+98:	/*  A quiet NaN operand propagates and raises nothing.  */
+99:	if (ppc_is_nan(a) || ppc_is_nan(b))
+100:		return 0;
+101:
+102:	switch (op) {
+103:	case PPC_INVOP_ADD:	/*  Inf + (-Inf)  */
+104:		if (ppc_is_inf(a) && ppc_is_inf(b)
+105:		    && ((a ^ b) >> 63) != 0)
+106:			return PPC_FPSCR_VXISI;
+107:		break;
+108:	case PPC_INVOP_SUB:	/*  Inf - Inf, same sign  */
+109:		if (ppc_is_inf(a) && ppc_is_inf(b)
+110:		    && ((a ^ b) >> 63) == 0)
+2405:
+2406:
+2407:/*
+2408: *  mfsrin, mtsrin:  Move From/To Segment Register Indirect
+2409: *
+2410: *  arg[0] = sr number, or for indirect mode: ptr to rb
+2411: *  arg[1] = ptr to rt
+2412: */
+2413:X(mfsr)
+2414:{
+2415:	/*  TODO: This only works for 32-bit mode  */
+2416:	reg(ic->arg[1]) = cpu->cd.ppc.sr[ic->arg[0]];
+2417:}
+2418:X(mfsrin)
+2419:{
+2420:	/*  TODO: This only works for 32-bit mode  */
+2421:	uint32_t sr_num = reg(ic->arg[0]) >> 28;
+2422:	reg(ic->arg[1]) = cpu->cd.ppc.sr[sr_num];
+2423:}
+2424:
+2425:
+2426:/*
+2427: *  rldicl:
+2428: *
+2429: *  arg[0] = copy of the instruction word
+2430: */
+2431:X(rldicl)
+2432:{
+2433:	int rs = (ic->arg[0] >> 21) & 31;
+2434:	int ra = (ic->arg[0] >> 16) & 31;
+2435:	int sh = ((ic->arg[0] >> 11) & 31) | ((ic->arg[0] & 2) << 4);
+2436:	int mb = ((ic->arg[0] >> 6) & 31) | (ic->arg[0] & 0x20);
+2437:	int rc = ic->arg[0] & 1;
+2438:	uint64_t tmp = cpu->cd.ppc.gpr[rs], tmp2;
+2439:	/*  TODO: Fix this, its performance is awful:  */
+2440:	while (sh-- != 0) {
+2441:		int b = (tmp >> 63) & 1;
+2442:		tmp = (tmp << 1) | b;
+2443:	}
+2444:	tmp2 = 0;
+2445:	while (mb <= 63) {
+2446:		/*  #522 (ppcrldiclzero): this was `tmp |=', so the MASK was
+2447:		    accumulated into the ROTATED VALUE and `tmp2' -- assigned 0
+2448:		    just above and never assigned again -- was still 0 at the AND
+2449:		    below.  THE DESTINATION WAS THEREFORE SET TO ZERO ON EVERY
+2450:		    EXECUTION, for every source, rotate amount and mask begin.
+2451:		    The `|=' also destroyed the rotated data by forcing every mask
+2452:		    bit to 1, which is moot only because the result was ANDed with
+2453:		    zero.  `rldicl' is the canonical 64-bit masking and zero-extend
+2454:		    instruction (`rldicl rA,rS,0,32' is the standard 32-bit
+2455:		    zero-extend), so this was wrong on the ordinary path for
+2456:		    ordinary compiler output.
+2457:
+2458:		    MEASURED at rung 3 BEFORE this edit, on unmodified -E bareppc:
+2459:		        artifacts/ppcrldiclzero/opus_ppc_rldicl_witness_20260910.py
+2460:		        witness_committed.out  -- 19/27, 190 of 190 census cells
+2461:		                                  wrong and all 190 returning zero
+2462:		        witness_fix.out        -- 24/27, 0 of 190 wrong
+2463:		    AND ON TWO MORE MACHINES, in a SEPARATE log -- an earlier draft
+2464:		    of this comment named all three here while citing only the
+2465:		    one-machine files above, which a pass-2 seat caught and then
+2466:		    re-measured rather than merely reporting:
+2467:		        pass2_20260910/opus_threemachine.log -- bareppc, testppc
+2468:		        and macppc -e g5 (the Power Mac G5, a PPC970 and therefore
+2469:		        64-bit), all three zero pre-fix and architectural post-fix
+2470:		    The wants come from the rldiclx RTL in the architecture manual,
+2471:		    not from this tree; the encodings were re-read by the tree's own
+2472:		    disassembler, a different code path from this handler.
+2473:
+2474:		    *** TWO EDITS TO THIS LINE PAIR ARE MEASURED WRONG, AND THEY
+2475:		    ARE WRONG IN DIFFERENT WAYS.  BOTH ARE TEMPTING. ***
+2476:		      * REPLACING the `&' with `|' ships ROTL64(rS,SH) |
+2477:		        MASK(MB,63) -- an OR where the architecture says AND -- and
+2478:		        gets 126 of 190 cells wrong.  Built and measured as the
+2479:		        M_NAIVE leg of killtable_20260910.
+2480:		      * DELETING the `& tmp2' outright now ships ROTL64 ALONE, with
+2481:		        the mask IGNORED.  (Before this fix it would have shipped
+2482:		        the OR, because the mask was in `tmp'; witness_naive.out
+2483:		        measured THAT function, not this one.  A warning written
+2484:		        against the old code would be a wrong record here, which is
+2485:		        what a pass-2 seat caught.)
+2486:		    Either is worse than the original defect in one specific way:
+2487:		    it removes the always-zero signature that makes this easy to
+2488:		    spot while leaving the value wrong.
+2489:
+2490:		    The sibling `rldicr' below is correct and shows the other
+2491:		    shape: it CLEARS bits in `tmp' and assigns `tmp' directly.
+2492:		    `rldimi' and `rlwimi' have their own separate defects, both
+2493:		    measured -- see the ppcrldimimask and ppcrlwimiwidth rows.  */
+2494:		tmp2 |= ((uint64_t)1 << (63-mb));
+2495:		mb ++;
+2496:	}
+2497:	cpu->cd.ppc.gpr[ra] = tmp & tmp2;
+2498:	if (rc)
+2499:		update_cr0(cpu, cpu->cd.ppc.gpr[ra]);
+2500:}
+2501:
+2502:
+2503:/*
+2504: *  rldicr:
+2505: *
+2506: *  arg[0] = copy of the instruction word
+2507: */
+2508:X(rldicr)
+2509:{
+2510:	int rs = (ic->arg[0] >> 21) & 31;
+2511:	int ra = (ic->arg[0] >> 16) & 31;
+2512:	int sh = ((ic->arg[0] >> 11) & 31) | ((ic->arg[0] & 2) << 4);
+2513:	int me = ((ic->arg[0] >> 6) & 31) | (ic->arg[0] & 0x20);
+2514:	int rc = ic->arg[0] & 1;
+2515:	uint64_t tmp = cpu->cd.ppc.gpr[rs];
+2516:	/*  TODO: Fix this, its performance is awful:  */
+2517:	while (sh-- != 0) {
+2518:		int b = (tmp >> 63) & 1;
+2519:		tmp = (tmp << 1) | b;
+2520:	}
+2521:	while (me++ < 63)
+2522:		tmp &= ~((uint64_t)1 << (63-me));
+2523:	cpu->cd.ppc.gpr[ra] = tmp;
+2524:	if (rc)
+2525:		update_cr0(cpu, tmp);
+2526:}
+2527:
+2528:
+2529:/*
+2530: *  rldimi:
+2531: *
+2532: *  arg[0] = copy of the instruction word
+2533: */
+2534:X(rldimi)
+2535:{
+2536:	uint32_t iw = ic->arg[0];
+2537:	int rs = (iw >> 21) & 31, ra = (iw >> 16) & 31;
+2538:	int sh = ((iw >> 11) & 31) | ((iw & 2) << 4);
+2539:	int mb = ((iw >> 6) & 31) | (iw & 0x20);
+2540:	int rc = ic->arg[0] & 1;
+2541:	int m;
+2542:	uint64_t tmp, s = cpu->cd.ppc.gpr[rs];
+2543:	/*  TODO: Fix this, its performance is awful:  */
+2544:	while (sh-- != 0) {
+2545:		int b = (s >> 63) & 1;
+2546:		s = (s << 1) | b;
+2547:	}
+2548:	m = mb; tmp = 0;
+2549:	do {
+2550:		tmp |= ((uint64_t)1 << (63-m));
+2551:		m ++;
+2552:	} while (m != 63 - sh);
+2553:	cpu->cd.ppc.gpr[ra] &= ~tmp;
+2554:	cpu->cd.ppc.gpr[ra] |= (tmp & s);
+2555:	if (rc)
+2556:		update_cr0(cpu, cpu->cd.ppc.gpr[ra]);
+2557:}
+2558:
+2559:
+2560:/*
+2561: *  rlwnm:
+2562: *
+2563: *  arg[0] = ptr to ra
+2564: *  arg[1] = mask
+2565: *  arg[2] = copy of the instruction word
+2566: */
+2567:X(rlwnm)
+2568:{
+2569:	uint32_t tmp, iword = ic->arg[2];
+2570:	int rs = (iword >> 21) & 31;
+2571:	int rb = (iword >> 11) & 31;
+2572:	int sh = cpu->cd.ppc.gpr[rb] & 0x1f;
+2573:	tmp = (uint32_t)cpu->cd.ppc.gpr[rs];
+2574:	tmp = sh ? ((tmp << sh) | (tmp >> (32-sh))) : tmp;
+2575:	tmp &= (uint32_t)ic->arg[1];
+2576:	reg(ic->arg[0]) = tmp;
+2577:}
+2578:DOT0(rlwnm)
+2579:
+2580:
+2581:/*
+2582: *  rlwinm:
+2583: *
+2584: *  arg[0] = ptr to ra
+2585: *  arg[1] = mask
+2586: *  arg[2] = copy of the instruction word
+2587: */
+2588:X(rlwinm)
+2589:{
+2590:	uint32_t tmp, iword = ic->arg[2];
+2591:	int rs = (iword >> 21) & 31;
+2592:	int sh = (iword >> 11) & 31;
+2593:	tmp = (uint32_t)cpu->cd.ppc.gpr[rs];
+2594:	tmp = sh ? ((tmp << sh) | (tmp >> (32-sh))) : tmp;
+2595:	tmp &= (uint32_t)ic->arg[1];
+2596:	reg(ic->arg[0]) = tmp;
+2597:}
+2598:DOT0(rlwinm)
+2599:
+2600:
+2601:/*
+2602: *  rlwimi:
+2603: *
+2604: *  arg[0] = ptr to rs
+2605: *  arg[1] = ptr to ra
+2606: *  arg[2] = copy of the instruction word
+2607: */
+2608:X(rlwimi)
+2609:{
+2610:	MODE_uint_t tmp = reg(ic->arg[0]), ra = reg(ic->arg[1]);
+2611:	uint32_t iword = ic->arg[2];
+2612:	int sh = (iword >> 11) & 31;
+2613:	int mb = (iword >> 6) & 31;
+2614:	int me = (iword >> 1) & 31;   
+2615:	int rc = iword & 1;
+2616:
+2617:	tmp = sh ? ((tmp << sh) | (tmp >> (32-sh))) : tmp;
+2618:
+2619:	for (;;) {
+2620:		uint64_t mask;
+2621:		mask = (uint64_t)1 << (31-mb);
+2622:		ra &= ~mask;
+2623:		ra |= (tmp & mask);
+2624:		if (mb == me)
+2625:			break;
+2626:		mb ++;
+2627:		if (mb == 32)
+2628:			mb = 0;
+2629:	}
+2630:	reg(ic->arg[1]) = ra;
+2631:	if (rc)
+2632:		update_cr0(cpu, ra);
+2633:}
+2634:
+2635:
+2636:/*
+2637: *  srawi:
+2638: *
+2639: *  arg[0] = ptr to rs
+2640: *  arg[1] = ptr to ra
+1002:#ifdef MODE32
+1357: *  (an IEEE_RM_* value, which for this CPU is just `fpscr & PPC_FPSCR_RN_MASK`).
+1601:		    cpu->cd.ppc.fpscr & PPC_FPSCR_RN_MASK);
+1742:	    cpu->cd.ppc.fpscr & PPC_FPSCR_RN_MASK);
+1779:	result = ieee_mul_round_rm(fra.f, frc.f, (cpu->cd.ppc.fpscr & PPC_FPSCR_RN_MASK));
+2119:	result = ieee_add_round_rm(fra.f, frb.f, (cpu->cd.ppc.fpscr & PPC_FPSCR_RN_MASK));
+2175:	result = ieee_add_round_rm(fra.f, -frb.f, (cpu->cd.ppc.fpscr & PPC_FPSCR_RN_MASK));
+2239:	result = ieee_div_round_rm(fra.f, frb.f, (cpu->cd.ppc.fpscr & PPC_FPSCR_RN_MASK));
+2446:		/*  #522 (ppcrldiclzero): this was `tmp |=', so the MASK was
+2477:		        MASK(MB,63) -- an OR where the architecture says AND -- and
+2492:		    `rldimi' and `rlwimi' have their own separate defects, both
+2493:		    measured -- see the ppcrldimimask and ppcrlwimiwidth rows.  */
+2530: *  rldimi:
+2534:X(rldimi)
+2561: *  rlwnm:
+2567:X(rlwnm)
+2578:DOT0(rlwnm)
+2582: *  rlwinm:
+2588:X(rlwinm)
+2598:DOT0(rlwinm)
+2602: *  rlwimi:
+2608:X(rlwimi)
+3087:#ifdef MODE32
+3095:#ifdef MODE32
+3103:#ifdef MODE32
+3402:#ifdef MODE32
+3526:#ifdef MODE32
+3543:#ifdef MODE32
+3568:#ifdef MODE32
+3581:#ifdef MODE32
+3599:#ifdef MODE32
+3616:#ifdef MODE32
+3641:#ifdef MODE32
+3654:#ifdef MODE32
+3676:#ifdef MODE32
+3702:#ifdef MODE32
+3714:#ifdef MODE32
+3743:#ifdef MODE32
+3775:#ifdef MODE32
+3789:#ifdef MODE32
+3801:#ifdef MODE32
+4070:#ifdef MODE32
+4307:#ifdef MODE32
+4527:			ic->f = rc? instr(rlwnm_dot) : instr(rlwnm); break;
+4529:			ic->f = rc? instr(rlwinm_dot) : instr(rlwinm); break;
+4539:		ic->f = instr(rlwimi);
+4576:			case PPC_30_RLDIMI: ic->f = instr(rldimi); break;
+4965:#ifdef MODE32
+# `ppcrldimimask` + `ppcrlwimiwidth` -- two MEASURED defects in one instruction family: the fix designs
+
+Nonce: `CODEX_PPCSIBS_20260910`. Open with `VERDICT:` giving the exact edit for EACH site separately,
+then echo the nonce.
+
+Ordinary correctness maintenance on a CPU model in an emulator written in C99. **The tree is
+`C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\`**; three unrelated 2021-vintage copies sit elsewhere under the
+project root. **Verdict line first.**
+
+**Please do not simply ratify.** Four briefs of mine this week had premises refuted by a seat that opened
+the file, and every refutation improved the round. **Check the premises, not just the derivations.** In
+particular the two "measured" results below came from a seat, and I have not re-derived either myself.
+
+## CONTEXT: a third defect in the same family is already fixed
+
+`X(rldicl)` was writing ZERO to its destination on every execution -- the mask was accumulated into the
+rotated value while the destination got `tmp & tmp2` and `tmp2` was never anything but 0. Witnessed at
+rung 3, 190 of 190 census cells wrong, repaired by one character. **The sibling audit that came with that
+witness found two MORE live defects, and this brief is about those two.**
+
+## SITE A -- `ppcrldimimask`, in `X(rldimi)`
+
+```c
+while (sh-- != 0) { ... rotate ... }        /*  post-decrement leaves sh == -1  */
+m = mb; tmp = 0;
+do { tmp |= ((uint64_t)1 << (63-m)); m ++; } while (m != 63 - sh);
+```
+
+`while (sh-- != 0)` **always** exits with `sh == -1`, so `63 - sh` is **always 64** and the mask always
+runs to bit 63. The architecture requires the mask to END AT `63 - SH`. Measured, destination seeded 0
+and an all-ones source: `SH=8` and `SH=32` both give all-ones where the low byte / low word should have
+been PRESERVED; `SH=0` agrees and is the one safe case. **This is the standard bitfield insert, so a
+compiler splicing a field destroys everything to the right of it.**
+
+## SITE B -- `ppcrlwimiwidth`, in `X(rlwimi)`
+
+```c
+MODE_uint_t tmp = reg(ic->arg[0]), ra = reg(ic->arg[1]);
+tmp = sh ? ((tmp << sh) | (tmp >> (32-sh))) : tmp;
+```
+
+`cpu_ppc.c` defines `DYNTRANS_DUALMODE_32`, so this file is compiled twice and `MODE_uint_t` is
+**`uint64_t`** in the 64-bit build. The architecture specifies a 32-bit rotate over the source's LOW half
+only. The right-shift pulls high-half bits into the low 32 bits, where the mask lives. Measured with
+source `0xAAAAAAAA0000000F`, shift 4: `got 0x5a5a5a5aaaaaaaf0`, `want 0x5a5a5a5a000000f0`. **Its siblings
+`rlwinm` and `rlwnm` cast to `uint32_t` before rotating and are correct; this one never does.**
+
+## THE QUESTIONS
+
+1. **PREMISES AS QUESTIONS -- re-derive both from the source and the architecture manual**
+   (`_scratchpad/ppc_pem_32and64_2005.txt` is local; the rldimix and rlwimix RTL is what settles it).
+   Is `sh` really always -1 at that point? Is `MODE_uint_t` really 64-bit in the 64-bit build here? **If
+   either reading is wrong the round collapses and I want to know.**
+2. **THE EXACT EDIT FOR EACH.** For Site A I am told the durable repair is to SAVE `sh` before the rotate
+   loop rather than to patch the `63 - sh` expression, because the same `while (sh-- != 0)` idiom appears
+   in `rldicl`, `rldicr` and `rldimi` and any future edit reaching for `sh` after the loop will be wrong
+   the same way. Do you agree, and does saving it change anything else in those handlers? For Site B, is
+   truncating to `uint32_t` before the rotate sufficient, or does the mask/merge below also need
+   attention?
+3. **ARE THESE ONE ROUND OR TWO?** This project takes ONE site per round; a second joins only if it is
+   the same semantic class under one fix design with one detector. They are in the same file and the same
+   instruction family but have different root causes (a clobbered loop variable versus a missing
+   truncation). Say which way you would split them and why.
+4. **WHAT ELSE IN THIS FAMILY IS WRONG?** `rldicr`, `rlwnm`, `rlwinm` are reported CORRECT and `rldic`,
+   `rldcl`, `rldcr` reported NOT IMPLEMENTED AT ALL (the decoder's default swallows them). **Re-check all
+   six.** An unimplemented but documented, compiler-emitted instruction is its own filing.
+5. **THE DETECTOR.** The floor needs failure on the pre-fix build, on a verbatim reinstatement, on a null
+   medium, and on a NULLED REPAIR. Name the rows and per row the mutant it kills and the observable that
+   differs. **Two traps measured today, both worth routing around:** a row is VACUOUS here exactly when
+   the selected window of the rotated source is all zeros, so choose a source where every mask window is
+   non-empty; and for Site B a row is vacuous unless the source's two halves DIFFER, because with an
+   all-ones source a 64-bit rotate and a true 32-bit one agree bit for bit. **The measuring seat's own
+   first draft hit the second trap and corrected it rather than shipping a green row.**
+6. **THE GATE HOLE.** No gate in this tree instantiates a 64-bit PowerPC CPU at all -- both PowerPC gates
+   drive a 32-bit part, and the decoder sends the whole 64-bit group to its bad path in that mode. So
+   these defects are invisible to the gates BY CONSTRUCTION. What is the smallest gate change that would
+   close it for the whole family, and is it a rider on these rounds or its own harness round?
+7. If you found something else, say so.
+
+Read-only: no builds, no probe runs, no edits, no patches. Prose and tables only.
+VERDICT: **Site A:** preserve decoded `sh`, rotate with a separate `int n = sh` and `while (n-- != 0)`, replace `m ++` with `m = (m + 1) & 63`, and change the mask-loop condition to `m != ((64 - sh) & 63)`. **Site B:** replace the combined declaration with `uint32_t tmp = (uint32_t)reg(ic->arg[0]);` and `MODE_uint_t ra = reg(ic->arg[1]);`. For complete wrapping-mask behavior, also add `if (mb > me) ra = (ra & 0xffffffffULL) | ((uint64_t)tmp << 32);` **after rotation, before the existing mask loop**.
+
+`CODEX_PPCSIBS_20260910`
+
+Both central defect premises hold. However, saving `sh` alone is insufficient, truncation alone leaves another defect, and **`rlwinm` and `rlwnm` are not universally correct**.
+
+I inspected the specified `GXEMUL-SEC` tree. The manual is actually in its parent directory�?Ts `_scratchpad`. No builds, probes, edits, or patches were performed. The detector results below are source-derived predictions; the existing [witness recording](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/ppcrldiclzero/witness_committed.out:24) agrees with the three quoted measurements.
+
+**For Site A, the post-decrement premise is exact.** [The handler](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc_instr.c:2521) decodes a signed `int sh` in `0..63`. Its final condition evaluates the old value zero and then decrements it to �^'1. This happens even for `SH=0`. Consequently, the existing mask always covers architectural bits `MB..63`.
+
+The [rldimix RTL](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ppc_pem_32and64_2005.txt:29908) requires `MASK(MB,63-SH)`. The manual�?Ts [mask definition](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ppc_pem_32and64_2005.txt:6878) makes both endpoints inclusive and wraps through bit 63 to bit 0 when the beginning exceeds the end.
+
+That exposes two problems with �?osave `sh`, then retain the mask loop�??:
+
+- Its condition compares the **incremented** position with the inclusive endpoint. It stops one bit early where it terminates normally.
+- It never wraps. Other operand combinations can run beyond bit 63 and evaluate invalid shift counts.
+
+The verdict�?Ts condition uses the position **after** the endpoint, modulo 64. Together with the modulo increment and existing `do` body, it handles ordinary, singleton, wrapping, and full-width masks in 1�?"64 iterations.
+
+I favor keeping the architectural operand intact�?"preferably declaring `sh` as `const`�?"and consuming a separate counter. Merely saving another copy while continuing to destroy `sh` leaves the future-reader hazard you identified. Applying the separate-counter change to `rldicl` and `rldicr` would preserve their current results: neither uses `sh` afterward. It is optional cleanup, not a necessary repair at those sites.
+
+`SH=0` is the only shift for which the current **mask is correct for every source and destination**. Other shifts can still produce coincidentally correct values.
+
+**For Site B, the width premise also holds.** [cpu_ppc.c](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc.c:53) enables the dual compilation. [tmp_ppc_tail.c](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/tmp_ppc_tail.c:51) explicitly defines both `reg` and `MODE_uint_t` as 64-bit for the first inclusion, then supplies their 32-bit versions for the second. CPU initialization selects the corresponding execution path.
+
+The offending expression has 64-bit operands while retaining the complementary shift `32-sh`. For nonzero shift `n`, source halves `H:L`, and correct rotated low word `w`, its low-word result is:
+
+`w | ((H << n) & 0xffffffff)`
+
+With your source and shift, `w=0x000000f0`, while the extra contribution is `0xaaaaaaa0`. Thus the quoted `0xaaaaaaf0` low word follows directly.
+
+The split declaration fixes that contamination. Narrowing **after** the expression does not. Keeping `ra` as `MODE_uint_t` is essential: changing both variables to `uint32_t` would discard destination bits that must survive.
+
+There is also a separate **wrapping-mask defect**. The [rlwimix RTL](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ppc_pem_32and64_2005.txt:29989) combines:
+
+- A rotated word duplicated into both halves of a 64-bit intermediate.
+- `MASK(MB+32,ME+32)` over 64 positions.
+
+When `MB>ME`, that mask includes **the entire upper word**. The current loop only visits the lower word. The additional verdict edit supplies precisely the missing upper-word insertion; its condition must precede the loop because the loop changes `mb`. The existing lower-word merge can remain.
+
+The local PEM contains a conflicting blanket upper-clearing sentence in its `rlwinm` prose. Its RTL and general definitions agree with IBM�?Ts contemporary Book I, which specifies the duplicated rotation and wrapping 64-bit mask without that blanket statement. That is the interpretation used here. [PowerPC UISA v2.02, pp. 71�?"76](https://powerpc.dev/general/PPC_Vers202_Book1_public.pdf)
+
+The six sibling findings are therefore:
+
+| Instruction | Source-derived finding |
+|---|---|
+| `rldicr` | Its rotation and destination value are correct. The clearing loop removes bits `ME+1..63`, including the boundary cases. Record-form qualification appears below. |
+| `rlwnm` | Correct low-word rotation, including extraction of the low five shift bits. **Incorrect upper word for wrapping masks on a 64-bit implementation.** |
+| `rlwinm` | Correct low-word rotation. **The same wrapping-mask upper-word defect.** |
+| `rldic` | Unimplemented: MD secondary opcode 2 reaches the decoder default. |
+| `rldcl` | Unimplemented: MDS secondary opcode 8 becomes 4 under the current three-bit extraction and reaches default. |
+| `rldcr` | Unimplemented: MDS secondary opcode 9 also becomes 4 and reaches default. |
+
+The word siblings truncate the rotation result, apply a lower-word mask, and write a zero-extended result. Their shared [decoder mask construction](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc_instr.c:4499) cannot represent the required upper bits.
+
+A concrete counterexample for **each** is source `0xaaaaaaaa0000000f`, shift zero, `MB=31, ME=0`: the architectural result is `0x0000000f00000001`; the implementation produces `0x0000000000000001`.
+
+The missing doubleword instructions reach [the default at line 4573](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc_instr.c:4553). They are not silently executed as no-ops: the shared [bad path](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1983) reports `UNIMPLEMENTED` and stops the emulated CPU.
+
+Ordinary compiler generation is directly supported for `rldic` by [LLVM�?Ts selector](https://raw.githubusercontent.com/llvm/llvm-project/main/llvm/lib/Target/PowerPC/PPCISelDAGToDAG.cpp), and for `rldcl` by its variable-rotate [selection pattern](https://raw.githubusercontent.com/llvm/llvm-project/main/llvm/lib/Target/PowerPC/PPCInstr64Bit.td). I verified `rldcr`�?Ts architectural definition and missing implementation; its presence in compiler instruction descriptions alone does not establish routine compiler emission.
+
+**I would split the filings as follows.**
+
+| Filing | Scope and reason |
+|---|---|
+| `ppcrldimimask` | Preserve the shift operand and implement the inclusive, wrapping doubleword mask. |
+| `ppcrlwimiwidth` | Truncate the source before word rotation. Different cause and discriminator from Site A. |
+| Word-mask wrap defect | The upper-word omission shared by `rlwimi`, `rlwinm`, and `rlwnm`. These three qualify for consideration together under one full-width rotation/mask design and detector. |
+| Missing instructions | Separate implementation filings from the value defects. |
+| PPC64 harness coverage | Separate harness round, with each repair contributing its own regression rows. |
+
+Thus **A and B are two rounds**. For bookkeeping, the declaration edit and additional upper-word edit in the verdict belong to the width and wrap filings respectively.
+
+**The detector needs mutant-specific observability.** The proposed �?ovacuous exactly when the selected source window is zero�?? rule does not hold generally for insert instructions.
+
+For correct mask `M`, rotated source `R`, and initial destination `D`:
+
+- A no-op differs precisely when `((R ^ D) & M) != 0`.
+- A wrong-mask mutant using `N` differs precisely when `((R ^ D) & (M ^ N)) != 0`.
+- A zero-writing mutant differs when the correct complete destination is nonzero.
+
+A zero source window can therefore be useful when the operation should **clear seeded destination bits**. Conversely, a nonzero window can be useless against a no-op when the destination already matches it.
+
+For Site B�?Ts contamination, differing source halves are necessary but insufficient. The extra high-half contribution must set a selected bit that the correct rotated word leaves clear. In particular, no single source can both make every possible singleton low-word window nonzero and discriminate this contamination: that would require an all-ones rotated low word.
+
+Here is a concrete floor. Hexadecimal results use `high32_low32`. Define `F=ffffffff_ffffffff` and `Z=5a5a5a5a_5a5a5a5a`.
+
+For A, use `S=F, D=0` except where specified:
+
+| Row | Operands | Architectural destination | Mutant and differing observable |
+|---|---|---|---|
+| `A8` | `SH=8, MB=0` | `ffffffff_ffffff00` | Pre-fix, verbatim reinstatement, or repaired counter with mask end forced back to 63: `ffffffff_ffffffff`. |
+| `A32` | `SH=32, MB=0` | `ffffffff_00000000` | Same mutants: `ffffffff_ffffffff`; also detects loss of the high shift-encoding bit. |
+| `A0_LAST` | `SH=0, MB=0` | `ffffffff_ffffffff` | Save-only repair retaining the old termination expression: `ffffffff_fffffffe`. |
+| `A_SINGLE` | `SH=8, MB=55` | `00000000_00000100` | Treating equal endpoints as an empty mask gives zero; original gives `00000000_000001ff`. |
+| `A_WRAP` | `SH=8, MB=60` | `ffffffff_ffffff0f` | Original/nonwrapping tail gives `00000000_0000000f`; the witness�?Ts intersection oracle gives zero. |
+| `A_DATA` | `S=01234567_89abcdef, D=Z; SH=8, MB=16` | `5a5a6789_abcdef5a` | Removing rotation gives `5a5a4567_89abcd5a`; discarding destination preservation gives `00006789_abcdef00`. |
+
+For B, use `D=Z`:
+
+| Row | Source; `SH,MB,ME` | Architectural destination | Mutant and differing observable |
+|---|---|---|---|
+| `B_BLEED` | `aaaaaaaa_0000000f`; `4,0,31` | `5a5a5a5a_000000f0` | Pre-fix, verbatim reinstatement, or narrowing only after rotating the original source: `5a5a5a5a_aaaaaaf0`. Narrowing `ra` loses the upper sentinel. |
+| `B_SHIFT31` | `ffffffff_00000002`; `31,0,31` | `5a5a5a5a_00000001` | Untruncated rotation gives `5a5a5a5a_80000001`. |
+| `B_PARTIAL` | `aaaaaaaa_f0f0f0f0`; `4,8,15` | `5a5a5a5a_5a0f5a5a` | Untruncated rotation gives `5a5a5a5a_5aaf5a5a`; replacing the whole low word destroys the surrounding `5a` bytes. |
+| `B_WRAP0` | `aaaaaaaa_0000000f`; `0,31,0` | `0000000f_5a5a5a5b` | Original and truncation-only repair retain upper word `5a5a5a5a`. This isolates the wrap defect without rotation contamination. |
+| `B_WRAP4` | `aaaaaaaa_f0f0f0f0`; `4,24,7` | `0f0f0f0f_0f5a5a0f` | Truncation-only repair retains upper word `5a5a5a5a`; copying the unrotated low word upward gives `f0f0f0f0`. |
+
+Every listed correct destination is nonzero and differs from its seed. Thus the value rows also reject **nulled repairs** that retain the new declarations/counter but remove the destination update or substitute a zero result. `A_DATA` additionally prevents an all-ones mask census from blessing a deleted rotation.
+
+The apparatus needs its own rows and acceptance rules:
+
+| Row/control | Mutant or failure it rejects | Required observable |
+|---|---|---|
+| `LIVE` | Null execution medium | A separate `li` changes a seeded register to `0x1234`. |
+| `SEED_HOLDS` | Readback that fabricates zeros | An untouched register retains `Z` across an unrelated instruction. |
+| `NULL_MEDIUM` | Empty transcript, absent machine, or absent execution | Feeding that medium to the same detector returns failure; missing registers never default to expected values. |
+| `ROW_MANIFEST` | Deleted rows, early termination, empty census | Every required named row occurs exactly once, with valid readback and completion. |
+| `ENCODING` | Wrong instruction or operands | Instruction bytes and decoded operands match the intended row. |
+
+Also include nonwrapping `SH=0` pins, source/destination alias cases, Rc-clear preservation, Rc-set CR0 checks, and the word rows on a 32-bit CPU. Those distinguish repairs that fix one result while breaking adjacent behavior.
+
+**The gate premise is too broad literally, but the correctness gap is real.** Both dedicated PowerPC probes select `macppc/g4`, whose default is the 32-bit MPC7400. However, [gate_asan_sweep.sh](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gate_asan_sweep.sh:339) enumerates machine types and subtypes. That includes 64-bit configurations such as `bareppc`, whose [default CPU is PPC970](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/machines/machine_test.c:448), and `macppc/g5`. Construction and sanitizer observations provide no architectural-value oracle for these instructions.
+
+The smallest sound change is **one additional mandatory PPC970 session called by an existing PowerPC gate**, using `bareppc` and an offline instruction stream. Keep the existing G4 session. Merely selecting G5 for the floating-point probes would still leave this family untested. Also, `-M 64` specifies RAM, not CPU width.
+
+That session should execute a fixed table covering all nine instructions, wrapping and nonwrapping masks, boundary shifts, and record forms. Check CPU identity, explicitly establish/read back `MSR[SF]` for mode-sensitive expectations, and require the manifest above. The three missing instructions and newly identified wrap defects will initially fail their architectural rows; they cannot be counted as covered passing functionality.
+
+Two further findings matter:
+
+First, the existing [witness oracle](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/ppcrldiclzero/opus_ppc_rldicl_witness_20260910.py:129) computes `rldimi`�?Ts mask by intersecting two nonwrapping masks, returning zero for wrapping cases. Its `mask32` also excludes the upper word from wrapping word masks. **Its quoted measurements remain valid because those rows use nonwrapping masks; its oracle should not be reused unchanged for the expanded audit.**
+
+Second, [update_cr0](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc.c:1803) chooses comparison width from CPU-model `bits`, rather than `MSR[SF]`. On PPC970 with `SF=0`, source `0x0000000080000000`, `rlwinm.` with `SH=0, MB=0, ME=31`, and `XER.SO=0`, the destination is correct but the helper predicts CR0=`4` (GT), whereas 32-bit computation mode requires CR0=`8` (LT). This is a separate shared record-form defect, including a qualification on otherwise-correct `rldicr`. The architectural mode distinction is explicit in the [local manual](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ppc_pem_32and64_2005.txt:6698).
+
+ succeeded in 505ms:
+6850:
+6851:cntlzd cntlzd.
+6852:
+6853:Operand Syntax rA,rS,rB rA,rS rA,rS rA,rS rA,rS rA,rS
+6854:
+6855:Operation
+6856:The contents of rS are ORed with the complement of the contents of rB and the result is placed into rA. orc OR with Complement orc. OR with Complement with CR Update. The dot suffix enables the
+6857:update of the CR.
+6858:The contents of the low-order eight bits of rS are placed into the low-order eight bits of rA. Bit [56] of rS (bit [24] in 32-bit implementations) is placed into the remaining high-order bits of rA. extsb Extend Sign Byte extsb. Extend Sign Byte with CR Update. The dot suffix enables the
+6859:update of the CR.
+6860:The contents of the low-order 16 bits of rS are placed into the low-order 16 bits of rA. Bit [48] of rS (bit [16] in 32-bit implementations) is placed into the remaining high-order bits of rA. extsh Extend Sign Half-word extsh. Extend Sign Half-word with CR Update. The dot suffix enables
+6861:the update of the CR.
+6862:The contents of the low-order 32 bits of rS are placed into the low-order 32 bits of rA. Bit [32] of rS is placed into the remaining high-order bits of rA. extsw Extend Sign Word extsw. Extend Sign Word with CR Update. The dot suffix enables the
+6863:update of the CR.
+6864:A count of the number of consecutive zero bits starting at bit [32] of rS (bit [0] in 32-bit implementations) is placed into rA. This number ranges from 0 to 32, inclusive. If Rc = 1 (dot suffix), LT is cleared in CR0. cntlzw Count Leading Zeros Word cntlzw. Count Leading Zeros Word with CR Update. The dot suffix
+6865:enables the update of the CR.
+6866:A count of the number of consecutive zero bits starting at bit [0] of rS is placed into rA. This number ranges from 0 to 64, inclusive. If Rc = 1 (dot suffix), LT is cleared in CR0. cntlzd Count Leading Zeros Double Word cntlzd. Count Leading Zeros Double Word with CR Update. The dot suf-
+6867:fix enables the update of the CR.
+6868:
+6869:Addressing Modes and Instruction Set Summary
+6870:Page 144 of 721
+6871:
+6872:pem4_instr_Set.fm.2.3 March 31, 2005
+6873:
+6874:Programming Environments Manual
+6875:PowerPC RISC Microprocessor Family
+6876:4.2.1.4 Integer Rotate and Shift Instructions
+6877:Rotation operations are performed on data from a GPR, and the result, or a portion of the result, is returned to a GPR. The rotation operations rotate a 64-bit quantity left by a specified number of bit positions. Bits that exit from position 0 enter at position 63.
+6878:Two types of rotation operation are supported: 1. ROTL64 or rotate64 - the value rotated is the given 64-bit value. The rotate64 operation is used to rotate a given 64-bit quantity. 2. ROTL32 or rotate32 - the value rotated consists of two copies of bits [32-63] of the given 64-bit value, one copy in bits [0-31] and the other in bits [32-63]. The rotate32 operation is used to rotate a given 32-bit quantity.
+6879:The rotate and shift instructions employ a mask generator. The mask is 64 bits long and consists of `1' bits from a start bit, Mstart, through and including a stop bit, Mstop, and `0' bits elsewhere. The values of Mstart and Mstop range from 0 to 63. If Mstart > Mstop, the `1' bits wrap around from position 63 to position 0. Thus the mask is formed as follows:
+6880:if Mstart  Mstop then mask[mstart-mstop] = ones mask[all other bits] = zeros
+6881:else mask[mstart-63] = ones mask[0-mstop] = ones mask[all other bits] = zeros
+6882:It is not possible to specify an all-zero mask. The use of the mask is described in the following sections.
+6883:If CR updating is enabled, rotate and shift instructions set CR0[0-2] according to the contents of rA at the completion of the instruction. Rotate and shift instructions do not change the values of XER[OV] and XER[SO] bits. Rotate and shift instructions, except algebraic right shifts, do not change the XER[CA] bit.
+6884:See Appendix E Simplified Mnemonics for a complete list of simplified mnemonics that allows simpler coding of often-used functions such as clearing the leftmost or rightmost bits of a register, left justifying or right justifying an arbitrary field, and simple rotates and shifts.
+6885:Integer Rotate Instructions
+6886:Integer rotate instructions rotate the contents of a register. The result of the rotation is either inserted into the target register under control of a mask (if a mask bit is 1 the associated bit of the rotated data is placed into the target register, and if the mask bit is 0 the associated bit in the target register is unchanged), or ANDed with a mask before being placed into the target register.
+6887:Rotate left instructions allow right-rotation of the contents of a register to be performed by a left-rotation of 64 - n, where n is the number of bits by which to rotate right. It also allows right-rotation of the contents of the low-order 32 bits of a register to be performed by a left-rotation of 32 - n, where n is the number of bits by which to rotate right.
+6888:The integer rotate instructions are summarized in Table 4-4
+6889:
+6890:pem4_instr_Set.fm.2.3 March 31, 2005
+6891:
+6892:Addressing Modes and Instruction Set Summary
+6893:Page 145 of 721
+6894:
+6895:Programming Environments Manual PowerPC RISC Microprocessor Family
+6896:
+6897:.
+6898:Table 4-4. Integer Rotate Instructions
+6899:
+6900:Name
+6901:
+6902:Mnemonic
+6903:
+6904:Rotate Left Double Word Immediate rldicl then Clear Left rldicl. (64-bit only)
+6905:
+17085:
+17086:(rX)
+17087:
+17088:The contents of rX
+17089:
+17090:x[n]
+17091:
+17092:n is a bit or field within x, where x is a register
+17093:
+17094:xn
+17095:
+17096:x is raised to the nth power
+17097:
+17098:ABS(x)
+17099:
+17100:Absolute value of x
+17101:
+17102:CEIL(x)
+17103:
+17104:Least integer  x
+17105:
+17106:pem8.fm.2.3 March 31, 2005
+17107:
+17108:Instruction Set
+17109:Page 349 of 721
+17110:
+17111:Programming Environments Manual PowerPC RISC Microprocessor Family
+17112:
+17113:Table 8-3. Notation and Conventions (Continued)
+17114:
+17115:Notation/Convention Characterization
+17116:CIA
+17117:Clear Clear left and shift left Cleared Do DOUBLE(x) Extract EXTS(x) GPR(x) if...then...else...
+17118:Insert
+17119:Leave MASK(x, y) MEM(x, y)
+17120:NIA
+17121:OEA Rotate ROTL[64](x, y) ROTL[32](x, y) Set Shift SINGLE(x)
+17122:
+17123:Meaning
+17124:Reference to the setting of status bits in a standard way that is explained in the text.
+17125:Current instruction address. The 64 or 32-bit address of the instruction being described by a sequence of pseudocode. Used by relative branches to set the next instruction address (NIA) and by branch instructions with LK = 1 to set the link register. Note: In 32-bit mode of 64-bit implementations, the high-order 32 bits of CIA are always cleared. Does not correspond to any architected register.
+17126:Clear the leftmost or rightmost n bits of a register to 0. This operation is used for rotate and shift instructions.
+17127:Clear the leftmost b bits of a register, then shift the register left by n bits. This operation can be used to scale a known non-negative array index by the width of an element. These operations are used for rotate and shift instructions.
+17128:Bits are set to 0.
+17129:Do loop. � Indenting shows range. � "To" and/or "by" clauses specify incrementing an iteration variable. � "While" clauses give termination conditions.
+17130:Result of converting x from floating-point single-precision format to floating-point double-precision format.
+17131:Select a field of n bits starting at bit position b in the source register, right or left justify this field in the target register, and clear all other bits of the target register to zero. This operation is used for rotate and shift instructions.
+17132:Result of extending x on the left with sign bits
+17133:General purpose register x
+17134:Conditional execution, indenting shows range, else is optional.
+17135:Select a field of n bits in the source register, insert this field starting at bit position b of the target register, and leave other bits of the target register unchanged. (No simplified mnemonic is provided for insertion of a field when operating on double-words; such an insertion requires more than one instruction.) This operation is used for rotate and shift instructions. Note: Simplified mnemonics are referred to as extended mnemonics in the architecture specification.
+17136:Leave innermost do loop, or the do loop described in leave statement.
+17137:Mask having ones in positions x through y (wrapping if x > y) and zeros elsewhere.
+17138:Contents of y bytes of memory starting at address x. Note: In 32-bit mode of a 64-bit implementation, the high-order 32 bits of the 64-bit value x are ignored.
+17139:Next instruction address, which is the 64- or 32-bit address of the next instruction to be executed (the branch destination) after a successful branch. In pseudocode, a successful branch is indicated by assigning a value to NIA. For instructions which do not branch, the next instruction address is CIA + 4. Note: In 32-bit mode of 64-bit implementations, the high-order 32 bits of NIA are always cleared. Does not correspond to any architected register.
+17140:PowerPC operating environment architecture
+17141:Rotate the contents of a register right or left n bits without masking. This operation is used for rotate and shift instructions.
+17142:Result of rotating the 64-bit value x left y positions
+17143:Result of rotating the 64-bit value x || x left y positions, where x is 32 bits long
+17144:Bits are set to 1.
+17145:Shift the contents of a register right or left n bits, clearing vacated bits (logical shift). This operation is used for rotate and shift instructions.
+17146:Result of converting x from floating-point double-precision format to floating-point single-precision format.
+17147:
+17148:Instruction Set
+17149:Page 350 of 721
+17150:
+17151:pem8.fm.2.3 March 31, 2005
+17152:
+17153:Programming Environments Manual PowerPC RISC Microprocessor Family
+17154:
+17155:Table 8-3. Notation and Conventions (Continued)
+17156:
+17157:Notation/Convention SPR(x) TRAP
+17158:Undefined
+17159:UISA VEA
+17160:
+17161:Meaning Special-purpose register x Invoke the system trap handler. An undefined value. The value may vary from one implementation to another, and from one execution to another on the same implementation. PowerPC user instruction set architecture PowerPC virtual environment architecture
+17162:
+17163:Table 8-4 describes instruction field notation conventions used throughout this chapter.
+17164:
+17165:Table 8-4. Instruction Field Conventions
+17166:
+17167:The Architecture Specification BA, BB, BT BF, BFA D DS FLM FRA, FRB, FRC, FRT, FRS FXM RA, RB, RT, RS SI U UI /, //, ///
+17168:
+17169:Equivalent to: crbA, crbB, crbD (respectively) crfD, crfS (respectively) d ds FM frA, frB, frC, frD, frS (respectively) CRM rA, rB, rD, rS (respectively) SIMM IMM UIMM 0...0 (shaded)
+17170:
+17171:Precedence rules for pseudocode operators are summarized in Table 8-5.
+17172:
+17173:Table 8-5. Precedence Rules
+17174:
+17175:Operators x[n], function evaluation (n)x or replication, x(n) or exponentiation unary -, � x, � +, - || =, , <, , >, , <U, >U, ?
+17176:&, , 
+17177:
+17178:Associativity Left to right
+17179:Right to left
+17180:Right to left Left to right Left to right Left to right Left to right Left to right
+17181:
+17182:pem8.fm.2.3 March 31, 2005
+17183:
+17184:Instruction Set
+17185:Page 351 of 721
+29850:32-Bit No
+29851:
+29852:64-Bit Yes
+29853:
+29854:64-Bit Bridge Optional
+29855:
+29856:Form MD
+29857:
+29858:pem8b.fm.2.3 March 31, 2005
+29859:
+29860:Page 535 of 721
+29861:
+29862:Programming Environments Manual PowerPC RISC Microprocessor Family
+29863:
+29864:rldimix
+29865:
+29866:64-Bit Implementations Only
+29867:
+29868:Rotate Left Double Word Immediate then Mask Insert (x'7800 000C')
+29869:
+29870:rldimi rldimi.
+29871:
+29872:rA,rS,SH,MB rA,rS,SH,MB
+29873:
+29874:(Rc = 0) (Rc = 1)
+29875:
+29876:rldimix
+29877:
+29878:30
+29879:
+29880:S
+29881:
+29882:A
+29883:
+29884:sh*
+29885:
+29886:mb*
+29887:
+29888:3
+29889:
+29890:sh* Rc
+29891:
+29892:0
+29893:
+29894:56
+29895:
+29896:10 11
+29897:
+29898:15 16
+29899:
+29900:20 21
+29901:
+29902:26 27
+29903:
+29904:29 30 31
+29905:
+29906:*Note: This is a split field.
+29907:
+29908:n  sh[5] || sh[0-4] r  ROTL[64](rS, n) b  mb[5] || mb[0-4] m  MASK(b, � n) rA  (r & m) | (rA & � m)
+29909:The contents of rS are rotated left the number of bits specified by operand SH. A mask is generated having 1 bits from bit MB through bit 63 - SH and 0 bits elsewhere. The rotated data is inserted into rA under control of the generated mask.
+29910:
+29911:This instruction is defined only for 64-bit implementations. Using it on a 32-bit implementation will cause the system illegal instruction error handler to be invoked.
+29912:
+29913:Note: rldimi can be used to insert an n-bit field, that is right-justified in rS, into rA starting at bit position b, by setting SH = 64 - (b + n) and MB = b.
+29914:
+29915:Other registers altered:
+29916:� Condition Register (CR0 field): Affected: LT, GT, EQ, SO
+29917:
+29918:(if Rc = 1)
+29919:
+29920:Simplified mnemonics:
+29921:
+29922:insrdi
+29923:
+29924:rA,rS,n,b
+29925:
+29926:equivalent to rldimi
+29927:
+29928:rA,rS,64 - (b + n),b
+29929:
+29930:For a more detailed list of simplified mnemonics for the rldimi instruction, refer to Appendix E Simplified Mnemonics.
+29931:
+29932:PowerPC Architecture Level UISA
+29933:
+29934:Supervisor Level
+29935:
+29936:32-Bit No
+29937:
+29938:64-Bit Yes
+29939:
+29940:64-Bit Bridge Optional
+29941:
+29942:Form MD
+29943:
+29944:Page 536 of 721
+29945:
+29946:pem8b.fm.2.3 March 31, 2005
+29947:
+29948:Programming Environments Manual PowerPC RISC Microprocessor Family
+29949:
+29950:rlwimix
+29951:Rotate Left Word Immediate then Mask Insert (x'5000 0000')
+29952:
+29953:rlwimix
+29954:
+29955:rlwimi rlwimi.
+29956:
+29957:rA,rS,SH,MB,ME rA,rS,SH,MB,ME
+29958:
+29959:(Rc = 0) (Rc = 1)
+29960:
+29961:20
+29962:
+29963:S
+29964:
+29965:A
+29966:
+29967:SH
+29968:
+29969:MB
+29970:
+29971:ME
+29972:
+29973:Rc
+29974:
+29975:0
+29976:
+29977:56
+29978:
+29979:10 11
+29980:
+29981:15 16
+29982:
+29983:20 21
+29984:
+29985:25 26
+29986:
+29987:30 31
+29988:
+29989:n  SH r  ROTL[32](rS[32-63], n) m  MASK(MB + 32, ME + 32) rA  (r & m) | (rA & � m)
+29990:The contents of rS are rotated left the number of bits specified by operand SH. A mask is generated having 1 bits from bit MB + 32 through bit ME + 32 and 0 bits elsewhere. The rotated data is inserted into rA under control of the generated mask.
+29991:
+29992:Note: rlwimi can be used to insert a bit field into the contents of rA using the methods shown below:
+29993:� To insert an n-bit field, that is left-justified in the low-order 32 bits of rS, into the high-order 32 bits of rA starting at bit position b, set SH = 32 - b, MB = b, and ME = (b + n) - 1.
+29994:� To insert an n-bit field, that is right-justified in the low-order 32 bits of rS, into the high-order 32 bits of rA starting at bit position b, set SH = 32 - (b + n), MB = b, and ME = (b + n) - 1.
+29995:
+29996:Other registers altered:
+29997:� Condition Register (CR0 field): Affected: LT, GT, EQ, SO
+29998:
+29999:(if Rc = 1)
+30000:
+30001:Simplified mnemonics:
+30002:
+30003:inslwi rA,rS,n,b
+30004:
+30005:equivalent to rlwimi rA,rS,32 - b,b,b + n - 1
+30006:
+30007:insrwi rA,rS,n,b (n > 0) equivalent to rlwimi rA,rS,32 - (b + n),b,(b + n) - 1
+30008:
+30009:PowerPC Architecture Level UISA
+30010:
+30011:Supervisor Level
+30012:
+30013:32-Bit
+30014:
+30015:64-Bit 64-Bit Bridge Optional
+30016:
+30017:Form M
+30018:
+30019:pem8b.fm.2.3 March 31, 2005
+30020:
+30021:Page 537 of 721
+30022:
+30023:Programming Environments Manual PowerPC RISC Microprocessor Family
+30024:
+30025:rlwinmx
+30026:Rotate Left Word Immediate then AND with Mask (x'5400 0000')
+30027:
+30050:0
+30051:
+30052:56
+30053:
+30054:10 11
+30055:
+30056:15 16
+30057:
+30058:20 21
+30059:
+30060:25 26
+30061:
+30062:30 31
+30063:
+30064:n  SH r  ROTL[32](rS[32-63], n) m  MASK(MB + 32, ME + 32) rA  r & m
+30065:The contents of rS[32-63] are rotated left the number of bits specified by operand SH. A mask is generated having 1 bits from bit MB + 32 through bit ME + 32 and 0 bits elsewhere. The rotated data is ANDed with the generated mask and the result is placed into rA. The upper 32 bits of rA are cleared.
+30066:
+30067:Note: rlwinm can be used to extract, rotate, shift, and clear bit fields using the methods shown below:
+30068:� To extract an n-bit field, that starts at bit position b in the high-order 32 bits of rS, right-justified into rA (clearing the remaining 32 - n bits of rA), set SH = b + n, MB = 32 - n, and ME = 31.
+30069:� To extract an n-bit field, that starts at bit position b in the high-order 32 bits of rS, left-justified into rA (clearing the remaining 32 - n bits of rA), set SH = b, MB = 0, and ME = n - 1.
+30070:� To rotate the contents of a register left (or right) by n bits, set SH = n (32 - n), MB = 0, and ME = 31.
+30071:� To shift the contents of a register right by n bits, by setting SH = 32 - n, MB = n, and ME = 31. It can be used to clear the high-order b bits of a register and then shift the result left by n bits by setting SH = n, MB = b - n and ME = 31 - n.
+30072:� To clear the low-order n bits of a register, by setting SH = 0, MB = 0, and ME = 31 - n.
+30073:
+30074:For all uses mentioned, the high-order 32 bits of rA are cleared.
+30075:
+30076:Other registers altered:
+30077:� Condition Register (CR0 field): Affected: LT, GT, EQ, SO
+30078:
+30079:(if Rc = 1)
+30080:
+30081:Simplified mnemonics:
+30082:
+30083:extlwi rA,rS,n,b (n > 0) extrwi rA,rS,n,b (n > 0) rotlwi rA,rS,n rotrwi rA,rS,n slwi rA,rS,n (n < 32) srwi rA,rS,n (n < 32) clrlwi rA,rS,n (n < 32) clrrwi rA,rS,n (n < 32) clrlslwi rA,rS,b,n (n d b < 32)
+30084:
+30085:equivalent to equivalent to equivalent to equivalent to equivalent to equivalent to equivalent to equivalent to equivalent to
+30086:
+30087:rlwinm rA,rS,b,0,n - 1 rlwinm rA,rS,b + n,32 - n,31 rlwinm rA,rS,n,0,31 rlwinm rA,rS,32 - n,0,31 rlwinm rA,rS,n,0,31-n rlwinm rA,rS,32 - n,n,31 rlwinm rA,rS,0,n,31 rlwinm rA,rS,0,0,31 - n rlwinm rA,rS,n,b - n,31 - n
+30088:
+30089:Page 538 of 721
+30090:
+30128:S 10 11
+30129:
+30130:A 15 16
+30131:
+30132:B 20 21
+30133:
+30134:MB 25 26
+30135:
+30136:ME
+30137:
+30138:Rc
+30139:
+30140:30 31
+30141:
+30142:n  rB[59-6327-31] r  ROTL[32](rS[32-63], n) m  MASK(MB + 32, ME + 32) rA  r & m
+30143:The contents of rS are rotated left the number of bits specified by the low-order five bits of rB. A mask is generated having 1 bits from bit MB + 32 through bit ME + 32 and 0 bits elsewhere. The rotated data is ANDed with the generated mask and the result is placed into rA.
+30144:
+30145:Note: rlwnm can be used to extract and rotate bit fields using the methods shown as follows:
+30146:� To extract an n-bit field, that starts at variable bit position b in the high-order 32 bits of rS, right-justified into rA (clearing the remaining 32 - n bits of rA), by setting the low-order five bits of rB to b + n, MB = 32 - n, and ME = 31.
+30147:� To extract an n-bit field, that starts at variable bit position b in the high-order 32 bits of rS, left-justified into rA (clearing the remaining 32 - n bits of rA), by setting the low-order five bits of rB to b, MB = 0, and ME = n - 1.
+30148:� To rotate the contents of a register left (or right) by n bits, by setting the low-order five bits of rB to n (32-n), MB = 0, and ME = 31.
+30149:
+30150:For all uses mentioned, the high-order 32 bits of rA are cleared.
+30151:
+30152:Other registers altered:
+30153:� Condition Register (CR0 field): Affected: LT, GT, EQ, SO
+30154:
+30155:(if Rc = 1)
+30156:
+30157:Simplified mnemonics:
+30158:
+30159:rotlw
+30160:
+30161:rA,rS,rB
+30162:
+30163:equivalent to rlwnm
+30164:
+30165:rA,rS,rB,0,31
+30166:
+30167:PowerPC Architecture Level UISA
+30168:
+30169:Supervisor Level
+30170:
+30171:32-Bit
+30172:
+30173:64-Bit 64-Bit Bridge Optional
+
+codex
+The manual confirms the `rldimi` wrap case is defined. It also overturns a key premise at Site 2: when `MB > ME`, the 64-bit mask wraps through the high half of RA. A source cast alone therefore leaves `rlwimi` incorrect; the repair must also insert the duplicated rotated word into those high bits.
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg --files -uu -g AGENTS.md 'C:\\DocumentNoSnc\\CC\\GXEMUL\\GXEMUL-SEC' 'C:\\DocumentNoSnc\\CC\\GXEMUL\\_scratchpad'
+Get-ChildItem -LiteralPath 'C:\\Users\\User00\\AppData\\Local\\Programs' -Name
+Get-ChildItem -LiteralPath 'C:\\Program Files (x86)' -Name
+Get-ChildItem -LiteralPath 'C:\\WSL' -Name" in C:\Users\User00\AppData\Local\Temp\claude\C--DocumentNoSnc-CC-GXEMUL\8e474f41-4d47-4c99-bf11-3406a84c4fcd\scratchpad
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$p = '"'C:\\DocumentNoSnc\\CC\\GXEMUL\\GXEMUL-SEC\\regress\\artifacts\\ppcrldimimask\\codex_design_20260910.txt'
+Get-Content -LiteralPath "'$p
+$p = '"'C:\\DocumentNoSnc\\CC\\GXEMUL\\GXEMUL-SEC\\src\\cpus\\cpu_ppc_instr.c'
+"'$lines = Get-Content -LiteralPath $p
+for ($n = 4482; $n -le 4582; $n++) { '"'{0}:{1}' -f "'$n,$lines[$n-1] }
+rg --files '"'C:\\DocumentNoSnc\\CC\\GXEMUL\\GXEMUL-SEC\\src' -g '*dyntrans*'
+Get-Command wsl,bash -ErrorAction SilentlyContinue | Select-Object Name,Source" in C:\Users\User00\AppData\Local\Temp\claude\C--DocumentNoSnc-CC-GXEMUL\8e474f41-4d47-4c99-bf11-3406a84c4fcd\scratchpad
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$p = '"'C:\\DocumentNoSnc\\CC\\GXEMUL\\_scratchpad\\ppc_pem_32and64_2005.txt'
+"'$lines = Get-Content -LiteralPath $p -Encoding UTF8
+foreach ($range in @(@(6865,6888),@(17130,17144),@(29906,29918),@(29987,29999),@(30064,30075),@(16872,16942))) { for ($n = $range[0]; $n -le $range[1]; $n++) { '"'{0}:{1}' -f "'$n,$lines[$n-1] } }
+rg -n '"'high-order 32 bits.*(undefined|unchanged)|upper 32 bits.*(undefined|unchanged)|MB.*ME|MB.*SH|MASK|ROTL' 'C:\\DocumentNoSnc\\CC\\GXEMUL\\_scratchpad\\ppc_oea_book3_v201.txt' 'C:\\DocumentNoSnc\\CC\\GXEMUL\\_scratchpad\\ppc_vea_book2_v201.txt'" in C:\Users\User00\AppData\Local\Temp\claude\C--DocumentNoSnc-CC-GXEMUL\8e474f41-4d47-4c99-bf11-3406a84c4fcd\scratchpad
+ succeeded in 189ms:
+Common
+Ollama
+OpenAI
+Python
+Common Files
+dotnet
+EasyAntiCheat_EOS
+Epic Games
+HP
+ImgBurn
+Intel
+Internet Explorer
+Microsoft
+Microsoft.NET
+Mozilla Maintenance Service
+MSBuild
+Password Safe
+Reference Assemblies
+VMware
+Windows Defender
+Windows Mail
+Windows Media Player
+Windows NT
+Windows Photo Viewer
+WindowsInstallationAssistant
+WindowsPowerShell
+Gentoo
+
+ succeeded in 285ms:
+VERDICT: **Site A:** preserve decoded `sh`, rotate with a separate `int n = sh` and `while (n-- != 0)`, replace `m ++` with `m = (m + 1) & 63`, and change the mask-loop condition to `m != ((64 - sh) & 63)`. **Site B:** replace the combined declaration with `uint32_t tmp = (uint32_t)reg(ic->arg[0]);` and `MODE_uint_t ra = reg(ic->arg[1]);`. For complete wrapping-mask behavior, also add `if (mb > me) ra = (ra & 0xffffffffULL) | ((uint64_t)tmp << 32);` **after rotation, before the existing mask loop**.
+
+`CODEX_PPCSIBS_20260910`
+
+Both central defect premises hold. However, saving `sh` alone is insufficient, truncation alone leaves another defect, and **`rlwinm` and `rlwnm` are not universally correct**.
+
+I inspected the specified `GXEMUL-SEC` tree. The manual is actually in its parent directory�?Ts `_scratchpad`. No builds, probes, edits, or patches were performed. The detector results below are source-derived predictions; the existing [witness recording](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/ppcrldiclzero/witness_committed.out:24) agrees with the three quoted measurements.
+
+**For Site A, the post-decrement premise is exact.** [The handler](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc_instr.c:2521) decodes a signed `int sh` in `0..63`. Its final condition evaluates the old value zero and then decrements it to �^'1. This happens even for `SH=0`. Consequently, the existing mask always covers architectural bits `MB..63`.
+
+The [rldimix RTL](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ppc_pem_32and64_2005.txt:29908) requires `MASK(MB,63-SH)`. The manual�?Ts [mask definition](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ppc_pem_32and64_2005.txt:6878) makes both endpoints inclusive and wraps through bit 63 to bit 0 when the beginning exceeds the end.
+
+That exposes two problems with �?osave `sh`, then retain the mask loop�??:
+
+- Its condition compares the **incremented** position with the inclusive endpoint. It stops one bit early where it terminates normally.
+- It never wraps. Other operand combinations can run beyond bit 63 and evaluate invalid shift counts.
+
+The verdict�?Ts condition uses the position **after** the endpoint, modulo 64. Together with the modulo increment and existing `do` body, it handles ordinary, singleton, wrapping, and full-width masks in 1�?"64 iterations.
+
+I favor keeping the architectural operand intact�?"preferably declaring `sh` as `const`�?"and consuming a separate counter. Merely saving another copy while continuing to destroy `sh` leaves the future-reader hazard you identified. Applying the separate-counter change to `rldicl` and `rldicr` would preserve their current results: neither uses `sh` afterward. It is optional cleanup, not a necessary repair at those sites.
+
+`SH=0` is the only shift for which the current **mask is correct for every source and destination**. Other shifts can still produce coincidentally correct values.
+
+**For Site B, the width premise also holds.** [cpu_ppc.c](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc.c:53) enables the dual compilation. [tmp_ppc_tail.c](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/tmp_ppc_tail.c:51) explicitly defines both `reg` and `MODE_uint_t` as 64-bit for the first inclusion, then supplies their 32-bit versions for the second. CPU initialization selects the corresponding execution path.
+
+The offending expression has 64-bit operands while retaining the complementary shift `32-sh`. For nonzero shift `n`, source halves `H:L`, and correct rotated low word `w`, its low-word result is:
+
+`w | ((H << n) & 0xffffffff)`
+
+With your source and shift, `w=0x000000f0`, while the extra contribution is `0xaaaaaaa0`. Thus the quoted `0xaaaaaaf0` low word follows directly.
+
+The split declaration fixes that contamination. Narrowing **after** the expression does not. Keeping `ra` as `MODE_uint_t` is essential: changing both variables to `uint32_t` would discard destination bits that must survive.
+
+There is also a separate **wrapping-mask defect**. The [rlwimix RTL](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ppc_pem_32and64_2005.txt:29989) combines:
+
+- A rotated word duplicated into both halves of a 64-bit intermediate.
+- `MASK(MB+32,ME+32)` over 64 positions.
+
+When `MB>ME`, that mask includes **the entire upper word**. The current loop only visits the lower word. The additional verdict edit supplies precisely the missing upper-word insertion; its condition must precede the loop because the loop changes `mb`. The existing lower-word merge can remain.
+
+The local PEM contains a conflicting blanket upper-clearing sentence in its `rlwinm` prose. Its RTL and general definitions agree with IBM�?Ts contemporary Book I, which specifies the duplicated rotation and wrapping 64-bit mask without that blanket statement. That is the interpretation used here. [PowerPC UISA v2.02, pp. 71�?"76](https://powerpc.dev/general/PPC_Vers202_Book1_public.pdf)
+
+The six sibling findings are therefore:
+
+| Instruction | Source-derived finding |
+|---|---|
+| `rldicr` | Its rotation and destination value are correct. The clearing loop removes bits `ME+1..63`, including the boundary cases. Record-form qualification appears below. |
+| `rlwnm` | Correct low-word rotation, including extraction of the low five shift bits. **Incorrect upper word for wrapping masks on a 64-bit implementation.** |
+| `rlwinm` | Correct low-word rotation. **The same wrapping-mask upper-word defect.** |
+| `rldic` | Unimplemented: MD secondary opcode 2 reaches the decoder default. |
+| `rldcl` | Unimplemented: MDS secondary opcode 8 becomes 4 under the current three-bit extraction and reaches default. |
+| `rldcr` | Unimplemented: MDS secondary opcode 9 also becomes 4 and reaches default. |
+
+The word siblings truncate the rotation result, apply a lower-word mask, and write a zero-extended result. Their shared [decoder mask construction](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc_instr.c:4499) cannot represent the required upper bits.
+
+A concrete counterexample for **each** is source `0xaaaaaaaa0000000f`, shift zero, `MB=31, ME=0`: the architectural result is `0x0000000f00000001`; the implementation produces `0x0000000000000001`.
+
+The missing doubleword instructions reach [the default at line 4573](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc_instr.c:4553). They are not silently executed as no-ops: the shared [bad path](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1983) reports `UNIMPLEMENTED` and stops the emulated CPU.
+
+Ordinary compiler generation is directly supported for `rldic` by [LLVM�?Ts selector](https://raw.githubusercontent.com/llvm/llvm-project/main/llvm/lib/Target/PowerPC/PPCISelDAGToDAG.cpp), and for `rldcl` by its variable-rotate [selection pattern](https://raw.githubusercontent.com/llvm/llvm-project/main/llvm/lib/Target/PowerPC/PPCInstr64Bit.td). I verified `rldcr`�?Ts architectural definition and missing implementation; its presence in compiler instruction descriptions alone does not establish routine compiler emission.
+
+**I would split the filings as follows.**
+
+| Filing | Scope and reason |
+|---|---|
+| `ppcrldimimask` | Preserve the shift operand and implement the inclusive, wrapping doubleword mask. |
+| `ppcrlwimiwidth` | Truncate the source before word rotation. Different cause and discriminator from Site A. |
+| Word-mask wrap defect | The upper-word omission shared by `rlwimi`, `rlwinm`, and `rlwnm`. These three qualify for consideration together under one full-width rotation/mask design and detector. |
+| Missing instructions | Separate implementation filings from the value defects. |
+| PPC64 harness coverage | Separate harness round, with each repair contributing its own regression rows. |
+
+Thus **A and B are two rounds**. For bookkeeping, the declaration edit and additional upper-word edit in the verdict belong to the width and wrap filings respectively.
+
+**The detector needs mutant-specific observability.** The proposed �?ovacuous exactly when the selected source window is zero�?? rule does not hold generally for insert instructions.
+
+For correct mask `M`, rotated source `R`, and initial destination `D`:
+
+- A no-op differs precisely when `((R ^ D) & M) != 0`.
+- A wrong-mask mutant using `N` differs precisely when `((R ^ D) & (M ^ N)) != 0`.
+- A zero-writing mutant differs when the correct complete destination is nonzero.
+
+A zero source window can therefore be useful when the operation should **clear seeded destination bits**. Conversely, a nonzero window can be useless against a no-op when the destination already matches it.
+
+For Site B�?Ts contamination, differing source halves are necessary but insufficient. The extra high-half contribution must set a selected bit that the correct rotated word leaves clear. In particular, no single source can both make every possible singleton low-word window nonzero and discriminate this contamination: that would require an all-ones rotated low word.
+
+Here is a concrete floor. Hexadecimal results use `high32_low32`. Define `F=ffffffff_ffffffff` and `Z=5a5a5a5a_5a5a5a5a`.
+
+For A, use `S=F, D=0` except where specified:
+
+| Row | Operands | Architectural destination | Mutant and differing observable |
+|---|---|---|---|
+| `A8` | `SH=8, MB=0` | `ffffffff_ffffff00` | Pre-fix, verbatim reinstatement, or repaired counter with mask end forced back to 63: `ffffffff_ffffffff`. |
+| `A32` | `SH=32, MB=0` | `ffffffff_00000000` | Same mutants: `ffffffff_ffffffff`; also detects loss of the high shift-encoding bit. |
+| `A0_LAST` | `SH=0, MB=0` | `ffffffff_ffffffff` | Save-only repair retaining the old termination expression: `ffffffff_fffffffe`. |
+| `A_SINGLE` | `SH=8, MB=55` | `00000000_00000100` | Treating equal endpoints as an empty mask gives zero; original gives `00000000_000001ff`. |
+| `A_WRAP` | `SH=8, MB=60` | `ffffffff_ffffff0f` | Original/nonwrapping tail gives `00000000_0000000f`; the witness�?Ts intersection oracle gives zero. |
+| `A_DATA` | `S=01234567_89abcdef, D=Z; SH=8, MB=16` | `5a5a6789_abcdef5a` | Removing rotation gives `5a5a4567_89abcd5a`; discarding destination preservation gives `00006789_abcdef00`. |
+
+For B, use `D=Z`:
+
+| Row | Source; `SH,MB,ME` | Architectural destination | Mutant and differing observable |
+|---|---|---|---|
+| `B_BLEED` | `aaaaaaaa_0000000f`; `4,0,31` | `5a5a5a5a_000000f0` | Pre-fix, verbatim reinstatement, or narrowing only after rotating the original source: `5a5a5a5a_aaaaaaf0`. Narrowing `ra` loses the upper sentinel. |
+| `B_SHIFT31` | `ffffffff_00000002`; `31,0,31` | `5a5a5a5a_00000001` | Untruncated rotation gives `5a5a5a5a_80000001`. |
+| `B_PARTIAL` | `aaaaaaaa_f0f0f0f0`; `4,8,15` | `5a5a5a5a_5a0f5a5a` | Untruncated rotation gives `5a5a5a5a_5aaf5a5a`; replacing the whole low word destroys the surrounding `5a` bytes. |
+| `B_WRAP0` | `aaaaaaaa_0000000f`; `0,31,0` | `0000000f_5a5a5a5b` | Original and truncation-only repair retain upper word `5a5a5a5a`. This isolates the wrap defect without rotation contamination. |
+| `B_WRAP4` | `aaaaaaaa_f0f0f0f0`; `4,24,7` | `0f0f0f0f_0f5a5a0f` | Truncation-only repair retains upper word `5a5a5a5a`; copying the unrotated low word upward gives `f0f0f0f0`. |
+
+Every listed correct destination is nonzero and differs from its seed. Thus the value rows also reject **nulled repairs** that retain the new declarations/counter but remove the destination update or substitute a zero result. `A_DATA` additionally prevents an all-ones mask census from blessing a deleted rotation.
+
+The apparatus needs its own rows and acceptance rules:
+
+| Row/control | Mutant or failure it rejects | Required observable |
+|---|---|---|
+| `LIVE` | Null execution medium | A separate `li` changes a seeded register to `0x1234`. |
+| `SEED_HOLDS` | Readback that fabricates zeros | An untouched register retains `Z` across an unrelated instruction. |
+| `NULL_MEDIUM` | Empty transcript, absent machine, or absent execution | Feeding that medium to the same detector returns failure; missing registers never default to expected values. |
+| `ROW_MANIFEST` | Deleted rows, early termination, empty census | Every required named row occurs exactly once, with valid readback and completion. |
+| `ENCODING` | Wrong instruction or operands | Instruction bytes and decoded operands match the intended row. |
+
+Also include nonwrapping `SH=0` pins, source/destination alias cases, Rc-clear preservation, Rc-set CR0 checks, and the word rows on a 32-bit CPU. Those distinguish repairs that fix one result while breaking adjacent behavior.
+
+**The gate premise is too broad literally, but the correctness gap is real.** Both dedicated PowerPC probes select `macppc/g4`, whose default is the 32-bit MPC7400. However, [gate_asan_sweep.sh](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gate_asan_sweep.sh:339) enumerates machine types and subtypes. That includes 64-bit configurations such as `bareppc`, whose [default CPU is PPC970](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/machines/machine_test.c:448), and `macppc/g5`. Construction and sanitizer observations provide no architectural-value oracle for these instructions.
+
+The smallest sound change is **one additional mandatory PPC970 session called by an existing PowerPC gate**, using `bareppc` and an offline instruction stream. Keep the existing G4 session. Merely selecting G5 for the floating-point probes would still leave this family untested. Also, `-M 64` specifies RAM, not CPU width.
+
+That session should execute a fixed table covering all nine instructions, wrapping and nonwrapping masks, boundary shifts, and record forms. Check CPU identity, explicitly establish/read back `MSR[SF]` for mode-sensitive expectations, and require the manifest above. The three missing instructions and newly identified wrap defects will initially fail their architectural rows; they cannot be counted as covered passing functionality.
+
+Two further findings matter:
+
+First, the existing [witness oracle](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/ppcrldiclzero/opus_ppc_rldicl_witness_20260910.py:129) computes `rldimi`�?Ts mask by intersecting two nonwrapping masks, returning zero for wrapping cases. Its `mask32` also excludes the upper word from wrapping word masks. **Its quoted measurements remain valid because those rows use nonwrapping masks; its oracle should not be reused unchanged for the expanded audit.**
+
+Second, [update_cr0](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc.c:1803) chooses comparison width from CPU-model `bits`, rather than `MSR[SF]`. On PPC970 with `SF=0`, source `0x0000000080000000`, `rlwinm.` with `SH=0, MB=0, ME=31`, and `XER.SO=0`, the destination is correct but the helper predicts CR0=`4` (GT), whereas 32-bit computation mode requires CR0=`8` (LT). This is a separate shared record-form defect, including a qualification on otherwise-correct `rldicr`. The architectural mode distinction is explicit in the [local manual](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ppc_pem_32and64_2005.txt:6698).
+4482:			bf = (iword >> 23) & 7;
+4483:			bfa = (iword >> 18) & 7;
+4484:			ic->arg[0] = 28 - 4*bf;
+4485:			ic->arg[1] = 28 - 4*bfa;
+4486:			ic->f = instr(mcrf);
+4487:			break;
+4488:
+4489:		case PPC_19_CRAND:
+4490:		case PPC_19_CRANDC:
+4491:		case PPC_19_CREQV:
+4492:		case PPC_19_CROR:
+4493:		case PPC_19_CRORC:
+4494:		case PPC_19_CRNOR:
+4495:		case PPC_19_CRXOR:
+4496:			switch (xo) {
+4497:			case PPC_19_CRAND:  ic->f = instr(crand); break;
+4498:			case PPC_19_CRANDC: ic->f = instr(crandc); break;
+4499:			case PPC_19_CREQV:  ic->f = instr(creqv); break;
+4500:			case PPC_19_CROR:   ic->f = instr(cror); break;
+4501:			case PPC_19_CRORC:  ic->f = instr(crorc); break;
+4502:			case PPC_19_CRNOR:  ic->f = instr(crnor); break;
+4503:			case PPC_19_CRXOR:  ic->f = instr(crxor); break;
+4504:			}
+4505:			ic->arg[0] = iword;
+4506:			break;
+4507:
+4508:		default:goto bad;
+4509:		}
+4510:		break;
+4511:
+4512:	case PPC_HI6_RLWNM:
+4513:	case PPC_HI6_RLWINM:
+4514:		ra = (iword >> 16) & 31;
+4515:		mb = (iword >> 6) & 31;
+4516:		me = (iword >> 1) & 31;   
+4517:		rc = iword & 1;
+4518:		mask = 0;
+4519:		for (;;) {
+4520:			mask |= ((uint32_t)0x80000000 >> mb);
+4521:			if (mb == me)
+4522:				break;
+4523:			mb ++; mb &= 31;
+4524:		}
+4525:		switch (main_opcode) {
+4526:		case PPC_HI6_RLWNM:
+4527:			ic->f = rc? instr(rlwnm_dot) : instr(rlwnm); break;
+4528:		case PPC_HI6_RLWINM:
+4529:			ic->f = rc? instr(rlwinm_dot) : instr(rlwinm); break;
+4530:		}
+4531:		ic->arg[0] = (size_t)(&cpu->cd.ppc.gpr[ra]);
+4532:		ic->arg[1] = mask;
+4533:		ic->arg[2] = (uint32_t)iword;
+4534:		break;
+4535:
+4536:	case PPC_HI6_RLWIMI:
+4537:		rs = (iword >> 21) & 31;
+4538:		ra = (iword >> 16) & 31;
+4539:		ic->f = instr(rlwimi);
+4540:		ic->arg[0] = (size_t)(&cpu->cd.ppc.gpr[rs]);
+4541:		ic->arg[1] = (size_t)(&cpu->cd.ppc.gpr[ra]);
+4542:		ic->arg[2] = (uint32_t)iword;
+4543:		break;
+4545:	case PPC_HI6_LMW:
+4546:	case PPC_HI6_STMW:
+4547:		/*  NOTE: Loads use rt, not rs.  */
+4548:		rs = (iword >> 21) & 31;
+4549:		ra = (iword >> 16) & 31;
+4550:		ic->arg[0] = rs;
+4551:		if (ra == 0)
+4552:			ic->arg[1] = (size_t)(&cpu->cd.ppc.zero);
+4553:		else
+4554:			ic->arg[1] = (size_t)(&cpu->cd.ppc.gpr[ra]);
+4555:		ic->arg[2] = (int32_t)(int16_t)iword;
+4556:		switch (main_opcode) {
+4557:		case PPC_HI6_LMW:
+4558:			ic->f = instr(lmw);
+4559:			break;
+4560:		case PPC_HI6_STMW:
+4561:			ic->f = instr(stmw);
+4562:			break;
+4563:		}
+4564:		break;
+4565:
+4566:	case PPC_HI6_30:
+4567:		xo = (iword >> 2) & 7;
+4568:		switch (xo) {
+4569:
+4570:		case PPC_30_RLDICL:
+4571:		case PPC_30_RLDICR:
+4572:		case PPC_30_RLDIMI:
+4573:			switch (xo) {
+4574:			case PPC_30_RLDICL: ic->f = instr(rldicl); break;
+4575:			case PPC_30_RLDICR: ic->f = instr(rldicr); break;
+4576:			case PPC_30_RLDIMI: ic->f = instr(rldimi); break;
+4577:			}
+4578:			ic->arg[0] = iword;
+4579:			if (cpu->cd.ppc.bits == 32) {
+4580:				if (!cpu->translation_readahead)
+4581:					fatal("TODO: rld* in 32-bit mode?\n");
+4582:				goto bad;
+C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\src\cpus\cpu_dyntrans.c
+
+Name     Source                               
+----     ------                               
+wsl.exe  C:\WINDOWS\system32\wsl.exe          
+bash.exe C:\Program Files\Git\usr\bin\bash.exe
+
+
+
+ exited 1 in 531ms:
+6865:enables the update of the CR.
+6866:A count of the number of consecutive zero bits starting at bit [0] of rS is placed into rA. This number ranges from 0 to 64, inclusive. If Rc = 1 (dot suffix), LT is cleared in CR0. cntlzd Count Leading Zeros Double Word cntlzd. Count Leading Zeros Double Word with CR Update. The dot suf-
+6867:fix enables the update of the CR.
+6868:
+6869:Addressing Modes and Instruction Set Summary
+6870:Page 144 of 721
+6871:
+6872:pem4_instr_Set.fm.2.3 March 31, 2005
+6873:
+6874:Programming Environments Manual
+6875:PowerPC RISC Microprocessor Family
+6876:4.2.1.4 Integer Rotate and Shift Instructions
+6877:Rotation operations are performed on data from a GPR, and the result, or a portion of the result, is returned to a GPR. The rotation operations rotate a 64-bit quantity left by a specified number of bit positions. Bits that exit from position 0 enter at position 63.
+6878:Two types of rotation operation are supported: 1. ROTL64 or rotate64 ? the value rotated is the given 64-bit value. The rotate64 operation is used to rotate a given 64-bit quantity. 2. ROTL32 or rotate32 ? the value rotated consists of two copies of bits [32-63] of the given 64-bit value, one copy in bits [0-31] and the other in bits [32-63]. The rotate32 operation is used to rotate a given 32-bit quantity.
+6879:The rotate and shift instructions employ a mask generator. The mask is 64 bits long and consists of `1' bits from a start bit, Mstart, through and including a stop bit, Mstop, and `0' bits elsewhere. The values of Mstart and Mstop range from 0 to 63. If Mstart > Mstop, the `1' bits wrap around from position 63 to position 0. Thus the mask is formed as follows:
+6880:if Mstart  Mstop then mask[mstart?mstop] = ones mask[all other bits] = zeros
+6881:else mask[mstart?63] = ones mask[0?mstop] = ones mask[all other bits] = zeros
+6882:It is not possible to specify an all-zero mask. The use of the mask is described in the following sections.
+6883:If CR updating is enabled, rotate and shift instructions set CR0[0?2] according to the contents of rA at the completion of the instruction. Rotate and shift instructions do not change the values of XER[OV] and XER[SO] bits. Rotate and shift instructions, except algebraic right shifts, do not change the XER[CA] bit.
+6884:See Appendix E Simplified Mnemonics for a complete list of simplified mnemonics that allows simpler coding of often-used functions such as clearing the leftmost or rightmost bits of a register, left justifying or right justifying an arbitrary field, and simple rotates and shifts.
+6885:Integer Rotate Instructions
+6886:Integer rotate instructions rotate the contents of a register. The result of the rotation is either inserted into the target register under control of a mask (if a mask bit is 1 the associated bit of the rotated data is placed into the target register, and if the mask bit is 0 the associated bit in the target register is unchanged), or ANDed with a mask before being placed into the target register.
+6887:Rotate left instructions allow right-rotation of the contents of a register to be performed by a left-rotation of 64 - n, where n is the number of bits by which to rotate right. It also allows right-rotation of the contents of the low-order 32 bits of a register to be performed by a left-rotation of 32 - n, where n is the number of bits by which to rotate right.
+6888:The integer rotate instructions are summarized in Table 4-4
+17130:Result of converting x from floating-point single-precision format to floating-point double-precision format.
+17131:Select a field of n bits starting at bit position b in the source register, right or left justify this field in the target register, and clear all other bits of the target register to zero. This operation is used for rotate and shift instructions.
+17132:Result of extending x on the left with sign bits
+17133:General purpose register x
+17134:Conditional execution, indenting shows range, else is optional.
+17135:Select a field of n bits in the source register, insert this field starting at bit position b of the target register, and leave other bits of the target register unchanged. (No simplified mnemonic is provided for insertion of a field when operating on double-words; such an insertion requires more than one instruction.) This operation is used for rotate and shift instructions. Note: Simplified mnemonics are referred to as extended mnemonics in the architecture specification.
+17136:Leave innermost do loop, or the do loop described in leave statement.
+17137:Mask having ones in positions x through y (wrapping if x > y) and zeros elsewhere.
+17138:Contents of y bytes of memory starting at address x. Note: In 32-bit mode of a 64-bit implementation, the high-order 32 bits of the 64-bit value x are ignored.
+17139:Next instruction address, which is the 64- or 32-bit address of the next instruction to be executed (the branch destination) after a successful branch. In pseudocode, a successful branch is indicated by assigning a value to NIA. For instructions which do not branch, the next instruction address is CIA + 4. Note: In 32-bit mode of 64-bit implementations, the high-order 32 bits of NIA are always cleared. Does not correspond to any architected register.
+17140:PowerPC operating environment architecture
+17141:Rotate the contents of a register right or left n bits without masking. This operation is used for rotate and shift instructions.
+17142:Result of rotating the 64-bit value x left y positions
+17143:Result of rotating the 64-bit value x || x left y positions, where x is 32 bits long
+17144:Bits are set to 1.
+29906:*Note: This is a split field.
+29907:
+29908:n  sh[5] || sh[0-4] r  ROTL[64](rS, n) b  mb[5] || mb[0-4] m  MASK(b, ? n) rA  (r & m) | (rA & ? m)
+29909:The contents of rS are rotated left the number of bits specified by operand SH. A mask is generated having 1 bits from bit MB through bit 63 ? SH and 0 bits elsewhere. The rotated data is inserted into rA under control of the generated mask.
+29910:
+29911:This instruction is defined only for 64-bit implementations. Using it on a 32-bit implementation will cause the system illegal instruction error handler to be invoked.
+29912:
+29913:Note: rldimi can be used to insert an n-bit field, that is right-justified in rS, into rA starting at bit position b, by setting SH = 64 ? (b + n) and MB = b.
+29914:
+29915:Other registers altered:
+29916:? Condition Register (CR0 field): Affected: LT, GT, EQ, SO
+29917:
+29918:(if Rc = 1)
+29987:30 31
+29988:
+29989:n  SH r  ROTL[32](rS[32-63], n) m  MASK(MB + 32, ME + 32) rA  (r & m) | (rA & ? m)
+29990:The contents of rS are rotated left the number of bits specified by operand SH. A mask is generated having 1 bits from bit MB + 32 through bit ME + 32 and 0 bits elsewhere. The rotated data is inserted into rA under control of the generated mask.
+29991:
+29992:Note: rlwimi can be used to insert a bit field into the contents of rA using the methods shown below:
+29993:? To insert an n-bit field, that is left-justified in the low-order 32 bits of rS, into the high-order 32 bits of rA starting at bit position b, set SH = 32 ? b, MB = b, and ME = (b + n) ? 1.
+29994:? To insert an n-bit field, that is right-justified in the low-order 32 bits of rS, into the high-order 32 bits of rA starting at bit position b, set SH = 32 ? (b + n), MB = b, and ME = (b + n) ? 1.
+29995:
+29996:Other registers altered:
+29997:? Condition Register (CR0 field): Affected: LT, GT, EQ, SO
+29998:
+29999:(if Rc = 1)
+30064:n  SH r  ROTL[32](rS[32-63], n) m  MASK(MB + 32, ME + 32) rA  r & m
+30065:The contents of rS[32-63] are rotated left the number of bits specified by operand SH. A mask is generated having 1 bits from bit MB + 32 through bit ME + 32 and 0 bits elsewhere. The rotated data is ANDed with the generated mask and the result is placed into rA. The upper 32 bits of rA are cleared.
+30066:
+30067:Note: rlwinm can be used to extract, rotate, shift, and clear bit fields using the methods shown below:
+30068:? To extract an n-bit field, that starts at bit position b in the high-order 32 bits of rS, right-justified into rA (clearing the remaining 32 ? n bits of rA), set SH = b + n, MB = 32 ? n, and ME = 31.
+30069:? To extract an n-bit field, that starts at bit position b in the high-order 32 bits of rS, left-justified into rA (clearing the remaining 32 ? n bits of rA), set SH = b, MB = 0, and ME = n ? 1.
+30070:? To rotate the contents of a register left (or right) by n bits, set SH = n (32 ? n), MB = 0, and ME = 31.
+30071:? To shift the contents of a register right by n bits, by setting SH = 32 ? n, MB = n, and ME = 31. It can be used to clear the high-order b bits of a register and then shift the result left by n bits by setting SH = n, MB = b ? n and ME = 31 ? n.
+30072:? To clear the low-order n bits of a register, by setting SH = 0, MB = 0, and ME = 31 ? n.
+30073:
+30074:For all uses mentioned, the high-order 32 bits of rA are cleared.
+30075:
+16872:
+16873:This field is used to specify an FPR as a source.
+16874:
+16875:This field is used to specify an FPR as a source.
+16876:
+16877:This field is used to specify an FPR as the destination.
+16878:
+16879:This field is used to specify an FPR as a source.
+16880:
+16881:Immediate field used as the data to be placed into a field in the FPSCR.
+16882:
+16883:Field used by the synchronize instruction. This field is defined in 64-bit implementations only.
+16884:
+16885:Field used to specify whether an integer compare instruction is to compare 64-bit numbers or 32-bit numbers. This field is defined in 64-bit implementations only.
+16886:Field used by the TLB Invalidate Entry instruction.
+16887:
+16888:Field used to specify whether an integer compare instruction is to compare 64-bit numbers or 32-bit numbers. This field is defined in 64-bit implementations only.
+16889:Field used by the Move To Machine State Register instruction.
+16890:
+16891:Immediate field specifying a 24-bit signed two's complement integer that is concatenated on the right with 0b00 and sign-extended to 64 bits (32 bits in 32-bit implementations).
+16892:
+16893:Link bit.
+16894:
+16895:0
+16896:
+16897:Does not update the link register (LR).
+16898:
+16899:1
+16900:
+16901:Updates the LR. If the instruction is a branch instruction, the address of the instruction following the
+16902:
+16903:branch instruction is placed into the LR.
+16904:
+16905:These fields are used in rotate instructions to specify a 64-bit mask (32 bits in 32-bit implementations) consisting of 1 bits from bit MB + 32 through bit ME + 32 inclusive, and 0 bits elsewhere, as described in Section 4.2.1.4 Integer Rotate and Shift Instructions.
+16906:
+16907:Field used in the MD-form and MDS-form instructions to specify the first 1-bit of a 64-bit mask as described in Section 4.2.1.4 Integer Rotate and Shift Instructions. This field is defined in 64-bit implementations only.
+16908:
+16909:Field used in the MD-form and MDS-form instructions to specify the last 1-bit of a 64-bit mask as described in Section 4.2.1.4 Integer Rotate and Shift Instructions. This field is defined in 64-bit implementations only.
+16910:
+16911:This field is used to specify the number of bytes to move in an immediate string load or store.
+16912:
+16913:This field is used for extended arithmetic to enable setting OV and SO in the XER.
+16914:
+16915:Primary opcode field
+16916:
+16917:This field is used to specify a GPR to be used as a source or destination.
+16918:
+16919:This field is used to specify a GPR to be used as a source.
+16920:
+16921:pem8.fm.2.3 March 31, 2005
+16922:
+16923:Instruction Set
+16924:Page 347 of 721
+16925:
+16926:Programming Environments Manual PowerPC RISC Microprocessor Family
+16927:
+16928:Table 8-2. Instruction Syntax Conventions (Continued)
+16929:
+16930:Field
+16931:Rc (31)
+16932:rD (6?10) rS (6?10) S (10) SH (16?20, or 16?20 and 30) SIMM (16?31) SPR (11?20) SR (12?15) 64-BIT BRIDGE SR (12?15) TBR (11?20) TH (9?10) TO (6?10) UIMM (16?31) XO (21?29, 21?30, 22?30, 26?30, 27?29, 27?30, or 30?31)
+16933:
+16934:Description
+16935:
+16936:Record bit.
+16937:
+16938:0
+16939:
+16940:Does not update the condition register (CR).
+16941:
+16942:1
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "wsl.exe --exec sh -c 'command -v cc'
+Get-Content -LiteralPath 'C:\\DocumentNoSnc\\CC\\GXEMUL\\GXEMUL-SEC\\Makefile' -TotalCount 65
+"'$p = '"'C:\\DocumentNoSnc\\CC\\GXEMUL\\GXEMUL-SEC\\src\\cpus\\cpu_ppc.c'
+"'$lines = Get-Content -LiteralPath $p
+for ($n = 1795; $n -le 1835; $n++) { '"'{0}:{1}' -f "'$n,$lines[$n-1] }' in C:\Users\User00\AppData\Local\Temp\claude\C--DocumentNoSnc-CC-GXEMUL\8e474f41-4d47-4c99-bf11-3406a84c4fcd\scratchpad
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$p = '"'C:\\DocumentNoSnc\\CC\\GXEMUL\\GXEMUL-SEC\\src\\cpus\\tmp_ppc_tail.c'
+"'$lines = Get-Content -LiteralPath $p
+for ($n = 40; $n -le 110; $n++) { '"'{0}:{1}' -f "'$n,$lines[$n-1] }
+$p = '"'C:\\DocumentNoSnc\\CC\\GXEMUL\\_scratchpad\\ppc_pem_32and64_2005.txt'
+"'$lines = Get-Content -LiteralPath $p
+for ($n = 6688; $n -le 6705; $n++) { '"'{0}:{1}' -f "'$n,$lines[$n-1] }
+rg --files '"'C:\\DocumentNoSnc\\CC\\GXEMUL\\GXEMUL-SEC\\regress\\artifacts\\ppcrldiclzero' -g '*witness*'
+rg -n 'def .*mask|def .*rldimi|rldimi|rlwimi' 'C:\\DocumentNoSnc\\CC\\GXEMUL\\GXEMUL-SEC\\regress\\artifacts\\ppcrldiclzero\\opus_ppc_rldicl_witness_20260910.py'" in C:\Users\User00\AppData\Local\Temp\claude\C--DocumentNoSnc-CC-GXEMUL\8e474f41-4d47-4c99-bf11-3406a84c4fcd\scratchpad
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "@'
+from pathlib import Path
+p = Path(r'C:\\DocumentNoSnc\\CC\\GXEMUL\\_scratchpad\\ppc_pem_32and64_2005.txt')
+lines = p.read_bytes().split(b'\\n')
+for n in (6879,17137,17143,29908,29909,29989,30064,30065):
+    print(n, repr(lines[n-1]))
+'@ | python -B -" in C:\Users\User00\AppData\Local\Temp\claude\C--DocumentNoSnc-CC-GXEMUL\8e474f41-4d47-4c99-bf11-3406a84c4fcd\scratchpad
+ succeeded in 201ms:
+A c c e s s   i s   d e n i e d .    
+ E r r o r   c o d e :   W s l / S e r v i c e / C r e a t e I n s t a n c e / E _ A C C E S S D E N I E D  
+ #
+#  DO NOT EDIT THIS FILE! It is automagically created by
+#  the configure script, based on Makefile.skel.
+#
+
+XINCLUDE=-I/usr/X11R6/include
+XLIB=-L/usr/X11R6/lib -lX11 -Wl,-rpath,/usr/X11R6/lib
+CWARNINGS=-Wshadow -Wcast-align -Wstrict-aliasing -Wall  -Wextra -Wno-unused-parameter -Wno-cast-align
+COPTIM=-fstrict-aliasing -fomit-frame-pointer -fpeephole -fgnu89-inline -O3 -DNDEBUG 
+INCLUDE=-Iinclude/
+DINCLUDE=-I../include/
+INCLUDE2=-I../../include/
+CC=cc
+OTHERLIBS=-lm 
+CPU_ARCHS= cpu_alpha.o cpu_alpha_palcode.o memory_alpha.o cpu_arm.o cpu_arm_coproc.o memory_arm.o  tmp_arm_loadstore.o tmp_arm_loadstore_p0_u0_w0.o tmp_arm_loadstore_p0_u0_w1.o tmp_arm_loadstore_p0_u1_w0.o tmp_arm_loadstore_p0_u1_w1.o tmp_arm_loadstore_p1_u0_w0.o tmp_arm_loadstore_p1_u0_w1.o tmp_arm_loadstore_p1_u1_w0.o tmp_arm_loadstore_p1_u1_w1.o tmp_arm_dpi.o tmp_arm_r.o tmp_arm_r0.o tmp_arm_r1.o tmp_arm_r2.o tmp_arm_r3.o tmp_arm_r4.o tmp_arm_r5.o tmp_arm_r6.o tmp_arm_r7.o tmp_arm_r8.o tmp_arm_r9.o tmp_arm_ra.o tmp_arm_rb.o tmp_arm_rc.o tmp_arm_rd.o tmp_arm_re.o tmp_arm_rf.o tmp_arm_multi.o cpu_i960.o memory_i960.o cpu_m88k.o memory_m88k.o cpu_mips.o cpu_mips_coproc.o  cpu_mips_instr_unaligned.o cpu_ppc.o cpu_riscv.o memory_riscv.o cpu_sh.o memory_sh.o
+CPU_TOOLS= generate_alpha_misc generate_arm_dpi generate_arm_r generate_arm_loadstore generate_arm_multi generate_m88k_bcnd generate_m88k_loadstore generate_mips_loadstore generate_mips_loadstore_multi generate_ppc_loadstore
+PREFIX=/usr
+MANDIR=/usr/share/man
+DESTDIR=
+
+#
+#  Makefile for GXemul
+#
+
+BIN=gxemul
+LIBS=$(XLIB) $(OTHERLIBS)
+
+all: build
+
+build: do_src
+	$(CC) $(COPTIM) src/console/*.o src/cpus/*.o src/debugger/*.o src/devices/*.o src/disk/*.o src/file/*.o src/machines/*.o src/net/*.o src/core/*.o src/promemul/*.o src/symbol/*.o $(LIBS) -o $(BIN)
+
+do_src:
+	cd src; $(MAKE)
+
+install:
+	@echo Installing binaries, man page, and documentation...
+	mkdir -p $(DESTDIR)$(PREFIX)/bin
+	cp -f $(BIN) $(DESTDIR)$(PREFIX)/bin/
+	mkdir -p $(DESTDIR)$(MANDIR)/man1
+	cp -f man/gxemul.1 $(DESTDIR)$(MANDIR)/man1/
+	mkdir -p $(DESTDIR)$(PREFIX)/share/doc/gxemul
+	cp -R doc/* $(DESTDIR)$(PREFIX)/share/doc/gxemul/
+
+uninstall:
+	@echo Removing binaries, man pages, and documentation...
+	rm -f $(DESTDIR)$(PREFIX)/bin/gxemul
+	rm -f $(DESTDIR)$(MANDIR)/man1/gxemul.1
+	rm -rf $(DESTDIR)$(PREFIX)/share/doc/gxemul
+
+clean:
+	rm -f $(BIN) *core core.* *.gmon _* *.exe ktrace.out tmp_*.out* callgrind.out* cachegrind.out*
+	cd src; $(MAKE) clean
+
+#  experiments and demos are not cleaned on a normal clean, only on a clean_all.
+
+clean_all: clean
+	cd experiments; $(MAKE) clean_all
+	cd demos; $(MAKE) clean
+	rm -f config.h Makefile src/Makefile src/cpus/Makefile
+	rm -f src/debugger/Makefile src/devices/Makefile
+	rm -f src/devices/fonts/Makefile src/disk/Makefile
+	rm -f src/file/Makefile src/machines/Makefile
+	rm -f src/main/Makefile src/core/Makefile src/net/Makefile
+	rm -f src/promemul/Makefile src/include/Makefile
+1795:}
+1796:
+1797:
+1798:/*
+1799: *  update_cr0():
+1800: *
+1801: *  Sets the top 4 bits of the CR register.
+1802: */
+1803:void update_cr0(struct cpu *cpu, uint64_t value)
+1804:{
+1805:	int c;
+1806:
+1807:	if (cpu->cd.ppc.bits == 64) {
+1808:		if ((int64_t)value < 0)
+1809:			c = 8;
+1810:		else if ((int64_t)value > 0)
+1811:			c = 4;
+1812:		else
+1813:			c = 2;
+1814:	} else {
+1815:		if ((int32_t)value < 0)
+1816:			c = 8;
+1817:		else if ((int32_t)value > 0)
+1818:			c = 4;
+1819:		else
+1820:			c = 2;
+1821:	}
+1822:
+1823:	/*  SO bit, copied from XER:  */
+1824:	c |= ((cpu->cd.ppc.spr[SPR_XER] >> 31) & 1);
+1825:
+1826:	cpu->cd.ppc.cr &= ~((uint32_t)0xf << 28);
+1827:	cpu->cd.ppc.cr |= ((uint32_t)c << 28);
+1828:}
+1829:
+1830:
+1831:/*
+1832: *  update_cr1():  #326
+1833: *
+1834: *  Sets CR field 1 from the top four bits of the FPSCR, which is what every
+1835: *  floating-point instruction with Rc=1 owes: Book I, "For all floating-point
+
+ succeeded in 208ms:
+6879 b"The rotate and shift instructions employ a mask generator. The mask is 64 bits long and consists of `1' bits from a start bit, Mstart, through and including a stop bit, Mstop, and `0' bits elsewhere. The values of Mstart and Mstop range from 0 to 63. If Mstart > Mstop, the `1' bits wrap around from position 63 to position 0. Thus the mask is formed as follows:\r"
+17137 b'Mask having ones in positions x through y (wrapping if x > y) and zeros elsewhere.\r'
+17143 b'Result of rotating the 64-bit value x || x left y positions, where x is 32 bits long\r'
+29908 b'n  sh[5] || sh[0-4] r  ROTL[64](rS, n) b  mb[5] || mb[0-4] m  MASK(b, \xac n) rA  (r & m) | (rA & \xac m)\r'
+29909 b'The contents of rS are rotated left the number of bits specified by operand SH. A mask is generated having 1 bits from bit MB through bit 63 \xad SH and 0 bits elsewhere. The rotated data is inserted into rA under control of the generated mask.\r'
+29989 b'n  SH r  ROTL[32](rS[32-63], n) m  MASK(MB + 32, ME + 32) rA  (r & m) | (rA & \xac m)\r'
+30064 b'n  SH r  ROTL[32](rS[32-63], n) m  MASK(MB + 32, ME + 32) rA  r & m\r'
+30065 b'The contents of rS[32-63] are rotated left the number of bits specified by operand SH. A mask is generated having 1 bits from bit MB + 32 through bit ME + 32 and 0 bits elsewhere. The rotated data is ANDed with the generated mask and the result is placed into rA. The upper 32 bits of rA are cleared.\r'
+
+ succeeded in 500ms:
+40:#include "memory_rw.c"
+41:#undef MEM_PPC
+42:#undef MEMORY_RW
+43:
+44:#define DYNTRANS_PC_TO_POINTERS_FUNC ppc_pc_to_pointers
+45:#define DYNTRANS_PC_TO_POINTERS_GENERIC ppc_pc_to_pointers_generic
+46:#include "cpu_dyntrans.c"
+47:#undef DYNTRANS_PC_TO_POINTERS_FUNC
+48:
+49:#undef DYNTRANS_PC_TO_POINTERS_GENERIC
+50:
+51:#define COMBINE_INSTRUCTIONS ppc_combine_instructions
+52:#ifndef DYNTRANS_32
+53:#define reg(x) (*((uint64_t *)(x)))
+54:#define MODE_uint_t uint64_t
+55:#define MODE_int_t int64_t
+56:#else
+57:#define reg(x) (*((uint32_t *)(x)))
+58:#define MODE_uint_t uint32_t
+59:#define MODE_int_t int32_t
+60:#endif
+61:#define COMBINE(n) ppc_combine_ ## n
+62:#include "quick_pc_to_pointers.h"
+63:#include "cpu_ppc_instr.c"
+64:
+65:#define DYNTRANS_RUN_INSTR_DEF ppc_run_instr
+66:#include "cpu_dyntrans.c"
+67:#undef DYNTRANS_RUN_INSTR_DEF
+68:
+69:#ifdef DYNTRANS_DUALMODE_32
+70:#undef COMBINE_INSTRUCTIONS
+71:#define COMBINE_INSTRUCTIONS ppc32_combine_instructions
+72:#undef X
+73:#undef instr
+74:#undef reg
+75:#define X(n) void ppc32_instr_ ## n(struct cpu *cpu, \
+76:	struct ppc_instr_call *ic)
+77:#define instr(n) ppc32_instr_ ## n
+78:#ifdef HOST_LITTLE_ENDIAN
+79:#define reg(x) ( *((uint32_t *)(x)) )
+80:#else
+81:#define reg(x) ( *((uint32_t *)(x)+1) )
+82:#endif
+83:#define MODE32
+84:#undef MODE_uint_t
+85:#undef MODE_int_t
+86:#define MODE_uint_t uint32_t
+87:#define MODE_int_t int32_t
+88:#define DYNTRANS_INVAL_ENTRY
+89:#undef DYNTRANS_INVALIDATE_TLB_ENTRY
+90:#define DYNTRANS_INVALIDATE_TLB_ENTRY ppc32_invalidate_tlb_entry
+91:#include "cpu_dyntrans.c"
+92:#undef DYNTRANS_INVAL_ENTRY
+93:
+94:#define DYNTRANS_INVALIDATE_TC ppc32_invalidate_translation_caches
+95:#include "cpu_dyntrans.c"
+96:#undef DYNTRANS_INVALIDATE_TC
+97:
+98:#define DYNTRANS_INVALIDATE_TC_CODE ppc32_invalidate_code_translation
+99:#include "cpu_dyntrans.c"
+100:#undef DYNTRANS_INVALIDATE_TC_CODE
+101:
+102:#define DYNTRANS_UPDATE_TRANSLATION_TABLE ppc32_update_translation_table
+103:#include "cpu_dyntrans.c"
+104:#undef DYNTRANS_UPDATE_TRANSLATION_TABLE
+105:
+106:#define DYNTRANS_PC_TO_POINTERS_FUNC ppc32_pc_to_pointers
+107:#define DYNTRANS_PC_TO_POINTERS_GENERIC ppc32_pc_to_pointers_generic
+108:#undef DYNTRANS_PC_TO_POINTERS
+109:#define DYNTRANS_PC_TO_POINTERS ppc32_pc_to_pointers
+110:#include "cpu_dyntrans.c"
+6688:The value in register rA (rA[32-63] sign-extended to 64 bits if L = 0) is compared with the sign-extended value of the SIMM operand, treating the operands as signed integers. The result of the comparison is placed into the CR field specified by operand crfD.
+6689:The value in register rA (rA[32-63] if L = 0) is compared with the value in register rB (rB[32-63] if L = 0), treating the operands as signed integers. The result of the comparison is placed into the CR field specified by operand crfD.
+6690:The value in register rA (rA[32-63] zero-extended to 64 bits if L = 0) is compared with 0x0000_0000_0000 || UIMM, treating the operands as unsigned integers. The result of the comparison is placed into the CR field specified by operand crfD.
+6691:The value in register rA (rA[32-63] if L = 0) is compared with the value in register rB (rB[32-63] if L = 0), treating the operands as unsigned integers. The result of the comparison is placed into the CR field specified by operand crfD.
+6692:
+6693:The crfD operand can be omitted if the result of the comparison is to be placed in CR0. Otherwise the target CR field must be specified in the instruction crfD field, using an explicit field number.
+6694:
+6695:For information on simplified mnemonics for the integer compare instructions see Appendix E Simplified Mnemonics.
+6696:
+6697:4.2.1.3 Integer Logical Instructions
+6698:The logical instructions shown in Table 4-3 perform bit-parallel operations on 64-bit operands. Logical instructions with the CR updating enabled (uses dot suffix) and instructions andi. and andis. set CR field CR0 (bits [0 to 2]) to characterize the result of the logical operation. In the default 64-bit mode, these fields are set as if the 64-bit result were compared algebraically to zero. In 32-bit mode of a 64-bit implementation, these fields are set as if the sign-extended low-order 32 bits of the result were algebraically compared to zero. Logical instructions without CR update and the remaining logical instructions do not modify the CR. Logical instructions do not affect the XER[SO], XER[OV], and XER[CA] bits.
+6699:See Appendix E Simplified Mnemonics for simplified mnemonic examples for integer logical operations.
+6700:
+6701:Addressing Modes and Instruction Set Summary
+6702:Page 142 of 721
+6703:
+6704:pem4_instr_Set.fm.2.3 March 31, 2005
+6705:
+C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\regress\artifacts\ppcrldiclzero\witness_naive.out
+C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\regress\artifacts\ppcrldiclzero\witness_fix.out
+C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\regress\artifacts\ppcrldiclzero\witness_committed.out
+C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\regress\artifacts\ppcrldiclzero\opus_witness_20260910.md
+C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\regress\artifacts\ppcrldiclzero\opus_ppc_rldicl_witness_20260910.py
+109:def mask_b_63(b):
+115:def mask_0_e(e):
+129:def want_rldimi(rs_val, ra_val, sh, mb):
+144:def mask32(mb, me):
+160:def want_rlwimi(rs_val, ra_val, sh, mb, me):
+167:    """opcode 30 (rldicl/rldicr/rldimi).  Field placement derived from the manual's
+190:    """opcode 20/21 (rlwimi/rlwinm): 0-5 op | 6-10 S | 11-15 A | 16-20 SH
+410:# rldimi: X(rldimi) computes its mask end as `63 - sh' AFTER the rotate loop has
+439:row("rldimi sh8", hex(sregs.get(4, -1)), hex(want_rldimi(M64, 0, 8, 0)),
+441:row("rldimi sh0", hex(sregs.get(5, -1)), hex(want_rldimi(M64, 0, 0, 0)),
+443:row("rldimi sh32", hex(sregs.get(6, -1)), hex(want_rldimi(M64, 0, 32, 0)),
+448:row("rlwimi wide", hex(wregs.get(8, -1)),
+449:    hex(want_rlwimi(RS_HALVES, SENT, 4, 0, 31)),
+451:row("rlwimi sh0", hex(wregs.get(9, -1)),
+452:    hex(want_rlwimi(RS_HALVES, SENT, 0, 0, 31)),
+
+codex
+The two repairs are now concrete. `rldimi` needs a separate rotation counter and an inclusive mask walk that wraps modulo 64. `rlwimi` needs a 32-bit source temporary plus high-half insertion when `MB > ME`.
+
+I’m checking all shift and mask-field combinations against an independent bit-position oracle, along with concrete mutants. Native C compiler commands were unavailable, and WSL returned access denied, so I can validate the arithmetic here but cannot claim a compiled emulator run.
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$p = '"'C:\\DocumentNoSnc\\CC\\GXEMUL\\GXEMUL-SEC\\regress\\artifacts\\ppcrldiclzero\\opus_ppc_rldicl_witness_20260910.py'
+"'$lines = Get-Content -LiteralPath $p
+for ($n = 100; $n -le 197; $n++) { '"'{0}:{1}' -f "'$n,$lines[$n-1] }' in C:\Users\User00\AppData\Local\Temp\claude\C--DocumentNoSnc-CC-GXEMUL\8e474f41-4d47-4c99-bf11-3406a84c4fcd\scratchpad
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "@'
+from itertools import product
+M32 = (1 << 32) - 1
+M64 = (1 << 64) - 1
+
+def arch_mask(b, e):
+    return sum(1 << (63-p) for p in range(64)
+               if (b <= p <= e if b <= e else p >= b or p <= e))
+
+masks = {(b,e): arch_mask(b,e) for b in range(64) for e in range(64)}
+
+def rotate_bits(s, n, width):
+    bits = format(s & ((1 << width)-1), '0%db' % width)
+    return int(bits[n:] + bits[:n], 2)
+
+def repaired_rldimi(s, d, sh, mb, endpoint_constant=64):
+    n = sh
+    while n "'!= 0:
+        n -= 1
+        b = (s >> 63) & 1
+        s = ((s << 1) | b) & M64
+    m, mask, iterations = mb, 0, 0
+    while True:
+        assert 0 <= 63-m <= 63
+        mask |= 1 << (63-m)
+        m = (m+1) & 63
+        iterations += 1
+        if m == ((endpoint_constant-sh) & 63):
+            break
+        assert iterations < 64
+    return ((d & (M64 ''^ mask)) | (s & mask)), iterations
+
+def repaired_rlwimi(s, d, sh, mb, me, width, mutant=False):
+    tmp = s & M32
+    ra = d & ((1 << width)-1)
+    if sh:
+        tmp = ((tmp << sh) | (tmp >> (32-sh))) & M32
+    if (mb < me if mutant else mb > me):
+        ra = ((ra & M32) | (tmp << 32)) & ((1 << width)-1)
+    iterations = 0
+    while True:
+        assert 0 <= 31-mb <= 31
+        mask = 1 << (31-mb)
+        ra = (ra & ~mask) | (tmp & mask)
+        iterations += 1
+        if mb == me:
+            break
+        mb += 1
+        if mb == 32:
+            mb = 0
+        assert iterations < 32
+    return ra, iterations
+
+pairs = [
+    (0, M64), (M64, 0), (0x0123456789abcdef, 0x5a5a5a5a5a5a5a5a),
+    (0xaaaaaaaa0000000f, 0x5a5a5a5a5a5a5a5a),
+    (0xaaaaaaaa0000000f, 0xaaaaaaaa0000000f),
+    (0x8000000080000000, 0x7fffffff7fffffff),
+    (0xffffffff00000002, 0x123456789abcdef0),
+    (0x0000000000000001, 0xfffffffffffffffe),
+    (0xaaaaaaaa55555555, 0x55555555aaaaaaaa),
+    (0x00000000f0f0f0f0, 0x55555555aaaaaaaa)
+]
+
+count_a, max_a = 0, 0
+for sh, mb in product(range(64), repeat=2):
+    mask = masks[mb, 63-sh]
+    for s,d in pairs:
+        got, iterations = repaired_rldimi(s, d, sh, mb)
+        rotated = rotate_bits(s, sh, 64)
+        want = (rotated & mask) | (d & (M64 ''^ mask))
+        assert got == want, ('"'rldimi', sh, mb, hex(s), hex(d), hex(got), hex(want))
+        assert iterations == ((63-sh-mb) & 63) + 1
+        count_a += 1
+        max_a = max(max_a, iterations)
+print('rldimi: %d whole-handler model rows passed; all 4096 SH/MB combinations; max mask iterations %d' % (count_a, max_a))
+
+count_b, max_b = 0, 0
+for sh, mb, me in product(range(32), repeat=3):
+    mask = masks[mb+32, me+32]
+    for s,d in pairs:
+        low = s & M32
+        duplicated = (low << 32) | low
+        rotated = rotate_bits(duplicated, sh, 64)
+        want64 = (rotated & mask) | (d & (M64 "'^ mask))
+        for width in (32, 64):
+            got, iterations = repaired_rlwimi(s, d, sh, mb, me, width)
+            want = want64 & ((1 << width)-1)
+            assert got == want, ('"'rlwimi', width, sh, mb, me, hex(s), hex(d), hex(got), hex(want))
+            assert iterations == ((me-mb) & 31) + 1
+            count_b += 1
+            max_b = max(max_b, iterations)
+print('rlwimi: %d whole-handler model rows passed; all 32768 SH/MB/ME combinations at both widths; max mask iterations %d' % (count_b, max_b))
+
+def enc_rldimi(ra, rs, sh, mb, rc=0):
+    return (30<<26) | (rs<<21) | (ra<<16) | ((sh&31)<<11) | ((mb&31)<<6) | (mb&32) | (3<<2) | ((sh&32)>>4) | rc
+
+def enc_rlwimi(ra, rs, sh, mb, me, rc=0):
+    return (20<<26) | (rs<<21) | (ra<<16) | (sh<<11) | (mb<<6) | (me<<1) | rc
+
+cases = [
+    ('A last-bit mutant', enc_rldimi(4,3,0,0), repaired_rldimi(M64,0,0,0)[0], repaired_rldimi(M64,0,0,0,63)[0]),
+    ('A wrap', enc_rldimi(4,3,40,40), repaired_rldimi(M64,0,40,40)[0], (1<<24)-1),
+    ('B wrap comparison mutant', enc_rlwimi(4,3,0,31,0), repaired_rlwimi(0xaaaaaaaa0000000f,0x5a5a5a5a5a5a5a5a,0,31,0,64)[0], repaired_rlwimi(0xaaaaaaaa0000000f,0x5a5a5a5a5a5a5a5a,0,31,0,64,True)[0]),
+    ('B bleed original', enc_rlwimi(4,3,4,0,31), repaired_rlwimi(0xaaaaaaaa0000000f,0x5a5a5a5a5a5a5a5a,4,0,31,64)[0], 0x5a5a5a5aaaaaaaf0),
+    ('B rotate 32-to-31 mutant', enc_rlwimi(4,3,1,0,31), repaired_rlwimi(0x0000000080000000,0,1,0,31,64)[0], 2)
+]
+for name, iw, want, bad in cases:
+    assert want "'!= bad
+    print('"'%s: iw=%08x correct=%016x wrong=%016x' % (name,iw,want,bad))
+
+print('Wrap masks: A=%016x B=%016x' % (masks[40,23],masks[63,32]))
+print('Original sh-- loop modeled for all 64 SH values:')
+for sh in range(64):
+    counter, count = sh, 0
+    while True:
+        old = counter
+        counter -= 1
+        if old == 0:
+            break
+        count += 1
+    assert counter == -1 and count == sh
+print('64/64 have exactly SH rotations and exit counter -1, including SH=0')
+'@ | python -B -" in C:\Users\User00\AppData\Local\Temp\claude\C--DocumentNoSnc-CC-GXEMUL\8e474f41-4d47-4c99-bf11-3406a84c4fcd\scratchpad
+ succeeded in 119ms:
+100:    return ok
+101:
+102:
+103:# ----------------------------------------------------------------- architecture
+104:def rotl64(x, n):
+105:    n &= 63
+106:    return ((x << n) | (x >> (64 - n))) & M64 if n else x & M64
+107:
+108:
+109:def mask_b_63(b):
+110:    """MASK(b,63), big-endian bit numbering = the low (64-b) bits."""
+111:    assert 0 <= b <= 63
+112:    return (1 << (64 - b)) - 1
+113:
+114:
+115:def mask_0_e(e):
+116:    """MASK(0,e), big-endian = the high (e+1) bits."""
+117:    assert 0 <= e <= 63
+118:    return (((1 << (e + 1)) - 1) << (63 - e)) & M64
+119:
+120:
+121:def want_rldicl(rs_val, sh, mb):
+122:    return rotl64(rs_val, sh) & mask_b_63(mb)
+123:
+124:
+125:def want_rldicr(rs_val, sh, me):
+126:    return rotl64(rs_val, sh) & mask_0_e(me)
+127:
+128:
+129:def want_rldimi(rs_val, ra_val, sh, mb):
+130:    """manual :29908 -- m <- MASK(b, ~n); prose :29909 "1 bits from bit MB
+131:       through bit 63 - SH"."""
+132:    m = mask_b_63(mb) & mask_0_e((63 - sh) & 63)
+133:    return (rotl64(rs_val, sh) & m) | (ra_val & (~m & M64))
+134:
+135:
+136:def rotl32(x, n):
+137:    """ROTL[32] per manual :6878 -- two copies of rS[32-63], then rotate."""
+138:    lo = x & 0xFFFFFFFF
+139:    n &= 31
+140:    r32 = ((lo << n) | (lo >> (32 - n))) & 0xFFFFFFFF if n else lo
+141:    return (r32 << 32) | r32
+142:
+143:
+144:def mask32(mb, me):
+145:    """MASK(mb+32, me+32) confined to the low 32 bits, PowerPC wrap-around form."""
+146:    m = 0
+147:    b = mb
+148:    while True:
+149:        m |= 1 << (31 - b)
+150:        if b == me:
+151:            break
+152:        b = (b + 1) & 31
+153:    return m
+154:
+155:
+156:def want_rlwinm(rs_val, sh, mb, me):
+157:    return rotl32(rs_val, sh) & mask32(mb, me)
+158:
+159:
+160:def want_rlwimi(rs_val, ra_val, sh, mb, me):
+161:    m = mask32(mb, me)
+162:    return (rotl32(rs_val, sh) & m) | (ra_val & (~m & M64))
+163:
+164:
+165:# -------------------------------------------------------------------- encodings
+166:def enc_md(xo, rs, ra, sh, mbe, rc=0):
+167:    """opcode 30 (rldicl/rldicr/rldimi).  Field placement derived from the manual's
+168:       own instruction-format diagram at :29706-29734:
+169:         0-5 opcode | 6-10 S | 11-15 A | 16-20 sh[0-4] | 21-26 mb[5]||mb[0-4]
+170:         | 27-29 XO | 30 sh[5] | 31 Rc      (all big-endian bit numbers)"""
+171:    assert 0 <= sh <= 63 and 0 <= mbe <= 63 and 0 <= xo <= 7
+172:    return ((30 << 26) | (rs << 21) | (ra << 16) | ((sh & 31) << 11)
+173:            | ((mbe & 31) << 6) | (((mbe >> 5) & 1) << 5) | (xo << 2)
+174:            | (((sh >> 5) & 1) << 1) | rc) & 0xFFFFFFFF
+175:
+176:
+177:def RLDICL(ra, rs, sh, mb):
+178:    return enc_md(0, rs, ra, sh, mb)
+179:
+180:
+181:def RLDICR(ra, rs, sh, me):
+182:    return enc_md(1, rs, ra, sh, me)
+183:
+184:
+185:def RLDIMI(ra, rs, sh, mb):
+186:    return enc_md(3, rs, ra, sh, mb)
+187:
+188:
+189:def enc_m(op, rs, ra, sh, mb, me, rc=0):
+190:    """opcode 20/21 (rlwimi/rlwinm): 0-5 op | 6-10 S | 11-15 A | 16-20 SH
+191:       | 21-25 MB | 26-30 ME | 31 Rc."""
+192:    return ((op << 26) | (rs << 21) | (ra << 16) | (sh << 11) | (mb << 6)
+193:            | (me << 1) | rc) & 0xFFFFFFFF
+194:
+195:
+196:def RLWINM(ra, rs, sh, mb, me):
+197:    return enc_m(21, rs, ra, sh, mb, me)
+
+ succeeded in 3804ms:
+rldimi: 40960 whole-handler model rows passed; all 4096 SH/MB combinations; max mask iterations 64
+rlwimi: 655360 whole-handler model rows passed; all 32768 SH/MB/ME combinations at both widths; max mask iterations 32
+A last-bit mutant: iw=7864000c correct=ffffffffffffffff wrong=fffffffffffffffe
+A wrap: iw=7864422e correct=ffffff0000ffffff wrong=0000000000ffffff
+B wrap comparison mutant: iw=506407c0 correct=0000000f5a5a5a5b wrong=5a5a5a5a5a5a5a5b
+B bleed original: iw=5064203e correct=5a5a5a5a000000f0 wrong=5a5a5a5aaaaaaaf0
+B rotate 32-to-31 mutant: iw=5064083e correct=0000000000000001 wrong=0000000000000002
+Wrap masks: A=ffffff0000ffffff B=ffffffff80000001
+Original sh-- loop modeled for all 64 SH values:
+64/64 have exactly SH rotations and exit counter -1, including SH=0
+
+codex
+All arithmetic-model checks passed: 40,960 `rldimi` cases and 655,360 `rlwimi` cases, covering every shift/mask combination with ten source/destination pairs and both word-handler widths.
+
+The existing witness has two oracle defects relevant to shipping: its `rldimi` mask intersection fails on wrapping masks, and its word mask omits the high half. Those oracles cannot certify these repairs unchanged.
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n '(CR0|CR\\[0).*32-bit|32-bit.*(CR0|CR\\[0)|MSR\\[SF\\].*CR|CR.*MSR\\[SF\\]' 'C:\\DocumentNoSnc\\CC\\GXEMUL\\_scratchpad\\ppc_pem_32and64_2005.txt'
+rg -n 'PPC_30_RLDIMI|PPC_HI6_RLWIMI|PPC_HI6_RLWINM' 'C:\\DocumentNoSnc\\CC\\GXEMUL\\GXEMUL-SEC\\src\\include\\cpu_ppc.h'" in C:\Users\User00\AppData\Local\Temp\claude\C--DocumentNoSnc-CC-GXEMUL\8e474f41-4d47-4c99-bf11-3406a84c4fcd\scratchpad
+ exited 1 in 80ms:
+875:� Condition register (CR). The condition register is a 32-bit register that is divided into eight 4-bit fields, CR0�CR7. This register stores the results of certain arithmetic operations and provides a mechanism for testing and branching. For more information, see Section 2.1.3 Condition Register (CR) on page 49.
+924:The condition register (CR) is a 32-bit register that reflects the result of certain operations and provides a mechanism for testing and branching. The bits in the CR are grouped into eight 4-bit fields, CR0�CR7, as shown in Figure 2-4.
+6357:The integer instructions that are coded to update the condition register, and the integer arithmetic instruction, addic., set CR bits 0�3 (CR0) to characterize the result of the operation. In the default 64-bit mode, CR0 is set to reflect a signed comparison of the 64-bit result to zero. In 32-bit mode (of 64-bit implementations), CR0 is set to reflect a signed comparison of the low-order 32 bits of the result to zero.
+6698:The logical instructions shown in Table 4-3 perform bit-parallel operations on 64-bit operands. Logical instructions with the CR updating enabled (uses dot suffix) and instructions andi. and andis. set CR field CR0 (bits [0 to 2]) to characterize the result of the logical operation. In the default 64-bit mode, these fields are set as if the 64-bit result were compared algebraically to zero. In 32-bit mode of a 64-bit implementation, these fields are set as if the sign-extended low-order 32 bits of the result were algebraically compared to zero. Logical instructions without CR update and the remaining logical instructions do not modify the CR. Logical instructions do not affect the XER[SO], XER[OV], and XER[CA] bits.
+6864:A count of the number of consecutive zero bits starting at bit [32] of rS (bit [0] in 32-bit implementations) is placed into rA. This number ranges from 0 to 32, inclusive. If Rc = 1 (dot suffix), LT is cleared in CR0. cntlzw Count Leading Zeros Word cntlzw. Count Leading Zeros Word with CR Update. The dot suffix
+28581:Note: The setting of CR0 bits LT, GT, and EQ is mode-dependent, and reflects overflow of the 32-bit result.
+28651:Note: The setting of CR0 bits LT, GT, and EQ is mode-dependent, and reflects overflow of the 32-bit result.
+50445:Following are examples using the word compare mnemonics. 1. Compare rA[32�63] with immediate value 100 as signed 32-bit integers and place result in CR0.
+50455:3. Compare rA[32�63] and rB[32�63] as unsigned 32-bit integers and place result in CR0.
+
+codex
+VERDICT: TWO rounds. `rldimi` needs all four counter/endpoint/wrap changes. `rlwimi` needs source narrowing AND high-half insertion for wrapping masks; a cast alone is insufficient.
+CODEX_PPCROT_20260910
+
+The sandbox is read-only, so this is the complete answer for `regress/artifacts/ppcrldimimask/codex_repair_20260910.md`.
+
+I inspected the specified [active source file](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc_instr.c:2534): the handlers begin at lines **2534** and **2608**. I accept the brief’s #522, dual-compilation, type-width, and gate-coverage facts as settled.
+
+1. **Yes: `sh == -1` on exit for every decoded SH, including zero.**
+
+   The final condition evaluates the old value zero, decrements `sh` to −1, and exits. The body executes exactly SH times.
+
+   The body correctly performs one unsigned 64-bit left rotation: it saves numeric bit 63, shifts left one, and inserts that saved bit at numeric bit 0. Repeating it SH times produces `ROTL64`.
+
+   Consequently, the current mask loop always stops when its incremented `m` reaches 64 and selects architectural bits `MB..63`.
+
+2. **The architectural mask is inclusive `MASK(MB, 63-SH)`.**
+
+   The extracted RTL at [PEM line 29908](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ppc_pem_32and64_2005.txt:29908) contains:
+
+   > m  MASK(b, ¬ n)
+
+   Here `b` and `n` are the decoded six-bit MB and SH operands. Complementing six-bit `n` gives `63-SH`; the following prose at **line 29909** explicitly gives that endpoint.
+
+   Using decoded operands, the operation is:
+
+   ```text
+   R = ROTL64(RS, SH)
+   M = MASK64(MB, 63-SH)
+   RA = (R & M) | (old_RA & ~M)
+   ```
+
+   The mask definition at [line 6879](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ppc_pem_32and64_2005.txt:6879) explicitly includes both endpoints and wraps from architectural position 63 to position 0.
+
+3. **Saving SH without changing the termination test is insufficient.**
+
+   The comparison happens **after** incrementing `m`. Thus, where the unwrapped loop terminates normally, `X = 63-SH` excludes the required endpoint.
+
+   The stopping position must be the position **after** that endpoint:
+
+   ```c
+   X = 64 - sh;             /*  For a nonwrapping counter.  */
+   X = (64 - sh) & 63;      /*  For the repaired circular counter.  */
+   ```
+
+   The circular form requires a circular increment too. Changing only one of those expressions does not repair the loop.
+
+4. **`MB=40, SH=40` is legal on a 64-bit implementation and requires wrapping.**
+
+   Its endpoint is 23. A partial repair that saves SH and changes `X` to 24, while retaining unbounded `m ++`, visits positions 40 through 63 and then enters the body with `m=64`. It evaluates:
+
+   ```c
+   (uint64_t)1 << -1
+   ```
+
+   That is **undefined behavior**. Calling it a guaranteed infinite loop would incorrectly assign defined behavior to the C program.
+
+   The complete repair below visits:
+
+   ```text
+   40..63, 0..23
+   ```
+
+   It takes **48 iterations** and produces mask:
+
+   ```text
+   0xffffff0000ffffff
+   ```
+
+   For example, `rldimi r4,r3,40,40` has instruction word `0x7864422e`. With `r3=0xffffffffffffffff` and initial `r4=0`, that mask is also the correct result. The original handler produces `0x0000000000ffffff`.
+
+   The instruction entry imposes no ordering restriction between MB and `63-SH`; the general wrapping definition applies. Its implementation restriction is that `rldimi` requires a 64-bit implementation. [PEM lines 29908–29911](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ppc_pem_32and64_2005.txt:29908)
+
+   This also corrects the brief’s overwrite characterization: **for nonwrapping masks**, the original overwrites the low SH bits that should survive. **For wrapping masks**, it omits the required insertion into positions `0..63-SH`, leaving those destination bits unchanged.
+
+5. **Complete `rldimi` replacement:**
+
+   ```c
+   X(rldimi)
+   {
+   	uint32_t iw = ic->arg[0];
+   	int rs = (iw >> 21) & 31, ra = (iw >> 16) & 31;
+   	int sh = ((iw >> 11) & 31) | ((iw & 2) << 4);
+   	int mb = ((iw >> 6) & 31) | (iw & 0x20);
+   	int rc = ic->arg[0] & 1;
+   	int m, n = sh;
+   	uint64_t tmp, s = cpu->cd.ppc.gpr[rs];
+
+   	/*  TODO: Fix this, its performance is awful:  */
+   	while (n-- != 0) {
+   		int b = (s >> 63) & 1;
+   		s = (s << 1) | b;
+   	}
+   	m = mb; tmp = 0;
+   	do {
+   		tmp |= ((uint64_t)1 << (63-m));
+   		m = (m + 1) & 63;
+   	} while (m != ((64 - sh) & 63));
+   	cpu->cd.ppc.gpr[ra] &= ~tmp;
+   	cpu->cd.ppc.gpr[ra] |= (tmp & s);
+   	if (rc)
+   		update_cr0(cpu, cpu->cd.ppc.gpr[ra]);
+   }
+   ```
+
+   The four coordinated edits are: declare `n = sh`; consume `n` in the rotation loop, preserving SH; wrap the mask position modulo 64; and compare against the endpoint’s successor modulo 64.
+
+   The `do` body makes singleton masks execute once and full-width masks execute 64 times. Every mask shift count stays within `0..63`. The source is captured before either destination write, so `RS == RA` works.
+
+   The performance TODO remains accurate: both rotation and mask construction remain iterative.
+
+6. **Yes: the wide source contaminates selected low-word bits.**
+
+   Let the original source be `H:L`, with each half 32 bits. For `1 <= n <= 31`, the erroneous expression’s low word is:
+
+   ```text
+   correct_32_bit_rotation(L, n) | ((H << n) & 0xffffffff)
+   ```
+
+   The existing low-word mask can select those additional bits.
+
+   With source `0xaaaaaaaa0000000f`, SH=4, MB=0, ME=31, and destination `0x5a5a5a5a5a5a5a5a`:
+
+   ```text
+   Correct:  0x5a5a5a5a000000f0
+   Original: 0x5a5a5a5aaaaaaaf0
+   ```
+
+   SH=0 bypasses the erroneous shift expression, so it does not exhibit this contamination.
+
+7. **`ROTL32` duplicates the source’s low word, and that duplication matters here.**
+
+   The definition at [PEM line 17143](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ppc_pem_32and64_2005.txt:17143) is:
+
+   > Result of rotating the 64-bit value x || x left y positions, where x is 32 bits long
+
+   Thus, if `W` is the ordinary 32-bit rotation of the source’s low word, the architectural intermediate is `W || W`.
+
+   The [rlwimi RTL at line 29989](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ppc_pem_32and64_2005.txt:29989) combines that intermediate with `MASK(MB+32, ME+32)` and preserves destination bits outside the mask.
+
+   **The premise that this mask always confines insertion to the low word is false.** When MB exceeds ME, it wraps across the boundary of the **64-bit** mask.
+
+8. **RA’s high half is preserved only when `MB <= ME`.**
+
+   Applying the instruction RTL and the general mask definition gives:
+
+   | Operands | High 32 mask bits | Required high 32 destination bits |
+   |---|---|---|
+   | `MB <= ME` | All zero | Preserve old RA |
+   | `MB > ME` | All one | Replace with rotated low source word `W` |
+
+   In the wrapping case, the architectural mask visits:
+
+   ```text
+   MB+32..63, 0..ME+32
+   ```
+
+   That includes **every architectural position `0..31`**, the high half. The current implementation’s unconditional high-half preservation is therefore another defect.
+
+9. **Complete `rlwimi` replacement:**
+
+   ```c
+   X(rlwimi)
+   {
+   	uint32_t tmp = (uint32_t)reg(ic->arg[0]);
+   	MODE_uint_t ra = reg(ic->arg[1]);
+   	uint32_t iword = ic->arg[2];
+   	int sh = (iword >> 11) & 31;
+   	int mb = (iword >> 6) & 31;
+   	int me = (iword >> 1) & 31;
+   	int rc = iword & 1;
+
+   	tmp = sh ? ((tmp << sh) | (tmp >> (32-sh))) : tmp;
+
+   	/*  A wrapping MASK(MB+32, ME+32) includes the high word.  */
+   	if (mb > me)
+   		ra = (ra & 0xffffffffULL) | ((uint64_t)tmp << 32);
+
+   	for (;;) {
+   		uint64_t mask;
+   		mask = (uint64_t)1 << (31-mb);
+   		ra &= ~mask;
+   		ra |= (tmp & mask);
+   		if (mb == me)
+   			break;
+   		mb ++;
+   		if (mb == 32)
+   			mb = 0;
+   	}
+   	reg(ic->arg[1]) = ra;
+   	if (rc)
+   		update_cr0(cpu, ra);
+   }
+   ```
+
+   Source narrowing alone fixes the contamination in question 6. It does **not** complete the instruction repair.
+
+   This replacement keeps `tmp` 32 bits and `ra` at the compilation’s register width. The explicit source cast documents the narrowing; initializing a `uint32_t` already performs it. The conditional assignment supplies the duplicated rotated word wherever the architectural mask selects the high half.
+
+   That assignment must occur **after rotation and before the loop mutates `mb`**. Its cast to `uint64_t` occurs before shifting by 32. In the 32-bit compilation, conversion back to `MODE_uint_t` discards that high half and preserves the existing low-word behavior. SH=0 avoids a shift by 32 in the rotation expression.
+
+   **The siblings are not universally correct.** Their 32-bit rotation idiom supplies the correct low word, but their complete implementations discard the high result required by wrapping masks. For `rlwinm` with source `0xaaaaaaaa0000000f`, SH=0, MB=31, ME=0, the RTL gives:
+
+   ```text
+   Correct:        0x0000000f00000001
+   Current sibling: 0x0000000000000001
+   ```
+
+   The same issue applies to `rlwnm` with a register shift whose low five bits are zero. See the [sibling implementations](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc_instr.c:2567) and their RTL at [PEM line 30064](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ppc_pem_32and64_2005.txt:30064) and [line 30142](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ppc_pem_32and64_2005.txt:30142).
+
+   There is an internal manual inconsistency worth making explicit: **line 30065** asserts blanket upper-half clearing for `rlwinm`. That conflicts with its RTL and the general duplicated-rotation/wrapping-mask definitions when MB>ME. The result above follows those RTL definitions; upper-half clearing is correct for nonwrapping masks and the listed simplified uses.
+
+10. **No decoded MB/ME combination can make the existing word loop run forever.**
+
+    Both fields are extracted with `& 31`, so initially each lies in `0..31`. Before each body, `mb` remains in that range: incrementing 31 immediately resets it to zero.
+
+    From initial position `b`, the successive positions are `(b+k) mod 32`. Therefore, ME is processed after exactly:
+
+    ```text
+    ((ME - b + 32) % 32) + 1
+    ```
+
+    body executions: between **1 and 32**, inclusive. The equality test follows insertion, so it includes ME. Every shift count `31-mb` is also valid.
+
+11. **These two sites are TWO rounds under the stated rule.**
+
+    They share a file and an instruction family, but the necessary repairs differ: `rldimi` repairs operand lifetime and an inclusive circular mask traversal; `rlwimi` repairs source width and the missing high-word insertion. Validating the second requires word-duplication and high-half expectations beyond the doubleword detector’s contract.
+
+    Sharing a harness or a generic mask utility does not establish the required unchanged detector/oracle coverage. The `rlwimi` round should ship its entire replacement above.
+
+    There is also a concrete detector obstacle in this tree. The existing [sibling witness](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/ppcrldiclzero/opus_ppc_rldicl_witness_20260910.py:129) uses an intersection of nonwrapping masks for `rldimi` at line 132, which incorrectly produces zero for wrapping cases. Its `mask32` at line 144 omits the high half required by wrapping word masks. **Those oracles require correction before they can certify these repairs.**
+
+    The settled gate coverage supplies no substitute for an actual 64-bit instruction-result oracle.
+
+12. **One-character, compiling mutants with defined wrong results:**
+
+    For **`rldimi`**, change `64` to `63` in the repaired termination condition:
+
+    ```c
+    } while (m != ((63 - sh) & 63));
+    ```
+
+    Execute `rldimi r4,r3,0,0`, instruction word **`0x7864000c`**, with:
+
+    ```text
+    r3:      0xffffffffffffffff
+    old r4:  0x0000000000000000
+    Correct: 0xffffffffffffffff
+    Mutant:  0xfffffffffffffffe
+    ```
+
+    It omits the inclusive endpoint, architectural bit 63.
+
+    For **`rlwimi`**, change `>` to `<` in the new high-word condition:
+
+    ```c
+    if (mb < me)
+    ```
+
+    Execute `rlwimi r4,r3,0,31,0`, instruction word **`0x506407c0`**, with:
+
+    ```text
+    r3:      0xaaaaaaaa0000000f
+    old r4:  0x5a5a5a5a5a5a5a5a
+    Correct: 0x0000000f5a5a5a5b
+    Mutant:  0x5a5a5a5a5a5a5a5b
+    ```
+
+    The low-word insertion succeeds, but the required high-word replacement is skipped. Each mutation changes one character—the smallest nonempty textual edit—and neither depends on undefined behavior.
+
+I checked executable Python models against an independent oracle using bit-position membership for masks and bit-string rotation: **40,960 `rldimi` cases** covering every SH/MB combination, and **655,360 `rlwimi` cases** covering every SH/MB/ME combination at both widths, each with ten source/destination pairs. All passed; maximum mask-loop counts were 64 and 32. The mutant results above were also checked.
+
+These are C99 replacements, but I could not compile or execute the repaired emulator here: native compiler commands were unavailable, and WSL returned `E_ACCESSDENIED`.
+
+Both replacements retain the existing Rc helper. A separate limitation remains in [update_cr0](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc.c:1803): it chooses comparison width from CPU-model width, while the [manual requires mode-dependent comparison](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ppc_pem_32and64_2005.txt:6357). Accordingly, these repairs do not establish correct record-form behavior on a 64-bit CPU operating with `SF=0`.
+tokens used
+119,467

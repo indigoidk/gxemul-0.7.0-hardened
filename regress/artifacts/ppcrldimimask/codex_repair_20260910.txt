@@ -1,0 +1,274 @@
+VERDICT: TWO rounds. `rldimi` needs all four counter/endpoint/wrap changes. `rlwimi` needs source narrowing AND high-half insertion for wrapping masks; a cast alone is insufficient.
+CODEX_PPCROT_20260910
+
+The sandbox is read-only, so this is the complete answer for `regress/artifacts/ppcrldimimask/codex_repair_20260910.md`.
+
+I inspected the specified [active source file](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc_instr.c:2534): the handlers begin at lines **2534** and **2608**. I accept the brief’s #522, dual-compilation, type-width, and gate-coverage facts as settled.
+
+1. **Yes: `sh == -1` on exit for every decoded SH, including zero.**
+
+   The final condition evaluates the old value zero, decrements `sh` to −1, and exits. The body executes exactly SH times.
+
+   The body correctly performs one unsigned 64-bit left rotation: it saves numeric bit 63, shifts left one, and inserts that saved bit at numeric bit 0. Repeating it SH times produces `ROTL64`.
+
+   Consequently, the current mask loop always stops when its incremented `m` reaches 64 and selects architectural bits `MB..63`.
+
+2. **The architectural mask is inclusive `MASK(MB, 63-SH)`.**
+
+   The extracted RTL at [PEM line 29908](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ppc_pem_32and64_2005.txt:29908) contains:
+
+   > m  MASK(b, ¬ n)
+
+   Here `b` and `n` are the decoded six-bit MB and SH operands. Complementing six-bit `n` gives `63-SH`; the following prose at **line 29909** explicitly gives that endpoint.
+
+   Using decoded operands, the operation is:
+
+   ```text
+   R = ROTL64(RS, SH)
+   M = MASK64(MB, 63-SH)
+   RA = (R & M) | (old_RA & ~M)
+   ```
+
+   The mask definition at [line 6879](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ppc_pem_32and64_2005.txt:6879) explicitly includes both endpoints and wraps from architectural position 63 to position 0.
+
+3. **Saving SH without changing the termination test is insufficient.**
+
+   The comparison happens **after** incrementing `m`. Thus, where the unwrapped loop terminates normally, `X = 63-SH` excludes the required endpoint.
+
+   The stopping position must be the position **after** that endpoint:
+
+   ```c
+   X = 64 - sh;             /*  For a nonwrapping counter.  */
+   X = (64 - sh) & 63;      /*  For the repaired circular counter.  */
+   ```
+
+   The circular form requires a circular increment too. Changing only one of those expressions does not repair the loop.
+
+4. **`MB=40, SH=40` is legal on a 64-bit implementation and requires wrapping.**
+
+   Its endpoint is 23. A partial repair that saves SH and changes `X` to 24, while retaining unbounded `m ++`, visits positions 40 through 63 and then enters the body with `m=64`. It evaluates:
+
+   ```c
+   (uint64_t)1 << -1
+   ```
+
+   That is **undefined behavior**. Calling it a guaranteed infinite loop would incorrectly assign defined behavior to the C program.
+
+   The complete repair below visits:
+
+   ```text
+   40..63, 0..23
+   ```
+
+   It takes **48 iterations** and produces mask:
+
+   ```text
+   0xffffff0000ffffff
+   ```
+
+   For example, `rldimi r4,r3,40,40` has instruction word `0x7864422e`. With `r3=0xffffffffffffffff` and initial `r4=0`, that mask is also the correct result. The original handler produces `0x0000000000ffffff`.
+
+   The instruction entry imposes no ordering restriction between MB and `63-SH`; the general wrapping definition applies. Its implementation restriction is that `rldimi` requires a 64-bit implementation. [PEM lines 29908–29911](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ppc_pem_32and64_2005.txt:29908)
+
+   This also corrects the brief’s overwrite characterization: **for nonwrapping masks**, the original overwrites the low SH bits that should survive. **For wrapping masks**, it omits the required insertion into positions `0..63-SH`, leaving those destination bits unchanged.
+
+5. **Complete `rldimi` replacement:**
+
+   ```c
+   X(rldimi)
+   {
+   	uint32_t iw = ic->arg[0];
+   	int rs = (iw >> 21) & 31, ra = (iw >> 16) & 31;
+   	int sh = ((iw >> 11) & 31) | ((iw & 2) << 4);
+   	int mb = ((iw >> 6) & 31) | (iw & 0x20);
+   	int rc = ic->arg[0] & 1;
+   	int m, n = sh;
+   	uint64_t tmp, s = cpu->cd.ppc.gpr[rs];
+
+   	/*  TODO: Fix this, its performance is awful:  */
+   	while (n-- != 0) {
+   		int b = (s >> 63) & 1;
+   		s = (s << 1) | b;
+   	}
+   	m = mb; tmp = 0;
+   	do {
+   		tmp |= ((uint64_t)1 << (63-m));
+   		m = (m + 1) & 63;
+   	} while (m != ((64 - sh) & 63));
+   	cpu->cd.ppc.gpr[ra] &= ~tmp;
+   	cpu->cd.ppc.gpr[ra] |= (tmp & s);
+   	if (rc)
+   		update_cr0(cpu, cpu->cd.ppc.gpr[ra]);
+   }
+   ```
+
+   The four coordinated edits are: declare `n = sh`; consume `n` in the rotation loop, preserving SH; wrap the mask position modulo 64; and compare against the endpoint’s successor modulo 64.
+
+   The `do` body makes singleton masks execute once and full-width masks execute 64 times. Every mask shift count stays within `0..63`. The source is captured before either destination write, so `RS == RA` works.
+
+   The performance TODO remains accurate: both rotation and mask construction remain iterative.
+
+6. **Yes: the wide source contaminates selected low-word bits.**
+
+   Let the original source be `H:L`, with each half 32 bits. For `1 <= n <= 31`, the erroneous expression’s low word is:
+
+   ```text
+   correct_32_bit_rotation(L, n) | ((H << n) & 0xffffffff)
+   ```
+
+   The existing low-word mask can select those additional bits.
+
+   With source `0xaaaaaaaa0000000f`, SH=4, MB=0, ME=31, and destination `0x5a5a5a5a5a5a5a5a`:
+
+   ```text
+   Correct:  0x5a5a5a5a000000f0
+   Original: 0x5a5a5a5aaaaaaaf0
+   ```
+
+   SH=0 bypasses the erroneous shift expression, so it does not exhibit this contamination.
+
+7. **`ROTL32` duplicates the source’s low word, and that duplication matters here.**
+
+   The definition at [PEM line 17143](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ppc_pem_32and64_2005.txt:17143) is:
+
+   > Result of rotating the 64-bit value x || x left y positions, where x is 32 bits long
+
+   Thus, if `W` is the ordinary 32-bit rotation of the source’s low word, the architectural intermediate is `W || W`.
+
+   The [rlwimi RTL at line 29989](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ppc_pem_32and64_2005.txt:29989) combines that intermediate with `MASK(MB+32, ME+32)` and preserves destination bits outside the mask.
+
+   **The premise that this mask always confines insertion to the low word is false.** When MB exceeds ME, it wraps across the boundary of the **64-bit** mask.
+
+8. **RA’s high half is preserved only when `MB <= ME`.**
+
+   Applying the instruction RTL and the general mask definition gives:
+
+   | Operands | High 32 mask bits | Required high 32 destination bits |
+   |---|---|---|
+   | `MB <= ME` | All zero | Preserve old RA |
+   | `MB > ME` | All one | Replace with rotated low source word `W` |
+
+   In the wrapping case, the architectural mask visits:
+
+   ```text
+   MB+32..63, 0..ME+32
+   ```
+
+   That includes **every architectural position `0..31`**, the high half. The current implementation’s unconditional high-half preservation is therefore another defect.
+
+9. **Complete `rlwimi` replacement:**
+
+   ```c
+   X(rlwimi)
+   {
+   	uint32_t tmp = (uint32_t)reg(ic->arg[0]);
+   	MODE_uint_t ra = reg(ic->arg[1]);
+   	uint32_t iword = ic->arg[2];
+   	int sh = (iword >> 11) & 31;
+   	int mb = (iword >> 6) & 31;
+   	int me = (iword >> 1) & 31;
+   	int rc = iword & 1;
+
+   	tmp = sh ? ((tmp << sh) | (tmp >> (32-sh))) : tmp;
+
+   	/*  A wrapping MASK(MB+32, ME+32) includes the high word.  */
+   	if (mb > me)
+   		ra = (ra & 0xffffffffULL) | ((uint64_t)tmp << 32);
+
+   	for (;;) {
+   		uint64_t mask;
+   		mask = (uint64_t)1 << (31-mb);
+   		ra &= ~mask;
+   		ra |= (tmp & mask);
+   		if (mb == me)
+   			break;
+   		mb ++;
+   		if (mb == 32)
+   			mb = 0;
+   	}
+   	reg(ic->arg[1]) = ra;
+   	if (rc)
+   		update_cr0(cpu, ra);
+   }
+   ```
+
+   Source narrowing alone fixes the contamination in question 6. It does **not** complete the instruction repair.
+
+   This replacement keeps `tmp` 32 bits and `ra` at the compilation’s register width. The explicit source cast documents the narrowing; initializing a `uint32_t` already performs it. The conditional assignment supplies the duplicated rotated word wherever the architectural mask selects the high half.
+
+   That assignment must occur **after rotation and before the loop mutates `mb`**. Its cast to `uint64_t` occurs before shifting by 32. In the 32-bit compilation, conversion back to `MODE_uint_t` discards that high half and preserves the existing low-word behavior. SH=0 avoids a shift by 32 in the rotation expression.
+
+   **The siblings are not universally correct.** Their 32-bit rotation idiom supplies the correct low word, but their complete implementations discard the high result required by wrapping masks. For `rlwinm` with source `0xaaaaaaaa0000000f`, SH=0, MB=31, ME=0, the RTL gives:
+
+   ```text
+   Correct:        0x0000000f00000001
+   Current sibling: 0x0000000000000001
+   ```
+
+   The same issue applies to `rlwnm` with a register shift whose low five bits are zero. See the [sibling implementations](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc_instr.c:2567) and their RTL at [PEM line 30064](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ppc_pem_32and64_2005.txt:30064) and [line 30142](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ppc_pem_32and64_2005.txt:30142).
+
+   There is an internal manual inconsistency worth making explicit: **line 30065** asserts blanket upper-half clearing for `rlwinm`. That conflicts with its RTL and the general duplicated-rotation/wrapping-mask definitions when MB>ME. The result above follows those RTL definitions; upper-half clearing is correct for nonwrapping masks and the listed simplified uses.
+
+10. **No decoded MB/ME combination can make the existing word loop run forever.**
+
+    Both fields are extracted with `& 31`, so initially each lies in `0..31`. Before each body, `mb` remains in that range: incrementing 31 immediately resets it to zero.
+
+    From initial position `b`, the successive positions are `(b+k) mod 32`. Therefore, ME is processed after exactly:
+
+    ```text
+    ((ME - b + 32) % 32) + 1
+    ```
+
+    body executions: between **1 and 32**, inclusive. The equality test follows insertion, so it includes ME. Every shift count `31-mb` is also valid.
+
+11. **These two sites are TWO rounds under the stated rule.**
+
+    They share a file and an instruction family, but the necessary repairs differ: `rldimi` repairs operand lifetime and an inclusive circular mask traversal; `rlwimi` repairs source width and the missing high-word insertion. Validating the second requires word-duplication and high-half expectations beyond the doubleword detector’s contract.
+
+    Sharing a harness or a generic mask utility does not establish the required unchanged detector/oracle coverage. The `rlwimi` round should ship its entire replacement above.
+
+    There is also a concrete detector obstacle in this tree. The existing [sibling witness](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/ppcrldiclzero/opus_ppc_rldicl_witness_20260910.py:129) uses an intersection of nonwrapping masks for `rldimi` at line 132, which incorrectly produces zero for wrapping cases. Its `mask32` at line 144 omits the high half required by wrapping word masks. **Those oracles require correction before they can certify these repairs.**
+
+    The settled gate coverage supplies no substitute for an actual 64-bit instruction-result oracle.
+
+12. **One-character, compiling mutants with defined wrong results:**
+
+    For **`rldimi`**, change `64` to `63` in the repaired termination condition:
+
+    ```c
+    } while (m != ((63 - sh) & 63));
+    ```
+
+    Execute `rldimi r4,r3,0,0`, instruction word **`0x7864000c`**, with:
+
+    ```text
+    r3:      0xffffffffffffffff
+    old r4:  0x0000000000000000
+    Correct: 0xffffffffffffffff
+    Mutant:  0xfffffffffffffffe
+    ```
+
+    It omits the inclusive endpoint, architectural bit 63.
+
+    For **`rlwimi`**, change `>` to `<` in the new high-word condition:
+
+    ```c
+    if (mb < me)
+    ```
+
+    Execute `rlwimi r4,r3,0,31,0`, instruction word **`0x506407c0`**, with:
+
+    ```text
+    r3:      0xaaaaaaaa0000000f
+    old r4:  0x5a5a5a5a5a5a5a5a
+    Correct: 0x0000000f5a5a5a5b
+    Mutant:  0x5a5a5a5a5a5a5a5b
+    ```
+
+    The low-word insertion succeeds, but the required high-word replacement is skipped. Each mutation changes one character—the smallest nonempty textual edit—and neither depends on undefined behavior.
+
+I checked executable Python models against an independent oracle using bit-position membership for masks and bit-string rotation: **40,960 `rldimi` cases** covering every SH/MB combination, and **655,360 `rlwimi` cases** covering every SH/MB/ME combination at both widths, each with ten source/destination pairs. All passed; maximum mask-loop counts were 64 and 32. The mutant results above were also checked.
+
+These are C99 replacements, but I could not compile or execute the repaired emulator here: native compiler commands were unavailable, and WSL returned `E_ACCESSDENIED`.
+
+Both replacements retain the existing Rc helper. A separate limitation remains in [update_cr0](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc.c:1803): it chooses comparison width from CPU-model width, while the [manual requires mode-dependent comparison](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ppc_pem_32and64_2005.txt:6357). Accordingly, these repairs do not establish correct record-form behavior on a 64-bit CPU operating with `SF=0`.
