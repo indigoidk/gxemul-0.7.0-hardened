@@ -1,0 +1,25 @@
+VERDICT: BREACH-FOUND  
+Nonce: PASS2_MK48_20260910
+
+1. **IS THE FIX RIGHT?**  
+READ + REASONED. Yes. The lower bound `MK48T08_CLKOFF + MK48TXX_ICSR` = `0x1ff8` is correct because the switch holds exactly one case at that offset. The other eight offsets `0x1ff0..0x1ff7` are ordinary NVRAM on the MK48T08 and must go to the RAM path. The new condition `addr < 0x1ff8 || addr >= 0x1ff9` routes only `0x1ff8` to the switch, so the legitimate case is not swallowed or disturbed.
+
+2. **IS THE UPPER BOUND STILL RIGHT?**  
+READ + REASONED. Yes. The upper bound remains `CLKOFF + MK48TXX_ISEC` = `0x1ff9`. This excludes the nine-byte block `0x1ff0..0x1ff8` from the RAM path, but includes addresses `>= 0x1ff9`, which the brief states are the time-of-day registers. That is correct because `mk48txx_update_regs()` writes into the same `reg` array. Moving the upper bound would be a separate change.
+
+3. **FLOOR SUBSTITUTION LEGITIMACY**  
+REASONED. Legitimate. The removed defect is the old lower-bound condition, not the `default:` arm itself. The `default:` arm was never deleted; it became unreachable. Reinstating the old condition (`M_OLD`) is the verbatim reinstatement of the removed defect. The worry that “reinstating the arm with the corrected boundary is a no-op” misidentifies the defect: the defect is the guard, not the arm. The floor is met.
+
+4. **MUTANT THAT ESCAPES THE 48-ROW INSTRUMENT**  
+REASONED. A concrete escape exists: change the upper bound from `CLKOFF + MK48TXX_ISEC` to `CLKOFF + MK48TXX_ISEC + 1` (`0x1ffa`).  
+Then the condition becomes `addr < 0x1ff8 || addr >= 0x1ffa`, so `0x1ff9` falls into the switch and hits `default: exit(1)`.  
+No row tests `0x1ff9`; the offset rows cover only `0x1ff0..0x1ff7`, and `csr rise` checks only the `0x1ff8` side effect. Therefore no row reddens. This is a boundary-expansion mutant and is a genuine gap in the instrument.
+
+5. **VACUOUS ROWS**  
+REASONED. No other detector row is vacuous. The offset rows vary under `M_OLD` and `M_HALF`; `csr rise` varies under `M_ICSR`; `msg silent` varies under `M_OLD`. The control rows (`live absent`, `nvram0 absent`, `devsig …`, `ok rd`) are not detectors and are expected to stay green. The only vacuity was the `0x1ff8` survive-only rows, already repaired by `csr rise`.
+
+6. **SECOND NON-FATAL DEFECT (WIDTH BUG)**  
+REASONED. Leaving it out of scope is correct. The width bug is pre-existing, non-fatal, and not introduced by this diff. Routing eight more offsets to that path replaces a fatal exit with a width-limited access, which is an improvement, not a regression. Fixing it would be a separate change and should not block this round.
+
+7. **OTHER**  
+READ inconsistency: the brief says the witness scored **15/47**, but the kill table summary says **15/48**. Likely a typo. Also “sixteen cells” vs “32 kill rows” is confusing: the table shows 32 offset rows (two read + two write per offset) plus `msg silent`, totaling 33 red rows under `M_OLD`. Not material to the verdict, but worth noting.

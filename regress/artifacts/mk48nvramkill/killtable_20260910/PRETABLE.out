@@ -1,0 +1,271 @@
+PRE-TABLE CHECK -- #521 mk48nvramkill
+Written BEFORE table 1 runs, so this file's own mtime proves the order.
+
+THE DIFF UNDER TEST is ONE token: the accept block's lower bound goes from
+`relative_addr < MK48T08_CLKOFF' to `relative_addr < MK48T08_CLKOFF + MK48TXX_ICSR'.
+Everything else in the hunk is comment.
+
+--------------------------------------------------------------------- SIBLING PARITY
+
+The two bounds of the accept block are the siblings, and they are ASYMMETRIC ON PURPOSE:
+
+    lower  CLKOFF + ICSR   (0x1ff8)   -- CHANGED by this diff
+    upper  CLKOFF + ISEC   (0x1ff9)   -- UNCHANGED
+
+After the change the block admits everything except the single offset 0x1ff8, which is
+exactly the one case the switch implements.  The asymmetry is therefore not an oversight:
+the window has collapsed to the width of the implemented case.
+
+  ROW OWED, and it is the one this check exists to find: the upper bound is now load-
+  bearing in a way it was not before.  Before the diff, moving it would have shifted a
+  nine-offset window; after it, moving it by one either swallows the implemented case
+  (ISEC -> ICSR, window empty) or re-admits a clock register (ISEC -> ISEC+1).  Rows
+  `ok rd 1ff8' / `ok wr 1ff8' and `ok rd 1ff9' / `ok wr 1ff9' already exist and pin both
+  sides.  NO NEW ROW OWED -- discharged by rows the witness already carried.
+
+--------------------------------------------------------------------- CLAIM -> ROW
+
+Added comment sentences asserting an observable consequence:
+
+  "the eight offsets 0x1ff0..0x1ff7 fell through it to a `default:' that calls exit(1)"
+      -> ROWED, sixteen times: `rd 1ff0'..`rd 1ff7', `wr 1ff0'..`wr 1ff7', each paired
+         with its ` obs' row.
+  "every offset kills in BOTH directions"
+      -> ROWED by construction: the census IS both directions.
+  "the kill is WIDTH-INDEPENDENT ... there is no width axis here"
+      -> *** NO ROW, AND THE NO-ROW IS THE POINT. ***  `len' never enters the guard, so a
+         row varying width at a fixed offset CANNOT VARY under any mutant of this guard.
+         It would be vacuous by construction -- the CHANNEL failure this project names.
+         The claim is a statement about the ABSENCE of an axis and is discharged by the
+         enumeration in the comment, not by a row.  Measured by the witness at three
+         widths (ld, ld.h, ld.bu) all dying at the same start offset.
+  "storage already existed -- `reg' is MK48TXX_LEN bytes"
+      -> ROWED indirectly by every ` obs' row and directly by `live' (a byte round-trips
+         through the same decode) and `nvram0' (an unwritten neighbour reads 0).
+  "the upper bound stays at MK48TXX_ISEC deliberately"
+      -> ROWED by `ok rd/wr 1ff9'.
+
+--------------------------------------------------------- GUARD FIELD vs BODY FIELD
+
+  guard reads:  relative_addr            (and the two vendored constants)
+  body reads:   relative_addr, idata, writeflag, d->reg[]
+
+`relative_addr' is the ONLY field in both.  There is no second field whose disagreement
+with the guard's could hide a state -- which is why this round has no joint-cell
+obligation, unlike the recent PCC2 and MTE rounds.  `idata' and `writeflag' are inputs the
+guard does not test; `writeflag' IS partitioned by the body (`if (writeflag == MEM_WRITE)'),
+so the {offset} x {read, write} cross-product is a floor axis and IS FULLY ROWED -- sixteen
+cells, all sixteen driven.
+
+  DISCLOSED, clause (e): `idata' is not partitioned by the body -- it is stored whole -- so
+  its value space is a single cell and no row is owed per value.  The witness drives 0x5a.
+
+------------------------------------------------------------------------- CHANNEL
+
+  row family        mutant it kills                         observable that differs
+  ----------------  -------------------------------------  ------------------------------
+  rd/wr 1ff0..1ff7  M_OLD: lower bound back to CLKOFF       process exit status 1 vs 0
+  (16 rows)         M_HALF: bound moved only part way        (a partial mutant reds only
+                                                             the offsets it re-admits)
+  ...` obs' (16)    the same, via a SECOND channel           the post-access scratch load:
+                                                             0x5a5a5a5a vs "died".  This
+                                                             is what separates a DEATH from
+                                                             a fatal() that merely prints,
+                                                             which matters because this
+                                                             fork's fatal() does NOT exit.
+  msg silent        M_OLD, M_HALF                            count of offset-named
+                                                             unimplemented messages, 0 vs 16
+  ok rd/wr 1ff8     M_ICSR: upper bound ISEC -> ICSR         the implemented case stops
+                                                             being reached; exit/obs change
+  ok rd/wr 1ff9     upper bound widened                      a clock register stops being
+                                                             served by the RAM path
+  live, nvram0      M_NULL: guard kept, backing assignment   a written byte no longer reads
+                    removed (the NULLED REPAIR)              back; 0x5a vs 0x00
+  devsig x4         M_NULL, and any medium substitution      four clock bytes vs zeros, in
+                                                             TWO encodings (BCD and raw)
+  neg apparatus     the apparatus itself                     asserts a RED under a bogus
+                                                             subtype, so the oracle is
+                                                             proven failable
+
+  *** EVERY NAMED CHANNEL CAN VARY UNDER ITS NAMED MUTANT.  The one claim with NO row --
+  width-independence -- is recorded above as deliberately unrowed, with its reason. ***
+
+--------------------------------------------------------------- VACUITY FLOOR PLAN
+
+  (a) fails on the pre-fix build          -> HEAD leg, whole-file null medium
+  (b) fails on a VERBATIM REINSTATEMENT   -> *** CANNOT BE SATISFIED LITERALLY, and the
+      of the removed defect                   design review raised this unprompted: THIS
+                                              DIFF REMOVES NO KILL STATEMENT.  It makes
+                                              the existing `default:' arm UNREACHABLE.  A
+                                              verbatim reinstatement of that arm, with the
+                                              corrected boundary retained, is either a
+                                              no-op or dead code, and NO behavioural
+                                              channel can distinguish it.  The
+                                              distinguishable form is RESTORING THE OLD
+                                              DISPATCH -- the old lower bound -- which is
+                                              M_OLD, and it is named separately rather than
+                                              pretending the literal clause is met.
+  (c) fails on a null medium              -> HEAD leg
+  (d) fails on a NULLED REPAIR            -> M_NULL: the corrected guard KEPT, the backing
+                                              assignment removed.  Predicted to redden
+                                              `live' and every ` obs' row.
+
+------------------------------------------------------ TABLE PLAN (predictions)
+
+  BASE    the fix, unmutated                       predict 47/47
+  M_OLD   `< CLKOFF + ICSR' -> `< CLKOFF'          predict 14/47, reddening all 32 kill
+                                                   rows AND `msg silent'
+  M_HALF  `+ MK48TXX_ICSR' -> `+ 4'                predict 39/47: offsets 0x1ff4..0x1ff7
+                                                   still die (8 rows + 8 obs = 16 red?  NO
+                                                   -- four offsets x two directions x two
+                                                   rows = 16 red, plus `msg silent' = 17,
+                                                   so 30/47).  *** I AM UNSURE OF THIS
+                                                   NUMBER AND AM WRITING THE PREDICTION
+                                                   ANYWAY so the measurement can correct
+                                                   it.  The point of the row is that a
+                                                   PARTIAL boundary move must not pass. ***
+  M_ICSR  upper `+ MK48TXX_ISEC' -> `+ MK48TXX_ICSR'  predict 43/47: the window is empty,
+                                                   0x1ff8 goes to the RAM path, so the
+                                                   implemented control case is never
+                                                   reached -- `ok rd/wr 1ff8' pair reds.
+  M_NULL  drop `d->reg[relative_addr] = idata;'    predict a LARGE red: `live' plus every
+                                                   write-side ` obs'.  The NULLED REPAIR.
+  HEAD    whole-file pre-fix (null medium)         predict 14/47
+
+  Every mutant is applied by LITERAL TEXT REPLACEMENT with MUTANT-TEXT-NOT-FOUND treated as
+  a hard failure, so each doubles as a presence pin on the fix's own text.
+
+  A NOTE ON THE DENOMINATOR: the witness scored 15/47 pre-fix and 46/47 post-fix because
+  its `msg census' row is green only while the defect lives.  The SHIPPED detector inverts
+  that row, so it scores 47/47 post-fix and 14/47 pre-fix.  The two files differ in exactly
+  one row's polarity; both are preserved.
+
+======================================================================================
+POST-TABLE-1 ADDENDUM, appended after t1 ran.  The block above is unchanged; this is
+the measurement, including where the block's own predictions were WRONG.
+
+*** TABLE 1 FOUND A FLOOR BREACH: M_ICSR ESCAPED 47/47, AND THIS BLOCK PREDICTED 43. ***
+
+  BASE      47/47
+  M_OLD     14/47   all 32 kill rows + `msg silent'
+  M_HALF    30/47   the four re-admitted offsets x 2 directions x 2 rows, + `msg silent'
+  M_ICSR    47/47   *** TOTAL ESCAPE -- clause (d) floor breach, L2 ***
+  M_NULL    22/47   live, nvram0, four devsig, the 1fef/1ff9 accept pair, 16 read rows
+  HEAD      14/47   whole-file null medium
+  RESTORED  47/47   restore verified, sentinel cleared on both parts
+
+TWO PREDICTIONS TO SCORE HONESTLY:
+  * M_HALF was predicted at "39/47 ... no, 30/47", written with the uncertainty stated
+    rather than resolved.  MEASURED 30/47.  The arithmetic that got there was right and
+    the first number was not; recording both is the point of writing predictions down.
+  * M_ICSR was predicted 43/47 on the reasoning that the `ok rd/wr 1ff8' pair would
+    redden.  **MEASURED 47/47.  The prediction was WRONG and the reason is instructive.**
+
+WHY M_ICSR ESCAPED, derived rather than guessed:
+
+    FIXED:   accept if  addr < 0x1ff8 || addr >= 0x1ff9   -> switch sees ONLY 0x1ff8
+    M_ICSR:  accept if  addr < 0x1ff8 || addr >= 0x1ff8   -> A TAUTOLOGY
+
+  Every address is accepted, the switch is NEVER REACHED, and 0x1ff8 is served as plain
+  RAM.  The control register silently stops doing its work.
+
+  *** AND THE ROWS AIMED AT THAT OFFSET COULD NOT SEE IT, BY CONSTRUCTION. ***  `ok rd
+  1ff8' and `ok wr 1ff8' assert only that the access RAN TO COMPLETION -- which is true on
+  the RAM path too.  They are SURVIVE-ONLY at that offset, which is this project's own
+  named vacuity: a survival oracle cannot separate two arms that both survive.  The
+  CHANNEL block above named their channel as "the implemented case stops being reached;
+  exit/obs change", and that was simply false -- neither exit status nor the scratch
+  observable moves.  **A channel asserted at writing time and never checked is exactly
+  what the CHANNEL rule exists to catch, and here the rule was applied and got the answer
+  wrong.**  What would have caught it is asking not "can this row vary?" but "can it vary
+  UNDER THIS MUTANT?" -- the mutant-specific form.
+
+THE REPAIR, in-round under L2: ONE ROW, `csr rise', reading the ICSR case's SIDE EFFECT.
+Writing the READ bit 0 -> 1 calls mk48txx_update_regs(), refreshing the clock registers
+from the host.  So the row clears ICSR, POISONS a clock slot, drives the rising edge, and
+reads the slot back:
+
+    fixed build   -> the poison is gone, replaced by the host value   (0x10 today)
+    M_ICSR        -> the poison SURVIVES, because no update ever ran  (0x5a)
+
+  It needs no new instruction encoding: r5's low byte is 0x5a, and 0x5a & MK48TXX_CSR_READ
+  (0x40) is 0x40, so one ST_B of r5 both poisons a slot and drives the edge.  0x5a is a
+  safe poison because a BCD day-of-month never exceeds 0x31.
+
+  MEASURED GREEN on the fixed build before table 2: the detector is 48/48.
+
+TABLE 2 RE-RUNS EVERY LEG, not just M_ICSR, because this project has measured that added
+rows perturb other mutants' scores.  Table 1 is preserved at t1/ rather than overwritten.
+
+--------------------------------------------------------------------------------------
+TABLE 2 (t2/SCORES.txt), the repaired 48-row instrument.  ZERO ESCAPES.
+
+  BASE      48/48
+  M_OLD     15/48   32 kill rows + `msg silent'
+  M_HALF    31/48   the four re-admitted offsets, both directions, both rows + `msg silent'
+  M_ICSR    47/48   *** KILLED, by `csr rise' AND BY NOTHING ELSE ***
+  M_NULL    22/48   live, nvram0, four devsig, the accept pair, `csr rise', 16 read rows,
+                    `msg silent'
+  HEAD      15/48   whole-file null medium
+  RESTORED  48/48   cmp-vs-SEC CLEAN, binary FRESH, sentinel cleared on both parts
+
+*** THE NEW ROW IS NECESSARY AND NON-REDUNDANT, which is the thing worth checking about
+any row added to close a breach. ***  M_ICSR scores 47/48 with `csr rise' as its ONLY red:
+no other row in the instrument sees that mutant, so the row is not decoration and the
+breach was real.  Conversely `csr rise' is green under M_OLD, M_HALF and HEAD -- those
+leave 0x1ff8 reaching the switch -- so it is aimed rather than indiscriminate.
+
+AND THE ADDED ROW DID NOT PERTURB THE OTHER LEGS' KILL SETS.  Every other score rose by
+EXACTLY ONE (14->15, 30->31, 47->48) and every FAILING list is unchanged except for
+M_NULL, which gains `csr rise' because removing the backing store also removes the poison
+write the row depends on.  That is the expected coupling and it is stated rather than
+discovered later.  *This project has measured that added rows change other mutants'
+scores; here the change is exactly the new row's own denominator, and the re-table is what
+establishes that rather than assuming it.*
+
+THE FLOOR, now satisfied and each clause pointed at its leg:
+  (a) fails pre-fix                        -> HEAD 15/48
+  (b) restated: restores the OLD DISPATCH  -> M_OLD 15/48   (the literal clause is
+                                              unsatisfiable here, as recorded above)
+  (c) null medium                          -> HEAD 15/48
+  (d) NULLED REPAIR                        -> M_NULL 22/48
+
+--------------------------------------------------------------------------------------
+PASS 2 FOUND TWO MORE THINGS AND ONE OF THEM WAS AN APPARATUS DEFECT IN THIS VERY TABLE.
+Table 3 (t3/SCORES.txt) is the result.  ZERO ESCAPES.
+
+  BASE      57/57
+  M_OLD     16/57      M_HALF  36/57      M_ICSR  56/57 (csr rise alone)
+  M_NULL    47/57      HEAD    16/57      RESTORED 57/57, sentinel cleared on both parts
+
+*** FINDING 1 (grok, BREACH-FOUND): THE SURVIVE-ONLY HOLE WAS STILL THERE, ON THE EIGHT
+BYTES THE FIX ACTUALLY ACCEPTS. ***  The sixteen kill rows prove the host SURVIVES and the
+guest runs on.  They prove NOTHING about whether the byte was stored or read back, so a
+mutant that accepts the access and drops the data passes all sixteen.  **That is the same
+class table 1 found at 0x1ff8** -- two consecutive findings, which is this project's
+trigger to ENUMERATE THE SPACE AND CLOSE EVERY CELL IN ONE DIFF.  Nine round-trip rows
+close it (0x1fef plus the eight), each writing a DISTINCT byte so that a mutant folding
+offsets onto one cell is caught too.
+
+*** FINDING 2 (grok): M_NULL AS RUN WAS NOT THE MUTANT THIS TABLE SAID IT WAS, AND THE
+RECORD ABOVE WAS THEREFORE FALSE ABOUT CLAUSE (d). ***  The mutator replaced the store
+with a COMMENT -- and a comment is WHITESPACE, so `goto ret;' became the if-body.  Reads
+stopped taking the accept path, fell into the switch, and died at `default:'.  The leg
+measured "reads are fatal everywhere", not "the store is gone": t2 shows `live absent'
+rather than `live 0x0', `ok rd 1fef' exit1 against `ok wr 1fef' exit0, and **`wr 1ff0'
+GREEN -- the write-side rows never saw a missing store at all.**  The block above claimed
+(d) was satisfied by `live' reddening 0x5a vs 0x00; the artifact said otherwise and nobody
+read it until a seat did.  Rebuilt with a real BRACED statement, and t3 now measures
+exactly what was claimed: `live 0x0' plus all nine round-trips red.  **CLAUSE (d) HAS NOW
+ACTUALLY BEEN RUN.**
+
+*** FINDING 3 (deepseek, BREACH-FOUND): REFUTED, and recorded because a refutation with
+its warrant is a result. ***  It proposed that widening the upper bound by one sends
+0x1ff9 to `default:' with no row to see it, saying "no row tests 0x1ff9".  **The probe has
+`ok rd 1ff9' and `ok wr 1ff9'** -- both would redden, because that offset would then end
+the host.  The escape does not exist.
+
+WHAT THE PANEL RATIFIED: the FIX itself, unanimously.  glm, minimax and the kimi substitute
+all RATIFY; grok and deepseek both say the fix is right and aim their BREACH verdicts at
+the instrument.  **No seat disputed the boundary, the arithmetic or the disposition.**
+Both breach findings were about the DETECTOR and one about this table's own apparatus.

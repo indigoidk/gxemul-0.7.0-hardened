@@ -84,7 +84,36 @@ DEVICE_ACCESS(mk48txx)
 	if (writeflag == MEM_READ)
 		odata = d->reg[relative_addr];
 
-	if (relative_addr < MK48T08_CLKOFF ||
+	/*  #521 (mk48nvramkill): the lower bound was MK48T08_CLKOFF, i.e. 0x1ff0,
+	    and it was missing its `+ MK48TXX_ICSR'.  The switch below holds exactly
+	    ONE case, MK48T08_CLKOFF + MK48TXX_ICSR (0x1ff8), so the eight offsets
+	    0x1ff0..0x1ff7 fell through it to a `default:' that calls exit(1) --
+	    EIGHT bytes inside the device's own 8192-byte registration ending the
+	    emulator process on an ordinary access.  MEASURED at rung 3 BEFORE this
+	    edit, on unmodified `-E mvme88k -e mvme187':
+	        artifacts/mk48nvramkill/opus_mk48_nvram_witness_20260910.py
+	        artifacts/mk48nvramkill/opus_witness_run_20260910.txt  -- 15/47,
+	            all 15 controls green and all 32 kill rows red.
+	    THE POPULATION IS SIXTEEN CELLS, NOT EIGHT: every offset kills in BOTH
+	    directions, ld.bu and st.b alike, and all sixteen were driven.  The kill
+	    is WIDTH-INDEPENDENT -- `len' never enters the guard, so ld / ld.h /
+	    ld.bu all die at the same start offset and there is no width axis here.
+
+	    THOSE EIGHT ARE ORDINARY NVRAM ON THIS PART, which is what licenses
+	    accepting them rather than declining.  mk48txxreg.h says the first bank
+	    of eight registers at (nvramsz - 16) -- exactly 0x1ff0 -- is "available
+	    only on more recent MK48Txx models", and names them IFLAGS, IASEC,
+	    IAMIN, IAHOUR, IADAY, IINTR, IWDOG.  They are the MK48T59's alarm and
+	    watchdog bank; this file implements the MK48T08 alone, where the region
+	    is plain non-volatile RAM.  Storage already existed -- `reg' is
+	    MK48TXX_LEN bytes -- so this is a BOUNDARY CORRECTION, not new policy,
+	    and no vendored constant is wrong.
+
+	    The upper bound stays at MK48TXX_ISEC deliberately: it routes the
+	    time-of-day registers to this same path, which is correct because
+	    mk48txx_update_regs() writes into this very array, and moving it would
+	    be a different change.  */
+	if (relative_addr < MK48T08_CLKOFF + MK48TXX_ICSR ||
 	    relative_addr >= MK48T08_CLKOFF + MK48TXX_ISEC) {
 		/*  Reads and writes to the RAM part of the mk48txx, or
 		    the clock registers, are OK:  */

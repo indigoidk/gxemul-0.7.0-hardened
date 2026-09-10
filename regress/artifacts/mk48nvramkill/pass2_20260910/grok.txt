@@ -1,0 +1,147 @@
+I'll review the real `#521` diff against the source, header, probe, and kill-table artifacts rather than ratifying from the packet. Opening those files first.Checkpoint HEAD is stale versus git; I'll derive the review from the current `dev_mk48txx.c`, header, probe, and kill-table artifacts.The source matches the packet so far; next I’ll verify attachments, the kill-table mutants, and whether any probe row is actually vacuous.**VERDICT: BREACH-FOUND**
+
+`PASS2_MK48_20260910`
+
+I opened `GXEMUL-SEC/src/devices/dev_mk48txx.c`, `mk48txxreg.h`, `machine_mvme88k.c`, `regress/mk48_nvram_probe.py`, `mutate.py`, `PRETABLE.out`, `t2/SCORES.txt`, and `t2/probe_M_NULL.raw`. The product diff matches the packet. The **fix is right**. The **48-row instrument still has the same survive-only hole** table 1 already found at `0x1ff8`, now sitting on the eight bytes the fix actually accepts. I did not build or run anything.
+
+---
+
+### 1. The fix is right
+
+`MK48T08_CLKOFF + MK48TXX_ICSR` is the correct lower bound.
+
+After the edit the accept predicate is
+
+```text
+relative_addr < 0x1ff8  ||  relative_addr >= 0x1ff9
+```
+
+so the switch is reached only at `0x1ff8`. That is exactly `case MK48T08_CLKOFF + MK48TXX_ICSR`. The comparison is strict `<`, so it does **not** swallow the implemented case. For integer offsets in the 8192-byte window this is the same set as `relative_addr != CLKOFF+ICSR`; the two-sided form is the better one to keep, because it still names a window a later case could occupy.
+
+The T08 hardware map matches the header: clock lives in the last sixteen bytes of 8K, and the first eight of those (`0x1ff0..0x1ff7`) are the T59 alarm/watchdog bank, documented as *"available only on more recent MK48Txx models"*. This file says it implements the MK48T08 only. `machine_mvme88k.c` attaches it as `"MK48T08 clock/nvram"` at `0xfffc0000` in the MVME187 arm only — one attach site in the tree. Storage already exists (`reg[MK48TXX_LEN]`). Accepting those eight as RAM is a boundary correction, not new policy.
+
+The `default: exit(1)` arm is now unreachable. Leaving it is a tripwire if a later edit widens the window without adding a case. Do not delete it in this round.
+
+---
+
+### 2. The upper bound is still right
+
+Leaving `>= MK48T08_CLKOFF + MK48TXX_ISEC` is correct for **this model**, not a second defect.
+
+`0x1ff9..0x1fff` are the time-of-day SRAM cells. `mk48txx_update_regs()` writes them; the access path only has to read and write the same array. That is pre-fix behaviour. The comment’s warrant (*“because update_regs writes into this array”*) is circular as a reason, but the conclusion holds: moving the upper bound is a different change.
+
+- Move it to `CLKOFF+ICSR` → tautology, CSR never reached. Table 1 measured this (`M_ICSR` 47/47, then 47/48). `csr rise` pins it.
+- Move it **up** (`ISEC+1` or `+16`) → TOD offsets fall into `default:` and die. `ok rd/wr 1ff9` pin that.
+
+CSR_WRITE / `SEC_STOP` side effects on TOD writes are pre-existing model gaps, not this bound.
+
+---
+
+### 3. `M_OLD` is legitimate clause (b) — and it is not a substitute
+
+The diff does not remove `exit(1)`. It removes the **old dispatch**. Clause (b) is reinstatement of the removed defect. The removed defect is `relative_addr < MK48T08_CLKOFF`. `M_OLD` is that reinstatement.
+
+Table 2 makes the identity visible: `M_OLD` and `HEAD` are both `15/48` with the **same** red list. For a one-token bound change, whole-file pre-fix and “put the old bound back” are the same mutant. That is evidence `M_OLD` is (b), not a stand-in.
+
+What is **not** met as described is (c): `HEAD` is not a null medium. It is still a working MK48T08 with the old bound. Identity rows exist (`live`, `devsig`, `neg apparatus`); a comment-only file was not run. Records nit, not a shipping blocker.
+
+---
+
+### 4. Mutant that escapes the 48-row instrument (the breach)
+
+**Edit, in the accept block only:**
+
+```c
+if (writeflag == MEM_WRITE)
+    if (relative_addr < MK48T08_CLKOFF)   /* extra conjunct */
+        d->reg[relative_addr] = idata;
+goto ret;
+```
+
+Guard kept (`< CLKOFF+ICSR || >= CLKOFF+ISEC`). Repair nulled **on the eight newly accepted offsets** (and on TOD, which no row round-trips either). `0x100` still stores.
+
+**Predicted `MK48_RESULT=48/48`.** Not measured here; derived from the probe:
+
+| row | why it stays green |
+|---|---|
+| `live` / `nvram0` | `0x100`/`0x101` still store |
+| 32 kill + `obs` | survive-only; host still lives; `obs` is the **scratch** `ld`, not the NVRAM cell |
+| `msg silent` | no `unimplemented` text |
+| `csr rise` | poison at `0x1ffd` is skipped, then the READ-bit edge still calls `update_regs()`, so mday becomes the host value the row wants |
+| `ok rd/wr 1ff8` | switch path unchanged |
+| `ok * 1fef` / `ok wr 1ff9` | survive-only |
+
+This is the `M_ICSR` hole on the bytes the fix actually touches. `ok rd/wr 1ff8` could not tell RAM from CSR because both survive; `csr rise` had to read a side effect. The sixteen `0x1ff0..0x1ff7` rows cannot tell “RAM store” from “accept and drop the write” for the same reason.
+
+`PRETABLE.out` discharged *“those eight are ordinary NVRAM”* onto `live` and the `obs` rows. That discharge is false:
+
+- `live` is at **`0x100`**, not in `0x1ff0..0x1ff7`.
+- every `obs` row does `st r5,r3,0 ; <access> ; ld r4,r3,0` and prints `r4`. A successful NVRAM read is overwritten; a successful NVRAM write is never read back.
+
+Same false CHANNEL claim they already corrected for `ok 1ff8`.
+
+**Class boundary**
+
+| in (killed by the current 48) | out, unless a data-channel row is added |
+|---|---|
+| `M_OLD`, `M_HALF`, `+7`, `<` → `<=`, `ISEC`→`ICSR` tautology | **scoped store-null on the new eight** (above) |
+| deleting `case 0x1ff8` (`ok 1ff8` dies) | scoped `return 1` on those eight, skipping `ret:` — the `obs` scratch load still greens |
+| global drop of the accept-block store, **if built with braces** (`live` → `0x0`) | width / `len` (no axis; correctly unrowed) |
+| | CSR_WRITE / `SEC_STOP` / T59 alarm behaviour |
+
+The repair is the `csr rise` analog at the new window: **one round-trip at `0x1ff0` and one at `0x1ff7`** (near and far; one end leaves the other half of a partial store-null unpinned, which is `M_HALF` on the data channel). `st.b 0x5a` / `ld.bu` / `print r4` / want `0x5a`. That also kills a scoped early-`return 1`.
+
+---
+
+### 5. Vacuous rows — `ok 1ff8` is not the only one in that position
+
+Against **their named mutants**, the sixteen kill/`obs` rows are not vacuous: they move under `M_OLD`/`M_HALF`. Against **a same-survival wrong arm**, they are in exactly the `ok 1ff8` position. That is Q4.
+
+Other notes, not a second breach:
+
+- `ok rd/wr 1ff8` remain survive-only vs `M_ICSR`. `csr rise` is the real pin; those two rows still catch *death* at `0x1ff8` (deleted case). Keep them.
+- `ok rd/wr 1ff9` are survive-only vs “TOD as RAM vs TOD as something else with a side effect”. No such side effect exists in this model. They *do* vary if the kill window grows. Fine.
+- Probe header still says `47/47` post-fix / `14/47` pre-fix. The instrument is 48 rows. L4 in the docstring, including `usage: mk48_nvram_witness.py`.
+
+---
+
+### 6. Leave the one-byte `len` defect out of this round
+
+It is real. The witness already measured it: `ld` of `0x1ffc` returned `0x00000005` rather than `0x05100926`. It already covers the whole device, including CSR and TOD. Routing eight more offsets onto that path newly *exhibits* it there (death used to mask it). That does not make it this round’s class.
+
+One site, one semantic class: host `exit(1)` on ordinary NVRAM. A `len`-aware copy is a different fix over 8192 bytes. **File it** as a residual the witness already named. Do not grow this diff. Do not describe the eight bytes as width-correct NVRAM in the product comment.
+
+---
+
+### 7. `M_NULL` as run is not the nulled repair the table claims
+
+`mutate.py` replaces the unbraced store with a comment:
+
+```c
+if (writeflag == MEM_WRITE)
+    d->reg[relative_addr] = idata;
+goto ret;
+```
+
+→
+
+```c
+if (writeflag == MEM_WRITE)
+    /* M_NULL: backing store removed */
+goto ret;
+```
+
+In C a comment is whitespace, so `goto ret` becomes the `if` body. Reads on the accept path fall through to `default:` and `exit(1)`. Writes skip the store and survive.
+
+`t2/probe_M_NULL.raw` measures that, not “`0x5a` vs `0x00`”:
+
+- `live` **`absent`**, not `0x0`
+- `nvram0` **`absent`** (a read of an unwritten neighbour died)
+- `ok rd 1fef` `exit1`, `ok wr 1fef` `exit0`
+- `rd 1ff0` `exit1`, **`wr 1ff0` `exit0`** — the write-side kill/`obs` rows do **not** see a missing store
+
+`PRETABLE.out` still tells the operator that (d) was satisfied by a nulled backing assignment reddening `live` as `0x5a` vs `0x00`. The artifact contradicts that sentence. A correctly braced global drop **would** be killed by `live`. The scoped drop in Q4 would not. Clause (d) as described has not been run.
+
+---
+
+**Do not ship the detector as 48/48-complete.** Add the two NVRAM round-trips, rebuild `M_NULL` with an actual statement in the `if` (braces or `{ /* no store */ }`), and re-table. The product token can stay.

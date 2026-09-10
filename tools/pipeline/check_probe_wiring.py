@@ -387,6 +387,28 @@ MANIFEST = {
     #  row first; until then this stays a witness of record.
     "artifacts/mk48nvramkill/opus_mk48_nvram_witness_20260910.py":
         (CLASS_WITNESS, "mk48nvramkill (#521): eight offsets inside the device's own 8192-byte registration reach a default: arm that calls exit(1) -- rung 3 on unmodified -E mvme88k -e mvme187, SIXTEEN cells driven (8 offsets x read/write), committed 15/47 with all 15 controls green, fixed 46/47"),
+    # -- #521 mk48nvramkill -------------------------------------------------------------
+    #  CLASS_DETECTOR, and EXEMPT below rather than wired.  It is a fast (0.4 s) single-leg
+    #  instrument that runs green on the fix today, so unlike a witness it COULD be gated --
+    #  what it lacks is a home: gate_m88k_rounding.sh is the only gate on this CPU family and
+    #  it drives luna88k, not mvme88k/mvme187.  Giving it an mvme187 leg is a gate change
+    #  owing its own negative controls, i.e. a harness round, not a rider on a device fix.
+    #  Filed to `wiringcliff'.
+    "mk48_nvram_probe.py":
+        (CLASS_DETECTOR, "mk48nvramkill (#521): 57 rows on unmodified -E mvme88k -e mvme187.  Sixteen kill cells (eight offsets x read/write), nine round-trip rows closing the survive-only class, a CSR rising-edge row for the control case's side effect, four device-signature controls in two encodings, and a negative-apparatus control that asserts its own liveness oracle CAN go red.  BASE 57/57, null medium 16/57, five mutants 16-56/57, ZERO ESCAPES (killtable_20260910/t3/SCORES.txt)"),
+
+    #  The three FROZEN copies are the instruments as-run, one per table.  Evidence, not live
+    #  detectors: t1 is the 47-row form whose M_ICSR escape opened the floor breach, t2 the
+    #  48-row repair, t3 the 57-row closure.
+    "artifacts/mk48nvramkill/killtable_20260910/t1/mk48_nvram_probe.frozen.py":
+        (CLASS_RESEARCH, "mk48nvramkill (#521) table 1: the as-run 47-row instrument -- M_ICSR escaped it 47/47, which is the floor breach the round was repaired for"),
+    "artifacts/mk48nvramkill/killtable_20260910/t2/mk48_nvram_probe.frozen.py":
+        (CLASS_RESEARCH, "mk48nvramkill (#521) table 2: the as-run 48-row instrument after the csr-rise repair -- zero escapes, but pass 2 then found the SAME survive-only class on the eight accepted offsets"),
+    "artifacts/mk48nvramkill/killtable_20260910/t3/mk48_nvram_probe.frozen.py":
+        (CLASS_RESEARCH, "mk48nvramkill (#521) table 3: the CLOSING 57-row instrument, byte-identical to the shipped regress/mk48_nvram_probe.py"),
+
+    "artifacts/mk48nvramkill/killtable_20260910/mutate.py":
+        (CLASS_TOOL, "mk48nvramkill (#521): the mutator -- one named literal find/replace per mutant with MUTANT-TEXT-NOT-FOUND a hard failure.  ITS OWN PRESENCE PIN CAUGHT TWO MISTAKES: an ambiguous anchor matching twice, and an M_NULL that replaced a statement with a COMMENT so `goto ret' became the if-body and the leg measured a different mutant than the record claimed"),
     "alpha_tbi_probe.py":
         (CLASS_DETECTOR, "alphatbinegsel (#520): 15 rows closing the tbi selector guard's NINE axes -- the window's four sides, the interior, the negative selectors, a1 zero-vs-nonzero, a1 magnitude and a0 magnitude.  BASE 15/15, null medium 11/15, nine mutants 12-14/15 (killtable_20260910/t3/SCORES.txt); every accept row carries a measured kill, checked by tally_kills.py"),
 
@@ -1527,6 +1549,13 @@ EXEMPT = {
     #  single-leg 15-row instrument that runs green on the fix today.  What it lacks is a
     #  HOME: no gate in this tree runs an Alpha machine at all.  Dated to fall due with
     #  the others so the cliff stays one date rather than becoming a rolling excuse.
+    #  #521's detector.  Single-leg, fast, green on the fix -- it lacks a HOME, not a design:
+    #  the only gate on this CPU family drives luna88k, not mvme88k/mvme187.  Dated to fall
+    #  due with the others so the cliff stays one date rather than a rolling excuse.
+    "mk48_nvram_probe.py":         ("2026-09-20",
+                                    "no gate drives mvme88k/mvme187; gate_m88k_rounding.sh "
+                                    "is the named home and giving it an mvme187 leg is a "
+                                    "harness round, filed to wiringcliff"),
     "alpha_tbi_probe.py":          ("2026-09-20",
                                     "no gate runs an Alpha machine; gate_crossfamily.sh "
                                     "is the named home and giving it one is a harness "

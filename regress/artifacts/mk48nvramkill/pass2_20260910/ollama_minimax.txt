@@ -1,0 +1,101 @@
+VERDICT: RATIFY (with disclosed debt and one named second-order concern)
+NONCE: PASS2_MK48_20260910
+
+I cannot read `dev_mk48txx.c`, `mk48txxreg.h`, `machine_mvme88k.c`, or the detector source. The packet is internally consistent and arithmetically tight on the values it names; I name below the premises I cannot settle from it.
+
+---
+
+## Premises I CAN check from the packet
+
+**Arithmetic.** `MK48T08_CLKSZ = 8192 = 0x2000`. `MK48T08_CLKOFF = 8192 - 16 = 8176 = 0x1ff0`. ✓ (READ)
+**Population.** M_OLD = 15/48 with exactly 32 offset-named failures + msg silent = 33 reds ⇒ 15 greens. The 32 reds split as 16 read-rows + 16 write-rows across 0x1ff0..0x1ff7. ✓ (READ)
+**Width-independence.** Stated by the diff and corroborated by M_NULL failing only the `rd 1ffX` half (the wr 1ffX rows are absent from M_NULL's failure list), which is what you would expect if writes either do not fire the named channel or are not exercised by M_NULL — the latter is more likely, but the asymmetry is informative: **the wr-half of the kill table is unexercised by M_NULL** and therefore cannot be claimed to detect "device absent" defects. (REASONED, see Q5)
+**M_ICSR arithmetic.** Changing the upper bound to `CLKOFF + ICSR = 0x1ff8` produces `addr < 0x1ff8 || addr >= 0x1ff8`, a tautology. ✓ (READ — this is forced by the stated constants, and the row that catches it is `csr rise`.)
+**M_HALF arithmetic.** A lower-bound shift to `0x1ff4` (halfway between `0x1ff0` and `0x1ff8`) reaches the switch for 0x1ff4..0x1ff8 inclusive; 0x1ff4..0x1ff7 fall to default. That is 4 offsets × 2 directions × 2 message forms = 16 entries + msg silent = 17 reds, matching 31/48. ✓ (READ)
+
+## Premises I CANNOT settle from the packet (named, with the single fact that would settle each)
+
+1. **The switch holds exactly one case at `CLKOFF + MK48TXX_ICSR` (= 0x1ff8).** Settled by reading the `switch (relative_addr)` block in `dev_mk48txx.c`. If the case label uses a literal (`case 0x1ff8:`) and the constants are correct, the fix is right; if the label uses a different constant, the lower-bound adjustment is to the wrong address. This is the load-bearing premise.
+2. **`MK48TXX_ICSR = 8` and `MK48TXX_ISEC = 9`.** Settled by `mk48txxreg.h`. The arithmetic `0x1ff0 + 8 = 0x1ff8` is forced by the brief's claim that the case lives at 0x1ff8; if `ICSR ≠ 8`, both the lower bound of the diff and the comment "MK48T08_CLKOFF + MK48TXX_ICSR (0x1ff8)" are wrong by the same offset.
+3. **The 0x1ff0..0x1ff7 region is plain NVRAM on the MK48T08** (i.e. the alarm/watchdog bank is in fact the MK48T59-only bank). Settled by a real MK48T08 datasheet. If the MK48T08 actually populates 0x1ff0..0x1ff7 with active time-of-day registers (year/month/day/dow at the high end, hours/min/sec/flags at the low end, in some vendor's layout), the brief's premise "those eight are ordinary NVRAM on this part" is false and the fix actively removes a clock register from the switch.
+4. **`machine_mvme88k.c` attaches the device unconditionally in its MVME187 arm.** Settled by reading `machine_mvme88k.c`. If attachment is gated by a flag the brief doesn't name, the rung-3 witness could not have reproduced the kill and the test is on a different code path.
+5. **`mk48txx_update_regs()` writes into `d->reg[]` (i.e. the same array as `relative_addr` indexes).** Settled by the function body. The brief's defence of the unchanged upper bound rests entirely on this.
+6. **The width defect (1 byte regardless of `len`)** exists in unmodified form three lines above the diff. Settled by reading the post-`goto ret` return path; if the path uses `relative_addr + 1` or a len-aware copy, Q6 is moot.
+
+---
+
+## Q1 — Is the fix right?
+
+**Conditional yes.** Given premises 1, 2, 3, 5 the lower bound `CLKOFF + MK48TXX_ICSR` is exactly the case address and the change cannot disturb the case: under the new condition the switch is reached for `addr ∈ [0x1ff8, 0x1ff9)`, i.e. exactly one byte, which is the byte the case handles. The case is the only thing the switch implements, so the lower bound cannot "swallow" anything except the seven offsets the brief claims are plain RAM. (REASONED, conditional on premises 1–3.)
+
+If premise 3 is wrong — if the MK48T08 actually implements 0x1ff0..0x1ff7 as clock registers that should be in the switch — the fix is a regression that turns eight live registers into dead bytes the user can no longer address. The diff's defence ("plain non-volatile RAM") is the only thing protecting this claim and it is the single point that needs a real datasheet, not a header file, to settle.
+
+## Q2 — Is the upper bound still right?
+
+**Conditional yes, but the upper bound is doing more work than the brief admits.** Under the new condition the switch handles exactly one byte (0x1ff8). Offsets 0x1ff9..0x1fff (seven bytes) fall through `relative_addr >= CLKOFF + ISEC` to the RAM path. The brief justifies this by saying update_regs populates that RAM. That is fine for *reads after a CSR-driven refresh*. It is **not** fine for *writes*: writing to 0x1ff9 stores into `d->reg[0x1ff9]`, which the next update_regs overwrites with the RTC's seconds field. The MK48T08 datasheet (not the header) is what tells you whether time-of-day writes are expected to round-trip; the brief asserts they need not and does not cite a source.
+
+This is a separate defect from the one being fixed and is correctly out of scope for this round, but the diff comment should not say "The upper bound stays at MK48TXX_ISEC *deliberately*" as though that has been re-justified here — it has not; it has been inherited. (REASONED.)
+
+## Q3 — The floor question
+
+**M_OLD is a legitimate floor for the 32-row kill population, but the round is not meeting clause (b) literally and the round should say so.**
+
+Clause (b), read literally, requires "verbatim reinstatement of the removed defect". The diff does not remove a statement; it modifies a lower bound and leaves the `default: exit(1)` arm in place but unreachable. The *only* way to make that arm fire again from the diff is to walk the lower bound back to a value smaller than 0x1ff8. M_OLD does exactly that and re-creates exit(1) on 0x1ff0..0x1ff7. So M_OLD is a *semantic* reinstatement of the user-visible defect, even though it is not a *literal* reinstatement of the removed text.
+
+That distinction matters because:
+
+- M_OLD re-creates the defect in the same place, with the same mechanism. A floor that wants to verify "the instrument can detect exit(1) at these eight offsets" is met.
+- But a floor that wants to verify "the instrument can detect this specific boundary edit *in isolation*" is **not** met by M_OLD: M_OLD bundles the lower-bound edit with all the other differences between the diff and HEAD. If a future developer introduces only the *upper-bound half* of the defect (`addr >= CLKOFF + ICSR`), M_OLD will not detect that; only M_ICSR would, and M_ICSR is in the breach-detection role, not the floor role.
+
+The honest answer: **the round's floor is met for the lower-bound class of edits; the round is silent on the upper-bound class.** If clause (b) is meant to cover both, then the round is claiming a floor it does not meet. If clause (b) is meant to cover the specific defect being fixed (the eight offsets exiting), M_OLD suffices. (REASONED.)
+
+## Q4 — What mutant escapes the 48-row instrument?
+
+**Yes, at least one concrete escape is disclosed debt rather than rowed. The class boundary is "edits whose only observable effect is at offsets 0x1ff9..0x1fff".**
+
+Concrete edits that escape:
+
+1. **Upper-bound off-by-one.** Change the upper bound from `MK48TXX_ISEC` to `MK48TXX_ISEC + 1` (= 10). The switch now reaches 0x1ff8 and 0x1ff9; 0x1ff9 falls to `default: exit(1)`. No row tests offset 0x1ff9. Predicted reddened rows: **none**. (REASONED.)
+2. **Add a case at the wrong address.** Add `case CLKOFF:` (i.e. `case 0x1ff0:`) and route it to "do nothing wrong". With the new lower bound the case is unreachable, so it's harmless. With the *old* lower bound the case fires for 0x1ff0 and the kill rows at 0x1ff0 still see exit(1) — wait, no, the case fires first and they don't see exit(1). Predicted: kill rows at 0x1ff0 would *go green* and the defect would be invisible to the instrument. This is a more dangerous escape: an edit that converts a kill into a no-op for some offsets while the row that fires expects death would turn red — actually, the row expects RAM access succeeds, so it would go green and the instrument would be deceived. (REASONED, but I would want to read the row semantics before committing to the direction.)
+3. **`mk48txx_update_regs()` no longer populates the array** — but actually `csr rise` catches this by reading back a poisoned slot. Not an escape. (REASONED.)
+4. **Write-bit handling in the CSR.** The `csr rise` row tests the *read* edge (setting bit 0). If a developer breaks the *write* path (clearing bit 0 to store the time back into the RTC), no row tests it. Predicted reddened rows: **none**. (REASONED.)
+
+The class BOUNDARY is: **the instrument has rows for 0x1ff0..0x1ff7, one row for the read-edge of the CSR, and rows for device presence and time-init. Anything that fails only at 0x1ff9..0x1fff, or only on the write-edge of the CSR, or only on a flag bit other than the read bit, is outside the class and is disclosed debt, not rowed.** (REASONED.)
+
+## Q5 — Any other vacuous rows?
+
+**Possibly one, and one near-miss.** Vacuity here means: the row's named channel cannot vary under any named mutant, so the row passes tautologically.
+
+- **`ok rd` (the "general access works" row)**: fails under M_NULL only. Under M_OLD, M_HALF, M_ICSR, M_HALF, M_OLD it passes — those mutations don't touch general RAM access. So `ok rd` is **not** vacuous against the enumerated class (it has M_NULL). (REASONED.)
+- **The `wr 1ffX` half of the kill table** — see the asymmetry in the M_NULL failure list above. M_NULL fires the `rd 1ffX` rows but **not** the `wr 1ffX` rows. That means either (a) M_NULL doesn't exercise writes, in which case those rows cannot be claimed to detect "device absent" defects, or (b) writes against a missing device do fire the row's named channel and the failure list is truncated. If (a), those rows are *partially* vacuous against M_NULL; they are non-vacuous against M_OLD (which does fire both halves) so they are not vacuous overall, but **the instrument is under-using the kill rows**: the wr half is detectable by exactly two mutants (M_OLD and M_HALF) and silent against the others. (REASONED, conditional on the failure list being complete.)
+- **`csr rise`** — the new row. It catches M_ICSR, M_OLD (no, M_OLD's switch *is* reached and the read edge does fire), M_NULL. Not vacuous. ✓ (REASONED.)
+
+The honest read: the 32 offset rows plus `msg silent` plus `csr rise` plus the 5 device/time rows plus `ok rd` plus the symmetry-gap write rows accounts for the 48. The wr half is exercised by the defect-class mutants but not by M_NULL; that is fine as long as no future M_NULL-style mutation is claimed to be detected by the wr half. (REASONED.)
+
+## Q6 — The width defect
+
+**Leaving it out is right for this round, but the diff makes the framing slightly off.**
+
+The diff says "those eight are ORDINARY NVRAM on this part, which is what licenses accepting them". That is the licence for the boundary correction. The width defect is a property of the *accept path itself*, not of any specific offset: any read or write routed to `goto ret` returns a single byte regardless of `len`. The diff routes *eight more offsets* to that path, but the path was already byte-wide before the diff and remains byte-wide after it. The diff does not introduce the bug; it does not widen its blast radius (the path was always len-blind); it does not change the symptom in any new way.
+
+Two reasons it would become this round's business:
+- If the kill rows tested multi-byte accesses at 0x1ff0..0x1ff7 and asserted something about the *width* of the returned data. The brief says the rows check "access ran to completion" / "death message present" / "no message", not width — so the rows pass either way.
+- If the diff's correctness argument depended on multi-byte semantics at those offsets. The diff's argument is the opposite: it claims those offsets are *plain RAM*, where single-byte access is the conventional NVRAM model.
+
+The framing concern: the diff comment is silent on the width defect. A future reviewer who sees "BOUNDARY CORRECTION, not new policy" might infer that the path *underneath* the boundary is unblemished, which is not true. A one-line note ("the accept path is byte-wide; a separate defect") would be honest and cheap. (REASONED.)
+
+## Q7 — Anything else
+
+1. **Wording hazard in the diff comment.** "THE POPULATION IS SIXTEEN CELLS, NOT EIGHT" — true, but the witness at rung 3 was 15/**47** and the detector is now 48 rows; the +1 is `csr rise`. The comment does not note that the instrument was extended in-round to repair the floor breach. That history is exactly what a future reviewer needs in order to understand why there are two distinct numbers in the same file. (REASONED, advisory.)
+
+2. **`MK48TXX_ISEC` as an upper-bound name is a smell.** The constant name reads as "instant seconds" or "seconds register offset". Using a register-name constant as the size of the entire clock region is fragile: if someone renames ISEC to point at a different register, the size silently changes. The brief cannot settle whether `MK48TXX_ISEC` is genuinely defined as 9 in `mk48txxreg.h` or whether it is a different constant with a misleading name; either way a comment in the diff explaining *why* the upper bound is `ISEC` and not, say, a literal 9 or `CLKOFF + 16` would have been the right move. (REASONED.)
+
+3. **The `machine_mvme88k.c` claim is a precondition for the rung-3 witness.** If MVME187 does not attach the device in its default arm, the witness's 15/47 is not a witness of this defect. The packet asserts the attachment; I cannot verify it. (NOT CHECKABLE.)
+
+4. **The `goto ret` path is the only path under the boundary.** The diff doesn't show what `ret:` does, but the brief says "Reads and writes to the RAM part of the mk48txx, or the clock registers, are OK". The "or" is doing work — it implies the clock registers could also be routed through the same path with len-blind semantics, which is the width defect from Q6. (REASONED.)
+
+5. **No measurement I would want that is missing.** The inline numbers (BASE, M_OLD, M_HALF, M_ICSR, M_NULL, HEAD, RESTORED) cover boundary mutations, tautology mutations, nullification mutations, and a head/restored sanity pair. The gap is at 0x1ff9..0x1fff (Q4) and on the write-edge of the CSR (Q4); both are disclosed-debt gaps rather than measurement gaps. (REASONED.)
+
+---
+
+**VERDICT: RATIFY** on the conditional that premises 1, 2, 3, and 5 hold in `dev_mk48txx.c` / `mk48txxreg.h`. The diff is a tight boundary correction. The floor (M_OLD) is met for the lower-bound edit but the round is silent on the upper-bound edit and should be labelled as such. Two disclosed-debt gaps are named (offsets 0x1ff9..0x1fff and the CSR write-edge). The width defect is correctly out of scope but warrants a one-line note in the diff comment.

@@ -18060,7 +18060,7 @@ codex seat under the found-something-else licence while answering a `#519` test-
 Witness OWED as an ATTEMPT: a `-fsanitize=undefined` build in `build-asan/` is the first thing to try,
 since a rung-3 guest witness may be impossible for UB that behaves as intended on every compiler here.
 
-### `mk48nvramkill` (HIGH) -- filed 2026-09-10
+### `mk48nvramkill` (HIGH) -- filed 2026-09-10 -- *** FIXED AND SHIPPED AS `#521`; see the CHANGELOG round block. The reading below stands and was CONFIRMED at rung 3 before the edit. ***
 
 `dev_mk48txx.c`, anchor `default:if (writeflag == MEM_READ)`: **EIGHT offsets inside the device's own
 mapped range end the emulator process, and a guest reaches them by reading ordinary NVRAM.**
@@ -18375,3 +18375,41 @@ finding about the gates.
 *Found by the GPT-6 Astra seat under the found-something-else licence while answering a tree-wide
 shift-UB census (`regress/artifacts/shiftcensus/codex_census_20260910.txt`). Verified locally by opening
 the handler before filing.*
+
+### `ppcrldimimask` (HIGH) -- filed 2026-09-10
+
+`cpu_ppc_instr.c`, grep anchor `X(rldimi)`: the rotate loop's post-decrement **always** leaves its shift
+variable at -1, so the insert mask always runs to bit 63 instead of `63 - SH`. **The instruction
+overwrites the `64 - SH` destination bits the architecture requires it to PRESERVE**, for every `SH != 0`.
+
+Measured, destination seeded to 0 and an all-ones source: `SH=8` gives all-ones where the architecture
+wants the low byte preserved; `SH=32` gives all-ones where it wants the low word preserved; `SH=0` agrees,
+and is the one safe case. This is the standard bitfield **insert** -- a compiler using it to splice a field
+destroys everything to the right of that field.
+
+*** The durable repair is NOT to patch the `63 - sh` expression. *** That loop idiom is shared by
+`rldicl`, `rldicr` and `rldimi`; `rldicr` survives only because it never reads the variable again. **Any
+future edit that reaches for it after the rotate loop in any of the three will be wrong the same way.**
+Save it before the loop instead. Same reachability and the same gate blind spot as `ppcrldiclzero`.
+
+### `ppcrlwimiwidth` (HIGH) -- filed 2026-09-10
+
+`cpu_ppc_instr.c`, grep anchor `X(rlwimi)`: the 32-bit rotate is performed at **64-bit width** in the
+64-bit build, so high-half source data leaks into the low 32 bits. The file is compiled twice and the
+operand type is 64 bits in one of them; the architecture specifies a 32-bit rotate over the source's LOW
+half only, and **the high half plays no part whatsoever**.
+
+Measured with source `0xAAAAAAAA0000000F`, destination seeded, shift 4: `got 0x5a5a5a5aaaaaaaf0` against
+`want 0x5a5a5a5a000000f0`. The `0xAAAAAA` is high-half data that cannot architecturally reach there.
+
+**Attribution is pinned by two companion rows.** `rlwinm` on the same source and shift is correct, because
+it casts to 32 bits before rotating, and `rlwimi` at shift 0 is correct because the ternary short-circuits
+the rotate. So the defect is the missing truncation in this one handler, not the shape of the expression.
+
+*A row testing this is vacuous unless the source's two halves DIFFER: the measuring seat's own first draft
+used an all-ones source, under which a 64-bit rotate and a true 32-bit one agree bit for bit, and it
+corrected the row rather than shipping it green.*
+
+**Adjacent, not a defect but recorded so a round does not rediscover it:** `rldic`, `rldcl` and `rldcr` are
+not implemented at all -- the decoder's default swallows them. `rldic` in particular is documented and
+compiler-emitted.

@@ -1,3 +1,139 @@
+# `#521` (mk48nvramkill): EIGHT ordinary NVRAM bytes inside a device's own mapped range ended the emulator, and the accept block's lower bound was one term short
+
+**THE DEFECT.** `dev_mk48txx.c` registers the MK48T08 for `MK48TXX_LEN` = `MK48T08_CLKSZ` = **8192**
+bytes. An early accept block passed everything OUTSIDE `[MK48T08_CLKOFF, MK48T08_CLKOFF + MK48TXX_ISEC)`
+to the RAM path with a `goto ret`. With `CLKOFF` = `0x1ff0` and `ISEC` = `9`, the `switch` was reached for
+`0x1ff0..0x1ff8` — and it holds exactly ONE case, `CLKOFF + MK48TXX_ICSR` = `0x1ff8`. **The other eight
+offsets fell to `default:` and called `exit(1)`.** `machine_mvme88k.c` attaches the device unconditionally
+in its MVME187 arm, at `0xfffc0000`.
+
+**AND THE BOUNDARY LOOKS DELIBERATE, WHICH IS WHY IT SURVIVED.** The block's own comment says reads and
+writes to the RAM part *"or the clock registers"* are OK, and the test reads as though it means
+*everything except the clock registers*. Its upper bound is the SECONDS register, so it hands the real
+time-of-day registers to the RAM path — harmless, because `mk48txx_update_regs()` writes into that same
+array — and captures the eight bytes below them into the fatal switch, which is not. *The bound was one
+term short in the direction nobody checks.*
+
+**THOSE EIGHT ARE ORDINARY NVRAM ON THIS PART, and that is what licenses accepting them rather than
+declining.** `mk48txxreg.h` says the first bank of eight registers at `(nvramsz - 16)` — exactly `0x1ff0`
+— is *"available only on more recent MK48Txx models"*, naming them IFLAGS, IASEC, IAMIN, IAHOUR, IADAY,
+IINTR and IWDOG. They are the MK48T59's alarm and watchdog bank; this file implements the MK48T08 alone.
+**Two seats reached that conclusion independently and by different routes** — one from the header's prose
+and the manufacturer's datasheet, one from the arithmetic that `8192 - 16` is the first fatal address —
+and neither was told the other's answer.
+
+**THE FIX IS ONE TOKEN.** The accept block's lower bound gains its missing `+ MK48TXX_ICSR`, so the
+`switch` is reached only at `0x1ff8`, which is exactly the case it implements. The `default:` arm becomes
+unreachable and is deliberately left in place as a tripwire for a later edit that widens the window
+without adding a case. Storage already existed — `reg` is `MK48TXX_LEN` bytes — so this is a **boundary
+correction, not new policy**, and no vendored constant is wrong.
+
+## WITNESSED AT RUNG 3 BEFORE THE EDIT
+
+`artifacts/mk48nvramkill/opus_mk48_nvram_witness_20260910.py`, on unmodified `-E mvme88k -e mvme187`,
+with nothing added to reach the site: **15/47 on the committed build**, all fifteen controls green and all
+thirty-two kill rows red; **46/47 after the fix**.
+
+**THE ORACLE IS A CONJUNCTION and it has to be:** the reaped wait status AND a post-access observable — a
+scratch store before the access under test and a scratch load after it. That makes death, a hang, and a
+diagnostic that merely complains **three distinguishable states**, which matters in this fork because
+`fatal()` has no early-out and does NOT exit, so "it printed a message" is not evidence of death. A
+timeout gets its own token rather than being read as a kill.
+
+**TWO MEASURED CORRECTIONS TO THE ORIGINAL FILING.** The killing population is **SIXTEEN cells, not
+eight** — every offset kills on write as well as read, and all sixteen were driven. And **the kill is
+WIDTH-INDEPENDENT**: `len` never enters the guard, so byte, halfword and word accesses all die at the same
+start offset. *There is therefore NO width axis to close, and a detector row varying width at a fixed
+offset would be non-varying by construction* — the opposite of the recent PCC2 rounds, where width was the
+whole defect.
+
+## THE DETECTOR, AND THE TWO TIMES IT WAS WRONG
+
+`regress/mk48_nvram_probe.py`, **57 rows**. It is the round's witness with one row INVERTED: the witness
+asserted sixteen offset-named death messages, which is green only while the defect LIVES, so it could
+never score full marks on a fixed build. The detector asserts ZERO such messages instead, and that row
+still reddens under any mutant restoring the old boundary.
+
+**TABLE 1 FOUND A FLOOR BREACH: `M_ICSR` ESCAPED 47/47.** Moving the accept block's UPPER bound to
+`CLKOFF + ICSR` makes the condition `addr < 0x1ff8 || addr >= 0x1ff8` a **tautology** — every address is
+accepted, the switch is never reached, and the control register is served as plain RAM while silently
+doing nothing. The rows aimed at that offset could not see it because **they are survive-only there**:
+they assert the access ran to completion, which is true on the RAM path too. *The pre-table block had
+named a channel for those rows that does not exist, so the CHANNEL check was applied and got the answer
+wrong; what would have caught it is asking not "can this row vary?" but "can it vary UNDER THIS MUTANT?"*
+
+Repaired with one row, `csr rise`, reading the case's SIDE EFFECT: writing the READ bit 0→1 calls
+`mk48txx_update_regs()`, so the row clears the register, poisons a clock slot, drives the edge and reads
+the slot back. It needs no new instruction encoding — the scratch register's low byte is `0x5a` and
+`0x5a & MK48TXX_CSR_READ` is `0x40`.
+
+**THEN PASS 2 FOUND THE SAME CLASS A SECOND TIME, ON THE EIGHT BYTES THE FIX ACTUALLY ACCEPTS.** The
+sixteen kill rows prove the host survives and the guest runs on, and prove nothing about whether the byte
+was stored or read back — so a mutant that accepts the access and drops the data passes all sixteen. **Two
+consecutive findings of one class is this project's trigger to enumerate the space and close every cell in
+ONE diff.** The space is *every offset this detector touches — is the DATA verified, or only survival?*
+Nine round-trip rows close it (`0x1fef` plus the eight), each writing a DISTINCT byte so a mutant folding
+offsets onto one cell is caught too.
+
+## MEASURED (`killtable_20260910/t3/SCORES.txt`)
+
+Scratch clone, baseline taken from the repo source, ONE frozen instrument for every leg, sentinel dropped
+before mutant 1 and cleared only after both clearance parts verified.
+
+| leg | mutant | score | reddens |
+|---|---|---|---|
+| BASE | the fix | **57/57** | — |
+| M_OLD | lower bound back to `CLKOFF` | 16/57 | all 32 kill rows, 8 round-trips, `msg silent` |
+| M_HALF | bound moved only part way | 36/57 | the four re-admitted offsets |
+| M_ICSR | upper bound `ISEC` → `ICSR` | 56/57 | **`csr rise` alone** |
+| M_NULL | guard kept, backing store removed | 47/57 | `live`, all nine round-trips |
+| HEAD | whole-file null medium | 16/57 | as M_OLD |
+| RESTORED | restore verified | **57/57** | — |
+
+**ZERO ESCAPES.** `csr rise` is M_ICSR's only red, so it is necessary rather than decoration, and it stays
+green under the three mutants that leave the switch reachable, so it is aimed rather than indiscriminate.
+
+## THE APPARATUS DEFECT PASS 2 CAUGHT IN THIS ROUND'S OWN TABLE
+
+**`M_NULL` as first run was NOT the mutant the table said it was, and the record was therefore false about
+floor clause (d).** The mutator replaced the store with a COMMENT — and a comment is WHITESPACE, so
+`goto ret;` became the `if` body. Reads stopped taking the accept path, fell into the switch and died at
+`default:`. The leg measured *"reads are fatal everywhere"*, not *"the store is gone"*: table 2 shows
+`live absent` rather than `live 0x0`, and **`wr 1ff0` GREEN — the write-side rows never saw a missing
+store at all.** The pre-table block claimed (d) was satisfied by `live` reddening `0x5a` against `0x00`;
+the artifact said otherwise and nobody read it until a seat did.
+
+Rebuilt with a real braced statement. Table 3 now measures exactly what was claimed — `live 0x0` plus all
+nine round-trips red — so **clause (d) has now actually been run.**
+
+**Floor clause (b) cannot be satisfied literally here and the round says so rather than pretending.** This
+diff removes no kill statement; it makes one unreachable. A verbatim reinstatement of that arm with the
+corrected boundary retained is a no-op or dead code, and no behavioural channel can distinguish it. The
+distinguishable form is restoring the OLD DISPATCH, which is `M_OLD`, named separately.
+
+## PASS 2 — EIGHT SEATS, WITH BOTH MISSES NAMED
+
+Panel `artifacts/mk48nvramkill/pass2_20260910/`. **The FIX was ratified by every seat that expressed a
+view on it**; glm, minimax and the kimi substitute RATIFY outright, and both BREACH-FOUND verdicts say the
+fix is right and aim at the instrument. No seat disputed the boundary, the arithmetic or the disposition.
+
+**`fable5` WALLED** on a per-model 429 with no substitute transport, re-fired once and still walled — a
+named seat failure, not agreement. **The `kimi` CLI walled on its weekly limit and is COVERED** by
+`kimi-k3:cloud`, which answered. **`agy` DELIBERATELY NOT FIRED** (measurement reserve).
+
+**One BREACH verdict was REFUTED, and it is recorded because a refutation with its warrant is a result.**
+deepseek proposed that widening the upper bound by one sends `0x1ff9` to `default:` with no row to see it,
+stating *"no row tests 0x1ff9"*. The probe has `ok rd 1ff9` and `ok wr 1ff9`; both would redden. The escape
+does not exist.
+
+## OUT OF SCOPE, FILED RATHER THAN FOLDED IN
+
+A second, non-fatal defect three lines above: the accept path reads and writes exactly ONE byte whatever
+`len` says, so a four-byte read of the clock block returns a single zero-extended byte where a true
+big-endian device read would return four packed ones. **Measured by the witness.** Routing eight more
+offsets onto that path newly *exhibits* it there — death used to mask it — but it covers the whole 8192
+bytes and a `len`-aware copy is a different fix. One site, one semantic class.
+
 # `#520` (alphatbinegsel): a guest TBIA flushed ONE page and left every other translation live -- `uint64_t a0` made `if (a0 >= 1)` an UNSIGNED compare, so both documented invalidate-everything selectors took the single-page branch
 
 **THE DEFECT, and it is one character of type rather than one of logic.** `PAL_OSF1_tbi` (`case 0x33` in
