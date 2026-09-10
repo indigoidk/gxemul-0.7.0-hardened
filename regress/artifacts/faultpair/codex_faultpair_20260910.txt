@@ -1,0 +1,96 @@
+VERDICT: `crimewidthkill` — **decline + latched announce**. `vmedefaultkill` — **decline + latched announce**, including deliberate promotion of its default-arm diagnostics to `fatal()`.
+`CODEX_FAULTPAIR_20260910`
+
+Both target kills are reachable. FAULT is mechanically available, but the evidence does **not** justify treating either entire refusal predicate as a hardware bus-error condition. These are design dispositions; I performed no builds, probes, edits, or patches.
+
+All emulator-source references below are to the specified `GXEMUL-SEC` tree.
+
+**Site A’s guard is as described, but its input population needs qualification.** The width ladder is at [dev_sgi_ip32.c:269](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_ip32.c:269), with the kill at 291–292.
+
+- Ordinary MIPS scalar accesses deliver **1, 2, 4, or 8 bytes**. The generator selects those sizes, and the load/store handler checks alignment before calling `memory_rw`. Alignment checking does not exclude byte accesses or aligned halfwords. [Load/store handler](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_mips_instr_loadstore.c:43)
+- Left/right unaligned instructions use aligned **4- or 8-byte** transactions here; they do not generate arbitrary intermediate callback lengths. [Unaligned helper](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_mips_instr_unaligned.c:44)
+- **Eight bytes is not a global callback maximum.** IP32 installs MEC, whose transmit descriptor reader passes a **32-byte buffer** through physical `memory_rw`; its destination is not restricted to RAM by that call path. Consequently, wider CRIME callbacks cannot all be recorded as dead merely from the scalar instruction widths. [MEC descriptor reader](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_mec.c:224)
+- The memory layer splits some virtual requests and clamps requests at device boundaries. It does not enforce a CRIME width policy. `len` is a `size_t`, not an unconstrained guest-supplied integer, but neither is it universally restricted to `{1,2,4,8}`.
+
+**Site B’s default arm is also live.** The registered aperture is 4 KiB, and its exact-offset switch recognizes only ten offsets. Its own header names additional real registers—including the second timer, interrupt status, and master mapping controls—which have no cases. Reads and writes can therefore reach the default arm. [VME handler](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_vme.c:57), [register definitions](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/thirdparty/mvme88k_vme.h:44)
+
+“Installed unconditionally” needs narrowing: it is unconditional **within the MVME187 case**. The MVME188 and MVME197 cases do not install it. [Machine setup](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/machines/machine_mvme88k.c:81)
+
+Your diagnostic premise holds for ordinary execution: `verbose` starts at zero, `debug()` subtracts one while `emul_executing`, and therefore returns without printing. Single stepping changes that calculation; startup logging differs too. Thus the precise finding is **no explanatory VME message during normal execution at default verbosity**, rather than `debug()` being universally invisible at that verbosity. `fatal()` has no corresponding early-out and writes through `va_debug()` to **stdout**. [Logging implementation](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/core/debugmsg.c:365)
+
+The failure plumbing is real: with exceptions enabled, callback failure produces MIPS DBE/IBE or M88K data/instruction-access exceptions. **A callback returning zero and a successful read returning zero data are different contracts.** [memory_rw.c:583](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:583)
+
+The `unreadable` precedent establishes that distinction, not the correct disposition for every unsupported access. Its callback is exactly `return 0`. There are ten textual SGI registrations, but they are **five in IP20 and five in the shared IP22/IP24 case**, excluding absent HPC/GIO hardware; they are not ten IP32 installations. MVME187 also uses `unreadable` separately for omitted hardware. [Unreadable callback](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_unreadable.c:41), [SGI registrations](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/machines/machine_sgi.c:239)
+
+The hardware evidence leads to different reasons for the same disposition:
+
+| Site | Hardware warrant and disposition |
+|---|---|
+| **A — CRIME width** | The bundled header says all registers use 64-bit access. SGI’s CRIME 1.5 specification §5.9 likewise requires doubleword operations. **That establishes a restriction, but does not specify the response to violating it.** I found no warrant establishing DBE for the rejected byte/halfword operations. The emulator also intentionally accommodates 32-bit accesses, explicitly mentioning NetBSD 1.6.2. Preserve that compatibility and decline unsupported widths without invoking register actions. A fault would add processor control flow whose hardware basis remains unestablished. [CRIME specification, §5.9](https://www.scribd.com/document/653451317/o2-CRIME-Spec), [existing compatibility](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_ip32.c:326) |
+| **B — VME default** | The predicate mixes omitted real registers, interior register-byte addresses, and reserved address space. Motorola permits 8-, 16-, and 32-bit reads of LCSR/GCSR registers, while explicitly specifying transfer errors for 8-/16-bit **LCSR writes**. Reserved regions have separate timeout behavior. Thus hardware supports some width faults, but **“no emulator case” is not that hardware predicate**. Decline the current default as an emulator limitation; register implementation and accurate aperture/width decoding require separately scoped work. [Motorola MVME187 guide, table 2-6 and note 3](https://www.geekdot.com/uploads/files/88k/187igd.pdf#page=50) |
+
+The absent-hardware precedent therefore does not automatically transfer to either refusal. Nor does the evidence establish that zero is hardware-correct everywhere. My recommendation is a bounded compatibility policy with an honest announcement, not a claim of complete hardware emulation.
+
+The compatibility hazard has an important logical limit: **a successful pre-fix execution cannot have traversed either unconditional `exit(1)` arm.** Changing only those arms cannot break an existing successful traversal of them. Regression risks arise from broadening the refusal predicate, changing supported accesses, or mishandling the newly surviving continuation.
+
+| Guest evidence | What it establishes |
+|---|---|
+| **IP32 NetBSD** | The battery records NetBSD 8.2 boot and device attachment, not a complete installed-system exercise. The handler also records older NetBSD compatibility requirements. This establishes CRIME use, not rejected-width use. [Battery record](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/battery/BATTERY_PASS_MAP.md:40) |
+| **IP32 OpenBSD and raw PROM** | The documentation describes OpenBSD/sgi operation and PROM versions 2.3, 4.13, and 4.18. CRIME contains a PROM cache-probe workaround. None of this establishes that those working runs executed the width-kill arm. Linux and IRIX are documented as incomplete experiments. [O2 documentation](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/doc/machine_sgi_o2.html:254) |
+| **OpenBSD/mvme88k** | The VME handler explicitly accommodates its presence probe. The documentation includes an OpenBSD 4.4 installation transcript with `vme0` attached and instructions for 4.5. That is historical operating-system evidence, not a current fault-versus-decline comparison. [Installation transcript](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/doc/machine_mvme88k.html:106) |
+| **Archived OpenBSD 2.2 source, outside the emulator tree** | The parent directory’s driver actually reads `vme2_masterctl` and programs mapping registers omitted by this emulator switch. `vmematch` selects the relevant parent-bus path, and `vmeattach` calls that initializer. These are real source consumers of default-arm registers, with no local fault-recovery wrapper around those accesses. They are **not evidence that this guest currently works**. [Archived driver](C:/DocumentNoSnc/CC/GXEMUL/_guest-src-openbsd22/sys/arch/mvme88k/dev/vme.c:443) |
+
+I found no measured comparison showing failure safer than zero at either target. A handled absence probe elsewhere does not prove that a controller initialization access has a suitable recovery path.
+
+For the recommended repair contract, declined reads produce deterministic zero bytes, declined writes have no register effects, and callbacks report success. At A, refusal must precede the register-specific switch and its semantic actions; simply removing the exit permits fallthrough. Preserve existing 4-/8-byte behavior.
+
+At B, **plainly replacing `exit(1)` with `break` is not necessarily zero decline**: `odata` was already loaded from the backing array before the switch. Interior offsets can share a nonzero backed word. Choosing zero therefore requires an explicit response decision. Correct subword lane handling is a separate implementation issue.
+
+I would deliberately promote **only B’s two default-arm messages** to `fatal()`, and latch the announcements. For a concrete detector contract, use one announcement per device instance and read/write direction; subsequent refusals still perform the same zero/discard behavior. State “unsupported by this model,” with the offset, width, and chosen response. Do not promote every `debug()` in the file through a macro.
+
+The following are **proposed detector rows, not measured results**. Their scope is the declared refusal contract, not arbitrary mutants.
+
+Each guest test needs a checked execution marker, a supported-device control, and checked continuation/results. Require every named row exactly once; missing media, skipped execution, missing rows, and malformed output fail. “The host survived” contributes no refusal-semantic evidence.
+
+Here, **NULLED REPAIR** means that the original kill remains removed while the new refusal handling is replaced by a successful no-op. Also test the stronger **announce-only** variant, retaining the message while removing the semantic repair.
+
+| Site A row | Mutant/control it distinguishes | Required differing observable |
+|---|---|---|
+| `A_LIVE_SUPPORTED` | Null medium, skipped guest, entire-handler zero stub; overbroad refusal of supported widths | Guest execution marker, nonzero CRIME identity, and checked supported 4-/8-byte behavior |
+| `A_READ_DECLINE` | Pre-fix build; verbatim kill reinstatement; failure return substituted for success; skipped load | Rejected-width reads replace a nonzero destination with zero and reach a checked continuation; the alternatives terminate, take an exception, or preserve the seed |
+| `A_WRITE_DECLINE` | Narrow writes incorrectly merged into backing state; refusal bypassed after the latch is set | Supported readback and controlled device-state snapshots remain unchanged after first and repeated declined writes |
+| `A_NO_REGISTER_ACTION` | Kill deletion followed by switch fallthrough, including announce-only repair | In an isolated callback test with controlled timing/semantic hooks, a declined access invokes no register action; fallthrough invokes one |
+| `A_CALLBACK_ZERO` | Nulled response while retaining the announcement/early success return | A deliberately nonzero callback buffer becomes entirely zero; the nulled response leaves its contents |
+| `A_ANNOUNCE` | Whole nulled repair; deleted announcement; `debug()` substitution; unlatched or incorrectly shared latch | During ordinary execution, at default verbosity and `-q`, exactly the declared first-use messages appear, with correct fields; repetitions and fresh instances have the declared counts |
+
+| Site B row | Mutant/control it distinguishes | Required differing observable |
+|---|---|---|
+| `B_LIVE_SUPPORTED` | Null medium, skipped guest, whole-device zero stub; default refusal accidentally applied to recognized cases | Guest marker, nonzero VBR control and checked backed-register behavior |
+| `B_READ_DECLINE` | Pre-fix build; verbatim kill reinstatement; fault substitution; skipped load | Zero result plus checked continuation, rather than termination, exception entry, or unchanged destination |
+| `B_PRELOADED_RESPONSE` | Announce-only repair or simple `break` retaining preloaded `odata` | An isolated default read sharing a deliberately nonzero backed word returns the declared zero response, rather than the preloaded value |
+| `B_WRITE_DECLINE` | Blanket backed acceptance; stores enabled only after announcement has latched | First and repeated refused writes leave the backing word and neighboring implemented state unchanged |
+| `B_CALLBACK_ZERO` | Nulled response with announcement retained | Nonzero input buffer is completely cleared by the callback |
+| `B_ANNOUNCE` | Promotion omitted; whole nulled repair; no latch; latch suppressing the other direction or another instance | Correct first-use diagnostic counts and contents under ordinary default execution and `-q` |
+
+There is a deliberate distinction in those tables: `memory_rw` already pre-zeroes device-read buffers. **Deleting redundant callback clearing can therefore be observationally equivalent at the guest interface.** `*_CALLBACK_ZERO` tests an explicitly stated callback contract; it must not be advertised as a guest-level distinction. Diagnostic and register-action rows provide independent evidence against a nulled repair.
+
+Both suites should also contain `A_EXCEPTION_LIVE` / `B_EXCEPTION_LIVE`: an independently established failing access must reach a guest exception recorder, produce the expected exception class/context, and permit a checked recovery continuation. Disabling the recorder or delivery must fail that control. This makes the “no exception on decline” assertion meaningful.
+
+If FAULT is chosen instead, replace the decline-read oracle with **positive architectural exception delivery**: guest handler entry, correct class and saved instruction context, unchanged load destination, and recovery progress. MIPS data accesses require DBE evidence; M88K requires data-access exception evidence. A zero buffer or an emulator diagnostic cannot substitute for either oracle.
+
+A debugger memory peek is also insufficient: these commands commonly request `NO_EXCEPTIONS`, and both devices use `DM_DEFAULT`, allowing the callback to be skipped. Guest execution and ordinary-execution diagnostic checks need separate controls. [Debugger access flags](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/debugger/debugger_cmds.c:716)
+
+The remaining fatal behavior has distinct ownership:
+
+| Location | Behavior and disposition |
+|---|---|
+| CRIME RAM limit, 239–240 | Configuration exit. **Precluded in normal IP32 setup** by the constructor’s earlier >1-GiB rejection. Record that warrant; it is not another live width refusal. [Constructor check](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/machines/machine_sgi.c:479) |
+| CRIME RAM divisibility, 249–253 | Configuration exit reached in an access handler. Separate initialization-validation cleanup; do not convert bad host configuration into a guest bus error. |
+| CRIME time warning, 153; control warning, 351 | `fatal()` logging without process exit. Separate logging/device-semantics concerns. |
+| CRIME hard reset, 343 | Intentionally stops guest CPUs. Preserve it for supported accesses. |
+| MACE interrupt writes, 606–610 | Logging without exit. Separate round. |
+| MACEPCI width/default diagnostics, 699 and 756–760 | Logging without exit. Optional trace calls at 704/772 require the presently disabled `MACEPCI_DEBUG`. Separate round. |
+| VME default, 137–143 | The file’s only explicit process exit; both its removal and diagnostic promotion belong to this round. |
+| Allocation checks in both files | Initialization failures through `CHECK_ALLOCATION`; separate from guest-access policy. |
+
+Two additional details deserve recording. The new CRIME width diagnostic should use C99 `%zu`, because `len` is `size_t`. Also, the nearby MACEPCI default documents a real O2 returning all ones for unimplemented registers—another concrete reason that absent-address fault behavior cannot be generalized to every register refusal. [MACEPCI default](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_ip32.c:754)
