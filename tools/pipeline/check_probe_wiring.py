@@ -378,6 +378,15 @@ MANIFEST = {
     #  change owing its own negative controls, which is a harness round, not a rider on a
     #  CPU fix.  Filed to `wiringcliff', the row for exactly that question -- not left as
     #  a silent third state.
+    # -- #521 mk48nvramkill ------------------------------------------------------------
+    #  CLASS_WITNESS, and correctly ungated: it is RED on the committed build by design
+    #  (15/47, all 32 kill rows failing), so a gate row would be permanently red until the
+    #  fix ships.  It is also NOT yet the round's detector -- its `msg census' row asserts
+    #  the DEFECT'S OWN SIGNATURE and is green only while the defect is present, so the
+    #  probe cannot score 47/47 on any build.  A shipped detector must drop or invert that
+    #  row first; until then this stays a witness of record.
+    "artifacts/mk48nvramkill/opus_mk48_nvram_witness_20260910.py":
+        (CLASS_WITNESS, "mk48nvramkill (#521): eight offsets inside the device's own 8192-byte registration reach a default: arm that calls exit(1) -- rung 3 on unmodified -E mvme88k -e mvme187, SIXTEEN cells driven (8 offsets x read/write), committed 15/47 with all 15 controls green, fixed 46/47"),
     "alpha_tbi_probe.py":
         (CLASS_DETECTOR, "alphatbinegsel (#520): 15 rows closing the tbi selector guard's NINE axes -- the window's four sides, the interior, the negative selectors, a1 zero-vs-nonzero, a1 magnitude and a0 magnitude.  BASE 15/15, null medium 11/15, nine mutants 12-14/15 (killtable_20260910/t3/SCORES.txt); every accept row carries a measured kill, checked by tally_kills.py"),
 

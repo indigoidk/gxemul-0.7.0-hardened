@@ -18275,3 +18275,50 @@ command byte to the COMMAND port, and the `DEVICE_ACCESS` default arm is another
 *All three came from the GPT-6 Astra exit audit's six E1 predicates
 (`regress/artifacts/queuetriage/codex_exitaudit_20260910.txt`). Every element above was re-derived locally
 by opening the files.*
+
+### `exitunowned76` (MED, tracking) -- filed 2026-09-10
+
+**76 guest-reachable error-exit sites across 24 files own no tracker row.** This row exists so the next
+session reads the census instead of re-running it, which has now happened twice. Evidence:
+`regress/artifacts/queuetriage/codex_exitaudit_20260910.txt`.
+
+*** THE EARLIER FIGURES WERE RIGHT AND THEIR DESCRIPTION WAS WRONG: 370 and 240 count `exit(1)`, not
+every `exit()`. *** Re-derived by stripping comments and string literals while preserving line positions,
+with an independent character-state lexer returning exactly the same call positions:
+
+```
+    src/devices    263 literal `exit('     135 calls after lexical filtering
+    src/cpus       112                      74
+    src/machines    35                      34
+    TOTAL          410                     243   (240 of them exit(1))
+```
+
+Of those 243: **150** runtime handlers and helpers, **80** init/configuration, 13 CPU generators plus a
+standalone experiment. The debugger is outside that scope and adds three.
+
+**Being inside a runtime function is not reachability.** The 150 split into **98 input-reachable through
+enabled in-tree wiring**, 33 dead or not established reachable, 10 optional instrumentation, 6 unattached
+or disabled attachments, 2 intentional halt/reboot, and 1 host RAM-config check misplaced in an access
+handler.
+
+Ownership is an **overlay, not a disjoint population**: 22 live exits and 3 others are actively owned
+(`n6` holds eight footbridge sites, `alphavmkill` one, `sgirekills` five, `lcaisalane` and `lcabadval`
+eight between them, `m88kexit` two dead ones). A strict open/held filter leaves 83, seven of which belong
+to in-work LCA repairs, so **the unowned remainder is 76**.
+
+*** One of my own earlier qualifications was too aggressive and is corrected here: lacking a separate
+CHILD repair id does not mean lacking an open OWNING row. *** `sgirekills` explicitly retains its five
+command exits. Conversely, an incidental mention in census prose is not a repair row.
+
+**Six E1 predicates** -- a one-to-five-line change with an existing test carrier -- were identified and
+**all six are now filed as their own rows**: `mk48nvramkill`, `mapledmaaddr`, `xscaleinten`,
+`crimewidthkill`, `vmedefaultkill`, `fbctrlportkill`. This row therefore tracks the ~70 that remain, and
+they are E2/E3: real rounds, not quick wins. Heaviest concentrations are `dev_osiop.c` (14),
+`cpu_arm_coproc.c` (8, one filed), `dev_adb.c` (7), `dev_dreamcast_g2.c` (6), `dev_pvr.c` and
+`dev_igsfb.c` (5 each).
+
+**The one constraint governing every disposition in this body, and it is easy to forget:** `memory_rw.c`
+turns a failed device callback into an architectural access exception for **MIPS and M88K only**.
+Returning zero from an ARM or SH device callback gives no bus-error delivery, so the FAULT member is
+unavailable there and a round reaching for it owes the exception path first. CPU translation and
+instruction handlers have their own direct mechanisms, which is a separate question.
