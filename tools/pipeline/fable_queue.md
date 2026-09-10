@@ -1693,6 +1693,8 @@ are ONE action. Both its `assess` and `review` stages stand at 7/9 awaiting opus
 ### 7g-1. (HIGH) *** A SEAT DISAGREEMENT ON SIBLING PARITY THAT I SETTLED BY READING, AND WHICH
 ### GENERALISES TO EVERY MULTI-LABEL SWITCH BLOCK IN THIS TREE. ***
 
+> **RULED 2026-09-09 (Fable 5.1 adjudicating, on codex + grok self-adjudications and an Opus MEASUREMENT): the labels ARE floor cells here -- the selector flows into `dst_mode`, the operand the repair reads -- so `#509` owes two rows (B x 32, C x 32) as L2 in a follow-up commit; `&& dst_tlb == MTE_TLB_A` MEASURED 14/14 with the defect live at B/C (`regress/artifacts/sgimtedepth4dead/killtable3_20260909/`).  The bound that keeps it finite is DATA FLOW, written into the SIBLING PARITY row in CLAUDE.md.  Two premises of the adjudication brief were wrong and are recorded on the ledger row: `fill b top` never shipped; `dispatch axes as full axes` was a gloss.  Carried by `sgimtelabelcells` (med) and `multilabelfloor` (low).**
+
 The edited comparison sits inside a block served by THREE `case` labels:
 
     switch (dst_tlb) {

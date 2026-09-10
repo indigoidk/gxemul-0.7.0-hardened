@@ -289,6 +289,8 @@ MANIFEST = {
         (CLASS_RESEARCH, "lcaconfbus1kill (#515) table 4: the same 18-row instrument for the targeted run -- grok's M13_regconj plus the 18-row PRE-FIX baseline, so the round's before/after uses one instrument"),
     "artifacts/lcairqstubkill/lcairq_probe.asrun.py":
         (CLASS_RESEARCH, "lcairqstubkill: the as-run witness ATTEMPT, preserved as evidence -- it did NOT fire, and it is not a detector"),
+    "artifacts/sgimtedepth4dead/killtable3_20260909/tlb_reach_control.py":
+        (CLASS_RESEARCH, "sgimtedepth4dead 7g-1 (2026-09-09): the Opus seat's guest-only TLB REACHABILITY CONTROL (unmodified -E sgi -e ip32) -- separates BASE / M_tlbA / M_tlbAB by the RGBA-vs-CI outcome at each of the three labels, which the shipped detector cannot; the positive control behind the FLOOR ruling.  Evidence, not a detector"),
     #  #516 (2026-09-09): every instrument and mutator preserved beside the lcairqstubkill kill tables.
     #  Seventeen files, each described from its own header; the gate refused the commit until they had a class.
     "artifacts/lcairqstubkill/killtable_20260909/frozen_lca_irqstub_probe.py":

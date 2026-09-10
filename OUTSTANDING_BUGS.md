@@ -17982,3 +17982,42 @@ is a FLOOR, one entry unsettled. Fix shape: a class rule (a witness that has gon
 a detector and owes a gate or a dated exemption) with a dated cutoff -- its own harness round with
 negative controls, never a rider. Filed from the Opus seat on the `wiringcliff` assess panel; the
 loop concedes it created an instance the same day.
+
+### `sgimtelabelcells` (med) -- filed 2026-09-09
+
+`sgi_mte_fill_probe.py` (`#509`) is BLIND AT TWO OF THREE LABELS: every transfer row drives `dst_tlb ==
+MTE_TLB_A`, so `if (depth == 32 && dst_tlb == MTE_TLB_A)` and `&& dst_tlb != MTE_TLB_C` each score 14/14
+against a 14/14 base (MEASURED by the Opus seat, `regress/artifacts/sgimtedepth4dead/killtable3_20260909/`),
+while a guest-only control (`tlb_reach_control.py`, unmodified `-E sgi -e ip32`) shows the CI-arm defect
+`#509` closed LIVE at B and C under them. RULED FLOOR by the 7g-1 adjudication: the selector's value flows
+into `dst_mode`, the operand the repair reads, so the labels are cells of the DEPENDS-ON enumeration and
+the mutant exempts measured-reachable cells. L2, repaired in a follow-up commit under `#509`: two rows
+(B x 32, C x 32 on the `fill top` channel), the table re-run with both mutants added (they must go 12/14 or
+worse), the contract amended, and the added comment's "every tiled transfer" universal narrowed or rowed.
+A changed instrument owes its table. `PRETABLE.out` predicted this escape before table 1 ran; the round
+disclosed it under clause (e) on a reading the measurement has now overturned. The `fill b top` row two
+pass-1 verdicts referred to NEVER SHIPPED.
+
+### `multilabelfloor` (low) -- filed 2026-09-09
+
+CLASS CENSUS owed by the 7g-1 ruling: which shipped detectors sit at a multi-label `switch` block where
+the selector's value flows into an lvalue the repair path reads or writes (the `sgimtedepth4dead` shape),
+and row only one label? Each such detector is short by (labels - 1) rows on the guard operand's
+body-tested partition; a block whose selector touches nothing the body reads is clause (e) and owes a
+sentence, not rows. Deriver: for each de-fatalisation or repair row with a kill table, read the enclosing
+`switch` and the repair's operands. A reading task for a file-reading seat; no measurement until a
+candidate is named. Not a sweep.
+
+### `pcc2c040ctlq` (med) -- filed 2026-09-09
+
+`regress/pcc2_c040_probe.py` `genctl ctlq` -- the ACCEPT row the de-escalation clause owes for `#512`'s
+C040 predicate -- tests `"C040 interrupt assertions" in t`, the PRE-FIX fatal text that `#512` retired,
+so it is green under every post-fix build and a guard WIDENING (the benign 0x10 write reaching the C040
+arm) is predicted to sweep 16/16 (Opus, by reading; `regress/artifacts/pcc2c040kill/opus_review_20260909.md`).
+L3: the sole carrier of an obligation, unfailable. OWED, in order: MEASURE the widening mutant against
+the shipped 16-row instrument; re-key the row on the post-fix announce text (`C040 (MC68040 EIPL)`) -- one
+string, no new row, no denominator change; re-measure the same mutant and the base; commit as a follow-up
+under `pcc2c040kill`. Also carried: an ANNOUNCE row at MIEN-SET as clause-(e) debt (a mutant conditioning
+only the announce on `!MIEN` is predicted 16/16; the killing row reads the already-bound `td` at zero
+sessions), and the latent `t2`/`t3` shadowing at `:464`/`:488`. The parent row's count is 16 rows, not
+17: `grep -c 'row("'` also matches the four `assert_row("` sites.

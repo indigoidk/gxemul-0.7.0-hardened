@@ -1414,7 +1414,7 @@ ATTACHED** — the adjudicating seat said so about the main loop's own call, and
 > **Two corollaries from the same pass, both measured.**  The PRE-TABLE CHECK's SIBLING PARITY row
 > compares BLOCKS; at a block that serves TWO case labels the siblings are the LABELS, and a
 > parity census over the row names is what would have shown `pendboth` as the only T2-only cell
-> before its table ran (Opus, pass 10).  And the measuring seat's own bound -- the cross-product
+> before its table ran (Opus, pass 10).  **AND THE JOIN ITSELF, adjudicated 2026-09-09 on `sgimtedepth4dead` 7g-1 after a MEASURED total escape: a dispatch LABEL is a floor axis of an edited guard when the selector's value FLOWS INTO an lvalue the guarded body reads or writes within the enclosing function (there, `dst_mode = (dst_tlb << 10) + ...` two lines above a repair of `dst_mode |= RGBA`), or when the body re-tests it after the join (TxICR); a label that reaches the edit and touches nothing the body reads is clause (e) (the `mode & COPY` shape).  A detector rowing one label of three was swept 14/14 by `&& dst_tlb == MTE_TLB_A` while a guest-only control showed the closed defect live at the other two (`regress/artifacts/sgimtedepth4dead/killtable3_20260909/`).  The floor it adds is {labels} x the guard operand's body-tested partition -- six cells there, two rows owed -- never the labels' cross-product with everything.**  And the measuring seat's own bound -- the cross-product
 > of the value-CLASSES the rows establish, with the dispatch axes as full axes, demand
 > INCREMENTAL -- agrees with the body-tested form on every cell that mattered here and differs on
 > where the classes come from (the rows, or the body's tests); that residual difference is

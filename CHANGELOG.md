@@ -1350,6 +1350,8 @@ the source independently of codex.
 
 # `#509` sgimtedepth4dead: a bit-count compared against a byte-count, so the branch never ran
 
+> **LATE-DISSENT DISPOSITION 2, 2026-09-09: MEASURED FALSE PASS against this detector's floor.** The round disclosed the B/C labels under clause (e); the 7g-1 adjudication ruled them FLOOR (the selector flows into the operand the repair reads), after the Opus seat measured `&& dst_tlb == MTE_TLB_A` at 14/14 against a 14/14 base with the closed defect live at B and C (`regress/artifacts/sgimtedepth4dead/killtable3_20260909/`). Repair owed as L2 in a follow-up commit under this number, carried by `sgimtelabelcells`. The record above is left as written; this line is so no reader sees false closure.
+
 **THE DEFECT.** `dev_sgi_re.c`, `do_mte_transfer()`, in the block shared by the `MTE_TLB_A/B/C`
 case labels:
 

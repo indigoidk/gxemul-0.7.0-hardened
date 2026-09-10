@@ -1,0 +1,59 @@
+TABLE 3 -- sgimtedepth4dead (#509, 2956c7e) -- the dst_tlb LABEL axis.
+Measured 2026-09-09/10 by the Opus 5 seat in scratch clone /tmp/gxopus7g1 (a cp -a of build/).
+Baseline NAMED: GXEMUL-SEC/src/devices/dev_sgi_re.c at HEAD b4d4177 (md5 8479c1eaeb39f006ef0b21cb3b46531a).
+build/ was NOT mutated at any point.  Instrument FROZEN once (md5 dcada99957a733e283efbcaf391d4409)
+and used for all three detector runs; the reachability control likewise (md5 25ec71f06b58c5c3b43793b7d18a2ee3).
+
+PART 1 -- THE SHIPPED 14-ROW DETECTOR (regress/sgi_mte_fill_probe.py)
+-------------------------------------------------------------------------------------------
+    mutant       edit at :1519                                     score   log
+    BASE         (none -- the shipped fix)                         14/14   BASE.raw
+    M_tlbA       depth == 32  &&  dst_tlb == MTE_TLB_A             14/14   M_tlbA.raw
+    M_tlbAB      depth == 32  &&  dst_tlb != MTE_TLB_C             14/14   M_tlbAB.raw
+
+BOTH ARE TOTAL ESCAPES, and stronger than the score says: `diff' against BASE.raw is EMPTY
+except the label on line 1.  Every row reported the identical `got' value.  That is what a
+detector blind BY CONSTRUCTION looks like -- not a near miss.
+
+Binaries differ, so the edits reached the measurement:
+    BASE     e113ca7193a91b8953c4c10f37417ab2   (reproduced bit-for-bit after restore)
+    M_tlbA   f43671a0405bb821679f31330a713d31
+    M_tlbAB  0d28610d4ba6e72e357b7ad79e907a56
+
+PART 2 -- THE REACHABILITY CONTROL (tlb_reach_control.py; NOT a proposed row set)
+-------------------------------------------------------------------------------------------
+Same tiled 32-bit FILL, bg = 0x11223344, driven at each of the three case labels in turn.
+Oracle dest[0]:  0x11 = RGBA arm (the #509 repair fired)   0x44 = CI arm (the #509 defect)
+Guest-only: an `sd' to CRIME_RE_TLB_A/B/C (0xb5001000/1200/1400) then the MTE registers, on
+an unmodified in-tree `-E sgi -e ip32'.  Rung 3.
+
+    binary       MTE_TLB_A   MTE_TLB_B   MTE_TLB_C   log
+    BASE         RGBA        RGBA        RGBA        reach_BASE.raw
+    M_tlbA       RGBA        CI          CI          reach_M_tlbA.raw
+    M_tlbAB      RGBA        RGBA        CI          reach_M_tlbAB.raw
+
+TWO THINGS FOLLOW, and they are different claims:
+  * THE SHIPPED FIX IS CORRECT AT ALL THREE LABELS.  BASE is RGBA everywhere.  Nothing here
+    is a defect in #509's product code.
+  * THE B AND C CELLS ARE REACHABLE AND THE DEFECT IS LIVE IN THEM under M_tlbA -- dest[0]
+    returns to 0x44, i.e. the CI PUT assigns buf[0] alone while memory_rw copies four, which
+    is the exact leak #509 closed.  The control SEPARATES all three binaries; the shipped
+    detector separates none of them.
+
+PART 3 -- WHAT WAS ALREADY DISCLOSED, AND WHAT IS NEW
+-------------------------------------------------------------------------------------------
+PRETABLE.out section 1 PREDICTED this escape before table 1 ran, in its own words:
+    "DISCLOSED as coverage debt: a mutant conditioning the repair on `dst_tlb == MTE_TLB_A'
+     escapes this detector."
+So the escape is not a surprise and the round is not accused of missing it.  What is new is
+(i) it is now MEASURED rather than predicted, and (ii) the REACHABILITY of the exempted cells
+is measured -- which is the fact the floor rule keys on and which no artifact held before.
+
+RESTORE -- both parts, run and recorded rather than asserted
+-------------------------------------------------------------------------------------------
+    part 1  cmp /tmp/gxopus7g1/src/devices/dev_sgi_re.c  vs SEC          CLEAN
+    part 2  [ /tmp/gxopus7g1/gxemul -nt src/devices/dev_sgi_re.c ]       OK
+    bin_BASE md5 after restore == stage B's md5                          e113ca...  identical
+    /tmp/gxopus7g1/.MUTANT                                               removed after both passed
+    build/ dev_sgi_re.c vs SEC                                           CLEAN (never touched)
+    build/.MUTANT                                                        absent (never created)
