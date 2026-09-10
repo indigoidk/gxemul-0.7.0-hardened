@@ -1,3 +1,43 @@
+# Records correction to `#512` (pcc2c040kill): `dev_pcc2.c` described a host kill its own code no longer had -- and the same sentence had already gone stale once before, in the same paragraph
+
+**THE WRONG RECORD.** `dev_pcc2.c`'s header carried, under "NOT FIXED HERE, cited so 'twelve kills
+removed' is not read as 'file clean'":
+
+    pcc2c040kill (a LEGAL byte write of 0x04 to GENCTL still ends the host in reassert_interrupts).
+
+`#512` (9fa07fe) had converted that arm to a latched decline, witnessed at rung 3 by
+`regress/pcc2_c040_probe.py` -- 3/4 committed, 4/4 fixed with the same script, 7/7 with three added
+discriminating rows. VERIFIED LOCALLY before editing, not taken from the seat that found it: the only
+executable `exit(1)` left in the file is `pcctwo_interrupt_common()`'s `default:` arm, on an unsupported
+interrupt LINE ID -- and that one's guest reachability is NOT established (the registration loop exposes
+sixteen line IDs and nothing in these files says which unsupported ones a connected device can emit),
+so the corrected text calls it a cited exit, not a witnessed kill.
+
+**THE SHARP PART: the clause beside it already carried the IDENTICAL correction for its sibling.** The
+same paragraph says of `pcc2defaultkill`: *"this sentence said 'still ends it' until #501's pass 4"*. The
+same sentence, in the same list, went stale the same way a second time, and the first correction did
+not protect the second clause. **A NOT-FIXED-HERE list is a dated claim wearing the clothes of a
+structural note**: it decays every time one of its own members is fixed, by the rounds that read it.
+The corrected text says so and names the deriver -- `grep -n 'exit(' dev_pcc2.c`, then read each hit --
+rather than trusting the list.
+
+**How it was found, because the route is the lesson.** The codex seat's answer
+(`regress/artifacts/pcc2c040kill/codex_analysis_20260908.err`) had been sitting UNREAD -- a zero-byte
+`.txt`, the answer in the `.err` -- with no ledger entry. It was the FIRST of ten unread streams opened
+on 2026-09-09, and it held a live wrong record; the rest were then opened, and two more live findings
+came out (`wiringcliff`'s counts; `sgirekills`' discharged blocker). The unread-review class is this
+project's most expensive recorded class, and this was its fourth instance.
+
+**The row stays OPEN, deliberately**: its flagship stages are held for adjudication (a partial ruling
+landed 2026-09-09; part (a) of its question is referred to a codex reading). That is a different fact
+from the kill being present, and conflating those two is exactly how the wrong sentence got written.
+
+Also corrected in place today, same class: `CHANGELOG.md`'s older "filed, not fixed" list that quoted
+the sentence now carries a dated pointer to `#512`, so a grep for the subject lands on the correction
+and not only on the stale line. Comment-only; propagated with the `#516` batch, clearance CLEAN/FRESH.
+Witness: `none` (records). Seats: codex found it; the loop verified and corrected; no panel on a
+comment correction, by judgment, recorded here.
+
 # `#516` lcairqstubkill: every ISA interrupt on alphabook1 routed into a function whose whole body was fatal() + exit(1)
 
 **THE DEFECT.** `dev_lca.c` registered the machine's two interrupt handlers as bare kills:

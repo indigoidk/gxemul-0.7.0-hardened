@@ -112,10 +112,31 @@
     converted; the detector reaches the odd ones through that path.
 
     NOT FIXED HERE, cited so "twelve kills removed" is not read as "file clean":
-    pcc2c040kill (a LEGAL byte write of 0x04 to GENCTL still ends the host in
-    reassert_interrupts).  pcc2defaultkill -- an unlisted offset ended it -- was
-    fixed by #501 (the default: arm below); this sentence said "still ends it"
-    until #501's pass 4 (Opus).  */
+    the `default:' arm of pcctwo_interrupt_common() below still ends the host on an
+    unsupported interrupt LINE ID.  *** REACHABILITY IS NOT ESTABLISHED HERE ***: the
+    registration loop exposes sixteen line IDs and nothing in this file says which
+    unsupported ones a connected device can actually emit, so this is a cited exit,
+    not a witnessed kill.
+
+    *** AND THIS SENTENCE HAS NOW GONE STALE TWICE, IN THE SAME PARAGRAPH, THE SAME
+    WAY.  Corrected 2026-09-09. ***  It read "pcc2c040kill (a LEGAL byte write of
+    0x04 to GENCTL still ends the host in reassert_interrupts)" -- while #512 had
+    already converted that arm to the latched decline visible at the C040 test in
+    reassert_interrupts() above, witnessed rung-3 by regress/pcc2_c040_probe.py
+    (3/4 committed -> 4/4 fixed -> 7/7 with the added rows) and shipped as 9fa07fe.
+    So the file was describing a kill its own code no longer had.  (The row stays
+    OPEN, deliberately -- its flagship stages are held -- which is a different fact
+    from the kill being present, and conflating the two is how this got written.)
+
+    The clause beside it already carried the IDENTICAL correction for pcc2defaultkill
+    -- an unlisted offset ended it, fixed by #501 (the default: arm below), and that
+    sentence said "still ends it" until #501's pass 4 (Opus).  **A NOT-FIXED-HERE LIST
+    IS A DATED CLAIM WEARING THE CLOTHES OF A STRUCTURAL NOTE**, and it decays every
+    time one of its own members is fixed -- by the rounds that read it.  DERIVE it
+    (`grep -n 'exit(' dev_pcc2.c', then read each hit) rather than trusting it.
+
+    Found by the codex seat; its answer had been sitting UNREAD in
+    regress/artifacts/pcc2c040kill/codex_analysis_20260908.err.  */
 enum {
 	PCC2_W_GENCTL_LEN,
 	PCC2_W_VECBASE_LEN,
