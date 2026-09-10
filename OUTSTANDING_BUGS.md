@@ -18098,7 +18098,7 @@ Found by the GPT-6 Astra exit audit (`regress/artifacts/queuetriage/codex_exitau
 ranked it first on BOTH axes out of 76 unowned runtime error-exit sites across 24 files. Every element
 above was re-derived locally by opening the files.
 
-### `mipsextshift` (MED) -- filed 2026-09-10
+### `mipsextshift` (MED) -- filed 2026-09-10 -- *** CORRECTED 2026-09-10 BY THE DESIGN REVIEW IN FOUR PLACES; the corrections are at the end of this entry and the reading below is kept because it is what the row was filed from. ***
 
 `cpu_mips_instr.c`, anchors `X(ext)` and `X(dext)`: the extraction shift count is computed from two
 independently decoded instruction fields and **goes NEGATIVE for 496 of 1024 encodable pairs**.
@@ -18432,3 +18432,29 @@ reachable on a real machine model, not only synthetic ones.
 **No gate has ever instantiated a 64-bit PowerPC CPU at all**, so that group is invisible by construction
 rather than by omission -- one coverage hole with one cause, closed by a single 64-bit probe. Severity
 ceiling stated honestly: nothing in-tree BOOTS a 64-bit PowerPC guest, which is why the witness is rung 3.
+
+### `mipsextshift` -- *** THE DESIGN REVIEW'S FOUR CORRECTIONS, 2026-09-10 ***
+
+**(1) Plain `dext` has NO bad field pairs, so the entry's own title was wrong.** Enumerated per opcode
+across all 1024 raw pairs: EXT has 496 negative counts, **DEXT has zero**, and DEXTM and DEXTU have 496
+each. The two variants add 32 to the field they widen **before packing the arguments for the shared
+handler**, so `X(dext)` is fed out-of-range fields rather than generating them. *A fix aimed at `dext`
+would have been aimed at the wrong place.*
+
+**(2) There ARE admission gates**, contrary to this entry's broader claim. SPECIAL3 rejects older
+ISA/revision combinations, R5900 takes another path, and a `$zero` destination selects a NOP. The field
+domains are unconstrained *when the handler actually runs*, but not every model or destination reaches it.
+
+**(3) A Reserved Instruction exception is PERMITTED, not MANDATED** -- which is exactly the overclaim this
+entry warned itself against. The manuals make the excessive field sum UNPREDICTABLE, and the manual's own
+definition of that term permits arbitrary exceptions while forbidding processor halt or hang. Declining is
+a sound policy; claiming the architecture requires RI would overstate the evidence.
+
+**(4) The `dins`-family execution handlers do not exist in this tree**, so the sibling question is partly
+moot.
+
+**The prescribed fix is two DECODER guards, not a mask and not a cast:** reject `lsb + msbd + 1 > 32` for
+EXT and `> 64` for the shared DEXT/DEXTM/DEXTU case **after** the variant adjustments, and do it **before
+the `$zero` NOP shortcut** -- the ordering matters, because a NOP taken first would swallow the rejection.
+That places the bound where the fields are normalised, which is the only point at which one bound serves
+all three variants.

@@ -1,0 +1,85 @@
+VERDICT: FAULT — add two decoder guards: `lsb + msbd + 1 > 32` for EXT, and `> 64`` for the shared DEXT/DEXTM/DEXTU case after variant adjustments. On rejection, set `ic->f = instr(reserved)` and `break`, before the `$zero` NOP shortcut.
+CODEX_MIPSEXT_20260910
+
+The defect is confirmed, with important corrections: **plain DEXT has no bad field pairs; DEXTM and DEXTU supply the bad pairs to `X(dext)`; the DINS-family execution handlers do not exist in this tree.**
+
+The [decoder](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_mips_instr.c:4359) independently extracts five-bit `rd` and `sa`. The [SPECIAL3 cases](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_mips_instr.c:5577) perform no field-sum validation. DEXTM adds 32 to `msbd`; DEXTU adds 32 to `lsb`; both adjustments happen before packing the arguments for the shared handler.
+
+I exhaustively enumerated all 1,024 raw field pairs per opcode, including packing and unpacking:
+
+| Opcode | Handler `msbd` | Handler `lsb` | `size` | Middle count, before cast | Negative pairs |
+|---|---:|---:|---:|---:|---:|
+| EXT | 0–31 | 0–31 | 1–32 | −31–31 | 496 |
+| DEXT | 0–31 | 0–31 | 1–32 | 1–63 | 0 |
+| DEXTM | 32–63 | 0–31 | 33–64 | −31–31 | 496 |
+| DEXTU | 0–31 | 32–63 | 1–32 | −31–31 | 496 |
+
+For DEXTM/U, the negative counts become `2^64−31` through `2^64−1` after conversion to `uint64_t`. The cast does not repair them.
+
+There **are admission gates**, contrary to the broader claim in the filed row: SPECIAL3 rejects older ISA/revision combinations, and R5900 takes another path. Also, `rt == $zero` selects NOP. Thus the field domains are unconstrained **when the extract handler actually runs**, but not every MIPS model or destination reaches it.
+
+I found and read the manuals under the parent project’s `_scratchpad`. [MIPS32 Revision 6.04, page 173](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/mips32_volII.txt:647) calls EXT’s excessive field sum UNPREDICTABLE. [MIPS64 Revision 2.50, pages 133–137](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/mips64_volII.txt:554) explicitly says ordinary DEXT has no UNPREDICTABLE field case, and specifies UNPREDICTABLE for excessive normalized sums in DEXTM/U. The [published MIPS64 manual](https://s3-eu-west-1.amazonaws.com/downloads-mips/documents/MD00087-2B-MIPS64BIS-AFP-05.04.pdf) corroborates those bounds.
+
+**RI is permitted here, not mandated.** The local manual’s [UNPREDICTABLE definition](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/mips64_volII.txt:44) permits arbitrary exceptions, while forbidding processor halt/hang and inaccessible-state access. The instruction pages separately identify pre-Release-2 availability as a Reserved Instruction case. Their “Exceptions: Reserved Instruction” line does not turn the field restriction into a mandatory RI rule.
+
+Consequently, field validation is a sound repair design, but UNPREDICTABLE alone does not force that design: a bounded deterministic result could also be an implementation choice. I recommend FAULT as this emulator’s explicit policy for malformed extract fields.
+
+The tree already provides the necessary mechanism. [`X(reserved)`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_mips_instr.c:131) synchronizes the instruction PC and calls `mips_cpu_exception(cpu, EXCEPTION_RI, ...)`. Neighbouring [`X(ldc1)` and `X(sdc1)`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_mips_instr.c:3142) reject an invalid register case by calling `instr(reserved)(cpu, ic)` and returning. These extract handlers can use that same helper.
+
+`goto bad` instead reaches the [dyntrans emulation-abort path](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1983), which sets `cpu->running = 0`. It is not CPU exception delivery.
+
+The smallest consistent edit is:
+
+| Opcode | Exact placement and effect |
+|---|---|
+| EXT | Immediately after decoding `msbd` and `lsb`, reject `lsb + msbd + 1 > 32` through reserved dispatch and `break`. |
+| DEXT | Participate in the shared normalized `> 64` check; all its currently encodable field pairs pass. |
+| DEXTM | Apply the shared check after `msbd += 32`. |
+| DEXTU | Apply the shared check after `lsb += 32`. |
+
+That is **two checks total: one 32-bit bound and one shared 64-bit bound**. No shift-expression change or new helper is necessary.
+
+Placing those checks before argument packing and NOP selection makes the chosen policy apply to malformed `$zero` destinations too. Handler-only guards would eliminate the present UB but leave those encodings silently accepted as NOPs. Selecting reserved dispatch and breaking also preserves the [translation tail’s deferred execution during readahead](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c:1912).
+
+Enumeration of the proposed guards admits 528 EXT pairs, 1,024 DEXT pairs, and 528 pairs each for DEXTM/U. **Every admitted middle and final shift count is within its operand width.**
+
+For [`X(ins)`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_mips_instr.c:1730), the census survives:
+
+| Quantity across 1,024 pairs | Enumerated result |
+|---|---:|
+| `size` range | −30–32 |
+| Negative / zero / positive sizes | 465 / 31 / 528 |
+| Initial and final shift counts, `pos` | 0–31 |
+| Both middle shift counts | 0–31 |
+| Invalid shift counts | 0 |
+| Reversed-field pairs | 496 |
+| Reversed-field pairs producing zero mask | 496 |
+
+Those reversed fields remain architecturally UNPREDICTABLE, but they do not create this shift-count defect. DINS/DINSM/DINSU appear in the [disassembler](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_mips.c:1191); there are no corresponding execution handlers or decoder cases. On a model admitting SPECIAL3, they reach its default `goto bad`. There are no three additional insert-handler shifts to repair.
+
+**The detector needs two distinct observables: UBSan diagnostics for definedness, and CPU exception state for the selected rejection policy.** A pre-fix result-register value cannot serve as a portable oracle for undefined execution.
+
+The following are proposed rows and predicted kills, not measured results. Names containing braces denote separate rows per listed opcode.
+
+| Rows | Mutant or failure killed | Observable |
+|---|---|---|
+| `PIN-EXT`, `PIN-D64` | Original decoder restored; guard removed, disabled, misplaced before normalization, or overridden by subsequent dispatch assignment | Active source contains the correct predicate and reserved dispatch, with a terminating `break`, after normalization and before NOP selection. Comments and inactive code cannot satisfy the pin. |
+| `UB-{EXT,DEXTM,DEXTU}` | Pre-fix/reinstated decoder; missing rejection for an affected variant | A source-attributed shift diagnostic makes the instrumented execution fail. Fixed execution must complete the required observation without that diagnostic. |
+| `RI-{EXT,DEXTM,DEXTU}` | **NULLED REPAIR:** guards retained but reserved handling neutralized; rejection changed to NOP; count masking substituted for rejection | Actual CP0 RI state, correct EPC/BD and exception-vector transfer, with destination unchanged. Sanitizer silence alone would miss these mutants. |
+| `ZERO-RI-{EXT,DEXTM,DEXTU}` | Validation placed only in handlers or bypassed by the `$zero` shortcut | RI state appears despite the discarded destination. `$zero` remaining zero is insufficient evidence. |
+| `VALID-{EXT,DEXT,DEXTM,DEXTU}` | Buildable null medium that makes extraction a NOP; blanket RI; lost variant adjustment; an overstrict boundary comparison | Correct nontrivial extracted value and no RI. Include legal field endpoints and full-width cases where supported. |
+| `EXCEPTION-CONTEXT` | Rejection bypasses PC synchronization or mishandles delay-slot execution | Correct EPC, BD and vector state for ordinary and delay-slot execution, including cached translation. |
+| `READAHEAD` | Exception raised while merely translating ahead | Exception state remains unchanged until the instruction executes. |
+| `MEDIUM-EVIDENCE` | Empty/comment-only medium; missing execution or output; reuse of an unrelated/stale executable | Required source constructs, build provenance and complete row evidence are prerequisites. Missing evidence fails rather than becoming “no sanitizer diagnostic.” |
+
+The `$zero` rows offer an additional useful distinction: the current decoder deliberately selects NOP, so that pre-fix path does **not** execute the suspect shifts. Its missing RI provides a defined policy differential, without inventing a wrong value for UB. It does not replace the sanitizer rows.
+
+For this repair, **“verbatim reinstatement” means restoring the original decoder block**. The original shift expressions intentionally remain; reinstating an unchanged expression is an equivalent mutant.
+
+Record actual emulator stderr or the complete captured terminal stream. Require execution/completion evidence independently. Treat sanitizer reports as presence/absence evidence, not execution counts: the two shifts have separate locations, while DEXTM/U share their handler location. Separate process records can preserve variant attribution when repeat suppression would otherwise obscure it.
+
+Two further premise corrections matter. The sibling [build-asan CPU Makefile](C:/DocumentNoSnc/CC/GXEMUL/build-asan/src/cpus/Makefile:9) does contain `-fsanitize=address,undefined`; that does not establish which source snapshot its existing binary represents. Also, this checkout’s [`#510` record](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/CHANGELOG.md:1728) describes the UBSan lane as deferred, and its source comments offer UBSan **or** a source pin. I cannot substantiate the claim that it shipped both detectors.
+
+Finally, the shared DEXT decoder never sets `x64 = 1`, so the [terminal MODE32 rejection](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_mips_instr.c:5712) does not catch it. That is a separate ISA-admission defect. MIPS64 EXT also requires a sign-extended word source for predictable architectural results; legal-value controls must respect that precondition.
+
+Only source/document reads and arithmetic enumeration were performed. No builds, emulator probes, edits or patches were made.
