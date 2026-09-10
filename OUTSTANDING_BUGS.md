@@ -18196,3 +18196,82 @@ checks are the nearest existing machinery.
 *Both rows came from the GPT-6 Astra exit audit's top three (`regress/artifacts/queuetriage/`), which
 ranked them I1/E1 out of 76 unowned runtime error-exit sites across 24 files. Every element above was
 re-derived locally by opening the files.*
+
+### `crimewidthkill` (HIGH) -- filed 2026-09-10
+
+`dev_sgi_ip32.c`, `DEVICE_ACCESS(crime)`, grep anchor `fatal("crime access len = %i!\n", len);`: the
+handler is a bare `if (len == 8) {...} else if (len == 4) {...} else { fatal(...); exit(1); }`. There is
+no other width arm, so **every other access length -- 1, 2, and anything wider -- ends the emulator.** A
+byte load is an ordinary thing for a guest or a PROM to do while probing, and nothing about the device's
+mapping advertises a width restriction.
+
+`machine_sgi.c` installs it with `dev_crime_init(machine, mem, 0x14000000, ...)` on the IP32 machines.
+CRIME is the memory and interrupt controller: one of the first things any IP32 guest touches.
+
+**The disposition is the interesting part, because member 5 (FAULT) is genuinely available here, which it
+usually is not.** `memory_rw.c` converts a failed device callback into an architectural access exception
+for **MIPS and M88K only** -- and this device is on MIPS. So `return 0` is not a silent decline: it is a
+positive statement that the access could not be serviced, delivered as the bus error real hardware gives.
+That is the `dev_unreadable.c` idiom, and `machine_sgi.c` already installs `dev_unreadable` ten times for
+exactly this reason -- the PROM and NetBSD probe absent regions and RELY on the failure. A round here
+should weigh FAULT against DECLINE rather than defaulting to decline as most of this queue does. Not
+measured, no witness; the rung-3 attempt is owed and looks cheap.
+
+### `vmedefaultkill` (HIGH) -- filed 2026-09-10
+
+`dev_vme.c`, default arm: it announces with **`debug()`** and then calls `exit(1)`.
+
+*** THIS ONE IS WORSE THAN THE USUAL SHAPE, AND THE REASON IS THE DIAGNOSTIC LEVEL. *** Every other
+unimplemented-register kill in this queue announces with `fatal()`, which this fork has measured cannot be
+silenced by `-q` -- `fatal()` has no early-out and goes straight to `va_debug`. This one uses `debug()`,
+which does have one (`if ((quiet_mode && !ss) || v < 0) return;`), so at default verbosity **the message
+is not printed at all and the emulator dies with no output explaining why.** A user sees the process
+vanish; a gate sees a non-zero exit and no diagnostic to grep. That makes it the hardest member of the
+class to DIAGNOSE, independent of how hard it is to trigger.
+
+`machine_mvme88k.c` installs it unconditionally (`vme addr=...`, `VME2_BASE`) on a machine this project
+actively boots -- the same constructor attaches the PCC2 the recent rounds are about. Probing a bus
+controller's register space is exactly what firmware does.
+
+Disposition: member 5 (FAULT) is **available** -- M88K is one of the two families `memory_rw.c` delivers a
+failed-device exception for -- so `return 0` gives the guest the bus error real VME hardware would. Member
+3 is the alternative and would need the announce **promoted from `debug()` to `fatal()`** to be worth
+anything, which is a second change the round must make deliberately rather than inherit.
+
+### `fbctrlportkill` (HIGH) -- filed 2026-09-10
+
+`dev_fbctrl.c`: **the PORT arm accepts an out-of-range port number with a warning and STORES it, and the
+DATA arm then calls `exit(1)` on that same stored value.** A two-step, guest-driven host kill in which the
+first step looks handled:
+
+```c
+case DEV_FBCTRL_PORT:  d->current_port = idata;                 /* stored FIRST */
+                       if (idata >= DEV_FBCTRL_NPORTS)
+                               fatal("[ WARNING: ... out of range! ]\n");   /* warned SECOND */
+case DEV_FBCTRL_DATA:  if (d->current_port < 0 || d->current_port >= DEV_FBCTRL_NPORTS) {
+                               fatal(...); exit(1); }
+```
+
+A reader auditing the PORT arm sees a range check and a diagnostic and concludes the case is handled. The
+check does nothing but print.
+
+*** AND THE TWO GUARDS TEST DIFFERENT QUANTITIES, which is the guard-field/body-field discriminator the
+pre-table check mandates. *** PORT tests `idata`, a `uint64_t`; DATA tests `d->current_port`, an `int`
+(verified in the struct). The store between them **truncates**. Both halves of the DATA guard are live:
+writing `0xffffffff` warns at PORT and lands `current_port == -1`, killing via the `< 0` half; writing
+`0x100000000` warns at PORT and truncates to a perfectly valid `0`, so the warning fires about a value
+that turns out fine. **The warning and the kill are keyed to different numbers**, so neither predicts the
+other, and a detector must not assume the warning marks the killing set.
+
+**The fix's first question is ORDER:** refusing the store in the PORT arm closes the DATA kill without
+touching the DATA arm at all -- one line moved, and it makes the DATA guard the belt-and-braces it reads
+as. Declining at DATA instead leaves the model holding a selector it has agreed to and cannot use.
+
+Reachability: `machine_test.c` attaches fbctrl at TWO sites, so it is on `testmips` and `testarm` --
+**the machines this project's own gates drive**. Third and fourth kills in the same file, recorded so a
+round does not close on one: `fbctrl_command()` has `default: fatal(...); exit(1)`, reached by writing a
+command byte to the COMMAND port, and the `DEVICE_ACCESS` default arm is another.
+
+*All three came from the GPT-6 Astra exit audit's six E1 predicates
+(`regress/artifacts/queuetriage/codex_exitaudit_20260910.txt`). Every element above was re-derived locally
+by opening the files.*

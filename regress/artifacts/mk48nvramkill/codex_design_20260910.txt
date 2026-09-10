@@ -1,0 +1,92 @@
+VERDICT: **backed accept**, by correcting the lower boundary. In [dev_mk48txx.c:87](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_mk48txx.c:87), replace `relative_addr < MK48T08_CLKOFF` with `relative_addr < MK48T08_CLKOFF + MK48TXX_ICSR`. Keep the upper comparison using `MK48TXX_ISEC`.
+
+`CODEX_MK48_DESIGN_20260910`
+
+S1–S4 and S6 check out in the specified tree. S5 needs qualification: attachment occurs unconditionally **within the MVME187 branch**, before the PROM-emulation check. The MVME188 and MVME197 branches do not attach this device. See [machine setup](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/machines/machine_mvme88k.c:81).
+
+Neither vendored constant is wrong. The lower comparison is missing `+ MK48TXX_ICSR`. **The claim that indices 0–7 lack `MK48TXX_I*` definitions is false**: seven have names, and index 1 is explicitly marked unused on MK48T59. The header explains that this first eight-register bank belongs only to newer models and specifically describes MK48T59’s additional facilities. See [the header’s model descriptions and definitions](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/thirdparty/mk48txxreg.h:42).
+
+On MK48T08, those eight addresses are ordinary NVRAM. The manufacturer’s diagram identifies 8184 SRAM bytes plus eight clock bytes; its clock window is `0x1ff8..0x1fff`. They are neither bank-switched storage nor MK48T08 alarm/watchdog registers. [ST datasheet, pages 7–8](https://www.st.com/resource/en/datasheet/m48t08.pdf)
+
+The offset enumeration is:
+
+| Addition | Header index | MK48T08 function | Current → proposed dispatch |
+|---|---|---|---|
+| `0x1ff0 + 0 = 0x1ff0` | `IFLAGS` | NVRAM | Default, diagnostic, exit → backed accept |
+| `0x1ff0 + 1 = 0x1ff1` | Unused on MK48T59 | NVRAM | Default, diagnostic, exit → backed accept |
+| `0x1ff0 + 2 = 0x1ff2` | `IASEC` | NVRAM | Default, diagnostic, exit → backed accept |
+| `0x1ff0 + 3 = 0x1ff3` | `IAMIN` | NVRAM | Default, diagnostic, exit → backed accept |
+| `0x1ff0 + 4 = 0x1ff4` | `IAHOUR` | NVRAM | Default, diagnostic, exit → backed accept |
+| `0x1ff0 + 5 = 0x1ff5` | `IADAY` | NVRAM | Default, diagnostic, exit → backed accept |
+| `0x1ff0 + 6 = 0x1ff6` | `IINTR` | NVRAM | Default, diagnostic, exit → backed accept |
+| `0x1ff0 + 7 = 0x1ff7` | `IWDOG` | NVRAM | Default, diagnostic, exit → backed accept |
+| `0x1ff0 + 8 = 0x1ff8` | `ICSR` | Control | Control case → same control case |
+| `0x1ff0 + 9 = 0x1ff9` | `ISEC` | Seconds | Backed access → unchanged |
+| `0x1ff0 + 10 = 0x1ffa` | `IMIN` | Minutes | Backed access → unchanged |
+| `0x1ff0 + 11 = 0x1ffb` | `IHOUR` | Hours | Backed access → unchanged |
+| `0x1ff0 + 12 = 0x1ffc` | `IWDAY` | Weekday | Backed access → unchanged |
+| `0x1ff0 + 13 = 0x1ffd` | `IDAY` | Date | Backed access → unchanged |
+| `0x1ff0 + 14 = 0x1ffe` | `IMON` | Month | Backed access → unchanged |
+| `0x1ff0 + 15 = 0x1fff` | `IYEAR` | Year | Backed access → unchanged |
+
+`8192 = 0x2000`; mapped starting offsets are `0x0000..0x1fff`. Offsets `0x0000..0x1fef` retain their existing RAM behavior.
+
+Changing **only the upper** `ISEC` to `ICSR` gives the wrong outcomes: `0x1ff0..0x1ff7` still reach the fatal default, while `0x1ff8` enters generic storage and loses its refresh operation. The proposed lower correction leaves exactly `0x1ff8` reaching the switch. This is one comparison edit adding one symbolic constant, rather than a replacement of an incorrect header definition.
+
+The sibling implementations support **backed accept**:
+
+| Sibling | Actual behavior |
+|---|---|
+| [MC146818 default handling](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_mc146818.c:484) | Unimplemented writes store the byte and issue debug output. Default reads ultimately return the stored register value. The callback returns success. |
+| [RS5C313 access](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_rs5c313.c:147) | Generic access stores/returns a masked nibble and succeeds. Unmodeled control facilities do not cause rejection. Its thirteen time fields are refreshed before every access; TINT, CTRL, and TEST survive that refresh. |
+| [LUNA88K NVRAM](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_luna88k.c:590) | Reads and writes copy the existing backing bytes and return success. |
+
+MC146818’s debug output is not a latched refusal announcement. RS5C313’s generic backing is silent. For actual MK48T08 NVRAM, the existing silent RAM path supplies the required behavior without additional policy or storage.
+
+**Fault is available on this machine.** The two architecture branches in [memory_rw.c:603](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:603) are **MIPS and m88k**. A nonpositive device result, with exceptions enabled, invokes `m88k_exception()` for instruction or data access and returns failure. That branch retains a TODO about recording the faulting address. Faulting is unsuitable because these are valid NVRAM locations, not because m88k lacks the delivery mechanism.
+
+The real time-register RAM path is intentional in this model, but its semantics need precise qualification. [The updater](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_mk48txx.c:58) writes only `ISEC..IYEAR`; its only callers in the tree are initialization and the [control case](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_mk48txx.c:98).
+
+| Event | Current behavior, preserved by the correction |
+|---|---|
+| Initialization | Populate all seven time bytes from host UTC. |
+| Guest time-register write | Store the byte immediately, without consulting `CSR_WRITE`. |
+| Subsequent time-register read | Return that stored byte; no refresh occurs. |
+| READ bit `0 → 1` | Overwrite all seven time bytes from host UTC, then store control. |
+| READ bit `1 → 1` | No refresh. |
+| READ bit `1 → 0` | Store control; no refresh. |
+
+Thus clock writes are **honored, readable, and subsequently overwritten on the next qualifying edge**. They are not silently discarded or persistently applied to an emulated clock.
+
+The seven time slots are shared storage for guest writes and host snapshots. The eight newly admitted NVRAM slots are separate array elements: the updater neither reads nor writes them. Accepting those eight writes therefore does not contaminate a later clock value.
+
+There are separate fidelity gaps: unlatched reads do not advance with time, and the WRITE-bit commit protocol is absent. Actual hardware resumes register updates after READ clears and transfers staged time into its counters when WRITE clears. [ST datasheet, page 14](https://www.st.com/resource/en/datasheet/m48t08.pdf) Those gaps do not require moving the seven time bytes into this switch to correct the NVRAM boundary.
+
+I found **no in-tree consumer depending on termination at these eight offsets**. The built-in [MVME PROM emulation](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/promemul/mvmeprom.c:99) handles console output, exit, and board identification; it contains no clock/NVRAM access. The [MVME documentation](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/doc/machine_mvme88k.html:62) directs users to download OpenBSD externally and includes an old boot transcript identifying MK48T08. That is not proof about every external guest or opaque PROM image, nor a current compatibility test. Existing accepted accesses retain their behavior under this edit.
+
+For the detector, there is an unavoidable qualification: **this smallest edit removes no kill statement**. It makes the existing default unreachable. A verbatim “reinstatement” of that same default, with the corrected boundary retained, is either no change or unreachable code. No behavioral channel can distinguish it. Consequently, the stated floor cannot be satisfied literally for that mutant. Restoring the **old dispatch and fatal behavior** is distinguishable and should be named separately.
+
+The proposed behavioral rows should use byte accesses, independent initial state, and controlled, distinct host-time samples for clock assertions. These are design expectations, not measured results.
+
+| Row or row family | Named mutant it detects | Observable that differs |
+|---|---|---|
+| `RAM_READ_i`, separately for `i = 0,1,2,3,4,5,6,7` | Pre-fix read behavior; restored reachable read kill | Required successful read completion and returned byte are absent under termination. Read fixtures must not require a preceding affected write. |
+| `RAM_WRITE_i`, separately for the same eight indices | Pre-fix write behavior; restored reachable write kill | Required successful write completion is absent under termination. |
+| `RAM_ROUNDTRIP_i`, separately for all eight indices | **NULLED REPAIR:** corrected guard and bypass retained, backing assignment removed; silent write decline | Nonzero written values read back correctly in the repair; original values remain under the mutant. Survival and silence alone cannot detect this. |
+| `RAM_ISOLATION` | Writes redirected to another slot; clock refresh incorrectly overwrites NVRAM | Independently distinct NVRAM bytes remain distinct and survive clock refresh; control and time bytes remain unaffected by NVRAM writes. |
+| `CSR_RISE` | Upper-bound `ISEC → ICSR`; omitted updater call | A qualifying control edge produces the expected new seven-byte host snapshot; the mutant leaves the previous snapshot. |
+| `CSR_HOLD_CLEAR_REARM` | Missing control storage; refresh on every control write; missing edge qualification | Control readback and snapshot sequence differ: hold and clear preserve the snapshot, the next rising edge refreshes it. |
+| `TOD_WRITE_LIFETIME` | Ignore time writes; refresh before every read; never overwrite staged values | Immediate readback returns staged bytes, and the next qualifying edge replaces them with the expected host snapshot. |
+| `EXISTING_ACCEPTS` | Overrestricted lower region or removed upper acceptance | Successful round trips at the adjacent existing RAM boundary and time-window endpoints differ from failure or dropped writes. |
+| `ACCESS_SUCCESS` | Replace successful completion with `return 0` | Callback success and completed guest access differ. Host survival alone is insufficient because m88k can receive a guest exception. |
+| `MEDIUM_EXECUTION` | Null/empty workload medium | Required, data-dependent completion records produced by the workload in that medium disappear. A host-runner banner or absence of diagnostics is insufficient. |
+
+The medium row must actually depend on execution from that medium. A device-only fixture has no medium variable and cannot claim this kill. Likewise, no row should claim to detect the nulled backing assignment through diagnostic count: correct storage and dropped storage are both silent.
+
+For the remaining fatal/unreachable inventory: there is exactly one literal `exit(` in this device file, [line 118](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_mk48txx.c:112), shared by the read and write diagnostics for the enumerated eight offsets. No other mapped starting offset reaches it. The sole `ICSR` case is reachable today and remains reachable after correction; the default becomes unreachable. The other model’s register cases are absent, rather than existing but unreachable decodes.
+
+There is also an initialization allocation-failure exit through `CHECK_ALLOCATION` and [its macro expansion](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/misc.h:181). Additional limitations visible here are the unchecked `gmtime()` result and multibyte accesses operating on only `reg[relative_addr]`, rather than transferring consecutive backing bytes.
+
+Finally, detector routing matters: this device registers with `DM_DEFAULT`. [The memory dispatch](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:583) skips its callback for `NO_EXCEPTIONS` accesses because `DM_READS_HAVE_NO_SIDE_EFFECTS` is absent. Success and zero-filled reads through that route would not demonstrate the repaired device behavior.
+
+No builds, device probes, edits, or patches were performed.
