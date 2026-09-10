@@ -131,6 +131,15 @@ extern u_int8_t *volatile pcc2intr_ipl;
 
 #define PCC2_GENCTL_FAST	0x01
 #define PCC2_GENCTL_IEN		0x02
-#define PCC2_GENCTL_C040	0x03
+/*  #517 (pcc2genctlc040alias): THIS VALUE IS WRONG AND THE NAME IS A TRAP.  C040 is bit 2 of
+    the General Control Register -- 0x04, as PCC2_C040 above correctly says and as VMESBCP2's
+    GENCTL page puts it (bit 10 of the word view).  0x03 is FAST | MIEN, two OTHER bits.  The
+    alias has ZERO consumers in this tree (derived: grep -rn PCC2_GENCTL_C040 src/ finds only
+    this line), so it is a loaded trap rather than a live defect: the first future site to reach
+    for the GENCTL_ spelling would test the wrong two bits and never the right one.  ANNOTATED
+    rather than deleted -- this is a vendored third-party header, the addition licence does not
+    reach a deletion here on a zero-consumer warrant, and a reader who greps for the symbol lands
+    on this warning instead of on a bare wrong number.  Use PCC2_C040.  */
+#define PCC2_GENCTL_C040	0x03	/*  WRONG -- see above; use PCC2_C040 (0x04)  */
 
 #endif	/*  MVME_PCCTWOREG_H  */

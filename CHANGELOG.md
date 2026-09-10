@@ -1,3 +1,37 @@
+# `#517` pcc2genctlc040alias: a vendored header defined C040 twice, and the second definition was a different register's bits
+
+**THE DEFECT.** `src/include/thirdparty/mvme_pcctworeg.h` carries `PCC2_C040 0x04` (right -- bit 2 of
+the General Control Register, matching VMESBCP2's GENCTL page and the value `dev_pcc2.c` uses) and,
+seventy lines later, `PCC2_GENCTL_C040 0x03`. **0x03 is FAST | MIEN** -- two other bits of the same
+register. The alias has ZERO consumers (deriver: `grep -rn PCC2_GENCTL_C040 src/` finds only the
+definition), so it is a loaded trap rather than a live defect: the first future site to reach for the
+`GENCTL_` spelling would test the wrong two bits and never the right one. Found by the codex seat on
+2026-09-07 while answering a different question about the same file; filed low; taken now because the
+owner's standing priority is critical bugs first and EASY-RESOLVABLE ones second, and this is one line.
+
+**THE DISPOSITION IS ANNOTATE, NOT DELETE, and that was adjudicated rather than assumed.** The
+flagship seat ranked it "a records/guard fix, not a round" on 2026-09-09. Deleting a definition from a
+vendored third-party header is a different licence from annotating one: the addition licence's
+discriminator -- a measured delta or a transferred warrant, never "cannot hurt" -- does not reach a
+deletion on a zero-consumer warrant, and a reader who greps for the symbol now lands on a warning that
+names the right constant instead of on a bare wrong number. The value is left as it was, marked WRONG
+on its own line, so nothing that might parse the header changes meaning.
+
+**WHAT THIS IS NOT.** Not a fix to `dev_pcc2.c`, which never used the alias. Not a claim that the
+header is otherwise correct -- `PCC2_GENCTL_FAST 0x01` and `PCC2_GENCTL_IEN 0x02` in the same block
+were not audited against the manual here and are not vouched for. No detector: there is no observable
+behaviour to pin, because no code reads the symbol; a row would be vacuous by construction, and the
+witness field says so.
+
+**Propagated** to `est/` and all three build trees with the `#516` batch (the header has three
+consumers -- `dev_clmpcc.c`, `dev_pcc2.c`, `machine_mvme88k.c` -- so `src/devices/*.o` and
+`src/machines/*.o` were cleared before the rebuild); two-part clearance RUN, CLEAN/FRESH on every row,
+`_scratchpad/propagate516.out`.
+
+Witness: `none` (documented-only; a comment on a symbol nothing reads). Seats: codex found it (assess,
+2026-09-07); fable5 adjudicated the disposition (2026-09-09); no panel fired on a one-line annotation,
+by the loop's judgment, and that judgment is recorded here rather than left to be inferred.
+
 # Records correction to `#512` (pcc2c040kill): `dev_pcc2.c` described a host kill its own code no longer had -- and the same sentence had already gone stale once before, in the same paragraph
 
 **THE WRONG RECORD.** `dev_pcc2.c`'s header carried, under "NOT FIXED HERE, cited so 'twelve kills
