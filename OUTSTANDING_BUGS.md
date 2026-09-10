@@ -18322,3 +18322,56 @@ turns a failed device callback into an architectural access exception for **MIPS
 Returning zero from an ARM or SH device callback gives no bus-error delivery, so the FAULT member is
 unavailable there and a round reaching for it owes the exception path first. CPU translation and
 instruction handlers have their own direct mechanisms, which is a separate question.
+
+### `ppcrldiclzero` (HIGH) -- filed 2026-09-10
+
+`cpu_ppc_instr.c`, grep anchor `X(rldicl)`: **the handler always writes ZERO to its destination
+register, for every operand, every rotate amount and every mask begin.**
+
+```c
+uint64_t tmp = cpu->cd.ppc.gpr[rs], tmp2;
+while (sh-- != 0) { ... rotate tmp left by one ... }
+tmp2 = 0;
+while (mb <= 63) {
+        tmp |= ((uint64_t)1 << (63-mb));      /*  the MASK goes into tmp  */
+        mb ++;
+}
+cpu->cd.ppc.gpr[ra] = tmp & tmp2;             /*  tmp2 is STILL 0  */
+```
+
+`tmp2` is assigned `0` and never assigned again. The `|=` also corrupts the rotated value it lands in,
+but that is moot: the result is ANDed with zero either way.
+
+**The sibling two functions down shows the intended shape, which makes the diagnosis certain rather than
+inferred.** `X(rldicr)` does the same rotate and then CLEARS bits in `tmp` (`tmp &= ~((uint64_t)1 <<
+(63-me))`), assigning `tmp` directly. `X(rldicl)` was written the other way round -- build a mask, then
+AND -- and the mask was accumulated into the wrong variable. **The fix is one character:** `tmp |=`
+becomes `tmp2 |=`.
+
+*** Why this is the most serious thing in today's batch. *** `rldicl` is not an obscure corner: it is
+**the** canonical 64-bit PowerPC masking and zero-extension instruction, emitted constantly by compilers
+(`rldicl rA,rS,0,32` is the standard 32-bit zero-extend). Every other defect filed today needs a guest to
+touch a particular register, width or offset. This one is wrong on the ordinary path, for ordinary code,
+on every execution.
+
+Reachability is wired and checked: `case PPC_30_RLDICL: ic->f = instr(rldicl); break;` in the primary
+decoder, reached whenever `cpu->cd.ppc.bits == 64`; the 32-bit path deliberately goes to `bad`. So it is
+live on every 64-bit PowerPC CPU model in this tree and dead on the 32-bit ones. **No regression file in
+the tree mentions `rldicl`** (`grep -rn rldicl regress/` outside artifacts returns nothing), which is how
+an always-zero result survived.
+
+**It is NOT a shift defect, which matters for scoping.** The census that found it explicitly records the
+computed counts here as SAFE (mask counts 0..63, rotate counts 1..31, hazard form NONE). It is a plain
+variable mix-up found while looking at something else, and it belongs to neither `shiftubcensus` nor
+`mipsextshift` but to its own correctness round.
+
+Not measured, no witness. The rung-3 attempt is owed first and looks unusually cheap: any 64-bit PowerPC
+machine, one `rldicl` with a nonzero source, and a register readback -- the wanted value is anything but
+zero and the pre-fix build must show zero. **A guest-visible wrong RESULT is a far easier oracle than the
+process-death oracles most of this queue needs.** Check first whether the existing PowerPC gates already
+execute one and pass anyway, because a green gate over an always-zero instruction would itself be a
+finding about the gates.
+
+*Found by the GPT-6 Astra seat under the found-something-else licence while answering a tree-wide
+shift-UB census (`regress/artifacts/shiftcensus/codex_census_20260910.txt`). Verified locally by opening
+the handler before filing.*

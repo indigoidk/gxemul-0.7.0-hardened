@@ -1,0 +1,108 @@
+VERDICT: Site A (`mapledmaaddr`) — **HOLD the proposed two-line ACCEPT** pending resolution of DMA-address state semantics. Site B (`xscaleinten`) — **ACCEPT for the ordinary INTCTL read into a general register**, with a narrower warrant than the brief claims.
+`CODEX_ACCEPTCLASS_20260910`
+
+I inspected the specified `GXEMUL-SEC` tree. No builds, probes, edits, or patches were performed. The detector results below are predictions, not measured kills.
+
+The premises check out only partly:
+
+| Premise | Site A | Site B |
+|---|---|---|
+| Store and read use the same field | Yes: write at 559, read at 564 use `d->dmaaddr`. | Yes: store at 315, load at 311 use `i80321_inten`. |
+| Field is initialized and appropriately sized | `uint32_t`; device initialization zeroes the structure. A normal four-byte access preserves its width. | `uint32_t`; `cpu_new()` zero-allocates the CPU. |
+| Assignment reaches the caller before termination | **No.** `odata` is local. The copy into `data` happens at 638, after the exit. | The destination CPU register is assigned, but subsequent guest instructions cannot execute. |
+| Real machine installation | Dreamcast installs Maple unconditionally at 149; default CPU is SH7750. | IQ80321 installs CP6 at 57; default CPU is `80321_600_2`. Iyonix installs it too. |
+| Quiet, structurally identical `isteer` sibling | — | **False for the whole case.** Its read is quiet; its store assigns the field and exits on any nonzero value. |
+
+These locations are in [Maple](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_dreamcast_maple.c:557), [ARM coprocessors](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_coproc.c:304), [Dreamcast construction](C:/DocumentNoSnc/CC/GXEMUL/GGXEMUL-SEC/src/machines/machine_dreamcast.c:149), and [IQ80321 construction](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/machines/machine_iq80321.c:57).
+
+For **A**, the consequential finding is another writer. DMA begins with a local copy of `d->dmaaddr`, advances that local address through the command list, then writes it back at 540, immediately below:
+
+> `// TODO: Should the DMA address be updated?`
+
+Consequently, “the read returns what the guest programmed” is true immediately after a write, but is **not the invariant maintained by this model after completed DMA**. See the [DMA tail](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_dreamcast_maple.c:539).
+
+Sega’s documentation identifies MDSTAR as the command-table **starting address**. Flycast corroborates a preserved programmed-address model: it walks a separate local address, and its register implementation also masks address bits. Those are concrete reasons to challenge GXemul’s writeback and unrestricted stored value. [Sega system architecture, §2.6.8](https://segaretro.org/images/7/78/DreamcastDevBoxSystemArchitecture.pdf), [Flycast DMA implementation](https://raw.githubusercontent.com/flyinghead/flycast/master/core/hw/maple/maple_if.cpp), [Flycast register implementation](https://raw.githubusercontent.com/flyinghead/flycast/master/core/hw/holly/sb.cpp).
+
+**Evidence limit:** I could read the indexed Sega description, but could not retrieve the complete vendor register specification establishing post-DMA readback and reserved-bit behavior. Flycast is corroboration, not a silicon specification. Therefore I am holding ACCEPT rather than claiming a conclusively proven hardware mismatch.
+
+If MDSTAR must retain the programmed start address, this becomes **IMPLEMENT**: maintain that state correctly before exposing it. An immediate write/read detector would miss the defect. I found no positive evidence of a clear-on-read operation, but absence of such evidence does not settle the address-lifecycle question.
+
+For **B**, the backing-state argument is substantially stronger. The interrupt controller’s `enable` pointer refers directly to `cpu->cd.arm.i80321_inten`; interrupt assertion/deassertion consults that field. The read therefore returns the programmed mask, rather than a disconnected shadow. Pending interrupt sources live in another field. See [controller binding](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_i80321.c:445) and [mask consumption](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_i80321.c:83).
+
+That supports deleting the diagnostic and exit for the normal read. It does **not** establish “fully modelled both ways”:
+
+- The store changes the mask without immediately recomputing the CPU interrupt signal. Correct register readback does not prove correct interrupt delivery.
+- The quiet `isteer` read does not establish steering support: nonzero steering writes terminate.
+- The generic dispatcher passes through `rd` and opcode fields without enforcing privilege, and CP6 does not validate `opcode1`/`opcode2`. A normal-register oracle does not cover special `Rd == PC` handling or noncanonical accesses.
+
+I did not obtain the matching Intel 80321 register chapter, so the ACCEPT recommendation is not a vendor-document certification of reserved bits or every access form. No local evidence requires recomputation or clearing of **the enable mask on read**.
+
+A TODO alone establishes neither implementation nor nonimplementation. If a read really requires missing behavior, a latch cannot supply it; member 3 would need an explicit, truthful decline contract.
+
+These should be **two rounds** under your stated scope rule. They share an immediate symptom—termination prevents a useful read from completing—but separate files, machines, and execution paths require separate witnesses. A’s unresolved state lifecycle also prevents me from endorsing identical dispositions today.
+
+For the detectors, define two distinct, nonzero, legal values per site: aligned physical addresses for A, and masks using defined interrupt-enable bits for B. The guest must perform the store itself. Use separate write-source and read-destination registers; overwrite the source after storing, poison each destination, and publish the actual read result into fresh RAM followed by a guest completion receipt. Neither the expected value nor that receipt may be preseeded.
+
+The proposed rows are:
+
+| Site A row | Named mutant | Observable that changes |
+|---|---|---|
+| `A.identity` | Comment-only target, stale source/probe, or wrongly selected executable | Source/probe identity or source-to-binary provenance fails. Comment text containing the anchor is insufficient. |
+| `A.return` | Pre-fix build; verbatim restoration of the diagnostic and exit; restoration of exit alone | The required **post-read guest publication** is absent. |
+| `A.effect` | Keep the read branch and remove its assignment; retain successful callback return | `odata` remains zero, so the published value differs from the separately stored nonzero value. |
+| `A.replace` | Ignore a subsequent write, retain an old value, or truncate implemented address bits | Readback differs from the second stored address. |
+| `A.repeat` | Return the field but clear or alter it on read | The later read differs from the same stored address. |
+| `A.quiet` | Restore only the diagnostic, or introduce a one-time “unimplemented” announcement | The target diagnostic count changes from zero to nonzero. |
+| `A.afterdma` — requires a settled hardware contract | Preserve the current DMA-cursor writeback when the repair requires preserving MDSTAR | After independently verified completed DMA, readback is the advanced cursor instead of the guest’s programmed start address. |
+
+`A.afterdma` needs transfer evidence alongside address readback: skipping DMA must not manufacture a pass. Its expected address must come from the settled specification, not today’s implementation.
+
+| Site B row | Named mutant | Observable that changes |
+|---|---|---|
+| `B.identity` | Comment-only target, stale source/probe, or wrong executable/machine selection | Identity/provenance fails; a generic ARM session is insufficient evidence of CP6 installation. |
+| `B.return` | Pre-fix build; verbatim restoration; exit-only restoration | Post-read guest publication is absent, **even though the callback assigned `r[rd]` before exiting**. |
+| `B.effect` | Keep the selected load branch but remove its assignment | The destination’s poison is published instead of the stored mask. |
+| `B.replace` | Ignore a later store, return a stale mask, or read the wrong field | Exact readback differs from the second mask. |
+| `B.repeat` | Clear or otherwise alter INTCTL on read | A subsequent read differs from the stored mask. |
+| `B.destination` | Write a fixed CPU register instead of the decoded destination | A second destination-register variant retains poison or receives the wrong result. |
+| `B.quiet` | Restore the diagnostic alone or add a latch-based announcement | Target diagnostic count becomes nonzero. |
+
+The identity rows are necessary: **a behaviorally identical stale executable cannot be distinguished by readback alone**. They need independently recorded provenance, not merely a filename or an asserted build label.
+
+The value rows distinguish nulled repairs without termination. The quiet rows distinguish false announcements without changing values. Neither channel claims to detect mutants that leave it unchanged. Missing, malformed, or timed-out output must fail the detector; an empty transcript cannot pass merely because its diagnostic count is zero.
+
+For **A’s vehicle**, `gdrom_default_probe.py` supplies usable Dreamcast session and instruction-planting machinery. Its `st()` and `ld()` functions only prepare registers; the row still needs actual guest store/load instructions. Its `pair()` helper exists specifically to place multiple accesses in one contiguous sequence. The script also executes its existing rows at top level, so it is not presently a clean importable helper module. See [the helpers](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gdrom_default_probe.py:353).
+
+The registration warning applies exactly: Maple registers with `DM_DEFAULT`, and [memory_rw.c](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:583) skips the callback for `NO_EXCEPTIONS` accesses unless `DM_READS_HAVE_NO_SIDE_EFFECTS` is set. The condition is not restricted to reads. Use **guest stores and guest loads**; debugger inspection can observe their RAM publications. Do not change the registration mode merely to accommodate the detector.
+
+For **B**, reuse the POSIX/WSL session, instruction planting, and RAM-result parsing approach from `arm_flags_probe.py`, but drive **IQ80321** and genuine guest coprocessor transfers. `gate_arm.sh` currently selects `testarm`/SA1110; that session does not establish this CP6 path. The gate supplies useful control and row-presence machinery, not existing coverage of INTCTL. See [gate setup](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gate_arm.sh:77) and [ARM session/result handling](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/arm_flags_probe.py:111). Fresh result parsing and explicit failure handling are essential; neither helper’s liveness behavior should be inherited as the value oracle.
+
+The explicit active `exit(1)` census is:
+
+| File and exit line | Cause | Round membership |
+|---|---|---|
+| Maple 565 | DMAADDR read | A |
+| Maple 426 | Unimplemented GUN handling | Separate |
+| Maple 459 | Unsupported unit-address combination | Separate |
+| Maple 520 | Unsupported GETCOND function | Separate |
+| Maple 529 | Unsupported command | Separate |
+| ARM coprocessors 313 | INTCTL read | B |
+| ARM coprocessors 62 | CP15 access with `rd == PC` | Separate |
+| ARM coprocessors 177 | Endianness transition | Separate; cached translation assumptions depend on it |
+| ARM coprocessors 264 | Nonzero PID / missing FCSE | Separate |
+| ARM coprocessors 324 | Nonzero interrupt steering | Separate |
+| ARM coprocessors 333 | Interrupt-source write / “ack” | Separate |
+| ARM coprocessors 419 | Unsupported CP6 selection | Separate |
+| ARM coprocessors 530 | Unsupported CP14 selection | Separate |
+
+**None of these thirteen exit statements is wholly unreachable** under the relevant machine installation and guest dispatch paths. That is a static reachability assessment, not a measured witness.
+
+There are narrower warranted absences:
+
+- **Nonzero-PID read reaching line 264:** unreachable in an ordinary continuing guest. PID starts at zero; its only nonzero-setting store exits immediately. The same exit remains reachable on writes.
+- **Nonzero `isteer` readback after a guest store:** similarly unavailable while the nonzero-store exit remains. Do not use it as a supposedly harmless control.
+- Six other `exit(1)` spellings in the ARM file are commented out and are not executable sites.
+
+Also, [`fatal()` itself only prints](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/core/debugmsg.c:384). Maple’s queue overruns, alignment warning/refusal, receive-address warning, BWRITE TODO, and miscellaneous register diagnostics are not additional process exits. CP15 likewise has logging-only TODOs and commented-out kills. Those require separate behavior/logging assessments.
+
+Finally, the existing [audit record](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/OUTSTANDING_BUGS.md:18163) contains another incorrect premise: **FAULT is not categorically unavailable to ARM coprocessor handlers because ARM device callbacks lack fault conversion in `memory_rw.c`.** CPU handlers can invoke `arm_exception()` directly; the adjacent [CDP handler already does](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c:2674). That does not justify faulting a valid INTCTL read, but it changes the option analysis for unsupported coprocessor operations.

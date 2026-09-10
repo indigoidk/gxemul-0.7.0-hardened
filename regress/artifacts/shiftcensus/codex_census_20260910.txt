@@ -1,0 +1,415 @@
+VERDICT: **1. ARM `X(bfi)`; 2. MIPS `X(ext)`; 3. MIPS `X(dext)` for DEXTM/DEXTU.**  
+`CODEX_SHIFTCENSUS_20260910`
+
+I would **not certify this class closed**. The fixed-commit inventory contains **6,620 computed-count shift operators under `src`**. I identified **57 operators with established hazardous operands**, plus **eight whose wider-access reachability remains unresolved**. Those eight are recorded explicitly below.
+
+The review targets **`4eac0b1ff822d6f8f4b3d6ea3066adbdab3c0a95`** in the specified repository. HEAD advanced during the review; I repeated the inventory against the fixed commit. No builds, test runs, edits, or patches were performed.
+
+**Counting and interpretation**
+
+An operator occurrence is the counting unit: an expression containing two shifts counts twice. I included `<<=`, `>>=`, named constant counts, macro definitions, generated source, and disabled source. Macro expansions are not multiplied by their number of callers.
+
+| Scope at `4eac0b1` | Computed-count operators |
+|---|---:|
+| CPU source, excluding tracked generated files | 851 |
+| Device source | 225 |
+| Headers, excluding one C++ stream insertion | 221 |
+| Other `src` files | 49 |
+| Tracked generated CPU files | 5,274 |
+| **Production-tree textual denominator** | **6,620** |
+| Regression support C files | 29 |
+| C files retained under `regress/artifacts` | 284 |
+| **Whole tracked C/C++ textual inventory** | **6,933** |
+
+The production denominator also checks as **2,066 `<<` + 1,960 `>>` + 1,040 `<<=` + 1,554 `>>=`**.
+
+To repeat the inventory:
+
+1. Enumerate paths using `git ls-tree -r --name-only 4eac0b1`, restricted to `.c`, `.h`, `.cc`, `.cpp`, `.cxx`, `.hpp`, and `.inc`.
+2. Read the corresponding `4eac0b1:path` blobs using `git cat-file --batch`; do not read another checkout or current working files.
+3. Strip comments, strings, and character literals; tokenize shifts, preserving compound assignments.
+4. Extract each count operand with C operator precedence. Exclude an integer literal, optionally parenthesized; retain named constants and arithmetic expressions.
+5. Resolve preprocessor alternatives and inspect definitions, decoders, loops, and callers. Two Alpha operators have preprocessor directives between the operator and count; six `cpu.h` counts use token-pasted architecture constants.
+6. Exclude `std::cerr <<` in `refcount_ptr.h`. Search individual reported anchors with `git grep -n -F 'anchor' 4eac0b1 -- path`.
+
+This is a textual census, not a claim that all retained regression artifacts are linked into the emulator.
+
+Below, **I** means promoted `int`, **U** means `unsigned int`, and **U32/U64/S32/S64** identify the corresponding fixed-width operand on the ordinary 32-bit-`int` host model. Intervals are inclusive; `8[0,7]` means `{0,8,…,56}`.
+
+The classifications distinguish:
+
+- **a:** negative count;
+- **b:** count at least the promoted operand width;
+- **c:** signed left-shift result not representable.
+
+Your S1 is correct for a 32-bit `int`. C99 also makes left-shifting a **negative signed operand** undefined; that matters for DSLL below. A wide assignment destination does not widen the shift itself. [C99, §6.5.7](https://open-std.org/jtc1/sc22/wg14/www/docs/n1256.pdf)
+
+`NONE` below means none of those forms on the stated host model. It does **not** certify arbitrary C99 implementations with 16-bit `int`; those portability qualifications follow the census.
+
+**Confirmed guest-driven findings**
+
+All paths in this table are under `src/`. “N” counts hazardous operator occurrences, excluding safe companion shifts.
+
+| File; grep anchor | N | Count expression → derived range | Promoted left operand | Forms |
+|---|---:|---|---|---|
+| `cpus/cpu_arm_instr.c`; `uint32_t mask = (1 << width) - 1` in `X(bfi)` | 1 | `msb-lsb+1` → **−30…32** | I | **a, b, c** |
+| `cpus/cpu_mips_instr.c`; `X(ext)` | 2 | `32-lsb-size` → **−31…31** | U32 | **a** |
+| Same; `X(dext)` | 2 | `(uint64_t)(64-lsb-size)` → `0…63` or **2⁶⁴−31…2⁶⁴−1** | U64 | **b** |
+| Same; `X(ror)` | 1 | `32-sa` → **1…32** | U32 | **b** |
+| Same; `X(rorv)` | 2 | Unmasked `sa`; `32-sa` | U32 | **a, b**; subtraction can also overflow |
+| Same; `X(dsll)` | 1 | Immediate count → **0…63** | **S64** | **c**, plus negative-left-operand UB |
+| `cpus/cpu_mips_coproc.c`; `bit = 1 << (MIPS_FCSR_FCC1_SHIFT + cc-1)` | 1 | `25+cc-1`, `cc=1…7` → **25…31** | I | **c** |
+| `cpus/cpu_arm_instr.c`; `is_userpage[index >> 5]` | 2 | `index & 31` → **0…31** | I | **c** |
+| `cpus/cpu_arm_instr_loadstore.c`; `if (!(x & (1 <<` | 1 | `(addr >> 12) & 31` → **0…31** | I | **c** |
+| `cpus/cpu_m88k_instr.c`; `m88k_rot` | 1 | `n`, after `n != 0` → **1…31** | I | **c** |
+| Same; `ic->arg[0] = 1 << d` | 1 | Decoded `d` → **0…31** | I | **c** |
+| `cpus/cpu_ppc_instr.c`; `1 << (31-bt)` | 14 | `31-bt` → **0…31** | I | **c** |
+| Same; `X(lswi)`, `24-8*sub` | 2 | `sub=0…3` → **{24,16,8,0}** | I, including promoted `unsigned char d` | **c** at count 24 |
+| `devices/dev_irqc.c`; `d->enabled` with `1 << idata` | 2 | Unvalidated `idata` → **0…UINT64_MAX** | I | **b, c** |
+| `devices/dev_i80321.c`; `((r+i)*8)` | 2 | `8(r+i)`; a contained register access reaches **{0,8,16,24}** | I for both `0xff` and promoted byte `b` | **c**; wider accesses additionally admit **b** |
+| `devices/dev_mb89352.c`; `1 << d->reg[BDID]` | 1 | Stored `uint8_t` → **0…255** | I | **b, c** |
+| `devices/dev_dec21143.c`; `d->mii_bit - 13` | 1 | **0…INT_MAX−13** before earlier counter overflow | I (`0x8000`) | **b** |
+| `devices/dev_dec21030.c`; `pixel_mask & (1 << i)` | 1 | Loop `i` → **0…31** | I | **c** |
+| `devices/dev_luna88k.c`; `interrupt->line + 25`, `25 + i` | 3 | Registered lines/loop values 1…6 → **26…31** | I | **c** |
+| `devices/dev_sgi_re.c`; `nr_of_bits_in_the_middle-1` | 2 | `maxidx-startidx` → **−31…31** | U32 | **a** |
+| `devices/dev_uninorth.c`; `idata & (1 << dev)` | 1 | Probe loop → **11…31** | I | **c** |
+| `devices/dev_v3.c`; `relative_addr & (1 << dev)` | 1 | Probe loop → **24…31** | I | **c** |
+| **Total** | **45** | | | |
+
+The fourteen PPC destination-mask operators belong to `crand`, `crandc`, `creqv`, `crnand`, `crnor`, `cror`, and `crorc`. Their fourteen **source-reading** shifts are safe and counted separately below.
+
+For MIPS RORV, converting an unrestricted unsigned register value to `int` is implementation-defined when it cannot be represented. On the usual 32-bit conversion, `sa` spans the entire signed range. Even restricting attention to representable, nonnegative register values leaves oversized counts. This is not merely the zero-count defect in immediate ROR.
+
+The DEC21143 finding survives checking the state machine: the read-direction branch can `break` before the end-of-data transition, while the common `mii_bit++` still executes. Its sibling SROM counter really does have an effective bound.
+
+**Configuration-dependent and host-only findings**
+
+These are not ranked as ordinary guest-controlled count selection. A guest can execute the eventual device/network operation, but configuration supplies the hazardous range.
+
+| File; grep anchor | N | Count → range | Left type | Reachability and forms |
+|---|---:|---|---|---|
+| `src/net/net_ip.c`; `x |= (1 << xl) - 1` | 1 | `32-prefix_length` → **2…31** | I | Configuration enables **c** with `/1`; network processing evaluates it |
+| `src/devices/dev_dec5800.c`; `1 << cpu->machine->ncpus` | 2 | CLI permits **1…256** | I | **c** at 31, **b** from 32 |
+| `src/devices/dev_sgi_ip19.c`; same anchor | 1 | Same | I | **c, b**; the following literal-count shift has another signed-overflow concern |
+| `src/devices/dev_dec5800.c`; `1 << interrupt->line` | 2 | Registered **0…31**; stock connection uses 28 | I | **c** requires additional configured wiring |
+| `src/devices/dev_sgi_ip32.c`; `uint32_t line = 1 << interrupt->line` | 2 | Registered **0…31**; stock MACE connections avoid 31 | I | **c** requires additional configured wiring |
+| `src/devices/dev_vr41xx.c`; `d->giuint` | 2 | GIU registration **0…31**; stock PCIC connection uses 9 | I | **c** requires additional configured wiring |
+| `src/devices/dev_kn02ba.c`; `devinit->interrupt_path, 1 << i` | 1 | Initialization loop **0…31** | I | **c**, initialization |
+| `src/console/console.c`; `int mask = 1 << (3-button)` | 1 | X button numbers 1…255 give **−252…2** | I | **a**, host input |
+
+The mouse row does not fit your three proposed populations: it is **host GUI input**, rather than guest input, initialization, CLI, or debugger input. `x11.c` passes button events through; the “button 1/2/3” comment is not validation.
+
+The configuration parser also assigns `ncpus` using `atoi`; the CLI’s `[1,256]` check is not a tree-wide validation of that member.
+
+Thus the **57 confirmed operators** divide into:
+
+| Hazardous operand provenance | Operators |
+|---|---:|
+| Guest instruction/device state without special hazardous configuration | **45** |
+| Configuration-dependent | **10** |
+| Initialization alone | **1** |
+| Host GUI input | **1** |
+
+Configuration-dependent callback rows are **not globally dead**: `emul_parse.c` accepts additional devices and `emul_machine_setup()` passes them to `device_add()`.
+
+**Enumeration of the field cases**
+
+These counts come from enumerating the decoded integer fields, without executing emulator instructions.
+
+| Case | Enumerated domain | Result |
+|---|---|---|
+| MIPS EXT | 32 × 32 field pairs | **496 negative counts**, 528 nonnegative |
+| Ordinary MIPS DEXT | 32 × 32 | Counts **1…63**; **zero hazardous pairs** |
+| DEXTM | 32 × 32, with decoder’s `msbd += 32` | **496 wrapped oversized counts** |
+| DEXTU | 32 × 32, with decoder’s `lsb += 32` | **496 wrapped oversized counts** |
+| Combined DEXT-family decoding | **3,072**, not 4,096 combinations | **992 hazardous combinations** |
+| ARM BFI | 32 × 32 | **465 negative**, **31 zero**, **525 counts 1…30**, **2 counts 31**, **1 count 32** |
+| MIPS INS | 32 × 32 | Both middle counts are **0…31** for all pairs |
+| SGI RE stipple bounds | 32 × 32 | **496 negative** rotation counts |
+
+BFI has **496 reversed-field encodings**, but only **465 negative shift counts**. The other 31 produce width zero. Mixing these two totals would be an enumeration error.
+
+**Priority, kept on the requested two axes**
+
+| Site | CRITICAL under your definition | EASY |
+|---|---|---|
+| ARM BFI | **Yes.** A valid full-width operation encounters the bad shift. A count-masking host lowering can make its mask zero, preserving the old destination instead of inserting the source. This is a static consequence, not a measured run here. | **Yes**, approximately 3–5 lines |
+| MIPS EXT | **Not established as an architectural-result violation.** The hazardous field combinations are architecturally UNPREDICTABLE. Host UB remains a real defect. | **Yes**, bounds check and decline |
+| MIPS DEXTM/DEXTU | Same qualification | **Yes**, bounds check after variant adjustment |
+| MIPS ROR/RORV | Valid instructions expose the defects; wrong-result behavior remains host/compiler dependent in this read-only review | **Yes**, mask variable count and guard zero |
+| Signed-mask rows | Established C99 defects; I would not assign CRITICAL solely from `1 << 31` | Usually **yes per handler** |
+| PPC `rldicl`, discussed below | **Yes**, definite wrong architectural result independent of shift UB | **Yes**, one-line correction |
+
+The MIPS manuals explicitly classify the excessive EXT-family field ranges as UNPREDICTABLE. Declining them is a sound emulator policy; claiming the architecture mandates a particular ordinary result or necessarily mandates Reserved Instruction would overstate the evidence. [MIPS64 instruction manual](https://s3-eu-west-1.amazonaws.com/downloads-mips/documents/MD00087-2B-MIPS64BIS-AFP-05.04.pdf)
+
+For **EASY-only priority**, I would put the network mask, M88K rotate mask, and MIPS FCC mask near the front. The fourteen PPC CR edits are individually small, but the whole family is more than a five-line change.
+
+**Smallest honest fixes for the top three**
+
+| Site | Fix |
+|---|---|
+| [ARM BFI](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c), anchor `X(bfi)` | Reject `msb < lsb` through the decoder’s existing decline path. For the remaining width **1…32**, construct the mask using an explicitly 32-bit all-ones value shifted right by `32-width`. This handles width 32 without shifting by 32 and removes signed-mask overflow. |
+| [MIPS EXT](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_mips_instr.c), anchor `SPECIAL3_EXT` | Before selecting/executing `ext`, validate `lsb + msbd < 32`. Otherwise select the existing reserved/decline path. Retain the extraction arithmetic for accepted fields. |
+| Same file, anchor `SPECIAL3_DEXTM` | Apply the decoder’s variant adjustments first, then validate `lsb + msbd < 64`; decline otherwise. The cast on the count supplies no protection. |
+
+ARM BFI permits insertion covering the entire 32-bit destination. Therefore rejecting width 32 would discard a valid operation. [ARMv7 architecture manual, BFI](https://documentation-service.arm.com/static/5f8daeb7f86e16515cdb8c4e)
+
+For the plain-one masks elsewhere, cast **before** shifting. Where a mask is subsequently retained in a variable, give that variable the intended unsigned type too—for example, MIPS FCC’s `bit`. Replacing the source literal while retaining a narrowing signed temporary is an incomplete portability repair.
+
+**Remaining varying-count expressions**
+
+The following tables account for the other **390** nonliteral, nonconstant-expression operators outside headers and generated files. They contain **381 bounded operators**, the **eight unresolved wider-access operators**, and **one disabled operator**.
+
+File names in the CPU table are under `src/cpus/`. Multiple anchors in a cell identify equivalent groups; N counts all operators in that row.
+
+| File; grep anchors | N | Count ranges and promoted left types | Result / warrant |
+|---|---:|---|---|
+| `cpu_mips.c`; `cache_pdcache`, `cache_picache`, `cache_secondary`, `ct->` cache fields | 11 | I; primary size exponents 10…16, primary line exponents `{2,4,5,6}`, secondary sizes `{18,19,20,22,23}`, secondary line size 6 | NONE; CPU tables/default assignments |
+| Same; `STATUS_IM_SHIFT + i` | 1 | I; **8…15** | NONE; eight interrupt registrations |
+| Same; `pageshift+1`, `paddr <<= pageshift` | 3 | I at **{11,13}**; U64 at **{10,12}** | NONE; selected MMU format |
+| Same; `5-j`, `4-j`, `1<<coprocnr` | 4 | I; **0…5**, **0…4**, **0…3** | NONE; loop bounds |
+| `cpu_mips_coproc.c`; `signofs`, `n_frac`, `1 << cc` | 6 | U64 at **{31,63}/{23,52}**; I at **0…7** | NONE; FP format selection and decoded `cc` |
+| `cpu_mips_instr.c`; `COPROC_AVAILABILITY_CHECK`, `X(ins)` | 5 | I count **1**; U32 counts `pos` **0…31**, `32-pos-size` **0…31** | NONE; actual macro argument is 1; INS enumeration |
+| Same; final `x >> lsb` in EXT/DEXT | 2 | U32 **0…31**; U64 **0…63** | NONE |
+| Same; `sll`, `sllv`, `srl`, `srlv`, `sra`, `srav`, `dsllv`, `dsrl`, `dsrlv`, `dsra`, `dsrav`, combined SLL handlers | 13 | Word counts **0…31**, doubleword **0…63**; unsigned register operands except explicit S32/S64 arithmetic right shifts | NONE; decode limits or `&31`/`&63` |
+| Same; `X(ror)` right shift, FCC branch test | 2 | U32 **0…31**; U64 **25…31** | NONE |
+| `cpu_mips_instr_unaligned.c`; `reg_ofs * 8` | 3 | U64; **8[0,7]** | NONE; word/doubleword limits and loop termination |
+| `memory_mips_v2p.c`; `pagemask_shift`, `pageshift`, `pfn_shift` | 10 | I masks; U64 addresses. Counts **{10,11,12,13}**, page shifts **{10,12,14,…,26}**, page-shift-plus-one **{11,13,…,27}** | NONE; unsupported page masks go to exception before later shifts |
+| `generate_mips_loadstore.c`; `1 << size` | 4 | I; **0…3** | NONE; generator loops |
+| `cpu_arm.c`; cache exponents | 2 | I; I-cache **12…16**, D-cache **{0,14,15}** | NONE; CPU table |
+| Same; `(i & 31)`, `1 << tmp`, `iw >> i` | 3 | U32 **0…31**; I **0…7**; U32 **0…15** | NONE; masks/loops |
+| Same; `imm6`, `imm6 - 1`, `32 - imm6` | 6 | U32/S32; **1…31** or **0…30** | NONE; `imm6` is decoded with `&31`, and zero is handled separately |
+| Same; `8*i` | 4 | U32; **8[0,3]** | NONE; one-, two-, or four-byte word buffers |
+| `cpu_arm_instr.c`; `uxtb`, `uxtab_rot`, `uxtah_rot` | 3 | U32; **{0,8,16,24}**, with 24 handled separately in `uxtah_rot` | NONE |
+| Same; `X(ubfx)`, `X(sbfx)` | 5 | U mask counts **1…31**; U signbit **0…30**; U32 `lsb` **0…31** | NONE on 32-bit U; width-32 branch prevents count 32 |
+| Same; BFI’s `x <<= lsb`, `mask <<= lsb` | 2 | U32; **0…31** | NONE; the hazardous mask construction is counted above |
+| Same; `rot_sh`, combined-handler `rot` | 4 | U32; **{8,16,24}** and their complements | NONE; nonzero rotation guards |
+| Same; `iw >> i`, `regs >> i` | 3 | U32; **0…15** | NONE; register-list loops |
+| `cpu_arm_instr_loadstore.c`; `rot_sh` | 4 | U32; **{8,16,24}** and complements | NONE; both paths have `if (rot_sh)` |
+| `generate_arm_multi.c`; `1 << i` | 3 | I; **0…15** | NONE on 32-bit I; loop bound |
+| `generate_arm_r.c`; `c-1` | 4 | Wide unsigned hexadecimal literal or U; **0…30/31** | NONE on 32-bit U; generator loops |
+| `memory_arm.c`; `domain * 2` | 1 | U32; **2[0,15]** | NONE; four-bit domain |
+| `cpu_ppc.c`; cache fields, `i*8`, `spr & 3` | 6 | I cache counts **13…20** by field; U64 **8[0,7]**; I **0…3** | NONE; type table, byte loop, mask |
+| `cpu_ppc_instr.c`; `bi31m`, `31-ba`, `31-bb` | 24 | U32; **0…31** | NONE; decoded CR indices |
+| Same; `bf_shift`, `mtfsb0/1`, `mtfsfi`, `mcrfs`, `mcrf` | 28 | U32; field shifts **4[0,7]**, individual-bit shifts **0…31** | NONE; explicit unsigned masks and bounded indices |
+| Same; `ppc_single_narrow`, `ppc_stfs_extract` | 4 | U64/ULL; **29…63**, **28…62**, or **30…52** | NONE; early return for excessive narrowing shift; exponent bounds |
+| Same; `rldicl`, `rldicr`, `rldimi`, `rlwnm`, `rlwimi`, `rlwinm`, decoded `mask` | 11 | U64 mask counts **0…63**; U32 rotate counts **1…31** | NONE; loop bounds and `sh ? … : tmp` |
+| Same; `dlinesize`, conditional-store `8*i`, `slw`, `sld`, `srw`, `17+bi` | 7 | I **{5,7}**; U64 **8[0,7]**; U32 **0…31**; U64 **0…63**; I **17…24** | NONE; type table, access width, masks, loop |
+| `generate_ppc_loadstore.c`; `1 << size` | 2 | I; **0…3** | NONE |
+| `cpu_alpha_instr_alu.c`; INS/EXT/MSK `r`, `64-r` | 6 | U64; low part **8[0,7]**, high part **8[1,7]** | NONE; explicit zero/64 branches |
+| Same; `ALU_SLL`, `ALU_SRA`, `ALU_SRL`, `ALU_CMPBGE` | 3 | U64 or S64 right shift **0…63**; I mask **0…7** | NONE; `&63` and byte loop |
+| `cpu_dyntrans.c`; `index & 31`, `translations_bitmap` | 5 | U32; **0…31** | NONE; explicit casts and bitmap subdivision |
+| `cpu_i960.c`; `MEMB_scale` | 1 | I; **0…7** | NONE; three-bit decode |
+| `cpu_m88k.c`; `3 - ((iw >> 10) & 3)` | 1 | I; **0…3** | NONE |
+| `cpu_m88k_instr.c`; `extu`, `ext`, `mak`, `clr`, `set`, immediate counterparts | 19 | U32; `o` **0…31**, nonzero `w` **1…31**, `w-1` **0…30**, `32-w` **1…31** | NONE; zero-width cases handled separately |
+| Same; rotate data shifts, `imm16 << shift`, `1U << d` | 4 | U32/U; **1…31**, **{0,16}**, **0…31** | NONE on 32-bit U; `imm16` is unsigned |
+| `cpu_m88k_instr_loadstore.c`; DMT lane shifts | 2 | I; **0…3** and **{0,2}** | NONE; masked address lanes |
+| `cpu_riscv.c`; `1 << i` | 2 | I; **0…14** | NONE; fifteen-entry extension-name table |
+| `cpu_sh_instr.c`; FP `signofs`, `n_frac` | 3 | U64; **{31,63}/{23,52}** | NONE |
+| Same; `X(shad)`, `X(shld)` | 4 | U32 left, S32/U32 right; **0…31** or **1…31** | NONE; masked count and separate zero case |
+| `generate_m88k_loadstore.c`; `1 << size` | 4 | I; **0…3** | NONE |
+| `memory_alpha.c`; `bitsPerLevel`, `pageSizeShift` | 6 | I at **10**; U64 at **{13,23,33}**, U64/ULL at **13** | NONE; fixed local constants |
+
+Device file names below are under `src/devices/`.
+
+| Files; grep anchors | N | Counts; promoted left types | Result / warrant |
+|---|---:|---|---|
+| `bus_isa.c`; `1 << x`, `x&7`, `line & 7` | 4 | **0…7**, I | NONE; short-circuit guard/masks |
+| `dev_8259.c`; `idata & 7`, `irr >> i` | 4 | **0…7**, I | NONE |
+| `dev_bebox.c`, `dev_cpc700.c`, `dev_footbridge.c`, `dev_gc.c`; `templ.line`, `interrupt_template.line` | 5 | **0…31**, U32 | NONE; 32-entry loops |
+| `dev_bt459.c`; `6-2*i` | 2 | **{6,4,2,0}**, I | NONE |
+| `dev_dc7085.c`; `tx_scanner` | 1 | **0…3**, I | NONE; scanner wraps modulo four |
+| `dev_dec21143.c`; hash masks, address-bit assembly, write-data shift, SROM data shift | 6 | Hash **0…15**, U; address assembly **0…4**, I; data shifts **0…15**, I | NONE; branch/state bounds |
+| `dev_dreamcast_gdrom.c`; `1u << (k & 31)` | 1 | **0…31**, U | NONE on 32-bit U; mask |
+| `dev_fb.c`; `1 << d->bit_depth` | 2 | **{2,4}** and **{1,8}**, I | NONE; preceding depth branches |
+| `dev_i80321.c`; `idata >> (i*8)` | 1 | **8[0,len−1]**, U64 | **Unresolved wider-access reachability** |
+| Same; `templ.line` | 1 | **0…31**, U32 | NONE |
+| `dev_irqc.c`; `templ.line` | 1 | **0…31**, U32 | NONE; `N_IRQC_INTERRUPTS == 32` |
+| `dev_jazz.c`; interrupt masks, `1 << odata`, `1<<i` | 6 | **0…15**, or **0…14** for JazzIO loop; I | NONE; registration and loops |
+| `dev_kn02.c`, `dev_kn02ba.c`; `templ.line` | 2 | **0…7 / 0…31**, U32 | NONE |
+| `dev_kn230.c`; name mask and `templ.line` | 2 | **8…15**, I/U32 | NONE on 32-bit I |
+| `dev_lca.c`; `0x800U << dev` | 1 | **0…20**, U | NONE on 32-bit U; already unsigned |
+| `dev_le.c`; ring-length counts, `crc & 0xf` | 3 | **0…7 / 0…15**, I | NONE on 32-bit I |
+| `dev_luna88k.c`; `(3 - (addr & 3)) * 8` | 1 | **{0,8,16,24}**, U64 | NONE |
+| `dev_mb89352.c`; `1 << target` | 1 | **0…7**, I | NONE; target-search loop |
+| `dev_ne2000.c`; remote-DMA `8*i` | 3 | **8[0,len−1]**, U64 | **Unresolved wider-access reachability** |
+| `dev_pcc2.c`; `1u << bit` | 2 | **0…11**, U | NONE; fixed enum callers |
+| Same; `1ULL << relative_addr` | 2 | **0…63**, ULL | NONE; `relative_addr %= PCC2_SIZE`, size 64 |
+| `dev_pmagja.c`; `idata >> (ix*4)` | 1 | No executed count | **Disabled by `#if 0`** |
+| `dev_ps2_stuff.c`; normal/DMA IRQ masks, SBUS masks | 6 | **0…15 / {8,10}**, I | NONE on 32-bit I; registration bounds |
+| `dev_pvr.c`; texture dimensions | 2 | **0…7**, I operand 8 | NONE |
+| `dev_px.c`; `1 << xbit` | 8 | **0…7**, I | NONE; byte loop |
+| `dev_rtl8139c.c`; `eeprom_address_width`, `15-cur_out_bit` | 3 | **8 / 0…15**, I | NONE on 32-bit I; initialization and counter reset |
+| `dev_sgi_gbe.c`; cursor extraction, bit depth | 2 | **2[0,15]**, U32; **0…3**, I | NONE |
+| `dev_sgi_ip32.c`; CRIME initialization masks | 2 | **0…31**, U32 | NONE |
+| `dev_sgi_mardigras.c`; `24 + (7-i)` | 1 | **24…31**, U64 | NONE |
+| `dev_sgi_mec.c`; `0x01 << dma_ptr_nr` | 1 | **1…3**, I | NONE; increment followed by `>=4` break |
+| `dev_sgi_re.c`; depth masks, initial stipple shifts | 6 | Depth **0…3**, I; stipple **0…31**, U32 | NONE; masked fields |
+| `dev_sh4.c`; timer, validation masks, SCI, PCIC warning bit | 8 | **0…2**, I; masked **0…7/3/15**, U; SCI **0…7**, I; PCIC **0…31**, U | NONE on 32-bit U; masks/counter bounds |
+| Same; four `sh4_bsc16_shift(cpu, len)` uses | 4 | Zero for LE; otherwise **8(len−2)** after partial-access rejection, U64 operands | **Unresolved wider-access reachability** |
+| `dev_v3.c`; `line & 7` | 2 | **0…7**, I | NONE |
+| `dev_vga.c`; `subx`, `7-j` | 2 | **0…7**, I | NONE; pixel loops |
+| `dev_vr41xx.c`; VRIP `line`, `line-16` | 4 | **0…15 / 0…9**, I | NONE on 32-bit I; registration and branch |
+| `fb_include.c`; `fb_addr`, `d->bit_depth` | 4 | Bit-position **0…7**, depth **{1,2,4}**, I | NONE; supported sub-byte depths and aligned pixel positions |
+
+| Other file; grep anchors | N | Counts; types | Result / warrant |
+|---|---:|---|---|
+| `src/core/float_emul.c`; `n_frac`, `n_exp`, `signofs`, fraction-bit loops | 20 | `{23,52}`, `{8,11}`, `{7,10}`, `{31,63}`, loop **0…51**; I for small exponent masks, otherwise U64/S64 | NONE; selected FP format |
+| Same; `ieee_int64_to_double_odd`, `ieee_int64_to_double_rm` | 7 | Bit-length loop **0…63**; retained-bit shift **1…10**; half-bit **0…9**; U64 | NONE; `INT64_MIN` early return and `n <= 53` branch |
+| `src/core/memory.c`; `paddr >> shrcount` | 1 | **20**, U64 | NONE |
+| `src/debugger/debugger_cmds.c`; `coprocnr == -1` | 1 | Executed counts **0…3**, I | NONE; sentinel branch plus parser validation |
+| `src/disk/diskimage.c`; `bit_nr & 7` | 2 | **0…7**, I | NONE |
+| `src/machines/machine.c`; `1 << tickshift` | 1 | Actual callers **14…19**, I | NONE; caller enumeration. The local lower clamp alone is insufficient proof |
+| `src/net/net.c`; `x |= ((1 << xl) - 1) & ~1` | 1 | **2…8**, I | NONE; **`if (xl > 8) xl = 8`** |
+
+**The eight unresolved operators**
+
+Their arithmetic is not mysterious; their complete caller reachability is unfinished.
+
+| Operators | Existence boundary | What prevents a confident reachability verdict |
+|---|---|---|
+| NE2000’s three `8*i` shifts | **b** when `i >= 8`; device-window dispatch can accommodate more than eight bytes | Ordinary scalar accesses are bounded. Larger debugger/loader/Jazz DMA accesses commonly carry `NO_EXCEPTIONS`, and this device lacks `DM_READS_HAVE_NO_SIDE_EFFECTS`, so those apparent routes do **not** establish execution |
+| i80321’s `idata >> (i*8)` | **b** when `i >= 8` | No local eight-byte limit; ordinary contained ARM register accesses do not establish that iteration |
+| SH4’s four BSC lane shifts | In BE mode, **b** when `len >= 10` | Partial-access rejection establishes a lower bound only. Scalar accesses are bounded; a larger transfer reaching these exact register cases still needs a proven route |
+
+I would not file these as **confirmed guest-reachable defects**, and I would not mark them `NONE`. Their unresolved status is why this report does not claim closure.
+
+**Named constant counts and generated copies**
+
+The following groups account for the remaining **678 non-header, non-generated operators**. Their counts are fixed despite not being literal tokens.
+
+| Files / grep family | N | Resolved counts and left operands | Result on 32-bit-`int` hosts |
+|---|---:|---|---|
+| CPU instruction files and `cpu_dyntrans.c`; `*_INSTR_ALIGNMENT_SHIFT` | 365 | **1** for SH/RISC-V; **2** otherwise. Small I instruction-page masks/indices; U32/U64 addresses and immediates; signed right-shift offsets | NONE |
+| CPU files; mask constructions using `DYNTRANS_L1N/L2N/L3N` | 45 | **17**, or **18** for relevant L3 tables; I | NONE |
+| CPU files; `64-DYNTRANS_L1N…` address extraction | 48 | **47,30,12/13**; U64 | NONE |
+| MIPS CPU/coproc/instruction/memory files; coprocessor `*_SHIFT` constants | 62 | Counts **2,3,4,6,8,12,13,23,24,25,28,31** as defined by the named field; register/address operands U32/U64, small decoded/control values I | NONE |
+| `cpu_arm.c`, `cpu_arm_coproc.c`; cache/AUX/LR/PC constants | 12 | **0,3,4,6,12,14,15,18,24,25**; small I constants or U32 fields | NONE |
+| `cpu_ppc_instr.c`; `PPC_FPSCR_FPCC_SHIFT` | 10 | **12**; bounded condition values | NONE |
+| `memory_ppc.c`; `PTE_VSID_SHFT` | 1 | **7** in the selected header configuration; U32 | NONE |
+| M88K instruction/load-store files; FPCR/DMT constants | 11 | FP rounding **14**, DREG **7**, enables **2**; U32 or bounded I | NONE |
+| SH CPU/dyntrans/memory files; SR/MMU constants | 9 | **4,5,10,18**; U32 or bounded I fields | NONE |
+| `memory_alpha.c`; `ALPHA_PAGESHIFT` | 3 | **13**, U64 | NONE |
+| `memory_rw.c`; `BITS_PER_MEMBLOCK` | 4 | **20**, I | NONE |
+| `dev_adb.c`; `VIA_REG_SHIFT` | 24 | **9**, fixed register-address constants | NONE |
+| `dev_dc7085.c`; `RBUF_LINE_NUM_SHIFT` | 2 | **8**, bounded I/promoted register value | NONE |
+| `dev_dec21143.c`; `ROM_WIDTH + 1`, `TDCTL_SIZE2_SHIFT` | 3 | **7 / 11**, I array bound / U32 descriptor | NONE |
+| `dev_dreamcast_gdrom.c`; `GDROM_W_*` | 12 | **0…11**, U | NONE |
+| `dev_jazz.c`; `PICA_TIMER_IRQ` | 1 | Fixed registered timer bit, I | NONE |
+| `dev_lca.c`; `LCA_W_IRQ_*` | 4 | **0,1**, U | NONE |
+| `dev_ne2000.c`; `ED_CR_PAGESHIFT` | 1 | **6**, promoted register byte | NONE |
+| `dev_pcc2.c`; `PCC2_W_C040` | 2 | **12**, U | NONE |
+| `dev_pvr.c`; display/timing `*_SHIFT` | 18 | **0,2,4,6,8,10,16,20**, U32/U64 register values | NONE |
+| `dev_sgi_gbe.c`; `CRMFB_*_SHIFT` | 11 | **0,2,5,12,13**, U32/U64 reads; bounded I resolution writes | NONE |
+| `dev_sgi_mec.c`; revision/PHY shifts | 2 | **29 / 5**, I constant / U64 register | NONE |
+| `dev_sgi_re.c`; stipple/MTE field shifts | 8 | **2,5,8,16,24**, register words | NONE |
+| `dev_sh4.c`; ITLB/UTLB entry shifts | 4 | **8**, U64 address | NONE |
+| `dev_vr41xx.c`; revision/clock shifts | 2 | **12**, bounded I constants | NONE |
+| `src/core/memory.c`; `BITS_PER_PAGETABLE/MEMBLOCK` | 4 | **20**, I | NONE |
+| `src/file/file_android.c`, `file_aout.c`, `file_macho.c`; `BITS_PER_MEMBLOCK` | 10 | **20**, I | NONE |
+
+The generated-file denominator is:
+
+| Files; anchors | N | Counts / types / warrant |
+|---|---:|---|
+| `tmp_arm_r0.c` through `tmp_arm_rf.c`; alignment shifts | 1,024 | Count **2**, small I page/index values; NONE |
+| Same; `x <<= y` | 512 | U32, **0…31** after upper-bound branch; NONE |
+| Same; `x <<= (y-1)` | 512 | U32, **0…30** after zero and upper-bound branches; NONE |
+| Same; `>> y` and `>>= y` | 3,072 | U32/S32/U64; bounded **0…31**, or **0…30** in the applicable ASR path; NONE |
+| `tmp_arm_multi.c`; alignment shifts | 26 | Count **2**, small I values; NONE |
+| `tmp_m88k_bcnd.c`; alignment shifts | 32 | Count **2**, small I values; NONE |
+| `tmp_mips_loadstore_multi.c`; DYNTRANS masks/address extraction | 96 | I masks at **17/18**; U64 extraction at **47/30/12**; NONE |
+| **Total** | **5,274** | |
+
+**Headers and genuinely unexecuted source**
+
+Of the **221 header operators**, **53** have production references:
+
+| Header group; anchors | N | Counts/types |
+|---|---:|---|
+| `cpu.h`; `DYNTRANS_MISC64_DECLARATIONS`, `VPH64`, `N_SAFE_DYNTRANS_LIMIT` | 8 | I counts **17/18**, or **13** |
+| Eight `cpu_<architecture>.h` files; `IC_ENTRIES_PER_PAGE`, `PC_TO_IC_ENTRY`, `ADDR_TO_PAGENR` | 24 | I **10/11**; address operands U32/U64 at **1/2**, **12/13** |
+| `cpu_m88k.h`; `M88K_PID`, `M88K_FPCR_RM_MASK` | 3 | Bounded I fields at **24/16/14** |
+| `thirdparty/dreamcast_maple.h`; `MAPLE_FUNC` | 1 | I; actual counts **{0,6,9}** |
+| `thirdparty/dreamcast_sysasicvar.h`; `SYSASIC_EVENT_TO_BITMASK` | 1 | I; actual event counts after `&31`: **{0,2,3,4,5,7,8,9,10,12,14,19,21}** |
+| `thirdparty/m88k_dmt.h`; `DMT_DREGBITS`, `DMT_ENBITS` | 2 | U32/promoted masked value at **7/2** |
+| `thirdparty/mvme88k_vme.h`; `VME2_SET_VBR0/1` | 2 | I; actual operands **6/7**, counts **28/24** |
+| `thirdparty/mvme_memcreg.h`; `MEMC_MEMCONF_RTOB` | 1 | I operand 4 MiB; count **0…7**, maximum result 512 MiB |
+| `thirdparty/osiopreg.h`; `OSIOP_SCID_VALUE` | 1 | I; actual argument **7** |
+| `thirdparty/pcireg.h`; `PCI_ID_CODE`, `PCI_CLASS_CODE`, `PCI_BHLC_CODE` | 10 | Fixed counts **0/8/16/24**; product field explicitly U32, other actual constructor arguments bounded |
+| **Total** | **53** | **NONE on the stated host model** |
+
+The remaining **168 operators belong to unreferenced macro definitions**. Their executed count range is **empty**; parameter-dependent promoted types do not exist until expansion. They are census records, not emulator bug filings.
+
+| Header | Unreferenced operators | Grep anchors |
+|---|---:|---|
+| `thirdparty/adb_viareg.h` | 14 | `V1IF_`, `V2IF_` |
+| `thirdparty/alpha_cpu.h` | 1 | `ALPHA_PGBYTES` |
+| `thirdparty/armreg.h` | 2 | `CPACR_CPn`, `NSACR_CPn` |
+| `thirdparty/cpc700reg.h` | 1 | `CPC_INTR_MASK` |
+| `thirdparty/crimereg.h` | 4 | `CRM_CONTROL_GET_`, `CRM_CONTROL_SET_` |
+| `thirdparty/crmfbreg.h` | 1 | `CRIME_PIPE_LEVEL` |
+| `thirdparty/ee_timerreg.h` | 4 | `T_MODE_GATM` |
+| `thirdparty/i80321reg.h` | 4 | `ICU_INT_HWMASK` |
+| `thirdparty/i82365reg.h` | 1 | `PCIC_MEM_PAGESIZE` |
+| `thirdparty/if_mecreg.h` | 3 | `MEC_MAC_IPG_DEFAULT` |
+| `thirdparty/igsfbreg.h` | 1 | `IGS_EXT_BUS_CTL_LINSIZE` |
+| `thirdparty/m8820x.h` | 3 | `CMMU_CSSP_VV`, `MC88200_CACHE_LINE`, `NBSG` |
+| `thirdparty/m8820x_pte.h` | 12 | `PG_PFNUM`, `IND_PDA`, `SDT_`, `PDT_`, `BATC_BLKBYTES`, `M88K_BTOBLK` |
+| `thirdparty/mips_cpuregs.h` | 10 | `MIPS3_CONFIG_CACHE_`, `MIPS4_CONFIG_CACHE_`, `MIPS_BREAK_` |
+| `thirdparty/mvme88k_vme.h` | 3 | `VME2_SLAVE_CHOOSE`, `VME2_IRQ_SW`, `VME2_IRQ_VME` |
+| `thirdparty/pcireg.h` | 22 | Extractor macros, `PCI_COMMAND_STATUS_CODE`, `PCI_INTERRUPT_CODE` |
+| `thirdparty/ppc_pte.h` | 2 | `SR_VSID` |
+| `thirdparty/ppc_spr.h` | 4 | `Mx_GP_` |
+| `thirdparty/ps2_dmacreg.h` | 64 | `D_CTRL_`, `D_STAT_`, `D_PCR_`, `D_SQWC_`, `D_CHCR_`, `D_QWC_`, `DMATAG_` |
+| `thirdparty/rtl81x9reg.h` | 1 | `RL_RXBUFLEN` |
+| `thirdparty/sgi_arcbios.h` | 2 | `COMPONENT_KEY_Cache_CacheSize`, `COMPONENT_KEY_Cache_LineSize` |
+| `thirdparty/sh4_cache.h` | 4 | `SH4_CACHE_FLUSH`, `SH4_EMODE_CACHE_FLUSH` |
+| `thirdparty/tulipreg.h` | 5 | `TULIP_ROM_SIZE`, `TULIP_ROM_MB_BITPOS`, `GPP_PNIC_` |
+| **Total** | **168** | |
+
+Adding PMAG-JA’s `#if 0` operator gives **169 genuinely unexecuted production-tree occurrences**. These are distinct from executed shifts whose dangerous operands are excluded by guards.
+
+The overall production accounting is therefore:
+
+| Classification | Operators |
+|---|---:|
+| Established hazardous operands | **57** |
+| Wider-access reachability unresolved | **8** |
+| Unreferenced macros or disabled source | **169** |
+| Bounded operands on the stated host model | **6,386** |
+| **Total** | **6,620** |
+
+**What I would not file**
+
+I would not file the 313 regression-source occurrences as additional emulator defects. The 29 support-file occurrences are in `diff_footbridge.c`, `diff_ieee_store.c`, `diff_m8820x.c`, `diff_m8invread.c`, `diff_memory_rw.c`, `diff_wdc_identify.c`, `repro_m8invread.c`, and `repro_m8sarpurge.c`. The other 284 are retained artifact/check sources, including deliberately preserved baselines and variants. They remain in the textual denominator; I have not presented them as a complete separate correctness audit of the regression programs.
+
+I would also exclude these tempting false positives from the issue queue:
+
+| Site | Why it does not support the proposed filing |
+|---|---|
+| `net.c` broadcast mask | Effective upper clamp is **8** |
+| Ordinary DEXT | Its actual decoder produces counts **1…63** |
+| INS middle shifts | Enumeration gives **31−msb**, always **0…31**, even for reversed fields |
+| ARM Thumb `imm6` | Despite its name, the decode is five bits; zero has separate semantics |
+| ARM load/store rotations | Both paths guard `rot_sh != 0` |
+| M88K `imm16 << shift` | `imm16` is **uint32_t**, despite containing a sign-extended value |
+| MIPS branch-immediate alignment shifts | The decoder’s `imm` is **uint32_t** |
+| MIPS TLB probe’s `found << R2K3K_INDEX_SHIFT` | `found == -1` takes the other branch before the shift |
+| MIPS page-size masks | The page-mask switch rejects unsupported values before later shifts |
+| Alpha high-part INS/EXT/MSK | Explicit zero/64 handling excludes count 64 |
+| PPC `ppc_single_narrow` | Excessive shifts return before mask construction |
+| PPC `rldimi` count | Enumerating the post-decrement loop state still keeps the later mask count **0…63** |
+| PCC2 warning masks | Fixed enum callers; byte-offset mask has a preceding modulo-64 operation |
+| SYSASIC event mask | Actual call arguments avoid bit 31; the macro’s nominal range alone would overstate reachability |
+| ARC cache-key macros | No production expansion; nominal large count fields are not an executed defect |
+| PMAG-JA pixel shift | Compiled out by `#if 0` |
+| Eight unresolved wider-access shifts | Neither a proven guest route nor a sufficient global bound has been established |
+
+**The 16-bit-`unsigned int` qualification**
+
+`1U` is not a universal replacement. The already-unsigned ARM UBFX/SBFX masks, M88K `1U << d`, generated ARM carry masks, GD-ROM/SH4 warning masks, and LCA’s `0x800U << dev` can exceed a 16-bit unsigned operand’s width.
+
+There are also numerous plain-`int` assumptions, including `1 << DYNTRANS_L1N` with count 17. Consequently, the `NONE` totals above are explicitly **not an arbitrary-C99-host portability certificate**. For repairs intended to support the architectural 32-bit mask independently of `unsigned int` width, use the architectural-width operand before shifting, together with any necessary count or field validation.
+
+Finally, one definite additional finding deserves its own correctness row: [PPC `X(rldicl)`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc_instr.c) initializes `tmp2 = 0`, ORs the mask into **`tmp`**, and assigns `tmp & tmp2` to the destination. It therefore **always writes zero**. The computed count is safe; the mask is accumulated into the wrong variable. This is **CRITICAL and EASY**, independently of the shift-UB census.
