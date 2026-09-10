@@ -405,6 +405,74 @@ honest record of DEFENSIVE work, and its own vocabulary is what makes the seat r
 > then implies the sibling would also have been refused is the freshly-minted-exemplar failure this
 > file names elsewhere: the instruction survives, the story around it has to match what happened.*
 
+> #### *** A FOURTH RUN, LATER THE SAME DAY, ISOLATES A CANDIDATE TRIGGER THE THREE RULES DO NOT
+> #### NAME: ASKING FOR A **CENSUS OF TERMINATING CALLS ACROSS A FILE**. ***
+>
+> Two briefs that day carried the SAME scoping paragraph (`src/` plus `regress/*.py`) and differed
+> sharply in one question:
+>
+>     brief     the terminating-call question it asked                          outcome
+>     XScale    "which of the other terminating calls IN THIS FUNCTION would     CLEAN, 13,457 b
+>               the same vehicle reach?" -- the function already INLINED
+>     CRIME     "HOW MANY other terminating calls are in this same FILE?"        REFUSED, 0 bytes
+>
+> The refused run had obeyed the archive exclusion -- **four** `regress/artifacts` hits, against
+> thousands in the earlier browsing refusal -- so rule 2 was satisfied and it was refused anyway.  Its
+> own reasoning carried 28 `exit(` / `fatal(` / host-termination tokens, because that is what the
+> question asked it to go and count.
+>
+> > **THE CANDIDATE DISTINCTION: a question about the terminating calls in a function you have ALREADY
+> > INLINED is a question about text in the packet.  A question of the form "how many are in this
+> > file / this device / this tree" is a request to GO AND ENUMERATE HOST-TERMINATION SITES, which
+> > builds the archive's own vocabulary inside the run.**  Same subject, opposite outcome.
+>
+> **HELD AS A HYPOTHESIS, NOT ADOPTED, AND THE REASON IS THAT I SPOILED THE EXPERIMENT.**  The re-fire
+> changed TWO things at once -- it dropped the census question AND narrowed the reading scope from
+> `src/` + `regress/*.py` to five named files.  **So a clean retry cannot say which change mattered**,
+> and this block will not claim it does.  The four-run experiment above is the standard this has to
+> meet and does not yet.
+>
+> #### *** THE CENSUS HYPOTHESIS IS REFUTED, WITHIN THE HOUR, BY THE RE-FIRE THAT WAS MEANT TO
+> #### CONFIRM IT.  The block above stays only as the record of a wrong guess. ***
+>
+> The retry dropped the census question AND narrowed the scope to five named files.  **It was refused
+> again**, in the same place, with **ZERO** `regress/artifacts` hits.  So neither change was the cause
+> and the census ask is not the trigger.
+>
+> **WHAT THE LOG ACTUALLY SHOWS:** at the moment of the flag it was reading **`memory_rw.c`** -- the
+> memory-dispatch core -- having been asked to trace a guest access WIDTH through the dispatcher to a
+> site that ends the process.  Its own reasoning carried 45 termination tokens, none of them from an
+> archive.
+>
+> > **THE READING THAT SURVIVES THIS PAIR: it is not the vocabulary, the archive, or the census.  It
+> > is asking a seat to TRACE HOW A GUEST-CHOSEN INPUT REACHES A HOST-TERMINATION SITE THROUGH THE
+> > MEMORY DISPATCHER.**  That is rule 3's shape at one remove -- not *build the construction*, but
+> > *show me the path an input takes to the crash* -- and the XScale brief is the near-control: same
+> > scoping paragraph, same subject family, same "can an ordinary instruction reach this arm?"
+> > question, but answered from a handler table rather than from memory dispatch, and CLEAN.
+>
+> **THE OPERATIONAL CONSEQUENCE, and it cost two invocations to learn: THIS QUESTION IS NOT CODEX'S.**
+> A width-reachability trace is something a MEASURING seat settles by measuring -- drive the byte load
+> and see -- in less time than a reading seat takes to refuse it.  *And the premise I said I was least
+> sure of took two lines to settle by hand: `memory_rw.c` passes `len` UNCHANGED to the device
+> callback (`mem->devices[i].f(cpu, mem, paddr, data, len, writeflag, extra)`), with no widening,
+> splitting or alignment at the call site.*
+>
+> **DO NOT RE-FIRE A THIRD TIME.**  Two refusals with different briefs on one subject is a seat
+> saying no to the subject, and the re-fire-a-walled-seat-once rule is about WALLS, not refusals.
+>
+> *Recorded against myself: I wrote the census hypothesis into this file one hour before the data that
+> refutes it, on a pair I had already spoiled by changing two variables at once.  The block above is
+> left standing, with this correction attached, because deleting it would hide that a rule in this
+> file was minted from a guess -- and this file's own finding is that a freshly minted exemplar is a
+> HYPOTHESIS.  It failed the first test it was given.*
+
+> *Recorded anyway, because the cheap habit it suggests costs nothing and is already good practice:
+> when you need a census of terminating sites, RUN THE GREP YOURSELF and inline the result as a
+> settled premise.  The seat's value is the disposition and the reachability argument, not the
+> counting -- and this project's own rule already says a brief should inline the deriver's OUTPUT
+> rather than send a seat to produce it.*
+
 > **THE FIX IS NOT MORE PROHIBITION.  A rule that bans an ask without supplying the replacement gets
 > broken by whoever actually needs the thing.**  Rule 3's own sentence already names the clean forms --
 > *check a construction you supply*, or *say whether one is possible* -- but naming a form is not the
