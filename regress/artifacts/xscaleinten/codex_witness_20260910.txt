@@ -1,0 +1,105 @@
+VERDICT: YES by source inspection: the existing IQ80321 and Iyonix machines expose this handler through ordinary ARM instruction dispatch, and reusable ARM coprocessor test machinery exists. No CP6 reproduction was run here.
+CODEX_XSCALE_20260910
+
+I read only the specified source tree and top-level regression Python files. No files were written.
+
+**1. Exactly two machine setups install this handler.**
+
+| Machine | Installation | Default CPU |
+|---|---|---|
+| IQ80321 | Direct assignment to `cpu->cd.arm.coproc[6]` in [machine_iq80321.c](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/machines/machine_iq80321.c:57) | `80321_600_2` |
+| Iyonix | The same direct assignment in [machine_iyonix.c](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/machines/machine_iyonix.c:64) | `80321_600_B0` |
+
+Both assignments occur **before** the `!machine->prom_emulation` early return. Disabling PROM emulation therefore does not remove CP6. Both machines also instantiate the existing `i80321` device. The generated machine registry includes both registrations. See [automachine.c](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/machines/automachine.c:108).
+
+The setup receives the **bootstrap CPU**, so this installation should not be generalized to every CPU in a hypothetical multiprocessor configuration. See [machine.c](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/machines/machine.c:502).
+
+The source-wide search found no other installer or caller of this handler. Selecting an XScale CPU alone is insufficient: generic ARM initialization installs CP15 and, for XScale, CP14; it does not install CP6. See [cpu_arm.c](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c:174).
+
+**2. An ordinary ARM-state coprocessor register transfer can reach the requested read arm.**
+
+The execution path is:
+
+`guest instruction fetch → arm_instr_to_be_translated → condition-selected arm_instr_mcr_mrc → arm_mcr_mrc → coproc[6] → arm_coproc_i80321_6`
+
+The ARM translator fetches the instruction from guest memory. In main-opcode `0xe`, an instruction with bit 4 set selects `cond_instr(mcr_mrc)` and saves the instruction word. This is execution decoding, independently of the disassembler. See [cpu_arm_instr.c](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c:4901).
+
+The runtime wrapper synchronizes `cpu->pc` and calls `arm_mcr_mrc`. That function extracts `opcode1`, `l_bit`, `crn`, `rd`, `cp_num`, `opcode2`, and `crm`, then calls the selected non-null handler. Consequently, a CP6 read with `crn=0`, `crm=0`, and `l_bit=1` reaches precisely the assignment and termination in question. See the [runtime wrapper](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c:948) and [dispatcher](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c:2643).
+
+**There is no privilege or processor-mode check in that transfer wrapper, dispatcher, or CP6 handler.** In particular, dispatch does not consult CPAR. CPAR is stored and read through CP15, but the source explicitly notes that it is not otherwise used; the source-wide references confirm no access-enforcement check. See [cpu_arm_coproc.c](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_coproc.c:273). This describes the emulator’s implementation, not a claim about real hardware permissions.
+
+There are ordinary execution prerequisites:
+
+- ARM conditional execution must select the instruction. A failed condition skips the transfer wrapper. See the [condition wrappers](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c:132).
+- The instruction must be fetched successfully and decoded in ARM state. Thumb state takes a separate interpreter. See [cpu_dyntrans.c](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c:254).
+- The executing CPU must have CP6 installed. With a null coprocessor entry, `arm_mcr_mrc` prints its generic TODO diagnostic and does not call this handler. **Its undefined-exception call and `exit(1)` are commented out**, so absence does not itself terminate execution there.
+
+The cold CPU initialization already selects SVC32 with IRQ/FIQ masked. No privilege transition is needed. See [cpu_arm.c](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm.c:127).
+
+CP6 register selection is not an MMIO address translation. The guest instruction needs accessible code memory, but the coprocessor register itself is selected directly through the handler table. The existing device shares the CPU’s `i80321_inten` storage through `d->enable`. See [dev_i80321.c](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_i80321.c:445).
+
+**3. The regression machinery already executes ARM guests and ARM coprocessor transfers.**
+
+The possible negative premise—“everything is load/store-oriented and nothing executes a coprocessor transfer”—is false.
+
+| Existing Python vehicle | Relevant execution |
+|---|---|
+| [footbridge_sites_probe.py](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/footbridge_sites_probe.py:82) | On `cats`, executes CP15 `MRC`, modifies the control-register value, executes `MCR`, then reads CP15 back with another `MRC`. |
+| [fbpending_witness.py](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/fbpending_witness.py:147) | Also executes the CP15 read/modify/write/read sequence on `cats`. |
+| [fbpending_drain_probe.py](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/fbpending_drain_probe.py:193) | Builds and executes CP15 transfers, with instruction-step checking. |
+| [pit8253_latch_probe.py](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/pit8253_latch_probe.py:70) | Executes CP15 transfers on `cats` as part of its guest setup and checks the resulting MMU state. |
+| [arm_flags_probe.py](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/arm_flags_probe.py:111) | The Python instrument identifying itself as Gate 14 runs ARM guests on `testarm`; its cache-clean programs also contain CP15 `MCR` instructions, including those at [line 800](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/arm_flags_probe.py:800). |
+
+Additional ARM guest drivers are [arm_bfx_width_probe.py](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/arm_bfx_width_probe.py:193), [arm_endian_probe.py](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/arm_endian_probe.py:270), [arm_fold_marker_probe.py](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/arm_fold_marker_probe.py:114), [arm_idle_probe.py](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/arm_idle_probe.py:119), [arm_memcpy_probe.py](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/arm_memcpy_probe.py:64), [arm_strlen_probe.py](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/arm_strlen_probe.py:98), and [arm_writeback_probe.py](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/arm_writeback_probe.py:510).
+
+Separately, the boot-to-shell rig table in [drive_guest.py](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/drive_guest.py:27) contains `luna88k` and `landisk`, not ARM.
+
+The most directly reusable pattern is `footbridge_sites_probe.py`: launch a stock machine into the debugger, plant guest instructions in RAM, set the PC, step instructions, check their disassembly, and inspect resulting registers. Its implementation does that at [line 107](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/footbridge_sites_probe.py:107) and [line 166](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/footbridge_sites_probe.py:166).
+
+**I found no existing dedicated CP6 test.** These scripts would need a CP6-specific program and assertions, using IQ80321 or Iyonix instead of their current machines. That requires no machine or device addition. The existing scripts themselves do not constitute a recorded reproduction of this CP6 site.
+
+**4. A naive readback assertion has several indistinguishable outcomes.**
+
+For an assertion equivalent to “write `W`; read; require result `W`”:
+
+| Fault | When the naive assertion can still pass |
+|---|---|
+| Always returns zero | When `W` is zero. |
+| Returns a stale value | When the stale value equals `W`, including repeated writes of the same value. |
+| Never executes the read | When the destination already contains `W`. Using the write-source register as the read destination makes this especially easy. |
+| Never executes the relevant program | When the inspected register or result memory already contains the expected value, or the parser accepts an old observation. |
+
+A discriminating oracle would check **successive state changes**: two distinct nonzero values, each written and subsequently read, with the read destination deliberately initialized to a different value before each read. The second expected value must differ from the first. This rejects constant zero, retention of the preceding value, and a read that leaves its destination untouched. Separate write-source and read-destination registers avoid the simplest false pass.
+
+Execution evidence must accompany those values: check the intended instruction address and decoded coprocessor/register fields, require the destination transition, and require a subsequent guest effect or successful continuation. Missing observations must fail rather than become zero or reuse earlier output.
+
+One correction to the probe commentary is relevant here: **a printed step disassembly alone does not prove the handler completed—or even that its condition passed.** The execution engine prints disassembly before executing the instruction. See [cpu_dyntrans.c](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c:282), followed by execution at [line 324](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c:324).
+
+For this proposed change, the oracle also needs **continuation and silence**. The current implementation assigns the destination before exiting, so the assignment alone is not the desired outcome. The unchanged source predicts the named diagnostic and exit status 1; the proposed behavior requires the correct value, continued execution, and no diagnostic from this read arm. A register round trip tests this storage contract, not the entire interrupt-controller model.
+
+**5. The same vehicle can reach every other explicit termination in this function.**
+
+| Other termination | Reachability through the same CP6 transfer mechanism |
+|---|---|
+| Interrupt steering, `crm=0, crn=4` | Write direction, with a nonzero source value. The assignment precedes termination. |
+| Interrupt acknowledgement, `crm=0, crn=8` | Write direction, with **any** source value, including zero. The assignment precedes termination. |
+| Shared `unknown:` termination | Either direction with an unsupported `crn` for `crm=0` or `crm=1`, or an unsupported `crm`. |
+
+These are visible in [cpu_arm_coproc.c](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_coproc.c:317) and its [unknown handler](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_coproc.c:416). `opcode1` and `opcode2` are not validated by this function; changing them alone does not send an otherwise recognized register selection to `unknown`.
+
+Each terminating case needs its own process invocation to observe all sites: the first reached `exit(1)` prevents later cases in that process. Shared test machinery therefore supports grouping the coverage work, without establishing that their repairs should be identical.
+
+Your corrected **read-direction** asymmetry is accurate. There is another premise correction: `crm=1` has **sixteen implemented direction arms—eight reads and eight writes—not fourteen**. All sixteen are quiet locally. `tcr0` and `tcr1` increment before returning their values; `tisr` writes clear selected bits and deassert timer interrupts. Thus “quiet” does not mean “a plain storage assignment.” The unsupported-register default still reaches `unknown`. See the [timer cases](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_coproc.c:343).
+
+**6. Only candidate (b), under the stated placement, is equivalent.**
+
+Here, the reference change deletes only the two diagnostic/termination lines from the INTEN read arm.
+
+| Candidate | Verdict | First distinguishing case |
+|---|---|---|
+| **(a)** Delete `exit(1)`, retain `fatal(...)` | **OBSERVABLY DIFFERENT** | The first INTEN read prints the diagnostic; the reference change is silent. |
+| **(b)** Delete both and move the read assignment immediately after the `if`/`else`, within the same `case 0` | **EQUIVALENT** | None for this implementation. On a write, the `else` first copies `r[rd]` into INTEN; the moved assignment then copies that identical value back into `r[rd]`. On a read, it performs the original assignment. |
+| **(c)** Replace both with one bounded, once-only diagnostic | **OBSERVABLY DIFFERENT** | The first eligible INTEN read with the diagnostic allowance unused emits a message; the reference change emits none. |
+| **(d)** Delete both from INTEN reads and ISRC writes together | **OBSERVABLY DIFFERENT** | The first ISRC write, including a zero write: the reference change still assigns, diagnoses, and exits; this candidate assigns and continues silently. |
+
+Two source facts settle the potentially misleading cases. [`fatal()`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/core/debugmsg.c:384) formats a message and returns; its name does not make candidate (a) terminating. Both [`r[]`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/cpu_arm.h:155) and [`i80321_inten`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/cpu_arm.h:212) are ordinary, non-volatile `uint32_t` storage, so candidate (b)’s additional write-direction assignment introduces neither truncation nor a register-access callback.

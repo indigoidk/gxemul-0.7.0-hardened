@@ -18708,3 +18708,41 @@ that as a new observable rather than call the diff behaviour-preserving.
   pre-filled with distinguishable contents.
 * **Keeping `fatal()` and deleting only `exit(1)` is rejected by no value assertion** if `fatal()`
   returns. Silence must be checked separately.
+
+
+### `xscaleinten` -- REACHABILITY ANSWERED **YES** 2026-09-10, and my negative premise was false
+
+`regress/artifacts/xscaleinten/codex_witness_20260910.txt`. This row now has a ratified disposition, a
+confirmed guest path and a named test vehicle; it needs a measuring seat and nothing else.
+
+**Two installers, both assigning before the `!machine->prom_emulation` early return** -- IQ80321 and
+Iyonix. Selecting an XScale CPU is not enough: generic ARM init installs CP15 and CP14, never CP6. The
+path is ordinary ARM dispatch with **no privilege or mode check anywhere in it**, and cold init already
+selects SVC32 with interrupts masked.
+
+*** I had guessed that nothing in `regress/` drives a coprocessor transfer. FIVE probes already execute
+CP15 MRC/MCR on `cats`, *** and `footbridge_sites_probe.py` is the directly reusable pattern -- plant
+instructions in RAM, set the pc, step, inspect registers -- pointed at IQ80321 instead. **No machine or
+device addition is required**, which is what the witness ladder demands.
+
+**An oracle trap that applies well beyond this row: a printed step disassembly does NOT prove the
+instruction executed, or even that its condition passed** -- the engine prints the disassembly *before*
+executing it. Any probe treating a stepped disassembly line as evidence of execution is asserting
+something the engine does not promise.
+
+A naive "write W, read, expect W" has four indistinguishable failures, including a read that never
+executes -- which passes whenever the destination already holds W, and is especially easy if the
+write-source register doubles as the read destination. The discriminating form uses two distinct
+nonzero values, separate source and destination registers, and a destination pre-set to a third value,
+plus **continuation and silence**: the current code already assigns the destination before terminating,
+so the assignment alone is not the outcome under test.
+
+**The same vehicle reaches every other termination in this function** -- interrupt steering, interrupt
+acknowledge, and the shared `unknown:` label -- but *** each needs its own process invocation, because
+the first `exit(1)` reached prevents observing any later one. *** That groups the coverage work without
+implying the repairs should be identical.
+
+A count in my brief was wrong: `crm=1` has **sixteen** direction arms, not fourteen. All sixteen are
+locally quiet, but "quiet" does not mean "plain accessor" -- `tcr0` and `tcr1` increment before
+returning their values, and a `tisr` write clears bits and deasserts timer interrupts. A sibling-parity
+argument resting on "the timer arms are plain storage" would be wrong.
