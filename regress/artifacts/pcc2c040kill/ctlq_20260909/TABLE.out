@@ -1,0 +1,118 @@
+ctlq_20260909 -- KILL TABLE for `pcc2c040ctlq' (follow-up under #512 pcc2c040kill)
+Opus 5 measuring seat, scratch clone /tmp/gxopusctlq (cp -a of build/), 2026-09-09..10.
+
+THE FINDING, MEASURED:  `genctl ctlq' -- the ACCEPT row the de-escalation clause owes for the
+C040 predicate -- was keyed on the PRE-FIX fatal() text, which #512 retired.  It was green under
+the shipped fix and under every post-fix mutant, so it was discharged BY EXISTING.  A guard
+WIDENING onto the benign bit it drives SWEPT THE 16-ROW DETECTOR CLEAN.
+
+INSTRUMENTS (frozen copies; one instrument per comparison)
+  SHIPPED   md5 a36b6a47e1001cc59c3ab02978d5ffda   = regress/pcc2_c040_probe.py at HEAD e73623a
+  REPAIRED  md5 cbe1945cffe7f3441cc93d5489bdc692   = ./pcc2_c040_probe.REPAIRED.py
+
+BASELINE IDENTITY (named, per the clone recipe)
+  clone src/devices/dev_pcc2.c  cmp  GXEMUL-SEC/src/devices/dev_pcc2.c   ->  IDENTICAL
+  (git status: dev_pcc2.c clean against HEAD; the +21 comment hunk the 2026-09-09 review
+   warned about was committed in 816e153, so working tree == HEAD == the measured source)
+  baseline rebuilt IN THE CLONE before mutant 1; [ gxemul -nt dev_pcc2.c ] OK on every build.
+
+THE MUTANT
+  M_widen   src/devices/dev_pcc2.c, reassert_interrupts(), the C040 test -- ONE line:
+
+      -	if (d->pcctwo_reg[PCCTWO_GENCTL] & PCC2_C040) {
+      +	if (d->pcctwo_reg[PCCTWO_GENCTL] & (PCC2_C040 | 0x10)) {
+
+  0x10 is the probe's own BENIGN value.  It is an UNNAMED GENCTL bit -- mvme_pcctworeg.h names
+  only DR0 0x80, C040 0x04, MIEN 0x02, FAST 0x01 -- which is exactly why a benign write of it is
+  legal and why `genctl ctl' / `genctl ctlq' drive it.  This is the canonical accept-side GROWTH
+  mutant: guard-only, because the latch operand `(1u << PCC2_W_C040)' is a compile-time constant
+  the guard cannot feed, and the carrier's discriminator selects guard-only at such a site.
+
+  NON-EQUIVALENCE IS MEASURED, not argued: under M_widen the repaired `genctl ctlq' reads `yes',
+  i.e. the benign 0x10 write DID reach the arm and DID emit the announce.  A mutant that swept a
+  table without being observable anywhere would be an equivalent mutant, not an escape.
+
+=================================================================================================
+TABLE 6 -- 16 rows.  Denominator UNCHANGED by the repair: no row added, no session added.
+=================================================================================================
+
+  build           instrument   score    red rows                          log
+  ------------------------------------------------------------------------------------------
+  BASE            SHIPPED      16/16    --                                shipped_BASE.raw
+  M_widen         SHIPPED      16/16    *** CLEAN SWEEP -- THE HOLE ***   shipped_M_widen.raw
+  ------------------------------------------------------------------------------------------
+  BASE            REPAIRED     16/16    --                                repaired_BASE.raw
+  M_widen         REPAIRED     15/16    genctl ctlq  got yes  want no     repaired_M_widen.raw
+  ------------------------------------------------------------------------------------------
+  M_return        REPAIRED     14/16    c040 noassert, c040 noassert2     repaired_M_return.raw
+  M_latchinside   REPAIRED     15/16    c040 noassert2                    repaired_M_latchinside.raw
+  M_d1_noassert   REPAIRED     14/16    c040 noassert, c040 noassert2     repaired_M_d1_noassert.raw
+
+That BASE/M_widen pair is the (a)/(b)-shaped control the accept-row failability rule demands:
+the row is now discharged by a MEASURED KILL rather than by existing.
+
+=================================================================================================
+SPOT CHECK -- the repair loses no existing kill.  Recorded originals beside the new scores.
+=================================================================================================
+
+  mutant          recorded (its own denominator)                   now, REPAIRED @ 16 rows
+  ------------------------------------------------------------------------------------------
+  M_return         9/10  killtable_20260908/M_return.raw            14/16  KILL PRESERVED
+                   red: c040 noassert                               red: c040 noassert
+                                                                       + c040 noassert2
+  M_latchinside   10/10  killtable_20260908/M_latchinside.raw       15/16  KILL PRESERVED
+                   *** ESCAPED at 10 rows ***                       red: c040 noassert2
+                   10/11  killtable_20260908/M_latchinside2.raw
+                   red: c040 noassert2
+  M_d1_noassert    9/10  killtable_20260908/M_d1_noassert.raw       14/16  KILL PRESERVED
+                   red: c040 noassert                               red: c040 noassert
+                                                                       + c040 noassert2
+
+  READ THE ARITHMETIC, NOT THE FRACTION.  9/10 -> 14/16 is not a weakened kill: 10 rows minus
+  9 ok = ONE red; 16 rows minus 14 ok = TWO red.  The extra red is `c040 noassert2', a row that
+  did not exist when the 10-row table ran (it was added in table 3).  M_return and M_d1_noassert
+  null the repair on EVERY encounter, so they redden both encounter rows; M_latchinside nulls it
+  only from the second encounter on, so it reddens exactly one.  Each mutant reddens the rows its
+  own mechanism predicts.
+
+  `genctl ctlq' is GREEN on all three spot-check mutants and on BASE.  The repair adds no false
+  red; it reddens under exactly one thing, which is the widening it exists to catch.
+
+  This also discharges hygiene note 2 of the 2026-09-09 review -- "no mutant has been scored
+  against the shipped 16-row instrument".  Four now have been.
+
+=================================================================================================
+ORDER -- the test-first discriminator, provable by mtime rather than asserted
+=================================================================================================
+
+  23:48:25  shipped_BASE.raw                 shipped probe, base            16/16
+  23:51:42  shipped_M_widen.raw              *** THE HOLE MEASURED ***      16/16
+  23:53:02  pcc2_c040_probe.REPAIRED.py      the repair WRITTEN AFTER it
+  23:54:55  repaired_M_widen.raw             15/16, genctl ctlq red
+  23:56:38  repaired_BASE.raw                16/16
+  23:58:28  repaired_M_return.raw            14/16
+  00:00:08  repaired_M_latchinside.raw       15/16
+  00:01:48  repaired_M_d1_noassert.raw       14/16
+
+  The repaired instrument was written strictly AFTER the sweep it repairs was measured, so the
+  re-pin cannot be a fit to a known answer.  Every log ends in PCC2C040_DONE (completion sentinel
+  checked, not assumed).  No row in any of the seven runs decided on a timeout: grep for
+  `no-pc' / `no-readback' / `no-breakpoint' / `killed' / `unreaped' across all seven -> NONE.
+
+=================================================================================================
+HYGIENE
+=================================================================================================
+
+  * /tmp/gxopusctlq/.MUTANT dropped BEFORE mutant 1, cleared only after BOTH parts:
+        cmp clone dev_pcc2.c vs SEC           -> CLEAN
+        [ gxemul -nt src/devices/dev_pcc2.c ] -> OK  (00:02:11.086 vs 00:02:09.647)
+  * every mutant build restored from GXEMUL-SEC FIRST, never from a script backup.
+  * MUTANT-TEXT-NOT-FOUND is a hard FAIL in mutate.py, so each find-text is also a presence pin.
+  * NO tracked file was edited.  build/ was READ (cp -a) and never written:
+        build/ cmp vs SEC -> CLEAN,  build/ [ -nt ] -> OK,  build/.MUTANT absent.
+  * OBSERVED, NOT CAUSED BY THIS SEAT: build/gxemul's mtime moved to 23:52:45 mid-session, i.e.
+    the main loop rebuilt its own tree concurrently.  It cannot have touched these numbers -- the
+    clone was taken at 23:45 and every build in it restores dev_pcc2.c from SEC, so the measured
+    source is SEC's in all seven runs, and any unrelated drift is held constant across the whole
+    table by being inside one frozen clone.  Recorded because a timestamp inside a measurement
+    window that nobody explains is how a stale-tree story starts.

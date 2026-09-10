@@ -289,6 +289,12 @@ MANIFEST = {
         (CLASS_RESEARCH, "lcaconfbus1kill (#515) table 4: the same 18-row instrument for the targeted run -- grok's M13_regconj plus the 18-row PRE-FIX baseline, so the round's before/after uses one instrument"),
     "artifacts/lcairqstubkill/lcairq_probe.asrun.py":
         (CLASS_RESEARCH, "lcairqstubkill: the as-run witness ATTEMPT, preserved as evidence -- it did NOT fire, and it is not a detector"),
+    "artifacts/pcc2c040kill/ctlq_20260909/pcc2_c040_probe.REPAIRED.py":
+        (CLASS_RESEARCH, "pcc2c040ctlq (#512 follow-up, 2026-09-09): the REPAIRED 16-row instrument as the Opus seat delivered it -- identical to the shipped regress/pcc2_c040_probe.py after the loop applied it; preserved as the measured copy (md5 cbe1945c)"),
+    "artifacts/pcc2c040kill/ctlq_20260909/mutate.py":
+        (CLASS_RESEARCH, "pcc2c040ctlq: the mutator (M_widen guard-only widening `& PCC2_C040' -> `& (PCC2_C040 | 0x10)', plus M_return / M_latchinside / M_d1_noassert re-built from killtable_20260908); scratch clone only"),
+    "artifacts/pcc2c040kill/ctlq_20260909/make_repaired.py":
+        (CLASS_RESEARCH, "pcc2c040ctlq: the script that produced the REPAIRED probe from the shipped one (the one-string re-key plus the SAYS hoist); evidence of the edit's provenance"),
     "artifacts/sgimtedepth4dead/killtable3_20260909/tlb_reach_control.py":
         (CLASS_RESEARCH, "sgimtedepth4dead 7g-1 (2026-09-09): the Opus seat's guest-only TLB REACHABILITY CONTROL (unmodified -E sgi -e ip32) -- separates BASE / M_tlbA / M_tlbAB by the RGBA-vs-CI outcome at each of the three labels, which the shipped detector cannot; the positive control behind the FLOOR ruling.  Evidence, not a detector"),
     #  #516 (2026-09-09): every instrument and mutator preserved beside the lcairqstubkill kill tables.

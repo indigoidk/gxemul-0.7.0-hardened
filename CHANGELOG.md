@@ -1,3 +1,50 @@
+# `#512` follow-up (pcc2c040ctlq): the accept row the de-escalation clause owed was keyed on the fix's own retired text, so it could not fail -- measured swept 16/16 by a guard widening, re-keyed on one string, 15/16
+
+**THE HOLE.** `regress/pcc2_c040_probe.py`'s `genctl ctlq` row is the ACCEPT row the de-escalation
+clause owes for `#512`'s C040 predicate: a benign GENCTL write (0x10, an unnamed bit) must NOT reach the
+C040 arm. It tested `"C040 interrupt assertions" in t` -- the PRE-FIX `fatal()` text, which `#512`
+replaced with the announce `C040 (MC68040 EIPL)`. `grep -c "C040 interrupt assertions"
+src/devices/dev_pcc2.c` is 0 on every post-fix build, so the row was ALWAYS green: under the shipped
+fix and under all ten mutants of both kill tables alike. An accept row discharged by existing, which the
+accept-row failability rule says is no discharge at all -- the check-that-cannot-fail class inside a
+detector. Found by the Opus seat while attacking a different question on this row (2026-09-09,
+`regress/artifacts/pcc2c040kill/opus_review_20260909.md`); graded L3 (the sole carrier of an
+obligation, vacuous) and MEASURED before it was repaired.
+
+**MEASURED, in that order** (`regress/artifacts/pcc2c040kill/ctlq_20260909/TABLE.out`, scratch clone,
+baseline `cmp`-identical to SEC, one frozen instrument per comparison, every log ending `PCC2C040_DONE`,
+mtimes proving the shipped-probe run preceded the repaired probe's creation):
+
+| instrument | BASE | `M_widen` (`& PCC2_C040` -> `& (PCC2_C040 \| 0x10)`) | `M_return` | `M_latchinside` | `M_d1_noassert` |
+|---|---|---|---|---|---|
+| SHIPPED (md5 a36b6a47) | 16/16 | **16/16 -- CLEAN SWEEP** | | | |
+| REPAIRED (md5 cbe1945c) | 16/16 | **15/16**, `genctl ctlq` red | 14/16 | 15/16 | 14/16 |
+
+The three spot-check kills are preserved (their earlier 9/10 and 10/10 were on 10-row tables; 14/16 is
+one red becoming two because `c040 noassert2` did not exist then). Guard-only is the right growth form
+at this site: the latch operand `(1u << PCC2_W_C040)` is a compile-time constant the guard cannot feed,
+so joint and guard-only are the same mutant and guard-only is the quieter one. Non-equivalence is
+measured, not argued: under `M_widen` the repaired row reads `yes` -- the benign write reached the arm.
+
+**THE EDIT: one string**, `ctl_saw_c040 = (SAYS in t)`, with `SAYS` hoisted above the CONTROL block so
+the announce text has one binding, and a dated provenance comment on the row. No new row, no new
+session, the denominator stays 16, so no recorded score restates. **`c040 attrib` is deliberately NOT
+re-keyed**: it keys on the same retired string and is correct that way -- the death it attributes is the
+reinstated pre-fix kill, which carries the old text; the two rows key on one string for opposite and
+both-valid reasons, and the obvious tidy-up would destroy `M_b_reinstate`'s kill.
+
+**BOUND, stated rather than glossed** (clause (e)): this pins the accept side for the bit the session
+drives, 0x10. A widening onto MIEN (0x02) is caught elsewhere and by accident (`irq live` suppresses);
+a widening onto DR0 (0x80) is caught by NO row -- disclosed, not rowed. The ANNOUNCE row at MIEN-set
+named by the review stays clause-(e) debt on the parent row. Also discharged: four mutants are now scored
+against the shipped 16-row instrument, which no table had done. The parent row's count is 16, not 17.
+
+Witness: `detector:regress/pcc2_c040_probe.py` (a harness repair on a shipped detector; no product code
+changed). Seats: opus5 measured and repaired in a scratch clone; the main loop applied the delivered copy
+byte-for-byte and verified `cmp`; no panel on a one-string detector repair, by judgment, recorded here.
+The repair-chain rule: this is a repair of DETECTOR material found by a review, so it owes its own pass
+on the diff -- OWED, batched into `#518`'s pass-2 panel window rather than fired alone.
+
 # `#517` pcc2genctlc040alias: a vendored header defined C040 twice, and the second definition was a different register's bits
 
 **THE DEFECT.** `src/include/thirdparty/mvme_pcctworeg.h` carries `PCC2_C040 0x04` (right -- bit 2 of
