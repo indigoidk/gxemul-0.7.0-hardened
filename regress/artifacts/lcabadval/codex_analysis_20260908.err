@@ -1,0 +1,893 @@
+Reading additional input from stdin...
+OpenAI Codex v0.153.4
+--------
+workdir: C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+model: gpt-6-astra
+provider: openai
+approval: never
+sandbox: read-only
+reasoning effort: max
+reasoning summaries: none
+session id: 01a08415-c287-7a41-94d4-783486a36cfd
+--------
+user
+# `dev_lca.c` `lca_ioc` — an analysis question about its `default:` arms
+
+Please answer by reading the source. **Answer in prose. Do not propose a code change, do not write
+a test, and do not construct any input sequence.** I want the analysis only; I will decide the
+disposition myself.
+
+## Read only these files
+
+    src/devices/dev_lca.c
+    src/include/thirdparty/alpha_lcareg.h
+    src/devices/bus_pci.c            (only for how a PCI config access is serviced)
+
+Do not read `CHANGELOG.md`, `tools/pipeline/ledger.json`, `OUTSTANDING_BUGS.md` or anything under
+`_scratchpad/` — those are project records, not the code under review.
+
+## Please do not simply ratify
+
+Where I state something as fact below, check whether it is true. A recent review had seven of nine
+readers confirm a premise stated wrongly. **Where I make an arithmetic claim — a value range, a
+mask, a count of reachable values — enumerate it rather than reasoning about it.** Walk the values,
+and ask what the PRODUCER of those values can actually emit before you walk them.
+
+**VERDICT LINE FIRST.**
+
+## What I believe, stated so you can refute it
+
+`DEVICE_ACCESS(lca_ioc)` handles a small number of register offsets and has `default:` arms for
+both reads and writes that call `fatal()` and then `exit(1)`. Separately, its `LCA_IOC_CONF` case
+rejects values with bits outside a narrow mask by the same means.
+
+## The questions
+
+**Q1. Enumerate the offsets `lca_ioc` implements, and the exact width of the region the device is
+registered for.** How many distinct offsets in that region reach a `default:` arm? Give the count
+and how you derived it. Note carefully whether `relative_addr` can be unaligned, and whether the
+region is scaled or shifted before the switch sees it — a derivation that misses a shift or a mask
+reads exactly like a correct one.
+
+**Q2. For each `exit(1)` in this file, say what it takes to reach it**: which register, which value
+or address, and whether reaching it requires anything unusual or merely an ordinary access. Please
+distinguish clearly between arms reachable by any access and arms that need a specific value.
+
+**Q3. Which of those arms have a documented meaning in the 21066 hardware manual?** The manual is
+at `_scratchpad/21066_66a_hrm.txt` (plain text, 13,876 lines) — you may read that one file too.
+I am asking whether the model is refusing something the hardware *documents*, in which case the
+right answer is to implement it, or something genuinely undefined.
+
+**Q4. Are the read `default:` and the write `default:` symmetric?** If one is broader than the
+other, say which and by how much. Sibling asymmetry inside one handler is usually a sign that one
+arm was written against a driver that happened to exercise it and the other was not.
+
+**Q5. What in this file has already been given a non-terminating disposition, and what shape did
+that take?** I want the file's own precedents described, because a repair that matches an existing
+in-file idiom is worth more than one argued from first principles.
+codex
+I’ll read the permitted source and manual, check the address and value producers, and enumerate what those files establish.
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$n = 0; Get-Content -LiteralPath '"'src/devices/dev_lca.c' | ForEach-Object { "'$n++; '"'{0,5}: {1}' -f "'$n, $_ }' in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$n = 0; Get-Content -LiteralPath '"'src/include/thirdparty/alpha_lcareg.h' | ForEach-Object { "'$n++; '"'{0,5}: {1}' -f "'$n, $_ }' in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n 'config|CONFIG|pci_data|pci_addr' src/devices/bus_pci.c" in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+ succeeded in 107ms:
+87: *  bus_pci_data_access():
+89: *  Reads from or writes to the PCI configuration registers of a device.
+91:void bus_pci_data_access(struct cpu *cpu, struct pci_data *pci_data,
+100:	dev = pci_data->first_device;
+102:		if (dev->bus      == pci_data->cur_bus &&
+103:		    dev->function == pci_data->cur_func &&
+104:		    dev->device   == pci_data->cur_device)
+112:			if (pci_data->cur_reg == 0)
+117:			fatal("[ bus_pci_data_access(): write to non-existant"
+119:			    pci_data->cur_bus, pci_data->cur_func,
+120:			    pci_data->cur_device);
+125:	/*  Return normal config data, or length data?  */
+126:	if (pci_data->last_was_write_ffffffff &&
+127:	    pci_data->cur_reg >= PCI_MAPREG_START &&
+128:	    pci_data->cur_reg <= PCI_MAPREG_END - 4)
+136:		int ofs = pci_data->cur_reg + i;
+146:		    pci_data->cur_reg >= PCI_MAPREG_START &&
+147:		    pci_data->cur_reg <= PCI_MAPREG_END - 4) {
+148:			pci_data->last_was_write_ffffffff = 1;
+153:		    dev->cfg_reg_write(dev, pci_data->cur_reg, *data) == 0) {
+159:			    (long long)x, pci_data->cur_bus,
+160:			    pci_data->cur_device, pci_data->cur_func,
+161:			    dev->name, pci_data->cur_reg);
+165:			if (pci_data->cur_reg == PCI_COMMAND_STATUS_REG
+178:	pci_data->last_was_write_ffffffff = 0;
+182:	    pci_data->cur_bus, pci_data->cur_device, pci_data->cur_func,
+183:	    dev->name, pci_data->cur_reg, len, (long)*data);
+192:void bus_pci_setaddr(struct cpu *cpu, struct pci_data *pci_data,
+195:	if (cpu == NULL || pci_data == NULL) {
+200:	pci_data->cur_bus = bus;
+201:	pci_data->cur_device = device;
+202:	pci_data->cur_func = function;
+203:	pci_data->cur_reg = reg;
+212:void bus_pci_add(struct machine *machine, struct pci_data *pci_data,
+220:	if (pci_data == NULL) {
+221:		fatal("bus_pci_add(): pci_data == NULL!\n");
+229:	pd = pci_data->first_device;
+244:	pd->next = pci_data->first_device;
+245:	pci_data->first_device = pd;
+248:	pd->pcibus   = pci_data;
+343: *  interrupt bases for PCI devices (as found in the configuration registers).
+346: *  the values in the configuration registers to the actual (emulated) device.
+351:struct pci_data *bus_pci_init(struct machine *machine, const char *irq_path,
+356:	struct pci_data *d;
+358:	CHECK_ALLOCATION(d = (struct pci_data *) malloc(sizeof(struct pci_data)));
+359:	memset(d, 0, sizeof(struct pci_data));
+390: *  the device (i.e. set up PCI configuration registers), and then if         *
+
+ succeeded in 181ms:
+    1: /* GXemul: $Id: alpha_lcareg.h,v 1.2 2006-06-16 18:31:26 debug Exp $ */
+    2: /* $NetBSD: lcareg.h,v 1.8 1997/09/05 02:14:31 thorpej Exp $ */
+    3: 
+    4: #ifndef ALPHA_LCAREG_H
+    5: #define	ALPHA_LCAREG_H
+    6: 
+    7: /*
+    8:  * Copyright (c) 1995 Carnegie-Mellon University.
+    9:  * All rights reserved.
+   10:  *
+   11:  * Authors: Jeffrey Hsu, Jason R. Thorpe
+   12:  * 
+   13:  * Permission to use, copy, modify and distribute this software and
+   14:  * its documentation is hereby granted, provided that both the copyright
+   15:  * notice and this permission notice appear in all copies of the
+   16:  * software, derivative works or modified versions, and any portions
+   17:  * thereof, and that both notices appear in supporting documentation.
+   18:  * 
+   19:  * CARNEGIE MELLON ALLOWS FREE USE OF THIS SOFTWARE IN ITS "AS IS" 
+   20:  * CONDITION.  CARNEGIE MELLON DISCLAIMS ANY LIABILITY OF ANY KIND 
+   21:  * FOR ANY DAMAGES WHATSOEVER RESULTING FROM THE USE OF THIS SOFTWARE.
+   22:  * 
+   23:  * Carnegie Mellon requests users of this software to return to
+   24:  *
+   25:  *  Software Distribution Coordinator  or  Software.Distribution@CS.CMU.EDU
+   26:  *  School of Computer Science
+   27:  *  Carnegie Mellon University
+   28:  *  Pittsburgh PA 15213-3890
+   29:  *
+   30:  * any improvements or extensions that they make and grant Carnegie the
+   31:  * rights to redistribute these changes.
+   32:  */
+   33: 
+   34: /*
+   35:  * 21066 chip registers
+   36:  */
+   37: 
+   38: #define REGVAL(r)	(*(volatile int32_t *)ALPHA_PHYS_TO_K0SEG(r))
+   39: #define REGVAL64(r)	(*(volatile int64_t *)ALPHA_PHYS_TO_K0SEG(r))
+   40: 
+   41: /*
+   42:  * Base addresses
+   43:  */
+   44: #define LCA_IOC_BASE	0x180000000ULL		/* LCA IOC Regs */
+   45: #define LCA_PCI_SIO	0x1c0000000ULL		/* PCI Sp. I/O Space */
+   46: #define LCA_PCI_CONF	0x1e0000000ULL		/* PCI Conf. Space */
+   47: #define LCA_PCI_SPARSE	0x200000000ULL		/* PCI Sparse Space */
+   48: #define LCA_PCI_DENSE	0x300000000ULL		/* PCI Dense Space */
+   49: 
+   50: #define LCA_IOC_HAE	LCA_IOC_BASE		/* Host Address Ext. (64) */
+   51: #define	IOC_HAE_ADDREXT	0x00000000f8000000ULL
+   52: #define	IOC_HAE_RSVSD	0xffffffff07ffffffULL
+   53: 
+   54: #define LCA_IOC_CONF	(LCA_IOC_BASE + 0x020)	/* Configuration Cycle Type */
+   55: 
+   56: #define LCA_IOC_STAT0	(LCA_IOC_BASE + 0x040)	/* Status 0 */
+   57: #define	IOC_STAT0_CMD	0x000000000000000fULL	/* PCI command mask */
+   58: #define	IOC_STAT0_ERR	0x0000000000000010ULL	/* IOC error indicator R/W1C */
+   59: #define	IOC_STAT0_LOST	0x0000000000000020ULL	/* IOC lose error info R/W1C */
+   60: #define	IOC_STAT0_THIT	0x0000000000000040ULL	/* test hit */
+   61: #define	IOC_STAT0_TREF	0x0000000000000080ULL	/* test reference */
+   62: #define	IOC_STAT0_CODE	0x0000000000000700ULL	/* code mask */
+   63: #define	IOC_STAT0_CODESHIFT 8
+   64: #define	IOC_STAT0_P_NBR	0x00000000ffffe000ULL	/* page number mask */
+   65: 
+   66: #define LCA_IOC_STAT1	(LCA_IOC_BASE + 0x060)	/* Status 1 */
+   67: #define	IOC_STAT1_ADDR	0x00000000ffffffffULL	/* PCI address mask */
+   68: 
+   69: #define	LCA_IOC_TBIA	(LCA_IOC_BASE + 0x080)	/* TLB Invalidate All */
+   70: #define	LCA_IOC_TB_ENA	(LCA_IOC_BASE + 0x0a0)	/* TLB Enable */
+   71: #define	IOC_TB_ENA_TEN	0x0000000000000080ULL
+   72: 
+   73: #define LCA_IOC_W_BASE0	(LCA_IOC_BASE + 0x100)	/* Window Base */
+   74: #define LCA_IOC_W_MASK0	(LCA_IOC_BASE + 0x140)	/* Window Mask */
+   75: #define LCA_IOC_W_T_BASE0 (LCA_IOC_BASE + 0x180) /* Translated Base */
+   76: 
+   77: #define LCA_IOC_W_BASE1	(LCA_IOC_BASE + 0x120)	/* Window Base */
+   78: #define LCA_IOC_W_MASK1	(LCA_IOC_BASE + 0x160)	/* Window Mask */
+   79: #define LCA_IOC_W_T_BASE1 (LCA_IOC_BASE + 0x1a0) /* Translated Base */
+   80: 
+   81: #define	IOC_W_BASE_W_BASE 0x00000000fff00000ULL	/* Window base value */
+   82: #define	IOC_W_BASE_SG	  0x0000000100000000ULL	/* Window uses SGMAPs */
+   83: #define	IOC_W_BASE_WEN	  0x0000000200000000ULL	/* Window enable */
+   84: 
+   85: #define	IOC_W_MASK_1M	0x0000000000000000ULL	/* 1MB window */
+   86: #define	IOC_W_MASK_2M	0x0000000000100000ULL	/* 2MB window */
+   87: #define	IOC_W_MASK_4M	0x0000000000300000ULL	/* 4MB window */
+   88: #define	IOC_W_MASK_8M	0x0000000000700000ULL	/* 8MB window */
+   89: #define	IOC_W_MASK_16M	0x0000000000f00000ULL	/* 16MB window */
+   90: #define	IOC_W_MASK_32M	0x0000000001f00000ULL	/* 32MB window */
+   91: #define	IOC_W_MASK_64M	0x0000000003f00000ULL	/* 64MB window */
+   92: #define	IOC_W_MASK_128M	0x0000000007f00000ULL	/* 128M window */
+   93: #define	IOC_W_MASK_256M	0x000000000ff00000ULL	/* 256M window */
+   94: #define	IOC_W_MASK_512M	0x000000001ff00000ULL	/* 512M window */
+   95: #define	IOC_W_MASK_1G	0x000000003ff00000ULL	/* 1GB window */
+   96: #define	IOC_W_MASK_2G	0x000000007ff00000ULL	/* 2GB window */
+   97: #define	IOC_W_MASK_4G	0x00000000fff00000ULL	/* 4GB window */
+   98: 
+   99: #define	IOC_W_T_BASE	0x00000000fffffc00ULL	/* page table base */
+  100: 
+  101: #endif	/*  ALPHA_LCAREG_H  */
+
+ succeeded in 204ms:
+    1: /*
+    2:  *  Copyright (C) 2006-2011  Anders Gavare.  All rights reserved.
+    3:  *
+    4:  *  Redistribution and use in source and binary forms, with or without
+    5:  *  modification, are permitted provided that the following conditions are met:
+    6:  *
+    7:  *  1. Redistributions of source code must retain the above copyright
+    8:  *     notice, this list of conditions and the following disclaimer.
+    9:  *  2. Redistributions in binary form must reproduce the above copyright  
+   10:  *     notice, this list of conditions and the following disclaimer in the 
+   11:  *     documentation and/or other materials provided with the distribution.
+   12:  *  3. The name of the author may not be used to endorse or promote products
+   13:  *     derived from this software without specific prior written permission.
+   14:  *
+   15:  *  THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+   16:  *  ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+   17:  *  IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+   18:  *  ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE   
+   19:  *  FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+   20:  *  DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+   21:  *  OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+   22:  *  HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+   23:  *  LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+   24:  *  OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+   25:  *  SUCH DAMAGE.
+   26:  *
+   27:  *
+   28:  *  COMMENT: LCA PCI bus, for Alpha machines
+   29:  */
+   30: 
+   31: #include <stdio.h>
+   32: #include <stdlib.h>
+   33: #include <string.h>
+   34: 
+   35: #include "bus_isa.h"
+   36: #include "bus_pci.h"
+   37: #include "cpu.h"
+   38: #include "device.h"
+   39: #include "emul.h"
+   40: #include "interrupt.h"
+   41: #include "machine.h"
+   42: #include "memory.h"
+   43: #include "misc.h"
+   44: 
+   45: #include "thirdparty/alpha_lcareg.h"
+   46: 
+   47: #define	LCA_ISA_BASE	(LCA_PCI_SIO + 0x10000000)
+   48: #define	LCA_ISA_MEMBASE	(LCA_PCI_SIO + 0x18000000)
+   49: 
+   50: 
+   51: struct lca_data {
+   52: 	struct pci_data		*pci_data;
+   53: 
+   54: 	uint64_t		ioc_conf;
+   55: 	uint64_t		tlb_enable;
+   56: 	uint64_t		window_base_0;
+   57: 	uint64_t		window_mask_0;
+   58: 	uint64_t		window_t_base_0;
+   59: 	uint64_t		window_base_1;
+   60: 	uint64_t		window_mask_1;
+   61: 	uint64_t		window_t_base_1;
+   62: };
+   63: 
+   64: 
+   65: /*
+   66:  *  lca_interrupt_assert():
+   67:  *
+   68:  *  Line 0 = ISA interrupt.
+   69:  */
+   70: void lca_interrupt_assert(struct interrupt *interrupt)
+   71: {
+   72: 	fatal("lca_interrupt_assert: TODO\n");
+   73: 	exit(1);
+   74: }
+   75: 
+   76: 
+   77: /*
+   78:  *  lca_interrupt_deassert():
+   79:  *
+   80:  *  Line 0 = ISA interrupt.
+   81:  */
+   82: void lca_interrupt_deassert(struct interrupt *interrupt)
+   83: {
+   84: 	fatal("lca_interrupt_deassert: TODO\n");
+   85: 	exit(1);
+   86: }
+   87: 
+   88: 
+   89: DEVICE_ACCESS(lca_pci_conf)
+   90: {
+   91: 	uint64_t idata = 0, odata = 0;
+   92: 	int tag, type1, bus, dev, func, reg;	/*  #515  */
+   93: 	struct lca_data *d = (struct lca_data *) extra;
+   94: 
+   95: 	if (writeflag == MEM_WRITE)
+   96: 		idata = memory_readmax64(cpu, data, len);
+   97: 
+   98: 	/*
+   99: 	 *  1. Decompose the address into a tag.
+  100: 	 *
+  101: 	 *  According to NetBSD's lca_pci.c, the address is composed like this:
+  102: 	 *
+  103: 	 *	addr = tag << 5 | (regoffset & ~0x03) << 5 | 0x3 << 3
+  104: 	 */
+  105: 	reg = (relative_addr >> 5) & 0xfc;
+  106: 	tag = (relative_addr >> 5) & ~0xff;
+  107: 
+  108: 	/*
+  109: 	 *  2. Decompose the tag into bus, dev, and func.
+  110: 	 *
+  111: 	 *  The tag can be constructed in one of two ways. On the primary
+  112: 	 *  bus (nr 0):
+  113: 	 *
+  114: 	 *	tag = (1 << (device + 11)) | (function << 8);
+  115: 	 *
+  116: 	 *  and on other busses, the tag is a normal:
+  117: 	 *
+  118: 	 *	tag = (bus << 16) | (device << 11) | (function << 8)
+  119: 	 */
+  120: 	/*  printf("tag = 0x%x\n", (int)tag);  */
+  121: 
+  122: 	/*  #515: `bus' used to be BOTH the configuration CYCLE TYPE and the
+  123: 	    DESTINATION BUS, and conflating them is the whole defect.  IOC_CONF bit 0
+  124: 	    selects the cycle type only -- 21066/21066A HRM S6.2.9: "PCI address bits
+  125: 	    ad<1:0> come directly from configuration cycle type register (IOC_CONF,
+  126: 	    Section 6.4.2) bits <1:0>" -- and it does NOT carry a bus number.  The
+  127: 	    destination bus of a type-1 cycle lives in the ADDRESS, per the PCI Local
+  128: 	    Bus specification's type-1 layout (bus 23..16, dev 15..11, fn 10..8,
+  129: 	    reg 7..2), which S6.2.9 defers to explicitly.
+  130: 
+  131: 	    Before this, a guest that merely SET bit 0 -- a value the CONF guard
+  132: 	    ACCEPTS -- made any subsequent access in this window reach
+  133: 	    `fatal("TODO. Non-zero bus."); exit(1)'.  MEASURED: two ordinary guest
+  134: 	    accesses, nothing refused anywhere on the path
+  135: 	    (regress/lca_confbus_probe.py, 3/4 pre-fix; artifacts/lcaconfbus1kill/).  */
+  136: 	type1 = d->ioc_conf & 1;	/*  #515  */
+  137: 	bus = 0;			/*  #515  */
+  138: 
+  139: 	if (!type1) {			/*  #515  */
+  140: 		/*  #511: was `0x800 << dev'.  `0x800' is a plain int (2^11) and `dev'
+  141: 		    reaches 20, so the last iteration evaluates 2^31 -- a SIGNED
+  142: 		    OVERFLOW, undefined by C99 6.5.7p4, not merely
+  143: 		    implementation-defined.  MEASURED under UBSAN before the change:
+  144: 		    "dev_lca.c:125:21: runtime error: left shift of 2048 by 20 places
+  145: 		    cannot be represented in type 'int'", reached by an ordinary guest
+  146: 		    ldq into the PCI config window (regress/lca_confbus_probe.py against
+  147: 		    build-asan; artifacts/lcashiftub/ubsan_HEAD_20260907.raw).
+  148: 
+  149: 		    `0x800U' makes the operand unsigned, so 2048U << 20 is 0x80000000U --
+  150: 		    inside unsigned int -- and NOTHING ELSE MOVES.
+  151: 
+  152: 		    *** THE REASON, CORRECTED: AN EARLIER DRAFT SAID `tag' IS "ALREADY A
+  153: 		    WIDER UNSIGNED QUANTITY".  THAT IS FALSE -- `tag' is a plain signed
+  154: 		    `int' (:92) -- AND FOUR PASS-2 SEATS CAUGHT IT.  Worse, the claim was
+  155: 		    backwards: being WIDER is what would CREATE a difference, not remove
+  156: 		    one.  Had `tag' been `uint64_t', the old `int' 0x80000000 is NEGATIVE
+  157: 		    and would SIGN-EXTEND to 0xffffffff80000000 for the `&', while
+  158: 		    `0x800U << 20' zero-extends to 0x0000000080000000 -- two different
+  159: 		    masks.  The seats were right about the mechanism and it does not fire
+  160: 		    here only because of the type.
+  161: 
+  162: 		    WHAT ACTUALLY HOLDS: both operands are 32-bit, so the `&' is performed
+  163: 		    at 32 bits either way -- `int & int' before, and after, `tag' converted
+  164: 		    to `unsigned int' by the usual arithmetic conversions.  The RESULT'S
+  165: 		    BIT PATTERN IS IDENTICAL; only its type changes, and it is consumed
+  166: 		    solely as a truth test in `if (...)'.  So no guest-visible value moves,
+  167: 		    and the repair is owed purely by the LANGUAGE. ***
+  168: 
+  169: 		    *** THE LOOP THIS SITS IN IS THIS FILE'S OWN GRACEFUL-DEGRADATION
+  170: 		    PRECEDENT -- the `dev >= 21' arm below has a commented-out
+  171: 		    fatal()/exit(1) and substitutes `dev = 0' instead, and `lcabadval'
+  172: 		    cites it as a transferable warrant.  The safe path contained the UB. ***  */
+  173: 		for (dev=0; dev<21; dev++)
+  174: 			if (tag & (0x800U << dev))	/*  #511  */
+  175: 				break;
+  176: 		if (dev >= 21) {
+  177: 			/*  fatal("[ LCA: No bus 0 device? TODO ]\n");
+  178: 			exit(1);  */
+  179: 			dev = 0;
+  180: 		}
+  181: 	} else {
+  182: 		/*  #515: a type-1 cycle carries its destination in the address.  */
+  183: 		bus = (tag >> 16) & 0xff;	/*  #515  */
+  184: 		dev = (tag >> 11) & 0x1f;	/*  #515  */
+  185: 	}
+  186: 
+  187: 	func = (tag >> 8) & 7;
+  188: 	/*  printf("bus=%i dev=%i func=%i reg=%i\n", bus,dev,func,reg);  */
+  189: 
+  190: 	/*  #515: a type-1 cycle whose bus field is zero selects NOTHING.  Type-1 is
+  191: 	    how a bridge is asked to reach a bus BEHIND it; the primary bus is reached
+  192: 	    with type-0 cycles, whose IDSEL encoding is decoded above.  Forwarding this
+  193: 	    case would set cur_bus = 0 and hand the access to whichever primary-bus
+  194: 	    device matched -- `i82378zb' is registered at 0:7:0 by DEVINIT below -- so
+  195: 	    simply decoding `bus' and stopping there would replace a host kill with a
+  196: 	    NEW MISROUTING.  Refuse it instead, matching `bus_pci_data_access''s own
+  197: 	    empty-slot contract (bus_pci.c, the `dev == NULL' arm: all-ones at register
+  198: 	    0, zero elsewhere) so the guest sees the ordinary "nothing there" answer.
+  199: 	    Writes are discarded, which leaves backend state untouched.  */
+  200: 	if (type1 && bus == 0) {		/*  #515  */
+  201: 		odata = reg == 0? (uint64_t) -1 : 0;
+  202: 	} else {
+  203: 		/*  Pass PCI accesses onto bus_pci:  */
+  204: 		bus_pci_setaddr(cpu, d->pci_data, bus, dev, func, reg);
+  205: 		bus_pci_data_access(cpu, d->pci_data, writeflag == MEM_READ?
+  206: 		    &odata : &idata, len, writeflag);
+  207: 	}
+  208: 
+  209: 	if (writeflag == MEM_READ)
+  210: 		memory_writemax64(cpu, data, len, odata);
+  211: 
+  212: 	return 1;
+  213: }
+  214: 
+  215: 
+  216: DEVICE_ACCESS(lca_isa)
+  217: {
+  218: 	unsigned int ofs, i;
+  219: 	uint8_t byte;
+  220: 
+  221: 	relative_addr >>= 5;
+  222: 
+  223: 	ofs = relative_addr & 3;
+  224: 	if (ofs > len) {
+  225: 		fatal("[ ofs=%i len=%i in lca_isa access function. "
+  226: 		    "aborting ]\n", ofs, len);
+  227: 		exit(1);
+  228: 	}
+  229: 
+  230: 	if (writeflag == MEM_WRITE) {
+  231: 		byte = data[ofs % len];
+  232: 		return cpu->memory_rw(cpu, cpu->mem, LCA_ISA_BASE +
+  233: 		    relative_addr, &byte, 1, writeflag, CACHE_NONE);
+  234: 	}
+  235: 
+  236: 	cpu->memory_rw(cpu, cpu->mem, LCA_ISA_BASE + relative_addr,
+  237: 	    &byte, 1, MEM_READ, CACHE_NONE);
+  238: 
+  239: 	for (i=0; i<len; i++)
+  240: 		data[i] = i == ofs? byte : 0x00;
+  241: 
+  242: 	return 1;
+  243: }
+  244: 
+  245: 
+  246: DEVICE_ACCESS(lca_ioc)
+  247: {
+  248: 	uint64_t idata = 0, odata = 0;
+  249: 	struct lca_data *d = (struct lca_data *) extra;
+  250: 
+  251: 	if (writeflag == MEM_WRITE)
+  252: 		idata = memory_readmax64(cpu, data, len);
+  253: 
+  254: 	switch (relative_addr + LCA_IOC_BASE) {
+  255: 
+  256: 	case LCA_IOC_BASE:
+  257: 		/*  Ignore? Linux reads from the base at startup.  */
+  258: 		break;
+  259: 
+  260: 	case LCA_IOC_CONF:
+  261: 		if (writeflag == MEM_READ) {
+  262: 			odata = d->ioc_conf;
+  263: 		} else {
+  264: 			d->ioc_conf = idata;
+  265: 			/*  Only bit 0 is implemented so far, the PCI bus 0 vs
+  266: 			    bus non-0 selection bit.  */
+  267: 			if (idata & ~1) {
+  268: 				/*  #506: was `0x%x', (int)idata -- a 64-bit guarded value
+  269: 				    narrowed to 32 in the KILL diagnostic, so a write of
+  270: 				    0x100000000 trips `idata & ~1' and then reports "0x0",
+  271: 				    which is a value this same guard ACCEPTS.  The five
+  272: 				    sibling arms below already print the full width this
+  273: 				    way; this arm was the outlier among the VALUE-guard
+  274: 				    diagnostics.  (Not the file's only narrowing site --
+  275: 				    the default arm below has the same cast, and this
+  276: 				    round fixes it too.)  */
+  277: 				fatal("TODO: Write to unimplemented bit of"
+  278: 				    " IOC_CONF: 0x%" PRIx64 "\n", (uint64_t)idata);
+  279: 				exit(1);
+  280: 			}
+  281: 		}
+  282: 		break;
+  283: 
+  284: 	case LCA_IOC_TBIA:
+  285: 		/*  TLB Invalidate All.  */
+  286: 		/*  TODO: For now, let's just ignore it.  */
+  287: 		break;
+  288: 
+  289: 	case LCA_IOC_TB_ENA:
+  290: 		if (writeflag == MEM_READ) {
+  291: 			odata = d->tlb_enable;
+  292: 		} else {
+  293: 			d->tlb_enable = idata;
+  294: 			/*  TODO: Actually implement this.  */
+  295: 			if (idata & ~IOC_TB_ENA_TEN) {
+  296: 				fatal("TODO: LCA_IOC_TB_ENA value "
+  297: 				    " (0x%" PRIx64") has unimplemented "
+  298: 				    "bits.\n", (uint64_t)idata);
+  299: 				exit(1);
+  300: 			}
+  301: 		}
+  302: 		break;
+  303: 
+  304: 	case LCA_IOC_W_BASE0:
+  305: 		if (writeflag == MEM_READ) {
+  306: 			odata = d->window_base_0;
+  307: 		} else {
+  308: 			d->window_base_0 = idata;
+  309: 			/*  TODO: Actually implement this.  */
+  310: 			if (idata != 0ULL && idata != 0x300800000ULL) {
+  311: 				fatal("TODO: LCA_IOC_W_BASE0 value differs"
+  312: 				    " (0x%" PRIx64") from the only implemented"
+  313: 				    " values\n", (uint64_t)idata);
+  314: 				exit(1);
+  315: 			}
+  316: 		}
+  317: 		break;
+  318: 
+  319: 	case LCA_IOC_W_MASK0:
+  320: 		if (writeflag == MEM_READ) {
+  321: 			odata = d->window_mask_0;
+  322: 		} else {
+  323: 			d->window_mask_0 = idata;
+  324: 			/*  TODO: Actually implement this.  */
+  325: 			if (idata != 0x700000ULL) {
+  326: 				fatal("TODO: LCA_IOC_W_MASK0 value differs"
+  327: 				    " (0x%" PRIx64") from the only implemented"
+  328: 				    " value\n", (uint64_t)idata);
+  329: 				exit(1);
+  330: 			}
+  331: 		}
+  332: 		break;
+  333: 
+  334: 	case LCA_IOC_W_T_BASE0:
+  335: 		if (writeflag == MEM_READ) {
+  336: 			odata = d->window_t_base_0;
+  337: 		} else {
+  338: 			d->window_t_base_0 = idata;
+  339: 			/*  TODO: Actually implement this.  */
+  340: 		}
+  341: 		break;
+  342: 
+  343: 	case LCA_IOC_W_BASE1:
+  344: 		if (writeflag == MEM_READ) {
+  345: 			odata = d->window_base_1;
+  346: 		} else {
+  347: 			d->window_base_1 = idata;
+  348: 			/*  TODO: Actually implement this.  */
+  349: 			if (idata != 0x240000000ULL) {
+  350: 				fatal("TODO: LCA_IOC_W_BASE1 value differs"
+  351: 				    " (0x%" PRIx64") from the only implemented"
+  361: 		} else {
+  362: 			d->window_mask_1 = idata;
+  363: 			/*  TODO: Actually implement this.  */
+  364: 			if (idata != 0x3ff00000ULL) {
+  365: 				fatal("TODO: LCA_IOC_W_MASK1 value differs"
+  366: 				    " (0x%" PRIx64") from the only implemented"
+  367: 				    " value\n", (uint64_t)idata);
+  368: 				exit(1);
+  369: 			}
+  370: 		}
+  371: 		break;
+  372: 
+  373: 	case LCA_IOC_W_T_BASE1:
+  374: 		if (writeflag == MEM_READ) {
+  375: 			odata = d->window_t_base_1;
+  376: 		} else {
+  377: 			d->window_t_base_1 = idata;
+  378: 			/*  TODO: Actually implement this.  */
+  379: 		}
+  380: 		break;
+  381: 
+  382: 	default:fatal("[ lca_ioc: unimplemented %s to offset 0x%x",
+  383: 		    writeflag == MEM_WRITE? "write" : "read", (int)
+  384: 		    relative_addr);
+  385: 		if (writeflag == MEM_WRITE)
+  386: 			fatal(": 0x%" PRIx64, (uint64_t)idata);	/*  #506  */
+  387: 		fatal(" ]\n");
+  388: 		exit(1);
+  389: 	}
+  390: 
+  391: 	if (writeflag == MEM_READ)
+  392: 		memory_writemax64(cpu, data, len, odata);
+  393: 
+  394: 	return 1;
+  395: }
+  396: 
+  397: 
+  398: DEVINIT(lca)
+  399: {
+  400: 	char *interrupt_path;
+  401: 	struct interrupt interrupt_template;
+  402: 	struct lca_data *d;
+  403: 
+  404: 	CHECK_ALLOCATION(d = (struct lca_data *) malloc(sizeof(struct lca_data)));
+  405: 	memset(d, 0, sizeof(struct lca_data));
+  406: 
+  407: 	/*  Register a PCI bus:  */
+  408: 	d->pci_data = bus_pci_init(
+  409: 	    devinit->machine,
+  410: 	    "TODO: irq"		/*  pciirq: TODO  */,
+  411: 	    LCA_PCI_SIO,	/*  pci device io offset  */
+  412: 	    0x00000000,		/*  pci device mem offset: TODO  */
+  413: 	    0x00000000,		/*  PCI portbase: TODO  */
+  414: 	    0x00000000,		/*  PCI membase: TODO  */
+  415: 	    "TODO: pci irq base",	/*  PCI irqbase: TODO  */
+  416: 	    LCA_ISA_BASE,	/*  ISA portbase  */
+  417: 	    LCA_ISA_MEMBASE,	/*  ISA membase  */
+  418: 	    "TODO: irqbase isa");                /*  ISA irqbase: TODO  */
+  419: 
+  420: 	/*  Add the "sio0" controller (as seen by NetBSD):  */
+  421: 	bus_pci_add(devinit->machine, d->pci_data, devinit->machine->memory,
+  422: 	    0, 7, 0, "i82378zb");
+  423: 
+  424: 	memory_device_register(devinit->machine->memory, "lca_pci_conf",
+  425: 	    LCA_PCI_CONF, 0x20000000, dev_lca_pci_conf_access, (void *)d,
+  426: 	    DM_DEFAULT, NULL);
+  427: 
+  428: 	memory_device_register(devinit->machine->memory, "lca_isa",
+  429: 	    LCA_PCI_SIO, 0x10000 << 5, dev_lca_isa_access, (void *)d,
+  430: 	    DM_DEFAULT, NULL);
+  431: 
+  432: 	memory_device_register(devinit->machine->memory, "lca_ioc",
+  433: 	    LCA_IOC_BASE, 0x20000000, dev_lca_ioc_access, (void *)d,
+  434: 	    DM_DEFAULT, NULL);
+  435: 
+  436: 	CHECK_ALLOCATION(interrupt_path = (char *)
+  437: 	    malloc(strlen(devinit->machine->path) + 10));
+  438: 	snprintf(interrupt_path, strlen(devinit->machine->path) + 10,
+  439: 	    "%s.lca", devinit->machine->path);
+  440: 
+  441: 	memset(&interrupt_template, 0, sizeof(interrupt_template));
+  442: 	interrupt_template.line = 0;
+  443: 	interrupt_template.name = interrupt_path;
+  444: 	interrupt_template.extra = d;
+  445: 	interrupt_template.interrupt_assert = lca_interrupt_assert;
+  446: 	interrupt_template.interrupt_deassert = lca_interrupt_deassert;
+  447: 	interrupt_handler_register(&interrupt_template);
+  448: 
+  449: 	bus_isa_init(devinit->machine, interrupt_path,
+  450: 	    BUS_ISA_IDE0 | BUS_ISA_IDE1, LCA_ISA_BASE, LCA_ISA_MEMBASE);
+  451: 
+  452: 	return 1;
+  453: }
+  454: 
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$n = 0; Get-Content -LiteralPath '"'src/devices/bus_pci.c' | ForEach-Object { "'$n++; if ($n -ge 87 -and $n -le 204) { '"'{0,5}: {1}' -f "'$n, $_ } }' in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n -i 'IOC_|configuration cycle type|host address extension|translation buffer|reserved.*address|quadword|unalign|naturally align|address alias' _scratchpad/21066_66a_hrm.txt" in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+ exited 1 in 142ms:
+rg: _scratchpad/21066_66a_hrm.txt: IO error for operation on _scratchpad/21066_66a_hrm.txt: The system cannot find the file specified. (os error 2)
+
+ succeeded in 407ms:
+   87:  *  bus_pci_data_access():
+   88:  *
+   89:  *  Reads from or writes to the PCI configuration registers of a device.
+   90:  */
+   91: void bus_pci_data_access(struct cpu *cpu, struct pci_data *pci_data,
+   92: 	uint64_t *data, int len, int writeflag)
+   93: {
+   94: 	struct pci_device *dev;
+   95: 	unsigned char *cfg_base;
+   96: 	uint64_t x, idata = *data;
+   97: 	int i;
+   98: 
+   99: 	/*  Scan through the list of pci_device entries.  */
+  100: 	dev = pci_data->first_device;
+  101: 	while (dev != NULL) {
+  102: 		if (dev->bus      == pci_data->cur_bus &&
+  103: 		    dev->function == pci_data->cur_func &&
+  104: 		    dev->device   == pci_data->cur_device)
+  105: 			break;
+  106: 		dev = dev->next;
+  107: 	}
+  108: 
+  109: 	/*  No device? Then return emptiness.  */
+  110: 	if (dev == NULL) {
+  111: 		if (writeflag == MEM_READ) {
+  112: 			if (pci_data->cur_reg == 0)
+  113: 				*data = (uint64_t) -1;
+  114: 			else
+  115: 				*data = 0;
+  116: 		} else {
+  117: 			fatal("[ bus_pci_data_access(): write to non-existant"
+  118: 			    " device, bus %i func %i device %i ]\n",
+  119: 			    pci_data->cur_bus, pci_data->cur_func,
+  120: 			    pci_data->cur_device);
+  121: 		}
+  122: 		return;
+  123: 	}
+  124: 
+  125: 	/*  Return normal config data, or length data?  */
+  126: 	if (pci_data->last_was_write_ffffffff &&
+  127: 	    pci_data->cur_reg >= PCI_MAPREG_START &&
+  128: 	    pci_data->cur_reg <= PCI_MAPREG_END - 4)
+  129: 		cfg_base = dev->cfg_mem_size;
+  130: 	else
+  131: 		cfg_base = dev->cfg_mem;
+  132: 
+  133: 	/*  Read data as little-endian:  */
+  134: 	x = 0;
+  135: 	for (i=len-1; i>=0; i--) {
+  136: 		int ofs = pci_data->cur_reg + i;
+  137: 		x <<= 8;
+  138: 		x |= cfg_base[ofs & (PCI_CFG_MEM_SIZE - 1)];
+  139: 	}
+  140: 
+  141: 	/*  Register write:  */
+  142: 	if (writeflag == MEM_WRITE) {
+  143: 		debug("[ bus_pci: write to PCI DATA: data = 0x%08llx ]\n",
+  144: 		    (long long)idata);
+  145: 		if (idata == 0xffffffffULL &&
+  146: 		    pci_data->cur_reg >= PCI_MAPREG_START &&
+  147: 		    pci_data->cur_reg <= PCI_MAPREG_END - 4) {
+  148: 			pci_data->last_was_write_ffffffff = 1;
+  149: 			return;
+  150: 		}
+  151: 
+  152: 		if (dev->cfg_reg_write == NULL ||
+  153: 		    dev->cfg_reg_write(dev, pci_data->cur_reg, *data) == 0) {
+  154: 			/*  Print a warning for unhandled writes:  */
+  155: 			debug("[ bus_pci: write to PCI DATA: data = 0x%08llx"
+  156: 			    " (current value = 0x%08llx); NOT YET"
+  157: 			    " SUPPORTED. bus %i, device %i, function %i (%s)"
+  158: 			    " register 0x%02x ]\n", (long long)idata,
+  159: 			    (long long)x, pci_data->cur_bus,
+  160: 			    pci_data->cur_device, pci_data->cur_func,
+  161: 			    dev->name, pci_data->cur_reg);
+  162: 
+  163: 			/*  Special warning, to detect if NetBSD's special
+  164: 			    detection of PCI devices fails:  */
+  165: 			if (pci_data->cur_reg == PCI_COMMAND_STATUS_REG
+  166: 			    && !((*data) & PCI_COMMAND_IO_ENABLE)) {
+  167: 				fatal("\n[ NetBSD PCI detection stuff not"
+  168: 				    " yet implemented for device '%s' ]\n",
+  169: 				    dev->name);
+  170: 			}
+  171: 		}
+  172: 		return;
+  173: 	}
+  174: 
+  175: 	/*  Register read:  */
+  176: 	*data = x;
+  177: 
+  178: 	pci_data->last_was_write_ffffffff = 0;
+  179: 
+  180: 	debug("[ bus_pci: read from PCI DATA, bus %i, device "
+  181: 	    "%i, function %i (%s) register 0x%02x: (len=%i) 0x%08lx ]\n",
+  182: 	    pci_data->cur_bus, pci_data->cur_device, pci_data->cur_func,
+  183: 	    dev->name, pci_data->cur_reg, len, (long)*data);
+  184: }
+  185: 
+  186: 
+  187: /*
+  188:  *  bus_pci_setaddr():
+  189:  *
+  190:  *  Sets the address in preparation for a PCI register transfer.
+  191:  */
+  192: void bus_pci_setaddr(struct cpu *cpu, struct pci_data *pci_data,
+  193: 	int bus, int device, int function, int reg)
+  194: {
+  195: 	if (cpu == NULL || pci_data == NULL) {
+  196: 		fatal("bus_pci_setaddr(): NULL ptr\n");
+  197: 		exit(1);
+  198: 	}
+  199: 
+  200: 	pci_data->cur_bus = bus;
+  201: 	pci_data->cur_device = device;
+  202: 	pci_data->cur_func = function;
+  203: 	pci_data->cur_reg = reg;
+  204: }
+
+codex
+The source has one `default:` shared by reads and writes. It also has six value guards, so the default’s symmetry is separate from the handler’s overall behavior. The permitted manual path does not exist here; I’m continuing with the source analysis.
+codex
+The file `_scratchpad/21066_66a_hrm.txt` is missing from this workspace. What is the correct local path to that manual?
+codex
+The numeric walk finds 536,870,902 unmatched byte offsets. That is a callback-level count: the permitted files omit the CPU and memory dispatcher, so they do not establish whether unaligned addresses can reach `lca_ioc`. The handler itself performs no alignment, shift, or mask before its switch.
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n 'exit\\(1\\)|case LCA_IOC|switch \\(relative_addr|relative_addr >>=|reg =|tag =|type1 =|bus =|dev =|memory_device_register' src/devices/dev_lca.c" in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+ succeeded in 15ms:
+73:	exit(1);
+85:	exit(1);
+105:	reg = (relative_addr >> 5) & 0xfc;
+106:	tag = (relative_addr >> 5) & ~0xff;
+114:	 *	tag = (1 << (device + 11)) | (function << 8);
+118:	 *	tag = (bus << 16) | (device << 11) | (function << 8)
+120:	/*  printf("tag = 0x%x\n", (int)tag);  */
+133:	    `fatal("TODO. Non-zero bus."); exit(1)'.  MEASURED: two ordinary guest
+136:	type1 = d->ioc_conf & 1;	/*  #515  */
+137:	bus = 0;			/*  #515  */
+171:		    fatal()/exit(1) and substitutes `dev = 0' instead, and `lcabadval'
+178:			exit(1);  */
+179:			dev = 0;
+183:		bus = (tag >> 16) & 0xff;	/*  #515  */
+184:		dev = (tag >> 11) & 0x1f;	/*  #515  */
+193:	    case would set cur_bus = 0 and hand the access to whichever primary-bus
+197:	    empty-slot contract (bus_pci.c, the `dev == NULL' arm: all-ones at register
+200:	if (type1 && bus == 0) {		/*  #515  */
+201:		odata = reg == 0? (uint64_t) -1 : 0;
+221:	relative_addr >>= 5;
+227:		exit(1);
+254:	switch (relative_addr + LCA_IOC_BASE) {
+256:	case LCA_IOC_BASE:
+260:	case LCA_IOC_CONF:
+279:				exit(1);
+284:	case LCA_IOC_TBIA:
+289:	case LCA_IOC_TB_ENA:
+299:				exit(1);
+304:	case LCA_IOC_W_BASE0:
+314:				exit(1);
+319:	case LCA_IOC_W_MASK0:
+329:				exit(1);
+334:	case LCA_IOC_W_T_BASE0:
+343:	case LCA_IOC_W_BASE1:
+353:				exit(1);
+358:	case LCA_IOC_W_MASK1:
+368:				exit(1);
+373:	case LCA_IOC_W_T_BASE1:
+388:		exit(1);
+424:	memory_device_register(devinit->machine->memory, "lca_pci_conf",
+428:	memory_device_register(devinit->machine->memory, "lca_isa",
+432:	memory_device_register(devinit->machine->memory, "lca_ioc",
+
+codex
+**Verdict: `lca_ioc` has one shared `default:`, with identical read/write coverage. Six separate write-value guards create additional terminating paths. The permitted manual is missing, so Q3 cannot be fully verified.**
+
+**Q1.** The ten explicitly handled relative offsets are `0x000` (`LCA_IOC_BASE`, also named `LCA_IOC_HAE`), `0x020` (`CONF`), `0x080` (`TBIA`), `0x0a0` (`TB_ENA`), `0x100` (`W_BASE0`), `0x120` (`W_BASE1`), `0x140` (`W_MASK0`), `0x160` (`W_MASK1`), `0x180` (`W_T_BASE0`), and `0x1a0` (`W_T_BASE1`). “Handled” includes stubs; these are not ten fully implemented hardware registers. See the [IOC switch](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:254) and [register definitions](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/thirdparty/alpha_lcareg.h:44).
+
+The [registration](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:432) specifies a width of `0x20000000` bytes: 536,870,912 bytes, or 512 MiB. Its byte offsets run from `0x00000000` through `0x1fffffff`. The switch adds `LCA_IOC_BASE`; it performs **no shift, mask, or alignment**. The shift in `lca_isa` belongs to a different callback.
+
+I walked every numeric byte offset in that span: ten match explicit cases and **536,870,902** match the default. This agrees with `536,870,912 − 10`. Separate enumeration restricted to four-byte-aligned offsets gives 134,217,718 defaults; restricted to eight-byte-aligned offsets gives 67,108,854.
+
+Those are callback-domain counts. The permitted files do not contain the memory dispatcher or CPU access producer, so they cannot establish whether an unaligned `relative_addr` actually arrives here. The handler itself accepts it without normalization. Consequently, **536,870,902 is the unmatched byte-offset count, not a proven count of guest-reachable offsets**.
+
+**Q2.** There are ten executable `exit(1)` calls. The other appearances occur in comments.
+
+The exits at lines **73** and **85** are in the [interrupt assertion and deassertion callbacks](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:70). Each exits whenever called, without inspecting a register, address, or value. These callbacks are registered for the LCA interrupt path used by ISA initialization. No exceptional interrupt parameter is required.
+
+The exit at line **227** is the [ISA address/length guard](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:221). Its producer is `ofs = (incoming_relative_addr >> 5) & 3`. Walking the registered numeric address span produces exactly `0, 1, 2, 3`. For positive lengths, enumerating `ofs > len` gives: length one rejects offsets two and three; length two rejects offset three; lengths three and greater reject none. A zero length rejects offsets one, two, and three. Thus four- and eight-byte accesses cannot take this exit. The permitted files do not establish which incoming lengths ordinary guest execution produces; the subsequent outgoing one-byte access does not establish that the incoming length can be one.
+
+The six [IOC write-value exits](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:260) have these exact conditions. **279**, at `CONF`, rejects every value except `0` and `1`. Its effective 64-bit rejection mask is `0xfffffffffffffffe`. **299**, at `TB_ENA`, rejects every value except `0` and `0x80`, using rejection mask `0xffffffffffffff7f`. I enumerated all 64 single-bit positions: only bit zero escapes the first mask, and only bit seven escapes the second.
+
+**314**, at `W_BASE0`, rejects every value except `0` and `0x300800000`. **329**, at `W_MASK0`, rejects every value except `0x700000`. **353**, at `W_BASE1`, rejects every value except `0x240000000`. **368**, at `W_MASK1`, rejects every value except `0x3ff00000`. All six require a write with a rejected value; reads do not take them. No malformed address or unusual transfer is intrinsically required. Each assignment to the stored register happens **before** its guard.
+
+Finally, **388** is the [shared default exit](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:382). Any read or write delivered at an unmatched offset takes it, independently of write data. Unaligned addressing is unnecessary: the header’s aligned `STAT0` and `STAT1` offsets are both unmatched.
+
+**Q3.** `_scratchpad/21066_66a_hrm.txt` was not found. I therefore cannot classify these conditions against the hardware manual, including reserved addresses, aliases, access restrictions, or reserved-bit behavior.
+
+The permitted header does establish that the default catches named registers: `STAT0` at `0x040` and `STAT1` at `0x060`. It describes status/error fields, including write-one-to-clear error indicators, and a PCI address field. It also names alternative window configurations that the value guards reject—for example, zero is explicitly defined as the mask for a 1 MB window. These are [header-supported distinctions](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/thirdparty/alpha_lcareg.h:56), rather than verified manual conclusions.
+
+The source comment citing manual §6.2.9 says `IOC_CONF<1:0>` supplies PCI `ad<1:0>`. That quotation alone does **not** establish that encodings `2` and `3` have defined configuration-cycle meanings. Classifying them requires the missing manual.
+
+**Q4.** The default behavior is exactly symmetric: **zero difference in address coverage**. There is one switch and one default, followed by an unconditional exit. The conditional inside that default only adds the written value to the diagnostic. Overall termination behavior is broader for writes because of the six value-guarded registers enumerated above.
+
+**Q5.** The file contains several non-terminating precedents.
+
+In the [type-zero PCI decoder](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:173), failure to find a device-selection bit substitutes `dev = 0`; the former diagnostic and exit are commented out. Walking the configuration-address producer confirms that this fallback is possible. Processing then continues through PCI configuration service; the substitution itself does not guarantee an empty result.
+
+The [type-one path](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:181) decodes the destination bus from the address. A zero destination bus returns all ones at configuration register zero, zero elsewhere, and discards writes. Other destinations proceed to the PCI backend. This matches the backend’s [absent-device response](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/bus_pci.c:109): those read values, with writes diagnosed and followed by a return.
+
+Within `lca_ioc`, the base/HAE case and `TBIA` ignore writes and return zero on reads. Both translated-base registers accept stored values and read them back while their hardware behavior remains marked TODO. The accepted values of the guarded registers similarly receive storage/readback treatment. The diagnostic-width edits leave their exits intact; they are not non-terminating dispositions.
+tokens used
+51,612

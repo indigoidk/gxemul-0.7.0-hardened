@@ -1,0 +1,54 @@
+**Verdict: `exit0` alone cannot prove continued execution or actual refusal. The population is not uniformly unprotected, but a diagnostic companion alone does not make a row safe.**
+
+Membership is defined by the **`want` argument being exactly `"exit0"`**, irrespective of the row’s name. I parsed the calls and checked their arguments against the `row(name, got, want, note)` signatures. This tests the property directly; names containing `surv`, `alive`, or `lv` would give the wrong population. Compound expectations such as `"exit0/0x0"` are outside this status-only class.
+
+I derive **43 call sites across exactly nine files**, agreeing with your count. These are source call sites: loops emit multiple named assertions from some sites.
+
+For Q4, “paired” below means another assertion consumes observations from **the same emulator session**. A requested print without an assertion does not qualify. A separate session exercising the same behavior is additional coverage, identified below.
+
+| File | `exit0` call sites | Unpaired | Paired with a later returned value | Paired with other assertions only |
+|---|---:|---:|---:|---:|
+| [gdrom_decline_probe.py](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gdrom_decline_probe.py:392) | 2 | 0 | 0 | 2 |
+| [pcc2_width_probe.py](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/pcc2_width_probe.py:611) | 11 | 0 | 8 | 3 |
+| [gdrom_default_probe.py](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gdrom_default_probe.py:1272) | 1 | 0 | 1 | 0 |
+| [pcc2_width_witness.py](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/pcc2_width_witness.py:201) | 4 | 0 | 4 | 0 |
+| [gdrom_toclen_probe.py](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gdrom_toclen_probe.py:279) | 5 | 2 | 2 | 1 |
+| [sgi_de_primop_probe.py](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/sgi_de_primop_probe.py:460) | 3 | 0 | 2 | 1 |
+| [sgi_de_width_probe.py](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/sgi_de_width_probe.py:263) | 5 | 0 | 2 | 3 |
+| [sgi_re_unmapped_probe.py](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/sgi_re_unmapped_probe.py:376) | 11 | 0 | 3 | 8 |
+| [sgi_re_width_probe.py](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/sgi_re_width_probe.py:322) | 1 | 1 | 0 | 0 |
+| **Total** | **43** | **3** | **22** | **18** |
+
+Thus the structural split is **3 unpaired versus 40 already paired**. But those 40 divide into **22 with a subsequent value assertion and 18 with other assertions only**. Calling all 40 “already safe” would ratify a property their pairing does not necessarily establish.
+
+Here is what every census site asserts in context, and what accompanies it.
+
+- **GDROM decline:** `fmt surv` and `unk surv` require normal status-zero termination for an unsupported data format and an unknown command, respectively. Their direct companions, `fmt says` and `unk says`, require exactly one matching decline announcement. Those pairs establish announcement plus status, not continued execution. Separate sessions provide stronger observations through `fmt cnt`, `unk cnt`, `fmt event`, and `unk event`; these check count reset and command completion.
+
+- **PCC2 width probe:** `byte rd` covers a legal byte read. The looped `hrd <name>` and `hwr <name>` cover halfword reads and writes at `genctl`, `t2ctl`, `t2icr`, `sccerr`, and `scctx`. `wrd sccerr` and `wwr sccerr` cover word accesses; `hrd ipl` and `hwr ipl` cover IPL halfwords. All these sites have corresponding `liv` or `lv` assertions requiring a subsequent RAM value. The read-side `nod` companions also assert that wide reads are **not declined**—these are not all refusal tests. Some write companions additionally require the decline announcement.
+
+  `op mask` is stronger still: `op mask dcl` checks the announcement and `rb mask` checks that the register remained unchanged. The other three call sites have different guarantees: `latch all lv` accompanies `latch all`’s twelve announcements and `latch all fail`’s zero device-write failures; looped `op <name>` accompanies only `op <name> dcl`; and `acc all lv` accompanies `acc all`’s zero declines for legal byte stores. The operator loop names are `vecbase`, `pscale`, `t1ctl`, `t1icr`, `sccicr`, `sccrx`, and `scsiicr`. Twelve announcements constrain progress through the session, but do not prove return from its final access.
+
+- **GDROM default:** `stale how` checks clean termination of the complete failed-command/no-data DMA session. It does **not** exercise the unsupported-format or unknown-command refusal sites. Its companions are `nodata stale`, `stale says`, `stale idle`, and `stale quiet`. The substantive distinctions are the DMA idle value, the expected no-data announcement, and absence of either unintended command/format decline. The “stale” name should not be read as proof that a stale nonzero length was established; the file explicitly corrects that interpretation.
+
+- **PCC2 witness:** `byte rd`, `half rd`, `word rd`, and `half wr` each have a matching `<name> liv` row requiring the subsequent RAM value. All four therefore distinguish returning from the access from terminating there with status zero. They establish continuation; that alone does not establish every device-side refusal effect.
+
+- **GDROM TOC length:** `ok surv` covers acceptance of the legal length and shares its session with `ok data0` and `ok data1`, which assert actual TOC data. `bad surv` covers a short request and has `bad says`, requiring a decline announcement. `zero surv` and `over surv` have **no same-session companions**, accounting for two unpaired sites. However, their behaviors already have separate `zero cond` and `over cond` sessions checking the refused state; the short case likewise has `bad cond`, plus count/event checks. `latch surv` has both `latch once` and `latch cond`: the latter checks the state after the later refusal. The two unpaired TOC sites therefore do **not** imply two behaviors lacking a decline oracle.
+
+- **SGI DE primitive operation:** The looped `<name> surv` produces `pt surv` and `tri surv`; each has `<name> live` and `<name> decl`. `reset surv` similarly has `reset live` and `reset decl`. These pairs establish both announcement and subsequent execution. **`rd surv` is the exception:** it has only `rd decl`. Its session requests a register print, but no row asserts that value. Consequently, the introductory claim that every survival row has a positive post-draw companion is false for [this read case](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/sgi_de_primop_probe.py:501).
+
+- **SGI DE width:** `lo_alive` and `lo_alive2` cover narrow writes, paired with `lo_kill`/`lo_decl` and their `2` counterparts: old kill text absent, decline text present. `hi_alive` has `hi_kill` and `hi_draw`, requiring no old kill or drawing diagnostic for the declined upper-half write. These are useful output constraints, but premature status-zero termination can satisfy them. `hi_rd_alive` additionally has `hi_rd_sent`, asserting the returned zero, alongside `hi_rd_draw`. `tail_acc_h` concerns an **accepted width reaching the drawing path**, followed by primitive-operation refusal; `tail_acc` checks that drawing was reached and `tail_acc_x` checks subsequent execution.
+
+- **SGI RE unmapped:** `rd surv`, `rd narrow surv`, and `clip rd surv` have the returned-value companions `rd sent`, `rd narrow sent`, and `clip rd sent`. These distinguish a completed read from termination at it. The remaining sites—`wr surv`, `wr narrow surv`, `clip surv`, `clip nar surv`, `clip rdn surv`, `cliphi rd surv`, `cliphi wr surv`, and `wr zero surv`—have their corresponding `decl` companions, with `wr kill` additionally accompanying `wr surv`. These cover direction, width, component, position, and zero-valued writes, but their direct pairs lack a subsequent value assertion. In particular, `clip rdn surv` and `cliphi rd surv` request prints whose values are never asserted. Separately, `wr then live` and `clip wr live` provide positive continuation checks for writes in the two components.
+
+- **SGI RE width:** The lone census call site expands to `<site> sw surv` for `tlb_a`, `tlb_b`, `tlb_c`, `tex`, `linear_a`, and `linear_b`. Each asks only whether its declined word-write session ended with status zero. This is the third unpaired call site. `<site> sw lat1` belongs to another session; the read-side `<site> lw surv` already combines status and returned value in its expectation, but observes a different access direction.
+
+For Q2, I take the established result as given: output and PTY observations are available separately, while `exit0` comes from exit status alone.
+
+For Q3, **capturing output makes discrimination possible; merely capturing it does not perform that discrimination**. An unexpected diagnostic can be distinguished by an assertion about its presence or absence. If the expected decline diagnostic is retained, however, matching or counting it cannot distinguish the two executions.
+
+There are also two different failures in your concern. **Announcement followed by premature `exit(0)`** is distinguished by positive evidence that execution completed the access or progressed beyond it. **Announcement followed by failure to refuse, with eventual normal exit**, requires an observable refusal effect—such as preserved register state or the expected device-condition state. A subsequent RAM value establishes continuation but can remain correct after an improperly accepted device write.
+
+Accordingly, the **22 value-paired sites already address premature termination at their tested access**. That is narrower than proving correct refusal. The other pairings can catch meaningful faults, but their existence alone does not justify “needing nothing.” Nor are the bare checks literally incapable of failing: nonzero exits and abnormal termination can fail them. Their weakness is accepting distinct behaviors that share status zero.
+
+For Q5, **`pcc2_width_witness.py` is a clean, consistent precedent for the termination ambiguity**: every census row has a positive continuation companion, and missing output is represented as `absent`, not the expected value. **`gdrom_toclen_probe.py` is the stronger precedent for actual refusal**: its `bad cond`, `zero cond`, `over cond`, and `latch cond` assertions observe refusal state, including the later latched refusal. Those existing idioms address the two different ambiguities without treating survival or an announcement as proof of refusal.

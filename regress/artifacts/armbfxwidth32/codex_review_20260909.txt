@@ -1,0 +1,41 @@
+**VERDICT: The supplied diff changes UBFX/SBFX only; BFI is unchanged. It repairs observable width-32 behavior as well as definedness, and the preserved mutant does not establish coverage of every predicate.**
+
+The checkout differs from the supplied text: its handler comments are revised, and its row list adds `s w32 pc` and `s w31`. Those additions must be kept separate when adjudicating the inlined diff.
+
+**Q1–Q2.** The settled UBFX/SBFX width domain is 1–32. Neither handler has an existing conditional guard before mask construction. In particular, neither locally checks that the field ends within the register.
+
+For “weakening,” enlarging a predicate’s true set must be distinguished from weakening the protection it supplies. The mask predicate selects the full-mask alternative when true.
+
+- **UBFX full-width predicate:** The fix adds “width equals 32.” Its true set is {32}; the shift executes for widths 1–31. No existing predicate dominates it within the handler. Relaxing equality to “at least 32” is a minimal comparator weakening, but changes nothing on this domain. The nearest boundary relaxation with a reachable effect also admits width 31 to the full-mask alternative. The supplied `w31` row would distinguish that: its source retains the unwanted highest bit. **UBFX full-width selection is an unmeasured weakening cell.**
+
+- **SBFX full-width predicate:** The fix adds the same predicate, with the same domain and absence of an enclosing guard. The same boundary relaxation would escape the supplied row list, which has no SBFX width-31 row. The checkout’s additional `s w31` row would distinguish it. **SBFX full-width selection is a separate unmeasured weakening cell.**
+
+- **SBFX width predicate:** “Width less than 32” already existed. The fix moves it ahead of the sign-bit test and puts the sign-bit shift inside its short-circuited right operand. Previously, that shift was an unconditional preceding statement; the sign-bit test then controlled whether the width comparison was evaluated. Afterwards, the width predicate controls evaluation of both the shift and the sign-bit test. Its nearest boundary weakening admits width 32. With the remaining fix intact, that produces no guest-value difference: the unsigned shift is defined, and extending with the complement of the full mask adds zero. **SBFX’s width restriction on sign-bit evaluation is an unmeasured cell.**
+
+- **SBFX sign-bit predicate:** This remains the requirement that the extracted field’s highest bit be set. Its computation becomes inline and unsigned; its evaluation is now dominated by the width predicate. The extension body requires both predicates. Dropping the sign-bit requirement is the minimal conjunct deletion: clear-sign fields now also receive extension. The supplied `s clear` row distinguishes this, expecting `0x7` where unconditional extension below width 32 would produce `0xfffffff7`. **Relaxation of the SBFX sign-bit requirement is an unmeasured cell.**
+
+The earlier mask ternary rejoins before the SBFX sign test; neither ternary arm encloses that test. Making width 32 reach mask construction’s shift would weaken the *protection*, while shrinking the full-mask predicate’s true set. The supplied `w32` and `s w32` rows distinguish that failure under the stipulated host lowering.
+
+**`M_nosext` does not establish those weakening measurements.** Its mutation and output are not included in the permitted reading. If its name denotes suppressed sign extension, it tests the opposite direction from dropping the sign-bit restriction: `s mid` requires extension, whereas `s clear` forbids it. The filename cannot authenticate its exact edit. Thus all four weakening cells named above remain unmeasured on the supplied evidence; a row’s predicted discrimination is not a preserved mutant measurement.
+
+The unsigned-literal changes are additional repairs, **not predicates**. The two mask unsignedness changes and the restoration of an unconditional signed sign-bit shift also lack measured mutants in this record. Changing only the inline sign-bit literal back to signed would remain defined under the retained width restriction.
+
+BFI contributes no changed predicate. Its [handler](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c:1450) still constructs its mask unconditionally. The manual’s requirement that the most-significant endpoint be at least the least-significant endpoint appears at [ddi0406.txt:18066](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ddi0406.txt:18066); that architectural condition is not a guard in this handler.
+
+**Q3.** A legal width-32 extraction necessarily starts at bit zero. The manual limits width accordingly and specifies copying the selected field with zero extension for UBFX. See [line 36789](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ddi0406.txt:36789) and [line 36795](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ddi0406.txt:36795).
+
+The fix selects the all-ones mask. Consequently, legal width-32 UBFX returns the whole source: `0x89abcdef` in `w32`. SBFX likewise preserves all 32 bits, pinned by `s w32`, consistent with the manual’s [sign-extension operation at line 30054](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ddi0406.txt:30054). For a decoded width-32 field with a nonzero starting bit, the handlers instead return the source shifted right; that field is outside the manual’s valid range.
+
+Under the stipulated old count-masked host lowering, the shift count 32 becomes zero, mask construction yields zero, and the result is zero. That is a host-behavior explanation, not a defined C result.
+
+**Therefore this is a behavior correction as well as a definedness repair.** The diff’s comments explicitly acknowledge it: “only one was returning a wrong value on this host.” The later comment claiming unchanged guest values concerns the isolated sign-extension rewrite, not the complete mask repair.
+
+**Q4. No—the supplied detector header explicitly disclaims that coverage:**
+
+> “Two one-line regressions re-open real undefined behaviour and score FULL MARKS, and no guest-value row can kill either. Disclosed, not covered:”
+
+It specifically identifies the mask’s `1U` → `1` regression and says:
+
+> “these two are unkillable BY THIS PROBE, not unkillable in principle.”
+
+The UBSAN paragraph describes a separate differential diagnostic lane, filed as `[[ubsanshiftlane]]`. It does not claim that the shipped guest-value detector performs that measurement.

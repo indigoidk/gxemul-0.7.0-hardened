@@ -159,7 +159,7 @@ MANIFEST = {
     "alpha_harness_probe.py":     (CLASS_WITNESS,  "alphaswpctxptbr: swpctx overwrites apcb_ptbr with the flags word -- HEAD 7/10, fix 10/10"),
     "lca_confwidth_probe.py":     (CLASS_WITNESS,  "lcaconfwidth: the IOC_CONF kill names a value the guard accepts -- HEAD 4/6, fix 6/6"),
     "lca_confbus_probe.py":       (CLASS_WITNESS,  "lcaconfbus1kill: an ACCEPTED stq 0x1 to IOC_CONF arms the bus!=0 kill in lca_pci_conf -- HEAD 3/4, the RED row is the defect; post-fix green PENDING"),
-    "lca_irqstub_probe.py":       (CLASS_WITNESS,  "lcairqstubkill: ONE guest store to the 8042 command port reaches lca_interrupt_assert and ends the host -- HEAD 3/4, the RED row is the defect; post-fix green PENDING"),
+    "lca_irqstub_probe.py":       (CLASS_WITNESS,  "lcairqstubkill: ONE guest store to the 8042 command port reaches lca_interrupt_assert and ends the host -- HEAD 3/6, the RED row is the defect; post-fix green MEASURED 11/11 (#516, killtable_20260909).  *** STILL CLASS_WITNESS, and that is now a JUDGMENT rather than a description: #516 grew it from 6 rows to 11, five of which exist only to defend the repair, so it is detector-shaped and NO GATE RUNS IT.  Kept as WITNESS because it is the witness of record in the ledger, and re-classing it would demand a gate home this round has not designed.  FILED to wiringcliff, which is the row for exactly that question -- not left as a silent third state."),
     "pcc2_c040_probe.py":         (CLASS_WITNESS,  "pcc2c040kill: ONE legal guest st.b of 0x04 to PCC2 GENCTL runs reassert_interrupts() in the same access and ends the host -- HEAD 3/4, the RED row is the defect; post-fix green PENDING"),
     "alpha_pfnoffset_probe.py":   (CLASS_WITNESS,  "alphapfnoffset: the page-table walk drops the within-page offset -- HEAD 5/7, fix 7/7"),
     #  A SECOND, INDEPENDENT path to the same two stubs, through a DIFFERENT device.  The row's
@@ -289,6 +289,42 @@ MANIFEST = {
         (CLASS_RESEARCH, "lcaconfbus1kill (#515) table 4: the same 18-row instrument for the targeted run -- grok's M13_regconj plus the 18-row PRE-FIX baseline, so the round's before/after uses one instrument"),
     "artifacts/lcairqstubkill/lcairq_probe.asrun.py":
         (CLASS_RESEARCH, "lcairqstubkill: the as-run witness ATTEMPT, preserved as evidence -- it did NOT fire, and it is not a detector"),
+    #  #516 (2026-09-09): every instrument and mutator preserved beside the lcairqstubkill kill tables.
+    #  Seventeen files, each described from its own header; the gate refused the commit until they had a class.
+    "artifacts/lcairqstubkill/killtable_20260909/frozen_lca_irqstub_probe.py":
+        (CLASS_RESEARCH, "lcairqstubkill (#516) tables D/E: the frozen 11-row instrument (the measuring seat's probe5 plus the loop's `kbc attrib' widening) that TABLE_D.out and TABLE_E.out measured -- superseded by table G once the twelfth row (`uart live') landed; preserved as evidence"),
+    "artifacts/lcairqstubkill/killtable_20260909/frozen_mut516d.py":
+        (CLASS_RESEARCH, "lcairqstubkill (#516) tables D/E: the frozen mutant-apply script (one named mutant per run by find/replace; MUTANT-TEXT-NOT-FOUND is a FAIL, so each find-text is a presence pin)"),
+    "artifacts/lcairqstubkill/killtable_20260909/G/frozen_lca_irqstub_probe.py":
+        (CLASS_RESEARCH, "lcairqstubkill (#516) TABLE G: the frozen 12-row SHIPPED instrument, byte-identical to regress/lca_irqstub_probe.py at commit time -- base 12/12, 14 of 16 cells killed, 2 measured equivalent (TABLE_G.out)"),
+    "artifacts/lcairqstubkill/killtable_20260909/G/frozen_mut516d.py":
+        (CLASS_RESEARCH, "lcairqstubkill (#516) TABLE G: the frozen mutant-apply script for the 2 sites x 8 edits enumeration plus the composites"),
+    "artifacts/lcairqstubkill/killtable_20260909/H/frozen_lca_irqstub_probe.py":
+        (CLASS_RESEARCH, "lcairqstubkill (#516) TABLE H: the same instrument, cmp-identical to G's frozen copy (the ONE-INSTRUMENT check in kill516h.sh), for the two assignment-bit-swap cells -- M14 8/12, M15 11/12 (TABLE_H.out)"),
+    "artifacts/lcairqstubkill/killtable_20260909/H/frozen_mut516h.py":
+        (CLASS_RESEARCH, "lcairqstubkill (#516) TABLE H: the frozen mutant-apply script for M14_assert_assignswap and M15_deassert_assignswap"),
+    "artifacts/lcairqstubkill/killtable_opus_20260909/lca_irqstub_probe2.py":
+        (CLASS_RESEARCH, "lcairqstubkill (#516) measuring seat, instrument 2 of its sequence: eight rows whose `irq honest' matched a bare `Alpha has no', present in BOTH announce texts -- M5_assertdishonest escaped it 8/8; the measured instance of the repair-reproduces-the-breach shape"),
+    "artifacts/lcairqstubkill/killtable_opus_20260909/lca_irqstub_probe3.py":
+        (CLASS_RESEARCH, "lcairqstubkill (#516) measuring seat, instrument 3 of its sequence (eight rows): intermediate, superseded by probe5; preserved so the adopted instrument's derivation can be audited"),
+    "artifacts/lcairqstubkill/killtable_opus_20260909/lca_irqstub_probe4.py":
+        (CLASS_RESEARCH, "lcairqstubkill (#516) measuring seat, instrument 4 of its sequence (nine rows): intermediate, superseded by probe5; preserved as evidence"),
+    "artifacts/lcairqstubkill/killtable_opus_20260909/lca_irqstub_probe5.py":
+        (CLASS_RESEARCH, "lcairqstubkill (#516) measuring seat, the 11-row instrument ADOPTED as the deliverable (drain sig, deassert ann/honest, assert once/deassert once, `irq honest' anchored to its own site); the shipped probe is this plus three corrections and the twelfth row"),
+    "artifacts/lcairqstubkill/killtable_opus_20260909b/frozen_shipped_probe.py":
+        (CLASS_RESEARCH, "lcairqstubkill (#516) pass-2 repair, measuring seat: the 11-row probe as it stood at that moment, frozen for the M12 reachability table"),
+    "artifacts/lcairqstubkill/killtable_opus_20260909b/frozen_narrow_operand_probe.py":
+        (CLASS_RESEARCH, "lcairqstubkill (#516) pass-2 repair, measuring seat: a frozen 11-row variant used by its Q3 comparison (the `kbc attrib' operand question, mut516r.py); evidence, not a detector"),
+    "artifacts/lcairqstubkill/killtable_opus_20260909b/lca_assertassert_probe.py":
+        (CLASS_RESEARCH, "lcairqstubkill (#516) pass-2 repair, measuring seat: six-row EDGE TRACE showing a second ASSERT edge with no intervening deassert is reachable on unmodified alphabook1 by ordinary stepped guest stores (the ns16550 on IRQ 4) -- the reachability measurement behind M12's L2 grading"),
+    "artifacts/lcairqstubkill/killtable_opus_20260909b/lca_irqstub_probe_REPAIR.py":
+        (CLASS_RESEARCH, "lcairqstubkill (#516) pass-2 repair, measuring seat: the PROPOSED 12-row repair (a second assert edge from a different ISA line between [B] and [C]); the shipped twelfth row `uart live' is the loop's implementation of it"),
+    "artifacts/lcairqstubkill/killtable_opus_20260909b/mut516q.py":
+        (CLASS_RESEARCH, "lcairqstubkill (#516) pass-2 repair, measuring seat: mutator for the M12 family (assert-guard latch-bit swap); scratch clone only"),
+    "artifacts/lcairqstubkill/killtable_opus_20260909b/mut516r.py":
+        (CLASS_RESEARCH, "lcairqstubkill (#516) pass-2 repair, measuring seat: the Q3 mutators (the `kbc attrib' widening question); scratch clone only"),
+    "artifacts/lcairqstubkill/killtable_opus_20260909b/mut516s.py":
+        (CLASS_RESEARCH, "lcairqstubkill (#516) pass-2 repair, measuring seat: re-builds of the round's own mutants so the proposed repair probe could be shown to lose none of their kills; scratch clone only"),
     "artifacts/lunaabsentcpu/killtable/fix_lunaabs.py":
         (CLASS_RESEARCH, "lunaabsentcpu (#503) table 1: the frozen fix script the baseline was derived from, preserved as evidence"),
     "artifacts/lunaabsentcpu/killtable/luna_absentcpu_probe.frozen.py":

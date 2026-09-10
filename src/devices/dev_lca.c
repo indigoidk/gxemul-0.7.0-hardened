@@ -48,8 +48,15 @@
 #define	LCA_ISA_MEMBASE	(LCA_PCI_SIO + 0x18000000)
 
 
+/*  #516: warn-once latch bits, one per stub.  PER-INSTANCE, reached through
+    `interrupt->extra' -- see the comment on lca_interrupt_assert().  */
+#define	LCA_W_IRQ_ASSERT	0	/*  #516  */
+#define	LCA_W_IRQ_DEASSERT	1	/*  #516  */
+
 struct lca_data {
 	struct pci_data		*pci_data;
+
+	unsigned int		warned;		/*  #516  */
 
 	uint64_t		ioc_conf;
 	uint64_t		tlb_enable;
@@ -69,8 +76,45 @@ struct lca_data {
  */
 void lca_interrupt_assert(struct interrupt *interrupt)
 {
-	fatal("lca_interrupt_assert: TODO\n");
-	exit(1);
+	struct lca_data *d = (struct lca_data *) interrupt->extra;	/*  #516  */
+
+	/*  #516: this was `fatal(); exit(1)' with NO GUARD -- not a refused value,
+	    an unimplemented path -- and DEVINIT below installs it as the ISA
+	    interrupt callback that `bus_isa_init' wires to BUS_ISA_IDE0|IDE1.  So an
+	    ordinary ISA interrupt ended the host, needing no unusual value anywhere.
+	    MEASURED on two independent guest paths: one store to the 8042 command
+	    port (regress/lca_irqstub_probe.py, 3/4) and three byte stores to the
+	    ns16550 on IRQ 4 (regress/lca_irqstub_uart_probe.py, 2/4).
+
+	    *** THE STUB IS NOT REPLACED BY A FORWARD, BECAUSE A FORWARD WOULD BE A
+	    NO-OP.  ALPHA HAS NO INTERRUPT DELIVERY AT ALL. ***  `cd.alpha.irq_asserted'
+	    is written by `cpu_alpha.c' and read NOWHERE.  `cpu_dyntrans.c' turns a
+	    pending interrupt into a delivered one for FIVE architectures -- ARM and
+	    M88K and PPC through their own `irq_asserted', MIPS through the COP0
+	    exception model, and SH through `int_to_assert' -- and ALPHA IS ABSENT
+	    FROM THAT LIST.  (An earlier draft of this comment said "ARM, M88K and
+	    PPC only": that enumeration was made by grepping for `irq_asserted', which
+	    is a CORRELATE of delivering rather than the property, and it missed the
+	    two architectures that deliver by another mechanism.  The Alpha conclusion
+	    is unchanged and is strengthened -- it is the outlier among five, not
+	    three.)  Calling `cpu_interrupt()' here would set
+	    a field nothing consumes.  Implementing delivery is a SUBSYSTEM -- the
+	    dyntrans dispatch, the PALcode entry and the IPL check -- and is its own
+	    round, not this one.
+
+	    So the disposition is DECLINE plus a bounded announce, and what it buys is
+	    stated narrowly on purpose: THE HOST STOPS DYING.  Interrupts do not start
+	    working; they were never delivered on this architecture and still are not.
+
+	    The latch is PER-INSTANCE (`interrupt->extra'), not function-static: a
+	    function-static bit would let one guest access to one device instance
+	    silence the diagnostic for every other instance, which is a class already
+	    filed against this tree.  */
+	if (d != NULL && !(d->warned & (1u << LCA_W_IRQ_ASSERT))) {	/*  #516  */
+		d->warned |= 1u << LCA_W_IRQ_ASSERT;
+		fatal("[ lca: ISA interrupt assert not implemented (Alpha has no "
+		    "interrupt delivery); ignored  (once) ]\n");
+	}
 }
 
 
@@ -81,8 +125,17 @@ void lca_interrupt_assert(struct interrupt *interrupt)
  */
 void lca_interrupt_deassert(struct interrupt *interrupt)
 {
-	fatal("lca_interrupt_deassert: TODO\n");
-	exit(1);
+	struct lca_data *d = (struct lca_data *) interrupt->extra;	/*  #516  */
+
+	/*  #516: the sibling of lca_interrupt_assert() above, same reasoning.  A
+	    SEPARATE latch bit, so the two are distinguishable: a driver normally
+	    reaches both within one interrupt cycle, and one shared bit would report
+	    whichever arrived first and hide the other entirely.  */
+	if (d != NULL && !(d->warned & (1u << LCA_W_IRQ_DEASSERT))) {	/*  #516  */
+		d->warned |= 1u << LCA_W_IRQ_DEASSERT;
+		fatal("[ lca: ISA interrupt deassert not implemented (Alpha has no "
+		    "interrupt delivery); ignored  (once) ]\n");
+	}
 }
 
 

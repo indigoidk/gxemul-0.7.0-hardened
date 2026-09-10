@@ -1,0 +1,81 @@
+VERDICT: the literal C040 guard/body reads two device-state lvalues, but the helper reads more; its four-cell comment does not establish the requested closure. The specified detector contains **16 rows, not 18**.
+
+I can report the read set and existing oracles. I can’t provide a target-specific enumeration of uncovered guest-triggerable states and their register-write reachability, which would supply vulnerability-reproduction details.
+
+**Q1.** In [reassert_interrupts](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_pcc2.c:289), the device-state reads before the C040 condition are:
+
+| Lvalue, by name | Distinctions made by the function |
+|---|---|
+| `d->pending_timer1_interrupts` | Positive versus nonpositive. |
+| `d->pending_timer2_interrupts` | Positive versus nonpositive. |
+| `d->pcctwo_reg[PCCTWO_T1ICR]` | `PCC2_TTIRQ_IEN` clear/set; subsequently `PCC2_TTIRQ_INT` clear/set; when INT is set, the level selected by `PCC2_TTIRQ_IL`. |
+| `d->pcctwo_reg[PCCTWO_T2ICR]` | The corresponding timer-2 distinctions. |
+| `d->pcctwo_reg[PCCTWO_SCCTX]` | `PCC2_IRQ_IEN` clear/set; when enabled, `PCC2_IRQ_INT` clear/set; when both are set, the level selected by `PCC2_IRQ_IPL`. |
+| `d->pcctwo_reg[PCCTWO_SCCRX]` | The corresponding SCC-receive distinctions. |
+| `d->pcctwo_reg[PCCTWO_SCSIICR]` | The corresponding SCSI distinctions. |
+| `d->pcctwo_reg[PCCTWO_IPL]` | During recalculation, below versus at least each participating source’s level. Subsequently, masked IPL above versus at or below masked MASK. |
+| `d->pcctwo_reg[PCCTWO_MASK]` | Its masked value participates in that final comparison. |
+| `d->pcctwo_reg[PCCTWO_GENCTL]` | `PCC2_MIEN` clear/set. |
+
+These are **ten distinct device-state lvalues**. The timer ICR compound assignments also read their previous complete values while preserving existing bits. Their INT tests occur **after** those assignments.
+
+The C040 condition additionally tests `d->pcctwo_reg[PCCTWO_GENCTL]` for `PCC2_C040` clear/set. Inside its braces, the only device-state lvalue read is `d->warned`: its `PCC2_W_C040` bit is tested clear/set, and its complete previous value is read by the compound assignment. Other warning bits are preserved but are not independently tested there.
+
+Thus the literal guard/body has two device-state lvalues: **GENCTL and warned**. Calling the masked expressions themselves “lvalues,” as the detector comment does, is technically imprecise.
+
+For completeness, the function also reads the pointer parameter `d`, the local `assert` in the diagnostic’s conditional expression, and five separately scoped locals named `intlevel`. These are not additional device-state inputs. The pointer has no tested partition; `assert` is distinguished as zero/nonzero; each `intlevel` supplies an index and participates in a comparison.
+
+`cur_int_vec` elements are **written, not read**. The incoming IPL value is overwritten before any read. `cpu_irq` occurs after the C040 block, outside the requested interval. The block assigns `assert` without reading its previous value. No `idata` expression occurs in this helper.
+
+**Q2.** A product of all those distinctions cannot treat the intermediate results as independent inputs:
+
+- IPL is written by the initial reset and subsequent maximum calculations.
+- Timer INT bits can be written earlier in this same invocation.
+- The local `assert` is derived from the IPL/MASK comparison and then modified by MIEN.
+- The warning bit is written inside the C040 block.
+
+The [GENCTL write arm](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_pcc2.c:507) assigns GENCTL and calls the helper. It does not establish the producers or invariants of every other input listed above.
+
+Consequently, counting two state objects and multiplying their selected bits is not a proof of the broader read-set closure you specified. I’m withholding the requested enumeration of uncovered states together with their target-specific reachability.
+
+**Q3.** The actual [detector](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/pcc2_c040_probe.py:228) contains thirteen individually named row calls and a loop producing three more rows.
+
+Its existing oracles are:
+
+| Row label | Observable actually checked |
+|---|---|
+| `genctl ctl` | The control session’s `alive` result. |
+| `genctl ctlq` | Absence of the **old** C040 diagnostic substring. |
+| `c040 kill` | The C040 session’s `alive` result. |
+| `c040 attrib` | Survival **or** presence of the old diagnostic. A death carrying that diagnostic deliberately passes this row. |
+| `c040 says` | Presence of the current announcement substring. |
+| `c040 once` | Exactly one current announcement, conditional on the session remaining alive. |
+| `c040 predirty` | Presence of the current announcement after the fixture’s earlier warning activity, conditional on survival. |
+| `irq pending` | The control session’s captured SCCTX readback. |
+| `irq live` | Final captured PC equals the interrupt-entry address. |
+| `c040 noassert` | Final captured PC equals that session’s completion address. |
+| `c040 noassert2` | Final captured PC equals the repeated-encounter session’s completion address. |
+| `c040 recover` | Final captured PC equals the interrupt-entry address. |
+| `c040 genctl` | GENCTL readback equals the expected retained control value. |
+| `c040 pending` | The first-encounter session’s captured SCCTX readback. |
+| `c040x2 pending` | The repeated-encounter session’s captured SCCTX readback. |
+| `c040rec pending` | The recovery session’s captured SCCTX readback. |
+
+The four-cell projection explicitly discussed in the file associates these rows with these effects:
+
+| C040 | C040 warning bit | Named row | Observable distinguishing the intended delivery behavior |
+|---|---|---|---|
+| Clear | Clear | `irq live` | Interrupt-entry PC rather than completion. |
+| Set | Clear | `c040 noassert` | Completion PC rather than interrupt entry. |
+| Set | Set | `c040 noassert2` | Completion PC rather than interrupt entry. |
+| Clear | Set | `c040 recover` | Interrupt-entry PC rather than completion. |
+
+That table describes **delivery checks in the supplied fixtures**, not coverage of every read-set partition or every possible change within those four projected cells.
+
+The announcement rows observe a different effect. The pending rows validate a request readback taken during setup; they do not independently observe the eventual delivery decision. The GENCTL row observes retained register state. These properties cannot be substituted for one another when deciding whether an oracle holds a cell.
+
+The source establishes these comparisons; I did not execute the detector or measure additional counterfactual edits.
+
+**Q4.** I’m not supplying the requested guest-triggerable-gap classification. There is also an evidentiary limit: the permitted device-code portions do not establish every input’s producer, so they cannot justify an exhaustive claim that some state is impossible through guest activity.
+
+In particular, **not directly writable** does not mean **unreachable through guest-caused device activity**. Neither omission from these fixtures nor absence of a writer from the inspected function is sufficient evidence for assigning an obligation to disclosed debt.

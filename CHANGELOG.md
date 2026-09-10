@@ -1,3 +1,220 @@
+# `#516` lcairqstubkill: every ISA interrupt on alphabook1 routed into a function whose whole body was fatal() + exit(1)
+
+**THE DEFECT.** `dev_lca.c` registered the machine's two interrupt handlers as bare kills:
+
+    void lca_interrupt_assert(struct interrupt *interrupt)
+    { fatal("lca_interrupt_assert: TODO\n"); exit(1); }        /*  and _deassert, identically  */
+
+`DEVINIT(lca)` registers them for `"<machine>.lca"` and hands that same path to `bus_isa_init`, so
+every ISA interrupt -- 8042, UART, IDE, PIT -- ended the host process. **No guard, no inspection of the
+argument, no unusual value anywhere**: a store of 0xAA (the standard 8042 self-test command) to ISA
+0x64 is four guest instructions, and the host is gone. It was WITNESSED at rung 3 before any edit
+(`regress/lca_irqstub_probe.py`, 7c2f8e4, 3/4 with the RED row being the defect) and separately
+through the ns16550 on IRQ 4 (`regress/lca_irqstub_uart_probe.py`).
+
+**THE FIX IS OPTION-SET MEMBER 3 AT BOTH STUBS: DECLINE + a bounded, PER-INSTANCE latched announce.**
+
+    struct lca_data *d = (struct lca_data *) interrupt->extra;
+    if (d != NULL && !(d->warned & (1u << LCA_W_IRQ_ASSERT))) {
+            d->warned |= 1u << LCA_W_IRQ_ASSERT;
+            fatal("[ lca: ISA interrupt assert not implemented (Alpha has no "
+                "interrupt delivery); ignored  (once) ]\n");
+    }
+
+with a SEPARATE latch bit for the deassert stub, so the two are distinguishable. Per-instance
+(`interrupt->extra`), not function-static: a function-static bit would let one guest access to one
+device instance silence the diagnostic for every other, a class already filed against this tree.
+
+**WHY DECLINE AND NOT IMPLEMENT, stated narrowly: THE HOST STOPS DYING. Interrupts do not start
+working -- they were never delivered on this architecture and still are not.** `cpu_dyntrans.c`
+delivers pending interrupts for FIVE architectures (ARM, M88K and PPC via `irq_asserted`; MIPS via
+COP0; SH via `int_to_assert`) and **has no Alpha arm**; `cd.alpha.irq_asserted` is written at
+`cpu_alpha.c:218,:223` and read nowhere. So forwarding would set a field nothing consumes, and the
+decline drops nothing that ever worked. (An earlier draft of this comment said "three architectures";
+the grok seat counted five. I had grepped `irq_asserted` -- a CORRELATE -- and Alpha's absence is
+unchanged and strengthened.) Implementing delivery is a SUBSYSTEM -- dyntrans dispatch, the PALcode
+entry, the IPL check -- and is filed as **`alphaintdeliver`** so the missing feature is TRACKED rather
+than buried inside a fixed kill. *That filing is what makes the decline honest: "silently missing"
+becomes "explicitly owed".*
+
+**Member 5 (FAULT) was NOT available.** `memory_rw.c`'s failed-device branch dispatches an exception
+for MIPS and M88K only; Alpha, ARM, i960, PowerPC, RISC-V and SH return `MEMORY_ACCESS_FAILED` without
+one. Recorded because the option-set rule says check availability on THIS CPU before choosing.
+
+## The option set had a member the packet did not name: HALT THE GUEST
+
+The disposition chose DECLINE + announce. A further disposition was available and is recorded here
+because the design packet never weighed it (the codex audit of that packet caught the omission): STOP
+THE GUEST CLEANLY -- `cpu->running = 0` rather than `exit(1)`, the graceful-halt shape the tree
+already uses. **REJECTED, and the reason is the same fact that makes this kill severe**: the stub is
+entered on ORDINARY ISA interrupts, not on a halt request. Halting on the first one makes
+`alphabook1` unbootable -- every keyboard or disk interrupt would stop the machine -- which is
+strictly worse than declining. So STOP-GUEST is the right shape for a halt request and the wrong shape
+for an unimplemented delivery path, and DECLINE + announce is chosen because the whole claim of this
+round is that the host survives AND the guest keeps running.
+
+**The scope line, so "two kills removed" is not read as "interrupts work":** this round removes two of
+`dev_lca.c`'s active `exit(1)` calls (the interrupt callbacks) by DECLINING; it does NOT implement
+Alpha interrupt delivery, which is `alphaintdeliver` and is the subsystem the decline sits in front of.
+
+## The witness went red first, then the detector was rebuilt THREE TIMES under the floor
+
+    PRE-FIX   lca_irqstub_probe.py 3/6    lca_irqstub_uart_probe.py 2/5   fix_20260908/
+    POST-FIX  6/6                         5/5                             same scripts
+
+**THE FIRST DETECTOR (six rows) PASSED CLAUSES (a) AND (c) AND WAS BLIND AT ONE OF THE TWO FIXED
+SITES.** The pass-1 seat (grok) had said the deassert stub was unreachable by either witness --
+`isa_interrupt_common` takes one edge per call, and neither probe let the PIC aggregate fall -- and the
+round disclosed that under clause (e). **Both Anthropic seats overturned it on 2026-09-09, and they were
+right**: clause (e) is for cells that are UNREACHABLE or need a capability the tree lacks, and the
+deassert edge needed ONE GUEST LOAD. Measured against the six-row detector
+(`killtable_opus_20260909/*_shipped.raw`):
+
+    M2d_deassert    verbatim exit(1) reinstated at the DEASSERT site alone     6/6  CLEAN SWEEP
+    M3_deassertoff  the deassert announce disabled                            6/6  CLEAN SWEEP
+    M4_sharedlatch  the two latch bits collapsed onto one                     6/6  CLEAN SWEEP
+
+M2d is the sharp form of floor clause (b) -- *at EVERY fixed site* -- and M4 is a clause-(d) breach
+against the fix's OWN comment ("a SEPARATE latch bit, so the two are distinguishable"). The chain was
+then verified in `dev_pckbc.c` by reading, not taken from any seat: `case 0xaa:` queues 0x55 and does
+NOT touch `d->state[]`, so a DATA read takes the `default:` arm and `pckbc_get_code` drains it;
+`pckbc_reassert_interrupts` sits on the common tail every access reaches; the empty queue takes the
+else-arm and deasserts. Every link synchronous inside the guest load.
+
+**THE SECOND DETECTOR (eleven rows) CLOSED THOSE THREE AND WAS BUILT BY THE MEASURING SEAT**, and it
+is adopted here as measured rather than re-implemented -- because the main loop's own staged version
+had a defect the seat measured in its OWN first attempt: `irq honest` matched a bare `"Alpha has no"`,
+and BOTH announce texts contain that string (`:115`, `:136`), so adding a deassert row silently turned a
+single-site row into a DISJUNCTION over two sites, and `M5_assertdishonest` swept 8/8. Anchoring each
+honesty row to its own site's full text restores the kill. *The original breach reproduced inside its
+own repair -- `#499`'s shape.* The seat's instrument drains into the DEAD LPT pointer so the port
+pointer survives, which buys a second full assert/deassert cycle ([D]) for free and closes the LATCH
+debt the round had also disclosed.
+
+**THE THIRD DETECTOR (twelve rows) CLOSED A MUTANT THE PASS-2 PANEL NAMED**, and the disposition was
+decided by MEASUREMENT with the author's interest disclosed. minimax: swap the latch bit in the ASSERT
+guard only, assignment unchanged -- the mirror of M4, and the pass-2 review seat's enumeration had
+collapsed {site} x {guard-only, guard+assignment} into one cell. It swept the eleven-row detector
+11/11, byte-identical to base on every row: its difference appears only with TWO assert edges and no
+deassert between, where it re-announces and the fix stays silent -- a log flood. Whether that was a
+floor breach or clause-(e) debt turned on one fact, referred to the measuring seat with the note that
+"no second line exists" was the answer that would have let the round ship as debt. **It measured a
+second synchronous ISA line: the ns16550 on IRQ 4**, installed unconditionally by `bus_isa_init`,
+asserting INLINE from `DEVICE_ACCESS(ns16550)` (four `dev_ns16550_tick` sites) behind
+`com_mcr & MCR_IENABLE`. Edge trace: `LCAEDGE 1 assert warned=0x0` -> two byte stores to IER/MCR ->
+`LCAEDGE 2 assert warned=0x1`, no deassert between. So L2, fixed in-round: [E] raises the UART
+(assert #2), [F] drops it (assert #3 -- `isa_interrupt_common` asserts on ANY change to a different
+NONZERO aggregate, which the main loop's own derivation had missed), then [C] drains the 8042 so the
+deassert edge is preserved.
+
+## Table G -- the instrument that ships, 16 mutants, baseline first
+
+`regress/artifacts/lcairqstubkill/killtable_20260909/TABLE_G.out`; 17 raws all ending `LCAIRQ_DONE`;
+baseline NAMED (the working tree) and cmp'd clean before mutant 1; scratch clone with a clone-local
+sentinel; restore verified by cmp against SEC and a rebuild, sentinel cleared.
+
+    base                   12/12     M7_deassert_assign     11/12
+    M2_both                 3/12     M8_assert_assign       12/12  EQUIVALENT
+    M2d_deassert            6/12     M9_deassert_nolatch    11/12
+    M2a_assert              3/12     M10_assert_nolatch     11/12
+    M3_deassertoff          9/12     M12_assertguard_swap   11/12  the breach, KILLED (assert once = 3)
+    M3a_assertoff           9/12     M13_deassertguard_swap  9/12
+    M4_sharedlatch          9/12     M_nonull               12/12  EQUIVALENT
+    M5_assertdishonest     11/12     M11_null                0/12
+    M6_deassertdishonest   11/12
+
+## Table H -- the two cells pass 3 found unswept, built last and measured
+
+The pass-3 panel (`panel_20260909_135737`, six seats, none ratifying) found no floor breach and one
+accounting defect: "sixteen mutants cover sixteen cells" counted two COMPOSITES (`M2_both`,
+`M4_sharedlatch`) as cells and had never built the ASSIGNMENT-bit swap at either site in isolation --
+the pass-2 diagonal collapse one level down, {site} x {bit-swap, form-change}. Four seats named the
+exact edits; kimi and glm predicted both would die on existing rows. **Predicted is not measured.**
+`TABLE_H.out`, instrument byte-identical to G's frozen copy, base re-measured:
+
+    base                       12/12
+    M14_assert_assignswap       8/12   assert once = 4, deassert once = 0  -- the union glm predicted
+    M15_deassert_assignswap    11/12   deassert once = 2
+
+So the denominator is now honest: **2 sites x 8 edits = 16 cells, 14 killed, 2 measured equivalent**,
+plus the null medium and two composites. The pass-3 review seats' other findings, each disposed: the
+contract still described the eleven-row instrument (grok -- L4, corrected in place: the second ISA
+line and the measured denominator are now in the header); the `[G]` readback is an 8-byte `LDQ` of a
+byte register (deepseek -- measured 0x8, `memory_rw` clamps the length, disclosed with the byte-load
+form filed rather than changing a working row and owing another table); no base-run row pins the
+second line's assert EDGE (glm -- true: `uart live` proves the store landed, not the edge; the M12
+`assert once = 3` datum proves the edges were live at measurement time; filed `lcairqedgepin`);
+`M_nonull`'s premise (kimi, glm -- "not checkable from the packet") CHECKED: the only registration
+of these handlers is `dev_lca.c`'s own `interrupt_template` at the `interrupt_handler_register` call,
+so `extra` is never NULL; and M8's boot-time residue (glm) CHECKED: `old_isa_assert` is never
+stored, it is recomputed from `irr & ~ier` at every entry (`bus_isa.c:104`, `:126`), so a stale
+nonzero is impossible by construction.
+
+**THE CHAIN CLOSES ON PASS 3.** Its zero floor breaches now carries a complete, measured denominator;
+the only material changed after it is contract TEXT, which is records, not floor-bound. No pass 4.
+
+**Two equivalents, each a RESULT with its warrant, not a gap.** M8 (`|=` -> `=` on the assert arm): the
+assert assignment runs only on the first assert, when `warned` is 0, because the stub is entered only
+on edges of the AGGREGATE `pic1->irr & ~pic1->ier`, which is 0 until the first assert -- NOT because
+"nothing sets IRR but an assert", which an earlier README said and which is false (masked asserts set
+IRR without entering the stub). Three seats challenged this on pass 2 and were refuted by reading: all
+three `dev_8259.c` direct deassert sites are guarded by an aggregate-CHANGE test that cannot fire at
+`irr == 0`. M_nonull (drop `d != NULL` from both guards): `interrupt->extra` is always the `lca_data`
+`DEVINIT(lca)` registered, so the test is never false -- a dead defensive predicate, measured dead.
+
+**Four of the twelve rows cannot kill anything alone.** The measuring seat derived three on the
+eleven-row instrument -- `kbc attrib` ⊆ `kbc kill`, `irq announce` ⊆ `irq honest`, `deassert ann` ⊆
+`deassert honest`, each want-string a prefix of its sibling's -- and the added `uart live` is a
+CONTROL by construction: no `dev_lca.c` mutant touches the UART, so it reds only when the host dies
+before the readback, which `kbc kill` already reds. So at most EIGHT of twelve carry a kill alone
+(derived, not measured per row). Said so the record does not read as twelve independent oracles.
+
+**The contract** (probe header) names what is covered -- both stubs, the latch across a cycle AND
+against a same-polarity repeat, the honesty of each announce -- and what is disclosed: interrupt
+DELIVERY (nothing here can observe it, because Alpha has none), and the three other measured routes to
+the deassert edge (no row owed: all four land in the same function with the same `interrupt->extra`,
+so no `dev_lca.c` mutant can distinguish them; the pass-2 review seat checked that argument and found
+it stronger than stated, since `interrupt_handler_lookup` copies the whole template).
+
+## Apparatus defects of the main loop's own, recorded because each looked like data
+
+* **THE INCOMPLETE-EDIT CLASS, THREE TIMES IN ONE ROUND.** (1) A clause-(e) disclosure was corrected
+  by APPENDING the correction BELOW the false line, leaving both standing and contradicting each other
+  (the pass-2 review seat found it). (2) `kbc attrib`'s label was corrected from a vague falsehood
+  (`died-elsewhere`) into a SPECIFIC one (`died-outside-lca` -- measured false by the seat's mutant
+  M14, a silent death INSIDE the deassert stub); it now says `no-lca-diagnostic`, which is all the row's
+  evidence supports. (3) A readback phase was added to the guest PROGRAM and not to the COMMAND list,
+  so the instruction was written into guest memory and never stepped; the BASELINE failed 11/12. Same
+  shape each time: an edit landing in one of the two places it needs to reach, where the untouched half
+  still reads correctly on its own. What caught the third was the baseline -- an instrument that cannot
+  go green certifies nothing about what it kills.
+* **Two columns in a driver that could not fail** (`ann_a=`/`ann_d=`, grepping text the probe never
+  prints) -- decoration presented as measurement; noted in the table README rather than deleted.
+* **A panel read from the WRONG DIRECTORY.** `ls -dt _scratchpad/panel_*` from `GXEMUL-SEC/` resolved
+  into a stale shadow `_scratchpad` holding four of yesterday's panels, and six verdict lines from
+  `alphatbinegsel`'s round were read as this round's. Caught semantically (the verdicts were about a
+  TBI guard), not mechanically -- a non-empty wrong answer defeats every fallback. The shadow directory
+  now carries a warning file; the rule is never a bare `_scratchpad/`.
+* **A background launch reported complete while its WSL child ran on** -- `run_in_background` plus a
+  trailing `&`, the documented hazard, built by hand after quoting the rule the same day.
+
+## Seat ledger
+
+Pass 1 (2026-09-08): codex, grok, glm, deepseek, minimax, kimi via `kimi-k3:cloud` (packet-fed)
+ANSWERED; kimi CLI 403 (covered); agy, opus5, fable5 DELIBERATELY NOT FIRED (owner: preserved for the
+2026-09-09 adjudication). Pass 2 on the diff (2026-09-08): same roster; **NOT RATIFY** from grok on the
+vacuous latch row, and it was right. 2026-09-09: **fable5 adjudicated** the packet (Y2 -> ship, the
+deassert disclosure -> overturned); **opus5 measured** the four deassert routes, built and measured the
+eleven-row instrument, then the twelve-row repair with its edge trace; pass 2 on the repair
+(`panel_20260909_071614`): codex, grok, glm, deepseek, minimax, kimi-substitute answered, kimi CLI
+walled, fable5 (RATIFY with one L4) and opus5 (M12 reachable, L2) via the Agent tool; pass 3 on the
+final repair: see its own entry. agy not fired at any stage: measurement reserve, and Opus held the
+measurement. Every non-answer above is a SEAT FAILURE or a deliberate non-firing, named, never
+agreement.
+
+Witness: `probe:regress/lca_irqstub_probe.py` (rung 3, 3/6 -> 12/12 under the same machine, with the
+UART sibling 2/5 -> 5/5). Detector: the same file, table G above.
+
 # `#515` lcaconfbus1kill: one variable meant two things, and a value the register's own guard ACCEPTS armed a host kill in a different handler
 
 **THE DEFECT.** `DEVICE_ACCESS(lca_pci_conf)` in `dev_lca.c` used a single `bus` for two unrelated
@@ -4883,6 +5100,11 @@ agreement.  Pass 3 on the repair diff: OWED to the eight non-builder seats; the 
 
 `pcc2c040kill` (HIGH: a legal byte write of 0x04 to GENCTL still ends the host in
 `reassert_interrupts`), `pcc2defaultkill`, `pcc2counter8`, `pcc2widecompose` (LOW).
+*(Dated pointer, added 2026-09-09: the two sentences above were TRUE when written and are not now --
+`pcc2defaultkill` was fixed by `#501` and `pcc2c040kill` by `#512` (9fa07fe, rung-3 witnessed
+3/4 -> 4/4 -> 7/7).  Left in place as the record of what was open at this round, with the pointer so a
+grep for the subject lands on the correction and not only on the stale line; `dev_pcc2.c`'s own header
+carried the same stale sentence until the same day, which is the incident this pointer exists for.)*
 
 ## Round pcc2widthkills -- twelve width kills become a direction split, and the tree knew the width was legal all along
 

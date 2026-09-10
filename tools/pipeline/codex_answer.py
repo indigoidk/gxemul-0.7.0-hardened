@@ -64,14 +64,35 @@ def main():
     path = args[0]
     text = io.open(path, encoding="utf-8", errors="replace").read()
 
-    n_refusals = text.count(REFUSAL)
+    #  *** COUNTING THE REFUSAL STRING IS UNSOUND, AND IT MISFIRED ON ITS SECOND DAY. ***
+    #
+    #  A codex run greps the repository, and this project's own ledger contains a row
+    #  (`codexcyberflag') that QUOTES the refusal message verbatim.  So a healthy answer whose trace
+    #  happens to include that grep output scores as REFUSED -- which is exactly what happened on
+    #  the `#516' pass-2 panel: two "hits", both inside grep output, with three verdict markers and
+    #  a substantive conclusion in the same file.
+    #
+    #  **A count cannot tell an ASSERTION from a QUOTATION OF ONE**, and this project has recorded
+    #  that class twice already -- once for a stale-claim grep that flagged an honest correction,
+    #  and once when a precommit check fired on codex quoting a committed file.  It gets STEADILY
+    #  WORSE as the records improve, because every honest write-up quotes what it describes.
+    #
+    #  THE DISCRIMINATOR IS POSITION, which is what this project already uses for seat truncation:
+    #  a REAL refusal terminates the stream, so it appears in the TAIL with no verdict after it.
+    TAIL = text[-4000:]
+    n_refusals = TAIL.count(REFUSAL)
+    quoted_only = text.count(REFUSAL) - n_refusals
     found = blocks(text)
 
     print("codex_answer: %s" % path)
     print("  stream bytes   %d" % len(text))
     print("  prose blocks   %d" % len(found))
-    print("  refusal marker %d occurrence(s)%s"
-          % (n_refusals, "   *** CONTENT-FILTER REFUSAL ***" if n_refusals else ""))
+    print("  refusal marker %d in the TAIL%s" % (n_refusals,
+          "   *** CONTENT-FILTER REFUSAL ***" if n_refusals else ""))
+    if quoted_only:
+        print("  (%d further occurrence(s) EARLIER in the stream -- almost certainly QUOTED, e.g. "
+              "grep output over this project's own records.  Not counted as a refusal.)"
+              % quoted_only)
 
     #  A verdict line is this project's convention, so say plainly whether one is present.
     verdicts = [b for b in found if re.search(r"(?im)^\W*\**VERDICT", b)]

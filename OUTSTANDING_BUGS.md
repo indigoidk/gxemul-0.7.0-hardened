@@ -17894,3 +17894,91 @@ both verdicts recorded as ANSWERED.
 sentinel before citing a preserved log; a panel dir has no single sentinel, and the seats finish at
 different times. **Proposed, not built:** the panel launcher already `wait`s for all seats — copying
 after that wait, rather than when the main loop next looks, removes the window entirely.
+
+### `splitscorer` (low) -- filed 2026-09-08
+
+APPENDING a row BELOW a probe's score computation silently splits the summary -- numerator over
+the old row set, denominator evaluated at print time. *** POPULATION AT HEAD IS ZERO across all 73
+candidate probes: this is an EDITING hazard I introduced twice in one session, NOT a latent defect
+in the tree. *** Both instances were in `#516`'s two probes and both were fixed by moving the
+computation adjacent to the print, where the split cannot be reintroduced. Filed as a class with a
+measured population of zero, so the next author who appends rows knows the shape: every row prints
+`ok` while the summary reads `4/6`, which is the cheapest possible signal and is only available
+because rows are printed individually.
+
+### `alphaintdeliver` (med) -- filed 2026-09-09
+
+Alpha has NO interrupt delivery -- `#516`'s decline is the disposition, this is the SUBSYSTEM it
+declines into. `cd.alpha.irq_asserted` is written (`cpu_alpha.c:218,:223`) and read nowhere;
+`cpu_dyntrans.c` delivers for FIVE architectures and has no Alpha arm; `memory_rw.c`'s
+failed-device branch dispatches only for MIPS and M88K. Implementing it is dyntrans dispatch +
+PALcode entry + the IPL check -- its own round. NOT a host-kill and lower than the kills it grew
+from: Alpha interrupts have never worked on this tree, `#516` only stopped the host dying. No guest
+that NEEDS delivery has been measured; the row claims the mechanism is absent, not that a guest is
+blocked. Filed from the `#516` adjudication (option-set member 7, IMPLEMENT) so the missing feature
+is TRACKED rather than buried inside a fixed kill -- the anti-laundering move the adjudication named.
+
+### `alphaswpctxmut` (low) -- filed 2026-09-09
+
+`alphaswpctxreg` (`#514`, 3031a30) shipped with clause (d) "satisfied by construction" -- an
+ARGUMENT, not a built mutant. Build it: publish the NEW context in v0 instead of the OLD (the
+incorrect repair the three-value oracle C/N/S was designed against) and measure
+`regress/alpha_swpctx_v0_probe.py` against it. Late-dissent disposition 2: a measured-false-pass
+check on a shipped detector, one build. Filed by the `alphaswpctxreg` design ruling.
+
+### `armbfxcells` (low) -- filed 2026-09-09
+
+`armbfxwidth32` (c0c7f55 + later rows): FOUR weakening cells named by codex with rows that WOULD
+kill them and no built mutant -- UBFX full-width relaxed to admit 31; SBFX the same; SBFX
+width-restriction-on-sign (derived equivalent); SBFX sign-bit requirement dropped. Build the four
+and score them; a "would" is not a measurement. Also check the shipped handler comments state the
+width-32 BEHAVIOUR change (L4 if not). Filed by the `armbfxwidth32` review ruling.
+
+### `lcairqedgepin` (low) -- filed 2026-09-09
+
+`lca_irqstub_probe.py`: no BASE-RUN row pins the second ISA line's assert EDGE. `uart live` proves
+the MCR store landed; on the fix the latched announce prints once whether or not [E] re-entered the
+stub, so if the UART silently stopped asserting, M12 would escape again and no row would say why.
+The measurement-time evidence is M12's own `assert once` = 3 (`TABLE_G.out`). A green-run pin needs
+a different channel: read PIC1's IRR back after [E] and want 0x12. One row; changes the instrument,
+so it owes a table. Filed from the `#516` pass-3 panel (glm), disclosed in the probe contract under
+clause (e).
+
+### `wdcaltoffleg` (med) -- filed 2026-09-09
+
+The THREE altoffset WDC differentials as ONE instrument -- `wdc_altoffset_probe.py` and the two
+that `import wdc_altoffset_probe as W` (`_sig`, `_4bit`): one module, one rig (`-E evbmips -e
+malta`, the battery's own `_images/wdc-scratch-64m.img`), one media family (the `c` in `ciR:` is a
+PREFIX -- MEASURED, the same image attaches as an IDE CD-ROM). OWED: (a) the parent's `ok` --
+already a complete verdict over 18 explicit expectations -- gets an exit status, FIRST QUESTION
+being whether a nonzero exit breaks the two-leg driver; (b) `_4bit`'s single-leg form is an ORACLE
+CHOICE (its verdict is definitionally between-leg -- "its whole point is that it DIFFERS by leg",
+`:216`), so the round chooses the fix-side absolute and says so; (c) `_sig`'s `sig` oracle is
+NON-DISCRIMINATING (unreadable and unrelated values both read as "declined") and is REDESIGNED,
+not bolted onto. Each of the three `wiringcliff` exemptions is re-dated naming THIS row and DELETED
+in the same edit as its wiring. Filed by the `wiringcliff` assess ruling (rev 2), from the Opus
+seat's measured 3 + 1 split.
+
+### `wdcsingleleg` (med) -- filed 2026-09-09
+
+`wdc_addtoinbuf_probe.py` -- a single-leg mode plus a pass/fail contract for the ONE WDC two-leg
+differential that is genuinely infrastructure-blocked: it imports none of `wdc_altoffset_probe`,
+carries its own pty/Emu, ties its expectations to DISK CONTENT (needs a POISONED image the battery
+does not build), and adds an endianness axis (`-e maltabe`). RETITLED the same day from "all four
+WDC differentials": the other three are one instrument and belong to `wdcaltoffleg`. Its
+`wiringcliff` exemption is re-dated naming THIS row and DELETED in the same edit as its wiring when
+this ships.
+
+### `witnessclassdoor` (med) -- filed 2026-09-09
+
+`check_probe_wiring.py`: CLASSIFICATION decides whether an un-gated probe's debt is VISIBLE -- an
+un-gated `CLASS_DETECTOR` is UNWIRED (fail) or dated EXEMPT, an un-gated `CLASS_WITNESS` renders
+`not run (correct)` -- and at least 8 of the 18 `CLASS_WITNESS` entries describe a POST-FIX-GREEN
+outcome, which is the checker's own definition of a detector. So detector debt escapes through the
+class field, UNDATED, faster than the dated EXEMPT table retires it. Instance made today:
+`lca_irqstub_probe.py`, kept WITNESS "because re-classing it would demand a gate home". Deriver
+(Opus): the MANIFEST's `CLASS_WITNESS` entries grepped for "fix N/M" or "post-fix green"; 8 of 18
+is a FLOOR, one entry unsettled. Fix shape: a class rule (a witness that has gone post-fix-green IS
+a detector and owes a gate or a dated exemption) with a dated cutoff -- its own harness round with
+negative controls, never a rider. Filed from the Opus seat on the `wiringcliff` assess panel; the
+loop concedes it created an instance the same day.

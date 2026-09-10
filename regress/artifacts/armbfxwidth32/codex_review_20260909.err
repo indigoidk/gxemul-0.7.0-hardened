@@ -1,0 +1,1006 @@
+Reading additional input from stdin...
+OpenAI Codex v0.153.4
+--------
+workdir: C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+model: gpt-6-astra
+provider: openai
+approval: never
+sandbox: read-only
+reasoning effort: max
+reasoning summaries: none
+session id: 01a08789-548d-7b71-b6f6-d9c9ab77d2fa
+--------
+user
+# armbfxwidth32 (commit c0c7f55) -- REVIEW READING: what does the shipped diff claim, and what could escape it?
+
+This is an ANALYSIS request about a diff that has ALREADY SHIPPED. Please do not write, propose or
+sketch any code, patch or guest sequence. Prose only.
+
+## THE TREE
+`C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\`. Ignore any other `src/` under the project root.
+
+## SCOPE -- read EXACTLY these
+    the diff below (inlined), and for context ONLY the three instruction handlers it touches in
+    src/cpus/cpu_arm_instr.c (ubfx, sbfx, bfi) and the row list of regress/arm_bfx_width_probe.py.
+    The ARM manual is LOCAL: `C:\DocumentNoSnc\CC\GXEMUL\_scratchpad\ddi0406.txt` -- A8.8.20 (BFI)
+    at line 18066 and the UBFX/SBFX sections nearby. Cite it by line if you use it.
+
+## SETTLED
+`ubfx/sbfx/bfi` built their mask with `1 << width` where the decoder lets width reach 32, and bfi's
+width can go negative -- three UB regions across eight sites. `#510` fixed UBFX/SBFX (widthm1
+encoding, never negative); BFI (MSB encoding, width in [-30, 32]) is the separate row `armbfiwidth`.
+Witness artifacts: `regress/artifacts/armbfxwidth32/witness_HEAD_20260907.raw`,
+`witness_FIXED_20260907.raw`, `witness_FIXED12_20260907.raw`, and one mutant `M_nosext.raw`.
+The flagship review stage was HELD for the 2026-09-09 adjudication, now being done.
+
+## THE QUESTIONS -- answer extensionally
+**Q1.** From the diff: which PREDICATES does the fix ADD or CHANGE at each of the sites it touches,
+and which existing predicates dominate them up to the enclosing handler boundary?
+**Q2.** For each, the smallest WEAKENING edit that still reads like the same check -- and whether the
+ONE preserved mutant (`M_nosext`) is that edit. Every predicate with no measured mutant is an
+unmeasured cell; name each.
+**Q3.** THE WIDTH-32 QUESTION: at width 32 the manual says UBFX copies the whole field. Under the
+fix, what does width 32 produce, and is there a row that pins it? Under the OLD code, what did it
+produce on a count-masked host shift? If those differ, the fix is a BEHAVIOUR change, not only a
+definedness repair -- say whether the diff's own comments say so.
+**Q4.** `#510`'s own finding: `1 << 31` and `1U << 31` give the same mask after the `- 1`, so NO
+guest-value row can catch a `1U` -> `1` regression. Does the shipped detector CLAIM to cover that,
+anywhere in its header? Quote it if so.
+
+VERDICT LINE FIRST, then the body. If the diff is not what the premises describe, say so first.
+
+## THE DIFF (src/cpus/cpu_arm_instr.c and regress/arm_bfx_width_probe.py only)
+diff --git a/regress/arm_bfx_width_probe.py b/regress/arm_bfx_width_probe.py
+new file mode 100644
+index 0000000..a41c0a0
+--- /dev/null
++++ b/regress/arm_bfx_width_probe.py
+@@ -0,0 +1,260 @@
++#!/usr/bin/env python3
++#
++#  armbfxwidth32 -- RUNG-3 WITNESS: UBFX/SBFX build their mask with a shift that is undefined
++#  at the top of the encoded width range.
++#
++#      cpu_arm_instr.c:4486  ubfx:  int width = 1 + ((iword >> 16) & 31);   -> {1..32}
++#      cpu_arm_instr.c:4493  sbfx:  int width = 1 + ((iword >> 16) & 31);   -> {1..32}
++#      cpu_arm_instr.c:1316  ubfx:  uint32_t mask = (1 << width) - 1;
++#      cpu_arm_instr.c:1340  sbfx:  uint32_t mask = (1 << width) - 1;
++#      cpu_arm_instr.c:1344  sbfx:  uint32_t topBitMask = 1 << (width-1);
++#      cpu_arm_instr.c:1370  bfi :  uint32_t mask = (1 << width) - 1;       (width = msb-lsb+1)
++#
++#  `1' is a plain int, so `1 << 32' shifts by the full width of the type (C99 6.5.7p3) and
++#  `1 << 31' is a signed overflow (6.5.7p4).
++#
++#  *** WHICH OF THOSE IS OBSERVABLE IS A DIFFERENT QUESTION, AND ONLY ONE IS. ***  Derived by
++#  walking the values, against the pass-1 panel's own framing of "two widths wide":
++#
++#      width  correct       predicted today   observable?
++#      32     0x89abcdef    0x00000000        YES -- the whole register becomes zero
++#      31     0x09abcdef    0x09abcdef        no -- `1<<31' gives INT_MIN and INT_MIN-1 wraps
++#                                             back to INT_MAX = 0x7fffffff, the CORRECT mask
++#       8     0x000000de    0x000000de        no
++#       1     0x00000001    0x00000001        no
++#
++#  So the RED row is width 32 alone.  The width-31 row is carried anyway, because it pins that a
++#  repair does not BREAK the case that currently works by accident.
++#
++#  ---------------------------------------------------------------------------------------------
++#  *** THE HAND-ASSEMBLED-ENCODING TRAP IS LOAD-BEARING HERE, NOT MERELY PRUDENT. ***
++#
++#  This project has been bitten four times by hand-assembled encodings, once in a COMMITTED gate
++#  row that measured the wrong register for months.  The signature is always the same: a wrong
++#  field yields 0, and any row that accepts 0 passes by accident.
++#
++#  **The width-32 symptom IS exactly zero.**  So a mis-encoded word that never executed is
++#  indistinguishable from the defect this probe exists to witness.  THREE independent controls,
++#  because one is not enough:
++#
++#    * `pc adv'  -- pc must advance by exactly 4.  An untranslatable word reaches the shared `bad'
++#                  label, which sets cpu->running = 0 and redirects to nothing_call (it does NOT
++#                  exit the host), so a bad encoding STOPS THE MACHINE and pc does not move.
++#    * `mid'     -- UBFX r0,r1,#4,#8 must give 0xde.  A small nonzero answer that only a correctly
++#                  encoded, correctly executed instruction produces.
++#    * `live'    -- a plain MOV proves plant/step/print works before any bitfield word is tried.
++#
++#  ---------------------------------------------------------------------------------------------
++#  MACHINERY, established from source by a codex capability pass rather than assumed:
++#
++#    * `put w' -> store_32bit_word() writes through cpu->byte_order and applies NO encoding
++#      whitelist; the CPU memory function calls invalidate_code_translation(), and ARM's
++#      invalidator resets the ENTIRE 4 KiB instruction page.  No guest cache maintenance needed.
++#    * testarm is LITTLE-endian, SA1110, supervisor mode, MMU DISABLED, so virtual == physical.
++#      Base RAM is [0, R) and `-M 64' gives 0x00000000-0x03ffffff.
++#    * *** r10-r15 ARE NOT REGISTERED DEBUGGER NAMES. ***  arm_cpu_new() exposes r0-r9, then
++#      sl, fp, ip, sp, lr, plus pc and cpsr.  `print r10' fails a lookup and returns nothing --
++#      so this probe uses r0 and r1 ONLY.
++#    * *** A DIRECT `cpsr' PRINT CAN SHOW STALE NZCV *** (the settings access does not sync the
++#      execution-flags field).  This probe therefore reads a GPR and never the flags.
++#    * The top of RAM is occupied -- a 12-byte halt stub at SP+32 with SP = R-4096, AND a PROM
++#      hook at R-8 written by arm_cpu_new().  CODE is planted low, at 0x10000.
++#    * Coprocessor encodings still exit(1) in arm_coproc_15 / i80321_6 / xscale_14.  Every word
++#      below is a data-processing media encoding; none touches CP space.
++#
++#  ---------------------------------------------------------------------------------------------
++#  *** WHAT THIS PROBE CANNOT SEE, from the pass-2 panel, stated before anyone relies on it. ***
++#
++#  Two one-line regressions re-open real undefined behaviour and score FULL MARKS, and no
++#  guest-value row can kill either.  Disclosed, not covered:
++#
++#    * `1U' -> `1' in the mask ternary.  Re-opens C99 6.5.7p4 at width 31.  `w31' stays green --
++#      it is the very wrap the fix comment describes -- and `w32' never evaluates the shift.
++#      `1 << 31' and `1U << 31' yield the SAME mask after the `- 1'.
++#    * restoring `uint32_t topBitMask = 1 << (width-1);' above the `if'.  Re-opens the second UB.
++#      `s w32' stays green: with a correct 32-bit mask, `x |= ~mask' is `x |= 0'.
++#      **`s w32' pins the MASK -- not topBitMask, and not the hoist.**
++#
++#  Both are DEFINEDNESS repairs, and definedness has no guest-visible value on a non-trapping
++#  host.  The vehicle that could pin them is UBSAN or a source pin, not a row.
++#
++#  *** AND UBSAN IS PRESENT.  An earlier draft of this paragraph said "whether build-asan/
++#  carries UBSAN is UNCHECKED" -- a wrong record written one grep away from the answer, in
++#  the same file, while composing an otherwise honest disclosure.  Checked:
++#      build-asan/Makefile      -fsanitize=address,undefined
++#      build-asan/src/Makefile  -fsanitize=address,undefined
++#      regress/gate_asan_sweep.sh   already exists
++#  So both escapes ARE pinnable -- as a DIFFERENTIAL, not a row: the fixed source produces no
++#  shift diagnostic and the `1U' -> `1' mutant produces one.  That is a second binary and a
++#  STDERR oracle rather than a value oracle, i.e. a new measurement lane, so it is filed as
++#  [[ubsanshiftlane]] for its own round rather than bolted onto one whose pass 2 has run. ***
++#
++#  The honest statement is therefore: these two are unkillable BY THIS PROBE, not unkillable
++#  in principle.  Recorded so a future reader does not read a full score as covering the
++#  whole diff.
++#
++#  Usage:  arm_bfx_width_probe.py <gxemul-binary> [label]
++import os, sys, pty, select, time, re
++
++BIN   = sys.argv[1]
++LABEL = sys.argv[2] if len(sys.argv) > 2 else "?"
++
++rows = []
++def row(name, got, want, note=""):
++    ok = (got == want)
++    rows.append((name, ok))
++    print("%-12s %-14s %-14s %-56s %s" % (name, str(got), str(want), note, "ok" if ok else "FAIL"))
++    return ok
++
++CODE = 0x8000                     # the address arm_flags_probe.py uses; low RAM, clear of the
++                                  # halt stub at SP+32 and the PROM hook at R-8
++
++#  *** A LOAD FILE IS REQUIRED, NOT COSMETIC -- AND I REPRODUCED THE EXACT DEFECT A PANEL HAD
++#  CAUGHT IN A SIBLING PROBE HOURS EARLIER. ***  `main.c` with no loadfile and no `-d` prints
++#  "No filename given. Aborting." and exits, so EVERY session reports `died`.  The first run of
++#  this probe scored 1/11 with all ten measurement rows reading `died` -- and the `live` row is
++#  what named it as an apparatus failure instead of letting it read as a defect signal.
++#  Every ARM probe in this tree passes `"0x%x:%s" % (CODE, STUB)`; they take the stub path from
++#  their gate caller, so a standalone probe must make its own.  Contents are irrelevant -- every
++#  word is overwritten by `put w` before `pc` is set -- but the file must exist and be non-empty.
++STUB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "arm_bfx_stub.bin")
++if not os.path.exists(STUB):
++    with open(STUB, "wb") as f:
++        f.write(bytes(16))        # 16 zero bytes; no escape, so the heredoc trap cannot recur
++SRC  = 0x89abcdef                 # four distinct nibble groups, top bit SET on purpose:
++                                  # width 32 must return it WHOLE, and a mask of 0 returns 0.
++OP_MOV_R0_2A = 0xe3a0002a         # mov r0, #0x2a   -- the liveness word
++
++#  UBFX/SBFX encodings, DERIVED from the decoder rather than recalled, and self-checked below
++#  against its own mask.  Field positions read out of X(to_be_translated):
++#      rd  = (iword >> 12) & 15
++#      *** THE SOURCE IS `rm' = iword & 15, NOT `rn' *** -- rn's bits 19:16 are occupied by
++#      widthm1, which is exactly why the ubfx block takes rm.  Getting that backwards IS the
++#      hand-assembled-encoding trap.
++def bfx(base, rd, rm, lsb, width):
++    return (0xe << 28) | base | (((width - 1) & 31) << 16) | ((rd & 15) << 12) \
++           | ((lsb & 31) << 7) | (rm & 15)
++
++UBFX_BASE, SBFX_BASE = 0x07e00050, 0x07a00050
++UBFX_MASK, SBFX_MASK = 0x0fe00070, 0x0fe00070
++
++def ubfx(lsb, width): return bfx(UBFX_BASE, 0, 1, lsb, width)
++def sbfx(lsb, width): return bfx(SBFX_BASE, 0, 1, lsb, width)
++
++def session(cmds, settle=1.5, spin=1.5):
++    pid, fd = pty.fork()
++    if pid == 0:
++        os.execv(BIN, [BIN, "-V", "-A", "-E", "testarm", "-M", "64",
++                       "0x%x:%s" % (CODE, STUB)])
++        os._exit(127)
++    buf = ""
++    def rd(t):
++        nonlocal buf
++        end = time.time() + t
++        while time.time() < end:
++            r, _, _ = select.select([fd], [], [], 0.1)
++            if not r:
++                continue
++            try:
++                d = os.read(fd, 65536)
++                if not d:
++                    return False
++                buf += d.decode("latin-1", "replace")
++            except OSError:
++                return False
++        return True
++    alive = rd(settle)
++    for i, c in enumerate(cmds):
++        try:
++            os.write(fd, (c + "\n").encode("latin-1"))
++        except OSError:
++            alive = False; break
++        if not rd(spin if i == len(cmds) - 1 else 0.22):
++            alive = False; break
++    try:
++        os.write(fd, b"quit\n"); rd(0.4)
++    except OSError:
++        pass
++    try:
++        os.close(fd)
++    except OSError:
++        pass
++    return buf.replace("\r", ""), alive
++
++def printed(t, reg):
++    m = re.search(r"print\s+%s\s*\n\s*(0x[0-9a-f]+)" % reg, t)
++    return "absent" if not m else "0x%x" % int(m.group(1), 16)
++
++def run_word(iw, src=SRC):
++    """Plant ONE instruction word, step it, and read r0 and pc back."""
++    cmds = ["r1=0x%x" % src, "r0=0x0",
++            "put w 0x%x, 0x%08x" % (CODE, iw),
++            "pc=0x%x" % CODE, "step 1", "print r0", "print pc"]
++    t, alive = session(cmds)
++    return t, alive, printed(t, "r0"), printed(t, "pc")
++
++print("arm_bfx_width_probe -- binary=%s label=%s machine=testarm" % (BIN, LABEL))
++print("%-12s %-14s %-14s %-56s %s" % ("row", "got", "want", "note", ""))
++
++#  ---- the encodings must satisfy the decoder's OWN mask, checked before anything is run -------
++enc_ok = all((w & UBFX_MASK) == UBFX_BASE for w in (ubfx(0, 32), ubfx(0, 31), ubfx(4, 8), ubfx(0, 1))) \
++     and all((w & SBFX_MASK) == SBFX_BASE for w in (sbfx(0, 32), sbfx(4, 8)))
++row("enc ok", "yes" if enc_ok else "no", "yes",
++    "every planted word matches the decoder's own mask -- checked before any run")
++
++#  ---- CONTROL 1: the plant/step/print path works at all ---------------------------------------
++t, alive, r0, pc = run_word(OP_MOV_R0_2A)
++row("live", r0 if alive else "died", "0x2a",
++    "LIVENESS: a plain `mov r0,#0x2a' plants, steps and prints")
++row("pc adv", pc if alive else "died", "0x%x" % (CODE + 4),
++    "CONTROL: pc advanced exactly 4.  A bad encoding sets running=0 and pc does NOT move")
++
++#  ---- CONTROL 2: a small NONZERO answer, because the defect's symptom is exactly zero ---------
++t, alive, r0, pc = run_word(ubfx(4, 8))
++row("mid", r0 if alive else "died", "0xde",
++    "UBFX #4,#8 of 0x89abcdef -- only a correct encoding AND execution gives 0xde")
++row("mid pc", pc if alive else "died", "0x%x" % (CODE + 4),
++    "CONTROL: the bitfield word really executed; it did not stop the machine")
++
++t, alive, r0, pc = run_word(ubfx(0, 1))
++row("w1", r0 if alive else "died", "0x1",
++    "UBFX #0,#1 -- the narrowest field, nonzero")
++
++#  ---- THE DEFECT ROW.  Asserts the CORRECT value and is expected to FAIL pre-fix. -------------
++#  `1 << 32' shifts by the type's own width, the mask becomes 0 on the common lowering, and the
++#  instruction returns 0 instead of the whole register.
++t, alive, r0, pc = run_word(ubfx(0, 32))
++row("w32", r0 if alive else "died", "0x89abcdef",
++    "UBFX #0,#32 must return the WHOLE register -- `1 << 32' is undefined")
++row("w32 pc", pc if alive else "died", "0x%x" % (CODE + 4),
++    "CONTROL: it EXECUTED and returned a wrong value; it did not fail to decode")
++
++#  ---- the neighbour that currently works BY ACCIDENT, pinned so a repair does not break it ----
++t, alive, r0, pc = run_word(ubfx(0, 31))
++row("w31", r0 if alive else "died", "0x9abcdef",
++    "UBFX #0,#31 -- UB (1<<31 overflows int) but wraps to the right mask; must STAY right")
++
++#  ---- SBFX: the same mask site, plus its own second shift at :1344 ----------------------------
++t, alive, r0, pc = run_word(sbfx(4, 8))
++row("s mid", r0 if alive else "died", "0xffffffde",
++    "SBFX #4,#8 of 0x89abcdef: field 0xde, top bit set, so sign-extended")
++
++t, alive, r0, pc = run_word(sbfx(0, 32))
++row("s w32", r0 if alive else "died", "0x89abcdef",
++    "SBFX #0,#32: the whole register.  Does NOT pin topBitMask -- see the header")
++
++#  *** ADDED BY PASS 2.  grok derived this escape and it holds: deleting the BIT TEST from
++#  `if (width < 32 && ...)' -- always sign-extend below width 32 -- scores full marks, because
++#  EVERY byte field of 0x89abcdef has bit 7 set (0x89, 0xab, 0xcd, 0xef) and `s mid' is a byte
++#  field.  No row had an SBFX field whose top bit is CLEAR, so nothing could see it. ***
++#      SBFX #1,#4 of 0x89abcdef: (V >> 1) & 0xf = 0x7, bit 3 CLEAR -> NOT sign-extended -> 0x7
++#      under always-extend:      0x7 | ~0xf = 0xfffffff7
++t, alive, r0, pc = run_word(sbfx(1, 4))
++row("s clear", r0 if alive else "died", "0x7",
++    "SBFX #1,#4 -> field 0x7, top bit CLEAR: must NOT sign-extend")
++
++ok = sum(1 for _, o in rows if o)
++print()
++print("ARMBFX_RESULT=%d/%d" % (ok, len(rows)))
++print("ARMBFX_DONE")
++sys.exit(0 if ok == len(rows) else 1)
+diff --git a/src/cpus/cpu_arm_instr.c b/src/cpus/cpu_arm_instr.c
+index 8059125..6baff8f 100644
+--- a/src/cpus/cpu_arm_instr.c
++++ b/src/cpus/cpu_arm_instr.c
+@@ -1313,7 +1313,30 @@ X(ubfx)
+ 	int lsb = (uint8_t)ic->arg[2];
+ 	int width = ic->arg[2] >> 16;
+ 
+-	uint32_t mask = (1 << width) - 1;
++	/*  #510: was `(1 << width) - 1'.  `width' is `1 + ((iword >> 16) & 31)', so
++	    it reaches 32 -- and `1' is a plain int, so the old expression was
++	    undefined at BOTH ends of that range: a shift count equal to the type's
++	    width at 32 (C99 6.5.7p3), and a signed overflow at 31 (6.5.7p4).
++
++	    ONLY THE 32 CASE IS OBSERVABLE, and the probe measured it: `UBFX
++	    r0,r1,#0,#32' of 0x89abcdef returned 0x0 on the committed build, while
++	    `#0,#31' returned the correct 0x9abcdef.
++
++	    *** WHAT THAT MEASUREMENT IS, STATED PRECISELY, BECAUSE A PASS-2 SEAT
++	    CAUGHT AN EARLIER DRAFT OVERSTATING IT.  The rows observe the RESULT
++	    REGISTER, never the mask.  "The mask became 0", and "1 << 31 gives
++	    INT_MIN so INT_MIN - 1 gives INT_MAX", are THIS HOST'S LOWERING (shl
++	    takes its count mod 32) -- undefined behaviour has no defined result to
++	    measure.  They explain the observation; they are not the observation. ***
++
++	    The repair is owed by the LANGUAGE at both widths; only one was returning
++	    a wrong value on this host.  `1U' defends 31 and the guard defends 32 --
++	    but a guest-VALUE probe cannot establish that, because `1 << 31' and
++	    `1U << 31' yield the SAME mask after the `- 1'.  No row can kill a
++	    `1U' -> `1' regression; UBSAN or a source pin can.  This is
++	    `cpu_m88k_instr.c's idiom in X(clr) and X(set), where `w == 0' encodes 32
++	    for that architecture.  */
++	uint32_t mask = (width == 32) ? 0xffffffffU : ((1U << width) - 1);
+ 
+ 	x >>= lsb;
+ 	x &= mask;
+@@ -1337,12 +1360,55 @@ X(sbfx)
+ 	int lsb = (uint8_t)ic->arg[2];
+ 	int width = ic->arg[2] >> 16;
+ 
+-	uint32_t mask = (1 << width) - 1;
++	/*  #510: was `(1 << width) - 1'.  `width' is `1 + ((iword >> 16) & 31)', so
++	    it reaches 32 -- and `1' is a plain int, so the old expression was
++	    undefined at BOTH ends of that range: a shift count equal to the type's
++	    width at 32 (C99 6.5.7p3), and a signed overflow at 31 (6.5.7p4).
++
++	    ONLY THE 32 CASE IS OBSERVABLE, and the probe measured it HERE, on SBFX:
++	    the `s w32' row returned 0x0 on the committed build.  (An earlier draft
++	    of this block was a VERBATIM COPY of the ubfx one and quoted a UBFX
++	    measurement -- a sentence about the other function.)
++
++	    *** WHAT THAT MEASUREMENT IS, STATED PRECISELY, BECAUSE A PASS-2 SEAT
++	    CAUGHT AN EARLIER DRAFT OVERSTATING IT.  The rows observe the RESULT
++	    REGISTER, never the mask.  "The mask became 0", and "1 << 31 gives
++	    INT_MIN so INT_MIN - 1 gives INT_MAX", are THIS HOST'S LOWERING (shl
++	    takes its count mod 32) -- undefined behaviour has no defined result to
++	    measure.  They explain the observation; they are not the observation. ***
++
++	    The repair is owed by the LANGUAGE at both widths; only one was returning
++	    a wrong value on this host.  `1U' defends 31 and the guard defends 32 --
++	    but a guest-VALUE probe cannot establish that, because `1 << 31' and
++	    `1U << 31' yield the SAME mask after the `- 1'.  No row can kill a
++	    `1U' -> `1' regression; UBSAN or a source pin can.  This is
++	    `cpu_m88k_instr.c's idiom in X(clr) and X(set), where `w == 0' encodes 32
++	    for that architecture.  */
++	uint32_t mask = (width == 32) ? 0xffffffffU : ((1U << width) - 1);
+ 	x >>= lsb;
+ 	x &= mask;
+ 
+-	uint32_t topBitMask = 1 << (width-1);
+-	if (x & topBitMask && width < 32)
++	/*  #510: was `uint32_t topBitMask = 1 << (width-1);' followed by
++	    `if (x & topBitMask && width < 32)'.  A SECOND undefined shift, and the
++	    `width < 32' test that would have made it moot sat on the NEXT line.
++
++	    *** THAT IS NOT MERELY A REORDER, AND AN EARLIER DRAFT CALLED IT ONE. ***
++	    The old form computed `1 << (width-1)' as a PRIOR STATEMENT, and a guard
++	    never rescues an expression already evaluated.  The guest-visible `x' is
++	    identical for every width in {1..32}; what changes is DEFINEDNESS at 32,
++	    where the old form always evaluated `1 << 31'.  Under a non-trapping
++	    lowering the stored value matches either way; under UBSAN the old form
++	    traps and this one does not.  That IS the fix.
++
++	    And with `1U' the shift is already defined at 32 (`1U << 31'), so the
++	    hoist is load-bearing for a SIGNED `1' and redundant for `1U'.  Doing
++	    both is right; calling them equivalent defences is not.
++
++	    At width 32 the body is skipped, and would be a no-op anyway: with mask
++	    0xffffffffU, `x |= ~mask' is `x |= 0'.  (An earlier draft said "there is
++	    no sign to extend", which is the wrong reason -- a 32-bit field HAS a
++	    sign bit.)  */
++	if (width < 32 && (x & (1U << (width - 1))))
+ 		x |= ~mask;
+ 
+ 	reg(ic->arg[0]) = x;
+codex
+I’ll read the three handlers, the probe’s row list, and the relevant local manual sections, then separate the predicate changes from the measured coverage.
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n '"'^A8'"\\.8\\.[0-9]+[ \\t]+(BFI|UBFX|SBFX)|"'^BFI$|''^UBFX$|''^SBFX$'"' 'C:\\DocumentNoSnc\\CC\\GXEMUL\\_scratchpad\\ddi0406.txt'" in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n '"'^X'"\\((ubfx|sbfx|bfi)\\)|"'^row'"\\(|"'^t, alive, r0, pc = run_word|''^SRC'"\\s*=' src/cpus/cpu_arm_instr.c regress/arm_bfx_width_probe.py" in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+ succeeded in 1992ms:
+regress/arm_bfx_width_probe.py:129:SRC  = 0x89abcdef                 # four distinct nibble groups, top bit SET on purpose:
+regress/arm_bfx_width_probe.py:214:row("enc ok", "yes" if enc_ok else "no", "yes",
+regress/arm_bfx_width_probe.py:218:t, alive, r0, pc = run_word(OP_MOV_R0_2A)
+regress/arm_bfx_width_probe.py:219:row("live", r0 if alive else "died", "0x2a",
+regress/arm_bfx_width_probe.py:221:row("pc adv", pc if alive else "died", "0x%x" % (CODE + 4),
+regress/arm_bfx_width_probe.py:225:t, alive, r0, pc = run_word(ubfx(4, 8))
+regress/arm_bfx_width_probe.py:226:row("mid", r0 if alive else "died", "0xde",
+regress/arm_bfx_width_probe.py:228:row("mid pc", pc if alive else "died", "0x%x" % (CODE + 4),
+regress/arm_bfx_width_probe.py:231:t, alive, r0, pc = run_word(ubfx(0, 1))
+regress/arm_bfx_width_probe.py:232:row("w1", r0 if alive else "died", "0x1",
+regress/arm_bfx_width_probe.py:238:t, alive, r0, pc = run_word(ubfx(0, 32))
+regress/arm_bfx_width_probe.py:239:row("w32", r0 if alive else "died", "0x89abcdef",
+regress/arm_bfx_width_probe.py:241:row("w32 pc", pc if alive else "died", "0x%x" % (CODE + 4),
+regress/arm_bfx_width_probe.py:245:t, alive, r0, pc = run_word(ubfx(0, 31))
+regress/arm_bfx_width_probe.py:246:row("w31", r0 if alive else "died", "0x9abcdef",
+regress/arm_bfx_width_probe.py:250:t, alive, r0, pc = run_word(sbfx(4, 8))
+regress/arm_bfx_width_probe.py:251:row("s mid", r0 if alive else "died", "0xffffffde",
+regress/arm_bfx_width_probe.py:254:t, alive, r0, pc = run_word(sbfx(0, 32))
+regress/arm_bfx_width_probe.py:255:row("s w32", r0 if alive else "died", "0x89abcdef",
+regress/arm_bfx_width_probe.py:264:row("s w32 pc", pc if alive else "died", "0x%x" % (CODE + 4),
+regress/arm_bfx_width_probe.py:272:t, alive, r0, pc = run_word(sbfx(1, 4))
+regress/arm_bfx_width_probe.py:273:row("s clear", r0 if alive else "died", "0x7",
+regress/arm_bfx_width_probe.py:280:t, alive, r0, pc = run_word(sbfx(0, 31))
+regress/arm_bfx_width_probe.py:281:row("s w31", r0 if alive else "died", "0x9abcdef",
+src/cpus/cpu_arm_instr.c:1309:X(ubfx)
+src/cpus/cpu_arm_instr.c:1368:X(sbfx)
+src/cpus/cpu_arm_instr.c:1450:X(bfi)
+
+ succeeded in 2010ms:
+18009:A8.8.20  BFI
+29995:A8.8.165  SBFX
+36738:A8.8.247  UBFX
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$manualLineNumber = 0
+$manualInSection = $false
+foreach ($manualLine in [System.IO.File]::ReadLines('"'C:\\DocumentNoSnc\\CC\\GXEMUL\\_scratchpad\\ddi0406.txt')) {
+    "'$manualLineNumber++
+    if ($manualLine -match '"'"'^A8'"\\.8\\.\\d+\\s') { "'$manualInSection = $manualLine -match '"'"'^A8'"\\.8\\.(20|165|247)\\s' }
+    if ("'$manualInSection) { '"'{0}:{1}' -f "'$manualLineNumber, $manualLine }
+    if ($manualLineNumber -gt 36900) { break }
+}' in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$armLineNumber = 0
+$armInHandler = $false
+foreach ($armLine in [System.IO.File]::ReadLines((Join-Path $PWD '"'src/cpus/cpu_arm_instr.c'))) {
+    "'$armLineNumber++
+    if ($armLine -match '"'"'^X'"\\((ubfx|sbfx|bfi)\\)') { "'$armInHandler = $true }
+    if ($armInHandler) { '"'{0}:{1}' -f "'$armLineNumber, $armLine }
+    if ($armInHandler -and $armLine -eq '"'}') { "'$armInHandler = $false }
+}' in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$probeLineNumber = 0
+foreach ($probeLine in [System.IO.File]::ReadLines((Join-Path $PWD '"'regress/arm_bfx_width_probe.py'))) {
+    "'$probeLineNumber++
+    if ($probeLineNumber -ge 211 -and $probeLineNumber -le 283) { '"'{0}:{1}' -f "'$probeLineNumber, $probeLine }
+    if ($probeLineNumber -gt 283) { break }
+}' in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+ exited 1 in 1479ms:
+Cannot invoke method. Method invocation is supported only on core types in this language mode.
+At line:4 char:25
++ ... nualLine in [System.IO.File]::ReadLines('C:\DocumentNoSnc\CC\GXEMUL\_ ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : InvalidOperation: (:) [], RuntimeException
+    + FullyQualifiedErrorId : MethodInvocationNotSupportedInConstrainedLanguage
+ 
+
+ exited 1 in 1738ms:
+Cannot invoke method. Method invocation is supported only on core types in this language mode.
+At line:3 char:24
++ ... robeLine in [System.IO.File]::ReadLines((Join-Path $PWD 'regress/arm_ ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : InvalidOperation: (:) [], RuntimeException
+    + FullyQualifiedErrorId : MethodInvocationNotSupportedInConstrainedLanguage
+ 
+
+ exited 1 in 1748ms:
+Cannot invoke method. Method invocation is supported only on core types in this language mode.
+At line:4 char:22
++ ... $armLine in [System.IO.File]::ReadLines((Join-Path $PWD 'src/cpus/cpu ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : InvalidOperation: (:) [], RuntimeException
+    + FullyQualifiedErrorId : MethodInvocationNotSupportedInConstrainedLanguage
+ 
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$manualLineNumber = 0
+$manualInSection = $false
+foreach ($manualLine in (Get-Content -LiteralPath '"'C:\\DocumentNoSnc\\CC\\GXEMUL\\_scratchpad\\ddi0406.txt' -TotalCount 36900)) {
+    "'$manualLineNumber++
+    if ($manualLine -match '"'"'^A8'"\\.8\\.\\d+\\s') { "'$manualInSection = $manualLine -match '"'"'^A8'"\\.8\\.(20|165|247)\\s' }
+    if ("'$manualInSection) { '"'{0}:{1}' -f "'$manualLineNumber, $manualLine }
+}' in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$probeLineNumber = 210
+Get-Content -LiteralPath '"'regress/arm_bfx_width_probe.py' | Select-Object -Skip 210 -First 73 | ForEach-Object {
+    "'$probeLineNumber++
+    '"'{0}:{1}' -f "'$probeLineNumber, $_
+}' in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$armLineNumber = 0
+$armInHandler = $false
+foreach ($armLine in (Get-Content -LiteralPath '"'src/cpus/cpu_arm_instr.c' -TotalCount 1500)) {
+    "'$armLineNumber++
+    if ($armLine -match '"'"'^X'"\\((ubfx|sbfx|bfi)\\)') { "'$armInHandler = $true }
+    if ($armInHandler) { '"'{0}:{1}' -f "'$armLineNumber, $armLine }
+    if ($armInHandler -and $armLine -eq '"'}') { "'$armInHandler = $false }
+}' in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+ succeeded in 1476ms:
+1309:X(ubfx)
+1310:{
+1311:	uint32_t x = reg(ic->arg[1]);
+1312:
+1313:	int lsb = (uint8_t)ic->arg[2];
+1314:	int width = ic->arg[2] >> 16;
+1315:
+1316:	/*  #510: was `(1 << width) - 1'.  `width' is `1 + ((iword >> 16) & 31)', so
+1317:	    it reaches 32 -- and `1' is a plain int, so the old expression was
+1318:	    undefined at THE TWO HIGHEST VALUES of that range: a shift count equal
+1319:	    to the type's width at 32 (C99 6.5.7p3), and a signed overflow at 31
+1320:	    (6.5.7p4).  (An earlier draft said "at BOTH ends", which is wrong for
+1321:	    {1..32} -- the low end, width 1, is perfectly well defined.)
+1322:
+1323:	    IN THE WITNESS RUNS, ONLY THE WIDTH-32 RESULT ROWS FAILED: `UBFX
+1324:	    r0,r1,#0,#32' of 0x89abcdef returned 0x0 on the committed build, while
+1325:	    `#0,#31' returned the correct 0x9abcdef.  (An earlier draft said "ONLY
+1326:	    THE 32 CASE IS OBSERVABLE", which claims more than the runs establish --
+1327:	    and at the time SBFX at width 31 was not tested AT ALL, so the claim
+1328:	    generalised a UBFX row to the other function.  `s w31' now covers it.)
+1329:	    Note also that a width-32 extract returns the whole register only for a
+1330:	    LEGAL field, i.e. lsb = 0; the decoder does not enforce that.
+1331:
+1332:	    *** WHAT THAT MEASUREMENT IS, STATED PRECISELY, BECAUSE A PASS-2 SEAT
+1333:	    CAUGHT AN EARLIER DRAFT OVERSTATING IT.  The rows observe the RESULT
+1334:	    REGISTER, never the mask.  "The mask became 0", and "1 << 31 gives
+1335:	    INT_MIN so INT_MIN - 1 gives INT_MAX", are THIS HOST'S LOWERING (shl
+1336:	    takes its count mod 32) -- undefined behaviour has no defined result to
+1337:	    measure.  They explain the observation; they are not the observation. ***
+1338:
+1339:	    The repair is owed by the LANGUAGE at both widths; only one was returning
+1340:	    a wrong value on this host.  `1U' defends 31 and the guard defends 32 --
+1341:	    but a guest-VALUE probe cannot establish that, because `1 << 31' and
+1342:	    `1U << 31' yield the SAME mask after the `- 1'.  No row can kill a
+1343:	    `1U' -> `1' regression; UBSAN or a source pin can.
+1344:
+1345:	    The SHAPE comes from `cpu_m88k_instr.c's X(clr)/X(set), but the analogy
+1346:	    needs care and an earlier draft ran the two together: there `w == 0'
+1347:	    ENCODES full width and the guard selects the full-width mask instead of
+1348:	    zero.  **It is not defending against a shift by 32 -- m88k's encoded
+1349:	    count never reaches 32.**  Here the guard IS doing that job.  Same
+1350:	    shape, different reason.  */
+1351:	uint32_t mask = (width == 32) ? 0xffffffffU : ((1U << width) - 1);
+1352:
+1353:	x >>= lsb;
+1354:	x &= mask;
+1355:
+1356:	reg(ic->arg[0]) = x;
+1357:}
+1368:X(sbfx)
+1369:{
+1370:	uint32_t x = reg(ic->arg[1]);
+1371:
+1372:	int lsb = (uint8_t)ic->arg[2];
+1373:	int width = ic->arg[2] >> 16;
+1374:
+1375:	/*  #510: was `(1 << width) - 1'.  `width' is `1 + ((iword >> 16) & 31)', so
+1376:	    it reaches 32 -- and `1' is a plain int, so the old expression was
+1377:	    undefined at THE TWO HIGHEST VALUES of that range: a shift count equal
+1378:	    to the type's width at 32 (C99 6.5.7p3), and a signed overflow at 31
+1379:	    (6.5.7p4).  (An earlier draft said "at BOTH ends", which is wrong for
+1380:	    {1..32} -- the low end, width 1, is perfectly well defined.)
+1381:
+1382:	    IN THE WITNESS RUNS, ONLY THE WIDTH-32 RESULT ROWS FAILED: the `s w32'
+1383:	    row returned 0x0 on the committed build.  (An earlier draft of this block
+1384:	    was a VERBATIM COPY of the ubfx one and quoted a UBFX measurement -- a
+1385:	    sentence about the other function.)
+1386:
+1387:	    *** AND WHEN THAT SENTENCE WAS FIRST WRITTEN, SBFX AT WIDTH 31 WAS NOT
+1388:	    TESTED AT ALL -- the claim generalised a UBFX row to this function, which
+1389:	    is the same copy-the-neighbour defect one paragraph up, committed while
+1390:	    correcting it.  `s w31' now pins it.  A pass-2 seat named both. ***
+1391:
+1392:	    *** WHAT THAT MEASUREMENT IS, STATED PRECISELY, BECAUSE A PASS-2 SEAT
+1393:	    CAUGHT AN EARLIER DRAFT OVERSTATING IT.  The rows observe the RESULT
+1394:	    REGISTER, never the mask.  "The mask became 0", and "1 << 31 gives
+1395:	    INT_MIN so INT_MIN - 1 gives INT_MAX", are THIS HOST'S LOWERING (shl
+1396:	    takes its count mod 32) -- undefined behaviour has no defined result to
+1397:	    measure.  They explain the observation; they are not the observation. ***
+1398:
+1399:	    The repair is owed by the LANGUAGE at both widths; only one was returning
+1400:	    a wrong value on this host.  `1U' defends 31 and the guard defends 32 --
+1401:	    but a guest-VALUE probe cannot establish that, because `1 << 31' and
+1402:	    `1U << 31' yield the SAME mask after the `- 1'.  No row can kill a
+1403:	    `1U' -> `1' regression; UBSAN or a source pin can.
+1404:
+1405:	    The SHAPE comes from `cpu_m88k_instr.c's X(clr)/X(set), but the analogy
+1406:	    needs care and an earlier draft ran the two together: there `w == 0'
+1407:	    ENCODES full width and the guard selects the full-width mask instead of
+1408:	    zero.  **It is not defending against a shift by 32 -- m88k's encoded
+1409:	    count never reaches 32.**  Here the guard IS doing that job.  Same
+1410:	    shape, different reason.  */
+1411:	uint32_t mask = (width == 32) ? 0xffffffffU : ((1U << width) - 1);
+1412:	x >>= lsb;
+1413:	x &= mask;
+1414:
+1415:	/*  #510: was `uint32_t topBitMask = 1 << (width-1);' followed by
+1416:	    `if (x & topBitMask && width < 32)'.  A SECOND undefined shift, and the
+1417:	    `width < 32' test that would have made it moot sat on the NEXT line.
+1418:
+1419:	    *** THAT IS NOT MERELY A REORDER, AND AN EARLIER DRAFT CALLED IT ONE. ***
+1420:	    The old form computed `1 << (width-1)' as a PRIOR STATEMENT, and a guard
+1421:	    never rescues an expression already evaluated.  The guest-visible `x' is
+1422:	    identical for every width in {1..32}; what changes is DEFINEDNESS at 32,
+1423:	    where the old form always evaluated `1 << 31'.  Under a non-trapping
+1424:	    lowering the stored value matches either way; under UBSAN the old form
+1425:	    traps and this one does not.  That IS the fix.
+1426:
+1427:	    And with `1U' the shift is already defined at 32 (`1U << 31'), so the
+1428:	    hoist is load-bearing for a SIGNED `1' and redundant for `1U'.  Doing
+1429:	    both is right; calling them equivalent defences is not.
+1430:
+1431:	    At width 32 the body is skipped, and would be a no-op anyway: with mask
+1432:	    0xffffffffU, `x |= ~mask' is `x |= 0'.  (An earlier draft said "there is
+1433:	    no sign to extend", which is the wrong reason -- a 32-bit field HAS a
+1434:	    sign bit.)  */
+1435:	if (width < 32 && (x & (1U << (width - 1))))
+1436:		x |= ~mask;
+1437:
+1438:	reg(ic->arg[0]) = x;
+1439:}
+1450:X(bfi)
+1451:{
+1452:	uint32_t x = reg(ic->arg[1]);
+1453:
+1454:	int lsb = (uint8_t)ic->arg[2];
+1455:	int msb = ic->arg[2] >> 16;
+1456:	int width = msb - lsb + 1;
+1457:
+1458:	x <<= lsb;
+1459:
+1460:	uint32_t mask = (1 << width) - 1;
+1461:
+1462:	mask <<= lsb;
+1463:
+1464:	reg(ic->arg[0]) &= ~mask;
+1465:	reg(ic->arg[0]) |= (x & mask);
+1466:}
+
+ succeeded in 1549ms:
+211:             for w in (ubfx(0, 32), ubfx(0, 31), ubfx(4, 8), ubfx(0, 1))) \
+212:     and all((w & SBFX_MASK) == SBFX_BASE
+213:             for w in (sbfx(0, 32), sbfx(4, 8), sbfx(1, 4), sbfx(0, 31)))
+214:row("enc ok", "yes" if enc_ok else "no", "yes",
+215:    "ALL EIGHT planted words match the decoder's own mask -- checked before any run")
+216:
+217:#  ---- CONTROL 1: the plant/step/print path works at all ---------------------------------------
+218:t, alive, r0, pc = run_word(OP_MOV_R0_2A)
+219:row("live", r0 if alive else "died", "0x2a",
+220:    "LIVENESS: a plain `mov r0,#0x2a' plants, steps and prints")
+221:row("pc adv", pc if alive else "died", "0x%x" % (CODE + 4),
+222:    "CONTROL: pc advanced exactly 4 -- see the header on what an untranslatable word does")
+223:
+224:#  ---- CONTROL 2: a small NONZERO answer, because the defect's symptom is exactly zero ---------
+225:t, alive, r0, pc = run_word(ubfx(4, 8))
+226:row("mid", r0 if alive else "died", "0xde",
+227:    "UBFX #4,#8 of 0x89abcdef -- only a correct encoding AND execution gives 0xde")
+228:row("mid pc", pc if alive else "died", "0x%x" % (CODE + 4),
+229:    "CONTROL: the bitfield word really executed; it did not stop the machine")
+230:
+231:t, alive, r0, pc = run_word(ubfx(0, 1))
+232:row("w1", r0 if alive else "died", "0x1",
+233:    "UBFX #0,#1 -- the narrowest field, nonzero")
+234:
+235:#  ---- THE DEFECT ROW.  Asserts the CORRECT value and is expected to FAIL pre-fix. -------------
+236:#  `1 << 32' shifts by the type's own width, the mask becomes 0 on the common lowering, and the
+237:#  instruction returns 0 instead of the whole register.
+238:t, alive, r0, pc = run_word(ubfx(0, 32))
+239:row("w32", r0 if alive else "died", "0x89abcdef",
+240:    "UBFX #0,#32 must return the WHOLE register -- `1 << 32' is undefined")
+241:row("w32 pc", pc if alive else "died", "0x%x" % (CODE + 4),
+242:    "CONTROL: it EXECUTED and returned a wrong value; it did not fail to decode")
+243:
+244:#  ---- the neighbour that currently works BY ACCIDENT, pinned so a repair does not break it ----
+245:t, alive, r0, pc = run_word(ubfx(0, 31))
+246:row("w31", r0 if alive else "died", "0x9abcdef",
+247:    "UBFX #0,#31 -- UB (1<<31 overflows int) but wraps to the right mask; must STAY right")
+248:
+249:#  ---- SBFX: the same mask site, plus its own second shift at :1344 ----------------------------
+250:t, alive, r0, pc = run_word(sbfx(4, 8))
+251:row("s mid", r0 if alive else "died", "0xffffffde",
+252:    "SBFX #4,#8 of 0x89abcdef: field 0xde, top bit set, so sign-extended")
+253:
+254:t, alive, r0, pc = run_word(sbfx(0, 32))
+255:row("s w32", r0 if alive else "died", "0x89abcdef",
+256:    "SBFX #0,#32: the whole register.  Does NOT pin topBitMask -- see the header")
+257:
+258:#  *** ADDED BY PASS 2.  grok derived this escape and it holds: deleting the BIT TEST from
+259:#  `if (width < 32 && ...)' -- always sign-extend below width 32 -- scores full marks, because
+260:#  EVERY byte field of 0x89abcdef has bit 7 set (0x89, 0xab, 0xcd, 0xef) and `s mid' is a byte
+261:#  field.  No row had an SBFX field whose top bit is CLEAR, so nothing could see it. ***
+262:#      SBFX #1,#4 of 0x89abcdef: (V >> 1) & 0xf = 0x7, bit 3 CLEAR -> NOT sign-extended -> 0x7
+263:#      under always-extend:      0x7 | ~0xf = 0xfffffff7
+264:row("s w32 pc", pc if alive else "died", "0x%x" % (CODE + 4),
+265:    "CONTROL: the SBFX word EXECUTED -- see the note below")
+266:#  *** ADDED BY PASS 2.  An earlier draft of this probe, its CHANGELOG block AND its commit
+267:#  message all said `pc adv = 0x8004' holds "on EVERY row".  IT DID NOT: only `pc adv', `mid pc'
+268:#  and `w32 pc' asserted pc, and all three are MOV/UBFX.  NO SBFX ROW CHECKED PC AT ALL -- and the
+269:#  SBFX rows are the ones whose expected failure value is also EXACTLY ZERO, which is precisely
+270:#  the case the pc control exists to disambiguate.  Named by the codex seat. ***
+271:
+272:t, alive, r0, pc = run_word(sbfx(1, 4))
+273:row("s clear", r0 if alive else "died", "0x7",
+274:    "SBFX #1,#4 -> field 0x7, top bit CLEAR: must NOT sign-extend")
+275:
+276:#  *** ADDED BY PASS 2: SBFX AT WIDTH 31 WAS ENTIRELY UNTESTED. ***  The round's headline claim --
+277:#  "only the width-32 case is observable" -- rested on a UBFX width-31 row and generalised to SBFX
+278:#  with no evidence.  SBFX #0,#31 of 0x89abcdef masks to 0x09abcdef, whose bit 30 is CLEAR, so it
+279:#  must NOT sign-extend.  (codex.)
+280:t, alive, r0, pc = run_word(sbfx(0, 31))
+281:row("s w31", r0 if alive else "died", "0x9abcdef",
+282:    "SBFX #0,#31: bit 30 CLEAR, so no sign extension -- and it pins SBFX at width 31 at all")
+283:
+
+ succeeded in 1807ms:
+18009:A8.8.20  BFI
+18010:
+18011:              Bit Field Insert copies any number of low order bits from a register into the same number of adjacent bits at any
+18012:              position in the destination register.
+18013:
+18014:              Encoding T1               ARMv6T2, ARMv7
+18015:
+18016:              BFI<c> <Rd>, <Rn>, #<lsb>, #<width>
+18017:
+18018:              15 14 13 12 11 10 9 8 7 6 5 4 3 2 1 0 15 14 13 12 11 10 9 8 7 6 5 4 3 2 1 0
+18019:
+18020:              1 1 1 1 0 (0) 1 1 0 1 1 0            Rn   0 imm3  Rd imm2 (0)                         msb
+18021:
+18022:              if Rn == `1111' then SEE BFC;
+18023:              d = UInt(Rd); n = UInt(Rn); msbit = UInt(msb); lsbit = UInt(imm3:imm2);
+18024:              if d IN {13,15} || n == 13 then UNPREDICTABLE;
+18025:
+18026:              Encoding A1               ARMv6T2, ARMv7
+18027:
+18028:              BFI<c> <Rd>, <Rn>, #<lsb>, #<width>
+18029:
+18030:              31 30 29 28 27 26 25 24 23 22 21 20 19 18 17 16 15 14 13 12 11 10 9 8 7 6 5 4 3 2 1 0
+18031:
+18032:              cond 0 1 1 1 1 1 0                   msb  Rd      lsb                    001          Rn
+18033:
+18034:              For the case when cond is 0b1111, see Unconditional instructions on page A5-214.
+18035:
+18036:              if Rn == `1111' then SEE BFC;
+18037:              d = UInt(Rd); n = UInt(Rn); msbit = UInt(msb); lsbit = UInt(lsb);
+18038:              if d == 15 then UNPREDICTABLE;
+18039:
+18040:A8-336        Copyright c 1996-1998, 2000, 2004-2012, 2014, 2018 ARM Limited. All rights reserved.       ARM DDI 0406C.d
+18041:                                                             Non-Confidential                                       ID040418
+18042:                                                                                              A8 Instruction Descriptions
+18043:                                                                                   A8.8 Alphabetical list of instructions
+18044:
+18045:                 Assembler syntax
+18046:
+18047:                 BFI{<c>}{<q>} <Rd>, <Rn>, #<lsb>, #<width>
+18048:
+18049:                 where:
+18050:
+18051:                 <c>, <q>    See Standard assembler syntax fields on page A8-285.
+18052:
+18053:                 <Rd>        The destination register.
+18054:
+18055:                 <Rn>        The source register.
+18056:
+18057:                 <lsb>       The least significant destination bit, in the range 0 to 31. This determines the required value of lsbit.
+18058:
+18059:                 <width>     The number of bits to be copied, in the range 1 to 32-<lsb>. The required value of msbit is
+18060:                             <lsb>+<width>-1.
+18061:
+18062:                 Operation
+18063:
+18064:                 if ConditionPassed() then
+18065:                       EncodingSpecificOperations();
+18066:                       if msbit >= lsbit then
+18067:                             R[d]<msbit:lsbit> = R[n]<(msbit-lsbit):0>;
+18068:                             // Other bits of R[d] are unchanged
+18069:                       else
+18070:                             UNPREDICTABLE;
+18071:
+18072:                 Exceptions
+18073:                 None.
+18074:
+18075:ARM DDI 0406C.d  Copyright c 1996-1998, 2000, 2004-2012, 2014, 2018 ARM Limited. All rights reserved.                     A8-337
+18076:ID040418                                                        Non-Confidential
+18077:A8 Instruction Descriptions
+18078:A8.8 Alphabetical list of instructions
+18079:
+29995:A8.8.165  SBFX
+29996:
+29997:                 Signed Bit Field Extract extracts any number of adjacent bits at any position from a register, sign-extends them to
+29998:                 32 bits, and writes the result to the destination register.
+29999:
+30000:                 Encoding T1  ARMv6T2, ARMv7
+30001:
+30002:                 SBFX<c> <Rd>, <Rn>, #<lsb>, #<width>
+30003:
+30004:                 15 14 13 12 11 10 9 8 7 6 5 4 3 2 1 0 15 14 13 12 11 10 9 8 7 6 5 4 3 2 1 0
+30005:
+30006:                 1 1 1 1 0 (0) 1 1 0 1 0 0             Rn  0 imm3       Rd imm2 (0) widthm1
+30007:
+30008:                 d = UInt(Rd); n = UInt(Rn);
+30009:                 lsbit = UInt(imm3:imm2); widthminus1 = UInt(widthm1);
+30010:                 if d IN {13,15} || n IN {13,15} then UNPREDICTABLE;
+30011:
+30012:                 Encoding A1  ARMv6T2, ARMv7
+30013:
+30014:                 SBFX<c> <Rd>, <Rn>, #<lsb>, #<width>
+30015:
+30016:                 31 30 29 28 27 26 25 24 23 22 21 20 19 18 17 16 15 14 13 12 11 10 9 8 7 6 5 4 3 2 1 0
+30017:
+30018:                 cond 0 1 1 1 1 0 1 widthm1                Rd           lsb  101                       Rn
+30019:
+30020:                 For the case when cond is 0b1111, see Unconditional instructions on page A5-214.
+30021:
+30022:                 d = UInt(Rd); n = UInt(Rn);
+30023:                 lsbit = UInt(lsb); widthminus1 = UInt(widthm1);
+30024:                 if d == 15 || n == 15 then UNPREDICTABLE;
+30025:
+30026:ARM DDI 0406C.d  Copyright c 1996-1998, 2000, 2004-2012, 2014, 2018 ARM Limited. All rights reserved.      A8-599
+30027:ID040418                                                        Non-Confidential
+30028:A8 Instruction Descriptions
+30029:A8.8 Alphabetical list of instructions
+30030:
+30031:        Assembler syntax
+30032:
+30033:        SBFX{<c>}{<q>} <Rd>, <Rn>, #<lsb>, #<width>
+30034:
+30035:        where:
+30036:
+30037:        <c>, <q>                        See Standard assembler syntax fields on page A8-285.
+30038:
+30039:        <Rd>                            The destination register.
+30040:
+30041:        <Rn>                            The first operand register.
+30042:
+30043:        <lsb>                           is the bit number of the least significant bit in the field, in the range 0-31. This determines the
+30044:                                        required value of lsbit.
+30045:
+30046:        <width>                         is the width of the field, in the range 1 to 32-<lsb>. The required value of widthminus1 is <width>-1.
+30047:
+30048:        Operation
+30049:
+30050:        if ConditionPassed() then
+30051:              EncodingSpecificOperations();
+30052:              msbit = lsbit + widthminus1;
+30053:              if msbit <= 31 then
+30054:                    R[d] = SignExtend(R[n]<msbit:lsbit>, 32);
+30055:              else
+30056:                    UNPREDICTABLE;
+30057:
+30058:        Exceptions
+30059:        None.
+30060:
+30061:A8-600  Copyright c 1996-1998, 2000, 2004-2012, 2014, 2018 ARM Limited. All rights reserved.  ARM DDI 0406C.d
+30062:                                                       Non-Confidential                                  ID040418
+30063:                                                                                                 A8 Instruction Descriptions
+30064:                                                                                      A8.8 Alphabetical list of instructions
+30065:
+36738:A8.8.247  UBFX
+36739:
+36740:                 Unsigned Bit Field Extract extracts any number of adjacent bits at any position from a register, zero-extends them
+36741:                 to 32 bits, and writes the result to the destination register.
+36742:
+36743:                 Encoding T1  ARMv6T2, ARMv7
+36744:
+36745:                 UBFX<c> <Rd>, <Rn>, #<lsb>, #<width>
+36746:
+36747:                 15 14 13 12 11 10 9 8 7 6 5 4 3 2 1 0 15 14 13 12 11 10 9 8 7 6 5 4 3 2 1 0
+36748:
+36749:                 1 1 1 1 0 (0) 1 1 1 1 0 0             Rn  0 imm3       Rd imm2 (0) widthm1
+36750:
+36751:                 d = UInt(Rd); n = UInt(Rn);
+36752:                 lsbit = UInt(imm3:imm2); widthminus1 = UInt(widthm1);
+36753:                 if d IN {13,15} || n IN {13,15} then UNPREDICTABLE;
+36754:
+36755:                 Encoding A1  ARMv6T2, ARMv7
+36756:
+36757:                 UBFX<c> <Rd>, <Rn>, #<lsb>, #<width>
+36758:
+36759:                 31 30 29 28 27 26 25 24 23 22 21 20 19 18 17 16 15 14 13 12 11 10 9 8 7 6 5 4 3 2 1 0
+36760:
+36761:                 cond 0 1 1 1 1 1 1 widthm1                Rd           lsb  101                       Rn
+36762:
+36763:                 For the case when cond is 0b1111, see Unconditional instructions on page A5-214.
+36764:
+36765:                 d = UInt(Rd); n = UInt(Rn);
+36766:                 lsbit = UInt(lsb); widthminus1 = UInt(widthm1);
+36767:                 if d == 15 || n == 15 then UNPREDICTABLE;
+36768:
+36769:ARM DDI 0406C.d  Copyright c 1996-1998, 2000, 2004-2012, 2014, 2018 ARM Limited. All rights reserved.      A8-757
+36770:ID040418                                                        Non-Confidential
+36771:A8 Instruction Descriptions
+36772:A8.8 Alphabetical list of instructions
+36773:
+36774:        Assembler syntax
+36775:
+36776:        UBFX{<c>}{<q>} <Rd>, <Rn>, #<lsb>, #<width>
+36777:
+36778:        where:
+36779:
+36780:        <c>, <q>                        See Standard assembler syntax fields on page A8-285.
+36781:
+36782:        <Rd>                            The destination register.
+36783:
+36784:        <Rn>                            The first operand register.
+36785:
+36786:        <lsb>                           is the bit number of the least significant bit in the field, in the range 0-31. This determines the
+36787:                                        required value of lsbit.
+36788:
+36789:        <width>                         is the width of the field, in the range 1 to 32-<lsb>. The required value of widthminus1 is <width>-1.
+36790:
+36791:        Operation
+36792:
+36793:        if ConditionPassed() then
+36794:              EncodingSpecificOperations();
+36795:              msbit = lsbit + widthminus1;
+36796:              if msbit <= 31 then
+36797:                    R[d] = ZeroExtend(R[n]<msbit:lsbit>, 32);
+36798:              else
+36799:                    UNPREDICTABLE;
+36800:
+36801:        Exceptions
+36802:        None.
+36803:
+36804:A8-758  Copyright c 1996-1998, 2000, 2004-2012, 2014, 2018 ARM Limited. All rights reserved.  ARM DDI 0406C.d
+36805:                                                       Non-Confidential                                  ID040418
+36806:                                                                                                 A8 Instruction Descriptions
+36807:                                                                                      A8.8 Alphabetical list of instructions
+36808:
+
+codex
+The supplied diff changes UBFX and SBFX; BFI appears only as background. The checkout also has later comments and two extra rows, `s w32 pc` and `s w31`. I’ll keep those separate from the supplied diff. The key predicate change is that the existing SBFX width test now guards evaluation of the sign-bit shift.
+codex
+The legal width-32 case returns the full source under the fix and zero under the specified old host lowering; `w32` and `s w32` pin that difference. Allowing SBFX’s sign test to run at width 32 would be value-invisible with the remaining fix intact: the unsigned shift is defined, and the extension adds zero.
+codex
+**VERDICT: The supplied diff changes UBFX/SBFX only; BFI is unchanged. It repairs observable width-32 behavior as well as definedness, and the preserved mutant does not establish coverage of every predicate.**
+
+The checkout differs from the supplied text: its handler comments are revised, and its row list adds `s w32 pc` and `s w31`. Those additions must be kept separate when adjudicating the inlined diff.
+
+**Q1–Q2.** The settled UBFX/SBFX width domain is 1–32. Neither handler has an existing conditional guard before mask construction. In particular, neither locally checks that the field ends within the register.
+
+For “weakening,” enlarging a predicate’s true set must be distinguished from weakening the protection it supplies. The mask predicate selects the full-mask alternative when true.
+
+- **UBFX full-width predicate:** The fix adds “width equals 32.” Its true set is {32}; the shift executes for widths 1–31. No existing predicate dominates it within the handler. Relaxing equality to “at least 32” is a minimal comparator weakening, but changes nothing on this domain. The nearest boundary relaxation with a reachable effect also admits width 31 to the full-mask alternative. The supplied `w31` row would distinguish that: its source retains the unwanted highest bit. **UBFX full-width selection is an unmeasured weakening cell.**
+
+- **SBFX full-width predicate:** The fix adds the same predicate, with the same domain and absence of an enclosing guard. The same boundary relaxation would escape the supplied row list, which has no SBFX width-31 row. The checkout’s additional `s w31` row would distinguish it. **SBFX full-width selection is a separate unmeasured weakening cell.**
+
+- **SBFX width predicate:** “Width less than 32” already existed. The fix moves it ahead of the sign-bit test and puts the sign-bit shift inside its short-circuited right operand. Previously, that shift was an unconditional preceding statement; the sign-bit test then controlled whether the width comparison was evaluated. Afterwards, the width predicate controls evaluation of both the shift and the sign-bit test. Its nearest boundary weakening admits width 32. With the remaining fix intact, that produces no guest-value difference: the unsigned shift is defined, and extending with the complement of the full mask adds zero. **SBFX’s width restriction on sign-bit evaluation is an unmeasured cell.**
+
+- **SBFX sign-bit predicate:** This remains the requirement that the extracted field’s highest bit be set. Its computation becomes inline and unsigned; its evaluation is now dominated by the width predicate. The extension body requires both predicates. Dropping the sign-bit requirement is the minimal conjunct deletion: clear-sign fields now also receive extension. The supplied `s clear` row distinguishes this, expecting `0x7` where unconditional extension below width 32 would produce `0xfffffff7`. **Relaxation of the SBFX sign-bit requirement is an unmeasured cell.**
+
+The earlier mask ternary rejoins before the SBFX sign test; neither ternary arm encloses that test. Making width 32 reach mask construction’s shift would weaken the *protection*, while shrinking the full-mask predicate’s true set. The supplied `w32` and `s w32` rows distinguish that failure under the stipulated host lowering.
+
+**`M_nosext` does not establish those weakening measurements.** Its mutation and output are not included in the permitted reading. If its name denotes suppressed sign extension, it tests the opposite direction from dropping the sign-bit restriction: `s mid` requires extension, whereas `s clear` forbids it. The filename cannot authenticate its exact edit. Thus all four weakening cells named above remain unmeasured on the supplied evidence; a row’s predicted discrimination is not a preserved mutant measurement.
+
+The unsigned-literal changes are additional repairs, **not predicates**. The two mask unsignedness changes and the restoration of an unconditional signed sign-bit shift also lack measured mutants in this record. Changing only the inline sign-bit literal back to signed would remain defined under the retained width restriction.
+
+BFI contributes no changed predicate. Its [handler](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c:1450) still constructs its mask unconditionally. The manual’s requirement that the most-significant endpoint be at least the least-significant endpoint appears at [ddi0406.txt:18066](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ddi0406.txt:18066); that architectural condition is not a guard in this handler.
+
+**Q3.** A legal width-32 extraction necessarily starts at bit zero. The manual limits width accordingly and specifies copying the selected field with zero extension for UBFX. See [line 36789](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ddi0406.txt:36789) and [line 36795](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ddi0406.txt:36795).
+
+The fix selects the all-ones mask. Consequently, legal width-32 UBFX returns the whole source: `0x89abcdef` in `w32`. SBFX likewise preserves all 32 bits, pinned by `s w32`, consistent with the manual’s [sign-extension operation at line 30054](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ddi0406.txt:30054). For a decoded width-32 field with a nonzero starting bit, the handlers instead return the source shifted right; that field is outside the manual’s valid range.
+
+Under the stipulated old count-masked host lowering, the shift count 32 becomes zero, mask construction yields zero, and the result is zero. That is a host-behavior explanation, not a defined C result.
+
+**Therefore this is a behavior correction as well as a definedness repair.** The diff’s comments explicitly acknowledge it: “only one was returning a wrong value on this host.” The later comment claiming unchanged guest values concerns the isolated sign-extension rewrite, not the complete mask repair.
+
+**Q4. No—the supplied detector header explicitly disclaims that coverage:**
+
+> “Two one-line regressions re-open real undefined behaviour and score FULL MARKS, and no guest-value row can kill either. Disclosed, not covered:”
+
+It specifically identifies the mask’s `1U` → `1` regression and says:
+
+> “these two are unkillable BY THIS PROBE, not unkillable in principle.”
+
+The UBSAN paragraph describes a separate differential diagnostic lane, filed as `[[ubsanshiftlane]]`. It does not claim that the shipped guest-value detector performs that measurement.
+tokens used
+42,884

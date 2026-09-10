@@ -1,0 +1,93 @@
+VERDICT: Uncaught parent exceptions can exit nonzero; measurement failures do not control exit status; closest is `wdc_altoffset_probe.py`, furthest is `wdc_altoffset_sig_probe.py`.
+
+Premise 2 is correct about the absence of `sys.exit(`, but “cannot exit nonzero” is too broad. The main altoffset file has two uncaught parent-process assertions: label width and distinct result registers. They currently hold—maximum label width 53, with 18 distinct registers—and protect table integrity rather than device measurements. Both companion altoffset files execute those assertions through their import. Missing arguments or malformed leg specifications can also raise exceptions in the companions; uncaught filesystem and PTY errors can terminate all four. [Integrity assertions](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/wdc_altoffset_probe.py:394)
+
+Neither PTY implementation propagates the child’s exit status. Failed row comparisons and unsuccessful breakpoint observations have no explicit nonzero exit path. The omitted fourth sentinel is `ALTOFF_DET_DONE`. Thus your conclusion holds for an exit-status-only gate evaluating completed measurements.
+
+I read only the four specified files. The expectations below distinguish a documented defective baseline from the fixed behavior; confirming their differential does not mean both binaries behave correctly.
+
+In [wdc_altoffset_probe.py](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/wdc_altoffset_probe.py:354), **Q1** has explicit expectations for all 18 rows. Unless distinguished below, the expectation applies to both legs:
+
+- `A/v0` expects RAM readback `0x55`. `B/v1` and `B/a0` expect cylinder-register readbacks `0x55` and `0x66`.
+- `C/a1` and `C/a2` expect FIFO readbacks `0x5a` and `0xa5`. `D/a3` expects the documented power-on status, `ST_POWERON = 0x51`.
+- The armed-status rows `P1/s0`, `P2/s3`, `P3/s6`, and `P4/t4` each expect `ST_ARMED = 0x58`.
+- The legal-reset acceptance rows `P1/s1` and `P1/s2` expect status `ST_IDLE = 0x50` and data `FF = 0xff`.
+- The defect rows `P2/s4` and `P2/s5` expect status/data `0x50/0xff` on the baseline and `0x58/0x71` on the fixed leg.
+- The non-reset control rows `P3/s7` and `P3/t9` expect `0x58/0x71`.
+- The additional defect rows `P4/t5` and `P4/t6` expect `0x50/0xff` on the baseline and `0x58/0x71` on the fixed leg.
+
+The current table therefore has **four differing rows**, despite the introductory statement that only P2’s two rows differ.
+
+The apparatus also computes expected-versus-observed instruction-word agreement, `w_ok`, and mnemonic agreement, `m_ok`; each has an expected total of `len(prog)`. `pc0` has an explicit expected entry address, `BASE`. `hit` is expected to report breakpoint arrival.
+
+The row comparisons produce `okb`, `okf`, `npass`, `nfail`, and `fails`; their successful differential means 36 correct predictions, zero failures, and an empty failure list. Most significantly, **`ok` already combines zero row failures, both breakpoint observations, and complete instruction-word agreement**. It excludes mnemonic agreement and the entry-PC observation. Its printed verdict is consequently a real computed decision, although it never controls exit status. [Aggregate verdict](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/wdc_altoffset_probe.py:682)
+
+For **Q2**, `elapsed` has no performance expectation beyond the existing completion deadline. The diagnostic counts in `b_dg` and `f_dg` cover “write to DATA, but not”, “reading too much”, “wdc inbuf overrun”, “wdc inbuf full”, “write to ALT. CTRL”, and “DRIVE ADDRESS”. No per-message count criterion is supplied. The file explicitly explains that suppressed debug output makes zero counts non-evidence. An assertion about these counts would require a claim connecting message multiplicity and verbosity to device behavior. [Diagnostic qualification](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/wdc_altoffset_probe.py:668)
+
+For **Q3**, both controls are present: RAM and cylinder-register liveness, per-phase armed-status liveness, the FIFO signature, and the computed power-on status signature. The observations license status-byte and individual data-byte assertions. They do not directly establish preservation of every staged byte or of `cur_command`.
+
+In [wdc_altoffset_sig_probe.py](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/wdc_altoffset_sig_probe.py:88), **Q1** extends beyond the table’s nonempty “want” column:
+
+- `v0`, “RAM round-trip 0x55”, has the known expectation `0x55`, although its table want is `None`.
+- `L1/v1` and `L1/a0` expect `0x55/0x66`. The computed Boolean `rt` checks that pair.
+- `D/a1` and `D/a2` have documented expectations of `0x14/0xeb` for the committed/m3 cases and `0x55/0x66` for the fixed case. Their table wants are `None`, but their expectations are explicit beside the observations.
+- `L2/s0` and `L2/s1` expect `0x14/0xeb` on every leg. The computed Boolean `live` checks that pair.
+- `sig` checks whether D returned exactly `0x14/0xeb`. That establishes the signature-present classification. **A false `sig` does not establish the expected fixed result:** unreadable or unrelated values also make it false, yet the output calls all those cases “declined”. [Verdict logic](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/wdc_altoffset_sig_probe.py:246)
+
+`w_ok` has the expected total `len(W.prog)`; `parked` should be true. `iscd` should be true for the stated rig, but it is a transcript-text observation, separate from the device signature. These quantities are recorded without a combined validity decision.
+
+For **Q2**, `a3`, “cyl_lo re-written, read back”, deserves a precise qualification. It is explicitly designated “recorded, not predicted”. However, the accompanying comment states that the reset latch remains clear on the fixed leg and is already set on committed/m3. Together with the stated signature behavior, that supports an **inferred** expectation of `0x55` versus `0x14`. Under your broad “expectation anywhere in the file” criterion, it is therefore unscored rather than wholly oracle-free. The assertion would concern persistence of the reset-signature override across the cylinder-register rewrite; the file deliberately does not adopt that prediction. [Intermediate observation](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/wdc_altoffset_sig_probe.py:104)
+
+There is no other device-result cell lacking an in-file expectation. Dates, paths, and program counts are metadata.
+
+For **Q3**, both controls are present. `v0` and L1 provide liveness; L2 provides positive liveness of the signature channel and a device signature. Its expected `0x14/0xeb` differs from the cylinder values supplied by the instrument, excluding ordinary RAM readback. The file computes these controls but does not require them before printing “declined”.
+
+In [wdc_altoffset_4bit_probe.py](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/wdc_altoffset_4bit_probe.py:183), **Q1** covers all nine result bytes:
+
+- `v0`, `v1`, and `a0` expect `0x55`, `0x55`, and `0x66`.
+- `P5 live/s0` and `P6 live/s3` expect `ST_ARMED = 0x58`.
+- `P6 ACCEPT/s4` and `P6 ACCEPT/s5` expect `ST_IDLE = 0x50` and `FF = 0xff`.
+- `P5 DEFECT/s1` and `P5 DEFECT/s2` have documented baseline/mask-mutant expectations of `0x50/0xff` and fixed expectations of `0x58/0x71`.
+
+Its `npass` and `nfail` count only the seven cells with non-`None` wants per leg. Nevertheless, the omitted P5 pair already has executable interpretation: `reset` recognizes `0x50/0xff`; `declined` recognizes `0x58/0x71`; other results print `INDETERMINATE`. `accept_ok` checks P6’s pair, and `armed_ok` checks both armed statuses. [Classification](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/wdc_altoffset_4bit_probe.py:222)
+
+`w_ok` should equal `len(W.prog)`, and `parked` should be true. There is no aggregate decision requiring all of these observations to agree.
+
+For **Q2**, no device-result byte requires inventing a new behavioral expectation. P5’s blank table wants represent variation by leg, not missing oracles. The remaining printed quantities are metadata. Both this file and the signature companion also permit an empty `LEGS` list and still print their completion sentinels.
+
+For **Q3**, liveness is present in the RAM/cylinder controls and both armed-status rows. A device-signature control is present **functionally**, through the computed status observations: armed `0x58` and legal-reset `0x50` cannot be ordinary RAM readback of the command value. There is no separately labelled FIFO/signature row. Importing the main probe does not retain its FIFO controls: this companion replaces its program and observed-register list.
+
+In [wdc_addtoinbuf_probe.py](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/wdc_addtoinbuf_probe.py:580), **Q1** has explicit expectations for all 15 rows:
+
+- `A/t8` expects RAM readback `0x55`.
+- `B/s0` and `B/s1` expect FIFO readbacks `0x5a/0xa5`.
+- `C/s2` expects queued-transfer status `ST_DATAIN = 0x58`.
+- `D/s3` expects the designated image’s first byte, `0xc0`; `F/s4` expects its chunk-one last byte, `0xc1`.
+- `G/s5`, `H/s6`, and `I/s7` expect `0xa5/0x5a/0xc2` on the shipped leg and the designated disk-content values `0xc2/0xc3/0xc4` on the fixed leg.
+- “drain loop counter reached zero”, `t9`, expects zero.
+- `L/t1` expects `0x58` on the shipped leg and `ST_IDLE = 0x50` on the fixed leg.
+- `M/t7` and `M/v0`, ordinary-write acceptance after RECAL, expect `0x5a/0xa5`.
+- `N/v1` and `N/a0`, ordinary-write acceptance after SOFT_RESET, also expect `0x5a/0xa5`.
+
+Except where distinguished, both legs share the expectation. L’s shipped value is explicitly an adopted historical measurement; its fixed value has a stated empty-ring derivation. The disk-content expectations require the specified image contents; this file accepts the image as an input.
+
+`oks`, `okf`, `npass`, and `nfail` already score the rows, with success meaning 30 correct predictions and zero failures. The apparatus separately computes `word_ok`, `word_bad`, `mn_ok`, `mn_bad`, and `bad_lines`, with complete agreement and no bad entries as their expectations. `pc0` has an explicit `BASE` expectation; `hit_s` and `hit_f` should report breakpoint arrival. Those apparatus observations are not incorporated into the row score or a final aggregate predicate. [Apparatus checks](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/wdc_addtoinbuf_probe.py:692)
+
+For **Q2**, `t_ship` and `t_fix` have no performance oracle beyond the completion deadline. `dg_s` and `dg_f` count “wdc inbuf overrun”, “write to DATA, but not”, “reading too much”, “ATAPI command rejected”, and “DATA OUT”, without specifying expected counts. Assertions would require claims about diagnostic emission and multiplicity under this execution mode.
+
+For **Q3**, both controls are present: A supplies RAM liveness; B supplies device-path liveness and the FIFO signature; D supplies known disk content through the measured data path. C is additional device liveness, but the file correctly warns that its DRQ value cannot distinguish queued ring data from an active packet phase.
+
+For **Q4**, the overlaps are concrete:
+
+- Main `A/v0`, signature `v0`, 4-bit `v0`, and addtoinbuf `A/t8` all check RAM readback `0x55`.
+- Main `B/v1,a0`, signature `L1/v1,a0`, and 4-bit `v1,a0` check cylinder readback `0x55/0x66`.
+- Main `C/a1,a2` and addtoinbuf `B/s0,s1` check the same FIFO push-order property, expecting `0x5a/0xa5`.
+- Main P2/P4 and 4-bit P5 observe the same kinds of outputs—post-operation status and first data byte—but under different control values. Main P1 and 4-bit P6 likewise check legal-reset acceptance under different values. These are distinct assertion instances.
+
+**No whole-file assertable set subsumes another.** Main uniquely includes its non-reset P3 observations; signature adds D/L2’s cylinder-signature channel; 4-bit adds P5/P6’s bit-3-set cases; addtoinbuf adds G/H/I’s disk-content observations, L’s completed-phase status, and M/N’s subsequent ordinary-write acceptance. Equal status constants across different command states do not make those properties identical.
+
+For **Q5**, the main altoffset probe is closest because `ok` already states a bounded pass/fail contract over the complete two-leg row table, instruction words, and observed completion. Addtoinbuf already has a complete scored row table, but no equivalent aggregate.
+
+The signature probe is furthest: its separate `rt`, `live`, and `sig` decisions never establish overall validity, and its negative signature classification accepts observations inconsistent with the documented fixed values. The 4-bit probe already distinguishes exact refusal from indeterminate results.
+
+The signature file’s exploratory origin and deliberately unscored `a3` do not make the whole instrument oracle-less. L1, L2, and D already supply a specific detection contract.

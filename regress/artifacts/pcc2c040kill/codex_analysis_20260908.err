@@ -1,0 +1,1981 @@
+Reading additional input from stdin...
+OpenAI Codex v0.153.4
+--------
+workdir: C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+model: gpt-6-astra
+provider: openai
+approval: never
+sandbox: read-only
+reasoning effort: max
+reasoning summaries: none
+session id: 01a08429-8e3b-74c0-aaf0-d046b5bb8c39
+--------
+user
+# `dev_pcc2.c` — an analysis question about a terminating arm reached from a legal register write
+
+**Answer in prose. Do not propose a code change, do not write a test, and do not construct any input
+or instruction sequence.** I want the analysis; I will design the repair.
+
+## Read only these files
+
+    src/devices/dev_pcc2.c
+    src/include/thirdparty/mvme_pcctwo.h     (or whatever header defines the PCC2 register names)
+    src/machines/machine_mvme88k.c           (only to answer which machines instantiate it)
+
+Do not read `CHANGELOG.md`, `tools/pipeline/ledger.json`, `OUTSTANDING_BUGS.md`, or anything under
+`_scratchpad/`.
+
+## Please do not simply ratify
+
+**Where I claim a COUNT, a REACHABILITY, or a VALUE RANGE, enumerate it and report what you get.**
+Ask what the PRODUCER can emit before walking it.
+
+**VERDICT LINE FIRST.**
+
+## What I believe, stated so you can refute it
+
+A byte write to the GENCTL register with a particular bit set (the one the header calls the C040
+bit) is a LEGAL write — the register's own guard accepts it — and it subsequently ends the host
+inside `reassert_interrupts()`. A previous round de-fatalised a set of WIDTH guards in this file;
+this arm was deliberately left, and the width detector's own test values were chosen to stay off it.
+
+## The questions
+
+**Q1. Trace the path from the guest write to the termination, naming each function.** Where exactly
+does the process end, what is the guard, and what does its diagnostic say? I want the call chain,
+because I do not yet know whether the kill is in the write handler or in something it calls.
+
+**Q2. Is the write actually LEGAL?** Show the register's guard and enumerate which byte values it
+accepts. If some accepted values reach the termination and others do not, give both sets. This is
+the claim I am least sure of.
+
+**Q3. What does the C040 bit MEAN?** Name it from the header and say what the model does with it
+elsewhere — is it read anywhere, does anything depend on it, or is it accepted and discarded? I want
+to know whether the right repair implements it or refuses it.
+
+**Q4. Enumerate every other `exit(1)` in this file**, with its guard and what reaching it takes. I
+want to know how many siblings there are and whether they are one class or several, because that
+decides whether this is one round or several.
+
+**Q5. What non-terminating idioms does this file ALREADY use** for values it does not implement?
+Name each and where it is. An in-file precedent is worth far more than a general principle — and if
+a previous round already de-fatalised guards here, its chosen shape is the one a new repair should
+match unless there is a reason not to.
+
+**Q6. Is `reassert_interrupts()` called from anywhere else?** If so, list the callers and say
+whether any of them can reach the same termination by another route. A repair aimed only at the
+GENCTL path would miss those.
+codex
+I’ll read the three permitted files and enumerate the guards and call paths. I’ll keep the answer in prose, without proposing a repair or constructing a triggering sequence.
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "Get-Content -LiteralPath 'src/devices/dev_pcc2.c'" in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "Get-Content -LiteralPath 'src/include/thirdparty/mvme_pcctwo.h'" in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n -C 12 -i 'pcc2|pcctwo|MVME187|MVME188|MVME197' src/machines/machine_mvme88k.c" in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+ succeeded in 71ms:
+16- *  ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+17- *  IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+18- *  ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE   
+19- *  FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+20- *  DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+21- *  OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+22- *  HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+23- *  LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+24- *  OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+25- *  SUCH DAMAGE.
+26- *   
+27- *
+28: *  COMMENT: MVME88K machines (MVME187)
+29- *
+30- *  This is for experiments with OpenBSD/mvme88k.
+31- *
+32: *  MVME187 according to http://mcg.motorola.com/us/products/docs/pdf/187igd.pdf
+33: *  ("MVME187 RISC Single Board Computer Installation Guide"):
+34- *
+35- *	88100 MPU, two MC88200 or MC88204 CMMUs (one for data cache and
+36- *		one for instruction cache).
+37- *	82596CA LAN Ethernet
+38- *	53C710 SCSI
+39- *	CD2401 SCC SERIAL IO
+40- *	PRINTER PORT
+41- *	MK48T08 BBRAM & CLOCK
+42- *	EPROM
+43- *	VME bus
+44- *
+45- *  ... and more details from OpenBSD/mvme88k sources:
+46- *
+47- *	0xff800000 .. 0xffbfffff = BUG PROM
+48- *	0xffe00000 .. 0xffe1ffff = BUG SRAM
+49: *	0xfff00000               = PCCTWO
+50- *	  0xfff40000             = VME bus
+51- *	  0xfff43000             = MEMC040 (Memory controller)
+52- *	  0xfff45000             = CD2401 SCC SERIAL IO (cl0)
+53- *	  0xfff46000             = 82596 Ethernet (ie0)
+54- *	  0xfff47000             = 53C710 SCSI (osiop0)
+55- *	  0xfffc0000             = MK48T08 (nvram0)
+56- *
+57- *  Note: It may turn out to be easier to support Lance ethernet (via VME)
+58- *  than to support the 82596 ethernet controller.
+59- */
+60-
+61-#include <stdio.h>
+62-#include <stdlib.h>
+63-#include <string.h>
+64-
+65-#include "cpu.h"
+66-#include "device.h"
+67-#include "devices.h"
+68-#include "machine.h"
+69-#include "memory.h"
+70-#include "misc.h"
+71-
+72:#include "thirdparty/mvme187.h"
+73-#include "thirdparty/mvme88k_vme.h"
+74:#include "thirdparty/mvme_pcctworeg.h"
+75-
+76-
+77-MACHINE_SETUP(mvme88k)
+78-{
+79-	char tmpstr[300];
+80-
+81-	switch (machine->machine_subtype) {
+82-
+83-	case MACHINE_MVME88K_187:
+84:		machine->machine_name = strdup("MVME187");
+85-
+86:		/*  The mvme187 device contains 187-specific stuff, such
+87-		    as motherboard registers, and the memory controller:  */
+88:		device_add(machine, "mvme187");
+89-
+90:		/*  PCC2 bus at 0xfff00000:  */
+91:		snprintf(tmpstr, sizeof(tmpstr), "pcc2 addr=0x%x", PCC2_BASE);
+92-		device_add(machine, tmpstr);
+93-
+94-		/*  VME2 bus at 0xfff40000:  */
+95-		snprintf(tmpstr, sizeof(tmpstr), "vme addr=0x%x", VME2_BASE);
+96-		device_add(machine, tmpstr);
+97-
+98-		/*  Cirrus Logic serial console at 0xfff45000:  */
+99:		snprintf(tmpstr, sizeof(tmpstr), "clmpcc irq=%s.cpu[%i].pcc2 "
+100-		    "addr=0x%08x name2=cl0", machine->path,
+101-		    machine->bootstrap_cpu, 0xfff45000);
+102-		machine->main_console_handle =
+103-		    (size_t) device_add(machine, tmpstr);
+104-
+105-		/*  ie0 ethernet: TODO  */
+106-		device_add(machine, "unreadable addr=0xfff46000 len=0x1000");
+107-
+108-		/*  53C710 SCSI at 0xfff47000:  */
+109:		snprintf(tmpstr, sizeof(tmpstr), "osiop irq=%s.cpu[%i].pcc2.%i "
+110-		    "addr=0x%08x", machine->path,
+111:		    machine->bootstrap_cpu, PCC2V_SCSI, 0xfff47000);
+112-		device_add(machine, tmpstr);
+113-
+114-		/*  MK48T08 clock/nvram at 0xfffc0000:  */
+115-		snprintf(tmpstr, sizeof(tmpstr),
+116-		    "mk48txx addr=0x%x", 0xfffc0000);
+117-		device_add(machine, tmpstr);
+118-
+119-		/*  VMES (?): TODO  */
+120-		device_add(machine, "unreadable addr=0xff780000 len=0x80000");
+121-
+122-		/*  VME devices: TODO  */
+123-		device_add(machine, "unreadable addr=0xffff0000 len=0x10000");
+124-
+125-		break;
+126-
+127-	case MACHINE_MVME88K_188:
+128:		machine->machine_name = strdup("MVME188");
+129-		/*  TODO  */
+130-		break;
+131-
+132-	case MACHINE_MVME88K_197:
+133:		machine->machine_name = strdup("MVME197");
+134-		/*  TODO  */
+135-		break;
+136-
+137-	default:fatal("Unimplemented MVME88K machine subtype %i\n",
+138-		    machine->machine_subtype);
+139-		exit(1);
+140-	}
+141-
+142-	if (!machine->prom_emulation)
+143-		return;
+144-
+145-
+--
+194-MACHINE_DEFAULT_RAM(mvme88k)
+195-{
+196-	machine->physical_ram_in_mb = 64;
+197-}
+198-
+199-
+200-MACHINE_REGISTER(mvme88k)
+201-{
+202-	MR_DEFAULT(mvme88k, "MVME88K", MACHINE_MVME88K);
+203-
+204-	machine_entry_add_alias(me, "mvme88k");
+205-
+206:	machine_entry_add_subtype(me, "MVME187", MACHINE_MVME88K_187,
+207:	    "mvme187", NULL);
+208-
+209:	machine_entry_add_subtype(me, "MVME188", MACHINE_MVME88K_188,
+210:	    "mvme188", NULL);
+211-
+212:	machine_entry_add_subtype(me, "MVME197", MACHINE_MVME88K_197,
+213:	    "mvme197", NULL);
+214-
+215-	me->set_default_ram = machine_default_ram_mvme88k;
+216-}
+217-
+
+ succeeded in 180ms:
+/*
+ *  Copyright (C) 2007-2014  Anders Gavare.  All rights reserved.
+ *
+ *  Redistribution and use in source and binary forms, with or without
+ *  modification, are permitted provided that the following conditions are met:
+ *
+ *  1. Redistributions of source code must retain the above copyright
+ *     notice, this list of conditions and the following disclaimer.
+ *  2. Redistributions in binary form must reproduce the above copyright  
+ *     notice, this list of conditions and the following disclaimer in the 
+ *     documentation and/or other materials provided with the distribution.
+ *  3. The name of the author may not be used to endorse or promote products
+ *     derived from this software without specific prior written permission.
+ *
+ *  THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+ *  ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ *  IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ *  ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE   
+ *  FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ *  DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+ *  OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+ *  HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+ *  LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+ *  OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+ *  SUCH DAMAGE.
+ *
+ *
+ *  COMMENT: Peripheral Channel Controller (PCC2) bus (used in MVME machines)
+ *
+ *  See "Single Board Computers Programmer's Reference Guide (Part 2 of 2)",
+ *  "VMESBCA2/PG1" (vmesbcp2.pdf) for more details.
+ *
+ *  Note: This is somewhat MVME187-specific, at the moment.
+ *
+ *  Implemented so far:
+ *	Timers 1 and 2.
+ *	The interrupt controller mechanism (partially!)
+ *
+ *  TODO:
+ *	All devices appart from the timers.
+ */
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "cpu.h"
+#include "device.h"
+#include "emul.h"
+#include "interrupt.h"
+#include "machine.h"
+#include "memory.h"
+#include "misc.h"
+
+#include "thirdparty/mvme187.h"
+#include "thirdparty/mvme_pcctworeg.h"
+
+
+#define	INTERRUPT_LEVEL_MASK	0x07
+
+#define	PCC_TIMER_TICK_HZ	100.0
+#define DEV_PCC2_TICK_SHIFT	14
+
+
+// #define	debug fatal
+
+/*  pcc2widthkills: TWELVE width-guard blocks in DEVICE_ACCESS(pcc2) -- TEN of them
+    `fatal(); exit(1)' kills that ended the host on a guest-chosen access width, and
+    two (IPL, MASK) #119 warn-once latches that declined it process-globally -- an ordinary aligned halfword load of a documented
+    register.  Same class as #337 (dev_wdc.c) and #497 (dev_sgi_re.c).
+
+    THE TREE ALREADY KNEW THE WIDTH IS LEGAL: mvme_pcctworeg.h says the PCCchip2
+    registers "can be accessed as bytes (8 bits), two-bytes (16 bits), or four-bytes
+    (32 bits)".  So this is not a fault to model; it is an access the model declines
+    to IMPLEMENT on one side and already implements on the other:
+
+      READS   are served BEFORE the switch by memcpy(data, pcctwo_reg + addr, len),
+              raw bytes in address order -- width-correct by construction.  The old
+              guard discarded a correct answer.  Now: ACCEPT (fall through).
+      WRITES  ten of the twelve arms use `idata', the composed value (SCCERR stores a
+              constant and IPL ignores it; both decline too -- a wide write's other
+              lanes have no home), and `idata' is "the addressed
+              byte" ONLY at len == 1: memory_readmax64 composes big-endian, so
+              (uint8_t) idata is the HIGHEST-address lane.  Deleting the guard would
+              store the neighbour's byte -- st.h 0xAABB to GENCTL would set GENCTL to
+              0xBB, VECBASE's lane.  And eight arms mask, read-modify-write or clear
+              on write, and seven of the twelve blocks call reassert_interrupts()
+              (five of those eight; a seat measured the earlier "six" wrong).  Now: DECLINE +
+              latched announce.  Per-lane composition through each arm (COMPOSE) is
+              the faithful upgrade and is FILED as pcc2widecompose; not taken here
+              because the hardware's lane semantics are not on disk and no driver
+              MEASUREMENT exists either way: the only consumer is mvme187, no mvme187
+              boot runs in this harness, and the one OS source in the tree (OpenBSD
+              2.2) declares these registers `volatile u_char' and byte-accesses them
+              -- a reading, not a measurement.
+
+    ONE BIT PER BLOCK, twelve, per instance: a driver bringing up the chip touches
+    several of these in one pass, and one latch would announce the first and silence
+    the rest (#497's own reasoning).  Auto-incremented rather than `1 << N' literals,
+    which this fork records as collision-prone; PCC2_W_NBITS names the count, and the
+    typedef after the enum makes the build fail if it ever exceeds the 32-bit field.
+
+    REACHABILITY, verified: every non-byte m88k access is alignment-checked BEFORE
+    memory_rw, and `relative_addr %= PCC2_SIZE' keeps parity, so only the SIX
+    EVEN-offset blocks (GENCTL, TxCTL, TxICR, SCCERR, SCCTX, IPL) are GUEST-reachable
+    (this said "five" until pass 2; IPL at 0x3e is even, and a seat counted); the
+    eight odd OFFSETS -- the six odd-only blocks VECBASE, PSCALEADJ, SCCICR, SCCRX,
+    SCSIICR, MASK, plus the T1CTL/T1ICR labels of the shared TxCTL/TxICR blocks --
+    are OPERATOR-reachable -- the debugger's `put h' warns on a
+    misaligned address and stores anyway, MEASURED (artifacts/pcc2widthkills/
+    operator_reach_20260903.out: `put h 0xfff42003' ended the host).  All twelve are
+    converted; the detector reaches the odd ones through that path.
+
+    NOT FIXED HERE, cited so "twelve kills removed" is not read as "file clean":
+    pcc2c040kill (a LEGAL byte write of 0x04 to GENCTL still ends the host in
+    reassert_interrupts).  pcc2defaultkill -- an unlisted offset ended it -- was
+    fixed by #501 (the default: arm below); this sentence said "still ends it"
+    until #501's pass 4 (Opus).  */
+enum {
+	PCC2_W_GENCTL_LEN,
+	PCC2_W_VECBASE_LEN,
+	PCC2_W_PSCALEADJ_LEN,
+	PCC2_W_TXCTL_LEN,	/*  one block serves T1CTL and T2CTL  */
+	PCC2_W_TXICR_LEN,	/*  one block serves T1ICR and T2ICR  */
+	PCC2_W_SCCERR_LEN,
+	PCC2_W_SCCICR_LEN,
+	PCC2_W_SCCTX_LEN,
+	PCC2_W_SCCRX_LEN,
+	PCC2_W_SCSIICR_LEN,
+	PCC2_W_IPL_LEN,		/*  was a #119 function-static: process-global  */
+	PCC2_W_MASK_LEN,	/*  was a #119 function-static: process-global  */
+	PCC2_W_C040,		/*  #512: not a _LEN -- the C040 delivery decline  */
+	PCC2_W_NBITS
+};
+
+struct pcc2_data {
+	struct interrupt	cpu_irq;
+
+	uint8_t			pcctwo_reg[PCC2_SIZE];
+
+	/*  pcc2widthkills: one bit per width-guard block, see the enum.  Zeroed by
+	    the init memset, so every instance starts with every announce armed.  */
+	uint32_t		warned;
+	/*  #501: one bit per BYTE OFFSET (0..0x3f) for the default: arm's announce;
+	    relative_addr is folded to PCC2_SIZE above the switch, so the shift is
+	    always defined.  Zeroed by the same memset.  */
+	uint64_t		warned_unimpl;
+
+	uint8_t			cur_int_vec[8];
+
+	/*  Timers:  */
+	struct timer		*timer;
+	int			pending_timer1_interrupts;
+	int			pending_timer2_interrupts;
+};
+/*  pcc2widthkills: the enum must fit the field.  A seat pointed out that a bare
+    `<= 32' tested a literal, not the field, so narrowing `warned' would compile
+    silently; this is dev_dreamcast_gdrom.c's own form.  Negative array size is a
+    compile-time error, C99, no assert.h.  */
+typedef char pcc2_w_fits_in_warned[(PCC2_W_NBITS <= 8 * sizeof(((struct pcc2_data *)0)->warned)
+    && PCC2_W_NBITS <= 8 * sizeof(1u)) ? 1 : -1];
+
+
+static uint32_t read32(unsigned char *p)
+{
+	uint32_t x = 0;
+	size_t i;
+
+	for (i=0; i<sizeof(x); i++) {
+		x <<= 8;
+		x |= p[i];
+	}
+
+	return x;
+}
+
+
+static void write32(unsigned char *p, uint32_t x)
+{
+	size_t i;
+
+	for (i=0; i<sizeof(x); i++) {
+		p[sizeof(x) - 1 - i] = x;
+		x >>= 8;
+	}
+}
+
+
+static void pcc_timer_tick(struct timer *t, void *extra)
+{
+	struct pcc2_data *d = (struct pcc2_data *) extra;
+
+	/*  The PCC2 timers run at 1 MHz.  */
+	int steps = (int) (1000000.0 / PCC_TIMER_TICK_HZ);
+
+	uint32_t count1, count2, compare1, compare2;
+	int interrupt1 = 0, interrupt2 = 0;
+
+	/*  Read values:  */
+	count1 = read32(&d->pcctwo_reg[PCCTWO_T1COUNT]);
+	count2 = read32(&d->pcctwo_reg[PCCTWO_T2COUNT]);
+	compare1 = read32(&d->pcctwo_reg[PCCTWO_T1CMP]);
+	compare2 = read32(&d->pcctwo_reg[PCCTWO_T2CMP]);
+
+	/*  Timer enabled? Then count...  */
+	if (d->pcctwo_reg[PCCTWO_T1CTL] & PCC2_TCTL_CEN) {
+		uint32_t old_count1 = count1;
+		count1 += steps;
+
+		/*  Did we pass the compare value?  */
+		if ((old_count1 < compare1 && count1 >= compare1) ||
+		    (old_count1 < compare1 && count1 < old_count1)) {
+			interrupt1 = 1;
+
+			if (d->pcctwo_reg[PCCTWO_T1CTL] & PCC2_TCTL_COC) {
+				while (count1 >= compare1) {
+					count1 -= compare1;
+					interrupt1 ++;
+				}
+				interrupt1 --;
+			}
+		}
+
+		/*  Overflow?  */
+		if ((int32_t) old_count1 >= 0 && (int32_t) count1 < 0) {
+			int oc = 1 + (d->pcctwo_reg[PCCTWO_T1CTL] >> 4);
+			d->pcctwo_reg[PCCTWO_T1CTL] &= ~PCC2_TCTL_OVF;
+			d->pcctwo_reg[PCCTWO_T1CTL] |= (oc << 4);
+		}
+	}
+
+	/*  ... and the same for timer 2:  */
+	if (d->pcctwo_reg[PCCTWO_T2CTL] & PCC2_TCTL_CEN) {
+		uint32_t old_count2 = count2;
+		count2 += steps;
+
+		if ((old_count2 < compare2 && count2 >= compare2) ||
+		    (old_count2 < compare2 && count2 < old_count2)) {
+			interrupt2 = 1;
+			if (d->pcctwo_reg[PCCTWO_T2CTL] & PCC2_TCTL_COC) {
+				while (count2 >= compare2) {
+					count2 -= compare2;
+					interrupt2 ++;
+				}
+				interrupt2 --;
+			}
+		}
+
+		if ((int32_t) old_count2 >= 0 && (int32_t) count2 < 0) {
+			int oc = 1 + (d->pcctwo_reg[PCCTWO_T2CTL] >> 4);
+			d->pcctwo_reg[PCCTWO_T2CTL] &= ~PCC2_TCTL_OVF;
+			d->pcctwo_reg[PCCTWO_T2CTL] |= (oc << 4);
+		}
+	}
+
+	/*  Should we cause interrupts?  */
+	if (interrupt1 && d->pcctwo_reg[PCCTWO_T1ICR] & PCC2_TTIRQ_IEN)
+		d->pending_timer1_interrupts += interrupt1;
+	if (interrupt2 && d->pcctwo_reg[PCCTWO_T2ICR] & PCC2_TTIRQ_IEN)
+		d->pending_timer2_interrupts += interrupt2;
+
+	/*  Write back values:  */
+	write32(&d->pcctwo_reg[PCCTWO_T1COUNT], count1);
+	write32(&d->pcctwo_reg[PCCTWO_T2COUNT], count2);
+}
+
+
+static void reassert_interrupts(struct pcc2_data *d)
+{
+	int assert = 0;
+
+	/*  #512: the C040 test used to sit HERE and was a fatal()+exit(1), so one
+	    legal guest byte write of 0x04 to GENCTL ended the host.  It now lives
+	    beside the MIEN test at the foot of this function, where declining to
+	    assert does not skip the recalculation below.  */
+
+	/*
+	 *  Recalculate current interrupt level:
+	 */
+	d->pcctwo_reg[PCCTWO_IPL] = 0;
+
+	/*  Timer interrupts?  */
+	if (d->pending_timer1_interrupts > 0 &&
+	    d->pcctwo_reg[PCCTWO_T1ICR] & PCC2_TTIRQ_IEN)
+		d->pcctwo_reg[PCCTWO_T1ICR] |= PCC2_TTIRQ_INT;
+	if (d->pending_timer2_interrupts > 0 &&
+	    d->pcctwo_reg[PCCTWO_T2ICR] & PCC2_TTIRQ_IEN)
+		d->pcctwo_reg[PCCTWO_T2ICR] |= PCC2_TTIRQ_INT;
+
+	if (d->pcctwo_reg[PCCTWO_T1ICR] & PCC2_TTIRQ_INT) {
+		int intlevel = d->pcctwo_reg[PCCTWO_T1ICR] & PCC2_TTIRQ_IL;
+		d->cur_int_vec[intlevel] = PCC2V_TIMER1;
+		if (d->pcctwo_reg[PCCTWO_IPL] < intlevel)
+			d->pcctwo_reg[PCCTWO_IPL] = intlevel;
+	}
+	if (d->pcctwo_reg[PCCTWO_T2ICR] & PCC2_TTIRQ_INT) {
+		int intlevel = d->pcctwo_reg[PCCTWO_T2ICR] & PCC2_TTIRQ_IL;
+		d->cur_int_vec[intlevel] = PCC2V_TIMER2;
+		if (d->pcctwo_reg[PCCTWO_IPL] < intlevel)
+			d->pcctwo_reg[PCCTWO_IPL] = intlevel;
+	}
+
+	if (d->pcctwo_reg[PCCTWO_SCCTX] & PCC2_IRQ_IEN &&
+	    d->pcctwo_reg[PCCTWO_SCCTX] & PCC2_IRQ_INT) {
+		int intlevel = d->pcctwo_reg[PCCTWO_SCCTX] & PCC2_IRQ_IPL;
+		d->cur_int_vec[intlevel] = PCC2V_SCC_TX;
+		if (d->pcctwo_reg[PCCTWO_IPL] < intlevel)
+			d->pcctwo_reg[PCCTWO_IPL] = intlevel;
+	}
+
+	if (d->pcctwo_reg[PCCTWO_SCCRX] & PCC2_IRQ_IEN &&
+	    d->pcctwo_reg[PCCTWO_SCCRX] & PCC2_IRQ_INT) {
+		int intlevel = d->pcctwo_reg[PCCTWO_SCCRX] & PCC2_IRQ_IPL;
+		d->cur_int_vec[intlevel] = PCC2V_SCC_RX;
+		if (d->pcctwo_reg[PCCTWO_IPL] < intlevel)
+			d->pcctwo_reg[PCCTWO_IPL] = intlevel;
+	}
+
+	if (d->pcctwo_reg[PCCTWO_SCSIICR] & PCC2_IRQ_IEN &&
+	    d->pcctwo_reg[PCCTWO_SCSIICR] & PCC2_IRQ_INT) {
+		int intlevel = d->pcctwo_reg[PCCTWO_SCSIICR] & PCC2_IRQ_IPL;
+		d->cur_int_vec[intlevel] = PCC2V_SCSI;
+		if (d->pcctwo_reg[PCCTWO_IPL] < intlevel)
+			d->pcctwo_reg[PCCTWO_IPL] = intlevel;
+	}
+
+	/*  TODO: Other interrupt sources.  */
+
+	/*  Assert interrupt on the CPU if the IPL is higher than the mask:  */
+	if ((d->pcctwo_reg[PCCTWO_IPL] & INTERRUPT_LEVEL_MASK) >
+	    (d->pcctwo_reg[PCCTWO_MASK] & INTERRUPT_LEVEL_MASK))
+		assert = 1;
+
+	debug("[ pcc2: IPL = %i, MASK = %i => %s ]\n", d->pcctwo_reg[PCCTWO_IPL]& INTERRUPT_LEVEL_MASK,
+		d->pcctwo_reg[PCCTWO_MASK] & INTERRUPT_LEVEL_MASK,
+		assert ? "ASSERT" : "no assert");
+
+	/*  ... but only allow interrupts if Master Interrupt Enable is on:  */
+	if (!(d->pcctwo_reg[PCCTWO_GENCTL] & PCC2_MIEN))
+		assert = 0;
+
+	/*  #512: ... and not while C040 selects a delivery pin this model does not
+	    have.  This was a fatal()+exit(1) at the TOP of this function, and
+	    reassert_interrupts() is called from ten sites -- the GENCTL write arm
+	    calls it in the SAME access -- so ONE legal guest `st.b' of 0x04 to
+	    GENCTL ended the host, with no driver and no interrupt involved
+	    (witness: regress/pcc2_c040_probe.py).
+
+	    DECLINING TO ASSERT, rather than returning, is what the MIEN test above
+	    already does for the other GENCTL interrupt-control bit.  A `return' AT
+	    THIS SITE would skip only the INTERRUPT_DEASSERT below -- the IPL
+	    recalculation and the cur_int_vec[] updates have already run by here.
+	    (It is a return at the OLD site, above the recalculation, that would skip
+	    all three; an earlier draft of this comment attached that reason to this
+	    placement, which is a wrong reason for a right position, and a wrong
+	    reason gets reused -- `assert = 0' -> `return' at THIS line is a
+	    one-token mutant every shipped row passes.)
+
+	    VMESBCP2 (the MVME187 board manual) settles the shape in two places.
+	    The General Control Register page ($FFF42002) puts C040 at bit 10 of the
+	    word view -- 0x04, matching this fork's header -- and says a set C040
+	    sends the request "via the EIPL* pins at the level that is programmed
+	    ... in the SCSI Interrupt Control Register"; the Interrupt Priority
+	    Level Register page adds that IPL2-IPL0 "always reflect the encoded
+	    request level".  So C040 selects the DELIVERY PIN and not the level,
+	    which is why the recalculation above must stay.  MIEN, by contrast,
+	    disables "both the EIPL* pins and the INT pin" -- so the two tests are
+	    siblings gating one output, not a nest.  */
+	if (d->pcctwo_reg[PCCTWO_GENCTL] & PCC2_C040) {
+		if (!(d->warned & (1u << PCC2_W_C040))) {
+			d->warned |= (1u << PCC2_W_C040);
+			fatal("[ pcc2: C040 (MC68040 EIPL) interrupt delivery not "
+			    "implemented; assertion suppressed  (once) ]\n");
+		}
+		assert = 0;
+	}
+
+	if (assert)
+		INTERRUPT_ASSERT(d->cpu_irq);
+	else
+		INTERRUPT_DEASSERT(d->cpu_irq);
+}
+
+
+void pcctwo_interrupt_common(struct interrupt *interrupt, int assert)
+{
+	struct pcc2_data *d = (struct pcc2_data *) interrupt->extra;
+
+	switch (interrupt->line) {
+
+	case PCC2V_SCSI:
+		if (assert)
+			d->pcctwo_reg[PCCTWO_SCSIICR] |= PCC2_IRQ_INT;
+		else
+			d->pcctwo_reg[PCCTWO_SCSIICR] &= ~PCC2_IRQ_INT;
+		break;
+
+	case PCC2V_SCC_TX:
+		if (assert)
+			d->pcctwo_reg[PCCTWO_SCCTX] |= PCC2_IRQ_INT;
+		else
+			d->pcctwo_reg[PCCTWO_SCCTX] &= ~PCC2_IRQ_INT;
+		break;
+
+	case PCC2V_SCC_RX:
+		if (assert)
+			d->pcctwo_reg[PCCTWO_SCCRX] |= PCC2_IRQ_INT;
+		else
+			d->pcctwo_reg[PCCTWO_SCCRX] &= ~PCC2_IRQ_INT;
+		break;
+
+	default:fatal("[ pcctwo_interrupt_common: TODO: line = %i ]\n",
+		    interrupt->line);
+		exit(1);
+	}
+
+	reassert_interrupts(d);
+}
+
+
+static void pcctwo_interrupt_assert(struct interrupt *interrupt)
+{
+	pcctwo_interrupt_common(interrupt, 1);
+}
+static void pcctwo_interrupt_deassert(struct interrupt *interrupt)
+{
+	pcctwo_interrupt_common(interrupt, 0);
+}
+
+
+DEVICE_TICK(pcc2)
+{
+	struct pcc2_data *d = (struct pcc2_data *) extra;
+	reassert_interrupts(d);
+}
+
+
+/*  pcc2widthkills: decline a wide WRITE to a byte register, announcing once per
+    block per instance.  The caller `break's after this; the read side of the same
+    block never reaches here.  */
+static void pcc2_width_decline(struct pcc2_data *d, int bit, const char *name, int len)
+{
+	if (!(d->warned & (1u << bit))) {
+		d->warned |= (1u << bit);
+		fatal("[ pcc2: unimplemented len=%i write to %s -- declined."
+		    "  (once) ]\n", len, name);
+	}
+}
+
+DEVICE_ACCESS(pcc2)
+{
+	uint64_t idata = 0;
+	struct pcc2_data *d = (struct pcc2_data *) extra;
+
+	/*  0xfff42000..0xfff42fff, but only 0x40 unique registers:  */
+	relative_addr %= PCC2_SIZE;
+
+	if (writeflag == MEM_WRITE)
+		idata = memory_readmax64(cpu, data, len);
+
+	if (writeflag == MEM_READ) {
+		if (relative_addr + len <= PCC2_SIZE)	/* OB-11: end-span */
+			memcpy(data, d->pcctwo_reg + relative_addr, len);
+		else {
+			static int warned = 0;	/* #119: loud-once (course-correction) */
+			if (!warned) {
+				fatal("[ pcc2: read 0x%x+%i beyond reg space 0x%x; "
+				    "zero-filled ]\n", (int)relative_addr, (int)len,
+				    (int)PCC2_SIZE);
+				warned = 1;
+			}
+			memset(data, 0, len);	/* OB-11b: don't leak uninit host memory */
+		}
+	}
+
+	switch (relative_addr) {
+
+	case PCCTWO_CHIPID:
+	case PCCTWO_CHIPREV:
+		if (writeflag == MEM_WRITE) {
+			fatal("[ IGNORING write to read-only PCCTWO_CHIPID/"
+			    "CHIPREV register ]\n");
+		}
+		break;
+
+	case PCCTWO_GENCTL:
+		if (len != 1 && writeflag == MEM_WRITE) {
+			pcc2_width_decline(d, PCC2_W_GENCTL_LEN, "PCCTWO_GENCTL", len);
+			break;
+		}
+		if (writeflag == MEM_WRITE) {
+			d->pcctwo_reg[relative_addr] = idata;
+			reassert_interrupts(d);
+		}
+		break;
+
+	case PCCTWO_VECBASE:
+		if (len != 1 && writeflag == MEM_WRITE) {
+			pcc2_width_decline(d, PCC2_W_VECBASE_LEN, "PCCTWO_VECBASE", len);
+			break;
+		}
+		if (writeflag == MEM_WRITE) {
+			d->pcctwo_reg[relative_addr] = idata & 0xf0;
+			if (idata & ~0xf0)
+				fatal("[ pcc2: HUH? write to PCCTWO_VECBASE"
+				    " with value 0x%02x. ]\n", (int) idata);
+		}
+		break;
+
+	case PCCTWO_T1CMP:
+	case PCCTWO_T2CMP:
+	case PCCTWO_T1COUNT:
+	case PCCTWO_T2COUNT:
+		if (writeflag == MEM_WRITE &&
+		    relative_addr + len <= PCC2_SIZE)	/* OB-11: end-span */
+			memcpy(d->pcctwo_reg + relative_addr, data, len);
+		break;
+
+	case PCCTWO_PSCALEADJ:
+		if (len != 1 && writeflag == MEM_WRITE) {
+			pcc2_width_decline(d, PCC2_W_PSCALEADJ_LEN, "PCCTWO_PSCALEADJ", len);
+			break;
+		}
+		if (writeflag == MEM_WRITE) {
+			fatal("[ pcc2: write to PSCALEADJ ignored (value "
+			    "0x%02x) ]\n", (int)idata);
+		}
+		break;
+
+	case PCCTWO_T2CTL:
+	case PCCTWO_T1CTL:
+		if (len != 1 && writeflag == MEM_WRITE) {
+			pcc2_width_decline(d, PCC2_W_TXCTL_LEN, "PCCTWO_TxCTL", len);
+			break;
+		}
+		if (writeflag == MEM_WRITE) {
+			/*  PCC2_TCTL_CEN and PCC2_TCTL_COC:  */
+			d->pcctwo_reg[relative_addr] &= 0xfc;
+			d->pcctwo_reg[relative_addr] |= (idata & 3);
+
+			if (idata & PCC2_TCTL_COVF)
+				d->pcctwo_reg[relative_addr] &=
+				    ~(PCC2_TCTL_OVF | PCC2_TCTL_COVF);
+
+			if (idata & ~7)
+				fatal("[ pcc2: HUH? write to PCCTWO_TxCTL"
+				    " with value 0x%02x. ]\n", (int) idata);
+		}
+		break;
+
+	case PCCTWO_T2ICR:
+	case PCCTWO_T1ICR:
+		if (len != 1 && writeflag == MEM_WRITE) {
+			pcc2_width_decline(d, PCC2_W_TXICR_LEN, "PCCTWO_TxICR", len);
+			break;
+		}
+		if (writeflag == MEM_WRITE) {
+			d->pcctwo_reg[relative_addr] &= ~0x17;
+			d->pcctwo_reg[relative_addr] |= (idata & 0x17);
+
+			if (relative_addr == PCCTWO_T1ICR &&
+			    !(idata & PCC2_TTIRQ_IEN))
+				d->pending_timer1_interrupts = 0;
+			if (relative_addr == PCCTWO_T2ICR &&
+			    !(idata & PCC2_TTIRQ_IEN))
+				d->pending_timer2_interrupts = 0;
+
+			if (relative_addr == PCCTWO_T1ICR && (idata & PCC2_TTIRQ_ICLR)
+			    && d->pcctwo_reg[relative_addr] & PCC2_TTIRQ_INT
+			    && d->pending_timer1_interrupts > 0)
+				d->pending_timer1_interrupts --;
+
+			if (relative_addr == PCCTWO_T2ICR && (idata & PCC2_TTIRQ_ICLR)
+			    && d->pcctwo_reg[relative_addr] & PCC2_TTIRQ_INT
+			    && d->pending_timer2_interrupts > 0)
+				d->pending_timer2_interrupts --;
+
+			if (idata & PCC2_TTIRQ_ICLR)
+				d->pcctwo_reg[relative_addr] &= ~PCC2_TTIRQ_INT;
+
+			if (idata & 0xe0)
+				fatal("[ pcc2: HUH? write to PCCTWO_TxICR"
+				    " with value 0x%02x. ]\n", (int) idata);
+
+			reassert_interrupts(d);
+		}
+		break;
+
+	case PCCTWO_SCCERR:
+		if (len != 1 && writeflag == MEM_WRITE) {
+			pcc2_width_decline(d, PCC2_W_SCCERR_LEN, "PCCTWO_SCCERR", len);
+			break;
+		}
+		if (writeflag == MEM_WRITE)
+			d->pcctwo_reg[relative_addr] = 0;	/*  clear  */
+		break;
+
+	case PCCTWO_SCCICR:
+		if (len != 1 && writeflag == MEM_WRITE) {
+			pcc2_width_decline(d, PCC2_W_SCCICR_LEN, "PCCTWO_SCCICR", len);
+			break;
+		}
+		if (writeflag == MEM_WRITE) {
+			d->pcctwo_reg[relative_addr] = idata & 0x1f;
+			if (idata & ~0x1f)
+				fatal("[ pcc2: HUH? write to PCCTWO_SCCICR"
+				    " with value 0x%02x. ]\n", (int) idata);
+			reassert_interrupts(d);
+		}
+		break;
+
+	case PCCTWO_SCCTX:
+		if (len != 1 && writeflag == MEM_WRITE) {
+			pcc2_width_decline(d, PCC2_W_SCCTX_LEN, "PCCTWO_SCCTX", len);
+			break;
+		}
+		if (writeflag == MEM_WRITE) {
+			d->pcctwo_reg[relative_addr] = idata & 0x1f;
+			if (idata & ~0x1f)
+				fatal("[ pcc2: HUH? write to PCCTWO_SCCTX"
+				    " with value 0x%02x. ]\n", (int) idata);
+			reassert_interrupts(d);
+		}
+		break;
+
+	case PCCTWO_SCCRX:
+		if (len != 1 && writeflag == MEM_WRITE) {
+			pcc2_width_decline(d, PCC2_W_SCCRX_LEN, "PCCTWO_SCCRX", len);
+			break;
+		}
+		if (writeflag == MEM_WRITE) {
+			d->pcctwo_reg[relative_addr] = idata & 0xdf;
+			if (idata & ~0xdf)
+				fatal("[ pcc2: HUH? write to PCCTWO_SCCRX"
+				    " with value 0x%02x. ]\n", (int) idata);
+			reassert_interrupts(d);
+		}
+		break;
+
+	case PCCTWO_SCCRXIACK:
+		/*  TODO. Hm. Is this enough?  */
+		d->pcctwo_reg[PCCTWO_SCCRX] &= ~PCC2_IRQ_INT;
+		reassert_interrupts(d);
+		break;
+
+	case PCCTWO_SCSIICR:
+		if (len != 1 && writeflag == MEM_WRITE) {
+			pcc2_width_decline(d, PCC2_W_SCSIICR_LEN, "PCCTWO_SCSIICR", len);
+			break;
+		}
+		if (writeflag == MEM_WRITE) {
+			d->pcctwo_reg[relative_addr] = idata & 0xdf;
+			if (idata & ~0xdf)
+				fatal("[ pcc2: HUH? write to PCCTWO_SCSIICR"
+				    " with value 0x%02x. ]\n", (int) idata);
+			reassert_interrupts(d);
+		}
+		break;
+
+	case PCCTWO_IPL:
+		/*  pcc2widthkills: was a #119 `static int w' -- process-global, and it
+		    said "ignored" about a READ the memcpy above had already served.
+		    Now per-instance, write-only, like the ten blocks above -- that is
+		    the WIDTH latch; the body's own #119 `static int w' below stays
+		    process-global (pcc2pscaleflood's family; not this round's).  */
+		if (len != 1 && writeflag == MEM_WRITE) {
+			pcc2_width_decline(d, PCC2_W_IPL_LEN, "PCCTWO_IPL", len);
+			break;
+		}
+		if (writeflag == MEM_WRITE) {
+			static int w = 0;	/* #119: was exit(1) (IPL is read-only) */
+			if (!w) { fatal("[ pcc2: write to read-only PCCTWO_IPL; "
+			    "ignored ]\n"); w = 1; }
+		} else {
+			if (d->pcctwo_reg[PCCTWO_IPL] == 0) {
+				static int w = 0;	/* #119: was exit(1) */
+				if (!w) { fatal("[ pcc2: IPL == 0 on read ]\n");
+				    w = 1; }
+			}
+		}
+		break;
+
+	case PCCTWO_MASK:
+		/*  pcc2widthkills: was a #119 `static int w' -- process-global, and it
+		    said "ignored" about a READ the memcpy above had already served.
+		    Now per-instance, write-only, like the ten blocks above -- that is
+		    the WIDTH latch.  (pcc2widthkills pass 7: this comment once claimed a
+		    #119 static of MASK's own "below" -- there is none; the body stores
+		    the byte and reasserts.  The static belongs to IPL's arm above.)  */
+		if (len != 1 && writeflag == MEM_WRITE) {
+			pcc2_width_decline(d, PCC2_W_MASK_LEN, "PCCTWO_MASK", len);
+			break;
+		}
+		if (writeflag == MEM_WRITE) {
+			d->pcctwo_reg[relative_addr] = idata;
+			reassert_interrupts(d);
+		}
+		break;
+
+	default:
+		/*  #501 (pcc2defaultkill): this arm ended the host with exit(1) on ANY
+		    access to an offset with no case -- 43 of the 0x40 byte offsets:
+		    eighteen documented registers the model does not implement (IEICR,
+		    IEERR, IEBERR, GPIO, SCSIERR, the printer block, SPEED, the *IACKs),
+		    the bytes inside the four counter/compare words, and the unnamed
+		    ones -- READS included, though the memcpy above the switch had
+		    already served them.  A guest ld.bu or st.b at any of them was a host
+		    kill (rung-3 witness).  Now: a READ keeps the served byte (the array's
+		    current byte, said so -- inside a running COUNT word that is the
+		    tick's value, not a default); a WRITE is DECLINED.  Not a
+		    backed store: the cased siblings contradict one (SCCERR clears on
+		    write, the ICRs mask and reassert, PSCALECNT/SPEED/the IACKs are
+		    read-only), no inspected OpenBSD driver path reaches them (if_ie never
+		    attaches: unreadable sits at its 82596 address), and a store from the
+		    one arm 43 offsets reach would add a bounded-write surface.  One
+		    latched fatal() per offset per instance, the house `(once)' shape --
+		    unlike PSCALEADJ's UNLATCHED print above (pcc2pscaleflood).  The
+		    IACK offsets 0x23/0x25 are declined like the rest: modelling them (on
+		    the SCCRXIACK shape) would open two new entries into the C040 path,
+		    so pcc2c040kill goes first.  The %= fold above IS the real part's:
+		    Motorola VMESBCP2 Table 6-1 lists $FFF42040-$FFF42FFF as repeated
+		    PCCchip2 registers.  */
+		if (!(d->warned_unimpl & (1ULL << relative_addr))) {
+			d->warned_unimpl |= 1ULL << relative_addr;
+			if (writeflag == MEM_WRITE)
+				fatal("[ pcc2: unimplemented write to offset "
+				    "0x%x (len %d): 0x%x -- declined.  (once) ]\n",
+				    (int) relative_addr, (int) len, (int) idata);
+			else
+				/*  data[0] is the byte actually SERVED; a reload of the
+				    array could differ: on the end-span path (zero-filled,
+				    the array byte kept) and inside a running COUNT word,
+				    whose SIGALRM-driven tick (timer.c) can land between
+				    the copy and this line.  A wide read is labelled.  */
+				fatal("[ pcc2: unimplemented read from offset "
+				    "0x%x (len %d) -- served 0x%02x.  (once) ]\n",
+				    (int) relative_addr, (int) len, data[0]);
+		}
+		break;
+	}
+
+	return 1;
+}
+
+
+DEVICE_ACCESS(mvme187_iack)
+{
+	uint64_t odata = 0;
+	struct pcc2_data *d = (struct pcc2_data *) extra;
+
+	if (writeflag == MEM_WRITE) {
+		fatal("[ pcc2: write to mvme187_iack? ]\n");
+	} else {
+		odata = d->pcctwo_reg[PCCTWO_VECBASE] + d->cur_int_vec[
+		    (relative_addr >> 2) & INTERRUPT_LEVEL_MASK];
+		debug("[ pcc2: mvme187_iack level %i => vector 0x%02x ]\n",
+		    (int)(relative_addr >> 2), (int)odata);
+
+		memory_writemax64(cpu, data, len, odata);
+	}
+
+	return 1;
+}
+
+
+DEVINIT(pcc2)
+{
+	struct pcc2_data *d;
+	int i;
+
+	CHECK_ALLOCATION(d = (struct pcc2_data *) malloc(sizeof(struct pcc2_data)));
+	memset(d, 0, sizeof(struct pcc2_data));
+
+	/*
+	 *  Initial values, according to the manual:
+	 *
+	 *  VECBASE is 0x0f after a reset, although the lowest four bits
+	 *  cannot be manually written to after startup.
+	 */
+	d->pcctwo_reg[PCCTWO_CHIPID] = PCC2_ID;
+	d->pcctwo_reg[PCCTWO_CHIPREV] = 0x00;
+	d->pcctwo_reg[PCCTWO_GENCTL] = 0x00;
+	d->pcctwo_reg[PCCTWO_VECBASE] = 0x0f;
+	d->pcctwo_reg[PCCTWO_PSCALEADJ] = 256 - 33;	// 256 - MHz (fake)
+
+	/*  Connect to the CPU's interrupt pin:  */
+	INTERRUPT_CONNECT(devinit->interrupt_path, d->cpu_irq);
+
+	/*
+	 *  Register the 16 PCC2 interrupt vectors:
+	 */
+	for (i=0; i<16; i++) {
+		struct interrupt templ;
+		char n[300];
+		snprintf(n, sizeof(n), "%s.pcc2.%i",
+		    devinit->interrupt_path, i);
+
+		memset(&templ, 0, sizeof(templ));
+		templ.line = i;
+		templ.name = n;
+		templ.extra = d;
+		templ.interrupt_assert = pcctwo_interrupt_assert;
+		templ.interrupt_deassert = pcctwo_interrupt_deassert;
+
+		interrupt_handler_register(&templ);
+	}
+
+	memory_device_register(devinit->machine->memory, "pcc2",
+	    devinit->addr, 4096, dev_pcc2_access, (void *)d,
+	    DM_DEFAULT, NULL);
+
+	memory_device_register(devinit->machine->memory, "mvme187_iack",
+	    M187_IACK, 32, dev_mvme187_iack_access, (void *)d,
+	    DM_DEFAULT, NULL);
+
+	d->timer = timer_add(PCC_TIMER_TICK_HZ, pcc_timer_tick, d);
+
+	machine_add_tickfunction(devinit->machine,
+	    dev_pcc2_tick, d, DEV_PCC2_TICK_SHIFT);
+
+	return 1;
+}
+
+
+ exited 1 in 185ms:
+Get-Content : Cannot find path 'src/include/thirdparty/mvme_pcctwo.h' because it does not exist.
+At line:2 char:1
++ Get-Content -LiteralPath 'src/include/thirdparty/mvme_pcctwo.h'
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : ObjectNotFound: (src/include/thirdparty/mvme_pcctwo.h:String) [Get-Content], ItemNotFoun 
+   dException
+    + FullyQualifiedErrorId : PathNotFound,Microsoft.PowerShell.Commands.GetContentCommand
+ 
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n 'exit\\s*\\(|fatal\\(|reassert_interrupts\\(|PCC2_C040|PCC2_MIEN|PCCTWO_GENCTL|pcc2_width_decline\\(|case |DEVINIT|DEVICE_ACCESS|DEVICE_TICK|templ\\.line|i<16|memory_device_register|timer_add|machine_add_tickfunction' src/devices/dev_pcc2.c" in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$pcc2Line = 0; Get-Content -LiteralPath '"'src/include/thirdparty/mvme_pcctworeg.h' | ForEach-Object { "'$pcc2Line++; '"'{0,4}: {1}' -f "'$pcc2Line, $_ }' in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+ succeeded in 44ms:
+67:/*  pcc2widthkills: TWELVE width-guard blocks in DEVICE_ACCESS(pcc2) -- TEN of them
+68:    `fatal(); exit(1)' kills that ended the host on a guest-chosen access width, and
+87:              on write, and seven of the twelve blocks call reassert_interrupts()
+268:static void reassert_interrupts(struct pcc2_data *d)
+272:	/*  #512: the C040 test used to sit HERE and was a fatal()+exit(1), so one
+339:	if (!(d->pcctwo_reg[PCCTWO_GENCTL] & PCC2_MIEN))
+343:	    have.  This was a fatal()+exit(1) at the TOP of this function, and
+344:	    reassert_interrupts() is called from ten sites -- the GENCTL write arm
+369:	if (d->pcctwo_reg[PCCTWO_GENCTL] & PCC2_C040) {
+372:			fatal("[ pcc2: C040 (MC68040 EIPL) interrupt delivery not "
+391:	case PCC2V_SCSI:
+398:	case PCC2V_SCC_TX:
+405:	case PCC2V_SCC_RX:
+412:	default:fatal("[ pcctwo_interrupt_common: TODO: line = %i ]\n",
+414:		exit(1);
+417:	reassert_interrupts(d);
+431:DEVICE_TICK(pcc2)
+434:	reassert_interrupts(d);
+441:static void pcc2_width_decline(struct pcc2_data *d, int bit, const char *name, int len)
+445:		fatal("[ pcc2: unimplemented len=%i write to %s -- declined."
+450:DEVICE_ACCESS(pcc2)
+467:				fatal("[ pcc2: read 0x%x+%i beyond reg space 0x%x; "
+478:	case PCCTWO_CHIPID:
+479:	case PCCTWO_CHIPREV:
+481:			fatal("[ IGNORING write to read-only PCCTWO_CHIPID/"
+486:	case PCCTWO_GENCTL:
+488:			pcc2_width_decline(d, PCC2_W_GENCTL_LEN, "PCCTWO_GENCTL", len);
+493:			reassert_interrupts(d);
+497:	case PCCTWO_VECBASE:
+499:			pcc2_width_decline(d, PCC2_W_VECBASE_LEN, "PCCTWO_VECBASE", len);
+505:				fatal("[ pcc2: HUH? write to PCCTWO_VECBASE"
+510:	case PCCTWO_T1CMP:
+511:	case PCCTWO_T2CMP:
+512:	case PCCTWO_T1COUNT:
+513:	case PCCTWO_T2COUNT:
+519:	case PCCTWO_PSCALEADJ:
+521:			pcc2_width_decline(d, PCC2_W_PSCALEADJ_LEN, "PCCTWO_PSCALEADJ", len);
+525:			fatal("[ pcc2: write to PSCALEADJ ignored (value "
+530:	case PCCTWO_T2CTL:
+531:	case PCCTWO_T1CTL:
+533:			pcc2_width_decline(d, PCC2_W_TXCTL_LEN, "PCCTWO_TxCTL", len);
+546:				fatal("[ pcc2: HUH? write to PCCTWO_TxCTL"
+551:	case PCCTWO_T2ICR:
+552:	case PCCTWO_T1ICR:
+554:			pcc2_width_decline(d, PCC2_W_TXICR_LEN, "PCCTWO_TxICR", len);
+582:				fatal("[ pcc2: HUH? write to PCCTWO_TxICR"
+585:			reassert_interrupts(d);
+589:	case PCCTWO_SCCERR:
+591:			pcc2_width_decline(d, PCC2_W_SCCERR_LEN, "PCCTWO_SCCERR", len);
+598:	case PCCTWO_SCCICR:
+600:			pcc2_width_decline(d, PCC2_W_SCCICR_LEN, "PCCTWO_SCCICR", len);
+606:				fatal("[ pcc2: HUH? write to PCCTWO_SCCICR"
+608:			reassert_interrupts(d);
+612:	case PCCTWO_SCCTX:
+614:			pcc2_width_decline(d, PCC2_W_SCCTX_LEN, "PCCTWO_SCCTX", len);
+620:				fatal("[ pcc2: HUH? write to PCCTWO_SCCTX"
+622:			reassert_interrupts(d);
+626:	case PCCTWO_SCCRX:
+628:			pcc2_width_decline(d, PCC2_W_SCCRX_LEN, "PCCTWO_SCCRX", len);
+634:				fatal("[ pcc2: HUH? write to PCCTWO_SCCRX"
+636:			reassert_interrupts(d);
+640:	case PCCTWO_SCCRXIACK:
+643:		reassert_interrupts(d);
+646:	case PCCTWO_SCSIICR:
+648:			pcc2_width_decline(d, PCC2_W_SCSIICR_LEN, "PCCTWO_SCSIICR", len);
+654:				fatal("[ pcc2: HUH? write to PCCTWO_SCSIICR"
+656:			reassert_interrupts(d);
+660:	case PCCTWO_IPL:
+667:			pcc2_width_decline(d, PCC2_W_IPL_LEN, "PCCTWO_IPL", len);
+671:			static int w = 0;	/* #119: was exit(1) (IPL is read-only) */
+672:			if (!w) { fatal("[ pcc2: write to read-only PCCTWO_IPL; "
+676:				static int w = 0;	/* #119: was exit(1) */
+677:				if (!w) { fatal("[ pcc2: IPL == 0 on read ]\n");
+683:	case PCCTWO_MASK:
+691:			pcc2_width_decline(d, PCC2_W_MASK_LEN, "PCCTWO_MASK", len);
+696:			reassert_interrupts(d);
+701:		/*  #501 (pcc2defaultkill): this arm ended the host with exit(1) on ANY
+702:		    access to an offset with no case -- 43 of the 0x40 byte offsets:
+716:		    latched fatal() per offset per instance, the house `(once)' shape --
+726:				fatal("[ pcc2: unimplemented write to offset "
+735:				fatal("[ pcc2: unimplemented read from offset "
+746:DEVICE_ACCESS(mvme187_iack)
+752:		fatal("[ pcc2: write to mvme187_iack? ]\n");
+766:DEVINIT(pcc2)
+782:	d->pcctwo_reg[PCCTWO_GENCTL] = 0x00;
+792:	for (i=0; i<16; i++) {
+799:		templ.line = i;
+808:	memory_device_register(devinit->machine->memory, "pcc2",
+812:	memory_device_register(devinit->machine->memory, "mvme187_iack",
+816:	d->timer = timer_add(PCC_TIMER_TICK_HZ, pcc_timer_tick, d);
+818:	machine_add_tickfunction(devinit->machine,
+
+ succeeded in 102ms:
+   1: /*	$OpenBSD: pcctworeg.h,v 1.8 2006/04/27 20:19:28 miod Exp $ */
+   2: 
+   3: #ifndef MVME_PCCTWOREG_H
+   4: #define MVME_PCCTWOREG_H
+   5: 
+   6: /*
+   7:  * Memory map for PCC2 chip found in MVME1x7 boards.
+   8:  *
+   9:  * PCCchip2 control and status register can be accessed as bytes (8 bits),
+  10:  * two-bytes (16 bits), or four-bytes (32 bits).
+  11:  */
+  12: 
+  13: #define	PCC2_BASE		0xfff42000
+  14: #define PCC2_SIZE		0x0040
+  15: 
+  16: #define	PCCTWO_CHIPID		0x0000
+  17: #define	PCCTWO_CHIPREV		0x0001
+  18: #define	PCCTWO_GENCTL		0x0002
+  19: #define	PCCTWO_VECBASE		0x0003
+  20: #define	PCCTWO_T1CMP		0x0004
+  21: #define	PCCTWO_T1COUNT		0x0008
+  22: #define	PCCTWO_T2CMP		0x000c
+  23: #define	PCCTWO_T2COUNT		0x0010
+  24: #define	PCCTWO_PSCALECNT	0x0014
+  25: #define	PCCTWO_PSCALEADJ	0x0015
+  26: #define	PCCTWO_T2CTL		0x0016
+  27: #define	PCCTWO_T1CTL		0x0017
+  28: #define	PCCTWO_GPIO_ICR		0x0018
+  29: #define	PCCTWO_GPIO_PCR		0x0019
+  30: #define	PCCTWO_T2ICR		0x001a
+  31: #define	PCCTWO_T1ICR		0x001b
+  32: #define	PCCTWO_SCCERR		0x001c
+  33: #define	PCCTWO_SCCICR		0x001d
+  34: #define	PCCTWO_SCCTX		0x001e
+  35: #define	PCCTWO_SCCRX		0x001f
+  36: #define	PCCTWO_SCCMOIACK	0x0023
+  37: #define	PCCTWO_SCCTXIACK	0x0025
+  38: #define	PCCTWO_SCCRXIACK	0x0027
+  39: #define	PCCTWO_IEERR		0x0028
+  40: #define	PCCTWO_IEICR		0x002a
+  41: #define	PCCTWO_IEBERR		0x002b
+  42: #define	PCCTWO_SCSIERR		0x002c
+  43: #define	PCCTWO_SCSIICR		0x002f
+  44: #define	PCCTWO_PRTICR		0x0030
+  45: #define	PCCTWO_PTRFICR		0x0031
+  46: #define	PCCTWO_PTRSICR		0x0032
+  47: #define	PCCTWO_PTRPICR		0x0033
+  48: #define	PCCTWO_PRTBICR		0x0034
+  49: #define	PCCTWO_PRTSTATUS	0x0036
+  50: #define	PCCTWO_PRTCTL		0x0037
+  51: #define	PCCTWO_SPEED		0x0038
+  52: #define	PCCTWO_PRTDATA		0x003a
+  53: /* The following registers are not valid on MVME197 */
+  54: #define	PCCTWO_IPL		0x003e
+  55: #define	PCCTWO_MASK		0x003f
+  56: 
+  57: #define PCC2_ID			0x20	/* value at CHIPID */
+  58: 
+  59: /* General Control Register */
+  60: #define PCC2_DR0		0x80
+  61: #define PCC2_C040		0x04
+  62: #define PCC2_MIEN		0x02
+  63: #define PCC2_FAST		0x01
+  64: 
+  65: /* Top 4 bits of the PCC2 VBR. Will be the top 4 bits of the vector */
+  66: #define	PCC2_VECT		0x50
+  67: 
+  68: /* Bottom 4 bits of the vector returned during IACK cycle */
+  69: #define PCC2V_PPBUSY		0x00 				/* lowest */
+  70: #define PCC2V_PPPE		0x01
+  71: #define PCC2V_PPSELECT		0x02
+  72: #define PCC2V_PPFAULT		0x03
+  73: #define PCC2V_PPACK		0x04
+  74: #define PCC2V_SCSI		0x05
+  75: #define PCC2V_IEFAIL		0x06
+  76: #define PCC2V_IE		0x07
+  77: #define PCC2V_TIMER2		0x08
+  78: #define PCC2V_TIMER1		0x09
+  79: #define PCC2V_GPIO		0x0a
+  80: #define PCC2V_SCC_RXE		0x0c
+  81: #define PCC2V_SCC_M		(PCC2V_SCC_RXE + 1)
+  82: #define PCC2V_SCC_TX		(PCC2V_SCC_M + 1)
+  83: #define PCC2V_SCC_RX		(PCC2V_SCC_TX + 1)
+  84: 
+  85: #if 0
+  86: /*
+  87:  * Vaddrs for interrupt mask and pri registers
+  88:  */
+  89: extern u_int8_t *volatile pcc2intr_mask;
+  90: extern u_int8_t *volatile pcc2intr_ipl;
+  91: #endif
+  92: 
+  93: /*
+  94:  * We lock off our interrupt vector at 0x50.
+  95:  */
+  96: #define PCC2_VECBASE		0x50
+  97: #define PCC2_NVEC		0x10
+  98: 
+  99: #define PCC2_TCTL_CEN		0x01
+ 100: #define PCC2_TCTL_COC		0x02
+ 101: #define PCC2_TCTL_COVF		0x04
+ 102: #define PCC2_TCTL_OVF		0xf0
+ 103: 
+ 104: #define PCC2_GPIO_PLTY		0x80
+ 105: #define PCC2_GPIO_EL		0x40
+ 106: 
+ 107: #define PCC2_GPIOCR_OE		0x2
+ 108: #define PCC2_GPIOCR_O		0x1
+ 109: 
+ 110: #define PCC2_SCC_AVEC		0x08
+ 111: 
+ 112: #define PCC2_SC_INHIBIT		(0 << 6)
+ 113: #define PCC2_SC_SNOOP		(1 << 6)
+ 114: #define PCC2_SC_INVAL		(2 << 6)
+ 115: #define PCC2_SC_RESV		(3 << 6)
+ 116: 
+ 117: #define pcc2_timer_us2lim(us)	(us)		/* timer increments in "us" */
+ 118: 
+ 119: #define PCC2_IRQ_IPL		0x07
+ 120: #define PCC2_IRQ_ICLR		0x08
+ 121: #define PCC2_IRQ_IEN		0x10
+ 122: #define PCC2_IRQ_INT		0x20
+ 123: 
+ 124: /* Tick Timer Interrupt Control Register */
+ 125: #define PCC2_TTIRQ_INT		0x20
+ 126: #define PCC2_TTIRQ_IEN		0x10
+ 127: #define PCC2_TTIRQ_ICLR		0x08
+ 128: #define PCC2_TTIRQ_IL		0x07		/* mask for IL2-IL0 */
+ 129: 
+ 130: #define PCC2_IEERR_SCLR		0x01
+ 131: 
+ 132: #define PCC2_GENCTL_FAST	0x01
+ 133: #define PCC2_GENCTL_IEN		0x02
+ 134: #define PCC2_GENCTL_C040	0x03
+ 135: 
+ 136: #endif	/*  MVME_PCCTWOREG_H  */
+
+codex
+The current code contradicts the termination premise: the C040 arm suppresses interrupt assertion and contains no `exit(1)`. I’m checking the one remaining executable `exit(1)` against the callback-registration loop and counting the existing guards and callers.
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$pcc2Text = Get-Content -Raw -LiteralPath '"'src/devices/dev_pcc2.c'; "'$pcc2Code = [regex]::Replace($pcc2Text, '"'(?s)/\\*.*?\\*/|(?m)//["'^'"\\r\\n]*', ''); "'$pcc2Header = Get-Content -Raw -LiteralPath '"'src/include/thirdparty/mvme_pcctworeg.h'; "'$pcc2Regs = @{}; foreach ($pcc2Match in [regex]::Matches($pcc2Header, '"'(?m)"'^#define'"\\s+(PCCTWO_\\w+)\\s+(0x[0-9a-fA-F]+)')) { "'$pcc2Regs[$pcc2Match.Groups[1].Value] = [Convert]::ToInt32($pcc2Match.Groups[2].Value.Substring(2), 16) }; $pcc2Access = [regex]::Match($pcc2Code, '"'(?s)DEVICE_ACCESS\\(pcc2\\)(.*?)DEVICE_ACCESS\\(mvme187_iack\\)').Groups[1].Value; "'$pcc2Cases = @([regex]::Matches($pcc2Access, '"'case\\s+(PCCTWO_\\w+)\\s*:') | ForEach-Object { "'$_.Groups[1].Value }); $pcc2Offsets = @($pcc2Cases | ForEach-Object { $pcc2Regs[$_] } | Sort-Object -Unique); [pscustomobject]@{ ExecutableExitOneCount = [regex]::Matches($pcc2Code, '"'\\bexit\\s*\\(\\s*1\\s*\\)').Count; ReassertCallSiteCount = [regex]::Matches("'$pcc2Code, '"'\\breassert_interrupts\\s*\\(d\\)').Count; ReassertAccessSiteCount = [regex]::Matches("'$pcc2Access, '"'\\breassert_interrupts\\s*\\(d\\)').Count; WidthGuardCount = [regex]::Matches("'$pcc2Access, '"'len "'!= 1 && writeflag == MEM_WRITE'"').Count; WidthLatchNames = @([regex]::Matches("'$pcc2Access, '"'pcc2_width_decline\\(d,\\s*(PCC2_W_\\w+)') | ForEach-Object { "'$_.Groups[1].Value }); ExplicitCaseCount = $pcc2Cases.Count; ExplicitCaseOffsets = @($pcc2Offsets | ForEach-Object { '"'0x{0:x2}' -f "'$_ }); DefaultOffsetCount = @(0..63 | Where-Object { $_ -notin $pcc2Offsets }).Count; DefaultOffsets = @(0..63 | Where-Object { $_ -notin $pcc2Offsets } | ForEach-Object { '"'0x{0:x2}' -f "'$_ }) } | ConvertTo-Json -Depth 3' in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+ exited 1 in 329ms:
+Cannot invoke method. Method invocation is supported only on core types in this language mode.
+At line:2 char:356
++ ... A-F]+)')) { $pcc2Regs[$pcc2Match.Groups[1].Value] = [Convert]::ToInt3 ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : InvalidOperation: (:) [], RuntimeException
+    + FullyQualifiedErrorId : MethodInvocationNotSupportedInConstrainedLanguage
+ 
+Cannot invoke method. Method invocation is supported only on core types in this language mode.
+At line:2 char:356
++ ... A-F]+)')) { $pcc2Regs[$pcc2Match.Groups[1].Value] = [Convert]::ToInt3 ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : InvalidOperation: (:) [], RuntimeException
+    + FullyQualifiedErrorId : MethodInvocationNotSupportedInConstrainedLanguage
+ 
+Cannot invoke method. Method invocation is supported only on core types in this language mode.
+At line:2 char:356
++ ... A-F]+)')) { $pcc2Regs[$pcc2Match.Groups[1].Value] = [Convert]::ToInt3 ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : InvalidOperation: (:) [], RuntimeException
+    + FullyQualifiedErrorId : MethodInvocationNotSupportedInConstrainedLanguage
+ 
+Cannot invoke method. Method invocation is supported only on core types in this language mode.
+At line:2 char:356
++ ... A-F]+)')) { $pcc2Regs[$pcc2Match.Groups[1].Value] = [Convert]::ToInt3 ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : InvalidOperation: (:) [], RuntimeException
+    + FullyQualifiedErrorId : MethodInvocationNotSupportedInConstrainedLanguage
+ 
+Cannot invoke method. Method invocation is supported only on core types in this language mode.
+At line:2 char:356
++ ... A-F]+)')) { $pcc2Regs[$pcc2Match.Groups[1].Value] = [Convert]::ToInt3 ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : InvalidOperation: (:) [], RuntimeException
+    + FullyQualifiedErrorId : MethodInvocationNotSupportedInConstrainedLanguage
+ 
+Cannot invoke method. Method invocation is supported only on core types in this language mode.
+At line:2 char:356
++ ... A-F]+)')) { $pcc2Regs[$pcc2Match.Groups[1].Value] = [Convert]::ToInt3 ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : InvalidOperation: (:) [], RuntimeException
+    + FullyQualifiedErrorId : MethodInvocationNotSupportedInConstrainedLanguage
+ 
+Cannot invoke method. Method invocation is supported only on core types in this language mode.
+At line:2 char:356
++ ... A-F]+)')) { $pcc2Regs[$pcc2Match.Groups[1].Value] = [Convert]::ToInt3 ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : InvalidOperation: (:) [], RuntimeException
+    + FullyQualifiedErrorId : MethodInvocationNotSupportedInConstrainedLanguage
+ 
+Cannot invoke method. Method invocation is supported only on core types in this language mode.
+At line:2 char:356
++ ... A-F]+)')) { $pcc2Regs[$pcc2Match.Groups[1].Value] = [Convert]::ToInt3 ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : InvalidOperation: (:) [], RuntimeException
+    + FullyQualifiedErrorId : MethodInvocationNotSupportedInConstrainedLanguage
+ 
+Cannot invoke method. Method invocation is supported only on core types in this language mode.
+At line:2 char:356
++ ... A-F]+)')) { $pcc2Regs[$pcc2Match.Groups[1].Value] = [Convert]::ToInt3 ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : InvalidOperation: (:) [], RuntimeException
+    + FullyQualifiedErrorId : MethodInvocationNotSupportedInConstrainedLanguage
+ 
+Cannot invoke method. Method invocation is supported only on core types in this language mode.
+At line:2 char:356
++ ... A-F]+)')) { $pcc2Regs[$pcc2Match.Groups[1].Value] = [Convert]::ToInt3 ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : InvalidOperation: (:) [], RuntimeException
+    + FullyQualifiedErrorId : MethodInvocationNotSupportedInConstrainedLanguage
+ 
+Cannot invoke method. Method invocation is supported only on core types in this language mode.
+At line:2 char:356
++ ... A-F]+)')) { $pcc2Regs[$pcc2Match.Groups[1].Value] = [Convert]::ToInt3 ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : InvalidOperation: (:) [], RuntimeException
+    + FullyQualifiedErrorId : MethodInvocationNotSupportedInConstrainedLanguage
+ 
+Cannot invoke method. Method invocation is supported only on core types in this language mode.
+At line:2 char:356
++ ... A-F]+)')) { $pcc2Regs[$pcc2Match.Groups[1].Value] = [Convert]::ToInt3 ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : InvalidOperation: (:) [], RuntimeException
+    + FullyQualifiedErrorId : MethodInvocationNotSupportedInConstrainedLanguage
+ 
+Cannot invoke method. Method invocation is supported only on core types in this language mode.
+At line:2 char:356
++ ... A-F]+)')) { $pcc2Regs[$pcc2Match.Groups[1].Value] = [Convert]::ToInt3 ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : InvalidOperation: (:) [], RuntimeException
+    + FullyQualifiedErrorId : MethodInvocationNotSupportedInConstrainedLanguage
+ 
+Cannot invoke method. Method invocation is supported only on core types in this language mode.
+At line:2 char:356
++ ... A-F]+)')) { $pcc2Regs[$pcc2Match.Groups[1].Value] = [Convert]::ToInt3 ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : InvalidOperation: (:) [], RuntimeException
+    + FullyQualifiedErrorId : MethodInvocationNotSupportedInConstrainedLanguage
+ 
+Cannot invoke method. Method invocation is supported only on core types in this language mode.
+At line:2 char:356
++ ... A-F]+)')) { $pcc2Regs[$pcc2Match.Groups[1].Value] = [Convert]::ToInt3 ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : InvalidOperation: (:) [], RuntimeException
+    + FullyQualifiedErrorId : MethodInvocationNotSupportedInConstrainedLanguage
+ 
+Cannot invoke method. Method invocation is supported only on core types in this language mode.
+At line:2 char:356
++ ... A-F]+)')) { $pcc2Regs[$pcc2Match.Groups[1].Value] = [Convert]::ToInt3 ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : InvalidOperation: (:) [], RuntimeException
+    + FullyQualifiedErrorId : MethodInvocationNotSupportedInConstrainedLanguage
+ 
+Cannot invoke method. Method invocation is supported only on core types in this language mode.
+At line:2 char:356
++ ... A-F]+)')) { $pcc2Regs[$pcc2Match.Groups[1].Value] = [Convert]::ToInt3 ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : InvalidOperation: (:) [], RuntimeException
+    + FullyQualifiedErrorId : MethodInvocationNotSupportedInConstrainedLanguage
+ 
+Cannot invoke method. Method invocation is supported only on core types in this language mode.
+At line:2 char:356
++ ... A-F]+)')) { $pcc2Regs[$pcc2Match.Groups[1].Value] = [Convert]::ToInt3 ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : InvalidOperation: (:) [], RuntimeException
+    + FullyQualifiedErrorId : MethodInvocationNotSupportedInConstrainedLanguage
+ 
+Cannot invoke method. Method invocation is supported only on core types in this language mode.
+At line:2 char:356
++ ... A-F]+)')) { $pcc2Regs[$pcc2Match.Groups[1].Value] = [Convert]::ToInt3 ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : InvalidOperation: (:) [], RuntimeException
+    + FullyQualifiedErrorId : MethodInvocationNotSupportedInConstrainedLanguage
+ 
+Cannot invoke method. Method invocation is supported only on core types in this language mode.
+At line:2 char:356
++ ... A-F]+)')) { $pcc2Regs[$pcc2Match.Groups[1].Value] = [Convert]::ToInt3 ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : InvalidOperation: (:) [], RuntimeException
+    + FullyQualifiedErrorId : MethodInvocationNotSupportedInConstrainedLanguage
+ 
+Cannot invoke method. Method invocation is supported only on core types in this language mode.
+At line:2 char:356
++ ... A-F]+)')) { $pcc2Regs[$pcc2Match.Groups[1].Value] = [Convert]::ToInt3 ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : InvalidOperation: (:) [], RuntimeException
+    + FullyQualifiedErrorId : MethodInvocationNotSupportedInConstrainedLanguage
+ 
+Cannot invoke method. Method invocation is supported only on core types in this language mode.
+At line:2 char:356
++ ... A-F]+)')) { $pcc2Regs[$pcc2Match.Groups[1].Value] = [Convert]::ToInt3 ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : InvalidOperation: (:) [], RuntimeException
+    + FullyQualifiedErrorId : MethodInvocationNotSupportedInConstrainedLanguage
+ 
+Cannot invoke method. Method invocation is supported only on core types in this language mode.
+At line:2 char:356
++ ... A-F]+)')) { $pcc2Regs[$pcc2Match.Groups[1].Value] = [Convert]::ToInt3 ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : InvalidOperation: (:) [], RuntimeException
+    + FullyQualifiedErrorId : MethodInvocationNotSupportedInConstrainedLanguage
+ 
+Cannot invoke method. Method invocation is supported only on core types in this language mode.
+At line:2 char:356
++ ... A-F]+)')) { $pcc2Regs[$pcc2Match.Groups[1].Value] = [Convert]::ToInt3 ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : InvalidOperation: (:) [], RuntimeException
+    + FullyQualifiedErrorId : MethodInvocationNotSupportedInConstrainedLanguage
+ 
+Cannot invoke method. Method invocation is supported only on core types in this language mode.
+At line:2 char:356
++ ... A-F]+)')) { $pcc2Regs[$pcc2Match.Groups[1].Value] = [Convert]::ToInt3 ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : InvalidOperation: (:) [], RuntimeException
+    + FullyQualifiedErrorId : MethodInvocationNotSupportedInConstrainedLanguage
+ 
+Cannot invoke method. Method invocation is supported only on core types in this language mode.
+At line:2 char:356
++ ... A-F]+)')) { $pcc2Regs[$pcc2Match.Groups[1].Value] = [Convert]::ToInt3 ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : InvalidOperation: (:) [], RuntimeException
+    + FullyQualifiedErrorId : MethodInvocationNotSupportedInConstrainedLanguage
+ 
+Cannot invoke method. Method invocation is supported only on core types in this language mode.
+At line:2 char:356
++ ... A-F]+)')) { $pcc2Regs[$pcc2Match.Groups[1].Value] = [Convert]::ToInt3 ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : InvalidOperation: (:) [], RuntimeException
+    + FullyQualifiedErrorId : MethodInvocationNotSupportedInConstrainedLanguage
+ 
+Cannot invoke method. Method invocation is supported only on core types in this language mode.
+At line:2 char:356
++ ... A-F]+)')) { $pcc2Regs[$pcc2Match.Groups[1].Value] = [Convert]::ToInt3 ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : InvalidOperation: (:) [], RuntimeException
+    + FullyQualifiedErrorId : MethodInvocationNotSupportedInConstrainedLanguage
+ 
+Cannot invoke method. Method invocation is supported only on core types in this language mode.
+At line:2 char:356
++ ... A-F]+)')) { $pcc2Regs[$pcc2Match.Groups[1].Value] = [Convert]::ToInt3 ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : InvalidOperation: (:) [], RuntimeException
+    + FullyQualifiedErrorId : MethodInvocationNotSupportedInConstrainedLanguage
+ 
+Cannot invoke method. Method invocation is supported only on core types in this language mode.
+At line:2 char:356
++ ... A-F]+)')) { $pcc2Regs[$pcc2Match.Groups[1].Value] = [Convert]::ToInt3 ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : InvalidOperation: (:) [], RuntimeException
+    + FullyQualifiedErrorId : MethodInvocationNotSupportedInConstrainedLanguage
+ 
+Cannot invoke method. Method invocation is supported only on core types in this language mode.
+At line:2 char:356
++ ... A-F]+)')) { $pcc2Regs[$pcc2Match.Groups[1].Value] = [Convert]::ToInt3 ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : InvalidOperation: (:) [], RuntimeException
+    + FullyQualifiedErrorId : MethodInvocationNotSupportedInConstrainedLanguage
+ 
+Cannot invoke method. Method invocation is supported only on core types in this language mode.
+At line:2 char:356
++ ... A-F]+)')) { $pcc2Regs[$pcc2Match.Groups[1].Value] = [Convert]::ToInt3 ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : InvalidOperation: (:) [], RuntimeException
+    + FullyQualifiedErrorId : MethodInvocationNotSupportedInConstrainedLanguage
+ 
+Cannot invoke method. Method invocation is supported only on core types in this language mode.
+At line:2 char:356
++ ... A-F]+)')) { $pcc2Regs[$pcc2Match.Groups[1].Value] = [Convert]::ToInt3 ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : InvalidOperation: (:) [], RuntimeException
+    + FullyQualifiedErrorId : MethodInvocationNotSupportedInConstrainedLanguage
+ 
+Cannot invoke method. Method invocation is supported only on core types in this language mode.
+At line:2 char:356
++ ... A-F]+)')) { $pcc2Regs[$pcc2Match.Groups[1].Value] = [Convert]::ToInt3 ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : InvalidOperation: (:) [], RuntimeException
+    + FullyQualifiedErrorId : MethodInvocationNotSupportedInConstrainedLanguage
+ 
+Cannot invoke method. Method invocation is supported only on core types in this language mode.
+At line:2 char:356
++ ... A-F]+)')) { $pcc2Regs[$pcc2Match.Groups[1].Value] = [Convert]::ToInt3 ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : InvalidOperation: (:) [], RuntimeException
+    + FullyQualifiedErrorId : MethodInvocationNotSupportedInConstrainedLanguage
+ 
+Cannot invoke method. Method invocation is supported only on core types in this language mode.
+At line:2 char:356
++ ... A-F]+)')) { $pcc2Regs[$pcc2Match.Groups[1].Value] = [Convert]::ToInt3 ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : InvalidOperation: (:) [], RuntimeException
+    + FullyQualifiedErrorId : MethodInvocationNotSupportedInConstrainedLanguage
+ 
+Cannot invoke method. Method invocation is supported only on core types in this language mode.
+At line:2 char:356
++ ... A-F]+)')) { $pcc2Regs[$pcc2Match.Groups[1].Value] = [Convert]::ToInt3 ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : InvalidOperation: (:) [], RuntimeException
+    + FullyQualifiedErrorId : MethodInvocationNotSupportedInConstrainedLanguage
+ 
+Cannot invoke method. Method invocation is supported only on core types in this language mode.
+At line:2 char:356
++ ... A-F]+)')) { $pcc2Regs[$pcc2Match.Groups[1].Value] = [Convert]::ToInt3 ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : InvalidOperation: (:) [], RuntimeException
+    + FullyQualifiedErrorId : MethodInvocationNotSupportedInConstrainedLanguage
+ 
+Cannot invoke method. Method invocation is supported only on core types in this language mode.
+At line:2 char:356
++ ... A-F]+)')) { $pcc2Regs[$pcc2Match.Groups[1].Value] = [Convert]::ToInt3 ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : InvalidOperation: (:) [], RuntimeException
+    + FullyQualifiedErrorId : MethodInvocationNotSupportedInConstrainedLanguage
+ 
+Cannot convert value to type "System.Management.Automation.LanguagePrimitives+InternalPSCustomObject". Only core types 
+are supported in this language mode.
+At line:2 char:1514
++ ... Offsets = @(0..63 | Where-Object { $_ -notin $pcc2Offsets } | ForEach ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : InvalidArgument: (:) [], RuntimeException
+    + FullyQualifiedErrorId : ConversionSupportedOnlyToCoreTypes
+ 
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$pcc2Text = Get-Content -Raw -LiteralPath '"'src/devices/dev_pcc2.c'; "'$pcc2Code = [regex]::Replace($pcc2Text, '"'(?s)/\\*.*?\\*/|(?m)//["'^'"\\r\\n]*', ''); "'$pcc2Header = Get-Content -Raw -LiteralPath '"'src/include/thirdparty/mvme_pcctworeg.h'; "'$pcc2Regs = @{}; foreach ($pcc2Match in [regex]::Matches($pcc2Header, '"'(?m)"'^#define'"\\s+(PCCTWO_\\w+)\\s+(0x[0-9a-fA-F]+)')) { "'$pcc2Regs[$pcc2Match.Groups[1].Value] = [int]$pcc2Match.Groups[2].Value }; $pcc2Access = [regex]::Match($pcc2Code, '"'(?s)DEVICE_ACCESS\\(pcc2\\)(.*?)DEVICE_ACCESS\\(mvme187_iack\\)').Groups[1].Value; "'$pcc2Cases = @([regex]::Matches($pcc2Access, '"'case\\s+(PCCTWO_\\w+)\\s*:') | ForEach-Object { "'$_.Groups[1].Value }); $pcc2Offsets = @($pcc2Cases | ForEach-Object { $pcc2Regs[$_] } | Sort-Object -Unique); @{ ExecutableExitOneCount = [regex]::Matches($pcc2Code, '"'\\bexit\\s*\\(\\s*1\\s*\\)').Count; ReassertCallSiteCount = [regex]::Matches("'$pcc2Code, '"'\\breassert_interrupts\\s*\\(d\\)').Count; ReassertAccessSiteCount = [regex]::Matches("'$pcc2Access, '"'\\breassert_interrupts\\s*\\(d\\)').Count; WidthGuardCount = [regex]::Matches("'$pcc2Access, '"'len "'!= 1 && writeflag == MEM_WRITE'"').Count; WidthLatchNames = @([regex]::Matches("'$pcc2Access, '"'pcc2_width_decline\\(d,\\s*(PCC2_W_\\w+)') | ForEach-Object { "'$_.Groups[1].Value }); ExplicitCaseCount = $pcc2Cases.Count; ExplicitCaseOffsets = @($pcc2Offsets | ForEach-Object { '"'0x{0:x2}' -f "'$_ }); DefaultOffsetCount = @(0..63 | Where-Object { $_ -notin $pcc2Offsets }).Count; DefaultOffsets = @(0..63 | Where-Object { $_ -notin $pcc2Offsets } | ForEach-Object { '"'0x{0:x2}' -f "'$_ }) } | ConvertTo-Json -Depth 3' in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+ succeeded in 226ms:
+{
+    "ExecutableExitOneCount":  1,
+    "ExplicitCaseOffsets":  [
+                                "0x00",
+                                "0x01",
+                                "0x02",
+                                "0x03",
+                                "0x04",
+                                "0x08",
+                                "0x0c",
+                                "0x10",
+                                "0x15",
+                                "0x16",
+                                "0x17",
+                                "0x1a",
+                                "0x1b",
+                                "0x1c",
+                                "0x1d",
+                                "0x1e",
+                                "0x1f",
+                                "0x27",
+                                "0x2f",
+                                "0x3e",
+                                "0x3f"
+                            ],
+    "DefaultOffsets":  [
+                           "0x05",
+                           "0x06",
+                           "0x07",
+                           "0x09",
+                           "0x0a",
+                           "0x0b",
+                           "0x0d",
+                           "0x0e",
+                           "0x0f",
+                           "0x11",
+                           "0x12",
+                           "0x13",
+                           "0x14",
+                           "0x18",
+                           "0x19",
+                           "0x20",
+                           "0x21",
+                           "0x22",
+                           "0x23",
+                           "0x24",
+                           "0x25",
+                           "0x26",
+                           "0x28",
+                           "0x29",
+                           "0x2a",
+                           "0x2b",
+                           "0x2c",
+                           "0x2d",
+                           "0x2e",
+                           "0x30",
+                           "0x31",
+                           "0x32",
+                           "0x33",
+                           "0x34",
+                           "0x35",
+                           "0x36",
+                           "0x37",
+                           "0x38",
+                           "0x39",
+                           "0x3a",
+                           "0x3b",
+                           "0x3c",
+                           "0x3d"
+                       ],
+    "DefaultOffsetCount":  43,
+    "ReassertCallSiteCount":  10,
+    "WidthLatchNames":  [
+                            "PCC2_W_GENCTL_LEN",
+                            "PCC2_W_VECBASE_LEN",
+                            "PCC2_W_PSCALEADJ_LEN",
+                            "PCC2_W_TXCTL_LEN",
+                            "PCC2_W_TXICR_LEN",
+                            "PCC2_W_SCCERR_LEN",
+                            "PCC2_W_SCCICR_LEN",
+                            "PCC2_W_SCCTX_LEN",
+                            "PCC2_W_SCCRX_LEN",
+                            "PCC2_W_SCSIICR_LEN",
+                            "PCC2_W_IPL_LEN",
+                            "PCC2_W_MASK_LEN"
+                        ],
+    "ExplicitCaseCount":  21,
+    "ReassertAccessSiteCount":  8,
+    "WidthGuardCount":  12
+}
+
+codex
+The count is twelve width-guard blocks and ten direct calls to `reassert_interrupts()` across three functions. GENCTL has no value guard and stores every byte pattern. The remaining exit handles unsupported interrupt callback lines; registration exposes sixteen line IDs, but these files do not establish which unsupported IDs a connected device can actually emit.
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n 'PCC2_(GENCTL_C040|C040|FAST|DR0|MIEN)|pcctwo_interrupt_common\\(|pcctwo_interrupt_assert\\(|pcctwo_interrupt_deassert\\(|cur_int_vec|pending_timer[12]_interrupts|relative_addr %=|memory_readmax64|memcpy\\(|memset\\(' src/devices/dev_pcc2.c src/include/thirdparty/mvme_pcctworeg.h" in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$pcc2Line = 0; Get-Content -LiteralPath '"'src/devices/dev_pcc2.c' | ForEach-Object { "'$pcc2Line++; if (($pcc2Line -ge 367 -and $pcc2Line -le 447) -or ($pcc2Line -ge 450 -and $pcc2Line -le 509) -or ($pcc2Line -ge 766 -and $pcc2Line -le 822)) { '"'{0,4}: {1}' -f "'$pcc2Line, $_ } }' in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+ succeeded in 78ms:
+src/include/thirdparty/mvme_pcctworeg.h:60:#define PCC2_DR0		0x80
+src/include/thirdparty/mvme_pcctworeg.h:61:#define PCC2_C040		0x04
+src/include/thirdparty/mvme_pcctworeg.h:62:#define PCC2_MIEN		0x02
+src/include/thirdparty/mvme_pcctworeg.h:63:#define PCC2_FAST		0x01
+src/include/thirdparty/mvme_pcctworeg.h:134:#define PCC2_GENCTL_C040	0x03
+src/devices/dev_pcc2.c:77:      READS   are served BEFORE the switch by memcpy(data, pcctwo_reg + addr, len),
+src/devices/dev_pcc2.c:83:              byte" ONLY at len == 1: memory_readmax64 composes big-endian, so
+src/devices/dev_pcc2.c:104:    memory_rw, and `relative_addr %= PCC2_SIZE' keeps parity, so only the SIX
+src/devices/dev_pcc2.c:149:	uint8_t			cur_int_vec[8];
+src/devices/dev_pcc2.c:153:	int			pending_timer1_interrupts;
+src/devices/dev_pcc2.c:154:	int			pending_timer2_interrupts;
+src/devices/dev_pcc2.c:258:		d->pending_timer1_interrupts += interrupt1;
+src/devices/dev_pcc2.c:260:		d->pending_timer2_interrupts += interrupt2;
+src/devices/dev_pcc2.c:283:	if (d->pending_timer1_interrupts > 0 &&
+src/devices/dev_pcc2.c:286:	if (d->pending_timer2_interrupts > 0 &&
+src/devices/dev_pcc2.c:292:		d->cur_int_vec[intlevel] = PCC2V_TIMER1;
+src/devices/dev_pcc2.c:298:		d->cur_int_vec[intlevel] = PCC2V_TIMER2;
+src/devices/dev_pcc2.c:306:		d->cur_int_vec[intlevel] = PCC2V_SCC_TX;
+src/devices/dev_pcc2.c:314:		d->cur_int_vec[intlevel] = PCC2V_SCC_RX;
+src/devices/dev_pcc2.c:322:		d->cur_int_vec[intlevel] = PCC2V_SCSI;
+src/devices/dev_pcc2.c:339:	if (!(d->pcctwo_reg[PCCTWO_GENCTL] & PCC2_MIEN))
+src/devices/dev_pcc2.c:352:	    recalculation and the cur_int_vec[] updates have already run by here.
+src/devices/dev_pcc2.c:369:	if (d->pcctwo_reg[PCCTWO_GENCTL] & PCC2_C040) {
+src/devices/dev_pcc2.c:385:void pcctwo_interrupt_common(struct interrupt *interrupt, int assert)
+src/devices/dev_pcc2.c:421:static void pcctwo_interrupt_assert(struct interrupt *interrupt)
+src/devices/dev_pcc2.c:423:	pcctwo_interrupt_common(interrupt, 1);
+src/devices/dev_pcc2.c:425:static void pcctwo_interrupt_deassert(struct interrupt *interrupt)
+src/devices/dev_pcc2.c:427:	pcctwo_interrupt_common(interrupt, 0);
+src/devices/dev_pcc2.c:456:	relative_addr %= PCC2_SIZE;
+src/devices/dev_pcc2.c:459:		idata = memory_readmax64(cpu, data, len);
+src/devices/dev_pcc2.c:463:			memcpy(data, d->pcctwo_reg + relative_addr, len);
+src/devices/dev_pcc2.c:472:			memset(data, 0, len);	/* OB-11b: don't leak uninit host memory */
+src/devices/dev_pcc2.c:516:			memcpy(d->pcctwo_reg + relative_addr, data, len);
+src/devices/dev_pcc2.c:563:				d->pending_timer1_interrupts = 0;
+src/devices/dev_pcc2.c:566:				d->pending_timer2_interrupts = 0;
+src/devices/dev_pcc2.c:570:			    && d->pending_timer1_interrupts > 0)
+src/devices/dev_pcc2.c:571:				d->pending_timer1_interrupts --;
+src/devices/dev_pcc2.c:575:			    && d->pending_timer2_interrupts > 0)
+src/devices/dev_pcc2.c:576:				d->pending_timer2_interrupts --;
+src/devices/dev_pcc2.c:754:		odata = d->pcctwo_reg[PCCTWO_VECBASE] + d->cur_int_vec[
+src/devices/dev_pcc2.c:772:	memset(d, 0, sizeof(struct pcc2_data));
+src/devices/dev_pcc2.c:798:		memset(&templ, 0, sizeof(templ));
+
+ succeeded in 142ms:
+ 367: 	    disables "both the EIPL* pins and the INT pin" -- so the two tests are
+ 368: 	    siblings gating one output, not a nest.  */
+ 369: 	if (d->pcctwo_reg[PCCTWO_GENCTL] & PCC2_C040) {
+ 370: 		if (!(d->warned & (1u << PCC2_W_C040))) {
+ 371: 			d->warned |= (1u << PCC2_W_C040);
+ 372: 			fatal("[ pcc2: C040 (MC68040 EIPL) interrupt delivery not "
+ 373: 			    "implemented; assertion suppressed  (once) ]\n");
+ 374: 		}
+ 375: 		assert = 0;
+ 376: 	}
+ 377: 
+ 378: 	if (assert)
+ 379: 		INTERRUPT_ASSERT(d->cpu_irq);
+ 380: 	else
+ 381: 		INTERRUPT_DEASSERT(d->cpu_irq);
+ 382: }
+ 383: 
+ 384: 
+ 385: void pcctwo_interrupt_common(struct interrupt *interrupt, int assert)
+ 386: {
+ 387: 	struct pcc2_data *d = (struct pcc2_data *) interrupt->extra;
+ 388: 
+ 389: 	switch (interrupt->line) {
+ 390: 
+ 391: 	case PCC2V_SCSI:
+ 392: 		if (assert)
+ 393: 			d->pcctwo_reg[PCCTWO_SCSIICR] |= PCC2_IRQ_INT;
+ 394: 		else
+ 395: 			d->pcctwo_reg[PCCTWO_SCSIICR] &= ~PCC2_IRQ_INT;
+ 396: 		break;
+ 397: 
+ 398: 	case PCC2V_SCC_TX:
+ 399: 		if (assert)
+ 400: 			d->pcctwo_reg[PCCTWO_SCCTX] |= PCC2_IRQ_INT;
+ 401: 		else
+ 402: 			d->pcctwo_reg[PCCTWO_SCCTX] &= ~PCC2_IRQ_INT;
+ 403: 		break;
+ 404: 
+ 405: 	case PCC2V_SCC_RX:
+ 406: 		if (assert)
+ 407: 			d->pcctwo_reg[PCCTWO_SCCRX] |= PCC2_IRQ_INT;
+ 408: 		else
+ 409: 			d->pcctwo_reg[PCCTWO_SCCRX] &= ~PCC2_IRQ_INT;
+ 410: 		break;
+ 411: 
+ 412: 	default:fatal("[ pcctwo_interrupt_common: TODO: line = %i ]\n",
+ 413: 		    interrupt->line);
+ 414: 		exit(1);
+ 415: 	}
+ 416: 
+ 417: 	reassert_interrupts(d);
+ 418: }
+ 419: 
+ 420: 
+ 421: static void pcctwo_interrupt_assert(struct interrupt *interrupt)
+ 422: {
+ 423: 	pcctwo_interrupt_common(interrupt, 1);
+ 424: }
+ 425: static void pcctwo_interrupt_deassert(struct interrupt *interrupt)
+ 426: {
+ 427: 	pcctwo_interrupt_common(interrupt, 0);
+ 428: }
+ 429: 
+ 430: 
+ 431: DEVICE_TICK(pcc2)
+ 432: {
+ 433: 	struct pcc2_data *d = (struct pcc2_data *) extra;
+ 434: 	reassert_interrupts(d);
+ 435: }
+ 436: 
+ 437: 
+ 438: /*  pcc2widthkills: decline a wide WRITE to a byte register, announcing once per
+ 439:     block per instance.  The caller `break's after this; the read side of the same
+ 440:     block never reaches here.  */
+ 441: static void pcc2_width_decline(struct pcc2_data *d, int bit, const char *name, int len)
+ 442: {
+ 443: 	if (!(d->warned & (1u << bit))) {
+ 444: 		d->warned |= (1u << bit);
+ 445: 		fatal("[ pcc2: unimplemented len=%i write to %s -- declined."
+ 446: 		    "  (once) ]\n", len, name);
+ 447: 	}
+ 450: DEVICE_ACCESS(pcc2)
+ 451: {
+ 452: 	uint64_t idata = 0;
+ 453: 	struct pcc2_data *d = (struct pcc2_data *) extra;
+ 454: 
+ 455: 	/*  0xfff42000..0xfff42fff, but only 0x40 unique registers:  */
+ 456: 	relative_addr %= PCC2_SIZE;
+ 457: 
+ 458: 	if (writeflag == MEM_WRITE)
+ 459: 		idata = memory_readmax64(cpu, data, len);
+ 460: 
+ 461: 	if (writeflag == MEM_READ) {
+ 462: 		if (relative_addr + len <= PCC2_SIZE)	/* OB-11: end-span */
+ 463: 			memcpy(data, d->pcctwo_reg + relative_addr, len);
+ 464: 		else {
+ 465: 			static int warned = 0;	/* #119: loud-once (course-correction) */
+ 466: 			if (!warned) {
+ 467: 				fatal("[ pcc2: read 0x%x+%i beyond reg space 0x%x; "
+ 468: 				    "zero-filled ]\n", (int)relative_addr, (int)len,
+ 469: 				    (int)PCC2_SIZE);
+ 470: 				warned = 1;
+ 471: 			}
+ 472: 			memset(data, 0, len);	/* OB-11b: don't leak uninit host memory */
+ 473: 		}
+ 474: 	}
+ 475: 
+ 476: 	switch (relative_addr) {
+ 477: 
+ 478: 	case PCCTWO_CHIPID:
+ 479: 	case PCCTWO_CHIPREV:
+ 480: 		if (writeflag == MEM_WRITE) {
+ 481: 			fatal("[ IGNORING write to read-only PCCTWO_CHIPID/"
+ 482: 			    "CHIPREV register ]\n");
+ 483: 		}
+ 484: 		break;
+ 485: 
+ 486: 	case PCCTWO_GENCTL:
+ 487: 		if (len != 1 && writeflag == MEM_WRITE) {
+ 488: 			pcc2_width_decline(d, PCC2_W_GENCTL_LEN, "PCCTWO_GENCTL", len);
+ 489: 			break;
+ 490: 		}
+ 491: 		if (writeflag == MEM_WRITE) {
+ 492: 			d->pcctwo_reg[relative_addr] = idata;
+ 493: 			reassert_interrupts(d);
+ 494: 		}
+ 495: 		break;
+ 496: 
+ 497: 	case PCCTWO_VECBASE:
+ 498: 		if (len != 1 && writeflag == MEM_WRITE) {
+ 499: 			pcc2_width_decline(d, PCC2_W_VECBASE_LEN, "PCCTWO_VECBASE", len);
+ 500: 			break;
+ 501: 		}
+ 502: 		if (writeflag == MEM_WRITE) {
+ 503: 			d->pcctwo_reg[relative_addr] = idata & 0xf0;
+ 504: 			if (idata & ~0xf0)
+ 505: 				fatal("[ pcc2: HUH? write to PCCTWO_VECBASE"
+ 506: 				    " with value 0x%02x. ]\n", (int) idata);
+ 507: 		}
+ 508: 		break;
+ 509: 
+ 766: DEVINIT(pcc2)
+ 767: {
+ 768: 	struct pcc2_data *d;
+ 769: 	int i;
+ 770: 
+ 771: 	CHECK_ALLOCATION(d = (struct pcc2_data *) malloc(sizeof(struct pcc2_data)));
+ 772: 	memset(d, 0, sizeof(struct pcc2_data));
+ 773: 
+ 774: 	/*
+ 775: 	 *  Initial values, according to the manual:
+ 776: 	 *
+ 777: 	 *  VECBASE is 0x0f after a reset, although the lowest four bits
+ 778: 	 *  cannot be manually written to after startup.
+ 779: 	 */
+ 780: 	d->pcctwo_reg[PCCTWO_CHIPID] = PCC2_ID;
+ 781: 	d->pcctwo_reg[PCCTWO_CHIPREV] = 0x00;
+ 782: 	d->pcctwo_reg[PCCTWO_GENCTL] = 0x00;
+ 783: 	d->pcctwo_reg[PCCTWO_VECBASE] = 0x0f;
+ 784: 	d->pcctwo_reg[PCCTWO_PSCALEADJ] = 256 - 33;	// 256 - MHz (fake)
+ 785: 
+ 786: 	/*  Connect to the CPU's interrupt pin:  */
+ 787: 	INTERRUPT_CONNECT(devinit->interrupt_path, d->cpu_irq);
+ 788: 
+ 789: 	/*
+ 790: 	 *  Register the 16 PCC2 interrupt vectors:
+ 791: 	 */
+ 792: 	for (i=0; i<16; i++) {
+ 793: 		struct interrupt templ;
+ 794: 		char n[300];
+ 795: 		snprintf(n, sizeof(n), "%s.pcc2.%i",
+ 796: 		    devinit->interrupt_path, i);
+ 797: 
+ 798: 		memset(&templ, 0, sizeof(templ));
+ 799: 		templ.line = i;
+ 800: 		templ.name = n;
+ 801: 		templ.extra = d;
+ 802: 		templ.interrupt_assert = pcctwo_interrupt_assert;
+ 803: 		templ.interrupt_deassert = pcctwo_interrupt_deassert;
+ 804: 
+ 805: 		interrupt_handler_register(&templ);
+ 806: 	}
+ 807: 
+ 808: 	memory_device_register(devinit->machine->memory, "pcc2",
+ 809: 	    devinit->addr, 4096, dev_pcc2_access, (void *)d,
+ 810: 	    DM_DEFAULT, NULL);
+ 811: 
+ 812: 	memory_device_register(devinit->machine->memory, "mvme187_iack",
+ 813: 	    M187_IACK, 32, dev_mvme187_iack_access, (void *)d,
+ 814: 	    DM_DEFAULT, NULL);
+ 815: 
+ 816: 	d->timer = timer_add(PCC_TIMER_TICK_HZ, pcc_timer_tick, d);
+ 817: 
+ 818: 	machine_add_tickfunction(devinit->machine,
+ 819: 	    dev_pcc2_tick, d, DEV_PCC2_TICK_SHIFT);
+ 820: 
+ 821: 	return 1;
+ 822: }
+
+codex
+**VERDICT: The legal-write claim holds, but the termination claim is stale for this checkout. GENCTL accepts all 256 byte values; C040 now suppresses interrupt assertion. Exactly one executable `exit(1)` remains, in `pcctwo_interrupt_common()`.**
+
+**Q1.** The path visible in the permitted files starts at `dev_pcc2_access`, defined by `DEVICE_ACCESS(pcc2)` and registered by `DEVINIT(pcc2)`. The handler calls `memory_readmax64()` to obtain the write value, stores it in GENCTL, and calls `reassert_interrupts(d)` during that same access. [GENCTL handler](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_pcc2.c:486)
+
+The helper’s current guard is `d->pcctwo_reg[PCCTWO_GENCTL] & PCC2_C040`. When that is true, it announces once per instance through `fatal()`:
+
+`[ pcc2: C040 (MC68040 EIPL) interrupt delivery not implemented; assertion suppressed  (once) ]`
+
+It then sets `assert = 0`, reaches `INTERRUPT_DEASSERT(d->cpu_irq)`, and returns. There is **no executable `exit(1)` in this helper**. Its comments describe an earlier termination at the top of the function, but that arm and its original diagnostic are absent from the current code. The opening comment claiming this write “still ends the host” contradicts the implementation. [Current C040 arm](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_pcc2.c:369)
+
+**Q2.** Yes, in your stated sense of acceptance by the register handler. Its only declining guard is `len != 1 && writeflag == MEM_WRITE`. After that guard, a write performs `d->pcctwo_reg[relative_addr] = idata` without any value check or mask.
+
+Starting with the producer’s domain—a byte—the accepted set is exactly `{0x00, 0x01, …, 0xfe, 0xff}`, cardinality **256**. The accepted values reaching the alleged C040 termination form the **empty set**; all 256 avoid that nonexistent arm.
+
+The C040 partition is also exact: clear-bit values are `8k + r`, with `k = 0…31` and `r ∈ {0,1,2,3}`; set-bit values have the same `k` and `r ∈ {4,5,6,7}`. Each set contains **128** values. The latter set selects suppression, without termination. The header explicitly permits byte accesses; acceptance of every byte pattern does not establish hardware semantics for every reserved bit. [Register definitions and access-width statement](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/thirdparty/mvme_pcctworeg.h:9)
+
+**Q3.** The operative header symbol is `PCC2_C040`, defined as `0x04`. There is also a separate `PCC2_GENCTL_C040` definition with value `0x03`, but this device file never uses it. [Header definitions](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/thirdparty/mvme_pcctworeg.h:59)
+
+The header supplies no explanatory prose for C040. The device’s comment and diagnostic identify it as selection of **MC68040 EIPL interrupt delivery**. That comment describes delivery-pin selection while retaining calculation of the interrupt level; this is the explanation present in the permitted source, without independently consulting its cited hardware manual.
+
+The model stores the bit and exposes it through the ordinary register-read `memcpy()`. Its sole explicit C040 bit test is in `reassert_interrupts()`. That test runs after IPL, pending interrupt status, and vector bookkeeping have been recalculated. It suppresses the modeled CPU interrupt output and preserves that bookkeeping. The adjacent MIEN test independently suppresses assertion when master interrupt enable is clear. Thus C040 is retained and acted upon; the alternate delivery mechanism remains unimplemented. [Interrupt-delivery handling](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_pcc2.c:339)
+
+**Q4.** Excluding comments, the file contains exactly **one** `exit(1)`, at line 414. It is the `default` arm of `pcctwo_interrupt_common()`, guarded by an `interrupt->line` that matches none of `PCC2V_SCSI`, `PCC2V_SCC_TX`, or `PCC2V_SCC_RX`. Its diagnostic is `[ pcctwo_interrupt_common: TODO: line = %i ]`, followed by a newline. Both `pcctwo_interrupt_assert()` and `pcctwo_interrupt_deassert()` call this function; either direction encounters the same guard. The exit occurs **before** its call to `reassert_interrupts()`. [Remaining termination](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_pcc2.c:385)
+
+For the producer-side enumeration, initialization assigns `templ.line = i` for `i = 0…15`, registering **16** callback identifiers. The three handled identifiers are `0x05` SCSI, `0x0e` SCC_TX, and `0x0f` SCC_RX. The other **13** are `0x00` PPBUSY, `0x01` PPPE, `0x02` PPSELECT, `0x03` PPFAULT, `0x04` PPACK, `0x06` IEFAIL, `0x07` IE, `0x08` TIMER2, `0x09` TIMER1, `0x0a` GPIO, `0x0b` unnamed, `0x0c` SCC_RXE, and `0x0d` SCC_M. [Callback registration](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_pcc2.c:792)
+
+Registration establishes those callback identities, **not actual emission by connected peripherals or guest reachability**. The permitted evidence does not establish which unsupported callbacks can actually be invoked. In particular, the local timer producer updates pending counters directly; timer vector values later placed in `cur_int_vec[]` are acknowledgment results, not calls into this switch.
+
+The remaining explicit termination therefore belongs to one unsupported-interrupt-source class, independent of GENCTL values and access widths.
+
+**Q5.** The existing width idiom is `pcc2_width_decline()` followed by `break`: announce once per block per instance using `d->warned`, leave the register untouched, and eventually return success from the access handler. I count **12 guard blocks**, enumerated as GENCTL, VECBASE, PSCALEADJ, T1CTL/T2CTL, T1ICR/T2ICR, SCCERR, SCCICR, SCCTX, SCCRX, SCSIICR, IPL, and MASK. These cover **14 register labels**, because each timer pair shares one block. Their guard is write-only; reads retain the data supplied before the switch, subject to the span check. [Width-decline helper](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_pcc2.c:438)
+
+There are **seven blocks** that apply supported semantics and diagnose unsupported value bits without exiting: VECBASE stores `idata & 0xf0`; T1CTL/T2CTL updates the enable/control bits and handles overflow clear, warning on `idata & ~7`; T1ICR/T2ICR updates writable bits through `0x17`, separately handles interrupt clear, and warns on `idata & 0xe0`; SCCICR and SCCTX each store `idata & 0x1f`; SCCRX and SCSIICR each store `idata & 0xdf`. The latter four warn about bits outside their respective masks. These diagnostics are unlatched. [VECBASE precedent](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_pcc2.c:497), [timer precedents](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_pcc2.c:530), [serial and SCSI precedents](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_pcc2.c:598)
+
+The other existing forms are diagnostic-and-ignore for CHIPID/CHIPREV writes, PSCALEADJ byte writes, and writes to `mvme187_iack`; diagnostic-once-and-ignore for IPL byte writes; and diagnostic-once while retaining the returned data for an IPL read reporting zero. The IPL latches are function-static and process-wide. [Read-only register handling](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_pcc2.c:478), [PSCALEADJ](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_pcc2.c:519), [IPL](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_pcc2.c:660), [acknowledgment writes](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_pcc2.c:746)
+
+The register-switch default preserves already-served read data and declines writes, announcing once per offset per instance; reads and writes share that offset’s latch. Reads spanning beyond the register array receive zeros with a process-wide once-only diagnostic. The counter/compare write block silently declines an out-of-span copy. Finally, C040 itself now uses a per-instance diagnostic latch plus output suppression, alongside the existing MIEN suppression idiom. [Default handling](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_pcc2.c:700), [read-span handling](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_pcc2.c:461), [bounded counter writes](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_pcc2.c:510)
+
+**Q6.** There are **three enclosing caller functions and ten direct call sites**. `dev_pcc2_access()` supplies eight: GENCTL at line 493; shared T1ICR/T2ICR at 585; SCCICR at 608; SCCTX at 622; SCCRX at 636; SCCRXIACK at 643; SCSIICR at 656; and MASK at 696. All except SCCRXIACK require a byte write. SCCRXIACK has neither a direction guard nor a width guard: an access clears SCCRX interrupt status and calls the helper. [SCCRX acknowledgment arm](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_pcc2.c:640)
+
+The other two sites are `pcctwo_interrupt_common()` after a handled interrupt line, and the periodic `dev_pcc2_tick()`. The separately registered `pcc_timer_tick()` does not directly call `reassert_interrupts()`. [Callback and device-tick callers](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_pcc2.c:417)
+
+Every listed site consults the stored GENCTL value when it enters the helper, so each can encounter the same C040 suppression without that particular call originating from a GENCTL write. None encounters a C040 termination in this version. The unsupported-line termination described in Q4 occurs upstream and independently.
+
+Within `machine_mvme88k.c`, **MVME187 instantiates PCC2; MVME188 and MVME197 do not**, having TODO-only setup arms. The detector’s chosen values and historical changes cannot be independently verified from the permitted current files. [Machine instantiation](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/machines/machine_mvme88k.c:83)
+tokens used
+65,414

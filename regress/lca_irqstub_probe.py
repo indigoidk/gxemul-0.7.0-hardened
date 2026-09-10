@@ -46,9 +46,59 @@
 #  *** CONTRACT -- WHAT THIS WITNESSES AND WHAT IT DOES NOT. ***
 #  It establishes that on unmodified `alphabook1' a single ordinary guest store to a documented
 #  8042 register ends the host process, with the terminating stub's own diagnostic as evidence.
-#  It does NOT establish that any shipped guest issues that command, and it is NOT a detector of a
-#  repair: "host survives" would green for a silent return, for a latched announce, and for an
-#  actual interrupt implementation alike.  A fix round owes a row that discriminates those.
+#  It does NOT establish that any shipped guest issues that command.
+#
+#  *** THE SECOND HALF OF THIS CONTRACT WAS DISCHARGED BY #516 ON 2026-09-09, AND THE SENTENCE IS
+#  CORRECTED RATHER THAN DELETED so a reader can see what the round owed. ***  It read: "it is NOT
+#  a detector of a repair: 'host survives' would green for a silent return, for a latched announce,
+#  and for an actual interrupt implementation alike.  A fix round owes a row that discriminates
+#  those."  That row is now `irq announce' + `irq honest', and their siblings cover the second stub.
+#
+#  WHAT IT NOW COVERS, stated so a later escape is either inside this claim or outside it:
+#    * BOTH stubs -- assert and deassert.  The deassert edge is driven by [C], the load that drains
+#      the 8042's reply; before that no witness in this tree reached the second stub AT ALL, and a
+#      verbatim reinstatement of its exit(1) scored 6/6 on the shipped detector (MEASURED, M2d).
+#    * the LATCH, by [D] -- a second full assert/deassert cycle, so an announce that repeats reds.
+#    * *** the ASSERT GUARD AGAINST A SAME-POLARITY REPEAT, by [E]/[F] -- a SECOND ISA line (the
+#      ns16550 on IRQ 4) raised and dropped while the 8042's line is still pending, so the aggregate
+#      changes 0x02 -> 0x12 -> 0x02 and the assert stub is entered THREE TIMES before any deassert.
+#      Added 2026-09-09 after the pass-2 panel's own mutant (swap the latch bit in the ASSERT guard
+#      only) swept the eleven-row instrument 11/11; this sentence is what the contract lacked until
+#      the pass-3 review seat noticed the contract still described the eleven-row instrument. ***
+#    * the HONESTY of each announce, anchored to its OWN site's full text.
+#  MEASURED against this instrument (killtable_20260909/TABLE_G.out + TABLE_H.out, one instrument,
+#  byte-identical frozen copies): 2 sites x 8 edits = 16 cells, 14 killed, 2 EQUIVALENT with their
+#  derivations recorded (`|=' -> `=' on the assert arm; `d != NULL' removed -- the only registration
+#  of these handlers is dev_lca.c's own interrupt_template, so `extra' is never NULL), plus the null
+#  medium and two composites.  The two assignment-bit-swap cells were built LAST, after four pass-3
+#  seats found them unswept in the stated denominator -- "sixteen mutants cover sixteen cells" had
+#  counted two composites as cells.
+#  WHAT IT STILL DOES NOT COVER, disclosed under clause (e):
+#    * a BASE-RUN pin on the second line's assert EDGE.  `uart live' proves the MCR store landed, not
+#      that the aggregate changed; on the fix the latched announce prints once whether or not [E]
+#      re-entered the stub, so no row here reds if the UART silently stopped asserting -- and M12
+#      would then escape again with nothing saying why.  The evidence the edges WERE live at
+#      measurement time is M12's own `assert once' = 3 (TABLE_G.out).  A green-run pin needs a
+#      different channel (the PIC1 IRR read back as 0x12 after [E]); filed as `lcairqedgepin'.
+#    * the readback at [G] is an 8-byte LDQ of a byte-wide register.  It MEASURED 0x8 (memory_rw
+#      clamps the length to the device's), and the row is green on every base run, but the tidy form
+#      is a byte load (BWX LDBU, opcode 0x0a); raised by a pass-3 seat, disclosed, not changed --
+#      changing the instrument would owe another table for a row that already works.
+#    * interrupt DELIVERY.  Nothing here can observe delivery, because Alpha has none to observe --
+#      that is the defect the announce reports, not an instrument limitation.
+#    * the three OTHER routes to the deassert edge (a PIC1 specific EOI to ISA 0x20; an IMR write
+#      to ISA 0x21 masking IRQ 1 or everything).  *** REPORTED reachable in one guest access each
+#      by the pass-1 measuring seat; THE WORD HERE WAS "MEASURED" UNTIL 2026-09-09 AND NO ARTIFACT
+#      ENUMERATING THOSE RUNS WAS PRESERVED -- only the 8042 route has raws.  A score claim names
+#      the log that produced it, and these have none, so the claim is downgraded to its true
+#      strength rather than left wearing a measurement's clothes. ***  The no-row conclusion does
+#      NOT rest on it: it rests on the mutation-indistinguishability argument below, which is
+#      source-derived and needs no reachability figure at all.  No
+#      row is owed for them: all four routes land in the same function with the same
+#      interrupt->extra, so no dev_lca.c mutant can distinguish them and a second row would be
+#      vacuous by construction.  A PLAIN EOI (0x20 -> 0x20) does NOT reach it -- `d->isr' is never
+#      set in dev_8259.c, so `irr &= ~isr' is a no-op -- which is worth recording because it is the
+#      route a reader would reach for first.
 #
 #  Usage:  lca_irqstub_probe.py <gxemul-binary> [label]
 import os, sys, pty, select, time, re
@@ -65,7 +115,10 @@ def row(name, got, want, note=""):
     return ok
 
 # ---------------------------------------------------------------- encoder (memory format only)
-ZERO, T0, T1, T2, T3 = 31, 1, 2, 3, 4
+ZERO, T0, T1, T2, T3, T4, T5, T6, T7 = 31, 1, 2, 3, 4, 5, 6, 7, 8
+#  #516/M12: T4..T7 added for the SECOND ISA line.  The shipped set stopped at T3, and a probe
+#  reaching for an undefined T4 dies with a NameError rather than emitting a bad encoding --
+#  which is the safe direction, and is how the measuring seat found it.
 
 def mem(op, ra, rb, disp):
     assert -32768 <= disp <= 32767, "displacement %d out of range" % disp
@@ -75,6 +128,10 @@ def LDA (ra, disp, rb=ZERO): return mem(0x08, ra, rb, disp)
 def LDAH(ra, disp, rb=ZERO): return mem(0x09, ra, rb, disp)
 def LDQ (ra, disp, rb):      return mem(0x29, ra, rb, disp)
 def STQ (ra, disp, rb):      return mem(0x2d, ra, rb, disp)
+def STB (ra, disp, rb):      return mem(0x0e, ra, rb, disp)   # BWX; ungated in this tree
+#  The UART registers are BYTE-wide, so the second line needs STB.  NOT a new capability:
+#  regress/lca_irqstub_uart_probe.py already drives this exact device with STB on this exact
+#  machine, and cpu_alpha_instr.c decodes opcode 0x0e with no BWX gate.
 
 def load_const(reg, val):
     #  32-bit only, and deliberately so: this builds the SCRATCH pointer, never a 64-bit operand.
@@ -158,25 +215,72 @@ ISA_BASE = 0x1d0000000
 KBC_CMD  = ISA_BASE + 0x64        # 8042 command port; IRQ 1
 LPT_DATA = ISA_BASE + 0x378       # LPT; dev_lpt_tick is EMPTY -- it never asserts
 KBC_SELFTEST = 0xAA               # standard 8042 self-test: queues a reply
+KBC_DATA = ISA_BASE + 0x60        # 8042 DATA port; a load DRAINS the queued reply
+KBC_REPLY = 0x55                  # what `case 0xaa:' queues (dev_pckbc.c)
+UART      = ISA_BASE + 0x3f8      # ns16550 tty0 on IRQ 4 -- THE SECOND ISA LINE
+UART_IER  = UART + 1
+UART_MCR  = UART + 4
+IER_ETXRDY, MCR_IENABLE = 0x02, 0x08
+#  *** THE UART ASSERTS SYNCHRONOUSLY, AND THAT IS THE WHOLE REASON THESE ROWS CAN EXIST. ***
+#  DEVICE_ACCESS(ns16550) calls dev_ns16550_tick(cpu, d) INLINE at four sites, and the assert
+#  lives in that tick behind `d->reg[com_mcr] & MCR_IENABLE'.  So it is NOT a host-timer route
+#  and a STEPPED probe can drive it -- unlike the PIT and the RTC, whose asserts are
+#  timer-driven and therefore invisible here.  bus_isa_init installs it UNCONDITIONALLY: no
+#  IDE image, no device_add, no machine modification, which is what keeps this a witness
+#  rather than a laundered one.
 
 setup = ["put d 0x%x, 0x%x" % (SCRATCH + 0,  k0(LPT_DATA)),
          "put d 0x%x, 0x%x" % (SCRATCH + 8,  KBC_SELFTEST),
-         "put d 0x%x, 0x%x" % (SCRATCH + 16, k0(KBC_CMD))]
+         "put d 0x%x, 0x%x" % (SCRATCH + 16, k0(KBC_CMD)),
+         "put d 0x%x, 0x%x" % (SCRATCH + 24, k0(KBC_DATA)),
+         "put d 0x%x, 0x%x" % (SCRATCH + 32, k0(UART_IER)),
+         "put d 0x%x, 0x%x" % (SCRATCH + 40, k0(UART_MCR))]
 
-#  T0 holds the SCRATCH base and is clobbered LAST, after both port pointers are loaded.
-lc       = load_const(T0, SCRATCH)
-prologue = lc + [LDQ(T1, 0,  T0),    # t1 = k0(LPT_DATA)
-                 LDQ(T3, 16, T0),    # t3 = k0(KBC_CMD)
-                 LDQ(T0, 8,  T0),    # t0 = 0xAA   (base clobbered last)
-                 STQ(T0, 0,  T1)]    # [A] CONTROL: same store into a port that cannot assert
-armed    = [STQ(T0, 0, T3)]          # [B] the SAME value, one port away -> IRQ 1 -> exit(1)
+#  T7 holds the SCRATCH base now, so every port pointer is loaded before anything clobbers it.
+lc       = load_const(T7, SCRATCH)
+prologue = lc + [LDQ(T1, 0,  T7),    # t1 = k0(LPT_DATA)
+                 LDQ(T3, 16, T7),    # t3 = k0(KBC_CMD)
+                 LDQ(T2, 24, T7),    # t2 = k0(KBC_DATA)
+                 LDQ(T4, 32, T7),    # t4 = k0(UART_IER)
+                 LDQ(T5, 40, T7),    # t5 = k0(UART_MCR)
+                 LDQ(T0, 8,  T7),    # t0 = 0xAA
+                 STQ(T0, 0,  T1)]    # [A] CONTROL: a port that cannot assert -- must survive
+armed    = [STQ(T0, 0, T3)]          # [B] ASSERT #1   aggregate 0x00 -> 0x02
+#  *** [E] IS WHY THIS PROBE HAS A SECOND DEVICE AT ALL: TWO ASSERT EDGES WITH NO DEASSERT
+#  BETWEEN. ***  `isa_interrupt_common' asserts on ANY change of `pic1->irr & ~pic1->ier' to a
+#  different NONZERO value -- not only on 0 -> nonzero -- so raising a SECOND line re-enters the
+#  assert stub while the first is still pending.  That is the ONLY sequence in which a defect in
+#  the ASSERT guard is observable, and no single-line sequence can produce it: an IMR mask/unmask
+#  gives assert -> deassert -> assert, and the deassert in the middle sets the sibling latch bit.
+second   = [LDA(T6, IER_ETXRDY),  STB(T6, 0, T4),
+            LDA(T6, MCR_IENABLE), STB(T6, 0, T5)]    # [E] ASSERT #2   0x02 -> 0x12
+#  [F] drops IRQ 4 again -- and note this is a THIRD ASSERT, not a deassert: 0x12 -> 0x02 is a
+#  change to a different NONZERO aggregate.  Dropping it here is what lets [C] still take the
+#  aggregate to ZERO, so the deassert edge the round owes is preserved rather than traded away.
+clear2   = [LDA(T6, 0), STB(T6, 0, T4)]              # [F] ASSERT #3   0x12 -> 0x02
+drain    = [LDQ(T1, 0, T2)]          # [C] DEASSERT #1  0x02 -> 0x00; T1 (LPT ptr) is DEAD here
+cycle2   = [STQ(T0, 0, T3),          # [D] ASSERT #4 and DEASSERT #2 -- the latch ACROSS a cycle
+            LDQ(T1, 0, T2)]
+#  [G] read com_mcr BACK.  dev_ns16550.c answers a read of com_mcr with `d->reg[com_mcr]', so a
+#  returned 0x08 could only have come from the device's own register file -- RAM and unmapped
+#  space answer differently.  *** THIS REPLACES A GREP FOR THE STRING "ns16550", which the
+#  measuring seat flagged in its OWN proposal: that string comes from debug(), so the row would go
+#  quiet under -q without saying so -- a control that cannot fail in the state that matters. ***
+mcrback  = [LDQ(T6, 0, T5)]
 
-prog = prologue + armed
+prog = prologue + armed + second + clear2 + drain + cycle2 + mcrback
 cmds = setup + ["put w 0x%x, 0x%08x" % (k0(CODE) + 4 * i, op) for i, op in enumerate(prog)]
 cmds += ["pc=0x%x" % k0(CODE),
          "step %d" % len(prologue),   # up to and including the CONTROL store
          "print t0",                  # proves we are alive here, and prints the value stored
-         "step %d" % len(armed)]      # the one store that differs
+         "step %d" % len(armed),      # [B] ASSERT #1
+         "step %d" % len(second),     # [E] ASSERT #2 -- second line up, no deassert between
+         "step %d" % len(clear2),     # [F] ASSERT #3 -- second line down again
+         "step %d" % len(drain),      # [C] DEASSERT #1 -- completes the 8042 handshake
+         "print t1",                  # what the DATA port answered
+         "step %d" % len(cycle2),     # [D] drive the whole cycle a second time
+         "step %d" % len(mcrback),    # [G] and ONLY NOW execute the readback
+         "print t6"]                  # DEVICE SIGNATURE for the second ISA line
 txt, alive = session(cmds)
 
 ctl_alive = ("print t0" in txt) and (printed(txt, "t0") != "absent")
@@ -197,18 +301,86 @@ row("kbc live", "yes" if saw_kbc else "no", "yes",
 row("kbc kill", "alive" if alive else "dead", "alive",
     "one ordinary store to a documented 8042 register must NOT end the host")
 
-#  ---- ATTRIBUTION: if it died, it died in THIS stub -------------------------------------------
+#  ---- ATTRIBUTION: if it died, it died in ONE OF THE TWO LCA INTERRUPT STUBS --------------------
 #  Green in both directions by construction; RED only if the host dies WITHOUT this diagnostic.
-sig = ("lca_interrupt_assert" in txt)
-row("kbc attrib", "yes" if (alive or sig) else "died-elsewhere", "yes",
-    "ATTRIBUTION: a death here must carry the interrupt stub's own diagnostic")
+#
+#  *** THE OPERAND IS `lca_interrupt' AND NOT `lca_interrupt_assert', AND THE WIDENING IS A
+#  CORRECTNESS FIX RATHER THAN A LOOSENING.  Found 2026-09-09 by the measuring seat. ***  This
+#  session now drives BOTH stubs, so a reinstated exit(1) in the DEASSERT stub kills the host with
+#  `lca_interrupt_deassert: TODO' -- which does not contain the string `lca_interrupt_assert'
+#  ("de" sits in the middle).  The row still went RED, correctly, and reported `died-elsewhere' --
+#  **a true failure under a false label**, sending a reader hunting a death outside this file when
+#  it happened in the sibling function four lines away.  A red must not lie about WHERE.
+sig = ("lca_interrupt" in txt)
+#  *** THE LABEL READ `died-outside-lca' FOR ONE DAY AND WAS MEASURABLY FALSE.  Corrected
+#  2026-09-09 from the measuring seat's mutant M14. ***  Under a SILENT death inside
+#  lca_interrupt_deassert the row printed `died-outside-lca' while the death was INSIDE lca --
+#  one false label traded for another, and the SPECIFIC one is worse than the vague one it
+#  replaced, because a reader can act on it and go hunting in the wrong file.  **This row's
+#  evidence is the ABSENCE OF A DIAGNOSTIC, never a location, so that is all it may claim.**
+row("kbc attrib", "yes" if (alive or sig) else "no-lca-diagnostic", "yes",
+    "ATTRIBUTION: a death here must carry EITHER interrupt stub's own diagnostic")
 
 for _l in txt.split(chr(10)):
     if "lca_interrupt" in _l or "pckbc: write to CTL" in _l:
         print("  EVIDENCE: %s" % _l.strip())
 
-ok = sum(1 for _, o in rows if o)
 print("")
+#  ================================================================================================
+#  #516: THE ROWS THIS PROBE'S OWN CONTRACT SAYS THE FIX ROUND OWES.
+#
+#  The contract above states the blind spot in its own words: *"it is NOT a detector of a repair:
+#  'host survives' would green for a silent return, for a latched announce, and for an actual
+#  interrupt implementation alike.  A fix round owes a row that discriminates those."*
+#
+#  The shipped disposition is DECLINE + a bounded per-instance announce, so the discriminator is the
+#  announce itself: a silent return prints nothing, and an actual implementation would print nothing
+#  either (it would deliver instead).  Only the chosen repair prints THIS text.
+ANN_A = "ISA interrupt assert not implemented"
+#  #516: the honesty rows are anchored to their OWN site's full text.  A bare
+#  "Alpha has no" matched EITHER announce, so once the deassert row was added a
+#  dishonest ASSERT announce swept the table clean (MEASURED: M5, 8/8).
+HON_A = "ISA interrupt assert not implemented (Alpha has no"
+HON_D = "ISA interrupt deassert not implemented (Alpha has no"
+
+#  ---- the SECOND ISA line's own device-signature control -------------------------------
+row("uart live", printed(txt, "t6"), "0x%x" % MCR_IENABLE,
+    "DEVICE SIGNATURE for [E]: com_mcr reads back from the UART's own register file")
+
+row("irq announce", "yes" if ANN_A in txt else "no", "yes",
+    "DISCRIMINATOR: a silent return and a real implementation both print nothing here")
+
+#  *** THE ANNOUNCE MUST NAME ALPHA'S MISSING DELIVERY, NOT MERELY SAY "TODO". ***  The round's whole
+#  claim is that it stops the host dying WITHOUT making interrupts work, and the diagnostic is the
+#  only place a guest-side reader ever learns that.  A message that omits it would let the record be
+#  read as "interrupts now work", which is exactly what the round must not assert.
+row("irq honest", "yes" if HON_A in txt else "no", "yes",
+    "the announce must say WHY -- the round fixes the kill, not the delivery")
+
+#  ---- #516: THE DEASSERT SITE.  Without these the deassert stub has NO witness at all. --------
+row("drain sig", printed(txt, "t1"), "0x%x" % KBC_REPLY,
+    "DEVICE SIGNATURE: only the 8042 answers 0x55 to a load from ISA 0x60")
+
+ANN_D = "ISA interrupt deassert not implemented"
+row("deassert ann", "yes" if ANN_D in txt else "no", "yes",
+    "DISCRIMINATOR: the SECOND stub -- reached only once the queue empties")
+
+row("deassert honest", "yes" if HON_D in txt else "no", "yes",
+    "SIBLING PARITY: the deassert announce owes the same reason its sibling does")
+
+#  ---- THE LATCH IS THE OTHER HALF OF THE CLAIM.  "(once)" is an ASSERTION about a bound. ----
+row("assert once", txt.count(ANN_A), 1,
+    "BOUND: FOUR assert edges, TWO with no deassert between -- this is what kills M12")
+row("deassert once", txt.count(ANN_D), 1,
+    "BOUND: same for the sibling -- a latch that resets is a log flood, not a latch")
+
+#  *** #516 MOVED THIS COMPUTATION DOWN, AND THE PROBE'S OWN OUTPUT IS WHAT EXPOSED THE NEED. ***
+#  It used to sit ABOVE the last rows, so adding rows below it produced a score whose numerator was
+#  counted over the OLD row set and whose denominator was evaluated at print time: every row
+#  printed `ok` and the summary said 4/6.  A score line that contradicts its own rows is the
+#  cheapest possible signal, and it is only available because the rows are printed individually.
+#  Keeping the computation adjacent to the print makes the split impossible to reintroduce.
+ok = sum(1 for _, o in rows if o)
 print("LCAIRQ_RESULT=%d/%d" % (ok, len(rows)))
 print("LCAIRQ_WITNESS=%s" % ("PASS" if ok == len(rows) else "FAIL"))
 print("LCAIRQ_DONE")

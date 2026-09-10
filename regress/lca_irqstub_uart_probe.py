@@ -178,6 +178,86 @@ row("uart irq", "alive" if alive3 else "died", "alive",
 row("stub named", "no" if "lca_interrupt_assert" not in t3 else "yes", "no",
     "the stub's own TODO diagnostic must not appear")
 
+#  ================================================================================================
+#  #516: THE LATCH ROW, and this probe is the only place it can be measured.
+#
+#  This session FREE-RUNS on a self-branch so `DEVICE_TICK' is reached repeatedly, and the UART is
+#  left with IER on -- so the tick keeps re-asserting the ISA interrupt for the whole spin window.
+#  **That makes an UNLATCHED announce print MANY times and a latched one print EXACTLY ONCE**,
+#  which is the only observable difference between the two, and it exists here and not in the
+#  sibling probe.
+#
+#  Counting is the oracle, not presence: a presence row would be satisfied by a latch that never
+#  engages, which is precisely the mutant this row exists to catch.
+ANN_A = "ISA interrupt assert not implemented"
+_n_ann = t3.count(ANN_A)
+
+#  *** MEASURED VACUOUS AS A LATCH TEST, AND RELABELLED RATHER THAN LEFT TO IMPLY COVERAGE IT DOES
+#  NOT HAVE.  The grok seat predicted this on pass 2 and a mutant confirmed it. ***
+#
+#  I wrote this row believing the free-running tick RE-ENTERS `lca_interrupt_assert', so that an
+#  unlatched announce would print many times and a latched one once.  grok read the path instead:
+#  **`isa_interrupt_common' is EDGE-TRIGGERED on the PIC aggregate.**  It calls ASSERT when IRR goes
+#  0->nonzero and returns when the aggregate merely stays asserted -- and this session leaves IER on
+#  and never drops IRR, so the stub is entered EXACTLY ONCE however long the guest free-runs.
+#
+#  MEASURED, not conceded: mutant `M1_unlatch' removes the latch entirely so the announce fires on
+#  every entry, and it scores **6/6 and 5/5 with this count still reading 1** -- a CLEAN SWEEP.
+#  (regress/artifacts/lcairqstubkill/killtable_20260908/)
+#
+#  So the row cannot discriminate the latch, and it no longer claims to.  What it DOES pin is real
+#  and worth keeping: the announce is not emitted more than once per session, which would catch a
+#  future edit that moved it outside the guard AND a future change that made the stub re-entrant.
+#
+#  *** THE LATCH IS UNEXERCISED BY **THIS** WITNESS, AND THAT IS THE WHOLE OF THE CLAIM. ***
+#  Exercising it needs TWO assert edges in one session -- an IRR that falls and rises again -- and
+#  this probe cannot produce them BY CONSTRUCTION: it free-runs with IER on, so the UART keeps
+#  re-asserting and the aggregate never falls.
+#
+#  *** THIS SENTENCE READ "UNEXERCISED BY ANY WITNESS IN THIS TREE" UNTIL 2026-09-09, AND THE
+#  ROUND'S OWN REPAIR HAD ALREADY REFUTED IT FIFTEEN LINES BELOW. ***  `lca_irqstub_probe.py'
+#  drives a second assert AND a second deassert edge at [D], and its `assert once' / `deassert
+#  once' rows DO exercise the latch -- MEASURED: `M9_deassert_nolatch' and `M10_assert_nolatch'
+#  each score 10/11, killed by exactly those count rows
+#  (regress/artifacts/lcairqstubkill/killtable_20260909/TABLE_D.out).
+#
+#  The defect was SCOPE: a claim true of this probe was written as a claim about the tree, and it
+#  then survived the very edit that falsified it, because the correction was appended BELOW it
+#  instead of applied TO it.  **An absence record that its own round refutes gets corrected, not
+#  left standing next to its refutation** -- and a reader hitting this line first would have taken
+#  the stale half, because it is the one that reads like a settled fact.
+#  Found by the pass-2 review seat, which is the half of a correction nobody re-reads.
+row("irq once", str(_n_ann) if alive3 else "died", "1",
+    "the announce is not repeated (does NOT test the latch -- see above)")
+
+#  *** THIS DISCLOSURE WAS OVERTURNED ON 2026-09-09 AND IS CORRECTED IN PLACE, NOT DELETED. ***
+#  It is kept verbatim below because it is the reasoning that had to be refuted, and because the
+#  round nearly shipped on it.  WHAT IS NOW TRUE: the deassert edge IS reachable, and by FOUR
+#  independent one-instruction routes, so disclosing it under clause (e) was the WRONG DISPOSITION
+#  -- clause (e) is for cells that are unreachable or need a capability the tree lacks, and this
+#  needed neither.  It is a clause-(b) FLOOR BREACH (L2), and it was MEASURED: a verbatim
+#  reinstatement of exit(1) at the deassert site alone scored 6/6 on the six-row detector.
+#  `lca_irqstub_probe.py' now drives that edge at [C] and the latch at [D]; see its contract.
+#  THIS probe remains assert-only BY CONSTRUCTION -- it free-runs with IER on, so the UART keeps
+#  re-asserting and the aggregate never falls -- which is why the finding lands in its sibling.
+#  The superseded text follows.
+#
+#  *** DISCLOSED, NOT BUILT: THE DEASSERT LATCH IS UNWITNESSED. ***  The grok seat traced this on
+#  pass 1: `isa_interrupt_common' takes ONE EDGE per call -- ASSERT when IRR goes 0->nonzero,
+#  DEASSERT when it goes nonzero->0 -- and NEITHER witness reaches the deassert edge.  The 8042
+#  probe never reads the 0x55 reply; this one leaves IER on and free-runs, so the aggregate never
+#  falls back to zero.  **So `lca_interrupt_deassert' and its separate latch bit have no row here,
+#  and no mutant of them could be killed.**  Coverage debt under clause (e), named rather than left
+#  to be discovered.  Closing it needs a guest sequence that LOWERS the interrupt again, which is a
+#  different session and is not built in this round.
+
+#  *** #516 MOVED THIS COMPUTATION DOWN, for the same reason as the sibling probe. ***  It sat
+#  ABOVE the last row, so `bad` was computed over the OLD row set while `len(rows)` was evaluated
+#  at print time.  Post-fix that happened to render correctly (nothing failed, so `bad` was empty
+#  either way) and PRE-FIX it did not: the run reported 3/5 when the honest score was 2/5, because
+#  the added row failed and was not counted.  **A split scorer is silently right whenever nothing
+#  fails, which is exactly when nobody checks it.**  Keeping the computation adjacent to the print
+#  makes the split impossible to reintroduce.
 bad = [n for n, ok in rows if not ok]
 print("\nIRQSTUB_RESULT=%d/%d" % (len(rows) - len(bad), len(rows)))
 if bad:
