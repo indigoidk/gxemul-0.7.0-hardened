@@ -126,10 +126,41 @@ def want_rldicr(rs_val, sh, me):
     return rotl64(rs_val, sh) & mask_0_e(me)
 
 
+def mask_range(b, e):
+    """MASK(b,e), the architecture's own mask generator -- ppc_pem_32and64_2005.txt:6879:
+
+           "The mask is 64 bits long and consists of `1' bits from a start bit,
+            Mstart, through and including a stop bit, Mstop, and `0' bits elsewhere.
+            ... If Mstart > Mstop, the `1' bits wrap around from position 63 to
+            position 0."
+           :6880-6881   if Mstart <= Mstop:  mask[mstart..mstop] = ones
+                        else:                mask[mstart..63] = ones
+                                             mask[0..mstop]   = ones
+           :6882        "It is not possible to specify an all-zero mask."
+
+       *** THE WRAPPING BRANCH IS A UNION.  An INTERSECTION -- which is what this file
+       used to compute -- is EMPTY whenever b > e, so it produced the all-zero mask the
+       manual says cannot exist, for every wrapping encoding.  See [[ppcwitnessmaskoracle]]. ***"""
+    assert 0 <= b <= 63 and 0 <= e <= 63
+    m = (mask_b_63(b) & mask_0_e(e)) if b <= e else (mask_b_63(b) | mask_0_e(e))
+    assert m != 0, "MASK(%d,%d) came out all-zero, which the architecture forbids" % (b, e)
+    return m
+
+
 def want_rldimi(rs_val, ra_val, sh, mb):
-    """manual :29908 -- m <- MASK(b, ~n); prose :29909 "1 bits from bit MB
-       through bit 63 - SH"."""
-    m = mask_b_63(mb) & mask_0_e((63 - sh) & 63)
+    """manual :29908 -- m <- MASK(b, ~n), i.e. MASK(MB, 63-SH), INCLUSIVE and WRAPPING.
+
+       *** CORRECTED 2026-09-10.  This computed `mask_b_63(mb) & mask_0_e(63-sh)' -- the
+       INTERSECTION of the two ranges -- which is right only while MB <= 63-SH and is
+       EMPTY for every wrapping encoding, so the oracle returned the untouched destination
+       and agreed with any implementation that also omits the wrap. ***
+
+       The prose at :29909 ("1 bits from bit MB through bit 63 - SH") describes the
+       non-wrapping reading, and quoting it is how the error got in; :6879 is the
+       definition that governs.  Verified against the definition over all 4096 (MB,SH)
+       pairs: zero all-zero masks after the correction, and byte-identical to the old
+       formula on every non-wrapping pair."""
+    m = mask_range(mb, (63 - sh) & 63)
     return (rotl64(rs_val, sh) & m) | (ra_val & (~m & M64))
 
 
@@ -142,15 +173,31 @@ def rotl32(x, n):
 
 
 def mask32(mb, me):
-    """MASK(mb+32, me+32) confined to the low 32 bits, PowerPC wrap-around form."""
-    m = 0
-    b = mb
-    while True:
-        m |= 1 << (31 - b)
-        if b == me:
-            break
-        b = (b + 1) & 31
-    return m
+    """MASK(MB+32, ME+32) at SIXTY-FOUR bits -- NOT confined to the low word.
+
+       *** CORRECTED 2026-09-10, after the dispute this helper was held for was settled by
+       the manual the 2005 PEM names as defining over itself. ***
+
+       PowerPC Book I v2.01 (ppc_uisa_book1_v201.txt) gives rlwinm at :4125-4137 as
+
+           r  <- ROTL32((RS)32:63, n)        m <- MASK(MB+32, ME+32)        RA <- r & m
+
+       with MASK defined at :578 as "Mask having 1s in positions x through y (WRAPPING IF
+       x > y) and 0s elsewhere", and ROTL32 producing the low word DUPLICATED into both
+       halves.  When MB > ME the mask covers MB+32..63 AND 0..ME+32, and the second range
+       contains every position 0..31 -- the HIGH half -- so the rotated word lands there.
+
+       *** BOOK I NEVER SAYS THE UPPER 32 BITS OF RA ARE CLEARED. ***  The 2005 PEM does say
+       so unconditionally at its :30065, and that sentence is absent from the defining
+       manual; the PEM's own :302 defers to it.  The clearing language that IS in Book I,
+       on this same page at :4170-4190, is a PROGRAMMING NOTE about clearing "the remaining
+       bits of THE LOW-ORDER 32 BITS of RA", every instance for a non-wrapping (MB, ME).
+
+       The old body ORed `1 << (31 - b)' only, so it was right below bit 32 and empty above
+       it.  Verified: identical to the old form on all 528 non-wrapping pairs, different on
+       all 496 wrapping pairs, and agreeing with the old form in the low word on every one
+       of those 496 -- i.e. this ADDS the high half and changes nothing else."""
+    return mask_range(mb + 32, me + 32)
 
 
 def want_rlwinm(rs_val, sh, mb, me):

@@ -2945,6 +2945,31 @@ FIFTEEN PDFs ARE PRESENT AND THE PROSE ABOVE NAMED ABOUT SEVEN. ***
                        "other bits unchanged", which is what a mask must respect.  `<width>' is "in the
                        range 1 to 32-<lsb>", so width 32 implies lsb 0 and copies the whole register.
                        An ARM bitfield round opens THIS, never ddi0100i.)
+  ppc_uisa_book1_v201.pdf
+                      (ADDED 2026-09-10: PowerPC User Instruction Set Architecture, Book I, Version
+                       2.01, September 2003 -- IBM, Wetzel/May/Frey/Silha.  997 KB -> 784 KB of text,
+                       12,586 lines.  Fetched WITH THE OWNER'S APPROVAL on this list's own vmesbcp2 /
+                       21066 / ddi0406 precedent, and then VERIFIED LOCALLY rather than taken from a
+                       seat's page anchor.  *** IT IS THE DOCUMENT THE 2005 PEM NAMES AS DEFINING OVER
+                       ITSELF: ppc_pem_32and64_2005.txt:302 reads "This book does not attempt to
+                       replace the PowerPC Architecture specification (version 2.01) ... which remains
+                       the defining manual for the PowerPC Architecture." ***  It was fetched to settle
+                       a question the four other local PowerPC manuals could not -- whether rlwinm with
+                       a WRAPPING mask (MB > ME) writes the rotated word into the destination's HIGH
+                       half.  `:4125-4137' gives the RTL, r <- ROTL32((RS)32:63, n); m <- MASK(MB+32,
+                       ME+32); RA <- r & m, and `:578' defines MASK as "1s in positions x through y
+                       (WRAPPING IF x > y) and 0s elsewhere".  *** AND THE DECIDING FACT IS AN ABSENCE:
+                       BOOK I NEVER SAYS THE UPPER 32 BITS OF RA ARE CLEARED, while the 2005 PEM
+                       asserts exactly that, unconditionally, in its own instruction description at
+                       :30065. ***  CHECK THAT ABSENCE BY READING `:4170-4190', NOT BY ONE GREP: that
+                       span DOES contain several "clearing" sentences, and every one of them is a
+                       programming note about clearing "the remaining bits of THE LOW-ORDER 32 BITS of
+                       RA" for an explicitly non-wrapping (MB, ME) -- precisely the false positive a
+                       grep-only negative trips on.  Its left column on the same page also gives
+                       rldic's mask as MASK(b, !n), which corroborates the !n = 63-SH complement that
+                       the rldimi work depends on.  `file' reports "10 page(s)" and is WRONG, exactly
+                       as it was for 21066.  A round on ANY PowerPC rotate-and-mask instruction opens
+                       THIS before the PEM.)
 ```
 
 **SIX were undocumented**, and two of them are load-bearing for work in flight the day this was

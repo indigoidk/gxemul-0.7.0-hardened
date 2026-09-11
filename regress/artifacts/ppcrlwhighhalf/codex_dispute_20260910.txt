@@ -1,0 +1,134 @@
+VERDICT: Your wrapping-mask derivation is correct. The 2005 PEM genuinely contradicts itself; the other three manuals do not settle the 64-bit result. I favor the RTL reading, but cannot establish it conclusively from these files.
+CODEX_RLWDISPUTE_20260910
+
+I checked only the four permitted files. All line numbers below refer to those text extractions.
+
+**The derivation does reach the entire upper half.** The 2005 manual’s Table 8-3 gives these definitions:
+
+- `ROTL[32](x, y)`: “Result of rotating the 64-bit value x || x left y positions, where x is 32 bits long” — [line 17143](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ppc_pem_32and64_2005.txt:17143).
+- `MASK(x, y)`: “Mask having ones in positions x through y (wrapping if x > y) and zeros elsewhere.” — [line 17137](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ppc_pem_32and64_2005.txt:17137).
+
+The mask’s width and wrapping boundary are explicit elsewhere:
+
+> The mask is 64 bits long and consists of `1' bits from a start bit, Mstart, through and including a stop bit, Mstop, and `0' bits elsewhere.
+
+The same line says:
+
+> If Mstart > Mstop, the `1' bits wrap around from position 63 to position 0.
+
+Both are at [line 6879](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ppc_pem_32and64_2005.txt:6879), §4.2.1.4.
+
+`rlwinm`’s RTL is at [line 30064](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ppc_pem_32and64_2005.txt:30064), printed page 538. Here it is with statement breaks and the assignment arrows missing from the extraction restored:
+
+```text
+n  ← SH
+r  ← ROTL[32](rS[32-63], n)
+m  ← MASK(MB + 32, ME + 32)
+rA ← r & m
+```
+
+Let `R` denote the rotated 32-bit word. The rotation produces `R || R`. When `MB > ME`, the mask selects:
+
+```text
+MB+32 .. 63
+0     .. ME+32
+```
+
+Since `ME+32 ≥ 32`, the second interval contains **every position 0..31**. Consequently, the RTL puts the complete `R` into the upper half. The lower half receives the masked version of `R`; it need not contain the complete word.
+
+For example, this is a direct evaluation of the specification:
+
+```text
+rS = 0x0000000012345678, SH = 0, MB = 31, ME = 0
+
+r  = 0x1234567812345678
+m  = 0xFFFFFFFF80000001
+rA = 0x1234567800000000
+```
+
+The upper half is nonzero. For `MB ≤ ME`, by contrast, the mask lies entirely within positions 32..63, and the RTL clears the upper half.
+
+**The contradicting sentence is genuinely unconditional in its immediate context.** At [line 30065](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ppc_pem_32and64_2005.txt:30065), the main instruction description ends:
+
+> The upper 32 bits of rA are cleared.
+
+This is the operational prose immediately following the RTL. It is instruction-description text, not a programming note, simplified-mnemonics table, or summary. Nothing in that paragraph restricts the sentence to `MB ≤ ME`.
+
+The programming note starts separately at [line 30067](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ppc_pem_32and64_2005.txt:30067). After its examples, a **different** sentence says:
+
+> For all uses mentioned, the high-order 32 bits of rA are cleared.
+
+That is [line 30074](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ppc_pem_32and64_2005.txt:30074). This sentence *is* qualified: the listed extraction, rotation, shift, and clear uses employ non-wrapping masks for their valid parameters. It agrees with the RTL.
+
+Thus, finding the qualified sentence does not explain away the earlier unconditional one. Your reviewer’s reported premise survives this check.
+
+The clearing statement in Appendix E.4.2, [line 50520](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ppc_pem_32and64_2005.txt:50520), likewise concerns the operations represented by its simplified-mnemonics table. Its context does not establish unconditional clearing for every encoding of `rlwinm`.
+
+**The three other manuals supply no independent ruling on this 64-bit upper half.**
+
+| Manual | What I found | Consequence |
+|---|---|---|
+| **2001 PEM, revision 2** | Its computation-modes section explicitly says that “all pseudocode examples provided in this chapter are for 32-bit implementations.” [Line 15668](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ppc_pem32_rev2_2001.txt:15668). Its rotate section specifies a **32-bit mask**, wrapping from position 31 to 0. [Line 7535](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ppc_pem32_rev2_2001.txt:7535). | It describes registers with no upper 32-bit half. It does not specify whether a 64-bit destination’s upper half is cleared, replicated, preserved, or undefined. |
+| **OEA Book III, v2.01** | No occurrences of `rlwinm`, `rlwnm`, or `rlwimi`. Its preface identifies its subject as additional operating-environment instructions and facilities, covering storage control, interrupts, and timing. [Lines 38–45](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ppc_oea_book3_v201.txt:38). | It supplies no instruction-specific answer. |
+| **VEA Book II, v2.01** | No occurrences of those three mnemonics. Its preface identifies its subject as the storage model, related instructions and facilities, and the Time Base. [Lines 38–44](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ppc_vea_book2_v201.txt:38). | It also supplies no instruction-specific answer. |
+
+The 2001 `rlwinm` RTL specifically uses `ROTL(rS, n)` and `MASK(MB, ME)`, with no `+32` offsets. Its accompanying prose describes rotating `rS[0–31]`. See [lines 25934–25936](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ppc_pem32_rev2_2001.txt:25934). That is consistent with its stated 32-bit implementation scope.
+
+One potentially misleading detail deserves mention: the 2001 notation table also contains the duplicated, 64-bit `ROTL[32]` definition at [line 15558](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ppc_pem32_rev2_2001.txt:15558). Its presence does not override the chapter’s explicit scope or give its 32-bit GPRs another 32 bits.
+
+Accordingly, this is **an internal disagreement in the 2005 PEM**, not a demonstrated disagreement among four independent descriptions of 64-bit `rlwinm`. The other three do not express competing answers.
+
+On authority, the 2005 PEM is the applicable supplied reference for this 64-bit instruction question, but it expressly defers to another document:
+
+> This book does not attempt to replace the PowerPC Architecture specification (version 2.01), which defines the architecture from the perspective of the three programming environments and which remains the defining manual for the PowerPC Architecture.
+
+— [2005 PEM, line 302](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ppc_pem_32and64_2005.txt:302).
+
+The relevant architectural volume would be **Book I, UISA**: the PEM classifies integer rotate and shift instructions as UISA instructions at [line 633](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ppc_pem_32and64_2005.txt:633), and Book III’s preface identifies Book I as defining the base instruction set at [lines 50–52](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ppc_oea_book3_v201.txt:50). Book I is absent from the permitted set. Books II and III cannot resolve this merely by being architectural specifications; they do not address the disputed operation.
+
+**For `rlwnm`, the mask analysis transfers directly. For `rlwimi`, the insertion operation matters.**
+
+`rlwnm` repeats the same rotation, mask, and final AND equations at [line 30142](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ppc_pem_32and64_2005.txt:30142). The shift amount comes from the low five bits of `rB`, as the following prose explicitly states. The extraction’s subscript is mangled as `rB[59-6327-31]`; that does not affect the mask issue.
+
+`rlwimi` uses the same duplicated rotation and `MASK(MB+32, ME+32)`, but its final assignment is:
+
+```text
+rA ← (r & m) | (rA & ¬m)
+```
+
+— [line 29989](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ppc_pem_32and64_2005.txt:29989), with assignment arrows restored.
+
+The upper-half results **implied by these RTL definitions** are:
+
+| Instruction | `MB ≤ ME` | `MB > ME` |
+|---|---|---|
+| `rlwinm` | Cleared | Replaced by `R` |
+| `rlwnm` | Cleared | Replaced by `R` |
+| `rlwimi` | Previous upper half preserved | Replaced by `R` |
+
+For insertion, a zero mask bit preserves the old destination bit. A wrapping mask has ones throughout the upper half, so it replaces all those bits.
+
+The unconditional clearing sentence at line 30065 belongs specifically to `rlwinm`. The clearing statement in the `rlwnm` entry is explicitly qualified by “For all uses mentioned,” at [line 30150](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ppc_pem_32and64_2005.txt:30150).
+
+Appendix E also expressly acknowledges that insert operations can affect the upper half:
+
+> The insert operations either preserve the high-order 32 bits of the target register or place rotated data there; the other operations clear these bits.
+
+— [line 50520](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ppc_pem_32and64_2005.txt:50520). Within its simplified-use context, this supports the insertion distinction.
+
+**There is a reconciliation for the non-wrapping uses, but none supported by these texts for the general wrapping case.**
+
+The proposed alternatives do not remove the conflict:
+
+- **A physical 32-bit implementation:** There is no upper half to describe. That explains the 2001 presentation, but does not reconcile two assertions about the 64-bit case.
+- **32-bit mode on a 64-bit implementation:** The 2005 PEM explicitly says that instructions setting a 64-bit register “affect all 64 bits, and the value placed into the register is independent of mode.” [Line 6204](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ppc_pem_32and64_2005.txt:6204).
+- **An instruction restricted to 32-bit implementations:** Chapter 8 says its instructions are provided in both implementation widths unless otherwise stated, and its pseudocode defaults to 64-bit mode. [Lines 17202–17203](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ppc_pem_32and64_2005.txt:17202). The `rlwinm` entry has no restriction that rescues the clearing sentence.
+- **An undefined upper half:** I found no such specification for `rlwinm` in the permitted files. Contradictory documentation does not itself establish architecturally undefined behavior.
+
+Qualifying line 30065 with **“when MB ≤ ME”** would reconcile it with the RTL. Alternatively, adding an explicit upper-half clearing operation to the RTL would reconcile it with the unconditional prose. Either would be a correction to the supplied text, not a qualification already present.
+
+I found no rule in these files establishing that pseudocode automatically overrides operational prose, or vice versa.
+
+**My confidence is very high in the derivation and the existence of the textual conflict; moderate in choosing the RTL as the intended architectural behavior.** The RTL reading is supported by the explicit 64-bit rotation definition, explicit 64-bit wrapping-mask definition, instruction equations, and consistent related operations. The strongest opposing evidence is the unconditional sentence in the main `rlwinm` description—not merely an informal example.
+
+The corresponding **UISA Book I v2.01 instruction definition and any relevant official errata** would most improve confidence. Checking the original 2005 PDF would also establish whether the conflict exists in the published page exactly as it appears in this extraction.
