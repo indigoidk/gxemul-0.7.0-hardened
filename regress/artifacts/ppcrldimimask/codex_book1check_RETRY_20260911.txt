@@ -1,0 +1,169 @@
+VERDICT: A passes; B passes at the stated register widths. Both CR0 arguments are correct; comparison width must follow the current architectural mode.
+CODEX_BOOK1CHECK_20260910
+
+References below use the supplied [Book I](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ppc_uisa_book1_v201.txt) and [PEM](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ppc_pem_32and64_2005.txt) extracts. I read only those files and wrote nothing. RTL transcriptions separate the columns and restore assignment and complement symbols lost in extraction.
+
+1. **Book I’s `rldimi` specifies the proposed endpoint and wrapping.**
+
+   Book I:4315–4320 gives:
+
+   ```text
+   n  ← sh5 || sh0:4
+   r  ← ROTL64((RS), n)
+   b  ← mb5 || mb0:4
+   m  ← MASK(b, ¬n)
+   RA ← r & m | (RA) & ¬m
+   ```
+
+   Its complete operational prose at Book I:4322–4327 is:
+
+   > The contents of register RS are rotated64 left SH bits. A mask is generated having 1-bits from bit MB through bit 63-SH and 0-bits elsewhere. The rotated data are inserted into register RA under control of the generated mask.
+
+   Thus **yes, the mask is semantically `MASK(MB, 63-SH)`**. The literal RTL writes `MASK(b, ¬n)`: `n` is the six-bit shift field, whose six-bit complement is `63-SH`.
+
+   PEM:29908–29909 gives the same RTL and endpoint. Both documents require wrapping: Book I:578–580 supplies the settled `MASK` definition, and PEM:6879–6881 explicitly describes wrapping from position 63 to position 0. Neither excludes `MB > 63-SH`.
+
+2. **A computes exactly that mask for all 4,096 pairs.**
+
+   Let:
+
+   ```text
+   E = 63 - SH                  inclusive endpoint
+   T = (64 - SH) & 63           position immediately after E
+   ```
+
+   The body processes `m`, advances it modulo 64, and stops when the *next* position equals `T`. It therefore processes precisely the inclusive cyclic interval from `MB` through `E`.
+
+   Its iteration count is:
+
+   ```text
+   L = 1 + ((E - MB) mod 64)
+   ```
+
+   Here `mod` means the nonnegative remainder. Consequently, **every execution takes between 1 and 64 iterations**.
+
+   For `SH=0`, `E=63` and `T=0`. Starting at `MB=0`, the `do/while` processes positions `0,1,…,63`, then stops after advancing back to 0. The initial equality between `m` and `T` does not skip the body or cause another traversal. For other `MB`, it processes `MB,…,63`.
+
+   For a wrapping example, `MB=63, SH=63` selects positions `63,0`, producing `0x8000000000000001`. A wrapping interval can also legitimately select every bit: `MB=1, SH=63` visits `1,…,63,0` exactly once each.
+
+   **There is no nonterminating pair and no position processed twice.** In a full traversal, the final control value returns to the starting position, but the body does not execute there again.
+
+   I checked all 4,096 pairs in an independent in-memory model against a mask defined by architectural bit membership. Results: zero mask mismatches, zero duplicate visits, zero nonterminations, and iteration counts from 1 through 64.
+
+   The split-field decoding also matches Book I. Rotating with the separate counter `n` preserves `sh` for mask construction, addressing the settled counter-clobbering problem. The unsigned 64-bit rotation and final masked merge are correct, including when `RS=RA`, because `s` captures the original source before destination modification.
+
+3. **Book I’s `rlwimi` gives exactly the proposed merge semantics.**
+
+   Book I:4315–4318, right column:
+
+   ```text
+   n  ← SH
+   r  ← ROTL32((RS)32:63, n)
+   m  ← MASK(MB+32, ME+32)
+   RA ← r & m | (RA) & ¬m
+   ```
+
+   Its complete operational prose at Book I:4320–4324, right column, is:
+
+   > The contents of register RS are rotated32 left SH bits. A mask is generated having 1-bits from bit MB+32 through bit ME+32 and 0-bits elsewhere. The rotated data are inserted into register RA under control of the generated mask.
+
+   **The instruction entry contains no separate upper-half clearing or preservation sentence.** Its RTL nevertheless determines that half completely.
+
+   Book I:501–504 defines `ROTL32(x,n)` as rotating the **64-bit concatenation `x||x`**. Book I:4008–4012 repeats that definition. If `W` is the ordinary 32-bit rotated word, architectural `r` is therefore `W||W`.
+
+   With `MB <= ME`, the mask’s upper half is zero, so `RA`’s upper half is preserved. With `MB > ME`, the mask wraps through all architectural positions `0:31`, so the upper half is replaced by `W`.
+
+   Book I also explicitly corroborates this outside the instruction entry. Its word-mnemonic discussion at :8877–8878 says:
+
+   > The Insert operations either preserve the high-order 32 bits of the target register or place rotated data there;
+
+4. **B produces the correct result in all four compilation-width cases.**
+
+   Define `μ` as the low 32 bits of architectural mask `m`, and let:
+
+   ```text
+   W  = ordinary 32-bit rotate-left of the original source word
+   L′ = (old destination low word & ~μ) | (W & μ)
+   H  = old destination high word
+   ```
+
+   The required results are:
+
+   | Mask case | Compilation width | Required destination | B |
+   |---|---:|---|---|
+   | `MB <= ME` | 32 bits | `L′` | Correct |
+   | `MB > ME` | 32 bits | `L′` | Correct |
+   | `MB <= ME` | 64 bits | `H || L′` | Correct |
+   | `MB > ME` | 64 bits | `W || L′` | Correct |
+
+   **The conditional is correctly placed before the loop.** It tests the original mask endpoints. On completion, the loop has changed `mb` to `me`, so moving that test after the loop would make `mb > me` false.
+
+   In the 64-bit compilation, the conditional preserves the low word and replaces the high word with `W`. Every subsequent loop mask is confined to the low word, so the loop preserves that prepared high word.
+
+   **In the 32-bit compilation, the conditional assignment is an exact no-op.** Its intermediate expression is evaluated at a width sufficient to hold the shifted word, but assignment back to unsigned `uint32_t` discards those upper 32 bits. The remaining low word is precisely the old `ra`. The shift is safe because the cast to `uint64_t` happens before `<< 32`.
+
+   The low-word loop inserts the selected rotated bits and preserves every unselected destination bit. The conditional rotation expression also avoids evaluating a shift by 32 when `SH=0`.
+
+   An in-memory model using C-style unsigned truncation checked all **32,768 SH/MB/ME combinations**, with six source/destination patterns at each width: **196,608 cases per width, zero mismatches**. Every 32-bit case also matched execution with the conditional assignment omitted. The algebra above establishes the result for arbitrary register contents; the pattern checks supplement it.
+
+   This establishes the 32-bit result at the stated register interface. A 32-bit compilation should not automatically be equated with a 64-bit processor executing in architectural 32-bit mode: the latter still has defined 64-bit register operations.
+
+5. **Both calls supply the value Book I requires for CR0.**
+
+   Book I:1363–1372 requires signed comparison of the destination result against zero and copying `XER.SO` into CR0’s fourth bit. Its width rule says:
+
+   > “Result” here refers to the entire 64-bit value placed into the target register in 64-bit mode, and to bits 32:63 of the 64-bit value placed into the target register in 32-bit mode.
+
+   Book I:4040–4045 applies the CR0 rules to rotate/shift instructions with `Rc=1` and states that these instructions do not change `XER.OV` or `XER.SO`.
+
+   A passes the final stored `gpr[ra]`. B passes `ra` immediately after storing that same value into the destination. **Both arguments are correct.** For insertion instructions, preserved destination bits must participate in the comparison too; comparing only rotated or inserted bits would be wrong.
+
+   The comparison width follows **current architectural mode**, not whether the mnemonic contains “Word” or “Doubleword.” For example, a final value of `0x8000000000000000` compares negative in 64-bit mode and equal to zero in 32-bit mode.
+
+   I have verified the call sites, not the unseen `update_cr0` implementation. That helper must implement the mode-dependent signed comparison and copy `XER.SO`. PEM:6357 and :6883 agree with these requirements.
+
+6. **`rlwnm` shares the rotation and mask rules, but its destination operation differs.**
+
+   Book I:4236–4242, right column, gives:
+
+   ```text
+   n  ← (RB)59:63
+   r  ← ROTL32((RS)32:63, n)
+   m  ← MASK(MB+32, ME+32)
+   RA ← r & m
+   ```
+
+   The prose at :4244–4252 specifies rotation by the low-order five bits of `RB`, generation of that mask, and placement of the AND result into `RA`.
+
+   Therefore the duplicated rotated word and wrapping-mask reasoning transfer directly. **B’s preservation of destination bits outside the mask does not transfer**, because `rlwnm` writes `r & m`:
+
+   | Mask case | 64-bit destination |
+   |---|---|
+   | `MB <= ME` | `0 || (W & μ)` |
+   | `MB > ME` | `W || (W & μ)` |
+
+   The 32-bit destination is `W & μ` in either case. All unselected bits are cleared. The shift count comes from `RB`, and the record form still compares the final destination at the current mode’s width.
+
+   Book I:4291–4292 explicitly says:
+
+   > For all the uses given above, the high-order 32 bits of register RA are cleared.
+
+   That sentence belongs to the programming note describing particular **non-wrapping** uses at :4272–4289. It does not impose unconditional clearing on wrapping encodings. PEM:30150 contains the same scoped statement.
+
+7. **There are additional disagreements in the PEM’s programming notes.**
+
+   | Instruction | PEM wording | Book I wording and consequence |
+   |---|---|---|
+   | `rlwimi` | :29993–29994 says the field is inserted into the **high-order** 32 bits of `rA`. | :4342–4354 defines `RAL` as the **low-order** 32 bits and inserts into `RAL`. The PEM identifies the wrong destination half in both examples. |
+   | `rlwnm` | :30146–30147 says the extracted field starts in the **high-order** 32 bits of `rS`. | :4267–4284 defines `RSL` as the **low-order** 32 bits and extracts from `RSL`. The PEM identifies the wrong source half in both examples. |
+   | `rlwinm`, additionally relevant to the settled issue | :30068–30069 likewise identifies the **high-order** source half. | :4168–4181 defines and uses the **low-order** source half. This is separate from the unconditional upper-destination clearing sentence. |
+
+   For `rldimi`, I found no operative disagreement: its split fields, rotation, inclusive endpoint, wrapping mask, merge, and record behavior agree.
+
+   There is also one necessary correction to the literal wording of the supplied settled facts. **Book I does contain an explicit upper-half clearing sentence for `rlwinm`**, at :4195–4196:
+
+   > For all the uses given above, the high-order 32 bits of register RA are cleared.
+
+   As with `rlwnm`, this is scoped to the preceding programming-note uses. The supported distinction is therefore: **Book I specifies clearing for those uses; PEM:30065 additionally asserts it unconditionally.** That correction does not change the wrapping result or either replacement’s verdict.
+
+   Across the three requested instructions—`rldimi`, `rlwimi`, and `rlwnm`—I found no further disagreement in their operative RTL or the shared rotation, mask, and CR0 definitions.

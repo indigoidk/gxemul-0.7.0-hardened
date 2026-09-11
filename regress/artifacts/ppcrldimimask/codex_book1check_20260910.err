@@ -1,0 +1,155 @@
+Reading additional input from stdin...
+2026-09-11T00:03:19.245260Z ERROR codex_models_manager::manager: failed to refresh available models: unexpected status 401 Unauthorized: Encountered invalidated oauth token for user, failing request, url: https://chatgpt.com/backend-api/codex/models?client_version=0.153.4, cf-ray: a392689f5aee9d1c-ORD, request id: req_d5ab5d48d9454477b323e4a9484e8273, auth error: 401, auth error code: token_revoked
+2026-09-11T00:03:19.269914Z ERROR codex_models_manager::manager: failed to refresh available models: unexpected status 401 Unauthorized: Encountered invalidated oauth token for user, failing request, url: https://chatgpt.com/backend-api/codex/models?client_version=0.153.4, cf-ray: a392689f5b35a69c-ORD, request id: req_8cd53130d1124b08b62fc7a5a58434b3, auth error: 401, auth error code: token_revoked
+OpenAI Codex v0.153.4
+--------
+workdir: C:\Users\User00\AppData\Local\Temp\claude\C--DocumentNoSnc-CC-GXEMUL\8e474f41-4d47-4c99-bf11-3406a84c4fcd\scratchpad
+model: gpt-6-astra
+provider: openai
+approval: never
+sandbox: read-only
+reasoning effort: max
+reasoning summaries: none
+session id: 01a08dc6-9e66-70d3-ad78-18670ccaa63b
+--------
+user
+# Check two proposed PowerPC handler replacements against Book I, which has just become available
+
+VERDICT line first, then the liveness token `CODEX_BOOK1CHECK_20260910`.
+
+## READ ONLY THESE FILES. DO NOT LIST OR SEARCH DIRECTORIES.
+
+```
+C:\DocumentNoSnc\CC\GXEMUL\_scratchpad\ppc_uisa_book1_v201.txt
+C:\DocumentNoSnc\CC\GXEMUL\_scratchpad\ppc_pem_32and64_2005.txt
+```
+
+The first is new: **PowerPC User Instruction Set Architecture, Book I, Version 2.01, September 2003**,
+a `pdftotext -layout` extraction. It was obtained because the 2005 PEM names it as authoritative over
+itself (`ppc_pem_32and64_2005.txt:302`). **Where the two disagree, Book I governs.**
+
+You do not need to read any source code. Both replacements are inlined below in full.
+
+**Please check these rather than ratifying them** — they were written against the PEM alone, before
+Book I was available, and the whole point of this pass is that the governing document has changed.
+
+## SETTLED (established today; cite rather than re-derive)
+
+* Book I `:4125-4137` gives `rlwinm` as `n <- SH; r <- ROTL32((RS)32:63, n); m <- MASK(MB+32, ME+32);
+  RA <- r & m`, and `:578` defines `MASK` as *"1s in positions x through y (wrapping if x > y)"*.
+* **Book I never states that the upper 32 bits of RA are cleared.** The 2005 PEM does, unconditionally,
+  at `:30065`. The clearing language in Book I at `:4170-4190` is a programming note about the
+  **low-order** 32 bits, for non-wrapping `(MB, ME)`.
+* `X(rldimi)`'s rotate loop is `while (sh-- != 0)`, which leaves `sh == -1` for every SH including 0.
+
+## REPLACEMENT A — `rldimi`
+
+```c
+X(rldimi)
+{
+	uint32_t iw = ic->arg[0];
+	int rs = (iw >> 21) & 31, ra = (iw >> 16) & 31;
+	int sh = ((iw >> 11) & 31) | ((iw & 2) << 4);
+	int mb = ((iw >> 6) & 31) | (iw & 0x20);
+	int rc = ic->arg[0] & 1;
+	int m, n = sh;
+	uint64_t tmp, s = cpu->cd.ppc.gpr[rs];
+
+	while (n-- != 0) {
+		int b = (s >> 63) & 1;
+		s = (s << 1) | b;
+	}
+	m = mb; tmp = 0;
+	do {
+		tmp |= ((uint64_t)1 << (63-m));
+		m = (m + 1) & 63;
+	} while (m != ((64 - sh) & 63));
+	cpu->cd.ppc.gpr[ra] &= ~tmp;
+	cpu->cd.ppc.gpr[ra] |= (tmp & s);
+	if (rc)
+		update_cr0(cpu, cpu->cd.ppc.gpr[ra]);
+}
+```
+
+## REPLACEMENT B — `rlwimi`
+
+```c
+X(rlwimi)
+{
+	uint32_t tmp = (uint32_t)reg(ic->arg[0]);
+	MODE_uint_t ra = reg(ic->arg[1]);
+	uint32_t iword = ic->arg[2];
+	int sh = (iword >> 11) & 31;
+	int mb = (iword >> 6) & 31;
+	int me = (iword >> 1) & 31;
+	int rc = iword & 1;
+
+	tmp = sh ? ((tmp << sh) | (tmp >> (32-sh))) : tmp;
+
+	/*  A wrapping MASK(MB+32, ME+32) includes the high word.  */
+	if (mb > me)
+		ra = (ra & 0xffffffffULL) | ((uint64_t)tmp << 32);
+
+	for (;;) {
+		uint64_t mask;
+		mask = (uint64_t)1 << (31-mb);
+		ra &= ~mask;
+		ra |= (tmp & mask);
+		if (mb == me)
+			break;
+		mb ++;
+		if (mb == 32)
+			mb = 0;
+	}
+	reg(ic->arg[1]) = ra;
+	if (rc)
+		update_cr0(cpu, ra);
+}
+```
+
+`MODE_uint_t` is `uint64_t` in the 64-bit compilation and `uint32_t` in the 32-bit one; the file is
+compiled twice. `reg(x)` reads a `MODE_uint_t` register.
+
+## QUESTIONS
+
+1. **Quote Book I's `rldimi` entry** with line numbers — its RTL and its prose. Does Book I give the
+   mask as `MASK(MB, 63-SH)`, and does it agree with the PEM on the endpoint and the wrapping?
+2. **Does replacement A compute exactly that mask, for all 4096 (MB, SH) pairs?** In particular check
+   `SH = 0` (where `(64 - sh) & 63` is `0`, so the loop's termination value equals its start when
+   `mb == 0`) and the wrapping case `MB > 63-SH`. **Is there any (MB, SH) for which the `do/while`
+   fails to terminate, or visits a position twice?**
+3. **Quote Book I's `rlwimi` entry** with line numbers. Does it give `rA <- (r & m) | (rA & ¬m)` with
+   `m <- MASK(MB+32, ME+32)`, and does Book I say anything about `rA`'s upper half for this
+   instruction specifically?
+4. **Does replacement B produce Book I's result in all four quadrants** — `{MB <= ME, MB > ME}` x
+   `{32-bit compilation, 64-bit compilation}`? I am particularly unsure about two things: whether the
+   `if (mb > me)` assignment is correctly placed relative to the loop that then mutates `mb`, and
+   whether the 32-bit compilation is genuinely unchanged by it.
+5. **Is `update_cr0` fed the right value in each?** Book I says the record form sets CR0 from the
+   contents of `rA` after the instruction. Both replacements pass the final destination value — check
+   that this is what Book I requires, and say whether the comparison WIDTH is specified by the
+   instruction or by the current mode.
+6. **What does Book I say about `rlwnm`**, and does replacement B's reasoning transfer to it
+   unchanged? I have not proposed a replacement for it.
+7. **Name any place where Book I and the 2005 PEM disagree** on these three instructions, beyond the
+   upper-half sentence already established. I would rather find the disagreements now than after a
+   repair ships.
+
+Answer in full. Do not write any file; return the whole answer and I will save it.
+
+2026-09-11T00:03:19.577411Z ERROR rmcp::transport::worker: worker quit with fatal: Transport channel closed, when UnexpectedServerResponse("HTTP 401: {\n  \"error\": {\n    \"message\": \"Encountered invalidated oauth token for user, failing request\",\n    \"type\": null,\n    \"code\": \"token_revoked\",\n    \"param\": null\n  },\n  \"status\": 401\n}")
+2026-09-11T00:03:19.661111Z ERROR rmcp::transport::worker: worker quit with fatal: Transport channel closed, when UnexpectedServerResponse("HTTP 401: {\n  \"error\": {\n    \"message\": \"Encountered invalidated oauth token for user, failing request\",\n    \"type\": null,\n    \"code\": \"token_revoked\",\n    \"param\": null\n  },\n  \"status\": 401\n}")
+2026-09-11T00:03:19.793441Z ERROR codex_api::endpoint::responses_websocket: failed to connect to websocket: HTTP error: 401 Unauthorized, url: wss://chatgpt.com/backend-api/codex/responses
+2026-09-11T00:03:19.960563Z ERROR codex_api::endpoint::responses_websocket: failed to connect to websocket: HTTP error: 401 Unauthorized, url: wss://chatgpt.com/backend-api/codex/responses
+2026-09-11T00:03:20.223483Z ERROR codex_login::auth::manager: Failed to refresh token: 401 Unauthorized: {
+  "error": {
+    "message": "Your session has ended. Please log in again.",
+    "type": "invalid_request_error",
+    "param": null,
+    "code": "refresh_token_invalidated"
+  }
+}
+2026-09-11T00:03:21.165807Z ERROR codex_api::endpoint::responses_websocket: failed to connect to websocket: HTTP error: 401 Unauthorized, url: wss://chatgpt.com/backend-api/codex/responses
+2026-09-11T00:03:21.399969Z ERROR codex_api::endpoint::responses_websocket: failed to connect to websocket: HTTP error: 401 Unauthorized, url: wss://chatgpt.com/backend-api/codex/responses
+ERROR: Your access token could not be refreshed because your refresh token was revoked. Please log out and sign in again.
+ERROR: Your access token could not be refreshed because your refresh token was revoked. Please log out and sign in again.

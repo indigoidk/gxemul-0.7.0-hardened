@@ -2959,13 +2959,24 @@ FIFTEEN PDFs ARE PRESENT AND THE PROSE ABOVE NAMED ABOUT SEVEN. ***
                        half.  `:4125-4137' gives the RTL, r <- ROTL32((RS)32:63, n); m <- MASK(MB+32,
                        ME+32); RA <- r & m, and `:578' defines MASK as "1s in positions x through y
                        (WRAPPING IF x > y) and 0s elsewhere".  *** AND THE DECIDING FACT IS AN ABSENCE:
-                       BOOK I NEVER SAYS THE UPPER 32 BITS OF RA ARE CLEARED, while the 2005 PEM
-                       asserts exactly that, unconditionally, in its own instruction description at
-                       :30065. ***  CHECK THAT ABSENCE BY READING `:4170-4190', NOT BY ONE GREP: that
-                       span DOES contain several "clearing" sentences, and every one of them is a
-                       programming note about clearing "the remaining bits of THE LOW-ORDER 32 BITS of
-                       RA" for an explicitly non-wrapping (MB, ME) -- precisely the false positive a
-                       grep-only negative trips on.  Its left column on the same page also gives
+                       BOOK I's CLEARING SENTENCE IS **SCOPED** AND THE PEM'S IS **UNCONDITIONAL**,
+                       and that difference is the whole finding.  Book I `:4195-4196' says "For all
+                       the uses given above, the high-order 32 bits of register RA are cleared" --
+                       qualified to the programming-note uses enumerated just above it, every one of
+                       which fixes a NON-WRAPPING (MB, ME).  The PEM carries that same qualified
+                       sentence at :30074 AND an UNCONDITIONAL one at :30065, inside its instruction
+                       description.  *** IT IS THE UNCONDITIONAL CLAIM THAT IS ABSENT FROM BOOK I,
+                       and neither qualified sentence reaches the wrapping case, so Book I's normative
+                       RTL governs it. ***
+                       *** AND READ TO :4200, NOT :4190 -- I FIRST WROTE THIS ENTRY CLAIMING BOOK I
+                       "NEVER SAYS" IT, HAVING READ :4170-4190 AND STOPPED FIVE LINES SHORT OF THE
+                       SENTENCE. ***  The entry already told the next reader to check the absence by
+                       READING rather than by one grep; that instruction was right and my execution of
+                       it was not.  **An absence claim is only as good as the span you actually read,
+                       and the span must be chosen to CONTAIN the thing you are denying, not to end
+                       where the interesting text seems to stop.**  The conclusion was unaffected --
+                       both PowerPC replacements verified against Book I afterwards -- which is
+                       exactly why the wrong sentence survived a first reading.  Its left column on the same page also gives
                        rldic's mask as MASK(b, !n), which corroborates the !n = 63-SH complement that
                        the rldimi work depends on.  `file' reports "10 page(s)" and is WRONG, exactly
                        as it was for 21066.  A round on ANY PowerPC rotate-and-mask instruction opens

@@ -187,11 +187,15 @@ def mask32(mb, me):
        halves.  When MB > ME the mask covers MB+32..63 AND 0..ME+32, and the second range
        contains every position 0..31 -- the HIGH half -- so the rotated word lands there.
 
-       *** BOOK I NEVER SAYS THE UPPER 32 BITS OF RA ARE CLEARED. ***  The 2005 PEM does say
-       so unconditionally at its :30065, and that sentence is absent from the defining
-       manual; the PEM's own :302 defers to it.  The clearing language that IS in Book I,
-       on this same page at :4170-4190, is a PROGRAMMING NOTE about clearing "the remaining
-       bits of THE LOW-ORDER 32 BITS of RA", every instance for a non-wrapping (MB, ME).
+       *** BOOK I's CLEARING SENTENCE IS SCOPED; THE PEM'S IS UNCONDITIONAL. ***  Book I at
+       :4195-4196 says "For all the uses given above, the high-order 32 bits of register RA
+       are cleared" -- qualified to the programming-note uses just enumerated, every one of
+       which fixes a NON-WRAPPING (MB, ME).  The PEM has that same qualified sentence at
+       :30074 AND an UNCONDITIONAL one at :30065 in its instruction description.  It is the
+       UNCONDITIONAL claim that Book I lacks, and neither qualified sentence reaches the
+       wrapping case -- so Book I's normative RTL governs it, and the PEM's own :302 defers
+       to Book I.  (This docstring first said Book I "NEVER SAYS" it; I had read :4170-4190
+       and stopped five lines short.  Corrected the same night, conclusion unchanged.)
 
        The old body ORed `1 << (31 - b)' only, so it was right below bit 32 and empty above
        it.  Verified: identical to the old form on all 528 non-wrapping pairs, different on
