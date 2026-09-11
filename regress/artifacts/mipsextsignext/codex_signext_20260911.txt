@@ -1,0 +1,137 @@
+VERDICT: Recommend (a). The unchecked truncation selects a permitted result where the architecture says UNPREDICTABLE; this does not establish a guest-correctness or host-safety bug.
+
+CODEX_MIPSSIGNEXT_20260911
+
+I read only the two specified files. This analysis assumes valid field encodings and leaves the settled shift-count question aside.
+
+1. **The restriction is explicit, and appears in both Restrictions and Operation.**
+
+   The complete **Restrictions** block at [mips64_volII.txt:746](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/mips64_volII.txt:746), with spacing restored from the extracted text, reads:
+
+   > Restrictions:  
+   > In implementations prior to Release of the architecture, this instruction resulted in a Reserved Instruction Exception.  
+   > The operation is UNPREDICTABLE if lsb+msbd > 31.  
+   > If GPR rs does not contain a sign-extended 32-bit value (bits 63..31 equal), then the result of the operation is UNPREDICTABLE.
+
+   The missing number after “Release” is present in the supplied text; the **Format** field on that same line explicitly identifies **MIPS32 Release 2**.
+
+   This is an operand restriction, not a programming note. It is also explicitly checked by the architectural pseudocode at [line 750](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/mips64_volII.txt:750):
+
+   ```text
+   if ((lsb + msbd) > 31) or (NotWordValue(GPR[rs])) then
+       UNPREDICTABLE
+   endif
+   ```
+
+   `NotWordValue` is defined at [line 117](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/mips64_volII.txt:117): bits 63..32 must equal 32 copies of bit 31.
+
+   The scope across the related instructions is:
+
+   | Instruction | Sign-extended 32-bit operand requirement |
+   |---|---|
+   | `EXT` | Applies to `rs`. |
+   | `INS` | Applies to **both `rs` and the existing `rt` value**. Its Restrictions and Operation both say so. [Line 770](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/mips64_volII.txt:770). |
+   | `DEXT`, `DEXTM`, `DEXTU` | No such requirement in their Restrictions or Operation sections. [Lines 554](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/mips64_volII.txt:554), [562](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/mips64_volII.txt:562), [570](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/mips64_volII.txt:570). |
+   | `DINS`, `DINSM`, `DINSU` | Likewise, no such requirement. [Lines 586](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/mips64_volII.txt:586), [594](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/mips64_volII.txt:594), [602](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/mips64_volII.txt:602). |
+
+   The doubleword instructions have their own encoding restrictions; the word-value restriction does not carry over to them.
+
+2. **Violation makes the result UNPREDICTABLE. There is no specified alternative answer.**
+
+   The quoted sentence says exactly:
+
+   > “…then the result of the operation is UNPREDICTABLE.”
+
+   That is the architecture’s defined term, distinct from its `UNDEFINED` category and from C undefined behavior. The general definition at [line 44](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/mips64_volII.txt:44) says:
+
+   > UNPREDICTABLE results may vary from processor implementation to implementation, instruction to instruction, or as a function of time on the same implementation or instruction. Software can never depend on results that are UNPREDICTABLE.
+
+   **“May vary” does not require variation.** An implementation can consistently produce the nominal extraction result. The ISA does not require a detector, randomization, or a particular exception here.
+
+   UNPREDICTABLE also has boundaries: it cannot access otherwise inaccessible data or state, and the manual explicitly says:
+
+   > UNPREDICTABLE operations must not halt or hang the processor.
+
+   Thus it is architectural latitude with restrictions, not permission for arbitrary host behavior.
+
+3. **The two inputs become indistinguishable, but that does not make either emulator result an architectural error.**
+
+   The actual handler matches your quotation at [cpu_mips_instr.c:1752](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_mips_instr.c:1752). At line 1756:
+
+   ```c
+   uint32_t rs = reg(ic->arg[1]);
+   ```
+
+   Both inputs become `rs == 0x80000000`:
+
+   | Original 64-bit source | Satisfies the `EXT` operand restriction? |
+   |---|---|
+   | `0x00000000_80000000` | No: bit 31 is one, but bits 63..32 are zero. |
+   | `0xFFFFFFFF_80000000` | Yes. |
+
+   Every subsequent expression uses that identical local `rs`. Two illustrative valid extractions, using the implementation’s signed-conversion convention, are:
+
+   | Fields | Trace and result from either source |
+   |---|---|
+   | `lsb=31`, `size=1` | Both masking shifts have count zero; `x=0x80000000`; `x >> 31` is one; destination becomes `0x00000000_00000001`. |
+   | `lsb=0`, `size=32` | Both masking shifts have count zero; `x=0x80000000`; the final signed conversion and register assignment produce `0xFFFFFFFF_80000000`. |
+
+   The full-width case is important. Although the description says “zero-extended,” the operation at [manual line 750](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/mips64_volII.txt:750) explicitly forms a **32-bit** word from leading zeros plus the extracted field, then applies `sign_extend` before assigning it to `GPR[rt]`. For a 32-bit extraction, there are no leading zeros, so result bit 31 controls extension into the 64-bit register. The handler’s final `(int32_t)` implements that behavior on the intended hosts.
+
+   Consequently, the result is **the specified answer for the sign-extended input and a permitted answer for the non-sign-extended input**. Calling the latter “wrong” assumes a guaranteed answer that the ISA expressly withholds. Calling both “specified correct answers” would also overstate the guarantee.
+
+   The source conversion to `uint32_t` is defined modulo \(2^{32}\). One C99 qualification: converting an out-of-range unsigned result to `int32_t`, as in the full-width example, is implementation-defined. That existing conversion convention is not C undefined behavior and does not depend on whether the original upper half satisfied the restriction.
+
+4. **The register state is ordinary and legitimately reachable.**
+
+   `EXT` was introduced with **MIPS32 Release 2**, and is available in the corresponding MIPS64 Release 2 architecture. Besides the manual’s Format field, this source’s SPECIAL3 decoder checks the ISA revision and routes unsupported revisions to the reserved-instruction handler. [cpu_mips_instr.c:5584](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_mips_instr.c:5584).
+
+   A concrete producer in this exact file is `X(daddiu)`:
+
+   ```c
+   reg(ic->arg[1]) = reg(ic->arg[0]) + (int32_t)ic->arg[2];
+   ```
+
+   It preserves the 64-bit sum. Adding one to `0x00000000_7FFFFFFF` therefore produces `0x00000000_80000000`, without any exceptional arithmetic case. This agrees with the manual’s definition of `DADDIU` as 64-bit addition. [Handler:2383](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_mips_instr.c:2383), [manual:519](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/mips64_volII.txt:519).
+
+   There is no general architectural invariant that every MIPS64 GPR always contains a sign-extended word. Arbitrary doubleword values are legitimate. **The problematic event is consuming such a value with an instruction whose defined behavior requires a word value.**
+
+5. **The honest severity is an informational modeling choice, with possible diagnostic or hardware-compatibility consequences.**
+
+   This omission establishes neither host undefined behavior from the upper-half mismatch nor an incorrect result within `EXT`’s defined operand domain. The practical cost is that GXemul can conceal a guest or toolchain mistake: a binary may appear to work here while obtaining a different result on hardware whose behavior differs outside the defined domain.
+
+   “A correct guest never reaches that state” needs qualification. Correct guests routinely hold non-sign-extended values. A guest seeking an architecture-guaranteed `EXT` answer must arrange a valid word operand **at that instruction**.
+
+   A compiler generating portable code for this ISA must maintain the required representation, normalize before using `EXT`, or select an appropriate doubleword operation. The manual explicitly provides a normalization operation: `SLL` with a zero shift amount accepts an arbitrary source, truncates it to 32 bits, and sign-extends the result. [Manual:1709](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/mips64_volII.txt:1709).
+
+   Real compiler output could violate the precondition through a backend bug or rely on a particular processor’s behavior. **These two files do not establish an actual compiler emission that does so.** Ordinary 64-bit arithmetic establishes reachability; it does not establish that correctly compiled, architecture-portable code gets a wrong answer from this handler.
+
+6. **An optional check belongs at execution time, before the source is narrowed.**
+
+   The natural location is the 64-bit version of `X(ext)`, immediately before [line 1756](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_mips_instr.c:1756). Read the full source and compare it with the 64-bit sign-extension of its low 32 bits. For an analogous `INS` diagnostic, inspect both original operands before modifying `rt`.
+
+   Checking the current register during translation would not suffice: the cached instruction can execute repeatedly with different values. The decoder could select a checked handler for a diagnostic mode, but the value test must occur when that handler runs.
+
+   The normal execution cost would be a full-width value check—typically a sign-extension, comparison, and conditional branch, with the source load shared where possible. A warning latch adds state and a test. Printing once limits logging; it does not eliminate detection overhead before the first violation. A separately selected diagnostic handler or compile-time option can leave the normal handler without that overhead.
+
+   Existing idioms provide pieces of this, but no reusable `NotWordValue` validator appears in the supplied file:
+
+   - `X(srl)` silently narrows its source despite the same architectural word-value requirement. [Handler:2143](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_mips_instr.c:2143), [manual:1745](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/mips64_volII.txt:1745).
+   - Execution-time checks already exist, such as overflow handling in `X(add)`. [Line 2058](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_mips_instr.c:2058).
+   - Static warning latches already implement “print once,” including in the SPECIAL3 decoder. [Line 5586](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_mips_instr.c:5586).
+
+   There is also a coverage detail: the decoder replaces `EXT` targeting `$zero` with `nop`. A check solely inside `X(ext)` would miss those instructions. A diagnostic intended to cover every executed `EXT` would need to preserve a checking path there while retaining `$zero` semantics. [Lines 5608–5609](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_mips_instr.c:5608).
+
+7. **The three dispositions have different purposes and costs.**
+
+   **(a) Leave it and document the behavior: defensible and recommended.** Document that, for valid field encodings, GXemul extracts from the low 32 bits and constructs the normal word result even when the architectural source precondition is violated. This chooses a permitted result and adds no execution overhead.
+
+   There is direct precedent: for a zero divisor, the manual makes `DIV`’s arithmetic result UNPREDICTABLE, while `X(div)` deterministically supplies quotient zero and remainder equal to the narrowed dividend. [Manual:606](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/mips64_volII.txt:606), [handler:1833](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_mips_instr.c:1833). The cost of (a) is reduced visibility into guest dependence on unspecified results.
+
+   **(b) Diagnose once: defensible as an optional debugging feature.** A nonfatal diagnostic can help find guest or compiler mistakes while preserving the existing result. Its costs are the runtime test, warning state, and diagnostic maintenance. The warning’s scope—per process, CPU, or run—should be deliberate.
+
+   An ordinary C `assert` is different: failure normally terminates the host process. That can be intentional in an explicitly selected developer checking mode, but it is not a required architectural response and would be an undesirable default change to emulator availability.
+
+   **(c) Reproduce architectural unpredictability: there is no unique behavior to reproduce.** The architecture specifies latitude, not a random-number algorithm. The current deterministic result already fits that latitude.
+
+   Matching a particular physical CPU outside the defined domain would require evidence about that CPU beyond these files. Randomizing results could serve an optional guest-validation experiment, but would add runtime work and complicate reproducibility without inherently improving CPU fidelity. Neither randomness nor an invented exception is necessary to make this handler architecturally defensible.

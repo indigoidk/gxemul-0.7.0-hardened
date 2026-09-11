@@ -1,0 +1,147 @@
+VERDICT: These files do not justify an exact replacement byte. The status alias is not a Drive Address implementation, and literal option (d) would preserve it.  
+CODEX_WDCDIGIN_20260911
+
+I inspected only the two permitted files. I take your earlier write-only scope and committed-build `51/51` witness as established; I did not rerun them or change any file.
+
+1. **The Drive Address bit layout is not derivable from these files.**
+
+   Neither file supplies its bit assignments or polarity. I cannot substantiate the proposed bit-7 high-impedance/undefined description, the positions and polarity of the drive/head fields, or the meaning of the remaining bits.
+
+   The main task-file Device/Head encoding does not establish the encoding of this separate register. Likewise, status-bit definitions cannot be reused as Drive Address definitions.
+
+   Consequently, I cannot give a sourced bit-by-bit layout or numeric replacement value. A hardware specification is needed. Even if it describes a bit as high-impedance, that alone would not establish a logical read value of one; that also requires a bus-resolution policy.
+
+2. **`wdcreg.h` contains a disabled, concrete register-offset definition, but no Drive Address bit definitions.**
+
+   Here is the complete relevant auxiliary-register block, with its actual line numbers. [wdcreg.h:65](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/thirdparty/wdcreg.h:65)
+
+   ```c
+   65: /* offsets of registers in the auxiliary register region */
+   66: #define wd_aux_altsts         0    /* alternate fixed disk status (R) */
+   67: #define wd_aux_ctlr           0    /* fixed disk controller control (W) */
+   68: #define  WDCTL_4BIT           0x08 /* use four head bits (wd1003) */
+   69: #define  WDCTL_RST            0x04 /* reset the controller */
+   70: #define  WDCTL_IDS            0x02 /* disable controller interrupts */
+   71: #if 0 /* NOT MAPPED; fd uses this register on PCs */
+   72: #define wd_digin              1    /* disk controller input (R) */
+   73: #endif
+   ```
+
+   Line 72 is more than an empty placeholder: it records an offset of **1** and a read designation. However, preprocessing discards it, so **this build cannot use `wd_digin` from this header**. Enabling it would supply only an offset, with no contents, polarity, or implementation.
+
+   The adjacent `WDCTL_*` definitions describe the write-side control register. The `WDCS_*` definitions at lines 78–85 describe status, and `WDSD_*` at lines 192–195 describe the main Device/Head register. None supplies the missing Drive Address layout.
+
+3. **Every WDC instance initialized by this file registers two bytes; the complete machine and floppy-attachment census is unavailable within the permitted sources.**
+
+   Registration is unconditional:
+
+   ```c
+   2028: memory_device_register(devinit->machine->memory, "wdc_altstatus",
+   2029:     alt_status_addr, 2, dev_wdc_altstatus_access, d, DM_DEFAULT, NULL);
+   ```
+
+   That is a literal **two bytes**, independent of `addr_mult`. The main region immediately below uses `DEV_WDC_LENGTH * devinit->addr_mult`. [dev_wdc.c:2028](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c:2028)
+
+   The initializer contains these address choices. [dev_wdc.c:2003](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c:2003)
+
+   | Machine case | Alternate-region base |
+   |---|---|
+   | Default | `devinit->addr + 0x206` |
+   | `MACHINE_MACPPC` | `devinit->addr + 0x160` |
+   | `MACHINE_HPCMIPS` | `0x14000386` when the main base is `0x14000180`; otherwise the default |
+   | `MACHINE_IQ80321` | `devinit->addr + 0x402` |
+
+   These are **address special cases**, not an exhaustive list of machines instantiating WDC. The write-fix comment additionally records a witness on `evbmips -e malta` at lines 623–630. Neither permitted file contains the machine-construction code needed to enumerate all instances or establish which also attach an FDC.
+
+   The ownership evidence is the header note above and the WDC comment at lines 644–653, which quotes the FDC length comment, `TODO 8, but collision with wdc`. I inspected that quotation in WDC, not the prohibited FDC file. [dev_wdc.c:644](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c:644)
+
+   **If the FDC owns this read on a particular PC configuration, WDC should leave the response to that owner.** That requires correct address routing or registration. Ignoring an access inside a callback that still owns the address does not accomplish it. Nor does the PC ownership note establish what the non-PC mappings should expose.
+
+   Also, the existing comment explicitly says that returning zero from this registered callback produces the memory-access failure path and `EXCEPTION_DBE`; it does **not** fall through to another device or unassigned-address handling. That is an attributed finding from this file, since the memory dispatcher is outside the permitted sources. [dev_wdc.c:655](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c:655)
+
+4. **The four dispositions make materially different claims.**
+
+   | Disposition | Defensibility and hardware assertion | Cost |
+   |---|---|---|
+   | **(a) Continue returning status** | Defensible as an explicitly retained compatibility approximation. These files do not justify declaring it intended hardware behavior: it asserts that offset 1 mirrors status, despite the file identifying it as Drive Address. | No implementation cost; preserves the witnessed discrepancy. No compatibility dependency on this alias has been established here. |
+   | **(b) Return `0x80`** | Defensible only as a documented placeholder or independently supported platform policy. The files establish neither. “Undefined” does not mean “must be one.” On your active-low premise, zero select bits assert signals; they are not a neutral default. | Small code change and constant-value tests, but it introduces a guest-visible policy and still supplies no head-dependent readback. |
+   | **(c) Encode drive/head with documented polarity** | Defensible where the mapped register really is ATA Drive Address, after obtaining its specification. Existing state supports programmed drive/head readback. These files cannot establish whether those two variables suffice for every defined bit. | Small encoding cost for those fields; additional specification, ownership, lifecycle, and test work. Other defined fields might require additional state. |
+   | **(d) Decline and retain the common-path value** | **Literally, this retains status and therefore has the same read behavior as (a).** A handled no-op does not release the address. | Little code cost, but no behavioral correction. Genuine delegation to the FDC would require routing/registration work beyond this branch. |
+
+   The decisive detail for **(d)** is the sequence:
+
+   ```c
+   612: uint64_t idata = 0, odata = 0;
+   ...
+   617: odata = status_byte(d, cpu);
+   ...
+   746: if (writeflag == MEM_READ)
+   747:     data[0] = odata;
+   749: return 1;
+   ```
+
+   An ignored offset-1 read that reaches this tail returns the already-computed status. [dev_wdc.c:609](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c:609), [dev_wdc.c:746](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c:746)
+
+   Moving the status calculation exclusively into the offset-0 read branch would instead leave offset 1 returning the initialized **zero**. That would be a new constant-response policy. Returning success without writing the buffer would depend on caller initialization—the comment at lines 667–670 reports zeroing—but would still claim the access was handled. Returning failure has the documented exception consequence described above.
+
+   Thus preserving current behavior while obtaining the missing evidence is defensible; declaring it hardware-correct is unsupported. None of the four choices, as presently evidenced, establishes a universally correct replacement.
+
+5. **For (c), the positive oracle must assert the specified encoding, not merely that the result changes.**
+
+   The existing invariance witness establishes the missing dependence. Its inverse—“head 0 and head 15 return different values”—would be a weak correctness test.
+
+   Once the specification supplies the masks and values, exercise the guest register interface for **both drive selections and all 16 head nibbles**, in a specified controller state, and require:
+
+   ```text
+   (actual & specified_mask) == (expected[drive][head] & specified_mask)
+   ```
+
+   The expected table should come independently from the specification, rather than calling or duplicating the implementation’s encoder. Bits whose values are unspecified must be excluded from the hardware oracle; any chosen deterministic emulator policy for them needs a separate assertion.
+
+   Conditionally, if the specification confirms four active-low head bits, the extracted raw field must equal `head ^ 0x0f`. If it confirms separate active-low drive-select lines, the selected line must be zero and the unselected line one. Those are **conditional oracle rules**, not a sourced layout from these files.
+
+   The coverage limits matter:
+
+   | Test | Wrong implementations that could still pass |
+   |---|---|
+   | Only require different values at heads 0 and 15 | Wrong polarity, wrong bit positions, a single toggling bit, or a response that alternates on reads |
+   | Require exact specified values at heads 0 and 15 | Permuted head-bit significance, incorrect intermediate heads, and an ignored drive selector if only one drive is tested |
+   | Exhaustively check both drives and every head in one state | Correct static encoding with stale updates after other operations, read side effects, mistakes in other modes or device-presence states, or incorrect machine routing bypassed by direct callback tests |
+
+   Repeat reads and vary the selection order to catch read-count or stale-state behavior. Check selection fields while varying unrelated status conditions, and separately verify defined non-selection fields in the states their specification requires.
+
+   Preserve offset-0 behavior as a separate regression obligation: its status value and interrupt behavior must remain correct. Ordinary STATUS explicitly acknowledges the interrupt at lines 1938–1939; the alternate handler does not. [dev_wdc.c:1932](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c:1932)
+
+   For an FDC-ownership disposition, the positive oracle would instead establish that the address reaches the intended owner and returns that owner’s specified response. Head-dependent ATA readback would then be the wrong acceptance criterion.
+
+6. **`d->head` is used for actual disk addressing and is maintained as the last programmed head nibble. Broader hardware fidelity remains unproved.**
+
+   Its readers in this file are:
+
+   | Reader | Role |
+   |---|---|
+   | Line 467, `wdc__read()` | Active CHS disk-read offset calculation |
+   | Line 560, `wdc__write()` | Active CHS disk-write offset calculation |
+   | Line 1917, `wd_sdh` read | Reconstructs the main Device/Head register |
+   | Lines 473 and 565 | LBA calculations, **both inside `#if 0`** |
+   | Lines 879, 888, 1069, 1920, 1928 | Diagnostic output |
+
+   The active CHS calculations use `d->head * d->sectors_per_track[d->drive]`. These are substantive consumers. [dev_wdc.c:459](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c:459), [dev_wdc.c:555](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c:555)
+
+   Initialization zeroes the whole structure at line 1988. Thereafter, the only explicit assignment to the head field in this file is the SDH write:
+
+   ```c
+   1924: d->drive = (idata >> 4) & 1;
+   1925: d->head  = idata & 0xf;
+   ```
+
+   The corresponding read reconstructs those fields at lines 1916–1917. Thus accepted SDH writes maintain a bounded head nibble and a channel-local drive selector consistently. [dev_wdc.c:1914](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c:1914)
+
+   There are limits to what those variables represent:
+
+   - The reset helper clears transfer state and the ring, but leaves head and drive untouched. The alternate-control reset calls that helper. [dev_wdc.c:740](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c:740), [dev_wdc.c:823](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c:823)
+   - Reads advance a local byte offset at line 544; writes advance `d->write_offset` at line 1781. Neither advances `d->head` to reflect transfer progress.
+   - `WDCC_RECAL` only sets the interrupt flag at lines 914–917.
+   - The disabled LBA calculations provide no evidence of working LBA head-field semantics.
+
+   **Using `d->head` for specification-defined readback of the programmed select field can be honest.** The premise that nothing else trusts it is false. Claiming that it represents a continuously updated physical head position, or correct head state throughout every ATA reset and command transition, would exceed what this implementation establishes.

@@ -1,0 +1,203 @@
+VERDICT: The high-half defect is confirmed. I recommend (d), with dedicated wrapping handlers selected at decode time.  
+CODEX_RLWINMFIX_20260911
+
+1. **The main premise is correct, under the mode/register definitions you supplied.**
+
+   The actual [handlers at lines 2567–2598](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc_instr.c:2567) match your excerpts. Both rotate a `uint32_t`, AND it with a mask explicitly narrowed to `uint32_t`, and assign that unsigned 32-bit result to the destination. In the stated 64-bit compilation, this zero-extends and clears the high half unconditionally.
+
+   The decoder correctly computes the **low 32 bits** of the architectural mask. Thus the low result is correct; for wrapping masks, the high result is wrong whenever the rotated word is nonzero.
+
+   Book I’s [`rlwnm` entry, lines 4236–4242](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ppc_uisa_book1_v201.txt:4236), gives the following RTL, with assignment notation restored from the text extraction:
+
+   ```text
+   n  <- (RB)59:63
+   r  <- ROTL32((RS)32:63, n)
+   m  <- MASK(MB+32, ME+32)
+   RA <- r & m
+   ```
+
+   Its accompanying prose says: “The rotated data are ANDed with the generated mask and the result is placed into register RA.” It therefore shares `rlwinm`’s mask and final-AND semantics; the shift-count source differs.
+
+   Taking the settled `rlwinm`, `MASK`, and duplicated-word definitions as given, your worked result is correct: the present handler returns zero where Book I gives `0x1234567800000000`.
+
+   One correction to the settled wording: **Book I contains another scoped upper-half clearing sentence**, under [`rlwnm`, lines 4291–4292](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ppc_uisa_book1_v201.txt:4291). It also starts “For all the uses given above”. This does not change the conclusion, but `:4195–4196` is not the only such sentence in the book.
+
+2. **Use the decoder to select the behavior and dedicated handlers to produce the missing data. Widening the decoder’s mask alone cannot repair this.**
+
+   The [shared decode arm, lines 4512–4534](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc_instr.c:4512), serves exactly `PPC_HI6_RLWNM` and `PPC_HI6_RLWINM`, including their record forms.
+
+   The argument uses relevant to this decision are:
+
+   | Context | Meaning or consumption of `arg[1]` |
+   |---|---|
+   | This shared decode arm | Precomputed low-word mask |
+   | `rlwnm`, `rlwinm` | Read that mask through an explicit `uint32_t` cast |
+   | Their `DOT0` wrappers | Invoke the body, then read the destination through `arg[0]` |
+   | Separate `rlwimi` arm | Destination-register pointer |
+   | Other instructions | Opcode-specific operands: immediates, register pointers, masks, branch information, etc. |
+
+   In particular, [`rlwimi` has a separate argument contract](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc_instr.c:2602) and separate decoder arm at `:4536–4543`. It does **not** consume the mask generated for these two instructions. Other concrete readers include `addi`/`li` at `:257/:261`, `andi_dot` at `:278`, `mtfsf` at `:1029–1030`, and `mtcrf` at `:2920–2921`.
+
+   **The declared type and capacity of `ic->arg[]` cannot be established from the permitted files.** They contain no definition of `struct ppc_instr_call`. Pointer assignments cast to `size_t`, but that does not prove the member itself is `size_t`. If it is `size_t`, its width follows the host, not `MODE_uint_t`. Likewise, this file does not define `reg`, the mode types, or `update_cr0`; I have treated your mode-type description as supplied context.
+
+   The translator’s local `mask` **is demonstrably `uint32_t`**, declared at `:4051`. Its visible uses belong to this shared arm. The file also includes a translation tail at `:5408` whose contents are outside the allowed reads, so this is an audit of the visible consumers, not a claim about every consumer elsewhere.
+
+   Candidate (b) therefore needs both verified argument capacity and changes to both handlers. Precomputing the mask avoids constructing it during execution, but duplicating the rotated data and retaining it through the AND still require execution-time operations. “Widen the decoder mask and fix both for free” is not supported.
+
+   My concrete recommendation is to add these two bodies beside the existing handlers:
+
+   ```c
+   #ifndef MODE32
+   X(rlwinm_wrap)
+   {
+       uint32_t iword = ic->arg[2];
+       int rs = (iword >> 21) & 31;
+       int sh = (iword >> 11) & 31;
+       uint32_t rot = (uint32_t)cpu->cd.ppc.gpr[rs];
+
+       rot = sh ? ((rot << sh) | (rot >> (32-sh))) : rot;
+       reg(ic->arg[0]) = ((uint64_t)rot << 32)
+           | (rot & (uint32_t)ic->arg[1]);
+   }
+   DOT0(rlwinm_wrap)
+
+   X(rlwnm_wrap)
+   {
+       uint32_t iword = ic->arg[2];
+       int rs = (iword >> 21) & 31;
+       int rb = (iword >> 11) & 31;
+       int sh = cpu->cd.ppc.gpr[rb] & 0x1f;
+       uint32_t rot = (uint32_t)cpu->cd.ppc.gpr[rs];
+
+       rot = sh ? ((rot << sh) | (rot >> (32-sh))) : rot;
+       reg(ic->arg[0]) = ((uint64_t)rot << 32)
+           | (rot & (uint32_t)ic->arg[1]);
+   }
+   DOT0(rlwnm_wrap)
+   #endif
+   ```
+
+   Then insert this **after the existing function-selection switch at `:4525–4530`**, before the argument assignments:
+
+   ```c
+   #ifndef MODE32
+       if (((iword >> 6) & 31) > ((iword >> 1) & 31)) {
+           if (main_opcode == PPC_HI6_RLWNM)
+               ic->f = rc ? instr(rlwnm_wrap_dot)
+                          : instr(rlwnm_wrap);
+           else
+               ic->f = rc ? instr(rlwinm_wrap_dot)
+                          : instr(rlwinm_wrap);
+       }
+   #endif
+   ```
+
+   This deliberately reconstructs the predicate from the unchanged instruction word. **Testing `mb > me` after the existing loop would fail:** the loop exits with `mb == me`. Saving the predicate before the loop is equally correct.
+
+   Selection occurs once per translation. The wrapping bodies retain the unmasked rotated word, perform one destination write, and read all operands before that write, including when RA aliases RS or RB. They retain the existing zero-shift guard.
+
+3. **The recommended repair is an exact no-op in the 32-bit compilation.**
+
+   Every added definition and selection statement is excluded by `#ifndef MODE32`. The existing decoder, argument values, handler bodies, and record wrappers remain the same in that compilation.
+
+   Algebraically, writing `w` for the rotated word and `L` for the existing low mask:
+
+   ```text
+   32-bit destination:              w & L
+   64-bit destination, MB <= ME:    zero_extend(w & L)
+   64-bit destination, MB > ME:     (uint64_t(w) << 32) | (w & L)
+   ```
+
+   Narrowing the last expression to 32 bits yields exactly `w & L`. The proposed guards establish the stronger property that the 32-bit execution path itself receives no added work.
+
+4. **`DOT0` needs no change; candidate (d) needs record wrappers for the new bodies.**
+
+   [`DOT0`, lines 208–209](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc_instr.c:208), already performs the right sequence:
+
+   ```c
+   instr(n)(cpu, ic);
+   update_cr0(cpu, reg(ic->arg[0]));
+   ```
+
+   The value supplied must be the **completed destination**, including its repaired high half. It must not be the low masked temporary or the unmasked rotation.
+
+   [Book I, lines 1363–1383](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ppc_uisa_book1_v201.txt:1363), specifies signed comparison against zero using the entire destination in **64-bit mode**, and bits `32:63` in **32-bit mode**. CR0’s fourth bit copies XER.SO. The rotate section explicitly refers to these rules at `:4040–4042`.
+
+   Thus comparison width follows the **current architectural mode**, not the instruction’s “Word” name:
+
+   | Completed result | Current mode | CR0 comparison |
+   |---|---|---|
+   | `0x1234567800000000` | 64-bit | GT |
+   | `0x1234567800000000` | 32-bit | EQ |
+   | `0x0000000080000000` | 64-bit | GT |
+   | `0x0000000080000000` | 32-bit | LT |
+
+   Compilation width and architectural mode must not be silently equated. The wrapper passes the appropriate stored value under your stated definitions; **whether `update_cr0` already implements the architectural mode rule cannot be verified here**, because its definition is absent. There is no evidence in these files justifying a change to that shared helper.
+
+5. **All four approaches can produce the correct result, but several require implementation details absent from their shorthand descriptions.**
+
+   Here, “Yes” refers to the completed implementation described below, including valid argument storage.
+
+   | Candidate | 32-bit, non-wrap | 32-bit, wrap | 64-bit, non-wrap | 64-bit, wrap |
+   |---|---:|---:|---:|---:|
+   | (a), conditional write is final | Yes | Yes | Yes | Yes |
+   | (b), full mask survives storage and AND | Yes | Yes | Yes | Yes |
+   | (c), OR masked rotated data using valid extra storage | Yes | Yes | Yes | Yes |
+   | (d), dedicated bodies and matching record wrappers | Yes | Yes | Yes | Yes |
+
+   **(a)** is mathematically correct because every high-half mask bit is set when wrapping. `rot` must be the saved rotation before masking, as you specified.
+
+   There is a placement trap in “after the AND”: if that conditional assignment is literally inserted before the existing unconditional `reg(ic->arg[0]) = tmp`, the latter overwrites the repair. Make the conditional write last, or use one final `if/else` assignment. A counterexample to the overwritten version is:
+
+   ```text
+   64-bit compilation; RS=1, SH=0, MB=1, ME=0
+   Correct: 0x0000000100000001
+   Actual:  0x0000000000000001
+   ```
+
+   For `rlwnm`, use a shift register whose low five bits are zero. Properly ordered (a) has no differing input.
+
+   **(b)** is mathematically correct only if the consumer also stops narrowing the mask. A suitable value path, after computing `rot` as a `uint32_t`, is:
+
+   ```c
+   MODE_uint_t tmp =
+       (MODE_uint_t)(((uint64_t)rot << 32) | rot);
+
+   tmp &= (MODE_uint_t)ic->arg[1];
+   reg(ic->arg[0]) = tmp;
+   ```
+
+   Retaining the original `(uint32_t)ic->arg[1]` cast defeats the repair even when `tmp` and the stored mask are wide. A 32-bit argument slot likewise defeats it in the 64-bit compilation. Both failures have the same counterexample immediately above.
+
+   Casting to `uint64_t` **before** shifting by 32 avoids a width-sized shift in the 32-bit compilation. With valid wide storage and the corrected AND, (b) has no differing input. Its storage prerequisite remains unverified under this audit.
+
+   **(c)** needs to OR **rotated data selected by the high mask**, not the high mask itself. For a separate 32-bit mask `H`, the expression is:
+
+   ```c
+   result = (uint64_t)(rot & low_mask)
+       | ((uint64_t)(rot & H) << 32);
+   ```
+
+   Here `H` is zero for non-wrap and `0xffffffff` for wrap. Literally ORing the high mask produces a counterexample even with zero source:
+
+   ```text
+   64-bit compilation; RS=0, shift=0, MB=1, ME=0
+   Correct:                   0x0000000000000000
+   ORing the high mask gives:  0xffffffff00000000
+   ```
+
+   Storage is the other problem: `arg[0]`, `arg[1]`, and `arg[2]` are already occupied. The permitted file proves neither that `arg[3]` exists nor that another slot is available. Adding or repacking storage requires an explicit interface design. Proper data masking with valid storage has no differing input.
+
+   **(d)** is correct as implemented above and has no differing input. It encodes the wrapping decision in the selected function without requiring a wider or additional argument.
+
+   A tempting defective implementation is to call the old body and then reread RS to reconstruct the high half. With `RA == RS`, `RS=2`, shift zero, `MB=31`, `ME=0`, the old body writes zero and destroys the source needed for the high half. That implementation returns zero instead of `0x0000000200000000`. The proposed bodies read everything before writing.
+
+   I checked the value formulas against an independent circular 64-bit mask and duplicated-word rotation in memory: all 1,024 mask pairs, all 32 shifts, and zero plus all 32 single-bit source words—1,081,344 cases, checked at both destination widths. The completed formulas passed. This validates the arithmetic; it is not a compiled emulator or CR-helper test.
+
+6. **Ship the accepted `rlwimi` repair first, after its required validation, then ship `rlwinm` and `rlwnm` together.**
+
+   That order completes the already accepted replacement and gives the subsequent change a clear baseline. There is no dependency between their visible decode arms or argument contracts.
+
+   Keep the changes independently reviewable. Their shared risks are word rotation, wrapping boundaries, operand aliasing, destination width, and record-form behavior. Combining them with a global argument-layout change or a new shared rotate-family abstraction would broaden that risk unnecessarily. Run the accepted `rlwimi` checks again when integrating this pair, alongside both compilation widths, both record forms, and aliasing cases.
+
+   Only the two permitted files were read. No files were written.
