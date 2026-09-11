@@ -1,0 +1,209 @@
+VERDICT: ATA-2 specifies diagnostic codes, separable control-register addresses, and 8-bit register transfers. It supplies geometry guidance, but does not settle overflow recovery, zero-word host policy, or PC address arbitration.
+CODEX_ATA2BATCH_20260911
+
+I read only the three permitted files. All citations below use their actual text-file line numbers. “ATA-2” means the supplied Revision 4c working draft; its cover identifies that revision and says it is not an approved, completed standard. [ATA:7–12](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ata2_x3t10_948d.txt:7)
+
+For **1, `wdcdiagerr`**, the diagnostic interpretation is specified, and **`0x01` is the correct success code**. The premise about the current channel-reset implementation needs correction.
+
+The decisive register description says:
+
+> “Following a power on, a reset, or completion of an EXECUTE DEVICE DIAGNOSTIC command, this register contains a diagnostic code (see table 11).”
+
+[ATA §6.2.8, lines 1634–1635](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ata2_x3t10_948d.txt:1634)
+
+The command description reinforces the distinction:
+
+> “The diagnostic code written into the Error register is an 8-bit code as shown in table 11, and not as defined in 6.2.8.”
+
+[ATA:2473–2474](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ata2_x3t10_948d.txt:2473)
+
+Table 11’s columns are displaced in the extraction. Restoring their alignment, its codes and descriptions are:
+
+| Code in device 0’s Error register | Description quoted from Table 11 |
+|---|---|
+| `01h` | “Device 0 passed, Device 1 passed or not present” |
+| `00h`, `02h–7Fh` | “Device 0 failed, Device 1 passed or not present” |
+| `81h` | “Device 1 failed, Device 0 passed” |
+| `80h`, `82h–FFh` | “Device 1 failed, Device 0 failed” |
+
+[ATA:2479–2485](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ata2_x3t10_948d.txt:2479)
+
+The immediately following qualification matters:
+
+> “The meaning of values other than 01h and 81h are vendor specific and should be considered a diagnostic failed condition.”
+
+[ATA:2487–2488](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ata2_x3t10_948d.txt:2487)
+
+Thus this draft does **not** assign individual failure codes to particular failed components or tests.
+
+Device 0 puts its own result in bits 6–0. Its bit 7 reports failure of a detected device 1 to assert `PDIAG-`; an absent device 1 leaves that bit clear. The command procedure gives those rules explicitly at [ATA:2506–2513](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ata2_x3t10_948d.txt:2506). For device 1, it says:
+
+> “Device 1 sets bit 7 of the Error register to zero and posts its diagnostic results to bits 6 through 0 of Error register”
+
+[ATA:2534–2535](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ata2_x3t10_948d.txt:2534)
+
+A present, successful device 1 also reports `01h`. The informative reset algorithm states:
+
+> “If Device 1 completed all initialization and diagnostic without error, Set the Error register to 01h and assert PDIAG-.”
+
+[ATA:5083–5084](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ata2_x3t10_948d.txt:5083)
+
+The main reset procedures independently require diagnostic results: device 0’s hardware-reset rules specify its own low-seven-bit result and the device-1 indication in bit 7; its software-reset rules do likewise. Device 1 posts its own diagnostic results after both resets. [ATA:3859–3868](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ata2_x3t10_948d.txt:3859), [3944–3953](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ata2_x3t10_948d.txt:3944), [3886](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ata2_x3t10_948d.txt:3886), [3976](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ata2_x3t10_948d.txt:3976)
+
+**As a numeric pattern, `0x01` is both a legal diagnostic code and a legal ordinary Error-register pattern.** The meanings depend on context:
+
+- After diagnostics/reset, it is diagnostic success.
+- Under the ordinary Error-register interpretation, bit 0 is `AMNF`: “Address Mark Not Found.” [ATA:1663–1666](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ata2_x3t10_948d.txt:1663)
+- The generic `ERR` flag belongs to the **Status register**. The header separately defines `WDCS_ERR = 0x01` and `WDCE_AMNF = 0x01`. [wdcreg.h:75–100](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/thirdparty/wdcreg.h:75)
+
+Diagnostic codes and ordinary error bits therefore occupy **the same Error register at different times**. The Status register’s `ERR` bit is the separate register meaning.
+
+The current model does the following:
+
+- `WDCC_DIAGNOSE` writes `d->error = 1`. That value itself is correct for successful diagnostics. [WDC:958–963](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c:958)
+- Device initialization also writes `1`. [WDC:1981–1994](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c:1981)
+- **The control-register channel-reset path does not write `1`, or clear Error.** It sets `COMMAND_RESET` and calls `wdc_new_command_reset()`, whose body leaves `d->error` untouched. The previous Error value survives. The assignment to zero belongs to `wdc_command()`, outside that helper. [WDC:740–743](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c:740), [823–846](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c:823)
+- There is one shared `error` member, and Error-register reads return it directly. The model does not maintain separate device-0 and device-1 diagnostic results. [WDC:126–134](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c:126), [1841–1844](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c:1841)
+
+There is also an actual conflation in `status_byte()`: every nonzero `d->error` sets `WDCS_ERR`, including successful diagnostic code `01h`. [WDC:594–595](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c:594) The informative diagnostic algorithm instead pairs the result with Status `50h`, which has `ERR` clear. [ATA:5192–5200](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ata2_x3t10_948d.txt:5192)
+
+One qualification: selecting an **absent** device 1 is a separate case. Section 8.7 permits an implementation with shadow registers reset to `00h`; that is not a successful present-device diagnostic code. [ATA:4443–4447](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ata2_x3t10_948d.txt:4443)
+
+For **2, `wdccylwrap`**, word 1 describes a logical geometry, and Annex D supplies relevant limits. Neither specifies a universal overflow-repair algorithm.
+
+The field definition is:
+
+> “The number of user-addressable logical cylinders in the default translation mode.”
+
+[ATA §7.15.2, lines 2807–2809](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ata2_x3t10_948d.txt:2807)
+
+This is a **count of logical cylinders**, not a physical-geometry requirement or the highest cylinder address. Section 7.2 explicitly makes mapping logical addresses to physical media vendor-specific. [ATA:1821–1828](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ata2_x3t10_948d.txt:1821)
+
+The model stores that count into two `unsigned char` elements without a clamp. Consequently, an input count of 65,536 produces two zero bytes. [WDC:144](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c:144), [337–339](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c:337) Your arithmetic is correct for 32 MiB divided into 512-byte sectors with one head and one sector per track. However, the supplied code obtains geometry through `diskimage_getchs()`; its implementation is outside the permitted files, so I cannot independently confirm that image configuration produces that input geometry. [WDC:2020–2026](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c:2020)
+
+A sixteen-bit count cannot directly represent 65,536. The separate statement that cylinders are numbered from zero through at most 65,535 is an **address-number limit**, not a rule making word 1 equal to zero mean 65,536. [ATA:2607–2608](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ata2_x3t10_948d.txt:2607), [1838–1839](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ata2_x3t10_948d.txt:1838)
+
+Crucially, Annex D says:
+
+> “For drives less than or equal to 528 MB, Identify Data word 1 (Default Cylinders) shall not specify a value greater than 1,024.”
+
+[ATA:5590–5591](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ata2_x3t10_948d.txt:5590)
+
+For drives larger than 528 MB and no larger than 8 GB, its table gives these maxima:
+
+| Word 3: heads | Maximum word 1: cylinders |
+|---|---:|
+| 1–4 | 65,535 |
+| 5–8 | 32,767 |
+| 9–16 | 16,383 |
+
+[ATA:5592–5615](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ata2_x3t10_948d.txt:5592)
+
+It also limits default heads to 16 and default sectors per track to 63 for drives through 8 GB. [ATA:5619–5627](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ata2_x3t10_948d.txt:5619)
+
+**These are informative compatibility rules.** Annex D is explicitly marked “informative,” and introduces its rules with “Maximum compatibility is achieved if the following rules are obeyed.” Its use of *shall* does not change that stated status. [ATA:5556–5558](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ata2_x3t10_948d.txt:5556), [5582–5586](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ata2_x3t10_948d.txt:5582)
+
+The document therefore contains maxima, but does **not** prescribe truncation, a universal word-1 saturation rule, or a unique replacement geometry. Annex D’s explicit division-and-ceiling recipe concerns **word 54 after INITIALIZE DEVICE PARAMETERS**, not word 1. [ATA:5643–5648](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ata2_x3t10_948d.txt:5643)
+
+**No special host interpretation of zero in word 1 is specified.** There is no stated “zero means 65,536,” “geometry unknown,” “device absent,” or mandated recovery procedure. Reading it literally as a count gives zero logical cylinders; that observation does not establish what a host must do with the inconsistent identification.
+
+There is useful consistency guidance:
+
+> “A device shall support the CHS translation described in words 1, 3 and 6 of the IDENTIFY DEVICE information.”
+
+[ATA:3110–3111](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ata2_x3t10_948d.txt:3110)
+
+> “The values in words 1, 3, and 6 should be selected such that the number of orphan sectors is minimized.”
+
+[ATA:5684](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ata2_x3t10_948d.txt:5684)
+
+Words 3 and 6 count logical heads per cylinder and logical sectors per track, so their product with word 1 describes the default full-cylinder capacity. [ATA:2816–2821](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ata2_x3t10_948d.txt:2816) For current geometry, the main text explicitly requires words 57–58 to equal `word54 × word55 × word56`. Annex D connects those current geometry fields to words 1, 3 and 6 before initialization changes the translation. [ATA:2926–2929](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ata2_x3t10_948d.txt:2926), [5643–5667](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ata2_x3t10_948d.txt:5643)
+
+For your example, **1,024 cylinders × 2 heads × 32 sectors = 65,536 sectors** preserves the entire 32 MiB and meets Annex D’s limits. That is an illustrative choice, not a uniquely mandated one. The actual CHS mapping must use the selected geometry too: the model’s read and write offsets depend on its heads and sectors-per-track arrays. [WDC:464–468](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c:464), [557–561](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c:557)
+
+For **3, `wdcaltownership`**, ATA-2 makes the selectors separable. It does not arbitrate PC host-port ownership.
+
+The standard describes `CS1-` as:
+
+> “the chip select signal from the host used to select the Control Block Registers.”
+
+It also records the historical name `CS3FX-`. The device register address itself comes from the three `DA` signals. [ATA:1226–1234](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ata2_x3t10_948d.txt:1226)
+
+Table 7 supplies these distinct rows:
+
+| CS0- | CS1- | DA2/DA1/DA0 | Read | Write |
+|---|---|---|---|---|
+| Negated | Asserted | `110` | Alternate status | Device control |
+| Negated | Asserted | `111` | Note 1 | Not Used |
+
+[ATA:1493–1495](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ata2_x3t10_948d.txt:1493)
+
+Note 1 says:
+
+> “This register is obsolete. It is recommended that a device not respond to a read of this address. If a device does respond, it shall be sure not to drive the DD7 signal to prevent possible conflict with floppy disk implementations.”
+
+[ATA:1529–1531](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ata2_x3t10_948d.txt:1529)
+
+Therefore **responding at `110` while not responding at `111` is expressly supported and recommended**. A shared chip-select signal does not require responding to both addresses.
+
+The framing needs two distinctions:
+
+- **Alternate Status and Device Control share one address**, distinguished by read versus write. They do not themselves require two bytes of address space.
+- The adjacent selectors are defined by ATA-2, but **a two-byte host resource reservation is not required**. The other selector is obsolete and can be left unanswered.
+
+Thus narrowing the ATA registration to retain Alternate Status/Device Control and release the obsolete address is compatible with this ATA register map. Whether that alone fixes the emulator’s system-level collision cannot be established here.
+
+Beyond Note 1, I found **no further floppy coexistence rule or ownership allocation for `0x3F6`/`0x3F7`**. This document defines signal-level selection, not that absolute PC address mapping. The model supplies the mapping and registers a length of two itself. [WDC:2003–2029](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c:2003)
+
+The permitted source documents the floppy claim specifically at **offset 1**, through:
+
+> `#if 0 /* NOT MAPPED; fd uses this register on PCs */`
+
+[wdcreg.h:71–73](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/thirdparty/wdcreg.h:71)
+
+It does not establish a floppy ownership claim over `0x3F6`. The WDC comment reports what the floppy source says, but that source was outside the permitted reading scope. [WDC:644–653](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c:644)
+
+For **4, `wdcaltwidth`**, the ATA-interface width is explicitly specified: **8 bits**.
+
+The decisive sentence is in the `IOCS16-` description:
+
+> “When transferring in any PIO mode and accessing any register except the data port, transfers shall be 8-bit using DD0-7;”
+
+[ATA §5.2.11, lines 1338–1339](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ata2_x3t10_948d.txt:1338)
+
+That includes Alternate Status and Device Control. A **single 16-bit ATA transfer of Alternate Status violates this requirement**. It is not a defined two-register word transfer.
+
+The strobe descriptions say:
+
+> “The falling edge of DIOR- enables data from a register or data port of the device onto the signals, DD0-DD7 or DD0-DD15.”
+
+[ATA:1264–1265](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ata2_x3t10_948d.txt:1264)
+
+> “The rising edge of DIOW- latches data from the signals, DD0-DD7 or DD0-DD15, into a register or the data port of the device.”
+
+[ATA:1270–1271](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ata2_x3t10_948d.txt:1270)
+
+Those alternatives are constrained by the width rule; asserting `CS1-` does not authorize the sixteen-bit alternative. The PIO data port is selected with **CS0- asserted, CS1- negated, DA=`000`**. [ATA:1499](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ata2_x3t10_948d.txt:1499) DMA is not an exception:
+
+> “When a DMA operation is enabled, IOCS16-, CS0- and CS1- shall not be asserted and transfers shall be 16-bits wide.”
+
+[ATA:1294–1295](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ata2_x3t10_948d.txt:1294)
+
+**A host CPU’s sixteen-bit access is a separate question.** The NOP discussion expressly acknowledges hosts that can only perform “16-bit register accesses,” and describes a host write involving Device/Head and Command. [ATA:3147–3153](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ata2_x3t10_948d.txt:3147) That passage prevents a blanket conclusion that every sixteen-bit *CPU instruction* is forbidden. It does not define a sixteen-bit control-register transaction on the ATA interface or explain this emulator’s host-side conversion.
+
+Consequently, the premise of the upper-byte question does not hold: **ATA-2 does not permit the proposed single ATA word read spanning these control addresses. It specifies no returned upper-byte value for it.**
+
+Note 1 restricts **DD7 during a read selecting `111`**. It does not turn that register into the `DD8–DD15` half of a read selecting `110`. Nor does “not drive” mean “return zero.” If a host adapter constructs a CPU word from separate byte cycles, the resulting byte placement and undriven-bit value need host-adapter/platform evidence.
+
+The current handler consumes or writes only `data[0]`; it contains no `len` handling. [WDC:609–619](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c:609), [746–749](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c:746) These files cannot establish the complete returned CPU word. They also cannot substantiate “every existing test,” because no test files were permitted.
+
+For **5**, the outstanding questions are explicitly these:
+
+| Filed question | What ATA-2 settles | What remains unanswered |
+|---|---|---|
+| **`wdcdiagerr`** | Diagnostic interpretation, success/failure classes, and device-role differences. | No unresolved standard question about whether diagnostic success may be `01h`. The model’s reset premise was incorrect. |
+| **`wdccylwrap`** | Logical-count meaning, supported-translation requirement, and informative geometry limits/consistency guidance. | **A unique overflow repair or clamp, and mandatory host treatment of word 1 equal to zero.** |
+| **`wdcaltownership`** | The two selectors are separable; leaving the obsolete one unanswered is recommended. | **PC port arbitration, actual floppy decoding, and whether narrowing this registration completely fixes the platform.** |
+| **`wdcaltwidth`** | Non-data ATA register transfers must be eight-bit; the proposed ATA word read has no specified upper byte. | **How a CPU word access is converted or handled by this emulator/platform.** |
+
+Thus **`wdccylwrap`, `wdcaltownership`, and the host-side portion of `wdcaltwidth` remain partly open**. The ATA register-width question itself is answered.
