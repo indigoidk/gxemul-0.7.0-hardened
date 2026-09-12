@@ -1,3 +1,118 @@
+# `#527` (ppcrlwimiwidth, ppcrldimimask): two PowerPC rotate-and-insert instructions computed wrong results — `rlwimi` rotated a 32-bit word at 64-bit width and never wrote a wrapping mask's high word; `rldimi`'s rotate loop consumed its own shift count, so every insert mask was built from `sh == -1`
+
+Both are sibling handlers in `src/cpus/cpu_ppc_instr.c` and share one commit and one joint kill table,
+because one build exercises both and each probe is the other's cross-check.  The architecture is Book I
+v2.01 (`_scratchpad/ppc_uisa_book1_v201.txt`): rlwimi `r <- ROTL32((RS)32:63, SH); m <- MASK(MB+32,
+ME+32); RA <- (r & m) | ((RA) & ~m)` with MASK wrapping when x > y (`:578`), and ROTL32 duplicating the
+word into both halves; rldimi `r <- ROTL64((RS), sh); m <- MASK(mb, 63-sh)`.
+
+**rlwimi — two defects in one handler.**  (1) `MODE_uint_t tmp = reg(rs)` held all 64 bits, so
+`(tmp << sh) | (tmp >> (32 - sh))` pulled high-word bits DOWN into the rotated low word.  (2) A
+wrapping mask (MB > ME) covers the WHOLE high word, which must receive the rotated word; the handler
+only walked the low word.  **FIX:** narrow on read, `uint32_t tmp = (uint32_t)reg(rs)`, and BEFORE the
+insertion loop `if (mb > me) ra = (ra & 0xffffffffULL) | ((uint64_t)tmp << 32);` — before, because the
+loop walks `mb` to `me` and a guard placed after it would never fire (`R_POST_LOOP` measures exactly
+that).  A 19-line comment records why a 32-bit `MODE_uint_t` build keeps only the low word, and that this
+is NOT a claim that 32-bit MODE removes half the register (Book I §1.2).
+
+**rldimi — two defects in one handler.**  (1) `while (sh-- != 0)` rotated correctly and left `sh == -1`,
+so the mask end `63 - sh` was 64 for every encoding.  (2) The mask loop `m ++` never wrapped past bit 63.
+**FIX:** rotate a copy (`int m, n = sh;  while (n-- != 0)`) and make the loop circular
+(`m = (m + 1) & 63; } while (m != ((64 - sh) & 63))`).
+
+**WITNESSES, rung 3, unmodified in-tree `-E bareppc -M 64` (PPC970).**  rlwimi: committed **14/28**, fix
+**28/28** (`artifacts/ppcrlwimiwidth/witness_{committed,fix}.out`, agy's witness).  rldimi: committed
+**17/27**, fix **27/27** (`artifacts/ppcrldimimask/witness_*.out`, the Opus seat's).  No Book I error in
+either fix: codex checked all 32,768 rlwimi and 4,096 rldimi immediate combinations against a model of
+the RTL; grok and kimi re-derived both from Book I independently.
+
+## The detectors — `regress/ppc_rlwimi_probe.py` (28 rows) and `regress/ppc_rldimi_probe.py` (29 rows), wired in `gate_ppc.sh`
+
+Promoted from the witnesses: RESULT/CONTROL/DONE protocol; CONTROL includes TARGET-INSTRUCTION rows (a no-op
+instruction would otherwise read CONTROL=OK); `census run` and `disasm total` want LITERALS (rlwimi 129 and
+146/146, rldimi 495 and 513/513) because the derived wants self-satisfied a shrunk census.  Each header
+carries a CONTRACT and a clause-(e) list.  The gate section runs BEFORE gate 13's NetBSD prerequisite, so a
+missing image cannot turn a red detector into a SKIP.
+
+| table | legs | result |
+|---|---|---|
+| 1 `ppcrlwimiwidth/killtable_20260911/`, `ppcrldimimask/killtable_20260911/` | 8 + 8 | all killed; **the first rlwimi NULL_MEDIUM leg was byte-identical to BASE and scored a vacuous 28/28** -- corrected in `killtable_nullmedium_20260911/` (rlwimi 12/28, rldimi 13/27) |
+| 2 `ppcrlwimiwidth/killtable2_20260912/` (+ `table2b/`) | 15 | 14 on prediction; five R_ legs REFUSED by a driver leg-name bug and re-run in `table2b/` rather than scored |
+| 3 `ppcrlwimiwidth/killtable3_20260912/` | 17 | 15 on prediction, zero escapes, cross-check held on every leg |
+
+Table 3's two misses, as what they are (POSTTABLE.out): **D_NO_MERGE** predicted 26, measured 25 — my
+arithmetic, the row-level prediction was right; **D_NOCIRC** predicted 21, measured 22 — `full rot` PASSED
+under that undefined-shift mutant (measured; the slow-circular mechanism is NOT measured).  The shipped
+probes differ from table 3's frozen instruments ONLY in header and comment text written after the §F2 pass
+(the corrections below); `POSTTABLE.out` records the non-comment-filtered diff, and no executable line differs.
+
+## Pass 2, and the two gaps it found (both rldimi)
+
+Nine-seat pass 2 (`_scratchpad/panel_20260912_095238_ppcpass2`, Opus measuring, the §F2 adjudication pass
+`panel_20260912_104522_xpadjud`, then Fable last): *is there a clause-(d) mutant this detector does not see?*
+
+* **codex: `while (n-- != 0 && mb != ((64 - sh) & 63))`** skips the rotate exactly when the mask is full
+  width.  Every full-width row and census cell used the ALL-ONES source, which no rotate changes.  Row
+  **`full rot`** (SH=24, MB=40 from 0xDEADBEEFCAFEF00D): table 3 `D_SKIP_FULL_ROT` 28/29, failing it alone.
+* **glm: no rA == rS row in rldimi** while rlwimi has three — a sibling-parity gap.  **glm's literal mutant
+  (`tmp & cpu->cd.ppc.gpr[rs]`) is NOT an aliasing mutant: it reads the UNROTATED source and is wrong for
+  every SH != 0 whatever the aliasing** — found by simulating it before building.  The leg built is glm's own
+  "equivalently" form (re-read after the clear, then rotate).  Row **`alias rs=ra`**: table 3
+  `D_ALIAS_REREAD` 28/29, failing it alone.
+
+**Grade: L1 construction** (the detectors were unshipped).  Fable ruled codex's three LATER gaps (below)
+clause (e), and closed the repair chain on this pass with its denominator: D_SKIP_FULL_ROT and
+D_ALIAS_REREAD measured killed; the Opus seat's `mb >= me` (27/28, `census wrong` its sole killer),
+unrotated high word (24/28), `n-- > 1` (25/27) and end-test-without-`& 63` (17/27) measured killed; the rest
+enumerated as (e).
+
+## Records corrected (L4), several by the panels
+
+* **F15 — MY RECORD WAS WRONG AND EVERY SEAT MISSED WHY (Fable).**  I recorded deleting rlwimi's `sh ?`
+  guard as "pre-existing, host-equivalent, not a gap".  But pre-fix `tmp` was 64-bit, so `tmp >> 32` at
+  SH = 0 was DEFINED and the guard redundant; **the fix narrowed `tmp` to `uint32_t`, which makes that shift
+  undefined and the guard LOAD-BEARING for definedness.**  The fix changed the guard's status.  No row can
+  pin it (the mutant is host-equivalent if equivalent at all); `R_NOGUARD` (predicted 28/28) is FILED.
+* **The literal pins DO carry a measured kill** — my table-2 note said they did not.  The Opus seat's
+  end-test-without-`& 63` leg read `census run 0/495`, `disasm total 8/16`.  **And the caveat (codex, kimi,
+  Fable), verbatim: measured for the hang case, redundantly with CONTROL; unmeasured for the shrink case.**
+  `CENSUS_SHRINK` (the fixed build with a shortened census) is FILED.
+* **"controls green on every build"** in both probes was false — tables 2 and 3 show CONTROL=FAIL on
+  R_REV_COND, R_NULL, D_MUT63, D_NOCIRC, D_NOKEEP_SH, D_NO_MERGE and D_NULL (codex).  CONTROL=OK certifies the
+  apparatus, never that a leg is harmless.
+* **D_NOCIRC "hangs and aborts at 182"** was load-dependent: table 1 hit the 90 s session timeout, table 2
+  completed all 495 cells in 394 s.  A correct build runs the whole probe in 0.1 s.
+* **`wrap fullword` "31 bits low"** — it is all 32 (codex).  **The patterned SH list** is 0, 8, 24, 40 (codex).
+* **The `>` bound** is pinned only by the census's MB == ME cells — disclosed (grok, Opus).
+
+## Disclosed and FILED, not built (clause (e), Fable)
+
+`n = sh & ~7` (every patterned SH is a multiple of 8 — FOLDED with F16 into ONE item carrying Fable's spec:
+ADD a full-mask patterned row at **SH=63, MB=1** (want 0xEF56DF77E57F7806; a byte-rounded rotate gives
+0x0DDEADBEEFCAFEF0), which pins every dropped SH bit — do not modify `full rot`, table 3's cited killer;
+costs a table 4 and pin 29 -> 30); a stale re-read confined to WRAPPING masks (the one alias row is
+non-wrapping); an insertion skipped only when Rc=1 (both record-form rows check CR presence only);
+`CENSUS_SHRINK`; `R_NOGUARD`.
+
+## Scope, stated by name
+
+**`regress/ppc_rldicl_probe.py` is modified in the working tree and is NOT in this commit** — an earlier
+session's `mask_range` oracle re-pin (`ppcwitnessmaskoracle`), not reviewed by this round's panels; it
+waits for its own record.  Likewise `tools/{BRIEF_TEMPLATE.md, CLAUDE.md, PIPELINE.md, panel.sh}` and
+`tools/pipeline/fable_queue.md`.  `SCORE_CLAIMS_MANIFEST` 25 -> **28**: the two new gate pins (28, 29) AND `#526`'s xscale pin, which `#526` shipped QUOTED (`"30"`) so that `check_score_claims.py`'s PIN regex could not see it -- for one commit the score-claims check guarded nothing there.  The gate behaved identically (a string compare); the literal is unquoted here, with a comment saying why.  Also carried: `#526`'s pass-2 receipt in `regress/pass2_ledger.tsv` and its ledger `commits` field (eb26590).
+
+## Seats
+
+Pass 2: codex, kimi (CLI), grok, glm, deepseek, minimax, kimi-k3:cloud — 7/7; Opus 5 measured; **agy
+DELIBERATELY NOT FIRED**; §F2: the same seven; Fable 5.1 last (subagent pinned to `model: fable`, opened
+naming `claude-fable-5-1`; verbatim at `artifacts/xscaleinten/fable_adjudication_20260912.md`).
+
+## Gate
+
+`gate_ppc.sh` (gate 13) with the rlwimi/rldimi section — parse before score, each protocol KEY exactly once
+and well formed, rows run and correct pinned to 28 and 29: **gate 13 PASS, 110 checks**, every rlwimi/rldimi row `ok` (protocol parsed, controls OK, run and correct 28 and 29), 0 FAIL, GATE_EXIT=0, run from a FROZEN copy of `gate_ppc.sh`; log `regress/artifacts/ppcrlwimiwidth/gate_ppc_20260912.log`.  The section was restored from `_scratchpad/gate_ppc.ppcround.sh` (parked out of the tree so the probes could stay untracked) and its pins were checked against the shipped probes' `row(` counts (28, 29) and table 3's BASE (28/28, 29/29) before it ran.  Negative controls on the gate
+section: **11 of 11 as specified** (`regress/artifacts/ppcrlwimiwidth/gate_negctl_20260912.sh` / `.out`): the section is EXTRACTED from the gate itself, its probe calls replaced by fixture logs derived from table 3's BASE, and run under counting stubs -- the untouched fixture passes, and a shrunk denominator (each probe), one red row, a duplicated RESULT, a malformed extra RESULT, a missing DONE, a missing RESULT, CONTROL=FAIL, a duplicated CONTROL and an empty log each fail on the intended check.  Build trees: two-part clearance RUN before the gate -- `cpu_ppc_instr.c` p1=CLEAN p2=FRESH in `build/`, `build-asan/` and `/tmp/gxsec-build`; `est/` p1=CLEAN, p2 N/A (source tree, no binary).
+
 # `#526` (xscaleinten): reading the i80321 interrupt-enable register ended the emulator — AFTER the model had already loaded the correct value into the destination register
 
 **THE DEFECT.** `arm_coproc_i80321_6()` — coprocessor 6 on `-E iq80321` (and Iyonix), installed by

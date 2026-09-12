@@ -1639,7 +1639,9 @@ else
     check "xscale probe exit status" "$xrc" "0"
     xres=$(sed -n 's/^XSCALE_RESULT=//p' "$XSCALELOG")
     #  Pinned by hand to a LITERAL: a pin that follows the probe cannot tell gained rows from lost ones.
-    check "xscale rows run"     "${xres#*/}" "30"
+    #  UNQUOTED on purpose: check_score_claims.py's PIN regex cannot see a quoted count, so `#526'
+    #  shipped this as "30" and the score-claims check guarded nothing here (fixed in `#527').
+    check "xscale rows run"     "${xres#*/}" 30
     check "xscale rows correct" "${xres%/*}" "30"
     check "xscale rows emitted" "$(grep -cE ' (ok|FAIL|BLOCKED)$' "$XSCALELOG")" "30"
     check "xscale rows failed"  "$(grep -c ' FAIL$' "$XSCALELOG")" "0"

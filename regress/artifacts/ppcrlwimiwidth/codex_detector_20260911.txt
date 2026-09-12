@@ -1,0 +1,249 @@
+VERDICT: HELD. The shipped probe detects neither repair, and `gate_ppc.sh` does not execute it.
+CODEX_PPCDET_20260911
+
+I read only the four named files, including the working-tree C file. No files were changed. The operand results below were checked by in-memory arithmetic; they are **predictions for execution tests, not measured emulator results**. Clause (a) therefore remains open.
+
+1. **The existing probe has no observation that discriminates either repair.**
+
+The [probe’s executed rows](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/ppc_rldicl_probe.py:341) are:
+
+| Rows | What they assert |
+|---|---|
+| `session`, `live`, `seed holds`, `src intact` | Normal session completion, `r9=0x1234`, preservation of the destination sentinel and source |
+| `disasm xcheck`, `disasm total` | Expected disassembly for the six control instructions and 190 census instructions |
+| `zx32 rldicl`, `rot8 rldicl`, `sh63 rldicl`, `sh32 rldicl` | Architectural destination values from **rldicl** |
+| `zx32 rldicr`, `rot8 rldicr` | Architectural destination values from **rldicr** |
+| `naive fix wrong` | An arithmetic comparison between two expressions computed within Python |
+| `neg apparatus` | Rejection of a nonexistent machine |
+| `bits32 live`, `bits32 rld bad` | Liveness on PPC603 and rejection of an `rldicl` encoding |
+| `vacuous cell`, `vac neighbour` | Two more **rldicl** destination values |
+| `census run`, `census wrong`, `census zero` | Completion and results of the 190-cell **rldicl** census |
+| `cand session`, `cr parsed`, `rc cr0` | Candidate-session completion, CR parsing, and the CR result of **rldicl.** |
+
+That is **24 row calls**, with census cells aggregated into rows. The comments claiming 19 rows are stale. Also, `naive fix wrong` still contributes to `SCORE` through `row()`, despite its “carried-not-counted” description.
+
+`want_rldimi`, `want_rlwimi`, `RLDIMI`, and `RLWIMI` exist, but none is called by an executed test. The [exclusion comment](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/ppc_rldicl_probe.py:477) explicitly says these instructions’ rows were removed.
+
+Consequently, neither edited handler executes. The register assertions, CR assertion, disassembly assertions, counts, and arithmetic-only assertion cannot discriminate these changes. Combining invariant observations does not create a discriminator.
+
+A build also missing #522 might make this probe red. That would be evidence about **#522**, not either held repair.
+
+2. **Concrete `rldimi` rows**
+
+The [working-tree handler](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc_instr.c:2534) contains the fix described in the brief.
+
+For the original code, the consumed `sh` makes the termination value 64. Its mask is therefore:
+
+```text
+M_old = MASK(MB,63)
+```
+
+Using the settled architectural formula:
+
+```text
+M_correct = MASK(MB,63-SH)
+```
+
+For **every SH from 1 through 63**, these masks differ for every MB. At SH=0 they agree. A mask difference becomes an observable result difference exactly when:
+
+```text
+(ROTL64(RS,SH) XOR RA_initial) AND (M_correct XOR M_mutant) != 0
+```
+
+That condition prevents crediting a row whose inserted and preserved data happen to agree.
+
+Use these five rows, with distinct source and destination registers and `Rc=0`:
+
+| Row | RS value | Initial RA | SH, MB |
+|---|---|---|---|
+| D-tail | `ffffffffffffffff` | `0000000000000000` | 1, 32 |
+| D-wrap | `ffffffffffffffff` | `0000000000000000` | 8, 60 |
+| D-full | `0123456789abcdef` | `0000000000000000` | 32, 32 |
+| D-one | `ffffffffffffffff` | `0000000000000000` | 63, 0 |
+| D-preserve | `0000000000000000` | `ffffffffffffffff` | 8, 32 |
+
+All hexadecimal values in these tables represent complete 64-bit registers.
+
+Define two mutants precisely:
+
+- **M_D_END:** retain `n = sh` and the modulo increment; change only the termination predicate to `m != 63 - sh`.
+- **M_D_TAIL:** retain the fixed rotation and modulo increment; terminate at `m != 0`. This restores the original `MASK(MB,63)` behavior.
+
+The observable is **RA after execution**:
+
+| Row | Correct RA | Original / M_D_TAIL RA | M_D_END RA |
+|---|---|---|---|
+| D-tail | `00000000fffffffe` | `00000000ffffffff` | `00000000fffffffc` |
+| D-wrap | `ffffffffffffff0f` | `000000000000000f` | `fffffffffffffe0f` |
+| D-full | `89abcdef01234567` | `0000000001234567` | `89abcdee01234567` |
+| D-one | `8000000000000000` | `ffffffffffffffff` | `ffffffffffffffff` |
+| D-preserve | `ffffffff000000ff` | `ffffffff00000000` | `ffffffff000001ff` |
+
+**Every row kills both named mutants**, through the unequal register values shown.
+
+The boundary cases matter:
+
+- **D-full:** `MB = (64-SH)&63 = 32`. The correct mask is all 64 bits. RA must equal `ROTL64(RS,32)`, namely `89abcdef01234567`.
+- **D-one:** `MB = 63-SH = 0`. The correct mask contains just architectural bit 0. M_D_END instead traverses the entire ring.
+- **SH=0, MB=0 would be a vacuous boundary witness against the original bug:** both implementations select all 64 bits. D-full deliberately avoids that case.
+
+D-preserve also exercises insertion of zero bits and retention of unselected destination bits. Its zero source is **not** vacuous: the seeded destination makes both the original and mutant results observably wrong.
+
+3. **Concrete `rlwimi` rows**
+
+The [working-tree handler](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc_instr.c:2608) contains both narrowing and high-word insertion.
+
+The old expression is **not a conventional ROTL64**. It evaluates the 32-bit rotation expression using a 64-bit source:
+
+```text
+(RS << SH) | (RS >> (32-SH))
+```
+
+For nonzero SH, writing `RS = H || L`, its low word is:
+
+```text
+ROTL32(L,SH) OR ((H << SH) truncated to 32 bits)
+```
+
+The high source word can therefore contaminate the low result.
+
+Use:
+
+| Row | RS value | Initial RA | SH, MB, ME |
+|---|---|---|---|
+| W-width1 | `0000000180000000` | `1122334455667788` | 1, 0, 31 |
+| W-width31 | `0000000100000002` | `1122334455667788` | 31, 0, 31 |
+| W-wrap | `89abcdef12345678` | `deadbeefa5a5a5a5` | 0, 28, 3 |
+
+Define:
+
+- **M_W_WIDE:** restore `MODE_uint_t tmp = reg(ic->arg[0]);`, removing **both** narrowings, while keeping the wrapping high-word insertion.
+- **M_W_HIGH:** retain `uint32_t tmp` and delete the wrapping high-word insertion block.
+
+These predictions concern the 64-bit variant under review.
+
+| Row | Correct RA | Original RA |
+|---|---|---|
+| W-width1 | `1122334400000001` | `1122334400000003` |
+| W-width31 | `1122334400000001` | `1122334480000001` |
+| W-wrap | `1234567815a5a5a8` | `deadbeef15a5a5a8` |
+
+The mutant assignments are deliberately separate:
+
+| Row | M_W_WIDE | M_W_HIGH | Discriminating channel |
+|---|---|---|---|
+| W-width1 | Killed; produces original RA | Survives; produces correct RA | Low word: `00000001` versus `00000003` |
+| W-width31 | Killed; produces original RA | Survives; produces correct RA | Low word: `00000001` versus `80000001` |
+| W-wrap | Survives; produces correct RA | Killed; produces original RA | High word: `12345678` versus `deadbeef` |
+
+For W-width1, the correct word rotation produces 1. The old wide expression produces `0000000300000003`, whose low word is 3. The nonwrapping mask replaces the complete low word, exposing the difference.
+
+W-width31 exposes contamination at a different position: numeric bit 31 instead of bit 1.
+
+For W-wrap:
+
+```text
+64-bit mask = fffffffff000000f
+rotated word = 12345678
+```
+
+The correct insertion replaces the whole high word with `12345678` and merges the selected low-word bits to produce `15a5a5a8`. Using SH=0 makes this row independent of the source-width repair.
+
+**A low-word-only readback of W-wrap would be vacuous against M_W_HIGH.** Both implementations produce the same low word.
+
+4. **Which mutants should satisfy clause (d)?**
+
+Your `rldimi` candidate, M_D_END, is useful, but it does **not** restore the original failure generally. Keeping `sh` intact changes what the reverted expression means. It tests an endpoint error.
+
+I would use **M_D_TAIL as the primary effect-nullifying mutant**, because it reproduces the original mask behavior while retaining the fixed rotation machinery. Keep M_D_END as an additional endpoint mutant. All five D rows kill both.
+
+Your `rlwimi` candidate, **M_W_HIGH**, is necessary and well chosen. W-wrap kills it. It does not test the narrowing repair, so **M_W_WIDE is also required**, killed by both width rows.
+
+There is an important equivalent-mutant trap here:
+
+```c
+MODE_uint_t tmp = (uint32_t)reg(ic->arg[0]);
+```
+
+Changing only the temporary’s type while retaining the source cast does **not** restore the width defect. The source high word has already been discarded; the handler subsequently consumes only the relevant low 32 bits of that expression. Likewise, removing only the cast while keeping a `uint32_t` destination still narrows on assignment.
+
+**Neither edit alone is a valid width-repair-nullifying mutant. No RA row should be credited with killing it.**
+
+5. **The proposed observations are nonvacuous, with explicit limits.**
+
+Every proposed data row asserts the **complete destination register**, against its architectural expected value. The tables identify the named mutant and its different observed value.
+
+They do not claim that:
+
+- An all-ones source detects a rotation-amount error. D-full supplies a nonsymmetric rotating source.
+- A nonwrapping `rlwimi` row detects deletion of wrapping behavior.
+- A SH=0 wrapping row detects the width defect.
+- Disassembly or liveness alone detects an execution-handler arithmetic error.
+
+All eight rows also expect RA to change from its initial value, so simply failing to execute the target instruction cannot satisfy them.
+
+Missing registers must be failures, not substituted zeros. Apparatus controls remain prerequisites; they receive no credit for killing these repair mutants.
+
+6. **Two scoped probes are cleaner; separate files are not inherently required.**
+
+Nothing in the four files establishes a requirement that each round own a separate physical file.
+
+One executable with independently selectable and scored instruction groups can satisfy “same detector, no new oracle,” provided each round runs **identical rows and expected-value logic** against its original, fixed, and mutant builds.
+
+The existing `want_rldimi` and `want_rlwimi` helpers already provide the distinct architectural formulas. Adding observations that call them does not require inventing another oracle.
+
+My recommendation is two scoped entry points, with proposed names:
+
+- `ppc_rldimi_probe.py`
+- `ppc_rlwimi_probe.py`
+
+They can share passive session, encoding, and mask utilities.
+
+Unconditionally extending `ppc_rldicl_probe.py` couples the acceptance status of three rounds. Adding both new groups before both repairs land makes one commit’s acceptance depend on the other. Incremental additions or explicit group selection can avoid that dependency, but separate entry points make the ownership clearer.
+
+Also, **do not import the current script merely to obtain its helpers**: its top-level code writes files and runs sessions. Shared utilities would need to be made passive.
+
+7. **The permitted gate does not run this probe.**
+
+[gate_ppc.sh](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gate_ppc.sh:95) invokes only:
+
+```text
+python3 ppc_rounding_probe.py ...
+```
+
+It checks `PPC_CONV_RESULT`, conversion controls, counts, and named floating-point rows. It contains no invocation or result handling for `ppc_rldicl_probe.py`.
+
+Thus, **the existing probe is ungated by this gate**. These four files cannot establish whether some other gate invokes it.
+
+Each new instruction group owes actual gate execution and checks that require:
+
+- Completion and working readback.
+- The expected named rows, each exactly once.
+- Five D data rows or three W data rows, respectively.
+- Correct values for every required row.
+- Nonpassing results for timeout, missing output, missing registers, or missing groups.
+
+Merely checking process success or the completion token is insufficient. The existing probe’s [ending](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/ppc_rldicl_probe.py:593) prints `SCORE`, `FAILING`, and its token without setting a failure exit status. Normal execution therefore exits successfully even with failed assertions.
+
+There is also a wiring dependency to avoid: `gate_ppc.sh` requires a NetBSD image before launching its current probe. The bareppc integer groups must run independently of that prerequisite—through a separately invoked gate, or through restructuring that prevents the image check from skipping them.
+
+8. **A cold-debugger register readback can provide the rung-3 witness.**
+
+Under the existing probe’s definition of rung 3, the available route is **unmodified `-E bareppc`**, using its [existing session implementation](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/ppc_rldicl_probe.py:284).
+
+That implementation:
+
+1. Starts the emulator in the cold debugger with a dummy image.
+2. Seeds source and destination registers directly.
+3. Places encoded instructions in guest RAM at `0x10000`.
+4. Disassembles the placed instructions.
+5. Sets PC and steps them.
+6. Dumps and parses registers.
+
+The probe documents bareppc’s default CPU as PPC970. The permitted [decoder code](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc_instr.c:4589) confirms that `rldimi` dispatch exists and rejects `cpu->cd.ppc.bits == 32`. I did not independently inspect the machine definition or CPU table, and I did not execute this route during this review.
+
+Each proposed row can use a fresh session with source `r3` and destination `r4`. Generate the instruction using the existing instruction-specific encoder, verify its disassembly, execute it, and assert the table’s complete `r4` value. Check liveness in that same session.
+
+No device side effect or guest OS is needed: **the architectural defect is the register value, and the debugger supplies the observation channel**.
+
+An offline differential is useful for designing and checking these expectations. Comparing Python arithmetic alone cannot establish that a shipped binary fails, and it cannot establish fetch/decode/execute reachability. Closing the hold requires the unchanged instruction-specific detectors to be run against each round’s original, fixed, and named mutant builds, with results enforced by a gate.

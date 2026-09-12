@@ -507,6 +507,38 @@ MANIFEST = {
     "artifacts/ppcrldiclzero/killtable_20260910/mutate.py":
         (CLASS_TOOL, "ppcrldiclzero (#522): the mutator, nine mutants including the two that escaped pass 2.  Written with an editor rather than generated, because building it through a shell heredoc ate a backslash level and turned every escape into a real newline -- the carrier's documented trap, with its documented remedy"),
 
+    # -- #527 ppcrlwimiwidth / ppcrldimimask: the witnesses PROMOTED and WIRED, with the round's instruments.
+    #  Both probes run BEFORE gate_ppc.sh's NetBSD prerequisite (register-to-register on -E bareppc -M 64,
+    #  no image), with RESULT/CONTROL/DONE parsed before scoring and both denominators pinned.  The artifact
+    #  witnesses are the as-measured instruments and are NOT byte-identical to the probes; they are
+    #  CLASS_RESEARCH (they assert the repaired property, a detector's shape), kept as the record.
+    "ppc_rlwimi_probe.py":
+        (CLASS_DETECTOR, "#527 ppcrlwimiwidth: 28 rows on unmodified -E bareppc -M 64 -- X(rlwimi) rotated at 64-bit width and the wrapping mask's high half never written.  Joint kill table 3 (artifacts/ppcrlwimiwidth/killtable3_20260912/): BASE 28/28, HEAD 14/28; wired in gate_ppc.sh, pin 28"),
+    "ppc_rldimi_probe.py":
+        (CLASS_DETECTOR, "#527 ppcrldimimask: 29 rows on unmodified -E bareppc -M 64 -- X(rldimi) mask bounds and the wrapping case; `full rot' and `alias rs=ra' added on pass 2.  Joint kill table 3: BASE 29/29, HEAD 17/29; wired in gate_ppc.sh, pin 29"),
+    "artifacts/ppcrlwimiwidth/agy_ppc_rlwimi_witness_20260911.py":
+        (CLASS_RESEARCH, "#527 ppcrlwimiwidth: the as-measured rung-3 witness (committed 14/28, fix 28/28, killtable_20260911/) -- promoted to regress/ppc_rlwimi_probe.py"),
+    "artifacts/ppcrldimimask/opus_ppc_rldimi_witness_20260911.py":
+        (CLASS_RESEARCH, "#527 ppcrldimimask: the as-measured rung-3 witness (committed 17/27, fix 27/27, killtable_20260911/) -- promoted to regress/ppc_rldimi_probe.py"),
+    "artifacts/ppcrlwimiwidth/killtable_20260911/mutate_rlwimi.py":
+        (CLASS_TOOL, "#527 rlwimi kill-table 1 mutator"),
+    "artifacts/ppcrlwimiwidth/killtable_nullmedium_20260911/mutate_rlwimi.py":
+        (CLASS_TOOL, "#527 rlwimi null-medium mutator (its NULL_MEDIUM is the corrected definition)"),
+    "artifacts/ppcrldimimask/killtable_20260911/mutate_rldimi.py":
+        (CLASS_TOOL, "#527 rldimi kill-table 1 mutator, reused by tables 2 and 3"),
+    "artifacts/ppcrldimimask/killtable_nullmedium_20260911/mutate_rldimi.py":
+        (CLASS_TOOL, "#527 rldimi null-medium mutator"),
+    "artifacts/ppcrlwimiwidth/killtable2_20260912/mut_rlwimi_t2.py":
+        (CLASS_TOOL, "#527 rlwimi table-2/3 wrapper: table 1's mutant blocks, anchor rebuilt around the corrected comment"),
+    "artifacts/ppcrlwimiwidth/killtable3_20260912/mut_rldimi_t3.py":
+        (CLASS_TOOL, "#527 rldimi table-3 mutator for the two pass-2 legs (D_SKIP_FULL_ROT, D_ALIAS_REREAD)"),
+    "artifacts/ppcrlwimiwidth/killtable3_20260912/ppc_rlwimi_probe.T3FROZEN.py":
+        (CLASS_RESEARCH, "#527 the frozen rlwimi instrument joint table 3 ran"),
+    "artifacts/ppcrlwimiwidth/killtable3_20260912/ppc_rldimi_probe.T3FROZEN.py":
+        (CLASS_RESEARCH, "#527 the frozen rldimi instrument joint table 3 ran"),
+    "artifacts/ppcrlwimiwidth/opus_pass2_20260912/patch.py":
+        (CLASS_TOOL, "#527 the Opus pass-2 seat's mutant patcher, preserved as run"),
+
     #  The measuring seat's own apparatus, preserved with its answer.  Its mutator and mine
     #  were written independently and produced the SAME figures, which is why the literals
     #  were then reused verbatim -- so the legs stay comparable across the two tables.
@@ -1708,10 +1740,13 @@ EXEMPT = {
     #  #522's detector.  Single-leg, 0.2 s, green on the fix.  It lacks a gate that RUNS a
     #  64-bit PowerPC CPU: gate 9 constructs them but has no result oracle, and both PowerPC
     #  gates drive a 32-bit part.  Closing that is a harness round, filed to wiringcliff.
+    #  *** ITS REASON EXPIRES WITH THE rlwimi/rldimi WIRING: gate_ppc.sh now EXECUTES -M 64. ***
+    #  What remains is the instrument: this probe prints no RESULT/CONTROL lines, so a gate
+    #  could only score its exit status, which gates here never trust.
     "ppc_rldicl_probe.py":         ("2026-09-20",
-                                    "no gate EXECUTES a 64-bit PowerPC CPU -- gate 9 "
-                                    "constructs them with no result oracle; gate_ppc.sh "
-                                    "is the named home, filed to wiringcliff"),
+                                    "gate_ppc.sh now executes -M 64 (rlwimi/rldimi); this "
+                                    "probe lacks the RESULT/CONTROL protocol a gate parses "
+                                    "-- that instrument change is filed to wiringcliff"),
     "mk48_nvram_probe.py":         ("2026-09-20",
                                     "no gate drives mvme88k/mvme187; gate_m88k_rounding.sh "
                                     "is the named home and giving it an mvme187 leg is a "

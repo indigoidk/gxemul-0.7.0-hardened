@@ -1,0 +1,172 @@
+VERDICT: Both local algorithms check out; mode integration is unverified, and the probe covers neither fix.
+CODEX_PPCPASS2_20260911
+
+All three paths were readable. The handlers match your supplied code. I read only the permitted files and wrote nothing. Independent in-memory models found no mismatches across all 4,096 `rldimi` mask combinations, all 1,024 `rlwimi` mask pairs, and selected operand checks covering every word-rotate encoding in both destination widths. These were arithmetic checks, not compiled-C or emulator runs.
+
+1. **`rldimi`: `(64 - sh) & 63` is correct.**
+
+   Book I’s RTL, with the text extraction’s layout and logical symbols normalized, is:
+
+   ```text
+   n  ← sh5 || sh0:4
+   r  ← ROTL64((RS), n)
+   b  ← mb5 || mb0:4
+   m  ← MASK(b, ¬n)
+   RA ← r&m | (RA)&¬m
+   ```
+
+   Here `n` is six bits, so `¬n` is `63-SH`. The accompanying prose explicitly names that endpoint. [Book I:4315](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ppc_uisa_book1_v201.txt:4315)
+
+   Your loop sets the current bit and then advances. Its exclusive stopping position must therefore be:
+
+   ```text
+   ((63-SH) + 1) mod 64 = (64-SH) & 63
+   ```
+
+   Before the fix, the final **failed** evaluation of `sh-- != 0` still decremented `sh`. It left `sh == -1`, including when the original shift was zero. Consequently, `63 - sh` evaluated to **64**. Combined with the old nonwrapping `m++`, the old loop built `MASK(MB,63)` for every original shift amount. It did not retain the required `63-SH` endpoint. [Current handler:2534](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc_instr.c:2534)
+
+2. **When `mb` equals the stopping position, the loop sets all 64 bits.**
+
+   Let `E = (64-sh)&63`. Starting with `m == E`:
+
+   ```text
+   set E;       advance to E+1 modulo 64; continue
+   set E+1;     advance again;            continue
+   ...
+   set E-1;     advance to E;             stop
+   ```
+
+   The condition is tested after advancing, so equality at entry does not cause an immediate exit.
+
+   For `SH=1, MB=63`, the architectural endpoint is 62:
+
+   ```text
+   set 63 → set 0 → ... → set 62 → advance to 63 → stop
+   ```
+
+   That is 64 iterations and the correct full wrapping mask.
+
+   `SH=0, MB=0` also takes 64 iterations, producing `MASK(0,63)`; that particular full mask is nonwrapping. A genuine one-bit case is `SH=63, MB=0`: set bit 0, advance to 1, stop.
+
+3. **Preserving `sh` introduces no conflicting dependency within this function.**
+
+   `sh` is decoded at line 2538 and copied into `n` at line 2541, before the rotation. Only `n` is subsequently decremented. After rotation, the mask-loop condition is the only use of `sh`.
+
+   No other operation relies on the old `-1` value. The destination updates and CR0 call do not use either counter.
+
+4. **The assignment is correct for a genuinely 32-bit destination, but that does not establish correctness for architectural 32-bit execution mode.**
+
+   Under your stated premise that `MODE_uint_t` is an unsigned 32-bit type, the wrapping assignment satisfies:
+
+   ```text
+   uint32((ra & 0xffffffff) | (uint64(tmp) << 32)) == ra
+   ```
+
+   The conversion discards the upper 32 bits by defined unsigned-conversion semantics. The subsequent loop then performs the required low-word insertion. This is a sound representation argument, not an accident, and the shift itself is performed at 64-bit width.
+
+   **The important qualification is in Book I §1.2:** both execution modes affect all 64 bits when an instruction sets a 64-bit register, and the register result is independent of mode. Book I also explicitly describes each GPR as 64 bits. Thus a 64-bit processor operating in 32-bit mode still owes the wrapping high-word write. [Computation modes:342](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ppc_uisa_book1_v201.txt:342), [GPR width:1989](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ppc_uisa_book1_v201.txt:1989)
+
+   The permitted source file does **not** define `MODE_uint_t` or `reg`, or establish which implementation selects each compiled variant. I therefore cannot certify that the narrow variant is used exclusively where discarding those bits is legitimate. If a 64-bit processor’s 32-bit execution mode reaches a variant that loses the architectural high word, that remains wrong.
+
+   For the local idiom, this file uses **`MODE32` with `#else`**, including `extsb` and `extsh`; it contains no `MODE64` conditional. A conditional block would therefore follow the `MODE32` convention, using `#ifndef MODE32` for the other variant. [Mode idiom:3091](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc_instr.c:3091)
+
+   No conditional is needed to repair the arithmetic you showed. I would clarify the comment:
+
+   ```c
+   /*  A wrapping 64-bit mask selects the duplicated high word.
+       Assignment to a 32-bit MODE_uint_t retains only the low word.  */
+   ```
+
+   That accurately describes the implementation without claiming that architectural 32-bit mode removes half the register.
+
+5. **The `rlwimi` ordering is correct.**
+
+   Within the loop, `mask` has exactly one set bit among numeric bit positions 0–31. Because it is `uint64_t`:
+
+   - `~mask` has ones throughout the high word, so `ra &= ~mask` preserves that word.
+   - `tmp & mask` has zeros throughout the high word, so the following OR also preserves it.
+
+   The wrapping assignment sets the entire high word before the loop. The nonwrapping path preserves the original high word. Every valid field combination terminates after 1–32 iterations and reaches the single common destination assignment. There is no early exit that leaves a partially applied high-word update. [Handler:2618](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc_instr.c:2618)
+
+   Source and destination values are captured before destination writeback, so `RS == RA` also works.
+
+6. **`mb > me` exactly identifies wrapping, with both requested boundaries correct.**
+
+   Adding 32 preserves ordering, and both resulting endpoints lie within 32–63:
+
+   ```text
+   MB > ME ⇔ MB+32 > ME+32
+   ```
+
+   When wrapping occurs, the mask includes `MB+32..63` and `0..ME+32`. The latter interval includes **every high-word position 0–31**. Book I defines both this wrapping behavior and the duplicated-word rotation. [Rotate/mask definitions:4008](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ppc_uisa_book1_v201.txt:4008)
+
+   | Fields | Architectural mask | Your behavior |
+   |---|---|---|
+   | `MB == ME` | One low-word bit | Guard false; loop updates one bit; high word preserved |
+   | `MB == ME+1`, for `ME=0..30` | All 64 bits | Guard true; high word replaced; loop replaces all 32 low bits |
+   | `MB=0, ME=31` | All low-word bits only | Guard false; high word preserved |
+
+   The last row matters: adjacency modulo 32 must not replace the ordinary integer comparison.
+
+7. **CR0 uses the completed destination, with comparison width determined by execution mode.**
+
+   The call already passed `ra` before your changes. In the 64-bit variant, that already included the old destination’s preserved high word. Your change supplies the corrected high word for wrapping cases; the call’s placement and argument expression are unchanged.
+
+   Book I specifies signed comparison of the completed result against zero:
+
+   - In **64-bit mode**, compare all 64 destination bits.
+   - In **32-bit mode**, compare destination bits 32–63.
+   - Copy XER.SO into CR0.SO.
+
+   This applies to record-form rotate instructions regardless of “Word” in their name. [CR0 rule:1363](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ppc_uisa_book1_v201.txt:1363), [Rotate record forms:4040](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ppc_uisa_book1_v201.txt:4040)
+
+   A useful discriminating example is:
+
+   ```text
+   RS=0x0000000000010000, old RA=0
+   SH=0, MB=31, ME=0
+   result RA=0x0001000000000000
+   ```
+
+   On a 64-bit processor, that register result is required in both execution modes. CR0 is **GT in 64-bit mode** and **EQ in 32-bit mode**, with SO copied in either case.
+
+   **The permitted files do not contain `update_cr0`’s definition.** The argument and ordering are appropriate, but its actual mode selection, comparison, and SO handling cannot be verified within this scope.
+
+8. **A one-character mutation can break the implementation while leaving this probe’s observations unchanged.**
+
+   Although the probe defines `want_rldimi`, `want_rlwimi`, `RLDIMI`, and `RLWIMI`, none is called by an executed test session. The tested instruction streams exercise `rldicl` and the `rldicr` control. The file explicitly explains the exclusion of these two instructions. Correcting an unused oracle does not create coverage. [Probe scope note:477](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/ppc_rldicl_probe.py:477)
+
+   These are concrete clause-(d) mutants:
+
+   | Mutant | Exact change | Guard retained, effect nulled | Probe detects it? |
+   |---|---|---|---|
+   | `M_RLDIMI_NOINSERT` | At source line 2550, change `(uint64_t)1` to `(uint64_t)0` | Both loops and their conditions remain; `tmp` stays zero, so RA remains unchanged | No |
+   | `M_RLWIMI_WRAP_NOOP` | Keep `if (mb > me)`; replace its body with `ra |= 0;` | Wrapping predicate remains; high-word replacement disappears | No |
+
+   The first is a **single-character edit**. Another single-character escape specifically targeting your endpoint repair is changing `64` to `63` in the stopping expression. For `SH=0, MB=0`, that mutant omits architectural bit 63.
+
+   Concrete discriminating observations would be:
+
+   - For `M_RLDIMI_NOINSERT`, use `RS=1, old RA=0, SH=0, MB=63`: correct RA is 1; mutant RA is 0.
+   - For `M_RLWIMI_WRAP_NOOP`, use the example in answer 7: correct RA is `0x0001000000000000`; mutant RA is zero.
+
+   **A low-word result row is vacuous under `M_RLWIMI_WRAP_NOOP`: this mutant never changes the low word.** A CR0 row in architectural 32-bit mode is likewise unable to observe that missing high-word write. Full-register readback or a discriminating CR0 observation in 64-bit mode is required.
+
+   The narrowing hunk needs its own mutant too: restore the complete original declaration, `MODE_uint_t tmp = reg(ic->arg[0]);`. With `RS=0x0000000100000000, old RA=0, SH=1, MB=0, ME=31`, the corrected result is zero; the wide-source mutant produces 2. The existing probe misses this as well.
+
+   There is a subtle mutation trap here: **changing only the temporary’s type back while retaining the initializer’s `(uint32_t)` cast does not break this function.** The source is still narrowed before rotation; subsequent consumers discard the temporary’s excess upper bits. Missing that semantically neutral mutant would not establish detector weakness.
+
+   Two additional concrete probe problems are visible:
+
+   - `row()` asserts row-name properties, but merely records `got == want`. The final code prints failures without exiting nonzero for failed value rows. **Successful script exit does not mean successful comparisons.** An external score-checking wrapper might compensate, but it is outside the permitted files. [Row handling:107](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/ppc_rldicl_probe.py:107), [Final scoring:594](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/ppc_rldicl_probe.py:594)
+   - The executable row set contains **24 rows**. It counts both `naive fix wrong` and `vacuous cell`, despite the “CARRIED-NOT-COUNTED” statement; the repeated “19 ROWS, NOT 24” comments are stale.
+
+   These escape conclusions come from inspecting the exercised paths. I did not build or run mutants.
+
+9. **Two commits under the scope rule you supplied.**
+
+   The instructions share a semantic class, but the repair designs differ: `rldimi` preserves the shift amount and constructs the correct inclusive circular mask; `rlwimi` narrows the rotation source and implements the duplicated high-word insertion.
+
+   There is also no shared functioning detector here—the permitted probe detects neither repair. The two expected-value helpers already exist, but they implement distinct instruction formulas. Even if their existence satisfies “no new oracle,” the **one fix design** requirement still fails.
+
+   Each commit should carry instruction-specific observations that kill its own effect-nullifying mutants, including a separate width-sensitive observation for `rlwimi`.

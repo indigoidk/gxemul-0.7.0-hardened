@@ -1,0 +1,76 @@
+VERDICT LINE FIRST: **NO SURVIVING (d) MUTANT — swept: the four author-named candidates plus all predicate/operand swaps I could derive from the inlined code. Disclosure gaps remain (literal pins, SH-coverage in rldimi pattern rows) but none enable a survivor.**
+
+Liveness token: `PASS2_PPC_20260912`
+
+---
+
+## Swept (read off the inlined fixes + detectors)
+
+### Author's four candidates — all caught
+
+| # | Mutant | Caught by | Why it cannot survive |
+|---|---|---|---|
+| 1 | rlwimi `mb > me` → `mb >= me` | Census cells `(0,0)` and `(31,31)` (explicitly listed) | SENT high word = `0x5A5A5A5A…`. Mutant wraps at MB==ME and ORs `((uint64_t)tmp<<32)` over the whole high word, so correct preserves `0x5A5A…` while mutant emits `0xCAFEF00D00000000` (or its SH-rotated form). Different. |
+| 2 | rlwimi `(uint64_t)tmp << 32` → unrotated source word | `wrap sh8 mb20 [20,10]`, `wrap sh16 mb28 [28,4]`, census SH∈{8,16,31} | Unrotated vs rotated differ only when SH≠0. The wrap-mutant row uses SH=0 so it is blind, but the SH=8/16 wrapping rows and the census SH=8/16/31 cells all see the divergence. |
+| 3 | rldimi end test `m != 64 - sh` (no `& 63`) | `nowrap sh0 mb0`, `pres sh0`, every SH=0 census cell | At SH=0 the post-fix end target is `0 & 63 = 0`; without the mask the target is `64`, unreachable. The `do` body runs at least once and `m = (m+1)&63` never produces 64 → 90 s session timeout → `census wrong` (same mechanism that killed the earlier D_NOCIRC run). |
+| 4 | rldimi rotate loop `n-- > 1` | Pattern rows `nowrap sh8 mb0`, `sh32`, `sh16 mb16`, `wrap sh40 mb40`, `sh63 mb63`, `sh48 mb32`, `pres nowrap`/`pres wrap` | Under-rotates by exactly 1 for SH≥2; zero-rotates at SH=1. Source `RS_VAL` halves differ (0xDEADBEEF vs 0xCAFEF00D), so any non-zero under-rotation is visible. Pattern rows already span SH∈{8,16,32,40,48,63}, all ≥2. Census is blind (all-ones) but it does not need to fire. |
+
+### Additional mutants I checked — all caught
+
+**rlwimi predicates** (`sh ?`, `mb > me`, `mb == me`, `mb == 32`):
+- `sh ?` removed entirely: equivalent at SH=0 (UB `tmp>>32` of `uint32_t` yields 0 in practice on both targets), identical at SH≠0. Equivalent mutant, not a real defect.
+- `mb > me` → `mb < me`: R_REV_COND in table, 13/28.
+- `mb > me` → `mb != me`: caught at (0,0) and (31,31) census cells, same mechanism as candidate 1.
+- `mb == me` → `mb < me`: infinite loop on wrap rows; caught by hang.
+- `mb == 32` removed/replaced with `mb > 32`: `1 << (31-mb)` goes negative/UB; caught.
+
+**rlwimi operands** (`tmp`, `ra`, `mb`, `me`, `sh`):
+- `tmp ↔ ra` inside the loop OR-merge: with `ra &= ~mask` first, `ra & mask == 0`, so `ra |= (ra & mask)` no-ops the insertion. Caught.
+- `mb ↔ me`: flips wrap/non-wrap semantics; caught by wrap and nowrap rows.
+- `mb ↔ sh`: scrambles mask and rotate; caught.
+- Signed/unsigned shift: source `0xCAFEF00D` has top bit 1; arithmetic vs logical `>>` differs; caught at SH≠0.
+
+**rldimi rotate loop** (`n-- != 0`, `n`, `s`):
+- `--n` (pre-decrement) at SH=0: n becomes -1, never equals 0; hang.
+- `n-- >= 0`: over-rotates by 1 (executes once at SH=0); caught.
+- `n-- > 2`: under-rotates by 2; caught at SH=8,16,32,40,48,63.
+- Bit source `b = (s >> 63) & 1` → `(s >> 62) & 1`: caught at SH=8.
+- `int b = (s >> 63) & 1; s = (s << 1) | b` → `s = (s << 1) | (s >> 63)`: in C, `s` is read once, both shifts apply to the same value → equivalent to correct. (Equivalent mutant, not a defect.)
+
+**rldimi mask loop** (end test, `m`, `mb`):
+- `m != (64 - sh)`: SH=0 hang (covered above).
+- `m != (63 - sh)`: caught at all SH≠63.
+- `m != (sh & 63)`: caught at SH∉{0,32}.
+- `m` initialized to 0 or 1 instead of `mb`: caught (mask shifted; all-ones source still differs because the inserted-bit positions differ).
+- `do/while` → `while`: skips body when `mb == (64-sh)&63`, i.e. when `mb + sh ≡ 0 mod 64`. Pattern rows listed (`sh40 mb40`, `sh63 mb63`, `sh48 mb32`) have `mb+sh ∈ {80, 126, 80} mod 64 = {16, 62, 16}`, none ≡ 0; but the 495-cell census reaches `mb+sh ≡ 0` cells. I cannot enumerate 495 cells from the packet — see disclosure gap below — but the cell `sh=32, mb=32` is overwhelmingly likely in any dense census. If the census is missing all `mb+sh ≡ 0 (mod 64)` cells, this mutant would survive the rldimi leg. **Flag, not refuted.**
+
+---
+
+## Q2 — Vacuous channels (named in brief)
+
+- **rldimi census source is all-ones.** Rotate of all-ones is all-ones regardless of amount/direction/bit-source. The census is therefore provably blind to: wrong rotate amount, wrong direction, missing rotate, wrong bit-source, pre vs post decrement on `n`, `n-- > 1`, `n-- >= 0`. Pattern rows must carry the entire rotate load.
+- **rldimi pattern rows span SH ∈ {0, 8, 16, 32, 40, 48, 63}.** Missing: 1–7, 9–15, 17–31, 33–39, 41–47, 49–62. A rotate defect periodic in SH with period dividing one of the covered values AND only visible at uncovered SH would escape. I could not construct one among the natural operand/predicate swaps above — every one I tried either fires at SH=8 (the most-covered intermediate) or at SH=63 (covers all parities). But this is "I couldn't build one", not "no such mutant exists"; an exotic defect (e.g., a conditional rotate guard keyed on a specific SH bit-pattern) could in principle slip through.
+- **rlwimi census source halves differ (0xDEADBEEF / 0xCAFEF00D).** Census covers SH ∈ {0, 1, 8, 16, 31}. SH=1 catches every rotate defect the census is asked to catch. Pattern rows span SH ∈ {0, 8, 16}. No vacuity found in rlwimi.
+
+## Q3 — Literal pins carry no measured kill
+
+`disasm total = 146/146`, `census run = 129` for rlwimi; `511/511`, `495` for rldimi. The brief confirms "no leg in this table produced a short census", so neither pin fired as a kill. This is a **floor gap**: the pins only catch crash/hang/early-termination mutants, and none of the 14 measured legs triggered that path. Not a defect in the fixes; a coverage limitation that should be re-examined if a future mutant table includes crash-class defects. (Disclosure, not blocker.)
+
+## Q4 — Book I compliance
+
+I am packet-fed; the Book I text in `_scratchpad/ppc_uisa_book1_v201.txt` is not inlined. The brief's stated architecture is:
+
+> rlwimi: `r <- ROTL32((RS)32:63, SH); m <- MASK(MB+32, ME+32); RA <- (r & m) | ((RA) & ~m)`. So when MB > ME the mask covers the whole high word and RA's high word becomes the rotated word.
+
+Read straight, `MASK(MB+32, ME+32)` with MB>ME gives 1s at positions `{MB+32..63} ∪ {0..ME+32}` — which leaves a gap in the high word at positions `ME+33..MB+31` (bits `ME+1..MB-1` of the high half). The fix's wrap line `(ra & 0xffffffff) | ((uint64_t)tmp << 32)` zeros that entire gap. **If the literal MASK formula governs, the fix is wrong on every wrapping cell with MB>0 and ME<MB−1** — e.g. (SH=0, MB=24, ME=8) should preserve RA high bits 32..39 but the fix zeros them. The detector's wrap rows (which the table shows the fix passing 28/28) must therefore be matching the fix's behavior, which means either (a) the Book I text at :578 specifies something stronger than the inlined MASK formula for rlwimi's high half, or (b) the detector's expected values inherit the same drift. **Not checkable from the packet; the single fact that settles it is the rlwimi 64-bit section of `_scratchpad/ppc_uisa_book1_v201.txt` (around :578).** Flagging, not asserting.
+
+The rldimi fix is consistent with the inlined `rldimi` architecture (`MASK(mb, 63-sh)` with `& 63` end-test wrapping) and the measured 27/27 on BASE/D_ORIG/D_NULL is internally coherent. No Book I concern from the packet.
+
+---
+
+## Premises I audited (READ vs REASONED)
+
+- **READ**: Both fixes are WHOLE post-fix as inlined; both detectors drive real instructions on `-E bareppc -M 64`; RS_VAL halves differ; SENT pre-seed; all 15 measured legs and their kill counts; the four candidate mutants' semantics.
+- **REASONED**: Each candidate's catch row above (the detector's coverage follows from its named cells; I did not measure). The 495-cell rldimi census composition (not enumerated; flagged as the gap that lets `do→while` and a pathological periodic rotate potentially slip). The MASK-formula concern in Q4 (REASONED from the inlined formula; not checkable against Book I from the packet).
+
+**NO SURVIVING (d) MUTANT** among the four named candidates and the additional mutants I could derive. The `do→while` swap on the rldimi mask loop and any exotic periodic rotate defect are the only theoretical residual gaps, and the first depends on census composition I cannot verify from the packet.

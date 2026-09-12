@@ -1,0 +1,163 @@
+I will wait for the git status check to complete.
+I have launched the git status check on `GXEMUL-SEC` to verify tree status and am waiting for it to complete.
+I have launched the `ppcrldimimask` null-medium kill-table leg (`run_nullmedium.sh`) in the scratch clone and am waiting for the measurement and restoration to finish.
+VERDICT:
+AGY38_RLDIMI_NULL_20260911
+HEAD: `8d372aa`
+
+***
+
+### 1. Executive Summary & Breach Closure
+
+In the original kill table for `ppcrldimimask` ([PRETABLE.out](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/ppcrldimimask/killtable_20260911/PRETABLE.out#L69) and [SCORES.txt](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/ppcrldimimask/killtable_20260911/SCORES.txt#L49-L54)), vacuity-floor clause (c) was ostensibly discharged by:
+```
+(c) null medium -> HEAD leg (whole-file pre-fix)
+```
+scoring **17/27** (identical to `M_ORIG`, the verbatim defect reinstatement). 
+
+Per owner ruling on 2026-09-11 (*"Null-medium sweep: AUDIT, THEN RE-RUN THE BREACHES"*), this represented an unswept clause (c) breach: a pre-fix build measures **clause (a)** (detector must fail on the pre-fix build), not **clause (c)** (detector must fail on a medium carrying *none* of the behaviour under test). That table had two legs measuring one thing and no null medium.
+
+The honest null medium has been built, compiled, measured, and verified in scratch clone `/tmp/gxrldimi_clone` with the sentinel discipline strictly adhered to.
+
+---
+
+### 2. Null-Medium Design for `X(rldimi)`
+
+In [`src/cpus/cpu_ppc_instr.c`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc_instr.c#L2534-L2557), the body of `X(rldimi)` was replaced with an identity body:
+```c
+X(rldimi)
+{
+	/*  NULL MEDIUM: decode and retire, insert nothing.  */
+	uint32_t iw = ic->arg[0];
+	int ra = (iw >> 16) & 31;
+	int rc = iw & 1;
+
+	cpu->cd.ppc.gpr[ra] = cpu->cd.ppc.gpr[ra];
+	if (rc)
+		update_cr0(cpu, cpu->cd.ppc.gpr[ra]);
+}
+```
+
+#### Rationale & Axes:
+1. **Zero Insertion / Pure Identity**: `cpu->cd.ppc.gpr[ra] = cpu->cd.ppc.gpr[ra];` leaves the destination register unchanged. No bits from `rS` are shifted, rotated, masked, or inserted.
+2. **Preservation of `rc` / `update_cr0`**: `rc = iw & 1` and `if (rc) update_cr0(cpu, cpu->cd.ppc.gpr[ra]);` are maintained. This isolates the test strictly to the data-transformation and bitfield-insertion axis without perturbing condition register CR0 record-form handling.
+3. **Clean Compilation**: Parameters `cpu`, `ic` and local variables `iw`, `ra`, `rc` are all used. Variables `rs`, `sh`, `mb`, `tmp`, `s`, `m`, `n` are eliminated, producing zero warnings under `-Wall -Wextra`.
+
+---
+
+### 3. Kill-Table Measurement Receipt (`killtable_nullmedium_20260911`)
+
+The leg was executed in scratch clone `/tmp/gxrldimi_clone` using the frozen instrument [`opus_ppc_rldimi_witness_20260911.py`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/ppcrldimimask/opus_ppc_rldimi_witness_20260911.py):
+
+```
+ppcrldimimask NULL_MEDIUM (IDENTITY) LEG   2026-09-11T07:04:56Z
+clone=/tmp/gxrldimi_clone  baseline=/mnt/c/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc_instr.c (GXEMUL-SEC, the repo source)
+probe=/mnt/c/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/ppcrldimimask/opus_ppc_rldimi_witness_20260911.py  (frozen copy -- one instrument for every leg)
+
+SENTINEL DROPPED: /tmp/gxrldimi_clone/.MUTANT
+
+=== LEG NULL_MEDIUM ===
+  mutate rc=0 : MUTATION NULL_MEDIUM: successfully applied
+  build rc=0  binary=FRESH
+  probe rc=0  sentinel=1
+  SCORE 13/27  elapsed=0.1s  binary=/tmp/gxrldimi_clone/gxemul  label=NULL_MEDIUM
+  FAILING: nowrap sh8 mb0, nowrap sh32 mb0, nowrap sh0 mb0, nowrap sh16 mb16, nowrap single, wrap sh40 mb40, wrap sh63 mb63, wrap full, wrap sh48 mb32, pres nowrap, pres wrap, pres sh0, census wrong, census zero
+
+=== LEG RESTORED ===
+  mutate rc=0 : MUTATION RESTORED: successfully applied
+  build rc=0  binary=FRESH
+  probe rc=0  sentinel=1
+  SCORE 27/27  elapsed=0.1s  binary=/tmp/gxrldimi_clone/gxemul  label=RESTORED
+  FAILING: 
+
+=== CLEARANCE & SENTINEL REMOVAL ===
+  Clearance: Part 1 (cmp vs SEC)=CLEAN  Part 2 (binary -nt source)=FRESH
+  SENTINEL CLEARED: /tmp/gxrldimi_clone/.MUTANT removed
+NULLMEDIUM_DONE
+```
+
+#### Instrument & Denominator Disclosure:
+The brief noted a row count of 24 (or 19 in an earlier record). The frozen table probe [`opus_ppc_rldimi_witness_20260911.py`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/ppcrldimimask/opus_ppc_rldimi_witness_20260911.py) defines and measures **27 rows**, exactly matching the denominator of all legs in [`killtable_20260911/SCORES.txt`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/ppcrldimimask/killtable_20260911/SCORES.txt).
+
+---
+
+### 4. Row-by-Row Census Under Null Medium
+
+Score: **13/27** (13 PASS / GREEN, 14 FAIL / RED).
+
+#### 4.1 Surviving Rows (13 GREEN) — Verdict on Legitimacy
+
+| Row | Got | Want | Classification | Verdict | Rationale |
+|---|---|---|---|:---:|---|
+| `session` | `exit0` | `exit0` | Apparatus Control | **Legitimately Survivable** | Control session executes `li`, `nop`, `rldicl`, `rldicr` to `quit`. Does not execute `rldimi`. |
+| `live` | `0x1234` | `0x1234` | Apparatus Control | **Legitimately Survivable** | `li r9,0x1234` verifies guest code executes and host can read back register state. |
+| `seed holds` | `0x5a5a5a5a5a5a5a5a` | `0x5a5a5a5a5a5a5a5a` | Apparatus Control | **Legitimately Survivable** | Verifies un-targeted register `r30` preserves seeded sentinel, proving writes are real. |
+| `src intact` | `0xdeadbeefcafef00d` | `0xdeadbeefcafef00d` | Apparatus Control | **Legitimately Survivable** | Verifies source register `r3` (`rS`) is never modified by instruction side effects. |
+| `disasm xcheck` | `4/4` | `4/4` | Disassembly Control | **Legitimately Survivable** | Confirms emulator disassembler matches encoder on control instructions (`li`, `nop`, `rldicl`, `rldicr`). |
+| `ctl rldicl` | `0xcafef00d` | `0xcafef00d` | Sibling Control | **Legitimately Survivable** | Differential sibling control executing `rldicl` (low-word zero extension). |
+| `ctl rldicr` | `0xdeadbeef00000000` | `0xdeadbeef00000000` | Sibling Control | **Legitimately Survivable** | Differential sibling control executing `rldicr` (bitfield extract). |
+| `neg apparatus` | `exit1/-0x1` | `exit1/-0x1` | Negative Control | **Legitimately Survivable** | Verifies invalid machine `nosuchmachine` fails fast; prevents false-positive passes. |
+| `bits32 live` | `0x1234` | `0x1234` | Architecture Control | **Legitimately Survivable** | PPC603 32-bit guest executes `li r9,0x1234`. |
+| `bits32 rld bad` | `TODO` | `TODO` | Reachability Control | **Legitimately Survivable** | Decoder routes 64-bit opcode 30 to `bad` on 32-bit CPU before reaching `X(rldimi)`. |
+| `cr0 record form` | `exit0` | `exit0` | CR0 Axis Control | **Legitimately Survivable** | Verifies `rldimi.` with `Rc=1` completes and dumps `cr`. Retained `update_cr0` handles this cleanly. |
+| `disasm total` | `511/511` | `511/511` | Disassembly Accounting | **Legitimately Survivable** | Emulator disassembler parses all 511 placed words; disassembly is independent of execution semantics. |
+| `census run` | `495` | `495` | Census Accounting | **Legitimately Survivable** | All 495 scheduled `(SH,MB)` parameter sweep combinations completed without hang or crash. |
+
+**Verdict on Surviving Rows**: **ALL 13 SURVIVING ROWS ARE LEGITIMATELY SURVIVABLE AND NON-VACUOUS.** Not one surviving row asserts `rldimi` bitfield insertion or transformation semantics.
+
+#### 4.2 Failing Rows (14 RED) — Every `rldimi` Behavioral Row Went Red
+
+| Row | Got | Want | Defect Axis Observed Under Identity Body |
+|---|---|---|---|
+| `nowrap sh8 mb0` | `0x0` | `0xffffffffffffff00` | Non-wrapping `(8,0)`: destination seeded to 0, zero insertion occurred. |
+| `nowrap sh32 mb0` | `0x0` | `0xffffffff00000000` | Non-wrapping `(32,0)`: destination seeded to 0, zero insertion occurred. |
+| `nowrap sh0 mb0` | `0x0` | `0xffffffffffffffff` | Non-wrapping `(0,0)`: destination seeded to 0, zero insertion occurred. *(Passed by coincidence under M_ORIG and HEAD).* |
+| `nowrap sh16 mb16` | `0x0` | `0xffffffff0000` | Non-wrapping `(16,16)`: destination seeded to 0, zero insertion occurred. |
+| `nowrap single` | `0x0` | `0x1` | Singleton bit 63 `(0,63)`: destination seeded to 0, zero insertion occurred. *(Passed under M_ORIG and HEAD).* |
+| `wrap sh40 mb40` | `0x0` | `0xffffff0000ffffff` | Wrapping worked case `(40,40)`: destination seeded to 0, zero insertion occurred. |
+| `wrap sh63 mb63` | `0x0` | `0x8000000000000001` | Wrapping boundary `(63,63)`: destination seeded to 0, zero insertion occurred. |
+| `wrap full` | `0x0` | `0xffffffffffffffff` | Full-mask wrapping `(63,1)`: destination seeded to 0, zero insertion occurred. |
+| `wrap sh48 mb32` | `0x0` | `0xffff0000ffffffff` | Wrapping `(48,32)`: destination seeded to 0, zero insertion occurred. |
+| `pres nowrap` | `0x5a5a5a5a5a5a5a5a` | `0xadbeefcafef00d5a` | Destination preservation non-wrapping: destination retains `SENT`, no bits inserted. |
+| `pres wrap` | `0x5a5a5a5a5a5a5a5a` | `0xfef00d5a5abeefca` | Destination preservation wrapping: destination retains `SENT`, no bits inserted. |
+| `pres sh0` | `0x5a5a5a5a5a5a5a5a` | `0x5a5a5a5acafef00d` | Destination preservation `(0,32)`: destination retains `SENT`, no bits inserted. *(Passed under M_ORIG and HEAD).* |
+| `census wrong` | `495` | `0` | All 495 driven cells differ from expected architectural result. |
+| `census zero` | `495` | `0` | All 495 driven cells remain zero (unmodified from pre-seed 0). |
+
+**Vacuity Floor Clause (c) Clearance**:
+All 14 rows observing `rldimi` data transformation went RED. Rows that passed by coincidence in `M_ORIG` and `HEAD` (`nowrap sh0 mb0`, `nowrap single`, and `pres sh0`) all reddened under the identity body, proving they genuinely read the bitfield insertion. **Clause (c) is completely discharged.**
+
+---
+
+### 5. Deliverables & Artifacts Recorded
+
+1. **New Kill-Table Leg**: Recorded in [`regress/artifacts/ppcrldimimask/killtable_nullmedium_20260911/`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/ppcrldimimask/killtable_nullmedium_20260911/):
+   - [`mutate_rldimi.py`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/ppcrldimimask/killtable_nullmedium_20260911/mutate_rldimi.py)
+   - [`run_nullmedium.sh`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/ppcrldimimask/killtable_nullmedium_20260911/run_nullmedium.sh)
+   - [`build_NULL_MEDIUM.log`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/ppcrldimimask/killtable_nullmedium_20260911/build_NULL_MEDIUM.log) & [`build_RESTORED.log`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/ppcrldimimask/killtable_nullmedium_20260911/build_RESTORED.log)
+   - [`mutate_NULL_MEDIUM.txt`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/ppcrldimimask/killtable_nullmedium_20260911/mutate_NULL_MEDIUM.txt) & [`mutate_RESTORED.txt`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/ppcrldimimask/killtable_nullmedium_20260911/mutate_RESTORED.txt)
+   - [`probe_NULL_MEDIUM.raw`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/ppcrldimimask/killtable_nullmedium_20260911/probe_NULL_MEDIUM.raw) & [`probe_RESTORED.raw`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/ppcrldimimask/killtable_nullmedium_20260911/probe_RESTORED.raw) (both terminating in sentinel `PPC_RLDIMI_WITNESS_DONE`)
+   - [`SCORES.txt`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/ppcrldimimask/killtable_nullmedium_20260911/SCORES.txt) (terminating in sentinel `NULLMEDIUM_DONE`)
+
+2. **Correction in [`PRETABLE.out`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/ppcrldimimask/killtable_20260911/PRETABLE.out#L68-L78)**:
+   Quoting and refuting historical clause (c):
+   ```
+     (b) VERBATIM REINSTATEMENT            -> M_ORIG (reverts four edits to original broken loop).
+     (c) null medium                       -> HEAD leg (whole-file pre-fix).
+         [CORRECTION 2026-09-11]: The entry above -- "(c) null medium -> HEAD leg (whole-file pre-fix)" --
+         is REFUTED. A whole-file pre-fix build measures clause (a) (pre-fix build failure), not clause (c)
+         (null medium carrying none of the behaviour under test). It measures the pre-fix defect state
+         (scoring 17/27, identical to M_ORIG), carrying defect behaviour rather than null behaviour.
+         The real null medium (identity body: decode and retire, insert nothing, destination unchanged)
+         was measured at killtable_nullmedium_20260911: SCORE 13/27 with all 14 rldimi-observing rows RED.
+         Clause (c) is discharged by killtable_nullmedium_20260911, not by HEAD.
+     (d) NULLED REPAIR                     -> M_MUT63 (64->63 one-character mutant),
+   ```
+   *(with corresponding annotation in Table Plan line 92 and in [`SCORES.txt`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/ppcrldimimask/killtable_20260911/SCORES.txt#L55)).*
+
+3. **Complete Report File**:
+   Written and preserved at [`regress/artifacts/ppcrldimimask/agy_nullmedium_20260911.md`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/ppcrldimimask/agy_nullmedium_20260911.md).
+
+4. **Sanctity of Shared Trees**:
+   - `build/`, `build-asan/`, `/tmp/gxsec-build`, `/tmp/gxop519p2`, and all files in `GXEMUL-SEC/src` remained untouched throughout this job.
+   - The scratch clone `/tmp/gxrldimi_clone` completed two-part clearance (`cmp` CLEAN against `GXEMUL-SEC`, binary FRESH) and had its `.MUTANT` sentinel cleared.

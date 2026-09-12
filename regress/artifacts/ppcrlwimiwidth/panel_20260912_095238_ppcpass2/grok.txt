@@ -1,0 +1,84 @@
+I'll start from the actual post-fix source, Book I, and both detectors so the (d) enumeration is derived rather than ratified from the brief.Checkpoint and HEAD match. Next I’ll read the two instruction bodies, both probes, and Book I’s mask/rotate RTL.Source matches the brief. Next I’ll read both probes and the uncommitted diff so row channels can be checked against the (d) enumeration.I’ll simulate the four unbuilt (d) candidates against the probes’ own oracles so the verdict isn’t just a reading.**NO SURVIVING (d) MUTANT — swept: rlwimi `{mb>me, mb>=me, mb<me, mb!=me, mb>me+1, mb>me&&sh, mb>me&&!sh, mb>me&&rc, mb>me&&mb!=31, mb>me&&me!=0, post-loop, drop-hi, uint32-cast-off, unrot-hi, ra-low-as-hi, drop-(uint64_t)-on-<<32, |= without clear}`; rldimi `{n--!=0, n-->1, n-->0 (equiv), consume-sh, n=mb, m++ / &31 / &127, end (64-sh)&63 vs 63-sh vs 64-sh vs m<64-sh, end uses n after rotate}`**
+
+PASS2_PPC_20260912
+
+I read `GXEMUL-SEC/src/cpus/cpu_ppc_instr.c` (`X(rldimi)`, `X(rlwimi)`), both probes, Book I v2.01 at the ROTL/MASK/RTL pages, the uncommitted diff, and `killtable2_20260912/PRETABLE.out`. I did not run a gate or rebuild gxemul. Kills for the four unbuilt candidates are from the C control flow plus the probes’ own `want_*` (full 64-bit compare). That is enough for those four; it is not a substitute for a scratch build if you want a measured score line.
+
+---
+
+## 1. Clause (d)
+
+### rlwimi — edited lines
+
+`uint32_t tmp = (uint32_t)reg(...)` and `if (mb > me) ra = (ra & 0xffffffffULL) | ((uint64_t)tmp << 32)`.
+
+Dominating predicates up to the function boundary: `mb > me` (the added guard); `sh ?` (produces `tmp`); the walk loop’s `mb == me` / `mb == 32` do **not** dominate the high-word line (it runs first — that is why `R_POST_LOOP` is a null of the repair). Body of the `if` reads `ra` and `tmp`.
+
+Floor cells that are actually owed: `{wrap, nowrap}` × `{sh=0, sh≠0}`. All four are rowed (`wrap mutant` / `pres wrap` / `wrap fullword`; `wrap sh8 mb20` / `wrap sh16 mb28` / `alias both`; `nowrap sh0`; `nowrap sh8 mb0` and siblings). The loop’s `mb == me` re-test makes `{mb==me}` enumeratable; that cell is in the census, not in any named pattern row.
+
+| mutant | green? | who kills it |
+|---|---|---|
+| `mb > me` → `mb >= me` | **no** | census `(SH,0,0)` and `(SH,31,31)` for `SH∈{0,1,8,16,31}` (10 cells), dest `SENT`. Single-bit `MB==ME` is non-wrapping; high word must stay `0x5A5A5A5A`. Mutant writes the rotated low word. None of those five rotations of `0xCAFEF00D` equals `0x5A5A5A5A`. **No named pattern row has `MB==ME`** — if you dropped those two pairs from `mb_me_nowrap`, this would go green. They are in the 129. |
+| `(uint64_t)tmp << 32` → unrotated low word | **no** | `wrap sh8 mb20`: `MUT_RS` low `0xF`, rotl8 = `0xF00` vs unrot `0xF`. Also `wrap sh16 mb28`, `alias both`, census wrap with `SH≠0`. All `SH=0` wrap rows are blind to this (identity rotate). |
+| drop the `if` / move it after the loop / revert the cast | **no** | table 2: `R_ONLY_CAST` 19, `R_POST_LOOP` 19, `R_ONLY_HIGH` 19, `R_ORIG` 14 |
+| `mb < me` | **no** | `R_REV_COND` 13, `CONTROL=FAIL` (`nowrap sh0` gets a spurious high write) |
+| `mb != me` | **no** | nowrap into dest 0: high word becomes `tmp` instead of 0 |
+| `mb > me + 1` | **no** | `wrap fullword` `(1,0)` and census `(31,30)`, `(1,0)` |
+| `mb > me && sh` / `&& !sh` | **no** | `wrap mutant` (SH=0) vs `wrap sh8 mb20` |
+| `mb > me && rc` | **no** | wrap rows are `Rc=0` |
+| `mb > me && mb != 31` / `&& me != 0` | **no** | `wrap mutant` is exactly `(31,0)` |
+| operand `tmp` → `ra`’s low half | **no** | dest is `SENT` (both halves `5A5A5A5A`), so this is a no-op on the high word; want high is `0x0000000F` |
+| drop `(uint64_t)` on `<< 32` | **no** | uint32 shift-by-32 is UB; on x86 it is `<<0`, so high word is cleared rather than replaced. `wrap mutant` still reds |
+| `ra \| (tmp<<32)` without the low mask | **no** | `0x5A5A5A5A \| 0xF` ≠ `0xF` |
+
+`if (X) → if (X && cpu->cd.ppc.bits==64)` is equivalent on this instrument: `bits` is `cpu_type.bits` (PPC970=64, PPC603=32), and on MODE32 the high-word write is already truncated. Not a defect.
+
+### rldimi — edited lines
+
+`n = sh`; `while (n-- != 0)`; `m = (m+1)&63`; `m != ((64-sh)&63)`.
+
+| mutant | green? | who kills it |
+|---|---|---|
+| `n-- > 1` | **no** | `pres nowrap` (SH=8, `RS_VAL`, mask 0..55): rotate 7 vs 8. `pres wrap` (SH=40) the same. Census and s1/s2 **cannot** — they use all-ones. |
+| `n-- > 0` | green, **equivalent** on `n∈[0,63]` | not a defect |
+| `m != 64-sh` without `&63` (circular `m`) | **no** | at `SH=0`, `m∈[0,63]` never equals 64 → infinite loop. Session 1 contains `nowrap sh0 mb0` / `nowrap single` (timeout 90s). Not a green detector. |
+| `(63-sh)&63` / `m++` / consume `sh` / `m < 64-sh` / no merge | **no** | table 2: 14, 20 `CONTROL=FAIL`, 16, 21, 24 |
+| `n = mb` | **no** | `pres nowrap` (8 vs 0) and `pres sh0` (0 vs 32). `pres wrap` is blind (`SH==MB==40`). |
+| increment `&31` / `&127` | **no** | long/wrap masks hang or take the `1<<(-1)` path the header already names |
+| end test uses `n` after rotate (`n==-1`) | **no** | end becomes 1 for every encoding; `nowrap sh8 mb0` is a 1-bit mask |
+
+### Closest green edit (not (d))
+
+`int n = sh & ~1` (or any mask that leaves `{0,8,40}` alone). Patterned rotate is only those three SH values; census is all-ones. The rotate body tests `n != 0`, not `sh & 1`. That is clause (e) (`idata == k` / untested bit), which the rldimi header already discloses as “census does not test rotate independently — the pattern rows do.” It is not a DEPENDS-ON predicate weaken and not a body-field swap.
+
+---
+
+## 2. Channel vacuity
+
+No target row is vacuous under the mutant it is named for.
+
+- **rldimi census / s1 / s2, source `~0`:** blind to **every** rotate-amount and rotate-direction defect (`ROTL64(~0, k) = ~0`). Preserve is also blind (dest 0). They still move under mask-bound mutants (`D_MUT63`, `D_NOWRAP`, `D_NOCIRC`). Rotate is carried only by `pres nowrap` (SH=8) and `pres wrap` (SH=40); `pres sh0` pins “no rotate at SH=0,” not a nonzero rotate.
+- **`nowrap sh0` / `nowrap sh0 mb0`:** agree with HEAD by construction (SH=0 skips the rlwimi rotate; rldimi SH=0 mask is 0..63 either way). They are target-instruction **controls**, and they do kill `R_NULL` / `D_NULL` / `R_REV_COND`.
+- **`wrap mutant` (SH=0):** cannot see width contamination. It is named for the high half; `R_ONLY_CAST` moves it.
+- **`cr0 record form`:** presence of `cr=` only, both probes. Disclosed on the rldimi side.
+- **`bits32 rlwimi`:** low 32 only; high-half repair is invisible on PPC603. Reachability, not a product kill.
+
+---
+
+## 3. `disasm total` / `census run` literals — disclosure, not a floor gap
+
+No table-2 product leg dropped cells without also failing `census wrong` (or CONTROL). PRETABLE predicted `D_NOCIRC` would red the literal via abort-at-182; this run finished 495 and still died on `census wrong` (20/27). So this table did **not** produce the measured kill those pins were rewritten for.
+
+They are instrument-identity pins against the table-1 failure (want derived from `len(uniq_census)` / `disasm_checked`, so a shrunk list scored green). Floor (a)(b)(d) is about product mutants of the two handlers. A product infinite loop still fails a 90s session on a pattern row; it does not need these literals to be (d)-complete.
+
+---
+
+## 4. Book I (the fixes, not the detectors)
+
+Neither handler is wrong against Book I v2.01 for an unreached `(SH,MB,ME)`.
+
+- **MASK** at :578 wraps iff `x > y`. **ROTL32** at :501/:4008 is `x\|\|x` then rotate. **rlwimi** RTL :4316–4319 is `RA <- r&m | (RA)&~m` with `m = MASK(MB+32, ME+32)`. For every `MB>ME`, `ME+32 ≥ 32`, so bits 0:31 are entirely in the mask — replacing the whole high word with the rotated low word is exact, not an approximation. `MB==ME` is a single low-word bit; `>` is the right test (`>=` is not). The 32-bit walk was already the low-word insert; it was not this round’s defect.
+- **rldimi** RTL `MASK(b, ~n)` is `MASK(mb, 63-SH)`. The loop is do-while over `[mb, successor(63-SH))` mod 64. `(64-sh)&63` is that successor, including `SH=0 → 0` (full word from `mb` through 63). Saving `sh` in `n` is required; `while (sh-- != 0)` really does leave `sh == -1` for every SH.
+- Census is 129 / 32768 and 495 / 4096. Both algorithms are uniform in the instruction fields; there is no per-cell branch that could be right on the sampled set and wrong off it. 64-bit CPU in 32-bit mode remains the filed hole (`ppccr0modewidth`).
+
+S1.2 :342 (“instructions that set a 64-bit register affect all 64 bits … independent of mode”) is what the new rlwimi comment cites; I checked it. That comment is not claiming MODE32 register width is architectural, and it says so.

@@ -87,14 +87,71 @@ set -u
 cd "$(dirname "$0")"
 . ./lib.sh
 
-gate_begin "gate 13: PowerPC FP conversion + FPSCR (#304/#305/#324-#330)"
+gate_begin "gate 13: PowerPC FP conversion + FPSCR (#304/#305/#324-#330) + rlwimi/rldimi"
 
 PMAX=${PMAX:-$ROOT/build/gxemul}
 LOG=$LOGDIR/gate_ppc.log
 
 need_exec "$PMAX"
-need_file "$IMAGES/netbsd401-macppc-GENERIC"
 command -v python3 >/dev/null || gate_skip "python3 not available"
+
+# ---- ppcrlwimiwidth: X(rlwimi) at 32-bit width + the wrapping mask's high half --------
+# BEFORE the NetBSD prerequisite ON PURPOSE.  These rows are register-to-register on
+# `-E bareppc -M 64` and need no image; behind need_file a missing image would turn a
+# red detector into a silent SKIP.  Placed here, a red row is recorded first, and #371's
+# gate_skip then reports FAIL rather than absorbing it.  PARSE BEFORE SCORE: gates grep
+# the result line, never the exit status, and a missing or DUPLICATED protocol line is a
+# FAIL.  Both halves of the score are pinned to a literal so a shrunk table cannot pass.
+RLWLOG=$LOGDIR/ppc_rlwimi.log
+python3 ppc_rlwimi_probe.py "$PMAX" gate > "$RLWLOG" 2>&1 || true
+#  Each KEY must occur exactly once in ANY form, and that one line must be well formed --
+#  counting only well-formed lines let a malformed EXTRA `RESULT=' through (codex review).
+rlwres=$(grep -c '^PPC_RLWIMI_RESULT=' "$RLWLOG")
+rlwresok=$(grep -cE '^PPC_RLWIMI_RESULT=[0-9]+/[0-9]+$' "$RLWLOG")
+rlwctl=$(grep -c '^PPC_RLWIMI_CONTROL=' "$RLWLOG")
+rlwctlok=$(grep -cE '^PPC_RLWIMI_CONTROL=(OK|FAIL)$' "$RLWLOG")
+rlwdone=$(grep -c '^PPC_RLWIMI_PROBE_DONE' "$RLWLOG")
+if [ "$rlwres" = 1 ] && [ "$rlwresok" = 1 ] && [ "$rlwctl" = 1 ] && [ "$rlwctlok" = 1 ] &&
+   [ "$rlwdone" = 1 ] && grep -qx 'PPC_RLWIMI_PROBE_DONE' "$RLWLOG"; then
+    check "rlwimi protocol parsed" "yes" "yes"
+    grep -E " ok$| FAIL$" "$RLWLOG" | sed 's/^/       /'
+    rlw=$(grep '^PPC_RLWIMI_RESULT=' "$RLWLOG" | cut -d= -f2)
+    check "rlwimi controls prove the probe measures" \
+          "$(grep '^PPC_RLWIMI_CONTROL=' "$RLWLOG" | cut -d= -f2)" "OK"
+    check "rlwimi rows run"     "${rlw#*/}" 28
+    check "rlwimi rows correct" "${rlw%/*}" 28
+else
+    note "rlwimi: protocol lines missing or duplicated (result=$rlwres control=$rlwctl done=$rlwdone)"
+    tail -5 "$RLWLOG" | sed 's/^/       /'
+    check "rlwimi protocol parsed" "no" "yes"
+fi
+
+# ---- ppcrldimimask: X(rldimi) mask bounds + wrap (same shape, same reasons) ------------
+RLDLOG=$LOGDIR/ppc_rldimi.log
+python3 ppc_rldimi_probe.py "$PMAX" gate > "$RLDLOG" 2>&1 || true
+#  Each KEY must occur exactly once in ANY form, and that one line must be well formed --
+#  counting only well-formed lines let a malformed EXTRA `RESULT=' through (codex review).
+rldres=$(grep -c '^PPC_RLDIMI_RESULT=' "$RLDLOG")
+rldresok=$(grep -cE '^PPC_RLDIMI_RESULT=[0-9]+/[0-9]+$' "$RLDLOG")
+rldctl=$(grep -c '^PPC_RLDIMI_CONTROL=' "$RLDLOG")
+rldctlok=$(grep -cE '^PPC_RLDIMI_CONTROL=(OK|FAIL)$' "$RLDLOG")
+rlddone=$(grep -c '^PPC_RLDIMI_PROBE_DONE' "$RLDLOG")
+if [ "$rldres" = 1 ] && [ "$rldresok" = 1 ] && [ "$rldctl" = 1 ] && [ "$rldctlok" = 1 ] &&
+   [ "$rlddone" = 1 ] && grep -qx 'PPC_RLDIMI_PROBE_DONE' "$RLDLOG"; then
+    check "rldimi protocol parsed" "yes" "yes"
+    grep -E " ok$| FAIL$" "$RLDLOG" | sed 's/^/       /'
+    rld=$(grep '^PPC_RLDIMI_RESULT=' "$RLDLOG" | cut -d= -f2)
+    check "rldimi controls prove the probe measures" \
+          "$(grep '^PPC_RLDIMI_CONTROL=' "$RLDLOG" | cut -d= -f2)" "OK"
+    check "rldimi rows run"     "${rld#*/}" 29
+    check "rldimi rows correct" "${rld%/*}" 29
+else
+    note "rldimi: protocol lines missing or duplicated (result=$rldres control=$rldctl done=$rlddone)"
+    tail -5 "$RLDLOG" | sed 's/^/       /'
+    check "rldimi protocol parsed" "no" "yes"
+fi
+
+need_file "$IMAGES/netbsd401-macppc-GENERIC"
 
 note "binary : $PMAX"
 note "machine: macppc/G4, NetBSD kernel loaded so the machine constructs; never executed"

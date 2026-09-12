@@ -1,0 +1,85 @@
+VERDICT: CHANGES REQUIRED — skip handling is correct; CONTROL coverage, protocol validation, and archive classification need correction.
+CODEX_PPCGATE_20260912
+
+I read only the seven listed files and wrote nothing. The two `witness_committed.out` logs were outside that allowlist, so committed-build results below are explicitly predictions from the documented defect code.
+
+**1. Your `lib.sh` reading is right.**
+
+[`check()`](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/lib.sh:80) increments `_fails` in the gate’s shell. Nothing between the new sections and `need_file` resets it. [`gate_skip()`](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/lib.sh:137) consults that counter and exits 1 when it is nonzero.
+
+Assuming valid protocol, available binary/Python, and otherwise green rows, let `G` denote the gate name:
+
+| Case | PREDICTION: printed behavior | Exit |
+|---|---|---:|
+| Image present; red rlwimi row | Displays the red row; fails `rlwimi rows correct`; runs rldimi and the FP section; finishes with `G: FAIL (f of n checks)` | 1 |
+| Image absent; red rlwimi row | Displays/records the failure, runs rldimi, then prints `G: FAIL (f of 8 checks failed before this section could not run: missing required input: PATH)` | 1 |
+| Image absent; both probes green | Prints the green probe checks, then `G: SKIP -- missing required input: PATH` | 77 |
+
+For one failed non-control row, `f=1`; a failed control row also fails the CONTROL check, giving `f=2`. If the image exists but the FP probe subsequently produces no result, its `gate_skip` also preserves the earlier failure.
+
+The proposed `gate_end; exit 1` blocks would change when execution stops. They are unnecessary for preserving this failure.
+
+**2. No selected control is predicted red on the documented committed behavior, but genuine controls are missing.**
+
+My in-memory models of the defect excerpts produce:
+
+| Probe | Committed-build prediction | Missing target-instruction controls |
+|---|---|---|
+| rlwimi | **PREDICTION: 14/28, CONTROL=OK** | `nowrap sh0` |
+| rldimi | **PREDICTION: 17/27, CONTROL=OK** | `nowrap sh0 mb0`, `nowrap single`, `pres sh0` |
+
+These omitted rows exercise cases that already work before the repair. They prove the target instruction changes registers correctly; `live` proves that `li` executes. See the [rlwimi case](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/ppc_rlwimi_probe.py:316) and [rldimi cases](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/ppc_rldimi_probe.py:307).
+
+The consequence is concrete: a synthetic model that makes 64-bit `rldimi` a no-op still satisfies every current rldimi CONTROL member. **PREDICTION: 13/27, CONTROL=OK.** The gate nevertheless fails its total-score check. Thus this weakens the claim “controls prove the probe measures”; it does **not** presently create a green gate.
+
+Both lists also omit `census zero`, another predicted baseline-green row. That is a useful invariant, but counting zero zero-valued results does not independently prove execution.
+
+Keeping `cr0 record form` preserves comparability. Its meaning remains only **CR readback presence**: the predicate checks `"cr" in cr_regs`, not CR0’s value or even `cr_how`. The rldimi disclosure accurately states this limitation. [Predicate](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/ppc_rldimi_probe.py:367)
+
+**3. The row display works; the protocol validator is looser than claimed.**
+
+Both unchanged `row()` formatters put the status last, with no trailing padding. Every current row matches ` ok$| FAIL$`; long notes merely expand the preceding column.
+
+At [gate lines 107–115](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gate_ppc.sh:107), however:
+
+- `[0-9]*` accepts empty numbers: `RESULT=/`, `RESULT=28/`, and `RESULT=/28` pass the shape test. Subsequent literal score checks reject them.
+- `[A-Z]*` accepts an empty CONTROL value and arbitrary uppercase words. The subsequent `OK` comparison rejects them.
+- Exact duplicate valid protocol lines correctly fail.
+- Counting only valid lines does **not** establish that each protocol key occurs once.
+
+For example, this synthetic log passes the rlwimi section:
+
+```text
+PPC_RLWIMI_RESULT=28/28
+PPC_RLWIMI_CONTROL=OK
+PPC_RLWIMI_PROBE_DONE
+PPC_RLWIMI_RESULT=
+```
+
+The malformed extra RESULT does not increase `rlwres`. The later, broader extraction produces an empty final value whose newline shell command substitution removes.
+
+Require exactly one record for each protocol key, then validate and extract that same record. With `grep -E`, require `[0-9]+/[0-9]+` and `CONTROL=(OK|FAIL)`.
+
+**4. Instruction measurements transfer; the strengthened completeness checks and new protocol still need fresh evidence.**
+
+AST comparison found every function unchanged between each witness and its promotion. Instruction words, seeds, session logic, parsing, arithmetic expectations, and row names are unchanged. Only two `row()` calls changed: `disasm total` and `census run`. Independent enumeration confirms 129 and 495 distinct census cells.
+
+Those changed wants matter:
+
+- `census run` now detects edits that shrink its defining list.
+- `disasm total` now demands the complete fixed count, whereas the witness accepted its dynamically accumulated denominator. An incomplete run can therefore acquire another failed row.
+
+The rldimi comment specifically identifies `M_NOCIRC` as aborting its census after 182 cells. Its promoted score must be remeasured; do not assume an exact score delta without its original row results. [Changed checks and comment](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/ppc_rldimi_probe.py:420)
+
+Freeze the final promoted probes and rerun:
+
+- For **each probe**: `BASE`/fixed, committed/pre-fix, the null-medium leg, and every recorded mutant in its `killtable_20260911/` and `killtable_nullmedium_20260911/` suites—explicitly including rldimi **`M_NOCIRC`**.
+- Gate integration: all-green/image-present; all-green/image-absent; rlwimi-red and rldimi-red with each image state.
+- Protocol negatives: missing, duplicated, malformed and empty records; failed CONTROL; reduced row/census counts.
+- The landed wiring checker and its `--selftest`.
+
+The allowed files expose no other literal mutant names, so I cannot responsibly enumerate them. Also account for the newly nonzero probe exit status on failed rows when reusing historical drivers.
+
+One additional correction: the two archived scripts are misclassified as `CLASS_WITNESS` in the [manifest](/C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/check_probe_wiring.ppcround.py:471). They assert repaired behavior, contrary to that file’s [explicit witness definition](/C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/check_probe_wiring.ppcround.py:54). **`CLASS_RESEARCH` fits these preserved measurement artifacts** and already exists for that purpose.
+
+Validation here was source comparison and in-memory modeling; no emulator or gate results were measured.

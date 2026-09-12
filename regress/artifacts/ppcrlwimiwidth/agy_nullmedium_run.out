@@ -1,0 +1,150 @@
+I have launched the null-medium kill-table run (`run_nullmedium.sh`) in the scratch clone `/tmp/gxrlwimi_clone` and am waiting for the execution to complete.
+Checking git status in GXEMUL-SEC to verify that no source files were touched.
+VERDICT:
+AGY38_NULLMED_20260911
+HEAD: `8d372aa`
+
+# ppcrlwimiwidth Honest Null-Medium Leg & Vacuity-Floor Clause (c) Report
+
+The vacuity-floor clause (c) breach identified in `regress/artifacts/ppcrlwimiwidth/killtable_20260911/mutate_rlwimi.py:179` has been repaired in-round. The previous `NULL_MEDIUM` leg recompiled `FIXED_BLOCK` byte-identical to `BASE` and `RESTORED`, falsely reporting 28/28 because it was an unmutated duplicate of the base leg under a misleading label.
+
+The real null medium—an honest identity body in `X(rlwimi)` that decodes and retires the instruction with zero insertion into the destination register—was built and measured in scratch clone `/tmp/gxrlwimi_clone`. Zero files in `build/`, `build-asan/`, `/tmp/gxsec-build`, or `GXEMUL-SEC/src/` were touched.
+
+---
+
+## 1. Identity Body Implementation
+
+In [mutate_rlwimi.py](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/ppcrlwimiwidth/killtable_nullmedium_20260911/mutate_rlwimi.py), the body of `X(rlwimi)` in `src/cpus/cpu_ppc_instr.c` was replaced with:
+
+```c
+X(rlwimi)
+{
+	/*  NULL MEDIUM: decode and retire, insert nothing.  */
+	MODE_uint_t ra = reg(ic->arg[1]);
+	uint32_t iword = ic->arg[2];
+	int rc = iword & 1;
+
+	reg(ic->arg[1]) = ra;
+	if (rc)
+		update_cr0(cpu, ra);
+}
+```
+
+### Engineering Rationale:
+1. **Zero Insertion / Pure Identity**: `ra` is loaded from `reg(ic->arg[1])` and written back unmodified via `reg(ic->arg[1]) = ra;`. No bits from `rS` (`ic->arg[0]`) are rotated, masked, or inserted.
+2. **Preservation of `rc` / `update_cr0` Axis**: `rc = iword & 1` and `if (rc) update_cr0(cpu, ra);` are kept so the Condition Register CR0 recording axis remains active, isolating the measurement strictly to the data-insertion axis.
+3. **Clean Warning-Free Build**: `ra`, `iword`, `rc`, `cpu`, and `ic` are all used, producing zero compiler warnings under `-Wall -Werror`.
+
+---
+
+## 2. Kill-Table Measurement Receipt
+
+Executed in scratch clone `/tmp/gxrlwimi_clone` with clone-local `.MUTANT` sentinel dropped before mutation, rebuilt, and measured using frozen probe [agy_ppc_rlwimi_witness_20260911.py](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/ppcrlwimiwidth/agy_ppc_rlwimi_witness_20260911.py):
+
+From [SCORES.txt](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/ppcrlwimiwidth/killtable_nullmedium_20260911/SCORES.txt):
+```
+ppcrlwimiwidth NULL_MEDIUM (IDENTITY) LEG   2026-09-11T06:28:11Z
+clone=/tmp/gxrlwimi_clone  baseline=/mnt/c/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc_instr.c (GXEMUL-SEC, the repo source)
+probe=/mnt/c/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/ppcrlwimiwidth/agy_ppc_rlwimi_witness_20260911.py  (frozen copy -- one instrument for every leg)
+
+SENTINEL DROPPED: /tmp/gxrlwimi_clone/.MUTANT
+
+=== LEG NULL_MEDIUM ===
+  mutate rc=0 : MUTATION NULL_MEDIUM: successfully applied
+  build rc=0  binary=FRESH
+  probe rc=0  sentinel=1
+  SCORE 12/28  elapsed=0.1s  binary=/tmp/gxrlwimi_clone/gxemul  label=NULL_MEDIUM
+  FAILING: bits32 rlwimi, nowrap sh0, nowrap sh8 mb0, nowrap sh16 mb8, nowrap sh4 mb16, wrap mutant, wrap sh0 mb24, wrap sh8 mb20, wrap sh16 mb28, pres nowrap, pres wrap, wrap fullword, alias nowrap, alias wrap, alias both, census wrong
+
+=== LEG RESTORED ===
+  mutate rc=0 : MUTATION RESTORED: successfully applied
+  build rc=0  binary=FRESH
+  probe rc=0  sentinel=1
+  SCORE 28/28  elapsed=0.0s  binary=/tmp/gxrlwimi_clone/gxemul  label=RESTORED
+  FAILING: 
+
+=== CLEARANCE & SENTINEL REMOVAL ===
+  Clearance: Part 1 (cmp vs SEC)=CLEAN  Part 2 (binary -nt source)=FRESH
+  SENTINEL CLEARED: /tmp/gxrlwimi_clone/.MUTANT removed
+NULLMEDIUM_DONE
+```
+
+---
+
+## 3. Census of Surviving (Green) and Failing (Red) Rows
+
+Score: **12/28** (12 PASS, 16 FAIL).
+
+### 3.1 Surviving Rows (12/12 GREEN) -- All Legitimately Survivable
+
+Every surviving row was evaluated for vacuity: **0 rows are vacuous by construction.**
+
+| Row | Got | Want | Classification | Legitimacy Verdict |
+|---|---|---|---|---|
+| `session` | `exit0` | `exit0` | Harness Control | **Legitimate**: Asserts control session runs `li`, `nop`, `rlwinm` and terminates at `quit`. Does not execute `rlwimi`. |
+| `live` | `0x1234` | `0x1234` | Harness Control | **Legitimate**: Asserts guest execution and register readback on `li r9,0x1234`. Does not execute `rlwimi`. |
+| `seed holds` | `0x5a5a5a5a5a5a5a5a` | `0x5a5a5a5a5a5a5a5a` | Harness Control | **Legitimate**: Asserts un-targeted register `r30` preserves pre-seeded sentinel value. |
+| `src intact` | `0xdeadbeefcafef00d` | `0xdeadbeefcafef00d` | Harness Control | **Legitimate**: Asserts source register `r3` (`rS`) is never corrupted as an execution side effect. |
+| `disasm xcheck` | `3/3` | `3/3` | Disassembly Control | **Legitimate**: Asserts internal disassembler agrees with encoder on control instructions (`li`, `nop`, `rlwinm`). |
+| `ctl rlwinm` | `0xcafef00d` | `0xcafef00d` | Sibling Control | **Legitimate**: Negative differential control observing sibling instruction `rlwinm` (extract low word), proving `rlwinm` remains unaffected. |
+| `neg apparatus` | `exit1/-0x1` | `exit1/-0x1` | Apparatus Control | **Legitimate**: Negative apparatus control verifying invalid machine `nosuchmachine` fails fast. |
+| `bits32 live` | `0x1234` | `0x1234` | Architecture Control | **Legitimate**: Asserts 32-bit CPU model (`PPC603`) harness liveness (`li r9,0x1234`). |
+| `cr0 record form` | `exit0` | `exit0` | CR0 Axis Control | **Legitimate**: Asserts `rlwimi.` (`Rc=1`) decodes and retires cleanly without crash, dumping CR. Retained `update_cr0` handles this legitimately. |
+| `disasm total` | `146/146` | `146/146` | Disassembly Bookkeeping | **Legitimate**: Asserts all 146 instruction words placed across sessions are recognized and disassembled as `rlwimi`. Disassembly is static instruction word decoding, independent of execution semantics. |
+| `census run` | `129` | `129` | Census Bookkeeping | **Legitimate**: Asserts all 129 scheduled `(SH,MB,ME)` combinations ran without session abort or crash. |
+| `census zero` | `0` | `0` | Anomaly Detection | **Legitimate**: Detects illegal destination zeroing bugs. Because destinations were pre-seeded with non-zero sentinel `SENT` (`0x5A5A5A5A5A5A5A5A`) and retained it, 0 cells evaluated to zero. |
+
+### 3.2 Failing Rows (16/16 RED) -- Every Row Observing `rlwimi` Goes Red
+
+Every row observing `rlwimi` data manipulation turns **RED**:
+
+1. `bits32 rlwimi`: **FAIL** (`0x5a5a5a5a` vs want `0xfef00dca`) — 32-bit destination retained `SENT`, zero insertion occurred.
+2. `nowrap sh0`: **FAIL** (`0x0` vs want `0xcafef00d`) — Non-wrapping SH=0: destination retained `0`, zero insertion occurred.
+3. `nowrap sh8 mb0`: **FAIL** (`0x0` vs want `0xfef00000`) — Non-wrapping SH=8: destination retained `0`.
+4. `nowrap sh16 mb8`: **FAIL** (`0x0` vs want `0xdca00`) — Non-wrapping SH=16: destination retained `0`.
+5. `nowrap sh4 mb16`: **FAIL** (`0x0` vs want `0xdc`) — Non-wrapping SH=4: destination retained `0`.
+6. `wrap mutant`: **FAIL** (`0x5a5a5a5a5a5a5a5a` vs want `0xf5a5a5a5b`) — Wrapping brief mutant `(31,0)`: destination retained `SENT`.
+7. `wrap sh0 mb24`: **FAIL** (`0x5a5a5a5a5a5a5a5a` vs want `0xf005a5a0f`) — Wrapping `(24,8)`: destination retained `SENT`.
+8. `wrap sh8 mb20`: **FAIL** (`0x5a5a5a5a5a5a5a5a` vs want `0xf00001a5f00`) — Wrapping `(20,10)`, SH=8: destination retained `SENT`.
+9. `wrap sh16 mb28`: **FAIL** (`0x5a5a5a5a5a5a5a5a` vs want `0xf0000025a5a50`) — Wrapping `(28,4)`, SH=16: destination retained `SENT`.
+10. `pres nowrap`: **FAIL** (`0x5a5a5a5a5a5a5a5a` vs want `0x5a5a5a5afef05a5a`) — Destination preservation non-wrapping: uninserted.
+11. `pres wrap`: **FAIL** (`0x5a5a5a5a5a5a5a5a` vs want `0xcafef00dcada5a0d`) — Destination preservation wrapping: uninserted.
+12. `wrap fullword`: **FAIL** (`0x5a5a5a5a5a5a5a5a` vs want `0xcafef00dcafef00d`) — Full-word wrapping mask `(1,0)`: uninserted.
+13. `alias nowrap`: **FAIL** (`0xdeadbeefcafef00d` vs want `0xdeadbeeffef0f00d`) — Self-insertion `RA == RS` non-wrapping: unaltered.
+14. `alias wrap`: **FAIL** (`0xdeadbeefcafef00d` vs want `0xcafef00dcafef00d`) — Self-insertion `RA == RS` wrapping: unaltered.
+15. `alias both`: **FAIL** (`0xdeadbeefcafef00d` vs want `0xafef00dcaffef0dc`) — Self-insertion `RA == RS` wrapping with shift: unaltered.
+16. `census wrong`: **FAIL** (`126` vs want `0`) — 126 of 129 sweep cells differed from expected architectural value.
+
+**Conclusion**: Vacuity-floor clause (c) is **fully discharged**. All 16 rows observing `rlwimi` insertion semantics reddened cleanly; not a single observation row passes by construction.
+
+---
+
+## 4. Correction to Historical Table
+
+In [killtable_20260911/SCORES.txt](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/ppcrlwimiwidth/killtable_20260911/SCORES.txt), a one-line correction quoting what it refutes was added without overwriting historical records:
+
+```text
+=== LEG NULL_MEDIUM ===
+  mutate rc=0 : MUTATION NULL_MEDIUM: successfully applied
+  build rc=0  binary=FRESH
+  probe rc=0  sentinel=1
+  SCORE 28/28  elapsed=0.1s  binary=/tmp/gxrlwimi_clone/gxemul  label=NULL_MEDIUM
+  FAILING: 
+  CORRECTION (2026-09-11): Leg above ("SCORE 28/28 ... label=NULL_MEDIUM") was byte-identical to BASE/RESTORED (third copy of base leg, not a null medium). Honest identity null medium measured at killtable_nullmedium_20260911: SCORE 12/28 (all 16 rlwimi-observing rows RED).
+
+=== LEG RESTORED ===
+```
+
+---
+
+## 5. Deliverables Summary
+
+1. **Artifact Directory**: [killtable_nullmedium_20260911/](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/ppcrlwimiwidth/killtable_nullmedium_20260911/) contains:
+   - `mutate_rlwimi.py`: Honest identity mutator
+   - `run_nullmedium.sh`: Driver script
+   - `mutate_NULL_MEDIUM.txt` & `mutate_RESTORED.txt`: Mutation logs
+   - `build_NULL_MEDIUM.log` & `build_RESTORED.log`: Build logs
+   - `probe_NULL_MEDIUM.raw` & `probe_RESTORED.raw`: Probe outputs
+   - `SCORES.txt`: Score record with clearance and completion sentinel
+2. **Correction Record**: Added to [killtable_20260911/SCORES.txt](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/ppcrlwimiwidth/killtable_20260911/SCORES.txt).
+3. **Full Report**: Written progressively to [agy_nullmedium_20260911.md](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/ppcrlwimiwidth/agy_nullmedium_20260911.md).

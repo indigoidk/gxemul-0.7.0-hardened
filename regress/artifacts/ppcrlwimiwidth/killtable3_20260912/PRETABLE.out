@@ -1,0 +1,57 @@
+ppcrlwimiwidth + ppcrldimimask -- JOINT KILL TABLE 3, PRETABLE, written 2026-09-12 BEFORE the table runs.
+Post-table notes go in a SEPARATE file (POSTTABLE.out) -- an append rewrites this file's mtime.
+
+WHY A TABLE 3.  The pass-2 panel (_scratchpad/panel_20260912_095238_ppcpass2) found two rldimi edits the
+27-row instrument could not see.  The detector is UNSHIPPED, so both rows are L1 pre-ship construction:
+  D_SKIP_FULL_ROT  (codex) `while (n-- != 0)' -> `while (n-- != 0 && mb != ((64 - sh) & 63))': the rotate is
+                   skipped exactly when the mask is full width.  Every full-width row and census cell used the
+                   ALL-ONES source, which no rotate can change.  New row `full rot': SH=24, MB=40 (full, since
+                   MB == 64-SH) from RS_VAL into SENT; want ROTL64(RS_VAL, 24) = 0xefcafef00ddeadbe.
+  D_ALIAS_REREAD   (glm) the merge re-reads rS AFTER rA was cleared.  rlwimi has three aliasing rows; rldimi had
+                   none (a SIBLING PARITY asymmetry).  New row `alias rs=ra': r8 = RS_VAL is both source and
+                   destination, SH=8, MB=16 (partial); want 0xdeadefcafef00d0d.
+                   *** glm's literal one-line form (`tmp & cpu->cd.ppc.gpr[rs]') re-reads the UNROTATED source,
+                   so it is wrong for every SH != 0 whatever the aliasing -- it is not an aliasing mutant, and
+                   the pattern rows would kill it.  Found by simulating it before building.  The leg built here
+                   is glm's own "equivalently" form: re-read rS after the clear AND rotate it (mut_rldimi_t3.py). ***
+Comment-only corrections in the same edit: rlwimi `wrap fullword' note (32 low bits, not 31 -- codex); rldimi
+CONTRACT (29 rows; rotate amount pinned at SH 8, 24, 40 only) and the `disasm total' literal 511 -> 513
+(two placed words added; to be MEASURED in this table's BASE leg, not carried).
+
+INSTRUMENTS: ppc_rlwimi_probe.T3FROZEN.py (28 rows), ppc_rldimi_probe.T3FROZEN.py (29 rows), copied from
+regress/ at launch by killtable3.sh, which records the cmp.  BASELINE: current SEC cpu_ppc_instr.c.
+
+PREDICTIONS.  The rlwimi probe is unchanged apart from one note string, so every rlwimi score repeats table 2.
+The two new rldimi rows were SIMULATED per leg (_scratchpad sim_rldimi_t3.py, a Python transcription of each
+mutant's C) and are added to table 2's rldimi failures:
+    leg              rlwimi /28          rldimi /29          new rows under the leg
+    BASE             28 CONTROL=OK       29 CONTROL=OK       both ok; `disasm total' 513/513
+    HEAD             14                  17                  both FAIL (table 2: 17/27)
+    R_REV_COND       13 CONTROL=FAIL     29                  -- rlwimi mutant: rldimi untouched
+    R_ONLY_CAST      19                  29
+    R_ONLY_HIGH      19                  29
+    R_POST_LOOP      19                  29
+    R_ORIG           14                  29
+    R_NULL           12 CONTROL=FAIL     29
+    D_MUT63          28                  14 CONTROL=FAIL     both FAIL (table 2: 14/27)
+    D_NOCIRC         28                  21 CONTROL=FAIL     `full rot' FAIL (its mask wraps -> the same
+                                                             unmasked-m UB as the census); alias ok.  UB LEG:
+                                                             if session 3 or the census hits the 90 s timeout
+                                                             the score is LOWER -- record which rows, do not fit
+    D_NOKEEP_SH      28                  16 CONTROL=FAIL     both FAIL (table 2: 16/27)
+    D_NOWRAP         28                  22 CONTROL=OK       `full rot' FAIL, alias ok (table 2: 21/27)
+    D_NO_MERGE       28                  26 CONTROL=FAIL     `alias rs=ra' FAIL, full rot ok (full mask:
+                                                             no merge to lose) (table 2: 24/27)
+    D_ORIG           28                  17                  both FAIL (= HEAD)
+    D_NULL           28                  13 CONTROL=FAIL     both FAIL (table 2: 13/27)
+    D_SKIP_FULL_ROT  28                  28 CONTROL=OK       `full rot' FAIL -- SOLE killer
+    D_ALIAS_REREAD   28                  28 CONTROL=OK       `alias rs=ra' FAIL -- SOLE killer
+
+THE CROSS-CHECK: every R_ leg must leave rldimi at 29/29 and every D_ leg rlwimi at 28/28.
+
+CHECKS.  SIBLING PARITY -- the asymmetry glm found (aliasing rowed on rlwimi only) is the row this table adds.
+CLAIM -> ROW -- CONTRACT's "`full rot' is the one full-width mask from a patterned source; `alias rs=ra' is the
+one rA == rS row" -> those rows.  GUARD FIELD vs BODY FIELD -- the rotate loop's predicate reads n; the mask loop
+reads m, mb, sh; codex's survivor qualifies the rotate predicate with the mask loop's own end expression (a
+body-read field), which is the (d) DEPENDS-ON form.  CHANNEL -- both rows read a register value that differs
+under their named mutant (simulated values above).

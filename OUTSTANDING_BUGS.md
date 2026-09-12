@@ -19400,3 +19400,25 @@ already discloses, filed so it is findable rather than argued again:
   restating the brief's first line and then finds the inten-bit survivor.  A NEGATIVE novel-byte count is the
   tell -- the heuristic subtracts the brief size from an answer SHORTER than the brief.  Harness change; owes
   two negative controls (an echo-only file still flagged; this file not flagged).
+
+### `ppcrldimimask` -- SHIPPED with `ppcrlwimiwidth` as `#527` (2026-09-12); residuals FILED, none owed
+
+Both fixes and their detectors (rlwimi 28 rows, rldimi 29, `gate_ppc.sh` pins 28 and 29) shipped as `#527`; the
+repair chain closed on the §F2 pass (Fable 5.1, `regress/artifacts/xscaleinten/fable_adjudication_20260912.md`).
+Filed, each ruled clause (e) or a named measurement, NOT owed:
+
+* **ONE ROW, SPECIFIED (folds codex's `n = sh & ~7` and deepseek's SH-1/2 misrotate):** ADD -- do not modify
+  `full rot`, table 3's cited killer -- a full-mask patterned rldimi row at **SH=63, MB=1** from 0xDEADBEEFCAFEF00D:
+  want 0xEF56DF77E57F7806; a byte-rounded rotate gives 0x0DDEADBEEFCAFEF0.  With SH=0 already rowed it pins every
+  dropped SH bit.  Cost: session 3 changes, so the D_ legs owe a table 4 (predictions first) and pin 29 -> 30.
+* **A stale rS re-read confined to WRAPPING masks** survives: the one `alias rs=ra` row is non-wrapping (codex).
+  An alias row at SH=40, MB=40 from RS_VAL should read 0xfef00defcabeefca where the late re-read gives
+  0x000000efca00efca (codex's arithmetic, not built).
+* **An insertion skipped only when Rc=1** survives both probes: each `cr0 record form` row checks that CR reads
+  back, not CR0's value and not the destination's value.  Both CONTRACTs disclose it.
+* **`CENSUS_SHRINK`** -- the literal `census run` / `disasm total` pins' only measured kill (the Opus seat's
+  end-test-without-`& 63` leg) is bundled with CONTROL=FAIL; their unique channel, a census that shrinks while
+  the session completes green, is unmeasured.  One run of the fixed build with a shortened census settles it.
+* **`R_NOGUARD`** -- delete rlwimi's `sh ?` guard; predicted 28/28.  The fix narrowed `tmp` to `uint32_t`, which
+  made `tmp >> 32` at SH=0 undefined and the guard LOAD-BEARING (Fable).  A red would only relabel it
+  "host-dependent equivalent"; no row can pin it.

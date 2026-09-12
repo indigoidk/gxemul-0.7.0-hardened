@@ -1,0 +1,24 @@
+ppcrlwimiwidth + ppcrldimimask PASS 2 (Opus measuring seat) -- clause-(d) mutation testing
+Clone /tmp/gxopus_p2 (cp -a build/, SEC sources = the fixes). Frozen probes == regress/ppc_*.py.
+Every leg: rm src/cpus/*.o; make -j4; [ gxemul -nt src ] verified; one mutant at a time; restore between.
+
+leg            edit                                              probe   score   CONTROL  FAILING                                           log
+BASE(fix)      the two fixes                                     rlwimi  28/28   OK      none                                              rlwimi_BASE.log
+BASE(fix)      the two fixes                                     rldimi  27/27   OK      none                                              rldimi_BASE.log
+RM_GE          if (mb > me) -> if (mb >= me)                     rlwimi  27/28   OK      census wrong                                      rlwimi_RM_GE.log
+RM_UNROT       (uint64_t)tmp<<32 -> (uint64_t)(uint32_t)reg(arg0)<<32  rlwimi  24/28   OK  wrap sh8 mb20, wrap sh16 mb28, alias both, census wrong  rlwimi_RM_UNROT.log
+DM_ROT1        while(n-- != 0) -> while(n-- > 1)                 rldimi  25/27   OK      pres nowrap, pres wrap                             rldimi_DM_ROT1.log
+DM_NOAND_END   while(m != ((64-sh)&63)) -> while(m != (64-sh))  rldimi  17/27   FAIL    nowrap*, pres*, disasm total, census run (hang@sh=0) rldimi_DM_NOAND_END.log
+
+VERDICT: NO SURVIVING (d) MUTANT for either PPC fix. All four brief "NOT built" candidates built and caught.
+
+NOTES
+ - DM_ROT1 confirms question 2: the census source is all-ones (rotl64(~0)==~0), so the 495-cell
+   census is BLIND to rotate-amount defects. Coverage is carried entirely by the 3 RS_VAL
+   preservation rows (pres nowrap sh8, pres wrap sh40, pres sh0). A uniform rotate (d) mutant is
+   caught there; a rotate defect confined to an SH outside {8,40} (sh0 has no rotate) and invisible
+   on all-ones would escape -- real coverage debt, but no natural uniform (d) mutant exploits it.
+ - Question 3 REFUTED: "disasm total / census run ... carry no measured kill" is false. DM_NOAND_END
+   reddened `census run` (17/27, census run in FAILING) because its sh=0 hang aborts a census
+   session early. So census run DOES carry a kill (against session-aborting mutants); not a floor gap.
+ - RM_GE caught by census (0,0)/(31,31) single-bit mb==me cells with SENT high word.

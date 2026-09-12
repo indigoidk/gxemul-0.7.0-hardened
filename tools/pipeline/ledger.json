@@ -35533,7 +35533,8 @@
      "ev": "regress/artifacts/xscaleinten/fable_adjudication_20260912.md (verbatim; brief _scratchpad/brief_adjud_xscale_ppc_20260912.md)",
      "note": "Fable 5.1, fired LAST as a subagent pinned to model fable; opened by naming itself claude-fable-5-1 (verified).  D1: clause (e), both cells, rows L1 -- and the rule the next pure deletion inherits.  Codex's three gaps: coverage debt; the repair chain CLOSES on this pass (zero floor breaches, with the denominator).  F15 was a WRONG RECORD: narrowing tmp to uint32_t made the `sh ?` guard load-bearing for definedness.  xscale ready behind a green gate; PPC ready after gate restore + pin check, the F15 record, the F11 caveat, and scoping ppc_rldicl_probe.py by name."
     }
-   ]
+   ],
+   "commits": "eb26590"
   },
   {
    "id": "crimewidthkill",
@@ -35588,7 +35589,171 @@
    "opened": "2026-09-10",
    "title": "cpu_ppc_instr.c X(rldimi): the rotate loop's post-decrement leaves sh == -1, so the insert mask always runs to bit 63 instead of 63-SH -- the instruction OVERWRITES the 64-SH destination bits the architecture requires it to PRESERVE, for every SH != 0",
    "note": "*** 2026-09-12, codex farm: the promotion was NOT done -- regress/ppc_rlwimi_probe.py was a byte-identical copy of the witness (cmp).  Promoted per codex's design and REVIEW (regress/artifacts/ppcrlwimiwidth/codex_promote*_20260912.txt, codex_promoreview_20260912.txt; ppcrldimimask/codex_promote_20260912.txt): regress/ppc_rldimi_probe.py (27 rows) with RESULT/CONTROL/DONE lines, a private loader stub, census wants pinned to MEASURED literals (they had been derived from the lists they count), and target-instruction CONTROL rows (without them a no-op instruction still read CONTROL=OK).  gate_ppc.sh sections designed to run BEFORE the NetBSD prerequisite with a strict parse -- PARKED at _scratchpad/gate_ppc.ppcround.sh (two new pins would raise SCORE_CLAIMS 25 -> 27) and MANIFEST entries parked (_scratchpad/ppc_manifest.py apply).  ALL UNMEASURED.  OWED: run both, re-table against frozen copies (rldimi M_NOCIRC by name), gate negative controls. ***\n\nFILED 2026-09-10 from the [[ppcrldiclzero]] witness's sibling audit.  MEASURED, not read.\n\nThe handler rotates with a `while (sh-- != 0)' loop, which ALWAYS exits with sh == -1 because the post-decrement runs once more than the body.  The mask loop then terminates on a condition involving 63 - sh, i.e. 64 -- always.  The architecture requires the mask to END AT 63-SH (the rldimix RTL and its prose, '1 bits from bit MB through bit 63 - SH').\n\nMEASURED with the destination seeded to 0 and an all-ones source:\n    SH=8    got 0xffffffffffffffff   want 0xffffffffffffff00\n    SH=32   got 0xffffffffffffffff   want 0xffffffff00000000\n    SH=0    got 0xffffffffffffffff   want 0xffffffffffffffff   -- the one safe case\n\n**This is the standard bitfield INSERT.**  A compiler using it to splice a field destroys everything to the right of that field.  Live for every SH != 0.\n\n*** THE DURABLE REPAIR IS NOT TO PATCH THE 63 - sh EXPRESSION. ***  That loop idiom is shared by rldicl, rldicr AND rldimi; rldicr survives only because it never reads sh again.  **Any future edit that reaches for sh after the rotate loop in any of the three will be wrong the same way.**  Save sh before the loop instead.\n\nSame reachability and the same gate blind spot as [[ppcrldiclzero]]: 64-bit CPUs only, and no gate instantiates one.\n\n*** DESIGN REVIEW 2026-09-10 (ppcrldimimask/codex_design_20260910.txt, GPT-6 Astra at max, 14,947 bytes, ZERO cyber flags): THE DEFECT PREMISE IS EXACT AND **MY PROPOSED REPAIR IS INSUFFICIENT**. ***\n\nThe post-decrement reading is confirmed exactly: the loop's final test evaluates the old value zero and then decrements to -1, **and this happens even for SH=0**, so the mask always covers architectural bits MB..63.  The rldimix RTL requires MASK(MB, 63-SH).\n\n**BUT 'SAVE sh BEFORE THE LOOP AND KEEP THE MASK LOOP' -- which I filed as the durable repair -- LEAVES TWO MORE DEFECTS.**  Both come from the manual's own mask definition, which makes BOTH endpoints inclusive and WRAPS through bit 63 to bit 0 when the beginning exceeds the end:\n  (1) the existing loop compares the INCREMENTED position against the inclusive endpoint, so where it terminates normally it **stops one bit early**;\n  (2) it **never wraps**, so other operand combinations run past bit 63 and evaluate invalid shift counts -- an undefined-behaviour defect hiding inside the wrong-value one.\n\nTHE PRESCRIBED REPAIR is therefore four coordinated changes rather than one: preserve the decoded `sh', rotate with a separate counter (`int n = sh; while (n-- != 0)'), advance the mask position modulo 64 (`m = (m + 1) & 63'), and terminate on the position AFTER the endpoint, modulo 64 (`m != ((64 - sh) & 63)').\n\n*A round that had taken my one-line framing would have shipped a fix that is still wrong at the endpoint and still undefined on the wrapping cases, and its detector -- built from the same framing -- would very likely have passed it.*\n\n*** THE GATE CLAIM WAS WRONG AND IS CORRECTED HERE.  I WROTE IT INTO THREE ROWS, A CHANGELOG BLOCK AND TWO COMMIT MESSAGES BEFORE A SEAT CHECKED IT (wiringcliff/codex_ppcgate_20260910.txt). ***\n\n**I CLAIMED: 'no gate in this tree instantiates a 64-bit PowerPC CPU at all, so the whole 64-bit-only instruction group is invisible BY CONSTRUCTION.'  THE FIRST HALF IS FALSE.**  Gate 9 (gate_asan_sweep.sh) enumerates EVERY advertised machine type and subtype -- including bareppc, testppc and macppc/g5, all of which default to the PPC970 -- so 64-bit PowerPC CPUs ARE constructed by a gate today, and have been all along.\n\n**THE CORRECT AND NARROWER FINDING: NO GATE CHECKS THEIR INSTRUCTION RESULTS.**  Gate 9 is a CONSTRUCTION check with no PowerPC result oracle; the two PowerPC gates both drive `macppc -e g4', an MPC7400, which is 32-bit, and their probes select it EXPLICITLY rather than by default.  So the defects were invisible because nothing EXECUTES these instructions and inspects the answer -- not because nothing builds the CPU.\n\n*** THAT DISTINCTION IS THIS PROJECT'S OWN WITNESS LADDER, ONE LEVEL UP, AND I WALKED PAST IT. ***  The ladder's whole rung-2 clause says machine CONSTRUCTION proves presence and NOT reachability, and is a reproduction only for defects that construction itself executes.  I applied that rule carefully to witnesses all day and then made exactly the error it warns about when reasoning about GATES.  A gate that constructs a CPU is a rung-2 gate; these defects need a rung-3 one.\n\nTHE PRESCRIBED CLOSURE IS SMALLER THAN MY FRAMING SUGGESTED: wire the existing 19-row regress/ppc_rldicl_probe.py into gate_ppc.sh, asserting its score AND its completion sentinel.  That closes the missing instruction-result check.  **It does NOT close all 64-bit PowerPC coverage**, and the seat says so explicitly rather than letting the round claim it does.\n\n*** DESIGNED 2026-09-10 (ppcrldimimask/codex_repair_20260910.txt, GPT-6 Astra at max, ZERO cyber flags).  MY PREMISES HELD AND MY CHARACTERISATION OF THE DEFECT WAS HALF OF IT. ***\n\nCONFIRMED: `sh' is `-1' on exit for EVERY decoded SH including zero (the final test reads the old value, decrements, and exits), the rotate body IS a correct ROTL64, and the mask loop therefore always stops at `m == 64' and selects bits `MB..63'.  The architectural mask is `MASK(MB, 63-SH)', INCLUSIVE of both endpoints and WRAPPING -- RTL at `ppc_pem_32and64_2005.txt:29908' (`m <- MASK(b, ~n)'), endpoint prose at `:29909', mask definition at `:6879'.\n\n*** THE ROW'S TITLE DESCRIBES ONLY THE NON-WRAPPING HALF.  The defect has TWO directions: ***\n  * `MB <= 63-SH' (non-wrapping) -- it OVERWRITES the low SH destination bits that must survive;\n  * `MB > 63-SH' (wrapping) -- it OMITS the required insertion into positions `0..63-SH', leaving\n    those destination bits UNCHANGED.\nA repair tested only on non-wrapping encodings fixes one and leaves the other.\n\n**AND SAVING SH IS NOT ENOUGH -- THREE MORE EDITS ARE NEEDED, which is why my sketch was rejected.**  The comparison happens AFTER the increment, so the stopping position is the endpoint's SUCCESSOR, and the counter must be circular:\n\n        int m, n = sh;                       /*  1: keep SH  */\n        while (n-- != 0) { ... }             /*  2: consume the copy  */\n        do {\n                tmp |= ((uint64_t)1 << (63-m));\n                m = (m + 1) & 63;            /*  3: circular increment  */\n        } while (m != ((64 - sh) & 63));     /*  4: successor, modulo 64  */\n\n**Changing only one of edits 3 and 4 does not repair the loop.**  A partial repair that saves SH and sets the bound to 24 at `MB=40, SH=40' while keeping `m ++' walks 40..63 and then enters the body with `m == 64', evaluating `(uint64_t)1 << -1'.  *** That is UNDEFINED BEHAVIOUR, and the seat declined to call it an infinite loop on the ground that doing so would assign DEFINED behaviour to an undefined program -- which is the correct discipline and is what my brief's question got wrong. ***\n\nWORKED CASE, usable as a row: `rldimi r4,r3,40,40' = instruction word **0x7864422e**, with `r3 = 0xffffffffffffffff' and `r4 = 0': the repaired loop visits 40..63 then 0..23, 48 iterations, mask **0xffffff0000ffffff**, which is also the correct result.  **The original handler produces 0x0000000000ffffff.**\n\nMUTANT, one character, defined result: `64` -> `63` in the repaired bound.  `rldimi r4,r3,0,0' = **0x7864000c**, `r3 = ~0', `r4 = 0' gives correct `0xffffffffffffffff' and mutant `0xfffffffffffffffe' -- it drops the inclusive endpoint, architectural bit 63.\n\nThe seat validated its replacement against an independent bit-membership oracle over **40,960 cases** (every SH/MB pair x ten source/destination pairs), max loop count 64.  **It could NOT compile or run the emulator** -- no native compiler, and WSL returned `E_ACCESSDENIED' -- so this is a READING plus an offline model, not a measurement of this tree.  A measuring seat still owes the build.\n\n**BLOCKER PARTLY CLEARED 2026-09-10:** [[ppcwitnessmaskoracle]]'s `want_rldimi' is corrected -- it was returning an all-zero mask for **2016 of 4096** (MB,SH) pairs, and the manual's own `:6882' (*\"It is not possible to specify an all-zero mask\"*) makes that a flat contradiction rather than a disputed reading.  `mask32' is deliberately left alone pending [[ppcrlwhighhalf]].  A wrapping-encoding row measured RED on the committed build is still owed before either repair is scored.\n\n**THE ORACLE BLOCKER IS CLEARED, 2026-09-11.**  [[ppcwitnessmaskoracle]]'s two corrected helpers were verified against PowerPC Book I -- endpoints, wrap direction, the `+32` offsets, the `& 63`, the all-zero-mask assertion's normative standing, and both partition counts.  **PASS.**  A measuring seat can now score this round without the oracle being the thing that is wrong.\n\n*** MEASURED AND REPAIRED 2026-09-11 BY THE agy SEAT (owner-approved use of the measurement reserve).  WITNESS TEST-FIRST, FOUR-EDIT REPAIR APPLIED, KILL TABLE WITH **ZERO ESCAPES**. ***\n\n**THE WITNESS IS TEST-FIRST AND THE ORDER IS PROVEN BY MTIME**, not asserted: `opus_ppc_rldimi_witness_20260911.py` and `witness_committed.out` at 23:02, `witness_fix.out` at 23:06, the repair after.\n\n    committed build (HEAD)   17/27   -- 10 failing rows, 431 of 495 census cells wrong\n    repaired build           27/27   -- 0 failing rows, 0 of 495 census cells wrong\n\n**THE REPAIR IS THE FOUR-EDIT FORM, BYTE-FOR-BYTE AS DESIGNED AND AS I VERIFIED IT OFFLINE OVER ALL 4096 (MB,SH) PAIRS** -- `int m, n = sh;` / `while (n-- != 0)` / `m = (m + 1) & 63;` / `while (m != ((64 - sh) & 63));`.\n\n*** KILL TABLE, `killtable_20260911/SCORES.txt`, frozen instrument, one clone, sentinel dropped before mutant 1 and CLEARED ONLY AFTER BOTH CLEARANCE PARTS (source `cmp` CLEAN, binary FRESH): ***\n\n    BASE           27/27      M_NOKEEP_SH    16/27\n    M_ORIG         17/27      M_NOCIRC       19/27\n    M_MUT63        14/27      M_NO_MERGE     24/27\n    M_NOWRAP       21/27      HEAD           17/27\n    RESTORED       27/27\n\n**ZERO ESCAPES, AND EACH OF THE FOUR EDITS HAS ITS OWN MUTANT AND EACH IS KILLED** -- `M_NOKEEP_SH` for edits 1-2, `M_NOCIRC` for edit 3, `M_MUT63` and `M_NOWRAP` for edit 4.  *That is the sole-killer discipline applied to a repair's parts rather than to a detector's rows, and it is what makes \"four coordinated edits\" a measured claim rather than a description.*\n\n**TWO CONTROLS WORTH NAMING:** `HEAD` scores exactly `M_ORIG`'s 17/27 with the identical failing set, confirming the committed build IS the defect and the mutator reproduces it; and `M_NO_MERGE` reds ONLY the three preservation rows (`pres nowrap`, `pres wrap`, `pres sh0`), which is those rows earning their place.\n\n*** APPARATUS NOTE, AND IT IS THE REASON THIS REPORT NEARLY WENT UNREAD: agy's `--print-timeout 30m` EXPIRED WHILE ITS BACKGROUND TASKS WERE STILL RUNNING. ***  The print session returned 8.8 KB of progress narration and no report, with stderr reading *\"root agent idle; waiting for 2 background task(s)\"*.  **The report existed on disk the whole time** -- `opus_measure_20260911.md`, 13 KB -- and was found only by looking in the artifacts directory rather than at the seat's stdout.  *A build-plus-kill-table does not fit a 30-minute print budget; size the timeout to the job, and when an agy run ends with background tasks outstanding, GO AND READ THE ARTIFACTS.  Its stderr is the tell and it is not the documented 111-byte quota wall.*\n\nSTILL OWED BEFORE THIS SHIPS: **pass 2 on the diff**, per the repair-chain rule -- one pass per floor-bound diff, closing on the first pass that finds zero breaches.\n\n*** PASS 2 (PARTIAL -- ONE SEAT, AND THE MISS IS NAMED): NO INCORRECT RESULT FOUND, ZERO FLOOR BREACHES, TWO CONCRETE CLAUSE-(e) ITEMS. ***  `ppcrldimimask/codex_pass2_20260911.txt`.\n\n**THE INERT-REPAIR CHECK PASSES, AND IT WAS THE ONE I MOST WANTED.**  Yesterday an adopted design in this same file turned out inert because a loop mutated the variable its guard tested before the guard ran.  Here the dataflow is `decode sh -> initialise n from sh -> decrement n during rotation -> read the ORIGINAL sh in the mask bound`, with **no intervening assignment, increment, decrement or address escape**.  The bound depends on the preserved `sh`, not the exhausted `n`.  **The repair is ACTIVE.**\n\n**TERMINATION IS PROVED FOR EVERY ENCODING, including the case I flagged.**  At `(MB,SH) = (0,0)` the bound is `0` and the mask loop runs **exactly 64 times** -- a full circuit, which is correct, because `MASK(0,63)` is all-ones and a `do/while` treats initial equality as a complete circuit rather than zero iterations.  Generally the loop runs 1..64 times, the increment stays in `0..63`, and no mask-bit shift has an invalid count.\n\n*** TWO CLAUSE-(e) ITEMS, BOTH CONCRETE, AND THE FIRST IS THE KIND A VALUE ORACLE CANNOT SEE BY CONSTRUCTION: ***\n  1. **A UB rewrite that produces every expected value.**  Replacing the rotation loop with `s = (s << sh) | (s >> (64 - sh));` invokes undefined behaviour at `SH = 0`, where the right shift has count 64 -- **and a compiler that recognises the idiom and emits a hardware rotate yields every correct test value anyway.**  *A value-checking instrument cannot distinguish correct output from undefined behaviour that happens to produce correct output.*\n  2. **Register aliasing.**  Computing the mask first and delaying the source load until after the destination is cleared preserves behaviour when `RA != RS` and breaks `RA == RS`.  That is the same aliasing axis named for the `rlwinm` work, and it applies here too.\n\n**AND A COVERAGE QUALIFICATION ON MY OWN TABLE:** `M_NOKEEP_SH` removes edits 1 and 2 TOGETHER, so that leg does **not** establish separate runtime kills for the two textual changes.  My claim that *\"each of the four edits has its own mutant\"* is therefore true of edits 3 and 4 and loose about 1 and 2.\n\n*** THIS IS A PARTIAL PASS AND I AM RECORDING IT AS ONE. ***  It was a SINGLE SEAT, fired because the measuring seat was mid-build on another round and a nine-seat panel would have contended with it.  The repair-chain rule closes a chain on the first pass finding zero breaches **provided the pass is valid -- roster complete or its misses named**.  The misses are named here: eight seats unfired.  **The round owes its full panel before it ships**, and the seat itself noted it was not given the probe rows and so cannot claim the instrument lacks alias checks.\n\n*** CORRECTION 2026-09-11: **the existing `regress/ppc_rldicl_probe.py` has 24 ROWS, NOT 19.**  THE \"19-ROW\" FIGURE IS WRONG and it appears verbatim in this row and in its sibling. ***\n\nMeasured three ways: `git show e777ff0:regress/ppc_rldicl_probe.py | grep -c '^row('` = **24**; HEAD = 24; worktree = 24; and `git log --follow` shows no change since `e777ff0`.  `ppcwitnessmaskoracle` calls the same instrument a **\"24-row detector\"**, so the ledger contradicted itself.\n\n**19 is a SCORE, lifted from different artifacts** -- `regress/artifacts/ppcrldiclzero/witness_committed.out` reads `SCORE 19/27`, and the superseded `pass2_20260910/opus_probe_BASE.raw` reads `SCORE 19/19`.  *A score transcribed into a row-count column is the frozen-number class in a new coat, and this one is load-bearing: it is the prescribed gate-wiring closure, so a future round wiring \"19 rows\" into a gate would pin a denominator five short and the check would pass while testing less than it claims.*\n\n*** 2026-09-11: CLAUSE (c) NOW GENUINELY DISCHARGED -- AN HONEST IDENTITY NULL MEDIUM, AND IT IS STRICTLY SHARPER THAN THE PRE-FIX LEG IT REPLACES. ***\n\n`killtable_nullmedium_20260911/` (sentinel `NULLMEDIUM_DONE`), built by agy 3.8 in `/tmp/gxrldimi_clone` against the frozen instrument:\n\n    NULL_MEDIUM (identity X(rldimi) body)   SCORE 13/27   -- FOURTEEN rows RED\n    RESTORED                                SCORE 27/27\n    Clearance: Part 1 (cmp vs SEC)=CLEAN    Part 2 (binary -nt source)=FRESH\n\nThe reds cover every substantive family -- `nowrap` x5, `wrap` x4, `pres` x3 -- **and both census rows (`census wrong`, `census zero`) also redden**, so they are not the pure bookkeeping I had predicted they might be.  *A prediction I wrote into the brief, refuted by the measurement, which is the right way round.*\n\n**THE COMPARISON IS THE FINDING, AND IT IS THE SECOND INSTANCE OF ONE PATTERN:**\n\n    ppcrldimimask   identity 13/27 (14 red)   pre-fix HEAD leg 17/27 (10 red)\n    ppcrlwimiwidth  identity 12/28 (16 red)   pre-fix HEAD leg 14/28 (14 red)\n\n**Both rounds, independently: the identity medium reddens MORE rows than the pre-fix medium the convention substitutes for it.**  That is what a sharper clause-(c) leg looks like, measured rather than argued -- and it is now carried to the flagship seat as question 7n-1, which asks whether *a strictly sharper form was available and cheap* converts an established house convention into a floor breach across the ~16 tables that use it.\n\n*The old discharge was `PRETABLE.out:69`, \"(c) null medium -> HEAD leg (whole-file pre-fix)\", with the PRETABLE itself predicting that leg identical to `M_ORIG` and the run confirming both at 17/27 -- two legs measuring one thing.  That sentence is superseded, not deleted: the leg's score was real; what was false was its NAME.*\n\n*** 2026-09-11 PASS 2 (codex GPT-6 Astra at max).  **Both algorithms VERIFIED; THE PROBE COVERS NEITHER FIX, AND THESE ARE TWO COMMITS NOT ONE.** ***\n\n*VERDICT: Both local algorithms check out; mode integration is unverified, and the probe covers neither fix.*\n\n**THE ARITHMETIC IS CONFIRMED, and by exhaustion rather than by argument:** independent in-memory models found **no mismatches across all 4,096 `rldimi` mask combinations and all 1,024 `rlwimi` mask pairs**, plus operand checks covering every word-rotate encoding in BOTH destination widths.  *Stated honestly as arithmetic checks, not compiled-C or emulator runs.*\n\n**`rldimi`: `(64 - sh) & 63` IS CORRECT.**  Book I's RTL is `m <- MASK(b, !n)` with `n` six bits, so `!n` is `63-SH` and the loop must stop once `m` has advanced past it.  `:4315` names that endpoint in prose.  *The pre-fix `63 - sh` read `sh` AFTER `while (sh-- != 0)` had left it at -1.*\n\n=== *** THE FINDING THAT CHANGES THE ROUND: NO DETECTOR COVERS EITHER FIX *** ===\n> *'There is no shared functioning detector here -- the permitted probe detects NEITHER repair.'*\n\n`ppc_rldicl_probe.py`'s two expected-value helpers exist but implement DISTINCT instruction formulas.  **So both fixes would ship with nothing that fails on the pre-fix build** -- vacuity floor clause (a) unmet, for both.  **Each commit owes instruction-specific observations that kill its own effect-nullifying mutant, including a SEPARATE WIDTH-SENSITIVE observation for `rlwimi`.**\n\n*** AND THEY ARE TWO COMMITS, NOT ONE.  The scope rule's join needs SAME SEMANTIC CLASS **AND ONE FIX DESIGN**; the class matches and the designs do not: *** `rldimi` preserves the shift amount and builds a correct inclusive circular mask; `rlwimi` narrows the rotation SOURCE and implements a duplicated high-word insertion.  *Even granting that the existing helpers satisfy 'no new oracle', the one-fix-design half fails.*\n\n=== THE 32-BIT MODE QUESTION: MY WORRY WAS HALF RIGHT, AND THE HALF THAT SURVIVES IS THE SHARPER ONE ===\nThe truncation is **sound as a representation argument, not an accident**: assignment to a 32-bit `MODE_uint_t` discards the upper bits by defined unsigned-conversion semantics, the shift itself happens at 64-bit width, and the loop then performs the low-word insertion.\n\n> *** BUT Book I S1.2 (`:342`): both execution modes affect ALL 64 BITS when an instruction sets a 64-bit register, and the register result is MODE-INDEPENDENT; `:1989` describes every GPR as 64 bits.  **So a 64-bit processor running in 32-bit MODE still owes the wrapping high-word write.** ***\n\n**The permitted files do not define `MODE_uint_t` or `reg`, or establish which implementation selects each compiled variant, so the seat declined to certify it** -- *'If a 64-bit processor's 32-bit execution mode reaches a variant that loses the architectural high word, that remains wrong.'*  **Filed rather than guessed.**\n\n**L4 CORRECTION APPLIED IN PLACE:** the one-line comment *'A wrapping MASK(MB+32, ME+32) includes the high word'* invited the reading that architectural 32-bit mode removes half the register.  Replaced with the seat's more accurate wording plus the open question and its Book I citations.  *This file's idiom is `MODE32` with `#else` (see `extsb`/`extsh`) and carries no `MODE64` conditional, so a future guard would be `#ifndef MODE32` -- recorded so the next round does not invent the opposite convention.*\n\n**STATUS: arithmetic green, DETECTOR OWED for both, and the round splits in two.**  Landing is held by owner ruling until the full panel reports.",
-   "witness": "probe:regress/artifacts/ppcrldimimask/opus_ppc_rldimi_witness_20260911.py"
+   "witness": "probe:regress/artifacts/ppcrldimimask/opus_ppc_rldimi_witness_20260911.py",
+   "entries": [
+    {
+     "seat": "codex",
+     "phase": "review",
+     "d": "SURVIVOR-SKIP-FULL-ROT",
+     "date": "2026-09-12",
+     "grade": "MANUAL",
+     "ev": "panel dir _scratchpad/panel_20260912_095238_ppcpass2, codex.txt (copy: regress/artifacts/ppcrlwimiwidth/panel_20260912_095238_ppcpass2)",
+     "note": "1,253,825 b; answer at the tail.  `while (n-- != 0 && mb != ((64 - sh) & 63))` skips the rotate exactly for a full-width mask, which every full-mask row fed from the all-ones source -- predicted 27/27.  Taken: row `full rot` (SH=24, MB=40, RS_VAL), killtable3 D_SKIP_FULL_ROT 28/29 failing it alone.  Also: the rlwimi `wrap fullword` note said 31 low bits (it is 32); both CR rows check presence only.  No Book I error in either fix (checked all 32,768 rlwimi and 4,096 rldimi immediates)."
+    },
+    {
+     "seat": "grok",
+     "phase": "review",
+     "d": "NO-SURVIVING-D-MUTANT",
+     "date": "2026-09-12",
+     "grade": "MANUAL",
+     "ev": "panel dir _scratchpad/panel_20260912_095238_ppcpass2, grok.txt (copy: regress/artifacts/ppcrlwimiwidth/panel_20260912_095238_ppcpass2)",
+     "note": "8,826 b.  Swept 17 rlwimi and 9 rldimi mutants with the kill for each; rotate evidenced only at SH 8 and 40; `sh & ~1` named as the closest green edit, clause (e).  Book I checked: both fixes exact."
+    },
+    {
+     "seat": "glm",
+     "phase": "review",
+     "d": "SURVIVOR-ALIAS",
+     "date": "2026-09-12",
+     "grade": "MANUAL",
+     "ev": "panel dir _scratchpad/panel_20260912_095238_ppcpass2, ollama_glm.txt (copy: regress/artifacts/ppcrlwimiwidth/panel_20260912_095238_ppcpass2)",
+     "note": "8,691 b, packet-fed.  rldimi had no rA == rS row (rlwimi has three).  Taken as a sibling-parity gap -- BUT its literal mutant (`tmp & cpu->cd.ppc.gpr[rs]`) reads the UNROTATED source and is wrong for every SH != 0; SIMULATED before building and replaced by its own 'equivalently' form (re-read after the clear, then rotate).  Row `alias rs=ra`, killtable3 D_ALIAS_REREAD 28/29 failing it alone."
+    },
+    {
+     "seat": "deepseek",
+     "phase": "review",
+     "d": "NO-SURVIVING-D-MUTANT",
+     "date": "2026-09-12",
+     "grade": "MANUAL",
+     "ev": "panel dir _scratchpad/panel_20260912_095238_ppcpass2, ollama_deepseek.txt (copy: regress/artifacts/ppcrlwimiwidth/panel_20260912_095238_ppcpass2)",
+     "note": "2,986 b, packet-fed.  Named an SH-1/2-only misrotate as a gap (clause (e), disclosed)."
+    },
+    {
+     "seat": "minimax",
+     "phase": "review",
+     "d": "NO-SURVIVING-D-MUTANT",
+     "date": "2026-09-12",
+     "grade": "MANUAL",
+     "ev": "panel dir _scratchpad/panel_20260912_095238_ppcpass2, ollama_minimax.txt (copy: regress/artifacts/ppcrlwimiwidth/panel_20260912_095238_ppcpass2)",
+     "note": "8,716 b, packet-fed.  All four candidate mutants caught, with the killer for each."
+    },
+    {
+     "seat": "kimi",
+     "phase": "review",
+     "d": "NO-SURVIVING-D-MUTANT",
+     "date": "2026-09-12",
+     "grade": "MANUAL",
+     "ev": "panel dir _scratchpad/panel_20260912_095238_ppcpass2, kimi.txt (copy: regress/artifacts/ppcrlwimiwidth/panel_20260912_095238_ppcpass2)",
+     "note": "121,728 b (CLI).  Swept ~40 rlwimi/rldimi mutants; the popcount argument closes every rlwimi P(mb, me) variant; rotate carried by exactly two RS_VAL rows (SH 8, 40)."
+    },
+    {
+     "seat": "kimi",
+     "phase": "review",
+     "d": "UNRESOLVED-ROTATE-PREMISE",
+     "date": "2026-09-12",
+     "grade": "MANUAL",
+     "ev": "panel dir _scratchpad/panel_20260912_095238_ppcpass2, ollama_kimi.txt (copy: regress/artifacts/ppcrlwimiwidth/panel_20260912_095238_ppcpass2)",
+     "note": "8,813 b, the kimi-k3:cloud substitute (PACKET-FED): could not see the pattern rows' sources in the packet; flagged the all-ones census as rotate-blind -- confirmed and disclosed."
+    },
+    {
+     "seat": "agy",
+     "phase": "review",
+     "d": "NOT-FIRED",
+     "date": "2026-09-12",
+     "grade": "MANUAL",
+     "ev": "panel dir _scratchpad/panel_20260912_095238_ppcpass2, SEATS.txt (copy: regress/artifacts/ppcrlwimiwidth/panel_20260912_095238_ppcpass2)",
+     "note": "DELIBERATELY NOT FIRED -- reserved for measurement by owner ruling 2026-08-30.  NOT a seat failure and NOT agreement."
+    },
+    {
+     "seat": "opus5",
+     "phase": "review",
+     "d": "NO-SURVIVOR-MEASURED",
+     "date": "2026-09-12",
+     "grade": "CONFIRMED",
+     "ev": "regress/artifacts/ppcrlwimiwidth/opus_pass2_20260912/ (rlwimi_RM_GE.log, rlwimi_RM_UNROT.log, rldimi_DM_ROT1.log, rldimi_DM_NOAND_END.log); report: regress/artifacts/xscaleinten/opus_pass2_20260912/OPUS_REPORT.md",
+     "note": "Measured: `mb >= me` 27/28 (census wrong its sole killer -- the `>` bound is census-only, now disclosed); unrotated high word 24/28; `n-- > 1` 25/27 (pres rows only); end test without `& 63` 17/27 with `census run` 0/495 and `disasm total` 8/16 red -- refuting my table-2 note that the literal pins carried no kill."
+    },
+    {
+     "seat": "codex",
+     "phase": "review",
+     "d": "D1-OVERTURNED-THREE-NEW-GAPS",
+     "date": "2026-09-12",
+     "grade": "MANUAL",
+     "ev": "panel dir _scratchpad/panel_20260912_104522_xpadjud, codex.txt (copy: regress/artifacts/xscaleinten/panel_20260912_104522_xpadjud)",
+     "note": "283,693 b.  Withdrew its own rd==0 floor argument: D1 is (e) for both cells.  Predicted three new gaps, none built, all ruled clause (e) by Fable and disclosed: `n = sh & ~7` (every patterned SH a multiple of 8), a wrap-only alias re-read, an Rc=1-only skip.  F11 attribution: the literal pins' shrink channel never measured (CENSUS_SHRINK, filed).  F12's shift list wrong (pres sh0 covers SH=0) -- corrected; stale 'controls green on every build' comments -- corrected."
+    },
+    {
+     "seat": "grok",
+     "phase": "review",
+     "d": "D1-CLAUSE-E-CHAIN-CLOSES",
+     "date": "2026-09-12",
+     "grade": "MANUAL",
+     "ev": "panel dir _scratchpad/panel_20260912_104522_xpadjud, grok.txt (copy: regress/artifacts/xscaleinten/panel_20260912_104522_xpadjud)",
+     "note": "8,729 b.  D1 clause (e); F14 still unwritten in the rlwimi header at the time -- then written; named RM_GE's `>` bound as census-only (disclosed); `full rot` also kills a do-while -> while mask loop; zero floor breaches, do not fire another ask-again."
+    },
+    {
+     "seat": "glm",
+     "phase": "review",
+     "d": "RD0-FLOOR-MINORITY",
+     "date": "2026-09-12",
+     "grade": "MANUAL",
+     "ev": "panel dir _scratchpad/panel_20260912_104522_xpadjud, ollama_glm.txt (copy: regress/artifacts/xscaleinten/panel_20260912_104522_xpadjud)",
+     "note": "10,373 b, packet-fed.  Held rd==0 as floor (overruled by Fable); its 'bit 28 refutes F2' misread the packet (Fable); its 'D_NOCIRC full rot passes by defined arithmetic' is refuted by the loop's structure (Fable)."
+    },
+    {
+     "seat": "deepseek",
+     "phase": "review",
+     "d": "D1-CLAUSE-E",
+     "date": "2026-09-12",
+     "grade": "MANUAL",
+     "ev": "panel dir _scratchpad/panel_20260912_104522_xpadjud, ollama_deepseek.txt (copy: regress/artifacts/xscaleinten/panel_20260912_104522_xpadjud)",
+     "note": "2,754 b, packet-fed.  D1 clause (e)."
+    },
+    {
+     "seat": "minimax",
+     "phase": "review",
+     "d": "D1-CLAUSE-E",
+     "date": "2026-09-12",
+     "grade": "MANUAL",
+     "ev": "panel dir _scratchpad/panel_20260912_104522_xpadjud, ollama_minimax.txt (copy: regress/artifacts/xscaleinten/panel_20260912_104522_xpadjud)",
+     "note": "8,869 b, packet-fed.  D1 clause (e); called PPC not ready on D_NOCIRC -- an invented threshold on a UB leg the PRETABLE flagged 'record, do not fit' (Fable)."
+    },
+    {
+     "seat": "kimi",
+     "phase": "review",
+     "d": "MOSTLY-UPHOLD-F11-ATTRIBUTION",
+     "date": "2026-09-12",
+     "grade": "MANUAL",
+     "ev": "panel dir _scratchpad/panel_20260912_104522_xpadjud, kimi.txt (copy: regress/artifacts/xscaleinten/panel_20260912_104522_xpadjud)",
+     "note": "173,702 b (CLI).  Upheld 14/16 on the merits; named the F11 attribution gap (the pins' unique channel unmeasured) and two named measurements (CENSUS_SHRINK; an rlwimi guard-deletion leg) -- both filed."
+    },
+    {
+     "seat": "kimi",
+     "phase": "review",
+     "d": "UPHOLD-REFINE-F5",
+     "date": "2026-09-12",
+     "grade": "MANUAL",
+     "ev": "panel dir _scratchpad/panel_20260912_104522_xpadjud, ollama_kimi.txt (copy: regress/artifacts/xscaleinten/panel_20260912_104522_xpadjud)",
+     "note": "11,751 b, kimi-k3:cloud substitute (PACKET-FED).  F5's label is EQUIVALENT, not a closable gap -- the probe says so."
+    },
+    {
+     "seat": "agy",
+     "phase": "review",
+     "d": "NOT-FIRED",
+     "date": "2026-09-12",
+     "grade": "MANUAL",
+     "ev": "panel dir _scratchpad/panel_20260912_104522_xpadjud, SEATS.txt (copy: regress/artifacts/xscaleinten/panel_20260912_104522_xpadjud)",
+     "note": "DELIBERATELY NOT FIRED (measurement reservation)."
+    },
+    {
+     "seat": "fable5",
+     "phase": "review",
+     "d": "ADJUDICATED-CHAIN-CLOSED",
+     "date": "2026-09-12",
+     "grade": "CONFIRMED",
+     "ev": "regress/artifacts/xscaleinten/fable_adjudication_20260912.md (verbatim; brief _scratchpad/brief_adjud_xscale_ppc_20260912.md)",
+     "note": "Fable 5.1, fired LAST as a subagent pinned to model fable; opened by naming itself claude-fable-5-1 (verified).  D1: clause (e), both cells, rows L1 -- and the rule the next pure deletion inherits.  Codex's three gaps: coverage debt; the repair chain CLOSES on this pass (zero floor breaches, with the denominator).  F15 was a WRONG RECORD: narrowing tmp to uint32_t made the `sh ?` guard load-bearing for definedness.  xscale ready behind a green gate; PPC ready after gate restore + pin check, the F15 record, the F11 caveat, and scoping ppc_rldicl_probe.py by name."
+    }
+   ]
   },
   {
    "id": "ppcrlwimiwidth",
@@ -35597,7 +35762,171 @@
    "opened": "2026-09-10",
    "title": "cpu_ppc_instr.c X(rlwimi): the 32-bit rotate is performed at 64-bit width in the 64-bit build, so HIGH-HALF source data leaks into the low 32 bits -- its two siblings truncate to uint32_t first and this one never does",
    "note": "*** 2026-09-12, codex farm: the promotion was NOT done -- regress/ppc_rlwimi_probe.py was a byte-identical copy of the witness (cmp).  Promoted per codex's design and REVIEW (regress/artifacts/ppcrlwimiwidth/codex_promote*_20260912.txt, codex_promoreview_20260912.txt; ppcrldimimask/codex_promote_20260912.txt): regress/ppc_rlwimi_probe.py (28 rows) with RESULT/CONTROL/DONE lines, a private loader stub, census wants pinned to MEASURED literals (they had been derived from the lists they count), and target-instruction CONTROL rows (without them a no-op instruction still read CONTROL=OK).  gate_ppc.sh sections designed to run BEFORE the NetBSD prerequisite with a strict parse -- PARKED at _scratchpad/gate_ppc.ppcround.sh (two new pins would raise SCORE_CLAIMS 25 -> 27) and MANIFEST entries parked (_scratchpad/ppc_manifest.py apply).  ALL UNMEASURED.  OWED: run both, re-table against frozen copies (rldimi M_NOCIRC by name), gate negative controls. ***\n\nFILED 2026-09-10 from the [[ppcrldiclzero]] witness's sibling audit.  MEASURED, not read.\n\nThe handler takes its operands as MODE_uint_t and then rotates with a shift pair using 32-sh.  cpu_ppc.c defines DYNTRANS_DUALMODE_32, so the file is compiled TWICE and MODE_uint_t is **uint64_t** in the 64-bit build.  The architecture specifies a 32-bit rotate over the LOW half of the source -- **the high half plays no part whatsoever** -- but the right-shift pulls bits out of the high half straight into the low 32 bits, which is exactly where the mask lives.\n\nMEASURED, source 0xAAAAAAAA0000000F, destination seeded 0x5A5A..., shift 4, full mask:\n    got 0x5a5a5a5aaaaaaaf0    want 0x5a5a5a5a000000f0\nThe 0xAAAAAA is high-half data the architecture says cannot reach there.\n\nATTRIBUTION IS PINNED BY TWO COMPANION ROWS: rlwinm on the SAME source and shift is CORRECT, because it casts to uint32_t before rotating, and rlwimi at SH=0 is correct because the ternary short-circuits the rotate entirely.  **So the defect is the missing truncation in this one handler, not the shape of the rotate expression.**\n\n*A row testing this is VACUOUS unless the source's two halves DIFFER: the seat's own first draft used an all-ones source, under which a 64-bit rotate and a true 32-bit one agree bit for bit, and it corrected the row rather than shipping it green.*\n\nADJACENT, NOT A DEFECT BUT WORTH RECORDING so a round does not rediscover it: rldic, rldcl and rldcr are NOT IMPLEMENTED AT ALL -- the decoder's default swallows them.  rldic in particular is documented and compiler-emitted.\n\n*** DESIGN REVIEW 2026-09-10: THE WIDTH PREMISE HOLDS AND **TRUNCATION ALONE IS NOT THE FIX**. ***\n\nCasting the source to `uint32_t' before the rotate is necessary and not sufficient.  The prescribed repair splits the combined declaration -- `uint32_t tmp = (uint32_t)reg(...)' with the destination kept at the mode-dependent width -- **and additionally handles the WRAPPING mask**, because the manual's mask wraps when the beginning exceeds the end: `if (mb > me) ra = (ra & 0xffffffffULL) | ((uint64_t)tmp << 32);' AFTER the rotation and BEFORE the existing mask loop.\n\n*** AND A NEW FINDING THAT CONTRADICTS THE EARLIER SIBLING AUDIT: `rlwinm' AND `rlwnm' ARE NOT UNIVERSALLY CORRECT. ***  The witness measured them green on the cases it drove and the audit recorded them as correct; the design review says that is true of those cases and not of the handlers.  **A measured-green sample is not a proof of correctness**, which is this project's own reading-versus- measurement distinction cutting the other way for once -- the measurement was right about what it measured and the GENERALISATION from it was mine.  Re-check both before either is called clean, and do not let this row's fix be copied to them on the strength of the audit.\n\n*** THE GATE CLAIM WAS WRONG AND IS CORRECTED HERE.  I WROTE IT INTO THREE ROWS, A CHANGELOG BLOCK AND TWO COMMIT MESSAGES BEFORE A SEAT CHECKED IT (wiringcliff/codex_ppcgate_20260910.txt). ***\n\n**I CLAIMED: 'no gate in this tree instantiates a 64-bit PowerPC CPU at all, so the whole 64-bit-only instruction group is invisible BY CONSTRUCTION.'  THE FIRST HALF IS FALSE.**  Gate 9 (gate_asan_sweep.sh) enumerates EVERY advertised machine type and subtype -- including bareppc, testppc and macppc/g5, all of which default to the PPC970 -- so 64-bit PowerPC CPUs ARE constructed by a gate today, and have been all along.\n\n**THE CORRECT AND NARROWER FINDING: NO GATE CHECKS THEIR INSTRUCTION RESULTS.**  Gate 9 is a CONSTRUCTION check with no PowerPC result oracle; the two PowerPC gates both drive `macppc -e g4', an MPC7400, which is 32-bit, and their probes select it EXPLICITLY rather than by default.  So the defects were invisible because nothing EXECUTES these instructions and inspects the answer -- not because nothing builds the CPU.\n\n*** THAT DISTINCTION IS THIS PROJECT'S OWN WITNESS LADDER, ONE LEVEL UP, AND I WALKED PAST IT. ***  The ladder's whole rung-2 clause says machine CONSTRUCTION proves presence and NOT reachability, and is a reproduction only for defects that construction itself executes.  I applied that rule carefully to witnesses all day and then made exactly the error it warns about when reasoning about GATES.  A gate that constructs a CPU is a rung-2 gate; these defects need a rung-3 one.\n\nTHE PRESCRIBED CLOSURE IS SMALLER THAN MY FRAMING SUGGESTED: wire the existing 19-row regress/ppc_rldicl_probe.py into gate_ppc.sh, asserting its score AND its completion sentinel.  That closes the missing instruction-result check.  **It does NOT close all 64-bit PowerPC coverage**, and the seat says so explicitly rather than letting the round claim it does.\n\n*** DESIGNED 2026-09-10 (ppcrldimimask/codex_repair_20260910.txt, GPT-6 Astra at max, ZERO cyber flags), AND IT FOUND A SECOND DEFECT AT THIS SITE THAT I HAD NOT SEEN.  MY 'ONE-TOKEN CAST' PREMISE IS REFUTED. ***\n\nThe width contamination is confirmed exactly as filed: for `1 <= SH <= 31' the erroneous expression's low word is `correct_rot32(L, SH) | ((H << SH) & 0xffffffff)', and the existing low-word mask can select those bits.  `SH == 0' bypasses the shift expression and is clean.\n\n*** THE SECOND DEFECT: WHEN `MB > ME' THE ARCHITECTURAL MASK WRAPS ACROSS THE 64-BIT BOUNDARY AND COVERS THE ENTIRE HIGH HALF, so RA's high 32 bits must be REPLACED with the rotated word -- and this implementation preserves them unconditionally. ***  `ROTL32(x, y)' is defined as rotating `x || x', the low word DUPLICATED (`ppc_pem_32and64_2005.txt:17143'), and the rlwimi RTL at `:29989' combines that with `MASK(MB+32, ME+32)'.  The wrapping mask visits `MB+32..63, 0..ME+32' -- which includes every architectural position `0..31'.\n\n    MB <= ME   high 32 mask bits all ZERO  -> preserve old RA      (what the code does)\n    MB >  ME   high 32 mask bits all ONE   -> replace with rot word (what the code never does)\n\n**So the repair is narrowing AND a high-word insertion**, and it must sit after the rotation and before the loop mutates `mb':\n\n        uint32_t tmp = (uint32_t)reg(ic->arg[0]);\n        MODE_uint_t ra = reg(ic->arg[1]);\n        ...\n        tmp = sh ? ((tmp << sh) | (tmp >> (32-sh))) : tmp;\n        /*  A wrapping MASK(MB+32, ME+32) includes the high word.  */\n        if (mb > me)\n                ra = (ra & 0xffffffffULL) | ((uint64_t)tmp << 32);\n\nIn the 32-bit compilation the conversion back to `MODE_uint_t' discards that high half, so the existing behaviour there is unchanged.\n\nMUTANT, one character: `>' -> `<' in the new condition.  `rlwimi r4,r3,0,31,0' = **0x506407c0**, `r3 = 0xaaaaaaaa0000000f', `r4 = 0x5a5a5a5a5a5a5a5a' gives correct `0x0000000f5a5a5a5b' and mutant `0x5a5a5a5a5a5a5a5b' -- the low-word insertion succeeds and the high-word replacement is skipped.\n\nTERMINATION PROVED rather than assumed: both fields are masked `& 31', `mb' is reset to 0 on reaching 32, positions are `(b+k) mod 32', and ME is processed after `((ME-b+32) % 32) + 1' bodies -- between 1 and 32.  Every shift count `31-mb' is in range.\n\nROUND SCOPE: **TWO rounds, not one**, with [[ppcrldimimask]].  Same file and family, but one repairs operand lifetime and a circular inclusive traversal while the other repairs source width and a missing high-word insertion, and validating the second needs word-duplication and high-half expectations that lie outside the doubleword detector's contract.\n\nValidated offline over **655,360 cases** (every SH/MB/ME at both widths x ten operand pairs).  **Not compiled** -- the seat had no native compiler and WSL returned `E_ACCESSDENIED'.\n\n**BLOCKER PARTLY CLEARED 2026-09-10:** [[ppcwitnessmaskoracle]]'s `want_rldimi' is corrected -- it was returning an all-zero mask for **2016 of 4096** (MB,SH) pairs, and the manual's own `:6882' (*\"It is not possible to specify an all-zero mask\"*) makes that a flat contradiction rather than a disputed reading.  `mask32' is deliberately left alone pending [[ppcrlwhighhalf]].  A wrapping-encoding row measured RED on the committed build is still owed before either repair is scored.\n\n**THE HIGH-HALF INSERTION HALF IS CONFIRMED OWED, 2026-09-10.**  It was filed as depending on the [[ppcrlwhighhalf]] dispute; that dispute is now RESOLVED by PowerPC Book I v2.01, which states the wrapping MASK and makes no upper-half clearing claim.  So this round needs BOTH halves -- the source narrowing AND the `if (mb > me)` high-word insertion -- and the narrowing alone is not the instruction's repair.\n\n**THE ORACLE BLOCKER IS CLEARED, 2026-09-11.**  [[ppcwitnessmaskoracle]]'s two corrected helpers were verified against PowerPC Book I -- endpoints, wrap direction, the `+32` offsets, the `& 63`, the all-zero-mask assertion's normative standing, and both partition counts.  **PASS.**  A measuring seat can now score this round without the oracle being the thing that is wrong.\n\n*** CHECKED FOR THE INERT-REPAIR DEFECT THAT KILLED THE SIBLING DESIGN, 2026-09-11: THIS ONE IS SAFE, AND THE REASON IS STRUCTURAL RATHER THAN LUCKY. ***\n\n`ppcrlwhighhalf`'s adopted repair turned out INERT because the DECODER mutates `mb` to equal `me` before the handler selection that tests `mb > me`.  The same question had to be asked here, since the proposed repair uses the identical guard.\n\n**IT IS FINE, and the difference is WHERE `mb` COMES FROM:**\n\n        X(rlwimi):  int mb = (iword >> 6) & 31;        <-- decoded FRESH, in the handler\n                    tmp = sh ? (rotate) : tmp;\n                    if (mb > me) ...                   <-- the proposed insertion, HERE\n                    for (;;) { ... mb ++; ... }        <-- mutation happens AFTER\n\n**`X(rlwimi)` does not consume a decoder-precomputed mask at all -- it decodes `mb` and `me` from `ic->arg[2]` itself -- so it never inherits the mutated value.**  `rlwinm` and `rlwnm` DO consume a precomputed mask, and their handler selection happens in the decoder, downstream of the loop that walks `mb` to `me`.\n\n*So the two rounds are not two instances of one hazard: one repair sits upstream of its own mutation and the other sat downstream of someone else's.  Recording the reason rather than only the verdict, because a future round asking \"is my guard inert?\" needs the discriminator -- **does this code decode the value it tests, or receive it?** -- and not a list of which handlers happened to be safe.*\n\n*** MEASURED AND REPAIRED 2026-09-11 BY agy ON **GEMINI 3.8 FLASH (HIGH)** -- the first round on the 3.8 seat, switched and liveness-verified the same hour. ***\n\n**WITNESS IS TEST-FIRST AND THE ORDER IS PROVEN BY MTIME, not asserted:** `witness_committed.out` 00:46, `candidate_fix.diff` 00:47, `witness_fix.out` 00:48.\n\n    committed build   14/28   -- 93 census cells differing from the architectural result\n    repaired build    28/28   -- 0 census cells differing, no failing rows\n\n**THE DIFF IS THE DESIGNED TWO-PART REPAIR, BOTH HALVES:** `uint32_t tmp = (uint32_t)reg(...)` splitting the declaration so `ra` keeps `MODE_uint_t`, and the `if (mb > me)` high-word insertion placed AFTER the rotate and BEFORE the loop -- which is the placement that keeps it from being inert, since the loop walks `mb` to `me`.\n\n*** AND IT FOLDED IN THE AXIS I HAD NOT ENUMERATED, WITHOUT BEING TOLD TO. ***  The pre-fix failing set includes **`alias nowrap`, `alias wrap`, `alias both`** -- REGISTER ALIASING, which a review named to me yesterday as an axis my four (mb, me, shift, compilation width) did not cover, and which I passed to this seat only as an open question.  **It rowed it.**  So `RA == RS` is measurably affected pre-fix and correct post-fix.\n\nThe rest of the pre-fix failing set spans both defects and both mask classes, which is what the brief demanded: three non-wrapping rows, four wrapping rows, `wrap fullword`, the two preservation rows, and the census.\n\n**STILL RUNNING when the print budget expired: the kill table** (`killtable_20260911/`).  Same orphan shape as this seat's earlier round today -- *\"root agent idle; waiting for 1 background task(s)\"* -- but the brief told it to write its report to disk as it goes, so the artifacts are accumulating rather than being held for a final flush.  **A 120-minute print budget was not enough either; the lesson is to collect from the artifacts directory, not from the seat's stdout.**\n\n*** THE KILL TABLE IS COMPLETE AND STRONG, AND ITS `NULL_MEDIUM` LEG IS A CHECK THAT CANNOT FAIL.  Found by opening the mutator rather than reading the leg name. ***\n\n    BASE          28/28        M_ONLY_HIGH   19/28\n    M_REV_COND    13/28        M_POST_LOOP   19/28\n    M_ONLY_CAST   19/28        M_ORIG        14/28   (= HEAD, identical failing set)\n    HEAD          14/28        RESTORED      28/28\n    NULL_MEDIUM   28/28        <-- SEE BELOW\n\nClearance: **Part 1 (cmp vs SEC) CLEAN, Part 2 (binary -nt source) FRESH, sentinel cleared.**\n\n**THREE LEGS EARN THEIR PLACE AND TWO OF THEM ANSWER QUESTIONS I ASKED EXPLICITLY:**\n  * **`M_ONLY_CAST` 19/28 and `M_ONLY_HIGH` 19/28** -- each half of the repair ALONE is killed, so **neither half suffices** and the two-part claim is measured rather than asserted.\n  * *** `M_POST_LOOP` 19/28 -- the INERT-PLACEMENT mutant. *** Moving the conditional after the loop is KILLED, which is the proof-by-measurement I asked for that the placement is load-bearing.  **That is the exact defect that made the sibling `rlwinm` design inert, and here it is a dead mutant instead of a shipped mistake.**\n\n*** BUT `NULL_MEDIUM` IS NOT A NULL MEDIUM. ***  The mutator reads `if leg in (\"BASE\", \"NULL_MEDIUM\", \"RESTORED\"): replacement = FIXED_BLOCK` -- **so the leg applies the SAME fixed block as BASE and is BASE under another name.**  It scores 28/28 because it is identical, not because the detector survives a degenerate input.\n\n**VACUITY FLOOR CLAUSE (c) IS THEREFORE UNDISCHARGED**: the detector must FAIL on a stale copy or a comment-only file, proving it carries identity rows and is actually testing the binary it claims.  A leg that cannot fail proves nothing and reads in the table as though it did -- *the check-that-cannot-fail shape, inside a floor clause whose whole purpose is to catch that shape.*\n\n**OWED BEFORE THIS SHIPS:** a real null medium -- run the frozen probe against a STALE binary, or against a source whose only change is a comment -- and show it RED.  Cheap, one leg, and it is the difference between claiming clause (c) and discharging it.\n\n*** 2026-09-11: THE KILL TABLE'S NULL-MEDIUM LEG IS A CHECK THAT CANNOT FAIL, SO VACUITY-FLOOR CLAUSE (c) IS UNDISCHARGED.  L2 -- repaired in-round. ***\n\n`killtable_20260911/mutate_rlwimi.py:179` reads\n\n    if leg in (\"BASE\", \"NULL_MEDIUM\", \"RESTORED\"):\n        replacement = FIXED_BLOCK\n\nso the NULL_MEDIUM leg COMPILES BYTE-IDENTICAL CODE TO BASE.  Its 28/28 in `SCORES.txt` is not a result: all three legs are the same binary, and the leg would report 28/28 whether or not the detector could detect anything.\n\nClause (c) requires the detector to FAIL on a medium carrying none of the behaviour under test.  A leg that recompiles the fix is a third copy of the base leg wearing the clause's name.\n\n**This is the check-that-cannot-fail family arriving INSIDE the floor clause whose whole purpose is to catch vacuity** -- which is worth recording as its own shape.  The carrier's existing instances are a `say` in a shell script and a sentence in a seat table; this one is a kill-table leg, i.e. it sits in the measurement apparatus and renders as a scored row.  A reader of `SCORES.txt` sees four green identity-ish legs and reads three independent confirmations where there is one.\n\nNOTHING ELSE IN THE ROUND IS AFFECTED: the six real mutants each scored a genuine kill (M_REV_COND 13/28, M_ONLY_CAST 19/28, M_ONLY_HIGH 19/28, M_POST_LOOP 19/28, M_ORIG 14/28, HEAD 14/28), and M_POST_LOOP at 19/28 independently proves the conditional's PLACEMENT is load-bearing.  The fix is not in question; the FLOOR CLAIM is.\n\nIN FLIGHT: agy 3.8 is building the real leg -- an identity `X(rlwimi)` body, in a scratch clone, no shared build tree touched -- where every row that genuinely observes rlwimi must RED.  Any row still green under an identity body is vacuous by construction and is the most valuable thing that run can return.  Brief predicts the `census` bookkeeping rows may legitimately survive; that is to be DISCLOSED with its reason, not waived.\n\nSTILL OWED after that: the full panel pass 2 on the diff.  Held rather than fired because a measuring seat's kill table was in flight and panel seats are CPU-heavy -- a deliberate hold, neither a seat failure nor agreement.\n\n*** CORRECTION 2026-09-11: **the existing `regress/ppc_rldicl_probe.py` has 24 ROWS, NOT 19.**  THE \"19-ROW\" FIGURE IS WRONG and it appears verbatim in this row and in its sibling. ***\n\nMeasured three ways: `git show e777ff0:regress/ppc_rldicl_probe.py | grep -c '^row('` = **24**; HEAD = 24; worktree = 24; and `git log --follow` shows no change since `e777ff0`.  `ppcwitnessmaskoracle` calls the same instrument a **\"24-row detector\"**, so the ledger contradicted itself.\n\n**19 is a SCORE, lifted from different artifacts** -- `regress/artifacts/ppcrldiclzero/witness_committed.out` reads `SCORE 19/27`, and the superseded `pass2_20260910/opus_probe_BASE.raw` reads `SCORE 19/19`.  *A score transcribed into a row-count column is the frozen-number class in a new coat, and this one is load-bearing: it is the prescribed gate-wiring closure, so a future round wiring \"19 rows\" into a gate would pin a denominator five short and the check would pass while testing less than it claims.*\n\n*** 2026-09-11 PASS 2 (codex GPT-6 Astra at max).  **Both algorithms VERIFIED; THE PROBE COVERS NEITHER FIX, AND THESE ARE TWO COMMITS NOT ONE.** ***\n\n*VERDICT: Both local algorithms check out; mode integration is unverified, and the probe covers neither fix.*\n\n**THE ARITHMETIC IS CONFIRMED, and by exhaustion rather than by argument:** independent in-memory models found **no mismatches across all 4,096 `rldimi` mask combinations and all 1,024 `rlwimi` mask pairs**, plus operand checks covering every word-rotate encoding in BOTH destination widths.  *Stated honestly as arithmetic checks, not compiled-C or emulator runs.*\n\n**`rldimi`: `(64 - sh) & 63` IS CORRECT.**  Book I's RTL is `m <- MASK(b, !n)` with `n` six bits, so `!n` is `63-SH` and the loop must stop once `m` has advanced past it.  `:4315` names that endpoint in prose.  *The pre-fix `63 - sh` read `sh` AFTER `while (sh-- != 0)` had left it at -1.*\n\n=== *** THE FINDING THAT CHANGES THE ROUND: NO DETECTOR COVERS EITHER FIX *** ===\n> *'There is no shared functioning detector here -- the permitted probe detects NEITHER repair.'*\n\n`ppc_rldicl_probe.py`'s two expected-value helpers exist but implement DISTINCT instruction formulas.  **So both fixes would ship with nothing that fails on the pre-fix build** -- vacuity floor clause (a) unmet, for both.  **Each commit owes instruction-specific observations that kill its own effect-nullifying mutant, including a SEPARATE WIDTH-SENSITIVE observation for `rlwimi`.**\n\n*** AND THEY ARE TWO COMMITS, NOT ONE.  The scope rule's join needs SAME SEMANTIC CLASS **AND ONE FIX DESIGN**; the class matches and the designs do not: *** `rldimi` preserves the shift amount and builds a correct inclusive circular mask; `rlwimi` narrows the rotation SOURCE and implements a duplicated high-word insertion.  *Even granting that the existing helpers satisfy 'no new oracle', the one-fix-design half fails.*\n\n=== THE 32-BIT MODE QUESTION: MY WORRY WAS HALF RIGHT, AND THE HALF THAT SURVIVES IS THE SHARPER ONE ===\nThe truncation is **sound as a representation argument, not an accident**: assignment to a 32-bit `MODE_uint_t` discards the upper bits by defined unsigned-conversion semantics, the shift itself happens at 64-bit width, and the loop then performs the low-word insertion.\n\n> *** BUT Book I S1.2 (`:342`): both execution modes affect ALL 64 BITS when an instruction sets a 64-bit register, and the register result is MODE-INDEPENDENT; `:1989` describes every GPR as 64 bits.  **So a 64-bit processor running in 32-bit MODE still owes the wrapping high-word write.** ***\n\n**The permitted files do not define `MODE_uint_t` or `reg`, or establish which implementation selects each compiled variant, so the seat declined to certify it** -- *'If a 64-bit processor's 32-bit execution mode reaches a variant that loses the architectural high word, that remains wrong.'*  **Filed rather than guessed.**\n\n**L4 CORRECTION APPLIED IN PLACE:** the one-line comment *'A wrapping MASK(MB+32, ME+32) includes the high word'* invited the reading that architectural 32-bit mode removes half the register.  Replaced with the seat's more accurate wording plus the open question and its Book I citations.  *This file's idiom is `MODE32` with `#else` (see `extsb`/`extsh`) and carries no `MODE64` conditional, so a future guard would be `#ifndef MODE32` -- recorded so the next round does not invent the opposite convention.*\n\n**STATUS: arithmetic green, DETECTOR OWED for both, and the round splits in two.**  Landing is held by owner ruling until the full panel reports.",
-   "witness": "probe:regress/artifacts/ppcrlwimiwidth/ (witness_committed.out / witness_fix.out)"
+   "witness": "probe:regress/artifacts/ppcrlwimiwidth/ (witness_committed.out / witness_fix.out)",
+   "entries": [
+    {
+     "seat": "codex",
+     "phase": "review",
+     "d": "SURVIVOR-SKIP-FULL-ROT",
+     "date": "2026-09-12",
+     "grade": "MANUAL",
+     "ev": "panel dir _scratchpad/panel_20260912_095238_ppcpass2, codex.txt (copy: regress/artifacts/ppcrlwimiwidth/panel_20260912_095238_ppcpass2)",
+     "note": "1,253,825 b; answer at the tail.  `while (n-- != 0 && mb != ((64 - sh) & 63))` skips the rotate exactly for a full-width mask, which every full-mask row fed from the all-ones source -- predicted 27/27.  Taken: row `full rot` (SH=24, MB=40, RS_VAL), killtable3 D_SKIP_FULL_ROT 28/29 failing it alone.  Also: the rlwimi `wrap fullword` note said 31 low bits (it is 32); both CR rows check presence only.  No Book I error in either fix (checked all 32,768 rlwimi and 4,096 rldimi immediates)."
+    },
+    {
+     "seat": "grok",
+     "phase": "review",
+     "d": "NO-SURVIVING-D-MUTANT",
+     "date": "2026-09-12",
+     "grade": "MANUAL",
+     "ev": "panel dir _scratchpad/panel_20260912_095238_ppcpass2, grok.txt (copy: regress/artifacts/ppcrlwimiwidth/panel_20260912_095238_ppcpass2)",
+     "note": "8,826 b.  Swept 17 rlwimi and 9 rldimi mutants with the kill for each; rotate evidenced only at SH 8 and 40; `sh & ~1` named as the closest green edit, clause (e).  Book I checked: both fixes exact."
+    },
+    {
+     "seat": "glm",
+     "phase": "review",
+     "d": "SURVIVOR-ALIAS",
+     "date": "2026-09-12",
+     "grade": "MANUAL",
+     "ev": "panel dir _scratchpad/panel_20260912_095238_ppcpass2, ollama_glm.txt (copy: regress/artifacts/ppcrlwimiwidth/panel_20260912_095238_ppcpass2)",
+     "note": "8,691 b, packet-fed.  rldimi had no rA == rS row (rlwimi has three).  Taken as a sibling-parity gap -- BUT its literal mutant (`tmp & cpu->cd.ppc.gpr[rs]`) reads the UNROTATED source and is wrong for every SH != 0; SIMULATED before building and replaced by its own 'equivalently' form (re-read after the clear, then rotate).  Row `alias rs=ra`, killtable3 D_ALIAS_REREAD 28/29 failing it alone."
+    },
+    {
+     "seat": "deepseek",
+     "phase": "review",
+     "d": "NO-SURVIVING-D-MUTANT",
+     "date": "2026-09-12",
+     "grade": "MANUAL",
+     "ev": "panel dir _scratchpad/panel_20260912_095238_ppcpass2, ollama_deepseek.txt (copy: regress/artifacts/ppcrlwimiwidth/panel_20260912_095238_ppcpass2)",
+     "note": "2,986 b, packet-fed.  Named an SH-1/2-only misrotate as a gap (clause (e), disclosed)."
+    },
+    {
+     "seat": "minimax",
+     "phase": "review",
+     "d": "NO-SURVIVING-D-MUTANT",
+     "date": "2026-09-12",
+     "grade": "MANUAL",
+     "ev": "panel dir _scratchpad/panel_20260912_095238_ppcpass2, ollama_minimax.txt (copy: regress/artifacts/ppcrlwimiwidth/panel_20260912_095238_ppcpass2)",
+     "note": "8,716 b, packet-fed.  All four candidate mutants caught, with the killer for each."
+    },
+    {
+     "seat": "kimi",
+     "phase": "review",
+     "d": "NO-SURVIVING-D-MUTANT",
+     "date": "2026-09-12",
+     "grade": "MANUAL",
+     "ev": "panel dir _scratchpad/panel_20260912_095238_ppcpass2, kimi.txt (copy: regress/artifacts/ppcrlwimiwidth/panel_20260912_095238_ppcpass2)",
+     "note": "121,728 b (CLI).  Swept ~40 rlwimi/rldimi mutants; the popcount argument closes every rlwimi P(mb, me) variant; rotate carried by exactly two RS_VAL rows (SH 8, 40)."
+    },
+    {
+     "seat": "kimi",
+     "phase": "review",
+     "d": "UNRESOLVED-ROTATE-PREMISE",
+     "date": "2026-09-12",
+     "grade": "MANUAL",
+     "ev": "panel dir _scratchpad/panel_20260912_095238_ppcpass2, ollama_kimi.txt (copy: regress/artifacts/ppcrlwimiwidth/panel_20260912_095238_ppcpass2)",
+     "note": "8,813 b, the kimi-k3:cloud substitute (PACKET-FED): could not see the pattern rows' sources in the packet; flagged the all-ones census as rotate-blind -- confirmed and disclosed."
+    },
+    {
+     "seat": "agy",
+     "phase": "review",
+     "d": "NOT-FIRED",
+     "date": "2026-09-12",
+     "grade": "MANUAL",
+     "ev": "panel dir _scratchpad/panel_20260912_095238_ppcpass2, SEATS.txt (copy: regress/artifacts/ppcrlwimiwidth/panel_20260912_095238_ppcpass2)",
+     "note": "DELIBERATELY NOT FIRED -- reserved for measurement by owner ruling 2026-08-30.  NOT a seat failure and NOT agreement."
+    },
+    {
+     "seat": "opus5",
+     "phase": "review",
+     "d": "NO-SURVIVOR-MEASURED",
+     "date": "2026-09-12",
+     "grade": "CONFIRMED",
+     "ev": "regress/artifacts/ppcrlwimiwidth/opus_pass2_20260912/ (rlwimi_RM_GE.log, rlwimi_RM_UNROT.log, rldimi_DM_ROT1.log, rldimi_DM_NOAND_END.log); report: regress/artifacts/xscaleinten/opus_pass2_20260912/OPUS_REPORT.md",
+     "note": "Measured: `mb >= me` 27/28 (census wrong its sole killer -- the `>` bound is census-only, now disclosed); unrotated high word 24/28; `n-- > 1` 25/27 (pres rows only); end test without `& 63` 17/27 with `census run` 0/495 and `disasm total` 8/16 red -- refuting my table-2 note that the literal pins carried no kill."
+    },
+    {
+     "seat": "codex",
+     "phase": "review",
+     "d": "D1-OVERTURNED-THREE-NEW-GAPS",
+     "date": "2026-09-12",
+     "grade": "MANUAL",
+     "ev": "panel dir _scratchpad/panel_20260912_104522_xpadjud, codex.txt (copy: regress/artifacts/xscaleinten/panel_20260912_104522_xpadjud)",
+     "note": "283,693 b.  Withdrew its own rd==0 floor argument: D1 is (e) for both cells.  Predicted three new gaps, none built, all ruled clause (e) by Fable and disclosed: `n = sh & ~7` (every patterned SH a multiple of 8), a wrap-only alias re-read, an Rc=1-only skip.  F11 attribution: the literal pins' shrink channel never measured (CENSUS_SHRINK, filed).  F12's shift list wrong (pres sh0 covers SH=0) -- corrected; stale 'controls green on every build' comments -- corrected."
+    },
+    {
+     "seat": "grok",
+     "phase": "review",
+     "d": "D1-CLAUSE-E-CHAIN-CLOSES",
+     "date": "2026-09-12",
+     "grade": "MANUAL",
+     "ev": "panel dir _scratchpad/panel_20260912_104522_xpadjud, grok.txt (copy: regress/artifacts/xscaleinten/panel_20260912_104522_xpadjud)",
+     "note": "8,729 b.  D1 clause (e); F14 still unwritten in the rlwimi header at the time -- then written; named RM_GE's `>` bound as census-only (disclosed); `full rot` also kills a do-while -> while mask loop; zero floor breaches, do not fire another ask-again."
+    },
+    {
+     "seat": "glm",
+     "phase": "review",
+     "d": "RD0-FLOOR-MINORITY",
+     "date": "2026-09-12",
+     "grade": "MANUAL",
+     "ev": "panel dir _scratchpad/panel_20260912_104522_xpadjud, ollama_glm.txt (copy: regress/artifacts/xscaleinten/panel_20260912_104522_xpadjud)",
+     "note": "10,373 b, packet-fed.  Held rd==0 as floor (overruled by Fable); its 'bit 28 refutes F2' misread the packet (Fable); its 'D_NOCIRC full rot passes by defined arithmetic' is refuted by the loop's structure (Fable)."
+    },
+    {
+     "seat": "deepseek",
+     "phase": "review",
+     "d": "D1-CLAUSE-E",
+     "date": "2026-09-12",
+     "grade": "MANUAL",
+     "ev": "panel dir _scratchpad/panel_20260912_104522_xpadjud, ollama_deepseek.txt (copy: regress/artifacts/xscaleinten/panel_20260912_104522_xpadjud)",
+     "note": "2,754 b, packet-fed.  D1 clause (e)."
+    },
+    {
+     "seat": "minimax",
+     "phase": "review",
+     "d": "D1-CLAUSE-E",
+     "date": "2026-09-12",
+     "grade": "MANUAL",
+     "ev": "panel dir _scratchpad/panel_20260912_104522_xpadjud, ollama_minimax.txt (copy: regress/artifacts/xscaleinten/panel_20260912_104522_xpadjud)",
+     "note": "8,869 b, packet-fed.  D1 clause (e); called PPC not ready on D_NOCIRC -- an invented threshold on a UB leg the PRETABLE flagged 'record, do not fit' (Fable)."
+    },
+    {
+     "seat": "kimi",
+     "phase": "review",
+     "d": "MOSTLY-UPHOLD-F11-ATTRIBUTION",
+     "date": "2026-09-12",
+     "grade": "MANUAL",
+     "ev": "panel dir _scratchpad/panel_20260912_104522_xpadjud, kimi.txt (copy: regress/artifacts/xscaleinten/panel_20260912_104522_xpadjud)",
+     "note": "173,702 b (CLI).  Upheld 14/16 on the merits; named the F11 attribution gap (the pins' unique channel unmeasured) and two named measurements (CENSUS_SHRINK; an rlwimi guard-deletion leg) -- both filed."
+    },
+    {
+     "seat": "kimi",
+     "phase": "review",
+     "d": "UPHOLD-REFINE-F5",
+     "date": "2026-09-12",
+     "grade": "MANUAL",
+     "ev": "panel dir _scratchpad/panel_20260912_104522_xpadjud, ollama_kimi.txt (copy: regress/artifacts/xscaleinten/panel_20260912_104522_xpadjud)",
+     "note": "11,751 b, kimi-k3:cloud substitute (PACKET-FED).  F5's label is EQUIVALENT, not a closable gap -- the probe says so."
+    },
+    {
+     "seat": "agy",
+     "phase": "review",
+     "d": "NOT-FIRED",
+     "date": "2026-09-12",
+     "grade": "MANUAL",
+     "ev": "panel dir _scratchpad/panel_20260912_104522_xpadjud, SEATS.txt (copy: regress/artifacts/xscaleinten/panel_20260912_104522_xpadjud)",
+     "note": "DELIBERATELY NOT FIRED (measurement reservation)."
+    },
+    {
+     "seat": "fable5",
+     "phase": "review",
+     "d": "ADJUDICATED-CHAIN-CLOSED",
+     "date": "2026-09-12",
+     "grade": "CONFIRMED",
+     "ev": "regress/artifacts/xscaleinten/fable_adjudication_20260912.md (verbatim; brief _scratchpad/brief_adjud_xscale_ppc_20260912.md)",
+     "note": "Fable 5.1, fired LAST as a subagent pinned to model fable; opened by naming itself claude-fable-5-1 (verified).  D1: clause (e), both cells, rows L1 -- and the rule the next pure deletion inherits.  Codex's three gaps: coverage debt; the repair chain CLOSES on this pass (zero floor breaches, with the denominator).  F15 was a WRONG RECORD: narrowing tmp to uint32_t made the `sh ?` guard load-bearing for definedness.  xscale ready behind a green gate; PPC ready after gate restore + pin check, the F15 record, the F11 caveat, and scoping ppc_rldicl_probe.py by name."
+    }
+   ]
   },
   {
    "id": "mipsextsignext",

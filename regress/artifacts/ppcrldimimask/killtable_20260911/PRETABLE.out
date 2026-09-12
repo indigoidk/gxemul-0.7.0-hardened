@@ -1,0 +1,95 @@
+PRE-TABLE CHECK -- ppcrldimimask
+Written BEFORE table 1 runs, so this file's own mtime proves the order.
+
+THE DIFF UNDER TEST is the FOUR COORDINATED EDITS in X(rldimi) in src/cpus/cpu_ppc_instr.c:
+  1. `int m, n = sh;`                       /*  1: keep SH  */
+  2. `while (n-- != 0)`                     /*  2: consume the copy  */
+  3. `m = (m + 1) & 63;`                    /*  3: circular increment  */
+  4. `while (m != ((64 - sh) & 63));`       /*  4: successor modulo 64  */
+
+A partial repair changing only some of these does not work: saving SH without the circular
+increment hits `(uint64_t)1 << -1` at MB=40, SH=40 (undefined behaviour in C).
+
+--------------------------------------------------------------------- SIBLING PARITY
+
+The sibling operations in opcode 30:
+  rldicl   repaired in #522 (e777ff0) by building mask in tmp2
+  rldicr   correct in tree: clears bits outside MASK(0, ME)
+  rldimi   this round: bitfield insert under MASK(MB, 63-SH) with wrapping
+  rlwimi   sibling 32-bit insert: separate defect (rotates 64 bits wide and omits
+           high-word insertion on wrapping masks), scheduled as separate round `ppcrlwimiwidth`.
+
+--------------------------------------------------------------------- CLAIM -> ROW
+
+1. "X(rldimi)'s rotate loop post-decrements sh to -1 on exit for every SH"
+   -> ROWED by every row where SH != 0.
+2. "Non-wrapping encodings (MB <= 63-SH) overwrite low SH destination bits"
+   -> ROWED as `nowrap sh8 mb0`, `nowrap sh32 mb0`, `nowrap sh16 mb16`, `pres nowrap`.
+3. "Wrapping encodings (MB > 63-SH) omit insertion into positions 0..63-SH"
+   -> ROWED as `wrap sh40 mb40` (worked case 40,40), `wrap sh63 mb63`, `wrap full`,
+      `wrap sh48 mb32`, `pres wrap`.
+4. "rldimi with MB=0, SH=0 agrees on broken build by coincidence"
+   -> ROWED as `nowrap sh0 mb0` (green on committed, green on fix).
+5. "One-character mutant 64 -> 63 drops architectural bit 63"
+   -> ROWED as `M_MUT63` leg in kill table, tested against `nowrap single` and `nowrap sh0 mb0`.
+6. "Full census across sweeps and diagonals"
+   -> ROWED as `census run`, `census wrong`, `census zero` (495 cells driven).
+
+--------------------------------------------------------- GUARD FIELD vs BODY FIELD
+
+This instruction is a pure computational transformation in user/supervisor mode:
+  Inputs:  cpu->cd.ppc.gpr[rs], cpu->cd.ppc.gpr[ra], sh, mb, rc
+  Outputs: cpu->cd.ppc.gpr[ra], and CR0 when rc=1
+
+The census walks the cross-product space (MB sweeps, SH sweeps, diagonal, anti-diagonal).
+
+------------------------------------------------------------------------- CHANNEL
+
+  row                mutant it kills                    observable that differs
+  -----------------  ---------------------------------  ------------------------------
+  nowrap sh8 mb0     M_ORIG, M_NOKEEP_SH, HEAD          destination: 0xffffffffffffff00 vs 0xffffffffffffffff
+  nowrap sh32 mb0    M_ORIG, M_NOKEEP_SH, HEAD          destination: 0xffffffff00000000 vs 0xffffffffffffffff
+  nowrap sh16 mb16   M_ORIG, M_NOKEEP_SH, HEAD          destination: 0x0000ffffffff0000 vs 0x0000ffffffffffff
+  nowrap single      M_MUT63                            destination: 0x1 vs 0x0 (bit 63 dropped)
+  nowrap sh0 mb0     M_MUT63                            destination: 0xffffffffffffffff vs 0xfffffffffffffffe
+  wrap sh40 mb40     M_ORIG, M_NOWRAP, M_NOCIRC, HEAD   destination: 0xffffff0000ffffff vs 0x0000000000ffffff
+  wrap sh63 mb63     M_ORIG, M_NOWRAP, M_NOCIRC, HEAD   destination: 0x8000000000000001 vs 0x0000000000000001
+  wrap full          M_ORIG, M_NOWRAP, M_NOCIRC, HEAD   destination: 0xffffffffffffffff vs 0x7fffffffffffffff
+  wrap sh48 mb32     M_ORIG, M_NOWRAP, M_NOCIRC, HEAD   destination: 0xffff0000ffffffff vs 0x00000000ffffffff
+  pres nowrap        M_ORIG, M_NO_MERGE, HEAD           destination: unmasked low 8 bits preserved
+  pres wrap          M_ORIG, M_NO_MERGE, HEAD           destination: unmasked middle bits preserved
+  pres sh0           M_NO_MERGE                         destination: unmasked high 32 bits preserved
+  cr0 record form    apparatus                          CR register dump with Rc=1
+  census wrong       M_ORIG, M_MUT63, M_NOWRAP, HEAD    count of disagreeing cells: 0 vs 431 / mutant count
+
+--------------------------------------------------------------- VACUITY FLOOR PLAN
+
+  (a) fails on the pre-fix build        -> HEAD leg and committed build: 17/27 on witness.
+  (b) VERBATIM REINSTATEMENT            -> M_ORIG (reverts four edits to original broken loop).
+  (c) null medium                       -> HEAD leg (whole-file pre-fix).
+      [CORRECTION 2026-09-11]: The entry above -- "(c) null medium -> HEAD leg (whole-file pre-fix)" --
+      is REFUTED. A whole-file pre-fix build measures clause (a) (pre-fix build failure), not clause (c)
+      (null medium carrying none of the behaviour under test). It measures the pre-fix defect state
+      (scoring 17/27, identical to M_ORIG), carrying defect behaviour rather than null behaviour.
+      The real null medium (identity body: decode and retire, insert nothing, destination unchanged)
+      was measured at killtable_nullmedium_20260911: SCORE 13/27 with all 14 rldimi-observing rows RED.
+      Clause (c) is discharged by killtable_nullmedium_20260911, not by HEAD.
+  (d) NULLED REPAIR                     -> M_MUT63 (64->63 one-character mutant),
+                                           M_NOWRAP (partial non-wrapping repair),
+                                           M_NOKEEP_SH (consume sh directly),
+                                           M_NOCIRC (omit circular increment),
+                                           M_NO_MERGE (omit destination preservation).
+
+------------------------------------------------------ TABLE PLAN (predictions)
+
+  BASE       the fix, unmutated                      predict 27/27
+  M_ORIG     the defect verbatim                     predict 17/27 (fails 10 rows)
+  M_MUT63    64 -> 63 in termination condition       predict fails singleton and endpoint-63 cells
+  M_NOWRAP   partial non-wrapping fix                predict fails all wrapping cases
+  M_NOKEEP_SH sh decremented in rotate loop          predict fails almost all cases (stops at m==1)
+  M_NOCIRC   m++ instead of (m+1)&63                 predict fails all wrapping cases
+  M_NO_MERGE ra = (tmp & s) without ~tmp & ra        predict fails all preservation rows
+  HEAD       whole-file pre-fix (null medium)        predict 17/27 (identical to M_ORIG)
+             [CORRECTION 2026-09-11]: Refuted as a null medium; HEAD is a pre-fix clause (a) leg.
+             Real null medium measured in killtable_nullmedium_20260911: SCORE 13/27.
+  RESTORED   restored baseline from SEC              predict 27/27 (cmp CLEAN, binary FRESH)

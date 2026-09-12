@@ -1,0 +1,130 @@
+VERDICT: No incorrect GPR result found in the repair. The table’s coverage claim stops short of proving runtime reachability, helper correctness, or C definedness after future edits.
+CODEX_RLDIMIP2_20260911
+
+I read only the two permitted files. The on-disk handler contains the supplied repair. I take your measurements and exhaustive 4096-pair mask check as given.
+
+1. **No counterexample to the repaired rotate, mask, and merge.**
+
+   [The handler](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc_instr.c:2534) decodes both `sh` and `mb` into `0..63`. Rotation uses unsigned 64-bit values and shifts by one, so neither endpoint introduces a shift by 64. Combined with your settled mask verification, it computes:
+
+   ```text
+   M   = MASK(MB, 63-SH)
+   RA′ = (RA_old & ~M) | (ROTL64(RS_old, SH) & M)
+   ```
+
+   That matches [Book I’s instruction definition](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ppc_uisa_book1_v201.txt:4315), using the [settled wrapping-mask definition](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ppc_uisa_book1_v201.txt:578).
+
+   | `(MB, SH)` | Mask | Mask-loop iterations |
+   |---|---|---:|
+   | `(0, 0)` | `0xffffffffffffffff` | 64 |
+   | `(63, 0)` | `0x0000000000000001` | 1 |
+   | `(0, 63)` | `0x8000000000000000` | 1 |
+   | `(63, 63)` | `0x8000000000000001` | 2 |
+   | `(63, 1)` | `0xffffffffffffffff` | 64 |
+   | `(63-SH, SH)` | `(uint64_t)1 << SH` | 1 |
+
+   More generally, `SH=0` gives `MB..63`; `MB=0` gives `0..63-SH`. At `SH=63`, the endpoint is bit 0, so every positive `MB` wraps through bit 63 back to bit 0.
+
+   **The register-alias case also works.** `s` captures the original source before either destination write. Consequently, `RA == RS` does not destroy the source needed for insertion. Register 0 receives ordinary GPR treatment here.
+
+2. **Both loops terminate for every encoding. At `(MB,SH)=(0,0)`, the mask loop executes exactly 64 times.**
+
+   The rotation body executes zero times, although its failed condition changes `n` from `0` to `-1`.
+
+   The mask loop then starts with `m=0`, and its bound is `0`:
+
+   - First iteration sets PPC bit 0, advances `m` to 1, and continues.
+   - Subsequent iterations set bits 1 through 62.
+   - The 64th iteration sets bit 63, advances `m` from 63 to 0, and stops.
+
+   Initial equality between the starting position and the bound means a complete circuit because this is a `do/while`.
+
+   Generally, the mask loop executes between 1 and 64 times. Its increment stays within `0..63`, and the bound is within that same range. No mask-bit shift has an invalid count.
+
+3. **The repair is active: `sh` remains untouched.**
+
+   The complete relevant dataflow is:
+
+   ```text
+   decode sh → initialize n from sh → decrement n during rotation
+             → read the original sh in the mask bound
+   ```
+
+   `n` is the sole countdown variable. It is used only by the rotation condition and ends at `-1`, including when `SH=0`.
+
+   Strictly, `n` is not the only *consumer of `sh`*: initializing `n` and evaluating the mask bound both read `sh`. Neither modifies it. There is no intervening assignment, increment, decrement, address escape, or function call that can change this local variable.
+
+   The mask loop intentionally changes `m` before testing it. Its endpoint depends on preserved `sh`, not exhausted `n`.
+
+4. **The handler exists in both compilations; the visible decoder rejects `bits == 32`. Absolute unreachability in the `MODE32` compilation is not established by these files.**
+
+   [The decoder](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc_instr.c:4566) selects `instr(rldimi)`, copies the instruction word, then executes:
+
+   ```c
+   if (cpu->cd.ppc.bits == 32) {
+       ...
+       goto bad;
+   }
+   ```
+
+   Thus a CPU with `bits == 32` leaves this arm through the failure path. Assigning `ic->f` beforehand does not itself execute the handler.
+
+   However, neither the handler nor this decoding arm has a `MODE32` exclusion. A runtime value of `bits != 32` passes this check in either compilation. The code selecting the compiled dispatcher, and the actual `bad` handling supplied by the [included translation tail](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc_instr.c:5407), are outside the permitted files. I cannot turn this local guard into proof that the `MODE32` handler is globally unreachable.
+
+   **If invoked, the repaired GPR computation remains 64-bit:** `s`, `tmp`, and the mask-bit constant explicitly use `uint64_t`; this handler uses direct `gpr[]` accesses rather than `MODE_uint_t` temporaries or `reg()`.
+
+   Also, “64-bit instruction” does not establish “64-bit execution mode only.” [Book I §1.2](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ppc_uisa_book1_v201.txt:340) specifies mode-independent register results, and [the `rldimi` entry](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ppc_uisa_book1_v201.txt:12191) marks its mode dependency as status-register behavior.
+
+5. **Yes: the final merged destination is the required record-form input. The repair can change the resulting CR0 classification.**
+
+   [Book I’s CR0 rule](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ppc_uisa_book1_v201.txt:1363) requires signed comparison of the result placed in the target register against zero:
+
+   - In 64-bit mode, compare all 64 bits.
+   - In 32-bit mode, compare the low 32 bits.
+   - Copy the final `XER.SO` into CR0’s SO bit.
+
+   [The call follows both merge writes](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_ppc_instr.c:2553), so its operand is correct. Comparing only the rotated source or inserted fragment would be wrong.
+
+   A concrete change, with distinct source and destination registers:
+
+   ```text
+   MB=0, SH=1, Rc=1, RS_old=0, RA_old=1
+   Original result: 0 → EQ
+   Repaired result: 1 → GT
+   ```
+
+   This changes classification in either execution mode. For a wrapping example, `MB=63, SH=63, RS_old=1, RA_old=0` changes the result from zero to `0x8000000000000000`: the required classification changes from EQ to LT in 64-bit mode, while remaining EQ in 32-bit mode.
+
+   The repair leaves XER untouched and makes no CR0 call when `Rc=0`.
+
+   **The helper itself remains unverified.** Neither its definition nor its declaration appears in the permitted source file. Correct argument and call ordering establish this handler’s side of the contract; they do not establish the helper’s comparison width, SO handling, or preservation of other CR fields.
+
+6. **The candidate results are below.** “First” uses ascending `MB`, then ascending `SH`.
+
+   | Candidate | Verdict | First difference |
+   |---|---|---|
+   | **(a)** Remove `& 63` from the bound | **DIFFERENT** | `(0,0)`: the bound becomes 64, which circular `m` never reaches. Every `SH=0` case loops forever. For `SH>0`, the bounds agree. |
+   | **(b)** Replace increment’s `& 63` with `% 64` | **EQUIVALENT** | None. `m+1` is always between 1 and 64, where these expressions agree. |
+   | **(c)** Initialize `n = sh & 63` | **EQUIVALENT** | None. Decoding already constrains `sh` to `0..63`. |
+   | **(d)** Move the initialization of `n` after the rotation | **DIFFERENT** | Already undefined at `(0,0)`: the first `n--` reads an uninitialized automatic variable. There is no defined output comparison or deterministic first failing result. |
+
+   For **(d)**, this means removing the original initializer and assigning `n = sh` afterward. The later assignment cannot repair the earlier uninitialized read.
+
+7. **No supplied mutant escapes within the enumerated class. That class does not cover arbitrary future edits.**
+
+   There are two qualifications to the displayed evidence:
+
+   - The table contains **six named `M_*` variants**. The stipulated `HEAD == M_ORIG` result adds reproducibility evidence, but no additional semantic mutation.
+   - `M_NOKEEP_SH` explicitly removes edits 1–2 together. That leg alone does not establish separate runtime kills for those two textual changes. Equivalent alternatives such as **(b)** and **(c)** should remain green.
+
+   A plausible future edit that a value-checking instrument **can miss even when it tests `SH=0`** is replacing the rotation loop with:
+
+   ```c
+   s = (s << sh) | (s >> (64 - sh));
+   ```
+
+   At `SH=0`, the right shift has count 64 and invokes undefined behavior in C. A compiler that recognizes this expression and emits a hardware rotate can nevertheless produce every expected test value. Thus an ordinary result table can stay clean while the edited C program is wrong. Detecting that defect requires checking definedness, through review or suitable diagnostics, beyond comparing result values.
+
+   Another concrete boundary is register aliasing: computing the mask first and delaying the source load until after clearing the destination preserves behavior when `RA != RS`, but breaks `RA == RS`. With `(MB,SH)=(0,0)` and the shared register initially `1`, that reordered implementation produces `0` instead of `1`.
+
+   The instrument’s rows and assertions were not supplied or permitted for inspection, so I cannot claim it lacks alias checks or undefined-behavior diagnostics. **The demonstrated boundary is detection of the exact measured mutants; the aggregate scores do not establish coverage of those additional failure mechanisms.**

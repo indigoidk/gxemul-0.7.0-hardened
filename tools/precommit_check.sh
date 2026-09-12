@@ -329,7 +329,12 @@ elif out=$(python "$SCORECHK" 2>&1); then
 	#  hard FAIL on purpose -- a floor that only catches SHRINKAGE goes slack
 	#  every time the count rises, which is how this check once sat at 16
 	#  against a real 18.
-	SCORE_CLAIMS_MANIFEST=25
+	#  RAISED 25 -> 28 ON 2026-09-12, DELIBERATELY.  Three newly SEEN pins: ppc_rlwimi_probe.py
+	#  and ppc_rldimi_probe.py (#527, gate_ppc.sh, 28 and 29 rows), and xscale_inten_probe.py
+	#  (#526, gate_arm.sh, 30) -- whose pin #526 shipped QUOTED ("30"), which this check's PIN
+	#  regex cannot see, so for one commit the score-claims check guarded nothing there.  The
+	#  gate behaved identically either way (a string compare); the literal is unquoted in #527.
+	SCORE_CLAIMS_MANIFEST=28
 	_spinned=$(printf '%s\n' "$out" | sed -n 's/^SCORE_CLAIMS_PINNED=//p')
 	if [ -z "$_spinned" ]; then
 		bad "check_score_claims printed no SCORE_CLAIMS_PINNED line -- the count cannot be pinned"

@@ -1,0 +1,29 @@
+NO SURVIVING (d) MUTANT — swept: listed candidates (`mb >= me`, unrotated high word, rldimi end test without `& 63`, `n-- > 1`) and standard arithmetic/relational mutations of the diff lines; residual risk only from a non-standard conditional mutant affecting `sh=1` or `sh=2` alone, which is not a typical clause-(d) mutation.
+
+PASS2_PPC_20260912
+
+**Q1 — Surviving mutant?**  
+READ from packet: the diff lines, detector row lists, and kill table.  
+REASONED: I enumerated the dominating predicates and operand swaps for each edited line.
+
+- **rlwimi `mb > me` → `mb >= me`**  
+  Caught by census cell `(0,0)` with `sh=0` and SENT high word. The mutant would set the high word to `tmp` (0xCAFEF00D) instead of leaving SENT (0x5A5A5A5A), so `census wrong` fails.  
+- **rlwimi `(uint64_t)tmp << 32` → unrotated source word**  
+  Caught by any wrapping row with `sh != 0`, e.g. `wrap sh8 mb20` or `wrap sh16 mb28`. High word would be unrotated, differing from Book I.  
+- **rldimi end test `m != 64 - sh` without `& 63`**  
+  For `sh=0`, `m` never equals 64 (since `m` is always 0–63), causing an infinite loop. Detector would time out or hang, so killed.  
+- **rldimi rotate loop `n-- > 1`**  
+  Reduces rotate count by 1 for all `sh >= 1`. Pattern rows include `sh=8`, `sh=16`, `sh=32`, `sh=40`, `sh=48`, `sh=63`, so any of those would catch the wrong rotate.  
+
+No other simple mutation of the diff lines (e.g. `n = sh ± 1`, `n = sh & 1`, `m = (m+1) & 31`, `tmp |= 1 << m`) survives, because they affect all `sh` values and the pattern rows cover enough distinct `sh` to expose them.
+
+**Q2 — Vacuous rows / blind spots**  
+READ: rldimi census uses an all-ones source.  
+REASONED: An all-ones source is invariant under any rotate amount, so the census cannot detect rotate-count defects. The pattern rows are intended to cover rotate amount, and they do for `sh ∈ {0,8,16,32,40,48,63}`. However, no pattern row explicitly uses `sh=1` or `sh=2`. A mutant that *only* mis-rotates for `sh=1` or `sh=2` (e.g. a conditional `if (sh == 1) n = 0;`) would evade both the census and the pattern rows. Such a mutant is not a standard clause-(d) mutation, but it is a coverage gap worth noting.
+
+**Q3 — `disasm total` / `census run` literals**  
+READ: No leg in the table produced a short census, so those pins never fired.  
+REASONED: This is a floor gap, not a disclosure. The pins are correct as expected totals, but the mutation set did not include any mutant that would shorten the census. A mutant causing an early exit or timeout would be caught by `census run`, but none was tested. The gap is in mutation coverage, not in the detector logic.
+
+**Premises audit**  
+READ: The brief’s architecture description uses PowerPC bit numbering (bit 0 = MSB), while the C code uses C bit numbering (bit 0 = LSB). This is not a contradiction; the code’s `31-mb` correctly maps to the low 32 bits in C. No self-contradictory premise found in the packet.

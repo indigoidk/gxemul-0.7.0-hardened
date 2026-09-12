@@ -2538,18 +2538,18 @@ X(rldimi)
 	int sh = ((iw >> 11) & 31) | ((iw & 2) << 4);
 	int mb = ((iw >> 6) & 31) | (iw & 0x20);
 	int rc = ic->arg[0] & 1;
-	int m;
+	int m, n = sh;
 	uint64_t tmp, s = cpu->cd.ppc.gpr[rs];
 	/*  TODO: Fix this, its performance is awful:  */
-	while (sh-- != 0) {
+	while (n-- != 0) {
 		int b = (s >> 63) & 1;
 		s = (s << 1) | b;
 	}
 	m = mb; tmp = 0;
 	do {
 		tmp |= ((uint64_t)1 << (63-m));
-		m ++;
-	} while (m != 63 - sh);
+		m = (m + 1) & 63;
+	} while (m != ((64 - sh) & 63));
 	cpu->cd.ppc.gpr[ra] &= ~tmp;
 	cpu->cd.ppc.gpr[ra] |= (tmp & s);
 	if (rc)
@@ -2607,7 +2607,8 @@ DOT0(rlwinm)
  */
 X(rlwimi)
 {
-	MODE_uint_t tmp = reg(ic->arg[0]), ra = reg(ic->arg[1]);
+	uint32_t tmp = (uint32_t)reg(ic->arg[0]);
+	MODE_uint_t ra = reg(ic->arg[1]);
 	uint32_t iword = ic->arg[2];
 	int sh = (iword >> 11) & 31;
 	int mb = (iword >> 6) & 31;
@@ -2615,6 +2616,28 @@ X(rlwimi)
 	int rc = iword & 1;
 
 	tmp = sh ? ((tmp << sh) | (tmp >> (32-sh))) : tmp;
+
+	/*  A wrapping 64-bit MASK(MB+32, ME+32) selects the DUPLICATED high
+	    word (Book I :578 -- MASK wraps when x > y).  Assignment to a
+	    32-bit MODE_uint_t retains only the low word, which is a sound
+	    representation argument by defined unsigned-conversion semantics
+	    and NOT an accident: the shift is performed at 64-bit width and
+	    the loop below then does the low-word insertion.
+
+	    IT IS NOT A CLAIM THAT ARCHITECTURAL 32-BIT MODE REMOVES HALF THE
+	    REGISTER, and the earlier one-line wording here invited that
+	    reading.  Book I S1.2 (:342) says both execution modes affect all
+	    64 bits when an instruction sets a 64-bit register and the result
+	    is mode-independent, and :1989 describes every GPR as 64 bits --
+	    so a 64-bit processor running in 32-bit MODE still owes this
+	    write.  Whether any such implementation compiles the narrow
+	    variant is NOT established here; if one does, it loses the
+	    architectural high word and that is a defect.  Filed rather than
+	    guessed.  (This file's idiom is MODE32 with #else -- see extsb /
+	    extsh -- and carries no MODE64 conditional, so a future guard
+	    would be #ifndef MODE32.)  */
+	if (mb > me)
+		ra = (ra & 0xffffffffULL) | ((uint64_t)tmp << 32);
 
 	for (;;) {
 		uint64_t mask;

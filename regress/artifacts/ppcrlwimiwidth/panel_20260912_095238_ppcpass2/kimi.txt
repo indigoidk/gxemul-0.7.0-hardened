@@ -1,0 +1,741 @@
+kimi version 0.36.0
+• Let me carefully work through this mutation-testing review. The task: review two PowerPC fixes (rlwimi and rldimi in gxemul's cpu_ppc_instr.c) and their detectors. The core question: is there a clause-(d) mutant of either fix that stays GREEN on its detector? I.e., a mutation of the fix (predicates dominating edited lines, operand swaps from fields the body reads) that the detector fails to kill.
+
+  I have the fixed code inlined in the prompt, plus the detector descriptions. I also have read access to the tree. The prompt says file-reading seats should check Book I correctness too (question 4). Let me read the actual source to verify the inlined code matches, and check the detectors.
+
+  Let me think hard about the semantics first.
+
+  ## rlwimi fix
+
+  ```c
+  X(rlwimi)
+  {
+  	uint32_t tmp = (uint32_t)reg(ic->arg[0]);
+  	MODE_uint_t ra = reg(ic->arg[1]);
+  	uint32_t iword = ic->arg[2];
+  	int sh = (iword >> 11) & 31;
+  	int mb = (iword >> 6) & 31;
+  	int me = (iword >> 1) & 31;
+  	int rc = iword & 1;
+
+  	tmp = sh ? ((tmp << sh) | (tmp >> (32-sh))) : tmp;
+
+  	if (mb > me)
+  		ra = (ra & 0xffffffffULL) | ((uint64_t)tmp << 32);
+
+  	for (;;) {
+  		uint64_t mask;
+  		mask = (uint64_t)1 << (31-mb);
+  		ra &= ~mask;
+  		ra |= (tmp & mask);
+  		if (mb == me)
+  			break;
+  		mb ++;
+  		if (mb == 32)
+  			mb = 0;
+  	}
+  	reg(ic->arg[1]) = ra;
+  	if (rc)
+  		update_cr0(cpu, ra);
+  }
+  ```
+
+  Book I: r <- ROTL32((RS)32:63, SH); m <- MASK(MB+32, ME+32); RA <- (r & m) | (RA & ~m). ROTL32 rotates the low word and duplicates into both halves: r = rotl(low32, sh) as a 64-bit value with high word = low word. MASK(x,y) wraps if x > y.
+
+  Case mb <= me (non-wrap): mask is bits 32+mb..32+me, i.e., only in the low word (bits (31-mb) down... wait, bit numbering: PowerPC big-endian bit numbering, bit 0 = MSB. MASK(32+mb, 32+me) in 64-bit numbering covers low word bits. In the code, `mask = 1 << (31-mb)` — C bit numbering from LSB: bit position 31-mb corresponds to PPC bit 32+mb. Yes.
+
+  So non-wrap: mask covers low word only, high word of RA untouched. The loop writes each bit from mb to me inclusive (since mb <= me, no wrap in loop). It takes bits from tmp (rotated low word). Note `tmp` is uint32_t; `tmp & mask` — mask is uint64_t bit within low word, fine. ra's high word untouched. Correct.
+
+  Case mb > me (wrap): MASK(32+mb, 32+me) with 32+mb > 32+me wraps: 1s from 32+mb through 63, and from 0 through 32+me. So mask = entire high word (bits 0..31) plus low word bits 32+mb..63 and 32..32+me. RA <- (r & m) | (RA & ~m): high word becomes r's high word = rotated word (duplicate). Low word bits in [mb..31] and [0..me] (PPC numbering within word) come from rotated word; bits (me+1..mb-1) preserved.
+
+  In the code: `if (mb > me) ra = (ra & 0xffffffffULL) | ((uint64_t)tmp << 32);` — sets high word to tmp (rotated word), preserves low word. Then loop: starts at mb, clears and sets bits, wraps mb at 32→0, until mb == me (inclusive of me). So the loop covers mb, mb+1, ..., 31, 0, 1, ..., me. Bits (me+1..mb-1) preserved. Correct.
+
+  Now candidate mutants:
+
+  **Candidate 1: `mb > me` → `mb >= me`.** When mb == me (single-bit mask, non-wrapping per Book I: MASK(32+k, 32+k) is a single bit, no wrap since x == y... wait — does MASK wrap when x > y only? "MASK(x, y) is 1s from x through y, wrapping if x > y". So x == y is a single bit, not full mask). With `mb >= me`, the high word would be overwritten with tmp when mb == me. Book I says high word untouched when mb == me. Detector: does any row test mb == me with a SENT high word and check it? Census has non-wrap cells (0,0) and (31,31) — those are mb == me cells, driven "each into a SENT destination from RS_VAL". SENT = 0x5A5A5A5A5A5A5A5A, high word 0x5A5A5A5A. Under the mutant, high word becomes rotated RS_VAL low word... RS_VAL = 0xDEADBEEFCAFEF00D, low word 0xCAFEF00D, rotated by sh. For census sh in {0,1,8,16,31} plus diagonals (k, k, 31-k) and (k, 31-k, k) for k=0..31. The diagonals include all k for mb==me? (k, 31-k, k): mb = 31-k, me = k — mb == me requires 31-k == k, no integer solution (31 odd). (k, k, 31-k): mb == me requires k == 31-k → k = 15.5, no. But the non-wrap set includes (0,0) and (31,31) with SH in {0,1,8,16,31}: that's cells (sh, 0, 0) and (sh, 31, 31) for those 5 sh values — mb == me cells with SENT dest, compared against Book I RTL. Under `mb >= me` mutant, high word = tmp (rotated), Book I expects SENT high word preserved. Mismatch → census wrong > 0 → killed. Unless... does the census compare the full 64-bit result? "compared with Book I's RTL" — presumably full RA. So killed by census cells like (0,0,0): sh=0, mb=0, me=0. Under mutant: high word = tmp = low32(RS) rotated 0 = 0xCAFEF00D, expected 0x5A5A5A5A. Killed. Also the question mentions "does a single-bit MB == ME cell with a SENT high word exist? the census has (0,0) and (31,31)". Yes — so `mb >= me` is killed. 
+
+  But wait — is there a subtlety: does the census run those cells from MUT_RS or RS_VAL? "plus the diagonals (k, k, 31-k) and (k, 31-k, k) for k = 0..31, deduplicated to 129 cells, each into a SENT destination from RS_VAL". So all census cells use RS_VAL (halves differ). (0,0,0): high word under mutant = 0xCAFEF00D ≠ SENT hi 0x5A5A5A5A. Killed. Good.
+
+  **Candidate 2: `(uint64_t)tmp << 32` → unrotated source word** — e.g., `ra = (ra & 0xffffffffULL) | (reg(ic->arg[0]) & 0xffffffff00000000ULL)` or `(uint64_t)(uint32_t)reg(ic->arg[0]) << 32`. Under this mutant, wrap rows with sh=0 would pass but sh=8, sh=16 wrap rows would fail: `wrap sh8 mb20` [20,10], `wrap sh16 mb28` [28,4] — these are into SENT from MUT_RS = 0xAAAAAAAA0000000F. Under mutant, high word = unrotated low word of MUT_RS = 0x0000000F; rotated by 8 = 0x00000F00. Different → killed. Also census wrap cells with sh in {1,8,16,31}: (1, 31, 0) etc. Killed. Unless the wrap rows don't check high word — they compare full RA presumably. Killed.
+
+  But what about the specific swap `((uint64_t)tmp << 32)` → `((uint64_t)tmp >> 32)`? tmp is uint32_t so tmp >> 32 is UB / 0 in practice (shift >= width is UB; on x86-64 with 32-bit shift it's masked to 0 → 0). Actually (uint64_t)tmp >> 32 = 0 since tmp < 2^32. So high word = 0. Killed by every wrap row (SENT high word 0x5A5A5A5A → 0; expected rotated tmp). Killed.
+
+  What about `<< 32` → `<< 31` or `<< 33`? High word wrong bits; wrap rows check high word → killed (any wrap row with sh0: expected high = tmp exactly).
+
+  **Candidate: `ra & 0xffffffffULL` → `ra & 0xffffffff00000000ULL`** (preserve high, set low = tmp<<32... that would make low word = 0). Then loop fixes bits mb..me wrap but bits between stay 0 instead of preserved. Killed by pres rows (`pres wrap` sh0 [24,8]: bits 9..23 preserved from SENT low 0x5A5A5A5A). Killed.
+
+  **Candidate: swap `tmp` and `ra` in loop**: `ra |= (ra & mask)` — no-op; then mask bits of ra unchanged — i.e., insert nothing into low word (but high still set if mb>me). Rows: nowrap rows into zero dest expect inserted bits ≠ 0 → killed (e.g., `nowrap sh8 mb0` [0,15] into zero dest from RS_VAL: expected low bits from rotated word; mutant leaves 0). Killed.
+
+  **Candidate: `mask = 1 << (31 - mb)` → `1 << (31 - me)`** — loop breaks when mb == me, but writes wrong bits... Actually if mask uses me (fixed), each iteration writes bit 31-me repeatedly, clearing bits... wait it clears `ra &= ~mask` with same mask each time, then sets from tmp same bit. So only bit 31-me is written; all other bits in [mb..me] preserved. Killed by nowrap rows with multi-bit ranges into zero dest (e.g., [0,15]: expected bits 16..31 (C numbering) from tmp; mutant leaves zero). Killed.
+
+  **Candidate: loop wrap `if (mb == 32) mb = 0` → `if (mb == 32) break`** or remove wrap: then for mb > me, loop runs mb..31 then mb=32... `1 << (31-32)` = `1 << -1` UB. Hmm, C UB — on x86 shift count masked → 1 << 31? Actually for uint64_t shift by -1 & 63 = 63. Anyway behavior weird; rows `wrap *` would fail since bit coverage wrong / break early. If break at 32: bits 0..me not written → killed by wrap rows ([24,8]: bits 0..8 PPC numbering = low bits; SENT preserved there vs expected tmp bits). Killed.
+
+  **Candidate: `mb ++` → `mb += 2`?** Then loop might skip me and never terminate... mb == me check; stepping by 2 may skip and loop forever (or wrap around repeatedly). If mb and me same parity it terminates after writing half the bits. Killed by rows with odd-distance ranges. Also timeout risk. A mutant that infinite-loops = detected (session dies). Not green.
+
+  **Candidate: `if (mb > me)` removed but high-word handled differently...** R_ONLY_CAST leg already: keep uint32_t read, drop high-word line → 19/28, killed. Measured.
+
+  **Candidate: `tmp = sh ? ... : tmp` → rotate wrong direction** `(tmp >> sh) | (tmp << (32-sh))`: killed by nowrap sh8 rows (into zero dest, bits [0,15]: rotated-left-8 vs rotated-right-8 differ). RS_VAL low 0xCAFEF00D rotl8 = 0xFEF00DCA; rotr8 = 0x0DCAFEF0. Row expects rotl → killed. sh=0 rows pass but sh8/sh16/sh4 kill. Killed.
+
+  **Candidate: `sh ?` → `sh > 0`?** sh is 0..31, sh > 0 ≡ sh != 0 ≡ sh truthy. Equivalent mutation — not a mutant that changes behavior. Same for `sh != 0`.
+
+  **Candidate: `sh ?` → always rotate** `(tmp << sh) | (tmp >> (32-sh))` with sh=0: `tmp >> 32` UB on uint32_t. In practice (x86) shift count masked → tmp >> 0 = tmp... wait, for 32-bit shifts on x86, count masked to 5 bits → 32 & 31 = 0 → tmp. So (tmp << 0) | (tmp >> 0) = tmp. Behaviorally identical on x86-64! Hmm — is that a surviving mutant? The guard `sh ?` exists precisely to avoid UB `tmp >> (32-0) = tmp >> 32`. On MSVC x86-64, `>>` for uint32_t with count 32: the compiler may emit `shr eax, cl` with cl=32 → masked to 0 → returns tmp. So behaviorally tmp. So mutant `tmp = (tmp << sh) | (tmp >> (32-sh));` unconditionally is behaviorally equivalent on common hardware (though UB in C). Is that a "(d) mutant"? Clause (d) seems to be "predicates dominating the edited lines and operand swaps". `sh ?` is a predicate dominating... but is the rotate line one of "the edited lines"? The fix edits were: (1) `uint32_t tmp` (was MODE_uint_t), (2) the `if (mb > me)` line added. The rotate line `tmp = sh ? (...) : tmp` — was that pre-existing? Looking at the original gxemul code... In original gxemul 0.6.x, rlwimi is:
+
+  Actually let me recall the original code from gxemul. In gxemul's cpu_ppc_instr.c (original 2021), I believe rlwimi was:
+
+  ```c
+  X(rlwimi)
+  {
+  	MODE_uint_t tmp = reg(ic->arg[0]);
+  	MODE_uint_t ra = reg(ic->arg[1]);
+  	uint32_t iword = ic->arg[2];
+  	int sh = (iword >> 11) & 31;
+  	int mb = (iword >> 6) & 31;
+  	int me = (iword >> 1) & 31;
+  	int rc = iword & 1;
+  	tmp = (tmp << sh) | (tmp >> (32-sh));
+  	...
+  ```
+
+  Hmm, I don't remember exactly. The brief says the fix changed `MODE_uint_t tmp` to `uint32_t tmp` and added the `if (mb > me)` line. The `sh ? ... : tmp` guard may be part of the fix or pre-existing. Either way, the question asks about mutants of "either fix" — predicates dominating the edited lines: "rlwimi: `sh ?`, `mb > me`, the loop's `mb == me` and `mb == 32`". So `sh ?` is explicitly in scope.
+
+  Unconditional rotate with sh=0 → UB but on x86-64 behaves as identity. This is a behaviorally-equivalent mutant on the test platform (technically UB). Detectors can't catch it because it behaves identically. Should I name it? It's an equivalent-mutant, not a real defect. But strictly "stays GREEN on its detector" — yes it stays green. Hmm, but is it a *mutant of the fix*? If the `sh ?` guard was pre-existing code, it's not part of the fix diff. Let me check the source. I should read the actual file and git diff.
+
+  Also on gcc, `tmp >> 32` where tmp is uint32_t: compile-time-constant? sh is runtime, so emitted shift instruction; on x86 SHR with CL masked to 31 → count 0 → unchanged. So identity. Equivalent mutant. Mutation testing convention: equivalent mutants are noted, not counted as survivors (they're unkillable). But strictly it "stays green". I should mention it as a noted equivalent-on-x86 mutant — honest disclosure. Actually wait — is it really equivalent? `(tmp << 0) | (tmp >> 32)`: if the compiler does the math at O2 with UB exploitation... gcc could assume sh != 0? No — sh is a runtime value 0..31, and the compiler can't assume the shift count. UB exploitation requires the compiler to prove the count is out of range, which it can't. So emitted code: mov ecx, 32; sub ecx, sh... it computes 32-sh at runtime = 32 when sh=0; shr with count 32 masked → 0 → tmp. Fine. Equivalent in practice on x86-64. I'll note it.
+
+  **Candidate: `mb > me` → `mb != me`?** Then single-bit cells (mb==me) don't get high word (correct), and wrap cells get it (correct)... wait mb != me is true for both mb > me AND mb < me. For mb < me (non-wrap multi-bit), mutant would set high word = tmp — wrong! Book I: high word untouched when mb < me. Killed by census non-wrap cells with SENT dest, e.g., (0, 0, 15): expected high 0x5A5A5A5A, mutant gives rotated tmp. `pres nowrap` row (sh8, [0,15], into SENT): checks preservation → killed. Yes, `pres nowrap` kills it directly.
+
+  **Candidate: `mb > me` → `mb >= me`** covered above — killed by census (0,0)/(31,31) with SENT... but wait, need to double check that census comparison includes the high word. "each into a SENT destination from RS_VAL, compared with Book I's RTL (`census wrong` wants 0, `census zero` wants 0)". The RTL comparison is over the full 64-bit RA. So yes.
+
+  Hmm, but hold on — is there a subtlety in how the census drives instructions "one instruction per destination register"? The detectors drive via debugger, one instruction per dest register. Fine.
+
+  **Candidate: swap rs/ra decode?** `rs = (iw >> 16) & 31` etc. — that's not an edited line; decode is pre-existing and disasm xcheck covers. Skip.
+
+  **Candidate: `(ra & 0xffffffffULL) | ((uint64_t)tmp << 32)` → `(ra & 0xffffffff00000000ULL) | tmp`?** That sets low = tmp, preserves high. Then loop overwrites bits [mb..wrap..me] of low word from tmp anyway, but bits between get tmp instead of preserved SENT; high word preserved instead of tmp. Wrap rows check both → killed. 
+
+  **Candidate: `tmp << 32` with tmp as rotated but... the `<< 32` → `<< 16`?** killed by any wrap row.
+
+  **Candidate R_POST_LOOP measured: moving the high-word line after the loop → 19/28.** Why does that fail? Because the loop's `ra &= ~mask; ra |= tmp & mask` only touches low-word bits; moving after means high word still gets set... wait, if moved after the loop, the high word would still be set to tmp<<32 at the end — same final value! Unless... `ra = (ra & 0xffffffffULL) | ...` after the loop: low word = post-loop ra (correct), high = tmp. Same result! Why did it measure 19?
+
+  Oh wait — R_POST_LOOP measured 19, i.e., killed. But semantically, moving that line after the loop... the loop only modifies bits 32..63 (C numbering, low word)? mask = 1 << (31-mb), mb in 0..31 → bits 0..31 of the uint64. Yes loop only touches low word. And the high-word line sets high word, preserving low. Order doesn't matter! Both commute! So R_POST_LOOP should be BEHAVIORALLY EQUIVALENT — a survivor — yet measured 19/28 (killed)?!
+
+  Hmm wait, let me re-read: "R_POST_LOOP | move the `if (mb > me)` line AFTER the loop | 19". Hmm, but that contradicts... unless the kill came from rows that check intermediate state? No, rows check final register. Unless moving it after the loop but... hold on, maybe the mutation moved it after `reg(ic->arg[1]) = ra;`? No, "after the loop" presumably right after loop end, before the writeback. Then final result identical. Unless the writeback... `reg(ic->arg[1]) = ra` — ra already updated. Identical.
+
+  Wait, maybe I misread which line. "move the `if (mb > me)` line AFTER the loop" — the two-line statement `if (mb > me) ra = (ra & 0xffffffffULL) | ((uint64_t)tmp << 32);`. After the loop. Loop writes low bits only. So final ra identical. Both orderings give same result. So R_POST_LOOP is an equivalent mutant and should measure 28 (green)... but measured 19?!
+
+  Unless the loop DOES touch high bits in some case. mask = (uint64_t)1 << (31-mb); mb ∈ [0,31] → shift in [0,31] → bits 0..31. Never high. So no.
+
+  Hmm, unless the mutant build had a compile error or the probe's "19" includes control failures from something else... The table says R_POST_LOOP → 19 (no CONTROL=FAIL annotation, so controls passed and 9 test rows failed?). Wait, 28-19 = 9 failures. If behaviorally equivalent, 0 rows should fail. Contradiction!
+
+  Let me reconsider. Maybe "the loop" referred to includes... hmm. Or maybe the mutation moved the line to after the loop but INSIDE... Let me think about what edit a mutation harness would make: cut the two lines, paste after the closing brace of the for loop. Result:
+
+  ```c
+  	for (;;) { ... }
+  	if (mb > me)
+  		ra = (ra & 0xffffffffULL) | ((uint64_t)tmp << 32);
+  	reg(ic->arg[1]) = ra;
+  ```
+
+  Final ra: loop modifies low bits from pre-loop ra; then high replaced, low preserved. Pre-loop ra = original RA. Original fix: high replaced first (low preserved), then loop writes low bits — loop reads ra? No! The loop doesn't read ra except `ra &= ~mask` which clears then sets — it doesn't depend on prior low bits... wait it does: `ra &= ~mask` preserves all bits except mask bit; `ra |= tmp & mask` sets mask bit from tmp. So each iteration only depends on ra's non-mask bits. Final low word: bits in [mb..me wrap] = tmp bits; other low bits = original RA bits (from before the high-word line, since that line preserves low word). High word = tmp. Both orders: identical final value. TRULY EQUIVALENT.
+
+  So why 19? Something's off. Possibilities: (a) the measured table is fictional/wrong — but my job is to check premises, and this is a premise I can check by reading... actually I can't re-run (rule says don't run gates, but building a single mutant in my own temp dir is allowed... though that takes a long time; also I can't easily replicate their harness quickly. Hmm, actually maybe I can — but let me think more first). (b) The mutation was applied differently than described — e.g., moved after the loop but after `reg(ic->arg[1]) = ra;`? That would also be equivalent (ra local, written back unchanged... no wait — if moved after writeback, the high-word change to local `ra` never gets written back → high word never updated → equals R_ONLY_CAST ≈ 19!). 
+
+  Hmm interesting: R_ONLY_CAST measured 19 too. And R_ONLY_HIGH measured 19. If "move after the loop" actually placed it after the writeback `reg(ic->arg[1]) = ra;`, behavior = high word never written = R_ONLY_CAST = 19. The coincidence of 19, 19, 19 is suspicious. OR the mutation genuinely commutes and the table is wrong (fabricated kills). Either way — the premise "R_POST_LOOP measured 19" is inconsistent with the code semantics as inlined. That's exactly the kind of premise the panel is asked to check ("a recent panel had seven of nine seats confirm a premise a brief stated wrongly").
+
+  Wait, wait. Let me recheck the loop. Does the loop touch the HIGH word ever? `mask = (uint64_t)1 << (31-mb);` — if mb somehow > 31? No, mb masked &31, incremented with wrap at 32→0. So no.
+
+  Does `ra` get read by the loop in a way that the high-word line affects? `ra &= ~mask` — ~mask has all high 32 bits set → high word of ra preserved by loop. So high word flows through the loop unchanged. The high-word line before the loop: high = tmp; loop preserves high. After: same. EQUIVALENT. Final answer identical for all inputs.
+
+  So R_POST_LOOP = 19 is IMPOSSIBLE under faithful "move after loop, before writeback". Two readings:
+  1. The mutation placed the line after the writeback (i.e., at end of function) → dead code → equals R_ONLY_CAST → 19. Then the leg name is misleading but the number is consistent.
+  2. The table is fabricated/wrong for this leg.
+
+  Either way, as a reviewer I should FLAG: R_POST_LOOP as described is behaviorally equivalent to the fix (the high-word write commutes with the loop, which touches only low-word bits), so a measured 19 is inconsistent — either the edit landed after the writeback (dead store, same as R_ONLY_CAST) or the measurement is wrong. If it truly landed before writeback and still killed 9 rows, the detector is detecting something other than behavior (impossible) — so premise flagged. This is a strong finding. Let me verify by reading the actual fixed source in the tree to make sure the inlined code is accurate (maybe the loop DOES touch high bits, e.g., mask computation differs). I must read the file.
+
+  Hmm wait, actually — maybe I should reconsider: maybe in the actual file, the loop is different. Let me read the real code. Also check git diff to see exactly what the fix changed (HEAD vs working tree).
+
+  **Now rldimi:**
+
+  ```c
+  X(rldimi)
+  {
+  	uint32_t iw = ic->arg[0];
+  	int rs = (iw >> 21) & 31, ra = (iw >> 16) & 31;
+  	int sh = ((iw >> 11) & 31) | ((iw & 2) << 4);
+  	int mb = ((iw >> 6) & 31) | (iw & 0x20);
+  	int rc = ic->arg[0] & 1;
+  	int m, n = sh;
+  	uint64_t tmp, s = cpu->cd.ppc.gpr[rs];
+  	while (n-- != 0) {
+  		int b = (s >> 63) & 1;
+  		s = (s << 1) | b;
+  	}
+  	m = mb; tmp = 0;
+  	do {
+  		tmp |= ((uint64_t)1 << (63-m));
+  		m = (m + 1) & 63;
+  	} while (m != ((64 - sh) & 63));
+  	cpu->cd.ppc.gpr[ra] &= ~tmp;
+  	cpu->cd.ppc.gpr[ra] |= (tmp & s);
+  	if (rc)
+  		update_cr0(cpu, cpu->cd.ppc.gpr[ra]);
+  }
+  ```
+
+  Book I rldimi: r <- ROTL64(RS, sh); m <- MASK(mb, 63-sh); RA <- (r & m) | (RA & ~m).
+
+  MASK(mb, 63-sh): 1s from bit mb through bit 63-sh, wrapping if mb > 63-sh.
+
+  The mask loop: starts m = mb; sets bit (63-m) [C numbering ↔ PPC bit m]; m = (m+1)&63; until m == (64-sh)&63 — i.e., stop after setting bit (63 - ((63-sh)&63))... let's see: loop sets bits for m = mb, mb+1, ..., up to but not including (64-sh)&63. So last bit set is m = ((64-sh)&63) - 1 = (63-sh)&63... careful: (64-sh)&63 for sh=0 is 0; then bits set from mb through 63 (wrap all the way) — i.e., MASK(mb, 63) for sh=0. Book: MASK(mb, 63-0) = MASK(mb,63). ✓. For sh>0: end = 64-sh, bits mb..63-sh. ✓ MASK(mb, 63-sh). ✓. The do-while always executes at least once: even if mb == (64-sh)&63 initially (mask would be... Book: MASK(mb, 63-sh) with mb == 63-sh → single bit). do-while: sets bit mb, then m = mb+1 ≠ mb... wait end test compares to (64-sh)&63 = mb+... if mb == 63-sh then (64-sh)&63 = mb+1 → after one iteration m = mb+1 == end → stop. Single bit. ✓.
+
+  Edge: sh=0, mb=0: end = 0; loop sets bits 0..63 (all) — MASK(0,63) full. ✓ Book: MASK(0, 63) full. ✓.
+
+  Edge: sh=0, mb=0 with end test `m != 0` — loops through all 64 values, sets all bits, m wraps to 0 → stop. ✓.
+
+  Candidate **D_MUT63** (`(63 - sh) & 63`): measured 14, CONTROL=FAIL. For sh=0: end = 63 → bits mb..62 only... wait end=(63-0)&63=63: bits mb..62 (m stops at 63). Book wants mb..63. So bit 63 missing → but controls fail? Interesting — controls like `nowrap sh0 mb0` expect full mask. Fine, measured.
+
+  Candidate from the prompt: **end test `m != 64 - sh` without `& 63`** (sh=0 only matters): for sh=0, end = 64. m cycles 0..63, wraps &63 → never equals 64 → INFINITE LOOP. Session timeout → detector fails (killed, but by hang). For sh>0, 64-sh ∈ [33,64]... sh≥1 → 64-sh ≤ 63, reachable. So only sh=0 hangs. `nowrap sh0 mb0` row exists → hang → killed (not green; a hang is not green). So named candidate refuted: it's detected via timeout. Unless the probe treats hang as pass — no, session dies → rows fail.
+
+  Candidate **rotate loop `n-- > 1`**: rotates sh-1 times instead of sh (for sh≥1; for sh=0: n-- > 1 with n=0 → 0 > 1 false → no rotate, same as fix ✓; for sh=1: n=1 → 1 > 1 false → 0 rotations instead of 1 ✗). So mutant = rotate by sh-1 for sh≥1. Detector: census source is ALL ONES — rotate of all-ones is all-ones regardless! Census is BLIND to rotate amount. Pattern rows: `nowrap sh8 mb0`, `nowrap sh32 mb0`, `nowrap sh16 mb16`, `wrap sh40 mb40`, `wrap sh63 mb63`, `wrap sh48 mb32`... what's the source for pattern rows? For rldimi the brief doesn't explicitly state the pattern-row source value. rlwimi used RS_VAL with halves differ; rldimi rows presumably use some non-trivial pattern. If pattern rows use a value where rotl by sh-1 ≠ rotl by sh (any non-degenerate value), then rows with sh≥1 kill it: `nowrap sh8 mb0` (rotate 7 vs 8). Unless the pattern rows only check the masked-merged result against expected computed with correct rotate → yes they'd fail under mutant. So killed by pattern rows — PROVIDED pattern-row source is not all-ones. The brief says census source is all-ones; pattern rows presumably use a different pattern (else they'd be redundant... not necessarily). Hmm. Need to read the probe to confirm. If pattern rows also used all-ones, `n-- > 1` would survive! That's candidate question 2 territory: "the census source for rldimi is all-ones: which rotate defects is that blind to, and do the pattern rows actually cover them?" I need to read ppc_rldimi_probe.py.
+
+  Rotate defects blind under all-ones source: wrong rotate amount (sh±k), rotate direction, no rotate — ALL invisible with all-ones source (rotl(0xFFFF...F, k) = 0xFFFF...F). But the mask depends on sh too! The mask end is 63-sh. So a rotate-amount defect that ALSO corrupts... no wait — the mutant `n-- > 1` only changes the rotate count, not the mask computation (mask uses `sh`, unchanged). So under all-ones census: mask correct, source all-ones → result correct regardless of rotate. Census blind. Pattern rows must carry it. Pattern rows with sh>0: nowrap sh8 mb0, nowrap sh32 mb0, nowrap sh16 mb16, wrap sh40 mb40, wrap sh63 mb63, wrap sh48 mb32 — if any uses a non-constant source (e.g., 0x0123456789ABCDEF), rotating by sh-1 vs sh gives different masked result → killed. I must read the probe to see the source values for pattern rows.
+
+  Similarly rlwimi census source RS_VAL (halves differ, non-degenerate) — rotate defects visible.
+
+  Candidate **rldimi `n-- != 0` → `n-- > 1`** covered: killed by pattern rows with sh≥1 if source non-degenerate.
+
+  Candidate **`s = (s << 1) | b` → `s = (s << 1)`** (no wrap of top bit): rotate becomes shift-left. Killed by pattern rows where rotated-out bits land in the mask: e.g., nowrap sh8 mb0 (mask 0..55 PPC = high bits... bits 0..63-sh=55). With shift instead of rotate, low 8 bits zero instead of top 8 bits. Mask covers bits 0..55 (PPC), i.e., everything except low 8 bits. The low 8 bits (PPC 56..63) are NOT in the mask — they're preserved from RA. So the difference (shift vs rotate) shows only in bits 56..63, which are outside the mask → RESULT IDENTICAL for nowrap sh8 mb0?! Interesting. For rldicl-like behavior the rotated-in bits matter when they're within mask mb..63-sh. For nowrap sh8 mb0: mask = bits 0..55. The wrapped bits (top 8 bits of source → bottom 8 bits) land at PPC bits 56..63, outside mask. So `s = (s<<1)` mutant invisible at (8, 0). At (16,16): mask 16..47; wrapped bits land 48..63 — outside. Hmm! For NON-WRAP cells, mask = mb..63-sh; rotated-in bits occupy PPC bits 64-sh..63, always outside the non-wrap mask (mask ends at 63-sh). So for non-wrap rows, the rotate's wrap-part is always masked out — shift vs rotate indistinguishable! Only the shift part matters.
+
+  For WRAP rows: mask = mb..63 ∪ 0..63-sh; rotated-in bits at PPC 64-sh..63 — is that within wrap mask? Wrap mask covers mb..63 and 0..63-sh. Bits 64-sh..63: covered iff 64-sh ≥ mb (i.e., within mb..63 part). E.g., wrap sh40 mb40: mask = 40..63 ∪ 0..23. Wrapped-in bits at 24..63 — 40..63 ∩ 24..63 = 40..63 covered. So shift-vs-rotate differs in bits 40..63 which are in mask → `wrap sh40 mb40` kills `s=(s<<1)` (if source has non-zero top bits). `wrap sh48 mb32`: wrapped bits at 16..63; mask = 32..63 ∪ 0..15; ∩ = 32..63 ≠ ∅ → killed. `wrap sh63 mb63`: wrapped bits at 1..63; mask = 63 ∪ 0..0; ∩ = {63} → killed if bit differs. `wrap full` (sh0? mask everything): wrapped bits... sh=0 → rotate 0 → no difference. Hmm "wrap full" probably sh=0 mb=0 → mask all; rotate 0 → shift==rotate; blind. But other rows kill. So `s=(s<<1)` killed by wrap rows IF source's relevant bits non-zero. Source for wrap rows — need probe source.
+
+  Similarly candidate **rotate direction `s = (s >> 1) | (b << 63)`**: right-rotate. Pattern rows with sh>0: nowrap sh8 mb0: mask 0..55; right-rotated source — different in mask region → killed (source non-degenerate).
+
+  Candidate **`m = (m + 1) & 63` → `m = m + 1`** (D_NOCIRC) measured 20, CONTROL=FAIL. For cells where the count hits 64... `1 << (63-m)` with m=64 → `1 << -1` UB... anyway measured.
+
+  Candidate **end test operand swap: `m != ((64 - sh) & 63)` → `m != ((63 - sh) & 63)`** = D_MUT63, measured 14 CONTROL=FAIL. Killed.
+
+  Candidate **end test → `m != ((64 - sh) & 63)` with `m` and end swapped** — symmetric !=, equivalent.
+
+  Candidate **mask bit `1 << (63 - m)` → `1 << (63 - mb)`**: sets same bit every iteration... loop still runs same trip count; tmp = single bit 63-mb. Killed by nowrap rows with multi-bit masks (nowrap sh32 mb0: mask 0..31 → 32 bits; mutant gives 1 bit) → killed.
+
+  Candidate **`cpu->cd.ppc.gpr[ra] &= ~tmp` → `&= tmp`**? Then |= tmp&s... result = (ra & tmp) | (tmp & s) = tmp & (ra|s). Killed by pres rows.
+
+  Candidate **`|= (tmp & s)` → `|= (tmp & ~s)`**? killed by nowrap rows into... dest pre-seeded with? For rldimi probe, pattern rows seed dest with something (SENT?). (tmp & ~s) vs (tmp & s): different unless masked s bits are 0... source non-zero → killed.
+
+  Candidate **`& 63` in rotate... `b = (s >> 63) & 1` → `(s >> 63)`** — same (b is int; s>>63 of uint64 is 0 or 1). Equivalent.
+
+  Candidate **`n = sh` → `n = 64 - sh`?** rotate by 64-sh ≡ rotate right by sh. Killed by pattern rows (sh>0) as above.
+
+  Candidate **swap `s` and `tmp` somewhere**: `cpu->cd.ppc.gpr[ra] |= (tmp & s)` → `|= (tmp | s)`? killed by nowrap rows where ~mask... no wait — result = (ra & ~tmp) | (tmp | s): bits outside mask get ra (correct), bits inside mask get 1|s... = 1 always (since tmp bit set) → all mask bits 1. nowrap sh8 mb0 expects pattern bits → killed.
+
+  Candidate: **rlwimi loop `mb == me` → `mb != me` break inverted** → single iteration then... `if (mb != me) break` → breaks immediately for mb≠me after one bit → killed by multi-bit rows; for mb==me loops forever... hang. Killed.
+
+  Candidate: rlwimi `mb == 32` → `mb > 32`? Never true → mb reaches 32 → `1 << (31-32)` = `1 << -1` UB → on x86-64 shl with cl = -1 & 63 = 63 → mask = 1<<63 (high word bit 0 PPC!) → corrupts high word... then `mb == me` check with mb=32 never equals me ∈ 0..31... mb keeps incrementing 33, 34... shift counts 31-33=-2 &63=62... mb never == me, and `mb == 32` wrap removed... infinite loop with mb growing unboundedly — actually mb is int, increments forever → signed overflow UB → hang in practice → killed by timeout. Wait but `mb == me` — me ∈ [0,31], mb grows past 31 → never equal → infinite. Hang → killed (wrap rows hang). Not green.
+
+  Candidate: rlwimi `mb == 32` → `mb == 31`? Then wrap happens one early: after writing bit 31... sequence: mb=31 → write bit 0 (C: 31-31=0)... wait mask bit for mb=31 is C-bit 0 (PPC bit 63). Then mb==me? if me≠31, mb++ → 32 → check `mb == 31`? No (32≠31) → mb=32: mask = 1 << (31-32) = 1 << -1 UB → x86: 1<<63 → clears/sets PPC bit 0 (high word MSB)! Then mb==me? 32≠me... mb=33: 1<<(31-33)=1<<-2 → &63=62... mb increments; when does mb==me (me≤31)? Never (mb>31 always now, and wrap check `mb==31` never true again) → infinite loop → hang → killed. OK.
+
+  Candidate: rlwimi loop `mb ++` → `mb += 1` equivalent; `mb = mb + 1 & 31`? `(mb+1)&31` — then `mb == 32` never true but wrap handled by &31 → equivalent behavior! `mb = (mb + 1) & 31` with the `if (mb == 32) mb = 0` still present (dead) — behaviorally identical. Equivalent mutant, stays green, unkillable. But is the loop increment an "edited line"? The loop wasn't edited by the fix (only the `if (mb>me)` line added and tmp type). Clause (d) is "predicates DOMINATING the edited lines... and operand swaps drawn from fields the body reads". The loop increment is not a predicate and not an operand swap... `mb ++` → `mb = (mb+1)&31` is neither. Out of scope for (d). Fine.
+
+  Candidate **rlwimi `mb > me` → `mb >= me`** — covered: killed by census (sh,0,0)/(sh,31,31) cells with SENT dest. But WAIT — need to confirm census comparison catches high-word changes: census compares full 64-bit RA against Book I RTL. The brief says census cells go "into a SENT destination from RS_VAL, compared with Book I's RTL". So yes full compare. (0,0,0): mb=me=0 → under mutant, high = rotl(0xCAFEF00D, 0) = 0xCAFEF00D; expected 0x5A5A5A5A → wrong → census wrong ≥ 1 → killed. ✓. Also (31,31) with any sh. So `mb >= me` KILLED. The prompt asks "does a single-bit MB == ME cell with a SENT high word exist? the census has (0,0) and (31,31)" — yes, and RS_VAL's rotated low word (0xCAFEF00D rot sh) differs from 0x5A5A5A5A for all census sh ∈ {0,1,8,16,31}: rotl32(0xCAFEF00D,0)=0xCAFEF00D; 1: 0x95FDE01B; 8: 0xFEF00DCA; 16: 0xF00DCAFE; 31: 0xE55F7806... none equal 0x5A5A5A5A. ✓ killed. Also the diagonals (k,k,31-k): mb==me... k = 31-k no solution; so mb==me cells only via the 10 cells from nonwrap set ×5 sh. Enough.
+
+  Candidate **rlwimi `mb > me` → `mb < me`** = R_REV_COND measured 13 CONTROL=FAIL. Killed.
+
+  Candidate **rlwimi high-word line uses `tmp` BEFORE rotation?** — i.e., move the `if (mb>me)` line BEFORE the rotate line. Then high word = unrotated low word. Equivalent to candidate 2 (unrotated source) → killed by wrap sh8/sh16 rows (MUT_RS 0xAAAAAAAA0000000F rotl8 low = 0x00000F00 vs unrotated 0x0000000F → differ). ✓ killed. Note wrap sh0 rows blind (rotate 0), but sh8/sh16 rows and census wrap cells with sh∈{1,8,16,31} kill it: census (1,31,0): high = rotl(0xCAFEF00D,1)=0x95FDE01B vs unrot 0xCAFEF00D → killed. ✓
+
+  Candidate **rlwimi `(uint64_t)tmp << 32` → `(uint64_t)tmp` (drop <<32)**: sets ra = (ra & 0xffffffff) | tmp → low word = tmp | (ra low)... wait: (ra & 0xffffffff) | tmp — low word becomes ra_low | tmp (OR!), high = 0. High zeroed → wrap rows expect high = tmp → killed. ✓
+
+  Candidate **rlwimi `0xffffffffULL` → `0xffffffff00000000ULL`**: covered → killed by pres wrap row (bits between preserved check). ✓
+
+  Candidate **rlwimi `ra & 0xffffffffULL` → `ra & 0xfffffffeULL`** or similar single-bit tweak: preserves low except bit 0... high = tmp. Then loop: if bit 0 (C) is in mask range it gets overwritten anyway. C-bit 0 = PPC bit 63 = me... For wrap [24,8]: mask covers PPC 24..31 ∪ 0..8 → C bits 0..7 ∪ 24..31... PPC bit p ↔ C bit 31-p within word. PPC 31 ↔ C 0. Mask includes PPC 31 (since mb=24 ≤ 31 in wrap start) → C bit 0 overwritten by loop → invisible! For a cell where C-bit-0 (PPC 31) is NOT in mask and mb>me... wrap cells not covering PPC31: mask = mb..31 always includes PPC31! Wrap mask from mb through 31 then 0..me — PPC 31 always in wrap mask. So the tweak is invisible for ALL wrap cells (high-word line only runs when mb>me, and then PPC bit 31 always gets overwritten by the loop from tmp; and the loop writes tmp bit 0 there, so the cleared bit 0 of preserved low is irrelevant... wait: `ra & 0xfffffffe` clears C bit 0 of the LOW word; then loop sets C bit 0 = tmp bit 0 (since PPC31 in mask). Final = same as fix. And other low bits preserved correctly. High word = tmp. IDENTICAL. Survivor?!
+
+  Hold on: is `0xffffffff` → `0xfffffffe` in scope for clause (d)? Clause (d) mutants are: predicate mutations dominating edited lines, and operand swaps from body-read fields. A constant tweak `0xffffffff` → `0xfffffffe` is neither a predicate flip nor an operand swap. It's a boundary/constant mutation — arguably clause (e) or out of scope. The question says "Enumerate DEPENDS-ON for each diff: the predicates DOMINATING the edited lines up to the function boundary... and operand swaps drawn from fields the body reads". So constants are out of scope. OK — but I could still mention it if it survives... let me double check its survival: under `ra & 0xfffffffe`: after line, low bit 0 cleared. Loop wrap case writes all bits in mb..31,0..me — includes PPC31 (C0) always in wrap → C0 = tmp bit 0. So final identical to fix. For non-wrap, line doesn't run. So yes, equivalent mutant. But out of (d) scope. Mention as a curiosity? Maybe briefly. Actually — it's strictly behaviorally equivalent, i.e., not even a real bug. Equivalent mutants aren't survivors in the actionable sense. I'll note it only if space permits. Hmm, actually careful: it IS a semantic change in general (if the loop didn't cover that bit) but in context it's dead. Equivalent-mutant. Skip or one line.
+
+  More important: **the R_POST_LOOP anomaly**. If truly equivalent, the measured 19 contradicts. This suggests either the mutation description is inaccurate (line placed after writeback → dead → same as R_ONLY_CAST 19, consistent) or the measurement is unreliable. As a reviewer I flag: premise inconsistent with code as inlined; the two writes commute. Let me double-check commutativity once more with extreme care:
+
+  Fix order:
+  1. ra₁ = (ra₀ & 0xFFFFFFFF) | (tmp << 32)  [if mb>me]
+  2. loop: for each bit i in wrap-set W (C-bits): ra = (ra & ~2^i) | (tmp & 2^i)
+
+  After: high = tmp; low bits in W = tmp bits; low bits ∉ W = ra₀ bits.
+
+  Post-loop order:
+  1. loop on ra₀: low bits in W = tmp bits; others = ra₀ bits; high unchanged (ra₀ high).
+  2. ra = (ra & 0xFFFFFFFF) | (tmp<<32): high = tmp; low preserved from step 1.
+
+  Final: high = tmp; low W-bits = tmp; low others = ra₀. IDENTICAL. ✓ Commute. (Loop never touches bits 32..63 since mask = 1<<(31-mb), mb∈[0,31].)
+
+  So R_POST_LOOP is behaviorally equivalent and CANNOT be killed by any behavioral detector. Measured 19 ⇒ the leg as described didn't do what it says, or the measurement is bogus. Strong premise flag. BUT — maybe I'm misreading "the loop". If "move after the loop" meant after the ENTIRE remaining body (including writeback), then dead store → high word never written → behavior = R_ONLY_CAST = 19/28 exactly. The identical 19s support this reading. So most likely explanation: the mutation placed the statement after `reg(ic->arg[1]) = ra;`, making it dead code, and 19 matches R_ONLY_CAST. The leg name then mis-describes the edit ("after the loop" vs "after the writeback"). Either way the table's claim "move AFTER the loop → 19 kills" is not evidence that a true post-loop (pre-writeback) placement is caught — because that mutant is equivalent and green. But since it's equivalent, it doesn't matter for survival. It matters as a detector-honesty note: the panel should not count R_POST_LOOP as a meaningful kill. Hmm, wait — actually, let me reconsider: is it possible the harness moved it right after the loop, before writeback, and the probe killed it via... `cr0 record form`? rc rows: update_cr0(cpu, ra) — same ra either way. Disasm rows: no. No row can see a difference. So no. Flag it.
+
+  Actually, hmm, one more possibility: the mutation harness might have moved the line after the loop but ALSO the writeback reads `ra`... no. Or the mutation introduced a compile error (unused?) — no. Or the probe rows that "killed" it were the wrap rows and the mutation put it after the loop INSIDE the loop braces mis-placed → compile error → build failed → all rows fail? 19 ≠ 0... no, build fail would give 0 or CONTROL=FAIL everywhere. The clean 19=R_ONLY_CAST strongly suggests dead-store placement. I'll flag it as: described placement is behaviorally equivalent; measured kill implies actual placement differed (likely post-writeback, dead store, equivalent to R_ONLY_CAST). Not a survivor — but a premise inaccuracy in the table.
+
+  Now, are there REAL survivors? Let me be systematic per clause (d) for each edited line.
+
+  ### rlwimi edited lines:
+  E1: `uint32_t tmp = (uint32_t)reg(ic->arg[0]);` (type change)
+  E2: `if (mb > me) ra = (ra & 0xffffffffULL) | ((uint64_t)tmp << 32);` (added)
+
+  Predicates dominating E1/E2 up to function boundary: none above E1 (top of function). Dominating E2: `if (mb > me)` itself; also the later loop predicates `mb == me`, `mb == 32` dominate subsequent uses of ra; and `sh ?` dominates tmp's value. Per the prompt's own list: `sh ?`, `mb > me`, `mb == me`, `mb == 32`.
+
+  - `sh ?` → `!sh ?` (invert): rotate only when sh==0 → for sh>0 no rotation; sh=0 rotates by... `(tmp << 0)|(tmp >> 32)` UB→identity. So mutant: no rotation ever. Killed by nowrap sh8/sh16/sh4 rows (into zero dest). ✓
+  - `sh ?` → removed (always rotate): equivalent-on-x86 (UB at sh=0 → identity). GREEN but equivalent (UB). Note it.
+  - `mb > me` → `mb < me` (R_REV_COND 13 ✗), `mb >= me` (killed by census (0,0)/(31,31) + SENT), `mb != me` (killed by pres nowrap), `mb <= me`/`mb == me` (wrap rows killed... `mb == me`: high word only for single-bit cells → wrap rows [31,0] etc. fail: expected high=tmp, got SENT → killed; also census wrap cells), constant true (killed by nowrap/pres rows into SENT: `pres nowrap` expects high preserved), constant false (= drop line = R_ONLY_CAST 19 ✗).
+    - operand swap inside predicate: `mb > me` → `me > mb` ≡ `mb < me` ✗ same as R_REV_COND.
+  - High-word line operand swaps: `tmp`↔`ra`: `ra = (ra & 0xffffffff) | (ra << 32)` — high = low<<32... killed by wrap rows (high ≠ tmp). `(uint64_t)tmp << 32` → `(uint64_t)tmp << 31`/33: killed by wrap rows (high wrong). `ra & 0xffffffffULL` → `tmp & 0xffffffff...`? `ra = (tmp & 0xffffffff) | (tmp<<32)` = tmp duplicated both words; then low bits outside W never restored from SENT → pres wrap row kills (bits 9..23 of low must stay SENT). ✓
+    - `(uint64_t)tmp << 32` → unrotated source `(uint64_t)(uint32_t)reg(ic->arg[0]) << 32`: killed by wrap sh8/sh16 + census sh∈{1,8,16,31} wrap cells. ✓ (named candidate refuted)
+  - Loop `mb == me` → `mb != me`: inverted → for mb<me writes one bit then breaks? No: `if (mb != me) break;` breaks after first write when mb≠me; when mb==me loops forever (writes same bit repeatedly... mb++ then wraps, writes all other bits, comes back — never breaks → hang). Rows: nowrap multi-bit into zero dest → only bit mb written, rest 0 → expected nonzero → killed (and mb==me rows hang → timeout kill). ✓
+    - `mb == me` → `mb >= me`? For mb<=me nonwrap: first iteration mb... after writing bit mb, check mb>=me: if mb<me continue... mb increments until mb==me → mb>=me true → break after writing bit me. Same as ==? For non-wrap, mb reaches me exactly → equivalent. For mb>me wrap: mb starts > me → breaks IMMEDIATELY after first bit → wrap rows killed. ✓ (census wrap cells too)
+    - `mb == me` → `mb == me + 1`? hmm operand from body: me+1 not a field. Skip — operand swaps only: `mb == me` → `me == mb` equivalent.
+  - Loop `mb == 32` → `mb == 31`/`mb == 0`/`mb > 32`: analyzed → hang or UB corruption → killed/timeout. `mb == 32` → `mb != 32` (wrap at... `if (mb != 32) mb = 0` → mb=1 → 0 after first increment → writes bit 31-0... sequence breaks wrong) → killed by nowrap multi-bit rows (e.g. [0,15]: after mb=0→1→reset 0 → infinite? mb: write 0, mb++ →1, ≠32 → mb=0! → write 0 again... infinite loop → hang). ✓ killed by timeout.
+    - swap: `mb == 32` → `me == 32`? me≤31 always false → no wrap → mb reaches 32 → UB shift, infinite loop (mb==me never for mb>31... wait mb increments 32,33,... == me(≤31) never → hang). ✓ timeout.
+  - E1 mutants: `(uint32_t)` cast dropped (= original defect, R_ONLY_HIGH 19 ✗). `tmp` 64-bit but cast at rotate: same thing. Swap `reg(ic->arg[0])` with `reg(ic->arg[1])`: tmp = RA seed... killed everywhere (nowrap rows expect RS-derived). Is `ic->arg[0]`↔`ic->arg[1]` a (d) swap? fields body reads — yes arguably. Killed. ✓
+  - `tmp << sh` ↔ `tmp >> (32-sh)` swap: `(tmp >> (32-sh)) | (tmp << sh)` — same expression! OR is commutative → equivalent. Ha. But `tmp = sh ? ((tmp >> sh) | (tmp << (32-sh))) : tmp` (rotate right) → killed by sh≥1 nowrap rows. ✓
+  - `32 - sh` → `32 - mb`? fields: sh, mb... rotate by mb... killed by rows where sh≠mb (nowrap sh16 mb8: rotate by 8 vs 16 differ → killed). ✓
+  - `tmp >> (32-sh)` → `ra >> (32-sh)`? killed. ✓
+
+  Also: what about `mb > me` with swapped SIDES using different fields: `mb > sh`? `if (mb > sh)` — hmm! For the census/rows, is `mb > sh` distinguishable from `mb > me`? Rows: nowrap cells have mb<=me; wrap cells mb>me. `mb > sh` triggers high-word write when mb > sh. Consider nowrap sh16 mb8 [8,23]: mb=8 < sh=16 → no high write (same as fix, since mb<me). pres nowrap sh8 [0,15]: mb=0 > 8? no. wrap sh0 mb24 [24,8]: mb=24 > sh=0 → high write ✓ same. wrap sh8 mb20 [20,10]: 20>8 ✓. wrap sh16 mb28 [28,4]: 28>16 ✓. wrap mutant sh0 [31,0]: 31>0 ✓. pres wrap sh0 [24,8]: 24>0 ✓. wrap fullword sh0 [1,0]: 1>0 ✓. nowrap sh0 [0,31]: 0>0 no ✓. nowrap sh8 mb0 [0,15]: 0>8 no ✓. nowrap sh4 mb16 [16,31]: 16>4 → HIGH WRITE! Fix says no (mb=16 < me=31). Under mutant: high word = tmp. What dest? "nowrap sh4 mb16 [16,31]" — into a ZERO dest ("non-wrapping into a zero dest"). High word was 0, becomes tmp — compared against expected (Book I: high stays 0) → row FAILS. ✓ killed. Census: nonwrap (sh, 0, 15) with sh ∈ {1,...}: (1,0,15): mb=0>1? no ✓... (16, 0, 15): mb=0 > 16 no. Cells where mb > sh with mb<=me: (sh=1, mb=8, me=23): 8>1 → high write, SENT dest, expected preserved → census wrong. ✓ killed. Good — `mb > sh` killed.
+
+  `mb > me` → `sh > me`? wrap sh0 rows: sh=0 > me=8? no → high not written → wrap rows fail. ✓
+
+  Now the trickier one: **rlwimi high-word line — is it needed only when mask wraps AND covers... wait, what if the loop itself could set high bits?** No.
+
+  **What about `if (mb > me)` → `if (mb >= me)`** — done, killed by census (0,0),(31,31). BUT: are (0,0) and (31,31) census cells compared on the FULL 64-bit value? Let me make sure the probe compares full width — brief says "compared with Book I's RTL" and RTL includes the high-word duplication... I'll verify in the probe source. Also there's a subtlety: with mb==me, the mutant writes high word = tmp; the census expected value computed from Book I RTL with MASK(32+k,32+k) single bit → high preserved = SENT. So diff in high word. If the census compare masked to low 32 bits, blind — need to read probe. I should READ the probes. Yes.
+
+  ### rldimi edited lines:
+  E1: `int m, n = sh;` (was `int m;`) + `while (n-- != 0)` (was `sh--`)
+  E2: `m = (m + 1) & 63;` (was `m ++;`)
+  E3: end test `m != ((64 - sh) & 63)` (was `m != 63 - sh`)
+
+  Predicates: `n-- != 0` (rotate loop guard), do-while end test.
+
+  - `n-- != 0` → `n-- > 1` (named): rotates sh-1 times for sh≥1; sh=0 same. Killed by pattern rows with sh≥1 IF pattern source is rotation-sensitive (not all-ones, not rotationally symmetric for those shifts). CHECK PROBE: what sources do rldimi pattern rows use? Need to read. If pattern rows use e.g. 0x0123456789ABCDEF — killed. If all-ones — SURVIVES (census blind too). MUST READ.
+    - Also `n-- != 0` → `n-- >= 0`? n is int; `n-- >= 0` loops while n ≥ 0: n=sh → rotates sh+1 times? Let's trace: `while (n-- >= 0)`: check n≥0, decrement. n=sh: sh≥0 → body, n=sh-1... continues until n=-1: check -1≥0 false stop. Body executed sh+1 times. Rotate by sh+1. Killed by pattern rows (sh≥0... any row with sh such that rotl(x,sh+1)≠rotl(x,sh) within mask — nowrap sh0 mb0: mask full 0..63; rotate 1 vs 0 → different (if source non-degenerate) → killed). ✓
+    - `n-- != 0` → `n-- != 1`? Body runs while n≠1... n=sh: runs for n=sh..2 → sh-1 rotations... when sh=0: n=0 ≠1 → body, n=-1 ≠1 → body... infinite downward (n-- forever, never ==1... n goes 0,-1,-2... never 1 → infinite → hang on sh=0 rows → timeout kill. And sh≥1 cells rotate sh-1 → pattern kills. ✓
+    - operand swap: `while (n-- != 0)` → `while (m-- != 0)`? m uninitialized... UB; m is int uninit — practical garbage → rotate random count → killed by rows. ✓ (or hang → timeout)
+    - `n = sh` → `n = mb`? rotate by mb: rows nowrap sh8 mb0: rotate 0 vs 8 → killed (mask full high bits... mask mb=0..55, rotate-by-0 vs 8 differ in bits 8..55 → yes killed). ✓
+  - Rotate body swaps: `s << 1` ↔ `s >> 1` with b placement: covered → killed by pattern rows with mask covering wrapped bits; note non-wrap-only blindness of shift-vs-rotate — but wrap rows exist (sh40 mb40 etc.) → killed. What about `b = (s >> 63) & 1` → `b = (s >> 63) & 0`? = shift → same analysis: killed only by wrap rows where wrapped bits land in mask: wrap sh40 mb40 ✓, wrap sh48 mb32 ✓, wrap sh63 mb63 (bit 63) ✓. Also `wrap full`? sh0: rotate 0 = shift 0, blind. Enough rows. ✓ — PROVIDED sources have the relevant top bits ≠ 0. MUT source? For rldimi what do wrap rows use? Need probe. If wrap rows' source is all-ones: rotl(all-ones)=all-ones; shift-left-by-1 of all-ones = ...1110 differs in LOW bits; wrapped-bit positions... hmm the shift-vs-rotate difference shows in bits 64-sh..63 (low sh bits become 0 instead of top bits). With all-ones source: shift gives low sh bits = 0; rotate gives low sh bits = 1 (top bits are 1). Mask must cover those bits: wrap sh40 mb40: bits 24..63 rotated-in; mask 40..63 ∪ 0..23 covers 40..63 → result bits 40..63 = 0 (shift) vs 1 (rotate) → DIFFER even with all-ones! So even all-ones sources catch shift-vs-rotate on wrap rows. Good. But rotate-AMOUNT defects (n-->1): all-ones blind everywhere (rotl by anything = all-ones; mask unchanged). So amount defects need non-degenerate pattern rows. KEY THING TO CHECK IN PROBE: pattern-row sources for rldimi.
+  - Mask loop `m = (m+1) & 63` → `m = (m + 1) & 31`? m wraps at 32 → bit `1 << (63-m)`: m∈[0,31] → bits 32..63 only... end test (64-sh)&63 ∈ [0,63]: if end ≥ 32 (sh ≤ 31... (64-sh)&63 ≥ 32 when 64-sh ≥ 32 i.e. sh ≤ 32, for sh≥1; or end=0 for sh=0): loop m: mb → ... if end ≥ 32, m wraps mod 32 never reaches ≥32 → infinite → hang → timeout. If end < 32 (sh ≥ 33): m must hit end; mb ≥ 33 possible... mb<32 start: cycles mod 32, hits end if end<32 → terminates but sets wrong bits (only bits 32..63 C... m∈[0,31] → C bits 63-m ∈ [32,63] → PPC bits 0..31). E.g., wrap sh40 mb40: end = (64-40)&63 = 24; mb=40 mod... m starts 40 — wait `m = mb` not masked... `(m+1)&31`: m=40 → 41&31=9 → ... cycles 0..31, hits 24 → bits set for m = 40, 9, 10, ..., 24... wait first iteration sets bit 63-40=23 with m=mb=40, then m=9... sets bits 54..39. Book mask: 40..63 ∪ 0..23 (PPC). Mutant sets PPC bits 23 (m=40), then m=9..24 → PPC bits 9..24 wait C bit 63-m for m∈[9,24] → PPC bits 9..24. Total mutant mask: PPC 23, 9..24 = 9..24. Book: 40..63, 0..23. Differ → census (40,40) cell (all-ones source: mask diff visible since source all ones → result = mask merged with SENT... census dest = SENT? For rldimi census: "495-cell (SH, MB) census from an all-ones source, compared with Book I" — dest seeded with? probably SENT or 0. Mask wrong → wrong result regardless) → killed. ✓ Plus hangs on sh≤32 cells → timeout. ✓
+    - `m = (m+1) & 63` → `m = (m+1) & 127`? m grows past 63 → `1 << (63-m)` negative shift UB... m=64: 63-64 = -1 &63 (x86) = 63... end test: end ∈[0,63], m grows 64,65... never equals end ≤ 63 until... m keeps growing, &127 cycles 0..127, hits end → terminates after up to 127 iterations, but bits for m=64..127 are UB-shifts → x86: 1 << ((63-m)&63) garbage bits. Wrong mask → census kills. And for end reachable only after UB → killed. Cases mb small, end < mb: m: mb...63, 64..127(UB bits), 0..end — extra UB bits set → census wrong. ✓ killed. Cases end > mb: stops before 64 → same as fix for those cells! E.g., nowrap sh8 mb0: end = 56, m: 0..55 → identical → pass. But wrap cells (end < mb) differ → killed. ✓
+  - End test `m != ((64 - sh) & 63)` swaps:
+    - `64 - sh` → `63 - sh` = D_MUT63 ✗ measured.
+    - `64 - sh` → `64 + sh`? mod 63... end = (64+sh)&63 = sh for sh>0... loop stops when m == sh: nowrap sh8 mb0: bits 0..7 (PPC) only → expected 0..55 → killed. ✓
+    - `sh` → `mb`: end = (64-mb)&63 → mask = single... m starts mb, ends 64-mb: bits mb..63-mb... nowrap sh8 mb0: end=64 → &63=0... m cycles full → all 64 bits vs expected 0..55 → census (8,0) all-ones: mask all → result all-ones; expected mask 0..55 with preserved low 8 bits from dest. If dest SENT → differ → killed. ✓
+    - `m != X` → `mb != X`? mb constant → if mb != end initially, infinite loop → hang → timeout kill; if mb == end (mb = 64-sh... e.g., nowrap sh16 mb16: 16 vs 48 ≠ → hang). ✓
+    - `& 63` dropped (named candidate): sh=0 → end=64 unreachable → infinite → timeout ✗ killed; sh>0 fine. So killed by any sh=0 row (`nowrap sh0 mb0` exists; `pres sh0`...). Also census has (0, mb) cells → hang. Killed, unless probe can't time out... "90 s session timeout" exists per D_NOCIRC anecdote → hang = fail. ✓ refuted.
+    - end test `!=` → `==`: do-while checks m == end to CONTINUE? `while (m == end)` — after first iteration, m = mb+1; if mb+1 == end... nowrap sh8 mb0: end=56; m=1 ≠56 → loop ends after 1 bit. Mask = bit 0 only → killed by nowrap rows. ✓
+  - `tmp |= 1 << (63-m)` → `tmp |= 1 << m`? Bit-reversed mask. nowrap sh8 mb0: mutant bits C 0..55 = PPC 63..8 → PPC 8..63; expected PPC 0..55. Differ → census (8,0) kills. ✓
+    - `63 - m` → `63 - sh`? sets same bit each iteration → single bit 63-(63-sh)=sh... killed by multi-bit rows. ✓
+  - Merge swaps: `gpr[ra] &= ~tmp` → `gpr[ra] &= tmp`? covered → killed by nowrap (bits outside mask must be preserved... dest seeded? `pres nowrap` row kills). `|= (tmp & s)` → `|= (tmp & ra)`? ra var is int register index! `tmp & ra` — type mismatch int→uint64... would compile (ra promoted). `s`→`gpr[rs]`... s IS gpr[rs] initial... rotate lost → killed by sh>0 rows. `(tmp & s)` → `(tmp & cpu->cd.ppc.gpr[rs])` — unrotated source — killed by nowrap sh8 (rotate matters). ✓
+  - `n = sh` where sh decode... decode lines not edited.
+
+  - rldimi rc line not edited.
+
+  Now **the rldimi all-ones census question (Q2)**: census blind to ALL rotate defects (amount, direction, shift-vs-rotate... no wait, direction: rotr(all-ones)=all-ones blind; shift-vs-rotate: visible only via mask-covered wrapped bits — but census computes from all-ones SOURCE: shift-left gives zeros in low sh bits; if mask covers them (wrap cells with mb ≤ 63... (sh,mb) with mb > 63-sh... wrapped bits at PPC 64-sh..63 in mask iff mb ≤ 63... always except... mask covers mb..63 ∪ 0..63-sh; bits 64-sh..63 ⊂ mb..63 iff 64-sh ≥ mb. Cells with mb ≤ 64-sh and mb > 63-sh: e.g. sh=8, mb=57: 57 > 55 wrap ✓, 57 ≤ 56? no → blind. sh=8, mb=50: 50 > 55? no non-wrap. Hmm: need mb > 63-sh (wrap) and 64-sh ≥ mb: 63-sh < mb ≤ 64-sh → mb = 64-sh exactly → cells (sh, 64-sh): shift-vs-rotate visible at bits 64-sh..63? mb=64-sh: mask = 64-sh..63 ∪ 0..63-sh = ALL bits. Wrapped bits 64-sh..63 in mask ✓ → visible. So census cells (sh, 64-sh) for sh=1..31 catch shift-vs-rotate even with all-ones (result bits 64-sh..63 = 0 vs 1). Diagonals... the census is SH×MB full grid? "495-cell (SH, MB) census" — 495 = C(33,2)? 33×30/2=495. Or 495 = sum... SH 0..31 × MB 0..31? = 1024 no. 495 = number of (SH,MB) with... maybe SH ∈ 0..63? 64×... hmm 495 = 45×22/2... Actually 495 = C(32,2) - 1 = 496-1. Or SH ∈ {0..31} × MB ∈ {0..31} with some dedup... 32×32=1024. 495... whatever — the probe says 495 cells; I'll read the probe to see which cells. If the grid covers (8, 56) etc., shift-vs-rotate partially covered by census; amount defects never (all-ones rotate-invariant). Direction: rotr(all-ones) = all-ones — blind ALWAYS. So direction defects and amount defects are census-blind; pattern rows must cover: `nowrap sh8 mb0`, `nowrap sh32 mb0`, `nowrap sh16 mb16`, `nowrap single`, wrap rows — IF those rows use a rotation-sensitive source, they kill direction/amount mutants. READ THE PROBE.
+
+  Also **rlwimi `bits32` rows**: "bits32 live", "bits32 rlwimi" — drive a 32-bit CPU build? "A 32-bit CPU build (PPC603) keeps only the low word" — settled premise. Fine.
+
+  Now, another angle — **the fixes themselves vs Book I (Q4)**:
+
+  rlwimi fix: 
+  - tmp = low 32 of RS ✓ (uint32_t conversion). Rotate: `sh ? (tmp<<sh)|(tmp>>(32-sh)) : tmp` ✓ rotl32.
+  - High word: if mb>me → tmp<<32 ✓ (wrap mask covers high word; r's high word = rotated duplicate ✓).
+  - Loop writes bits mb..me (wrapping) from tmp into low word ✓; bits outside preserved ✓.
+  - rc → update_cr0(cpu, ra): Book I: Rc=1 → CR0 set from RA (64-bit signed compare in 64-bit... Book I: if Rc, CR0 := compare RA with 0 — in 64-bit implementations, CR0 derived from the full 64-bit RA? For 32-bit instructions in Book I 64-bit... rlwimi Rc: "CR0 is set based on the contents of RA" — for 32-bit rotate instructions on 64-bit impls, CR0 is set from the full 64-bit RA value? Hmm — actually in PowerPC, for rlwimi., CR0 reflects the full 64-bit register on 64-bit implementations? Let me recall: Book I: "CR0:0 := (RA) < 0 ..." using the full RA. For 32-bit instructions on 64-bit machines, yes — CR0 is set from the 64-bit value (that's why `ppccr0modewidth` exists as a separate finding about 32-bit MODE). The probe has `cr0 record form` row ✓. update_cr0 signature — fine.
+  - Edge: sh ∈ [0,31] ✓; mb, me ∈ [0,31] ✓. All 32×32×32 cells: census covers 129 including diagonals... the fix looks correct for all cells by the case analysis above. What about mb==me with mb>me false → single bit ✓ matches Book (MASK(x,x) single bit).
+
+  Hmm wait — one more rlwimi check: **`update_cr0(cpu, ra)` uses `ra` AFTER writeback — same value ✓.** And aliasing RA==RS: `tmp` and `ra` read before writeback ✓ (alias rows ✓).
+
+  rldimi fix:
+  - sh decode: `((iw >> 11) & 31) | ((iw & 2) << 4)` — sh5..1 in bits 11-15? rldimi encoding: sh field bits 11-15 (5 bits) + bit 1 (sh0). iw bit 1 → sh bit 5 (value 32): `(iw & 2) << 4` = bit1 → bit5 ✓. mb: bits 6-10 (5 bits) + bit 5 (mb5... mb bit 5 (value 32) at iw bit 5): `(iw & 0x20)` = bit5 ✓ → mb = ((iw>>6)&31) | (iw&0x20) ✓. Standard.
+  - Rotate loop: rotates left by 1, n times, n=sh ✓ rotl64 by sh ✓ (sh ∈ 0..63; n-- != 0 with n=64... sh max 63 ✓).
+  - Mask: do-while sets bits mb..(63-sh) wrapping ✓ (analyzed above, incl. sh=0 → end 0 → mb..63 ✓; mb = (64-sh)&63 impossible since (64-sh)&63 = 0 for sh=0 and mb=0 → then sets all bits: MASK(0,63) ✓ Book MASK(0, 63-sh=63) ✓).
+  - Merge: `gpr[ra] &= ~tmp; gpr[ra] |= (tmp & s);` ✓ = (r&m)|(RA&~m) ✓.
+  - Read RS before write RA — `s` read at top ✓ alias-safe.
+  - cr0 from gpr[ra] after write ✓.
+
+  Wait — rldimi edge: what if sh = 0 AND mb = 0: end = (64-0)&63 = 0 = m initial? do-while: sets bit 63 (m=0), m=1, ... continues until m==0 again → all 64 bits ✓ (do-while doesn't check before first iteration ✓).
+
+  Edge: mb = (64-sh)&63 exactly (single... e.g., sh=8, end=56, mb=56): sets bit for m=56, then m=57≠56... wait end=56: after setting m=56's bit (C bit 7), m becomes 57, 57 != 56 → continues! m=57...63, 0...56 → sets ALL bits. Book: MASK(mb=56, 63-sh=56) → single bit (x==y, no wrap since x>y false). BUG?! Wait: do-while sets bit 63-m for m=mb, increments, checks m != end. If mb == end: sets bit mb, m = mb+1 ≠ mb=end → keeps going → sets ALL bits and stops when m wraps to end=mb. So mask = all 64 bits. Book: MASK(56,56) = single bit. MISMATCH!
+
+  Hold on. Is mb == (64-sh)&63 reachable? mb ∈ 0..63, sh ∈ 0..63. (64-sh)&63 for sh∈[1,63] = 64-sh ∈ [1,63]; for sh=0 → 0. So mb == 64-sh with sh ≥ 1: e.g., sh=8, mb=56: Book MASK(56, 63-8=56) → single bit PPC 56. Fix: mask = ALL bits. **WRONG against Book I?!**
+
+  Wait wait. Let me recheck the loop:
+
+  ```c
+  	m = mb; tmp = 0;
+  	do {
+  		tmp |= ((uint64_t)1 << (63-m));
+  		m = (m + 1) & 63;
+  	} while (m != ((64 - sh) & 63));
+  ```
+
+  mb=56, sh=8: end = 56. Iter1: bit 63-56=7 set; m=57; 57≠56 continue. ... m cycles 58..63,0..55, then m=56 → stop. All bits set except none... all m values 56,57,...,55 covered → ALL 64 bits. Book: MASK(56, 56): x=56 ≤ y=56 → bits 56..56 single bit. So the fix produces full mask where Book wants single bit. **Is this a real divergence?**
+
+  Hmm, but wait — MASK(x,y) with x == y: "1s from x through y, wrapping if x > y". x==y → not wrapping → 1s from x through x = single bit. Yes.
+
+  And mb=56, sh=8 means MASK(mb=56, 63-sh=56) single bit. The loop gives full mask. So for cells (sh, mb) with mb = 64-sh (sh=1..63, mb=1..63), the fix is wrong?!
+
+  Hmm, hold on. Let me re-derive the intended end. Book mask MASK(mb, 63-sh). Loop should set bits mb, mb+1, ..., 63-sh (mod 64, wrapping if mb > 63-sh). Natural implementation: stop AFTER setting bit 63-sh, i.e., loop until m == (63-sh+1)&63 = (64-sh)&63 AFTER increment. The do-while checks after increment: stop when m == (64-sh)&63. For mb=56, sh=8: stop when m == 56. But m STARTS at 56! The check is after increment, so first check is m=57 ≠ 56 → full cycle. The intent "set bits 56..56" requires stopping when next-m == 56, but next-m after first iteration is 57, and the start value 56 is never tested. So indeed full mask. BUG — unless... does the census cover (sh=8, mb=56)? The census is (SH, MB) 495 cells. If the census covers the anti-diagonal mb = 64-sh, it would have caught it... unless census only covers mb ≤ 31 or a subset! 495 cells — what subset? If SH ∈ 0..63 and MB ∈ 0..63 that'd be 4096. 495... Let me think: maybe SH ∈ 0..31 and MB ∈ 0..31 with dedup... 1024. Hmm 495 = C(32,2) - 1? C(32,2)=496. Or maybe pairs (sh, mb) with sh+mb ≤ ... ? Number of (sh,mb) with sh≥0, mb≥0, sh+mb ≤ 32: sum_{s=0}^{32}(33-s) = 33×34/2 = 561. No. sh+mb < 32: C(33,2)=528. ≤ 31: 32×33/2=528. Hmm. sh ∈ 0..63, mb ∈ 0..31, with sh+mb... Let me not guess — READ THE PROBE. The point: if the census doesn't include cells where mb = 64-sh (e.g., sh=8, mb=56 — mb=56 > 31 if MB only goes to 31... but mb field is 6 bits, values to 63!).
+
+  Wait, actually — hold on. Does the rldimi row set include such a cell? Rows: nowrap sh8 mb0, nowrap sh32 mb0, nowrap sh0 mb0, nowrap sh16 mb16 (mb=16, end=48, 16≠48 fine), nowrap single (sh?, mb? — "single" probably single-bit mask: mb == 63-sh, e.g., sh=8, mb=55 → MASK(55,55) single bit — end=(64-8)&63=56 ≠ 55 → loop: m=55, set bit, m=56=end stop → single bit ✓ correct!). Hmm interesting: "nowrap single" with mb == 63-sh works correctly. The BAD cell is mb == 64-sh ≡ 63-sh + 1, i.e., MASK(x, x-1): x > y → WRAPPING → mask = bits x..63 ∪ 0..x-1 = ALL bits! Book: MASK(56, 55): 56 > 55 → wrap → 1s from 56 through 63 and 0 through 55 = ALL 64 bits! 
+
+  WAIT. MASK(mb, 63-sh) with mb = 56, sh = 8 → MASK(56, 55)?? 63 - sh = 63 - 8 = 55, NOT 56! Let me recompute. I conflated. Book mask end is 63-sh. Loop stops when m == (64-sh)&63, i.e., after setting bit (64-sh)-1 = 63-sh. So bits mb..63-sh ✓. For mb=56, sh=8: MASK(56, 55) → 56 > 55 → WRAP → all bits ✓. Loop: m=56 → 57... → stop when m == (64-8)&63 = 56 → full cycle → all bits ✓✓. PHEW. Correct!
+
+  Single-bit case: mb == 63-sh, e.g., sh=8, mb=55: MASK(55,55) single. Loop: end = 56; m=55: set bit 8 (C), m=56 == 56 → stop. Single bit ✓. 
+
+  So no bug there. My scare was arithmetic. Let me redo the general correctness: loop sets bits for m = mb, mb+1, ..., stopping when m reaches E=(64-sh)&63; last bit set = E-1 mod 64 = (63-sh) mod 64. For sh=0: E=0, last bit = 63 → bits mb..63 (with wrap if mb>0... mb..63 no wrap needed; if mb=0 all bits). Book sh=0: MASK(mb, 63) ✓. For sh≥1: E=64-sh ∈ [1,63], bits mb..63-sh ✓ wrap when mb > 63-sh ✓ full mask when mb = 63-sh+1 = 64-sh = E — loop: m starts at E, first check after increment m=E+1≠E → full cycle ✓ matches Book (MASK(E, E-1) wrap → all) ✓. GREAT — the fix is correct for all (sh, mb). 
+
+  OK so rldimi fix correct. rlwimi fix correct (case analysis above). 
+
+  Now Q4 also asks "wrong against Book I for any (SH, MB, ME) the census does not reach" — rlwimi census: 129 cells of 5×14 + diagonals. Full space 32×32×32 = 32768. The fix's structure (single uniform code path, case split only on mb>me) — correctness argument covers all cells, not just census. The (d)-mutation question is what matters.
+
+  Now let me also double check **rlwimi `mb > me` → `mb >= me`** kill path once more, and whether any (d) mutant survives. Also check rlwimi high-word-write operand swap candidates involving `sh`: `(uint64_t)tmp << 32` → `(uint64_t)tmp << sh`? For wrap sh0 rows: <<0 → tmp in low word, high 0 → expected high=tmp → killed. ✓
+
+  What about swapping `0xffffffffULL` with... `0xffffffff` (int, no ULL)? `ra & 0xffffffff` — 0xffffffff as int is -1 (if int 32-bit)... in C, 0xffffffff has type unsigned int (fits) → promoted to uint64 → same value 0xFFFFFFFF. Equivalent. `0xffffffffUL` — on Windows UL is 32-bit → same value. Equivalent. Skip.
+
+  Now the remaining real survivor hunt — think about mutants that are green because detector rows are blind:
+
+  rlwimi detector blindness: rows into zero dest can't catch preservation defects; pres rows into SENT catch those. Census from RS_VAL into SENT with full compare covers everything in its 129 cells. A (d) mutant that only manifests outside the 129 cells: e.g., `mb > me` → `mb > me || mb == 17`? Not a (d) mutant (not predicate flip/swap). (d) predicate mutations: > → >=, <, !=, ==, <=, true, false; operand swaps mb↔me, mb/me → sh. All shown killed. Loop `mb == me` → swaps `mb == sh`? `if (mb == sh) break`: nowrap sh8 mb0 me15: loop writes 0..7, mb=8==sh=8 → break early → bits 8..15 unwritten → zero dest → row expects bits → killed ✓. `me == 32` for `mb == 32`? me≤31 → never → same as no-wrap-check → hang ✓. `mb == 32` → `sh == 32`? sh≤31 → never → hang ✓. `mb == 32` → `mb == me`?? then break-check duplicated: wrap at `if (mb == me) mb = 0` — after loop already broke... unreachable-ish: for non-wrap mb<=me loop breaks at me before 32; for wrap: mb hits 32 — check mb==me? me<mb≤31... me could be... mb=32, me≤31 → 32≠me → no wrap → mb=33 → UB shift, mb never==me → hang ✓ timeout.
+
+  rldimi detector blindness: census all-ones blind to rotate-amount/direction; pattern rows cover IF sources rotation-sensitive. READ PROBE to confirm sources. If pattern rows also all-ones → SURVIVOR: `n-- > 1` / `n = sh+1` / direction flips green. The prompt literally hints: "the census does not test the rotate amount independently of the mask bounds — the pattern rows do." Claimed. Verify.
+
+  Also **Q2: does any row's named channel fail to vary under its named mutant (vacuous)?** e.g., rlwimi `wrap mutant` row [31,0] sh0 from MUT_RS 0xAAAAAAAA0000000F: rotl by 0 → tmp = 0x0000000F; high word = 0x0000000F... channel varies ✓. R_ONLY_CAST (drop high line): killed by wrap rows — channel = high word ✓ varies. R_ONLY_HIGH (tmp back to MODE_uint_t): contamination shows in low word for sh>0... nowrap sh8 into zero dest: 64-bit rotate of 0xDEADBEEFCAFEF00D by 8: (v<<8 | v>>56) low32 = 0xEFCAFEF00D... wait rotl64(v,8) low 32 = ((v<<8)|(v>>56)) & 0xFFFFFFFF = (0xBEEFCAFEF00D... let me not compute exactly — point is low word differs from rotl32 → nowrap sh8 row catches ✓ (measured 19 ✓).
+
+  Vacuous check: rldimi `nowrap sh0 mb0` under D_NOKEEP_SH (sh consumed → -1): mask end = 63-(-1)... original defect: `m != 63 - sh` with sh=-1 → m != 64 → never → infinite → that row hangs... measured 16 CONTROL=FAIL — the control failure... hmm `nowrap sh0 mb0` might be a control? Whatever, measured.
+
+  Q3: `disasm total` and `census run` pins — literal counts with no measured kill in this table. Floor gap or disclosure? These pins catch mutants that CRASH/short-circuit the census (e.g., hang-free early exit, session death mid-census) — in this table, every leg either completed the census (run count = target) or failed controls first. D_NOCIRC earlier hit timeout at cell 182 → `census run` would have caught it... it says "its census completed this time; in an earlier table it hit a 90 s session timeout at cell 182". So the pin HAS a historical near-kill. Verdict: it's a floor/liveness pin — honest as long as labeled "no measured kill in THIS table; guards short/crashed censuses (seen historically at cell 182)". It's a floor gap in the formal sense (no leg exercises it), but a defensible disclosure IF the row is asserted as a liveness floor rather than a kill channel. I'll call it: floor pin, legitimate, but the table provides no kill evidence for it — recommend labeling as floor, not a kill channel; optionally add a mutant that truncates the census (e.g., make the probe crash at cell N) to prove the pin fires — that's a probe-self-test mutant, not a code mutant.
+
+  Now, the **R_POST_LOOP premise issue** — I keep coming back to it. Let me also re-examine R_ONLY_HIGH = 19: revert tmp to MODE_uint_t but keep the high-word line. High-word line then uses CONTAMINATED tmp (64-bit rotate result): high = tmp<<32... tmp 64-bit, `(uint64_t)tmp << 32` — tmp's high word shifted out, low word (contaminated low) into high. And low word loop uses contaminated tmp bits. So nowrap sh8 rows fail (contamination), wrap sh0 rows... sh=0: no contamination (rotate 0: `(tmp << 0)|(tmp >> 32)` — wait with 64-bit tmp and sh=0... original code `tmp = sh ? (...) : tmp` — if the sh guard existed, sh=0 → no rotate → no contamination; high = tmp<<32 = correct high! So wrap sh0 rows PASS under R_ONLY_HIGH; sh>0 rows fail. 19 plausible ✓.
+
+  R_ONLY_CAST = 19: tmp correct 32-bit, no high line: nowrap rows pass, wrap rows fail (high stays SENT), pres nowrap passes, pres wrap fails (high), alias wrap fails... 28-19=9 wrap-ish rows + census wrap cells rolled into census rows... plausible ✓. R_POST_LOOP = 19 with EXACTLY the same count as R_ONLY_CAST — consistent with dead-store (behaviorally = R_ONLY_CAST). If truly pre-writeback post-loop, count would be 28. So the measured 19 tells us the edit as BEHAVIORALLY equivalent to dropping the line — meaning the mutation almost certainly landed after the writeback (or the loop somehow... no). FLAG: the leg description ("move AFTER the loop") is inconsistent with semantics unless "after the loop" means "after the writeback" — a true post-loop-pre-writeback placement commutes (loop touches only low-word bits; the line touches only the high word) and would be GREEN. So either the table's label is wrong, or... the measurement is. Either way it's a premise to flag, and per the panel's instructions ("check the premises"), this is exactly the kind of thing to surface. AND it has a corollary: **a true R_POST_LOOP (after loop, before writeback) is a GREEN mutant** — but it's an EQUIVALENT mutant (no behavioral difference), so it's not a clause-(d) survivor that matters... The question asks "is there a clause-(d) mutant that stays GREEN" — an equivalent mutant technically stays green but is not a detector gap. I should report: no NON-EQUIVALENT survivor; note the equivalent-mutant curiosity (reordering commute) and the table inconsistency.
+
+  Hmm, wait — is moving a statement across a loop a clause-(d) mutant? (d) = predicates dominating edited lines + operand swaps. Statement motion isn't in (d) as enumerated. R_POST_LOOP was a table leg, not necessarily (d). OK.
+
+  Let me now also sweep **rldimi (d) mutants green-check** more:
+
+  - `while (n-- != 0)` → `while (--n != 0)`? pre-decrement: rotates sh-1 times for sh≥1; sh=0: n=-1 → --n = -2 ≠ 0 → infinite downward... n-- keeps going to INT_MIN → UB/hang → sh0 rows hang → timeout ✗. For sh≥1 pattern rows kill ✓.
+  - `n = sh` → `n = sh & 31`? For sh ≤ 31 same; sh ≥ 32: n = sh-32 → rotate by sh-32. Rows: nowrap sh32 mb0 → rotate 0 vs 32 → killed (if source rotation-sensitive) ✓. wrap sh40 mb40 → rotate 8 vs 40 ✓. wrap sh48 mb32 ✓. wrap sh63 mb63 → 31 vs 63 ✓. Killed ✓ (mask unchanged). BUT census: sh≥32 cells — census source all-ones → blind; does census include sh≥32? "495-cell (SH, MB) census" — unknown SH range. If census SH only 0..31 and pattern rows carry sh≥32... pattern rows DO carry sh32/40/48/63 → killed anyway ✓.
+  - `n = sh` → `n = mb`? covered ✓ killed by nowrap sh8 mb0 (rotate 0 vs 8).
+  - `n = sh` → `n = 63 - sh`? nowrap sh8: rotate 55 vs 8 → killed ✓. nowrap sh32 mb0: rotate 31 vs 32 → killed ✓ (sensitive source).
+  - `b = (s >> 63) & 1` → `b = (s >> 63) & 0` / drop `| b`: shift-not-rotate → killed by wrap rows (sh40 mb40: bits 40..63 zeroed vs rotated-in; source top bits... with ANY source where bits 0..23 (which rotate into 24..63... wait rotl40: source bits 0..23 → positions 40..63; shift: zeros there. Mask covers 40..63 → result differs iff source bits 0..23 ≠ 0. Need probe source for wrap sh40 mb40. If source all-ones → differs (1 vs 0) ✓. So even all-ones kills shift-mutant ✓.
+  - Direction swap `s = (s >> 1) | ((uint64_t)b << 63)` with `b = s & 1`: rotr. All-ones blind; pattern rows with sensitive source kill (nowrap sh8 mb0: rotr8 vs rotl8 differ within bits 0..55 for generic source) ✓. Need source.
+  - `m = (m + 1) & 63` → `m = (m + 1) | 63`? m → 63 after first inc → bits... m=63 forever? (63+1)|63 = 127|63=127... wait (63+1)=64, 64|63=127 → 1<<(63-127)=1<<-64 UB... x86 &63 → 1<<0... end test m != end: 127 ≠ end (≤63) → infinite → hang ✓ timeout.
+  - `& 63` → `& 62`? m+1 & 62: even values only after... m=mb; e.g., mb=0: m= (1)&62=0 → m stays 0? (0+1)&62 = 0 → infinite loop setting same bit, end never reached (unless end=0 → sh=0 cells: end=0 → terminates immediately after first bit → mask = 1 bit vs full → census sh0 cells kill; other cells hang → timeout) ✓.
+  - End test: `m != ((64 - sh) & 63)` → `m != ((64 - sh) & 31)`? end' = (64-sh)&31: sh=8 → 56&31=24: nowrap sh8 mb0: bits 0..23 → expected 0..55 → census (8,0) all-ones: mask 0..23 vs 0..55 → with SENT/zero dest differs ✓ killed. sh=0: end'=0 → same as fix for sh0. Killed by sh8+ cells ✓.
+  - `64 - sh` → `64 - mb`? end=(64-mb)&63: nowrap sh8 mb0: end=0 → full mask vs 0..55 → census kills ✓.
+  - `64 - sh` → `64 - m`?? end depends on m... `m != (64-m)&63` → m != (64-m)&63: m=mb+1... solve m ≡ 64-m (mod 64) → 2m ≡ 64 → m=32: loop stops when m hits 32 (if reachable from mb): nowrap sh8 mb0: bits 0..31 → expected 0..55 → killed ✓.
+  - `(tmp & s)` → `(tmp | s)` covered ✓. `(tmp & s)` → `(s & tmp)` same. `gpr[ra] |= (tmp & s)` → `gpr[ra] |= (tmp & cpu->cd.ppc.gpr[ra])`? inserts old RA bits into mask region → pres nowrap/nowrap rows kill (result keeps dest bits where they were... nowrap sh8 mb0 into seeded dest: mask bits = old dest bits ≠ source bits → killed) ✓.
+
+  So the hunt hinges on the rldimi pattern-row sources. Also need to confirm rlwimi census full-width compare. READ BOTH PROBES. Also read the actual fixed source to confirm inlined code matches (premise check!) and maybe git diff for the exact fix lines.
+
+  Also the **`bits32 rlwimi` / `bits32 rld bad` rows** — cross-build checks; fine.
+
+  One more candidate class: **rlwimi loop mask `(uint64_t)1 << (31-mb)` → `(uint64_t)1 << (31-me)`** covered (killed). **`31-mb` → `31-mb+32`?** `1 << (63-mb)` → writes HIGH word bits PPC 0..31! Then loop sets high bits from tmp (tmp is uint32 → `tmp & mask` with mask high → tmp promoted... tmp & mask where mask = 1<<(63-mb) ≥ 2^32: tmp (uint32) promoted to uint64 with zero high → tmp & mask = 0 → high bits CLEARED, never set. And low bits never written. nowrap rows into zero dest: low bits expected → 0 → killed ✓.
+
+  **`ra &= ~mask` → `ra &= mask`**: keeps only mask bit... killed by everything ✓.
+
+  **`ra |= (tmp & mask)` → `ra |= (tmp ^ mask)`**? tmp ^ mask: bit set unless tmp bit set... `ra |= tmp^mask` always sets mask bit (mask bit in tmp^mask = ~tmpbit & maskbit... (tmp ^ mask) & mask = ~tmp & mask... wait no: `ra |= (tmp ^ mask)` — ORs all bits of tmp^mask including NON-mask bits of tmp! → sets bits outside mask → into zero dest nowrap rows: extra bits → killed ✓. OK that's not even a swap... skip, out of (d).
+
+  Enough analysis — now VERIFY by reading files:
+  1. `GXEMUL-SEC/src/cpus/cpu_ppc_instr.c` — the two functions as committed-in-worktree (uncommitted fix). Confirm inlined code matches EXACTLY. Premise check.
+  2. `GXEMUL-SEC/regress/ppc_rlwimi_probe.py` — census cells, compare width, SENT usage, row sources.
+  3. `GXEMUL-SEC/regress/ppc_rldimi_probe.py` — pattern-row sources (rotation-sensitive?), census cells (SH/MB ranges), census source all-ones confirm.
+  4. Maybe git diff (uncommitted changes) — `git -C GXEMUL-SEC diff` or status. Careful: read-only git commands fine.
+
+  The tree note says GXEMUL-SEC has its own .git. Let me read the files. They might be large; I'll grep for the functions.
+
+  Plan: parallel reads/greps. Then write verdict.
+
+  Verdict shape: `NO SURVIVING (d) MUTANT — swept: <list>` with the caveat flags:
+  - rldimi rotate-amount mutants (n-- > 1 etc.): killed ONLY IF pattern rows use rotation-sensitive sources — confirm; if all-ones everywhere → SURVIVOR.
+  - R_POST_LOOP 19 premise inconsistency (equivalent-mutant commute argument).
+  - `sh ?` removal = UB-equivalent-on-x86 green (note).
+  - Q3 floor-pin answer.
+
+  Let me go read. First locate the probe files and the relevant source region.
+
+• I'll verify the premises against the actual tree before reasoning about survivors — the inlined code, both probes' sources and census cells, and the real diff.gate_ppc.sh
+gate_ppc_halt.sh
+ppc_halt_probe.py
+ppc_rldicl_probe.py
+ppc_rldimi_probe.py
+ppc_rlwimi_probe.py
+ppc_rounding_probe.py
+ M regress/gate_arm.sh
+ M regress/ppc_rldicl_probe.py
+ M src/cpus/cpu_ppc_instr.c
+?? regress/alpha_dummy.bin
+?? regress/arm_bfx_stub.bin
+?? regress/artifacts/b120/
+?? regress/artifacts/fbdisabled/
+?? regress/artifacts/gdromdefault_461/
+?? regress/artifacts/heldqueue/
+?? regress/artifacts/hlen/
+?? regress/artifacts/landiskaux/codex_fixdesign_20260911.err
+?? regress/artifacts/landiskaux/codex_fixdesign_20260911.txt
+?? regress/artifacts/lcaisaphys/
+?? regress/artifacts/lcaisasize/
+?? regress/artifacts/makercfalse/codex_design_20260911.err
+?? regress/artifacts/makercfalse/codex_design_20260911.txt
+?? regress/artifacts/mapledmaaddr/codex_detector_20260911.err
+?? regress/artifacts/mapledmaaddr/codex_detector_20260911.txt
+?? regress/artifacts/mapledmaaddr/codex_detector_RETRY_20260911.err
+?? regress/artifacts/mapledmaaddr/codex_detector_RETRY_20260911.txt
+
+
+• The fix is uncommitted (M src/cpus/cpu_ppc_instr.c). Probes ppc_rlwimi_probe.py / ppc_rldimi_probe.py are NOT modified (not in the M list) — so they're committed already. Read the two functions and the diff, and both probes.diff --git a/src/cpus/cpu_ppc_instr.c b/src/cpus/cpu_ppc_instr.c
+index d3e6565..4456584 100644
+--- a/src/cpus/cpu_ppc_instr.c
++++ b/src/cpus/cpu_ppc_instr.c
+@@ -2538,18 +2538,18 @@ X(rldimi)
+ 	int sh = ((iw >> 11) & 31) | ((iw & 2) << 4);
+ 	int mb = ((iw >> 6) & 31) | (iw & 0x20);
+ 	int rc = ic->arg[0] & 1;
+-	int m;
++	int m, n = sh;
+ 	uint64_t tmp, s = cpu->cd.ppc.gpr[rs];
+ 	/*  TODO: Fix this, its performance is awful:  */
+-	while (sh-- != 0) {
++	while (n-- != 0) {
+ 		int b = (s >> 63) & 1;
+ 		s = (s << 1) | b;
+ 	}
+ 	m = mb; tmp = 0;
+ 	do {
+ 		tmp |= ((uint64_t)1 << (63-m));
+-		m ++;
+-	} while (m != 63 - sh);
++		m = (m + 1) & 63;
++	} while (m != ((64 - sh) & 63));
+ 	cpu->cd.ppc.gpr[ra] &= ~tmp;
+ 	cpu->cd.ppc.gpr[ra] |= (tmp & s);
+ 	if (rc)
+@@ -2607,7 +2607,8 @@ DOT0(rlwinm)
+  */
+ X(rlwimi)
+ {
+-	MODE_uint_t tmp = reg(ic->arg[0]), ra = reg(ic->arg[1]);
++	uint32_t tmp = (uint32_t)reg(ic->arg[0]);
++	MODE_uint_t ra = reg(ic->arg[1]);
+ 	uint32_t iword = ic->arg[2];
+ 	int sh = (iword >> 11) & 31;
+ 	int mb = (iword >> 6) & 31;
+@@ -2616,6 +2617,28 @@ X(rlwimi)
+ 
+ 	tmp = sh ? ((tmp << sh) | (tmp >> (32-sh))) : tmp;
+ 
++	/*  A wrapping 64-bit MASK(MB+32, ME+32) selects the DUPLICATED high
++	    word (Book I :578 -- MASK wraps when x > y).  Assignment to a
++	    32-bit MODE_uint_t retains only the low word, which is a sound
++	    representation argument by defined unsigned-conversion semantics
++	    and NOT an accident: the shift is performed at 64-bit width and
++	    the loop below then does the low-word insertion.
++
++	    IT IS NOT A CLAIM THAT ARCHITECTURAL 32-BIT MODE REMOVES HALF THE
++	    REGISTER, and the earlier one-line wording here invited that
++	    reading.  Book I S1.2 (:342) says both execution modes affect all
++	    64 bits when an instruction sets a 64-bit register and the result
++	    is mode-independent, and :1989 describes every GPR as 64 bits --
++	    so a 64-bit processor running in 32-bit MODE still owes this
++	    write.  Whether any such implementation compiles the narrow
++	    variant is NOT established here; if one does, it loses the
++	    architectural high word and that is a defect.  Filed rather than
++	    guessed.  (This file's idiom is MODE32 with #else -- see extsb /
++	    extsh -- and carries no MODE64 conditional, so a future guard
++	    would be #ifndef MODE32.)  */
++	if (mb > me)
++		ra = (ra & 0xffffffffULL) | ((uint64_t)tmp << 32);
++
+ 	for (;;) {
+ 		uint64_t mask;
+ 		mask = (uint64_t)1 << (31-mb);
+The inlined code matches the tree exactly. Note: the loop `mb == me` / `mb == 32` / `sh ?` were pre-existing (not in the diff), but the prompt includes them in clause (d) scope ("predicates DOMINATING the edited lines up to the function boundary"), so my sweep stands.
+
+  Note one detail in the actual file: `int me = (iword >> 1) & 31;   ` with trailing spaces — irrelevant.
+
+  Now read both probes. Key things to verify:
+  1. rlwimi probe: census cells, does census compare full 64-bit RA (needed to kill `mb >= me`), SENT dest for census, wrap-row sources.
+  2. rldimi probe: pattern-row sources (rotation-sensitive or all-ones?), census source (all-ones claimed), census (SH,MB) cells, dest seed.rlwimi probe confirmed:
+  - Census cells: 5 sh × 14 (mb,me) = 70, plus diagonals (k,k,31-k) and (k,31-k,k) for k=0..31 (64) = 134 → dedup 129. Each into SENT dest, from RS_VAL, compared with `want_rlwimi` = full 64-bit Book I value (`(rotl32(rs_val, sh) & m) | (ra_val & ~m)` — full 64-bit compare, since rotl32 duplicates into both halves and mask32/mask_range is 64-bit, ra_val=SENT 64-bit). So census DOES compare the full 64-bit register. ✓
+
+  - `mb >= me` mutant: census cells (sh, 0, 0) and (sh, 31, 31) for sh ∈ {0,1,8,16,31} — all into SENT. Under mutant, high word = rotl32 low word = e.g. sh=0: 0xCAFEF00D00000000... wait, high = tmp = 0xCAFEF00D. Expected high = 0x5A5A5A5A. got != exp → census_fail ≥ 1 → killed. ✓ Also the diagonals (k,k,31-k): mb=me requires k = 31-k → none. But (0,0) and (31,31) suffice — 10 cells. Killed. ✓
+
+  - Unrotated-source-in-high-word mutant: wrap rows `wrap sh8 mb20`, `wrap sh16 mb28` (MUT_RS = 0xAAAAAAAA0000000F): rotl8 of 0x0000000F = 0x00000F00 ≠ 0x0000000F → high word differs → killed. Also census wrap cells with sh ∈ {1,8,16,31}. ✓ Killed.
+
+  - `census run` = 129 literal and `disasm total` = 146/146 literal — these are CONTROL rows. census_run increments only after checking `chow != exit0` per chunk → abort breaks with census_run short → row fails. So a hang mid-census → TIMEOUT → census_run < 129 → CONTROL=FAIL. So the pin DOES have teeth for hangs/short censuses; it just had no leg in THIS table produce a short census. It's a floor pin with a real channel (timeout/abort), historically exercised (D_NOCIRC at cell 182 in an earlier table). Good answer for Q3.
+
+  - Note the comment at lines 463-465: wants were switched from derived `len(uniq_census)` to literals 146/129 precisely because a census shrunk by an edit passed both rows — that IS the disclosure for Q3: the pins exist to catch a shrunk census, and the promotion design already caught that self-referential-want defect. So Q3: it's disclosure + a real floor; the table not exercising it is fine because the channel was proven during promotion.
+
+  - Row count check: 4 control session rows (session, live, seed holds, src intact) + disasm xcheck + ctl rlwinm = 6; neg apparatus = 7; bits32 live/rlwimi = 9; nowrap 4 = 13; wrap 4 = 17; pres 3 = 20; alias 3 = 23; cr0 record form = 24; disasm total, census run, census wrong, census zero = 28. ✓ 28 rows matches.
+
+  - Vacuousness (Q2 for rlwimi): does each row's channel vary under its named mutant? `nowrap sh0` row: RLWIMI(4, SRC, 0, 0, 31) into zero dest, want = want_rlwimi(RS_VAL, 0, 0,0,31) = rotl32(RS_VAL,0) low word = 0xCAFEF00D, high word = 0 (dest 0, mask = low word only since mb<=me). This passes pre-fix (SH=0 no contamination) — it's the target-instruction control ✓. Non-vacuous.
+  - `wrap mutant` row [31,0] sh0: want high = 0x0000000F (rotated low word 0x0000000F), SENT high replaced; low: bit 31 (PPC) from tmp bit 0 = 1, bits 0..30... me=0: mask = PPC 32+31..63 ∪ 32..32 → C bits 0 (PPC63) and 31 (PPC32)... low word bits: mb=31 → C bit 0; me=0 → C bit 31. So low bits 0 and 31 from tmp; tmp=0x0000000F → bit0=1, bit31=0. SENT low 0x5A5A5A5A → bit0 was 0 → now 1; bit31 was 0 → 0. want 0x0000000F5A5A5A5B ✓ matches comment. Channel varies ✓.
+
+  - One vacuity check for rlwimi: MUT_RS = 0xAAAAAAAA0000000F — under the WIDTH-CONTAMINATION mutant (tmp 64-bit), wrap sh8 mb20: tmp = rotl64(MUT_RS, 8) = 0xAAAAAA0000000FAA; low word = 0x00000FAA vs fixed 0x00000F00 → differs ✓ non-vacuous. And high word under missing-high-line: stays SENT ✓.
+
+  Now the aliasing rows: `alias nowrap` (4,4,8,0,15) — RS_VAL in r4, dest=r4. want = want_rlwimi(RS_VAL, RS_VAL, 8,0,15). Fine.
+
+  One more subtle rlwimi check — the `if (mb > me)` → `mb >= me` kill via census: cells (sh,0,0): under mutant, high = tmp = rotl32 low; but ALSO the loop: mb=0, me=0 → writes C bit 31 (PPC 32) from tmp — same in both. got = (SENT & 0xffffffff... no: ra = (SENT & 0xffffffff) | tmp<<32 → high = tmp; then loop bit 31. exp = SENT high. tmp for sh=0 = 0xCAFEF00D ≠ 0x5A5A5A5A ✓ killed. Also (k,k,31-k) diagonal has no mb==me; and (k,31-k,k): mb=31-k, me=k: mb==me → k=15.5 none. So exactly the (0,0)/(31,31) × 5 sh = 10 cells carry the `>=` kill. They exist ✓.
+
+  What about `mb > me` → `mb != me`? pres nowrap (sh8 [0,15], SENT): mb=0 ≤ me=15 → mutant fires (0≠15) → high = tmp; exp high = SENT → killed ✓ (not even needing census).
+
+  `mb > me` → true (always): pres nowrap killed ✓. → false: wrap rows killed ✓ (= R_ONLY_CAST measured 19).
+
+  Now, R_POST_LOOP: the probe comment at line 51-52 says "THE CONDITIONAL MUST PRECEDE THE LOOP. The loop walks mb around to me, so after it mb == me and the guard would never fire." — !!! That's the justification. But wait — the guard checks `mb > me` — after the loop mb == me → guard false → line does nothing. OH. I see — the mutation "move the line after the loop" — after the loop, mb has been MUTATED to equal me! The loop consumes mb (increments it to me). So `if (mb > me)` AFTER the loop evaluates with mb == me → false → high word never written → equivalent to R_ONLY_CAST → 19! 
+
+  I was wrong about commutativity — not because of the writeback order, but because the loop DESTROYS mb. The predicate `mb > me` is data-dependent on mb, and the loop mutates mb (and me stays). After the loop, mb == me always → `mb > me` false. So R_POST_LOOP = line never fires = R_ONLY_CAST = 19 ✓✓. The table is CONSISTENT. My premise-flag dissolves — the probe's own comment explains it. Good thing I read the probe. This is a great reminder: the loop consumes mb (it's not a for-scope variable).
+
+  But WAIT — this has a mutation-testing consequence in the OTHER direction: a true "reorder with predicate preserved" (e.g., hoist the guard computation: `int wrap = mb > me;` before loop, use after) would be equivalent — but that's not a simple line move. Fine.
+
+  So R_POST_LOOP measured 19 is exactly as semantics dictate. Withdraw the anomaly. (My earlier reasoning about the loop touching only low bits was correct, but I missed that mb is consumed — the guard can't be re-evaluated.) Also note: me is NOT consumed. mb is. Good.
+
+  Now the rlwimi sweep is complete and the detector looks solid. Remaining: read the rldimi probe for pattern-row sources (the all-ones census question) and census cells.Now the critical question: rldimi rotate-amount/direction mutants. Pattern rows:
+
+  Session 1 (nowrap): source = RS_ONES (all-ones!), dest = 0. Rows: nowrap sh8 mb0, nowrap sh32 mb0, nowrap sh0 mb0, nowrap sh16 mb16, nowrap single — ALL all-ones source. These rows are about MASK bounds, and all-ones makes mask windows observable. Under a rotate-amount mutant (e.g., n-- > 1 → rotate sh-1), rotl(all-ones, anything) = all-ones → these rows CANNOT see rotate defects. Mask unchanged by the mutant → all 5 nowrap rows GREEN under rotate-amount mutant.
+
+  Session 2 (wrap): source = RS_ONES too! dest = 0. wrap sh40 mb40, wrap sh63 mb63, wrap full, wrap sh48 mb32 — all all-ones. Same blindness for rotate amount/direction.
+
+  Session 3 (preservation): source = RS_VAL = 0xDEADBEEFCAFEF00D — ROTATION-SENSITIVE! Rows:
+  - `pres nowrap`: RLDIMI(4, SRC, 8, 0) → sh=8, mb=0 → mask 0..55; dest SENT. want = (rotl64(RS_VAL,8) & mask(0..55)) | (SENT & ~mask). Under `n-- > 1` mutant: rotate by 7 instead of 8 → rotl64(RS_VAL,7) ≠ rotl64(RS_VAL,8) within mask bits 0..55 → got ≠ exp → FAIL. KILLED! ✓
+  - `pres wrap`: RLDIMI(5, SRC, 40, 40) → rotate 39 vs 40 → differs → killed ✓ (backup).
+  - `pres sh0`: sh=0 → rotate 0; under `n-- > 1`: n=0 → 0 > 1 false → 0 rotations → same → this row blind, but the other two kill.
+
+  So the named candidate `n-- > 1` IS killed by `pres nowrap` (and `pres wrap`). The claim "the pattern rows do [test the rotate amount]" — well, ONLY session 3's three rows use RS_VAL; sessions 1-2 use all-ones. But `pres nowrap` and `pres wrap` have sh=8 and sh=40 with rotation-sensitive source → rotate-amount mutants caught. 
+
+  What about a rotate mutant that only manifests at sh values not in {8, 40, 0}? E.g., `n = sh & 31`: affects only sh ≥ 32. `pres wrap` has sh=40 → rotate 40&31=8 vs 40 → differs → killed ✓. `n = sh | 1`? sh=8 → 9: pres nowrap killed ✓. `n = sh + 32`? sh=8 → 40: killed ✓. `n = 32` constant? killed ✓. `n = sh >> 1`? sh=8 → 4: killed ✓. OK — any amount mutant visible at sh=8 or sh=40 is caught. A mutant visible only at OTHER sh values, e.g. `n = sh == 16 ? 0 : sh`? That's not a (d) mutant (not a predicate flip on dominating predicates, not an operand swap of body-read fields... well, `n-- != 0` swaps and `n = sh` RHS swaps: RHS drawn from fields the body reads: tmp, ra, mb, me... wait rldimi body reads: sh, mb, s, tmp, m, n. Operand swap for `n = sh`: `n = mb` (killed: sh=8,mb=0 → rotate 0 vs 8 → pres nowrap fails ✓), `n = m`?? uninitialized — UB, garbage → almost surely fails ✓, `n = s`?? type... s is uint64_t → n = (int)s = low 32 bits of RS_VAL = 0xCAFEF00D → huge rotate count → loop runs 0xCAFEF00D & ... times — rotates n mod 64 effectively but loop COUNT is huge → timeout → killed. ✓
+
+  Rotate body swaps: `s = (s << 1) | b` → `s = (s >> 1) | b`? b = (s>>63)&1 = 0 or 1; s>>1 | b puts b at bit 0 — mostly right-shift. pres nowrap: rotl8 expected; got garbage → killed ✓. `b = (s >> 63) & 1` → `b = (s >> 63) & 0` → shift-left not rotate: under all-ones sources invisible EXCEPT where mask covers the shifted-in zeros: with RS_ONES, shift-by-1 repeated sh times gives low sh bits = 0. nowrap sh8 mb0: mask 0..55 (PPC), i.e., C bits 8..63; low 8 C bits (0..7) NOT in mask → dest 0 preserved → got = same as rotate version (all-ones in mask, 0 outside) → BLIND at nowrap rows. wrap sh40 mb40: mask = PPC 40..63 ∪ 0..23 = C bits 0..23 ∪ 40..63. Shifted-in zeros at C bits 0..39 (low 40 bits). In mask: C 0..23 → got zeros there; rotate version gives 1s → DIFFER → wrap sh40 mb40 FAILS ✓ killed. Good — shift-vs-rotate IS caught by wrap rows even with all-ones (as I predicted analytically).
+
+  Direction swap `s = (s >> 1) | ((uint64_t)b << 63)` (proper rotr): all-ones blind everywhere; pres nowrap: rotr8(RS_VAL) vs rotl8(RS_VAL) differ in mask 0..55 → killed ✓.
+
+  So rldimi rotate coverage: sessions 1-2 + census all-ones → mask-only; session 3 RS_VAL rows (sh ∈ {8, 40, 0}) → rotate amount/direction caught at those two nonzero shift points. Adequate for (d) mutants since any (d) rotate mutant manifests at sh=8 or sh=40 (they're generic shift amounts; a (d) mutant can't be conjured to dodge exactly {8,40} — dodging would require a constant-comparison mutant like `sh == 8 ? ...`, outside (d)).
+
+  Hmm, one more: `n-- != 0` → `n-- >= 0` rotates sh+1 times: pres nowrap rotate 9 vs 8 → killed ✓. `n-- != 0` → `--n != 0`: sh=8 → 7 rotations? `--n`: n=8→7≠0 body... let me count: pre-decrement: check --n != 0: n: 8→7 body(1), 7→6 body(2), ..., 1→0 stop. Bodies = 7 = sh-1 → killed by pres nowrap ✓. For sh=0: --0 = -1 ≠ 0 → infinite → timeout ✓.
+
+  Now the mask-loop mutants vs census: census is (SH,MB) grid: SH ∈ {0,8,40,63} × 64 MB + MB ∈ {0,40} × 64 SH + diagonals (k,k), (k,63-k). 495 unique. Source all-ones, dest 0, full 64-bit compare vs want_rldimi. All-ones is PERFECT for mask observation: got = mask (since rotl(ones)=ones, dest 0) → got == exp ⇔ mask correct. So any mask-bounds mutant is caught wherever the grid has a distinguishing cell.
+
+  Check remaining mask mutants:
+  - `m = (m+1) & 63` → `m = (m+1) & 31`: grid: sh=40 row, mb sweep: end = (64-40)&63 = 24; cells (40, mb) for mb ≥ 33: m starts ≥33, (m+1)&31 cycles [0,31], hits 24 → terminates with wrong bits (C bits for m∈[0,31] = PPC 32..63) → wrong mask vs Book (e.g., (40,40): Book mask 40..63∪0..23) → census wrong ≥1 → killed ✓. Cells with mb ≤ 31 and end 24: same as fix... (40, 0): m: 0..23 → identical → pass; but (40,40) kills. Also sh=0 row: end=0: (0, mb): m: mb.. → (m+1)&31: mb=0 → 0? (0+1)&31=1... cycles 1..31, 0 → stop at m=0 → bits for m=0..31 only = PPC 32..63 — wait end=(64-0)&63=0, m starts mb: (0,5): m=5,6..31,0 stop → bits PPC 58..63, 32..63... wrong (Book MASK(5,63) = PPC 5..63) → killed ✓. Definitely killed.
+  - `& 63` → `& 127`: cells where mask wraps (end ≤ mb): m runs past 63 → UB shift counts → garbage bits → census (sh=0, mb=5): m: 5..63 then 64...(1<<(63-64)=1<<-1 UB) → garbage → got≠exp ✓ killed (mod C UB — on x86 the shift produces SOME bits; got ≠ mask almost surely; only cell where it agrees by luck... full cycle includes 64..127 UB bits; x86: (63-m)&63 for m=64..127 gives 63..0 → sets PPC 0..63 again — all bits already set... hmm! For sh=0, mb=5: Book mask = PPC 5..63. Mutant: m=5..63 sets PPC 5..63 ✓; m=64..127: x86 shift (63-m)&63 = 63..0 → sets PPC 0..63 → adds PPC 0..4 → mask = all → got = all-ones ≠ exp → killed ✓.) Fine.
+  - End test `m != ((64 - sh) & 63)` → `m != ((64 - sh) & 31)`: sh=0 → end 0 same ✓ pass at sh=0; sh=8 → end = 56&31 = 24: census row sh=8, all mb: cells (8, 0): mask = PPC 0..23 vs Book 0..55 → wrong ✓ killed.
+  - End → `m != ((63 - sh) & 63)` = D_MUT63 measured 14 CONTROL=FAIL ✓.
+  - End → `m != ((64 - sh))` (no &63): sh=0 → end 64 unreachable → infinite do-while → session TIMEOUT → census_run short → CONTROL=FAIL ✓ (also `nowrap sh0 mb0` control session hangs → timeout). Named candidate refuted ✓.
+  - End swap sh→mb: `m != ((64 - mb) & 63)`: census (8, 0): end = 0... wait (64-0)&63 = 0 → full mask vs Book 0..55 → wrong ✓ killed.
+  - End swap m↔... symmetric.
+  - `tmp |= 1 << (63-m)` → `tmp |= 1 << (63-mb)`: single bit per cell → census (0,0): got = PPC 0 bit only = 0x8000... ≠ all-ones → killed ✓.
+  - `63 - m` → `m`: bit-reversed mask → (0,0): all bits set (m cycles all) → pass? (0,0): mask all ✓ same. (8,0): m 0..55 → bits C 63-m for... mutant `1 << m` sets C bits 0..55 = PPC 63..8 → mask PPC 8..63 vs Book 0..55 → wrong ✓ killed.
+  - `~tmp` merge mutants / `tmp & s` → `tmp & ra`... `ra` is int index: (tmp & ra): ra = DESTS[i] = 4..29 → tiny number → got = dest & ~tmp | (tmp & 4..29) → vs all-ones expected in mask → census kills ✓.
+  - `gpr[ra] &= ~tmp` → `gpr[ra] &= tmp`: got = (dest & tmp) | (tmp & s) = tmp & (dest | s); census dest=0: = tmp & s = tmp & ones = tmp = mask → SAME as fix on census!! Blind on census (dest 0, source ones). Pattern rows: s1 dest 0 ones → tmp & (0|ones) = tmp → same ✓ blind. s2 same. s3: dest SENT, source RS_VAL: got = tmp & (SENT | RS_VAL_rotated)... vs want = (rot & m)|(SENT & ~m). `pres nowrap` (8,0): mutant: mask region = rot8(RS_VAL) & mask... wait: got = (SENT & tmp) | (tmp & rot8) = tmp & (SENT | rot8). In mask bits: SENT|rot8 has 1s wherever either has 1 → got mask-bits = rot8 | SENT bits ≠ rot8 bits where SENT has 1 and rot8 has 0 → differs ✓ killed. `pres sh0` similar. So killed ✓.
+  - `|= (tmp & s)` → `|= (tmp | s)`: census: mask bits = 1|1 = 1 → same! dest 0 → blind on census. s1/s2 dest 0, s=ones → tmp|ones = ones → mask bits all 1 → SAME as fix (ones in mask) → blind! s3: pres nowrap: mask bits = rot8(RS_VAL) | ... no wait `(tmp | s)` = tmp | rot8: mask bits get 1 wherever tmp bit set OR rot bit set — tmp bit IS set in mask → all mask bits 1. want mask bits = rot8(RS_VAL) bits — has zeros → differs ✓ `pres nowrap` kills ✓. Phew.
+  - `|= (tmp & s)` → `|= (tmp & ~s)`: census: mask bits = ~ones = 0 → got 0 → census_zero ≥1 + census wrong → killed ✓.
+  - `gpr[ra] |= (tmp & s)` → `gpr[ra] = (tmp & s)` = D_NO_MERGE measured 24 CONTROL=FAIL ✓.
+
+  Now `n = sh` → `n = 64 - sh`? (64-sh not a body field... swaps drawn from fields: sh is a field; arithmetic on it is a different mutation class. (d) covers operand swaps — `n = sh` → `n = mb` covered, killed by pres nowrap (mb=0 → rotate 0 vs 8) ✓.)
+
+  What about the do-while → while conversion? `while (m != end) { set bit; inc }`: mb == end cells (full mask per Book, e.g., (40, 24)? wait mb == end means mb = (64-sh)&63 → full mask Book). With plain while: m=mb==end → zero iterations → mask 0 → got = dest = 0... census cells with mb = (64-sh)&63: e.g., sh=40 → end 24: cell (40, 24) in grid (sh=40 row sweeps all mb) → Book mask FULL (MASK(24,23) wrap → all) → got = 0 ≠ all-ones → census wrong + census zero → killed ✓. Also `nowrap single` (0, 63): end = 64&63=0... mb=63 ≠ 0 → fine. Grid has mb==end cells? sh=0 → end 0 → cell (0,0) ✓ in grid. sh=8 → end 56 → (8,56) ✓. sh=40 → (40,24) ✓. sh=63 → end 1 → (63,1) ✓. All present → killed ✓. (do→while is a predicate-adjacent structural mutant; covered anyway.)
+
+  `do {} while (m != end)` → `do {} while (m == end)`: one iteration then... m=mb+1; == end? For nowrap sh8 mb0: end=56, m=1≠56 → stop → mask = bit 0 only → census (8,0) wrong ✓ killed.
+
+  OK. Both detectors are tight for (d). Remaining named candidates:
+
+  1. rlwimi `mb > me` → `mb >= me`: KILLED — census (sh,0,0) and (sh,31,31) × 5 sh, SENT dest, full-width compare; high word 0xCAFEF00D-family ≠ 0x5A5A5A5A. ✓
+  2. rlwimi high-word ← unrotated source: KILLED — wrap sh8 mb20/wrap sh16 mb28 (MUT_RS low 0x0000000F rotl8=0x00000F00 ≠ unrotated; high word compared full width) + census wrap cells sh∈{1,8,16,31}. ✓
+  3. rldimi end test without `& 63`: KILLED — sh=0 rows/cells infinite-loop (end=64 unreachable) → 90s TIMEOUT → `nowrap sh0 mb0` + `census run` CONTROL=FAIL. Not green (a hang is a loud fail here). ✓
+  4. rldimi `n-- > 1`: KILLED — `pres nowrap` (sh=8, RS_VAL source: rotate 7 vs 8 in mask 0..55) and `pres wrap` (sh=40). ✓
+
+  Q2 (vacuous channels): Check each row varies under its named mutant:
+  - rlwimi: all rows' channels verified varying (nowrap sh* vary under contamination — e.g. RS_VAL 0xDEADBEEFCAFEF00D rotl64 by 8 vs rotl32 differ in low word ✓; wrap rows vary under missing high line ✓; pres rows vary ✓; alias rows vary ✓).
+  - rldimi: sessions 1-2 all-ones are mask-only channels — VACUOUS for rotate defects BY DESIGN (disclosed in header: "The census uses an all-ones source and does not test the rotate amount independently of the mask bounds -- the pattern rows do"). But "the pattern rows do" is only half-true: only session 3 (`pres nowrap` sh8, `pres wrap` sh40) uses RS_VAL. So rotate coverage rests on exactly 2 rows (plus `pres sh0` for sh=0 identity). They ARE non-vacuous (rotl7/rotl39 ≠ rotl8/rotl40 within mask). So: disclosure accurate, but the phrase "pattern rows" = 2 rows. Any (d) rotate mutant fires at sh=8 or sh=40 since those are generic amounts. Fine.
+  - One genuinely thin spot: rotate amount is only tested at sh ∈ {8, 40} (and sh=0 identity). A mutant keyed to dodge those two values would survive — but that's a constant-keyed mutant outside clause (d). Name it as residual.
+
+  Q3: `disasm total` (146/511) and `census run` (129/495) — the probe comments (lines 463-465 rlwimi, 420-422 rldimi) document that the wants were CHANGED from derived lengths to literals precisely because a shrunk census self-satisfied; and rldimi CONTROL comment documents D_NOCIRC census timeout at 182/495 in table 1 (census run pin would read 182 ≠ 495 → CONTROL=FAIL). So the pins have a real, historically-exercised channel (session abort/timeout → short census). In THIS table no leg produced a short census — that's expected: the pins guard the floor (crash/timeout/truncation), not behavioral kills. It's disclosure, not a gap — PROVIDED the panel accepts "floor pins need no per-table kill evidence". The alternative (a mutant that truncates the census to prove the pin fires per-table) is a probe-self-test, doable but arguably belongs to promotion, not per-commit mutation review. I'll call it: disclosure; floor pin with documented historical fire (D_NOCIRC table 1 at cell 182).
+
+  Q4 (Book I correctness of the fixes): I did the full case analysis:
+  - rlwimi: mb<=me → mask in low word only, loop covers mb..me, high preserved ✓; mb>me → wrap mask covers high word + low mb..31,0..me; fix sets high = rotl duplicate ✓ and loop covers exactly mb..31,0..me ✓; mb==me single bit ✓ (loop writes 1 bit, no high write since mb>me false ✓). Rotation guard sh=0 ✓. rs/ra read before writeback ✓ alias-safe. cr0 from final ra ✓.
+  - rldimi: rotate = rotl64(s, sh) ✓ (n=sh iterations, sh∈[0,63] since sh field 6 bits ✓). Mask loop: bits mb..(63-sh) mod 64 ✓ including mb = (64-sh)&63 full-mask wrap ✓ and mb == 63-sh single bit ✓ and sh=0 end=0 → mb..63 ✓. Merge ✓. cr0 ✓. All (sh,mb) ∈ [0,63]² correct — including the ones the census doesn't reach (census reaches 495 of 4096 cells but the code path is uniform; the case analysis covers all).
+
+  Hmm wait, one more rldimi edge: sh field decode — `sh = ((iw >> 11) & 31) | ((iw & 2) << 4)` — max sh = 31 | 32 = 63 ✓. n=63 loop fine. `mb = ((iw >> 6) & 31) | (iw & 0x20)` max 63 ✓. Encoding in probe enc_md matches (sh bit5 → iw bit1; mb bit5 → iw bit5) ✓ consistent with disasm xcheck rows (511 disasm agreements ✓).
+
+  And the fixes vs HEAD: HEAD rldimi had `while (sh-- != 0)` consuming sh → sh=-1 → `m != 63-(-1)=64` → never wraps... wait, original: `m ++` (no &63) and `m != 63 - sh` with sh=-1 → m != 64 → m runs mb..63 then 64 → equals 64 → STOP! Actually m != 64: m increments  mb→...→64 → stops when m==64. But before stopping, at m=64: loop check happens after setting bit for m... do-while: sets bit 63-m for m, then m++, check m != 64. m goes mb..63 (bits 63-mb..0), m=64 after inc from 63 → check 64 != 64 false → stop. So mask = PPC mb..63 always. No UB actually (m never reaches 64 inside body... wait body executes for m=mb..63; check after m=64 → exit. So bit setting only for m ≤ 63 → defined). Mask always mb..63. Matches defect description ✓.
+
+  HEAD measured 17/27: rows failing on HEAD = 10: nowrap sh8 mb0 (mask 0..63 vs 0..55) ✓, nowrap sh32 mb0 ✓, nowrap sh16 mb16 ✓, wrap sh40 mb40 (Book 40..63∪0..23; HEAD 40..63) ✓, wrap sh63 mb63 (Book {63,0}; HEAD {63}) ✓, wrap full ✓, wrap sh48 mb32 ✓, pres nowrap ✓, pres wrap ✓, census wrong (cells) ✓... that's 10 ✓ consistent.
+
+  rlwimi HEAD 14/28: fails = 14: nowrap sh8/sh16/sh4 (3, contamination), wrap 4, pres nowrap (contamination) + pres wrap + wrap fullword (3), alias nowrap/both (2; alias wrap sh0 no contamination but high → fails too → 3), census wrong + census zero?... let me count: 3 + 4 + 3 + 3 + 1 (census wrong) = 14 ✓ consistent. Good — table internally consistent.
+
+  Also double-check R_REV_COND (mb<me) = 13 CONTROL=FAIL: nowrap rows into zero dest: mb<me fires → high word = tmp... dest pre-seeded 0 in session 1 → high = tmp<<32; want high = 0 → nowrap sh0 fails (that's a CONTROL row → CONTROL=FAIL ✓ consistent with annotation). ✓
+
+  D_NOWRAP (`m++; } while (m < 64 - sh)`) = 21 CONTROL=OK — interesting: predicted and measured 21 with control OK. Loop while m < 64-sh: for non-wrap cells stops at 63-sh... m < 64-sh: after setting bit m and incrementing, continue while m < 64-sh → last bit set = 63-sh ✓ same as fix for nowrap; for wrap cells (mb > 63-sh): m increments past 63 → 64: `1 << (63-64)` = 1 << -1 UB... m=64 → check 64 < 64-sh false → stop. Body executed for m=64 → UB shift. On x86: (63-64)&63 = 63 → sets bit 0 (PPC 63)?? Hmm whatever — wrap rows fail (missing 0..63-sh insertion) → 6 failures: wrap sh40 mb40, wrap sh63 mb63, wrap full, wrap sh48 mb32, pres wrap, census wrong = 6 → 27-6=21 ✓ consistent. Controls all nowrap/sh0 → OK ✓.
+
+  Now — anything GREEN? Let me think about genuinely tricky (d) survivors once more, especially cross-product swaps I haven't done:
+
+  rlwimi:
+  - `tmp = sh ? ((tmp << sh) | (tmp >> (32-sh))) : tmp` — swap `sh` and `32-sh`: `(tmp << (32-sh)) | (tmp >> sh)` = rotr(32-sh... = rotl(32-(32-sh))=... (x << (32-sh)) | (x >> sh) = rotr32(x, sh) = rotl32(x, 32-sh). For sh=0 guarded. Killed by nowrap sh8 (rotl24 vs rotl8) ✓.
+  - high line: `(ra & 0xffffffffULL) | ((uint64_t)tmp << 32)` — swap `ra` and `tmp` roles: `(tmp & 0xffffffffULL) | ((uint64_t)ra << 32)` → ra_new = tmp | (ra_old << 32)?? high = old ra low word; then loop... low = tmp | ... killed by pres wrap (low preserved bits wrong) and wrap rows (high = 0x5A5A5A5A vs rotated) ✓.
+  - `if (mb > me)` with me swapped to a constant? not (d).
+  - loop `mask = 1 << (31-mb)` → `1 << (31-me)`: first bit wrong; loop still breaks at mb==me → writes bit (31-me) repeatedly → nowrap sh8 mb0 [0,15]: writes only bit PPC 15 → into zero dest → got = bit ≠ want (16 bits) ✓ killed.
+  - `ra |= (tmp & mask)` → `ra |= (ra & mask)`: no-op-ish: bits not inserted → nowrap rows into zero dest → got 0 in mask ≠ want ✓ killed.
+  - swap ic->arg[0]/arg[1] in tmp read: tmp = RA (SENT/0) → nowrap sh0 control fails ✓ CONTROL=FAIL.
+
+  rldimi:
+  - `s = cpu->cd.ppc.gpr[rs]` → `gpr[ra]`: aliasing break: s = dest seed: census dest 0 → s=0 → got 0 ≠ mask → census zero/wrong ✓ killed.
+  - merge writes `gpr[ra]` → `gpr[rs]`: dest unchanged: census dest 0... got = 0 ≠ exp → killed ✓; also src intact control fails (r3 written) ✓ CONTROL=FAIL.
+  - `while (n-- != 0)` → `while (n-- != 1)`: covered → sh=0 hang ✓ / sh≥1 off-by-one killed by pres nowrap ✓.
+  - `int m, n = sh;` → `n = sh + 1`? constant-arith, not (d) swap; anyway pres nowrap kills ✓.
+  - `m = mb` → `m = 0`? constant, not (d); census (0,5) etc. kill ✓. `m = mb` → `m = sh`? (d) swap! nowrap sh8 mb0: m starts 8, end 56 → mask PPC 8..55 vs Book 0..55 → census (8,0) wrong ✓ killed. wrap sh40 mb40: m=40 same (mb=40=sh=40 coincidentally!) → that cell blind; but census (8,0), (0,5)... (0, mb): sh=0 row: m = 0 always → mask 0..63 vs Book mb..63 → wrong for mb>0 ✓ killed.
+  - `tmp = 0` → `tmp = s`? mask OR-ed onto s bits: mask superset → census wrong ✓ killed.
+  - end test `m != ((64 - sh) & 63)` → `m != ((64 - n) & 63)`? n after rotate loop = -1! (n-- post-decrement leaves -1). (64 - (-1)) & 63 = 65 & 63 = 1 → end = 1: nowrap sh8 mb0: bits 0..0 only (m stops at 1) → census (8,0) wrong ✓ killed. Ha — poetic (mirror of original defect). Killed anyway.
+  - `m != ...` → `n != ...`? n=-1 constant → m != -1 always true (m ≥ 0... m cycles 0..63, never -1) → infinite → timeout ✓ killed.
+
+  Anything involving `rc`? Not part of fix.
+
+  Decode swaps (rs/ra/sh/mb field extraction): not edited lines; also disasm xcheck + ctl rows catch gross decode errors. `sh` decode `((iw >> 11) & 31) | ((iw & 2) << 4)` — not edited. Skip.
+
+  So: NO surviving (d) mutant found. Both named-candidate classes refuted with specific rows. Residual notes:
+  (a) rldimi rotate amount verified only at sh ∈ {0,8,40} — adequate for all (d) mutants (any field-swap/predicate flip fires at 8 or 40), but a constant-keyed mutant (outside (d)) could dodge. Worth one row at a third shift, e.g. sh=63 RS_VAL? Not required.
+  (b) rlwimi `sh ?` removal → unconditional rotate with `tmp >> 32` at sh=0 is C-UB but behaves as identity on x86-64 (SHR count masked) — an equivalent-on-this-platform mutant, GREEN but not a behavioral defect; also it's outside the fix diff (line pre-exists). Actually wait — is the `sh ?` guard pre-existing? Check the diff: the diff shows `tmp = sh ? ((tmp << sh) | (tmp >> (32-sh))) : tmp;` as CONTEXT (unchanged) — yes pre-existing. And the prompt included `sh ?` in the sweep list. Note it as equivalent-mutant disclosure.
+  (c) R_POST_LOOP: resolved — probe header lines 51-52 explain the guard must precede the loop because the loop consumes mb; post-loop placement makes `mb > me` always false → behaviorally = R_ONLY_CAST → 19 ✓ table consistent, my initial commutativity worry was wrong (I forgot mb is consumed).
+  (d) Q3: floor pins, disclosed in probe comments with historical fire (table 1 D_NOCIRC census abort at 182 → census run ≠ 495).
+  (e) Q2: rldimi sessions 1-2 + census all-ones = mask-only channels — rotate defects blind there BY DESIGN; carried by `pres nowrap`/`pres wrap` (RS_VAL). Disclosed in header. rlwimi channels all vary.
+  (f) Q4: both fixes correct against Book I for ALL cells incl. census-unreached ones (case analysis: rlwimi mb<me/mb>me/mb==me; rldimi full (sh,mb) grid incl. full-mask wrap mb=(64-sh)&63 and single-bit mb=63-sh and sh=0).
+
+  One more check on the rlwimi census `mb >= me` kill: cells (sh, 0, 0) — in mb_me_nowrap list ✓ (0,0) present. (31,31) ✓ present. sh ∈ {0,1,8,16,31} → 10 cells. And dedup: (0,0,0) also from diagonal (k=0: (0,0,31)? no — diagonal is (k,k,31-k) = (0,0,31) and (k,31-k,k) = (0,31,0). So (0,0,0) unique from the grid ✓. 129 = 70 + 64 - 5 dups? 70+64 = 134; dups: (0,0,31) appears in grid (sh=0,(0,31)) and diagonal k=0 → dup; (0,31,0) grid (sh=0,(31,0)) and diagonal → dup; (8,8,23): grid has (8, (8,23)) ✓ and diagonal k=8: (8,8,23) dup; (8,23,8): grid (8,(8,23))? no that's (mb,me)=(8,23) → cell (8,8,23). (k,31-k,k) k=8 → (8,23,8): grid (sh=8, mb=23, me=8)? not in lists → unique. k=16: (16,16,15): grid? no. (16,15,16)? no. Hmm 134-129 = 5 dups: (0,0,31), (0,31,0), (8,8,23), and? (16,?,?) ... (k,k,31-k) in grid requires (mb,me)=(k,31-k) in the 14 pairs: (8,23) k=8 ✓; (16,15)? no; (0,31) k=0 ✓; (31,0) k=31 ✓ → (31,31,0). (k,31-k,k) in grid: (mb,me) = (31-k,k): (31,0) k=0 ✓ → (0,31,0) already counted; (0,31) k=31 → (31,0,31) grid (sh=31,(0,31)) ✓ dup; (8,23)?? (31-k,k)=(8,23) → k=23: (23,8,23) grid (sh=23,...)? sh must be 23 — not in {0,1,8,16,31} → no. So dups: (0,0,31), (0,31,0), (8,8,23), (31,31,0), (31,0,31) = 5 ✓ 134-5=129 ✓✓. Internal consistency confirmed — 129 is exactly right.
+
+  rldimi census 495: SH rows 4×64=256; MB rows 2×64=128; diagonals 128. Total 512. Dups: (k,k) ∩ SH-rows: (0,0),(8,8),(40,40),(63,63) = 4; (k,k) ∩ MB-rows: (0,0),(40,40) = 2; (k,63-k) ∩ SH-rows: sh=0→(0,63), 8→(8,55), 40→(40,23), 63→(63,0) = 4; (k,63-k) ∩ MB-rows: mb=0→(63,0), mb=40→(23,40) = 2; SH-rows ∩ MB-rows: (sh,0) for sh∈{0,8,40,63} = 4 + (sh,40) = 4 → 8; (k,k) ∩ (k',63-k'): k = 63-k → none. Inclusion-exclusion on the four sets: |A∪B∪C∪D| where A=SH-rows(256), B=MB-rows(128), C=diag(64), D=anti(64). A∩B=8, A∩C=4, A∩D=4, B∩C=2, B∩D=2, C∩D=0; triples: A∩B∩C: (0,0),(40,40)=2; A∩B∩D: (63,0) ✓(in A sh=63 row, B mb=0 col, D), (23,40)? in A? sh=23 no → 1; A∩C∩D=0; B∩C∩D=0; quad=0. |union| = 512 - (8+4+4+2+2) + (2+1) = 512-20+3 = 495 ✓✓. 495 exactly right.
+
+  Everything cross-checks. Verdict: NO SURVIVING (d) MUTANT, with the swept list and the disclosures.
+
+  Also should I double-check the claimed HEAD rlwimi contamination mechanism? `MODE_uint_t tmp` 64-bit, `tmp << sh | tmp >> (32-sh)`: for sh=8, RS_VAL: tmp<<8 low32 = 0xEFCAFEF00D & ... wait 0xDEADBEEFCAFEF00D << 8 = 0xADBEEFCAFEF00D00 (truncated 64) → low32 = 0xFEF00D00. tmp >> 24 = 0x000000DEADBEEF... low32 = 0xADBEEF?? 0xDEADBEEFCAFEF00D >> 24 = 0x000000DEADBEEFCA → low 32 = 0xADBEEFCA. OR: 0xFEF00D00 | 0xADBEEFCA = 0xFFFFFFCA?? hmm: 0xFEF00D00 | 0xADBEEFCA = 0xFFFF... FEF00D00 | ADBEEFCA: FE|AD=FF, F0|BE=FE, 0D|EF=EF, 00|CA=CA → 0xFFFEEFCA vs correct rotl32 0xFEF00DCA. Differ ✓ non-vacuous. Fine.
+
+  Now compose the verdict. Format required:
+  - VERDICT LINE FIRST, then liveness token PASS2_PPC_20260912.
+  - Verdict line format: `NO SURVIVING (d) MUTANT — swept: <list>`.
+  - Answer Q1 (named candidates + full sweep), Q2 (vacuity), Q3 (floor vs disclosure), Q4 (Book I).
+  - Mention what I swept precisely.
+  - Note the R_POST_LOOP resolution (I initially suspected a table inconsistency; resolved by probe comment lines 51-52 — mb is consumed by the loop, so post-loop placement ⇒ guard always false ⇒ identical to R_ONLY_CAST ⇒ 19 consistent).
+  - Note the two census-count cross-checks (129, 495 derived by hand — match).
+  - Note residual: rldimi rotate coverage rests on 2 RS_VAL rows (sh=8, sh=40); sufficient for (d), thin against constant-keyed mutants (outside (d)).
+  - Equivalent-mutant notes: rlwimi `sh ?`→unconditional (UB-but-identity on x86-64, pre-existing line, outside fix diff); these aren't survivors.
+
+  Keep it tight.
+
+• **VERDICT: NO SURVIVING (d) MUTANT — swept: rlwimi {`mb>me` → `<` `<=` `>=` `==` `!=` true false, `mb`↔`me`, `mb/me`→`sh`; `tmp`↔`ra`, `<<32`→`<<0/31/33/sh`, unrotated-source, `0xffffffff`→high-half mask, line pre/post-rotation; `sh?` invert/remove, `<<`↔`>>`, `sh`↔`mb`; loop `mb==me` → `!=` `>=` `mb==sh`, `mb==32` → `==31` `>32` `!=32` `me/sh==32`; `mask` `31-mb`→`31-me`/`63-mb`; `ra|=` source swaps} · rldimi {`n--!=0` → `>1` `>=0` `--n` `!=1` `n=mb/m/s`, direction, shift-not-rotate, `n=sh&31`; `m=(m+1)&63` → `&31` `&62` `&127` `|63`; end test → `63-sh` no-`&63` `&31` `sh→mb` `sh→n` `m→n` `!=`→`==` do→while; `1<<(63-m)` → `1<<m` `1<<(63-mb)`; merge `&=~tmp`→`&=tmp`, `|=(tmp&s)` → `tmp|s` `tmp&~s` `tmp&ra` `tmp&SEED`, `gpr[ra]`→`gpr[rs]`, `s`↔dest} — every mutant either fails a named row, fails census cells, or hangs into the 90 s timeout (CONTROL=FAIL). Liveness: **PASS2_PPC_20260912**
+
+  I read the tree, not just the brief: `GXEMUL-SEC/src/cpus/cpu_ppc_instr.c:2534-2656` matches the inlined fix verbatim (`git diff` confirms the exact four rldimi edits and two rlwimi edits), and both probes in full.
+
+  **Q1 — the four named candidates, all refuted:**
+  - `mb > me` → `mb >= me`: killed. The census carries mb==me cells (0,0) and (31,31) × SH∈{0,1,8,16,31}, each into SENT, compared full-width (`want_rlwimi` returns the 64-bit `(rotl32 & m) | (SENT & ~m)`, `ppc_rlwimi_probe.py:156-159`). Under the mutant, high word becomes rotl32(0xCAFEF00D,sh) — 0xCAFEF00D, 0x95FDE01B, 0xFEF00DCA, 0xF00DCAFE, 0xE55F7806 — none equals 0x5A5A5A5A, so `census wrong` ≥ 1 at all five SH.
+  - `<<32` ← unrotated source: killed by `wrap sh8 mb20` / `wrap sh16 mb28` (MUT_RS low word 0x0000000F: rotl8 = 0x00000F00 ≠ 0x0000000F, high word compared) plus census wrap cells at SH∈{1,8,16,31}. The sh0 wrap rows are blind to it, but they are not alone.
+  - rldimi end test `m != 64 - sh` (no `& 63`): sh=0 makes the end 64, unreachable since `m` is taken `& 63` — infinite do-while → session TIMEOUT → `nowrap sh0 mb0` and `census run` go CONTROL=FAIL. A hang is not green here; the 90 s timeout is the killer.
+  - rldimi `n-- > 1`: rotates sh−1 times for sh≥1. Census and sessions 1–2 are blind (all-ones source), but `pres nowrap` (sh=8, RS_VAL, mask 0..55: rotl7 ≠ rotl8) and `pres wrap` (sh=40: rotl39 ≠ rotl40) both fire. Killed.
+
+  **Q2 — vacuity:** rlwimi: every named channel varies (I spot-computed the contamination: HEAD rotl64 of RS_VAL at sh8 gives low word 0xFFFEEFCA vs correct 0xFEF00DCA). rldimi: sessions 1–2 and the census are mask-only channels by design — under all-ones, got == exp ⇔ mask correct, and *any* rotate amount/direction defect is invisible there. The header discloses this and claims "the pattern rows do" cover rotate; in fact exactly **two** rows carry that (`pres nowrap` sh8, `pres wrap` sh40 — the only RS_VAL rows with sh≠0). Sufficient for clause (d): any predicate-flip or field-swap on the rotate fires at sh=8 or sh=40. A constant-keyed mutant (`sh==8?0:sh`) would survive, but that is outside (d). Shift-vs-rotate mutants are caught even with all-ones, via wrap rows whose mask covers the shifted-in zeros (`wrap sh40 mb40`). One residual worth one line in the commit message: rotate amount is evidenced at sh∈{8,40} only.
+
+  **Q3 — floor vs disclosure:** disclosure, with a documented historical fire. Both probes pin literals *because* derived wants self-satisfied a shrunk census (comments at `ppc_rlwimi_probe.py:463-465`, `ppc_rldimi_probe.py:420-422`); the rldimi CONTROL comment records D_NOCIRC's census aborting at cell 182 in table 1 — which is exactly the `census run ≠ 495` channel firing. No leg in *this* table exercises it because no leg truncated the census; the pin guards crash/timeout, not behavior. I cross-checked the literals by hand from the combo lists: rlwimi 70 + 64 − 5 dups = 129; rldimi 256 + 128 + 128 − 17 overlaps = 495. Both exact.
+
+  **Q4 — the fixes against Book I:** correct for *all* cells, including ones the censuses don't reach. rlwimi: mb<me (mask in low word, loop covers mb..me, high preserved), mb>me (wrap mask covers the whole high word; the added line supplies the duplicated rotated word and the loop covers mb..31,0..me), mb==me (single bit, no wrap since MASK wraps only when x>y — so the `>` strictness is load-bearing and the census guards it). rldimi: the do-while terminates at `(64-sh)&63`, which correctly yields the single-bit case (mb == 63−sh), the full-mask wrap (mb == 64−sh, e.g. MASK(24,23) = all ones — the do-while's fire-before-test is exactly right there), and sh=0 (end 0 ⇒ mb..63). Decode of the 6-bit sh/mb matches the probe's `enc_md` and the 511 disasm agreements.
+
+  **Two premise checks I ran that did *not* fail the table, one of which I initially misread:**
+  - R_POST_LOOP=19 looked impossible to me on commute grounds (the line writes only the high word, the loop only low-word bits) — wrong: the loop **consumes `mb`** (it ends with mb==me), so post-loop placement makes `mb > me` always false; the probe header says this explicitly (`ppc_rlwimi_probe.py:51-52`). R_POST_LOOP ≡ R_ONLY_CAST, and the identical 19s are consistent, not suspicious.
+  - Equivalent-mutant notes (green but behaviorally identity, so not survivors): rlwimi `sh ?` → unconditional rotate (`tmp >> 32` at sh=0 is C-UB but identity on x86-64; the line pre-exists the fix anyway); `mb++` → `mb=(mb+1)&31` makes `mb==32` dead but is identical. Neither indicates a detector gap.
+
+  One measurement I did not take (none needed beyond the inlined tables): a leg moving the rlwimi high-word line *before* the rotate — I refuted it analytically via `wrap sh8 mb20`, and it is subsumed by the unrotated-source candidate.
+
+To resume this session: kimi -r session_b8a8048b-537b-4416-9797-4270888a4eca
