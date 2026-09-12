@@ -1,3 +1,177 @@
+# `#518` (lcabadval): legal LCA register writes terminated the emulator, including the SROM-required clearing of a DMA window
+
+**THE DEFECT AND FIX.** The historical guards killed the host after storing the operand.
+The uncommitted `src/devices/dev_lca.c` repairs CONF, TB_ENA, W_BASE0/1 and W_MASK0/1:
+CONF retains its CFG AD field; TB_ENA retains TEN; BASE retains W_BASE, SG and WEN.
+MASK validates the normalized contiguous-low-ones field before storing; invalid fields
+preserve the previous value and announce once. CONF's unmodelled field and enabled DMA
+windows announce once. Translation itself remains unimplemented.
+
+The ledger's manual warrant is thirteen canonical MASK settings, not thirteen interchangeable
+window configurations with fixed bases. SROM must clear both BASE registers; the old BASE0
+already accepted zero, while BASE1 killed on it. Readbacks test the model's echo policy;
+the hardware registers are write-only with UNPREDICTABLE readback.
+
+**WITNESS — REPORTED IN THE LEDGER.** Unmodified Alpha `alphabook1`, cold debugger, guest
+quadword accesses, same-session accepted-value control before each legal-value write.
+`regress/artifacts/lcabadval/witness_20260909/HEAD_74daefd.out`: committed witness **14/20**,
+with each legal-value death carrying its own arm's diagnostic; fix **20/20 (no preserved artifact)**.
+W_T_BASE0 supplies the sibling control.
+The filename names `74daefd`, but the ledger says its banner stamps `54a2eb4`; it records
+unchanged device source across the moving HEADs. Construction alone was not this witness.
+
+**MEASURED — THE TABLES ARE DIFFERENT INSTRUMENTS.**
+`regress/artifacts/lcabadval/killtable_20260910/SCORES.txt` (58-row instrument):
+`M26_mask_field_wide`, `M27_tbena_mask_wide`, `M32_wen_ann_or`, `M33_conf_ann_or` each **58/58**;
+`M20_def_echo` also **58/58**. The latter is equivalent by construction, not a measured index-bug escape.
+`regress/artifacts/lcabadval/killtable_20260910/t3/SCORES3.txt`: BASE **64/64**;
+those four earlier sweepers each **63/64**; `M20_def_echo` **64/64**.
+`M25..M42` are killed; `M43_mask1_widen`, `M44_mask1_field_idata`,
+`M45_base1_nosg`, `M47_base1_widen` each escape at **64/64**.
+`regress/artifacts/lcabadval/killtable_20260910/t4/SCORES4.txt`: BASE **67/67**;
+`M43_mask1_widen`, `M44_mask1_field_idata`, `M47_base1_widen` still **67/67**.
+`M45_base1_nosg`, `M46_conf_ann_wide`, `M48_wen_perreg`, `M49_def_narrow` each **66/67**,
+on `wbase1 sg`, `conf silent`, `wen once`, `def width`, respectively.
+
+**MEASURED — `regress/artifacts/lcabadval/killtable5_20260912/SCORES.txt`.**
+Frozen 75-row probe; working-tree fix baseline compared clean; fresh builds and completion
+sentinels recorded; restoration compared clean and its sentinel was cleared.
+
+| Leg | Score | Failures; observed mutant pair |
+|---|---|---|
+| BASE | **75/75** | none |
+| HEAD | **15/75** | historical killing implementation; multiple failures |
+| M43_mask1_widen | **74/75** | `wmask1 filter-zero`; `0xfff00000/0xff000` |
+| M44_mask1_idata | **74/75** | `wmask1 filter-zero`; `0xfff00000/0xfff00000` |
+| M47_base1_widen | **74/75** | `wbase1 filter`; `0x1fff00000/0x400000000` |
+| M_RULE2 | **74/75** | `wmask1 f2`; `0x700000/0x200000` |
+| M_STORE01 | **74/75** | `wmask0 filter`; `0xfff00000/0x1000` |
+| M_CONF_B4 | **74/75** | `conf filter`; `0x3/0x10` |
+| M_TBENA_B8 | **74/75** | `tbena filter`; `0x80/0x100` |
+
+These match `regress/artifacts/lcabadval/killtable5_20260912/PRETABLE.out`.
+The new CONF/TB_ENA mutations fail only their own D12 rows. The ledger's earlier
+“75 rows UNMEASURED; table 5 OWED” is superseded by this measurement.
+
+**DEDUCED — `regress/artifacts/lcabadval/killtable5_20260912/codex_passE_20260912.txt`.**
+All **12/12** stated stored-mask cells have carriers: six arms × {widen, narrow}. This is
+source-based coverage reasoning for unbuilt mutations, not twelve measured mutant builds.
+CONF/TB_ENA narrowing was not separately built. D11/D12 check nonzero seeds followed by
+reserved-bit complements; the existing BASE live rows supply WEN narrowing coverage.
+MASK rule, raw-operand and defined-shift changes also have named carriers; this does not
+prove coverage of arbitrary predicate rewrites. Silence alone does not establish filtering.
+
+**CORRECTIONS — WHAT WAS WRONG, WHAT SETTLED IT.**
+
+* Census: the ledger's four-arm account omitted BASE1/MASK1. Its correction, “one single-value
+  arm out of four”, was also wrong: three of six were single-value guards. The historical
+  predicates in the probe header settle this. Each MASK rejected twelve of thirteen canonical
+  fields, correcting the witness author's eleven-of-thirteen count.
+* The ledger corrects twelve textual exits to eleven live exits: the `dev >= 21` kill was
+  commented out. These are historical counts, not counts of the repaired file.
+* “No rig” did not establish witness impossibility. The ledger records a failed ELF launch
+  and a banner matcher that matched the error itself; the WSL construction check corrected
+  that apparatus, and the later witness established the actual device path.
+* “Firmware is the only writer” was withdrawn: kernel stores use the same path. “Any interrupt”
+  overstated the old confound: only propagated callbacks reached the stubs; the probe header
+  records their later repair. Exit status alone never establishes arm attribution.
+* “These fields feed window decoding” contradicted the same brief's pure-storage description.
+  The ledger's source check found CONF the sole functional consumer. The sibling storage arms
+  and store-before-check ordering did not establish hardware-correct acceptance.
+* The design record itself disagrees: the earlier codex answer says RCR1 has no functional
+  consumer; the later disposition says a consumer was found and A/B were the same option.
+  The record does not reconcile those premises; the manual supplied the final warrant.
+* The adjudication scoped window arms, CONF acceptance and TB_ENA out. The witness's TB_ENA
+  ignored-bit write killed the host, refuting “NOT a functional defect”; the implementation
+  therefore revised scope. The ledger's opening “default not closed” is also stale: current
+  code declines default writes and returns zero for reads, announcing each direction once.
+  This closes termination there, not the missing register implementations.
+* Grok corrected CONF bit 1 being called the type-1 select: bit 0 is consumed; the other
+  bit carries CFG AD encodings, not extra PCI cycle types. The comment called
+  the whole field TYPE before qualifying it, and the default arm's “no state changes” was too
+  broad (no IOC register-value change, but `d->warned` changes). BOTH CORRECTED IN THIS ROUND
+  (comment-only; propagated and rebuilt, lca BASE re-run).
+* Kimi found `def read0` reading a stale register print; the index was repaired. The audit
+  says the all-ones mutant, not equivalent `M20_def_echo`, measures that defect.
+  `def width` matched an echoed debugger command; it was re-keyed to the announcement.
+* The original grid omitted widening and latch assignment versus accumulation. Codex added
+  field-rule, repeat-after-other-reasons and diagnostic-width cells; grok added per-label WEN.
+  The claimed SG-drop hole was already caught by `wbase0 live`; restoring the old whitelist
+  would not kill its accepted live/zero values. New SG rows are additional pins.
+* Instrument growth was 40 → 53 → 58 rows. The ledger's **52/53 (no preserved artifact)**
+  was an instrument error: `0x100f0000` set bit 28, not the intended low bits.
+  The audit's **63/64 (no preserved artifact for the overwritten run)** was later remeasured
+  as `FIX518_detector_run3_D9unsplit.out`, but the record names no artifact directory.
+  “Every log has a sentinel” excludes the quarantined `pre_repair_aborted/` attempt.
+  Added rows were not proof of monotonic results: a session also changed.
+* The ledger groups four kills as round-four rows, but `conf silent` already fails in the
+  preceding table's `SCORES3.txt`; the grouping does not establish four new rows.
+  The earlier all-L1/L4-repaired ruling was overtaken by codex's
+  L2 finding on the remaining table-four escapes: filtering/validation defects, not equivalent
+  mutations and not merely acceptance-guard weakenings. The measured closure is table 5 above.
+* The prediction audit corrected 25 rows to 73 emitted rows; D12 then made 75.
+  It established no wrong `want`; its source predictions were not measurements.
+  Six attribution rows are vacuous as repair detectors; `wmask1 indep`/`wmask1 once` duplicate
+  one observation. Their inclusion does not create independent coverage; the ledger's
+  pre-ship repair obligation has no recorded discharge.
+* D11's initial closure covered four filtered arms, omitting CONF/TB_ENA; D12 supplied them.
+  Its “every architected bit” seed claim excludes BASE WEN: `0x1fff00000` leaves WEN clear
+  deliberately for the silence check; the BASE live rows carry that bit.
+* The closing pass corrected D11's “widening reads that bit / narrowing loses that bit”.
+  At MASK, validation can instead reject the complement and retain the nonzero seed, or
+  reject the seed itself. The pair still fails. The corrective comment is present, and
+  the `wmask0 filter` row's display-only note, which repeated the broader wording, was corrected in this round.
+* D11 calls table 4 “clean” and names MASK0/BASE1; its SCORES4.txt record instead has surviving
+  MASK1 filtering/operand mutations and BASE1 filtering. MASK0 was a later repair-chain gap.
+  The header said BASE bits above 33 were unrowed, contrary to D11 and the ledger's D6 finding.
+  BOTH CORRECTED IN THIS ROUND in the probe's comments; they were records, not missing coverage.
+* The audit already rejected modification time as proof of prediction order; table 5's
+  PRETABLE nevertheless claims “mtime proves order”. Matching predictions establish agreement,
+  not independent proof of chronology. The ledger also corrects eight transports to six
+  answering of seven, and eight IOC warning bits to six IOC plus two IRQ bits.
+  Propagation was already done when the old draft said OWED, according to that audit.
+
+**CLAUSE (e) — STILL OPEN.** DMA/SG translation and SG's functional effect; unchanged W_T_BASE
+behaviour beyond the sibling control; functional consumption of CONF beyond this echo probe;
+hardware readback; non-quadword accesses; per-device-instance latch independence (untested,
+not untestable); quiet-mode diagnostic visibility (source-supported, unmeasured). Default
+decline is not implementation of STAT0, STAT1, SFT_RST or PAR_DIS: filed as `lcaiocstat0`.
+The ISA `ofs > len` termination belongs to `lcaisalane`; this is not whole-chipset closure.
+The MANIFEST entries land in this commit (a detector entry and a dated EXEMPT, below).
+
+**SEATS — FROM THE LEDGER, NOT A RETROSPECTIVE UNANIMOUS PANEL.**
+
+* 2026-08-31 assess: glm, deepseek, minimax answered; codex's N/A entry holds codex, grok,
+  kimi, opus5, fable5. Research: opus5 supplied a reading-based constructibility sequence;
+  fable5 held. Main-loop construction checks were not seat answers.
+* 2026-09-06 assess and research: codex answered, correcting the census and design premises.
+* 2026-09-07 research: codex gave a qualified fix-check. Design: grok favoured A for the storage
+  arms but distinguished CONF; glm favoured A there and B for CONF; minimax favoured A across
+  the arms; kimi split CONF decline/mask from storage acceptance; deepseek dissented for B;
+  codex recommended conservative B and challenged its warrant. Opus5/fable5 deliberately held
+  for adjudication; no vote. Kimi used the packet-fed cloud substitute after the CLI wall.
+* 2026-09-08 assess: codex and grok read files; glm, kimi, minimax, deepseek answered from
+  packets; deepseek challenged the premise. Design: codex answered both disposition and
+  fix-design passes, qualifying earlier findings.
+* 2026-09-09 assess/research/design: fable5, the main loop running as Fable 5.1, adjudicated
+  the held stages in one ruling, not an independent review. Research: opus5 measured the witness.
+* 2026-09-10 review: codex, grok, deepseek, glm, kimi, minimax answered; their findings and
+  corrections are above. Kimi again used the cloud substitute. Opus5 measured the initial
+  tables; the main loop ran the subsequent tables. Agy **deliberately not fired**, measurement
+  reserve. Fable5 adjudicated as the main loop. Codex separately audited the draft and ruled
+  on the escapes; neither its NO-GO nor the later floor breach is agreement with the first ruling.
+* 2026-09-11: codex prediction audit. 2026-09-12: codex table design, D12 review and closing
+  pass; recorded read-only farm work, not extra panel stages. No table-five operator seat is
+  named in its SCORES file. The audit mentions an Opus wall without a preserved artifact;
+  no further seat outcome is claimed for it.
+
+**DISPOSITION.** The probe runs on Alpha; no gate in this tree runs an Alpha machine.
+It follows the tree's #520 precedent: `lca_badval_probe.py` is a CLASS_DETECTOR with a dated EXEMPT
+entry in `check_probe_wiring.py` (2026-09-20, the same cliff as #520-#522), filed to `wiringcliff` --
+`gate_crossfamily.sh` is the named home.  The shipped probe differs from table 5's frozen instrument
+only in comments and one display-only note string; the lca BASE was re-run on the rebuilt binary after
+the comment corrections.  Commit: this block's own; its pass-2 receipt is keyed to that SHA in the next commit.
+
 # `#519` (sgirandomcolour): unsupported colour PUTs replaced guest pixel data with host-PRNG bytes and flooded diagnostics
 
 **THE DEFECT.** The DE colour default included documented YCRCB among 12 of 16 type encodings.

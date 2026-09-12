@@ -1,0 +1,35 @@
+VERDICT: All 12/12 cells in the stated stored-mask class have detecting rows; no cell is unrowed.
+CODEX_518E_20260912
+
+[SCORES.txt](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/lcabadval/killtable5_20260912/SCORES.txt:6) records BASE **75/75**, HEAD **15/75**, and all seven mutants **74/75**, with exactly PRETABLE’s predicted failing rows and readback pairs. Both new widening mutants fail their D12 row alone. The conclusions about unbuilt mutations below are source-based deductions.
+
+The denominator is **six arms × {widen, narrow} = 12 cells**:
+
+| Arm | Widening detector | Narrowing detector |
+|---|---|---|
+| CONF | `conf filter`: complement readback | `conf filter`: seed readback |
+| TB_ENA | `tbena filter`: complement readback | `tbena filter`: seed readback |
+| MASK0 | `wmask0 filter`: complement readback | `wmask0 filter`: seed readback |
+| MASK1 | `wmask1 filter-zero`: complement readback | `wmask1 filter-zero`: seed readback |
+| BASE0 | `wbase0 filter`: complement readback | `wbase0 filter` for bits 20–32; `wbase0 live` for WEN |
+| BASE1 | `wbase1 filter`: complement readback | `wbase1 filter` for bits 20–32; `wbase1 live` for WEN |
+
+These carriers are implemented in [D11](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/lca_badval_probe.py:623), [D12](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/lca_badval_probe.py:675), and the [per-arm live checks](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/lca_badval_probe.py:273).
+
+**CONF/TB_ENA narrowing is detected despite not being separately built.** Removing CONF bit 0 changes its pair to `0x2/0x0`; removing bit 1 produces `0x1/0x0`, against expected `0x3/0x0`. Removing TEN produces `0x0/0x0`, against `0x80/0x0`. PRETABLE’s measurement limitation remains accurately stated.
+
+1. **WEN removal does fail both corresponding live rows.** Their oracle includes the accepted-value readback:
+   - BASE0: expected `0x300800000`, obtains `0x100800000`.
+   - BASE1: expected `0x240000000`, obtains `0x40000000`.
+
+   The announce can still fire because its condition examines `idata`; the readback detects the lost stored bit. D11’s WEN-clear seed cannot detect that removal.
+
+2. **The corresponding MASK0 validation changes have MASK0 carriers.** Relaxing the rule to `<= 2` fails [`wmask0 f2`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/lca_badval_probe.py:414): it obtains `0x200000` instead of `0x100000`. Taking the operand from raw `idata` fails `wmask0 filter`, retaining `0xfff00000` after the complement; [`wmask0 hif`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/lca_badval_probe.py:495) also detects it. For changes to the right-shift constant within defined counts 0–63, counts below 20 reject the D11 seed; counts above 20 admit field 2 and fail `wmask0 f2`. This supports those validation changes without claiming exhaustive coverage of arbitrary predicate rewrites.
+
+3. **The filtering pairs prevent a vacuous zero from passing this class.** Each seed is nonzero and checked; every scored phase performs a load. Dropping both writes fails the seed; dropping the complement write retains the seed; missing output becomes `absent`.
+
+   One explanation needs correction: D11’s claim that widening always “reads that bit” is too broad for MASK. Under the [actual validation](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:404), admitting reserved bits 32–63 makes the complement illegal and retains the nonzero seed. The row still fails. Narrowing can likewise reject the seed entirely instead of merely losing one bit.
+
+   `wen silent both` alone can remain green if announcements disappear; `wen base0` and `wen base1` supply the positive checks. Its silence result does not establish filtering.
+
+This is a test-coverage finding only. No files were written.

@@ -413,6 +413,12 @@ MANIFEST = {
     #  copies stay evidence forever, because their whole purpose is that a table's scores can be re-read
     #  against the exact instrument that produced them.
     #  lcaisalane's is a WITNESS as-run copy, red on HEAD by design and not a green row anyone may wire.
+    #  #518 lcabadval, landed with the round: the live detector (DETECTOR + dated EXEMPT below -- no
+    #  gate runs an Alpha machine, the #520 precedent) and its table-5 mutator.
+    "lca_badval_probe.py":
+        (CLASS_DETECTOR, "lcabadval (#518): 75 rows on unmodified -E alphabook1 -- six IOC write arms that killed the host on manual-legal values, now stored by field (MASK validated) with latched announces.  Kill table 5 (artifacts/lcabadval/killtable5_20260912/): BASE 75/75, HEAD 15/75, seven mutants 74/75 each on one named row, every leg on prediction"),
+    "artifacts/lcabadval/killtable5_20260912/mut518t5.py":
+        (CLASS_TOOL, "lcabadval (#518) table-5 mutator: seven mutants against the CURRENT SEC dev_lca.c, each find-text required to occur exactly once"),
     "artifacts/lcabadval/killtable_20260910/lca_badval_probe.asrun.py":
         (CLASS_RESEARCH, "lcabadval (#518) table 1: the as-run 40-row instrument, the measuring seat's first table -- superseded by the repaired 58-row copy, kept so table 1's scores stay re-readable"),
     "artifacts/lcabadval/killtable_20260910/lca_badval_probe.asrun2.py":
@@ -1699,6 +1705,11 @@ EXEMPT = {
                                     "no gate runs an Alpha machine; gate_crossfamily.sh "
                                     "is the named home and giving it one is a harness "
                                     "round, filed to wiringcliff"),
+    #  #518's detector.  Same footing as #520's, and deliberately the same date so the
+    #  cliff stays one date: a single-leg 75-row instrument, green on the fix, with no HOME.
+    "lca_badval_probe.py":         ("2026-09-20",
+                                    "no gate runs an Alpha machine; gate_crossfamily.sh "
+                                    "is the named home, filed to wiringcliff with #520"),
 }
 
 DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")

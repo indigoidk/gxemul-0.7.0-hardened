@@ -1,0 +1,22 @@
+VERDICT: NOT RATIFIED — static analysis supports D12’s intended coverage; execution remains unmeasured.
+CODEX_518D12_20260912
+
+Only the three listed files were read. No files were written, and no builds or probes ran. **PREDICTION: 75/75** for the current implementation, assuming the documented register constants and normal harness execution.
+
+1. **The wants are consistent with the current implementation.** CONF stores `idata & 0x3ULL`, giving `0x3/0x0`. Setting bit 1 additionally calls the announcement helper, which updates `d->warned` and prints; it does not change the stored register value. [CONF and announcement implementation](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:316)
+
+   The other CONF consumer in this file reads **bit 0** to select PCI configuration decoding. D12 accesses scratch/code RAM and IOC registers, so that consumer does not intervene. `tlb_enable` has no consumer here beyond its IOC readback. [CONF consumer](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:195)
+
+   TB_ENA gives `0x80/0x0` **provided `IOC_TB_ENA_TEN == 0x80`**, as the probe documents. Its actual macro definition is in an unlisted header, so that numeric definition was not independently verified. [TB_ENA arm](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:366)
+
+2. **Yes, D12 scores its own session.** `pair()` is defined at module scope, within the D11 section; it resolves global `vals` **and `alive` when called**. D12 rebinds both before its assertions. Thus `pair(0)` uses CONF readbacks **0 and 1**, and `pair(2)` uses TB_ENA readbacks **2 and 3**. Every D12 phase ends in an actual load, so none prints stale `t3`. [Sequence builder](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/lca_badval_probe.py:360), [pair and D12](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/lca_badval_probe.py:634)
+
+3. **The whole suite now covers constant store-mask widening/narrowing at all six arms:** CONF, TB_ENA, MASK0, MASK1, BASE0 and BASE1. No retained-bit or reserved-bit position remains unexercised within that class.
+
+   One inaccurate D11 comment remains: its BASE seed, `0x1fff00000`, **does not set WEN, bit 33**. Consequently, D11’s BASE pairs alone cannot detect removal of WEN. Existing `wbase0 live` and `wbase1 live` readbacks already cover that bit at both arms; the full-suite conclusion relies on them. [Overstated seed claim](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/lca_badval_probe.py:603), [existing accepted values and readbacks](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/lca_badval_probe.py:273)
+
+   **Neither D12 row has an invariant observable under its claimed mask mutation class.** Removing a retained bit changes the seed readback; adding a reserved bit changes the complement readback. The combined pair detects either. This establishes coverage for constant-mask errors; arbitrary input-dependent filtering and announcement behavior require separate assertions.
+
+4. **Adding these sessions does not change existing row results through the mechanisms named.** D11 is session **24**; D12 adds only session **25**. Each session forks and executes a fresh emulator, and device initialization zeroes its own state. Earlier rows already contain evaluated booleans, so rebinding globals cannot rescore them. [Session creation](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/lca_badval_probe.py:189), [device initialization](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:505)
+
+   Static enumeration gives **75 unique row names**, with no collisions. The new names have lengths **11** and **12**. There is **no 18-character limit** in this probe: `%-14s` specifies minimum padding, without truncation, and `rows` retains the full names. Eighteen is simply the current longest label. [Row storage and formatting](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/lca_badval_probe.py:130)

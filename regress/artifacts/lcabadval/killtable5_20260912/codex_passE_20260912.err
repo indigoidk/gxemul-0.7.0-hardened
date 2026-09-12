@@ -1,0 +1,2619 @@
+Reading additional input from stdin...
+OpenAI Codex v0.153.4
+--------
+workdir: C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+model: gpt-6-astra
+provider: openai
+approval: never
+sandbox: read-only
+reasoning effort: max
+reasoning summaries: none
+session id: 01a095ac-22cf-7462-835e-eb912904bd50
+--------
+user
+# `#518` CLOSING PASS -- verify an enumeration against a measured table; do not hunt cells
+
+VERDICT line first, then the token `CODEX_518E_20260912`.
+
+A test-adequacy review of a regression probe for an open-source hardware emulator (GXemul, C99).
+"Mutation" = a one-line change to the emulator's own source, to check the probe notices.  **Do not
+ratify.**  READ ONLY these files (tree `GXEMUL-SEC/`).  **Write no file.**
+
+## FILES
+```
+C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\src\devices\dev_lca.c                                   (UNCOMMITTED -- DEVICE_ACCESS(lca_ioc))
+C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\regress\lca_badval_probe.py                            (UNTRACKED, 75 rows; D11 + D12 at the end)
+C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\regress\artifacts\lcabadval\killtable5_20260912\PRETABLE.out
+C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\regress\artifacts\lcabadval\killtable5_20260912\SCORES.txt
+C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\regress\artifacts\lcabadval\killtable5_20260912\mut518t5.py
+```
+
+## WHAT WAS MEASURED (read SCORES.txt, do not trust this summary)
+9 legs, scratch clone, frozen 75-row instrument: BASE 75/75; HEAD 15/75; M43, M44, M47 (the three
+table-4 escapes, each 67/67 then) now 74/75; M_RULE2, M_STORE01 74/75; and two new mutants --
+CONF store mask widened by bit 4, TB_ENA by bit 8 -- each 74/75 on its D12 row ALONE.  Every leg
+matched PRETABLE's prediction, including the observed readback pairs.
+
+## THE ONE QUESTION
+The class the round closed is **stored-field filtering at the six filtered arms** (CONF, TB_ENA, MASK0,
+MASK1, BASE0, BASE1): any constant store mask widened by a reserved bit or narrowed by an architected
+bit.  **Is that class now closed at all six arms -- give the denominator (arm x widen/narrow) and the
+row that detects each cell -- or is there a cell with no row?**  The PRETABLE says narrowing at CONF and
+TB_ENA was NOT separately built; is it nevertheless detected, and by which row?
+
+## PREMISES I WANT ATTACKED
+1. WEN at BASE0/BASE1 is said to be carried by `wbase0 live' / `wbase1 live', not by the D11 seed.
+   Does narrowing the BASE store mask by WEN red one of those rows?
+2. The MASK arms VALIDATE a field and store only legal ones.  Is there a validation-side mutant (the
+   rule, the shift, the operand) at MASK0 that has no MASK0 row -- M_RULE2 and M44 were built at MASK1?
+3. Is any D11/D12 row able to pass for the wrong reason (e.g. a readback that is zero for a reason
+   other than filtering)?
+codex
+I’ll check the five files, map the widen/narrow cells to probe rows, and distinguish measured results from source-based conclusions.
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "Get-Content -LiteralPath 'C:\\DocumentNoSnc\\CC\\GXEMUL\\GXEMUL-SEC\\src\\devices\\dev_lca.c'" in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "Get-Content -LiteralPath 'C:\\DocumentNoSnc\\CC\\GXEMUL\\GXEMUL-SEC\\regress\\artifacts\\lcabadval\\killtable5_20260912\\mut518t5.py'" in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "Get-Content -LiteralPath 'C:\\DocumentNoSnc\\CC\\GXEMUL\\GXEMUL-SEC\\regress\\lca_badval_probe.py'" in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "Get-Content -LiteralPath 'C:\\DocumentNoSnc\\CC\\GXEMUL\\GXEMUL-SEC\\regress\\artifacts\\lcabadval\\killtable5_20260912\\SCORES.txt'" in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "Get-Content -LiteralPath 'C:\\DocumentNoSnc\\CC\\GXEMUL\\GXEMUL-SEC\\regress\\artifacts\\lcabadval\\killtable5_20260912\\PRETABLE.out'" in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+ succeeded in 222ms:
+#!/usr/bin/env python3
+"""#518 table 5 mutator.  usage: mut518t5.py <SEC dev_lca.c> <out path> <LEG>
+
+Baseline = the CURRENT SEC dev_lca.c (not a frozen older copy -- table 4's t2 mutator restored
+from t2/BASELINE_t2.c, which predates later comment edits).  Every find-text is chosen to occur
+EXACTLY ONCE, scoped by the arm's own store target where MASK0 and MASK1 share text; a count
+other than 1 is a hard failure (exit 3), never an unmutated leg.
+
+  M43_mask1_widen    MASK1 stored-field mask widened to bits 12-31      (t2 M43, L2 in table 4)
+  M44_mask1_idata    MASK1 validation operand from RAW idata            (t2 M44, L2 in table 4)
+  M47_base1_widen    BASE1 store mask widened to bit 34                 (t2 M47, L2 in table 4)
+  M_RULE2            MASK1 rule weakened to (f & (f+1)) <= 2            (adjudicator's #499-trap)
+  M_STORE01          MASK0 stored-field mask widened by bit 12          (adjudicator's #499-trap)
+  M_CONF_B4          CONF store mask widened by bit 4    -- NEW: no 73-row input set bit 4
+  M_TBENA_B8         TB_ENA store mask widened by bit 8  -- NEW: no 73-row input set bit 8
+"""
+import io, sys
+
+T = "\t"
+V0 = T*4 + "uint64_t v = idata & 0xfff00000ULL, f = v >> 20;\n" + T*4 + "if ((f & (f + 1)) == 0)\n" + T*5 + "d->window_mask_0 = v;\n"
+V1 = T*4 + "uint64_t v = idata & 0xfff00000ULL, f = v >> 20;\n" + T*4 + "if ((f & (f + 1)) == 0)\n" + T*5 + "d->window_mask_1 = v;\n"
+B1 = "d->window_base_1 = idata & (IOC_W_BASE_W_BASE | IOC_W_BASE_SG | IOC_W_BASE_WEN);"
+
+LEGS = {
+    "M43_mask1_widen": (V1, V1.replace("idata & 0xfff00000ULL", "idata & 0xfffff000ULL")),
+    "M44_mask1_idata": (V1, V1.replace("f = v >> 20;", "f = idata >> 20;")),
+    "M47_base1_widen": (B1, B1.replace("IOC_W_BASE_WEN);", "IOC_W_BASE_WEN | (1ULL << 34));")),
+    "M_RULE2":         (V1, V1.replace("if ((f & (f + 1)) == 0)", "if ((f & (f + 1)) <= 2)")),
+    "M_STORE01":       (V0, V0.replace("idata & 0xfff00000ULL", "idata & 0xfff01000ULL")),
+    "M_CONF_B4":       ("d->ioc_conf = idata & 0x3ULL;", "d->ioc_conf = idata & 0x13ULL;"),
+    "M_TBENA_B8":      ("d->tlb_enable = idata & IOC_TB_ENA_TEN;",
+                        "d->tlb_enable = idata & (IOC_TB_ENA_TEN | 0x100ULL);"),
+}
+
+src, dst, leg = sys.argv[1:4]
+t = io.open(src, encoding="utf-8").read()
+if leg != "BASE":
+    if leg not in LEGS:
+        sys.exit("unknown leg %s" % leg)
+    old, new = LEGS[leg]
+    n = t.count(old)
+    if n != 1 or old == new:
+        sys.stderr.write("FIND-TEXT for %s occurs %d times (or is a no-op) -- REFUSING\n" % (leg, n))
+        sys.exit(3)
+    t = t.replace(old, new)
+io.open(dst, "w", encoding="utf-8", newline="\n").write(t)
+print("MUTATED %s" % leg)
+
+ succeeded in 229ms:
+#518 KILL TABLE 5   2026-09-12T11:59:10Z
+baseline = SEC src/devices/dev_lca.c (post-fix working set)   probe = FROZEN 75-row (lca_badval_probe.py.frozen)
+baseline cmp: CLEAN
+SENTINEL DROPPED (clone-local)
+
+=== LEG BASE ===
+  build rc=0 binary=FRESH
+  LCABADVAL_RESULT=75/75  sentinel=[LCABADVAL_DONE]
+  FAILING: 
+
+=== LEG HEAD ===
+  build rc=0 binary=FRESH
+  LCABADVAL_RESULT=15/75  sentinel=[LCABADVAL_DONE]
+  FAILING: conf legal dead |tbena legal dead |wbase0 legal dead |wmask0 legal dead |wbase1 legal dead |wmask1 legal dead |conf stored dead |tbena stored dead |wbase0 stored dead |wmask0 stored dead |wbase1 stored dead |wmask1 stored dead |wmask0 declined dead |wmask0 once dead |wmask0 kept2 dead |wmask1 declined dead |wmask1 indep dead |wmask0 f2 dead |wmask1 once dead |conf reserved dead |conf once dead |wen once dead |wbase1 wen dead |wbase0 zero dead |def alive dead |def w once dead |def width no |def read0 dead |def r once dead |conf widen dead |tbena clear dead |wbase0 sg dead |wbase0 widen dead |wmask0 widen dead |wmask0 hif dead |tbena b1 dead |wen base0 dead |all conf dead |all wen dead |all m0 dead |all m1 dead |all defw dead |all defr dead |wen base1 0 |wen silent dead |wbase0 nowen dead |conf silent dead |conf ann6 dead |conf 6 stored dead |wmask0 zero dead |wbase1 sg dead |def state dead |wmask0 filter dead |wmask1 filter-zero dead |wmask1 f2 dead |wbase0 filter dead |wbase1 filter dead |wen silent both dead |conf filter dead |tbena filter dead 
+
+=== LEG M43_mask1_widen ===
+  build rc=0 binary=FRESH
+  LCABADVAL_RESULT=74/75  sentinel=[LCABADVAL_DONE]
+  FAILING: wmask1 filter-zero 0xfff00000/0xff000 
+
+=== LEG M44_mask1_idata ===
+  build rc=0 binary=FRESH
+  LCABADVAL_RESULT=74/75  sentinel=[LCABADVAL_DONE]
+  FAILING: wmask1 filter-zero 0xfff00000/0xfff00000
+
+=== LEG M47_base1_widen ===
+  build rc=0 binary=FRESH
+  LCABADVAL_RESULT=74/75  sentinel=[LCABADVAL_DONE]
+  FAILING: wbase1 filter 0x1fff00000/0x400000000 
+
+=== LEG M_RULE2 ===
+  build rc=0 binary=FRESH
+  LCABADVAL_RESULT=74/75  sentinel=[LCABADVAL_DONE]
+  FAILING: wmask1 f2 0x700000/0x200000 
+
+=== LEG M_STORE01 ===
+  build rc=0 binary=FRESH
+  LCABADVAL_RESULT=74/75  sentinel=[LCABADVAL_DONE]
+  FAILING: wmask0 filter 0xfff00000/0x1000 
+
+=== LEG M_CONF_B4 ===
+  build rc=0 binary=FRESH
+  LCABADVAL_RESULT=74/75  sentinel=[LCABADVAL_DONE]
+  FAILING: conf filter 0x3/0x10 
+
+=== LEG M_TBENA_B8 ===
+  build rc=0 binary=FRESH
+  LCABADVAL_RESULT=74/75  sentinel=[LCABADVAL_DONE]
+  FAILING: tbena filter 0x80/0x100 
+
+=== RESTORE ===
+  restore cmp-vs-SEC=CLEAN binary=FRESH
+  SENTINEL CLEARED (both parts)
+KILLTABLE5_DONE
+
+ succeeded in 242ms:
+#518 lcabadval -- KILL TABLE 5 PRETABLE, written 2026-09-12 BEFORE the table runs (mtime proves order)
+
+INSTRUMENT: regress/lca_badval_probe.py at 75 rows (D11 + the new D12), frozen copy
+regress/artifacts/lcabadval/base_20260912/lca_badval_probe.py.frozen.  BASE MEASURED before this
+table: LCABADVAL_RESULT=75/75 (base_20260912/BASE.log).
+BASELINE: the CURRENT SEC dev_lca.c (post-fix working set) -- not t2/BASELINE_t2.c, which table 4's
+mutator restored from and which predates later comment edits.  Mutator: mut518t5.py (every find-text
+occurs exactly once, scoped by the arm's own store target; a miss is a HARD FAIL).
+
+WHY THIS TABLE.  Table 4 measured three clause-(d) escapes at 67/67 (M43, M44, M47), ruled L2; the
+repair rows R2/R5 were added (73 rows) but never measured against those mutants.  The codex table-5
+design (codex_table5design_20260912.txt) then found the CLASS the repair closed at four arms still
+open at two more -- CONF and TB_ENA had no reserved-bit complement -- and D12 added it (75 rows).
+
+LEGS AND PREDICTIONS (codex predictions were made against the 73-row form; each carries to 75 because
+D12 touches neither MASK nor BASE):
+  BASE          75/75                                            (measured already: 75/75)
+  HEAD          pre-#518 file, all kills live.  codex conditional prediction 15/73 at 73 rows; D12's
+                session writes CONF first and HEAD dies there, so both D12 rows add red: PREDICTED
+                15/75, direction certain, number conditional
+  M43_mask1_widen  74/75  red: wmask1 filter-zero   (observed pair 0xfff00000/0xff000)
+  M44_mask1_idata  74/75  red: wmask1 filter-zero   (0xfff00000/0xfff00000 -- raw f declines)
+  M47_base1_widen  74/75  red: wbase1 filter        (0x1fff00000/0x400000000)
+  M_RULE2          74/75  red: wmask1 f2            (0x700000/0x200000)
+  M_STORE01        74/75  red: wmask0 filter        (0xfff00000/0x1000)
+  M_CONF_B4        74/75  red: conf filter ONLY     (0x3/0x10)  -- NEW.  No 73-row input sets bit 4
+                                                     (CONF was driven with 0x1, 0x2, 0x6, 0x100000002),
+                                                     so this is predicted INVISIBLE to every other row
+  M_TBENA_B8       74/75  red: tbena filter ONLY    (0x80/0x100) -- NEW.  TB_ENA was driven with 0x80,
+                                                     0x81, 0x82, 0x01; bit 8 never set before D12
+
+THE DISCRIMINATING CLAIM: if M_CONF_B4 or M_TBENA_B8 reds ANY row other than its own D12 row, D12 was
+not the only carrier and the codex finding was overstated; if either scores 75/75, D12 is vacuous for
+the class it was added for.  Either outcome changes the record.
+
+CHECKS:
+  SIBLING PARITY  the six filtered arms are the siblings; D11 + D12 now give every one a seed + 64-bit
+                  complement pair.  WEN at BASE is carried by `wbase0/1 live', not by the D11 seed
+                  (the D11 comment was corrected for this).
+  CLAIM -> ROW    D12's comment claims "reds on a store mask widened by any reserved bit or narrowed by
+                  either field bit" -- M_CONF_B4 / M_TBENA_B8 test the widening half; narrowing is
+                  the seed half (0x3 / 0x80 read back whole) and is NOT separately built here: filed.
+  GUARD/BODY      the repair at CONF/TB_ENA is the store mask itself; no guard.  N/A beyond the mask.
+  CHANNEL         each D12 row scores the (seed, complement) PAIR; under a widened mask the
+                  complement readback is non-zero -- the channel varies by construction.
+
+ succeeded in 269ms:
+/*
+ *  Copyright (C) 2006-2011  Anders Gavare.  All rights reserved.
+ *
+ *  Redistribution and use in source and binary forms, with or without
+ *  modification, are permitted provided that the following conditions are met:
+ *
+ *  1. Redistributions of source code must retain the above copyright
+ *     notice, this list of conditions and the following disclaimer.
+ *  2. Redistributions in binary form must reproduce the above copyright  
+ *     notice, this list of conditions and the following disclaimer in the 
+ *     documentation and/or other materials provided with the distribution.
+ *  3. The name of the author may not be used to endorse or promote products
+ *     derived from this software without specific prior written permission.
+ *
+ *  THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+ *  ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ *  IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ *  ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE   
+ *  FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ *  DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+ *  OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+ *  HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+ *  LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+ *  OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+ *  SUCH DAMAGE.
+ *
+ *
+ *  COMMENT: LCA PCI bus, for Alpha machines
+ */
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "bus_isa.h"
+#include "bus_pci.h"
+#include "cpu.h"
+#include "device.h"
+#include "emul.h"
+#include "interrupt.h"
+#include "machine.h"
+#include "memory.h"
+#include "misc.h"
+
+#include "thirdparty/alpha_lcareg.h"
+
+#define	LCA_ISA_BASE	(LCA_PCI_SIO + 0x10000000)
+#define	LCA_ISA_MEMBASE	(LCA_PCI_SIO + 0x18000000)
+
+
+/*  #516: warn-once latch bits, one per stub.  PER-INSTANCE, reached through
+    `interrupt->extra' -- see the comment on lca_interrupt_assert().  */
+#define	LCA_W_IRQ_ASSERT	0	/*  #516  */
+#define	LCA_W_IRQ_DEASSERT	1	/*  #516  */
+#define	LCA_W_IOC_CONF_CFG1	2	/*  #518: IOC_CONF<1> set -- CFG AD<1:0> = 10/11, not a cycle type  */
+#define	LCA_W_IOC_WMASK0	3	/*  #518: unsupported W_MASK0 encoding declined  */
+#define	LCA_W_IOC_WMASK1	4	/*  #518: unsupported W_MASK1 encoding declined  */
+#define	LCA_W_IOC_WEN		5	/*  #518: a DMA window enabled -- translation not modelled  */
+#define	LCA_W_IOC_DEF_W	6	/*  #518: default-arm write declined  */
+#define	LCA_W_IOC_DEF_R	7	/*  #518: default-arm read answered with zero  */
+
+struct lca_data {
+	struct pci_data		*pci_data;
+
+	unsigned int		warned;		/*  #516  */
+
+	uint64_t		ioc_conf;
+	uint64_t		tlb_enable;
+	uint64_t		window_base_0;
+	uint64_t		window_mask_0;
+	uint64_t		window_t_base_0;
+	uint64_t		window_base_1;
+	uint64_t		window_mask_1;
+	uint64_t		window_t_base_1;
+};
+
+
+/*
+ *  lca_interrupt_assert():
+ *
+ *  Line 0 = ISA interrupt.
+ */
+void lca_interrupt_assert(struct interrupt *interrupt)
+{
+	struct lca_data *d = (struct lca_data *) interrupt->extra;	/*  #516  */
+
+	/*  #516: this was `fatal(); exit(1)' with NO GUARD -- not a refused value,
+	    an unimplemented path -- and DEVINIT below installs it as the ISA
+	    interrupt callback that `bus_isa_init' wires to BUS_ISA_IDE0|IDE1.  So an
+	    ordinary ISA interrupt ended the host, needing no unusual value anywhere.
+	    MEASURED on two independent guest paths: one store to the 8042 command
+	    port (regress/lca_irqstub_probe.py, 3/4) and three byte stores to the
+	    ns16550 on IRQ 4 (regress/lca_irqstub_uart_probe.py, 2/4).
+
+	    *** THE STUB IS NOT REPLACED BY A FORWARD, BECAUSE A FORWARD WOULD BE A
+	    NO-OP.  ALPHA HAS NO INTERRUPT DELIVERY AT ALL. ***  `cd.alpha.irq_asserted'
+	    is written by `cpu_alpha.c' and read NOWHERE.  `cpu_dyntrans.c' turns a
+	    pending interrupt into a delivered one for FIVE architectures -- ARM and
+	    M88K and PPC through their own `irq_asserted', MIPS through the COP0
+	    exception model, and SH through `int_to_assert' -- and ALPHA IS ABSENT
+	    FROM THAT LIST.  (An earlier draft of this comment said "ARM, M88K and
+	    PPC only": that enumeration was made by grepping for `irq_asserted', which
+	    is a CORRELATE of delivering rather than the property, and it missed the
+	    two architectures that deliver by another mechanism.  The Alpha conclusion
+	    is unchanged and is strengthened -- it is the outlier among five, not
+	    three.)  Calling `cpu_interrupt()' here would set
+	    a field nothing consumes.  Implementing delivery is a SUBSYSTEM -- the
+	    dyntrans dispatch, the PALcode entry and the IPL check -- and is its own
+	    round, not this one.
+
+	    So the disposition is DECLINE plus a bounded announce, and what it buys is
+	    stated narrowly on purpose: THE HOST STOPS DYING.  Interrupts do not start
+	    working; they were never delivered on this architecture and still are not.
+
+	    The latch is PER-INSTANCE (`interrupt->extra'), not function-static: a
+	    function-static bit would let one guest access to one device instance
+	    silence the diagnostic for every other instance, which is a class already
+	    filed against this tree.  */
+	if (d != NULL && !(d->warned & (1u << LCA_W_IRQ_ASSERT))) {	/*  #516  */
+		d->warned |= 1u << LCA_W_IRQ_ASSERT;
+		fatal("[ lca: ISA interrupt assert not implemented (Alpha has no "
+		    "interrupt delivery); ignored  (once) ]\n");
+	}
+}
+
+
+/*
+ *  lca_interrupt_deassert():
+ *
+ *  Line 0 = ISA interrupt.
+ */
+void lca_interrupt_deassert(struct interrupt *interrupt)
+{
+	struct lca_data *d = (struct lca_data *) interrupt->extra;	/*  #516  */
+
+	/*  #516: the sibling of lca_interrupt_assert() above, same reasoning.  A
+	    SEPARATE latch bit, so the two are distinguishable: a driver normally
+	    reaches both within one interrupt cycle, and one shared bit would report
+	    whichever arrived first and hide the other entirely.  */
+	if (d != NULL && !(d->warned & (1u << LCA_W_IRQ_DEASSERT))) {	/*  #516  */
+		d->warned |= 1u << LCA_W_IRQ_DEASSERT;
+		fatal("[ lca: ISA interrupt deassert not implemented (Alpha has no "
+		    "interrupt delivery); ignored  (once) ]\n");
+	}
+}
+
+
+DEVICE_ACCESS(lca_pci_conf)
+{
+	uint64_t idata = 0, odata = 0;
+	int tag, type1, bus, dev, func, reg;	/*  #515  */
+	struct lca_data *d = (struct lca_data *) extra;
+
+	if (writeflag == MEM_WRITE)
+		idata = memory_readmax64(cpu, data, len);
+
+	/*
+	 *  1. Decompose the address into a tag.
+	 *
+	 *  According to NetBSD's lca_pci.c, the address is composed like this:
+	 *
+	 *	addr = tag << 5 | (regoffset & ~0x03) << 5 | 0x3 << 3
+	 */
+	reg = (relative_addr >> 5) & 0xfc;
+	tag = (relative_addr >> 5) & ~0xff;
+
+	/*
+	 *  2. Decompose the tag into bus, dev, and func.
+	 *
+	 *  The tag can be constructed in one of two ways. On the primary
+	 *  bus (nr 0):
+	 *
+	 *	tag = (1 << (device + 11)) | (function << 8);
+	 *
+	 *  and on other busses, the tag is a normal:
+	 *
+	 *	tag = (bus << 16) | (device << 11) | (function << 8)
+	 */
+	/*  printf("tag = 0x%x\n", (int)tag);  */
+
+	/*  #515: `bus' used to be BOTH the configuration CYCLE TYPE and the
+	    DESTINATION BUS, and conflating them is the whole defect.  IOC_CONF bit 0
+	    selects the cycle type only -- 21066/21066A HRM S6.2.9: "PCI address bits
+	    ad<1:0> come directly from configuration cycle type register (IOC_CONF,
+	    Section 6.4.2) bits <1:0>" -- and it does NOT carry a bus number.  The
+	    destination bus of a type-1 cycle lives in the ADDRESS, per the PCI Local
+	    Bus specification's type-1 layout (bus 23..16, dev 15..11, fn 10..8,
+	    reg 7..2), which S6.2.9 defers to explicitly.
+
+	    Before this, a guest that merely SET bit 0 -- a value the CONF guard
+	    ACCEPTS -- made any subsequent access in this window reach
+	    `fatal("TODO. Non-zero bus."); exit(1)'.  MEASURED: two ordinary guest
+	    accesses, nothing refused anywhere on the path
+	    (regress/lca_confbus_probe.py, 3/4 pre-fix; artifacts/lcaconfbus1kill/).  */
+	type1 = d->ioc_conf & 1;	/*  #515  */
+	bus = 0;			/*  #515  */
+
+	if (!type1) {			/*  #515  */
+		/*  #511: was `0x800 << dev'.  `0x800' is a plain int (2^11) and `dev'
+		    reaches 20, so the last iteration evaluates 2^31 -- a SIGNED
+		    OVERFLOW, undefined by C99 6.5.7p4, not merely
+		    implementation-defined.  MEASURED under UBSAN before the change:
+		    "dev_lca.c:125:21: runtime error: left shift of 2048 by 20 places
+		    cannot be represented in type 'int'", reached by an ordinary guest
+		    ldq into the PCI config window (regress/lca_confbus_probe.py against
+		    build-asan; artifacts/lcashiftub/ubsan_HEAD_20260907.raw).
+
+		    `0x800U' makes the operand unsigned, so 2048U << 20 is 0x80000000U --
+		    inside unsigned int -- and NOTHING ELSE MOVES.
+
+		    *** THE REASON, CORRECTED: AN EARLIER DRAFT SAID `tag' IS "ALREADY A
+		    WIDER UNSIGNED QUANTITY".  THAT IS FALSE -- `tag' is a plain signed
+		    `int' (:92) -- AND FOUR PASS-2 SEATS CAUGHT IT.  Worse, the claim was
+		    backwards: being WIDER is what would CREATE a difference, not remove
+		    one.  Had `tag' been `uint64_t', the old `int' 0x80000000 is NEGATIVE
+		    and would SIGN-EXTEND to 0xffffffff80000000 for the `&', while
+		    `0x800U << 20' zero-extends to 0x0000000080000000 -- two different
+		    masks.  The seats were right about the mechanism and it does not fire
+		    here only because of the type.
+
+		    WHAT ACTUALLY HOLDS: both operands are 32-bit, so the `&' is performed
+		    at 32 bits either way -- `int & int' before, and after, `tag' converted
+		    to `unsigned int' by the usual arithmetic conversions.  The RESULT'S
+		    BIT PATTERN IS IDENTICAL; only its type changes, and it is consumed
+		    solely as a truth test in `if (...)'.  So no guest-visible value moves,
+		    and the repair is owed purely by the LANGUAGE. ***
+
+		    *** THE LOOP THIS SITS IN IS THIS FILE'S OWN GRACEFUL-DEGRADATION
+		    PRECEDENT -- the `dev >= 21' arm below has a commented-out
+		    fatal()/exit(1) and substitutes `dev = 0' instead, and `lcabadval'
+		    cites it as a transferable warrant.  The safe path contained the UB. ***  */
+		for (dev=0; dev<21; dev++)
+			if (tag & (0x800U << dev))	/*  #511  */
+				break;
+		if (dev >= 21) {
+			/*  fatal("[ LCA: No bus 0 device? TODO ]\n");
+			exit(1);  */
+			dev = 0;
+		}
+	} else {
+		/*  #515: a type-1 cycle carries its destination in the address.  */
+		bus = (tag >> 16) & 0xff;	/*  #515  */
+		dev = (tag >> 11) & 0x1f;	/*  #515  */
+	}
+
+	func = (tag >> 8) & 7;
+	/*  printf("bus=%i dev=%i func=%i reg=%i\n", bus,dev,func,reg);  */
+
+	/*  #515: a type-1 cycle whose bus field is zero selects NOTHING.  Type-1 is
+	    how a bridge is asked to reach a bus BEHIND it; the primary bus is reached
+	    with type-0 cycles, whose IDSEL encoding is decoded above.  Forwarding this
+	    case would set cur_bus = 0 and hand the access to whichever primary-bus
+	    device matched -- `i82378zb' is registered at 0:7:0 by DEVINIT below -- so
+	    simply decoding `bus' and stopping there would replace a host kill with a
+	    NEW MISROUTING.  Refuse it instead, matching `bus_pci_data_access''s own
+	    empty-slot contract (bus_pci.c, the `dev == NULL' arm: all-ones at register
+	    0, zero elsewhere) so the guest sees the ordinary "nothing there" answer.
+	    Writes are discarded, which leaves backend state untouched.  */
+	if (type1 && bus == 0) {		/*  #515  */
+		odata = reg == 0? (uint64_t) -1 : 0;
+	} else {
+		/*  Pass PCI accesses onto bus_pci:  */
+		bus_pci_setaddr(cpu, d->pci_data, bus, dev, func, reg);
+		bus_pci_data_access(cpu, d->pci_data, writeflag == MEM_READ?
+		    &odata : &idata, len, writeflag);
+	}
+
+	if (writeflag == MEM_READ)
+		memory_writemax64(cpu, data, len, odata);
+
+	return 1;
+}
+
+
+DEVICE_ACCESS(lca_isa)
+{
+	unsigned int ofs, i;
+	uint8_t byte;
+
+	relative_addr >>= 5;
+
+	ofs = relative_addr & 3;
+	if (ofs > len) {
+		fatal("[ ofs=%i len=%i in lca_isa access function. "
+		    "aborting ]\n", ofs, len);
+		exit(1);
+	}
+
+	if (writeflag == MEM_WRITE) {
+		byte = data[ofs % len];
+		return cpu->memory_rw(cpu, cpu->mem, LCA_ISA_BASE +
+		    relative_addr, &byte, 1, writeflag, CACHE_NONE);
+	}
+
+	cpu->memory_rw(cpu, cpu->mem, LCA_ISA_BASE + relative_addr,
+	    &byte, 1, MEM_READ, CACHE_NONE);
+
+	for (i=0; i<len; i++)
+		data[i] = i == ofs? byte : 0x00;
+
+	return 1;
+}
+
+
+/*
+ *  #518 (lcabadval): one bounded announce per (device instance, reason).  Six
+ *  IOC write arms used to end the host with fatal()+exit(1) on any value outside
+ *  a tiny accepted set -- and the sets were WRONG, not merely harsh: the 21066
+ *  HRM (Table 6-6) lists THIRTEEN legal W_MASK encodings where the model took
+ *  one, and S6.4.14 REQUIRES SROM to write ZERO to W_BASE1, which was fatal.
+ *  The arms below store the ARCHITECTED FIELDS, ignore reserved bits (type X),
+ *  validate W_MASK by its field rule, and decline what the model cannot honour
+ *  with this announce -- fatal() prints and returns (it cannot be silenced by
+ *  -q, which is why a latch and not a verbosity flag).
+ */
+static void lca_ioc_announce(struct lca_data *d, int bit, const char *what,
+	uint64_t v)
+{
+	if (d->warned & (1u << bit))
+		return;
+	d->warned |= 1u << bit;
+	fatal("[ lca_ioc: %s: 0x%" PRIx64 "  (once) ]\n", what, v);
+}
+
+
+DEVICE_ACCESS(lca_ioc)
+{
+	uint64_t idata = 0, odata = 0;
+	struct lca_data *d = (struct lca_data *) extra;
+
+	if (writeflag == MEM_WRITE)
+		idata = memory_readmax64(cpu, data, len);
+
+	switch (relative_addr + LCA_IOC_BASE) {
+
+	case LCA_IOC_BASE:
+		/*  Ignore? Linux reads from the base at startup.  */
+		break;
+
+	case LCA_IOC_CONF:
+		if (writeflag == MEM_READ) {
+			odata = d->ioc_conf;
+		} else {
+			/*  #518: was `if (idata & ~1) { fatal(); exit(1); }' with the
+			    store BEFORE the check (#506 had widened its diagnostic).
+			    HRM S6.2.9: IOC_CONF<1:0> select the configuration cycle
+			    TYPE; everything above is reserved and is IGNORED, not
+			    fatal.  Bit 0 selects type-1 cycles and is what lca_pci_conf
+			    reads (#515); bit 1 selects the CFG AD<1:0> encodings 10/11,
+			    which are not configuration-cycle types -- stored and
+			    announced once, not modelled.  (Pass 2: this comment first
+			    called bit 1 the type-1 select; grok read lca_pci_conf.)  */
+			d->ioc_conf = idata & 0x3ULL;
+			if (idata & 0x2ULL)
+				lca_ioc_announce(d, LCA_W_IOC_CONF_CFG1, "IOC_CONF<1> set"
+				    " (CFG AD<1:0> = 10/11, not a configuration-cycle type):"
+				    " stored, not modelled", idata);
+		}
+		break;
+
+	case LCA_IOC_TBIA:
+		/*  TLB Invalidate All.  */
+		/*  TODO: For now, let's just ignore it.  */
+		break;
+
+	case LCA_IOC_TB_ENA:
+		if (writeflag == MEM_READ) {
+			odata = d->tlb_enable;
+		} else {
+			/*  #518: TEN is the only architected bit (HRM Table 6-13);
+			    the rest are type X -- IGNORED on write, never fatal.  The
+			    old arm stored the whole value and then died on it.  */
+			d->tlb_enable = idata & IOC_TB_ENA_TEN;
+		}
+		break;
+
+	case LCA_IOC_W_BASE0:
+		if (writeflag == MEM_READ) {
+			odata = d->window_base_0;
+		} else {
+			/*  #518: was a two-value whitelist + exit(1).  The HRM defines
+			    this register by FIELDS -- W_BASE<31:20>, SG<32>, WEN<33> --
+			    not by a list of numbers, and S6.4.14 REQUIRES SROM to write
+			    zero here.  Store the fields (reserved bits dropped); the
+			    window is not translated by this model, which is announced
+			    once when any window is ENABLED.  */
+			d->window_base_0 = idata & (IOC_W_BASE_W_BASE | IOC_W_BASE_SG | IOC_W_BASE_WEN);
+			if (idata & IOC_W_BASE_WEN)
+				lca_ioc_announce(d, LCA_W_IOC_WEN, "a DMA window was"
+				    " enabled; window translation is not modelled", idata);
+		}
+		break;
+
+	case LCA_IOC_W_MASK0:
+		if (writeflag == MEM_READ) {
+			odata = d->window_mask_0;
+		} else {
+			/*  #518: was `!= 0x700000ULL' + exit(1): ONE accepted value where
+			    HRM Table 6-6 lists THIRTEEN (W_MASK<31:20> = 0, 1, 3, 7, ...
+			    0xfff: a contiguous low-ones field), and the old arm STORED
+			    before it checked.  Validate the field, store only when it is
+			    legal, decline once otherwise with the previous value kept.  */
+			{
+				uint64_t v = idata & 0xfff00000ULL, f = v >> 20;
+				if ((f & (f + 1)) == 0)
+
+					lca_ioc_announce(d, LCA_W_IOC_WMASK0, "unsupported"
+					    " IOC_W_MASK0 encoding declined (HRM Table 6-6);"
+					    " previous value kept", idata);
+			}
+		}
+		break;
+
+	case LCA_IOC_W_T_BASE0:
+		if (writeflag == MEM_READ) {
+			odata = d->window_t_base_0;
+		} else {
+			d->window_t_base_0 = idata;
+			/*  TODO: Actually implement this.  */
+		}
+		break;
+
+	case LCA_IOC_W_BASE1:
+		if (writeflag == MEM_READ) {
+			odata = d->window_base_1;
+		} else {
+			/*  #518: was a ONE-value whitelist + exit(1) -- and the one value
+			    was not zero, which S6.4.14 item 3 requires SROM to write.
+			    Same disposition as W_BASE0 above.  */
+			d->window_base_1 = idata & (IOC_W_BASE_W_BASE | IOC_W_BASE_SG | IOC_W_BASE_WEN);
+			if (idata & IOC_W_BASE_WEN)
+				lca_ioc_announce(d, LCA_W_IOC_WEN, "a DMA window was"
+				    " enabled; window translation is not modelled", idata);
+		}
+		break;
+
+	case LCA_IOC_W_MASK1:
+		if (writeflag == MEM_READ) {
+			odata = d->window_mask_1;
+		} else {
+			/*  #518: was `!= 0x3ff00000ULL' + exit(1): ONE accepted value where
+			    HRM Table 6-6 lists THIRTEEN (W_MASK<31:20> = 0, 1, 3, 7, ...
+			    0xfff: a contiguous low-ones field), and the old arm STORED
+			    before it checked.  Validate the field, store only when it is
+			    legal, decline once otherwise with the previous value kept.  */
+			{
+				uint64_t v = idata & 0xfff00000ULL, f = v >> 20;
+				if ((f & (f + 1)) == 0)
+					d->window_mask_1 = v;
+				else
+					lca_ioc_announce(d, LCA_W_IOC_WMASK1, "unsupported"
+					    " IOC_W_MASK1 encoding declined (HRM Table 6-6);"
+					    " previous value kept", idata);
+			}
+		}
+		break;
+
+	case LCA_IOC_W_T_BASE1:
+		if (writeflag == MEM_READ) {
+			odata = d->window_t_base_1;
+		} else {
+			d->window_t_base_1 = idata;
+			/*  TODO: Actually implement this.  */
+		}
+		break;
+
+	default:
+		/*  #518: was fatal()+exit(1) for ANY offset the switch does not
+		    list.  Decline the write (no state changes), answer a read with
+		    zero (odata is already 0), announce each direction once.  The
+		    value keeps #506's full width.  NOT all of these offsets are
+		    unimplemented HOLES: STAT0 (+0x040), STAT1 (+0x060), SFT_RST
+		    (+0x0c0) and PAR_DIS (+0x0e0) are DOCUMENTED registers this
+		    model has never had, and S6.4.14 items 1-2 require SROM to
+		    write SFT_RST and STAT0 -- those now survive as declined writes
+		    instead of ending the process, and are filed (lcaiocstat0) for
+		    an implementation, which this decline is not.  (grok, pass 2)  */
+		{
+			int bit = writeflag == MEM_WRITE ?
+			    LCA_W_IOC_DEF_W : LCA_W_IOC_DEF_R;
+			if (!(d->warned & (1u << bit))) {
+				d->warned |= 1u << bit;
+				fatal("[ lca_ioc: unimplemented %s to offset 0x%x",
+				    writeflag == MEM_WRITE? "write" : "read", (int)
+				    relative_addr);
+				if (writeflag == MEM_WRITE)
+					fatal(": 0x%" PRIx64 " -- declined",
+					    (uint64_t)idata);	/*  #506  */
+				else
+					fatal(" -- answered with zero");
+				fatal("  (once per direction) ]\n");
+			}
+		}
+		break;
+	}
+
+	if (writeflag == MEM_READ)
+		memory_writemax64(cpu, data, len, odata);
+
+	return 1;
+}
+
+
+DEVINIT(lca)
+{
+	char *interrupt_path;
+	struct interrupt interrupt_template;
+	struct lca_data *d;
+
+	CHECK_ALLOCATION(d = (struct lca_data *) malloc(sizeof(struct lca_data)));
+	memset(d, 0, sizeof(struct lca_data));
+
+	/*  Register a PCI bus:  */
+	d->pci_data = bus_pci_init(
+	    devinit->machine,
+	    "TODO: irq"		/*  pciirq: TODO  */,
+	    LCA_PCI_SIO,	/*  pci device io offset  */
+	    0x00000000,		/*  pci device mem offset: TODO  */
+	    0x00000000,		/*  PCI portbase: TODO  */
+	    0x00000000,		/*  PCI membase: TODO  */
+	    "TODO: pci irq base",	/*  PCI irqbase: TODO  */
+	    LCA_ISA_BASE,	/*  ISA portbase  */
+	    LCA_ISA_MEMBASE,	/*  ISA membase  */
+	    "TODO: irqbase isa");                /*  ISA irqbase: TODO  */
+
+	/*  Add the "sio0" controller (as seen by NetBSD):  */
+	bus_pci_add(devinit->machine, d->pci_data, devinit->machine->memory,
+	    0, 7, 0, "i82378zb");
+
+	memory_device_register(devinit->machine->memory, "lca_pci_conf",
+	    LCA_PCI_CONF, 0x20000000, dev_lca_pci_conf_access, (void *)d,
+	    DM_DEFAULT, NULL);
+
+	memory_device_register(devinit->machine->memory, "lca_isa",
+	    LCA_PCI_SIO, 0x10000 << 5, dev_lca_isa_access, (void *)d,
+	    DM_DEFAULT, NULL);
+
+	memory_device_register(devinit->machine->memory, "lca_ioc",
+	    LCA_IOC_BASE, 0x20000000, dev_lca_ioc_access, (void *)d,
+	    DM_DEFAULT, NULL);
+
+	CHECK_ALLOCATION(interrupt_path = (char *)
+	    malloc(strlen(devinit->machine->path) + 10));
+	snprintf(interrupt_path, strlen(devinit->machine->path) + 10,
+	    "%s.lca", devinit->machine->path);
+
+	memset(&interrupt_template, 0, sizeof(interrupt_template));
+	interrupt_template.line = 0;
+	interrupt_template.name = interrupt_path;
+	interrupt_template.extra = d;
+	interrupt_template.interrupt_assert = lca_interrupt_assert;
+	interrupt_template.interrupt_deassert = lca_interrupt_deassert;
+	interrupt_handler_register(&interrupt_template);
+
+	bus_isa_init(devinit->machine, interrupt_path,
+	    BUS_ISA_IDE0 | BUS_ISA_IDE1, LCA_ISA_BASE, LCA_ISA_MEMBASE);
+
+	return 1;
+}
+
+
+ succeeded in 299ms:
+#!/usr/bin/env python3
+#
+#  lcabadval -- RUNG-3 WITNESS: SIX value-guarded write arms in `dev_lca.c' end the host process
+#  on values the 21066/21066A hardware manual makes LEGAL, one of which the manual REQUIRES SROM
+#  to write.
+#
+#  THE DEFECT.  `DEVICE_ACCESS(lca_ioc)' has six write arms of this shape:
+#
+#      case LCA_IOC_W_MASK0:
+#              ...
+#              d->window_mask_0 = idata;          <-- STORED FIRST, unconditionally
+#              if (idata != 0x700000ULL) {
+#                      fatal("TODO: LCA_IOC_W_MASK0 value differs (0x%" PRIx64") from the only"
+#                            " implemented value\n", (uint64_t)idata);
+#                      exit(1);                   <-- then the process ends
+#              }
+#
+#  The accepted sets, as enumerated from the predicates themselves (NOT from a table):
+#
+#      arm         offset   predicate                              accepted set
+#      IOC_CONF    +0x020   idata & ~1                             {0, 1}
+
+#      W_BASE1     +0x120   idata != 0x240000000                   {0x240000000}
+#      W_MASK1     +0x160   idata != 0x3ff00000                    {0x3ff00000}
+#
+#  *** THE GUARDS ARE WRONG, NOT MERELY HARSH, AND THE MANUAL IS WHAT SAYS SO. ***  Every `legal'
+#  row below drives a value the 21066/21066A HRM documents as legal for that register, and each
+#  one cites its own line in `_scratchpad/21066_66a_hrm.txt'.  The sharpest is W_BASE1: S6.4.14
+#  item 3 (:10791-10792) says SROM "Prevents the IOC from responding to itself by writing zero to
+#  the IOC_W_BASE1 and IOC_W_BASE0 registers".  ZERO IS THE VALUE THE INITIALISATION SEQUENCE IS
+#  REQUIRED TO WRITE, and at W_BASE1 it ends the emulator.  It is also the value the model's own
+#  register reads back before anyone writes it, so writing back what you just read is fatal.
+#
+#  THE MANUAL VALUES USED, each verified by reading the cited lines rather than taken from a seat:
+#
+#    CONF    -> 2      Table 6-10 (:10246-10254): bits <1:0> are the CFG AD<1:0> FIELD, so all
+#                      four encodings are legal.  S6.2.9 (:9217) says the same from the other end.
+#                      The guard accepts HALF of a documented two-bit field.
+#    TB_ENA  -> 0x81   Table 6-13 (:10443, :10453): bits 63:8 and 6:0 are RES of type X, and the
+#                      manual's own type legend (:985-988) defines X as "return UNPREDICTABLE
+#                      results when read and are IGNORED ON WRITE OPERATIONS".  0x81 differs from
+#                      the accepted 0x80 in exactly one bit the hardware is documented to IGNORE.
+#    W_BASE0 -> 0x280000000    Figure 6-9 (:10556-10560) and Table 6-16 (:10562-10583): WEN is
+#                      bit 33, SG bit 32, W_BASE<31:20> bits 31:20.  So this is WEN set, direct
+#                      mapping (SG clear), window base 0x80000000 -- naturally aligned to any
+#                      window size up to 2 GB, as :10538-10539 requires, and not overlapping the
+#                      base the fork accepts at the sibling register (:10540-10541).  Zero cannot
+#                      be used here: W_BASE0's guard is the one arm of the six that accepts it.
+#    W_MASK0 -> 0x100000       Table 6-6 (:9587), encoding `0000 0000 0001' = 2 MB window.
+#    W_BASE1 -> 0              S6.4.14 item 3 (:10791-10792), the SROM-required value.
+#    W_MASK1 -> 0xfff00000     Table 6-6 (:9598), encoding `1111 1111 1111' = 4 GB window.
+#
+#  Table 6-6 lists THIRTEEN legal W_MASK encodings (:9586-9598).  W_MASK0 accepts one of them and
+#  W_MASK1 accepts a different one, so TWELVE OF THIRTEEN are fatal at each register and neither
+#  register accepts the other's value.  DERIVE IT, do not trust this sentence:
+#      awk 'NR>=9586 && NR<=9598' _scratchpad/21066_66a_hrm.txt | wc -l      -> 13
+#  and each arm's predicate is a single `!=' against one constant, so the accepted set has size 1.
+#  (Note 1 MB is the encoding `0000 0000 0000' = 0x0, so writing ZERO to either mask register is a
+#  legal window size and is also fatal.)
+#
+#  *** THE FIGURE/TABLE STAGGER WAS CHECKED, NOT ASSUMED. ***  `pdftotext -layout' staggers
+#  Table 6-16's descriptions against its bit rows (:10566-10583 reads WEN's description beside
+#  SG's row), which is the extraction artefact the carrier warns about.  It is NOT relied on: the
+#  UNSTAGGERED Figure 6-9 (:10556-10560) gives the layout directly, and this tree's own
+#  `alpha_lcareg.h' independently pins IOC_W_BASE_WEN = bit 33, IOC_W_BASE_SG = bit 32,
+#  IOC_W_BASE_W_BASE = bits 31:20.  Three sources agree, so no single calibration point is
+#  load-bearing here.
+#
+#  ---------------------------------------------------------------------------------------------
+#  *** WHAT THIS IS AND IS NOT.  IT IS A WITNESS, NOT A DETECTOR. ***
+#
+#  It establishes: on unmodified `alphabook1', ONE ordinary guest `stq' of a manual-legal value to
+#  a documented LCA IOC register ends the host process, with that arm's own diagnostic as
+#  evidence, after the SAME register at the SAME width through the SAME path has just been proven
+#  live in the SAME process.  It does NOT establish that any shipped guest writes these values,
+#  and it is NOT a detector of the repair: `alive' greens equally for a silent accept, for a
+#  latched announce, for a decline that discards the value, and for a full implementation.  A fix
+#  round owes rows that discriminate those -- at minimum a readback row per arm proving what the
+#  repair did with the value, and a latch-count row if the disposition is a bounded announce.
+#
+#  THE STORE-BEFORE-CHECK IS VISIBLE IN THE SOURCE AND IS DELIBERATELY NOT ROWED HERE.  Every arm
+#  assigns `d->field = idata' before testing it, so on HEAD the rejected value is already in the
+#  struct when exit(1) runs -- but the process ends, so no guest can observe it and no row can
+#  either.  It becomes observable only once the kill goes, which makes it a FIX-round row (does
+#  the repair leave the register holding the refused value?), not a witness row.  Recorded so the
+#  fix round does not have to rediscover it.
+#
+#  ---------------------------------------------------------------------------------------------
+#  SHAPE: ONE PROCESS PER ARM, CONTROL FIRST, and every element of it was paid for by a sibling
+#  probe in this tree.
+#
+#    1.  ONE PROCESS, NOT TWO.  [A] pre-read, [B] accepted store, [C] read-back and [D] the
+#        killing store all happen in the SAME emulator run, so between the store that LIVES and
+#        the store that DIES only the VALUE differs -- not the address, not the width, not the
+#        path, not the process.  Two sessions would leave a residual that something else differed.
+#    2.  THE PAIR IS THE ORACLE.  A bare "the register read back 0x700000" row would be weak;
+#        UNMAPPED space and a missed device both read 0 (`memory_rw.c''s #95 pre-zero), and a
+#        bare zero proves nothing.  `<arm> live' asserts the TRANSITION 0x0 -> <accepted value>
+#        from the same address in the same process, which nothing but the device can produce.
+#        All six accepted values are NONZERO, so every `live' row carries a device signature.
+#    3.  STAY ON `step'.  #516 de-fatalised the two ISA interrupt stubs, so they are no longer
+#        confounders -- but `continue' would still let a host-timer tick reach code this probe is
+#        not testing, and the witness costs nothing by stepping.
+#    4.  EVERY ACCESS IS A GUEST INSTRUCTION.  Debugger `dump' skips DM_DEFAULT handlers and
+#        `lca_ioc' is registered DM_DEFAULT, so `dump' would read the pre-zero and make the
+#        window look unmapped.  A debugger `put d' of a killing value IS a host kill but is NOT a
+#        guest access and witnesses nothing.  Every `put d' below targets SCRATCH, which is RAM.
+#    5.  ATTRIBUTION IS BY THE ARM'S OWN TEXT, NEVER BY EXIT STATUS.  A wrong offset would fall
+#        into `default:' and die with "[ lca_ioc: unimplemented write to offset ... ]" -- a death
+#        for a DIFFERENT reason, which is a FAILED reproduction.  Each `<arm> attrib' row is green
+#        in both directions by construction and reds only if the host died WITHOUT that arm's
+#        diagnostic.  All six literals were verified unique in `src/' (one hit each).
+#
+#  THE NEGATIVE CONTROL IS `W_T_BASE0' (+0x180), and the VALUE is chosen to make it work hard:
+#  it is written 0x100000 -- the very value that kills at W_MASK0 two rows up.  W_T_BASE0 is an
+#  implemented case in the same switch, in the same handler, with no value guard, so the pair
+#  attributes the deaths to THE ARM'S PREDICATE rather than to the value, to the width, to K0SEG,
+#  or to writing into the IOC window at all.  (0x100000 is also a legal page-table base for that
+#  register: IOC_W_T_BASE is bits 31:10, so a 1 MB-aligned value is well-formed.)
+#
+#  Usage:  lca_badval_probe.py <gxemul-binary> [label]
+import os, sys, pty, select, time, re
+
+BIN   = sys.argv[1]
+LABEL = sys.argv[2] if len(sys.argv) > 2 else "?"
+MACH  = "alphabook1"          #  device_add(machine, "lca") is ST_ALPHABOOK1 ONLY
+
+rows = []
+def row(name, got, want, note=""):
+    ok = (got == want)
+    rows.append((name, ok))
+    print("%-14s %-24s %-24s %-52s %s" % (name, str(got), str(want), note, "ok" if ok else "FAIL"))
+    return ok
+
+# ---------------------------------------------------------------- encoder (memory format only)
+ZERO, T0, T1, T2, T3, T4, T5 = 31, 1, 2, 3, 4, 5, 6
+#  T5 is the highest used.  A probe reaching for an undefined register name dies with a NameError
+#  rather than emitting a bad encoding, which is the safe direction (#516 found this the hard way).
+
+def mem(op, ra, rb, disp):
+    assert -32768 <= disp <= 32767, "displacement %d out of range" % disp
+    return (op << 26) | (ra << 21) | (rb << 16) | (disp & 0xffff)
+
+def LDA (ra, disp, rb=ZERO): return mem(0x08, ra, rb, disp)
+def LDAH(ra, disp, rb=ZERO): return mem(0x09, ra, rb, disp)
+def LDQ (ra, disp, rb):      return mem(0x29, ra, rb, disp)
+def STQ (ra, disp, rb):      return mem(0x2d, ra, rb, disp)
+#  QUADWORD ONLY, and that is architectural rather than a preference: HRM S6.4 says the IOC
+#  registers are accessed with quadword operations, so LDL/STL are excluded by the manual.
+
+def load_const(reg, val):
+    #  32-bit only, and deliberately so: this builds the SCRATCH pointer, never a 64-bit operand.
+    #  Every operand this probe drives is 64-bit-capable and arrives via `put d' + LDQ.
+    lo = val & 0xffff
+    hi = (val >> 16) & 0xffff
+    if lo >= 0x8000:
+        hi = (hi + 1) & 0xffff
+    ops = [LDAH(reg, hi if hi < 0x8000 else hi - 0x10000)]
+    if lo:
+        ops.append(LDA(reg, lo if lo < 0x8000 else lo - 0x10000, reg))
+    return ops
+
+# ---------------------------------------------------------------- addresses (ALL RAM < 64 MB)
+K0SEG        = 0xfffffc0000000000
+def k0(p):   return K0SEG | p
+
+LCA_IOC_BASE  = 0x180000000              # alpha_lcareg.h; DEVINIT maps 0x20000000 bytes here
+IOC_CONF      = LCA_IOC_BASE + 0x020
+IOC_TB_ENA    = LCA_IOC_BASE + 0x0a0
+IOC_W_BASE0   = LCA_IOC_BASE + 0x100
+IOC_W_BASE1   = LCA_IOC_BASE + 0x120
+IOC_W_MASK0   = LCA_IOC_BASE + 0x140
+IOC_W_MASK1   = LCA_IOC_BASE + 0x160
+IOC_W_T_BASE0 = LCA_IOC_BASE + 0x180     # the negative control: implemented, NO value guard
+
+SCRATCH      = 0x01020000
+CODE         = 0x01040000
+
+assert max(SCRATCH, CODE) < 64 * 1024 * 1024, "scratch/code must be inside RAM"
+
+DUMMY = os.path.join(os.path.dirname(os.path.abspath(__file__)), "alpha_dummy.bin")
+if not os.path.exists(DUMMY):
+    with open(DUMMY, "wb") as f:
+        f.write(b"\0" * 8)
+
+# ---------------------------------------------------------------- session
+def session(cmds, settle=1.6, spin=2.2):
+    pid, fd = pty.fork()
+    if pid == 0:
+        os.execv(BIN, [BIN, "-V", "-x", "-E", "alpha", "-e", MACH, "-M", "64",
+                       "0x20000000:" + DUMMY])
+        os._exit(127)
+    buf = ""
+    def rd(t):
+        nonlocal buf
+        end = time.time() + t
+        while time.time() < end:
+            r, _, _ = select.select([fd], [], [], 0.1)
+            if not r:
+                continue
+            try:
+                d = os.read(fd, 65536)
+                if not d:
+                    return False
+                buf += d.decode("latin-1", "replace")
+            except OSError:
+                return False
+        return True
+    alive = rd(settle)
+    for i, c in enumerate(cmds):
+        try:
+            os.write(fd, (c + "\n").encode("latin-1"))
+        except OSError:
+            alive = False; break
+        if not rd(spin if i == len(cmds) - 1 else 0.35):
+            alive = False; break
+    try:
+        os.write(fd, b"quit\n"); rd(0.4)
+    except OSError:
+        pass
+    try:
+        os.close(fd)
+    except OSError:
+        pass
+    return buf.replace("\r", ""), alive
+
+def printed(t, reg):
+    m = re.search(r"print\s+%s\s*\n\s*(0x[0-9a-f]+)" % reg, t)
+    return "absent" if not m else "0x%x" % int(m.group(1), 16)
+
+# ---------------------------------------------------------------- the per-arm driver
+#  Register discipline, copied from lca_confbus_probe.py: T0 holds the SCRATCH base and is read
+#  for the LAST time by the third LDQ, so every operand is in a register before anything else
+#  happens.  The four accesses are labelled [A]..[D] here and in the report.
+def arm(addr, accepted, legal, settle=1.6, spin=2.2):
+    setup = ["put d 0x%x, 0x%x" % (SCRATCH + 0,  k0(addr)),
+             "put d 0x%x, 0x%x" % (SCRATCH + 8,  accepted),
+             "put d 0x%x, 0x%x" % (SCRATCH + 16, legal)]
+    prologue = load_const(T0, SCRATCH) + [
+        LDQ(T1, 0,  T0),    # t1 = k0(register)
+        LDQ(T4, 8,  T0),    # t4 = the ACCEPTED value
+        LDQ(T5, 16, T0),    # t5 = the manual-LEGAL value  (T0 is dead after this)
+        LDQ(T2, 0,  T1),    # [A] PRE-read       -- must be 0 (the model memsets its state)
+        STQ(T4, 0,  T1),    # [B] ACCEPTED store -- must survive
+        LDQ(T3, 0,  T1)]    # [C] READ-BACK      -- must echo the accepted value
+    armed = [STQ(T5, 0, T1)]  # [D] the manual-LEGAL store -- ends the host on HEAD
+    cmds = setup + ["put w 0x%x, 0x%08x" % (k0(CODE) + 4 * i, op)
+                    for i, op in enumerate(prologue + armed)]
+    cmds += ["pc=0x%x" % k0(CODE),
+             "step %d" % len(prologue),   # up to and including the read-back
+             "print t2",                  # [A], while the host is certainly still alive
+             "print t3",                  # [C], likewise
+             "step %d" % len(armed)]      # [D]
+    txt, alive = session(cmds, settle, spin)
+    return txt, alive, printed(txt, "t2"), printed(txt, "t3")
+
+def evidence(txt):
+    #  *** ECHO THE EVIDENCE INTO THIS LOG. ***  lca_confbus_probe.py shipped an attribution row
+    #  whose only evidence was a pty buffer nobody preserved -- a green row a later reader cannot
+    #  check.  Every diagnostic this handler can emit is printed here instead.
+    for _l in txt.split(chr(10)):
+        if "TODO:" in _l or "lca_ioc:" in _l or "[ lca:" in _l:
+            print("  EVIDENCE: %s" % _l.strip())
+
+print("lca_badval_probe -- binary=%s label=%s machine=%s" % (BIN, LABEL, MACH))
+print("%-14s %-24s %-24s %-52s %s" % ("row", "got", "want", "note", ""))
+
+# ---------------------------------------------------------------- the six arms
+#  (label, address, accepted value, manual-legal value, this arm's UNIQUE fatal() literal,
+#   the note that says what the `legal' row proves)
+ARMS = [
+    ("conf",   IOC_CONF,    0x1,          0x2,
+     "Write to unimplemented bit of",
+     "CFG AD<1:0> is a 2-bit FIELD (T6-10 :10250); 2 of 4 encodings kill"),
+    ("tbena",  IOC_TB_ENA,  0x80,         0x81,
+     "LCA_IOC_TB_ENA value",
+     "bit 0 is RES type X = IGNORED ON WRITE (legend :985, T6-13 :10453)"),
+    ("wbase0", IOC_W_BASE0, 0x300800000,  0x280000000,
+     "LCA_IOC_W_BASE0 value differs",
+     "WEN + base 0x80000000, aligned (F6-9 :10556; :10538-10539)"),
+    ("wmask0", IOC_W_MASK0, 0x700000,     0x100000,
+     "LCA_IOC_W_MASK0 value differs",
+     "2 MB window, Table 6-6 :9587 -- 12 of 13 legal encodings kill"),
+    ("wbase1", IOC_W_BASE1, 0x240000000,  0x0,
+     "LCA_IOC_W_BASE1 value differs",
+     "*** THE SROM-REQUIRED VALUE, S6.4.14 item 3 :10791-10792 ***"),
+    ("wmask1", IOC_W_MASK1, 0x3ff00000,   0xfff00000,
+     "LCA_IOC_W_MASK1 value differs",
+     "4 GB window, Table 6-6 :9598 -- MASK0's own value kills here too"),
+]
+
+for label, addr, accepted, legal, sig, why in ARMS:
+    txt, alive, pre, post = arm(addr, accepted, legal)
+
+    #  ---- LIVENESS + DEVICE SIGNATURE, in one row -------------------------------------------
+    #  The PAIR is the oracle: unmapped space and a missed device both read 0 forever, so only a
+    #  live device can turn 0x0 into a nonzero value it was just handed.  This also proves the
+    #  ACCEPTED store did not kill -- which is what makes the death two rows down attributable to
+    #  the VALUE and to nothing else about the access.
+    row("%s live" % label, "%s->%s" % (pre, post), "0x0->0x%x" % accepted,
+        "LIVENESS+DEVSIG: same addr/width/process; only a device echoes this")
+
+    #  ---- THE DEFECT ROW ---------------------------------------------------------------------
+    #  ORACLE POLARITY: the witness ladder requires the symptom on the PRE-FIX build and green
+    #  post-fix with the SAME script, so this asserts the CORRECT behaviour.
+    #  PRE-FIX -> "dead" -> RED.   POST-FIX -> "alive" -> GREEN.
+    row("%s legal" % label, "alive" if alive else "dead", "alive", why)
+
+    #  ---- ATTRIBUTION: if it died, it died HERE ----------------------------------------------
+    #  Green in BOTH directions by construction; RED only if the host died WITHOUT this arm's
+    #  diagnostic -- i.e. "did it fail for the reason under test?"  A wrong offset lands in
+    #  `default:' and reds this row instead of quietly passing as a reproduction.
+    hit = (sig in txt)
+    row("%s attrib" % label, "yes" if (alive or hit) else "died-elsewhere", "yes",
+        "ATTRIBUTION: a death here must carry THIS arm's unique diagnostic")
+    evidence(txt)
+
+# ---------------------------------------------------------------- the negative control
+#  W_T_BASE0 is an implemented case in the SAME switch with NO value guard, and it is handed the
+#  value that kills at W_MASK0.  If this died too, the deaths above would be about the window or
+#  the width rather than about the predicates, and the whole witness would be void.
+CTLVAL = 0x100000
+txtc, alivec, prec, postc = arm(IOC_W_T_BASE0, CTLVAL, CTLVAL)
+
+row("ctl noguard", "alive" if alivec else "dead", "alive",
+    "CONTROL: same window, same width, an arm with NO value guard")
+row("ctl echo", "%s->%s" % (prec, postc), "0x0->0x%x" % CTLVAL,
+    "CONTROL: the value that KILLS at W_MASK0 is stored and echoed here")
+evidence(txtc)
+
+# ================================================================ #518 DETECTOR ROWS
+#  The rows above are the WITNESS (RED on HEAD 74daefd at 14/20, GREEN on the fix with the same
+#  script).  The rows below DEFEND the fix -- they are what a kill table is scored against -- and
+#  each names the mutant it kills and the observable that differs (the CHANNEL line).
+#
+#  CONTRACT (clause (e)).  Designed to catch, per arm: (b) the verbatim kill reinstated (the
+#  `stored' rows die); (d) the STORE MASK narrowed (CONF `& 0x3' -> `& 0x1' loses bit 1; TB_ENA
+#  storing the raw value keeps 0x81; W_BASE dropping WEN/SG or truncating to 32 bits; W_MASK
+#  `& 0xfff00000' widened or narrowed); (d) the W_MASK FIELD RULE weakened (`f != 0' accepts
+#  0x500000; `f == 1' declines 0xfff00000) or the old STORE-BEFORE-CHECK order reinstated (the
+#  declined value is kept instead of the previous one); (d) the latch bits COLLAPSED (the second
+#  register's, or the second direction's, announce never prints) or the latch REMOVED (a second
+#  identical write announces twice); (d) the default arm declining reads to nonzero or writing
+#  state.  NOT rowed, disclosed: the SG bit's effect (nothing consumes it), the W_T_BASE arms
+#  (unchanged, and the negative control already pins one), the reserved bits ABOVE bit 33 of
+#  W_BASE (dropped by the same mask as the ones below it -- one row per mask, not per bit), and
+#  the `ofs > len' exit in lca_isa, which belongs to lcaisalane.  Every value here is QUADWORD.
+#
+#  WHAT THE READ-BACKS ARE, stated so nobody reads them as architecture (grok, pass 2): the HRM
+#  types these registers WO, readback UNPREDICTABLE (:980-988).  The model has always echoed the
+#  stored value; every `stored'/`widen'/`declined' row tests THAT ECHO POLICY, which is what the
+#  fix wrote into and what a mutant would change -- it is not a claim about hardware readback.
+#
+#  Session shape: T0 = SCRATCH base (live throughout), T1 = address, T2 = value, T3 = read-back;
+#  each phase reloads T1/T2 from a `put d' slot, so eight registers are never a constraint.  A
+#  phase is stepped as a block and its read-back printed while the host is certainly alive.
+
+def seq(consts, phases, settle=1.6, spin=2.2):
+    """consts: list of 64-bit values -> SCRATCH slots 0,8,16,...  phases: list of lists of
+    (op, addr_slot, val_slot) with op in {'st', 'ld'}; each phase ends with `print t3'.
+    Returns (txt, alive, [read-backs in phase order as strings])."""
+    setup = ["put d 0x%x, 0x%x" % (SCRATCH + 8 * i, v) for i, v in enumerate(consts)]
+    prog = load_const(T0, SCRATCH)
+    lens = [len(prog)]
+    for ph in phases:
+        ops = []
+        for op, a, v in ph:
+            ops.append(LDQ(T1, 8 * a, T0))
+            if op == "st":
+                ops.append(LDQ(T2, 8 * v, T0))
+                ops.append(STQ(T2, 0, T1))
+            else:
+                ops.append(LDQ(T3, 0, T1))
+        prog += ops
+        lens.append(len(ops))
+    cmds = setup + ["put w 0x%x, 0x%08x" % (k0(CODE) + 4 * i, op) for i, op in enumerate(prog)]
+    cmds += ["pc=0x%x" % k0(CODE), "step %d" % lens[0]]
+    for n in lens[1:]:
+        cmds += ["step %d" % n, "print t3"]
+    txt, alive = session(cmds, settle, spin)
+    vals = ["0x%x" % int(m, 16) for m in
+            re.findall(r"print\s+t3\s*\n\s*(0x[0-9a-f]+)", txt)]
+    return txt, alive, vals
+
+def nth(vals, i):
+    return vals[i] if i < len(vals) else "absent"
+
+def announces(txt, needle):
+    return txt.count(needle)
+
+#  ---- D1: the STORED value per arm -- accepted, then manual-legal, then read back -------------
+#  KILLS: (b) reinstated kill (dies); (d) mask narrowed / raw store / declined-not-stored (reads
+#  the accepted value or the raw one).  Writing the accepted value FIRST makes a skipped LATER store
+#  visible only where the accepted and the normalized legal values DIFFER -- at TB_ENA they are both
+#  0x80, which is why `tbena clear' exists (round 2); it does not cover an arm whose store is
+#  deleted outright (the accepted write is skipped too -- `<arm> live' reds there).  The want is the NORMALIZED legal value: for TB_ENA 0x81
+#  reads back 0x80, which is the reserved-bit rule in one row.
+NORMAL = {"conf": 0x2, "tbena": 0x80, "wbase0": 0x280000000, "wmask0": 0x100000,
+          "wbase1": 0x0, "wmask1": 0xfff00000}
+for label, addr, accepted, legal, sig, why in ARMS:
+    txt, alive, vals = seq([k0(addr), accepted, legal],
+                           [[("st", 0, 1)], [("st", 0, 2), ("ld", 0, 0)]])
+    row("%s stored" % label, nth(vals, 1) if alive else "dead", "0x%x" % NORMAL[label],
+        "accepted then legal: reads back the NORMALIZED legal value (fields kept, RES dropped)")
+    evidence(txt)
+
+#  ---- D2: unsupported W_MASK encodings are DECLINED, the previous value KEPT, once per register --
+#  KILLS: field rule weakened to `f != 0' (0x500000 stored); store-before-check reinstated (reads
+#  0x500000); latch removed (two announces); MASK0/MASK1 latch bits collapsed (MASK1 never
+#  announces after MASK0 did, in the SAME session).
+DECL0, DECL1 = "IOC_W_MASK0 encoding declined", "IOC_W_MASK1 encoding declined"
+txt, alive, vals = seq([k0(IOC_W_MASK0), 0x100000, 0x500000, 0x900000,
+                        k0(IOC_W_MASK1), 0xfff00000, 0x200000],
+                       [[("st", 0, 1), ("st", 0, 2), ("ld", 0, 0)],      # phase 0: legal, bad, read
+                        [("st", 0, 3), ("ld", 0, 0)],                     # phase 1: second bad, read
+                        [("st", 4, 5), ("st", 4, 2), ("st", 4, 3), ("ld", 4, 4)],   # phase 2: MASK1 legal, bad, bad, read
+                        [("st", 0, 6), ("ld", 0, 0)]])                            # phase 3 (codex): f = 2 at MASK0
+row("wmask0 declined", nth(vals, 0) if alive else "dead", "0x100000",
+    "0x500000 (field 101b) declined: previous legal value KEPT, host alive")
+row("wmask0 once", announces(txt, DECL0) if alive else "dead", 1,
+    "TWO unsupported writes announce EXACTLY ONCE -- the (once) latch")
+row("wmask0 kept2", nth(vals, 1) if alive else "dead", "0x100000",
+    "the second unsupported write also leaves the previous value")
+row("wmask1 declined", nth(vals, 2) if alive else "dead", "0xfff00000",
+    "MASK1: 0x500000 declined after 0xfff00000 stored")
+row("wmask1 indep", announces(txt, DECL1) if alive else "dead", 1,
+    "MASK1 still announces after MASK0 did -- independent latch bits")
+row("wmask0 f2", nth(vals, 3) if alive else "dead", "0x100000",
+    "PASS 2 (codex): field 0b10 is NOT a Table 6-6 encoding; a rule weakened to admit it (== 0 -> <= 2) stores 0x200000")
+row("wmask1 once", announces(txt, DECL1) if alive else "dead", 1,
+    "PASS 2 (glm): TWO unsupported MASK1 writes announce ONCE -- pins MASK1 latch REMOVED, not only shared")
+evidence(txt)
+
+#  ---- D3: IOC_CONF reserved bits dropped, bit 1 kept and announced once ----------------------
+#  KILLS: mask narrowed to bit 0 (reads 0x0 or 0x1); raw store (reads 0x100000002); latch removed.
+CFG1 = "IOC_CONF<1> set"
+txt, alive, vals = seq([k0(IOC_CONF), 0x1, 0x100000002, 0x2],
+                       [[("st", 0, 1), ("st", 0, 2), ("ld", 0, 0)],
+                        [("st", 0, 3), ("ld", 0, 0)]])
+row("conf reserved", nth(vals, 0) if alive else "dead", "0x2",
+    "0x100000002: reserved bit 32 DROPPED, CFG<1> kept")
+row("conf once", announces(txt, CFG1) if alive else "dead", 1,
+    "two writes with CFG<1> set announce EXACTLY ONCE")
+evidence(txt)
+
+
+#  announce twice).  +0x1e0 is inside DEVINIT's window and names no register in alpha_lcareg.h.UNL = LCA_IOC_BASE + 0x1e0
+DEFW, DEFR = "unimplemented write to offset 0x1e0", "unimplemented read to offset 0x1e0"
+txt, alive, vals = seq([k0(UNL), 0x5a5a5a5a5a5a],
+                       [[("st", 0, 1), ("st", 0, 1)],
+                        [("ld", 0, 0), ("ld", 0, 0)]])   # PASS 2: TWO reads, so the read latch REMOVED is pinned too
+row("def alive", "alive" if alive else "dead", "alive",
+    "two writes to an unlisted IOC offset survive")
+row("def w once", announces(txt, DEFW) if alive else "dead", 1,
+    "the declined write announces EXACTLY ONCE for two writes")
+#  PASS 2 (kimi substitute): this read nth(vals, 0) -- the print after the STORE-ONLY phase 0, a
+#  STALE t3 -- so M20_def_echo passed it.  The load is in phase 1; index 1 is the read-back.
+row("def width", "yes" if (": 0x5a5a5a5a5a5a -- declined" in txt) else "no", "yes",
+    "the declined-write ANNOUNCE carries the full 64-bit value (round 4: the first form matched the echoed put-d command too)")
+row("def read0", nth(vals, 1) if alive else "dead", "0x0",
+    "a read of the unlisted offset answers ZERO, not the written value")
+row("def r once", announces(txt, DEFR) if alive else "dead", 1,
+    "two reads announce ONCE on the read direction OWN latch bit, after the write did")
+evidence(txt)
+
+
+#  ---- D6 (PASS 2 additions, 2026-09-10): the mask cells the first block did not drive -----------
+#  Named by four packet-fed seats against my own enumeration.  KILLS: SG dropped from the W_BASE
+#  mask (three seats said no row drove bit 32 -- WRONG, codex: `wbase0 live's accepted 0x300800000
+#  carries SG, so this row is a SECOND pin at BASE0; BASE1 gets its own below); masks WIDENED (minimax: CONF `& 0x3' -> `& 0x7';
+#  W_BASE keeping bit 34; W_MASK `& 0xfff00000' -> `& 0xfffff000'); the field taken from idata
+#  instead of v (glm: `f = idata >> 20' declines a legal value that carries bit 32); a TB_ENA
+#  no-store (kimi: the accepted 0x80 equals the normalized legal value, so `tbena stored' cannot see
+#  a skipped store -- this row writes 0x80 then the reserved-only 0x01 and wants TEN CLEAR).
+txt, alive, vals = seq([k0(IOC_CONF), 0x6, k0(IOC_TB_ENA), 0x80, 0x01,
+                        k0(IOC_W_BASE0), 0x380000000, 0x680000000,
+                        k0(IOC_W_MASK0), 0x1f0000, 0x100100000, 0x700000, 0x82],
+                       [[("st", 0, 1), ("ld", 0, 0)],                 # conf 0x6 -> 0x2
+                        [("st", 2, 3), ("st", 2, 4), ("ld", 2, 2)],   # tbena 0x80 then 0x01 -> 0x0
+                        [("st", 5, 6), ("ld", 5, 5)],                 # wbase0 SG|WEN|base -> same
+                        [("st", 5, 7), ("ld", 5, 5)],                 # wbase0 bit 34 set -> dropped
+                        [("st", 8, 9), ("ld", 8, 8)],                 # wmask0 low bits -> dropped
+                        [("st", 8, 11), ("st", 8, 10), ("ld", 8, 8)],  # wmask0: 0x700000 THEN bit-32 value -> 0x100000
+                        [("st", 2, 3), ("st", 2, 12), ("ld", 2, 2)]])  # tbena 0x80 then 0x82 -> 0x80 (round 3)
+row("conf widen", nth(vals, 0) if alive else "dead", "0x2",
+    "0x6 reads 0x2: a mask WIDENED to bit 2 stores it (minimax)")
+row("tbena clear", nth(vals, 1) if alive else "dead", "0x0",
+    "0x80 then 0x01 reads 0x0: TEN cleared by a reserved-only write; a NO-STORE reads 0x80 (kimi)")
+row("wbase0 sg", nth(vals, 2) if alive else "dead", "0x380000000",
+    "SG|WEN|base round-trips: the SG bit (32) is stored (deepseek)")
+row("wbase0 widen", nth(vals, 3) if alive else "dead", "0x280000000",
+    "bit 34 set reads dropped: reserved bits ABOVE 33 are not stored (deepseek Q6, minimax)")
+row("wmask0 widen", nth(vals, 4) if alive else "dead", "0x100000",
+    "0x1f0000 reads 0x100000: bits 19:16 below the mask are not stored (minimax); first draft wrote 0x100f0000 = bit 28, declined")
+row("wmask0 hif", nth(vals, 5) if alive else "dead", "0x100000",
+    "0x700000 then 0x100100000 reads 0x100000: bit 32 masked BEFORE the field test; a decline would keep 0x700000 (round 3)")
+row("tbena b1", nth(vals, 6) if alive else "dead", "0x80",
+    "0x82 reads 0x80: a reserved bit OTHER than bit 0 is dropped (table 1 M27 `& ~1' kept it)")
+row("wen base0", announces(txt, WEN) if alive else "dead", 1,
+    "BASE0 ALONE enables (twice) in this session: the announce prints once -- pins BASE0's own announce (grok)")
+evidence(txt)
+
+#  ---- D7 (PASS 2): all six announces in ONE process -- any two latch bits shared reds the later --
+#  kimi Q4.5: D2/D5 armed only a SIBLING's bit before the firing write; a cross-arm collision
+#  (conf<->wen, mask<->def, ...) was unrowed.  One session fires every announce; each needle once.
+txt, alive, vals = seq([k0(IOC_CONF), 0x2, k0(IOC_W_BASE0), 0x280000000,
+                        k0(IOC_W_MASK0), 0x500000, k0(IOC_W_MASK1), 0x500000, k0(UNL), 0x5a5a],
+                       [[("st", 0, 1), ("st", 2, 3), ("st", 4, 5), ("st", 6, 7), ("st", 8, 9), ("ld", 8, 8),
+                         ("st", 0, 1), ("st", 4, 5)]])   # codex: REPEAT conf and mask0 after the others
+for _n, _needle in (("all conf", CFG1), ("all wen", WEN), ("all m0", DECL0), ("all m1", DECL1),
+                    ("all defw", DEFW), ("all defr", DEFR)):
+    row(_n, announces(txt, _needle) if alive else "dead", 1,
+        "six announces in one process, then conf and mask0 REPEATED: prints once (bits neither shared nor erased by `=')")
+evidence(txt)
+
+
+#  ---- D8 (PASS 2, grok): BASE1 ALONE enables a window -- the per-label WEN announce ------------
+#  D4 enables BASE0 first, so deleting BASE1's announce (or BASE0's) still gives `wen once' = 1.
+#  The shared latch bit is the JOIN the 7g-1 discriminator warns about, reached through a shared
+#  bit rather than a fall-through label.  Together with `wen base0' (D6) each label's announce is
+#  pinned on its own.
+txt, alive, vals = seq([k0(IOC_W_BASE1), 0x240000000],
+                       [[("st", 0, 1), ("ld", 0, 0)]])
+row("wen base1", announces(txt, WEN) if alive else "dead", 1,
+    "BASE1 ALONE enables: the announce prints once -- pins BASE1's own announce (grok)")
+row("wbase1 alone", nth(vals, 0) if alive else "dead", "0x240000000",
+    "and the value round-trips in a session that never touched BASE0")
+evidence(txt)
+
+
+#  ---- D9 (round 3, from table 1's own mutants): SILENCE rows -------------------------------------
+#  M32 (`if (idata | WEN)') and M33 (`if (idata | 0x2)') announce on EVERY write; M37 (`== 0x2')
+#  announces only on the exact value.  No earlier session wrote W_BASE without WEN, or CONF without
+#  bit 1, and asserted SILENCE; none wrote a bit-1 CONF value other than 0x2 on its own.
+#  Two sessions, because announces() counts the WHOLE transcript: the silence rows must live in a
+#  session that never writes an announcing value (the first draft put 0x6 in the same session and
+#  `conf silent' read 1 on the correct build -- 63/64, the row refusing its own construction).
+txt, alive, vals = seq([k0(IOC_W_BASE0), 0x80000000, k0(IOC_CONF), 0x1],
+                       [[("st", 0, 1), ("ld", 0, 0)],          # BASE0 without WEN/SG
+                        [("st", 2, 3), ("ld", 2, 2)]])         # CONF 0x1: bit 1 clear
+row("wen silent", announces(txt, WEN) if alive else "dead", 0,
+    "a W_BASE0 write WITHOUT WEN announces NOTHING (kills `&' -> `|' on the WEN test)")
+row("wbase0 nowen", nth(vals, 0) if alive else "dead", "0x80000000",
+    "and the WEN-clear base value round-trips")
+row("conf silent", announces(txt, CFG1) if alive else "dead", 0,
+    "CONF 0x1 (bit 1 clear) announces NOTHING in a session that writes nothing else (kills `&' -> `|')")
+evidence(txt)
+txt, alive, vals = seq([k0(IOC_CONF), 0x6],
+                       [[("st", 0, 1), ("ld", 0, 0)]])         # CONF 0x6 alone: bit 1 set, != 0x2
+row("conf ann6", announces(txt, CFG1) if alive else "dead", 1,
+    "CONF 0x6 ALONE (bit 1 set, != 0x2) announces ONCE (kills `& 0x2' -> `== 0x2')")
+row("conf 6 stored", nth(vals, 0) if alive else "dead", "0x2",
+    "and 0x6 stores 0x2 in this session too")
+evidence(txt)
+
+
+#  ---- D10 (round 4, from the records audit): the cells codex's saved answer named as still absent ----
+txt, alive, vals = seq([k0(IOC_W_MASK0), 0x700000, 0x0, k0(IOC_W_BASE1), 0x340000000,
+                        k0(UNL), 0x77],
+                       [[("st", 0, 1), ("st", 0, 2), ("ld", 0, 0)],      # MASK0: 0x700000 then ZERO (f = 0, legal)
+                        [("st", 3, 4), ("ld", 3, 3)],                   # BASE1 with SG|WEN|base
+                        [("st", 0, 1), ("st", 5, 6), ("ld", 0, 0)]])    # MASK0 legal, then a DEFAULT-arm write, read MASK0
+row("wmask0 zero", nth(vals, 0) if alive else "dead", "0x0",
+    "field 0 (Table 6-6's 1 MB encoding, :9587) is LEGAL and stores after a nonzero (a rule that rejects f == 0 keeps 0x700000)")
+row("wbase1 sg", nth(vals, 1) if alive else "dead", "0x340000000",
+    "SG|WEN|base round-trips at BASE1 (`wbase0 live' pins SG at BASE0 only -- codex, t2 M45)")
+row("def state", nth(vals, 2) if alive else "dead", "0x700000",
+    "a named register survives a DEFAULT-arm write to an unlisted offset: no IOC register-value change (the announce latch is the only state that moves)")
+evidence(txt)
+
+#  ---- D11 (round 5): the CLASS CLOSURE for the stored-bit filtering class -------------------
+#  WHY A CLASS CLOSURE RATHER THAN TWO MORE ROWS.  Table 4 came back clean and the ask-again then
+#  found filtering escapes at MASK0 and BASE1 -- the SECOND consecutive pass to find one breach of
+#  one class, which is the carrier's trigger to stop buying cells one at a time and enumerate the
+#  whole space in ONE diff.  The space is {MASK, BASE} x {window 0, window 1} x {reserved-bit
+#  filtering, field-source selection, zero acceptance, invalid-field rejection}, and the cells that
+#  no existing row held are R1-R6 below.  *** THAT SPACE IS FOUR ARMS OF SIX: CONF and TB_ENA filter
+#  a stored field too and were left out -- closed by D12, which is where the correction lives. ***
+#
+#  THE INPUTS ARE THE 64-BIT COMPLEMENTS OF THE STORE MASKS, and that is the whole trick:
+#      ~0xfff00000  == 0xffffffff000fffff   (MASK: architected bits 20-31)
+#      ~0x3fff00000 == 0xfffffffc000fffff   (BASE: W_BASE 20-31, SG 32, WEN 33)
+#  so EVERY reserved bit is set and EVERY architected bit is clear.  A store mask widened by even
+#  one bit therefore reads back that bit instead of zero, and a mask NARROWED by one bit is caught
+#  at the SEED readback, whose value sets every architected bit.  One pair of writes per register
+#  covers narrowing and widening in both directions.
+#  *** EXCEPT WEN AT BASE: the BASE seed 0x1fff00000 sets W_BASE and SG but NOT WEN (bit 33),
+#  so these BASE pairs cannot see WEN narrowed out of the store mask.  `wbase0 live' and
+#  `wbase1 live' carry that bit at both arms (codex, D12 review 2026-09-12).  The seed stays
+#  WEN-clear on purpose: a WEN-set seed would fire the WEN announce that `wen silent both'
+#  asserts is ABSENT. ***
+#
+#  AND THE FIELD-SOURCE CELL FALLS OUT OF THE SAME INPUT.  With the shipped normalisation
+#  f = (idata & 0xfff00000) >> 20 the complement gives f = 0, f & (f+1) = 0, LEGAL, stored as 0.
+#  Validate the RAW input instead and f = 0xffffffff000, f & (f+1) = 0xffffffff000 != 0, DECLINED --
+#  so the seed value is retained and the row reds.  Reserved input bits 32-63 become deciding field
+#  bits 12-43 under raw validation, which is why the complement separates the two readings and a
+#  merely-large legal value would not.
+#
+#  Each row scores the PAIR (seed readback, final readback): the seed is not a free-standing row
+#  because a rule that rejects the seed and a rule that rejects the final write are different
+#  mutants, and one row that names both states separates them without inflating the denominator.
+S_MASK = 0xffffffff000fffff        # ~0xfff00000
+S_BASE = 0xfffffffc000fffff        # ~0x3fff00000
+txt, alive, vals = seq([k0(IOC_W_MASK0), 0xfff00000, S_MASK,      # slots 0,1,2
+                        k0(IOC_W_MASK1), 0x700000, 0x200000,      # slots 3,4,5
+                        k0(IOC_W_BASE0), 0x1fff00000, S_BASE,     # slots 6,7,8
+                        k0(IOC_W_BASE1)],                         # slot 9
+                       [[("st", 0, 1), ("ld", 0, 0)],             # R1 seed:  MASK0 all-ones field
+                        [("st", 0, 2), ("ld", 0, 0)],             # R1 final: MASK0 complement
+                        [("st", 3, 1), ("ld", 3, 3)],             # R2 seed:  MASK1 all-ones field
+                        [("st", 3, 2), ("ld", 3, 3)],             # R2 final: MASK1 complement
+                        [("st", 3, 4), ("ld", 3, 3)],             # R3 seed:  MASK1 field 7
+                        [("st", 3, 5), ("ld", 3, 3)],             # R3 final: MASK1 field 2 (illegal)
+                        [("st", 6, 7), ("ld", 6, 6)],             # R4 seed:  BASE0 W_BASE|SG
+                        [("st", 6, 8), ("ld", 6, 6)],             # R4 final: BASE0 complement
+                        [("st", 9, 7), ("ld", 9, 9)],             # R5 seed:  BASE1 W_BASE|SG
+                        [("st", 9, 8), ("ld", 9, 9)]])            # R5 final: BASE1 complement
+def pair(i):
+    return (nth(vals, i) + "/" + nth(vals, i + 1)) if alive else "dead"
+
+row("wmask0 filter", pair(0), "0xfff00000/0x0",
+    "MASK0: the all-ones field stores whole, then its 64-bit COMPLEMENT stores ZERO.  Reds on a "
+    "store mask widened by any reserved bit (reads that bit), narrowed by any architected bit "
+    "(the seed loses it), or validating the RAW idata instead of the normalised field (f becomes "
+    "0xffffffff000, declines, and the seed is retained)")
+row("wmask1 filter-zero", pair(2), "0xfff00000/0x0",
+    "the same pair at MASK1 -- the sibling window, whose filtering had no row at all.  It also "
+    "carries the NORMALISED-ZERO acceptance cell: f == 0 after masking is legal (HRM Table 6-6's "
+    "1 MB encoding), so a rule excluding zero keeps 0xfff00000 here")
+row("wmask1 f2", pair(4), "0x700000/0x700000",
+    "MASK1 invalid-field rejection at FIELD 2, which `wmask1 declined' does not drive (it uses 5 "
+    "and 9): 2 & 3 == 2, so bit 1 of the predicate result is what separates `== 0' from `<= 2'.  "
+    "A predicate relaxed to `<= 2' stores 0x200000 and reds this row")
+row("wbase0 filter", pair(6), "0x1fff00000/0x0",
+    "BASE0: W_BASE|SG stores whole (SG at bit 32 and every W_BASE bit), then the complement stores "
+    "ZERO.  Bits 0-19 and 34-63 are set in that write, so any reserved bit added to the store mask "
+    "reads back")
+row("wbase1 filter", pair(8), "0x1fff00000/0x0",
+    "the same pair at BASE1.  M47 -- the store mask extended to bit 34 -- retains exactly "
+    "0x400000000 here, which is the escape the ask-again found and which no BASE1 row could see")
+row("wen silent both", announces(txt, WEN) if alive else "dead", 0,
+    "ZERO WEN announces across a session that writes BOTH windows' BASE registers four times with "
+    "WEN clear.  `wen silent' touches BASE0 only, so a `idata & WEN' -> `idata | WEN' edit at the "
+    "BASE1 arm alone was unrowed -- a sibling gap, not clause-(e) debt")
+evidence(txt)
+
+#  ---- D12 (round 6): the SAME closure at the two arms D11's space left out -------------------
+#  D11 enumerated {MASK, BASE} x {window 0, window 1} -- FOUR of the SIX arms #518 filters.  CONF
+#  (`& 0x3') and TB_ENA (`& IOC_TB_ENA_TEN') also store a filtered field, and before this session
+#  their reserved-bit inputs were only 0x6, 0x100000002, 0x81, 0x82 and 0x01: a store mask widened by
+#  any OTHER reserved bit read back clean everywhere (codex, table-5 design, 2026-09-12 -- the
+#  closure-at-one-cell-leaves-its-symmetric-cell-open shape, a fifth time).  Same trick as D11: the
+#  seed sets every architected bit, the 64-bit COMPLEMENT sets every reserved bit.
+S_CONF  = 0xfffffffffffffffc       # ~0x3
+S_TBENA = 0xffffffffffffff7f       # ~0x80
+txt, alive, vals = seq([k0(IOC_CONF), 0x3, S_CONF,                # slots 0,1,2
+                        k0(IOC_TB_ENA), 0x80, S_TBENA],           # slots 3,4,5
+                       [[("st", 0, 1), ("ld", 0, 0)],             # R7 seed:  CONF both field bits
+                        [("st", 0, 2), ("ld", 0, 0)],             # R7 final: CONF complement
+                        [("st", 3, 4), ("ld", 3, 3)],             # R8 seed:  TB_ENA TEN
+                        [("st", 3, 5), ("ld", 3, 3)]])            # R8 final: TB_ENA complement
+row("conf filter", pair(0), "0x3/0x0",
+    "CONF: both CFG AD bits store, then the complement (bits 2-63 set, 0-1 clear) stores ZERO.  Reds "
+    "on a store mask widened by any reserved bit or narrowed by either field bit")
+row("tbena filter", pair(2), "0x80/0x0",
+    "TB_ENA: TEN stores, then the complement (every bit but 7) stores ZERO.  Reds on a store mask "
+    "widened by any type-X bit or narrowed off TEN")
+evidence(txt)
+
+
+# ---------------------------------------------------------------- summary
+#  Computed adjacent to the print on purpose: #516 shipped a probe whose numerator was counted
+#  over an older row set while the denominator was evaluated at print time, and every row said
+#  `ok' beside a summary that did not.
+ok = sum(1 for _, o in rows if o)
+print("")
+print("LCABADVAL_ARMS=%d" % len(ARMS))
+print("LCABADVAL_RESULT=%d/%d" % (ok, len(rows)))
+print("LCABADVAL_WITNESS=%s" % ("PASS" if ok == len(rows) else "FAIL"))
+print("LCABADVAL_DONE")
+sys.exit(0 if ok == len(rows) else 1)
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$deviceLines = Get-Content -LiteralPath '"'C:\\DocumentNoSnc\\CC\\GXEMUL\\GXEMUL-SEC\\src\\devices\\dev_lca.c'; for ("'$lineIndex = 340; $lineIndex -lt [Math]::Min(585, $deviceLines.Count); $lineIndex++) { '"'{0}: {1}' -f ("'$lineIndex + 1), $deviceLines[$lineIndex] }' in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$probeLines = Get-Content -LiteralPath '"'C:\\DocumentNoSnc\\CC\\GXEMUL\\GXEMUL-SEC\\regress\\lca_badval_probe.py'; for ("'$lineIndex = 0; $lineIndex -lt [Math]::Min(250, $probeLines.Count); $lineIndex++) { '"'{0}: {1}' -f ("'$lineIndex + 1), $probeLines[$lineIndex] }' in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+ exited 1 in 218ms:
+Cannot invoke method. Method invocation is supported only on core types in this language mode.
+At line:2 char:130
++ ... eIndex = 0; $lineIndex -lt [Math]::Min(250, $probeLines.Count); $line ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : InvalidOperation: (:) [], RuntimeException
+    + FullyQualifiedErrorId : MethodInvocationNotSupportedInConstrainedLanguage
+ 
+
+ exited 1 in 236ms:
+Cannot invoke method. Method invocation is supported only on core types in this language mode.
+At line:2 char:127
++ ... ndex = 340; $lineIndex -lt [Math]::Min(585, $deviceLines.Count); $lin ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : InvalidOperation: (:) [], RuntimeException
+    + FullyQualifiedErrorId : MethodInvocationNotSupportedInConstrainedLanguage
+ 
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$deviceLines = Get-Content -LiteralPath '"'C:\\DocumentNoSnc\\CC\\GXEMUL\\GXEMUL-SEC\\src\\devices\\dev_lca.c'; for ("'$lineIndex = 340; $lineIndex -lt 585 -and $lineIndex -lt $deviceLines.Count; $lineIndex++) { '"'{0}: {1}' -f ("'$lineIndex + 1), $deviceLines[$lineIndex] }' in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$probeLines = Get-Content -LiteralPath '"'C:\\DocumentNoSnc\\CC\\GXEMUL\\GXEMUL-SEC\\regress\\lca_badval_probe.py'; for ("'$lineIndex = 0; $lineIndex -lt 250 -and $lineIndex -lt $probeLines.Count; $lineIndex++) { '"'{0}: {1}' -f ("'$lineIndex + 1), $probeLines[$lineIndex] }' in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+ succeeded in 150ms:
+341: 		if (writeflag == MEM_READ) {
+342: 			odata = d->ioc_conf;
+343: 		} else {
+344: 			/*  #518: was `if (idata & ~1) { fatal(); exit(1); }' with the
+345: 			    store BEFORE the check (#506 had widened its diagnostic).
+346: 			    HRM S6.2.9: IOC_CONF<1:0> select the configuration cycle
+347: 			    TYPE; everything above is reserved and is IGNORED, not
+348: 			    fatal.  Bit 0 selects type-1 cycles and is what lca_pci_conf
+349: 			    reads (#515); bit 1 selects the CFG AD<1:0> encodings 10/11,
+350: 			    which are not configuration-cycle types -- stored and
+351: 			    announced once, not modelled.  (Pass 2: this comment first
+352: 			    called bit 1 the type-1 select; grok read lca_pci_conf.)  */
+353: 			d->ioc_conf = idata & 0x3ULL;
+354: 			if (idata & 0x2ULL)
+355: 				lca_ioc_announce(d, LCA_W_IOC_CONF_CFG1, "IOC_CONF<1> set"
+356: 				    " (CFG AD<1:0> = 10/11, not a configuration-cycle type):"
+357: 				    " stored, not modelled", idata);
+358: 		}
+359: 		break;
+360: 
+361: 	case LCA_IOC_TBIA:
+362: 		/*  TLB Invalidate All.  */
+363: 		/*  TODO: For now, let's just ignore it.  */
+364: 		break;
+365: 
+366: 	case LCA_IOC_TB_ENA:
+367: 		if (writeflag == MEM_READ) {
+368: 			odata = d->tlb_enable;
+369: 		} else {
+370: 			/*  #518: TEN is the only architected bit (HRM Table 6-13);
+371: 			    the rest are type X -- IGNORED on write, never fatal.  The
+372: 			    old arm stored the whole value and then died on it.  */
+373: 			d->tlb_enable = idata & IOC_TB_ENA_TEN;
+374: 		}
+375: 		break;
+376: 
+377: 	case LCA_IOC_W_BASE0:
+378: 		if (writeflag == MEM_READ) {
+379: 			odata = d->window_base_0;
+380: 		} else {
+381: 			/*  #518: was a two-value whitelist + exit(1).  The HRM defines
+382: 			    this register by FIELDS -- W_BASE<31:20>, SG<32>, WEN<33> --
+383: 			    not by a list of numbers, and S6.4.14 REQUIRES SROM to write
+384: 			    zero here.  Store the fields (reserved bits dropped); the
+385: 			    window is not translated by this model, which is announced
+386: 			    once when any window is ENABLED.  */
+387: 			d->window_base_0 = idata & (IOC_W_BASE_W_BASE | IOC_W_BASE_SG | IOC_W_BASE_WEN);
+388: 			if (idata & IOC_W_BASE_WEN)
+389: 				lca_ioc_announce(d, LCA_W_IOC_WEN, "a DMA window was"
+390: 				    " enabled; window translation is not modelled", idata);
+391: 		}
+392: 		break;
+393: 
+394: 	case LCA_IOC_W_MASK0:
+395: 		if (writeflag == MEM_READ) {
+396: 			odata = d->window_mask_0;
+397: 		} else {
+398: 			/*  #518: was `!= 0x700000ULL' + exit(1): ONE accepted value where
+399: 			    HRM Table 6-6 lists THIRTEEN (W_MASK<31:20> = 0, 1, 3, 7, ...
+400: 			    0xfff: a contiguous low-ones field), and the old arm STORED
+401: 			    before it checked.  Validate the field, store only when it is
+402: 			    legal, decline once otherwise with the previous value kept.  */
+403: 			{
+404: 				uint64_t v = idata & 0xfff00000ULL, f = v >> 20;
+405: 				if ((f & (f + 1)) == 0)
+406: 					d->window_mask_0 = v;
+407: 				else
+408: 					lca_ioc_announce(d, LCA_W_IOC_WMASK0, "unsupported"
+409: 					    " IOC_W_MASK0 encoding declined (HRM Table 6-6);"
+410: 					    " previous value kept", idata);
+411: 			}
+412: 		}
+413: 		break;
+414: 
+415: 	case LCA_IOC_W_T_BASE0:
+416: 		if (writeflag == MEM_READ) {
+417: 			odata = d->window_t_base_0;
+418: 		} else {
+419: 			d->window_t_base_0 = idata;
+420: 			/*  TODO: Actually implement this.  */
+421: 		}
+422: 		break;
+423: 
+424: 	case LCA_IOC_W_BASE1:
+425: 		if (writeflag == MEM_READ) {
+426: 			odata = d->window_base_1;
+427: 		} else {
+428: 			/*  #518: was a ONE-value whitelist + exit(1) -- and the one value
+429: 			    was not zero, which S6.4.14 item 3 requires SROM to write.
+430: 			    Same disposition as W_BASE0 above.  */
+431: 			d->window_base_1 = idata & (IOC_W_BASE_W_BASE | IOC_W_BASE_SG | IOC_W_BASE_WEN);
+432: 			if (idata & IOC_W_BASE_WEN)
+433: 				lca_ioc_announce(d, LCA_W_IOC_WEN, "a DMA window was"
+434: 				    " enabled; window translation is not modelled", idata);
+435: 		}
+436: 		break;
+437: 
+438: 	case LCA_IOC_W_MASK1:
+439: 		if (writeflag == MEM_READ) {
+440: 			odata = d->window_mask_1;
+441: 		} else {
+442: 			/*  #518: was `!= 0x3ff00000ULL' + exit(1): ONE accepted value where
+443: 			    HRM Table 6-6 lists THIRTEEN (W_MASK<31:20> = 0, 1, 3, 7, ...
+444: 			    0xfff: a contiguous low-ones field), and the old arm STORED
+445: 			    before it checked.  Validate the field, store only when it is
+446: 			    legal, decline once otherwise with the previous value kept.  */
+447: 			{
+448: 				uint64_t v = idata & 0xfff00000ULL, f = v >> 20;
+449: 				if ((f & (f + 1)) == 0)
+450: 					d->window_mask_1 = v;
+451: 				else
+452: 					lca_ioc_announce(d, LCA_W_IOC_WMASK1, "unsupported"
+453: 					    " IOC_W_MASK1 encoding declined (HRM Table 6-6);"
+454: 					    " previous value kept", idata);
+455: 			}
+456: 		}
+457: 		break;
+458: 
+459: 	case LCA_IOC_W_T_BASE1:
+460: 		if (writeflag == MEM_READ) {
+461: 			odata = d->window_t_base_1;
+462: 		} else {
+463: 			d->window_t_base_1 = idata;
+464: 			/*  TODO: Actually implement this.  */
+465: 		}
+466: 		break;
+467: 
+468: 	default:
+469: 		/*  #518: was fatal()+exit(1) for ANY offset the switch does not
+470: 		    list.  Decline the write (no state changes), answer a read with
+471: 		    zero (odata is already 0), announce each direction once.  The
+472: 		    value keeps #506's full width.  NOT all of these offsets are
+473: 		    unimplemented HOLES: STAT0 (+0x040), STAT1 (+0x060), SFT_RST
+474: 		    (+0x0c0) and PAR_DIS (+0x0e0) are DOCUMENTED registers this
+475: 		    model has never had, and S6.4.14 items 1-2 require SROM to
+476: 		    write SFT_RST and STAT0 -- those now survive as declined writes
+477: 		    instead of ending the process, and are filed (lcaiocstat0) for
+478: 		    an implementation, which this decline is not.  (grok, pass 2)  */
+479: 		{
+480: 			int bit = writeflag == MEM_WRITE ?
+481: 			    LCA_W_IOC_DEF_W : LCA_W_IOC_DEF_R;
+482: 			if (!(d->warned & (1u << bit))) {
+483: 				d->warned |= 1u << bit;
+484: 				fatal("[ lca_ioc: unimplemented %s to offset 0x%x",
+485: 				    writeflag == MEM_WRITE? "write" : "read", (int)
+486: 				    relative_addr);
+487: 				if (writeflag == MEM_WRITE)
+488: 					fatal(": 0x%" PRIx64 " -- declined",
+489: 					    (uint64_t)idata);	/*  #506  */
+490: 				else
+491: 					fatal(" -- answered with zero");
+492: 				fatal("  (once per direction) ]\n");
+493: 			}
+494: 		}
+495: 		break;
+496: 	}
+497: 
+498: 	if (writeflag == MEM_READ)
+499: 		memory_writemax64(cpu, data, len, odata);
+500: 
+501: 	return 1;
+502: }
+503: 
+504: 
+505: DEVINIT(lca)
+506: {
+507: 	char *interrupt_path;
+508: 	struct interrupt interrupt_template;
+509: 	struct lca_data *d;
+510: 
+511: 	CHECK_ALLOCATION(d = (struct lca_data *) malloc(sizeof(struct lca_data)));
+512: 	memset(d, 0, sizeof(struct lca_data));
+513: 
+514: 	/*  Register a PCI bus:  */
+515: 	d->pci_data = bus_pci_init(
+516: 	    devinit->machine,
+517: 	    "TODO: irq"		/*  pciirq: TODO  */,
+518: 	    LCA_PCI_SIO,	/*  pci device io offset  */
+519: 	    0x00000000,		/*  pci device mem offset: TODO  */
+520: 	    0x00000000,		/*  PCI portbase: TODO  */
+521: 	    0x00000000,		/*  PCI membase: TODO  */
+522: 	    "TODO: pci irq base",	/*  PCI irqbase: TODO  */
+523: 	    LCA_ISA_BASE,	/*  ISA portbase  */
+524: 	    LCA_ISA_MEMBASE,	/*  ISA membase  */
+525: 	    "TODO: irqbase isa");                /*  ISA irqbase: TODO  */
+526: 
+527: 	/*  Add the "sio0" controller (as seen by NetBSD):  */
+528: 	bus_pci_add(devinit->machine, d->pci_data, devinit->machine->memory,
+529: 	    0, 7, 0, "i82378zb");
+530: 
+531: 	memory_device_register(devinit->machine->memory, "lca_pci_conf",
+532: 	    LCA_PCI_CONF, 0x20000000, dev_lca_pci_conf_access, (void *)d,
+533: 	    DM_DEFAULT, NULL);
+534: 
+535: 	memory_device_register(devinit->machine->memory, "lca_isa",
+536: 	    LCA_PCI_SIO, 0x10000 << 5, dev_lca_isa_access, (void *)d,
+537: 	    DM_DEFAULT, NULL);
+538: 
+539: 	memory_device_register(devinit->machine->memory, "lca_ioc",
+540: 	    LCA_IOC_BASE, 0x20000000, dev_lca_ioc_access, (void *)d,
+541: 	    DM_DEFAULT, NULL);
+542: 
+543: 	CHECK_ALLOCATION(interrupt_path = (char *)
+544: 	    malloc(strlen(devinit->machine->path) + 10));
+545: 	snprintf(interrupt_path, strlen(devinit->machine->path) + 10,
+546: 	    "%s.lca", devinit->machine->path);
+547: 
+548: 	memset(&interrupt_template, 0, sizeof(interrupt_template));
+549: 	interrupt_template.line = 0;
+550: 	interrupt_template.name = interrupt_path;
+551: 	interrupt_template.extra = d;
+552: 	interrupt_template.interrupt_assert = lca_interrupt_assert;
+553: 	interrupt_template.interrupt_deassert = lca_interrupt_deassert;
+554: 	interrupt_handler_register(&interrupt_template);
+555: 
+556: 	bus_isa_init(devinit->machine, interrupt_path,
+557: 	    BUS_ISA_IDE0 | BUS_ISA_IDE1, LCA_ISA_BASE, LCA_ISA_MEMBASE);
+558: 
+559: 	return 1;
+560: }
+561: 
+
+ succeeded in 155ms:
+1: #!/usr/bin/env python3
+2: #
+3: #  lcabadval -- RUNG-3 WITNESS: SIX value-guarded write arms in `dev_lca.c' end the host process
+4: #  on values the 21066/21066A hardware manual makes LEGAL, one of which the manual REQUIRES SROM
+5: #  to write.
+6: #
+7: #  THE DEFECT.  `DEVICE_ACCESS(lca_ioc)' has six write arms of this shape:
+8: #
+9: #      case LCA_IOC_W_MASK0:
+10: #              ...
+11: #              d->window_mask_0 = idata;          <-- STORED FIRST, unconditionally
+12: #              if (idata != 0x700000ULL) {
+13: #                      fatal("TODO: LCA_IOC_W_MASK0 value differs (0x%" PRIx64") from the only"
+14: #                            " implemented value\n", (uint64_t)idata);
+15: #                      exit(1);                   <-- then the process ends
+16: #              }
+17: #
+18: #  The accepted sets, as enumerated from the predicates themselves (NOT from a table):
+19: #
+20: #      arm         offset   predicate                              accepted set
+21: #      IOC_CONF    +0x020   idata & ~1                             {0, 1}
+22: #      IOC_TB_ENA  +0x0a0   idata & ~IOC_TB_ENA_TEN   (~0x80)      {0, 0x80}
+23: #      W_BASE0     +0x100   idata != 0 && idata != 0x300800000     {0, 0x300800000}
+24: #      W_MASK0     +0x140   idata != 0x700000                      {0x700000}
+25: #      W_BASE1     +0x120   idata != 0x240000000                   {0x240000000}
+26: #      W_MASK1     +0x160   idata != 0x3ff00000                    {0x3ff00000}
+27: #
+28: #  *** THE GUARDS ARE WRONG, NOT MERELY HARSH, AND THE MANUAL IS WHAT SAYS SO. ***  Every `legal'
+29: #  row below drives a value the 21066/21066A HRM documents as legal for that register, and each
+30: #  one cites its own line in `_scratchpad/21066_66a_hrm.txt'.  The sharpest is W_BASE1: S6.4.14
+31: #  item 3 (:10791-10792) says SROM "Prevents the IOC from responding to itself by writing zero to
+32: #  the IOC_W_BASE1 and IOC_W_BASE0 registers".  ZERO IS THE VALUE THE INITIALISATION SEQUENCE IS
+33: #  REQUIRED TO WRITE, and at W_BASE1 it ends the emulator.  It is also the value the model's own
+34: #  register reads back before anyone writes it, so writing back what you just read is fatal.
+35: #
+36: #  THE MANUAL VALUES USED, each verified by reading the cited lines rather than taken from a seat:
+37: #
+38: #    CONF    -> 2      Table 6-10 (:10246-10254): bits <1:0> are the CFG AD<1:0> FIELD, so all
+39: #                      four encodings are legal.  S6.2.9 (:9217) says the same from the other end.
+40: #                      The guard accepts HALF of a documented two-bit field.
+41: #    TB_ENA  -> 0x81   Table 6-13 (:10443, :10453): bits 63:8 and 6:0 are RES of type X, and the
+42: #                      manual's own type legend (:985-988) defines X as "return UNPREDICTABLE
+43: #                      results when read and are IGNORED ON WRITE OPERATIONS".  0x81 differs from
+44: #                      the accepted 0x80 in exactly one bit the hardware is documented to IGNORE.
+45: #    W_BASE0 -> 0x280000000    Figure 6-9 (:10556-10560) and Table 6-16 (:10562-10583): WEN is
+46: #                      bit 33, SG bit 32, W_BASE<31:20> bits 31:20.  So this is WEN set, direct
+47: #                      mapping (SG clear), window base 0x80000000 -- naturally aligned to any
+48: #                      window size up to 2 GB, as :10538-10539 requires, and not overlapping the
+49: #                      base the fork accepts at the sibling register (:10540-10541).  Zero cannot
+50: #                      be used here: W_BASE0's guard is the one arm of the six that accepts it.
+51: #    W_MASK0 -> 0x100000       Table 6-6 (:9587), encoding `0000 0000 0001' = 2 MB window.
+52: #    W_BASE1 -> 0              S6.4.14 item 3 (:10791-10792), the SROM-required value.
+53: #    W_MASK1 -> 0xfff00000     Table 6-6 (:9598), encoding `1111 1111 1111' = 4 GB window.
+54: #
+55: #  Table 6-6 lists THIRTEEN legal W_MASK encodings (:9586-9598).  W_MASK0 accepts one of them and
+56: #  W_MASK1 accepts a different one, so TWELVE OF THIRTEEN are fatal at each register and neither
+57: #  register accepts the other's value.  DERIVE IT, do not trust this sentence:
+58: #      awk 'NR>=9586 && NR<=9598' _scratchpad/21066_66a_hrm.txt | wc -l      -> 13
+59: #  and each arm's predicate is a single `!=' against one constant, so the accepted set has size 1.
+60: #  (Note 1 MB is the encoding `0000 0000 0000' = 0x0, so writing ZERO to either mask register is a
+61: #  legal window size and is also fatal.)
+62: #
+63: #  *** THE FIGURE/TABLE STAGGER WAS CHECKED, NOT ASSUMED. ***  `pdftotext -layout' staggers
+64: #  Table 6-16's descriptions against its bit rows (:10566-10583 reads WEN's description beside
+65: #  SG's row), which is the extraction artefact the carrier warns about.  It is NOT relied on: the
+66: #  UNSTAGGERED Figure 6-9 (:10556-10560) gives the layout directly, and this tree's own
+67: #  `alpha_lcareg.h' independently pins IOC_W_BASE_WEN = bit 33, IOC_W_BASE_SG = bit 32,
+68: #  IOC_W_BASE_W_BASE = bits 31:20.  Three sources agree, so no single calibration point is
+69: #  load-bearing here.
+70: #
+71: #  ---------------------------------------------------------------------------------------------
+72: #  *** WHAT THIS IS AND IS NOT.  IT IS A WITNESS, NOT A DETECTOR. ***
+73: #
+74: #  It establishes: on unmodified `alphabook1', ONE ordinary guest `stq' of a manual-legal value to
+75: #  a documented LCA IOC register ends the host process, with that arm's own diagnostic as
+76: #  evidence, after the SAME register at the SAME width through the SAME path has just been proven
+77: #  live in the SAME process.  It does NOT establish that any shipped guest writes these values,
+78: #  and it is NOT a detector of the repair: `alive' greens equally for a silent accept, for a
+79: #  latched announce, for a decline that discards the value, and for a full implementation.  A fix
+80: #  round owes rows that discriminate those -- at minimum a readback row per arm proving what the
+81: #  repair did with the value, and a latch-count row if the disposition is a bounded announce.
+82: #
+83: #  THE STORE-BEFORE-CHECK IS VISIBLE IN THE SOURCE AND IS DELIBERATELY NOT ROWED HERE.  Every arm
+84: #  assigns `d->field = idata' before testing it, so on HEAD the rejected value is already in the
+85: #  struct when exit(1) runs -- but the process ends, so no guest can observe it and no row can
+86: #  either.  It becomes observable only once the kill goes, which makes it a FIX-round row (does
+87: #  the repair leave the register holding the refused value?), not a witness row.  Recorded so the
+88: #  fix round does not have to rediscover it.
+89: #
+90: #  ---------------------------------------------------------------------------------------------
+91: #  SHAPE: ONE PROCESS PER ARM, CONTROL FIRST, and every element of it was paid for by a sibling
+92: #  probe in this tree.
+93: #
+94: #    1.  ONE PROCESS, NOT TWO.  [A] pre-read, [B] accepted store, [C] read-back and [D] the
+95: #        killing store all happen in the SAME emulator run, so between the store that LIVES and
+96: #        the store that DIES only the VALUE differs -- not the address, not the width, not the
+97: #        path, not the process.  Two sessions would leave a residual that something else differed.
+98: #    2.  THE PAIR IS THE ORACLE.  A bare "the register read back 0x700000" row would be weak;
+99: #        UNMAPPED space and a missed device both read 0 (`memory_rw.c''s #95 pre-zero), and a
+100: #        bare zero proves nothing.  `<arm> live' asserts the TRANSITION 0x0 -> <accepted value>
+101: #        from the same address in the same process, which nothing but the device can produce.
+102: #        All six accepted values are NONZERO, so every `live' row carries a device signature.
+103: #    3.  STAY ON `step'.  #516 de-fatalised the two ISA interrupt stubs, so they are no longer
+104: #        confounders -- but `continue' would still let a host-timer tick reach code this probe is
+105: #        not testing, and the witness costs nothing by stepping.
+106: #    4.  EVERY ACCESS IS A GUEST INSTRUCTION.  Debugger `dump' skips DM_DEFAULT handlers and
+107: #        `lca_ioc' is registered DM_DEFAULT, so `dump' would read the pre-zero and make the
+108: #        window look unmapped.  A debugger `put d' of a killing value IS a host kill but is NOT a
+109: #        guest access and witnesses nothing.  Every `put d' below targets SCRATCH, which is RAM.
+110: #    5.  ATTRIBUTION IS BY THE ARM'S OWN TEXT, NEVER BY EXIT STATUS.  A wrong offset would fall
+111: #        into `default:' and die with "[ lca_ioc: unimplemented write to offset ... ]" -- a death
+112: #        for a DIFFERENT reason, which is a FAILED reproduction.  Each `<arm> attrib' row is green
+113: #        in both directions by construction and reds only if the host died WITHOUT that arm's
+114: #        diagnostic.  All six literals were verified unique in `src/' (one hit each).
+115: #
+116: #  THE NEGATIVE CONTROL IS `W_T_BASE0' (+0x180), and the VALUE is chosen to make it work hard:
+117: #  it is written 0x100000 -- the very value that kills at W_MASK0 two rows up.  W_T_BASE0 is an
+118: #  implemented case in the same switch, in the same handler, with no value guard, so the pair
+119: #  attributes the deaths to THE ARM'S PREDICATE rather than to the value, to the width, to K0SEG,
+120: #  or to writing into the IOC window at all.  (0x100000 is also a legal page-table base for that
+121: #  register: IOC_W_T_BASE is bits 31:10, so a 1 MB-aligned value is well-formed.)
+122: #
+123: #  Usage:  lca_badval_probe.py <gxemul-binary> [label]
+124: import os, sys, pty, select, time, re
+125: 
+126: BIN   = sys.argv[1]
+127: LABEL = sys.argv[2] if len(sys.argv) > 2 else "?"
+128: MACH  = "alphabook1"          #  device_add(machine, "lca") is ST_ALPHABOOK1 ONLY
+129: 
+130: rows = []
+131: def row(name, got, want, note=""):
+132:     ok = (got == want)
+133:     rows.append((name, ok))
+134:     print("%-14s %-24s %-24s %-52s %s" % (name, str(got), str(want), note, "ok" if ok else "FAIL"))
+135:     return ok
+136: 
+137: # ---------------------------------------------------------------- encoder (memory format only)
+138: ZERO, T0, T1, T2, T3, T4, T5 = 31, 1, 2, 3, 4, 5, 6
+139: #  T5 is the highest used.  A probe reaching for an undefined register name dies with a NameError
+140: #  rather than emitting a bad encoding, which is the safe direction (#516 found this the hard way).
+141: 
+142: def mem(op, ra, rb, disp):
+143:     assert -32768 <= disp <= 32767, "displacement %d out of range" % disp
+144:     return (op << 26) | (ra << 21) | (rb << 16) | (disp & 0xffff)
+145: 
+146: def LDA (ra, disp, rb=ZERO): return mem(0x08, ra, rb, disp)
+147: def LDAH(ra, disp, rb=ZERO): return mem(0x09, ra, rb, disp)
+148: def LDQ (ra, disp, rb):      return mem(0x29, ra, rb, disp)
+149: def STQ (ra, disp, rb):      return mem(0x2d, ra, rb, disp)
+150: #  QUADWORD ONLY, and that is architectural rather than a preference: HRM S6.4 says the IOC
+151: #  registers are accessed with quadword operations, so LDL/STL are excluded by the manual.
+152: 
+153: def load_const(reg, val):
+154:     #  32-bit only, and deliberately so: this builds the SCRATCH pointer, never a 64-bit operand.
+155:     #  Every operand this probe drives is 64-bit-capable and arrives via `put d' + LDQ.
+156:     lo = val & 0xffff
+157:     hi = (val >> 16) & 0xffff
+158:     if lo >= 0x8000:
+159:         hi = (hi + 1) & 0xffff
+160:     ops = [LDAH(reg, hi if hi < 0x8000 else hi - 0x10000)]
+161:     if lo:
+162:         ops.append(LDA(reg, lo if lo < 0x8000 else lo - 0x10000, reg))
+163:     return ops
+164: 
+165: # ---------------------------------------------------------------- addresses (ALL RAM < 64 MB)
+166: K0SEG        = 0xfffffc0000000000
+167: def k0(p):   return K0SEG | p
+168: 
+169: LCA_IOC_BASE  = 0x180000000              # alpha_lcareg.h; DEVINIT maps 0x20000000 bytes here
+170: IOC_CONF      = LCA_IOC_BASE + 0x020
+171: IOC_TB_ENA    = LCA_IOC_BASE + 0x0a0
+172: IOC_W_BASE0   = LCA_IOC_BASE + 0x100
+173: IOC_W_BASE1   = LCA_IOC_BASE + 0x120
+174: IOC_W_MASK0   = LCA_IOC_BASE + 0x140
+175: IOC_W_MASK1   = LCA_IOC_BASE + 0x160
+176: IOC_W_T_BASE0 = LCA_IOC_BASE + 0x180     # the negative control: implemented, NO value guard
+177: 
+178: SCRATCH      = 0x01020000
+179: CODE         = 0x01040000
+180: 
+181: assert max(SCRATCH, CODE) < 64 * 1024 * 1024, "scratch/code must be inside RAM"
+182: 
+183: DUMMY = os.path.join(os.path.dirname(os.path.abspath(__file__)), "alpha_dummy.bin")
+184: if not os.path.exists(DUMMY):
+185:     with open(DUMMY, "wb") as f:
+186:         f.write(b"\0" * 8)
+187: 
+188: # ---------------------------------------------------------------- session
+189: def session(cmds, settle=1.6, spin=2.2):
+190:     pid, fd = pty.fork()
+191:     if pid == 0:
+192:         os.execv(BIN, [BIN, "-V", "-x", "-E", "alpha", "-e", MACH, "-M", "64",
+193:                        "0x20000000:" + DUMMY])
+194:         os._exit(127)
+195:     buf = ""
+196:     def rd(t):
+197:         nonlocal buf
+198:         end = time.time() + t
+199:         while time.time() < end:
+200:             r, _, _ = select.select([fd], [], [], 0.1)
+201:             if not r:
+202:                 continue
+203:             try:
+204:                 d = os.read(fd, 65536)
+205:                 if not d:
+206:                     return False
+207:                 buf += d.decode("latin-1", "replace")
+208:             except OSError:
+209:                 return False
+210:         return True
+211:     alive = rd(settle)
+212:     for i, c in enumerate(cmds):
+213:         try:
+214:             os.write(fd, (c + "\n").encode("latin-1"))
+215:         except OSError:
+216:             alive = False; break
+217:         if not rd(spin if i == len(cmds) - 1 else 0.35):
+218:             alive = False; break
+219:     try:
+220:         os.write(fd, b"quit\n"); rd(0.4)
+221:     except OSError:
+222:         pass
+223:     try:
+224:         os.close(fd)
+225:     except OSError:
+226:         pass
+227:     return buf.replace("\r", ""), alive
+228: 
+229: def printed(t, reg):
+230:     m = re.search(r"print\s+%s\s*\n\s*(0x[0-9a-f]+)" % reg, t)
+231:     return "absent" if not m else "0x%x" % int(m.group(1), 16)
+232: 
+233: # ---------------------------------------------------------------- the per-arm driver
+234: #  Register discipline, copied from lca_confbus_probe.py: T0 holds the SCRATCH base and is read
+235: #  for the LAST time by the third LDQ, so every operand is in a register before anything else
+236: #  happens.  The four accesses are labelled [A]..[D] here and in the report.
+237: def arm(addr, accepted, legal, settle=1.6, spin=2.2):
+238:     setup = ["put d 0x%x, 0x%x" % (SCRATCH + 0,  k0(addr)),
+239:              "put d 0x%x, 0x%x" % (SCRATCH + 8,  accepted),
+240:              "put d 0x%x, 0x%x" % (SCRATCH + 16, legal)]
+241:     prologue = load_const(T0, SCRATCH) + [
+242:         LDQ(T1, 0,  T0),    # t1 = k0(register)
+243:         LDQ(T4, 8,  T0),    # t4 = the ACCEPTED value
+244:         LDQ(T5, 16, T0),    # t5 = the manual-LEGAL value  (T0 is dead after this)
+245:         LDQ(T2, 0,  T1),    # [A] PRE-read       -- must be 0 (the model memsets its state)
+246:         STQ(T4, 0,  T1),    # [B] ACCEPTED store -- must survive
+247:         LDQ(T3, 0,  T1)]    # [C] READ-BACK      -- must echo the accepted value
+248:     armed = [STQ(T5, 0, T1)]  # [D] the manual-LEGAL store -- ends the host on HEAD
+249:     cmds = setup + ["put w 0x%x, 0x%08x" % (k0(CODE) + 4 * i, op)
+250:                     for i, op in enumerate(prologue + armed)]
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$probeLines = Get-Content -LiteralPath '"'C:\\DocumentNoSnc\\CC\\GXEMUL\\GXEMUL-SEC\\regress\\lca_badval_probe.py'; for ("'$lineIndex = 480; $lineIndex -lt 780 -and $lineIndex -lt $probeLines.Count; $lineIndex++) { '"'{0}: {1}' -f ("'$lineIndex + 1), $probeLines[$lineIndex] }' in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$probeLines = Get-Content -LiteralPath '"'C:\\DocumentNoSnc\\CC\\GXEMUL\\GXEMUL-SEC\\regress\\lca_badval_probe.py'; for ("'$lineIndex = 250; $lineIndex -lt 480 -and $lineIndex -lt $probeLines.Count; $lineIndex++) { '"'{0}: {1}' -f ("'$lineIndex + 1), $probeLines[$lineIndex] }' in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+ succeeded in 159ms:
+251:     cmds += ["pc=0x%x" % k0(CODE),
+252:              "step %d" % len(prologue),   # up to and including the read-back
+253:              "print t2",                  # [A], while the host is certainly still alive
+254:              "print t3",                  # [C], likewise
+255:              "step %d" % len(armed)]      # [D]
+256:     txt, alive = session(cmds, settle, spin)
+257:     return txt, alive, printed(txt, "t2"), printed(txt, "t3")
+258: 
+259: def evidence(txt):
+260:     #  *** ECHO THE EVIDENCE INTO THIS LOG. ***  lca_confbus_probe.py shipped an attribution row
+261:     #  whose only evidence was a pty buffer nobody preserved -- a green row a later reader cannot
+262:     #  check.  Every diagnostic this handler can emit is printed here instead.
+263:     for _l in txt.split(chr(10)):
+264:         if "TODO:" in _l or "lca_ioc:" in _l or "[ lca:" in _l:
+265:             print("  EVIDENCE: %s" % _l.strip())
+266: 
+267: print("lca_badval_probe -- binary=%s label=%s machine=%s" % (BIN, LABEL, MACH))
+268: print("%-14s %-24s %-24s %-52s %s" % ("row", "got", "want", "note", ""))
+269: 
+270: # ---------------------------------------------------------------- the six arms
+271: #  (label, address, accepted value, manual-legal value, this arm's UNIQUE fatal() literal,
+272: #   the note that says what the `legal' row proves)
+273: ARMS = [
+274:     ("conf",   IOC_CONF,    0x1,          0x2,
+275:      "Write to unimplemented bit of",
+276:      "CFG AD<1:0> is a 2-bit FIELD (T6-10 :10250); 2 of 4 encodings kill"),
+277:     ("tbena",  IOC_TB_ENA,  0x80,         0x81,
+278:      "LCA_IOC_TB_ENA value",
+279:      "bit 0 is RES type X = IGNORED ON WRITE (legend :985, T6-13 :10453)"),
+280:     ("wbase0", IOC_W_BASE0, 0x300800000,  0x280000000,
+281:      "LCA_IOC_W_BASE0 value differs",
+282:      "WEN + base 0x80000000, aligned (F6-9 :10556; :10538-10539)"),
+283:     ("wmask0", IOC_W_MASK0, 0x700000,     0x100000,
+284:      "LCA_IOC_W_MASK0 value differs",
+285:      "2 MB window, Table 6-6 :9587 -- 12 of 13 legal encodings kill"),
+286:     ("wbase1", IOC_W_BASE1, 0x240000000,  0x0,
+287:      "LCA_IOC_W_BASE1 value differs",
+288:      "*** THE SROM-REQUIRED VALUE, S6.4.14 item 3 :10791-10792 ***"),
+289:     ("wmask1", IOC_W_MASK1, 0x3ff00000,   0xfff00000,
+290:      "LCA_IOC_W_MASK1 value differs",
+291:      "4 GB window, Table 6-6 :9598 -- MASK0's own value kills here too"),
+292: ]
+293: 
+294: for label, addr, accepted, legal, sig, why in ARMS:
+295:     txt, alive, pre, post = arm(addr, accepted, legal)
+296: 
+297:     #  ---- LIVENESS + DEVICE SIGNATURE, in one row -------------------------------------------
+298:     #  The PAIR is the oracle: unmapped space and a missed device both read 0 forever, so only a
+299:     #  live device can turn 0x0 into a nonzero value it was just handed.  This also proves the
+300:     #  ACCEPTED store did not kill -- which is what makes the death two rows down attributable to
+301:     #  the VALUE and to nothing else about the access.
+302:     row("%s live" % label, "%s->%s" % (pre, post), "0x0->0x%x" % accepted,
+303:         "LIVENESS+DEVSIG: same addr/width/process; only a device echoes this")
+304: 
+305:     #  ---- THE DEFECT ROW ---------------------------------------------------------------------
+306:     #  ORACLE POLARITY: the witness ladder requires the symptom on the PRE-FIX build and green
+307:     #  post-fix with the SAME script, so this asserts the CORRECT behaviour.
+308:     #  PRE-FIX -> "dead" -> RED.   POST-FIX -> "alive" -> GREEN.
+309:     row("%s legal" % label, "alive" if alive else "dead", "alive", why)
+310: 
+311:     #  ---- ATTRIBUTION: if it died, it died HERE ----------------------------------------------
+312:     #  Green in BOTH directions by construction; RED only if the host died WITHOUT this arm's
+313:     #  diagnostic -- i.e. "did it fail for the reason under test?"  A wrong offset lands in
+314:     #  `default:' and reds this row instead of quietly passing as a reproduction.
+315:     hit = (sig in txt)
+316:     row("%s attrib" % label, "yes" if (alive or hit) else "died-elsewhere", "yes",
+317:         "ATTRIBUTION: a death here must carry THIS arm's unique diagnostic")
+318:     evidence(txt)
+319: 
+320: # ---------------------------------------------------------------- the negative control
+321: #  W_T_BASE0 is an implemented case in the SAME switch with NO value guard, and it is handed the
+322: #  value that kills at W_MASK0.  If this died too, the deaths above would be about the window or
+323: #  the width rather than about the predicates, and the whole witness would be void.
+324: CTLVAL = 0x100000
+325: txtc, alivec, prec, postc = arm(IOC_W_T_BASE0, CTLVAL, CTLVAL)
+326: 
+327: row("ctl noguard", "alive" if alivec else "dead", "alive",
+328:     "CONTROL: same window, same width, an arm with NO value guard")
+329: row("ctl echo", "%s->%s" % (prec, postc), "0x0->0x%x" % CTLVAL,
+330:     "CONTROL: the value that KILLS at W_MASK0 is stored and echoed here")
+331: evidence(txtc)
+332: 
+333: # ================================================================ #518 DETECTOR ROWS
+334: #  The rows above are the WITNESS (RED on HEAD 74daefd at 14/20, GREEN on the fix with the same
+335: #  script).  The rows below DEFEND the fix -- they are what a kill table is scored against -- and
+336: #  each names the mutant it kills and the observable that differs (the CHANNEL line).
+337: #
+338: #  CONTRACT (clause (e)).  Designed to catch, per arm: (b) the verbatim kill reinstated (the
+339: #  `stored' rows die); (d) the STORE MASK narrowed (CONF `& 0x3' -> `& 0x1' loses bit 1; TB_ENA
+340: #  storing the raw value keeps 0x81; W_BASE dropping WEN/SG or truncating to 32 bits; W_MASK
+341: #  `& 0xfff00000' widened or narrowed); (d) the W_MASK FIELD RULE weakened (`f != 0' accepts
+342: #  0x500000; `f == 1' declines 0xfff00000) or the old STORE-BEFORE-CHECK order reinstated (the
+343: #  declined value is kept instead of the previous one); (d) the latch bits COLLAPSED (the second
+344: #  register's, or the second direction's, announce never prints) or the latch REMOVED (a second
+345: #  identical write announces twice); (d) the default arm declining reads to nonzero or writing
+346: #  state.  NOT rowed, disclosed: the SG bit's effect (nothing consumes it), the W_T_BASE arms
+347: #  (unchanged, and the negative control already pins one), the reserved bits ABOVE bit 33 of
+348: #  W_BASE (dropped by the same mask as the ones below it -- one row per mask, not per bit), and
+349: #  the `ofs > len' exit in lca_isa, which belongs to lcaisalane.  Every value here is QUADWORD.
+350: #
+351: #  WHAT THE READ-BACKS ARE, stated so nobody reads them as architecture (grok, pass 2): the HRM
+352: #  types these registers WO, readback UNPREDICTABLE (:980-988).  The model has always echoed the
+353: #  stored value; every `stored'/`widen'/`declined' row tests THAT ECHO POLICY, which is what the
+354: #  fix wrote into and what a mutant would change -- it is not a claim about hardware readback.
+355: #
+356: #  Session shape: T0 = SCRATCH base (live throughout), T1 = address, T2 = value, T3 = read-back;
+357: #  each phase reloads T1/T2 from a `put d' slot, so eight registers are never a constraint.  A
+358: #  phase is stepped as a block and its read-back printed while the host is certainly alive.
+359: 
+360: def seq(consts, phases, settle=1.6, spin=2.2):
+361:     """consts: list of 64-bit values -> SCRATCH slots 0,8,16,...  phases: list of lists of
+362:     (op, addr_slot, val_slot) with op in {'st', 'ld'}; each phase ends with `print t3'.
+363:     Returns (txt, alive, [read-backs in phase order as strings])."""
+364:     setup = ["put d 0x%x, 0x%x" % (SCRATCH + 8 * i, v) for i, v in enumerate(consts)]
+365:     prog = load_const(T0, SCRATCH)
+366:     lens = [len(prog)]
+367:     for ph in phases:
+368:         ops = []
+369:         for op, a, v in ph:
+370:             ops.append(LDQ(T1, 8 * a, T0))
+371:             if op == "st":
+372:                 ops.append(LDQ(T2, 8 * v, T0))
+373:                 ops.append(STQ(T2, 0, T1))
+374:             else:
+375:                 ops.append(LDQ(T3, 0, T1))
+376:         prog += ops
+377:         lens.append(len(ops))
+378:     cmds = setup + ["put w 0x%x, 0x%08x" % (k0(CODE) + 4 * i, op) for i, op in enumerate(prog)]
+379:     cmds += ["pc=0x%x" % k0(CODE), "step %d" % lens[0]]
+380:     for n in lens[1:]:
+381:         cmds += ["step %d" % n, "print t3"]
+382:     txt, alive = session(cmds, settle, spin)
+383:     vals = ["0x%x" % int(m, 16) for m in
+384:             re.findall(r"print\s+t3\s*\n\s*(0x[0-9a-f]+)", txt)]
+385:     return txt, alive, vals
+386: 
+387: def nth(vals, i):
+388:     return vals[i] if i < len(vals) else "absent"
+389: 
+390: def announces(txt, needle):
+391:     return txt.count(needle)
+392: 
+393: #  ---- D1: the STORED value per arm -- accepted, then manual-legal, then read back -------------
+394: #  KILLS: (b) reinstated kill (dies); (d) mask narrowed / raw store / declined-not-stored (reads
+395: #  the accepted value or the raw one).  Writing the accepted value FIRST makes a skipped LATER store
+396: #  visible only where the accepted and the normalized legal values DIFFER -- at TB_ENA they are both
+397: #  0x80, which is why `tbena clear' exists (round 2); it does not cover an arm whose store is
+398: #  deleted outright (the accepted write is skipped too -- `<arm> live' reds there).  The want is the NORMALIZED legal value: for TB_ENA 0x81
+399: #  reads back 0x80, which is the reserved-bit rule in one row.
+400: NORMAL = {"conf": 0x2, "tbena": 0x80, "wbase0": 0x280000000, "wmask0": 0x100000,
+401:           "wbase1": 0x0, "wmask1": 0xfff00000}
+402: for label, addr, accepted, legal, sig, why in ARMS:
+403:     txt, alive, vals = seq([k0(addr), accepted, legal],
+404:                            [[("st", 0, 1)], [("st", 0, 2), ("ld", 0, 0)]])
+405:     row("%s stored" % label, nth(vals, 1) if alive else "dead", "0x%x" % NORMAL[label],
+406:         "accepted then legal: reads back the NORMALIZED legal value (fields kept, RES dropped)")
+407:     evidence(txt)
+408: 
+409: #  ---- D2: unsupported W_MASK encodings are DECLINED, the previous value KEPT, once per register --
+410: #  KILLS: field rule weakened to `f != 0' (0x500000 stored); store-before-check reinstated (reads
+411: #  0x500000); latch removed (two announces); MASK0/MASK1 latch bits collapsed (MASK1 never
+412: #  announces after MASK0 did, in the SAME session).
+413: DECL0, DECL1 = "IOC_W_MASK0 encoding declined", "IOC_W_MASK1 encoding declined"
+414: txt, alive, vals = seq([k0(IOC_W_MASK0), 0x100000, 0x500000, 0x900000,
+415:                         k0(IOC_W_MASK1), 0xfff00000, 0x200000],
+416:                        [[("st", 0, 1), ("st", 0, 2), ("ld", 0, 0)],      # phase 0: legal, bad, read
+417:                         [("st", 0, 3), ("ld", 0, 0)],                     # phase 1: second bad, read
+418:                         [("st", 4, 5), ("st", 4, 2), ("st", 4, 3), ("ld", 4, 4)],   # phase 2: MASK1 legal, bad, bad, read
+419:                         [("st", 0, 6), ("ld", 0, 0)]])                            # phase 3 (codex): f = 2 at MASK0
+420: row("wmask0 declined", nth(vals, 0) if alive else "dead", "0x100000",
+421:     "0x500000 (field 101b) declined: previous legal value KEPT, host alive")
+422: row("wmask0 once", announces(txt, DECL0) if alive else "dead", 1,
+423:     "TWO unsupported writes announce EXACTLY ONCE -- the (once) latch")
+424: row("wmask0 kept2", nth(vals, 1) if alive else "dead", "0x100000",
+425:     "the second unsupported write also leaves the previous value")
+426: row("wmask1 declined", nth(vals, 2) if alive else "dead", "0xfff00000",
+427:     "MASK1: 0x500000 declined after 0xfff00000 stored")
+428: row("wmask1 indep", announces(txt, DECL1) if alive else "dead", 1,
+429:     "MASK1 still announces after MASK0 did -- independent latch bits")
+430: row("wmask0 f2", nth(vals, 3) if alive else "dead", "0x100000",
+431:     "PASS 2 (codex): field 0b10 is NOT a Table 6-6 encoding; a rule weakened to admit it (== 0 -> <= 2) stores 0x200000")
+432: row("wmask1 once", announces(txt, DECL1) if alive else "dead", 1,
+433:     "PASS 2 (glm): TWO unsupported MASK1 writes announce ONCE -- pins MASK1 latch REMOVED, not only shared")
+434: evidence(txt)
+435: 
+436: #  ---- D3: IOC_CONF reserved bits dropped, bit 1 kept and announced once ----------------------
+437: #  KILLS: mask narrowed to bit 0 (reads 0x0 or 0x1); raw store (reads 0x100000002); latch removed.
+438: CFG1 = "IOC_CONF<1> set"
+439: txt, alive, vals = seq([k0(IOC_CONF), 0x1, 0x100000002, 0x2],
+440:                        [[("st", 0, 1), ("st", 0, 2), ("ld", 0, 0)],
+441:                         [("st", 0, 3), ("ld", 0, 0)]])
+442: row("conf reserved", nth(vals, 0) if alive else "dead", "0x2",
+443:     "0x100000002: reserved bit 32 DROPPED, CFG<1> kept")
+444: row("conf once", announces(txt, CFG1) if alive else "dead", 1,
+445:     "two writes with CFG<1> set announce EXACTLY ONCE")
+446: evidence(txt)
+447: 
+448: #  ---- D4: enabling a window announces ONCE across both registers; BASE0 accepts SROM's zero ---
+449: #  KILLS: WEN latch removed (two announces); per-register WEN latches (also two); BASE0 zero
+450: #  refused.  0x240000000 has bit 33 (WEN) set, so the accepted W_BASE1 value enables a window.
+451: WEN = "a DMA window was enabled"
+452: txt, alive, vals = seq([k0(IOC_W_BASE0), 0x280000000, k0(IOC_W_BASE1), 0x240000000, 0x0],
+453:                        [[("st", 0, 1), ("st", 2, 3), ("ld", 2, 2)],
+454:                         [("st", 0, 4), ("ld", 0, 0)]])
+455: row("wen once", announces(txt, WEN) if alive else "dead", 1,
+456:     "BASE0 then BASE1 both with WEN: the not-modelled announce prints ONCE")
+457: row("wbase1 wen", nth(vals, 0) if alive else "dead", "0x240000000",
+458:     "BASE1's accepted value round-trips with WEN (bit 33) intact")
+459: row("wbase0 zero", nth(vals, 1) if alive else "dead", "0x0",
+460:     "SROM's required zero lands at BASE0 too (S6.4.14 item 3)")
+461: evidence(txt)
+462: 
+463: #  ---- D5: the default arm -- write declined, read answers zero, each direction latched -------
+464: #  KILLS: reinstated kill; a default arm that stores or returns nonzero; the two direction
+465: #  latches collapsed (the read never announces after the write did); latch removed (two writes
+466: #  announce twice).  +0x1e0 is inside DEVINIT's window and names no register in alpha_lcareg.h.
+467: UNL = LCA_IOC_BASE + 0x1e0
+468: DEFW, DEFR = "unimplemented write to offset 0x1e0", "unimplemented read to offset 0x1e0"
+469: txt, alive, vals = seq([k0(UNL), 0x5a5a5a5a5a5a],
+470:                        [[("st", 0, 1), ("st", 0, 1)],
+471:                         [("ld", 0, 0), ("ld", 0, 0)]])   # PASS 2: TWO reads, so the read latch REMOVED is pinned too
+472: row("def alive", "alive" if alive else "dead", "alive",
+473:     "two writes to an unlisted IOC offset survive")
+474: row("def w once", announces(txt, DEFW) if alive else "dead", 1,
+475:     "the declined write announces EXACTLY ONCE for two writes")
+476: #  PASS 2 (kimi substitute): this read nth(vals, 0) -- the print after the STORE-ONLY phase 0, a
+477: #  STALE t3 -- so M20_def_echo passed it.  The load is in phase 1; index 1 is the read-back.
+478: row("def width", "yes" if (": 0x5a5a5a5a5a5a -- declined" in txt) else "no", "yes",
+479:     "the declined-write ANNOUNCE carries the full 64-bit value (round 4: the first form matched the echoed put-d command too)")
+480: row("def read0", nth(vals, 1) if alive else "dead", "0x0",
+
+ succeeded in 160ms:
+481:     "a read of the unlisted offset answers ZERO, not the written value")
+482: row("def r once", announces(txt, DEFR) if alive else "dead", 1,
+483:     "two reads announce ONCE on the read direction OWN latch bit, after the write did")
+484: evidence(txt)
+485: 
+486: 
+487: #  ---- D6 (PASS 2 additions, 2026-09-10): the mask cells the first block did not drive -----------
+488: #  Named by four packet-fed seats against my own enumeration.  KILLS: SG dropped from the W_BASE
+489: #  mask (three seats said no row drove bit 32 -- WRONG, codex: `wbase0 live's accepted 0x300800000
+490: #  carries SG, so this row is a SECOND pin at BASE0; BASE1 gets its own below); masks WIDENED (minimax: CONF `& 0x3' -> `& 0x7';
+491: #  W_BASE keeping bit 34; W_MASK `& 0xfff00000' -> `& 0xfffff000'); the field taken from idata
+492: #  instead of v (glm: `f = idata >> 20' declines a legal value that carries bit 32); a TB_ENA
+493: #  no-store (kimi: the accepted 0x80 equals the normalized legal value, so `tbena stored' cannot see
+494: #  a skipped store -- this row writes 0x80 then the reserved-only 0x01 and wants TEN CLEAR).
+495: txt, alive, vals = seq([k0(IOC_CONF), 0x6, k0(IOC_TB_ENA), 0x80, 0x01,
+496:                         k0(IOC_W_BASE0), 0x380000000, 0x680000000,
+497:                         k0(IOC_W_MASK0), 0x1f0000, 0x100100000, 0x700000, 0x82],
+498:                        [[("st", 0, 1), ("ld", 0, 0)],                 # conf 0x6 -> 0x2
+499:                         [("st", 2, 3), ("st", 2, 4), ("ld", 2, 2)],   # tbena 0x80 then 0x01 -> 0x0
+500:                         [("st", 5, 6), ("ld", 5, 5)],                 # wbase0 SG|WEN|base -> same
+501:                         [("st", 5, 7), ("ld", 5, 5)],                 # wbase0 bit 34 set -> dropped
+502:                         [("st", 8, 9), ("ld", 8, 8)],                 # wmask0 low bits -> dropped
+503:                         [("st", 8, 11), ("st", 8, 10), ("ld", 8, 8)],  # wmask0: 0x700000 THEN bit-32 value -> 0x100000
+504:                         [("st", 2, 3), ("st", 2, 12), ("ld", 2, 2)]])  # tbena 0x80 then 0x82 -> 0x80 (round 3)
+505: row("conf widen", nth(vals, 0) if alive else "dead", "0x2",
+506:     "0x6 reads 0x2: a mask WIDENED to bit 2 stores it (minimax)")
+507: row("tbena clear", nth(vals, 1) if alive else "dead", "0x0",
+508:     "0x80 then 0x01 reads 0x0: TEN cleared by a reserved-only write; a NO-STORE reads 0x80 (kimi)")
+509: row("wbase0 sg", nth(vals, 2) if alive else "dead", "0x380000000",
+510:     "SG|WEN|base round-trips: the SG bit (32) is stored (deepseek)")
+511: row("wbase0 widen", nth(vals, 3) if alive else "dead", "0x280000000",
+512:     "bit 34 set reads dropped: reserved bits ABOVE 33 are not stored (deepseek Q6, minimax)")
+513: row("wmask0 widen", nth(vals, 4) if alive else "dead", "0x100000",
+514:     "0x1f0000 reads 0x100000: bits 19:16 below the mask are not stored (minimax); first draft wrote 0x100f0000 = bit 28, declined")
+515: row("wmask0 hif", nth(vals, 5) if alive else "dead", "0x100000",
+516:     "0x700000 then 0x100100000 reads 0x100000: bit 32 masked BEFORE the field test; a decline would keep 0x700000 (round 3)")
+517: row("tbena b1", nth(vals, 6) if alive else "dead", "0x80",
+518:     "0x82 reads 0x80: a reserved bit OTHER than bit 0 is dropped (table 1 M27 `& ~1' kept it)")
+519: row("wen base0", announces(txt, WEN) if alive else "dead", 1,
+520:     "BASE0 ALONE enables (twice) in this session: the announce prints once -- pins BASE0's own announce (grok)")
+521: evidence(txt)
+522: 
+523: #  ---- D7 (PASS 2): all six announces in ONE process -- any two latch bits shared reds the later --
+524: #  kimi Q4.5: D2/D5 armed only a SIBLING's bit before the firing write; a cross-arm collision
+525: #  (conf<->wen, mask<->def, ...) was unrowed.  One session fires every announce; each needle once.
+526: txt, alive, vals = seq([k0(IOC_CONF), 0x2, k0(IOC_W_BASE0), 0x280000000,
+527:                         k0(IOC_W_MASK0), 0x500000, k0(IOC_W_MASK1), 0x500000, k0(UNL), 0x5a5a],
+528:                        [[("st", 0, 1), ("st", 2, 3), ("st", 4, 5), ("st", 6, 7), ("st", 8, 9), ("ld", 8, 8),
+529:                          ("st", 0, 1), ("st", 4, 5)]])   # codex: REPEAT conf and mask0 after the others
+530: for _n, _needle in (("all conf", CFG1), ("all wen", WEN), ("all m0", DECL0), ("all m1", DECL1),
+531:                     ("all defw", DEFW), ("all defr", DEFR)):
+532:     row(_n, announces(txt, _needle) if alive else "dead", 1,
+533:         "six announces in one process, then conf and mask0 REPEATED: prints once (bits neither shared nor erased by `=')")
+534: evidence(txt)
+535: 
+536: 
+537: #  ---- D8 (PASS 2, grok): BASE1 ALONE enables a window -- the per-label WEN announce ------------
+538: #  D4 enables BASE0 first, so deleting BASE1's announce (or BASE0's) still gives `wen once' = 1.
+539: #  The shared latch bit is the JOIN the 7g-1 discriminator warns about, reached through a shared
+540: #  bit rather than a fall-through label.  Together with `wen base0' (D6) each label's announce is
+541: #  pinned on its own.
+542: txt, alive, vals = seq([k0(IOC_W_BASE1), 0x240000000],
+543:                        [[("st", 0, 1), ("ld", 0, 0)]])
+544: row("wen base1", announces(txt, WEN) if alive else "dead", 1,
+545:     "BASE1 ALONE enables: the announce prints once -- pins BASE1's own announce (grok)")
+546: row("wbase1 alone", nth(vals, 0) if alive else "dead", "0x240000000",
+547:     "and the value round-trips in a session that never touched BASE0")
+548: evidence(txt)
+549: 
+550: 
+551: #  ---- D9 (round 3, from table 1's own mutants): SILENCE rows -------------------------------------
+552: #  M32 (`if (idata | WEN)') and M33 (`if (idata | 0x2)') announce on EVERY write; M37 (`== 0x2')
+553: #  announces only on the exact value.  No earlier session wrote W_BASE without WEN, or CONF without
+554: #  bit 1, and asserted SILENCE; none wrote a bit-1 CONF value other than 0x2 on its own.
+555: #  Two sessions, because announces() counts the WHOLE transcript: the silence rows must live in a
+556: #  session that never writes an announcing value (the first draft put 0x6 in the same session and
+557: #  `conf silent' read 1 on the correct build -- 63/64, the row refusing its own construction).
+558: txt, alive, vals = seq([k0(IOC_W_BASE0), 0x80000000, k0(IOC_CONF), 0x1],
+559:                        [[("st", 0, 1), ("ld", 0, 0)],          # BASE0 without WEN/SG
+560:                         [("st", 2, 3), ("ld", 2, 2)]])         # CONF 0x1: bit 1 clear
+561: row("wen silent", announces(txt, WEN) if alive else "dead", 0,
+562:     "a W_BASE0 write WITHOUT WEN announces NOTHING (kills `&' -> `|' on the WEN test)")
+563: row("wbase0 nowen", nth(vals, 0) if alive else "dead", "0x80000000",
+564:     "and the WEN-clear base value round-trips")
+565: row("conf silent", announces(txt, CFG1) if alive else "dead", 0,
+566:     "CONF 0x1 (bit 1 clear) announces NOTHING in a session that writes nothing else (kills `&' -> `|')")
+567: evidence(txt)
+568: txt, alive, vals = seq([k0(IOC_CONF), 0x6],
+569:                        [[("st", 0, 1), ("ld", 0, 0)]])         # CONF 0x6 alone: bit 1 set, != 0x2
+570: row("conf ann6", announces(txt, CFG1) if alive else "dead", 1,
+571:     "CONF 0x6 ALONE (bit 1 set, != 0x2) announces ONCE (kills `& 0x2' -> `== 0x2')")
+572: row("conf 6 stored", nth(vals, 0) if alive else "dead", "0x2",
+573:     "and 0x6 stores 0x2 in this session too")
+574: evidence(txt)
+575: 
+576: 
+577: #  ---- D10 (round 4, from the records audit): the cells codex's saved answer named as still absent ----
+578: txt, alive, vals = seq([k0(IOC_W_MASK0), 0x700000, 0x0, k0(IOC_W_BASE1), 0x340000000,
+579:                         k0(UNL), 0x77],
+580:                        [[("st", 0, 1), ("st", 0, 2), ("ld", 0, 0)],      # MASK0: 0x700000 then ZERO (f = 0, legal)
+581:                         [("st", 3, 4), ("ld", 3, 3)],                   # BASE1 with SG|WEN|base
+582:                         [("st", 0, 1), ("st", 5, 6), ("ld", 0, 0)]])    # MASK0 legal, then a DEFAULT-arm write, read MASK0
+583: row("wmask0 zero", nth(vals, 0) if alive else "dead", "0x0",
+584:     "field 0 (Table 6-6's 1 MB encoding, :9587) is LEGAL and stores after a nonzero (a rule that rejects f == 0 keeps 0x700000)")
+585: row("wbase1 sg", nth(vals, 1) if alive else "dead", "0x340000000",
+586:     "SG|WEN|base round-trips at BASE1 (`wbase0 live' pins SG at BASE0 only -- codex, t2 M45)")
+587: row("def state", nth(vals, 2) if alive else "dead", "0x700000",
+588:     "a named register survives a DEFAULT-arm write to an unlisted offset: no IOC register-value change (the announce latch is the only state that moves)")
+589: evidence(txt)
+590: 
+591: #  ---- D11 (round 5): the CLASS CLOSURE for the stored-bit filtering class -------------------
+592: #  WHY A CLASS CLOSURE RATHER THAN TWO MORE ROWS.  Table 4 came back clean and the ask-again then
+593: #  found filtering escapes at MASK0 and BASE1 -- the SECOND consecutive pass to find one breach of
+594: #  one class, which is the carrier's trigger to stop buying cells one at a time and enumerate the
+595: #  whole space in ONE diff.  The space is {MASK, BASE} x {window 0, window 1} x {reserved-bit
+596: #  filtering, field-source selection, zero acceptance, invalid-field rejection}, and the cells that
+597: #  no existing row held are R1-R6 below.  *** THAT SPACE IS FOUR ARMS OF SIX: CONF and TB_ENA filter
+598: #  a stored field too and were left out -- closed by D12, which is where the correction lives. ***
+599: #
+600: #  THE INPUTS ARE THE 64-BIT COMPLEMENTS OF THE STORE MASKS, and that is the whole trick:
+601: #      ~0xfff00000  == 0xffffffff000fffff   (MASK: architected bits 20-31)
+602: #      ~0x3fff00000 == 0xfffffffc000fffff   (BASE: W_BASE 20-31, SG 32, WEN 33)
+603: #  so EVERY reserved bit is set and EVERY architected bit is clear.  A store mask widened by even
+604: #  one bit therefore reads back that bit instead of zero, and a mask NARROWED by one bit is caught
+605: #  at the SEED readback, whose value sets every architected bit.  One pair of writes per register
+606: #  covers narrowing and widening in both directions.
+607: #  *** EXCEPT WEN AT BASE: the BASE seed 0x1fff00000 sets W_BASE and SG but NOT WEN (bit 33),
+608: #  so these BASE pairs cannot see WEN narrowed out of the store mask.  `wbase0 live' and
+609: #  `wbase1 live' carry that bit at both arms (codex, D12 review 2026-09-12).  The seed stays
+610: #  WEN-clear on purpose: a WEN-set seed would fire the WEN announce that `wen silent both'
+611: #  asserts is ABSENT. ***
+612: #
+613: #  AND THE FIELD-SOURCE CELL FALLS OUT OF THE SAME INPUT.  With the shipped normalisation
+614: #  f = (idata & 0xfff00000) >> 20 the complement gives f = 0, f & (f+1) = 0, LEGAL, stored as 0.
+615: #  Validate the RAW input instead and f = 0xffffffff000, f & (f+1) = 0xffffffff000 != 0, DECLINED --
+616: #  so the seed value is retained and the row reds.  Reserved input bits 32-63 become deciding field
+617: #  bits 12-43 under raw validation, which is why the complement separates the two readings and a
+618: #  merely-large legal value would not.
+619: #
+620: #  Each row scores the PAIR (seed readback, final readback): the seed is not a free-standing row
+621: #  because a rule that rejects the seed and a rule that rejects the final write are different
+622: #  mutants, and one row that names both states separates them without inflating the denominator.
+623: S_MASK = 0xffffffff000fffff        # ~0xfff00000
+624: S_BASE = 0xfffffffc000fffff        # ~0x3fff00000
+625: txt, alive, vals = seq([k0(IOC_W_MASK0), 0xfff00000, S_MASK,      # slots 0,1,2
+626:                         k0(IOC_W_MASK1), 0x700000, 0x200000,      # slots 3,4,5
+627:                         k0(IOC_W_BASE0), 0x1fff00000, S_BASE,     # slots 6,7,8
+628:                         k0(IOC_W_BASE1)],                         # slot 9
+629:                        [[("st", 0, 1), ("ld", 0, 0)],             # R1 seed:  MASK0 all-ones field
+630:                         [("st", 0, 2), ("ld", 0, 0)],             # R1 final: MASK0 complement
+631:                         [("st", 3, 1), ("ld", 3, 3)],             # R2 seed:  MASK1 all-ones field
+632:                         [("st", 3, 2), ("ld", 3, 3)],             # R2 final: MASK1 complement
+633:                         [("st", 3, 4), ("ld", 3, 3)],             # R3 seed:  MASK1 field 7
+634:                         [("st", 3, 5), ("ld", 3, 3)],             # R3 final: MASK1 field 2 (illegal)
+635:                         [("st", 6, 7), ("ld", 6, 6)],             # R4 seed:  BASE0 W_BASE|SG
+636:                         [("st", 6, 8), ("ld", 6, 6)],             # R4 final: BASE0 complement
+637:                         [("st", 9, 7), ("ld", 9, 9)],             # R5 seed:  BASE1 W_BASE|SG
+638:                         [("st", 9, 8), ("ld", 9, 9)]])            # R5 final: BASE1 complement
+639: def pair(i):
+640:     return (nth(vals, i) + "/" + nth(vals, i + 1)) if alive else "dead"
+641: 
+642: row("wmask0 filter", pair(0), "0xfff00000/0x0",
+643:     "MASK0: the all-ones field stores whole, then its 64-bit COMPLEMENT stores ZERO.  Reds on a "
+644:     "store mask widened by any reserved bit (reads that bit), narrowed by any architected bit "
+645:     "(the seed loses it), or validating the RAW idata instead of the normalised field (f becomes "
+646:     "0xffffffff000, declines, and the seed is retained)")
+647: row("wmask1 filter-zero", pair(2), "0xfff00000/0x0",
+648:     "the same pair at MASK1 -- the sibling window, whose filtering had no row at all.  It also "
+649:     "carries the NORMALISED-ZERO acceptance cell: f == 0 after masking is legal (HRM Table 6-6's "
+650:     "1 MB encoding), so a rule excluding zero keeps 0xfff00000 here")
+651: row("wmask1 f2", pair(4), "0x700000/0x700000",
+652:     "MASK1 invalid-field rejection at FIELD 2, which `wmask1 declined' does not drive (it uses 5 "
+653:     "and 9): 2 & 3 == 2, so bit 1 of the predicate result is what separates `== 0' from `<= 2'.  "
+654:     "A predicate relaxed to `<= 2' stores 0x200000 and reds this row")
+655: row("wbase0 filter", pair(6), "0x1fff00000/0x0",
+656:     "BASE0: W_BASE|SG stores whole (SG at bit 32 and every W_BASE bit), then the complement stores "
+657:     "ZERO.  Bits 0-19 and 34-63 are set in that write, so any reserved bit added to the store mask "
+658:     "reads back")
+659: row("wbase1 filter", pair(8), "0x1fff00000/0x0",
+660:     "the same pair at BASE1.  M47 -- the store mask extended to bit 34 -- retains exactly "
+661:     "0x400000000 here, which is the escape the ask-again found and which no BASE1 row could see")
+662: row("wen silent both", announces(txt, WEN) if alive else "dead", 0,
+663:     "ZERO WEN announces across a session that writes BOTH windows' BASE registers four times with "
+664:     "WEN clear.  `wen silent' touches BASE0 only, so a `idata & WEN' -> `idata | WEN' edit at the "
+665:     "BASE1 arm alone was unrowed -- a sibling gap, not clause-(e) debt")
+666: evidence(txt)
+667: 
+668: #  ---- D12 (round 6): the SAME closure at the two arms D11's space left out -------------------
+669: #  D11 enumerated {MASK, BASE} x {window 0, window 1} -- FOUR of the SIX arms #518 filters.  CONF
+670: #  (`& 0x3') and TB_ENA (`& IOC_TB_ENA_TEN') also store a filtered field, and before this session
+671: #  their reserved-bit inputs were only 0x6, 0x100000002, 0x81, 0x82 and 0x01: a store mask widened by
+672: #  any OTHER reserved bit read back clean everywhere (codex, table-5 design, 2026-09-12 -- the
+673: #  closure-at-one-cell-leaves-its-symmetric-cell-open shape, a fifth time).  Same trick as D11: the
+674: #  seed sets every architected bit, the 64-bit COMPLEMENT sets every reserved bit.
+675: S_CONF  = 0xfffffffffffffffc       # ~0x3
+676: S_TBENA = 0xffffffffffffff7f       # ~0x80
+677: txt, alive, vals = seq([k0(IOC_CONF), 0x3, S_CONF,                # slots 0,1,2
+678:                         k0(IOC_TB_ENA), 0x80, S_TBENA],           # slots 3,4,5
+679:                        [[("st", 0, 1), ("ld", 0, 0)],             # R7 seed:  CONF both field bits
+680:                         [("st", 0, 2), ("ld", 0, 0)],             # R7 final: CONF complement
+681:                         [("st", 3, 4), ("ld", 3, 3)],             # R8 seed:  TB_ENA TEN
+682:                         [("st", 3, 5), ("ld", 3, 3)]])            # R8 final: TB_ENA complement
+683: row("conf filter", pair(0), "0x3/0x0",
+684:     "CONF: both CFG AD bits store, then the complement (bits 2-63 set, 0-1 clear) stores ZERO.  Reds "
+685:     "on a store mask widened by any reserved bit or narrowed by either field bit")
+686: row("tbena filter", pair(2), "0x80/0x0",
+687:     "TB_ENA: TEN stores, then the complement (every bit but 7) stores ZERO.  Reds on a store mask "
+688:     "widened by any type-X bit or narrowed off TEN")
+689: evidence(txt)
+690: 
+691: 
+692: # ---------------------------------------------------------------- summary
+693: #  Computed adjacent to the print on purpose: #516 shipped a probe whose numerator was counted
+694: #  over an older row set while the denominator was evaluated at print time, and every row said
+695: #  `ok' beside a summary that did not.
+696: ok = sum(1 for _, o in rows if o)
+697: print("")
+698: print("LCABADVAL_ARMS=%d" % len(ARMS))
+699: print("LCABADVAL_RESULT=%d/%d" % (ok, len(rows)))
+700: print("LCABADVAL_WITNESS=%s" % ("PASS" if ok == len(rows) else "FAIL"))
+701: print("LCABADVAL_DONE")
+702: sys.exit(0 if ok == len(rows) else 1)
+
+codex
+The table matches the reported nine legs, including each failing row and readback pair. The source also supports CONF/TB_ENA narrowing detection through D12’s seed readbacks, and WEN removal through both `live` rows. One detail needs qualification: widening a MASK filter into high reserved bits can make validation retain the seed, which still fails the row but does not read back the added bit.
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$artifactLines = Get-Content -LiteralPath '"'C:\\DocumentNoSnc\\CC\\GXEMUL\\GXEMUL-SEC\\regress\\artifacts\\lcabadval\\killtable5_20260912\\SCORES.txt'; for ("'$lineIndex = 0; $lineIndex -lt $artifactLines.Count; $lineIndex++) { '"'{0}: {1}' -f ("'$lineIndex + 1), $artifactLines[$lineIndex] }' in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$artifactLines = Get-Content -LiteralPath '"'C:\\DocumentNoSnc\\CC\\GXEMUL\\GXEMUL-SEC\\regress\\artifacts\\lcabadval\\killtable5_20260912\\mut518t5.py'; for ("'$lineIndex = 0; $lineIndex -lt $artifactLines.Count; $lineIndex++) { '"'{0}: {1}' -f ("'$lineIndex + 1), $artifactLines[$lineIndex] }' in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$artifactLines = Get-Content -LiteralPath '"'C:\\DocumentNoSnc\\CC\\GXEMUL\\GXEMUL-SEC\\regress\\artifacts\\lcabadval\\killtable5_20260912\\PRETABLE.out'; for ("'$lineIndex = 0; $lineIndex -lt $artifactLines.Count; $lineIndex++) { '"'{0}: {1}' -f ("'$lineIndex + 1), $artifactLines[$lineIndex] }' in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+ succeeded in 184ms:
+1: #518 KILL TABLE 5   2026-09-12T11:59:10Z
+2: baseline = SEC src/devices/dev_lca.c (post-fix working set)   probe = FROZEN 75-row (lca_badval_probe.py.frozen)
+3: baseline cmp: CLEAN
+4: SENTINEL DROPPED (clone-local)
+5: 
+6: === LEG BASE ===
+7:   build rc=0 binary=FRESH
+8:   LCABADVAL_RESULT=75/75  sentinel=[LCABADVAL_DONE]
+9:   FAILING: 
+10: 
+11: === LEG HEAD ===
+12:   build rc=0 binary=FRESH
+13:   LCABADVAL_RESULT=15/75  sentinel=[LCABADVAL_DONE]
+14:   FAILING: conf legal dead |tbena legal dead |wbase0 legal dead |wmask0 legal dead |wbase1 legal dead |wmask1 legal dead |conf stored dead |tbena stored dead |wbase0 stored dead |wmask0 stored dead |wbase1 stored dead |wmask1 stored dead |wmask0 declined dead |wmask0 once dead |wmask0 kept2 dead |wmask1 declined dead |wmask1 indep dead |wmask0 f2 dead |wmask1 once dead |conf reserved dead |conf once dead |wen once dead |wbase1 wen dead |wbase0 zero dead |def alive dead |def w once dead |def width no |def read0 dead |def r once dead |conf widen dead |tbena clear dead |wbase0 sg dead |wbase0 widen dead |wmask0 widen dead |wmask0 hif dead |tbena b1 dead |wen base0 dead |all conf dead |all wen dead |all m0 dead |all m1 dead |all defw dead |all defr dead |wen base1 0 |wen silent dead |wbase0 nowen dead |conf silent dead |conf ann6 dead |conf 6 stored dead |wmask0 zero dead |wbase1 sg dead |def state dead |wmask0 filter dead |wmask1 filter-zero dead |wmask1 f2 dead |wbase0 filter dead |wbase1 filter dead |wen silent both dead |conf filter dead |tbena filter dead 
+15: 
+16: === LEG M43_mask1_widen ===
+17:   build rc=0 binary=FRESH
+18:   LCABADVAL_RESULT=74/75  sentinel=[LCABADVAL_DONE]
+19:   FAILING: wmask1 filter-zero 0xfff00000/0xff000 
+20: 
+21: === LEG M44_mask1_idata ===
+22:   build rc=0 binary=FRESH
+23:   LCABADVAL_RESULT=74/75  sentinel=[LCABADVAL_DONE]
+24:   FAILING: wmask1 filter-zero 0xfff00000/0xfff00000
+25: 
+26: === LEG M47_base1_widen ===
+27:   build rc=0 binary=FRESH
+28:   LCABADVAL_RESULT=74/75  sentinel=[LCABADVAL_DONE]
+29:   FAILING: wbase1 filter 0x1fff00000/0x400000000 
+30: 
+31: === LEG M_RULE2 ===
+32:   build rc=0 binary=FRESH
+33:   LCABADVAL_RESULT=74/75  sentinel=[LCABADVAL_DONE]
+34:   FAILING: wmask1 f2 0x700000/0x200000 
+35: 
+36: === LEG M_STORE01 ===
+37:   build rc=0 binary=FRESH
+38:   LCABADVAL_RESULT=74/75  sentinel=[LCABADVAL_DONE]
+39:   FAILING: wmask0 filter 0xfff00000/0x1000 
+40: 
+41: === LEG M_CONF_B4 ===
+42:   build rc=0 binary=FRESH
+43:   LCABADVAL_RESULT=74/75  sentinel=[LCABADVAL_DONE]
+44:   FAILING: conf filter 0x3/0x10 
+45: 
+46: === LEG M_TBENA_B8 ===
+47:   build rc=0 binary=FRESH
+48:   LCABADVAL_RESULT=74/75  sentinel=[LCABADVAL_DONE]
+49:   FAILING: tbena filter 0x80/0x100 
+50: 
+51: === RESTORE ===
+52:   restore cmp-vs-SEC=CLEAN binary=FRESH
+53:   SENTINEL CLEARED (both parts)
+54: KILLTABLE5_DONE
+
+ succeeded in 185ms:
+1: #!/usr/bin/env python3
+2: """#518 table 5 mutator.  usage: mut518t5.py <SEC dev_lca.c> <out path> <LEG>
+3: 
+4: Baseline = the CURRENT SEC dev_lca.c (not a frozen older copy -- table 4's t2 mutator restored
+5: from t2/BASELINE_t2.c, which predates later comment edits).  Every find-text is chosen to occur
+6: EXACTLY ONCE, scoped by the arm's own store target where MASK0 and MASK1 share text; a count
+7: other than 1 is a hard failure (exit 3), never an unmutated leg.
+8: 
+9:   M43_mask1_widen    MASK1 stored-field mask widened to bits 12-31      (t2 M43, L2 in table 4)
+10:   M44_mask1_idata    MASK1 validation operand from RAW idata            (t2 M44, L2 in table 4)
+11:   M47_base1_widen    BASE1 store mask widened to bit 34                 (t2 M47, L2 in table 4)
+12:   M_RULE2            MASK1 rule weakened to (f & (f+1)) <= 2            (adjudicator's #499-trap)
+13:   M_STORE01          MASK0 stored-field mask widened by bit 12          (adjudicator's #499-trap)
+14:   M_CONF_B4          CONF store mask widened by bit 4    -- NEW: no 73-row input set bit 4
+15:   M_TBENA_B8         TB_ENA store mask widened by bit 8  -- NEW: no 73-row input set bit 8
+16: """
+17: import io, sys
+18: 
+19: T = "\t"
+20: V0 = T*4 + "uint64_t v = idata & 0xfff00000ULL, f = v >> 20;\n" + T*4 + "if ((f & (f + 1)) == 0)\n" + T*5 + "d->window_mask_0 = v;\n"
+21: V1 = T*4 + "uint64_t v = idata & 0xfff00000ULL, f = v >> 20;\n" + T*4 + "if ((f & (f + 1)) == 0)\n" + T*5 + "d->window_mask_1 = v;\n"
+22: B1 = "d->window_base_1 = idata & (IOC_W_BASE_W_BASE | IOC_W_BASE_SG | IOC_W_BASE_WEN);"
+23: 
+24: LEGS = {
+25:     "M43_mask1_widen": (V1, V1.replace("idata & 0xfff00000ULL", "idata & 0xfffff000ULL")),
+26:     "M44_mask1_idata": (V1, V1.replace("f = v >> 20;", "f = idata >> 20;")),
+27:     "M47_base1_widen": (B1, B1.replace("IOC_W_BASE_WEN);", "IOC_W_BASE_WEN | (1ULL << 34));")),
+28:     "M_RULE2":         (V1, V1.replace("if ((f & (f + 1)) == 0)", "if ((f & (f + 1)) <= 2)")),
+29:     "M_STORE01":       (V0, V0.replace("idata & 0xfff00000ULL", "idata & 0xfff01000ULL")),
+30:     "M_CONF_B4":       ("d->ioc_conf = idata & 0x3ULL;", "d->ioc_conf = idata & 0x13ULL;"),
+31:     "M_TBENA_B8":      ("d->tlb_enable = idata & IOC_TB_ENA_TEN;",
+32:                         "d->tlb_enable = idata & (IOC_TB_ENA_TEN | 0x100ULL);"),
+33: }
+34: 
+35: src, dst, leg = sys.argv[1:4]
+36: t = io.open(src, encoding="utf-8").read()
+37: if leg != "BASE":
+38:     if leg not in LEGS:
+39:         sys.exit("unknown leg %s" % leg)
+40:     old, new = LEGS[leg]
+41:     n = t.count(old)
+42:     if n != 1 or old == new:
+43:         sys.stderr.write("FIND-TEXT for %s occurs %d times (or is a no-op) -- REFUSING\n" % (leg, n))
+44:         sys.exit(3)
+45:     t = t.replace(old, new)
+46: io.open(dst, "w", encoding="utf-8", newline="\n").write(t)
+47: print("MUTATED %s" % leg)
+
+ succeeded in 214ms:
+1: #518 lcabadval -- KILL TABLE 5 PRETABLE, written 2026-09-12 BEFORE the table runs (mtime proves order)
+2: 
+3: INSTRUMENT: regress/lca_badval_probe.py at 75 rows (D11 + the new D12), frozen copy
+4: regress/artifacts/lcabadval/base_20260912/lca_badval_probe.py.frozen.  BASE MEASURED before this
+5: table: LCABADVAL_RESULT=75/75 (base_20260912/BASE.log).
+6: BASELINE: the CURRENT SEC dev_lca.c (post-fix working set) -- not t2/BASELINE_t2.c, which table 4's
+7: mutator restored from and which predates later comment edits.  Mutator: mut518t5.py (every find-text
+8: occurs exactly once, scoped by the arm's own store target; a miss is a HARD FAIL).
+9: 
+10: WHY THIS TABLE.  Table 4 measured three clause-(d) escapes at 67/67 (M43, M44, M47), ruled L2; the
+11: repair rows R2/R5 were added (73 rows) but never measured against those mutants.  The codex table-5
+12: design (codex_table5design_20260912.txt) then found the CLASS the repair closed at four arms still
+13: open at two more -- CONF and TB_ENA had no reserved-bit complement -- and D12 added it (75 rows).
+14: 
+15: LEGS AND PREDICTIONS (codex predictions were made against the 73-row form; each carries to 75 because
+16: D12 touches neither MASK nor BASE):
+17:   BASE          75/75                                            (measured already: 75/75)
+18:   HEAD          pre-#518 file, all kills live.  codex conditional prediction 15/73 at 73 rows; D12's
+19:                 session writes CONF first and HEAD dies there, so both D12 rows add red: PREDICTED
+20:                 15/75, direction certain, number conditional
+21:   M43_mask1_widen  74/75  red: wmask1 filter-zero   (observed pair 0xfff00000/0xff000)
+22:   M44_mask1_idata  74/75  red: wmask1 filter-zero   (0xfff00000/0xfff00000 -- raw f declines)
+23:   M47_base1_widen  74/75  red: wbase1 filter        (0x1fff00000/0x400000000)
+24:   M_RULE2          74/75  red: wmask1 f2            (0x700000/0x200000)
+25:   M_STORE01        74/75  red: wmask0 filter        (0xfff00000/0x1000)
+26:   M_CONF_B4        74/75  red: conf filter ONLY     (0x3/0x10)  -- NEW.  No 73-row input sets bit 4
+27:                                                      (CONF was driven with 0x1, 0x2, 0x6, 0x100000002),
+28:                                                      so this is predicted INVISIBLE to every other row
+29:   M_TBENA_B8       74/75  red: tbena filter ONLY    (0x80/0x100) -- NEW.  TB_ENA was driven with 0x80,
+30:                                                      0x81, 0x82, 0x01; bit 8 never set before D12
+31: 
+32: THE DISCRIMINATING CLAIM: if M_CONF_B4 or M_TBENA_B8 reds ANY row other than its own D12 row, D12 was
+33: not the only carrier and the codex finding was overstated; if either scores 75/75, D12 is vacuous for
+34: the class it was added for.  Either outcome changes the record.
+35: 
+36: CHECKS:
+37:   SIBLING PARITY  the six filtered arms are the siblings; D11 + D12 now give every one a seed + 64-bit
+38:                   complement pair.  WEN at BASE is carried by `wbase0/1 live', not by the D11 seed
+39:                   (the D11 comment was corrected for this).
+40:   CLAIM -> ROW    D12's comment claims "reds on a store mask widened by any reserved bit or narrowed by
+41:                   either field bit" -- M_CONF_B4 / M_TBENA_B8 test the widening half; narrowing is
+42:                   the seed half (0x3 / 0x80 read back whole) and is NOT separately built here: filed.
+43:   GUARD/BODY      the repair at CONF/TB_ENA is the store mask itself; no guard.  N/A beyond the mask.
+44:   CHANNEL         each D12 row scores the (seed, complement) PAIR; under a widened mask the
+45:                   complement readback is non-zero -- the channel varies by construction.
+
+codex
+VERDICT: All 12/12 cells in the stated stored-mask class have detecting rows; no cell is unrowed.
+CODEX_518E_20260912
+
+[SCORES.txt](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/lcabadval/killtable5_20260912/SCORES.txt:6) records BASE **75/75**, HEAD **15/75**, and all seven mutants **74/75**, with exactly PRETABLE’s predicted failing rows and readback pairs. Both new widening mutants fail their D12 row alone. The conclusions about unbuilt mutations below are source-based deductions.
+
+The denominator is **six arms × {widen, narrow} = 12 cells**:
+
+| Arm | Widening detector | Narrowing detector |
+|---|---|---|
+| CONF | `conf filter`: complement readback | `conf filter`: seed readback |
+| TB_ENA | `tbena filter`: complement readback | `tbena filter`: seed readback |
+| MASK0 | `wmask0 filter`: complement readback | `wmask0 filter`: seed readback |
+| MASK1 | `wmask1 filter-zero`: complement readback | `wmask1 filter-zero`: seed readback |
+| BASE0 | `wbase0 filter`: complement readback | `wbase0 filter` for bits 20–32; `wbase0 live` for WEN |
+| BASE1 | `wbase1 filter`: complement readback | `wbase1 filter` for bits 20–32; `wbase1 live` for WEN |
+
+These carriers are implemented in [D11](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/lca_badval_probe.py:623), [D12](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/lca_badval_probe.py:675), and the [per-arm live checks](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/lca_badval_probe.py:273).
+
+**CONF/TB_ENA narrowing is detected despite not being separately built.** Removing CONF bit 0 changes its pair to `0x2/0x0`; removing bit 1 produces `0x1/0x0`, against expected `0x3/0x0`. Removing TEN produces `0x0/0x0`, against `0x80/0x0`. PRETABLE’s measurement limitation remains accurately stated.
+
+1. **WEN removal does fail both corresponding live rows.** Their oracle includes the accepted-value readback:
+   - BASE0: expected `0x300800000`, obtains `0x100800000`.
+   - BASE1: expected `0x240000000`, obtains `0x40000000`.
+
+   The announce can still fire because its condition examines `idata`; the readback detects the lost stored bit. D11’s WEN-clear seed cannot detect that removal.
+
+2. **The corresponding MASK0 validation changes have MASK0 carriers.** Relaxing the rule to `<= 2` fails [`wmask0 f2`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/lca_badval_probe.py:414): it obtains `0x200000` instead of `0x100000`. Taking the operand from raw `idata` fails `wmask0 filter`, retaining `0xfff00000` after the complement; [`wmask0 hif`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/lca_badval_probe.py:495) also detects it. For changes to the right-shift constant within defined counts 0–63, counts below 20 reject the D11 seed; counts above 20 admit field 2 and fail `wmask0 f2`. This supports those validation changes without claiming exhaustive coverage of arbitrary predicate rewrites.
+
+3. **The filtering pairs prevent a vacuous zero from passing this class.** Each seed is nonzero and checked; every scored phase performs a load. Dropping both writes fails the seed; dropping the complement write retains the seed; missing output becomes `absent`.
+
+   One explanation needs correction: D11’s claim that widening always “reads that bit” is too broad for MASK. Under the [actual validation](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c:404), admitting reserved bits 32–63 makes the complement illegal and retains the nonzero seed. The row still fails. Narrowing can likewise reject the seed entirely instead of merely losing one bit.
+
+   `wen silent both` alone can remain green if announcements disappear; `wen base0` and `wen base1` supply the positive checks. Its silence result does not establish filtering.
+
+This is a test-coverage finding only. No files were written.
+tokens used
+66,744
