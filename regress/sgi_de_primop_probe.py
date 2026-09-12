@@ -149,7 +149,10 @@ catch, and which it is NOT:
                             50/50 -- the pass-14 all-ones drawmode had enabled the
                             block that reads them.)
           op == 0x00000000  the reset value -- CLOSED by `dec regs'.
-          latch-field bits  0-8 by `xlatch all'; 9 is the latch itself.
+          latch-field bits  0-8 by `xlatch all'; 9 is the latch itself.  (DERIVED,
+                            not mutant-measured: no `|| (d->warned & bit)' cell was
+                            ever built.  Pass 16 named it; filed.  An unmeasured
+                            closure must not render like a measured one.)
           operand zero/nonzero on x1..pattern -- CLOSED by `dec ops'.
       DELIBERATELY NOT COVERED, and unclosable by rows -- an escape here is OUTSIDE
       THE CONTRACT, not a breach.  *** PASS 15 GENERALISED THIS LIST after three seats
@@ -161,7 +164,10 @@ catch, and which it is NOT:
           `x & MASK' on op and the eleven registers, (b) op inequality, (c) the one
           equality `op == 0', and (d) zero/nonzero on the seven operands.  EVERY OTHER
           predicate on op, a register or an operand is uncovered by construction,
-          because the sessions pin at most TWO values per field: equality to any
+          because the sessions pin at most TWO values per REGISTER or OPERAND field
+          (op is the exception: ten distinct second-reach literals, so equality to
+          any of those ten is incidentally closed -- pass 16 corrected 'op == 0' to
+          that, the safe direction): equality to any
           unpinned value, masked equality, ranges, bit relations, arbitrary Boolean
           functions of bits, and compounds across fields.  Each is an infinite family
           and each new two-draw session pins one member.  Measured limits: `op ==
@@ -1139,7 +1145,7 @@ t, alive, how = session(store(A, DE + MODE_SRC, val="0xffffffff")
 row("dec regs", t.count(declined("0x00000000")), 1,
     "ELEVEN all-ones registers, POINT twice, ONE announce -- kills any register-bit or op==0 bypass")
 row("dec regs liv", printed(t, "v0") if alive else "died", "0x0",
-    "...and the guest RUNS ON through the seven-store session")
+    "...and the guest RUNS ON through the thirteen-store session")
 #  *** AND THE ROW ABOVE OWES A PRECONDITION WITNESS, the lesson `xlatch all' paid
 #  for: "five all-ones registers" is only true if the five stores LAND.  The entry
 #  announcement prints drawmode and src_mode verbatim, so pin both, anchored on the
@@ -1151,8 +1157,14 @@ row("dec regs liv", printed(t, "v0") if alive else "died", "0x0",
 #  shape reds on BASE before any mutant is scored.  Pass 14, table 12. ***
 #  *** PASS 15: the anchor now pins dst_mode's VALUE too (three of the eleven).  Two seats
 #  found the old anchor certified nothing past src_mode while the note said "really landed".
-#  rop and the six XFER registers have NO channel in this line; stipple_mode has its own
-#  (next row).  So the precondition is witnessed at 4 of 11, and the note says so. ***
+#  rop and the six XFER registers have NO channel in THIS line; stipple_mode has its own
+#  (next row).  So the precondition is witnessed at 4 of 11 by standing rows.
+#  *** PASS 16: THE SIX XFER REGISTERS DO HAVE A CHANNEL -- the XFER block's own
+#  unlatched fatal() prints all six by name once per draw, and under this session it
+#  fires (step_x = -1 != src_bufdepth 8).  One want=2 row would take the standing
+#  witness to 10 of 11.  FILED as sgideprimopstrengthen with the latch-field mutant
+#  and the `rop & 1' cell, because the chain closed on this pass and a new row is a
+#  new floor-bound diff.  Today the seven rest on the table-13 kills. ***
 row("dec regs set", t.count("op = 0x00000000, drawmode=0xffffffff src_mode=0xffffffff dst_mode=0xffffffff"), 2,
     "drawmode/src_mode/dst_mode stores landed, both draws -- 3 of 11 pinned here, 1 more below")
 #  stipple_mode all-ones trips the UNLATCHED pre-switch fatal(), which PRINTS THE VALUE --
@@ -1425,7 +1437,9 @@ print("NOROW  latch bypass: equality to an unpinned value -- op == 0x07000000 ME
 print("NOROW  latch bypass: operand sub-bit / threshold  -- fg & 0x80 MEASURED full-score"
       " (table 12); infinite family, declared, not hunted")
 print("NOROW  latch bypass: bit relations / Boolean fns  -- (op&1) != ((op>>1)&1) predicted"
-      " full-score; every session pins <= 2 values per field; declared")
+      " full-score; concrete in-scope examples: nr_of_bits_in_the_middle != 1,"
+      " src_x != -1, saved_src_x != 0xffff (all-ones collides with the XFER-off"
+      " sentinel); every register/operand pins <= 2 values; declared")
 print("NOROW  latch bypass: cross-field compounds        -- op closure and latch-field"
       " closure live in different sessions; declared")
 
