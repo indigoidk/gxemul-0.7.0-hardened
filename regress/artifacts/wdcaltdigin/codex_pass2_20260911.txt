@@ -1,0 +1,143 @@
+VERDICT: NOT RATIFIED — branch binding is correct; full call purity and detector coverage remain unverified, and the comment overstates its hardware evidence.  
+CODEX_525PASS2_20260911
+
+I read only the three specified working-tree files. All paths exist. The actual handler matches your comment-stripped version, including six opening and six closing braces. No files were written; detector results below remain your reported measurements.
+
+1. **All four cells reach the bodies you expect.**
+
+   Every cell first executes `idata = data[0]` and `odata = status_byte(d, cpu)`. After that:
+
+   | Direction | Offset | Selected body | Common tail |
+   |---|---:|---|---|
+   | READ | 0 | Inner `else`: ALTSTATUS debug call; preserves status in `odata` | Writes status to `data[0]`; returns 1 |
+   | READ | 1 | Inner `if`: sets `odata = 0`; no handler debug call | Writes zero to `data[0]`; returns 1 |
+   | WRITE | 0 | Final outer `else`: ALT. CTRL debug; if `WDCTL_RST` is set, assigns `COMMAND_RESET` and calls the reset helper | No buffer assignment; returns 1 |
+   | WRITE | 1 | Outer `else if`: DRIVE ADDRESS debug; ignores the write | No buffer assignment; returns 1 |
+
+   A READ cannot enter either WRITE body. A WRITE at offset 1 cannot reach either reset operation, regardless of its data byte. The reset helper clears the ATAPI command/phase, pending write, and ring indices. [Edited handler](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c:609), [reset and common tail](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c:784).
+
+2. **The unbraced `else` binds to the inner `if`.**
+
+   Specifically, `else` at line 663 belongs to `if (relative_addr != 0)` at line 620. The closing brace preceding `else if` at line 666 closes the outer READ block; that `else if` belongs to `if (writeflag==MEM_READ)`.
+
+   The two-line `debug(...)` invocation is one expression statement. Its line break does not require braces. Both inner arms currently contain exactly one executable statement; the long comment does not change that.
+
+   I would brace the inner `else` to make future additions easier to review, but its present form is not a branch-binding defect. This is a source-level conclusion; the definition of `debug` is outside the permitted files.
+
+3. **`status_byte()` has no direct device-state mutation, but its complete call chain is not verified.**
+
+   Its body constructs a local integer. It reads image existence, ring occupancy, `write_in_progress`, `error`, and ATAPI command/phase state. It contains no assignment through `d` or `cpu`, no ring consumption, and no interrupt operation. [Status helper](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c:584).
+
+   The interrupt acknowledgement on normal STATUS reads is explicitly **outside** this helper:
+
+   ```c
+   odata = status_byte(d, cpu);
+   ...
+   INTERRUPT_DEASSERT(d->irq);
+   d->int_assert = 0;
+   ```
+
+   Those last two operations occur in the main register handler and are absent from `wdc_altstatus`. Thus calling the shared status helper does not, by itself, include the normal STATUS acknowledgement. [Normal STATUS read](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c:1976).
+
+   The unresolved dependency is `diskimage_exist(cpu->machine, ...)`. Its implementation is absent from all three allowed files. It receives a machine pointer, so its name and apparent purpose are insufficient to prove purity.
+
+   **The defensible conclusion is: no device-state side effect is visible in `status_byte()` itself; transitive side-effect freedom cannot be certified from these files.** I found no evidence that the declined read clears a latch or acknowledges an interrupt.
+
+   If you require a locally provable guarantee that declined reads never invoke this dependency, calculate status only in the READ/offset-0 arm. The current edit does not establish that stronger guarantee.
+
+4. **The declined read explicitly writes one zero byte. Two-byte registration does not make that assignment a two-byte register transfer.**
+
+   The common tail writes `data[0] = odata` on every READ, including the declined one. The dispatcher supplies an `unsigned char *` buffer. Thus `data[0]` is the first byte of this access, and is appropriate for a one-byte register read at either starting offset. Offset 1 does **not** require assigning `data[1]`.
+
+   The registration remains two bytes long. In `memory_rw.c`, the registered-device branch first zeroes the entire requested READ buffer, then clamps the length to the remaining device extent, then invokes the handler. [Registration](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c:2072), [zero-fill and clamp](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:478).
+
+   For an ordinary `len == 2` request delivered to this branch, let `S` be the computed status:
+
+   | Request | Handler receives | Result |
+   |---|---|---|
+   | READ, offset 0 | Offset 0, `len = 2` | Buffer bytes `[S, 0]`; handler supplies only the first byte |
+   | READ, offset 1 | Offset 1, `len = 1` | Original two-byte buffer becomes `[0, 0]`; pre-zeroing covered both bytes before clamping |
+   | WRITE, offset 0 | Offset 0, `len = 2` | Only `data[0]` controls the reset decision; second byte is ignored |
+   | WRITE, offset 1 | Offset 1, `len = 1` | Write is ignored; second byte is not forwarded elsewhere |
+
+   The device-end clamp does not split the remaining byte into another device access. At offset 1, it can emit the existing, rate-limited truncation diagnostic at debug verbosity.
+
+   A **direct handler call** with `len == 2` behaves differently from that complete dispatch path: the handler writes only `data[0]`; `data[1]` retains its incoming contents. The handler itself neither zeroes the full buffer nor checks `len`.
+
+   These are byte-buffer results, not a declaration of supported 16-bit register semantics. The handler performs no endian-aware 16-bit conversion. Whether a particular CPU permits an odd-address halfword access before reaching this code also cannot be established here. The wrapper separately splits translated accesses at its 1-KiB boundary; the PC addresses `0x3f6` and `0x3f7` do not cross that boundary for length two.
+
+   **The width policy remains unpinned.** The present implementation is determinable without approving that policy.
+
+5. **There is no other internal reader of this alternate region in `dev_wdc.c`.**
+
+   The requested searches find the handler definition, comment references, the local `alt_status_addr` declaration, its default/platform-specific assignments, and the callback registration. There is no direct internal call to `dev_wdc_altstatus_access` and no executable literal `0x3f7` read. The other `status_byte()` caller reads the main STATUS register independently.
+
+   The alternate address is assigned through the default calculation and MACPPC, HPCMIPS, and IQ80321 cases. These are address-selection sites, not consumers relying on the former return value. This finding does not establish what guest drivers or other files expect.
+
+   **The new rationale does overclaim its evidence.** The header establishes auxiliary offset 0 and contains the disabled `wd_digin` definition with its PC floppy note. It does not prove “matches no hardware on any layout” or that every correct guest using every registered layout expects a floppy effect. [Header definitions](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/thirdparty/wdcreg.h:65).
+
+   I would narrow those sentences to the decoder defect and the selected emulator policy. I did not inspect `dev_fdc.c`, so its quoted contents remain unverified.
+
+6. **`M_NULL_EFFECT` is the canonical deletion of this repair’s effect, but it is not a sufficient selector audit.**
+
+   Keeping the offset guard and deleting `odata = 0` leaves the earlier status value intact. The common tail then overwrites the dispatcher’s pre-zeroed byte with that status. Consequently, the stated nonzero CORE states discriminate it. It also preserves the new suppression of the offset-1 read diagnostic, making it more isolated than a full reinstatement.
+
+   Your other examples divide as follows:
+
+   | Mutation | Consequence for the reported CORE pair |
+   |---|---|
+   | Change the read guard to `relative_addr > 1` | Offset 1 never declines; both nonzero-status CORE reads fail |
+   | Apply zeroing only when `d->error` is nonzero | Power-on case agrees; armed `0x58` case fails |
+   | Apply zeroing only when `d->error` is zero | Armed case agrees; power-on `0x51` case fails |
+
+   The two status values therefore already vary the truth of `d->error`.
+
+   **There is a concrete quieter candidate supported by those same values: condition zeroing on drive readiness.** For example, retain the outer offset guard but change its body to:
+
+   ```c
+   if (odata & WDCS_DRDY)
+       odata = 0;
+   ```
+
+   Both `0x51` and `0x58` contain `WDCS_DRDY`, so this agrees with the repair in both reported CORE states. In this implementation, readiness comes only from successful `diskimage_exist()`. A selected absent image at initialization instead produces `S = 0x01`, because `d->error = 1`; this conditional repair would incorrectly return that nonzero status.
+
+   This also sharpens the initialization premise: `d->error = 1` guarantees **nonzero** status; `0x51` additionally requires image existence.
+
+   If those two CORE observations are the only offset-1 READ observations, the readiness-conditioned mutant survives the described table while leaving the other three cells unchanged. That is a source-derived candidate survivor, not a measured result. The stated `M_NULL_MEDIUM` failure on ACCEPT rows does not establish coverage of this different, declined-arm-only mutation.
+
+   Other selectors worth checking specifically in the relevant READ/offset-1 observations are:
+
+   | Selector | Variation that could expose conditional zeroing |
+   |---|---|
+   | `d->drive` | Both selected drives |
+   | `d->base_drive` | Primary and secondary controllers |
+   | `d->atapi_cmd_in_progress` | ATA and active ATAPI states |
+   | `d->cur_command` | Including a latched `COMMAND_RESET` |
+   | `d->int_assert` | Pending and non-pending interrupt |
+   | `d->addr_mult`, machine type, CPU byte order | Different mapping/platform configurations |
+
+   I cannot say which of these the full detector never varies without its contents. Variation elsewhere among the 16 rows is insufficient: it must occur where the conditional repair is exercised, with a nonzero status that makes omitting zeroing observable.
+
+   One width trap deserves separate treatment: conditioning the inner assignment on `len == 1` is effectively equivalent for ordinary positive-length offset-1 accesses through this registration. Dispatch already clamps them to one byte. An original `len == 2` request therefore cannot distinguish that mutant at offset 1; its survival would not by itself demonstrate missing coverage.
+
+7. **`return 1` remains correct for the chosen handled-zero READ policy.**
+
+   The registered-device return handling is shared by READ and WRITE:
+
+   ```c
+   res = mem->devices[i].f(...);
+   if (res == 0)
+       res = -1;
+
+   if (res <= 0 && !no_exceptions) {
+       ...
+       return MEMORY_ACCESS_FAILED;
+   }
+   goto do_return_ok;
+   ```
+
+   There is no retry of another registered device and no fall-through to unassigned-address handling after a callback returns zero. Direction changes the diagnostic wording, not this failure decision. [Callback and failure handling](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:583).
+
+   With `MEM_MIPS` and exceptions enabled, a failed **data READ** invokes `mips_cpu_exception(... EXCEPTION_DBE ...)`, just as a failed data WRITE does. Instruction accesses select `EXCEPTION_IBE`; M88K has its own exception branch. `NO_EXCEPTIONS` suppresses this failure/exception branch and can also suppress callback invocation depending on device flags.
+
+   Thus the source supports retaining success for an intentionally zero-valued read. It does **not** independently prove that every resulting read exception hangs a guest: repeated retries depend on guest exception handling. The 19,793-line count and silent retry loop remain your reported measurement, not facts established by reading these three files.

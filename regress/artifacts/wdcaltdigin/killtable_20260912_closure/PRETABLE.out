@@ -1,0 +1,109 @@
+PRE-TABLE BLOCK -- #525 wdcaltdigin, PASS-3 CLASS CLOSURE
+=========================================================
+WRITTEN BEFORE TABLE 1 RUNS, so this file's own mtime proves the order.
+
+WHY THIS TABLE EXISTS.  The ninth seat -- fired because check_stage_panels refused
+the commit at 8/9 -- BUILT `&& (odata & (WDCS_DRDY | WDCS_DRQ))` and scored it 19/19
+against the shipped instrument: a TOTAL ESCAPE.  The round had audited PER BIT, and
+every bit WAS driven both ways; but the predicate is a DISJUNCTION, whose negation
+(DRDY clear AND DRQ clear) held in no row.  Two consecutive passes found one class,
+so this repair owes the CLASS CLOSURE and this table VERIFIES THE ENUMERATION.
+
+------------------------------------------------------------------ THE SPACE
+
+Mutant form:  `if (odata & X) odata = 0;`  -- guard kept, repair conditioned on
+status bits -- for X over the 15 nonzero subsets of {DRDY 0x40, DSC 0x10, DRQ 0x08,
+ERR 0x01}, the four bits status_byte() can set.
+
+Reachable statuses: DRDY and DSC are set TOGETHER (only under diskimage_exist);
+DRQ and ERR are independent.  So {0x00,0x50} x {0,0x08} x {0,0x01}:
+    0x00 0x01 0x08 0x09 0x50 0x51 0x58 0x59
+
+A mutant ESCAPES iff (s & X) != 0 at EVERY CORE status s -- it then zeroes exactly
+where the fix does.
+
+------------------------------------------------------ CORE ROWS AND THEIR STATUS
+
+    status  CORE row (offset 1, want 0x00)   status proven by
+    0x51    CORE_READ_OFF1_POWERON    s1     CONTROL_STATUS_POWERON  a3
+    0x58    CORE_READ_OFF1_ARMED      s4     CONTROL_STATUS_ARMED    s2
+    0x08    CORE_READ_OFF1_EMPTYSLAVE t6     CONTROL_STATUS_EMPTYSLAVE t4
+    0x01    CORE_READ_OFF1_PWR_SLAVE  k0 NEW CONTROL_STATUS_PWR_SLAVE  t7 NEW
+    0x50    CORE_READ_OFF1_SRST       k1 NEW WRITE0_SRST_DRQ_CLEAR   s5
+
+Every status is MEASURED by a row of its own, so the enumeration below is grounded
+in observed values, not in assumed device behaviour.  Probe BASE: 22/22 CONTROL=OK.
+
+------------------------------------------------------- THE ENUMERATION (derived)
+
+DIE -- 12 of 15:
+   DRDY          0x40   killed at 0x08 (t6), 0x01 (k0)
+   DSC           0x10   killed at 0x08 (t6), 0x01 (k0)
+   DRDY|DSC      0x50   killed at 0x08 (t6), 0x01 (k0)
+   DRQ           0x08   killed at 0x51 (s1), 0x01 (k0), 0x50 (k1)
+   DRDY|DRQ      0x48   killed at 0x01 (k0) ONLY      <- M_DRDYDRQ, the measured escape
+   DSC|DRQ       0x18   killed at 0x01 (k0) ONLY
+   DRDY|DSC|DRQ  0x58   killed at 0x01 (k0) ONLY
+   ERR           0x01   killed at 0x58 (s4), 0x08 (t6), 0x50 (k1)
+   DRDY|ERR      0x41   killed at 0x08 (t6) ONLY
+   DSC|ERR       0x11   killed at 0x08 (t6) ONLY
+   DRDY|DSC|ERR  0x51   killed at 0x08 (t6) ONLY
+   DRQ|ERR       0x09   killed at 0x50 (k1) ONLY      <- M_DRQERR, the measured escape
+
+SURVIVE -- 3 of 15, ALL EQUIVALENT:
+   DRDY|DRQ|ERR  0x49   omits only 0x10 (DSC without DRDY) -- UNREACHABLE
+   DSC|DRQ|ERR   0x19   omits only 0x40 (DRDY without DSC) -- UNREACHABLE
+   all four      0x59   omits NEITHER
+   and at status 0x00 all three skip the assignment and still return 0x00, which is
+   indistinguishable from the decline.  No reachable, observable difference exists.
+   *** CORRECTED BY THE CLOSING PASS: the first version said all three differ "at 0x10",
+   which is true of 0x49 only.  The conclusion was unaffected. ***
+
+SOLE CARRIERS, disclosed (the L3 shape): k0 is the only killer of 3 masks, t6 of 3,
+k1 of 1.  That is inherent to a closure where each cell is ONE status value; a
+second row per cell would re-test the same status and add no discrimination.
+
+------------------------------------------------------------------ TABLE LEGS
+
+  BASE        the fix                                   predict 22/22
+  HEAD        the committed dev_wdc.c (clause a)         predict RED on the CORE rows
+  M_DRDY      X = 0x40  (the round's own pass-2 mutant)  predict DIE  (t6, k0)
+  M_DRDYDRQ   X = 0x48  (the ninth seat's escape)        predict DIE  (k0 only)
+  M_DRQERR    X = 0x09  (the second cell)                predict DIE  (k1 only)
+  E_EQUIV49   X = 0x49  (predicted EQUIVALENT)           predict SURVIVE 22/22
+
+The last leg makes the arithmetic FALSIFIABLE IN BOTH DIRECTIONS: if it dies, the
+equivalence derivation is wrong and the reachable-status set is not what status_byte()
+produces.  A leg that disagrees with its prediction is a result, not noise.
+
+---------------------------------------------------------- CLAUSE (e) DISCLOSED
+
+  * M_REG1 (registration 2 -> 1): measured 22/22 by the ninth seat.  Coverage DEBT,
+    not floor -- the returned byte is genuinely the same on the only channel the
+    detector has.  A future narrowing would go green and make #494's arm dead code.
+  * M_LEN1 (`&& len == 1`): EQUIVALENT -- memory_rw.c len-clamps to the device end,
+    so len is always 1 at relative_addr 1.  The #499 width class does NOT apply.
+  * Multi-access / page effects: N/A -- every access is a single lbu/sb.
+
+------------------------------------------------ CLOSING PASS, and its boundary
+
+codex (GPT-6 Astra, max), regress/artifacts/wdcaltdigin/killtable_20260912_closure/
+codex_passE_20260912.txt:  COMPLETE for the declared mask family -- 15 classified, 12 killed,
+3 equivalent, 0/12 non-equivalent escapes.  Completeness in three lines: statuses 01, 08 and 50
+force any survivor to contain ERR, DRQ and one of DRDY/DSC -- exactly 0x49, 0x19, 0x59.
+
+THE PREMISE IT WAS ASKED TO ATTACK -- that the space is the UNDERLYING state, not the status
+byte -- IS ANSWERED BY THE JOIN RULE: the guarded body `odata = 0` has an EMPTY read set, so
+image/ring/write/ATAPI/error/drive contribute ZERO additional joined axes.  "Adding a predicate
+to a mutant cannot manufacture its own floor membership."  Every SINGLE-SOURCE predicate dies
+anyway (W, B, P, A, E, drive-only).
+
+*** THE BOUNDARY, disclosed under clause (e) rather than claimed: this enumeration covers POSITIVE
+DISJUNCTIONS OVER `odata`, not arbitrary Boolean functions of device state.  `!A` (always true
+here -- ATAPI is never active) and `P || W || E` (true at every CORE row) SURVIVE by deduction.
+Both are outside the contract, as stated. ***
+
+memory_rw.c LENGTH CLAMP, flagged by the pass as unverifiable from its permitted files: VERIFIED
+AT SOURCE -- `:495` tests `paddr + len > mem->devices[i].length`, `:523` sets `len =
+mem->devices[i].length - paddr`.  At offset 1 of the two-byte region, len clamps to 1.  (794-line
+file = the fork tree, not the 530-line pristine copy.)

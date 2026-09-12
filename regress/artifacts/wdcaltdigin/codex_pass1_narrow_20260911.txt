@@ -1,0 +1,125 @@
+VERDICT: Approve the literal `2` → `1` edit as withdrawal of the WDC auxiliary decode at offset 1; complete detector and machine-compatibility clearance remains unverified.  
+CODEX_ALTDIGIN_P1_20260911
+
+I read only the five permitted files, changed nothing, and ran no probe. The registration still contains `2` at [dev_wdc.c:2029](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c:2029).
+
+Two premises need correction immediately: the initializer contains **three machine-specific case labels**, and the supplied probe **does not contain the head-select read witness**. Your numbered references to the ATA map, Note 1, PS2 forwarding, and the clamp do point to the stated subjects.
+
+**1. Returning zero can represent device nonresponse, provided its producer is identified correctly.** The emulator completes a read with a numeric result; that does not mean WDC supplied that result. Removing WDC’s address claim is an honest implementation of device nonparticipation at this emulator’s decoding abstraction. It does not simulate electrical high impedance.
+
+The distinction is:
+
+- A registered WDC callback returning zero data still occupies the address.
+- The memory subsystem supplying zero after finding no responder is a platform fallback.
+- Another responder supplying a value is that responder’s contribution.
+
+Consequently, “offset 1 is no longer claimed **by this auxiliary registration**” follows from the edit. “Offset 1 necessarily becomes unmapped” requires additional knowledge of the machine map, including RAM.
+
+The current alias is confirmed: [dev_wdc.c:617](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c:617) computes status, reads bypass the write-offset discrimination, and line 747 assigns that status to `data[0]`.
+
+Your correction concerning registered-device `return 0` is also right: [memory_rw.c:595](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:595) converts it to failure; the following exception branch does not retry another responder. Retaining the registration and returning success without filling data would preserve ownership, so it would not establish the proposed routing property.
+
+There is, however, a qualification **inside your cited unmapped block**: [memory_rw.c:676](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:676) calls `memory_warn_about_unimplemented_addr`, and lines 678–679 can return `MEMORY_ACCESS_FAILED` before zero-fill. That helper’s implementation is outside the permitted files. The explicit MIPS DBE code at 698–704 is indeed disabled.
+
+Thus the verified statement is: **the ordinary outside-RAM fallback zero-fills reads, ignores writes, and contains no active explicit DBE operation in that block; successful completion is subject to the preceding helper.** That qualification does not restore the earlier claim that narrowing inherently causes a bus fault.
+
+No better device-level disposition is demonstrated by these files. A bus model carrying separate value and drive-mask information would support electrical nonresponse more explicitly, but that would require a broader interface change.
+
+**2. The replacement DD7 oracle is constructible, and it observes routing rather than voltage or the returned bit.** Driving DD7 low is still driving it. Moreover, the present `status_byte()` only adds DRDY, DSC, DRQ, and ERR, so its aliased result already has bit 7 clear. A bit-7-clear detector would accept the current behavior. See [dev_wdc.c:584](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c:584).
+
+For actual guest accesses, record:
+
+- The attempted physical address, direction, and original width.
+- The auxiliary registration’s interval and the selected device entry.
+- Callback entry, device instance, relative address, and delivered width.
+- Completion, including any nested forwarding.
+
+The lookup uses an exclusive upper bound at [memory_rw.c:480](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:480), and callback dispatch occurs at line 587. With the narrowed interval `[A, A+1)`, this auxiliary entry cannot match a request starting at `A+1`.
+
+The detector should establish **an observed request, no auxiliary address claim, and no WDC callback contribution through its dispatch chain**, with successful offset-0 accesses proving the observer and device route are live. Recording the attempted request matters: an absent callback record alone could mean the guest never executed the access. Ordinary debug-message silence is unsuitable; the permitted probe itself explains that limitation at [wdc_altoffset_probe.py:670](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/wdc_altoffset_probe.py:670).
+
+An entire-machine “zero WDC contribution” claim additionally requires checking other WDC mappings and forwarding routes. The literal edit proves exclusion from this particular registration.
+
+If another responder returns a byte with bit 7 set, that is compatible with zero WDC contribution. The oracle therefore makes **no unconditional assertion about the guest’s resulting byte**.
+
+**3. The numerical witness changes; the head-invariance predicate does not invert.** First, the supplied artifact explicitly states that no row reads either alternate-region offset at [wdc_altoffset_probe.py:113](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/wdc_altoffset_probe.py:113). It contains offset-1 **write** tests. I cannot authenticate the reported head-select measurements from this file, and I will not infer another filename from the defect ID.
+
+For the witness you describe, assuming the same initial device state, no other responder, and successful zero-fill fallback, the source predicts:
+
+| Observable | Current two-byte registration | Proposed one-byte registration |
+|---|---:|---:|
+| `A+1` read, head 0 | `0x51` | `0x00` |
+| `A+1` read, head 15 | `0x51` | `0x00` |
+| SDH readback after selecting head 15 | `0xaf` | `0xaf` |
+| Equality across the two head selections | True | True |
+
+The SDH implementation supports that unchanged readback at [dev_wdc.c:1914](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c:1914).
+
+An exact `0x51` alias witness would stop observing the alias. **Equality across heads still passes both versions**, so invariance alone cannot detect restoration of the two-byte registration. SDH readback establishes that the head write landed in the main register bank; it does not establish who answered `A+1`.
+
+With another responder, even post-fix head invariance is not an appropriate requirement. Retain head selection as historical witness context or a control, and replace the acceptance criterion with routing exclusion.
+
+**4. The fix needs new read/routing rows and can reuse the existing P1 write-accept rows.** Below, uppercase titles are proposed detector rows, not claims about existing files. Mutant outcomes are source-derived predictions, not measured kills. Each row requires an observed completed access and the stated live initial condition.
+
+| Row | Named mutant | Observable that differs |
+|---|---|---|
+| `A1_READ_WDC_UNCLAIMED` | `M_REWIDEN`: restore registration length 2 | Fixed auxiliary interval excludes `A+1`; mutant interval includes it. In the confirmed WDC witness route, callback count changes from zero to one. |
+| `A1_WRITE_WDC_UNCLAIMED` | `M_REWIDEN` | The same routing difference on a write. Existing offset-1 write handling remains a no-op, so WDC state alone would miss this mutant. |
+| `A0_READ_ALTERNATE_STATUS` | `M_ZERO_ALT_READ`: suppress the status assignment; also `M_CONSTANT_51` | With the attached-drive fixture, reads at `A` report `0x51` initially and `0x58` when armed. Suppressed assignment leaves dispatcher zeros; constant `0x51` fails the armed observation. Require the offset-0 callback route too. |
+| `A0_READ_PRESERVES_PENDING_IRQ` | `M_ACK_ALT_READ`: add the normal Status read’s interrupt-clearing action | Start with a pending interrupt. It remains pending after Alternate Status on the fixed implementation; the mutant clears it. Returned status bytes need not differ. |
+| Existing **“P1 accept 0x3f6 SRST aborts the write: DRQ CLEAR”** | `M_IGNORE_CONTROL_WRITE`; also omission of the writer-clear operation | An armed status of `0x58` becomes `0x50`; under the mutant DRQ remains set. |
+| Existing **“P1 accept 0x3f6 SRST purged the ring: 0xff”** | `M_SKIP_RING_CLEAR` | After reset, the data read returns the empty-ring value `0xff`; the mutant retains the staged first byte `0x71`. |
+| `A0_WRITE_SRST_SIGNATURE` | `M_OMIT_COMMAND_RESET`: remove only the `cur_command = COMMAND_RESET` assignment | In a CD-ROM fixture with non-reset command state and seeded cylinder readback `0x6655`, reset makes cylinder readback `0xeb14`; the mutant leaves `0x6655`. |
+
+The existing P1 titles and expectations are at [wdc_altoffset_probe.py:368](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/wdc_altoffset_probe.py:368). The reset assignment and helper call are distinct operations at [dev_wdc.c:740](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c:740); the helper clears writer and ring state at line 823. The CD-ROM signature readout is at [dev_wdc.c:1874](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c:1874).
+
+The last row matters if claiming coverage of the signature assignment: **neither DRQ nor ring contents changes under `M_OMIT_COMMAND_RESET`**, because the helper still executes. The permitted probe explicitly documents that blind spot. Likewise, an ordinary no-reset control write followed by unchanged status would not prove write acceptance: ignoring the write could produce exactly that observation.
+
+Alternate Status’s pending-interrupt distinction is stated in the draft at [ata2_x3t10_948d.txt:1535](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ata2_x3t10_948d.txt:1535). The normal Status handler actually clears it at [dev_wdc.c:1938](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c:1938), making a status-byte-only oracle insufficient for that mutant.
+
+Your width argument checks out for the shown dispatch route. [memory_rw.c:492](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:492) zeroes the incoming read length before the clamp at **line 523**. The callback uses the first byte. Consequently, the wide-read buffer remains `{status, 0…}`, and wide writes retain their first-byte effect. [dev_ps2_spd.c:73](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_ps2_spd.c:73) forwards its incoming `len` to the auxiliary address, establishing the relevant forwarding path.
+
+After narrowing, every positive-length access delivered through this registration reaches the callback at offset zero with `len == 1`. Therefore `data[0]` and `data[len - 1]` are equivalent there, whether the mutation concerns input or output. **Line 523 is the correct warrant.** This supports retirement of that reachable multibyte-callback case. It does not establish that wide guest accesses disappeared or that all width behavior is now hardware-accurate. The permitted files do not contain the actual defect-management row, so its title and recorded closure remain unverified.
+
+Two detector-packaging points also matter:
+
+- The existing probe’s “committed” expectations describe the older offset-1 write-reset defect. Today’s callback already rejects that write at line 622. Reusing its unchanged baseline expectations for this new before/after comparison would mis-score the baseline.
+- Its failure result is printed, while `ALTOFF_DET_DONE` is unconditional and failed comparisons do not produce an explicit failing exit status. See [wdc_altoffset_probe.py:682](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/wdc_altoffset_probe.py:682). Neither that token nor ordinary process completion is sufficient evidence of detector acceptance.
+
+**5. No all-machine clearance can be established from the permitted files.** The actual address selection at [dev_wdc.c:2003](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c:2003) is:
+
+| Selection | Auxiliary address `A`, with `D = devinit->addr` | Removed byte |
+|---|---:|---:|
+| Default | `D + 0x206` | `D + 0x207` |
+| `MACHINE_MACPPC` | `D + 0x160` | `D + 0x161` |
+| `MACHINE_HPCMIPS`, when `D == 0x14000180` | `0x14000386` | `0x14000387` |
+| `MACHINE_IQ80321` | `D + 0x402` | `D + 0x403` |
+
+Other HPCMIPS addresses retain the default. These are **three explicit overrides plus the default**, not five machine-specific cases. If “five machines” refers to a separate census of callers, that census is unavailable here.
+
+The literal length is correct: the auxiliary callback does not divide by `addr_mult`; the main callback does at line 1082. The overrides change the address, and the auxiliary registration remains independent of the main region’s multiplied length.
+
+For PS2, the visible SPD aperture ends where its hidden WDC base begins, so that SPD aperture itself does not occupy the downstream auxiliary `A+1`. This follows from [dev_ps2_spd.c:103](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_ps2_spd.c:103). It says nothing about every other machine registration.
+
+There is also a relevant warning already recorded in [dev_wdc.c:644](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c:644): comments describe historical floppy-register contention and a curtailed FDC range. Those comments justify investigating ownership; they do not prove a current overlapping responder.
+
+Accordingly, I cannot name a verified machine harmed by exposing another responder, and I cannot certify that none exists. That requires the actual registration maps, backing-memory boundaries, and routing outcomes for each configuration. **Address arithmetic alone cannot establish what answers the vacated byte.**
+
+**6. The round may claim adoption of a draft recommendation, with the abstraction stated.** The document identifies itself as Revision 4c, March 18, 1996, and explicitly says it is incomplete and unapproved at [ata2_x3t10_948d.txt:7](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ata2_x3t10_948d.txt:7).
+
+Your address-based citation is correct: the control-block row at line 1495 selects Note 1, whose text is at [line 1529](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ata2_x3t10_948d.txt:1529). Searching this text for “Drive Address” produced no match.
+
+The recommendation supports choosing nonresponse for the obsolete address. The subsequent DD7 sentence imposes a **conditional “shall” on a device that does respond**, within this unapproved draft. Calling the first choice recommended must not erase that distinction.
+
+The round should not claim:
+
+- That a finalized ATA-2 requirement mandates removing the register.
+- That every response to the obsolete address is forbidden.
+- That zero or a cleared bit 7 demonstrates electrical high impedance.
+- That every post-fix `A+1` read returns zero or every access succeeds.
+- That the change proves complete ATA compatibility, fixes floppy ownership, or preserves every machine’s responder.
+- That head invariance, existing write-only rows, or unexecuted proposed rows validate the new read-side contract.
+
+A defensible change description is:
+
+> Narrow the WDC auxiliary registration to the Alternate Status/Device Control byte, following the nonresponse recommendation for the obsolete control-block address in ATA-2 Working Draft Revision 4c. Offset 1 is excluded from this auxiliary decode. Its eventual responder and read value depend on the surrounding machine map.

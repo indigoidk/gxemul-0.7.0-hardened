@@ -1,0 +1,69 @@
+VERDICT: The ERR-only row distinguishes the mutant, but DIAGNOSE never reaches its arm without an image. These files do not prove diskless instantiation; selecting the absent slave avoids another emulator session.
+
+CODEX_525_DRDY_20260911
+
+I read only the four specified working-tree files. These are source-derived conclusions; I ran no emulator or mutant and wrote no file.
+
+**1. Is the controller instantiated without an IDE image?**
+
+**The permitted files do not settle the machine-level question.** Once `DEVINIT(wdc)` is called, it registers both register regions regardless of image presence. Its image-existence check guards only geometry retrieval. But the Malta code that decides whether to invoke this initializer is outside the permitted files. [dev_wdc.c:2073](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c:2073), [dev_wdc.c:2112](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c:2112)
+
+The current probe always supplies an IDE image, so it provides no diskless-launch evidence. [wdc_altdigin_probe.py:255](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/wdc_altdigin_probe.py:255)
+
+**2. Does no-image DIAGNOSE reach line 1054?**
+
+**No. There is exactly the earlier guard you asked about—but it produces the status you need.**
+
+An enabled controller dispatches a command-register write to `wdc_command()`. Its order is:
+
+1. Set `cur_command`, then clear `d->error` at line 933.
+2. Call `wdc_new_command_reset()`.
+3. Detect the missing image, set `d->error |= WDCE_ABRT`, set `int_assert = 1`, and **return before the command switch**.
+
+Thus DIAGNOSE’s arm is unreachable without an image. The resulting error-register value is **`0x04`**, while the resulting status-register value is **`0x01`**. The entry clear does not run again afterward. [dev_wdc.c:2024](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c:2024), [dev_wdc.c:928](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c:928), [wdcreg.h:98](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/thirdparty/wdcreg.h:98)
+
+There is another correction to your premise: **initialization already sets `d->error = 1`.** A freshly initialized controller with no image starts at `0x01`, assuming no intervening state changes. Your hypothetical “no image and no error” state is vacuous, but that is not this initializer’s state. [dev_wdc.c:2079](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c:2079)
+
+**3. Is the resulting status exactly `0x01`?**
+
+**Yes, once that command reaches the enabled controller.** The reset helper clears the ring, writer, ATAPI flag, and ATAPI phase before the missing-image return. Consequently:
+
+- Missing image contributes neither DRDY nor DSC.
+- The cleared transfer state contributes no DRQ.
+- Nonzero `d->error` contributes ERR.
+
+`status_byte()` tests whether the error is nonzero; it does not copy the error-register bits into status. [dev_wdc.c:915](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c:915), [dev_wdc.c:584](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c:584)
+
+`int_assert` contributes no status bit. The tick function asserts the IRQ; reading `+7` deasserts it and clears `int_assert`, without clearing `d->error`. Therefore that read leaves subsequent alternate-status reads at `0x01`. [dev_wdc.c:151](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c:151), [dev_wdc.c:2024](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c:2024)
+
+**4. Does the CORE row discriminate, with offset 0 still working?**
+
+**Yes.** The handler calculates status first. The working-tree repair zeroes it only for a nonzero read offset; offset 0 retains it. The common read tail returns that byte. [dev_wdc.c:617](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c:617), [dev_wdc.c:698](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c:698), [dev_wdc.c:838](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c:838)
+
+| Observation in ERR-only state | Working-tree fix | Stated mutant |
+|---|---:|---:|
+| Normal status, `+7` | `0x01` | `0x01` |
+| Alternate status, offset 0 | `0x01` | `0x01` |
+| Drive Address, offset 1 | **`0x00`** | **`0x01`** |
+
+For the mutant, `0x01 & WDCS_DRDY` is zero, so it leaves the status byte intact.
+
+**Your proposed two rows do not observe offset 0 in this state.** Include `ACCEPT_READ_OFF0_NOIMG`, expecting `0x01`, to test that requirement explicitly. The `+7` control establishes normal-register liveness, but does not exercise alternate offset 0.
+
+**5. What differs, and could any existing row catch it?**
+
+The differing observable is **the byte loaded into the register scored by `CORE_READ_OFF1_NOIMG`: fixed `0x00`, mutant `0x01`.**
+
+**No existing row among the 16 catches this specific mutant.** The only two offset-1 reads occur with status `0x51` and `0x58`. Both have DRDY set, so the mutant still zeroes both results. Its change affects neither the offset-0 reads nor the write paths or other controls. **16/16 is the source-predicted result, not a measurement I performed.** [wdc_altdigin_probe.py:133](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/wdc_altdigin_probe.py:133), [wdc_altdigin_probe.py:164](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/wdc_altdigin_probe.py:164)
+
+**6. Is there a cheaper route?**
+
+**Yes: select the absent slave on the existing controller.** Writing `0xb0` to `wd_sdh` selects drive 1. That register-write path has no image-presence guard and changes neither error nor transfer state. Status checks the newly selected drive’s image. The fixture supplies one IDE image; the new status control should enforce the empty-slave assumption. [dev_wdc.c:2006](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c:2006), [wdc_altdigin_probe.py:255](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/wdc_altdigin_probe.py:255)
+
+For **your exact `0x01` expectation**, insert the selection and observations immediately after the existing power-on offset-1 read, before the first `arm_a_write()`. At that point the FIFO signature bytes have been consumed, no command has cleared the initial error, and no transfer is armed. Selecting the empty slave therefore yields `0x01`. The following `arm_a_write()` already writes `0xa0` to select drive 0 again. **No DIAGNOSE, reset, separate restore, or new session is needed.** [wdc_altdigin_probe.py:124](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/wdc_altdigin_probe.py:124), [wdc_altdigin_probe.py:95](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/wdc_altdigin_probe.py:95)
+
+There is also an easy **append-at-the-end alternative**: after W2’s final data read, select the empty slave. The write remains armed, seven staged bytes remain queued, and error is zero. Status becomes **`0x08`**; normal status and offset 0 should return `0x08`, while offset 1 should return zero. The mutant returns `0x08`. **ERR is not the only usable bit: DRQ is independent of image presence.** [wdc_altdigin_probe.py:148](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/wdc_altdigin_probe.py:148), [dev_wdc.c:584](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c:584)
+
+Reset alone cannot clear DRDY while the selected image remains present: DRDY is recomputed from image existence.
+
+Finally, the named probe currently creates **one `Emu`**, and the gate invokes it once. Preserve the existing result registers when adding observations, extend their collection, and deliberately update the gate’s literal row count from 16 to **19** if adding CONTROL, ACCEPT, and CORE. [wdc_altdigin_probe.py:266](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/wdc_altdigin_probe.py:266), [gate_sh_rounding.sh:1457](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gate_sh_rounding.sh:1457), [gate_sh_rounding.sh:1485](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gate_sh_rounding.sh:1485)

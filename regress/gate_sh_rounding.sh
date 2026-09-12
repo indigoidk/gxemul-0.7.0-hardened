@@ -1428,6 +1428,93 @@ else
     fi
 fi
 
+# ---------------------------------------------------------------------------
+# #525 (wdcaltdigin): the wdc alt-ctrl handler never decoded its offset ON THE
+# READ SIDE.  `relative_addr' was tested in exactly ONE place -- inside the
+# `else' of `writeflag == MEM_READ' -- so a READ of offset 1, the Drive Address
+# register, returned the ALT-STATUS byte: a different register's value, from an
+# offset the handler never looked at.  THE SYMMETRIC CELL OF #494, which closed
+# the WRITE half of that same `if' and left this one open.
+#
+# ATA-2 X3T10/0948D Note 1 recommends a device NOT RESPOND to a read here and,
+# if it does, NOT DRIVE DD7.  `odata = 0' leaves bit 7 clear, so the returned
+# value satisfies the one constraint the standard places on a device that
+# answers; WHICH non-DD7 value is emulator policy, and the comment says so.
+#
+# THE STATUS BYTE BEING NONZERO IS LOAD-BEARING, NOT INCIDENTAL.  The mutant
+# that keeps the offset guard and deletes `odata = 0' returns the status byte S;
+# if S were 0 the fixed and broken builds would return the same byte and the row
+# would be vacuous.  d->error = 1 at init gives S = 0x51, armed 0x58.
+#
+# Measured in regress/artifacts/wdcaltdigin/killtable_20260911/: HEAD 14/16,
+# fix 16/16, M_REINSTATE = HEAD, M_NULL_MEDIUM fails a DIFFERENT pair (the two
+# ACCEPT rows) -- all four legs score 14/16, so the discrimination lives in the
+# ROW IDENTITY and not the score.
+#
+# *** THIS BLOCK SAID "Clause (d) is N/A-WITH-REASON ... the enumeration is EMPTY".
+# BOTH HALVES WERE WRONG, AND THE COMMIT THAT CARRIED THE SENTENCE REFUTED IT. ***
+#   (1) The body reading nothing does not empty the floor: DEPENDS-ON crosses the
+#       guard's predicates with the state the REPAIR PATH reads, and `odata' is
+#       composed from four independently settable sources (image present, DRQ
+#       sources, d->error).  (2) "`!= 0' admits no weakening" answers only the
+#       OPERAND-weakening form.  The canonical clause-(d) shape is an ADDED
+#       CONJUNCT -- `if (odata & WDCS_DRDY)' -- which this very round built and
+#       scored 18/19, forty lines below the sentence that declared it impossible.
+#   Found by the ninth seat, which then BUILT `&& (odata & (WDCS_DRDY|WDCS_DRQ))'
+#   and scored it 19/19 -- a total escape the per-bit audit could not see, because
+#   the predicate is a DISJUNCTION whose negation held in no row.
+#
+# THE ENUMERATION IS NOT EMPTY; IT IS FIFTEEN MASKS AND IT IS CLOSED.  Every
+# `if (odata & X)' over the four settable status bits was derived against the
+# five MEASURED CORE statuses {0x51 0x58 0x08 0x01 0x50}: 12 die, 3 survive and
+# all 3 are EQUIVALENT (they differ only at 0x00, where leak == decline, or at
+# DSC-without-DRDY, which status_byte() cannot produce).  The derivation and the
+# measured legs: regress/artifacts/wdcaltdigin/killtable_20260912_closure/.
+ADLOG=$LOGDIR/gate_wdc_altdigin.log
+ADIMG=$LOGDIR/wdc_altdigin_scratch.img
+python3 -u wdc_altdigin_probe.py "$PMAX" GATE "$ADIMG" "$LOGDIR/altdigin" > "$ADLOG" 2>&1 || true
+
+if ! grep -q "WDC_ALTDIGIN_RESULT=" "$ADLOG"; then
+    note "wdc_altdigin probe produced no result line; last lines follow"
+    tail -5 "$ADLOG" | sed 's/^/       /'
+    check "wdc_altdigin probe completed" "no" "yes"
+else
+    grep -E " PASS | FAIL " "$ADLOG" | sed 's/^/       /'
+    adres=$(grep -o "WDC_ALTDIGIN_RESULT=[0-9]*/[0-9]*" "$ADLOG" | tail -1 | cut -d= -f2)
+
+    #  *** PARSE BEFORE SCORE -- the same guard the wdcflood section above carries,
+    #  and for the same measured reason: a result line that EXISTS but is MALFORMED
+    #  still satisfies the outer grep, `adres' is then EMPTY, and both ${adres%/*}
+    #  and ${adres#*/} expand to the empty string -- so `check "rows correct" "" ""'
+    #  PASSES while nothing was measured. ***
+    if [ -z "$adres" ]; then
+        note "wdc_altdigin result line present but unparseable; last lines follow"
+        tail -3 "$ADLOG" | sed 's/^/       /'
+        check "wdc_altdigin result parses" "no" "yes"
+    else
+        check "wdc_altdigin result parses" "yes" "yes"
+
+        adctl=$(grep -o "WDC_ALTDIGIN_CONTROL=[A-Z]*" "$ADLOG" | tail -1 | cut -d= -f2)
+        check "wdc_altdigin control: liveness and devsig" "${adctl:-missing}" "OK"
+
+        #  DENOMINATOR PINNED TO A LITERAL.  A gate that trusts the probe's own
+        #  denominator cannot tell a probe that LOST rows from one that never had
+        #  them -- which is this file's own padded-column lesson one level up.
+        #  *** PIN MOVED 16 -> 19 ON 2026-09-11 (#525 pass 2), DELIBERATELY. ***  The
+        #  probe gained a three-row phase that drives the offset-1 decline with DRDY
+        #  CLEAR, by selecting the ABSENT SLAVE (0xb0 -> wd_sdh).  Without it the
+        #  one-token mutant `if (odata & WDCS_DRDY) odata = 0;` swept all 16 rows:
+        #  every earlier row drives DRDY SET (0x51 / 0x58), so the mutant zeroed
+        #  anyway and was invisible BY CONSTRUCTION.  A pin that follows the probe
+        #  cannot tell a probe that GAINED rows from one that LOST them, which is
+        #  why the literal moves by hand and says why.
+        #  PIN 19 -> 22 (2026-09-12, #525 pass 3): the 0x01 cell (absent slave at
+        #  power-on) and the 0x50 cell (post-SRST), closing the status-bit class.
+        check "wdc_altdigin rows run"     "${adres#*/}" 22
+        check "wdc_altdigin rows correct" "${adres%/*}" "${adres#*/}"
+    fi
+fi
+
 #  *** A SOURCE GREP, BECAUSE A STEP-BASED PROBE CANNOT SEE CHANNEL SEMANTICS. ***
 #  `fatal(` -> `debug(` at any of the six sites scores a CLEAN SWEEP against every row
 #  above: they all single-step, and debug() always prints under stepping (its early-out

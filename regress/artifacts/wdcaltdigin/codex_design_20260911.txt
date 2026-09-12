@@ -1,0 +1,326 @@
+VERDICT: The four-cell table is correct. The registered-device fault is live, but its measurement does not establish narrowing behavior. The supplied header path is missing.
+CODEX_ALTDIGIN_20260911
+
+The exact path `C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\src\include\wdcreg.h` returned “The system cannot find the file specified”; an exact-path existence check also returned false. I did not look for a replacement. Consequently, I can verify three files and the WDC comment’s quotation of the header, but cannot independently verify the header itself.
+
+This is a source review. I did not inspect the referenced artifacts, execute detectors, or change any file.
+
+Your cell table survives the source check.
+
+In [dev_wdc.c:609](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c:609), `relative_addr` occurs in exactly one executable test within `DEVICE_ACCESS(wdc_altstatus)`: line 622. That test is reached only when the initial `writeflag == MEM_READ` condition is false.
+
+Let **S** denote the status byte produced by `status_byte(d, cpu)`.
+
+| Cell | Actual disposition |
+|---|---|
+| WRITE, offset 0 | Reaches Alt Ctrl. If `idata & WDCTL_RST`, assigns `COMMAND_RESET` and calls `wdc_new_command_reset()`, lines 740–742. Correct routing and the settled #481 reset behavior. |
+| WRITE, offset 1 | Enters #494’s decline arm. Emits its debug message, performs neither reset action, and returns 1. |
+| READ, offset 0 | Returns S in `data[0]`. |
+| READ, offset 1 | **Also returns S in `data[0]`. No read-side offset decoding exists.** |
+
+“Alt Ctrl, correct” should remain scoped to that routing and reset behavior; this function does not implement every Device Control bit.
+
+The common tail does exactly what your reading says:
+
+```c
+746: if (writeflag == MEM_READ)
+747:     data[0] = odata;
+749: return 1;
+```
+
+It neither rejects offset 1 nor replaces S with zero. The earlier `idata = data[0]` does not change that conclusion. The `addr_mult` division and `io_enabled` gate at lines 1082–1085 belong to the separate main WDC handler, not this alternate-register handler.
+
+The registered-device exception claim is correct, with architecture and access-mode qualifications.
+
+After invoking a matched device handler, [memory_rw.c:595](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:595) contains:
+
+```c
+595: if (res == 0)
+596:     res = -1;
+```
+
+Its failure branch contains these statements:
+
+```c
+603: if (res <= 0 && !no_exceptions) {
+604:     debug("[ %s device '%s' addr %08lx "
+605:         "failed ]\n", writeflag?
+606:         "writing to" : "reading from",
+607:         mem->devices[i].name, (long)paddr);
+608: #ifdef MEM_MIPS
+609:     mips_cpu_exception(cpu,
+610:         cache == CACHE_INSTRUCTION?
+611:         EXCEPTION_IBE : EXCEPTION_DBE,
+612:         0, vaddr, 0, 0, 0, 0);
+613: #endif
+```
+
+The `MEM_M88K` branch begins at line 614; its exception call is:
+
+```c
+620:     m88k_exception(cpu, cache == CACHE_INSTRUCTION
+621:         ? M88K_EXCEPTION_INSTRUCTION_ACCESS
+622:         : M88K_EXCEPTION_DATA_ACCESS, 0);
+```
+
+The failure branch then returns:
+
+```c
+624:     return MEMORY_ACCESS_FAILED;
+```
+
+**Those exception calls are live conditional-compilation branches, not inside an `#if 0`.** For an ordinary data access with `NO_EXCEPTIONS` clear, a registered handler returning zero causes the MIPS DBE call or the M88K data-access exception call.
+
+After a matched device, line 626 instead goes to `do_return_ok` when the failure branch is not taken. Neither outcome resumes the device search or falls through to unassigned-address handling.
+
+The qualification matters: `NO_EXCEPTIONS` suppresses this failure branch and can also suppress the handler invocation at lines 583–589. A debugger-style read using that flag is therefore not automatically evidence that the device handler ran.
+
+The comment’s **path explanation** is verified. The exact 19,793 count, guest retry loop, and default-verbosity silence are not independently verified by these files. There is a `debug()` call matching the reported device-failed messages, but the logging implementation and guest exception handling are outside the permitted scope. A finite diagnostic count also does not, by itself, prove an endless loop.
+
+The narrowing inference needs a narrower claim.
+
+Failing to match a registered device proceeds beyond the device search. It does **not** manufacture a failed device-handler result.
+
+For the ordinary out-of-RAM path, [memory_rw.c:676](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:676) says:
+
+```c
+676: if (paddr >= mem->physical_max && !no_exceptions)
+677:     if (memory_warn_about_unimplemented_addr
+678:         (cpu, mem, writeflag, paddr, len))
+679:         return MEMORY_ACCESS_FAILED;
+
+681: if (writeflag == MEM_READ) {
+682:     /*  Return all zeroes? (Or 0xff? TODO)  */
+683:     memset(data, 0, len);
+```
+
+The proposed MIPS exception below that zero-fill is the disabled one:
+
+```c
+685: #if 0
+```
+
+Inside that disabled section:
+
+```c
+701: mips_cpu_exception(cpu,
+702:     EXCEPTION_DBE, 0, vaddr, 0,
+703:     0, 0, 0);
+```
+
+It ends at line 706. The write-side commentary and continuation are:
+
+```c
+709: /*  Hm? Shouldn't there be a DBE exception for
+710:     invalid writes as well?  TODO  */
+
+712: goto do_return_ok;
+```
+
+And:
+
+```c
+784: do_return_ok:
+785:     return MEMORY_ACCESS_OK;
+```
+
+Thus, **if this ordinary gap path is reached and the warning helper permits continuation**, reads are zero-filled, writes are ignored, and the access returns success. Under those conditions, narrowing produces structural DECLINE, not the registered-device FAULT.
+
+There are two reasons not to turn that into an unconditional statement about A:
+
+- `memory_warn_about_unimplemented_addr()` can return failure **before the read is zero-filled**. Its implementation is not in the permitted files, so its diagnostics, stopping behavior, and conditions remain unsettled.
+- Removing WDC ownership does not establish an ordinary out-of-RAM gap. Another device might own the address; an address within RAM can follow RAM access; this file also has MIPS cache and PROM exceptions to the ordinary fallback.
+
+**Citing the 19,793 registered-device failures against narrowing would therefore be a wrong record.** Conversely, calling narrowing universally *silent* DECLINE is not established by the available source.
+
+The architecture record should read as follows:
+
+| Memory implementation | Failed registered data access, exceptions enabled |
+|---|---|
+| `MEM_MIPS` | Calls `mips_cpu_exception(... EXCEPTION_DBE ...)`, then returns failure. |
+| `MEM_M88K` | Calls `m88k_exception(... M88K_EXCEPTION_DATA_ACCESS ...)`, then returns failure. |
+| `MEM_ALPHA` | No equivalent exception dispatch here; returns failure. |
+| Other architecture variants | No additional architecture-specific exception dispatch appears in this branch. |
+
+So member 5 exists through this mechanism for a WDC installation using the MIPS or M88K implementation. It is **not established as a portable WDC disposition across architectures**. Returning `MEMORY_ACCESS_FAILED` is not itself proof of a guest architectural exception on Alpha or elsewhere.
+
+The permitted files do not provide a census of machines that actually install WDC. `DEVINIT(wdc)` contains machine-specific address adjustments, but those branches are not evidence of actual callers. I therefore cannot certify a WDC installation on M88K merely because the generic M88K failure mechanism exists.
+
+I rank **B first for this repair under the available evidence**, and A second pending evidence about the released address.
+
+B has a defined result independent of which fallback would handle the released address: decline the offset-1 read, return byte **`0x00`**, and retain handler return value **1**.
+
+A concrete B would retain the unconditional S calculation and the common tail, replacing the initial read arm with:
+
+```c
+if (writeflag == MEM_READ) {
+    if (relative_addr != 0) {
+        odata = 0;
+    } else {
+        debug("[ wdc: read from ALTSTATUS: 0x%02x ]\n",
+            (int)odata);
+    }
+} else if (relative_addr != 0) {
+    /* Existing #494 write-decline arm. */
+```
+
+The existing Alt Ctrl arm follows unchanged.
+
+Zero’s warrant is the emulator’s deterministic declined-read convention: #95 pre-zeroes registered-device read buffers, and the ordinary unimplemented-address path also chooses zero. **That is an emulator policy, not proof that a real Drive Address or floppy register must read zero.** The latter would require implementation and hardware evidence absent here.
+
+Crucially, #95 alone does not implement B. Leaving the new decline arm empty retains S in `odata`; the common tail then overwrites the pre-zeroed first byte with S. Explicitly replacing `odata` is the operative effect in this formulation.
+
+A has a stronger ownership property: WDC ceases claiming an unimplemented byte. Its registration must, however, be evaluated with the actual surrounding map and fallback behavior. This ranking is about establishing the resulting behavior, not the number of changed lines.
+
+Under A, #494’s offset arm becomes unreachable **through that registration**. I would remove that arm and move a shortened historical account beside the one-byte registration:
+
+- Explain that the former two-byte registration exposed offset 1 to this handler.
+- Preserve the witness and kill-table references, including the independently observable signature-latch effect.
+- Explain that narrowing now excludes that address.
+- Preserve the registered-return-zero finding explicitly as a finding about the former registered path.
+
+Deleting executable dead code does not require deleting the measured finding. Leaving a long comment that describes the old exposure as currently reachable would be misleading. The permitted files do not establish whether external direct callers of the handler exist, so the reachability claim should explicitly concern registered memory dispatch.
+
+The ownership issue is separable from stopping this alias.
+
+The FDC quotation is verified directly in [dev_fdc.c:49](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_fdc.c:49):
+
+```c
+#define DEV_FDC_LENGTH 6 /*  TODO 8, but collision with wdc  */
+```
+
+Its registration uses `DEV_FDC_LENGTH` at lines 126–128. Merely shrinking WDC therefore does not extend FDC to cover its offsets 6 or 7.
+
+The claimed `wd_digin` quotation appears secondhand in WDC’s comment at lines 647–650, but the specified header could not be opened. **“Verified from both sides” is not a result this review can report.**
+
+B can stop returning ATA status at offset 1 while ownership remains unresolved. A can remove WDC’s ownership without implementing FDC, but classifying the resulting access requires map and fallback evidence. Neither repair, by itself, resolves the floppy collision or implements digital input.
+
+Width is not rejected by registration size.
+
+The dispatcher matches the **starting address**, then zeroes the original read buffer and clamps the handler’s length. [memory_rw.c:480](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:480) contains:
+
+```c
+480: if (paddr >= mem->devices[i].baseaddr &&
+481:     paddr < mem->devices[i].endaddr) {
+```
+
+Followed by:
+
+```c
+491: if (writeflag == MEM_READ)
+492:     memset(data, 0, len);
+
+494: paddr -= mem->devices[i].baseaddr;
+495: if (paddr + len > mem->devices[i].length) {
+```
+
+And the actual truncation:
+
+```c
+523:     len = mem->devices[i].length - paddr;
+```
+
+The matched-device path subsequently returns without dispatching the truncated suffix to another address.
+
+For accesses reaching this dispatcher as one chunk:
+
+| Offset, requested width | HEAD | A: registration 1 | B: registration 2, read decline |
+|---|---|---|---|
+| 0, 1 | Handler length 1. READ `[S]`; WRITE uses `data[0]`. | Same. | Same. |
+| 1, 1 | Handler length 1. READ `[S]`; WRITE declined. | No WDC dispatch; fallback determines result. | Handler length 1. READ `[0]`; WRITE declined. |
+| 0, 2 | Handler length 2. READ `[S, 0]`; WRITE uses only `data[0]`. | **Clamped to length 1.** READ still `[S, 0]`; WRITE still uses only `data[0]`. | Handler length 2. READ `[S, 0]`; WRITE uses only `data[0]`. |
+| 1, 2 | Clamped to length 1. READ `[S, 0]`; WRITE declined. | No WDC dispatch; fallback determines result. | Clamped to length 1. READ `[0, 0]`; WRITE declined. |
+
+The arrays describe buffer bytes, not an endian-independent guest integer. Under A’s ordinary gap fallback, the offset-1 reads are all zero and writes are ignored, subject to the earlier qualifications.
+
+Therefore:
+
+- **A guarantees a one-byte handler call for positive-width accesses beginning at its sole registered byte.**
+- **A does not reject guest two-byte accesses.** It truncates them and reports success through this path.
+- Neither A nor B treats a two-byte access as two independently decoded register accesses.
+- A byte-result-only test at offset 0, width 2 cannot distinguish A from HEAD or B: all return `[S, 0]`.
+
+Earlier CPU alignment or translation handling can prevent or split an instruction before this point. These files do not establish that every geometrical combination is a legal guest instruction on every machine.
+
+For a denominator, distinguish contained accesses from boundary probes:
+
+| Domain | Number of combinations |
+|---|---:|
+| HEAD/B, wholly contained positive-width accesses | **6:** `(0,1)`, `(0,2)`, `(1,1)`, each READ and WRITE |
+| HEAD/B, starts `{0,1}` × requested widths `{1,2}` × directions | **8**, including the two offset-1 width-2 boundary probes |
+| A, wholly contained positive-width accesses | **2:** offset 0, width 1, READ and WRITE |
+
+Registration length does not generally limit requested `len` to `{1,2}`. Eight is an explicitly bounded test domain, not all possible requests.
+
+Given only your statement that existing rows use `len == 1`, they can cover **at most 4/6** contained HEAD combinations, or **4/8** of that boundary-inclusive domain. A row issuing only one distinct tuple covers **1/6** or **1/8**, irrespective of repetition. I cannot establish the actual aggregate numerator without reading the rows.
+
+The detector needs observable differences, not just visits to the affected code.
+
+For the proposed B, the clause-(d) mutant is exact:
+
+> **B-null-effect:** Keep `if (relative_addr != 0)` and its branch, but remove `odata = 0`. Keep the unconditional S calculation and common tail. Offset-1 reads again return S.
+
+A declined read must use a fixture with **S ≠ 0** to kill that mutant. If S is zero, fixed and broken implementations return the same byte.
+
+A has no separate `if` guard and effect statement in its literal `2 → 1` edit. Changing 1 back to 2 is reversion, not an independent guard-kept/effect-removed mutation. A coherent structural analogue is:
+
+> **A-null-exclusion:** Keep the one-byte registration, but restore an additional mapping of the released byte to WDC. The original range restriction remains; its intended exclusion is defeated.
+
+For example, a second one-byte registration at the released address using this handler restores a status alias. That mutant must be described as a **structural null**, not represented as deleting an effect statement that A does not contain. Checking only that the original registration still says `1` would miss it.
+
+For “null medium,” two meanings require different treatment:
+
+- **No attached disk/backend:** This is a legitimate fixture. The fixed build should pass, and the old or nulled repair should still fail when S is made nonzero. Disklessness does not imply zero status: initialization sets `d->error = 1` at line 1994, and `status_byte()` includes `WDCS_ERR` when `d->error` is set at lines 594–595. Establish the nonzero control explicitly.
+- **A null test vehicle that returns zero for every read without exercising WDC:** The detector must reject it through a legal offset-0 read expected to return nonzero S. An offset-1-zero assertion alone accepts this null vehicle.
+
+The source files do not define your project’s meaning of “null medium”; neither interpretation should silently substitute for the other.
+
+The following is a concrete row specification for B. **These are predicted kills, not measured kills.** Use normal dispatched accesses with `NO_EXCEPTIONS` clear, controlled state, and an independently established expected S. “Handler length” and invocation counts require dispatch instrumentation; guest data alone does not expose them.
+
+| Row | Required observation | Named mutant and differing observable |
+|---|---|---|
+| **R1-byte**, offset 1, READ, width 1; run with a backend and diskless with S ≠ 0 | Returned byte 0; access succeeds. Pair with a legal nonzero offset-0 control. | **HEAD**, **verbatim reinstatement**, **B-null-effect**, or removing the read offset guard: returned byte becomes S. Returning 0 from the declined handler instead: access result becomes failure; MIPS/M88K additionally dispatch the relevant exception. |
+| **R0-byte**, offset 0, READ, width 1; S ≠ 0, IRQ pending | Exact S, with the pending IRQ preserved. | Make the new decline guard always true or invert it: byte becomes 0. Remove the common read assignment or substitute an all-zero null vehicle: byte becomes 0. Substitute ordinary STATUS-read handling: IRQ is deasserted even though the status byte can remain identical. |
+| **W0-byte**, offset 0, WRITE, width 1; reset and non-reset sublegs | Reset subleg performs both the command-latch assignment and helper clearing. A non-reset `WDCTL_4BIT` subleg preserves them. | Misroute writes through the read arm: reset effects disappear. Delete helper: writer/ring/phase survive. Delete command assignment: command latch survives. Restore the wrong reset-bit test: the non-reset subleg changes state. |
+| **W1-byte**, offset 1, WRITE, width 1 | Reset-bearing input changes neither writer/ring state nor command/signature latch. | Remove #494’s decline: reset effects appear. Guard only the helper: command/signature latch changes while ring state stays unchanged. **This row does not kill B-null-effect or HEAD’s read alias.** |
+| **R0-wide**, offset 0, READ, width 2 | `[S, 0]`; B dispatches length 2. | Add a width-based read decline: first byte becomes 0. Fill the second byte with S: second byte changes. Narrow registration to 1: only recorded handler length changes; returned bytes do not. |
+| **R1-wide**, offset 1, READ, width 2 | `[0, 0]`; handler length 1. | HEAD/reinstatement/B-null-effect: first byte becomes S. Remove dispatcher truncation: recorded length becomes 2, while the corrected handler’s returned bytes can remain unchanged. |
+| **W0-wide**, offset 0, WRITE, width 2 | First byte controls the action; second byte is ignored. Use sublegs that place the reset bit exclusively in each byte. | Reject wide writes: first-byte-reset subleg loses its reset. Use the second byte as control, or process it as an additional control write: one or both sublegs change the reset outcome. |
+| **W1-wide**, offset 1, WRITE, width 2 | No reset/latch effects; handler length 1. | Reopen #494: reset/latch effects appear. Remove truncation alone: recorded length changes, **not necessarily controller state**. |
+
+The IRQ observation has direct source support: ordinary STATUS reads deassert the IRQ and clear `int_assert` at [dev_wdc.c:1933](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c:1933); alternate-status reads do neither.
+
+The signature observation needs a properly conditioned fixture. [dev_wdc.c:1874](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c:1874) and its high-cylinder counterpart return `0x14`/`0xeb` only when `cur_command == COMMAND_RESET` and the selected medium is a CD-ROM. Moreover, an active ATAPI command overrides those values afterward.
+
+Therefore, a guest-visible signature leg needs a selected CD-ROM, `atapi_cmd_in_progress == 0`, and initial cylinder values distinguishable from the signature. **A diskless signature leg cannot witness that latch.** Use a separate qualified CD-ROM leg or an explicit internal `cur_command` assertion. Ring/DRQ observations cannot substitute for it.
+
+For A, the rows must change their observations rather than pretending the old WDC channel still exists:
+
+| A obligation | Non-vacuous observation and kill |
+|---|---|
+| Reject offset-1 READs, widths 1 and 2 | In a verified ordinary-gap fixture, observe returned zero bytes with an offset-0 S ≠ 0 control. HEAD, reinstatement, and restored status aliases return S in the first byte. The CPU read result remains an observation channel even without an owning device. |
+| Prove offset-1 exclusion for both directions | Observe **zero WDC invocations** at the released address, with a positive offset-0 invocation control. Reinstatement and A-null-exclusion produce a WDC invocation. |
+| Preserve offset-0 READ and WRITE | Observe legal nonzero status and both reset effects. Removing the registration, shifting it away, or making its effective range empty loses those accepted operations. |
+| Pin offset-0 width-2 truncation | Observe effective handler length 1. Restoring the original two-byte range produces length 2. `[S,0]` and first-byte write effects alone cannot kill that mutant. |
+
+In particular, **a WRITE-offset-1 ring-preservation row cannot kill verbatim reinstatement of today’s HEAD**: #494 already preserves that ring. The same is true of its command latch. Such a row can kill a reopened-control-path mutant, but cannot be credited for detecting restored ownership while #494 remains effective.
+
+Likewise, the offset-0 truncation row does not kill A-null-exclusion implemented as a separate alias: the original one-byte registration can still truncate. The released-address dispatch/read row is what distinguishes that mutant.
+
+The accept-side predicate accounting for the concrete B above is:
+
+| Predicate or boundary | What pins its accepted side |
+|---|---|
+| Device start-address bounds, unchanged at two bytes | R0-byte through actual dispatch; W0-byte proves the legal control address also remains reachable. |
+| Initial `writeflag == MEM_READ`, enclosing the new guard | W0-byte detects misrouting writes into the read branch; R1-byte detects losing read-side decoding. |
+| New read-side `relative_addr != 0` | R0-byte with S ≠ 0 kills overbroad or inverted decline; R1-byte kills a disabled decline. |
+| Common-tail `writeflag == MEM_READ` | R0-byte kills suppression of the read assignment because #95 leaves zero in its place. |
+| Existing write-side offset guard and `idata & WDCTL_RST` | W1-byte and the reset/non-reset W0-byte sublegs pin the retained write behavior and both reset effects. |
+
+There is an easily missed limitation here: **R0-byte’s returned value alone need not kill inversion of the initial direction test.** S was computed before that test, and the separate common tail can still return it after the wrong arm ran. The write acceptance leg supplies a differing observable.
+
+There is no new width, disk-presence, `io_enabled`, or `addr_mult` predicate in B. Do not invent accept obligations from those as though they appeared in this diff. Width remains a separate dispatch contract, covered by the explicit wide rows.
+
+Under A, the changed admission predicate is the upper range boundary, from `paddr < base + 2` to `paddr < base + 1`, for both directions. Its width clamp changes too, but that clamp continues the access; it is not a width-rejection predicate.
+
+**No accept obligation or mutation-test floor is discharged by this review.** The source establishes the distinct observations above and exposes the vacuous ones. Measured kills, existing-row coverage, the header quotation, and the released address’s actual machine behavior remain unverified within the permitted files.

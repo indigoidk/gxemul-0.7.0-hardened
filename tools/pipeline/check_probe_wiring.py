@@ -180,6 +180,17 @@ MANIFEST = {
     #  this checker reads TRACKED files, so a manifest naming an untracked probe is a GHOST,
     #  and a tracked probe with no entry is UNCLASSIFIED.  Both are red, in opposite
     #  directions, and `2956c7e' shipped the second one -- see [[gateworktree]].
+    #  #524 (armbdt): the block-data-transfer cold-page witness, promoted from
+    #  regress/artifacts/armbdt/ and RUN BY gate_arm.sh, so it is a DETECTOR
+    #  rather than preserved evidence.  Five mutants measured dead in
+    #  killtable_20260911e: mask hoisted to entry (27/32), weakened to & ~1
+    #  (29/32), over-aligned to & ~7 (30/32), made conditional on p_bit (31/32),
+    #  and both helpers returning (8/32).  The gate pins its denominator to a
+    #  LITERAL 32 because the row set grew 25 -> 29 -> 32 as those were closed.
+    #  arm_bdt_probe.py -- ENTRY DEFERRED TO `#524`, WHICH COMMITS THE PROBE.
+    #  The MANIFEST is checked against TRACKED files, so naming a probe this
+    #  commit does not carry makes it a GHOST.  Re-add with the probe:
+    #    "arm_bdt_probe.py": (CLASS_DETECTOR, "#524 ARM/Thumb block transfer across a cold host page"),
     "arm_bfx_width_probe.py":     (CLASS_WITNESS,  "armbfxwidth32: ubfx/sbfx build their mask with `1 << width' where width reaches 32 -- HEAD 9/11"),
     "arm_endian_probe.py":         (CLASS_DETECTOR, "ARM LDR rotation / endianness"),
     "arm_flags_probe.py":          (CLASS_DETECTOR, "ARM flag semantics"),
@@ -220,6 +231,32 @@ MANIFEST = {
     #  through cyl_lo/cyl_hi on a CD-ROM rig and is the ONLY instrument that sees
     #  it.  Measured: m3 scored 0 red on the main detector and DEFECT PRESENT on
     #  the signature one.
+    #  #525 (wdcaltdigin): the SYMMETRIC CELL of #494 above.  That round closed the
+    #  WRITE half of one `if` and left the READ half open, so a READ of offset 1 --
+    #  the Drive Address register -- returned the ALT-STATUS byte.  Promoted from
+    #  regress/artifacts/wdcaltdigin/ and RUN BY gate_sh_rounding.sh, so DETECTOR
+    #  rather than evidence -- and unlike the two #494 probes below it is
+    #  SINGLE-LEG, asserting fix-side wants against the gate own binary, so it
+    #  needs no dated exemption.  Measured: HEAD 14/16, fix 16/16.  The status byte
+    #  is NONZERO (0x51 power-on, 0x58 armed) and that is load-bearing: the mutant
+    #  that keeps the guard and deletes `odata = 0` returns S, so with S == 0 the
+    #  fixed and broken builds would agree and the row would be vacuous.
+    #  #525 artifact instruments, arriving with this round.  RESEARCH, not
+    #  detectors -- and keyed by their PATH RELATIVE TO regress/, which is how
+    #  every artifacts/ entry here is keyed.  A bare basename is not found and
+    #  becomes a GHOST: my first attempt used basenames and took the count from
+    #  4 problems to 7.
+    #  detectors: they are frozen or one-shot and owe no gate.
+    "artifacts/wdcaltdigin/agy_altdigin_witness_20260911.py":
+        (CLASS_RESEARCH, "#525 the rung-3 witness as agy built it -- preserved as the as-run record"),
+    "artifacts/wdcaltdigin/killtable_20260911/mutate_altdigin.py":
+        (CLASS_RESEARCH, "#525 kill-table mutator; refuses to write an unmutated file, so each find-text doubles as a presence pin"),
+    "artifacts/wdcaltdigin/killtable_20260911_drdy/wdc_altdigin_probe.FROZEN.py":
+        (CLASS_RESEARCH, "#525 the frozen probe copy for the DRDY kill table -- one instrument for every leg"),
+    "artifacts/wdcaltdigin/killtable_20260912_closure/wdc_altdigin_probe.FROZEN.py":
+        (CLASS_RESEARCH, "#525 the frozen 22-row probe for the pass-3 CLASS-CLOSURE table (BASE 22/22, HEAD 17/22, three disjunction mutants killed, the predicted equivalent survived)"),
+    "wdc_altdigin_probe.py":
+        (CLASS_DETECTOR, "#525 wdc alt-ctrl READ-side offset decode -- the cell #494 left open"),
     "wdc_altoffset_probe.py":
         (CLASS_DETECTOR, "#494 wdc alt-ctrl offset decode -- DRQ/ring channels"),
     "wdc_altoffset_sig_probe.py":

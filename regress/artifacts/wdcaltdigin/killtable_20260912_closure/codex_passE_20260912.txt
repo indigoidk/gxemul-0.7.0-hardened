@@ -1,0 +1,77 @@
+VERDICT: COMPLETE for the declared mask family under the supplied join rule: 15 masks classified, 12 killed, 3 equivalent; 0/12 non-equivalent escapes.
+CODEX_525E_20260912
+
+The underlying state is richer than the composed status byte, but **the join rule you supplied does not add that state to this floor**. Closure over arbitrary state predicates would be a wider claim, and the 22 rows do not establish it.
+
+I read only the four specified files, recomputed the enumeration in memory, and wrote nothing. Execution results below refer to the supplied artifacts; I did not run the probe.
+
+The join rule is decisive. The [guarded body](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c:698) is `odata = 0`. Its read set is empty. Writing `odata` does not read its previous value. Although underlying state flows into the preceding status calculation, that value is overwritten when the repair executes. The subsequent `data[0] = odata` is outside the guarded body.
+
+Consequently, image presence, buffer occupancy, write state, ATAPI phase, error and drive selection supply **zero additional joined axes** under this rule. Adding a predicate to a mutant cannot manufacture its own floor membership. Strictly, the join rule alone does not demand the status-mask predicates either: their denominator comes from the explicitly identified recurring mutation family.
+
+The checked denominator is **15 nonempty masks × eight possible composed statuses**, assessed against **five CORE observations**. Define:
+
+- `P`: the selected image exists.
+- `B`: `inbuf_head != inbuf_tail`.
+- `W`: `write_in_progress != 0`.
+- `A`: `atapi_cmd_in_progress && (atapi_phase & WDCS_DRQ)`.
+- `E`: `error != 0`.
+- `D`: `drive`.
+
+[status_byte()](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c:584) computes:
+
+```text
+S = (P ? 0x50 : 0) | ((B || W || A) ? 0x08 : 0) | (E ? 0x01 : 0)
+```
+
+Its output domain is `{00,01,08,09,50,51,58,59}` in hexadecimal. For the declared mutant, a CORE observation fails exactly when its nonzero `S` has `(S & X) == 0`.
+
+| Mask(s), hexadecimal | Killing CORE phases |
+|---|---|
+| `40`, `10`, `50` | EMPTYSLAVE, PWR_SLAVE |
+| `08` | POWERON, PWR_SLAVE, SRST |
+| `48`, `18`, `58` | PWR_SLAVE |
+| `01` | ARMED, EMPTYSLAVE, SRST |
+| `41`, `11`, `51` | EMPTYSLAVE |
+| `09` | SRST |
+| `49`, `19`, `59` | None; equivalent |
+
+There is a short completeness proof: the observed statuses `01`, `08` and `50` force every surviving mask to include ERR, DRQ, and at least one of DRDY/DSC. Exactly three masks satisfy that: `49`, `19`, `59`. Each intersects every possible nonzero status; at zero, skipping the assignment still returns zero. Thus the unobserved CORE statuses `09` and `59` cannot expose another member of this mask family.
+
+The [recorded scores](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/wdcaltdigin/killtable_20260912_closure/SCORES.txt:6) agree with every corresponding prediction, including `E_EQUIV49` at 22/22. They record three non-equivalent mask builds and one equivalent mask build, alongside BASE and HEAD. Classification of all 15 comes from the exhaustive calculation, not 15 recorded builds.
+
+One wording correction is warranted in [PRETABLE’s equivalence paragraph](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/wdcaltdigin/killtable_20260912_closure/PRETABLE.out:53): `49` omits the unreachable DSC-only status `10`; `19` omits the unreachable DRDY-only status `40`; `59` omits neither. Status zero produces no observable difference. The equivalence conclusion remains correct.
+
+The [probe sequence](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/wdc_altdigin_probe.py:120) holds the following joint states. These are **source-derived states immediately before each observation**, not measurements of the internal fields. Registers identify all 22 rows.
+
+| Observation group | Row registers | `(P,B,W,A,E,D)` | Composed status | CORE register |
+|---|---|---|---|---|
+| Initial liveness / POWERON | `v0,v1,a0,a3,s0,s1` | `(1,0,0,0,1,0)` | `51` | `s1` |
+| FIFO signature | `a1,a2` | `(1,1,0,0,1,0)` | `59`, derived | — |
+| PWR_SLAVE | `t7,k0` | `(0,0,0,0,1,1)` | `01` | `k0` |
+| ARMED / W2 | `s2,s3,s4,s7,t8,t9` | `(1,1,1,0,0,0)` | `58` | `s4` |
+| SRST | `s5,k1,s6` | `(1,0,0,0,0,0)` | `50` | `k1` |
+| EMPTYSLAVE | `t4,t5,t6` | `(0,1,1,0,0,1)` | `08` | `t6` |
+
+For `a2`, the FIFO becomes empty **after** its read. That FIFO observation does not supply an offset-1 test at status `59`.
+
+The state trace follows the implementation: initialization sets error to 1; the write command clears error, arms the write, and the probe stages eight bytes; SRST clears the transfer state and ring. Drive selection changes neither the ring nor write/error state. ATAPI remains inactive throughout. Status-port reads acknowledge the interrupt but do not change these status sources.
+
+Therefore, your two proposed direct predicates already die:
+
+- Conditioning on `W` or `B` fails POWERON, PWR_SLAVE and SRST.
+- Conditioning on `P` fails both slave CORE rows.
+- Conditioning on `A` fails all five CORE rows.
+- Conditioning on `E` fails ARMED, EMPTYSLAVE and SRST.
+
+**Broader underlying-state conditioning can survive.** For example, conditioning on `!A` is always satisfied here, so these rows cannot distinguish it; active ATAPI DRQ would distinguish it. Even the positive-source disjunction `P || W || E` holds at every CORE observation while omitting buffer-only and ATAPI-only DRQ contributions. These are deductions from the state table, not additional measured mutants.
+
+That establishes the boundary precisely: **five CORE joint states do not close arbitrary underlying-state predicates, and the supplied join rule does not require that expansion.** Likewise, the 15-mask enumeration is a positive-disjunction enumeration, not an enumeration of arbitrary Boolean functions of `odata`.
+
+Your three additional checks resolve as follows:
+
+1. **Drive-only conditioning is closed.** The [drive assignment](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c:2013) restricts `D` to 0 or 1. Declining only on drive 0 fails PWR_SLAVE and EMPTYSLAVE; declining only on drive 1 fails POWERON, ARMED and SRST. Of the four Boolean functions of drive alone, constant false is the HEAD behavior and dies; constant true is equivalent. This does not establish closure of compound drive/state predicates.
+
+2. **The registered offset domain is `{0,1}`.** The [alternate-status registration](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c:2120) is literally two bytes, without `addr_mult` scaling. The handler neither advances nor transforms `relative_addr`; wider length does not itself create a third starting offset. Thus `!= 0`, `& 1` and `== 1` agree throughout that registered domain. **The stronger dispatcher claim remains unverified within the permitted files:** PRETABLE asserts that `memory_rw.c` clamps length at the boundary, but that file was excluded. The byte-only probe supplies no independent wider-access measurement. I can confirm the registration and predicate equivalence, not certify unseen dispatch code.
+
+3. **No invalid kill attribution appears in the six recorded legs.** Every credited failing row reads offset 1 into a sampled register, and its returned byte changes under the credited mutant. All 22 row registers occur in `REGS`, with no duplicates or omissions. The ten CONTROL rows and seven ACCEPT rows are supporting observations; for these read-only conditional mutants, they supply no additional killing channels. In particular, the unchanged status CONTROL proves the precondition while the adjacent CORE read kills the mutant. The older helper-only write-decline escape is explicitly disclosed in the source: its signature-latch effect cannot be detected through the DRQ/FIFO channels those rows observe.

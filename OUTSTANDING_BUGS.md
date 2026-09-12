@@ -18,6 +18,240 @@
 > why. Rounds 60–65 (#295–#300) cleared the entire floating-point feasibility queue;
 > what follows is what they left, plus what they found on the way.
 >
+> ### OPEN -- filed 2026-09-11 from `#524` pass D: a cheap way to get more assertions per session
+> ### silently moves every assertion after the first onto the FAST path
+>
+> **`multiaccesswarms`** (MED) -- **a probe row testing a SLOW-PATH fix with a MULTI-ACCESS
+> instruction is vacuous from the second access onward.**  The first cold access goes through the
+> slow path *and warms the page*; every later access in that session takes the FAST path, which the
+> fix does not touch and a slow-path mutant does not alter.
+>
+> Measured on `ARM_LDM_MULTI_P2_R2`: a mutant that deviates at the second access left the row GREEN.
+> Found by kimi (measuring); glm reached it from the other end by calling the kill table
+> *"internally impossible as stated"* because a row it expected to red did not.
+>
+> **This is the CHANNEL check's own shape** -- *a row whose named channel cannot vary under its
+> named mutant is vacuous by construction* -- **and it is knowable at WRITING time.**  It was missed
+> by reasoning about the ARITHMETIC of the second access, which is genuinely different, instead of
+> about WHICH PATH SERVICES IT.
+>
+> **THE RULE: a row testing a slow-path repair drives ONE access per cold page.**  More assertions
+> mean more sessions, not more registers.  A multi-register transfer kept for register-list-length
+> coverage must label its later assertions as FAST-path observations rather than count them as
+> slow-path coverage.
+>
+> ### OPEN -- filed 2026-09-11 from the GPT-6 Astra PowerPC-detector answer. ALL THREE WERE
+> ### VOLUNTEERED: I asked about detector rows and it returned these unprompted.
+>
+> **`probeexitzero`** (MED) -- **`regress/` carries TWO INCOMPATIBLE PROBE-EXIT IDIOMS and nothing
+> tells a gate author which one the probe they are wiring follows.**  Of **67** probes printing a
+> SCORE/_RESULT tally, **26 key their exit status on the tally and 41 always exit 0 with failed
+> rows.**
+>
+> *** MY FIRST DERIVER RETURNED **3**, AND IT WAS WRONG FOR THE EXACT REASON THIS ROW WARNS
+> ABOUT. ***  It asked *"does the file contain a nonzero `sys.exit` anywhere?"* -- a CORRELATE -- so
+> `ppc_rldicl_probe.py`, the very subject of the finding, scored CLEAN on the strength of an
+> apparatus guard at `:89`.  Keyed on what DEFINES the class -- an exit keyed on the tally, searched
+> only AFTER the tally is computed -- the answer is 41.  **Wrong by 13x, in the row telling the next
+> person not to key on a correlate.**
+>
+> **THE DEFECT IS THE SPLIT, NOT THE 41.**  Exiting 0 is the house idiom, and the gates REFUSE the
+> exit-status channel in writing: `gate_arm.sh:672` and `gate_sh_rounding.sh:1457` both end
+> `> "$LOG" 2>&1 || true`, then guard with `if ! grep -q "..._RESULT="` (PARSE BEFORE SCORE), then
+> pin the denominator against a literal.  But 26 probes carry the opposite idiom, several with an
+> identical `sys.exit(0 if ok == len(rows) else 1)` -- so **a gate author who has read those
+> reasonably concludes exit status is a supported channel, and wiring any of the 41 that way yields
+> a check that CANNOT FAIL.**  Not live today: both of today's probes are gated on result lines.
+>
+> *The repair is NOT "fix 41 probes" -- a sweep that size is the `#392` shape and would be switched
+> off.  Forward-only: new gate sections grep result lines; a probe whose exit IS keyed says so in
+> its header; a new probe picks one idiom and its round says which.*
+>
+> **`ppcgateimageskip`** (MED) -- `gate_ppc.sh` requires a NetBSD image before launching its probe,
+> so a missing image turns integer-instruction coverage into a `gate_skip`: **silent coverage loss
+> scored as SKIP**, a class this tree has measured before (`gate_build.sh` withdraws
+> `/tmp/gxsec-gxemul` while `gate_mips.sh` `need_exec`s it, so gate 4 skips on a missing binary).
+> **Live consequence for two HELD HIGH rounds:** the `rldimi`/`rlwimi` detectors are bareppc-only --
+> register-to-register instructions read through the cold debugger, needing no guest OS and no image
+> at all -- so wiring them behind that prerequisite couples a detector that needs no image to an
+> image that may be absent, and the failure renders as SKIP rather than red.
+>
+> **`ppcprobescorestale`** (LOW) -- `regress/ppc_rldicl_probe.py`'s comments claim **19 rows** while
+> the file makes **24 `row()` calls**, and `naive fix wrong` contributes to SCORE despite being
+> documented carried-not-counted.  The second can mislead a MEASUREMENT, not just a reader: a
+> denominator that silently includes a row the record says is excluded makes every `n/N` from this
+> probe ambiguous between two N, and any kill table citing its scores inherits that ambiguity.  The
+> flagship adjudication graded this an **L4 in the closed `#522`** and ruled `naive fix wrong` *"a
+> pure-Python row whose channel cannot vary under any emulator mutant"* -- vacuous by construction.
+> Demote it to a print.
+>
+> ### OPEN -- filed 2026-09-11 from #524's table 4: a probe's memory read indexed dump COLUMNS by
+> ### 16-byte offset while ISSUING an unaligned dump, so it silently returned a NEIGHBOURING word
+>
+> **`probereadalign`** (LOW, but it made a CORRECT fix look broken) -- `read_mem32(addr)` dumped
+> from `addr`, searched for the line labelled `(addr & ~0xF)`, then indexed
+> `line[12:48].split()` by `(addr & 0xF) // 4`.
+>
+> **The label matches whether or not the dump start is aligned**, so every sanity check that looked
+> for the right line passed. But an unaligned start BLANK-PADS the leading word groups, `.split()`
+> collapses the padding, and every index shifts by the number of omitted groups. Measured:
+>
+> ```
+>   dump 0x21000 0x21008   ->  0x00021000  00000000 44332211
+>   dump 0x21004 0x2100c   ->  0x00021000           44332211 00000000
+>                                           ^^^^^^^^ leading group absent
+>   read_mem32(0x21004)    ->  parts == ['44332211','00000000'], idx 1  ->  0
+> ```
+>
+> **MEASURED COST: 8 of 10 kill-table legs changed value when it was repaired**, including the
+> pre-fix `HEAD` leg -- which had been reported as failing FEWER rows than it really does -- and it
+> made `#524`'s correct fix report a red BASE row. *It cost four rounds of inference before anyone
+> dumped the memory and looked; the dump settled it in one run.*
+>
+> **THE GENERAL FORM IS THIS PROJECT'S PADDED-COLUMN TRAP IN A NEW PLACE: the ROW was found and the
+> COLUMN was wrong.** A check that verifies it located the right line learns nothing about whether
+> it read the right field, and positional parsing of a human-formatted dump cannot tell the
+> difference.
+>
+> **REPAIR (applied in `#524`'s probe): dump from `(addr & ~0xF)` for 16 bytes so all four groups
+> are always present -- which is what the index arithmetic already assumed. One line.** Filed as a
+> CLASS because any future probe parsing `dump` positionally inherits it, and the next probe is
+> usually copied from the last one. **Censused: no other probe in the tree shares the shape today**
+> (`grep -rln 'offset_in_16' regress/`), so the population is one and this row exists to keep it
+> there.
+>
+> ### OPEN -- filed 2026-09-11 from the #524/#525 panel (grok): a kill-table driver took its
+> ### baseline from the MUTABLE working tree while its own comment claimed it verified the commit
+>
+> **`killtablebaseline`** (MEDIUM) -- `regress/artifacts/armbdt/killtable_20260911/killtable.sh`
+> reads:
+>
+> ```sh
+> 15: # Verify SEC cpu_arm_instr.c matches pure HEAD commit 8d372aa
+> 16: git -C "$SEC_DIR" log --oneline -1
+> 18: cp "$SEC_DIR/src/cpus/cpu_arm_instr.c" "$HEAD_FILE"
+> ```
+>
+> **The comment says VERIFY.  Line 16 prints a commit and gates on nothing.  Line 18 then copies
+> from the WORKING TREE, which is a moving reference.**  This is `makercfalse`'s defect in a
+> different script, found the same day -- a script that captures exactly the right number and acts
+> on none of it.
+>
+> **It did not bite:** when the table ran (~06:45) the tree was pre-fix, so the copy genuinely was
+> HEAD and **the measurement is valid**.  `#524` landed at ~10:1x.  **A re-run today would copy the
+> FIXED file as the baseline** -- and while every MUTANT leg fails loudly (`mutate_armbdt.py` exits
+> 1 on MUTANT-TEXT-NOT-FOUND at `:50`/`:62`/`:67`, and its anchor now occurs ZERO times in the tree,
+> measured), **the HEAD leg is `pass` at `:46-48` with no text check at all and would measure the
+> fixed code while labelling it HEAD.**
+>
+> **THE ONE LEG WITHOUT A PRESENCE PIN IS THE ONE THAT WOULD LIE.**  Every mutant leg is protected
+> by its find-text acting as a presence pin; the BASELINE leg, which asserts nothing, is not.
+>
+> *And the rule was in the measuring seat's brief, verbatim: "NAME THE BASELINE BY COMMIT, never by
+> a moving reference."  It was given and the script used `cp` from the working tree anyway --
+> knowing a rule and having it fire on the right object are different problems.*  Repair is two
+> lines (`git show <commit>:path >` for the baseline, plus a presence pin on the HEAD leg) and owes
+> negative controls in both directions.  Per-round artifact driver, not a committed gate -- filed as
+> a CLASS because the next round copies the last round's driver.
+>
+> ### OPEN -- filed 2026-09-11 by #524's pass 2, which refuted that round's own "only two sites"
+> ### premise: two COMBINED handlers replace LDM/STM and never reach the helpers #524 fixed
+>
+> **`armbdtcombined`** (MEDIUM) -- `#524` masks the two `memory_rw` calls in the generic
+> `arm_pop()`/`arm_push()` helpers so a block transfer ignores the low two address bits, as
+> DDI0100I requires.  **Two combined-instruction handlers do the transfer themselves and never
+> reach those calls**, so the rounding does not apply to them:
+>
+> * **`netbsd_memset`** (`cpu_arm_instr.c:2093`, replaces STM) does
+>   `memset(page + (addr & 0xfff), 0, 128);` at `:2127` -- a RAW page offset with no word
+>   rounding.  Its runtime guards check page bounds, zero source values and page availability;
+>   **none rejects an unaligned address.**
+> * **`netbsd_memcpy`** (`:2274`, replaces LDM/STM) copies through raw `& 0xfff` offsets on BOTH
+>   source and destination, **while its register-publication reads use `& 0xffc`.**
+>
+> **The sharpest part is the internal disagreement: `netbsd_memcpy` ROUNDS THE ADDRESS IT PUBLISHES
+> TO REGISTERS AND DOES NOT ROUND THE ADDRESS IT COPIES FROM.**  One handler, two address rules.
+> Their matchers (`:3428`) recognise instruction patterns without establishing alignment, so an
+> unaligned base reaches the combined body unopposed.  *The file already half-knows --
+> `netbsd_memcpy`'s own comment at `:2252` acknowledges "the overlap and unaligned-copy
+> divergences" -- which is the recurring shape of a fact living where nobody consults it at edit
+> time.*
+>
+> **PRE-EXISTING, not a regression of `#524`**, so filed under the stopping rule rather than
+> repaired in-round.  **But it bounds what that round may claim: the generic helpers are closed,
+> the BDT access rule is not.**  A rung-3 fixture for the generic path already exists
+> (`regress/artifacts/armbdt/agy_armbdt_witness_20260911.py`, unmodified `testarm`); reaching a
+> combined handler additionally requires driving the instruction pattern its matcher recognises,
+> which has not been attempted.  Every quote above was re-read from the source before filing.
+>
+> ### OPEN -- filed 2026-09-11: a CLOSED row's live counter-proposal was carried by nothing, and
+> ### annotating that row as resolved would have buried it
+>
+> **`censusprobescope`** (LOW) -- `census` is closed: its proposed rule (*a round that touches a gate runs
+> that gate's mutant census*) was **REJECTED** on a 9/9 assess with an explicit CLOSE verdict, and a
+> rejection is a decision rather than outstanding work.  **But the same entry carries a counter-proposal
+> that was never dispositioned** -- *"Adopt instead, bounded: extend `SM_COVERED`/`SM_EXEMPT` to
+> `*_probe.py`"* -- and **measured, not assumed: `SM_COVERED` co-occurring with `*_probe.py` appears in
+> exactly ONE ledger row, `census` itself, which is closed.**  So the proposal existed only as prose inside
+> a terminal row.  **This is the overtaken-closure hazard in its cheapest form: not a defect lost, but a
+> PROPOSAL lost, which nothing in the harness looks for.**  Found while annotating twelve stale entries in
+> this file -- the pass flagged it rather than ticking over it, and wrote `census`'s annotation so the tick
+> cannot be read as closing the proposal.  *No opinion is recorded here on whether the proposal is RIGHT;
+> that is the adjudication it never had, and giving it a carrier is what makes the adjudication possible.*
+>
+> ### OPEN -- filed 2026-09-11 from the `lcaisalane` pass-1 panel: THREE residuals that the panel named
+> ### and NOTHING FILED, so all three would have died with their parent row's closure
+>
+> *Filed together because they share a provenance rather than a fix: each was named by a seat in
+> `regress/artifacts/lcaisalane/` and existed ONLY as prose inside another row's artifacts.  The
+> end-of-round harvest is supposed to catch exactly this, and did not.*
+>
+> *** SEVERITY CORRECTED 2026-09-11, SAME DAY AS FILING: HIGH -> MEDIUM. *** A design pass with
+> `memory_rw.c` in scope confirmed the flag genuinely matters (`memory_rw.c:245-252` --
+> `if (misc_flags & PHYSICAL || cpu->translate_v2p == NULL) { paddr = vaddr; }`), but **the
+> "dies under any real OS" claim was a CHAIN OF THREE PREMISES and only the first holds.**
+> (b) enabling page tables does NOT necessarily produce a miss -- valid entries can give an
+> identity mapping, and a miss needs a failed lookup or invalid entry; (c) no in-tree LCA guest
+> is shown to enable paging at all. The repair is complete at 2 of 2 calls. **I filed this HIGH
+> on a pass-1 seat's quoted sentence without the evidence under it.** The original entry follows,
+> unaltered except for this severity marker.
+>
+> **`lcaisaphys`** (MEDIUM, was HIGH) -- `dev_lca.c` `DEVICE_ACCESS(lca_isa)`, the two nested `cpu->memory_rw` calls at
+> `:291-292` (write) and `:295-296` (read): both omit `PHYSICAL` and hand an already-physical address
+> (`LCA_ISA_BASE + relative_addr`) to the translator as a VIRTUAL one.  While the guest runs unmapped this is
+> invisible; **the moment a guest enables page tables every sparse access page-walks, lands in `not_found`, and
+> hits an unlatched guest-drivable `fatal()`, with reads zero-filled and writes SILENTLY DROPPED** -- in the
+> finding seat's words, *"the entire sparse I/O window dies under any real OS."*  One flag on two calls.
+> **Ranked ABOVE its own parent row** by the seat that found it, which is the rung-is-not-severity rule working:
+> this has no witness yet and still outranks a witnessed host kill.  Collides with `IOC_HAE`, which the model
+> ignores entirely -- named now so a future round does not discover it mid-design.  The rung-3 fixture ALREADY
+> EXISTS (`regress/lca_isalane_probe.py`, `-E alpha -e alphabook1`), so the attempt is cheap and is owed.
+> Provenance: `regress/artifacts/lcaisalane/opus_pass1_20260910.md:218-222` (finding F7).
+>
+> **`lcaisasize`** (MEDIUM) -- same handler, `:280`: `relative_addr >>= 5` discards bits 4:0, and **HRM
+> `_scratchpad/21066_66a_hrm.txt:8850` (S6.2.6.1) says bits <4:3> ARE the transfer size**, with `:9198-9199`
+> confirming the I/O region supports every sparse transfer.  The model implements the BYTE row only -- 4 of the
+> 11 legal encodings in Table 6-3 (`:8857-8891`) -- so **7 of 11 are under-copied.**  A panel seat called this a
+> phantom (*"the sparse window forces a<4:3> = 00"*) and was REFUTED by reading: the window is registered
+> `0x10000 << 5` wide with no alignment restriction, so a guest LDL at `(0x3fd << 5) | (1 << 3)` -- the HRM's
+> WORD encoding -- reaches the handler with the size bits already gone.  **Unlike its siblings the `:283` guard
+> never fires here, so this is SILENT AND TOTAL, and it sits on the canonical `LDL` path a real guest uses** --
+> which is why on reachability-by-a-real-guest it outranks the host kill it was found under (that kill needs
+> `ldbu`/`stb`, BWX instructions a genuine EV4 guest never emits).  Member 7: capture `(relative_addr >> 3) & 3`
+> BEFORE the shift, transfer every enabled byte, pack lanes.  Its own round -- different class, different member,
+> new oracles.  Provenance: `regress/artifacts/lcaisalane/RULING_20260910.md:66-73`, which says FILED.
+>
+> **`lcaisaqword`** (MEDIUM) -- same handler: for the QUADWORD encoding `a<6:5>` is **not** `ad<1:0>`, so
+> `((port << 5) | 0x78) >> 5` = `port | 3` and a quadword I/O access to port *P* is forwarded to **port P+3**.
+> **This is the one place the manual's prose and its table disagree, and the disagreement IS the finding:**
+> `:9192-9193` states flatly that ad<1:0> come from a<6:5>, while Table 6-3 at `:8884` reads
+> `11  11  Quadword  0000  00  00  Unmasked`.  The table is taken -- more specific, and corroborated by its own
+> footnote at `:8888` (*"ad2 is 0 for the first longword and 1 for the second"*, so ad<1:0> is 00 throughout).
+> The extraction was calibrated on **two independent columns STRADDLING the compressed block**, not one point,
+> per the rule that a single calibration point is valid only for a uniform stagger.  **An ADDRESSING defect, not
+> a width one -- a fix for `lcaisasize` does not imply a fix for this**, which is why the finding seat asked for
+> it to be filed separately.  Provenance: `regress/artifacts/lcaisalane/opus_pass1_20260910.md:77-79`.
+>
 > ### OPEN -- filed 2026-09-05 from round #502's pass 2: the m88k delay-slot shadow arm is the manual's WRONG pipeline
 > ### stage, now reachable by ordinary faults; plus three LOW residuals of the same function
 >
@@ -92,6 +326,17 @@
 >
 > ### OPEN -- filed 2026-09-05 (retrospective batch 7): dev_luna88k.c delivers an interrupt to a CPU that
 > ### does not exist -- two ordinary guest stores on the one-cpu luna-88k kill the emulator process (MEASURED)
+>
+> ✅ **`lunaabsentcpu` RESOLVED. Ticked in place 2026-09-11: ledger `closed`, sev high, shipped as `#503`
+> (commit `79cd12e`, 2026-09-06).**  The entry below ends *"Fable adjudication in flight"* and presents the
+> option set as undecided; **the adjudication LANDED and option (a) SHIPPED.**  Evidence, one grep anchor in
+> `src/devices/dev_luna88k.c`: `reassert_interrupts()` now reads `for (cpu = 0; cpu < d->ncpus; cpu++) {  /*  #503  */`
+> -- the loop is bound to the `ncpus` captured at DEVINIT, exactly the house idiom the option set named, and the
+> `/*  #503 (lunaabsentcpu):  */` comments at the capture site and at the DEVINIT bound say so in the source.
+> The ledger carries the rung-3 witness (`regress/luna_absentcpu_probe.py`: SIGSEGV pre-fix on the default
+> one-cpu machine, green post-fix) and a 22-row kill table.  **This tick does NOT close the two rows the
+> entry spins off -- `lunaabsentmaskdecl` and `es438cells` are separate ids and are untouched here.**
+> *The original entry follows, unaltered.*
 >
 > **`lunaabsentcpu`** (HIGH) -- `reassert_interrupts()` (anchor `static void reassert_interrupts`) walks all `MAX_CPUS` slots
 > and calls `INTERRUPT_ASSERT(d->cpu_irq[cpu])` -- a direct call through the struct's function pointer -- but DEVINIT connects
@@ -303,6 +548,20 @@
 >
 > ### OPEN -- filed 2026-08-29: *** A GUEST WRITE TO A READ-ONLY REGISTER ABORTS A LIVE TRANSFER ***
 >
+> ✅ **`wdcaltoffset` RESOLVED. Ticked in place 2026-09-11: ledger `closed`, sev high, shipped as `#493`
+> (commit `3521a22`, the durable rung-3 witness) and `#494` (commit `c125450`, 2026-08-30, *"the alt-ctrl
+> handler never decoded its own offset, so a store to a read-only register aborted a live transfer"*).**
+> The entry below ends *"The fix is NOT to revert #481 ... It is to make the handler decode its offset"* --
+> **that fix SHIPPED.**  Evidence, one grep anchor in `src/devices/dev_wdc.c`: `DEVICE_ACCESS(wdc_altstatus)`
+> now carries an `else if (relative_addr != 0)` arm whose comment opens
+> `/*  #494: THE HANDLER NEVER DECODED ITS OWN OFFSET.  */`, so offset 1 (the read-only Drive Address
+> Register, `0x3f7`) is no longer treated as Device Control.  The ledger's witness field records the rung-3
+> measurement on unmodified `evbmips -e malta` (sentinel `ALTOFF_DONE`) and the shipped fix re-measured at
+> 18 rows, 36 of 36 predictions (`killtable_20260830/RESULTS_detector18.txt`, sentinel `ALTOFF_DET_DONE`).
+> **The entry's warning that `wdcaltwidth` CANNOT ABSORB THIS still stands** -- width and offset decode are
+> different claims, and `wdcaltwidth` is a separate id that this tick does not touch.
+> *The original entry follows, unaltered.*
+>
 > **`wdcaltoffset`** -- sev **high**, guest-reachable, no harness needed, and its rung-3
 > witness was ALREADY COMMITTED by the round that made it worse.
 >
@@ -354,6 +613,16 @@
 > settled premises.  FILED, not built: a checker for a CHANGELOG-named row still `in work`.
 >
 > ### OPEN -- filed 2026-08-29: a gated tool prints line numbers that are all wrong
+>
+> ✅ **`divsweeplines` RESOLVED. Ticked in place 2026-09-11: ledger `closed`, witness
+> `harness:regress/artifacts/makercfalse/divsweep_controls_20260830/`.**  The entry below closes *"Not taken
+> in #492: it is a tool change owing its own controls"* -- **the controls were then built and the repair WAS
+> taken.**  Evidence, one grep anchor in `regress/diag_div_sweep.py`: the file now carries
+> *"making strip_lits newline-preserving moved a measured case from"*, i.e. the length-preserving
+> `strip_lits` the entry prescribed.  The controls the entry said were owed exist at
+> `regress/artifacts/makercfalse/divsweep_controls_20260830/` -- a BEFORE/AFTER pair from the same tool at
+> the same HEAD, with the row COUNT pinned at 27 in both, so the fix is shown to move WHERE sites are
+> reported without changing WHICH are found.  *The original entry follows, unaltered.*
 >
 > **`divsweeplines`** -- `diag_div_sweep.py` computes `ln = raw[:m.start()].count(chr(10))`
 > where `m.start()` indexes the **stripped** text, and `strip_lits()` collapses each
@@ -429,6 +698,17 @@
 > pre-fix 2 warnings / post-fix 0, then gate_build PASS -> binary republished ->
 > gate_mips PASS (was SKIP).
 >
+> ✅ **`propagatecpsilent` RESOLVED. Ticked in place 2026-09-11: ledger `closed`, witness
+> `harness:regress/artifacts/makercfalse/propagate_controls_20260830/`.**  This entry is HALF-annotated
+> already -- it says *"Fixed in the rewrite; the original still carries it"* -- **but it still sits under an
+> `### OPEN` heading, and the ledger closure records that the script the row named was a SCRATCH TOOL that
+> no longer exists**, so there is no surviving original to inherit the defect.  Evidence: the controls at
+> `regress/artifacts/makercfalse/propagate_controls_20260830/` (`cpguard.sh` + `cpguard_20260830.out`) run
+> SIX checks in BOTH directions and end on the sentinel `CPGUARD_PASS   6 checks, both directions` -- the
+> old idiom is reproduced and shown to announce success on a missing source, and the shipped idiom is shown
+> to report the failure AND to catch a case `cp`'s exit status cannot see.
+> *The original entry follows, unaltered.*
+>
 > **`propagatecpsilent`** -- the build-tree propagate script prints `propagated`
 > after a **failed** `cp`.  Measured on my own tooling: the log read *cp: cannot
 > stat ... No such file or directory* immediately followed by *propagated*.  **A
@@ -453,6 +733,18 @@
 >
 > Both surfaced while REPAIRING the wsl-dollar guard, and neither is about the emulator.
 >
+> ✅ **`hookctlgate` RESOLVED. Ticked in place 2026-09-11: ledger `closed`, sev low, witness
+> `harness:` -- the suite now runs from precommit when the hook or the suite changes, 18 of 18, 0 wrong,
+> preserved at `regress/artifacts/makercfalse/hook_controls_20260829/CONTROL_hookctl_20260830.out`.**
+> The entry below says the 18-row control suite *"is run by nothing"*; **it is run by something now, and the
+> entry's own guess at the shape was right -- it landed as a `tools/`-level check, not a `regress/` gate.**
+> Evidence: `tools/pipeline/check_hook_controls.py` exists, and `tools/precommit_check.sh` gates on the
+> completion sentinel -- `if printf %s "$hcout" | grep -q HOOKCTL_DONE; then`, with the failure arm
+> `bad "wsl-dollar hook controls did not reach HOOKCTL_DONE:"`.  The two negative controls the entry said
+> were owed are recorded in the ledger, including the one that matters most: **a bogus `GXHOOK` path makes
+> it REFUSE rather than report 18 of 18 against a missing file** -- the check-that-cannot-fail shape
+> closed off.  *The original entry follows, unaltered.*
+>
 > **`hookctlgate`** -- the guard fires on **every Bash call** and its 18-row control suite
 > (`artifacts/makercfalse/hook_controls_20260829/hookctl.py`, 9 must FIRE / 9 must stay
 > SILENT) is run by nothing.  It is classified `CLASS_RESEARCH` because no *emulator* gate
@@ -469,6 +761,15 @@
 > *Against gating it in `regress/`: an emulator gate running harness-tool controls is a
 > category mixture.  A `tools/`-level check is likelier right.  It owes the usual two
 > negative controls -- red on a broken hook, green on the shipped one.*
+>
+> ✅ **`hookdurability` RESOLVED. Ticked in place 2026-09-11: ledger `closed`, sev low, closed 2026-08-30
+> BY THE SAME ROUTE THE wsl-dollar GUARD USED -- which is the remedy this entry itself named.**  The entry
+> below says **`round_reminder.sh` still lives only at the untracked path**.  **It does not: it is TRACKED.**
+> Evidence, and it is one command rather than a line citation: `git ls-files` returns
+> `tools/hooks/round_reminder.sh`.  The ledger's witness records that the shim was driven on BOTH arms and
+> both emit valid hook JSON, with a negative control -- **the tracked target hidden returns rc=0 and ZERO
+> bytes, so a fresh clone degrades to *no reminder* rather than *no session*.**  Its reasoning about the
+> one-copy shim is what shipped.  *The original entry follows, unaltered.*
 >
 > **`hookdurability`** -- `.claude/` sits at the PROJECT ROOT, one level **above** the git
 > root, so anything there is outside version control.  `tools/install_hooks.sh` states the
@@ -668,6 +969,33 @@
 >   SAYING THE AMBIGUITY IS STILL PRESENT.  TWO CONSECUTIVE LINES ASSERTING OPPOSITE
 >   STATES. ***
 >
+>   ✅ **STATE: CLOSED.  Ticked in place 2026-09-11: ledger `closed`, shipped as `#484` (commit `cf300c0`,
+>   2026-08-27, *"wdc: a full ring reported itself empty, and the next push destroyed a byte"*).**
+>
+>   **The `STATE: OPEN` line below was RIGHT when it was written and went stale the SAME DAY.**  It is a
+>   correction against `#473`, which fixed the chunking and not the ambiguity -- that reading still holds.
+>   What it could not know is that the real fix landed hours later: the ledger closure says
+>   *"THE ROW WAS STALE IN THE OTHER DIRECTION: THE WORK SHIPPED ON 2026-08-27 AND THE ROW STILL READ
+>   `in work` WITH AN EMPTY `commits` FIELD FOR THREE DAYS."*
+>
+>   Evidence, one grep anchor in `src/devices/dev_wdc.c`: the ring comment now reads
+>   *"One slot is sacrificed, so head == tail now means EMPTY, full stop, and every reader below becomes
+>   sound with no struct change and no new field"*, modelled on `dev_pckbc.c`'s `pckbc_add_code()`, with the
+>   refuse-before-store return placed OUTSIDE the latch -- deliberately, and the comment says why: nested
+>   inside it, the first overflow is refused and every later push walks head onto tail, the defect restored.
+>   Witness: rung 3, a guest program on unmodified `evbmips -e malta`, free-running, 34 hand-encoded MIPS
+>   instructions, BOTH controls present (RAM liveness, and a device signature -- two reads of the SAME
+>   address return `0x5a` then `0xa5`, which a memory cell cannot do and only a FIFO can), 20/20
+>   predictions.  Kill table 8/8 at `regress/artifacts/wdcchunking/killtable_20260827/`.
+>
+>   *** AND ONE LIVE CONSEQUENCE THAT OUTLIVES THE TICK, RECORDED HERE SO IT IS NOT BURIED BY IT: this
+>   entry's own tail still says **"Needs a build -- queued behind the machine embargo"**, and a 2026-09-11
+>   sweep found that to be the ONLY genuine embargo blocker anywhere in this file -- sitting on shipped,
+>   witnessed, CLOSED work.  It blocks nothing.  It is noted rather than deleted because deleting it is a
+>   content change and this pass only ticks. ***
+>
+>   *The original state line and the entry it heads follow, unaltered:*
+>
 >   **STATE: OPEN.**  `#473` fixed the ATAPI DATA-IN CHUNKING -- it moved an existing 32768
 >   clamp before the push loop.  **It did not touch the ambiguity**, and the entry below says
 >   so in its own words: *`head == tail` for BOTH empty and full with no disambiguator*.
@@ -749,7 +1077,19 @@
 >   argued for a per-opcode set. Explicitly OUTSIDE `#464`'s contract, not a floor breach.
 >   Filed because the probe header asserted this was filed while no row existed: **a contract
 >   line asserting a disposition is a WRONG RECORD until the disposition is a row.**
-> - **`wdchpcmipsaddr`** — `DEVINIT(wdc)`'s `MACHINE_HPCMIPS` branch assigns `0x14000386`,
+> - **`wdchpcmipsaddr`** — ☑ **ASSESSED, NOT CHANGED. Ticked in place 2026-09-11: ledger `closed`, badge
+>   `A` (author self-review disclosed), `commits` EMPTY and witness `none`.**  *** THE DISPOSITION IS NOT
+>   "FIXED" AND MUST NOT BE READ AS ONE. ***  The ledger closure says in its own words: *"ASSESSED, NOT
+>   CHANGED. ... The row's claim is therefore TRUE.  No code changed"* — the arm is arithmetically a no-op
+>   (`0x14000180 + 0x206 == 0x14000386`), the only address it can see comes from a hardcoded literal in
+>   `dev_pcic.c`, **and the arm is UPSTREAM (`39748e3`), so its `/* TODO: Fix */` is NOT discharged by the
+>   arithmetic**: whether `+0x206` is architecturally right for hpcmips is a hardware question and no manual
+>   in `_scratchpad/` covers VR41xx.  Deleting a marker that may point at a live defect needs a warrant that
+>   round did not have.  Witness `none` is recorded explicitly as *"nothing to witness"* rather than
+>   *"did not think to try"* — different states, which must not render the same.
+>   **So: closed as a DECISION about scope, with the finding intact and the TODO deliberately left standing.**
+>   *The original entry follows, unaltered:*
+>   `DEVINIT(wdc)`'s `MACHINE_HPCMIPS` branch assigns `0x14000386`,
 >   exactly what the default `devinit->addr + 0x206` already computes for `0x14000180`. It
 >   carries a `TODO: Fix` and does nothing. Not guest-reachable; it earns a line only because
 >   it sits on the two-instance route `wdcflagindep`'s probe would have to use.
@@ -775,7 +1115,28 @@
 > load-bearing claim below was re-verified against the source, the local DDI 0100I extraction,
 > or the row itself before being written down.*
 > 
-> - **`b118L`** — a disk that fails to be added stays on the list. **DOCUMENTED-ONLY**: no
+> - **`b118L`** — ☑ **DOCUMENTED-ONLY, CLOSED WITH NO CODE CHANGE. Ticked in place 2026-09-11: ledger
+>   `closed`, `commits` EMPTY, witness `none -- TRUE but NOT OBSERVABLE`; the assess stage was 9/9 on the
+>   full roster and the hold read *"FILE - no measurable effect until a caller survives"*.**
+>   **THE DEFECT ITSELF IS NOT DISPUTED AND NOT FIXED** — the ledger establishes it by reading:
+>   `diskimage_add()` links the new disk into the chain and **six `return -1` exits sit AFTER that link**,
+>   none of them unlinking, while the PRE-link failures free correctly — *"the split falling exactly at the
+>   link point, which is the signature of checks added after the link rather than of a decision."*  It is
+>   closed because it is **UNOBSERVABLE**, not because it is absent: both in-tree callers terminate the
+>   process, so no witness at any rung can exist without first adding a caller that survives the error.
+>
+>   > ### *** THE REOPEN TRIGGER IS LIVE CONTENT AND SURVIVES THIS TICK — IT IS THE ONE THING CLOSURE
+>   > ### WOULD OTHERWISE DESTROY, AND THE LEDGER SAID SO BEFORE CLOSING: *"the reopen trigger must survive
+>   > ### into the closure text, or closing destroys the one thing that would bring it back."* ***
+>   >
+>   > **REOPEN THIS ROW IF EITHER HAPPENS: (1) any NEW caller of `diskimage_add()` that survives a failed
+>   > add and continues; or (2) any change to the two existing callers' failure arms — `emul_parse.c`'s
+>   > `exit(1)` arm, `main.c`'s `return 1` arm — that continues after failure instead of terminating.**
+>   > (Cited positionally on purpose: the entry's own `:558`/`:561`/`:707`/`:709` numbers are same-file
+>   > citations into `src/core/`, and this project's citation-form rule expects those to drift.)
+>
+>   *The original entry follows, unaltered:*
+>   a disk that fails to be added stays on the list. **DOCUMENTED-ONLY**: no
 >   surviving caller exists. `emul_parse.c:558` exits at `:561`; `main.c:707` returns 1 at
 >   `:709`, never reaching `emul_simple_init()`. **And `exitsweep` cannot activate it** —
 >   `census_exits.py:59` scopes the census to `src/devices/` while both callers live in
@@ -847,7 +1208,33 @@
 >   check D uses bare `git diff -U0` (unstaged only) while every other section uses both, so on
 >   the ordinary add-then-commit workflow both its sub-checks print green about a diff they
 >   never read.**
-> - **`census`** — the proposed "a round that touches a gate runs that gate's mutant census"
+> - **`census`** — ☑ **DECIDED AND CLOSED, NO CODE CHANGE TO THE PROPOSAL'S SUBJECT. Ticked in place
+>   2026-09-11: ledger `closed`, commits `4142c58` + `e3cf79f`, witness `none` — documented-only, and the
+>   ledger records that *no witness is possible IN PRINCIPLE* because the row is a POLICY proposal, not a
+>   defect.**  **A REJECTION IS A DECISION, NOT OUTSTANDING WORK.**  The assess stage ran 9/9 on the full
+>   roster with an explicit verdict — *"REJECT THE STANDING RULE; CLOSE AS SUPERSEDED BY IMPLEMENTATION"* —
+>   and it warns against closing it as a clause-(b) duplicate, which would be a wrong record.  (`e3cf79f`
+>   touched this row's code AFTER it closed: the class ratchet's census cited five line numbers and **three
+>   of the five had drifted**; all five are now verified-unique grep anchors.  The census itself is
+>   unchanged and still correct — only how the sites are named.)
+>
+>   > ### *** BUT ONE SENTENCE OF THIS ENTRY IS NOT RESOLVED AND MUST NOT BE READ AS RESOLVED. ***
+>   >
+>   > The entry closes with **"Adopt instead, bounded: extend `SM_COVERED`/`SM_EXEMPT` to `*_probe.py`"**.
+>   > That is a LIVE RESIDUAL, and **no ledger row carries it** — measured 2026-09-11.  The claim is about
+>   > the PROPOSAL, not the bare string: `SM_COVERED` occurs in several ledger rows and elsewhere in this
+>   > file, almost all of it about the EXISTING `gate_offline.sh` manifest.  **What is unique is
+>   > `SM_COVERED` CO-OCCURRING WITH `*_probe.py`: exactly one ledger row carries it, and that row is THIS
+>   > one, which is `closed`.**  Deriver, so the next reader re-runs it rather than trusting a literal —
+>   > and deliberately no count of THIS file, since writing one here changes it:
+>   > `python -c` over `ledger.json`, printing every row whose text holds both `SM_COVERED` and `probe.py`.
+>   > So the proposal exists only as prose inside a closed row and has no id of its own.  **The tick above
+>   > closes the REJECTED standing rule; it does NOT close the adopted-instead residual, which needs a
+>   > ledger row of its own before it can be tracked at all.**
+>   > *Flagged rather than filed: this pass may only edit this file, and creating a row is a ledger edit.*
+>
+>   *The original entry follows, unaltered:*
+>   the proposed "a round that touches a gate runs that gate's mutant census"
 >   rule is **REJECTED on three measured grounds**, and explicitly NOT as a clause-(b)
 >   duplicate (different denominators). Its warrant is a stale 13-of-18 when the census defines
 >   22 today; its trigger scales cost with the GATE rather than the diff, which is the `#392`
@@ -905,7 +1292,22 @@
 >   the previous buffer silently.** NOT fixed: a release inside `alloc_data()` is an ADDITION,
 >   and with no third caller there is no mutant that can measure the delta the licence
 >   requires. Recorded so a round that ADDS a third call site inherits the obligation.
-> - **`preserveinstrument`** — the durable-path rule preserves **measurements** but not
+> - **`preserveinstrument`** — ☑ **CLOSED AS A PRACTICE, NO CODE CHANGE AND NO CHECKER. Ticked in place
+>   2026-09-11: ledger `closed`, `commits` EMPTY, state `CLOSED-practice-universal-rule-refined`, witness
+>   `harness:` a census of the 14 most recent artifact directories holding a measurement.**  The entry below
+>   says *"Proposed, not adopted"*; **it was adopted — as a REFINED rule rather than as the one proposed,
+>   and the census is what changed it.**  Measured: of those 14 dirs, **12 preserve their instrument by
+>   COPY and 2 by COMMITTED REFERENCE — 14 of 14 identifiable**, and both non-copying cases are LEGITIMATE
+>   (their instrument is a committed file that is itself the thing under test — `divsweep_controls_20260830`
+>   names `regress/diag_div_sweep.py`; `batteryreds/tgate_20260829` names the gate in its own header).
+>   **So the entry's own remedy — *one more `cp`* — would have been WRONG**: a copy-in-the-dir rule scores
+>   those two as defects and demands a duplicate of a committed file, which is the drift hazard this project
+>   already pays for elsewhere.  The rule as adopted: ***the instrument must be IDENTIFIABLE from the
+>   artifact — preserved beside the measurement when it is a scratch script, or NAMED when it is a committed
+>   file.  Never duplicated.***  No checker, deliberately: a separate audit of every ledger witness field
+>   found **48 of 50 artifacts still resolve, with both dead ones on a single row**, and that evidence does
+>   not support machinery.  *The original entry follows, unaltered:*
+>   the durable-path rule preserves **measurements** but not
 >   **instruments**. #465 saved a seat's 22 artifacts (8 score logs, 8 build logs, source
 >   snapshot) and *not* the 26-row probe that produced them. When the pass-2 adjudication then
 >   recommended porting six of its rows — explicitly because "the construction and measurement
@@ -1000,7 +1402,14 @@
 > - **`killdriverunTracked`** — the kill-table driver lives in a session temp dir, so the
 >   apparatus producing this project's most-cited numbers is untracked.
 > - **`citestale`** — a same-file line citation is invalidated by the round's OWN later edits.
-> - **`scoreclaimhex`** — `check_score_claims` reads a slash-separated HEX LIST as a score claim.
+> - **`scoreclaimhex`** — ✅ **RESOLVED. Ticked in place 2026-09-11: ledger `closed`, shipped as commit
+>   `df0dfcc` (2026-08-26, *"scoreclaimhex FIXED: one character, and the coverage check that had to come
+>   with it"*).** Evidence, one grep anchor: `tools/pipeline/check_score_claims.py` carries
+>   *"THE `x` IN THE LOOKBEHIND IS LOAD-BEARING AND WAS ADDED 2026-08-26 (`scoreclaimhex`)"* — the
+>   negative lookbehind is now `(?<![\dx/])`, so the `00` of `0x00/0x10` no longer parses as a score.
+>   The ledger records both negative controls and a coverage check that the checker did not merely stop
+>   looking. *The original entry follows, unaltered:*
+>   `check_score_claims` reads a slash-separated HEX LIST as a score claim.
 > - **`sectionEnarrow`** — precommit section E sees only `regress/diff_*.c`, 14 of 52 detectors,
 >   and prints an unqualified verdict over that subset.
 > - **`ledgerstatelies`** — the ledger's `state` field had no written semantics; the block is now
@@ -18188,8 +18597,36 @@ own interrupt-enable register is the natural consumer, and the generic coprocess
 supervisor-only precondition.
 
 Disposition: **member 4 (ACCEPT)**, two lines deleted, no latch, for the same reason as `mapledmaaddr`.
-FAULT is unavailable regardless -- the failed-device exception path is MIPS and M88K only, and this is
-ARM. Not measured, no witness built. Note the witness needs a **coprocessor read from an ARM guest**,
+*** L4, CORRECTED 2026-09-11: THAT SENTENCE READ "FAULT is unavailable regardless -- the failed-device
+exception path is MIPS and M88K only, and this is ARM."  **IT IS WRONG, AND IT REASONS FROM THE WRONG
+MECHANISM.** ***  The MIPS/M88K claim is about `memory_rw.c`'s failed-DEVICE-ACCESS path, which is
+irrelevant here: a coprocessor register transfer is not a device access and never reaches it.  **ARM has
+undefined-instruction delivery and it is already used** -- `cpu_arm.c:2677`, in `arm_cdp()`:
+
+    fatal("[ arm_cdp: pc=0x%08x, iword=0x%08x ]\n", (int)cpu->pc, iword);
+    arm_exception(cpu, ARM_EXCEPTION_UND);      /*  LIVE, not commented out  */
+
+and `arm_exception()` at `:616` handles `ARM_EXCEPTION_UND` at `:634`.  **So member 5 (FAULT) IS
+AVAILABLE on ARM coprocessor sites.**  Note the near neighbour, which is the more interesting fact:
+`arm_mcr_mrc()`'s missing-handler branch at `:2660` carries **the very same call, commented out** --
+`// arm_exception(cpu, ARM_EXCEPTION_UND);` -- so an access to an UNINSTALLED coprocessor prints and
+falls through silently today.
+
+**THE DISPOSITION IS UNCHANGED AND ITS REAL WARRANT IS BETTER: ACCEPT (member 4) stands on its own
+merits** -- the model already computes the correct value and then discards it, which is the footbridge
+IRQEnable precedent, and FAULT would be wrong for a register the model implements.  What was wrong was
+the claim that the alternative did not exist.
+
+*** WHY THIS WAS WORTH CORRECTING RATHER THAN LEAVING: the false warrant is TRANSFERABLE, and there are
+SEVEN sibling guest-reachable host kills in `cpu_arm_coproc.c` waiting to reuse it *** (CP6 `unknown`,
+CP14 `unknown`, CP15 PID, CP6 ISTEER, CP15 endian, CP6 ISRC, CP15 `rd == ARM_PC`).  **For the two
+`unknown:` default arms, UND is very likely the RIGHT member**, and a sentence saying FAULT is
+impossible would have removed it from the option set before anyone looked.  Found by the fable5
+adjudication of the held queue (`regress/artifacts/heldqueue/fable_adjudication_20260911.md`) reading
+`codex_coproc_20260910.txt`, an answer on disk since 2026-09-10 that no record cited; **every element
+re-verified here by opening `cpu_arm.c` before this edit was written.**
+
+Not measured, no witness built for the FAULT alternative. Note the witness needs a **coprocessor read from an ARM guest**,
 which is a different vehicle from the device probes this project mostly writes; `gate_arm.sh`'s decode
 checks are the nearest existing machinery.
 
@@ -18746,3 +19183,204 @@ A count in my brief was wrong: `crm=1` has **sixteen** direction arms, not fourt
 locally quiet, but "quiet" does not mean "plain accessor" -- `tcr0` and `tcr1` increment before
 returning their values, and a `tisr` write clears bits and deasserts timer interrupts. A sibling-parity
 argument resting on "the timer arms are plain storage" would be wrong.
+
+
+### `sgirandomcolour` -- *** `#519` DOES NOT CLOSE.  PASS 2 MEASURED A FLOOR BREACH, 2026-09-11. ***
+
+**Six mutants score 59/59 on the shipped instrument and every one writes uninitialised host stack into
+guest memory.** `regress/artifacts/sgirandomcolour/pass2_20260911/` -- 13 builds, 11 instrument runs,
+13 controls.
+
+    M30_tilenrdecline   if (tile_nr == 0) ok = 0;       59/59   tile 1, 0x70630000
+    M31_tilenrguard     if (ok || tile_nr)              59/59   tile 1, 0x6368696e  <- ASCII "chin"
+    M32_tilenrxdecline  if (tile_nr_x == 0) ok = 0;     59/59   tile 1
+    M33_tiledorigin     if (linear || y == 0) ok = 0;   59/59   tiled (0,1)
+    M28r                the disclosed escape, replicated  59/59
+    M37_fgvalue         if (*color == 0xaabbccdd)       59/59
+
+**The smallest is eleven characters: `if (ok)` -> `if (ok || tile_nr)`.**
+
+*** THE NEGATIVE CONTROLS ARE WHAT MAKE IT A FINDING. *** `|| ofs`, `|| x` and `|| y` each score
+**58/59**, killed by exactly one row -- so the probe *does* see geometry. It cannot reach the tile
+**index**: its only (4,1) cell is LINEAR, where `x >> 12 == 0`, and a tiled (4,1) would not have
+helped either since `x / tilewidth == 0` at every bufdepth.
+
+**Severity inverts the usual picture.** At 32bpp a tile is 128x128, so `tile_nr == 0` is
+`x < 128 && y < 128`. On the default 1280x1024 framebuffer M30 **keeps the fix over 1.25% of the
+screen and re-opens it over the other 98.75%** -- and all 59 rows sit inside the 1.25%.
+
+*** THE CAUSE IS A WRONG WARRANT OF MINE THAT HAD ALREADY BEEN REUSED. *** The clause-(d) flow test
+was applied **correctly** to `tlb_mode` -- floor axis, via `tileptr` -- and then **stopped at the
+ARRAY and never reached the INDEX**. `tileptr = d->re_tlb_a[tile_nr] << 16`, so `tile_nr` reaches the
+guarded store's address operand at least as directly as `tlb_mode` does, and `#100` in that same
+function already calls `tile_nr` guest-derived and bounds it. My PRETABLE named only `tlb_mode` and
+`bufdepth` as `ofs`'s dependencies, while `ofs = 512*y + (x % tilewidth) * bufdepth` contains x and y.
+
+**Three reading seats independently found the warrant false before the measurement showed what it
+cost**, and one of them made the symmetry argument outright: `M13` (bufdepth), `M14` (linear) and
+`M28` (color_mode) are **one guard-weakening shape on three fields**, so *"an instrument-relative
+escape is not a contract-relative exemption."*
+
+**This is the THIRD consecutive pass finding that shape, so the class-closure rule bites: the next
+repair owes the closure in ONE diff, not another cell.** The 16-cell closure was principled and
+**incomplete on its own principle**. Reachability is a `sw` to `DE_MODE_DST`, not a driver design
+choice.
+
+**Also measured, and it trims rather than grows the instrument:** the four `ann cum` rows earn no kill
+(delete them and `M5`/`M7` still die via `ann1`/`once`); `tA/tB/tC silent` kill sets are strict
+subsets of the matching `ann1` sets; and `ycrcb x4y1` discriminated nothing until the pass-2 mutants
+existed. **Rows that carry no kill are score noise.**
+
+### `wdcdiagerr` (MED) -- the premise is INVERTED: `0x01` is the CORRECT code, and the defect is the coupling
+
+ATA-2 `:2534` and `:5083`: a device completing diagnostics without error **sets the Error register to
+`01h`**. So the value the model writes is right.
+
+**The defect is that `d->error` is ONE variable serving TWO registers with opposite meanings** --
+`dev_wdc.c:1843` returns it as the **Error register**, and `:594` uses it to raise the **Status**
+register's `ERR` flag inside `status_byte()`. The tree's own header shows the collision:
+`WDCS_ERR = 0x01` and `WDCE_AMNF = 0x01`, the same number in different registers.
+
+**So after EXECUTE DEVICE DIAGNOSTIC the model reports diagnostic SUCCESS in Error and command
+FAILURE in Status, simultaneously** -- and `01h` is precisely the value that exposes the conflation. A
+one-line change to the diagnostic value would leave `ERR` wrong.
+
+### `wdcpktstatus` -- TWO ROUNDS, not one, and it needs a standard this tree does not have
+
+My hypothesis that this and `wdcdiagerr` were one defect is **refuted on a zero: there are NO reads of
+the ATAPI transfer's status anywhere in `dev_wdc.c`.** The backend's `res` is consumed and tested only
+for `== 0` / `== 1`; the recorded status is never read and is freed at the next dispatch. So for a
+dispatched packet on an existing image, **ERR has no implemented route to rise** -- `status_byte()`
+returns `DRDY|DSC = 0x50` and Error stays `0x00`. Separating the storage repairs the diagnostic row
+and leaves this one untouched.
+
+*** AND ATA-2 DOES NOT SPECIFY ATAPI PACKET COMPLETION. *** It contains no ATAPI, PACKET or CHECK
+CONDITION definition and explicitly **reserves `A0h-AFh`** (`:5828`) -- which is the model's own PACKET
+opcode. **A claim about required ATAPI behaviour sourced from ATA-2 would be sourced from the wrong
+standard.** Settling this needs the separate packet specification.
+
+### `wdcaltownership` -- ATA-2 makes the two addresses SEPARABLE, which licenses the narrowing
+
+`CS1-` is *"the chip select signal from the host used to select the Control Block Registers"*, and the
+register address within that block comes from the three `DA` signals (`:1226-1234`). Selecting the
+block and selecting an address inside it are **separate mechanisms**, so a device may answer one
+control-block address and decline another.
+
+**That makes `wdcaltdigin`'s narrowing disposition conformant at the ATA level, not merely
+convenient.** ATA-2 does **not** arbitrate PC host-port ownership; that stays open.
+
+### `wdccylwrap` (LOW -> MED) -- a clamp is the WRONG fix
+
+ATA-2 `:2807`: word 1 is *"the number of user-addressable logical **cylinders** in the default
+translation mode"* -- a **count**, not the highest address, with logical-to-physical mapping
+vendor-specific. And Annex D `:5590`: *"For drives less than or equal to 528 MB, Identify Data word 1
+shall not specify a value greater than 1,024."*
+
+The witnessed case is a **32 MiB** image with heads = sectors = 1, giving 65,536 cylinders -- **a
+breach of that limit by a factor of 64 before anything overflows.** The zero in word 1 is the symptom
+of a bad geometry choice, not an independent arithmetic defect.
+
+*** So clamping would replace a meaningless zero with a PLAUSIBLE WRONG NUMBER, which is strictly
+worse -- a zero is visibly broken and a plausible count is not. *** The repair is to choose a default
+translation geometry that fits sixteen bits and covers the image, and the CHS mapping must then use
+it, since the transfer offsets read the same arrays.
+
+**Annex D is INFORMATIVE** -- *"maximum compatibility is achieved if the following rules are obeyed"* --
+and its *shall* does not change that. The fetched document is a **Revision 4c working draft** whose own
+cover says it is not an approved standard.
+
+### `ppcwitnessmaskoracle` -- both corrections VERIFIED against Book I; the PowerPC blocker is cleared
+
+Endpoints, wrap direction, the `+32` offsets, the `& 63`, and both partition counts
+(2016 + 2080 = 4096; 528 + 496 = 1024) all hold. **And the assertion is legitimate** -- I had made
+*"It is not possible to specify an all-zero mask"* an `assert`, and an assert resting on a
+non-normative sentence would fire on a legal encoding, which would be worse than the defect it
+replaced. `ppcrldimimask` and `ppcrlwimiwidth` can now be measured without the oracle being the thing
+that is wrong.
+
+### `mipsextsignext` -- DROPPED, not a defect
+
+The restriction is real and explicit (Restrictions block **and** Operation pseudocode, with
+`NotWordValue` formally defined) -- but **UNPREDICTABLE says results MAY vary, and may-vary is not
+must-vary**, so the model's truncation selects a *permitted* result where the architecture specifies
+none. It also corrected my scope in both directions: the requirement **also** governs `INS`, for both
+operands, and does **not** govern any doubleword form. A round that had generalised across the family
+would have added checks to six instructions the architecture does not restrict.
+
+### `m88kexcdetectorl2` (HIGH -> LOW) -- the sweep was neither a sweep nor a failure
+
+The row's own title says M1/M2 delete `implemented = true;` at **DATA_ACCESS or RESET** -- vectors 3
+and 0. **The probe drives neither**: `grep -c 'V_RESET|V_DATA|V_INTERRUPT|V_INSTR'` returns **0**, and
+its 62 rows drive vectors 4-10, 114, the reserved 11/50/127 and the user traps. So the byte-identical
+transcripts are the **correct and expected** result; the mutated code never executes.
+
+Three parties reasoned about it without checking which vectors the probe drives -- the filer called it
+a floor breach, I called it an apparatus failure, and a design review said the source predicts red
+(true only for arms the probe drives). **The rule question held for the flagship seat is withdrawn:
+the L2-versus-clause-(e) choice presupposed that a mutant in the detector's reach had escaped, and
+none had.**
+
+### `codexfarmclobber` (MED) -- a missing output file means "never started" ONLY for tools that create it at launch
+
+`codexfarm.py` calls `subprocess.run()`, which BLOCKS for the whole call, and writes its answer file
+only AFTERWARDS.  So for the entire run -- 6m41s in the measured case -- **there is no answer file at
+all**, and the carrier's discriminator *log MISSING -> the command NEVER STARTED* reads that as dead.
+
+That rule is correct for a SHELL REDIRECT, which creates the file before it execs, and exactly wrong
+for a tool that writes at the end.  I applied it, concluded a job had never started, and re-fired codex
+at the SAME output path with a `>` redirect -- which truncates at launch.  **A completed 12,032-byte
+answer was destroyed by its own replacement.**
+
+The cross-check that should have caught it is one this project has ALREADY recorded as blind here:
+git-bash `ps -ef` prints the executable path and no arguments, so `grep -c -i codex` returns 0 whether
+or not anything is running.  **Two apparatus checks, both blind, both failing in the same direction** --
+and the one signal that WAS available went unconsulted: the harness tracks background jobs and notifies
+on exit, so *"has it finished?"* was answerable without touching the filesystem.
+
+FIXED STRUCTURALLY, because *remember that codexfarm writes late* is exactly the prose this project
+has measured does not fire: a `<out>.RUNNING` sentinel written BEFORE the call and removed after the
+answer lands, so mid-run and never-started stop rendering the same; plus a REFUSAL to launch when a
+live sentinel or a NON-EMPTY answer already exists at the target path.  Negative-controlled in both
+directions -- a non-empty answer refuses and survives intact at its original byte count, a live sentinel
+refuses and names the owning pid, a CLEAN path is NOT refused, and `CODEXFARM_FORCE=1` overrides both.
+
+OPEN because the tool lives in the session scratchpad rather than in `GXEMUL-SEC/tools/`, so nothing is
+owed to the repo for the fix itself.  **What is owed is the carrier-level correction**: the discriminator
+is stated there without its qualifier, and it is wrong for every tool in this project that writes its
+output at the end rather than streaming it -- `agy` being the other one already on record.
+
+### `landiskintc` (MED) -- six guest accesses per boot to UNMAPPED SH7751R extended-INTC registers
+
+OpenBSD 7.6 on landisk touches **`0xfe080000` five times per boot** (`intc_init`) and **`0xfe080040` once** (`intpri_intr_priority`).  Both are SH7751R extended-INTC registers and **neither is claimed by any device in the constructed machine**, so all six accesses reach nothing.
+
+**What is NOT established is the severity question itself:** whether the guest's interrupt-priority configuration is thereby wrong, or whether these writes are redundant with the base INTC registers the model does implement.  A write that lands nowhere and a write that lands nowhere AND MATTERS are different defects; the census counts accesses, not consequences.
+
+First step: `dev_sh4.c`'s INTC handling against `_scratchpad/sh7750_hardware.txt`.  **The SH manual is present** -- this project once treated "there is no SH documentation" as load-bearing for four rounds, and it was false.
+
+Measured in `regress/artifacts/landiskaux/census_20260827/RESULTS.txt`, whose write-up corrected itself to name all five unmapped sites per boot.  Filed 2026-09-11 because that correction had been made and then recorded in no row.
+
+### `landiskboardreg` (MED) -- eight guest accesses per boot to UNMAPPED landisk board registers, including the RTC chip-enable
+
+`0x10000003` is touched **five times per boot from `rtc_ce`** -- the RTC chip-enable -- and `0x10000005` **three times** from `intr_init` / `extintr_establish`.  Neither is claimed by any device in the constructed machine.
+
+**The RTC half is a testable prediction rather than a guess.**  The machine DOES construct an `rs5c313` RTC at `0x110000000`.  If `rtc_ce` is the chip-select the guest drives to reach it, then the RTC conversation is happening with its select line going nowhere -- which either works by accident, because the model ignores chip-select, or does not work at all.  **Check which before assigning severity; the two outcomes differ by a lot and both are informative.**
+
+`0x10000003` also appears in the `wdcstandby` row.  **That may be an unrelated coincidence of a common constant** -- it has NOT been established that they share a subject, and a round should check rather than assume.
+
+Measured in the same census.  Filed 2026-09-11.
+
+### `agentmodelwall` (MED) -- a MODEL wall on the Agent tool is not a TRANSPORT outage
+
+**Measured 2026-09-11, during a real double outage.**  Opus 5 hit a session limit (`resets 6:10am`, HTTP 429) and killed **four in-flight subagents at once**; Fable 5 was already walled on its own quota, tested three times that day.  Both are Anthropic seats behind the **same Agent-tool transport**, and both are compile-and-measure front ends -- the roster weakness the carrier records from `#462`.
+
+*** But the transport was never down.  Two subagents launched on `model: sonnet` started normally in the same minute. ***
+
+**A MODEL WALL AND A TRANSPORT OUTAGE PRESENT IDENTICALLY** -- an Agent call that fails -- **and they have different remedies.**  `#462`'s outage was `API Error: 529 Overloaded` on the path, and nothing could be done but wait.  A per-model rate limit leaves the path healthy and the other models on it reachable.
+
+**The discriminator is in the error text and costs nothing to read:** a `529 Overloaded` names no model and is the transport; a `429 rate_limit` naming `model sent to the API: claude-opus-5` is that model only.
+
+**Recoverable and not recoverable are different here.**  READING capacity is fully recoverable -- a sonnet subagent has the same repo tools and can do records audits, source tracing and harvests.  **MEASURING capacity is not equivalent**: the carrier's claim for Opus is that it is *the seat most likely to compile and measure*, which is a statement about judgement rather than permission.  Whether a sonnet measurement carries the same weight is **not established** and must not be assumed -- substituting it silently and reporting the result as the flagship's is the seat-failure-counted-as-agreement shape wearing a model name.
+
+**Operational rule:** when an Agent call fails, read WHICH MODEL the error names before concluding the transport is gone, and try another model on the same path.  One invocation settles it -- exactly as the wall rule already says for CLI seats.
+
+Filed because the cost was real: for about ten minutes subagent capacity was treated as lost while it was available the whole time.  Same shape as the kimi substitute sitting unfired for days.

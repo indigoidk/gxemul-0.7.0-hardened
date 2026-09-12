@@ -1,0 +1,112 @@
+VERDICT:
+AGY38_ALTDIGIN_20260911
+HEAD: `8d372aa`
+
+# Witness and Verification Summary: WDC Alternate Status / Drive Address Register (`wdcaltdigin`) Read Decode Defect
+
+The complete witness probe and kill table report has been written and preserved at [`agy_witness_20260911.md`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/wdcaltdigin/agy_witness_20260911.md).
+
+---
+
+### 1. Defect Confirmation & Root Cause
+
+In [`src/devices/dev_wdc.c`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c#L609-L625), [`DEVICE_ACCESS(wdc_altstatus)`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c#L609) registers a 2-byte region (`wdc_altstatus` at `0x3f6` and Drive Address register at `0x3f7`).
+- `relative_addr` was decoded in exactly one place: inside the `else` of `writeflag == MEM_READ` ([`#494`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c#L622-L672)).
+- The `MEM_READ` path unconditionally calculated `odata = status_byte(d, cpu)` without inspecting `relative_addr`.
+- A guest read of offset 1 (`0x3f7`) unconditionally returned the status byte $S$ instead of declining the unmapped read.
+
+Four-cell closure table:
+| Access Cell | Offset 0 (`0x3f6`) | Offset 1 (`0x3f7`) |
+| :--- | :--- | :--- |
+| **WRITE** | Alt Ctrl ([`#481`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c#L673-L745)): `WDCTL_RST` triggers soft reset | Drive Address reg ([`#494`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c#L622-L672)): declined store (no reset) |
+| **READ**  | Alt Status: returns status byte $S$ ($S \neq 0$) | Drive Address reg (`wdcaltdigin`): declined read (`0x00`) |
+
+---
+
+### 2. Pre-Fix Baseline Measurement (Committed HEAD `8d372aa`)
+
+Measured on committed HEAD `8d372aa` in scratch clone `/tmp/gxaltdigin_clone` on unmodified in-tree machine `evbmips -e malta` (Little-endian MIPS 5Kc, PIIX4 IDE with scratch disk image attached as `iR:`).
+
+- **Raw Log**: [`witness_committed.out`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/wdcaltdigin/witness_committed.out)
+- **Score**: **14 / 16**
+- **Non-Zero Status Guarantee ($S \neq 0$)**:
+  - Power-on / idle Alt Status (offset 0): $S = \mathbf{0x51}$ (`WDCS_DRDY | WDCS_DSC | WDCS_ERR`, set by `dev_wdc_init()`)
+  - Armed Alt Status (offset 0): $S_{\text{armed}} = \mathbf{0x58}$ (`WDCS_DRDY | WDCS_DSC | WDCS_DRQ`, set by `arm_a_write()`)
+  - Offset 1 power-on read (`s1`): got $\mathbf{0x51}$ (defect leaks $S$, want `0x00`) $\rightarrow$ **FAIL**
+  - Offset 1 armed read (`s4`): got $\mathbf{0x58}$ (defect leaks $S_{\text{armed}}$, want `0x00`) $\rightarrow$ **FAIL**
+  - All 14 control, accept, and write guard rows passed.
+
+---
+
+### 3. Ruled Repair & Post-Fix Measurement (`BASE`)
+
+Applied the ruled repair to [`src/devices/dev_wdc.c`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c#L619-L623):
+```c
+if (writeflag == MEM_READ) {
+    if (relative_addr != 0) {
+        /*  Declined read convention: emulator policy pre-zeroes
+            registered-device read buffers (#95); return 0 here
+            for unmapped offset 1 (Drive Address register / digin).  */
+        odata = 0;
+    } else {
+        debug("[ wdc: read from ALTSTATUS: 0x%02x ]\n",
+            (int)odata);
+    }
+} else if (relative_addr != 0) {
+```
+- **Raw Log**: [`witness_fix.out`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/wdcaltdigin/witness_fix.out)
+- **Score**: **16 / 16** (Clean pass across all 16 rows; offset-1 reads return `0x00`).
+
+---
+
+### 4. Mutant Kill Table
+
+[`PRETABLE.out`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/wdcaltdigin/killtable_20260911/PRETABLE.out) was written and frozen at `09:44:27` before table execution. The table ran in scratch clone `/tmp/gxaltdigin_clone` with object invalidation (`rm -f src/devices/*.o`) and binary freshness validation on each leg.
+
+| Leg | Description | Score | Status | Kill Rationale / Failing Observables |
+| :--- | :--- | :---: | :---: | :--- |
+| **`BASE`** | Ruled repair: decode `relative_addr != 0` on read, `odata = 0;` | **16/16** | **PASS** | Clean run across all 16 rows. Offset 1 returns `0x00`, offset 0 returns $S$, write cells intact. |
+| **`HEAD`** | Committed HEAD `8d372aa`: no read decode | **14/16** | **KILLED** | **KILLED BY CORE READS.** 2 rows fail (`s1` got `0x51`, `s4` got `0x58`). Symptom confirmed. |
+| **`M_NULL_EFFECT`** | Clause-(d) mutant: decode branch kept, `odata = 0;` deleted | **14/16** | **KILLED** | **KILLED BY CORE READS.** 2 rows fail (`s1` got `0x51`, `s4` got `0x58`). Decisively killed because $S \neq 0$. |
+| **`M_REINSTATE`** | Verbatim pre-fix read arm (`if (writeflag == MEM_READ) debug(...)`) | **14/16** | **KILLED** | **KILLED BY CORE READS.** 2 rows fail (`s1` got `0x51`, `s4` got `0x58`). Verbatim pre-fix defect reconfirmed. |
+| **`M_NULL_MEDIUM`** | Null medium stub: `data[0] = 0; return 1;` on all reads | **14/16** | **KILLED** | **KILLED BY ACCEPT ROWS.** 2 rows fail (`s0` got `0x00` vs want `0x51`; `s3` got `0x00` vs want `0x58`). Rejects all-zero medium. |
+| **`RESTORED`** | Reinstatement of pristine HEAD `8d372aa` after two-part clearance | **14/16** | **CONFIRMED** | Byte-for-byte identical output and score to baseline [`witness_committed.out`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/wdcaltdigin/witness_committed.out). |
+
+---
+
+### 5. Two-Part Restoration & Scratch Clone Verification
+
+1. **Source Restoration**: Pristine [`src/devices/dev_wdc.c`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c) restored from frozen HEAD file. `cmp -s` against `GXEMUL-SEC` evaluated **CLEAN**.
+2. **Binary Freshness**: Recompiled with `rm -f src/devices/*.o && make -C /tmp/gxaltdigin_clone -j8`. `[ /tmp/gxaltdigin_clone/gxemul -nt dev_wdc.c ]` evaluated **TRUE**.
+3. **Sentinel Removal**: `/tmp/gxaltdigin_clone/.MUTANT` dropped before Leg 1 and unlinked **only after** both Part 1 and Part 2 verified.
+4. **Git Tree Cleanliness**: No files in `GXEMUL-SEC` source were edited; all outputs reside exclusively under [`regress/artifacts/wdcaltdigin/`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/wdcaltdigin/).
+
+---
+
+### 6. Clause (e) Disclosure of Instrument Limitations
+
+1. **`wdcaltwidth` & `len == 2` Access Behavior**:
+   - `wdc_altstatus` is registered 2 bytes wide. All test rows execute `len == 1` accesses (`lbu`/`sb`).
+   - In [`DEVICE_ACCESS(wdc_altstatus)`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c#L609), the handler accesses strictly `data[0]`. Under `#95`, `memory_rw.c` pre-zeroes registered read buffers via `memset(data, 0, len)`.
+   - A 16-bit little-endian read at offset 0 (`0x3f6`) receives `data[0] = odata` and `data[1] = 0x00`, yielding 16-bit word value $S$ (`0x0051` or `0x0058`).
+   - A 16-bit read at offset 1 (`0x3f7`) crosses the 2-byte registration boundary into unmapped I/O address space.
+   - On 16-bit writes, `idata = data[0]` means only the low byte is decoded for `WDCTL_RST`.
+2. **Primary IDE Scope**: Harness exercises PIIX4 primary channel (`0x1f0`/`0x3f6`). Secondary channels and CD-ROM ATAPI signature interactions share the C handler but were not separately exercised.
+3. **Absence of Real Floppy Multiplexing**: Physical PC hardware multiplexes the floppy Digital Input Register (DIR) with ATA Drive Address at `0x3f7`. GXemul models `wdc` without DIR multiplexing.
+4. **Polled Status Verification**: Probe measures device state through polled register loads; interrupt line transition assertions (`nIEN`) were not wired to an ISR in this probe.
+
+---
+
+### 7. Artifact Inventory
+
+All preserved artifacts under [`regress/artifacts/wdcaltdigin/`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/wdcaltdigin/):
+- [`agy_witness_20260911.md`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/wdcaltdigin/agy_witness_20260911.md): Master report document.
+- [`agy_altdigin_witness_20260911.py`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/wdcaltdigin/agy_altdigin_witness_20260911.py): Frozen Rung-3 witness probe script.
+- [`witness_committed.out`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/wdcaltdigin/witness_committed.out): Raw baseline run log on committed HEAD `8d372aa` (Score 14/16).
+- [`witness_fix.out`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/wdcaltdigin/witness_fix.out): Raw candidate fix run log on `BASE` (Score 16/16).
+- [`killtable_20260911/PRETABLE.out`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/wdcaltdigin/killtable_20260911/PRETABLE.out): Pre-table derivation and predicted scores.
+- [`killtable_20260911/mutate_altdigin.py`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/wdcaltdigin/killtable_20260911/mutate_altdigin.py): Mutation driver script.
+- [`killtable_20260911/killtable.sh`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/wdcaltdigin/killtable_20260911/killtable.sh): Automated kill table runner script with restoration checks.
+- [`killtable_20260911/SCORES.txt`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/wdcaltdigin/killtable_20260911/SCORES.txt): Summary score records.
+- [`killtable_20260911/probe_*.raw`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/wdcaltdigin/killtable_20260911/): Raw logs for `BASE`, `HEAD`, `M_NULL_EFFECT`, `M_REINSTATE`, `M_NULL_MEDIUM`, and `RESTORED`.
+- [`killtable_20260911/KILLTABLE_DONE`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/wdcaltdigin/killtable_20260911/KILLTABLE_DONE): Completion sentinel.

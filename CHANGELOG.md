@@ -1,3 +1,181 @@
+# `#525` (wdcaltdigin): the alt-status handler never decoded its offset ON THE READ SIDE — a read of the Drive Address register returned the ALT-STATUS byte, and `#494` closed the write half of the same `if` and left this one open
+
+**THE DEFECT.** `DEVICE_ACCESS(wdc_altstatus)` computes `odata = status_byte(d, cpu)` unconditionally
+and then tests `relative_addr` in **exactly one place** — inside the `else` of
+`writeflag == MEM_READ`. So the read path never decoded its own offset, and a READ of offset 1 —
+the Drive Address register, `0x3f7` on the PC layout — **returned the alt-status byte: the value of
+a different register, from an offset the handler never looked at.** The region is registered two
+bytes wide.
+
+**THIS IS THE SYMMETRIC CELL OF `#494`.** That round closed the WRITE half of this same `if` and
+left the READ half open. The function's own inputs give a two-by-two:
+
+| direction | offset 0 | offset 1 |
+|---|---|---|
+| WRITE | Alt Ctrl / `WDCTL_RST` (`#481`) | declined silently (`#494`) |
+| READ | alt-status, unchanged | **returned the status byte — closed here** |
+
+Three cells were closed and one was not. *A repair that fixes the cell its mutant used and leaves
+the symmetric one is a shape this project has now recorded twice.*
+
+**THE FIX.** Decode the read; `odata = 0` on offset 1; keep the unconditional status calculation,
+the common tail and `return 1`. **The registration is deliberately NOT narrowed** — a `2 → 1` at
+`memory_device_register()` would close both offset-1 cells structurally, but it moves `0x3f7` from
+HANDLED-AND-DECLINED to UNMAPPED, an unmeasured path, and it would leave `#494`'s arm as dead code
+carrying a measured comment. Owner ruling: decode the read.
+
+**MEASURED, rung 3, cold debugger, unmodified in-tree machine.** Committed HEAD **14/16**, with both
+offset-1 read rows returning the status byte (`0x51` at power-on, `0x58` armed); the fix **16/16**.
+Same script both ways. Artifacts under `regress/artifacts/wdcaltdigin/killtable_20260911/`,
+`KILLTABLE_DONE` present, `PRETABLE.out` written 51 s before table 1 so its mtime proves the order.
+
+**THE STATUS BYTE IS NONZERO AND THAT IS LOAD-BEARING, NOT INCIDENTAL.** The clause-(d)-shaped
+mutant keeps the offset guard and deletes `odata = 0`, so offset-1 reads return the status byte
+again — **and if S were 0 the fixed and broken builds would return the identical byte and the row
+would be vacuous.** `dev_wdc_init()` sets `d->error = 1`, so `status_byte()` yields
+`WDCS_DRDY|WDCS_DSC|WDCS_ERR = 0x51`; armed by `WDCC_WRITE` it yields `0x58`. Both values are
+printed in the log rather than asserted.
+
+> **AND THE SCORES ALONE ARE MISLEADING, WHICH IS WORTH RECORDING RATHER THAN GLOSSING.** All four
+> mutant legs score **14/16**. `SCORES.txt` therefore says nothing distinguishes them. Opening the
+> raw logs shows `M_NULL_MEDIUM` fails a **different pair** of rows (`ACCEPT_READ_OFF0_*`) than HEAD
+> does (`CORE_READ_OFF1_*`). *The numerator is identical and the whole discrimination lives in the
+> row identity — read `probe_<leg>.raw`, never `SCORES.txt`.*
+
+## Clause (d) is N/A-WITH-REASON, not passed
+
+**The DEPENDS-ON enumeration for this repair is EMPTY.** The guarded body is `odata = 0;` — it reads
+nothing and tests nothing — and the dominating predicates are `writeflag == MEM_READ` and
+`relative_addr != 0`, where **over a two-byte region `!= 0` admits no non-equivalent weakening.**
+
+*Recorded as inapplicable with its reason rather than as discharged: an unrun check and an
+inapplicable one must not render the same, and writing "(d) passed" here would have claimed a test
+that was never available.* Floor otherwise: (a) HEAD red, (b) `M_REINSTATE` = HEAD, (c)
+`M_NULL_MEDIUM` fails the accept rows.
+
+## ATA-2 gives this more warrant than the round first claimed
+
+X3T10 0948D, Note 1 (`_scratchpad/ata2_x3t10_948d.txt:1529-1531`): *"This register is obsolete. It
+is recommended that a device **not respond** to a read of this address. If a device does respond, it
+shall be sure **not to drive the DD7 signal** to prevent possible conflict with floppy disk
+implementations."*
+
+**Declining is the recommended behaviour, not merely a choice. DD7 is bit 7, and `odata = 0` leaves
+it clear**, so the returned value satisfies the one constraint the standard places on a device that
+does answer. Zero remains an emulator policy **where the standard is silent** — it fixes *which*
+non-DD7 value is returned — but it is not arbitrary. `030e961` already recorded this Note as
+governing and the comment never cited it; two panel seats raised it independently.
+
+**THE `030e961` DD7 BIT-7 ROW IS DISCHARGED BY SUBSUMPTION:** both `CORE_READ_OFF1_*` rows want
+`0x00`, which pins every bit including DD7.
+
+## Disclosed under clause (e)
+
+* **`if (odata & WDCS_DRDY) odata = 0;`** — predicted to escape 16/16. **Debt, not floor**, on the
+  test that the guarded body never reads or tests `odata`, it only writes it. *Two rows would close
+  it and the recipe is known: SDH `0xb0`, any command to an imageless drive sets
+  `d->error |= WDCE_ABRT`, giving HEAD `0x01`, fix `0x00`, mutant `0x01`. `d->error` is one shared
+  field, so those rows must go LAST in their session.*
+* **`M_NULL_EFFECT` and `M_REINSTATE` are indistinguishable to this instrument** — same score, same
+  rows, same bytes. Expected, and stated rather than left for a later pass to find.
+* **Two panel-proposed selector mutants DO NOT COMPILE** and are recorded so nobody rebuilds them:
+  `struct wdc_data` has no `unit` field (it has `drive` and `base_drive`), and `page_size` appears
+  nowhere reachable from `cpu->mem`.
+
+## Records corrections made in-round
+
+* **The handler contradicted itself within one function.** `#494`'s write arm still carried *"A
+  correct guest writes here expecting a floppy effect"* — the identical claim this round's read-side
+  comment retracts 34 lines above. **L4, narrowed in place.** *Found by grepping for the sibling of
+  a correction already called finished, which is mechanical rule 2 and which I had skipped.*
+* Two overclaims narrowed: *"matches no hardware on any layout"*, and the universal floppy-effect
+  claim. **And a refinement: `DEV_FDC_LENGTH` is 6, so `dev_fdc.c` does not register `0x3f7` today
+  — the documented collision is PROSPECTIVE, not live.**
+
+## Seats
+
+Panel `regress/artifacts/armbdt/panel_20260911/`: **six of seven scriptable seats answered**; the
+kimi CLI was WALLED and its `kimi-k3:cloud` substitute answered, so that seat was COVERED, not lost.
+**agy deliberately not fired** (reserved for measurement — it built this round's witness).
+**Opus 5 deliberately not fired.** **Fable 5 adjudicated, after every other seat had spoken.**
+
+**DISCHARGED — and this paragraph was a WRONG RECORD from the moment the promotion happened.**
+It read *"STILL OWED ... the probe is under `regress/artifacts/`, not `regress/` proper, so 'shipped a
+detector with the fix' is not yet true — promote it."*  **It was promoted.**  `regress/wdc_altdigin_probe.py`
+is staged in `regress/` proper and `gate_sh_rounding.sh:1457` runs it, guarded by a
+PARSE-BEFORE-SCORE check at `:1459` and pinned at `:1485` with `check "wdc_altdigin rows run" 16`.
+*The sentence survived its own discharge because nobody re-read it after doing the work — the
+dated-record-quoted-as-live class, caught by the fable5 held-queue adjudication.*
+
+
+## *** PASS 2 ADDED A THREE-ROW PHASE, BECAUSE A ONE-TOKEN MUTANT SWEPT THE 16-ROW
+## INSTRUMENT.  THE ROW DESIGN TOOK THREE ATTEMPTS AND TWO OF MY OWN "MEASUREMENTS" WERE
+## OF THE APPARATUS RATHER THAN THE DEVICE. ***
+
+Two seats independently predicted a TOTAL ESCAPE of the shipped 16 rows:
+
+    if (odata & WDCS_DRDY)
+            odata = 0;
+
+It keeps the offset guard and nulls the repair **only where DRDY is CLEAR** -- and every row the
+instrument drove has DRDY SET (`ST_POWERON = 0x51`, `ST_ARMED = 0x58`), so the mutant zeroes
+anyway and is invisible BY CONSTRUCTION.  The adjudication graded it a **pre-ship L1**: correct by
+the DEPENDS-ON letter as debt (the guarded body `odata = 0` reads nothing), but the round is still
+being built, so it is closed here rather than filed.
+
+### THREE DESIGNS, AND WHY THE FIRST TWO FAILED
+
+The requirement is a status that is **NON-ZERO with DRDY CLEAR**.  That is harder than it looks:
+
+* **"run a session with no disk image"** -- VACUOUS, refuted by READING `status_byte()` at `:584`.
+  It sets `WDCS_DRDY | WDCS_DSC` only under `diskimage_exist()`, so with no image and no error the
+  status is `0x00` -- and a correctly DECLINED `0x00` cannot be told from a LEAKED `0x00`.
+* **"issue `WDCC_DIAGNOSE` to set `d->error`, read ERR = 0x01"** -- REFUTED FROM SOURCE by the
+  design seat: `wdc_command()` clears `d->error` at `:933`, calls the reset helper, then detects
+  the missing image, sets `WDCE_ABRT` and **RETURNS BEFORE THE COMMAND SWITCH**, so DIAGNOSE's arm
+  at `:1054` is unreachable without an image.
+
+**What works is the ABSENT SLAVE plus an armed write.**  Writing `0xb0` to `wd_sdh` selects drive
+1; that path (`:2006`) sets only sectorsize/lba/drive/head and touches neither error nor transfer
+state, and `status_byte()` recomputes DRDY from the NEWLY SELECTED drive's image.  **`WDCS_DRQ` is
+independent of image presence**, so with the W2 write still armed and staged bytes queued the
+status is `0x08` -- non-zero, DRDY clear.  The phase sits between the `t8` and `t9` reads, the one
+point where DRQ is MEASURED set by the line above it, and `arm_a_write()`'s own `0xa0` reselects
+drive 0 afterwards.
+
+    CONTROL_STATUS_EMPTYSLAVE     +7        want 0x08   -- DRQ only; DRDY and DSC CLEAR
+    ACCEPT_READ_OFF0_EMPTYSLAVE   offset 0  want 0x08   -- the legal read still answers
+    CORE_READ_OFF1_EMPTYSLAVE     offset 1  want 0x00   -- declined while DRDY is clear
+
+The ACCEPT row is present on the design seat's own correction: without it the phase never observes
+offset 0 in this state, and a DEAD device would satisfy the CORE row for the wrong reason.
+
+### THE MEASURED KILL (`regress/artifacts/wdcaltdigin/killtable_20260911_drdy/SCORES.txt`)
+
+    LEG BASE      19/19  CONTROL=OK  FAILING: none
+    LEG M_DRDY    18/19  CONTROL=OK  FAILING: CORE_READ_OFF1_EMPTYSLAVE  (want 0x00 got 0x08)
+    RESTORE       cmp-vs-SEC=CLEAN  binary=FRESH  SENTINEL CLEARED (both parts)
+
+**A row is not discharged by existing; it is discharged by reddening under its mutant.**  The
+one-token mutant now dies on exactly the row written for it and disturbs nothing else.  The gate
+pin moved 16 -> 19 by hand, with its reason, because a pin that follows the probe cannot tell a
+probe that GAINED rows from one that LOST them.
+
+### *** A MEASUREMENT ERROR OF MINE, RECORDED BECAUSE IT NEARLY SHIPPED AS TWO FALSE
+### "MEASURED" CLAIMS IN THE PROBE'S OWN CONTRACT ***
+
+`REGS` is the tuple driving the register readback.  **A row whose register is ABSENT from it is
+never read and scores `0x00` -- which is indistinguishable from a device that answered `0x00`.**
+`t4/t5/t6` were not in `REGS`, so two earlier PLACEMENTS of this phase reported "status 0x00" and I
+wrote each up as a refutation of the DEVICE STATE.  Adding the three registers took the same probe
+to 19/19.  **Those placements are UNTESTED, not refuted**, and the probe's comment says so.
+
+*This is the pattern-that-matched-nothing class wearing a register's clothes: a selection that
+returns nothing yields a clean, confident, wrong answer, and unlike a crash it looks exactly like a
+measurement.  The lesson that generalises: when a new row reads `0x00`, establish that the readback
+can SEE the register before concluding anything about the device.*
+
+
 # `#522` (ppcrldiclzero): `rldicl` wrote ZERO to its destination on every execution — the mask was accumulated into the rotated value and ANDed with a variable that was never anything but zero
 
 **THE DEFECT.** `X(rldicl)` rotates its source, then builds a mask. The mask was ORed into **`tmp`** — the

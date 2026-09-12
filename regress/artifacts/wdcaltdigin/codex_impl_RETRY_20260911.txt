@@ -1,0 +1,131 @@
+VERDICT: Prefer (a) to remove WDC’s response at offset 1. The permitted files do not establish that narrowing is safe on every attaching machine.
+CODEX_DIGINIMPL_20260911
+
+The device-level change is concrete: register `wdc_altstatus` with length **1 instead of 2**. But questions 2 and 4 require evidence outside your permitted files. An initializer’s machine-specific address adjustments are not an attachment census, and a failed-device-access exception path does not establish the behavior of an unclaimed address.
+
+There is also a premise to qualify: **returning bit 7 clear is not the electrical equivalent of leaving DD7 undriven.**
+
+The supplied document identifies itself as **X3T10/0948D Revision 4c, March 18, 1996**, and its cover explicitly says it is an unapproved working document subject to modification. It supports choosing a compatibility policy aligned with that draft; it does not support claiming verified compliance with the final approved ATA-2 standard. Within the draft, nonresponse is a **recommendation**, while avoiding DD7 drive is a **conditional requirement if the device responds**. Neither statement specifies a CPU exception or an emulator return code. [Draft cover](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ata2_x3t10_948d.txt:7), [Table 7, Note 1](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ata2_x3t10_948d.txt:1529)
+
+The settled alias, two-byte registration, and present status-bit behavior are established at [the alternate handler](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c:609), [registration](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c:2028), [status construction](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c:584), and [status definitions](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/thirdparty/wdcreg.h:78).
+
+**“Do not respond” means that WDC supplies no response to that address.** What the guest subsequently observes belongs to the surrounding bus and memory model. These are separate facts:
+
+- WDC does not claim the address.
+- No other device claims the address.
+- The guest receives a particular value, takes an exception, or completes a discarded write.
+
+The first does not establish the other two. A host bridge can turn device nonresponse into a CPU exception; that does not mean the ATA device answered. Conversely, returning zero data successfully does not establish nonresponse.
+
+Let `A` denote `alt_status_addr`, and consider one-byte accesses unless otherwise stated.
+
+| Candidate | Does it achieve the recommendation? | Guest-visible behavior and cost |
+|---|---|---|
+| **(a) Register one byte** | **Yes, at WDC’s registration boundary:** `A+1` leaves this region. Whether the complete machine implements the intended nonresponse behavior remains unverified. | The access proceeds according to the surrounding address map: another responder, or unassigned-address handling. Both reads and writes change routing. Existing successful accesses may become faults or reach another device. |
+| **(b) Keep two bytes; return `0` at offset 1** | **It implements a failed mapped access.** It cannot be identified with ATA nonresponse without a justified bus translation. | WDC remains selected. Per your supplied premise, MIPS and M88K raise architectural exceptions. It does not fall through to the unassigned-address path or give another device an opportunity to answer through that path. |
+| **(c) Keep two bytes; return a constant with bit 7 clear** | **No.** WDC still supplies a successful response. | The guest receives the constant. This removes the status alias but preserves ownership of the address and synthesizes a value. Clearing bit 7 establishes only the byte-value property discussed below. |
+| **(d) Restrict `status_byte()` to offset 0** | **No, with the common tail retained.** | At offset 1, `odata` remains its initialized value, zero; the tail writes it to `data[0]` and returns `1`. This is **(c) with constant zero**. |
+
+The return-zero distinction is also documented in the existing write-guard comment, including an attributed Malta measurement of a device-failure exception. That is useful evidence, but it is not a fresh inspection of `memory_rw.c` or proof of unassigned-address behavior. [Failure-path explanation](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c:655)
+
+For **(d)**, there is an additional placement hazard: the current handler has no explicit offset-zero *read* branch. Its existing final `else` is the **offset-zero write** branch. Moving `status_byte()` into that existing branch would make reads of **both** offsets return zero. The table assumes the sensible interpretation: introduce an offset-zero condition that still computes status for reads of `A`. [Branch structure](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c:619), [common tail](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c:746)
+
+Other variations visible or assessable here are:
+
+- **Return `1` without assigning the read buffer:** still successful handling, not a nonresponse mechanism. The source comment reports that caller initialization already supplies zeros; leaving that buffer untouched would rely on caller initialization, not bus semantics. [Buffer-initialization comment](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c:667)
+- **Return masked status or a synthesized Drive Address value:** still an answer. Neither implements the recommendation.
+- **Remove the whole alternate registration:** also removes legitimate alternate-status reads and Device Control writes.
+- **Disable `io_enabled`:** the alternate handler does not consult it. The check belongs to the regular-register handler. [Regular-handler check](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c:1082)
+
+No mechanism for per-bit drive validity, bus fallthrough from a selected device, or a distinct “declined” callback result is demonstrated by these files. Such a mechanism would need separate dispatcher/bus evidence or additional implementation.
+
+The **first distinguishing guest access** is generally a byte read of `A+1`, but some candidates are observationally equivalent:
+
+- For **(a)**, that first read leaves the WDC region. Its result may distinguish it immediately from the others, but the permitted files do not determine that result.
+- For **(b)**, that read faults on MIPS/M88K under the supplied premise, distinguishing it from successful **(c)/(d)**.
+- For **(c)** with a nonzero constant, that read distinguishes it from the sensible implementation of **(d)**.
+- For **(c)** with constant zero versus sensible **(d)**, **no guest access distinguishes them on the shown behavior**.
+- If unassigned reads under **(a)** produce zero, a successful zero constant can match its byte result. If unassigned reads fault like **(b)**, their architectural outcomes may match. Dispatch evidence is then necessary.
+- With the misplaced-write-branch interpretation of **(d)**, the first read of `A` in a state with nonzero status exposes the additional regression.
+- A byte **write** to `A+1` distinguishes successful ignored handling under **(c)/(d)** from **(b)** if its offset guard applies to both directions. A read-only version of **(b)** preserves the previous write behavior.
+
+Thus there is no universal guest-only access sequence that uniquely identifies all four implementations.
+
+Every invocation of the shown `DEVINIT(wdc)` requests a **literal two-byte alternate region**, independent of `addr_mult`. The regular region separately requests `8 * addr_mult` bytes. The complete address-selection policy shown here is:
+
+| Initializer case | Alternate-region base | Alternate length |
+|---|---:|---:|
+| Default | `devinit->addr + 0x206` | 2 bytes |
+| `MACHINE_MACPPC` | `devinit->addr + 0x160` | 2 bytes |
+| `MACHINE_HPCMIPS`, when the main base is `0x14000180` | `0x14000386` | 2 bytes |
+| Other `MACHINE_HPCMIPS` bases | Default formula | 2 bytes |
+| `MACHINE_IQ80321` | `devinit->addr + 0x402` | 2 bytes |
+
+These branches change addresses, not lengths. The alternate callback also does not divide its offset by `addr_mult`. Consequently, the proposed change is **literal `2 → 1`**, not multiplication by the register stride. [Initializer](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c:1981)
+
+The source additionally reports a working **evbmips/Malta** attachment in the previous write-side investigation. That is an attributed attachment report, not an exhaustive census. [Malta report](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c:623)
+
+**No alternate-register functionality shown here needs the second byte.** It currently provides the read alias and the guarded write. The header also compiles out `wd_digin` with a comment assigning that PC address to floppy use. This supports narrowing locally; it does not prove that no machine wrapper, overlapping mapping, or transaction-width convention depends on the existing registration. [Auxiliary-register definitions](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/thirdparty/wdcreg.h:65)
+
+The requested machine-wide conclusions therefore remain:
+
+| Question | What these inputs establish |
+|---|---|
+| Which machines attach WDC? | Address exceptions and an attributed Malta attachment, **not a complete list**. |
+| Does any attachment depend on two bytes for another purpose? | No such purpose appears in this device implementation; external dependencies are **unverified**. |
+| What happens to an unclaimed access on MIPS? | **Unverified.** The supplied failed-device exception behavior concerns a different path. |
+| What happens after narrowing on MACPPC, IQ80321, or other attachments? | **Unverified.** Their bus and unassigned-address implementations are excluded. |
+| Does the M88K failure premise establish a WDC attachment? | **No.** It establishes failure behavior if that path is exercised, not attachment coverage. |
+
+It would be incorrect to fill this gap with a claimed “MIPS bus error, other architectures silence” matrix.
+
+The concrete registration change I recommend is:
+
+```c
+memory_device_register(devinit->machine->memory, "wdc_altstatus",
+    alt_status_addr, 1, dev_wdc_altstatus_access, d, DM_DEFAULT, NULL);
+```
+
+**Narrowing also excludes offset-1 writes from this WDC region by construction.** It therefore prevents the original Device Control misdecode for byte accesses routed through this registration. It does **not** preserve the previous guest-visible successful ignored write: the surrounding map now determines its outcome.
+
+I would **keep the existing write-side guard as defense** against an erroneous future wider registration or another invocation path. It becomes redundant for ordinary byte accesses through the narrowed mapping, but retaining it protects the reset action. Its comment should describe the two-byte registration as historical, and its current “read-only” description should be corrected to reflect the draft’s **Not Used** write entry. [Write guard](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c:622), [control-block entries](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ata2_x3t10_948d.txt:1493)
+
+Accesses wider than one byte need separate treatment: the callback only assigns `data[0]`, and these files do not establish whether dispatch splits, accepts, or rejects a transaction starting at `A` and spanning the new boundary. Narrowing’s byte-access argument is not proof about those transactions.
+
+The **DD7 regression requirement needs two distinct oracles**.
+
+Your settled observation establishes that the current alias’s returned byte has bit 7 clear. It does not establish literal electrical compliance: driving DD7 low is still driving DD7. Note 1 says to avoid driving the signal, and the draft identifies the data lines as tri-state signals. The callback shown here supplies a byte, with no accompanying drive mask. [Note 1](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ata2_x3t10_948d.txt:1529), [driver types](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ata2_x3t10_948d.txt:1024)
+
+I would specify these proposed rows; I cannot identify existing regression rows because their files are outside the allowed inputs:
+
+| Proposed row | Positive requirement |
+|---|---|
+| `digin_response_dd7_clear` | **For a retained-response policy:** prove the read happened and WDC successfully answered; then require the returned byte’s bit 7 to be clear, independently of status construction. This pins the byte-level surrogate, not electrical non-driving. |
+| `digin_unclaimed` | **For narrowing:** prove an actual byte read of `A+1` reached dispatch, require WDC not to be selected, and require the resulting responder or unassigned outcome to match that machine’s established behavior. |
+| `digin_bsy_isolation` | In a controlled test fixture, make status report BSY. First verify that alternate status at `A` exposes BSY; then verify that the attempted read at `A+1` still never selects WDC. |
+
+The BSY fixture is a proposed test provision, not an existing hook demonstrated by these files. It prevents the test from depending on today’s inability to report BSY and prevents “fixing” the problem by clearing BSY globally. Alternate status is supposed to expose that bit. [Alternate-status definition](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ata2_x3t10_948d.txt:1533)
+
+After narrowing, **an unconditional assertion that the guest’s value at `A+1` has bit 7 clear is wrong**. Another responder or the bus’s unassigned-read value could legitimately supply bit 7 set. There may also be no returned value because the access faults.
+
+The meaningful replacement is **zero WDC contribution**, independent of BSY. A conditional “if WDC answers, bit 7 is clear” assertion alone becomes vacuous when it never answers; the separate nonresponse row must carry the acceptance criterion.
+
+The **inverted witness must prove execution and routing**, rather than head-select invariance:
+
+| Implementation or test failure | Exact target read observed? | WDC selected? | WDC result | Passes `digin_unclaimed`? |
+|---|---:|---:|---|---:|
+| Address outside WDC’s mapping | Yes | No | None | Yes, if downstream outcome also matches |
+| Answered with a constant | Yes | Yes | Successful byte | No |
+| Answered with status alias | Yes | Yes | Successful status byte | No |
+| Registered handler returns `0` | Yes | Yes | Failed access | No |
+| Access never happened | No | No | None | No |
+
+The observation must identify the **actual address, direction, and width** at dispatch. Absence of an ALTSTATUS log, an unchanged destination variable, or a liveness marker elsewhere in the program does not prove that this read occurred. A direct callback test also cannot prove that registration excludes the address.
+
+For a faulting access, the positive architectural evidence is the expected exception associated with that access, together with its dispatch record. For a completing access, record its actual completion and resolution. The expected outcome must be independently established for each attachment, not learned from the candidate being tested.
+
+A controlled neighboring responder can additionally show that WDC leaves the address available: its response must reach the requester at `A+1`. This is useful for exposing constant responders and mapped failures, although it does not replace each machine’s unassigned-address test.
+
+Head selection can remain a coverage dimension, but invariance is no longer an acceptance condition. A constant, a masked status alias, and a skipped access all satisfy weak invariance or clear-bit checks. The execution-and-routing oracle rejects all three.
+
+Only the three permitted files were read. No files were written and no tests were executed. The remaining limitation is specific: **attachment coverage and per-machine behavior after the address leaves WDC’s mapping remain unverified.**

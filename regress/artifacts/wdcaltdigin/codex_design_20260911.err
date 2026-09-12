@@ -1,0 +1,2362 @@
+Reading additional input from stdin...
+OpenAI Codex v0.153.4
+--------
+workdir: C:\Users\User00\AppData\Local\Temp\claude\C--DocumentNoSnc-CC-GXEMUL\8e474f41-4d47-4c99-bf11-3406a84c4fcd\scratchpad
+model: gpt-6-astra
+provider: openai
+approval: never
+sandbox: read-only
+reasoning effort: max
+reasoning summaries: none
+session id: 01a0904d-3fb5-70b0-8d01-f254d9fe2e1d
+--------
+user
+# `wdcaltdigin` — the READ cell that `#494` left open when it closed the WRITE cell of the same `if`
+
+VERDICT line first, then the liveness token `CODEX_ALTDIGIN_20260911`.
+
+**Please do not simply ratify.** Twice today a codex pass has refuted the central premise of a brief
+of mine, both times correctly — one claimed a probe row witnessed five sites it never touches, one
+claimed two callers that do not exist. **Check the premises, not just the derivations.** "Your cell
+table is wrong" is the most valuable answer you can give.
+
+## READ ONLY THESE FILES. DO NOT LIST OR SEARCH DIRECTORIES.
+
+```
+C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\src\devices\dev_wdc.c
+C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\src\devices\dev_fdc.c
+C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\src\include\wdcreg.h
+C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\src\cpus\memory_rw.c
+```
+
+**All four verified to exist as absolute paths before firing.** The tree under review is
+`GXEMUL-SEC/src/`; three unrelated 2021-vintage copies of `src/` sit elsewhere under the project
+root and give line numbers off by hundreds. **If a path above is wrong, say so and do not guess a
+replacement.**
+
+## SETTLED PREMISES — re-inlined so you need not re-derive them
+
+* `#481` established that the Alt Ctrl reset bit is `WDCTL_RST` (0x04), not `WDCTL_4BIT` (0x08).
+* `#494` established, **at rung 3 on an unmodified `evbmips -e malta`**, that a guest store to
+  offset 1 of this region was being treated as a Device Control write, which aborted a live ATA
+  write and purged the queued ring. Its fix declines the **whole action**, not just the helper call,
+  because a helper-only guard leaves the ATAPI signature latched — and that was measured, not
+  reasoned.
+* The region is registered **two bytes wide** at `dev_wdc.c:2028-2029`:
+  `memory_device_register(..., alt_status_addr, 2, dev_wdc_altstatus_access, d, DM_DEFAULT, NULL);`
+* This project's option set is: 1 DELETE · 2 DECLINE (silent) · 3 DECLINE + BOUNDED LATCHED
+  ANNOUNCE · 4 ACCEPT · 5 FAULT · 6 BACKED ACCEPT · 7 IMPLEMENT.
+
+## THE FINDING — which I want checked, not confirmed
+
+Reading `DEVICE_ACCESS(wdc_altstatus)` at `:609` in execution order:
+
+* `:614` `idata = data[0];`
+* `:617` `odata = status_byte(d, cpu);` — **unconditional; the offset is not consulted**
+* `:619` `if (writeflag == MEM_READ)` → `debug(...)` only; the common tail assigns `odata` out
+* `:622` `else if (relative_addr != 0)` → the `#494` arm, declining the write
+* `:673` `else` → the genuine Alt Ctrl write path
+
+**My claim: `relative_addr` is tested in exactly ONE place in this function, and that place is
+inside the `else` of `writeflag == MEM_READ` — so the READ path never decodes its offset, and a read
+of offset 1 returns the alt-status byte.** Giving the two-by-two:
+
+| cell | disposition at HEAD (my reading) |
+|---|---|
+| WRITE, offset 0 | Alt Ctrl, correct (`#481`) |
+| WRITE, offset 1 | closed by `#494` |
+| READ, offset 0 | alt-status, correct |
+| READ, offset 1 | **OPEN — returns the alt-status byte** |
+
+**Confirm or refute this table cell by cell from the source.** If `relative_addr` is tested
+somewhere I missed, or if the common tail does something I have not accounted for, say so.
+
+## *** THE MEASUREMENT I MOST NEED YOU TO SCRUTINISE, BECAUSE A DISPOSITION TURNS ON IT ***
+
+`#494`'s own comment at `:655-665` records, correcting an earlier wrong reason in place:
+
+> *"THE ACCESS STAYS HANDLED (`return 1`) … this device is REGISTERED, so a 0 never reaches
+> [unassigned-address] handling. `memory_rw` sets `res = -1`, takes its `res <= 0` branch, and
+> raises `EXCEPTION_DBE` — measured, 19793 `device 'wdc_altstatus' … failed` lines and ZERO
+> `non-existant` ones under `-v`. The guest then loops forever re-executing the faulting store, and
+> at DEFAULT verbosity it does so in SILENCE."*
+
+**Questions on exactly this:**
+
+1. **Verify that claim against `memory_rw.c`.** Does a registered device handler returning 0 reach
+   `res <= 0` and raise `EXCEPTION_DBE`? Quote the lines. **Is `EXCEPTION_DBE` live, or is it inside
+   an `#if 0`?** I have a note saying it is disabled for MIPS/M88K and I do not trust my own note.
+2. **Is that measured claim TRANSFERABLE to a NARROWED registration?** My reading is that it is not —
+   returning 0 from a *registered* device and making the address *unmapped* are different paths. For
+   an unmapped address, what does `memory_rw.c` actually do to a read and to a write? **Quote it.**
+   If unmapped reads are zero-filled and writes ignored, then narrowing is a structural DECLINE, not
+   a FAULT — and citing that 19793 against a narrowing would be a wrong record.
+3. **So: does FAULT (member 5) even exist as an option at this site, on the machines that install
+   this device?** This project has recorded that FAULT works because `memory_rw` dispatches an
+   exception on a failed device access **for MIPS and M88K**, with no Alpha equivalent. Say what is
+   true here, from the source.
+
+## THE DISPOSITION QUESTION
+
+Two candidate repairs, and I want your ranking with reasons:
+
+* **(A) NARROW THE REGISTRATION** — the literal `2` → `1` at `:2029`. Closes both offset-1 cells
+  structurally. **But then the `relative_addr != 0` arm at `:622` becomes DEAD CODE** carrying a long
+  comment describing a case that can no longer arrive — say what should happen to it, because
+  leaving it is a wrong record and deleting it discards a measured finding.
+* **(B) DECODE THE READ** — mirror `#494` on the read side inside the handler; registration
+  untouched. Smallest diff, keeps the address owned by wdc, makes the two-by-two symmetric.
+  **What should a declined read RETURN, and why?** The common tail assigns `odata`; `#95` already
+  zeroes the caller's buffer. Name the value and its warrant.
+
+**Do not assume the answer is whichever is smaller.** Note the tree documents the 0x3f7 collision
+from BOTH sides and resolves it from neither — `wdcreg.h` compiles `wd_digin` out under an `#if 0`
+noting *"NOT MAPPED; fd uses this register on PCs"*, and `dev_fdc.c`'s `DEV_FDC_LENGTH` carries
+*"TODO 8, but collision with wdc"*. **Verify both of those quotes exist; if either does not, say
+so.** Does that ownership question have to be settled BEFORE this one, or is it separable?
+
+## THE DETECTOR
+
+1. **What rows does the chosen repair owe?** The floor requires failing on the pre-fix build, on a
+   verbatim reinstatement, on a null medium, and **on a NULLED REPAIR — guard kept, effect removed.**
+   Name the clause-(d) mutant explicitly for each candidate.
+2. **For every row, name the mutant it kills and the observable that differs under that mutant.** A
+   row whose named channel cannot vary under its named mutant is vacuous by construction and that is
+   knowable now, before any table runs. **Under repair (A) especially: if the address is unmapped,
+   what channel can a row even read?**
+3. **THE ACCEPT SIDE.** Whichever repair, enumerate from the diff every predicate that gated the old
+   behaviour and say what accept row pins each — proving legal alt-status reads at offset 0 still
+   land. An accept row is discharged by a MEASURED KILL, not by existing.
+4. **WIDTH.** A sibling row records that the region is registered two bytes wide while every existing
+   row uses `len == 1`, so the access width is unpinned. **Does repair (A) settle that by
+   construction? And what happens to a `len == 2` access under each candidate?** Report a
+   denominator: how many (offset, width, direction) combinations exist in the registered region, and
+   how many any existing row covers.
+
+Answer in full. Do not write any file; return the whole answer and I will save it. **An honest "the
+files do not settle this" is a real answer.**
+
+codex
+I’ll read only the four named files and check the cell table, failure paths, and width handling before assessing the repairs and detector rows.
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n --no-heading --color never -e 'DEVICE_ACCESS\\(wdc_altstatus\\)' -e 'relative_addr' -e 'wd_digin' -e 'DEV_FDC_LENGTH' -e 'alt_status_addr' -e '#494' -e '#95' -e 'EXCEPTION_DBE' -e 'res <= 0' -e 'res = -1' -e 'non-existant' -e 'memory_device_register' -e 'status_byte' -e 'len' -e 'MEM_READ' -e 'MEM_WRITE' -- 'C:\\DocumentNoSnc\\CC\\GXEMUL\\GXEMUL-SEC\\src\\devices\\dev_wdc.c'" in C:\Users\User00\AppData\Local\Temp\claude\C--DocumentNoSnc-CC-GXEMUL\8e474f41-4d47-4c99-bf11-3406a84c4fcd\scratchpad
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n --no-heading --color never -e 'DEVICE_ACCESS\\(wdc_altstatus\\)' -e 'relative_addr' -e 'wd_digin' -e 'DEV_FDC_LENGTH' -e 'alt_status_addr' -e '#494' -e '#95' -e 'EXCEPTION_DBE' -e 'res <= 0' -e 'res = -1' -e 'non-existant' -e 'memory_device_register' -e 'status_byte' -e 'len' -e 'MEM_READ' -e 'MEM_WRITE' -- 'C:\\DocumentNoSnc\\CC\\GXEMUL\\GXEMUL-SEC\\src\\devices\\dev_fdc.c'" in C:\Users\User00\AppData\Local\Temp\claude\C--DocumentNoSnc-CC-GXEMUL\8e474f41-4d47-4c99-bf11-3406a84c4fcd\scratchpad
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n --no-heading --color never -e 'DEVICE_ACCESS\\(wdc_altstatus\\)' -e 'relative_addr' -e 'wd_digin' -e 'DEV_FDC_LENGTH' -e 'alt_status_addr' -e '#494' -e '#95' -e 'EXCEPTION_DBE' -e 'res <= 0' -e 'res = -1' -e 'non-existant' -e 'memory_device_register' -e 'status_byte' -e 'len' -e 'MEM_READ' -e 'MEM_WRITE' -- 'C:\\DocumentNoSnc\\CC\\GXEMUL\\GXEMUL-SEC\\src\\cpus\\memory_rw.c'" in C:\Users\User00\AppData\Local\Temp\claude\C--DocumentNoSnc-CC-GXEMUL\8e474f41-4d47-4c99-bf11-3406a84c4fcd\scratchpad
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n --no-heading --color never -e 'DEVICE_ACCESS\\(wdc_altstatus\\)' -e 'relative_addr' -e 'wd_digin' -e 'DEV_FDC_LENGTH' -e 'alt_status_addr' -e '#494' -e '#95' -e 'EXCEPTION_DBE' -e 'res <= 0' -e 'res = -1' -e 'non-existant' -e 'memory_device_register' -e 'status_byte' -e 'len' -e 'MEM_READ' -e 'MEM_WRITE' -- 'C:\\DocumentNoSnc\\CC\\GXEMUL\\GXEMUL-SEC\\src\\include\\wdcreg.h'" in C:\Users\User00\AppData\Local\Temp\claude\C--DocumentNoSnc-CC-GXEMUL\8e474f41-4d47-4c99-bf11-3406a84c4fcd\scratchpad
+ succeeded in 816ms:
+49:#define	DEV_FDC_LENGTH		6	/*  TODO 8, but collision with wdc  */
+53:	uint8_t			reg[DEV_FDC_LENGTH];
+64:	if (writeflag == MEM_WRITE)
+65:		idata = memory_readmax64(cpu, data, len);
+67:	switch (relative_addr) {
+86:		 *  The write arm's 2+len fatal() calls built ONE line between
+89:		 *  buffer sized from the register array, never from len.
+91:		if (writeflag==MEM_READ) {
+93:			    "read from reg %i", (int)relative_addr);
+94:			odata = d->reg[relative_addr];
+96:			char buf[3 * DEV_FDC_LENGTH + 1];
+100:			for (i=0; i<len && i<DEV_FDC_LENGTH; i++)
+105:			    "write to reg %i:%s", (int)relative_addr, buf);
+106:			d->reg[relative_addr] = idata;
+110:	if (writeflag == MEM_READ)
+111:		memory_writemax64(cpu, data, len, odata);
+126:	memory_device_register(devinit->machine->memory, devinit->name,
+127:	    devinit->addr, DEV_FDC_LENGTH, dev_fdc_access, d,
+
+ succeeded in 928ms:
+75:	int		warned_badlen;
+91:	    debug()'s at core/debugmsg.c:375), so -q cannot silence it.
+94:	    checks was proposed and is wrong: #337's own shared warned_badlen
+141:	int		atapi_len;
+212:	    cited with the one that produced it rather than blended.  Both tables kill
+231:	    silently re-aims a 512-byte disk write at data the guest never staged
+270:	    is silent (it is now refused and announced); that the bulk paths never
+488:		    overwrite unread bytes in silence.
+579: *  status_byte():
+584:static int status_byte(struct wdc_data *d, struct cpu *cpu)
+609:DEVICE_ACCESS(wdc_altstatus)
+617:	odata = status_byte(d, cpu);
+619:	if (writeflag==MEM_READ)
+622:	else if (relative_addr != 0) {
+623:		/*  #494: THE HANDLER NEVER DECODED ITS OWN OFFSET.  The region is
+647:		    controller on PCs -- wdcreg.h compiles wd_digin out under
+651:		    dev_fdc.c's DEV_FDC_LENGTH carries `TODO 8, but collision with
+659:		    res = -1, takes its res <= 0 branch, and raises EXCEPTION_DBE --
+661:		    `non-existant` ones under -v.  The guest then loops forever
+669:		    that by the untouched-buffer hazard; #95 already zeroes the caller's
+746:	if (writeflag == MEM_READ)
+797: *                    #337 and #464, and it is STRICTLY WORSE than the equivalent
+976:		    completion interrupt.  The only opcodes that stay silent are the
+987:		    A question never reached, not a decision to stay silent.
+1024:		    Inside it, the second unimplemented command silently
+1045:		    and every later one would go silent again.  It is what a tidying
+1058:		    fabricated one and lent it credibility.
+1082:	relative_addr /= d->addr_mult;
+1087:	if (writeflag == MEM_WRITE) {
+1088:		if (relative_addr == wd_data)
+1089:			idata = memory_readmax64(cpu, data, len);
+1093:			if (len != 1 && !d->warned_nonbyte_write) {
+1102:	switch (relative_addr) {
+1105:		if (writeflag == MEM_READ) {
+1109:				if (len >= 2)
+1111:				if (len == 4) {
+1116:				if (len >= 2)
+1118:				if (len == 4) {
+1126:				if (len == 1)
+1128:				if (len == 4)
+1130:				if (len == 8)
+1140:				    two if len >= 2, four only if len == 4 --
+1152:				    from `len' alone and so counts ATTEMPTS
+1154:				    while `len` says 3 or 8. Subtracting the
+1155:				    requested length let atapi_len step PAST
+1163:				int consumed = len == 4 ? 4 : (len >= 2 ? 2 : 1);
+1166:				    requested length; it did not stop the subtraction STEPPING
+1167:				    PAST ZERO.  With an odd remainder -- and the length is a
+1169:				    remainder drove atapi_len NEGATIVE, so `== 0` never fired
+1176:				    CLAMPING `consumed` RATHER THAN SATURATING atapi_len,
+1178:				    the re-arm's length, and the refill's source offset
+1190:				    below rewrite len2', so the clamp is untagged upstream code.
+1198:				if (consumed > d->atapi_len)
+1199:					consumed = d->atapi_len;
+1201:				d->atapi_len -= consumed;
+1205:				    read with atapi_len already 0 drove the counter NEGATIVE and `== 0`
+1207:				    0 leaves atapi_len AT 0, the test fires, and two guest register
+1209:				    read DATA -- reach `d->atapi_st->data_in_len` through NULL.
+1212:				    offsetof(struct scsi_transfer, data_in_len).  The pre-#475 blob
+1220:				if (d->atapi_len == 0 && d->atapi_st == NULL) {
+1226:				} else if (d->atapi_len == 0 &&
+1235:					    the phase, so a new packet starts with atapi_len == 0,
+1236:					    atapi_received == data_in_len and atapi_st STALE NON-NULL (it is
+1238:					    here, finds `received < data_in_len` false, and sets
+1261:					    In CMDOUT the atapi_len/atapi_received pair describes the
+1268:					    data_in_len) {
+1278:						    atapi_len is 0, so the guest drained the previous chunk; data_in
+1283:						    atapi_len counts only what the DATAIN arms pushed, and the
+1288:						    head without touching atapi_len, and those bytes are still
+1332:						d->atapi_len = d->atapi_st->
+1333:						    data_in_len -
+1335:						if (d->atapi_len > 32768)
+1336:							d->atapi_len = 32768;
+1344:						      a LIVE scsi_transfer with data_in_len > 0 always has
+1350:						    length without one.  The three later length mutations in the
+1366:						    rather than a check that would silently never fire.  Filed
+1368:						for (int j=0; j<d->atapi_len; j++)
+1387:			int inbuf_len;
+1389:			    MEASURED: a latched field silences every later legal write,
+1390:			    turning a corruption defect into silent data loss, which is
+1393:			int badlen_this = 0;
+1396:				if (len == 1)
+1398:				if (len == 4)
+1400:				if (len == 8)
+1411:				    "expecting any? (len=%i): 0x%08lx ]\n",
+1412:				    (int)len, (long)idata);
+1422:			    WITHOUT growing atapi_len -- which counts only what the
+1457:			    device is registered -- it would raise EXCEPTION_DBE and
+1459:			    silently at default verbosity.  Measured last round at
+1460:			    19793 device-failed diagnostics and zero non-existant
+1488:				switch (len) {
+1512:				        badlen_this = 1;
+1513:				        if (!d->warned_badlen) {
+1514:						d->warned_badlen = 1;
+1516:						    "write len %i (ignored)\n",
+1517:						    len);
+1522:				switch (len) {
+1546:				        badlen_this = 1;
+1547:				        if (!d->warned_badlen) {
+1548:						d->warned_badlen = 1;
+1550:						    "write len %i (ignored)\n",
+1551:						    len);
+1557:			inbuf_len = d->inbuf_head - d->inbuf_tail;
+1558:			while (inbuf_len < 0)
+1559:				inbuf_len += WDC_INBUF_SIZE;
+1599:			    write did -- the width switch's `default:` arm (len 3 or 8) pushes
+1610:			    `#478` added `badlen_this` and guarded the sector DRAIN with
+1624:			if (d->atapi_cmd_in_progress && !badlen_this &&
+1625:			    d->atapi_phase == PHASE_CMDOUT && inbuf_len == 12) {
+1629:				/*  #477: THE `inbuf_len == 12` IN THE GUARD ABOVE IS WHAT BOUNDS THE
+1647:				while (inbuf_len > 0) {
+1649:					inbuf_len --;
+1653:				d->atapi_st->cmd_len = 12;
+1658:					d->atapi_st->cmd_len = 10;
+1680:					d->atapi_len = 0;
+1687:				d->atapi_len = 0;
+1701:						d->atapi_len = d->atapi_st->data_in_len;
+1702:						if (d->atapi_len > 32768)
+1703:							d->atapi_len = 32768;
+1705:						for (int j=0; j<d->atapi_len; j++)
+1734:			    `inbuf_len == 0` satisfies `0 % 512 == 0`, so this block fired
+1743:			      `inbuf_len > 0`   closes the empty ring, and the WRITE+PKT
+1745:			                        consumed the LOCAL inbuf_len to a stale 0
+1747:			      `!badlen_this`    closes the LEFTOVER door: an unread payload
+1753:			    WRITE+PKT door involves no bad-len access at all.  */
+1754:			if (inbuf_len > 0 && !badlen_this &&
+1756:			    inbuf_len % (512 * d->write_count) == 0)
+1759:			    inbuf_len % 512 == 0)) ) {
+1790:			    inbuf_len % (512 * d->write_count) == 0)
+1793:			    inbuf_len % 512 == 0)) && !d->warned_empty_drain) {
+1795:				    precedent -- dev_asc.c refuses a zero-length DATA_OUT
+1796:				    and SAYS SO rather than proceeding silently.
+1807:				    asserted -- a write silently vanishing.  N=1 per device
+1819:				    `inbuf_len == 0` is reached by TWO routes: an empty ring, and a
+1842:		if (writeflag == MEM_READ) {
+1852:		if (writeflag == MEM_READ) {
+1865:		if (writeflag == MEM_READ) {
+1875:		if (writeflag == MEM_READ) {
+1882:				int x = d->atapi_len;
+1895:		if (writeflag == MEM_READ) {
+1902:				int x = d->atapi_len;
+1915:		if (writeflag==MEM_READ) {
+1933:		if (writeflag==MEM_READ) {
+1934:			odata = status_byte(d, cpu);
+1947:		if (writeflag==MEM_READ)
+1949:			    (int)relative_addr);
+1952:			    (int)relative_addr, (int)idata);
+1959:	if (writeflag == MEM_READ) {
+1960:		if (relative_addr == wd_data)
+1961:			memory_writemax64(cpu, data, len, odata);
+1968:			if (len != 1 && !d->warned_nonbyte_read) {
+1984:	uint64_t alt_status_addr;
+2003:	alt_status_addr = devinit->addr + 0x206;
+2008:		alt_status_addr = devinit->addr + 0x160;
+2013:			alt_status_addr = 0x14000386;
+2016:		alt_status_addr = devinit->addr + 0x402;
+2028:	memory_device_register(devinit->machine->memory, "wdc_altstatus",
+2029:	    alt_status_addr, 2, dev_wdc_altstatus_access, d, DM_DEFAULT, NULL);
+2030:	memory_device_register(devinit->machine->memory, devinit->name,
+
+ exited 1 in 991ms:
+rg: C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\src\include\wdcreg.h: IO error for operation on C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\src\include\wdcreg.h: The system cannot find the file specified. (os error 2)
+
+ succeeded in 1022ms:
+50: *	len		the length of the 'data' buffer
+51: *	writeflag	set to MEM_READ or MEM_WRITE
+70: *  copies of a page size that can silently diverge is the shape this tree has been bitten
+129:	unsigned char *data, size_t len, int writeflag, int misc_flags);
+135: *  The worker below translates the START vaddr and then copies the whole length from the
+138: *  span is contiguous VIRTUALLY.  Those coincide only by luck, and the moment the length
+162: *      one device call, offset 0xffe, len 4, zero host lookups.
+184:	unsigned char *data, size_t len, int writeflag, int misc_flags)
+190:		/*  `len > granule - offset`, NOT `offset + len > granule`: the sum can
+191:		    wrap for an absurd length (offset 1, len SIZE_MAX), which would skip
+196:		    than it delivers: this form does not SERVICE such a length, it declines
+197:		    to mis-copy it.  A length near SIZE_MAX now iterates about 2^54 times
+198:		    instead of silently under-splitting -- measured, a fuzz watchdog fired
+202:		while (len > granule - offset) {
+212:				    covered the whole length.  Zero the rest here so the
+214:				if (writeflag == MEM_READ)
+215:					memset(data, 0, len);
+221:			len -= head;
+226:	return MEMORY_RW_ONE_PAGE(cpu, mem, vaddr, data, len, writeflag, misc_flags);
+231:	unsigned char *data, size_t len, int writeflag, int misc_flags)
+265:			    ethos as the failed-device-read path (#95).  */
+266:			if (writeflag == MEM_READ)
+267:				memset(data, 0, len);
+283:	if (writeflag == MEM_WRITE && cpu->machine->watchpoints.n != 0 &&
+285:	    machine_watchpoint_match(cpu->machine, paddr, len)) {
+287:		size_t vi, vn = len < 16 ? len : 16;
+290:			snprintf(valbuf + strlen(valbuf),
+291:			    sizeof(valbuf) - strlen(valbuf), "%s%02x",
+295:		    (int) len, (uint64_t) vaddr, (uint64_t) paddr, valbuf,
+296:		    len > 16 ? " ..." : "", (uint64_t) cpu->pc);
+318:			if (paddr == stop + len && writeflag == swriteflag)
+328:						(int)start, (int)(stop + len - 1), (int)len*8);
+433:	 *  TODO: if paddr < base, but len enough, then the device should
+457:		 *	   entire page is added, it will access non-existant
+485:				/*  #95: zero the caller's buffer up front on a read
+487:				    or whose access is len-clamped just below -- can
+491:				if (writeflag == MEM_READ)
+492:					memset(data, 0, len);
+495:				if (paddr + len > mem->devices[i].length) {
+503:					    #95/#119 above).  */
+515:						    " len %i -> %i",
+516:						    writeflag == MEM_WRITE ?
+519:						    (int) len,
+521:						    length - paddr));
+523:					len = mem->devices[i].length - paddr;
+529:					int wf = writeflag == MEM_WRITE? 1 : 0;
+551:						/*  MEM_WRITE to force the page
+560:						    MEM_WRITE);
+562:					    mem->devices[i].length) {
+588:					    data, len, writeflag,
+596:					res = -1;
+603:				if (res <= 0 && !no_exceptions) {
+611:					    EXCEPTION_IBE : EXCEPTION_DBE,
+650:			    writeflag, len, data))
+670:			if (writeflag == MEM_READ)
+671:				memset(data, 0, len);
+678:				    (cpu, mem, writeflag, paddr, len))
+681:			if (writeflag == MEM_READ) {
+683:				memset(data, 0, len);
+702:					    EXCEPTION_DBE, 0, vaddr, 0,
+731:		if (writeflag == MEM_READ)
+732:			memset(data, 0, len);
+749:			(writeflag == MEM_WRITE? 1 : 0) : ok - 1),
+757:	if ((writeflag == MEM_WRITE
+762:	if ((paddr&((1<<BITS_PER_MEMBLOCK)-1)) + len > (1<<BITS_PER_MEMBLOCK)) {
+766:		size_t len_head = (size_t) ((1<<BITS_PER_MEMBLOCK) -
+769:		if (writeflag == MEM_WRITE)
+770:			memcpy(memblock + offset, data, len_head);
+772:			memcpy(data, memblock + offset, len_head);
+774:		return MEMORY_RW(cpu, mem, vaddr + len_head, data + len_head,
+775:		    len - len_head, writeflag, misc_flags);
+779:	if (writeflag == MEM_WRITE)
+780:		memcpy(memblock + offset, data, len);
+782:		memcpy(data, memblock + offset, len);
+
+codex
+The specified `wdcreg.h` path returns “file not found.” I won’t look for a replacement. The other three files are readable; I’ll continue with them and mark the header quote as unverified.
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$p = '"'C:\\DocumentNoSnc\\CC\\GXEMUL\\GXEMUL-SEC\\src\\devices\\dev_wdc.c'
+"'$lines = Get-Content -LiteralPath $p
+foreach ($range in @(@(50,150), @(565,755), @(1910,2055))) {
+  for ($n = $range[0]; $n -le $range[1] -and $n -le $lines.Count; $n++) { '"'{0}: {1}' -f "'$n, $lines[$n - 1] }
+}' in C:\Users\User00\AppData\Local\Temp\claude\C--DocumentNoSnc-CC-GXEMUL\8e474f41-4d47-4c99-bf11-3406a84c4fcd\scratchpad
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$lines = Get-Content -LiteralPath '"'C:\\DocumentNoSnc\\CC\\GXEMUL\\GXEMUL-SEC\\src\\cpus\\memory_rw.c'
+for ("'$n = 1; $n -le $lines.Count; $n++) { '"'{0}: {1}' -f "'$n, $lines[$n - 1] }' in C:\Users\User00\AppData\Local\Temp\claude\C--DocumentNoSnc-CC-GXEMUL\8e474f41-4d47-4c99-bf11-3406a84c4fcd\scratchpad
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$lines = Get-Content -LiteralPath '"'C:\\DocumentNoSnc\\CC\\GXEMUL\\GXEMUL-SEC\\src\\devices\\dev_fdc.c'
+for ("'$n = 1; $n -le $lines.Count; $n++) { '"'{0}: {1}' -f "'$n, $lines[$n - 1] }
+Test-Path -LiteralPath '"'C:\\DocumentNoSnc\\CC\\GXEMUL\\GXEMUL-SEC\\src\\include\\wdcreg.h' -PathType Leaf" in C:\Users\User00\AppData\Local\Temp\claude\C--DocumentNoSnc-CC-GXEMUL\8e474f41-4d47-4c99-bf11-3406a84c4fcd\scratchpad
+ succeeded in 6485ms:
+1: /*
+2:  *  Copyright (C) 2003-2009  Anders Gavare.  All rights reserved.
+3:  *
+4:  *  Redistribution and use in source and binary forms, with or without
+5:  *  modification, are permitted provided that the following conditions are met:
+6:  *
+7:  *  1. Redistributions of source code must retain the above copyright
+8:  *     notice, this list of conditions and the following disclaimer.
+9:  *  2. Redistributions in binary form must reproduce the above copyright  
+10:  *     notice, this list of conditions and the following disclaimer in the 
+11:  *     documentation and/or other materials provided with the distribution.
+12:  *  3. The name of the author may not be used to endorse or promote products
+13:  *     derived from this software without specific prior written permission.
+14:  *
+15:  *  THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+16:  *  ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+17:  *  IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+18:  *  ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE   
+19:  *  FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+20:  *  DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+21:  *  OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+22:  *  HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+23:  *  LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+24:  *  OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+25:  *  SUCH DAMAGE.
+26:  *   
+27:  *
+28:  *  COMMENT: PC-style floppy controller
+29:  *
+30:  *  TODO!  (This is just a dummy skeleton right now.)
+31:  *
+32:  *  TODO 2: Make it work nicely with both ARC and PC emulation.
+33:  *
+34:  *  See http://members.tripod.com/~oldboard/assembly/765.html for a
+35:  *  quick overview.
+36:  */
+37: 
+38: #include <stdio.h>
+39: #include <stdlib.h>
+40: #include <string.h>
+41: 
+42: #include "device.h"
+43: #include "interrupt.h"
+44: #include "machine.h"
+45: #include "memory.h"
+46: #include "misc.h"
+47: 
+48: 
+49: #define	DEV_FDC_LENGTH		6	/*  TODO 8, but collision with wdc  */
+50: 
+51: 
+52: struct fdc_data {
+53: 	uint8_t			reg[DEV_FDC_LENGTH];
+54: 	struct interrupt	irq;
+55: };
+56: 
+57: 
+58: DEVICE_ACCESS(fdc)
+59: {
+60: 	struct fdc_data *d = (struct fdc_data *) extra;
+61: 	uint64_t idata = 0, odata = 0;
+62: 	size_t i;
+63: 
+64: 	if (writeflag == MEM_WRITE)
+65: 		idata = memory_readmax64(cpu, data, len);
+66: 
+67: 	switch (relative_addr) {
+68: 	case 0x04:
+69: 		break;
+70: 	default:/*
+71: 		 *  #280: this dummy skeleton models exactly one register --
+72: 		 *  0x04, the Main Status Register, handled above -- so every
+73: 		 *  other offset lands here, and an ungated fatal() emitted one
+74: 		 *  host line per guest access (measured: 1.00 lines/access,
+75: 		 *  read and write alike).
+76: 		 *
+77: 		 *  Gated at DEBUG like #276, NOT latched like #277/#279,
+78: 		 *  because the guest IS told: the probe fails through modelled
+79: 		 *  behaviour and the OS draws the right conclusion by itself
+80: 		 *  ("fdc at pica0 slot 2 offset 0x0 not configured"). A latch
+81: 		 *  would be actively wrong here -- fdcprobe's reset pulse is
+82: 		 *  TWO writes to reg 2 (0x00, then FDO_FRST), and a latch
+83: 		 *  would suppress the second one, the only interesting thing
+84: 		 *  this site shows.
+85: 		 *
+86: 		 *  The write arm's 2+len fatal() calls built ONE line between
+87: 		 *  them (only the closer carried the newline); they collapse
+88: 		 *  into a single debugmsg with the bytes pre-formatted into a
+89: 		 *  buffer sized from the register array, never from len.
+90: 		 */
+91: 		if (writeflag==MEM_READ) {
+92: 			debugmsg(SUBSYS_DEVICE, "fdc", VERBOSITY_DEBUG,
+93: 			    "read from reg %i", (int)relative_addr);
+94: 			odata = d->reg[relative_addr];
+95: 		} else {
+96: 			char buf[3 * DEV_FDC_LENGTH + 1];
+97: 			size_t p = 0;
+98: 
+99: 			buf[0] = '\0';
+100: 			for (i=0; i<len && i<DEV_FDC_LENGTH; i++)
+101: 				p += snprintf(buf + p, sizeof(buf) - p,
+102: 				    " %02x", data[i]);
+103: 
+104: 			debugmsg(SUBSYS_DEVICE, "fdc", VERBOSITY_DEBUG,
+105: 			    "write to reg %i:%s", (int)relative_addr, buf);
+106: 			d->reg[relative_addr] = idata;
+107: 		}
+108: 	}
+109: 
+110: 	if (writeflag == MEM_READ)
+111: 		memory_writemax64(cpu, data, len, odata);
+112: 
+113: 	return 1;
+114: }
+115: 
+116: 
+117: DEVINIT(fdc)
+118: {
+119: 	struct fdc_data *d;
+120: 
+121: 	CHECK_ALLOCATION(d = (struct fdc_data *) malloc(sizeof(struct fdc_data)));
+122: 	memset(d, 0, sizeof(struct fdc_data));
+123: 
+124: 	INTERRUPT_CONNECT(devinit->interrupt_path, d->irq);
+125: 
+126: 	memory_device_register(devinit->machine->memory, devinit->name,
+127: 	    devinit->addr, DEV_FDC_LENGTH, dev_fdc_access, d,
+128: 	    DM_DEFAULT, NULL);
+129: 
+130: 	return 1;
+131: }
+132: 
+False
+
+ succeeded in 12541ms:
+50: extern int quiet_mode;
+51: 
+52: /*  #define debug fatal  */
+53: 
+54: struct wdc_data {
+55: 	struct interrupt irq;
+56: 	int		addr_mult;
+57: 	int		base_drive;
+58: 	int		data_debug;
+59: 	int		io_enabled;
+60: 
+61: 	/*  Cached values:  */
+62: 	int		cyls[2];
+63: 	int		heads[2];
+64: 	int		sectors_per_track[2];
+65: 
+66: 	unsigned char	*inbuf;
+67: 	int		inbuf_head;
+68: 	int		inbuf_tail;
+69: 
+70: 	int		int_assert;
+71: 
+72: 	/*  #337: latch each replaced exit(1) so a guest that retries in a
+73: 	    loop cannot flood the host log -- the same flood #265 caused and
+74: 	    #269 had to undo.  */
+75: 	int		warned_badlen;
+76: 	int		warned_empty_drain;
+77: 	int		warned_atapi_err;
+78: 	int		warned_null_xfer;
+79: 	int		warned_atapi_dataout;
+80: 
+81: 	/*  #464 (wdcflood): the SIX fatal() this file still emitted without bound.
+82: 	    #337 latched "each replaced exit(1)"; these were always fatal()
+83: 	    and never exit(1), so they fell outside that round's enumeration.
+84: 	    Measured: 20 stores -> 20 host lines with AND without -q, and the
+85: 	    OVER-READ site at 500 iterations produced 2000 lines / 158,449
+86: 	    bytes.  Artifacts: regress/artifacts/wdcflood/witness_20260825/
+87: 	    {fr_no__q,fr_with__q,n3}.out.  (An earlier wording said "the read
+88: 	    path", which points a reader at the non-8-bit READ guard instead;
+89: 	    n3.out is 2000x "reading too much", i.e. the ring over-read.)
+90: 	    fatal() has no early-out (core/debugmsg.c:384-390, against
+91: 	    debug()'s at core/debugmsg.c:375), so -q cannot silence it.
+92: 
+93: 	    SIX FLAGS, NOT FOUR.  Pairing the ring halves or the two width
+94: 	    checks was proposed and is wrong: #337's own shared warned_badlen
+95: 	    spans the two arms of ONE ENDIANNESS BRANCH (the
+96: 	    `cpu->byte_order == EMUL_LITTLE_ENDIAN` test in the wd_data write
+97: 	    arm below, and its else),
+98: 	    which are mutually exclusive at runtime, so sharing there loses
+99: 	    nothing.  These six can all fire in one session.  Measured
+100: 	    corroboration: in the session that produced the over-read, no
+101: 	    PRODUCER operation ran at all, so no overrun could have preceded
+102: 	    it -- the ring halves are causally independent.
+103: 
+104: 	    (An earlier draft warranted that with "it fires with NO DISK
+105: 	    ATTACHED", which is a NON-SEQUITUR: wdc_addtoinbuf is reachable
+106: 	    from the guest DATA-WRITE path below, so a diskless guest can
+107: 	    fill the ring perfectly well.  The conclusion holds; the reason
+108: 	    given for it did not, and a wrong reason gets reused.)
+109: 
+110: 	    fatal() is KEPT rather than downgraded, on this fork's own
+111: 	    recorded warrant at dev_asc.c:248-257: under -q verbosity settles
+112: 	    at VERBOSITY_ERROR, so a WARNING-level debugmsg would be INVISIBLE
+113: 	    to the boot-log hygiene grep and an ERROR-level one would trip
+114: 	    #261's break-on-ERROR.  */
+115: 	int		warned_inbuf_overrun;
+116: 	int		warned_inbuf_overread;
+117: 	int		warned_unimpl_cmd;
+118: 	int		warned_nonbyte_write;
+119: 	int		warned_nonbyte_read;
+120: 	int		warned_data_unexpected;
+121: 
+122: 	int		write_in_progress;
+123: 	int		write_count;
+124: 	int64_t		write_offset;
+125: 
+126: 	int		error;
+127: 	int		precomp;
+128: 	int		seccnt;
+129: 	int		sector;
+130: 	int		cyl_lo;
+131: 	int		cyl_hi;
+132: 	int		sectorsize;
+133: 	int		lba;
+134: 	int		drive;
+135: 	int		head;
+136: 	int		cur_command;
+137: 
+138: 	int		atapi_cmd_in_progress;
+139: 	int		atapi_phase;
+140: 	struct scsi_transfer *atapi_st;
+141: 	int		atapi_len;
+142: 	size_t		atapi_received;
+143: 
+144: 	unsigned char	identify_struct[512];
+145: };
+146: 
+147: 
+148: #define COMMAND_RESET	0x100
+149: 
+150: 
+565: 		offset = 512 * (((d->head & 0xf) << 24) +
+566: 		    (cyl << 8) + d->sector);
+567: 	printf("WDC write to offset %lli\n", (long long)offset);
+568: #endif
+569: 
+570: 	d->write_in_progress = d->cur_command;
+571: 	d->write_count = count;
+572: 	d->write_offset = offset;
+573: 
+574: 	/*  TODO: result code?  */
+575: }
+576: 
+577: 
+578: /*
+579:  *  status_byte():
+580:  *
+581:  *  Return a reasonable status byte corresponding to the controller's current
+582:  *  state.
+583:  */
+584: static int status_byte(struct wdc_data *d, struct cpu *cpu)
+585: {
+586: 	int odata = 0;
+587: 	if (diskimage_exist(cpu->machine, d->drive + d->base_drive,
+588: 	    DISKIMAGE_IDE))
+589: 		odata |= WDCS_DRDY | WDCS_DSC;
+590: 	if (d->inbuf_head != d->inbuf_tail)
+591: 		odata |= WDCS_DRQ;
+592: 	if (d->write_in_progress)
+593: 		odata |= WDCS_DRQ;
+594: 	if (d->error)
+595: 		odata |= WDCS_ERR;
+596: 	if (d->atapi_cmd_in_progress && (d->atapi_phase & WDCS_DRQ)) {
+597: 		odata |= WDCS_DRQ;
+598: 	}
+599: 	return odata;
+600: }
+601: 
+602: 
+603: /*  #481: forward-declared so the ALT-CTRL arm below can call it.  A panel seat's
+604:     control mutant failed to compile for want of exactly this line and the failure
+605:     was briefly read as a design constraint against calling the shared helper; it
+606:     is one line and it builds clean.  */
+607: static void wdc_new_command_reset(struct wdc_data *d);
+608: 
+609: DEVICE_ACCESS(wdc_altstatus)
+610: {
+611: 	struct wdc_data *d = (struct wdc_data *) extra;
+612: 	uint64_t idata = 0, odata = 0;
+613: 
+614: 	idata = data[0];
+615: 
+616: 	/*  Same as the normal status byte:  */
+617: 	odata = status_byte(d, cpu);
+618: 
+619: 	if (writeflag==MEM_READ)
+620: 		debug("[ wdc: read from ALTSTATUS: 0x%02x ]\n",
+621: 		    (int)odata);
+622: 	else if (relative_addr != 0) {
+623: 		/*  #494: THE HANDLER NEVER DECODED ITS OWN OFFSET.  The region is
+624: 		    registered TWO BYTES wide, so offset 1 -- the Drive Address
+625: 		    register, 0x3f7 on the PC layout -- arrived here and was treated
+626: 		    as a Device Control write.  Since #481 corrected the reset bit,
+627: 		    that meant a guest store to a READ-ONLY register aborted a live
+628: 		    ATA write and purged the queued ring.  Measured at rung 3 on an
+629: 		    unmodified evbmips -e malta; the witness is preserved under
+630: 		    regress/artifacts/wdcaltoffset/witness_20260829/.
+631: 
+632: 		    THE WHOLE ACTION IS DECLINED, NOT JUST THE HELPER CALL, AND THAT
+633: 		    IS THE POINT.  The reset has two effects with two owners: the
+634: 		    cur_command assignment below, and the ring/DRQ clearing inside
+635: 		    wdc_new_command_reset().  A fix that guards only the helper leaves
+636: 		    the ATAPI signature latched.  That was MEASURED, not reasoned: it
+637: 		    escapes the witness AND the detector that replaced it with a clean
+638: 		    sweep, because every row in both observes DRQ or the ring and
+639: 		    neither varies under it.  The kill table and its scores are under
+640: 		    regress/artifacts/wdcaltoffset/killtable_20260830/ -- read TABLE.txt
+641: 		    for the counts rather than trusting a number written here, which is
+642: 		    how this sentence was wrong once already.
+643: 
+644: 		    SILENT BY DESIGN, at debug() level and with no latch.  The house
+645: 		    idiom announces a guest ANOMALY, and this is not one: the tree
+646: 		    records in two places that this byte belongs to the floppy
+647: 		    controller on PCs -- wdcreg.h compiles wd_digin out under
+648: 		    an `#if 0` whose own note reads "NOT MAPPED; fd uses this
+649: 		    register on PCs" (the delimiters are dropped here on purpose:
+650: 		    a comment terminator quoted inside a comment ends it), and
+651: 		    dev_fdc.c's DEV_FDC_LENGTH carries `TODO 8, but collision with
+652: 		    wdc`.  A correct guest writes here expecting a floppy effect, so
+653: 		    a wdc diagnostic would report correct behaviour as a fault.
+654: 
+655: 		    THE ACCESS STAYS HANDLED (return 1), AND THE REASON IS NOT THE ONE
+656: 		    THIS COMMENT FIRST GAVE.  It said a 0 would fall through to
+657: 		    unassigned-address handling and warn per access.  That is false: this
+658: 		    device is REGISTERED, so a 0 never reaches that path.  memory_rw sets
+659: 		    res = -1, takes its res <= 0 branch, and raises EXCEPTION_DBE --
+660: 		    measured, 19793 `device 'wdc_altstatus' ... failed` lines and ZERO
+661: 		    `non-existant` ones under -v.  The guest then loops forever
+662: 		    re-executing the faulting store, and at DEFAULT verbosity it does so
+663: 		    in SILENCE.  That is worse than a warning flood, not better, which is
+664: 		    why the wrong reason was worth correcting rather than dropping: a
+665: 		    maintainer who reads `only noisy warnings` may decide a 0 is fine.
+666: 
+667: 		    The arm falls through to the common tail, which is a no-op for it --
+668: 		    the tail only assigns on the READ path.  (An earlier draft justified
+669: 		    that by the untouched-buffer hazard; #95 already zeroes the caller's
+670: 		    buffer, so that hazard cannot arise here either.)  */
+671: 		debug("[ wdc: write to DRIVE ADDRESS (read-only): 0x%02x,"
+672: 		    " ignored ]\n", (int)idata);
+673: 	} else {
+674: 		debug("[ wdc: write to ALT. CTRL: 0x%02x ]\n",
+675: 		    (int)idata);
+676: 		/*  #481: THE RESET BIT IS WDCTL_RST (0x04), NOT WDCTL_4BIT (0x08).
+677: 		
+678: 		    WDCTL_4BIT is "use four head bits (wd1003)", a head-addressing
+679: 		    mode selector that Linux libata holds as its STEADY-STATE ap->ctl.
+680: 		    Testing it here meant three measured defects at once:
+681: 		
+682: 		      * a real soft reset was MISSED.  Older OpenBSD asserts with 0x06,
+683: 		        which has bit 3 CLEAR -- measured `cur_command 0x0`.
+684: 		      * a ROUTINE control write DESTROYED THE RECORD OF WHICH COMMAND IS
+685: 		        EXECUTING -- measured `0xec -> 0x100`.  cur_command is also the
+686: 		        value assigned into write_in_progress, so this is only harmless
+687: 		        because wdc__write() has exactly ONE caller, immediately after
+688: 		        the assignment.  An accident, not an invariant.
+689: 		      * an nIEN write latched a reset.  0x0a is libata's polled-mode
+690: 		        staple -- measured `0x0a->0x100`.
+691: 		
+692: 		    COMMAND_RESET IS NOT A RESET ACTION.  It is read at exactly two
+693: 		    sites, both making the cylinder registers return the ATAPI signature
+694: 		    0xEB14 for a CD-ROM.  It is the SIGNATURE LATCH -- which is why the
+695: 		    wrong bit went unnoticed: triggering on libata's steady state kept
+696: 		    the signature on almost always.
+697: 		
+698: 		    LEVEL-TRIGGERED, DELIBERATELY, AND THE MEASURED DIFFERENCE
+699: 		    FAVOURS THIS FORM.  A channel held in reset must not carry bytes
+700: 		    out the far side, and an edge-triggered abort lets it:
+701: 		
+702: 		        assert 0x0e, 8 guest stores to DATA, rewrite 0x0e, release
+703: 		          LEVEL (this form):  occ 0, DRQ 0   -- the ring is purged
+704: 		          EDGE:               occ 8, DRQ 1   -- the bytes survive the
+705: 		                                                 whole reset, and the
+706: 		                                                 status byte still
+707: 		                                                 advertises DRQ
+708: 		
+709: 		    Measured through register writes only, with a liveness control (the
+710: 		    same traffic without a reset leaves occ 8, so the 0 is the reset
+711: 		    working and not a dead path).
+712: 		
+713: 		    *** AN EARLIER VERSION OF THIS COMMENT SAID edge and level were
+714: 		    "indistinguishable here, because the abort is idempotent and no
+715: 		    protocol-following driver issues commands while holding SRST".
+716: 		    THAT WAS MEASURED FALSE.  Three things were wrong with it:
+717: 		
+718: 		      * the differential behind it only ever asserted SRST ONCE, and
+719: 		        the forms differ only when a driver HOLDS it across two
+720: 		        control writes with something accruing in between;
+721: 		      * IDEMPOTENCE OF THE HELPER DOES NOT LICENCE THE INFERENCE.
+722: 		        It means repeating the abort is harmless.  It says nothing
+723: 		        about SKIPPING the repeat, which is what an edge does, and
+724: 		        state accrues between the writes;
+725: 		      * the scenario above ISSUES NO COMMAND.  Plain data-register
+726: 		        stores suffice -- and in a hardening fork the guest need not
+727: 		        be protocol-following at all.
+728: 		
+729: 		    The decision is unchanged and now rests on evidence that does not
+730: 		    collapse when someone builds the discriminating case. ***
+731: 		
+732: 		    Note also that a prev_ctl update mis-scoped by one brace makes
+733: 		    every LATER reset be ignored -- a failure this form cannot have --
+734: 		    but that is a secondary argument, not the reason.
+735: 		
+736: 		    THE ABORT IS #479's HELPER, not a second one: a channel reset and a
+737: 		    new command must not disagree about what gets cleared, and #479
+738: 		    already reasoned out which latches must SURVIVE (see its comment --
+739: 		    clearing warned_* would undo #337 and #464).  */
+740: 		if (idata & WDCTL_RST) {
+741: 			d->cur_command = COMMAND_RESET;
+742: 			wdc_new_command_reset(d);
+743: 		}
+744: 	}
+745: 
+746: 	if (writeflag == MEM_READ)
+747: 		data[0] = odata;
+748: 
+749: 	return 1;
+750: }
+751: 
+752: 
+753: 
+754: /*
+755:  *  wdc_new_command_reset():
+1910: 			debug("[ wdc: write to CYL_HI: 0x%02x ]\n", (int)idata);
+1911: 		}
+1912: 		break;
+1913: 
+1914: 	case wd_sdh:	/*  6: sectorsize/drive/head  */
+1915: 		if (writeflag==MEM_READ) {
+1916: 			odata = (d->sectorsize << 6) + (d->lba << 5) +
+1917: 			    (d->drive << 4) + (d->head);
+1918: 			debug("[ wdc: read from SDH: 0x%02x (sectorsize %i,"
+1919: 			    " lba=%i, drive %i, head %i) ]\n", (int)odata,
+1920: 			    d->sectorsize, d->lba, d->drive, d->head);
+1921: 		} else {
+1922: 			d->sectorsize = (idata >> 6) & 3;
+1923: 			d->lba   = (idata >> 5) & 1;
+1924: 			d->drive = (idata >> 4) & 1;
+1925: 			d->head  = idata & 0xf;
+1926: 			debug("[ wdc: write to SDH: 0x%02x (sectorsize %i,"
+1927: 			    " lba=%i, drive %i, head %i) ]\n", (int)idata,
+1928: 			    d->sectorsize, d->lba, d->drive, d->head);
+1929: 		}
+1930: 		break;
+1931: 
+1932: 	case wd_command:	/*  7: command or status  */
+1933: 		if (writeflag==MEM_READ) {
+1934: 			odata = status_byte(d, cpu);
+1935: 			if (!quiet_mode)
+1936: 				debug("[ wdc: read from STATUS: 0x%02x ]\n",
+1937: 				    (int)odata);
+1938: 			INTERRUPT_DEASSERT(d->irq);
+1939: 			d->int_assert = 0;
+1940: 		} else {
+1941: 			debug("[ wdc: write to COMMAND: 0x%02x ]\n",(int)idata);
+1942: 			wdc_command(cpu, d, idata);
+1943: 		}
+1944: 		break;
+1945: 
+1946: 	default:
+1947: 		if (writeflag==MEM_READ)
+1948: 			debug("[ wdc: read from 0x%02x ]\n",
+1949: 			    (int)relative_addr);
+1950: 		else
+1951: 			debug("[ wdc: write to  0x%02x: 0x%02x ]\n",
+1952: 			    (int)relative_addr, (int)idata);
+1953: 	}
+1954: 
+1955: 	/*  Assert interrupt, if necessary:  */
+1956: 	dev_wdc_tick(cpu, extra);
+1957: 
+1958: ret:
+1959: 	if (writeflag == MEM_READ) {
+1960: 		if (relative_addr == wd_data)
+1961: 			memory_writemax64(cpu, data, len, odata);
+1962: 		else {
+1963: 			/*  #464: latch the announcement only.  This sits
+1964: 			    INSIDE the function's common `ret:` tail, so
+1965: 			    `data[0] = odata` and the `return 1` below must run
+1966: 			    regardless -- an early return here would hand the
+1967: 			    guest an untouched read buffer.  */
+1968: 			if (len != 1 && !d->warned_nonbyte_read) {
+1969: 				d->warned_nonbyte_read = 1;
+1970: 				fatal("[ wdc: WARNING! non-8-bit access on "
+1971: 				    "READ! ]\n");
+1972: 			}
+1973: 			data[0] = odata;
+1974: 		}
+1975: 	}
+1976: 
+1977: 	return 1;
+1978: }
+1979: 
+1980: 
+1981: DEVINIT(wdc)
+1982: {
+1983: 	struct wdc_data *d;
+1984: 	uint64_t alt_status_addr;
+1985: 	int i, tick_shift = WDC_TICK_SHIFT;
+1986: 
+1987: 	CHECK_ALLOCATION(d = (struct wdc_data *) malloc(sizeof(struct wdc_data)));
+1988: 	memset(d, 0, sizeof(struct wdc_data));
+1989: 
+1990: 	INTERRUPT_CONNECT(devinit->interrupt_path, d->irq);
+1991: 	d->addr_mult  = devinit->addr_mult;
+1992: 	d->data_debug = 1;
+1993: 	d->io_enabled = 1;
+1994: 	d->error      = 1;
+1995: 
+1996: 	d->inbuf = (unsigned char *) zeroed_alloc(WDC_INBUF_SIZE);
+1997: 
+1998: 	/*  base_drive = 0 for the primary controller, 2 for the secondary.  */
+1999: 	d->base_drive = 0;
+2000: 	if ((devinit->addr & 0xfff) == 0x170)
+2001: 		d->base_drive = 2;
+2002: 
+2003: 	alt_status_addr = devinit->addr + 0x206;
+2004: 
+2005: 	/*  Special hacks for individual machines:  */
+2006: 	switch (devinit->machine->machine_type) {
+2007: 	case MACHINE_MACPPC:
+2008: 		alt_status_addr = devinit->addr + 0x160;
+2009: 		break;
+2010: 	case MACHINE_HPCMIPS:
+2011: 		/*  TODO: Fix  */
+2012: 		if (devinit->addr == 0x14000180)
+2013: 			alt_status_addr = 0x14000386;
+2014: 		break;
+2015: 	case MACHINE_IQ80321:
+2016: 		alt_status_addr = devinit->addr + 0x402;
+2017: 		break;
+2018: 	}
+2019: 
+2020: 	/*  Get disk geometries:  */
+2021: 	for (i=0; i<2; i++)
+2022: 		if (diskimage_exist(devinit->machine, d->base_drive +i,
+2023: 		    DISKIMAGE_IDE))
+2024: 			diskimage_getchs(devinit->machine, d->base_drive + i,
+2025: 			    DISKIMAGE_IDE, &d->cyls[i], &d->heads[i],
+2026: 			    &d->sectors_per_track[i]);
+2027: 
+2028: 	memory_device_register(devinit->machine->memory, "wdc_altstatus",
+2029: 	    alt_status_addr, 2, dev_wdc_altstatus_access, d, DM_DEFAULT, NULL);
+2030: 	memory_device_register(devinit->machine->memory, devinit->name,
+2031: 	    devinit->addr, DEV_WDC_LENGTH * devinit->addr_mult, dev_wdc_access,
+2032: 	    d, DM_DEFAULT, NULL);
+2033: 
+2034: 	machine_add_tickfunction(devinit->machine, dev_wdc_tick,
+2035: 	    d, tick_shift);
+2036: 
+2037: 	devinit->return_ptr = d;
+2038: 
+2039: 	return 1;
+2040: }
+2041: 
+
+ succeeded in 30050ms:
+1: /*
+2:  *  Copyright (C) 2003-2021  Anders Gavare.  All rights reserved.
+3:  *
+4:  *  Redistribution and use in source and binary forms, with or without
+5:  *  modification, are permitted provided that the following conditions are met:
+6:  *
+7:  *  1. Redistributions of source code must retain the above copyright
+8:  *     notice, this list of conditions and the following disclaimer.
+9:  *  2. Redistributions in binary form must reproduce the above copyright
+10:  *     notice, this list of conditions and the following disclaimer in the
+11:  *     documentation and/or other materials provided with the distribution.
+12:  *  3. The name of the author may not be used to endorse or promote products
+13:  *     derived from this software without specific prior written permission.
+14:  *
+15:  *  THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+16:  *  ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+17:  *  IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+18:  *  ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE
+19:  *  FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+20:  *  DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+21:  *  OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+22:  *  HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+23:  *  LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+24:  *  OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+25:  *  SUCH DAMAGE.
+26:  *
+27:  *
+28:  *  Generic memory_rw(), with special hacks for specific CPU families.
+29:  *
+30:  *  Example for inclusion from memory_mips.c:
+31:  *
+32:  *	MEMORY_RW should be mips_memory_rw
+33:  *	MEM_MIPS should be defined
+34:  *
+35:  *
+36:  *  TODO: Cleanup the "ok" variable usage!
+37:  */
+38: 
+39: 
+40: /*
+41:  *  memory_rw():
+42:  *
+43:  *  Read or write data from/to memory.
+44:  *
+45:  *	cpu		the cpu doing the read/write
+46:  *	mem		the memory object to use
+47:  *	vaddr		the virtual address
+48:  *	data		a pointer to the data to be written to memory, or
+49:  *			a placeholder for data when reading from memory
+50:  *	len		the length of the 'data' buffer
+51:  *	writeflag	set to MEM_READ or MEM_WRITE
+52:  *	misc_flags	CACHE_{NONE,DATA,INSTRUCTION} | other flags
+53:  *
+54:  *  If the address indicates access to a memory mapped device, that device'
+55:  *  read/write access function is called.
+56:  *
+57:  *  This function should not be called with cpu == NULL.
+58:  *
+59:  *  Returns one of the following:
+60:  *	MEMORY_ACCESS_FAILED
+61:  *	MEMORY_ACCESS_OK
+62:  *
+63:  *  (MEMORY_ACCESS_FAILED is 0.)
+64:  */
+65: 
+66: /*
+67:  *  #430: THE PAGE SIZE, IN ONE PLACE.
+68:  *
+69:  *  It was a local inside the function.  The wrapper below needs the same number, and two
+70:  *  copies of a page size that can silently diverge is the shape this tree has been bitten
+71:  *  by before -- so it is hoisted to a macro and the local now reads it.  Note the Alpha
+72:  *  value: it is 8 KB, not 4 KB, so anything that splits at "the page boundary" must use
+73:  *  THIS and never a literal 4096.  A review seat caught exactly that hazard in the design
+74:  *  brief, which had said "4 KB page" throughout.
+75:  */
+76: #ifdef MEM_ALPHA
+77: #define	MRW_OFFSET_MASK		0x1fff
+78: #else
+79: #define	MRW_OFFSET_MASK		0xfff
+80: #endif
+81: 
+82: /*
+83:  *  #430: THE SPLIT GRANULE IS 1 KB, AND IT IS NOT THE SAME NUMBER AS THE MASK ABOVE.
+84:  *
+85:  *  MRW_OFFSET_MASK is the HOST-page granule: what memory_paddr_to_hostaddr() is asked for
+86:  *  and what update_translation_table() caches.  The granule the SPLIT needs is a different
+87:  *  thing -- the smallest unit at which a translator in this tree can send two adjacent
+88:  *  virtual addresses to unrelated physical ones -- and it is SMALLER:
+89:  *
+90:  *      memory_arm.c:198-207   descriptor type 3 on a non-XScale core is a 1 KB page,
+91:  *                             *return_paddr = (d2 & 0xfffffc00) | (vaddr & 0x3ff)
+92:  *      memory_sh.c:116        SH4_PTEL_SZ_1K gives mask 0xfffffc00
+93:  *      memory_mips_v2p.c      the VR41xx path likewise has 1 KB logic
+94:  *
+95:  *  A first draft of this split used the 4 KB mask and a review seat produced the
+96:  *  counterexample: with a 1 KB mapping, a four-byte access at 0x13fe crosses a translation
+97:  *  boundary but NOT a 4 KB one, so the loop never fired and the defect survived exactly
+98:  *  where MEMORY_NOT_FULL_PAGE says it is most likely.  Splitting finer is always SAFE --
+99:  *  each chunk is then inside one mapping for every translator here, and the worker's own
+100:  *  host-page arithmetic is unchanged -- so the only cost is more worker calls on the slow
+101:  *  path for a multi-page translated access, which is rare (large transfers are PHYSICAL
+102:  *  and exempt).  Correctness at a known granule beats a faster one that is wrong on ARM.
+103:  */
+104: #define	MRW_SPLIT_MASK		0x3ff
+105: 
+106: /*  The one-page worker; its name is derived from MEMORY_RW because cpu_alpha.c includes
+107:     this file TWICE in one translation unit (alpha_userland_memory_rw, then alpha_memory_rw
+108:     via tmp_alpha_tail.c), so a plainly named static would be a redefinition.  */
+109: #ifndef MRW_CAT2
+110: #define	MRW_CAT2(a,b)		a##b
+111: #define	MRW_CAT(a,b)		MRW_CAT2(a,b)
+112: #endif
+113: #define	MEMORY_RW_ONE_PAGE	MRW_CAT(MEMORY_RW, _one_page)
+114: 
+115: /*
+116:  *  The one relationship between the two that MUST hold, asserted at COMPILE TIME because it
+117:  *  cannot be asserted at run time by the offline differential.
+118:  *
+119:  *  MEM_ALPHA is never compiled by that differential -- its fixture is 4 KB-specific -- so a
+120:  *  review seat MEASURED that widening MRW_OFFSET_MASK, or hardcoding the worker's local back
+121:  *  to 0xfff (exactly the drift this macro exists to prevent), leaves every row green.  A
+122:  *  static assertion costs nothing and covers the Alpha build the test cannot reach.  The
+123:  *  name is derived because this file is included twice per translation unit.
+124:  */
+125: typedef char MRW_CAT(MEMORY_RW, _split_le_page)
+126:     [(MRW_SPLIT_MASK) <= (MRW_OFFSET_MASK) ? 1 : -1];
+127: 
+128: static int MEMORY_RW_ONE_PAGE(struct cpu *cpu, struct memory *mem, uint64_t vaddr,
+129: 	unsigned char *data, size_t len, int writeflag, int misc_flags);
+130: 
+131: 
+132: /*
+133:  *  #430: TRANSLATE ONCE PER PAGE, NOT ONCE PER ACCESS.
+134:  *
+135:  *  The worker below translates the START vaddr and then copies the whole length from the
+136:  *  host pointer for THAT page.  memory_paddr_to_hostaddr() returns a pointer into a 1 MB
+137:  *  memblock, so the copy walks host memory that is contiguous PHYSICALLY while the guest's
+138:  *  span is contiguous VIRTUALLY.  Those coincide only by luck, and the moment the length
+139:  *  carries past the page boundary the guest reads -- or OVERWRITES -- whatever physical
+140:  *  page happens to follow.  Measured offline against a deliberately non-monotonic map: a
+141:  *  straddling read returned the physically-following page's bytes, and a straddling WRITE
+142:  *  left the guest's intended page untouched while corrupting an unrelated one.  Measured
+143:  *  too: when the tail page had no valid translation the old code returned
+144:  *  MEMORY_ACCESS_OK anyway, so this was a MISSING FAULT as well as a wrong page.
+145:  *
+146:  *  The existing split at the end of the worker is NOT this guard and must not be mistaken
+147:  *  for it: it fires at BITS_PER_MEMBLOCK (1 MB) granularity and its job is to stop the memcpy
+148:  *  running off the end of a host allocation.
+149:  *
+150:  *  It is ONE BOUNDARY IN 1024, not 256: MRW_SPLIT_MASK is 0x3ff, so the split granule is
+151:  *  1024 bytes and 1 MB / 1024 = 1024.  The old "256" came from dividing 1 MB by a 4 KB page
+152:  *  -- a granule this split does not use, as the note above says: "The granule the SPLIT
+153:  *  needs is a different one."  (And per that note the real page here is 8 KB anyway.)
+154:  *
+155:  *  Two properties of the memblock split, both MEASURED:
+156:  *    - post-#430 it fires only on PHYSICAL accesses.  A TRANSLATED 4096-byte write across a
+157:  *      1 MB boundary is chunked at the 1024-byte SPLIT granule, so it costs 4 translations
+158:  *      and 4 host lookups and never reaches here; PHYSICAL costs 0 and 2.  A chunk of at
+159:  *      most one granule, granule-aligned, cannot cross 1 MB.
+160:  *    - its head can NEVER be a device, in either version: device dispatch `goto
+161:  *      do_return_ok`s first.  Measured with a device straddling the memblock boundary --
+162:  *      one device call, offset 0xffe, len 4, zero host lookups.
+163:  *
+164:  *  A LOOP, not recursion.  A recursive split costs a real frame per chunk when the compiler
+165:  *  does NOT eliminate the tail call -- measured at -O0, 1,834,896 bytes of stack for a 16 MB
+166:  *  access -- and a large enough access then dies on the stack rather than returning an
+167:  *  answer.
+168:  *
+169:  *  CORRECTION, and it is the reason this paragraph is worded carefully: the first draft said
+170:  *  "gcc does not turn the tail call into a loop at -O2".  MEASURED, IT DOES -- gcc 15.2.1
+171:  *  performs the sibling-call optimisation at -O2 and -O3, leaving a 96-byte span.  So the
+172:  *  loop is still the right implementation (it does not depend on an optimisation being
+173:  *  applied, and -O0 builds and other compilers are real), but the justification was wrong,
+174:  *  and the row that certified it was VACUOUS until the differential was given
+175:  *  -fno-optimize-sibling-calls.  No caller in the tree passes an access large enough for
+176:  *  this to bite today; it is insurance, and it costs about fifteen lines.
+177:  *
+178:  *  ONLY WHEN A TRANSLATION ACTUALLY HAPPENS.  Under PHYSICAL (or with no translate_v2p)
+179:  *  paddr == vaddr, there is no per-page mapping to redo, and splitting would buy nothing
+180:  *  while turning one large DMA into thousands of calls -- so those go straight through and
+181:  *  the memblock split keeps doing its job unchanged.
+182:  */
+183: int MEMORY_RW(struct cpu *cpu, struct memory *mem, uint64_t vaddr,
+184: 	unsigned char *data, size_t len, int writeflag, int misc_flags)
+185: {
+186: 	if (!(misc_flags & PHYSICAL) && cpu->translate_v2p != NULL) {
+187: 		size_t granule = (size_t) MRW_SPLIT_MASK + 1;
+188: 		size_t offset = (size_t) (vaddr & MRW_SPLIT_MASK);
+189: 
+190: 		/*  `len > granule - offset`, NOT `offset + len > granule`: the sum can
+191: 		    wrap for an absurd length (offset 1, len SIZE_MAX), which would skip
+192: 		    the loop and hand the whole thing to the worker.  The subtraction
+193: 		    cannot wrap, because offset < granule always.
+194: 
+195: 		    STATED EXACTLY, because the first version of this comment implied more
+196: 		    than it delivers: this form does not SERVICE such a length, it declines
+197: 		    to mis-copy it.  A length near SIZE_MAX now iterates about 2^54 times
+198: 		    instead of silently under-splitting -- measured, a fuzz watchdog fired
+199: 		    at two million chunks.  No caller passes anything remotely like it (the
+200: 		    largest in the tree are PHYSICAL and exempt), so the case is recorded
+201: 		    and filed rather than handled.  */
+202: 		while (len > granule - offset) {
+203: 			size_t head = granule - offset;
+204: 
+205: 			if (!MEMORY_RW_ONE_PAGE(cpu, mem, vaddr, data, head,
+206: 			    writeflag, misc_flags)) {
+207: 				/*  #244 PROMISES THE WHOLE READ BUFFER, AND SPLITTING BROKE
+208: 				    THAT: the worker zeroes only the chunk IT was given, so a
+209: 				    failure before the last chunk used to leave the caller's
+210: 				    remaining bytes untouched -- uninitialised host stack, for
+211: 				    a caller that ignores the return value.  Unsplit, one call
+212: 				    covered the whole length.  Zero the rest here so the
+213: 				    guarantee is the same as it was.  */
+214: 				if (writeflag == MEM_READ)
+215: 					memset(data, 0, len);
+216: 				return MEMORY_ACCESS_FAILED;
+217: 			}
+218: 
+219: 			vaddr += head;
+220: 			data += head;
+221: 			len -= head;
+222: 			offset = 0;
+223: 		}
+224: 	}
+225: 
+226: 	return MEMORY_RW_ONE_PAGE(cpu, mem, vaddr, data, len, writeflag, misc_flags);
+227: }
+228: 
+229: 
+230: static int MEMORY_RW_ONE_PAGE(struct cpu *cpu, struct memory *mem, uint64_t vaddr,
+231: 	unsigned char *data, size_t len, int writeflag, int misc_flags)
+232: {
+233: 	const int offset_mask = MRW_OFFSET_MASK;
+234: 
+235: 	int ok = 2;
+236: 	uint64_t paddr;
+237: 	int cache, no_exceptions, offset;
+238: 	unsigned char *memblock;
+239: 	int dyntrans_device_danger = 0;
+240: 
+241: 	no_exceptions = misc_flags & NO_EXCEPTIONS;
+242: 	cache = misc_flags & CACHE_FLAGS_MASK;
+243: 
+244: 
+245: 	if (misc_flags & PHYSICAL || cpu->translate_v2p == NULL) {
+246: 		paddr = vaddr;
+247: 	} else {
+248: 		ok = cpu->translate_v2p(cpu, vaddr, &paddr,
+249: 		    (writeflag? FLAG_WRITEFLAG : 0) +
+250: 		    (no_exceptions? FLAG_NOEXCEPTIONS : 0)
+251: 		    + (misc_flags & MEMORY_USER_ACCESS)
+252: 		    + (cache==CACHE_INSTRUCTION? FLAG_INSTR : 0));
+253: 
+254: 		/*
+255: 		 *  If the translation caused an exception, or was invalid in
+256: 		 *  some way, then simply return without doing the memory
+257: 		 *  access:
+258: 		 */
+259: 		if (!ok) {
+260: 			/*  #244: A failed (or NO_EXCEPTIONS) translation leaves
+261: 			    the caller's read buffer untouched; zero it so
+262: 			    callers that ignore the return value (e.g. the DEC
+263: 			    PROM string helpers) consume deterministic 0 bytes
+264: 			    instead of uninitialised host stack. Same zero-fill
+265: 			    ethos as the failed-device-read path (#95).  */
+266: 			if (writeflag == MEM_READ)
+267: 				memset(data, 0, len);
+268: 			return MEMORY_ACCESS_FAILED;
+269: 		}
+270: 	}
+271: 
+272: 	/*
+273: 	 *  #250: data write-watchpoint. Checked here, before the device /
+274: 	 *  cache / RAM dispatch (several of which return early �?" notably the
+275: 	 *  R3000 cached path via memory_cache_R3000()), so every store that
+276: 	 *  reaches this slow path is covered. Watched pages are kept off the
+277: 	 *  fast store table by update_translation_table(), and R3000 cached
+278: 	 *  data already comes through here. Show the store (writer pc, target,
+279: 	 *  width, value) and request entry into the debugger after the current
+280: 	 *  instruction, via the same about_to_enter_single_step mechanism as
+281: 	 *  subsystem breakpoints. NOP unless a watchpoint is set.
+282: 	 */
+283: 	if (writeflag == MEM_WRITE && cpu->machine->watchpoints.n != 0 &&
+284: 	    !single_step && !about_to_enter_single_step &&
+285: 	    machine_watchpoint_match(cpu->machine, paddr, len)) {
+286: 		char valbuf[3 * 16 + 1];
+287: 		size_t vi, vn = len < 16 ? len : 16;
+288: 		valbuf[0] = '\0';
+289: 		for (vi = 0; vi < vn; vi++)
+290: 			snprintf(valbuf + strlen(valbuf),
+291: 			    sizeof(valbuf) - strlen(valbuf), "%s%02x",
+292: 			    vi ? " " : "", data[vi]);
+293: 		fatal("[ WATCHPOINT: write of %i byte(s) to vaddr 0x%" PRIx64
+294: 		    " (paddr 0x%" PRIx64") = %s%s, pc = 0x%" PRIx64" ]\n",
+295: 		    (int) len, (uint64_t) vaddr, (uint64_t) paddr, valbuf,
+296: 		    len > 16 ? " ..." : "", (uint64_t) cpu->pc);
+297: 		about_to_enter_single_step = true;
+298: 	}
+299: 
+300: #if 0
+301: 	/*
+302: 	 *  For quick-and-dirty debugging of 32-bit code, typically
+303: 	 *  unknown ROM code:  Write out a summary of accessed memory ranges.
+304: 	 */
+305: 	if (cpu->running && paddr < 0x00300000)
+306: 	{
+307: 		static int swriteflag = -1, lastswriteflag;
+308: 		static int32_t start = -1, stop = -1;
+309: 		static int32_t laststart = -1, laststop = -1;
+310: 
+311: 		if (start == -1)
+312: 		{
+313: 			start = stop = paddr;
+314: 			swriteflag = writeflag;
+315: 		}
+316: 		else
+317: 		{
+318: 			if (paddr == stop + len && writeflag == swriteflag)
+319: 			{
+320: 				stop = paddr;
+321: 			}
+322: 			else
+323: 			{
+324: 				if (start != laststart || stop != laststop || swriteflag != lastswriteflag)
+325: 				{
+326: 					printf("%s  %08x -- %08x  %i-bit\n",
+327: 						swriteflag ? "WRITE" : "READ ",
+328: 						(int)start, (int)(stop + len - 1), (int)len*8);
+329: 				}
+330: 
+331: 				laststart = start; laststop = stop; lastswriteflag = swriteflag;
+332: 
+333: 				start = stop = paddr;
+334: 				swriteflag = writeflag;
+335: 			}
+336: 		}
+337: 
+338: 		// Make sure the access is not put into quick lookup tables:
+339: 		ok |= MEMORY_NOT_FULL_PAGE;
+340: 	}
+341: #endif
+342: 
+343: #if 0
+344: 	/*
+345: 	 *  For quick-and-dirty test to see which memory addresses are in use,
+346: 	 *  making a "waterfall spectrum"...
+347: 	 */
+348: 	if (cpu->running && (paddr < 0x200000 ||
+349: 		(paddr >= 0x0c000000 && paddr < 0x0d000000)))
+350: 	{
+351: 		int64_t xsize = 1920, ysize = 1080;
+352: 		static int y = 0;
+353: 		static int count = 0;
+354: 		static uint8_t* buf = NULL;
+355: 
+356: 		if (buf == NULL)
+357: 		{
+358: 			buf = (uint8_t*)malloc(xsize * ysize*3);
+359: 			memset(buf, 0xff, xsize * ysize*3);
+360: 		}
+361: 
+362: 		uint64_t paddr2 = paddr - 0x0c000000;
+363: 		
+364: 		if (paddr < 0x200000)
+365: 			paddr2 = paddr + 16*1048576;
+366: 
+367: 		int64_t max = 16*1048576 + (2*1048576);
+368: 
+369: 		int64_t x = xsize * paddr2 / max;
+370: 
+371: 		if (x >= 0 && x < xsize)
+372: 		{
+373: 			if (writeflag)
+374: 			{
+375: 				int c = buf[(x+y*xsize)*3+0];
+376: 				if (c == 255)
+377: 					c = 128;
+378: 				else if (c > 0)
+379: 				{
+380: 					c = c - 8;
+381: 				}
+382: 
+383: 				buf[(x+y*xsize)*3+1] = c;
+384: 				buf[(x+y*xsize)*3+2] = c;
+385: 			}
+386: 			else
+387: 			{
+388: 				int c = buf[(x+y*xsize)*3+1];
+389: 				if (c == 255)
+390: 					c = 128;
+391: 				else if (c > 0)
+392: 				{
+393: 					c = c - 8;
+394: 				}
+395: 
+396: 				buf[(x+y*xsize)*3+0] = c;
+397: 				buf[(x+y*xsize)*3+2] = c;
+398: 			}
+399: 		}
+400: 		
+401: 		for (int meg = 0; meg < 18; ++meg)
+402: 			buf[((xsize * (meg * 0x100000LL) / max) +y*xsize)*3+1] = 64;
+403: 
+404: 		count ++;
+405: 		if (count >= 8192)
+406: 		{
+407: 			count = 0;
+408: 			y ++;
+409: 			
+410: 			if (y >= ysize)
+411: 			{
+412: 				static int n = 0;
+413: 				char name[40];
+414: 				snprintf(name, sizeof(name), "memory_%05i.ppm", n++);
+415: 				FILE* f = fopen(name, "w");
+416: 				printf("writing out %s\n", name);
+417: 				fprintf(f, "P6\n%i %i\n255\n", (int)xsize, (int)ysize);
+418: 				fwrite((char*)buf, 1, (int)(xsize*ysize*3), f);
+419: 				fclose(f);
+420: 				memset(buf, 0xff, xsize*ysize);
+421: 				y = 0;
+422: 			}
+423: 		}
+424: 		
+425: 		// Make sure the access is not put into quick lookup tables:
+426: 		ok |= MEMORY_NOT_FULL_PAGE;
+427: 	}
+428: #endif
+429: 
+430: 	/*
+431: 	 *  Memory mapped device?
+432: 	 *
+433: 	 *  TODO: if paddr < base, but len enough, then the device should
+434: 	 *  still be written to!
+435: 	 */
+436: 	if (paddr >= mem->mmap_dev_minaddr && paddr < mem->mmap_dev_maxaddr) {
+437: 		uint64_t orig_paddr = paddr;
+438: 		int i, start, end, res;
+439: 
+440: #if 0
+441: 
+442: TODO: The correct solution for this is to add RAM devices _around_ the
+443: dangerous device. The solution below incurs a slowdown for _everything_,
+444: not just the device in question.
+445: 
+446: 		/*
+447: 		 *  Really really slow, but unfortunately necessary. This is
+448: 		 *  to avoid the folowing scenario:
+449: 		 *
+450: 		 *	a) offsets 0x000..0x123 are normal memory
+451: 		 *	b) offsets 0x124..0x777 are a device
+452: 		 *
+453: 		 *	1) a read is done from offset 0x100. the page is
+454: 		 *	   added to the dyntrans system as a "RAM" page
+455: 		 *	2) a dyntranslated read is done from offset 0x200,
+456: 		 *	   which should access the device, but since the
+457: 		 *	   entire page is added, it will access non-existant
+458: 		 *	   RAM instead, without warning.
+459: 		 *
+460: 		 *  Setting dyntrans_device_danger = 1 on accesses which are
+461: 		 *  on _any_ offset on pages that are device mapped avoids
+462: 		 *  this problem, but it is probably not very fast.
+463: 		 *
+464: 		 *  TODO: Convert this into a quick (multi-level, 64-bit)
+465: 		 *  address space lookup, to find dangerous pages.
+466: 		 */
+467: 		for (i=0; i<mem->n_mmapped_devices; i++)
+468: 			if (paddr >= (mem->devices[i].baseaddr & ~offset_mask)&&
+469: 			    paddr <= ((mem->devices[i].endaddr-1)|offset_mask)){
+470: 				dyntrans_device_danger = 1;
+471: 				break;
+472: 			}
+473: #endif
+474: 
+475: 		start = 0; end = mem->n_mmapped_devices - 1;
+476: 		i = mem->last_accessed_device;
+477: 
+478: 		/*  Scan through all devices:  */
+479: 		do {
+480: 			if (paddr >= mem->devices[i].baseaddr &&
+481: 			    paddr < mem->devices[i].endaddr) {
+482: 				/*  Found a device, let's access it:  */
+483: 				mem->last_accessed_device = i;
+484: 
+485: 				/*  #95: zero the caller's buffer up front on a read
+486: 				    so a device handler that fills only part of it --
+487: 				    or whose access is len-clamped just below -- can
+488: 				    never hand back uninitialised host memory to the
+489: 				    guest.  Root-cause fix for the uninit-read class
+490: 				    (cf. per-device #91/#93/#94).  */
+491: 				if (writeflag == MEM_READ)
+492: 					memset(data, 0, len);
+493: 
+494: 				paddr -= mem->devices[i].baseaddr;
+495: 				if (paddr + len > mem->devices[i].length) {
+496: 					/*  Note the truncation per the
+497: 					    warn-loudly ethos, but only at
+498: 					    debug verbosity (-v) and at most
+499: 					    8 times (single-threaded), since
+500: 					    probing at the end of a device's
+501: 					    mapped range is common and benign
+502: 					    (cf. the unwarned zero-fill in
+503: 					    #95/#119 above).  */
+504: 					static int n_trunc_msgs = 0;
+505: 					if (ENOUGH_VERBOSITY(SUBSYS_MEMORY,
+506: 					    VERBOSITY_DEBUG) &&
+507: 					    n_trunc_msgs < 8) {
+508: 						n_trunc_msgs ++;
+509: 						debugmsg_cpu(cpu,
+510: 						    SUBSYS_MEMORY,
+511: 						    mem->devices[i].name,
+512: 						    VERBOSITY_DEBUG,
+513: 						    "%s truncated at end of"
+514: 						    " device: offset 0x%llx,"
+515: 						    " len %i -> %i",
+516: 						    writeflag == MEM_WRITE ?
+517: 						    "write" : "read",
+518: 						    (long long) paddr,
+519: 						    (int) len,
+520: 						    (int) (mem->devices[i].
+521: 						    length - paddr));
+522: 					}
+523: 					len = mem->devices[i].length - paddr;
+524: 				}
+525: 
+526: 				if (cpu->update_translation_table != NULL &&
+527: 				    !(ok & MEMORY_NOT_FULL_PAGE) &&
+528: 				    mem->devices[i].flags & DM_DYNTRANS_OK) {
+529: 					int wf = writeflag == MEM_WRITE? 1 : 0;
+530: 					unsigned char *host_addr;
+531: 
+532: 					if (!(mem->devices[i].flags &
+533: 					    DM_DYNTRANS_WRITE_OK))
+534: 						wf = 0;
+535: 
+536: 					if (writeflag && wf) {
+537: 						if (paddr < mem->devices[i].
+538: 						    dyntrans_write_low)
+539: 							mem->devices[i].
+540: 							dyntrans_write_low =
+541: 							    paddr &~offset_mask;
+542: 						if (paddr >= mem->devices[i].
+543: 						    dyntrans_write_high)
+544: 							mem->devices[i].
+545: 						 	dyntrans_write_high =
+546: 							    paddr | offset_mask;
+547: 					}
+548: 
+549: 					if (mem->devices[i].flags &
+550: 					    DM_EMULATED_RAM) {
+551: 						/*  MEM_WRITE to force the page
+552: 						    to be allocated, if it
+553: 						    wasn't already  */
+554: 						uint64_t *pp = (uint64_t *)mem->
+555: 						    devices[i].dyntrans_data;
+556: 						uint64_t p = orig_paddr - *pp;
+557: 						host_addr =
+558: 						    memory_paddr_to_hostaddr(
+559: 						    mem, p & ~offset_mask,
+560: 						    MEM_WRITE);
+561: 					} else if ((paddr | offset_mask) <
+562: 					    mem->devices[i].length) {
+563: 						host_addr = mem->devices[i].
+564: 						    dyntrans_data +
+565: 						    (paddr & ~offset_mask);
+566: 					} else {
+567: 						/*  #155: (Codex/Fable)
+568: 						    don't install dyntrans
+569: 						    fast-path access to a
+570: 						    device page that is not
+571: 						    fully backed; keep it on
+572: 						    the bounded slow path.  */
+573: 						host_addr = NULL;
+574: 					}
+575: 
+576: 					if (host_addr != NULL)
+577: 						cpu->update_translation_table(
+578: 						    cpu, vaddr & ~offset_mask,
+579: 						    host_addr, wf,
+580: 						    orig_paddr & ~offset_mask);
+581: 				}
+582: 
+583: 				res = 0;
+584: 				if (!no_exceptions || (mem->devices[i].flags &
+585: 				    DM_READS_HAVE_NO_SIDE_EFFECTS)) {
+586: 					bool running_before_device_access = cpu->running;
+587: 					res = mem->devices[i].f(cpu, mem, paddr,
+588: 					    data, len, writeflag,
+589: 					    mem->devices[i].extra);
+590: 
+591: 					if (running_before_device_access && !cpu->running)
+592: 						return MEMORY_ACCESS_FAILED;
+593: 				}
+594: 
+595: 				if (res == 0)
+596: 					res = -1;
+597: 
+598: 				/*
+599: 				 *  If accessing the memory mapped device
+600: 				 *  failed, then return with an exception.
+601: 				 *  (Architecture specific.)
+602: 				 */
+603: 				if (res <= 0 && !no_exceptions) {
+604: 					debug("[ %s device '%s' addr %08lx "
+605: 					    "failed ]\n", writeflag?
+606: 					    "writing to" : "reading from",
+607: 					    mem->devices[i].name, (long)paddr);
+608: #ifdef MEM_MIPS
+609: 					mips_cpu_exception(cpu,
+610: 					    cache == CACHE_INSTRUCTION?
+611: 					    EXCEPTION_IBE : EXCEPTION_DBE,
+612: 					    0, vaddr, 0, 0, 0, 0);
+613: #endif
+614: #ifdef MEM_M88K
+615: 					/*  TODO: This is enough for
+616: 					    OpenBSD/mvme88k's badaddr()
+617: 					    implementation... but the
+618: 					    faulting address should probably
+619: 					    be included somewhere too!  */
+620: 					m88k_exception(cpu, cache == CACHE_INSTRUCTION
+621: 					    ? M88K_EXCEPTION_INSTRUCTION_ACCESS
+622: 					    : M88K_EXCEPTION_DATA_ACCESS, 0);
+623: #endif
+624: 					return MEMORY_ACCESS_FAILED;
+625: 				}
+626: 				goto do_return_ok;
+627: 			}
+628: 
+629: 			if (paddr < mem->devices[i].baseaddr)
+630: 				end = i - 1;
+631: 			if (paddr >= mem->devices[i].endaddr)
+632: 				start = i + 1;
+633: 			i = (start + end) >> 1;
+634: 		} while (start <= end);
+635: 	}
+636: 
+637: 
+638: #ifdef MEM_MIPS
+639: 	/*
+640: 	 *  Data and instruction cache emulation:
+641: 	 */
+642: 
+643: 	switch (cpu->cd.mips.cpu_type.mmu_model) {
+644: 	case MMU3K:
+645: 		/*  if not uncached addess  (TODO: generalize this)  */
+646: 		if (!(misc_flags & PHYSICAL) && cache != CACHE_NONE &&
+647: 		    !((vaddr & 0xffffffffULL) >= 0xa0000000ULL &&
+648: 		      (vaddr & 0xffffffffULL) <= 0xbfffffffULL)) {
+649: 			if (memory_cache_R3000(cpu, cache, paddr,
+650: 			    writeflag, len, data))
+651: 				goto do_return_ok;
+652: 		}
+653: 		break;
+654: 	default:
+655: 		/*  R4000 etc  */
+656: 		/*  TODO  */
+657: 		;
+658: 	}
+659: #endif	/*  MEM_MIPS  */
+660: 
+661: 
+662: 	/*  Outside of physical RAM?  */
+663: 	if (paddr >= mem->physical_max) {
+664: #ifdef MEM_MIPS
+665: 		if ((paddr & 0xffffc00000ULL) == 0x1fc00000) {
+666: 			/*  Ok, this is PROM stuff  */
+667: 		} else if ((paddr & 0xfffff00000ULL) == 0x1ff00000) {
+668: 			/*  Sprite reads from this area of memory...  */
+669: 			/*  TODO: is this still correct?  */
+670: 			if (writeflag == MEM_READ)
+671: 				memset(data, 0, len);
+672: 			goto do_return_ok;
+673: 		} else
+674: #endif /* MIPS */
+675: 		{
+676: 			if (paddr >= mem->physical_max && !no_exceptions)
+677: 				if (memory_warn_about_unimplemented_addr
+678: 				    (cpu, mem, writeflag, paddr, len))
+679: 					return MEMORY_ACCESS_FAILED;
+680: 
+681: 			if (writeflag == MEM_READ) {
+682: 				/*  Return all zeroes? (Or 0xff? TODO)  */
+683: 				memset(data, 0, len);
+684: 
+685: #if 0
+686: /*
+687:  *  NOTE: This code prevents a PROM image from a real 5000/200 from booting.
+688:  *  I think I introduced it because it was how some guest OS (NetBSD?) detected
+689:  *  the amount of RAM on some machine.
+690:  *
+691:  *  TODO: Figure out if it is not needed anymore, and remove it completely.
+692:  */
+693: #ifdef MEM_MIPS
+694: 				/*
+695: 				 *  For real data/instruction accesses, cause
+696: 				 *  an exceptions on an illegal read:
+697: 				 */
+698: 				if (cache != CACHE_NONE && !no_exceptions &&
+699: 				    paddr >= mem->physical_max &&
+700: 				    paddr < mem->physical_max+1048576) {
+701: 					mips_cpu_exception(cpu,
+702: 					    EXCEPTION_DBE, 0, vaddr, 0,
+703: 					    0, 0, 0);
+704: 				}
+705: #endif  /*  MEM_MIPS  */
+706: #endif
+707: 			}
+708: 
+709: 			/*  Hm? Shouldn't there be a DBE exception for
+710: 			    invalid writes as well?  TODO  */
+711: 
+712: 			goto do_return_ok;
+713: 		}
+714: 	}
+715: 
+716: 
+717: 	/*
+718: 	 *  Uncached access:
+719: 	 *
+720: 	 *  1)  Translate the physical address to a host address.
+721: 	 *
+722: 	 *  2)  Insert this virtual->physical->host translation into the
+723: 	 *      fast translation arrays (using update_translation_table()).
+724: 	 *
+725: 	 *  3)  If this was a Write, then invalidate any code translations
+726: 	 *      in that page.
+727: 	 */
+728: 	memblock = memory_paddr_to_hostaddr(mem, paddr & ~offset_mask,
+729: 	    writeflag);
+730: 	if (memblock == NULL) {
+731: 		if (writeflag == MEM_READ)
+732: 			memset(data, 0, len);
+733: 		goto do_return_ok;
+734: 	}
+735: 
+736: 	offset = paddr & offset_mask;
+737: 
+738: 	if (cpu->update_translation_table != NULL && !dyntrans_device_danger
+739: #ifdef MEM_MIPS
+740: 	    /*  Ugly hack for R2000/R3000 caches:  */
+741: 	    && (cpu->cd.mips.cpu_type.mmu_model != MMU3K ||
+742:             !(cpu->cd.mips.coproc[0]->reg[COP0_STATUS] & MIPS1_ISOL_CACHES))
+743: #endif
+744: 	    && !(ok & MEMORY_NOT_FULL_PAGE)
+745: 	    && !no_exceptions)
+746: 		cpu->update_translation_table(cpu, vaddr & ~offset_mask,
+747: 		    memblock, (misc_flags & MEMORY_USER_ACCESS) |
+748: 		    (cache == CACHE_INSTRUCTION?
+749: 			(writeflag == MEM_WRITE? 1 : 0) : ok - 1),
+750: 		    paddr & ~offset_mask);
+751: 
+752: 	/*
+753: 	 *  If writing, or if mapping a page where writing is ok later on,
+754: 	 *  then invalidate code translations for the (physical) page address:
+755: 	 */
+756: 
+757: 	if ((writeflag == MEM_WRITE
+758: 	    || (ok == 2 && cache == CACHE_DATA)
+759: 	    ) && cpu->invalidate_code_translation != NULL)
+760: 		cpu->invalidate_code_translation(cpu, paddr, INVALIDATE_PADDR);
+761: 
+762: 	if ((paddr&((1<<BITS_PER_MEMBLOCK)-1)) + len > (1<<BITS_PER_MEMBLOCK)) {
+763: 		/*  #165: (Codex/Fable) split accesses that cross a memblock
+764: 		    boundary (e.g. large DMA transfers) at the boundary,
+765: 		    instead of exiting the whole emulator.  */
+766: 		size_t len_head = (size_t) ((1<<BITS_PER_MEMBLOCK) -
+767: 		    (paddr & ((1<<BITS_PER_MEMBLOCK)-1)));
+768: 
+769: 		if (writeflag == MEM_WRITE)
+770: 			memcpy(memblock + offset, data, len_head);
+771: 		else
+772: 			memcpy(data, memblock + offset, len_head);
+773: 
+774: 		return MEMORY_RW(cpu, mem, vaddr + len_head, data + len_head,
+775: 		    len - len_head, writeflag, misc_flags);
+776: 	}
+777: 
+778: 	/*  And finally, read or write the data:  */
+779: 	if (writeflag == MEM_WRITE)
+780: 		memcpy(memblock + offset, data, len);
+781: 	else
+782: 		memcpy(data, memblock + offset, len);
+783: 
+784: do_return_ok:
+785: 	return MEMORY_ACCESS_OK;
+786: }
+787: 
+788: /*  #430: this file is included more than once per translation unit (see cpu_alpha.c), so
+789:     the per-inclusion macros must not leak into the next inclusion.  MRW_CAT/MRW_CAT2 are
+790:     inclusion-independent and are left defined behind their own guard.  */
+791: #undef MEMORY_RW_ONE_PAGE
+792: #undef MRW_OFFSET_MASK
+793: #undef MRW_SPLIT_MASK
+794: 
+
+codex
+The four-cell table matches the handler. The registered-device failure branch has live MIPS and M88K exception calls; the `#if 0` surrounds a separate MIPS exception in the out-of-RAM read path. That path also calls an uninspected warning helper before zero-filling, so these files do not establish that narrowing always gives silent zero reads and ignored writes.
+codex
+Width handling adds another distinction: `memory_rw.c` truncates an access that starts inside a device; it does not dispatch the remaining bytes separately. Narrowing would therefore turn an offset-0, two-byte access into a one-byte handler call. Both candidates return the same read bytes there, so a data-only row cannot prove that narrowing occurred.
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$lines = Get-Content -LiteralPath '"'C:\\DocumentNoSnc\\CC\\GXEMUL\\GXEMUL-SEC\\src\\devices\\dev_wdc.c'
+"'$view = foreach ($range in @(@(755,850), @(1045,1105))) {
+  for ($n = $range[0]; $n -le $range[1]; $n++) { '"'{0}: {1}' -f "'$n, $lines[$n - 1] }
+}
+$view -join [Environment]::NewLine' in C:\Users\User00\AppData\Local\Temp\claude\C--DocumentNoSnc-CC-GXEMUL\8e474f41-4d47-4c99-bf11-3406a84c4fcd\scratchpad
+ succeeded in 1063ms:
+755:  *  wdc_new_command_reset():
+756:  *
+757:  *  #479: A COMMAND ENTERING wdc_command() STARTS WITHOUT THE PREVIOUS COMMAND'S
+758:  *  WRITER, BUFFERED BYTES, OR PHASE.
+759:  *
+760:  *  #480 L4: THE SCOPE IS THIS FUNCTION, NOT THE WORD "COMMAND".  An earlier
+761:  *  headline read "A NEW COMMAND STARTS WITHOUT..." with no qualifier, and the
+762:  *  device falsified that in its own code: the ALT-CTRL arm assigned
+763:  *  cur_command = COMMAND_RESET WITHOUT CALLING THIS HELPER, so the most
+764:  *  reset-like operation the device had was not a caller at all.  The SCOPE
+765:  *  paragraph forty lines below said so; a universal headline with its qualifier
+766:  *  that far down is read as universal.  Named by the fable seat on #479 pass 2.
+767:  *
+768:  *  wdc_command() cleared the ATAPI flag and the error and nothing else, so three
+769:  *  pieces of the previous command's state survived into the next one.  All three
+770:  *  were reproduced with liveness controls before this was written:
+771:  *
+772:  *    write_in_progress   an ATA write stayed armed across a packet command, so one
+773:  *                        shared ring served the disk-write path and the CDB path at
+774:  *                        once.  MEASURED: a guest's own sector write put 512 CD-ROM
+775:  *                        DATA-IN bytes and ZERO of its own on the image.
+776:  *    the input ring      residue from an under-drained transfer was never cleared.
+777:  *                        MEASURED: the drain then fires early and the guest's sector
+778:  *                        arrives with the previous transfer's bytes at its head.
+779:  *    atapi_phase         PHASE_CMDOUT survived an ordinary WRITE command.  Latent
+780:  *                        while the dispatch tests the flag AND the phase -- and #477's
+781:  *                        comment was pointing a future round straight at it.
+782:  *
+783:  *  WHY THE TOP, AND NOT THE END.  IDENTIFY loads its 512-byte response INTO the ring
+784:  *  as part of the command, and wdc__read() does the same for every ordinary READ.  A
+785:  *  seat measured the end-of-function form destroying both -- 256 of 256 IDENTIFY
+786:  *  words wrong, and a freshly-read sector gone -- while every row this round pins
+787:  *  stayed GREEN.  Clean-up-on-exit reads as the more principled placement and is the
+788:  *  more dangerous one.
+789:  *
+790:  *  WHAT THIS DELIBERATELY DOES NOT TOUCH:
+791:  *
+792:  *    cur_command     wdc__write() reads it, and the caller sets it immediately
+793:  *                    above.  Clearing it here would break the write it is about to
+794:  *                    set up.
+795:  *    the warned_*    latches.  Zeroing them alongside everything else reads as
+796:  *                    COMPLETING this helper and is the mutant to press: it undoes
+797:  *                    #337 and #464, and it is STRICTLY WORSE than the equivalent
+798:  *                    mistake in dev_asc.c, because wdc_command() runs far more often
+799:  *                    than a chip reset.  dev_asc.c says so at its own latch
+800:  *                    declarations: "Deliberately NOT cleared by dev_asc_reset() or
+801:  *                    dev_asc_fifo_flush(): a guest could otherwise re-arm the flood."
+802:  *
+803:  *  SCOPE.  TWO CALLERS: wdc_command(), and the ALT-CTRL arm on a real soft reset.
+804:  *
+805:  *  *** THIS PARAGRAPH SAID "Called from wdc_command() only" AND PRESCRIBED WHAT WOULD
+806:  *  HAVE TO HAPPEN FIRST BEFORE THE OTHER CALLER COULD EXIST.  #481 DID EXACTLY THAT,
+807:  *  so the prescription is DISCHARGED rather than merely stale. ***
+808:  *
+809:  *  It read: extending the helper to that arm AS IT STOOD was MEASURED to cancel a
+810:  *  legal transfer on an ordinary 0x08 Device Control write, which real drivers hold
+811:  *  as their steady state; so the extension "needs the arm's bit test fixed first
+812:  *  (WDCTL_RST, not WDCTL_4BIT) and is a separate round."
+813:  *
+814:  *  #481 is that round.  It corrected the bit AND made the call in one change, which
+815:  *  is why the accept rows this paragraph pointed at are GREEN on the shipped tree and
+816:  *  still RED under `Md_bitswap` -- the same extension WITHOUT the prerequisite.
+817:  *  Those four rows therefore MEASURED the ordering argument rather than asserting it.
+818:  *
+819:  *  The invariant is still not established on every path into the device: the ALT-CTRL
+820:  *  arm calls this only for WDCTL_RST, and other decode paths into that register are
+821:  *  filed rather than covered.  Said out loud rather than implied, as before.
+822:  */
+823: static void wdc_new_command_reset(struct wdc_data *d)
+824: {
+825: 	d->atapi_cmd_in_progress = 0;
+826: 	d->atapi_phase = 0;
+827: 	d->write_in_progress = 0;
+828: 
+829: 	/*  pointer reset rather than a drain loop, matching dev_asc_fifo_flush()'s
+830: 	    count-zeroing: there is no consumer to notify and nothing to hand back.  */
+831: 	d->inbuf_head = d->inbuf_tail = 0;
+832: }
+833: /*
+834:  *  wdc_command():
+835:  */
+836: void wdc_command(struct cpu *cpu, struct wdc_data *d, int idata)
+837: {
+838: 	size_t i;
+839: 
+840: 	d->cur_command = idata;
+841: 	d->error = 0;
+842: 
+843: 	/*  #479: this replaced a bare `d->atapi_cmd_in_progress = 0;`.  The flag
+844: 	    was one of three pieces of the previous command's state, and clearing
+845: 	    only the one that had been noticed is what left the other two.  */
+846: 	wdc_new_command_reset(d);
+847: 
+848: 	/*
+849: 	 *  Disk images that do not exist return an ABORT error.  This also
+850: 	 *  happens with CDROM images with the WDCC_IDENTIFY command; CDROM
+1045: 		    and every later one would go silent again.  It is what a tidying
+1046: 		    maintainer writes -- group the response with the warning -- and a
+1047: 		    sweep using one fresh device per opcode CANNOT SEE IT, because
+1048: 		    the latch is 0 on every leg.  Row `irq 2nd` exists for exactly
+1049: 		    that mutant.
+1050: 		
+1051: 		    *** THAT SENTENCE NAMED A ROW `irq 2nd` THAT DOES NOT EXIST.
+1052: 		    Repo-wide it occurred in this comment and nowhere else. ***  The
+1053: 		    real artifact is an unnamed SUB-LEG of row_completion_irq(),
+1054: 		    printing a `2nd` field inside a row named "a terminated command
+1055: 		    raises its irq".  What makes the error dangerous rather than
+1056: 		    untidy is the company it kept: the SAME sentence cites `abrt 2nd`,
+1057: 		    which IS a real row -- so a true citation stood next to a
+1058: 		    fabricated one and lent it credibility.
+1059: 		
+1060: 		    #464 already found the ABORT BIT wrongly inside
+1061: 		    this same guard and shipped `abrt 2nd` for it; the interrupt
+1062: 		    needed the same row.  */
+1063: 		d->error |= WDCE_ABRT;
+1064: 		d->int_assert = 1;
+1065: 		if (!d->warned_unimpl_cmd) {
+1066: 			d->warned_unimpl_cmd = 1;
+1067: 			fatal("[ wdc: WARNING! Unimplemented command 0x%02x "
+1068: 			    "(drive %i, head %i, cyl %i, sector %i, nsecs %i)"
+1069: 			    " ]\n", d->cur_command, d->drive, d->head,
+1070: 			    d->cyl_hi*256+d->cyl_lo, d->sector, d->seccnt);
+1071: 		}
+1072: 	}
+1073: }
+1074: 
+1075: 
+1076: DEVICE_ACCESS(wdc)
+1077: {
+1078: 	struct wdc_data *d = (struct wdc_data *) extra;
+1079: 	uint64_t idata = 0, odata = 0;
+1080: 	int i;
+1081: 
+1082: 	relative_addr /= d->addr_mult;
+1083: 
+1084: 	if (!d->io_enabled)
+1085: 		goto ret;
+1086: 
+1087: 	if (writeflag == MEM_WRITE) {
+1088: 		if (relative_addr == wd_data)
+1089: 			idata = memory_readmax64(cpu, data, len);
+1090: 		else {
+1091: 			/*  #464: latch the announcement; `idata = data[0]`
+1092: 			    is the repair and stays outside the guard.  */
+1093: 			if (len != 1 && !d->warned_nonbyte_write) {
+1094: 				d->warned_nonbyte_write = 1;
+1095: 				fatal("[ wdc: WARNING! non-8-bit access on "
+1096: 				    "WRITE! ]\n");
+1097: 			}
+1098: 			idata = data[0];
+1099: 		}
+1100: 	}
+1101: 
+1102: 	switch (relative_addr) {
+1103: 
+1104: 	case wd_data:	/*  0: data  */
+1105: 		if (writeflag == MEM_READ) {
+
+codex
+I favor B for the repair supported by this file scope: it gives offset 1 an explicit zero response while preserving the existing mapping. A needs evidence about the released address’s fallback behavior before it can be classified across machines. For the detector, I’m distinguishing nonzero status on a diskless controller from a test medium that returns zero for every read—the latter would fool an offset-1-only check.
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$lines = Get-Content -LiteralPath '"'C:\\DocumentNoSnc\\CC\\GXEMUL\\GXEMUL-SEC\\src\\devices\\dev_wdc.c'
+"'$view = foreach ($range in @(@(848,875), @(1868,1913))) {
+  for ($n = $range[0]; $n -le $range[1]; $n++) { '"'{0}: {1}' -f "'$n, $lines[$n - 1] }
+}
+$view -join [Environment]::NewLine' in C:\Users\User00\AppData\Local\Temp\claude\C--DocumentNoSnc-CC-GXEMUL\8e474f41-4d47-4c99-bf11-3406a84c4fcd\scratchpad
+ succeeded in 539ms:
+848: 	/*
+849: 	 *  Disk images that do not exist return an ABORT error.  This also
+850: 	 *  happens with CDROM images with the WDCC_IDENTIFY command; CDROM
+851: 	 *  images must be detected with ATAPI_IDENTIFY_DEVICE instead.
+852: 	 *
+853: 	 *  TODO:  Is this correct/good behaviour?
+854: 	 */
+855: 	if (!diskimage_exist(cpu->machine, d->drive + d->base_drive,
+856: 	    DISKIMAGE_IDE)) {
+857: 		debug("[ wdc: command 0x%02x drive %i, but no disk image ]\n",
+858: 		    d->cur_command, d->drive + d->base_drive);
+859: 		d->error |= WDCE_ABRT;
+860: 		d->int_assert = 1;
+861: 		return;
+862: 	}
+863: 	if (diskimage_is_a_cdrom(cpu->machine, d->drive + d->base_drive,
+864: 	    DISKIMAGE_IDE) && d->cur_command == WDCC_IDENTIFY) {
+865: 		debug("[ wdc: IDENTIFY drive %i, but it is an ATAPI "
+866: 		    "drive ]\n", d->drive + d->base_drive);
+867: 		d->error |= WDCE_ABRT;
+868: 		d->int_assert = 1;
+869: 		return;
+870: 	}
+871: 
+872: 	/*  Handle the command:  */
+873: 	switch (d->cur_command) {
+874: 
+875: 	case WDCC_READ:
+1868: 		} else {
+1869: 			d->sector = idata;
+1870: 			debug("[ wdc: write to SECTOR: 0x%02x ]\n", (int)idata);
+1871: 		}
+1872: 		break;
+1873: 
+1874: 	case wd_cyl_lo:	/*  4: cylinder low  */
+1875: 		if (writeflag == MEM_READ) {
+1876: 			odata = d->cyl_lo;
+1877: 			if (d->cur_command == COMMAND_RESET &&
+1878: 			    diskimage_is_a_cdrom(cpu->machine,
+1879: 			    d->drive + d->base_drive, DISKIMAGE_IDE))
+1880: 				odata = 0x14;
+1881: 			if (d->atapi_cmd_in_progress) {
+1882: 				int x = d->atapi_len;
+1883: 				if (x > 32768)
+1884: 					x = 32768;
+1885: 				odata = x & 255;
+1886: 			}
+1887: 			debug("[ wdc: read from CYL_LO: 0x%02x ]\n",(int)odata);
+1888: 		} else {
+1889: 			d->cyl_lo = idata;
+1890: 			debug("[ wdc: write to CYL_LO: 0x%02x ]\n", (int)idata);
+1891: 		}
+1892: 		break;
+1893: 
+1894: 	case wd_cyl_hi:	/*  5: cylinder high  */
+1895: 		if (writeflag == MEM_READ) {
+1896: 			odata = d->cyl_hi;
+1897: 			if (d->cur_command == COMMAND_RESET &&
+1898: 			    diskimage_is_a_cdrom(cpu->machine,
+1899: 			    d->drive + d->base_drive, DISKIMAGE_IDE))
+1900: 				odata = 0xeb;
+1901: 			if (d->atapi_cmd_in_progress) {
+1902: 				int x = d->atapi_len;
+1903: 				if (x > 32768)
+1904: 					x = 32768;
+1905: 				odata = (x >> 8) & 255;
+1906: 			}
+1907: 			debug("[ wdc: read from CYL_HI: 0x%02x ]\n",(int)odata);
+1908: 		} else {
+1909: 			d->cyl_hi = idata;
+1910: 			debug("[ wdc: write to CYL_HI: 0x%02x ]\n", (int)idata);
+1911: 		}
+1912: 		break;
+1913: 
+
+codex
+VERDICT: The four-cell table is correct. The registered-device fault is live, but its measurement does not establish narrowing behavior. The supplied header path is missing.
+CODEX_ALTDIGIN_20260911
+
+The exact path `C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\src\include\wdcreg.h` returned “The system cannot find the file specified”; an exact-path existence check also returned false. I did not look for a replacement. Consequently, I can verify three files and the WDC comment’s quotation of the header, but cannot independently verify the header itself.
+
+This is a source review. I did not inspect the referenced artifacts, execute detectors, or change any file.
+
+Your cell table survives the source check.
+
+In [dev_wdc.c:609](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c:609), `relative_addr` occurs in exactly one executable test within `DEVICE_ACCESS(wdc_altstatus)`: line 622. That test is reached only when the initial `writeflag == MEM_READ` condition is false.
+
+Let **S** denote the status byte produced by `status_byte(d, cpu)`.
+
+| Cell | Actual disposition |
+|---|---|
+| WRITE, offset 0 | Reaches Alt Ctrl. If `idata & WDCTL_RST`, assigns `COMMAND_RESET` and calls `wdc_new_command_reset()`, lines 740–742. Correct routing and the settled #481 reset behavior. |
+| WRITE, offset 1 | Enters #494’s decline arm. Emits its debug message, performs neither reset action, and returns 1. |
+| READ, offset 0 | Returns S in `data[0]`. |
+| READ, offset 1 | **Also returns S in `data[0]`. No read-side offset decoding exists.** |
+
+“Alt Ctrl, correct” should remain scoped to that routing and reset behavior; this function does not implement every Device Control bit.
+
+The common tail does exactly what your reading says:
+
+```c
+746: if (writeflag == MEM_READ)
+747:     data[0] = odata;
+749: return 1;
+```
+
+It neither rejects offset 1 nor replaces S with zero. The earlier `idata = data[0]` does not change that conclusion. The `addr_mult` division and `io_enabled` gate at lines 1082–1085 belong to the separate main WDC handler, not this alternate-register handler.
+
+The registered-device exception claim is correct, with architecture and access-mode qualifications.
+
+After invoking a matched device handler, [memory_rw.c:595](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:595) contains:
+
+```c
+595: if (res == 0)
+596:     res = -1;
+```
+
+Its failure branch contains these statements:
+
+```c
+603: if (res <= 0 && !no_exceptions) {
+604:     debug("[ %s device '%s' addr %08lx "
+605:         "failed ]\n", writeflag?
+606:         "writing to" : "reading from",
+607:         mem->devices[i].name, (long)paddr);
+608: #ifdef MEM_MIPS
+609:     mips_cpu_exception(cpu,
+610:         cache == CACHE_INSTRUCTION?
+611:         EXCEPTION_IBE : EXCEPTION_DBE,
+612:         0, vaddr, 0, 0, 0, 0);
+613: #endif
+```
+
+The `MEM_M88K` branch begins at line 614; its exception call is:
+
+```c
+620:     m88k_exception(cpu, cache == CACHE_INSTRUCTION
+621:         ? M88K_EXCEPTION_INSTRUCTION_ACCESS
+622:         : M88K_EXCEPTION_DATA_ACCESS, 0);
+```
+
+The failure branch then returns:
+
+```c
+624:     return MEMORY_ACCESS_FAILED;
+```
+
+**Those exception calls are live conditional-compilation branches, not inside an `#if 0`.** For an ordinary data access with `NO_EXCEPTIONS` clear, a registered handler returning zero causes the MIPS DBE call or the M88K data-access exception call.
+
+After a matched device, line 626 instead goes to `do_return_ok` when the failure branch is not taken. Neither outcome resumes the device search or falls through to unassigned-address handling.
+
+The qualification matters: `NO_EXCEPTIONS` suppresses this failure branch and can also suppress the handler invocation at lines 583–589. A debugger-style read using that flag is therefore not automatically evidence that the device handler ran.
+
+The comment’s **path explanation** is verified. The exact 19,793 count, guest retry loop, and default-verbosity silence are not independently verified by these files. There is a `debug()` call matching the reported device-failed messages, but the logging implementation and guest exception handling are outside the permitted scope. A finite diagnostic count also does not, by itself, prove an endless loop.
+
+The narrowing inference needs a narrower claim.
+
+Failing to match a registered device proceeds beyond the device search. It does **not** manufacture a failed device-handler result.
+
+For the ordinary out-of-RAM path, [memory_rw.c:676](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:676) says:
+
+```c
+676: if (paddr >= mem->physical_max && !no_exceptions)
+677:     if (memory_warn_about_unimplemented_addr
+678:         (cpu, mem, writeflag, paddr, len))
+679:         return MEMORY_ACCESS_FAILED;
+
+681: if (writeflag == MEM_READ) {
+682:     /*  Return all zeroes? (Or 0xff? TODO)  */
+683:     memset(data, 0, len);
+```
+
+The proposed MIPS exception below that zero-fill is the disabled one:
+
+```c
+685: #if 0
+```
+
+Inside that disabled section:
+
+```c
+701: mips_cpu_exception(cpu,
+702:     EXCEPTION_DBE, 0, vaddr, 0,
+703:     0, 0, 0);
+```
+
+It ends at line 706. The write-side commentary and continuation are:
+
+```c
+709: /*  Hm? Shouldn't there be a DBE exception for
+710:     invalid writes as well?  TODO  */
+
+712: goto do_return_ok;
+```
+
+And:
+
+```c
+784: do_return_ok:
+785:     return MEMORY_ACCESS_OK;
+```
+
+Thus, **if this ordinary gap path is reached and the warning helper permits continuation**, reads are zero-filled, writes are ignored, and the access returns success. Under those conditions, narrowing produces structural DECLINE, not the registered-device FAULT.
+
+There are two reasons not to turn that into an unconditional statement about A:
+
+- `memory_warn_about_unimplemented_addr()` can return failure **before the read is zero-filled**. Its implementation is not in the permitted files, so its diagnostics, stopping behavior, and conditions remain unsettled.
+- Removing WDC ownership does not establish an ordinary out-of-RAM gap. Another device might own the address; an address within RAM can follow RAM access; this file also has MIPS cache and PROM exceptions to the ordinary fallback.
+
+**Citing the 19,793 registered-device failures against narrowing would therefore be a wrong record.** Conversely, calling narrowing universally *silent* DECLINE is not established by the available source.
+
+The architecture record should read as follows:
+
+| Memory implementation | Failed registered data access, exceptions enabled |
+|---|---|
+| `MEM_MIPS` | Calls `mips_cpu_exception(... EXCEPTION_DBE ...)`, then returns failure. |
+| `MEM_M88K` | Calls `m88k_exception(... M88K_EXCEPTION_DATA_ACCESS ...)`, then returns failure. |
+| `MEM_ALPHA` | No equivalent exception dispatch here; returns failure. |
+| Other architecture variants | No additional architecture-specific exception dispatch appears in this branch. |
+
+So member 5 exists through this mechanism for a WDC installation using the MIPS or M88K implementation. It is **not established as a portable WDC disposition across architectures**. Returning `MEMORY_ACCESS_FAILED` is not itself proof of a guest architectural exception on Alpha or elsewhere.
+
+The permitted files do not provide a census of machines that actually install WDC. `DEVINIT(wdc)` contains machine-specific address adjustments, but those branches are not evidence of actual callers. I therefore cannot certify a WDC installation on M88K merely because the generic M88K failure mechanism exists.
+
+I rank **B first for this repair under the available evidence**, and A second pending evidence about the released address.
+
+B has a defined result independent of which fallback would handle the released address: decline the offset-1 read, return byte **`0x00`**, and retain handler return value **1**.
+
+A concrete B would retain the unconditional S calculation and the common tail, replacing the initial read arm with:
+
+```c
+if (writeflag == MEM_READ) {
+    if (relative_addr != 0) {
+        odata = 0;
+    } else {
+        debug("[ wdc: read from ALTSTATUS: 0x%02x ]\n",
+            (int)odata);
+    }
+} else if (relative_addr != 0) {
+    /* Existing #494 write-decline arm. */
+```
+
+The existing Alt Ctrl arm follows unchanged.
+
+Zero’s warrant is the emulator’s deterministic declined-read convention: #95 pre-zeroes registered-device read buffers, and the ordinary unimplemented-address path also chooses zero. **That is an emulator policy, not proof that a real Drive Address or floppy register must read zero.** The latter would require implementation and hardware evidence absent here.
+
+Crucially, #95 alone does not implement B. Leaving the new decline arm empty retains S in `odata`; the common tail then overwrites the pre-zeroed first byte with S. Explicitly replacing `odata` is the operative effect in this formulation.
+
+A has a stronger ownership property: WDC ceases claiming an unimplemented byte. Its registration must, however, be evaluated with the actual surrounding map and fallback behavior. This ranking is about establishing the resulting behavior, not the number of changed lines.
+
+Under A, #494’s offset arm becomes unreachable **through that registration**. I would remove that arm and move a shortened historical account beside the one-byte registration:
+
+- Explain that the former two-byte registration exposed offset 1 to this handler.
+- Preserve the witness and kill-table references, including the independently observable signature-latch effect.
+- Explain that narrowing now excludes that address.
+- Preserve the registered-return-zero finding explicitly as a finding about the former registered path.
+
+Deleting executable dead code does not require deleting the measured finding. Leaving a long comment that describes the old exposure as currently reachable would be misleading. The permitted files do not establish whether external direct callers of the handler exist, so the reachability claim should explicitly concern registered memory dispatch.
+
+The ownership issue is separable from stopping this alias.
+
+The FDC quotation is verified directly in [dev_fdc.c:49](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_fdc.c:49):
+
+```c
+#define DEV_FDC_LENGTH 6 /*  TODO 8, but collision with wdc  */
+```
+
+Its registration uses `DEV_FDC_LENGTH` at lines 126–128. Merely shrinking WDC therefore does not extend FDC to cover its offsets 6 or 7.
+
+The claimed `wd_digin` quotation appears secondhand in WDC’s comment at lines 647–650, but the specified header could not be opened. **“Verified from both sides” is not a result this review can report.**
+
+B can stop returning ATA status at offset 1 while ownership remains unresolved. A can remove WDC’s ownership without implementing FDC, but classifying the resulting access requires map and fallback evidence. Neither repair, by itself, resolves the floppy collision or implements digital input.
+
+Width is not rejected by registration size.
+
+The dispatcher matches the **starting address**, then zeroes the original read buffer and clamps the handler’s length. [memory_rw.c:480](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:480) contains:
+
+```c
+480: if (paddr >= mem->devices[i].baseaddr &&
+481:     paddr < mem->devices[i].endaddr) {
+```
+
+Followed by:
+
+```c
+491: if (writeflag == MEM_READ)
+492:     memset(data, 0, len);
+
+494: paddr -= mem->devices[i].baseaddr;
+495: if (paddr + len > mem->devices[i].length) {
+```
+
+And the actual truncation:
+
+```c
+523:     len = mem->devices[i].length - paddr;
+```
+
+The matched-device path subsequently returns without dispatching the truncated suffix to another address.
+
+For accesses reaching this dispatcher as one chunk:
+
+| Offset, requested width | HEAD | A: registration 1 | B: registration 2, read decline |
+|---|---|---|---|
+| 0, 1 | Handler length 1. READ `[S]`; WRITE uses `data[0]`. | Same. | Same. |
+| 1, 1 | Handler length 1. READ `[S]`; WRITE declined. | No WDC dispatch; fallback determines result. | Handler length 1. READ `[0]`; WRITE declined. |
+| 0, 2 | Handler length 2. READ `[S, 0]`; WRITE uses only `data[0]`. | **Clamped to length 1.** READ still `[S, 0]`; WRITE still uses only `data[0]`. | Handler length 2. READ `[S, 0]`; WRITE uses only `data[0]`. |
+| 1, 2 | Clamped to length 1. READ `[S, 0]`; WRITE declined. | No WDC dispatch; fallback determines result. | Clamped to length 1. READ `[0, 0]`; WRITE declined. |
+
+The arrays describe buffer bytes, not an endian-independent guest integer. Under A’s ordinary gap fallback, the offset-1 reads are all zero and writes are ignored, subject to the earlier qualifications.
+
+Therefore:
+
+- **A guarantees a one-byte handler call for positive-width accesses beginning at its sole registered byte.**
+- **A does not reject guest two-byte accesses.** It truncates them and reports success through this path.
+- Neither A nor B treats a two-byte access as two independently decoded register accesses.
+- A byte-result-only test at offset 0, width 2 cannot distinguish A from HEAD or B: all return `[S, 0]`.
+
+Earlier CPU alignment or translation handling can prevent or split an instruction before this point. These files do not establish that every geometrical combination is a legal guest instruction on every machine.
+
+For a denominator, distinguish contained accesses from boundary probes:
+
+| Domain | Number of combinations |
+|---|---:|
+| HEAD/B, wholly contained positive-width accesses | **6:** `(0,1)`, `(0,2)`, `(1,1)`, each READ and WRITE |
+| HEAD/B, starts `{0,1}` × requested widths `{1,2}` × directions | **8**, including the two offset-1 width-2 boundary probes |
+| A, wholly contained positive-width accesses | **2:** offset 0, width 1, READ and WRITE |
+
+Registration length does not generally limit requested `len` to `{1,2}`. Eight is an explicitly bounded test domain, not all possible requests.
+
+Given only your statement that existing rows use `len == 1`, they can cover **at most 4/6** contained HEAD combinations, or **4/8** of that boundary-inclusive domain. A row issuing only one distinct tuple covers **1/6** or **1/8**, irrespective of repetition. I cannot establish the actual aggregate numerator without reading the rows.
+
+The detector needs observable differences, not just visits to the affected code.
+
+For the proposed B, the clause-(d) mutant is exact:
+
+> **B-null-effect:** Keep `if (relative_addr != 0)` and its branch, but remove `odata = 0`. Keep the unconditional S calculation and common tail. Offset-1 reads again return S.
+
+A declined read must use a fixture with **S ≠ 0** to kill that mutant. If S is zero, fixed and broken implementations return the same byte.
+
+A has no separate `if` guard and effect statement in its literal `2 → 1` edit. Changing 1 back to 2 is reversion, not an independent guard-kept/effect-removed mutation. A coherent structural analogue is:
+
+> **A-null-exclusion:** Keep the one-byte registration, but restore an additional mapping of the released byte to WDC. The original range restriction remains; its intended exclusion is defeated.
+
+For example, a second one-byte registration at the released address using this handler restores a status alias. That mutant must be described as a **structural null**, not represented as deleting an effect statement that A does not contain. Checking only that the original registration still says `1` would miss it.
+
+For “null medium,” two meanings require different treatment:
+
+- **No attached disk/backend:** This is a legitimate fixture. The fixed build should pass, and the old or nulled repair should still fail when S is made nonzero. Disklessness does not imply zero status: initialization sets `d->error = 1` at line 1994, and `status_byte()` includes `WDCS_ERR` when `d->error` is set at lines 594–595. Establish the nonzero control explicitly.
+- **A null test vehicle that returns zero for every read without exercising WDC:** The detector must reject it through a legal offset-0 read expected to return nonzero S. An offset-1-zero assertion alone accepts this null vehicle.
+
+The source files do not define your project’s meaning of “null medium”; neither interpretation should silently substitute for the other.
+
+The following is a concrete row specification for B. **These are predicted kills, not measured kills.** Use normal dispatched accesses with `NO_EXCEPTIONS` clear, controlled state, and an independently established expected S. “Handler length” and invocation counts require dispatch instrumentation; guest data alone does not expose them.
+
+| Row | Required observation | Named mutant and differing observable |
+|---|---|---|
+| **R1-byte**, offset 1, READ, width 1; run with a backend and diskless with S ≠ 0 | Returned byte 0; access succeeds. Pair with a legal nonzero offset-0 control. | **HEAD**, **verbatim reinstatement**, **B-null-effect**, or removing the read offset guard: returned byte becomes S. Returning 0 from the declined handler instead: access result becomes failure; MIPS/M88K additionally dispatch the relevant exception. |
+| **R0-byte**, offset 0, READ, width 1; S ≠ 0, IRQ pending | Exact S, with the pending IRQ preserved. | Make the new decline guard always true or invert it: byte becomes 0. Remove the common read assignment or substitute an all-zero null vehicle: byte becomes 0. Substitute ordinary STATUS-read handling: IRQ is deasserted even though the status byte can remain identical. |
+| **W0-byte**, offset 0, WRITE, width 1; reset and non-reset sublegs | Reset subleg performs both the command-latch assignment and helper clearing. A non-reset `WDCTL_4BIT` subleg preserves them. | Misroute writes through the read arm: reset effects disappear. Delete helper: writer/ring/phase survive. Delete command assignment: command latch survives. Restore the wrong reset-bit test: the non-reset subleg changes state. |
+| **W1-byte**, offset 1, WRITE, width 1 | Reset-bearing input changes neither writer/ring state nor command/signature latch. | Remove #494’s decline: reset effects appear. Guard only the helper: command/signature latch changes while ring state stays unchanged. **This row does not kill B-null-effect or HEAD’s read alias.** |
+| **R0-wide**, offset 0, READ, width 2 | `[S, 0]`; B dispatches length 2. | Add a width-based read decline: first byte becomes 0. Fill the second byte with S: second byte changes. Narrow registration to 1: only recorded handler length changes; returned bytes do not. |
+| **R1-wide**, offset 1, READ, width 2 | `[0, 0]`; handler length 1. | HEAD/reinstatement/B-null-effect: first byte becomes S. Remove dispatcher truncation: recorded length becomes 2, while the corrected handler’s returned bytes can remain unchanged. |
+| **W0-wide**, offset 0, WRITE, width 2 | First byte controls the action; second byte is ignored. Use sublegs that place the reset bit exclusively in each byte. | Reject wide writes: first-byte-reset subleg loses its reset. Use the second byte as control, or process it as an additional control write: one or both sublegs change the reset outcome. |
+| **W1-wide**, offset 1, WRITE, width 2 | No reset/latch effects; handler length 1. | Reopen #494: reset/latch effects appear. Remove truncation alone: recorded length changes, **not necessarily controller state**. |
+
+The IRQ observation has direct source support: ordinary STATUS reads deassert the IRQ and clear `int_assert` at [dev_wdc.c:1933](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c:1933); alternate-status reads do neither.
+
+The signature observation needs a properly conditioned fixture. [dev_wdc.c:1874](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c:1874) and its high-cylinder counterpart return `0x14`/`0xeb` only when `cur_command == COMMAND_RESET` and the selected medium is a CD-ROM. Moreover, an active ATAPI command overrides those values afterward.
+
+Therefore, a guest-visible signature leg needs a selected CD-ROM, `atapi_cmd_in_progress == 0`, and initial cylinder values distinguishable from the signature. **A diskless signature leg cannot witness that latch.** Use a separate qualified CD-ROM leg or an explicit internal `cur_command` assertion. Ring/DRQ observations cannot substitute for it.
+
+For A, the rows must change their observations rather than pretending the old WDC channel still exists:
+
+| A obligation | Non-vacuous observation and kill |
+|---|---|
+| Reject offset-1 READs, widths 1 and 2 | In a verified ordinary-gap fixture, observe returned zero bytes with an offset-0 S ≠ 0 control. HEAD, reinstatement, and restored status aliases return S in the first byte. The CPU read result remains an observation channel even without an owning device. |
+| Prove offset-1 exclusion for both directions | Observe **zero WDC invocations** at the released address, with a positive offset-0 invocation control. Reinstatement and A-null-exclusion produce a WDC invocation. |
+| Preserve offset-0 READ and WRITE | Observe legal nonzero status and both reset effects. Removing the registration, shifting it away, or making its effective range empty loses those accepted operations. |
+| Pin offset-0 width-2 truncation | Observe effective handler length 1. Restoring the original two-byte range produces length 2. `[S,0]` and first-byte write effects alone cannot kill that mutant. |
+
+In particular, **a WRITE-offset-1 ring-preservation row cannot kill verbatim reinstatement of today’s HEAD**: #494 already preserves that ring. The same is true of its command latch. Such a row can kill a reopened-control-path mutant, but cannot be credited for detecting restored ownership while #494 remains effective.
+
+Likewise, the offset-0 truncation row does not kill A-null-exclusion implemented as a separate alias: the original one-byte registration can still truncate. The released-address dispatch/read row is what distinguishes that mutant.
+
+The accept-side predicate accounting for the concrete B above is:
+
+| Predicate or boundary | What pins its accepted side |
+|---|---|
+| Device start-address bounds, unchanged at two bytes | R0-byte through actual dispatch; W0-byte proves the legal control address also remains reachable. |
+| Initial `writeflag == MEM_READ`, enclosing the new guard | W0-byte detects misrouting writes into the read branch; R1-byte detects losing read-side decoding. |
+| New read-side `relative_addr != 0` | R0-byte with S ≠ 0 kills overbroad or inverted decline; R1-byte kills a disabled decline. |
+| Common-tail `writeflag == MEM_READ` | R0-byte kills suppression of the read assignment because #95 leaves zero in its place. |
+| Existing write-side offset guard and `idata & WDCTL_RST` | W1-byte and the reset/non-reset W0-byte sublegs pin the retained write behavior and both reset effects. |
+
+There is an easily missed limitation here: **R0-byte’s returned value alone need not kill inversion of the initial direction test.** S was computed before that test, and the separate common tail can still return it after the wrong arm ran. The write acceptance leg supplies a differing observable.
+
+There is no new width, disk-presence, `io_enabled`, or `addr_mult` predicate in B. Do not invent accept obligations from those as though they appeared in this diff. Width remains a separate dispatch contract, covered by the explicit wide rows.
+
+Under A, the changed admission predicate is the upper range boundary, from `paddr < base + 2` to `paddr < base + 1`, for both directions. Its width clamp changes too, but that clamp continues the access; it is not a width-rejection predicate.
+
+**No accept obligation or mutation-test floor is discharged by this review.** The source establishes the distinct observations above and exposes the vacuous ones. Measured kills, existing-row coverage, the header quotation, and the released address’s actual machine behavior remain unverified within the permitted files.
+tokens used
+87,977

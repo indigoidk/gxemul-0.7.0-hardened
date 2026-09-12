@@ -1,0 +1,93 @@
+﻿PRE-TABLE CHECK -- wdcaltdigin
+Written BEFORE table 1 runs, so this file's own mtime proves the order.
+
+THE DIFF UNDER TEST is in src/devices/dev_wdc.c:
+  DEVICE_ACCESS(wdc_altstatus) at line 609:
+    Ruled repair: decode relative_addr on the MEM_READ path:
+      if (writeflag == MEM_READ) {
+          if (relative_addr != 0) {
+              odata = 0;
+          } else {
+              debug("[ wdc: read from ALTSTATUS: 0x%02x ]\n",
+                  (int)odata);
+          }
+      } else if (relative_addr != 0) {
+          /* existing #494 write-decline arm, unchanged */
+      }
+    Common tail assigns data[0] = odata on MEM_READ and returns 1.
+    Declined read convention: emulator policy pre-zeroes registered-device
+    read buffers (#95); returning 0 is an emulator convention, not a claim
+    about physical ATA bus float.
+
+--------------------------------------------------------------------- SIBLING PARITY
+
+1. Sibling symmetry with #494:
+   #494 repaired (WRITE, offset 1) in DEVICE_ACCESS(wdc_altstatus) to decline stores to
+   the read-only Drive Address register (0x3f7) so they do not trigger a soft reset.
+   The READ path remained un-decoded in the preceding `if (writeflag == MEM_READ)`,
+   returning status byte S for both offset 0 (0x3f6) and offset 1 (0x3f7).
+   wdcaltdigin completes the 4-cell table:
+     - (WRITE, offset 0): Alt Ctrl (#481) -> soft reset
+     - (WRITE, offset 1): Drive Address register (#494) -> declined store
+     - (READ,  offset 0): Alt Status -> returns S (S != 0)
+     - (READ,  offset 1): Drive Address register (wdcaltdigin) -> declined read (0x00)
+
+--------------------------------------------------------------------- CLAIM -> ROW
+
+1. "Offset-1 read at power-on returns 0x00 rather than status byte S (0x51)"
+   -> ROWED as CORE_READ_OFF1_POWERON (fails pre-fix, passes post-fix).
+2. "Offset-1 read while armed returns 0x00 rather than armed status S_armed (0x58)"
+   -> ROWED as CORE_READ_OFF1_ARMED (fails pre-fix, passes post-fix).
+3. "Legal offset-0 read returns non-zero status S at power-on (rejects null medium)"
+   -> ROWED as ACCEPT_READ_OFF0_POWERON (want S = 0x51 != 0).
+4. "Legal offset-0 read returns non-zero status S_armed while armed (rejects null medium)"
+   -> ROWED as ACCEPT_READ_OFF0_ARMED (want S_armed = 0x58 != 0).
+5. "Write cell offset 0 soft reset (#481) unregressed"
+   -> ROWED as WRITE0_SRST_DRQ_CLEAR (0x50) and WRITE0_SRST_RING_PURGED (0xff).
+6. "Write cell offset 1 write-decline (#494) unregressed"
+   -> ROWED as WRITE1_DECLINE_DRQ_SET (0x58) and WRITE1_DECLINE_RING_INTACT (0x71).
+7. "Liveness and Device Signature Controls"
+   -> ROWED as CONTROL_RAM_LIVENESS (0x55), CONTROL_CYL_LO_LIVENESS (0x55),
+      CONTROL_CYL_HI_LIVENESS (0x66), CONTROL_FIFO_DEVSIG_1 (0x5a),
+      CONTROL_FIFO_DEVSIG_2 (0xa5), CONTROL_STATUS_POWERON (0x51),
+      CONTROL_STATUS_ARMED (0x58), CONTROL_STATUS_ARMED_W2 (0x58).
+
+--------------------------------------------------------------------- CHANNEL -- PER ROW, MUTANT KILLED & OBSERVABLE DIFFERENCE
+
+ROW                         KILLS                   OBSERVABLE THAT DIFFERS
+--------------------------  ----------------------  ---------------------------------------------
+CORE_READ_OFF1_POWERON      HEAD, M_NULL_EFFECT,    Register s1: returns 0x00 on BASE vs
+                            M_REINSTATE             0x51 on mutant (differs by status byte S)
+CORE_READ_OFF1_ARMED        HEAD, M_NULL_EFFECT,    Register s4: returns 0x00 on BASE vs
+                            M_REINSTATE             0x58 on mutant (differs by armed status S_armed)
+ACCEPT_READ_OFF0_POWERON    M_NULL_MEDIUM           Register s0: returns 0x51 on BASE vs
+                                                    0x00 on null medium (differs by S != 0)
+ACCEPT_READ_OFF0_ARMED      M_NULL_MEDIUM           Register s3: returns 0x58 on BASE vs
+                                                    0x00 on null medium (differs by S_armed != 0)
+WRITE0_SRST_DRQ_CLEAR       Regression guard        Register s5: verifies 0x50 (DRQ clear)
+WRITE0_SRST_RING_PURGED     Regression guard        Register s6: verifies 0xff (ring purged)
+WRITE1_DECLINE_DRQ_SET      Regression guard        Register t8: verifies 0x58 (DRQ maintained)
+WRITE1_DECLINE_RING_INTACT  Regression guard        Register t9: verifies 0x71 (bytes maintained)
+Controls (8 rows)           Apparatus / Harness     Hold constant across all legs
+
+VACUOUS-BY-CONSTRUCTION CHECK: Every row above names a channel that CAN vary under its
+named mutant. In particular, M_NULL_EFFECT varies ONLY on offset-1 reads and CANNOT be killed
+if S == 0. Because our fixture measures S = 0x51 and S_armed = 0x58 (strictly non-zero),
+the channel is guaranteed active and non-vacuous.
+
+--------------------------------------------------------------------- PREDICTED SCORES ACROSS MUTANTS
+
+Leg             Expected Score  Failing Rows / Kill Reason
+--------------  --------------  -------------------------------------------------------------
+BASE            16/16           None -- clean pass across all 16 rows.
+HEAD            14/16           2 rows: CORE_READ_OFF1_POWERON (0x51), CORE_READ_OFF1_ARMED (0x58).
+M_NULL_EFFECT   14/16           2 rows: CORE_READ_OFF1_POWERON (0x51), CORE_READ_OFF1_ARMED (0x58).
+                                KILLED BY CORE READ ROWS. Proves odata = 0 assignment is essential.
+M_REINSTATE     14/16           2 rows: CORE_READ_OFF1_POWERON (0x51), CORE_READ_OFF1_ARMED (0x58).
+                                KILLED BY CORE READ ROWS. Verbatim return of pre-fix read arm.
+M_NULL_MEDIUM   14/16           2 rows: ACCEPT_READ_OFF0_POWERON (0x00), ACCEPT_READ_OFF0_ARMED (0x00).
+                                KILLED BY ACCEPT ROWS. Proves legal reads returning non-zero S reject
+                                all-zero read stubs.
+RESTORED        14/16           2 rows: byte-for-byte identical to HEAD baseline.
+
+PRETABLE_DONE

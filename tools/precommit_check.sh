@@ -320,7 +320,16 @@ elif out=$(python "$SCORECHK" 2>&1); then
 	#  with a literal denominator pin (`check "gdromcond rows run" ... 20`).  Same
 	#  deliberate raise, and the growth arm named this file and this line when it fired --
 	#  which is the property that makes the check worth its noise.
-	SCORE_CLAIMS_MANIFEST=23
+	#  RAISED 23 -> 25 ON 2026-09-12, DELIBERATELY.  Two newly gated probes:
+	#  wdc_altdigin_probe.py (#525, pinned in gate_sh_rounding.sh at 22 rows)
+	#  and arm_bdt_probe.py (#524, pinned in gate_arm.sh at 43).  (This said 19
+	#  and 39 -- both pins grew under their class closures after it was written.)
+	#  The checker reads the WORKING TREE, so #524's pin counts here one commit
+	#  before gate_arm.sh lands; #524 is the next commit.  Growth is a
+	#  hard FAIL on purpose -- a floor that only catches SHRINKAGE goes slack
+	#  every time the count rises, which is how this check once sat at 16
+	#  against a real 18.
+	SCORE_CLAIMS_MANIFEST=25
 	_spinned=$(printf '%s\n' "$out" | sed -n 's/^SCORE_CLAIMS_PINNED=//p')
 	if [ -z "$_spinned" ]; then
 		bad "check_score_claims printed no SCORE_CLAIMS_PINNED line -- the count cannot be pinned"
