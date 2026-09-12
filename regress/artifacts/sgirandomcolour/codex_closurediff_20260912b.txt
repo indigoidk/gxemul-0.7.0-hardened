@@ -1,0 +1,314 @@
+VERDICT: Do not ratify closure yet. Eleven cells are empty; the design below fills their input coverage, but the permitted files do not identify the exact historical M28 mutation.
+CODEX_519CL_20260912
+
+I read only the four named files. All replacements below have unique old strings in the current working tree. I checked Python syntax and expanded the session commands in memory; no emulator or mutant ran, and no file was written.
+
+**Current occupancy**
+
+Latch state means **on entry to the colour default arm**, before its warning update.
+
+| Addressing mode | Clear: occupied depths | Clear: empty depths | Set: occupied depths | Set: empty depths |
+|---|---|---|---|---|
+| TLB_A | 1, 4 | 2, 8 | 1, 2, 4, 8 | — |
+| TLB_B | 1 | 2, 4, 8 | 1, 2, 4, 8 | — |
+| TLB_C | 1 | 2, 4, 8 | 1, 2, 4, 8 | — |
+| LIN_A | 1, 4 | 2, 8 | 2, 4, 8 | 1 |
+
+That is **21 occupied cells and eleven empty cells**, derived from these session sequences:
+
+- Each tiled session performs four accepts, then declines at depths **1 clear → 2 set → 4 set → 8 set → 1 set**. [Session loop](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/sgi_re_colourdefault_probe.py:451)
+- The coordinate session’s first decline, `xy dec c1`, supplies **TLB_A/4/clear**. Its other declines have the latch set. [Coordinate session](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/sgi_re_colourdefault_probe.py:682)
+- The linear-width session supplies **LIN_A/1/clear**, then **LIN_A/2/set** and **LIN_A/8/set**. The original witness supplies **LIN_A/4/clear**; `two declined` observes **LIN_A/4/set**. [Linear session](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/sgi_re_colourdefault_probe.py:498)
+
+M28 is a separate limitation: the current probe already contains ten other-nibble decline rows. Its existing `nib 60` runs at **FG_ALT with the latch set**. PRETABLE names `M28_permit_othernibbles` but supplies no exact replacement. The proposed `M28 nib60` adds a fresh **FG_VAL/latch-clear** observation; its historical-M28 kill remains unestablished.
+
+Apply the following **seven probe replacements together** in [sgi_re_colourdefault_probe.py](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/sgi_re_colourdefault_probe.py). The depth-eight changes strengthen four existing assertions without adding rows.
+
+**Replacement 1 — controlling header contract**
+
+OLD:
+```python
+#  CONTRACT (vacuity-floor clause (e)) -- what this witness catches and what it does NOT:
+#    CATCHES   the default arm assigning random() and storing it: `ycrcb put' and `reserved put'
+#              expect the destination to remain unchanged (post-fix honest decline); on HEAD they
+#              fail because host random() bytes overwrite the pre-painted sentinel.
+#    DOES NOT  implement YCRCB colour space conversion or other colour modes; it witnesses the defect
+#              on unhandled modes under ordinary bounds-correctness engineering.
+```
+
+NEW:
+```python
+#  CONTRACT -- #519 closure design, 2026-09-12.  This is the controlling coverage
+#  contract; older CONTRACT/CLOSED/COMPLETE claims below are historical and are
+#  superseded wherever they claim a larger domain or describe missing coverage.
+#
+#  The declined-PUT input projection is
+#      {TLB_A, TLB_B, TLB_C, LIN_A} x {bufdepth 1, 2, 4, 8 bytes}
+#      x {SGIRE_W_BADCOLOR clear, set ON ENTRY to the colour default arm}.
+#  Its 32 cells concern PUTs that reach that arm with eligible coordinates and
+#  a valid selected mapping.  Earlier bounds, mapping and BADMODE returns are
+#  outside this projection.  The added fixtures use solid 1x1 DE rectangles at
+#  (0,0); their supported RGBA/4-byte controls verify the selected destination.
+#  At (0,0), the index and offset are zero at every tested depth.
+#
+#  The design occupies every cell of this projection.  This exhausts its input
+#  tuples for a default-store permission predicate depending ONLY on these
+#  three axes.  It is not full closure over arbitrary predicates on all function
+#  inputs, nor a claim that each cell independently tests every warning property.
+#  The projection's cell readbacks cover every attempted transfer byte,
+#  including both words at depth eight.  Each added decline is observed before
+#  a later repaint or PUT.
+#  Preserved bytes do not prove that no write occurred: a write of identical
+#  bytes remains invisible.  Zero-initialized negative controls have exact,
+#  differing readbacks; kills of uninitialized-buffer mutants need measurement.
+#
+#  OUTSIDE: exhaustive coordinates, tile indices, descriptor payloads, raw mode
+#  bits, foreground values, other device/CPU/memory state and their interactions.
+#  All twelve default nibbles are driven, but are not crossed with this
+#  entire projection.  GET, accepted-type width semantics, invalid-input
+#  paths, per-instance/reset behavior and cold/warm memory paths are not closed.
+#  Existing acceptance, nibble, coordinate and latch-independence rows retain
+#  their individual assertions without enlarging the projection.
+#
+#  M28 nib60 adds a fresh LIN_A/depth-4/type-0x60 decline at FG_VAL.  It targets
+#  the reported other-nibble permission family.  The exact historical M28/M28r
+#  edit is absent from the permitted records; NIB_OTHER_ZERO is a newly specified
+#  deterministic control, not an identification of that historical mutant.
+#  Every score for this design is a PREDICTION until built and measured.
+```
+
+**Replacement 2 — complete depth-eight readbacks**
+
+OLD:
+```python
+def cell_op(A, mode, ks):
+    """One cell: repaint, then `sw MODE_DST; sw PRIM_START; lw' in ONE stepped block.  The
+    primitive fires synchronously inside the second store, so the load that follows it in the
+    same block reads the destination after that operation and before anything else."""
+    return (["put w 0x%x, 0x%08x" % (ks, DST_PAINT),
+             "a3=0x%x" % DE_MODE_DST,   "t0=0x%x" % mode,
+             "a2=0x%x" % DE_PRIM_START, "t1=0x%x" % PRIM_RECT,
+             "at=0x%x" % ks,            "v0=0x%x" % SENTINEL]
+            + run_ops([OP_SW_T0_A3, OP_SW_T1_A2, OP_LW_V0_AT], A.take(3))
+            + ["print v0"])
+
+def printed_seq(t):
+    return ["0x%08x" % (int(v, 16) & 0xffffffff)
+            for v in re.findall(r"print\s+v0\s*\n\s*(0x[0-9a-f]+)", t)]
+```
+
+NEW:
+```python
+DST_PAINT_TAIL = 0x55667788
+
+def cell_want(mode):
+    return ("0x%08x%08x" % (DST_PAINT, DST_PAINT_TAIL)
+            if ((mode >> 8) & 3) == 3 else "0x%08x" % DST_PAINT)
+
+def cell_op(A, mode, ks):
+    """Repaint, fire one synchronous PUT, then read its whole transfer span."""
+    depth8 = ((mode >> 8) & 3) == 3
+    paint = ["put w 0x%x, 0x%08x" % (ks, DST_PAINT)]
+    if depth8:
+        paint += ["put w 0x%x, 0x%08x" % (ks + 4, DST_PAINT_TAIL)]
+    return (paint
+            + ["a3=0x%x" % DE_MODE_DST,   "t0=0x%x" % mode,
+               "a2=0x%x" % DE_PRIM_START, "t1=0x%x" % PRIM_RECT,
+               "at=0x%x" % ks,            "v0=0x%x" % SENTINEL]
+            + run_ops([OP_SW_T0_A3, OP_SW_T1_A2,
+                       OP_LD_V0_AT if depth8 else OP_LW_V0_AT], A.take(3))
+            + ["print v0"])
+
+def printed_seq(t, modes=None):
+    raw = re.findall(r"print\s+v0\s*\n\s*(0x[0-9a-f]+)", t)
+    if modes is None:
+        return ["0x%08x" % (int(v, 16) & 0xffffffff) for v in raw]
+    if len(raw) != len(modes):
+        return []
+    return [("0x%016x" % (int(v, 16) & 0xffffffffffffffff)
+             if ((mode >> 8) & 3) == 3
+             else "0x%08x" % (int(v, 16) & 0xffffffff))
+            for v, mode in zip(raw, modes)]
+```
+
+**Replacement 3 — tiled parsing widths**
+
+OLD:
+```python
+    _v = printed_seq(_t) if _alive else []
+```
+
+NEW:
+```python
+    _modes = [m for _, m, _ in _acc] + [m for _, m in _dec] + [_rpt]
+    _v = printed_seq(_t, _modes) if _alive else []
+```
+
+**Replacement 4 — tiled expected values**
+
+OLD:
+```python
+        row("%s ycrcb %s" % (_tag, _n), _cell(len(_acc) + _j) if _alive else "died", want_sentinel,
+```
+
+NEW:
+```python
+        row("%s ycrcb %s" % (_tag, _n), _cell(len(_acc) + _j) if _alive else "died", cell_want(_m),
+```
+
+**Replacement 5 — linear parsing widths**
+
+OLD:
+```python
+_vl = printed_seq(t_lin) if alive_lin else []
+```
+
+NEW:
+```python
+_vl = printed_seq(t_lin, (0x10f0, 0x11f0, 0x13f0)) if alive_lin else []
+```
+
+**Replacement 6 — linear expected values**
+
+OLD:
+```python
+    row("lin ycrcb %s" % _n, (_vl[_i] if _i < len(_vl) else "absent") if alive_lin else "died",
+        want_sentinel,
+```
+
+NEW:
+```python
+    row("lin ycrcb %s" % _n, (_vl[_i] if _i < len(_vl) else "absent") if alive_lin else "died",
+        cell_want(_m),
+```
+
+**Replacement 7 — eleven missing cells and the explicit M28-family row**
+
+OLD:
+```python
+ok = sum(1 for _, o in rows if o)
+```
+
+NEW:
+```python
+# ================================================================ #519 bounded closure
+# Ten fresh first-decline sessions, one primed repeat session, and the M28-family row.
+# Each table entry contributes ONE assertion: its readbacks and announce count.
+# The RGBA control uses four initialized bytes, including for depth-eight declines.
+# A fresh session has BADCOLOR clear; the RGBA control leaves it clear.
+CL519_CASES = (
+    ("tA d2 first",   0x01f0, KS_A,       False, "FIRST_A2_ZERO"),
+    ("tA d8 first",   0x03f0, KS_A,       False, "FIRST_A8_ZERO"),
+    ("tB d2 first",   0x05f0, KS_B,       False, "FIRST_B2_ZERO"),
+    ("tB d4 first",   0x06f0, KS_B,       False, "FIRST_B4_ZERO"),
+    ("tB d8 first",   0x07f0, KS_B,       False, "FIRST_B8_ZERO"),
+    ("tC d2 first",   0x09f0, KS_C,       False, "FIRST_C2_ZERO"),
+    ("tC d4 first",   0x0af0, KS_C,       False, "FIRST_C4_ZERO"),
+    ("tC d8 first",   0x0bf0, KS_C,       False, "FIRST_C8_ZERO"),
+    ("lin d2 first",  0x11f0, DST_KSEG1,  False, "FIRST_L2_ZERO"),
+    ("lin d8 first",  0x13f0, DST_KSEG1,  False, "FIRST_L8_ZERO"),
+    ("lin d1 repeat", 0x10f0, DST_KSEG1,  True,  "REPEAT_L1_ZERO"),
+    ("M28 nib60",     0x1260, DST_KSEG1,  False, "NIB_OTHER_ZERO"),
+)
+for _name, _mode, _ks, _repeat, _control in CL519_CASES:
+    A = Addr(CODE)
+    _cmds = tiled_prologue(A)
+    _cmds += store(A, RE_LINEAR_A, 0x0000001000000000, op=OP_SD_T0_A3)
+    _modes = [(_mode & 0x1c00) | 0x0220]
+    _want = ["0x%08x" % FG_VAL]
+    if _repeat:
+        # This first decline is itself read before the target cell repaints.
+        _modes.append(MODE_YCRCB)
+        _want.append(cell_want(MODE_YCRCB))
+    _modes.append(_mode)
+    _want.append(cell_want(_mode))
+    for _m in _modes:
+        _cmds += cell_op(A, _m, _ks)
+    _t, _alive = session(_cmds, spin=3.0)
+    _got = printed_seq(_t, _modes) if _alive else []
+    row(_name, (tuple(_got), _t.count(ANN)) if _alive else "died",
+        (tuple(_want), 1),
+        "readbacks in operation order; one announce; control=" + _control)
+
+ok = sum(1 for _, o in rows if o)
+```
+
+**Exact negative controls and what varies**
+
+These are **alternative test mutations**, applied individually to [dev_sgi_re.c](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:364). They are not production changes. The following Python string literals specify the exact old and new text; `\t` denotes a literal tab.
+
+Initializing the default-arm buffer makes these controls deterministic without copying uninitialized storage. Their predicates run **before** the warning block sets BADCOLOR. Testing the clear state at the later `if (ok)` would be too late.
+
+```python
+OLD = "\t\t\tok = 0;"
+
+NEW_BY_MUTANT = {
+    "FIRST_A2_ZERO":
+        "\t\t\tmemset(buf, 0, sizeof(buf)); ok = (tlb_mode == 0 && bufdepth == 2 && !(d->warned & SGIRE_W_BADCOLOR));",
+    "FIRST_A8_ZERO":
+        "\t\t\tmemset(buf, 0, sizeof(buf)); ok = (tlb_mode == 0 && bufdepth == 8 && !(d->warned & SGIRE_W_BADCOLOR));",
+    "FIRST_B2_ZERO":
+        "\t\t\tmemset(buf, 0, sizeof(buf)); ok = (tlb_mode == 1 && bufdepth == 2 && !(d->warned & SGIRE_W_BADCOLOR));",
+    "FIRST_B4_ZERO":
+        "\t\t\tmemset(buf, 0, sizeof(buf)); ok = (tlb_mode == 1 && bufdepth == 4 && !(d->warned & SGIRE_W_BADCOLOR));",
+    "FIRST_B8_ZERO":
+        "\t\t\tmemset(buf, 0, sizeof(buf)); ok = (tlb_mode == 1 && bufdepth == 8 && !(d->warned & SGIRE_W_BADCOLOR));",
+    "FIRST_C2_ZERO":
+        "\t\t\tmemset(buf, 0, sizeof(buf)); ok = (tlb_mode == 2 && bufdepth == 2 && !(d->warned & SGIRE_W_BADCOLOR));",
+    "FIRST_C4_ZERO":
+        "\t\t\tmemset(buf, 0, sizeof(buf)); ok = (tlb_mode == 2 && bufdepth == 4 && !(d->warned & SGIRE_W_BADCOLOR));",
+    "FIRST_C8_ZERO":
+        "\t\t\tmemset(buf, 0, sizeof(buf)); ok = (tlb_mode == 2 && bufdepth == 8 && !(d->warned & SGIRE_W_BADCOLOR));",
+    "FIRST_L2_ZERO":
+        "\t\t\tmemset(buf, 0, sizeof(buf)); ok = (tlb_mode == 4 && bufdepth == 2 && !(d->warned & SGIRE_W_BADCOLOR));",
+    "FIRST_L8_ZERO":
+        "\t\t\tmemset(buf, 0, sizeof(buf)); ok = (tlb_mode == 4 && bufdepth == 8 && !(d->warned & SGIRE_W_BADCOLOR));",
+    "REPEAT_L1_ZERO":
+        "\t\t\tmemset(buf, 0, sizeof(buf)); ok = (tlb_mode == 4 && bufdepth == 1 && (d->warned & SGIRE_W_BADCOLOR) != 0);",
+    "NIB_OTHER_ZERO":
+        "\t\t\tmemset(buf, 0, sizeof(buf)); ok = (color_mode != 0xf0 && color_mode != 0x50);",
+    "TAIL8_ZERO":
+        "\t\t\tok = 0; if (bufdepth == 8) { memset(buf, 0, sizeof(buf)); cpu->memory_rw(cpu, cpu->mem, tileptr + ofs + 4, buf, 4, MEM_WRITE, NO_EXCEPTIONS | PHYSICAL); }",
+}
+```
+
+**PREDICTIONS for the distinguishing readbacks:**
+
+| Proposed row | Control | Expected target readback | Target readback under control |
+|---|---|---|---|
+| `tA d2 first` | `FIRST_A2_ZERO` | `0x11223344` | `0x00003344` |
+| `tA d8 first` | `FIRST_A8_ZERO` | `0x1122334455667788` | `0x0000000000000000` |
+| `tB d2 first` | `FIRST_B2_ZERO` | `0x11223344` | `0x00003344` |
+| `tB d4 first` | `FIRST_B4_ZERO` | `0x11223344` | `0x00000000` |
+| `tB d8 first` | `FIRST_B8_ZERO` | `0x1122334455667788` | `0x0000000000000000` |
+| `tC d2 first` | `FIRST_C2_ZERO` | `0x11223344` | `0x00003344` |
+| `tC d4 first` | `FIRST_C4_ZERO` | `0x11223344` | `0x00000000` |
+| `tC d8 first` | `FIRST_C8_ZERO` | `0x1122334455667788` | `0x0000000000000000` |
+| `lin d2 first` | `FIRST_L2_ZERO` | `0x11223344` | `0x00003344` |
+| `lin d8 first` | `FIRST_L8_ZERO` | `0x1122334455667788` | `0x0000000000000000` |
+| `lin d1 repeat` | `REPEAT_L1_ZERO` | `0x11223344` | `0x00223344` |
+| `M28 nib60` | `NIB_OTHER_ZERO` | `0x11223344` | `0x00000000` |
+
+Each ordinary added row expects:
+```python
+(("0xaabbccdd", target_readback), 1)
+```
+
+The repeat row expects:
+```python
+(("0xaabbccdd", "0x11223344", "0x11223344"), 1)
+```
+
+Its middle value observes the priming decline; its final value observes the depth-one repeat.
+
+**Vacuity findings**
+
+- **None of the twelve additions is vacuous under its specified `_ZERO` control.** The target memory observation changes as shown above. Acceptance readbacks and announcement counts remain unchanged under those controls.
+- **Announcement count alone would be vacuous for these store-permission mutations.** They preserve the warning behavior. The distinguishing assertion is the destination value.
+- **Repainting cannot erase the evidence:** each PUT’s load and `print v0` precede the next operation’s repaint. The repeat session records its priming decline separately.
+- **The existing four depth-eight assertions were blind to tail-only corruption.** Under `TAIL8_ZERO`, their former four-byte observations cannot change. After replacements 2–6, their expected `0x1122334455667788` changes to **PREDICTION: `0x1122334400000000`**. The four new depth-eight rows observe that difference too.
+- The RGBA controls use depth four, whose packing initializes every transferred byte. At the added origin coordinates, changing depth leaves index and offset zero. This avoids introducing an accepted depth-eight buffer-initialization dependency into the setup.
+- These rows do not establish cold-page behavior. Their named mutations change the colour helper’s decision independently of page warmth. No status-register value is used as evidence of refusal.
+- For an uninitialized-buffer mutant, paint equality remains possible. That is an oracle limitation, not proof of refusal. **For the exact historical M28/M28r, the files do not settle the kill.**
+
+The design contains **89 assertions in 29 sessions**, adding twelve sessions. **PREDICTION:** baseline `89/89`; each `FIRST_*_ZERO` and `REPEAT_L1_ZERO` control `88/89`; `NIB_OTHER_ZERO` `78/89`; `TAIL8_ZERO` `81/89`.

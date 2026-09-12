@@ -1,0 +1,123 @@
+#519 sgirandomcolour -- KILL TABLE 5 PRETABLE, written 2026-09-12 BEFORE the table runs (mtime proves order)
+
+INSTRUMENT: regress/sgi_re_colourdefault_probe.py after codex's seven closure replacements;
+frozen copy regress/artifacts/sgirandomcolour/base_20260912/sgi_re_colourdefault_probe.py.frozen.
+BASE MEASURED before this table: SGICOLOUR_RESULT=89/89 (base_20260912/BASE.log) -- the codex
+design's own prediction was 89/89.
+
+SPACE (the probe's controlling CONTRACT): {TLB_A, TLB_B, TLB_C, LIN_A} x {bufdepth 1,2,4,8} x
+{SGIRE_W_BADCOLOR clear, set on entry to the default arm} = 32 cells.  Occupancy before the closure,
+DERIVED by codex from the sessions (not copied from an earlier answer) -- reproduced verbatim:
+
+**Current occupancy**
+
+Latch state means **on entry to the colour default arm**, before its warning update.
+
+| Addressing mode | Clear: occupied depths | Clear: empty depths | Set: occupied depths | Set: empty depths |
+|---|---|---|---|---|
+| TLB_A | 1, 4 | 2, 8 | 1, 2, 4, 8 | — |
+| TLB_B | 1 | 2, 4, 8 | 1, 2, 4, 8 | — |
+| TLB_C | 1 | 2, 4, 8 | 1, 2, 4, 8 | — |
+| LIN_A | 1, 4 | 2, 8 | 2, 4, 8 | 1 |
+
+That is **21 occupied cells and eleven empty cells**, derived from these session sequences:
+
+- Each tiled session performs four accepts, then declines at depths **1 clear → 2 set → 4 set → 8 set → 1 set**. [Session loop](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/sgi_re_colourdefault_probe.py:451)
+- The coordinate session’s first decline, `xy dec c1`, supplies **TLB_A/4/clear**. Its other declines have the latch set. [Coordinate session](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/sgi_re_colourdefault_probe.py:682)
+- The linear-width session supplies **LIN_A/1/clear**, then **LIN_A/2/set** and **LIN_A/8/set**. The original witness supplies **LIN_A/4/clear**; `two declined` observes **LIN_A/4/set**. [Linear session](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/sgi_re_colourdefault_probe.py:498)
+
+M28 is a separate limitation: the current probe already contains ten other-nibble decline rows. Its existing `nib 60` runs at **FG_ALT with the latch set**. PRETABLE names `M28_permit_othernibbles` but supplies no exact replacement. The proposed `M28 nib60` adds a fresh **FG_VAL/latch-clear** observation; its historical-M28 kill remains unestablished.
+
+
+LEGS (every mutant is ONE replacement of the unique line `			ok = 0;` at dev_sgi_re.c:364,
+text exactly as codex specified; a find-text miss is a HARD FAIL, never an unmutated leg):
+  BASE       post-fix working tree
+  HEAD       git show HEAD:src/devices/dev_sgi_re.c  (the committed defect -- floor clause (a))
+  FIRST_A2_ZERO .. FIRST_L8_ZERO (10), REPEAT_L1_ZERO, NIB_OTHER_ZERO, TAIL8_ZERO
+
+CHANNEL per row, and the prediction each leg is scored against -- codex's table, verbatim:
+
+**PREDICTIONS for the distinguishing readbacks:**
+
+| Proposed row | Control | Expected target readback | Target readback under control |
+|---|---|---|---|
+| `tA d2 first` | `FIRST_A2_ZERO` | `0x11223344` | `0x00003344` |
+| `tA d8 first` | `FIRST_A8_ZERO` | `0x1122334455667788` | `0x0000000000000000` |
+| `tB d2 first` | `FIRST_B2_ZERO` | `0x11223344` | `0x00003344` |
+| `tB d4 first` | `FIRST_B4_ZERO` | `0x11223344` | `0x00000000` |
+| `tB d8 first` | `FIRST_B8_ZERO` | `0x1122334455667788` | `0x0000000000000000` |
+| `tC d2 first` | `FIRST_C2_ZERO` | `0x11223344` | `0x00003344` |
+| `tC d4 first` | `FIRST_C4_ZERO` | `0x11223344` | `0x00000000` |
+| `tC d8 first` | `FIRST_C8_ZERO` | `0x1122334455667788` | `0x0000000000000000` |
+| `lin d2 first` | `FIRST_L2_ZERO` | `0x11223344` | `0x00003344` |
+| `lin d8 first` | `FIRST_L8_ZERO` | `0x1122334455667788` | `0x0000000000000000` |
+| `lin d1 repeat` | `REPEAT_L1_ZERO` | `0x11223344` | `0x00223344` |
+| `M28 nib60` | `NIB_OTHER_ZERO` | `0x11223344` | `0x00000000` |
+
+Each ordinary added row expects:
+```python
+(("0xaabbccdd", target_readback), 1)
+```
+
+The repeat row expects:
+```python
+(("0xaabbccdd", "0x11223344", "0x11223344"), 1)
+```
+
+Its middle value observes the priming decline; its final value observes the depth-one repeat.
+
+
+PREDICTED SCORES (codex): BASE 89/89; each FIRST_*_ZERO and REPEAT_L1_ZERO 88/89 (its own row only);
+NIB_OTHER_ZERO 78/89; TAIL8_ZERO 81/89.  HEAD: not predicted -- random() bytes differ per run, so
+the expectation is 'many ycrcb/cell rows red', stated as a direction, not a number.
+
+CHECKS (mandatory pre-table block):
+  SIBLING PARITY  the four addressing modes are the siblings; the closure rows exist for all four at
+                  every depth -- the point of the diff.  N/A beyond that, with this reason.
+  CLAIM -> ROW    the probe CONTRACT's claims map to the 12 new rows plus the depth-8 readback
+                  widening (rows 2-6 of the replacements); the M28 row is a FAMILY control, and the
+                  contract says it does not identify the historical M28 edit.
+  GUARD/BODY      guard is `ok` (set 0 in the default arm); the store body reads tileptr, ofs, buf,
+                  bufdepth.  The controls condition on tlb_mode / bufdepth / d->warned / color_mode --
+                  every one a body-read or dominating-predicate field, per the DEPENDS-ON bound.
+  CHANNEL         the destination readback -- see codex's vacuity findings below.  Announce count
+                  alone would be VACUOUS for store-permission mutants (they keep the warning).
+
+CODEX VACUITY FINDINGS, verbatim:
+
+**Vacuity findings**
+
+- **None of the twelve additions is vacuous under its specified `_ZERO` control.** The target memory observation changes as shown above. Acceptance readbacks and announcement counts remain unchanged under those controls.
+- **Announcement count alone would be vacuous for these store-permission mutations.** They preserve the warning behavior. The distinguishing assertion is the destination value.
+- **Repainting cannot erase the evidence:** each PUT’s load and `print v0` precede the next operation’s repaint. The repeat session records its priming decline separately.
+- **The existing four depth-eight assertions were blind to tail-only corruption.** Under `TAIL8_ZERO`, their former four-byte observations cannot change. After replacements 2–6, their expected `0x1122334455667788` changes to **PREDICTION: `0x1122334400000000`**. The four new depth-eight rows observe that difference too.
+- The RGBA controls use depth four, whose packing initializes every transferred byte. At the added origin coordinates, changing depth leaves index and offset zero. This avoids introducing an accepted depth-eight buffer-initialization dependency into the setup.
+- These rows do not establish cold-page behavior. Their named mutations change the colour helper’s decision independently of page warmth. No status-register value is used as evidence of refusal.
+- For an uninitialized-buffer mutant, paint equality remains possible. That is an oracle limitation, not proof of refusal. **For the exact historical M28/M28r, the files do not settle the kill.**
+
+The design contains **89 assertions in 29 sessions**, adding twelve sessions. **PREDICTION:** baseline `89/89`; each `FIRST_*_ZERO` and `REPEAT_L1_ZERO` control `88/89`; `NIB_OTHER_ZERO` `78/89`; `TAIL8_ZERO` `81/89`.
+
+
+=== POST-TABLE CORRECTIONS, 2026-09-12 (appended AFTER the table; the text above is left as written so
+its mtime still proves it preceded the run) -- from the codex closing pass, codex_passE_20260912.txt ===
+
+L4 GUARD/BODY: FALSE about d->warned.  In the fixed source the latch bit neither supplies a store operand nor
+   determines `ok`; its conditional governs the DIAGNOSTIC and both branches merge before the store guard.  It
+   is NOT a predicate dominating the store.  The latch axis is a legitimate, EXPLICITLY CHOSEN mutation axis
+   (erroneous coupling of store permission to the announce state) -- that is its warrant, not DEPENDS-ON.
+L4 CLAIM -> ROW: INCOMPLETE.  The twelve additions plus the four widened depth-8 assertions witness 16 of the
+   32 cells; the other 16 rest on EXISTING rows.  The complete cell -> row map is the table in
+   codex_passE_20260912.txt (every cell named, M = measured isolated kill, P = predicted).
+
+CLOSING RESULT: 0/32 cells unoccupied, WITH the denominator.  11 isolated-cell kills MEASURED (this table),
+21 PREDICTED from source + fixture (e.g. a TLB_B/4/set-only control predicted 88/89 on `tB ycrcb d4`).
+Disclosed and NOT closed by this enumeration: bare `ok = (<pred>)` mutants that leave buf uninitialised --
+identical-byte writes are invisible, so their kills need measurement (the probe CONTRACT already says so);
+and the exact historical M28/M28r edit.
+
+L4, found by the codex CHANGELOG drafting pass (codex_changelogdraft_20260912.txt): THIS FILE'S "mtime proves
+order" IS NO LONGER TRUE -- appending the section above REWROTE the mtime.  The order evidence that survives: the
+pre-append mtime 02:26:35 CDT, observed by `ls` when the file was written and before the table was launched, and
+SCORES.txt's own header `2026-09-12T07:27:41Z` (02:27:41 CDT).  The #519 row had already withdrawn mtime as an
+order proof once (the pass-2 brief's verbatim copy replaced it); this round repeated the claim and then destroyed
+its basis.  Future post-table notes go in a SEPARATE file, never appended to the PRETABLE.

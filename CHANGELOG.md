@@ -1,3 +1,188 @@
+# `#519` (sgirandomcolour): unsupported colour PUTs replaced guest pixel data with host-PRNG bytes and flooded diagnostics
+
+**THE DEFECT.** The DE colour default included documented YCRCB among 12 of 16 type encodings.
+`fatal()` returned; drawing continued into the store and could announce per pixel. The MTE path
+did not reach this arm. Width matters: four PRNG bytes at 32 bpp, one at 8 bpp, and at depth 8
+four PRNG bytes plus an uninitialised tail. The source comment still says “four HOST-PRNG bytes”
+without that qualification; the probe header and ledger review supply it.
+
+**THE FIX.** In `src/devices/dev_sgi_re.c`, the PUT default clears `ok` outside the warning latch;
+`if (ok)` guards `memory_rw`. A declined PUT preserves the destination. `SGIRE_W_BADCOLOR`
+announces once on its own bit, retaining the attribution prefix. GET and accepted-width buffer
+initialisation remain separate concerns (`sgirebufuninit`).
+
+**WITNESS — MEASURED, as reported by the ledger.** Rung 3, agy's independent-transport fallback:
+`regress/artifacts/sgirandomcolour/witness_20260910/HEAD_run1.out`: committed `1ce8296`, **2/5**;
+`regress/artifacts/sgirandomcolour/fix_20260910/FIX519_run1.out`: same script on the fix, **5/5**.
+The unsupported YCRCB and reserved PUTs destroyed the paint; the supported RGBA control landed.
+Paint `0x11223344` became `0x56e8857a` and `0x38abc4e1` across runs; the control was `0xaabbccdd`.
+
+**THE REPAIR CHAIN — historical measurements reported by the ledger.**
+`regress/artifacts/sgirandomcolour/killtable_20260910/`: frozen BASE **14/14**; all twelve planned
+mutants killed, including reinstatement `M1` and whole-file pre-fix `M11`, each **6/14**.
+The frozen source differed from the later source by the announce's extra closing bracket;
+the record says no row or mutant read that token. Codex could not authenticate saved-log binaries.
+Opus's `M13_widthdecline` and `M14_lineardecline` escaped **14/14** and **19/19** in that directory
+(the probe names `M13_widthdecline.raw` and `M14l_lineardecline_vs19.raw`). These are distinct
+from the coordinate mutants later assigned the same numeric prefixes.
+
+Grok's non-origin guard escape and latch-bit collision prompted the coordinate row, missing
+RGB/RGBA drop-case controls and `allbits` priming. The latter exercises all twelve other latch
+bits in one session; the earlier one-session-per-bit cost premise was false. The remaining
+width/addressing escapes required the mode/depth expansion; clean earlier tables did not close it.
+`regress/artifacts/sgirandomcolour/pass2_20260911/`: `M30`, `M31`, `M32`, `M33`, `M28r`, `M37`
+each **59/59**; the offset/x/y negative controls each **58/59**, killed by `ycrcb x4y1` alone.
+
+The ledger's subsequent `/tmp/gxop519p2` run reports BASE **77/77**, `M30/M31` **74/77**,
+`M32/M33` **75/77**, and `M28/M37` **67/77** (no preserved artifact).
+It also reports pre-fix `M11` and reinstatement `M1` at **28/77** each, previously **22/59** each
+(no preserved artifact). These reports do not establish the exact historical M28/M28r edit.
+Four redundant `ann cum` assertions were removed and 22 added, taking 59 assertions to 77.
+The ledger records that `M1` lost only those cumulative-count kills; `M38_acceptannounce`
+independently justified retaining `silent`, failing those rows while leaving `ann1` green.
+
+**WRONG RECORDS, CORRECTED — the ledger retains the claims and their rebuttals.**
+
+* CHANNEL omitted `ann1`'s drop-case kills: those mutants consume the latch before the marker.
+  The ledger's CHANNEL/red-list audit supplies that attribution; absent markers fail closed.
+* The measuring seat's “sentinel absent” was a false negative: the ledger records that git-bash
+  and WSL resolved `/tmp` to different filesystems.
+* “Skip rather than return” was not observable: after the PUT switch only the guarded store
+  remains. The alleged shared tail belongs to `DEVICE_ACCESS(sgi_re)`. Codex, grok and minimax
+  challenged the claim; the current source confirms it. The later unconditional-return proposal
+  is still absent from the source, which retains the guard.
+* “PUT arms assign four bytes” excludes CI, which assigns one; “does not read the nibble” ignores
+  the diagnostic. The later claim that `color_mode` cannot feed a body-read value also fails:
+  accepting arms fill `buf`. The store reads `tileptr`, `ofs`, `buf`, `bufdepth`; tile indices
+  feed its address. The ledger's source-reading and packet-fed reviews refuted the narrow warrant.
+* Codex/glm corrected the brief's **2 hunks / 58 lines** to **3 hunks, 48 additions + 13 deletions
+  = 61 changed lines**; 58 was the nonblank count. Minimax's missing witness rows were a packet
+  defect. The extra announce bracket and missing RGB/RGBA growth mutants were repaired in-round.
+* Deepseek and the earlier PRETABLE assigned `M8_declineall` to `live silent`. The ledger's
+  table red lists show `live/ci8/rgb/abgr` failing; `live silent` remains **0**, not **1**.
+* The initial linear-offset explanation was wrong: linear x is a byte offset and y is ignored.
+  `indep paint` cannot observe the LIN_B half after setup repaints it. Overlap concerns the next
+  word's most significant byte and only a possible change, not a guaranteed failure.
+  The later “xofs always zero” comment was also false: `ycrcb x4y1` has `xofs = 16`.
+* Codex's records audit corrected fourteen sessions to nine, identified the demotions as
+  PRIM_OP/BADMODE, and replaced a guessed timestamp/mtime warrant with the brief's verbatim copy.
+  The ledger's final adjudication nevertheless repeats “fourteen pre-existing sessions”.
+* The “colour selector cannot feed the store” warrant was withdrawn. Grok argued clause (e)
+  from body-tested labels (all twelve nibbles share default); deepseek and the kimi substitute
+  argued a floor breach. A later
+  symmetry argument changed the loop's disposition. The **192-cell** scare was wrong; the
+  one-row proposal and then eleven-row costing were superseded: **ten** other-nibble rows
+  sufficed because **two** default nibbles were already driven. Proposed row totals were plans.
+* “Six position-selector escapes” was wrong, and that brief listed only five: `M28` concerns
+  the nibble, `M37` the foreground; at most four concern position. Printable “chin” was also
+  not provenance proof. The later codex audit grounded the issue in uninitialised storage.
+* “Complete” coverage omitted descriptor payloads and treated sampled coordinates/values as
+  exhausted. The later codex review applied the body's actual partitions and rejected closure
+  over arbitrary predicates. The controlling probe CONTRACT expressly supersedes those claims.
+  The audit allegation that earlier latch mutants were omitted was itself rejected by the ledger:
+  they were present in the regression tail.
+* The witness was first labelled research, producing a phantom research panel; the ledger
+  corrects it to review/measurement. Design evidence first went to the shadow scratchpad;
+  the ledger records verbatim preservation under `panel_design_20260908/`.
+
+**CLOSING INSTRUMENT.** The controlling `regress/sgi_re_colourdefault_probe.py` CONTRACT covers
+`{TLB_A, TLB_B, TLB_C, LIN_A} × {1,2,4,8 bytes} × {BADCOLOR clear,set on entry}`: **32 cells**
+that actually reach the PUT default through valid mappings. Entry state precedes the warning.
+PRETABLE records **89 assertions / 29 sessions**: twelve additions occupy eleven missing cells
+and add the M28-family observation; four existing depth-eight readbacks now inspect both words.
+Accept controls prove the destination mapping, each decline is read before repainting, and
+all transferred paint bytes differ from zero. Announcement counts alone cannot detect these
+store-permission controls. The bounded improvement does not prove that equal bytes mean no write.
+
+**MEASURED — closing table.** Every score below is from
+`regress/artifacts/sgirandomcolour/killtable5_20260912/SCORES.txt`.
+
+| Leg | Score | Recorded failures |
+|---|---|---|
+| BASE | **89/89** | none |
+| HEAD | **28/89** | 61 rows |
+| FIRST_*_ZERO (ten controls); REPEAT_L1_ZERO | **88/89 each** | each control's own row only |
+| NIB_OTHER_ZERO | **78/89** | ten other-nibble rows plus `M28 nib60` |
+| TAIL8_ZERO | **81/89** | all eight depth-eight rows |
+
+The table records fresh builds, CLEAN baseline/restoration comparisons and cleared sentinel.
+RESTORE has no recorded probe score. The separate earlier BASE **89/89** is reported by PRETABLE
+at `regress/artifacts/sgirandomcolour/base_20260912/BASE.log`; it is not this table's BASE artifact.
+
+**DERIVED / PREDICTED — closing pass.**
+`regress/artifacts/sgirandomcolour/killtable5_20260912/codex_passE_20260912.txt` maps every cell:
+**21 previously occupied + 11 added = 32; 0/32 unoccupied. Eleven isolated-cell kills MEASURED;
+the other 21 isolated-cell kills PREDICTED.** NIB_OTHER_ZERO and TAIL8_ZERO are additional
+measurements spanning multiple cells. An isolated TLB_B/4/set control is **PREDICTED 88/89**,
+`tB ycrcb d4` alone, by that pass; it was not built in this table.
+The pass contains source-derived readback predictions; SCORES contains no raw readback values.
+HEAD's 28 green rows are acceptance, setup, attribution or warning controls, not credited
+with detecting the historical colour-default defect.
+
+**THE POST-TABLE L4s — corrections, not silent replacements.**
+`regress/artifacts/sgirandomcolour/killtable5_20260912/PRETABLE.out` retains both wrong claims
+and appends codex pass E's corrections:
+
+* **GUARD/BODY:** “every control field is body-read or dominating” was false for `d->warned`.
+  It controls the diagnostic; neither branch determines `ok`, and they merge before the store.
+  The latch is an explicitly chosen axis for erroneous coupling, not a DEPENDS-ON consequence.
+* **CLAIM → ROW:** attributing the entire projection to the additions and widening was incomplete.
+  The twelve additions plus four widened observations cover **16 of 32 cells**; **the other 16**
+  require unchanged rows. Pass E supplies the complete mapping. Sibling parity holds for the
+  combined instrument, not the additions alone.
+
+**DISAGREEMENTS AND UNPROVED RECORD CLAIMS.** The ledger reports M28/M28r escapes and later kills;
+the controlling CONTRACT and pass E say the exact edit is absent. Family coverage is established
+only to the extent above; historical-mutant identity remains unresolved. The ledger's glm design
+entry says skip-write, while its design adjudication attributes zero-fill-and-store to glm.
+Earlier entries place GET under `sgirebufuninit`; the later residual note calls its fatal unfiled.
+Those attributions disagree. PRETABLE claimed "mtime proves order" -- which the row had withdrawn
+once already -- and then its own post-table append REWROTE the mtime, destroying that basis.  The
+surviving order evidence is the pre-append mtime 02:26:35 CDT observed before launch and SCORES.txt's
+header 07:27:41Z (02:27:41 CDT); recorded as an L4 in PRETABLE.out.  Post-table notes now go in a
+separate file.
+
+**CLAUSE (e) / STILL OPEN.** Bare `ok = (<pred>)` mutants leave `buf` uninitialised; an identical-byte
+write is invisible, and their kills require measurement. The exact historical M28/M28r remains
+unproved. No exhaustive claim covers coordinates, tile indices, descriptor payloads, raw mode
+bits, foreground values, other device/CPU/memory state or their interactions. Default nibbles
+are driven but not crossed with the full projection; coordinate/width/label joins remain outside.
+GET, accepted-type width semantics, invalid-input paths, per-instance/reset behaviour, cold/warm
+memory paths and every warning property independently in each cell remain open.
+The colour-first reverse-latch `SET_OTHER(j)` check is still owed in the ledger; later-added warn
+bits are also outside the existing priming set. The historical regression tail has no recorded
+completion result. The sibling addressing-mode blind spot remains
+a reading, not a measurement. Fixed polling windows can yield loud false reds under load.
+The ledger's unconditional-return and companion buffer-initialisation proposals have not landed;
+the latter's hardware semantics and performance cost remain unmeasured. Its landing hold has
+no recorded discharge. These limits survive the narrower deterministic-control coverage result.
+
+**SEATS, by stage — ledger entries and later notes.**
+
+* Research: codex filed the scope reading.
+* Design pass 1: grok, glm, deepseek, kimi via `kimi-k3:cloud`, minimax answered.
+  Codex, agy, opus5 and fable5 were deliberately not fired at that stage. Codex subsequently
+  answered DESIGN2; fable5, the main loop as Fable 5.1, adjudicated the design.
+* Witness: agy measured as fallback while both Anthropic transports were walled; codex's witness
+  brief was refused. The intended Opus witness assignment is not an Opus witness result.
+* Review pass 2: codex, grok, glm, deepseek, minimax and kimi via `kimi-k3:cloud` answered;
+  kimi's CLI was walled, its substitute covered the seat. Opus5 measured after the reset.
+  Codex also answered the PRETABLE records audit and allbits check. Agy was deliberately not fired
+  for review, having measured the witness; fable5/Fable 5.1 adjudicated.
+* Later pass 2 notes name grok, deepseek and the kimi substitute; the symmetry seat is not named.
+  Opus 5 measured the subsequent expansion; codex answered the later class-closure review.
+  Codex's closure-design brief was refused once, then answered when reworded; codex also answered
+  closing pass E. Table 5 was built and run by the main loop in a scratch clone.
+
+**GATE / COMMIT.** `regress/gate_arm.sh` now runs the probe in
+a new section after `sgirandompixel`, pinning **89 rows**. This supersedes the ledger's “gate
+wiring OWED; pin 77” note.
+Gate result: gate 14 PASS (914 checks) with the new section green -- protocol parsed, liveness row, rows run 89, rows
+correct 89, 0 FAIL; log preserved at
+`regress/artifacts/sgirandomcolour/killtable5_20260912/gate_arm_89rows.log`.  The gated probe is
+byte-identical to the frozen table-5 instrument (`cmp` in the gate driver). Commit: this block's own commit; its pass-2 receipt is keyed to that SHA in the commit after it, as the
+tree's precedent requires.
+
 # `#524` (armbdt): an ARM block transfer through a cold host page spliced bytes across a word boundary — the same instruction at the same unaligned base returned different bytes according to host page-cache warmth
 
 **THE DEFECT.** `arm_pop()` (LDM) and `arm_push()` (STM) each hold one running

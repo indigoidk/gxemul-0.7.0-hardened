@@ -1,0 +1,297 @@
+VERDICT: The declined PUT repair is correct as written; the claimed complete class closure is not established. A separate buffer-initialization defect remains in the worktree.
+CODEX_SGIRANDOM_20260911
+
+I read only the three specified worktree files. I made no changes and ran no emulator or mutants. The measurements in the brief and source comments remain reported measurements, not independently verified results.
+
+Several premises need correcting first:
+
+- **The supplied probe is already beyond the quoted 59-row instrument.** It contains the pass-4 nibble and coordinate additions. Statically expanding its loops gives **77 assertions in 17 sessions**: four earlier assertions were removed and 22 were added. [Colour probe](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/sgi_re_colourdefault_probe.py:451)
+- **The six recorded escapes are not six position-selector escapes.** Your table contains five entries. The probe identifies the six as M28, M30, M31, M32, M33 and M37; it describes M28 as a colour-nibble mutant and M37 as a foreground-value mutant. The exact M28r implementation is absent from the permitted files. [Recorded escape set](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/sgi_re_colourdefault_probe.py:250)
+- **There is no shared executable tail after this function’s PUT/GET branches.** The function ends immediately after them. The common-tail restriction documented in the width probe belongs to a different function, `DEVICE_ACCESS(sgi_re)`.
+- The bytes `63 68 69 6e` spell “chin,” but that does not independently establish their provenance. The security-relevant evidence is the transfer of uninitialized automatic storage across the guest boundary. Printable content is neither necessary nor sufficient to prove that provenance.
+
+For question 1, the distinction between **a value being tested** and **a value contributing to an operand** changes the answer substantially.
+
+These are the actual tests in the complete function. Values before and after reassignment must be distinguished. [Function](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:221)
+
+| Lvalue tested | Partition induced by the body | Consequence at the declined PUT |
+|---|---|---|
+| `put` | Zero / nonzero | Only nonzero reaches the PUT repair. |
+| `tlb_mode` | Switch labels `0`, `1`, `2`, `4`, default; the other tests distinguish default’s `3` from `5–7` | Only `0`, `1`, `2`, `4` reach the colour switch. |
+| `linear` | False / true | Derived from `tlb_mode > 3`; not an independent axis. |
+| Incoming `x` | `< 0`, `0…2047`, `>= 2048`, where the tiled bounds condition evaluates it | Tiled calls must be in range. Linear calls bypass this test. There is no `x == 0` test. |
+| Incoming `y` | The same three bounds classes, where evaluated | Tiled calls must be in range. Later `y &= 127` changes the value available to a mutant. There is no `y == 0` test. |
+| Tiled `tile_nr` | `< 256` / `>= 256`, under `tlb_mode <= 2` | Only `< 256` survives. **No zero/nonzero test exists.** |
+| Reassigned linear `tile_nr` | `< 32` / `>= 32`, after `tile_nr = x >> 12` | Only `< 32` survives. This is a different value from the earlier tiled calculation. |
+| `tileptr` before masking | Valid bit clear / set | Clear returns. Then the valid bit is removed, so it is always clear at the store site. |
+| `color_mode` | CI / RGB / RGBA / ABGR / default | Default contains twelve nibble values, not twelve separate switch labels. |
+| `d->warned & SGIRE_W_BADMODE` | Clear / set | Tested on the unsupported addressing-mode path, which returns before the colour repair. |
+| `d->warned & SGIRE_W_BADCOLOR` | Clear / set | Both states reach the declined PUT; they distinguish first announcement from subsequent declines. |
+| `ok` | Zero / nonzero | Local repair state, not a free device input. Correct execution leaves it zero on every default PUT. |
+
+The body **does not test** `tile_nr_x`, `tile_nr_y`, `tilewidth_in_pixels`, `xofs`, `ofs`, `*color`, or the payload bits of the selected TLB entry.
+
+`bufdepth` is also not compared in this function. Nevertheless, its extraction gives an exact four-value domain, `{1,2,4,8}`, and it directly determines the transfer length. Exhausting that small domain is the stronger contract your existing probe deliberately adopted.
+
+`mode` contributes the decoded addressing, depth and colour fields. Treating both the raw word and those decoded fields as independent axes would duplicate dependencies. The claim that its remaining bits are read by “nothing in this function” is slightly too broad: the BADMODE diagnostic prints the raw `mode`. Those bits do not otherwise affect the ordinary colour-decline path.
+
+The selected TLB **entry value** also matters: selecting an array and selecting the address stored in that array are different dependencies. Conversely, `*color` is read by accepting packing arms, **not by the correct declined PUT**. M37 introduces a dependence into that declined path.
+
+Finally, “the store reads exactly four lvalues” is shorthand for four pixel-related operands. Literally, the call also reads the CPU callback and memory context. A contract may hold that infrastructure fixed, but should say so.
+
+For joint reachability, the tiled equations are:
+
+```text
+W  = 512 / bufdepth
+tx = floor(x / W)
+ty = incoming_y >> 7
+n  = 16*ty + tx
+u  = incoming_y & 127
+offset = 512*u + (x % W)*bufdepth
+```
+
+A tiled call reaching the colour switch requires in-range incoming coordinates, `n < 256`, and a valid selected entry. These constraints rule out a blind Cartesian product. At depth eight, for example, the coordinate bounds alone do not imply `n < 256`.
+
+For linear addressing, the switch replaces the final index and offset with `x >> 12` and `x & 4095`. Incoming `y` does not select the final address.
+
+There is also a caller limitation relevant to question 3: **the DE PUT callers shown in this file restrict `x` to eleven bits**, so their linear PUTs always use final linear entry zero. The MTE helper calls shown here use tiled addressing; its linear branch takes another path. Thus a nonzero linear entry is possible at the helper’s interface, but cannot be reached merely by changing the existing probe’s DE vertex. Starting another identical session would not fix that limitation. [DE callers](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:889), [MTE callers](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:1509)
+
+For question 2, **your two requested rules do not currently determine one full floor**:
+
+1. Use only partitions induced by the body’s tests.
+2. Treat the added zero/nonzero selector predicates as an exhausted class.
+
+The first rule does not produce the second rule’s partitions. In particular, `tile_nr == 0`, `tile_nr_x == 0`, and masked `y == 0` are mutant predicates, not predicates in the original body.
+
+Dataflow identifies dependencies. It does **not** establish that two samples exhaust the possible predicates over a dependency.
+
+Under the strict body-partition rule:
+
+- Arbitrary distinctions between valid tile indices are within-class slices.
+- Arbitrary distinctions between valid descriptor payloads are within-class slices.
+- Additional foreground values and ignored mode-bit patterns are within-class slices.
+- The twelve unsupported colour values share one default label.
+
+Those are clause-(e) exclusions **if that is the declared mutation boundary**. If recurrence promotes any of them into separately owed classes, their partitions must be stated explicitly, and their jointly reachable combinations become floor. You cannot promise that product and then classify its missing combinations as debt.
+
+The earlier-return paths—unsupported addressing modes, invalid tile pointers and rejected bounds—are **unreachable at this repair site**, rather than untested colour-decline cells. GET behavior and accepted-type width behavior are separate obligations.
+
+A concrete, small projection already available from your declared depth domain is:
+
+```text
+{TLB_A, TLB_B, TLB_C, LIN_A}
+× {1, 2, 4, 8 bytes}
+× {BADCOLOR clear, BADCOLOR set}
+```
+
+That is **32 reachable declined-PUT cells**, with a default colour label and eligible address. It does not claim to exhaust coordinate or descriptor-value refinements.
+
+The current script occupies **21 of those 32 cells**:
+
+| Addressing mode | Depths with BADCOLOR clear | Depths with BADCOLOR already set |
+|---|---|---|
+| TLB_A | 1, 4 | 1, 2, 4, 8 |
+| TLB_B | 1 | 1, 2, 4, 8 |
+| TLB_C | 1 | 1, 2, 4, 8 |
+| LIN_A | 1, 4 | 2, 4, 8 |
+
+TLB_A/depth-four/clear is supplied by the first coordinate decline. In the ordinary tiled sessions, depth one is first; the other depths run after it sets the latch. The linear-width session similarly puts depth one first. [Session ordering](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/sgi_re_colourdefault_probe.py:461)
+
+This is a count of **occupied input cells**, not a claim that every property of every occupied cell is asserted.
+
+Pass 4 also leaves a hole inside its own chosen selector model. Considering only:
+
+```text
+tile_nr nonzero
+tile_nr_x nonzero
+masked y nonzero
+```
+
+the tiled combinations `(tile_nr == 0, tile_nr_x != 0)` are impossible. Of the remaining six combinations, the origin and C1–C4 cover five. They omit:
+
+```text
+tile_nr nonzero, tile_nr_x zero, masked y nonzero
+```
+
+C4 does not supply that cell: its horizontal tile index is nonzero. This is the symmetric-cell problem you asked me to check.
+
+Adding the omitted combination alone would still not establish closure over `tile_nr_y`, `xofs`, widths, addressing labels, descriptor contents and their declared interactions. The correct remedy is an explicit partition contract, not another claim that four coordinates exhaust two free variables. [Pass-4 coordinate construction](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/sgi_re_colourdefault_probe.py:613)
+
+The probe’s “no finite row set” wording also needs narrowing. Fixed-width input domains are finite. What is true is that **no proper sampled subset excludes every arbitrary predicate selecting an unobserved input**. Exhaustion may be impractical; it is not mathematically infinite.
+
+For question 3, the costs that can actually be stated are:
+
+- **The historical position escapes already have targeted rows in this worktree.** They are not an outstanding request to add C1–C4.
+- **Completing the 32-cell mode/depth/latch projection requires eleven additional cell assertions.**
+- **No defensible total for the broader “full input class” follows from the currently conflicting partition rules.** Giving one would invent the boundary you explicitly told me not to invent.
+
+The eleven missing cells are concrete:
+
+| Proposed row | Input cell | Named negative control |
+|---|---|---|
+| `tA d2 first` | TLB_A, depth 2, latch clear | `FIRST(A,2)` |
+| `tA d8 first` | TLB_A, depth 8, latch clear | `FIRST(A,8)` |
+| `tB d2 first` | TLB_B, depth 2, latch clear | `FIRST(B,2)` |
+| `tB d4 first` | TLB_B, depth 4, latch clear | `FIRST(B,4)` |
+| `tB d8 first` | TLB_B, depth 8, latch clear | `FIRST(B,8)` |
+| `tC d2 first` | TLB_C, depth 2, latch clear | `FIRST(C,2)` |
+| `tC d4 first` | TLB_C, depth 4, latch clear | `FIRST(C,4)` |
+| `tC d8 first` | TLB_C, depth 8, latch clear | `FIRST(C,8)` |
+| `lin d2 first` | LIN_A, depth 2, latch clear | `FIRST(L,2)` |
+| `lin d8 first` | LIN_A, depth 8, latch clear | `FIRST(L,8)` |
+| `lin d1 repeat` | LIN_A, depth 1, latch set | `REPEAT(L,1)` |
+
+These names describe proposed controls, not built mutants. `FIRST(m,w)` permits the otherwise declined store only in the named mode/depth while the warning bit is initially clear; `REPEAT(L,1)` does so only in its named already-warned cell. Diagnostics remain unchanged.
+
+For every row, the relevant effect assertion is **no memory write for that declined operation**. With the current probe architecture, its practical observable is preservation of every destination byte covered by the attempted transfer. Announcement count is not the distinguishing channel for these controls.
+
+Existing processes can accommodate this projection **with rearranged first-decline operations and appropriately scoped transcript assertions**. There are seventeen sessions, enough to distribute the sixteen different first-decline mode/depth cells.
+
+But **append-only is not sufficient without qualifications**:
+
+- Ten missing cells require the warning bit clear.
+- Only four current sessions perform no colour decline.
+- Appending a decline to `t_live` also requires scoping `live silent` to its accepting phase; it currently counts the entire transcript.
+- Once a session sets BADCOLOR, later operations cannot recreate the clear state.
+
+With phase scoping, four missing first-decline cells can be appended to those accepting sessions. The remaining six require rearranging other sessions’ first declines or adding processes. The repeat cell can simply be appended to the linear-width session.
+
+Additional commands still increase run time and exercise the fixed-delay transcript machinery. Avoiding new processes does not make that cost zero.
+
+For question 4, **I prefer an unconditional return in the PUT default**. The separate flag is unnecessary here, although it is not a defect in the current execution.
+
+The concrete structure is:
+
+```c
+if (put) {
+        switch (color_mode) {
+        /* Existing accepting cases and their packing stay here. */
+
+        default:
+                if (!(d->warned & SGIRE_W_BADCOLOR)) {
+                        d->warned |= SGIRE_W_BADCOLOR;
+                        /* Existing fatal() call, unchanged. */
+                }
+                return;
+        }
+
+        cpu->memory_rw(cpu, cpu->mem, tileptr + ofs,
+            buf, bufdepth, MEM_WRITE, NO_EXCEPTIONS | PHYSICAL);
+} else {
+        /* Existing GET branch. */
+}
+```
+
+The `return` must be **outside the warning-latch conditional**.
+
+This has been checked against the actual enclosing function:
+
+- The function returns `void`.
+- The accepting cases break to the one PUT store.
+- The default returns without calling that store.
+- The GET branch is an alternative branch, not subsequent work.
+- Nothing executable follows the PUT/GET branches.
+- Returning from this helper returns control to the caller’s drawing loop; it does not terminate that loop.
+
+The width-handler concern about skipping `memory_writemax64()` and `return 1` does not transfer to this helper. Those statements occur in `DEVICE_ACCESS(sgi_re)`. [Helper’s ending](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:364), [Different handler’s tail](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:833)
+
+The alternatives cost:
+
+| Form | Benefit | Cost or limitation |
+|---|---|---|
+| Current `ok` flag | Correct no-store behavior today | Carries a decision to a later, separately editable guard without needing to do so. |
+| Unconditional default `return` | Makes rejection terminal and removes the flag | Small local refactor and comment updates. Future edits can still condition or remove the return; it is not mutation-proof. |
+| Initialize `buf`, retain rejection | Prevents uninitialized bytes from being copied if a store occurs | Changes additional width/read behavior; does not prevent an unauthorized store. |
+| Store inside each accepting case | Default has no route through a shared store | Four duplicated callback sites and argument lists; accepted-width initialization defects remain. |
+
+No new behavioral row can distinguish a correctly placed early return from the correct current flag implementation: they are observationally equivalent here. Existing acceptance, decline, continuation and latch checks should remain applicable. I have not compiled or executed this refactor.
+
+For question 5, **initializing the local buffer and zero-filling the destination are different decisions**.
+
+With rejection intact, initializing `buf` does not write anything to the destination. The comment’s objection to publishing an unsolicited colour therefore does not prohibit a local initializer.
+
+However, initialization does **not** make a spurious store harmless. It converts a possible disclosure into a deterministic unauthorized overwrite. “Unsupported PUT stores nothing” remains a separate invariant.
+
+There is a specific transferred warrant available here, stronger than “it cannot hurt”: **accepted PUT paths already copy uninitialized bytes in the present worktree**.
+
+| Accepted packing arm | Bytes initialized | Transfer depths with an uninitialized suffix |
+|---|---:|---|
+| CI | 1 | 2, 4, 8 |
+| RGB | 4 | 8 |
+| RGBA | 4 | 8 |
+| ABGR | 4 | 8 |
+
+All these combinations can pass the colour switch and reach the store. No depth/type compatibility check prevents them. [Packing and store](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:321)
+
+The same file’s #509 comment records the same buffer-to-guest failure mechanism and explicitly leaves other widths outstanding. That supports a **transferred warrant for initialization safety**, not a measured delta established by this review. [#509 warrant and remaining widths](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sgi_re.c:1539)
+
+I would accept `uint8_t buf[8] = {0};` as a candidate companion repair on that stated warrant. I would not describe it as merely belt-and-braces for #519:
+
+- It changes six accepted PUT format/depth combinations.
+- Placed at the existing shared declaration, it also changes GET behavior when the read supplies fewer bytes than packing consumes.
+- It establishes deterministic bytes, not hardware-correct semantics for every unsupported format/depth combination.
+- Its generated-code and performance cost have not been measured here.
+
+The permitted files do not establish that zero padding is the intended hardware behavior for all those combinations. They do establish why copying uninitialized storage is unacceptable.
+
+For question 6, **the distinction between `sgirandomcolour` and `sgirebufuninit` survives**.
+
+They protect different invariants:
+
+- `sgirandomcolour`: an unsupported PUT performs **no store**.
+- `sgirebufuninit`: every byte consumed by an actual transfer or colour reconstruction is **initialized**.
+
+A mutant can violate both simultaneously. That does not make the invariants interchangeable.
+
+An early return fixes the unsupported PUT path but leaves the accepted-width cases above. Initialization prevents disclosure through those bytes but does not make an unsupported store correct.
+
+GET adds another independent initialization problem: RGB reconstruction consumes three bytes; RGBA, ABGR and the default reconstruction consume four. Depth-one and depth-two reads can supply fewer bytes than those expressions consume. The callback’s return value is also ignored, although the permitted files do not establish its failure/partial-read guarantees.
+
+Neither supplied probe exercises this helper’s GET packing path. CPU loads of destination RAM and reads of RE register arrays are not calls to the pixel GET branch.
+
+For question 7, the existing rows compare with the disclosed mutants as follows:
+
+| Mutant | Existing row whose destination channel can differ | Reason |
+|---|---|---|
+| M30_tilenrdecline | `xy dec c1`, `c3`, `c4` | Their final tiled index is nonzero. |
+| M31_tilenrguard | `xy dec c1`, `c3`, `c4` | Same relevant state distinction. |
+| M32_tilenrxdecline | `xy dec c1`, `c4` | Their horizontal tile index is nonzero. |
+| M33_tiledorigin | `xy dec c2`, `c4` | They are tiled and their **masked** `y` is nonzero. |
+| M37_fgvalue, as described in the probe | The ten `nib …` decline rows | They use `FG_ALT`, rather than the foreground constant accepted by that mutant’s condition. |
+| M28r | Not exactly assignable from these files | The probe describes M28 as a nibble restriction and adds ten corresponding decline rows, but supplies no exact M28r edit. |
+
+In particular:
+
+- C3 does **not** expose M33: incoming `y == 128` becomes zero before the colour switch.
+- `ycrcb x4y1` does **not** expose M30–M33 as written in your table: it is linear, and both relevant tile indices are zero there.
+- The coordinate **accept** rows do not kill default-only decline mutations. They establish that the chosen destination is reachable.
+- `xy ann` does not kill these store-only mutants when they leave the warning behavior intact.
+- `nib accept alt` establishes alternate-colour acceptance; it does not kill the stated M37 default-only mutation. The alternate-colour **decline** rows do that.
+
+These are static distinctions, not newly measured kills.
+
+Three oracle issues remain material.
+
+**First, every existing depth-eight decline assertion observes only four bytes.** `cell_op()` paints one word and reads it with `lw`; `printed_seq()` normalizes to 32 bits. The `d8` names do not change that. [Cell operation and parser](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/sgi_re_colourdefault_probe.py:434)
+
+I would strengthen the existing `tA`, `tB`, `tC` and `lin ycrcb d8` assertions to paint and compare all eight bytes, using distinct nonzero contents across the two words. This need not add logical rows or sessions.
+
+The named distinguishing control for each is `TAIL_WRITE(mode)`: an incorrect declined operation changes the upper-addressed four bytes while preserving the first four. The existing channel cannot vary under that control; the strengthened channel can.
+
+**Second, unchanged paint is not proof of no store.** Uninitialized bytes can happen to equal the paint. Therefore, the proposed eleven rows and existing disclosure rows have a nonvacuous destination channel, but a source-only review cannot promise that each will kill its mutant on a particular build.
+
+A test harness observing **zero write callbacks** would establish the refusal effect without copying or depending on uninitialized bytes. Such a harness is not present in these files. It is a separate testing capability, not something I can claim the existing sessions already provide.
+
+**Third, the anchor and latch claims have narrower scopes than some comments suggest.**
+
+`xy anchor t0` watches tile zero’s word at offset zero. It does not watch every offset in tile zero. A translation error preserving a nonzero offset can leave that anchor unchanged; the per-cell accept rows provide the relevant detection for those ordinary misrouting cases.
+
+Similarly, `allbits` establishes **other latches first, colour second**. The width probe’s two-order TEX/unmapped example does not establish colour-first independence.
+
+I would add one aggregate `colour/others` assertion to an existing colour-first session: after the colour announcement, drive the twelve other sites and require each expected announcement. Its named control family is `SET_OTHER(j)`: the colour warning update also sets another site’s bit. The observable is the missing announcement from site `j`. The current other-first sequence can remain green under that error because the other bit was already set.
+
+That adds one assertion and needs no new process. It complements, rather than repeats, the existing shared-bit control. [Existing colour priming](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/sgi_re_colourdefault_probe.py:326), [Width probe’s ordering precedent](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/sgi_re_width_probe.py:570)
+
+Finally, extending coordinates across depths requires recomputing and validating the selected entry and destination. Reusing C1’s fixed vertex at another depth can select another tile; changing only the mode can consequently turn a proposed decline test into an earlier invalid-pointer return. Each added address/depth setup needs an accepting control that proves that same mapping reaches its intended destination.
+
+The concrete review recommendation is therefore an unconditional default-arm return, an explicitly warranted treatment of buffer initialization, and a contract that names its actual partitions. The **eleven missing mode/depth/latch cells, one reverse-latch assertion, and strengthened four depth-eight assertions** are a bounded, reviewable improvement. They must not be represented as full closure over arbitrary predicates on all function inputs.

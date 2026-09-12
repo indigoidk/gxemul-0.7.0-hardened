@@ -560,6 +560,31 @@ MANIFEST = {
         (CLASS_RESEARCH, "sgirandomcolour (#519) table 1: the FROZEN 14-row instrument the measuring seat ran, BASE 14/14 -- the copy every table-1 score is re-readable against"),
     "artifacts/sgirandomcolour/killtable_20260910/sgi_re_colourdefault_probe.REPAIRED19.OPUSFROZEN.py":
         (CLASS_RESEARCH, "sgirandomcolour (#519): the measuring seat's own frozen copy of the repaired 19-row instrument, on which it re-ran its two escapes and measured them STILL escaping at 19/19"),
+    #  #519 sgirandomcolour, landed with the round: the detector and its untracked instruments.
+    "sgi_re_colourdefault_probe.py":
+        (CLASS_DETECTOR, "#519 sgirandomcolour: the colour-mode PUT default arm stored random() bytes into guest memory.  89 assertions; the CONTRACT's 32-cell projection is fully occupied; kill table 5 (artifacts/sgirandomcolour/killtable5_20260912/) 15 legs, every one on prediction.  Wired in gate_arm.sh, pin 89"),
+    "artifacts/sgirandomcolour/killtable3_20260910/mut519c.py":
+        (CLASS_TOOL, "#519 table-3 mutator"),
+    "artifacts/sgirandomcolour/killtable3_20260910/o519_explore2.py":
+        (CLASS_RESEARCH, "#519 table 3: the measuring seat's exploration driver, preserved as run"),
+    "artifacts/sgirandomcolour/killtable3_20260910/sgi_re_colourdefault_probe.T3FROZEN.py":
+        (CLASS_RESEARCH, "#519 table 3: the frozen instrument that table ran"),
+    "artifacts/sgirandomcolour/killtable4_20260911/mut519d.T4FROZEN.py":
+        (CLASS_TOOL, "#519 table-4 mutator, frozen as run"),
+    "artifacts/sgirandomcolour/killtable4_20260911/sgi_re_colourdefault_probe.T4FROZEN.py":
+        (CLASS_RESEARCH, "#519 table 4: the frozen instrument that table ran"),
+    "artifacts/sgirandomcolour/killtable5_20260912/mutate519k5.py":
+        (CLASS_TOOL, "#519 table-5 mutator: eleven single-cell zero-store controls plus NIB_OTHER and TAIL8, each find-text required to occur exactly once"),
+    "artifacts/sgirandomcolour/pass2_20260911/ctrl519p2.P2FROZEN.py":
+        (CLASS_RESEARCH, "#519 pass 2: a negative-control driver, frozen as run"),
+    "artifacts/sgirandomcolour/pass2_20260911/ctrl519p2_fg.P2FROZEN.py":
+        (CLASS_RESEARCH, "#519 pass 2: the foreground negative-control driver, frozen as run"),
+    "artifacts/sgirandomcolour/pass2_20260911/mut519p2.P2FROZEN.py":
+        (CLASS_TOOL, "#519 pass-2 mutator, frozen as run"),
+    "artifacts/sgirandomcolour/pass2_20260911/mut519p2b.P2FROZEN.py":
+        (CLASS_TOOL, "#519 pass-2 second mutator, frozen as run"),
+    "artifacts/sgirandomcolour/pass2_20260911/sgi_re_colourdefault_probe.P2FROZEN.py":
+        (CLASS_RESEARCH, "#519 pass 2: the frozen instrument the pass-2 measurements ran"),
     "artifacts/sgirandomcolour/killtable_20260910/mut519.py":
         (CLASS_RESEARCH, "sgirandomcolour (#519) table 1: the mutator for M1..M12 (M11 copies the pre-fix file wholesale as the null medium); its M1/M7/M12 find-strings quote the pre-bracket literal and will not apply to the current source, which the round records rather than silently repairs"),
     "artifacts/sgirandomcolour/killtable_20260910/mut519b.py":

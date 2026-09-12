@@ -1,0 +1,182 @@
+#519 sgirandomcolour -- PRE-TABLE CHECK for KILL TABLE 4 (the CLASS CLOSURE).
+Opus measuring seat.  Written BEFORE table 4's first build; its mtime is the proof of order.
+
+WHAT CHANGED SINCE TABLE 3
+  regress/sgi_re_colourdefault_probe.py only.  src/devices/dev_sgi_re.c is UNTOUCHED (md5
+  6e2c6873, unchanged since 2026-09-10 04:26).  This is a DETECTOR diff, not a product diff.
+  59 rows -> 77: twenty-two added, four deleted.
+
+  Smoke against the fix BEFORE this file was written: 77/77, every new row green, on a clone
+  verified PART1 CLEAN / PART2 FRESH.  That is a dry run, not table 4; table 4 is the frozen
+  measurement.
+
+================================================================ 0.  THE ENUMERATION AND ITS BOUND
+
+The floor question is asked of the SHIPPED COMPOSITE, so it is asked over the guarded store's
+COMPLETE free input set rather than over a list of mutant forms.  The guarded body is one
+statement and reads exactly four lvalues:
+
+    cpu->memory_rw(cpu, cpu->mem, tileptr + ofs, buf, bufdepth, MEM_WRITE, ...)
+
+    bufdepth  <- (mode>>8)&3                             FREE    {1,2,4,8}      CLOSED (table 3)
+    tileptr   <- tlb_mode (array), tile_nr (element)     tlb_mode {0,1,2,4}     CLOSED (table 3)
+    ofs       <- x, y, bufdepth, tlb_mode                DERIVED
+    buf       <- color_mode (arm), *color (value)
+
+THE BOUND, and it is the whole reason this is closable rather than #392: tile_nr, tile_nr_x,
+tile_nr_y, xofs and ofs are NOT independent axes.  Each is a pure function of
+(x, y, bufdepth, tlb_mode), and the latter two are already closed.  So "close every derived
+coordinate" IS "close the pair (x, y)" -- two free variables.  The complete free input set is
+
+        { bufdepth, tlb_mode, color_mode, *color, x, y }
+
+of which table 3 closed the first two.  Table 4 closes the other four.  THE SET IS FINITE AND
+READ OFF THE FUNCTION; it cannot grow by argument.
+
+WHY A CLASS CLOSURE AND NOT ANOTHER CELL.  Three consecutive passes found ONE shape -- a decline
+conditioned on an input the rows hold at a single value.  Pass 1/2 of table 3: bufdepth (M13),
+tlb_mode (M14).  Pass 2 of this round: tile index (M30/M31/M32), tiled y (M33), nibble (M28),
+foreground value (M37) -- six mutants at 59/59, each measured writing uninitialised host stack
+into guest memory (artifacts/sgirandomcolour/pass2_20260911/).  The rule forbids buying a cell.
+
+================================================================ 1.  SIBLING PARITY
+
+The diff de-fatalises nothing new -- it adds rows.  The sibling comparison that applies is
+between the FOUR closed axes, and it is where the asymmetry was:
+
+    axis         body's own partition                   driven before      driven now
+    bufdepth     {1,2,4,8} (the shift domain)           4 of 4             4 of 4
+    tlb_mode     {0,1,2,4} reachable to the store       4 of 4             4 of 4
+    color_mode   5 labels; 12 values reach `default'    5 labels, 2 values 5 labels, 12 values
+    *color       no body test; one value held           1                  2
+    x, y         {0}, within-tile, crossing-tile        (0,0) + one linear (0,0) + 4 tiled
+
+ASYMMETRY FOUND AND CLOSED: three axes were closed over a DOMAIN and three over a single point.
+No axis is now driven at fewer than two distinct classes.
+
+================================================================ 2.  CLAIM -> ROW
+
+Every added sentence asserting an observable consequence, mapped to the row that observes it.
+The trigger is SEMANTIC (does this sentence assert something a row could observe?), not a verb list.
+
+  "ten declined nibbles ... announce ONCE"                        -> nib ann
+  "an RGBA PUT drawn in a SECOND colour lands whole"              -> nib accept alt
+  "closes the *color axis for free"                               -> nib 40..e0 (all ten at FG_ALT)
+  "lands in THIS cell's own tile at its own offset"               -> xy acc c1..c4 (4 distinct addrs)
+  "no cell silently collapsed onto [tile 0]"                      -> xy anchor t0
+  "four declined PUTs across four tiles announce ONCE, and the
+   four ACCEPTS are silent"                                       -> xy ann (cumulative == 1
+                                                                      covers BOTH halves)
+  "x IS 132 AND NOT 128 ... xofs [would stay] 0"                  -> xy acc c1 lands at ofs 16,
+                                                                      which is the observable
+  "y IS 129 AND NOT 128 ... 128 masks to zero"                    -> xy acc c4 lands at ofs 528
+                                                                      (= 512*1 + 16), so y is 1
+  "C4 IS THE JOINT CELL"                                          -> xy dec c4
+  "the cross-PUT latch ... is still pinned by `once'"             -> once (retained row)
+
+NO ADDED SENTENCE IS WITHOUT A ROW.  Two claims are deliberately NOT rowed and are stated as
+disclosures instead, in the contract: a predicate enumerating the driven cell set by value, and
+coordinate-joined-to-width/label mutants.
+
+================================================================ 3.  GUARD FIELD vs BODY FIELD
+
+Guard (the predicate that decides the decline): `color_mode', a local derived from `mode'.
+Guarded BODY: cpu->memory_rw(..., tileptr + ofs, buf, bufdepth, MEM_WRITE, ...).
+Body-read lvalues: tileptr, ofs, buf, bufdepth, cpu->mem.
+
+*** TABLE 3's ENTRY FOR THIS SECTION WAS WRONG AND THE ERROR IS WHY TABLE 4 EXISTS. ***
+It concluded: "`color_mode' is written nowhere the body reads.  So a decline conditioned on
+color_mode is invisible to any body-side oracle and is coverage debt, not floor."
+
+That applied a DIFFERENT test from the one it applied to tlb_mode two lines above.  For tlb_mode
+it used the 2026-09-09 flow test (tlb_mode flows into tileptr, a body-read lvalue -> FLOOR AXIS).
+For color_mode it asked whether color_mode is ITSELF read by the body.  Under the flow test,
+color_mode selects among four arms EVERY ONE OF WHICH WRITES `buf' -- the store's DATA operand --
+so it flows, and the same section's own line says so ("buf <- written by the four supported arms").
+
+  The disposition on M28 survived anyway, for a narrower and correct reason: the body's own tests
+  partition color_mode into FIVE LABELS and all five were driven, so M28 sliced WITHIN a label,
+  which the 2026-09-04 ruling files as clause (e).
+
+  THE COST WAS ELSEWHERE.  The same mis-stated test also excluded `tile_nr' -- and tile_nr flows
+  into `tileptr', the ADDRESS operand, as the INDEX of the very array tlb_mode selects
+  (`tileptr = d->re_tlb_a[tile_nr] << 16').  It passes the flow test unambiguously.  `#100' in
+  this same function already calls tile_nr "guest-derived" and added a bound for it.
+
+WHERE GUARD AND BODY DISAGREE, restated correctly:
+  `buf' is written by the four supported arms and NOT by the default arm.  The DISAGREEING STATE
+  is "the store runs with buf unassigned" -- which is what every permitting mutant produces, and
+  what pass 2 measured six times (0x70630000, 0x6368696e, 0x706300fe, 0x706300d6, 0x706300c3).
+  `0x6368696e' is ASCII "chin": host stack text reaching guest-visible memory.
+
+================================================================ 4.  CHANNEL -- per NEW row, the mutant it kills and the observable that differs
+
+  nib 40..e0 (10)   M28_permit_othernibbles and any nibble-set predicate
+                    -> word at phys 0x10000 != paint.  MEASURED in pass 2: nib60 read 0x706300c3.
+  nib 40..e0 (10)   M37_fgvalue and any *color predicate
+                    -> same channel; these ten are the only declined cells drawn in FG_ALT.
+                       MEASURED in pass 2 (FGAXIS.out): 0x706300fe at fg 0x12345678.
+  nib accept alt    a mutant declining a SUPPORTED type, or one keyed to FG_VAL on the accept
+                    side -> word != 0x5a3c691e.  Non-vacuous: M8_declineall is in table 4.
+  nib ann           a latch that re-fires per nibble -> count != 1.  M5_nolatch is in table 4.
+  xy dec c1         M30/M31/M32 (tile_nr, tile_nr_x), `ofs == 0', `xofs == 0'
+                    -> word at 0xa0020010 != paint.  MEASURED in pass 2: t1 read 0x70630000.
+  xy dec c2         M33 (`linear || y == 0') and any post-mask y predicate
+                    -> word at 0xa0010200 != paint.  MEASURED in pass 2: ty1 read 0x706300d6.
+  xy dec c3         a `tile_nr_y == 0' predicate -> word at 0xa0040000 != paint.
+  xy dec c4         the PAIRWISE DISJUNCTIONS -- `tile_nr==0 || y==0', `tile_nr_x==0 ||
+                    tile_nr_y==0', `xofs==0 || y==0' -- which every other cell satisfies.
+  xy acc c1..c4     a decode that sends one cell's PUT to another cell's tile, and the
+                    de-escalation ACCEPT side -> each reads its own distinct address; the four
+                    addresses are 0x20010 / 0x10200 / 0x40000 / 0x50210, so a collapse is visible.
+  xy anchor t0      a cell collapsing onto tile 0 while its own cell still looks untouched
+                    -> word at 0xa0010000 != paint.
+  xy ann            an announce on an ACCEPT, or a latch re-firing across tiles -> count != 1.
+
+VACUOUS-BY-CONSTRUCTION AUDIT: no new row is survive-only, and none rests on a channel that
+cannot vary under its named mutant -- every one of the eleven channels above is a READBACK or a
+COUNT, and six of them were MEASURED to vary in pass 2 before this table was designed.
+
+  *** THE ONE I HAD TO FIX BY ENUMERATING, recorded because it nearly shipped. ***  My pass-2
+  control used x = 128.  At x = 128 `x % tilewidth_in_pixels' is 0, so xofs stays 0 and
+  `if (xofs == 0) ok = 0;' would have swept table 4 clean even WITH a tile_nr row present.
+  x = 132 makes tile_nr_x and xofs non-zero in one cell.  Found by enumerating the derived set
+  against the cells, not by running another table.
+
+================================================================ 5.  THE DELETIONS, AND THEIR WARRANT
+
+Four rows deleted: `tA ann cum', `tB ann cum', `tC ann cum', `lin ann cum'.
+
+  MEASURED over table 3's 26 mutants, each of their kill sets is {M1,M11,M5,M7} -- a STRICT
+  SUBSET of the matching `ann1' row's {M1,M11,M5,M7,M9,M10,M16,M17}.  They carried no kill of
+  their own.  Rows are owed PER ENUMERATED MUTANT, and two rows no enumerated mutant
+  distinguishes collapse into one.
+
+  NO MUTANT LOSES ITS ONLY KILL, checked before deleting rather than after: M5_nolatch keeps
+  {once, tA/tB/tC ann1}; M7_silent keeps its announce-text reds; M1 and M11 keep 32 reds each.
+
+  WHAT THEY PINNED IS STILL PINNED.  `ann cum' was the only whole-transcript announce count in
+  its window, so it alone covered the `rpt' cell's announce.  `once' is also a whole-transcript
+  count (two declined PUTs in one process, cumulative == 1) and is RETAINED, so cross-PUT
+  latching keeps an oracle.  The two new blocks add `nib ann' and `xy ann', both cumulative.
+
+  `tA/tB/tC silent' are KEPT although their table-3 kill sets also nest inside `ann1's.  They
+  pin a DIFFERENT property -- that an ACCEPTED type announces nothing -- which no table-3 mutant
+  isolates.  Rather than judge it, table 4 BUILDS the discriminator: M38_acceptannounce adds an
+  announce to the RGBA arm, which should red `silent' and NOT `ann1'.  If it does, the rows are
+  justified by measurement; if it does not, they are deletable and I will say so.
+
+  `ycrcb x4y1' is KEPT and is now DISCHARGED: its own comment claims it kills `if (ok || x)' and
+  `|| y', table 3 built neither, and its kill set there was a strict subset of `lin ycrcb d1'.
+  Pass 2 built M34/M35/M36 (`|| ofs', `|| x', `|| y') and each scored 58/59 with that row as the
+  SOLE red.  The claim is measured, not asserted.
+
+================================================================ 6.  WHAT TABLE 4 MUST SHOW
+
+  BASE                     77/77.
+  M30/M31/M32/M33/M28r/M37 MUST NOW DIE.  These are the six pass-2 escapes; if any still scores
+                           77/77 the closure has failed on its own motivating case.
+  M34/M35/M36              must still die (no row broke).
+  M38_acceptannounce       settles whether `silent' earns its place.
+  the 26 table-3 mutants    re-measured for comparability -- adding 22 rows and deleting 4 makes
+                           every previously recorded score on this detector incomparable.

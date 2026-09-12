@@ -1,0 +1,284 @@
+#519 sgirandomcolour -- PRE-TABLE CHECK for KILL TABLE 3 (the pass-3 closure of M13/M14).
+Written 2026-09-10 by the Opus 5 measuring seat, BEFORE table 3's first build.  Its mtime is the
+proof of order; the frozen instrument, frozen baseline and frozen driver are all stamped after it.
+
+Instrument under review: regress/sgi_re_colourdefault_probe.py, uncommitted, this round's own
+deliverable.  Diff under review: NONE -- src/devices/dev_sgi_re.c is UNTOUCHED by this pass.  Table 3
+scores a DETECTOR change, not a product change, which is why the (b) and (c) legs matter as much as
+the (d) ones: they are what proves the enlarged instrument still discriminates on the axes it
+already covered.
+
+*** WHAT THIS PASS EXISTS FOR.  `M13_widthdecline' (ok = 0 -> if (bufdepth == 4) ok = 0;) and
+`M14_lineardecline' (-> if (linear) ok = 0;) scored 14/14 on the table-1 instrument and 19/19 on the
+19-row one -- TWO MEASURED TOTAL ESCAPES.  Both are UNDER-declining clause-(d) mutants: where the
+added condition is false the unsupported colour type is PERMITTED and the guarded store runs, and
+because #519 deleted the random() fill that store now writes UNINITIALISED buf. ***
+
+0. THE PRESCRIPTION WAS CHECKED BEFORE IT WAS IMPLEMENTED, AND IT IS CORRECT
+   ---------------------------------------------------------------------------------------------
+   The 18-cell table came from a design review, not a measurement, and this round has already had
+   one premise (the mutants' DIRECTION) measured backwards.  Every element was re-derived from
+   src/devices/dev_sgi_re.c and then MEASURED with a throwaway probe against the fix binary
+   (o519_explore.py / o519_explore2.py; logs preserved as EXPLORE_*.out beside this file).
+
+   FIELD ARITHMETIC, from horrible_getputpixel's own first four lines:
+       color_mode = mode & DE_MODE_TYPE_MASK      (0x00f0)
+       bufdepth   = 1 << ((mode >> 8) & 3)        (bits 9:8 -> 1, 2, 4, 8)
+       tlb_mode   = (mode >> 10) & 0x7            (bits 12:10)
+       linear     = tlb_mode > 3
+   The three fields are disjoint, so a mode word sets all three independently.
+
+       mode    tlb_mode  label    bufdepth  type    bufdepth==4 || linear
+       0x0000     0      TLB_A       1      CI      false
+       0x0210     0      TLB_A       4      RGB     true
+       0x0220     0      TLB_A       4      RGBA    true
+       0x0230     0      TLB_A       4      ABGR    true
+       0x00f0     0      TLB_A       1      YCRCB   FALSE   <- the corner
+       0x0400     1      TLB_B       1      CI      false
+       0x0610/20/30  1   TLB_B       4      RGB/RGBA/ABGR    true
+       0x04f0     1      TLB_B       1      YCRCB   FALSE   <- the corner
+       0x0800     2      TLB_C       1      CI      false
+       0x0a10/20/30  2   TLB_C       4      RGB/RGBA/ABGR    true
+       0x08f0     2      TLB_C       1      YCRCB   FALSE   <- the corner
+       0x12f0     4      LIN_A       4      YCRCB   true    (every declined row shipped so far)
+
+   ALL THREE PRESCRIBED CLAIMS HOLD:
+     * the TLB_B and TLB_C mode words are right -- 0x0400/0x0800 select tlb_mode 1/2 and leave
+       bits 9:8 zero, and 0x06x0/0x0ax0 add BUFDEPTH_32 without disturbing the label field;
+     * 0x00f0 really is depth-1, TILED and YCRCB simultaneously;
+     * the corner really does make BOTH added conditions false, so it is exactly the cell M13 and
+       M14 permit.
+   MEASURED on the fix binary: every accept cell returned its prescribed word at all three windows
+   (0xdd223344 / 0xaabbcc00 / 0xaabbccdd / 0xddccbbaa) and every declined cell returned the paint
+   0x11223344, with exactly ONE announce carrying `[ put: color mode = 0xf0 ]'.  `unimplemented
+   dst_mode' appears ZERO times, so the tiled mode words reach the COLOUR switch and not the
+   TLB/mode default.
+
+   TWO THINGS THE PRESCRIPTION DID NOT SAY, both measured rather than argued:
+   (a) THE TILED ADDRESS.  setup_put() programs RE_LINEAR_A; the tiled path takes tileptr from
+       re_tlb_[abc][tile_nr] << 16 and needs BIT 15 of the stored halfword set (it becomes
+       tileptr's bit 31, the "valid" bit).  One 8-byte store fills four entries from big-endian
+       halfwords, so `sd 0x8001000000000000' at CRIME_RE_TLB_A gives re_tlb_a[0] = 0x8001 and a
+       destination of physical 0x10000.  The three windows are given DIFFERENT tiles -- 0x8001,
+       0x8002, 0x8003 -> phys 0x10000/0x20000/0x30000 -- so an accept cell pins WHICH array the
+       mode word selected (clause (f) anchoring), not merely that a write happened somewhere.
+   (b) THE OFFSET.  At (0,0) every cell here has ofs 0, so the review's (4,1) arithmetic
+       (512*1 + 4 = 516 at tiled depth 1) is correct but not exercised: the position axis stays
+       pinned by the existing `ycrcb x4y1' row on the LINEAR path.
+
+1. SIBLING PARITY
+   ---------------------------------------------------------------------------------------------
+   Unchanged from table 1's block: the PUT default arm's sibling is the GET default arm (untouched,
+   disclosed as sgirebufuninit) and the TLB/mode switch's own default (SGIRE_W_BADMODE), which
+   RETURNS before the store.  N/A for this pass in one respect and the reason is recorded rather
+   than left blank: NO PRODUCT CODE CHANGES IN PASS 3, so there is no new arm to compare against a
+   sibling.  What this pass adds is coverage of arms that already existed.
+   NEW SIBLING SET, and it is the reason for three sessions rather than one: the FOUR dispatch
+   labels that reach the guarded store -- TLB_A, TLB_B, TLB_C, LIN_A.  Before this pass the
+   declined rows drove ONE of them.  A parity census over the row names was the check that would
+   have shown that, and it is what section 5 now does over the whole 4x4 domain.
+
+2. CLAIM -> ROW  (every added comment sentence that asserts an observable consequence)
+   ---------------------------------------------------------------------------------------------
+   "all sixteen cells ... are driven with an unsupported colour type and a readback"
+                                            -> the sixteen declined cells themselves; negative
+                                               controls M20..M27
+   "an accept cell pins WHICH array the mode word selected"
+                                            -> tA/tB/tC ci8|rgb|rgba|abgr (12 cells), each reading
+                                               its own window's distinct tile
+   "a latch or an announce conditioned on the addressing mode"
+                                            -> tA/tB/tC silent | ann1 | ann cum (9 rows)
+   "a SECOND declined PUT here, latch already set, still skips its store"
+                                            -> tA/tB/tC ycrcb rpt (3 rows)
+   "the primitive fires synchronously inside the second store"
+                                            -> NO ROW, and none is owed: it is a statement about
+                                               why the readback in the same stepped block is valid.
+                                               Its negative control is that every accept cell would
+                                               read the paint if it were false.
+   "0x8001 is not decoration: 0x0001 returns without writing"
+                                            -> NO ROW.  SENTENCE, carried from sgi_re_rgb_probe.py's
+                                               own measured note; no cell here drives a clear bit 15.
+   "measured for every cell ... never assumed"  -> section 6 below IS that measurement.
+
+3. GUARD FIELD vs BODY FIELD
+   ---------------------------------------------------------------------------------------------
+   Guard (the predicate that decides the decline): `color_mode', a local derived from `mode'.
+   Guarded BODY: cpu->memory_rw(cpu, cpu->mem, tileptr + ofs, buf, bufdepth, MEM_WRITE, ...).
+   Body-read lvalues: tileptr, ofs, buf, bufdepth, cpu->mem.
+     tileptr  <- assigned by the switch on tlb_mode  (case 0/1/2 from re_tlb_[abc], case 4 from
+                 re_linear_a).  So tlb_mode's value FLOWS INTO a body-read lvalue: by the
+                 2026-09-09 dispatch-label ruling it is a FLOOR AXIS of this guard.
+     ofs      <- 512*y + (x % tilewidth)*bufdepth on the tiled path, x & 4095 on the linear one.
+                 Depends on BOTH tlb_mode and bufdepth.
+     bufdepth <- passed straight to the store as its LENGTH.
+     buf      <- written by the four supported arms and NOT by the default arm.  THE DISAGREEING
+                 STATE the rule asks for is therefore "the store runs with buf unassigned", which
+                 is precisely what a permitting mutant produces -- and section 6 measures what
+                 lands.
+   WHERE GUARD AND BODY DISAGREE: `color_mode' is written nowhere the body reads.  So a decline
+   conditioned on color_mode is invisible to any body-side oracle and is coverage debt, not floor
+   -- disclosed in the contract with M28 as its negative control.
+
+4. CHANNEL -- per row, the mutant it kills and the observable that differs under it
+   ---------------------------------------------------------------------------------------------
+   tA/tB/tC ycrcb d1   M13_widthdecline, M15_jointwidthlin, M24_permit_d2d8,
+                       M20/M21/M22 (the one that exempts THIS label)      -> word != paint
+   tA/tB/tC ycrcb d2   M13, M15, M26_permit_d2                            -> word != paint
+   tA/tB/tC ycrcb d4   M14_lineardecline, M23_permit_tiled_d4             -> word != paint
+   tA/tB/tC ycrcb d8   M13, M15, M25_permit_d8, M24                       -> word != paint
+   lin ycrcb d1/d2/d8  M13, M24, M25, M26 on the LINEAR label             -> word != paint
+   tA/tB/tC ycrcb rpt  M4_okinlatch at a tiled window                     -> word != paint
+   tA/tB/tC ci8|rgb|rgba|abgr
+                       M8_declineall; M9/M16/M17/M10 (the case dropped);
+                       any window-conditioned case drop                   -> word != expected packing
+   tA/tB/tC silent     an announce moved to the accept side               -> count > 0
+   tA/tB/tC ann1       a latch or announce conditioned on tlb_mode;
+                       M7_silent                                          -> count 0
+   tA/tB/tC ann cum    M5_nolatch at a tiled window                        -> count > 1
+   lin ann cum         M5_nolatch on the linear label                      -> count > 1
+
+   *** VACUOUS-BY-CONSTRUCTION AUDIT.  A row whose named channel cannot vary under its named
+   mutant is vacuous, and that is knowable BEFORE the table.  Two findings: ***
+     * `tA ycrcb d4' does NOT vary under M13 (bufdepth == 4 is true there, so M13 declines and the
+       paint stands).  It is not vacuous -- it varies under M14 and M23 -- but it is NOT a control
+       for M13 and must not be reported as one.
+     * `tA/tB/tC silent' and the accept cells cannot vary under ANY of M13/M14/M15/M20..M27: those
+       mutants only widen what is PERMITTED, and permitting cannot make an accept cell wrong.  They
+       are declared CONTROLS for this family, not detectors of it, exactly as `indep paint' was
+       declared a control for `latch indep' in table 1's block.
+
+5. THE (d) ENUMERATION FOR TABLE 3, and it is stated over a DOMAIN rather than a mutant list
+   ---------------------------------------------------------------------------------------------
+   The repair-chain amendment says that when two consecutive passes find breaches of one class, the
+   next repair owes the CLASS CLOSURE: enumerate the full space from the function's own inputs and
+   close every cell in ONE diff.  This pass does that.
+
+   Reachable-to-the-store partition of tlb_mode: {0 TLB_A, 1 TLB_B, 2 TLB_C, 4 LIN_A}.  3 and 5-7
+   take the BADMODE default, which RETURNS before the store; >= 8 is impossible after `& 0x7'.
+   Domain of bufdepth: exactly {1, 2, 4, 8} -- `1 << ((mode >> 8) & 3)'.
+   The 4 x 4 = 16 declined cells:
+
+       label \ depth      1        2        4        8
+       TLB_A            0x00f0   0x01f0   0x02f0   0x03f0
+       TLB_B            0x04f0   0x05f0   0x06f0   0x07f0
+       TLB_C            0x08f0   0x09f0   0x0af0   0x0bf0
+       LIN_A            0x10f0   0x11f0   0x12f0*  0x13f0      (* the ONE cell already shipped)
+
+   With all sixteen present in the declined set, NO predicate over tlb_mode and bufdepth alone can
+   be false at every declined cell -- whatever its shape, because the declined set is the entire
+   reachable domain of those two lvalues.  That is a stronger claim than "these mutant forms die",
+   and M20..M27 are its negative controls rather than its content.
+
+   MUTANTS, one edit each, all dry-run to exactly one match (o519_dryrun.sh output preserved):
+     floor (b)  M1_reinstate           the pre-fix arm verbatim inside the new structure
+     floor (c)  M11_null               the pre-fix file wholesale (also serves clause (a):
+                                       it is byte-identical to HEAD's dev_sgi_re.c)
+     floor (d)  M2_noguard  M3_zerofill  M4_okinlatch
+                M13_widthdecline       if (bufdepth == 4)      ** MUST NOW DIE **
+                M14_lineardecline      if (linear)             ** MUST NOW DIE **
+                M15_jointwidthlin      if (bufdepth == 4 || linear)
+                M20_permit_tlba        if (tlb_mode != 0)      permits TLB_A only
+                M21_permit_tlbb        if (tlb_mode != 1)
+                M22_permit_tlbc        if (tlb_mode != 2)
+                M23_permit_tiled_d4    if (linear || bufdepth != 4)
+                M24_permit_d2d8        if (bufdepth == 1 || bufdepth == 4)
+                M25_permit_d8          if (bufdepth != 8)
+                M26_permit_d2          if (bufdepth != 2)
+                M27_permit_bc_d2d8     if (tlb_mode == 0 || linear || bufdepth == 1
+                                           || bufdepth == 4)  -- the 4-term joint that the
+                                       PREVIOUS (10-cell) plan would have left open
+     latch      M5_nolatch  M6_sharedbit  M7_silent
+     accept     M8_declineall  M9_dropcase_ci  M10_dropcase_abgr  M16_dropcase_rgb
+                M17_dropcase_rgba
+     L4         M12_prefix_reworded
+     BOUNDARY   M28_permit_othernibbles  if (color_mode == 0xf0 || color_mode == 0x50)
+                                       -- PREDICTED TO ESCAPE.  Disclosed in the contract, and it
+                                       is clause-(e) debt rather than a floor breach because
+                                       color_mode does not flow into any body-read lvalue.
+
+6. THE CAUTION THE BRIEF ASKED ME TO TEST RATHER THAN REPEAT -- AND IT IS MEASURED, NOT ASSUMED
+   ---------------------------------------------------------------------------------------------
+   "unchanged paint does not prove absence of a store: at depth 1, an erroneous byte equal to 0x11
+   passes."  TRUE IN PRINCIPLE, and the whole declined half of this instrument rests on it, so it
+   was measured before any row was written -- by building M13 and reading what a PERMITTED store
+   actually puts there.
+
+   MEASURED, by building M13_widthdecline and M15_jointwidthlin in the clone and running the
+   throwaway explorer against each (EXPLORE_M13.out, EXPLORE_M15.out, preserved beside this file;
+   the fix binary's own run is EXPLORE_BASE.out).  Destination pre-painted 0x11223344 everywhere:
+
+       cell (TLB_A)      fix        M13_widthdecline   M15_jointwidthlin
+       0x00f0  d1     0x11223344      0x70223344         0x70223344
+       0x01f0  d2     0x11223344      0x70633344         0x70633344
+       0x02f0  d4     0x11223344      0x11223344         0x11223344   (both DECLINE here)
+       0x03f0  d8     0x11223344      0x7063000f         0x70630017
+       0x00f0  rpt    0x11223344      0x70223344         0x70223344
+       (TLB_B and TLB_C d1 and rpt: identical, 0x70223344 under both mutants)
+
+   SO: A PERMITTED STORE AT DEPTH 1 WRITES 0x70, NOT 0x11.  No cell of the eighteen -- nor of the
+   twenty-four this pass actually ships -- is vacuous for the stated reason.  THE VALUE IS
+   MEASURED, NOT GUARANTEED, and three things about it are worth recording because they bound how
+   far the measurement can be trusted:
+     * buf[0] = 0x70 and buf[1] = 0x63 are STABLE across two different binaries (M13 and M15) and
+       across all three windows and both the first and the repeated PUT -- so it is a deterministic
+       stack residue, not noise;
+     * buf[2..3] are NOT stable: 0x000f under M13 and 0x0017 under M15.  A cell whose kill rests on
+       the LOW bytes of a depth-8 store would be build-dependent.  Every cell here is killed by
+       byte 0, which is the stable one;
+     * the residue is still UNINITIALISED STACK by construction.  If some future build put 0x11
+       there, the depth-1 cells would go silently green.  The instrument is not defenceless against
+       that: the depth-2 cell requires 0x70,0x63 == 0x11,0x22 and the depth-8 cell requires four
+       bytes to coincide, so the SET of cells degrades gracefully where any single cell could not.
+       That is the honest statement -- collectively robust, individually contingent -- and it is
+       why the contract discloses it as (iv) rather than claiming the cells are unconditional.
+
+   AND THE ANNOUNCE IS NOT A SUBSTITUTE ORACLE, which is what makes the readback load-bearing:
+   under BOTH permitting mutants the announce still fires exactly once with the right text.  A
+   detector built only on the announce would score M13 and M14 CLEAN, which is precisely how they
+   escaped 14/14 and 19/19.
+
+7. APPARATUS DEFECTS FOUND IN MY OWN INSTRUMENTS WHILE DOING THIS, RECORDED RATHER THAN QUIETLY
+   FIXED -- all three are classes the carrier already names
+   ---------------------------------------------------------------------------------------------
+   a. A MARKER GREP THAT MATCHED NOTHING REPORTED 0 FOR EVERYTHING.  The first explorer split the
+      transcript on "0x00519519"; the debugger prints "0x519519", so the split never happened and
+      the fallback string was counted instead -- giving `announce before marker = 0' and
+      `between markers = 0' as CONFIDENT, WRONG measurements of a string literal.  Caught only
+      because the same block printed `marker1 seen=False' beside the counts.  THE DENOMINATOR RULE
+      WORKING: a count printed without a "did the selector select anything" companion is not
+      evidence.  The corrected run gives 0 before / 1 between / 1 total, which is what the
+      prescription asked for.
+   b. THE BASH -> HEREDOC -> PYTHON BACKSLASH COLLAPSE, in the direction the carrier documents.
+      mut519c.py's find-strings for M1_reinstate and M7_silent quote a fatal() whose format ends
+      "]\n".  Written as a doubled backslash in a quoted heredoc, one level was consumed, Python
+      read a REAL NEWLINE, and both mutants reported MUTANT-TEXT-NOT-FOUND -- the presence-pin
+      firing correctly on a defect in the mutator rather than in the tree.  Repaired with chr(92),
+      which is immune in both directions, and re-dry-run: all 25 mutants now apply with exactly one
+      match each.
+   c. I EDITED THE MUTATOR WHILE THE PRE-CHECK WAS STILL RUNNING.  Adding M28 to mut519c.py at
+      ~16:07 landed between the pre-check's M13 leg and its M15 leg, and a multi-run driver
+      re-reads its mutator between legs.  The edit adds one dictionary entry and changes no
+      find/replace string -- verified by re-running the dry run -- so M15's mutation is unaffected,
+      but the hazard is exactly the one this project records, and the pre-check is therefore NOT a
+      frozen-instrument measurement.  TABLE 3 IS: it runs from frozen copies of the instrument, the
+      mutator, the baseline and the driver, all stamped after this file.
+
+8. WHAT IS N/A HERE, WITH ITS REASON -- an unrun check and an inapplicable one must not render the
+   same
+   ---------------------------------------------------------------------------------------------
+   * ACCEPT-ROW FAILABILITY (the de-escalation companion): N/A for this pass in its own right --
+     it binds a round that REMOVES a host-fatal guard, and pass 3 changes no product code.  The
+     obligation was discharged in the fix's own pass and its rows (`live', `ci8 put', `rgb put',
+     `abgr put') are re-scored here unchanged, joined by twelve more at the tiled windows.
+   * ORACLE CORRECTION (re-pin first, measure red, then change code): N/A -- no shipped oracle is
+     re-pinned.  Every existing row keeps its expectation byte for byte; the pass only ADDS.
+   * PROPAGATION TO BUILD TREES: N/A -- the only file changed is a probe, and probes do not live in
+     the build trees.  src/devices/dev_sgi_re.c is untouched, so build/, build-asan/,
+     /tmp/gxsec-build and est/ are all unaffected by this pass and none of them was written.
+
+9. ORDER OF OPERATIONS, so the record is checkable rather than asserted
+   ---------------------------------------------------------------------------------------------
+   explorer runs (BASE/M13/M15)  ->  THIS FILE  ->  freeze instrument+mutator+baseline+driver  ->
+   table 3 leg 1 (BASE).  The explorer runs precede this file deliberately: the CHANNEL check is
+   only worth anything if it is MEASURED, and section 6 is that measurement.  Table 3 itself has
+   not started when this file is written, and every artifact it produces is stamped later.

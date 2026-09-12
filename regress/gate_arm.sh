@@ -1400,6 +1400,34 @@ else
     check "sgi_re randompixel rows red"   "$(count "$RANDLOG" " FAIL$")" "0"
 fi
 
+#  ---- #519 sgirandomcolour: the PUT-side twin of the block above.  The COLOUR-mode default arm
+#  wrote four random() bytes into guest memory, reachable with the documented DE_MODE_TYPE_YCRCB; it
+#  now declines the store with a latched announce.  The probe's controlling CONTRACT names its
+#  projection -- {TLB_A, TLB_B, TLB_C, LIN_A} x {bufdepth 1,2,4,8} x {latch clear, set on entry}, all
+#  32 cells occupied -- and kill table 5 (artifacts/sgirandomcolour/killtable5_20260912/SCORES.txt)
+#  measured 15 legs, every one on its pre-registered prediction: BASE 89/89, HEAD 28/89, eleven
+#  single-cell zero-store controls 88/89 each on its OWN row, NIB_OTHER 78/89, TAIL8 81/89.
+#  PARSE BEFORE SCORE: the RESULT and DONE lines must each appear exactly once and be well formed.
+#  The denominator is a LITERAL -- a pin that follows the probe cannot tell gained rows from lost ones.
+COLLOG=$LOGDIR/sgi_re_colourdefault.log
+python3 sgi_re_colourdefault_probe.py "$PMAX" gate > "$COLLOG" 2>&1 || true
+colres=$(grep -c '^SGICOLOUR_RESULT=' "$COLLOG")
+colresok=$(grep -cE '^SGICOLOUR_RESULT=[0-9]+/[0-9]+$' "$COLLOG")
+coldone=$(grep -cx 'SGICOLOUR_DONE' "$COLLOG")
+if [ "$colres" = 1 ] && [ "$colresok" = 1 ] && [ "$coldone" = 1 ]; then
+    check "sgi_re colourdefault protocol parsed" "yes" "yes"
+    #  `live' is the liveness control: a supported RGBA PUT lands its colour.  Two spaces after the
+    #  name, the padded-column idiom above -- `live silent' must not match `live'.
+    check "sgi_re colourdefault liveness row" "$(count "$COLLOG" "^live  .*ok$")" "1"
+    col=$(grep '^SGICOLOUR_RESULT=' "$COLLOG" | cut -d= -f2)
+    check "sgi_re colourdefault rows run"     "${col#*/}" 89
+    check "sgi_re colourdefault rows correct" "${col%/*}" 89
+else
+    note "sgi_re colourdefault: protocol lines missing or duplicated (result=$colres/$colresok done=$coldone)"
+    tail -5 "$COLLOG" | sed 's/^/       /'
+    check "sgi_re colourdefault protocol parsed" "no" "yes"
+fi
+
 #  ------------------------------------------------------------ #505 sgirergbroundtrip
 #  horrible_getputpixel()'s RGB GET read buf[1..3] while its RGB PUT writes the three channels at
 #  buf[0..2] and an explicit pad at buf[3] -- so an RGB pixel did not survive its own round trip and

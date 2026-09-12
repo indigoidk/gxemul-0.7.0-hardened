@@ -146,13 +146,27 @@ enum {
 	    has a row for exactly this (`tex xbit', which fires all six width
 	    latches before reading).
 
-	    THE NEXT FREE BIT IS 1 << 12, AND THIS IS THE LAST ENUMERATOR --
-	    which is where that claim belongs, per the convention two comments
-	    up.  A maintainer adding a bit BELOW this line must move this
-	    sentence with it and demote the copy here, exactly as #513 had to
-	    demote SGIRE_W_BADMODE's.
+	    (This comment used to end "THE NEXT FREE BIT IS 1 << 12, AND THIS
+	    IS THE LAST ENUMERATOR".  #519 added SGIRE_W_BADCOLOR = 1 << 12
+	    BELOW this line and moved the sentence with it, as this comment
+	    itself instructed.  Demoted, not deleted, for the same reason as
+	    the two demotions above it.)
 	 */
 	SGIRE_W_TEX_RD    = 1 << 11,
+
+	/*  #519 (sgirandomcolour): the colour-type PUT decline in
+	    horrible_getputpixel() gets its OWN bit, per the rule every entry
+	    above records: the helper is per-pixel, the struct is shared by
+	    four handlers, and a latch shared with any other site is silenced
+	    by that site's ordinary traffic.  SGIRE_W_BADMODE (1 << 10) is the
+	    TLB/mode switch's decline in the same function and is a different
+	    event with a different text; sharing it would collapse the two.
+
+	    THE NEXT FREE BIT IS 1 << 13, AND THIS IS THE LAST ENUMERATOR --
+	    which is where that claim belongs, per the convention above.  A
+	    maintainer adding a bit BELOW this line must move this sentence
+	    with it and demote the copy here.  */
+	SGIRE_W_BADCOLOR  = 1 << 12,
 };
 
 struct sgi_re_data {
@@ -306,6 +320,7 @@ void horrible_getputpixel(int put, struct cpu* cpu, struct sgi_re_data* d,
 
 	uint8_t buf[8];		/* #100: bufdepth can be 8 = 1<<((mode>>8)&3) */
 	if (put) {
+		int ok = 1;	/*  #519: cleared by the default arm below  */
 		switch (color_mode) {
 		case DE_MODE_TYPE_CI:
 			buf[0] = *color;
@@ -328,16 +343,36 @@ void horrible_getputpixel(int put, struct cpu* cpu, struct sgi_re_data* d,
 			buf[2] = *color >> 16;
 			buf[3] = *color >> 24;
 			break;
-		default:buf[0] = random();
-			buf[1] = random();
-			buf[2] = random();
-			buf[3] = random();
-			// TODO.
-			fatal("[ put: color mode = 0x%x ]\n", color_mode);
+		default:/*  #519 (sgirandomcolour): this arm was `buf[0..3] = random()'
+			    and an UNLATCHED per-pixel fatal(), after which the common
+			    store below wrote four HOST-PRNG bytes into guest memory.
+			    Twelve of the sixteen type nibbles reach here, the documented
+			    DE_MODE_TYPE_YCRCB among them.  MEASURED at rung 3
+			    (regress/sgi_re_colourdefault_probe.py): a destination
+			    pre-painted 0x11223344 read 0x56e8857a and 0x38abc4e1 on two
+			    runs -- neither the paint nor any packing of the colour, and
+			    different each run because main.c seeds random() per process.
+
+			    NOW DECLINED, member 3: the STORE IS SKIPPED, so the
+			    destination keeps what the guest had -- not a zero fill, which
+			    would publish a colour the guest never asked for (random() with
+			    the entropy stripped) -- and the announce is latched on its own
+			    bit because this helper is per-pixel.  The old literal is kept
+			    as the prefix: the witness attributes on it.  A declined PUT
+			    never reads buf, so the width question (sgirebufuninit) is a
+			    separate row, and the GET default below is untouched.  */
+			ok = 0;
+			if (!(d->warned & SGIRE_W_BADCOLOR)) {
+				d->warned |= SGIRE_W_BADCOLOR;
+				fatal("[ put: color mode = 0x%x ] [ sgi_re: unimplemented "
+				    "colour type in horrible_getputpixel, x=%i y=%i; store "
+				    "declined (once) ]\n", color_mode, x, y);
+			}
 		}
 
-		cpu->memory_rw(cpu, cpu->mem, tileptr + ofs,
-		    buf, bufdepth, MEM_WRITE, NO_EXCEPTIONS | PHYSICAL);
+		if (ok)	/*  #519: a declined type stores nothing  */
+			cpu->memory_rw(cpu, cpu->mem, tileptr + ofs,
+			    buf, bufdepth, MEM_WRITE, NO_EXCEPTIONS | PHYSICAL);
 	} else {
 		cpu->memory_rw(cpu, cpu->mem, tileptr + ofs,
 		    buf, bufdepth, MEM_READ, NO_EXCEPTIONS | PHYSICAL);
