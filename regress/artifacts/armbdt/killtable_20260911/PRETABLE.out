@@ -1,0 +1,55 @@
+PRE-TABLE CHECK -- armbdt
+Written BEFORE table 1 runs, so this file's own mtime proves the order.
+
+THE DIFF UNDER TEST is in src/cpus/cpu_arm_instr.c:
+  arm_pop() (:1653) and arm_push() (:1842):
+    Masking `addr & ~3` strictly at the two memory_rw call sites:
+      if (!cpu->memory_rw(cpu, cpu->mem, addr & ~3, data, sizeof(data), MEM_READ, CACHE_DATA))
+      if (!cpu->memory_rw(cpu, cpu->mem, addr & ~3, data, sizeof(data), MEM_WRITE, CACHE_DATA))
+  NEVER masking at function entry, preserving unmasked arithmetic writeback (*np = addr).
+
+--------------------------------------------------------------------- SIBLING PARITY
+
+1. In-tree multi-generator precedent:
+   src/cpus/generate_arm_multi.c:117 emits `addr &= 0xffc;` on access before host page indexing,
+   while writeback derivation uses the unmasked arithmetic base register.
+2. Single-register load/store precedent (#19, #357, #364):
+   cpu_arm_instr_loadstore.c separates access masking from base register writeback.
+   ARM DDI 0100I A5.2.5 / A5.2.8 / A4-37 specifies that LDM/STM ignore addr[1:0] on memory
+   access while Mode 4 writeback updates Rn with unmasked arithmetic offset.
+
+--------------------------------------------------------------------- CLAIM -> ROW
+
+1. "Unaligned base splices bytes across word boundary on cold host pages (arm_pop/LDM)"
+   -> ROWED as ARM_LDM_COLD_DATA, ARM_LDM_DIV_CHECK (fails pre-fix, passes post-fix).
+2. "Cold LDM pre-fix produces specific predictable byte pattern (attribution)"
+   -> ROWED as CONTROL_ATTRIB_PLUS1 (asserts cold unaligned load at 0x20001 yields 0x88112233).
+3. "Unaligned base splices bytes across word boundary on cold host pages (arm_push/STM)"
+   -> ROWED as ARM_STM_COLD_DATA, ARM_STM_DIV_CHECK (fails pre-fix, passes post-fix).
+4. "Cold STM pre-fix corrupts adjacent byte at 0x21004"
+   -> ROWED as ARM_STM_COLD_CLOBBER (asserts word 1 byte at 0x21004 clobbered by 0x11 pre-fix).
+5. "Thumb POP inherits the defect (cpu_arm.c:1677 -> arm_pop)"
+   -> ROWED as THUMB_POP_COLD_DATA, THUMB_POP_DIV_CHECK (fails pre-fix, passes post-fix).
+6. "Thumb PUSH inherits the defect (cpu_arm.c:1670 -> arm_push)"
+   -> ROWED as THUMB_PUSH_COLD_DATA, THUMB_PUSH_DIV_CHECK (fails pre-fix, passes post-fix).
+7. "Mandatory writeback: base register equals unmasked arithmetic result (kills mask-at-entry mutant)"
+   -> ROWED as ARM_LDM_WB_UNAL1, ARM_LDM_WB_UNAL2, ARM_STM_WB_UNAL, THUMB_POP_WB_UNAL, THUMB_PUSH_WB_UNAL.
+8. "Liveness control: aligned round-trip passes"
+   -> ROWED as CONTROL_LIVENESS.
+9. "Path assertions: cold access is genuinely cold, warm access is genuinely resident"
+   -> ROWED as ARM_LDM_PATH_COLD, ARM_LDM_PATH_WARM, ARM_STM_PATH_COLD, ARM_STM_PATH_WARM.
+
+--------------------------------------------------------------------- PREDICTED SCORES ACROSS MUTANTS
+
+Leg             Expected Score  Failing Rows / Kill Reason
+--------------  --------------  -------------------------------------------------------------
+BASE            25/25           None -- all 4 callers green, cold==warm, writeback exact.
+HEAD            17/25           8 rows: 4 cold data + 4 div checks across all 4 callers.
+M_ENTRY         20/25           5 rows: ARM_LDM_WB_UNAL1, ARM_LDM_WB_UNAL2, ARM_STM_WB_UNAL,
+                                THUMB_POP_WB_UNAL, THUMB_PUSH_WB_UNAL. KILLED BY WRITEBACK.
+M_POP_ONLY      21/25           4 rows: ARM_STM_COLD_DATA, ARM_STM_DIV_CHECK,
+                                THUMB_PUSH_COLD_DATA, THUMB_PUSH_DIV_CHECK. KILLED BY STORES.
+M_PUSH_ONLY     21/25           4 rows: ARM_LDM_COLD_DATA, ARM_LDM_DIV_CHECK,
+                                THUMB_POP_COLD_DATA, THUMB_POP_DIV_CHECK. KILLED BY LOADS.
+M_NULL_MEDIUM    4/25           21 rows: CONTROL_LIVENESS and all 20 transfer rows FAIL.
+                                Proves every row genuinely observes block transfer.

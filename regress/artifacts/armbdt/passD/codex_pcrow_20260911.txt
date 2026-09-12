@@ -1,0 +1,92 @@
+VERDICT: `arm_push()` confirms PC first, PC word `0x00008014`, and writeback `0x00021003`. Actual cold-path execution remains conditional on dispatch and cache state.
+CODEX_PCROW_20260911
+
+I read only the two specified working-tree files. No files were written and no probe was run. One line correction: `if (i == ARM_PC)` is at **1868**; `value = cpu->pc + 12` is at **1869**.
+
+1. **Decode: `0xe9208002` is `STMDB r0!, {r1, pc}`.**
+
+   | Field | Bits | Value | Meaning |
+   |---|---|---|---|
+   | cond | 31–28 | `0xe` | AL |
+   | Instruction class | 27–25 | `0b100` | Block data transfer |
+   | P | 24 | `1` | Before |
+   | U | 23 | `0` | Decrement |
+   | S | 22 | `0` | Ordinary register values |
+   | W | 21 | `1` | Writeback |
+   | L | 20 | `0` | Store |
+   | Rn | 19–16 | `0` | r0 |
+   | Register list | 15–0 | `0x8002` | Bits 15 and 1: PC and r1 |
+
+   The decoder selects generic `bdt_store` for this class with `L=0` and supplies the pointer to r0. The wrapper extracts P/U/S/W using the corresponding masks. See [decoder](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c:4782) and [store wrapper](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c:1968).
+
+2. **PC, register 15, is accessed first.**
+
+   The actual loop is:
+
+   ```c
+   for (i=(u_bit? 0 : 15); i>=0 && i<=15; i+=(u_bit? 1 : -1))
+   ```
+
+   With `U=0`, it starts at 15 and decrements. Bit 15 is selected, so PC is stored immediately. Registers 14 through 2 are skipped by `continue`; then r1 is stored. Those skipped iterations perform no address adjustment. See [loop and register selection](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c:1836).
+
+3. **The unmasked addresses are `0x21007`, then `0x21003`. The writes land at `0x21004`, then `0x21000`.**
+
+   `addr` starts as `*np = 0x2100b`. For every selected register, `P=1, U=0` executes `addr -= sizeof(uint32_t)` before accessing memory. The `if (!p_bit)` block performs no post-step for this instruction.
+
+   | Access order | Register | Pre-decrement arithmetic | Running address | Word destination with #524 |
+   |---|---|---|---|---|
+   | 1 | PC | `0x2100b − 4` | `0x21007` | `0x21004` |
+   | 2 | r1 | `0x21007 − 4` | `0x21003` | `0x21000` |
+
+   The slow call receives `addr & 0xfffffffc`; the fast path achieves the same alignment through `p32[(addr & 0xfff) >> 2]`. Thus **`0x21007` is the first unmasked effective address, not the address passed to the edited call.** See [pre-step and fast path](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c:1871) and [edited call and post-step](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c:1910).
+
+   Your geometry holds: applying `~1`, `~2`, `~3`, and `~7` to `0x21007` yields `0x21006`, `0x21005`, `0x21004`, and `0x21000`, respectively.
+
+4. **The model stores `CODE + 8 + 12 = CODE + 20 = 0x00008014`.**
+
+   The probe defines `CODE = 0x00008000` and writes instruction word `i` at `CODE + 4*i`. Therefore the third word is at `CODE + 8 = 0x00008008`. See [CODE](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/arm_bdt_probe.py:38) and [program placement](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/arm_bdt_probe.py:99).
+
+   Immediately before calling `arm_push()`, `bdt_store` synchronizes `cpu->pc` to the executing instruction using its instruction-call index within the current page. Consequently, at the PC-value assignment:
+
+   ```text
+   cpu->pc = CODE + 8 = 0x00008008
+   value   = cpu->pc + 12 = 0x00008014
+   ```
+
+   See [PC synchronization](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c:1983). The assignment explicitly uses **+12**. Its preceding comment says `NOTE/TODO: 8 vs 12 on some ARMs`. **The two permitted files do not settle whether +12 is architecturally correct for the configured CPU.** Assert it as the model’s behavior. See [PC value and TODO](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c:1867).
+
+5. **After successful completion, r0 is `0x00021003`.**
+
+   Two selected registers decrement the running address by eight bytes. With `W=1`, the final `*np = addr` writes that unmasked value to r0:
+
+   ```text
+   r0 = 0x2100b − 8 = 0x21003
+   ```
+
+   The access mask never changes `addr`. A failed slow store returns before writeback, so successful completion is the qualification. See [failure return and writeback](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c:1910).
+
+**There is no PC-list rejection in `arm_push()`.** Its S-bit handling selects banked values only for certain registers through r14; afterward, the PC case unconditionally replaces `value` with `cpu->pc + 12`. This instruction has `S=0` anyway. The decoder’s PC rejection concerns **PC as the base register**; `Rn=0` does not trigger it. See [S-bit handling](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c:1848) and [base-register rejection](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c:4840).
+
+Two limits prevent claiming proven cold-path coverage from this reading:
+
+- Inside the helper, PC reaches the edited call when `host_store[0x21] == NULL`. Otherwise it takes the fast branch.
+- Before the helper, the decoder can substitute an optimized handler under its host/guest-endianness and `show_trace_tree` conditions. The opcode tables are external. The probe passes `-T`, but its option semantics and cache initialization are outside the permitted files. **These two files do not settle unconditional cold-path reachability.** See [optimized dispatch](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c:4791) and [probe invocation](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/arm_bdt_probe.py:49).
+
+For the proposed row, **reusing the existing STM setup’s `r1 = 0x11223344`**, the concrete expected observations are:
+
+```text
+word at 0x21000 = 0x11223344
+word at 0x21004 = 0x00008014
+r0             = 0x00021003
+```
+
+The lower word contains r1 because r1 is the second store. Read all three explicitly after execution and before closing the session:
+
+```python
+w0 = s.read_mem32(PAGE_STM)
+w1 = s.read_mem32(PAGE_STM + 4)
+r0_after = s.get_reg("r0")
+ok = (w0, w1, r0_after) == (0x11223344, CODE + 20, 0x00021003)
+```
+
+This probe uses explicit reads, with no shared register-readback tuple. Its [memory reader](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/arm_bdt_probe.py:123) dumps from the aligned base and selects the requested word; its [register reader](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/arm_bdt_probe.py:118) issues `print r0` for the writeback observation.

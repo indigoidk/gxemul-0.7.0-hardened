@@ -1,0 +1,97 @@
+**VERDICT: NEITHER FIX IS WRONG.** Both `#524` and `#525` are correct, minimal, and correctly placed for the defects they target. The "NOT RATIFIED" findings describe *adjacent, separate* defects (or, in two cases, misreadings of the architecture), not errors in the fixes. `#524` finding 6 in particular does not survive arithmetic: the mask cannot move the access to a different page. I have labelled each claim READ (taken from the packet) or REASONED (my derivation from it). I have read no files.
+
+---
+
+## Round `#524` — `arm_pop` / `arm_push`
+
+**READ:** Spec quote (ignore A[1:0]) is correct for ARMv5/v7 AArch32 word LDM/STM.
+**READ:** `arm_writeback_probe.py` scores the entry-mask mutant 22/22 — it is blind to it. Full rung scores the entry-mask mutant 20/25, killed by the writeback rows.
+**REASONED:** `addr & 0xfffffffc` is the right mask form. `addr` is `uint32_t`; clearing A[1:0] matches AArch32 word granularity. A 64-bit variant would need `~3UL`, but BDT here is 32-bit ARM.
+**REASONED:** Masking at the call site (not function entry) is correct because the brief explicitly states the `w_bit` writeback line and Mode 4 Rn writeback consume the unmasked running value. Moving the mask earlier would silently change those side effects — exactly what the 20/25 score says.
+
+**Finding 6 ("mask can change which page is touched") — REASONED, partially correct as a literal claim, INVERTED as a defect.**
+The old call's `memcpy` starts at the *unmasked* `addr` and reads four bytes. If `addr` is within 3 bytes of a page boundary, the OLD memcpy reads into the *next* page (e.g. `addr = 0x1ffd` → bytes `0x1ffd…0x2000`, the last byte lies in page P+1). The CORRECTED call reads from `addr & ~3`, which stays inside page P. So yes, the old call *can* touch a page the corrected call doesn't. **But that is exactly the architecturally correct behaviour.** The spec says ignore A[1:0] for the *access*; the access is the aligned word in page P. If P+1 is unmapped, the OLD build spuriously faults on bytes it was never entitled to read; the CORRECTED build does the right thing. This is a *benefit* of the fix, not a defect, and "mask after translation" is not an alternative — translation requires the upper VA bits, which the mask does not touch. So: masking the VIRTUAL address before translation is the only correct place; masking after translation is equivalent for small pages and impossible for boundary-crossing VAs.
+
+**Findings 4 & 5 (Device memory, ARMv6 UNPREDICTABLE) — REASONED disclosure, not defect.**
+For Device / Strongly Ordered regions, A2-42 marks the access UNPREDICTABLE on ARMv6+. The fix does not introduce a regression for an aligned access (still a strict no-op across 32-bit wraparound). For an unaligned Device access, the spec *permits any behaviour*, so any deterministic choice is in-spec. The fix isn't wrong for those callers — it's just one specific choice within UNPREDICTABLE territory. The right framing is "filed separately", which the packet does.
+
+**Finding 1 (`netbsd_memset` / `netbsd_memcpy`) — READ.** These are *separate* bugs in different handlers that don't reach the fixed helpers. Not a defect of *this* fix.
+
+**Finding 2 (Thumb POP PC interworking) — READ.** Different site, different bug. Not this round.
+
+**Finding 3 (helpers reach device dispatch) — REASONED disclosure, not defect.** Same logic as 4/5: aligned accesses unchanged; unaligned-to-device is already UNPREDICTABLE territory.
+
+---
+
+## Round `#525` — `wdc_altstatus`
+
+**READ:** Pre-fix, `relative_addr` is consulted only inside the `else if (writeflag != MEM_READ)` arm. The READ path's offset 1 (0x3f7, Drive Address) is therefore never decoded and returns the ALT-STATUS byte.
+**READ:** `#494` closed the WRITE half; this closes the READ half. {READ, WRITE} × {offset 0, offset 1} — three of four cells were closed; this is the fourth.
+**REASONED:** Returning 0 for a register the chip does not define is the conventional choice (zero is the dominant "no register here" idiom; 0xff is also seen on real open-bus hardware; last-written is impractical because writes are declined, not stored; faulting would crash any guest that probes the hole). The fix is structurally correct: braces balance 6/6, the unbraced `else` binds to the inner `if`, the common tail writes whatever `odata` is left in.
+
+**Finding 2 (interrupt acknowledgement absent) — REASONED, probably benign.**
+On real 82C37-style hardware, reading ALT-STATUS is non-destructive and does *not* clear the interrupt. The main handler does the deassert; this one is correctly a pure read. The packet flags that the full call chain wasn't verified — that's a fair disclosure, but doesn't refute the fix.
+
+**Finding 3 (overclaimed comments) — READ.** The packet says the comments were narrowed already; no remaining defect.
+
+**Finding 4 (`DEV_FDC_LENGTH = 6`, so 0x3f7 is *not* currently registered by FDC) — READ.** The collision is prospective. Not a defect of this fix.
+
+**Finding 5 (detector coverage / selector audit unverified) — READ.** Open work, doesn't refute.
+
+---
+
+## Answers to the questions
+
+**Q1. Is either fix WRONG?** No. Mechanism for `#524`: the fix changes exactly one operand at exactly the call site where the byte-splicing happens; writeback consumers of the unmasked running value are untouched, which the in-tree writeback probe was specifically built to detect (and the entry-mask mutant is the one it correctly fails to catch). Mechanism for `#525`: the structural change is a brace-restructure plus one assignment, and the unbraced `else` binds correctly. Neither fix introduces a regression for any input the architecture specifies a result for.
+
+**Q2. Is `addr & 0xfffffffc` the right form, and is the pre-translation placement right?** Yes on both counts (REASONED above). The mask is the AArch32 word-alignment mask. Masking the VIRTUAL address before translation is the only correct place — masking after translation is equivalent for small pages (because PA low 12 bits = VA low 12 bits) and impossible for a VA that straddles a page boundary (translation needs the upper bits). The "change which page is touched" framing in finding 6 is technically true for *the unmasked→masked delta at the page boundary*, but it is the architecturally correct delta; the old build was touching a page it shouldn't have.
+
+**Q3. Does finding 4/5 make the fix wrong?** No. ARMv6 Device/Strongly Ordered multiword unaligned is UNPREDICTABLE, so any deterministic behaviour is in-spec. The fix is not wrong for those callers; it is a disclosure that those callers should be reviewed separately (and finding 1's `netbsd_*` handlers are the bigger unfixed exposure).
+
+**Q4. `#525`: is returning 0 right? Rank alternatives.**
+1. **Return 0** (chosen) — clean, matches the dominant convention; the guest can probe without trapping.
+2. **Return 0xff** — also common (open-bus). Slightly worse for guests that test for "register absent" by `== 0`.
+3. **Return last written** — impractical: writes are declined, there is no last-written state to recall.
+4. **Leave buffer untouched** — risky: depends on caller initialisation; can alias whatever happened to be in `data[0]`.
+5. **Fault** — too aggressive: any guest probing 0x3f7 would crash on hardware that simply does not implement the Drive Address register.
+
+So returning 0 is the best of five reasonable choices; none of the alternatives is strictly more correct.
+
+**Q5. THE QUESTION I MOST WANT ATTACKED — what selector could either repair's effect be conditioned on that the detector never varies?**
+
+The shape of the answer is: a *broad* condition that is true for every row the detector exercises but false for some real-world input class.
+
+- **`#524`** — condition the mask on something external to the LDM/STM semantics the rows probe:
+  - `if ((cpu->pc >> 24) == 0x10)` — only mask when PC is in a specific high region; rows likely run with PC in user-RAM or kernel-RAM, not whatever 0x10** maps to. Always-true in the detector, false in production for most code.
+  - `if (cpu->privilege == USR)` — rows likely run USR; supervisor-mode handlers (the kernel stack push on entry) are exactly the unfixed exposure.
+  - `if (cpu->mmu_itlb_hit)` — rows likely hit a warm TLB; cold-TLB on first SVC would escape.
+  - `if (--mask_budget > 0) addr &= 0xfffffffc;` with a static counter initialised high — detector runs ≤ 25 invocations; production runs millions. Apply N-1 times in the detector, then never again.
+
+- **`#525`** — condition `odata = 0` on something the rows don't vary:
+  - `if (odata == 0x51 || odata == 0x58)` — the rows probe exactly these two power-on/armed values (per the packet). Any guest that boots further (post-DRQ, post-error) returns odata unchanged. **This is the single most dangerous one**: the rows are demonstrably value-narrow.
+  - `if (writeflag == MEM_READ && relative_addr != 0 && (cpu->pc & 0xfff) == 0)` — combines the offset-1 condition the detector does exercise with a PC-tile condition it never varies.
+  - `if (some_global_debug_flag)` — release builds would never mask.
+
+The general principle that the prior sibling round exposed: **tile/PC/segment/CPU-mode selectors on `cpu->pc` are the worst offenders**, because the rows typically vary only one axis (the access pattern), not the surrounding architectural state.
+
+**Q6. One commit or two?** Two commits. Different files, different devices, different defects, different review audiences. Bundling buys nothing and risks one being reverted without the other.
+
+**Q7. Smallest edit that breaks either fix and still passes its detector?**
+
+- **`#524`:** Replace `& 0xfffffffc` with `& 0xfffffffd` (clears only A[1], not A[0]). The detector's aligned rows are no-ops either way, and the unaligned rows likely exercise addresses whose A[0] happens to be 0 in every probed case. Passes 25/25; breaks for any guest using an A[0]=1 base. Even smaller: move the mask to function entry **and** also write `*np = addr & 0xfffffffc` in the w-bit branch — the writeback probe still scores 22/22, the main detector goes back to ~25/25, but you have silently changed the contract for any future writeback consumer.
+
+- **`#525`:** `odata = (odata == 0x51 || odata == 0x58) ? 0 : odata;` — exactly the value-narrowed conditioning from Q5. Detector passes 16/16 because those are the only values it probes; every other power-state value escapes.
+
+---
+
+## What I could not settle from the packet
+
+- **The full call chain through `status_byte()` for `#525` finding 2.** Naming the single fact that would settle it: the body of `status_byte()` for `cpu_arm.c`'s WDC binding — does it touch any device-state field at all, or is it strictly a pure read of latched status? Without that source I cannot refute finding 2; I can only argue it is probably benign from the architectural convention.
+
+- **Whether `#524` finding 5 (ARMv6 Device) ever actually fires in the GXemul device tree.** The architectural claim is correct; whether any device in this tree maps its registers to ARMv6 Device memory such that an unaligned LDM/STM reaches it depends on the MMU mappings, which the packet does not inline. Single fact that would settle it: the page-table attributes for every device-mapped region in the test machines. Out of scope for this round.
+
+- **Whether `memory_rw`'s 1KB split is a hard fault boundary or just an internal-buffer convenience.** If the former, finding 6 has slightly more weight (but still inverts to a benefit of the fix, as I argued). If the latter, it's noise.
+
+- **Selector coverage audit for both detectors (finding 5 of `#524`, finding 5 of `#525`).** The packet explicitly flags this as unverified. I have no way to refute it from the packet alone; naming the audit as the missing artefact is the most useful output.
+
+No file access was attempted; no measurement was made; nothing in this response should be labelled MEASURED.

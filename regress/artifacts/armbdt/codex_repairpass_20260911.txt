@@ -1,0 +1,175 @@
+VERDICT: FLOOR BREACH FOUND; the repair correctly detects M_MASK1 but does not close the repair chain.
+CODEX_524REPAIR_20260911
+
+I read only the three specified files and wrote nothing. The additional mutant-survival findings below are **static deductions, not newly measured kill-table results**.
+
+1. **The new encodings and observation targets are correct.**
+
+   | Encoding | Decoded fields | Instruction |
+   |---|---|---|
+   | `0xe3a00802` | Immediate MOV; opcode `1101`; `S=0`; `Rd=0`; rotate field `8`; immediate `2` | `mov r0,#0x20000` |
+   | `0xe2800002` | Immediate ADD; opcode `0100`; `S=0`; `Rn=Rd=0`; rotation `0`; immediate `2` | `add r0,r0,#2` |
+   | `0xe8900002` | Block transfer; `P=0,U=1,S=0,W=0,L=1`; `Rn=0`; register list `0x0002` | `ldmia r0,{r1}` |
+   | `0xe8800002` | Same, with `L=0` | `stmia r0,{r1}` |
+   | `0xe59f0008` | Immediate word load; `P=1,U=1,B=0,W=0,L=1`; `Rn=15`; `Rd=0`; offset `8` | `ldr r0,[pc,#8]` |
+   | `0xe59f1008` | Same load, with `Rd=1` | `ldr r1,[pc,#8]` |
+
+   All have condition `1110`, AL.
+
+   The MOV immediate is `ROR32(0x00000002, 2×8) = 0x00020000`, following [DDI 0100I’s immediate-operand definition](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ddi0100i.txt:18051).
+
+   The STM literal placements also check independently:
+
+   - At `0x8000`, the first LDR reads `0x8000 + 8 + 8 = 0x8010`, containing `0x00021002`.
+   - At `0x8004`, the second LDR reads `0x8004 + 8 + 8 = 0x8014`, containing `0x11223344`.
+   - The branch at `0x800c`, `0xeafffffe`, branches to itself, preventing execution of either literal.
+
+   The PC calculation follows the manual’s [ARM PC-reading rule](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ddi0100i.txt:1624). The LDM check reads the actual destination, `r1`; the STM check reads the intended destination word at `PAGE_STM`. I found no wrong-register or misplaced-literal defect in these additions.
+
+   Architectural correctness retains the existing qualification: ignoring address bits `[1:0]` applies to the specified U-bit-zero, alignment-checking-disabled behavior. These rows do not establish alignment-fault correctness. The qualification is explicit in the manual’s [LDM rule](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ddi0100i.txt:7952) and [STM rule](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ddi0100i.txt:14113).
+
+2. **Both predicted mutant values follow independently.**
+
+   For LDM, the seeded bytes are:
+
+   ```text
+   Offset:  0  1  2  3  4  5  6  7
+   Byte:   44 33 22 11 88 77 66 55
+   ```
+
+   `0x20002 & 0xfffffffe = 0x20002`. Reading four bytes therefore gives:
+
+   ```text
+   22 + (11 << 8) + (88 << 16) + (77 << 24)
+   = 0x77881122
+   ```
+
+   For STM, little-endian `0x11223344` emits `44 33 22 11`. Starting at offset two in the zeroed region produces:
+
+   ```text
+   Offset:  0  1  2  3  4  5  6  7
+   Byte:   00 00 44 33 22 11 00 00
+   ```
+
+   Thus the first word is **`0x33440000`**, and the second is `0x00001122`.
+
+   The correct mask starts either access at offset zero. Both new DATA rows therefore discriminate the measured `M_MASK1` exactly as intended. The missing second-word assertion in the new STM run does not prevent it from killing that mutant.
+
+3. **Yes: the shipped composite still has clean-sweep candidates within the requested shapes.**
+
+   The two access expressions are at lines **1704 and 1898** of [cpu_arm_instr.c](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c:1704).
+
+   **First counterexample: replace either or both access masks with `0xfffffff8`, meaning `& ~7`.**
+
+   Every first transfer whose data the instrument asserts has one of these effective addresses:
+
+   | Transfer | Raw effective address | Correct `& ~3` | Incorrect `& ~7` |
+   |---|---:|---:|---:|
+   | Liveness LDM | `0x10000` | `0x10000` | `0x10000` |
+   | ARM LDM `+1` | `0x20001` | `0x20000` | `0x20000` |
+   | ARM LDM `+2` | `0x20002` | `0x20000` | `0x20000` |
+   | ARM STM `+1` | `0x21001` | `0x21000` | `0x21000` |
+   | ARM STM `+2` | `0x21002` | `0x21000` | `0x21000` |
+   | Thumb POP | `0x22001` | `0x22000` | `0x22000` |
+   | Thumb PUSH, after decrement | `0x23001` | `0x23000` | `0x23000` |
+
+   The warm path retains its existing word indexing. The access-mask change leaves running-address arithmetic and all five writeback expectations unchanged.
+
+   The two-register LDM does not rescue the detector: it asserts **only `r0` writeback**, not either loaded register. Any second-transfer data difference is unobserved; that transfer might also use the warmed fast path. See the [two-register writeback run](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/armbdt/agy_armbdt_witness_20260911.py:253).
+
+   Consequently, load-only `~7`, store-only `~7`, and both-site `~7` each have a static clean-sweep argument across all 29 assertions.
+
+   Strictly, `~7` is **over-alignment**, not a weakening of the alignment requirement. It is nevertheless the incorrect-mask shape your question explicitly includes.
+
+   **Second counterexample: a genuine conditional weakening at the store site.**
+
+   Keep the load site correct. At the store site, use:
+
+   ```text
+   p_bit true:   mask 0xfffffffe
+   p_bit false:  mask 0xfffffffc
+   ```
+
+   This uses an existing predicate evaluated before the edited call.
+
+   - Every ARM STM run, including the new `+2` run, uses IA: `p_bit=0`. It receives the correct mask.
+   - Thumb PUSH uses DB: `p_bit=1`. It receives the weakened mask, but its effective address is only `PAGE_TPUSH+1`.
+   - At that address, `~1` and `~3` agree.
+   - Writeback remains unmasked and unchanged.
+
+   **All 29 assertions therefore miss this conditional weakening.** A Thumb PUSH transfer with effective residue `+2` would distinguish it.
+
+   This is the symmetric coverage failure: ARM STM now exercises residue two, while the same store helper’s pre-indexed/decrementing cell still exercises only residue one.
+
+4. **The `+3` reasoning is valid within a fixed cell, but its blanket wording overstates the result.**
+
+   For a fixed AND mask, if both `B+1` and `B+2` map correctly to the same word-aligned `B`, the mask necessarily clears both low bits. `B+3` then also maps to `B`. Thus a `+3` row adds no discrimination among those fixed masks **at the same predicate setting and word location**.
+
+   In particular:
+
+   - `~1` is distinguished by `+2`.
+   - `~2` is distinguished by `+1`.
+   - `~7` remains invisible at `+3` in the first word of an eight-byte block. It needs an access with address bit two set.
+
+   However, a **Thumb PUSH `+3`** row would kill the conditional store mutant above, while every currently shipped `+1` and `+2` row misses it. A Thumb PUSH `+2` row would kill it equally well.
+
+   Therefore:
+
+   - I found no **residue-three-specific** obligation among the fixed-mask and existing-predicate shapes examined.
+   - Omitting `+3` from the two new ARM IA cases is defensible.
+   - “A `+3` row buys no enumerated mutant” is too broad as a statement about the composite. The missing distinction is the **predicate/residue combination**; residue three is one possible witness, not a necessary one.
+
+   I am not counting an invented predicate that explicitly singles out residue three as an existing dominating predicate.
+
+5. **The new PATH rows are fixture checks, but vacuous as mutation discriminators within this floor.**
+
+   Each `in_tlb_*_p2` value is captured **before `run_prog`**. The later PATH assertion tests that saved Boolean. A mutation confined to the block-transfer helper’s mask, operands, or predicates cannot retroactively change it.
+
+   No completed PATH assertion changes value under the enumerated helper-local mutations. Even changing which branch the transfer executes would not change the earlier snapshot.
+
+   These rows can detect some fixture failures, such as the target page already being resident before execution. They do **not** directly establish that the later `memory_rw` call executed. The getter also returns “not resident” when it finds no matching output, so absence and a failed/unrecognized dump are not distinguished. See [get_tlb_page](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/armbdt/agy_armbdt_witness_20260911.py:130).
+
+   Under your stated criterion, both added PATH rows are vacuous as floor-mutant channels. Their fixture value should not be counted as additional mutation discrimination.
+
+6. **Exactly two failures is tight for the intended site coverage, but thin across the enumerated cells.**
+
+   A small correction to the minimum claim: **one DATA row suffices to kill the single measured mutant that weakens both sites simultaneously**. Two site-specific DATA rows are needed to distinguish both independent single-site weakenings.
+
+   The observed two failures are therefore sensible. Their count alone is not evidence of a deficient repair.
+
+   The deficiency is demonstrated by variants that both new rows miss:
+
+   - `~7` at either site;
+   - the store-side `~1` mask restricted to `p_bit=1`;
+   - analogous restrictions to existing unexercised predicate settings.
+
+   Adding duplicate observations of ARM IA at the same addresses would not address those gaps. Useful additional observations must distinguish the affected address bit or predicate setting.
+
+7. **The denominator here is explicitly nonzero.**
+
+   I inspected all 29 assertions: **2 controls, 6 PATH, 12 DATA, 4 divergence checks, and 5 writeback checks**.
+
+   Their transfer coverage is:
+
+   | Caller/cell | Residues and fixtures | Observed state |
+   |---|---|---|
+   | ARM LDM IA, `W=0`, `{r1}` | Aligned warm control; `+1` cold/warm; `+2` cold | `r1` |
+   | ARM LDM IA, `W=1`, `{r1}` | `+1`, cold-seeded | Base writeback only |
+   | ARM LDM IA, `W=1`, `{r1,r2}` | `+1`, cold-seeded | Base writeback only |
+   | ARM STM IA, `W=0`, `{r1}` | `+1` cold/warm; `+2` cold | Memory |
+   | ARM STM IA, `W=1`, `{r1}` | `+1`, cold-seeded | Base writeback only |
+   | Thumb POP, `{r1}` | `+1` cold/warm | Data; cold writeback |
+   | Thumb PUSH, `{r1}` | Effective `+1` cold/warm | Memory; cold writeback |
+
+   All these instruction cases use `S=0`; the asserted data uses the little-endian fixture.
+
+   The concrete shape sweep comprised:
+
+   - **Constant masks:** all 25 ordered load/store pairs drawn from `{~3, ~1, ~2, unmasked, ~7}`. Excluding the correct pair leaves **24 mutants: 21 distinguished and 3 statically surviving**.
+   - **Conditional weakening:** `~1` selected by existing `p_bit`, `!u_bit`, or `s_bit`, otherwise `~3`, separately at each site. These **six variants survive the shipped observations**: the relevant settings are either absent or tested only where the two masks agree.
+   - **Address-operand substitution:** original base `*np` substituted for running `addr`, retaining the correct mask, at load-only, store-only, and both sites. The **load-only variant survives**: first IA loads use the original base, and later loaded data is unasserted. Store-containing variants are distinguished by Thumb PUSH’s predecrement.
+   - **Entry masking:** inspected against the five writeback assertions; your supplied measurement reports its rejection.
+
+   I walked both complete helpers, including loop bounds, register-selection gates, page selection, preceding address formation, and state handling. I inspected downstream writeback for observability; it is not a predicate dominating the access.
+
+   **There is no zero to certify.** The repair closes the uniform `M_MASK1` escape, while the composite still misses incorrect masks at bit-two-set word addresses and conditional weakenings in the uncovered predicate/residue cells.

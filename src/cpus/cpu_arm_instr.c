@@ -1650,7 +1650,70 @@ void arm_pop(struct cpu* cpu, uint32_t* np, int p_bit, int u_bit, int s_bit, int
 				    ((value & 0xff0000) >> 8) |
 				    ((value & 0xff000000) >> 24);
 		} else {
-			if (!cpu->memory_rw(cpu, cpu->mem, addr, data,
+			/*  #524 (armbdt): MASK THE ACCESS, NEVER THE RUNNING
+			    `addr'.
+
+			    *** THE ARCHITECTURAL RULE IS QUALIFIED AND AN EARLIER
+			    DRAFT OF THIS COMMENT STATED IT FLAT.  ddi0100i.txt
+			    :7954-7959: "For CP15_reg1_Ubit == 0, the Load
+			    Multiple instructions ignore the least significant two
+			    bits of the address.  If an implementation includes a
+			    System Control coprocessor, an address with bits[1:0]
+			    != 0b00 causes an alignment exception IF ALIGNMENT
+			    CHECKING IS ENABLED.  For CP15_reg1_Ubit == 1, all
+			    non-word aligned accesses cause an alignment fault."
+			    So ignore-the-low-two-bits holds for Ubit == 0 with
+			    checking DISABLED, and not otherwise. ***
+
+			    AND THE FORK IS INTERNALLY INCONSISTENT ABOUT THAT
+			    TODAY, which is why the qualification is not academic:
+			    cpu_arm.c:129 SETS ARM_CONTROL_ALIGN in the default
+			    control register and :474 only PRINTS it ("enabled");
+			    nothing consults it.  So the model announces alignment
+			    checking and enforces none.  Modelling the fault is a
+			    SEPARATE round -- this fix makes the two paths agree
+			    with each other and with the Ubit == 0 / checking-off
+			    reading the fork already implements on its fast path.
+
+			    THE DEFECT: the FAST path gets the truncation free from
+			    `(addr & 0xfff) >> 2', and this slow path passed the
+			    RAW addr to memory_rw, whose `offset = paddr &
+			    offset_mask' is PAGE-granularity and whose transfer is
+			    a raw memcpy -- so an unaligned base SPLICED BYTES
+			    ACROSS A WORD BOUNDARY and the same instruction
+			    returned different bytes according to host page-cache
+			    warmth, a condition invisible to the guest.
+
+			    The mask must NOT move to the function entry: `*np =
+			    addr' at the writeback below uses the unmasked running
+			    value, and Mode 4 writeback derives from unmasked Rn.
+			    MEASURED: an entry-mask mutant scores 27/32 on the
+			    SHIPPED 32-row detector, killed by the five WB_UNAL rows
+			    alone (killtable_20260911e/probe_M_ENTRY.raw).
+			    *** THIS READ "20/25 ... (probe_M_ENTRY.raw)" UNTIL
+			    2026-09-11.  BOTH HALVES WERE WRONG. ***  20/25 is TABLE
+			    1's figure, carried forward while the detector grew
+			    25 -> 29 -> 32 rows; and the bare filename names FIVE
+			    different files with FIVE different scores -- 20/25,
+			    20/25, 24/29, 26/32, 27/32 -- so the citation could not
+			    be resolved even in principle.  That is the
+			    durable-path rule failing by AMBIGUITY rather than by
+			    overwrite, which is a shape this project had not
+			    recorded.  A score claim names the DIRECTORY, not just
+			    the file.  Found by the Opus pass-C measuring seat.
+			    It is additionally invisible to
+			    the pre-existing arm_writeback_probe.py BY
+			    CONSTRUCTION -- that probe scopes itself to the
+			    single-register path, a different generator, and never
+			    reaches these helpers.  *** THAT SECOND CLAIM IS NOT A
+			    MEASUREMENT AND AN EARLIER DRAFT WROTE IT AS ONE: the
+			    figure "22/22" appears in no .raw and in no SCORES.txt,
+			    only in briefs and seat answers.  Stated here by
+			    construction, which is what the evidence supports. ***
+			    The generated fast dispatch already separates access
+			    from writeback the same way (generate_arm_multi.c,
+			    `addr &= 0xffc').  */
+			if (!cpu->memory_rw(cpu, cpu->mem, addr & 0xfffffffc, data,
 			    sizeof(data), MEM_READ, CACHE_DATA)) {
 				/*  load failed  */
 				return;
@@ -1839,7 +1902,12 @@ void arm_push(struct cpu* cpu, uint32_t* np, int p_bit, int u_bit, int s_bit, in
 				data[2] = value >> 8;
 				data[3] = value;
 			}
-			if (!cpu->memory_rw(cpu, cpu->mem, addr, data,
+			/*  #524 (armbdt): the STM side of the same defect; see
+			    the LDM site in arm_pop() for the full reasoning.
+			    STM(1) p.A4-190 carries the identical
+			    ignore-the-low-two-bits rule, and `*np = addr' below
+			    must keep seeing the UNMASKED running value.  */
+			if (!cpu->memory_rw(cpu, cpu->mem, addr & 0xfffffffc, data,
 			    sizeof(data), MEM_WRITE, CACHE_DATA)) {
 				/*  store failed  */
 				return;

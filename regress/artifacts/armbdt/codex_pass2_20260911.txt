@@ -1,0 +1,116 @@
+VERDICT: NOT RATIFIED — the two masks are locally correct, but other BDT implementations still use unrounded addresses, and the architectural justification needs qualification.
+CODEX_524PASS2_20260911
+
+I read only the four permitted files, directly from the working tree. Both edited calls are present. I did not inspect HEAD, list directories, write files, or run the detector.
+
+1. **The mask and literal are correct for `uint32_t addr`.**
+
+   `addr & 0xfffffffc` clears exactly bits 1 and 0 and preserves every other address bit. On ordinary implementations with 32-bit `int`, the unsuffixed hexadecimal literal has type `unsigned int`: its value does not fit signed `int`. The result remains unsigned and widens correctly when passed to `memory_rw`’s `uint64_t vaddr` parameter. A wider host pointer does not change this.
+
+   `addr & ~(uint32_t)3` produces the same result. On ordinary two’s-complement implementations, `addr & ~3` does too: with 32-bit `int`, `~3` is signed `-4`, which the usual arithmetic conversions convert to the appropriate unsigned mask. The explicitly unsigned form avoids relying on signed-complement details.
+
+   **This file’s idiom is mixed.** [SWP’s data-address rounding](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c:1497) uses `addr &= ~(uint32_t)3`; the same `arm_pop` helper uses `& 0xfffffffc` when assigning PC at line 1774. The closest *data-access* precedent favors `~(uint32_t)3`, but your literal is not a correctness defect.
+
+   Also, the generator’s `0xffc` is a **page-offset mask**, applied after selecting the page. It would be wrong to substitute that narrower mask into the `memory_rw` argument.
+
+   **The architectural qualification is substantive:** [LDM(1), A4-37](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ddi0100i.txt:7952) conditions rounding on CP15 register 1’s `U == 0`, and still requires an alignment exception when alignment checking is enabled. `U == 1` requires an alignment fault for unaligned LDM. [STM(1), A4-190](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ddi0100i.txt:14113) says the same. This CP15 `U` is distinct from the instruction’s increment/decrement `u_bit`.
+
+   Neither helper checks those controls before accessing memory. Consequently, the mask implements the non-faulting word-rounding behavior; it does not establish correctness in alignment-fault modes. The permitted files do not establish whether those modes are rejected elsewhere or whether masking suppresses a check in the ARM translation callback.
+
+2. **There are exactly two direct `memory_rw` sites in these generic BDT helpers—but they are not the only implementations of BDT accesses.**
+
+   The edited sites are [LDM at 1673](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c:1673) and [STM at 1867](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c:1867). The ARM BDT wrappers call these helpers. The generator emits aligned host-word accesses and falls back to those wrappers.
+
+   Your count of seven remaining calls is correct. Their classification needs correction:
+
+   | Remaining calls in `cpu_arm_instr.c` | Operation | Address handling |
+   |---|---|---|
+   | 1498, 1521 | SWP read/write | `addr` already word-rounded at 1497 |
+   | 1540, 1547 | SWPB read/write | One-byte accesses; low address bits select the byte |
+   | 1982 | LDREX | Unaligned addresses rejected before the call |
+   | 2042 | STREX | Unaligned addresses rejected before the call |
+   | 4009 | Instruction fetch | Address aligned before fetching |
+
+   These are not seven ordinary generated single-register load/store calls. Nevertheless, none is a missed generic LDM/STM call.
+
+   **The broader completeness claim fails at two other locations:**
+
+   - [The `netbsd_memset` combined handler](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c:2093) replaces STM instructions but performs `memset(page + (addr & 0xfff), 0, 128)` at line 2127. Its runtime guards check page bounds, zero source values, and page availability; they do not reject an unaligned address.
+   - [The `netbsd_memcpy` combined handler](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c:2274) replaces LDM/STM instructions but copies through raw `& 0xfff` source and destination offsets. Its register-publication reads use `& 0xffc`, so the rounded register values and the byte-copy operation themselves use different address rules.
+
+   Their [matchers](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c:3428) recognize instruction patterns without establishing address alignment. The combined bodies bypass both edited calls. The memcpy comment at line 2252 even acknowledges a pre-existing unaligned-copy divergence.
+
+   These defects predate your two hunks. They matter directly to “ONLY two sites on the block-data-transfer path”: **yes for the generic helpers’ `memory_rw` calls; no for all implementations of the BDT access rule.**
+
+3. **Thumb callers that actually enter these helpers automatically receive the access fix. Complete Thumb coverage is unverified.**
+
+   Every transferred register in either helper goes through the same aligned host-word access or the newly masked slow call. There is no Thumb-specific raw-address branch inside either transfer loop. This remains true for mixed warm/cold pages.
+
+   However, the permitted file contains comments saying the helpers are shared with Thumb; it does not contain the Thumb dispatch implementation. `cpu_arm.c` is outside your permitted set. Therefore, I cannot verify:
+
+   - The actual PUSH/POP call sites and arguments.
+   - Whether either instruction has another access path.
+   - Whether Thumb LDMIA/STMIA use these helpers.
+   - The reported absence of Thumb probes.
+
+   There is also a separate reason to avoid equating shared-helper access coverage with complete Thumb POP correctness: [the helper’s PC handling](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c:1772) clears both low PC bits and calls the ARM pointer-update routine. [Thumb POP’s specification](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ddi0100i.txt:24256) preserves the halfword address and specifies interworking behavior. An external Thumb caller might compensate; I cannot establish that here. This handling is unchanged by your patch.
+
+4. **For an aligned initial base, the two argument changes are strict no-ops.**
+
+   All running-address adjustments are multiples of four. Thus an initially aligned `addr` stays aligned, including across 32-bit wraparound. At every edited call, the old and new address arguments are identical. That includes aligned MMIO accesses.
+
+   **The helpers are not restricted to RAM**, however. An unaligned address can reach device dispatch, and rounding can change a device-relative offset or even the selected mapping near a device boundary. Device dispatch uses the translated address before the RAM-copy path. See [device selection and offset calculation](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:480).
+
+   The raw low bits also remain meaningful for writeback and alignment-fault detection. Moreover, [A2-42](C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/ddi0100i.txt:3256) specifies additional **UNPREDICTABLE** behavior for ARMv6 unaligned multiword accesses to Device or Strongly Ordered memory. The unconditional claim that all callers simply ignore those bits is too broad.
+
+5. **Yes: the old call can touch—and fault on—a page that the corrected call never accesses.**
+
+   First, your edit rounds the **virtual address**, before translation. [The current `memory_rw` wrapper](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c:183) splits translated accesses at **1 KB** boundaries using `MRW_SPLIT_MASK == 0x3ff`. Its RAM worker separately uses a 4 KB offset mask for ARM and performs byte copies.
+
+   For a word-aligned physical address, the worker’s arithmetic is appropriate: the maximum 4 KB page offset is `0xffc`, and adding four reaches the page’s exclusive end without crossing it. The same reasoning applies to the wrapper’s 1 KB granule.
+
+   Consider a four-byte access starting at `B - 1`, where `B` is a page boundary:
+
+   | Version | Bytes requested | Translation behavior |
+   |---|---|---|
+   | Old | `B - 1` through `B + 2` | Can access both mappings |
+   | New | `B - 4` through `B - 1` | Accesses only the preceding mapping |
+
+   If the preceding mapping succeeds and the next mapping faults, the old slow call can fail while the new call succeeds. Old stores can also perform a partial first-chunk write before the second chunk fails.
+
+   **That is an observable fault change, but it is part of correcting the erroneous byte range** in the non-faulting word-rounding regime. Preserving that second-page access would preserve the defect.
+
+   A multiple-register instruction can still legitimately reach another page on a subsequent aligned word. Rounding does not remove that access.
+
+   Translation callbacks, write-watchpoints, and device callbacks also receive the rounded address. I cannot certify unchanged ARM fault-address-register contents: the callback implementing ARM translation and fault reporting is outside the permitted files.
+
+6. **The entry-mask mutant tests writeback preservation; it does not null the access-rounding effect.**
+
+   It still rounds every access correctly. Its defect is that writeback loses the original low bits. It is useful, but it exercises a different invariant from “the mask remains syntactically present while its effect disappears.”
+
+   A closer clause-(d) mutant is an **identity-mask mutant**: retain the calls and their failure checks, but use `addr & 0xffffffff` at both edited sites. For this `uint32_t`, the alignment effect disappears completely. Its address arguments reproduce the original behavior. Any score prediction would still be an inference from your reported HEAD result, not a new measurement.
+
+   The smaller partial mutants have these detection requirements:
+
+   | Mutant | Required failing observation |
+   |---|---|
+   | Leave only LDM fixed | Cold, unaligned STM memory-result assertion |
+   | Leave only STM fixed | Cold, unaligned LDM loaded-value assertion |
+   | Use `& 0xfffffffe` | Cold access with address low bits `10` or `11`, checking distinguishing data |
+
+   Half-masking correctly handles low bits `00` and `01`; it leaves `10` and `11` at offset two. It preserves raw writeback. Thus aligned rows, writeback-only rows, and unaligned rows using only offset `+1` can all miss it. Warm helper accesses also bypass the mutated slow call.
+
+   **I cannot name an actual shipped row that turns red.** Its names, addresses, fixtures, and assertions are absent from the permitted files. Your reported `21/25` results say the one-site mutants were caught, but do not identify their failing rows or establish coverage of half-masking.
+
+7. **The comment’s core explanation is supported; its scope and measurement claims need different treatment.**
+
+   The source supports access-only rounding, preservation of the running address for writeback, and the generator precedent. [The generator](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/generate_arm_multi.c:117) masks its page offset while emitting writeback separately from the original register value.
+
+   Two explanatory statements should be tightened:
+
+   - Qualify the architectural rule with the alignment-control conditions discussed above.
+   - Describe the **RAM worker** as copying bytes without word rounding. `memory_rw` also splits transfers and dispatches devices; it is not universally one raw `memcpy`.
+
+   **I could not verify the `20/25` or `22/22` scores.** Their appearance in the comment confirms what the comment claims, not that the measurements occurred. I also could not verify “killed by the writeback rows alone,” the correct-build comparison, any other reported score, or the detector’s path witnesses.
+
+   “This round’s detector” is not a durable artifact identifier. Those numbers should either reference a specific retained detector, mutant definition, and result record, or be omitted from the product comment. Nothing in the permitted evidence proves the numbers false; nothing independently verifies them.

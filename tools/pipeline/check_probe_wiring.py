@@ -185,12 +185,37 @@ MANIFEST = {
     #  rather than preserved evidence.  Five mutants measured dead in
     #  killtable_20260911e: mask hoisted to entry (27/32), weakened to & ~1
     #  (29/32), over-aligned to & ~7 (30/32), made conditional on p_bit (31/32),
-    #  and both helpers returning (8/32).  The gate pins its denominator to a
-    #  LITERAL 32 because the row set grew 25 -> 29 -> 32 as those were closed.
-    #  arm_bdt_probe.py -- ENTRY DEFERRED TO `#524`, WHICH COMMITS THE PROBE.
-    #  The MANIFEST is checked against TRACKED files, so naming a probe this
-    #  commit does not carry makes it a GHOST.  Re-add with the probe:
-    #    "arm_bdt_probe.py": (CLASS_DETECTOR, "#524 ARM/Thumb block transfer across a cold host page"),
+    #  and both helpers returning (8/32).  *** THAT WAS THE 32-ROW STATE.  The chain ran to
+    #  TABLE 7 (killtable_20260911h_floor/): every row at residue 7, ten floor cells over
+    #  {pop, push} x {IA, IB, DA, DB} + push x s + push x pc, ALL killing; BASE 43/43. ***
+    #  The gate pins its denominator to a LITERAL 43 (grew 25 -> 29 -> 32 -> 39 -> 43).
+    "arm_bdt_probe.py": (CLASS_DETECTOR, "#524 ARM/Thumb block transfer across a cold host page -- 43 rows, table 7 BASE 43/43"),
+    #  #524's as-run instruments, preserved: the agy witness, one mutator per table, the
+    #  two frozen probes the closing tables ran, and pass C's drivers.  None owes a gate.
+    "artifacts/armbdt/agy_armbdt_witness_20260911.py":
+        (CLASS_RESEARCH, "#524 the rung-3 cold-page witness as agy built it -- the as-run record"),
+    "artifacts/armbdt/killtable_20260911/mutate_armbdt.py":
+        (CLASS_TOOL, "#524 kill-table mutator, table 20260911(1)"),
+    "artifacts/armbdt/killtable_20260911b/mutate_armbdt.py":
+        (CLASS_TOOL, "#524 kill-table mutator, table 20260911b"),
+    "artifacts/armbdt/killtable_20260911c/mutate_armbdt.py":
+        (CLASS_TOOL, "#524 kill-table mutator, table 20260911c"),
+    "artifacts/armbdt/killtable_20260911d/mutate_armbdt.py":
+        (CLASS_TOOL, "#524 kill-table mutator, table 20260911d"),
+    "artifacts/armbdt/killtable_20260911e/mutate_armbdt.py":
+        (CLASS_TOOL, "#524 kill-table mutator, table 20260911e"),
+    "artifacts/armbdt/killtable_20260911f_opus/drivers/ldmdb_control.py":
+        (CLASS_RESEARCH, "#524 pass C non-equivalence control: LDMDB r0!,{r1} run for real under the escaping mutants"),
+    "artifacts/armbdt/killtable_20260911f_opus/drivers/mutate_opus.py":
+        (CLASS_TOOL, "#524 pass C mutator (the opus5 measuring seat)"),
+    "artifacts/armbdt/killtable_20260911g_closure/arm_bdt_probe.FROZEN.py":
+        (CLASS_RESEARCH, "#524 the frozen 39-row probe for the table-g class closure"),
+    "artifacts/armbdt/killtable_20260911g_closure/mutate524g.py":
+        (CLASS_TOOL, "#524 table-g mutator"),
+    "artifacts/armbdt/killtable_20260911h_floor/arm_bdt_probe.FROZEN.py":
+        (CLASS_RESEARCH, "#524 the frozen 43-row probe for TABLE 7, the floor closure"),
+    "artifacts/armbdt/killtable_20260911h_floor/mutate524g.py":
+        (CLASS_TOOL, "#524 table-7 mutator"),
     "arm_bfx_width_probe.py":     (CLASS_WITNESS,  "armbfxwidth32: ubfx/sbfx build their mask with `1 << width' where width reaches 32 -- HEAD 9/11"),
     "arm_endian_probe.py":         (CLASS_DETECTOR, "ARM LDR rotation / endianness"),
     "arm_flags_probe.py":          (CLASS_DETECTOR, "ARM flag semantics"),

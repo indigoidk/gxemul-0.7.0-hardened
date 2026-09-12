@@ -1,3 +1,348 @@
+# `#524` (armbdt): an ARM block transfer through a cold host page spliced bytes across a word boundary — the same instruction at the same unaligned base returned different bytes according to host page-cache warmth
+
+**THE DEFECT.** `arm_pop()` (LDM) and `arm_push()` (STM) each hold one running
+`uint32_t addr = *np` and branch on host page residency **per register**:
+
+* **FAST path** (page resident): `p32[(addr & 0xfff) >> 2]` — the `>> 2` truncates the low two bits.
+* **SLOW path** (cold page): passed the **RAW, UNMASKED `addr`** to `memory_rw`, whose
+  `offset = paddr & offset_mask` is page-granular — **not word-rounded** — and whose transfer is a
+  raw `memcpy`.
+
+**So an unaligned base spliced bytes across an architectural word boundary, and which bytes a guest
+got depended on whether the host page happened to be resident — a condition invisible to the guest
+architecture.** Guest data corruption, on a defect that had sat with no witness for three weeks.
+
+**THE FIX.** `addr & 0xfffffffc` at the two slow-path `memory_rw` call sites. **Never at function
+entry:** `if (w_bit) *np = addr;` uses the unmasked running value and Mode 4 writeback derives from
+unmasked `Rn`. The code generator already separates the two the same way, emitting `addr &= 0xffc;`.
+
+## The architectural warrant is QUALIFIED, and the round says so at the site
+
+`ddi0100i.txt:7954-7959`: *"For `CP15_reg1_Ubit == 0`, the Load Multiple instructions ignore the
+least significant two bits of the address. If an implementation includes a System Control
+coprocessor, an address with bits[1:0] != 0b00 causes an alignment exception **if alignment checking
+is enabled**. For `CP15_reg1_Ubit == 1`, all non-word aligned accesses cause an alignment fault."*
+
+**An earlier draft of the comment stated this flat, and the row's own 2026-08-29 record already said
+"the record must NOT say unqualifiedly" — so the comment broke an obligation the row had already
+written down.** Corrected in place.
+
+**And the fork is internally inconsistent about it today**, which is why the qualification is not
+academic: `cpu_arm.c:129` **SETS** `ARM_CONTROL_ALIGN` in the default control register, `:474` only
+**prints** it, and nothing consults it. The model announces alignment checking and enforces none.
+Modelling the fault is a separate round; this fix makes the two paths agree with each other and with
+the `Ubit == 0` / checking-off reading the fork already implements on its fast path.
+
+## Witness — rung 3, and the instrument had to earn its own cold page
+
+Cold debugger on the **unmodified in-tree `testarm`**, pty-driven, no `device_add`, no custom
+machine. The conditioning is the point: **`put b` writes byte-wise with `CACHE_NONE|NO_EXCEPTIONS`,
+populating RAM without updating the translation tables — the COLD seed; `put w` writes words with
+`CACHE_DATA` and WARMS the page.** Before every transfer the probe runs `tlbdump 0,r` to confirm the
+target is genuinely absent on a cold run and resident on a warm one — **without that, the core
+comparison establishes nothing about which path each run took.**
+
+## The clause-(d) floor breach, measured and closed
+
+**Table 2 measured `M_MASK1` — the fix present, its mask weakened `0xfffffffc` → `0xfffffffe` — at
+`25/25`. A TOTAL ESCAPE**, and the canonical clause-(d) form because *the fix IS the mask* (this
+project's own `#461 m_align1`, `& 3` → `& 1`).
+
+**Cause: every unaligned base the probe drove was `+1`, and `x+1 & ~1 == x+1 & ~3`.**
+
+It was predicted by arithmetic in adjudication and **built anyway**, because this project's rule is
+that *"it would sweep the table" is a MEASUREMENT, never an inference.* The prediction was right;
+a round that had accepted it unmeasured would have shipped a floor claim it never tested.
+
+**CLOSED with four rows — `+2` bases for LDM and STM plus their PATH controls.** Table 3:
+
+| leg | score | fails |
+|---|---|---|
+| `BASE` | **29/29** | none |
+| `HEAD` | 19/29 | 10, including both new rows |
+| **`M_MASK1`** | **27/29** | **exactly 2 — only the rows written for it** |
+| `M_ENTRY` | 24/29 | 5 — **all five writeback rows, nothing else** |
+| `M_POP_ONLY` / `M_PUSH_ONLY` | 24/29 | 5 each — perfect mirror images |
+| `M_NULL_MEDIUM` | 8/29 | 21, including both controls |
+| `RESTORED` | 19/29 | = `HEAD` |
+
+**Every leg dies on a distinct, semantically correct set.** Predicted observables under `M_MASK1`
+were written into `PRETABLE2.out` before the run and both hit exactly: `0x77881122` and
+`0x33440000`.
+
+**`+3` is deliberately NOT rowed:** `~1` dies at `+2`, `~2` already dies at `+1`, so a `+3` row
+kills no ENUMERATED mutant. **Rows are owed per enumerated mutant, never per reachable value.**
+Residue 3 is disclosed in the contract.
+
+> **`M_ENTRY` is why the mask is at the access and not at entry, and it is not a style argument.**
+> The entry-mask mutant scores 24/29 here, killed by the writeback rows — **and it is invisible BY
+> CONSTRUCTION to the pre-existing `arm_writeback_probe.py`, which scopes itself to the
+> single-register path and never reaches these helpers.** *An earlier draft of the comment gave a
+> figure for that probe as "Measured"; the figure appears in no `.raw` and no `SCORES.txt`, only in
+> briefs and seat answers. Restated by construction, with the word removed.*
+
+## Scope: the round closes the generic helpers, NOT the BDT access rule
+
+**Two combined-instruction handlers replace LDM/STM outright and never reach the fixed helpers.**
+`netbsd_memset` does `memset(page + (addr & 0xfff), 0, 128)` — raw page offset, no rounding, and its
+guards check page bounds and source values but **never reject an unaligned address**. `netbsd_memcpy`
+copies through raw `& 0xfff` offsets **while its register-publication reads use `& 0xffc`** — one
+handler, two address rules, and its own comment already acknowledges *"the overlap and
+unaligned-copy divergences"*.
+
+**Pre-existing, so FILED (`armbdtcombined`) rather than repaired here — but the round may not claim
+to have closed the class.**
+
+## Disclosed under clause (e)
+
+* **Residue 3** (see above).
+* **The helpers are not restricted to RAM.** An unaligned address can reach device dispatch, and
+  rounding can change a device-relative offset near a device boundary.
+* **`ddi0100i.txt:3256` (A2-42)** specifies additional UNPREDICTABLE behaviour for ARMv6 unaligned
+  multiword accesses to Device or Strongly Ordered memory, so "all callers ignore those bits" would
+  be too broad.
+* **The edit rounds the VIRTUAL address, before translation**, and `memory_rw` splits translated
+  accesses at 1 KB — so the old call could touch, and fault on, a page the corrected call never
+  accesses. Intended, and stated rather than discovered later.
+* **A separate, untouched Thumb issue:** the helper's PC handling clears both low PC bits while
+  Thumb POP's specification preserves the halfword address and specifies interworking.
+
+## Records corrections and a defect in the round's own apparatus
+
+**The first kill-table driver took its baseline from the MUTABLE working tree** while its own comment
+claimed it verified the commit: `git log --oneline -1` gated on nothing, and the HEAD leg had **no
+presence pin at all** — the one leg that would silently mismeasure. Its restoration check was also
+self-referential, comparing the clone against the same tree its backup came from, which is the
+carrier's named failure mode. **Filed as `killtablebaseline`; a repaired driver was written as a NEW
+file — editing the preserved one would falsify the record of what ran — and negative-controlled
+seven ways.**
+
+**Table 1's numbers then reproduced EXACTLY on the repaired driver, 7 of 7 legs.** So that table's
+*measurement* was sound and what the defect cost was *reproducibility*.
+
+*`PRETABLE.out` predicted `M_NULL_MEDIUM 4/25` where the measurement was `6/25`. The two extra
+survivors are `ARM_STM_COLD_CLOBBER` and `THUMB_PUSH_COLD_CLOBBER` — "neighbour not clobbered" rows
+are IDENTITY rows under a medium that writes nothing, so the block's claim that every row observes
+block transfer was false for those two.*
+
+## Seats
+
+Panel `regress/artifacts/armbdt/panel_20260911/`: six of seven scriptable seats answered; the kimi
+CLI was WALLED and its `kimi-k3:cloud` substitute answered, so that seat was COVERED. **agy
+deliberately not fired** — it BUILT this round's witness and kill table. **Opus 5 deliberately not
+fired.** **Fable 5 adjudicated last, after every other seat**, and its ruling reclassified this from
+grok's L3 to a clause-(d) breach, which is what forced the measurement above.
+
+**DISCHARGED — a WRONG RECORD, corrected 2026-09-11.**  It read *"STILL OWED: the probe is under
+`regress/artifacts/`, not `regress/` proper — so 'shipped a detector with the fix' is not yet true;
+promote it and pin its result in `gate_arm.sh`."*  **All three were done.**
+`regress/arm_bdt_probe.py` is staged in `regress/` proper; `gate_arm.sh:672` runs it; `:674` guards
+the parse; `:687-688` pin `bdt rows run 32` and `bdt rows correct`.  *Same class as the identical
+stale sentence in the `#525` block above: two rounds wrote the same OWED note and neither re-read it
+after discharging it.*
+
+
+## *** THE CLAUSE-(d) WORK DID NOT END AT TABLE 3.  IT TOOK THREE MORE PASSES, AN INSTRUMENT
+## REPAIR, AND A SEVEN-ROW CLASS CLOSURE -- AND THIS BLOCK RECORDED NONE OF IT UNTIL NOW. ***
+
+Found by the pass-C measuring seat auditing this round's own record: within this block,
+`M_MASK7`, `M_PBITCOND`, `read_mem32`, `32/32`, `BIT2` and `39` each appeared **zero** times.
+The narrative stopped at *"CLOSED with four rows ... Table 3: BASE 29/29"* while the shipped
+detector is 39 rows from table 6.  **A reader would not learn that a `p_bit`-conditioned mutant
+was ever considered, and so would not know a `p_bit` cell exists to be left open.**  That is the
+gap this section closes.
+
+### PASS B -- the first repair did not close the chain
+
+`M_MASK1` (`& ~1`) was closed with two rows.  The repair-chain pass then found **`M_MASK7`**
+(`& ~7`, over-alignment) and **`M_PBITCOND`** also sweeping: every base the instrument drove
+-- `0x10000`, `0x2000{1,2}`, `0x2100{1,2}` -- lies in the FIRST word of its 8-byte block, where
+`~3` and `~7` agree.  A base with **address bit 2 set** separates them, which is what the
+`*_COLD_DATA_BIT2` rows do.
+
+### AN INSTRUMENT DEFECT, FOUND BECAUSE A **BASE** ROW WENT RED
+
+Table 4 reported `BASE 31/32` -- the FIX failing `ARM_STM_COLD_DATA_BIT2`.  A red BASE row blocks
+the round, so it was diagnosed rather than explained away, and **the arithmetic would not close**:
+two readings of one mechanism that could not both be true.  Instrumenting settled it in one run.
+
+`read_mem32()` searched for the dump line labelled `(addr & ~0xF)` -- **which matches whether or
+not the dump START is aligned** -- then indexed `line[12:48].split()` by `(addr & 0xF) // 4`.  An
+unaligned start BLANK-PADS the leading groups, `.split()` collapses the padding, and every index
+shifts by the number of omitted groups.  **8 of 10 legs changed value when it was repaired**,
+including the HEAD leg.  The store had been correct all along; the READ was wrong.  Filed as
+`probereadalign`; the repair is to dump from `(addr & ~0xF)` for 16 bytes.
+
+### PASS C -- FIVE clause-(d) mutants, each a TOTAL ESCAPE, measured not read
+
+`regress/artifacts/armbdt/killtable_20260911f_opus/SCORES.txt`, eight legs built in a scratch
+clone against the 32-row instrument:
+
+    M_POPP_NONE   p_bit ? addr : (addr & ~3)                32/32
+    M_POPP_WEAK   addr & (p_bit ? ~1 : ~3)                  32/32
+    M_POPW_WEAK   addr & (w_bit ? ~1 : ~3)                  32/32
+    M_SBIT_NONE   s_bit ? addr : (addr & ~3)   BOTH sites   32/32
+    M_NPMASK      (*np) & ~3  -- the mask on the WRONG operand  32/32
+
+`M_POPP_NONE` is **clause (b)** -- the removed defect reinstated VERBATIM -- restricted to
+`p_bit == 1`.  A NON-EQUIVALENCE CONTROL ran `LDMDB r0!,{r1}` (`0xe9300002`) for real
+(`ldmdb_*.out`): BASE `r1 = 0x55667788`; `M_POPP_NONE` and `M_POPW_WEAK` `r1 = 0x00005566` -- the
+FIX-ABSENT value -- and `M_NPMASK` `r1 = 0x00000000`, with the writeback `r0 = 0x20006` CORRECT on
+all four.  **Three escaping mutants corrupt a guest register on an instruction the detector never
+issues**, so "the target is dead" is excluded rather than assumed.  Not a corner case: none of
+these encodings is in the 256-entry `cpu_arm_multi.txt` fast list, and `:4810-4811` disables the
+optimised path entirely for a BIG-ENDIAN guest, so on BE **every** block transfer goes through
+these helpers.
+
+**THE CLASS:** every `p/u/s/w` partition was discharged on the STORE side and undischarged on the
+LOAD side, because the only leg varying any of those bits is Thumb PUSH -- which calls
+`arm_push()`.  `arm_pop()` was driven at exactly ONE `(p,u,s)` point, `(0,1,0)`.  **And it breaches
+this round's OWN enumeration:** `PRETABLE3.out` declares `{site} x {residue} x {word position} x
+{p_bit}` and says *"close every cell in ONE diff"* -- it then honoured `{site}` for `M_MASK7`
+(adding BOTH the LDM and STM `BIT2` rows) and did NOT honour it for `p_bit`, adding only
+`THUMB_PUSH_COLD_DATA_P2`.  **Three cells of a two-by-two.**
+
+*Missable for a structural reason: the load-side cell could not be closed by copying the push row.
+The instrument's only `p_bit=1` caller is Thumb PUSH, so closing `{load} x {p_bit=1}` needs a NEW
+INSTRUCTION WORD, not a new base.*
+
+### THE CLASS CLOSURE -- seven rows in ONE diff, and the measured table that closes it
+
+Per the rule that two consecutive passes finding one class owe the full enumeration in one diff:
+`ARM_LDM_IB_P2` (`0xe9900002`), `ARM_LDM_DA_P2` (`0xe8100002`), `ARM_LDM_DB_P2` (`0xe9300002`),
+`ARM_LDM_S_P2` (`0xe8d00002`), and a three-assertion `LDMIA r0!,{r1,r2}` leg (`0xe8b00006`) at
+residue 2.  **That last is one session carrying three assertions, closing `w_bit` x residue-2 AND
+register-list-length together.**  It must sit at residue 2: at the pre-existing `WB_UNAL2` base the
+low bits are `01`, where `~1` and `~3` AGREE, so that row is structurally blind to a
+`w_bit`-conditioned weakening.
+
+`regress/artifacts/armbdt/killtable_20260911g_closure/SCORES.txt` -- SIX mutants built, SIX dead:
+
+    BASE          39/39  CONTROL=OK  FAILING none
+    M_POPP_NONE   37/39  ARM_LDM_IB_P2, ARM_LDM_DB_P2
+    M_POPP_WEAK   37/39  ARM_LDM_IB_P2, ARM_LDM_DB_P2
+    M_NPMASK      37/39  ARM_LDM_IB_P2, ARM_LDM_DB_P2
+    M_POPW_WEAK   37/39  ARM_LDM_DB_P2, ARM_LDM_MULTI_P2_R1
+    M_SBIT_NONE   38/39  ARM_LDM_S_P2
+    M_POPU_WEAK   37/39  ARM_LDM_DA_P2, ARM_LDM_DB_P2
+    RESTORE       cmp-vs-SEC CLEAN, binary FRESH, SENTINEL CLEARED
+
+**`M_POPU_WEAK` was ENUMERATED by the pass-C seat and explicitly NOT BUILT** (*"derived (same
+legs)"*).  Building it discharged `ARM_LDM_DA_P2`, which otherwise killed nothing -- a condemning
+prediction costs one build if wrong, and this one turned a row with no measured kill into a row
+with two.
+
+### DISCLOSED UNDER CLAUSE (e), not claimed
+
+* `ARM_LDM_MULTI_P2_R2` and `ARM_LDM_MULTI_P2_WB` carry **no measured kill**.  *** THE REASON
+  GIVEN HERE WAS WRONG -- it read "secondary assertions on a leg whose primary assertion already
+  kills", which implies they COULD kill and happened not to.  They CANNOT. ***  R2 is a
+  **FAST-path** observation: the first cold access warms the page, so r2 never reaches the edited
+  line.  WB observes `*np`, which no mask mutant touches.  Measured twice and independently
+  suspected by a reading seat that called the table *"internally impossible as stated"*.  Filed as
+  the class `multiaccesswarms`: **a multi-register leg yields exactly ONE cold observation; more
+  assertions mean more SESSIONS, not more registers.**
+* *** THIS READ "The STORE side of the {p,u,s} product is not newly rowed: Thumb PUSH already
+  varies p and u there."  THAT IS A WRONG RECORD AND IT IS WHY THE STORE GAP SURVIVED A WHOLE
+  PASS. ***  **`p` and `u` are ONE SELECTOR with FOUR values -- the addressing mode**, not two
+  independent bits: the code tests them NESTED (`if (p_bit) { if (u_bit)`), the architecture names
+  the pair as one field, and `generate_arm_multi.c:120` switches on `p*2+u`.  Thumb PUSH is
+  hardcoded **DB** (`cpu_arm.c:1670`) and every STM row was **IA** -- so the sentence stated TWO
+  MODES OF FOUR as an axis, leaving **IB and DA with no row at all on the store side, at any
+  residue or strength**.  The dropped-qualifier class, and the qualifier was load-bearing.
+  Closed by `ARM_STM_IB_R7`, `ARM_STM_DA_R7` and `ARM_STM_S_R7`.
+* *** THIS LINE SAID a joint `(p_bit && u_bit)` conditioning and `addr & (w_bit ? ~7 : ~3)` were
+  "enumerated and still unbuilt".  PASS D BUILT BOTH, AS CALIBRATION KILLS, AND BOTH DIED:
+  `M_PU_WEAK_BOTH` 38/39 (`ARM_LDM_IB_P2`) and `M_W_OVER7_BOTH` 38/39 (`ARM_LDM_DB_P2`). ***
+  The disclosure is retired, not carried.
+* Big-endian is disclosed rather than rowed, with the `:4810-4811` caveat above.
+* **`ARM_LDM_S_P2` IS A SOLE CARRIER (L3):** it is the only killer of `M_SBIT_NONE`, so the whole
+  `s_bit` axis rests on one row.  `ARM_LDM_DB_P2` kills five mutants but **no mutant depends on it
+  alone** -- appearing in many FAILING lists is a CORRELATE of being load-bearing; being the only
+  killer is the property that matters, and the two rows are opposite on it.
+
+## PASS D -- FIVE MORE ESCAPES AT 39/39, MEASURED; THEN THE FLOOR WAS RE-DERIVED AND CLOSED
+
+The table-g closure above did NOT close the chain.  Pass D's kimi seat (the CLI, back from a
+day-long wall) BUILT AND MEASURED five further clause-(d) mutants at 39/39 in its own clone, with
+calibration kills proving its sweep could see kills (`_scratchpad/panel_20260911_193940/kimi.txt`):
+
+    E1 s_bit ? addr : (addr & ~3)             PUSH only    39/39
+    E2 addr & ((s_bit && w_bit) ? ~1 : ~3)    POP          39/39
+    E3 addr & (s_bit ? ~7 : ~3)               POP          39/39
+    E4 addr & (p_bit ? ~7 : ~3)               PUSH only    39/39
+    E5 addr & ((p&&u&&w) ? ~1 : ~3)           BOTH         39/39
+
+It also found `ARM_LDM_MULTI_P2_R2` VACUOUS BY CONSTRUCTION: the first cold access WARMS the page,
+so the second register's access takes the FAST path and cannot see a slow-path mutant.  A reading
+seat (glm) had independently called the table *"internally impossible as stated"* from the same
+anomaly without knowing why.  Filed as the class `multiaccesswarms`: **a multi-register leg yields
+exactly ONE cold observation; more assertions mean more SESSIONS, not more registers.**
+
+### THE FLOOR, RE-DERIVED BY THE ADJUDICATING SEAT -- and my proposed bound was wrong in both halves
+
+I had graded single-axis cells as floor and joints as debt, on the premise that "all four bits are
+body-tested" -- true of the ENCLOSING FUNCTIONS, which is what my grep found.  **The joint-cell
+rule's "body" is the GUARDED body -- the cold `else` branch -- which tests only the `memory_rw`
+return and `cpu->byte_order`.**  So p/u/s/w are SELECTORS, and the join rule is ASYMMETRIC: p,u
+flow into `addr` (floor, both sites); s flows into `value` -> `data` on PUSH only; w reaches
+nothing either body reads ((e)); `i == ARM_PC` flows into `value = cpu->pc + 12` on PUSH.
+
+**And p/u are ONE SELECTOR WITH FOUR VALUES -- the addressing mode**: the code tests them nested,
+the architecture names the pair as one field, and `generate_arm_multi.c:120` switches on `p*2+u`.
+So the store side was missing TWO WHOLE MODES: STM rows were all IA and Thumb PUSH is hardcoded
+DB, leaving **IB and DA with no row at all**.
+
+    FLOOR = {cold first access} x {pop, push} x {IA, IB, DA, DB}
+          + {push} x {s = 1}  +  {push} x {pc in list}             = TEN CELLS
+
+**Regraded under that floor the four passes found 1, 1, 3, 1 breaches -- not 1, 2, 5, 5.  The
+rising count was DEBT GRADED AS FLOOR.**  The real growth was geometric: every repair rowed at the
+residue of the mutant it had just found, so each pass discovered the next strength.
+
+### THE GEOMETRIC FIX: EVERY ROW AT RESIDUE 7 (mod 8)
+
+`0x_0007` has bits 0, 1 and 2 all set, so ONE access discriminates `~1`, `~2`, `~3` AND `~7`.  It
+also closed a gap the table-g closure had SHIPPED: all three of its mode rows accessed `0x20006`
+(bit 0 CLEAR), so `addr & (p_bit ? 0xfffffffd : 0xfffffffc)` escaped BY ARITHMETIC -- the round's
+residue-3 disclosure went false the moment pass C admitted mode-conditioning.
+
+The three pop mode rows were RE-BASED to residue 7; `ARM_LDM_S_P2` became `LDMIA r0!,{r1}^` at
+`0x20007` (over-coverage, since s is (e) on pop, but free, and it closes the (s&&w) joint); and
+four store rows were added: `ARM_STM_IB_R7`, `ARM_STM_DA_R7`, `ARM_STM_S_R7`, and
+`ARM_STM_PC_DB_R7` -- `STMDB r0!,{r1,pc}` at `0x2100b`.  **In DB the loop starts at r15, so the PC
+is accessed FIRST and its access is the cold one, at `0x21007`: one row closes both {push x pc}
+and {push x DB}'s bit-2-set residue (E4).**  Its expectation (`CODE + 20`, the model's `pc + 12`)
+was derived from source by a seat and cross-checked, not by me; the designing seat said plainly it
+could not establish cold-path reachability from source, and **the row is green on BASE, so the
+cold path was taken** -- the measurement answered what the reading could not.
+
+### TABLE 7 (`regress/artifacts/armbdt/killtable_20260911h_floor/SCORES.txt`) -- THE CHAIN CLOSES
+
+`PRETABLE.out` written BEFORE the table, naming all ten cells with row, residue and mutant.
+
+    BASE           43/43   CONTROL=OK   FAILING none
+    M_PUSHS_NONE   42/43   ARM_STM_S_R7          <- E1, the measured L2
+    M_POPP_MASK2   41/43   ARM_LDM_IB_P2, ARM_LDM_DB_P2    <- the ~2 gap
+    M_PUSH_IB_WEAK 42/43   ARM_STM_IB_R7         M_PUSH_DA_WEAK 42/43  ARM_STM_DA_R7
+    M_PUSHPC_NONE  42/43   ARM_STM_PC_DB_R7      M_PUSHP_OVER7  41/43  ARM_STM_IB_R7, ARM_STM_PC_DB_R7
+    + all six table-g mutants, still dead
+    D_PUW_WEAK     43/43   FAILING none          <- ESCAPED, as DISCLOSED in the contract
+    D_POPSW_WEAK   42/43   ARM_LDM_S_P2          <- DIED, better than disclosed
+    RESTORE        cmp-vs-SEC CLEAN, binary FRESH, SENTINEL CLEARED
+
+**The first table in this round whose rows came from the HELPERS' INPUTS rather than from the
+mutant list -- and the first in which every floor cell kills and the only escape is one the
+contract named in advance.**  The gate pin moved 39 -> 43 by hand, with its reason.
+
+**GATE GREEN AT THE 43 PIN** -- `gate_arm.sh` run whole on 2026-09-12, unpiped: `bdt control`
+OK, `bdt rows run` 43, `bdt rows correct` 43, 0 FAIL, **gate 14 PASS (910 checks)**, log
+preserved at `regress/artifacts/armbdt/killtable_20260911h_floor/gate_arm_43rows.log`.  The
+shipped probe is byte-identical to that table's frozen copy (`cmp` run in the gate driver).
+The gate's own comment was corrected AFTER the run (comment-only: "25 -> 29 -> 32" named three
+of the five row counts).  The `arm_bdt_probe.py` MANIFEST entry, deferred while the probe was
+untracked, lands in this commit with the probe and its twelve preserved instruments.
+
 # `#525` (wdcaltdigin): the alt-status handler never decoded its offset ON THE READ SIDE — a read of the Drive Address register returned the ALT-STATUS byte, and `#494` closed the write half of the same `if` and left this one open
 
 **THE DEFECT.** `DEVICE_ACCESS(wdc_altstatus)` computes `odata = status_byte(d, cpu)` unconditionally

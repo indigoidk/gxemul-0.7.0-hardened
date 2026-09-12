@@ -1,0 +1,33 @@
+VERDICT: Neither fix is wrong as a local correction, but #524 is incomplete (combined handlers bypass it) and #525’s offset-1 read value is not established from the packet; do not ratify without addressing those.
+
+1. **Is either fix WRONG?**  
+   - #524: Not wrong. The mask `addr & 0xfffffffc` correctly implements the architectural “ignore low two bits” for LDM/STM. It is a no-op for aligned bases and fixes the cache-warmth inconsistency.  
+   - #525: Not wrong as a local change, but the choice of `0` for offset-1 reads is not proven correct. The packet does not establish what a real Drive Address register returns, and the first pass notes the floppy controller does not currently register `0x3f7` (READ: finding 4). Returning `0` is a defensible open-bus value, but it is an assumption, not a verified fact.
+
+2. **#524: form and place of mask**  
+   - `addr & 0xfffffffc` is the right form for 32-bit word alignment (READ: DDI0100I says ignore low two bits).  
+   - Masking the **virtual** address before translation is correct. The architectural address is the aligned virtual address; translation should be applied to that. Masking after translation would align the physical address, which is conceptually wrong and could diverge if the MMU ever does not preserve low bits (REASONED). Finding 6 (old call could touch a page the corrected call never accesses) is a consequence of fixing the address, not a defect of the fix.
+
+3. **#524: device dispatch and ARMv6 Device memory**  
+   - This is a **disclosure**, not a wrongness. For normal RAM the fix is correct. For Device or Strongly Ordered memory, ARMv6 declares unaligned multiword accesses UNPREDICTABLE, so any behavior (including aligning) is permitted. The fix does not make a defined case incorrect; it only changes an undefined case. If the emulator aims to model specific device behavior for unaligned accesses, additional handling is needed, but that is outside the scope of this fix.
+
+4. **#525: returning 0 vs alternatives**  
+   Ranking from best to worst (REASONED, based on typical emulator practice and the packet’s note that no device currently owns offset 1):  
+   1. **Return 0** – deterministic, common “no device” value, avoids falsely setting disk-change bits.  
+   2. **Return 0xff** – also deterministic, often used for open bus, but may falsely indicate all bits set.  
+   3. **Leave buffer untouched** – nondeterministic, can leak stale data, worst for reproducibility.  
+   4. **Fault** – too harsh; the region is registered, so a fault would surprise guests that probe the register.  
+   5. **Return last written value** – not meaningful because writes to offset 1 are declined (READ: fix description), so there is no last written value.
+
+5. **Selector that could hide a mutant**  
+   A plausible conditioning not varied by the inlined rows:  
+   - For #524: gate the mask on `if (cpu->mem->page_size == 4096)` (or any constant property of the test memory map). All 25 rows likely use the same page size, so the mutant passes, but real systems with different page sizes would break.  
+   - For #525: gate `odata = 0` on `if (d->unit == 0)` (or `cpu->model == PC`). The 16 rows probably all use the primary controller, so the mutant passes, but a secondary controller would still return the status byte.  
+   These are one-line conditions that a plausible edit could introduce and the detector would never see.
+
+6. **One commit or two?**  
+   **Two commits.** They are independent files, devices, and defects. The only commonality is thematic (“handler ignored part of its address”), which is not a technical dependency. Separate commits allow clean bisection and independent revert.
+
+7. **Smallest edit that breaks either fix and still passes its detector**  
+   - #524: add a condition that is always true in the test environment but false elsewhere, e.g., `if (cpu->mem->page_size == 4096) addr &= ~3;`. The detector uses one page size, so all rows pass; a different page size breaks the fix.  
+   - #525: add `if (d->unit == 0) odata = 0;` inside the offset-1 read branch. If all detector rows use unit 0, it passes; a unit 1 read would still return the status byte.

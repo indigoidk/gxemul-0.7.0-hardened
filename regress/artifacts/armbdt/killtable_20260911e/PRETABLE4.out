@@ -1,0 +1,57 @@
+PRE-TABLE BLOCK -- #524 armbdt, TABLE 5
+=======================================
+SEPARATE FILE, not an append.
+
+*** THIS TABLE ADDS NO ROWS AND NO MUTANTS.  IT IS A RE-MEASUREMENT AFTER A
+DEFECT WAS FOUND IN THE INSTRUMENT ITSELF. ***
+
+WHAT WENT WRONG.  Table 4 reported BASE 31/32 -- the FIX failing one row,
+ARM_STM_COLD_DATA_BIT2.  A red BASE row blocks the round, so it was
+diagnosed rather than explained away.
+
+I first tried to reason from the byte patterns and COULD NOT MAKE THE
+ARITHMETIC CLOSE: under HEAD that row implied the store ended at 0x21004
+(base 0x21001), while ARM_STM_COLD_DATA calibrates correctly at base 0x21001.
+Two readings of one mechanism that cannot both be true.
+
+SO I INSTRUMENTED INSTEAD, and the dump settled it in one run:
+
+    r0 = 0x21005                                   <- the literal loaded fine
+    0x00021000  00000000 44332211 00000000 ...     <- the store LANDED at
+                                                      0x21004, exactly as the
+                                                      mask intends
+
+THE STORE WAS CORRECT ALL ALONG.  THE READ WAS WRONG.
+
+THE INSTRUMENT DEFECT, measured directly:
+
+    dump from an ALIGNED start
+      0x00021000  00000000 44332211
+    dump from an UNALIGNED start (what read_mem32 issued)
+      0x00021000           44332211 00000000
+                  ^^^^^^^^ leading group BLANK-PADDED
+
+read_mem32() searched for the line labelled (addr & ~0xF) -- which matches in
+both cases -- then indexed `line[12:48].split()` by (addr & 0xF) // 4.  When
+the dump starts unaligned the leading groups are ABSENT and .split() collapses
+the padding, so every index shifts and parts[idx] returns a NEIGHBOURING word.
+
+    read_mem32(0x21004) -> parts == ['44332211', '00000000'], idx 1 -> 0
+
+REPAIR: dump from (addr & ~0xF) for 16 bytes, so all four groups are always
+present -- which is what the idx arithmetic already assumed.  One line.
+
+SCOPE.  This is a defect in the WITNESS, not in the emulator, and it was
+present in the probe as originally built.  It affects every read_mem32 call
+at a nonzero 16-byte offset -- i.e. the STM and Thumb PUSH clobber rows --
+so ANY previously reported value from those rows is suspect and this table
+re-measures all of them.  Grepped: no other probe in the tree shares the
+shape.
+
+WHAT MUST BE TRUE FOR #524 TO SHIP
+  BASE            CLEAN.  Anything else and the round holds.
+  M_MASK1         RED on the P2 rows
+  M_MASK7         RED on the BIT2 rows
+  M_PBITCOND      RED on THUMB_PUSH_COLD_DATA_P2
+  RESTORED        == HEAD
+Predictions only; measured values go to SCORES.txt and citations name it.

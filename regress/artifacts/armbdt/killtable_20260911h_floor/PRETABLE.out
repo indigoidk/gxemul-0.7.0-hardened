@@ -1,0 +1,143 @@
+PRE-TABLE BLOCK -- #524 armbdt, TABLE 7 (h): THE TEN-CELL FLOOR
+==============================================================
+SEPARATE FILE, not an append.  WRITTEN BEFORE TABLE 1 RUNS, so this file's own
+mtime proves the order.
+
+*** THIS IS THE FIRST TABLE IN THIS ROUND WHOSE ROW SET IS DERIVED FROM THE
+HELPERS' INPUTS RATHER THAN FROM THE MUTANT LIST, AND THAT DISTINCTION IS THE
+WHOLE REASON THE CHAIN RAN TO FOUR PASSES. ***
+
+Passes A/B/C/D each repaired at the residue of the mutant they had just found --
+2 for `~1', bit-2-set for `~7' -- so each pass necessarily discovered the next
+strength.  Pass C invoked the class-closure amendment and then executed it FROM
+THE MUTANT LIST; the probe's own comment admits it ("a base at residue 2 ...
+which is where ~1 and ~3 disagree").  The amendment says enumerate from the
+FUNCTION'S OWN INPUTS.  This block is that enumeration.
+
+--------------------------------------------------------------- THE FLOOR
+
+Adjudicated 2026-09-11 (regress/artifacts/armbdt/passD/).  The joint-cell rule's
+"body" is the GUARDED body -- the cold `else' branch -- NOT the enclosing
+function.  The guarded body of the pop edit (cpu_arm_instr.c:1652-1730) tests
+exactly two things: the memory_rw return, and cpu->byte_order.  So p/u/s/w are
+SELECTORS tested outside it, and the join rule asks whether each flows into an
+lvalue the guarded body reads or writes:
+
+    p, u  -> `addr'                                   FLOOR, both sites
+    s     -> pop: nothing (gates return_flag and the
+                  second loop's bank select, AFTER
+                  the body)                           clause (e) on pop
+             push: `value' (:1848-1865), which the
+                  body packs into `data' (:1894-1904) FLOOR on push
+    w     -> nothing at either site (`*np = addr' is
+             after the loop, :1777 / :1925)           clause (e), both sites
+    i == ARM_PC -> push: `value = cpu->pc + 12'       FLOOR on push
+
+*** AND p/u ARE ONE SELECTOR WITH FOUR VALUES, NOT TWO BITS. ***  The code tests
+them NESTED (`if (p_bit) { if (u_bit)'), the architecture names the pair as one
+field, and generate_arm_multi.c:120 switches on `p*2+u'.  So a mutant
+conditioned on any SUBSET of modes is killed by any member cell's row, and
+`(p && u)' is not a joint -- it is the cell IB.
+
+    FLOOR = {cold first access} x {pop, push} x {IA, IB, DA, DB}
+          + {push} x {s = 1}
+          + {push} x {pc in list}                         = TEN CELLS
+
+------------------------------------------- THE GEOMETRY: RESIDUE 7 (mod 8)
+
+One cold DATA row per cell, at an access address = 7 (mod 8).  0x_0007 has bits
+0, 1 AND 2 set, so ONE access discriminates `~1', `~2', `~3' AND `~7'.  No
+future strength needs a new residue, which is the property every previous repair
+lacked.
+
+*** THIS ALSO CLOSES A LIVE GAP THE PREVIOUS TABLE SHIPPED: all three pass-C
+closure rows accessed 0x20006, bit 0 CLEAR, so `addr & (p_bit ? 0xfffffffd :
+0xfffffffc)' escaped BY ARITHMETIC.  The round's residue-3 disclosure ("~2
+already dies at +1") was true of the UNCONDITIONAL form and went false the
+moment pass C admitted mode-conditioning, because every +1 row is IA. ***
+
+--------------------------------------------------- CELL -> ROW -> MUTANT
+
+cell              row(s)                      access      kills
+----------------  --------------------------  ----------  ----------------------
+pop  IA           ARM_LDM_COLD_DATA           0x20001     M_MASK1 (measured 29/39)
+                  ARM_LDM_COLD_DATA_P2        0x20002
+                  ARM_LDM_COLD_DATA_BIT2      0x20005     M_MASK15 (30/39)
+pop  IB           ARM_LDM_IB_P2               0x20007     M_POPP_*, M_NPMASK
+pop  DA           ARM_LDM_DA_P2               0x20007     M_POPU_WEAK
+pop  DB           ARM_LDM_DB_P2               0x20007     M_POPP_*, M_POPW_WEAK
+push IA           ARM_STM_COLD_DATA           0x21001
+                  ARM_STM_COLD_DATA_P2        0x21002
+                  ARM_STM_COLD_DATA_BIT2      0x21005
+push IB           ARM_STM_IB_R7      *NEW*    0x21007     M_PUSH_IB_WEAK
+push DA           ARM_STM_DA_R7      *NEW*    0x21007     M_PUSH_DA_WEAK
+push DB           THUMB_PUSH_COLD_DATA        0x23001     } bit 2 NEVER set here,
+                  THUMB_PUSH_COLD_DATA_P2     0x23002     } which is exactly E4
+push s=1          ARM_STM_S_R7       *NEW*    0x21007     M_PUSHS_NONE  <- E1, L2
+push pc-in-list   ARM_STM_PC_DB_R7   *NEW*    0x21007     M_PUSHPC_NONE  <- closes E4 too
+
+OVER-COVERAGE, kept deliberately and NOT floor: ARM_LDM_S_P2, now
+`LDMIA r0!,{r1}^' at 0x20007.  s is clause (e) on the POP side, but the row is
+free and at residue 7 it also closes the (s && w) joint (E2) and the
+s-conditioned over-alignment (E3).
+
+----------------------------------------------- THE TENTH CELL: NOW WRITTEN
+
+    STMDB r0!,{r1,pc}   = 0xe9208002   base 0x2100b     -> ARM_STM_PC_DB_R7
+
+*** ONE ROW CLOSES TWO CELLS. ***  In DB the loop runs `for (i = (u_bit ? 0 : 15); ...)`,
+so with u_bit==0 it starts at r15: PC IS ACCESSED FIRST and its access is the COLD
+one, at 0x21007 -- bit 2 SET.  So this single row closes {push x pc} AND gives
+{push x DB} the bit-2-set residue it never had, which is E4.
+
+EVERY NUMBER IN IT WAS DERIVED FROM THE SOURCE BY A SEAT, NOT BY ME, AND CROSS-CHECKED
+HERE.  The block was held OPEN in the first version of this file precisely because its
+expectation is `cpu->pc + 12` (arm_push:1868) rather than a value I could read off a
+seed -- and two rows earlier today carried expectations I derived myself, never
+measured, and then mis-diagnosed twice.
+
+    decode    0xe9208002 = STMDB r0!,{r1,pc}   cond=e P=1 U=0 S=0 W=1 L=0 Rn=0
+    accesses  0x21007 (pc, FIRST, cold) then 0x21003 (r1)
+    land at   0x21004 (pc) and 0x21000 (r1), after & ~3
+    expect    w0 = 0x11223344   w1 = CODE + 20 = 0x00008014   r0 = 0x00021003
+
+REACHABILITY, stated as the seat stated it rather than upgraded: there is NO PC-list
+rejection in arm_push() (the S-bit path banks only through r14; the PC case takes
+pc+12 unconditionally; the decoder's PC rejection at :4840 is about PC as the BASE
+register, which Rn=0 is not).  **But the two files it read do NOT settle unconditional
+cold-path reachability** -- PC reaches the edited call only when host_store[0x21] is
+NULL, and the decoder may substitute an optimised handler.  **That is what the BASE leg
+of this table measures: if ARM_STM_PC_DB_R7 is green on BASE, the path was taken.**
+
+The model's +12 is asserted as WHAT THE MODEL DOES.  The 8-vs-12 question is a separate
+TODO and this row deliberately does not arbitrate it.
+
+--------------------------------------------------------- CLAUSE (e) DISCLOSED
+
+Named rather than left blank, so an escape here is "outside the contract, as
+stated" rather than a breach:
+
+  * ALL w-conditioned forms, both sites (w reaches nothing the body reads).
+  * ALL s-conditioned forms on POP (S_P2 is over-coverage, not floor).
+  * `iw & 0x8000' on pop.
+  * SECOND AND LATER REGISTERS of one instruction -- the first cold access WARMS
+    the page, so every later access takes the fast path.  See [[multiaccesswarms]].
+    A page-crossing second access would be the only cold form; NOT owed, because
+    iteration is not an input of the mask.
+  * BYTE ORDER -- a body-tested partition, and N/A-WITH-REASON rather than blank:
+    there is no BE ARM rig; `-E testarm' is LE.  Note :4810-4811 disables the
+    optimised path entirely for a BE guest, so on BE every block transfer goes
+    through these helpers.
+  * MASK CONSTANTS agreeing with 0xfffffffc on bits 0-2 and differing above.
+  * JOINTS of any floor axis with any of the above.
+
+------------------------------------------------------------- TABLE LEGS
+
+Regression (must all still die): the six from killtable_20260911g_closure.
+New, must die:  M_PUSHS_NONE, M_POPP_MASK2, M_PUSH_IB_WEAK, M_PUSH_DA_WEAK,
+                M_PUSHPC_NONE, M_PUSHP_OVER7.
+Disclosed controls, EXPECTED TO ESCAPE (and the contract says so): the
+(s && w) and (p && u && w) forms on pop.
+
+A leg that escapes and is NOT in the disclosed list is a floor breach.  A zero
+against this ten-cell denominator closes the chain; a bare zero does not.

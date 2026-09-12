@@ -645,6 +645,92 @@ wgot=${wres%/*}; wwant=${wres#*/}
 check "writeback rows run"     "$wwant" 22
 check "writeback rows correct" "$wgot"  "$wwant"
 
+# ---------------------------------------------------------------------------
+# #524 (armbdt): block data transfer through a COLD host page.
+#
+# arm_pop()/arm_push() take a fast path when the host page is resident and a
+# slow memory_rw() path when it is not.  The fast path truncates the low two
+# address bits for free; the slow path passed the RAW address, whose transfer
+# is a page-granular memcpy -- so an unaligned base SPLICED BYTES ACROSS A WORD
+# BOUNDARY and the same instruction returned different bytes according to host
+# page-cache warmth.  Fixed by masking AT THE TWO ACCESS SITES ONLY; the mask
+# must never move to function entry, because writeback uses the unmasked
+# running address.
+#
+# THE DENOMINATOR IS PINNED TO A LITERAL BELOW, DELIBERATELY.  The probe grew
+# 25 -> 29 -> 32 -> 39 -> 43 rows across seven kill tables as clause-(d) mutants were
+# closed, and a gate that trusts the probe's own denominator cannot tell a
+# probe that lost rows from one that never had them.
+#
+# Five mutants are measured dead in regress/artifacts/armbdt/killtable_20260911e/:
+#   M_ENTRY      mask hoisted to entry      27/32  ARM_LDM_WB_UNAL1/2, ARM_STM_WB_UNAL,
+#                                                  THUMB_POP_WB_UNAL, THUMB_PUSH_WB_UNAL
+#   M_MASK1      mask weakened to & ~1      29/32  ARM_LDM_COLD_DATA_P2, ARM_STM_COLD_DATA_P2,
+#                                                  THUMB_PUSH_COLD_DATA_P2
+#   M_MASK7      mask over-aligned to & ~7  30/32  ARM_LDM_COLD_DATA_BIT2, ARM_STM_COLD_DATA_BIT2
+#   M_PBITCOND   mask conditional on p_bit  31/32  THUMB_PUSH_COLD_DATA_P2
+#   M_NULL_MEDIUM both helpers return        8/32  24 rows red; the 8 that SURVIVE are the six
+#                                                  PATH_* rows and the two *_COLD_CLOBBER rows
+#
+# THE KILLING ROWS ARE NAMED, NOT DESCRIBED, FOR TWO REASONS.  A name is checkable against
+# killtable_20260911e/probe_<mutant>.raw; a description is not.  And the earlier wording said
+# M_ENTRY was "killed by the writeback rows" -- which collided with the arm_writeback_probe.py
+# stem and made check_score_claims read 27/32 as a stale claim about THAT probe (its pin is 22).
+# A comment that makes a checker wrong is the defanging rule's own lesson: before writing a word
+# a tool matches on, ask what the tool will do with it.
+#
+# *** THE 8 SURVIVORS UNDER THE NULL MEDIUM ARE A DISCLOSED LIMIT, NOT A PASS. ***  With both
+# helpers replaced by `return;' nothing is written at all, so a row asserting a NEIGHBOUR was not
+# clobbered is satisfied trivially, and the PATH_* rows observe which host-page path was taken
+# rather than what landed.  Clause (c) is met by the 24 that do red; these 8 say why 8/32 is not 0.
+BDTLOG=$LOGDIR/gate_arm_bdt.log
+python3 arm_bdt_probe.py "$PMAX" > "$BDTLOG" 2>&1 || true
+
+if ! grep -q "ARMBDT_RESULT=" "$BDTLOG"; then
+    note "bdt probe produced no result line; last lines follow"
+    tail -5 "$BDTLOG" | sed 's/^/       /'
+    gate_skip "bdt probe did not complete"
+fi
+
+grep -E " ok$| FAIL$" "$BDTLOG" | sed 's/^/       /'
+
+bctrl=$(grep -o "ARMBDT_CONTROL=[A-Z]*" "$BDTLOG" | tail -1 | cut -d= -f2)
+check "bdt control: liveness and attribution" "${bctrl:-missing}" "OK"
+
+bres=$(grep -o "ARMBDT_RESULT=[0-9]*/[0-9]*" "$BDTLOG" | tail -1 | cut -d= -f2)
+bgot=${bres%/*}; bwant=${bres#*/}
+#  *** PIN MOVED 32 -> 39 ON 2026-09-11, DELIBERATELY, FOR THE CLASS CLOSURE. ***
+#  Pass C measured FIVE clause-(d) mutants at 32/32 -- a TOTAL ESCAPE each -- all
+#  one class: every p/u/s/w partition was discharged on the STORE side and
+#  undischarged on the LOAD side, because the only leg varying those bits was
+#  Thumb PUSH, which calls arm_push().  Seven rows close the load side; all SIX
+#  built mutants now die (killtable_20260911g_closure/SCORES.txt):
+#    BASE        39/39                     M_SBIT_NONE 38/39 -- S_P2
+#    M_POPP_NONE 37/39 -- IB_P2, DB_P2     M_POPP_WEAK 37/39 -- IB_P2, DB_P2
+#    M_NPMASK    37/39 -- IB_P2, DB_P2     M_POPW_WEAK 37/39 -- DB_P2, MULTI_P2_R1
+#    M_POPU_WEAK 37/39 -- DA_P2, DB_P2
+#  A pin that follows the probe cannot tell a probe that GAINED rows from one
+#  that LOST them, so the literal moves by hand and says why.
+#  *** PIN 39 -> 43 ON 2026-09-12: THE TEN-CELL FLOOR. ***  Table 7
+#  (killtable_20260911h_floor) is the first table in this round whose rows are
+#  enumerated from the HELPERS OWN INPUTS rather than from the mutant list --
+#  which is what the class-closure rule always said, and what pass C invoked but
+#  did not do.  Every earlier repair rowed at the residue of the mutant it had
+#  just found, so each pass discovered the next strength.
+#
+#  EVERY NEW ROW SITS AT AN ACCESS ADDRESS = 7 (mod 8): bits 0, 1 and 2 are all
+#  set, so ONE access discriminates ~1, ~2, ~3 AND ~7.  No future strength needs
+#  a new residue.
+#
+#    BASE 43/43.  All ten floor cells kill:
+#      M_PUSHS_NONE   42/43 ARM_STM_S_R7        M_POPP_MASK2  41/43 IB_P2, DB_P2
+#      M_PUSH_IB_WEAK 42/43 ARM_STM_IB_R7       M_PUSH_DA_WEAK 42/43 ARM_STM_DA_R7
+#      M_PUSHPC_NONE  42/43 ARM_STM_PC_DB_R7    M_PUSHP_OVER7 41/43 IB_R7, PC_DB_R7
+#      plus the six table-g mutants, all still dead.
+#    The ONE escape is DISCLOSED: D_PUW_WEAK 43/43, named in the contract.
+check "bdt rows run"     "$bwant" 43
+check "bdt rows correct" "$bgot"  "$bwant"
+
 # #367: PATH ATTRIBUTION IS NOW A CHECKED QUANTITY, not a comment.
 #
 # Which of the two load/store paths a row takes was asserted in prose and was

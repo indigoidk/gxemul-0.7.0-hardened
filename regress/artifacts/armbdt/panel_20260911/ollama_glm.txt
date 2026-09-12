@@ -1,0 +1,54 @@
+**VERDICT: Neither repair is WRONG as scoped — #524 is architecturally correct and its six findings are disclosures, not defects; #525's mechanism is sound but its returned constant (0 vs 0xFF) is not settleable from this packet and should be recorded as owner-ruled, not evidence-ruled; both detectors are structurally blind to guest-context conditioning, and I name a one-line edit that would pass 25/25 and one that would pass 16/16. Also: the packet's own "null medium 6/25" row is inconsistent with its "restored baseline 17/25" row under the natural reading.**
+
+Answering from this packet alone; I cannot open any tree, so every line-number, page-cite, and file claim below is READ-unverifiable and flagged where it matters.
+
+## 1. Is either fix wrong?
+
+**#524: No.** [REASONED from READ facts] Per-register masking of the *running* address reproduces the fast path's word selection exactly: base B, k-th register transfers the word at (B+4k) & ~3 in both paths, including when the list straddles a page boundary, because the fast path re-checks residency per register [READ] and the slow path masks per call [READ diff]. Writeback stays on the unmasked running value [READ], matching Rn ± 4n computed from the original base [REASONED, arch]. The six findings: #2 is a *different* defect in different code (uniform wrongness, no warm/cold split — not this fix's scope); #3 is separate; #4/#5/#6 are licensed behavior changes (Q3).
+
+**#525: No, with one soft spot.** The four-cell closure recount is consistent [READ: three cells closed by #481/#494, the fourth by this fix]. One item the first pass left "unverified" I can close on spec grounds: the missing INT acknowledge is **correct hardware behavior, not a gap** — ALTSTATUS-family reads do not clear INTRQ on real ATA; only the main STATUS read does [REASONED]. Finding 2 dissolves rather than pends. The soft spot is the constant — see Q4.
+
+## 2. Form and placement of `addr & 0xfffffffc`
+
+Form is right: for `uint32_t`, `0xfffffffc` ≡ `~3` with no C99 promotion hazard on any plausible host [REASONED]. Placement: **virtual, before translation, per-register — and masking after translation would be strictly worse, twice over.** (a) Alignment is a property of the *architectural* (virtual) address; the fast path masks virtual, so post-translation masking re-opens fast/slow divergence in physical space for any translation whose frame base isn't 4-aligned [REASONED]. (b) Translating the raw address first walks — and faults on — pages the architectural access never touches; the spurious faults finding 6 describes would then persist. Finding 6 is therefore a description of the fix being *right*: the fault that disappears is one the architecture says cannot occur.
+
+## 3. Findings 4 and 5 — wrongness or disclosure?
+
+**Disclosure.** [REASONED] The architectural access address *is* the aligned address; the pre-fix raw dispatch to devices was itself the deviation. The fast path never dispatched to devices (it indexes host memory directly), so devices never had a warm/cold divergence — only a uniform wrongness, now a uniform correctness. ARMv6's UNPREDICTABLE [READ finding 5] licenses either behavior. Residual risks that belong in the commit message: a guest that accidentally relied on raw unaligned device dispatch, and debugger watchpoints keyed on the unaligned address.
+
+## 4. #525 returning 0 — ranked
+
+[REASONED, with the packet's facts READ] Best→worst:
+1. **0xFF or 0** — deterministic and inert; which of the two is better is **not settleable from this packet**. My recollection (recalled, not sourced here — the settling fact is the ATA/AT bit table for 0x3F7): the Drive Address register presents *complemented* select lines, so 0xFF = "nothing asserted" and 0x00 = "everything asserted"; and under the prospective FDC DIR decode, bit 7 clear (=0x00) reads as *disk changed*. Under **both** standard decodes, 0x00 is the "something happened" value. If the spec table agrees, 0xFF edges out 0 — but today the risk is prospective [READ refinement 4: FDC length 6 excludes 0x3F7], so 0 is defensible.
+2. **Last-written** — fabricates a register that doesn't exist (offset-1 writes are declined, so "last written" is ill-defined anyway); deterministically lies to the guest.
+3. **Untouched** — nondeterministic guest-visible garbage; worst reproducibility. *Settling fact:* whether `memory_rw` pre-zeroes read buffers — if it does, untouched ≡ 0 and this failure mode vanishes.
+4. **Fault** — turns a read real hardware answers into a guest crash. Worst.
+
+## 5. The unvaried selector — the question I most want answered too
+
+The structural fact: both detectors are driven by **fixed, unmodified in-tree guests** [READ], so rows can only vary what those guests vary. Warmth, direction, W-bit, and site are varied [READ, inferred from the mutant table]. What is not:
+
+* **#524, my headline: memory-type conditioning — `if (target_is_ram) addr &= ~3;`.** Plausible because it is *the author's own disclosed worry* (finding 4): a maintainer spooked about device-relative offsets writes exactly this "careful" version. Structurally invisible because warmth — the detector's only lens on this repair — exists **only for RAM pages**; a device-resident row cannot show fast/slow divergence at all. The selector is collinear with the observational mechanism. This is the deepest blind spot in the packet.
+* #524, runners-up: `if (!thumb)` (finding 3 proves Thumb was in play; invisible if testarm executes no Thumb through these helpers — the packet never says it does); `if (w_bit)` (passes iff no row has an unaligned base *without* writeback — the entry-mask kill proves writeback rows exist, not that unaligned ∧ w=0 does); any address-value predicate beyond the low two bits (the guest binary fixes all base addresses — the direct analog of the sibling round's coordinate selectors).
+* **#525, my headline: readiness conditioning — add `&& (odata & 0x40)` to the guard.** [READ + REASONED] There are exactly **two** offset-1 read rows, with statuses 0x51 and 0x58; both have DRDY (bit 6) **set** and BSY (bit 7) **clear**. "Decline the read only when the drive is ready" is a plausible edit shape, passes both rows and therefore 16/16, and breaks every guest read of 0x3F7 while the drive is not ready. The detector probes a 256-value status space at **two points** — this is the sibling round's single-position lesson in miniature. Runners-up: `!(odata & 0x80)` ("only when not busy"); access-width conditioning if all 16 rows are byte accesses; machine-layout conditioning if all rows run one machine (the packet's comment history shows layouts were on the author's mind).
+
+General law for the panel: the escapes are conditions that are (i) true on every row's context and (ii) *plausible because they match the fix's own disclosed concerns*. Both rounds have exactly one such predicate available.
+
+## 6. One commit or two?
+
+**Two.** [REASONED] #524 is a semantics change for all ARM guests with licensed behavior changes (device dispatch, disappearing faults, watchpoints) that belong in its own message; #525 is a one-register decode. Independent revert and bisect: a future ARM regression must be revertable without un-fixing the WDC, and the two detectors are separate instruments. The shared "handler ignored part of its own address" theme is panel taxonomy, not code identity.
+
+## 7. Smallest edit that breaks the fix and passes its detector
+
+* **#524:** one added condition, `if (!thumb) addr &= ~3;` — passes 25/25 iff testarm runs no Thumb through the helpers (settling fact: whether any of the 25 rows executes Thumb-mode LDM/STM/POP reaching these helpers). Alternative with a different escape: `if (w_bit) addr &= ~3;` — passes iff unaligned-base and w=0 never co-occur (settling fact: the alignment × W-bit row matrix).
+* **#525:** thirteen characters — insert `&& (odata & 0x40)` into the new guard. Passes 16/16 on the packet's own two documented values; any mid-command or not-ready read of 0x3F7 returns the status byte.
+
+## Premise audit (my actual job)
+
+1. **"Null medium 6/25" is unexplained and, under the natural reading (repair deleted), contradicts "restored baseline 17/25 = HEAD" [READ, both].** Reverting the fix *is* HEAD behavior; these two rows cannot both describe reversion. Either the null medium is a different, harsher intervention the packet fails to name, or one row is wrong. Name it.
+2. **The `arm_writeback_probe.py` blindness claim is only coherent if every probe row has an aligned base** [REASONED]: any unaligned-base writeback row *must* kill the entry-mask mutant, since entry-masking changes exactly the written-back value there. That single fact settles whether "structurally blind" is accurate or mislabeled.
+3. Refinement 4 requires the FDC base to be 0x3f0, which the packet never states [READ length 6; REASONED conditional]. Standard, but unstated.
+4. The 25-row arithmetic is internally consistent: revert loses 8 rows, one-site loses 4 — two disjoint 4-row site covers [REASONED from the READ table]. No anomaly.
+5. DDI0100I p.A4-37/p.A4-190 and A2-42: the *semantic* content matches ARM as I know it [REASONED]; exact cites uncheckable from this packet.
+
+Measurements worth naming (per the operational rule, I am not running anything): add (a) a detector leg executing Thumb LDM/STM/POP through these helpers, (b) an unaligned-BDT-into-a-guest-visible-device row, and (c) for #525, offset-1 reads in at least three further controller phases plus one wide access. Those three additions close every escape I can construct from this packet.

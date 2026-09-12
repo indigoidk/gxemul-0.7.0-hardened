@@ -1,0 +1,2300 @@
+Reading additional input from stdin...
+OpenAI Codex v0.153.4
+--------
+workdir: C:\DocumentNoSnc\CC\GXEMUL
+model: gpt-6-astra
+provider: openai
+approval: never
+sandbox: read-only
+reasoning effort: max
+reasoning summaries: none
+session id: 01a0935b-5a05-76f1-981f-17396a167bb0
+--------
+user
+# `#524`: ONE ROW, and I will not write it until its expected value is derived from the source
+
+VERDICT line first, then the liveness token `CODEX_PCROW_20260911`.
+
+**ONE QUESTION: what exactly should this row assert?** I need concrete numbers, derived by reading,
+not plausibility.
+
+## WHY I AM ASKING INSTEAD OF WRITING IT
+
+Earlier today I wrote two probe rows with expectations I had *derived* rather than measured. Both
+read `0x00` when run, and I recorded each as a refutation of the DEVICE. Both were refutations of
+nothing — the rows' registers were absent from the probe's readback tuple, so they were never read.
+**An untested row with a derived expectation is how I burned two cycles**, so this one gets its
+expectation established from the source first.
+
+**Do not ratify.** Fourteen times today a pass has refuted a premise of mine, every time correctly.
+If my reading of the access order below is wrong, that is the answer I want.
+
+## READ ONLY THESE FILES. DO NOT LIST OR SEARCH DIRECTORIES.
+
+```
+C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\src\cpus\cpu_arm_instr.c
+C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\regress\arm_bdt_probe.py
+```
+
+Both verified present immediately before firing, and **both are UNCOMMITTED — read the WORKING
+TREE.** The tree is `GXEMUL-SEC/src/`; three 2021-vintage copies of `src/` sit elsewhere under the
+project root and give line numbers off by hundreds. If a path or line is wrong, say so and do not
+guess a replacement.
+
+## THE CONTEXT, in one paragraph
+
+`#524` masks the address at two slow-path `cpu->memory_rw` calls in `arm_pop()` and `arm_push()`.
+The detector's floor was adjudicated as ten cells: `{cold first access} × {pop, push} × {IA, IB,
+DA, DB}`, plus `{push} × {s = 1}`, plus `{push} × {pc in list}`. Nine are closed. **The tenth is
+`push × pc-in-list`, and it is worth a row because `value = cpu->pc + 12` at `arm_push:1868` is an
+lvalue the guarded body packs into `data` — so `i == ARM_PC` is a floor axis on the store side.**
+
+The row I intend, per the adjudication:
+
+```
+    STMDB r0!, {r1, pc}   =  0xe9208002      base r0 = 0x2100b
+```
+
+The claim is that **in DB order the PC is accessed FIRST**, so its access is the COLD one, and it
+lands at `0x21007` — an address ≡ 7 (mod 8), which is the geometry the whole closure now uses
+(bits 0, 1 and 2 all set, so `~1`, `~2`, `~3` and `~7` are discriminated by one access).
+
+## THE QUESTIONS — all five need a number or a plain "the source does not settle this"
+
+1. **Decode `0xe9208002` and confirm it is `STMDB r0!, {r1, pc}`.** Give the field breakdown
+   (cond, P, U, S, W, L, Rn, register list). If it is not that instruction, give me the word that
+   is.
+2. **In `arm_push()`, which register's access happens FIRST for this instruction?** Read the loop
+   direction — I believe it is `for (i = (u_bit ? 0 : 15); ...)`, so with `u_bit == 0` it starts at
+   i=15 and decrements, making **PC first**. Confirm or refute from the code. **This is the load-
+   bearing premise: if r1 is accessed first, the cold access is at a different address and the whole
+   row moves.**
+3. **What address does that first access use, for base `0x2100b`?** Walk the pre-step/loop
+   arithmetic in `arm_push()` (around `:1871-1876` and the `if (p_bit)` / `if (!p_bit)` blocks) and
+   give the concrete effective address of each of the two accesses, in order. I expect the PC's to
+   be `0x21007` and r1's to be `0x21003`, but I want that from the code.
+4. **What VALUE does the model store for the PC?** `arm_push:1868` is `value = cpu->pc + 12` (or
+   similar — read it). At the moment this instruction executes, what is `cpu->pc`? The probe loads
+   its program at a base it calls `CODE` and the store is the 3rd word — so give me the expected
+   stored word **as an expression in `CODE`**, e.g. `CODE + 8 + 12`. Note whether the model uses
+   +8 or +12 and whether that is architecturally right (there is a known TODO in this area; if the
+   model is wrong, the row should still assert what the model DOES and say so).
+5. **What is `r0` after writeback?** I expect `0x21003` (base − 8). Confirm from the code.
+
+**AND ONE THING TO CHECK THAT I HAVE NOT ASKED AS A NUMBER:** is there any guard in `arm_push()`
+that DECLINES or diverts a register list containing the PC, or that treats `s_bit` / PC specially
+before the store — anything that would stop this instruction reaching the edited `memory_rw` call
+at all? If so the row is unreachable as designed and I need to know now rather than after a build.
+
+Answer in full. **Write no file** — return the whole answer and I will save it. An honest "the two
+permitted files do not settle question N" is a real answer.
+codex
+I’ll read the two specified working-tree files and trace the decode, store order, addresses, PC value, writeback, and guards.
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n -- 'arm_push|arm_pop|memory_rw|u_bit|p_bit|s_bit|w_bit|cpu->pc|CODE|readback|e9208002|2100b|pc.in.list' 'C:\\DocumentNoSnc\\CC\\GXEMUL\\GXEMUL-SEC\\src\\cpus\\cpu_arm_instr.c'" in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n -- 'arm_push|arm_pop|memory_rw|u_bit|p_bit|s_bit|w_bit|cpu->pc|CODE|readback|e9208002|2100b|pc.in.list' 'C:\\DocumentNoSnc\\CC\\GXEMUL\\GXEMUL-SEC\\regress\\arm_bdt_probe.py'" in C:\DocumentNoSnc\CC\GXEMUL
+ succeeded in 81ms:
+5:Tests all four callers of arm_pop / arm_push:
+38:CODE = 0x00008000
+49:            os.execvp(bin_path, [bin_path, "-V", "-A", "-T", "-E", "testarm", "-M", "64", "0x%x:%s" % (CODE, STUB)])
+101:            self.send("put w 0x%x, 0x%08x" % (CODE + 4*i, w))
+102:        self.send("pc=0x%x" % CODE)
+286:    #  arm_push().  arm_pop() was driven at exactly ONE (p,u,s) point: (0,1,0).
+289:    #     M_POPP_NONE   p_bit ? addr : (addr & ~3)            32/32
+290:    #     M_POPP_WEAK   addr & (p_bit ? ~1 : ~3)              32/32
+291:    #     M_POPW_WEAK   addr & (w_bit ? ~1 : ~3)              32/32
+292:    #     M_SBIT_NONE   s_bit ? addr : (addr & ~3), BOTH      32/32
+296:    #  restricted to p_bit == 1.  A non-equivalence control ran LDMDB for real
+302:    #  p_bit=1 caller in the instrument is Thumb PUSH, so closing it needs a NEW
+317:           f"r1={arm_ldm_ib_p2_v:#010x} want 0x55667788  -- LDMIB r0,{{r1}} from 0x20003: PRE-increment gives access 0x20007 -> word at 0x20004. Closes pop x p_bit=1; kills M_POPP_NONE / M_POPP_WEAK")
+327:           f"r1={arm_ldm_da_p2_v:#010x} want 0x55667788  -- LDMDA r0,{{r1}} from 0x20007: post-DECREMENT, access 0x20007. Closes pop x u_bit=0")
+347:           f"r1={arm_ldm_s_p2_v:#010x} want 0x55667788  -- LDMIA r0!,{{r1}}^ from 0x20007: S-bit WITH writeback at residue 7. Closes s_bit and the (s&&w) joint; kills M_SBIT_NONE")
+354:    #  (`memory_rw.c:738-750` hands every successful RAM access to
+356:    #  so r2's access takes the FAST branch at `arm_pop:1637` and cannot see a
+495:    #  MODE.  The code tests them NESTED (`if (p_bit) { if (u_bit)`), the
+642:    #  ==== CLASS CLOSURE, cell 3 of 3: THE PREDICATE AXIS (p_bit) ====
+644:    #  mask 0xfffffffe when p_bit is true, 0xfffffffc when false.  Every ARM STM
+645:    #  run uses IA (p_bit=0) and gets the correct mask; Thumb PUSH uses DB
+646:    #  (p_bit=1) and gets the weakened one -- but its only effective address was
+665:           f"w0={w0_tp2:#010x} want 0x11223344 (p_bit-conditional mutant 0x33440000)")
+
+ succeeded in 81ms:
+35: *  Note: cpu->pc is prefered over r[ARM_PC]. r[ARM_PC] is only used in a
+212:	cpu->pc &= ~((ARM_IC_ENTRIES_PER_PAGE-1)
+214:	cpu->pc += (low_pc << ARM_INSTR_ALIGNMENT_SHIFT);
+219:	    (uint32_t)cpu->pc);
+233:	cpu->pc &= ~((ARM_IC_ENTRIES_PER_PAGE-1)
+235:	cpu->pc += (low_pc << ARM_INSTR_ALIGNMENT_SHIFT);
+237:	fatal("[ ARM: unimplemented 0xf instruction at pc = 0x%08" PRIx32" ]\n", (uint32_t)cpu->pc);
+258:	cpu->pc = (uint32_t)((cpu->pc & 0xfffff000) + (int32_t)ic->arg[0]);
+356:	cpu->pc = reg(ic->arg[0]);
+357:	if (cpu->pc & 1)
+365:	if (cpu->pc & 2 && ((cpu->pc & 1) == 0)) {
+366:		fatal("[ ARM pc misaligned? 0x%08x ]\n", (int)cpu->pc);
+387:	cpu->pc = cpu->cd.arm.r[ARM_LR];
+388:	if (cpu->pc & 1)
+396:	if (cpu->pc & 2 && ((cpu->pc & 1) == 0)) {
+397:		fatal("[ ARM pc misaligned? 0x%08x ]\n", (int)cpu->pc);
+420:	uint32_t pc = ((uint32_t)cpu->pc & 0xfffff000) + (int32_t)ic->arg[1];
+424:	cpu->pc = pc + (int32_t)ic->arg[0];
+440:	uint32_t pc = ((uint32_t)cpu->pc & 0xfffff000) + (int32_t)ic->arg[1];
+445:	cpu->pc = pc + (int32_t)ic->arg[0];
+447:	if (cpu->pc & 1)
+450:		fatal("[ blx_imm internal error. Should have switched to THUMB! 0x%08x ]\n", (int)cpu->pc);
+460:	if (cpu->pc & 2 && ((cpu->pc & 1) == 0)) {
+461:		fatal("[ ARM pc misaligned? 0x%08x ]\n", (int)cpu->pc);
+469:		cpu_functioncall_trace(cpu, cpu->pc);
+484:	uint32_t lr = ((uint32_t)cpu->pc & 0xfffff000) + (int32_t)ic->arg[2];
+486:	cpu->pc = reg(ic->arg[0]);
+489:	if (cpu->pc & 1)
+497:	if (cpu->pc & 2 && ((cpu->pc & 1) == 0)) {
+498:		fatal("[ ARM pc misaligned? 0x%08x ]\n", (int)cpu->pc);
+518:	uint32_t pc = ((uint32_t)cpu->pc & 0xfffff000) + (int32_t)ic->arg[1];
+522:	cpu->pc = pc + (int32_t)ic->arg[0];
+524:	cpu_functioncall_trace(cpu, cpu->pc);
+540:	    ((uint32_t)cpu->pc & 0xfffff000) + (int32_t)ic->arg[2];
+553:	uint32_t low_pc, lr = (cpu->pc & 0xfffff000) + ic->arg[2];
+562:	cpu->pc &= ~((ARM_IC_ENTRIES_PER_PAGE-1)
+564:	cpu->pc += (low_pc << ARM_INSTR_ALIGNMENT_SHIFT);
+567:	cpu_functioncall_trace(cpu, cpu->pc);
+690:	uint32_t iw; uint64_t tmp; int u_bit, a_bit;
+692:	u_bit = iw & 0x00400000; a_bit = iw & 0x00200000;
+694:	if (u_bit)
+767:	reg(ic->arg[1]) = ((uint32_t)cpu->pc&0xfffff000) + (int32_t)ic->arg[0];
+781:	old_pc = cpu->pc;
+787:	cpu->pc = cpu->cd.arm.r[ARM_LR];
+795:	if ((old_pc & ~mask_within_page) == (cpu->pc & ~mask_within_page)) {
+797:		    ((cpu->pc & mask_within_page) >> ARM_INSTR_ALIGNMENT_SHIFT);
+806:	cpu->pc = cpu->cd.arm.r[ARM_LR];
+887:			cpu->pc &= ~((ARM_IC_ENTRIES_PER_PAGE-1) << ARM_INSTR_ALIGNMENT_SHIFT);
+888:			cpu->pc += (low_pc << ARM_INSTR_ALIGNMENT_SHIFT);
+889:			old_pc = cpu->pc;
+951:	cpu->pc &= ~((ARM_IC_ENTRIES_PER_PAGE-1) << ARM_INSTR_ALIGNMENT_SHIFT);
+952:	cpu->pc += (low_pc << ARM_INSTR_ALIGNMENT_SHIFT);
+959:	cpu->pc &= ~((ARM_IC_ENTRIES_PER_PAGE-1) << ARM_INSTR_ALIGNMENT_SHIFT);
+960:	cpu->pc += (low_pc << ARM_INSTR_ALIGNMENT_SHIFT);
+973:	cpu->pc = cpu->cd.arm.r[ARM_LR];
+997:	cpu->pc &= 0xfffff000;
+998:	cpu->pc += ic->arg[0];
+1010:	cpu->pc &= 0xfffff000;
+1011:	cpu->pc += ic->arg[0];
+1023:	cpu->pc &= 0xfffff000;
+1024:	cpu->pc += ic->arg[0];
+1200:		 *  cur_ic_page and cpu->pc, all of which are right here.
+1204:		a = cpu->pc & ~((ARM_IC_ENTRIES_PER_PAGE-1)
+1347:	    ENCODES full width and the guard selects the full-width mask instead of
+1407:	    ENCODES full width and the guard selects the full-width mask instead of
+1489:	cpu->pc &= ~((ARM_IC_ENTRIES_PER_PAGE-1) << ARM_INSTR_ALIGNMENT_SHIFT);
+1490:	cpu->pc += (low_pc << ARM_INSTR_ALIGNMENT_SHIFT);
+1498:	if (!cpu->memory_rw(cpu, cpu->mem, addr, d, sizeof(d), MEM_READ,
+1521:	if (!cpu->memory_rw(cpu, cpu->mem, addr, d, sizeof(d), MEM_WRITE,
+1537:	cpu->pc &= ~((ARM_IC_ENTRIES_PER_PAGE-1) << ARM_INSTR_ALIGNMENT_SHIFT);
+1538:	cpu->pc += (low_pc << ARM_INSTR_ALIGNMENT_SHIFT);
+1540:	if (!cpu->memory_rw(cpu, cpu->mem, addr, d, sizeof(d), MEM_READ,
+1547:	if (!cpu->memory_rw(cpu, cpu->mem, addr, d, sizeof(d), MEM_WRITE,
+1602:void arm_pop(struct cpu* cpu, uint32_t* np, int p_bit, int u_bit, int s_bit, int w_bit, uint32_t iw)
+1610:	if (s_bit) {
+1614:			s_bit = 0;
+1617:			s_bit = 0;
+1622:	for (i=(u_bit? 0 : 15); i>=0 && i<=15; i+=(u_bit? 1 : -1)) {
+1630:		if (p_bit) {
+1631:			if (u_bit)
+1680:			    RAW addr to memory_rw, whose `offset = paddr &
+1716:			if (!cpu->memory_rw(cpu, cpu->mem, addr & 0xfffffffc, data,
+1734:		if (!p_bit) {
+1735:			if (u_bit)
+1742:	for (i=(u_bit? 0 : 15); i>=0 && i<=15; i+=(u_bit? 1 : -1)) {
+1748:		if (!s_bit) {
+1777:	if (w_bit)
+1817:		cpu->pc = cpu->cd.arm.r[ARM_PC] & 0xfffffffc;
+1833:void arm_push(struct cpu* cpu, uint32_t* np, int p_bit, int u_bit, int s_bit, int w_bit, uint16_t regs)
+1840:	for (i=(u_bit? 0 : 15); i>=0 && i<=15; i+=(u_bit? 1 : -1)) {
+1848:		if (s_bit) {
+1869:			value = cpu->pc + 12;
+1871:		if (p_bit) {
+1872:			if (u_bit)
+1906:			    the LDM site in arm_pop() for the full reasoning.
+1910:			if (!cpu->memory_rw(cpu, cpu->mem, addr & 0xfffffffc, data,
+1917:		if (!p_bit) {
+1918:			if (u_bit)
+1925:	if (w_bit)
+1941:	int p_bit = iw & 0x01000000;
+1942:	int u_bit = iw & 0x00800000;
+1943:	int s_bit = iw & 0x00400000;
+1944:	int w_bit = iw & 0x00200000;
+1947:	if (!s_bit)
+1954:	cpu->pc &= ~((ARM_IC_ENTRIES_PER_PAGE-1) << ARM_INSTR_ALIGNMENT_SHIFT);
+1955:	cpu->pc += (low_pc << ARM_INSTR_ALIGNMENT_SHIFT);
+1957:	arm_pop(cpu, np, p_bit, u_bit, s_bit, w_bit, (uint16_t)iw);
+1973:	int p_bit = iw & 0x01000000;
+1974:	int u_bit = iw & 0x00800000;
+1975:	int s_bit = iw & 0x00400000;
+1976:	int w_bit = iw & 0x00200000;
+1979:	if (!s_bit)
+1986:	cpu->pc &= ~((ARM_IC_ENTRIES_PER_PAGE-1) << ARM_INSTR_ALIGNMENT_SHIFT);
+1987:	cpu->pc += (low_pc << ARM_INSTR_ALIGNMENT_SHIFT);
+1989:	arm_push(cpu, np, p_bit, u_bit, s_bit, w_bit, (uint16_t)iw);
+2015:	cpu->pc &= ~((ARM_IC_ENTRIES_PER_PAGE-1) << ARM_INSTR_ALIGNMENT_SHIFT);
+2016:	cpu->pc += (low_pc << ARM_INSTR_ALIGNMENT_SHIFT);
+2025:	if (!cpu->memory_rw(cpu, cpu->mem, addr, word,
+2060:	cpu->pc &= ~((ARM_IC_ENTRIES_PER_PAGE-1) << ARM_INSTR_ALIGNMENT_SHIFT);
+2061:	cpu->pc += (low_pc << ARM_INSTR_ALIGNMENT_SHIFT);
+2085:	if (!cpu->memory_rw(cpu, cpu->mem, addr, word,
+2644:		cpu->pc &= ~((ARM_IC_ENTRIES_PER_PAGE-1)
+2646:		cpu->pc += (low_pc << ARM_INSTR_ALIGNMENT_SHIFT);
+2919:	 *  Idiom open-coded from arm_push/arm_pop (bdt_load), not SWAP32, so the two
+3103:		cpu->pc = (uint32_t)(((uint32_t)cpu->pc & 0xfffff000)
+3121:		cpu->pc = (uint32_t)(((uint32_t)cpu->pc & 0xfffff000)
+3139:		cpu->pc = (uint32_t)(((uint32_t)cpu->pc & 0xfffff000)
+3451:	cpu->pc &= ~((ARM_IC_ENTRIES_PER_PAGE-1) << ARM_INSTR_ALIGNMENT_SHIFT);
+3452:	cpu->pc += (ARM_IC_ENTRIES_PER_PAGE << ARM_INSTR_ALIGNMENT_SHIFT);
+4031:	int condition_code, main_opcode, secondary_opcode, s_bit, rn, rd, r8;
+4032:	int p_bit, u_bit, w_bit, l_bit, regform, rm, any_pc_reg; // , c, t
+4038:	addr = cpu->pc & ~((ARM_IC_ENTRIES_PER_PAGE-1) <<
+4041:	cpu->pc = addr;
+4052:		if (!cpu->memory_rw(cpu, cpu->mem, addr, &ib[0],
+4076:	u_bit = iword & 0x00800000;
+4077:	w_bit = iword & 0x00200000;
+4078:	s_bit = l_bit = iword & 0x00100000;
+4201:				if (s_bit)
+4207:				if (s_bit)
+4220:			if (s_bit) {
+4348:			p_bit = main_opcode & 1;
+4355:				    + (w_bit? 64 : 0)
+4357:				    + (u_bit? 256 : 0) + (p_bit? 512 : 0)
+4372:				    + (w_bit? 64 : 0)
+4374:				    + (u_bit? 256 : 0) + (p_bit? 512 : 0)
+4475:			if (s_bit == 0)
+4511:			if (s_bit && steps != 0 && imm < 256
+4560:		if (secondary_opcode == 0xf && !regform && !s_bit) {
+4574:			    16 * secondary_opcode + (s_bit? 256 : 0)];
+4577:			    16 * secondary_opcode + (s_bit? 256 : 0) +
+4746:			if (u_bit)
+4807:		 *  bdt_store (via arm_pop/arm_push) swap on both their warm and
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$sourceLines = Get-Content -LiteralPath '"'C:\\DocumentNoSnc\\CC\\GXEMUL\\GXEMUL-SEC\\src\\cpus\\cpu_arm_instr.c'; for ("'$sourceNumber = 4030; $sourceNumber -le 4110; $sourceNumber++) { '"'{0}: {1}' -f "'$sourceNumber, $sourceLines[$sourceNumber - 1] }; rg -n -C 28 -- '"'bdt_store|bdt_load' 'C:\\DocumentNoSnc\\CC\\GXEMUL\\GXEMUL-SEC\\src\\cpus\\cpu_arm_instr.c'" in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$probeLines = Get-Content -LiteralPath '"'C:\\DocumentNoSnc\\CC\\GXEMUL\\GXEMUL-SEC\\regress\\arm_bdt_probe.py'; for ("'$probeNumber = 1; $probeNumber -le [Math]::Min(390, $probeLines.Count); $probeNumber++) { '"'{0}: {1}' -f "'$probeNumber, $probeLines[$probeNumber - 1] }' in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$sourceLines = Get-Content -LiteralPath '"'C:\\DocumentNoSnc\\CC\\GXEMUL\\GXEMUL-SEC\\src\\cpus\\cpu_arm_instr.c'; foreach ("'$sourceRange in @(@(1,115),@(1570,2000))) { for ($sourceNumber = $sourceRange[0]; $sourceNumber -le $sourceRange[1]; $sourceNumber++) { '"'{0}: {1}' -f "'$sourceNumber, $sourceLines[$sourceNumber - 1] } }' in C:\DocumentNoSnc\CC\GXEMUL
+ succeeded in 214ms:
+4030: 	unsigned char ib[4];
+4031: 	int condition_code, main_opcode, secondary_opcode, s_bit, rn, rd, r8;
+4032: 	int p_bit, u_bit, w_bit, l_bit, regform, rm, any_pc_reg; // , c, t
+4033: 	void (*samepage_function)(struct cpu *, struct arm_instr_call *);
+4034: 
+4035: 	/*  Figure out the address of the instruction:  */
+4036: 	low_pc = ((size_t)ic - (size_t)cpu->cd.arm.cur_ic_page)
+4037: 	    / sizeof(struct arm_instr_call);
+4038: 	addr = cpu->pc & ~((ARM_IC_ENTRIES_PER_PAGE-1) <<
+4039: 	    ARM_INSTR_ALIGNMENT_SHIFT);
+4040: 	addr += (low_pc << ARM_INSTR_ALIGNMENT_SHIFT);
+4041: 	cpu->pc = addr;
+4042: 	addr &= ~((1 << ARM_INSTR_ALIGNMENT_SHIFT) - 1);
+4043: 
+4044: 	/*  Read the instruction word from memory:  */
+4045: 	page = cpu->cd.arm.host_load[addr >> 12];
+4046: 
+4047: 	if (page != NULL) {
+4048: 		/*  fatal("TRANSLATION HIT! 0x%08x\n", addr);  */
+4049: 		memcpy(ib, page + (addr & 0xfff), sizeof(ib));
+4050: 	} else {
+4051: 		/*  fatal("TRANSLATION MISS! 0x%08x\n", addr);  */
+4052: 		if (!cpu->memory_rw(cpu, cpu->mem, addr, &ib[0],
+4053: 		    sizeof(ib), MEM_READ, CACHE_INSTRUCTION)) {
+4054: 			fatal("to_be_translated(): "
+4055: 			    "read failed: TODO\n");
+4056: 			return;
+4057: 		}
+4058: 	}
+4059: 
+4060: 	if (cpu->byte_order == EMUL_LITTLE_ENDIAN)
+4061: 		iword = READ_WORD_LE(ib);
+4062: 	else
+4063: 		iword = READ_WORD_BE(ib);
+4064: 
+4065: 
+4066: #define DYNTRANS_TO_BE_TRANSLATED_HEAD
+4067: #include "cpu_dyntrans.c"
+4068: #undef  DYNTRANS_TO_BE_TRANSLATED_HEAD
+4069: 
+4070: 
+4071: 	/*  The idea of taking bits 27..24 was found here:
+4072: 	    http://armphetamine.sourceforge.net/oldinfo.html  */
+4073: 	condition_code = iword >> 28;
+4074: 	main_opcode = (iword >> 24) & 15;
+4075: 	secondary_opcode = (iword >> 21) & 15;
+4076: 	u_bit = iword & 0x00800000;
+4077: 	w_bit = iword & 0x00200000;
+4078: 	s_bit = l_bit = iword & 0x00100000;
+4079: 	rn    = (iword >> 16) & 15;
+4080: 	rd    = (iword >> 12) & 15;
+4081: 	r8    = (iword >> 8) & 15;
+4082: 	// c     = (iword >> 7) & 31;
+4083: 	// t     = (iword >> 4) & 7;
+4084: 	rm    = iword & 15;
+4085: 
+4086: 	/*
+4087: 	 *  Translate the instruction:
+4088: 	 */
+4089: 
+4090: 	if ((iword >> 28) == 0xf) {
+4091: 		/*  The "never" condition is nowadays used for special encodings.  */
+4092: 		if ((iword & 0xfc70f000) == 0xf450f000) {
+4093: 			/*  Preload:  TODO.  Treat as NOP for now.  */
+4094: 			ic->f = instr(nop);
+4095: 			goto okay;
+4096: 		}
+4097: 
+4098: 		if (iword == 0xf10c0040) {
+4099: 			/*  cpsid f. Treat as NOP for now.  */
+4100: 			ic->f = instr(nop);
+4101: 			goto okay;
+4102: 		}
+4103: 
+4104: 		if (iword == 0xf10c0080) {
+4105: 			/*  cpsid i. Treat as NOP for now.  */
+4106: 			ic->f = instr(nop);
+4107: 			goto okay;
+4108: 		}
+4109: 
+4110: 		if (iword == 0xf57ff04f) {
+1585-	struct arm_instr_call *);
+1586-X(cmps);
+1587-X(teqs);
+1588-X(tsts);
+1589-X(sub);
+1590-X(add);
+1591-X(subs);
+1592-X(eor_regshort);
+1593-X(cmps_regshort);
+1594-
+1595-
+1596-#include "cpu_arm_instr_misc.c"
+1597-
+1598-
+1599-/*
+1600- *  Shared between regular ARM and the THUMB encoded 'pop'.
+1601- */
+1602-void arm_pop(struct cpu* cpu, uint32_t* np, int p_bit, int u_bit, int s_bit, int w_bit, uint32_t iw)
+1603-{
+1604-	uint32_t addr = *np;
+1605-	unsigned char data[4];
+1606-	unsigned char *page;
+1607-	int i, return_flag = 0;
+1608-	uint32_t new_values[16];
+1609-
+1610-	if (s_bit) {
+1611-		/*  Load to USR registers:  */
+1612-		if ((cpu->cd.arm.cpsr & ARM_FLAG_MODE) == ARM_MODE_USR32) {
+1613:			fatal("[ bdt_load: s-bit: in usermode? ]\n");
+1614-			s_bit = 0;
+1615-		}
+1616-		if (iw & 0x8000) {
+1617-			s_bit = 0;
+1618-			return_flag = 1;
+1619-		}
+1620-	}
+1621-
+1622-	for (i=(u_bit? 0 : 15); i>=0 && i<=15; i+=(u_bit? 1 : -1)) {
+1623-		uint32_t value;
+1624-
+1625-		if (!((iw >> i) & 1)) {
+1626-			/*  Skip register i:  */
+1627-			continue;
+1628-		}
+1629-
+1630-		if (p_bit) {
+1631-			if (u_bit)
+1632-				addr += sizeof(uint32_t);
+1633-			else
+1634-				addr -= sizeof(uint32_t);
+1635-		}
+1636-
+1637-		page = cpu->cd.arm.host_load[addr >> 12];
+1638-		if (page != NULL) {
+1639-			uint32_t *p32 = (uint32_t *) page;
+1640-			value = p32[(addr & 0xfff) >> 2];
+1641-			/*  Change byte order of value if
+--
+1767-				if (i >= 13 && i <= 14)
+1768-					cpu->cd.arm.default_r8_r14[i-8] =
+1769-					    new_values[i];
+1770-				else
+1771-					cpu->cd.arm.r[i] = new_values[i];
+1772-				break;
+1773-			}
+1774-		}
+1775-	}
+1776-
+1777-	if (w_bit)
+1778-		*np = addr;
+1779-
+1780-	if (return_flag) {
+1781-		uint32_t new_cpsr;
+1782-		int switch_register_banks;
+1783-
+1784-		switch (cpu->cd.arm.cpsr & ARM_FLAG_MODE) {
+1785-		case ARM_MODE_FIQ32:
+1786-			new_cpsr = cpu->cd.arm.spsr_fiq; break;
+1787-		case ARM_MODE_ABT32:
+1788-			new_cpsr = cpu->cd.arm.spsr_abt; break;
+1789-		case ARM_MODE_UND32:
+1790-			new_cpsr = cpu->cd.arm.spsr_und; break;
+1791-		case ARM_MODE_IRQ32:
+1792-			new_cpsr = cpu->cd.arm.spsr_irq; break;
+1793-		case ARM_MODE_SVC32:
+1794-			new_cpsr = cpu->cd.arm.spsr_svc; break;
+1795:		default:fatal("bdt_load: unimplemented mode %i\n",
+1796-			    cpu->cd.arm.cpsr & ARM_FLAG_MODE);
+1797-			cpu->running = 0;
+1798-			cpu->cd.arm.next_ic = &nothing_call;
+1799-			return;
+1800-		}
+1801-
+1802-		switch_register_banks = (cpu->cd.arm.cpsr & ARM_FLAG_MODE) !=
+1803-		    (new_cpsr & ARM_FLAG_MODE);
+1804-
+1805-		if (switch_register_banks)
+1806-			arm_save_register_bank(cpu);
+1807-
+1808-		cpu->cd.arm.cpsr = new_cpsr;
+1809-		cpu->cd.arm.flags = cpu->cd.arm.cpsr >> 28;
+1810-
+1811-		if (switch_register_banks)
+1812-			arm_load_register_bank(cpu);
+1813-	}
+1814-
+1815-	/*  NOTE: Special case: Loading the PC  */
+1816-	if (iw & 0x8000) {
+1817-		cpu->pc = cpu->cd.arm.r[ARM_PC] & 0xfffffffc;
+1818-		if (cpu->machine->show_trace_tree)
+1819-			cpu_functioncall_trace_return(cpu);
+1820-		/*  TODO: There is no need to update the
+1821-		    pointers if this is a return to the
+1822-		    same page!  */
+1823-		/*  Find the new physical page and update the
+--
+1903-				data[3] = value;
+1904-			}
+1905-			/*  #524 (armbdt): the STM side of the same defect; see
+1906-			    the LDM site in arm_pop() for the full reasoning.
+1907-			    STM(1) p.A4-190 carries the identical
+1908-			    ignore-the-low-two-bits rule, and `*np = addr' below
+1909-			    must keep seeing the UNMASKED running value.  */
+1910-			if (!cpu->memory_rw(cpu, cpu->mem, addr & 0xfffffffc, data,
+1911-			    sizeof(data), MEM_WRITE, CACHE_DATA)) {
+1912-				/*  store failed  */
+1913-				return;
+1914-			}
+1915-		}
+1916-
+1917-		if (!p_bit) {
+1918-			if (u_bit)
+1919-				addr += sizeof(uint32_t);
+1920-			else
+1921-				addr -= sizeof(uint32_t);
+1922-		}
+1923-	}
+1924-
+1925-	if (w_bit)
+1926-		*np = addr;
+1927-}
+1928-
+1929-
+1930-/*
+1931: *  bdt_load:  Block Data Transfer, Load
+1932- *
+1933- *  arg[0] = pointer to uint32_t in host memory, pointing to the base register
+1934- *  arg[1] = 32-bit instruction word. Most bits are read from this.
+1935- */
+1936:X(bdt_load)
+1937-{
+1938-	uint32_t *np = (uint32_t *)ic->arg[0];
+1939-	uint32_t low_pc;
+1940-	uint32_t iw = ic->arg[1];  /*  xxxx100P USWLnnnn llllllll llllllll  */
+1941-	int p_bit = iw & 0x01000000;
+1942-	int u_bit = iw & 0x00800000;
+1943-	int s_bit = iw & 0x00400000;
+1944-	int w_bit = iw & 0x00200000;
+1945-
+1946-#ifdef GATHER_BDT_STATISTICS
+1947-	if (!s_bit)
+1948-		update_bdt_statistics(iw);
+1949-#endif
+1950-
+1951-	/*  Synchronize the program counter:  */
+1952-	low_pc = ((size_t)ic - (size_t)
+1953-	    cpu->cd.arm.cur_ic_page) / sizeof(struct arm_instr_call);
+1954-	cpu->pc &= ~((ARM_IC_ENTRIES_PER_PAGE-1) << ARM_INSTR_ALIGNMENT_SHIFT);
+1955-	cpu->pc += (low_pc << ARM_INSTR_ALIGNMENT_SHIFT);
+1956-
+1957-	arm_pop(cpu, np, p_bit, u_bit, s_bit, w_bit, (uint16_t)iw);
+1958-}
+1959:Y(bdt_load)
+1960-
+1961-
+1962-/*
+1963: *  bdt_store:  Block Data Transfer, Store
+1964- *
+1965- *  arg[0] = pointer to uint32_t in host memory, pointing to the base register
+1966- *  arg[1] = 32-bit instruction word. Most bits are read from this.
+1967- */
+1968:X(bdt_store)
+1969-{
+1970-	uint32_t *np = (uint32_t *)ic->arg[0];
+1971-	uint32_t low_pc;
+1972-	uint32_t iw = ic->arg[1];  /*  xxxx100P USWLnnnn llllllll llllllll  */
+1973-	int p_bit = iw & 0x01000000;
+1974-	int u_bit = iw & 0x00800000;
+1975-	int s_bit = iw & 0x00400000;
+1976-	int w_bit = iw & 0x00200000;
+1977-
+1978-#ifdef GATHER_BDT_STATISTICS
+1979-	if (!s_bit)
+1980-		update_bdt_statistics(iw);
+1981-#endif
+1982-
+1983-	/*  Synchronize the program counter:  */
+1984-	low_pc = ((size_t)ic - (size_t)
+1985-	    cpu->cd.arm.cur_ic_page) / sizeof(struct arm_instr_call);
+1986-	cpu->pc &= ~((ARM_IC_ENTRIES_PER_PAGE-1) << ARM_INSTR_ALIGNMENT_SHIFT);
+1987-	cpu->pc += (low_pc << ARM_INSTR_ALIGNMENT_SHIFT);
+1988-
+1989-	arm_push(cpu, np, p_bit, u_bit, s_bit, w_bit, (uint16_t)iw);
+1990-}
+1991:Y(bdt_store)
+1992-
+1993-
+1994-/*
+1995- *  Load Register Exclusive (ARM "load linked"):
+1996- *
+1997- *  A Load Register Exclusive instruction initiates a RMW (read-modify-write)
+1998- *  sequence.
+1999- *
+2000- *  A Store Register Exclusive instruction ends the sequence.
+2001- *
+2002- *  arg[0] = ptr to rt
+2003- *  arg[1] = ptr to rn
+2004- *  arg[2] = int32_t imm offset
+2005- */
+2006-X(ldrex)
+2007-{
+2008-	uint32_t addr = reg(ic->arg[1]) + (int32_t)ic->arg[2];
+2009-	int low_pc;
+2010-	uint8_t word[sizeof(uint32_t)];
+2011-
+2012-	/*  Synchronize the program counter:  */
+2013-	low_pc = ((size_t)ic - (size_t)
+2014-	    cpu->cd.arm.cur_ic_page) / sizeof(struct arm_instr_call);
+2015-	cpu->pc &= ~((ARM_IC_ENTRIES_PER_PAGE-1) << ARM_INSTR_ALIGNMENT_SHIFT);
+2016-	cpu->pc += (low_pc << ARM_INSTR_ALIGNMENT_SHIFT);
+2017-
+2018-	if (addr & (sizeof(word)-1)) {
+2019-		fatal("TODO: ldrex unaligned access: exception\n");
+--
+2275-		    than requiring alignment, and this matcher matches code SHAPE,
+2276-		    not register values, so a guest with r1 & 3 != 0 does fold:
+2277-		    measured at r1 = SRC+1, the masked read publishes what the
+2278-		    genuine sequence publishes, while `& 0xfff` would publish
+2279-		    byte-rotated words. `(r1 & 0xfff) + 16 <= 0xff0` rules out a
+2280-		    carry past bit 11, so (r1 & 0xffc) + 16 is bit-for-bit the
+2281-		    address the real second ldmia reads. Bound: the entry guard
+2282-		    gives (r1 & 0xfff) <= 0xfe0, and masking only lowers that, so
+2283-		    +16..+31 stays inside the page.
+2284-
+2285-		    Published BEFORE the memcpy, and NOT because that makes
+2286-		    overlap safe -- it does not. The real second ldmia runs AFTER
+2287-		    the first stmia, so on a FORWARD overlap it loads post-store
+2288-		    bytes, which no placement around a single memcpy can
+2289-		    reproduce (measured: dst = src+16 diverges either way). The
+2290-		    reason is determinism: publish-after would read bytes a
+2291-		    UB-on-overlap memcpy had just written, so the registers would
+2292-		    depend on the host memcpy's direction and vector width.
+2293-		    Publish-before is identical to publish-after in every case
+2294-		    this fold is correct in (no overlap) and deterministic
+2295-		    otherwise. The overlap and unaligned-copy divergences are
+2296-		    pre-existing and recorded in OUTSTANDING_BUGS.
+2297-
+2298-		    #378: "NO byteswap" above is safe ONLY because this matcher
+2299-		    can no longer fire for a big-endian guest: it requires
+2300-		    instr(multi_0x08b15018) installed at ic[-5], and the
+2301-		    dispatcher now installs the multi fast path only when
+2302-		    cpu->byte_order == EMUL_LITTLE_ENDIAN (a BE guest gets
+2303:		    bdt_load there, the matcher declines, and this raw pw[] block
+2304-		    is unreachable). If a future round re-enables the fast path
+2305-		    for BE (the S4 _le/_be shape), these four publishes must gain
+2306-		    the same swap in the SAME change or fold and handler diverge
+2307-		    -- exactly the class the #354 invariant above forbids.  */
+2308-		{
+2309-			uint32_t *pw = (uint32_t *)
+2310-			    (page_1 + (addr_r1 & 0xffc) + 16);
+2311-			cpu->cd.arm.r[3]      = pw[0];   /* +16 */
+2312-			cpu->cd.arm.r[4]      = pw[1];   /* +20 */
+2313-			cpu->cd.arm.r[ARM_IP] = pw[2];   /* +24  (r12) */
+2314-			cpu->cd.arm.r[ARM_LR] = pw[3];   /* +28  (r14) */
+2315-		}
+2316-
+2317-		memcpy(page_0 + (addr_r0 & 0xfff),
+2318-		    page_1 + (addr_r1 & 0xfff), 32);
+2319-		cpu->cd.arm.r[0] = addr_r0 + 32;
+2320-		cpu->cd.arm.r[1] = addr_r1 + 32;
+2321-		n_iter ++;				/*  #358  */
+2322-
+2323-		cpu->n_translated_instrs += 4;
+2324-
+2325-		instr(subs)(cpu, ic + 4);
+2326-		cpu->n_translated_instrs ++;
+2327-
+2328-		/*  Loop while greater or equal:  */
+2329-		cpu->n_translated_instrs ++;
+2330-	} while (((cpu->cd.arm.flags & ARM_F_N)?1:0) ==
+2331-	    ((cpu->cd.arm.flags & ARM_F_V)?1:0));
+--
+2891-	 *  a fold that did no folding. Not pre-gated with ENOUGH_VERBOSITY(), per
+2892-	 *  the #278 convention, so `breakpoint subsystem cpu` catches a fold in
+2893-	 *  flight -- which is also why a static first-N latch was rejected here:
+2894-	 *  it would gate the breakpoint path too and kill that capability after
+2895-	 *  N folds. This fold has no internal loop, so there is nothing to
+2896-	 *  summarise and no information-content guard analogous to strlen's
+2897-	 *  `n_loops > 1`; the volume is accepted and the rows copy blocks, not
+2898-	 *  megabytes.
+2899-	 */
+2900-	debugmsg_cpu(cpu, SUBSYS_CPU, "netbsd_copyin",
+2901-	    VERBOSITY_DEBUG, "combined 6 loads");
+2902-
+2903-	q32 = &cpu->cd.arm.r[6];
+2904-	ofs >>= 2;
+2905-	q32[0] = p32[ofs+2];
+2906-	q32[1] = p32[ofs+3];
+2907-	q32[2] = p32[ofs+4];
+2908-	q32[3] = p32[ofs+5];
+2909-	q32[4] = p32[ofs+0];
+2910-	q32[5] = p32[ofs+1];
+2911-
+2912-	/*
+2913-	 *  #383 copyin-order: the six moves above are raw HOST words. The general
+2914-	 *  handler this fold delegates to on a decline assembles per cpu->byte_order
+2915-	 *  (cpu_arm_instr_loadstore.c load word arm, order-aware since #372), so on
+2916-	 *  a big-endian guest they were byte-reversed -- the #342/#355 self-
+2917-	 *  contradiction class, and the divergence the #354 invariant forbids.
+2918-	 *  q32 = &r[6] IS the destination register block, so the swap is in place.
+2919:	 *  Idiom open-coded from arm_push/arm_pop (bdt_load), not SWAP32, so the two
+2920-	 *  paths cannot drift. BEFORE the #362 rotation: DDI 0100I p. A4-44 rotates
+2921-	 *  the value assembled in the memory system's order, not the raw host word.
+2922-	 *  This fold is not reached on a big-endian HOST (the matcher is
+2923-	 *  #ifdef HOST_LITTLE_ENDIAN), so the #else arm is written only for symmetry.
+2924-	 */
+2925-#ifdef HOST_LITTLE_ENDIAN
+2926-	if (cpu->byte_order == EMUL_BIG_ENDIAN) {
+2927-#else
+2928-	if (cpu->byte_order == EMUL_LITTLE_ENDIAN) {
+2929-#endif
+2930-		int k;
+2931-		for (k = 0; k < 6; k++) {
+2932-			uint32_t v = q32[k];
+2933-			q32[k] = ((v & 0xff) << 24) | ((v & 0xff00) << 8) |
+2934-			    ((v & 0xff0000) >> 8) | ((v & 0xff000000) >> 24);
+2935-		}
+2936-	}
+2937-
+2938-	/*
+2939-	 *  #362: the six ldrt's this replaces are word LOADS, so an unaligned base
+2940-	 *  rotates each of them right by 8 * r0[1:0]. Without this the fold would
+2941-	 *  disagree with the very template it delegates to on a decline -- and the
+2942-	 *  measured form of that is sharper than a fold-versus-`-J` differential:
+2943-	 *  on ONE binary with r0 = 0x10001, pass 1 declines (not-user), runs
+2944-	 *  genuinely and yields 0x44112233, while pass 2 folds and yields
+2945-	 *  0x11223344. The emulator would contradict itself inside a single guest
+2946-	 *  loop, which is the #342/#355 class.
+2947-	 *
+--
+4760-				memcpy(cbuf, p + (a & 0xfff), len);
+4761-
+4762-				if (b_bit) {
+4763-					x = cbuf[0];
+4764-				} else {
+4765-					if (cpu->byte_order == EMUL_LITTLE_ENDIAN)
+4766-						x = cbuf[0] + (cbuf[1]<<8) +
+4767-						    (cbuf[2]<<16) + (cbuf[3]<<24);
+4768-					else
+4769-						x = cbuf[3] + (cbuf[2]<<8) +
+4770-						    (cbuf[1]<<16) + (cbuf[0]<<24);
+4771-				}
+4772-				
+4773-				ic->arg[1] = x;
+4774-			}
+4775-		}
+4776-		if (iword == 0xe4b09004)
+4777-			cpu->cd.arm.combination_check = COMBINE(netbsd_copyin);
+4778-		if (iword == 0xe4a17004)
+4779-			cpu->cd.arm.combination_check = COMBINE(netbsd_copyout);
+4780-		break;
+4781-
+4782-	case 0x8:	/*  Multiple load/store...  (Block data transfer)  */
+4783-	case 0x9:	/*  xxxx100P USWLnnnn llllllll llllllll  */
+4784-		ic->arg[0] = (size_t)(&cpu->cd.arm.r[rn]);
+4785-		ic->arg[1] = (size_t)iword;
+4786-		/*  Generic case:  */
+4787-		if (l_bit)
+4788:			ic->f = cond_instr(bdt_load);
+4789-		else
+4790:			ic->f = cond_instr(bdt_store);
+4791-#if defined(HOST_LITTLE_ENDIAN) && !defined(GATHER_BDT_STATISTICS)
+4792-		/*
+4793-		 *  Check for availability of optimized implementation:
+4794-		 *  xxxx100P USWLnnnn llllllll llllllll
+4795-		 *           ^  ^ ^ ^        ^  ^ ^ ^   (0x00950154)
+4796-		 *  These bits are used to select which list to scan, and then
+4797-		 *  the list is scanned linearly.
+4798-		 *
+4799-		 *  The optimized functions do not support show_trace_tree,
+4800-		 *  but it's ok to use the unoptimized version in that case.
+4801-		 *
+4802-		 *  #378: nor do they support a big-endian guest -- the emitted
+4803-		 *  bodies move raw host words (generate_arm_multi.c has no
+4804-		 *  byte-order term), so on this LE host a BE guest's LDM/STM
+4805-		 *  through them is byte-reversed per word, and 23 of the 256
+4806:		 *  handlers load PC, i.e. a reversed RETURN ADDRESS. bdt_load/
+4807:		 *  bdt_store (via arm_pop/arm_push) swap on both their warm and
+4808-		 *  cold arms, so installing only for a little-endian guest makes
+4809-		 *  every BE multi-transfer correct at the cost of the fast path
+4810-		 *  no BE guest today can boot to use. Resolving the guest term
+4811-		 *  at translate time is sound because cpu->byte_order cannot
+4812-		 *  change after translation: every write is machine-setup-time,
+4813-		 *  SETEND is undecoded (and ARM_FLAG_E inert), and the CP15 c1
+4814-		 *  B-bit route exits the emulator (see cpu_arm_coproc.c). The
+4815-		 *  same decision the MIPS multi generator makes with its _le/_be
+4816-		 *  variants -- a future BE-ARM-guest round should emit those
+4817-		 *  (S4 in the round-119/#378 records) rather than re-open this
+4818-		 *  gate. NOTE the memcpy fold's two BAIL-OUT calls also invoke
+4819-		 *  the emitted handler directly -- reachable only when its
+4820-		 *  matcher fired, i.e. never on BE; see the #354 comment.
+4821-		 */
+4822-		if (!cpu->machine->show_trace_tree &&
+4823-		    cpu->byte_order == EMUL_LITTLE_ENDIAN) {
+4824-			int i = 0, j = iword;
+4825-			j = ((j & 0x00800000) >> 16) | ((j & 0x00100000) >> 14)
+4826-			  | ((j & 0x00040000) >> 13) | ((j & 0x00010000) >> 12)
+4827-			  | ((j & 0x00000100) >>  5) | ((j & 0x00000040) >>  4)
+4828-			  | ((j & 0x00000010) >>  3) | ((j & 0x00000004) >>  2);
+4829-			while (multi_opcode[j][i] != 0) {
+4830-				if ((iword & 0x0fffffff) ==
+4831-				    multi_opcode[j][i]) {
+4832-					ic->f = multi_opcode_f[j]
+4833-					    [i*16 + condition_code];
+4834-					break;
+4835-				}
+
+ exited 1 in 229ms:
+Cannot invoke method. Method invocation is supported only on core types in this language mode.
+At line:2 char:129
++ ... Number = 1; $probeNumber -le [Math]::Min(390, $probeLines.Count); $pr ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : InvalidOperation: (:) [], RuntimeException
+    + FullyQualifiedErrorId : MethodInvocationNotSupportedInConstrainedLanguage
+ 
+
+ succeeded in 229ms:
+1: /*
+2:  *  Copyright (C) 2005-2021  Anders Gavare.  All rights reserved.
+3:  *
+4:  *  Redistribution and use in source and binary forms, with or without
+5:  *  modification, are permitted provided that the following conditions are met:
+6:  *
+7:  *  1. Redistributions of source code must retain the above copyright
+8:  *     notice, this list of conditions and the following disclaimer.
+9:  *  2. Redistributions in binary form must reproduce the above copyright  
+10:  *     notice, this list of conditions and the following disclaimer in the 
+11:  *     documentation and/or other materials provided with the distribution.
+12:  *  3. The name of the author may not be used to endorse or promote products
+13:  *     derived from this software without specific prior written permission.
+14:  *
+15:  *  THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+16:  *  ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+17:  *  IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+18:  *  ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE   
+19:  *  FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+20:  *  DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+21:  *  OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+22:  *  HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+23:  *  LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+24:  *  OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+25:  *  SUCH DAMAGE.
+26:  *
+27:  *
+28:  *  ARM instructions.
+29:  *
+30:  *  Individual functions should keep track of cpu->n_translated_instrs.
+31:  *  (If no instruction was executed, then it should be decreased. If, say, 4
+32:  *  instructions were combined into one function and executed, then it should
+33:  *  be increased by 3.)
+34:  *
+35:  *  Note: cpu->pc is prefered over r[ARM_PC]. r[ARM_PC] is only used in a
+36:  *        few places, and should always be kept in synch with the real
+37:  *        program counter.
+38:  */
+39: 
+40: 
+41: /*  #define GATHER_BDT_STATISTICS  */
+42: 
+43: 
+44: #ifdef GATHER_BDT_STATISTICS
+45: /*
+46:  *  update_bdt_statistics():
+47:  *
+48:  *  Gathers statistics about load/store multiple instructions.
+49:  *
+50:  *  NOTE/TODO: Perhaps it would be more memory efficient to swap the high
+51:  *  and low parts of the instruction word, so that the lllllll bits become
+52:  *  the high bits; this would cause fewer host pages to be used. Anyway, the
+53:  *  current implementation works on hosts with lots of RAM.
+54:  *
+55:  *  The resulting file, bdt_statistics.txt, should then be processed like
+56:  *  this to give a new cpu_arm_multi.txt:
+57:  *
+58:  *  uniq -c bdt_statistics.txt|sort -nr|head -256|cut -f 2 > cpu_arm_multi.txt
+59:  */
+60: static void update_bdt_statistics(uint32_t iw)
+61: {
+62: 	static FILE *f = NULL;
+63: 	static long long *counts;
+64: 	static char *counts_used;
+65: 	static long long n = 0;
+66: 
+67: 	if (f == NULL) {
+68: 		size_t s = (1 << 24) * sizeof(long long);
+69: 		f = fopen("bdt_statistics.txt", "w");
+70: 		if (f == NULL) {
+71: 			fprintf(stderr, "update_bdt_statistics(): :-(\n");
+72: 			exit(1);
+73: 		}
+74: 		counts = zeroed_alloc(s);
+75: 		counts_used = zeroed_alloc(65536);
+76: 	}
+77: 
+78: 	/*  Drop the s-bit: xxxx100P USWLnnnn llllllll llllllll  */
+79: 	iw = ((iw & 0x01800000) >> 1) | (iw & 0x003fffff);
+80: 
+81: 	counts_used[iw & 0xffff] = 1;
+82: 	counts[iw] ++;
+83: 
+84: 	n ++;
+85: 	if ((n % 500000) == 0) {
+86: 		int i;
+87: 		long long j;
+88: 		fatal("[ update_bdt_statistics(): n = %lli ]\n", (long long) n);
+89: 		fseek(f, 0, SEEK_SET);
+90: 		for (i=0; i<0x1000000; i++)
+91: 			if (counts_used[i & 0xffff] && counts[i] != 0) {
+92: 				/*  Recreate the opcode:  */
+93: 				uint32_t opcode = ((i & 0x00c00000) << 1)
+94: 				    | (i & 0x003fffff) | 0x08000000;
+95: 				for (j=0; j<counts[i]; j++)
+96: 					fprintf(f, "0x%08x\n", opcode);
+97: 			}
+98: 		fflush(f);
+99: 	}
+100: }
+101: #endif
+102: 
+103: 
+104: /*****************************************************************************/
+105: 
+106: 
+107: /*
+108:  *  Helper definitions:
+109:  *
+110:  *  Each instruction is defined like this:
+111:  *
+112:  *	X(foo)
+113:  *	{
+114:  *		code for foo;
+115:  *	}
+1570: extern void (*arm_load_store_instr_pc[1024])(struct cpu *,
+1571: 	struct arm_instr_call *);
+1572: 
+1573: extern void (*arm_load_store_instr_3[2048])(struct cpu *,
+1574: 	struct arm_instr_call *);
+1575: 
+1576: extern void (*arm_load_store_instr_3_pc[2048])(struct cpu *,
+1577: 	struct arm_instr_call *);
+1578: 
+1579: extern uint32_t (*arm_r[8192])(struct cpu *, struct arm_instr_call *);
+1580: extern uint32_t arm_r_r3_t0_c0(struct cpu *cpu, struct arm_instr_call *ic);
+1581: 
+1582: extern void (*arm_dpi_instr[2 * 2 * 2 * 16 * 16])(struct cpu *,
+1583: 	struct arm_instr_call *);
+1584: extern void (*arm_dpi_instr_regshort[2 * 16 * 16])(struct cpu *,
+1585: 	struct arm_instr_call *);
+1586: X(cmps);
+1587: X(teqs);
+1588: X(tsts);
+1589: X(sub);
+1590: X(add);
+1591: X(subs);
+1592: X(eor_regshort);
+1593: X(cmps_regshort);
+1594: 
+1595: 
+1596: #include "cpu_arm_instr_misc.c"
+1597: 
+1598: 
+1599: /*
+1600:  *  Shared between regular ARM and the THUMB encoded 'pop'.
+1601:  */
+1602: void arm_pop(struct cpu* cpu, uint32_t* np, int p_bit, int u_bit, int s_bit, int w_bit, uint32_t iw)
+1603: {
+1604: 	uint32_t addr = *np;
+1605: 	unsigned char data[4];
+1606: 	unsigned char *page;
+1607: 	int i, return_flag = 0;
+1608: 	uint32_t new_values[16];
+1609: 
+1610: 	if (s_bit) {
+1611: 		/*  Load to USR registers:  */
+1612: 		if ((cpu->cd.arm.cpsr & ARM_FLAG_MODE) == ARM_MODE_USR32) {
+1613: 			fatal("[ bdt_load: s-bit: in usermode? ]\n");
+1614: 			s_bit = 0;
+1615: 		}
+1616: 		if (iw & 0x8000) {
+1617: 			s_bit = 0;
+1618: 			return_flag = 1;
+1619: 		}
+1620: 	}
+1621: 
+1622: 	for (i=(u_bit? 0 : 15); i>=0 && i<=15; i+=(u_bit? 1 : -1)) {
+1623: 		uint32_t value;
+1624: 
+1625: 		if (!((iw >> i) & 1)) {
+1626: 			/*  Skip register i:  */
+1627: 			continue;
+1628: 		}
+1629: 
+1630: 		if (p_bit) {
+1631: 			if (u_bit)
+1632: 				addr += sizeof(uint32_t);
+1633: 			else
+1634: 				addr -= sizeof(uint32_t);
+1635: 		}
+1636: 
+1637: 		page = cpu->cd.arm.host_load[addr >> 12];
+1638: 		if (page != NULL) {
+1639: 			uint32_t *p32 = (uint32_t *) page;
+1640: 			value = p32[(addr & 0xfff) >> 2];
+1641: 			/*  Change byte order of value if
+1642: 			    host and emulated endianness differ:  */
+1643: #ifdef HOST_LITTLE_ENDIAN
+1644: 			if (cpu->byte_order == EMUL_BIG_ENDIAN)
+1645: #else
+1646: 			if (cpu->byte_order == EMUL_LITTLE_ENDIAN)
+1647: #endif
+1648: 				value = ((value & 0xff) << 24) |
+1649: 				    ((value & 0xff00) << 8) |
+1650: 				    ((value & 0xff0000) >> 8) |
+1651: 				    ((value & 0xff000000) >> 24);
+1652: 		} else {
+1653: 			/*  #524 (armbdt): MASK THE ACCESS, NEVER THE RUNNING
+1654: 			    `addr'.
+1655: 
+1656: 			    *** THE ARCHITECTURAL RULE IS QUALIFIED AND AN EARLIER
+1657: 			    DRAFT OF THIS COMMENT STATED IT FLAT.  ddi0100i.txt
+1658: 			    :7954-7959: "For CP15_reg1_Ubit == 0, the Load
+1659: 			    Multiple instructions ignore the least significant two
+1660: 			    bits of the address.  If an implementation includes a
+1661: 			    System Control coprocessor, an address with bits[1:0]
+1662: 			    != 0b00 causes an alignment exception IF ALIGNMENT
+1663: 			    CHECKING IS ENABLED.  For CP15_reg1_Ubit == 1, all
+1664: 			    non-word aligned accesses cause an alignment fault."
+1665: 			    So ignore-the-low-two-bits holds for Ubit == 0 with
+1666: 			    checking DISABLED, and not otherwise. ***
+1667: 
+1668: 			    AND THE FORK IS INTERNALLY INCONSISTENT ABOUT THAT
+1669: 			    TODAY, which is why the qualification is not academic:
+1670: 			    cpu_arm.c:129 SETS ARM_CONTROL_ALIGN in the default
+1671: 			    control register and :474 only PRINTS it ("enabled");
+1672: 			    nothing consults it.  So the model announces alignment
+1673: 			    checking and enforces none.  Modelling the fault is a
+1674: 			    SEPARATE round -- this fix makes the two paths agree
+1675: 			    with each other and with the Ubit == 0 / checking-off
+1676: 			    reading the fork already implements on its fast path.
+1677: 
+1678: 			    THE DEFECT: the FAST path gets the truncation free from
+1679: 			    `(addr & 0xfff) >> 2', and this slow path passed the
+1680: 			    RAW addr to memory_rw, whose `offset = paddr &
+1681: 			    offset_mask' is PAGE-granularity and whose transfer is
+1682: 			    a raw memcpy -- so an unaligned base SPLICED BYTES
+1683: 			    ACROSS A WORD BOUNDARY and the same instruction
+1684: 			    returned different bytes according to host page-cache
+1685: 			    warmth, a condition invisible to the guest.
+1686: 
+1687: 			    The mask must NOT move to the function entry: `*np =
+1688: 			    addr' at the writeback below uses the unmasked running
+1689: 			    value, and Mode 4 writeback derives from unmasked Rn.
+1690: 			    MEASURED: an entry-mask mutant scores 27/32 on the
+1691: 			    SHIPPED 32-row detector, killed by the five WB_UNAL rows
+1692: 			    alone (killtable_20260911e/probe_M_ENTRY.raw).
+1693: 			    *** THIS READ "20/25 ... (probe_M_ENTRY.raw)" UNTIL
+1694: 			    2026-09-11.  BOTH HALVES WERE WRONG. ***  20/25 is TABLE
+1695: 			    1's figure, carried forward while the detector grew
+1696: 			    25 -> 29 -> 32 rows; and the bare filename names FIVE
+1697: 			    different files with FIVE different scores -- 20/25,
+1698: 			    20/25, 24/29, 26/32, 27/32 -- so the citation could not
+1699: 			    be resolved even in principle.  That is the
+1700: 			    durable-path rule failing by AMBIGUITY rather than by
+1701: 			    overwrite, which is a shape this project had not
+1702: 			    recorded.  A score claim names the DIRECTORY, not just
+1703: 			    the file.  Found by the Opus pass-C measuring seat.
+1704: 			    It is additionally invisible to
+1705: 			    the pre-existing arm_writeback_probe.py BY
+1706: 			    CONSTRUCTION -- that probe scopes itself to the
+1707: 			    single-register path, a different generator, and never
+1708: 			    reaches these helpers.  *** THAT SECOND CLAIM IS NOT A
+1709: 			    MEASUREMENT AND AN EARLIER DRAFT WROTE IT AS ONE: the
+1710: 			    figure "22/22" appears in no .raw and in no SCORES.txt,
+1711: 			    only in briefs and seat answers.  Stated here by
+1712: 			    construction, which is what the evidence supports. ***
+1713: 			    The generated fast dispatch already separates access
+1714: 			    from writeback the same way (generate_arm_multi.c,
+1715: 			    `addr &= 0xffc').  */
+1716: 			if (!cpu->memory_rw(cpu, cpu->mem, addr & 0xfffffffc, data,
+1717: 			    sizeof(data), MEM_READ, CACHE_DATA)) {
+1718: 				/*  load failed  */
+1719: 				return;
+1720: 			}
+1721: 			if (cpu->byte_order == EMUL_LITTLE_ENDIAN) {
+1722: 				value = data[0] +
+1723: 				    (data[1] << 8) + (data[2] << 16)
+1724: 				    + ((uint32_t)data[3] << 24);
+1725: 			} else {
+1726: 				value = data[3] +
+1727: 				    (data[2] << 8) + (data[1] << 16)
+1728: 				    + ((uint32_t)data[0] << 24);
+1729: 			}
+1730: 		}
+1731: 
+1732: 		new_values[i] = value;
+1733: 
+1734: 		if (!p_bit) {
+1735: 			if (u_bit)
+1736: 				addr += sizeof(uint32_t);
+1737: 			else
+1738: 				addr -= sizeof(uint32_t);
+1739: 		}
+1740: 	}
+1741: 
+1742: 	for (i=(u_bit? 0 : 15); i>=0 && i<=15; i+=(u_bit? 1 : -1)) {
+1743: 		if (!((iw >> i) & 1)) {
+1744: 			/*  Skip register i:  */
+1745: 			continue;
+1746: 		}
+1747: 
+1748: 		if (!s_bit) {
+1749: 			cpu->cd.arm.r[i] = new_values[i];
+1750: 		} else {
+1751: 			switch (cpu->cd.arm.cpsr & ARM_FLAG_MODE) {
+1752: 			case ARM_MODE_USR32:
+1753: 			case ARM_MODE_SYS32:
+1754: 				cpu->cd.arm.r[i] = new_values[i];
+1755: 				break;
+1756: 			case ARM_MODE_FIQ32:
+1757: 				if (i >= 8 && i <= 14)
+1758: 					cpu->cd.arm.default_r8_r14[i-8] =
+1759: 					    new_values[i];
+1760: 				else
+1761: 					cpu->cd.arm.r[i] = new_values[i];
+1762: 				break;
+1763: 			case ARM_MODE_SVC32:
+1764: 			case ARM_MODE_ABT32:
+1765: 			case ARM_MODE_UND32:
+1766: 			case ARM_MODE_IRQ32:
+1767: 				if (i >= 13 && i <= 14)
+1768: 					cpu->cd.arm.default_r8_r14[i-8] =
+1769: 					    new_values[i];
+1770: 				else
+1771: 					cpu->cd.arm.r[i] = new_values[i];
+1772: 				break;
+1773: 			}
+1774: 		}
+1775: 	}
+1776: 
+1777: 	if (w_bit)
+1778: 		*np = addr;
+1779: 
+1780: 	if (return_flag) {
+1781: 		uint32_t new_cpsr;
+1782: 		int switch_register_banks;
+1783: 
+1784: 		switch (cpu->cd.arm.cpsr & ARM_FLAG_MODE) {
+1785: 		case ARM_MODE_FIQ32:
+1786: 			new_cpsr = cpu->cd.arm.spsr_fiq; break;
+1787: 		case ARM_MODE_ABT32:
+1788: 			new_cpsr = cpu->cd.arm.spsr_abt; break;
+1789: 		case ARM_MODE_UND32:
+1790: 			new_cpsr = cpu->cd.arm.spsr_und; break;
+1791: 		case ARM_MODE_IRQ32:
+1792: 			new_cpsr = cpu->cd.arm.spsr_irq; break;
+1793: 		case ARM_MODE_SVC32:
+1794: 			new_cpsr = cpu->cd.arm.spsr_svc; break;
+1795: 		default:fatal("bdt_load: unimplemented mode %i\n",
+1796: 			    cpu->cd.arm.cpsr & ARM_FLAG_MODE);
+1797: 			cpu->running = 0;
+1798: 			cpu->cd.arm.next_ic = &nothing_call;
+1799: 			return;
+1800: 		}
+1801: 
+1802: 		switch_register_banks = (cpu->cd.arm.cpsr & ARM_FLAG_MODE) !=
+1803: 		    (new_cpsr & ARM_FLAG_MODE);
+1804: 
+1805: 		if (switch_register_banks)
+1806: 			arm_save_register_bank(cpu);
+1807: 
+1808: 		cpu->cd.arm.cpsr = new_cpsr;
+1809: 		cpu->cd.arm.flags = cpu->cd.arm.cpsr >> 28;
+1810: 
+1811: 		if (switch_register_banks)
+1812: 			arm_load_register_bank(cpu);
+1813: 	}
+1814: 
+1815: 	/*  NOTE: Special case: Loading the PC  */
+1816: 	if (iw & 0x8000) {
+1817: 		cpu->pc = cpu->cd.arm.r[ARM_PC] & 0xfffffffc;
+1818: 		if (cpu->machine->show_trace_tree)
+1819: 			cpu_functioncall_trace_return(cpu);
+1820: 		/*  TODO: There is no need to update the
+1821: 		    pointers if this is a return to the
+1822: 		    same page!  */
+1823: 		/*  Find the new physical page and update the
+1824: 		    translation pointers:  */
+1825: 		quick_pc_to_pointers_arm(cpu);
+1826: 	}
+1827: }
+1828: 
+1829: 
+1830: /*
+1831:  *  Shared between regular ARM and the THUMB encoded 'push'.
+1832:  */
+1833: void arm_push(struct cpu* cpu, uint32_t* np, int p_bit, int u_bit, int s_bit, int w_bit, uint16_t regs)
+1834: {
+1835: 	int i;
+1836: 	uint32_t value, addr = *np;
+1837: 	unsigned char data[4];
+1838: 	unsigned char *page;
+1839: 
+1840: 	for (i=(u_bit? 0 : 15); i>=0 && i<=15; i+=(u_bit? 1 : -1)) {
+1841: 		if (!((regs >> i) & 1)) {
+1842: 			/*  Skip register i:  */
+1843: 			continue;
+1844: 		}
+1845: 
+1846: 		value = cpu->cd.arm.r[i];
+1847: 
+1848: 		if (s_bit) {
+1849: 			switch (cpu->cd.arm.cpsr & ARM_FLAG_MODE) {
+1850: 			case ARM_MODE_FIQ32:
+1851: 				if (i >= 8 && i <= 14)
+1852: 					value = cpu->cd.arm.default_r8_r14[i-8];
+1853: 				break;
+1854: 			case ARM_MODE_ABT32:
+1855: 			case ARM_MODE_UND32:
+1856: 			case ARM_MODE_IRQ32:
+1857: 			case ARM_MODE_SVC32:
+1858: 				if (i >= 13 && i <= 14)
+1859: 					value = cpu->cd.arm.default_r8_r14[i-8];
+1860: 				break;
+1861: 			case ARM_MODE_USR32:
+1862: 			case ARM_MODE_SYS32:
+1863: 				break;
+1864: 			}
+1865: 		}
+1866: 
+1867: 		/*  NOTE/TODO: 8 vs 12 on some ARMs  */
+1868: 		if (i == ARM_PC)
+1869: 			value = cpu->pc + 12;
+1870: 
+1871: 		if (p_bit) {
+1872: 			if (u_bit)
+1873: 				addr += sizeof(uint32_t);
+1874: 			else
+1875: 				addr -= sizeof(uint32_t);
+1876: 		}
+1877: 
+1878: 		page = cpu->cd.arm.host_store[addr >> 12];
+1879: 		if (page != NULL) {
+1880: 			uint32_t *p32 = (uint32_t *) page;
+1881: 			/*  Change byte order of value if
+1882: 			    host and emulated endianness differ:  */
+1883: #ifdef HOST_LITTLE_ENDIAN
+1884: 			if (cpu->byte_order == EMUL_BIG_ENDIAN)
+1885: #else
+1886: 			if (cpu->byte_order == EMUL_LITTLE_ENDIAN)
+1887: #endif
+1888: 				value = ((value & 0xff) << 24) |
+1889: 				    ((value & 0xff00) << 8) |
+1890: 				    ((value & 0xff0000) >> 8) |
+1891: 				    ((value & 0xff000000) >> 24);
+1892: 			p32[(addr & 0xfff) >> 2] = value;
+1893: 		} else {
+1894: 			if (cpu->byte_order == EMUL_LITTLE_ENDIAN) {
+1895: 				data[0] = value;
+1896: 				data[1] = value >> 8;
+1897: 				data[2] = value >> 16;
+1898: 				data[3] = value >> 24;
+1899: 			} else {
+1900: 				data[0] = value >> 24;
+1901: 				data[1] = value >> 16;
+1902: 				data[2] = value >> 8;
+1903: 				data[3] = value;
+1904: 			}
+1905: 			/*  #524 (armbdt): the STM side of the same defect; see
+1906: 			    the LDM site in arm_pop() for the full reasoning.
+1907: 			    STM(1) p.A4-190 carries the identical
+1908: 			    ignore-the-low-two-bits rule, and `*np = addr' below
+1909: 			    must keep seeing the UNMASKED running value.  */
+1910: 			if (!cpu->memory_rw(cpu, cpu->mem, addr & 0xfffffffc, data,
+1911: 			    sizeof(data), MEM_WRITE, CACHE_DATA)) {
+1912: 				/*  store failed  */
+1913: 				return;
+1914: 			}
+1915: 		}
+1916: 
+1917: 		if (!p_bit) {
+1918: 			if (u_bit)
+1919: 				addr += sizeof(uint32_t);
+1920: 			else
+1921: 				addr -= sizeof(uint32_t);
+1922: 		}
+1923: 	}
+1924: 
+1925: 	if (w_bit)
+1926: 		*np = addr;
+1927: }
+1928: 
+1929: 
+1930: /*
+1931:  *  bdt_load:  Block Data Transfer, Load
+1932:  *
+1933:  *  arg[0] = pointer to uint32_t in host memory, pointing to the base register
+1934:  *  arg[1] = 32-bit instruction word. Most bits are read from this.
+1935:  */
+1936: X(bdt_load)
+1937: {
+1938: 	uint32_t *np = (uint32_t *)ic->arg[0];
+1939: 	uint32_t low_pc;
+1940: 	uint32_t iw = ic->arg[1];  /*  xxxx100P USWLnnnn llllllll llllllll  */
+1941: 	int p_bit = iw & 0x01000000;
+1942: 	int u_bit = iw & 0x00800000;
+1943: 	int s_bit = iw & 0x00400000;
+1944: 	int w_bit = iw & 0x00200000;
+1945: 
+1946: #ifdef GATHER_BDT_STATISTICS
+1947: 	if (!s_bit)
+1948: 		update_bdt_statistics(iw);
+1949: #endif
+1950: 
+1951: 	/*  Synchronize the program counter:  */
+1952: 	low_pc = ((size_t)ic - (size_t)
+1953: 	    cpu->cd.arm.cur_ic_page) / sizeof(struct arm_instr_call);
+1954: 	cpu->pc &= ~((ARM_IC_ENTRIES_PER_PAGE-1) << ARM_INSTR_ALIGNMENT_SHIFT);
+1955: 	cpu->pc += (low_pc << ARM_INSTR_ALIGNMENT_SHIFT);
+1956: 
+1957: 	arm_pop(cpu, np, p_bit, u_bit, s_bit, w_bit, (uint16_t)iw);
+1958: }
+1959: Y(bdt_load)
+1960: 
+1961: 
+1962: /*
+1963:  *  bdt_store:  Block Data Transfer, Store
+1964:  *
+1965:  *  arg[0] = pointer to uint32_t in host memory, pointing to the base register
+1966:  *  arg[1] = 32-bit instruction word. Most bits are read from this.
+1967:  */
+1968: X(bdt_store)
+1969: {
+1970: 	uint32_t *np = (uint32_t *)ic->arg[0];
+1971: 	uint32_t low_pc;
+1972: 	uint32_t iw = ic->arg[1];  /*  xxxx100P USWLnnnn llllllll llllllll  */
+1973: 	int p_bit = iw & 0x01000000;
+1974: 	int u_bit = iw & 0x00800000;
+1975: 	int s_bit = iw & 0x00400000;
+1976: 	int w_bit = iw & 0x00200000;
+1977: 
+1978: #ifdef GATHER_BDT_STATISTICS
+1979: 	if (!s_bit)
+1980: 		update_bdt_statistics(iw);
+1981: #endif
+1982: 
+1983: 	/*  Synchronize the program counter:  */
+1984: 	low_pc = ((size_t)ic - (size_t)
+1985: 	    cpu->cd.arm.cur_ic_page) / sizeof(struct arm_instr_call);
+1986: 	cpu->pc &= ~((ARM_IC_ENTRIES_PER_PAGE-1) << ARM_INSTR_ALIGNMENT_SHIFT);
+1987: 	cpu->pc += (low_pc << ARM_INSTR_ALIGNMENT_SHIFT);
+1988: 
+1989: 	arm_push(cpu, np, p_bit, u_bit, s_bit, w_bit, (uint16_t)iw);
+1990: }
+1991: Y(bdt_store)
+1992: 
+1993: 
+1994: /*
+1995:  *  Load Register Exclusive (ARM "load linked"):
+1996:  *
+1997:  *  A Load Register Exclusive instruction initiates a RMW (read-modify-write)
+1998:  *  sequence.
+1999:  *
+2000:  *  A Store Register Exclusive instruction ends the sequence.
+
+codex
+The loop puts PC first, with running addresses `0x21007` then `0x21003`. The edited call masks the first address to `0x21004`. I’m checking the probe’s readback tuple and dispatch conditions to distinguish the expected value from proof that the cold path runs.
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$sourceLines = Get-Content -LiteralPath '"'C:\\DocumentNoSnc\\CC\\GXEMUL\\GXEMUL-SEC\\src\\cpus\\cpu_arm_instr.c'; foreach ("'$sourceRange in @(@(120,205),@(4820,4865))) { for ($sourceNumber = $sourceRange[0]; $sourceNumber -le $sourceRange[1]; $sourceNumber++) { '"'{0}: {1}' -f "'$sourceNumber, $sourceLines[$sourceNumber - 1] } }' in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$probeLines = Get-Content -LiteralPath '"'C:\\DocumentNoSnc\\CC\\GXEMUL\\GXEMUL-SEC\\regress\\arm_bdt_probe.py'; for ("'$probeNumber = 390; $probeNumber -le $probeLines.Count; $probeNumber++) { '"'{0}: {1}' -f "'$probeNumber, $probeLines[$probeNumber - 1] }' in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$probeLines = Get-Content -LiteralPath '"'C:\\DocumentNoSnc\\CC\\GXEMUL\\GXEMUL-SEC\\regress\\arm_bdt_probe.py'; for ("'$probeNumber = 1; $probeNumber -le 180; $probeNumber++) { '"'{0}: {1}' -f "'$probeNumber, $probeLines[$probeNumber - 1] }' in C:\DocumentNoSnc\CC\GXEMUL
+ succeeded in 160ms:
+1: #!/usr/bin/env python3
+2: """
+3: arm_bdt_probe.py -- Rung-3 witness for ARM block data transfer (armbdt).
+4: 
+5: Tests all four callers of arm_pop / arm_push:
+6:   1. X(bdt_load)          (ARM LDM)
+7:   2. X(bdt_store)         (ARM STM)
+8:   3. Thumb POP            (cpu_arm.c:1677)
+9:   4. Thumb PUSH           (cpu_arm.c:1670)
+10: 
+11: Under cold debugger on unmodified in-tree machine testarm.
+12: Core row shape: identical instruction against identical unaligned base executed
+13: COLD and WARM, asserting both produce identical architecturally-correct bytes.
+14: Discriminates writeback (W=1) unmasked arithmetic result to kill mask-at-entry mutant.
+15: Includes liveness control and attribution control asserting specific byte splice.
+16: 
+17: PROMOTED 2026-09-11 from regress/artifacts/armbdt/agy_armbdt_witness_20260911.py,
+18: which stays in place as the AS-RUN record of tables 1-5.  This copy is the one
+19: that evolves and that gate_arm.sh executes; editing the artifact copy would
+20: falsify what those tables actually measured.
+21: 
+22: *** read_mem32() DUMPS FROM THE 16-BYTE-ALIGNED BASE.  An unaligned dump start
+23: still carries the aligned line label but BLANK-PADS the leading word groups,
+24: and .split() then shifts every column index -- so the read silently returns a
+25: NEIGHBOURING word.  That defect corrupted 8 of 10 legs of table 4 and made a
+26: CORRECT fix report a red BASE row.  Row: probereadalign. ***
+27: """
+28: 
+29: import os, sys, pty, select, time, re
+30: 
+31: BIN = sys.argv[1] if len(sys.argv) > 1 else "/tmp/gxarmbdt_clone/gxemul"
+32: LEG = sys.argv[2] if len(sys.argv) > 2 else "BASE"
+33: STUB = "/tmp/stub_armbdt.bin"
+34: if not os.path.exists(STUB):
+35:     with open(STUB, "wb") as f:
+36:         f.write((0xE1A00000).to_bytes(4, "little"))
+37: 
+38: CODE = 0x00008000
+39: PAGE_LDM = 0x00020000
+40: PAGE_STM = 0x00021000
+41: PAGE_TPOP = 0x00022000
+42: PAGE_TPUSH = 0x00023000
+43: 
+44: class GXemulSession:
+45:     def __init__(self, bin_path, timeout=30):
+46:         self.bin_path = bin_path
+47:         self.pid, self.fd = pty.fork()
+48:         if self.pid == 0:
+49:             os.execvp(bin_path, [bin_path, "-V", "-A", "-T", "-E", "testarm", "-M", "64", "0x%x:%s" % (CODE, STUB)])
+50:             os._exit(127)
+51:         self.buf = ""
+52:         self.dead = False
+53:         self.wait_prompt(timeout)
+54: 
+55:     def rd(self, t=0.2):
+56:         r, _, _ = select.select([self.fd], [], [], t)
+57:         if self.fd not in r:
+58:             return False
+59:         try:
+60:             d = os.read(self.fd, 65536)
+61:         except OSError:
+62:             self.dead = True
+63:             return False
+64:         if not d:
+65:             self.dead = True
+66:             return False
+67:         self.buf += d.decode("latin1", "replace")
+68:         return True
+69: 
+70:     def wait_prompt(self, timeout=20):
+71:         t0 = time.time()
+72:         while time.time() - t0 < timeout:
+73:             if self.dead:
+74:                 return False
+75:             self.rd(0.1)
+76:             if self.buf.rstrip().endswith("GXemul>"):
+77:                 return True
+78:         return False
+79: 
+80:     def send(self, cmd_str, timeout=15):
+81:         if self.dead:
+82:             return ""
+83:         mark = len(self.buf)
+84:         b = (cmd_str + "\n").encode("latin1")
+85:         try:
+86:             os.write(self.fd, b)
+87:         except OSError:
+88:             self.dead = True
+89:             return ""
+90:         t0 = time.time()
+91:         while time.time() - t0 < timeout:
+92:             if self.dead:
+93:                 return ""
+94:             self.rd(0.1)
+95:             if len(self.buf) > mark and self.buf[mark:].rstrip().endswith("GXemul>"):
+96:                 return self.buf[mark:]
+97:         return ""
+98: 
+99:     def run_prog(self, prog_words, timeout=3.0):
+100:         for i, w in enumerate(prog_words):
+101:             self.send("put w 0x%x, 0x%08x" % (CODE + 4*i, w))
+102:         self.send("pc=0x%x" % CODE)
+103:         mark = len(self.buf)
+104:         try:
+105:             os.write(self.fd, b"continue\n")
+106:         except OSError:
+107:             self.dead = True
+108:             return False
+109:         t0 = time.time()
+110:         while time.time() - t0 < timeout:
+111:             self.rd(0.1)
+112:         try:
+113:             os.write(self.fd, b"\x03")
+114:         except OSError:
+115:             pass
+116:         return self.wait_prompt(timeout=5)
+117: 
+118:     def get_reg(self, rname):
+119:         raw = self.send("print %s" % rname)
+120:         m = re.search(r"0x([0-9a-fA-F]+)", raw)
+121:         return int(m.group(1), 16) if m else None
+122: 
+123:     def read_mem32(self, addr):
+124:         #  *** DUMP FROM THE 16-BYTE-ALIGNED BASE, ALWAYS. ***  Measured
+125:         #  2026-09-11: `dump` at an UNALIGNED start still labels the line
+126:         #  with the aligned address but BLANK-PADS the leading word groups:
+127:         #    aligned    0x00021000  00000000 44332211
+128:         #    unaligned  0x00021000           44332211 00000000
+129:         #  `.split()` collapses that padding, so every group index shifts
+130:         #  and parts[idx] silently returns a NEIGHBOURING word.  Dumping
+131:         #  from the aligned base keeps all four groups present, which is
+132:         #  what the idx arithmetic below already assumes.
+133:         base = addr & ~0xF
+134:         raw = self.send("dump 0x%x 0x%x" % (base, base + 16))
+135:         hex_addr = "0x%08x" % (addr & ~0xF)
+136:         offset_in_16 = addr & 0xF
+137:         for line in raw.splitlines():
+138:             if line.startswith(hex_addr):
+139:                 parts = line[12:48].split()
+140:                 idx = offset_in_16 // 4
+141:                 if idx < len(parts):
+142:                     hex_str = parts[idx]
+143:                     if len(hex_str) == 8:
+144:                         b0 = int(hex_str[0:2], 16)
+145:                         b1 = int(hex_str[2:4], 16)
+146:                         b2 = int(hex_str[4:6], 16)
+147:                         b3 = int(hex_str[6:8], 16)
+148:                         return b0 | (b1 << 8) | (b2 << 16) | (b3 << 24)
+149:         return None
+150: 
+151:     def get_tlb_page(self, vaddr):
+152:         raw = self.send("tlbdump 0,r")
+153:         hex_addr = "0x%08x" % (vaddr & ~0xFFF)
+154:         for line in raw.splitlines():
+155:             if hex_addr in line:
+156:                 m_load = re.search(r"load=([yn])", line)
+157:                 m_store = re.search(r"store=([yn])", line)
+158:                 load_ok = (m_load.group(1) == "y") if m_load else False
+159:                 store_ok = (m_store.group(1) == "y") if m_store else False
+160:                 return True, load_ok, store_ok
+161:         return False, False, False
+162: 
+163:     def close(self):
+164:         try:
+165:             self.send("quit", timeout=2)
+166:             os.kill(self.pid, 9)
+167:             os.waitpid(self.pid, 0)
+168:         except Exception:
+169:             pass
+170: 
+171: def main():
+172:     print(f"=== ARM BLOCK DATA TRANSFER WITNESS (armbdt)  LEG={LEG} ===")
+173:     print(f"Binary: {BIN}")
+174:     print("Core symptom: Unaligned base splices bytes across word boundary on cold host pages")
+175:     print("Mandatory writeback: Unmasked Rn arithmetic preserved under W=1 Mode 4 transfers")
+176:     print("")
+177: 
+178:     results = []
+179:     failing = []
+180: 
+
+ succeeded in 171ms:
+390:     s = GXemulSession(BIN)
+391:     for i, b in enumerate(bytes_ldm):
+392:         s.send("put b 0x%x, 0x%02x" % (PAGE_LDM + i, b))
+393:     prog_ldm_wb1 = [0xe3a00802, 0xe2800001, 0xe8b00002, 0xeafffffe]
+394:     s.run_prog(prog_ldm_wb1)
+395:     r0_wb1 = s.get_reg("r0")
+396:     s.close()
+397:     record("ARM_LDM_WB_UNAL1", "WB", (r0_wb1 == 0x20005),
+398:            f"r0={r0_wb1:#010x} want 0x00020005 (mutant 0x00020004)")
+399: 
+400:     # Writeback 2-regs: ldmia r0!, {r1, r2} with unaligned base 0x20001
+401:     s = GXemulSession(BIN)
+402:     for i, b in enumerate(bytes_ldm):
+403:         s.send("put b 0x%x, 0x%02x" % (PAGE_LDM + i, b))
+404:     prog_ldm_wb2 = [0xe3a00802, 0xe2800001, 0xe8b00006, 0xeafffffe]
+405:     s.run_prog(prog_ldm_wb2)
+406:     r0_wb2 = s.get_reg("r0")
+407:     s.close()
+408:     record("ARM_LDM_WB_UNAL2", "WB", (r0_wb2 == 0x20009),
+409:            f"r0={r0_wb2:#010x} want 0x00020009 (mutant 0x00020008)")
+410: 
+411:     # -------------------------------------------------------------
+412:     # 3. CALLER 2: ARM STM (X(bdt_store)) - COLD vs WARM
+413:     # -------------------------------------------------------------
+414:     # Cold STM: seed 0x21000..0x21007 with zeroes via put b
+415:     s = GXemulSession(BIN)
+416:     for i in range(8):
+417:         s.send("put b 0x%x, 0x00" % (PAGE_STM + i))
+418:     in_tlb_stm_cold, _, _ = s.get_tlb_page(PAGE_STM)
+419: 
+420:     prog_stm = [
+421:         0xe59f0008, 0xe59f1008, 0xe8800002, 0xeafffffe,
+422:         0x00021001, 0x11223344
+423:     ]
+424:     s.run_prog(prog_stm)
+425:     r4_stm_cold = s.read_mem32(PAGE_STM)
+426:     r5_stm_cold = s.read_mem32(PAGE_STM + 4)
+427:     s.close()
+428: 
+429:     # Warm STM: seed 0x21000..0x21007 with zeroes via put w
+430:     s = GXemulSession(BIN)
+431:     s.send("put w 0x%x, 0x00000000" % PAGE_STM)
+432:     s.send("put w 0x%x, 0x00000000" % (PAGE_STM + 4))
+433:     in_tlb_stm_warm, _, _ = s.get_tlb_page(PAGE_STM)
+434:     s.run_prog(prog_stm)
+435:     r4_stm_warm = s.read_mem32(PAGE_STM)
+436:     r5_stm_warm = s.read_mem32(PAGE_STM + 4)
+437:     s.close()
+438: 
+439:     record("ARM_STM_PATH_COLD", "PATH", (not in_tlb_stm_cold),
+440:            f"page resident before cold={in_tlb_stm_cold} want False")
+441:     record("ARM_STM_PATH_WARM", "PATH", in_tlb_stm_warm,
+442:            f"page resident before warm={in_tlb_stm_warm} want True")
+443:     record("ARM_STM_COLD_DATA", "DATA", (r4_stm_cold == 0x11223344),
+444:            f"w0={r4_stm_cold:#010x} want 0x11223344 (bug 0x22334400)")
+445:     record("ARM_STM_COLD_CLOBBER", "DATA", (r5_stm_cold == 0x00000000),
+446:            f"w1={r5_stm_cold:#010x} want 0x00000000 (bug 0x00000011)")
+447:     record("ARM_STM_WARM_DATA", "DATA", (r4_stm_warm == 0x11223344 and r5_stm_warm == 0),
+448:            f"w0={r4_stm_warm:#010x} w1={r5_stm_warm:#010x}")
+449:     record("ARM_STM_DIV_CHECK", "DISC", (r4_stm_cold == r4_stm_warm and r4_stm_cold == 0x11223344),
+450:            f"cold={r4_stm_cold:#010x} warm={r4_stm_warm:#010x}")
+451: 
+452:     #  ---- #524 clause-(d) closure: the +2 base, STM side ----
+453:     #  Same discrimination on the store path.  Correct: the word lands at
+454:     #  PAGE_STM.  Under ~1 the base stays 0x21002, so the bytes straddle and
+455:     #  PAGE_STM reads 0x33440000 instead.
+456:     s = GXemulSession(BIN)
+457:     for i in range(8):
+458:         s.send("put b 0x%x, 0x00" % (PAGE_STM + i))
+459:     in_tlb_stm_p2, _, _ = s.get_tlb_page(PAGE_STM)
+460:     prog_stm_p2 = [
+461:         0xe59f0008, 0xe59f1008, 0xe8800002, 0xeafffffe,
+462:         0x00021002, 0x11223344
+463:     ]
+464:     s.run_prog(prog_stm_p2)
+465:     w0_p2 = s.read_mem32(PAGE_STM)
+466:     s.close()
+467:     record("ARM_STM_PATH_COLD_P2", "PATH", (not in_tlb_stm_p2),
+468:            f"page resident before +2 cold={in_tlb_stm_p2} want False")
+469:     record("ARM_STM_COLD_DATA_P2", "DATA", (w0_p2 == 0x11223344),
+470:            f"w0={w0_p2:#010x} want 0x11223344 (mask1 mutant 0x33440000)")
+471: 
+472:     #  ==== CLASS CLOSURE, cell 2 of 3: the same word position, STORE side ====
+473:     #    0x21005 & ~3 == 0x21004 (correct: word lands at PAGE_STM+4)
+474:     #    0x21005 & ~7 == 0x21000 (mutant:  word lands at PAGE_STM)
+475:     #  Both halves are asserted, so the row cannot pass by the value merely
+476:     #  being absent from one place.
+477:     s = GXemulSession(BIN)
+478:     for i in range(8):
+479:         s.send("put b 0x%x, 0x00" % (PAGE_STM + i))
+480:     prog_stm_b2 = [
+481:         0xe59f0008, 0xe59f1008, 0xe8800002, 0xeafffffe,
+482:         0x00021005, 0x11223344
+483:     ]
+484:     s.run_prog(prog_stm_b2)
+485:     w0_b2 = s.read_mem32(PAGE_STM)
+486:     w1_b2 = s.read_mem32(PAGE_STM + 4)
+487:     s.close()
+488:     record("ARM_STM_COLD_DATA_BIT2", "DATA", (w1_b2 == 0x11223344 and w0_b2 == 0x00000000),
+489:            f"w0={w0_b2:#010x} w1={w1_b2:#010x} want w1=0x11223344 w0=0 (mask~7 swaps them)")
+490: 
+491:     #  ==== THE STORE SIDE OF THE ADDRESSING-MODE PRODUCT ====
+492:     #
+493:     #  *** THESE CELLS HAD NO ROW AT ALL, and the gap was invisible because `p`
+494:     #  and `u` are ONE SELECTOR, not two bits: together they name the ADDRESSING
+495:     #  MODE.  The code tests them NESTED (`if (p_bit) { if (u_bit)`), the
+496:     #  architecture names the pair as one field, and generate_arm_multi.c:120
+497:     #  switches on `p*2+u`.  Every store row here was STM**IA**, and Thumb PUSH
+498:     #  is hardcoded **DB** (cpu_arm.c:1670) -- so IB and DA were never driven on
+499:     #  the store side at any residue or strength.  A round block claiming *"Thumb
+500:     #  PUSH already varies p and u there"* was two modes of four stated as an
+501:     #  axis: the dropped-qualifier class. ***
+502:     #
+503:     #  EVERY ROW BELOW SITS AT AN ACCESS ADDRESS = 7 (mod 8).  THAT IS THE
+504:     #  GEOMETRIC FIX FOR THE WHOLE CHAIN: 0x21007 has bits 0, 1 AND 2 set, so
+505:     #  ~1, ~2, ~3 and ~7 are ALL discriminated by ONE access.  Every earlier
+506:     #  repair placed its rows at the residue of the mutant it had just found
+507:     #  (2 for ~1, bit-2-set for ~7) -- which is precisely why each pass found
+508:     #  the next strength.  0x21007 & ~3 == 0x21004, so the word must land at
+509:     #  PAGE_STM+4 and PAGE_STM must stay ZERO; both halves are asserted so the
+510:     #  row cannot pass by the value merely being absent from one place.
+511: 
+512:     s = GXemulSession(BIN)
+513:     for i in range(8):
+514:         s.send("put b 0x%x, 0x00" % (PAGE_STM + i))
+515:     prog_stmib = [
+516:         0xe59f0008, 0xe59f1008, 0xe9800002, 0xeafffffe,
+517:         0x00021003, 0x11223344
+518:     ]
+519:     s.run_prog(prog_stmib)
+520:     w0_stmib = s.read_mem32(PAGE_STM)
+521:     w1_stmib = s.read_mem32(PAGE_STM + 4)
+522:     s.close()
+523:     record("ARM_STM_IB_R7", "DATA", (w0_stmib == 0x00000000 and w1_stmib == 0x11223344),
+524:            f"w0={w0_stmib:#010x} w1={w1_stmib:#010x} want w0=0 w1=0x11223344  -- STMIB r0,{{r1}} from 0x21003: PRE-increment, access 0x21007. Closes push x IB")
+525: 
+526:     s = GXemulSession(BIN)
+527:     for i in range(8):
+528:         s.send("put b 0x%x, 0x00" % (PAGE_STM + i))
+529:     prog_stmda = [
+530:         0xe59f0008, 0xe59f1008, 0xe8000002, 0xeafffffe,
+531:         0x00021007, 0x11223344
+532:     ]
+533:     s.run_prog(prog_stmda)
+534:     w0_stmda = s.read_mem32(PAGE_STM)
+535:     w1_stmda = s.read_mem32(PAGE_STM + 4)
+536:     s.close()
+537:     record("ARM_STM_DA_R7", "DATA", (w0_stmda == 0x00000000 and w1_stmda == 0x11223344),
+538:            f"w0={w0_stmda:#010x} w1={w1_stmda:#010x} want w0=0 w1=0x11223344  -- STMDA r0,{{r1}} from 0x21007: post-DECREMENT, access 0x21007. Closes push x DA")
+539: 
+540:     s = GXemulSession(BIN)
+541:     for i in range(8):
+542:         s.send("put b 0x%x, 0x00" % (PAGE_STM + i))
+543:     prog_stms = [
+544:         0xe59f0008, 0xe59f1008, 0xe8c00002, 0xeafffffe,
+545:         0x00021007, 0x11223344
+546:     ]
+547:     s.run_prog(prog_stms)
+548:     w0_stms = s.read_mem32(PAGE_STM)
+549:     w1_stms = s.read_mem32(PAGE_STM + 4)
+550:     s.close()
+551:     record("ARM_STM_S_R7", "DATA", (w0_stms == 0x00000000 and w1_stms == 0x11223344),
+552:            f"w0={w0_stms:#010x} w1={w1_stms:#010x} want w0=0 w1=0x11223344  -- STMIA r0,{{r1}}^ from 0x21007: S-bit store -- the cell E1 MEASURED as a TOTAL ESCAPE (L2)")
+553: 
+554:     # Writeback STM: stmia r0!, {r1} with unaligned base 0x21001
+555:     s = GXemulSession(BIN)
+556:     for i in range(8):
+557:         s.send("put b 0x%x, 0x00" % (PAGE_STM + i))
+558:     prog_stm_wb = [
+559:         0xe59f0008, 0xe59f1008, 0xe8a00002, 0xeafffffe,
+560:         0x00021001, 0x11223344
+561:     ]
+562:     s.run_prog(prog_stm_wb)
+563:     r0_stm_wb = s.get_reg("r0")
+564:     s.close()
+565:     record("ARM_STM_WB_UNAL", "WB", (r0_stm_wb == 0x21005),
+566:            f"r0={r0_stm_wb:#010x} want 0x00021005 (mutant 0x00021004)")
+567: 
+568:     # -------------------------------------------------------------
+569:     # 4. CALLER 3: Thumb POP (cpu_arm.c:1677) - COLD vs WARM
+570:     # -------------------------------------------------------------
+571:     # Cold Thumb POP:
+572:     s = GXemulSession(BIN)
+573:     for i, b in enumerate(bytes_ldm):
+574:         s.send("put b 0x%x, 0x%02x" % (PAGE_TPOP + i, b))
+575:     prog_tpop = [0xe59f0008, 0xe1a0d000, 0xe28f0005, 0xe12fff10, 0x00022001, 0xe7febc02]
+576:     s.run_prog(prog_tpop)
+577:     r1_tpop_cold = s.get_reg("r1")
+578:     sp_tpop_cold = s.get_reg("sp")
+579:     s.close()
+580: 
+581:     # Warm Thumb POP:
+582:     s = GXemulSession(BIN)
+583:     s.send("put w 0x%x, 0x11223344" % PAGE_TPOP)
+584:     s.send("put w 0x%x, 0x55667788" % (PAGE_TPOP + 4))
+585:     s.run_prog(prog_tpop)
+586:     r1_tpop_warm = s.get_reg("r1")
+587:     s.close()
+588: 
+589:     record("THUMB_POP_COLD_DATA", "DATA", (r1_tpop_cold == 0x11223344),
+590:            f"r1={r1_tpop_cold:#010x} want 0x11223344 (bug 0x88112233)")
+591:     record("THUMB_POP_WARM_DATA", "DATA", (r1_tpop_warm == 0x11223344),
+592:            f"r1={r1_tpop_warm:#010x} want 0x11223344")
+593:     record("THUMB_POP_DIV_CHECK", "DISC", (r1_tpop_cold == r1_tpop_warm and r1_tpop_cold == 0x11223344),
+594:            f"cold={r1_tpop_cold:#010x} warm={r1_tpop_warm:#010x}")
+595:     record("THUMB_POP_WB_UNAL", "WB", (sp_tpop_cold == 0x22005),
+596:            f"sp={sp_tpop_cold:#010x} want 0x00022005 (mutant 0x00022004)")
+597: 
+598:     # -------------------------------------------------------------
+599:     # 5. CALLER 4: Thumb PUSH (cpu_arm.c:1670) - COLD vs WARM
+600:     # -------------------------------------------------------------
+601:     # Thumb push {r1} decrements sp by 4 before store (stmdb sp!, {r1}).
+602:     # Initial sp = 0x23005 -> decrements to 0x23001, stores r1 = 0x11223344.
+603:     # Cold Thumb PUSH:
+604:     s = GXemulSession(BIN)
+605:     for i in range(8):
+606:         s.send("put b 0x%x, 0x00" % (PAGE_TPUSH + i))
+607:     prog_tpush = [
+608:         0xe59f0014,  # 0x8000: ldr r0, [pc, #20] -> loads 0x23005 at 0x801c
+609:         0xe1a0d000,  # 0x8004: mov sp, r0
+610:         0xe59f1010,  # 0x8008: ldr r1, [pc, #16] -> loads 0x11223344 at 0x8020
+611:         0xe28f0005,  # 0x800c: add r0, pc, #5    -> 0x8019 (target 0x8018 | 1)
+612:         0xe12fff10,  # 0x8010: bx r0
+613:         0xe1a00000,  # 0x8014: nop
+614:         0xe7feb402,  # 0x8018: push {r1} (0xb402), b . (0xe7fe)
+615:         0x00023005,  # 0x801c
+616:         0x11223344   # 0x8020
+617:     ]
+618:     s.run_prog(prog_tpush)
+619:     sp_tpush_cold = s.get_reg("sp")
+620:     r4_tpush_cold = s.read_mem32(PAGE_TPUSH)
+621:     r5_tpush_cold = s.read_mem32(PAGE_TPUSH + 4)
+622:     s.close()
+623: 
+624:     # Warm Thumb PUSH:
+625:     s = GXemulSession(BIN)
+626:     s.send("put w 0x%x, 0x00000000" % PAGE_TPUSH)
+627:     s.send("put w 0x%x, 0x00000000" % (PAGE_TPUSH + 4))
+628:     s.run_prog(prog_tpush)
+629:     r4_tpush_warm = s.read_mem32(PAGE_TPUSH)
+630:     r5_tpush_warm = s.read_mem32(PAGE_TPUSH + 4)
+631:     s.close()
+632: 
+633:     record("THUMB_PUSH_COLD_DATA", "DATA", (r4_tpush_cold == 0x11223344),
+634:            f"w0={r4_tpush_cold:#010x} want 0x11223344 (bug 0x22334400)")
+635:     record("THUMB_PUSH_COLD_CLOBBER", "DATA", (r5_tpush_cold == 0x00000000),
+636:            f"w1={r5_tpush_cold:#010x} want 0x00000000 (bug 0x00000011)")
+637:     record("THUMB_PUSH_WARM_DATA", "DATA", (r4_tpush_warm == 0x11223344 and r5_tpush_warm == 0),
+638:            f"w0={r4_tpush_warm:#010x} w1={r5_tpush_warm:#010x}")
+639:     record("THUMB_PUSH_DIV_CHECK", "DISC", (r4_tpush_cold == r4_tpush_warm and r4_tpush_cold == 0x11223344),
+640:            f"cold={r4_tpush_cold:#010x} warm={r4_tpush_warm:#010x}")
+641: 
+642:     #  ==== CLASS CLOSURE, cell 3 of 3: THE PREDICATE AXIS (p_bit) ====
+643:     #  The repair-chain pass found a CONDITIONAL weakening that sweeps all 29:
+644:     #  mask 0xfffffffe when p_bit is true, 0xfffffffc when false.  Every ARM STM
+645:     #  run uses IA (p_bit=0) and gets the correct mask; Thumb PUSH uses DB
+646:     #  (p_bit=1) and gets the weakened one -- but its only effective address was
+647:     #  PAGE_TPUSH+1, where ~1 and ~3 AGREE.  So the predicate axis was exercised
+648:     #  at exactly one residue and the conditional was invisible.
+649:     #
+650:     #  sp starts 0x23006; push {r1} is stmdb sp!, so it decrements to 0x23002.
+651:     #    0x23002 & ~3 == 0x23000  (correct -> word at PAGE_TPUSH = 0x11223344)
+652:     #    0x23002 & ~1 == 0x23002  (mutant  -> straddles; PAGE_TPUSH = 0x33440000)
+653:     s = GXemulSession(BIN)
+654:     for i in range(8):
+655:         s.send("put b 0x%x, 0x00" % (PAGE_TPUSH + i))
+656:     prog_tpush_p2 = [
+657:         0xe59f0014, 0xe1a0d000, 0xe59f1010, 0xe28f0005,
+658:         0xe12fff10, 0xe1a00000, 0xe7feb402,
+659:         0x00023006, 0x11223344
+660:     ]
+661:     s.run_prog(prog_tpush_p2)
+662:     w0_tp2 = s.read_mem32(PAGE_TPUSH)
+663:     s.close()
+664:     record("THUMB_PUSH_COLD_DATA_P2", "DATA", (w0_tp2 == 0x11223344),
+665:            f"w0={w0_tp2:#010x} want 0x11223344 (p_bit-conditional mutant 0x33440000)")
+666:     record("THUMB_PUSH_WB_UNAL", "WB", (sp_tpush_cold == 0x23001),
+667:            f"sp={sp_tpush_cold:#010x} want 0x00023001 (mutant 0x00023000)")
+668: 
+669:     # -------------------------------------------------------------
+670:     # SUMMARY & SENTINEL
+671:     # -------------------------------------------------------------
+672:     n_ok = sum(1 for _, _, ok, _ in results if ok)
+673:     n_total = len(results)
+674:     print("")
+675:     print(f"SCORE {n_ok}/{n_total}")
+676:     #  Gate-idiom lines, matching the other ARM probes in gate_arm.sh.
+677:     #  PRINT-ONLY: no row verdict depends on them, so adding them does not
+678:     #  change the instrument the kill tables measured.
+679:     ctrl = "OK" if all(ok for name, _, ok, _ in results
+680:                        if name.startswith("CONTROL_")) else "BROKEN"
+681:     print(f"ARMBDT_CONTROL={ctrl}")
+682:     print(f"ARMBDT_RESULT={n_ok}/{n_total}")
+683:     if failing:
+684:         print(f"FAILING: {','.join(failing)}")
+685:     else:
+686:         print("FAILING: none")
+687:     print("ARMBDT_WITNESS_DONE")
+688: 
+689: if __name__ == "__main__":
+690:     main()
+
+ succeeded in 179ms:
+120:  *  uses the main foo function.)  Y also defines an array with pointers to
+121:  *  all of these functions.
+122:  *
+123:  *  If the compiler is good enough (i.e. allows long enough code sequences
+124:  *  to be inlined), then the Y functions will be compiled as full (inlined)
+125:  *  functions, otherwise they will simply call the X function.
+126:  */
+127: 
+128: uint8_t condition_hi[16] = { 0,0,1,1, 0,0,0,0, 0,0,1,1, 0,0,0,0 };
+129: uint8_t condition_ge[16] = { 1,0,1,0, 1,0,1,0, 0,1,0,1, 0,1,0,1 };
+130: uint8_t condition_gt[16] = { 1,0,1,0, 0,0,0,0, 0,1,0,1, 0,0,0,0 };
+131: 
+132: #define Y(n) void arm_instr_ ## n ## __eq(struct cpu *cpu,		\
+133: 			struct arm_instr_call *ic)			\
+134: 	{  if (cpu->cd.arm.flags & ARM_F_Z)				\
+135: 		arm_instr_ ## n (cpu, ic);		}		\
+136: 	void arm_instr_ ## n ## __ne(struct cpu *cpu,			\
+137: 			struct arm_instr_call *ic)			\
+138: 	{  if (!(cpu->cd.arm.flags & ARM_F_Z))				\
+139: 		arm_instr_ ## n (cpu, ic);		}		\
+140: 	void arm_instr_ ## n ## __cs(struct cpu *cpu,			\
+141: 			struct arm_instr_call *ic)			\
+142: 	{  if (cpu->cd.arm.flags & ARM_F_C)				\
+143: 		arm_instr_ ## n (cpu, ic);		}		\
+144: 	void arm_instr_ ## n ## __cc(struct cpu *cpu,			\
+145: 			struct arm_instr_call *ic)			\
+146: 	{  if (!(cpu->cd.arm.flags & ARM_F_C))				\
+147: 		arm_instr_ ## n (cpu, ic);		}		\
+148: 	void arm_instr_ ## n ## __mi(struct cpu *cpu,			\
+149: 			struct arm_instr_call *ic)			\
+150: 	{  if (cpu->cd.arm.flags & ARM_F_N)				\
+151: 		arm_instr_ ## n (cpu, ic);		}		\
+152: 	void arm_instr_ ## n ## __pl(struct cpu *cpu,			\
+153: 			struct arm_instr_call *ic)			\
+154: 	{  if (!(cpu->cd.arm.flags & ARM_F_N))				\
+155: 		arm_instr_ ## n (cpu, ic);		}		\
+156: 	void arm_instr_ ## n ## __vs(struct cpu *cpu,			\
+157: 			struct arm_instr_call *ic)			\
+158: 	{  if (cpu->cd.arm.flags & ARM_F_V)				\
+159: 		arm_instr_ ## n (cpu, ic);		}		\
+160: 	void arm_instr_ ## n ## __vc(struct cpu *cpu,			\
+161: 			struct arm_instr_call *ic)			\
+162: 	{  if (!(cpu->cd.arm.flags & ARM_F_V))				\
+163: 		arm_instr_ ## n (cpu, ic);		}		\
+164: 	void arm_instr_ ## n ## __hi(struct cpu *cpu,			\
+165: 			struct arm_instr_call *ic)			\
+166: 	{  if (condition_hi[cpu->cd.arm.flags])				\
+167: 		arm_instr_ ## n (cpu, ic);		}		\
+168: 	void arm_instr_ ## n ## __ls(struct cpu *cpu,			\
+169: 			struct arm_instr_call *ic)			\
+170: 	{  if (!condition_hi[cpu->cd.arm.flags])			\
+171: 		arm_instr_ ## n (cpu, ic);		}		\
+172: 	void arm_instr_ ## n ## __ge(struct cpu *cpu,			\
+173: 			struct arm_instr_call *ic)			\
+174: 	{  if (condition_ge[cpu->cd.arm.flags])				\
+175: 		arm_instr_ ## n (cpu, ic);		}		\
+176: 	void arm_instr_ ## n ## __lt(struct cpu *cpu,			\
+177: 			struct arm_instr_call *ic)			\
+178: 	{  if (!condition_ge[cpu->cd.arm.flags])			\
+179: 		arm_instr_ ## n (cpu, ic);		}		\
+180: 	void arm_instr_ ## n ## __gt(struct cpu *cpu,			\
+181: 			struct arm_instr_call *ic)			\
+182: 	{  if (condition_gt[cpu->cd.arm.flags])				\
+183: 		arm_instr_ ## n (cpu, ic);		}		\
+184: 	void arm_instr_ ## n ## __le(struct cpu *cpu,			\
+185: 			struct arm_instr_call *ic)			\
+186: 	{  if (!condition_gt[cpu->cd.arm.flags])			\
+187: 		arm_instr_ ## n (cpu, ic);		}		\
+188: 	void (*arm_cond_instr_ ## n  [16])(struct cpu *,		\
+189: 			struct arm_instr_call *) = {			\
+190: 		arm_instr_ ## n ## __eq, arm_instr_ ## n ## __ne,	\
+191: 		arm_instr_ ## n ## __cs, arm_instr_ ## n ## __cc,	\
+192: 		arm_instr_ ## n ## __mi, arm_instr_ ## n ## __pl,	\
+193: 		arm_instr_ ## n ## __vs, arm_instr_ ## n ## __vc,	\
+194: 		arm_instr_ ## n ## __hi, arm_instr_ ## n ## __ls,	\
+195: 		arm_instr_ ## n ## __ge, arm_instr_ ## n ## __lt,	\
+196: 		arm_instr_ ## n ## __gt, arm_instr_ ## n ## __le,	\
+197: 		arm_instr_ ## n , arm_instr_never };
+198: 
+199: #define cond_instr(n)	( arm_cond_instr_ ## n  [condition_code] )
+200: 
+201: 
+202: /*****************************************************************************/
+203: 
+204: 
+205: /*
+4820: 		 *  matcher fired, i.e. never on BE; see the #354 comment.
+4821: 		 */
+4822: 		if (!cpu->machine->show_trace_tree &&
+4823: 		    cpu->byte_order == EMUL_LITTLE_ENDIAN) {
+4824: 			int i = 0, j = iword;
+4825: 			j = ((j & 0x00800000) >> 16) | ((j & 0x00100000) >> 14)
+4826: 			  | ((j & 0x00040000) >> 13) | ((j & 0x00010000) >> 12)
+4827: 			  | ((j & 0x00000100) >>  5) | ((j & 0x00000040) >>  4)
+4828: 			  | ((j & 0x00000010) >>  3) | ((j & 0x00000004) >>  2);
+4829: 			while (multi_opcode[j][i] != 0) {
+4830: 				if ((iword & 0x0fffffff) ==
+4831: 				    multi_opcode[j][i]) {
+4832: 					ic->f = multi_opcode_f[j]
+4833: 					    [i*16 + condition_code];
+4834: 					break;
+4835: 				}
+4836: 				i ++;
+4837: 			}
+4838: 		}
+4839: #endif
+4840: 		if (rn == ARM_PC) {
+4841: 			if (!cpu->translation_readahead)
+4842: 				fatal("TODO: bdt with PC as base\n");
+4843: 			goto bad;
+4844: 		}
+4845: 		break;
+4846: 
+4847: 	case 0xa:					/*  B: branch  */
+4848: 	case 0xb:					/*  BL: branch+link  */
+4849: 		if (main_opcode == 0x0a) {
+4850: 			ic->f = cond_instr(b);
+4851: 			samepage_function = cond_instr(b_samepage);
+4852: 
+4853: 			/*  Abort read-ahead on unconditional branches:  */
+4854: 			if (condition_code == 0xe &&
+4855: 			    cpu->translation_readahead > 1)
+4856:                                 cpu->translation_readahead = 1;
+4857: 
+4858: 			if (iword == 0xcaffffed)
+4859: 				cpu->cd.arm.combination_check =
+4860: 				    COMBINE(netbsd_memset);
+4861: 			if (iword == 0xaafffff9)
+4862: 				cpu->cd.arm.combination_check =
+4863: 				    COMBINE(netbsd_memcpy);
+4864: 		} else {
+4865: 			if (cpu->machine->show_trace_tree) {
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n -- 'multi_opcode|show_trace_tree|define ARM_(PC|INSTR_ALIGNMENT_SHIFT|IC_ENTRIES_PER_PAGE)|readback|regs.*=' 'C:\\DocumentNoSnc\\CC\\GXEMUL\\GXEMUL-SEC\\src\\cpus\\cpu_arm_instr.c'" in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$probeLines = Get-Content -LiteralPath '"'C:\\DocumentNoSnc\\CC\\GXEMUL\\GXEMUL-SEC\\regress\\arm_bdt_probe.py'; for ("'$probeNumber = 181; $probeNumber -le 389; $probeNumber++) { '"'{0}: {1}' -f "'$probeNumber, $probeLines[$probeNumber - 1] }' in C:\DocumentNoSnc\CC\GXEMUL
+ succeeded in 69ms:
+468:	if (cpu->machine->show_trace_tree)
+974:	if (cpu->machine->show_trace_tree)
+1818:		if (cpu->machine->show_trace_tree)
+2116:extern uint32_t *multi_opcode[256];
+2117:extern void (**multi_opcode_f[256])(struct cpu *, struct arm_instr_call *);
+2812:	    exact. Transparent otherwise: eor_regshort is the S == 0 table entry so
+4239:				if (cpu->machine->show_trace_tree &&
+4398:			if (cpu->machine->show_trace_tree)
+4799:		 *  The optimized functions do not support show_trace_tree,
+4822:		if (!cpu->machine->show_trace_tree &&
+4829:			while (multi_opcode[j][i] != 0) {
+4831:				    multi_opcode[j][i]) {
+4832:					ic->f = multi_opcode_f[j]
+4865:			if (cpu->machine->show_trace_tree) {
+
+ succeeded in 128ms:
+181:     def record(name, kind, ok, detail=""):
+182:         res_str = "ok" if ok else "FAIL"
+183:         print(f"{name:<34}  {kind:<8}  {detail:<38}  {res_str}", flush=True)
+184:         results.append((name, kind, ok, detail))
+185:         if not ok:
+186:             failing.append(name)
+187: 
+188:     # -------------------------------------------------------------
+189:     # 1. LIVENESS CONTROL: Aligned LDM/STM round-trip at 0x10000
+190:     # -------------------------------------------------------------
+191:     s = GXemulSession(BIN)
+192:     s.send("put w 0x10000, 0xCAFEBABE")
+193:     prog_ctrl = [0xe3a00801, 0xe8900002, 0xeafffffe]
+194:     s.run_prog(prog_ctrl)
+195:     val = s.get_reg("r1")
+196:     s.close()
+197:     ctrl_live = (val == 0xCAFEBABE)
+198:     record("CONTROL_LIVENESS", "CTRL", ctrl_live, f"r1={val:#010x} want 0xcafebabe")
+199: 
+200:     # -------------------------------------------------------------
+201:     # 2. CALLER 1: ARM LDM (X(bdt_load)) - COLD vs WARM
+202:     # -------------------------------------------------------------
+203:     # Cold run: seed 0x20000 with put b (CACHE_NONE | NO_EXCEPTIONS)
+204:     s = GXemulSession(BIN)
+205:     bytes_ldm = [0x44, 0x33, 0x22, 0x11, 0x88, 0x77, 0x66, 0x55]
+206:     for i, b in enumerate(bytes_ldm):
+207:         s.send("put b 0x%x, 0x%02x" % (PAGE_LDM + i, b))
+208:     in_tlb_cold, _, _ = s.get_tlb_page(PAGE_LDM)
+209: 
+210:     prog_ldm = [0xe3a00802, 0xe2800001, 0xe8900002, 0xeafffffe]
+211:     s.run_prog(prog_ldm)
+212:     r1_cold = s.get_reg("r1")
+213:     s.close()
+214: 
+215:     # Warm run: seed 0x20000 with put w (CACHE_DATA warms page)
+216:     s = GXemulSession(BIN)
+217:     s.send("put w 0x%x, 0x11223344" % PAGE_LDM)
+218:     s.send("put w 0x%x, 0x55667788" % (PAGE_LDM + 4))
+219:     in_tlb_warm, _, _ = s.get_tlb_page(PAGE_LDM)
+220:     s.run_prog(prog_ldm)
+221:     r1_warm = s.get_reg("r1")
+222:     s.close()
+223: 
+224:     # Attribution control (pre-fix bug produces exact spliced bytes)
+225:     record("CONTROL_ATTRIB_PLUS1", "CTRL-A", (r1_cold == 0x88112233 or r1_cold == 0x11223344),
+226:            f"cold r1={r1_cold:#010x} (bug=0x88112233)")
+227: 
+228:     record("ARM_LDM_PATH_COLD", "PATH", (not in_tlb_cold),
+229:            f"page resident before cold={in_tlb_cold} want False")
+230:     record("ARM_LDM_PATH_WARM", "PATH", in_tlb_warm,
+231:            f"page resident before warm={in_tlb_warm} want True")
+232:     record("ARM_LDM_COLD_DATA", "DATA", (r1_cold == 0x11223344),
+233:            f"r1={r1_cold:#010x} want 0x11223344 (bug 0x88112233)")
+234:     record("ARM_LDM_WARM_DATA", "DATA", (r1_warm == 0x11223344),
+235:            f"r1={r1_warm:#010x} want 0x11223344")
+236:     record("ARM_LDM_DIV_CHECK", "DISC", (r1_cold == r1_warm and r1_cold == 0x11223344),
+237:            f"cold={r1_cold:#010x} warm={r1_warm:#010x}")
+238: 
+239:     #  ---- #524 clause-(d) closure: the +2 base ----
+240:     #  M_MASK1 (the fix present, its mask weakened 0xfffffffc -> 0xfffffffe)
+241:     #  scored 25/25 -- a MEASURED TOTAL ESCAPE -- because EVERY unaligned base
+242:     #  above is +1, and x+1 & ~1 == x+1 & ~3.  A +2 base separates them:
+243:     #  0x20002 & ~3 == 0x20000 (correct), 0x20002 & ~1 == 0x20002 (mutant).
+244:     #  Predicted by arithmetic, then measured -- which is the order this
+245:     #  project requires, because "it would sweep the table" is a measurement.
+246:     #  +3 is deliberately NOT rowed: ~1 dies here at +2 and ~2 already dies at
+247:     #  +1, so a +3 row buys no ENUMERATED mutant.  Residue 3 is disclosed in
+248:     #  the contract instead.  Rows are owed per enumerated mutant, never per
+249:     #  reachable value.
+250:     s = GXemulSession(BIN)
+251:     for i, b in enumerate(bytes_ldm):
+252:         s.send("put b 0x%x, 0x%02x" % (PAGE_LDM + i, b))
+253:     in_tlb_p2, _, _ = s.get_tlb_page(PAGE_LDM)
+254:     prog_ldm_p2 = [0xe3a00802, 0xe2800002, 0xe8900002, 0xeafffffe]
+255:     s.run_prog(prog_ldm_p2)
+256:     r1_p2 = s.get_reg("r1")
+257:     s.close()
+258:     record("ARM_LDM_PATH_COLD_P2", "PATH", (not in_tlb_p2),
+259:            f"page resident before +2 cold={in_tlb_p2} want False")
+260:     record("ARM_LDM_COLD_DATA_P2", "DATA", (r1_p2 == 0x11223344),
+261:            f"r1={r1_p2:#010x} want 0x11223344 (mask1 mutant 0x77881122)")
+262: 
+263:     #  ==== CLASS CLOSURE, cell 1 of 3: WORD POSITION WITHIN THE 8-BYTE BLOCK ====
+264:     #  The repair-chain pass found that `& ~7' (OVER-alignment) sweeps all 29
+265:     #  assertions: every base the instrument drove -- 0x10000, 0x2000{1,2},
+266:     #  0x2100{1,2} -- lies in the FIRST word of its 8-byte block, where ~3 and
+267:     #  ~7 agree.  A base with ADDRESS BIT 2 SET separates them.
+268:     #    0x20005 & ~3 == 0x20004  (correct -> bytes[4..7] = 88 77 66 55)
+269:     #    0x20005 & ~7 == 0x20000  (mutant  -> bytes[0..3] = 44 33 22 11)
+270:     s = GXemulSession(BIN)
+271:     for i, b in enumerate(bytes_ldm):
+272:         s.send("put b 0x%x, 0x%02x" % (PAGE_LDM + i, b))
+273:     prog_ldm_b2 = [0xe3a00802, 0xe2800005, 0xe8900002, 0xeafffffe]
+274:     s.run_prog(prog_ldm_b2)
+275:     r1_b2 = s.get_reg("r1")
+276:     s.close()
+277:     record("ARM_LDM_COLD_DATA_BIT2", "DATA", (r1_b2 == 0x55667788),
+278:            f"r1={r1_b2:#010x} want 0x55667788 (mask~7 mutant 0x11223344)")
+279: 
+280:     #  ==== CLASS CLOSURE, THE p/u/s/w x SITE PRODUCT ON THE **LOAD** SIDE ====
+281:     #
+282:     #  *** PASS C MEASURED **FIVE** clause-(d) mutants at 32/32 -- a TOTAL ESCAPE
+283:     #  EACH -- and they are all one class:  every p/u/s/w partition was
+284:     #  discharged on the STORE side and undischarged on the LOAD side, because
+285:     #  the only leg that varied any of those bits was Thumb PUSH, which calls
+286:     #  arm_push().  arm_pop() was driven at exactly ONE (p,u,s) point: (0,1,0).
+287:     #  Artifacts: regress/artifacts/armbdt/killtable_20260911f_opus/SCORES.txt
+288:     #
+289:     #     M_POPP_NONE   p_bit ? addr : (addr & ~3)            32/32
+290:     #     M_POPP_WEAK   addr & (p_bit ? ~1 : ~3)              32/32
+291:     #     M_POPW_WEAK   addr & (w_bit ? ~1 : ~3)              32/32
+292:     #     M_SBIT_NONE   s_bit ? addr : (addr & ~3), BOTH      32/32
+293:     #     M_NPMASK      (*np) & ~3 -- mask on the WRONG operand  32/32
+294:     #
+295:     #  M_POPP_NONE is clause (b) -- the removed defect reinstated VERBATIM --
+296:     #  restricted to p_bit == 1.  A non-equivalence control ran LDMDB for real
+297:     #  (ldmdb_*.out): BASE r1=0x55667788, mutant r1=0x00005566 (the FIX-ABSENT
+298:     #  value), r0 writeback correct on both -- so these CORRUPT A GUEST REGISTER
+299:     #  and are live defects, not equivalent mutants.
+300:     #
+301:     #  *** THE LOAD CELL COULD NOT BE CLOSED BY COPYING THE PUSH ROW: the only
+302:     #  p_bit=1 caller in the instrument is Thumb PUSH, so closing it needs a NEW
+303:     #  INSTRUCTION WORD, not a new base.  That is why it was missable. ***
+304:     #
+305:     #  All five rows below use a COLD page and a base at residue 2 (or a net
+306:     #  access there), which is where ~1 and ~3 disagree.  bytes_ldm seeds
+307:     #  0x11223344 at +0 and 0x55667788 at +4.
+308: 
+309:     s = GXemulSession(BIN)
+310:     for i, b in enumerate(bytes_ldm):
+311:         s.send("put b 0x%x, 0x%02x" % (PAGE_LDM + i, b))   # put b = COLD seed
+312:     prog_arm_ldm_ib_p2 = [0xe3a00802, 0xe2800003, 0xe9900002, 0xeafffffe]
+313:     s.run_prog(prog_arm_ldm_ib_p2)
+314:     arm_ldm_ib_p2_v = s.get_reg("r1")
+315:     s.close()
+316:     record("ARM_LDM_IB_P2", "DATA", (arm_ldm_ib_p2_v == 0x55667788),
+317:            f"r1={arm_ldm_ib_p2_v:#010x} want 0x55667788  -- LDMIB r0,{{r1}} from 0x20003: PRE-increment gives access 0x20007 -> word at 0x20004. Closes pop x p_bit=1; kills M_POPP_NONE / M_POPP_WEAK")
+318: 
+319:     s = GXemulSession(BIN)
+320:     for i, b in enumerate(bytes_ldm):
+321:         s.send("put b 0x%x, 0x%02x" % (PAGE_LDM + i, b))   # put b = COLD seed
+322:     prog_arm_ldm_da_p2 = [0xe3a00802, 0xe2800007, 0xe8100002, 0xeafffffe]
+323:     s.run_prog(prog_arm_ldm_da_p2)
+324:     arm_ldm_da_p2_v = s.get_reg("r1")
+325:     s.close()
+326:     record("ARM_LDM_DA_P2", "DATA", (arm_ldm_da_p2_v == 0x55667788),
+327:            f"r1={arm_ldm_da_p2_v:#010x} want 0x55667788  -- LDMDA r0,{{r1}} from 0x20007: post-DECREMENT, access 0x20007. Closes pop x u_bit=0")
+328: 
+329:     s = GXemulSession(BIN)
+330:     for i, b in enumerate(bytes_ldm):
+331:         s.send("put b 0x%x, 0x%02x" % (PAGE_LDM + i, b))   # put b = COLD seed
+332:     prog_arm_ldm_db_p2 = [0xe3a00802, 0xe280000b, 0xe9300002, 0xeafffffe]
+333:     s.run_prog(prog_arm_ldm_db_p2)
+334:     arm_ldm_db_p2_v = s.get_reg("r1")
+335:     s.close()
+336:     record("ARM_LDM_DB_P2", "DATA", (arm_ldm_db_p2_v == 0x55667788),
+337:            f"r1={arm_ldm_db_p2_v:#010x} want 0x55667788  -- LDMDB r0!,{{r1}} from 0x2000b: PRE-decrement gives access 0x20007. Closes pop x (p=1,u=0); this exact word was the pass-C non-equivalence control")
+338: 
+339:     s = GXemulSession(BIN)
+340:     for i, b in enumerate(bytes_ldm):
+341:         s.send("put b 0x%x, 0x%02x" % (PAGE_LDM + i, b))   # put b = COLD seed
+342:     prog_arm_ldm_s_p2 = [0xe3a00802, 0xe2800007, 0xe8f00002, 0xeafffffe]
+343:     s.run_prog(prog_arm_ldm_s_p2)
+344:     arm_ldm_s_p2_v = s.get_reg("r1")
+345:     s.close()
+346:     record("ARM_LDM_S_P2", "DATA", (arm_ldm_s_p2_v == 0x55667788),
+347:            f"r1={arm_ldm_s_p2_v:#010x} want 0x55667788  -- LDMIA r0!,{{r1}}^ from 0x20007: S-bit WITH writeback at residue 7. Closes s_bit and the (s&&w) joint; kills M_SBIT_NONE")
+348: 
+349:     #  *** THIS WAS WRITTEN AS "THE BARGAIN ROW: one leg, THREE assertions".
+350:     #  THE BARGAIN IS NOT REAL, AND THE REASON IS STRUCTURAL RATHER THAN
+351:     #  ARITHMETIC. ***  Only the FIRST access of this leg is a slow-path
+352:     #  observation.  That access misses and goes through the slow path -- which
+353:     #  is what the row is for -- and IN DOING SO IT WARMS THE PAGE
+354:     #  (`memory_rw.c:738-750` hands every successful RAM access to
+355:     #  `update_translation_table`; `cpu_dyntrans.c:1594-1596` fills `host_load`),
+356:     #  so r2's access takes the FAST branch at `arm_pop:1637` and cannot see a
+357:     #  slow-path mutant at all.
+358:     #
+359:     #  MEASURED TWICE: table g's `M_POPW_WEAK` reds R1 and GREENS R2 although
+360:     #  the mutant splices r2's address by construction; and a `w ? ~7 : ~3`
+361:     #  mutant reds only `DB_P2`.  A reading seat independently called the table
+362:     #  "internally impossible as stated" from the same anomaly without knowing
+363:     #  the cause.
+364:     #
+365:     #  **THE RULE: A MULTI-REGISTER LEG YIELDS EXACTLY ONE COLD OBSERVATION.**
+366:     #  More assertions mean more SESSIONS, not more registers -- and that is the
+367:     #  attractive edit, which is why it is filed as a class (`multiaccesswarms`).
+368:     #  R1 is kept as the slow-path row; R2 and WB are kept as cheap fast-path
+369:     #  and writeback CONTROLS, labelled as such, credited with no kills.
+370:     #  A page-crossing second access would be the only cold form; it is NOT
+371:     #  owed, because iteration is not an input of the mask -- disclosed.
+372:     s = GXemulSession(BIN)
+373:     for i, b in enumerate(bytes_ldm):
+374:         s.send("put b 0x%x, 0x%02x" % (PAGE_LDM + i, b))   # put b = COLD seed
+375:     prog_ldm_multi_p2 = [0xe3a00802, 0xe2800002, 0xe8b00006, 0xeafffffe]
+376:     s.run_prog(prog_ldm_multi_p2)
+377:     r1_mp2 = s.get_reg("r1")
+378:     r2_mp2 = s.get_reg("r2")
+379:     r0_mp2 = s.get_reg("r0")
+380:     s.close()
+381:     record("ARM_LDM_MULTI_P2_R1", "DATA", (r1_mp2 == 0x11223344),
+382:            f"r1={r1_mp2:#010x} want 0x11223344  -- LDMIA r0!,{{r1,r2}} from 0x20002, first word")
+383:     record("ARM_LDM_MULTI_P2_R2", "DATA", (r2_mp2 == 0x55667788),
+384:            f"r2={r2_mp2:#010x} want 0x55667788  -- second word: a WARM/FAST-path observation, NOT slow-path coverage. It kills NOTHING and cannot.")
+385:     record("ARM_LDM_MULTI_P2_WB", "WB", (r0_mp2 == 0x2000a),
+386:            f"r0={r0_mp2:#010x} want 0x0002000a  -- writeback keeps the RAW base. Kills NOTHING: the mutants change only the memory argument, never *np.")
+387: 
+388: 
+389:     # Writeback 1-reg: ldmia r0!, {r1} with unaligned base 0x20001
+
+codex
+VERDICT: `arm_push()` confirms PC first, PC word `0x00008014`, and writeback `0x00021003`. Actual cold-path execution remains conditional on dispatch and cache state.
+CODEX_PCROW_20260911
+
+I read only the two specified working-tree files. No files were written and no probe was run. One line correction: `if (i == ARM_PC)` is at **1868**; `value = cpu->pc + 12` is at **1869**.
+
+1. **Decode: `0xe9208002` is `STMDB r0!, {r1, pc}`.**
+
+   | Field | Bits | Value | Meaning |
+   |---|---|---|---|
+   | cond | 31–28 | `0xe` | AL |
+   | Instruction class | 27–25 | `0b100` | Block data transfer |
+   | P | 24 | `1` | Before |
+   | U | 23 | `0` | Decrement |
+   | S | 22 | `0` | Ordinary register values |
+   | W | 21 | `1` | Writeback |
+   | L | 20 | `0` | Store |
+   | Rn | 19–16 | `0` | r0 |
+   | Register list | 15–0 | `0x8002` | Bits 15 and 1: PC and r1 |
+
+   The decoder selects generic `bdt_store` for this class with `L=0` and supplies the pointer to r0. The wrapper extracts P/U/S/W using the corresponding masks. See [decoder](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c:4782) and [store wrapper](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c:1968).
+
+2. **PC, register 15, is accessed first.**
+
+   The actual loop is:
+
+   ```c
+   for (i=(u_bit? 0 : 15); i>=0 && i<=15; i+=(u_bit? 1 : -1))
+   ```
+
+   With `U=0`, it starts at 15 and decrements. Bit 15 is selected, so PC is stored immediately. Registers 14 through 2 are skipped by `continue`; then r1 is stored. Those skipped iterations perform no address adjustment. See [loop and register selection](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c:1836).
+
+3. **The unmasked addresses are `0x21007`, then `0x21003`. The writes land at `0x21004`, then `0x21000`.**
+
+   `addr` starts as `*np = 0x2100b`. For every selected register, `P=1, U=0` executes `addr -= sizeof(uint32_t)` before accessing memory. The `if (!p_bit)` block performs no post-step for this instruction.
+
+   | Access order | Register | Pre-decrement arithmetic | Running address | Word destination with #524 |
+   |---|---|---|---|---|
+   | 1 | PC | `0x2100b − 4` | `0x21007` | `0x21004` |
+   | 2 | r1 | `0x21007 − 4` | `0x21003` | `0x21000` |
+
+   The slow call receives `addr & 0xfffffffc`; the fast path achieves the same alignment through `p32[(addr & 0xfff) >> 2]`. Thus **`0x21007` is the first unmasked effective address, not the address passed to the edited call.** See [pre-step and fast path](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c:1871) and [edited call and post-step](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c:1910).
+
+   Your geometry holds: applying `~1`, `~2`, `~3`, and `~7` to `0x21007` yields `0x21006`, `0x21005`, `0x21004`, and `0x21000`, respectively.
+
+4. **The model stores `CODE + 8 + 12 = CODE + 20 = 0x00008014`.**
+
+   The probe defines `CODE = 0x00008000` and writes instruction word `i` at `CODE + 4*i`. Therefore the third word is at `CODE + 8 = 0x00008008`. See [CODE](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/arm_bdt_probe.py:38) and [program placement](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/arm_bdt_probe.py:99).
+
+   Immediately before calling `arm_push()`, `bdt_store` synchronizes `cpu->pc` to the executing instruction using its instruction-call index within the current page. Consequently, at the PC-value assignment:
+
+   ```text
+   cpu->pc = CODE + 8 = 0x00008008
+   value   = cpu->pc + 12 = 0x00008014
+   ```
+
+   See [PC synchronization](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c:1983). The assignment explicitly uses **+12**. Its preceding comment says `NOTE/TODO: 8 vs 12 on some ARMs`. **The two permitted files do not settle whether +12 is architecturally correct for the configured CPU.** Assert it as the model’s behavior. See [PC value and TODO](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c:1867).
+
+5. **After successful completion, r0 is `0x00021003`.**
+
+   Two selected registers decrement the running address by eight bytes. With `W=1`, the final `*np = addr` writes that unmasked value to r0:
+
+   ```text
+   r0 = 0x2100b − 8 = 0x21003
+   ```
+
+   The access mask never changes `addr`. A failed slow store returns before writeback, so successful completion is the qualification. See [failure return and writeback](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c:1910).
+
+**There is no PC-list rejection in `arm_push()`.** Its S-bit handling selects banked values only for certain registers through r14; afterward, the PC case unconditionally replaces `value` with `cpu->pc + 12`. This instruction has `S=0` anyway. The decoder’s PC rejection concerns **PC as the base register**; `Rn=0` does not trigger it. See [S-bit handling](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c:1848) and [base-register rejection](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c:4840).
+
+Two limits prevent claiming proven cold-path coverage from this reading:
+
+- Inside the helper, PC reaches the edited call when `host_store[0x21] == NULL`. Otherwise it takes the fast branch.
+- Before the helper, the decoder can substitute an optimized handler under its host/guest-endianness and `show_trace_tree` conditions. The opcode tables are external. The probe passes `-T`, but its option semantics and cache initialization are outside the permitted files. **These two files do not settle unconditional cold-path reachability.** See [optimized dispatch](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_instr.c:4791) and [probe invocation](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/arm_bdt_probe.py:49).
+
+For the proposed row, **reusing the existing STM setup’s `r1 = 0x11223344`**, the concrete expected observations are:
+
+```text
+word at 0x21000 = 0x11223344
+word at 0x21004 = 0x00008014
+r0             = 0x00021003
+```
+
+The lower word contains r1 because r1 is the second store. Read all three explicitly after execution and before closing the session:
+
+```python
+w0 = s.read_mem32(PAGE_STM)
+w1 = s.read_mem32(PAGE_STM + 4)
+r0_after = s.get_reg("r0")
+ok = (w0, w1, r0_after) == (0x11223344, CODE + 20, 0x00021003)
+```
+
+This probe uses explicit reads, with no shared register-readback tuple. Its [memory reader](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/arm_bdt_probe.py:123) dumps from the aligned base and selects the requested word; its [register reader](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/arm_bdt_probe.py:118) issues `print r0` for the writeback observation.
+tokens used
+64,131

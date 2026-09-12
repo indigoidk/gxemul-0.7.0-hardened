@@ -1,0 +1,127 @@
+I'll treat this as an adversarial review of the two uncommitted diffs, starting from the working tree and the inlined claims rather than from the round's conclusions.The working tree is dirtier than just these two rounds. Next I’ll isolate the `#524` and `#525` hunks and read the enclosing handlers, not the commit-message version of them.I have the hunks. Next I’ll read the enclosing functions, the generated LDM/STM path, and both detectors so I can attack the premises rather than the comments.The generated LDM path already masks; I’ll compare that against `memory_rw`’s page split, the combined memcpy/memset handlers, and both probes’ actual rows.The first `#525` pass already named a DRDY-conditioned zeroing escape; I’ll check whether a scratch clone can actually measure that, and the `#524` one-bit mask weaken, instead of leaving them as predictions.**NOT RATIFIED** — neither product edit is wrong; both detectors admit a one-selector total escape of the `sgirandomcolour` shape, and `#524`'s is a clause-(d) floor hole.
+
+I read `GXEMUL-SEC/src/` (working tree, not HEAD). Line numbers match this packet (`arm_pop` at 1602, `wdc_altstatus` at 609), not the 2021 `src/` at the project root. I did not run a gate or rebuild; selector-escape scores below are derived from the probe sources and the BASE logs, not re-measured.
+
+---
+
+## 1. Is either fix WRONG?
+
+**No.** Incomplete coverage and a policy choice are not a reversed repair.
+
+**`#524`:** the slow path was a raw 4-byte `memcpy` of an unaligned VA; the fast path already did `(addr & 0xfff) >> 2`. Masking only the `memory_rw` argument, leaving the running `addr` for `*np = addr`, is the same split `generate_arm_multi.c` already emits (`addr &= 0xffc` after the page lookup; writeback is `r[n] += 4*n_regs` on the live register). Algebra: access *k* is `(Rn + 4k) & ~3 == (Rn & ~3) + 4k`, so per-call masking equals “mask start, then step by 4”, while writeback from the unmasked runner stays `Rn ± 4N`.
+
+**`#525`:** the READ path really never decoded `relative_addr`. The unbraced `else` binds to the inner `if`; the four cells land where the comment says. `status_byte()` is a pure read (I opened `diskimage_exist()`: it walks `machine->first_diskimage` and returns). `INTERRUPT_DEASSERT` lives only on the main STATUS arm, which is what Alternate Status is *for*. A declined offset-1 read acknowledges nothing.
+
+What would make `#525` *wrong* is returning the status byte, or `return 0` from the handler (DBE). `odata = 0` does neither.
+
+---
+
+## 2. `#524`: is `addr & 0xfffffffc` right, and is masking the VA the right place?
+
+**Yes, and yes. Masking after translation is worse.**
+
+`addr` is `uint32_t`. `0xfffffffc` is the ARM ARM’s own `AND 0xFFFFFFFC`. `addr & ~(uint32_t)3` is the same bits; this file already uses that form on `swp`. Do **not** substitute the generator’s `0xffc`: that is a *page-offset* mask applied after `host_*[addr >> 12]`. Fed to `memory_rw` it would zero the page number.
+
+Finding 6 is true as a delta and **mis-aimed as an objection**. `memory_rw` splits translated accesses at 1 KB (`MRW_SPLIT_MASK == 0x3ff`), then `memcpy`s. A 4-byte access at `B-1` therefore used to walk `B-1 .. B+2` and could translate, store into, or fault on the *next* mapping. LDM/STM with `U==0` are specified to use the aligned word at `B-4`. The old extra page is the defect. Clearing bits [1:0] cannot change a 1 KB or 4 KB page number, so VA-mask and PA-mask are equivalent *for a single chunk*. The split runs *before* the worker, so an unmasked VA is already two translations by the time you could mask a PA. Masking after translation cannot prevent that.
+
+DDI 0100I A2-42 even allows the CPU to send the raw address and have the memory system ignore [1:0]. This emulator’s RAM worker does **not** ignore them. The helpers are the right layer.
+
+---
+
+## 3. Findings 4 and 5: wrong for some caller, or a disclosure?
+
+**Disclosure.** They do not make the two sites wrong.
+
+The fast path, the generated multi handlers, and now the slow path all ignore [1:0] for the *access*. Device dispatch will see a different `relative_addr` near a device edge; that is what “ignore the low two bits” means. A2-42’s extra UNPREDICTABLE clause is ARMv6 Device/Strongly Ordered multiword with `Addr[1:0] != 00`. This tree models pre-v6 `U==0` (the `swp` comment says so in as many words; there is no SCTLR U/A check in these helpers). If alignment faults are ever added, they must inspect the **unmasked** `addr` *before* this mask, or the check is dead. That is a future-round note, not a reason to leave the slow path splicing.
+
+`netbsd_memset` / `netbsd_memcpy` still use raw `& 0xfff`. Pre-existing, they never enter these helpers, and the memcpy comment already records the unaligned-copy divergence. They do not reverse this diff. Thumb PUSH/POP *do* enter the helpers (`cpu_arm.c`); they get the access fix. The helper’s `cpu->pc = r[PC] & ~3` vs Thumb interworking is a different, unchanged path; the Thumb interpreter overwrites `cpu->pc` after `arm_pop` returns.
+
+---
+
+## 4. `#525`: is returning 0 right?
+
+**As a “stop returning the other register” policy, yes. As ATA-2, it is a response, not silence.**
+
+I re-read `_scratchpad/ata2_x3t10_948d.txt:1529-1531`. Control-block `DA=111` is Note 1: *recommended that a device not respond*; *if it does, it shall not drive DD7*. `030e961` already recorded that every earlier disposition, including “model Drive Address faithfully”, fights that paragraph. Owner ruling still stands: decode the read, do not narrow the registration.
+
+Ranking, each with its failure mode:
+
+| Rank | Disposition | Failure mode |
+|---|---|---|
+| 1 | **Not respond** (unmap offset 1, or a true open-bus / high-Z DD7) | Closest to ATA-2. Narrowing was rejected: FDC `TODO 8` overlaps *two* bytes (`0x3f6-0x3f7`), and an unmapped access is a `non-existant paddr` flood under `-T`. Still the standard’s preference. |
+| 2 | **`odata = 0`, `return 1` (shipped)** | Responds with an invented byte. DD7 is 0, so it does not drive DD7 *high*; it still drives it *low*. Stops the alias. Detector pins the whole byte to `0x00`, so this policy is now a test oracle, not just a comment. |
+| 3 | **`0xff` / open-bus** | Looks like FDC DSKCHG on a PC. CORE rows want `0x00` and would kill it — which is why you cannot silently switch to it later without re-pinning. |
+| 4 | **Leave the buffer untouched** | If the tail still does `data[0] = odata`, this *is* the defect (`status_byte` wins). If you skip the tail, `#95` already zeroed the buffer and you have (2) by another door, easier to break. |
+| 5 | **Last written value** | Offset 1 writes are declined (`#494`). There is no stored cell. That is BACKED ACCEPT of an obsolete register ATA-2 tells you not to implement. |
+| 6 | **Fault (`return 0`)** | `memory_rw` turns that into `EXCEPTION_DBE` on MIPS. `#494` already measured the silent retry loop. Worst. |
+
+I would not reverse `odata = 0` in this round. I would also not call it hardware.
+
+---
+
+## 5. Selectors the rows never vary (the question you wanted attacked)
+
+Both instruments probe **one cell of the repair’s own operand** and then declare the repair pinned.
+
+### `#524` — 25 rows, every unaligned access is `addr & 3 == 1`
+
+From `agy_armbdt_witness_20260911.py`: LDM at `0x20001`, STM at `0x21001`, Thumb POP at `0x22001`, Thumb PUSH SP `0x23005` pre-decrements to `0x23001`. CONTROL_LIVENESS is aligned. There is **no +2 and no +3**.
+
+**Floor mutant, one hex digit:**
+
+```c
+addr & 0xfffffffe    /* was 0xfffffffc */
+```
+
+or `addr & ~1`. For every row, `x+1 & ~1 == x+1 & ~3`. Writeback is unmasked, so the WB rows stay green. Warm rows use the fast `>> 2` path, which already drops both bits. This is `#461`’s `& 3` → `& 1` exactly, and this detector is structurally blind to it.
+
+A second total-escape, slightly less tiny: **mask only the first transfer in the loop**. Every DATA/DIV/CLOBBER row transfers `{r1}`. The only 2-register row (`ARM_LDM_WB_UNAL2`) checks `r0` writeback, not `r1`/`r2`. Subsequent unaligned accesses are unobserved.
+
+Partially covered, so *not* total: `u_bit` / `p_bit` (Thumb PUSH is STMDB: `p=1,u=0`; ARM rows are IA). Untested and therefore available as debt: LDMDA (`p=0,u=0`), IB, LDMDB, `s_bit==1`, PC in the list, BE, a 1 KB page seam (`addr & 0x3ff == 0x3fe`).
+
+`CONTROL_ATTRIB_PLUS1` is `bug_value OR correct_value`. It cannot go red on HEAD or BASE. It is not a kill row.
+
+### `#525` — 16 rows, both CORE status values carry `WDCS_DRDY`
+
+This is the mutant the first pass already wrote down, still absent from `mutate_altdigin.py`:
+
+```c
+if (relative_addr != 0) {
+    if (odata & WDCS_DRDY)
+        odata = 0;
+}
+```
+
+`0x51` and `0x58` both have bit 6. Offset-0 ACCEPT rows never enter the arm. WRITE cells unchanged. The one state that would distinguish it — no image, `status_byte` = `WDCS_ERR` = `0x01`, because `d->error = 1` at init — is not in the table.
+
+Same shape, also unvaried on the offset-1 READ observations: `d->drive == 0` (SDH `0xa0`, default drive 0), `!d->atapi_cmd_in_progress`, `machine_type == MACHINE_EVBMIPS`. `d->error` / DRQ / `int_assert` *do* flip between the two CORE rows; those are not escapes.
+
+`len == 1` is a trap, not a win: at offset 1 the dispatcher already clamps length to 1, so that conjunct is invisible through this registration. The first pass was right.
+
+I did not rebuild these mutants. The derivation is from the probe source plus `probe_BASE.raw` / the `#525` ROW_DEFS. A clone run of `& ~1` and the DRDY conjunct is the measurement to take before anyone claims a clean table.
+
+---
+
+## 6. One commit or two?
+
+**Two.** Different files, different CPUs, different machines (`testarm` vs `evbmips -e malta`), different detectors, already numbered `#524` and `#525`. “Both ignored part of an address” is a rhyme, not a blast radius. A red battery under a merged commit cannot be attributed. The checkpoint already says four in-flight campaigns must not become one commit; these two are another pair of that rule.
+
+---
+
+## 7. Smallest edit that breaks the fix and still passes its detector
+
+**`#524`:** `0xfffffffc` → `0xfffffffe` (or `~3` → `~1`) at both `memory_rw` sites. One character. Predicted **25/25**.
+
+**`#525`:** keep `if (relative_addr != 0)` and write `if (odata & WDCS_DRDY) odata = 0;`. Predicted **16/16**. Deleting `odata = 0` entirely is *not* that edit; `M_NULL_EFFECT` already scored 14/16.
+
+---
+
+## First-pass findings, attacked rather than repeated
+
+- **Finding 6 as “maybe mask after translation”:** reversed above. The extra page is the bug.
+- **`#525` `status_byte` purity:** settled. `diskimage_exist` does not mutate. Declined reads do not ack IRQs; they must not.
+- **ATA-2 vs `odata = 0`:** the shipped value is a response. That does not make the alias-repair wrong; it means the round’s hardware sentence should stay as small as it already got (“emulator policy, not a hardware claim”).
+- **PRETABLE vs SCORES on `#524` `M_NULL_MEDIUM`:** PRETABLE predicted 4/25; `SCORES.txt` is **6/25**. The packet’s 6/25 is the measured one. The prediction was wrong by two rows; PATH/ATTRIB-style controls surviving an early `return` is the likely remainder. Do not cite 4/25.
+- **The kill table did not measure the working-tree text.** `mutate_armbdt.py` applies `addr & ~3` with no comment block. The uncommitted file has a 20-line comment and `0xfffffffc`. Semantically the same mask; a re-run of that mutator against the commented file will fail to find `POP_RW_OLD`. Freeze the mutator against the text you intend to commit.
+
+Product diffs can stand. The detectors cannot ship as the round’s “we pinned the repair” claim until `#524` has a `+2` and a `+3` (or an anchored `& 3` mutant) and `#525` has one CORE observation with `WDCS_DRDY` clear.
