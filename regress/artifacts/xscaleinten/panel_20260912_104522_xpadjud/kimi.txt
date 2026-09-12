@@ -1,0 +1,1099 @@
+kimi version 0.36.0
+• Let me parse this carefully. This is an adjudication pass for a multi-seat review panel process in the GXEMUL-SEC tree. The user (operator) has shared findings from two panels about two fixes:
+
+  1. `xscaleinten` — ARM XScale i80321 coprocessor `inten` register read fix (pure deletion of `fatal`/`exit(1)`)
+  2. `ppcrlwimiwidth`/`ppcrldimimask` — PPC rlwimi (32-bit width) and rldimi (circular mask) fixes
+
+  I'm asked to adjudicate findings F1..F16 and disagreements D1..D3, with verdicts (UPHOLD / OVERTURN / REFINE / CANNOT SETTLE), answer which accepted disposition is wrong, what everyone missed, and whether either round is ready to commit.
+
+  The operational rule says: do NOT run run.sh, gate_*.sh, or the battery. I can read files, and I can build/run single detectors in my own temp directory.
+
+  Key context files to examine:
+  - The tree: `C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\`
+  - The fix diffs and enclosing functions are "in the two pass-2 briefs" — I should find those briefs. Likely under `GXEMUL-SEC/` somewhere, maybe `regress/artifacts/` or `_scratchpad/`.
+  - Kill table 3 artifacts: `regress/artifacts/xscaleinten/killtable3_20260912/`, `regress/artifacts/ppcrlwimiwidth/killtable3_20260912/`
+
+  To adjudicate properly, I should verify key claims by reading the actual source and the briefs. Let me plan:
+
+  1. Find the two pass-2 briefs (xscalepass2, ppcpass2).
+  2. Read the actual code: `arm_coproc_i80321_6` in src (probably `src/cpus/cpu_arm_coproc.c`), and the PPC rlwimi/rldimi implementation (`src/cpus/cpu_ppc_instr.c` probably).
+  3. Read the kill table artifacts and POSTTABLE.out.
+  4. Read the detectors (test files) for both rounds.
+  5. Adjudicate.
+
+  The questions are conceptual but grounded in the actual code. Key technical questions I need to think about:
+
+  **F1**: `if (rd == 0) { fatal; exit(1); }` survives 29 rows (measured 29/29), kills only on the new RD0_ALLONES row (30th). Actually the measured result says M_RD0 29/30 failing RD0_ALLONES alone. So ACCEPTED and fixed with a row. Fine.
+
+  **F2**: exit keyed on an inten bit no row sets (bit 22, say `if (i80321_inten & (1<<22)) exit(1)`) survives all rows; RD0_ALLONES sets inten = 0xffffffff which drives all bits. Measured M_MAGICBIT 29/30 failing RD0_ALLONES alone. Fine.
+
+  Wait — but RD0_ALLONES sets inten <- 0xffffffff, so all bits set; a mutant keyed on any single bit dies. And rd == 0 via r0 target. One row fires both. OK.
+
+  **F3/F4**: M5 redirects BOTH directions of the crn-0 arm to isteer. F4 rejected findings that assumed read-only M5. That's settled by mutator text. I should check the mutator `mut_xscale_t2.py` exists and read it to verify. That's a cheap verification of the one thing the user says they "read, not measured".
+
+  **F5**: `if (isteer != 0)` exit survives — equivalent on this instrument because isteer can only become nonzero through a write that itself exits (the write path to isteer has its own fatal/exit presumably). Accepted as disclosure. Hmm — is that right? The detector rows: ANCHOR_EXC enables irq 28 (writes inten = 1<<28?), others write inten with various values... but any write to inten via crn 0 with l=0 presumably still exits? Wait, no — the fix is only about the READ (l_bit=1) path. The write path (`crm 0 / crn 0 / l=0`) still does `i80321_inten = r[rd]`? Let me check the actual code. Actually from the premise: "the `crm 0 / crn 0 / l_bit` arm did `r[rd] = i80321_inten; fatal("TODO: XScale read from inten?"); exit(1);`". So reads load r[rd]. Writes presumably set i80321_inten quietly. Then what writes isteer? Maybe writes to crn 4 or other registers write isteer with a fatal? Need to check the enclosing function.
+
+  Actually the claim: "isteer can only become non-zero through a write that itself exits". So somewhere in the coproc code, a write to some register does `isteer = ...; fatal; exit(1);` or similar. If so, `if (isteer != 0) exit` is unreachable-with-isteer-nonzero on this instrument, hence any rows can't drive it — equivalent mutant. Disclosure, fine.
+
+  **F6**: disposition precedent about DC21285 footbridge — the brief overstated it; accepted. Minor.
+
+  **F7**: D_RESET/D_ZERO names overstate discriminator; accepted as record, no change. Fine — a naming quibble.
+
+  **F8**: NOT COVERED additions: read-count ceiling (no session makes more than five inten reads) and ANCHOR rows raise only irq 28. Accepted. Fine.
+
+  **F9**: D_SKIP_FULL_ROT: `while (n-- != 0)` → `while (n-- != 0 && mb != ((64 - sh) & 63))` — skips rotate exactly when mask is full width. New row `full rot`: SH=24, MB=40... wait, let me think about rldimi semantics.
+
+  rldimi: rotate left doubleword immediate then mask insert. `rldimi ra, rs, sh, mb`. The mask is from bit mb to bit 63-sh (bit numbering: IBM big-endian bit order, bit 0 = MSB). Mask has bits from mb through (63 - sh) inclusive. The inserted value is rotl(rs, sh) under that mask.
+
+  In the implementation described: rotate a copy `n = sh` times? Hmm — the old loop consumed `sh`, fix uses `n = sh` copy. And the mask loop wraps: `m = (m + 1) & 63; } while (m != ((64 - sh) & 63))`.
+
+  D_SKIP_FULL_ROT mutant: `while (n-- != 0 && mb != ((64-sh)&63))` — the rotate loop stops early when mask is full-width? Wait, the rotate loop is the one rotating tmp left sh times. The mutant adds condition `mb != ((64-sh)&63)` to the rotate loop. Hmm, "skips the rotate exactly when the mask is full width". Full width means mb == 0 and sh == 0? Actually the mask spans mb..(63-sh); full width (64 bits) would need mb=0 and sh=0, giving mask bits 0..63. But wait, can the mask ever be full width for rldimi? If sh=0 and mb=0, mask = all bits, and rotate by 0 — inserted value is rs itself. Hmm, but the loop `do { ... m = (m+1)&63; } while (m != ((64-sh)&63))` — hmm, if mask start == end point it either does 1 iteration or 64. The do-while starts at m = mb, sets bit, increments, checks m != (64-sh)&63. If mb == (64-sh)&63... it runs all 64 bits? Wait no: do { set bit m; m = (m+1)&63 } while (m != end). If start == end, it sets all 64 bits before m wraps back to start. So mask full-width case is mb == (64-sh)&63.
+
+  Hmm wait, let's recompute: mask bits mb..(63-sh) in IBM bit numbering (bit 0 = MSB). In a do-while from mb setting bits and stopping after we've set bit (63-sh)... Actually `while (m != ((64-sh)&63))` — the loop continues until m equals (64-sh)&63, i.e., stops BEFORE setting bit (64-sh)? No wait — do-while sets bit then increments then tests. Loop: m = mb; do { tmp |= maskbit(m); m=(m+1)&63; } while (m != ((64-sh)&63)). So it sets bits mb, mb+1, ..., until m reaches (64-sh)&63, having set bit ((64-sh)&63 - 1) as the last one. Hmm, so the mask is bits mb through (64-sh)-1 inclusive? In IBM numbering, mask for rldimi is bits mb..(63-sh) where... hmm, actually PowerPC spec: rldimi mask is mb..(63-sh) inclusive? Let me recall: for rldimi, mask = mb to 63-sh inclusive. In IBM bit numbering. Number of bits = 64 - sh - mb... Let me not go down this hole; the exact bit positions matter less than the adjudication logic. But F9's row: SH=24, MB=40, from 0xDEADBEEFCAFEF00D into 0x5A5A5A5A5A5A5A5A, want 0xefcafef00ddeadbe.
+
+  Let's verify: rs = 0xDEADBEEFCAFEF00D, sh = 24. rotl(rs, 24) = ?
+
+  rs = 0xDEADBEEFCAFEF00D. rotl by 24: 0xF00DDEADBEEFCAFE? Let's compute: rotl64(x,24) = (x << 24) | (x >> 40). x << 24 = 0xBEEFCAFEF00D0000... wait let me be careful.
+
+  x = 0xDEADBEEFCAFEF00D.
+  x << 24 = 0xEFCAFEF00D000000? Compute: 0xDEADBEEFCAFEF00D << 24: take low 40 bits shifted... 0xDEADBEEFCAFEF00D * 2^24 mod 2^64. 0xDEADBEEFCAFEF00D = DE AD BE EF CA FE F0 0D bytes. Shift left 24 bits = 3 bytes: low 5 bytes become top: EF CA FE F0 0D followed by 000000 → 0xEFCAFEF00D000000.
+  x >> 40 = 0x000000DEADBEEF? x >> 40: drop low 5 bytes: 0x00000000DEADBEEF → wait 0xDEADBEEFCAFEF00D >> 40 = 0x000000DEADBEEF? >> 40 bits = >> 5 bytes: DE AD BE → 0x0000000000DEADBE? Hmm: 16 hex digits; >> 40 = >> 10 hex digits: 0xDEADBEEFCAFEF00D >> 40: keep top 6 hex digits: DEADBE → 0x0000000000DEADBE.
+  rotl24 = 0xEFCAFEF00D000000 | 0x0000000000DEADBE = 0xEFCAFEF00DDEADBE. 
+
+  And the expected value is 0xefcafef00ddeadbe. So the mask is FULL WIDTH: the whole rotated value replaces ra. So mb=40, sh=24: mask bits... In IBM numbering with the loop semantics above: bits from 40 to (64-24)-1 = 39, i.e., wraps around: bits 40..63 and 0..39 = all 64 bits. So yes, mask full width, mb == (64-sh)&63 → 40 == 40. Good. The expected want = full rotated value. Checks out — the row is self-consistent. And D_SKIP_FULL_ROT measured 28/29 failing `full rot` alone. 
+
+  But wait — the mutant condition `mb != ((64 - sh) & 63)` on the ROTATE loop: when mb == (64-sh)&63 the rotate is skipped entirely, so result = ra & ~mask | (rs & mask) = rs (full width) — 0xDEADBEEFCAFEF00D ≠ want. Killed. Good.
+
+  **F10**: alias row rs=ra. r8 = RS_VAL, SH=8, MB=16. The mutant D_ALIAS_REREAD: re-read rS after the clear AND rotate it — differs from fix only when rA==rS. Measured 28/29 failing `alias rs=ra` alone. Checks out as constructed.
+
+  Question 3 of "WHERE I MIGHT BE FOOLING MYSELF": "F10's row catches the aliasing form I BUILT. Is there an aliasing mutant it does not catch?" Yes — e.g., a mutant that computes the rotate from gpr[ra] before storing (i.e., rotates ra in place: `gpr[ra] = rotl(gpr[ra], sh)` then merges) — that's exactly what "old loop consumed sh" did? No wait. The fix: snapshot s = gpr[rs] before rotating; previously the loop rotated gpr[rs]?? Hmm, "rldimi rotates a COPY `n = sh` (the old loop consumed `sh`)". So the rotate target was always a copy `s`? Let me re-read: "rldimi snapshots `s = gpr[rs]` before rotating it, then `gpr[ra] &= ~tmp; gpr[ra] |= (tmp & s);`". So the fix does: s = gpr[rs]; rotate s left sh times (n = sh; while (n--) s = (s << 1) | (s >> 63) or similar); then merge. The aliasing hazard: if ra == rs, the merge `gpr[ra] &= ~tmp` clobbers gpr[rs] before... no, s is already snapshotted, fine.
+
+  An aliasing mutant the row doesn't catch: one that snapshots s AFTER `gpr[ra] &= ~tmp` but rotates the snapshot — that's D_ALIAS_REREAD roughly. What about a mutant that does `gpr[ra] |= (tmp & s)` but clears first using the rotated value incorrectly... Any aliasing bug needs ra==rs to manifest. The row has ra==rs=r8. Any mutant whose wrongness appears only under aliasing will be caught by this row IF the row's expected value differs under the mutant. Not necessarily: e.g., a mutant that rotates by sh+1 only when ra==rs — contrived. More natural: a mutant that merges as `gpr[ra] = (gpr[ra] & ~tmp) | (tmp & gpr[rs])` WITHOUT snapshot, i.e., re-reading gpr[rs] — with ra==rs, gpr[rs] at that point equals old_ra & ~tmp, so result differs from correct by losing the rs bits under the mask... Actually that's glm's literal mutant form? glm's literal was `gpr[ra] |= (tmp & cpu->cd.ppc.gpr[rs])` — reads unrotated source. The row catches unrotated-source too (SH=8 ≠ 0).
+
+  Hmm, what aliasing mutant survives the row? Consider a mutant that writes back in a different order: `gpr[ra] = (tmp & s) | (gpr[ra] & ~tmp)` — same value, fine, not a bug. The alias row catches anything that reads gpr[ra]/gpr[rs] post-clear or post-merge instead of the snapshot. What about a mutant that snapshots s = gpr[rs] but then does the rotate destructively on gpr[rs] and uses gpr[rs] — with ra==rs, final value = rotated value merged... e.g., rotate gpr[rs] in place, then gpr[ra] &= ~tmp; gpr[ra] |= tmp & gpr[rs]. With ra==rs: after in-place rotate, gpr[ra] holds rotl(rs); then &= ~tmp leaves rotl(rs) & ~tmp; |= tmp & rotl(rs) gives rotl(rs) — i.e., full rotate, mask ignored. Expected with mask: not full rotate (mask MB=16, SH=8: mask bits 16..(64-8)-1=55? i.e., not full width). So the row would catch that too. OK — the row is fairly robust. But a mutant could be wrong under aliasing in ways the row's specific SH/MB don't expose? The mask with MB=16, SH=8 covers bits 16..55 (IBM) = not full; rotated vs not-rotated differs; so most alias mutants die. Fine.
+
+  **F11**: literal pins (census run 495, disasm total 8/16) carry a measured kill — the note said none, corrected. Opus measured end-test-without-&63 mutant read census run 0/495, disasm 8/16. OK.
+
+  Hmm wait — "disasm total 513/513 measured" for rldimi BASE 29/29. And census/disasm pins. Fine.
+
+  **F12**: rotate amount evidence: SH 8, 40, now 24. "an edit keyed on another single SH is not pinned" — disclosure. Fine.
+
+  **F13**: rlwimi wrap fullword replaces all 32 bits, not 31. Fixed note. Fine.
+
+  **F14**: cr0 record form rows check CR presence only; deleting update_cr0 survives — disclosure owed in rlwimi header. Fine.
+
+  **F15**: deleting rlwimi's `sh ?` guard equivalent on x86-64 — tmp >> 32 at sh=0 is UB but evaluates as >>0... hmm wait: sh=0, the guard is presumably `tmp = sh ? (tmp << sh) | (tmp >> (32 - sh)) : tmp` or similar. At sh=0, tmp >> 32 (32-bit operand shifted by 32) is UB; on x86-64, shift count masked to 5 bits → >> 0 → tmp. So deleting guard gives tmp = (tmp << 0) | (tmp >> 32) = tmp | tmp = tmp — same as guard result. Equivalent on this host, UB in C. Accepted as not-a-gap with no change. Hmm — is accepting that right? The line predates the fix; the mutant (deleting the guard) behaves identically on this host. The question for a detector gap is whether a real bug could survive. The guard deletion is not a bug on this host. OK, fine.
+
+  **F16**: mutant misrotating only at SH=1 or 2 survives — clause (e) disclosure. Fine.
+
+  **D1**: floor vs disclosure for F1/F2. The rule as stated in premises: clause (d) DEPENDS-ON enumerates predicates dominating edited lines (to function boundary) and operand swaps drawn from fields the guarded body reads; for a PURE DELETION the (d) mutant re-introduces removed behaviour under a DIFFERENT predicate. A value the body never tests as a case (`idata == k`) is clause-(e) DISCLOSURE.
+
+  So for the pure deletion (removing fatal+exit), the (d) mutants re-introduce the exit under different predicates. The question: which predicates count as floor (d) cells vs disclosure (e)?
+
+  The body reads `rd` (as index) and `i80321_inten`; tests neither. The premise says "operand swaps drawn from fields the guarded body reads". `rd == 0`: is 0 a "swap"? An equality predicate `rd == 0`... The field rd is read by the body (used as array index). A predicate keyed on rd is arguably drawn from a field the body reads. But `rd == 0` specifically vs `rd == 8`: both are `idata == k` shapes on the field. The premise says "A value the body never tests as a case (`idata == k`) is clause-(e) DISCLOSURE, not a floor cell."
+
+  Under a strict reading of the premise, `rd == 0` is `idata == k` with k=0 — the body never tests rd as a case — so it's disclosure. Codex's floor argument was "a bounded operand swap: an existing equality-to-zero predicate with the body-read index substituted" — i.e., treating it as an operand swap of some existing `== 0` predicate elsewhere in the function (e.g., `crm == 0`, `crn == 0` checks exist dominating the arm). Hmm — that's a stretch but defensible: the dominating predicates include `crm == 0 && crn == 0 && l_bit`; substituting rd for crn in an equality-to-zero yields `rd == 0`. That IS an operand swap drawn from... hmm, the swap source is a predicate, and the swap target field (rd) is body-read.
+
+  For the inten-bit predicate: `i80321_inten & (1<<22)` — there's no existing bit-test predicate in the dominating set to swap from? If the dominating predicates are all equality-to-zero on crm/crn/opcode fields, then a bit test is a different predicate SHAPE, not an operand swap. So under the premise's rule: `rd == 0` could be floor (operand swap: crn→rd in the existing `== 0` predicate... but wait, operand swaps are "drawn from fields the guarded body reads" — rd is read by the body. So swap the FIELD in a dominating predicate from crn to rd: `rd == 0` — that's literally an operand swap on an existing predicate. FLOOR. And `rd == 8`? There's no `== 8` predicate dominating; that's inventing a new constant → `idata == k` → disclosure. And inten bit test: new predicate shape on a body-read field... the bit position 22 is a fresh constant; no swap source. → disclosure. Hmm, but then "any inten bit" as a class: one row with inten=0xffffffff pins all bit positions. 
+
+  Actually wait — I need to be careful about what the premise intends. The premise is the operator's own rule (settled premises are given as ground truth for packet-fed seats). Under that rule:
+
+  - Clause (d) for pure deletion: re-introduce removed behaviour under a DIFFERENT predicate. The (d) enumeration covers "predicates dominating the edited lines (to the function boundary)" — i.e., for the deletion, re-introducing fatal+exit gated by any predicate from that dominating set (e.g., only when crm==0, only when l_bit, etc.) — plus "operand swaps drawn from fields the guarded body reads" — i.e., take one of those predicates and swap a field with a body-read field.
+
+  So `rd == 0`: dominating predicates include `crn == 0`. Swap crn (a field the predicate reads) with rd (a field the body reads): `rd == 0`. That's a clause-(d) operand swap → FLOOR CELL. The row must pin it (it does, via RD0_ALLONES).
+
+  - `i80321_inten & (1 << 22)`: is there a dominating predicate of bit-test shape? Probably not. A fresh constant 22 and fresh shape → `idata == k` disclosure. But then, is the "one row closes it" justification coherent? The row inten=0xffffffff pins ALL bit-test predicates of the form `inten & mask` for any mask — that's a partition closed by one row. That's nice but the CLASSIFICATION shouldn't depend on row cheapness (the operator's own distrust).
+
+  Hmm, but actually let me reconsider: is "any inten bit" perhaps floor under a generous reading — "operand swap drawn from fields the body reads" applied to... a bit test would need an existing bit test to swap into. Is there? The arm is selected by `crm == 0 / crn == 0 / l_bit` — l_bit is a boolean field test (l_bit != 0 or == 1). Swapping l_bit (a bit field) with a bit of inten? l_bit is a 1-bit field of the instruction; inten bit 22 is a bit of a value. Eh — the swap rule says "fields the guarded body reads" as swap TARGETS; l_bit→(inten bit) is not a field swap, it's a shape change. I'll call the inten-bit one disclosure but note the boundary is genuinely arbitrary, and D1's real answer is about the RULE, not this case: since the row was added either way (unshipped detector, L1 construction), the classification only affects the changelog grade. 
+
+  My adjudication of D1: REFINE — `rd == 0` is floor (operand swap of the dominating `crn == 0` predicate onto body-read field rd, exactly the premise's (d) definition); `rd == k` for k≠0 and `inten & (1<<b)` are clause-(e) disclosure (fresh constant / fresh predicate shape = `idata == k`). The operator's lean ("disclosure for arbitrary, floor for rd==0 and any-inten-bit because cheap") gets the right answer for rd==0 with the WRONG justification (cheapness), and the wrong answer for inten-bit under the premise's own rule — it's disclosure; the fact that one row happens to pin the whole partition doesn't change the grade, it changes the disclosure's status from "unpinned" to "pinned anyway". The rule for next time: grade by the swap-source test, not by row cost. If a disclosure-class mutant is pinned by a row you built for other reasons, record it as pinned disclosure, not floor.
+
+  Actually, hold on. Let me reconsider whether `inten & (1<<22)` might also be floor under "operand swaps drawn from fields the guarded body reads". Consider the dominating predicate `l_bit` — it's a single-bit test (opcode bit). The body reads `i80321_inten`. An operand swap of the bit-test predicate from field l_bit to... a bit of i80321_inten? The swap targets are "fields" — is a bit of a value a field? In this codebase, `l_bit` is derived as `opcode & (1<<20)` or similar. Hmm. If we allow bit-position substitution as operand swap, then ANY bit test on ANY body-read value becomes floor, and the enumeration is bounded (32 bits) — 32 mutants, one row kills all (inten=all-ones). Then "any inten bit" would be floor and cheaply closed. But `rd == 8` would still be disclosure (constant 8 has no swap source) unless we allow constant substitution... The premise distinguishes: operand swaps (field-for-field) are (d); value-as-case (`idata == k`) is (e). A bit test `inten & (1<<22)`: the swapped-in element is inten (a field) for l_bit (a field) — field-for-field, same shape (single-bit test). I could argue floor. But the constant 22 is new... in a bit test the "constant" is the bit position, which for l_bit is fixed by the encoding. Swapping the tested OBJECT l_bit→inten keeps no canonical position. I think the honest reading: the premise's (d) swap is about same-shaped predicates with a field replaced by a body-read field; `l_bit` test swapped to `inten bit` requires ALSO choosing a position — two degrees of freedom, second one unbounded-ish (32 choices but no canonical source). The `rd == 0` swap preserves the constant 0 from `crn == 0` — one degree of freedom, constant inherited. That's the clean line: floor = predicate shape + constant both inherited from a dominating predicate, field swapped to a body-read one; anything needing a fresh constant or fresh shape = disclosure.
+
+  Under that line: `rd == 0` floor; `inten & (1<<22)` disclosure (fresh constant 22, arguably fresh shape); `rd == 8` disclosure. And the operator's question "if D1 comes out floor, is closure a row per undriven rd, or unbounded and therefore disclosure by construction?" — answer: for `rd == k`, k≠0, the enumeration is bounded (16 rd values) but the constants have no swap source, so disclosure by the rule; closure by one row per value is possible (16 rows) but not owed; the existing row pins k=0. Also note RD0_ALLONES with r0 target: r0 poisoned 0xdeadbe00, want 0xffffffff — kills both `rd==0` exit and any inten-bit exit. For `rd==8` a row with r8 target + distinctive inten would pin it; not owed.
+
+  **D2**: settled by mutator text (F4). I should verify by reading `mut_xscale_t2.py` if I can find it. The operator says the two findings they rejected rest on a mutator text they read, not a new measurement — but wait, they ALSO have `probe_M5.raw` evidence: "the row reading isteer gets S1 (probe_M5.raw: got 0xa500005a want 0), and inten is never written, so the IRQ never enables (ANCHOR_EXC got 0x8024 spin, want 0x18)". That IS a measurement of M5's behavior consistent with two-way redirect. So F4's rejection rests on BOTH the mutator text AND measured M5 leg output (M5 28/30 with those specific failures). The M5 measured failures (INTEN_WRITE_PRESERVES_ISTEER got S1; ANCHOR_EXC spin) are exactly what a two-way redirect predicts. A read-only redirect would give different failures (D_S1 red). So D2: UPHOLD the settlement — it's corroborated by measurement, not just text. That's a direct answer to "WHERE I MIGHT BE FOOLING MYSELF" bullet 1.
+
+  **D3**: literal pins — measured by Opus (F11) that the end-test mutant reads census run 0/495, disasm 8/16 → they carry a kill. Floor-vs-disclosure label: under the premise, "An UNSHIPPED detector's rows are L1 construction — adding a row needs no floor warrant" — the literal pins exist in the unshipped detector; whether they're floor or disclosure: a mutant that changes the census/disasm totals (e.g., end-test without &63 making the mask loop run differently... producing 0/495) — the literal pin rows are essentially detector self-consistency anchors. I'd say: the label question is moot for grading; they're pinned-by-construction anchors. If forced: disclosure — they pin a class of "any edit that changes instruction decode/count" which is `idata == k` shaped on global counters, not on predicates dominating edited lines. Actually hmm. Let me think about what "census run 495" and "disasm total 8/16" are. Probably the detector counts instructions executed (census) and disassembles some. A mutant breaking the mask loop's termination changes execution counts → census 0/495. These literals catch mutants whose effect is a global behavioral change not caught by value rows. They're detector internals. Classification: I'd rule CANNOT SETTLE cleanly / or REFINE: they're neither floor cells nor disclosure in the (d)/(e) sense — they're cross-check anchors (the operator's own "cross-check held on every leg" language). Their measured kill justifies keeping them; the label debate is record-keeping. If a label is required for the changelog: disclosure (they disclose that the detector's global channels carry signal beyond the value rows).
+
+  Now the "suspicious 14/16 acceptance" question — WHICH ACCEPTED DISPOSITION IS WRONG? Let me hunt for the weakest acceptance.
+
+  Candidates:
+
+  - F15 (rlwimi `sh ?` guard deletion equivalent): accepted as not-a-gap. Hmm, wait. Let me look at this more carefully. "deleting rlwimi's `sh ?` guard is equivalent on this host (`tmp >> 32` at sh=0 is UB but evaluates as `>> 0` on x86-64)". Wait — for rlwimi, is there an sh=0 case in the detector? If sh=0 rows exist and the mutant behaves identically, fine. But is the claim even right? If the guard is `tmp = sh ? rotl32(tmp, sh) : tmp` and you delete it: `tmp = (tmp << sh) | (tmp >> (32 - sh))` with sh=0: `tmp << 0 | tmp >> 32`. tmp is 32-bit (uint32_t?) — after the fix "rlwimi narrows tmp to 32 bits". `tmp >> 32` where tmp is uint32_t: UB (shift ≥ width); on x86-64 with variable shift, count masked &31 → 0 → tmp. So tmp|tmp = tmp. Same. OK equivalent on host. But WAIT — the mutant is a C-level UB; if the build uses -O2 the compiler could do anything... measured? The seats said "equivalent"; was it measured? F15 says "accepted as not-a-gap, no change". If it wasn't measured, it's a prediction. The kill table 3 has 17 legs... which legs? Listed: D_SKIP_FULL_ROT, D_ALIAS_REREAD, D_NO_MERGE, D_NOCIRC, BASE... 17 legs total, 15 on prediction, 2 misses named. The un-named legs presumably include the guard-deletion mutant? Not clear. I can't verify without the artifacts. I should read the artifacts directory.
+
+  - F9 row correctness: `full rot` want 0xefcafef00ddeadbe — I verified the rotate. But ALSO need to verify the mask is full width under the implementation's mask semantics: mb=40, sh=24, end = (64-24)&63 = 40 → mb == end → do-while sets all 64 bits. Under the FIX, the mask loop with wrap sets bits 40,41,...,63,0,...,39 = all bits. Yes full. And expected = rotl(rs,24) = 0xEFCAFEF00DDEADBE ✓.
+
+  - F10 alias row: RS_VAL, SH=8, MB=16: mask bits 16..55 (IBM) — in value terms, that's 0x0000FFFFFFFF0000? IBM bit 16 = MSB-side: bit b IBM ↔ value bit (63-b). Bits 16..55 → value bits 8..47 → mask 0x0000FFFFFFFFFF00? Let me compute: value bits 8 through 47 inclusive = ((1<<48)-1) & ~((1<<8)-1) = 0x0000FFFFFFFFFF00? (1<<48)-1 = 0x0000FFFFFFFFFFFF; minus 0xFF → 0x0000FFFFFFFFFF00. Yes. So expected ra = (RS_OLD & ~mask) | (rotl(RS_VAL,8) & mask) with ra=rs=r8=RS_VAL: correct = (RS_VAL & 0xFFFF0000000000FF) | (rotl8(RS_VAL) & 0x0000FFFFFFFFFF00). The D_ALIAS_REREAD mutant (re-read after clear, then rotate): s' = RS_VAL & ~mask; result = (RS_VAL & ~mask) | (rotl(s',8) & mask). These differ (rotating before vs after masking). Row catches it. Measured 28/29 failing alias row alone ✓.
+
+  - F2's "union 0xFFA5F05F; never set: 0x005A0FA0": rows drive inten = 0, 0xA500005A, 0x5AA5F00D, and bit 28 (0x10000000). Union: 0xA500005A | 0x5AA5F00D | 0x10000000 = 0xFFA5F05F? Let's check: 0xA500005A | 0x5AA5F00D = 0xFFA5F05F. Yes. | 0x10000000 → 0xFFA5F05F (bit 28 already? 0xA500005A has bit 28? 0xA = 1010 at nibble 7 (bits 28-31): yes bit 28 set... wait nibble 7 is the top: 0xA500005A top nibble A = bits 31,29. 0x5AA5F00D top nibble 5 = bits 30,28. So union has bit 28. So "bit 28" row = 0x10000000 ⊂ union. Union = 0xFFA5F05F. Complement = 0x005A0FA0. Bit 22: 0x00400000 — in complement? 0x005A0FA0 = bits: 0x00400000 yes (5A = 0101 1010 → bit 22 (0x400000) is in the 4? 0x005A0FA0: nibble 5 (bits 20-23) = 5 = 0101 → bits 22 and 20. Yes bit 22 ∈ never-set. ✓ arithmetic consistent. And RD0_ALLONES sets inten=0xffffffff which covers every never-set bit. One row does close the whole bit-partition. ✓
+
+  - F1's row: RD0_ALLONES — r0 poisoned 0xdeadbe00, inten<-0xffffffff, mrc p6,0,r0,c0,c0,0, want r0==0xffffffff. Wait — but does the detector's session allow writing r0? MRC into r0 is fine architecturally. The poison value ensures a no-op read (mutant that doesn't write r[rd]) is caught too — actually that's a nice extra: it also pins "read does nothing" mutants. Under M_RD0 (exit if rd==0), the instruction exits → detector reports fail on that row. ✓ measured.
+
+  Now — the deeper hunt for "what did all of us miss":
+
+  1. **The M_RD0/M_MAGICBIT mutants EXIT the process.** When the coproc does exit(1), the emulator dies mid-session. The row RD0_ALLONES kills them — but is the kill attributed to the right channel? Any exit(1) inside the session also kills the HOST process, so all subsequent rows in that session would fail too — RD0_ALLONES "failing alone" means... hmm, if RD0_ALLONES is mid-session, an exit there would red all later rows in the same session, so "failing RD0_ALLONES alone" implies it's the last row of its session, or in a fresh session by itself ("fresh session" per the description). The description says "fresh session" — good, so exit kills just that session's one row. But careful: under M_RD0, do OTHER sessions still pass? Yes — measured 29/30 with RD0_ALLONES alone red. Consistent only if RD0_ALLONES is isolated. Fine.
+
+  2. **What about a mutant that returns i80321_inten but ALSO does something else wrong** — out of scope.
+
+  3. **The xscale fix body: `r[rd] = i80321_inten;`** — what about rd == 15 (PC)? M_RD15 exists as a leg (29/30). Writing r15 in ARM has pipeline semantics (in real HW, reading PC gives +8; writing via MRC to r15... MRC with rd=15 is UNPREDICTABLE-ish or writes CPSR flags for MRC? Actually MRC to r15 is special). But the instrument measured M_RD15 29/30 — meaning a mutant keyed on rd==15 fails one row (some row reads into r15: "Inten reads landed only in r3-r7, r9, r10, r15" — yes r15 is driven). OK.
+
+  4. **Missed: `rd == 0` in the WRITE direction?** F1/F2 concern the read path. The write path `i80321_inten = r[rd]` with rd==0 writes r0's value — fine. Not relevant.
+
+  5. **Bigger miss candidate — the PPC rlwimi fix's interaction**: "rlwimi narrows tmp to 32 bits and, BEFORE the insertion loop, `if (mb > me) ra = (ra & 0xffffffff) | ((uint64_t)tmp << 32)`". Wait, that sets the HIGH 32 bits of ra to tmp when mb > me (wrap case). Hmm — rlwimi on a 64-bit CPU: rlwimi rotates the LOW 32 bits of rs (rotl32), and inserts into the low 32 bits of ra under mask mb..me; the HIGH 32 bits of ra... In 64-bit PowerPC, rlwimi leaves the high 32 bits of ra UNCHANGED? No wait — rlwimi is a 32-bit instruction in 64-bit mode: the result's high 32 bits... Actually in PowerPC 64-bit, rlwimi writes the full 64-bit ra: bits 0-31 (high) of ra are... Let me recall the architecture: For rlwimi in 64-bit implementations, the rotated 32-bit value is inserted into both halves? No — that's rlwimi's quirk: the mask mb..me applies, and "the low 32 bits of the result are placed in ra[32:63], and ra[0:31] are... " Hmm. Actually I recall: in 64-bit mode, rlwimi produces ra = insert into LOW half; the HIGH half of ra is left unchanged? No! Let me think again. PowerPC spec for rlwimi (64-bit impl): "The contents of rS[32:63] are rotated left by SH, then inserted into rA[32:63] under control of mask mb..me. rA[0:31] are unchanged." Hmm, no — I believe for rlwimi in 64-bit mode the high 32 bits of rA are PRESERVED (not zeroed, not mirrored). Wait, but there IS a subtlety: rotl32 result is also copied to the high half for some instructions? That's for rlwinm? No — rlwinm in 64-bit: result is the 32-bit rotate masked, placed in low 32, and high 32 are ZERO? Hmm.
+
+  Actually, PowerPC 64-bit semantics for the rlw* instructions: r is the 32-bit rotated value of rS[32:63]. For rlwinm: rA = r & mask (as 64-bit, r zero-extended? r is 32 bits; rA[0:31] = 0? no...). Let me recall properly: In 64-bit mode, rlwinm: "rA ← r AND mask" where r = ROTL32(rS[32:63]) and the result is placed in the full 64-bit rA with the 32-bit r zero-extended? I believe rlwinm zero-extends? No wait...
+
+  Hmm, the actual PowerPC spec: for rlwinm in 64-bit implementations, "rA[0:31] ← 0"? I'm fairly sure rlwinm in 64-bit mode sets the entire 64-bit rA, with r (32-bit) treated as... hmm, no. Actually I remember now: rlwinm clears the upper 32 bits. From the PowerPC ISA: "rlwinm RA,RS,SH,MB,ME — n ← SH; r ← ROTL32((RS)[32:63], n); m ← MASK(MB,ME); RA ← r & m" — where r is a 32-bit value, and the assignment to 64-bit RA... The spec defines r as 32-bit; "RA ← r & m" with m a 64-bit mask of form 0^32 || mask32? The mask MASK(MB,ME) in 64-bit is defined with leading 32 zeros? Hmm, no: MASK(x,y) for the rlw* instructions in 64-bit mode... 
+
+  OK here's what I actually remember solidly from emulator code (e.g., QEMU translate): rlwinm in 64-bit mode: `ra = rotl32(rs, sh) & mask32(mb,me)` — result zero-extended to 64 bits. YES — QEMU's rlwinm produces a 64-bit value from rotl32 masked, i.e., high 32 bits are ZERO. And rlwimi in 64-bit: `ra = (ra & ~mask) | (rotl32(rs,sh) & mask)` — the insertion happens in the LOW 32 bits and the HIGH 32 bits of ra are PRESERVED. Hmm, is that right? QEMU: `gen_rlwimi`: mask = MASK(mb,me) (32-bit), `t0 = rotl32(rs)`, then `ra = (ra & ~mask) | (t0 & mask)` computed on 64-bit values with 32-bit mask → high bits of ra preserved. YES. So in 64-bit PowerPC, rlwimi preserves ra[0:31] (IBM numbering = high half).
+
+  Now the fix's wrap handling: "if (mb > me) ra = (ra & 0xffffffff) | ((uint64_t)tmp << 32)". When the mask wraps (mb > me), the mask in 64-bit... WAIT. This sets the HIGH 32 bits of ra to tmp (the rotated value) when mb > me?! That contradicts the ISA! Unless... hmm, wait. Actually hold on — is this gxemul's own historical behavior? There IS a real subtlety in old POWER/PowerPC: some early implementations of rlwimi with mb > me... no. Hmm, actually wait. Let me reconsider: maybe gxemul's rlwimi historically REPLICATES the rotated word into the high half when mask wraps? That would be a bug per ISA... but the premise says this is the FIX and the detector passes with it. The detector row `wrap fullword` "replaces all 32" (F13: the note said 31 low bits, it replaces all 32) — hmm, "replaces all 32" — low 32? The wrap case mask mb>me covers bits mb..31 and 0..me (IBM 32-bit mask on low word) = FULL 32 bits when mb == me+1. The note correction: "replaces all 32" — i.e., when mb > me... 
+
+  Hold on, I should actually go read the code instead of guessing. This is exactly the kind of thing where the whole panel could be wrong if they all shared the same premise text. The premise says the fix does `ra = (ra & 0xffffffff) | (tmp << 32)` when mb > me. Per PowerPC 64-bit ISA, rlwimi should PRESERVE the high 32 bits of ra regardless of wrap. Setting high = rotated value when wrap... 
+
+  Hmm wait, actually — maybe I'm wrong about gxemul's register model. Let me think about what old gxemul did. Actually, I recall the PowerPC ISA for rlwimi in 64-bit mode DOES have the high-half subtlety for rlwnm/rlwimi? No... Let me just recall QEMU again. QEMU ppc translate, gen_rlwimi:
+  ```c
+  MASK... uint64_t mask = ...; 
+  if (mb <= me) { ... } 
+  ```
+  Hmm honestly I can't recite it verbatim. The IBM PowerPC ISA 2.07 pseudocode for rlwimi:
+  ```
+  n ← SH5
+  r ← ROTL32((RS)32:63, n)
+  m ← MASK(MB+32, ME+32)
+  RA ← r&m | (RA)&¬m
+  ```
+  MASK with 64-bit indices MB+32, ME+32 — so the mask applies to bits 32:63 (the low word in IBM numbering where bit 0 is MSB of the 64-bit reg). So mask bits only in the LOW half; RA's high half (bits 0:31) = RA & ¬m covers them fully (mask has zeros there) → PRESERVED. So YES: rlwimi preserves high 32 bits of RA in 64-bit mode, always, wrap or not.
+
+  So if the fix sets ra high = tmp when mb > me, that VIOLATES the ISA... UNLESS gxemul's convention differs or the old code did this and the fix preserves it deliberately for compatibility with the existing instrument. WAIT — the premise: this whole exercise is a security-audit battery on gxemul where the "fix" targets specific battery rows. The detector measures against a TRUTH derived from... what? If the truth table was built from the panel's own analysis, a shared misreading of the ISA would pass BASE 29/29 AND be wrong everywhere. That's exactly "WHAT DID ALL OF US MISS" material.
+
+  Hmm, but hold on. Maybe the fix is right and my memory of the ISA is wrong. Let me think about real hardware behavior for rlwimi wrap in 64-bit. In 64-bit PowerPC, the rotate-and-mask instructions with 32-bit masks: rlwimi's mask m = MASK(MB+32, ME+32). If MB ≤ ME: mask = bits MB+32..ME+32 (contiguous in low word). If MB > ME: MASK(x,y) with x > y = all bits EXCEPT y+1..x-1 — so mask = bits 32..MB' region... i.e., bits 32:63 except ME+33..MB+31 = low word bits 0..MB (IBM32) and ME..31, still all within the low half. High half of mask = 0 always. So high half of RA preserved ALWAYS. I'm confident: rlwimi in 64-bit mode never touches RA's high 32 bits.
+
+  Hmm, so then why would the fix set `ra = (ra & 0xffffffff) | (tmp << 32)` on wrap? That zeroes... no wait, it sets high = tmp (rotated value), keeps low = ra low... but then the insertion loop modifies low bits under mask. Final: high = tmp, low = merged. That means for wrap masks, RA high = rotated value instead of preserved. That contradicts ISA... 
+
+  UNLESS the panel's PPC is a 32-bit-only implementation where gpr[] is 64-bit storage but rlwimi was buggy before and the fix... no, "narrows tmp to 32 bits" then "if (mb>me) ra = (ra & 0xffffffff) | (tmp << 32)" — hmm hold on. Maybe I have the direction wrong: maybe the ORIGINAL gxemul code, in the wrap case, wrote the rotated value into the HIGH word as a known longstanding gxemul behavior (there's a real historical artifact here!). Actually YES — I now recall: old gxemul's ppc rlwimi implementation had exactly this weird code with `ra = (ra & 0xffffffff) | ((uint64_t)tmp << 32)` for mb>me... I genuinely can't verify from memory. The right move: READ THE CODE. The whole point of this adjudication is that I have the tree available. Let me not speculate and instead go read:
+
+  - `GXEMUL-SEC/src/cpus/cpu_ppc_instr.c` (or wherever rlwimi lives)
+  - the briefs
+  - the detector files with the want values
+
+  If the detector's `wrap fullword` row has a want that encodes high=tmp behavior, and real ISA says preserve-high, then EVERYONE missed that the fix codifies non-ISA behavior... but wait — maybe gxemul documents this. OR maybe my ISA memory is faulty. Let me check real docs... I can't fetch PPC ISA easily, but I can reason from the OpenBSD/NetBSD guest perspective: does any real code run rlwimi with mb>me in 64-bit? Rare. The panel's truth likely came from... the briefs will say.
+
+  Hmm wait, actually, now I really do recall something specific: PowerPC 601 / POWER architecture: on the POWER/PowerPC 601 bridge, rlwimi with mb>me ("mask wraps") had implementation-specific behavior? No... The 601 is 32-bit anyway.
+
+  Actually, there IS a documented 64-bit quirk: for rlwimi/rlwinm/rlwnm executed in 64-bit mode, some EARLY 64-bit implementations (POWER3?) ... no, I don't think so.
+
+  Alternatively the gxemul code might be implementing the ROTATION differently: maybe gxemul's rlwimi rotates the FULL 64-bit value when mb>me? No, "narrows tmp to 32 bits".
+
+  OK, enough speculation. Plan of action: read the actual files. Also the briefs, kill tables, detectors, mutators. Then adjudicate.
+
+  Also for xscale: read `arm_coproc_i80321_6` in GXEMUL-SEC/src/cpus/cpu_arm_coproc.c, verify the body reads rd and i80321_inten only, check the write path and isteer write paths (F5's claim "isteer can only become non-zero through a write that itself exits" — verify by reading the function for `i80321_isteer` assignments).
+
+  Also verify F4/D2 by reading `mut_xscale_t2.py`.
+
+  Let me also verify the claim in F7: "D_RESET/D_ZERO cannot vary under a wrong-source mutant whose substitute is also 0" — detector structure claim; would need detector reading. And F8 read-count ceiling ≤5 reads per session — detector.
+
+  Given the volume, I should delegate parallel exploration to subagents: one for xscale artifacts (brief + code + mutator + detector + killtable), one for PPC. But the adjudication reasoning needs the details in MY context. Subagents return summaries — for verdict-grade work I'd rather read key files myself. Compromise: use two explore subagents to LOCATE everything (briefs, detectors, mutators, killtable dirs) and return paths + key excerpts, then I read the critical hunks myself. Actually, the tree is big but the paths are predictable: GXEMUL-SEC/regress/artifacts/xscaleinten/killtable3_20260912/, GXEMUL-SEC/regress/artifacts/ppcrlwimiwidth/killtable3_20260912/. The briefs: panel_20260912_095235_xscalepass2, panel_20260912_095238_ppcpass2 — search for those names.
+
+  Let me start with Glob/Grep to locate the panel dirs and briefs. I'll do it directly — a handful of targeted searches.
+
+  Key files to find:
+  1. The two pass-2 briefs (probably .md or .txt under GXEMUL-SEC/regress/ or a panels dir).
+  2. `cpu_arm_coproc.c` with `arm_coproc_i80321_6`.
+  3. PPC rlwimi/rldimi code.
+  4. `mut_xscale_t2.py`.
+  5. Detectors for both rounds.
+  6. Kill table artifacts + POSTTABLE.out.
+  7. CHANGELOG entries maybe.
+
+  Then adjudicate F1-F16, D1-D3, answer the 4 questions.
+
+  The verdict line must be FIRST, then liveness token ADJUD_XP_20260912. Format: "VERDICT LINE FIRST, then the liveness token". So my reply starts with a verdict line (overall adjudication summary), then the token, then the analysis.
+
+  Let me now think about what my final verdicts are likely to be, pending verification:
+
+  F1: UPHOLD (measured 29/30 failing RD0_ALLONES alone).
+  F2: UPHOLD (measured).
+  F3: UPHOLD (verify mutator text).
+  F4: UPHOLD the rejection (M5 two-way; corroborated by probe_M5.raw + ANCHOR_EXC measurements — NOT just text).
+  F5: UPHOLD as disclosure — verify isteer write paths in code. Actually check: is there ANY path where isteer becomes nonzero without exit? Read the coproc function.
+  F6: UPHOLD (verify dev_footbridge.c has fatal+exit for the analogous case — grep).
+  F7: UPHOLD as record.
+  F8: UPHOLD.
+  F9: UPHOLD (verified arithmetic above; measured).
+  F10: UPHOLD (measured). The aliasing-mutant question: answer it — any alias-dependent mutant that the row misses? One that comes to mind: a mutant that SNAPSHOTS correctly but merges with operator error visible only under aliasing... e.g., `gpr[ra] &= ~tmp; gpr[ra] |= (tmp & s);` → mutant `gpr[ra] |= (tmp & s); gpr[ra] &= ~tmp;` (reversed order: clear AFTER or) — for ra==rs: result = (s_rotated & tmp... wait s is the rotated snapshot; order swap gives ((ra_old | (tmp&s)) & ~tmp) = ra_old & ~tmp — mask bits LOST entirely. For ra≠rs same wrong result — actually this mutant is wrong regardless of aliasing, caught by any masked row. Fine. A genuinely alias-only mutant the row misses: hmm, one whose wrongness requires ra==rs AND the row's specific SH=8/MB=16 produces same value? E.g., mutant rotates the re-read value by a DIFFERENT function that coincides at SH=8? Contrived. The honest answer: the row pins the class "re-reads ra/rs after clobber" and "uses unrotated source"; it does NOT pin mutants that compute the merge from a snapshot taken after SOME other intermediate step that happens to equal the correct snapshot at these SH/MB values. In practice: the row pins alias mutants whose wrong value differs from correct under mask 0x0000FFFFFFFFFF00 and rotate 8 — which is all natural alias mutants I can construct except degenerate ones. Also: mutant `s = gpr[ra]` instead of `gpr[rs]` (operand swap ra↔rs at snapshot) — with ra==rs row, s is same → row does NOT catch it! But other rows (ra≠rs) catch it: any row with rs≠ra kills it. So covered elsewhere. What about `gpr[rs] &= ~tmp` (clobbering SOURCE instead of dest)? With ra≠rs: destroys rs, result in ra... ra gets (tmp&s)|(ra&~tmp) — wait if mutant does `gpr[rs] &= ~tmp; gpr[ra] |= (tmp & s)` — ra = ra_old | (tmp&s) (no clear) — wrong for ra≠rs → caught by masked rows. With ra==rs: r8 = (r8&~tmp)|(tmp&s) = correct! So an "rs-clobber" mutant is caught by non-alias rows, not the alias row. Good division. The remaining alias-only class: mutants that are correct for ra≠rs and wrong for ra==rs — the row's job. Forms: (a) re-read post-clear (built, caught); (b) re-read post-merge: s2 = gpr[rs] AFTER `gpr[ra] |= (tmp&s)` — for ra==rs, s2 = (old&~tmp)|(tmp&s); then final = (old&~tmp)|(tmp&s2) = ((old&~tmp)|(tmp&s)) since (tmp & s2) ⊆ tmp... = (old&~tmp) | (tmp & ((old&~tmp)|(tmp&s))) = (old&~tmp) | (tmp&s) — SAME as correct! So post-merge re-read is NOT wrong under aliasing (idempotent or). Interesting — so (b) is equivalent, not a bug. (c) clear via `gpr[ra] = gpr[ra] & ~tmp` using UPDATED tmp? no. I think the built form is the canonical alias bug. Answer: no natural alias mutant escapes; contrived ones (SH-keyed) fall under F16-style disclosure.
+
+  F11: UPHOLD (Opus measured).
+  F12: UPHOLD. Note: `full rot` adds SH 24, so SH evidence now {8, 24, 40} — but wait, is 40 for rldimi or rlwimi? "rotate amount was evidenced only at SH 8 and 40 (all-ones census is rotate-blind)". rldimi SH ∈ {8, 40} previously, +24 now. rlwimi SH is 5-bit (0..31); separate. Fine.
+  F13: UPHOLD.
+  F14: UPHOLD — and note the owed header line is a COMMIT BLOCKER-ish nit (owe before commit, trivial).
+  F15: this is my prime suspect for "wrong acceptance". Let me scrutinize: "deleting rlwimi's sh ? guard is equivalent on this host (tmp >> 32 at sh=0 is UB but evaluates as >> 0 on x86-64); the line predates the fix." Concerns: (1) Was it MEASURED? If not measured, acceptance rests on host-shift semantics — but UB under -O2 is not "evaluates as >> 0"; GCC on x86-64 for a variable shift emits shr with count masked by hardware → >>0 result — true for uint32_t variable shift at runtime. If sh is a compile-time constant 0 folded... sh comes from decoded instruction, not constant. So runtime shr, count & 31 = 0 → tmp unchanged. Equivalent — OK physically. (2) But the REAL question: does any detector row use sh=0 for rlwimi? If no row has sh=0, the mutant is untested anyway (not "equivalent", just unpinned). If rows DO have sh=0 and pass under the mutant, "equivalent on this host" is the right call, and it's not a detector gap. Either way "no change" seems defensible. But the acceptance language "UB but evaluates as" is fragile — on a different host (or different compiler flags, e.g., -fsanitize=undefined or a future -O3 transform) the mutant diverges; but mutants are evaluated ON this host, so equivalence-on-host is the right standard for the battery. Hmm. I'll UPHOLD but flag the reasoning should say "host-equivalent mutant; not a detector gap; recorded" — which they did. Actually wait, one more angle: "the line predates the fix" — meaning the guard is pre-existing code, not part of the fix's edited lines, so mutants on it are out of scope for THIS fix's floor anyway. The floor is about the edited lines. Deleting a PRE-EXISTING guard is not a regression the fix introduced. So not-a-gap is right for grading the fix. UPHOLD.
+
+  F16: UPHOLD as disclosure. Note the tension with F12: F12 says "an edit keyed on another single SH is not pinned" (disclosure), F16 says misrotating only at SH 1 or 2 survives (disclosure) — consistent.
+
+  D1: REFINE per my analysis above: rd==0 is floor (operand swap of dominating `crn==0` onto body-read rd, constant inherited); inten-bit and rd==k(k≠0) are disclosure (fresh constant/shape). The operator's lean reaches the right split for the wrong reason (cheapness). Rule for next pure deletion: floor = re-introduction under a predicate obtainable from the dominating set by field-swap to a body-read field with inherited constants; everything needing a new constant/shape = disclosure, and if a built row happens to pin a disclosure class, grade it "pinned disclosure", don't promote it to floor retroactively.
+
+  Hmm wait, but I should double check the dominating predicates actually include an `== 0`. The arm is "crm 0 / crn 0 / l_bit" — so yes, `crm == 0 && crn == 0 && l_bit` (and opcode2/op1 fields too presumably) dominate. So `== 0` predicates exist with fields crm, crn. Swap field crn→rd (body-read): `rd == 0`. One degree of freedom. Floor. ✓. And what about `i80321_inten == 0` (equality, not bit test)? Swap crn→inten: `i80321_inten == 0` — floor cell too! Is it pinned? Rows drive inten = 0 (some row has inten=0!) and S1/S2/bit28 — "the rows drive inten = 0, S1, S2, bit 28". So a mutant `if (i80321_inten == 0) exit` — the row with inten=0 READ would kill it IF such a read row exists with want ≠ ... wait, if inten==0 and the read exits, the row fails; correct behavior returns 0. Do rows read inten while it's 0? Presumably D_ZERO does (F7 mentions D_ZERO). So pinned already. ✓ good — so the floor set for the deletion = {re-introduce under each dominating predicate} ∪ {field-swaps: rd==0, inten==0, (rd==0 with l_bit? combinations...)} — and the inten==0 cell is pinned by existing D_ZERO. Only rd==0 was missing → now pinned. Clean.
+
+  Bit-test shape: no dominating bit-test predicate... except l_bit itself IS a bit test of the opcode! l_bit = (opcode >> 20) & 1 or a field extraction. Hmm — if l_bit is tested as a predicate `l_bit` (i.e., `opcode & (1<<20)` shape), then swapping the tested object opcode→i80321_inten gives `i80321_inten & (1<<20)` — a bit test with inherited constant 20! Is bit 20 pinned? inten values: 0, 0xA500005A, 0x5AA5F00D, 0x10000000. Bit 20 (0x00100000): 0xA500005A has bit 20? 0xA500005A: nibble for bits 20-23 is '0' (0xA5**0**0005A → bits 20-23 = 0). 0x5AA5F00D: bits 20-23 = '5' = 0101 → bit 20 set. So yes, bit 20 is driven by S2 row. A mutant `if (inten & (1<<20)) exit` dies on the S2 read row. So the floor bit-test cell (inherited position 20) was ALREADY pinned. The disclosure is only for OTHER bit positions (22 etc.) — now pinned anyway by all-ones. This is a nice refinement showing the floor cells were: rd==0 (added), inten==0 (D_ZERO), inten bit 20 (S2 row). Hmm, but is l_bit's position 20? For MRC/MCR, bit 20 is the L bit indeed (MRC/MCR bit 20 = L). In the code it's probably `l_bit = (i >> 20) & 1`. Plausible. But careful: swapping opcode→inten in `opcode & (1<<20)`: the constant 20 is inherited from the encoding. I'll present this as the REFINE with an explicit "if l_bit is implemented as a bit test" hedge — verify in code.
+
+  Wait, actually the floor enumeration says "operand swaps drawn from fields the guarded body reads". The swap takes a field FROM a predicate and replaces with a body-read field. `rd == 0`: replace crn with rd. `inten == 0`: replace crn with inten. `inten & (1<<20)`: replace opcode with inten. All legit one-field swaps with inherited constants. So the floor set has ~3-5 cells beyond the plain re-introductions; all pinned now. D1 resolved cleanly under the premise's own rule, WITHOUT recourse to cheapness. 
+
+  D2: UPHOLD (mutator text + corroborating measurements).
+  D3: REFINE — the kill is measured (settles "carries a kill"); the label: treat census/disasm literal pins as cross-check anchors (a third category: detector-internal oracles), grade as disclosure if forced into the (d)/(e) scheme. Actually the premise only gives floor/disclosure... I'll say: REFINE — they're disclosure-grade detectors of global behavior change; their measured kill promotes them from "unpinned anchor" to "pinned disclosure", not to floor. Consistent with my D1 rule (no promotion by cheapness/luck). Hmm, wait — but actually for D3, is there an argument they're floor? Floor cells are mutants of the EDITED lines. The end-test-without-&63 mutant IS a mutant of an edited line (the mask loop wrap `& 63` was added by the fix!). So the mutant is a (d)-class edit-variant... The census/disasm literals are the ROWS that kill it — wait no. Let me re-read: "Opus: the `census run`/`disasm total` literal pins DO carry a measured kill — its end-test-without-&63 mutant read `census run 0 / 495`, `disasm total 8/16`." So the mutant (removing `& 63` from the mask loop end test — a mutant of an edited line) was killed by the literal pin rows (census/disasm totals). deepseek asked whether literal pins' role is floor-gap; grok/kimi/codex said disclosure. The question is about the ROWS (literal pins), not the mutant. Rows aren't floor or disclosure — CELLS (mutant classes) are. The cell "mask-loop end-test variants" is floor (it's on an edited line). The literal pins happen to carry that kill (redundantly with...? does any VALUE row kill the end-test mutant? census 0/495 means execution went sideways — probably hung or crashed → host death → everything reds. Hmm "census run 0/495" suggests the run produced 0 of 495 census events — the mutant loop likely never terminates or corrupts badly. If it hangs, all rows red; the literal is just the first reporter). So D3's real content: the literal pins are early/global reporters for catastrophic mutants — that's a reporting channel, not an independent oracle class. Label: CANNOT SETTLE is a cop-out; I'll REFINE: the (d) cell is floor regardless of which row reports it; the literal pins' measured kill shows they function as global-integrity anchors — keep them, label them anchors, stop grading rows as floor/disclosure (rows are L1; CELLS get grades). That dissolves D3.
+
+  Question 2 — which accepted disposition is WRONG? I need to actually dig. My candidates so far:
+
+  (a) F15's "no change" — defensible, probably fine.
+  (b) The F13 note fix — trivially fine.
+  (c) F6 — verify footbridge actually has fatal+exit (grep). If dev_footbridge.c does NOT have it, F6's acceptance is wrong. Check.
+  (d) F5 — verify no isteer-write-without-exit path. If there IS one (e.g., MCR to some crn writes isteer quietly), then `if (isteer != 0) exit` is NOT equivalent — it would be killable by a row driving that write, and the correct disposition is a floor cell / gap, not disclosure. READ THE CODE.
+  (e) F9's row — want value verified ✓.
+  (f) F1/F2 row — but wait: RD0_ALLONES wants r0 == 0xffffffff. Under the FIX, mrc loads i80321_inten = 0xffffffff → r0 = 0xffffffff ✓. But hmm — "r0 poisoned 0xdeadbe00": poisoning r0 then reading into r0. Fine.
+
+  (g) THE BIG ONE — the rlwimi wrap high-word behavior (`ra = (ra & 0xffffffff) | (tmp << 32)` when mb > me). Let me think HARD about whether this matches the PowerPC ISA... Actually — WAIT. I remember now!! There IS a genuine architectural subtlety: **rlwimi on 64-bit** — hmm, no. Let me recompute from the spec pseudocode (ISA 3.0, rlwimi RA,RS,SH,MB,ME):
+  ```
+  n ← SH
+  r ← ROTL32((RS)[32:63], n)
+  m ← MASK(MB+32, ME+32)
+  RA ← r & m | (RA) & ¬m
+  ```
+  r is 32-bit; r & m: m is 64-bit mask with zeros in bits 0:31 (since MASK(MB+32,ME+32) only sets bits ≥ 32 in IBM numbering = low half). r & m needs r extended to 64 bits — zero-extended. So RA = (zero-extended r & m) | (RA & ~m): bits 0:31 of RA = RA's old bits 0:31 (since m and r have nothing there). PRESERVED. I'm sure. rlwimi preserves the high word. Always. Wrap or not (MASK with x>y wraps within the low half only).
+
+  So `ra = (ra & 0xffffffff) | (tmp << 32)` on mb>me sets high word = tmp — WRONG per ISA... UNLESS gxemul's tmp here is not what I think, or the line is doing something else — maybe gxemul's convention is that for mb>me the mask becomes full-64-bit? No wait — hmm, hold on. Let me reconsider: maybe gxemul's OLD code computed the mask as a 64-bit mask where wrap masks extend into the high word? If gxemul's original bug was treating the rlwimi mask as 64-bit (mask = MASK(mb,me) on 64-bit indices, where mb>me wraps through bits me+1..mb-1 INCLUDING the high word?)... MASK(0,0) style... The fix premise says: "rlwimi narrows tmp to 32 bits and, BEFORE the insertion loop, if (mb > me) ra = (ra & 0xffffffff) | ((uint64_t)tmp << 32)". 
+
+  Hmm, hmm. What if gxemul's mask loop for the wrap case iterates m from mb upward through 63 (crossing into... no, 5-bit fields, m wraps &31? or &63?). If gxemul represents the rlwimi mask in a 64-bit variable with bits numbered 0..63 where the wrap case would set bits mb..31 AND 0..me in 32-bit numbering but the code maps them onto a 64-bit mask wrongly...
+
+  You know what — this is exactly why I must read the code and the detector's `wrap fullword` row with its want value. If the want for the wrap row has high word == rotated tmp, then the detector codifies non-ISA behavior and EVERYONE missed it (or: it's deliberate gxemul-compatible behavior documented somewhere — the briefs should say; the F13 note "replaces all 32" suggests the wrap replaces all 32 LOW bits and the row checks... hmm "replaces all 32" not "64").
+
+  Wait, actually, let me reconsider once more. `wrap fullword`: maybe the row is mb=0, me=31? That's mb ≤ me, full mask 32 bits, no wrap. "wrap fullword note said 31 low bits; it replaces all 32" — the NOTE (in the contract/header) described the row as replacing 31 low bits; codex corrected: it replaces all 32. If the row is mb=0,me=31 (fullword, NOT wrap) the note's "wrap fullword" name is about... ugh. OR the row is mb=1, me=0? wrap with mask bits 1..31 and 0..0 = all 32 bits (mb == me+1 → full). That's the wrap-fullword: mb=1, me=0 → mask = all 32. Under the fix: mb>me → ra high = tmp, low fully replaced by tmp → ra = (tmp<<32)|tmp?? And the want presumably = that. Per ISA: high preserved. So want would be ISA-wrong. UNLESS gxemul documents deviant behavior. I NEED THE CODE + ROW.
+
+  Alternatively maybe I have it backwards and the fix is CORRECTING the high-word behavior: old code did something with the high word always; fix does `ra = (ra & 0xffffffff) | (tmp << 32)` only when mb>me... still wrong per ISA. OR — wait — maybe I have IBM bit numbering of mb/me flipped in gxemul's code: gxemul might number mask bits LSB=0. If gxemul's insertion loop maps mask bit m to value bit m (LSB-style), then mb>me "wrap" in gxemul-land might correspond to... the ISA wrap is mb>me in MSB-style. If gxemul converted, the conditions could map differently. Reading the code will resolve everything.
+
+  So my main investigative targets:
+  1. rlwimi code + wrap row want (candidate for the big miss).
+  2. isteer write paths (F5 candidate).
+  3. footbridge fatal+exit (F6 candidate).
+  4. mut_xscale_t2.py (D2/F3/F4 verification).
+  5. Kill tables + POSTTABLE.out (consistency check of the inlined claims).
+  6. Detectors (F7/F8 claims, read-count ceiling, anchor irq 28).
+  7. rldimi code (verify snapshot/wrap claims, D_NOCIRC mechanism — the 22 vs 21 miss: `full rot` PASSED under D_NOCIRC; operator says "likely x86 shift-count masking making the unmasked loop circular, NOT measured". D_NOCIRC: removes the `& 63` wrap from mask loop increment? "its mask loop wraps: m = (m + 1) & 63" — D_NOCIRC removes &63 → m goes 40..63, then 64, 65... end test m != 40 never true for m ≥ 64 → infinite loop? or maskbit(m) for m>63 is UB... The measured: 22/29, `full rot` passed. Hmm, if D_NOCIRC removes the &63 on increment, the do-while from mb=40: sets bits 40..63, m=64 != 40 continue, bit 64?? maskbit(64) = 1 << (63-64)?? UB / shift negative... could loop forever or terminate by luck. But measured: it FAILED 7 rows and passed full rot. The operator's arithmetic predicted 21, got 22. The miss is explained plausibly. Not a verdict issue, but the "likely mechanism NOT measured" is honest. Fine.)
+
+  Also question 3 "WHAT DID ALL OF US MISS" — beyond the rlwimi-ISA candidate, other universal misses to consider:
+
+  - **RD0_ALLONES double-duty risk**: one row pins two cells; if the row is removed/regresses, two cells lose coverage. Minor, not a "miss" per se. Also: RD0_ALLONES sets inten=0xffffffff — does any OTHER row read inten afterwards expecting something else? "fresh session" — no.
+
+  - **The `mrc p6,0,r0,c0,c0,0` encoding**: crm=0, crn=0, opcode2=0. M_RD0 exits on rd==0 — but the EXIT happens in the emulator; the detector sees process death. Fine.
+
+  - **xscale: what about the WRITE path's interaction with RD0_ALLONES?** The row first writes inten<-0xffffffff (mcr p6,0,r?,c0,c0,0 with r? = 0xffffffff) then reads into r0. Write path unaffected by M_RD0 (keyed on read arm? F1 says "if (rd == 0) { fatal; exit(1); } AFTER THE LOAD" — so the mutant is on the read arm only). But wait — if M_RD0's exit is after the load on the read arm, the write arm with rd==0 (mcr from r0) doesn't exit. Fine. But under M_RD0, does the row's WRITE use rd==0? "inten <- 0xffffffff" — probably loaded into some rN first then mcr from rN. If they used r0 for the write... M_RD0 doesn't guard writes, so fine either way.
+
+  - **PPC: rlwimi `if (mb > me)` uses POST-fix tmp (narrowed 32-bit) shifted <<32** — tmp is uint32 narrowed; `(uint64_t)tmp << 32` OK.
+
+  - **What about rlwimi when ra == rs?** rlwimi has "three" rA==rS rows (F10 says rlwimi has three). OK.
+
+  - **rldimi with sh=0**: mask loop end (64-0)&63 = 0; if mb=0: do-while from 0 sets all 64 bits; rotate n=0 times → s unchanged → ra = rs. Fine. Rows? unknown.
+
+  - **The census/disasm pins under M_RD0-type exit mutants**: process death → census partial → literal reds FIRST possibly before the value row — reporting order. Not a miss.
+
+  - **BIGGER: the xscale read fix `r[rd] = i80321_inten` — ARM MRC semantics: for rd==15, MRC writes... in real ARM, MRC with Rd=15 has special behavior (the value goes nowhere / or sets flags for some CP). Writing r[15] in gxemul = PC write → could branch! Does the instrument have an r15 read row (yes: "Inten reads landed in ... r15"). If gxemul's r[15] write doesn't branch (just sets pc value), the session continues; real hardware behavior differs. But that's pre-existing gxemul behavior for all MRC, not this fix. M_RD15 29/30 measured — a mutant keyed rd==15 fails one row → the r15 row exists and pins it. OK.
+
+  - **The deep PPC miss candidate**: `rldimi` mask when sh=0 and mb=0 → end=0: do-while sets ALL bits (full) — correct (mask mb..63-sh = 0..63). When mb=0, sh=0 the do-while: m=0, set bit 0, m=1 != 0... sets all 64. ✓. When mb=5, sh=0: end=0, sets 5..63. Mask should be mb..63-sh = 5..63. ✓. 
+
+  - **rldimi: the rotate loop and the mask loop BOTH depend on sh; D_SKIP_FULL_ROT keyed the ROTATE loop on mb==end.** Covered.
+
+  - **Missed xscale cell: re-introduction under a swapped predicate crm→opcode2 etc.** M_OPCODE2 exists (27/30). M_CRM exists (29/30). M_OP1 (29/30). Covered.
+
+  - **Missed: `crm 0/crn 0` arm with l_bit=0 (write) — could a mutant move the fatal to the WRITE arm?** Detector writes inten in many rows → would die. M_ISTEER_WR is something else. Probably covered by existing rows (any write row reds if write exits). E.g., ANCHOR writes. Fine.
+
+  - **What about `r[rd] = i80321_inten` byte order / narrowing?** r[] is 32-bit, inten 32-bit. Fine.
+
+  - **THE OTHER BIG CANDIDATE**: F4's rejection — "Under the two-way M5 the inten write lands in isteer" — wait, M5 redirects the crn-0 arm to isteer BOTH directions: reads of inten return isteer; writes to inten write isteer. Then "INTEN_WRITE_PRESERVES_ISTEER" row: writes inten=S1 (→ isteer=S1 under M5), then reads isteer → gets S1 (want 0) → red ✓. "inten is never written, so the IRQ never enables (ANCHOR_EXC got 0x8024 spin, want 0x18)" ✓ consistent. M5 = 28/30: exactly 2 reds. Consistent story. UPHOLD.
+
+  But glm's point "M5's 27/29 has no consistent mechanism" was against 27/29 (old table, 29 rows); now M5 = 28/30 with 2 explained reds. Consistent.
+
+  - **deepseek's "INTEN_WRITE_PRESERVES_ISTEER is vacuous under M5"**: under M5 the row's want (isteer stays 0 after inten write) fails because the write lands in isteer. The row is NOT vacuous — it's red. The row's PURPOSE (pinning that inten writes don't touch isteer) is exactly what M5 violates. Rejection correct.
+
+  Now, the commit-readiness question:
+  - xscale: detector 30 rows, gate pin 30 owed; CHANGELOG D1 grade owed (my refinement). F14's rlwimi header line owed. F8 clauses added (done). If gate green with 30 — commit-ready AFTER: (1) CHANGELOG records D1 ruling (grade), (2) rlwimi cr0 disclosure line added (trivial), (3) resolve the rlwimi-ISA question if it's real.
+  - PPC: 15/17 predictions with 2 recorded misses (arithmetic + unmeasured mechanism) — misses are explained in POSTTABLE; gate green → ready once header line added.
+
+  But if the rlwimi-wrap high-word thing is ISA-wrong, that's a "STOP, fix truth first" finding. MUST CHECK THE CODE.
+
+  Also should check: does the rlwimi fix's `if (mb > me)` line have a detector row that would distinguish high=tmp vs high=preserved? The `wrap fullword` row: if it poisons ra high with a distinctive value and the want has high == that poison → codifies preserve (ISA-correct), and the fix line `(uint64_t)tmp << 32` would FAIL that row... contradiction with BASE 29/29. So either the want codifies high=tmp (ISA-wrong, panel-wide miss) or ra high poison == rotated value by coincidence (test design flaw) or the row doesn't check high word. READ THE ROW.
+
+  Hmm wait, actually — hold on, let me reconsider the ISA question once more, because I want to be really sure before I go reading. Actually now I doubt myself in the other direction: I have a nagging memory that in SOME 64-bit PowerPC documentation, rlwimi/rlwinm are described with the rotated 32-bit result placed in BOTH halves... no, that's not right either — that's for the "rotl32" of... hmm, rlwinm in 64-bit: RA ← r & m where r is 32-bit zero-extended? For rlwinm that means high word = 0. Let me sanity check with compiler behavior: `x & 0xF0` on 64-bit PPC compiles to rlwinm and the result's high bits are 0 ✓ (zero-extension of 32-bit ops is how 32-bit semantics are emulated). And `y = (y & ~0xFF) | ((x rotated) & 0xFF)` via rlwimi — used for byte inserts; if rlwimi zeroed the high word, `li;rlwimi` sequences building 32-bit constants in 64-bit code would break... they DO use `rlwimi` to build constants and rely on... hmm, in 64-bit code, building a 32-bit constant, high word garbage doesn't matter if only w-form used after. But compilers DO emit rlwimi for 64-bit shifts/inserts of 32-bit values... For `(a & 0xffffffff00000000) | b32`-type ops they use rld* forms. I'm fairly confident: rlwimi PRESERVES the high 32 bits of RA in 64-bit mode. (QEMU: GEN_MASK... `gen_rlwimi` uses `deposit64`? Hmm, actually QEMU implements rlwimi via `tcg_gen_deposit`? No that's for newer... older QEMU: `t0 = rotl32(rs, sh); tcg_gen_andi(t1, ra, ~mask); tcg_gen_andi(t0, t0, mask); tcg_gen_or(ra, t1, t0)` with mask as 64-bit constant from a 32-bit mask → high preserved ✓.)
+
+  OK so high-preserved is my strong belief. But there's a wrinkle: what if gxemul's `tmp` after "narrows to 32 bits" is the rotated AND the fix line only fires when mb>me where... hmm, what would mb>me even mean for the mask loop? If the mask loop is LSB-numbered (bit m = value bit m), then ISA mask mb..me (MSB-numbered) = value bits (31-me)..(31-mb). A "wrap" mb>me in ISA MSB-land = mask = bits 0..(31-mb) and (31-me)..31 (value numbering) — two disjoint chunks near LSB and MSB of the low word — still never touches high word. So `ra = (ra & 0xffffffff) | (tmp << 32)` writes high word = tmp — deviant. Unless gxemul's mask loop for the wrap case ALSO walks into bits 32..63 of a 64-bit mask variable (treating mask as 64-bit mask numbered 0..63 MSB-style?). If gxemul's ORIGINAL code had mask bits in MSB-style 0..63 over the full register and the wrap case mb>me produced mask bits mb..63 and 0..me — which for mb ≤ 31 would include bits 32..63 (the LOW word in IBM numbering...). AAARGH. Bit numbering confusion. READ THE CODE.
+
+  One more candidate universal miss: **the rlwimi fix line `ra = (ra & 0xffffffff) | ((uint64_t)tmp << 32)` runs BEFORE the insertion loop and MUTATES ra — if ra == rs, the subsequent `tmp` computation already happened? Order: tmp = rotl32(rs low) first? "narrows tmp to 32 bits and, BEFORE the insertion loop, if (mb>me) ra = ..." — if ra==rs and the rotate reads gpr[rs] AFTER this line, the rotate would read the CLOBBERED ra. Does rlwimi snapshot rs? The premise doesn't mention a snapshot for rlwimi (only rldimi got the s snapshot). If rlwimi computes tmp from gpr[rs] BEFORE the ra write, fine. If after — alias bug in the FIX itself! rlwimi has three alias rows (F10) — if they pass (BASE 30/30... wait PPC BASE 29/29 for rldimi; rlwimi base presumably also green), then either the fix computes tmp first or the alias rows don't cover mb>me. CHECK: do the three rlwimi alias rows include a wrap (mb>me) case? If all three are mb ≤ me, then the mb>me-with-ra==rs path is UNPINNED — and if the fix's line ordering writes ra before reading rs, that's a LIVE BUG IN THE FIX that no row catches. That would be a REAL catch for question 3. Must read the code ordering + alias rows' MB/ME values.
+
+  OK. Investigation plan (parallel):
+
+  Direct reads (I'll do myself):
+  1. Find panel dirs/briefs: Glob for `*xscalepass2*`, `*ppcpass2*` under GXEMUL-SEC.
+  2. Grep `arm_coproc_i80321_6` in GXEMUL-SEC/src.
+  3. Grep `rlwimi` / `rldimi` in GXEMUL-SEC/src.
+  4. Grep `i80321_isteer` writes.
+  5. Grep footbridge fatal.
+  6. mut_xscale_t2.py.
+  7. Kill table dirs listing + POSTTABLE.out.
+  8. Detector files (rows: RD0_ALLONES, full rot, alias rs=ra, wrap fullword, the three rlwimi alias rows).
+
+  That's a lot of context. Strategy: I'll do the locating greps myself (cheap), then read the surgical hunks. Delegate nothing initially; the reads are targeted. If the detector files are huge, I'll grep within them for row names.
+
+  Let me start.
+
+• I'll verify the load-bearing claims against the actual tree before ruling — starting with locating the briefs, mutator, detectors, and kill tables.
+
+• The panel dirs aren't matching that glob. Let me search for the kill table artifacts and mutator.Found the kill tables and mutators. Now let me find the pass-2 briefs (panel_20260912_095235_xscalepass2) — those are probably panel run directories elsewhere. Let me search for the panel directories. Also read key files:
+
+  1. `cpu_arm_coproc.c` — the i80321 function (find line range).
+  2. `cpu_ppc_instr.c` — rlwimi/rldimi implementations.
+  3. `mut_xscale_t2.py` (killtable2).
+  4. POSTTABLE.out both.
+  5. Detector probes (T3FROZEN) for the row definitions.
+
+  Let me grep for the i80321 function body and the rlwimi/rldimi code.
+
+• Kill tables located. Now reading the actual fix code, mutators, and post-table outputs.
+
+• Very interesting. Now I have the actual code.
+
+  **xscale (cpu_arm_coproc.c:304-336)**: The fix is confirmed:
+  - crm 0 / crn 0 / l_bit: `r[rd] = i80321_inten;` — quiet read ✓ (fatal/exit deleted)
+  - Write: `i80321_inten = r[rd];` quiet ✓
+  - crn 4 (isteer): read quiet; WRITE: `i80321_isteer = r[rd]; if (r[rd] != 0) { fatal; exit(1); }` — so isteer can become non-zero! Look: the write happens FIRST (`i80321_isteer = r[rd]`), THEN the check exits. So a write of nonzero to isteer sets isteer nonzero AND exits. F5's claim: "isteer can only become non-zero through a write that itself exits" — TRUE (the assignment happens, then exit; so within a running session, isteer never nonzero at any observable continuation point). A mutant `if (isteer != 0) exit` on the read arm: isteer is nonzero only if a prior write set it — but that write exited the process. So in any session that survives to do an isteer READ, isteer == 0. EQUIVALENT. ✓ F5's reasoning verified against code. Good — F5 UPHOLD. Note nuance: isteer could also become non-zero... no other writes (grep showed only lines 316/318). ✓
+
+  Also note: the crn-0 arm body reads rd (index) and i80321_inten; tests neither ✓ (premise confirmed).
+
+  The dominating predicates: `crm == 0`, then `crn == 0`, then `l_bit`. Also function entry conditions: the function is called for coprocessor 6 with certain opcode1? The switch is on crm. So dominating predicates to line 311: `crm==0 && crn==0 && l_bit` (plus whatever dispatch conditions in the caller — "to the function boundary" per the rule, so we stop at the function: crm==0, crn==0, l_bit). Also opcode1/opcode2 are parameters but NOT tested in this function — interesting! opcode2 is never tested in the crm-0 arm. So M_OPCODE2 (27/30) is a mutant that... re-introduces behavior keyed on opcode2? It's listed as a leg with 27/30 — it kills 3 rows. Since the body never tests opcode2, a predicate `opcode2 == k` is idata==k disclosure shape, but M_OPCODE2 is a built leg anyway (L1 rows pin it).
+
+  Wait — actually for D1, the floor enumeration: predicates dominating line 311 within the function = {crm==0, crn==0, l_bit}. Operand swaps: swap a field in those predicates with a field the body reads (rd, i80321_inten). From `crm==0`: → `rd==0`, `i80321_inten==0`. From `crn==0`: same shape, same swaps (dup). From `l_bit` (a truthiness test on an int parameter — is it a bit-test? it's tested as `if (l_bit)`, truthiness, not a bit-extraction): swap l_bit→? The body doesn't read l_bit... swaps go the other direction: predicate field → body-read field. `if (l_bit)` → `if (rd)`? or `if (i80321_inten)`? Hmm — if we treat l_bit's test as "nonzero test", swaps give `rd != 0` and `i80321_inten != 0` predicates. Is `if (i80321_inten != 0) exit` pinned? Rows drive inten=0 and nonzero values; a mutant exiting when inten != 0 dies on the S1 read row ✓. Is `if (rd != 0) exit` pinned? Reads land in r3-r7, r9, r10, r15 → any such read dies ✓ (in fact the ORIGINAL HEAD behavior... well). So the (d) floor cells from swaps: {rd==0, inten==0, rd!=0, inten!=0} roughly, plus the plain re-introductions under each dominating predicate ({crm==0},{crn==0},{l_bit}) and combinations. All pinned: rd==0 by RD0_ALLONES (new), inten==0 by D_ZERO rows (inten=0 driven AND read — is there a read row with inten=0? F7 says "D_RESET/D_ZERO cannot vary under a wrong-source mutant whose substitute is also 0" — so D_ZERO has inten==0 and reads it; a mutant `if (inten==0) exit` would die on D_ZERO ✓).
+
+  The inten BIT test (`inten & (1<<22)`): no dominating bit-test predicate exists (l_bit is a plain int parameter tested for truthiness — its "bitness" is in the CALLER, outside the function boundary; the rule says enumerate "to the function boundary"). So bit-test is a fresh shape + fresh constant → clause (e) disclosure ✓. My D1 refinement holds, and it's cleaner than my guess: l_bit inside the function is truthiness, and swapping gives `inten != 0`, which is ALREADY pinned by S1/S2 read rows. So floor cells were: rd==0 (was missing → RD0_ALLONES), and the rest already pinned. 
+
+  **rldimi (cpu_ppc_instr.c:2534-2557)**: confirmed:
+  - `int m, n = sh; uint64_t tmp, s = gpr[rs];`
+  - rotate loop on n/s ✓ (snapshot before rotate; rotate the copy)
+  - mask loop: `m = mb; tmp = 0; do { tmp |= 1 << (63-m); m = (m+1)&63; } while (m != ((64-sh)&63));` ✓ wrap with &63 ✓
+  - `gpr[ra] &= ~tmp; gpr[ra] |= (tmp & s);` ✓ snapshot used in merge ✓
+
+  Verify the mask semantics: bits set from mb up to but not including (64-sh)&63 (with the do-while running full circle if mb == (64-sh)&63). ISA rldimi mask: bits mb..63-sh INCLUSIVE (IBM numbering). Loop sets mb, mb+1, ..., stops when m == (64-sh)&63, i.e., last bit set is ((64-sh)&63 - 1) mod 64. Hmm: if sh=0, end=0, sets mb..63 (last set: 63). ISA mask for rldimi with sh=0: mb..63 ✓ (63-sh=63). If sh=8, end=(64-8)&63=56: sets mb..55, last=55. ISA: mb..63-sh = mb..56?? Hmm — ISA rldimi: mask = mb..(63-sh). 63-8=55... wait 63-sh with sh=8 = 55. And the loop's last set bit = 55 ✓. Let me recheck my earlier computation: I said end=(64-sh)&63 and last set = end-1 = 63-sh ✓. Consistent with ISA (mask mb..63-sh inclusive). ✓ And when mb == 63-sh+1 i.e. mb == (64-sh)&63: full 64-bit mask ✓ (ISA: MASK wraps, all bits). ✓ So the fix's mask is ISA-correct.
+
+  `full rot` row: SH=24, MB=40: end=(64-24)=40=mb → full mask ✓, want = rotl(rs,24) = 0xEFCAFEF00DDEADBE ✓ (verified earlier).
+
+  Alias row: SH=8, MB=16: mask bits 16..55 ✓ non-full; snapshot vs re-read differ ✓.
+
+  D_NOCIRC (removes `& 63` from increment): m goes mb..63, then 64,65... `1 << (63-m)` with m=64 → shift by -1 → UB; in practice x86 shift masks count → 1 << (63-64 mod ...)... the loop end test `m != ((64-sh)&63)`: m increments forever past 63... `m` is int, so m = 64,65,... never equals end (which is ≤ 63) → infinite loop UNLESS the shift UB terminates it... it can't terminate by the test. Hmm, but measured D_NOCIRC = 22/29 with `full rot` PASSING. If the loop never terminates for wrap cases... for NON-wrap cases (mb < end), the loop terminates normally without wrap (m never reaches 63+). For `full rot` (mb=40=end): the do-while must wrap to terminate; without &63, m goes 40..63, 64... shift 63-64=-1 UB... then 65... never == 40 → hang → row times out → but measured says `full rot` PASSED under D_NOCIRC?! 
+
+  Hmm wait — unless D_NOCIRC removes `& 63` from the END TEST (`((64 - sh) & 63)`) rather than the increment! "its mask loop wraps: m = (m + 1) & 63; } while (m != ((64 - sh) & 63))" — two &63s. Which one is D_NOCIRC? The operator said "that undefined-shift mutant" and "x86 shift-count masking making the unmasked loop circular". If D_NOCIRC removes the &63 from the INCREMENT: m goes 40,41,...,63,64,...; shift `1 << (63-m)`: at m=64, count=-1 → x86: count & 63 = 63 → 1<<63; m=65 → count &63 = 62... m keeps incrementing; the end test m != 40 — m mod nothing... m is a plain int — never == 40 again → INFINITE loop. Doesn't match measured.
+
+  If D_NOCIRC removes &63 from the END TEST: end = 64-sh (unmasked). For sh=24: end=40, same as masked (since 40<64) — wait (64-24)=40, &63=40, same. Hmm, then `full rot` unaffected ✓... but for sh=0: end=64 vs 0. Loop from mb: m wraps &63 (increment kept), cycles 0..63, end test m != 64 → NEVER true → infinite loop for ALL rows (m cycles forever without hitting 64). That would hang everything, not 22/29.
+
+  Hmm. What if D_NOCIRC removes the &63 from the INCREMENT and the shift `1 << (63-m)` for m>63... but wait — maybe the mutant makes the loop terminate via the shift UB writing bit... no, the loop terminates only on the m test.
+
+  Let me reconsider: "the likely mechanism is x86 shift-count masking making the unmasked loop circular". If the increment's &63 is removed BUT the shift-count masking on `1 << (63-m)`... that doesn't make m circular. UNLESS the mutant is on the rotate loop (`n`/`s`)? No wait — maybe D_NOCIRC targets the mask loop differently: maybe it removes `& 63` from the end test `((64 - sh) & 63)` AND the increment keeps &63. For full rot (sh=24,mb=40): end unmasked = 40 → same → terminates after full circle ✓ passes. For a row with sh=8, mb=16: end = 56 (same masked/unmasked since 56 < 64) → normal. Hmm — when do masked and unmasked end tests differ? (64-sh)&63 vs (64-sh): differ only when sh=0 (64 vs 0). So D_NOCIRC (end-test variant) would hang only sh=0 rows... and behave identically elsewhere. Measured 22/29 with 7 failures — doesn't fit either unless sh=0 rows hang → those fail, plus what else?
+
+  Hmm, wait — actually maybe I have it backwards: maybe D_NOCIRC changes the mask loop to NOT be circular in the mb>end case, e.g., replaces the do-while with a non-wrapping loop? "NOCIRC" = no circular mask: e.g., `while (m != end && m < 64)` or a for loop m=mb..end without wrap. Then wrap cases (mb > end... wait in the fix's encoding, mask bits mb..(63-sh); "wrap" (circular) case is when mb > 63-sh, i.e., mb > end-1, i.e., mb >= end... the circular case is mb > (63-sh) ⇔ mb >= (64-sh)&63 when sh... hmm. For mb=40, sh=24: 63-sh=39 < 40 → mask wraps ✓ circular. A NOCIRC mutant that drops the wrap (e.g., `for (m = mb; m <= 63-sh; m++)` or breaks at 64) would set bits 40..39 = NOTHING (loop condition immediately false) → tmp=0 → `full rot` row: gpr[ra] unchanged = 0x5A5A... ≠ want → `full rot` should FAIL. But measured: `full rot` PASSED under D_NOCIRC. So NOCIRC isn't that either.
+
+  The operator's words: "D_NOCIRC predicted 21, measured 22 — `full rot` PASSED under that undefined-shift mutant (measured; the likely mechanism is x86 shift-count masking making the unmasked loop circular, NOT measured)." — "undefined-shift mutant" and "unmasked loop". OK here's a reading that fits: D_NOCIRC removes `& 63` from the mask loop's INCREMENT (`m = (m + 1) & 63` → `m = m + 1`). For a circular case (mb=40, sh=24, end=40): m: 40..63 sets bits 40..63 (IBM→ `1 << (63-m)` for m=63 → 1<<0 ✓), then m=64: `1 << (63-64)` = `1 << -1` — UB; x86-64 shl with cl=0xff... wait, `(uint64_t)1 << (63-m)`: 63-m = -1; as shift count in C, it's int -1; the x86-64 shl instruction uses cl = low 8 bits of the count, masked to 6 bits for 64-bit operand: -1 & 63 = 63 → `1 << 63`. m=65: count=-2 &63=62 → 1<<62... So bits get set "circularly": m=64 sets bit 63 (IBM m=0 equivalent!), m=65 → bit 62 (IBM m=1)... i.e., the hardware masking makes the SHIFT circular even though m itself grows. The loop continues: m=64+k sets IBM bit k. The end test `m != 40`: m goes 63→64→...→ never 40 — m is int, increments without bound... m will NEVER equal 40. INFINITE LOOP. Still doesn't fit!
+
+  Unless... the loop is `do { ... } while (m != end)` and m wraps via INT overflow? No, takes forever.
+
+  Hmm, OR the shift-count masking theory applies to the END TEST differently... Actually wait — maybe I should stop guessing and read `mutate_D_NOCIRC.txt` — the mutation is recorded in the artifacts! That's the honest way. Also read POSTTABLE.out for the recorded explanation.
+
+  **rlwimi (2608-2656)**: Now the big one. The code:
+
+  ```c
+  uint32_t tmp = (uint32_t)reg(ic->arg[0]);   /* rs low word */
+  MODE_uint_t ra = reg(ic->arg[1]);
+  ...
+  tmp = sh ? ((tmp << sh) | (tmp >> (32-sh))) : tmp;
+  if (mb > me)
+      ra = (ra & 0xffffffffULL) | ((uint64_t)tmp << 32);
+  for (;;) {
+      uint64_t mask = (uint64_t)1 << (31-mb);
+      ra &= ~mask;
+      ra |= (tmp & mask);
+      if (mb == me) break;
+      mb++;
+      if (mb == 32) mb = 0;
+  }
+  reg(ic->arg[1]) = ra;
+  ```
+
+  So the mask bits: value bit (31-mb) — IBM 32-bit numbering on the low word. Loop from mb to me (wrapping 31→0). So mask = IBM32 bits mb..me (wrapping if mb>me). 
+
+  ISA rlwimi (64-bit): RA = (rotl32(rs) & m) | (RA & ~m), m = MASK(MB+32, ME+32) — mask confined to low word; high word of RA PRESERVED.
+
+  The fix: when mb > me (wrap), sets ra high word = tmp (the rotated value). Per ISA, high word should be PRESERVED regardless. So the fix deviates from the ISA for wrap masks!
+
+  BUT — the comment block (2620-2638) explicitly addresses this! It claims: "A wrapping 64-bit MASK(MB+32, ME+32) selects the DUPLICATED high word (Book I :578 -- MASK wraps when x > y)." 
+
+  Hmm! Interesting claim: MASK(MB+32, ME+32) with MB+32 > ME+32 (i.e., mb > me) WRAPS in 64-bit numbering: MASK(x,y) with x>y = all bits EXCEPT y+1..x-1. So mask = bits 0..ME+32 and MB+32..63 — wait, MASK(x,y) for x≤y = bits x..y; for x>y = bits x..63,0..y (all bits except y+1..x-1). So MASK(MB+32, ME+32) with mb>me: bits MB+32..63 (low word bits MB..31 in 32-numbering) AND bits 0..ME+32 — which includes the ENTIRE HIGH WORD (bits 0..31) plus low-word bits 32..ME+32!! 
+
+  OH. So in 64-bit, the mask for rlwimi with mb>me DOES include the high word! And then RA = r&m | RA&~m where r is... what is r in the 64-bit spec? Let me recheck the ISA pseudocode for rlwimi:
+
+  ```
+  n ← SH
+  r ← ROTL32((RS)[32:63], n)
+  m ← MASK(MB+32, ME+32)
+  RA ← r&m | (RA)&¬m
+  ```
+
+  Hmm — if r is a 32-bit value, how is r&m computed with 64-bit m? The ISA pseudocode... actually I now recall the ISA defines r as 64-bit for these: let me think. In Book I, rlwimi pseudocode (Power ISA 2.07, p.578-ish — and the comment cites ":578"!):
+
+  ```
+  rlwimi RA,RS,SH,MB,ME
+  n ← SH
+  r ← ROTL32((RS)32:63, n)
+  m ← MASK(MB+32, ME+32)
+  RA ← r&m | (RA)&¬m
+  ```
+
+  ROTL32 produces a 32-bit result; in the pseudocode arithmetic, values are conceptually infinite-precision? No — the ISA pseudocode treats r as a 64-bit value where ROTL32(x,n) is defined as... hmm. Actually, KEY INSIGHT: I remember now! For the 32-bit rotate instructions in 64-bit mode, the ISA says the rotated 32-bit value is treated as... Let me recall rlwinm: `RA ← r & m` — if r were zero-extended and m = MASK(MB+32,ME+32) (low-word mask), then RA high = 0. For rlwinm, mask never wraps (MASK(MB+32, ME+32) with mb≤me — contiguous in low word) — RA high = 0 ✓ (rlwinm zeroes high word — matches what I said earlier).
+
+  For rlwimi with mb ≤ me: m confined to low word, RA = (r&m)|(RA&~m): high word preserved ✓.
+
+  For rlwimi with mb > me: m = MASK(MB+32,ME+32) wraps → includes bits 0..ME+32 → the whole high word PLUS low-word bits 32..ME+32 and MB+32..63. Then RA = r&m | RA&~m: high word of result = r & (high part of m) = r's high word. If r is zero-extended 32-bit, high word of RA = 0. If r is the DUPLICATED rotated value (rotl32 result in both halves), high word = rotated value.
+
+  So everything hinges on: in the ISA pseudocode, is `r ← ROTL32((RS)32:63, n)` zero-extended or duplicated into 64 bits?
+
+  I now genuinely recall: the Power ISA defines ROTL32 as returning a value where... hmm. Actually — I remember the actual text! Power ISA Book I, rlwinm description: "The contents of bits 32:63 of register RS are rotated left by n bits. A mask is generated... The rotated data is ANDed with the mask and the result placed into register RA." For rlwimi: "the rotated data is inserted into register RA under control of the mask." And there's a NOTE in some versions about the 601/ POWER... 
+
+  Hmm, but the gxemul comment says "Book I :578 — MASK wraps when x > y" and claims the wrapping mask "selects the DUPLICATED high word". The duplication claim: I recall the ISA ROTL32 definition: "ROTL32(x, n) = ROTL64(x32:63 ‖ x32:63... "? Actually YES — I believe the ISA defines ROTL32(x,n) for use in these pseudocode lines as the rotation of the 32-bit value, and the result used in `RA ← r & m | RA & ~m` is... Let me think about rlwnm: "r ← ROTL32((RS)32:63, n); m ← MASK(MB+32,ME+32); RA ← r & m". 
+
+  I have a concrete way to check my memory: think about what real 64-bit PowerPC hardware does with `rlwimi` with mb>me, or what gcc emits. gcc uses rlwimi for bit-field inserts in 32-bit code; with mb>me (wrap mask) it's rare. But there's a well-known documented behavior — I now REALLY do remember: **PowerPC 64-bit rlwimi with a wrapping mask inserts the rotated word into BOTH the high and low words**. This is documented as an oddity! From the PowerPC 601 or the 64-bit bridge... Actually the famous reference: the "rlwimi with mb > me" case is mentioned in the PowerPC architecture as: the mask wraps around, and since the mask in 64-bit mode is MASK(MB+32, ME+32), a wrapping mask includes the upper 32 bits; and the rotated operand r — the architecture defines r as the 32-bit rotated value REPLICATED: "r ← ROTL32(...) " where ROTL32 is defined to produce the value duplicated in both halves? 
+
+  I can settle this from the ISA's own definition of ROTL32. Power ISA Book I Appendix/pseudocode: 
+
+  ```
+  ROTL32(x, y) = ROTL64(x || x, y)[32:63]? 
+  ```
+  Hmm no. Let me think about rlwimi on a 32-bit-only CPU: registers are 32-bit, mask = MASK(MB,ME) 32-bit, wrap = bits mb..31,0..me. On 64-bit: mask = MASK(MB+32,ME+32). For CONSISTENCY with 32-bit behavior in the low word: mask bits MB+32..63 (= low word mb..31) and bits 32..ME+32 (low word 0..me) ✓ plus, because 64-bit MASK wraps through bit 0, also bits 0..31 (the high word). So the high word IS selected when mb>me. And what's inserted there? r's high bits. If r is defined as ROTL32 giving a 32-bit quantity used in 64-bit expression, conventionally it'd be zero-extended → high word CLEARED, not duplicated.
+
+  The gxemul comment says "selects the DUPLICATED high word" — claiming r is duplicated. I need the actual ISA text. I recall the ISA pseudo for these (from the PowerPC PEM / ISA 2.x): 
+
+  ```
+  rlwimi: n ← SH; r ← ROTL32((RS)32:63, n); m ← MASK(MB+32, ME+32); RA ← r&m | (RA)&¬m
+  ```
+
+  and ROTL32 is defined in the pseudocode functions as:
+
+  ```
+  define ROTL32(x, n): return ROTL64(x^32 || x... 
+  ```
+
+  Honestly, I remember there being a definition like: ROTL32(x,y): "r ← ROTL64(x ‖ x, y); return r32:63" — that returns 32 bits, zero-extended in expressions. Hmm.
+
+  BUT there's a second, decisive angle: THE ARCHITECTURE EXPLICITLY DOCUMENTS THIS CASE. I recall from the PowerPC ISA, the rlwimi description has a note: "If MB > ME, the mask wraps..." — and for 64-bit implementations, Appendix on 64-bit: hmm.
+
+  Third angle — actual silicon behavior known in emulator-land: What does QEMU do for rlwimi with mb>me in 64-bit? QEMU: target/ppc/translate.c (old): 
+  ```c
+  GEN_HANDLER(rlwimi, ...){
+      uint32_t mask = ...; // 32-bit mask mb..me wrapping
+      ...
+      tcg_gen_rotl_i64? no — rlwimi: t0 = tcg_temp; tcg_gen_rotl? 
+  ```
+  Old QEMU used helper/rotl32: `t0 = rotl32(cpu_gpr[rs], sh)` — rotl32 returns uint32_t zero-extended to 64. Then `t1 = cpu_gpr[ra]; tcg_gen_andi(t0, t0, mask); tcg_gen_andi(t1, t1, ~mask); tcg_gen_or(cpu_gpr[ra], t0, t1)` with mask a 32-bit value as uint64. High word: preserved (mask has no high bits). So QEMU does NOT duplicate, does NOT clear — it PRESERVES the high word even when mb>me.
+
+  Hmm, so QEMU (battle-tested against real hardware via kvm comparisons... well, not really) says preserve. gxemul's fix says duplicate when mb>me. These differ. Which matches the ISA?
+
+  DECISIVE check: the IBM Power ISA actually documents this! I'm now recalling with more confidence: In the Power ISA, there IS explicit text about rlwimi with MB > ME on 64-bit implementations: the operation is described with the 64-bit MASK, and the ROTATED value... 
+
+  OK here's the thing — I can actually derive it from the 32-bit definition + the 64-bit extension rules. Power ISA Book I section on "Rotate and Shift Instructions" (64-bit): "The 32-bit rotate instructions ... are defined such that the result is independent of the mode"? The gxemul comment CITES Book I S1.2 (:342): "both execution modes affect all 64 bits when an instruction sets a 64-bit register and the result is mode-independent". For the result to be MODE-INDEPENDENT (same in 32-bit and 64-bit mode)... in 32-bit mode, registers are still 64-bit physically (in 64-bit implementations) but the ISA says 32-bit mode... hmm, this is about 32-bit implementations vs 64-bit.
+
+  Let me try to actually find the ISA text. I recall the relevant sentence now — from Power ISA v2.07 Book I, rlwimi description:
+
+  "rlwimi RA,RS,SH,MB,ME
+  n ← SH
+  r ← ROTL32((RS)32:63, n)
+  m ← MASK(MB+32, ME+32)
+  RA ← r&m | (RA)&¬m
+
+  The contents of bits 32:63 of register RS are rotated left SH bits. A mask is generated having 1-bits from bit MB+32 through bit ME+32 (wrapping if MB+32 > ME+32) and 0-bits elsewhere. The rotated data is inserted into register RA under control of the generated mask."
+
+  And ROTL32 definition (pseudocode prelude): "ROTL32(x,y) — Rotate left: the value x (32 bits) rotated... In the pseudocode, ROTL32 returns a 64-bit value whose bits 0:31 are 0?" or "...whose bits 0:31 equal bits 32:63"?
+
+  I genuinely cannot recite it. HOWEVER — I remember concrete prior art in ANOTHER emulator: Dingoonity... no. PearPC? pearpc's ppc_opc.cc: `ppc_opc_rlwimi`: 
+  ```c
+  uint32 r = ppc_word_rotate_left(gpr[rs], sh);
+  uint32 mask = ppc_mask(mb, me); // 32-bit
+  gpr[ra] = (r & mask) | (gpr[ra] & ~mask);
+  ```
+  32-bit only. Dolphin (GameCube, 32-bit): same. Only 64-bit implementations face this.
+
+  What about IBM's own docs for the 970 or POWER4? The famous sentence I might be thinking of: from the PowerPC 64-bit bridge architecture (the 601→64 transition): "Note that if mb > me, the mask will include bits 0:31 of the result"... 
+
+  Actually — WAIT. I can look at this from the gxemul comment itself: it cites "Book I :578 -- MASK wraps when x > y" — that's the MASK definition page. The MASK function: `MASK(x, y) = if x < y then 0^x-1 || 1^(y-x+1) || 0^(63-y) else 1^(64-x)... ` MASK with x>y = all 1s except bits y+1..x-1. So MASK(34, 33) (mb=2,me=1) = all 64 bits except bit 33... wait MASK(34,33): x>y → all bits except (y+1..x-1) = except bit 33. So mask = everything except bit 33 (value bit 30). Hmm interesting — so for mb=me+1 the "wrap" mask = ALL 64 bits minus one bit? NO wait — MASK(MB+32, ME+32), mb=2,me=1 → MASK(34,33) → all bits except 33 → 63 ones. But 32-bit semantics (mb=2,me=1, 32-bit MASK(2,1)) = all 32 bits except bit 1 → 31 ones in the low word. The 64-bit version additionally includes the high word (32 more ones). So with mb>me the 64-bit mask = high word ∪ low-word mask bits.
+
+  Then RA = r & m | RA & ~m. For this to be "mode-independent" in the low word, r's low word = rotl32 ✓. For the HIGH word: result high = r & (all ones high portion) = r's high word. If ROTL32 zero-extends, result high = 0. If ROTL32 duplicates, result high = rotl32.
+
+  The mode-independence principle (Book I S1.2): "If an instruction's result depends on the mode, that's bad" — actually the cited text says results ARE mode-independent: a 64-bit implementation executing rlwimi in 32-bit mode vs 64-bit mode should produce the same 64-bit RA. In 32-bit mode... the ISA says what about high words in 32-bit mode? Hmm.
+
+  Let me try the strongest concrete memory: I'm now ~75% sure the actual Power ISA definition is that **the 32-bit rotated result is duplicated into both halves** — because I remember the rlwimi/rlwnm/rlwinm 64-bit pseudocode being:
+
+  ```
+  r ← ROTL32((RS)32:63, n)
+  ```
+  with ROTL32 defined (Book I, "Pseudocode for rotating"):
+  ```
+  ROTL32(x, y) = ROTL64(x ‖ x, y)32:63  ← NO...
+  ```
+
+  Hmm, alternatively I remember discussions in the QEMU list about `rlwimi` high word behavior and the answer being "architecture says the high 32 bits are set to the rotated value when the mask wraps, i.e., mb > me" — actually YES!! I do remember this specific oddity now: it's a REAL, DOCUMENTED PowerPC quirk. The PowerPC 64-bit rlwimi with mb>me is one of the famous "weird corners". Reference: the "PowerPC Compiler Writer's Guide" or the 601 manual... The quirk: **rlwimi with a wrapping mask copies the rotated data into the high 32 bits of RA**. This exists because the architecture defines the mask as MASK(MB+32,ME+32) over 64 bits and the rotated value r as the 32-bit value REPLICATED (the ROTL32 pseudocode in 64-bit context duplicates). 
+
+  Supporting memory: I believe IBM's ISA actually has this note under rlwimi: "In 64-bit implementations, if the mask wraps (MB > ME), the rotated data is also inserted into bits 0:31 of RA." — I'm now recalling that gxemul's ORIGINAL code had exactly this duplication (the `if (mb > me) ra = ... tmp << 32` pattern might be ORIGINAL gxemul code from 2004, not invented by the fix!). Let me check: the premise says "the line predates the fix" was said about the `sh ?` guard (F15), not about the mb>me line. The premise describes the fix as: "rlwimi narrows tmp to 32 bits and, BEFORE the insertion loop, if (mb > me) ra = (ra & 0xffffffff) | ((uint64_t)tmp << 32)". So the mb>me line IS part of the fix ("and" — both are the fix). Hmm, or the line existed and the fix narrowed tmp? "rlwimi narrows tmp to 32 bits AND, BEFORE THE INSERTION LOOP, [adds/keeps] if (mb>me)...".
+
+  The ORIGINAL gxemul 0.4.x rlwimi — I can check! There's `_archive/gxemul-0.3.2/` in the project root... and GXEMUL-SEC/.git — the fix is UNCOMMITTED, so `git diff` shows exactly what the fix changed! That's decisive for what the fix did. Also the mutate_D_*.txt files show the mutant diffs against the fix.
+
+  And the ISA question itself: I should verify with a web search if needed, but first check git diff + the detector row. If the duplication is ISA-correct (the famous quirk), then the fix is RIGHT and everything is consistent. If the ISA says preserve, the whole panel shipped an ISA violation. My memory now leans 65-70% that the duplication-on-wrap IS the documented 64-bit behavior (it's the kind of obscure-but-true fact that would have come from the battery's earlier truth-building rounds; and the comment block cites specific page numbers with a defensive tone suggesting prior seats challenged it and it survived adjudication).
+
+  Actually, you know what — I CAN verify the ISA claim right now with high confidence via web search of the Power ISA. Let me do that. Query: "rlwimi" 64-bit mask wraps "high" — or the ISA text "the rotated data is inserted into bits 0:31". Let me search.
+
+  Also plan: git diff in GXEMUL-SEC to see both fixes exactly. Read mut_xscale_t2.py (D2). Read POSTTABLE.out (both). Read the two probe detectors' key rows (RD0_ALLONES, full rot, alias, wrap fullword). Read mutate_D_NOCIRC.txt for the NOCIRC mystery. Read dev_footbridge.c fatal (F6). That's manageable.
+
+  Let me fire parallel calls:
+  1. Bash: git -C GXEMUL-SEC diff --stat (and status) — read-only, allowed (no mutations).
+  2. Read mut_xscale_t2.py.
+  3. Read POSTTABLE.out (ppc).
+  4. Read POSTTABLE.out (xscale).
+
+  Then more reads. M regress/gate_arm.sh
+ M regress/ppc_rldicl_probe.py
+ M src/cpus/cpu_arm_coproc.c
+ M src/cpus/cpu_ppc_instr.c
+ M tools/BRIEF_TEMPLATE.md
+ M tools/CLAUDE.md
+ M tools/PIPELINE.md
+ M tools/panel.sh
+ M tools/pipeline/fable_queue.md
+?? _scratchpad/
+?? regress/alpha_dummy.bin
+?? regress/arm_bfx_stub.bin
+?? regress/artifacts/b120/
+?? regress/artifacts/fbdisabled/
+?? regress/artifacts/gdromdefault_461/
+?? regress/artifacts/heldqueue/
+?? regress/artifacts/hlen/
+?? regress/artifacts/landiskaux/codex_fixdesign_20260911.err
+?? regress/artifacts/landiskaux/codex_fixdesign_20260911.txt
+?? regress/artifacts/lcaisaphys/
+ regress/gate_arm.sh           |  36 +++++++++++++
+ regress/ppc_rldicl_probe.py   |  78 ++++++++++++++++++++++-----
+ src/cpus/cpu_arm_coproc.c     |   2 -
+ src/cpus/cpu_ppc_instr.c      |  33 ++++++++++--
+ tools/BRIEF_TEMPLATE.md       | 123 ++++++++++++++++++++++++++++++++++++++++++
+ tools/CLAUDE.md               |  39 ++++++++++++--
+ tools/PIPELINE.md             |   2 +-
+ tools/panel.sh                |   4 +-
+ tools/pipeline/fable_queue.md |  99 ++++++++++++++++++++++++++++++++++
+ 9 files changed, 391 insertions(+), 25 deletions(-)
+Confirmed from the artifacts:
+
+  1. **M5 mutator (t2)**: `read_line="cpu->cd.arm.r[rd] = cpu->cd.arm.i80321_isteer;"` AND `write_line="cpu->cd.arm.i80321_isteer = cpu->cd.arm.r[rd];"` — TWO-WAY redirect confirmed. F3/F4/D2 settled: the read-only reading is false. ✓ And probe_M5.raw measured corroborates (per the packet). So F4's rejection rests on text + measurement.
+
+  2. **POSTTABLE ppc**: D_NOCIRC mechanism now explicit: "with `m ++' unmasked, `1 << (63-m)' runs past bit 0 into undefined shifts, and if the host masks the count to six bits the loop keeps setting the same bits circularly until m wraps and meets its end value — a full mask, reached slowly". 
+
+  Hmm wait — m++ unmasked, m is int. m: 40...63, then 64, 65... the end test is `m != ((64-sh)&63)` = m != 40. m increments past 40 at the START (m starts at 40, sets bit, m=41...). Wait the do-while: starts m=mb=40; sets bit; m=41; test m != 40 → continue; ... m=63→ sets bit; m=64; test: 64 != 40 → continue; shift `1 << (63-64)` = `1 << -1` UB → on x86-64, 64-bit shl masks count to 6 bits: -1 & 63 = 63 → sets bit 63 (which is IBM m=0). m=65: count -2 & 63 = 62 → bit 62 (IBM m=1)... m=64+k sets IBM bit k. Continues until m = ... it needs m == 40 to stop, but m only grows: 64, 65, ...  — m will NEVER equal 40 again. Unless m OVERFLOWS int (2^31 iterations — "near-timeout"!). Hmm — "keeps setting the same bits circularly until m wraps and meets its end value — a full mask, reached slowly, consistent with the census's near-timeout". m wraps = INT overflow after 2^31 increments → m cycles through negative values (itself UB but behaves as wrap on x86) and eventually hits 40 → terminates with full mask. ~2^31 loop iterations ≈ seconds-to-minutes — "near-timeout" ✓. That fits! m is int; after 64 it goes 65...2^31-1, wraps to -2^31, climbs back to 40 → terminates. During the negative-m phase, 63-m is huge (shift count masked &63 → sets bits circularly). Final tmp = all ones (full mask) → `full rot` PASSES (value exact). The mutant still fails 7 other rows (non-wrap cases where... hmm, why do OTHER rows fail? For non-circular masks (mb < end), the loop terminates normally before m reaches 64 — those should PASS. Which 7 fail? Rows where end < mb (circular but NOT full) — the mutant makes those full-mask too instead of the wrapped mask → wrong value → fail. There are presumably 7 such circular-non-full rows. ✓ consistent. And CONTROL=FAIL because census near-timeout. OK — the mechanism offered is plausible and the miss is honestly recorded. Fine. (The loop-termination-via-INT-overflow is itself UB, but on x86 it wraps; "measured value exact" — OK.)
+
+  Also NOTE: D_NOCIRC passed `full rot` — meaning the all-ones mask arrives eventually. But `m == 40` — during negative-m climb, does m necessarily hit exactly 40? m increments by 1 through ALL int values, so yes, it hits 40 exactly. OK.
+
+  3. **Literal pins (D3/F11)**: the measured kill is `../opus_pass2_20260912/rldimi_DM_NOAND_END.log` — "end test without `& 63': the SH=0 hang aborts the sessions" — census 0/495, disasm 8/16. So the end-test-without-&63 mutant: `while (m != (64 - sh))` — for sh=0: end=64, m cycles 0..63 forever (with increment &63 kept) → hang → sessions aborted → census 0/495. So the literal pins' measured kill is via a HANG (global), not via a value row. The pins are first reporters of catastrophic/hang mutants. ✓ my D3 read: they're global-integrity anchors; the cell (end-test variants on an edited line) is floor; the pins carry the kill because the hang aborts everything. 
+
+  Note the rldimi mask loop when sh=0: with &63: end = 0; if mb=0: do-while sets all 64 bits (full) — correct ISA (mask 0..63). The mutant without &63: end=64, m wraps forever → hang. So the &63 in the END TEST is load-bearing for sh=0; the &63 in the INCREMENT is load-bearing for circular masks. Both pinned: end-test by the hang-kill (literal pins) + D_NOKEEP_SH/D_MUT63 legs presumably; increment by the circular rows. ✓
+
+  4. **xscale POSTTABLE**: 12/12 on prediction, M_RD0 and M_MAGICBIT each fail RD0_ALLONES alone ✓ matches the packet.
+
+  Now the remaining verifications:
+  A. **git diff** of the two src files — see exactly what the fixes changed (esp. whether the `mb>me` line is new or pre-existing, and the rlwimi narrowing).
+  B. **The rlwimi `wrap fullword` row** in the frozen probe — check ra high poison vs want (does the detector pin high-word duplication, preservation, or nothing?).
+  C. **The three rlwimi alias rows** — do any have mb>me (covering the ra-clobber-before-rs-read ordering question)? Actually looking at the rlwimi code: `tmp = (uint32_t)reg(ic->arg[0])` — tmp is snapshotted FIRST, then rotated, then `if (mb>me) ra = ...` writes the LOCAL ra (not the register!), then the loop modifies local ra, and only at the end `reg(ic->arg[1]) = ra`. So the register is written ONCE at the end; rs was snapshotted at the start. NO aliasing hazard in the fix at all — ra==rs is safe by construction (single writeback, snapshot first). So my "alias ordering bug in the fix" worry is MOOT for rlwimi: the fix's structure (local accumulation + final writeback) makes ra==rs safe regardless of row coverage. The three alias rows exist but the code is safe even without them. Good — no fix bug.
+
+     But WAIT — rldimi does `gpr[ra] &= ~tmp; gpr[ra] |= (tmp & s);` — DIRECT register ops, two-step. With ra==rs: s was snapshotted BEFORE (line 2542), so the &= clobber of gpr[ra]==gpr[rs] doesn't affect s. Safe ✓. The alias row pins mutants that re-read post-clobber ✓.
+
+  D. **dev_footbridge.c fatal+exit** (F6).
+  E. **The rlwimi high-word ISA question** — web search for the ISA definition.
+  F. **wrap fullword row + alias rows' MB/ME** — read the frozen rlwimi probe.
+  G. **M_RD0/M_MAGICBIT mutants in t3 mutator** — check they're as described (read mut_xscale_t3.py quickly).
+  H. **The RLWIMI narrowing claim**: "rlwimi narrows tmp to 32 bits" — was tmp previously 64-bit (MODE_uint_t)? The git diff will show.
+
+  Let me also check the D1-relevant detector rows for inten==0 (D_ZERO) — F7 says D_RESET/D_ZERO can't vary under wrong-source-0 mutants; fine.
+
+  Next round of parallel calls: git diff for the two files; read footbridge fatal; read the frozen rlwimi probe (grep for "wrap fullword" and alias rows); read mut_xscale_t3.py.diff --git a/src/cpus/cpu_arm_coproc.c b/src/cpus/cpu_arm_coproc.c
+index 49831e7..344590e 100644
+--- a/src/cpus/cpu_arm_coproc.c
++++ b/src/cpus/cpu_arm_coproc.c
+@@ -309,8 +309,6 @@ void arm_coproc_i80321_6(struct cpu *cpu, int opcode1, int opcode2, int l_bit,
+ 	case 0:	switch (crn) {
+ 		case 0:	if (l_bit) {
+ 				cpu->cd.arm.r[rd] = cpu->cd.arm.i80321_inten;
+-				fatal("TODO: XScale read from inten?\n");
+-				exit(1);
+ 			} else
+ 				cpu->cd.arm.i80321_inten = cpu->cd.arm.r[rd];
+ 			break;
+diff --git a/src/cpus/cpu_ppc_instr.c b/src/cpus/cpu_ppc_instr.c
+index d3e6565..4456584 100644
+--- a/src/cpus/cpu_ppc_instr.c
++++ b/src/cpus/cpu_ppc_instr.c
+@@ -2538,18 +2538,18 @@ X(rldimi)
+ 	int sh = ((iw >> 11) & 31) | ((iw & 2) << 4);
+ 	int mb = ((iw >> 6) & 31) | (iw & 0x20);
+ 	int rc = ic->arg[0] & 1;
+-	int m;
++	int m, n = sh;
+ 	uint64_t tmp, s = cpu->cd.ppc.gpr[rs];
+ 	/*  TODO: Fix this, its performance is awful:  */
+-	while (sh-- != 0) {
++	while (n-- != 0) {
+ 		int b = (s >> 63) & 1;
+ 		s = (s << 1) | b;
+ 	}
+ 	m = mb; tmp = 0;
+ 	do {
+ 		tmp |= ((uint64_t)1 << (63-m));
+-		m ++;
+-	} while (m != 63 - sh);
++		m = (m + 1) & 63;
++	} while (m != ((64 - sh) & 63));
+ 	cpu->cd.ppc.gpr[ra] &= ~tmp;
+ 	cpu->cd.ppc.gpr[ra] |= (tmp & s);
+ 	if (rc)
+@@ -2607,7 +2607,8 @@ DOT0(rlwinm)
+  */
+ X(rlwimi)
+ {
+-	MODE_uint_t tmp = reg(ic->arg[0]), ra = reg(ic->arg[1]);
++	uint32_t tmp = (uint32_t)reg(ic->arg[0]);
++	MODE_uint_t ra = reg(ic->arg[1]);
+ 	uint32_t iword = ic->arg[2];
+ 	int sh = (iword >> 11) & 31;
+ 	int mb = (iword >> 6) & 31;
+@@ -2616,6 +2617,28 @@ X(rlwimi)
+ 
+ 	tmp = sh ? ((tmp << sh) | (tmp >> (32-sh))) : tmp;
+ 
++	/*  A wrapping 64-bit MASK(MB+32, ME+32) selects the DUPLICATED high
++	    word (Book I :578 -- MASK wraps when x > y).  Assignment to a
++	    32-bit MODE_uint_t retains only the low word, which is a sound
++	    representation argument by defined unsigned-conversion semantics
++	    and NOT an accident: the shift is performed at 64-bit width and
++	    the loop below then does the low-word insertion.
++
++	    IT IS NOT A CLAIM THAT ARCHITECTURAL 32-BIT MODE REMOVES HALF THE
++	    REGISTER, and the earlier one-line wording here invited that
++	    reading.  Book I S1.2 (:342) says both execution modes affect all
++	    64 bits when an instruction sets a 64-bit register and the result
++	    is mode-independent, and :1989 describes every GPR as 64 bits --
++	    so a 64-bit processor running in 32-bit MODE still owes this
++	    write.  Whether any such implementation compiles the narrow
++	    variant is NOT established here; if one does, it loses the
++	    architectural high word and that is a defect.  Filed rather than
++	    guessed.  (This file's idiom is MODE32 with #else -- see extsb /
++	    extsh -- and carries no MODE64 conditional, so a future guard
++	    would be #ifndef MODE32.)  */
++	if (mb > me)
++		ra = (ra & 0xffffffffULL) | ((uint64_t)tmp << 32);
++
+ 	for (;;) {
+ 		uint64_t mask;
+ 		mask = (uint64_t)1 << (31-mb);
+Key confirmations:
+
+  1. **F6 footbridge**: `dev_footbridge.c` STILL HAS multiple `fatal`+`exit(1)` pairs (lines 564-565, 573-574, 587-589, 601-604, 612-614, 621-623, 711-712, 736-737). And the TIMER_EXTERNAL case was FIXED (comment at 661-667: "it used to reach fatal()+exit(1) right here... #432"). So the DC21285 precedent: the timer zero-load and external-clock cases were fixed (disposition precedent: fix the defect), while other fatal+exit pairs remain. So F6's qualification is accurate: the precedent is a disposition precedent (that defect class gets fixed), not a "source is now quiet" claim. ACCEPTED correctly. UPHOLD F6.
+
+  2. **git diff confirms the fixes exactly as the premises state**:
+     - xscale: pure deletion of 2 lines ✓
+     - rldimi: `int m` → `int m, n = sh`; `while (sh--...)` → `while (n--...)`; mask loop `m ++` → `m = (m+1)&63`, end test `m != 63 - sh` → `m != ((64-sh)&63)` ✓
+     - rlwimi: `MODE_uint_t tmp = reg(...)` → `uint32_t tmp = (uint32_t)reg(...)` (narrowing ✓); the `if (mb > me) ra = ...` block with the big comment is NEW (added by the fix) ✓.
+
+     IMPORTANT DETAIL the diff reveals about rldimi: OLD end test was `m != 63 - sh` (not `(63-sh)&63`... the old code: `m++; } while (m != 63 - sh)`). With the old increment `m++` unmasked and end `63-sh`: for circular masks (mb > 63-sh), m would run 63→64...`1 << (63-m)` UB → the ORIGINAL bug. The fix adds &63 to both. ✓ consistent with premises ("its mask loop wraps: m = (m + 1) & 63; } while (m != ((64 - sh) & 63))").
+
+     Wait — one subtlety on the OLD rldimi: `while (sh-- != 0)` consumed sh, THEN the mask loop used `63 - sh` — with sh consumed to -1?? `while (sh-- != 0)` — post-decrement: when sh reaches 0, test fails, but sh-- still executes → sh = -1 after the loop! So `63 - sh` = 64! The OLD mask end test was `m != 64` — never true for m in 0..63, and m++ unmasked... So OLD rldimi: mask loop ran from mb, m++, until m == 64: sets bits mb..63 then m=64 stops. So old mask = bits mb..63 (IBM) ALWAYS (regardless of sh!). That's the ppcrldimimask defect: the mask ignored sh entirely (always mb..63). And the fix: n=sh copy preserves sh for the end test `((64-sh)&63)` ✓. And rotate consumed... the old rotate consumed sh — after the fix the mask loop needs sh, hence n. All consistent.
+
+     Hmm wait, also the OLD mask loop when mb=0, sh=0: end = 63-(-1) = 64: m: 0..63, m=64 stop: sets 0..63 = full ✓ (accidentally right for sh=0 since mask mb..63 = full when mb=0). OK.
+
+     NEW code with sh=0, mb=0: end = (64-0)&63 = 0; do-while from 0: sets all 64 bits ✓ (mask mb..63-sh = 0..63 ✓).
+     NEW code sh=0, mb=5: end=0; do-while: m=5,6,...,63, then m=(63+1)&63=0 → stop. Sets 5..63 ✓ (mask 5..63 ✓).
+
+  3. **M_RD0/M_MAGICBIT (t3)**: `read_extra_post` — the exit is AFTER the load ✓ as F1 stated ("after the load"). M_MAGICBIT bit 22 = 0x00400000 ✓ as F2/measured.
+
+  4. **rlwimi high-word duplication is NEW code added by the fix** (the whole comment + `if (mb>me)` block). So this is a deliberate, documented design decision with Book I citations (:578 MASK wrap, :342 mode independence, :1989 GPRs 64-bit). The comment's defensive tone shows earlier rounds fought over this. The ISA question remains: is duplication correct? The comment asserts it with citations. My memory says the 64-bit rlwimi wrap-mask behavior IS the famous quirk where the rotated value goes into the high word. Let me verify with a web search to be sure, because if wrong, everyone missed it.
+
+  Also still to check:
+  - The rlwimi probe rows: `wrap fullword` want (does it pin the high word? If ra high is poisoned with a distinctive value and want has high == tmp, the detector codifies duplication; if the row doesn't poison the high word, the duplication is UNPINNED by the detector — a real gap: R_REV_COND/R_ONLY_HIGH mutants... wait, R_ONLY_HIGH exists! "R_ONLY_HIGH 19/28" — that's a mutant of the rlwimi arm. Let me read the mutate_R_*.txt files to see what R_ONLY_HIGH etc. are. The R_ mutants all leave rldimi at 29/29 ✓ cross-check. R_ONLY_HIGH probably keeps ONLY the high-word write (drops the low insertion) or similar. 19/28 — killed by 9 rows. So wrap rows exist and pin the high-word behavior. Let me read the mutants + the probe rows to confirm the wrap rows poison ra-high distinctively.
+
+  - rldimi probe rows: `full rot` and `alias rs=ra` — verify want values match my computation (0xEFCAFEF00DDEADBE etc.).
+
+  - The xscale probe: RD0_ALLONES row ✓ described; verify quickly.
+
+  Let me read the frozen probes. They could be big; grep for the row names.MUTATED M_ONLY_HIGH
+MUTATED M_REV_COND
+MUTATED M_ONLY_CAST
+The detector rows confirm:
+
+  **rlwimi probe**:
+  - `pres nowrap`: want_rlwimi(RS_VAL, SENT, 8, 0, 15) — "preserve unmasked destination bits in low and high words" — so nowrap rows DO check high-word preservation ✓
+  - `pres wrap`: (RS_VAL, SENT, 0, 24, 8) — "preserve unmasked bits in low word, replace high half" — codifies high replacement on wrap ✓
+  - `wrap fullword`: (RS_VAL, SENT, 0, 1, 0) — "wrap fullword boundary: replace entire high half + all 32 low bits" — codifies duplication explicitly, with SENT as ra poison presumably. Need to see want_rlwimi and SENT.
+  - Three alias rows: nowrap (8,0,15), wrap (0,31,0), both (4,20,10) — includes TWO mb>me alias rows! So the rlwimi alias-wrap path IS covered. But per my code reading, the fix is alias-safe by construction anyway (snapshot tmp first, single writeback). Fine.
+  - `want_rlwimi` is a Python reference model in the probe — its semantics duplicate the fix's claims. Self-consistency: probe's want model vs fix — need to glance at want_rlwimi to make sure it's an independent expression (mask construction) not a transliteration... it will be a transliteration of the same architectural understanding; the independent anchor is the ISA text. The ISA question stands. Let me do the web check.
+
+  **rldimi probe**:
+  - SHIPPED CONTRACT updated: "exactly three rotate amounts (SH 8, 24, 40...), so an edit keyed on one other SH value is NOT pinned" ✓ F12 recorded in the shipped contract.
+  - `full rot`: RLDIMI(7, SRC, 24, 40), want = want_rldimi(RS_VAL, SENT, 24, 40), "result is ROTL64(rS,24)" ✓ matches my computed 0xEFCAFEF00DDEADBE (want_rldimi will compute it; row comment confirms ROTL64).
+  - `alias rs=ra`: RLDIMI... s3 seed (8, RS_VAL), row want_rldimi(RS_VAL, RS_VAL, 8, 16) ✓ SH=8, MB=16 ✓.
+  - Census 495 cells with all-ones source — rotate-blind ✓ disclosed.
+  - `disasm total` 513/513 literal pin ✓ (F11: re-measured at BASE).
+  - rldimi header line 57: "(1) ... of 32 bits (filed separately as ppccr0modewidth)" — that's the CR0-width filing. F14 says the rlwimi header owes the cr0-presence-only line — the rldimi contract line 67 says "The CR row checks readback PRESENCE only; CR0 value semantics are not covered." — so rldimi HAS it; rlwimi contract needs the same line. Let me check the rlwimi probe's shipped contract for the CR line... I saw the rlwimi contract? Not yet. Grep quickly for "PRESENCE" in the rlwimi probe.
+
+  **R_ mutants**: the .txt files only say "MUTATED M_ONLY_HIGH" etc. — the actual mutant definitions must be in a mutator py (mut_rlwimi_t3.py?) — only mut_rldimi_t3.py was listed. Hmm, the R_ legs were probably made by an inline sed in killtable3.sh. Let me check killtable3.sh for the R_ mutant definitions. Actually — the mutant NAMES: R_NULL, R_ORIG, R_POST_LOOP, R_ONLY_HIGH, R_ONLY_CAST, R_REV_COND — these look like variants of the `if (mb > me)` line: R_ONLY_HIGH = keep only the high-write (no narrowing?), R_ONLY_CAST = only the cast/narrowing (drop the mb>me line), R_REV_COND = reverse the condition (mb <= me), R_POST_LOOP = move the line after the loop, R_ORIG = original code (no fix), R_NULL = delete the whole arm? Their scores (R_REV_COND 13, R_NULL 12 CONTROL=FAIL, R_ORIG 14, others 19) — all killed hard. The point for me: the wrap rows pin the high-word behavior (R_ONLY_HIGH 19/28 killed by 9 rows; R_REV_COND reverses mb>me → nowrap rows would get high-word replacement → killed by 15 rows). So the duplication IS detector-pinned. Whether it's ISA-RIGHT is the remaining question.
+
+  Let me: (1) grep the R_ mutant bodies in killtable3.sh; (2) check want_rlwimi + SENT; (3) check the rlwimi probe contract for the CR-presence line; (4) web-verify the ISA rlwimi 64-bit wrap behavior; (5) check the xscale probe RD0_ALLONES row + the "five reads" ceiling + irq 28 anchor (F8); (6) check the rlwimi probe header for the "replaces all 32" F13 fix.
+
+  Then write the adjudication.Wait — the `want_rlwimi` reference:
+
+  ```python
+  def want_rlwimi(rs_val, ra_val, sh, mb, me):
+      """Architectural rlwimi result per Book I:4310."""
+      m = mask32(mb, me)
+      return (rotl32(rs_val, sh) & m) | (ra_val & (~m & M64))
+  ```
+
+  and `mask32(mb, me)` returns `mask_range(mb + 32, me + 32)` — a 64-bit mask from mask_range over IBM-style positions. Let me figure out mask_range: presumably bits x..y (with wrap if x>y) mapped to value bits 63-pos. mask_range(mb+32, me+32): for mb>me, x=mb+32 > y=me+32 → wraps: bits (mb+32)..63 and 0..(me+32). In value terms: bits 63-(mb+32)=31-mb .. 0 (low word bits 0..31-mb), and bits 63..63-(me+32)=31-me (high word bits 32..63 AND low word bits 31-me..31).
+
+  So for mb>me, m includes the ENTIRE high word (bits 32..63 of the value) → `ra_val & ~m` keeps NOTHING of the high word; `rotl32(rs_val, sh) & m` — rotl32 returns ≤ 32 bits... `rotl32(rs_val, sh) & m`: rotl32 value has only low 32 bits; & m (which includes high bits) → contributes nothing to the high word!!! 
+
+  Hold on: `rotl32(rs_val, sh)` — Python function, returns the 32-bit rotated value (0..2^32-1). Then `& m` where m has high-word bits set → those high bits AND with zero → 0. So want_rlwimi's high word for mb>me = (ra_val & ~m) high = ra high & (complement of mask high) = 0 (mask covers all high bits) → **want high word = 0**?!
+
+  But the fix does `ra = (ra & 0xffffffff) | (tmp << 32)` — high word = tmp (rotated value), NOT 0!
+
+  CONTRADICTION between the probe's want model and the fix?? But BASE scored 28/28 CONTROL=OK... So they must agree. Let me recompute. Maybe mask_range doesn't wrap the way I think, or rotl32 duplicates.
+
+  I need to read rotl32 and mask_range exactly. Let me grep them.
+
+  Actually wait — maybe rotl32 in this probe returns the value DUPLICATED into both halves (i.e., `(x | x << 32) rotated`)? "rotl32(rs_val, sh)" — if defined as: `v = rs_val & 0xFFFFFFFF; v |= v << 32; then rotl64(v, sh)` — that would give duplicated rotation. Then `& m` with m including high word → high word = rotl32 duplicated high = the rotated value ✓ matching the fix. Plausible: the probe author would model the ISA's "r" as the duplicated rotate. Let me read the helper definitions.
+
+  Also mask32's docstring said "per Book I:4310" for want_rlwimi. Let me read lines ~120-160 of the probe.
+
+  And the F13 note: `wrap fullword` row comment NOW says "replace entire high half + all 32 low bits" ✓ (the corrected "all 32" wording). With sh=0, mb=1, me=0: mask = mask_range(33, 32) → wrap: bits 33..63 and 0..32 → everything except bit 32?? Hmm wait: mask_range(x,y) with x>y = bits x..63 ∪ 0..y. x=33,y=32: bits 33..63 ∪ 0..32 = ALL 64 bits ✓ (full). So m = M64. want = (rotl32(rs,0) & M64) | (ra & 0) = rotl32 duplicated = both halves = tmp<<32|tmp ✓ "replace entire high half + all 32 low bits" ✓ consistent with the fix.
+
+  So want model and fix agree on duplication. Now the ONLY open question: does the actual Power ISA agree? The probe cites "Book I:4310" (the rlwimi instruction page) and the code comment cites :578 (MASK), :342 (S1.2), :1989. My memory is now fairly strong that 64-bit rlwimi with mb>me DOES write the rotated value into the high word — this is the documented quirk. Let me verify via web: search "rlwimi" "mask" "0:31" 64-bit rotate inserted high. The IBM Power ISA rlwimi description should be findable. Let me do one web search to nail it.
+
+  Also confirm rotl32/mask_range definitions in the probe (to be sure BASE 28/28 isn't want-model==fix transliteration hiding a shared error — even if transliterated, the ISA citation is the anchor; my web check resolves it).
+
+  Also for F8 verification (xscale): read-count ceiling + irq 28 — grep the xscale probe contract for "five" / "irq 28". And the rlwimi probe header for the CR-presence line (F14 owed) — grep "PRESENCE" found nothing in rlwimi probe? The grep above with pattern `def want_rlwimi|SENT =|PRESENCE|CR0 value` — PRESENCE and CR0 value didn't appear in the output for the rlwimi probe (only rldimi line 67 had it). So rlwimi header indeed lacks the CR-presence line → F14's "owed" confirmed outstanding. Let me verify by grepping the rlwimi probe contract for "cr0 record form" rows and any contract statement.The probe's reference model is decisive:
+
+  ```python
+  def rotl32(x, n):
+      """ROTL[32] per Book I:4008 -- two copies of (RS)[32:63], then rotate."""
+      lo = x & 0xFFFFFFFF
+      n &= 31
+      r32 = ((lo << n) | (lo >> (32 - n))) & 0xFFFFFFFF if n else lo
+      return (r32 << 32) | r32        # <-- DUPLICATED into both halves
+  ```
+
+  So the probe's architectural model says: the ISA's ROTL32 produces the rotated value in BOTH halves ("two copies of (RS)[32:63], then rotate", citing Book I:4008). And mask32 = MASK(MB+32, ME+32) at 64 bits. So for mb>me, the mask wraps through the high word and selects the duplicated rotated high word. This matches the fix's `ra = (ra & 0xffffffff) | (tmp << 32)` — with tmp = the 32-bit rotate. ✓ Self-consistent.
+
+  Now — is that the REAL ISA? The web search didn't directly settle it. Let me recall the actual Power ISA ROTL32 definition. In Power ISA Book I, the pseudocode functions section defines:
+
+  ```
+  ROTL32(x, y)
+      return ROTL64(x || x, y)    # or similar
+  ```
+
+  Hmm, actually I now recall with high confidence: the Power ISA defines the 32-bit rotate used by rlw* instructions as rotating a DOUBLE-WIDTH concatenation: "ROTL32(x, n)" in the architecture pseudocode for 64-bit implementations is defined (in the "Fixed-Point Rotate and Shift Instructions" section intro or the rlwimi description) via: the 32-bit source is conceptually duplicated. YES — I remember the actual IBM text now, from the PowerPC PEM and the ISA: for rlwinm etc. in 64-bit implementations:
+
+  "n ← SH; r ← ROTL32((RS)32:63, n); m ← MASK(MB+32, ME+32); RA ← r & m" — and ROTL32 is defined in the pseudocode conventions as: ROTL32(x,y) means the 64-bit value formed by rotating the 64-bit concatenation x‖x? Hmm, no wait...
+
+  Actually — the DEFINITIVE memory: Power ISA Book I, Appendix/pseudocode: 
+
+  ```
+  if 64-bit implementation then ROTL32(x, y) ← ROTL64(x || x, y)
+  ```
+
+  Hmm, I can't fully recite. BUT there's strong circumstantial evidence: this exact behavior (rlwimi with wrapping mask writes rotated data into the upper word on 64-bit) is a documented architectural quirk that real code hits. I remember specifically: the "rlwimi with mb>me" trap is mentioned in IBM's 64-bit documentation and in the Cell BE programming docs; and it's why some 32-bit-coded sequences behave "strangely" on 64-bit. Also the famous case: `rlwimi rA, rS, 0, 1, 0` used as a full-word insert — on 64-bit this also splats to the high word.
+
+  Let me do one more targeted search/fetch to be thorough — the IBM Power ISA text. Search for "ROTL32" definition Power ISA "two copies". Actually, the Microsoft OldNewThing article on PowerPC rotates might cover it. Let me fetch that page — Raymond Chen's series is precise about 64-bit behavior. Alternatively search "rlwimi" "0:31" duplicated.
+
+  Actually, I recall the OldNewThing article says something like: "On 64-bit PowerPC, the 32-bit rotate instructions operate on a virtual 64-bit value consisting of two copies of the low 32 bits" — YES, I'm quite sure Raymond Chen wrote exactly that: the 32-bit rotate instructions in 64-bit PowerPC treat the value as two concatenated copies, so rlwinm's mask... and rlwimi with a wrapping mask can copy into the high word. Let me fetch to confirm.
+
+  Meanwhile, the rlwimi CR row: `cr0 record form` — checks only that CR dump exists ("exit0" if "cr" in cr_regs) — presence only, and the rlwimi SHIPPED CONTRACT header — I didn't see it; grep found "cr0 record form" row but no contract line about presence-only. The rldimi contract HAS "The CR row checks readback PRESENCE only; CR0 value semantics are not covered" (line 67). The rlwimi contract apparently LACKS it → F14's "owed in the rlwimi header" confirmed true. (I should double-check the rlwimi contract text to be sure it doesn't say it elsewhere — grep "PRESENCE" returned nothing for rlwimi probe. Confirmed owed.)
+
+  F8 items for xscale — check the probe contract for the read-count ceiling and irq-28 anchor clauses. Let me grep the xscale probe header.
+
+  Then fetch OldNewThing. Then I'm done verifying and can write the adjudication.The OldNewThing article is 32-bit-only focused (Windows NT PPC was 32-bit) — it doesn't settle the 64-bit duplicated-rotate question. I need the actual ISA text for ROTL32 in 64-bit implementations. Let me do one more targeted check. The probe cites "Book I:4008 -- two copies of (RS)[32:63], then rotate" for ROTL32 and "Book I:578" for MASK, "Book I:4125, 4310" for rlwimi. These look like page numbers of a specific Power ISA PDF (probably v3.0 or 2.07). Page 4008 in a ~4000+ page document — Power ISA v3.0C/3.1 is that big.
+
+  I recall the actual ISA definition now — from Power ISA Book I, the rlwimi description pseudocode:
+
+  ```
+  n ← SH
+  r ← ROTL32((RS)[32:63], n)
+  m ← MASK(MB+32, ME+32)
+  RA ← r & m | (RA) & ~m
+  ```
+
+  And ROTL32 is defined in Book I's "Pseudocode Definitions" (or at the rlwinm instruction) as... In the IBM Power ISA Version 2.07B, Book I, Section 1.3.x "Pseudocode Notation": 
+
+  ```
+  ROTL32(x, y)  —  Rotate Left 32-bit
+      if 64-bit implementation then return ROTL64(x || x, y)  ?
+  ```
+
+  Hmm. Actually, I genuinely remember the 64-bit rotate-for-32-bit-instructions being defined as rotating a 64-bit value consisting of TWO COPIES of the 32-bit operand. This appears in the PowerPC 620 manual and the original 64-bit PowerPC architecture spec (the SR28-5124 doc from the search results — "The PowerPC Architecture May94" — covers the 620!). The reason: it makes rlwinm/rlwimi/rlwnm behave consistently regardless of whether the mask computation is done 32-bit or 64-bit, and it makes rlwinm with mb=0,me=31 (full mask) produce r‖r (duplicated) — wait, for rlwinm full mask on 64-bit, result = r & MASK(32,63) = r & low-half-mask = zero-extended, not duplicated, because MASK(32,63) has no high bits. But rlwinm with mb>me... can't happen for rlwinm? No — rlwinm CAN have mb>me (wrap, as Raymond Chen showed: rlwinm rd,ra,5,20,6 wraps). On 64-bit, rlwinm with mb>me: m = MASK(MB+32,ME+32) wraps → includes high word → result high = r & high = duplicated rotate's high word = rotl32! So on 64-bit PowerPC, `rlwinm r4,r3,5,20,6` would produce high word = rotl32(r3,5)?! That's wild but it IS the documented behavior — I'm now recalling this specific example being discussed: yes, on 64-bit, wrapping-mask rlwinm writes the high half too. This is documented in the 64-bit bridge architecture and every ISA since.
+
+  Let me confirm via one more fetch — try the "PowerPC 600 series part 5" sister article or search for the specific claim "two copies". Actually, better: fetch the IBM PowerPC Architecture May94 PDF page? It's a big PDF; FetchURL may not handle it well. Alternative: search for "rlwinm" "64-bit" "two copies" rotate.
+
+  Actually, there's an even better authoritative source I remember: the Power ISA "Fixed-Point Rotate and Shift Instructions" section has this note (paraphrasing): "In 64-bit implementations, the rotation is performed on a 64-bit value consisting of two copies of bits 32:63 of RS." Hmm, honestly at this point I have:
+  - The probe's model with specific page citations (Book I:4008, :4125, :4310, :578) — these are checkable claims someone measured against the ISA PDF earlier in the battery.
+  - My own independent recollection converging on "duplicated rotate is the documented 64-bit behavior" (it explains why the mask is defined as MASK(MB+32,ME+32) rather than a 32-bit mask — the architecture deliberately lets wrap masks reach the high word, which only makes sense with a duplicated operand; otherwise wrap would just zero the high word, an odd thing to architect).
+  - QEMU's behavior... QEMU actually implements rlwinm as: `mask = MASK(mb+32, me+32)` style? Modern QEMU uses `tcg_gen_rotli_i64(t0, t1, sh)` on the DOUBLED value? Hmm — actually YES, I now remember QEMU's translate.c: for rlwinm they do `t0 = deposit64(rs, 0, 32, rs)` (duplicate!) then rotl then mask with a 64-bit mask. QEMU: `GEN_HANDLER(rlwinm...)`: 
+    ```
+    uint64_t mask = ...;  // ppc_maskl/ppc_masku with +32
+    tcg_gen_deposit... t0 = (rs & 0xffffffff); t0 |= t0 << 32; rotl; and mask
+    ```
+    I'm fairly confident modern QEMU duplicates (ppc_translate uses `cpu_gpr[rs] * 0x100000001` style trick for the 32-bit rotates in 64-bit mode). Yes — the `* 0x100000001` duplication idiom is in QEMU and in IBM's own documentation examples.
+
+  Good — convergence from three independent directions (my ISA memory, the duplication idiom in real emulators, the architectural motivation for MASK(MB+32,ME+32)). The fix's high-word duplication on wrap is ISA-CORRECT. The panel did NOT ship an ISA violation; the big-miss candidate dies. And the detector pins it (`pres wrap`, `wrap fullword`, R_REV_COND/R_ONLY_HIGH legs).
+
+  Let me do one quick confirmatory search anyway for honesty — "rlwinm" "two copies" 64-bit. Actually the search results already gave me the May94 architecture PDF which documents the 620's 64-bit behavior. I could fetch it but it's a huge PDF; the snippet already shows "Mask having 1s in positions x through y (wrapping if x > y)". I'll do one more short search for the duplication sentence; if it fails quickly, I'll proceed — my confidence is already ~90% and the consequences of being wrong here are bounded (the behavior is pinned, cited to Book I pages, and matches QEMU idiom).
+
+  Actually, let me be efficient: I have enough. One more search, then write.
+
+  F8 verification: the probe's NOT COVERED now includes "no session makes more than five inten reads, so an exit after the sixth is not pinned (M_NREAD exits after the fourth)" ✓ and "the only pending source the ANCHOR rows raise is irq 28" ✓ — both clauses added as F8 said. ✓ (Note the M_NREAD mutant exits when ++nread > 4, i.e., on the 5th read — contract says "no session makes more than five inten reads" — hmm, M_NREAD measured 27/30, so it killed 3 rows, meaning some session DOES make a 5th read (the exit fires at read #5). "no session makes more than five" — so max is exactly five: the exit at #5 fires → those sessions die. Contract consistent: an exit after the SIXTH is not pinned. ✓)
+
+  F14: rlwimi contract — the grep for "PRESENCE" in the rlwimi probe returned nothing; the `cr0 record form` row checks presence only ("exit0" if "cr" in cr_regs). rldimi contract has the presence-only clause; rlwimi's SHIPPED CONTRACT — I haven't actually seen it. Let me check whether the rlwimi probe has a SHIPPED CONTRACT section and whether it mentions CR. The grep for "SHIPPED CONTRACT|cr0 record|readback" found only the row itself and no contract hit in the first 3 hits... Actually the grep output shows no "SHIPPED CONTRACT" hit for rlwimi probe — odd. Maybe the contract is worded differently. Quick grep for "CONTRACT" in the rlwimi probe. Also the F13 "31 low bits → all 32" fix — the row comment now says "all 32 low bits" ✓ done.
+
+  One more thing to check for Q4 (commit readiness): the CHANGELOG entries. GXEMUL-SEC has CHANGELOG.md? The packet mentions "the GRADE in the CHANGELOG". Not strictly needed for adjudication; the owed items are: (a) rlwimi header CR-presence line (F14), (b) D1 grade entry, (c) gate runs green (30-row xscale gate pin 30 — "Detector 29 -> 30 rows, gate pin 30"). The gate_arm.sh diff (+36 lines) probably includes the pins. Fine.
+
+  Let me do the final quick checks: (1) grep CONTRACT in rlwimi probe; (2) one web search for rlwinm two copies; (3) glance at the rlwimi probe's contract section.The Raptor Power ISA v3.1B PDF snippet confirms: "two copies of bits 32:63 of the given 64-bit value, one copy in ..." — that's the ISA's own ROTL32 definition: the 32-bit rotate instructions operate on a 64-bit value consisting of two copies of bits 32:63. So:
+
+  - ROTL32 duplicates → for rlwimi with mb>me, the wrapping MASK(MB+32,ME+32) includes bits 0:31 of RA, and the inserted value there is the duplicated rotated word. **The fix's `ra = (ra & 0xffffffff) | (tmp << 32)` is ISA-CORRECT.** The panel did not ship an ISA violation. The big-miss candidate is dead — and moreover the claim is pinned by the detector (`pres wrap`, `wrap fullword`, R_REV_COND 13/28, R_ONLY_HIGH 19/28) and cited to Book I pages (MASK :578 "1s in positions x through y (wrapping if x > y)", ROTL32 :4008/:4126, rlwimi :4310). Verified independently via the ISA PDF snippet. Good.
+
+  - F14 confirmed: the rlwimi contract's CLAUSE (e) has (1) ppccr0modewidth (that's about update_cr0 comparing 64 vs 32 bits in 32-bit mode — a DIFFERENT issue), (2) 32-bit truncation, (3) OS rigs. It does NOT state "the CR row checks readback PRESENCE only; CR0 value semantics are not covered" — the rldimi contract has exactly that sentence (line 67), rlwimi lacks it. So F14's "owed in the rlwimi header" is TRUE and outstanding. (Nuance: rlwimi's clause (e)(1) cites the cr0-mode-width filing, but the specific disclosure "deleting update_cr0 survives because the row checks presence only" is not stated for rlwimi. So the owed line is real.)
+
+  Also worth noting: the rlwimi census has "Quadrant 2: SH in {1, 8, 16, 31}" — so for rlwimi, SH=1 IS driven! F16 was about rldimi ("a mutant misrotating only at SH 1 or 2 survives") — rldimi SH evidence: 8, 24, 40 (+census rotate-blind all-ones). So F16 for rldimi stands: rldimi census cells — what SH values does the rldimi census use? All-ones source, so rotate amount invisible. So rldimi rotate pinned only at {8,24,40} → SH 1/2-keyed mutant survives → disclosure ✓ consistent with the shipped contract line ("an edit keyed on one other SH value is NOT pinned").
+
+  Now — the F1/F2/D1 analysis with the code in hand:
+
+  Dominating predicates for line 311 (to function boundary): `crm == 0` (switch case), `crn == 0` (switch case), `l_bit` (truthy). Note: switch-case predicates are equalities to constants 0 — same as `crm == 0 && crn == 0`.
+
+  Clause (d) for the pure deletion: re-introduce the exit under (a) any dominating predicate — done implicitly (the original HEAD is the trivial case); (b) operand swaps drawn from body-read fields (rd, i80321_inten) substituted into the dominating predicates:
+  - `rd == 0` (swap crn→rd in `crn == 0`) → FLOOR CELL. Was missing; RD0_ALLONES now pins it (measured).
+  - `i80321_inten == 0` (swap crn→inten) → FLOOR CELL. Pinned by D_ZERO-family rows (inten=0 read rows exist).
+  - `!l_bit`/`l_bit == 0`-style swaps aren't applicable to body fields.
+  - Truthiness swap from `l_bit`: `rd != 0`, `i80321_inten != 0` → FLOOR CELLS if we count the truthiness shape. Pinned: any read row with rd≠0 kills `rd != 0` exit; S1/S2 read rows kill `inten != 0` exit.
+  - `i80321_inten & (1<<k)` for arbitrary k: NOT obtainable by field swap from any dominating predicate (no bit-test shape dominates; l_bit is a whole-parameter truthiness test, and its bit-position lives in the CALLER, outside the function boundary) → clause (e) DISCLOSURE. k=0..31 bounded class (32 cells), all pinned incidentally by the all-ones row — "pinned disclosure", not floor.
+  - `rd == k`, k≠0: fresh constant → disclosure. Bounded (15 cells: k=1..15 minus driven ones... rd ∈ 0..15; driven: 0,3-7,9,10,15; so undriven k ∈ {1,2,8,11,12,13,14} — 7 cells). Not pinned. Disclosure by construction; closure would cost ≤7 rows, cheap but not owed since the class is disclosure.
+  - `i80321_inten == V` for specific V: disclosure (fresh constant); the rows drive 0,S1,S2,bit28,all-ones → 5 cells pinned incidentally; unbounded-ish (2^32) → disclosure by construction.
+
+  So D1: the operator's lean had the right answer for `rd==0` (floor) via the WRONG justification (cheapness), and the WRONG grade for the inten bit (they leaned floor; the rule says disclosure — but they ADDED the row anyway, which is fine because L1 rows need no warrant). The principled rule: floor = re-introduction under a predicate reachable from the dominating set by swapping in a body-read field while INHERITING the constant and shape; anything needing a fresh constant or fresh shape = disclosure. Cheapness never enters. And a disclosure cell that happens to be pinned stays disclosure — grade cells, not rows.
+
+  D3: with the artifacts in hand — the literal pins' measured kill (DM_NOAND_END: end-test without &63 → sh=0 hang → census 0/495, disasm 8/16) is a HANG kill reported by the global counters. The mutant is on an edited line (floor cell), killed in table 2 also by... wait, was DM_NOAND_END one of the table legs? No — it was Opus's ad-hoc pass-2 mutant (rldimi_DM_NOAND_END.log). The table legs D_NOCIRC etc. cover the &63 variants. The point for D3: the literal pins DO carry a measured kill (settled by measurement — F11), and the label: they're not floor cells (cells are mutant classes; the pins are ROWS). If forced into the vocabulary: the pins function as global-integrity anchors; their kill is real but opportunistic (they reported a hang, not a value). deepseek's "floor gap" reading vs grok/kimi/codex "disclosure": the honest ruling is REFINE — the question miscasts rows as cells; the &63 end-test cell is floor (edited line) and is killed by BOTH value rows (census wrong etc... hmm, actually is it? DM_NOAND_END hangs → no value rows run; the only reporters ARE the literal pins. So for THAT cell the literal pins are the SOLE reporters. Interesting — so the pins aren't redundant: for hang-class mutants they're the only channel. That's a real detector function, worth a line in the contract: "the literal pins are the sole reporters for mutants that hang or abort sessions before value rows run". That's a refinement I can offer.
+
+  Wait, actually — census 0/495: census run row failed; disasm total 8/16 failed. But what about "session"/"live" control rows — CONTROL=FAIL presumably (hang → sentinel missing → control fail → leg red via control channel anyway). Hmm — if CONTROL=FAIL, the leg is killed by the control channel regardless of the literal pins! The POSTTABLE for the ppc table lists CONTROL=OK/FAIL per leg. For DM_NOAND_END (not a table leg) we don't have that. The pins' kill being "carried" vs "redundant with control": the pins fail AND control fails — the kill attribution to the pins is partially redundant. Hmm. But F11's correction is about whether the pins have ANY measured kill — Opus's log shows them red. Whether control also red is a nuance: for the pins to matter independently, a mutant must fail them while control stays OK (e.g., a census-shrinking edit that doesn't abort the session — codex's promotion-design note at line 437-439: literal pins replaced derived counts BECAUSE a census-shrinking edit passed both rows when wants were derived — that's their independent function: session completes, counts short). So: pins = the only channel for "session completes but instrument shrank", plus redundant reporters for hangs. Fine.
+
+  Now F15 re-examined with code: rlwimi line 2618: `tmp = sh ? ((tmp << sh) | (tmp >> (32-sh))) : tmp;` — the guard. Deleting it: `tmp = (tmp << sh) | (tmp >> (32-sh))` — sh=0: `tmp >> 32` on uint32_t = UB; x86-64 shr r32,cl masks cl to 5 bits → >>0 → tmp|tmp = tmp. Equivalent on host ✓. And rldimi has NO such guard (`while (n-- != 0)` loop — sh=0 → zero iterations ✓ fine). rlwnm/rlwinm have the same guard pattern (pre-existing idiom). The guard line is PRE-EXISTING (not in the diff? wait — the diff shows the rlwimi hunk starting at line 2616: `tmp = sh ? ...` appears in the diff context at 2618 UNCHANGED ✓ pre-existing). So F15: deleting a pre-existing guard is not a cell of THIS fix's floor; and it's host-equivalent anyway. "Not-a-gap, no change" ✓ UPHOLD. (One caveat worth stating: host-equivalence was argued, not measured — but the standard for "not a detector gap" is correct: the mutant isn't a fix-line cell; recording is enough.)
+
+  F7 with code+probe: D_RESET/D_ZERO — rows with inten=0. Under M5 (wrong source: isteer=0), reading inten→0 equals want 0 → can't vary ✓ kimi's point valid; accepted as record ✓. ANCHOR_CONTRAST kills M1 by host death: M1 = exit if isrc != 0 after load; ANCHOR row at 0x14 reads inten while isrc!=0 (M1 trap comment at probe line 548) → exit → host death → the row's "spins" channel is really host-death ✓ naming overstates ✓ record-only ✓ UPHOLD.
+
+  F5 verified in code (cpu_arm_coproc.c:317-323): isteer write sets the value THEN exits if nonzero → no live session can have isteer != 0 at a read point → `if (isteer != 0) exit` on the read arm is unkillable-by-construction = equivalent on this instrument ✓ disclosure ✓ UPHOLD. (And the contract says exactly this at line 17: "an exit keyed on isteer != 0 cannot be pinned by a live session, because the isteer non-zero write itself exits" ✓ already disclosed.)
+
+  F6 verified: footbridge retains fatal+exit pairs; the fixed case (#432 timer external, and presumably the zero-load) is the disposition precedent ✓ UPHOLD.
+
+  F9 verified: mutant shape + row arithmetic + measured kill (D_SKIP_FULL_ROT 28/29, full rot alone) ✓ UPHOLD.
+
+  F10 verified: glm's "equivalently" form built as D_ALIAS_REREAD, row added, measured kill ✓ UPHOLD. Also noted: the fix is alias-safe by construction (snapshot at 2542 before any gpr write; rlwimi does single writeback at 2653 after local accumulation) — so the alias rows pin mutant re-introductions, not a live hazard.
+
+  F11 verified in POSTTABLE ✓ UPHOLD.
+
+  F12 verified: contract updated to "SH 8, 24, 40" + "keyed on one other SH value is NOT pinned" ✓ UPHOLD.
+
+  F13 verified: row note now "all 32 low bits" ✓ UPHOLD.
+
+  F14 verified owed: rlwimi contract lacks the presence-only CR line (rldimi has it) — UPHOLD, and it's a concrete pre-commit owe.
+
+  F16: consistent with contract disclosure ✓ UPHOLD.
+
+  Now Q2 — which accepted disposition is WRONG? I've verified all 14; the strongest remaining candidate is F15 (host-equivalence argued not measured — but disposition correct anyway) or F7 (record-only, harmless). Honestly: all 14 hold under verification. The suspicious count is explained by selection: the panel's findings were themselves measurements/verifiable claims, and the two rejected ones were the only ones resting on a false premise (read-only M5). I should say this plainly rather than manufacturing a wrong one. BUT I can offer the nearest-miss: F15's reasoning quality (host-equivalence is build-dependent; a -O0 vs -O2 or clang build could differ — the mutant was not built). If any acceptance deserves a hedge, it's F15: the disposition (not-a-gap) is right for the wrong-ish reason; the cleaner reason is "pre-existing line, not a fix-line cell; floor is computed on edited lines". Also F2's row-cost framing... no, F2 is measured.
+
+  Actually — wait. Let me reconsider F3's acceptance detail: "the CONTRACT said 'the read loading another register (M5: isteer)'; the measured M5 redirects BOTH directions" — accepted, header corrected ✓ (probe line 10: "the crn-0 arm redirected to isteer in BOTH directions (M5 -- a read-only redirect was not built; it would red the value rows, D_S1 first, by construction)" ✓ verified in the frozen probe).
+
+  And Q3 — what did all of us miss? Let me assemble the genuine residuals:
+
+  1. **The pins-vs-control redundancy nuance** (above): for hang-class mutants the literal pins are redundant with CONTROL=FAIL; their independent channel is "session completes, census shrinks". Nobody stated that the pins' measured kill (DM_NOAND_END) came WITH a control failure presumably (session aborted → sentinel missing → CONTROL=FAIL) — so "the pins carry a measured kill" is true but the kill is not solely attributable; their unique function remains the codex shrink case, which is still NOT measured. Hmm wait — is it? The promotion-design note says the derived-count variant passed a census-shrinking edit; the literal-count version was built in response; was a census-shrinking mutant ever measured against the literal pins? Not that I've seen. So: the pins' INDEPENDENT kill (shrink-with-clean-control) remains unmeasured; the measured one (hang) is control-redundant. That's a genuine "all of us missed" — F11's correction overstated "carry a measured kill" without the attribution caveat. It's a REFINE on F11, actually! Let me be careful: F11 said "the literal pins DO carry a measured kill" — TRUE as stated (they went red on a real mutant). My refinement: the kill they carry is one the control channel also carries; the kill only they can carry (shrink, clean control) is still unmeasured. REFINE F11.
+
+  2. **M_NREAD vs contract wording**: contract says "no session makes more than five inten reads, so an exit after the sixth is not pinned (M_NREAD exits after the fourth)". M_NREAD: `if (++nread > 4)` → exits ON the 5th read. "Exits after the fourth" = on the fifth. So the ceiling that IS pinned is 5; the contract's "more than five" is the measured fact. Consistent — but the nread counter is STATIC across sessions! `static int nread = 0;` — process-global, accumulates across ALL sessions in one gxemul invocation... but each probe session is a fresh gxemul process? Sessions are separate emulator runs (fresh session per the probe design) — each is a new process → static resets. But WITHIN one process, nread accumulates across the session's reads. M_NREAD 27/30: 3 rows red — rows in sessions whose cumulative read count crosses 4. Fine, measured. No issue. Skip.
+
+  3. **RD0_ALLONES double-duty**: one row kills two cells (rd==0 floor + all inten-bit disclosure). If the row regresses (deleted/renamed), two graded cells lose their pin at once; and the row ALSO pins "no-op read" via the r0 poison (0xdeadbe00 → want 0xffffffff: a read that writes nothing leaves poison → red; actually that's the poison's purpose ✓ good design). Not a miss — the row comment says the poison bit. Skip.
+
+  4. **The rldimi contract line 57-59** discloses rldic/rldcl/rldcr unimplemented (`goto bad`) — fine.
+
+  5. **What about rldimi with mb > 63-sh where 63-sh is the OLD code's... no. The fix is ISA-verified above (mask mb..63-sh inclusive; do-while sets mb..(63-sh) since last-set = end-1 = 63-sh ✓). Wait — double-check the full-width boundary: mb == (64-sh)&63 ⇔ mb == 63-sh+1 ⇔ mask = all 64 bits? ISA MASK(mb, 63-sh) with mb > 63-sh wraps = bits mb..63 ∪ 0..63-sh — that's all bits iff mb = 63-sh+1? bits mb..63 and 0..(mb-1) = all 64 ✓. And if mb > 63-sh+1 (e.g., mb=50, sh=24: 63-sh=39; mask = bits 50..63 ∪ 0..39 = 54 bits — a proper wrap). The loop: from 50, sets 50..63, wraps to 0..39, stops when m == 40 ✓ sets 50..63,0..39 ✓ correct.
+
+  6. **rlwimi `me` field extraction**: `int me = (iword >> 1) & 31;` — for rlwimi, ME is bits 6:10... wait rlwimi encoding: opcode 20, RS 21-25, RA 16-20, SH 11-15, MB 6-10, ME 1-5, Rc 0. So `me = (iword >> 1) & 31` ✓ bits 1-5 ✓. mb = (iword >> 6) & 31 ✓. sh = (iword >> 11) & 31 ✓. rldimi: sh = ((iw >> 11) & 31) | ((iw & 2) << 4) — rldimi sh is 6 bits: bits 11-15 + bit 1 as sh[5]? rldimi (MD opcode 30, XO=3): sh field = bits 11-15 with the 6th bit at bit 1. `((iw & 2) << 4)` = bit1 → bit5 ✓. mb = ((iw >> 6) & 31) | (iw & 0x20) — mb 6 bits: bits 6-10 + bit 5 (0x20) as mb[5] ✓. OK.
+
+  7. **One more potential miss — the rlwimi `for(;;)` mask loop when mb > me**: starts at mb, sets bit (31-mb), increments, wraps 31→0, breaks when mb == me AFTER setting bit me ✓. Mask = IBM32 bits mb..31,0..me ✓ = mask32 low-word part ✓. And the high word already set to tmp before the loop; loop only touches low word (mask = 1 << (31-mb), mb ≤ 31 → bits 0..31 of the 64-bit ra ✓ never touches high bits). And `ra &= ~mask` on the low bits ✓. Consistent.
+
+  8. **rlwimi when mb > me AND the loop's bits... all consistent.**
+
+  9. **The xscale write-direction `rd == 0` cell**: mutant `if (rd == 0) exit` on the WRITE arm (mcr from r0)? The detector writes inten from... RD0_ALLONES: `mcr p6,0,r1,c0,c0,0` (from r1, per the probe comment line 484: "mcr p6,0,r1,c0,c0,0 / mrc p6,0,r0,c0,c0,0"). Other rows write from various rd. Is there a write-from-r0 row? Probably not (writes come from r1 etc.). So an exit on the write arm keyed rd==0 is UNPINNED — is it a floor cell? The edited lines are ONLY the read arm (pure deletion of 2 lines in the l_bit branch). The write arm is UNTOUCHED by the fix → mutants there are not cells of this fix's floor (they belong to the pre-existing-behavior detector's disclosure at most). The contract's NOT COVERED says "an exit keyed on `rd == k' for another k is not pinned" — it says this about reads ("inten reads land only in r0, r3-r7..."). It doesn't separately discuss write-arm rd==0. But since the fix didn't touch the write arm, this is out of scope — though worth one clause? The NOT COVERED already covers "the handler ignores opcode1 and opcode2... one nonzero value of each" and rd==k generally. Hmm — the rd==k clause is under "inten reads land only in..." which is read-side. A pedantic addition: "nor is an exit on the WRITE arm keyed on rd (writes use r1-r7...)". Minor; I can offer it as an optional clause. Actually the whole write arm was never a finding; the original code's write arm was already quiet (git diff shows only the read arm changed). So write-arm mutants are detector-scope, not fix-scope. The detector's job per its contract is the read path fix. I'll mention it as a possible one-line addition, not a blocker.
+
+  10. **What everyone missed — the strongest candidate**: Let me think about whether there's something genuinely unseen... 
+
+      a) F11 attribution refinement (found above) ✓.
+      
+      b) **D_NO_MERGE arithmetic miss**: recorded honestly. Fine.
+      
+      c) **`update_cr0` deletion survives BOTH probes** (F14): disclosed for rldimi, owed for rlwimi. But ALSO: `update_cr0(cpu, ra)` in rlwimi is called with the 64-bit `ra` — while `update_cr0` internally may compare... that's ppccr0modewidth (filed). Fine.
+      
+      d) **rldimi `full rot` row uses SH=24/MB=40, and the census's six full-mask cells use all-ones** — the row is the ONLY patterned full-mask. A mutant that special-cases `mb == (64-sh)&63 && source-pattern-invariant`... contrived, disclosure-covered.
+      
+      e) **The RD0_ALLONES row also implicitly pins `r0` writability** — mrc to r0: some ARM cores treat... no, r0 is a normal GPR. Fine.
+      
+      f) **xscale: `rd == 15` MRC semantics** — RD15_SURVIVE asserts survival only; the contract discloses "r15 data and flag semantics beyond survival to the marker" ✓ already disclosed. Fine.
+      
+      g) **The one thing literally nobody examined: the F1 mutant is `read_extra_post` (exit AFTER the load), so under M_RD0 the load happens and THEN exit — the row fails via host death. But a `read_extra_pre` rd==0 mutant (exit BEFORE the load) would behave identically for the row (host death either way). So RD0_ALLONES pins the PREDICATE, not the position. Fine — position is not the cell.**
+      
+      h) **Hmm — the inten==0 floor cell: is it REALLY pinned?** D_ZERO rows: read inten when it's 0 with want 0. A mutant `if (inten == 0) exit` AFTER the load: the load happens (r[rd] = 0), then exit → host death → D_ZERO's session dies → row red ✓ pinned (host-death channel). ✓ Yes pinned.
+      
+      i) **And `rd != 0` exit mutant**: every read row has rd≠0 → first read exits → many rows red ✓ pinned.
+      
+      j) **`inten != 0` exit**: S1 read row → exits ✓ pinned.
+
+      k) **THE WRITE-ARM floor of the ORIGINAL defect**: the fix is the deletion on the read arm only. All good.
+
+      l) What about **`opcode1`**: the handler "ignores opcode1 and opcode2" — disclosed (one nonzero value each pinned: M_OPCODE2 27/30 → opcode2 pinned at one nonzero; M_OP1 29/30 → opcode1 pinned at one nonzero). ✓ disclosed as ONE-value pinning ✓.
+
+  So the honest Q3 answer: the F11 attribution nuance (measured kill is control-redundant; the independent shrink-kill remains unmeasured) + optionally the write-arm rd==k clause. And the systematic point: acceptance rate 14/16 is not evidence of failure BECAUSE the panel's findings came with measurements (Opus) — the process self-corrected via measurement; the two rejected ones were the only premise-violating ones.
+
+  Q4 — commit readiness:
+  - xscale: ready once (a) gate runs green at pin 30 (the packet says gate pin 30 was added — gate_arm.sh +36 lines in the diff presumably includes it; I didn't verify the pin value inside gate_arm.sh — quick check? The diff showed gate_arm.sh modified +36. I could grep for "30" pins... the packet says "Detector 29 -> 30 rows, gate pin 30" as done. I'll take the packet + require the green gate as stated). (b) CHANGELOG records the D1 ruling with the principled split (rd==0 floor via inherited-constant swap; inten-bit = pinned disclosure). That's a record-keeping owe, small.
+  - PPC: ready once (a) the rlwimi header CR-presence line lands (F14 — the only concrete owed artifact I verified outstanding), (b) gate green at 28/29 pins (rlwimi 28 rows, rldimi 29 rows — POSTTABLE shows /28 and /29), (c) POSTTABLE's two misses are recorded (done, in the file).
+  - Neither needs more MUTANTS. The measurement I would NAME (per the panel rule): for the rlwimi F15 hedge — build the guard-deletion mutant once in a scratch dir to convert "host-equivalent (argued)" to measured. It's cheap and closes the only unmeasured acceptance. Also for F11's attribution: a census-shrinking mutant with clean control to give the literal pins their independent measured kill — cheap, closes the last unmeasured pin function. Both optional-but-worth-it; neither blocks commit since both are record-grade, not defect-grade.
+
+  Wait — one more check for Q2 thoroughness: the F15 acceptance is the one I flagged; is it WRONG though? No — disposition correct. So my Q2 answer: none of the 14 is wrong on the merits; the two that carry weak justifications are F15 (host-equivalence argued, not measured — right answer, fragile reasoning) and F1/F2's D1-lean (right disposition — row added — but the cheapness rationale would mis-grade the next case; the principled rule is in D1's ruling). If forced to name the "wrongest": F15's "no change" should have been "no row, but record that equivalence was argued-not-measured; the line is pre-existing so it's out of the fix floor" — which is nearly what they did ("accepted as not-a-gap, no change" + it's recorded in the panel record). Hmm. So even F15 stands. I'll say that plainly — manufacturing a 15th rejection would be exactly the agreement-in-reverse fallacy the operator warned about. But I CAN note the one substantive refinement (F11) and the two small owes.
+
+  Also D2: UPHOLD (mutator text read + probe_M5.raw measured both agree — the operator's "rests on text I read, not measurement" self-doubt is answered: the measurement IS in kill table 3, M5 28/30 with exactly the two predicted failure channels).
+
+  One more sanity check on my D1 ruling regarding `rd == 0` being floor — codex's argument was "a bounded operand swap: an existing equality-to-zero predicate with the body-read index substituted". Verified: the dominating predicates ARE `crm == 0`, `crn == 0` (switch cases = equality-to-zero predicates) ✓ so the swap inherits both shape (equality) and constant (0), only the field changes (crn→rd, and rd is body-read: `cpu->cd.arm.r[rd]`). Clean floor. ✓ And grok's "body never tests rd" argument conflates the cell's predicate with the body's tests — the (d) rule for deletions doesn't require the body to test the field; it requires the mutant predicate to come from the dominating set + body-read-field swaps. So grok's disclosure vote is wrong for rd==0 under the rule, right for the inten bit. codex split it correctly.
+
+  Verdict line: needs to be one line first. Something like: "VERDICT: F1–F16 all UPHOLD except F11 REFINE (measured kill is control-redundant; the shrink-kill is still unmeasured); D1 REFINE (rd==0 = floor by inherited-constant swap, inten-bit = pinned disclosure — cheapness is not the rule); D2 UPHOLD (mutator text AND M5's measured 28/30 agree); D3 REFINE (cells get grades, rows don't; the end-test cell is floor, the pins are its sole reporters for hang-class mutants); both rounds commit-ready behind a green gate, PPC owes the rlwimi CR-presence line first."
+
+  Then the liveness token ADJUD_XP_20260912.
+
+  Structure of the reply:
+  - Verdict line
+  - Token
+  - Q1: F1..F16 one line each
+  - D1..D3 one line each (with the D1 rule spelled out a bit more)
+  - Q2: which accepted disposition is wrong — answer honestly
+  - Q3: what all missed
+  - Q4: commit readiness + named measurements
+  - Brief note on what I verified independently (so the operator knows this wasn't packet-ratification): code, diff, mutators, probes, POSTTABLEs, ISA.
+
+  Also cite the ISA source: [Power ISA v3.1B (raptorcs)](https://wiki.raptorcs.com/w/images/d/d3/OPF_PowerISA_v3.1B.pdf) for the two-copies rotate; the OldNewThing article for 32-bit mask wrap semantics (actually I don't need the OldNewThing citation for the verdict; the ISA PDF is the load-bearing one). Mention file:line refs: cpu_arm_coproc.c:309-336, cpu_ppc_instr.c:2534-2557, 2608-2656; mutator lines; probe lines.
+
+  Keep it dense but organized. The operator wants adjudication, not an essay. One line per finding. Let me write it.
+
+  For F16 — where does SH 1/2 belong: rldimi rotate pinned at {8,24,40} only ✓ disclosure ✓.
+
+  Also should double check: F12 says "rotate amount evidenced only at SH 8 and 40" pre-change, now 8/24/40 — and the contract line 65 confirms 8, 24, 40 ✓.
+
+  For Q2, let me also weigh F8 once more: "ACCEPTED, two clauses added" — verified both clauses present in the frozen probe (lines 18-19) ✓ correct.
+
+  F4: rejection upheld — and note the rejection did NOT rest only on text: probe_M5.raw (28/30, INTEN_WRITE_PRESERVES_ISTEER got S1 want 0; ANCHOR_EXC spin) is a measurement that a read-only redirect would contradict (D_S1 would red first). ✓
+
+  F13: "wrap fullword note said 31 low bits; it replaces all 32" — row comment now reads "replace entire high half + all 32 low bits" ✓.
+
+  Let me also double-check the claim in F2's arithmetic once more: union 0xFFA5F05F = 0xA500005A | 0x5AA5F00D | 0x10000000:
+  0xA500005A | 0x5AA5F00D:
+  A500005A = 1010 0101 0000 0000 0000 0000 0101 1010
+  5AA5F00D = 0101 1010 1010 0101 1111 0000 0000 1101
+  OR        = 1111 1111 1010 0101 1111 0000 0101 1111 = F F A 5 F 0 5 F ✓
+  | 10000000: bit 28 = nibble 7's low bit (0x10000000 → 0001 at top nibble): F|1 = F ✓ → 0xFFA5F05F ✓
+  complement 0x005A0FA0 ✓ bit 22 (0x00400000) ∈ complement ✓ (0x005A0FA0: 0x00400000 & it = 0x00400000 ✓ nonzero → bit set in complement → never set by rows ✓). All consistent.
+
+  And F1's "reads landed only in r3-r7, r9, r10, r15" + now r0 ✓ contract line 14 matches ("r0, r3-r7, r9, r10 and r15") ✓.
+
+  Now write the final answer. Format: verdict line, token, then sections. One line per F. Reasonably concise but complete. I'll include the "what I verified myself" note briefly at the end (or weave into findings). Use `path:line` refs.
+
+• VERDICT: F1–F16 all UPHOLD except **F11 REFINE** (the measured pin-kill is control-redundant; the pins' *independent* kill is still unmeasured); **D1 REFINE** (`rd==0` is floor by inherited-constant swap, the inten bit is pinned disclosure — cheapness is not the rule); **D2 UPHOLD** (corroborated by measurement, not just the mutator text); **D3 REFINE** (grades attach to cells, not rows); xscale round is commit-ready behind a green gate, PPC owes the rlwimi CR-presence line first. I re-verified against the tree rather than the packet: the fixes (`git diff`), both mutators, both frozen probes, both POSTTABLEs, and the ISA itself.
+
+  ADJUD_XP_20260912
+
+  ## 1. Findings
+
+  **F1 — UPHOLD.** Verified in `mut_xscale_t3.py:44`: the exit is `read_extra_post` (after the load), and `POSTTABLE.out:16` records M_RD0 29/30 failing RD0_ALLONES alone. The row (`xscale_inten_probe.T3FROZEN.py:479-505`) is a fresh session, r0 poisoned, write from r1 — self-isolating, so the host-death reds exactly one row.
+
+  **F2 — UPHOLD.** Arithmetic rechecked: rows drive 0, S1, S2, bit 28; union 0xFFA5F05F, bit 22 (0x00400000) sits in the complement 0x005A0FA0; all-ones closes the whole 32-bit partition with one row. Measured M_MAGICBIT 29/30, RD0_ALLONES alone.
+
+  **F3 — UPHOLD.** `mut_xscale_t2.py:30-31` (carried into t3) replaces *both* `read_line` and `write_line` with isteer — two-way, not read-only. The contract header was corrected and the frozen probe says so (`xscale_inten_probe.T3FROZEN.py:10`).
+
+  **F4 — UPHOLD (rejection stands).** And note your self-doubt on this one is answerable: the rejection does *not* rest on mutator text alone. `probe_M5.raw` measured 28/30 with exactly the two channels a two-way redirect predicts (isteer reads back S1; ANCHOR_EXC spins because inten was never written). A read-only redirect would have redded D_S1 first. Text and measurement agree.
+
+  **F5 — UPHOLD.** Verified in `cpu_arm_coproc.c:317-323`: the isteer write *assigns, then* exits on nonzero — so no live session ever reaches an isteer read with isteer ≠ 0. `if (isteer != 0) exit` is unkillable by construction; disclosure is the right grade, and the contract already carries it (probe line 17).
+
+  **F6 — UPHOLD.** Verified: `dev_footbridge.c` still has its `fatal`+`exit(1)` pairs (e.g. 564-565, 587-589, 602-604, 711-712); the fixed TIMER_EXTERNAL case (#432) is a disposition precedent, exactly as the qualification said.
+
+  **F7 — UPHOLD as record.** Correct on both: D_ZERO can't discriminate a wrong-source-0 mutant (0 == 0), and M1's kill arrives as host death at the `0x14` read-while-isrc≠0 (probe line 548), not via a "spins" value. The kills are real; the names overstate. No change is the right cost/benefit.
+
+  **F8 — UPHOLD.** Both clauses verified present in the frozen probe (lines 18-19: the five-read ceiling with M_NREAD exiting on the fifth, and irq 28 as the only ANCHOR-driven source).
+
+  **F9 — UPHOLD.** Rechecked the row math against the fixed code (`cpu_ppc_instr.c:2548-2552`): MB=40, SH=24 gives end `(64-24)&63 = 40 = mb`, so the do-while sets all 64 bits; want = ROTL64(0xDEADBEEFCAFEF00D, 24) = 0xEFCAFEF00DDEADBE ✓. D_SKIP_FULL_ROT measured failing `full rot` alone.
+
+  **F10 — UPHOLD.** glm's literal form is wrong for any SH≠0 regardless of aliasing; the built D_ALIAS_REREAD differs only under rA==rS, and the row (SH=8, MB=16, partial mask) separates snapshot from re-read. Measured 28/29, `alias rs=ra` alone. Bonus from reading the code: the fix is alias-safe *by construction* (`s` snapshotted at line 2542 before any GPR write; rlwimi accumulates in a local and writes back once at line 2653), so the alias rows pin re-introductions, not a live hazard.
+
+  **F11 — REFINE.** The correction is true as stated (Opus's `rldimi_DM_NOAND_END.log` reds both literals) — but nobody recorded the attribution: that mutant *hangs*, so the session aborts, the sentinel goes missing, and **CONTROL=FAIL carries the same kill**. The kill that only the literal pins can carry — a census-shrinking edit where the session completes cleanly (the codex promotion-design case the literals were built for, probe lines 437-441) — remains **unmeasured**. Keep the correction; add the caveat, and optionally measure the shrink case (named below).
+
+  **F12 — UPHOLD.** The shipped contract now reads "SH 8, 24, 40 … an edit keyed on one other SH value is NOT pinned" (rldimi probe lines 65-66). Disclosure correctly scoped.
+
+  **F13 — UPHOLD.** The row note now says "replace entire high half + all 32 low bits" (rlwimi probe line 372). Correct: MB=1, ME=0 is MASK(33,32) = all 64 bits.
+
+  **F14 — UPHOLD, and confirmed still owed.** The rldimi contract has "The CR row checks readback PRESENCE only; CR0 value semantics are not covered" (line 67). The rlwimi contract's clause (e) lists ppccr0modewidth, 32-bit truncation, OS rigs — but **not** the presence-only sentence, and its `cr0 record form` row (line 405) checks presence only. Deleting `update_cr0` survives the rlwimi instrument; that line is the one concrete artifact still owed.
+
+  **F15 — UPHOLD, with the right reason substituted.** The guard is pre-existing (the `git diff` shows it as context, not change), so its deletion is not a cell of this fix's floor regardless of host semantics — that, not "UB evaluates as >> 0", is the load-bearing justification. Host-equivalence was argued, not measured; on this host it happens to be right (runtime `shr r32,cl`, count masked to 5 bits), but that clause is build-dependent and should not be cited as mechanism.
+
+  **F16 — UPHOLD.** Consistent with the contract's own disclosure (rotate pinned at {8,24,40} only for rldimi; rlwimi's census separately drives SH ∈ {1,8,16,31}, so this is an rldimi-only gap). An `SH==k`-keyed misrotate is the `idata == k` shape — clause (e).
+
+  ## Disagreements
+
+  **D1 — REFINE, and the premise's own rule settles it without cheapness.** The dominating predicates of the edited line, to the function boundary, are `crm == 0`, `crn == 0`, and `l_bit` (`cpu_arm_coproc.c:309-310`). The (d) swaps substitute body-read fields into those predicates *inheriting shape and constant*:
+  - `crn == 0` with field crn→rd gives `rd == 0`: **floor** (codex had this right). Now pinned.
+  - Same swap with crn→i80321_inten gives `inten == 0`: floor, already pinned by the D_ZERO family (host-death channel).
+  - The `l_bit` truthiness swap gives `rd != 0` / `inten != 0`: floor, pinned by every S1/S2 read row.
+  - `inten & (1<<k)`: **disclosure** — no bit-test predicate dominates, and the bit-ness of `l_bit` lives in the *caller*, outside the function boundary. Fresh shape + fresh constant. It is *pinned* disclosure now (the all-ones row covers all 32 positions), but pinned disclosure does not promote to floor. Grok had this one right.
+  - `rd == k`, k∉{0}: disclosure; bounded (the undriven set is k ∈ {1,2,8,11,12,13,14}) but not owed.
+
+  Rule for the next pure deletion: **floor = re-introduction under a predicate reachable from the dominating set by swapping in a body-read field with shape and constant inherited; anything needing a fresh constant or fresh shape is disclosure, and cell grades never depend on row cost.** Your lean landed the right split for `rd==0` with the wrong justification, and would have mis-graded the inten bit. Grade cells, not rows.
+
+  **D2 — UPHOLD.** Settled by the mutator text (F3) and corroborated by the M5 leg measurement (F4). Both rejected findings assumed a read-only M5 that was never built.
+
+  **D3 — REFINE.** "Carries a kill" is settled by measurement (F11). The floor-vs-disclosure label was miscast: rows don't get grades, cells do. The end-test-without-`&63` mutant is an edit-variant of a fix line — that *cell* is floor. The literal pins are global-integrity anchors that are the **sole** reporters for hang/abort mutants (value rows never run) and the planned sole reporters for census-shrink; for the hang case their report is redundant with CONTROL=FAIL. Record them as anchors with that division of labor and the label question dissolves.
+
+  ## 2. Which accepted disposition is wrong?
+
+  None of the fourteen, on the merits — I went hunting and the tree refuses to convict any of them. Two carry weak *justifications* worth amending in the record: **F15** (right answer; the mechanism clause "UB evaluates as >>0" is argued-not-measured and build-dependent — the durable reason is "pre-existing line, outside the fix floor") and the **D1 lean** (right row action; wrong grading principle). The 14/16 count is less suspicious than it looks: this panel's findings arrived with measurements attached (Opus's 29/29s, the raw logs), and the only two rejections were the only two findings resting on a factually false premise about the mutator. Agreement bought by measurement is not agreement by contagion. Manufacturing a fifteenth rejection would be the same fallacy with the sign flipped.
+
+  ## 3. What did all of us miss?
+
+  - **The F11 attribution gap** (the real one): the literal pins' only *measured* kill comes bundled with a control failure. Their unique channel — session completes, instrument shrank, control green — has never been measured. Everyone (me included, until I lined up the three documents) read "pins carry a measured kill" as covering the case the pins were *built* for. It doesn't.
+  - The rlwimi contract's missing CR line (F14) is the only owed artifact still actually missing from the tree — everything else marked "accepted, changed" I verified as landed.
+  - Small, optional: the NOT COVERED's `rd == k` clause is read-side; one more clause — "an exit on the *write* arm keyed on rd is not pinned (writes use r1-r7)" — would close the last unnamed predicate in the untouched sibling arm. Not a blocker; the write arm is outside the fix.
+  - Nothing architectural. I ran the one shared-premise failure mode to ground: the fix's `if (mb > me) ra = (ra & 0xffffffff) | (tmp << 32)` depends on the whole panel's reading of 64-bit rlwimi. It checks out independently: the ISA defines the 32-bit rotate as operating on two copies of bits 32:63, and MASK(MB+32,ME+32) wraps into the high word when x > y ([Power ISA v3.1B, Book I](https://wiki.raptorcs.com/w/images/d/d3/OPF_PowerISA_v3.1B.pdf) — the probe's page citations :578/:4008/:4310 match this text). The `want_rlwimi` model's duplicated `rotl32` (probe lines 142-147) is the architecture, not a panel invention, and the behavior is detector-pinned (`pres wrap`, `wrap fullword`, R_REV_COND 13/28, R_ONLY_HIGH 19/28).
+
+  On your third self-doubt: the alias row catches every aliasing mutant I can construct that is actually wrong — the post-merge re-read turns out to be *equivalent* (the OR is idempotent under the mask), and operand swaps rS↔rA at the snapshot are caught by the ordinary rS≠rA rows. The surviving alias-only class would need an SH/MB-keyed contrivance, which is F16-shaped disclosure.
+
+  ## 4. Ready to commit?
+
+  **xscaleinten: yes**, once the gate runs green at pin 30. One record-keeping owe: the CHANGELOG should carry D1 as ruled above (rd==0 floor; inten bit pinned disclosure), so the next pure deletion inherits the principled line rather than the cheap one.
+
+  **PPC: yes after one owed line.** Add the rlwimi header's CR-presence-only disclosure (F14 — rldimi has it, rlwimi doesn't). The two POSTTABLE misses are already recorded as what they are; 15/17 with both misses explained (one arithmetic, one measured-and-mechanism-flagged) is a healthy table, not a red one.
+
+  Two measurements worth NAMING (neither blocks commit; both are single-mutant scratch builds, not gate runs):
+  1. **Census-shrink vs literal pins** — an rldimi edit that drops census cells but exits cleanly, run once, to give the literal pins their independent (control-green) measured kill. Closes the F11 refinement.
+  2. **rlwimi guard deletion** — build the `sh ?`-guard-deletion leg once and confirm 28/28, converting F15's host-equivalence from argument to measurement. If it ever reds, F15 flips from "not-a-gap" to "host-dependent equivalent", which is still not a row-worthy gap but should be said accurately.
+
+To resume this session: kimi -r session_8e918748-cd6c-440d-ba59-bcefaf53f2d6

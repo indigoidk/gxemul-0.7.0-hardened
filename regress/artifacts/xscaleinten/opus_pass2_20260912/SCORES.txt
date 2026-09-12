@@ -1,0 +1,36 @@
+xscaleinten PASS 2 (Opus measuring seat) -- clause-(d)/DEPENDS-ON mutation testing
+Clone /tmp/gxopus_p2 (cp -a of build/, SEC sources copied in as baseline = the fix).
+Frozen probe: xscale_inten_probe.frozen.py (== regress/xscale_inten_probe.py).
+Every leg: rm src/cpus/*.o; make -j4; [ gxemul -nt src ] verified; one mutant at a time; restore from SEC between.
+
+leg          score   CONTROL  FAILING rows            log
+BASE(fix)    29/29   OK       none                    xscale_BASE.log
+XM_RD0       29/29   OK       none  *** SURVIVOR ***   xscale_XM_RD0.log
+XM_ISTEER    29/29   OK       none  (equiv, unreach.)  xscale_XM_ISTEER.log
+XM_MAGICBIT  29/29   OK       none  *** SURVIVOR ***   xscale_XM_MAGICBIT.log
+
+Mutant edits (inserted after `cpu->cd.arm.r[rd] = cpu->cd.arm.i80321_inten;`, inside if(l_bit)):
+ XM_RD0      if (rd == 0) { fatal("TODO: XScale read from inten?\n"); exit(1); }
+ XM_ISTEER   if (cpu->cd.arm.i80321_isteer != 0) { fatal(...); exit(1); }
+ XM_MAGICBIT if (cpu->cd.arm.i80321_inten & 0x00400000) { fatal(...); exit(1); }
+
+LIVENESS (proves the survivors are reachable host kills, not inert edits): live_*.log
+ XM_RD0: mrc into r0 (0xee100610) -> TODOcount=1 (DIES);  mrc into r9 (0xee109610) -> TODOcount=0 (survives).
+ XM_MAGICBIT: inten<-0x400000 then read -> TODOcount=1 (DIES).
+
+FINDINGS
+ XM_RD0  SURVIVOR. Re-introduces the exit(1) on an inten MRC whose Rd==0. No detector row reads
+   inten into r0 (rows use r9,r4,r5,r6,r10,r3,r7,r15). The CONTRACT lists rd==15 (M_RD15) as a
+   covered "different predicate" but the symmetric rd==0 (and any Rd no row targets) escapes -- an
+   undisclosed gap in the very predicate family the contract claims. Reachable by a plain guest MRC.
+ XM_MAGICBIT SURVIVOR. Re-introduces exit(1) when i80321_inten has a bit set that none of the
+   probed values carry (S1|S2|reset|0x10000000 = 0xFFB5F05F; ~ = 0x004A0FA0, e.g. bit 22). Body
+   READS inten but never TESTS its value -> clause-(e), yet reachable: guest writes inten<-0x400000
+   then reads. Contract's NOT-COVERED list omits inten-value predicates.
+ XM_ISTEER survivor-but-EQUIVALENT: isteer!=0 is unreachable without a prior isteer write that
+   itself exit(1)s (SIB_WRITE control), so the guard can never fire. Not a coverage concern.
+
+RECOMMENDATION: add two rows -- (a) inten MRC into r0 survives to a marker; (b) inten<-value with a
+ high/odd bit, read back, survives -- OR add a contract disclosure line scoping rd/inten-value
+ predicates. XM_RD0 touches the contract's own claimed family (rd predicates), so it is at least
+ undisclosed coverage debt and arguably an L2 anchor-symmetry breach.

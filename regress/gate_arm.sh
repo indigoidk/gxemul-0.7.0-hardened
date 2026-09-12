@@ -1610,4 +1610,40 @@ else
     check "pit8253 rows run" "$(grep -cE '^  (ok|FAIL) ' "$PITLOG")" "18"
 fi
 
+#  ---- xscaleinten: arm_coproc_i80321_6's read of the modelled inten register (CP6 crm 0 / crn 0)
+#  ended the host with `fatal(); exit(1)' after computing the right value; it is now an ACCEPT.  The
+#  promoted detector is 30 rows: the agy witness's 26, codex's two (D_OP1, INTEN_WRITE_PRESERVES_ISTEER),
+#  D_CRM1_TMR0 (the crm-isolation row), and RD0_ALLONES, added on pass 2 after an exit keyed on
+#  `rd == 0' measured 29/29 against the 29-row instrument.  Kill table 3
+#  (artifacts/xscaleinten/killtable3_20260912/): twelve legs, all on prediction, BASE 30/30, HEAD 12/30;
+#  each pass-2 row the SOLE killer of its own mutant (RD0_ALLONES kills M_RD0 and M_MAGICBIT).  Unreached rows report
+#  BLOCKED and are not passes, so both FAIL and BLOCKED must be zero.  Section shape from the codex
+#  promotion design (codex_promote_20260912b.txt), which said 28; pinned by hand at 30.
+XSCALELOG=$LOGDIR/gate_xscale_inten.log
+xrc=0
+python3 -u xscale_inten_probe.py "$PMAX" gate "$STUB" > "$XSCALELOG" 2>&1 || xrc=$?
+
+#  PARSE BEFORE SCORE: exactly one valid record of each kind.
+if [ "$(grep -c '^XSCALE_RESULT=' "$XSCALELOG")" != "1" ] ||
+   ! grep -Eq '^XSCALE_RESULT=(0|[1-9][0-9]*)/(0|[1-9][0-9]*)$' "$XSCALELOG" ||
+   [ "$(grep -c '^XSCALE_CONTROL=' "$XSCALELOG")" != "1" ] ||
+   ! grep -Eq '^XSCALE_CONTROL=(OK|FAIL)$' "$XSCALELOG" ||
+   [ "$(grep -cx 'XSCALE_PROBE_DONE' "$XSCALELOG")" != "1" ]; then
+    note "xscale probe produced no unique, valid completion record; last lines follow"
+    tail -5 "$XSCALELOG" | sed 's/^/       /'
+    check "xscale probe output parses" "no" "yes"
+else
+    check "xscale probe output parses" "yes" "yes"
+    grep -E ' (ok|FAIL|BLOCKED)$' "$XSCALELOG" | sed 's/^/       /'
+    check "xscale controls" "$(sed -n 's/^XSCALE_CONTROL=//p' "$XSCALELOG")" "OK"
+    check "xscale probe exit status" "$xrc" "0"
+    xres=$(sed -n 's/^XSCALE_RESULT=//p' "$XSCALELOG")
+    #  Pinned by hand to a LITERAL: a pin that follows the probe cannot tell gained rows from lost ones.
+    check "xscale rows run"     "${xres#*/}" "30"
+    check "xscale rows correct" "${xres%/*}" "30"
+    check "xscale rows emitted" "$(grep -cE ' (ok|FAIL|BLOCKED)$' "$XSCALELOG")" "30"
+    check "xscale rows failed"  "$(grep -c ' FAIL$' "$XSCALELOG")" "0"
+    check "xscale rows blocked" "$(grep -c ' BLOCKED$' "$XSCALELOG")" "0"
+fi
+
 gate_end

@@ -309,8 +309,6 @@ void arm_coproc_i80321_6(struct cpu *cpu, int opcode1, int opcode2, int l_bit,
 	case 0:	switch (crn) {
 		case 0:	if (l_bit) {
 				cpu->cd.arm.r[rd] = cpu->cd.arm.i80321_inten;
-				fatal("TODO: XScale read from inten?\n");
-				exit(1);
 			} else
 				cpu->cd.arm.i80321_inten = cpu->cd.arm.r[rd];
 			break;

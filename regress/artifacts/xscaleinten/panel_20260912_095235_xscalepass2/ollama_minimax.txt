@@ -1,0 +1,30 @@
+VERDICT LINE FIRST, then the liveness token `PASS2_XSCALE_20260912`.
+
+**SURVIVOR: clause-(d) mutant guarded by `(cpu->cd.arm.i80321_inten & 0x005A0FA0) != 0`** inserted after the load in the crm=0/crn=0/l_bit read path. Stays GREEN on all 29 rows. Reasoning: floor cell (body reads the lvalue), but the mask is exactly the bits set in neither S1 (=0xA500005A, bits {1,3,4,6,24,26,29,31}) nor S2 (=0x5AA5F00D, bits {0,2,3,12,13,14,15,16,18,21,23,25,27,28,30}), namely bits {5,7,8,9,10,11,17,19,20,22}. Every inten value the detector ever presents — 0 (reset/D_ZERO/ANCHOR_CONTRAST/RD15_SURVIVE-assuming-no-write), S1 (D_S1, LNC_SUB, D_OP1, INTEN_WRITE_PRESERVES_ISTEER-write, D_CRM1_TMR0-write), S2 (D_S2, D_OP2), and bit 28 (ANCHOR_ISRC/ANCHOR_M1, and bit 28 ∈ S2) — is a subset of S1∪S2 bits, so the conjunction is always 0 and the re-introduced exit never fires. No row was expected to catch it: the detector never writes a "poison" value into inten that escapes the S1/S2 alphabet, so the test suite has no channel that could exercise the predicate.
+
+### Swept
+
+**Candidate (d) floor cells the author named, classified:**
+
+1. **`inten & ~(S1|S2) != 0`**: floor cell (body reads `i80321_inten`). **SURVIVOR** — no row varies `inten` outside S1∪S2.
+2. **`rd == 0`**: floor cell (body indexes `r[rd]`). **Cannot settle from packet alone.** The single fact that would settle it: the assembler destination register of the MRC in the D_OP1 fresh session. The D-arm destinations are {r4,r5,r6,r9,r10} and LNC_SUB is r3 and RD15_SURVIVE is r15; r0 is the marker load in the D arm, so it is *probable* no row reads inten into r0, but D_OP1's rd is not stated. If D_OP1's rd ∈ {0,1,2,7,8,11,12,13,14} (the registers no described row reads inten into), this mutant also survives. **Name the premise, name the row, name the single fact.**
+3. **`rd` ∈ any register no row reads inten into**: floor cell. Survives by construction for all rd ∉ {r3,r4,r5,r6,r9,r10,r15} — that's 9 of 16 registers, including r0-r2, r7, r8, r11-r14. Same single-fact dependency as (2) for r0 specifically.
+4. **`isteer != 0` in the inten read path**: **clause-(e) disclosure, not (d)** — the body in the crm=0/crn=0/l_bit arm never reads or tests `i80321_isteer`; only the crn=4 arm touches it. Survives trivially because INTEN_WRITE_PRESERVES_ISTEER writes isteer←0 before its isteer read, and SIB_WRITE's non-zero isteer write is on a different code path that already has its own host-killed exit. So strictly: not a (d) survivor, but it is a survivor.
+
+### Vacuous rows (Q2)
+
+None found under named mutants. Each row's named channel varies under the mutant the kill table credits it with: ANCHOR_M1↔M1 (isrc-driven death), D_OP2↔M_OPCODE2 (opcode2=1 → death), D_OP2↔M_NREAD (5th read → death in the D arm's read sequence), RD15_SURVIVE↔M_RD15 (rd=15 → death), D_OP1↔M_OP1 (opcode1=1 → death), INTEN_WRITE_PRESERVES_ISTEER↔M_ISTEER_WR (inten write side-effect → isteer corrupted), D_CRM1_TMR0↔M_CRM (wrong register returned). The one I want to flag for the panel, even though it is not vacuous: **D_OP2's named channel in the packet is "read with opcode2=1 into r10" with no stated `want` value**; it is killed by M_OPCODE2 and M_NREAD, both death-causing, so the row varies on survival. But a value-substitution mutant on the read result (the shape M5 takes) is not caught by D_OP2 because D_OP2 does not appear in M5's two-row failure list. That is not vacuity-by-construction (the row's channel is opcode2-acceptance, and M5 doesn't touch opcode2); it is a coverage gap — D_OP2 does not redundantly assert the read value, so a future value-substitution mutant on the crm=0/crn=0 path would slip past D_OP2 the way it slipped past the author until the anchor session caught it. Note this for the detector, not for the diff.
+
+### Contract (Q3)
+
+No statement is false. The closest to an overclaim is **"NOT COVERED: … r15 data and flag semantics beyond survival to the marker (RD15_SURVIVE)."** Flag semantics are not a live concern for MRC (MRC does not modify CPSR flags in ARM), so listing them under "not covered" slightly overstates a non-channel; but it is not false. **Accept the contract as written.** If forced to pick one: the "flag semantics" clause is the weakest, not wrong.
+
+### Disposition (Q4 — packet-fed, so I confirm only what the packet states)
+
+The packet itself gives the reasoning and the precedent: the value is already computed, the write arm stores the same field unchanged, the sibling crn=4 read has no diagnostic and no exit, and the DC21285 precedent in this tree is ACCEPT for a read the model already answers correctly. ACCEPT is consistent with the stated reasoning and precedent. I cannot independently verify against the source (not a file-reading seat), but the packet's argument is internally sound.
+
+### Final
+
+`SURVIVOR: if ((cpu->cd.arm.i80321_inten & 0x005A0FA0) != 0) { fatal(...); exit(1); }` — clause-(d), floor cell on `i80321_inten`, predicate is the bitwise complement of (S1|S2) over the 32-bit inten alphabet the detector exercises, never fires. Additionally, "exit when rd is any register outside {r3,r4,r5,r6,r9,r10,r15}" survives conditional on D_OP1's rd not being one of those seven; **the single fact that would settle it is D_OP1's MRC destination register.**
+
+PASS2_XSCALE_20260912

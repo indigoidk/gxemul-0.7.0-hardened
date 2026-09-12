@@ -1,0 +1,36 @@
+SURVIVOR: reinsert after the load, in the crm==0/crn==0/l_bit arm — `if (cpu->cd.arm.i80321_inten & 0x00400000) { fatal("TODO: XScale read from inten?\n"); exit(1); }` — provably 29/29 green; second guaranteed class: same site guarded by `if (rd == k)` for any of the ≥5 undriven rd values.
+
+PASS2_XSCALE_20260912
+
+## Q1 — surviving clause-(d) mutants: yes, two classes, both floor cells
+
+DEPENDS-ON (READ): the site predicates crm==0, crn==0, l_bit are pinned true by every subject read, so mutants keyed on them degenerate to HEAD (killed, 12/29). The free dimensions are the body-read fields `rd` and `i80321_inten`, and the rows cover each only at finitely many points.
+
+* **inten-bit class (floor cell).** inten at read time takes only {0, S1, S2, 0x10000000} across the whole suite (READ: D_RESET/D_ZERO/CONTRAST read 0; D_S1/D_OP1/LNC_SUB read S1; D_S2/D_OP2 read S2; ANCHOR_M1 reads bit 28). S1 = bits {31,29,26,24,6,4,3,1}; S2 = {30,28,27,25,23,21,18,16,15,14,13,12,3,2,0}; bit 28 ∈ S2, so the ANCHOR seed adds nothing (REASONED from the hex). Bits **{5,7,8,9,10,11,17,19,20,22}** are never set at any read. The exhibit mutant never fires: value rows return their wants, and D_SURVIVE/D_TODO_ABS/markers/P2_VACUITY see nothing. Row I expected to catch it: **D_S2** (widest seed, 15 bits) — it cannot, because S2 lacks the bit; **ANCHOR_M1** cannot, because 0x10000000 is a single bit already in S2.
+* **rd class (floor cell).** Rows read inten into {r3,r4,r5,r6,r9,r10,r15} (READ), plus at most the unstated destinations of D_OP1, ANCHOR_M1, X4_NOP (A2_INSTALLED if it reads at all). At most 10 of the 15 candidates r0–r14 are driven, so **≥5 rd-keyed reinstatements survive by counting alone** (REASONED). Your own M_RD15 leg proves this is (d)-class: `rd==15` was killed only because RD15_SURVIVE pins rd=15; its siblings are untested. Expected catcher: an "RD12_SURVIVE" that does not exist.
+* Boundary note (REASONED): predicates that are invariants at the site (e.g. post-load `inten != r[rd]`) are BASE-equivalent, not (d). The two classes above are reachable-but-undriven, which is the meaningful (d) residue.
+
+**Your three candidates:** (1) inten-bit — floor cell, **survives** (above). (2) `rd==0` — floor cell; `rd==0` itself is **not settleable from the packet** (Rd fields of D_OP1/ANCHOR_M1/X4_NOP unstated), but the undriven-rd class survives with certainty. (3) `isteer != 0` — **clause-(e) disclosure**: the crn-0 read body never reads isteer (READ), so it is outside your DEPENDS-ON enumeration; it also survives, since isteer is 0 at every inten read (REASONED: SIB_WRITE dies at its write; IWP zeroes isteer first; no row writes isteer then reads inten). Note the sweep's breadth is inconsistent: isrc, opcode1, opcode2, and a read counter — all equally outside DEPENDS-ON — were built and killed, while `isteer != 0` and a 6th-read counter (D's five reads are the maximum any session drives, READ) were not; both are 29/29 green.
+
+## Q2 — vacuity: no, but one pairing is worse than vacuous
+
+Every named failing row's channel provably varies under its mutant (REASONED): M1 fires at ANCHOR_M1 and at CONTRAST's own read (CONTRAST must contain an inten read — forced independently by HEAD's arithmetic: my row-by-row count of HEAD gives exactly 9 failing + 8 blocked = 17, matching 12/29 and the brief's "P2_VACUITY and seven more BLOCKED"); M_OPCODE2/M_NREAD fire at D_OP2, the **5th** inten read (D_S2 passing under M_NREAD proves the counter is scoped to the crn-0 arm); M_OP1, M_RD15, M_ISTEER_WR, M_CRM all check out. No vacuous-by-construction pairing. The M5 pairing is not vacuous — it is inverted; see Q3.
+
+## Q3 — the false CONTRACT statement
+
+**"the read loading another register (M5: isteer)", together with the "each MEASURED in kill table 2" claim covering it — false.** If the subject (crn-0) read loaded isteer, then in D/LNC the destination gets 0 (isteer is never written there), so D_S1, D_S2, D_OP2, D_OP1, LNC_SUB fail on their wants, while INTEN_WRITE_PRESERVES_ISTEER — whose read is the untouched crn-4 arm — **passes**. The measured M5 row (27/29, failing IWP + ANCHOR_EXC) is exactly the inverted set: it is what a corrupted **crn-4 read loading inten** produces for IWP. So the built leg did not mutate the subject read; the described mutant was never measured. Additionally, the M5/ANCHOR_EXC cell has no consistent mechanism under any reading: an isteer read returns the same 32-bit value (inten's 0x10000000) in both the M5 and M_ISTEER_WR legs, so no guest logic can fail EXC in one and pass in the other, and the controller consumes inten, not isteer (READ). At least one cell of the M5 leg is wrong. (Consolation: if the described crn-0 mutant *were* built, D_S1 etc. would catch it — the mislabel hides no survivor in that channel, but it does falsify "each MEASURED".)
+
+Secondary overclaim: the headline "reinstated under a different predicate — isrc, op1, op2, rd==15, 4th-read" is five points, not the class; the rd-complement and inten-bit-complement survivors appear nowhere in NOT COVERED, which is otherwise honest.
+
+## Not checkable from the packet (one settling fact each)
+
+1. Rd fields of D_OP1 / ANCHOR_M1 / X4_NOP — settles whether `rd==0` specifically survives (the class survives regardless).
+2. The inten seed in RD15_SURVIVE's session, and the anchor guest's full store sequence — settles the exact surviving bit set (ten bits if the seed is 0/S1/S2).
+3. The P2_VACUITY poison constants — a pre-load `r[rd]`-keyed predicate survives for every constant outside the poison set.
+4. The anchor leg's non-inten accesses — the only fact that could rescue the M5/EXC cell.
+
+Measurements to name (predicted, not run): `if (inten & 0x00400000)` → 29/29; `if (rd == 12)` → 29/29 (pick k after fact 1); `if (isteer != 0)` → 29/29.
+
+## Q4 (packet-only note)
+
+Nothing in the packet contradicts ACCEPT: the diff context shows the load above the removed lines, the write arm stores the same field, the crn-4 read is quiet, and the DC21285 precedent is ACCEPT (all READ). The latched-announce alternative cannot be adjudicated without the tree; no inlined fact supports it.

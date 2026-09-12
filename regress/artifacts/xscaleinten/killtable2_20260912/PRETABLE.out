@@ -1,0 +1,57 @@
+xscaleinten -- KILL TABLE 2 PRETABLE, written 2026-09-12 BEFORE the table runs.
+(Post-table notes go in a SEPARATE file: appending here would rewrite this file's mtime, which is part of
+the order evidence -- #519's table 5 destroyed its own that way.)
+
+INSTRUMENT: regress/xscale_inten_probe.py -- the promoted 29-row detector (the 26-row agy witness + codex's
+16 replacements + D_CRM1_TMR0).  Frozen copy: regress/artifacts/xscaleinten/base_20260912/
+xscale_inten_probe.py.frozen (cmp-identical to regress/ today).  BASE MEASURED before this table: 29/29,
+CONTROL=OK (base_20260912/BASE.log).  Loader stub: base_20260912/xscale_stub.bin (one ARM NOP).
+BASELINE: the CURRENT SEC cpu_arm_coproc.c.  Mutator: mut_xscale_t2.py (one block per leg, each find-text
+required to occur exactly once).
+
+WHY THIS TABLE.  Table 1 (killtable_20260911/SCORES.txt, the 26-row witness) killed all five of its
+mutants.  Codex's pass 2 then found an escape (the kill reinstated only for opcode1 != 0: 26/26) and two
+unrowed cells (an inten write that also writes isteer; crm isolation at crn 0).  The promotion added a row
+for each.  This table re-runs table 1's five mutants against the PROMOTED instrument, whose death
+accounting changed (rows captured before a mid-session death now score normally; unreached rows report
+BLOCKED and are not passes), and builds the three new cells.
+
+LEGS AND PREDICTIONS
+  BASE         29/29  CONTROL=OK                                   (measured already)
+  HEAD         PREDICTED 13/29: table 1's fifteen failures + D_OP1 (the fresh opcode1=1 session reads
+               inten and dies).  CONTROL=FAIL expected: P2_VACUITY goes BLOCKED when pre-snapshots after
+               the first death are missing.  Direction certain; the count depends on the BLOCKED rules.
+  M1           PREDICTED 26/29: ANCHOR_M1, ANCHOR_EXC, ANCHOR_CONTRAST (as table 1); the three new rows
+               run in fresh sessions with isrc == 0 and pass.
+  M5           PREDICTED 27/29: ANCHOR_EXC (as table 1) + INTEN_WRITE_PRESERVES_ISTEER (the inten write
+               lands in isteer, which then reads S1).  D_OP1 PASSES under M5: M5 swaps BOTH directions, so
+               the opcode1 session reads back the S1 it wrote.  Codex predicted the isteer row; the D_OP1
+               pass is mine.
+  M_OPCODE2    PREDICTED 26/29: D_SURVIVE, D_OP2, D_MARKER.  Under the new accounting D_RESET..D_S2 are
+               captured before the opcode2=1 access kills the session.  (Table 1 had 7 failures.)
+  M_RD15       PREDICTED 28/29: RD15_SURVIVE.
+  M_NREAD      PREDICTED 26/29: D_SURVIVE, D_OP2, D_MARKER.  The D session's FIFTH inten read is the
+               opcode2=1 one, so it dies at the same point as M_OPCODE2.  Every other session is a fresh
+               process with its own static counter and makes fewer than five reads.
+  M_OP1        PREDICTED 28/29: D_OP1 alone -- the escape codex found, now rowed.
+  M_ISTEER_WR  PREDICTED 28/29: INTEN_WRITE_PRESERVES_ISTEER.  UNCERTAIN whether the SIB rows or the D
+               session see the extra isteer write too (the D session writes inten several times; nothing
+               there reads isteer back that I can see).  If more rows red, the prediction was too narrow,
+               not the row.
+  M_CRM        PREDICTED 28/29: D_CRM1_TMR0 alone -- reads S1 (inten) where T = 0x5A5A0000 is wanted.
+               D_TRR0 reads crm=1/crn=4 and is unaffected, which is exactly the isolation gap codex named.
+
+THE DISCRIMINATING CLAIMS: each of the three new rows must be the SOLE killer of its own new mutant.  If
+M_OP1, M_ISTEER_WR or M_CRM scores 29/29 the row is vacuous for its cell; if any of them reds a row other
+than its own, the row is not the sole carrier and the record says so.
+
+CHECKS:
+  SIBLING PARITY  the crn-0 inten arm vs the crn-4 isteer arm vs the crm-1 timer arms: each now has a read
+                  row and a write-side observation (INTEN_WRITE_PRESERVES_ISTEER is the cross-arm one).
+  CLAIM -> ROW    D_CRM1_TMR0's comment claims "a guard that stops testing crm returns S1 here" -- M_CRM is
+                  that edit.  INTEN_WRITE_PRESERVES_ISTEER's name is its claim -- M_ISTEER_WR.
+  GUARD/BODY      the fix deletes the kill; the dominating predicates are the crm and crn switches and
+                  l_bit.  M_CRM (crm), M_OPCODE2 / M_OP1 (opcode fields the arm ignores) and M_RD15 (rd)
+                  are the DEPENDS-ON cells; M5 swaps the body's register operand.
+  CHANNEL         every new row reads a register value in a fresh session -- the value differs under its
+                  named mutant by construction (S1 vs T; S1 vs 0; HOST-DIED vs S1).

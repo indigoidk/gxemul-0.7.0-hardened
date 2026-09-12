@@ -1,0 +1,83 @@
+I'll review the uncommitted fix and the 29-row detector against the source, then enumerate clause-(d) mutants instead of ratifying the packet. First I need the current tree, the enclosing function, and the probe.The uncommitted fix is already in the working tree. Next I’ll read the probe, how `i80321_inten` is consumed, and the kill-table artifacts.The M5 score (27/29, only two failures) does not match a “read loads isteer” mutant. I’ll check the actual mutants, PRETABLE, and interrupt path before classifying survivors.SURVIVOR: after the load, `if (rd == 0) { fatal("TODO: XScale read from inten?\n"); exit(1); }` — MEASURED 29/29 (`regress/artifacts/xscaleinten/opus_pass2_20260912/xscale_XM_RD0.log`). Clause (e), not a floor cell.
+
+PASS2_XSCALE_20260912
+
+The green edit is real. It is not L2. The body uses `rd` as an index and never tests it; `rd == 0` is the `idata == k` shape the joint-cells rule already files as disclosure.
+
+## 1. DEPENDS-ON, then the three candidates
+
+Edited body (post-fix):
+
+```c
+cpu->cd.arm.r[rd] = cpu->cd.arm.i80321_inten;
+```
+
+| | what |
+|---|---|
+| Dominating predicates (function boundary) | `crm == 0`, `crn == 0`, `l_bit` |
+| Body **reads** | `rd` (index), `i80321_inten` (copied word) |
+| Body **writes** | `r[rd]` — the brief listed this as a read; it is not |
+| Body **tests** | nothing. No `if` on `rd`, no bit test on `inten` |
+
+Pure deletion, so (d) re-introduces `fatal`+`exit(1)` under a **different** predicate, or operand-swaps a body-read field. Joint cells exist only where the body **distinguishes** an lvalue. Read ≠ distinguish.
+
+### Floor sweep (killed, or would be)
+
+| mutant | result |
+|---|---|
+| Unconditional reintroduction (HEAD) | 12/29 |
+| Exit on `!l_bit` (write arm of the same `crn`) | first D `mcr` dies; `D_SURVIVE` |
+| Exit on `crn==4` read | `SIB_READ` |
+| Exit on `crm==1` | `D_TRR0` / `D_CRM1_TMR0` |
+| `inten`→`isteer` both directions (measured M5) | 27/29 |
+| Read-only `inten`→`isteer` | stronger: `D_S1` (write still hits `inten`, read returns 0) |
+| `if (rd == 15)` (M_RD15) | 28/29 |
+| `if (i80321_inten != 0)` | `D_S1`, `D_S2`, `LNC_SUB`, `ANCHOR_M1` |
+| `if (i80321_inten == 0)` | `D_RESET`, `D_ZERO`, `ANCHOR_CONTRAST` |
+| `if (isrc != 0)` (M1; `isrc` is **not** body-read here) | 26/29 |
+| `if (opcode1 != 0)` / `if (opcode2 != 0)` | 28/29, 26/29 |
+| `nread > 4` | 26/29 |
+| Write also stores `isteer` / tmr0 reads `inten` | 28/29 each |
+
+No floor (d) cell stays green. The dominating path has no body-tested partition to hide in.
+
+### The three unbuilt candidates, classified
+
+**`if (rd == 0)` after the load — GREEN, clause (e).**  
+Measured 29/29, CONTROL=OK, same instrument. Destinations actually used for an inten MRC: `{3,4,5,6,7,9,10,15}`. Expected catcher `D_SURVIVE` never issues `rd==0`; `D_MARKER` / `X4_NOP` observe r0 via `mov`, not MRC. Same hole for `{1,2,8,11–14}` (`D_TRR0` uses r8 on **crm=1/crn=4**, so it does not pin an inten `rd==8` kill).
+
+This is not a floor cell. The body never distinguishes `rd==0` from `rd==4`. That is the same leftover as “opcode1 encodings beyond the one nonzero the rows drive,” which the CONTRACT already discloses. `rd==15` was worth rowing because CP15 in this same file already special-cases `rd == ARM_PC`; `rd==0` has no such warrant. Closing every unused `rd` is the unbounded encoding product.
+
+**`if (i80321_inten & 0x100)` (any bit in `~(S1|S2|0x10000000)` = `0x005A0FA0`) — GREEN, clause (e).**  
+Driven values are `{0, 0xA500005A, 0x5AA5F00D, 0x10000000}`. Union `0xFFA5F05F`. The body copies the word; it does not test bits. Same class as `idata == k`.
+
+**`if (i80321_isteer != 0)` — GREEN, not in the (d) enumeration.**  
+The repaired body does not read `isteer`. Mutant text exists (`mutant_XM_ISTEER.txt`); no probe log in that dir. `SIB_WRITE` dies on the nonzero **write** in a different session, so no later inten read ever sees `isteer != 0`. File as (e) if named at all.
+
+## 2. Named channel vs named mutant
+
+No named pair is vacuous.
+
+M5 is the one that looks like it should be. The CONTRACT describes “the read loading another register.” The mutator swaps **both** directions (`mut_xscale_t2.py`). Round-trips through `isteer` keep `D_S1`/`LNC_SUB` green; the kill is `INTEN_WRITE_PRESERVES_ISTEER` (got S1, want 0) and `ANCHOR_EXC` (got `0x8024` spin, want `0x18`) — `probe_M5.raw`. Those channels do vary under the **measured** mutant.
+
+A read-only swap would have reddened `D_S1` and would **not** have reddened `INTEN_WRITE_PRESERVES_ISTEER` (that session never MRC-reads inten). So the two sentences in the CONTRACT/PRETABLE are about two different edits.
+
+`RD15_SURVIVE` is survival-only, as the CONTRACT says. It reddens M_RD15 (`exit` on `rd==15`). It cannot see a skip-the-load of r15. That skip is not the named mutant and is not a reintroduction of the removed `exit`.
+
+`D_OP2`/`D_MARKER` going BLOCKED under M_OPCODE2/M_NREAD is still a non-pass (`passed` counts only `ok is True`). The kill is `D_SURVIVE`. Not vacuous.
+
+## 3. CONTRACT
+
+False as written: **“the read loading another register (M5: isteer).”** Table 2 measured a bidirectional alias onto `isteer`. PRETABLE already says so (“M5 swaps BOTH directions”). The header should match the mutator.
+
+Gap, not a lie: unused `rd` is not in NOT COVERED, while opcode1/opcode2 encodings are. Same leftover class. One sentence, parallel to the opcode disclosure, is the cheap close. Eight new rows are not.
+
+HEAD 12/29, the listed kills, the retained host-kill controls, and “one nonzero opcode encoding each” all match `SCORES.txt`.
+
+## 4. ACCEPT is right
+
+The load already writes the field the interrupt controller consumes (`dev_i80321.c`: `d->enable = &cpu->cd.arm.i80321_inten`). The write arm of the same `crn` stores it with no diagnostic. The sibling `crn==4` read is already quiet. A latched “TODO: XScale read from inten?” would announce an unimplemented access the model implements — the wrong-record case that made ACCEPT a member.
+
+The DC21285 ENABLE-SET read is a disposition precedent in the carrier, not a quiet source example: `dev_footbridge.c` still `fatal`+`exit(1)` after filling `odata`. The in-file sibling is the one that actually matches.
+
+Do not add a latch here.

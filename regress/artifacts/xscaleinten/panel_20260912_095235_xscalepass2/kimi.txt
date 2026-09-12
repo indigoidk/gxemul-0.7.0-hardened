@@ -1,0 +1,815 @@
+kimi version 0.36.0
+• Let me understand the task. This is a mutation-testing review of an emulator detector fix in GXEMUL-SEC. The question: is there a clause-(d) mutant of this fix that stays GREEN on all 29 rows? A clause-(d) mutant re-introduces the removed behaviour (fatal+exit) under a DIFFERENT predicate.
+
+  I need to:
+  1. Look at the actual source: `GXEMUL-SEC/src/cpus/cpu_arm_coproc.c` and the detector `GXEMUL-SEC/regress/xscale_inten_probe.py`.
+  2. Enumerate the 29 rows and what predicates they pin.
+  3. Find whether any mutant predicate (e.g., exit when `i80321_inten` has some bit set that neither S1 nor S2 has, exit when `rd == 0`, exit when `isteer != 0`) survives all 29 rows.
+
+  Key data:
+  - S1 = 0xA500005A, S2 = 0x5AA5F00D. Union of bits: S1 has bits: 0xA500005A = 1010 0101 ... 0101 1010. S2 = 0x5AA5F00D. Union of S1|S2 = 0xA500005A | 0x5AA5F00D = 0xFFA5F05F. Let me compute: 0xA500005A | 0x5AA5F00D:
+    - A5 | 5A = FF
+    - 00 | A5 = A5
+    - 00 | F0 = F0
+    - 5A | 0D = 5F
+    So union = 0xFFA5F05F. Bits NOT set in union: complement = 0x005A0FA0. So a mutant `if (inten & 0x005A0FA0) {fatal;exit}` would never trigger on reads returning S1 or S2.
+
+  But wait — which rows read inten with values other than S1/S2?
+  - D_RESET: read at reset, want 0. 0 & mask = 0, no trigger.
+  - D_ZERO: inten<-0, read, want 0.
+  - D_S1, D_S2: S1, S2.
+  - D_OP2: read with opcode2=1 — value is presumably S2 (after inten<-S2)? The sequence: D_S2 then D_OP2 reads into r10. The value would still be S2 (inten unchanged).
+  - LNC_SUB: r3<-S1.
+  - D_OP1: read with opcode1=1, want S1.
+  - ANCHOR: inten<-bit 28 = 0x10000000. Is 0x10000000 in the union 0xFFA5F05F? 0xFFA5F05F has bit 28 (0x10000000) set? 0xF0000000 & 0x10000000 = yes, bit 28 set. So ANCHOR's value's bits are within union. But ANCHOR_M1 reads inten while isrc != 0 — the value read is 0x10000000 (bit 28). A mutant keyed on a bit in 0x005A0FA0 wouldn't trigger.
+  - ANCHOR_CONTRAST: inten = 0.
+  - RD15_SURVIVE: read into r15 — value presumably S1 or whatever was written. Actually, what value? "an inten read into r15 survives to the marker" — likely S1.
+
+  So a mutant `if ((cpu->cd.arm.i80321_inten & 0x005A0FA0) != 0) { fatal; exit(1); }` placed after the load would survive all 29 rows, because every read value in the test suite only has bits from {0, S1, S2, bit28}.
+
+  Wait, but I need to check D_OP2's value. In arm D sequence: inten<-S2, read into r6 (D_S2); read with opcode2=1 into r10 (D_OP2). What's the want for D_OP2? Probably S2 (the current inten). So value bits ⊆ union.
+
+  Hmm, but wait — is the mutant "re-introducing the removed behaviour under a different predicate"? The removed behaviour was: after loading r[rd] = inten, fatal+exit unconditionally. A clause-(d) mutant: same lines but guarded by a predicate that's false for all 29 rows but true for some real inputs. E.g., `if (inten & 0x10) exit` — check: does S1 or S2 have bit 0x10? S1 = 0xA500005A: low byte 0x5A = 0101 1010 — bit 4 (0x10) is set! 0x5A = 90 = 64+16+8+2 = 0101_1010, yes bit4 set. So mask must avoid S1|S2 bits. 0x005A0FA0 & S1 = ? S1=0xA500005A, 0x005A0FA0 & 0xA500005A: byte-wise: 00&A5=00, 5A&00=00, 0F&00=00, A0&5A=00? 0xA0 & 0x5A: A0=1010_0000, 5A=0101_1010, AND=0000_0000=0. Yes 0. & S2=0x5AA5F00D: 00&5A=00, 5A&A5: 0101_1010 & 1010_0101 = 0000_0000 = 0, 0F&F0=0, A0&0D: 1010_0000 & 0000_1101 = 0. So mask 0x005A0FA0 avoids both. Good.
+
+  But hold on — I should verify by reading the actual detector file to see exactly what values are read in each row, especially D_OP2, D_OP1, RD15_SURVIVE, ANCHOR rows, and whether any row reads inten after writing some value with bits outside S1|S2|bit28. E.g., is there a row that writes inten = 0xFFFFFFFF or random? The CONTRACT says NOT COVERED includes "the rows pin that for ONE nonzero value of each" opcode. The S1/S2 choices look deliberately bit-complementary-ish but their union is not all-ones, which is exactly the hole.
+
+  Also candidate: exit only when `rd == 0`. Which destinations are used? r9 (D_RESET), r4 (D_S1), r5 (D_ZERO), r6 (D_S2), r10 (D_OP2), r3 (LNC_SUB, LNC_COND), r15 (RD15_SURVIVE), D_OP1 (unknown reg), ANCHOR reads (unknown reg). If no row reads into r0, then `if (rd == 0) {fatal;exit}` survives. Need to check the detector source for D_OP1's destination and ANCHOR rows' destinations. The brief says "exit only when `rd == 0`, or `rd` is some register no row reads into" — the author flags this as a candidate to check or refute. I must read the probe script and enumerate every destination register.
+
+  Also candidate: exit only when `isteer != 0`. INTEN_WRITE_PRESERVES_ISTEER writes isteer<-0 first, so isteer == 0 there. Do any rows set isteer nonzero and then read inten? SIB_WRITE does crn-4 non-zero write → dies (expected, that's a retained kill). SIB_READ: crn-4 read survives — that's a read of isteer, not setting it. So after SIB_WRITE the session is dead. If no session sets isteer != 0 and then reads inten, a mutant `if (i80321_isteer != 0) {fatal;exit}` in the inten read arm survives. But wait — would that be clause (d)? It re-introduces exit under a different predicate. Yes. Is isteer != 0 a "floor cell"? The body doesn't read isteer at all — so it's clause-(e) disclosure? Hmm, the distinction the author asks: "Is each a floor cell (the body tests or reads the lvalue) or clause-(e) disclosure (the body never distinguishes it)?" — I think "floor cell" means a predicate on state the body actually reads (so a test could in principle pin it), vs clause-(e) where the body never distinguishes it.
+
+  Also opcode1/opcode2: the handler never tests them. D_OP2 pins opcode2=1 works; D_OP1 pins opcode1=1. But only ONE nonzero value each. A mutant `if (opcode2 == 2) exit` would survive since only opcode2=1 is tested. Similarly opcode1==2. That's the classic "pin one value, mutant uses another" survivor. The CONTRACT explicitly says NOT COVERED: "the rows pin that for ONE nonzero value of each, not for every encoding". So the contract already discloses this — but question 1 asks to enumerate. The mutant M_OPCODE2 used `opcode2 != 0` and was caught by D_OP2. But a mutant `opcode2 == 7` (or any value ≠ 0,1... wait ≠ the tested value 1) survives. Actually opcode2==2..7 all survive since only opcode2 ∈ {0 (most rows), 1 (D_OP2)} appear.
+
+  Wait, but careful: opcode2 for the inten read. What is opcode2 in the normal rows? Probably 0. D_OP2 uses opcode2=1. So mutant `if (opcode2 == 5) exit` never fires. Survivor.
+
+  Similarly crm: mutant placed in the case 0/case 0 arm can't involve crm since we're already in crm==0. But predicate could be `if (crn == 0 && ...)` — we're in crn==0 already.
+
+  What about `l_bit`? The exit was in the l_bit true arm. A mutant `if (!l_bit) exit` in that position can't be — well the mutant is inside the if(l_bit) block, so predicate on l_bit is constant true there.
+
+  Other state: `cpu->cd.arm.r[rd]` value — same as inten bits (read loads inten into r[rd]; the predicate could test r[rd] after load, same as inten bits).
+
+  What about testing `rd` relating to specific registers used: r3, r4, r5, r6, r9, r10, r15, and whatever D_OP1/ANCHOR use. rd==0, rd==1, rd==2, rd==7, rd==8, rd==11..14 might be untested. Need to read the probe.
+
+  Also: exit only when inten has bit 28 set? ANCHOR sets bit 28 and reads (ANCHOR_M1). So that would be caught by ANCHOR_M1... but wait, ANCHOR rows are free-running; ANCHOR_M1 "read inten while isrc != 0" — if the read exits, does the row fail? Yes presumably (survival/marker). But careful: a mutant `if (inten & 0x10000000) exit` — caught by ANCHOR_M1 and ANCHOR_EXC? ANCHOR_EXC unmasks CPSR.I and spins; no further read after? Actually inten<-bit28 then UART asserts irq 28, read inten (ANCHOR_M1)... The exact sequence matters. Anyway bit-28 is pinned.
+
+  What bits are pinned by the suite? 0 (D_RESET, D_ZERO, ANCHOR_CONTRAST), S1, S2, S2 again (D_OP2), S1 (LNC_SUB, D_OP1?), bit28 (ANCHOR). So the union 0xFFA5F05F | 0x10000000 = 0xFFA5F05F already includes bit 0x10000000? 0xFFA5F05F: F=1111 at bits 28-31, yes bit 28 included. So the pinned-bit union is 0xFFA5F05F, and 0x005A0FA0 is completely unpinned. So a value-bit mutant survives.
+
+  But is that a legit "clause-(d) mutant"? Clause (d): "the (d) mutant re-introduces the removed behaviour under a DIFFERENT predicate." `if (cpu->cd.arm.i80321_inten & 0x005A0FA0) { fatal(...); exit(1); }` after the load — yes, that's re-introducing fatal+exit under a different predicate. It survives all 29 rows. That looks like a genuine SURVIVOR.
+
+  Hmm wait — but I should double-check the exact read values in each row by reading the probe file. Especially:
+  - RD15_SURVIVE: what value is in inten when read into r15? If it's, say, 0xDEADBEEF or something with bits outside the union, my mask changes. 0xDEADBEEF & 0x005A0FA0 = ? DEADBEEF: byte-wise DE AD BE EF. & 00 5A 0F A0: 00, AD&5A=08? A D & 5 A: 0xAD=1010_1101, 0x5A=0101_1010, AND=0000_1000=0x08. Nonzero! So if RD15 uses 0xDEADBEEF, mask 0x005A0FA0 would trigger and be caught. So I must read the actual values.
+
+  - D_OP1's value: "want S1" per the brief ("D_OP1 (read with opcode1=1, want S1)"). OK S1.
+  - D_OP2's want: not stated; presumably S2 (inten currently holds S2). Need to check.
+  - ANCHOR_M1 read value: inten = bit 28. Also ANCHOR might read inten at other points? "read inten while isrc != 0 (ANCHOR_M1)". 
+  - LNC rows: LNC_SUB r3<-S1.
+  - E_UNKNOWN: opcode1=3, crn=9, crm=2 — dies with message. Under my value-mask mutant, E_UNKNOWN still dies at unknown: label — unaffected. Good.
+  - INTEN_WRITE_PRESERVES_ISTEER: isteer<-0, inten<-S1, read isteer (crn 4) want 0. Does it read inten? "read isteer, want 0" — it reads crn=4, not inten. The inten read isn't performed, so value mutant unaffected. But wait — inten<-S1 write: under value-mask mutant placed in the read arm only, write arm unaffected. Good.
+
+  So the candidate survivor: in the `case 0: if (l_bit) {` arm, after `cpu->cd.arm.r[rd] = cpu->cd.arm.i80321_inten;`, add `if (cpu->cd.arm.i80321_inten & 0x005A0FA0) { fatal("TODO: XScale read from inten?\n"); exit(1); }` — survives all 29 rows PROVIDED no row reads inten with any of those bits set. Must verify against the probe: values read are {0, S1, S2, bit28}. And RD15_SURVIVE's value.
+
+  Also the `rd == 0` candidate: need the list of destination registers across all rows: D arm: r9, r4, r5, r6, r10; LNC: r3 (and X4_NOP destination? "a NOP destination check (X4_NOP)" — that's a different instruction, probably not coproc); RD15: r15; D_OP1: ?; ANCHOR_M1: ?; SIB_READ: ? (reads crn4 into some reg). If r0 never used as coproc destination, `if (rd == 0) {fatal;exit}` survives. Must check D_OP1 and ANCHOR register choices. The author explicitly asks to check or refute "exit only when rd == 0, or rd is some register no row reads into."
+
+  And `isteer != 0`: INTEN_WRITE_PRESERVES_ISTEER sets isteer to 0 and never nonzero before an inten read. SIB_WRITE sets isteer nonzero but that's a crn-4 write that dies by design (session ends). Does any session write isteer != 0 and then successfully read inten? If not, `if (cpu->cd.arm.i80321_isteer != 0) {fatal;exit}` in the inten read arm survives. Need to check whether any row sets isteer nonzero then reads inten in the same session. SIB_WRITE: crn-4 non-zero write still dies — that's the retained kill (isteer write with nonzero → fatal+exit by the original code). So after SIB_WRITE the emulator is dead; no subsequent inten read. In D arm, isteer never written. In ANCHOR, isteer never written (I think). So `isteer != 0` predicate is constant 0 in every live session → survivor. Unless... hmm, wait: does the interrupt controller or anything else set isteer? On reset it's 0. The machine might not touch it. So yes, survivor — but is it clause (d)? It reintroduces the exit behavior under a predicate on state. Yes. It's a "disclosure" class mutant (body never reads isteer) — the author asks to classify each as floor cell vs clause-(e) disclosure.
+
+  Also opcode2==2..7 style mutants survive (only 0 and 1 pinned). opcode1: D_OP1 pins opcode1=1; rows otherwise opcode1=0 presumably. So `opcode1==2` mutant survives. The CONTRACT already discloses this ("ONE nonzero value of each"). Question 3 asks which CONTRACT statement is false or overclaims. The disclosure is honest about that. But maybe the contract overclaims elsewhere — e.g., "Designed to catch, and each MEASURED in kill table 2" — the listed mutants were measured. The NOT COVERED list mentions value bits? No! It does NOT disclose the value-bit hole (inten bits beyond S1|S2|bit28 unpinned) nor the rd-not-0 hole nor isteer-nonzero hole. NOT COVERED discloses: opcode1/opcode2 one-value pinning; r15 data/flag semantics; SIB_READ survival-only; interrupt-controller behavior beyond the one path. So the CONTRACT's claim "Designed to catch ... the removed fatal()+exit(1) reinstated verbatim (HEAD 12/29); reinstated under a different predicate — isrc != 0 (M1), opcode1 != 0 (M_OP1), opcode2 != 0 (M_OPCODE2), rd == 15 (M_RD15), or after the fourth read (M_NREAD)" — this reads as if the different-predicate space were covered by those five, but the actual kill table only covers predicates that are TRUE under the test values/rows. The contract doesn't claim completeness explicitly though... "Designed to catch, and each MEASURED" — it enumerates what was measured. The overclaim might be in the disposition or in "each MEASURED in kill table 2" — fine. Question 3: "Which statement in the CONTRACT above is false or overclaims?" Candidate answer: the implied coverage of "reinstated under a different predicate" is not exhaustive — the five measured predicates are all value-true under the suite's data, but predicates that are false-on-suite-data (unpinned inten bits, rd==0, isteer!=0, opcode2∈{2..7}) are neither measured nor disclosed in NOT COVERED. The NOT COVERED paragraph discloses the opcode one-value pinning but omits the parallel one-/few-value pinning of inten bits, rd values, and isteer. That's the overclaim-by-omission. Hmm, but is any statement strictly false? Let me think after reading the probe.
+
+  Also P2_VACUITY: "every destination held a poison DIFFERENT from its want before its read" — guards against vacuous value rows. But it only ensures the destination differs before; doesn't pin all bits.
+
+  Question 2: "Does any row's named channel fail to vary under its named mutant (vacuous by construction)?" Need to check each mutant-row pair: e.g., M_NREAD "exit on 5th read" — D arm has how many inten reads? D_RESET, D_S1, D_ZERO, D_S2, D_OP2 = 5 reads. Exit on 5th read → kills D_OP2 (the 5th), so D_SURVIVE fails. OK. But wait — the static count counts all reads of inten? or all coproc-6 reads? "static count, exit on 5th read". D_TRR0 is a trr0 read (crm=1) — if the counter is in the inten read arm only, then trr0 reads don't count. The failing rows were D_SURVIVE (D_OP2, D_MARKER) — consistent with exit on the 5th inten read = D_OP2. Fine.
+
+  Vacuity candidates: M_RD15 (rd==15) caught by RD15_SURVIVE only — the channel varies (rd=15 vs others). M_CRM caught by D_CRM1_TMR0 — tmr0 read returns inten; row wants 0x5A5A0000, gets S1 → fail. Varies. M_ISTEER_WR caught by INTEN_WRITE_PRESERVES_ISTEER — write also stores isteer; row reads isteer want 0, gets S1 → fail. Varies. M5 (read loads isteer): caught by INTEN_WRITE_PRESERVES_ISTEER (isteer<-0, inten<-S1, read isteer → under M5... wait M5 makes the INTEN READ load isteer; INTEN_WRITE_PRESERVES_ISTEER reads isteer directly (crn4), not via inten read. Hmm — how does M5 fail INTEN_WRITE_PRESERVES_ISTEER? Under M5, inten reads load isteer. INTEN_WRITE_PRESERVES_ISTEER: isteer<-0; inten<-S1; read isteer want 0 — that reads crn4 which returns isteer=0 regardless of M5. Hmm, that wouldn't fail... unless the row also reads inten and checks S1. The row name says "inten write preserves isteer" — maybe the row is: isteer<-0, inten<-S1, read inten (want S1 → under M5 loads isteer=0 → fail) and read isteer (want 0 → under M_ISTEER_WR fails). The brief says INTEN_WRITE_PRESERVES_ISTEER fails under both M5 and M_ISTEER_WR. For M5 to fail it, the row must include an inten read with want S1. OK so the row likely checks both. Fine — need to read the probe to confirm.
+
+  ANCHOR_EXC fails under M5 and M1? M1: exit when isrc != 0 after load — ANCHOR_M1 read happens while isrc!=0 → dies → ANCHOR_M1 fails; ANCHOR_CONTRAST fails?? Under M1, ANCHOR_CONTRAST (inten=0, spin, never reach 0x18): the read with isrc... in contrast leg, UART irq 28 pending so isrc != 0, inten=0; a read of inten would exit — but does the contrast leg read inten? Hmm, table says M1 fails ANCHOR_M1, ANCHOR_CONTRAST (ANCHOR_EXC). The parenthetical (ANCHOR_EXC) might mean BLOCKED — ANCHOR_EXC blocked because... M1 kills the read in ANCHOR_M1, session dies before ANCHOR_EXC? If ANCHOR is one session: inten<-bit28; UART asserts irq28 (ANCHOR_ISRC); read inten (ANCHOR_M1); unmask CPSR.I, spin (ANCHOR_EXC). Under M1, ANCHOR_M1 read exits → ANCHOR_EXC BLOCKED. And ANCHOR_CONTRAST is a separate session: inten=0, spin, 0x18 never reached. Under M1... why would ANCHOR_CONTRAST fail? If contrast leg also reads inten while isrc!=0 → exit → the row "spins and 0x18 never reached" — if the emulator exits, 0x18 is never reached → row would PASS (0x18 never reached). Unless the row requires survival to a marker/timeout, and exit counts as fail. Hmm, or the contrast leg expects the spin to continue for N cycles without 0x18; process death = fail. Plausible. Whatever — measured, not my job to re-derive, but for vacuity check (Q2) I might note anything suspicious.
+
+  Actually wait, Q2 asks: does any row's named channel fail to vary under its named mutant? I.e., is any kill vacuous — the row fails for a reason other than the named channel. E.g., D_SURVIVE fails under M_OPCODE2 because D_OP2 exits — the channel (opcode2!=0) does vary (D_OP2 has opcode2=1, others 0). Fine. M_NREAD: exit on 5th read — channel varies by count. Fine.
+
+  Potential vacuous: M_CRM "tmr0 read returns inten" caught only by D_CRM1_TMR0. The row: tmr0<-0x5A5A0000, inten<-S1, read crm=1/crn=0 want 0x5A5A0000. Under M_CRM, tmr0 read returns inten=S1 → 0xA500005A ≠ 0x5A5A0000 → fail. Channel varies (tmr0 vs inten). Good.
+
+  But hmm, one more subtle vacuity: under M5 (read loads isteer), why does ANCHOR_EXC fail? ANCHOR: inten<-bit28; isteer=0; read inten → under M5 loads isteer=0 into rd — doesn't die. ANCHOR_M1 just reads and... want bit28? If ANCHOR_M1 checks the read value == 0x10000000, M5 would fail ANCHOR_M1, not ANCHOR_EXC. Table says M5 fails INTEN_WRITE_PRESERVES_ISTEER, ANCHOR_EXC. So ANCHOR_M1 passes under M5 → ANCHOR_M1 must not check the value (survival only?) or... hmm. And ANCHOR_EXC fails: under M5, maybe the OS/driver reads inten during IRQ handling and gets isteer=0, so it masks nothing / the handler behaves differently and never reaches 0x18? Or the spin loop reads inten to ACK? Honestly the ANCHOR rows run a real guest (OpenBSD?) — "the UART asserts irq 28" — free-running guest. Under M5, when the guest reads inten it gets isteer=0, maybe the guest then doesn't handle the interrupt and 0x18... no wait, 0x18 is the hardware vector, reached regardless of guest reads. Unless reaching 0x18 requires CPSR.I unmasked which the guest does based on inten value... This is measured data; I shouldn't re-derive, but for Q2 (vacuity) I could flag that ANCHOR_EXC failing under M5 is mediated by guest behavior, not by a direct assertion — not vacuous per se.
+
+  Let me now plan the actual work:
+
+  1. Read `GXEMUL-SEC/src/cpus/cpu_arm_coproc.c` (the function, ~lines 280-420) to confirm the post-fix source matches the brief, check for anything the brief omitted (e.g., other exits, the tcr0/tcr1 semantics).
+  2. Read `regress/xscale_inten_probe.py` fully — enumerate all 29 rows, every destination register, every inten value read, opcodes used.
+  3. Then enumerate candidate (d) mutants and check each against the rows:
+     a. Value-bit mask mutant: needs the full set of inten values read across rows. If values ⊆ {0, S1, S2, 0x10000000}, then mask = ~(S1|S2|0x10000000) & 0xFFFFFFFF = 0x005A0FA0 survives (provided RD15 value etc. checked).
+     b. rd==0 (or any unused rd): need full destination list.
+     c. isteer != 0: need to confirm no session sets isteer nonzero before an inten read.
+     d. opcode2 == v for v ∉ {0,1}: survives; disclosed in CONTRACT NOT COVERED (one nonzero value pinned). Same opcode1 == v for v ∉ {0,1}.
+     e. Others: exit on nth read for n > 5? D arm has 5 inten reads; LNC has 1; other sessions have 1 each. A mutant "exit on 6th read" (static count) — D arm has exactly 5 reads (D_RESET, D_S1, D_ZERO, D_S2, D_OP2). So exit on 6th read never fires in any session (each session is fresh, static count per process). M_NREAD tested 5th. 6th+ survives! Is that disclosed? CONTRACT says "after the fourth read (M_NREAD)" — hmm, "after the fourth read" = exit on 5th? M_NREAD caught by D_SURVIVE. A mutant exit-on-6th-read survives all rows since max reads in any session is 5. That's another survivor — same class as M_NREAD but different threshold. Wait, but is that "re-introducing the removed behaviour under a different predicate"? Yes — count predicate. And it's NOT disclosed in NOT COVERED. Nice catch. But careful: does D arm do exactly 5 inten reads? D_RESET, D_S1, D_ZERO, D_S2, D_OP2 — yes 5. D_TRR0 is a trr0 read (crm=1) — if the counter is per-read-of-inten-arm, then 5. If the counter counts all coproc-6 MRCs, D_TRR0 + 5 = 6... The M_NREAD measured leg caught D_SURVIVE with (D_OP2, D_MARKER) failing, meaning the 5th inten read = D_OP2 died. If counter counted all cp6 reads, the 5th would be D_S2 (TRR0, RESET, S1, ZERO, S2) and D_S2 would fail... but the table says (D_OP2, D_MARKER) — D_OP2 is the one that died, so counter counts inten reads only, and D_OP2 is #5. So exit-on-6th-inten-read survives. Unless single-step D arm... D_TRR0 mrc trr0 is a read of crm=1 — counter in case 0/crn 0 arm only. Yes.
+
+     f. Predicate on `cpu->cd.arm.r[rd]` post-load — equivalent to inten value bits.
+     g. Predicate combining: e.g., exit if inten == 0? D_RESET and D_ZERO read 0 → caught. Exit if inten != 0? caught by D_S1. Exit if inten & 1? S1=0x...5A bit0=0; S2=0x...0D bit0=1 → caught by D_S2. bit1? S1 0x5A bit1=1 → caught. So low bits pinned. High bits: bit31 S1 has it. The unpinned mask 0x005A0FA0 stands.
+     h. Predicate on rd == PC (15) → M_RD15 measured, caught. rd==14 (LR)? Is r14 ever a destination? Probably not. Survivor if no row uses r14. Need the destination list.
+     i. Predicate on opcode1/opcode2 nonzero with inequality — measured/caught. Equality with unpinned value — survives, disclosed.
+     j. Predicate on crm/crn — constant within the arm (crm==0, crn==0 dominates), so any predicate referencing crm/crn is constant true or false there; false ones are pure dead-code mutants (e.g., `if (crn == 4) exit` inside the crn==0 arm) — that's an "equivalent mutant" trivially, not interesting; clause (d) predicates drawn from dominating set... The brief says enumerate DEPENDS-ON: (1) predicates dominating the edited lines up to function boundary; (2) operand swaps from fields the body reads. A dead predicate like crn==4 inside crn==0 arm is an equivalent mutant (unreachable) — arguably not a real survivor since it can never trigger for any input. The interesting survivors are predicates satisfiable by real inputs but not by the suite.
+
+  So likely verdict: SURVIVOR(S) exist. The strongest, cleanest one: `if (cpu->cd.arm.i80321_inten & 0x005A0FA0) { fatal(...); exit(1); }` — provided the probe only ever reads values 0, S1, S2, 0x10000000. Also rd==0/unused-rd survivor, isteer!=0 survivor, read-count≥6 survivor, opcode1/2 unpinned-value survivor (disclosed).
+
+  The author's question: "Name any such mutant that leaves all 29 rows green, and say which row you expected to catch it and why it cannot." For the value-bit mutant: the rows I'd expect to catch it: D_S1/D_S2 (value rows with P2_VACUITY poison) — cannot because S1|S2 ≠ 0xFFFFFFFF; the union 0xFFA5F05F leaves 0x005A0FA0 unpinned. ANCHOR pins bit 28 only. No row writes inten with any of those bits. Expected-catcher: P2_VACUITY? No — vacuity only checks poison≠want before read.
+
+  For rd==0: expected catcher — the D arm destinations r4,r5,r6,r9,r10 + r3 + r15 + D_OP1's reg + ANCHOR's reg. If r0 never used → survivor. The author asked specifically to classify: rd==0 is a floor cell (the body's lvalue r[rd] — the body reads/writes rd as index; a test could pin it by reading into r0).
+
+  For isteer!=0: clause-(e)-ish disclosure — the inten read body never reads isteer, so it's a cross-cell predicate; no row sets isteer≠0 in a live session (SIB_WRITE dies by design at the write).
+
+  Hmm wait, one caution on the isteer mutant: INTEN_WRITE_PRESERVES_ISTEER writes isteer<-0 explicitly. What about reset value of isteer — 0. ANCHOR leg — does the guest write isteer? If the guest (OpenBSD? or a custom stub?) writes isteer nonzero, the mutant would fire there. ANCHOR is "free-running" — a guest stub that sets inten bit 28, waits for UART irq. Probably doesn't touch isteer. Need to check the probe source.
+
+  Also — the isrc read arm (crn 8) — not relevant.
+
+  Also consider: predicate on l_bit? Inside `if (l_bit)` block, l_bit is constant true. A mutant moving exit to the write arm (`else` branch): `else { inten = r[rd]; fatal; exit; }` — that changes write behavior; rows that write inten: D_S1 (inten<-S1 via MCR), D_ZERO, D_S2, LNC_SUB (inten<-S1), D_OP1, INTEN_WRITE_PRESERVES_ISTEER (inten<-S1), D_CRM1_TMR0 (inten<-S1), ANCHOR (inten<-bit28). All these write inten first → all would die → caught. So no.
+
+  Predicate on opcode2 in the write? The measured M_OPCODE2 was presumably in the read path... "M_OPCODE2 `if (opcode2 != 0)` exit" caught by D_SURVIVE (D_OP2). OK.
+
+  Another subtle one: exit unless rd==15? No wait, that's caught by everything. Exit if rd != 15 is the inverse — caught. 
+
+  What about predicate `if (cpu->cd.arm.i80321_isrc != 0 && (inten & isrc) == 0)`... overcomplicated. Keep to clean survivors.
+
+  Also the "fourth read" wording: CONTRACT header says "after the fourth read (M_NREAD)" while kill table says "exit on 5th read" — same thing (exit when count reaches 5 = after 4 successful). Fine.
+
+  Now Q3 — which CONTRACT statement is false/overclaims. Candidates:
+  - "Designed to catch, and each MEASURED in kill table 2: ... reinstated under a different predicate — isrc != 0 (M1), opcode1 != 0 (M_OP1), opcode2 != 0 (M_OPCODE2), rd == 15 (M_RD15), or after the fourth read (M_NREAD)" — this list implies the alternate-predicate space is these five; but all five are true-under-suite predicates. The false-under-suite predicate class (unpinned inten bits, unused rd values, isteer≠0, read-count > 5, opcode values ∉ {0,1}) is unmeasured and, except for the opcode one, undisclosed. If the CONTRACT is read as claiming the detector was designed to catch reinstatement under different predicates generally, it overclaims. The NOT COVERED paragraph discloses the opcode1/opcode2 single-value pinning but is silent on the inten-value-bit pinning (S1/S2 union ≠ all-ones), the rd-value coverage (only 7-9 of 16 registers), the isteer-nonzero state, and the read-count threshold above 5. That's the overclaim — by omission in NOT COVERED.
+
+  Also check: "P2_VACUITY (every destination held a poison DIFFERENT from its want before its read)" — is that true for D_RESET? want 0; poison must be ≠ 0. Fine.
+
+  And HEAD 12/29 — measured.
+
+  Q2 — vacuous-by-construction rows: I need to look for a row whose named channel doesn't vary under its mutant. Candidates to check in the probe:
+  - LNC_COND: conditional mrceq with failing condition leaves r3's poison — under which mutant? It's not a mutant-catcher row; it's a correctness row.
+  - D_OP1 vs M_OP1: channel varies (opcode1=1 vs 0). But note M_OP1 caught ONLY by D_OP1 — single row. If D_OP1's opcode1 were actually 0 by construction bug, it'd be vacuous — need to verify the probe really emits opcode1=1. Read the source.
+  - M_CRM vs D_CRM1_TMR0: verify the row writes tmr0 0x5A5A0000 AND inten S1 and reads crm1/crn0 — if it forgot to write inten, under M_CRM it'd read inten=0 ≠ 0x5A5A0000 still fail — channel still varies? The failure would be vacuous if inten==0x5A5A0000 too... no. Eh.
+  - The parenthesized BLOCKED rows (ANCHOR_EXC under M1) — a blocked row isn't a kill; fine.
+
+  Actually for Q2, a real candidate: does D_OP2's read actually differ in value channel from D_S2? D_OP2 pins opcode2, value same S2. Under M_OPCODE2 the channel varies. Fine.
+
+  Another possible vacuity: X4_NOP "a NOP destination check" — what's it for? Probably ensures some unrelated NOP doesn't corrupt. Not a mutant catcher.
+
+  Let me also check: does any row read inten into r0? The author hints rd==0. Let me enumerate from the probe: D arm: r9, r4, r5, r6, r10. LNC: r3. RD15: r15. D_OP1: ? ANCHOR_M1: ? SIB_READ: ? (reads crn4). E_UNKNOWN: n/a. INTEN_WRITE_PRESERVES_ISTEER: reads isteer into ? and maybe inten into ?. D_CRM1_TMR0: reads tmr0 into ?. So candidates for unused rd: r0, r1, r2, r7, r8, r11, r12, r14 likely unused; r13 (sp) unlikely. So `if (rd == 0)` almost certainly survives — but must verify D_OP1 and ANCHOR don't use r0. The guest-driven ANCHOR leg reads inten via the guest OS... if ANCHOR runs actual OpenBSD guest code, the guest's choice of register is whatever the kernel uses — the probe author may not control it. Hmm, ANCHOR is "free-running" with "the UART asserts irq 28" — sounds like a guest program. The read in ANCHOR_M1 might be by guest code with unknown rd. But then the predicate rd==0 might fire in ANCHOR if the guest uses r0! I need to read the probe to see how ANCHOR is implemented — likely a custom guest stub (assembly) where the author chose registers.
+
+  OK. Time to actually read files. Also confirm the in-tree diff is actually present (uncommitted) — read the current source around line 309.
+
+  Also for Q4 (file-reading seats only — I can read files): Is ACCEPT right? The read returns the stored inten; hardware-wise, i80321 ICU: INTEN register is read/write (interrupt enable). Reading it back is meaningful. The isteer read sibling is quiet. DC21285 precedent: ACCEPT for a correctly-answered read. So ACCEPT is right. The write arm stores the same field — consistent. Also the interrupt controller consumes i80321_inten. So ACCEPT yes.
+
+  Plan of action:
+  1. Read the diff/source: `GXEMUL-SEC/src/cpus/cpu_arm_coproc.c` lines ~280-420.
+  2. Read `GXEMUL-SEC/regress/xscale_inten_probe.py` entirely.
+  3. Possibly check git status to confirm uncommitted.
+  4. Maybe check how the probe drives values/registers; enumerate rows.
+  5. Compose the verdict.
+
+  The user says building/running a single detector or mutant in own temp dir is fine and encouraged, but response budget matters. I think careful source reading suffices to name survivors with exact edits; running a mutant build to prove green would be gold-plating. Given "response budget" hints, I'll do the source analysis. Actually — proving at least one survivor empirically would be strong. But building gxemul takes minutes; the panel rule says it's fine in own temp dir. Let me first read and see. The verdict requires naming the exact edit and why rows can't catch it — source analysis gives that. I'll skip the build unless quick. Let me read files first.
+
+  Let me start.
+
+• I'll read the actual fix site and the 29-row detector source before verdictizing anything.README.md
+__pycache__
+absorb_census.py
+alpha_dummy.bin
+alpha_harness_probe.py
+alpha_pfnoffset_probe.py
+alpha_swpctx_v0_probe.py
+alpha_tbi_probe.py
+arcbios_shift_probe.py
+arm_bdt_probe.py
+arm_bfx_stub.bin
+arm_bfx_width_probe.py
+arm_endian_probe.py
+arm_flags_probe.py
+arm_fold_marker_probe.py
+arm_idle_probe.py
+arm_memcpy_probe.py
+arm_strlen_probe.py
+arm_writeback_probe.py
+artifacts
+asic_badaddr_probe.py
+build_asan.sh
+diag_div_sweep.py
+diff_autodev_gen.sh
+diff_dis_sync_ovl
+diff_dis_sync_ovl.map
+diff_diskimage_geom.c
+diff_diskimage_io.c
+diff_diskimage_parse.c
+diff_diskimage_sync.c
+diff_fbpending_bound.c
+diff_footbridge.c
+diff_ieee_store.c
+diff_m8820x.c
+diff_m8invread.c
+diff_memory_rw.c
+diff_rtc_range.c
+diff_sh4_tmu.c
+diff_timer.c
+diff_wdc_identify.c
+drive_guest.py
+fbpending_drain_probe.py
+fbpending_witness.py
+footbridge_sites_probe.py
+gate_ab.sh
+gate_arm.sh
+gate_asan_sweep.sh
+gate_build.sh
+gate_crossfamily.sh
+gate_hygiene.sh
+ M regress/gate_arm.sh
+ M regress/ppc_rldicl_probe.py
+ M src/cpus/cpu_arm_coproc.c
+ M src/cpus/cpu_ppc_instr.c
+ M tools/BRIEF_TEMPLATE.md
+ M tools/CLAUDE.md
+ M tools/PIPELINE.md
+ M tools/panel.sh
+ M tools/pipeline/fable_queue.md
+?? _scratchpad/
+?? regress/alpha_dummy.bin
+?? regress/arm_bfx_stub.bin
+?? regress/artifacts/b120/
+?? regress/artifacts/fbdisabled/
+?? regress/artifacts/gdromdefault_461/
+?? regress/artifacts/heldqueue/
+?? regress/artifacts/hlen/
+?? regress/artifacts/landiskaux/codex_fixdesign_20260911.err
+?? regress/artifacts/landiskaux/codex_fixdesign_20260911.txt
+?? regress/artifacts/lcaisaphys/
+
+
+• Source confirmed: the fix is present in-tree (fatal+exit removed from the crn=0 read arm, lines 310-314). `git status` shows `M src/cpus/cpu_arm_coproc.c` — uncommitted. Good.
+
+  Now read the detector: `regress/xscale_inten_probe.py`. Let me find it and read it fully.Now I have the full probe. Let me enumerate the facts precisely.
+
+  **Every inten read (crm=0, crn=0, l=1) in the suite, with destination rd and expected value:**
+
+  Arm D (single session, single-stepped):
+  1. D_RESET: `mrc 6,0,r9,cr0,cr0,0` (0xEE109610) — rd=9, opcode1=0, opcode2=0, want 0 (inten at reset = 0).
+  2. D_S1: `mrc 6,0,r4,cr0,cr0,0` (0xEE104610) — rd=4, want S1=0xA500005A (after inten<-S1).
+  3. D_ZERO: `mrc 6,0,r5,cr0,cr0,0` (0xEE105610) — rd=5, want 0.
+  4. D_S2: `mrc 6,0,r6,cr0,cr0,0` (0xEE106610) — rd=6, want S2=0x5AA5F00D.
+  5. D_OP2: `mrc 6,0,r10,cr0,cr0,1` (0xEE10A630) — rd=10, opcode2=1, want S2.
+
+  Let me decode 0xEE10A630 to verify: MRC encoding: cond=1110, 1110, opcode1[23:21], L=1[20], crn[19:16], rd[15:12], cpnum[11:8]=0110, opcode2[7:5], 1[4], crm[3:0].
+  0xEE10A630 = 1110 1110 0001 0000 1010 0110 0011 0000.
+  - bits[27:25] = 110? Let me be careful: 0xEE10A630 = binary: E=1110, E=1110, 1=0001, 0=0000, A=1010, 6=0110, 3=0011, 0=0000.
+  - cond [31:28] = 1110
+  - [27:24] = 1110 → bits 27:25=111? MRC is 1110 in [27:24] with bit 24... Actually coprocessor register transfer: [27:24]=1110, bit[20]=L. opcode1 = bits [23:21]. Here byte 2 is 0x10 = 0001_0000: bits[23:16] = 0001_0000 → opcode1 = bits[23:21] = 000, bit[20] (L) = 1, crn[19:16] = 0000. 
+  - rd = bits[15:12] = 0xA = 10. cpnum bits[11:8] = 0110 = 6. opcode2 = bits[7:5]: low byte 0x30 = 0011_0000 → bits[7:5] = 001 = 1, bit[4]=1, crm[3:0] = 0000. 
+
+  So yes: opcode1=0, L=1, crn=0, rd=10, cp=6, opcode2=1, crm=0. Comment "mrc 6,0,r10,cr0,cr0,1" matches.
+
+  Arm LNC: 
+  - LNC_SUB: `mrc 6,0,r3,cr0,cr0,0` (0xEE103610) — rd=3, want S1. inten<-S1 done by mcr at start.
+  - LNC_COND: `mrceq 6,0,r3,cr0,cr0,0` (0x0E103610) — cond=EQ false; the instruction never executes → rd=3 never reaches the handler. Poison 0xDEADBE03 must stay. Note: this row would NOT catch a mutant, it checks cond handling.
+
+  Arm RD15: `mrc 6,0,r15,cr0,cr0,0` (0xEE10F610) — rd=15, inten=S1. Survival-only (marker r0=0x5A). Note: after `mrc ... r15`, in gxemul the write to r15 = write to pc? Whatever — row only checks r0 marker after stepping the marker instruction. Value in r15 is S1=0xA500005A but the row doesn't check it.
+
+  Arm D_OP1 (fresh session): words = (0xEE001610, 0xEE307610, NOP): mcr inten<-S1 (r1); `mrc` 0xEE307610: decode: E E 3 0 7 6 1 0 → bits[23:21] = opcode1: byte2 = 0x30 = 0011_0000: bits[23:21] = 001 = 1, L=bit20=1, crn[19:16]=0000. rd = 0x7 = 7. cp=6, opcode2: low byte 0x10 = 0001_0000 → bits[7:5]=000, bit4=1, crm=0. So `mrc 6,1,r7,cr0,cr0,0` — opcode1=1, rd=7, want S1. Destination r7 (poison 0xDEADBE07).
+
+  INTEN_WRITE_PRESERVES_ISTEER (fresh): words = (0xEE040610, 0xEE001610, 0xEE147610, NOP):
+  - 0xEE040610: mcr: L=0, crn=0, rd=0? decode: byte2 0x04 = 0000_0100: bits[23:21]=000, L=bit20=0, crn[19:16]=0100=4. rd = 0x0 = 0. cp=6, opcode2=0 (low byte 0x10: bits[7:5]=000, bit4=1), crm=0. So `mcr 6,0,r0,cr4,cr0,0` — isteer <- r0 = 0 (r0=0x00000000 in setup). 
+  - 0xEE001610: mcr inten <- r1 = S1.
+  - 0xEE147610: mrc: byte2 0x14: L=1, crn=4. rd=7. `mrc 6,0,r7,cr4,cr0,0` — read isteer into r7, want 0.
+  So this row never reads inten. The third word steps: `for _ in words[:-2]` steps first 2 words (mcr isteer, mcr inten), then checks r7 poison, then steps the third (mrc isteer). So under M5 (inten read loads isteer), this row would NOT fail... but kill table says M5 fails INTEN_WRITE_PRESERVES_ISTEER! Hmm wait. Under M5, the inten READ loads isteer. This row has no inten read... 
+
+  Hold on, let me re-check. Maybe I misread which word is stepped. words[:-2] for 4-word tuple = first 2 words stepped. Then `before = r7`. Then step the third word. The third word 0xEE147610 is `mrc 6,0,r7,cr4,cr0,0` (crn=4 read → loads isteer=0 → r7=0, want 0 → pass even under M5?).
+
+  Under M5, does anything in this row break? The mcr inten<-S1 is a write — M5 changes read behavior only. Hmm, so how did M5 fail this row in the measured table?
+
+  Wait — maybe M5 was implemented as "the inten read arm loads isteer" AND the mutant changed the store side too? Or maybe M5 changed case 0 read to `r[rd] = isteer`, and also... the row wants r7 == 0 after reading isteer. Under M5 inten read loads isteer; this row reads isteer (crn=4) → still loads isteer=0 → r7=0 → pass. So the measured table says M5 killed INTEN_WRITE_PRESERVES_ISTEER — contradiction with my reading unless the mutant's implementation differed.
+
+  Hmm, wait. Let me re-read the kill table line: "M5 read loads isteer | 27/29 | INTEN_WRITE_PRESERVES_ISTEER, ANCHOR_EXC". Maybe M5 was implemented as swapping the two read arms: case 0 read loads isteer AND case 4 read loads inten (a full swap)? If case 4 read loaded inten=S1, then this row's read of crn=4 would give r7 = S1 ≠ 0 → FAIL. That's consistent! So M5 as built probably swapped both arms, or changed case-4 to load inten. The row names "M5: the read loading another register (M5: isteer)". A symmetric swap is the natural implementation. So under M5, INTEN_WRITE_PRESERVES_ISTEER fails via the crn-4 read returning S1.
+
+  OK so INTEN_WRITE_PRESERVES_ISTEER's actual assertion: isteer read after isteer<-0 and inten<-S1 returns 0 — catches mutants where inten write stores isteer (M_ISTEER_WR: write also stores isteer → isteer=S1 → read gives S1≠0 → FAIL — consistent) and mutants where crn-4 read returns inten.
+
+  D_CRM1_TMR0 (fresh): words = (0xEE002611, 0xEE001610, 0xEE107611, NOP):
+  - 0xEE002611: mcr, byte2 0x26 = 0010_0110: L=0, crn[19:16]=0010? wait: 0x26 = 0010_0110. bits[23:16] = 0x26 → opcode1 = bits[23:21] = 001? Hmm wait, that gives opcode1=1. Let me redo: bits[23:21] are the top 3 bits of byte2. 0x26 = 0010_0110 binary. bit23=0, bit22=0, bit21=1 → opcode1 = 001 = 1? That doesn't match the comment "mcr p6,0,r2,c0,c1,0".
+
+  Hmm wait, I think I have the bit layout wrong. Let me recheck with a known one: 0xEE001610 = "mcr 6,0,r1,cr0,cr0,0". Binary: 1110 1110 0000 0000 0001 0110 0001 0000. MCR layout: [31:28]cond=1110, [27:25]=110, [24]=0, [23:21]=opcode1, [20]=L, [19:16]=crn, [15:12]=rd, [11:8]=cp, [7:5]=opcode2, [4]=1, [3:0]=crm.
+
+  [27:24] for 0xEE...: second nibble E=1110 → bits[27:24]=1110. So [27:25]=111, bit24=0. OK so MCR/MRC have [27:24]=1110 with bit 24 part of it; opcode1 = bits[23:21].
+
+  0xEE001610: byte2 = 0x00 → opcode1=000, L=0, crn=0000. rd nibble = 0x1 = 1. cp = 0x6. low byte 0x10: opcode2=000, bit4=1, crm=0000. mcr p6, opcode1=0, r1, crn=0, crm=0, opcode2=0. Matches "mcr 6,0,r1,cr0,cr0,0".
+
+  0xEE002611: byte2 = 0x00 → opcode1=0, L=0, crn=0. rd = 0x2 = 2. cp=6. low byte 0x11 = 0001_0001: opcode2 = bits[7:5] = 000, bit4=1, crm = 0001 = 1. So mcr p6,0,r2,crn0,crm1,op2=0 → tmr0 <- r2 = 0x5A5A0000. Comment says "mcr p6,0,r2,c0,c1,0". Match.
+
+  0xEE107611: byte2 = 0x10 = 0001_0000: opcode1=000, L=bit20=1, crn=0000. rd = 0x7. cp=6. low byte 0x11: opcode2=0, bit4=1, crm=1. mrc p6,0,r7,c0,c1,0 → tmr0 read into r7, want 0x5A5A0000. Match.
+
+  So D_CRM1_TMR0: tmr0<-0x5A5A0000, inten<-S1, read tmr0 want 0x5A5A0000. Under M_CRM (tmr0 read returns inten) → S1 → FAIL. Consistent.
+
+  E_UNKNOWN: 0xee79b6b2. Decode: cond=1110, [27:24]=1110, byte2=0x79 = 0111_1001: opcode1 = bits[23:21] = 011 = 3, L = bit20 = 1, crn[19:16] = 1001 = 9. rd = 0xB = 11. cp = 6. low byte 0xB2 = 1011_0010: opcode2 = bits[7:5] = 101 = 5, bit4 = 1, crm = 0010 = 2. So opcode1=3, opcode2=5, crn=9, crm=2, rd=11, l=1 → matches the expected message. Note: E_UNKNOWN pins opcode1=3 and opcode2=5 reaching the unknown branch! Interesting — so a mutant `if (opcode1 == 3) exit` in the INTEN read arm... would it fire anywhere? Only rows with opcode1=3: E_UNKNOWN (already dies at unknown — but wait, would the mutant fire before reaching unknown? The mutant is in the crm=0/crn=0 arm; E_UNKNOWN has crm=2/crn=9 → goes to unknown directly, never enters the inten arm. So a mutant `opcode1==3 → exit` in the inten arm never fires in the suite (D_OP1 has opcode1=1, all others 0). Survivor — but this is the disclosed class (opcode1 pinned for ONE nonzero value = 1 in the inten arm; 3 and 5 only appear in a tuple that never reaches the arm).
+
+  S_ISRC_WR: 0xee080610: byte2=0x08=0000_1000: L=0, crn=1000=8. mcr isrc <- r0. r0 not set in S session... fresh session, r0 = ? Not initialized — register state at machine reset, likely 0. Doesn't matter; the write arm dies regardless.
+
+  SIB_READ: 0xee147610: mrc crn=4 → r7? byte2 0x14: L=1, crn=4, rd=7... wait rd nibble = 0x7? 0xee147610: nibbles E E 1 4 7 6 1 0. rd = 0x7 = 7. Hmm but the comment in probe at line 399: s_sibr sets r0=0xdeadbe00, then words at CODE: 0xee147610 (`mrc 6,0,r7,cr4,cr0,0` — read isteer into r7), then 0xe3a0005a (mov r0,#0x5a). Row checks r0 == MARKER. Survival-only. Yes.
+
+  SIB_WRITE: 0xee041610: mcr crn=4, rd=1 → isteer <- r1 = S1 ≠ 0 → dies with steering message.
+
+  ANCHOR (single session s_anc): r1=0x10000000, r2=0xfe800000 (com UART base?), r3=0x02, r4=0x08, r7=0xdeadbe07, r9=0xdeadbe09.
+  prog_anc:
+  - 0x00 NOP
+  - 0x04 mcr inten <- r1 = 0x10000000 (bit 28)
+  - 0x08 strb r3,[r2,#1] → com_ier = 2
+  - 0x0C strb r4,[r2,#4] → com_mcr = 8 → asserts irq 28
+  - 0x10 mrc 6,0,r7,cr8,cr0,0 (0xEE187610) → isrc read into r7 → want 0x10000000 (ANCHOR_ISRC)
+  - 0x14 mrc 6,0,r9,cr0,cr0,0 (0xEE109610) → inten read into r9, want 0x10000000 (ANCHOR_M1)
+  - 0x18 mrs r5,cpsr; 0x1C bic r5,#0x80; 0x20 msr cpsr_c,r5 (unmask IRQ); 0x24 b .
+
+  ANCHOR_EXC: breakpoint at 0x18 (vector), continue → pc must hit 0x18.
+  Note ANCHOR_M1 checks the VALUE r9 == 0x10000000. So under M5 (inten read loads isteer=0) r9 = 0 → ANCHOR_M1 should FAIL under M5. But the measured table says M5 fails INTEN_WRITE_PRESERVES_ISTEER and ANCHOR_EXC — NOT ANCHOR_M1! Hmm.
+
+  Wait, under M5 (symmetric swap?), the inten read at 0x14 loads isteer=0 into r9 → ANCHOR_M1 wants 0x10000000 → FAIL. But the table doesn't list ANCHOR_M1 as failing under M5. So M5 was NOT a full swap; it only changed the crn-0 read to load isteer. Then ANCHOR_M1 r9 = isteer = 0 ≠ 0x10000000 → should fail... but it's not listed. Unless... hmm, "FAILING (BLOCKED)" column: M5 27/29, failing INTEN_WRITE_PRESERVES_ISTEER, ANCHOR_EXC. That's only 2 rows for 27/29. Consistent count: 29-27=2.
+
+  But by my reading, under M5 (case-0 read loads isteer), the failing rows should include: D_S1 (want S1, got isteer=0), D_S2, D_OP2, LNC_SUB, D_OP1, RD15?? no RD15 is survival-only (value unchecked — passes), ANCHOR_M1 (want 0x10000000, got 0), INTEN_WRITE_PRESERVES_ISTEER (no—if not a swap, the isteer read still gives 0 → pass)... That would be like 6-7 failures, not 2. So M5 as measured must have been something narrower. 
+
+  Hmm wait — maybe M5 was: case 0 read loads isteer INTO THE SAME structure but... Let me reconsider: maybe M5 was implemented as `cpu->cd.arm.r[rd] = cpu->cd.arm.i80321_isteer;` — the D arm reads would all fail (D_S1 want S1 got 0)... giving 27/29? No, that gives way more failures.
+
+  Unless the kill table's "M5" only swapped the WRITE arm or something. Actually, maybe M5 = "inten write also... no. Hmm, the CONTRACT says "the read loading another register (M5: isteer)". 
+
+  Let me recount: which rows actually check the VALUE of an inten read? D_RESET(0), D_S1(S1), D_ZERO(0), D_S2(S2), D_OP2(S2), LNC_SUB(S1), D_OP1(S1), ANCHOR_M1(0x10000000), RD15 (survival only — no value). INTEN_WRITE_PRESERVES_ISTEER checks isteer read == 0 (not inten). D_CRM1_TMR0 checks tmr0 read. 
+
+  Under M5 (inten read loads isteer; isteer stays 0 in all sessions): D_RESET: want 0, got isteer=0 → PASS (vacuously!). D_S1: want S1, got 0 → FAIL. D_ZERO: want 0, got 0 → PASS (vacuous). D_S2: FAIL. D_OP2: FAIL. LNC_SUB: FAIL. D_OP1: FAIL. ANCHOR_M1: FAIL (0 ≠ 0x10000000). INTEN_WRITE_PRESERVES_ISTEER: reads crn4 → isteer → 0 → PASS. So M5 should fail {D_S1, D_S2, D_OP2, LNC_SUB, D_OP1, ANCHOR_M1} = 6 rows → 23/29, not 27/29.
+
+  The measured table says M5 → 27/29 failing only INTEN_WRITE_PRESERVES_ISTEER, ANCHOR_EXC. That implies M5 was implemented differently: probably "the inten WRITE stores into isteer instead/additionally" — no wait, that's M_ISTEER_WR.
+
+  Hmm, maybe M5 was implemented as swapping crn dispatch: case 0 ↔ case 4 (the read and write arms both swapped)? Then: inten<-S1 writes isteer instead... Let me test: under case-swap (case 0 does what case 4 did, case 4 does what case 0 did):
+  - D arm: mcr inten<-S1 (crn0 write) → now stores isteer AND since S1≠0 → fatal+exit "steering not implemented" → D dies at 0x0C → many rows fail. No.
+
+  Maybe M5: read arm `r[rd] = i80321_isteer` but ALSO isteer is... no.
+
+  Alternatively, maybe M5 was: `r[rd] = inten` replaced by `r[rd] = isrc`? No, contract says isteer.
+
+  Let me think about what mutant gives exactly {INTEN_WRITE_PRESERVES_ISTEER, ANCHOR_EXC}:
+  - INTEN_WRITE_PRESERVES_ISTEER fails → the isteer read (crn4) after isteer<-0, inten<-S1 gives non-zero, or the session dies. If M5 made the inten WRITE store isteer (write arm swapped: crn0 write → isteer), then isteer<-0 (crn4 write → stores inten? if full write swap) ... let's try full write swap only: case 0 write → isteer = r[rd] (with the steering check? if the check moved too, isteer=S1≠0 → dies. If the check stayed in case 4, then case 0 write just stores isteer=S1, no death). And case 4 write → inten = r[rd] (=0 from r0). Then INTEN_WRITE_PRESERVES_ISTEER: word1 mcr crn4 r0=0 → inten=0; word2 mcr crn0 r1=S1 → isteer=S1; word3 mrc crn4 → if read arms unchanged, crn4 read → isteer = S1 ≠ 0 → FAIL. D arm: inten<-S1 (crn0 write) → isteer=S1; read inten (crn0 read) → unchanged arm reads inten=0 (never written, since crn0 writes go to isteer now) → D_RESET want 0 got 0 PASS; D_S1 want S1 got 0 FAIL. So D_S1 fails too → not matching.
+
+  Try M5 = read-arm-only swap (case 0 read ↔ case 4 read): case 0 read → r[rd]=isteer; case 4 read → r[rd]=inten. Writes unchanged.
+  - D_RESET: read inten → isteer=0, want 0 → PASS (vacuous).
+  - D_S1: want S1, got 0 → FAIL. → 28/29 max... doesn't match.
+
+  Hmm, so none of my simple implementations give exactly {INTEN_WRITE_PRESERVES_ISTEER, ANCHOR_EXC}. What mutant fails ANCHOR_EXC but not ANCHOR_M1? ANCHOR_EXC depends on the IRQ reaching 0x18 after CPSR.I unmask; that path consumes inten (the interrupt controller asserts IRQ only if inten & isrc). ANCHOR_M1 checks r9 == 0x10000000 (the read-back). A mutant that fails EXC but not M1: one that corrupts inten AFTER the read-back, or makes the read-back correct but the stored inten wrong... E.g., M5 = "inten read loads isteer INTO r[rd] but also... no.
+
+  Wait — maybe M5 changed the WRITE arm: `i80321_inten = r[rd]` replaced by `i80321_isteer = r[rd]` (inten write stores isteer — but that's exactly what the contract calls M_ISTEER_WR, measured separately as failing only INTEN_WRITE_PRESERVES_ISTEER). Under "inten write stores isteer (instead of inten)":
+  - INTEN_WRITE_PRESERVES_ISTEER: isteer<-0 (word1, crn4 write → isteer=0), inten<-S1 (word2 → isteer=S1!), read isteer → S1 ≠ 0 → FAIL ✓.
+  - ANCHOR: inten<-0x10000000 → actually stores isteer; inten stays 0 → IRQ never asserted (controller consumes inten) → ANCHOR_ISRC: isrc read want 0x10000000... wait would isrc still assert? isrc is the pending source register — UART asserts its interrupt line; isrc bit 28 set regardless of inten. So ANCHOR_ISRC passes; ANCHOR_M1: read inten → inten=0 (never stored) → want 0x10000000 → FAIL. Hmm, that contradicts too (table lists only ANCHOR_EXC for M5, and ANCHOR_M1 passes under M5).
+
+  Unless M_ISTEER_WR = "inten write ALSO stores isteer" (both), and M5 = "inten write stores isteer INSTEAD of inten"... but contract says M5 is about the READ loading isteer.
+
+  Hmm, hold on. Maybe under M5 the read loads isteer, and ANCHOR_M1... the mrc at 0x14 loads isteer. In the ANCHOR session, isteer=0, so r9 = 0 ≠ 0x10000000 → ANCHOR_M1 FAILS. Table says otherwise. Contradiction again.
+
+  Unless the read loading isteer was implemented as `r[rd] = inten` → `r[rd] = isteer` BUT the ANCHOR_M1 read at 0x14... r9=0. FAIL. Can't avoid.
+
+  So the measured M5 row seems inconsistent with EVERY simple implementation I can construct that matches "read loads isteer" — except one: maybe the mutant was implemented as `case 0: if (l_bit) { r[rd] = isteer; } else inten = r[rd];` — no wait, that's the same.
+
+  What if M5 swapped the FIELDS in both read arms AND the isteer read arm: case 0 read → isteer, case 4 read → inten? Then:
+  - D_RESET → 0 PASS (vacuous), D_S1 FAIL... still fails D_S1. No.
+
+  What if M5 was applied only to... hmm, what if M5 was: `cpu->cd.arm.r[rd] = cpu->cd.arm.i80321_inten;` → `cpu->cd.arm.r[rd] = cpu->cd.arm.i80321_isteer = cpu->cd.arm.i80321_inten;`? Weird.
+
+  OK, let me step back. Maybe the kill table entries in the brief are just what they are (measured by the operator), and I shouldn't try to re-derive each exactly — but Q2 asks explicitly: "Does any row's named channel fail to vary under its named mutant (vacuous by construction)?" The M5 line is exactly where the arithmetic smells: by my reading of the probe, ANY mutant that makes "the inten read load isteer" must fail D_S1 (want S1, isteer=0) — the D_S1 row is value-checked and poisoned (P2_VACUITY ensures r4 ≠ S1 before; the got value isteer=0 ≠ S1). So a measured M5 of 27/29 with only INTEN_WRITE_PRESERVES_ISTEER + ANCHOR_EXC failing cannot be the mutant the CONTRACT describes ("the read loading another register (M5: isteer)"). Either the table line is mislabeled/mismeasured, or M5 was a different edit (likely the write-side swap that the contract elsewhere calls M_ISTEER_WR... but that fails ANCHOR_M1 too, as shown above).
+
+  Hmm wait, let me redo the M_ISTEER_WR analysis: "M_ISTEER_WR inten write also stores isteer | 28/29 | INTEN_WRITE_PRESERVES_ISTEER only". Under "write also stores isteer": inten<-S1 stores BOTH inten and isteer=S1. 
+  - INTEN_WRITE_PRESERVES_ISTEER: isteer<-0, inten<-S1 (→ isteer=S1 too), read isteer → S1 ≠ 0 → FAIL ✓.
+  - ANCHOR: inten<-0x10000000 → inten AND isteer = 0x10000000. isrc asserts (UART), inten read back = 0x10000000 → ANCHOR_M1 PASS ✓. IRQ: controller consumes inten & isrc → fires → EXC PASS ✓. 
+  - All D rows pass (inten stored correctly). ✓ 28/29 with only INTEN_WRITE_PRESERVES_ISTEER failing ✓. Consistent.
+
+  Now what edit gives M5 = {INTEN_WRITE_PRESERVES_ISTEER, ANCHOR_EXC}? INTEN_WRITE_PRESERVES_ISTEER fails → isteer read ≠ 0 after isteer<-0, inten<-S1 → the inten write touched isteer, OR the isteer read returns something else (inten=S1). ANCHOR_EXC fails but ANCHOR_M1 passes → inten read-back correct (0x10000000) but IRQ didn't fire → the stored inten the controller sees is wrong... but the read-back reads the same field the controller consumes (`i80321_inten`)! Unless the read-back happened BEFORE... no: order in prog_anc: mcr inten (0x04), UART poke (0x08-0x0C), isrc read (0x10), inten read (0x14) — read-back after write. If inten field holds 0x10000000 (read-back correct), the controller must see it. What breaks EXC while M1 passes? 
+
+  - The isteer read returning inten (case 4 read → inten): INTEN_WRITE_PRESERVES_ISTEER: isteer read → inten=S1 ≠ 0 → FAIL ✓. ANCHOR: doesn't touch crn4; inten path intact; EXC should PASS. ✗ (EXC listed as failing).
+  - The isrc read returning something? ANCHOR_ISRC passes per table.
+
+  What if M5 = "read loads isteer" applied to the ISRC read arm (crn8)? ANCHOR_ISRC: r7 = isteer = 0 ≠ 0x10000000 → FAIL ✗ (not listed).
+
+  Hmm, what if M5 = case 0 read loads `isteer` but the D-arm... no, D_S1 must fail. Unless the D arm sessions… wait, wait. Under M5, D arm: mcr inten<-S1 stores inten=S1 (write unchanged), mrc inten → loads isteer. In the D session, isteer=0. D_S1 want S1, got 0 → FAIL. Inescapable.
+
+  So the M5 line as inlined (27/29, failing {INTEN_WRITE_PRESERVES_ISTEER, ANCHOR_EXC}) is INCONSISTENT with the probe source for the mutant the contract names. Something's off — either the inlined table has a copy/paste error (maybe those are the results for a different mutant, e.g. "case 4 read loads inten" plus something), or the mutant built as M5 wasn't what the contract says. This is exactly the kind of thing the panel wants flagged — but I should be careful: I can check the actual artifacts! The brief says kill table 2 is at `regress/artifacts/xscaleinten/killtable2_20260912/SCORES.txt`, and maybe the mutant diffs are archived there too. Let me look.
+
+  Also Q2: I found a genuinely vacuous-adjacent thing: under M5, D_RESET and D_ZERO pass vacuously (want 0, isteer=0 — the poison guard P2_VACUITY checks the DESTINATION's pre-value, not the loaded value; if the mutant loads a different field that happens to be 0, the want-0 rows can't see it). That's the "named channel fails to vary": D_RESET/D_ZERO's channel (inten value) is 0, and isteer is also 0 → under M5 they pass vacuously. That's a real vacuity-by-construction for any "loads wrong register" mutant whenever both fields are 0. The suite's defense is D_S1/D_S2 (nonzero wants). Fine as designed, but worth naming for Q2.
+
+  Now the DEPENDS-ON enumeration for question 1:
+
+  Predicates dominating the edited lines (the read arm, post-fix lines 310-311): `crm == 0` (outer switch), `crn == 0` (inner switch), `l_bit != 0` (the if). Constants within the arm. opcode1, opcode2 NOT tested anywhere (the whole function ignores them; only the unknown-message prints them).
+
+  Fields the guarded body reads: `cpu->cd.arm.i80321_inten` (rvalue), `rd` (index), `cpu->cd.arm.r[]` (lvalue array). Writes: `r[rd]`.
+
+  Candidate (d) mutants (reintroduce fatal+exit in the read arm under a different predicate) and their fates:
+
+  1. `if (cpu->cd.arm.i80321_inten & 0x005A0FA0) { fatal(...); exit(1); }` — mask = bits set in NEITHER S1, S2, 0, nor 0x10000000. Values read in the suite: {0 (D_RESET, D_ZERO, ANCHOR_CONTRAST inten=0), S1 (D_S1, LNC_SUB, D_OP1, RD15), S2 (D_S2, D_OP2), 0x10000000 (ANCHOR_M1)}. S1|S2|0x10000000 = 0xA500005A | 0x5AA5F00D | 0x10000000:
+     A500005A | 5AA5F00D = FFA5F05F (computed earlier); | 10000000 = FFA5F05F (bit 28 already in F). Complement: 0x005A0FA0. Check: 0x005A0FA0 & 0xA500005A: 00&A5=00; 5A&00=00; 0F&00=00; A0&5A: 1010_0000 & 0101_1010 = 0000_0000 → 0 ✓. & 0x5AA5F00D: 00; 5A&A5 = 0101_1010&1010_0101 = 0; 0F&F0=0; A0&0D = 1010_0000 & 0000_1101 = 0 ✓. & 0x10000000 = 0 ✓. & 0 = 0 ✓. 
+     → never fires in any row → SURVIVOR. Expected catchers: D_S1/D_S2/D_OP2/LNC_SUB/D_OP1 (the value rows) — cannot catch it because S1|S2 ≠ all-ones; ANCHOR pins only bit 28; the poison/vacuity machinery only constrains destinations' pre-values, not the mask of value-bits ever read. Concretely: e.g., `if (inten & 0x00001000)` (bit 12) — bit 12 is in 0x005A0FA0 (0x0000_1000: 0x0FA0 has bits 5,7,8,9,10,11? let me check: 0x0FA0 = 0000_1111_1010_0000: bits 5,7,8,9,10,11. Bit 12 = 0x1000 is NOT in 0x0FA0. 0x005A0FA0 bits: 0x005A0000 = bits 17,19,20,22 (5A = 0101_1010 → bits 16+1=17? let me: 0x005A0000: byte = 0x5A at bits 16-23: 0101_1010 << 16 → bits 17,19,20,22. 0x00000FA0: bits 5,7,8,9,10,11. So unpinned bits = {5,7,8,9,10,11,17,19,20,22}. Bit 12 (0x1000) is pinned? S2 = 0x5AA5F00D: 0xF00D → F at bits 12-15: yes bit 12 set in S2. OK.
+     Simplest survivor edit: `if (cpu->cd.arm.i80321_inten & 8) { fatal(...); exit(1); }` — bit 3? 0x08: S1=...5A: 0x5A = 0101_1010 has bit 3 set (8). Oops. Use bit 5 (0x20): S1 0x5A bit5? 0x5A = 0101_1010: bit5=1 (0x20). Yes set in S1. Bit 7 (0x80): S1 0x5A bit7=0; S2 0x0D bit7=0; 0x10000000 bit7=0 ✓ → `if (inten & 0x80)` never fires! Check S1 byte0 = 0x5A: 0101_1010 — bit7 = 0 ✓. S2 byte0 = 0x0D: 0000_1101 — bit7=0 ✓. Great: single-bit mask 0x80 (or 0x100, 0x200, 0x400, 0x800, 0x20000, 0x80000, 0x100000, 0x400000, etc.) all survive. Cleanest: `if (cpu->cd.arm.i80321_inten & 0x80)`.
+
+  2. `if (rd == 0)` exit: destination registers used across the suite for inten reads: r9, r4, r5, r6, r10 (D), r3 (LNC), r15 (RD15), r7 (D_OP1), r9 (ANCHOR_M1). Also inten WRITES use rd: r1, r2, r3 (D mcr), r1 (LNC/RD15/D_OP1/IWPI/CRM1 mcr), r1 (ANCHOR mcr). The mutant in the read arm fires only on reads. rd==0 never appears as a read destination → SURVIVOR. Expected catcher: none — no row reads inten into r0. (The suite does use r0 as a write source in IWPI word1 — isteer<-r0 — but that's crn=4.) Also rd==1? Read dests: {9,4,5,6,10,3,15,7}. rd ∈ {0,1,2,8,11,12,13,14} all untested as read destinations. `if (rd == 14)` etc. all survive. Note M_RD15 pinned rd==15 (caught by RD15_SURVIVE); the other 7 registers are unpinned. And careful: RD15's own assertion is survival-only, but that's fine for the rd==15 mutant.
+
+  3. `if (cpu->cd.arm.i80321_isteer != 0)` exit in the inten read arm: isteer is 0 at reset; written only in IWPI (isteer<-0) and SIB_WRITE (isteer<-S1 → dies at the write, session over, no subsequent inten read) — wait, SIB_WRITE session: the write itself kills the emulator (retained behavior, both builds). So in every session where an inten read executes, isteer==0 → predicate never true → SURVIVOR. Expected catcher: INTEN_WRITE_PRESERVES_ISTEER — cannot, because it pins isteer==0, the false branch of this predicate. This is a clause-(e)/cross-cell disclosure: the inten read body never reads isteer; the detector's isteer rows only pin the zero state in live sessions.
+
+  4. Read-count threshold: static count, exit on Nth inten read for N ≥ 6: D arm performs exactly 5 inten reads (0x08,0x10,0x18,0x20,0x24); every other session does ≤1 (LNC 1, RD15 1, D_OP1 1, ANCHOR 1; IWPI/CRM1 read crn4/crm1 not inten; ANCHOR_CONTRAST 1). M_NREAD measured exit-on-5th (caught by D_SURVIVE via D_OP2). Exit-on-6th never fires → SURVIVOR. Same class as M_NREAD, threshold beyond the suite's max read count of 5. Expected catcher: D_SURVIVE/D_OP2 — cannot, they only reach the 5th read. Hmm — is a static-count mutant "re-introducing the removed behaviour under a different predicate"? Yes (count predicate), and M_NREAD established the class.
+
+  5. opcode2 == v, v ∉ {0,1}: only D_OP2 uses opcode2=1; all other inten reads opcode2=0. `if (opcode2 == 5)` → never fires → SURVIVOR (disclosed in CONTRACT NOT COVERED: "ONE nonzero value of each"). Note E_UNKNOWN uses opcode2=5 but at crm=2/crn=9 — never enters the inten arm. opcode1 == v, v ∉ {0,1}: same (D_OP1 pins 1; E_UNKNOWN's opcode1=3 never reaches the arm).
+
+  6. `if (cpu->cd.arm.r[rd] == <poison>)`? The read arm loads r[rd] AFTER; a predicate on the pre-read destination value... e.g. `if (r[rd] == 0xdeadbe09)` — contrived; the pre-values are poisons like 0xDEADBE00-0x0A, 0xdeadbe07... A mutant `if ((r[rd] & 0xFFFF0000) != 0xDEAD0000)`... these are silly but technically survivors. Not worth listing beyond noting the destination-poison channel exists. Actually the more natural one: exit unless destination holds poison — equivalent-ish mutants. Skip; mention only if concise.
+
+  7. Predicate on isrc: M1 measured `isrc != 0` → caught by ANCHOR_M1/CONTRAST. But `if (isrc & ~0x10000000)` — isrc in the suite is either 0 (all stepped sessions, no IRQ asserted... wait, does the UART in ANCHOR_CONTRAST assert isrc bit 28? Yes — contrast pokes com_ier/com_mcr the same, so isrc bit 28 = 1, inten=0. So isrc values in suite: 0 or 0x10000000 only. `if (isrc & 0x0FFFFFFF)` never fires → SURVIVOR (same class as #1, on the sibling field). M1's `isrc != 0` was the coarse predicate; a masked variant survives. Expected catcher: ANCHOR_M1/ANCHOR_CONTRAST — cannot, the only pending source ever raised is bit 28.
+
+  8. Predicate on tmr0/timers: tmr0 = 0 in all sessions except D_CRM1_TMR0 (0x5A5A0000) and D_TRR0 seeds trr0 not tmr0. `if (tmr0 != 0)` in inten read arm: D_CRM1_TMR0 session sets tmr0=0x5A5A0000 and then reads... the third word reads crm=1/crn=0 (tmr0), NOT inten! Does that session ever read inten? Words: mcr tmr0, mcr inten, mrc tmr0, NOP. No inten read → the mutant in the inten read arm never fires there. Every other session has tmr0=0. → SURVIVOR. Same cross-cell class as #3. Expected catcher: D_CRM1_TMR0 — cannot, its session never executes an inten read after setting tmr0.
+
+  Wow, OK. So multiple survivors. The strongest/most central ones for the verdict: the inten-value-bit mask (#1) — because it attacks the very channel the fix is about (the read value) and the suite pins only 4 values whose union isn't all-ones; rd==0 (#2) — the author's own candidate; isteer!=0 (#3); isrc-mask (#7); read-count ≥6 (#4); opcode equality (#5, disclosed).
+
+  Which row did the author EXPECT to catch each? 
+  - For #1: the natural expected catcher is the value-row set D_S1/D_S2 (+P2_VACUITY ensuring non-vacuity) — the author clearly designed S1/S2 as complementary-ish patterns (0xA500005A vs 0x5AA5F00D) presumably to cover "bit patterns", but the union is 0xFFA5F05F, not 0xFFFFFFFF; 12 bits never appear in any read value. ANCHOR adds only bit 28 (already in the union). So no row distinguishes "exit iff bit 7 set" from no-exit.
+  - For #2: expected catcher would be a row reading into r0 — none exists; read destinations are {3,4,5,6,7,9,10,15}.
+  - For #3: INTEN_WRITE_PRESERVES_ISTEER was clearly designed to pin the isteer/inten isolation — but only the isteer==0 direction in a live session; no session holds isteer≠0 across an inten read (the only nonzero isteer write is SIB_WRITE, which is a retained kill — the session ends AT the write).
+  - For #4: M_NREAD/D_OP2 pinned the 5th read; nothing performs a 6th.
+  - For #7: ANCHOR pins isrc ∈ {0, bit28}.
+
+  Classification the author asked for (floor cell vs clause-(e) disclosure):
+  - inten value bits (#1): the body READS i80321_inten (it's the rvalue) → floor cell: the detector CAN pin it (just write more values); the suite simply didn't. It's a coverage hole, not a disclosure.
+  - rd (#2): the body uses rd as the lvalue index → floor cell, same reasoning.
+  - isrc mask (#7): the inten read body never reads isrc → cross-cell; but M1 established isrc as in-scope via ANCHOR; the mask variant is a granularity hole under an established cell. Hmm — the author's dichotomy: "floor cell (the body tests or reads the lvalue)" vs "clause-(e) disclosure (the body never distinguishes it)". isrc: body never reads it in this arm → clause-(e)-ish, though ANCHOR drives isrc.
+  - isteer (#3), tmr0 (#8): body never reads them in this arm → clause-(e) cross-cell.
+  - opcode1/opcode2 equality (#5): body never tests them at all (function-wide) → clause-(e), and explicitly disclosed in the CONTRACT.
+  - count (#4): not guest-visible state at all — a host-side counter; same class as M_NREAD (measured), threshold beyond suite max.
+
+  Q2 (vacuous channels): 
+  - D_RESET and D_ZERO pass vacuously under any "loads wrong register/value" mutant whenever the wrong source is also 0 (isteer, isrc, tmr0 all 0 in stepped sessions). Their channel (inten==0) doesn't vary from the mutant's substitute. They're still needed (they pin reset/zero semantics against the verbatim HEAD exit), but under M5-class mutants they carry no signal. That's by construction: the poison guard P2_VACUITY checks the destination register, not the source-field value.
+  - Also ANCHOR_CONTRAST under M1: I noted the table lists ANCHOR_CONTRAST failing under M1. Under M1 (`if (isrc != 0) exit` after the inten load): the CONTRAST session does read inten at 0x14 while isrc=0x10000000 (UART poked identically) → exit fires → the spin never happens; row wants pc == CODE+0x24 after breakpoint-add/continue/interrupt... if host died, pc_ctl = "HOST-DIED" ≠ CODE+0x24 → FAIL. So the row fails — but its named channel is "inten=0 ⇒ 0x18 never reached"; under M1 it fails for a DIFFERENT reason (host death at the inten read), not because 0x18 was reached. Is that vacuous? The row does detect the mutant (fails when mutant present, passes when absent) — as a kill it's fine; but semantically the contrast channel didn't vary (0x18 unreached in both builds under M1; the discriminator is host-death vs spin). Hmm, this is a "fails for the wrong reason" — the row's pass/fail still correlates with the mutant. I'd call it: the channel varies (host-death substitutes for the spin), but the row's NAME overstates what was measured. Borderline; worth one line.
+  - And the M5 inconsistency I found: by the probe source, "inten read loads isteer" must fail D_S1/D_S2/D_OP2/LNC_SUB/D_OP1/ANCHOR_M1 (all value-checked inten reads with nonzero wants). The inlined table claims M5 failed only INTEN_WRITE_PRESERVES_ISTEER + ANCHOR_EXC (27/29). That's arithmetically impossible for the named edit. Either the M5 build was actually a different edit (a write-side swap), or the table line is mislabeled. THIS is a concrete refutation of a premise — exactly what the panel is for. Let me verify by checking the artifacts dir for the actual M5 diff and SCORES.txt. The contract references `regress/artifacts/xscaleinten/killtable2_20260912/SCORES.txt`. Let me look at that tree.
+
+  Actually — wait. Let me double check ANCHOR_M1 under "read loads isteer": isteer in ANCHOR session = 0 → r9 = 0 ≠ 0x10000000 → FAIL. Yes. And D_OP2 → 0 ≠ S2 FAIL. LNC_SUB → 0 ≠ S1 FAIL. D_OP1 → 0 ≠ S1 FAIL. D_S1, D_S2 FAIL. So 6 failures minimum → 23/29 max. The table says 27/29. Contradiction stands. Unless the M5 build changed "read loads isteer" where isteer somehow held the right values... no, isteer is 0 everywhere live.
+
+  Let me check the artifacts directory for kill table 2 to see the actual mutant diffs and SCORES. Also check whether there's a M5 diff file. Let me look at regress/artifacts/xscaleinten/.
+
+  Also for Q3, the CONTRACT statements:
+  - "reinstated under a different predicate -- isrc != 0 (M1), opcode1 != 0 (M_OP1), opcode2 != 0 (M_OPCODE2), rd == 15 (M_RD15), or after the fourth read (M_NREAD)" — "each MEASURED in kill table 2". If the M5 line is mislabeled, then "each MEASURED" is false for M5 as described. But more centrally: the CONTRACT's design claim lists five alternate predicates, all of which are TRUE under suite data (isrc≠0 happens; opcode≠0 happens; rd==15 happens; 5th read happens) — i.e., the measured alternates are exactly the predicates the suite can catch by construction. The CONTRACT does NOT claim exhaustiveness... but the phrase "Designed to catch ... reinstated under a different predicate" reads as a coverage claim over the alternate-predicate class, and NOT COVERED discloses only the opcode-value granularity. The false/overclaiming statements:
+    1. The M5 description vs measured table mismatch (if confirmed by artifacts) — "each MEASURED" overclaims.
+    2. NOT COVERED omits: value-bit granularity of inten reads (only 4 distinct values; 12 bits never read), read-destination coverage (8 of 16 registers; rd==0/1/2/8/11/12/13/14 unpinned), read-count ceiling (≤5 reads), cross-cell predicates (isteer≠0, tmr0≠0, isrc mask) — none of these is disclosed, while the parallel opcode1/opcode2 granularity hole IS disclosed. So NOT COVERED is incomplete — an overclaim by omission relative to its own clause-(e) framing ("vacuity-floor clause e").
+  - Also check "HEAD 12/29": HEAD has the exit; the 12 that pass at HEAD: rows not involving inten reads/survival: P2_VACUITY?? At HEAD the D session dies at 0x08 (first inten read) → pre_snapshots for 0x10.. missing → P2_VACUITY = BLOCKED (missing_pre → None). Brief says "P2_VACUITY and seven more BLOCKED". Passes at HEAD: A2_INSTALLED (no cp6 message — true at HEAD too, since the handler IS installed and dies inside) ✓, E_UNKNOWN ✓, S_ISRC_WR ✓, SIB_READ ✓ (crn4 read fine at HEAD), SIB_WRITE ✓, LNC_COND ✓ (mrceq not executed — dies? no: LNC session: mcr inten<-S1 (write, fine at HEAD), mrceq not executed, NOP, then subject mrc → dies. LNC_COND/X4_NOP/LNC_P2 checked BEFORE the subject read → pass), D_TRR0 ✓ (trr0 read before inten read? D arm order: 0x00 mcr trr0, 0x04 mrc trr0 (fine), 0x08 mrc inten → dies. D_TRR0 checked from post_snapshots[0x04] → pass). Count: A2, E_UNKNOWN, S_ISRC_WR, SIB_READ, SIB_WRITE, LNC_COND, X4_NOP, LNC_P2, D_TRR0 = 9... plus? D_TODO_ABS at HEAD: the diagnostic IS printed → "PRESENT" → FAIL. Hmm. LNC_TODO_ABS: PRESENT → FAIL. What else passes at HEAD... ANCHOR_CONTRAST: contrast session reads inten at 0x14 → dies at HEAD → "HOST-DIED" → want CODE+0x24 → FAIL. ANCHOR_ISRC: isrc read at 0x10 fine, r7=0x10000000 → PASS ✓ (10). INTEN_WRITE_PRESERVES_ISTEER: isteer<-0, inten<-S1 (write ok), read isteer → 0 → PASS ✓ (11). D_CRM1_TMR0: reads tmr0, no inten read → PASS ✓ (12). D_OP1: reads inten → dies → FAIL. RD15: dies → FAIL. ANCHOR_M1: dies at 0x14 → BLOCKED (r9 missing → report None → BLOCKED). ANCHOR_EXC: BLOCKED. D_RESET/S1/ZERO/S2/OP2: 0x08 read dies → post missing → BLOCKED ×5. D_SURVIVE FAIL. D_MARKER BLOCKED. D_TODO_ABS FAIL. P2_VACUITY BLOCKED. LNC_SUB FAIL, LNC_MARKER FAIL, LNC_TODO_ABS FAIL.
+    Count: PASS = A2, D_TRR0, E_UNKNOWN, S_ISRC_WR, SIB_READ, SIB_WRITE, LNC_COND, X4_NOP, LNC_P2, ANCHOR_ISRC, ANCHOR_CONTRAST?, IWPI, D_CRM1_TMR0. ANCHOR_CONTRAST at HEAD: contrast session dies at 0x14 inten read → HOST-DIED → FAIL. So PASS = 12: A2, D_TRR0, E_UNKNOWN, S_ISRC_WR, SIB_READ, SIB_WRITE, LNC_COND, X4_NOP, LNC_P2, ANCHOR_ISRC, IWPI, D_CRM1_TMR0 = 12 ✓✓. The measured 12/29 matches my independent derivation exactly. BLOCKED: P2_VACUITY, D_RESET, D_S1, D_ZERO, D_S2, D_OP2, D_MARKER, ANCHOR_M1, ANCHOR_EXC = 9. Brief says "P2_VACUITY and seven more BLOCKED" — I count 9 blocked (P2 + 8 more). Hmm: "P2_VACUITY and seven more" = 8 blocked. I count 9. Let me recount BLOCKED at HEAD: P2_VACUITY(1), D_RESET(2), D_S1(3), D_ZERO(4), D_S2(5), D_OP2(6), D_MARKER(7), ANCHOR_M1(8), ANCHOR_EXC(9). FAIL: D_SURVIVE, D_TODO_ABS, LNC_SUB, LNC_TODO_ABS, LNC_MARKER, RD15_SURVIVE, D_OP1, ANCHOR_CONTRAST = 8. 12 pass + 9 blocked + 8 fail = 29 ✓. The brief's prose said "P2_VACUITY and seven more BLOCKED" — off by one vs my derivation (9 blocked). Eh — the brief's table is the operator's; "seven more" might be a prose slip (should be eight more). Minor; not the detector contract though. Actually the QUESTIONS don't ask about HEAD arithmetic. I could note it in passing — no, keep focused. Actually Q3 asks which CONTRACT statement is false/overclaims — the "seven more" is in the brief's kill-table prose, not the CONTRACT header. I'll mention it as a footnote if space allows. Hmm, actually let me recount whether D_MARKER at HEAD is BLOCKED: marker = post_snapshots.get(0x28) → None → report None → BLOCKED ✓. And ANCHOR_M1: r9_inten = None → report_row got=None... look at the code: `report_row("ANCHOR_M1", ..., r9_inten, 0x10000000, r9_inten == 0x10000000)` — r9_inten is None → None == 0x10000000 → False → FAIL, not BLOCKED! Let me recheck: report_row("ANCHOR_M1", "...", r7_isrc..., ok = r9_inten == 0x10000000). If the session died at 0x14, post_anc[0x14] never set → r9_inten = None → ok=False → FAIL (not BLOCKED). Similarly ANCHOR_ISRC: post_anc[0x10] exists (0x10 stepped before 0x14 — isrc read, fine at HEAD) → r7_isrc = 0x10000000 → PASS ✓. ANCHOR_EXC: anc_died_at = 0x14 → BLOCKED ✓. So at HEAD: ANCHOR_M1 = FAIL (not blocked). Recount: FAIL = D_SURVIVE, D_TODO_ABS, LNC_SUB, LNC_TODO_ABS, LNC_MARKER, RD15, D_OP1, ANCHOR_M1, ANCHOR_CONTRAST = 9. BLOCKED = P2, D_RESET, D_S1, D_ZERO, D_S2, D_OP2, D_MARKER, ANCHOR_EXC = 8. PASS = 29-9-8 = 12 ✓. So "P2_VACUITY and seven more BLOCKED" = 8 blocked ✓ matches! And FAILING would be 9 rows: "subject reads, markers, anchors" — D_OP1, RD15, LNC_SUB, D_SURVIVE, D_TODO_ABS, LNC_TODO_ABS, LNC_MARKER, ANCHOR_M1, ANCHOR_CONTRAST ✓ "subject reads, markers, anchors" fits. Great — HEAD line is internally consistent. My earlier confusion resolved.
+
+  Now, back to the M5 puzzle. Let me look at the artifacts to see the actual M5 diff. That's the decisive move for Q2/Q3. `regress/artifacts/xscaleinten/killtable2_20260912/`.
+
+  Let me also double-check the M1 line against source: M1 = `if (isrc != 0) {fatal;exit}` after the load. Rows: D sessions: isrc=0 (no IRQ) → all D inten reads pass. ANCHOR: isrc=0x10000000 at the 0x14 read → exit → ANCHOR_M1 FAIL (r9 None → False), ANCHOR_EXC BLOCKED (anc_died_at=0x14). ANCHOR_CONTRAST: contrast session pokes UART the same → isrc bit28 set → 0x14 read exits → HOST-DIED → FAIL. Table: "M1 26/29 | ANCHOR_M1, ANCHOR_CONTRAST (ANCHOR_EXC)" = failing ANCHOR_M1 + ANCHOR_CONTRAST, blocked ANCHOR_EXC → 26 pass ✓ consistent.
+
+  M_OPCODE2 `if (opcode2 != 0)` exit after load: fires only at D_OP2 (0x24, opcode2=1) → D_OP2 BLOCKED (post missing → report None → BLOCKED), D_SURVIVE FAIL (died at 0x24), D_MARKER BLOCKED. Table: "26/29 | D_SURVIVE (D_OP2, D_MARKER)" ✓ consistent (D_SURVIVE failing, D_OP2+D_MARKER blocked).
+
+  M_NREAD exit on 5th inten read: the 5th is D_OP2 → same signature → 26/29 ✓ consistent. (Confirms counter counts inten-arm reads only, since D_TRR0 mrc at 0x04 would otherwise make D_S2 the 5th.)
+
+  M_RD15 `if (rd == 15)`: fires at RD15 session's mrc → RD15_SURVIVE FAIL; nothing else uses rd=15 → 28/29 ✓ consistent.
+
+  M_OP1 `if (opcode1 != 0)`: fires only in D_OP1 session (opcode1=1) → D_OP1: step of third word (the mrc) fails → "HOST-DIED" → FAIL → 28/29 ✓ consistent.
+
+  M_ISTEER_WR: only IWPI fails → 28/29 ✓ (derived above).
+
+  M_CRM (tmr0 read returns inten): D_CRM1_TMR0: tmr0<-0x5A5A0000, inten<-S1, read tmr0 → S1 ≠ 0x5A5A0000 → FAIL. Any other row read tmr0? D_TRR0 reads trr0 (crn=4 of crm=1) — unaffected. → 28/29 ✓ consistent.
+
+  So ALL lines check out against the probe source EXCEPT M5. Under "inten read loads isteer" I derive failing = {D_S1, D_S2, D_OP2, LNC_SUB, D_OP1, ANCHOR_M1} + blocked {D_MARKER? no — D_MARKER at 0x28 comes after the reads; under M5 no exit happens, session survives, D_MARKER passes; values just wrong}. Wait M5 doesn't exit anything — it's a value corruption. So D_SURVIVE passes, D_MARKER passes. Failing: D_S1, D_S2, D_OP2, LNC_SUB, D_OP1, ANCHOR_M1 = 6 FAIL → 23/29. Table claims 27/29 with failing {IWPI, ANCHOR_EXC}. 
+
+  What edit fails exactly {IWPI, ANCHOR_EXC}? 
+  - IWPI fails ⟺ isteer read after (isteer<-0, inten<-S1) ≠ 0 → either the isteer READ returns non-isteer nonzero (inten=S1) or the inten WRITE clobbers isteer.
+  - ANCHOR_EXC fails but ANCHOR_M1 passes ⟺ inten read-back correct (field holds 0x10000000) but IRQ doesn't reach 0x18. The IRQ path consumes i80321_inten... unless the controller ALSO consults isteer! Let me check: does the interrupt logic use i80321_isteer? If the machine's interrupt assertion uses (isrc & inten) and maybe steers via isteer... If M5 = "inten write also stores isteer" (== M_ISTEER_WR!), then ANCHOR: inten=isteer=0x10000000. If the controller steers irq 28 away when isteer bit set... then EXC fails! And M1 passes (read-back of inten correct ✓). And IWPI fails (isteer=S1 ✓). And everything else passes (D arm: isteer gets set but nothing checks it; the write arm stores inten correctly so all value rows pass ✓). That gives EXACTLY {IWPI, ANCHOR_EXC} = 27/29!
+
+  So M5's measured signature matches "inten write also stores isteer" — which is precisely what the contract calls M_ISTEER_WR. But M_ISTEER_WR is listed SEPARATELY with signature {IWPI only} = 28/29. Hmm. Under pure M_ISTEER_WR (also-stores), ANCHOR_EXC would fail ONLY IF the controller consumes isteer. M_ISTEER_WR measured 28/29 {IWPI} → EXC passed → controller does NOT consume isteer. So M5 ≠ M_ISTEER_WR.
+
+  Then what fails EXC but not M1, and fails IWPI? 
+  - EXC fails without host death: the interrupt never asserts or never taken. M1 passes: r9=0x10000000 read back correctly — but WAIT: if the mutant made the inten WRITE store somewhere else (so inten=0), then ANCHOR_M1 read-back = 0 ≠ 0x10000000 → M1 FAILS. Contradiction. So the stored inten must be right. EXC failure then requires the IRQ path broken elsewhere: e.g., CPSR.I unmask broken, or vector fetch... The mrs/bic/msr sequence — a mutant in the coproc handler can't touch that. OR the isrc read... ANCHOR_ISRC passes (r7=0x10000000 ✓).
+
+  Hmm! What if M5 = "read loads isteer" applied to the ISRC read arm (crn=8)?? ANCHOR_ISRC would fail. No.
+
+  What if M5 swapped isrc and inten reads (crn8 ↔ crn0)? ANCHOR_ISRC: r7 = inten = 0x10000000 → want 0x10000000 → PASS (coincidentally! inten==isrc==0x10000000 in this session!). ANCHOR_M1: r9 = isrc = 0x10000000 → PASS (coincidence again!). EXC: inten field=0x10000000, isrc real → IRQ fires → PASS. No.
+
+  What if M5 = inten read loads isrc? D_S1: isrc=0 → FAIL. No (23/29 again).
+
+  OK here's another thought — what if the table line for M5 is just WRONG (transcription), and the real measured M5 signature was {D_S1, D_S2, D_OP2, LNC_SUB, D_OP1, ANCHOR_M1} 23/29? Or the "M5" row in the table belongs to a different mutant (e.g. "inten write stores isteer ONLY (not inten)" — under that: IWPI: isteer<-0 (crn4 write → isteer=0), inten<-S1 (crn0 write → isteer=S1, inten unchanged=0), read isteer → S1 → FAIL ✓. ANCHOR: inten<-0x10000000 → isteer=0x10000000, inten stays 0 → M1 read-back = 0 → FAIL ✗. No.)
+
+  What if M5 = "case 0 read loads isteer AND case 0 write stores isteer" (i.e., case 0 fully redirected to isteer)? D: inten<-S1 → isteer=S1 (no steering check since it's the inten arm); D_RESET reads isteer=0 → PASS vacuous; D_S1: read → isteer... after mcr at 0x0C stored isteer=S1 → r4 = S1 → PASS! D_ZERO: mcr inten<-0 → isteer=0; read → 0 PASS. D_S2: isteer=S2 → PASS. D_OP2: PASS. LNC: inten<-S1 → isteer=S1; LNC_SUB reads isteer=S1 → PASS. D_OP1: PASS. RD15: survives ✓. IWPI: isteer<-0 (crn4 write → isteer=0), inten<-S1 (crn0 write → isteer=S1), read isteer (crn4 read → isteer=S1) → want 0 → FAIL ✓!! ANCHOR: inten<-0x10000000 → isteer (inten stays 0); isrc read ✓ ISRC PASS; inten read at 0x14 → isteer=0x10000000 → r9=0x10000000 → M1 PASS!!; EXC: inten field = 0 → IRQ never fires → TIMEOUT → EXC FAIL ✓!!! 
+
+  THAT'S IT. M5's measured signature {IWPI, ANCHOR_EXC} matches "case 0 (inten) FULLY redirected to isteer — both read and write arms use i80321_isteer". Because every inten write-then-read round-trips through isteer consistently, all value rows pass (the detector's writes and reads agree!), IWPI catches the aliasing (isteer clobbered by inten write), and ANCHOR_EXC catches it via the interrupt controller consuming the REAL i80321_inten field (still 0). And the contract's description "the read loading another register (M5: isteer)" is then a MISDESCRIPTION of the mutant actually built — the read alone changing would have failed 6 value rows; the measured 27/29 is only consistent with the read AND write both redirected (or with a write-only redirect plus a read redirect... precisely: read→isteer and write→isteer).
+
+  Hmm wait, write-only redirect (write→isteer, read unchanged→inten): D_S1: read inten=0 ≠ S1 → FAIL. No. Read-only redirect: 6 rows fail. Both: exactly {IWPI, ANCHOR_EXC}. ✓✓ 
+
+  So either (a) M5 as built redirected both arms and the contract under-describes it ("the read loading another register"), or (b) the table is mislabeled. Either way, for Q2/Q3 I have a solid, evidence-based finding: the CONTRACT's M5 description is inconsistent with its own kill-table line given the probe source; and the more important general point stands regardless.
+
+  But hold on — is the "both arms redirected" mutant actually consistent with ANCHOR_CONTRAST passing? Contrast: inten<-0 → isteer=0; read-back not checked in contrast (the contrast session steps the same 6 words but only checks pc==CODE+0x24 after continue). The 0x14 read → isteer=0, no death; spin at 0x24; inten field=0 → no IRQ → 0x18 never reached → pc=CODE+0x24 ✓ PASS. And SIB_READ (crn4 read → isteer): s_sibr reads isteer=0 → survives → r0=marker ✓ PASS. E_UNKNOWN, S_ISRC_WR, SIB_WRITE unaffected ✓. D_CRM1_TMR0: tmr0<-0x5A5A0000, inten<-S1 → isteer=S1, read tmr0 → 0x5A5A0000 ✓ PASS. P2_VACUITY: all pre-values differ from wants ✓ PASS. D_TODO_ABS ✓. A2 ✓. D_TRR0 ✓. LNC_COND/X4_NOP/LNC_P2 ✓. D_SURVIVE/D_MARKER ✓. RD15 ✓ (survives; value unchecked). D_RESET/D_ZERO ✓ (isteer=0 both times... wait D_ZERO: mcr inten<-0 → isteer=0; read → isteer=0 → want 0 ✓). Score: 29 - 2 = 27 ✓✓✓. PERFECT match.
+
+  So the M5 line is consistent IFF the mutant redirected both the read and write of inten to isteer. The CONTRACT's phrase "the read loading another register (M5: isteer)" describes only half of that edit. Given the contract says "each MEASURED in kill table 2", and kill table 2's M5 cannot be the read-only edit, the CONTRACT statement "Designed to catch ... the read loading another register (M5: isteer)" is either a misdescription of the mutant or the table line is wrong — this is my concrete answer to Q3's "which statement is false or overclaims", alongside the NOT-COVERED omissions.
+
+  I can verify by reading the kill table artifacts: regress/artifacts/xscaleinten/killtable2_20260912/. Let me check for the mutant diffs there.
+
+  Also, for completeness on Q2 — one more vacuity check: INTEN_WRITE_PRESERVES_ISTEER's poison is r7=0xDEADBE07 checked before the isteer read. Fine. And under M_ISTEER_WR the row fails with got=S1. Channel varies ✓.
+
+  And ANCHOR_CONTRAST's discriminator: pc == CODE+0x24 (the spin loop) — meaning "0x18 never reached" is measured as "still spinning after continue+interrupt". Under any host-killing mutant that fires at the 0x14 read (M1), contrast fails as HOST-DIED — a different failure mode than "0x18 reached" but still a fail. OK.
+
+  Now, the destination-register census for the rd==0 survivor: inten READ destinations in the suite: r9 (D_RESET), r4 (D_S1), r5 (D_ZERO), r6 (D_S2), r10 (D_OP2), r3 (LNC_SUB), r7 (D_OP1), r15 (RD15), r9 (ANCHOR_M1). Set = {3,4,5,6,7,9,10,15}. Untested: {0,1,2,8,11,12,13,14}. So `if (rd == 0)` — also `rd==1`, `rd==2`, `rd==8`, `rd==11`, `rd==12`, `rd==13`, `rd==14` — all survive. M_RD15 pinned exactly one of nine untested-at-HEAD... well, 15 is now tested. 
+
+  Also the mrceq (LNC_COND) — conditional read with false condition never reaches the handler (rd=3); a mutant keyed on cond? The handler doesn't see cond. Not applicable.
+
+  One more (d) class: exit under predicate `cpu->cd.arm.r[rd]` pre-value, e.g. `if (r[rd] != 0xdeadbeXX)` — too contrived; skip. Also "exit when inten == 0xA500005A" (exact S1) — fires at D_S1 → caught. "exit when inten has bit 31" → S1 has bit31 → caught by D_S1/LNC_SUB/D_OP1. "exit when inten has bit 28" → ANCHOR_M1 (0x10000000) → caught (also S1/S2 have bit28? S1=0xA500005A: 0xA = 1010 → bit31,29; S2=0x5AA5F00D: 0x5=0101 → bits 30,28. Yes S2 bit28 set → D_S2 catches too). So single-bit masks are caught IFF the bit ∈ union {S1,S2,0x10000000} = 0xFFA5F05F; the 12 unpinned bits {5,7,8,9,10,11,17,19,20,22} (0x005A0FA0) are survivors. Let me verify bit 5 (0x20): S1 0x5A = 0101_1010: bit5 (0x20)=1! Yes S1 has bit5. Recheck 0x005A0FA0 bit5: 0x0FA0 = 0000_1111_1010_0000 → bits 5,7,8,9,10,11. Bit 5 in 0x0FA0? 0x0FA0 & 0x20 = 0x20 ≠ 0 → yes bit5 is IN the mask 0x005A0FA0. But S1 has bit5 set (0x5A & 0x20 = 0x20)! Contradiction with my union computation? Let me recompute S1|S2 carefully.
+
+  S1 = 0xA500005A. Byte0 = 0x5A = 0101_1010 → bits 1,3,4,6. (0x5A = 64+16+8+2 = 90: bits 6,4,3,1.) Right — bit5 (0x20=32) is NOT in 0x5A. 0x5A & 0x20 = 0? 0x5A = 0101_1010; 0x20 = 0010_0000; AND = 0000_0000. Yes 0. I misread — bit5 is clear in S1. Good, 0x005A0FA0 stands. And bit7 (0x80): 0x5A & 0x80 = 0 ✓. So `if (inten & 0x80)` survives; also & 0x20, 0x100, 0x200, 0x400, 0x800, 0x20000, 0x80000, 0x100000, 0x400000, 0x200000? 0x005A0000 bits: 0x5A<<16 = bits 17,19,20,22. So unpinned bits: {5,7,8,9,10,11} ∪ {17,19,20,22} — that's 10 bits, and 0x005A0FA0 = 0x005A0000|0x00000FA0: 0x0FA0 bits {5,7,8,9,10,11} (6 bits) + {17,19,20,22} (4 bits) = 10 bits. Union 0xFFA5F05F has 22 bits set. 10 unpinned + 22 pinned = 32 ✓.
+
+  Wait, double-check 0x0FA0 bits: 0x0FA0 = 0000_1111_1010_0000₂. Bit positions (from 0): 0x0FA0 = 4000 decimal = 2048+1024+512+256+128+32 = bits 11,10,9,8,7,5. Yes {5,7,8,9,10,11} ✓ (bit 6 = 0x40 = 64 not included; S1 0x5A has bit 6 ✓ consistent).
+
+  And S2 = 0x5AA5F00D byte1 = 0xF0 (bits 12-15), byte2 = 0xA5 (bits 16,18,21,23), byte3 = 0x5A (bits 25,27,28,30), byte0 = 0x0D (bits 0,2,3). S1 byte3 = 0xA5 (bits 24,26,29,31), byte2 = 0x00, byte1 = 0x00, byte0 bits {1,3,4,6}. Union byte0: 0x5A|0x0D = 0x5F (bits 0,1,2,3,4,6) → missing 5,7 ✓. Byte1: 0x00|0xF0 = 0xF0 → missing 8,9,10,11 ✓. Byte2: 0x00|0xA5 = 0xA5 → missing 17,19,20,22 ✓. Byte3: 0xA5|0x5A = 0xFF → none missing; bit 28 ⊂ ✓. Total missing 10 bits = 0x005A0FA0 ✓.
+
+  So survivor #1 exact edit: after line 311 (`cpu->cd.arm.r[rd] = cpu->cd.arm.i80321_inten;`), insert:
+  ```c
+  				if (cpu->cd.arm.i80321_inten & 0x005A0FA0) {
+  					fatal("TODO: XScale read from inten?\n");
+  					exit(1);
+  				}
+  ```
+  or single-bit `& 0x80`. This fires on real hardware values (e.g., inten=0x00000080 — a perfectly legitimate enable mask for source 7) yet is green on all 29 rows. THIS is the headline answer: YES, clause-(d) mutants exist; the value rows pin only 4 of 2^32 values and their bit-union is 22/32 bits.
+
+  Which row "should" have caught it: D_S1/D_S2 (the value-pinning rows, backed by P2_VACUITY) — cannot because the poison guard only ensures the destination changed, not that all 32 value-bits were ever exercised; ANCHOR_M1 pins bit 28 only. A row writing e.g. inten=0xFFFFFFFF (or ~S1) and reading it back would kill the whole mask class.
+
+  Hmm — actually let me reconsider whether ~S1 = 0x5AFFFFA5 kills the whole class: ~S1 & 0x005A0FA0 = ? 0x5AFFFFA5 & 0x005A0FA0: 5A&00=00; FF&5A=5A; ... = nonzero ✓ fires → caught. But a mutant masked on bits in S1 only would survive ~S1... no single write kills all mask mutants; 0xFFFFFFFF does (any nonzero mask fires). Or two writes S1 and ~S1 cover all bits (union = all ones). S2 ≠ ~S1 (that's the design miss: S2 = 0x5AA5F00D vs ~S1 = 0x5AFFFFA5 — close in byte3/byte0-ish but byte1/byte2 leave 10 bits cold).
+
+  Now Q4: Is ACCEPT right? The i80321 INTEN register is a real read/write register (interrupt enable). The model stores it, the controller consumes it, the read returns the live value. The diagnostic claimed "TODO" as if reads were unimplemented, but the value was loaded BEFORE the fatal — the read was fully implemented, just killed. Sibling isteer read (crn4) is silent; the i80321's real INTEN is readable (it's a simple RW register, not write-only). DC21285 precedent (footbridge) in this tree: ACCEPT for correctly-answered reads. So ACCEPT is right; a latched announce (warn-once) would be appropriate only if the semantic were uncertain or side-effecting. One nuance: is there any REAL hardware subtlety — on i80321, is INTEN read-back defined? The i80321 ICU: INTEN (interrupt enable) is RW. The XScale IOP (80321 is "IOP321"): coprocessor 6 regs — INTEN is CP6 crn0 crm0, RW. Yes, readable. ACCEPT correct.
+
+  Also should I double check `machine_iq80321.c` installs coproc 6 and the interrupt consumption of inten (for the EXC-under-M5 reasoning)? The settled premises say the machine installs the handler and the controller consumes inten — I don't need to re-derive, and my M5 analysis used exactly that premise (controller consumes the REAL field). Good. But for the M5 question I could check the artifacts dir for the actual M5 diff to confirm which half of the inconsistency is real (misdescription vs mislabel). That's worth one look — it's cheap.
+
+  Let me look at the artifacts dir.
+
+  Then compose the verdict:
+
+  VERDICT: SURVIVOR(S) — multiple clause-(d) mutants stay green on all 29 rows:
+  1. VALUE-BIT MASK: `if (cpu->cd.arm.i80321_inten & 0x005A0FA0) { fatal(...); exit(1); }` after the load. Floor cell (body reads the lvalue's source). Expected catcher D_S1/D_S2/ANCHOR_M1 — cannot: read values in the suite are only {0, S1, S2, 0x10000000}, bit-union 0xFFA5F05F; 10 bits never exercised.
+  2. RD==0 (or rd ∈ {1,2,8,11,12,13,14}): `if (rd == 0) {...exit}`. Floor cell. Expected catcher: none exists — read destinations are {3,4,5,6,7,9,10,15} only. M_RD15 pinned one register of sixteen.
+  3. ISTEER!=0: `if (cpu->cd.arm.i80321_isteer != 0) {...exit}`. Clause-(e) cross-cell (body never reads isteer). Expected catcher INTEN_WRITE_PRESERVES_ISTEER — cannot: it pins isteer==0 in a live session; the only nonzero isteer write (SIB_WRITE) is a retained kill, session ends at the write.
+  4. READ-COUNT ≥ 6: static count exit on 6th inten read. Suite max is 5 (D arm); M_NREAD pinned exactly 5. Expected catcher D_SURVIVE/D_OP2 — cannot, they stop at 5.
+  5. ISRC MASK: `if (cpu->cd.arm.i80321_isrc & 0x0FFFFFFF)` — isrc is only ever 0 or bit28 (ANCHOR raises only source 28). M1 pinned !=0 only.
+  6. OPCODE equality on unpinned values (opcode1==3, opcode2==5 in the inten arm) — disclosed in CONTRACT NOT COVERED (E_UNKNOWN's 3/5 never enters the arm). 
+
+  Q2: 
+  - D_RESET and D_ZERO are vacuous under any loads-wrong-source mutant whose substitute field is also 0 (their channel inten==0 doesn't vary); the suite's real signal for that class is D_S1/D_S2/D_OP2. 
+  - M5 inconsistency: by probe source, the contract-described M5 ("read loads isteer") must fail ≥6 value rows (D_S1, D_S2, D_OP2, LNC_SUB, D_OP1, ANCHOR_M1) → ≤23/29. The inlined 27/29 {IWPI, ANCHOR_EXC} is only consistent with an M5 that redirected BOTH the inten read and write to isteer (value rows then self-consistently round-trip through isteer; IWPI catches the alias; EXC catches it via the controller reading the real inten field). So either the built M5 was the both-arms edit (contract under-describes it) or the table line is mislabeled. Check artifacts.
+  - ANCHOR_CONTRAST under M1 fails as HOST-DIED, not as "0x18 reached" — the kill is real but the named channel ("inten=0 spins, 0x18 never reached") isn't the discriminator there; host-death is.
+
+  Q3: CONTRACT false/overclaiming statements:
+  - "Designed to catch, and each MEASURED in kill table 2 ... the read loading another register (M5: isteer)" — the table's M5 line cannot be the read-only edit (arithmetic above). Overclaims/misdescribes.
+  - NOT COVERED is incomplete: it discloses opcode1/opcode2 single-value pinning but omits the parallel granularity holes — inten value-bits (4 values, 22/32 bits), read-destination registers (8/16), read-count ceiling (≤5), isteer/tmr0 nonzero state never held across an inten read, isrc single-bit (only source 28). Under its own "vacuity-floor clause e" framing these are exactly the floors that aren't disclosed.
+  - (The "reinstated under a different predicate" list reads as the alternate-predicate coverage; all five measured alternates are predicates that are TRUE under suite data — the false-under-suite alternate class is unmeasured and undisclosed.)
+
+  Q4: ACCEPT is right (for file-reading seats): the read arm computes the correct value (the controller itself consumes the same field), the isteer sibling read is silent, INTEN on real i80321 is a RW register, and the fatal was simply wrong — the value was loaded before the diagnostic. A latched announce would add noise with no semantic uncertainty to flag. DC21285 precedent supports it.
+
+  Verdict line: `SURVIVOR: if (cpu->cd.arm.i80321_inten & 0x005A0FA0) { fatal("TODO: XScale read from inten?\n"); exit(1); }` after the load — plus five more classes (rd==0, isteer!=0, count≥6, isrc&0x0FFFFFFF, opcode-equality).
+
+  Wait — one more check on survivor #2 (rd==0): is rd==0 ever a read destination... the IWPI word1 `mcr 6,0,r0,cr4,cr0,0` is a WRITE with rd=0 (r0 is the source). The mutant is in the read arm; writes don't reach it. ANCHOR uses r9/r7 for reads. Contrast: same prog_anc — read at 0x14 is r9. So rd==0 never seen by the read arm ✓ survivor. But hmm, careful: does the S_ISRC_WR/E_UNKNOWN sessions' instructions hit the inten read arm? E_UNKNOWN crm=2 → unknown ✓ no. S_ISRC_WR crn=8 write ✓ no. LNC_COND mrceq: never executed ✓. Also -V -T flags: -V = verbose? -T = ? These are gxemul flags; -T halts on... whatever, irrelevant to predicates.
+
+  And survivor #4 (count≥6): "static count" — M_NREAD was built as a static counter in the handler. D arm does exactly 5 inten reads. A count≥6 mutant never fires ✓. Also note: the counter would count across... each Session is a fresh process (pty.fork + execvp), so static resets ✓.
+
+  One more possible survivor class I should sanity-check: predicate on `cpu->cd.arm.r[rd]` AFTER the load (same as inten value) — covered by #1. Predicate combining two pinned dimensions, e.g. `if (opcode2 == 1 && rd == 10)` — fires at D_OP2 → caught. `if (rd == 7 && opcode1 == 1)` → D_OP1 → caught. `if (rd == 7)` alone → D_OP1 reads into r7! → caught. Wait — D_OP1's destination IS r7. So rd==7 is pinned ✓ (it's in my tested set {3,4,5,6,7,9,10,15} ✓). Good.
+
+  What about `if (opcode1 != 0 && opcode2 != 0)`? No row has both nonzero → SURVIVOR (conjunction of two pinned channels — the suite never varies them jointly!). D_OP1 has opcode1=1,opcode2=0; D_OP2 has opcode1=0,opcode2=1. So `opcode1 && opcode2` never true → survivor. That's a nice one — a conjunction mutant. Add as class #6b: joint-conditions on individually-pinned channels (never varied together). Also `if (opcode1 == 1 && rd == 8)` etc.
+
+  Also: predicate `l_bit == 0` in the read arm — constant false inside `if (l_bit)` — dead/equivalent mutant, not a real survivor (can never trigger for any input). Exclude, maybe one line noting constant-folded predicates are equivalent mutants, not survivors.
+
+  Now the artifacts check for M5. Let me look.
+
+  Also the operational rule: don't run gates; building a single mutant in my own temp dir is allowed. Building gxemul takes a while; I have strong static proof for the survivors (value sets enumerated from the probe source). An empirical confirmation of survivor #1 would require: build base (exists? build/ dir in GXEMUL-SEC?), patch, run probe. The probe needs a load STUB — third arg. There's probably a stub generator in the artifacts or the probe usage. Actually the probe takes STUB as argv[3] — some file loaded at 0x8000 (the `-M 32 0x8000:STUB`?). Looking at Session: `os.execvp(bin_path, [bin_path, "-V", "-T", "-E", "iq80321", "-M", "32", "0x%x:%s" % (CODE, STUB)])` — the stub is loaded via gxemul's file-loading arg `0xADDR:FILE`. It needs to exist but its content is irrelevant (probe writes memory via debugger `put w`). So a stub could be any small file.
+
+  Empirical check would be nice but: the panel says "Building and running a single detector or mutant in your own temp directory is fine and encouraged". Time budget though — gxemul build is ./configure && make, several minutes. The static enumeration is airtight for the survivors (the probe's row definitions enumerate every read; the mutant predicates are constant-false over that enumeration by construction). The main empirical value would be confirming M5's actual diff — but the artifacts dir likely contains the mutant diffs. Let me check there first.
+
+  Let me look at the killtable2 artifacts.C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/xscaleinten
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/xscaleinten/agy_witness_20260911.md
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/xscaleinten/agy_xscale_run.err
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/xscaleinten/agy_xscale_run.out
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/xscaleinten/agy_xscale_witness_20260911.py
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/xscaleinten/base_20260912
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/xscaleinten/base_20260912/BASE.log
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/xscaleinten/base_20260912/xscale_inten_probe.py.frozen
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/xscaleinten/base_20260912/xscale_stub.bin
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/xscaleinten/brief_armcoproc.md
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/xscaleinten/codex_changelogdraft_20260912.err
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/xscaleinten/codex_changelogdraft_20260912.txt
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/xscaleinten/codex_coproc_20260910.err
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/xscaleinten/codex_coproc_20260910.txt
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/xscaleinten/codex_pass2_20260911.err
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/xscaleinten/codex_pass2_20260911.txt
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/xscaleinten/codex_promote_20260912.err
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/xscaleinten/codex_promote_20260912.txt
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/xscaleinten/codex_promote_20260912b.err
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/xscaleinten/codex_promote_20260912b.txt
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/xscaleinten/codex_witness_20260910.err
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/xscaleinten/codex_witness_20260910.txt
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/xscaleinten/killtable2_20260912
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/xscaleinten/killtable2_20260912/build_BASE.log
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/xscaleinten/killtable2_20260912/build_HEAD.log
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/xscaleinten/killtable2_20260912/build_M1.log
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/xscaleinten/killtable2_20260912/build_M5.log
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/xscaleinten/killtable2_20260912/build_M_CRM.log
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/xscaleinten/killtable2_20260912/build_M_ISTEER_WR.log
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/xscaleinten/killtable2_20260912/build_M_NREAD.log
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/xscaleinten/killtable2_20260912/build_M_OP1.log
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/xscaleinten/killtable2_20260912/build_M_OPCODE2.log
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/xscaleinten/killtable2_20260912/build_M_RD15.log
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/xscaleinten/killtable2_20260912/build_RESTORE.log
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/xscaleinten/killtable2_20260912/cpu_arm_coproc.HEAD.c
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/xscaleinten/killtable2_20260912/killtable2.run-0912.sh
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/xscaleinten/killtable2_20260912/killtable2.sh
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/xscaleinten/killtable2_20260912/mut_xscale_t2.py
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/xscaleinten/killtable2_20260912/POSTTABLE.out
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/xscaleinten/killtable2_20260912/PRETABLE.out
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/xscaleinten/killtable2_20260912/probe_BASE.raw
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/xscaleinten/killtable2_20260912/probe_HEAD.raw
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/xscaleinten/killtable2_20260912/probe_M1.raw
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/xscaleinten/killtable2_20260912/probe_M5.raw
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/xscaleinten/killtable2_20260912/probe_M_CRM.raw
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/xscaleinten/killtable2_20260912/probe_M_ISTEER_WR.raw
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/xscaleinten/killtable2_20260912/probe_M_NREAD.raw
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/xscaleinten/killtable2_20260912/probe_M_OP1.raw
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/xscaleinten/killtable2_20260912/probe_M_OPCODE2.raw
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/xscaleinten/killtable2_20260912/probe_M_RD15.raw
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/xscaleinten/killtable2_20260912/SCORES.txt
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/xscaleinten/killtable_20260911
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/xscaleinten/killtable_20260911/build_BASE.log
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/xscaleinten/killtable_20260911/build_HEAD.log
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/xscaleinten/killtable_20260911/build_M1.log
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/xscaleinten/killtable_20260911/build_M5.log
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/xscaleinten/killtable_20260911/build_M_NREAD.log
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/xscaleinten/killtable_20260911/build_M_OPCODE2.log
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/xscaleinten/killtable_20260911/build_M_RD15.log
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/xscaleinten/killtable_20260911/build_RESTORE.log
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/xscaleinten/killtable_20260911/killtable.sh
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/xscaleinten/killtable_20260911/mutate_BASE.txt
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/xscaleinten/killtable_20260911/mutate_HEAD.txt
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/xscaleinten/killtable_20260911/mutate_M1.txt
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/xscaleinten/killtable_20260911/mutate_M5.txt
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/xscaleinten/killtable_20260911/mutate_M_NREAD.txt
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/xscaleinten/killtable_20260911/mutate_M_OPCODE2.txt
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/xscaleinten/killtable_20260911/mutate_M_RD15.txt
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/xscaleinten/killtable_20260911/mutate_xscale.py
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/xscaleinten/killtable_20260911/PRETABLE.out
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/xscaleinten/killtable_20260911/probe_BASE.raw
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/xscaleinten/killtable_20260911/probe_HEAD.raw
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/xscaleinten/killtable_20260911/probe_M1.raw
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/xscaleinten/killtable_20260911/probe_M5.raw
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/xscaleinten/killtable_20260911/probe_M_NREAD.raw
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/xscaleinten/killtable_20260911/probe_M_OPCODE2.raw
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/xscaleinten/killtable_20260911/probe_M_RD15.raw
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/xscaleinten/killtable_20260911/probe_RESTORED.raw
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/xscaleinten/killtable_20260911/SCORES.txt
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/xscaleinten/opus_pass2_20260912
+There's `mut_xscale_t2.py` in killtable2_20260912 — the mutator script that built the mutants. Let me read it to see the exact M5 edit, plus SCORES.txt and probe_M5.raw.Confirmed. The actual M5 mutant (mut_xscale_t2.py line 30-31):
+
+  ```python
+  "M5": (FIX, blk(read_line="cpu->cd.arm.r[rd] = cpu->cd.arm.i80321_isteer;",
+                   write_line="cpu->cd.arm.i80321_isteer = cpu->cd.arm.r[rd];")),
+  ```
+
+  M5 redirected BOTH the read AND the write of inten to isteer — the "inten" cell is fully aliased onto isteer. My derivation was right: the contract's description "the read loading another register (M5: isteer)" describes only the read half; the mutant that produced 27/29 is the full read+write redirect. Under a read-only redirect, D_S1, D_S2, D_OP2, LNC_SUB, D_OP1, ANCHOR_M1 would all fail (23/29). So:
+
+  - Q2: No row is vacuous in the sense that its channel failed to vary — BUT the M5 kill is weaker than the contract implies: the 6 value rows never saw M5's effect because M5 kept write/read self-consistent through isteer. The suite's only defenses against a full cell-alias were (a) a cross-cell row (IWPI) and (b) the interrupt controller consuming the real field (ANCHOR_EXC). A pure read-only redirect WOULD have been caught 6 ways — so the detector does cover the read-only class via the value rows. Good for the author on that class. The contract mis-describes the mutant though ("the read loading another register" — actually both arms).
+
+  Also notable in the SCORES.txt: LEG M5 has `XSCALE_CONTROL=OK` even though 2 rows fail! Look: controls list includes ANCHOR_CONTRAST but not ANCHOR_EXC, and not IWPI. So CONTROL=OK under M5 — fine, controls passed. Not an issue per se (controls are the retained-kill/vitality rows).
+
+  Also interesting: M1 has CONTROL=FAIL (because ANCHOR_CONTRAST is a control and it failed). HEAD CONTROL=FAIL.
+
+  Also the HEAD line in SCORES.txt: FAILING 9 rows (D_TODO_ABS, D_SURVIVE, LNC_TODO_ABS, LNC_SUB, LNC_MARKER, D_OP1, RD15_SURVIVE, ANCHOR_M1, ANCHOR_CONTRAST), BLOCKED 8 (P2_VACUITY, D_RESET, D_S1, D_ZERO, D_S2, D_OP2, D_MARKER, ANCHOR_EXC). 9+8+12=29 ✓. Matches my derivation exactly, and matches the brief ("P2_VACUITY and seven more BLOCKED") ✓.
+
+  M_NREAD actual edit: `static int nread = 0; if (++nread > 4)` — exit on 5th read ✓ ("after the fourth read"). Note: the static counter is incremented on EVERY entry to case 0 arm — reads AND writes? No wait, read_extra_pre is placed inside `if (l_bit) {` before the load — so reads only. D arm: 5 inten reads → 5th (++nread=5 > 4) fires at D_OP2 ✓ consistent. A mutant `> 5` (exit on 6th) survives since max is 5. ✓ my survivor #4 stands. Also note: nread is a function-static, process-wide; sessions are separate processes ✓.
+
+  M_OPCODE2 actual edit: `head=` — placed BEFORE `if (l_bit)`: `case 0: if (opcode2 != 0) {fatal; exit;} if (l_bit) {...` — so it kills on opcode2!=0 for BOTH reads and writes of inten. Only D_OP2 has opcode2=1 ✓. (Note the FIX baseline text: `case 0:\t\tif (l_bit) {` — head goes between `case 0:` and `if (l_bit)`.)
+
+  M_RD15: read_extra_pre — inside the read arm, before the load: `if (rd == 15) {fatal; exit;}`. Fires only in RD15 session ✓. My rd==0 mutant is the same shape with rd==0 — never fires ✓ SURVIVOR confirmed in-shape.
+
+  M_OP1: read_extra_post — after the load: `if (opcode1 != 0) {fatal; exit;}`. D_OP1 only ✓.
+
+  M1: read_extra_post: `if (isrc != 0) {fatal("...with isrc!=0\n"); exit;}` ✓.
+
+  M_ISTEER_WR: write_line = `{ inten = r[rd]; isteer = r[rd]; }` ✓ — only IWPI checks isteer after inten write ✓.
+
+  M_CRM: tmr0 read → inten ✓ only D_CRM1_TMR0 reads tmr0 with inten≠tmr0 ✓.
+
+  So now I can also precisely classify: the measured mutants cover predicates that are TRUE under suite data. The false-under-suite predicate space (my survivors) is unmeasured. And crucially, the M5 description in the CONTRACT ("the read loading another register") does not match the measured mutant (read AND write redirected) — the measured M5 is a stronger/different mutant than described; a read-only M5 would have failed 6 rows, and the contract's wording claims the read direction was what was measured. Actually — hmm, wait. Is the contract's claim "Designed to catch ... the read loading another register (M5: isteer)" FALSE? The measured M5 does include the read loading isteer (plus the write). The kill signature (IWPI, ANCHOR_EXC) comes from the write half + controller. The value rows that "the read loading" would implicate were NOT what caught it. So the contract's parenthetical is at minimum misleading about what the suite proves: no row in the suite fails when ONLY the read is redirected... no wait — a read-only redirect WOULD fail D_S1 etc. (want S1, got isteer=0). So the suite DOES catch read-only redirects — 6 rows would fail. The contract describes M5 as the read-redirect; the built M5 was read+write-redirect; the built one is caught by different rows than the described one would be. The contract overclaims/misstates which mutant was measured. For the panel: the load-bearing point is — the "read loads another register" class IS covered (via value rows, by construction and verifiable), but NOT by the M5 leg actually measured; the M5 leg measured a full cell-alias, caught only by IWPI + the controller path. If someone reads the table as "M5 died, therefore the read-redirect class is measured-dead", the arithmetic doesn't support it — the read-redirect kill is inferred, not measured. Given the panel's demand for measurement over inference, that's a real Q3 finding.
+
+  Let me also verify probe_M5.raw quickly to confirm the two failing rows and maybe confirm the value rows passed (got=... want=...). Let me grep the raw for D_S1 line.
+
+  Also — one more check for the rd==0 survivor and value-mask survivor: are there any inten reads in the suite I missed? Let me grep the probe for all `mrc` words hitting crn=0/crm=0: 0xEE109610 (r9), 0xEE104610 (r4), 0xEE105610 (r5), 0xEE106610 (r6), 0xEE10A630 (r10, op2=1), 0x0E103610 (mrceq r3, not executed), 0xEE103610 (r3), 0xEE307610 (r7, op1=1), 0xEE10F610 (r15). And ANCHOR's 0xEE109610 (r9). That's all. Read destinations: {3,4,5,6,7,9,10,15} ✓. Values: {0, S1, S2, 0x10000000} ✓.
+
+  Wait — also double-check: does the mrceq in LNC (0x0E103610) execute the handler in gxemul even when the condition fails? In gxemul's ARM core, conditional instructions with false condition are skipped before dispatch. LNC_COND row proves it (r3 keeps poison). And under my value-mask mutant — even if the handler were called, inten=S1 has no mask bits → no exit ✓. Fine.
+
+  One more consideration for survivor #1: the predicate must be a "re-introduction of the removed behaviour" — fatal("TODO: XScale read from inten?\n") + exit(1), i.e., the same diagnostic text would ALSO trip D_TODO_ABS/LNC_TODO_ABS if it ever printed. Under the mask it never prints in the suite ✓. (A real guest writing inten=0x00000080 — enable source 7 — would die. Genuine behavior change, undetected.)
+
+  Also, note ANCHOR_CONTRAST under my mask mutant: inten=0 → no fire ✓; the contrast session does read inten at 0x14 (inten=0) → mask & 0 = 0 ✓ survives.
+
+  And what about the `-T` flag... irrelevant.
+
+  Let me quickly verify probe_M5.raw to lock the M5 facts (D_S1 passed under M5, IWPI got=S1). Then check opcode2=1 row's expect value (S2) — yes expect_map[0x24] = S2 ✓ (inten holds S2 at that point).
+
+  Also I should double-check the claim "E_UNKNOWN's opcode1=3/opcode2=5 never enters the inten arm" — E_UNKNOWN word 0xee79b6b2: crm=2 → outer switch default → unknown ✓. It dies in unknown with the 6-field message — and importantly the message PRINTS opcode1=3 opcode2=5, proving those fields reach the handler — but no row tests an inten-arm access with those opcodes. So `if (opcode2 == 5)` in the inten arm never fires ✓ (disclosed class).
+
+  Now probe_M5.raw: let me read it. Also maybe peek at PRETABLE.out (the prediction) — the brief said "HEAD was predicted 13/29 and measured 12/29". Fine.
+
+  Then write the final verdict. Format:
+
+  VERDICT LINE FIRST: `SURVIVOR: ...` then token `PASS2_XSCALE_20260912`.
+
+  Structure:
+  1. Verdict line + token.
+  2. The headline survivor (exact edit) + why the value rows can't catch it (bit-union arithmetic, enumerated read values from probe source).
+  3. Full survivor list (6 classes), each with exact predicate, floor-cell vs clause-(e), expected catcher and why it fails to.
+  4. Q2 answer: vacuity sweep results — D_RESET/D_ZERO vacuous under zero-substituting mutants; M5 description/measurement mismatch (the big one — measured M5 redirected both arms; contract describes read-only; read-only would be 23/29, not the measured 27/29); ANCHOR_CONTRAST's discriminator under M1 is host-death not the spin.
+  5. Q3 answer: CONTRACT statements false/overclaiming: (a) "the read loading another register (M5: isteer)" — misdescribes the measured mutant; the read-redirect class is covered by construction (6 value rows) but NOT measured dead in table 2; (b) NOT COVERED omits value-bit granularity (22/32 bits), rd coverage (8/16), read-count ceiling (5), cross-cell nonzero state (isteer/tmr0 never ≠0 across an inten read), isrc single-source (only bit 28) — while disclosing the parallel opcode hole; (c) minor: "each MEASURED" holds only if you accept the M5 label mismatch.
+  6. Q4: ACCEPT yes — with the DC21285-style reasoning: value already computed and consumed by the controller, sibling read silent, real INTEN is RW; a latched announce would be noise. 
+
+  Also "say WHAT YOU SWEPT": enumerate the DEPENDS-ON sets explicitly: dominating predicates {crm==0, crn==0, l_bit==1} (constants in the arm; mutant predicates on them are equivalent mutants, not survivors); body-read fields {i80321_inten (rvalue), rd (index), r[] (lvalue)}; swept masks over inten (single bits: 10 of 32 unpinned — listed), swept rd ∈ 0..15 ({0,1,2,8,11,12,13,14} unpinned), swept cross-cells {isteer, isrc, tmr0, tmr1, trr0, trr1, tisr, wdtcr, tcr0, tcr1} (isteer/isrc/tmr0 nonzero states unpinned in live sessions; trr0 seeded only in D arm — hmm, trr0! D arm seeds trr0=0x11112222 (D_TRR0). A mutant `if (trr0 == 0x11112222)` in the inten read arm fires in the D session at the first inten read (0x08) → caught by D rows. `if (trr0 != 0)` fires in D arm only → caught. So trr0 is pinned by the D session. tcr0/tcr1/tmr1/trr1/tisr/wdtcr: never touched in any session → all 0 → `if (tmr1 != 0)` etc. survive — same cross-cell class as #3. Fine, fold into the cross-cell class.)
+
+  Also swept: count thresholds (>4 measured, ≥5 survives... i.e., exit on 6th+ read), opcode equality/inequality (≠0 measured & caught; ==v for v∉{0,1} survives; conjunction opcode1&&opcode2 survives — never jointly nonzero), isrc masks (!=0 measured; &0x0FFFFFFF survives), inten equality to exact suite values (==S1 caught; ==value-never-written survives trivially but that's an equivalent-ish mutant? No — ==0xDEADBEEF could fire on a real guest; never in suite → survivor, same class as mask).
+
+  I think I should also explicitly answer the author's classification question for their three named candidates:
+  - "exit only when i80321_inten has some bit set that neither S1 nor S2 has" → SURVIVOR, floor cell (body reads the field; suite under-exercises it). Note: must also exclude bit 28 pinned by ANCHOR — mask 0x005A0FA0 avoids all suite values {0,S1,S2,0x10000000}.
+  - "exit only when rd == 0, or rd is some register no row reads into" → SURVIVOR, floor cell. Read destinations = {3,4,5,6,7,9,10,15}; rd ∈ {0,1,2,8,11,12,13,14} all work.
+  - "exit only when isteer != 0" → SURVIVOR, clause-(e) cross-cell (the inten read body never reads isteer). No live session holds isteer≠0 across an inten read: the only nonzero isteer write is SIB_WRITE, which is a retained kill — the process exits at the write itself, so the predicate can never be observed true by any row.
+
+  Let me also confirm probe_M5.raw shows D_S1 passing with got=S1 (proving the write-side redirect made value rows self-consistent) — quick grep. And confirm BASE raw 29/29 exists as claimed (restore cmp CLEAN — SCORES.txt says so; trust).
+
+  Let me grep probe_M5.raw for the key lines.D_RESET          D: inten reset val (rd=9)                        got=0x00000000     want=0x00000000     ok
+D_S1             D: inten read S1 (rd=4)                          got=0xa500005a     want=0xa500005a     ok
+D_ZERO           D: inten read 0 (rd=5)                           got=0x00000000     want=0x00000000     ok
+D_S2             D: inten read S2 (rd=6)                          got=0x5aa5f00d     want=0x5aa5f00d     ok
+D_OP2            D: inten read opcode2=1 (rd=10)                  got=0x5aa5f00d     want=0x5aa5f00d     ok
+LNC_SUB          LNC: subject mrc r3 <- S1                        got=0xa500005a     want=0xa500005a     ok
+D_OP1            CP6: inten read opcode1=1 (rd=7)                 got=0xa500005a     want=0xa500005a     ok
+INTEN_WRITE_PRESERVES_ISTEER inten write leaves isteer zero                   got=0xa500005a     want=0x00000000     FAIL
+RD15_SURVIVE     RD15: read into r15 survives to marker           got=0x0000005a     want=0x0000005a     ok
+ANCHOR_M1        ANCHOR: inten read while isrc!=0 (M1 floor)      got=0x10000000     want=0x10000000     ok
+ANCHOR_EXC       ANCHOR: IRQ exception reached vector 0x18        got=0x00008024     want=0x00000018     FAIL
+SCORE 27/29
+FAILING: INTEN_WRITE_PRESERVES_ISTEER, ANCHOR_EXC
+Confirmed empirically. Under the built M5 (both arms redirected to isteer):
+  - D_S1 got 0xa500005a — the value row passes because the write went to isteer and the read came back from isteer: self-consistent round-trip through the wrong cell.
+  - IWPI got 0xa500005a want 0 — the isteer read exposes the alias.
+  - ANCHOR_EXC got 0x00008024 (the spin loop address CODE+0x24) — the IRQ never fired because the real i80321_inten field stayed 0. Interesting: got=0x8024 means pc stayed at the spin — the same signature as the CONTRAST pass. ANCHOR_EXC fails as "TIMEOUT still spinning", want 0x18.
+
+  So under M5, ANCHOR_M1 "passes" with got=0x10000000 — but that value came from isteer, not inten! The row's want happens to equal what was written, and the write/read round-trip through isteer reproduces it. ANCHOR_M1 is VACUOUS under M5: its channel (inten field holds bit 28) did not vary — the emulator's inten field was 0 the whole time, and the row still got its want. That's a genuine "named channel fails to vary under the named mutant" — answer to Q2! ANCHOR_M1 under M5 passes vacuously; only ANCHOR_EXC (the controller consuming the real field) had signal. Same for D_S1/D_S2/D_OP2/LNC_SUB/D_OP1 under M5: they pass vacuously — each write-then-read pair round-trips through isteer consistently, so the rows get their wants while the named cell (i80321_inten) is never touched. The poison guard P2_VACUITY can't see it because the destination register really does change from poison to want.
+
+  That's the deep answer for Q2: under a cell-alias mutant (wrong lvalue on BOTH arms), every value row in the suite is vacuous-by-construction — the detector's writes and reads are aliased consistently. The suite's only non-vacuous channels under M5 were (a) a cross-cell observation (IWPI reads isteer directly) and (b) the interrupt controller consuming the true field (ANCHOR_EXC). The value rows' named channel ("the read loads i80321_inten") failed to vary.
+
+  Conversely, under a read-only alias (what the CONTRACT says M5 was), those 6 value rows WOULD have signal. So the class "read loads another register" is covered by construction, but table 2 does not contain that measurement — the M5 leg measured the both-arms alias. The contract says "each MEASURED in kill table 2: ... the read loading another register (M5: isteer)". The measured leg was not that edit. Q3 finding confirmed with raw data.
+
+  Now — one more sanity check on my headline survivor: I want to be careful about one subtlety: `cpu->cd.arm.r[rd] = cpu->cd.arm.i80321_inten;` then `if (cpu->cd.arm.i80321_inten & 0x005A0FA0) exit`. All suite inten-read values: D_RESET 0, D_S1 S1, D_ZERO 0, D_S2 S2, D_OP2 S2, LNC_SUB S1, D_OP1 S1, RD15 S1 (survival only but still executes the read arm → predicate evaluated: S1 & mask = 0 ✓ no fire), ANCHOR_M1 0x10000000, ANCHOR_CONTRAST 0 (the contrast session steps the same 6 words, including the 0x14 inten read with inten=0 ✓ no fire). mrceq never dispatches. E_UNKNOWN/S_ISRC_WR/SIB/IWPI/D_CRM1_TMR0/D_TRR0 never execute the inten read arm... wait, IWPI does `mcr inten<-S1` (write arm — predicate is in the read arm, not evaluated on write; even if it were, S1 & mask = 0). ✓ Survivor stands: all 29 green.
+
+  And rd==0: all read destinations {3,4,5,6,7,9,10,15} ≠ 0 ✓. isteer!=0: isteer is 0 in every session that reaches an inten read (IWPI writes isteer 0; SIB_WRITE dies at the write; ANCHOR never writes isteer) ✓. isrc&0x0FFFFFFF: isrc ∈ {0, 0x10000000} in all sessions (only UART source 28 asserted, only in ANCHOR legs) ✓. nread>5: max 5 inten reads in any session ✓. opcode1&&opcode2 both nonzero: never (D_OP1: 1,0; D_OP2: 0,1) ✓. opcode2==5 / opcode1==3 in inten arm: never (disclosed class) ✓. tmr1!=0, tcr0!=0, trr1!=0, tisr!=0, wdtcr!=0: all always 0 ✓ (same cross-cell class; trr0 is the exception — pinned nonzero in the D session by D_TRR0 seed, so `if (trr0 != 0)` would fire at D_RESET and be caught).
+
+  Alright. Also for completeness, the "DEPENDS-ON enumeration" the author asked for:
+
+  (1) Predicates dominating the edited lines up to function boundary: `crm == 0` (line 307 switch), `crn == 0` (line 309 switch), `l_bit != 0` (line 310 if). Inside the arm these are constants — a mutant predicate on crm/crn/l_bit is either constant-true (equivalent to the verbatim HEAD reinstatement → caught like HEAD) or constant-false (unreachable dead code = equivalent mutant, not a survivor, since it can never fire for ANY input). opcode1/opcode2 do NOT dominate — never tested anywhere in the function.
+
+  (2) Operand swaps from fields the body reads: body reads `cpu->cd.arm.i80321_inten` (rvalue) and `rd` (index into r[]). Swaps: read loads a different field (M5-class — covered by construction for read-only; both-arms measured), r[rd] → wrong register index... e.g., `r[rd+1]` or `r[0]`? That's a body mutation, not a (d) predicate — but for completeness: `r[(rd+1)&15]` as destination would fail value rows (poison in rd stays, want never arrives → D_S1 got=poison≠S1 FAIL) — caught. Swap inten↔isteer on write only — caught by D_S1. Covered.
+
+  Now — is ACCEPT right (Q4)? Yes. Reasons: the value was already computed and stored; the write arm round-trips the same field; the interrupt controller consumes the field (so reads model real state, not a stub); the isteer sibling read is silent; real i80321 INTEN (CP6 crn0/crm0) is a RW register; and the in-tree DC21285 precedent accepts correctly-answered reads. A latched announce adds a log line for a fully-modelled register — noise, and no guest-visible value. One small caveat worth stating: ACCEPT is right for the READ; the isrc write arm (int ack) and isteer steering remain legitimately unimplemented kills — retained as controls, which the detector rows correctly.
+
+  Also, should I mention: the earlier-pass premise failure the author mentions ("opcode fields were disclosed") — the CONTRACT's NOT COVERED does disclose the opcode one-value pinning. Fine.
+
+  One more possible (d) survivor to check for thoroughness: predicate on the COMBINATION rd==10 && opcode2==1? That's exactly D_OP2 → fires → caught. rd==9 && crm==0... D_RESET/ANCHOR_M1 use r9 → caught. Conjunctions of pinned dimensions where some row hits the exact tuple → caught. Conjunctions no row hits (e.g., rd==3 && opcode1==1 — LNC_SUB has rd=3,op1=0; D_OP1 has rd=7,op1=1 → no row has rd==3&&op1==1) → SURVIVOR. This is the general joint-variation hole: the suite pins marginal distributions, not the joint. Worth one line.
+
+  Also the mrceq cond channel: a mutant can't see cond (the core doesn't dispatch on failed cond — proven by LNC_COND). N/A.
+
+  Also: `if (cpu->cd.arm.r[rd] == <pre-value>)` — pre-values are poisons chosen by the probe; a mutant keyed on "destination already holds 0xDEADBE03"-style values would fire in the suite (LNC) → caught if keyed on suite poisons; keyed on any other value → survivor but contrived (host can't normally know guests' register values... actually r[rd] pre-value is legit guest state; e.g. `if (r[rd] == 0)` exit — do any rows have destination pre-value 0? D arm poisons: r0..r10 set to 0xdeadbe00..0xdeadbe0a, then r1=S1, r2=0, r3=S2, r7=TRR0_SEED. D_ZERO's destination r5 pre = 0xdeadbe05. ANCHOR: r7=0xdeadbe07, r9=0xdeadbe09. IWPI/D_OP1/CRM1: r7=0xdeadbe07, r0=0. RD15: r1=S1, r0=0xdeadbe00; destination r15 pre = pc (0x800C-ish, nonzero). LNC r3=0xdeadbe03. So all destinations pre-read are nonzero → `if (cpu->cd.arm.r[rd] == 0)` (pre-load destination zero) never fires → SURVIVOR. That's a predicate on the body's lvalue cell — floor cell, contrived but real: a guest doing `mrc` into a zeroed register would die. Worth listing as a seventh class (destination pre-value). Good — it directly answers "operand swaps drawn from fields the guarded BODY reads (rd, cpu->cd.arm.r[], i80321_inten)": the r[] channel is swept and has a hole (all suite destinations are poisoned nonzero).
+
+  I think the analysis is complete and thoroughly evidence-backed. Now write the final answer. Keep it structured but tight. Verdict line first, then token. The author wants: the mutant list with exact edits, which row was expected to catch each and why it can't, floor-cell vs clause-(e) classification, Q2 vacuity sweep, Q3 contract falsehoods, Q4 ACCEPT opinion, and a "what I swept" inventory.
+
+  Format: verdict line, token, then sections. Use backticks, keep tables minimal. Cite file:line where useful (probe line numbers, mutator line numbers, source lines).
+
+• `SURVIVOR: if (cpu->cd.arm.i80321_inten & 0x005A0FA0) { fatal("TODO: XScale read from inten?\n"); exit(1); }` inserted after the load at `cpu_arm_coproc.c:311` — green on all 29 rows. It is not alone; five more clause-(d) classes survive below.
+
+  `PASS2_XSCALE_20260912`
+
+  I read the post-fix source (`GXEMUL-SEC/src/cpus/cpu_arm_coproc.c:304-418`, matches the brief), the full detector (`regress/xscale_inten_probe.py`, 618 lines), the kill-table-2 mutator (`artifacts/xscaleinten/killtable2_20260912/mut_xscale_t2.py`), `SCORES.txt`, and `probe_M5.raw`. Findings below are decoded from the probe's instruction words, not from the brief's prose.
+
+  ## Q1 — DEPENDS-ON and the surviving (d) mutants
+
+  Dominating predicates up to the function boundary: `crm == 0` (line 307), `crn == 0` (line 309), `l_bit != 0` (line 310). All three are constants inside the arm — a predicate on them is either the verbatim HEAD reinstatement (caught like HEAD) or unreachable dead code (an equivalent mutant, fires for no input — not a survivor). Body-read fields: `i80321_inten` (rvalue), `rd` (index), `r[]` (lvalue). `opcode1`/`opcode2` are tested nowhere in the function.
+
+  I enumerated every inten-read the suite ever executes, straight from the probe's words: values read are **only** {0, S1=0xA500005A, S2=0x5AA5F00D, 0x10000000} (D_RESET, D_S1, D_ZERO, D_S2, D_OP2, LNC_SUB, D_OP1, RD15, ANCHOR_M1, ANCHOR_CONTRAST's read at 0x14). Destinations are **only** {r3, r4, r5, r6, r7, r9, r10, r15}. Against that enumeration:
+
+  - **SURVIVOR 1 — value-bit mask (floor cell).** `if (i80321_inten & 0x005A0FA0) {fatal; exit;}`. S1∣S2∣0x10000000 = 0xFFA5F05F; the 10 bits {5,7,8,9,10,11,17,19,20,22} never appear in any value any row reads. Any non-empty sub-mask works (simplest: `& 0x80`). Expected catcher: the value rows D_S1/D_S2/D_OP2/LNC_SUB/D_OP1 backed by P2_VACUITY — they cannot, because the poison guard constrains the *destination's pre-value*, not the set of value-bits ever exercised; ANCHOR_M1 adds only bit 28, already in the union. S2 is close to ~S1 but not equal (byte1/byte2 leave 10 bits cold). One `inten<-0xFFFFFFFF` write+read row would kill this whole class; it does not exist.
+  - **SURVIVOR 2 — `if (rd == 0)` (floor cell).** Same shape as the measured M_RD15 (`mut_xscale_t2.py:34`) with `0` for `15`. No row reads inten into r0 — or into r1, r2, r8, r11, r12, r13, r14. M_RD15 pinned one register of sixteen. Expected catcher: none exists; there is no row to catch it.
+  - **SURVIVOR 3 — `if (i80321_isteer != 0)` (clause-(e) cross-cell).** The inten-read body never reads isteer. isteer is 0 in every session that reaches an inten read: IWPI writes isteer←0; the only nonzero isteer write is SIB_WRITE, which is a *retained kill* — the process exits at that write, so no row can ever observe isteer≠0 across a subsequent inten read. Expected catcher: INTEN_WRITE_PRESERVES_ISTEER — it pins exactly the false branch (isteer==0).
+  - **SURVIVOR 4 — read-count ceiling.** `static int nread = 0; if (++nread > 5) {fatal; exit;}` — the measured M_NREAD is `> 4` (`mut_xscale_t2.py:36`); the D arm performs exactly 5 inten reads and every other session ≤1. Any threshold ≥ 5 never fires. Expected catcher: D_SURVIVE/D_OP2 — they stop at the 5th read.
+  - **SURVIVOR 5 — `if (i80321_isrc & 0x0FFFFFFF)` (cross-cell, M1 refined).** isrc is only ever 0 or bit 28 — ANCHOR raises source 28 and nothing else. M1's `isrc != 0` was the coarse predicate; any mask avoiding bit 28 survives. Same for `if (tmr1 != 0)`, `tcr0`, `trr1`, `tisr`, `wdtcr` — all always 0 in every session (trr0 is the exception: D_TRR0 seeds it nonzero in the D session, so a trr0 predicate fires at D_RESET and dies).
+  - **SURVIVOR 6 — joint/opcode encodings (disclosed class, but wider than disclosed).** `opcode1 == 3` or `opcode2 == 5` in the inten arm never fires (E_UNKNOWN's 3/5 goes crm=2→`unknown`, never entering the arm). Also `if (opcode1 != 0 && opcode2 != 0)`: D_OP1 has (1,0), D_OP2 has (0,1) — the suite pins the marginals, never the joint. Same shape: `rd == 3 && opcode1 == 1` — no row hits the tuple.
+
+  Your three named candidates, classified: the inten-bit mask is a **floor cell** (the body reads the lvalue's source; the suite merely under-exercises it — 4 of 2^32 values, 22 of 32 bits). `rd == 0` is a **floor cell** (the body indexes on rd; 8 of 16 registers exercised). `isteer != 0` is **clause-(e)** — the body never distinguishes it, and the detector's own design (SIB_WRITE dies at the write) makes the true branch unobservable in any live session.
+
+  Also swept and refuted: destination-pre-value predicates (`if (r[rd] == 0)` pre-load — every destination is poisoned nonzero, so that survives too; contrived but real), exact-value equality on never-written values (`== 0xDEADBEEF`, survivor), single bits inside the union (e.g. `& 0x10000000` — caught by ANCHOR_M1/D_S2; `& 0x20` — caught by D_S1… no wait, bit 5 is clear in S1: `& 0x20` survives, it's in the mask). M_OPCODE2/M_OP1 were built as `head=`/post-load `!= 0` tests — the equality-on-unpinned-value variants are the hole, and that one *is* disclosed.
+
+  ## Q2 — vacuous channels under named mutants
+
+  Yes, and it is the biggest finding here:
+
+  - **M5 is not the mutant the CONTRACT names.** The contract says "the read loading another register (M5: isteer)". The built M5 (`mut_xscale_t2.py:30-31`) redirected **both** arms: read loads isteer *and* write stores isteer. Under a read-only redirect, D_S1, D_S2, D_OP2, LNC_SUB, D_OP1, ANCHOR_M1 must all fail (want≠0, isteer=0) → ≤23/29. The measured 27/29 is arithmetically impossible for the described edit — and `probe_M5.raw` confirms the both-arms reading: D_S1 got 0xa500005a "ok", because the write and read round-trip *self-consistently through isteer*.
+  - **Consequence: under the built M5, every value row is vacuous-by-construction.** D_S1/D_S2/D_OP2/LNC_SUB/D_OP1/ANCHOR_M1 all "pass" while their named channel — the `i80321_inten` cell — never varies: the field is 0 the whole session and the rows still get their wants. P2_VACUITY cannot see it (the destination really does change poison→want). The only non-vacuous signal under M5 was a cross-cell observation (IWPI reads isteer directly, got=S1) and the interrupt controller consuming the true field (ANCHOR_EXC, got=0x8024 still spinning). So the read-redirect class is covered *by construction* (six value rows would fire), but that kill is **inferred, not measured** — table 2 contains no leg that exercises it.
+  - D_RESET and D_ZERO are vacuous under any loads-wrong-source mutant whose substitute is also 0 (isteer, isrc, tmr0 all 0 in stepped sessions) — their channel (inten==0) cannot vary from the substitute. They still earn their keep against HEAD-class kills.
+  - ANCHOR_CONTRAST under M1 fails as HOST-DIED at the 0x14 read, not via its named channel ("spins, 0x18 never reached" — 0x18 is unreached in both builds there). The kill is real; the name overstates the discriminator.
+
+  The other seven legs I re-derived from the probe source and all match SCORES.txt exactly (including HEAD 12/29 = 9 FAIL + 8 BLOCKED + 12 PASS, matching "P2_VACUITY and seven more").
+
+  ## Q3 — false / overclaiming CONTRACT statements
+
+  1. **"each MEASURED in kill table 2 … the read loading another register (M5: isteer)"** — false as stated. The measured leg redirected read *and* write; the read-only edit the sentence describes appears nowhere in table 2, and its kill is an inference from the value rows' construction, not a measurement. Either the contract mis-describes the mutant or the table mislabels the leg; `mut_xscale_t2.py` says the former.
+  2. **NOT COVERED is incomplete against its own clause-(e) framing.** It discloses the opcode1/opcode2 one-value pinning but omits the parallel, now-demonstrated holes: inten value-bits (4 values, 22/32 bits; no ~S1 or all-ones row), read-destination coverage (8/16 registers), the read-count ceiling (≤5; only `>4` measured), the unobservability of isteer≠0/tmr1≠0/etc. in live sessions, and isrc pinned to a single source (bit 28 only). The "reinstated under a different predicate" list is five predicates that are all *true under suite data*; the false-under-suite alternate class is neither measured nor disclosed.
+
+  ## Q4 — is ACCEPT right?
+
+  Yes. The read returns the live field the write arm stores and the interrupt controller itself consumes — the read was fully implemented; the `fatal`+`exit(1)` sat *after* the correct load. The crn-4 sibling read is silent, real i80321 INTEN (CP6 crn0/crm0) is a plain RW register, and the DC21285 precedent in this tree accepts exactly this shape of correctly-answered read. A latched announce would flag a semantic that is neither uncertain nor side-effecting — noise. The retained kills (isteer steering, isrc ack, unknown tuple) are the genuinely unimplemented paths, and rowing them as controls is the right call.
+
+  **Bottom line for commit:** ACCEPT the fix — but do not let the 29/29-vs-mutants table read as "alternate-predicate reinstatements are measured dead." The mask mutant above (fires for a guest enabling interrupt source 7, invisible to all 29 rows), `rd == 0`, and `isteer != 0` are concrete survivors; the M5 contract line does not match its own artifact. One added row — `inten<-0xFFFFFFFF`, read back, want 0xFFFFFFFF — plus one read into r0 would close the two floor-cell classes cheaply.
+
+To resume this session: kimi -r session_31300608-1f4d-4d1f-bd15-e2e041f726eb

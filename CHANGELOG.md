@@ -1,3 +1,127 @@
+# `#526` (xscaleinten): reading the i80321 interrupt-enable register ended the emulator — AFTER the model had already loaded the correct value into the destination register
+
+**THE DEFECT.** `arm_coproc_i80321_6()` — coprocessor 6 on `-E iq80321` (and Iyonix), installed by
+`machine_iq80321.c` — handles `crm 0 / crn 0` as the interrupt-enable register.  Its load arm read:
+
+```c
+cpu->cd.arm.r[rd] = cpu->cd.arm.i80321_inten;
+fatal("TODO: XScale read from inten?\n");
+exit(1);
+```
+
+**The destination received the modelled value and the host process then died.**  The register is fully
+modelled in both directions: the store arm writes the same field, and `dev_i80321.c` consumes it
+(`d->enable = &cpu->cd.arm.i80321_inten`).  A guest reading back its own interrupt enables — which is
+what firmware does — ended the emulator.
+
+**THE SIBLING IN THE SAME SWITCH IS THE WARRANT.**  `crn 4` (isteer) has the identical load/store
+shape and its read carries no diagnostic and no exit.  `crn 0`'s kill is the switch's outlier —
+upstream residue, the exit the author reached while developing, not a policy.
+
+**THE FIX — ACCEPT (member 4 of the option set).**  Delete the two lines; keep the value.  No latch
+and no announce: the read is implemented, so a bounded "unimplemented" message would be a wrong
+record in product code.  The write arm, and the three kills this round RETAINS in the same handler —
+the isteer non-zero write, the isrc write (`TODO: XScale int ack?`) and the unknown-tuple exit — are
+untouched and rowed as controls.  Every seat that read the source in two passes upheld ACCEPT.
+
+**THE WITNESS, and one thing it does NOT establish.**  Rung 3, cold debugger, unmodified in-tree
+`iq80321`: `regress/artifacts/xscaleinten/agy_xscale_witness_20260911.py`, committed build **11/26**,
+fix **26/26** (`witness_committed.out`, `witness_fix.out`).  **Test-first ORDER is not established by
+these artifacts**: `witness_fix.out` carries the EARLIER mtime (`02:20:10` against `02:20:23`), and
+nothing records that the committed leg was run before the edit.  What IS established, three times, is
+that the committed source reproduces the death from a clean rebuild: every kill table's HEAD leg
+(11/26, 12/29, 12/30).  *Recorded as a reproducible pre-fix measurement, not as test-first.*
+
+## The detector — `regress/xscale_inten_probe.py`, 30 rows, `gate_arm.sh` pin 30
+
+Promoted from the witness with codex's repairs (`codex_promote_20260912b.txt`, answered after the
+cybersecurity filter refused the first wording): a RESULT/CONTROL/DONE protocol, captured values kept
+when a later step dies with unreached rows reported **BLOCKED** (not failed, not passed), a non-zero
+exit on any non-passing row, and three new rows — `D_OP1` (read with opcode1 = 1),
+`INTEN_WRITE_PRESERVES_ISTEER`, and `D_CRM1_TMR0` (crm isolation at crn 0).  Pass 2 added the
+thirtieth, `RD0_ALLONES`.  The header carries a CONTRACT and a NOT COVERED list (clause (e)).
+
+| table | instrument | legs | result |
+|---|---|---|---|
+| 1 `killtable_20260911/` | witness, 26 rows | 7 | M1 23, M5 25, M_OPCODE2 19, M_NREAD 19, M_RD15 25 — all killed |
+| 2 `killtable2_20260912/` | 29 rows | 10 | 9 on prediction; HEAD predicted 13/29, measured 12/29 (a BLOCKED row counted as a pass in the prediction's arithmetic) |
+| 3 `killtable3_20260912/` | 30 rows | 12 | **12 on prediction**; BASE 30/30, HEAD 12/30, every mutant killed |
+
+Each table ran in a scratch clone of `build/` with a clone-local sentinel, a frozen instrument, a
+`PRETABLE.out` written before it ran and a separate `POSTTABLE.out`; each restore was cmp-CLEAN and
+FRESH.  Table 3's frozen instrument is `cmp`-identical to the shipped probe.
+
+## Pass 2, and the two survivors it found
+
+A nine-seat pass 2 (`_scratchpad/panel_20260912_095235_xscalepass2`, the Opus measuring seat, then a
+§F2 adjudication pass `panel_20260912_104522_xpadjud`, then Fable) asked one question: *is there a
+clause-(d) mutant this detector does not see?*  **Two, both measured by the Opus seat at 29/29 against
+the 29-row instrument, and both confirmed LIVE kills** (`artifacts/xscaleinten/opus_pass2_20260912/`):
+
+* **`if (rd == 0) { fatal; exit(1); }`** after the load.  Every inten read in the probe landed in r3-r7,
+  r9, r10 or r15.  `xscale_XM_RD0.log` 29/29; `live_XM_RD0_r0.log` dies, `_r9.log` survives.
+* **`if (i80321_inten & 0x00400000) { fatal; exit(1); }`** — bit 22.  The rows drove inten = 0, S1,
+  S2 and bit 28 only; union `0xFFA5F05F`, so bits `0x005A0FA0` were never set.  `xscale_XM_MAGICBIT.log`.
+
+**One row closes both:** `RD0_ALLONES` writes all-ones to inten and reads it into a poisoned r0.
+Table 3: `M_RD0` 29/30 and `M_MAGICBIT` 29/30, **each failing `RD0_ALLONES` alone**; no other leg's
+failure set changed.
+
+**THE GRADE — CLAUSE (e), BOTH CELLS; THE ROW IS L1 CONSTRUCTION.**  Ruled by the flagship seat (Fable 5.1, last, on
+7/7 scriptable seats plus Opus), against a three-seat minority that held `rd == 0` as a floor cell by
+operand swap.  The floor is the cross-product of the dominating predicates (`crm == 0`, `crn == 0`,
+`l_bit`) with the device-STATE lvalues the repair reads; the body reads `rd` as an INDEX and inten as a
+SOURCE and tests neither, so both exits are the `idata == k` shape.  The swap reading was rejected on its
+own consequence: it makes `rd == 0` floor only because `crn == 0` happens to dominate -- had the arm been
+`crn 4`, `rd == 4` would be floor and `rd == 0` not.  **Grading by coincidence is the same vice as
+grading by cost, and my own provisional lean ("floor, because one cheap row pins each") was that vice;
+it is overturned.**  THE RULE THE NEXT PURE DELETION INHERITS, when its guarded body tests nothing: the
+floor is clause (b)'s verbatim reinstatement plus the dominating predicates' accept cell; every
+re-introduction keyed on a body-read operand the body does not test is clause (e), disclosed BY CLASS in
+the CONTRACT; a row added for one is L1 -- licensed because cheap, never graded floor because cheap.
+*And the row's reach, stated rather than implied (codex): all-ones pins every single-bit-SET predicate on
+inten, not bit-CLEAR or multi-bit patterns.*
+
+**What the NOT COVERED list now says, because the row closes two partitions and not the class:** an exit
+keyed on `rd == k` for an undriven k, or on an exact inten VALUE, is not pinned — the body indexes by
+`rd` and copies inten, and tests neither; an exit keyed on `isteer != 0` is EQUIVALENT on this
+instrument (isteer can only become non-zero through a write that itself exits); no session makes more
+than five inten reads; the ANCHOR rows raise only irq 28.
+
+**Two kill CHANNELS named, because the row names overstate them (kimi):** `ANCHOR_CONTRAST` kills M1 by
+HOST DEATH at the read, not through its named "spins, 0x18 never reached" channel; and `D_RESET` /
+`D_ZERO` cannot vary under a wrong-source mutant whose substitute is also zero (isteer, isrc and tmr0 are
+all 0 in a stepped session) -- they earn their place against the reinstatement class, not that one.
+
+## Wrong records corrected in-round (L4, found by the panels)
+
+* **The CONTRACT said M5 was "the read loading another register".**  The measured M5 redirects BOTH
+  directions of the crn-0 arm to isteer (`mut_xscale_t2.py`); a read-only redirect was never built.
+  Two seats (glm, deepseek) then argued M5's 27/29 was inconsistent or its row vacuous — both from the
+  read-only premise; `probe_M5.raw` refutes it (the isteer row reads S1, so the WRITE was redirected).
+* **"4th read"** in the D arm was the fifth inten read (codex).
+* **The probe had no CONTRACT header at all** until the CHANGELOG draft's own review said so — a floor
+  clause, supplied before the pass-2 panel saw the probe.
+* **My pass-2 brief called the DC21285 read a quiet-source precedent.**  `dev_footbridge.c` still
+  carries its `fatal` + `exit` there; it is a DISPOSITION precedent only (codex, grok).
+
+## Seats
+
+Pass 2: codex, kimi (CLI), grok, glm, deepseek, minimax, kimi-k3:cloud — 7/7 scriptable answered;
+**minimax was labelled ECHO-ONLY by `panel.sh` and was a real answer** (it found the inten-bit
+survivor) — a seat-check false positive, recorded.  Opus 5 measured.  **agy DELIBERATELY NOT FIRED**
+(owner reservation for measurement).  §F2 adjudication: the same seven answered; Opus not re-fired
+(its measurements were in the packet).  Fable 5.1 adjudicated LAST, after every other seat, as a subagent pinned to `model: fable` that opened by
+naming itself `claude-fable-5-1` (verified, not assumed); it also closed the repair chain on this pass --
+zero floor breaches, with the denominator: M_RD0, M_MAGICBIT (and the PPC round's four) measured killed,
+the rest enumerated as (e).
+
+## Gate
+
+`gate_arm.sh` (gate 14) with the new xscale section — parse before score, RESULT/CONTROL/DONE each
+exactly once, rows run / correct / emitted pinned to the literal 30, FAIL and BLOCKED both zero:
+**gate 14 PASS, 922 checks** -- the 914 of `#519`'s run plus this section's eight, every xscale row `ok` (parses, controls OK, exit 0, run 30, correct 30, emitted 30, FAIL 0, BLOCKED 0); GATE_EXIT=0; run from a FROZEN copy of `gate_arm.sh`; log `regress/artifacts/xscaleinten/gate_arm_20260912.log`.  Build trees: two-part clearance RUN before the gate, not asserted -- `cpu_arm_coproc.c` p1=CLEAN p2=FRESH in `build/`, `build-asan/` and `/tmp/gxsec-build`; `est/` p1=CLEAN, p2 N/A (source tree, no binary); the probe `cmp`-IDENTICAL to kill table 3's frozen instrument.
+
 # `#518` (lcabadval): legal LCA register writes terminated the emulator, including the SROM-required clearing of a DMA window
 
 **THE DEFECT AND FIX.** The historical guards killed the host after storing the operand.

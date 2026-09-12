@@ -1,0 +1,24 @@
+SURVIVOR: multiple clause-(d) mutants, e.g. reinsert `fatal("TODO: XScale read from inten?\n"); exit(1);` after the load under `if (rd == 0)`. Also `if (isteer != 0)` and `if (i80321_inten & ~(S1|S2))` survive all 29 rows.  
+PASS2_XSCALE_20260912
+
+**1. Surviving (d) mutants**  
+READ from packet: the fix deletes an unconditional `fatal(); exit(1);` after `cpu->cd.arm.r[rd] = cpu->cd.arm.i80321_inten;` under `crm==0`, `crn==0`, `l_bit`.  
+REASONED: a clause-(d) mutant may re-introduce the exit under any predicate on in-scope state. The 29 rows only exercise inten reads with `rd ∈ {3,4,5,6,9,10,15}` and `i80321_inten ∈ {0, S1, S2, bit28}`. No row uses `rd == 0`, no row sets `isteer != 0` before an inten read, and `bit28` is already set in `S2 = 0x5AA5F00D`. Therefore:
+
+- `if (rd == 0) { fatal(...); exit(1); }` — survives. Expected catcher would be a row reading inten into r0; none exists. `RD15_SURVIVE` uses r15, not r0.  
+- `if (isteer != 0) { fatal(...); exit(1); }` — survives. The only nonzero isteer write is `SIB_WRITE`, which dies before any inten read; `INTEN_WRITE_PRESERVES_ISTEER` sets isteer=0 and then reads crn=4, not inten.  
+- `if (i80321_inten & ~(S1|S2)) { fatal(...); exit(1); }` — survives. Observed inten values are 0, S1, S2, and bit28. Bit28 is in S2, so the mask is false for all rows. Expected catcher `ANCHOR_M1` would trigger only if bit28 were outside S1|S2, but it is not.
+
+Classification:  
+- `rd == 0` and `i80321_inten & ~(S1|S2)` are **floor cells** — the body reads `rd` and `i80321_inten`.  
+- `isteer != 0` is **clause-(e) disclosure** — the inten-read body never reads `isteer`.
+
+**2. Vacuous row?**  
+READ from packet: table says M5 (`read loads isteer`) fails `INTEN_WRITE_PRESERVES_ISTEER`.  
+REASONED: the row description says `INTEN_WRITE_PRESERVES_ISTEER` does `isteer<-0, inten<-S1, read isteer, want 0`. That row does not execute the inten-read path, so the named channel (inten read) does not vary under M5. This is either a vacuous row or the row description is incomplete. No other row in the table appears vacuous by construction.
+
+**3. False/overclaim in CONTRACT**  
+The claim that M5 is caught by `INTEN_WRITE_PRESERVES_ISTEER` is suspect for the reason above. The contract’s “each MEASURED in kill table 2” overclaims if that row does not actually exercise the mutant.
+
+**4. ACCEPT disposition**  
+Not checkable from packet (file-reading only). From the inlined text, ACCEPT is consistent with the sibling crn=4 read and the stated DC21285 precedent, but I cannot verify the source.

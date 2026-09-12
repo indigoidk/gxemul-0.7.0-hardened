@@ -19384,3 +19384,19 @@ Measured in the same census.  Filed 2026-09-11.
 **Operational rule:** when an Agent call fails, read WHICH MODEL the error names before concluding the transport is gone, and try another model on the same path.  One invocation settles it -- exactly as the wall rule already says for CLI seats.
 
 Filed because the cost was real: for about ten minutes subagent capacity was treated as lost while it was available the whole time.  Same shape as the kimi substitute sitting unfired for days.
+
+### `xscaleinten` -- SHIPPED as `#526` (2026-09-12); residuals FILED, none owed
+
+The fix (ACCEPT: delete the `fatal` + `exit(1)` after the inten load) and its 30-row detector shipped as
+`#526`, with `gate_arm.sh` pinned at 30.  The repair chain closed on the §F2 adjudication pass (Fable 5.1,
+`regress/artifacts/xscaleinten/fable_adjudication_20260912.md`).  What stays OPEN is coverage debt the CONTRACT
+already discloses, filed so it is findable rather than argued again:
+
+* **Exits keyed on `rd == k` for an undriven k (inten reads land in r0, r3-r7, r9, r10, r15) and on an exact
+  inten VALUE.**  Clause (e) by Fable's ruling -- the body indexes by `rd` and copies inten and tests neither.
+  `RD0_ALLONES` pins the `rd == 0` and single-bit-SET partitions; nothing pins the rest, BY DESIGN.
+* **`panel.sh`'s ECHO-ONLY check has a FALSE POSITIVE.**  On `panel_20260912_095235_xscalepass2` it labelled
+  minimax `ECHO-ONLY (5394b = brief 9606b + -4212b) -- NOT A REVIEW`; the file is a real answer that opens by
+  restating the brief's first line and then finds the inten-bit survivor.  A NEGATIVE novel-byte count is the
+  tell -- the heuristic subtracts the brief size from an answer SHORTER than the brief.  Harness change; owes
+  two negative controls (an echo-only file still flagged; this file not flagged).

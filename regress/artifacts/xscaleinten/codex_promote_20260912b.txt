@@ -1,0 +1,587 @@
+VERDICT: Do not close the round: these edits provide 28 rows, but crm isolation remains uncovered, and the allowed files do not establish the MANIFEST entry.
+CODEX_XSCP_20260912
+
+I read only the four named files. Their source line numbers match. No files were written.
+
+Produce `C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\regress\xscale_inten_probe.py` from the [listed witness](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/xscaleinten/agy_xscale_witness_20260911.py), applying all probe replacements below. Every OLD block was verified to occur once in that witness. The gate replacement was independently verified once.
+
+**(a), (b): the two new rows**
+
+| Operation | Word | Expected value |
+|---|---|---|
+| `mrc p6,1,r7,c0,c0,0` after inten ← S1 | `0xEE307610` | `S1 = 0xA500005A` |
+| isteer ← r0, with r0 = 0 | `0xEE040610` | — |
+| inten ← r1, with r1 = S1 | `0xEE001610` | — |
+| `mrc p6,0,r7,c4,c0,0` | `0xEE147610` | `0` |
+
+Use fresh sessions so an earlier D-session death cannot block either new row. Both destinations are checked for poison immediately before the read.
+
+OLD:
+```python
+    # -------------------------------------------------------------
+    # ARM RD15: Destination PC (r15)
+    # -------------------------------------------------------------
+```
+
+NEW:
+```python
+    # Fresh sessions keep either new observation independent of D's survival.
+    for tag, desc, words, want in (
+        ("D_OP1", "CP6: inten read opcode1=1 (rd=7)",
+         (0xEE001610, 0xEE307610, NOP), S1),
+        ("INTEN_WRITE_PRESERVES_ISTEER", "inten write leaves isteer zero",
+         (0xEE040610, 0xEE001610, 0xEE147610, NOP), 0),
+    ):
+        probe = Session(BIN)
+        try:
+            setup = [
+                "r0=0x00000000",
+                f"r1=0x{S1:08x}",
+                "r7=0xdeadbe07",
+            ]
+            setup += [
+                f"put w 0x{CODE + 4*i:08x}, 0x{word:08x}"
+                for i, word in enumerate(words)
+            ]
+            setup.append(f"pc=0x{CODE:08x}")
+            ready = all(probe.send(cmd) for cmd in setup)
+            for _ in words[:-2]:
+                if ready:
+                    ready = probe.send("step 1", timeout=10)
+            before = probe.get_regs().get(7) if ready else None
+            if not ready or before is None:
+                got = "HOST-DIED" if probe.dead else "SETUP-UNOBSERVED"
+                ok = None
+            elif before != 0xDEADBE07:
+                got, ok = "BAD-POISON", False
+            elif not probe.send("step 1", timeout=10):
+                got = "HOST-DIED" if probe.dead else "TIMEOUT"
+                ok = False
+            else:
+                got = probe.get_regs().get(7)
+                ok = None if got is None else got == want
+            report_row(tag, desc, got, want, ok)
+        finally:
+            probe.close()
+
+    # -------------------------------------------------------------
+    # ARM RD15: Destination PC (r15)
+    # -------------------------------------------------------------
+```
+
+**(c): retain completed observations; report missing observations BLOCKED**
+
+OLD:
+```python
+        st = "ok" if ok else "FAIL"
+```
+
+NEW:
+```python
+        st = "BLOCKED" if ok is None else ("ok" if ok else "FAIL")
+```
+
+OLD:
+```python
+        if not ok or s.dead:
+            d_died_at = off
+            break
+```
+
+NEW:
+```python
+        if not ok or s.dead:
+            d_died_at = off
+            d_stop_reason = "HOST-DIED" if s.dead else "TIMEOUT"
+            break
+```
+
+Missing pre-snapshots must also stop earning a green vacuity control.
+
+OLD:
+```python
+    report_row("P2_VACUITY", "D: subject dest held poison pre-step",
+               "VOID" if vacuity_violated else "POISON_CLEAN",
+               "POISON_CLEAN",
+               not vacuity_violated)
+```
+
+NEW:
+```python
+    missing_pre = [off for off in dest_map if pre_snapshots.get(off) is None]
+    p2_ok = False if vacuity_violated else (None if missing_pre else True)
+    report_row("P2_VACUITY", "D: each pre-read value differs from want",
+               "VOID" if vacuity_violated else (
+                   "MISSING-PRE" if missing_pre else "DIFFERENT"),
+               "DIFFERENT", p2_ok)
+```
+
+OLD:
+```python
+    report_row("D_TRR0", "D: trr0 CP6 liveness", r8_trr0, TRR0_SEED, r8_trr0 == TRR0_SEED)
+```
+
+NEW:
+```python
+    report_row("D_TRR0", "D: trr0 CP6 liveness", r8_trr0, TRR0_SEED,
+               None if r8_trr0 is None else r8_trr0 == TRR0_SEED)
+```
+
+OLD:
+```python
+    if d_died_at is not None:
+        report_row("D_SURVIVE", "D: ran to marker without exit(1)", f"died@0x{d_died_at:02x}", "SURVIVED", False)
+        report_row("D_RESET", "D: inten reset val (rd=9)", "VOID" if vacuity_violated else "-", 0, False)
+        report_row("D_S1", "D: inten read S1 (rd=4)", "VOID" if vacuity_violated else "-", S1, False)
+        report_row("D_ZERO", "D: inten read 0 (rd=5)", "VOID" if vacuity_violated else "-", 0, False)
+        report_row("D_S2", "D: inten read S2 (rd=6)", "VOID" if vacuity_violated else "-", S2, False)
+        report_row("D_OP2", "D: inten read opcode2=1 (rd=10)", "VOID" if vacuity_violated else "-", S2, False)
+        report_row("D_MARKER", "D: marker reached (r0=0x5a)", "-", MARKER, False)
+    else:
+        regs_final = post_snapshots.get(0x28, {})
+        report_row("D_SURVIVE", "D: ran to marker without exit(1)", "SURVIVED", "SURVIVED", True)
+        report_row("D_RESET", "D: inten reset val (rd=9)", "VOID" if vacuity_violated else regs_final.get(9), 0, (not vacuity_violated) and regs_final.get(9) == 0)
+        report_row("D_S1", "D: inten read S1 (rd=4)", "VOID" if vacuity_violated else regs_final.get(4), S1, (not vacuity_violated) and regs_final.get(4) == S1)
+        report_row("D_ZERO", "D: inten read 0 (rd=5)", "VOID" if vacuity_violated else regs_final.get(5), 0, (not vacuity_violated) and regs_final.get(5) == 0)
+        report_row("D_S2", "D: inten read S2 (rd=6)", "VOID" if vacuity_violated else regs_final.get(6), S2, (not vacuity_violated) and regs_final.get(6) == S2)
+        report_row("D_OP2", "D: inten read opcode2=1 (rd=10)", "VOID" if vacuity_violated else regs_final.get(10), S2, (not vacuity_violated) and regs_final.get(10) == S2)
+        report_row("D_MARKER", "D: marker reached (r0=0x5a)", regs_final.get(0), MARKER, regs_final.get(0) == MARKER)
+```
+
+NEW:
+```python
+    d_cause = (
+        f"{d_stop_reason}@0x{d_died_at:02x}"
+        if d_died_at is not None else "MISSING-SNAPSHOT"
+    )
+    report_row("D_SURVIVE", "D: ran to marker without exit(1)",
+               d_cause if d_died_at is not None else "SURVIVED",
+               "SURVIVED", d_died_at is None)
+    for tag, desc, off, rd, want in (
+        ("D_RESET", "D: inten reset val (rd=9)", 0x08, 9, 0),
+        ("D_S1", "D: inten read S1 (rd=4)", 0x10, 4, S1),
+        ("D_ZERO", "D: inten read 0 (rd=5)", 0x18, 5, 0),
+        ("D_S2", "D: inten read S2 (rd=6)", 0x20, 6, S2),
+        ("D_OP2", "D: inten read opcode2=1 (rd=10)", 0x24, 10, S2),
+    ):
+        before = pre_snapshots.get(off)
+        after = post_snapshots.get(off, {}).get(rd)
+        if after is None:
+            report_row(tag, desc, d_cause, want, None)
+        elif before is None:
+            report_row(tag, desc, "MISSING-PRE", want, None)
+        elif before == want:
+            report_row(tag, desc, "VOID", want, False)
+        else:
+            report_row(tag, desc, after, want, after == want)
+    marker = post_snapshots.get(0x28, {}).get(0)
+    report_row("D_MARKER", "D: marker reached (r0=0x5a)",
+               d_cause if marker is None else marker, MARKER,
+               None if marker is None else marker == MARKER)
+```
+
+**(d): fresh prompts, checked timeouts, and cleanup**
+
+A timeout leaves the session unsynchronized. Subsequent commands require a successful interrupt/resynchronization.
+
+OLD:
+```python
+        self.buf = ""
+        self.dead = False
+        self.wait_prompt(timeout)
+```
+
+NEW:
+```python
+        self.buf = ""
+        self.dead = False
+        self.ready = False
+        self.wait_prompt(timeout, mark=0)
+```
+
+OLD:
+```python
+    def wait_prompt(self, timeout=30):
+        t0 = time.time()
+        while time.time() - t0 < timeout:
+            if self.dead:
+                return False
+            self.rd(0.1)
+            if self.buf.rstrip().endswith("GXemul>"):
+                return True
+        return False
+
+    def send(self, cmd_str, timeout=30):
+        if self.dead:
+            return False
+        b = (cmd_str + "\n").encode("latin1")
+        try:
+            os.write(self.fd, b)
+        except OSError:
+            self.dead = True
+            return False
+        return self.wait_prompt(timeout)
+```
+
+NEW:
+```python
+    def wait_prompt(self, timeout=30, mark=None):
+        if mark is None:
+            mark = len(self.buf)
+        self.ready = False
+        deadline = time.monotonic() + timeout
+        while not self.dead:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+            self.rd(min(0.1, remaining))
+            if self.dead:
+                return False
+            if self.buf[mark:].rstrip().endswith("GXemul>"):
+                self.ready = True
+                return True
+        return False
+
+    def send(self, cmd_str, timeout=30):
+        if self.dead or not self.ready:
+            return False
+        mark = len(self.buf)
+        self.ready = False
+        b = (cmd_str + "\n").encode("latin1")
+        try:
+            os.write(self.fd, b)
+        except OSError:
+            self.dead = True
+            return False
+        return self.wait_prompt(timeout, mark=mark)
+
+    def interrupt(self, timeout=2):
+        if self.dead:
+            return False
+        mark = len(self.buf)
+        self.ready = False
+        try:
+            os.write(self.fd, b"\x03")
+        except OSError:
+            self.dead = True
+            return False
+        return self.wait_prompt(timeout, mark=mark)
+```
+
+Cleanup needs an escape from a still-running child. Preserve the pre-cleanup death flag: EOF caused by our own `quit` must not make the expected-death controls pass.
+
+OLD:
+```python
+    def close(self):
+        try:
+            os.write(self.fd, b"quit\n")
+            time.sleep(0.1)
+        except OSError:
+            pass
+        try:
+            os.close(self.fd)
+        except OSError:
+            pass
+        try:
+            _, st = os.waitpid(self.pid, 0)
+            code = os.WEXITSTATUS(st) if os.WIFEXITED(st) else None
+            sig = os.WTERMSIG(st) if os.WIFSIGNALED(st) else None
+        except Exception:
+            code, sig = None, None
+        return code, sig, self.buf
+```
+
+NEW:
+```python
+    def close(self):
+        dead_before_close = self.dead
+        if not self.dead and not self.ready:
+            self.interrupt(timeout=2)
+        if not self.dead and self.ready:
+            self.send("quit", timeout=1)
+        try:
+            os.close(self.fd)
+        except OSError:
+            pass
+        deadline = time.monotonic() + 2
+        st = None
+        while st is None:
+            try:
+                pid, status = os.waitpid(self.pid, os.WNOHANG)
+            except ChildProcessError:
+                break
+            if pid == self.pid:
+                st = status
+                break
+            if time.monotonic() >= deadline:
+                try:
+                    os.kill(self.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                try:
+                    _, st = os.waitpid(self.pid, 0)
+                except ChildProcessError:
+                    pass
+                break
+            time.sleep(0.02)
+        code = os.WEXITSTATUS(st) if st is not None and os.WIFEXITED(st) else None
+        sig = os.WTERMSIG(st) if st is not None and os.WIFSIGNALED(st) else None
+        self.dead = dead_before_close
+        return code, sig, self.buf
+```
+
+Install the positive breakpoint before executing the IRQ-enable instructions. Query registers only after a confirmed prompt.
+
+OLD:
+```python
+    if s_anc.dead:
+        report_row("ANCHOR_EXC", "ANCHOR: IRQ exception reached vector 0x18", "HOST-DIED", "0x00000018", False)
+    else:
+        for off, _, _ in prog_anc[6:]:
+            s_anc.send("step 1")
+        s_anc.send("breakpoint add 0x18")
+        s_anc.send("continue", timeout=3)
+        regs_anc_cont = s_anc.get_regs()
+        pc_hit = regs_anc_cont.get("pc")
+        report_row("ANCHOR_EXC", "ANCHOR: IRQ exception reached vector 0x18",
+                   pc_hit, 0x00000018, pc_hit == 0x00000018)
+```
+
+NEW:
+```python
+    if anc_died_at is not None or s_anc.dead or not s_anc.ready:
+        report_row("ANCHOR_EXC", "ANCHOR: IRQ exception reached vector 0x18",
+                   "ANCHOR-SETUP-UNOBSERVED", 0x00000018, None)
+    else:
+        ready = s_anc.send("breakpoint add 0x18")
+        if not ready:
+            report_row("ANCHOR_EXC", "ANCHOR: IRQ exception reached vector 0x18",
+                       "BREAKPOINT-UNCONFIRMED", 0x00000018, None)
+        else:
+            stopped = s_anc.send("continue", timeout=3)
+            recovered = False
+            if not stopped and not s_anc.dead:
+                recovered = s_anc.interrupt(timeout=2)
+            if stopped or recovered:
+                pc_hit = s_anc.get_regs().get("pc")
+            else:
+                pc_hit = None
+            got = pc_hit if pc_hit is not None else (
+                "HOST-DIED" if s_anc.dead else "TIMEOUT-UNSYNCED")
+            report_row("ANCHOR_EXC", "ANCHOR: IRQ exception reached vector 0x18",
+                       got, 0x00000018, pc_hit == 0x00000018)
+```
+
+Give the contrast leg the same breakpoint placement and observation interval.
+
+OLD:
+```python
+    for off, _, _ in prog_anc:
+        ok = s_ctl.send("step 1")
+```
+
+NEW:
+```python
+    for off, _, _ in prog_anc[:6]:
+        ok = s_ctl.send("step 1")
+```
+
+OLD:
+```python
+    if ctl_died:
+        pc_ctl = "HOST-DIED"
+    else:
+        s_ctl.send("breakpoint add 0x18")
+        os.write(s_ctl.fd, b"continue\n")
+        time.sleep(0.4)
+        try:
+            os.write(s_ctl.fd, b"\x03")
+            s_ctl.wait_prompt(2)
+            regs_ctl = s_ctl.get_regs()
+            pc_ctl = regs_ctl.get("pc")
+        except:
+            pc_ctl = None
+```
+
+NEW:
+```python
+    if ctl_died:
+        pc_ctl = "HOST-DIED" if s_ctl.dead else "STEP-TIMEOUT"
+    elif not s_ctl.send("breakpoint add 0x18"):
+        pc_ctl = "BREAKPOINT-UNCONFIRMED"
+    else:
+        stopped = s_ctl.send("continue", timeout=3)
+        recovered = False
+        if not stopped and not s_ctl.dead:
+            recovered = s_ctl.interrupt(timeout=2)
+        if stopped or recovered:
+            pc_ctl = s_ctl.get_regs().get("pc")
+        else:
+            pc_ctl = "HOST-DIED" if s_ctl.dead else "TIMEOUT-UNSYNCED"
+```
+
+**(e): promotion and machine-readable results**
+
+Promoted filename:
+```text
+C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\regress\xscale_inten_probe.py
+```
+
+OLD:
+```python
+agy_xscale_witness_20260911.py -- Rung-3 witness for xscaleinten on -E iq80321.
+```
+
+NEW:
+```python
+xscale_inten_probe.py -- Regression probe for xscaleinten on -E iq80321.
+```
+
+Pass the gate’s existing stub explicitly. This also supplies the `signal` import used above.
+
+OLD:
+```python
+import os, sys, pty, select, time, re
+
+BIN = sys.argv[1] if len(sys.argv) > 1 else "/tmp/gxxscale/gxemul"
+LEG = sys.argv[2] if len(sys.argv) > 2 else "BASE"
+STUB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "regress", "arm_bfx_stub.bin")
+if not os.path.exists(STUB):
+    STUB = "/tmp/stub.bin"
+    if not os.path.exists(STUB):
+        with open(STUB, "wb") as f:
+            f.write(bytes(16))
+```
+
+NEW:
+```python
+import os, sys, pty, select, time, re, signal
+
+if len(sys.argv) != 4:
+    raise SystemExit("usage: xscale_inten_probe.py GXEMUL LEG STUB")
+BIN, LEG = sys.argv[1:3]
+STUB = os.path.abspath(sys.argv[3])
+if not os.path.isfile(STUB):
+    raise SystemExit(f"missing load stub: {STUB}")
+```
+
+OLD:
+```python
+    print(f"=== XSCALEINTEN WITNESS [{LEG}] ===")
+```
+
+NEW:
+```python
+    print(f"=== XSCALEINTEN PROBE [{LEG}] ===")
+```
+
+Keep BLOCKED rows in the denominator, separate their names from failures, emit explicit controls, and return nonzero on an unsuccessful run.
+
+OLD:
+```python
+    passed = sum(1 for _, ok, _, _, _ in rows if ok)
+    total = len(rows)
+    failing = [tag for tag, ok, _, _, _ in rows if not ok]
+    print()
+    print(f"SCORE {passed}/{total}")
+    if failing:
+        print(f"FAILING: {', '.join(failing)}")
+    else:
+        print("FAILING: NONE")
+    print("XSCALE_WITNESS_DONE")
+    return passed, total
+
+if __name__ == "__main__":
+    run()
+```
+
+NEW:
+```python
+    passed = sum(1 for _, ok, _, _, _ in rows if ok is True)
+    total = len(rows)
+    failing = [tag for tag, ok, _, _, _ in rows if ok is False]
+    blocked = [tag for tag, ok, _, _, _ in rows if ok is None]
+    controls = (
+        "P2_VACUITY", "A2_INSTALLED", "D_TRR0",
+        "LNC_COND", "X4_NOP", "LNC_P2",
+        "E_UNKNOWN", "S_ISRC_WR", "SIB_READ", "SIB_WRITE",
+        "ANCHOR_ISRC", "ANCHOR_CONTRAST",
+    )
+    states = {tag: ok for tag, ok, _, _ in rows}
+    control_ok = (
+        len(states) == total
+        and all(states.get(tag) is True for tag in controls)
+    )
+    print()
+    print(f"SCORE {passed}/{total}")
+    print("FAILING: " + (", ".join(failing) if failing else "NONE"))
+    print("BLOCKED: " + (", ".join(blocked) if blocked else "NONE"))
+    print("XSCALE_CONTROL=" + ("OK" if control_ok else "FAIL"))
+    print(f"XSCALE_RESULT={passed}/{total}")
+    print("XSCALE_PROBE_DONE")
+    return 0 if control_ok and passed == total else 1
+
+if __name__ == "__main__":
+    sys.exit(run())
+```
+
+For [gate_arm.sh](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gate_arm.sh), OLD:
+```bash
+gate_end
+```
+
+NEW — full section:
+```bash
+# ------------------------------------------------------------------ xscaleinten
+XSCALELOG=$LOGDIR/gate_xscale_inten.log
+xrc=0
+python3 -u xscale_inten_probe.py "$PMAX" gate "$STUB" > "$XSCALELOG" 2>&1 || xrc=$?
+
+# PARSE BEFORE SCORE: require one complete, valid record of each kind.
+if [ "$(grep -c '^XSCALE_RESULT=' "$XSCALELOG")" != "1" ] ||
+   ! grep -Eq '^XSCALE_RESULT=(0|[1-9][0-9]*)/(0|[1-9][0-9]*)$' "$XSCALELOG" ||
+   [ "$(grep -c '^XSCALE_CONTROL=' "$XSCALELOG")" != "1" ] ||
+   ! grep -Eq '^XSCALE_CONTROL=(OK|FAIL)$' "$XSCALELOG" ||
+   [ "$(grep -cx 'XSCALE_PROBE_DONE' "$XSCALELOG")" != "1" ]; then
+    note "xscale probe produced no unique, valid completion record; last lines follow"
+    tail -5 "$XSCALELOG" | sed 's/^/       /'
+    check "xscale probe output parses" "no" "yes"
+else
+    check "xscale probe output parses" "yes" "yes"
+    grep -E ' (ok|FAIL|BLOCKED)$' "$XSCALELOG" | sed 's/^/       /'
+
+    xctrl=$(sed -n 's/^XSCALE_CONTROL=//p' "$XSCALELOG")
+    check "xscale controls" "$xctrl" "OK"
+    check "xscale probe exit status" "$xrc" "0"
+
+    xres=$(sed -n 's/^XSCALE_RESULT=//p' "$XSCALELOG")
+    xgot=${xres%/*}
+    xwant=${xres#*/}
+    # Pinned by hand: 26 existing rows plus the two new rows.
+    check "xscale rows run" "$xwant" "28"
+    check "xscale rows correct" "$xgot" "28"
+    check "xscale rows emitted" "$(grep -cE ' (ok|FAIL|BLOCKED)$' "$XSCALELOG")" "28"
+    check "xscale rows failed" "$(grep -c ' FAIL$' "$XSCALELOG")" "0"
+    check "xscale rows blocked" "$(grep -c ' BLOCKED$' "$XSCALELOG")" "0"
+fi
+
+gate_end
+```
+
+**The MANIFEST entry cannot be supplied exactly from these files.** `check_probe_wiring.py` is outside the allowlist, and the allowed files provide neither its entry syntax nor a replacement anchor. The required association is:
+
+```text
+xscale_inten_probe.py -> gate_arm.sh
+```
+
+That is an association specification, not a verified MANIFEST line.
+
+**(f): denominator and remaining limits**
+
+The designed row count is **28**: 26 existing rows plus `D_OP1` and `INTEN_WRITE_PRESERVES_ISTEER`. BLOCKED rows remain included.
+
+**PREDICTION:** fixed build **28/28**, subject to measuring the revised IRQ harness. The opcode1 reinstatement should fail `D_OP1`; M5 should make the new isteer observation return `S1`, failing its zero expectation.
+
+These edits do **not** supply the missing `crm=1, crn=0, l_bit=1` observation. `D_TRR0` still does not isolate crm.
+
+Python syntax and targeted in-memory prompt/snapshot checks passed. Bash validation could not start because of an MSYS sandbox permission error. No emulator measurements were performed.

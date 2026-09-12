@@ -1,0 +1,85 @@
+PRE-TABLE CHECK -- xscaleinten
+Written BEFORE table 1 runs, so this file's own mtime proves the order.
+
+THE DIFF UNDER TEST is in src/cpus/cpu_arm_coproc.c, arm_coproc_i80321_6(), case 0 (crn 0, crm 0):
+  Deletion of two lines in the l_bit (load) arm:
+    fatal("TODO: XScale read from inten?\n");
+    exit(1);
+  keeping the assignment:
+    cpu->cd.arm.r[rd] = cpu->cd.arm.i80321_inten;
+  adding NO diagnostic.
+
+--------------------------------------------------------------------- SIBLING PARITY
+
+In arm_coproc_i80321_6():
+  crm 0 / crn 0:  inten (interrupt enable) -- subject of this round.
+  crm 0 / crn 4:  isteer (interrupt steering). Read is silent-accept; write with non-zero
+                  fatal/exit(1)s at :320-325 ("ARM xscale interrupt steering is not yet implemented").
+                  Rowed as SIB_READ (survives) and SIB_WRITE (dies both builds).
+  crm 0 / crn 8:  isrc (interrupt source). Read is silent-accept; write fatal/exit(1)s at
+                  :331-333 ("TODO: XScale int ack?").
+                  Rowed as S_ISRC_WR (dies both builds).
+  crm 1:          timers (tmr0, tmr1, tcr0, tcr1, tisr, wdtcr). 16 quiet direction arms.
+
+--------------------------------------------------------------------- CLAIM -> ROW
+
+1. "Pre-fix build terminates on reading inten"
+   -> ROWED as D_SURVIVE, LNC_SUB, RD15_BRANCH, ANCHOR_M1 (all fail pre-fix, pass post-fix).
+2. "TODO diagnostic text is emitted on pre-fix read"
+   -> ROWED as D_TODO_ABS, LNC_TODO_ABS (PRESENT pre-fix -> FAIL; ABSENT post-fix -> ok).
+3. "CP6 is installed in IQ80321 bootstrap CPU"
+   -> ROWED as A2_INSTALLED (generic arm_mcr_mrc uninstalled diagnostic is ABSENT) and
+      D_TRR0 (CP6 trr0 register round-trip proves functional coprocessor communication).
+4. "Condition codes gate instruction execution"
+   -> ROWED as LNC_COND (mrceq with Z=0 does not alter r3).
+5. "NOP does not alter destination"
+   -> ROWED as X4_NOP (mov r0,r0 leaves r0 poisoned, does not acquire S1).
+6. "Vacuity floor (P2) is satisfied"
+   -> ROWED as P2_VACUITY (every subject destination holds its poison immediately before its step).
+7. "Side-effect anchor: interrupt controller reads inten via d->enable"
+   -> ROWED as ANCHOR_ISRC (NS16550 asserts line 28 synchronously),
+      ANCHOR_EXC (IRQ fires and jumps to vector 0x18 breakpoint when inten bit 28 is set),
+      ANCHOR_CONTRAST (when inten=0, vector 0x18 is never reached; spins in b .).
+
+--------------------------------------------------------- GUARD FIELD vs BODY FIELD
+
+  Guard field: l_bit (read vs write), crn, crm, opcode1, opcode2, condition code (CPSR Z).
+  Body field: cpu->cd.arm.r[rd], cpu->cd.arm.i80321_inten, d->enable.
+
+------------------------------------------------------------------------- CHANNEL
+
+  row                mutant it kills                    observable that differs
+  -----------------  ---------------------------------  ------------------------------
+  D_SURVIVE          HEAD (M_ORIG)                      exit 1 vs continued execution
+  D_TODO_ABS         HEAD (M_ORIG)                      "TODO: XScale read from inten?" in log vs absent
+  LNC_SUB            HEAD (M_ORIG)                      exit 1 vs r3 = S1 (0xA500005A)
+  ANCHOR_M1          M1 (floor breach)                  exit 1 vs r9 = 0x10000000
+  ANCHOR_EXC         M5 (total escape)                  timeout/spin vs breakpoint 0x18 hit
+  D_OP2              M_OPCODE2 (opcode2 != 0 check)     exit 1 / bad value vs r10 = S2
+  RD15_BRANCH        M_RD15 (rd == 15 refused/ignored)  exit 1 / trap vs r0 = 0x5a (marker)
+  D_OP2 / D_MARKER   M_NREAD (static nread > 4)         exit 1 on 5th read vs marker reached
+
+------------------------------------------------------------------------- PREDICTIONS
+
+Leg            Predicted Score    Killed By
+------------   ----------------   --------------------------------------------
+BASE           26/26              (Clean post-fix baseline)
+HEAD           11/26              D_TODO_ABS, D_SURVIVE, D_RESET, D_S1, D_ZERO, D_S2, D_OP2, D_MARKER,
+                                  LNC_TODO_ABS, LNC_SUB, LNC_MARKER, RD15_BRANCH, ANCHOR_M1, ANCHOR_EXC, ANCHOR_CONTRAST
+M1             24/26              ANCHOR_M1, ANCHOR_EXC
+M5             25/26              ANCHOR_EXC
+M_OPCODE2      24/26              D_OP2, D_MARKER
+M_RD15         25/26              RD15_BRANCH
+M_NREAD        24/26              D_OP2, D_MARKER
+RESTORED       26/26              (Reproduces BASE after restore and fresh build)
+
+------------------------------------------------------------------------- CLAUSE (e) DISCLOSURES
+
+What the instrument cannot see:
+1. Secondary CPU CP6 access: IQ80321 assigns CP6 only to bootstrap_cpu in machine_iq80321.c:57;
+   multiprocessor ARM configurations (if any) are outside the single-CPU test vehicle.
+2. MMU address translation during CP6 access: CP6 is a coprocessor register transfer (MRC/MCR),
+   not an MMIO load/store, so memory translation tables are bypassed for the register itself.
+3. Timer tick jitter under long execution: Free-running ANCHOR uses single-step to stage NS16550
+   writes before switching to free-run, avoiding step-1 tick interference.
+4. Non-canonical opcode1 encodings other than opcode1=0 and opcode1=3 (tested in arm E).

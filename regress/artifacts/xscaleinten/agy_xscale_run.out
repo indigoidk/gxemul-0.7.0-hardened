@@ -1,0 +1,116 @@
+I have launched the size check on `GXEMUL-SEC` in the background and will continue as soon as it returns.
+I am waiting for the background size check to complete.
+I have initiated the test compilation in `/tmp/gxxscale` and will await its completion.
+I am waiting for the build task in `/tmp/gxxscale` to finish.
+I will wait for the build process to finish.
+I will stop calling tools to allow the background build to complete.
+I am waiting for task-125 to complete.
+I will wait for the background task to complete.
+I will wait for the build and pre-fix measurement task to complete.
+I will wait for the task to finish.
+I have launched the kill table run across all legs in `/tmp/gxxscale` and will await completion.
+I will wait for the kill table execution to complete.
+VERDICT:
+AGY38_XSCALE_20260911
+HEAD: `8d372aa`
+
+# `xscaleinten` Rung-3 Witness, Repair, and Kill Table on `-E iq80321`
+
+## 1. Executive Summary & Defect Disposition
+
+The defect in [cpu_arm_coproc.c](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_coproc.c#L310-L316) (`arm_coproc_i80321_6()`, `crm == 0`, `crn == 0`) terminates the emulator on any guest read of the Intel 80321 `INTEN` (Interrupt Enable) register via Coprocessor 6 (`MRC p6, 0, Rd, c0, c0, 0`):
+
+```c
+		case 0:	if (l_bit) {
+				cpu->cd.arm.r[rd] = cpu->cd.arm.i80321_inten;
+				fatal("TODO: XScale read from inten?\n");
+				exit(1);
+			} else
+				cpu->cd.arm.i80321_inten = cpu->cd.arm.r[rd];
+			break;
+```
+
+In GXemul's architecture, `dev_i80321.c:446` explicitly wires this register into the interrupt controller via pointer aliasing:
+```c
+d->enable = &cpu->cd.arm.i80321_inten;
+```
+Both the backing store and interrupt gating semantics (`*d->status & *d->enable` in `i80321_assert()`) were fully implemented; the read arm correctly transferred the register value to `cpu->cd.arm.r[rd]` before needlessly aborting.
+
+**Repair Applied**: Deletion of the two terminating lines (`fatal(...)` and `exit(1);`), preserving the register assignment without emitting any false "unimplemented" diagnostic.
+
+---
+
+## 2. Measurement Verification: Pre-Fix vs. Post-Fix
+
+Measurements were performed on the IQ80321 platform (`-E iq80321`) using a 7-arm guest assembly harness loaded at PA/VA `0x00008000` (strictly above the `0x4000-0x7FFF` L1 translation table).
+
+### Summary of Results (26 Assertions)
+
+| Arm / Assertion Focus | Pre-Fix (`witness_committed.out`) | Post-Fix (`witness_fix.out`) | Status |
+| :--- | :--- | :--- | :--- |
+| **D (Data Transfer & Reset)** | 1 / 9 passed (`D_P2_POISON` passed; `D_TODO_ABS`, `D_SURVIVE`, `D_RESET`, `D_S1`, `D_ZERO`, `D_S2`, `D_OP2`, `D_MARKER` failed) | **9 / 9 passed** | **Repaired** |
+| **LNC (Latent Non-Canonical)** | 2 / 5 passed (`LNC_P2`, `LNC_COND` passed; `LNC_TODO_ABS`, `LNC_SUB`, `LNC_MARKER` failed) | **5 / 5 passed** | **Repaired** |
+| **E (Exception Refusal)** | 1 / 1 passed (opcode1 != 0 dies with exit 1) | **1 / 1 passed** (still dies) | Preserved |
+| **S (Sibling Parity)** | 2 / 2 passed (unimplemented write arms die) | **2 / 2 passed** (still die) | Preserved |
+| **RD15 (Rd == 15 PC Transfer)**| 1 / 2 passed (`RD15_P2` passed; `RD15_SURVIVE` failed) | **2 / 2 passed** | **Repaired** |
+| **ANCHOR (Side-Effect Gating)**| 1 / 4 passed (`ANCHOR_P2` passed; `ANCHOR_M1`, `ANCHOR_EXC`, `ANCHOR_CONTRAST` failed) | **4 / 4 passed** | **Repaired** |
+| **CONTRACT (X4, A2, D_TRR0)** | 3 / 3 passed (`X4_NOP`, `A2_INSTALLED`, `D_TRR0` pass) | **3 / 3 passed** | Preserved |
+| **TOTAL** | **11 / 26 passed** (15 failing) | **26 / 26 passed** (0 failing) | **100% Repaired** |
+
+### Key Guard & Contract Checks
+- **P2 Vacuity Guard**: Verified that every destination register holds its distinct poison value (`0xDEADBEEF`, `0xBAADF00D`, etc.) immediately prior to its read instruction.
+- **X4 Contract**: NOP destination verification confirmed that `mov r0, r0` leaves `r0` poisoned and does not acquire `S1`.
+- **A2 Contract**: Confirmed complete absence of the generic `arm_mcr_mrc: uninstalled coproc 6` diagnostic.
+- **Diagnostic Absence**: Verified that `fatal: TODO: XScale read from inten?` is present under pre-fix and completely absent post-fix.
+
+---
+
+## 3. Mutant Kill Table
+
+The kill table was executed under strict scratch-clone isolation in `/tmp/gxxscale`. The sentinel file `/tmp/gxxscale/.MUTANT` was dropped before mutation began. [PRETABLE.out](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/xscaleinten/killtable_20260911/PRETABLE.out) was generated and written at `2026-09-11 02:18:05`, strictly preceding the table 1 runs.
+
+### Results Matrix (`SCORES.txt`)
+
+```
+Leg            Score       Failing Assertions                                                            Verdict
+------------   ---------   ---------------------------------------------------------------------------   -------
+BASE           26/26       NONE                                                                          PASS
+HEAD           11/26       D_TODO_ABS, D_SURVIVE, D_RESET, D_S1, D_ZERO, D_S2, D_OP2, D_MARKER,         KILLED
+                           LNC_TODO_ABS, LNC_SUB, LNC_MARKER, RD15_SURVIVE, ANCHOR_M1, ANCHOR_EXC,
+                           ANCHOR_CONTRAST
+M1             23/26       ANCHOR_M1, ANCHOR_EXC, ANCHOR_CONTRAST                                       KILLED
+M5             25/26       ANCHOR_EXC                                                                    KILLED
+M_OPCODE2      19/26       D_SURVIVE, D_RESET, D_S1, D_ZERO, D_S2, D_OP2, D_MARKER                       KILLED
+M_RD15         25/26       RD15_SURVIVE                                                                  KILLED
+M_NREAD        19/26       D_SURVIVE, D_RESET, D_S1, D_ZERO, D_S2, D_OP2, D_MARKER                       KILLED
+RESTORED       26/26       NONE                                                                          PASS
+```
+
+### Cleanliness & Sentinel Clearance
+- All 6 mutants (`HEAD`, `M1`, `M5`, `M_OPCODE2`, `M_RD15`, `M_NREAD`) were killed by their predicted observables.
+- Following mutant runs, `/tmp/gxxscale/src/cpus/cpu_arm_coproc.c` was restored from `GXEMUL-SEC`.
+- `cmp -s` confirmed byte-identical match (`CLEAN`) and fresh binary recompilation (`FRESH`).
+- `/tmp/gxxscale/.MUTANT` sentinel was removed.
+- Confirmation run on restored build reproduced clean `BASE` (26/26).
+
+---
+
+## 4. Clause (e) Contract Disclosures
+
+1. **Secondary CPU Coprocessor Dispatch**: [machine_iq80321.c:57](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/machines/machine_iq80321.c#L57) registers `arm_coproc_i80321_6` onto `cpu->cd.arm.coproc[6]` exclusively for `bootstrap_cpu`. Coprocessor dispatch on hypothetical secondary cores in an SMP configuration is unmodeled in this machine and unmeasured by this harness.
+2. **MMU & Bus Translation Bypass**: Coprocessor 6 register transfers (`MRC`/`MCR`) dispatch directly within the ARM core structure. They do not generate physical memory bus cycles or exercise L1/L2 page table address translation faults.
+3. **Timer Tick Scheduling Boundary**: The side-effect anchor stages NS16550 UART register stores via single-stepping prior to free-running to avoid the GXemul step-1 timer tick firing (`ticks_till_next[n] <= 0`), ensuring IRQ assertion state is stabilized before exception delivery.
+4. **Unmapped Coprocessor Encodings**: `opcode1` values other than `0` (canonical `INTEN`) and `3` (refusal E arm) default to GXemul's generic `arm_coproc_i80321_6(): unknown: ...` diagnostic and are outside the measured partition.
+
+---
+
+## 5. Artifact Index
+
+All supporting witness scripts, outputs, and kill-table logs are located at `regress/artifacts/xscaleinten/`:
+- Report: [agy_witness_20260911.md](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/xscaleinten/agy_witness_20260911.md)
+- Witness Test Harness: [agy_xscale_witness_20260911.py](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/xscaleinten/agy_xscale_witness_20260911.py)
+- Pre-fix Log: [witness_committed.out](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/xscaleinten/witness_committed.out)
+- Post-fix Log: [witness_fix.out](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/xscaleinten/witness_fix.out)
+- Pre-table Timestamp & Analysis: [PRETABLE.out](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/xscaleinten/killtable_20260911/PRETABLE.out)
+- Kill-Table Script & Mutation Engine: [killtable.sh](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/xscaleinten/killtable_20260911/killtable.sh) & [mutate_xscale.py](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/xscaleinten/killtable_20260911/mutate_xscale.py)
+- Kill-Table Scores: [SCORES.txt](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/xscaleinten/killtable_20260911/SCORES.txt)

@@ -1,0 +1,138 @@
+VERDICT: The detector has holes: an opcode1-gated reinstatement escapes, and several recorded kills are misattributed. I found no reason to change the deletion itself.  
+CODEX_XSCALE_P2_20260911
+
+I read only the four named files, including the uncommitted working-tree source. This is a source review against the recorded measurements; I did not rerun the emulator or write files.
+
+1. **For the exact M5 mutant, your central reading is right.**
+
+   [SCORES.txt](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/xscaleinten/killtable_20260911/SCORES.txt:25) records exactly one discriminator: `ANCHOR_EXC`. The probe explains why:
+
+   - The inten value round-trips tolerate a consistent substitution in both directions.
+   - `ANCHOR_M1` also reads back through the substituted arm.
+   - `ANCHOR_ISRC` observes the pending interrupt source, which can be asserted while the enable register remains zero.
+   - `ANCHOR_CONTRAST` requests zero enable. M5 leaves the real enable register zero, so the expected absence of an IRQ remains satisfied.
+
+   Two qualifications matter. **Not every `D_*` row is a round-trip:** `D_RESET` reads before any inten write, `D_TRR0` exercises another register, and the survival/diagnostic rows have other channels. `D_RESET` nevertheless fails to distinguish this substitution because the observed reset values coincide. Also, “one discriminator for this consistent M5 substitution” is narrower than “one row capable of detecting any wrong-register edit.”
+
+   **Yes, add a cheaper independent row: `INTEN_WRITE_PRESERVES_ISTEER`.** In one fresh session, with a poisoned read destination:
+
+   ```text
+   write isteer (crm=0, crn=4) = 0
+   write inten  (crm=0, crn=0) = S1
+   read  isteer (crm=0, crn=4) -> r7; expect 0
+   ```
+
+   BASE leaves `r7 == 0`; M5 produces `r7 == S1`. The final observation uses the sibling arm, so the matching substitution in the inten read cannot conceal the corruption. Writing **zero** through the real isteer arm is legal in the [working-tree implementation](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_coproc.c:315); this proposal avoids its nonzero-write fatal path.
+
+   This is a deterministic register-independence check using a few steps. Keep the IRQ row for functional controller coverage.
+
+   Your fragility concern is justified, but **“most load-sensitive” is not established by these files**. `ANCHOR_CONTRAST` also depends on wall-clock timing, and the session helper has a synchronization weakness discussed below. There are multiple external observations, but only one currently distinguishes M5.
+
+2. **The four different-predicate mutants are not a complete enumeration. Here is the one escaping reinstatement.**
+
+   Inside the existing inten load arm, immediately after its assignment:
+
+   ```c
+   if (opcode1 != 0) {
+       fatal("TODO: XScale read from inten?\n");
+       exit(1);
+   }
+   ```
+
+   This retains the original enclosing predicates and introduces a different predicate. It is not merely the original death condition widened.
+
+   **Source-level prediction: all 26 rows still pass.** I decoded the literal CP6 instruction words in the probe: every tested inten access has `opcode1 == 0`. The sole nonzero opcode1 instruction is `E_UNKNOWN`, with `opcode1=3, crn=9, crm=2`; it never reaches the edited arm and still dies through `unknown`.
+
+   Yet an inten read with nonzero opcode1 reaches the assignment in the supplied function and would now die under this reinstatement. Thus it is not an equivalent mutant of that function.
+
+   [PRETABLE’s disclosure](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/xscaleinten/killtable_20260911/PRETABLE.out:85) that opcode1=3 is “tested in arm E” does not close this hole. It tests that value in an already-rejected register tuple.
+
+   Its “Guard field” classification also needs correction: opcode1 and opcode2 are inputs but are not dispatch guards here; instruction condition evaluation lies outside this function. Your stated three dominating predicates are the relevant ones within the requested boundary.
+
+3. **The write accept side is meaningful for survival, but its independent register identity depends on the IRQ anchor.**
+
+   Passing M5 does **not** make a row vacuous for a different obligation. A row can establish that legal writes continue and round-trip while failing to establish that they update the intended backing member.
+
+   | Old gating predicate | Current accept evidence | Limit |
+   |---|---|---|
+   | `crn == 0` | `SIB_READ`: `crm=0, crn=4, l_bit=1` | Establishes continuation; does not check the sibling’s returned value or silence. |
+   | `crm == 0` | `D_TRR0`: `crm=1, crn=4` | Exercises another crm, but changes crn too. |
+   | `l_bit` | Inten writes followed by value checks and continuation | Detects fatal writes and several broken writes; consistent M5 substitution survives these checks. |
+
+   For the obligation **“legal writes must not acquire the removed death behavior,”** the write-side evidence is not vacuous. Making those writes fatal prevents their expected continuation.
+
+   For **“legal writes update real inten,”** the independent evidence currently comes from `ANCHOR_EXC`. The proposed isteer-preservation row adds a cheap check against the actual M5 corruption.
+
+   There is also a qualification to your crm claim: **if “per predicate” requires changing that predicate while holding the other former gates true, `D_TRR0` does not satisfy it.** It changes both crm and crn. A stepped read of `tmr0`, at `crm=1, crn=0, l_bit=1`, supplies that missing isolation. Its read has none of the tcr counter-increment behavior.
+
+4. **ACCEPT is supported; I cannot justify a once-only announcement for the implemented read.**
+
+   The ordinary read already has a concrete backing value and an assignment that returns it. The deletion lets that operation complete. Nothing in the inspected arm records a missing transition, acknowledges an interrupt, or requests an unsupported operation that would explain announcing it once.
+
+   An optional instruction trace could truthfully record a read. That does not justify an unsupported-operation warning, or selecting the latched-announcement option for this fix. The prevalence of `(once)` elsewhere does not establish an event here.
+
+   The strongest qualification is architectural scope: these files do not establish the required semantics of every opcode encoding or of an MRC destination of r15. Those require evidence beyond this function and the survival probe. **That uncertainty supplies no positive reason to add a diagnostic to ordinary inten reads.**
+
+5. **`RD15_SURVIVE` is valid against actual M_RD15; the broader “ignored” claim is where its channel fails.**
+
+   Actual M_RD15 exits inside the load arm. That prevents the following marker instruction from executing. The probe explicitly reports failure when the MRC step fails or the session dies, and otherwise checks the marker. Its channel can vary under the specified mutant.
+
+   Survival is directly relevant at a de-fatalisation site: death is the behavior being removed. A survival oracle being vacuous at a silent-refusal site does not make it vacuous here.
+
+   Its measured contribution is narrow: **HEAD and M_RD15**, with M_RD15 receiving its only failure from this row. It can also catch control-flow damage that prevents reaching the immediate marker. It does not establish correct transferred data, flags, or architectural r15 handling.
+
+   Conversely, **silently ignoring the MRC while continuing to the next instruction still produces `r0 == 0x5a`**. The marker channel cannot distinguish that behavior from the current successful run. Consequently, PRETABLE’s parenthetical “refused/ignored” overclaims what this row detects. The specified fatal refusal is covered; silent ignoring is not.
+
+   For the exact concrete mutant/channel pairs in PRETABLE, I found no inherently invariant pair that invalidates the recorded kill. I did find four invariant **earlier D value observations** being counted as failures under later-death mutants; see answer 7.
+
+   Two other row descriptions overstate their assertions:
+
+   - [`P2_VACUITY`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/xscaleinten/agy_xscale_witness_20260911.py:187) accepts missing snapshots and checks only that an available value is not already the expected result. It does **not** establish that every destination held its prescribed poison. Missing evidence can produce `POISON_CLEAN`.
+   - `SIB_READ` checks the subsequent marker, not the MRC destination or diagnostic absence. It proves survival for that sibling access, not the full advertised “silent-accept” behavior.
+
+6. **The prescribed RD15 observable is present under a new name.**
+
+   [PRETABLE’s channel entry](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/xscaleinten/killtable_20260911/PRETABLE.out:59) prescribes “exit 1 / trap vs r0 = 0x5a (marker).” [`RD15_SURVIVE`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/xscaleinten/agy_xscale_witness_20260911.py:359) implements that observable.
+
+   Therefore, **semantically this is a rename, not a dropped marker/survival obligation**. The files cannot prove the history or intent of the rename, but the assertion matches. No separate branch-target assertion is specified by that channel entry.
+
+   The unresolved “ignored” coverage discussed above is an inadequacy of the prescribed oracle, not a missing row caused by the rename.
+
+7. **The over-kills have concrete explanations; some are misleadingly attributed.**
+
+   **M1:** The contrast session reuses the program containing the inten read after the interrupt source is asserted. Setting inten to zero does not make `isrc != 0` false. M1 therefore kills that session at the same subject read, and `ANCHOR_CONTRAST` reports `HOST-DIED`.
+
+   This is a legitimate failure of that session’s continuation requirement. It is **not evidence that M1 incorrectly delivered an IRQ with enable zero**. Likewise, its `ANCHOR_EXC` failure occurs before the exception observation. Those failures share a cause.
+
+   **M_OPCODE2 and M_NREAD:** Both first kill the D session at offset `0x24`. For M_NREAD, the inten reads are at `0x08`, `0x10`, `0x18`, `0x20`, and `0x24`; the last is the **fifth**, despite the source comment calling it the fourth.
+
+   The probe already captured the earlier successful read snapshots. Nevertheless, [its death-reporting branch](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/xscaleinten/agy_xscale_witness_20260911.py:217) unconditionally marks every D value row failed whenever `d_died_at` is set.
+
+   The five failures beyond the two predicted ones therefore comprise:
+
+   | Extra failure | Explanation |
+   |---|---|
+   | `D_SURVIVE` | Correct: the sequence dies before its marker. |
+   | `D_RESET`, `D_S1`, `D_ZERO`, `D_S2` | Forced failures despite those earlier value observations being unaffected by either mutant. |
+
+   **Those four rows red for a reason other than their advertised value mismatch.** Evaluate them from their corresponding immediate snapshots. Report observations that were never reached as unavailable or blocked, with the cause stated; retain explicit survival failures.
+
+   This does not demonstrate an innocent production behavior failing today: both mutants really introduce forbidden death. It demonstrates that the seven red rows are not seven independent observations of broken behavior. Over-killing alone supplies no additional confidence.
+
+   There are also concrete harness concerns relevant to your load-sensitivity question:
+
+   - [`wait_prompt`](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/xscaleinten/agy_xscale_witness_20260911.py:53) examines the cumulative buffer. If no new output arrives during its first 0.1-second read, a previous trailing `GXemul>` can satisfy the new command’s wait. Completion needs a **fresh prompt associated with that command**.
+   - The positive anchor ignores the result of `send("continue", timeout=3)` and immediately requests registers. On timeout, the emulator may still be running. Interrupt and resynchronize before querying registers.
+   - Several paths classify a timeout as death without establishing process termination. Record those outcomes separately.
+
+   These are source-level weaknesses; the recorded over-kills do not show that they occurred during the table runs.
+
+   Finally, **the probe itself returns process status zero despite failed rows**: `run()` returns counts, and the main entry point ignores them. SCORES consistently records `probe rc=0`, including HEAD’s 11/26. The recorded table reads the scores, but an exit-status-only regression runner would miss these failures. The four files do not establish whether a surrounding runner enforces the score.
+
+8. **I would keep the fix exactly as supplied.**
+
+   In the [working-tree arm](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_arm_coproc.c:309), the read assigns `i80321_inten`, takes the existing case break, exits the outer switch, and reaches the common `return` at line 412. It cannot fall through into `unknown`. The write assignment remains in its existing `else`; the other fatal arms remain structurally intact.
+
+   The deleted statements contain the diagnostic and host termination, with no intervening validation or implementation work. I found no missing operation that the ordinary read now needs before returning, and no basis for adding a latch or announcement.
+
+   The limitation is specific: **this evidence supports the narrow de-fatalisation; it does not certify every pre-existing CP6 encoding or r15 semantic that becomes observable when the function returns.** The current detector’s survival checks do not settle those broader questions.

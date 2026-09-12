@@ -1,0 +1,35 @@
+SURVIVOR — at least three clause-(d) mutants stay green; the strongest is unkillable by construction: insert after the load, read arm, `if (cpu->cd.arm.i80321_isteer != 0) { fatal("TODO: XScale read from inten?\n"); exit(1); }`
+PASS2_XSCALE_20260912
+
+## Q1 — the survivors, and DEPENDS-ON
+
+**Dominating predicates of the edited lines** (READ, from the inlined function): cp6 registration, `crm==0`, `crn==0`, `l_bit==1`. `opcode1`/`opcode2` are confirmed untested by the inlined switch body (READ — consistent with the settled premise; only `crm`/`crn` are switched). **Operand space the body reads**: `rd` (as index), `cpu->cd.arm.r[]` (source of the store arm), `i80321_inten` (the lvalue read). It never reads `isteer` or `isrc` on this arm.
+
+**Survivor A — `if (cpu->cd.arm.i80321_isteer != 0) exit` after the load.** REASONED: the only row that ever makes `isteer != 0` is SIB_WRITE, and that row dies *in the crn-4 write arm* before any inten read executes (retained behaviour, rowed as a control). Every other session holds `isteer` at reset or writes it 0 (INTEN_WRITE_PRESERVES_ISTEER). So the predicate is unreachable in any live session. Expected catcher: an ANCHOR-style row pairing nonzero isteer with a subsequent inten read — **such a row cannot exist while SIB_WRITE remains a control**; M1 was killable only because the model sets `isrc` without dying, whereas the model refuses steering by process exit. This is not a coverage gap; it is a model-imposed equivalent mutant. Classification: clause-(e) non-disclosure (body never distinguishes `isteer`) plus unreachable-state floor. Settling fact: `i80321_isteer`'s reset value is 0 and nothing outside this handler writes it (packet implies both; states neither).
+
+**Survivor B — `if (rd == k) exit`.** READ: named inten-read destinations are r9, r4, r5, r6, r10 (D), r3 (LNC_SUB), r15 (RD15). REASONED: D_OP1, ANCHOR_M1, ANCHOR_CONTRAST (and X4_NOP, nature unclear) have undisclosed destinations — at most 4 more distinct values. Of the 9 unpinned rd values {0,1,2,7,8,11,12,13,14}, **≥5 are used by no row**, by pigeonhole. So `rd==14` (say) is green; `rd==0` is the author's candidate but I cannot confirm r0 specifically is unused — the *class* is provably non-empty, the exact k is not nameable from the packet. Expected catcher: none exists; RD15_SURVIVE pins exactly one register, chosen because r15 is architecturally special — which is precisely why the other nine are exposed. Classification: floor cell (body reads `rd` as an index; 7–11 of 16 values pinned).
+
+**Survivor C — `if (cpu->cd.arm.i80321_inten & (1u<<22)) exit`.** READ: disclosed read values are {0, S1, S2, 1<<28}; their union is 0xFFA5F05F. REASONED: bits {5,7,8,9,10,11,17,19,20,22} never occur in any disclosed read. Note the author's candidate as phrased — "a bit neither S1 nor S2 has" — is *refuted* for bit 28, which ANCHOR_M1 drives; the predicate must use a bit outside the fuller union. Survival is contingent on one undisclosed fact: RD15_SURVIVE's expected value (if it were, e.g., all-ones it would cover the class; that is the settling fact). REASONED: ANCHOR_M1 passed under M5, so it asserts survival only and pins no further value. Classification: floor cell (body reads the lvalue; 4–5 of 2^32 values pinned).
+
+**Conceded survivors**: `opcode1==2`, `opcode2==7` — the contract's NOT-COVERED already discloses single-value opcode pinning. **Conditional extra**: reinstate the exit on the *isrc read arm* (`crn==8, l_bit==1`) — no row unambiguously performs a guest isrc read (ANCHOR_ISRC may be host-side). Settling fact: does ANCHOR_ISRC execute an MRC cp6/crn8?
+
+## Q2 — vacuous channels
+
+REASONED: all nine measured mutant legs died, so every named channel demonstrably varied — none is vacuous. Two caveats: (a) M_NREAD and M_OPCODE2 kill at the same event (D's 5th read is D_OP2); the count predicate is pinned at exactly one threshold — "exit on 6th read" survives unless an ANCHOR session performs ≥6 inten reads (read counts undisclosed). (b) See the M5 flag below — if the table is accurate, the D-arm value channel did *not* vary under M5, which is exactly what Q2 hunts.
+
+## Q3 — false or overclaiming contract statements
+
+1. **Overclaim** (REASONED): "Designed to catch … reinstated under a different predicate" as a class claim. Only five instances are covered; NOT-COVERED concedes opcode encodings but omits the rd-sparsity class, the sibling-state (`isteer!=0`) class — which is *unkillable*, not merely uncovered — and the inten data-bit class. The sentence survives only if read as an exact enumeration.
+2. **Probable inconsistency** (REASONED): if M5 genuinely makes the crn-0 read load `isteer`, then D_S1/D_S2/D_OP2 (wants S1/S2, isteer==0 in session D), LNC_SUB and D_OP1 (want S1) must all fail — yet the table shows only INTEN_WRITE_PRESERVES_ISTEER and ANCHOR_EXC failing (27/29). No single coherent edit yields that exact failing set given the row descriptions (a full crn0↔crn4 swap would also fail D_S1). Either "read loads isteer" is loosely described or a row summary omits detail. Settling fact: the exact M5 diff and D_S1's measured value under M5.
+
+Arithmetic of every other leg, and the BLOCKED bookkeeping at HEAD, checks out against the row descriptions (READ/REASONED).
+
+## Q4 — ACCEPT?
+
+Reserved for file-reading seats. Packet-internal note only (REASONED): ACCEPT is self-consistent — the write arm and isteer sibling are quiet, the exit was anomalous to this read arm — but whether the tree latched-announce convention applies is not determinable here.
+
+## Swept (so "zero" and "looked" don't collide)
+
+Predicates: crm/crn weakening (killed by D_CRM1_TMR0, SIB_READ), opcode encodings, rd values (all 16), inten data bits (union computed), isteer/isrc state, read-count thresholds, per-tuple reinstatement incl. isrc read. Operand swaps: load-source→isteer (measured), →isrc/→tmr0 (killed by D_S1 wants), load deletion (killed by P2_VACUITY's poison), rd-index remap (killed unless identity on the pinned set), arm swap (killed at D_RESET), write-target swap (M_ISTEER_WR measured). Cells: isteer==0-at-every-read, destination-set emptiness, RD15 value, ANCHOR read counts — three of these cells are floors the 29 rows cannot pave.
+
+**Open settling facts, ranked**: (1) `i80321_isteer` reset value + absence of other writers (Survivor A); (2) rd of D_OP1/ANCHOR_M1/ANCHOR_CONTRAST/X4_NOP (which k, not whether); (3) RD15_SURVIVE's expected value (Survivor C); (4) the exact M5 diff (Q3 flag #2).

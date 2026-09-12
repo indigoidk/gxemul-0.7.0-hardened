@@ -216,6 +216,21 @@ MANIFEST = {
         (CLASS_RESEARCH, "#524 the frozen 43-row probe for TABLE 7, the floor closure"),
     "artifacts/armbdt/killtable_20260911h_floor/mutate524g.py":
         (CLASS_TOOL, "#524 table-7 mutator"),
+    #  #526 xscaleinten, landed with the round: the detector and its untracked instruments.
+    "xscale_inten_probe.py":
+        (CLASS_DETECTOR, "#526 xscaleinten: a guest MRC read of the i80321 interrupt-enable register (coprocessor 6, c0) ended the host -- 30 rows, kill table 3 (artifacts/xscaleinten/killtable3_20260912/) BASE 30/30, HEAD 12/30, all ten mutants killed, twelve legs on prediction.  Wired in gate_arm.sh, pin 30"),
+    "artifacts/xscaleinten/killtable3_20260912/mut_xscale_t3.py":
+        (CLASS_TOOL, "#526 kill-table 3 mutator: table 2's legs plus M_RD0 and M_MAGICBIT (pass 2)"),
+    "artifacts/xscaleinten/killtable3_20260912/xscale_inten_probe.T3FROZEN.py":
+        (CLASS_RESEARCH, "#526 the frozen 30-row instrument kill table 3 ran"),
+    "artifacts/xscaleinten/opus_pass2_20260912/patch.py":
+        (CLASS_TOOL, "#526 the Opus pass-2 seat's mutant patcher (M_RD0 / M_MAGICBIT survivors measured 29/29), preserved as run"),
+    "artifacts/xscaleinten/agy_xscale_witness_20260911.py":
+        (CLASS_RESEARCH, "#526 the rung-3 witness as agy built it -- preserved as the as-run record"),
+    "artifacts/xscaleinten/killtable_20260911/mutate_xscale.py":
+        (CLASS_TOOL, "#526 kill-table 1 mutator"),
+    "artifacts/xscaleinten/killtable2_20260912/mut_xscale_t2.py":
+        (CLASS_TOOL, "#526 kill-table 2 mutator: M1, M5, M_OPCODE2, M_RD15, M_NREAD and the three pass-2 cells (M_OP1, M_ISTEER_WR, M_CRM)"),
     "arm_bfx_width_probe.py":     (CLASS_WITNESS,  "armbfxwidth32: ubfx/sbfx build their mask with `1 << width' where width reaches 32 -- HEAD 9/11"),
     "arm_endian_probe.py":         (CLASS_DETECTOR, "ARM LDR rotation / endianness"),
     "arm_flags_probe.py":          (CLASS_DETECTOR, "ARM flag semantics"),
