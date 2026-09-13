@@ -560,9 +560,11 @@ DEVICE_ACCESS(dreamcast_maple)
 			/* debug("[ dreamcast_maple: dmaaddr set to 0x%08x"
 			    " ]\n", d->dmaaddr);  */
 		} else {
-			fatal("[ dreamcast_maple: TODO: read from dmaaddr ]\n");
+			/*  #528: answered like MAPLE_ENABLE's read -- the field is
+			    the one the write arm stores and maple_do_dma_xfer()
+			    consumes -- with no diagnostic and no exit.  This read
+			    used to compute the value and then end the emulator.  */
 			odata = d->dmaaddr;
-			exit(1);
 		}
 		break;
 

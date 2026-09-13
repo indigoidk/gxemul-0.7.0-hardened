@@ -1,0 +1,123 @@
+I'll start from the repo truth, then check the maple handler and option-set premises against the tree rather than the brief.HEAD is `7457c04`. Next I’ll read the maple row, the handler, and the earlier detector review against the source.The earlier review unblocked the round. I’ll now read the handler, DMA tail, detector specs, and SH4 fault path against the source.The retry detector is stronger than the brief’s summary. Next I’ll check SH4 fault delivery, `writeflag` values, and sibling arms so the option set is from the tree.**VERDICT: ACCEPT is right. The brief’s detector is not: it is passed by hoisting `odata = d->dmaaddr` above the switch, and by a reworded `fatal()` that merely drops the TODO string. DMA is contract coverage of live-field reporting, not floor. Premise 2’s live third `writeflag` path is false.**
+
+`PASS1_MAPLE_20260912`
+
+Checked against `GXEMUL-SEC/src/` at HEAD `7457c04`. No gate, no product edit.
+
+---
+
+## 1. ACCEPT is right
+
+The read arm already has the value. `exit(1)` runs **before** the common tail, so unlike `#526` (`xscaleinten`) the guest never receives it: `odata` is local, `memory_writemax64` is after the `switch`. Two deleted lines, keep `odata = d->dmaaddr;`, **`break` into the existing tail** (`if (writeflag == MEM_READ) memory_writemax64(...); return 1;`). Not an early `return`.
+
+| member | why not |
+|---|---|
+| **1 DELETE** | Dropping the assignment as well returns the `#95` pre-zero (`memory_rw.c`, `if (writeflag == MEM_READ) memset(data, 0, len)`). The field is modelled. |
+| **2 DECLINE** | Same as zero / stale dest. The write arm two lines up stores `d->dmaaddr = idata` with no mask. |
+| **3 DECLINE + LATCHED ANNOUNCE** | The read is implemented. `"unimplemented; ignored"` would be a wrong record in product code. Unlatched `fatal()` is a guest-drivable flood (`fatal()` has no early-out, `debugmsg.c`). |
+| **4 ACCEPT** | **This.** Same shape as `MAPLE_ENABLE` in the same `switch` (`odata = d->enable`, no diagnostic). Same disposition as `#526`. The TODO is author uncertainty, not a missing implementation. |
+| **5 FAULT** | **Unavailable, and `return 0` is worse than a fault.** `memory_rw.c` raises on failed device access under `MEM_MIPS` and `MEM_M88K` only. `MEM_SH` does not appear in that file (only `MEM_ALPHA` / `MEM_MIPS` / `MEM_M88K`). On SH4, `return 0` becomes `MEMORY_ACCESS_FAILED` with no exception; `cpu_sh_instr.c` `X(load_l_rm_rn)` then **returns without assigning the destination** (its comment says `Exception`; none runs). In-tree, this is already written at the `#452` da2 arm in `dev_sh4.c`. Even if the machinery existed, refusing an implemented register would be wrong. |
+| **6 BACKED ACCEPT** | Storage exists. Inventing a second cell is how a last-programmed snapshot is born. |
+| **7 IMPLEMENT** | No predicate is stubbed. Hardware-accurate **cursor** policy is `mapledmaadvance`, already filed. |
+
+No local Dreamcast/Holly/Maple PDF (`_scratchpad/*.pdf` has none). That does **not** block ACCEPT: the model already holds and consumes `d->dmaaddr` (the next `maple_do_dma_xfer` starts from it). Returning the field is honesty about that model. Holding this round for silicon readback was the 2026-09-10 HOLD; the later read-arm review overturned it, and that ruling still holds.
+
+Sketch constraint: match ENABLE. Do not `return` inside `case 0x04`.
+
+---
+
+## 2. Which wrong fix passes the detector above
+
+The brief’s four bullets are the right *topics* and the wrong *instrument*. Exact edits that pass it:
+
+**W1 — hoist (collateral-damaging “fix”).** Move `odata = d->dmaaddr;` above the `switch` and delete `fatal`/`exit` from `case 0x04`. Every DMAADDR write/read, the survival marker, the TODO grep, and a post-DMA “equals the field” check still pass. `MAPLE_RESET2` (`0x10`), `MAPLE_RESET` (`0x8c`), `0xe8`, and the default arm currently leave `odata` at 0 on reads; the hoist makes them return `dmaaddr`. One control kills it: with a nonzero DMAADDR programmed, `R(0x10)` must stay 0. The RETRY detector named this `other read`. The brief omitted it.
+
+**W2 — reworded announce (member 3 in member 4’s clothes).**
+
+```c
+fatal("[ dreamcast_maple: dmaaddr = 0x%08x ]\n", (int)d->dmaaddr);
+odata = d->dmaaddr;
+```
+
+TODO text is absent, values match, process lives. Grep for one string is not a silence channel. The row is: **no diagnostic in any `0x04` read interval**, including a newly worded `fatal()`.
+
+**W3 — `if (len != 4) { fatal(...); exit(1); }` then the assignment.** Every implied row is a 32-bit `mov.l`. Clause (e) under the `#526` pure-deletion rule (below), but it is a wrong fix the brief detector cannot see.
+
+**W4 — magic-bit / exact-value re-kill**, the `#526` pair:
+
+```c
+if (d->dmaaddr & 0x00400000) { fatal(...); exit(1); }
+odata = d->dmaaddr;
+```
+
+or `if (d->dmaaddr == 0) { ... exit(1); }`. “Nonzero high bits and low five” does not pin an undriven bit. `#526` needed one all-ones-into-a-driven-destination row to kill both; the same row shape is owed here (all-ones write, exact readback, plus the initial-zero read).
+
+**W5 — if the DMA oracle is the cursor formula, not the field.** For a one-descriptor DEVINFO with `datalen_cmd == 0`, `C = P+12`. Then this passes:
+
+```c
+/* last programmed P, plus +12 after a STATE=1 that produced a response */
+odata = dma_happened ? (programmed + 12) : programmed;
+```
+
+“Equals the field” without an **independent** observation of `d->dmaaddr` is an equals-the-author’s-arithmetic check. That is `mapledmaadvance` wearing this round’s clothes. The RETRY detector’s repair is the existing alignment-refusal line (`dmaaddr 0x........ is NOT 32-byte aligned; aborting`) as `E1`/`E2`, plus a **second** transfer so `P+12` fails `dma2`. `MAPLE_STATE == 0` is still not DMA evidence (read arm always assigns `odata = 0`).
+
+Keep-fatal, delete-only-`exit(1)` is **caught** by a real silence row; it is **not** caught by value or survival if `fatal()` returns (it does).
+
+`odata = 0`, `odata = d->dmaaddr & ~0x1f`, and a last-programmed snapshot (given a real live-field DMA row) do **not** pass a detector that actually does what the bullets claim. The hole is the bullets as specified, not those three.
+
+### DMA: contract, not floor
+
+The floor this **pure deletion** inherits is the rule `#526` wrote for the next one:
+
+> when its guarded body tests nothing: the floor is clause (b)’s verbatim reinstatement plus the dominating predicates’ accept cell; every re-introduction keyed on a body-read operand the body does not test is clause (e).
+
+After the edit the guarded body is one assignment, `odata = d->dmaaddr;`. It tests nothing.
+
+**Clause (d) enumerates:**
+
+- Dominating predicates (enclosing function only): `relative_addr == 0x04`, `writeflag != MEM_WRITE` (the `else`).
+- Accept cell of those predicates: a `MEM_READ` at `0x04` that delivers the live field and does not kill.
+- (b) verbatim `fatal` + `exit(1)` restored in that `else`.
+- Operand-swap / `dmaaddr == k` / `len != 4` / hoist / reworded `fatal`: **clause (e)**, disclosed by class. Grading them floor because one cheap row pins them is the vice `#526` overturned (`rd == 0` was floor only by coincidence of `crn == 0`).
+
+The DMA leg is **not** in that enumeration. A last-programmed snapshot is extra code, not a weakening of `odata = d->dmaaddr`. Include a DMA row only as **contract (e)**: “the source is the live field after the existing writers have run.” Independent observation (alignment refusal), independently demonstrated transfer (DEVINFO signature in a pre-filled buffer), two transfers if you bother. Disclose: this does not certify cursor arithmetic; a missing reference is a fail, never a pass; if `mapledmaadvance` later stops advancing, the fixture needs reassessment. `off keep` / `align keep` pin early-return **entry-value** preservation the same way — useful, not floor.
+
+`(f)`: at least one exact-value row is already anchored (the field, not pairwise distinctness). Do not let post-DMA “≠ P” replace that.
+
+---
+
+## 3. Which premise is false
+
+**Premise 2.** There is no `DEVICE_ACCESS` caller whose `writeflag` is neither `MEM_READ` nor `MEM_WRITE`.
+
+- `memory.h`: `MEM_READ=0`, `MEM_WRITE=1`, `MEM_DOWNGRADE=128`.
+- `memory_rw.c` documents `writeflag` as `MEM_READ` or `MEM_WRITE`. The only device callback is `mem->devices[i].f(..., writeflag, ...)`.
+- `MEM_DOWNGRADE` is used only in `cpu_dyntrans.c` on the **TLB** helper (`writeflag & MEM_DOWNGRADE`). It is never passed to `memory_rw` or a device.
+
+The `else` is the house idiom (`MAPLE_ENABLE`, `MAPLE_SPEED`). After ACCEPT, a hypothetical third value assigns `odata` and skips `memory_writemax64` because that call is already `if (writeflag == MEM_READ)` — same as ENABLE. Tightening the arm to `else if (writeflag == MEM_READ)` is not required and would be a different edit than the sibling.
+
+Premise 1 is unanswered, not false; ACCEPT still dominates. Premise 3 is true: `mapledmaadvance` is already split out; this round must not decide the tail `d->dmaaddr = addr`. One correction to older prose: an aborted transfer preserves the **entry** value (which may already be a previous cursor), not a separately saved programmed address; enable is checked before alignment.
+
+---
+
+## Detector that a wrong fix cannot pass
+
+Rung-3 guest `mov.l` on unmodified `-E dreamcast`, P2 `0xa05f6c04`. `DM_DEFAULT`: debugger `dump` does not reach the handler. `#95` pre-zeroes read buffers; poison the destination register anyway.
+
+| row | kills |
+|---|---|
+| `live` RAM round-trip + marker | unexecuted guest / dead session |
+| `devsig` ENABLE write/read at `+0x14` | RAM, not the device |
+| `initial` `R(0x04)==0` | `if (!d->dmaaddr) exit` |
+| `raw a` unaligned (low five set), `raw b` high bit, **`allones`** | constant, `~0x1f` mask, single-bit-SET re-kill |
+| `replace` second write | snapshot of the first store |
+| `other read` `R(0x10)==0` with DMAADDR nonzero | **W1 hoist** |
+| `marker` after the subject read | host death; `return 0` (stale dest, no SH exception) |
+| `read quiet` no diagnostic of any wording in every `0x04` read interval | **W2**; keep-`fatal` delete-`exit` |
+| `finished` process exit 0 | leftover `exit(1)` |
+
+Optional, disclosed (e): one DEVINFO transfer, then alignment-refusal `E` as the expected read; a second transfer with `E2 != E1`. Not floor. Not a cursor certification.
+
+Contract: 32-bit reads at Maple `+0x04` report the current `dmaaddr` field, all bits, no read diagnostic, no host death. Not covered: cursor policy, wraparound, interrupt delivery, `len != 4`, `dmaaddr == k` for an undriven k, other offsets except the hoist control.
+
+`(a)(b)(c)`: committed build dies on the first `0x04` load (marker absent); verbatim reinstatement dies the same way; a comment-only file is not this source.

@@ -1,0 +1,556 @@
+kimi version 0.36.0
+• Let me understand this task. The user wants a PASS 2 review of a fix for issue #528 (`mapledmaaddr`) in the GXEMUL-SEC tree. The question: is there a mutant of the fix (within clause-(d) enumeration) that stays GREEN on all 16 rows of the detector?
+
+  Clause (d) enumeration: re-introduced exit or diagnostic under a different predicate, weakened dominating predicate, operand swap on `d->dmaaddr` or `odata`, width variations (memory_writemax64 with len — every row reads 32 bits).
+
+  I need to actually look at the code and the probe to answer this carefully. The user explicitly says "Please do not simply ratify" — they want me to find a mutant that survives, or say what I swept.
+
+  Let me look at:
+  1. `GXEMUL-SEC/src/devices/dev_dreamcast_maple.c` — the actual file with the uncommitted diff
+  2. `GXEMUL-SEC/regress/maple_dmaaddr_probe.py` — the 16-row detector
+  3. Maybe the kill table artifacts
+
+  Key question details:
+  - The fix: on read of DMAADDR (relative_addr 0x04, writeflag != MEM_WRITE), `odata = d->dmaaddr;` with no diagnostic, no exit.
+  - Detector: 16 rows, SH4 `mov.l` reads on unmodified `-E dreamcast`.
+  - Every load destination seeded 0xa5a55a5a.
+  - All rows read 32 bits.
+
+  Now, the question is: is there a mutant inside clause (d) that passes all 16 rows?
+
+  Let me think about candidate mutants:
+
+  1. **Width mutant**: all rows read 32 bits. If every row uses `mov.l` (32-bit), then a mutant that only answers 32-bit reads correctly but does something different for other widths... but wait, `memory_writemax64(cpu, data, len, odata)` writes `len` bytes of odata. The width mutant would be: what if the mutant checks `len == 4` and does something different for other widths? E.g., exit if `len != 4`. Since all 16 rows read 32 bits, a mutant like:
+
+  ```c
+  odata = d->dmaaddr;
+  if (len != 4)
+      exit(1);
+  ```
+
+  would pass all 16 rows! Because every row reads 32 bits (len == 4). This is "a re-introduced exit under a different predicate" — the predicate being `len != 4`, which is never exercised by the detector. Hmm, but is that inside clause (d)? Clause (d) says "a re-introduced exit or diagnostic under a different predicate". Yes — the predicate `len != 4` is a different predicate, and since every row reads 32 bits, this mutant is GREEN on all 16 rows.
+
+  Similarly a diagnostic under `len != 4` — but wait, `read silent` counts read sessions whose transcript contains `dreamcast_maple` text. If the diagnostic only fires on len != 4, it never fires in the detector, so all rows pass.
+
+  Actually even simpler: a diagnostic under a predicate that's never true in the detector, e.g., exit if `len == 8`, or exit if `cpu->machine->something`. But the clause says "under a different predicate" — the predicate must be within the enumeration. The width point is explicitly called out: "Include width: `memory_writemax64(cpu, data, len, odata)` — every row reads 32 bits."
+
+  That's a huge hint. The author is basically pointing at the width channel: the detector only exercises 32-bit reads, so any mutant whose badness is gated on width ≠ 4 survives. For example:
+
+  - `if (len == 8) { fatal(...); exit(1); }` — survives.
+  - `odata = d->dmaaddr; if (len != 4) d->dmaaddr = 0;` — survives (state mutation gated on width).
+  - Answering with only 16 bits for narrow reads: `if (len == 2) odata &= 0xffff;` — survives.
+
+  But wait — is that a "mutant of this fix"? The kill table mutants are small edits to the fix. A width-gated exit is an addition, like M_EXITONLY but with a predicate. Clause (d) explicitly includes "a re-introduced exit or diagnostic under a different predicate". So yes.
+
+  2. **Operand swap on `odata`**: e.g., `odata = odata;` — no. `data = d->dmaaddr`? That would be caught. What about writing to the wrong variable in a way that's undetectable? `odata = d->dmaaddr` swapped to... hmm, what operand swap survives? If we write `odata = d->enable` — would be caught by value rows (val_a 0x8c012345 vs enable value). Unless enable happens to... no.
+
+  What about `odata = d->dmaaddr & 0xffffffff`? Identity for 32-bit — not a real mutant. `odata = (uint32_t)d->dmaaddr`? dmaaddr is likely uint32_t already, or uint64? Let me check the struct. If `d->dmaaddr` is `uint32_t`, then masking is identity. If it's `uint64_t`, then `odata = d->dmaaddr & 0xffffffff` is identity for all values the write arm can store (if write arm masks). Actually the write arm: what does it store? Need to check the code. If write arm stores `idata` into `d->dmaaddr` where dmaaddr is uint32_t, then any high-bit mutant is identity.
+
+  3. **Weakened dominating predicate**: `relative_addr == 0x04` weakened to... e.g., `relative_addr == 0x04 || relative_addr == 0x10`? Then RESET2 read would return dmaaddr instead of 0 → caught by `other read` (reads RESET2 after writing 0x8c012345, wants 0). What about `relative_addr == 0x04 || relative_addr == 0x18`? STATE read — is STATE read ever exercised? The 16 rows: read val_a, read val_b, other read (RESET2), marker survive, exit status, initial zero, read four, read all ones, double read 1/2, write replace, read silent, RAM round trip ×2, IPRD, MAPLE_SPEED. STATE read isn't read... Actually wait — does any row read STATE? The survive row does a marker store. Hmm, `double read` reads DMAADDR twice. So a mutant that also answers STATE reads with dmaaddr... would any row catch it? Only if a row reads STATE (0x18) after writing a nonzero dmaaddr and expects 0. Looking at the rows: `other read` reads RESET2 at +0x10, want 0. No row reads STATE or SPEED-as-dmaaddr... MAPLE_SPEED control reads 0x80 expecting shift/mask of 0x12345678 → 0x12340000. So if the weakened predicate included 0x80, the SPEED row would catch it. But 0x18? No row reads STATE. So a mutant `relative_addr == 0x04 || relative_addr == 0x18` answering odata = d->dmaaddr on STATE reads survives all 16 rows!
+
+  Hmm wait, but is that "inside the clause-(d) enumeration"? "a weakened dominating predicate" — yes, `relative_addr == 0x04` weakened to include 0x18 is a weakened dominating predicate. But hold on — would the STATE arm's existing code interfere? The switch has a separate arm for 0x18. To weaken the predicate you'd have to merge arms, e.g., `case 0x04: case 0x18:` fallthrough... but STATE's write arm runs maple_do_dma_xfer. If you merge read handling... Actually the structure: switch (relative_addr) with case 0x04 having if (writeflag == MEM_WRITE) {...} else { odata = d->dmaaddr; }. A mutant could be: in case 0x04, the write arm condition weakened. Let me think about which weakened predicates are actually expressible as small edits:
+
+  - Write arm: `if (writeflag == MEM_WRITE)` → always true? Then reads would be treated as writes: `d->dmaaddr = idata` where idata = 0 on reads (idata initialized 0, and on MEM_READ no data is loaded into idata... actually memory_rw loads idata from memory only for MEM_WRITE? Let me check — in DEVICE_ACCESS handlers, idata is typically read via memory_readmax64 only when writeflag == MEM_WRITE). If the write arm executes on a read, d->dmaaddr = 0 and no odata set → value rows fail (read returns 0 or... odata stays 0, memory_writemax64 writes 0 to destination → poisoned destination 0xa5a55a5a becomes 0 → detected). Caught.
+
+  - `writeflag != MEM_WRITE` in the read branch — pass 1 settled that only MEM_READ/MEM_WRITE reach the handler. So weakening `writeflag != MEM_WRITE` to always-true... that's the else branch anyway.
+
+  What about the outer guard — is there an outer guard on the switch? "default (fatal, no exit)".
+
+  4. **The most interesting one: predicate on a different register/value channel.** E.g., exit if `d->dmaaddr == 0xdeadbeef` — value-keyed exits are clause (e), taken as L1 rows (M_EQ4, M_BIT30, M_ZEROEXIT are in the kill table). The author says value-keyed exits are clause (e), not (d). But what about a value-keyed exit on a value not in the detector? M_EQ4 exits on ==4, caught by read four. M_BIT30 exits on bit 30, caught by read all ones (0xffffffff has bit 30 set... wait 0x40000000 bit set in 0xffffffff, yes). M_ZEROEXIT exits on ==0, caught by initial zero. But a mutant `exit if d->dmaaddr == 0x00000002`? Is 2 read by any row? Rows read: 0x8c012345, 0x0c00001f, 0xffffffff, 4, 0, 0x13579bdf. A value-keyed exit on 0x00000008 would survive! But that's clause (e), and the author says those are "taken as L1 rows because cheap" — meaning they're acknowledged as detectable-in-principle rows; the kill table includes three of them. The question explicitly restricts to clause (d). Hmm, but "re-introduced exit under a different predicate" in (d) — is a value-keyed exit on an unread value clause (d) or (e)? The author put value-keyed exits (d->dmaaddr == v, & bit) in clause (e). So I should mention it as adjacent but focus on (d).
+
+  Actually re-reading: "Value-keyed exits (`d->dmaaddr == v`, `& bit`) are clause (e), taken as L1 rows because cheap." So value-keyed is (e). Clause (d) = re-introduced exit or diagnostic under a different predicate, weakened dominating predicate, operand swap on d->dmaaddr or odata, plus width.
+
+  So the strongest (d) survivors:
+
+  **Survivor A (width):** `if (len != 4) { fatal("[ dreamcast_maple: TODO: read from dmaaddr ]\n"); exit(1); }` added alongside `odata = d->dmaaddr;`. All 16 rows use mov.l (32-bit), so len==4 always → never fires → 16/16 GREEN. The detector has zero width variation: no mov.b/mov.w row, no 64-bit read. This is squarely (d): a re-introduced exit under a different predicate (`len != 4`), and the author explicitly flagged width.
+
+  Even stronger: `odata = d->dmaaddr; if (len == 8) odata = 0;` or a diagnostic under `len != 4` — `read silent` can't catch it because it never prints.
+
+  **Survivor B (weakened dominating predicate to an unread address):** merge STATE (0x18) read into the dmaaddr answer: e.g., change case 0x18's read else-branch from `odata stays 0` to `odata = d->dmaaddr`, or change the 0x04 guard to `relative_addr == 0x04 || relative_addr == 0x18`... but wait, the switch structure means each case is separate. The weakened predicate would have to be inside the case. Hmm, actually a cleaner weakened predicate: the `other read` row only covers RESET2 (0x10). The arms 0x18 (STATE read → 0), 0xe8, and default are not read after a dmaaddr write in any row. Wait — is 0xe8 read anywhere? No. So mutating the STATE read answer or 0xe8's answer to `d->dmaaddr` survives. But is that "weakening the dominating predicate" of THIS fix? The dominating predicate is `relative_addr == 0x04`. A mutant like `case 0x04: ... else odata = d->dmaaddr; break;` plus changing case 0x18's read to also return dmaaddr — that's editing a different arm. I'd argue the cleanest in-enumeration weakened predicate: replace the `switch (relative_addr)` case label `case 0x04:` with `case 0x04: case 0x18:` — no wait, that changes semantics of 0x18 entirely (write would set dmaaddr instead of running DMA). Hmm.
+
+  Alternative: in case 0x04's read else-branch, no width check. Let me think about what "weakened dominating predicate" means concretely for this code:
+
+  ```c
+  case 0x04:
+      if (writeflag == MEM_WRITE) {
+          d->dmaaddr = idata;
+      } else {
+          odata = d->dmaaddr;
+      }
+      break;
+  ```
+
+  Weakened dominating predicates:
+  - `relative_addr == 0x04` → can't easily weaken without touching the switch. Could change to `case 0x04: case 0x10:` (fallthrough into RESET2? no — adding 0x10's label here removes RESET2's own arm, breaking its write-fatal behavior... but does any row write RESET2 nonzero? Probably not. Hmm, `other read` reads RESET2 and wants 0; if RESET2's arm is merged with 0x04, reading RESET2 returns dmaaddr=0x8c012345 → caught). Merging with 0x18: reading STATE returns dmaaddr — no row reads STATE → survives. Writing STATE would set dmaaddr instead of running DMA — no row writes STATE (the detector defers post-DMA to mapledmaadvance)... wait, does any row trigger DMA? "survive (read DMAADDR on a fresh device into r2, then a marker store)" — the marker store is to RAM presumably, not to STATE. So no row runs maple_do_dma_xfer. So `case 0x04: case 0x18:` merged: writes to STATE would store dmaaddr rather than run DMA — untested; reads of STATE return dmaaddr — untested. 16/16 GREEN. That's a weakened dominating predicate that survives!
+
+  But is it a plausible "mutant of this fix"? Mutation testing applies small edits to the diff hunk. The diff hunk is only the else-branch of case 0x04. Mutants inside the hunk: the statement `odata = d->dmaaddr;`. Clause (d) enumerates: re-introduced exit/diagnostic under different predicate, weakened dominating predicate, operand swap. The dominating predicates are `relative_addr == 0x04` and `writeflag != MEM_WRITE`. Weakening `writeflag != MEM_WRITE`: since only MEM_READ/MEM_WRITE reach the handler (settled, 279 call sites), the else is exactly MEM_READ. Weakening would mean... there's nothing to weaken — the else already catches everything non-write. Hmm, unless the mutant restructures: `if (writeflag == MEM_WRITE || writeflag == MEM_READ)` — identity. What about weakening to allow the read answer on writes too? `odata = d->dmaaddr;` unconditionally after the if? Then writes would also write back the old value to... no, memory_writemax64 only runs on MEM_READ (common tail: `if (writeflag == MEM_READ) memory_writemax64(...)`). So `odata = d->dmaaddr` executed on writes is harmless → survives. Is that a weakened predicate? It removes the `writeflag != MEM_WRITE` guard on the odata assignment... but the assignment's effect is gated at the tail. E.g.:
+
+  ```c
+  if (writeflag == MEM_WRITE) {
+      d->dmaaddr = idata;
+  }
+  odata = d->dmaaddr;
+  ```
+
+  This hoists the load out of the else — every row: write rows don't check odata... wait, `write replace` writes twice then reads — read returns the new value, fine. All read rows get odata = dmaaddr, fine. Writes set odata but the tail ignores it for MEM_WRITE. 16/16 GREEN! Wait, is this M_HOIST? No — M_HOIST puts `odata = d->dmaaddr` at the declaration (top of function, before the switch), which made `other read` fail because RESET2 read returned dmaaddr. But hoisting only within case 0x04 (after the if/else, inside the case) is different: it only affects the 0x04 arm. On writes to DMAADDR, odata = new dmaaddr, but tail doesn't write back on MEM_WRITE. On reads, odata = dmaaddr. All 16 rows pass!
+
+  Hold on — is that within clause (d)? "a weakened dominating predicate" — the predicate `writeflag != MEM_WRITE` guarding `odata = d->dmaaddr` is removed (weakened to true). Yes! And the kill table doesn't include it. M_HOIST is different (hoist to function top, caught by other read). This "case-local unconditional assign" survives. But wait — is it a mutant "of this fix"? The fix is the else-branch. Moving `odata = d->dmaaddr;` from the else to after the if (still in case 0x04) is a one-line move, squarely a mutant of the fix. And it's GREEN on all 16 rows. The row I expected to catch it: none — because the tail gates writeback on MEM_READ, the dead-store on writes is unobservable through any row. Actually is it truly unobservable? odata is local; memory_writemax64 only on MEM_READ. Yes, unobservable. Semantically it's actually *equivalent* — not even a behavior change! Hmm, wait: on MEM_WRITE, does anything else read odata? The common tail: `if (writeflag == MEM_READ) memory_writemax64(cpu, data, len, odata); return 1;`. No. So the mutant is semantically equivalent — a "equivalent mutant". It's not a bug. But the question asks for mutants that stay GREEN — equivalent mutants do. But more interesting are non-equivalent survivors (real behavioral changes the detector can't see). The width-gated exit is non-equivalent and survives.
+
+  Let me also check: does the detector test writes in a way that would catch... `write replace`: write 0x8c012345, write 0x13579bdf, read → expect 0x13579bdf. With the case-local unconditional: write arm stores idata, then odata = d->dmaaddr (new value) — no writeback on write. Read returns 0x13579bdf. Green.
+
+  OK so I have at least two survivors:
+
+  1. **Width-gated exit/diagnostic** (`len != 4` → fatal+exit, or len==8 → exit): survives because all 16 rows are 32-bit mov.l. The author literally telegraphed this: "Include width: ... every row reads 32 bits."
+
+  2. **Width-gated state mutation**: `if (len != 4) d->dmaaddr = 0;` — survives, no row reads at other widths. Also `if (len == 2) odata = 0;` etc.
+
+  3. **Unconditional (guard-less) odata assignment within case 0x04** — equivalent mutant, survives trivially. Hmm, but maybe don't lead with this; it's arguably not a "mutant" in the interesting sense since it's behaviorally identical. Actually mutation testing counts equivalent mutants as survivors that can't be killed. But the spirit of the question: edits that keep rows green while changing behavior. The width ones change behavior (on untested widths).
+
+  4. **STATE-arm merge / weakened relative_addr**: `case 0x04: case 0x18:` — hmm wait, actually let me re-check the switch. The brief says arms 0x04, 0x10, 0x14, 0x18, 0x80, 0x8c, 0xe8, default. If I merge 0x18 into 0x04 by adding `case 0x18:` fallthrough above case 0x04's body... then STATE writes would set d->dmaaddr = idata instead of running maple_do_dma_xfer, and STATE reads return dmaaddr. No row touches STATE. Survives 16/16. Is this "weakened dominating predicate"? Broadly yes — the address predicate is widened. But it's a bigger edit (deleting/merging a case). The clause says "a weakened dominating predicate" — `relative_addr == 0x04` is implemented as `case 0x04:`; adding a fallthrough case label weakens it. I'll include it but note the edit size.
+
+  Hmm wait, actually there's a subtlety: with switch/case, `case 0x04: case 0x18:` means both addresses execute the same body. But the body's write arm stores dmaaddr — for STATE that's wrong but untested. OK.
+
+  Also **0x14 ENABLE merge**? `case 0x04: case 0x14:`: reading ENABLE would return dmaaddr instead of d->enable — is ENABLE read in any row? The 16 rows don't list an ENABLE read. Wait, "MAPLE_ENABLE's read" is mentioned in the fix comment but is it rowed? Rows: read val_a/b, other read (RESET2), survive ×2, initial zero, read four, read all ones, double read ×2, write replace, read silent, RAM ×2, IPRD, SPEED. No ENABLE read. So even merging with ENABLE survives. But again, bigger edit.
+
+  5. **Operand swap on `d->dmaaddr`**: what operand swaps survive? `odata = d->dmaaddr` → `odata = d->enable`? Value rows catch it (enable ≠ 0x8c012345... unless enable is 0 and... val rows write dmaaddr then read; enable would be whatever reset value — read returns wrong value → caught). `odata = idata`? On reads idata is 0 (never loaded) → read returns 0 → caught by val rows. `d->dmaaddr = odata`? (swap direction) → read returns 0 (odata initialized 0) → caught. `odata = ~d->dmaaddr`? Caught by val rows (complement ≠ value; even 0xa5a55a5a poison vs ~0 = 0xffffffff... initial zero row: write nothing, fresh device dmaaddr = 0? → ~0 = 0xffffffff ≠ 0 → caught). So operand swaps are all caught — good.
+
+  But what about `odata = d->dmaaddr | 0` — not a mutant. `odata = (uint32_t)d->dmaaddr` — need to check the field type. If dmaaddr is uint32_t, then `odata = d->dmaaddr & 0xffffffff` is identity — equivalent mutant. If dmaaddr is uint64_t and the write arm stores full idata (also 64-bit?)... memory read on SH4 mov.l gives 32-bit idata. The write arm stores idata (uint64_t but only 32 bits loaded for a 4-byte write? memory_readmax64 loads len bytes → for len=4, idata is 32-bit value zero-extended). So even if dmaaddr is uint64_t, high 32 bits are always 0 for 32-bit writes... unless a 64-bit write (mov.l can't). Are there rows doing 8-byte writes? "write 0x8c012345" — SH4 can't store 64-bit to MMIO easily (fmov? no). The probe uses mov.l. So a mutant `odata = d->dmaaddr & 0xffffffff` or `odata = (int32_t)d->dmaaddr` (sign extension: odata is uint64_t; (int32_t)0x8c012345 = negative → sign-extended to 0xffffffff8c012345; memory_writemax64 writes len=4 bytes → low 4 bytes = 0x8c012345 → GREEN!). Oh interesting — **sign-extension mutant**: `odata = (int32_t)d->dmaaddr;` — odata is uint64_t; the cast sign-extends into 64-bit, but memory_writemax64 only writes `len` (4) bytes → observable value identical for all 32-bit rows. GREEN on 16/16. Is that an "operand swap on odata"? It's a type/width manipulation. The author said "Include width" — this is the width channel: since every row reads exactly 32 bits, the high 32 bits of odata are dead. Any mutation above bit 31 is invisible: `odata = d->dmaaddr | 0xdeadbeef00000000ULL` survives! `odata = (uint64_t)(int64_t)(int32_t)d->dmaaddr` survives. `odata = d->dmaaddr + (1ULL<<40)` survives. These are all width-channel survivors. And `odata = d->dmaaddr & 0xffffffffULL` (mask to 32) also survives (equivalent given 32-bit view). Actually even `odata = d->dmaaddr & 0xffffffff | 0x5a5a00000000` — survives.
+
+  So the width channel gives a whole family: **any mutation confined to bits ≥ 32 of odata, and any exit/diagnostic/state-mutation gated on len ≠ 4**, survives all 16 rows because the probe is monochromatic at 32 bits.
+
+  6. **`read silent` channel**: counts sessions containing text `dreamcast_maple`. A diagnostic reworded to not contain "dreamcast_maple"! M_REWORD reworded the diagnostic and got caught by read silent — wait, no: M_REWORD = "the diagnostic verbatim / reworded / latched (once), no exit" — each scored 15/16 failing `read silent` alone. Hmm, if M_REWORD reworded but still contained "dreamcast_maple" (e.g., "[ dreamcast_maple: read from dmaaddr ]"), then read silent catches it. But what if the diagnostic is reworded to NOT contain the substring "dreamcast_maple"? E.g., `fatal("[ maple: dmaaddr read ]\n")` without exit. Then read silent (which greps for `dreamcast_maple` anywhere in the transcript) sees 0/9 → passes! And value rows pass (odata = d->dmaaddr still runs... wait, does fatal() return? In gxemul, fatal() prints and... let me think. In gxemul, `fatal()` is a macro/function that prints the message; it does NOT exit (debug() vs fatal() — fatal prints with [ ] and continues? Actually in gxemul, `fatal()` typically prints and continues execution unless... hmm. Let me recall: gxemul's misc.h: `void fatal(const char *fmt, ...)` — prints "FATAL ERROR" and... Actually I think in gxemul, fatal() does NOT exit; it just prints. Wait no. Let me check the original code: `fatal("[ dreamcast_maple: TODO: read from dmaaddr ]\n"); odata = d->dmaaddr; exit(1);` — the HEAD version has fatal THEN exit(1). If fatal() exited, the exit(1) would be dead code. The fact that exit(1) follows fatal() proves fatal() returns in this codebase! Yes — gxemul's fatal() prints and returns (it's not abort). So M_KEEPFATAL = diagnostic verbatim, no exit → 15/16, caught only by read silent.
+
+  So the diagnostic-without-the-substring mutant: `fatal("[ maple: TODO: dmaaddr read ]\n"); odata = d->dmaaddr;` — read silent counts `dreamcast_maple` substring occurrences in transcripts of read sessions. If the message avoids that substring, 0/9 → pass. All other rows pass (value, survive, exit status). 16/16 GREEN. Is this clause (d)? "a re-introduced ... diagnostic under a different predicate" — hmm, this is a re-introduced diagnostic under the SAME predicate but a different TEXT. The clause-(d) enumeration says "a re-introduced exit or diagnostic under a different predicate". The reworded diagnostic dodging the substring is not "under a different predicate" — it's the same predicate. But M_REWORD was already killed by read silent... which means M_REWORD's rewording retained the substring. The user's brief says "silence over the whole read interval (any maple text, not one literal)" — "any maple text". Does read silent grep for "dreamcast_maple" or for "maple"? The DETECTOR section says: "`read silent` counts read sessions whose transcript contains the text `dreamcast_maple` anywhere (want 0/9)." So it greps `dreamcast_maple` literally. But SETTLED says the floor is "silence ... (any maple text, not one literal)". Overclaim! The probe header CONTRACT apparently claims "any maple text" but the implementation greps one literal `dreamcast_maple`. So a diagnostic saying `[ maple: ... ]` or even `[ dreamcast maple: ... ]` (space) dodges. That's a survivor adjacent to (d) — it's a reworded diagnostic; M_REWORD was killed, but only because its rewording kept the substring. Hmm — wait, I need to verify what M_REWORD actually reworded to. The kill table says M_REWORD fails `read silent` alone. If the detector greps `dreamcast_maple`, then M_REWORD's text contained it. A rewording that drops "dreamcast_" survives. But hold on — is that within clause (d)? The enumeration in Q1: "a re-introduced exit or diagnostic under a different predicate, a weakened dominating predicate, an operand swap on d->dmaaddr or odata". A text rewording is none of those three... but Q2 asks "Does any row's channel fail to vary under the mutant it is named for?" — read silent's channel is the transcript text; the row is named for silence; the M_*FATAL/REWORD/LATCHED mutants are caught by it only if the text matches the literal. So the answer to Q2: read silent's channel (substring `dreamcast_maple`) is narrower than its CONTRACT claim (any maple text) — a reworded diagnostic without that substring survives. I'll report this under Q2/Q3 rather than as the primary (d) survivor, since the (d) clause is about predicates/operands. Actually — hmm, let me re-read clause (d) once more.
+
+  Q1: "DEPENDS-ON for this pure deletion: dominating predicates `relative_addr == 0x04` and `writeflag != MEM_WRITE`; the guarded body `odata = d->dmaaddr;` reads only `d->dmaaddr` and tests nothing. **Name any edit inside that enumeration** — a re-introduced exit or diagnostic under a different predicate, a weakened dominating predicate, an operand swap on `d->dmaaddr` or `odata` — that leaves all 16 rows green**"
+
+  So the enumeration = {exit/diagnostic under different predicate, weakened dominating predicate, operand swap}. Plus width explicitly. The width-gated exit is exactly "re-introduced exit under a different predicate" (predicate: len != 4). That's my lead survivor.
+
+  The unconditional-odata-in-case mutant is "weakened dominating predicate" (writeflag guard removed) — survives, but it's behaviorally equivalent (dead store on write), so it's a "green but equivalent" — worth naming.
+
+  The case-merge (0x18/0x14) is weakened address predicate — survives, behaviorally non-equivalent on unrowed addresses! That's a good one: reading MAPLE_STATE would return dmaaddr instead of 0; no row reads STATE. Also writing STATE wouldn't run DMA. Non-equivalent, green.
+
+  Now Q2: "Does any row's channel fail to vary under the mutant it is named for?" Let me audit rows:
+
+  - `read val_a/val_b`, `read four`, `read all ones`, `initial zero`, `double read 1/2`, `write replace`: channel = r2 value after mov.l. These vary fine.
+  - `marker survive` / `exit status`: channel = marker store + exit code. Under M_EXITONLY they fail (exit before marker? M_EXITONLY exits after the load — exit(1) prevents marker store and gives exit status 1). Fine.
+  - `read silent`: channel = transcript substring `dreamcast_maple`. As shown, it fails to vary for diagnostics avoiding the literal — but also: does it vary under `debug()` output? M_RET0 fails read silent because memory_rw's failed-access debug() prints under stepping — the debug text presumably contains "dreamcast_maple"? Hmm, memory_rw.c's failed access debug prints the device name maybe. OK.
+  - `other read`: channel = RESET2 read value. Varies under M_HOIST. Fine.
+  - Controls (RAM round trip, IPRD, SPEED): fine.
+
+  But also — does any row's channel fail to vary under its named mutant? Consider `double read 2` vs M_READCLEAR: works (second read returns 0). `initial zero` vs M_ZEROEXIT: works. Consider value rows under a mutant that answers correctly only when... hmm.
+
+  One more channel issue: the poison seed 0xa5a55a5a — M_DECLINE (assignment deleted) returns odata=0, caught because destination becomes 0 ≠ poison ≠ value? Wait, if the access succeeds and writes odata=0, destination = 0. The row wants the written value. Fine. But what about a mutant where the handler returns 0 (M_RET0)? On SH4, a failed device access... the brief says memory_rw delivers failed access as exception for MIPS/M88K only; on SH4, handler return 0 "silently skips the load" — so destination keeps the poison 0xa5a55a5a. The row detects poison ≠ expected. Good — that's why the poison exists. And M_RET0's score: 8 value rows fail + read silent. Consistent.
+
+  Q3: "Which CONTRACT statement in the probe header is false or overclaims?" I don't have the probe header in front of me — I need to read `regress/maple_dmaaddr_probe.py`. The SETTLED says the floor claims "silence over the whole read interval (any maple text, not one literal)" while the detector greps the single literal `dreamcast_maple` → overclaim, if the CONTRACT text says "any maple text". Also possibly the CONTRACT claims something about width ("every read"?) while only 32-bit is tested. Or claims the detector is on "unmodified -E dreamcast". Let me actually read the files.
+
+  Also I should check: the diff — is it actually applied in the working tree? Let me read the file. And check the struct type of dmaaddr, the write arm, the switch arms (is there an ENABLE read? STATE read returns 0?), the tail.
+
+  Also potential survivor: **`other read` only covers RESET2**. A weakened-predicate mutant answering `d->dmaaddr` for *any* address (e.g., default arm change, or `relative_addr & 0x0f == 0x04` style widening) — would SPEED row catch it? SPEED reads 0x80 and expects the shift/mask behavior. If the mutant widens case 0x04 to `relative_addr == 0x04 || relative_addr == 0x84`? Not expressible simply. `relative_addr & ~0x80 == 0x04`? Then 0x84 also answers dmaaddr; SPEED (0x80) still hits its own case → survives since no row reads 0x84. But that's contrived. The natural ones: 0x14 (ENABLE) and 0x18 (STATE) and 0xe8 are unread by rows. Only RESET2 (0x10) and SPEED (0x80) and IPRD (different device) are read besides DMAADDR. So weakened address predicates covering 0x14/0x18/0xe8 survive.
+
+  Wait, actually one more important check: the `other read` row writes 0x8c012345 to DMAADDR then reads RESET2 and wants 0. What about a mutant that returns dmaaddr for RESET2 too (weakened)? Caught. Good, already considered.
+
+  Now — is there a mutant on `d->dmaaddr` operand that survives? E.g., read from the wrong struct member that's always equal? No. What about `odata = cpu->...`? Caught by value rows. OK.
+
+  What about the surviving "swap" `odata = d->dmaaddr` → `memory_writemax64` direct with dmaaddr... not in the arm.
+
+  Let me also think about **M_LATCHED** (diagnostic once): caught by read silent (it prints on first read → 1/9 ≥ 1 → fail). A latched diagnostic that prints only on the *second* read? Double read 1/2 rows — transcript of that session contains the text → read silent counts that session → fail. A diagnostic that prints only after N reads where N > reads-per-session? Sessions: max reads per session = double read session (2 reads? plus RESET2/other rows do 1 read + controls). Hmm, "read silent counts read sessions whose transcript contains the text" — 9 read sessions. If a diagnostic fires only on the 3rd read of a session, and no session reads 3 times... double read session reads DMAADDR twice + controls (RAM, IPRD?, SPEED?) — IPRD is a different device (SH4 IPRD? "SH4 IPRD reset value" — some SH4 register). SPEED read is a maple read! If the SPEED control is in the same session as double-read, the maple device... would the latch counter be per-device? If the diagnostic is `static int n; if (++n > 5) fatal(...)` — across the emulator process, all maple reads count. If a session does ≤ 5 maple reads total... 9 sessions × several reads... A threshold-latched diagnostic could survive! But that's contrived (clause e-ish, value-keyed on a counter). Hmm, the M_LATCHED tested "(once)" — fired on first. A high-threshold latch would survive but that's a contrived predicate — arguably within "diagnostic under a different predicate". Worth mentioning briefly? Maybe as a noted extension. Keep focused.
+
+  Also **time/step-keyed**: exit after N instructions — contrived, skip.
+
+  Now the sign-extension/high-bits family is the cleanest "operand swap on odata" survivor: `odata = (int32_t)d->dmaaddr;` — wait, is that an operand swap? It's an operand *modification*. The family "any edit confined to odata bits ≥ 32" — e.g., `odata = d->dmaaddr | 0xffffffff00000000ULL`. Hmm, but would that be caught by... memory_writemax64(cpu, data, len, odata) with len=4 → writes 4 bytes. On SH4, mov.l destination register gets 4 bytes. The row compares r2 to expected 32-bit. High bits never observed. GREEN. So yes.
+
+  And the "Include width" hint also covers: a mutant that only answers for len==4 (`if (len == 4) odata = d->dmaaddr;` else odata stays 0 — or else exit). All rows len==4 → green. Behavior on 8/2/1-byte reads changed vs fix (fix answers for all widths). Real SH4 code could do mov.b/mov.w? In practice the Dreamcast maple registers are accessed as 32-bit, so the fix's width-independence matches hardware-ish behavior; a len==4 gate would be a latent divergence the detector can't see.
+
+  Let me now go read the actual files to ground all this: the device file (applied diff?), the probe, the kill table dir, maybe memory_writemax64.
+
+  Plan:
+  1. Read `GXEMUL-SEC/src/devices/dev_dreamcast_maple.c` around the DMAADDR arm + struct + tail.
+  2. Read `GXEMUL-SEC/regress/maple_dmaaddr_probe.py` — rows + CONTRACT header.
+  3. Skim kill table artifacts to confirm M_REWORD text and read silent implementation.
+  4. Compose verdict.
+
+  Given the instruction "Please do not simply ratify" — I expect to find at least the width-gated exit survivor. Let me verify details on disk.
+
+  Should I run anything? The operational rule says don't run gates; building/running a single detector or mutant in own temp dir is fine but probably unnecessary — I can reason from source. Time budget: this is an analysis task. I'll do source reads, maybe a quick grep for memory_writemax64 to confirm width semantics.
+
+  Let me start reading.
+
+• Verdict work first — reading the actual arm, the probe's rows and CONTRACT, and the kill-table legs before I claim anything.
+
+  PASS2_MAPLE_20260912 regress/gate_sh_rounding.sh       |  29 +++++++++
+ regress/ppc_rldicl_probe.py       |  78 ++++++++++++++++++++----
+ src/devices/dev_dreamcast_maple.c |   6 +-
+ tools/BRIEF_TEMPLATE.md           | 123 ++++++++++++++++++++++++++++++++++++++
+ tools/CLAUDE.md                   |  39 +++++++++++-
+ tools/PIPELINE.md                 |   2 +-
+ tools/panel.sh                    |   4 +-
+ tools/pipeline/fable_queue.md     |  99 ++++++++++++++++++++++++++++++
+ tools/pipeline/ledger.json        |  95 ++++++++++++++++++++++++++++-
+ 9 files changed, 454 insertions(+), 21 deletions(-)
+ M regress/gate_sh_rounding.sh
+ M regress/ppc_rldicl_probe.py
+ M src/devices/dev_dreamcast_maple.c
+ M tools/BRIEF_TEMPLATE.md
+ M tools/CLAUDE.md
+ M tools/PIPELINE.md
+ M tools/panel.sh
+ M tools/pipeline/fable_queue.md
+ M tools/pipeline/ledger.json
+?? _scratchpad/
+?? regress/alpha_dummy.bin
+?? regress/arm_bfx_stub.bin
+?? regress/artifacts/b120/
+?? regress/artifacts/fbdisabled/
+?? regress/artifacts/gdromdefault_461/
+?? regress/artifacts/heldqueue/
+?? regress/artifacts/hlen/
+?? regress/artifacts/landiskaux/codex_fixdesign_20260911.err
+?? regress/artifacts/landiskaux/codex_fixdesign_20260911.txt
+?? regress/artifacts/lcaisaphys/
+
+
+• Good. The diff is applied in the tree. `dmaaddr` is `uint32_t`. Now read the full access function (arms + tail) and the probe.
+
+• The fix is in the tree and `dmaaddr` is `uint32_t`. Now the full switch, the tail, and the probe itself.
+
+• Now I have the full picture. Let me analyze the detector carefully.
+
+  Key facts established from source:
+  - `d->dmaaddr` is `uint32_t`. Write arm: `d->dmaaddr = idata;` (idata is uint64_t, loaded via memory_readmax64 with len — for a 32-bit mov.l store, idata has zero-extended 32 bits).
+  - Read arm (the fix): `odata = d->dmaaddr;` — odata is uint64_t.
+  - Tail: `if (writeflag == MEM_READ) memory_writemax64(cpu, data, len, odata);` — writes `len` bytes.
+  - Switch arms: 0x04, 0x10 (RESET2), 0x14 (ENABLE read → d->enable), 0x18 (STATE read → 0), 0x80 (SPEED read → d->timeout << 16), 0x8c (RESET — write only; read falls through with odata=0, no fatal! interesting: case 0x8c read → odata stays 0, break — quiet), 0xe8 (write only; read → odata 0, quiet), default (fatal, no exit → prints "dreamcast_maple" text).
+
+  Detector mechanics (crucial):
+  - 16 rows. 9 read sessions (READS list): val_a, val_b, other read, survive, initial zero, read four, read all ones, double read, write replace. All stepped through the debugger.
+  - `read silent`: counts sessions where the literal substring `dreamcast_maple` appears in the transcript. The CONTRACT says "the silence row counts ANY `dreamcast_maple' output in a read session, never one literal string". Hmm — careful reading: "counts ANY `dreamcast_maple' output ... never one literal string". So the contract claims the row keys on the device-name token `dreamcast_maple` as opposed to one specific message string like "TODO: read from dmaaddr". The SETTLED bullet in the user's brief says: "silence over the whole read interval (any maple text, not one literal)". Those differ! "Any maple text" (the brief's paraphrase) vs "ANY `dreamcast_maple' output" (the contract). The implementation greps the single literal substring "dreamcast_maple". So a diagnostic reworded to avoid the substring "dreamcast_maple" (e.g., `fatal("[ maple: dmaaddr read ]\n")` — like the existing `maple_do_dma_xfer`'s own `debug("[ maple_do_dma_xfer: not enabled? ]\n")`, which notably does NOT contain "dreamcast_maple"!) survives read silent.
+
+  Wait — but is a reworded diagnostic avoiding the substring within clause (d)? Clause (d): "a re-introduced exit or diagnostic under a different predicate". The reworded diagnostic is under the SAME predicate. But the kill table's M_REWORD was killed by read silent — meaning M_REWORD's rewording retained the substring "dreamcast_maple". The CONTRACT claims "never one literal string" — and the implementation IS one literal string ("dreamcast_maple")! The contract distinguishes "ANY `dreamcast_maple' output" vs "one literal string" — the author means "not keyed on the one literal TODO message". So the contract's claim is: keyed on the device token, catches verbatim/reworded/latched. But a rewording that drops the device token (like the code's own `maple_do_dma_xfer` debug style: "[ maple_do_dma_xfer: ... ]") escapes. Is that a CONTRACT overclaim (Q3)? The contract says "the diagnostic alone, verbatim, reworded or latched -- the silence row counts ANY `dreamcast_maple' output in a read session, never one literal string". Strictly, the sentence is accurate: it counts any `dreamcast_maple` output, not one literal string. The overclaim is the implication that "reworded" is covered as a class — only rewordings retaining the token are. And the user's brief (SETTLED) states the floor as "silence over the whole read interval (any maple text, not one literal)" — "any maple text" overclaims: it's any *dreamcast_maple* text. Note `debug("[ maple_do_dma_xfer: not enabled? ]\n")` exists in the very same file without the token, proving the idiom exists.
+
+  Now the width question — Q1 explicitly: "Include width: `memory_writemax64(cpu, data, len, odata)` — every row reads 32 bits."
+
+  Check the probe: `load32` uses SH4 `mov.l @r1, rD` (0x6002 | ...): 32-bit loads only. `store32` uses `mov.l r2, @r1` (0x2122): 32-bit stores only. The controls use `put w` (debugger word = 32-bit) and mov.l. So yes — every access is len=4. The CONTRACT's NOT COVERED clause admits: "read widths other than 32 bits (the common tail's `len')". So width-gated mutants are *disclosed* as not covered. But the user's Q1 still asks to name any edit inside the (d) enumeration that stays green — and width-gated exit is exactly such an edit. The CONTRACT disclosing it as NOT COVERED doesn't make it not-a-survivor; the question is whether the 16 rows kill it. They don't. So the verdict must be: SURVIVORS EXIST within clause (d), and the NOT COVERED clause already admits the width family. Hmm — but the user's question 1 says "Name any edit inside that enumeration ... that leaves all 16 rows green, and the row you expected to catch it." The NOT COVERED disclosure means the author already knows width is out — but the verdict line format asks either "NO SURVIVING (d) MUTANT — swept: <list>" or "SURVIVOR: <exact edit>". Since width is inside the clause-(d) enumeration per the question itself ("Include width"), honest answer: SURVIVORS — the width-gated exit/diagnostic, and the high-32-bits-of-odata family (uint32_t field → uint64_t odata, dead above bit 31 at len=4).
+
+  Let me enumerate precisely, with exact edits:
+
+  **S1 — width-gated exit (clause d: re-introduced exit under a different predicate):**
+  ```c
+  odata = d->dmaaddr;
+  if (len != 4)
+      exit(1);
+  ```
+  or with fatal. Every row is mov.l → len == 4 always → predicate never true → 16/16 GREEN. No row can catch it: the detector has zero width variation (load32/store32 only; even the controls are 32-bit). The CONTRACT itself discloses this ("read widths other than 32 bits"). Expected row: none exists; a mov.b/mov.w/64-bit read row would catch it.
+
+  **S2 — width-gated diagnostic (re-introduced diagnostic under a different predicate):**
+  ```c
+  odata = d->dmaaddr;
+  if (len != 4)
+      fatal("[ dreamcast_maple: read from dmaaddr ]\n");
+  ```
+  Even though the text contains "dreamcast_maple", read silent can't see it because it never prints (len==4 in all 9 read sessions). 16/16 GREEN.
+
+  **S3 — high-half odata mutation (operand "swap"/perturbation on odata's dead bits):**
+  `odata = (uint64_t)(int32_t)d->dmaaddr;` — sign-extends into the high 32 bits of odata; or `odata = d->dmaaddr | 0xffffffff00000000ULL;` or `odata = d->dmaaddr ^ 0x5a5a5a5a00000000ULL;`. memory_writemax64 writes only len=4 bytes → the guest observes the low 32 bits only → all value rows green. This is an operand mutation that the 32-bit-only observation channel cannot see. Wait — is this a real behavior change? odata's high bits are dead at len=4. If a future guest does an 8-byte read (len=8), the fix returns 0x00000000_8c012345 while S3 returns garbage high. But the detector never does. So it's a survivor relative to the detector; behaviorally it differs from the fix on unrowed widths. Actually careful: is `odata = (int32_t)d->dmaaddr` caught by `read val_a`? VAL_A = 0x8c012345, sign bit set. (int32_t)0x8c012345 = negative; converted to uint64_t odata = 0xffffffff8c012345. memory_writemax64(cpu, data, len=4, odata) → writes low 4 bytes → r2 = 0x8c012345. printed → 0x8c012345. Row wants VAL_A → green. Yes, survives. The row I expected to catch it: none — only a 64-bit read row could.
+
+  **S4 — weakened dominating predicate on writeflag (guard removal → dead store on writes):**
+  ```c
+  if (writeflag == MEM_WRITE) {
+      d->dmaaddr = idata;
+  }
+  odata = d->dmaaddr;   /* unconditioned: was guarded by the else */
+  ```
+  Within case 0x04 only. On MEM_WRITE, odata is set but the tail only calls memory_writemax64 on MEM_READ → unobservable. All 16 rows green. But this is an *equivalent mutant* — no behavior change at all. Worth listing as swept-but-equivalent rather than a survivor of concern. Hmm — actually wait. Is it truly equivalent? The tail: `if (writeflag == MEM_READ) memory_writemax64(...)`. Yes. odata is a local otherwise unused. So S4 is semantically identical. Equivalent mutants "survive" trivially but aren't evidence of detector weakness. I'll list it under swept/equivalent, not as the headline.
+
+  **S5 — weakened address predicate to an unrowed arm:** e.g., extend the read answer to STATE (0x18): change case 0x18's read branch from `odata = 0` to `odata = d->dmaaddr`, or merge `case 0x04` with a fallthrough. No row reads STATE (0x18), ENABLE (0x14 is read but its own arm), or 0xe8. Wait — does any row read 0x14? No ENABLE read row. Does any row read 0x8c or 0xe8? No. `other read` covers only RESET2 (0x10); controls cover SPEED (0x80). So a mutant that also answers `d->dmaaddr` on STATE reads (real behavior change: the fix/HEAD return 0 = "DMA complete") is green. Is this "weakened dominating predicate `relative_addr == 0x04`"? It's an edit to a different arm, arguably. But the natural expression as a weakened predicate: `case 0x04:` → `case 0x04: case 0x18:` — that merges write behavior too (STATE write would store dmaaddr instead of running DMA; no row writes STATE either — the detector never triggers maple_do_dma_xfer). 16/16 green. Hmm, but the case-merge is a bigger structural edit than a "mutant". The minimal version: in case 0x18 read branch, `odata = 0` → `odata = d->dmaaddr` — but that's not the fix hunk; it's another arm. The question's enumeration: "a weakened dominating predicate". The dominating predicates are `relative_addr == 0x04` and `writeflag != MEM_WRITE`. `relative_addr == 0x04` weakened = matching more addresses. In a switch, that's `case 0x04: case 0x18:` fallthrough or changing the value, e.g., `case 0x14:` — no. I'll present S5 as: yes, weakened address predicate survives iff the added addresses avoid {0x10, 0x80} — e.g. STATE 0x18: `case 0x04: case 0x18:` gives 16/16 because `other read` only pins RESET2 and `ctrl devsig maple` pins SPEED, and no row reads STATE/ENABLE-as-dmaaddr or runs DMA. Also STATE's write arm runs maple_do_dma_xfer which — wait, if merged, writing 1 to 0x18 sets d->dmaaddr=1 instead of DMA. Unrowed. Green.
+
+  Hmm, hold on — one nuance for S5 with `case 0x04: case 0x18:`: the write arm of the merged case stores `d->dmaaddr = idata`. Does any row *write* STATE? No. OK green.
+
+  **S6 — diagnostic dodging the literal (channel check for Q2):**
+  `fatal("[ maple: read from dmaaddr ]\n"); odata = d->dmaaddr;` — no "dreamcast_maple" substring → read silent sees 0/9; all value rows unaffected (fatal returns); survive/exit rows fine. 16/16 GREEN. This is M_REWORD's escape hatch: M_REWORD died only because its rewording kept the token. Is S6 clause (d)? "re-introduced ... diagnostic under a different predicate" — same predicate, different text. Not strictly (d). It belongs to Q2/Q3: the read-silent channel is keyed on one literal substring while the brief's SETTLED floor claims "any maple text". I'll answer it under Q2 (channel fails to vary) and Q3 (overclaim), and note it as a survivor outside (d)-strict but inside the M_REWORD class the kill table claimed dead. The user said: "If you find none, say WHAT YOU SWEPT" and wants the next three wrong fixes. The three pass-1 wrong fixes were caught by rows; the user wants "the next three" — i.e., new wrong fixes that pass. S1/S2 (width-gated exit/diagnostic), S3 (high-half), S5 (STATE merge), S6 (token-free reword) are candidates. That's more than three.
+
+  Now, is the width family legitimately "inside the clause-(d) enumeration"? Q1: "Name any edit inside that enumeration — a re-introduced exit or diagnostic under a different predicate, a weakened dominating predicate, an operand swap on d->dmaaddr or odata — that leaves all 16 rows green. Include width: memory_writemax64(cpu, data, len, odata) — every row reads 32 bits." — Yes, the user explicitly directs width into scope. And the CONTRACT's NOT COVERED already discloses width-other-than-32. So for Q3: the CONTRACT is honest about width ("NOT COVERED: ... read widths other than 32 bits (the common tail's `len')"). Good — no overclaim there. The overclaim candidates in CONTRACT:
+
+  1. Line 16-21: "the silence row counts ANY `dreamcast_maple' output in a read session, never one literal string" — and claims it catches "the diagnostic alone, verbatim, reworded or latched". The reworded class is only caught if the rewording retains the substring `dreamcast_maple`. The code's own `maple_do_dma_xfer` debug uses "[ maple_do_dma_xfer: ..." — no token. So "reworded" as a class overclaims. Also the user's SETTLED phrasing "any maple text" overclaims vs the implementation (one substring). Wait, but the CONTRACT sentence is careful: "counts ANY `dreamcast_maple' output" — that's exactly what line 221 does: `"dreamcast_maple" in t`. Literally true. The false/overclaiming part is the *class claim* "reworded" — a reworded diagnostic that drops the device token passes. Also note: the claim "the FAULT idiom `return 0' (a silent load-skip on SH4...)" — M_RET0 scored 7/16: 8 value rows + read silent. It says read silent caught it because memory_rw's failed-access debug() prints under stepping. Hmm, does the debug text contain "dreamcast_maple"? memory_rw.c's failed access debug prints... presumably the device name. Plausible.
+
+  2. Another CONTRACT statement to check: "Every register access is a real SH4 guest instruction (`mov.l') stepped through the cold debugger: the maple device is registered DM_DEFAULT, so the debugger's own dump/put never reach its handler." Wait — but the sessions DO use `put h`/`put w` to place code and seed RAM (0x8c001800, MARKER at 0x8c001f04, CODE at 0x8c001000). Those are RAM, not the device. And `ctrl live` uses `put w` on RAM then mov.l. OK. But "Every register access is a real SH4 guest instruction" — true for maple registers: store32/load32 used for DMAADDR/RESET2/SPEED. IPRD read via load32. OK true.
+
+  3. "POISON value distinct from every want" — POISON=0xa5a55a5a; wants: 0x12345678, 0xda74 (masked), 0x12340000, VAL_A, VAL_B, 0, 0x55aa55aa, "exit0", VAL_4, VAL_ONES, VAL_R, "0/9", 0xdeadbeef. Distinct, true. Note: `read all ones` wants 0xffffffff — poison differs. OK.
+
+  4. "Every load destination is seeded with a POISON value ... so a fix that silently skips the load cannot pass a value row." Check: load32 seeds rD=POISON before mov.l. marker survive: r5 is seeded POISON (load32(MARKER,...,dest=5) seeds r5) — yes. double read dests r2,r3 both seeded. OK true. Hmm — one gap: in the survive session, the read of DMAADDR goes to r2 seeded POISON; marker store uses r3→@r4... The instructions: `0x6212` = mov.l @r1, r2; `0x2432`?? Let me decode: 0x2432 — mov.l r3, @r4 is 0x2432? SH4 mov.l Rm, @Rn encoding: 0010 nnnn mmmm 0010 → 0x2000 | (n<<8) | (m<<4) | 2. 0x2432: n=4, m=3, 0010 → mov.l r3, @r4. Yes. And 0x6212: 0110 nnnn mmmm 0010 → 0x6000|(2<<8)|(1<<4)|2 = mov.l @r1, r2. Yes.
+
+  5. Sentinels fine.
+
+  6. "Promoted from the rung-3 witness ... (committed 4/12, fix 12/12), with the rows the pass-1 panel and Fable's ruling owed" — historical, fine.
+
+  7. Line 162-165 comment: "A write to MAPLE_DMAADDR prints nothing (its debug() is commented out) and a MAPLE_RESET2 read is quiet, so ANY maple output in these sessions is the read speaking." Hmm — the double-read session writes DMAADDR then reads twice; the write replace session writes twice; the val sessions write once. Writes are quiet (debug commented out). RESET2 read quiet (case 0x10 read → break, odata=0). SPEED read — case 0x80 read → `odata = d->timeout << 16`, quiet (debug is only on write). But wait: the SPEED *write* in ctrl devsig maple calls `debug("[ dreamcast_maple: timeout set to %i ]\n", ...)`! Does debug() print by default? In gxemul, debug() prints only if the 'd' debug flag... actually in gxemul, `debug()` prints always? No — gxemul's debug() prints to stdout only when... hmm. In gxemul misc.c: `debug(...)` — it prints always (unlike debug_msg). Actually I recall gxemul has `debug()` which always prints (used for device chatter) — no wait. Let me think: gxemul src/include/misc.h declares `void debug(const char *fmt, ...);` and in misc.c, debug() prints if `verbose`? Hmm. There's `-v` verbose flag. In gxemul, debug() output appears only in verbose mode? The probe runs `gxemul -V -x -E dreamcast -M 64 KERNEL` — is `-V` verbose? In gxemul, `-V` = "verbose debug" hmm, actually `-V` might be... In gxemul 0.6.x: `-v` increases verbosity? `-V`? Let me not guess. The ctrl devsig maple session is NOT in READS (it's a plain session, not rsession) — lines 185: `t, how = session(...)` not rsession. So SPEED-write debug output doesn't pollute read silent. Good design. But the comment at line 162 says "A write to MAPLE_DMAADDR prints nothing ... so ANY maple output in these sessions is the read speaking" — in the read sessions, the writes are to DMAADDR (quiet) and RESET2 read (quiet). True. OK.
+
+  But wait — subtle: in read sessions, `run()` uses `put h` to write code to RAM (0x8c001000 region) — fine. And the transcript includes the debugger echo of commands. Commands include text like "r1=0xa05f6c04" — does any command or echo contain "dreamcast_maple"? No. Does the emulator banner print "dreamcast_maple"? Machine init might print device names under -V... If the banner contained "dreamcast_maple", ALL read sessions would be noisy and read silent would fail even on BASE (16/16 measured, so no). OK.
+
+  Now M_RET0's read-silent failure: return 0 from handler → memory_rw treats as failed access → prints debug under stepping? The brief says "memory_rw's failed-access debug() prints under stepping". The printed text contains "dreamcast_maple"?? memory_rw.c debug for failed device access prints something like "[ memory_rw(): read from 0x... failed ]"? Would it contain the device name? Possibly `dev_dreamcast_maple_access`... The kill table measured it, so fine.
+
+  Now, more candidate (d) mutants to sweep and confirm killed:
+
+  - **Operand swap `odata = d->enable`**: val rows kill (enable=0 after... wait, does any read session set enable? No. d->enable=0 in all read sessions → reads return 0 → val_a wants 0x8c012345 → fail. Killed.
+  - **`odata = idata`**: on reads idata=0 (memory_readmax64 only on MEM_WRITE) → reads return 0 → killed by val rows. 
+  - **`odata = d->dmaaddr & ~0x1f`** = M_MASKLOW, killed (val_a has low bits set). Killed.
+  - **Mask high: `odata = d->dmaaddr & 0xffff`** — val_a 0x8c012345 → 0x2345 ≠ → killed. CONTRACT says "masking of high or low-five bits" measured. Killed.
+  - **Swap target: `data = d->dmaaddr` or write to idata** — odata stays 0 → destination becomes 0 → val rows fail (poison overwritten with 0). Killed. Actually wait: `memory_writemax64(cpu, data, len, odata)` with odata=0 writes 0 → r2=0 ≠ VAL_A. Killed.
+  - **Weaken `relative_addr == 0x04` to always (default-style: answer dmaaddr for every addr)** — then RESET2 read returns 0x8c012345 → `other read` fails; SPEED read returns dmaaddr → ctrl devsig maple fails (0x12340000 expected). Killed.
+  - **Weaken to `relative_addr & 0x0f == 0x04`** — matches 0x04, 0x14, 0x24...: 0x14 ENABLE read would... wait the switch is on full relative_addr; a mutant `case 0x04` → can't express mask in case label; would need if-chain restructure. Contrived. But if expressed (replacing switch with if), ENABLE read → dmaaddr: no row reads ENABLE → survives! But that's a restructure, not a mutant. Skip — note S5 covers the class via STATE.
+  - **`writeflag != MEM_WRITE` weakened**: the else already covers all non-write. Only MEM_READ exists (settled). To weaken you'd have to make the read answer fire on writes too → S4 (equivalent, dead store). Or swap: read answer on MEM_WRITE only → then reads skip load? No: else-branch on write → write does odata=dmaaddr (dead), read does d->dmaaddr=idata with idata=0 → clears field and returns 0 → val rows fail (r2=0 or... odata=0 → r2=0). Killed.
+  - **Exit under predicate `d->dmaaddr == v`** for unrowed v (e.g., 0xdeadbeef or == 8): clause (e), disclosed NOT COVERED. Not (d).
+  - **Exit under `len == 4`**?? That would fire on every row → killed. The survivable direction is len != 4.
+  - **Exit under `cpu->...` state predicate**: contrived, clause (e)-ish. Skip.
+  - **`return 0` under len != 4** — same width family as S1 (SH4 silent skip; poison holds → no row at other widths). Same family.
+  - **Diagnostic with latched counter threshold > max reads per session**: M_LATCHED was once (fires first read) → killed by read silent. A latch firing on the 100th read never fires in any session (max ~3 maple reads/session) → survives. Predicate = counter threshold — "diagnostic under a different predicate" → another (d) survivor, though contrived. Worth one line: the latch class is only pinned for latch-count 1. Hmm, is it? read silent counts any session containing the text; double-read session has 2 DMAADDR reads + 0 others... a latch firing on 3rd read of a session: sessions have at most 2 DMAADDR reads (double read session); RESET2 read doesn't print. So fire-on-3rd-read survives. Contrived but real. I'll mention briefly.
+
+  Also Q2 audit: "Does any row's channel fail to vary under the mutant it is named for?"
+
+  Rows and their named mutants:
+  - read silent ← M_KEEPFATAL/M_REWORD/M_LATCHED: channel = literal substring `dreamcast_maple`. Fails to vary for a rewording that drops the token (the file's own maple_do_dma_xfer debug style does exactly that). So YES — this row's channel is narrower than its named class "reworded". This is my Q2 headline.
+  - Also: read silent under M_RET0 — measured failing, meaning the channel varies there. Fine.
+  - `other read` ← M_HOIST: channel = RESET2 read value. M_HOIST hoists to declaration → all arms return dmaaddr... wait M_HOIST: `odata = d->dmaaddr` at declaration → RESET2 read → odata=0x8c012345 → row catches. Varies. But note: the row pins only RESET2; a hoist-like mutant affecting only STATE/0xe8 (not possible via declaration-hoist, but via per-arm edit) escapes — the channel varies for the named mutant, so Q2-strict: fine.
+  - `double read 2` ← M_READCLEAR: varies.
+  - `exit status`/`marker survive` ← M_EXITONLY: varies.
+  - value rows ← M_DECLINE/M_MASKLOW: vary.
+  - width channel: NO row has a width channel — that's the Q1 survivor, not Q2 (Q2 asks about rows' channels under their named mutants).
+  - `initial zero` ← M_ZEROEXIT: varies (measured).
+  - One more: `ctrl devsig maple` — SPEED write uses debug() → prints "[ dreamcast_maple: timeout set to ..." if debug prints in this mode. That session is not in READS so it doesn't trip read silent. But hold on — does debug() print under `-V`? If yes, transcript of ctrl session has the text — harmless since not counted. OK.
+
+  Q3: Which CONTRACT statement is false or overclaims?
+
+  Candidates:
+  (a) "the diagnostic alone, verbatim, reworded or latched -- the silence row counts ANY `dreamcast_maple' output in a read session, never one literal string" — the MEASURED claim lists "reworded" as caught; in truth only token-preserving rewordings are caught; the row IS keyed on one literal string: `dreamcast_maple`. "never one literal string" is false in the sense that matters: it is exactly one literal string, just a short one (the device name rather than the full TODO line). A diagnostic reworded to "[ maple: ... ]" (the file's own maple_do_dma_xfer style) passes all 16 rows. OVERCLAIM. This also contradicts the brief's SETTLED floor phrasing "any maple text" — the implementation is narrower than "any maple text" (e.g., "maple:" alone wouldn't match... wait "any maple text" is broader than "dreamcast_maple"; implementation matches only strings containing "dreamcast_maple"). So the CONTRACT's literal sentence is true ("counts ANY dreamcast_maple output") but the class claim "reworded" is the overclaim, and "never one literal string" is spin — it is one literal substring.
+
+  (b) "Promoted from the rung-3 witness ... (committed 4/12, fix 12/12)" — historical, can't verify cheaply, skip.
+
+  (c) "Every register access is a real SH4 guest instruction (`mov.l')" — check `put w 0x8c001800, 0x12345678` — that's a debugger poke to RAM, not a register access; the claim says "register access" meaning maple/sh4 registers — SPEED is accessed via store32/load32 (real mov.l). IPRD via load32. DMAADDR/RESET2 via load32/store32. True.
+
+  (d) "the maple device is registered DM_DEFAULT, so the debugger's own dump/put never reach its handler" — verify DM_DEFAULT semantics: devices registered DM_DEFAULT are skipped by debugger access? In gxemul, memory_device_register with DM_DEFAULT and the debugger's `dump` uses... The claim underpins using `put h` to place code at 0x8c001000 (RAM) — that's RAM anyway. Is there any debugger access to the maple range? `r1=0xa05f6c04` just sets a register. No direct put to 0xa05f6c04. So the claim isn't load-bearing for the rows, and it's probably true (DM_DEFAULT = mirrored/default flags). Skip unless quick to verify. Actually let me check memory_device_register signature usage: DM_DEFAULT is the "flags" arg — in gxemul, DM_DEFAULT means the device *is* accessed through normal path; debugger accesses bypass devices unless... There's a flag DM_DYNTRANS_OK etc. I won't verify; not needed.
+
+  (e) NOT COVERED clause: honest about width and exact-value exits. Good.
+
+  (f) "Every load destination is seeded with a POISON value distinct from every want, so a fix that silently skips the load cannot pass a value row." — true as measured (M_RET0 fails 8 value rows). But note a wrinkle: `ctrl devsig sh4` masks to & 0xffff — if load skipped, poison & 0xffff = 0x5a5a ≠ 0xda74 → fails. fine.
+
+  (g) Line 18: "the FAULT idiom `return 0' (a silent load-skip on SH4, where memory_rw.c raises no exception)" — true per brief.
+
+  (h) The CONTRACT says the kill table measured "masking of high or low-five bits" — kill table has M_MASKLOW (low five). High masking listed in contract as measured; table in the brief only shows M_MASKLOW. Brief may have elided. Not an overclaim of the detector itself.
+
+  So Q3 answer: the one false/overclaiming CONTRACT statement is the silence-row description (lines 16-18 + the comment at 162-165 "Keyed on the channel, never on one literal string"): it is keyed on one literal string — the 15-char token `dreamcast_maple` — and a reworded diagnostic that drops the token (idiom already present in this very file at maple_do_dma_xfer's debug) defeats it while every other row stays green. Also the user's SETTLED line "any maple text" overclaims relative to the implementation.
+
+  Wait, I should double check M_REWORD in the kill table to see what rewording was used — to confirm it kept the token. Let me look at the artifacts dir. Also verify the kill table exists and check the M_REWORD patch.
+
+  Also Q1 wants: "and the row you expected to catch it" for each survivor. For S1/S2/S3: no row; would need a non-32-bit read row. For S5: no row (STATE read unrowed); `other read` is the row class that should have caught it but only pins RESET2. For S6: read silent was expected to catch it but its channel is one literal.
+
+  One more sweep item for completeness: operand swap `odata = d->dmaaddr` → `odata = d->timeout << 16`-style cross-field — killed by val rows. `odata = d->dmaaddr + 0` identity — not a mutant. `d->dmaaddr = idata` write-arm changes — outside read arm; but "operand swap on d->dmaaddr" could include the write arm: e.g., write arm `d->dmaaddr = idata & ~0x1f`? Then read val_b (0x0c00001f) → reads back 0x0c000000 → killed. Write arm `d->dmaaddr = idata & 0xffffffff`? idata for len=4 already 32-bit zero-extended → identity → survives but equivalent. Write arm truncation to 16 bits → killed by val_a.
+
+  What about `odata = d->dmaaddr` where the read answers BEFORE the write arm stores — no, ordering fine.
+
+  Another: **`return 1` early skipping the tail**? e.g., `return 1` inside the read arm before memory_writemax64 → destination keeps POISON → val rows fail (0xa5a55a5a ≠ want). Killed.
+
+  **`odata = d->dmaaddr; d->dmaaddr = idata;` on read (idata=0)** = M_READCLEAR-ish (clears on read) → double read 2 catches. Already measured.
+
+  **Answer via `memory_writemax64(cpu, data, len, d->dmaaddr)` directly + `return 1`** — equivalent, survives trivially (equivalent).
+
+  Now — S3 sign-extension: is that really inside "operand swap on d->dmaaddr or odata"? It's an operand *conversion*. The enumerated list ends with "an operand swap on `d->dmaaddr` or `odata`" — the spirit includes operand perturbations; and "Include width" explicitly opens the odata-width channel. I'll present S3 under the width umbrella (odata is 64-bit, field is 32-bit, only len=4 bytes leave the device).
+
+  Hmm, also worth checking: `memory_writemax64` — does it mask odata to len bytes? Let me verify quickly in src/core or include. memory_writemax64(cpu, data, len, odata) writes len bytes from the uint64_t — standard gxemul: it stores the low len bytes (big/little endian per cpu). So high bits dead at len=4. Quick grep to confirm.
+
+  Let me also confirm the kill-table dir and M_REWORD text. And confirm `fatal` returns (doesn't exit) — the HEAD code `fatal(...); odata = ...; exit(1);` proves it (exit(1) after fatal would be dead otherwise). Actually HEAD per diff: `fatal(...); odata = d->dmaaddr; exit(1);` — yes fatal returns.
+
+  Let me do these three quick greps/reads, then write the verdict.
+
+  Also, for thoroughness — "every row reads 32 bits" — including the surviving-session read of DMAADDR (mov.l) and MARKER (mov.l). Yes. And all writes 32-bit. So even a mutant `if (len != 4) return 0;`... wait that's in the handler not the arm; M_RET0 variant gated on width — same family.
+
+  And one more possible survivor class within "weakened dominating predicate": `writeflag != MEM_WRITE` — what if the mutant *strengthens* to `writeflag == MEM_READ`? Equivalent (only two writeflags reach). Not a survivor of concern; equivalent. The brief says no other writeflag reaches (settled). OK.
+
+  Also `case 0x04` → `case 0x04 | 0` — nonsense, skip.
+
+  Verdict line: `SURVIVOR: <exact edit>` — I'll give the width-gated exit as the primary (it's squarely in clause (d)'s "re-introduced exit under a different predicate" + the explicitly-asked width), plus the family. The user asked "is there a mutant of this fix — inside the clause-(d) enumeration below — that stays GREEN on all 16 rows? If you find none, say WHAT YOU SWEPT." I found several. So verdict: SURVIVORS (plural), lead with the minimal one.
+
+  Primary survivor (minimal exact edit):
+  ```c
+  } else {
+      odata = d->dmaaddr;
+      if (len != 4)
+          exit(1);
+  }
+  ```
+  16/16: every one of the 16 rows issues len==4 accesses only (mov.l / put w), so the predicate is constant-false across the whole detector. No row's channel includes `len`. The CONTRACT's NOT COVERED already concedes this family.
+
+  Secondary survivors:
+  2. Width-gated diagnostic: `if (len != 4) fatal("[ dreamcast_maple: ... ]\n");` — read silent's transcript channel never sees it (it never prints); 16/16.
+  3. High-half odata: `odata = (uint64_t)(int32_t)d->dmaaddr;` (or OR/XOR any constant into bits 32..63) — memory_writemax64 emits len=4 bytes; bits ≥32 of odata are a dead channel for every row; 16/16.
+  4. Token-free reworded diagnostic: `fatal("[ maple: read from dmaaddr ]\n"); odata = d->dmaaddr;` — read silent greps one literal `dreamcast_maple`; this file's own maple_do_dma_xfer debug uses exactly such token-free text; 16/16. (This is the M_REWORD class the kill table claims dead.)
+  5. Address-predicate widening to an unrowed arm: `case 0x04: case 0x18:` (fallthrough) — STATE reads return dmaaddr, STATE writes store instead of running DMA; no row touches 0x18; `other read` pins only RESET2 and the maple control pins only SPEED; 16/16. (Whether this counts as "one mutant of the diff" is arguable — it's the weakened-dominating-predicate class.)
+  6. Contrived latch: diagnostic/exit keyed on a counter ≥ 3 reads (max maple reads in any read session is 2) — survives read silent; M_LATCHED only pinned latch-at-1.
+
+  Equivalent (swept, not counted): unconditional `odata = d->dmaaddr` after the if within case 0x04 (dead store on writes — tail gates on MEM_READ); `d->dmaaddr & 0xffffffff` (field is uint32_t); `writeflag == MEM_READ` strengthening. Killed as expected: all operand swaps to other fields/idata/zero (val rows + poison), mask high/low (val_a/val_b), guard widened to all addresses (other read + ctrl devsig maple), guard swapped read/write (val rows), early return skipping tail (poison), read-clears (double read 2), value-keyed exits ==0/==4/bit-set (initial zero/read four/read all ones), value-keyed exits on unrowed constants (clause (e), disclosed).
+
+  Q2 answer: read silent is the row whose channel fails to vary under part of its named class — it varies for token-preserving rewordings (M_REWORD died) but not for token-free ones; its channel is the 15-byte literal, not "any maple text". Every other row's channel varies under its named mutant (measured in the kill table: other read/M_HOIST, double read 2/M_READCLEAR, initial zero/M_ZEROEXIT, read four/M_EQ4, read all ones/M_BIT30, survive+exit/M_EXITONLY, value rows/M_DECLINE/M_MASKLOW/M_RET0). Also note `read silent` *over*-fires for M_RET0 via an unrelated printer (memory_rw's failed-access debug under stepping) — that row failing for M_RET0 is channel bleed, not the read speaking; harmless for BASE but it means the row isn't purely "the read's own voice". Hmm wait — actually that's interesting for Q2: read silent under M_RET0 varies because of memory_rw's debug print, not because of anything the maple read says. So the channel "varies" for M_RET0 for an extraneous reason. Not a failure to vary, but a note.
+
+  Q3 answer: the CONTRACT sentence "the silence row counts ANY `dreamcast_maple' output in a read session, never one literal string" + the comment "Keyed on the channel, never on one literal string" — overclaims: the implementation (line 221) is exactly one literal string, `"dreamcast_maple" in t`; the "reworded" entry in the measured list is caught only when the rewording retains that token. The rest of the CONTRACT (width disclosure, clause-(e) disclosure, poison claims, DM_DEFAULT claim) reads true against the implementation. Also the SETTLED floor's "any maple text" phrasing is broader than the implementation — same overclaim propagated into the brief.
+
+  Let me verify the kill-table M_REWORD text and memory_writemax64 quickly, then write the final answer. Also double-check that debug() prints under `-V`... actually not needed for any claim I'm making. Skip.
+
+  One more check on S5 feasibility: `case 0x04: case 0x18:` — order in switch: 0x04 case comes first; to merge you'd write `case 0x04: case 0x18:` before the shared body and delete the old 0x18 arm (duplicate case label = compile error otherwise). It compiles fine with the 0x18 arm removed. DMA xfer never runs in any row (no row writes STATE). Also MAPLE RESET 0x8c writes in... no row writes 0x8c. OK.
+
+  And confirm no row reads 0x14 ENABLE — correct, none. `ctrl devsig maple` touches 0x80 only.
+
+  Also should double-check the claim "every row reads 32 bits" — load32 uses mov.l (opcode 0x6mn2: 0110 nnnn mmmm 0010 = mov.l @Rm, Rn — yes, 0010 = .l). store32 0x2122: 0010 0001 0010 0010 → mov.l r2, @r1. put w / put h are debugger pokes to RAM for setup, not device reads. So device accesses: all 32-bit. 
+
+  Quick verifications:
+  1. kill table dir listing + M_REWORD patch content.
+  2. memory_writemax64 definition (confirm len-byte truncation).
+
+• The detector and arm are fully in view. Two quick verifications — the M_REWORD leg's actual text, and `memory_writemax64`'s width semantics — then I'll rule./c/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/mapledmaaddr/:
+agy_maple_witness_20260912.py
+agy_witness_report_20260912.md
+codex_detector_20260911.err
+codex_detector_20260911.txt
+codex_detector_RETRY_20260911.err
+codex_detector_RETRY_20260911.txt
+codex_readarm_20260910.err
+codex_readarm_20260910.txt
+fable_pass1_20260912.md
+fix.diff
+killtable_20260912
+opus_pass1_20260912.md
+opus_pass2_20260912
+panel_20260912_123520_maplepass1
+witness_committed.out
+witness_fix.out
+
+/c/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/mapledmaaddr/killtable_20260912/:
+POSTTABLE.out
+PRETABLE.out
+SCORES.txt
+build_BASE.log
+build_HEAD.log
+build_M_BIT30.log
+build_M_DECLINE.log
+build_M_EQ4.log
+build_M_EXITONLY.log
+build_M_HOIST.log
+build_M_KEEPFATAL.log
+build_M_LATCHED.log
+build_M_MASKLOW.log
+build_M_READCLEAR.log
+build_M_RET0.log
+build_M_REWORD.log
+build_M_ZEROEXIT.log
+build_RESTORE.log
+dev_dreamcast_maple.HEAD.c
+killtable.run-0912.sh
+killtable.sh
+maple_dmaaddr_probe.FROZEN.py
+mut_maple.py
+mutate_M_BIT30.txt
+mutate_M_DECLINE.txt
+mutate_M_EQ4.txt
+mutate_M_EXITONLY.txt
+mutate_M_HOIST.txt
+mutate_M_KEEPFATAL.txt
+mutate_M_LATCHED.txt
+mutate_M_MASKLOW.txt
+mutate_M_READCLEAR.txt
+mutate_M_RET0.txt
+mutate_M_REWORD.txt
+mutate_M_ZEROEXIT.txt
+probe_BASE.raw
+probe_HEAD.raw
+probe_M_BIT30.raw
+probe_M_DECLINE.raw
+probe_M_EQ4.raw
+probe_M_EXITONLY.raw
+
+
+• memory_rw.c isn't at that path. Let me find it, read the M_REWORD mutation text, and the SCORES.The mutate_*.txt files are just markers. Let me look at mut_maple.py (the mutation script) to see what M_REWORD actually reworded to, and read memory_writemax64 in src/core/memory.c.Confirmed:
+
+  1. **M_REWORD** = `fatal("[ dreamcast_maple: read from dmaaddr ]\n");` — retains the token `dreamcast_maple`. So the kill table's "reworded" leg only proved token-preserving rewordings die. A token-free rewording survives `read silent` (line 221: `"dreamcast_maple" in t`).
+
+  2. **memory_writemax64** writes exactly `len` bytes (low `len` bytes, endian-ordered). So at len=4, bits 32..63 of odata are dead — the sign-extension/high-half family is unobservable by every row.
+
+  3. M_LATCHED fires on first read (w=0 → print once) — died to read silent. A latch with threshold above the per-session read count (max 2 maple reads in any read session — the double-read session) would survive; contrived, note in passing.
+
+  Everything checks. Now the verdict. The user asked for: verdict line first, liveness token, then the answer to Q1 (the one that matters), Q2, Q3.
+
+  Verdict: SURVIVOR — several inside clause (d). The cleanest, minimal, exact edit:
+
+  ```c
+  odata = d->dmaaddr;
+  if (len != 4)
+      exit(1);
+  ```
+
+  Every device access in all 16 rows is a 32-bit `mov.l` (probe lines 72-80: load32/store32 only; even the two RAM controls and IPRD/SPEED use mov.l / put w), so `len == 4` at every entry and the predicate never fires. 16/16 GREEN. No row can catch it: no row varies `len`. The CONTRACT's NOT COVERED (lines 22-24) already concedes "read widths other than 32 bits" — so this survivor is disclosed-but-present; the verdict for "stays GREEN on all 16 rows" is still YES.
+
+  Family (all 16/16, all inside clause (d)'s enumeration + the width hint):
+
+  S1a. `if (len != 4) exit(1);` after the assignment (above). Also `if (len == 8) fatal(...); exit(1);`, `if (len != 4) return 0;` — same channel.
+  S1b. Width-gated diagnostic: `if (len != 4) fatal("[ dreamcast_maple: TODO: read from dmaaddr ]\n");` — even with the token in the text, read silent can't fire because it never prints. M_KEEPFATAL/M_REWORD died only because they print unconditionally at len==4.
+  S2. High-half odata: `odata = (uint64_t)(int32_t)d->dmaaddr;` — or `| 0x5a5a5a5a00000000ULL`, any edit confined to bits 32-63. dmaaddr is uint32_t (dev_dreamcast_maple.c:76), odata uint64_t, memory_writemax64 emits len=4 bytes (memory.c:99-108). All value rows green including read all ones (0xffffffff sign-extends to 0xffffffffffffffff → low 4 bytes 0xffffffff ✓). This is the "operand swap on odata" that survives — the width hint in Q1 is exactly this channel.
+  S3. Token-free reworded diagnostic (the M_REWORD escape): `fatal("[ maple: read from dmaaddr ]\n"); odata = d->dmaaddr;` — 16/16. The file itself models this idiom: maple_do_dma_xfer's debug at line 385 is "[ maple_do_dma_xfer: not enabled? ]" — no "dreamcast_maple" substring. Strictly this is the same predicate, so it sits at the edge of clause (d)'s "re-introduced diagnostic" wording; regardless it is a wrong fix that passes, and it's the direct refutation of the kill table's "reworded" claim.
+  S4. Weakened dominating address predicate onto an unrowed arm: `case 0x04: case 0x18:` (drop the 0x18 arm). STATE reads then return dmaaddr (real change: the arm documents "Always return 0 to indicate DMA xfer complete"), STATE writes store idata instead of running maple_do_dma_xfer — and no row touches 0x18 either way. `other read` pins RESET2 only; `ctrl devsig maple` pins SPEED only. 16/16. Same for 0x14-as-dmaaddr (no ENABLE read row) — but NOT for 0x10 (other read) or 0x80 (ctrl devsig maple). This is the weakened-dominating-predicate survivor: the complement coverage has holes at every arm except 0x10 and 0x80.
+  S5 (contrived, noting for completeness): latched diagnostic/exit with threshold > 2 reads (max maple reads in any single read session is 2 — the double-read session). M_LATCHED pinned only latch-at-1.
+
+  Equivalent mutants swept (green but behaviorally identical, not evidence of weakness): unconditional `odata = d->dmaaddr` after the if within case 0x04 (dead store on MEM_WRITE — the tail at line 639 gates writeback on MEM_READ); `odata = d->dmaaddr & 0xffffffff` (field is uint32_t — identity); strengthening the else to `writeflag == MEM_READ` (settled: only MEM_READ/MEM_WRITE reach the handler).
+
+  Killed as the table says (swept, agree): swap to `d->enable`/`idata`/0 (val rows + poison), mask high or low (val_a/val_b), guard inverted or universal (val rows; other read + ctrl devsig maple), early `return 1` skipping the tail (poison holds), read-clears (double read 2), value-keyed exits on rowed constants (initial zero / read four / read all ones), value-keyed exits on unrowed constants — clause (e), disclosed NOT COVERED, out of scope for (d).
+
+  The row I expected to catch each survivor: S1/S2 — none exists; the missing row is a non-32-bit read (mov.b/mov.w, or a 64-bit pair). S3 — read silent was named for it; its channel is one literal. S4 — other read's class; the row reads only RESET2.
+
+  Q2: Yes — `read silent` is the row whose channel fails to vary under part of its named mutant class. It varies for token-preserving rewordings (M_REWORD died) but not for token-free ones; the channel is the 15-byte literal `dreamcast_maple` (probe line 221), not "any maple text". Secondary observation: under M_RET0 the same row fires for an extraneous reason — memory_rw's failed-access debug under stepping, not the read's own voice — so the channel is both narrower than claimed (misses token-free text) and not exclusively the read's (catches the framework's). Every other named row's channel varies correctly under its named mutant per the measured table: other read/M_HOIST, double read 2/M_READCLEAR, initial zero/M_ZEROEXIT, read four/M_EQ4, read all ones/M_BIT30, marker survive + exit status/M_EXITONLY, value rows/M_DECLINE, M_MASKLOW, M_RET0. And the width channel doesn't exist in any row — that is the Q1 survivor, not a Q2 channel failure.
+
+  Q3: The overclaiming CONTRACT statement is lines 15-18: "the diagnostic alone, verbatim, reworded or latched -- the silence row counts ANY `dreamcast_maple' output in a read session, never one literal string" (and the line 164-165 comment "Keyed on the channel, never on one literal string"). The implementation is exactly one literal string — `"dreamcast_maple" in t` at line 221. "Reworded" was MEASURED only for a rewording that kept the token (mut_maple.py line 17); the class is not caught. The SETTLED floor's "any maple text" is the same overclaim propagated. The rest of the CONTRACT reads true: the width and clause-(e) NOT COVERED disclosures are honest (and are precisely where S1/S2 live), the poison claim is real (M_RET0/M_DECLINE die to it), DM_DEFAULT/mov.l claims match the code.
+
+  Verdict line format: `SURVIVOR: <exact edit>`. I'll give the primary exact edit and note the family. The user asked for the next three wrong fixes — I have five (S1, S2/S1b, S3, S4, +S5 contrived). Good — "I want the next three" — deliver at least three concrete ones.
+
+  Should I actually build and run one of these mutants to prove 16/16? The operational rule says building/running a single detector or mutant in my own temp dir is "fine and encouraged". That would harden the verdict from "reasoned" to "measured". But: building gxemul takes a while (configure + make), and the run requires the openbsd landisk kernel image + WSL/pty (python pty — this is Windows Git Bash; pty.fork won't work on native Windows Python; the harness presumably runs under WSL). The kill table was built in a scratch clone with a frozen instrument — suggesting a Linux/WSL environment. My Bash here is Git Bash on Windows. python with pty won't work here. There's `wsl` maybe? This could eat a lot of time. The brief says "Naming it is worth far more to this panel than a timeout." 
+
+  The reasoning is solid and grounded in source: len==4 at every device access (only mov.l touches the device; the SH4 mov.l handler in gxemul's memory_rw passes len=4), memory_writemax64 emits len bytes, read silent greps one literal, no row touches 0x18. Each is checkable by inspection, and the frozen probe + mutator are in artifacts. I'll do one more cheap source check to make sure SH4 mov.l really reaches the handler with len==4 (i.e., there's no path where a 32-bit SH4 load is split into 1-byte device accesses with len=1!). Hmm — that actually matters for S1! If gxemul's memory_rw for a 4-byte load calls the device once with len=4 — standard gxemul: yes, memory_rw calls the device access once with len = access size. But wait — could the SH4 mov.l emulation do the device access as len=4? In gxemul, cpu memory access goes through memory_rw with len = size of access (4 for mov.l). Devices get len=4. Yes. But is there any alignment splitting? gxemul does split unaligned accesses; 0xa05f6c04 is 4-aligned. Fine.
+
+  One more consideration for S1's exact form: `len` is in scope in DEVICE_ACCESS (parameter). Yes — `DEVICE_ACCESS(dreamcast_maple)` expands to a function with (cpu, memory, relative_addr, writeflag, data, len, extra, ...). len is used at line 553 and 640. So `if (len != 4) exit(1);` compiles. Good.
+
+  And S2's exact edit: `odata = (uint64_t)(int32_t)d->dmaaddr;` compiles (both casts fine). Good.
+
+  S4 exact edit: `case 0x04:` → `case 0x04: case 0x18:` plus deleting the old 0x18 case block (else duplicate label → compile error). I'll state it precisely.
+
+  Now, do I attempt a measured confirmation via WSL? Check quickly if wsl is available and if there's a prebuilt gxemul binary in the kill table scratch clone... The kill table ran somewhere. There's _scratchpad and _wsl-gentoo at project root; the probe was run under WSL presumably (pty). A confirmation run would need: a scratch copy of GXEMUL-SEC src, mutate, configure+make (minutes), run probe (each session ~4s × ~12 sessions × … plus emulator startup). The panel explicitly warns about timeouts being worse than named measurements. I'll reason instead, and name the measurement I did not run. Actually — let me at least check whether WSL + a prebuilt tree exists, cheaply (one command). If a build tree with the fix already exists (e.g., the kill table's scratch clone with build logs), I could... even so, a full make is minutes. I'll skip and name it. Actually, let me do a 5-second check for the scratch clone location from killtable.sh to reference it accurately in "what I swept / what I did not run".
+
+  Hmm, keep it lean. I have enough. One quick read of killtable.sh header for the scratch-clone path to cite, then write the answer. Actually not needed for the verdict. Skip it.
+
+  Write the final answer now. Format: verdict line first, then PASS2_MAPLE_20260912 token (user said "VERDICT LINE FIRST, then the liveness token"). Then Q1, Q2, Q3. Keep it tight but complete, engineer tone.
+
+• Verdict and token, then the three questions.
+
+  **SURVIVOR: in the read arm, keep `odata = d->dmaaddr;` and add `if (len != 4) exit(1);` — 16/16 GREEN, because every one of the 16 rows reaches the device exclusively through SH4 `mov.l`, so `len == 4` at every entry and the predicate is constant-false across the entire detector.**
+
+  PASS2_MAPLE_20260912
+
+  ## Q1 — the (d) mutants that stay green (five, three of them non-equivalent)
+
+  All edits are against the fixed read arm at `src/devices/dev_dreamcast_maple.c:562-568`. Verified on disk: `d->dmaaddr` is `uint32_t` (line 76), `odata` is `uint64_t` (line 550), `memory_writemax64` emits exactly `len` low bytes (`src/core/memory.c:99-108`), and the probe's only device-access primitives are `load32`/`store32` = `mov.l` (`regress/maple_dmaaddr_probe.py:72-80`).
+
+  - **S1 — width-gated exit** (re-introduced exit under a different predicate): `odata = d->dmaaddr; if (len != 4) exit(1);`. No row varies `len`; the probe has no `mov.b`/`mov.w`/64-bit row at all. Row I expected to catch it: none exists — the missing row is a non-32-bit read. Variants equally green: `if (len == 8) exit(1);`, `if (len != 4) return 0;`. The CONTRACT's NOT COVERED clause (probe lines 22-24) concedes this family, but "disclosed" is not "dead": asked whether a (d) mutant passes all 16 rows, this one does.
+  - **S2 — width-gated diagnostic**: `odata = d->dmaaddr; if (len != 4) fatal("[ dreamcast_maple: TODO: read from dmaaddr ]\n");`. The text even keeps the token — `read silent` cannot fire because nothing ever prints. M_KEEPFATAL/M_REWORD died only because they announce unconditionally at the one width the detector uses.
+  - **S3 — high-half `odata` perturbation** (the operand-side width channel): `odata = (uint64_t)(int32_t)d->dmaaddr;` — or OR/XOR any constant into bits 32..63. At `len == 4` the high 32 bits of `odata` never leave `memory_writemax64`, so all value rows pass, including `read all ones` (0xffffffff sign-extends, low 4 bytes still 0xffffffff). Green, and behaviorally distinct from the fix on any future 64-bit read.
+  - **S4 — token-free reworded diagnostic** (the M_REWORD escape hatch): `fatal("[ maple: read from dmaaddr ]\n"); odata = d->dmaaddr;`. `read silent` is `​"dreamcast_maple" in t` (probe line 221) — one literal. This very file models the dodging idiom: `maple_do_dma_xfer`'s own diagnostic is `"[ maple_do_dma_xfer: not enabled? ]"` (line 385), no `dreamcast_maple` substring. 16/16. `mut_maple.py:17` confirms the table's "reworded" leg kept the token, so the class was never actually killed.
+  - **S5 — weakened address predicate onto an unrowed arm**: `case 0x04: case 0x18:` (deleting the old 0x18 block). STATE reads then return `d->dmaaddr` instead of the documented "always 0 = DMA complete", and STATE writes store `idata` instead of running `maple_do_dma_xfer()` — a real behavioral change, and no row touches 0x18 in either direction. `other read` pins only RESET2 (0x10); `ctrl devsig maple` pins only SPEED (0x80). 16/16. (Widening onto 0x10 or 0x80 dies to those two rows; onto 0x14/0x8c/0xe8 survives — the complement coverage has holes everywhere except 0x10 and 0x80.)
+
+  Contrived but real, noting for the record: a latch keyed on >2 reads (M_LATCHED pinned only latch-at-1; the double-read session is the only 2-read session). Swept and **equivalent** (green, no behavior change, not evidence against the detector): unconditional `odata = d->dmaaddr` after the if inside case 0x04 (dead store on MEM_WRITE — the tail at line 639 gates on MEM_READ); `& 0xffffffff` (field is `uint32_t`); strengthening the else to `writeflag == MEM_READ`. Swept and **killed** as the table says: swaps to `d->enable`/`idata`/0, high/low masks, inverted or universal guard, early `return 1` (poison holds), read-to-clear, and the value-keyed exits — the unrowed-constant ones stay clause (e), as disclosed.
+
+  What I did *not* do: rebuild and re-run the probe under these five mutants. I'm on Git Bash here — `pty.fork` in the probe wants the WSL side — and a configure+make plus 12-session run exceeds this seat's budget. The measurements I'd name to harden this: S1 and S4 through the frozen instrument in the kill-table scratch clone. Each claim above is instead pinned to a source line you can check in seconds.
+
+  ## Q2 — the row whose channel doesn't vary: `read silent`
+
+  Yes, one. `read silent`'s channel is the 15-byte literal `dreamcast_maple`, but its named mutant class is "the diagnostic, reworded". It varies for token-preserving rewordings (M_REWORD died) and fails to vary for token-free ones (S4). Secondary: under M_RET0 that row fires for an extraneous reason — memory_rw's failed-access `debug()` under stepping, not the read's own voice — so the channel is simultaneously narrower than its name (misses token-free text) and not exclusively the read's (catches the framework's). Every other named row's channel varies correctly per your own table: `other read`/M_HOIST, `double read 2`/M_READCLEAR, `initial zero`/M_ZEROEXIT, `read four`/M_EQ4, `read all ones`/M_BIT30, `marker survive`+`exit status`/M_EXITONLY, value rows/M_DECLINE+M_MASKLOW. And the width channel exists in no row — that's Q1, not a per-row failure.
+
+  ## Q3 — the overclaiming CONTRACT statement
+
+  Lines 15-18: "the diagnostic alone, verbatim, **reworded** or latched — the silence row counts ANY `dreamcast_maple' output in a read session, **never one literal string**" (echoed at lines 164-165: "Keyed on the channel, never on one literal string"). It *is* one literal string — `"dreamcast_maple" in t`, line 221 — and "reworded" was measured only in its token-preserving form, so the class claim is false as written; S4 is the counterexample. The SETTLED floor's "any maple text" is the same overclaim propagated upstream. The rest of the CONTRACT checks out against the implementation: the width and clause-(e) NOT COVERED disclosures are honest (and are exactly where S1/S2/S3 live), the poison claim is real (M_RET0/M_DECLINE die to it), and the DM_DEFAULT/`mov.l` framing matches the code.
+
+  Net: the fix is right and the 16 rows do kill everything they claim to kill *at 32 bits with the device token in the text* — but the answer to your one question is yes, and the next three wrong fixes for the row budget are S1 (`if (len != 4) exit(1);`), S4 (token-free `fatal`), and S5 (`case 0x04: case 0x18:`).
+
+To resume this session: kimi -r session_1106813b-3eea-4723-928d-8ed95dd17907

@@ -1,0 +1,195 @@
+VERDICT: The two-line fix is sound. A strong detector can compare readback with an independent observation of the live field, without endorsing the cursor arithmetic. One “settled” premise is false in this checkout.
+CODEX_MAPLEDET_20260911
+
+In this file, `odata` is initialized to **zero** before the switch; `odata = d->dmaaddr` is inside `case 0x04`. The common tail calls `memory_writemax64`, rather than assigning `data[0]`. Consequently, deleting the assignment as well would return zero. See the [access handler](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_dreamcast_maple.c:550) and [common tail](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_dreamcast_maple.c:637). The supplied probe describes a preloaded **GD-ROM DMA shadow** at [lines 655 onward](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gdrom_default_probe.py:655); that description does not apply to Maple.
+
+The remaining settled facts support the design below. In particular, the existing alignment refusal prints the address copied from the live field, then returns without changing it. That supplies an independent field observation through an existing path. See the [DMA entry and refusal](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_dreamcast_maple.c:380).
+
+Use that observation as the expected value for the DMA-dependent read rows.
+
+**The concrete fixture uses these values.**
+
+Let `W(offset, value)` and `R(offset)` mean actual 32-bit guest stores and loads at `M + offset`.
+
+```text
+M       = 0xa05f6c00       Maple registers through P2
+A       = 0x13579bdf       all five low bits set
+B       = 0xeca86420       complement of A; aligned
+
+P1      = 0x0c001400       physical address of one descriptor
+P2      = 0x0c001480       physical address of two descriptors
+
+R1      = 0x0c001800       first transfer's receive buffer
+R2      = 0x0c001a00       second transfer, descriptor 1 receive buffer
+R3      = 0x0c001c00       second transfer, descriptor 2 receive buffer
+
+SCRATCH = 0x0c001f00       execution control
+MARKER  = 0x0c001f04       per-block completion marker
+POISON  = 0xa5a55a5a       preset destination of each register load
+```
+
+The relevant offsets are `0x04` for DMA address, `0x14` for enable, and `0x18` for the trigger. The device registers physical base `0x005f6c00` in [device initialization](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_dreamcast_maple.c:644).
+
+Access descriptor and receive RAM through its uncached guest alias, while putting **physical addresses** in descriptors and `MAPLE_DMAADDR`. Reserve 512 bytes for each receive buffer, and require the expected response to fit. These locations are below the probe’s stated ELF load address; its existing instruction area starts at `0x8c001000`. See the [probe’s memory layout](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gdrom_default_probe.py:189).
+
+`A` is an unaligned **register value**. The access to the register itself remains aligned. No DMA is triggered while `A` or `B` is programmed.
+
+Use **`MAPLE_COMMAND_DEVINFO`, port A, main unit**. Port A has the controller attached, and the command produces a response header followed by its device information. This is deterministic and needs no queued controller input. See the [DEVINFO response path](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_dreamcast_maple.c:471) and [port attachments](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_dreamcast_maple.c:654).
+
+Define a 12-byte descriptor `D(receive, last)`:
+
+| Descriptor-relative offset | Bytes |
+|---|---|
+| `+0` | `00 00 00 80` if last; otherwise `00 00 00 00` |
+| `+4` | `receive`, encoded little endian |
+| `+8` | `MAPLE_COMMAND_DEVINFO, 20, 00, 00` |
+
+Thus the port is zero, the GUN bit is clear, the receiver selects main unit zero, and `datalen_cmd` is zero.
+
+Stage:
+
+```text
+P1       : D(R1, last=true)
+
+P2       : D(R2, last=false)
+P2 + 12  : D(R3, last=true)
+```
+
+The permitted files do not define the numeric opcode constants or `struct maple_devinfo` layout. The descriptor above therefore uses the exact build constant; I am not claiming an independently verified numeric expansion.
+
+Define `SIG(receive)` as these exact checks:
+
+- Header bytes equal  
+  `[MAPLE_RESPONSE_DEVINFO, 0x20, 0x00, sizeof(struct maple_devinfo)/4]`.
+- The bytes at  
+  `receive + 4 + offsetof(struct maple_devinfo, di_product_name)`  
+  begin with the exact ASCII string `Dreamcast Controller`.
+
+Those expectations come from the [controller initializer](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_dreamcast_maple.c:97) and the DEVINFO response construction. They are fixed build expressions, **not expectations learned from received bytes**. This checks a response signature, not every byte of the DEVINFO protocol.
+
+Before each successful transfer, explicitly fill and verify the receive buffers. Do not assume fresh RAM is zero.
+
+**Run the following rows in order.**
+
+The Maple rows belong to one emulator session. Each driving block must have its own confirmed execution checkpoint. Every register load starts with `POISON` in its destination register.
+
+`E1` and `E2` below are addresses parsed from the existing message:
+
+```text
+[ dreamcast_maple: dmaaddr 0x........ is NOT 32-byte aligned; aborting ]
+```
+
+Require exactly one matching message in the specified trigger interval. Missing, malformed, or ambiguous output is a failure to establish the reference; it must never become an expected zero.
+
+| Row | Ordered drive | Assertion |
+|---|---|---|
+| `live` | Initialize scratch to a different value. Execute a guest store of `0x12345678` to scratch, followed by a guest load. | Actual load result is `0x12345678`; block completion marker is present. |
+| `initial` | Fresh device: `W(0x14, 0)`; `R(0x04)`. | Read is exactly `0`. |
+| `raw a` | `W(0x04, A)`; `R(0x04)`. | Read is exactly `A`, including all five low bits. |
+| `other read` | With `A` still programmed, `R(0x10)`. | Read is exactly `0`. This is the collateral check for a literal unconditional hoist. |
+| `raw b` | `W(0x04, B)`; `R(0x04)`. | Read is exactly `B`, including the high bit. |
+| `dma1 data` | Stage `P1`; fill and verify all 512 bytes at `R1` as `0xcc`. Execute `W(0x14, 0)`, `W(0x04, P1)`, `W(0x14, 1)`, `W(0x18, 1)`. | `SIG(R1)` holds after this trigger. |
+| `dma1 ref` | Refill and verify `R1` as `0x3c`. **Do not write `0x04`.** With enable still one, execute `W(0x18, 1)`. | Exactly one alignment refusal supplies `E1`; its low five bits are nonzero; `R1` remains `0x3c`. |
+| `dma1 live` | `R(0x04)`. | Read is exactly `E1`. |
+| `off keep` | **Do not write `0x04`.** Execute `W(0x14, 0)`, `W(0x18, 1)`, then `R(0x04)`. | Read is exactly `E1`; `R1` remains `0x3c`; this trigger produces no alignment refusal. |
+| `align keep` | **Do not write `0x04`.** Execute `W(0x14, 1)`, `W(0x18, 1)`, then `R(0x04)`. | Exactly one alignment refusal again names `E1`; read is exactly `E1`; `R1` remains `0x3c`. |
+| `dma2 data` | Stage both descriptors at `P2`; fill and verify `R2` as `0xdd` and `R3` as `0xee`. Execute `W(0x14, 0)`, `W(0x04, P2)`, `W(0x14, 1)`, `W(0x18, 1)`. | Both `SIG(R2)` and `SIG(R3)` hold. |
+| `dma2 ref` | Refill and verify `R2` as `0x66`, `R3` as `0x99`. **Do not write `0x04`.** Execute `W(0x18, 1)`. | Exactly one alignment refusal supplies `E2`; both buffers retain their fills. Require `E2 != E1` to qualify this as a distinct-cursor challenge. |
+| `dma2 live` | `R(0x04)`. | Read is exactly `E2`. |
+| `dma2 hold` | Execute `W(0x18, 1)` again, without programming the address. | Exactly one alignment refusal still names `E2`; buffers retain their fills. This also checks that the preceding read did not change the independently observed field. |
+| `read quiet` | Inspect the separately bounded intervals for **every `0x04` read** above. | No read diagnostic, including the retained TODO message or an added “ignored” message. All read intervals must be complete. |
+| `finished` | Confirm every required block’s completion marker, then request normal shutdown and collect process status. | Every required observation exists; no timeout or forced termination; actual exit status is zero. |
+
+The `other read` row is an explicitly additional handler regression check. Its expectation follows from `0x10` leaving the zero-initialized `odata` untouched on reads in the [RESET2 arm](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_dreamcast_maple.c:569).
+
+For these particular descriptors, the settled cursor formula gives:
+
+```text
+first transfer:  0x0c00140c
+second transfer: 0x0c001498
+```
+
+These calculations establish **reachability and discrimination**: both reference triggers encounter unaligned cursors; neither cursor equals its programmed address; the two cursors differ. The read assertions use `E1` and `E2`, not these literals. No general monotonicity or non-equality claim follows. The relevant completion assignment retains its explicit architectural question at [lines 539–540](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_dreamcast_maple.c:539).
+
+The first reference refusal happens before the corresponding read under test. The later reference checks establish that the observed field remains unchanged. Reads after these refusals still observe the completed transfer’s cursor, by the settled entry-value preservation rule.
+
+**The independent evidence of DMA is the fresh DEVINFO response.**
+
+`dma1 data` and `dma2 data` demand device-generated signature bytes replacing verified, distinguishable fills at the designated destinations. Neither cursor movement nor a status read can substitute for those assertions.
+
+The response and the field observations come from the **same transfer sequence in the same session**. The alignment refusal is evidence of the live address used by the next attempted transfer; it is not evidence that the preceding transfer moved data.
+
+No row needs to read `MAPLE_STATE`. Its read arm explicitly assigns zero in [the state case](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_dreamcast_maple.c:582).
+
+**The six requested states separate as follows.**
+
+| Implementation or execution state | Distinguishing observation |
+|---|---|
+| Correct reporting of the live field | Passes exact programmed-value rows and `dma1 live`/`dma2 live`, with quiet reads and confirmed execution. |
+| A constant | Cannot satisfy `initial`, `raw a`, and `raw b` together. In particular, zero fails `raw a`; constant `A` fails `raw b`. |
+| Alignment masking | `raw a` returns `0x13579bc0` instead of `0x13579bdf`. The aligned `raw b` row alone would not catch it. |
+| Last-programmed-address snapshot that never tracks DMA | Passes the programmed-value rows, but `dma1 live` returns `P1` instead of independently observed `E1`. |
+| `fatal()` retained while `exit(1)` is removed | If `fatal()` returns, values can all be correct. `read quiet` fails on the diagnostic. |
+| Guest program never executed | Scratch/markers remain unchanged, load destinations retain poison, or observations are absent. `live`, block checkpoints, and `finished` fail. Silence alone would pass. |
+
+`dma2 live` additionally catches retention of the **first completed cursor**, and the two-descriptor fixture defeats a fabricated fixed `P + 12` answer. Exact equality with the reference also rejects fabricated `P + 4`; “different from `P`” is never the read oracle.
+
+The liveness implementation needs more than the supplied probe’s `alive` Boolean. Its sampling loop can return true merely because time expired, and its own comments document that limitation. See [the session helper](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gdrom_default_probe.py:289).
+
+For each block, preset `MARKER` to a failure value and have the final guest instruction write a distinct block identifier. Parse actual debugger results from that block’s response interval, not echoed assignments or an earlier `print` result. Advance only after the checkpoint is confirmed. The probe specifically records the hazard of combining unacknowledged `run()` sequences at [the `pair` helper](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gdrom_default_probe.py:370).
+
+Require the complete expected set of row identifiers. An empty or partially executed table must fail, rather than benefiting from `all([])`.
+
+**Both early-return paths deserve rows.**
+
+`off keep` and `align keep` deliberately retain a **prior transfer’s cursor**. Reprogramming `P1` before either row would destroy that distinguishing state.
+
+The disabled row also uses an unaligned entry value. Its absence of an alignment refusal therefore checks the settled enable-before-alignment ordering. The enabled row positively reaches the alignment refusal and checks its preserved entry value.
+
+These rows are partly redundant against the simple last-programmed snapshot already caught by `dma1 live`. Their separate purpose is to pin the read contract in both refusal contexts. They are worth including; they need not be advertised as unique mutant killers.
+
+The disabled row’s unchanged-buffer assertion alone cannot prove that its trigger instruction ran. That assertion would also pass if the trigger were omitted. Its execution checkpoint and verified instruction sequence remain necessary; do not label buffer preservation itself an execution witness.
+
+**The vacuity audit is specific to each claimed target.**
+
+| Proposed claim | Reading-time verdict |
+|---|---|
+| Initial-zero read catches constant zero | **VACUOUS:** both return zero. |
+| A single exact value catches every constant | **VACUOUS** for the constant equal to that value. |
+| Aligned programmed values catch alignment masking | **VACUOUS:** masking leaves those values unchanged. |
+| No-DMA readback catches the last-programmed snapshot | **VACUOUS:** field and snapshot agree there. |
+| A fresh-state refusal catches that snapshot | **VACUOUS** when the programmed address is still the entry value. |
+| `MAPLE_STATE == 0` proves DMA acceptance or execution | **VACUOUS:** its read result does not depend on success. |
+| Response bytes catch an incorrect read-only `odata` transform | **VACUOUS for that transform:** response generation is unaffected. These rows establish the DMA fixture. |
+| Value or normal-exit assertions catch a returning retained `fatal()` | **VACUOUS:** neither observable need change. The diagnostic row carries this mutant. |
+| Zero diagnostic count proves the guest executed | **VACUOUS:** an unexecuted program is also silent. |
+| A `0x04` row catches a fresh field sample taken once per callback | **VACUOUS:** that transformation is equivalent within this register’s contract. |
+
+Thus every claimed non-equivalent target has an observation that can change. That does **not** make every supporting row a killer for every target.
+
+The zero-count diagnostic channel still needs validation: exercise the retained-`fatal()` variant and confirm that it actually turns `read quiet` red. Similarly, omission of guest execution must turn the execution controls red. These are proposed discriminators, not measured kills from this read-only review.
+
+**The four candidate edits have these classifications.**
+
+All witness accesses below are 32-bit, with DMA disabled unless specified.
+
+| Candidate | Classification and first distinguishing input |
+|---|---|
+| **(a)** `odata = d->dmaaddr & ~0x1f;` | **DIFFERENT.** `W(0x04, 1); R(0x04)` returns `1` correctly and `0` under the mutant. |
+| **(b)** Assignment hoisted above the switch | **DIFFERENT as a literal unconditional assignment to shared `odata`.** `W(0x04, 1); R(0x10)` returns `0` correctly and `1` after that hoist. |
+| **(c)** Keep `fatal(...)`, delete only `exit(1)` | **DIFFERENT.** The first `R(0x04)` on a fresh device produces the unwanted diagnostic. If `fatal()` returns, the numeric result remains correct. |
+| **(d)** `odata = 0;` | **DIFFERENT.** `W(0x04, 1); R(0x04)` returns `1` correctly and `0` under the mutant. |
+
+For **(b), restricted to `0x04`, the answer is EQUIVALENT**. Sampling once on each callback entry does not create a persistent stale snapshot. A DMA-triggering callback completes synchronously; the next read callback samples the updated field. There is no distinguishing `0x04` input under the settled writer and synchrony premises.
+
+If the hoist is guarded to apply only to `0x04`, or stores into a temporary used only by that arm, the collateral difference also disappears. It would then be wrong to demand a killing row.
+
+**The detector’s contract should disclose its implementation dependencies.** Suggested text:
+
+> This detector checks that 32-bit reads at Maple offset `0x04` report the current `dmaaddr` field, preserving its bits, without a read diagnostic or process termination. It exercises initial state, distinct programmed values, completed DMA state, and both early-return contexts with a prior transfer’s cursor. Successful DMA is established by fresh DEVINFO response signatures in explicitly initialized receive buffers. DMA-dependent expected register values come from the existing alignment-refusal diagnostic, independently of the read under test.
+>
+> The descriptor fixtures depend on the current completion behavior producing distinct unaligned cursors. That dependency constructs discriminating states; it does not establish that advancing the cursor is architecturally correct. Changes to completion policy or the reference diagnostic require reassessment of the fixture. A missing reference makes the test inconclusive or failed, never passed. The detector does not certify general cursor arithmetic, wraparound behavior, interrupt delivery, complete DEVINFO correctness, or untested access widths. Coordinated changes to both reporting and the independent reference are outside the stated mutant coverage.
+
+This design introduces no product diagnostic. It uses the existing refusal message only in explicitly designated trigger intervals; silence applies separately to the implemented reads.
+
+I read only the three permitted files. No files were written, and no detector or mutant table was executed.

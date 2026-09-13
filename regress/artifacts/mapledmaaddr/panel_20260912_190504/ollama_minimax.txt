@@ -1,0 +1,51 @@
+VERDICT: **CLOSES** — the exact-transcript oracle closes the diagnostic class for output that lands on the pty during the read. The two escapes I can name (deferred output, separate channels) are explicitly outside the contract as stated. Liveness: `CLOSE528_20260912`.
+
+---
+
+### Q1. Edits the oracle cannot see
+
+- **[REASONED] Deferred output via `atexit()` / late stderr flush.** `SNAP = buf` is taken immediately before `os.write(fd, b"quit\n")` (diff `+ global SNAP / SNAP = buf`). Anything queued for process termination — an `atexit(prints_something)`, a `fprintf(stderr, ...)` that the stdio buffer hasn't flushed, a debug log written in a cleanup hook registered during the read — lands in the pty AFTER the snapshot. Reachable from a C edit (one line: `atexit(diagnostic_print); odata = d->dmaaddr;`). No row in this instrument observes it: `exit status` would still see `exit0` from a quiet `atexit`, `marker survive` is unaffected, `read silent` reads `SNAP` which doesn't contain the bytes. The brief itself flags this ("output that arrives after the snapshot (a latched diagnostic deferred to exit, `atexit`, stderr buffering)") — i.e. the author already knows it and has chosen to leave it outside the contract.
+
+- **[REASONED] Output on a channel the pty never carries.** A `FILE *` opened in the read arm (`fopen("/tmp/maple.log", "a"); fprintf(...);`), a `syslog(3)` call, a write to an inherited fd the harness hasn't bound to the pty. Same story: bytes never enter `SNAP`, no row sees them. Also outside the contract as stated; not reachable from a stock `fatal()` (which writes to the console), but reachable from custom C in the arm.
+
+- **[REASONED] ANSI / `\b` overwrites — I do NOT believe these escape.** Three sub-cases, all caught:
+  1. `\r…` overwrite → `bare_cr` count fires (the check is `raw.count("\r") - raw.count("\r\n")`).
+  2. `\b…` overwrite → the diagnostic line is a SEPARATE entry after the disassembly's `\n` (disassembly prints before execute, per settled premise). That separate line begins with `\b`, the regex `^([0-9a-f]{8}):\s+([0-9a-f]{4})\s` is anchored at start, mismatch → surplus or wrong-kind fires.
+  3. `\033[1A\033[2K…` cursor-positioning overwrite → same as (2): the escape bytes are at the start of the diagnostic line, the anchored regex doesn't match, surplus/wrong-kind fires. (Without a leading `\r` you cannot return to column 0, so you cannot overwrite the prior line in place; you only ever produce a new line, and that new line carries the escape bytes the regex refuses.)
+  In every overwrite path I can construct, either `\r` is counted, or the diagnostic's own line begins with non-`[0-9a-f]` and fails the anchored regex.
+
+- **[REASONED] No-newline output line-buffered into the next prompt.** `fatal("X")` with no `\n`: on a pty, the bytes accumulate into whatever the next output is. The resulting line is strictly longer than the owed echo (`ln == want` for echoes, anchored regex for hex/put/disasm). Caught.
+
+- **[READ] The acknowledged partial comparison** ("a disassembly line is compared only on address and opcode — its mnemonic and comment are not; a `print` line only on being one hex line"). In principle exploitable: a diagnostic that emits a line of the exact form `XXXXXXXX: HHHH <anything>\n` AT the owed disassembly position passes. But to occupy that position without producing a surplus line requires an overwrite, and the overwrite paths above are all caught. So from a normal C edit to this arm, the partial comparison is not exploitable.
+
+### Q2. Oracle soundness
+
+- **[READ]** BASE 37/37 × 3 — three clean runs, every row passes. Strong evidence against false-red in practice.
+
+- **[REASONED] Possible false red under load.** The `session()` tail waits `spin = 1.20 s` after the last command before `SNAP = buf`. On a heavily loaded host, a line can straddle the snapshot (partial disassembly, missing trailing `\s` before the mnemonic), or arrive entirely after 1.2 s. The partial line fails the anchored regex → false red. Not observed in the 3 BASE runs, but the window is finite. This is a harness concern, not an oracle defect; the oracle correctly reports what is in `SNAP`.
+
+- **[REASONED] Dead session cannot false-green.** A session that prints nothing has an empty body after `t.find("GXemul> ")`. `owed()` returns the full transcript; the position loop hits "line N missing" on the first iteration. `read silent` fires. The only false-green path is an emulator that synthesises the owed transcript by coincidence, which is outside what the oracle can defend against.
+
+- **[REASONED] First-prompt alignment.** Per the inlined transcript, the pty echoes the prompt concatenated with the first input (`GXemul> r1=0xa05f6c04\r\n`), so `t.find("GXemul> ")` lands on the first owed echo. `owed()` starts at the same position. They align.
+
+- **[REASONED] `bare_cr` on CRLF pty.** The count is `raw.count("\r") - raw.count("\r\n")`. As long as the pty emits CRLF for every `\n` (which the example transcript confirms), this is 0 on clean. Not checkable from the packet beyond "the example shows CRLF"; the broader claim "the pty's CRLF is deterministic" is what the 3 BASE runs already substantiate empirically.
+
+### Q3. Does the repair chain close?
+
+- **[READ]** Denominator swept: the seven diagnostic legs (verbatim, bare hex, blank line, bare CR, prompt line, glued `GXemul> `, `GXemul> quit\n`), across 12 read sessions, plus the single-bit selector narrowing (`& ~0x10`, `& ~0x04`, `|= 0x80000000`, `&= ~0x40000000`), read-to-clear, third-read exit, plus the consumer-keyed declines and exits from tables 1–4. The `(12/12 sessions for the last two)` qualifier is consistent with all seven legs scoring 12/12 on `read silent` — i.e. the diagnostic class is closed in the read-silent channel.
+
+- **[REASONED]** Future escape: **outside the contract, as stated.** A diagnostic whose bytes never enter the pty during the read — `atexit()`, stderr-buffer-not-flushed, separate file, syslog, network — passes every row. The contract's "latched" means "prints on subsequent reads too" (the first read sees it), not "deferred to process termination"; the brief distinguishes these in Q1's enumeration.
+
+- **[REASONED]** A breach of the contract would require an on-pty diagnostic during the read whose transcript is byte-identical, line-for-line, to the owed one at every position — i.e. an overwrite that lands exactly the owed bytes at the owed positions. With `\r` counted, with anchored regexes refusing leading escape/`\b`, with surplus and trailing checks, I cannot construct such an edit.
+
+### Q4. Which claims are wrong or imprecise
+
+- **[REASONED] "36/37 on `read silent` alone"** is ambiguous in a way that matters. Read as "36 of 37 mutants are detected when `read silent` is the only check" → implies one mutant survives `read silent`, which would be a survivor of the class and the fourth oracle would NOT close. Read as "each diagnostic mutant trips 36 of the 37 total rows; `read silent` is among those 36" → no survivor, closure holds. The "(12/12 sessions for the last two)" qualifier strongly favours the second reading (the 37 denominator doesn't match 12 sessions), but the wording should be tightened. If the first reading is intended, I would name the surviving mutant; based on the measurements shown I cannot.
+
+- **[REASONED] "The fourth oracle is a strict tightening of the third"** holds for on-pty output during the read. Removing the `quit`-echo exemption and replacing shape-matching with position-exact matching are both monotone tightenings over the third's grammar+counts. No on-pty diagnostic caught by the third can evade the fourth.
+
+- **[READ]** The settled premises (`fatal()` returns and prints unconditionally; `va_debug("")` prints nothing; disassembly before execute; debugger echo format) are internally consistent and consistent with the inlined example transcript and the diff's `owed()` model. I see no error.
+
+- **[REASONED] "21 runs, 20 exactly on prediction"** leaves 1 run unaccounted for. Without the run index and the predicted vs. observed outcome I cannot check this from the packet. If the deviation is a flake (timing under load), it is consistent with the false-red concern in Q2; if it is systematic, it is a defect not disclosed here. Name the missing run and the row that diverged — that single fact would settle it.
+
+- **Not checkable from the packet:** (a) which run in the 21 was off-prediction and on which row; (b) whether the 12-session test corpus exercises every code path the diagnostic class could land on (specifically: whether any session reaches the read via a path that does not produce the owed disassembly — if such a session exists, the oracle's snapshot semantics still hold, but the corpus's coverage would matter for closure confidence).

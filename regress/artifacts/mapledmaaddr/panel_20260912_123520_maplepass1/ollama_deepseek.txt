@@ -1,0 +1,16 @@
+VERDICT: ACCEPT is right; the detector must add a non-MEM_READ/non-MEM_WRITE access test and a field-liveness check. The false premise is that the read “computes the stored value and then ends” — the code calls `fatal()` before `odata = d->dmaaddr`, so the value is never assigned before termination.
+
+PASS1_MAPLE_20260912
+
+**READ** from the packet:  
+- In the `0x04` read arm, `fatal(...)` precedes `odata = d->dmaaddr; exit(1);`, so the stored value is not computed before the process ends.  
+- `MAPLE_ENABLE` read arm is quiet (`odata = d->enable;`).  
+- `maple_do_dma_xfer()` writes `d->dmaaddr = addr;` at the transfer tail.
+
+**REASONED** answers:  
+1. **Is ACCEPT right?** Yes. Returning the model’s field is the least-bad option and removes a process-killing outlier. Hardware semantics cannot be settled from the packet, but no alternative dominates.  
+2. **Which wrong fix passes the detector?** Replace the `else` in the `0x04` case with `else if (writeflag == MEM_READ) odata = d->dmaaddr;` and leave `odata` defaulting to 0. This passes all detector clauses because the detector only issues `MEM_READ`; it never exercises a non-`MEM_WRITE`, non-`MEM_READ` path. The exact edit narrows the read arm to `MEM_READ` only.  
+   - The DMA leg is **necessary for the floor** because it catches a fix that returns a separate written value instead of the live `d->dmaaddr` field.  
+   - It is **not** coverage of the separate cursor row; it only checks that the read equals the field, not that the field update is correct.  
+   - For a pure deletion (`odata = d->dmaaddr;` under `relative_addr == 0x04` and `writeflag != MEM_WRITE`), clause (d) verifies that the read reflects the current field after a transfer, i.e., it catches snapshot-returning wrong fixes.  
+3. **Which premise is false?** The statement in THE DEFECT that a guest read “computes the stored value and then ends” is false; the code calls `fatal()` before the assignment, so the value is never computed.

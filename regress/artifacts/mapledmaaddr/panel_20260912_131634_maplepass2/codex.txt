@@ -1,0 +1,2898 @@
+Reading additional input from stdin...
+OpenAI Codex v0.153.4
+--------
+workdir: C:\DocumentNoSnc\CC\GXEMUL
+model: gpt-6-astra
+provider: openai
+approval: never
+sandbox: read-only
+reasoning effort: max
+reasoning summaries: none
+session id: 01a096d5-e7aa-7c20-80a8-182f6fc16697
+--------
+user
+# `mapledmaaddr` (#528) PASS 2 — the real diff, its 16-row detector and a measured kill table, before commit
+
+VERDICT LINE FIRST, then the liveness token `PASS2_MAPLE_20260912`.
+
+**ONE QUESTION: is there a mutant of this fix — inside the clause-(d) enumeration below — that stays GREEN on all 16
+rows?**  If you find none, say WHAT YOU SWEPT.  **Please do not simply ratify**: on pass 1 of this very row three seats
+found three wrong fixes that passed my brief's summary of the detector; they are rows now, and I want the next three.
+
+Tree: `C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\` (ignore any other `src/` under the project root).
+
+## THE DIFF (uncommitted), `src/devices/dev_dreamcast_maple.c`, WHOLE
+
+```diff
+@@ -560,9 +560,11 @@ DEVICE_ACCESS(dreamcast_maple)
+ 			/* debug("[ dreamcast_maple: dmaaddr set to 0x%08x"
+ 			    " ]\n", d->dmaaddr);  */
+ 		} else {
+-			fatal("[ dreamcast_maple: TODO: read from dmaaddr ]\n");
++			/*  #528: answered like MAPLE_ENABLE's read -- the field is
++			    the one the write arm stores and maple_do_dma_xfer()
++			    consumes -- with no diagnostic and no exit.  This read
++			    used to compute the value and then end the emulator.  */
+ 			odata = d->dmaaddr;
+-			exit(1);
+ 		}
+ 		break;
+```
+
+The enclosing function (unchanged elsewhere): `uint64_t idata = 0, odata = 0;` at the top; `switch (relative_addr)`
+with arms 0x04 (this one), 0x10 RESET2 (write: fatal() on nonzero; read: odata stays 0), 0x14 ENABLE (read: `odata =
+d->enable`), 0x18 STATE (write 1 runs `maple_do_dma_xfer()`; read: 0), 0x80 SPEED, 0x8c RESET, 0xe8, default (fatal, no
+exit); common tail `if (writeflag == MEM_READ) memory_writemax64(cpu, data, len, odata); return 1;`.
+`memory_rw.c` delivers a failed device access as an exception for MIPS and M88K only — on this SH4 machine a handler
+`return 0` silently skips the load.
+
+## SETTLED (pass 1, Fable 5.1 adjudicating; `regress/artifacts/mapledmaaddr/fable_pass1_20260912.md`)
+
+* ACCEPT is right, 9/9.  No `writeflag` other than MEM_READ/MEM_WRITE reaches this handler (279 call sites scanned).
+* The FLOOR: the accept cell with a POISONED destination and high + low-five-bit values; silence over the whole read
+  interval (any maple text, not one literal); `other read` (the hoist deletes the dominating `relative_addr == 0x04`);
+  survival + exit status.  Value-keyed exits (`d->dmaaddr == v`, `& bit`) are clause (e), taken as L1 rows because cheap.
+* The post-DMA value is NOT rowed here — deferred by name to the separate row `mapledmaadvance`.
+
+## THE DETECTOR — `regress/maple_dmaaddr_probe.py`, 16 rows, real SH4 `mov.l` on unmodified `-E dreamcast`
+
+Every load destination is seeded 0xa5a55a5a first.  Nine READ sessions (each a fresh emulator process): `read val_a`
+(write 0x8c012345, read), `read val_b` (0x0c00001f), `other read` (write 0x8c012345, read RESET2 at +0x10, want 0),
+survive (read DMAADDR on a fresh device into r2, then a marker store; rows `marker survive` and `exit status`),
+`initial zero`, `read four`, `read all ones` (0xffffffff), `double read 1/2` (write 0x8c012345, read twice), `write
+replace` (write 0x8c012345 then 0x13579bdf, read).  `read silent` counts read sessions whose transcript contains the
+text `dreamcast_maple` anywhere (want 0/9).  Controls: a RAM round trip at start and end, SH4 IPRD reset value, and
+MAPLE_SPEED's shift/mask (0x12345678 -> 0x12340000).
+
+## MEASURED — kill table 1 (`regress/artifacts/mapledmaaddr/killtable_20260912/`), frozen instrument, scratch clone
+
+| leg | edit | score | failing |
+|---|---|---|---|
+| BASE | the fix | 16/16 | — |
+| HEAD | committed (fatal + exit) | 5/16 | 11 rows |
+| M_KEEPFATAL / M_REWORD / M_LATCHED | the diagnostic verbatim / reworded / latched `(once)`, no exit | 15/16 each | read silent alone |
+| M_EXITONLY | exit(1) after the load, no diagnostic | 6/16 | 10 rows |
+| M_RET0 | `return 0` (the FAULT idiom) | 7/16 | 8 value rows + read silent (memory_rw's failed-access `debug()` prints under stepping) |
+| M_DECLINE | the assignment deleted | 9/16 | 7 value rows |
+| M_HOIST | `odata = d->dmaaddr` at the declaration, the arm emptied | 15/16 | other read alone |
+| M_READCLEAR | `d->dmaaddr = 0` after the load | 15/16 | double read 2 alone |
+| M_EQ4 / M_BIT30 / M_ZEROEXIT | exit if `== 4` / `& 0x40000000` / `== 0` | 15, 15, 13 | read four / read all ones / initial zero + survive |
+| M_MASKLOW | `odata = d->dmaaddr & ~0x1f` | 9/16 | 7 value rows |
+
+## QUESTIONS
+
+1. **(the one that matters)** DEPENDS-ON for this pure deletion: dominating predicates `relative_addr == 0x04` and
+   `writeflag != MEM_WRITE`; the guarded body `odata = d->dmaaddr;` reads only `d->dmaaddr` and tests nothing.  **Name
+   any edit inside that enumeration — a re-introduced exit or diagnostic under a different predicate, a weakened
+   dominating predicate, an operand swap on `d->dmaaddr` or `odata` — that leaves all 16 rows green**, and the row you
+   expected to catch it.  Include width: `memory_writemax64(cpu, data, len, odata)` — every row reads 32 bits.
+2. **Does any row's channel fail to vary under the mutant it is named for?**
+3. **Which CONTRACT statement in the probe header is false or overclaims?**
+
+Verdict line: `NO SURVIVING (d) MUTANT — swept: <list>` or `SURVIVOR: <exact edit>`.
+
+
+## OPERATIONAL RULE FOR EVERY SEAT (appended by panel.sh, not by the author)
+
+**Do not run `run.sh`, any `gate_*.sh`, or the battery.** Every measurement you need is
+inlined above. A gate takes minutes -- longer than your response budget -- and a second
+concurrent invocation corrupts the operator run in progress, because the gates share one
+log directory. A seat that runs a gate produces no review AND may invalidate someone
+else s. Building and running a single detector or mutant in your own temp directory is
+fine and encouraged; driving the harness is not.
+
+If you want a measurement that is not inlined, NAME IT and say why. Naming it is worth
+far more to this panel than a timeout.
+codex
+I’ll inspect the specified tree, probe header, and recorded row channels, then look for surviving predicate, operand, and width mutations. I’ll leave the gates and battery untouched.
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "Get-Location; rg --files -g AGENTS.md -g maple_dmaaddr_probe.py -g dev_dreamcast_maple.c -g '*fable_pass1_20260912*' -g '*killtable*' ." in C:\DocumentNoSnc\CC\GXEMUL
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'git status --short; git diff -- src/devices/dev_dreamcast_maple.c' in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+ succeeded in 210ms:
+ M regress/gate_sh_rounding.sh
+ M regress/ppc_rldicl_probe.py
+ M src/devices/dev_dreamcast_maple.c
+ M tools/BRIEF_TEMPLATE.md
+ M tools/CLAUDE.md
+ M tools/PIPELINE.md
+ M tools/panel.sh
+ M tools/pipeline/fable_queue.md
+ M tools/pipeline/ledger.json
+?? _scratchpad/
+?? regress/alpha_dummy.bin
+?? regress/arm_bfx_stub.bin
+?? regress/artifacts/b120/
+?? regress/artifacts/fbdisabled/
+?? regress/artifacts/gdromdefault_461/
+?? regress/artifacts/heldqueue/
+?? regress/artifacts/hlen/
+?? regress/artifacts/landiskaux/codex_fixdesign_20260911.err
+?? regress/artifacts/landiskaux/codex_fixdesign_20260911.txt
+?? regress/artifacts/lcaisaphys/
+?? regress/artifacts/lcaisasize/
+?? regress/artifacts/makercfalse/codex_design_20260911.err
+?? regress/artifacts/makercfalse/codex_design_20260911.txt
+?? regress/artifacts/mapledmaaddr/agy_maple_witness_20260912.py
+?? regress/artifacts/mapledmaaddr/agy_witness_report_20260912.md
+?? regress/artifacts/mapledmaaddr/codex_detector_20260911.err
+?? regress/artifacts/mapledmaaddr/codex_detector_20260911.txt
+?? regress/artifacts/mapledmaaddr/codex_detector_RETRY_20260911.err
+?? regress/artifacts/mapledmaaddr/codex_detector_RETRY_20260911.txt
+?? regress/artifacts/mapledmaaddr/fable_pass1_20260912.md
+?? regress/artifacts/mapledmaaddr/fix.diff
+?? regress/artifacts/mapledmaaddr/killtable_20260912/
+?? regress/artifacts/mapledmaaddr/opus_pass1_20260912.md
+?? regress/artifacts/mapledmaaddr/panel_20260912_123520_maplepass1/
+?? regress/artifacts/mapledmaaddr/witness_committed.out
+?? regress/artifacts/mapledmaaddr/witness_fix.out
+?? regress/artifacts/n6/
+?? regress/artifacts/panelseatlabel/
+?? regress/artifacts/ppcrlwhighhalf/codex_redesign_20260911.err
+?? regress/artifacts/ppcrlwhighhalf/codex_redesign_20260911.txt
+?? regress/artifacts/ppcrlwhighhalf/codex_redesign_RETRY_20260911.err
+?? regress/artifacts/ppcrlwhighhalf/codex_redesign_RETRY_20260911.txt
+?? regress/artifacts/ppcrlwhighhalf/codex_witness_20260911.err
+?? regress/artifacts/ppcrlwhighhalf/codex_witness_20260911.txt
+?? regress/artifacts/ppcwitnessmaskoracle/
+?? regress/artifacts/sgirandomcolour/opus_impl_20260910.md
+?? regress/artifacts/sh4rtcflags/
+?? regress/artifacts/sh4sqwrite/
+?? regress/artifacts/shprotld/
+?? regress/artifacts/vmedefaultkill/
+?? regress/artifacts/wdcaltdigin/killtable_20260911_drdy/run_BASE/disk.img
+?? regress/artifacts/wdcaltdigin/killtable_20260911_drdy/run_M_DRDY/disk.img
+?? regress/artifacts/wdcaltdigin/killtable_20260912_closure/run_BASE/disk.img
+?? regress/artifacts/wdcaltdigin/killtable_20260912_closure/run_E_EQUIV49/disk.img
+?? regress/artifacts/wdcaltdigin/killtable_20260912_closure/run_HEAD/disk.img
+?? regress/artifacts/wdcaltdigin/killtable_20260912_closure/run_M_DRDY/disk.img
+?? regress/artifacts/wdcaltdigin/killtable_20260912_closure/run_M_DRDYDRQ/disk.img
+?? regress/artifacts/wdcaltdigin/killtable_20260912_closure/run_M_DRQERR/disk.img
+?? regress/artifacts/wdcerrfamily/
+?? regress/artifacts/wiringcliff/codex_ppcgate_20260910.err
+?? regress/artifacts/wiringcliff/codex_ppcgate_20260910.txt
+?? regress/lca_isalane_probe.py
+?? regress/maple_dmaaddr_probe.py
+?? regress/sgi_mte_dummy.bin
+diff --git a/src/devices/dev_dreamcast_maple.c b/src/devices/dev_dreamcast_maple.c
+index ccab7ef..2e0a319 100644
+--- a/src/devices/dev_dreamcast_maple.c
++++ b/src/devices/dev_dreamcast_maple.c
+@@ -560,9 +560,11 @@ DEVICE_ACCESS(dreamcast_maple)
+ 			/* debug("[ dreamcast_maple: dmaaddr set to 0x%08x"
+ 			    " ]\n", d->dmaaddr);  */
+ 		} else {
+-			fatal("[ dreamcast_maple: TODO: read from dmaaddr ]\n");
++			/*  #528: answered like MAPLE_ENABLE's read -- the field is
++			    the one the write arm stores and maple_do_dma_xfer()
++			    consumes -- with no diagnostic and no exit.  This read
++			    used to compute the value and then end the emulator.  */
+ 			odata = d->dmaaddr;
+-			exit(1);
+ 		}
+ 		break;
+ 
+
+ succeeded in 475ms:
+
+.\build-asan\src\devices\dev_dreamcast_maple.c
+.\build\src\devices\dev_dreamcast_maple.c
+.\est\src\devices\dev_dreamcast_maple.c
+.\GXEMUL-SEC\src\devices\dev_dreamcast_maple.c
+.\GXEMUL-SEC\regress\maple_dmaaddr_probe.py
+.\_archive\audit-results-20260625_203645\builds\orig-asan\src\devices\dev_dreamcast_maple.c
+.\GXEMUL-SEC\regress\artifacts\xscaleinten\killtable_20260911\killtable.sh
+.\GXEMUL-SEC\regress\artifacts\xscaleinten\killtable3_20260912\killtable3.sh
+.\GXEMUL-SEC\regress\artifacts\xscaleinten\killtable3_20260912\killtable3.run-0912.sh
+.\GXEMUL-SEC\regress\artifacts\xscaleinten\killtable2_20260912\killtable2.sh
+.\GXEMUL-SEC\regress\artifacts\xscaleinten\killtable2_20260912\killtable2.run-0912.sh
+.\GXEMUL-SEC\regress\artifacts\batteryreds\row5_20260829\killtable3.out
+.\_scratchpad\seat500_p9\tree\src\devices\dev_dreamcast_maple.c
+.\GXEMUL-SEC\regress\artifacts\mapledmaaddr\killtable_20260912\killtable.sh
+.\GXEMUL-SEC\regress\artifacts\mapledmaaddr\killtable_20260912\killtable.run-0912.sh
+.\GXEMUL-SEC\regress\artifacts\mapledmaaddr\fable_pass1_20260912.md
+.\GXEMUL-SEC\regress\artifacts\armbdt\killtable_20260911e\killtable.sh
+.\GXEMUL-SEC\regress\artifacts\armbdt\killtable_20260911d\killtable.sh
+.\GXEMUL-SEC\regress\artifacts\armbdt\killtable_20260911c\killtable.sh
+.\GXEMUL-SEC\regress\artifacts\armbdt\killtable_20260911b\killtable.sh
+.\GXEMUL-SEC\regress\artifacts\armbdt\killtable_20260911\killtable.sh
+.\_archive\audit-results-20260625_203645\builds\est-asanonly\src\devices\dev_dreamcast_maple.c
+.\GXEMUL-SEC\regress\artifacts\alphatbinegsel\killtable_20260910\t3\killtable.asrun.sh
+.\GXEMUL-SEC\regress\artifacts\m88kexcdeliver\killtable8\killtable8_m88kexc.sh
+.\GXEMUL-SEC\regress\artifacts\m88kexcdeliver\killtable7\killtable7_m88kexc.sh
+.\GXEMUL-SEC\regress\artifacts\alphatbinegsel\killtable_20260910\killtable.sh
+.\GXEMUL-SEC\regress\artifacts\m88kexcdeliver\killtable6\killtable6_m88kexc.sh
+.\GXEMUL-SEC\regress\artifacts\wdcaltdigin\killtable_20260911\killtable.sh
+.\GXEMUL-SEC\regress\artifacts\m88kexcdeliver\killtable5\killtable5_m88kexc.sh
+.\GXEMUL-SEC\regress\artifacts\m88kexcdeliver\killtable10\killtable10_m88kexc.sh
+.\GXEMUL-SEC\regress\artifacts\gdrompionull\opus_p2_20260826\killtable.sh
+.\GXEMUL-SEC\regress\artifacts\gdrompionull\opus_p2_20260826\killtable.run-190716.sh
+.\src\devices\dev_dreamcast_maple.c
+.\GXEMUL-SEC\regress\artifacts\lunaabsentcpu\killtable3\killtable3_lunaabs_clone.sh
+.\GXEMUL-SEC\regress\artifacts\lunaabsentcpu\killtable3\killtable3_driver.log
+.\GXEMUL-SEC\regress\artifacts\lunaabsentcpu\killtable2\killtable2_lunaabs_clone.sh
+.\GXEMUL-SEC\regress\artifacts\lunaabsentcpu\killtable2\killtable2_driver.log
+.\GXEMUL-SEC\regress\artifacts\lunaabsentcpu\killtable\killtable_lunaabs_clone.sh
+.\GXEMUL-SEC\regress\artifacts\lunaabsentcpu\killtable\killtable_driver.log
+.\GXEMUL-SEC\regress\artifacts\ppcrlwimiwidth\killtable_20260911\killtable.sh
+.\GXEMUL-SEC\regress\artifacts\ppcrlwimiwidth\killtable3_20260912\killtable3.sh
+.\GXEMUL-SEC\regress\artifacts\ppcrlwimiwidth\killtable3_20260912\killtable3.run-0912.sh
+.\GXEMUL-SEC\regress\artifacts\ppcrlwimiwidth\killtable2_20260912\killtable2b.sh
+.\GXEMUL-SEC\regress\artifacts\ppcrlwimiwidth\killtable2_20260912\killtable2b.run-0912.sh
+.\GXEMUL-SEC\regress\artifacts\ppcrlwimiwidth\killtable2_20260912\killtable2.sh
+.\GXEMUL-SEC\regress\artifacts\ppcrlwimiwidth\killtable2_20260912\killtable2.run-0912.sh
+.\GXEMUL-SEC\regress\artifacts\ppcrldimimask\killtable_20260911\killtable.sh
+.\GXEMUL-SEC\regress\artifacts\ppcrldiclzero\pass2_20260910\opus_killtable_SCORES.txt
+.\GXEMUL-SEC\regress\artifacts\ppcrldiclzero\pass2_20260910\opus_killtable.log
+.\GXEMUL-SEC\regress\artifacts\lcabadval\killtable5_20260912\killtable5.sh
+.\GXEMUL-SEC\regress\artifacts\lcabadval\killtable5_20260912\killtable5.run-0912.sh
+.\GXEMUL-SEC\regress\artifacts\sgirandomcolour\killtable5_20260912\killtable5.sh
+.\GXEMUL-SEC\regress\artifacts\sgirandomcolour\killtable5_20260912\killtable5.run-0912.sh
+.\GXEMUL-SEC\regress\artifacts\pcc2widthkills\opus_pass2_20260903\killtable2.log
+.\GXEMUL-SEC\regress\artifacts\pcc2widthkills\opus_pass2_20260903\killtable.log
+.\_scratchpad\p465\killtable.sh
+.\_scratchpad\p465\killtable.run-190716.sh
+.\_scratchpad\panel_20260830_214609\kimi_q1\build_mutant\src\devices\dev_dreamcast_maple.c
+.\_scratchpad\lunaabs\killtable_driver.log
+.\_scratchpad\lunaabs\killtable4_driver.log
+.\_scratchpad\lunaabs\killtable3_driver.log
+.\_scratchpad\lunaabs\killtable2_driver.log
+Path                      
+----                      
+C:\DocumentNoSnc\CC\GXEMUL
+
+
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$taskPaths = @('"'C:\\AGENTS.md','C:\\DocumentNoSnc\\AGENTS.md','C:\\DocumentNoSnc\\CC\\AGENTS.md','C:\\DocumentNoSnc\\CC\\GXEMUL\\AGENTS.md','C:\\DocumentNoSnc\\CC\\GXEMUL\\GXEMUL-SEC\\AGENTS.md'); foreach ("'$taskPath in $taskPaths) { if (Test-Path -LiteralPath $taskPath) { Write-Output $taskPath; Get-Content -LiteralPath $taskPath } }; rg --files --hidden -g AGENTS.md src regress' in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$taskLine = 0; Get-Content -LiteralPath regress/maple_dmaaddr_probe.py | ForEach-Object { $taskLine++; '"'{0,4}: {1}' -f "'$taskLine, $_ }' in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n 'DEPENDS.ON|clause.{0,10}\\(d\\)|\\(d\\).*mut|CONTRACT|SCORES|score|PASS|FAIL' tools/BRIEF_TEMPLATE.md tools/PIPELINE.md regress/artifacts/mapledmaaddr/killtable_20260912/killtable.sh; rg -n 'memory_writemax64|memory_device_register|dmaaddr|calloc|zero' src/devices/dev_dreamcast_maple.c src/memory.c src/memory_rw.c; rg --files regress/artifacts/mapledmaaddr/killtable_20260912" in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$taskLine = 0; Get-Content -LiteralPath src/devices/dev_dreamcast_maple.c | ForEach-Object { $taskLine++; if ($taskLine -le 155 -or $taskLine -ge 500) { '"'{0,4}: {1}' -f "'$taskLine, $_ } }; Get-Content -LiteralPath regress/artifacts/mapledmaaddr/fable_pass1_20260912.md' in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+ exited 1 in 2481ms:
+ succeeded in 2531ms:
+tools/BRIEF_TEMPLATE.md:13:**THE FAILURE THIS FILE EXISTS TO STOP is not forgetting the rules.  It is remembering them
+tools/BRIEF_TEMPLATE.md:92:> > SETTLE a repo fact, so score an UNCONDITIONED agreement as zero -- while a CONDITIONED
+tools/BRIEF_TEMPLATE.md:147:a fresh PASS-1 brief and convened nine seats on it.
+tools/BRIEF_TEMPLATE.md:250:| 1 | the clause-(d) flow test | `tlb_mode` -> `tileptr` | **stopped at the ARRAY, never reached the INDEX** `tile_nr` | six measured escapes; a round re-opened after it was ready to close |
+tools/BRIEF_TEMPLATE.md:348:no score moves, and the seat returns a fluent, internally consistent answer about the wrong artifact.
+tools/BRIEF_TEMPLATE.md:657:> *Measured cost of getting it wrong, from `#498`: the fall-through form scored 24/25 and the
+tools/BRIEF_TEMPLATE.md:722:## §F2 — *** THE ADJUDICATION PASS: THE PANEL SHARES ITS FINDINGS. ***
+tools/BRIEF_TEMPLATE.md:755:### THE THREE QUESTIONS THE ADJUDICATION PASS ASKS
+tools/BRIEF_TEMPLATE.md:797:* [ ] **PASS 2 ONLY — paste `git diff --numstat` for the round's files and mark each one
+regress/artifacts/mapledmaaddr/killtable_20260912/killtable.sh:11:SCORES=$K/SCORES.txt
+regress/artifacts/mapledmaaddr/killtable_20260912/killtable.sh:20:  echo "SENTINEL DROPPED (clone-local)"; } > "$SCORES"
+regress/artifacts/mapledmaaddr/killtable_20260912/killtable.sh:24:    echo "" >> "$SCORES"; echo "=== LEG $leg ===" >> "$SCORES"
+regress/artifacts/mapledmaaddr/killtable_20260912/killtable.sh:31:    echo "  mutate rc=$rc  changed-lines-vs-SEC=$ch" >> "$SCORES"
+regress/artifacts/mapledmaaddr/killtable_20260912/killtable.sh:32:    if [ $rc != 0 ]; then echo "  MUTATOR REFUSED -- leg NOT measured" >> "$SCORES"; continue; fi
+regress/artifacts/mapledmaaddr/killtable_20260912/killtable.sh:33:    if [ "$leg" != BASE ] && [ "$ch" = 0 ]; then echo "  MUTANT IDENTICAL TO BASE -- leg NOT measured" >> "$SCORES"; continue; fi
+regress/artifacts/mapledmaaddr/killtable_20260912/killtable.sh:36:    echo "  build rc=$brc binary=$fresh" >> "$SCORES"
+regress/artifacts/mapledmaaddr/killtable_20260912/killtable.sh:37:    if [ $brc != 0 ] || [ $fresh != FRESH ]; then echo "  BUILD FAILED -- leg NOT measured (not a kill)" >> "$SCORES"; continue; fi
+regress/artifacts/mapledmaaddr/killtable_20260912/killtable.sh:39:    echo "  $(grep -oE 'MAPLE_DMAADDR_RESULT=[0-9]+/[0-9]+' "$K/probe_$leg.raw" | tail -1)  $(grep -oE 'MAPLE_DMAADDR_CONTROL=[A-Z]+' "$K/probe_$leg.raw" | tail -1)  sentinel=[$(tail -1 "$K/probe_$leg.raw")]" >> "$SCORES"
+regress/artifacts/mapledmaaddr/killtable_20260912/killtable.sh:40:    echo "    $(grep -E '^FAILING:' "$K/probe_$leg.raw" | tail -1)" >> "$SCORES"
+regress/artifacts/mapledmaaddr/killtable_20260912/killtable.sh:43:echo "" >> "$SCORES"; echo "=== RESTORE ===" >> "$SCORES"
+regress/artifacts/mapledmaaddr/killtable_20260912/killtable.sh:48:echo "  restore cmp-vs-SEC=$p1 binary=$p2" >> "$SCORES"
+regress/artifacts/mapledmaaddr/killtable_20260912/killtable.sh:49:if [ $p1 = CLEAN ] && [ $p2 = FRESH ]; then rm -f "$C/.MUTANT"; echo "  SENTINEL CLEARED (both parts)" >> "$SCORES"
+regress/artifacts/mapledmaaddr/killtable_20260912/killtable.sh:50:else echo "  SENTINEL LEFT IN PLACE" >> "$SCORES"; fi
+regress/artifacts/mapledmaaddr/killtable_20260912/killtable.sh:51:echo KILLTABLE_DONE >> "$SCORES"
+tools/PIPELINE.md:178:  adjudication alone; a dead seat is a SEAT FAILURE, recorded by name, never counted as
+rg: src/memory.c: The system cannot find the file specified. (os error 2)
+rg: src/memory_rw.c: The system cannot find the file specified. (os error 2)
+src/devices/dev_dreamcast_maple.c:76:	uint32_t	dmaaddr;
+src/devices/dev_dreamcast_maple.c:377: *  Perform a DMA transfer. enable should be 1, and dmaaddr should point to
+src/devices/dev_dreamcast_maple.c:382:	uint32_t addr = d->dmaaddr;
+src/devices/dev_dreamcast_maple.c:389:	/*  debug("[ dreamcast_maple: DMA transfer, dmaaddr = "
+src/devices/dev_dreamcast_maple.c:397:		fatal("[ dreamcast_maple: dmaaddr 0x%08" PRIx32" is NOT"
+src/devices/dev_dreamcast_maple.c:540:	d->dmaaddr = addr;
+src/devices/dev_dreamcast_maple.c:559:			d->dmaaddr = idata;
+src/devices/dev_dreamcast_maple.c:560:			/* debug("[ dreamcast_maple: dmaaddr set to 0x%08x"
+src/devices/dev_dreamcast_maple.c:561:			    " ]\n", d->dmaaddr);  */
+src/devices/dev_dreamcast_maple.c:567:			odata = d->dmaaddr;
+src/devices/dev_dreamcast_maple.c:640:		memory_writemax64(cpu, data, len, odata);
+src/devices/dev_dreamcast_maple.c:653:	memory_device_register(devinit->machine->memory, devinit->name,
+regress/artifacts/mapledmaaddr/killtable_20260912\build_M_DECLINE.log
+regress/artifacts/mapledmaaddr/killtable_20260912\build_M_BIT30.log
+regress/artifacts/mapledmaaddr/killtable_20260912\build_HEAD.log
+regress/artifacts/mapledmaaddr/killtable_20260912\build_BASE.log
+regress/artifacts/mapledmaaddr/killtable_20260912\build_M_EXITONLY.log
+regress/artifacts/mapledmaaddr/killtable_20260912\build_M_EQ4.log
+regress/artifacts/mapledmaaddr/killtable_20260912\build_M_HOIST.log
+regress/artifacts/mapledmaaddr/killtable_20260912\build_M_KEEPFATAL.log
+regress/artifacts/mapledmaaddr/killtable_20260912\SCORES.txt
+regress/artifacts/mapledmaaddr/killtable_20260912\probe_M_ZEROEXIT.raw
+regress/artifacts/mapledmaaddr/killtable_20260912\probe_M_REWORD.raw
+regress/artifacts/mapledmaaddr/killtable_20260912\probe_M_RET0.raw
+regress/artifacts/mapledmaaddr/killtable_20260912\probe_M_READCLEAR.raw
+regress/artifacts/mapledmaaddr/killtable_20260912\probe_M_MASKLOW.raw
+regress/artifacts/mapledmaaddr/killtable_20260912\probe_M_LATCHED.raw
+regress/artifacts/mapledmaaddr/killtable_20260912\probe_M_KEEPFATAL.raw
+regress/artifacts/mapledmaaddr/killtable_20260912\probe_M_HOIST.raw
+regress/artifacts/mapledmaaddr/killtable_20260912\probe_M_EXITONLY.raw
+regress/artifacts/mapledmaaddr/killtable_20260912\probe_M_EQ4.raw
+regress/artifacts/mapledmaaddr/killtable_20260912\probe_M_DECLINE.raw
+regress/artifacts/mapledmaaddr/killtable_20260912\probe_M_BIT30.raw
+regress/artifacts/mapledmaaddr/killtable_20260912\probe_HEAD.raw
+regress/artifacts/mapledmaaddr/killtable_20260912\probe_BASE.raw
+regress/artifacts/mapledmaaddr/killtable_20260912\PRETABLE.out
+regress/artifacts/mapledmaaddr/killtable_20260912\POSTTABLE.out
+regress/artifacts/mapledmaaddr/killtable_20260912\mut_maple.py
+regress/artifacts/mapledmaaddr/killtable_20260912\mutate_M_ZEROEXIT.txt
+regress/artifacts/mapledmaaddr/killtable_20260912\mutate_M_REWORD.txt
+regress/artifacts/mapledmaaddr/killtable_20260912\mutate_M_RET0.txt
+regress/artifacts/mapledmaaddr/killtable_20260912\mutate_M_READCLEAR.txt
+regress/artifacts/mapledmaaddr/killtable_20260912\mutate_M_MASKLOW.txt
+regress/artifacts/mapledmaaddr/killtable_20260912\mutate_M_LATCHED.txt
+regress/artifacts/mapledmaaddr/killtable_20260912\mutate_M_KEEPFATAL.txt
+regress/artifacts/mapledmaaddr/killtable_20260912\mutate_M_HOIST.txt
+regress/artifacts/mapledmaaddr/killtable_20260912\mutate_M_EXITONLY.txt
+regress/artifacts/mapledmaaddr/killtable_20260912\mutate_M_EQ4.txt
+regress/artifacts/mapledmaaddr/killtable_20260912\mutate_M_DECLINE.txt
+regress/artifacts/mapledmaaddr/killtable_20260912\mutate_M_BIT30.txt
+regress/artifacts/mapledmaaddr/killtable_20260912\maple_dmaaddr_probe.FROZEN.py
+regress/artifacts/mapledmaaddr/killtable_20260912\killtable.sh
+regress/artifacts/mapledmaaddr/killtable_20260912\killtable.run-0912.sh
+regress/artifacts/mapledmaaddr/killtable_20260912\dev_dreamcast_maple.HEAD.c
+regress/artifacts/mapledmaaddr/killtable_20260912\build_RESTORE.log
+regress/artifacts/mapledmaaddr/killtable_20260912\build_M_ZEROEXIT.log
+regress/artifacts/mapledmaaddr/killtable_20260912\build_M_REWORD.log
+regress/artifacts/mapledmaaddr/killtable_20260912\build_M_RET0.log
+regress/artifacts/mapledmaaddr/killtable_20260912\build_M_READCLEAR.log
+regress/artifacts/mapledmaaddr/killtable_20260912\build_M_MASKLOW.log
+regress/artifacts/mapledmaaddr/killtable_20260912\build_M_LATCHED.log
+
+ succeeded in 7687ms:
+   1: #!/usr/bin/env python3
+   2: """
+   3: maple_dmaaddr_probe.py -- regression detector for `mapledmaaddr' (#528) on UNMODIFIED `-E dreamcast'.
+   4: 
+   5: src/devices/dev_dreamcast_maple.c, case 0x04 (MAPLE_DMAADDR), read arm: it computed `odata = d->dmaaddr' and then
+   6: called fatal() and exit(1), so an ordinary guest read ended the emulator.  #528 is ACCEPT: the read now returns the
+   7: field, quietly, like MAPLE_ENABLE's.  Promoted from the rung-3 witness
+   8: regress/artifacts/mapledmaaddr/agy_maple_witness_20260912.py (committed 4/12, fix 12/12), with the rows the pass-1
+   9: panel and Fable's ruling (artifacts/mapledmaaddr/fable_pass1_20260912.md) owed.
+  10: 
+  11: Every register access is a real SH4 guest instruction (`mov.l') stepped through the cold debugger: the maple device
+  12: is registered DM_DEFAULT, so the debugger's own dump/put never reach its handler.  Every load destination is seeded
+  13: with a POISON value distinct from every want, so a fix that silently skips the load cannot pass a value row.
+  14: 
+  15: CONTRACT (vacuity-floor clause e).  Designed to catch, and each MEASURED in the kill table
+  16: (artifacts/mapledmaaddr/killtable_20260912/): the removed fatal()+exit(1) reinstated (HEAD); the diagnostic alone,
+  17: verbatim, reworded or latched -- the silence row counts ANY `dreamcast_maple' output in a read session, never one
+  18: literal string; exit(1) alone; the FAULT idiom `return 0' (a silent load-skip on SH4, where memory_rw.c raises no
+  19: exception); DECLINE (the value dropped); the read hoisted out of its `relative_addr == 0x04' guard (`other read');
+  20: a read that clears the field (the double read); an exit keyed on the value 0, 4, or any single SET bit (all-ones);
+  21: and masking of high or low-five bits.
+  22: NOT COVERED: an exit keyed on another exact value, or on a bit pattern that all-ones does not set (clause (e): the
+  23: body copies the field and tests no partition of it); read widths other than 32 bits (the common tail's `len');
+  24: a `writeflag' that is neither MEM_READ nor MEM_WRITE (no caller passes one -- EQUIVALENT).
+  25: NO ROW asserts what a read returns AFTER a DMA transfer.  Whether the transfer's cursor update (`d->dmaaddr = addr'
+  26: at the end of maple_do_dma_xfer) is architectural is the separate row `mapledmaadvance', whose detector will observe
+  27: it through this read arm using the refusal message's printed field as its oracle -- never a computed `P + 12'.
+  28: 
+  29: Sentinel: MAPLE_DMAADDR_PROBE_DONE (plus MAPLE_DMAADDR_RESULT=n/N and MAPLE_DMAADDR_CONTROL=OK|FAIL).
+  30: """
+  31: 
+  32: import os
+  33: import pty
+  34: import re
+  35: import select
+  36: import sys
+  37: import time
+  38: 
+  39: if len(sys.argv) < 2:
+  40:     sys.stderr.write("usage: maple_dmaaddr_probe.py <gxemul> [kernel] [label]\n")
+  41:     sys.exit(2)
+  42: 
+  43: BIN = sys.argv[1]
+  44: KERNEL = sys.argv[2] if len(sys.argv) > 2 else "/mnt/c/DocumentNoSnc/CC/GXEMUL/_images/openbsd76-landisk-bsd.rd"
+  45: LABEL = sys.argv[3] if len(sys.argv) > 3 else ""
+  46: 
+  47: MAPLE_DMAADDR = 0xa05f6c04
+  48: MAPLE_RESET2 = 0xa05f6c10
+  49: MAPLE_SPEED = 0xa05f6c80
+  50: 
+  51: CODE = 0x8c001000
+  52: MARKER = 0x8c001f04
+  53: POISON = 0xa5a55a5a            # seeded into every load destination; differs from every want below
+  54: 
+  55: BRA_SELF = 0xaffe
+  56: NOP = 0x0009
+  57: 
+  58: VAL_A = 0x8c012345             # nonzero high bits and nonzero low five bits
+  59: VAL_B = 0x0c00001f             # all five low bits set
+  60: VAL_4 = 0x00000004             # the value 4 (codex's `d->dmaaddr == 0x04' swap) -- clause (e), L1
+  61: VAL_ONES = 0xffffffff          # every bit set: pins any single-bit-SET exit -- clause (e), L1
+  62: VAL_R = 0x13579bdf             # the replacing write
+  63: 
+  64: 
+  65: def run(ops, at):
+  66:     put = ["put h 0x%x, 0x%04x" % (at + 2 * i, op) for i, op in enumerate(ops)]
+  67:     put += ["put h 0x%x, 0x%04x" % (at + 2 * len(ops), BRA_SELF),
+  68:             "put h 0x%x, 0x%04x" % (at + 2 * len(ops) + 2, NOP)]
+  69:     return put + ["pc=0x%x" % at, "step %d" % len(ops)]
+  70: 
+  71: 
+  72: def load32(addr, at, dest=2):
+  73:     """mov.l @r1, r<dest>, with r<dest> POISONED first."""
+  74:     return ["r1=0x%x" % addr, "r%d=0x%x" % (dest, POISON)] + \
+  75:         run([0x6002 | (1 << 4) | (dest << 8)], at) + ["print r%d" % dest]
+  76: 
+  77: 
+  78: def store32(addr, val, at):
+  79:     """mov.l r2, @r1"""
+  80:     return ["r1=0x%x" % addr, "r2=0x%08x" % val] + run([0x2122], at)
+  81: 
+  82: 
+  83: def session(cmds, settle=2.5, spin=1.2):
+  84:     pid, fd = pty.fork()
+  85:     if pid == 0:
+  86:         os.execv(BIN, [BIN, "-V", "-x", "-E", "dreamcast", "-M", "64", KERNEL])
+  87:         os._exit(127)
+  88:     buf = ""
+  89: 
+  90:     def rd(t):
+  91:         nonlocal buf
+  92:         end = time.time() + t
+  93:         while time.time() < end:
+  94:             r, _, _ = select.select([fd], [], [], 0.20)
+  95:             if not r:
+  96:                 continue
+  97:             try:
+  98:                 d = os.read(fd, 65536)
+  99:             except OSError:
+ 100:                 return False
+ 101:             if not d:
+ 102:                 return False
+ 103:             buf += d.decode("latin-1", "replace")
+ 104:         return True
+ 105: 
+ 106:     rd(settle)
+ 107:     for i, c in enumerate(cmds):
+ 108:         try:
+ 109:             os.write(fd, (c + "\n").encode("latin-1"))
+ 110:         except OSError:
+ 111:             break
+ 112:         if not rd(spin if i == len(cmds) - 1 else 0.20):
+ 113:             break
+ 114:     try:
+ 115:         os.write(fd, b"quit\n")
+ 116:         rd(0.4)
+ 117:     except OSError:
+ 118:         pass
+ 119:     try:
+ 120:         os.close(fd)
+ 121:     except OSError:
+ 122:         pass
+ 123:     how = "nostatus"
+ 124:     try:
+ 125:         _, stat = os.waitpid(pid, 0)
+ 126:         if os.WIFSIGNALED(stat):
+ 127:             how = "sig%d" % os.WTERMSIG(stat)
+ 128:         elif os.WIFEXITED(stat):
+ 129:             how = "exit%d" % os.WEXITSTATUS(stat)
+ 130:     except OSError:
+ 131:         pass
+ 132:     return buf, how
+ 133: 
+ 134: 
+ 135: def printed(t, reg, nth=-1):
+ 136:     m = re.findall(r"print\s+%s\s*\r?\n\s*(0x[0-9a-f]+)" % reg, t)
+ 137:     return m[nth] if len(m) >= (nth + 1 if nth >= 0 else 1) else "absent"
+ 138: 
+ 139: 
+ 140: def hx(v):
+ 141:     if isinstance(v, int):
+ 142:         return "0x%x" % v
+ 143:     if isinstance(v, str) and v.startswith("0x"):
+ 144:         try:
+ 145:             return "0x%x" % int(v, 16)
+ 146:         except ValueError:
+ 147:             return v
+ 148:     return str(v)
+ 149: 
+ 150: 
+ 151: rows = []
+ 152: 
+ 153: 
+ 154: def row(name, got, want, note=""):
+ 155:     g, w = hx(got), hx(want)
+ 156:     ok = (g == w)
+ 157:     rows.append((name, ok))
+ 158:     print("%-18s %-14s %-14s %-44s %s" % (name, g, w, note, "ok" if ok else "FAIL"))
+ 159:     sys.stdout.flush()
+ 160: 
+ 161: 
+ 162: #  The READ sessions: every one of them must be silent -- no `dreamcast_maple' text at all.  A write to MAPLE_DMAADDR
+ 163: #  prints nothing (its debug() is commented out) and a MAPLE_RESET2 read is quiet, so ANY maple output in these
+ 164: #  sessions is the read speaking.  Keyed on the channel, never on one literal string (Fable pass 1: the literal form
+ 165: #  is vacuous by construction against a reworded or latched announce).
+ 166: READS = []
+ 167: 
+ 168: 
+ 169: def rsession(cmds):
+ 170:     t, how = session(cmds)
+ 171:     READS.append((t, how))
+ 172:     return t, how
+ 173: 
+ 174: 
+ 175: print("MAPLE_DMAADDR DETECTOR -- rung 3, unmodified -E dreamcast   binary=%s  label=%s" % (BIN, LABEL))
+ 176: print("%-18s %-14s %-14s %-44s %s" % ("row", "got", "want", "note", ""))
+ 177: 
+ 178: # -- controls ------------------------------------------------------------------------------------------------------
+ 179: t, how = session(["put w 0x8c001800, 0x12345678"] + load32(0x8c001800, CODE))
+ 180: row("ctrl live", printed(t, "r2"), 0x12345678, "RAM round trip through the same apparatus")
+ 181: t, how = session(load32(0xffd00010, CODE))
+ 182: g = printed(t, "r2")
+ 183: row("ctrl devsig sh4", ("0x%x" % (int(g, 16) & 0xffff)) if g.startswith("0x") else g, 0xda74,
+ 184:     "SH4 IPRD reset value: a device, not RAM")
+ 185: t, how = session(store32(MAPLE_SPEED, 0x12345678, CODE) + load32(MAPLE_SPEED, CODE + 0x20))
+ 186: row("ctrl devsig maple", printed(t, "r2"), 0x12340000, "MAPLE_SPEED shifts/masks: this device decodes")
+ 187: 
+ 188: # -- the accept cell, FLOOR: poisoned destination, high and low-five bits ------------------------------------------
+ 189: t, how = rsession(store32(MAPLE_DMAADDR, VAL_A, CODE) + load32(MAPLE_DMAADDR, CODE + 0x20))
+ 190: row("read val_a", printed(t, "r2"), VAL_A, "high + low bits; destination poisoned")
+ 191: t, how = rsession(store32(MAPLE_DMAADDR, VAL_B, CODE) + load32(MAPLE_DMAADDR, CODE + 0x20))
+ 192: row("read val_b", printed(t, "r2"), VAL_B, "low five bits all set")
+ 193: 
+ 194: # -- the dominating-predicate complement, FLOOR: a hoisted read would answer RESET2 with the field ------------------
+ 195: t, how = rsession(store32(MAPLE_DMAADDR, VAL_A, CODE) + load32(MAPLE_RESET2, CODE + 0x20))
+ 196: row("other read", printed(t, "r2"), 0x0, "RESET2 reads 0 with the field nonzero")
+ 197: 
+ 198: # -- survival + exit status, FLOOR: the exit(1) half -----------------------------------------------------------------
+ 199: cmds = ["put w 0x%x, 0x0" % MARKER, "r1=0x%x" % MAPLE_DMAADDR, "r2=0x%x" % POISON,
+ 200:         "r3=0x55aa55aa", "r4=0x%x" % MARKER] + run([0x6212, 0x2432], CODE) + load32(MARKER, CODE + 0x20, dest=5)
+ 201: t, how = rsession(cmds)
+ 202: row("marker survive", printed(t, "r5"), 0x55aa55aa, "the store after the read executes")
+ 203: row("exit status", how, "exit0", "the session ends by `quit'")
+ 204: 
+ 205: # -- clause (e) cells, L1 (cheap, disclosed by class) ----------------------------------------------------------------
+ 206: t, how = rsession(load32(MAPLE_DMAADDR, CODE))
+ 207: row("initial zero", printed(t, "r2"), 0x0, "fresh device: field is zero")
+ 208: t, how = rsession(store32(MAPLE_DMAADDR, VAL_4, CODE) + load32(MAPLE_DMAADDR, CODE + 0x20))
+ 209: row("read four", printed(t, "r2"), VAL_4, "the value 4")
+ 210: t, how = rsession(store32(MAPLE_DMAADDR, VAL_ONES, CODE) + load32(MAPLE_DMAADDR, CODE + 0x20))
+ 211: row("read all ones", printed(t, "r2"), VAL_ONES, "every bit set")
+ 212: t, how = rsession(store32(MAPLE_DMAADDR, VAL_A, CODE) + load32(MAPLE_DMAADDR, CODE + 0x20, dest=2)
+ 213:                   + load32(MAPLE_DMAADDR, CODE + 0x40, dest=3))
+ 214: row("double read 1", printed(t, "r2"), VAL_A, "first of two reads, no write between")
+ 215: row("double read 2", printed(t, "r3"), VAL_A, "second read: the first did not clear it")
+ 216: t, how = rsession(store32(MAPLE_DMAADDR, VAL_A, CODE) + store32(MAPLE_DMAADDR, VAL_R, CODE + 0x20)
+ 217:                   + load32(MAPLE_DMAADDR, CODE + 0x40))
+ 218: row("write replace", printed(t, "r2"), VAL_R, "a second write replaces what the read reports")
+ 219: 
+ 220: # -- silence over every read session, FLOOR ---------------------------------------------------------------------------
+ 221: noisy = sum(1 for t, _ in READS if "dreamcast_maple" in t)
+ 222: row("read silent", "%d/%d" % (noisy, len(READS)), "0/%d" % 9, "maple output in read sessions (any text)")
+ 223: 
+ 224: t, how = session(["put w 0x8c001800, 0xdeadbeef"] + load32(0x8c001800, CODE))
+ 225: row("ctrl zlive", printed(t, "r2"), 0xdeadbeef, "trailing RAM round trip: the apparatus lived")
+ 226: 
+ 227: npass = sum(1 for _, ok in rows if ok)
+ 228: CONTROL_ROWS = ("ctrl live", "ctrl devsig sh4", "ctrl devsig maple", "ctrl zlive")
+ 229: st = dict(rows)
+ 230: control_ok = all(st.get(n, False) for n in CONTROL_ROWS)
+ 231: print("")
+ 232: print("SCORE %d/%d  label=%s" % (npass, len(rows), LABEL))
+ 233: print("FAILING: " + ", ".join(n for n, ok in rows if not ok))
+ 234: print("MAPLE_DMAADDR_RESULT=%d/%d" % (npass, len(rows)))
+ 235: print("MAPLE_DMAADDR_CONTROL=%s" % ("OK" if control_ok else "FAIL"))
+ 236: print("MAPLE_DMAADDR_PROBE_DONE")
+ 237: sys.stdout.flush()
+ 238: sys.exit(0 if control_ok and npass == len(rows) else 1)
+
+ succeeded in 9611ms:
+   1: /*
+   2:  *  Copyright (C) 2006-2020  Anders Gavare.  All rights reserved.
+   3:  *
+   4:  *  Redistribution and use in source and binary forms, with or without
+   5:  *  modification, are permitted provided that the following conditions are met:
+   6:  *
+   7:  *  1. Redistributions of source code must retain the above copyright
+   8:  *     notice, this list of conditions and the following disclaimer.
+   9:  *  2. Redistributions in binary form must reproduce the above copyright  
+  10:  *     notice, this list of conditions and the following disclaimer in the 
+  11:  *     documentation and/or other materials provided with the distribution.
+  12:  *  3. The name of the author may not be used to endorse or promote products
+  13:  *     derived from this software without specific prior written permission.
+  14:  *
+  15:  *  THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+  16:  *  ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+  17:  *  IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+  18:  *  ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE   
+  19:  *  FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+  20:  *  DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+  21:  *  OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+  22:  *  HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+  23:  *  LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+  24:  *  OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+  25:  *  SUCH DAMAGE.
+  26:  *   
+  27:  *
+  28:  *  COMMENT: Dreamcast Maple bus controller
+  29:  *
+  30:  *  The Maple bus has 4 ports (A-D), and each port has up to 6 possible "units"
+  31:  *  (where unit 0 is the main unit). Communication is done using DMA; each
+  32:  *  DMA transfer sends one or more requests, and for each of these requests
+  33:  *  a response is generated (or a timeout if there was no device at the
+  34:  *  specific port).
+  35:  *
+  36:  *  See Marcus Comstedt's page (http://mc.pp.se/dc/maplebus.html) for more
+  37:  *  details about the DMA request/responses.
+  38:  *
+  39:  *
+  40:  *  TODO:
+  41:  *	Unit numbers / IDs for real Maple devices.
+  42:  *	The Controller (up/down/left/right, buttons, etc).
+  43:  */
+  44: 
+  45: #include <stdio.h>
+  46: #include <stdlib.h>
+  47: #include <string.h>
+  48: #include <sys/time.h>
+  49: 
+  50: #include "console.h"
+  51: #include "cpu.h"
+  52: #include "device.h"
+  53: #include "machine.h"
+  54: #include "memory.h"
+  55: #include "misc.h"
+  56: 
+  57: #include "thirdparty/dreamcast_maple.h"
+  58: #include "thirdparty/dreamcast_sysasicvar.h"
+  59: 
+  60: 
+  61: // #define debug fatal
+  62: 
+  63: #define	N_MAPLE_PORTS		4
+  64: 
+  65: #define	MAX_CHARS		8192
+  66: #define	MAX_CONTROLLER_DATA	4096
+  67: 
+  68: #define	MAPLE_TICK_SHIFT	17
+  69: 
+  70: struct maple_device {
+  71: 	struct maple_devinfo devinfo;
+  72: };
+  73: 
+  74: struct dreamcast_maple_data {
+  75: 	/*  Registers:  */
+  76: 	uint32_t	dmaaddr;
+  77: 	int		enable;
+  78: 	int		timeout;
+  79: 
+  80: 	/*  Attached devices:  */
+  81: 	struct maple_device *device[N_MAPLE_PORTS];
+  82: 
+  83: 	/*  For keyboard/controller input:  */
+  84: 	int		console_handle;
+  85: 	uint8_t		char_queue[MAX_CHARS];
+  86: 	uint16_t	controller_queue[MAX_CONTROLLER_DATA];
+  87: 	int		char_queue_head, char_queue_tail;
+  88: 	int		controller_queue_head, controller_queue_tail;
+  89: };
+  90: 
+  91: 
+  92: /*
+  93:  *  Maple devices:
+  94:  *
+  95:  *  TODO: Figure out strings and numbers of _real_ Maple devices.
+  96:  */
+  97: struct maple_device maple_device_controller = {
+  98: 	{
+  99: 		BE32_TO_HOST(MAPLE_FUNC(MAPLE_FN_CONTROLLER)),	/*  di_func  */
+ 100: 		{ LE32_TO_HOST(0xfe060f00),0,0 },/* di_function_data[3]  */
+ 101: 		0xff,				/*  di_area_code  */
+ 102: 		0,				/*  di_connector_direction  */
+ 103: 		"Dreamcast Controller",		/*  di_product_name  */
+ 104: 		"di_product_license",		/*  di_product_license  */
+ 105: 		LE16_TO_HOST(0x01ae),		/*  di_standby_power  */
+ 106: 		LE16_TO_HOST(0x01f4)		/*  di_max_power  */
+ 107: 	}
+ 108: };
+ 109: struct maple_device maple_device_keyboard = {
+ 110: 	{
+ 111: 		BE32_TO_HOST(MAPLE_FUNC(MAPLE_FN_KEYBOARD)),/*  di_func  */
+ 112: 		{ LE32_TO_HOST(2),0,0 },	/*  di_function_data[3]  */
+ 113: 		0xff,				/*  di_area_code  */
+ 114: 		0,				/*  di_connector_direction  */
+ 115: 		"Keyboard",			/*  di_product_name  */
+ 116: 		"di_product_license",		/*  di_product_license  */
+ 117: 		LE16_TO_HOST(100),		/*  di_standby_power  */
+ 118: 		LE16_TO_HOST(100)		/*  di_max_power  */
+ 119: 	}
+ 120: };
+ 121: struct maple_device maple_device_mouse = {
+ 122: 	{
+ 123: 		BE32_TO_HOST(MAPLE_FUNC(MAPLE_FN_MOUSE)),/*  di_func  */
+ 124: 		{ LE32_TO_HOST(0xfe060f00),0,0 },/* di_function_data[3]  */
+ 125: 		0xff,				/*  di_area_code  */
+ 126: 		0,				/*  di_connector_direction  */
+ 127: 		"Dreamcast Mouse",		/*  di_product_name  */
+ 128: 		"di_product_license",		/*  di_product_license  */
+ 129: 		LE16_TO_HOST(0x0069),		/*  di_standby_power  */
+ 130: 		LE16_TO_HOST(0x0120)		/*  di_max_power  */
+ 131: 	}
+ 132: };
+ 133: 
+ 134: 
+ 135: DEVICE_TICK(maple)
+ 136: {
+ 137: 	struct dreamcast_maple_data *d = (struct dreamcast_maple_data *) extra;
+ 138: 	int key;
+ 139: 
+ 140: 	while ((key = console_readchar(d->console_handle)) >= 0) {
+ 141: 		/*  Add to the keyboard queue:  */
+ 142: 		d->char_queue[d->char_queue_head] = key;
+ 143: 		d->char_queue_head = (d->char_queue_head + 1) % MAX_CHARS;
+ 144: 		if (d->char_queue_head == d->char_queue_tail)
+ 145: 			fatal("[ dreamcast_maple: KEYBOARD QUEUE OVERRUN! ]\n");
+ 146: 
+ 147: 		/*
+ 148: 		 *  NOTE/TODO:
+ 149: 		 *
+ 150: 		 *  Implement the controller in a reasonable way!
+ 151: 		 *  Theoretically, there are all of these buttons: ABCD XYZ Start
+ 152: 		 *  and two digital pads, two analog joysticks, and two
+ 153: 		 *  analog fire buttons (left and right).
+ 154: 		 */
+ 155: 
+ 500: 					    receive_addr + 4 + i, (unsigned
+ 501: 					    char *) di + i, 1, MEM_WRITE,
+ 502: 					    NO_EXCEPTIONS | PHYSICAL);
+ 503: 			}
+ 504: 			break;
+ 505: 
+ 506: 		case MAPLE_COMMAND_GETCOND:
+ 507: 			cpu->memory_rw(cpu, cpu->mem, addr, (unsigned char *) (void *) &buf, 4,
+ 508: 			    MEM_READ, NO_EXCEPTIONS | PHYSICAL);
+ 509: 			cond = buf[3] + (buf[2] << 8) + (buf[1] << 16)
+ 510: 			    + (buf[0] << 24);
+ 511: 			if (cond & MAPLE_FUNC(MAPLE_FN_CONTROLLER)) {
+ 512: 				maple_getcond_controller_response(
+ 513: 				    d, cpu, port, receive_addr);
+ 514: 			} else if (cond & MAPLE_FUNC(MAPLE_FN_KEYBOARD)) {
+ 515: 				maple_getcond_keyboard_response(
+ 516: 				    d, cpu, port, receive_addr);
+ 517: 			} else {
+ 518: 				fatal("[ dreamcast_maple: WARNING: GETCOND: "
+ 519: 				    "UNIMPLEMENTED 0x%08" PRIx32" ]\n", cond);
+ 520: 				exit(1);
+ 521: 			}
+ 522: 			break;
+ 523: 
+ 524: 		case MAPLE_COMMAND_BWRITE:
+ 525: 			fatal("[ dreamcast_maple: BWRITE: TODO ]\n");
+ 526: 			break;
+ 527: 
+ 528: 		default:fatal("[ dreamcast_maple: command %i: TODO ]\n", cmd);
+ 529: 			exit(1);
+ 530: 		}
+ 531: 
+ 532: 		addr += datalen_cmd * 4;
+ 533: 
+ 534: 		/*  Last request? Then stop.  */
+ 535: 		if (last_message)
+ 536: 			break;
+ 537: 	}
+ 538: 
+ 539: 	// TODO: Should the DMA address be updated?
+ 540: 	d->dmaaddr = addr;
+ 541: 
+ 542: 	/*  Assert the SYSASIC_EVENT_MAPLE_DMADONE event:  */
+ 543: 	SYSASIC_TRIGGER_EVENT(SYSASIC_EVENT_MAPLE_DMADONE);
+ 544: }
+ 545: 
+ 546: 
+ 547: DEVICE_ACCESS(dreamcast_maple)
+ 548: {
+ 549: 	struct dreamcast_maple_data *d = (struct dreamcast_maple_data *) extra;
+ 550: 	uint64_t idata = 0, odata = 0;
+ 551: 
+ 552: 	if (writeflag == MEM_WRITE)
+ 553: 		idata = memory_readmax64(cpu, data, len);
+ 554: 
+ 555: 	switch (relative_addr) {
+ 556: 
+ 557: 	case 0x04:	/*  MAPLE_DMAADDR  */
+ 558: 		if (writeflag == MEM_WRITE) {
+ 559: 			d->dmaaddr = idata;
+ 560: 			/* debug("[ dreamcast_maple: dmaaddr set to 0x%08x"
+ 561: 			    " ]\n", d->dmaaddr);  */
+ 562: 		} else {
+ 563: 			/*  #528: answered like MAPLE_ENABLE's read -- the field is
+ 564: 			    the one the write arm stores and maple_do_dma_xfer()
+ 565: 			    consumes -- with no diagnostic and no exit.  This read
+ 566: 			    used to compute the value and then end the emulator.  */
+ 567: 			odata = d->dmaaddr;
+ 568: 		}
+ 569: 		break;
+ 570: 
+ 571: 	case 0x10:	/*  MAPLE_RESET2  */
+ 572: 		if (writeflag == MEM_WRITE && idata != 0)
+ 573: 			fatal("[ dreamcast_maple: UNIMPLEMENTED reset2 value"
+ 574: 			    " 0x%08x ]\n", (int)idata);
+ 575: 		break;
+ 576: 
+ 577: 	case 0x14:	/*  MAPLE_ENABLE  */
+ 578: 		if (writeflag == MEM_WRITE)
+ 579: 			d->enable = idata;
+ 580: 		else
+ 581: 			odata = d->enable;
+ 582: 		break;
+ 583: 
+ 584: 	case 0x18:	/*  MAPLE_STATE  */
+ 585: 		if (writeflag == MEM_WRITE) {
+ 586: 			switch (idata) {
+ 587: 			case 0:	break;
+ 588: 			case 1:	maple_do_dma_xfer(cpu, d);
+ 589: 				break;
+ 590: 			default:fatal("[ dreamcast_maple: UNIMPLEMENTED "
+ 591: 				    "state value %i ]\n", (int)idata);
+ 592: 			}
+ 593: 		} else {
+ 594: 			/*  Always return 0 to indicate DMA xfer complete.  */
+ 595: 			odata = 0;
+ 596: 		}
+ 597: 		break;
+ 598: 
+ 599: 	case 0x80:	/*  MAPLE_SPEED  */
+ 600: 		if (writeflag == MEM_WRITE) {
+ 601: 			d->timeout = (idata >> 16) & 0xffff;
+ 602: 			/*  TODO: Bits 8..9 are "speed", but only the value
+ 603: 			    0 (indicating 2 Mbit/s) should be used.  */
+ 604: 			debug("[ dreamcast_maple: timeout set to %i ]\n",
+ 605: 			    d->timeout);
+ 606: 		} else {
+ 607: 			odata = d->timeout << 16;
+ 608: 		}
+ 609: 		break;
+ 610: 
+ 611: 	case 0x8c:	/*  MAPLE_RESET  */
+ 612: 		if (writeflag == MEM_WRITE) {
+ 613: 			if (idata != 0x6155404f && idata != 0x61557f00)
+ 614: 				fatal("[ dreamcast_maple: UNIMPLEMENTED reset "
+ 615: 				    "value 0x%08x ]\n", (int)idata);
+ 616: 			d->enable = 0;
+ 617: 		}
+ 618: 		break;
+ 619: 
+ 620: 	case 0xe8:	/*  UNKNOWN_0xe8  */
+ 621: 		if (writeflag == MEM_WRITE) {
+ 622: 			// The Dreamcast PROM writes 1 here.
+ 623: 			if (idata != 1) {
+ 624: 				fatal("[ dreamcast_maple: UNIMPLEMENTED 0xe8 "
+ 625: 				    "value 0x%08x ]\n", (int)idata);
+ 626: 			}
+ 627: 		}
+ 628: 		break;
+ 629: 
+ 630: 	default:if (writeflag == MEM_READ) {
+ 631: 			fatal("[ dreamcast_maple: UNIMPLEMENTED read from "
+ 632: 			    "addr 0x%x ]\n", (int)relative_addr);
+ 633: 		} else {
+ 634: 			fatal("[ dreamcast_maple: UNIMPLEMENTED write to addr "
+ 635: 			    "0x%x: 0x%x ]\n", (int)relative_addr, (int)idata);
+ 636: 		}
+ 637: 	}
+ 638: 
+ 639: 	if (writeflag == MEM_READ)
+ 640: 		memory_writemax64(cpu, data, len, odata);
+ 641: 
+ 642: 	return 1;
+ 643: }
+ 644: 
+ 645: 
+ 646: DEVINIT(dreamcast_maple)
+ 647: {
+ 648: 	struct dreamcast_maple_data *d;
+ 649: 
+ 650: 	CHECK_ALLOCATION(d = (struct dreamcast_maple_data *) malloc(sizeof(struct dreamcast_maple_data)));
+ 651: 	memset(d, 0, sizeof(struct dreamcast_maple_data));
+ 652: 
+ 653: 	memory_device_register(devinit->machine->memory, devinit->name,
+ 654: 	    0x5f6c00, 0x100, dev_dreamcast_maple_access, d, DM_DEFAULT, NULL);
+ 655: 
+ 656: 	/*  Devices connected to port A..D:  */
+ 657: 	d->device[0] = &maple_device_controller;
+ 658: 	d->device[1] = NULL;
+ 659: 	d->device[2] = &maple_device_keyboard;
+ 660: 	d->device[3] = NULL;	/*  TODO:  &maple_device_mouse;  */
+ 661: 
+ 662: 	d->console_handle = console_start_slave_inputonly(
+ 663: 	    devinit->machine, "maple", 1);
+ 664: 	devinit->machine->main_console_handle = d->console_handle;
+ 665: 
+ 666: 	machine_add_tickfunction(devinit->machine, dev_maple_tick, d,
+ 667: 	    MAPLE_TICK_SHIFT);
+ 668: 
+ 669: 	return 1;
+ 670: }
+ 671: 
+FABLE_MAPLE_P1_20260912 �?" Fable 5.1 (claude-fable-5-1)
+`# CHECKPOINT -- 2026-09-12 ~12:4x   HEAD 7457c04 (records)`
+
+(Verbatim answer of the flagship adjudicating seat on the `mapledmaaddr` pass-1 design review, fired LAST on
+2026-09-12 as an Agent-tool subagent pinned to `model: fable`, after the seven scriptable seats
+(`panel_20260912_123520_maplepass1/`), the Opus seat (`opus_pass1_20260912.md`) and agy's measurement (the witness).
+Saved here because an Agent seat leaves no file in a panel dir.)
+
+**VERDICT: ACCEPT upheld, 9/9 by argument as well as by count. The FAULT member is UNAVAILABLE on SH4 and its idiom is a silent load-skip �?" that goes into the CHANGELOG *and* corrects the carrier's member-5 clause. Floor = (a)(b)(c) + the accept cell with a POISONED destination + silence over the whole read interval + `other read` (the dominating-predicate complement); everything keyed on a `dmaaddr` value �?" zero, `== 0x04`, all-ones, the read-to-clear double read �?" is clause (e), taken as L1 because cheap, never graded floor. The DMA leg is NOT floor: it kills only a new lvalue outside the BOUND; defer it to `mapledmaadvance` with a no-row sentence, or if shipped here, L1 with the refusal-message `E` as its only admissible oracle. The agy witness is ADMISSIBLE as the rung-3 test-first witness (4/12 �+' 12/12, same script, both controls), but its `read quiet` row is CHANNEL-invalid and must not be carried into the detector unchanged.** Evidence basis: 7/7 scriptable seats, Opus, and agy (fired for measurement, not reading). I read the tree; built nothing.
+
+**Q1 �?" ACCEPT, upheld.** Carrier member 4: *"the model ALREADY computes the right value and then discards it. Delete the kill, keep the value, NO latch."* Four independent grounds converge: the field is consumed by the model itself (`:382` reads it at DMA entry), the siblings are quiet (`:578-579`, `:605`), no Holly document exists locally (`ls _scratchpad/*.pdf` �?" kimi's "false as worded" is right and immaterial: SH7750 manuals do not cover the Holly ASIC) and Comstedt documents write semantics only, so IMPLEMENT/BACKED have no warrant under the addition licence. Sketch rule: `break` into the common tail, never `return` (grok). Premise 2 is settled, not open: `MEM_READ=0`/`MEM_WRITE=1`, no third-value caller (Opus scanned 279 sites; grok, codex, kimi concur) �?" deepseek's `else if (writeflag == MEM_READ)` "wrong fix" is EQUIVALENT and gets a disclosure, not a row. Two packet-fed readings are wrong on this tree and were honestly flagged as uncheckable: deepseek's "the value is never computed" (`fatal()` returns; `odata = d->dmaaddr` runs before `exit(1)`) and minimax's "stock `fatal()` exits" (`debugmsg.c:384-390`, no early-out). **FAULT must go into the record, twice.** I verified `memory_rw.c` carries `#ifdef MEM_MIPS` (`:608`) and `#ifdef MEM_M88K` (`:614`) and no `MEM_SH`; Opus's `cpu_sh_instr.c` reading shows `return 0` leaves Rn untouched and continues �?" worse than DECLINE. The carrier's member-5 clause says *"There is no Alpha equivalent"*; it now owes *"nor SH, where the idiom silently skips the load"* �?" structure-first, in the option-set clause where the next round chooses.
+
+**Q2 �?" row list, under my xscaleinten Q1 rule** (*"the floor is clause (b) verbatim reinstatement plus the dominating predicates' accept cell; every re-introduction keyed on a body-read operand the body does not test (`rd == k`, `field & bit`, `field == v`) is clause (e), disclosed BY CLASS; any row added for one is L1 �?" licensed because cheap, never graded floor because cheap"*). The body `odata = d->dmaaddr;` tests nothing; dominating predicates `relative_addr == 0x04`, `writeflag != MEM_WRITE`.
+- **Poisoned destinations (Opus E-a): FLOOR, as the CHANNEL validity of the accept row itself**, not a separate row �?" a value row whose Rn already holds the expected value cannot vary under `return 0`. Likewise the high-bit/low-five values are the accept row done properly (an aligned value cannot vary under `& ~0x1f`); all-ones is L1 and pins every single-bit-SET predicate by class (Opus W4, my F2 correction this morning).
+- **Silence over the whole read interval: FLOOR.** Two statements were removed; clause (b) reinstatement of the `fatal()` alone is a (b) mutant, and a row keyed to the literal `TODO` string has a channel that cannot vary under a reworded announce (codex W2, Opus E-b, grok) �?" so the literal form is VACUOUS BY CONSTRUCTION. Survival marker + exit status carry the `exit(1)` half.
+- **`other read` `R(0x10)==0` (the hoist): FLOOR.** The hoist deletes the dominating predicate `relative_addr == 0x04` from the assignment �?" clause (d) in its purest form, a predicate weakened to `true`. The JOIN ruling does not apply (`relative_addr` flows into nothing the body reads), but the complement cell of a dominating predicate is inside the cross-product. Both prior designs had it; the brief dropped it.
+- **Double read, no write between (glm, Opus): clause (e), L1.** Read-to-clear ADDS a store to a state lvalue; it is neither a predicate weakening nor an operand swap. One extra load �?" take it, and the contract states "reads have no side effect".
+- **Zero cell, replacement write: (e)/L1.** Zero is `field == v`; replacement pins the unedited write arm against a snapshot that is a new lvalue (outside BOUND clause 2).
+- **codex's `d->dmaaddr == 0x04`: clause (e), the `idata == k` shape �?" NOT floor.** This is `rd == 0` with the constant inherited from `relative_addr == 0x04` by coincidence, exactly the reading I overturned this morning: *"floor membership [would] depend on which constant the sibling dispatch happened to carry."* `d->dmaaddr` is a state lvalue, which `rd` was not �?" but the body tests no partition of it, so its partition is one class and `== 0x04` is `field == v` by the rule's own text. Codex's "reuses existing constants, not arbitrary sweeps" is the coincidence argument restated. A value-4 row costs one write; take it as L1 if wanted; disclose `== k` by class.
+
+**Q3 �?" DMA leg: not floor; deferred, or L1 with a stated oracle.** glm/deepseek/ollama-kimi argue "only leg that kills the shadow" �?" that grades by mutant, not by enumeration. The shadow requires a new lvalue the body does not read; DEPENDS-ON clause (2) draws swaps *"ONLY from fields the guarded BODY reads"*, and the enumeration is diff-closed precisely so a plausible wrong fix outside it is coverage debt, not breach (this is #447's escapes, not #448's). Opus and codex are right on the rule. kimi CLI is right on mechanism and it decides the disposition: an expected value from the read under test is circular; `P+12` certifies the cursor arithmetic `mapledmaadvance` exists to question; the only admissible oracle is the refusal message printing `addr` copied from `d->dmaaddr` at `:382` �?" an observation of the FIELD, not of the arithmetic �?" with DEVINFO signatures in verified pre-filled buffers as transfer evidence and `E2 != E1`. **Ruling:** the brief's "recorded consequence" sentence (*"including a post-DMA cursor"*) is a CLAIM�+'ROW trigger; write the explicit no-row sentence and ship the leg with the cursor row, whose observation channel is this very read arm �?" load-bearing there, and buildable only after this fix lands. If the round ships it anyway, it is L1 under the RETRY spec verbatim; never a floor claim.
+
+**Q4 �?" missed, and the witness.** (1) The agy witness is ADMISSIBLE: unmodified `-E dreamcast`, guest `mov.l` through decode, same script red (4/12, every subject row `absent`/`exit1`) and green (12/12); liveness (`ctrl live`/`ctrl zlive` RAM round trips) and device signature (`ctrl devsig maple`: SPEED returns `0x12340000` for `0x12345678` �?" RAM cannot produce that mask); destinations seeded `0xdead`, so it is valid against `return 0`. The landisk ramdisk argument is inert (cold debugger, `pc=` set). Outputs are at durable paths; the report names `fix.diff` �?" verify it exists before any record cites it. (2) **What no seat could see, because it was built concurrently:** the witness's `read quiet` row keys on the literal `TODO` string �?" the exact CHANNEL defect three seats condemned in the brief �?" and it lacks `other read`, all-ones and the double read. It is the WITNESS; the detector must not inherit it unchanged. (3) Opus's re-entrancy finding (`NO_EXCEPTIONS` + `DM_DEFAULT` �+' a descriptor at `0x5f6c04` is skipped) settles the earlier readarm caveat; record it, and record that `dump`/`put` never reach this handler. (4) Contract discloses: 32-bit reads only; `dmaaddr == k` by class; cursor policy not certified.
+
+codex
+The silence check still matches the literal substring `dreamcast_maple`; the measured rewording kept that substring. I’m checking whether removing the prefix qualifies under the requested enumeration, and whether any width difference is observable through this SH4 access path.
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n 'DEPENDS.ON|clause .d.|\\(d\\)|guarded BODY|operand.swap|dominat|BOUND' tools/CLAUDE.md tools/BRIEF_TEMPLATE.md tools/PIPELINE.md regress/README* README*; rg --files src | rg 'memory(_rw)?\\.c"'$|cpu_sh(_instr|_loadstore)?|debugmsg'"\\.c"'$|dreamcast.*'"\\.c"'$'"'; Get-Content -LiteralPath src/devices/dev_dreamcast_maple.c | Select-Object -Skip 544 -First 60" in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -LiteralPath regress/artifacts/mapledmaaddr/killtable_20260912/mut_maple.py; Get-Content -LiteralPath regress/artifacts/mapledmaaddr/killtable_20260912/SCORES.txt; Get-Content -LiteralPath regress/artifacts/mapledmaaddr/killtable_20260912/probe_M_REWORD.raw; Get-Content -LiteralPath regress/artifacts/mapledmaaddr/killtable_20260912/probe_M_EXITONLY.raw; Get-Content -LiteralPath regress/artifacts/mapledmaaddr/killtable_20260912/probe_M_RET0.raw; Get-FileHash -LiteralPath regress/maple_dmaaddr_probe.py,regress/artifacts/mapledmaaddr/killtable_20260912/maple_dmaaddr_probe.FROZEN.py -Algorithm SHA256' in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n 'memory_writemax64|memory_rw\\(' src/cpus/cpu_sh* src/memory; rg -n 'void fatal|fatal\\(|verbose|quiet_mode' src/core/debugmsg.c; Get-Command python,python3,wsl,gcc,clang -ErrorAction SilentlyContinue | Select-Object Name,Source" in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+ exited 1 in 3909ms:
+rg: src/cpus/cpu_sh*: The filename, directory name, or volume label syntax is incorrect. (os error 123)
+rg: src/memory: The system cannot find the file specified. (os error 2)
+56: *	Convert existing debug() and fatal() calls to the new debugmsg() call.
+75:int verbose = 0;
+76:int quiet_mode = 0;
+116: *  Used internally by the old debug() and fatal() functions.
+174:			fatal("[ subsystem breakpoint: %s ]\n",
+342: *  This affects both the older debug() and fatal() functions, and the new
+357: *  debug() and fatal():
+361: *  at the default level, and fatal() is used to always print stuff. With some
+369:	int v = verbose;
+375:	if ((quiet_mode && !ss) || v < 0)
+384:void fatal(const char *fmt, ...)
+
+Name        Source                                                            
+----        ------                                                            
+python.exe  C:\Users\User00\AppData\Local\Programs\Python\Python312\python.exe
+python3.exe C:\Users\User00\AppData\Local\Microsoft\WindowsApps\python3.exe   
+wsl.exe     C:\WINDOWS\system32\wsl.exe                                       
+
+
+
+ succeeded in 4398ms:
+rg: regress/README*: The filename, directory name, or volume label syntax is incorrect. (os error 123)
+rg: README*: The filename, directory name, or volume label syntax is incorrect. (os error 123)
+tools/CLAUDE.md:47:   > > **THE TWO-PART CLEARANCE IS A ROUND-BOUNDARY OBLIGATION, NOT A MUTATION-RESTORE
+tools/CLAUDE.md:1287:> ### *** CLAUSE (d) — NULL-REPAIR RED. Adopted 2026-08-23 by OWNER RULING, on the round
+tools/CLAUDE.md:1290:> **(d) The detector must also fail when the fix is PRESENT but its REPAIR IS NULLED —
+tools/CLAUDE.md:1293:> **(b) DOES NOT IMPLY (d), and #461 measured both in the same hour on the same detector:**
+tools/CLAUDE.md:1298:> | `m_align1` | (d): keep the guard, weaken `& 3` to `& 1` | **27/27 — ESCAPED** |
+tools/CLAUDE.md:1301:> re-opened the very defect the round had just closed. (b) restores the DEFECT; (d) neuters
+tools/CLAUDE.md:1303:> different sites: (b) fails where the old code was, (d) fails where the new code is.
+tools/CLAUDE.md:1305:> **HOW TO BUILD THE (d) MUTANT — and it is the same discriminator the accept-row rule
+tools/CLAUDE.md:1306:> already uses.** Take each predicate the fix **DEPENDS ON** and weaken it to the
+tools/CLAUDE.md:1309:> a bound relaxed. **Not deletion** — deletion is (b) wearing (d)'s clothes and is usually
+tools/CLAUDE.md:1315:> A row written from the FIX's intent tests the intent, not the boundary — so (d)'s mutant
+tools/CLAUDE.md:1323:> ### QUEUE, AND NOBODY NOTICED FOR THREE ROUNDS. Corrected 2026-08-24 -- clause (d) now
+tools/CLAUDE.md:1324:> ### reads DEPENDS ON, not INTRODUCED. ***
+tools/CLAUDE.md:1326:> Clause (d) says *keep the guard, null its repair*. As written it enumerated only
+tools/CLAUDE.md:1333:> So for those rounds clause (d) enumerated **nothing**, and a round could satisfy the
+tools/CLAUDE.md:1334:> floor while having built no (d) mutant whatever. `#461` measured (d) successfully only
+tools/CLAUDE.md:1337:> **Reading it as DEPENDS ON fixes both cases at once**, and it is why this now replaces a
+tools/CLAUDE.md:1344:> * **fix adds none** -> the (d) mutant reroutes an EXISTING guard's repair. For a
+tools/CLAUDE.md:1345:>   de-fatalisation: **swap the guard's operand for a field the guarded BODY reads.**
+tools/CLAUDE.md:1347:>   -- not the same one widened, which is (b) wearing (d)'s clothes.
+tools/CLAUDE.md:1355:> under DEPENDS ON it is a **floor breach, L2, fix in-round** -- which is what the round
+tools/CLAUDE.md:1358:> #### *** THE BOUND, and it is not optional: "DEPENDS ON" INVITES TRANSITIVE DATA-FLOW
+tools/CLAUDE.md:1362:> > **DEPENDS ON enumerates exactly two things: (1) the predicates DOMINATING the diff's
+tools/CLAUDE.md:1363:> > edited lines, walked up only to the ENCLOSING FUNCTION BOUNDARY -- never into callees
+tools/CLAUDE.md:1364:> > or callers; and (2) for operand-swap forms, swaps drawn ONLY from fields the guarded
+tools/CLAUDE.md:1368:> measured case**: the `d->data == NULL` guard dominates the edited decline (clause 1), and
+tools/CLAUDE.md:1378:> > **DEPENDS-ON enumerates JOINT cells over the guard's operands and the body-read lvalues EXACTLY
+tools/CLAUDE.md:1423:> #### *** THE LETTER OVER-DEMANDED, AND ITS OWN AUTHOR BOUNDED IT ONE PASS LATER (pass 11, 2026-09-04). ***
+tools/CLAUDE.md:1432:> > is OWED for -- is the cross-product of the guard's dominating predicates with the device-STATE lvalues
+tools/CLAUDE.md:1532:> > two clause-(d) floor breaches that the round's own artifact had predicted and specified.
+tools/CLAUDE.md:1609:> | **GUARD FIELD vs BODY FIELD** | list fields the PREDICATE reads and fields the guarded BODY reads; where they differ, grep whether they are written at the same sites. If not, the detector owes a state where they DISAGREE | the guard's operand swapped for a field whose third state no row built |
+tools/CLAUDE.md:1638:> #### AND THE OBVIOUS GENERALISATION IS UNBOUNDED, SO IT IS NOT THE ONE ADOPTED
+tools/CLAUDE.md:1645:>   the floor clauses, the (d) DEPENDS-ON closure, one accept row per conditioned predicate,
+tools/CLAUDE.md:1653:> > WITHOUT BOUND.**  That is the stop condition, and it is structural rather than a cap: the
+tools/CLAUDE.md:1677:> That is deliberate and it is the whole point: an escaped (d) mutant means the round's
+tools/CLAUDE.md:1705:> > **AN ACCEPT ROW WRITTEN AT A WINDOW'S BASE TESTS THE NEAR BOUND TWICE AND THE FAR BOUND
+tools/CLAUDE.md:1709:> > #### BOUNDS ARE LOAD-BEARING" -- IS MEASURED **FALSE**, and it was falsified the same day
+tools/CLAUDE.md:1883:> the fork's own answer was BOUND THE COUNT, KEEP THE MESSAGE.
+tools/CLAUDE.md:1892:> > **1 DELETE  ·  2 DECLINE (silent)  ·  3 DECLINE + BOUNDED (LATCHED) ANNOUNCE  ·
+tools/CLAUDE.md:2292:> > `if (X)` -> `if (X && Y)` on the DOMINATING predicate — the canonical clause-(d) form, i.e.
+tools/CLAUDE.md:2474:> > FLOOR QUESTION -- does a clean-sweep mutant exist in the (d) enumeration -- is asked of the
+tools/CLAUDE.md:2477:> #### THE BOUND IS IMPORTED, NOT INTRINSIC -- state the dependency or the rule overclaims
+tools/CLAUDE.md:2480:> **the (d) DEPENDS-ON enumeration being diff-closed and finite**, and from *zero breaches*
+tools/CLAUDE.md:2734:### *** A SIXTH TERM, `detector:<path>` -- OWNER DECISION 2026-08-27, WITH A BOUND THAT IS
+tools/CLAUDE.md:2750:> **THE BOUND: `detector:` IS NOT A RUNG.** It records that a fix shipped with a MEASURED
+tools/BRIEF_TEMPLATE.md:250:| 1 | the clause-(d) flow test | `tlb_mode` -> `tileptr` | **stopped at the ARRAY, never reached the INDEX** `tile_nr` | six measured escapes; a round re-opened after it was ready to close |
+tools/BRIEF_TEMPLATE.md:608:> | a mutant for the kill table | *"what is the smallest edit that still compiles and gets this wrong?"* | *"Here are four candidate weakenings: (a) ... (b) ... (c) ... (d) ....  For each, say whether it is EQUIVALENT to the shipped form or produces a different result, and at which input the two first differ."* |
+tools/BRIEF_TEMPLATE.md:613:> that makes this cheap rather than a concession: an answer saying *(b) and (d) are non-equivalent and
+src\cpus\cpu_sh_instr.c
+src\cpus\cpu_sh.c
+src\include\cpu_sh.h
+
+
+DEVICE_ACCESS(dreamcast_maple)
+{
+	struct dreamcast_maple_data *d = (struct dreamcast_maple_data *) extra;
+	uint64_t idata = 0, odata = 0;
+
+	if (writeflag == MEM_WRITE)
+		idata = memory_readmax64(cpu, data, len);
+
+	switch (relative_addr) {
+
+	case 0x04:	/*  MAPLE_DMAADDR  */
+		if (writeflag == MEM_WRITE) {
+			d->dmaaddr = idata;
+			/* debug("[ dreamcast_maple: dmaaddr set to 0x%08x"
+			    " ]\n", d->dmaaddr);  */
+		} else {
+			/*  #528: answered like MAPLE_ENABLE's read -- the field is
+			    the one the write arm stores and maple_do_dma_xfer()
+			    consumes -- with no diagnostic and no exit.  This read
+			    used to compute the value and then end the emulator.  */
+			odata = d->dmaaddr;
+		}
+		break;
+
+	case 0x10:	/*  MAPLE_RESET2  */
+		if (writeflag == MEM_WRITE && idata != 0)
+			fatal("[ dreamcast_maple: UNIMPLEMENTED reset2 value"
+			    " 0x%08x ]\n", (int)idata);
+		break;
+
+	case 0x14:	/*  MAPLE_ENABLE  */
+		if (writeflag == MEM_WRITE)
+			d->enable = idata;
+		else
+			odata = d->enable;
+		break;
+
+	case 0x18:	/*  MAPLE_STATE  */
+		if (writeflag == MEM_WRITE) {
+			switch (idata) {
+			case 0:	break;
+			case 1:	maple_do_dma_xfer(cpu, d);
+				break;
+			default:fatal("[ dreamcast_maple: UNIMPLEMENTED "
+				    "state value %i ]\n", (int)idata);
+			}
+		} else {
+			/*  Always return 0 to indicate DMA xfer complete.  */
+			odata = 0;
+		}
+		break;
+
+	case 0x80:	/*  MAPLE_SPEED  */
+		if (writeflag == MEM_WRITE) {
+			d->timeout = (idata >> 16) & 0xffff;
+			/*  TODO: Bits 8..9 are "speed", but only the value
+			    0 (indicating 2 Mbit/s) should be used.  */
+			debug("[ dreamcast_maple: timeout set to %i ]\n",
+
+ succeeded in 4957ms:
+#!/usr/bin/env python3
+"""mapledmaaddr (#528) kill-table mutator.  usage: mut_maple.py <SEC dev_dreamcast_maple.c> <out> <LEG>
+
+Every leg edits the FIXED read arm (or, for M_HOIST, the declaration above the switch).  Each find-text must occur
+EXACTLY ONCE or the leg is REFUSED, so a find-text doubles as a presence pin.  HEAD is not built here -- the driver
+takes it from `git show HEAD:`.
+"""
+import io, sys
+
+ASSIGN = "\t\t\todata = d->dmaaddr;\n"
+DECL = "\tuint64_t idata = 0, odata = 0;\n"
+T = "\t\t\t"
+
+LEGS = {
+ # the diagnostic reinstated, verbatim / reworded / latched (house idiom), with no exit: the silence row's legs
+ "M_KEEPFATAL": (ASSIGN, T + "fatal(\"[ dreamcast_maple: TODO: read from dmaaddr ]\\n\");\n" + ASSIGN),
+ "M_REWORD":    (ASSIGN, T + "fatal(\"[ dreamcast_maple: read from dmaaddr ]\\n\");\n" + ASSIGN),
+ "M_LATCHED":   (ASSIGN, T + "{ static int w = 0; if (!w) { w = 1; fatal(\"[ dreamcast_maple: "
+                             "DMAADDR read (once) ]\\n\"); } }\n" + ASSIGN),
+ # the exit alone
+ "M_EXITONLY":  (ASSIGN, ASSIGN + T + "exit(1);\n"),
+ # the FAULT idiom and DECLINE
+ "M_RET0":      (ASSIGN, T + "return 0;\n"),
+ "M_DECLINE":   (ASSIGN, T + "/*  declined  */\n"),
+ # the read hoisted out of its relative_addr == 0x04 guard (the arm itself emptied)
+ "M_HOIST":     None,
+ # read-to-clear
+ "M_READCLEAR": (ASSIGN, ASSIGN + T + "d->dmaaddr = 0;\n"),
+ # value-keyed exits: clause (e) cells, each pinned by one L1 row
+ "M_EQ4":       (ASSIGN, ASSIGN + T + "if (d->dmaaddr == 0x04)\n" + T + "\texit(1);\n"),
+ "M_BIT30":     (ASSIGN, ASSIGN + T + "if (d->dmaaddr & 0x40000000)\n" + T + "\texit(1);\n"),
+ "M_ZEROEXIT":  (ASSIGN, ASSIGN + T + "if (d->dmaaddr == 0)\n" + T + "\texit(1);\n"),
+ # masking of the low five bits (the alignment the DMA path wants, applied to the read)
+ "M_MASKLOW":   (ASSIGN, T + "odata = d->dmaaddr & ~(uint64_t)0x1f;\n"),
+}
+
+src, dst, leg = sys.argv[1:4]
+t = io.open(src, encoding="utf-8").read()
+if leg not in LEGS:
+    sys.exit("unknown leg %s -- REFUSING" % leg)
+if leg == "M_HOIST":
+    edits = [(DECL, "\tuint64_t idata = 0, odata = d->dmaaddr;\n"), (ASSIGN, T + "/*  hoisted above the switch  */\n")]
+else:
+    edits = [LEGS[leg]]
+for old, new in edits:
+    if t.count(old) != 1:
+        sys.stderr.write("find-text for %s occurs %d times -- REFUSING\n" % (leg, t.count(old)))
+        sys.exit(3)
+    t = t.replace(old, new)
+io.open(dst, "w", encoding="utf-8", newline="\n").write(t)
+print("MUTATED %s" % leg)
+mapledmaaddr KILL TABLE 1   2026-09-12T17:55:27Z
+baseline = SEC src/devices/dev_dreamcast_maple.c (the fix)   probe = FROZEN at launch (maple_dmaaddr_probe.FROZEN.py), cmp vs regress/: IDENTICAL
+baseline cmp: CLEAN
+SENTINEL DROPPED (clone-local)
+
+=== LEG BASE ===
+  mutate rc=0  changed-lines-vs-SEC=0
+  build rc=0 binary=FRESH
+  MAPLE_DMAADDR_RESULT=16/16  MAPLE_DMAADDR_CONTROL=OK  sentinel=[MAPLE_DMAADDR_PROBE_DONE]
+    FAILING: 
+
+=== LEG HEAD ===
+  mutate rc=0  changed-lines-vs-SEC=6
+  build rc=0 binary=FRESH
+  MAPLE_DMAADDR_RESULT=5/16  MAPLE_DMAADDR_CONTROL=OK  sentinel=[MAPLE_DMAADDR_PROBE_DONE]
+    FAILING: read val_a, read val_b, marker survive, exit status, initial zero, read four, read all ones, double read 1, double read 2, write replace, read silent
+
+=== LEG M_KEEPFATAL ===
+  mutate rc=0  changed-lines-vs-SEC=1
+  build rc=0 binary=FRESH
+  MAPLE_DMAADDR_RESULT=15/16  MAPLE_DMAADDR_CONTROL=OK  sentinel=[MAPLE_DMAADDR_PROBE_DONE]
+    FAILING: read silent
+
+=== LEG M_REWORD ===
+  mutate rc=0  changed-lines-vs-SEC=1
+  build rc=0 binary=FRESH
+  MAPLE_DMAADDR_RESULT=15/16  MAPLE_DMAADDR_CONTROL=OK  sentinel=[MAPLE_DMAADDR_PROBE_DONE]
+    FAILING: read silent
+
+=== LEG M_LATCHED ===
+  mutate rc=0  changed-lines-vs-SEC=1
+  build rc=0 binary=FRESH
+  MAPLE_DMAADDR_RESULT=15/16  MAPLE_DMAADDR_CONTROL=OK  sentinel=[MAPLE_DMAADDR_PROBE_DONE]
+    FAILING: read silent
+
+=== LEG M_EXITONLY ===
+  mutate rc=0  changed-lines-vs-SEC=1
+  build rc=0 binary=FRESH
+  MAPLE_DMAADDR_RESULT=6/16  MAPLE_DMAADDR_CONTROL=OK  sentinel=[MAPLE_DMAADDR_PROBE_DONE]
+    FAILING: read val_a, read val_b, marker survive, exit status, initial zero, read four, read all ones, double read 1, double read 2, write replace
+
+=== LEG M_RET0 ===
+  mutate rc=0  changed-lines-vs-SEC=2
+  build rc=0 binary=FRESH
+  MAPLE_DMAADDR_RESULT=7/16  MAPLE_DMAADDR_CONTROL=OK  sentinel=[MAPLE_DMAADDR_PROBE_DONE]
+    FAILING: read val_a, read val_b, initial zero, read four, read all ones, double read 1, double read 2, write replace, read silent
+
+=== LEG M_DECLINE ===
+  mutate rc=0  changed-lines-vs-SEC=2
+  build rc=0 binary=FRESH
+  MAPLE_DMAADDR_RESULT=9/16  MAPLE_DMAADDR_CONTROL=OK  sentinel=[MAPLE_DMAADDR_PROBE_DONE]
+    FAILING: read val_a, read val_b, read four, read all ones, double read 1, double read 2, write replace
+
+=== LEG M_HOIST ===
+  mutate rc=0  changed-lines-vs-SEC=4
+  build rc=0 binary=FRESH
+  MAPLE_DMAADDR_RESULT=15/16  MAPLE_DMAADDR_CONTROL=OK  sentinel=[MAPLE_DMAADDR_PROBE_DONE]
+    FAILING: other read
+
+=== LEG M_READCLEAR ===
+  mutate rc=0  changed-lines-vs-SEC=1
+  build rc=0 binary=FRESH
+  MAPLE_DMAADDR_RESULT=15/16  MAPLE_DMAADDR_CONTROL=OK  sentinel=[MAPLE_DMAADDR_PROBE_DONE]
+    FAILING: double read 2
+
+=== LEG M_EQ4 ===
+  mutate rc=0  changed-lines-vs-SEC=2
+  build rc=0 binary=FRESH
+  MAPLE_DMAADDR_RESULT=15/16  MAPLE_DMAADDR_CONTROL=OK  sentinel=[MAPLE_DMAADDR_PROBE_DONE]
+    FAILING: read four
+
+=== LEG M_BIT30 ===
+  mutate rc=0  changed-lines-vs-SEC=2
+  build rc=0 binary=FRESH
+  MAPLE_DMAADDR_RESULT=15/16  MAPLE_DMAADDR_CONTROL=OK  sentinel=[MAPLE_DMAADDR_PROBE_DONE]
+    FAILING: read all ones
+
+=== LEG M_ZEROEXIT ===
+  mutate rc=0  changed-lines-vs-SEC=2
+  build rc=0 binary=FRESH
+  MAPLE_DMAADDR_RESULT=13/16  MAPLE_DMAADDR_CONTROL=OK  sentinel=[MAPLE_DMAADDR_PROBE_DONE]
+    FAILING: marker survive, exit status, initial zero
+
+=== LEG M_MASKLOW ===
+  mutate rc=0  changed-lines-vs-SEC=2
+  build rc=0 binary=FRESH
+  MAPLE_DMAADDR_RESULT=9/16  MAPLE_DMAADDR_CONTROL=OK  sentinel=[MAPLE_DMAADDR_PROBE_DONE]
+    FAILING: read val_a, read val_b, read four, read all ones, double read 1, double read 2, write replace
+
+=== RESTORE ===
+  restore cmp-vs-SEC=CLEAN binary=FRESH
+  SENTINEL CLEARED (both parts)
+KILLTABLE_DONE
+MAPLE_DMAADDR DETECTOR -- rung 3, unmodified -E dreamcast   binary=/tmp/gxmaple1/gxemul  label=M_REWORD
+row                got            want           note                                         
+ctrl live          0x12345678     0x12345678     RAM round trip through the same apparatus    ok
+ctrl devsig sh4    0xda74         0xda74         SH4 IPRD reset value: a device, not RAM      ok
+ctrl devsig maple  0x12340000     0x12340000     MAPLE_SPEED shifts/masks: this device decodes ok
+read val_a         0x8c012345     0x8c012345     high + low bits; destination poisoned        ok
+read val_b         0xc00001f      0xc00001f      low five bits all set                        ok
+other read         0x0            0x0            RESET2 reads 0 with the field nonzero        ok
+marker survive     0x55aa55aa     0x55aa55aa     the store after the read executes            ok
+exit status        exit0          exit0          the session ends by `quit'                   ok
+initial zero       0x0            0x0            fresh device: field is zero                  ok
+read four          0x4            0x4            the value 4                                  ok
+read all ones      0xffffffff     0xffffffff     every bit set                                ok
+double read 1      0x8c012345     0x8c012345     first of two reads, no write between         ok
+double read 2      0x8c012345     0x8c012345     second read: the first did not clear it      ok
+write replace      0x13579bdf     0x13579bdf     a second write replaces what the read reports ok
+read silent        8/9            0/9            maple output in read sessions (any text)     FAIL
+ctrl zlive         0xdeadbeef     0xdeadbeef     trailing RAM round trip: the apparatus lived ok
+
+SCORE 15/16  label=M_REWORD
+FAILING: read silent
+MAPLE_DMAADDR_RESULT=15/16
+MAPLE_DMAADDR_CONTROL=OK
+MAPLE_DMAADDR_PROBE_DONE
+MAPLE_DMAADDR DETECTOR -- rung 3, unmodified -E dreamcast   binary=/tmp/gxmaple1/gxemul  label=M_EXITONLY
+row                got            want           note                                         
+ctrl live          0x12345678     0x12345678     RAM round trip through the same apparatus    ok
+ctrl devsig sh4    0xda74         0xda74         SH4 IPRD reset value: a device, not RAM      ok
+ctrl devsig maple  0x12340000     0x12340000     MAPLE_SPEED shifts/masks: this device decodes ok
+read val_a         absent         0x8c012345     high + low bits; destination poisoned        FAIL
+read val_b         absent         0xc00001f      low five bits all set                        FAIL
+other read         0x0            0x0            RESET2 reads 0 with the field nonzero        ok
+marker survive     absent         0x55aa55aa     the store after the read executes            FAIL
+exit status        exit1          exit0          the session ends by `quit'                   FAIL
+initial zero       absent         0x0            fresh device: field is zero                  FAIL
+read four          absent         0x4            the value 4                                  FAIL
+read all ones      absent         0xffffffff     every bit set                                FAIL
+double read 1      absent         0x8c012345     first of two reads, no write between         FAIL
+double read 2      absent         0x8c012345     second read: the first did not clear it      FAIL
+write replace      absent         0x13579bdf     a second write replaces what the read reports FAIL
+read silent        0/9            0/9            maple output in read sessions (any text)     ok
+ctrl zlive         0xdeadbeef     0xdeadbeef     trailing RAM round trip: the apparatus lived ok
+
+SCORE 6/16  label=M_EXITONLY
+FAILING: read val_a, read val_b, marker survive, exit status, initial zero, read four, read all ones, double read 1, double read 2, write replace
+MAPLE_DMAADDR_RESULT=6/16
+MAPLE_DMAADDR_CONTROL=OK
+MAPLE_DMAADDR_PROBE_DONE
+MAPLE_DMAADDR DETECTOR -- rung 3, unmodified -E dreamcast   binary=/tmp/gxmaple1/gxemul  label=M_RET0
+row                got            want           note                                         
+ctrl live          0x12345678     0x12345678     RAM round trip through the same apparatus    ok
+ctrl devsig sh4    0xda74         0xda74         SH4 IPRD reset value: a device, not RAM      ok
+ctrl devsig maple  0x12340000     0x12340000     MAPLE_SPEED shifts/masks: this device decodes ok
+read val_a         0xa5a55a5a     0x8c012345     high + low bits; destination poisoned        FAIL
+read val_b         0xa5a55a5a     0xc00001f      low five bits all set                        FAIL
+other read         0x0            0x0            RESET2 reads 0 with the field nonzero        ok
+marker survive     0x55aa55aa     0x55aa55aa     the store after the read executes            ok
+exit status        exit0          exit0          the session ends by `quit'                   ok
+initial zero       0xa5a55a5a     0x0            fresh device: field is zero                  FAIL
+read four          0xa5a55a5a     0x4            the value 4                                  FAIL
+read all ones      0xa5a55a5a     0xffffffff     every bit set                                FAIL
+double read 1      0xa5a55a5a     0x8c012345     first of two reads, no write between         FAIL
+double read 2      0xa5a55a5a     0x8c012345     second read: the first did not clear it      FAIL
+write replace      0xa5a55a5a     0x13579bdf     a second write replaces what the read reports FAIL
+read silent        8/9            0/9            maple output in read sessions (any text)     FAIL
+ctrl zlive         0xdeadbeef     0xdeadbeef     trailing RAM round trip: the apparatus lived ok
+
+SCORE 7/16  label=M_RET0
+FAILING: read val_a, read val_b, initial zero, read four, read all ones, double read 1, double read 2, write replace, read silent
+MAPLE_DMAADDR_RESULT=7/16
+MAPLE_DMAADDR_CONTROL=OK
+MAPLE_DMAADDR_PROBE_DONE
+
+Algorithm       Hash                                                                   Path                            
+---------       ----                                                                   ----                            
+SHA256          4C818A80507B129BC1BFFF7DB55960825F8B7C27C5E327CAA728C226C56024C4       C:\DocumentNoSnc\CC\GXEMUL\GX...
+SHA256          4C818A80507B129BC1BFFF7DB55960825F8B7C27C5E327CAA728C226C56024C4       C:\DocumentNoSnc\CC\GXEMUL\GX...
+
+
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "Get-Content -LiteralPath tools/CLAUDE.md | Select-Object -Skip 1286 -First 168; Get-Content -LiteralPath tools/CLAUDE.md | Select-Object -Skip 1609 -First 85; rg -n --glob '*.c' 'memory_writemax64\\(|fmov_load|fmov.*load|store.*double|load.*double' src/memory* src/cpus/cpu_sh_instr.c src/core" in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg --files src | rg 'memory|sh_loadstore|sh_instr|debugmsg'; rg -n 'memory_rw\\(|len|fmov|fpscr' src/cpus/cpu_sh_instr.c | Select-Object -First 160; Get-Content -LiteralPath src/core/debugmsg.c | Select-Object -Skip 108 -First 58; Get-Content -LiteralPath src/core/debugmsg.c | Select-Object -Skip 352 -First 42" in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+ succeeded in 313ms:
+src\core\memory.c
+src\core\debugmsg.c
+src\include\memory.h
+src\cpus\cpu_sh_instr.c
+src\cpus\memory_sh.c
+src\cpus\memory_rw.c
+src\cpus\memory_ppc.c
+src\cpus\memory_mips_v2p.c
+src\cpus\memory_mips.c
+src\cpus\memory_m88k.c
+src\cpus\memory_arm.c
+src\cpus\memory_alpha.c
+137: *  second; were that not so it would be a hard compile error, not silent
+142:	return (cpu->cd.sh.fpscr & SH_FPSCR_RM_MASK) == SH_FPSCR_RM_NEAREST?
+169: *  can MISS a site silently, whereas this cannot, and the function is a no-op
+182:	if (!(cpu->cd.sh.fpscr & SH_FPSCR_DN_ZERO))
+379:		if (!cpu->memory_rw(cpu, cpu->mem, addr, (unsigned char *)&data,
+387:		if (!cpu->memory_rw(cpu, cpu->mem, addr, (unsigned char *)&data,
+406:		if (!cpu->memory_rw(cpu, cpu->mem, addr, (unsigned char *)&data,
+414:		if (!cpu->memory_rw(cpu, cpu->mem, addr, (unsigned char *)&data,
+433:		if (!cpu->memory_rw(cpu, cpu->mem, addr, (unsigned char *)&data,
+441:		if (!cpu->memory_rw(cpu, cpu->mem, addr, (unsigned char *)&data,
+487:		if (!cpu->memory_rw(cpu, cpu->mem, addr, (unsigned char *)&data,
+515:		if (!cpu->memory_rw(cpu, cpu->mem, addr, (unsigned char *)&data,
+543:		if (!cpu->memory_rw(cpu, cpu->mem, addr, (unsigned char *)&data,
+574:		if (!cpu->memory_rw(cpu, cpu->mem, addr, (unsigned char *)&data,
+605:		if (!cpu->memory_rw(cpu, cpu->mem, addr, (unsigned char *)&data,
+651:		if (!cpu->memory_rw(cpu, cpu->mem, addr, (unsigned char *)&data,
+673: *  fmov_rm_frn:       Load a floating point value into FRn from address Rm.
+674: *  fmov_r0_rm_frn:    Load a floating point value into FRn from address R0+Rm.
+675: *  fmov_rm_postinc_frn: Load a floating point value into FRn from address Rm.
+704:		if (!cpu->memory_rw(cpu, cpu->mem, addr, (unsigned char *)&data,
+725:		if (!cpu->memory_rw(cpu, cpu->mem, addr, (unsigned char *)&data,
+750:		if (!cpu->memory_rw(cpu, cpu->mem, addr, (unsigned char *)&data,
+765:X(fmov_rm_frn)
+774:	SH_ALIGN_CHECK_LD(addr, (cpu->cd.sh.fpscr & SH_FPSCR_SZ) ? 7 : 3);
+789:	if (cpu->cd.sh.fpscr & SH_FPSCR_SZ) {
+798:		if (!cpu->memory_rw(cpu, cpu->mem, addr + 4, (unsigned char *)&data,
+815:		if (!cpu->memory_rw(cpu, cpu->mem, addr, (unsigned char *)&data,
+832:	if (cpu->cd.sh.fpscr & SH_FPSCR_SZ) {
+840:X(fmov_r0_rm_frn)
+853:	int d = cpu->cd.sh.fpscr & SH_FPSCR_SZ;
+873:			if (!cpu->memory_rw(cpu, cpu->mem, addr,
+883:		if (!cpu->memory_rw(cpu, cpu->mem, addr + 4,
+908:		if (!cpu->memory_rw(cpu, cpu->mem, addr, (unsigned char *)&data,
+924:X(fmov_rm_postinc_frn)
+926:	int d = cpu->cd.sh.fpscr & SH_FPSCR_SZ;
+947:		if (!cpu->memory_rw(cpu, cpu->mem, addr, (unsigned char *)&data,
+965:		if (!cpu->memory_rw(cpu, cpu->mem, addr, (unsigned
+991:		if (!cpu->memory_rw(cpu, cpu->mem, addr, (unsigned char *)&data,
+1011:		if (!cpu->memory_rw(cpu, cpu->mem, addr, (unsigned char *)&data,
+1035:		if (!cpu->memory_rw(cpu, cpu->mem, addr, (unsigned char *)&data,
+1058:		if (!cpu->memory_rw(cpu, cpu->mem, addr, (unsigned char *)&data,
+1081:		if (!cpu->memory_rw(cpu, cpu->mem, addr, (unsigned char *)&data,
+1108:		if (!cpu->memory_rw(cpu, cpu->mem, addr, (unsigned char *)&data,
+1138:		if (!cpu->memory_rw(cpu, cpu->mem, addr, (unsigned char *)&data,
+1173:		if (!cpu->memory_rw(cpu, cpu->mem, addr, (unsigned char *)&data,
+1189:	if (ic->arg[0] == (size_t)&cpu->cd.sh.fpscr)
+1190:		sh_update_fpscr(cpu, data);
+1204:		if (!cpu->memory_rw(cpu, cpu->mem, addr, (unsigned char *)&data,
+1226:		if (!cpu->memory_rw(cpu, cpu->mem, addr, (unsigned char *)&data,
+1252:		if (!cpu->memory_rw(cpu, cpu->mem, addr, (unsigned char *)&data,
+1279:		if (!cpu->memory_rw(cpu, cpu->mem, addr, (unsigned char *)&data,
+1304:		if (!cpu->memory_rw(cpu, cpu->mem, addr, (unsigned char *)&data,
+1326:		if (!cpu->memory_rw(cpu, cpu->mem, addr, (unsigned char *)&data,
+1347: *  fmov_frm_rn:        Store FRm to address Rn.
+1348: *  fmov_frm_r0_rn:     Store FRm to address R0 + Rn.
+1349: *  fmov_frm_predec_rn: Store FRm to address Rn - 4 (or 8), update Rn.
+1374:		if (!cpu->memory_rw(cpu, cpu->mem, addr, &data,
+1399:		if (!cpu->memory_rw(cpu, cpu->mem, addr, (unsigned char *)&data,
+1424:		if (!cpu->memory_rw(cpu, cpu->mem, addr, (unsigned char *)&data,
+1433:X(fmov_frm_rn)
+1442:	SH_ALIGN_CHECK_ST(addr, (cpu->cd.sh.fpscr & SH_FPSCR_SZ) ? 7 : 3);
+1450:	 *  and `fmov drM,@rN` was measured killing the process for half of all
+1459:	if (cpu->cd.sh.fpscr & SH_FPSCR_SZ) {
+1478:		if (!cpu->memory_rw(cpu, cpu->mem, addr + 4, (unsigned char *)&data2,
+1500:		if (!cpu->memory_rw(cpu, cpu->mem, addr, (unsigned char *)&data,
+1509:X(fmov_frm_r0_rn)
+1520:	int d = cpu->cd.sh.fpscr & SH_FPSCR_SZ;
+1544:		if (!cpu->memory_rw(cpu, cpu->mem, addr + 4,
+1562:		if (!cpu->memory_rw(cpu, cpu->mem, addr, (unsigned char *)&data,
+1571:X(fmov_frm_predec_rn)
+1573:	int d = cpu->cd.sh.fpscr & SH_FPSCR_SZ? 1 : 0;
+1601:		if (!cpu->memory_rw(cpu, cpu->mem, addr, (unsigned char *)&data,
+1618:		if (!cpu->memory_rw(cpu, cpu->mem, addr + 4, (unsigned
+1637:		if (!cpu->memory_rw(cpu, cpu->mem, addr, (unsigned char *)&data,
+1662:		if (!cpu->memory_rw(cpu, cpu->mem, addr, (unsigned char *)&data,
+1687:		if (!cpu->memory_rw(cpu, cpu->mem, addr, (unsigned char *)&data,
+1705:		if (!cpu->memory_rw(cpu, cpu->mem, addr, (unsigned char *)&data,
+1730:		if (!cpu->memory_rw(cpu, cpu->mem, addr, (unsigned char *)&data,
+1755:		if (!cpu->memory_rw(cpu, cpu->mem, addr, (unsigned char *)&data,
+1781:		if (!cpu->memory_rw(cpu, cpu->mem, addr, (unsigned char *)&data,
+1800:		if (!cpu->memory_rw(cpu, cpu->mem, addr, (unsigned char *)&data,
+1825:		if (!cpu->memory_rw(cpu, cpu->mem, addr, (unsigned char *)&data,
+2864: *  lds_rm_fpscr:       Copy Rm into FPSCR.
+2874:X(lds_rm_fpscr)
+2877:	sh_update_fpscr(cpu, reg(ic->arg[1]));
+2882: *  fmov_frm_frn:  Copy one floating-point register (or pair) to another.
+2887:X(fmov_frm_frn)
+2895:	if (!(cpu->cd.sh.fpscr & SH_FPSCR_SZ)) {
+2925:	if (cpu->cd.sh.fpscr & SH_FPSCR_PR) {
+2991:	if (cpu->cd.sh.fpscr & SH_FPSCR_PR) {
+3198:	if (cpu->cd.sh.fpscr & SH_FPSCR_PR) {
+3226:	if (cpu->cd.sh.fpscr & SH_FPSCR_PR) {
+3251:	if (cpu->cd.sh.fpscr & SH_FPSCR_PR) {
+3279:	if (cpu->cd.sh.fpscr & SH_FPSCR_PR) {
+3371:	if (cpu->cd.sh.fpscr & SH_FPSCR_PR) {
+3412:	if (cpu->cd.sh.fpscr & SH_FPSCR_PR) {
+3447:	if (cpu->cd.sh.fpscr & SH_FPSCR_PR) {
+3485:	if (cpu->cd.sh.fpscr & SH_FPSCR_PR) {
+3500:		 *  directly instead of silently returning 0.0. FPSCR
+3523:		 *  directly instead of silently returning 0.0. FPSCR
+3561:	if (cpu->cd.sh.fpscr & SH_FPSCR_PR) {
+3588:	if (cpu->cd.sh.fpscr & SH_FPSCR_PR) {
+3618:	sh_update_fpscr(cpu, cpu->cd.sh.fpscr ^ SH_FPSCR_FR);
+3623:	sh_update_fpscr(cpu, cpu->cd.sh.fpscr ^ SH_FPSCR_SZ);
+3733:		 *  already-aligned address instead would silently drop [9:5].
+3753:		 *  Passing FLAG_NOEXCEPTIONS here would be silent CORRUPTION,
+3769:		cpu->memory_rw(cpu, cpu->mem, 0xe0000000UL + ofs
+3773:		cpu->memory_rw(cpu, cpu->mem, extaddr+ofs, (unsigned char *)
+3791:	if (!cpu->memory_rw(cpu, cpu->mem, addr, &byte, 1, MEM_READ,
+3801:	if (!cpu->memory_rw(cpu, cpu->mem, addr, &newbyte, 1, MEM_WRITE,
+3872:	// must not silently read a truncated address past the alignment check).
+4053:		if (!cpu->memory_rw(cpu, cpu->mem, addr, ib,
+4227:				ic->arg[0] = (size_t)&cpu->cd.sh.fpscr;
+4607:				ic->arg[0] = (size_t)&cpu->cd.sh.fpscr;
+4614:				ic->arg[0] = (size_t)&cpu->cd.sh.fpscr;
+4617:				ic->f = instr(lds_rm_fpscr);
+4984:			ic->f = instr(fmov_r0_rm_frn);
+4989:			ic->f = instr(fmov_frm_r0_rn);
+4994:			ic->f = instr(fmov_rm_frn);
+4999:			ic->f = instr(fmov_rm_postinc_frn);
+5004:			ic->f = instr(fmov_frm_rn);
+5009:			ic->f = instr(fmov_frm_predec_rn);
+5014:			ic->f = instr(fmov_frm_frn);
+#define	DEBUG_BUFSIZE		2048
+#define	DEBUG_INDENTATION	4
+
+
+/*
+ *  va_debug():
+ *
+ *  Used internally by the old debug() and fatal() functions.
+ */
+static void va_debug(va_list argp, const char *fmt)
+{
+	char buf[DEBUG_BUFSIZE + 1];
+	buf[0] = buf[DEBUG_BUFSIZE] = 0;
+	vsnprintf(buf, DEBUG_BUFSIZE, fmt, argp);
+
+	char* s = buf;
+	while (*s) {
+		if (debug_old_currently_at_start_of_line) {
+			for (size_t i = 0; i < debug_indent * DEBUG_INDENTATION; i++)
+				printf(" ");
+		}
+
+		printf("%c", *s);
+
+		debug_old_currently_at_start_of_line = false;
+		if (*s == '\n' || *s == '\r')
+			debug_old_currently_at_start_of_line = true;
+		s++;
+	}
+}
+
+
+/*
+ *  debugmsg_va():
+ *
+ *  Used internally by debugmsg().
+ */
+static void debugmsg_va(struct cpu* cpu, int subsystem,
+	const char *name, int verbosity, va_list argp, const char *fmt)
+{
+	bool subsystem_breakpoint = false;
+
+	/*
+	 *  #261: opt-in global break on any ERROR-level message (covers every
+	 *  subsystem, incl. ones registered after a per-subsystem breakpoint
+	 *  was set). Default off = single false test = no-op.
+	 */
+	bool do_bp = (debugmsg_n_breakpoints > 0 &&
+	    debugmsg_breakpoint_level[subsystem] >= 0 &&
+	    verbosity <= debugmsg_breakpoint_level[subsystem]);
+	if (debugmsg_break_on_error && verbosity <= VERBOSITY_ERROR)
+		do_bp = true;
+
+	if (do_bp) {
+		/*
+		 *  This message triggers a breakpoint on subsystem messages:
+		 *  make sure the message itself is shown (even if the current
+		 *  verbosity setting would have suppressed it), and request
+}
+
+
+/*
+ *  debug() and fatal():
+ *
+ *  These are here because of all the legacy code that uses them. Basically,
+ *  debug() is mapped to something that is only displayed with verbosity
+ *  at the default level, and fatal() is used to always print stuff. With some
+ *  hacks to make it work reasonable with -q and when executing normally or
+ *  when executing single-stepping.
+ */
+void debug(const char *fmt, ...)
+{
+	va_list argp;
+	bool ss = single_step || about_to_enter_single_step;
+	int v = verbose;
+	if (emul_executing)
+		v--;
+	if (ss)
+		v++;
+
+	if ((quiet_mode && !ss) || v < 0)
+		return;
+
+	va_start(argp, fmt);
+	va_debug(argp, fmt);
+	va_end(argp);
+}
+
+
+void fatal(const char *fmt, ...)
+{
+	va_list argp;
+
+	va_start(argp, fmt);
+	va_debug(argp, fmt);
+	va_end(argp);
+}
+
+
+void debugmsg_set_verbosity_level(int subsystem, int verbosity)
+
+ exited 1 in 329ms:
+> ### *** CLAUSE (d) �?" NULL-REPAIR RED. Adopted 2026-08-23 by OWNER RULING, on the round
+> that measured its case. ***
+>
+> **(d) The detector must also fail when the fix is PRESENT but its REPAIR IS NULLED �?"
+> the guard kept, its effect removed.**
+>
+> **(b) DOES NOT IMPLY (d), and #461 measured both in the same hour on the same detector:**
+>
+> | mutant | shape | score |
+> |---|---|---|
+> | `m_dmarevert` | (b): reinstate the `exit(1)` verbatim | **22/31 �?" killed** |
+> | `m_align1` | (d): keep the guard, weaken `& 3` to `& 1` | **27/27 �?" ESCAPED** |
+>
+> The detector passed (a), (b) and (c) and was still blind to a ONE-CHARACTER edit that
+> re-opened the very defect the round had just closed. (b) restores the DEFECT; (d) neuters
+> the FIX. A detector can be sensitive to one and blind to the other, because they fail at
+> different sites: (b) fails where the old code was, (d) fails where the new code is.
+>
+> **HOW TO BUILD THE (d) MUTANT �?" and it is the same discriminator the accept-row rule
+> already uses.** Take each predicate the fix **DEPENDS ON** and weaken it to the
+> least-restrictive form that still *reads* like the same check: a mask narrowed
+> (`& 3` -> `& 1`), a condition qualified (`if (X)` -> `if (X && writeflag == MEM_WRITE)`),
+> a bound relaxed. **Not deletion** �?" deletion is (b) wearing (d)'s clothes and is usually
+> already covered. The test is whether a plausible future edit could produce it.
+>
+> **WHY THE ONE-CHARACTER FORM IS THE ONE THAT MATTERS.** `dma alias`, the row written
+> specifically to pin that repair, was **STRUCTURALLY BLIND** to it: it used an ODD address,
+> which both guard forms drop. *The row aimed at the defect could not see the defect return.*
+> A row written from the FIX's intent tests the intent, not the boundary �?" so (d)'s mutant
+> has to come from an adversary, which is exactly what the ask-again buys.
+>
+> **COST: one mutant per repair predicate**, the same order as the accept-row rule (#448 = 4,
+> #449 = 1, #461 = 4 across two arms). It is bounded by the diff, so it cannot become #392:
+> the predicates are the ones the fix ADDED, and that list is finite and visible.
+>
+> ### *** "THE PREDICATE THE FIX INTRODUCED" ENUMERATED THE EMPTY SET FOR MOST OF THIS
+> ### QUEUE, AND NOBODY NOTICED FOR THREE ROUNDS. Corrected 2026-08-24 -- clause (d) now
+> ### reads DEPENDS ON, not INTRODUCED. ***
+>
+> Clause (d) says *keep the guard, null its repair*. As written it enumerated only
+> predicates the diff ADDS -- and **the two commonest fix shapes here add none**:
+>
+> * a **pure deletion** introduces no predicate at all;
+> * a **DE-FATALISATION** introduces none either -- it changes what an EXISTING
+>   predicate's branch does. That is most of this project's queue.
+>
+> So for those rounds clause (d) enumerated **nothing**, and a round could satisfy the
+> floor while having built no (d) mutant whatever. `#461` measured (d) successfully only
+> because its fix happened to ADD a predicate (an alignment mask) for the mutant to weaken.
+>
+> **Reading it as DEPENDS ON fixes both cases at once**, and it is why this now replaces a
+> narrower deletion-only rule written earlier the same day: that rule was a special case of
+> this gap, and two overlapping statements of one rule is the accumulation this carrier is
+> supposed to refuse.
+>
+> **The two shapes, once the enumeration is right:**
+> * **fix ADDS a predicate** -> weaken the added one (unchanged; the original rule).
+> * **fix adds none** -> the (d) mutant reroutes an EXISTING guard's repair. For a
+>   de-fatalisation: **swap the guard's operand for a field the guarded BODY reads.**
+>   For a pure deletion: **re-introduce the removed behaviour under a DIFFERENT predicate**
+>   -- not the same one widened, which is (b) wearing (d)'s clothes.
+>
+> *** THE MEASURED CASE, and it is why this matters rather than being tidy: ***
+> `#462` de-fatalised two arms. Its guard reads `d->data`; the body it guards reads
+> `d->data` AND `d->data_len`; the two are set together in one place and cleared in two
+> places that touch only ONE of them. Swapping the guard's operand to `d->data_len == 0`
+> **scored a CLEAN SWEEP on a 52-row detector that had just passed twelve mutants**, and
+> restored a NULL-pointer read of 408 bytes. Under the old wording that was coverage debt;
+> under DEPENDS ON it is a **floor breach, L2, fix in-round** -- which is what the round
+> did, before the wording was corrected.
+>
+> #### *** THE BOUND, and it is not optional: "DEPENDS ON" INVITES TRANSITIVE DATA-FLOW
+> #### CHASING, which is unbounded and is how this becomes `#392`. Named 2026-08-24 by the
+> #### adjudicating seat, in the same breath as upholding the correction. ***
+>
+> > **DEPENDS ON enumerates exactly two things: (1) the predicates DOMINATING the diff's
+> > edited lines, walked up only to the ENCLOSING FUNCTION BOUNDARY -- never into callees
+> > or callers; and (2) for operand-swap forms, swaps drawn ONLY from fields the guarded
+> > BODY reads (the guard-field/body-field grep the pre-table check already mandates).**
+>
+> That is finite, derivable from the diff by reading, and **it provably contains the
+> measured case**: the `d->data == NULL` guard dominates the edited decline (clause 1), and
+> `data_len` is a body-read field (clause 2), so `M11` falls out mechanically rather than
+> by inspiration. It cannot become `#392` because the enumeration stays closed over the
+> diff's own hunks -- the same closure the INTRODUCED wording had, without the empty-set
+> defect that made INTRODUCED enumerate nothing for a de-fatalisation.
+>
+> #### *** JOINT CELLS -- adjudicated 2026-09-04 on `pcc2widthkills` pass 10 by the flagship seat, after
+> #### a measuring seat's CONJUNCTION of two body-read counts escaped 190/190 AND THE SAME SEAT ARGUED IT
+> #### WAS NOT A BREACH.  Both proposed bounds were rejected; the one adopted came from neither. ***
+>
+> > **DEPENDS-ON enumerates JOINT cells over the guard's operands and the body-read lvalues EXACTLY
+> > WHEN THE GUARDED BODY'S OWN CODE DISTINGUISHES THEM.**  For each lvalue take the PARTITION the
+> > body's own tests induce (`pending > 0` gives {0, >0}; `relative_addr == PCCTWO_T1ICR` gives
+> > {T1, T2}); the enumerated cells are the CROSS-PRODUCT of those partitions -- never arbitrary
+> > boolean functions of the read-set.  A mutant exempting a single cell whose reachability is
+> > MEASURED is a floor breach; close the whole cross-product in ONE diff and write into the
+> > contract which cells are rowed.  A value or combination the body never tests as a case
+> > (`idata == k`; a byte no conditional distinguishes; both counts >= 2 where the body tests `> 0`)
+> > is DISCLOSED under clause (e).
+>
+> **Why this form and not the two that were argued.**  The dissent's discriminator -- *a plausible
+> future edit* -- failed three ways: plausibility is not derivable by reading; the mutant was written
+> and measured, so it is an edit someone writes; and "single-operand is complete" is measurably
+> false, since `&& idata != 2` is single-operand and escapes.  The main loop's own bound -- *pairs of
+> body-read lvalues over a finite reachable space* -- was rejected as SELF-REFUTING: the counts' raw
+> value space is 2^32 apiece, so "finite" does no bounding work on its motivating case (a C `int` is
+> finite -- the first wording here said it was not; codex and glm caught it on pass 11); "reachable
+> guest state" would force rowing
+> `idata == 2` that the same record discloses; and a PAIRS cap misses `#499`'s four axes.  The
+> body-tested-partition form is finite (a product of small partition counts), derivable from the
+> diff by reading the body's own `if`s, and it enumerates `#499`'s width x component x direction x
+> position cells from `len`, `writeflag` and `relative_addr` -- which neither argued bound reached.
+>
+> **The measured case.**  The TxICR body tests both pending counts at `> 0` and the label at
+> `== T1ICR` / `T2ICR`, so the closure is {T2, T1} x {p1 = 0, > 0} x {p2 = 0, > 0} -- eight cells.
+> Pass 9 held one open cell (both counts, T2 label: a 190/190 escape, predicted by the Opus seat
+> before its build); pass 10 found the MIRROR (both counts, T1 label) and the (p2 only, T1 label)
+> cell open -- the `#499` shape reproduced inside the repair for it -- and the label x p1 x p2 x IEN
+> product (sixteen cells) closed in one diff of nine readbacks in existing sessions; the ICLR, INT and
+> 0xe0 partitions were disclosed by count, and pass 11 then found the ICLR x pending cell open and
+> in-rule (this paragraph said "eight cells ... three readbacks" until pass 11).  **The De Morgan form of the gap**, from the kimi
+> substitute: `!(p1 && p2)` is `p1 == 0 || p2 == 0`; neither disjunct is true of all its lvalue's
+> held values, the disjunction is true in every row, so a per-lvalue disclosure test can never fire
+> on it.  That is why the per-lvalue value-domain statement, correct as far as it went, could not
+> see this class at all.
+>
+> **Two corollaries from the same pass, both measured.**  The PRE-TABLE CHECK's SIBLING PARITY row
+> compares BLOCKS; at a block that serves TWO case labels the siblings are the LABELS, and a
+> parity census over the row names is what would have shown `pendboth` as the only T2-only cell
+> before its table ran (Opus, pass 10).  **AND THE JOIN ITSELF, adjudicated 2026-09-09 on `sgimtedepth4dead` 7g-1 after a MEASURED total escape: a dispatch LABEL is a floor axis of an edited guard when the selector's value FLOWS INTO an lvalue the guarded body reads or writes within the enclosing function (there, `dst_mode = (dst_tlb << 10) + ...` two lines above a repair of `dst_mode |= RGBA`), or when the body re-tests it after the join (TxICR); a label that reaches the edit and touches nothing the body reads is clause (e) (the `mode & COPY` shape).  A detector rowing one label of three was swept 14/14 by `&& dst_tlb == MTE_TLB_A` while a guest-only control showed the closed defect live at the other two (`regress/artifacts/sgimtedepth4dead/killtable3_20260909/`).  The floor it adds is {labels} x the guard operand's body-tested partition -- six cells there, two rows owed -- never the labels' cross-product with everything.**  And the measuring seat's own bound -- the cross-product
+> of the value-CLASSES the rows establish, with the dispatch axes as full axes, demand
+> INCREMENTAL -- agrees with the body-tested form on every cell that mattered here and differs on
+> where the classes come from (the rows, or the body's tests); that residual difference is
+> carried to the next pass as a named question rather than settled by the author.
+>
+> #### *** THE LETTER OVER-DEMANDED, AND ITS OWN AUTHOR BOUNDED IT ONE PASS LATER (pass 11, 2026-09-04). ***
+>
+> Read literally, "the cross-product of the body-tested partitions" demanded ALL 128 cells at the TxICR
+> arm -- the body also tests `idata & IEN`, `idata & ICLR`, the register's INT bit and `idata & 0xe0` --
+> and it compounds as 2^k in the `if`-count across twelve arms: the `#392` shape wearing the rule's
+> clothes.  Three seats said the letter demands the remainder; the flagship seat, asked to be harder on
+> its own rule than on anyone, ruled AGAINST the letter:
+>
+> > **The rule ENUMERATES joint cells wherever the body distinguishes them; the FLOOR -- the cells a row
+> > is OWED for -- is the cross-product of the guard's dominating predicates with the device-STATE lvalues
+> > the fix's own repair path reads that are JOINTLY REACHABLE through its own data flow.**  The bits of
+> > the single value being written are single-operand MARGINALS, not floor; joint cells outside the floor
+> > are clause-(e) coverage debt, subject to the one ask-again.  A filter may reject or discharge a cell
+> > but may demand a new row only for a floor cell -- so it cannot grow unbounded.
+>
+> At TxICR the floor is {label} x {p1} x {p2}: one `pcc_timer_tick` callback increments both counts and
+> `reassert_interrupts` reads both, so the pair is a joint input of the model.  Eight cells, all rowed.
+>
+> #### *** THE FLOOR INCLUDES THE SINGLE-AXIS GENERATING SET, AND "DERIVED" STATE IS NOT DISPOSABLE.
+> #### Adjudicated 2026-09-04 by the fix review (Fable 5.1 adjudicating; GPT-6 Astra at max dissenting on the
+> #### bound and supplying the two findings that made the amendment measurable). ***
+>
+> > **At each floor cell, every idata bit the guarded body TESTS is written both clear and set.**  The bare
+> > state floor above does not catch `M_ICLR` -- an idata-bit x state joint -- and would grade the pass-11
+> > escape as debt while the CHANGELOG grades it L2; the generating set is what makes the two consistent.
+> > Multi-axis idata joints stay clause-(e) debt.  **The codex seat adopts the Opus strength-t covering
+> > array instead** (its `t` = the body's longest conjunction) and is RECORDED, not adopted -- for COST (seven
+> > binary axes at TxICR make a strength-4 array tens of pty cells per arm: the 2^k growth by another door) and
+> > because a covering array certifies that a tuple OCCURS, not that an observable differs, so it cannot be the
+> > floor without the CHANNEL obligation doing the work.  *This clause first said "`t` is a judgment input";
+> > the array's own author refuted that on pass 13 -- `t` is read off the body -- and supplied the two grounds.*
+>
+> | **CHANNEL** | for each row, name **the mutant it kills** and **the observable that differs under that mutant**. A row whose named channel cannot vary under its named mutant is VACUOUS BY CONSTRUCTION, and that is knowable at writing time, before any table runs | a survival oracle at a REFUSAL-EFFECT site: guarded and unguarded code both survive |
+>
+> ### *** THE CHANNEL LINE IS THE FOURTH CHECK, ADDED 2026-08-28 AFTER `#489` SHIPPED A
+> ### DETECTOR THREE TIMES AND A PANEL MEASURED FOUR ESCAPES OF ONE SHAPE. ***
+>
+> `#489` de-fatalised a guard, and **four separate mutants left the host ALIVE while the guard
+> was wrong** -- `> 408`, exempt-zero, `< 408`, and a latch-state collapse. Each was caught
+> only by a row reading a DECLINE channel (COND_DATA_AVAIL, the zeroed count, the fired event).
+> Each was predicted by a seat from the packet alone, and **each escaped a table that had
+> already come back CLEAN.** The round's own probe header carried the governing sentence before
+> three of the four were found.
+>
+> > #### *** "EACH ESCAPED A CLEAN TABLE" IS FALSE OF `> 408`.  Corrected 2026-09-06 from the
+> > #### retro re-check (batch 8b), verified against the artifacts before this edit. ***
+> >
+> > `regress/artifacts/gdromexitsix/killtable_20260828/M2_gt408.raw` -- TABLE 1, the 13-row instrument
+> > -- reads `TOCLEN_RESULT=10/13`: the `> 408` mutant was KILLED from the first table and never escaped
+> > anything (11/15 in table 2, 13/19 in table 4).  The clean-table escape of that shape was the EARLY
+> > RETURN, `break;` -> `return;`: 13/13 on the 13-row table, then `M7_return.raw` 17/19 once `bad cnt`
+> > and `bad event` were rowed.  Exempt-zero (`M8` 18/19), `< 408` (`M9` 18/19) and the latch collapse
+> > (`M10` 18/19) stand as written.  **The rule above is untouched -- a row reading a DECLINE channel is
+> > what caught every one of them -- and the exemplar's count is what was wrong.**  A wrong exemplar in
+> > the paragraph that mints a check gets reused as the check's warrant, which is why it is corrected
+> > here rather than left to the CHANGELOG (`#489`'s block carries the same correction).
+>
+> **THE COST WAS NOT MISSING KNOWLEDGE.  IT WAS KNOWLEDGE LIVING WHERE NOBODY CONSULTS IT AT
+> ROW-WRITING TIME** -- this file's trigger-versus-memory finding, again.
+>
+> #### AND THE OBVIOUS GENERALISATION IS UNBOUNDED, SO IT IS NOT THE ONE ADOPTED
+>
+> The tempting sentence is *"every VALUE and every STATE in which a guard refuses needs a
+> decline-channel row."*  **That licenses unbounded row growth -- the `#392` shape** -- and the
+> adjudication that produced this line rejected it for exactly that reason. The distinction:
+>
+> * **ROW DEMAND** -- *which* refusals need pinning -- is ALREADY bounded and is not touched:
+>   the floor clauses, the (d) DEPENDS-ON closure, one accept row per conditioned predicate,
+>   one anchor row per position claim, one ask-again. **Rows are owed PER ENUMERATED MUTANT,
+>   never per refusing state**; two states no enumerated mutant distinguishes collapse into one
+>   row. That enumeration is diff-closed and finite.
+> * **ROW VALIDITY** -- what `#489` actually measured -- is the CHANNEL line above, and it is a
+>   WRITE-TIME check on rows that already exist.
+>
+> > **A FILTER CAN REJECT OR REPAIR A ROW; IT CAN NEVER DEMAND A NEW ONE -- SO IT CANNOT GROW
+> > WITHOUT BOUND.**  That is the stop condition, and it is structural rather than a cap: the
+> > generator side is untouched.
+>
+> *Mechanising it -- a `# kills: <mutant> via <channel>` comment per row -- is FILED, not
+> adopted: it changes what every probe in the tree must carry, and that is an owner decision
+> rather than a round's.*
+>
+> **The third is the one that looked impossible and is the cheapest.** It only seemed
+> unreachable because it was approached from the mutant side -- *"what edit escapes?"*,
+> which is unbounded -- instead of the field side -- *"what states can these two fields be
+> in?"*, which is a grep. In `#462` that was three lines of output: `alloc_data` sets both
+> fields; two `free` sites clear only one.
+>
+> **DO NOT move the ask-again earlier.** It works BECAUSE a clean table redirects seats away
+> from shapes the author already covered; measured yield says so. And do not raise the cap
+> -- the cap is what stands between this and `#392`.
+
+> **(e) THE CONTRACT.** The probe header names which edits this detector is designed
+> to catch. *A detector that says so is falsifiable; one claiming completeness is
+> not* -- and a later escape becomes "outside the contract" or "a breach of it",
+> which are different dispositions, rather than an argument about overclaiming.
+> Two lines in a header.
+>
+> **IT IS A FLOOR CLAUSE, so a breach is L2 �?" replace IN-ROUND however late it is found.**
+> That is deliberate and it is the whole point: an escaped (d) mutant means the round's
+> claim to have "shipped a detector with the fix" is false about the fix's own repair.
+>
+> ### *** (f) THE ANCHOR RULE -- adopted 2026-08-25 after a CLEAN 12/12 detector was escaped
+> ### by a ONE-TERM translation that three purpose-built rows could not see BY CONSTRUCTION. ***
+>
+> **Rows that assert only PAIRWISE DISTINCTNESS, or a same-path round-trip, test the decode
+> against ITSELF.** They are therefore invariant under any edit that re-maps addresses
+> INJECTIVELY over the probed set -- translations first among them -- and they catch a re-map
+> only where it COLLIDES on that set.
+>
+> `#463` shipped three rows built specifically to pin an index bound: `alias`, `alias2` and
+> `crossarr`. All three read back `+0x10` and together assert exactly
+> `cell(+0x10) != cell(+0x14), cell(+0x18), cell(+0x24)`. **They never assert WHICH cell any
+> offset names.** So `r = (relative_addr / 4) & 3` -> `((relative_addr / 4) + 1) & 3` slid the
+> whole window one word, every pair stayed distinct, and the detector scored a CLEAN SWEEP --
+> while every `+0x?8` register moved one past a `[3]` array and a documented register's store
+> landed on `int asserted_13`, making the device drop a legitimately pending interrupt.
+rg: src/memory*: The filename, directory name, or volume label syntax is incorrect. (os error 123)
+src/core\float_emul.c:422:uint64_t ieee_store_float_value_rm(double nf, int fmt, int rm)
+src/core\float_emul.c:713:uint64_t ieee_store_float_value(double nf, int fmt)
+src/core\float_emul.c:764: *  The D-format store is a pure re-encode -- a host double already has
+src/core\memory.c:82: *  memory_writemax64():
+src/core\memory.c:89:void memory_writemax64(struct cpu *cpu, unsigned char *buf, int len,
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -LiteralPath src/core/memory.c | Select-Object -Skip 75 -First 70; Get-Content -LiteralPath src/cpus/cpu_sh_instr.c | Select-Object -Skip 760 -First 218; Get-Content -LiteralPath src/cpus/memory_rw.c | Select-Object -Skip 470 -First 185; Get-Content -LiteralPath src/include/memory.h | Select-Object -First 150' in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n 'memory_rw\\(|dev_dreamcast_maple_access|sh_.*_loadstore|MEM_READ|length|len' src/cpus/memory_sh.c src/cpus/cpu_sh.c | Select-Object -First 100; rg -n '#define.*MEM_(READ|WRITE)|DEVICE_ACCESS' src/include/device.h src/include/memory.h; rg -n --glob '*.raw' 'read silent|other read|double read 2|exit status|SCORE ' regress/artifacts/mapledmaaddr/killtable_20260912" in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+ succeeded in 184ms:
+src/cpus/cpu_sh.c:583:	 *  could not even be silenced with -q.
+src/cpus/cpu_sh.c:632:		for (j=10 - strlen(tdefs[i].name); j>0; j--)
+src/include/memory.h:117:#define	MEM_READ			0
+src/include/memory.h:118:#define	MEM_WRITE			1
+src/include/memory.h:149:#define DEVICE_ACCESS(x)	int dev_ ## x ## _access(struct cpu *cpu, \
+regress/artifacts/mapledmaaddr/killtable_20260912\probe_M_ZEROEXIT.raw:8:other read         0x0            0x0            RESET2 reads 0 with the field nonzero        ok
+regress/artifacts/mapledmaaddr/killtable_20260912\probe_M_ZEROEXIT.raw:10:exit status        exit1          exit0          the session ends by `quit'                   FAIL
+regress/artifacts/mapledmaaddr/killtable_20260912\probe_M_ZEROEXIT.raw:15:double read 2      0x8c012345     0x8c012345     second read: the first did not clear it      ok
+regress/artifacts/mapledmaaddr/killtable_20260912\probe_M_ZEROEXIT.raw:17:read silent        0/9            0/9            maple output in read sessions (any text)     ok
+regress/artifacts/mapledmaaddr/killtable_20260912\probe_M_ZEROEXIT.raw:20:SCORE 13/16  label=M_ZEROEXIT
+regress/artifacts/mapledmaaddr/killtable_20260912\probe_M_ZEROEXIT.raw:21:FAILING: marker survive, exit status, initial zero
+regress/artifacts/mapledmaaddr/killtable_20260912\probe_M_REWORD.raw:8:other read         0x0            0x0            RESET2 reads 0 with the field nonzero        ok
+regress/artifacts/mapledmaaddr/killtable_20260912\probe_M_REWORD.raw:10:exit status        exit0          exit0          the session ends by `quit'                   ok
+regress/artifacts/mapledmaaddr/killtable_20260912\probe_M_REWORD.raw:15:double read 2      0x8c012345     0x8c012345     second read: the first did not clear it      ok
+regress/artifacts/mapledmaaddr/killtable_20260912\probe_M_REWORD.raw:17:read silent        8/9            0/9            maple output in read sessions (any text)     FAIL
+regress/artifacts/mapledmaaddr/killtable_20260912\probe_M_REWORD.raw:20:SCORE 15/16  label=M_REWORD
+regress/artifacts/mapledmaaddr/killtable_20260912\probe_M_REWORD.raw:21:FAILING: read silent
+regress/artifacts/mapledmaaddr/killtable_20260912\probe_M_RET0.raw:8:other read         0x0            0x0            RESET2 reads 0 with the field nonzero        ok
+regress/artifacts/mapledmaaddr/killtable_20260912\probe_M_RET0.raw:10:exit status        exit0          exit0          the session ends by `quit'                   ok
+regress/artifacts/mapledmaaddr/killtable_20260912\probe_M_RET0.raw:15:double read 2      0xa5a55a5a     0x8c012345     second read: the first did not clear it      FAIL
+regress/artifacts/mapledmaaddr/killtable_20260912\probe_M_RET0.raw:17:read silent        8/9            0/9            maple output in read sessions (any text)     FAIL
+regress/artifacts/mapledmaaddr/killtable_20260912\probe_M_RET0.raw:20:SCORE 7/16  label=M_RET0
+regress/artifacts/mapledmaaddr/killtable_20260912\probe_M_RET0.raw:21:FAILING: read val_a, read val_b, initial zero, read four, read all ones, double read 1, double read 2, write replace, read silent
+regress/artifacts/mapledmaaddr/killtable_20260912\probe_M_READCLEAR.raw:8:other read         0x0            0x0            RESET2 reads 0 with the field nonzero        ok
+regress/artifacts/mapledmaaddr/killtable_20260912\probe_M_READCLEAR.raw:10:exit status        exit0          exit0          the session ends by `quit'                   ok
+regress/artifacts/mapledmaaddr/killtable_20260912\probe_M_READCLEAR.raw:15:double read 2      0x0            0x8c012345     second read: the first did not clear it      FAIL
+regress/artifacts/mapledmaaddr/killtable_20260912\probe_M_READCLEAR.raw:17:read silent        0/9            0/9            maple output in read sessions (any text)     ok
+regress/artifacts/mapledmaaddr/killtable_20260912\probe_M_READCLEAR.raw:20:SCORE 15/16  label=M_READCLEAR
+regress/artifacts/mapledmaaddr/killtable_20260912\probe_M_READCLEAR.raw:21:FAILING: double read 2
+regress/artifacts/mapledmaaddr/killtable_20260912\probe_M_EQ4.raw:8:other read         0x0            0x0            RESET2 reads 0 with the field nonzero        ok
+regress/artifacts/mapledmaaddr/killtable_20260912\probe_M_EQ4.raw:10:exit status        exit0          exit0          the session ends by `quit'                   ok
+regress/artifacts/mapledmaaddr/killtable_20260912\probe_M_EQ4.raw:15:double read 2      0x8c012345     0x8c012345     second read: the first did not clear it      ok
+regress/artifacts/mapledmaaddr/killtable_20260912\probe_M_EQ4.raw:17:read silent        0/9            0/9            maple output in read sessions (any text)     ok
+regress/artifacts/mapledmaaddr/killtable_20260912\probe_M_EQ4.raw:20:SCORE 15/16  label=M_EQ4
+regress/artifacts/mapledmaaddr/killtable_20260912\probe_M_MASKLOW.raw:8:other read         0x0            0x0            RESET2 reads 0 with the field nonzero        ok
+regress/artifacts/mapledmaaddr/killtable_20260912\probe_M_MASKLOW.raw:10:exit status        exit0          exit0          the session ends by `quit'                   ok
+regress/artifacts/mapledmaaddr/killtable_20260912\probe_M_MASKLOW.raw:15:double read 2      0x8c012340     0x8c012345     second read: the first did not clear it      FAIL
+regress/artifacts/mapledmaaddr/killtable_20260912\probe_M_MASKLOW.raw:17:read silent        0/9            0/9            maple output in read sessions (any text)     ok
+regress/artifacts/mapledmaaddr/killtable_20260912\probe_M_MASKLOW.raw:20:SCORE 9/16  label=M_MASKLOW
+regress/artifacts/mapledmaaddr/killtable_20260912\probe_M_MASKLOW.raw:21:FAILING: read val_a, read val_b, read four, read all ones, double read 1, double read 2, write replace
+regress/artifacts/mapledmaaddr/killtable_20260912\probe_M_DECLINE.raw:8:other read         0x0            0x0            RESET2 reads 0 with the field nonzero        ok
+regress/artifacts/mapledmaaddr/killtable_20260912\probe_M_DECLINE.raw:10:exit status        exit0          exit0          the session ends by `quit'                   ok
+regress/artifacts/mapledmaaddr/killtable_20260912\probe_M_DECLINE.raw:15:double read 2      0x0            0x8c012345     second read: the first did not clear it      FAIL
+regress/artifacts/mapledmaaddr/killtable_20260912\probe_M_DECLINE.raw:17:read silent        0/9            0/9            maple output in read sessions (any text)     ok
+regress/artifacts/mapledmaaddr/killtable_20260912\probe_M_DECLINE.raw:20:SCORE 9/16  label=M_DECLINE
+regress/artifacts/mapledmaaddr/killtable_20260912\probe_M_DECLINE.raw:21:FAILING: read val_a, read val_b, read four, read all ones, double read 1, double read 2, write replace
+regress/artifacts/mapledmaaddr/killtable_20260912\probe_M_HOIST.raw:8:other read         0x8c012345     0x0            RESET2 reads 0 with the field nonzero        FAIL
+regress/artifacts/mapledmaaddr/killtable_20260912\probe_M_HOIST.raw:10:exit status        exit0          exit0          the session ends by `quit'                   ok
+regress/artifacts/mapledmaaddr/killtable_20260912\probe_M_HOIST.raw:15:double read 2      0x8c012345     0x8c012345     second read: the first did not clear it      ok
+regress/artifacts/mapledmaaddr/killtable_20260912\probe_M_HOIST.raw:17:read silent        0/9            0/9            maple output in read sessions (any text)     ok
+regress/artifacts/mapledmaaddr/killtable_20260912\probe_M_HOIST.raw:20:SCORE 15/16  label=M_HOIST
+regress/artifacts/mapledmaaddr/killtable_20260912\probe_M_HOIST.raw:21:FAILING: other read
+regress/artifacts/mapledmaaddr/killtable_20260912\probe_M_EXITONLY.raw:8:other read         0x0            0x0            RESET2 reads 0 with the field nonzero        ok
+regress/artifacts/mapledmaaddr/killtable_20260912\probe_M_EXITONLY.raw:10:exit status        exit1          exit0          the session ends by `quit'                   FAIL
+regress/artifacts/mapledmaaddr/killtable_20260912\probe_M_EXITONLY.raw:15:double read 2      absent         0x8c012345     second read: the first did not clear it      FAIL
+regress/artifacts/mapledmaaddr/killtable_20260912\probe_M_EXITONLY.raw:17:read silent        0/9            0/9            maple output in read sessions (any text)     ok
+regress/artifacts/mapledmaaddr/killtable_20260912\probe_M_EXITONLY.raw:20:SCORE 6/16  label=M_EXITONLY
+regress/artifacts/mapledmaaddr/killtable_20260912\probe_M_EXITONLY.raw:21:FAILING: read val_a, read val_b, marker survive, exit status, initial zero, read four, read all ones, double read 1, double read 2, write replace
+regress/artifacts/mapledmaaddr/killtable_20260912\probe_BASE.raw:8:other read         0x0            0x0            RESET2 reads 0 with the field nonzero        ok
+regress/artifacts/mapledmaaddr/killtable_20260912\probe_BASE.raw:10:exit status        exit0          exit0          the session ends by `quit'                   ok
+regress/artifacts/mapledmaaddr/killtable_20260912\probe_BASE.raw:15:double read 2      0x8c012345     0x8c012345     second read: the first did not clear it      ok
+regress/artifacts/mapledmaaddr/killtable_20260912\probe_BASE.raw:17:read silent        0/9            0/9            maple output in read sessions (any text)     ok
+regress/artifacts/mapledmaaddr/killtable_20260912\probe_BASE.raw:20:SCORE 16/16  label=BASE
+regress/artifacts/mapledmaaddr/killtable_20260912\probe_M_BIT30.raw:8:other read         0x0            0x0            RESET2 reads 0 with the field nonzero        ok
+regress/artifacts/mapledmaaddr/killtable_20260912\probe_M_BIT30.raw:10:exit status        exit0          exit0          the session ends by `quit'                   ok
+regress/artifacts/mapledmaaddr/killtable_20260912\probe_M_BIT30.raw:15:double read 2      0x8c012345     0x8c012345     second read: the first did not clear it      ok
+regress/artifacts/mapledmaaddr/killtable_20260912\probe_M_BIT30.raw:17:read silent        0/9            0/9            maple output in read sessions (any text)     ok
+regress/artifacts/mapledmaaddr/killtable_20260912\probe_M_BIT30.raw:20:SCORE 15/16  label=M_BIT30
+regress/artifacts/mapledmaaddr/killtable_20260912\probe_M_LATCHED.raw:8:other read         0x0            0x0            RESET2 reads 0 with the field nonzero        ok
+regress/artifacts/mapledmaaddr/killtable_20260912\probe_M_LATCHED.raw:10:exit status        exit0          exit0          the session ends by `quit'                   ok
+regress/artifacts/mapledmaaddr/killtable_20260912\probe_M_LATCHED.raw:15:double read 2      0x8c012345     0x8c012345     second read: the first did not clear it      ok
+regress/artifacts/mapledmaaddr/killtable_20260912\probe_M_LATCHED.raw:17:read silent        8/9            0/9            maple output in read sessions (any text)     FAIL
+regress/artifacts/mapledmaaddr/killtable_20260912\probe_M_LATCHED.raw:20:SCORE 15/16  label=M_LATCHED
+regress/artifacts/mapledmaaddr/killtable_20260912\probe_M_LATCHED.raw:21:FAILING: read silent
+regress/artifacts/mapledmaaddr/killtable_20260912\probe_M_KEEPFATAL.raw:8:other read         0x0            0x0            RESET2 reads 0 with the field nonzero        ok
+regress/artifacts/mapledmaaddr/killtable_20260912\probe_M_KEEPFATAL.raw:10:exit status        exit0          exit0          the session ends by `quit'                   ok
+regress/artifacts/mapledmaaddr/killtable_20260912\probe_M_KEEPFATAL.raw:15:double read 2      0x8c012345     0x8c012345     second read: the first did not clear it      ok
+regress/artifacts/mapledmaaddr/killtable_20260912\probe_M_KEEPFATAL.raw:17:read silent        8/9            0/9            maple output in read sessions (any text)     FAIL
+regress/artifacts/mapledmaaddr/killtable_20260912\probe_M_KEEPFATAL.raw:20:SCORE 15/16  label=M_KEEPFATAL
+regress/artifacts/mapledmaaddr/killtable_20260912\probe_M_KEEPFATAL.raw:21:FAILING: read silent
+regress/artifacts/mapledmaaddr/killtable_20260912\probe_HEAD.raw:8:other read         0x0            0x0            RESET2 reads 0 with the field nonzero        ok
+regress/artifacts/mapledmaaddr/killtable_20260912\probe_HEAD.raw:10:exit status        exit1          exit0          the session ends by `quit'                   FAIL
+regress/artifacts/mapledmaaddr/killtable_20260912\probe_HEAD.raw:15:double read 2      absent         0x8c012345     second read: the first did not clear it      FAIL
+regress/artifacts/mapledmaaddr/killtable_20260912\probe_HEAD.raw:17:read silent        8/9            0/9            maple output in read sessions (any text)     FAIL
+regress/artifacts/mapledmaaddr/killtable_20260912\probe_HEAD.raw:20:SCORE 5/16  label=HEAD
+regress/artifacts/mapledmaaddr/killtable_20260912\probe_HEAD.raw:21:FAILING: read val_a, read val_b, marker survive, exit status, initial zero, read four, read all ones, double read 1, double read 2, write replace, read silent
+
+ succeeded in 222ms:
+
+	return x;
+}
+
+
+/*
+ *  memory_writemax64():
+ *
+ *  Write at most 64 bits of data to a buffer.  Length is given by
+ *  len, and the byte order by cpu->byte_order.
+ *
+ *  This function should not be called with cpu == NULL.
+ */
+void memory_writemax64(struct cpu *cpu, unsigned char *buf, int len,
+	uint64_t data)
+{
+	int i, byte_order = cpu->byte_order;
+
+	if (len & MEM_PCI_LITTLE_ENDIAN) {
+		len &= ~MEM_PCI_LITTLE_ENDIAN;
+		byte_order = EMUL_LITTLE_ENDIAN;
+	}
+
+	if (byte_order == EMUL_LITTLE_ENDIAN)
+		for (i=0; i<len; i++) {
+			buf[i] = data & 255;
+			data >>= 8;
+		}
+	else
+		for (i=0; i<len; i++) {
+			buf[len - 1 - i] = data & 255;
+			data >>= 8;
+		}
+}
+
+
+/*
+ *  zeroed_alloc():
+ *
+ *  Allocates a block of memory using mmap(), and if that fails, try
+ *  malloc() + memset(). The returned memory block contains only zeroes.
+ */
+void *zeroed_alloc(size_t s)
+{
+	void *p = mmap(NULL, s, PROT_READ | PROT_WRITE,
+	    MAP_ANON | MAP_PRIVATE, -1, 0);
+
+	/*  #175: (Codex/Fable) mmap failure is MAP_FAILED, not NULL  */
+	if (p == MAP_FAILED) {
+#if 1
+		fprintf(stderr, "zeroed_alloc(): mmap() failed. This should"
+		    " not usually happen. If you can reproduce this, then"
+		    " please contact me with details about your run-time"
+		    " environment.\n");
+		exit(1);
+#else
+		CHECK_ALLOCATION(p = malloc(s));
+		memset(p, 0, s);
+#endif
+	}
+
+	return p;
+}
+
+
+/*
+ *  memory_new():
+ *
+ *  This function creates a new memory object. An emulated machine needs one
+ *  of these.
+	else
+		data = BE32_TO_HOST(data);
+	reg(ic->arg[1]) = data;
+}
+X(fmov_rm_frn)
+{
+	uint32_t addr = reg(ic->arg[0]);
+	uint32_t *p = (uint32_t *) cpu->cd.sh.host_load[addr >> 12];
+	uint32_t data;
+
+	FLOATING_POINT_AVAILABLE_CHECK;
+
+	/*  SZ=1 (register pair) is a 64-bit access needing 8-byte alignment.  */
+	SH_ALIGN_CHECK_LD(addr, (cpu->cd.sh.fpscr & SH_FPSCR_SZ) ? 7 : 3);
+
+	/*
+	 *  #315: the destination base for a register-pair transfer. An ODD
+	 *  register field selects the XD bank (XF[field & ~1]), which is what
+	 *  the postinc/predec siblings have always done. This used to be
+	 *  `fatal("ODD ...")` + exit(1) -- a legal instruction killing the host
+	 *  process -- with the correct redirect sitting unreachable on the very
+	 *  next line. The base is used for BOTH words below; assigning it and
+	 *  then still writing through ic->arg[1] would have left the redirect
+	 *  dead, which a panel seat caught in the first draft of this fix.
+	 */
+	size_t r1 = ic->arg[1];
+
+	uint32_t data2 = 0;
+	if (cpu->cd.sh.fpscr & SH_FPSCR_SZ) {
+		// Register pair. Read second word first, then fallback
+		// to read the first word.
+
+		int ofs = (r1 - (size_t)&cpu->cd.sh.fr[0]) / sizeof(uint32_t);
+		if (ofs & 1)
+			r1 = (size_t)&cpu->cd.sh.xf[ofs & ~1];
+
+		SYNCH_PC;
+		if (!cpu->memory_rw(cpu, cpu->mem, addr + 4, (unsigned char *)&data,
+		    sizeof(data), MEM_READ, CACHE_DATA)) {
+			/*  Exception.  */
+			if (!cpu->running)
+				cpu->cd.sh.next_ic = &nothing_call;
+			return;
+		}
+
+		data2 = data;
+		
+		// fall-through to read the first word in the pair:
+	}
+
+	if (p != NULL) {
+		data = p[(addr & 0xfff) >> 2];
+	} else {
+		SYNCH_PC;
+		if (!cpu->memory_rw(cpu, cpu->mem, addr, (unsigned char *)&data,
+		    sizeof(data), MEM_READ, CACHE_DATA)) {
+			/*  Exception.  */
+			if (!cpu->running)
+				cpu->cd.sh.next_ic = &nothing_call;
+			return;
+		}
+	}
+
+	if (cpu->byte_order == EMUL_LITTLE_ENDIAN)
+		data = LE32_TO_HOST(data);
+	else
+		data = BE32_TO_HOST(data);
+
+	reg(r1) = data;			/*  #315: the redirected base  */
+
+	// TODO: How about little endian: read words in opposite order?
+	if (cpu->cd.sh.fpscr & SH_FPSCR_SZ) {
+		if (cpu->byte_order == EMUL_LITTLE_ENDIAN)
+			data2 = LE32_TO_HOST(data2);
+		else
+			data2 = BE32_TO_HOST(data2);
+		reg(r1 + 4) = data2;	/*  #315  */
+	}
+}
+X(fmov_r0_rm_frn)
+{
+	uint32_t data, addr = reg(ic->arg[0]) + cpu->cd.sh.r[0];
+	uint32_t *p = (uint32_t *) cpu->cd.sh.host_load[addr >> 12];
+	/*
+	 *  #315: SZ=1 (register pair) used to run ABORT_EXECUTION here, which
+	 *  sets cpu->running = 0 -- a legal FMOV stopping the emulator. It is
+	 *  now the same transfer the postinc sibling has always performed: an
+	 *  odd register field selects the XD bank, and the second word lives at
+	 *  addr + 4. The alignment class widens with it: a register pair is a
+	 *  64-bit access and needs 8-byte alignment, which the hard-coded mask
+	 *  of 3 did not ask for.
+	 */
+	int d = cpu->cd.sh.fpscr & SH_FPSCR_SZ;
+	size_t r1 = ic->arg[1];
+
+	if (d) {
+		int ofs = (r1 - (size_t)&cpu->cd.sh.fr[0]) / sizeof(uint32_t);
+		if (ofs & 1)
+			r1 = (size_t)&cpu->cd.sh.xf[ofs & ~1];
+	}
+
+	FLOATING_POINT_AVAILABLE_CHECK;
+
+	SH_ALIGN_CHECK_LD(addr, d ? 7 : 3);
+
+	if (d) {
+		uint32_t data2;
+
+		if (p != NULL) {
+			data = p[(addr & 0xfff) >> 2];
+		} else {
+			SYNCH_PC;
+			if (!cpu->memory_rw(cpu, cpu->mem, addr,
+			    (unsigned char *)&data, sizeof(data),
+			    MEM_READ, CACHE_DATA)) {
+				if (!cpu->running)
+					cpu->cd.sh.next_ic = &nothing_call;
+				return;
+			}
+		}
+
+		SYNCH_PC;
+		if (!cpu->memory_rw(cpu, cpu->mem, addr + 4,
+		    (unsigned char *)&data2, sizeof(data2),
+		    MEM_READ, CACHE_DATA)) {
+			if (!cpu->running)
+				cpu->cd.sh.next_ic = &nothing_call;
+			return;
+		}
+
+		if (cpu->byte_order == EMUL_LITTLE_ENDIAN) {
+			data = LE32_TO_HOST(data);
+			data2 = LE32_TO_HOST(data2);
+		} else {
+			data = BE32_TO_HOST(data);
+			data2 = BE32_TO_HOST(data2);
+		}
+
+		reg(r1) = data;
+		reg(r1 + 4) = data2;
+		return;
+	}
+
+	if (p != NULL) {
+		data = p[(addr & 0xfff) >> 2];
+	} else {
+		SYNCH_PC;
+		if (!cpu->memory_rw(cpu, cpu->mem, addr, (unsigned char *)&data,
+		    sizeof(data), MEM_READ, CACHE_DATA)) {
+			/*  Exception.  */
+			if (!cpu->running)
+				cpu->cd.sh.next_ic = &nothing_call;
+			return;
+		}
+	}
+
+	if (cpu->byte_order == EMUL_LITTLE_ENDIAN)
+		data = LE32_TO_HOST(data);
+	else
+		data = BE32_TO_HOST(data);
+
+	reg(ic->arg[1]) = data;
+}
+X(fmov_rm_postinc_frn)
+{
+	int d = cpu->cd.sh.fpscr & SH_FPSCR_SZ;
+	uint32_t data, data2, addr = reg(ic->arg[0]);
+	uint32_t *p = (uint32_t *) cpu->cd.sh.host_load[addr >> 12];
+	size_t r1 = ic->arg[1];
+
+	if (d) {
+		/*  xd instead of dr?  */
+		int ofs = (r1 - (size_t)&cpu->cd.sh.fr[0]) / sizeof(uint32_t);
+		if (ofs & 1)
+			r1 = (size_t)&cpu->cd.sh.xf[ofs & ~1];
+	}
+
+	FLOATING_POINT_AVAILABLE_CHECK;
+
+	/*  SZ=1 (d) is a 64-bit register-pair access needing 8-byte alignment.  */
+	SH_ALIGN_CHECK_LD(addr, d ? 7 : 3);
+
+	if (p != NULL) {
+		data = p[(addr & 0xfff) >> 2];
+	} else {
+		SYNCH_PC;
+		if (!cpu->memory_rw(cpu, cpu->mem, addr, (unsigned char *)&data,
+		    sizeof(data), MEM_READ, CACHE_DATA)) {
+			/*  Exception.  */
+			if (!cpu->running)
+				cpu->cd.sh.next_ic = &nothing_call;
+			return;
+		}
+	}
+
+	if (cpu->byte_order == EMUL_LITTLE_ENDIAN)
+		data = LE32_TO_HOST(data);
+	else
+		data = BE32_TO_HOST(data);
+
+	if (d) {
+		/*  Double-precision load:  */
+		addr += 4;
+		SYNCH_PC;
+		if (!cpu->memory_rw(cpu, cpu->mem, addr, (unsigned
+		    char *)&data2, sizeof(data2), MEM_READ, CACHE_DATA)) {
+			if (!cpu->running)
+				cpu->cd.sh.next_ic = &nothing_call;
+			return;
+		}
+
+		if (cpu->byte_order == EMUL_LITTLE_ENDIAN)
+			data2 = LE32_TO_HOST(data2);
+		else
+			data2 = BE32_TO_HOST(data2);
+		reg(r1 + 4) = data2;
+	}
+
+				break;
+			}
+#endif
+
+		start = 0; end = mem->n_mmapped_devices - 1;
+		i = mem->last_accessed_device;
+
+		/*  Scan through all devices:  */
+		do {
+			if (paddr >= mem->devices[i].baseaddr &&
+			    paddr < mem->devices[i].endaddr) {
+				/*  Found a device, let's access it:  */
+				mem->last_accessed_device = i;
+
+				/*  #95: zero the caller's buffer up front on a read
+				    so a device handler that fills only part of it --
+				    or whose access is len-clamped just below -- can
+				    never hand back uninitialised host memory to the
+				    guest.  Root-cause fix for the uninit-read class
+				    (cf. per-device #91/#93/#94).  */
+				if (writeflag == MEM_READ)
+					memset(data, 0, len);
+
+				paddr -= mem->devices[i].baseaddr;
+				if (paddr + len > mem->devices[i].length) {
+					/*  Note the truncation per the
+					    warn-loudly ethos, but only at
+					    debug verbosity (-v) and at most
+					    probing at the end of a device's
+					    mapped range is common and benign
+					    (cf. the unwarned zero-fill in
+					    #95/#119 above).  */
+					static int n_trunc_msgs = 0;
+					if (ENOUGH_VERBOSITY(SUBSYS_MEMORY,
+					    VERBOSITY_DEBUG) &&
+					    n_trunc_msgs < 8) {
+						n_trunc_msgs ++;
+						debugmsg_cpu(cpu,
+						    SUBSYS_MEMORY,
+						    mem->devices[i].name,
+						    VERBOSITY_DEBUG,
+						    "%s truncated at end of"
+						    " device: offset 0x%llx,"
+						    " len %i -> %i",
+						    writeflag == MEM_WRITE ?
+						    "write" : "read",
+						    (long long) paddr,
+						    (int) len,
+						    (int) (mem->devices[i].
+						    length - paddr));
+					}
+					len = mem->devices[i].length - paddr;
+				}
+
+				if (cpu->update_translation_table != NULL &&
+				    !(ok & MEMORY_NOT_FULL_PAGE) &&
+				    mem->devices[i].flags & DM_DYNTRANS_OK) {
+					int wf = writeflag == MEM_WRITE? 1 : 0;
+					unsigned char *host_addr;
+
+					if (!(mem->devices[i].flags &
+					    DM_DYNTRANS_WRITE_OK))
+						wf = 0;
+
+					if (writeflag && wf) {
+						if (paddr < mem->devices[i].
+						    dyntrans_write_low)
+							mem->devices[i].
+							dyntrans_write_low =
+							    paddr &~offset_mask;
+						if (paddr >= mem->devices[i].
+						    dyntrans_write_high)
+							mem->devices[i].
+						 	dyntrans_write_high =
+							    paddr | offset_mask;
+					}
+
+					if (mem->devices[i].flags &
+					    DM_EMULATED_RAM) {
+						/*  MEM_WRITE to force the page
+						    to be allocated, if it
+						    wasn't already  */
+						uint64_t *pp = (uint64_t *)mem->
+						    devices[i].dyntrans_data;
+						uint64_t p = orig_paddr - *pp;
+						host_addr =
+						    memory_paddr_to_hostaddr(
+						    mem, p & ~offset_mask,
+						    MEM_WRITE);
+					} else if ((paddr | offset_mask) <
+					    mem->devices[i].length) {
+						host_addr = mem->devices[i].
+						    dyntrans_data +
+						    (paddr & ~offset_mask);
+					} else {
+						/*  #155: (Codex/Fable)
+						    don't install dyntrans
+						    fast-path access to a
+						    device page that is not
+						    fully backed; keep it on
+						    the bounded slow path.  */
+						host_addr = NULL;
+					}
+
+					if (host_addr != NULL)
+						cpu->update_translation_table(
+						    cpu, vaddr & ~offset_mask,
+						    host_addr, wf,
+						    orig_paddr & ~offset_mask);
+				}
+
+				res = 0;
+				if (!no_exceptions || (mem->devices[i].flags &
+				    DM_READS_HAVE_NO_SIDE_EFFECTS)) {
+					bool running_before_device_access = cpu->running;
+					res = mem->devices[i].f(cpu, mem, paddr,
+					    data, len, writeflag,
+					    mem->devices[i].extra);
+
+					if (running_before_device_access && !cpu->running)
+						return MEMORY_ACCESS_FAILED;
+				}
+
+				if (res == 0)
+					res = -1;
+
+				/*
+				 *  If accessing the memory mapped device
+				 *  failed, then return with an exception.
+				 *  (Architecture specific.)
+				 */
+				if (res <= 0 && !no_exceptions) {
+					debug("[ %s device '%s' addr %08lx "
+					    "failed ]\n", writeflag?
+					    "writing to" : "reading from",
+					    mem->devices[i].name, (long)paddr);
+#ifdef MEM_MIPS
+					mips_cpu_exception(cpu,
+					    cache == CACHE_INSTRUCTION?
+					    EXCEPTION_IBE : EXCEPTION_DBE,
+					    0, vaddr, 0, 0, 0, 0);
+#endif
+#ifdef MEM_M88K
+					/*  TODO: This is enough for
+					    OpenBSD/mvme88k's badaddr()
+					    implementation... but the
+					    faulting address should probably
+					    be included somewhere too!  */
+					m88k_exception(cpu, cache == CACHE_INSTRUCTION
+					    ? M88K_EXCEPTION_INSTRUCTION_ACCESS
+					    : M88K_EXCEPTION_DATA_ACCESS, 0);
+#endif
+					return MEMORY_ACCESS_FAILED;
+				}
+				goto do_return_ok;
+			}
+
+			if (paddr < mem->devices[i].baseaddr)
+				end = i - 1;
+			if (paddr >= mem->devices[i].endaddr)
+				start = i + 1;
+			i = (start + end) >> 1;
+		} while (start <= end);
+	}
+
+
+#ifdef MEM_MIPS
+	/*
+	 *  Data and instruction cache emulation:
+	 */
+
+	switch (cpu->cd.mips.cpu_type.mmu_model) {
+	case MMU3K:
+		/*  if not uncached addess  (TODO: generalize this)  */
+		if (!(misc_flags & PHYSICAL) && cache != CACHE_NONE &&
+		    !((vaddr & 0xffffffffULL) >= 0xa0000000ULL &&
+		      (vaddr & 0xffffffffULL) <= 0xbfffffffULL)) {
+			if (memory_cache_R3000(cpu, cache, paddr,
+			    writeflag, len, data))
+				goto do_return_ok;
+		}
+		break;
+	default:
+		/*  R4000 etc  */
+#ifndef	MEMORY_H
+#define	MEMORY_H
+
+/*
+ *  Copyright (C) 2004-2021  Anders Gavare.  All rights reserved.
+ *
+ *  Redistribution and use in source and binary forms, with or without
+ *  modification, are permitted provided that the following conditions are met:
+ *
+ *  1. Redistributions of source code must retain the above copyright
+ *     notice, this list of conditions and the following disclaimer.
+ *  2. Redistributions in binary form must reproduce the above copyright  
+ *     notice, this list of conditions and the following disclaimer in the 
+ *     documentation and/or other materials provided with the distribution.
+ *  3. The name of the author may not be used to endorse or promote products
+ *     derived from this software without specific prior written permission.
+ *
+ *  THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+ *  ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ *  IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ *  ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE   
+ *  FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ *  DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+ *  OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+ *  HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+ *  LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+ *  OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+ *  SUCH DAMAGE.
+ *
+ *
+ *  Memory related functions.
+ */
+
+#include <stdbool.h>
+#include <sys/types.h>
+#include <inttypes.h>
+
+#include "misc.h"
+
+
+#define	DEFAULT_RAM_IN_MB		32
+
+struct cpu;
+
+
+/*
+ *  Memory mapped device
+ */
+struct memory_device {
+	uint64_t	baseaddr;
+	uint64_t	endaddr;	/*  NOTE: after the last byte!  */
+	uint64_t	length;
+	int		flags;
+
+	const char	*name;
+
+	int		(*f)(struct cpu *,struct memory *,
+			    uint64_t,unsigned char *,size_t,int,void *);
+	void		*extra;
+
+	unsigned char	*dyntrans_data;
+
+	uint64_t	dyntrans_write_low;
+	uint64_t	dyntrans_write_high;
+};
+
+
+/*
+ *  Memory
+ *  ------
+ *
+ *  This struct defines a memory object. Most machines only use one memory
+ *  object (the main memory), but if necessary, multiple memories can be
+ *  used.
+ */
+struct memory {
+	uint64_t	physical_max;
+	void		*pagetable;
+
+	int		dev_dyntrans_alignment;
+
+	int		n_mmapped_devices;
+	int		last_accessed_device;
+	/*  The following two might speed up things a little bit.  */
+	/*  (actually maxaddr is the addr after the last address)  */
+	uint64_t	mmap_dev_minaddr;
+	uint64_t	mmap_dev_maxaddr;
+
+	struct memory_device *devices;
+};
+
+#define	BITS_PER_PAGETABLE	20
+#define	BITS_PER_MEMBLOCK	20
+#define	MAX_BITS		40
+
+
+/*  memory.c:  */
+#define	MEM_PCI_LITTLE_ENDIAN	128
+uint64_t memory_readmax64(struct cpu *cpu, unsigned char *buf, int len);
+void memory_writemax64(struct cpu *cpu, unsigned char *buf, int len,
+	uint64_t data);
+
+void *zeroed_alloc(size_t s);
+
+struct memory *memory_new(uint64_t physical_max);
+
+int memory_points_to_string(struct cpu *cpu, struct memory *mem,
+	uint64_t addr, int min_string_length);
+char *memory_conv_to_string(struct cpu *cpu, struct memory *mem,
+	uint64_t addr, char *buf, int bufsize);
+
+unsigned char *memory_paddr_to_hostaddr(struct memory *mem,
+	uint64_t paddr, int writeflag);
+
+
+/*  Writeflag:  */
+#define	MEM_READ			0
+#define	MEM_WRITE			1
+#define	MEM_DOWNGRADE			128
+
+/*  Misc. flags:  */
+#define	CACHE_DATA			0
+#define	CACHE_INSTRUCTION		1
+#define	CACHE_NONE			2
+#define	CACHE_FLAGS_MASK		0x3
+#define	NO_EXCEPTIONS			16
+#define	PHYSICAL			32
+#define	MEMORY_USER_ACCESS		64	/*  for ARM and M88K  */
+
+/*  Dyntrans Memory flags:  */
+#define	DM_DEFAULT				0
+#define	DM_DYNTRANS_OK				1
+#define	DM_DYNTRANS_WRITE_OK			2
+#define	DM_READS_HAVE_NO_SIDE_EFFECTS		4
+#define	DM_EMULATED_RAM				8
+
+#define FLAG_WRITEFLAG          1
+#define FLAG_NOEXCEPTIONS       2
+#define FLAG_INSTR              4
+
+#define	MEMORY_ACCESS_FAILED		0
+#define	MEMORY_ACCESS_OK		1
+#define	MEMORY_ACCESS_OK_WRITE		2
+#define	MEMORY_NOT_FULL_PAGE		256
+
+void memory_device_dyntrans_access(struct cpu *, struct memory *mem,
+	void *extra, uint64_t *low, uint64_t *high);
+
+#define DEVICE_ACCESS(x)	int dev_ ## x ## _access(struct cpu *cpu, \
+	struct memory *mem, uint64_t relative_addr, unsigned char *data,  \
+
+codex
+I found a direct predicate candidate: masking bit `0x08` from the switch selector preserves every Maple offset the probe uses, but makes offset `0x0c` alias DMAADDR. `other read` uses `0x10`, so it cannot expose this weakening. I’m checking the remaining selector bits and separating predicted survivors from recorded measurements.
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n 'CONTRACT|each MEASURED|reworded|masking of high|NOT COVERED|Keyed on the channel|noisy =|other read|exit status|ctrl zlive' regress/maple_dmaaddr_probe.py; rg -n 'switch \\(relative_addr\\)|case 0x04|odata = d->dmaaddr|memory_writemax64|0x5f6c00|uint32_t.*dmaaddr' src/devices/dev_dreamcast_maple.c; rg -n 'M_REWORD|M_BIT30|M_MASKLOW' regress/artifacts/mapledmaaddr/killtable_20260912/mut_maple.py; Get-Content -LiteralPath src/cpus/cpu_sh_instr.c | Select-Object -Skip 350 -First 112; Get-Content -LiteralPath src/cpus/memory_sh.c | Select-Object -First 82" in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "@'
+import ast
+from pathlib import Path
+probe = ast.parse(Path('regress/maple_dmaaddr_probe.py').read_text())
+constants = {}
+for node in probe.body:
+    if isinstance(node, ast.Assign) and len(node.targets) == 1 and isinstance(node.targets[0], ast.Name):
+        try:
+            constants[node.targets[0].id] = ast.literal_eval(node.value)
+        except (ValueError, TypeError):
+            pass
+addresses = set()
+for node in ast.walk(probe):
+    if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name) or node.func.id not in ('load32', 'store32'):
+        continue
+    arg = node.args[0]
+    value = constants.get(arg.id) if isinstance(arg, ast.Name) else ast.literal_eval(arg)
+    if isinstance(value, int) and 0xa05f6c00 <= value < 0xa05f6d00:
+        addresses.add(value - 0xa05f6c00)
+print('SOURCE-LEVEL SELECTOR CHECK, not an emulator measurement')
+print('Probe Maple offsets:', ', '.join(hex(x) for x in sorted(addresses)))
+for bit in range(8):
+    mask = 1 << bit
+    changes = [(a, a & ~mask) for a in sorted(addresses) if a "'!= (a & ~mask)]
+    print('"'drop 0x%02x: %s; DMAADDR alias witness +0x%02x' % (mask, 'unchanged tested selectors' if not changes else 'changes ' + str(changes), 4 | mask))
+print('Bits 8..63 are equivalent at the registered 0x100-byte device boundary.')
+values = [constants[n] for n in ('VAL_A','VAL_B','VAL_4','VAL_ONES','VAL_R')] + [0]
+for width in (1, 2, 4, 8):
+    trunc = (1 << (width*8)) - 1
+    differences = []
+    for v in values:
+        signed = (v if v < (1 << 31) else v - (1 << 32)) & ((1 << 64)-1)
+        if v & trunc "'!= signed & trunc:
+            differences.append(hex(v))
+    print('"'int32_t sign-extension, len=%d: differs for %s' % (width, differences))
+print('Silence predicate accepts tokenless diagnostic:', 'dreamcast_maple' not in '[ maple: DMAADDR read ]\\n')
+'@ | python -B -" in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+ succeeded in 194ms:
+SOURCE-LEVEL SELECTOR CHECK, not an emulator measurement
+Probe Maple offsets: 0x4, 0x10, 0x80
+drop 0x01: unchanged tested selectors; DMAADDR alias witness +0x05
+drop 0x02: unchanged tested selectors; DMAADDR alias witness +0x06
+drop 0x04: changes [(4, 0)]; DMAADDR alias witness +0x04
+drop 0x08: unchanged tested selectors; DMAADDR alias witness +0x0c
+drop 0x10: changes [(16, 0)]; DMAADDR alias witness +0x14
+drop 0x20: unchanged tested selectors; DMAADDR alias witness +0x24
+drop 0x40: unchanged tested selectors; DMAADDR alias witness +0x44
+drop 0x80: changes [(128, 0)]; DMAADDR alias witness +0x84
+Bits 8..63 are equivalent at the registered 0x100-byte device boundary.
+int32_t sign-extension, len=1: differs for []
+int32_t sign-extension, len=2: differs for []
+int32_t sign-extension, len=4: differs for []
+int32_t sign-extension, len=8: differs for ['0x8c012345', '0xffffffff']
+Silence predicate accepts tokenless diagnostic: True
+
+ succeeded in 244ms:
+15:CONTRACT (vacuity-floor clause e).  Designed to catch, and each MEASURED in the kill table
+17:verbatim, reworded or latched -- the silence row counts ANY `dreamcast_maple' output in a read session, never one
+19:exception); DECLINE (the value dropped); the read hoisted out of its `relative_addr == 0x04' guard (`other read');
+21:and masking of high or low-five bits.
+22:NOT COVERED: an exit keyed on another exact value, or on a bit pattern that all-ones does not set (clause (e): the
+164:#  sessions is the read speaking.  Keyed on the channel, never on one literal string (Fable pass 1: the literal form
+165:#  is vacuous by construction against a reworded or latched announce).
+196:row("other read", printed(t, "r2"), 0x0, "RESET2 reads 0 with the field nonzero")
+198:# -- survival + exit status, FLOOR: the exit(1) half -----------------------------------------------------------------
+203:row("exit status", how, "exit0", "the session ends by `quit'")
+221:noisy = sum(1 for t, _ in READS if "dreamcast_maple" in t)
+225:row("ctrl zlive", printed(t, "r2"), 0xdeadbeef, "trailing RAM round trip: the apparatus lived")
+228:CONTROL_ROWS = ("ctrl live", "ctrl devsig sh4", "ctrl devsig maple", "ctrl zlive")
+76:	uint32_t	dmaaddr;
+382:	uint32_t addr = d->dmaaddr;
+454:		case 0x04: unit = 3; break;
+555:	switch (relative_addr) {
+557:	case 0x04:	/*  MAPLE_DMAADDR  */
+567:			odata = d->dmaaddr;
+640:		memory_writemax64(cpu, data, len, odata);
+654:	    0x5f6c00, 0x100, dev_dreamcast_maple_access, d, DM_DEFAULT, NULL);
+17: "M_REWORD":    (ASSIGN, T + "fatal(\"[ dreamcast_maple: read from dmaaddr ]\\n\");\n" + ASSIGN),
+31: "M_BIT30":     (ASSIGN, ASSIGN + T + "if (d->dmaaddr & 0x40000000)\n" + T + "\texit(1);\n"),
+34: "M_MASKLOW":   (ASSIGN, T + "odata = d->dmaaddr & ~(uint64_t)0x1f;\n"),
+X(xor_imm_r0) { cpu->cd.sh.r[0] ^= ic->arg[0]; }
+X(or_imm_r0)  { cpu->cd.sh.r[0] |= ic->arg[0]; }
+X(tst_imm_r0)
+{
+	if (cpu->cd.sh.r[0] & ic->arg[0])
+		cpu->cd.sh.sr &= ~SH_SR_T;
+	else
+		cpu->cd.sh.sr |= SH_SR_T;
+}
+
+
+/*
+ *  xor_b_imm_r0_gbr:  mem[r0+gbr] |= imm
+ *  or_b_imm_r0_gbr:   mem[r0+gbr] ^= imm
+ *  and_b_imm_r0_gbr:  mem[r0+gbr] &= imm
+ *
+ *  arg[0] = imm
+ */
+X(xor_b_imm_r0_gbr)
+{
+	uint32_t addr = cpu->cd.sh.gbr + cpu->cd.sh.r[0];
+	uint8_t *p = (uint8_t *) cpu->cd.sh.host_store[addr >> 12];
+
+	if (p != NULL) {
+		p[addr & 0xfff] ^= ic->arg[0];
+	} else {
+		uint8_t data;
+		SYNCH_PC;
+		if (!cpu->memory_rw(cpu, cpu->mem, addr, (unsigned char *)&data,
+		   sizeof(data), MEM_READ, CACHE_DATA)) {
+			/*  Exception.  */
+			if (!cpu->running)
+				cpu->cd.sh.next_ic = &nothing_call;
+			return;
+		}
+		data ^= ic->arg[0];
+		if (!cpu->memory_rw(cpu, cpu->mem, addr, (unsigned char *)&data,
+		   sizeof(data), MEM_WRITE, CACHE_DATA)) {
+			/*  Exception.  */
+			if (!cpu->running)
+				cpu->cd.sh.next_ic = &nothing_call;
+			return;
+		}
+	}
+}
+X(or_b_imm_r0_gbr)
+{
+	uint32_t addr = cpu->cd.sh.gbr + cpu->cd.sh.r[0];
+	uint8_t *p = (uint8_t *) cpu->cd.sh.host_store[addr >> 12];
+
+	if (p != NULL) {
+		p[addr & 0xfff] |= ic->arg[0];
+	} else {
+		uint8_t data;
+		SYNCH_PC;
+		if (!cpu->memory_rw(cpu, cpu->mem, addr, (unsigned char *)&data,
+		   sizeof(data), MEM_READ, CACHE_DATA)) {
+			/*  Exception.  */
+			if (!cpu->running)
+				cpu->cd.sh.next_ic = &nothing_call;
+			return;
+		}
+		data |= ic->arg[0];
+		if (!cpu->memory_rw(cpu, cpu->mem, addr, (unsigned char *)&data,
+		   sizeof(data), MEM_WRITE, CACHE_DATA)) {
+			/*  Exception.  */
+			if (!cpu->running)
+				cpu->cd.sh.next_ic = &nothing_call;
+			return;
+		}
+	}
+}
+X(and_b_imm_r0_gbr)
+{
+	uint32_t addr = cpu->cd.sh.gbr + cpu->cd.sh.r[0];
+	uint8_t *p = (uint8_t *) cpu->cd.sh.host_store[addr >> 12];
+
+	if (p != NULL) {
+		p[addr & 0xfff] &= ic->arg[0];
+	} else {
+		uint8_t data;
+		SYNCH_PC;
+		if (!cpu->memory_rw(cpu, cpu->mem, addr, (unsigned char *)&data,
+		   sizeof(data), MEM_READ, CACHE_DATA)) {
+			/*  Exception.  */
+			if (!cpu->running)
+				cpu->cd.sh.next_ic = &nothing_call;
+			return;
+		}
+		data &= ic->arg[0];
+		if (!cpu->memory_rw(cpu, cpu->mem, addr, (unsigned char *)&data,
+		   sizeof(data), MEM_WRITE, CACHE_DATA)) {
+			/*  Exception.  */
+			if (!cpu->running)
+				cpu->cd.sh.next_ic = &nothing_call;
+			return;
+		}
+	}
+}
+
+
+/*
+ *  mov_imm_rn:  Set rn to a signed 8-bit value
+ *  add_imm_rn:  Add a signed 8-bit value to Rn
+ *
+ *  arg[0] = int8_t imm, extended to at least int32_t
+ *  arg[1] = ptr to rn
+ */
+X(mov_imm_rn) { reg(ic->arg[1]) = ic->arg[0]; }
+X(mov_0_rn)   { reg(ic->arg[1]) = 0; }
+X(add_imm_rn) { reg(ic->arg[1]) += ic->arg[0]; }
+X(inc_rn)     { reg(ic->arg[1]) ++; }
+/*
+ *  Copyright (C) 2006-2009  Anders Gavare.  All rights reserved.
+ *
+ *  Redistribution and use in source and binary forms, with or without
+ *  modification, are permitted provided that the following conditions are met:
+ *
+ *  1. Redistributions of source code must retain the above copyright
+ *     notice, this list of conditions and the following disclaimer.
+ *  2. Redistributions in binary form must reproduce the above copyright  
+ *     notice, this list of conditions and the following disclaimer in the 
+ *     documentation and/or other materials provided with the distribution.
+ *  3. The name of the author may not be used to endorse or promote products
+ *     derived from this software without specific prior written permission.
+ *
+ *  THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+ *  ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ *  IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ *  ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE   
+ *  FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ *  DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+ *  OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+ *  HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+ *  LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+ *  OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+ *  SUCH DAMAGE.
+ */
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "cpu.h"
+#include "machine.h"
+#include "memory.h"
+#include "misc.h"
+
+#include "thirdparty/sh4_exception.h"
+#include "thirdparty/sh4_mmu.h"
+
+
+/*
+ *  translate_via_mmu():
+ *
+ *  Scan the UTLB for a matching virtual address. If a match was found, then
+ *  check permission bits etc. If everything was ok, then return the physical
+ *  page address, otherwise cause an exception.
+ *
+ *  The implementation should (hopefully) be quite complete, except for lack
+ *  of "Multiple matching entries" detection. (On a real CPU, these would
+ *  cause exceptions.)
+ *
+ *  Same return values as sh_translate_v2p().
+ */
+static int translate_via_mmu(struct cpu *cpu, uint32_t vaddr,
+	uint64_t *return_paddr, int flags)
+{
+	int wf = flags & FLAG_WRITEFLAG;
+	int i, urb, urc, require_asid_match, cur_asid, expevt = 0;
+	uint32_t hi, lo = 0, mask = 0;
+	int sh;		/*  Shared  */
+	int d;		/*  Dirty bit  */
+	int v;		/*  Valid bit  */
+	int pr;		/*  Protection  */
+	int i_start;
+
+	cur_asid = cpu->cd.sh.pteh & SH4_PTEH_ASID_MASK;
+	require_asid_match = !(cpu->cd.sh.mmucr & SH4_MMUCR_SV)
+	    || !(cpu->cd.sh.sr & SH_SR_MD);
+
+	if (!(flags & FLAG_NOEXCEPTIONS)) {
+		/*
+		 *  Increase URC every time the UTLB is accessed.
+		 *
+		 *  THE TODO THAT USED TO SIT HERE IS ANSWERED, 2026-08-22,
+		 *  against a real SH7750 Hardware Manual (Rev.7.00,
+		 *  REJ09B0366-0700) obtained by owner directive.  It asked
+		 *  whether URC should be left alone by `ldtlb`, wondered
+		 *  whether this was the right place, and floated setting it
+		 *  to a random value instead.  The MMUCR field definition
+		 *  settles all three:
+		 *
+		 *      "URC is incremented each time the UTLB is accessed.
+
+codex
+SURVIVOR: replace `switch (relative_addr)` with `switch (relative_addr & ~0x08ULL)`.
+PASS2_MAPLE_20260912
+
+**Predicted 16/16 by source inspection; not emulator-measured.** This directly weakens the dominating address predicate: DMAADDR now accepts offsets `0x04` **and `0x0c`**. It introduces no new state operand or value-keyed condition.
+
+The probe accesses Maple only at offsets `0x04`, `0x10`, and `0x80`. None contains bit `0x08`, so every existing access follows its original branch—including both controls and all nine read sessions.
+
+Three surviving edits from this same predicate-weakening family are:
+
+| Replacement at [the switch](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_dreamcast_maple.c:555) | Newly aliases DMAADDR | Expected detector |
+|---|---:|---|
+| `switch (relative_addr & ~0x08ULL)` | `+0x0c` | `other read` |
+| `switch (relative_addr & ~0x20ULL)` | `+0x24` | `other read` |
+| `switch (relative_addr & ~0x40ULL)` | `+0x44` | `other read` |
+
+`other read` cannot distinguish any of them: its `+0x10` selector remains unchanged. After writing `VAL_A` to DMAADDR, reading each alias would distinguish BASE’s default-arm zero plus diagnostic from the mutant’s quiet `VAL_A`. These are aligned 32-bit accesses, so the width exclusion does not discharge them.
+
+**Channel validity:** The recorded mutants do vary their intended channels: `M_HOIST` changes `other read`, `M_READCLEAR` changes `double read 2`, and `M_EXITONLY` changes survival/status. Their measurements stand.
+
+There is also a separate diagnostic escape: insert this immediately before the retained assignment:
+
+```c
+fatal("[ maple: DMAADDR read ]\n");
+```
+
+Values and survival remain correct, while [the silence matcher](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/maple_dmaaddr_probe.py:221) still reports `0/9`. `fatal()` adds no automatic device-name prefix. Thus `read silent` is blind to this rewording. This challenges the diagnostic coverage claim independently of the three clause-(d) selector survivors.
+
+**Width:** `odata = (int32_t)d->dmaaddr;` preserves every tested low-32-bit result; high-bit test values do not detect sign extension into `odata`’s upper half. A `len=8` callback could distinguish it, but SH4 FMOV pairs here perform separate four-byte callbacks. I would require a reachable eight-byte witness before counting that as a guest-visible wrong fix. Narrow-width exits likewise escape the detector, but widths other than 32 bits are explicitly excluded in its header.
+
+**CONTRACT corrections:**
+
+- “Verbatim, reworded or latched” overclaims unrestricted rewording. The precise guarantee is detection of the case-sensitive substring `dreamcast_maple`. “Never one literal string” does not establish a diagnostic channel independent of message text.
+- [“Each MEASURED … masking of high or low-five bits”](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/maple_dmaaddr_probe.py:15) overstates the table: `M_MASKLOW` measures low-bit masking; `M_BIT30` measures an exit predicate, not high-bit masking. High-bit-mask sensitivity is supported by the values, but was not separately measured.
+
+The next measurements to name are **M_ALIAS08, M_ALIAS20, and M_ALIAS40**, each against the frozen detector and its alias witness above. That would establish both the predicted clean sweep and the behavioral divergence. No gates, battery, builds, or emulator runs were invoked.
+tokens used
+83,517
+SURVIVOR: replace `switch (relative_addr)` with `switch (relative_addr & ~0x08ULL)`.
+PASS2_MAPLE_20260912
+
+**Predicted 16/16 by source inspection; not emulator-measured.** This directly weakens the dominating address predicate: DMAADDR now accepts offsets `0x04` **and `0x0c`**. It introduces no new state operand or value-keyed condition.
+
+The probe accesses Maple only at offsets `0x04`, `0x10`, and `0x80`. None contains bit `0x08`, so every existing access follows its original branch—including both controls and all nine read sessions.
+
+Three surviving edits from this same predicate-weakening family are:
+
+| Replacement at [the switch](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_dreamcast_maple.c:555) | Newly aliases DMAADDR | Expected detector |
+|---|---:|---|
+| `switch (relative_addr & ~0x08ULL)` | `+0x0c` | `other read` |
+| `switch (relative_addr & ~0x20ULL)` | `+0x24` | `other read` |
+| `switch (relative_addr & ~0x40ULL)` | `+0x44` | `other read` |
+
+`other read` cannot distinguish any of them: its `+0x10` selector remains unchanged. After writing `VAL_A` to DMAADDR, reading each alias would distinguish BASE’s default-arm zero plus diagnostic from the mutant’s quiet `VAL_A`. These are aligned 32-bit accesses, so the width exclusion does not discharge them.
+
+**Channel validity:** The recorded mutants do vary their intended channels: `M_HOIST` changes `other read`, `M_READCLEAR` changes `double read 2`, and `M_EXITONLY` changes survival/status. Their measurements stand.
+
+There is also a separate diagnostic escape: insert this immediately before the retained assignment:
+
+```c
+fatal("[ maple: DMAADDR read ]\n");
+```
+
+Values and survival remain correct, while [the silence matcher](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/maple_dmaaddr_probe.py:221) still reports `0/9`. `fatal()` adds no automatic device-name prefix. Thus `read silent` is blind to this rewording. This challenges the diagnostic coverage claim independently of the three clause-(d) selector survivors.
+
+**Width:** `odata = (int32_t)d->dmaaddr;` preserves every tested low-32-bit result; high-bit test values do not detect sign extension into `odata`’s upper half. A `len=8` callback could distinguish it, but SH4 FMOV pairs here perform separate four-byte callbacks. I would require a reachable eight-byte witness before counting that as a guest-visible wrong fix. Narrow-width exits likewise escape the detector, but widths other than 32 bits are explicitly excluded in its header.
+
+**CONTRACT corrections:**
+
+- “Verbatim, reworded or latched” overclaims unrestricted rewording. The precise guarantee is detection of the case-sensitive substring `dreamcast_maple`. “Never one literal string” does not establish a diagnostic channel independent of message text.
+- [“Each MEASURED … masking of high or low-five bits”](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/maple_dmaaddr_probe.py:15) overstates the table: `M_MASKLOW` measures low-bit masking; `M_BIT30` measures an exit predicate, not high-bit masking. High-bit-mask sensitivity is supported by the values, but was not separately measured.
+
+The next measurements to name are **M_ALIAS08, M_ALIAS20, and M_ALIAS40**, each against the frozen detector and its alias witness above. That would establish both the predicted clean sweep and the behavioral divergence. No gates, battery, builds, or emulator runs were invoked.

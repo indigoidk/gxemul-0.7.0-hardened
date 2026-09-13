@@ -1638,4 +1638,35 @@ check "wdcflood: every latch BALANCED (set count == read count)" \
 check "wdcflood: device latch population (bump DELIBERATELY, read it first)" \
       "$(printf '%s\n' "$wdclatch" | grep -oE 'WDC_LATCH_DECL=[0-9]+' | cut -d= -f2)" "11"
 
+#  ---- mapledmaaddr (#528): a guest READ of MAPLE_DMAADDR computed the field and then ended the emulator
+#  (fatal + exit(1)).  Now ACCEPT, answered like MAPLE_ENABLE's read.  The detector drives real SH4 guest
+#  loads/stores on unmodified -E dreamcast, every load destination POISONED, and in its twelve read sessions compares
+#  the WHOLE transcript, through `quit' to the pty's EOF, with the exact line sequence the commands owe -- never a
+#  device name, never a whitelist of line shapes -- and requires every read session to reach EOF and exit 0.  37 rows;
+#  kill tables 2-7 under artifacts/mapledmaaddr/ (their SCORES.txt and POSTTABLE.out).
+#  PARSE BEFORE SCORE: each protocol KEY exactly once and well formed; the pins are UNQUOTED literals so
+#  check_score_claims.py sees them (a quoted count is invisible to its PIN regex -- #526).
+MAPLELOG=$LOGDIR/gate_maple_dmaaddr.log
+mrc=0
+python3 -u maple_dmaaddr_probe.py "$PMAX" "$KERNEL" gate > "$MAPLELOG" 2>&1 || mrc=$?
+if [ "$(grep -c '^MAPLE_DMAADDR_RESULT=' "$MAPLELOG")" != "1" ] ||
+   ! grep -Eq '^MAPLE_DMAADDR_RESULT=(0|[1-9][0-9]*)/(0|[1-9][0-9]*)$' "$MAPLELOG" ||
+   [ "$(grep -c '^MAPLE_DMAADDR_CONTROL=' "$MAPLELOG")" != "1" ] ||
+   ! grep -Eq '^MAPLE_DMAADDR_CONTROL=(OK|FAIL)$' "$MAPLELOG" ||
+   [ "$(grep -cx 'MAPLE_DMAADDR_PROBE_DONE' "$MAPLELOG")" != "1" ]; then
+    note "mapledmaaddr probe produced no unique, valid completion record; last lines follow"
+    tail -5 "$MAPLELOG" | sed 's/^/       /'
+    check "mapledmaaddr probe output parses" "no" "yes"
+else
+    check "mapledmaaddr probe output parses" "yes" "yes"
+    grep -E ' (ok|FAIL)$' "$MAPLELOG" | sed 's/^/       /'
+    check "mapledmaaddr controls" "$(sed -n 's/^MAPLE_DMAADDR_CONTROL=//p' "$MAPLELOG")" "OK"
+    check "mapledmaaddr probe exit status" "$mrc" "0"
+    mres=$(sed -n 's/^MAPLE_DMAADDR_RESULT=//p' "$MAPLELOG")
+    check "mapledmaaddr rows run"     "${mres#*/}" 37
+    check "mapledmaaddr rows correct" "${mres%/*}" 37
+    check "mapledmaaddr rows emitted" "$(grep -cE ' (ok|FAIL)$' "$MAPLELOG")" 37
+    check "mapledmaaddr rows failed"  "$(grep -c ' FAIL$' "$MAPLELOG")" 0
+fi
+
 gate_end

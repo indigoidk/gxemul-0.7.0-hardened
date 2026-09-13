@@ -1,0 +1,88 @@
+VERDICT LINE FIRST: `SURVIVOR — three: (1) re-introduced fatal() under a never-true predicate on d->dmaaddr; (2) move odata = d->dmaaddr out of the else, weakening writeflag != MEM_WRITE to "true"; (3) widen the case 0x04 arm to also accept an untested device address (0x0c, 0x14, 0x18, 0x8c, or 0xe8 — anything outside the probe's reach).`
+
+Liveness token: `PASS2_MAPLE_20260912`.
+
+---
+
+## (1) Re-introduced diagnostic under a never-true predicate on `d->dmaaddr` — REASONED
+
+Edit (inside the `else` body, after `odata = d->dmaaddr;`):
+```c
+if (d->dmaaddr == 0xdeadbeef)
+    fatal("[ dreamcast_maple: re-armed ]\n");
+```
+
+The probe writes only these values to `d->dmaaddr`: `0`, `0x00000004`, `0x8c012345`, `0x0c00001f`, `0xffffffff`, `0x13579bdf`. None equals `0xdeadbeef` (and `> 0xffffffff` is unreachable for a `uint32_t`). The diagnostic never fires, so `read silent` never sees the text. The arm body still does the correct load on every read, so every value row, `other read`, `double read 1/2`, `write replace`, `marker survive`, `exit status`, and the controls all pass. The row the author would expect to catch this is `read silent`; it does not, because the predicate gates the print out.
+
+This is clause-(d) category (a): "re-introduced … diagnostic under a different predicate."
+
+## (2) Remove the else — weaken `writeflag != MEM_WRITE` to "true" — REASONED
+
+Edit:
+```c
+case 0x04:
+    if (writeflag == MEM_WRITE) {
+        d->dmaaddr = idata;
+    }
+    odata = d->dmaaddr;          /* unconditional within the arm */
+    break;
+```
+
+The dominating predicate of the read body is `writeflag != MEM_WRITE`. Removing the `else` makes the predicate "true." The body now also runs on writes, setting `odata = d->dmaaddr` (= the just-written `idata`). But `memory_writemax64(...)` is only called on `MEM_READ` (common tail), so on writes the new `odata` value is unobservable. On reads, the behavior is identical to BASE. All 11 DMAADDR-touching rows plus the MAPLE_SPEED / RAM / IPRD controls pass. No row catches this — it is an equivalent mutant under the 16-row probe.
+
+This is clause-(d) category (b): "weakened dominating predicate." Note `M_HOIST` (which weakens `relative_addr == 0x04` instead) fails `other read`; the analogous weakening on `writeflag` does not, because the predicate's negation isn't observed by any probe row.
+
+## (3) Widen `case 0x04:` to an untested address — REASONED
+
+Edit (fall-through form):
+```c
+case 0x04:
+case 0x0c:        /* or 0x14, 0x18, 0x8c, 0xe8 */
+    if (writeflag == MEM_WRITE) {
+        d->dmaaddr = idata;
+    } else {
+        odata = d->dmaaddr;
+    }
+    break;
+```
+
+The probe's device-side coverage is exactly: 0x04 (every read row), 0x10 (`other read`), 0x80 (MAPLE_SPEED shift/mask control). Addresses 0x14, 0x18, 0x8c, 0xe8, and anything else (0x0c shown) are unreached. Widening the case to any of them makes the DMAADDR arm fire on that address — but no row exercises it, so nothing fails. The MAPLE_SPEED control must remain on 0x80 alone and `other read` must remain on 0x10 alone, so the safe picks are the five untested addresses above (and any other the probe doesn't touch).
+
+This is clause-(d) category (b): "weakened dominating predicate," specifically on `relative_addr == 0x04`. It is observably different from BASE for the widened address — a real behavioral change, not an equivalent mutant — yet the 16-row probe cannot see it. Row expected to catch it: none exists; that is the gap.
+
+---
+
+## What I also swept and ruled out — REASONED
+
+**Operand swaps, category (c):** `d->dmaaddr = odata` (LHS↔RHS) zeros `d->dmaaddr` and the load returns 0 — fails 7 value rows (matches `M_DECLINE`'s shape, plus the destructive store). `odata = d->enable` (field swap on `d->dmaaddr`) — fails every value row that reads back what was written. `odata = odata`, `odata = (d->dmaaddr, d->dmaaddr)`, cast forms, `+0`, `|0`, `&0xffffffff` — all either equivalent to BASE (and so don't count as a "mutant") or are not swaps. No operand swap stays GREEN.
+
+**Weakenings on the read-side that aren't equivalent:** changing `relative_addr == 0x04` to `!= 0x04`, to `< 0x04`, or to include 0x10 / 0x80 — fails `other read` / MAPLE_SPEED control respectively (this is why `M_HOIST` fails 1 row). Weakening `writeflag != MEM_WRITE` to *false* (so the if-branch always runs and writes always set `d->dmaaddr` but reads never set `odata`) — fails 7 value rows. Adding a diagnostic whose predicate IS true for some test value — that test fails (matches the M_EQ4 / M_BIT30 / M_ZEROEXIT row pattern).
+
+**Width games outside clause-(d):** since every row reads 32 bits, anything that mutates only the upper 32 bits of `odata` (e.g., `odata = d->dmaaddr | (1ULL << 63)`) is unobservable here — but that is not "an operand swap on `d->dmaaddr` or `odata`," so I set it aside. Worth flagging to the panel as a follow-up row if a 64-bit-width probe is ever added.
+
+---
+
+## Q2 — does any row's channel fail to vary under the mutant it is named for? — READ from kill table
+
+No. Tracing each named pair against the packet:
+
+- `read silent` vs `M_KEEPFATAL` / `M_REWORD` / `M_LATCHED` — each prints a `…maple…` string on the read path, so all 9 read sessions carry the text; `read silent` flips from 0/9 to 9/9. Varies.
+- `other read` vs `M_HOIST` — the hoisted `odata = d->dmaaddr` runs before the switch, so the RESET2 read at +0x10 returns `d->dmaaddr` (= 0x8c012345 from the prior write) instead of 0. Varies.
+- `double read 2` vs `M_READCLEAR` — first read returns 0x8c012345 and clears the field; second read returns 0. Varies.
+- `read four` vs `M_EQ4` — write of 4 makes `d->dmaaddr == 4` true, the read then takes the exit, emulator dies before the load. Varies.
+- `read all ones` vs `M_BIT30` — `0xffffffff & 0x40000000` is truthy, exit fires. Varies.
+- `initial zero` and `survive` vs `M_ZEROEXIT` — fresh device has `d->dmaaddr == 0`, the very first DMAADDR read takes the exit, no marker store and non-zero exit status. Varies.
+
+Every named channel flips on its named mutant.
+
+---
+
+## Q3 — which CONTRACT statement in the probe header is false or overclaims? — NOT CHECKABLE from the packet
+
+The probe header is not inlined in this brief; only its behavior is described. To settle Q3 I would need the literal header text (the `CONTRACT:` block at the top of `regress/maple_dmaaddr_probe.py`). The single fact that would settle it: the probe header source.
+
+---
+
+## Swept, in one line
+
+Dead-code diagnostic on `d->dmaaddr` · unconditional `odata = d->dmaaddr` (equivalent mutant) · widened `case 0x04:` to an unreached device address. Operand swaps on either operand fail. Predicate weakenings that reach a tested address fail.

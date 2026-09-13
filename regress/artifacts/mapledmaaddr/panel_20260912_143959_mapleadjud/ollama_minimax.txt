@@ -1,0 +1,49 @@
+VERDICT: UPHOLD F1, F2, F3, F6, F7, F8, D2; REFINE F4 (enable-form grade unstated); F5 grade is **wrong** — counter is not a body-read operand, so clause (e) does not apply. ADJUD_MAPLE_20260912
+
+---
+
+## Adjudication (F1–F8, D1–D2)
+
+**F1** — UPHOLD. *Reasoned.* The `switch (relative_addr)` partitions by case label, so `relative_addr != 0x04` is the complement — every other label is the FLOOR cell. Alias reads at default-arm single-bit offsets (0x0c/0x24/0x44/0x84) are the single-bit selector weakening of the 0x04 mask; including them is correct coverage.
+
+**F2** — UPHOLD. *Reasoned.* A silence FLOOR keyed on a literal that the buggy code never emits is vacuous by construction; rewriting against the debugger's quiet grammar is the only honest repair. The concept of "interval silence" as FLOOR survives; the test, not the grade, was broken.
+
+**F3** — UPHOLD. *Read.* `len` is read by the common tail, not the guarded body; pass-1 rule text makes `field & bit` / `len == v` clause (e) explicitly. `read width16` (mov.w) is the correct L1 row.
+
+**F4** — REFINE. *Reasoned.* The alignment form (`d->dmaaddr & 0x1f`) fits clause (e) by the rule's own text (`field & bit`). The enable form is **outside the BOUND** because `d->enable` is not a field the guarded body reads — clause (e) requires a body-read operand. The disposition notes this but then grades "clause (e) taken as L1" as if it covers both. It does not. CHANGELOG must distinguish the two rows or drop the grade for M_ENDECLINE.
+
+**F5** — **OVERTURN** the grade (accept the row, reject the clause). *Reasoned.* The per-process read counter is not a body-read operand at all — the guarded body reads `d->dmaaddr` and nothing else; the counter lives in the harness/pty layer. Clause (e) is "re-introduction keyed on a body-read operand the body does not test." A field the body never reads is not in the rule's domain. The row is fine; the grade should be **outside the BOUND** (same status as the enable form of F4), not (e) L1.
+
+**F6** — UPHOLD. *Read.* The overclaims are enumerated and false on the packet's own evidence; rewriting is the only correct response.
+
+**F7** — UPHOLD (REJECT). *Reasoned.* If the common tail writes `odata` only on MEM_READ, then moving `odata = d->dmaaddr` to any MEM_READ-only site is observationally equivalent. Disclosing it as a survivor-equivalent is correct; not adding it to the instrument is correct.
+
+**F8** — UPHOLD. *Reasoned.* `fatal()` under a value predicate the body never sees is clause (e) by class; disclosed, no row needed. Consistent with pass-1.
+
+**D1** — REFINE. *Reasoned.* Opus is right that M_ALIGNDECLINE has the canonical (d) shape `if (X) → if (X && Y)` with Y reading the body-read field, and that this is the first contact between the pass-1 rule and a *decline* (the rule was written for re-introduced EXITS). But the rule's own text — "`field & bit`" as the exemplar of (e) — is explicit, and the disposition follows that text. The CHANGELOG should record: "clause (e) L1 per rule text; Opus's (d) reading noted; rule's applicability to declines (vs exits) is an open question the rule did not anticipate." The row stands either way.
+
+**D2** — UPHOLD. *Reasoned.* The switch itself tests `relative_addr` by label; that is the body-tested partition. Single-bit aliases are the cells a one-bit selector weakening merges into the default arm — they are (e)-shaped but the FLOOR comes from the label partition itself. D2's counter is a re-grade, not a defect.
+
+---
+
+## Q2 — Which disposition is wrong?
+
+**F5.** (Reasoned.) The read counter is external to the guarded body; the body reads `d->dmaaddr` only. Clause (e) requires a body-read operand. Grading the counter as (e) L1 misapplies the rule. The row itself is fine; the clause label is the defect. F4 is second-worst — it conflates the alignment and enable grades under one label.
+
+## Q3 — A mutant that survives the 29-row instrument?
+
+**Yes — the write arm of case 0x04 is uncovered.** *Reasoned.* All 25 legs are read-side (M_TOKENFREE, M_ALIAS*, M_AND4, M_LEN, M_ALIGN*, M_EN*, M_THIRDREAD, M_BIT30). None exercise a write. The exact edit that survives:
+
+- In case 0x04's write path, change `d->dmaaddr = odata;` to `d->dmaaddr = odata ^ 0x1;` (or delete the assignment, or write a different field). Every read row still observes the pre-write value of `d->dmaaddr`; none of the 29 rows asserts a post-write value, so the mutant is never killed.
+
+If the intent was read-arm-only, the sweep is complete as stated; the gap is write-arm coverage, not a hole in the read instrument.
+
+## Q4 — Is #528 ready to commit once gate 10 is green?
+
+**Conditional yes.** *Reasoned.* The instrument shows the read fix is precise (every read-path mutant killed; only one secondary-effect miss on M_BIT30, timing-dependent, POSTTABLE-only). Commit blockers that remain on the packet:
+
+1. F5's grade must be corrected in CHANGELOG (outside BOUND, not (e) L1).
+2. F4's CHANGELOG must distinguish M_ALIGNDECLINE (e L1) from M_ENDECLINE (outside BOUND).
+3. D1 should be recorded as "rule-text says (e); Opus's (d) noted; rule-vs-decline applicability open."
+
+If gate 10 is the regression battery and it goes green, those three are paperwork, not code — commit. If "gate 10" includes the CHANGELOG audit, it cannot go green until 1–3 are fixed.

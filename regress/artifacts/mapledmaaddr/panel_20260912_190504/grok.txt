@@ -1,0 +1,102 @@
+I'll start from the full offloaded brief and the shipped oracle, then check the premises against the tree rather than ratifying the packet.The checkpoint is stale relative to HEAD; next I’ll read the shipped probe, the maple read arm, and `fatal()` so the oracle claims can be checked rather than restated.The silence oracle only matches disassembly address and opcode, so I’m checking whether a diagnostic can land in the unchecked suffix, and whether `fatal()` / step-print order match the packet.The whitelist-shape class looks closed on paper; I’m going to measure the deferred-output cases the packet asked about (`atexit`, buffered stderr) rather than treating them as reasoning.**CLOSES**
+
+CLOSE528_20260912
+
+The whitelist-shape class is closed. A future pty-visible diagnostic that still prints *during* the DMAADDR read and leaves `read silent` green would be a **breach of the contract**. `fatal("")`, a deferred print, and a non-pty FILE are **outside the contract, as stated** (empty is named; host/environment is named; SNAP-before-`quit` is the “during” cut).
+
+---
+
+Premises checked against `GXEMUL-SEC/` (not ratified from the packet):
+
+| Premise | Checked? |
+|---|---|
+| Fix is `odata = d->dmaaddr;` in `case 0x04`; tail is `memory_writemax64` + `return 1` | Yes |
+| Default arm prints `[ dreamcast_maple: UNIMPLEMENTED read from addr 0x.. ]` and answers 0 | Yes |
+| `fatal()` returns; `va_debug` prints nothing for an empty format (`while (*s)`) | Yes |
+| Disassembly is printed, **then** `I;` runs (`cpu_dyntrans.c`) | Yes |
+| Debugger echo / `put` / `step` / `print` formats | Yes (`print rN` is `PARSE_NUMBER` → `0x%"PRIx64"\n"`) |
+| SNAP is taken before `quit` is typed; `rsession` stores SNAP | Yes |
+| Table 5 scores vs the listed predictions | Yes (SCORES.txt / POSTTABLE.out) |
+| fmov SZ=1 is two 4-byte `memory_rw`s, not one 8-byte callback | Yes (`cpu_sh_instr.c`) |
+| Live atexit / `setvbuf(stderr)` mutant | **No** — this seat cannot exec WSL; named from the source, not measured |
+| `CLICOLOR` during table 5 | **No** — inferred unset because BASE was 37/37 |
+| All 12 noise lines per diagnostic leg | **No** — each raw prints only the first three |
+
+---
+
+### 1. Diagnostics the exact-transcript oracle cannot see
+
+**During the read, onto the pty, one or more bytes:** I do not have a 12-session hide. After the disassembly newline the next debugger output is a prompt (11 sessions) or the next disassembly (the one `step 2` session). `noise()` then either sees an extra/altered line or a glued echo (`ln == want`). Table 5 already measured the shapes that beat oracles 1–3: verbatim, hex, blank, CR, prompt, glue, `GXemul> quit` — all 36/37 on `read silent` alone, 12/12 sessions for the last two (`probe_M_GLUEPROMPT.raw`: `line 28 is 'GXemul> GXemul> print r2'`; `probe_M_QUITLINE.raw`: `line 28 is 'GXemul> quit'`).
+
+**Landing sites the brief named:**
+
+* **Inside a disassembly line (mnemonic/comment unchecked).** Not reachable from this arm. `sh_cpu_disassemble_instr` writes the full line including `; r1 = 0x…` and the `\n` *before* `I;`. A device `fatal(" injected")` cannot append to that line in the byte stream. `\r` / ANSI do not rewrite a previous line in the buffer; they land on the *next* line (and `\r` trips the bare-CR count).
+* **Inside a `print` hex line (`("value", None)`).** The print runs *after* the load. A no-newline diagnostic glues onto `GXemul> print rN`, which is an exact echo match, not a hex match.
+* **Prefix-match on a later disassembly (`_DIS` has no `$`).** Reachable in the **one** session that steps twice (`marker survive`). Exact C: `fatal("8c001002:  2432 ");` (no newline) — `_is("disasm")` still accepts the glued second line. The other eleven sessions glue that text onto `GXemul> print …` and red. The 12-session AND still kills it. Not a survivor of the row.
+* **Replaces rather than adds.** The debugger still emits every owed line. Printing the next owed line yourself inserts a duplicate; surplus catches it. Swallowing the debugger’s line is not a diagnostic in this arm.
+
+**Reachable edits the oracle does not see** (not whitelist-shape hides):
+
+```c
+/* 1. empty — EQUIVALENT, disclosed. Transcript identical to quiet. */
+fatal("");
+/* same mechanism: va_debug stops at the first NUL */
+fatal("%c", 0);
+
+/* 2. deferred to process exit — SNAP has already been taken.
+      Operator may see it after quit; read silent will not. */
+static void p(void) { fatal("[ maple: DMAADDR read ]\n"); }
+atexit(p);
+odata = d->dmaaddr;
+
+/* 3. fully-buffered stderr: debugger fflush(stdout) does not flush it.
+      fatal() itself uses printf/stdout, so this is fprintf, not fatal(). */
+setvbuf(stderr, NULL, _IOFBF, 8192);
+fprintf(stderr, "[ maple: DMAADDR read ]\n");
+odata = d->dmaaddr;
+
+/* 4. not on the pty — host channel, disclosed. */
+FILE *f = fopen("/tmp/maple.diag", "w");
+fprintf(f, "[ maple: DMAADDR read ]\n");
+```
+
+(2) and (3) are reachable C edits to this arm. No current row observes them (`read silent` uses SNAP; value rows use `printed()` on a hex after `print rN`; `ctrl zlive` is a later session). They are **not** the class that beat oracles 1–3 (one `fatal(format)` whose bytes look like debugger grammar). I did not build them.
+
+---
+
+### 2. Is the oracle sound?
+
+**Clean session, false red**
+
+* **1.2 s tail / 0.20 s inter-command window.** If the last `print` (or a `step`) is only partly in the buffer, `tail` is a partial hex/`GXemul>` and is not in `("", "GXemul> ")`. Table 5 ran BASE 37/37 three times on an idle clone; that is not a gate-load sample. Residual, not a diagnostic hole.
+* **`CLICOLOR`.** `enable_colorized_output = getenv("CLICOLOR") != NULL`, and a pty *is* a tty, so `color_prompt()` emits `\e[34;1m` in front of every `GXemul> `. Echo is exact equality. A clean session with `CLICOLOR` set reds `read silent`. The probe does not clear it. Table 5’s 37/37 implies it was unset for those runs.
+* **First prompt.** `t.find("GXemul> ")` is the start of the first echo line, which is what `owed()` starts with. Fine on this machine (`-V` drops to the debugger immediately). A banner containing that eight-character string would false-red; BASE says this image does not have one.
+
+**Dead session, false green on silence**
+
+* Death *during* the read (exit, `return 0` skip, hang before the print) leaves missing owed lines → red. Good.
+* Silence does **not** look at `how`. A child that produced a complete owed transcript and then died on `quit` could pass `read silent` and still fail `exit status` unless the death is `exit(0)`. The `exit status` note is right: `exit(0)` at the read is carried by `marker survive` (incomplete print), not by the status row.
+
+A dead session cannot pass the **detector**; it can pass the silence row only if the owed transcript is already complete.
+
+---
+
+### 3. Does the repair chain close?
+
+**Denominator swept:** every `fatal`/`printf`/`write` to the child’s stdout that emits ≥1 byte during the DMAADDR access, before the next debugger prompt — the space that produced the three previous survivors (literal → grammar shape → count/exemption). Also the table-5 generating set as measured (18 FROZEN5 legs, all on prediction; the one miss is FROZEN4 `M_GLUEPROMPT` 34/35 vs 35/35, old instrument).
+
+That space is closed. The remaining shape matchers (`_DIS` prefix, `print` any-hex) do not give a 12-session hide, given print-then-execute.
+
+A future escape that is still “bytes to the pty during the read” would be **a breach of the contract**. `fatal("")`, atexit/`setvbuf(stderr)`, and a host FILE would be **outside the contract, as stated**.
+
+---
+
+### 4. Which claims are wrong?
+
+**“Never a whitelist of line shapes” / “the transcript itself” / “exact line sequence.”** Echo is exact. `put`/`rN=`/`pc=` are exact values. Disassembly is a **prefix** (`_DIS` has no `$`). `print` is **any** `^0x[0-9a-f]+$`. Those two are still a whitelist. They are not a 12-session disguise from this arm; the sentence is still false.
+
+**“The only disguise left is `fatal("")`.”** Same `while (*s)` also makes `fatal("%c", 0)` and `fatal("\0…")` silent. Deferred stderr/atexit and a non-pty FILE also emit no SNAP bytes. Empty is disclosed; the others are only partly so (host/environment yes; atexit only by the SNAP cut).
+
+**The contract’s “ANY wording or shape”** is broader than the floor’s “printed *during* a DMAADDR read.” Interval silence as ruled is the right bound. The header should say “during the read, on the debugger pty,” or name atexit/`setvbuf(stderr)` under (e). That is an overclaim in the header, not a floor breach of the fourth oracle.
+
+Not wrong, checked: fix text; `fatal()` returns; empty format; disassembly-before-execute; table-5 numbers (HEAD 11/37, diagnostic legs 36/37, `& ~0x10` 35/37, `& ~0x04` 21/37, `|= 0x80000000` 36/37, `&= ~0x40000000` 36/37, 21 runs / 20 on prediction); fmov SZ=1 as two 4-byte accesses; 12 `rsession`s.

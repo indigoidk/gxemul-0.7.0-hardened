@@ -1,0 +1,44 @@
+VERDICT: CLOSES
+
+FINAL528_20260912
+
+**What I could not check from the packet** (and what would settle each)
+
+- The actual `src/devices/dev_dreamcast_maple.c`. The fix is stated as in place; verifying would need the tree.
+- The full `owed()` body. Only the `quit` branch and surrounding context are in the diff.
+- The full `noise()` comparison. The unchanged `body[k] != want` line cannot be a direct string-vs-tuple compare (body is a transcript line, want is a tuple element); the production code must parse each body line into a `(kind, payload)` tuple (or format `want` to a string) before the comparison. The stable 37/37 across three correct-build runs in kill table 6 implies it works.
+- The exact count of `rsession()` calls. The brief says 12; one would have to count from the file. Settled by reading `maple_dmaaddr_probe.py`.
+- The `rd()` implementation — only its timeouts (0.20s, spin, 10.0s) appear. Settled by reading the helper.
+- Whether the 12 sessions are 12 separate emulator processes (each with its own `atexit`) or one shared process — the "12/12 sessions: one extra line" result with the atexit mutant implies separate processes, since one shared process would fire the handler once and only the last session would show the extra line. Settled by reading the test driver.
+- Whether stderr is connected to the same pty as stdout (assumed typical for a child process). Settled by the harness.
+
+**Q1 — Is any emulator output produced because of the read still not compared?**
+
+I do not disagree with the file/syslog exclusion. The pty carries anything written to stdout/stderr (and direct writes to its fd) — including atexit output and stdio-buffer flushes on exit, which are the cases this change explicitly closes.
+
+I would add two narrow cases the brief does not name, both unlikely in this code path:
+- A handler that prints to `/dev/tty` from a context where the controlling terminal is not the pty (e.g., the emulator sets up its own session). Output would bypass the pty.
+- A handler that `fork()`s a grandchild and lets the grandchild inherit an fd pointing elsewhere before printing. The grandchild's print is not on the pty.
+
+Neither is implied by the brief; the contract's "channel the pty never carries" already covers them by spirit.
+
+**Q2 — Can a correct build fail? Can a crashed session pass?**
+
+Correct build failing: very unlikely. The 0.20s / spin read windows are unchanged. `rd(10.0)` returns when the pty hits EOF — it does not "wait 10 s" if EOF arrives earlier. A first prompt absent from `t` makes `raw = t` and the comparison fails, but that is not a false positive (the environment is broken). A correct build that produces all owed output then hangs before EOF: `rd(10.0)` returns after 10 s with the owed output already buffered; comparison passes — this is correct, since a silent emulator is silent.
+
+Crashed session passing `read silent`: only in the narrow window where the crash occurs between the quit echo and the process's exit syscall. Transcript has all owed lines + quit echo, `tail = ""`, comparison passes. But that result is correct for `read silent` (the emulator spoke only what it owed), and the crash would fail other rows that inspect post-quit state or exit status, so it is not a missed defect in the test suite.
+
+**Q3 — Does the review chain close here?**
+
+Yes, for the stated contract: any output from the read handler to the pty, in any form (any text, bare hex, blank, bare CR, prompt-shaped, command-shaped, literal `GXemul> quit`), at any time (before, during, or after the command stream, including atexit and stdio flush at exit). The kill table 6 reproduction is the proof — the atexit mutant moves from 37/37 on the previous test to 36/37 on this test, with `read silent` failing 12/12.
+
+The chain does not close for:
+- Output to non-pty channels (file, syslog, socket, separate `/dev/tty`) — listed as outside.
+- Value-conditioned body effects and other value cells — separate rows (`mapledmaadvance` etc.) cover those.
+- 64-bit reads, non-{READ,WRITE} `writeflag`, `fatal("")`, moving the assignment out of `else` — listed as EQUIVALENT.
+
+A future miss is more plausibly *outside the stated contract* than a breach of it; the contract is comprehensive for pty output.
+
+**Q4 — Which statement above is wrong?**
+
+I do not see a clearly wrong statement. Each claim in the brief is either internally consistent with the diff and kill table 6 results, or acknowledged in the contract as outside the test's reach. The only caveat I would flag is mechanical, not a logical error: `t.find("GXemul> ")` matches the *first occurrence* of that byte sequence in `t`, so if the emulator ever printed "GXemul> " before the actual first prompt (e.g., in a banner), the comparison would start there and the test could spuriously fail a correct build. Three consecutive 37/37 runs argue this does not happen in practice, but the locator is substring-based, not "first prompt of this session"-based.

@@ -1,0 +1,59 @@
+VERDICT: ACCEPT is the right fix; the detector is sound for the read-arm row, with clause (d) doubling as cursor-row coverage that is also necessary for the DMA-observability floor. No realistic wrong fix passes all four clauses; the closest gap is read-side-effect bugs (e.g., read-to-clear), which the detector does not pin and which would need an additional clause to catch.
+
+Liveness: PASS1_MAPLE_20260912
+
+---
+
+## Premise audit
+
+**P1 — Real-hardware MAPLE_DMAADDR read value.** [REASONED, UNCHECKABLE] Packet states no `_scratchpad/*.pdf`. ACCEPT still dominates: `d->dmaaddr` is well-defined (assigned by guest writes and by the `maple_do_dma_xfer` tail), the sibling read arms in this same switch (0x14 ENABLE, 0x18 STATE→0, 0x80 SPEED) all return their field, and the alternatives either keep a kill (DECLINE), depend on architecture-specific failure delivery that the brief itself flags as uncertain for SH4 (FAULT), or invent behavior not present in the model (LATCHED, BACKED, IMPLEMENT). Single fact that would settle it: a Holly / SH7750S TRM definition of the MAPLE_DMAADDR read contract.
+
+**P2 — Third value of `writeflag`.** [READ from packet structure] The function shape — top-level `if (writeflag == MEM_WRITE)` for the idata load, case-internal `if (writeflag == MEM_WRITE)` for the write arm, and the common-tail `if (writeflag == MEM_READ) memory_writemax64(...)` — leaves a third-value path that, after ACCEPT, assigns `odata`, skips the writeback, and returns 1. Behavior change is real but only relevant if some caller exercises that third value; the brief correctly flags this as the question to settle.
+
+**P3 — Cursor row is separate.** [READ from earlier review, per brief] ACCEPT does not touch `maple_do_dma_xfer`; the cursor computation is preserved. The detector's clause (d) is the only place that *observes* the cursor's effect, and it cannot distinguish a broken read arm from a broken cursor — but the read-arm row should not decide the cursor here.
+
+## ACCEPT vs the full option set [REASONED]
+
+- **DELETE (remove case 0x04):** falls into `default`. Brief annotates default as `fatal(...)` for either direction with "no exit." Whether default exits or not, DELETE fails the detector — if default exits, fails (c); if default does not exit, `odata` stays 0 and the read returns 0, failing (a) "nonzero HIGH bits / nonzero LOW FIVE bits." Either way, caught.
+- **DECLINE:** keeps `fatal`/`exit(1)`. Wrong on its face; the read is the operation being modeled, not a programming error.
+- **DECLINE+LATCHED ANNOUNCE:** incoherent — a latched announce alongside a kill still kills.
+- **ACCEPT:** delete `fatal`/`exit(1)`, keep `odata = d->dmaaddr;`. Aligns with the rest of the switch.
+- **FAULT:** the brief itself flags SH4 availability as uncertain. Also semantically wrong — a normal MAPLE_DMAADDR read should succeed, not raise a bus-error equivalent.
+- **BACKED ACCEPT:** backed by something other than `d->dmaaddr` (a separate register/mirror). If the backing tracks the field, equivalent to ACCEPT; if it doesn't, a wrong fix the detector will catch via (a)/(b)/(d).
+- **IMPLEMENT:** speculative without the TRM.
+
+ACCEPT dominates.
+
+## Detector clause analysis [REASONED, anchored in packet code]
+
+| Clause | What it pins | What wrong fix it catches |
+|---|---|---|
+| (a) distinct values, EXACT, nonzero HIGH and LOW5 | `relative_addr == 0x04`; read returns `d->dmaaddr` verbatim | constant return, zero return, `& ~0x1f` alignment mask, truncation, byte-swap |
+| (b) second write REPLACES | `writeflag != MEM_WRITE` path; field updates on writes | write-side snapshot/latch |
+| (c) process survives AND TODO string absent | kill removed; literal `"TODO: read from dmaaddr"` gone | keep `fatal`, keep `exit(1)`, keep the marker string, no-op replace (caught by (a)) |
+| (d) post-DMA read equals field | read sees DMA-updated `d->dmaaddr` | cursor-row regression; cache that updates only on writes |
+
+Clauses (a), (b), (c) are sufficient for the read-arm row. Clause (d) is *both* cursor-row coverage *and* necessary for the floor if "the read reflects DMA updates" is in scope — the brief's question. The dominating predicates for the ACCEPT body are `relative_addr == 0x04` ∧ `writeflag != MEM_WRITE`; (a) pins the first by addressing MAPLE_DMAADDR, (b) pins the second by reading after writing.
+
+## Which wrong fix passes? [REASONED]
+
+The pure deletion described — remove `fatal`/`exit(1)`, leave `odata = d->dmaaddr;` — *is* ACCEPT and passes everything.
+
+A wrong fix that passes (a), (b), (c) but fails (d): a write-side cache (`static uint32_t last_written`) updated only in the write arm, ignoring DMA's update of `d->dmaaddr`. Clause (d) catches it.
+
+A wrong fix that passes all four clauses: **read-to-clear**, e.g., `odata = d->dmaaddr; d->dmaaddr = 0;`. If the detector's (a) sequence is strictly write→immediate-read with no second read after the first, (a)/(b)/(c) all pass; clause (d) also passes because the read happens *after* the DMA tail's assignment and returns it before clearing. This is a real detector gap for read-side-effect bugs, but it is speculative hardware behavior, and adding a "second consecutive read equals first read" sub-clause to (a) would close it.
+
+## False premise?
+
+The brief's parenthetical on the `default` arm — *"fatal(... for either direction -- no exit"* — is suspect. In stock GXemul, `fatal()` calls `exit(1)`. If "no exit" is wrong and the default actually exits, then a PURE DELETION of case 0x04 fails (c) rather than (a); either way it fails the detector, so the verdict is unchanged, but the brief's annotation should be re-checked against the actual `fatal()` definition.
+
+## Uncheckable from the packet
+
+- Real-hardware MAPLE_DMAADDR read contract (P1).
+- Whether SH4 raises an exception on a `device_access` return of 0 (FAULT availability).
+- Whether `memory_rw.c` really delivers failure as exception for MIPS/M88K (premise inside the FAULT option).
+- Whether the default handler exits.
+- Whether `d->dmaaddr = addr` at the `maple_do_dma_xfer` tail computes the correct cursor (separate row, asserted; not this row's concern).
+- Whether the witness sequence in clause (d) uses a command whose response actually lands in a pre-filled receive buffer — the brief says this is being built; the exact supported command is not inlined and would be needed to *run* (d), not to *reason* about it.
+
+Each of these names one fact that would settle it; none are needed to choose ACCEPT.

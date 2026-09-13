@@ -1,0 +1,44 @@
+**SURVIVOR: `if (len != 4) { fatal("[ dreamcast_maple: dmaaddr read ]\n"); exit(1); }` added to the read arm (or equivalently `odata = d->dmaaddr; if (len == 8) exit(1);`) — 16/16 green, because all 16 rows take it at len==4.**
+
+Liveness token: `PASS2_MAPLE_20260912`
+
+## Q1 — the width-keyed reintroduction
+
+READ: the brief states every load in the detector is `mov.l` — "every row reads 32 bits" — and the common tail consumes `len` (`memory_writemax64(cpu, data, len, odata)`), so `len` is in scope in the arm.
+
+REASONED: the exact mutant, applied to the post-fix arm:
+
+```c
+		} else {
+			if (len != 4) {
+				fatal("[ dreamcast_maple: dmaaddr read ]\n");
+				exit(1);
+			}
+			odata = d->dmaaddr;
+		}
+```
+
+This is literal clause (d): the HEAD diagnostic + exit re-introduced *verbatim*, under a different predicate (`len`, not `relative_addr`/`writeflag`). Every one of the 9 read sessions exercises len==4 only, so the predicate is constant across the entire battery; a predicate that never varies cannot be falsified. All value rows, silence, survive, exit status, controls: green by construction, not by luck.
+
+**The row I expected to catch it does not exist.** The missing row is a width leg: a 10th read session doing `mov.b`/`mov.w` (or a 64-bit `fmov.d`) at 0xa05f6c04, asserting register content, no-exit, and silence at that width. Per the operational rule I name this measurement rather than run it.
+
+REASONED, one honest caveat — whether this mutant is a real regression or inert on the reachable domain is **not checkable from the packet**. The panel settled the analogous domain question for `writeflag` (REASONED from READ: "279 call sites scanned → only MEM_READ/MEM_WRITE reach this handler"), but no equivalent scan for `len` is stated. The single fact that settles it: can gxemul's SH4 memory_rw path deliver len ∈ {1,2,8} to this device (byte/halfword loads, or SH4's 64-bit `fmov.d`)? If yes, this is a genuine undetected kill-of-fix; if no, it is exactly as inert as a `writeflag > MEM_WRITE` mutant. Either way the ONE QUESTION — green on all 16? — is YES.
+
+The general form: any predicate constant over the 16 rows is undetectable (`len`, machine type `-E dreamcast`, cpu index). The detector varies dmaaddr value, read count (1–2), prior writes, register poison, and session count — nothing else. A counter-keyed reintroduction (`if (++nreads > 10) exit(1)`; the battery performs 10 DMAADDR reads) is the same family and also green; I note it but the len mutant is sharper because the author put `len` in the diff's own tail call.
+
+## Q2 — channels that fail to vary
+
+READ off the kill table: every named row's channel demonstrably varied — `other read` (passes HEAD 5/16, fails M_HOIST), `double read 2` (M_READCLEAR), `initial zero` (correctly *passes* M_DECLINE/M_MASKLOW since 0 survives both — the poison design works), `read silent` (M_KEEPFATAL/REWORD/LATCHED), `exit status`/`marker survive` (M_ZEROEXIT takes 3 rows: 13/16 ✓). Arithmetic on all 13 legs is internally consistent.
+
+REASONED: the one channel that fails to vary is `len` — no row varies it under any mutant, including the one the panel should fear most.
+
+## Q3 — CONTRACT claims
+
+**Not checkable from the packet: the CONTRACT header text is not inlined.** The single fact that settles this: the header text plus the probe's match pattern. Two packet-visible candidates:
+
+1. READ: SETTLED claims the floor is "silence … (**any maple text, not one literal**)"; the DETECTOR section says the check is "transcript contains the text `dreamcast_maple`" per read session. These are inconsistent as stated. If the matcher is the literal substring, a reworded diagnostic avoiding it (`fatal("[ maple: dma %08x ]")`) is a *second* survivor of the same kill table. M_REWORD was caught, but its reword may have retained the substring — the packet cannot distinguish.
+2. READ/REASONED: any CONTRACT clause asserting post-write read identity without a width qualifier overclaims — it is verified only at len==4.
+
+## Verdict
+
+`SURVIVOR: if (len != 4) { fatal("[ dreamcast_maple: dmaaddr read ]\n"); exit(1); } odata = d->dmaaddr;` — swept the rest of (d): operand swaps (killed by the 7 value rows, M_DECLINE/M_MASKLOW as witnesses), arm-merges/hoists (`other read`, witnessed), post-read mutation (`double read 2`, witnessed), unconditional diagnostics/exits (`read silent`, survive, exit status, witnessed). Constant-across-rows predicates — `len`, machine, cpu id, total-read counter — are the open seam; only `len` is reachable from the diff's own text.

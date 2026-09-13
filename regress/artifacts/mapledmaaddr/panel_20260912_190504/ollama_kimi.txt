@@ -1,0 +1,31 @@
+**SURVIVOR: defer the announce past the pre-quit snapshot.** Exact edit to the fixed arm (file-scope helper + 3 lines in case `0x04`):
+
+```c
+static void maple_dmaaddr_announce(void) { printf("[ dreamcast_maple: DMAADDR read ]\n"); }
+/* read arm: */
+odata = d->dmaaddr;
+{ static int hooked; if (!hooked) { hooked = 1; atexit(maple_dmaaddr_announce); } }
+```
+
+Produced transcript: byte-identical to the measured BASE session through the snapshot; after `GXemul> quit\r\n` the pty shows `[ dreamcast_maple: DMAADDR read ]`. `noise()` reads only `SNAP` (READ: `READS.append((SNAP, how, cmds))`), the exit-status row checks only `how == "exit0"`, and every value row is unaffected → predicted 37/37 green with the defect reinstated and operator-visible. Same class (the read speaks, the silence oracle is deaf), new axis: the attack moved from *shape* to *time*, because the oracle's window ends at `SNAP`.
+
+Liveness token: `CLOSE528_20260912`.
+
+---
+
+**Q1 — what the oracle cannot see** (each claim labeled):
+
+- **During-the-read bytes, any shape: no survivor.** REASONED from the diff: exec-time output starts a fresh line (settled premise); echo lines are compared by `ln == want` (exact), hex/put by anchored regexes, and any insert desyncs the strict in-order compare, which also flags surplus/missing/tail/bare-CR.
+- **The disasm-tail hole is unreachable — and the packet itself corroborates that.** REASONED+READ: `_DIS` compares only address+opcode, so a no-newline diagnostic could hide in the mnemonic/comment region *only if* it lands between the opcode and the newline. The settled premise (disasm line complete, newline printed, before execution) forbids that; and table 5's newline-free legs (`glued GXemul> `, `GXemul> quit`) measured **12/12 noisy** — had they landed in the uncompared tail, `read silent` would have been green for those sessions. So the premise held on the measured build. (If the premise ever breaks, `fatal("X")` with no newline is the exact escape.)
+- **The `("value", None)` laxity hides nothing.** REASONED: `_HEX` is fully anchored (`^0x[0-9a-f]+$`); a diagnostic cannot live inside the print line, and an insert before it desyncs.
+- **Post-snapshot output: invisible — this is the survivor above.** READ: nothing runs `noise()` on the full transcript `t` (only value rows use `t`, via `printed()`); the tail rule admits only `""`/`"GXemul> "` *within* SNAP. REASONED: reachable as a small C edit (atexit, or `setvbuf(..., _IOFBF, ...)` so even a plain `fatal(...)`'s bytes flush only at exit). A row *could* observe it: append `t` to READS as well and require zero bytes after the `quit` echo — a one-line-plus change, no new harness.
+- **A channel the pty never carries** (mutant writes to a freshly opened fd/file): REASONED invisible but not operator-facing; verbatim `fatal`'s channel demonstrably reaches the pty (it was killed), so ordinary diagnostics can't go this way.
+- **Replacement rather than addition:** REASONED impossible for transcript bytes (the arm cannot unprint debugger output); the only replaceable surface is the returned *value*, pinned by the value rows' constants.
+
+**Q2 — oracle soundness.** READ/REASONED: one apparent dependency is actually settled by the packet's own measurement — whether `SNAP = buf` freezes the buffer: if SNAP aliased post-quit bytes, `GXemul> quit` would appear as a surplus line and BASE would red; BASE measured 37/37 ×3, so SNAP excludes it. **Not checkable from the packet:** the `rd()`/`spin` implementation (not inlined) — under host load the snapshot can race the last command's output, and a value line split from its CRLF lands in `tail` and reds `trailing %r`, a **false red of a clean session**. BASE 37/37 ×3 bounds this on the operator host only; the single settling fact is the rd/spin source (or one BASE run under deliberate load). **Dead session passing: no path found** — REASONED: missing owed lines red `read silent`, and `how ≠ exit0` reds `exit status`.
+
+**Q3 — closure.** Denominator swept (READ): seven diagnostic legs × 12 read sessions in table 5, plus tables 1–4's mutant enumeration (hoists, selector narrowings, keyed declines/exits, sibling writes), plus the new single-bit set/clear reread rows. Within that denominator the **shape** subclass is closed by exact equality — this is the first oracle that is not a whitelist. The survivor above is on the **time** axis, which the contract does not enumerate: the floor clause's own wording is "printed **during** a DMAADDR read," and although "latched" is listed among covered forms, no measured leg defers past the snapshot — if "latched" is meant to include exit-deferral, that coverage is unmeasured. So the chain closes the class **as enumerated**; the escape is formally *outside the contract, as stated* — but it is the same operator-visible defect, and a one-row repair (noise the post-quit bytes) would close it.
+
+**Q4 — which claim is wrong.** REASONED+READ: the headline claim that the exact-transcript oracle closes the diagnostic class with *"no exemption needed."* The pre-quit snapshot does not remove the last exemption; it converts the quit-echo exemption into an unbounded **post-snapshot blind spot** — no row inspects the final transcript, so "rejects any missing / extra / altered line" is true only inside a window the mutant can legally print outside of. Supporting unmeasured items (named, not asserted wrong): (a) the settled premise that the disasm line *including its newline* precedes execution — corroborated by the 12/12 glued-leg measurement, not independently provable from the packet (settling fact: one `fatal("MARKER")`-no-newline leg examined for placement, or the `cpu_dyntrans.c` print order); (b) `fatal("")` EQUIVALENT — internally consistent with the measured blank-line leg (`fatal("\n")` produced exactly one blank line, so fatal adds no prefix/newline of its own), but sourced from `debugmsg.c`, which I cannot read.
+
+**Measurement I want** (naming, not running): one kill-table leg with the atexit (or `_IOFBF`) announce above. Prediction: 0/12 noisy, 37/37 green — settling the survivor in a single run.

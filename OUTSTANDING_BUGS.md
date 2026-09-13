@@ -19422,3 +19422,45 @@ Filed, each ruled clause (e) or a named measurement, NOT owed:
 * **`R_NOGUARD`** -- delete rlwimi's `sh ?` guard; predicted 28/28.  The fix narrowed `tmp` to `uint32_t`, which
   made `tmp >> 32` at SH=0 undefined and the guard LOAD-BEARING (Fable).  A red would only relabel it
   "host-dependent equivalent"; no row can pin it.
+
+### `mapledmaaddr` -- SHIPPED as `#528` (2026-09-12); residuals FILED, none owed
+
+The fix (ACCEPT: delete the `fatal` + `exit(1)` around the `MAPLE_DMAADDR` read) and its 37-row detector shipped as
+`#528`, with `gate_sh_rounding.sh` (gate 10) pinned at 37.  The detector took SEVEN kill tables; the flagship
+adjudications (`regress/artifacts/mapledmaaddr/fable_pass2_20260912.md`, `fable_close_20260912.md`) ruled the grades
+and closed the chain on the silence oracle.  Filed, each disclosed in the probe's NOT COVERED list, NOT owed:
+
+* **A decline or exit KEYED on sibling state the rows leave at reset** -- `} else if (d->timeout) { ... } else {`
+  survives every read session (the timeout is 0 in all twelve).  One `MAPLE_SPEED` write before a read in any session
+  would pin the `timeout != 0` cell; not taken, because the arm's body reads no sibling field (clause (e)).
+* **An effect after the third read in one process** (counter > 3), **two-bit selector merges**, **high-bit masking**
+  (covered by the values, never separately measured), **environment-keyed effects**.
+* **Clause (c) was never a kill-table leg.**  The four control rows carry it by construction; the named measurement is
+  a binary built WITHOUT the maple device at 0x5f6c00, which must red `ctrl devsig maple`.  Cheap; not run.
+* **The carrier's member-5 clause** should gain "nor SH, where the idiom silently skips the load" (the flagship seat's
+  pass-1 ruling).  Not made: `tools/CLAUDE.md` carries an earlier session's unreviewed delta, and section J requires
+  the root and tools copies to match -- so it lands with whatever round reviews that delta.
+* **The dead-pty `quit` echo (table 2's one miss) is MOOT, not filed:** the shipped oracle reads the whole transcript
+  through EOF and requires exit 0 in every read session, so a dead session reds deterministically.
+* **The emulated-time window is DISCLOSED, not owed** (flagship ruling, `fable_close_20260912.md`): a session spans the
+  first-step device tick plus the two `cpu_run_deinit()` ticks, so a diagnostic keyed on a later tick (a periodic
+  summary; `M_TICKPERIODIC4` 37/37 in kill table 7, by design) is unobservable by any finite session.
+* **A no-DMAADDR silence-control session for the shutdown-tick coupling** (flagship seat, "worth filing; not owed"):
+  `read silent` runs through the two shutdown ticks, so it also requires every dreamcast device to be silent on them.
+  One session that runs `quit` WITHOUT reading DMAADDR and requires ITS transcript to be exact would make a future
+  shutdown print by another device red THAT row too -- distinguishing "another device speaking" from "the read
+  speaking".  Cost: one session; changes the row count and the gate pin.
+
+### `silencewhitelist` (LOW, harness) -- filed 2026-09-12 from `#528`
+
+`#528`'s silence row went through SEVEN oracles -- a literal, a quiet grammar, per-class counts, counts with an
+exemption, a pre-`quit` snapshot, a whole transcript with a bounded read and prefix-matched disassembly -- and each of
+the first six was swept by a diagnostic in a legal shape or a later interval (a token-free message, a bare hex line, a
+blank line, the exempted `quit` text, an `atexit` print, an exit-time crash, a swapped disassembler).  **A silence
+oracle built as a whitelist has, by construction, a shape to hide in -- and one that stops observing at a point in time
+has an interval to hide in.**  The closure is an EXACT OWED TRANSCRIPT computed from the commands (`owed()` /
+`disasm_line()` / `noise()` / `unclean()` in `regress/maple_dmaaddr_probe.py`): the whole session through the pty's
+EOF, every line in full, EOF and exit 0 required.  Other detectors in `regress/`
+carry silence rows keyed on a literal or a grammar; which of them are FLOOR-graded, and so owe the same closure, has not
+been censused.  **The deriver, not a list:** grep `regress/*_probe.py` for rows whose name or note says `silent` /
+`quiet` / `noise`, and read each oracle.  Not owed by any shipped round: each row's grade was ruled in its own round.

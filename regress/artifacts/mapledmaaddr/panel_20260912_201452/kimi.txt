@@ -1,0 +1,815 @@
+kimi version 0.36.0
+• Let me think carefully about this. The task is a verification pass on a regression test change for the `mapledmaaddr` issue #528 in GXemul-SEC. I'm asked to:
+
+  1. Check whether any emulator output produced by the register read is still not compared
+  2. Whether a correct build can fail / a crashed session can pass
+  3. Whether the review chain closes
+  4. Which statement above is wrong
+
+  I should verify premises, not just reasoning. The tree is `C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\`. I should read the actual test file `regress/maple_dmaaddr_probe.py` and compare with the diff, read the device file `src/devices/dev_dreamcast_maple.c`, and check the artifacts like `SCORES.txt` / `POSTTABLE.out`.
+
+  Key things to verify in the diff:
+
+  The session function: after typing commands, it sends `quit\n` and calls `rd(10.0)` which reads until EOF (or timeout). The `noise()` function compares the whole transcript from the first prompt to EOF against `owed(cmds + ["quit"])`.
+
+  Potential issues to check:
+
+  1. **Timing**: `rd(10.0)` — does `rd` return immediately at EOF or does it wait the full 10 seconds? The comment says "rd returns at once when the pty closes". Need to check the actual `rd` implementation in the file. If `rd` waits for the full timeout when no data arrives, a clean build might... wait, EOF causes `os.read` to raise OSError (EIO on Linux when slave closes) or return b"". Depends on implementation. If the emulator is slow to exit (e.g., 10s not enough on a loaded machine), the transcript would be truncated and... actually if the emulator is slow to exit but prints nothing, the transcript is complete and comparison passes. If it exits slowly and the fd is closed by the test before EOF, we might miss late output — but that's a mutant-catching concern, not a false-fail concern. Actually wait — if `rd(10.0)` times out before the emulator exits, then `os.close(fd)` closes the master; the emulator may still be running. The transcript would be complete for a quiet emulator. So a slow exit doesn't fail a correct build. But it could let a slow-printing mutant escape — e.g., a handler that forks a child which sleeps 11 seconds then prints? That's contrived; the pty master closed means the child's write would get EIO/SIGPIPE... Actually output after close wouldn't be observed regardless.
+
+  2. **The `quit` echo**: When you type `quit\n`, the pty echoes `quit\r\n` (echo mode). The debugger reads the line and exits. Does GXemul's debugger print anything on quit? Need to check — maybe it prints something like "GXemul>" no... Let me check the actual debugger quit behavior in the source. In GXemul, `debugger_cmd_quit` prints a message? Let me recall: in gxemul's debugger.c, the quit command prints "Quit." maybe? Hmm. Actually in GXemul (Anders Gavare's), `debugger_cmd_quit` just sets `exit_debugger = 1; debugger->running = 0` or similar... I need to check the actual source in GXEMUL-SEC/src/debugger/.
+
+  Wait — actually there's a subtlety: in GXemul, when you quit the debugger from the console during emulation, it asks "Quit? [y/n]"? No... Hmm. There might be a confirmation prompt? I should check the actual source.
+
+  Also: the test's `owed()` builds expected lines from the command list: echo lines, value lines, "put" confirmations, disasm lines. For `quit` it expects just the echo. But the echo itself — when typing `quit\n`, the pty echoes `quit\r\n`. The `noise()` function finds `GXemul> ` first occurrence and takes from there. The echo line for a command would be... wait, how do echoes appear? The debugger prints prompt `GXemul> ` (no newline), then the typed command echoes, then `\r\n`. So the transcript line is `GXemul> <cmd>\r\n`? Hmm, but `owed()` produces kinds: "echo", "value", "put", "disasm". Let me read the actual current file to see how `owed()` constructs lines and how noise() compares.
+
+  I need to actually read the file rather than reason from the diff. Let me plan the reads:
+
+  - `regress/maple_dmaaddr_probe.py` (current, full)
+  - `src/devices/dev_dreamcast_maple.c` (the fix)
+  - `regress/artifacts/mapledmaaddr/killtable6_20260912/SCORES.txt` and `POSTTABLE.out`
+  - The frozen previous version `killtable5_20260912/maple_dmaaddr_probe.FROZEN5.py` to confirm the diff base
+  - `src/debugger/` quit behavior — check what `quit` prints.
+  - Check how the pty is set up (echo mode, CRLF translation) in the test.
+
+  Also verify claim: "37 checks", "12 read sessions".
+
+  Premises to check that I cannot check from text: the kill table 6 measurements (SCORES.txt) — the prompt says results are in files "once it finishes" — I can check if they exist.
+
+  Potential trap: Q4 "Which statement above is wrong?" — there may be a deliberately wrong statement in the background. Let me scrutinize:
+
+  - "the Maple bus device's register-read handler for MAPLE_DMAADDR (offset 0x04) used to print a TODO message and terminate the emulator; it now just returns the stored value, like its sibling register MAPLE_ENABLE" — plausible; check source.
+  - "The regression test regress/maple_dmaaddr_probe.py (37 checks)" — count rows in file.
+  - "twelve test sessions" — check READS sessions count = 12.
+  - Kill table claims — check SCORES.txt.
+  - "rd returns at once when the pty closes" — check rd implementation. On Linux, reading master after slave closed gives EIO (OSError) or returns b"". If `rd` loops with select and retries on OSError, it might spin... need to read.
+  - The noise() logic: `lines = raw.replace("\r", "").split("\n")`; `body, tail = lines[:-1], lines[-1]`. If the transcript ends with `\n` after quit echo, then last element is "" → tail == "" → OK. If transcript ends without trailing newline (e.g., ends with prompt "GXemul> "), tail would be "GXemul> " → flagged "trailing". After quit, does the emulator print anything? The echo is `quit\r\n`; then process exits; pty EOF. So transcript ends with `\r\n` → after removing `\r`, ends with `\n` → split gives final "" → tail "". Good.
+
+  But wait: what about the "first prompt" — `t.find("GXemul> ")`. If a mutant prints a diagnostic BEFORE the first prompt (e.g., at device registration... no, the read happens later). Output before the first prompt is excluded from comparison (`raw = t[i:]`). Could the register read cause output before the first prompt? No — the read happens after commands are typed, which is after the first prompt. But could a diagnostic print "GXemul> " earlier? Hmm, `t.find` finds the FIRST occurrence of "GXemul> ". If the emulator prints a banner containing "GXemul> "... unlikely.
+
+  Actually, a subtle one: what if a diagnostic is printed BEFORE the first prompt due to buffering? The read happens during the session, after prompts. Fine.
+
+  Another subtlety: echo of typed commands. When the test writes commands and the pty echoes them, the echoed text appears in the transcript. `owed()` expects echo lines. The prompt "GXemul> " is printed without newline; the echo follows on the same line. So the transcript line is `GXemul> cmd\r\n`. And `owed` "echo" entries presumably map to `GXemul> ` + cmd. Let me check how noise() compares each line against (kind, want). I need the full current file.
+
+  Potential false-fail for correct build (Q2): 
+  - Fixed read windows: `rd(spin if i == len(cmds)-1 else 0.20)` — if the emulator is slow (loaded machine), output may arrive after the window closes; commands are typed anyway... Actually look at the loop: for each cmd, write cmd, then rd window. If output is incomplete, subsequent writes still happen (pty buffers), and reads accumulate. The final `rd(spin)` after last cmd... Actually the loop `for i, cmd in enumerate(cmds)` writes each command and reads. If timing is tight, some output may arrive late but still be captured in later windows or the final `rd(10.0)` after quit. Since comparison is on the WHOLE transcript now, late arrival within the session is still captured as long as it arrives before EOF-close. Even better than before. But: what if output arrives AFTER `rd(10.0)` returns? rd(10.0) waits until EOF... if it returns at EOF, all output flushed before exit is captured. A slow emulator exit: does `rd` have a max duration? `rd(10.0)` — presumably reads for up to 10 seconds. If emulator takes >10s to exit after quit (e.g., slow disk flush), the test closes the fd and the transcript still ends with echo — passes. A correct build wouldn't print extra. So no false fail from slow exit per se. But what if the emulator hasn't finished processing earlier commands before quit is typed? The pty input buffer queues them; the debugger processes them in order; output ordering preserved. The final transcript still matches owed order. OK.
+
+  - Crashed session passing: if the emulator crashes mid-session (e.g., segfault during the read), the pty gets EOF early; the transcript would be missing owed lines → noise() flags "missing". Unless the crash happens... after all owed lines are printed? Owed includes quit echo — a crash before quit processing means no quit echo → flagged. What if the emulator crashes exactly after echoing quit but... quit echo is the terminal's echo of typed input — happens immediately when written to master, regardless of the emulator reading it. Interesting: the echo is generated by the pty line discipline, not by the emulator! So even if the emulator is dead, writing `quit\n` to the master produces the echo `quit\r\n` in the transcript (if echo is still on). Hmm — but if the emulator is dead, the master write still works as long as the slave side is open... If the emulator exited/crashed, the slave fd is closed; writing to master returns... on Linux, writing to a master whose slave is closed gives EIO. Reading gives EIO/EOF. Actually once the slave is closed, the pty is dead; the test's `os.write(fd, b"quit\n")` would raise OSError (EIO), caught by `except OSError: pass`. Then no echo appears → transcript missing quit echo line → flagged as missing line → session counted noisy. Good.
+
+  But consider a crash AFTER all reads but before quit in a *read session*: the missing owed lines (remaining commands' echoes etc.) flag it. And `how` — session returns `how` indicating termination reason? The tuple stores `how`. Does any row check `how`? In the diff, `READS.append((t, how, cmds))` but noise only uses t and cmds. Maybe other rows check how. Need to read full file.
+
+  Now the real question Q1: any output produced because of the register read still not compared?
+
+  Candidates:
+  a) Output before the first "GXemul> " occurrence — excluded by `t.find`. Could the read cause output there? No.
+  b) Output after `rd(10.0)` returns but... rd returns at EOF; after EOF there's nothing to read. Unless rd times out (10s) while emulator still alive, then close → any later output lost. A mutant that delays output >10s after quit? E.g., atexit handler that sleeps 11s then prints? Or alarm(11)? The contract now claims to catch "a line printed late (an atexit handler, a buffered stream's flush at exit)". A mutant with `alarm(12)` or a sleeping atexit handler would escape the 10s window. But is that "produced because of the register read"? It is registered because of the read. Hmm, but the kill table measured atexit caught. The 10s window: if the operator machine is slow, does a correct build risk false fail? If rd(10.0) returns only at EOF, the 10.0 is presumably a cap. If the emulator takes >10s to exit... a correct build would still pass (transcript complete; missing EOF doesn't matter as tail=="" already). Wait — actually if rd(10.0) times out, is tail still ""? Transcript ends with `quit\r\n` (echo from pty) → tail "". Yes passes. But then `os.close(fd)` while emulator still running — fine.
+
+  Hmm wait, actually there's a subtlety: does the emulator print anything on exit normally? Like a shutdown message? In GXemul, on quit from debugger... the debugger quit command prints "GXemul> " nothing? Let me check the actual gxemul source. In src/debugger/debugger.c (old gxemul 0.4.x), `debugger_cmd_quit` does: `printf("Quit.\n");`? Hmm, I genuinely don't remember. The test asserts quit owes ONLY its echo. If gxemul printed something on quit, the correct build would fail — but they measured correct build 37/37 three times, so quit must print nothing. I can check the source to confirm.
+
+  c) Output on stderr vs stdout — both go to the same pty presumably (the test spawns gxemul with stderr redirected to the pty?). Check the spawn code (pty.fork or openpty + subprocess). If stderr goes elsewhere, a debug() to stderr would escape. Need to check how the emulator is launched in session().
+
+  d) Output interleaved INTO the echo lines: e.g., a diagnostic printed while a command echo... any extra byte alters a line → caught.
+
+  e) A diagnostic that overwrites via carriage return: bare CR rejected. `\r` not part of CRLF counted. What about backspace (\b) or ANSI escape sequences? A diagnostic printing `\b` chars or ESC sequences would be extra bytes within a line → the line wouldn't match owed → caught. Unless it prints exactly... no.
+
+  f) Terminal control: a diagnostic that changes terminal modes (echo off) — then subsequent echoes disappear → missing lines → caught. Nice.
+
+  g) Output printed before the first prompt: `i = t.find("GXemul> ")` — if a diagnostic prints "GXemul> " as part of noise BEFORE the real first prompt... the read happens after prompts exist. But what about a diagnostic that includes "GXemul> " EARLIER than the actual prompt? Impossible — first prompt precedes any command.
+
+  Wait, actually one more: what if the diagnostic is printed but happens to be EXACTLY consumed... no, comparison is exact.
+
+  h) The "quit" echo exemption: previously table 4 exempted the quit echo; now nothing exempt. A mutant printing `fatal("GXemul> quit\n")`? That text after echo would add lines → caught. Prompt-shaped text caught.
+
+  i) What about output that arrives after EOF? Impossible by definition.
+
+  j) Output to the pty's slave from a forked child after master closed — not observable; but also "off the console"? It IS the console but unobservable after close. The window is rd(10.0). A fork+sleep(>10s)+print mutant escapes. Is that within contract? The contract says "a line printed late (an atexit handler, a buffered stream's flush at exit)" — those print AT exit, within the window. A deliberately delayed print (sleep then print) is a different shape not claimed. But honestly, is it "output produced because of the register read"? Yes, registered by the read. Hmm. But practically, an atexit handler that sleeps would delay process exit beyond 10s — rd(10.0) times out, close master, child writes to closed pty → EIO/SIGPIPE → nothing observable. The mutant would escape detection. But is that a realistic mutation-testing concern? The panel's earlier passes chased atexit; a sleep-delayed print is the natural next adversarial step along the same "time axis" they just discovered. But closing the master makes the output unobservable BY ANY transcript-based test — you'd need wall-clock process monitoring (waitpid timeout) rather than transcript. Actually a test could wait longer or check process liveness. The current test does have a spin timeout overall presumably.
+
+  Hold on — also: does `session()` verify the emulator actually exited? If a mutant registers atexit that hangs forever (pause()), rd(10.0) times out, close, move on — transcript clean → passes. A hang-on-exit mutant would pass the silence row! But other rows? The `how` field might record termination. Let me check what `session()` returns as `how` and whether any row asserts clean exit. In the diff I see `t, how = session(cmds)`. Need to see rows using `how`. If no row asserts exit status, then "exit(1) alone" mutant — how was that caught? The contract says "exit(1) alone" is caught. exit(1) on the read → emulator dies mid-session → missing owed lines → caught by silence row, plus value rows fail. OK.
+
+  But an atexit-hang: emulator doesn't die, just hangs at exit after printing everything owed. Transcript = owed exactly. rd times out after 10s, close. Session appears clean! Would 37/37 pass? The silence row passes. Value rows pass (correct values read). Unless there's a row on `how` (e.g., "session ended by EOF within timeout"). Need to check. If such mutant passes, that's a GAP — but is it "output not compared"? It's not output at all; it's non-termination. Q1 asks specifically about output. Q2 asks about crashed session passing. A hang-at-exit isn't a crash. Hmm, but the `how` return — let me read the file.
+
+  Also Q2: "Can a crashed session pass it?" — crash mid-session → missing lines → noisy → fail. Crash after quit echo? The quit echo comes from the pty, and after that the owed list is complete. If the emulator crashes (SIGSEGV) during exit AFTER echoing quit (i.e., quit typed, emulator reads quit, begins exit, segfaults in an atexit handler)... transcript = echo only, tail "" → silence row PASSES. Value rows already recorded. So a crash-during-exit passes the silence comparison! Does anything else check? `how`? If `session()` reports how="eof" regardless of exit status (no waitpid status check), a segfaulting-exit build passes 37/37. Is that a gap? The contract is about output comparison for the silence row; a crash at exit produces no output (well, "Segmentation fault" is printed by the SHELL, not the emulator — and there's no shell here since the test forks the emulator directly? If the test uses pty.fork + exec, a crash message isn't printed; the kernel doesn't print to the pty). So yes, a segfault-on-exit would be invisible to the transcript. But is that "output produced because of the register read"? No output at all. Q1 is about output. Q2 asks about crashed sessions — a crashed session CAN pass if the crash happens during exit after the quit echo, PROVIDED nothing checks the exit status. Must check whether session()/rows check how the session ended (EOF vs timeout vs exit status). Let me look.
+
+  Actually wait — does the owed-list comparison catch missing quit echo if crash before quit? Yes. The only passing crash window is: after the pty echoes `quit` and before/during exit, with no bytes printed. The owed list ends at quit echo. So crash-during-exit → passes. Hmm, but is that within the stated contract? The contract covers message-reinstatement mutants; a crash at exit isn't in the kill list. The kill-table contract lists "the removed fatal()+exit(1) reinstated (HEAD)" — that's caught earlier (missing lines). So crash-at-exit is arguably outside contract but worth disclosing.
+
+  Let me now also check `rd`: implementation. And the pty setup: echo, ONLCR (CRLF). The bare-CR check: `raw.count("\r") - raw.count("\r\n")` — counts CRs not part of CRLF. If a diagnostic prints `\r\n` itself, it'd be indistinguishable from pty CRLF — but that just means its newline looks like a newline; the extra line still mismatches owed → caught anyway.
+
+  One more potential gap: `lines = raw.replace("\r", "").split("\n")`. If a diagnostic prints an extra `\n` gluing... caught as line mismatch.
+
+  What about a diagnostic printed BEFORE the first prompt but the transcript find: `i = t.find("GXemul> ")`. Suppose emulator startup prints nothing before prompt. A mutant in the READ handler can't print before the first prompt (handler runs later). OK.
+
+  What about output going to stderr — is stderr on the pty? Check spawn: probably `pty.fork()` then `os.execv`, or `os.openpty()` + subprocess with stderr=STDOUT. If stderr NOT on pty, a `fprintf(stderr, ...)` diagnostic escapes! debug()/fatal() in gxemul print to stdout? gxemul's debug() prints to stdout. fatal() prints to stderr? Let me check src/core or misc. In gxemul, `fatal` uses `debug(...)`? Actually gxemul's fatal prints "fatal: ..." via fprintf(stderr)? Hmm. The kill table measured fatal-reinstatement caught (11/37 — caught), so whatever channel fatal uses is on the pty. But a NEW diagnostic via fprintf(stderr) — if stderr isn't attached to the pty, escapes. Check session spawn code.
+
+  Let me also verify the claims in "what changed": 17 runs, 17 on prediction; atexit 36/37 with read silent failing 12/12 sessions; previous version atexit 37/37 (missed). Check SCORES.txt/POSTTABLE.out existence and content.
+
+  Also count rows = 37, read sessions = 12.
+
+  Also check the C fix in dev_dreamcast_maple.c: read arm for 0x04 returns d->dmaaddr; MAPLE_ENABLE sibling. Also check that `maple_do_dma_xfer` has `d->dmaaddr = addr` cursor update (mentioned). Not strictly needed.
+
+  Also check the debugger quit command prints nothing: search debugger source for quit.
+
+  Now, the operational rule: do not run gates; building/running a single detector or mutant in own temp dir is fine and encouraged. I can run the detector myself? "Building and running a single detector or mutant in your own temp directory is fine and encouraged". Running the full test (12 sessions × emulator runs) might take a while but could be OK. However, careful: a second concurrent invocation corrupts the operator run because gates share one log directory — that refers to gates. Running the probe script directly writes where? It may write artifacts to regress/artifacts/... Better to just read files and maybe run quick static checks, not the full probe. The killtable6 dir may already have POSTTABLE.out finished. I'll read.
+
+  I think the efficient approach: spawn parallel reads. The file is ~430+ lines; read the whole probe file. Also read the device file, SCORES.txt, POSTTABLE.out, and grep debugger quit.
+
+  Given the depth required, I could delegate to explore agents, but I want to verify details myself since the verdict depends on exact code. Let me do direct reads — the file set is small and known.
+
+  Plan:
+  1. Read `regress/maple_dmaaddr_probe.py` fully (~450 lines, one Read call).
+  2. Read `src/devices/dev_dreamcast_maple.c` (relevant portions; grep MAPLE_DMAADDR first, or read whole file — probably ~600 lines; read it).
+  3. Read killtable6 SCORES.txt and POSTTABLE.out.
+  4. Grep debugger for "quit" command implementation.
+  5. Check how many `row(` calls = 37; count read sessions = 12.
+
+  Then compose verdict.
+
+  Let me start. Also note: the tree root is `C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\` — ignore other src. Paths: `GXEMUL-SEC/regress/maple_dmaaddr_probe.py`, `GXEMUL-SEC/src/devices/dev_dreamcast_maple.c`.
+
+  Let me fire parallel reads.
+
+• I'll verify this against the actual tree — reading the current probe, the device source, and the kill-table artifacts in parallel.BASE_prelaunch.out
+POSTTABLE.out
+PRETABLE.out
+SCORES.txt
+build_BASE.log
+build_BASE2.log
+build_BASE3.log
+build_HEAD.log
+build_M_ATEXIT.log
+build_M_BLANKDIAG.log
+build_M_CRDIAG.log
+build_M_EXITONLY.log
+build_M_GLUEPROMPT.log
+build_M_HEXDIAG.log
+build_M_KEEPFATAL.log
+build_M_ORBIT31.log
+build_M_PROMPTDIAG.log
+build_M_QUITLINE.log
+build_M_READCLEAR.log
+build_RESTORE.log
+dev_dreamcast_maple.HEAD.c
+killtable6.run-0912.sh
+killtable6.sh
+maple_dmaaddr_probe.FROZEN5.py
+maple_dmaaddr_probe.FROZEN6.py
+mut_maple6.py
+mutate_M_ATEXIT.txt
+mutate_M_BLANKDIAG.txt
+mutate_M_CRDIAG.txt
+mutate_M_EXITONLY.txt
+mutate_M_GLUEPROMPT.txt
+mutate_M_HEXDIAG.txt
+mutate_M_KEEPFATAL.txt
+mutate_M_ORBIT31.txt
+mutate_M_PROMPTDIAG.txt
+mutate_M_QUITLINE.txt
+mutate_M_READCLEAR.txt
+probe5_BASE.raw
+probe5_M_ATEXIT.raw
+probe_BASE.raw
+probe_BASE2.raw
+probe_BASE3.raw
+probe_HEAD.raw
+probe_M_ATEXIT.raw
+probe_M_BLANKDIAG.raw
+probe_M_CRDIAG.raw
+probe_M_EXITONLY.raw
+probe_M_GLUEPROMPT.raw
+probe_M_HEXDIAG.raw
+probe_M_KEEPFATAL.raw
+probe_M_ORBIT31.raw
+probe_M_PROMPTDIAG.raw
+probe_M_QUITLINE.raw
+probe_M_READCLEAR.raw
+---
+agy_maple_witness_20260912.py
+agy_witness_report_20260912.md
+codex_detector_20260911.err
+codex_detector_20260911.txt
+codex_detector_RETRY_20260911.err
+codex_detector_RETRY_20260911.txt
+codex_readarm_20260910.err
+codex_readarm_20260910.txt
+fable_pass1_20260912.md
+fable_pass2_20260912.md
+fix.diff
+gate_sh_rounding_20260912_T4INSTRUMENT.log
+killtable2_20260912
+killtable3_20260912
+killtable4_20260912
+killtable5_20260912
+killtable6_20260912
+killtable_20260912
+opus_close_20260912
+opus_pass1_20260912.md
+opus_pass2_20260912
+panel_20260912_123520_maplepass1
+panel_20260912_131634_maplepass2
+panel_20260912_143959_mapleadjud
+panel_20260912_190504
+witness_committed.out
+witness_fix.out
+
+
+• Now read the SCORES.txt, POSTTABLE.out, and the device source. Also check the mutate_M_ATEXIT.txt to see the atexit mutant, and the FROZEN6 vs FROZEN5 difference to confirm the diff matches. Also grep the debugger quit command.
+
+  Let me read in parallel:
+  - SCORES.txt
+  - POSTTABLE.out
+  - src/devices/dev_dreamcast_maple.c (the read arm region — grep first or read whole)
+  - mutate_M_ATEXIT.txt
+  - Check debugger quit behavior: grep "quit" in src/debugger/Good. The device fix is confirmed: case 0x04 read arm returns `odata = d->dmaaddr` with no fatal/exit. MAPLE_ENABLE sibling confirmed.
+
+  The kill table artifacts exist and match the claims:
+  - BASE ×3 37/37, HEAD 11/37, M_ATEXIT 36/37 (read silent alone, 12/12 sessions with surplus line after quit echo), FROZEN5 on M_ATEXIT 37/37 (miss reproduced), all earlier shapes 36/37 read silent alone.
+  - 17 runs: 15 FROZEN6 + 2 FROZEN5. Let me count legs: BASE, HEAD, M_ATEXIT(F6+F5=2), M_KEEPFATAL, M_EXITONLY, M_HEXDIAG, M_BLANKDIAG, M_CRDIAG, M_PROMPTDIAG, M_GLUEPROMPT, M_QUITLINE, M_ORBIT31, M_READCLEAR, BASE2, BASE3 → FROZEN6 runs: BASE, HEAD, M_ATEXIT, KEEPFATAL, EXITONLY, HEXDIAG, BLANKDIAG, CRDIAG, PROMPTDIAG, GLUEPROMPT, QUITLINE, ORBIT31, READCLEAR, BASE2, BASE3 = 15. FROZEN5: BASE, M_ATEXIT = 2. Total 17. ✓
+
+  Also the background claims "the `atexit` handler 36/37 (`read silent` fails in 12/12 sessions: one extra line after the `quit` echo)" — POSTTABLE says "read silent alone, 12/12 sessions: `1 surplus line(s), first '[ dreamcast_maple: DMAADDR was read ]'`". ✓
+
+  Now check remaining premises:
+  1. Row count = 37. Let me count `row(` calls in the probe: 
+  - ctrl live (1), ctrl devsig sh4 (2), ctrl devsig maple (3)
+  - read val_a (4), read val_b (5)
+  - other pre read (6), other 0x10/14/18/80/8c/e8 (7-12)
+  - alias 0x0c, 0x24, 0x44, 0x84, 0x00, 0x05, 0x06 (13-19)
+  - read width16 (20), read width8 (21)
+  - marker survive (22), exit status (23)
+  - initial zero (24), zero reread (25), read four (26), read all ones (27), ones reread (28)
+  - read aligned (29), read enabled (30), read joint (31)
+  - double read 1 (32), double read 2 (33), reread 3 (34)
+  - write replace (35)
+  - read silent (36)
+  - ctrl zlive (37)
+  Total 37. ✓
+
+  2. Read sessions = 12. Count `rsession(` calls:
+  1. read val_a (line 321)
+  2. read val_b (323)
+  3. other pre read session (337)
+  4. width16/8 (361)
+  5. marker survive (369)
+  6. zero/reread (377)
+  7. read four (380)
+  8. all ones (382)
+  9. read aligned (391)
+  10. enabled/joint (395)
+  11. double read (400)
+  12. write replace (405)
+  = 12. ✓ And `read silent` wants "0/%d" % 12 — hardcoded 12 matches.
+
+  3. The diff fidelity: FROZEN6 exists; claim "cmp vs regress/: IDENTICAL" — SCORES.txt line 2 says so. I could verify by diffing FROZEN6 against the current probe, and FROZEN5 against killtable5's copy. Quick check.
+
+  4. The quit behavior: does GXemul's debugger print anything on quit? Need to check src/debugger. If the debugger printed something (e.g., "GXemul> " another prompt or a message), BASE would fail. BASE passes 37/37 three times, so empirically quit prints nothing beyond echo. But let me check the source for due diligence — also whether `-V` (quiet?) affects it. The exec args: `"-V", "-x", "-E", "dreamcast", "-M", "64", KERNEL`. -V probably means... in gxemul, -V is "boot into ROM monitor / don't load kernel"? Hmm, actually in gxemul -V means "verbose"? Let me check. Actually it doesn't matter much for the verdict, but the claim "a clean build passes 37/37" is measured.
+
+  Wait — one important thing: does the emulator, when quitting the debugger during emulation (-x? -V?), print something like "GXemul> " prompt again or "Continuing..."? No — BASE passes with tail=="", so quit → EOF with nothing after echo. Good, empirically thrice.
+
+  5. Q1 — any output produced because of the register read still not compared?
+
+  Now the careful adversarial analysis of the CURRENT version:
+
+  noise(t, cmds):
+  - i = t.find("GXemul> ") — everything BEFORE the first prompt occurrence is excluded. What appears before the first prompt? The emulator's startup banner. With -V... the startup may print nothing. If a mutant printed at STARTUP... but the read handler can't print before the first prompt since reads happen after commands are typed. So pre-prompt exclusion is not a hole for read-caused output. ✓
+
+  Actually wait — there's a subtle one. `t.find("GXemul> ")` finds the FIRST occurrence. Could a read-caused diagnostic print the text "GXemul> " BEFORE the real first prompt? No — reads happen after prompts.
+
+  But here's a nastier one: could a diagnostic print a line containing "GXemul> " such that... find() takes the first occurrence which is the real prompt (startup happens before any read). Fine.
+
+  - After quit: `rd(10.0)`. Look at rd's implementation: loop until time.time() >= end; select 0.2s; on OSError or EOF (d empty) return False immediately. So rd(10.0) returns at once on pty close (EOF → os.read raises OSError EIO on Linux, or returns b""). BUT: it has a 10-second cap. If the emulator takes longer than 10s to exit after quit (slow machine, loaded), rd times out and returns True (loop expires), then close. Transcript ends after quit echo → tail "" → passes. For a CLEAN build that's fine (no false fail). For a mutant whose late output is delayed >10s (e.g., `atexit` handler that sleeps 11s before printing, or `alarm(12)`), the output would never be observed → escape. Also after close, writes get EIO. So: the "late line" class is caught only within a 10-second post-quit window. Is that worth flagging? The contract says "a line printed late (an atexit handler, a buffered stream's flush at exit)". An atexit handler printing after sleep(11) is a further mutation along the same axis. Practically: a real diagnostic wouldn't sleep. Under mutation-testing adversariality, the next Fable-style prediction would be exactly `sleep(11); fprintf(...)`. But note: even an infinitely patient transcript reader can't see output after the master is closed... well, the test could waitpid first with a longer timeout and keep reading until EOF. The current session does waitpid AFTER close (blocking, no timeout!). Interesting: `os.waitpid(pid, 0)` blocks indefinitely. If the mutant atexit sleeps 11s, waitpid waits 11s. If it hangs forever (pause()), waitpid hangs forever → the TEST hangs (operator sees a stuck gate, not a pass). Hmm, actually is there an overall timeout? The gate may have one. The probe itself has no waitpid timeout. So a hang-at-exit mutant would stall the probe — arguably "detected" by operator timeout, but not by a row. Not an output issue though.
+
+  More important Q1 candidates:
+
+  (a) A diagnostic whose bytes are entirely consumed before the first prompt — impossible as argued.
+
+  (b) Output printed to the pty but BEFORE `t.find("GXemul> ")`'s match — same thing.
+
+  (c) A diagnostic printed with no newline and glued BEFORE... any glue alters a line → caught.
+
+  (d) A diagnostic that consists only of "\r\n"? That adds a blank line → surplus/line-mismatch → caught (M_BLANKDIAG measured).
+
+  (e) What about output that is written and then UNWRITTEN via terminal control — e.g., prints "\r" + spaces? Bare CR caught; other bytes alter lines.
+
+  (f) ANSI escape: `\x1b[2K` etc. — bytes appear in transcript, alter a line → caught. Unless the diagnostic RE-PRINTS the exact owed bytes after erasing them?? A transcript is a byte stream; erasure on screen doesn't erase bytes. Any escape byte is an extra byte → mismatch. Only if the diagnostic produces ZERO bytes (fatal("") — disclosed EQUIVALENT) does nothing show.
+
+  (g) A diagnostic that turns OFF echo before later commands echo → missing echo lines → caught. Or turns echo off right before quit? The quit echo comes from the line discipline; if the handler (via ioctl on the tty — it can, STDIN is the pty slave) disables echo during the read, then the quit echo disappears → "line N missing" → caught. Nice — so even terminal-mode tampering red-flags.
+
+  (h) The exit-status row: `row("exit status", how, "exit0")` — only for the marker-survive session. For OTHER read sessions, `how` is recorded but never asserted. So a crash-during-exit (after quit echo) in one of the 11 other sessions: transcript = owed exactly (quit echo last), tail "" → noise empty → read silent passes; no exit-status row on that session → the crash passes ALL rows. E.g., mutant: read handler registers an atexit that does `*(int*)0=0;` → segfault at exit → 37/37. Is that "output produced because of the register read not compared"? It's not output — it's a crash. Q2 asks "Can a crashed session pass it?" — answer: yes, if the crash happens during exit after the quit echo, in any session except the marker-survive one (which is the only one with an exit-status row). Hmm wait — but would a segfault print anything? On a pty without a shell, no "Segmentation fault" message is printed by anyone (that's the shell's job). The emulator runs as the direct child of the probe via pty.fork + execv. So a segfault is byte-silent. The kernel doesn't write to the pty. So yes — SIGSEGV at exit is transcript-invisible.
+
+  Actually wait, does the emulator's own code print something on signals? GXemul might install signal handlers... unlikely for SEGV. OK.
+
+  Is that in-contract? The contract covers "exit(1) alone" (caught via missing owed lines since exit(1) at the READ kills the session before remaining commands run) and "an exit keyed on the value..." — those exits happen AT the read. A crash AT exit (after quit) is the time-axis again: effect delayed to process exit. The atexit-PRINT is now caught; atexit-CRASH is not. Also atexit that calls exit(42)? Same: transcript clean, exit status wrong, but only the marker session asserts exit0. So `atexit(exit_42)` registered by the read → passes 36/37... wait, in the marker session too the transcript is clean; the marker session DOES assert exit status "exit0" → exit42 would fail "exit status" row there. But the atexit registered by the read fires in EVERY session including the marker one (the marker session also reads DMAADDR — yes, run([0x6212, 0x2432]) does mov.l @r1,r2 with r1=MAPLE_DMAADDR). So in the marker session, how="exit42" → row "exit status" fails. So exit(42)-at-exit IS caught by the one exit-status row. And SIGSEGV at exit → how="sig11" → fails "exit status" row in the marker session! Wait — the marker session is `rsession(cmds)` → it's in READS and also rows "marker survive" and "exit status". how would be "sig11" → want "exit0" → FAIL. So a crash-at-exit mutant fails the "exit status" row after all — because the exit-status row's session also performs a DMAADDR read, so the atexit/crash triggers there too.
+
+  Let me double check: marker session cmds: r1=MAPLE_DMAADDR; run([0x6212, 0x2432], CODE) — 0x6212 is mov.l @r1, r2 → reads DMAADDR. So yes, the read happens in that session. An atexit-registered crash fires at every process exit → every session's exit → marker session's `how` = sig11 → row fails. 
+
+  What about a mutant that crashes at exit only conditionally... any condition keyed on the read fires in the marker session too (it reads DMAADDR with poisoned r2, marker store after). Hmm — keyed on value? Marker session's read is of a fresh device (no store to DMAADDR in that session) → field is 0. A mutant: atexit crash only if dmaaddr==0? Then in the marker session it crashes → exit status row fails. If keyed on dmaaddr!=0, marker session's read sees 0 → no crash → exit status row passes; other sessions (val_a etc.) crash at exit but have no exit-status row... but their transcript is still clean → 36/37 pass → ESCAPE. Hmm! E.g.: `if (d->dmaaddr != 0) atexit(crash)` — wait, but does an effect "keyed on the value" fall in the disclosed NOT-COVERED class? "an effect keyed on another exact value" is disclosed NOT COVERED (value cells not partitioned). The crash-at-exit keyed on nonzero... "an exit keyed on the value 0, 4, bit 30, or a 16- or 8-bit access" IS covered — but those are exits AT the read, caught by missing lines. An exit DELAYED to process-exit keyed on value-nonzero: the marker session has field 0 → survives; sessions with nonzero field crash at exit → but their transcript already complete → read silent passes (transcript is owed-exact). Which row would catch it? None: value rows already recorded correct values before the crash-at-exit. read silent: transcript clean. So 37/37?? Wait, need the crash to produce no bytes — a segfault produces no bytes. exit(1) at exit via atexit produces no bytes either! atexit(handler){ exit(1); } → how="exit1" in every session where registered. Marker session: registered (read happens, condition nonzero false → not registered) → hmm, keyed on nonzero: marker session field=0, not registered, exit0 → passes. Other sessions: exit1 at exit, but no exit-status row on them → pass. read silent: transcripts clean → pass. → 37/37 ESCAPE.
+
+  Hold on, is that right? Let me re-examine: which sessions have their `how` asserted? Only the marker-survive session ("exit status" row). All other 11 read sessions + non-read sessions (ctrl, alias) never assert how. A nonzero-keyed atexit-exit(1): in ctrl sessions no DMAADDR read → clean. In alias session: store32 DMAADDR VAL_A then reads of OTHER offsets (0x0c etc.) — no DMAADDR read! The alias session reads offsets 0x0c,0x24,... not 0x04. So the read handler for 0x04 isn't called → not registered → clean. In the 11 read sessions other than marker: field nonzero in val_a/val_b/other-pre/width/four/ones/aligned/enabled/joint/double/replace → registered → exit(1) at exit → how="exit1" → unasserted → transcripts clean (exit(1) prints nothing) → read silent passes. Marker session: field zero → not registered → exit0 ✓. Zero session: field 0 → not registered → exit0. So ALL rows pass: 37/37. ESCAPE!
+
+  Hmm wait, but atexit handlers run at process exit — the process exit happens after quit. exit(1) from an atexit handler... the exit status becomes 1. But no row checks it in those sessions. And the transcript: exit(1) prints nothing → transcript = owed exactly. Yes.
+
+  So: an exit DELAYED to process-exit (atexit/on_exit), keyed so it doesn't fire in the marker session (e.g., `if (d->dmaaddr) atexit(bail)`), passes 37/37. Is this "in contract"? The contract's covered list: "exit(1) alone" and "an exit keyed on the value 0, 4, bit 30..." — these were measured as exits AT the read (killing the session mid-stream → missing owed lines → caught). A delayed exit is the same TIME axis the panel just chased, one step further: the atexit measurement was about a PRINT; the exit-status analog was not measured. The previous pass's reviewers found atexit-print; this pass's change closes the transcript window but the exit-status hole was ALREADY there in table 5 (exit status row existed and only on the marker session). So it's not a regression from this change; it's a pre-existing disclosed-ish hole? Is it disclosed? NOT COVERED section discloses "an effect keyed on another exact value" (value cells). "an exit keyed on the value 0, 4, bit 30" is in the COVERED list though — as immediate exits. A delayed exit keyed on value is neither exactly. Hmm.
+
+  But wait — Q1 asks about OUTPUT. This delayed-exit is not output. Q2 asks "Can a crashed session pass it?" — a crash MID-session can't (missing lines). A crash AT exit after quit echo: passes read silent; caught only by the single exit-status row if and only if the triggering condition holds in the marker session. Since the marker session reads DMAADDR on a fresh device (field == 0), any crash-at-exit keyed on the field being NONZERO escapes entirely; an unconditional crash-at-exit fails "exit status" (how="sig11" ≠ "exit0").
+
+  Hmm, wait — unconditional crash at exit: does it really fail? The marker session performs the DMAADDR read → registers crash → at exit SIGSEGV → waitpid → WIFSIGNALED → how="sig11" → row "exit status" got "sig11" want "exit0" → FAIL → 36/37. Caught. ✓.
+
+  Now, is Q2's "crashed session" asking whether a session that crashes can pass the COMPARISON (read silent)? Yes in the at-exit window. But the test as a whole catches unconditional crash-at-exit via exit status row. Value-keyed crash-at-exit escapes the whole test. This is a real, nameable gap — but is it a gap in "the regression test's output comparison" (the question of this pass)? The pass question: "is the regression test's output comparison now complete?" Q1: "Is any emulator output produced because of the register read still not compared?" The delayed-exit produces NO output. So strictly for Q1: output-wise, the whole pty byte stream from first prompt to EOF is compared. Remaining un-compared output channels:
+
+  1. Output before the first "GXemul> " occurrence — impossible for read-caused output. ✓ compared-region starts correctly. Hmm wait, actually one more scenario: what if a mutant makes the FIRST prompt text different so find() fails? i<0 → raw=t → whole transcript compared → stricter. Fine.
+
+  2. Output after rd(10.0) gives up (10s post-quit cap) — a mutant delaying output >10s after quit escapes the window. E.g., atexit handler: `sleep(11); fatal(...)`. rd times out at 10s → returns True → close → at 11s the write hits a closed pty → EIO → nothing ever observable. Actually — is it "produced"? The bytes go nowhere (EIO). From the operator's console perspective the emulator died silently. A transcript can NEVER see it because the transcript's lifespan ends when the test closes the master — and the test can't wait forever. But the test COULD wait longer or waitpid-first. Given waitpid(pid, 0) blocks indefinitely AFTER close, the probe will actually sit until the process exits (11s), then continue — but the transcript is already sealed. So the >10s-delayed print is a genuine escape along the time axis: "a line printed late" is claimed covered — measured only for print-at-exit (0-delay). A sleep-delayed print is the natural next mutation. But is it realistic? In mutation testing, the adversary is the panel itself (Fable predicted glue/exemption shapes). The next panel would predict sleep(11). However: consider waitpid order. After rd(10.0) times out, the probe closes fd and waitpids. The mutant's sleep(11) then fatal() at 11s: fatal prints... to stdout which is the pty slave — closed master → write returns EIO or SIGPIPE kills it. Bytes never appear anywhere. Even a perfect transcript oracle watching "the console" sees nothing, because the console (pty master) was closed. So this is arguably OUTSIDE what any transcript test can observe — like the disclosed "output on a channel the pty never carries": here it's "output after the pty is gone". Hmm, but the test chose to close after 10s; it could have chosen to keep reading until EOF with a 60s cap. The window is finite by necessity; 10s is the line. Any finite cap has a sleep(cap+1) escape. This is worth NAMING as a measurement limit, but I'd classify it as inherent-to-finite-window, disclosed-by-construction-ish ("a buffered stream's flush at exit" and atexit are covered; arbitrarily delayed output is the same class as "keyed on time" which IS disclosed: "effects keyed on the environment (time, verbosity, the host)"). Yes! The NOT-COVERED list already discloses "effects keyed on the environment (time, ...)". A sleep(11) print is an effect keyed on time. Disclosed. Good — so the >10s escape is inside an already-disclosed class.
+
+  3. Output on stderr: does the pty carry stderr? pty.fork() → child: the pty slave becomes stdin/stdout/stderr (pty.fork makes the slave the controlling terminal and dups it to 0,1,2). Yes — pty.fork() sets up the child's fds 0,1,2 all to the slave. So stderr IS on the pty. ✓ (Python's pty.fork: "the child's controlling terminal... stdin, stdout, stderr are the pty"). So fprintf(stderr,...) is caught too. ✓
+
+  4. Output via the debug() macro — debug is defined as... `// #define debug fatal` commented out, so debug defaults to whatever misc.h defines (likely quiet printf only when verbose). With -V flag... hmm wait, what is -V in gxemul? Let me think: gxemul options: -v verbose? -V might be "verbose debug"? If -V enables debug output... The MAPLE_SPEED write arm has `debug("[ dreamcast_maple: timeout set to %i ]\n", ...)` NOT commented out — and the ctrl devsig maple session writes MAPLE_SPEED! If debug() printed, that session's transcript would contain the line... but ctrl devsig maple session is NOT a read session (not in READS), so read silent doesn't cover it. Only read sessions' transcripts are compared. Do any of the 12 read sessions write MAPLE_SPEED? Looking: no, read sessions write DMAADDR and ENABLE only. OK. And in gxemul, -V = "increase verbosity"? Hmm, actually in gxemul 0.4.x, `-V` means "start up in the debugger single-step... "? Let me not guess; check quickly. Actually the probe comment says "cold debugger" — the emulator drops into the debugger immediately. In gxemul, that's `-V`? Hmm, I recall: gxemul flags: `-x` use X11? no wait, `-x` means... "open X11 windows"? -X is X11. -x might be "no X11"? Hmm. In gxemul: -X = use X11. -x = ...? Let me check src/main or the debugger entry. The probe uses "-V -x -E dreamcast -M 64 kernel". From gxemul man page: `-V` = "enter the debugger before executing anything" (single-step... no). I believe: gxemul -V: "Boot into the debugger" hmm or is it that -V disables... Let me just grep. Not critical but let me verify since "first prompt" behavior depends on it.
+
+  5. A diagnostic that prints exactly the owed bytes of FUTURE lines — i.e., the handler pre-prints the session's own owed output?? Absurd — it can't know the commands... well actually the mutant could print "0x8c012345" as the value line... but the value comes from the real print command; an EXTRA matching line is still surplus → caught. Order is fixed. Any extra byte anywhere → caught. ✓
+
+  6. Output glued onto the quit echo line itself: e.g., handler leaves something in stdout buffer that flushes at exit and lands on the same line as "quit" echo → then the echo line = "GXemul> quitGARBAGE" → mismatch line k → caught (M_QUITLINE measured: literal "GXemul> quit" text → caught). A flush that adds bytes after echo's \r\n → surplus line → caught (M_ATEXIT measured). Bytes BETWEEN echo and newline? The echo is produced by the kernel line discipline atomically per input... the emulator's own output can interleave: e.g., buffered "X" flushed right as quit typed: transcript "GXemul> Xquit\r\n" or "GXemul> quitX\r\n" → line mismatch → caught. ✓
+
+  7. What about the emulator printing something after quit that is EXACTLY ""? nothing. ✓
+
+  8. Non-pty channels: file, syslog, network — disclosed. ✓ I agree with the disclosure: the transcript oracle is defined on the operator console. (Q1 asks "say if you disagree" — I don't disagree; a transcript-based detector can't observe off-console channels, and it's disclosed.)
+
+  9. What about output that goes to the pty but BEFORE the first prompt due to the read happening... no.
+
+  10. One more: the `-V` startup prints a banner BEFORE first prompt — excluded from comparison. If the read could influence startup output — impossible (read happens after).
+
+  11. What about the read causing output via a DIFFERENT device later (e.g., the read corrupts state so the CONSOLE prints)? "side effects on sibling state the rows never read back" — disclosed. Also any such print would appear as extra transcript lines → caught, actually! If the read sets state that later causes the serial console to emit a byte, that byte is an extra transcript byte → caught by read silent. Unless the byte goes out after... the session steps specific instructions; nothing runs after quit. OK.
+
+  12. Hmm, what about the read arm RE-enabling the commented debug on the WRITE arm — that's a write-arm change, not read-caused output... the write sessions: store32 DMAADDR is used in read sessions! If a mutant UN-comments the debug() on the DMAADDR write arm (`dmaaddr set to 0x...`), the write prints → extra line in the read session transcript → read silent catches it. ✓ (The probe comment says "the former's debug() is commented out" and any write output would red the silence row.)
+
+  13. What about output during rd windows that get... all output accumulates in buf; comparison is on the whole buf. ✓
+
+  So Q1 answer: NO output produced by the read, on the pty, from first prompt to EOF, escapes comparison — with two edges, both already inside disclosed classes: (a) output delayed beyond the 10s post-quit cap (subsumed by the disclosed "effects keyed on time" class — and arguably unobservable by ANY transcript once the master closes); (b) off-pty channels (explicitly disclosed). I agree with the disclosure. Everything the atexit/flush class prints at exit is measured caught (12/12).
+
+  Hmm wait, one more output shape: what if the diagnostic is printed but the session's transcript region before first prompt... covered. What about output produced by the read in the ALIAS or CTRL sessions — those aren't silence sessions! The alias session reads DMAADDR? No — alias reads offsets 0x0c..0x06 but NOT 0x04. Ctrl sessions don't touch maple (RAM + IPRD + MAPLE_SPEED). MAPLE_SPEED read is odata = d->timeout << 16 — quiet arm. Write prints debug() only if debug prints. Is debug() silent under the probe's flags? Check: misc.h debug macro. In gxemul, debug() is defined in misc.h as: `if (cpu->machine->verbose) ...`? Hmm, actually there's a global `verbose` variable; debug prints only if verbose. -V might SET verbose?! If -V sets verbose, then the MAPLE_SPEED write in ctrl devsig maple would print "[ dreamcast_maple: timeout set to ... ]" — harmless (not a silence session) but the read-back row expects the value 0x12340000 via `print r2` → printed() regex scans for the print answer — extra lines don't matter for printed(). OK fine.
+
+  But WAIT — if -V sets verbose=1, would a mutant's `debug("...")` in the read arm print?? debug() is mapped to printf-like only when verbose. A read-arm debug() call would then print → caught by read silent (extra line). And if -V doesn't set verbose, debug prints nothing → a debug()-shaped diagnostic (as opposed to fatal()-shaped) would be byte-silent → EQUIVALENT to no diagnostic → fine, because the CONTRACT is about catching diagnostics that actually speak. Hmm, but careful: a real-world regression would most plausibly reinstate fatal() (which prints unconditionally). Is -V verbose? In gxemul main.c: options include -v (verbose) and -V (?). Let me check quickly. Actually from gxemul man: "-V  Start in the debugger, single-step... " no... I recall `-V` = "verbose start"? Let me grep the source. It matters for whether debug() speaks in these sessions. If debug() is silent and a mutant reinstates the diagnostic as debug() instead of fatal()... debug() silent → no bytes → no observable effect → equivalent to correct under the transcript; and value rows unaffected. The CONTRACT claims "a diagnostic alone, in ANY wording or shape" — a byte-silent debug() emits no byte, same disclosed class as fatal(""). Fine either way, but let me check what -V does to be accurate.
+
+  Actually the more important -V question: does -V make the emulator drop into the debugger at startup (printing the first prompt) — the probe relies on it. And "cold debugger" comment. Let me grep gxemul usage text.
+
+  Q2: Can a correct build fail? Timing analysis:
+  - rd(settle=2.5) initial: waits for first prompt. On a slow host, if gxemul takes >2.5s to reach the debugger prompt, commands start being typed into the pty anyway — line discipline buffers input; echo appears when... echo happens immediately on write (kernel echoes), even if the emulator hasn't read yet. So echo lines appear in order; the emulator processes commands when ready; output order preserved. The whole-transcript comparison is robust to slow startup EXCEPT: if the emulator hasn't printed its prompt before commands are typed, the transcript would be "GXemul> " printed later — but echoes happen immediately: the echo "put h ...\r\n" could appear BEFORE the first "GXemul> " prompt → then find("GXemul> ") finds the prompt printed AFTER some echoes → those early echo lines are before index i → excluded from comparison → then owed expects them as body[0..] but body starts at a later line → mismatch/missing → FALSE FAIL possible? Hmm wait: actually can echo appear before the prompt? The emulator prints "GXemul> " (prompt) only after reaching the debugger. If the probe types commands at t=2.5s while the emulator reaches the debugger at t=3s, the input sits in the pty buffer with echo already emitted at write time. So transcript: echo lines first (t=2.5-3), then "GXemul> cmd1..." wait no — echo of typed input appears immediately: transcript would be: [echo of cmd1]\r\n[echo of cmd2]... then emulator prints banner + "GXemul> " then reads buffered cmd1, prints its answer, prints "GXemul> " again, etc. Then find("GXemul> ") lands after the early echoes; owed line 0 = echo "GXemul> put..." but body[0] would be... the FIRST prompt occurrence is "GXemul> " followed by the ANSWER to cmd1? No wait: prompt printed, then emulator reads cmd1 from buffer (already echoed long ago, echo does NOT repeat), prints answer, prompt again, reads cmd2 (no new echo), ... So transcript from first prompt: "GXemul> <answer1>\r\nGXemul> <answer2>..." — none of the command echoes appear after prompts (they were echoed before). owed expects "GXemul> cmd" echo lines → mismatch → FALSE FAIL. So YES, if the emulator takes longer than `settle` (2.5s) to reach the first prompt, the comparison false-fails. But wait — is that realistic? settle=2.5s; gxemul -E dreamcast -M 64 with a small bsd.rd kernel on -V (debugger entry) starts in well under a second normally. Under heavy load (operator running concurrent gates!), could exceed 2.5s occasionally. Hmm, but actually: is the premise right that echo appears before the emulator reads? Yes, pty echo is kernel-side, immediate. And does gxemul print the prompt AFTER processing each queued command... The false-fail scenario requires startup slower than settle. This is a genuine timing fragility: the probe never WAITS for the first prompt; rd(settle) is a fixed sleep, not a wait-for-prompt. Same for per-command windows (0.20s fixed): if the emulator is slower than 0.2s per command, echoes still immediate; answers may lag — but since buf accumulates and comparison happens at the end, lagging answers are fine AS LONG AS they arrive before the transcript is sealed... they will: quit is typed last, emulator processes the queue in order, prints everything, exits → EOF. rd(10.0) collects the rest. The final `rd(spin=1.2)` after the last command — if the emulator takes >1.2s+... doesn't matter, rd(10.0) after quit keeps collecting. BUT the order! If answers arrive late they still arrive in order (single-threaded emulator processing queued commands in order). Order preserved → comparison fine. The ONLY fragile point is the FIRST prompt vs early echoes (settle window), and the quit echo: quit is typed, echoed immediately; if the emulator is still processing earlier commands, its remaining answers print AFTER the quit echo → transcript: ...quit echo..., then answers, then exit. Then owed: ...echo lines..., "GXemul> quit" — but actual has "GXemul> quit" appearing BEFORE the late answers → mismatch → false fail. Scenario: per-command windows total ≈ 0.2×(n-1)+1.2 s per session; if the emulator falls behind the typing pace, quit's echo lands mid-stream. The typing pace: ~0.2s per command, gxemul stepping a few instructions per command — normally milliseconds. Under pathological load could lag. So: a correct build CAN fail if the host is slow enough that (a) startup exceeds 2.5s, or (b) the emulator's processing falls behind the 0.2s/command typing cadence so answers print after the quit echo. How likely? The kill table ran 17 runs with 0 false reds on 3 BASE runs. The previous tables ran many sessions too. The fixed windows are the known trade-off; the pre-change version had the same windows (only the post-quit part changed). Actually the change INCREASED robustness in one way (whole buffer compared, late output captured by rd(10.0)) but introduced the new strictness: table 5 compared only the pre-quit snapshot, so late answers after quit echo didn't matter (SNAP was before quit). NOW late answers after the quit echo → false fail. Hmm wait — in table 5, if the emulator lagged, SNAP (before quit) would contain lines in correct order (answers in order, just possibly missing the last ones → missing → fail too). Both versions false-fail on lag; the new one is not worse regarding lag before quit... actually similar. The main new false-fail mode: emulator answers arriving between quit-echo and exit — in order, but AFTER the quit echo. In table 5 those answers were awaited by rd(spin) before quit was typed... the spin window after the last command is 1.2s; a lag >1.2s → table5: missing lines in SNAP → fail; table6: lines after quit echo → fail. Same fragility, different signature. OK: timing fragility exists but is inherited, bounded, and measured-absent (3× BASE green + all prior tables green on BASE).
+
+  Slow exit: rd(10.0) caps at 10s; if the emulator exits at 15s (say fs cleanup), transcript is complete by the quit echo → passes. waitpid blocks until exit → probe just slower. No false fail. ✓ And a hung exit → probe hangs (operator timeout) — not a false fail, but a stuck run. (Not output-related.)
+
+  Crashed session passing: mid-session crash → missing owed lines → read silent fails it; plus value rows fail ("absent"). Crash-at-exit → passes read silent; unconditional one fails "exit status" row (measured? not measured in table 6 — M_EXITONLY is exit(1) AT the read → 11/37). A crash/exit at process-exit keyed to NOT fire in the marker session (field==0 there) escapes everything — as analyzed. Is that a NEW gap from this change? No — exit-status coverage predates. But it's directly on the time axis this pass is about: the print analog was caught, the exit analog survives. Is it in-contract? Contract claims covered: "exit(1) alone; ... an exit keyed on either partition; ... an exit keyed on the value 0, 4, bit 30, or a 16- or 8-bit access". These are all exits AT the read. A delayed exit (atexit) is the SAME class as the atexit print, which the new contract claims to cover: "a line printed late (an atexit handler...)". The contract now names atexit explicitly — for PRINT. The exit variant of the atexit trick is not named. Since the fix's defect class is "the read kills the emulator" (fatal+exit), a DELAYED kill is arguably the most contract-relevant escape! #528 is literally about the emulator dying. atexit(exit_1) registered by the read, keyed on d->dmaaddr != 0 (or on a read counter > 0... wait marker session also reads → counter >0 → fires → exit status row fails → caught). Keyed on nonzero field: marker session field=0 → survives → 37/37 ESCAPE. Keyed on "value 4": disclosed ("effect keyed on another exact value" — NOT COVERED list (1)). Keyed on nonzero: that's a partition the rows DO test (zero vs nonzero are both present)... "an exit keyed on the value 0" is covered — measured as immediate exit. Hmm.
+
+  Let me test the escape scenario concretely once more:
+  Mutant in the read arm: `odata = d->dmaaddr; if (d->dmaaddr) atexit(die_quietly);` where die_quietly does exit(1) (no output).
+  - Session val_a: field 0x8c012345 ≠ 0 → registered → after quit, exit(1) → transcript: owed-exact (no bytes) → read silent ✓; how="exit1" — unasserted. Rows: read val_a ✓.
+  - All nonzero-field read sessions: same → ✓.
+  - Zero session (initial zero / zero reread): field 0 → not registered → exit0 → transcripts clean → ✓.
+  - Marker session: field 0 → not registered → exit status "exit0" ✓.
+  - read four: field 4 ≠ 0 → exit1 unasserted ✓.
+  - Ctrl/alias sessions: no DMAADDR read... wait alias session stores VAL_A to DMAADDR but never READS 0x04 → handler read arm not invoked → not registered → ✓.
+  - read silent: all transcripts owed-exact → 0/12 ✓.
+  - ctrl zlive ✓.
+  Total: 37/37 — ESCAPE. A delayed kill, keyed on nonzero, passes everything.
+
+  Now, is this in the stated contract? The contract's covered list has exits keyed on values, but measured as immediate exits. The NOT-COVERED discloses "an effect keyed on another exact value" — nonzero isn't "another exact value"... it's the zero/nonzero partition which the rows explicitly exercise (initial zero vs val_a). So the escape uses a partition the contract considers pinned (by M_EXITONLY-style mutants) — but only in the immediate-exit form. The delayed form is unmeasured and unnamed. The atexit clause covers "a line printed late" — a late EXIT is not a printed line. So: it's a genuine survivor on the time axis, not covered by the transcript change (no bytes involved), not caught by the single exit-status row (conditioned away in that one session), and not clearly inside any disclosed NOT-COVERED class. The closest disclosed class: none fit well. "effects keyed on the environment (time...)" — no, it's keyed on the field value. Hmm — "an effect starting on the third read (reread 3)" is covered... "an effect starting after the third read in one process (counter > 3)" is disclosed. Not this.
+
+  So strictly, Q2's "can a crashed session pass it" → yes for conditioned crash/exit-at-exit; and Q1 → all pty OUTPUT is compared; the escape produces no output. The question for the verdict: does this block CLOSES? The pass's question is "is the output comparison now complete?" — for OUTPUT, yes. But the review chain (Q3) — the panel's job is mutation hunting; the time axis has one more survivor. Is it fair to demand it? The change under review (transcript to EOF) does exactly what it claims for output. The exit-status hole predates this change and is not an OUTPUT-comparison gap. Hmm. But "Does the review chain close here?" asks about the chain, not just the diff.
+
+  Wait — actually, let me reconsider whether the exit-status row REALLY doesn't cover other sessions. `row("exit status", how, "exit0", ...)` — only the marker session. Also there's "marker survive". And no other how-assertions. Confirmed by reading lines 366-371: yes only one.
+
+  Hmm, but hold on — also check: does the atexit-exit(1) REALLY produce no transcript bytes? exit(1) from an atexit handler: process terminates, no output. What about gxemul's own exit path printing something? The mutant's atexit runs BEFORE/AFTER gxemul's own cleanup... atexit handlers run in reverse registration order; gxemul might register its own (console cleanup prints nothing usually). If gxemul's exit path prints nothing normally (BASE tail=="" confirms nothing after quit echo), then exit(1) in atexit prints nothing. ✓.
+
+  And one more consideration: WIFEXITED exit1 in marker session — only if registered there. Field==0 → not registered. ✓.
+
+  So the honest verdict: the OUTPUT comparison is complete (Q1: nothing on the pty un-compared, within disclosed edges), but the review chain does NOT fully close because the time axis has a surviving non-output twin: the delayed exit/crash keyed to avoid the marker session. Is that in-scope for THIS pass? The pass asks "is the regression test's output comparison now complete?" — I can answer: yes for output (CLOSES the output-comparison question), and NAME the survivor as outside the output comparison but on the same axis, recommending one measurement. The verdict line format: "CLOSES" or "GAP: <exact edit>". Hmm. If I say CLOSES while naming a survivor... The survivor is not an output-comparison gap. The question is scoped: "is the regression test's output comparison now complete?" If output comparison is complete → CLOSES, with the delayed-exit named as a separate, pre-existing hole (not introduced here, not an output gap) — for Q3: a future miss of the atexit-print kind would be a breach; the delayed-exit is outside the stated contract? Hmm, but is it? The contract claims "exit(1) alone" and exits keyed on values as CAUGHT — a reader would reasonably read "an exit keyed on the value 4" as covering the exit class, but the measurement was immediate-exit only. The delayed variant is a different mechanism (registration + exit handler). I'd say: the stated contract's exit rows are about the read arm's own control flow; the delayed exit is a NEW mechanism on the time axis the contract just opened by naming atexit. Since the contract NOW says "a line printed late (an atexit handler...)" — it names atexit as a covered mechanism but only for output. A delayed exit via the same mechanism is neither measured nor disclosed. That's arguably a breach-shaped hole: same axis, same mechanism, different effect.
+
+  Hmm, wait. Let me reconsider — is it really true that no row would catch the delayed exit? Let me re-examine "read silent" for the exit(1) mutant once more. rd(10.0): emulator exits(1) → pty EOF → rd returns False quickly → transcript ends at quit echo → tail "" → owed-exact → silent. Yes.
+
+  And how about the possibility that gxemul's exit path flushes stdio printing something? No — BASE passes with tail=="". ✓
+
+  OK here's another wrinkle for Q1: is there any output produced by the read that lands in the transcript but is EXCLUDED by `t.find("GXemul> ")`? The first prompt... what if a read-arm diagnostic is printed during the settle window? No—reads happen after commands.
+
+  What about a diagnostic printed by the read arm in response to the DEBUGGER's own accesses? The probe notes "the maple device is registered DM_DEFAULT, so the debugger's own dump/put never reach its handler" — wait, the probe doesn't dump maple. The debugger's startup? -V drops into debugger; does the debugger read devices at startup? No. OK.
+
+  One more Q1 edge: output that consists of terminal-injected RESPONSES — e.g., the handler writes "\x1b[6n" (cursor position request) — the TERMINAL (here, the pty master side = the probe) doesn't answer (probe isn't a terminal emulator) — no response bytes → but the request bytes themselves are extra → caught. ✓
+
+  And output via SIGTTIN/SIGTTOU... no bytes.
+
+  What about the handler closing stdout (fclose(stdout))? Then later owed lines (answers, prompts) can't print → missing → caught. And the quit echo still echoes (kernel). read silent fails (missing). ✓ Mutant caught.
+
+  What about dup2'ing stdout to /dev/null mid-session → missing lines → caught. ✓
+
+  Freopen to a file → off-pty channel disclosed + missing lines caught anyway. ✓
+
+  OK Q1 is solid: no compared-region escape for bytes on the pty.
+
+  Now Q2 false-fail analysis summary:
+  - Correct build CAN fail if host slowness breaks the fixed windows in the two ways identified (startup > settle=2.5s with echoes preceding first prompt — actually wait, let me recheck: if startup > 2.5s, commands are typed before prompt; echoes appear BEFORE the prompt in the transcript; find("GXemul> ") skips them... then body[0] = "GXemul> " + <answer to cmd1>? Hmm, actually when the emulator finally prints the prompt and reads cmd1 (echoed earlier), it prints the answer: transcript around there: "GXemul> 0x...\r\n"? The prompt has no newline; the answer follows on the SAME line? The debugger prints the answer with a leading newline? Typically answer prints right after the echoed command... but the echo happened way earlier. So the line would be "GXemul> " + answer-with-leading-\n? The exact bytes depend on the debugger. Either way, mismatch vs owed "GXemul> cmd1" → FAIL. So yes: slow startup → false fail. Measured probability: low (17/17 green BASE×3 + prior tables), but nonzero on a loaded host. Not introduced by this change (settle existed), but the whole-transcript comparison makes the post-quit segment strict too: answers arriving after quit echo → false fail (new signature, same root cause: typing cadence outrunning the emulator). Also: the initial `rd(settle)` returning False (EOF — emulator died at startup, e.g., bad kernel path) → break → then quit write fails OSError → transcript = banner → read silent: find prompt... if it died before any prompt, raw=t=banner, owed lines missing → read silent fails → crash detected as noise. Good: startup crash fails loudly. ✓ "Can a crashed session pass it?" — mid/startup crash: no. Exit-time crash: passes read silent, caught only if unconditional (exit-status row); conditioned → passes everything.
+
+  Q3: Does the review chain close? What I checked: device fix (line 557-568), the probe's session()/rd()/noise()/owed() logic, row count 37, read-session count 12, kill-table artifacts (SCORES/POSTTABLE match claims, 17 runs), FROZEN6 identity claim (SCORES line 2 says cmp IDENTICAL at launch — I can verify the file exists; a quick cmp of FROZEN6 vs regress/ would confirm now; cheap: do it), pty.fork semantics (stderr on pty), quit echo behavior (BASE tail==""). Also should verify the diff base: FROZEN5 == killtable5's copy (claimed IDENTICAL in SCORES line 3; and the diff shown in the prompt matches FROZEN5→regress). Let me cmp FROZEN6 vs regress/maple_dmaaddr_probe.py and diff killtable5's frozen vs FROZEN5 to confirm the verbatim diff. Cheap and decisive.
+
+  What I cannot check from text alone: the actual 17 measurements (I take SCORES.txt as the record; I re-ran nothing per the operational rule — actually I COULD run a single mutant in my own temp dir... the atexit leg takes ~12 sessions × ~10s+ per session... Each session: settle 2.5 + ~30 commands×0.2 + spin 1.2 + rd up to 10 (returns at EOF quickly). ~10-15s per session × 12-16 sessions ≈ 3-4 min per probe run. Plus a build. That's within feasibility but the operational rule says gates take minutes and corrupt the operator run; a single detector+mutant in my own temp dir is "fine and encouraged". Building gxemul takes minutes (configure+make). Given SCORES.txt is complete and POSTTABLE written, re-measuring is optional. The strongest verification I can add cheaply: run the CURRENT probe against the CURRENT (fixed) binary to confirm 37/37 and see the actual transcript shape (confirming quit-echo/tail behavior). Is there a built binary available? build/ dir has gxemul? Let me check for a gxemul binary. Actually POSTTABLE says BASE ran 3× green on FROZEN6 with a FRESH binary — that IS the current probe against the fixed build, measured. Re-running adds little; and a concurrent run risk... the rule only prohibits gates (shared log dir). A probe run writes only stdout (I redirect to my temp). The probe does need the kernel image path default /mnt/c/... — we're in Git Bash on Windows, /mnt/c doesn't exist; need WSL. The killtable ran under WSL presumably. Hmm — can I even run it here? bash is Git Bash; pty.fork doesn't exist on Windows Python. So running locally is likely infeasible without WSL. `wsl` command may exist. Time budget: the panel expects an answer, not a re-run; measurements are inlined and the artifacts match. I'll verify file identity with cmp/diff (cheap) and skip re-execution, naming it as what I did NOT re-measure.
+
+  Q4: Which statement above is wrong? Candidates:
+  (a) "rd returns at once when the pty closes" — TRUE per implementation (OSError/EOF → return False immediately). ✓ true.
+  (b) "the comparison covers the whole output" — mostly true with the pre-prompt exclusion (but nothing read-caused can appear there).
+  (c) "A clean build passes 37/37 with it" — confirmed by BASE×3.
+  (d) "17 runs, 17 exactly on prediction" — confirmed.
+  (e) "the atexit handler 36/37 (read silent fails in 12/12 sessions: one extra line after the quit echo)" — POSTTABLE: "read silent alone, 12/12 sessions: 1 surplus line(s), first '[ dreamcast_maple: DMAADDR was read ]' -- the line after the quit echo". ✓.
+  (f) "every earlier message shape ... still fails read silent" — SCORES ✓ (KEEPFATAL, HEXDIAG, BLANKDIAG, CRDIAG, PROMPTDIAG, GLUEPROMPT, QUITLINE all 36/37 read silent alone).
+  (g) "Previous version on the same binary: the atexit handler 37/37 (missed)" ✓ FROZEN5 M_ATEXIT 37/37.
+  (h) The claim in "How read silent works now": "for each of twelve test sessions" — 12 ✓. "compares the session's WHOLE output — from the first prompt until the pseudo-terminal closes" — mostly true: until EOF OR the 10s cap. Minor imprecision: the window is "until EOF or 10s after quit, whichever first". Not really "wrong" in a material way.
+  (i) "an earlier review ruled that a reinstated message alone must fail the test" — background, plausible.
+  (j) The diff itself — verify against actual FROZEN5/FROZEN6. The diff shows noise() docstring etc. One thing in the diff hunk: in `owed()`, the added `if c == "quit": continue` — placed AFTER `step` and BEFORE `print`. And in noise: `exp = owed(cmds + ["quit"])`. ✓ matches file lines 215-216, 246.
+  (k) "the original defect 11/37" ✓.
+  (l) Background: "The fix has been unchanged and uncontested" — verify fix.diff vs current source? The current source has the #528 comment block. Fine.
+
+  Hmm, what statement IS wrong? Let me hunt harder. Possibility: "One check, read silent, requires that reading the register produces NO extra emulator output — an earlier review ruled that a reinstated message alone must fail the test." OK.
+
+  "the session now reads until the pseudo-terminal reaches end-of-file after quit" — as noted, rd(10.0) stops at EOF **or after 10s**. If the emulator exits within 10s (normal), it's EOF. True in practice.
+
+  "and compares the session's WHOLE output ... against that list, line by line. Any extra, missing or altered line, anything after the quit echo, or any carriage return not part of CRLF fails it." — Note: the comparison STOPS at the first bad line (`break`) — but it still fails. "Anything after the quit echo" — surplus → fail ✓. Also the tail check: `if tail != ""`. Hmm — wait, what if the transcript's last line has no trailing newline because EOF cut mid-line? E.g., emulator prints partial line then exits → tail = "partial" → flagged ✓.
+
+  Actually, here's a candidate wrong statement, subtle: in "How read silent works now": "for each of twelve test sessions, it builds from the typed commands alone the exact list of lines the debugger prints (command echo, register value, memory-write confirmation, one disassembly line per stepped instruction)". Hmm — "one disassembly line per stepped instruction": owed() appends a disasm entry per step ✓. "memory-write confirmation" for put ✓. What about `r1=0x...` → hex ✓. All true.
+
+  Another candidate: the claim in the change rationale — "the previous version compared only the output captured BEFORE quit was typed... a handler which registers an atexit() callback printing a message would print after that point and go unnoticed" ✓ reproduced (FROZEN5 37/37).
+
+  Maybe the wrong statement is elsewhere: "Kill table 6 (targeted; results in ... SCORES.txt and POSTTABLE.out once it finishes): 17 runs, 17 exactly on prediction." — It HAS finished; numbers match. Hmm "17 exactly on prediction" — was HEAD predicted 11/37? POSTTABLE says 17 on prediction. Take as given.
+
+  Wait, maybe check "the original defect 11/37" — HEAD fails 26 rows of 37 → 11 pass ✓ (matches HEAD row in SCORES: 11/37).
+
+  Hmm — what about the statement "A clean build passes 37/37 three times" — BASE, BASE2, BASE3 ✓.
+
+  Maybe the "wrong statement" is the one I should find by actually diffing FROZEN5→regress vs the inlined diff: if the inlined diff is faithful, then no wrong statement there. Let me do the cmp/diff checks. Also verify FROZEN6 == regress (SCORES claims IDENTICAL at launch; if someone edited regress/ AFTER the table ran, cmp would differ now — that would be material! The verdict "test now compares whole output" rests on regress/ == what was measured). Let me check mtimes and cmp.
+
+  Also possible wrong statement: "quit expected to print exactly its echo and then nothing more" — true per BASE green.
+
+  Also: the statement in the diff comment: "the typed `quit' owes its echo and then nothing" — fine.
+
+  Let me also check the killtable5 FROZEN5 vs the diff's left side: the diff's left file is killtable5_20260912/maple_dmaaddr_probe.FROZEN5.py. And killtable6 dir ALSO has FROZEN5/FROZEN6 copies. SCORES line 3: FROZEN5 cmp vs killtable5's frozen copy IDENTICAL. Verify.
+
+  Plan: run cmp/diff commands. Also grep -c row( to confirm 37 (already counted manually = 37 ✓ but the SCORES says 37 too). Also check gxemul's -V flag meaning & debugger quit prints nothing — grep debugger source for "quit".
+
+  Let me also double-check one Q2 claim in the prompt: "or a slow exit" — rd(10.0) cap: if exit takes >10s, rd times out, close, waitpid blocks. Transcript complete. No false fail. But hmm — one more: what if the emulator, on a SLOW host, hasn't yet printed all owed lines when... covered above (order preserved; rd(10.0) collects until EOF; EOF only after exit; emulator processes ALL queued commands before reading quit? wait — does gxemul's debugger quit command discard queued input? quit is read after earlier commands (FIFO); it processes cmd queue in order; quit exits. All answers print before exit. Order preserved. So even a lagging emulator produces the owed order, PROVIDED quit's ECHO doesn't interleave before late answers. Echo of quit happens at WRITE time (kernel). The probe writes quit immediately after the last rd window. If the emulator is still processing earlier commands, their answers print AFTER the quit echo → misorder → false fail. So the guard is the per-command 0.2s + final spin 1.2s: emulator must keep up with ~5 commands/sec. Stepping a few SH4 instructions in the cold debugger: microseconds of work; even a loaded host keeps up. Startup settle 2.5s is the tighter risk on first prompt only. Overall: false-fail possible only under host pathology; measured absent; inherited, not introduced.
+
+  One more possible wrong statement! "the session now reads until the pseudo-terminal reaches end-of-file after quit, and the comparison covers the whole output, with quit expected to print exactly its echo and then nothing more." — combined with "rd returns at once when the pty closes": reading rd(): on EOF it returns False at once ✓. But note rd(10.0) is called INSIDE the try whose except catches OSError from os.write... rd's own OSError is caught internally. Fine.
+
+  Also, "Any ... carriage return not part of CRLF fails it" ✓ bare_cr check.
+
+  Now, one more Q1 class I should double check: output written to the pty by the KERNEL line discipline due to the read? No.
+
+  Signal-driven output: the read handler raises SIGX and a gxemul signal handler prints? gxemul installs no such handler for that. Contrived → environment class.
+
+  What about output printed by the read to the pty but arriving after EOF? Impossible — EOF happens at slave close; slave closes at process exit; atexit runs before exit. A forked CHILD keeps the slave open → pty does NOT EOF when parent exits! Interesting: if the read handler FORKS a child that inherits stdout (pty slave), then after the parent exits, the slave is still open in the child → no EOF → rd(10.0) times out after 10s → close master. If the child prints within 10s → captured → surplus → CAUGHT (nice, the fork doesn't hide it as long as it prints within the window). If the child sleeps >10s → escapes — the time-keyed class again (disclosed). Also the child keeps the slave open: waitpid(parent) returns; probe moves on; the child is orphaned holding a dead pty. OK.
+
+  So Q1: complete for output within the measured window; edges disclosed (time-keyed, off-pty).
+
+  Now, is the delayed-exit survivor worth a GAP verdict? The verdict options: "CLOSES" or "GAP: <exact edit>". The pass title: "is the regression test's output comparison now complete?" I judge: YES — output comparison complete. The delayed-exit (no output) is outside the OUTPUT comparison question, but Q2/Q3 invite it. Since Q3 asks "would a future miss be outside the stated contract or a breach of it" — if I answer CLOSES, I should say: a future miss on the OUTPUT axis (e.g., a new print shape/channel on the pty within the window) would be a BREACH of the stated contract; the delayed-exit/crash survivor is NOT covered by the stated contract's exit clauses (which were measured as immediate exits) — it's outside, but adjacent; I recommend naming it as a disclosed NOT-COVERED or adding one measurement. Hmm — but is recommending more work compatible with CLOSES? The panel culture here seems to be: CLOSES means the chain closes, no further measurement needed. If I name a live survivor, that's not closure... but the pass question is scoped to the output comparison. Ugh. Let me re-read the pass questions:
+
+  1. Is any emulator output produced because of the register read still not compared? → No (with disclosed edges). THIS is the pass's title question.
+  2. Can a correct build fail? Can a crashed session pass? → Timing: only host-pathology false-fails; crashed session: mid-session no, at-exit yes conditioned (named).
+  3. Does the review chain close? Name what you checked. If it closes, would a future miss be "outside the stated contract" or "a breach"?
+  4. Which statement above is wrong?
+
+  Q4 demands I find a wrong statement — or say none found? "Which statement above is wrong?" presupposes one. Let me hunt once more, very carefully, comparing inlined claims to the tree.
+
+  Claim: "the silence row compares each of the twelve read sessions' WHOLE transcript, from its first prompt to the pty's EOF" — the noise() starts at `t.find("GXemul> ")`. Hmm wait — what does the transcript look like BEFORE the first prompt with -V? If gxemul prints NOTHING before the prompt, i=0-ish. If it prints a banner, that's excluded. Read-caused output can't appear there. OK.
+
+  Claim: "rd returns at once when the pty closes" — rd implementation: on OSError return False; `if not d: return False`. On Linux, when the slave closes, reading the master: after buffered data drained, os.read raises OSError(EIO) → return False ✓. True.
+
+  Claim: POSTTABLE "FROZEN6 cmp-IDENTICAL to regress/ at launch" — verify now.
+
+  Claim: "the change under review... A clean build passes 37/37 with it." ✓.
+
+  Claim in background: "The regression test regress/maple_dmaaddr_probe.py (37 checks) drives real guest instructions through GXemul's debugger over a pseudo-terminal." ✓.
+
+  "One check, read silent, requires that reading the register produces NO extra emulator output — an earlier review ruled that a reinstated message alone must fail the test." ✓ (M_KEEPFATAL 36/37).
+
+  "How read silent works now: for each of twelve test sessions, it builds from the typed commands alone the exact list of lines the debugger prints (command echo, register value, memory-write confirmation, one disassembly line per stepped instruction), and compares the session's WHOLE output — from the first prompt until the pseudo-terminal closes after quit — against that list, line by line. Any extra, missing or altered line, anything after the quit echo, or any carriage return not part of CRLF fails it."
+
+  Hmm — "for each of twelve test sessions" — read silent covers the 12 READS sessions ✓ (len(READS)=12). Note: the marker-survive session IS one of the 12 (rsession). ✓.
+
+  "Any extra, missing or altered line ... fails it" — extra line BEFORE the owed ones → shifts → mismatch ✓. OK.
+
+  "The change under review (below): the session now reads until the pseudo-terminal reaches end-of-file after quit" — modulo the 10s cap. Is the 10s cap a "wrong statement"? The statement omits the cap. Under normal operation (emulator exits in ms), it reads to EOF. The cap only binds if the emulator DOESN'T exit — in which case... a mutant that doesn't exit: rd times out, close, waitpid BLOCKS FOREVER → probe hangs. Hmm wait: if the emulator doesn't exit after quit (e.g., quit disabled by mutant? not read-related), the probe hangs forever at waitpid — no timeout anywhere. That's a liveness assumption: quit always exits. For a CORRECT build it does (measured). OK, minor.
+
+  Now the strongest "wrong statement" candidate I've found so far — let me re-examine POSTTABLE's atexit line: "read silent alone, 12/12 sessions: `1 surplus line(s), first '[ dreamcast_maple: DMAADDR was read ]'`". Hmm, in noise(), the surplus branch: `bad.append("%d surplus line(s), first %r" % (len(body) - len(exp), body[len(exp)]))`. For the atexit mutant, transcript after quit echo: "\r\n[ dreamcast_maple: DMAADDR was read ]\r\n"? The printed line ends with \n via fatal's format. So body has one extra line "[ dreamcast_maple: DMAADDR was read ]" and tail "" ✓ → "1 surplus line(s), first '[ dreamcast_maple: DMAADDR was read ]'" ✓ consistent.
+
+  What about M_GLUEPROMPT: `fatal("GXemul> ")` glued onto next prompt — caught as line mismatch ✓ 36/37.
+
+  Everything checks out. So which statement is wrong?? Maybe the premise "17 runs, 17 exactly on prediction" — but POSTTABLE says exactly that. Since I can't see the predictions document (PRETABLE.out!), I should read PRETABLE.out to verify predictions matched. "once it finishes" — it finished. Let me read PRETABLE.out. If PRETABLE's predictions differ from results in some leg, then "17 exactly on prediction" would be wrong. Check it.
+
+  Also BASE_prelaunch.out. And the killtable6.sh to see mutants. Also mut_maple6.py maybe. Let me read PRETABLE.out.
+
+  Also for Q4, another candidate: the background says "Four reviewers predicted, and the compile-and-measure reviewer confirmed (37/37 — the test missed it), that a handler which registers an atexit() callback printing a message would print after that point and go unnoticed." — FROZEN5 on M_ATEXIT = 37/37 ✓ missed. Consistent.
+
+  And: "The earlier grammar-based version of the test had looked at the whole buffer, so this was a coverage loss introduced by the previous change." — table 4's grammar looked at the whole buffer including post-quit? The comment in the probe says "which table 4's whole-buffer grammar would have caught". Consistent internal claim; verifying table4's frozen probe would confirm — killtable4 dir exists. Could grep for whether table4's probe read post-quit output. Cheap-ish: check killtable4's frozen probe for the rd-after-quit and whether noise saw the full buffer. Maybe worth one grep to confirm the "coverage loss" narrative. If table4 did NOT actually look at the whole buffer, the "coverage loss" statement is wrong. Let me check.
+
+  Let me also confirm there is no statement about "the literal GXemul> quit" — M_QUITLINE: mutant prints the literal text "GXemul> quit" (a prompt-shaped line mimicking the quit echo). Caught ✓ 36/37.
+
+  OK let me do the verification commands now:
+  1. cmp FROZEN6 vs regress probe.
+  2. diff FROZEN5 (killtable5) vs FROZEN5 (killtable6) — identity; and optionally diff FROZEN5→regress to confirm the inlined diff is faithful (spot check).
+  3. Read PRETABLE.out (predictions).
+  4. Grep killtable4's frozen probe for post-quit handling.
+  5. Grep debugger for quit command (confirm no print).
+  6. Check gxemul -V meaning (usage text) — minor; skip if noisy. Actually -V: I want to know whether debug() prints (verbose). Check misc.h debug definition + main.c -V. Quick grep.
+
+  Then write the verdict.
+
+  Actually also check: are there exactly 12 rsession calls (grep -c "rsession(" minus def)? I counted from the file already: calls at lines 321,323,337,361,369,377,380,382,391,395,400,405 = 12 ✓. And row( count: 37 — let me count row( occurrences: rows are created via row(...) calls including loops. `grep -c "row("` would include the def row line. Manual count done = 37 ✓ and SCORE says /37 ✓.
+
+  Let me run the checks.FROZEN6_IDENTICAL
+FROZEN5_IDENTICAL
+16,33c16,33
+< CONTRACT (vacuity-floor clause e).  Designed to catch, and each MEASURED in a kill table under
+< artifacts/mapledmaaddr/ (killtable2_20260912/ .. killtable5_20260912/): the removed fatal()+exit(1) reinstated (HEAD);
+< a diagnostic alone, in ANY wording or shape -- verbatim, reworded with or without the device name, latched, a bare hex
+< value, a blank line, a bare carriage return, a prompt-shaped line with or without a newline, the text of a typed
+< command -- because the silence row compares each of the twelve read sessions' transcript, as it stood BEFORE `quit'
+< was typed, with the exact line sequence its commands owe (owed(): every echo, value, `put' confirmation and
+< disassembly line, computed from the command alone), and rejects any CR that is not the pty's CRLF (never a device
+< name, never a whitelist of line shapes); exit(1) alone; the FAULT idiom `return 0' (a silent load-skip on SH4, where
+< memory_rw.c raises no exception); DECLINE, unconditional or keyed on the consumer's partitions -- `read aligned' (a
+< 32-byte-aligned value), `read enabled' (after MAPLE_ENABLE = 1) and their joint cell `read joint'; an exit keyed on
+< either partition; the read hoisted out of its `relative_addr == 0x04' guard; the selector narrowed by any ONE bit --
+< the eight-cell generating set `relative_addr & ~bit' folds 0x04|bit or 0x04&~bit onto DMAADDR: `alias 0x05' (mov.b),
+< `alias 0x06' (mov.w), `alias 0x00' (bit 2 dropped, e.g. `case 0x00:' stacked on the label), `alias 0x0c/24/44/84',
+< `other 0x14' -- and 0x04 widened onto any other case label (`other 0x..'); a read arm that also writes MAPLE_ENABLE
+< or the timeout (`other pre read' then `other 0x14' / `other 0x80'); a read that clears the field, or sets or clears
+< any one bit of it (`double read 2', `zero reread', `ones reread'); an effect that starts on the third read (`reread
+< 3'); masking of the low five bits; an exit keyed on the value 0, 4, bit 30, or a 16- or 8-bit access (`read width16',
+< `read width8').
+---
+> CONTRACT (vacuity-floor clause e).  Designed to catch, and each MEASURED in a kill table under artifacts/mapledmaaddr/
+> (killtable2_20260912/ .. killtable6_20260912/): the removed fatal()+exit(1) reinstated (HEAD); a diagnostic alone, in
+> ANY wording or shape -- verbatim, reworded with or without the device name, latched, a bare hex value, a blank line, a
+> bare carriage return, a prompt-shaped line with or without a newline, the text of a typed command, or a line printed
+> late (an atexit handler, a buffered stream's flush at exit) -- because the silence row compares each of the twelve
+> read sessions' WHOLE transcript, from its first prompt to the pty's EOF, with the exact line sequence its commands owe
+> (owed(): every echo, value, `put' confirmation and disassembly line, computed from the command alone; the typed `quit'
+> owes its echo and then nothing), and rejects any CR that is not the pty's CRLF (never a device name, never a whitelist
+> of line shapes); exit(1) alone; the FAULT idiom `return 0' (a silent load-skip on SH4, where memory_rw.c raises no
+> exception); DECLINE, unconditional or keyed on the consumer's partitions -- `read aligned' (a 32-byte-aligned value),
+> `read enabled' (after MAPLE_ENABLE = 1) and their joint cell `read joint'; an exit keyed on either partition; the read
+> hoisted out of its `relative_addr == 0x04' guard; the selector narrowed by any ONE bit -- the eight-cell generating
+> set `relative_addr & ~bit' folds 0x04|bit or 0x04&~bit onto DMAADDR: `alias 0x05' (mov.b), `alias 0x06' (mov.w),
+> `alias 0x00' (bit 2 dropped, e.g. `case 0x00:' stacked on the label), `alias 0x0c/24/44/84', `other 0x14' -- and 0x04
+> widened onto any other case label (`other 0x..'); a read arm that also writes MAPLE_ENABLE or the timeout (`other pre
+> read' then `other 0x14' / `other 0x80'); a read that clears the field, or sets or clears any one bit of it (`double
+> read 2', `zero reread', `ones reread'); an effect that starts on the third read (`reread 3'); masking of the low five
+> bits; an exit keyed on the value 0, 4, bit 30, or a 16- or 8-bit access (`read width16', `read width8').
+49c49,50
+< EQUIVALENT: va_debug prints nothing for an empty format).
+---
+> EQUIVALENT: va_debug prints nothing for an empty format); output on a channel the pty never carries (a file the arm
+> opens, syslog) -- off the operator's console, and outside what a transcript can observe.
+144,145d144
+<     global SNAP
+<     SNAP = buf                  # the transcript BEFORE `quit' is typed: what noise() reads (no exemption needed)
+148,149c147,148
+<         rd(0.4)
+<     except OSError:
+---
+>         rd(10.0)                # read to EOF (rd returns at once when the pty closes): whatever the emulator prints
+>     except OSError:             # on its way out -- an atexit handler, a buffered stream's flush -- is in the transcript
+175,178c174,182
+< #  oracle is now the TRANSCRIPT ITSELF: every command owes an exact, in-order sequence of lines computed from the
+< #  command alone (owed() below), the snapshot is taken before `quit' is typed (so nothing is exempt), and every CR must
+< #  be the pty's CRLF.  A quiet emulator prints exactly that; anything else -- extra, missing, glued or reordered -- is
+< #  the emulator speaking.  The only disguise left is a diagnostic that emits no byte (`fatal("")': EQUIVALENT).
+---
+> #  oracle became the TRANSCRIPT ITSELF (table 5): every command owes an exact, in-order sequence of lines computed from
+> #  the command alone (owed() below), and every CR must be the pty's CRLF.
+> #    table 5  ...read from a snapshot taken BEFORE `quit' was typed -- and the closing pass (deepseek, kimi, glm) found
+> #             the TIME axis: `atexit(announce)' registered by the read prints after the snapshot, which table 4's
+> #             whole-buffer grammar would have caught.  The repair had narrowed the window it was meant to close.
+> #  So the transcript is now the WHOLE session, from the first prompt to the pty's EOF: `quit' owes exactly its echo and
+> #  then nothing, whatever the emulator would print on its way out.  A quiet emulator prints exactly the owed lines;
+> #  anything else -- extra, missing, glued, reordered, altered, or late -- is the emulator speaking.  What is left: a
+> #  diagnostic that emits no byte (`fatal("")': EQUIVALENT) and output on a channel the pty never carries (a file).
+210a215,216
+>         if c == "quit":
+>             continue                            # owes its echo; then the process ends, and nothing may follow
+234c240,241
+<     """Differences between the pre-`quit' transcript `t' and the exact transcript `cmds' owe.  Empty = silent."""
+---
+>     """Differences between the whole session transcript `t' (first prompt to EOF) and the exact transcript `cmds'
+>     owe, the typed `quit' included.  Empty = silent."""
+239c246
+<     exp = owed(cmds)
+---
+>     exp = owed(cmds + ["quit"])
+250,251c257,258
+PRETABLE predictions match SCORES results exactly. FROZEN6 == regress/ probe (still identical now, not just at launch). The inlined diff is faithful to the actual FROZEN5→regress diff (the diff output matches the prompt's diff — I saw the same hunks).
+
+  Remaining checks:
+  1. Table 4's probe: did its grammar scan the whole buffer (the "coverage loss" claim)? Grep killtable4's frozen probe.
+  2. Debugger quit prints nothing — grep the debugger source.
+  3. The atexit mutant diff (opus_close_20260912/M_ATEXIT.diff) — confirm the mutant shape (atexit + fatal) so "line printed late" claim is right.
+  4. -V flag meaning — minor; check quickly whether debug() prints. Actually, MAPLE_SPEED write arm has a live debug() call (not commented) — and the ctrl devsig maple session writes MAPLE_SPEED and passes. That session isn't a silence session, so no constraint. But `other 0x80` reads SPEED — read arm quiet. Do any of the 12 read sessions write MAPLE_SPEED? No. OK, -V meaning doesn't affect the verdict; but for Q2 completeness, know whether debug prints: if -V made debug() print, BASE sessions would still pass (no debug in read path). Skip deep -V analysis; just grep usage quickly.
+
+  Let me also double-check the claim "every read session reads DMAADDR" (PRETABLE line 38-39): the 12 rsession calls — do all include a load32(MAPLE_DMAADDR,...)? 
+  1. 321: yes. 2. 323: yes. 3. 337: yes (DMAADDR first). 4. 361: yes ×2. 5. 369 marker: run([0x6212, 0x2432]) — 0x6212 = mov.l @r1,r2 with r1=MAPLE_DMAADDR → yes. 6. 377: yes ×2. 7. 380: yes. 8. 382: yes. 9. 391: yes. 10. 395: yes ×2. 11. 400: yes ×3. 12. 405: yes. All 12 ✓.
+
+  Also confirm the tail element semantics: lines[:-1] body, lines[-1] tail; if transcript ends with "\n", tail="". ✓.
+
+  Now greps: debugger quit; table4 frozen probe buffer scope; atexit diff.BASE_prelaunch.out
+POSTTABLE.out
+PRETABLE.out
+SCORES.txt
+blank_measure.py
+build_BASE.log
+build_HEAD.log
+build_M_BLANKDIAG.log
+build_M_CRDIAG.log
+build_M_EXITONLY.log
+build_M_HEXDIAG.log
+build_M_KEEPFATAL.log
+build_M_PROMPTDIAG.log
+build_RESTORE.log
+dev_dreamcast_maple.HEAD.c
+killtable4.run-0912.sh
+killtable4.sh
+maple_dmaaddr_probe.FROZEN4.py
+mut_maple4.py
+mutate_M_BLANKDIAG.txt
+mutate_M_CRDIAG.txt
+mutate_M_EXITONLY.txt
+mutate_M_HEXDIAG.txt
+mutate_M_KEEPFATAL.txt
+mutate_M_PROMPTDIAG.txt
+probe_BASE.raw
+probe_HEAD.raw
+probe_M_BLANKDIAG.raw
+probe_M_CRDIAG.raw
+probe_M_EXITONLY.raw
+---
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/mapledmaaddr/killtable4_20260912/maple_dmaaddr_probe.FROZEN4.py:139:        os.write(fd, b"quit\n")
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/mapledmaaddr/killtable4_20260912/maple_dmaaddr_probe.FROZEN4.py:188:        #  the `quit' echo is not counted: it is typed after the last command and may miss the read window on a
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/mapledmaaddr/killtable4_20260912/maple_dmaaddr_probe.FROZEN4.py:190:        got_prm = sum(1 for ln in body if ln.startswith("GXemul> ") and ln != "GXemul> quit")
+C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/mapledmaaddr/killtable4_20260912/maple_dmaaddr_probe.FROZEN4.py:305:row("exit status", how, "exit0", "the session ends by `quit'")
+All confirmed:
+  - `debugger_cmd_quit` prints nothing (only sets flags) → "quit owes exactly its echo and then nothing" is source-verified, not just measured.
+  - Table 4's FROZEN4 probe: grep shows it read `quit` echo within the body (line 188-190: "the `quit' echo is not counted ... may miss the read window") — its grammar scanned `body` which came from the whole buffer. Let me quickly confirm FROZEN4 read the buffer AFTER quit (i.e., noise saw post-quit bytes). Line 139 writes quit; need to see if it rd()s after quit and whether the grammar covered the full buf. The comment says quit echo "may miss the read window" — implying rd after quit existed (rd(0.4) like table 5?). If table 4's noise() scanned the whole buf including post-quit bytes, then the "coverage loss" narrative holds. Let me peek at FROZEN4 lines ~130-200 to be sure. This is the last premise for the "coverage loss" statement in the background.
+
+  Also the M_ATEXIT diff confirms the mutant: atexit handler calling fatal() → prints at exit after quit. Matches.
+
+  One more check for Q2's "slow exit" and the exact tail semantics, plus FROZEN4's post-quit read. Read FROZEN4 relevant region.Confirmed: FROZEN4 (table 4) scanned `body` from the WHOLE buffer (it read `rd(0.4)` after quit and `noise()` operated on `raw` to the end of the buffer — including post-quit bytes, with the quit echo exempted only from the prompt COUNT). So an off-grammar line printed after quit would have been caught by `bad = [ln for ln in body if not any(p.match...)]`. The "coverage loss introduced by the previous change" narrative is TRUE: table 5's SNAP-before-quit narrowed the window that table 4 had. ✓
+
+  Everything in the background checks out. Now the deeper analysis for the questions.
+
+  Summary of verification:
+  - FROZEN6 == regress/ probe now (cmp IDENTICAL).
+  - FROZEN5 identical across killtable5/6.
+  - Inlined diff faithful (spot-checked hunks match).
+  - Device fix confirmed (dev_dreamcast_maple.c:557-569, odata = d->dmaaddr, no fatal/exit; MAPLE_ENABLE sibling at 577-582).
+  - debugger_cmd_quit prints nothing (debugger_cmds.c:1629-1638) — "quit owes exactly its echo and then nothing" is source-true.
+  - rd() returns at once on EOF/OSError (lines 121-135 of current probe) — true.
+  - 37 rows, 12 read sessions (counted).
+  - SCORES/POSTTABLE/PRETABLE consistent: 17 runs, all on prediction; atexit 36/37 with read silent failing 12/12 (surplus line after quit echo); FROZEN5 atexit 37/37 (escape reproduced).
+  - Table 4 grammar scanned whole buffer → coverage-loss claim true.
+  - pty.fork: child fds 0/1/2 all on the slave → stderr on the pty; echoes from the line discipline.
+
+  Now the four questions.
+
+  **Q1: Is any emulator output produced because of the register read still not compared?**
+
+  The comparison region: from `t.find("GXemul> ")` to end of buf; buf accumulates everything from spawn until EOF (or the 10s cap). Read-caused output cannot precede the first prompt (reads only happen after commands are typed). Within the region, EVERY byte is accounted for: owed lines must match exactly, surplus fails, tail must be "", bare CRs fail. Terminal-mode tampering (echo off) removes owed echoes → fails. Buffered flushes at exit → within region → fails (measured). So within the pty byte stream, no.
+
+  Edges, all inside already-disclosed classes:
+  - Output delayed more than 10s after quit (rd(10.0) cap): a `sleep(11)`-then-print atexit or a forked child printing late. After the master closes, the bytes are unobservable by ANY transcript. This is the disclosed "effects keyed on the environment (time...)" class. Worth naming as the finite-window bound.
+  - Off-pty channels (file, syslog): explicitly disclosed in the new NOT-COVERED text. I agree: a transcript oracle is defined on the operator's console; nothing in the fix's defect class (fatal/debug print) suggests off-console output, and disclosing is the right treatment.
+
+  So: no uncompared output within the observable channel + window.
+
+  **Q2: Can a correct build fail this comparison? Can a crashed session pass it?**
+
+  False-fail paths (correct build):
+  - Startup slower than settle=2.5s: command echoes (kernel-side, immediate) land BEFORE the first prompt; `find("GXemul> ")` then excludes them, and the owed echo lines mismatch → false red. The probe never waits FOR the prompt; rd(settle) is a fixed sleep.
+  - Emulator falls behind the ~0.2s/command typing cadence: answers print after the `quit` echo (echoed at write time) → misordered transcript → false red. This strictness is new in signature (table 5 would have red it as missing lines in SNAP instead — same root cause). Measured absent: BASE ×3 green plus all earlier tables.
+  - Slow exit (>10s after quit): transcript already ends at the quit echo → passes; waitpid just blocks longer. No false fail. A hung exit hangs the probe (no waitpid timeout) — an operator-visible stall, not a false red.
+
+  Crashed session passing:
+  - Crash at startup/mid-session: missing owed lines → read silent fails it; value rows fail. Cannot pass.
+  - Crash during exit, after the quit echo: produces no bytes (no shell to print "Segmentation fault"; the probe is the parent) → transcript owed-exact → read silent passes it. BUT the "exit status" row (want exit0) covers it IF the crash condition fires in that session — and it does for any read-triggered crash, because the marker-survive session also reads DMAADDR... with the field == 0. So an UNCONDITIONAL exit-time crash (or one keyed on zero/anything-that-holds-in-that-session) red-fails "exit status" (how="sig11"). A crash/exit-at-exit keyed to NOT hold in the marker session (e.g., on `d->dmaaddr != 0`) escapes every row: value rows already recorded, transcripts byte-clean, exit status unasserted in the other 11 read sessions. Concrete mutant: `odata = d->dmaaddr; if (d->dmaaddr) atexit(die);` with `die() { exit(1); }` → 37/37. That's the non-output twin of the atexit print — same time axis, no bytes, so outside the OUTPUT comparison, and only the single exit-status row stands in its way. Not measured in any table (M_EXITONLY is exit(1) AT the read → 11/37; a different mechanism). It predates this change (the exit-status row coverage is unchanged), so it is not a regression from this diff; but it is the next survivor on the axis this pass just opened. It is also arguably outside the contract's covered list as MEASURED (the covered exits were all immediate), yet adjacent to "exit(1) alone" in a way a future panel could call breach-shaped. My call: name it, and offer the one-line measurement (mutant + expected 37/37 escape; fix = assert `how` in every read session, e.g. fold `how == "exit0"` into read silent or an "exit clean 0/12" row). Actually — simpler fix: extend read silent's row to also require all 12 hows == "exit0". One line. I'll name this as the exact edit if I verdict GAP... 
+
+  Hmm. Now the verdict: CLOSES or GAP? The pass question is literally "is the regression test's output comparison now complete?" For OUTPUT: complete. The delayed-exit is not output. The panel's question 1 restricts to output; question 2 explicitly invites the crash analysis. Since I found a live, concrete, never-measured survivor (conditioned delayed exit/crash at process exit), is the chain "closed"? The instructions say verdict CLOSES or "GAP: <exact edit>". The survivor is real but it is NOT in the output comparison — and Q1 (the pass's title question) is honestly answerable as "no uncompared output". The delayed exit is a different row's business (exit status), pre-existing, disclosed? Not disclosed explicitly. Hmm.
+
+  Let me weigh: the previous pass found atexit-print and the author fixed exactly that, adding "a line printed late" to the contract and measuring it. A reviewer who now says "the output comparison is complete" while knowing the exit-twin survives would be doing the panel a disservice if they didn't name it. But is it a GAP in the change under review? The change's scope: output comparison. It achieves that. The exit-status hole exists in BOTH versions equally. The panel rule has been "L1 repairs cost one line" — the natural recommendation: strengthen the exit-status coverage to all 12 sessions (one-line row change), OR disclose the delayed-exit class in NOT COVERED. Since the verdict format allows "GAP: <exact edit>", and I found a concrete escape on the same axis the contract now names (atexit), I think the honest verdict is: CLOSES for the output comparison (the pass's stated question), with the delayed-exit named as the one survivor on the adjacent non-output row — and let me decide whether that's "outside the stated contract" or "a breach".
+
+  Actually, re-read Q3: "Does the review chain close here? Name what you checked. If it closes, would a future miss be 'outside the stated contract' or 'a breach of it'?" — the conditional "if it closes" allows answering "no, and here's why". And the verdict format: "CLOSES" or "GAP: <exact edit>". Given the panel culture (every previous pass that found a live survivor said so), and that I have a concrete 37/37 escape mutant, the rigorous answer is GAP — not in the output comparison (which is complete), but in the exit-status coverage on the same time axis the contract now explicitly names ("an atexit handler"). The contract's sentence claims the atexit MECHANISM is caught; it is caught only for the print effect. An exit-effect through the identical mechanism survives. That's "breach-shaped": the contract as written names the mechanism.
+
+  Hmm, but hold on. Let me steelman CLOSES once more. The contract's covered-list sentence is about "a diagnostic alone, in ANY wording or shape ... or a line printed late (an atexit handler, ...)" — all OUTPUT. The exit clauses ("exit(1) alone", "an exit keyed on...") are about the read arm's own exits. A delayed exit is neither named nor measured nor disclosed. Under the panel's own rule from PRETABLE ("grok and minimax graded it outside the contract as written; ... Opus graded it a breach"), a grader could go either way; the author's own practice was to take the repair since it costs one line. The symmetric repair here costs one line too (assert exit0 across the 12 sessions). 
+
+  Decision: verdict GAP, with the exact edit: extend the exit-status assertion to all read sessions (or disclose the delayed-exit class). The exact C mutant and what the test would see, and the exact one-line test edit. But wait — the operational rule says a seat should NAME any measurement it wants rather than run gates. I did not run the mutant (build+12 sessions ≈ minutes; also Python pty won't run under Git Bash and WSL invocation would take a while — and the measurements I need were inlined). I name it.
+
+  Hmm, actually, let me reconsider the escape once more to be really sure it escapes read silent. `atexit(die)` where die calls exit(1): when the process exits (after quit), atexit handlers run; die() calls exit(1) — no output. waitpid gives WIFEXITED 1 → how="exit1". In the 11 non-marker read sessions, how is recorded but never asserted. Transcript: quit echo last, tail "" → silent. Value rows: all values printed earlier, correct. So yes 36 rows pass + read silent passes = 37/37. And CONTROL=OK. ESCAPE confirmed by construction. Also variant with `_exit(1)` or `*(volatile int*)0=0` (sig11) — same, no bytes.
+
+  Edge: does gxemul's own shutdown print anything after atexit handlers? BASE: tail "" — nothing. And atexit handlers registered by the device run before stdio cleanup; die() exits immediately. Fine.
+
+  One subtlety: `if (d->dmaaddr)` — in the marker session, the read happens on a FRESH device (no prior store to DMAADDR in that session): cmds = put marker, r1=DMAADDR, r2=POISON, r3, r4, run mov.l @r1,r2 + store... The read sees dmaaddr==0 → not registered → exit0 ✓. In the zero session: field 0 → not registered ✓. All other read sessions write nonzero first → registered → exit1 unasserted. So 37/37. ✓ escape holds.
+
+  Also — the same hole covers a delayed exit keyed on a counter >N (disclosed: "an effect starting after the third read in one process (counter > 3)" — hmm! That IS disclosed for EFFECTS. "an effect starting after the third read" — but the marker session does ONE read; a counter>1 keyed delayed exit would avoid the marker session (1 read < 2)... wait marker session: one DMAADDR read. double-read session: 3 reads. A mutant registering atexit(die) on the 2nd+ read: marker session never reaches 2 → not registered → exit0 ✓; sessions with ≥2 reads get exit1 unasserted. But sessions with exactly 1 read (val_a, val_b, four, aligned, replace...) → not registered → exit0. Either way all rows pass. So the counter variant ALSO escapes, and "counter > 3" is already disclosed as NOT COVERED. The nonzero-keyed variant is the cleanest.)
+
+  Is the nonzero-keyed delayed exit inside disclosed NOT-COVERED classes? NOT COVERED (1): "an effect keyed on another exact value, or on a bit pattern all-ones does not set" — nonzero is not an exact value; it's the complement partition of "value 0", and "an exit keyed on the value 0" IS in the covered list (measured as immediate exit). So the delayed exit keyed on nonzero is the immediate-exit-covered partition with a delayed mechanism. Not disclosed. Genuine survivor.
+
+  So my verdict: GAP — but precisely scoped: the OUTPUT comparison (the pass question) is complete; the gap is the exit-status twin on the same atexit time axis, one line to close or disclose. Given the format demands "CLOSES or GAP: <exact edit>", and the pass question is the output comparison... I'll be candid: the output comparison closes; the chain as a whole has this one named survivor. I'll give the verdict as CLOSES? No — I must pick per the evidence. The evidence: a concrete, constructible 37/37 escape exists, on the axis the contract text now explicitly names (atexit). If I say CLOSES, the next panel finds it in one step (it's the obvious dual of M_ATEXIT). The panel's own standard ("interval silence means the read may not announce itself, whenever the announcement lands" — Opus) extends naturally: the read may not KILL the emulator, whenever the kill lands. #528's defect IS a kill. A delayed kill is the closest possible relative of the original defect. That's floor, not L1. So: GAP, with the exact edit.
+
+  The exact edit (test side, one line): change the read silent row to also require every read session's exit status, e.g.:
+
+  ```python
+  noisy = [n for n in (noise(t, c) for t, _, c in READS) if n]
+  badexit = [h for _, h, _ in READS if h != "exit0"]
+  row("read silent", "%d/%d+%d" % (...))
+  ```
+
+  cleanest one-liner: after the noisy line, add `noisy += ["exit %s" % h for _, h, _ in READS if h != "exit0"]` — reusing the same row so it stays 37 rows and "0/12" semantics... hmm, that changes the got-format. Alternatively a new 38th row "read exits". The minimal-diff faithful-to-style edit:
+
+  ```python
+  noisy = [n for n in (noise(t, c) for t, _, c in READS) if n] + \
+      ["exit status %s" % h for _, h, _ in READS if h != "exit0"]
+  ```
+
+  That folds delayed exits/crashes in ANY read session into the FLOOR silence row, keeping 37 rows. Expected effect on the mutant: 11/12 sessions report exit1 → "read silent" got "11/12" want "0/12" → FAIL → 36/37. On BASE: all exit0 → unchanged 37/37. (M_ATEXIT-print mutant: exit0 → still caught via surplus.) 
+
+  And/or disclose. The exact C mutant for the measurement I name:
+
+  ```c
+  odata = d->dmaaddr;
+  if (d->dmaaddr && !maple_ax_reg) { maple_ax_reg = 1; atexit(maple_dmaaddr_die); }
+  /* static void maple_dmaaddr_die(void) { _exit(1); } */
+  ```
+
+  Predicted: 37/37 escape (all transcripts owed-exact; marker session field==0 → exit0 ✓; the 11 nonzero-field sessions exit(1) with no row asserting how).
+
+  Hmm wait, one more check on the prediction: with _exit(1) in atexit... atexit handlers run during exit(); calling _exit inside is fine, immediate. how="exit1". ✓. Also variant `*(volatile int *)0 = 0;` → "sig11". Same escape.
+
+  **Q2 false-fail summary** (correct build): only host-pathology timing (startup > 2.5s settle → pre-prompt echoes excluded → mismatch; emulator lagging the 0.2s/command cadence → answers after quit echo → mismatch). Both inherited windows (settle/spin/0.20 unchanged); the post-quit strictness is new but BASE×3 + prior runs show it doesn't red in practice. Slow exit: no false fail (transcript sealed at quit echo; waitpid blocks). No waitpid timeout: a hung exit stalls the probe — operator-visible, not a false red.
+
+  **Q3: does the chain close?** What I checked (name them): the device fix; FROZEN6 vs regress identity (cmp); FROZEN5 identity across tables; the inlined diff fidelity; SCORES/POSTTABLE/PRETABLE consistency (17/17 on prediction, leg by leg); row count 37 and 12 read sessions; rd() EOF semantics; pty.fork channel coverage (stderr on pty); debugger_cmd_quit source (prints nothing); table-4 FROZEN4 whole-buffer scan (coverage-loss narrative true); M_ATEXIT.diff (mutant shape as described); all 12 read sessions do read DMAADDR. What I could NOT check from text/reran nothing: I did not re-run any leg (per the operational rule; Python pty doesn't exist under this Git Bash and a WSL rebuild+run is minutes) — the 17 measurements are taken from the artifacts, which are internally consistent; and the operator's concurrent run state.
+
+  Chain closes on the OUTPUT axis. The named survivor (delayed exit/crash at process exit, conditioned to miss the marker session) is on the exit-status axis: if closed by the one-line edit, then a future OUTPUT miss within the pty+window would be a BREACH of the stated contract (the contract now claims the whole transcript and late lines); a miss via >10s-delayed output or off-pty channels is OUTSIDE (disclosed). The delayed exit as it stands: I'd grade it breach-shaped against the contract's new "an atexit handler" phrase — the mechanism is named, only the print effect was measured.
+
+  **Q4: which statement is wrong?** All the load-bearing claims verified true. The one imprecise statement: "the session now reads until the pseudo-terminal reaches end-of-file after quit" — rd(10.0) returns at EOF OR after 10 s, whichever first; the transcript can therefore be sealed before EOF if the emulator outlives the cap (only when the emulator hasn't exited within 10 s — a correct build exits in milliseconds, so immaterial there, but it is the seam the >10 s delayed-output class hangs off). Also arguably: "17 exactly on prediction" — verified true against PRETABLE vs SCORES. "the comparison covers the whole output" — true modulo the pre-first-prompt prefix (excluded by find; unreachable for read-caused output). Hmm, which do I name as THE wrong statement? The most defensible single answer: the EOF claim's omitted 10 s cap. But is it "wrong"? It says "reads until the pty reaches end-of-file after quit" — in every measured run it did reach EOF; the code's actual contract is min(EOF, 10s). I'd call it imprecise rather than false. Alternative candidate: "Any extra, missing or altered line ... fails it" — true. "A clean build passes 37/37 with it" — true. Honestly, I found no false load-bearing statement; the only inaccuracy is the EOF-without-cap phrasing (and its consequence belongs to the disclosed time class). I'll answer Q4 that way: no load-bearing statement is wrong; the one imprecision is the "reads until EOF" phrasing (10 s cap omitted), plus note the exit-status sentence in the contract (covered exits) was measured only for immediate exits — as a statement about the kill table it remains literally true.
+
+  Wait, actually — let me double-check one more statement for Q4: "Four reviewers predicted, and the compile-and-measure reviewer confirmed (37/37 — the test missed it)". PRETABLE says "deepseek, kimi (CLI and substitute) and glm predicted, and Opus MEASURED 37/37" — that's 3 named + kimi counted how? "kimi (CLI and substitute)" — deepseek, kimi-CLI, kimi-substitute, glm = 4 predictors, Opus measured. ✓ consistent.
+
+  And "The change under review (below): ... A clean build passes 37/37 with it." ✓ BASE_prelaunch + BASE×3.
+
+  One more possible Q4 candidate: the header text in the diff says "`read width16', `read width8'" for "an exit keyed on ... a 16- or 8-bit access" — measured in earlier tables. Fine.
+
+  OK. Also should I double check the claim "the original defect 11/37" — HEAD = dev_dreamcast_maple.HEAD.c reinstated: 11/37 ✓.
+
+  Now — one more sanity check on my GAP reasoning: is the delayed exit REALLY not caught by "exit status" row via the marker session if keyed on nonzero? Marker session reads DMAADDR on fresh device → 0 → no registration → exit0 → row passes. ✓. And ctrl sessions don't read DMAADDR. Alias session: stores VAL_A then reads OTHER offsets → read arm of 0x04 never invoked... wait — the alias session's store32(MAPLE_DMAADDR, VAL_A) sets the field, but no 0x04 READ → atexit not registered in that session (registration is in the READ arm) → exit0. ✓ escape holds.
+
+  Also double-check that the marker session is in READS (so a mutant registering on ANY read incl. the zero-field one, e.g. unconditional, gets caught): unconditional atexit(exit_1): marker session registers → exit1 → "exit status" got exit1 want exit0 → FAIL 36/37 ✓ caught. So ONLY the conditioned variant escapes. Good — that's exactly the shape of "keyed on the consumer's partitions" mutants the contract already cares about ("an exit keyed on the value 0" is covered as immediate; its delayed dual escapes).
+
+  Alright — also sanity: my proposed one-line edit would catch it: the 11 sessions with nonzero field → how="exit1" → 11 entries in noisy → "read silent" got "11/12"... hmm wait, got-format is "%d/%d" % (len(noisy), len(READS)) → "11/12" vs want "0/12" → FAIL. And BASE: exit0 everywhere → "0/12" ✓. And it also strengthens against crash-at-exit (sig11). One line. Also should note: fold how into the silence row keeps 37 rows; alternatively add a 38th row — panel's choice; the one-liner preserves the row count and the FLOOR status of the row.
+
+  Actually hold on, one flaw in my one-liner: noisy entries are expected to be noise() return lists... `noisy = [n for n in (...) if n]` — n is a list of strings. Then `for n in noisy[:3]: print(" noise: %r" % n[:2])` — n[:2] slices. If I append strings instead of lists, n[:2] on a string gives 2 chars — cosmetic only. Fine: `noisy += [["exit status %s" % h] for _, h, _ in READS if h != "exit0"]` keeps types. Details for the author; my job is to name it.
+
+  Also, is there any OTHER uncompared output I should double-check... what about the `ctrl zlive` and ctrl sessions — not read sessions, and the read isn't invoked there. Right.
+
+  What about output produced by the read in a read session but consumed as part of an owed line... e.g., the diagnostic prints exactly "0x8c012345" BEFORE print r2's real answer: then there are TWO hex lines for one owed value → order: owed expects... echo "print r2", then value. The diagnostic printed during the STEP (before print) would insert a line between disasm and echo-print → shifts → mismatch → caught. ✓
+
+  What about a diagnostic that replaces an owed line by suppressing the real one (e.g., read arm makes print output wrong)? Value rows cover correctness; silence row covers shape. ✓
+
+  I'm confident in the analysis. Let me also spot-check `read silent`'s handling of the case where find("GXemul> ") is -1 (banner only, crash at startup): raw=t, lines from banner, body lines vs owed → mismatch/missing → noisy ✓.
+
+  One more possible Q1 hole I should honestly consider: the first prompt EXCLUSION — `t.find("GXemul> ")`. What if a read-arm diagnostic prints "\nGXemul> " EARLY...? It can't print before the first prompt. But what about a diagnostic printed DURING the session that contains "GXemul> " — find takes the FIRST occurrence which is the real first prompt (startup, before any command) ✓ no effect.
+
+  What if the emulator's first prompt differs ("GXemul> " is standard)? Measured. ✓
+
+  Done. Also the operational rule: I ran no gates; only read files and cmp/diff. I name the one measurement: the conditioned delayed-exit mutant (M_LATEXIT), expected 37/37 on FROZEN6 → confirming the escape; then the one-line probe edit, expected 36/37 (read silent 11/12) on the mutant and 37/37 on BASE.
+
+  Verdict wording: The pass's title question is about output comparison — that part closes. But the review chain question (Q3) plus the discovered survivor means the honest verdict line is GAP with the exact edit. The instructions: "VERDICT LINE FIRST (CLOSES or GAP: <exact edit>)". I'll write:
+
+  GAP: fold each read session's exit status into the FLOOR row — in maple_dmaaddr_probe.py, change `noisy = [n for n in (noise(t, c) for t, _, c in READS) if n]` to also append `["exit %s" % h]` for every READS session whose how != "exit0" (or disclose the class): an atexit/_exit registered by the read, keyed on d->dmaaddr != 0, prints nothing and passes 37/37 because only the marker session asserts how (and its read sees field 0). The output comparison itself is complete.
+
+  Then liveness token FINAL528_20260912.
+
+  Then answer the 4 questions concisely.
+
+  Also mention which premises I could not check from the text: the actual 17 runs (taken from artifacts, internally consistent, not re-run per the operational rule); the operator's in-progress run; WSL build environment. And that I verified everything else against the tree.
+
+  Q2 precise answers:
+  - Correct build false-fail: only under host pathology: (a) startup longer than settle=2.5s → echoes precede first prompt → find() excludes them → owed mismatch; (b) emulator falls behind the 0.2s/command cadence → answers land after the quit echo → misorder. Both windows pre-date this change; measured absent (BASE×3 here, plus all earlier tables). Slow exit (>10s): passes — transcript is sealed at the quit echo; waitpid has no timeout, so a hung exit stalls the probe rather than redding it.
+  - Crashed session passing: mid-session or startup crash → missing owed lines → read silent + value rows fail it; cannot pass. Crash during exit (after the quit echo) → byte-silent (no shell on the pty) → read silent passes it; caught only by the single "exit status" row if the trigger holds in that session — unconditional triggers do (measured? no — M_EXITONLY is the immediate exit; but by construction how="sig11"≠"exit0"), conditioned-on-nonzero escapes (the GAP above).
+
+  Q3: closes on the output axis modulo the named survivor. What I checked: list. A future OUTPUT miss within pty+window = breach; >10s/off-pty = outside (disclosed); the delayed exit = currently uncontracted but adjacent/breach-shaped; close or disclose.
+
+  Q4: no load-bearing statement false; the imprecise one: "reads until the pty reaches end-of-file after quit" — the code is rd(10.0), EOF or 10s cap, whichever first (material only for >10s-delayed output, which the contract's disclosed time class covers). If pressed to name a wrong statement: that one, by omission. Everything else verified.
+
+  Length: keep it tight but complete. The panel wants verdict first, token, then per-question answers. Use light markdown.
+
+• `GAP: fold every read session's exit status into the FLOOR silence row (or disclose the class) — in regress/maple_dmaaddr_probe.py, extend `noisy` with `+ [["exit %s" % h] for _, h, _ in READS if h != "exit0"]`. The **output** comparison itself is now complete; the survivor is its non-output twin on the same atexit axis: a delayed kill registered by the read, keyed on `d->dmaaddr != 0`, prints zero bytes and passes 37/37, because only the marker session asserts `how` and its read sees field 0.`
+
+  `FINAL528_20260912`
+
+  Premises checked against the tree (not just the text): the fix (`src/devices/dev_dreamcast_maple.c:557-569`, `odata = d->dmaaddr`, quiet; ENABLE sibling at 577-582); FROZEN6 `cmp`-identical to `regress/maple_dmaaddr_probe.py` *right now*; FROZEN5 identical across killtable5/6; the inlined diff is faithful; `SCORES.txt`/`POSTTABLE.out`/`PRETABLE.out` mutually consistent — 17 runs, 17 on prediction, atexit 36/37 with 12/12 surplus-after-quit, FROZEN5 37/37 escape reproduced; 37 rows and exactly 12 `rsession` calls, all 12 reading DMAADDR; `rd()` returns at once on EOF/OSError (probe lines 121-135); `pty.fork` puts stderr on the pty; `debugger_cmd_quit` prints nothing (`debugger_cmds.c:1629-1638`), so "quit owes its echo and then nothing" is source-true; FROZEN4's grammar did scan the whole post-quit buffer (the coverage-loss narrative is true). Not checked: I re-ran nothing (operational rule; no working pty under this Git Bash) — the 17 measurements are taken from the artifacts, which are internally consistent; the operator's in-progress run.
+
+  **1. Uncompared output?** None on the pty. Read-caused bytes cannot precede the first prompt (reads happen after commands), and from `find("GXemul> ")` to EOF every byte is owed-exact: surplus, altered, missing, glued, late-after-quit all fail; bare CRs fail; echo/termios tampering removes owed lines and fails. Two edges remain, both inside already-disclosed classes: output delayed past the `rd(10.0)` cap (a `sleep(11)`-then-print — bytes then hit a closed master, unobservable by *any* transcript; the disclosed "effects keyed on time" class), and off-pty channels (file, syslog — newly and correctly disclosed; I agree: a transcript oracle is defined on the operator's console).
+
+  **2. Correct build failing / crashed session passing?** False red only under host pathology: startup slower than `settle=2.5s` puts kernel-side echoes *before* the first prompt, which `find()` then excludes → owed mismatch; or the emulator falls behind the 0.2 s/command cadence and answers land after the `quit` echo → misorder. Both windows pre-date this change; measured absent (BASE ×3 here plus all earlier tables). A slow exit (>10 s) cannot false-red — the transcript is already sealed at the quit echo; note `waitpid` has no timeout, so a *hung* exit stalls the probe (operator-visible, not a red). Crashes: startup/mid-session crash → missing owed lines, fails loudly. Crash *during* exit, after the quit echo, is byte-silent (no shell on the pty) and passes `read silent`; it is caught only by the single `exit status` row when the trigger holds in the marker session. Unconditional atexit-`exit(1)`/`_exit(1)`/SIGSEGV → `how="exit1"/"sig11"` → red. But the conditioned form escapes everything: `odata = d->dmaaddr; if (d->dmaaddr && !reg) { reg = 1; atexit(die); }` with `die(){ _exit(1); }` — every nonzero-field session exits 1 with byte-clean transcripts and no row asserting `how`; the marker session reads a fresh device (field 0) so it stays `exit0`; zero session likewise. Predicted 37/37, CONTROL=OK. That is the exact dual of M_ATEXIT — same mechanism the contract now names, different effect — and #528's defect *is* a kill, so this is floor-shaped, not L1. Named measurement (not run): M_LATEXIT as above, expect 37/37 on FROZEN6; after the one-line edit, expect 36/37 (`read silent` 11/12) and BASE still 37/37.
+
+  **3. Chain closure?** On the output axis, yes — late print, glue, prompt-shaped, blank, CR, quit-line, hex, verbatim, and the FROZEN5 escape are all measured dead on the new instrument, and the superset argument in PRETABLE is sound since the pre-quit prefix is still compared line-for-line. The chain does not fully close while the delayed exit stands: it is unmeasured, undisclosed, and one step from the contract's own new phrase "an atexit handler". If you close it (one line) or disclose it, then a future output miss within the pty window is a **breach** of the stated contract; >10 s-delayed or off-pty output is **outside** it (disclosed).
+
+  **4. Wrong statement?** No load-bearing statement is false. The one imprecision: "the session now reads until the pseudo-terminal reaches end-of-file after `quit`" — the code is `rd(10.0)`: EOF *or* a 10 s cap, whichever first. Immaterial for any build that exits promptly (all 17 legs did), but it is the seam the disclosed >10 s time class hangs off, and the header's "to the pty's EOF" inherits it.
+
+To resume this session: kimi -r session_56806047-9bc1-4d14-a16f-4da7b54524ce

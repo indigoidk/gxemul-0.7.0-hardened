@@ -1,0 +1,11 @@
+GAP: change `rd(10.0)` to a blocking read until EOF (e.g., `rd(None)` if the API treats no timeout as blocking, or loop until EOF).  
+FINAL528_20260912
+
+1. **READ** from the diff: the post-`quit` read is `rd(10.0)`, a bounded read with a 10-second timeout, not a guaranteed read-to-EOF.  
+   **REASONED**: any output produced after that timeout but before process exit is not compared. Exact C change: an `atexit` handler that sleeps >10s before printing (or a slow buffered flush) would evade. The test would see no extra line because the read returned before the output. Output to non-pty channels is outside reach as stated; I do not disagree from the packet.
+
+2. **REASONED**: Yes, a correct build can fail if the emulator’s exit after `quit` takes longer than 10 seconds: the read returns on timeout, the buffer may not end with the final newline, and `noise()` requires `tail == ""`, so it reports trailing garbage. Also, if the first prompt is delayed beyond the initial read window, the transcript may be truncated. These are timing-dependent false failures.
+
+3. **REASONED**: The review chain does not close because the post-`quit` read is not actually to EOF; it is bounded. I checked the diff’s use of `rd(10.0)` against the claim “reads until EOF”. A future miss of delayed output would be a breach of the stated contract (“whole transcript … to the pty’s EOF”), not outside it.
+
+4. **READ**: The statement “the session now reads until the pseudo-terminal reaches end-of-file after `quit`” is wrong; the code uses `rd(10.0)`, a timed read, not a blocking read-to-EOF.

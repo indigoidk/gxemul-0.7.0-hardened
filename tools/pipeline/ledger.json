@@ -35356,11 +35356,437 @@
   },
   {
    "id": "mapledmaaddr",
-   "state": "open",
+   "state": "in work",
    "sev": "high",
    "opened": "2026-09-10",
    "title": "dev_dreamcast_maple.c MAPLE_DMAADDR read: the handler assigns the CORRECT value to odata and then calls exit(1), so an ordinary guest read of a register the model fully implements ends the emulator -- option-set member 4 (ACCEPT), two lines deleted",
-   "note": "FILED 2026-09-10 from the GPT-6 Astra exit audit (regress/artifacts/queuetriage/codex_exitaudit_20260910.txt), which ranked it I1/E1. VERIFIED LOCALLY by opening the file before filing.\n\nThe read arm of `case 0x04: /* MAPLE_DMAADDR */` reads, in order:\n    fatal(\"[ dreamcast_maple: TODO: read from dmaaddr ]\\n\");\n    odata = d->dmaaddr;\n    exit(1);\n**The correct value is computed and then thrown away by terminating the process.**  The WRITE arm two lines above stores `d->dmaaddr = idata', so the register is FULLY MODELLED in both directions -- a guest that writes the DMA address and reads it back, which is the ordinary way to confirm a controller programming step, is killed on the read.\n\nREACHABILITY: machine_dreamcast.c adds `dreamcast_maple' unconditionally.  Nothing has to start DMA or build a command list; the plain readback reaches it.\n\n*** THIS IS THE ACCEPT MEMBER'S TEXTBOOK SHAPE, which the option set records as member 4: the model ALREADY computes the right value and then discards it, so the disposition is to delete the kill and KEEP THE VALUE, with NO latch -- there is no event to announce, and a bounded announce would ship a wrong record in product code (an `unimplemented; ignored' message about a read that is implemented and is not ignored). ***  Two deleted lines.\n\nFAULT is not available and would be wrong anyway: memory_rw.c converts a failed device callback into an architectural access exception for MIPS and M88K ONLY, and this device sits on an SH4 machine -- but the access is implemented, so refusing it would be the wrong answer even if the machinery existed.\n\nTEST CARRIER EXISTS: regress/gdrom_default_probe.py already supplies a Dreamcast session with guest load/store helpers.  The oracle must assert that a separately STORED value reads back EXACTLY and that execution continues -- observing a zero, or a surviving debugger prompt, would be a vacuous row, since both are true of several wrong implementations.\n\nNOT MEASURED and no witness built.  The rung-3 attempt is owed before this may be recorded documented-only.\n\n*** DESIGN REVIEW 2026-09-10 (acceptclass/codex_acceptclass_20260910.txt): VERDICT IS **HOLD** THE TWO-LINE ACCEPT, AND IT REFUTED A PREMISE OF MINE.  Both points verified locally before recording. ***\n\n**MY PREMISE 'the correct value is computed and then thrown away' IS TOO GENEROUS.**  `odata` is a LOCAL.  The copy that delivers it -- `memory_writemax64(cpu, data, len, odata)' -- sits at the FUNCTION TAIL, after the switch, so `exit(1)' fires first and **the value never reaches the caller at all**.  The fix is unchanged (deleting the kill lets execution reach the tail and the value IS then delivered), but the DESCRIPTION was wrong and a wrong description gets reused.\n\n**AND THE ROUND IS HELD ON A SEMANTIC QUESTION I DID NOT ASK: what should a read of the DMA address RETURN?**  Real Maple hardware may advance a DMA cursor, in which case a post-transfer readback should give the ADVANCED cursor rather than the address the guest programmed.  The model stores only what was written.  So ACCEPT-as-stored may be shipping a plausible wrong value in place of a loud stop, which is the worse outcome and is exactly the hazard the brief's own question 2 raised about the `TODO'.  **The round owes a settled hardware contract before it may ship**, and the detector's `A.afterdma' row must take its expected value FROM THAT CONTRACT rather than from today's implementation -- with transfer evidence alongside the address readback, so that skipping DMA cannot manufacture a pass.\n\n*** THE HELD QUESTION WAS AIMED AT THE WRONG ARM, AND THE TREE ANSWERS IT ITSELF.  Found 2026-09-10 by opening the file, in under two minutes, which is what the check-do-not-judge rule is for. ***\n\nThe review held this round on *what should a read of the DMA address RETURN -- the programmed address, or an ADVANCED cursor?*, and warned that ACCEPT-as-stored might ship a plausible wrong value in place of a loud stop.  **The premise under that question is that the model stores only what was written.  IT DOES NOT.**\n\n`maple_do_dma_xfer()' walks the command list accumulating `addr += datalen_cmd * 4' and then, at its tail, immediately before asserting SYSASIC_EVENT_MAPLE_DMADONE:\n\n        // TODO: Should the DMA address be updated?\n        d->dmaaddr = addr;\n\n**So the advancing cursor is ALREADY MODELLED, and the tree flags its own uncertainty about it in a comment one line above.**  A read after a transfer would return the ADVANCED address; a read before any transfer returns the programmed one.\n\n*** WHAT THAT CHANGES: THE TWO QUESTIONS ARE ON DIFFERENT SITES AND ONLY ONE OF THEM IS THIS ROUND'S. ***  The read arm does not decide what `d->dmaaddr' holds -- it is a pure reporter of a field that `maple_do_dma_xfer()' owns.  Whether the advance is architecturally right is a PRE-EXISTING open question at a DIFFERENT site, which this round neither creates nor resolves, and deleting the read-side termination leaves it exactly where it was.  **Filed separately as [[mapledmaadvance]] rather than folded in here** -- the same discipline the sibling review applied to [[xscaleinten]], where a write-side kill on the adjacent case was ruled a separate row.\n\n**AND THE `plausible wrong value versus a loud stop' TRADE IS WEAKER THAN IT LOOKS, in two ways worth stating rather than glossing.**  The loud stop is `exit(1)' -- it ends the emulator, so nobody acts on it as a diagnostic; and the SAME unverified address is ALREADY handed to the DMA engine on every transfer, so the exposure the review is protecting against exists whether or not a guest ever reads the register back.  The read arm is the one place the value is currently NOT consumed.\n\n**THE DETECTOR CONSEQUENCE, which is the part the review was right to press on:** the after-DMA row must NOT pin the advanced value as architecturally correct, because this round has not established that.  It pins the READ ARM'S contract, which is what the diff changes -- (i) a stored value reads back exactly with no transfer in between, and (ii) the value read after a transfer DIFFERS from the programmed one, which proves the read reports the live field rather than a constant or a stale snapshot -- with transfer evidence alongside, so that a skipped DMA cannot manufacture a pass.  The advanced value's CORRECTNESS is [[mapledmaadvance]]'s to pin, and the contract paragraph says so under clause (e).\n\n*Recorded before any seat was asked, then sent for checking rather than acted on: the review that raised the hold was right that the round owed an answer, and the answer turned out to be in the file rather than in a datasheet.*\n\n*** REVIEWED 2026-09-10 (mapledmaaddr/codex_readarm_20260910.txt, GPT-6 Astra at max, ZERO cyber flags).  VERDICT: **THE READ-ARM CORRECTION MAY PROCEED INDEPENDENTLY.**  My state trace was right, my observability claim was wrong, and MY PROPOSED DETECTOR IS INSUFFICIENT. ***\n\n**THE SEPARATION HOLDS**, on a bounded basis the review stated rather than assumed: the read correction implements a separately testable rule -- *return the stored register field* -- while the cursor item decides what the transfer routine should STORE there.  The cursor policy already affects execution beyond this arm, since a subsequent transfer starts from `d->dmaaddr' and so already consumes the advanced value whether or not any guest reads it.\n\n**BUT MY FRAMING WAS TOO STRONG IN ONE PLACE, and the correction is exact:** *\"the edit does not change cursor computation\"* is correct; *\"the edit does not change the OBSERVABILITY of that computation\"* would NOT be -- a guest read that previously stopped execution can now obtain the field.  That is a new observable, and the round must say so rather than claim the diff is behaviour-preserving.\n\nTHREE CORRECTIONS TO MY OWN NOTE ABOVE, all from reading the file:\n  1. **The advance is MORE than the payload increment I quoted.**  Each descriptor advances by **8 bytes of control words + 4 bytes of command word + 4*datalen_cmd of data**, so the committed value is `C = (P + SUM(12 + 4*D_i)) mod 2^32'.  I wrote only the `4 * datalen_cmd' term.\n  2. **\"Advanced\" does not mean numerically larger** -- the sum is taken modulo 2^32, so wraparound is possible, and it is not guaranteed that `C != P'.\n  3. *** MY EARLY-EXIT CLAIM WAS WRONG. ***  I wrote that after an aborted transfer the field holds *the PROGRAMMED address*.  It holds the **ENTRY value**, which may itself be a PREVIOUS transfer's cursor -- an early return preserves what was there, it does not restore a separately retained programmed address.  Also the `!d->enable' check comes FIRST, so a disabled AND unaligned address takes the disabled return and never reaches the alignment diagnostic.\n\nWRITERS OF THE FIELD, complete for these two files: structure initialisation, the register write arm, and the DMA completion assignment.  Neither reset register clears it (`MAPLE_RESET' clears `enable'), and the tick function touches input queues only.  **The cursor is published at the TAIL, not incrementally**, and the ordinary trigger is SYNCHRONOUS -- writing 1 to `MAPLE_STATE' calls the transfer routine directly, with no scheduled DMA worker -- so no partially-advanced value can be observed.  *Scope caveat the seat raised itself: the routine calls `cpu->memory_rw', and these two files do not establish that such a callback can never re-enter device access.*\n\n*** THE DETECTOR I PROPOSED IS INSUFFICIENT, AND THIS IS THE PART THAT CHANGES THE ROUND. ***\n  * **Assertion (i), exact readback with no DMA, is passable by four wrong implementations:** a constant equal to the one test value; constant zero against an initial-zero-only test; ALIGNMENT MASKING against any test using only aligned values; and a separate snapshot of the last programmed address that never tracks DMA at all.  *Remedy: several distinct values, including nonzero HIGH bits and nonzero LOW FIVE bits, and successive writes shown to replace what reads report.  No DMA is needed for the unaligned cases.*\n  * **Assertion (ii), post-transfer inequality, proves only that the answer differs from `P'** -- satisfied by zero, by a fabricated `P + 4', by a stale cursor from an earlier transfer, and by any masked transform that still differs.  Independent DMA evidence rules out a SKIPPED transfer; it says nothing about the relationship between the returned value and the field.\n  * **THE FORM THAT WORKS:** capture the actual field value `S' immediately before the read, then assert the delivered register value equals `S' EXACTLY, that the read leaves the field unchanged, and that the access returns normally with NO read-side diagnostic.  Apply it both after ordinary programming and after an independently demonstrated transfer.\n  * *** `MAPLE_STATE == 0' IS NOT DMA EVIDENCE: its read arm always returns zero, including after an early return. ***  Use a supported command and verify a fresh expected response in a receive buffer pre-filled with distinguishable contents; a completion event alone is weaker, because the descriptor loop can reach the tail through paths that do not implement the request fully.\n  * **Candidate (c) -- keep `fatal()' and delete only `exit(1)' -- is NOT rejected by any value assertion if `fatal()' returns.  Silence and normal completion must be checked separately.**\n\nPARTITION OF THE CHANGE, exact: only `relative_addr == 0x04' in the non-write branch moves.  The changed read class includes EVERY field value and history -- initial zero, freshly programmed values, UNALIGNED values, completed-DMA cursors, values preserved by disabled or unaligned attempts, and values retained across reset writes -- with no enable or alignment condition on the corrected read.  *A syntactic subtlety worth a row's comment: the `else' also covers a direction flag equal to neither MEM_WRITE nor MEM_READ, which previously terminated and afterwards assigns `odata' and returns without serialising it.*\n\nAttachment is unconditional at `machine_dreamcast.c:149', BEFORE the `prom_emulation' early return.\n\n*** A 'SETTLED PREMISE' I GAVE THE PANEL WAS A FACT ABOUT A DIFFERENT DEVICE.  Corrected 2026-09-11 (mapledmaaddr/codex_detector_20260911.txt), verified here by opening the file. ***\n\nI wrote, as settled: *\"`odata` is computed BEFORE the offset is examined, and delivered by the common tail, so an 'ignored' read still returns the value.\"*  **That is true of `dev_wdc.c`'s alt-status handler and FALSE of this one.**  `dev_dreamcast_maple.c` initialises `odata = 0` at `:550`, assigns `odata = d->dmaaddr` **INSIDE** the `0x04` read arm, and delivers at `:638`.\n\n**THE CONSEQUENCE IS NOT COSMETIC: for Maple an ignored read returns ZERO, not the field.**  So the *decline-in-place* option here is **not** equivalent to *change nothing*, which is exactly what it WAS for the WDC row -- and I had carried that equivalence across as though it were a property of the pattern rather than of that file.\n\n*** THIS IS THE FOURTH SCOPE-TRANSFER ERROR OF THE SESSION AND THEY ARE ALL ONE SHAPE: A CLAIM VERIFIED IN ONE SCOPE, REUSED IN ANOTHER WITHOUT RE-CHECKING. ***\n  1. `#519`: the clause-(d) flow test applied correctly to `tlb_mode`, then **stopped at the array and never reached the index** -- six escapes, round re-opened.\n  2. `#519`: the `color_mode` warrant true of the arm I edited, **false of its sibling arms**.\n  3. `rlwinm`: `rlwimi`'s ordering warrant **did not transfer one call earlier**, into the decoder -- the adopted repair was inert.\n  4. here: a WDC handler's control flow **transferred to a Maple handler** that does not share it.\n\n**Each was caught by a seat or by reading, never by re-reading my own reasoning** -- which is the argument for the premise-audit opener and for naming premises as QUESTIONS rather than as settled facts.  *A premise inherited from a sibling investigation is the most dangerous kind, because it arrives already believed.*\n\n**THE DETECTOR IS VIABLE: it can distinguish all six states**, provided the read-value, DMA-response, execution and diagnostic assertions are kept **separate** rather than folded into one row.  The strict oracle is *the guest's returned 32-bit value equals an INDEPENDENTLY OBSERVED current `d->dmaaddr`* -- obtained by host-side inspection immediately before the read, and **not derived from the same path under test.**\n\n*** 2026-09-11: A SEVENTH CAUSE OF A ZERO-BYTE CODEX ANSWER: TRANSPORT, AND IT DEMANDS THE OPPOSITE RESPONSE FROM THE ONE THE RECORD WOULD HAVE GIVEN IT. ***\n\n`regress/artifacts/mapledmaaddr/codex_detector_20260911.txt` is ZERO BYTES with a 213 KB `.err`.  The staging review was about to file it under the two-refusals rule -- *\"if it refuses twice, commit both zero-byte files as the record and stop\"*.  **It never refused.**  Its `.err` ends:\n\n    ERROR: Reconnecting... 2/5\n    ERROR: Reconnecting... 3/5\n    ERROR: Reconnecting... 4/5\n\nand the content immediately before that is ordinary substantive analysis, mid-sentence, of the probe's `dma alias` row.  **The seat was answering and the connection died under it.**\n\nTHE SIX CAUSES ALREADY ON RECORD -- terminal refusal, quota wall, still in flight, cp1252 decode death, auth revocation, and `rc=-1` with the answer in the `.err` -- **none fits.**  There is no cyber flag at the tail, no quota text, the process exited, the decode is fine, auth is live (other codex jobs answered in the same window), and `rc` was 0.\n\n> **THE DISCRIMINATOR IS THE `.err` TAIL: `Reconnecting... N/5` MEANS TRANSPORT, AND A TRANSPORT FAILURE IS RE-FIRED IMMEDIATELY.**  A refusal is the seat declining the SUBJECT, so re-firing the same brief buys nothing and the two-refusals rule exists to stop you paying twice for it.  A transport drop is content-independent -- *the seat had no opinion about the brief at all* -- so re-firing is the correct and only response.\n\n**WHY THE MISFILING WOULD HAVE BEEN EXPENSIVE RATHER THAN UNTIDY:** filing it as a refusal would have recorded *\"codex declines the Maple subject\"* -- a durable, false fact about a SEAT, of exactly the kind this project has repeatedly had to un-learn (\"it was never the seat, it was the brief\", the kimi substitute left unfired for days, minimax written off for a week).  **A seat wrongly recorded as refusing a subject is a seat nobody fires again.**\n\n*This is the daemon-rule's shape one transport up: a WALL is the seat refusing and you wait it out; a REFUSED CONNECTION is the transport being absent and one command fixes it.  Codex has now shown the second kind, and its `.err` says so in as many words -- which is why the standing rule is CHECK THE `.err`, NOT THE SIZE.*\n\nRe-fired as `codex_detector_RETRY_20260911`.  **Both files are kept**: 21 zero-byte codex answers are already tracked, all `codex_*`, including a committed failed-retry PAIR at `crimewidthkill/codex_witness_20260910.txt` + `..._RETRY_...`.  The zero-byte file IS the record of the loss, and now carries its cause.\n\n*** THE TRANSPORT CLASS ABOVE IS REFUTED BY ITS OWN INSTANCE.  I WROTE IT HOURS AGO AND THE ANSWER LANDED COMPLETE. ***\n\n`codex_detector_20260911.txt` is **16,624 bytes**, carries its liveness token, and ends in a finished sentence.  **It was never lost.**  And the `Reconnecting... N/5` lines I keyed on sit at `.err` lines **3821-3823 of 3976** -- *155 lines from the end, not at the tail*.  The CLI reconnected and carried on.\n\n**SO THE DIAGNOSIS WAS EXACTLY BACKWARDS: the seat had an opinion about the brief, delivered it, and I recorded that it had none.**  The zero bytes I read were the NORMAL MID-RUN STATE of a direct `codex exec` -- whose shell creates the redirect target at launch, so **0 bytes means started-and-running**, which is the discriminator I had written into `codexfarm.py` myself earlier the same session.\n\n> *** THIS IS THE SECOND TIME TODAY I READ A MID-RUN FILE AS A DEAD JOB, AND THE FIRST TIME COST A COMPLETED 12,032-BYTE ANSWER. ***  The structural fix I built covers `codexfarm` jobs, which now carry a `.RUNNING` sentinel.  **This job was a direct `codex exec` with a shell redirect and has no sentinel** -- so the fix did not reach the case, and I applied the wrong rule again to the one shape it does not cover.\n\n**WHAT SURVIVES, and it is narrow:** a genuinely dead transport is still distinguishable, and the `codexfarm.py` check I added tests the **LAST EIGHT LINES** plus an empty answer.  Here the reconnects are 155 lines from the end, so **that check would correctly NOT have fired** -- it is narrower than the prose I wrote around it, and the prose was the defective half.\n\n**THE CORRECTED RULE: `Reconnecting... N/5` ANYWHERE IN A `.err` MEANS THE CLI HIT NETWORK TROUBLE, NOT THAT THE JOB DIED.**  It is diagnostic of nothing on its own.  What decides liveness is the same thing it always was: **the job has not notified yet** -- the harness tracks background jobs and reports on exit, and that signal was available and unconsulted both times.\n\n*A correction is not safer than the thing it corrects: this one minted a class from a single instance, exactly as this project's own freshly-minted-exemplar rule warns, and the instance refuted it four minutes later.  The retry fired at a DIFFERENT path, so nothing was clobbered -- the path discipline held where the reasoning did not, and the retry is kept as an independent second answer on one brief rather than cancelled.*\n\n**THE ANSWER ITSELF REPORTS A FINDING WORTH THE ROUND:** *\"A detector can separate the six states, but one 'settled' premise is false in the specified source.\"*  Unharvested; that is the next step on this row.\n\n*** 2026-09-11 -- **CORRECTING THE TEMPLATE DOES NOT CORRECT THE BRIEFS ALREADY ON DISK**, AND I FIRED THE UNCORRECTED ONE TWICE TODAY. ***\n\nThe brief's settled-premises block said *\"`odata` is computed BEFORE the offset is examined, and delivered by the common tail (`if (writeflag == MEM_READ) data[0] = odata;`), so an 'ignored' read still returns the value.\"*  **True of `dev_wdc.c`.  FALSE of this device.**\n\n`dev_dreamcast_maple.c:550` initialises `uint64_t idata = 0, odata = 0;`; the `0x04` arm assigns inside itself; the value returns through `memory_writemax64()` at `:637`.  **There is no `data[0] = odata` tail here, so deleting the assignment returns ZERO rather than the live value** -- which inverts what the oracle must look for.  Verified by opening the file.\n\n*** THE CHAIN IS THE FINDING, AND IT IS NEW. ***\n  1. The error was made -- a premise carried from `dev_wdc.c` to a device that does not share it.\n  2. It was CAUGHT, and recorded as **instance #4 in `tools/BRIEF_TEMPLATE.md`'s scope-transfer table (`:253`), naming this exact device and this exact premise.**\n  3. **The BRIEF was never corrected.**\n  4. I fired that brief today.  Twice -- the original and a retry.\n  5. The seat caught the same error again, independently, from the source.\n\n> **A TEMPLATE GOVERNS BRIEFS WRITTEN *FROM* IT.  IT DOES NOT REACH BRIEFS ALREADY WRITTEN.**  Recording a scope-transfer instance in the template closes the class for FUTURE briefs and leaves the originating brief on disk, loaded, refutable, and re-fireable.\n\n*This is the carrier's own thesis landing on the one artifact it holds up as the piece of prose that demonstrably works: the premise-audit block fires because it lives where the decision happens.  It does -- for a brief being WRITTEN.  The decision to RE-FIRE an existing brief happens somewhere else entirely, and nothing was watching there.*\n\n**REMEDY APPLIED: the brief is corrected IN PLACE, quoting what it refutes** (the retry now running had already read the old text, so this stops the third firing rather than the second).  **The general form -- when a scope-transfer instance is recorded in the template, correct the brief it came from in the same edit -- is a one-line habit and belongs in the template's own §C block.**\n\nAND THE ANSWER'S DESIGN CONTENT STANDS, with four vacuity findings stated against NAMED mutants rather than universally: post-transfer inequality is **insufficient** (many wrong values satisfy it); the unaligned-disabled retry is **vacuous for enable-guard deletion** (alignment refusal preserves the same entry value); **silence alone is vacuous** (no execution also produces no diagnostic); and a fresh expected response is **vacuous for a read-arm-only value mutant** (it establishes DMA execution; the address row carries the value rejection).  Weakenings: (a) DIFFERENT, (c) DIFFERENT, (d) DIFFERENT, and **(b) EQUIVALENT for the `0x04` contract but DIFFERENT for the whole callback** -- `W(04,1); R(10)` returns 0 originally and 1 after the hoist, caught by an `other zero` row.\n\n*Method note: my first grep for the premise in the brief returned ZERO and I nearly reported the brief clean -- the text is `` `odata` is computed `` and the backticks broke the pattern.  `grep -F` with a denominator found it at lines 39-40.  The pattern-that-matched-nothing trap, inside the check for a different error.*\n\n*** 2026-09-11 -- **THE RETRY REPLICATES THE REFUTATION INDEPENDENTLY (badge `s`)**. ***\n\nThe re-fire (18,024 b, `codex_detector_RETRY_20260911.txt`) reaches the same verdict from the same three files in a separate invocation: *\"The two-line fix is sound.  A strong detector can compare readback with an independent observation of the live field, without endorsing the cursor arithmetic.  **One 'settled' premise is false in this checkout.**\"*\n\n**So my `odata` premise is refuted TWICE, independently.**  Badged `s` -- SAME-MODEL replication, which this project's doctrine ranks below two-family agreement and forbids passing off as it.  *It is still worth more than one answer: the two runs did not share a process, and the second was fired before I had corrected the brief, so both read the identical defective packet and both caught it.*\n\n**AND THE RETRY ANSWERS THE QUESTION I MOST WANTED:** the detector can pin the read arm's contract **by comparing readback against an INDEPENDENT observation of the live field**, *\"without endorsing the cursor arithmetic\"* -- i.e. without certifying that the advanced value is architecturally right, which is a separate open question with no local documentation.  That is exactly the separation the contract paragraph needs.\n\n*The duplicate firing was caused by my own misdiagnosis and cost one extra invocation.  Recorded honestly: it bought a replication, but it was not bought deliberately, and a replication chosen on purpose would have gone to a DIFFERENT family.*"
+   "note": "FILED 2026-09-10 from the GPT-6 Astra exit audit (regress/artifacts/queuetriage/codex_exitaudit_20260910.txt), which ranked it I1/E1. VERIFIED LOCALLY by opening the file before filing.\n\nThe read arm of `case 0x04: /* MAPLE_DMAADDR */` reads, in order:\n    fatal(\"[ dreamcast_maple: TODO: read from dmaaddr ]\\n\");\n    odata = d->dmaaddr;\n    exit(1);\n**The correct value is computed and then thrown away by terminating the process.**  The WRITE arm two lines above stores `d->dmaaddr = idata', so the register is FULLY MODELLED in both directions -- a guest that writes the DMA address and reads it back, which is the ordinary way to confirm a controller programming step, is killed on the read.\n\nREACHABILITY: machine_dreamcast.c adds `dreamcast_maple' unconditionally.  Nothing has to start DMA or build a command list; the plain readback reaches it.\n\n*** THIS IS THE ACCEPT MEMBER'S TEXTBOOK SHAPE, which the option set records as member 4: the model ALREADY computes the right value and then discards it, so the disposition is to delete the kill and KEEP THE VALUE, with NO latch -- there is no event to announce, and a bounded announce would ship a wrong record in product code (an `unimplemented; ignored' message about a read that is implemented and is not ignored). ***  Two deleted lines.\n\nFAULT is not available and would be wrong anyway: memory_rw.c converts a failed device callback into an architectural access exception for MIPS and M88K ONLY, and this device sits on an SH4 machine -- but the access is implemented, so refusing it would be the wrong answer even if the machinery existed.\n\nTEST CARRIER EXISTS: regress/gdrom_default_probe.py already supplies a Dreamcast session with guest load/store helpers.  The oracle must assert that a separately STORED value reads back EXACTLY and that execution continues -- observing a zero, or a surviving debugger prompt, would be a vacuous row, since both are true of several wrong implementations.\n\nNOT MEASURED and no witness built.  The rung-3 attempt is owed before this may be recorded documented-only.\n\n*** DESIGN REVIEW 2026-09-10 (acceptclass/codex_acceptclass_20260910.txt): VERDICT IS **HOLD** THE TWO-LINE ACCEPT, AND IT REFUTED A PREMISE OF MINE.  Both points verified locally before recording. ***\n\n**MY PREMISE 'the correct value is computed and then thrown away' IS TOO GENEROUS.**  `odata` is a LOCAL.  The copy that delivers it -- `memory_writemax64(cpu, data, len, odata)' -- sits at the FUNCTION TAIL, after the switch, so `exit(1)' fires first and **the value never reaches the caller at all**.  The fix is unchanged (deleting the kill lets execution reach the tail and the value IS then delivered), but the DESCRIPTION was wrong and a wrong description gets reused.\n\n**AND THE ROUND IS HELD ON A SEMANTIC QUESTION I DID NOT ASK: what should a read of the DMA address RETURN?**  Real Maple hardware may advance a DMA cursor, in which case a post-transfer readback should give the ADVANCED cursor rather than the address the guest programmed.  The model stores only what was written.  So ACCEPT-as-stored may be shipping a plausible wrong value in place of a loud stop, which is the worse outcome and is exactly the hazard the brief's own question 2 raised about the `TODO'.  **The round owes a settled hardware contract before it may ship**, and the detector's `A.afterdma' row must take its expected value FROM THAT CONTRACT rather than from today's implementation -- with transfer evidence alongside the address readback, so that skipping DMA cannot manufacture a pass.\n\n*** THE HELD QUESTION WAS AIMED AT THE WRONG ARM, AND THE TREE ANSWERS IT ITSELF.  Found 2026-09-10 by opening the file, in under two minutes, which is what the check-do-not-judge rule is for. ***\n\nThe review held this round on *what should a read of the DMA address RETURN -- the programmed address, or an ADVANCED cursor?*, and warned that ACCEPT-as-stored might ship a plausible wrong value in place of a loud stop.  **The premise under that question is that the model stores only what was written.  IT DOES NOT.**\n\n`maple_do_dma_xfer()' walks the command list accumulating `addr += datalen_cmd * 4' and then, at its tail, immediately before asserting SYSASIC_EVENT_MAPLE_DMADONE:\n\n        // TODO: Should the DMA address be updated?\n        d->dmaaddr = addr;\n\n**So the advancing cursor is ALREADY MODELLED, and the tree flags its own uncertainty about it in a comment one line above.**  A read after a transfer would return the ADVANCED address; a read before any transfer returns the programmed one.\n\n*** WHAT THAT CHANGES: THE TWO QUESTIONS ARE ON DIFFERENT SITES AND ONLY ONE OF THEM IS THIS ROUND'S. ***  The read arm does not decide what `d->dmaaddr' holds -- it is a pure reporter of a field that `maple_do_dma_xfer()' owns.  Whether the advance is architecturally right is a PRE-EXISTING open question at a DIFFERENT site, which this round neither creates nor resolves, and deleting the read-side termination leaves it exactly where it was.  **Filed separately as [[mapledmaadvance]] rather than folded in here** -- the same discipline the sibling review applied to [[xscaleinten]], where a write-side kill on the adjacent case was ruled a separate row.\n\n**AND THE `plausible wrong value versus a loud stop' TRADE IS WEAKER THAN IT LOOKS, in two ways worth stating rather than glossing.**  The loud stop is `exit(1)' -- it ends the emulator, so nobody acts on it as a diagnostic; and the SAME unverified address is ALREADY handed to the DMA engine on every transfer, so the exposure the review is protecting against exists whether or not a guest ever reads the register back.  The read arm is the one place the value is currently NOT consumed.\n\n**THE DETECTOR CONSEQUENCE, which is the part the review was right to press on:** the after-DMA row must NOT pin the advanced value as architecturally correct, because this round has not established that.  It pins the READ ARM'S contract, which is what the diff changes -- (i) a stored value reads back exactly with no transfer in between, and (ii) the value read after a transfer DIFFERS from the programmed one, which proves the read reports the live field rather than a constant or a stale snapshot -- with transfer evidence alongside, so that a skipped DMA cannot manufacture a pass.  The advanced value's CORRECTNESS is [[mapledmaadvance]]'s to pin, and the contract paragraph says so under clause (e).\n\n*Recorded before any seat was asked, then sent for checking rather than acted on: the review that raised the hold was right that the round owed an answer, and the answer turned out to be in the file rather than in a datasheet.*\n\n*** REVIEWED 2026-09-10 (mapledmaaddr/codex_readarm_20260910.txt, GPT-6 Astra at max, ZERO cyber flags).  VERDICT: **THE READ-ARM CORRECTION MAY PROCEED INDEPENDENTLY.**  My state trace was right, my observability claim was wrong, and MY PROPOSED DETECTOR IS INSUFFICIENT. ***\n\n**THE SEPARATION HOLDS**, on a bounded basis the review stated rather than assumed: the read correction implements a separately testable rule -- *return the stored register field* -- while the cursor item decides what the transfer routine should STORE there.  The cursor policy already affects execution beyond this arm, since a subsequent transfer starts from `d->dmaaddr' and so already consumes the advanced value whether or not any guest reads it.\n\n**BUT MY FRAMING WAS TOO STRONG IN ONE PLACE, and the correction is exact:** *\"the edit does not change cursor computation\"* is correct; *\"the edit does not change the OBSERVABILITY of that computation\"* would NOT be -- a guest read that previously stopped execution can now obtain the field.  That is a new observable, and the round must say so rather than claim the diff is behaviour-preserving.\n\nTHREE CORRECTIONS TO MY OWN NOTE ABOVE, all from reading the file:\n  1. **The advance is MORE than the payload increment I quoted.**  Each descriptor advances by **8 bytes of control words + 4 bytes of command word + 4*datalen_cmd of data**, so the committed value is `C = (P + SUM(12 + 4*D_i)) mod 2^32'.  I wrote only the `4 * datalen_cmd' term.\n  2. **\"Advanced\" does not mean numerically larger** -- the sum is taken modulo 2^32, so wraparound is possible, and it is not guaranteed that `C != P'.\n  3. *** MY EARLY-EXIT CLAIM WAS WRONG. ***  I wrote that after an aborted transfer the field holds *the PROGRAMMED address*.  It holds the **ENTRY value**, which may itself be a PREVIOUS transfer's cursor -- an early return preserves what was there, it does not restore a separately retained programmed address.  Also the `!d->enable' check comes FIRST, so a disabled AND unaligned address takes the disabled return and never reaches the alignment diagnostic.\n\nWRITERS OF THE FIELD, complete for these two files: structure initialisation, the register write arm, and the DMA completion assignment.  Neither reset register clears it (`MAPLE_RESET' clears `enable'), and the tick function touches input queues only.  **The cursor is published at the TAIL, not incrementally**, and the ordinary trigger is SYNCHRONOUS -- writing 1 to `MAPLE_STATE' calls the transfer routine directly, with no scheduled DMA worker -- so no partially-advanced value can be observed.  *Scope caveat the seat raised itself: the routine calls `cpu->memory_rw', and these two files do not establish that such a callback can never re-enter device access.*\n\n*** THE DETECTOR I PROPOSED IS INSUFFICIENT, AND THIS IS THE PART THAT CHANGES THE ROUND. ***\n  * **Assertion (i), exact readback with no DMA, is passable by four wrong implementations:** a constant equal to the one test value; constant zero against an initial-zero-only test; ALIGNMENT MASKING against any test using only aligned values; and a separate snapshot of the last programmed address that never tracks DMA at all.  *Remedy: several distinct values, including nonzero HIGH bits and nonzero LOW FIVE bits, and successive writes shown to replace what reads report.  No DMA is needed for the unaligned cases.*\n  * **Assertion (ii), post-transfer inequality, proves only that the answer differs from `P'** -- satisfied by zero, by a fabricated `P + 4', by a stale cursor from an earlier transfer, and by any masked transform that still differs.  Independent DMA evidence rules out a SKIPPED transfer; it says nothing about the relationship between the returned value and the field.\n  * **THE FORM THAT WORKS:** capture the actual field value `S' immediately before the read, then assert the delivered register value equals `S' EXACTLY, that the read leaves the field unchanged, and that the access returns normally with NO read-side diagnostic.  Apply it both after ordinary programming and after an independently demonstrated transfer.\n  * *** `MAPLE_STATE == 0' IS NOT DMA EVIDENCE: its read arm always returns zero, including after an early return. ***  Use a supported command and verify a fresh expected response in a receive buffer pre-filled with distinguishable contents; a completion event alone is weaker, because the descriptor loop can reach the tail through paths that do not implement the request fully.\n  * **Candidate (c) -- keep `fatal()' and delete only `exit(1)' -- is NOT rejected by any value assertion if `fatal()' returns.  Silence and normal completion must be checked separately.**\n\nPARTITION OF THE CHANGE, exact: only `relative_addr == 0x04' in the non-write branch moves.  The changed read class includes EVERY field value and history -- initial zero, freshly programmed values, UNALIGNED values, completed-DMA cursors, values preserved by disabled or unaligned attempts, and values retained across reset writes -- with no enable or alignment condition on the corrected read.  *A syntactic subtlety worth a row's comment: the `else' also covers a direction flag equal to neither MEM_WRITE nor MEM_READ, which previously terminated and afterwards assigns `odata' and returns without serialising it.*\n\nAttachment is unconditional at `machine_dreamcast.c:149', BEFORE the `prom_emulation' early return.\n\n*** A 'SETTLED PREMISE' I GAVE THE PANEL WAS A FACT ABOUT A DIFFERENT DEVICE.  Corrected 2026-09-11 (mapledmaaddr/codex_detector_20260911.txt), verified here by opening the file. ***\n\nI wrote, as settled: *\"`odata` is computed BEFORE the offset is examined, and delivered by the common tail, so an 'ignored' read still returns the value.\"*  **That is true of `dev_wdc.c`'s alt-status handler and FALSE of this one.**  `dev_dreamcast_maple.c` initialises `odata = 0` at `:550`, assigns `odata = d->dmaaddr` **INSIDE** the `0x04` read arm, and delivers at `:638`.\n\n**THE CONSEQUENCE IS NOT COSMETIC: for Maple an ignored read returns ZERO, not the field.**  So the *decline-in-place* option here is **not** equivalent to *change nothing*, which is exactly what it WAS for the WDC row -- and I had carried that equivalence across as though it were a property of the pattern rather than of that file.\n\n*** THIS IS THE FOURTH SCOPE-TRANSFER ERROR OF THE SESSION AND THEY ARE ALL ONE SHAPE: A CLAIM VERIFIED IN ONE SCOPE, REUSED IN ANOTHER WITHOUT RE-CHECKING. ***\n  1. `#519`: the clause-(d) flow test applied correctly to `tlb_mode`, then **stopped at the array and never reached the index** -- six escapes, round re-opened.\n  2. `#519`: the `color_mode` warrant true of the arm I edited, **false of its sibling arms**.\n  3. `rlwinm`: `rlwimi`'s ordering warrant **did not transfer one call earlier**, into the decoder -- the adopted repair was inert.\n  4. here: a WDC handler's control flow **transferred to a Maple handler** that does not share it.\n\n**Each was caught by a seat or by reading, never by re-reading my own reasoning** -- which is the argument for the premise-audit opener and for naming premises as QUESTIONS rather than as settled facts.  *A premise inherited from a sibling investigation is the most dangerous kind, because it arrives already believed.*\n\n**THE DETECTOR IS VIABLE: it can distinguish all six states**, provided the read-value, DMA-response, execution and diagnostic assertions are kept **separate** rather than folded into one row.  The strict oracle is *the guest's returned 32-bit value equals an INDEPENDENTLY OBSERVED current `d->dmaaddr`* -- obtained by host-side inspection immediately before the read, and **not derived from the same path under test.**\n\n*** 2026-09-11: A SEVENTH CAUSE OF A ZERO-BYTE CODEX ANSWER: TRANSPORT, AND IT DEMANDS THE OPPOSITE RESPONSE FROM THE ONE THE RECORD WOULD HAVE GIVEN IT. ***\n\n`regress/artifacts/mapledmaaddr/codex_detector_20260911.txt` is ZERO BYTES with a 213 KB `.err`.  The staging review was about to file it under the two-refusals rule -- *\"if it refuses twice, commit both zero-byte files as the record and stop\"*.  **It never refused.**  Its `.err` ends:\n\n    ERROR: Reconnecting... 2/5\n    ERROR: Reconnecting... 3/5\n    ERROR: Reconnecting... 4/5\n\nand the content immediately before that is ordinary substantive analysis, mid-sentence, of the probe's `dma alias` row.  **The seat was answering and the connection died under it.**\n\nTHE SIX CAUSES ALREADY ON RECORD -- terminal refusal, quota wall, still in flight, cp1252 decode death, auth revocation, and `rc=-1` with the answer in the `.err` -- **none fits.**  There is no cyber flag at the tail, no quota text, the process exited, the decode is fine, auth is live (other codex jobs answered in the same window), and `rc` was 0.\n\n> **THE DISCRIMINATOR IS THE `.err` TAIL: `Reconnecting... N/5` MEANS TRANSPORT, AND A TRANSPORT FAILURE IS RE-FIRED IMMEDIATELY.**  A refusal is the seat declining the SUBJECT, so re-firing the same brief buys nothing and the two-refusals rule exists to stop you paying twice for it.  A transport drop is content-independent -- *the seat had no opinion about the brief at all* -- so re-firing is the correct and only response.\n\n**WHY THE MISFILING WOULD HAVE BEEN EXPENSIVE RATHER THAN UNTIDY:** filing it as a refusal would have recorded *\"codex declines the Maple subject\"* -- a durable, false fact about a SEAT, of exactly the kind this project has repeatedly had to un-learn (\"it was never the seat, it was the brief\", the kimi substitute left unfired for days, minimax written off for a week).  **A seat wrongly recorded as refusing a subject is a seat nobody fires again.**\n\n*This is the daemon-rule's shape one transport up: a WALL is the seat refusing and you wait it out; a REFUSED CONNECTION is the transport being absent and one command fixes it.  Codex has now shown the second kind, and its `.err` says so in as many words -- which is why the standing rule is CHECK THE `.err`, NOT THE SIZE.*\n\nRe-fired as `codex_detector_RETRY_20260911`.  **Both files are kept**: 21 zero-byte codex answers are already tracked, all `codex_*`, including a committed failed-retry PAIR at `crimewidthkill/codex_witness_20260910.txt` + `..._RETRY_...`.  The zero-byte file IS the record of the loss, and now carries its cause.\n\n*** THE TRANSPORT CLASS ABOVE IS REFUTED BY ITS OWN INSTANCE.  I WROTE IT HOURS AGO AND THE ANSWER LANDED COMPLETE. ***\n\n`codex_detector_20260911.txt` is **16,624 bytes**, carries its liveness token, and ends in a finished sentence.  **It was never lost.**  And the `Reconnecting... N/5` lines I keyed on sit at `.err` lines **3821-3823 of 3976** -- *155 lines from the end, not at the tail*.  The CLI reconnected and carried on.\n\n**SO THE DIAGNOSIS WAS EXACTLY BACKWARDS: the seat had an opinion about the brief, delivered it, and I recorded that it had none.**  The zero bytes I read were the NORMAL MID-RUN STATE of a direct `codex exec` -- whose shell creates the redirect target at launch, so **0 bytes means started-and-running**, which is the discriminator I had written into `codexfarm.py` myself earlier the same session.\n\n> *** THIS IS THE SECOND TIME TODAY I READ A MID-RUN FILE AS A DEAD JOB, AND THE FIRST TIME COST A COMPLETED 12,032-BYTE ANSWER. ***  The structural fix I built covers `codexfarm` jobs, which now carry a `.RUNNING` sentinel.  **This job was a direct `codex exec` with a shell redirect and has no sentinel** -- so the fix did not reach the case, and I applied the wrong rule again to the one shape it does not cover.\n\n**WHAT SURVIVES, and it is narrow:** a genuinely dead transport is still distinguishable, and the `codexfarm.py` check I added tests the **LAST EIGHT LINES** plus an empty answer.  Here the reconnects are 155 lines from the end, so **that check would correctly NOT have fired** -- it is narrower than the prose I wrote around it, and the prose was the defective half.\n\n**THE CORRECTED RULE: `Reconnecting... N/5` ANYWHERE IN A `.err` MEANS THE CLI HIT NETWORK TROUBLE, NOT THAT THE JOB DIED.**  It is diagnostic of nothing on its own.  What decides liveness is the same thing it always was: **the job has not notified yet** -- the harness tracks background jobs and reports on exit, and that signal was available and unconsulted both times.\n\n*A correction is not safer than the thing it corrects: this one minted a class from a single instance, exactly as this project's own freshly-minted-exemplar rule warns, and the instance refuted it four minutes later.  The retry fired at a DIFFERENT path, so nothing was clobbered -- the path discipline held where the reasoning did not, and the retry is kept as an independent second answer on one brief rather than cancelled.*\n\n**THE ANSWER ITSELF REPORTS A FINDING WORTH THE ROUND:** *\"A detector can separate the six states, but one 'settled' premise is false in the specified source.\"*  Unharvested; that is the next step on this row.\n\n*** 2026-09-11 -- **CORRECTING THE TEMPLATE DOES NOT CORRECT THE BRIEFS ALREADY ON DISK**, AND I FIRED THE UNCORRECTED ONE TWICE TODAY. ***\n\nThe brief's settled-premises block said *\"`odata` is computed BEFORE the offset is examined, and delivered by the common tail (`if (writeflag == MEM_READ) data[0] = odata;`), so an 'ignored' read still returns the value.\"*  **True of `dev_wdc.c`.  FALSE of this device.**\n\n`dev_dreamcast_maple.c:550` initialises `uint64_t idata = 0, odata = 0;`; the `0x04` arm assigns inside itself; the value returns through `memory_writemax64()` at `:637`.  **There is no `data[0] = odata` tail here, so deleting the assignment returns ZERO rather than the live value** -- which inverts what the oracle must look for.  Verified by opening the file.\n\n*** THE CHAIN IS THE FINDING, AND IT IS NEW. ***\n  1. The error was made -- a premise carried from `dev_wdc.c` to a device that does not share it.\n  2. It was CAUGHT, and recorded as **instance #4 in `tools/BRIEF_TEMPLATE.md`'s scope-transfer table (`:253`), naming this exact device and this exact premise.**\n  3. **The BRIEF was never corrected.**\n  4. I fired that brief today.  Twice -- the original and a retry.\n  5. The seat caught the same error again, independently, from the source.\n\n> **A TEMPLATE GOVERNS BRIEFS WRITTEN *FROM* IT.  IT DOES NOT REACH BRIEFS ALREADY WRITTEN.**  Recording a scope-transfer instance in the template closes the class for FUTURE briefs and leaves the originating brief on disk, loaded, refutable, and re-fireable.\n\n*This is the carrier's own thesis landing on the one artifact it holds up as the piece of prose that demonstrably works: the premise-audit block fires because it lives where the decision happens.  It does -- for a brief being WRITTEN.  The decision to RE-FIRE an existing brief happens somewhere else entirely, and nothing was watching there.*\n\n**REMEDY APPLIED: the brief is corrected IN PLACE, quoting what it refutes** (the retry now running had already read the old text, so this stops the third firing rather than the second).  **The general form -- when a scope-transfer instance is recorded in the template, correct the brief it came from in the same edit -- is a one-line habit and belongs in the template's own §C block.**\n\nAND THE ANSWER'S DESIGN CONTENT STANDS, with four vacuity findings stated against NAMED mutants rather than universally: post-transfer inequality is **insufficient** (many wrong values satisfy it); the unaligned-disabled retry is **vacuous for enable-guard deletion** (alignment refusal preserves the same entry value); **silence alone is vacuous** (no execution also produces no diagnostic); and a fresh expected response is **vacuous for a read-arm-only value mutant** (it establishes DMA execution; the address row carries the value rejection).  Weakenings: (a) DIFFERENT, (c) DIFFERENT, (d) DIFFERENT, and **(b) EQUIVALENT for the `0x04` contract but DIFFERENT for the whole callback** -- `W(04,1); R(10)` returns 0 originally and 1 after the hoist, caught by an `other zero` row.\n\n*Method note: my first grep for the premise in the brief returned ZERO and I nearly reported the brief clean -- the text is `` `odata` is computed `` and the backticks broke the pattern.  `grep -F` with a denominator found it at lines 39-40.  The pattern-that-matched-nothing trap, inside the check for a different error.*\n\n*** 2026-09-11 -- **THE RETRY REPLICATES THE REFUTATION INDEPENDENTLY (badge `s`)**. ***\n\nThe re-fire (18,024 b, `codex_detector_RETRY_20260911.txt`) reaches the same verdict from the same three files in a separate invocation: *\"The two-line fix is sound.  A strong detector can compare readback with an independent observation of the live field, without endorsing the cursor arithmetic.  **One 'settled' premise is false in this checkout.**\"*\n\n**So my `odata` premise is refuted TWICE, independently.**  Badged `s` -- SAME-MODEL replication, which this project's doctrine ranks below two-family agreement and forbids passing off as it.  *It is still worth more than one answer: the two runs did not share a process, and the second was fired before I had corrected the brief, so both read the identical defective packet and both caught it.*\n\n**AND THE RETRY ANSWERS THE QUESTION I MOST WANTED:** the detector can pin the read arm's contract **by comparing readback against an INDEPENDENT observation of the live field**, *\"without endorsing the cursor arithmetic\"* -- i.e. without certifying that the advanced value is architecturally right, which is a separate open question with no local documentation.  That is exactly the separation the contract paragraph needs.\n\n*The duplicate firing was caused by my own misdiagnosis and cost one extra invocation.  Recorded honestly: it bought a replication, but it was not bought deliberately, and a replication chosen on purpose would have gone to a DIFFERENT family.*",
+   "entries": [
+    {
+     "seat": "codex",
+     "phase": "design",
+     "d": "ACCEPT-DETECTOR-EQ4-ESCAPE",
+     "date": "2026-09-12",
+     "grade": "MANUAL",
+     "ev": "panel dir _scratchpad/panel_20260912_123520_maplepass1, codex.txt (copy: regress/artifacts/mapledmaaddr/panel_20260912_123520_maplepass1)",
+     "note": "1,274,352 b; answer at the tail.  ACCEPT.  Named `if (d->dmaaddr == 0x04) exit(1)` as a (d) operand swap escaping every documented fixture (Fable: clause (e), taken as the L1 row `read four`); the DMA leg is needed only against a last-programmed-address shadow; the other-register read and read-interval silence must survive into the detector."
+    },
+    {
+     "seat": "grok",
+     "phase": "design",
+     "d": "ACCEPT-HOIST-REWORD-ESCAPES",
+     "date": "2026-09-12",
+     "grade": "MANUAL",
+     "ev": "panel dir _scratchpad/panel_20260912_123520_maplepass1, grok.txt (copy: regress/artifacts/mapledmaaddr/panel_20260912_123520_maplepass1)",
+     "note": "10,803 b.  ACCEPT, `break` into the common tail, never `return`.  The brief's detector passed by hoisting `odata = d->dmaaddr` above the switch and by a reworded fatal(); premise 2 (a third writeflag) FALSE."
+    },
+    {
+     "seat": "glm",
+     "phase": "design",
+     "d": "ACCEPT-READ-SIDE-EFFECT-ROW",
+     "date": "2026-09-12",
+     "grade": "MANUAL",
+     "ev": "panel dir _scratchpad/panel_20260912_123520_maplepass1, ollama_glm.txt (copy: regress/artifacts/mapledmaaddr/panel_20260912_123520_maplepass1)",
+     "note": "7,326 b, packet-fed.  ACCEPT; nothing forbade a read that mutates the field (-> `double read`); argued the DMA leg FLOOR (overruled: the shadow is a new lvalue outside the BOUND)."
+    },
+    {
+     "seat": "deepseek",
+     "phase": "design",
+     "d": "ACCEPT",
+     "date": "2026-09-12",
+     "grade": "MANUAL",
+     "ev": "panel dir _scratchpad/panel_20260912_123520_maplepass1, ollama_deepseek.txt (copy: regress/artifacts/mapledmaaddr/panel_20260912_123520_maplepass1)",
+     "note": "2,002 b, packet-fed.  ACCEPT; its 'value never computed' reading is wrong on this tree (fatal() returns) and was honestly flagged uncheckable; its `else if (writeflag == MEM_READ)` 'wrong fix' is EQUIVALENT (Fable)."
+    },
+    {
+     "seat": "minimax",
+     "phase": "design",
+     "d": "ACCEPT",
+     "date": "2026-09-12",
+     "grade": "MANUAL",
+     "ev": "panel dir _scratchpad/panel_20260912_123520_maplepass1, ollama_minimax.txt (copy: regress/artifacts/mapledmaaddr/panel_20260912_123520_maplepass1)",
+     "note": "6,567 b, packet-fed.  ACCEPT; named read-side-effect bugs as the closest gap."
+    },
+    {
+     "seat": "kimi",
+     "phase": "design",
+     "d": "ACCEPT-DMA-LEG-DECIDES-CURSOR",
+     "date": "2026-09-12",
+     "grade": "MANUAL",
+     "ev": "panel dir _scratchpad/panel_20260912_123520_maplepass1, kimi.txt (copy: regress/artifacts/mapledmaaddr/panel_20260912_123520_maplepass1)",
+     "note": "71,435 b (CLI).  ACCEPT.  The DMA leg as specified would DECIDE the cursor row unless its expected value comes from an independent oracle -- the refusal message printing the live field; named the shadow mutant exactly."
+    },
+    {
+     "seat": "kimi",
+     "phase": "design",
+     "d": "ACCEPT",
+     "date": "2026-09-12",
+     "grade": "MANUAL",
+     "ev": "panel dir _scratchpad/panel_20260912_123520_maplepass1, ollama_kimi.txt (copy: regress/artifacts/mapledmaaddr/panel_20260912_123520_maplepass1)",
+     "note": "5,593 b, kimi-k3:cloud substitute (PACKET-FED)."
+    },
+    {
+     "seat": "agy",
+     "phase": "design",
+     "d": "MEASURED-WITNESS",
+     "date": "2026-09-12",
+     "grade": "CONFIRMED",
+     "ev": "regress/artifacts/mapledmaaddr/agy_maple_witness_20260912.py, witness_committed.out (4/12), witness_fix.out (12/12), fix.diff, agy_witness_report_20260912.md",
+     "note": "FIRED FOR MEASUREMENT (the rung-3 witness), not for reading.  Built both scratch clones, [gxemul -nt source] PASS for each; committed 4/12 at 12:43:56, fix 12/12 at 12:45:03, same script; liveness + device-signature controls green in both.  SEC never written."
+    },
+    {
+     "seat": "opus5",
+     "phase": "design",
+     "d": "ACCEPT-THREE-ESCAPES-DMA-COVERAGE",
+     "date": "2026-09-12",
+     "grade": "CONFIRMED",
+     "ev": "regress/artifacts/mapledmaaddr/opus_pass1_20260912.md",
+     "note": "Read-only.  ACCEPT; FAULT on SH4 is a silent load-skip (memory_rw.c has no MEM_SH arm; cpu_sh_instr.c returns before the register write).  Three escapes of the brief's condensed detector: `return 0` (needs POISONED destinations), a reworded/latched announce (needs interval silence), the hoist (needs `other read`).  DMA leg = coverage of the cursor row."
+    },
+    {
+     "seat": "fable5",
+     "phase": "design",
+     "d": "ADJUDICATED-FLOOR-RULED",
+     "date": "2026-09-12",
+     "grade": "CONFIRMED",
+     "ev": "regress/artifacts/mapledmaaddr/fable_pass1_20260912.md",
+     "note": "Fable 5.1, fired LAST, verified by its own model name (claude-fable-5-1).  ACCEPT 9/9.  Floor = poisoned accept cell + interval silence + other read + survival/exit; value-keyed rows (zero, 4, all-ones, double read) clause (e) taken as L1; the DMA leg deferred to mapledmaadvance with a no-row sentence; the witness admissible, its literal `read quiet` row NOT to be inherited.  Owed: the carrier's member-5 clause gains 'nor SH, where the idiom silently skips the load' (filed -- tools/CLAUDE.md carries an earlier session's unreviewed delta)."
+    },
+    {
+     "seat": "codex",
+     "phase": "review",
+     "d": "SURVIVORS-ALIAS-TOKEN-CONTRACT",
+     "date": "2026-09-12",
+     "grade": "MANUAL",
+     "ev": "panel dir _scratchpad/panel_20260912_131634_maplepass2, codex.txt (copy: regress/artifacts/mapledmaaddr/panel_20260912_131634_maplepass2)",
+     "note": "162,985 b; answer at the tail.  Named the single-bit selector aliases (`& ~0x08/0x20/0x40`, killed in table 2 as M_ALIAS08/20/40), the literal-keyed silence row, and two CONTRACT overclaims (masking, 'never one literal')."
+    },
+    {
+     "seat": "grok",
+     "phase": "review",
+     "d": "SURVIVOR-AND4",
+     "date": "2026-09-12",
+     "grade": "MANUAL",
+     "ev": "panel dir _scratchpad/panel_20260912_131634_maplepass2, grok.txt (copy: regress/artifacts/mapledmaaddr/panel_20260912_131634_maplepass2)",
+     "note": "9,051 b.  SURVIVOR `if (relative_addr & 4) relative_addr = 0x04;` -- `other read` pinned RESET2 only (M_AND4, killed 23/29 in table 2)."
+    },
+    {
+     "seat": "kimi",
+     "phase": "review",
+     "d": "SURVIVORS-WIDTH-FAMILY",
+     "date": "2026-09-12",
+     "grade": "MANUAL",
+     "ev": "panel dir _scratchpad/panel_20260912_131634_maplepass2, kimi.txt (copy: regress/artifacts/mapledmaaddr/panel_20260912_131634_maplepass2)",
+     "note": "91,400 b (CLI).  SURVIVORS inside (d): a width-gated exit (`len != 4`, M_LEN) led a family; the literal silence key."
+    },
+    {
+     "seat": "kimi",
+     "phase": "review",
+     "d": "SURVIVOR-LEN",
+     "date": "2026-09-12",
+     "grade": "MANUAL",
+     "ev": "panel dir _scratchpad/panel_20260912_131634_maplepass2, ollama_kimi.txt (copy: regress/artifacts/mapledmaaddr/panel_20260912_131634_maplepass2)",
+     "note": "4,629 b, kimi-k3:cloud substitute (PACKET-FED).  SURVIVOR `if (len != 4)` exit; swept operand swaps, arm merges, post-read mutation; named constant-across-rows predicates (len, machine, total-read counter) as the open seam."
+    },
+    {
+     "seat": "glm",
+     "phase": "review",
+     "d": "SURVIVORS-LEN-TOKEN-LABEL",
+     "date": "2026-09-12",
+     "grade": "MANUAL",
+     "ev": "panel dir _scratchpad/panel_20260912_131634_maplepass2, ollama_glm.txt (copy: regress/artifacts/mapledmaaddr/panel_20260912_131634_maplepass2)",
+     "note": "6,650 b, packet-fed (seat check CHECK: no verdict token -- the answer opens `**SURVIVOR` and was read in full).  Three: `len != 4` exit, a reworded diagnostic without the device string, `case 0x04: case 0x08:`."
+    },
+    {
+     "seat": "deepseek",
+     "phase": "review",
+     "d": "SURVIVOR-EQUIVALENT",
+     "date": "2026-09-12",
+     "grade": "MANUAL",
+     "ev": "panel dir _scratchpad/panel_20260912_131634_maplepass2, ollama_deepseek.txt (copy: regress/artifacts/mapledmaaddr/panel_20260912_131634_maplepass2)",
+     "note": "1,683 b, packet-fed (seat check CHECK: no verdict token -- opens `SURVIVOR:`, read in full).  Moving the assignment out of the `else` -- REJECTED as a survivor: EQUIVALENT (the tail consumes odata only on MEM_READ); disclosed."
+    },
+    {
+     "seat": "minimax",
+     "phase": "review",
+     "d": "SURVIVORS-THREE",
+     "date": "2026-09-12",
+     "grade": "MANUAL",
+     "ev": "panel dir _scratchpad/panel_20260912_131634_maplepass2, ollama_minimax.txt (copy: regress/artifacts/mapledmaaddr/panel_20260912_131634_maplepass2)",
+     "note": "6,828 b, packet-fed.  fatal() under a never-true value predicate (clause (e), disclosed), the else-hoist (EQUIVALENT), a label widened onto an untested offset (rowed: `other 0x..`)."
+    },
+    {
+     "seat": "agy",
+     "phase": "review",
+     "d": "NOT-FIRED",
+     "date": "2026-09-12",
+     "grade": "MANUAL",
+     "ev": "panel dir _scratchpad/panel_20260912_131634_maplepass2, SEATS.txt (copy: regress/artifacts/mapledmaaddr/panel_20260912_131634_maplepass2)",
+     "note": "DELIBERATELY NOT FIRED (measurement reservation)."
+    },
+    {
+     "seat": "opus5",
+     "phase": "review",
+     "d": "SURVIVORS-MEASURED-7",
+     "date": "2026-09-12",
+     "grade": "CONFIRMED",
+     "ev": "regress/artifacts/mapledmaaddr/opus_pass2_20260912/OPUS_REPORT.md",
+     "note": "Measuring seat, scratch clone.  SEVEN mutants MEASURED 16/16 and each proven non-equivalent by a discriminator: declines and exits keyed on the consumer's partitions (`d->dmaaddr & 0x1f`, `!d->enable`), a third-read counter, a width exit, a token-free diagnostic.  All seven killed in kill table 2 (25 legs, zero escapes)."
+    },
+    {
+     "seat": "codex",
+     "phase": "review",
+     "d": "HOLD-CASE00-HEXDIAG-JOINT",
+     "date": "2026-09-12",
+     "grade": "MANUAL",
+     "ev": "panel dir _scratchpad/panel_20260912_143959_mapleadjud, codex.txt (copy: regress/artifacts/mapledmaaddr/panel_20260912_143959_mapleadjud)",
+     "note": "281,455 b.  HOLD: survivors `case 0x00:` (FLOOR -- drops the selector's SET bit), `fatal(\"0x%08x\\n\", ...)` (a grammar is a whitelist of SHAPES; executed the parser on synthetic transcripts), `} else if (!d->enable || (d->dmaaddr & 0x1f)) {` (joint, (e)).  D1 upheld as (e).  All three killed in kill table 3."
+    },
+    {
+     "seat": "kimi",
+     "phase": "review",
+     "d": "REFINE-SUBWORD-ALIASES",
+     "date": "2026-09-12",
+     "grade": "MANUAL",
+     "ev": "panel dir _scratchpad/panel_20260912_143959_mapleadjud, kimi.txt (copy: regress/artifacts/mapledmaaddr/panel_20260912_143959_mapleadjud)",
+     "note": "118,420 b (CLI).  `& ~0x01` / `& ~0x02` survive: mov.b at 0x05 and mov.w at 0x06 REACH the device, so the contract's 'SH4 address error before the device' was true for mov.l only (L4, corrected).  Also len == 1, counter > 3, sibling-state writes.  Killed in table 3 (M_ALIAS01/02, M_LEN1, M_SIBLING); counter > 3 disclosed."
+    },
+    {
+     "seat": "kimi",
+     "phase": "review",
+     "d": "REFINE-ALIASES-BITS01",
+     "date": "2026-09-12",
+     "grade": "MANUAL",
+     "ev": "panel dir _scratchpad/panel_20260912_143959_mapleadjud, ollama_kimi.txt (copy: regress/artifacts/mapledmaaddr/panel_20260912_143959_mapleadjud)",
+     "note": "6,087 b, kimi-k3:cloud substitute (PACKET-FED).  Same bits-0/1 finding by reading the packet's offsets alone."
+    },
+    {
+     "seat": "grok",
+     "phase": "review",
+     "d": "UPHOLD-D1-BLANKDIAG-STALE",
+     "date": "2026-09-12",
+     "grade": "MANUAL",
+     "ev": "panel dir _scratchpad/panel_20260912_143959_mapleadjud, grok.txt (copy: regress/artifacts/mapledmaaddr/panel_20260912_143959_mapleadjud)",
+     "note": "8,752 b.  D1 upheld ((e): 'M_ALIGNDECLINE is M_BIT30 with a different mask'); F1's warrant overturned as applied to the aliases; the stale `dreamcast_maple` probe comment (L4, fixed); and a predicted survivor `fatal(\"\\n\");` -- READ LATE (omitted from table 3's PRETABLE by my summary), disposed of in-round: killed in targeted kill table 4."
+    },
+    {
+     "seat": "glm",
+     "phase": "review",
+     "d": "GRADES-OUTSIDE-BOUND",
+     "date": "2026-09-12",
+     "grade": "MANUAL",
+     "ev": "panel dir _scratchpad/panel_20260912_143959_mapleadjud, ollama_glm.txt (copy: regress/artifacts/mapledmaaddr/panel_20260912_143959_mapleadjud)",
+     "note": "6,858 b, packet-fed.  F3 / F4-enable / F5 are EXTENSIONS of (e) -- outside the BOUND -- not applications of it; three of four alias rows L1.  Contract wording adopted."
+    },
+    {
+     "seat": "deepseek",
+     "phase": "review",
+     "d": "F4-GRADE-WRONG",
+     "date": "2026-09-12",
+     "grade": "MANUAL",
+     "ev": "panel dir _scratchpad/panel_20260912_143959_mapleadjud, ollama_deepseek.txt (copy: regress/artifacts/mapledmaaddr/panel_20260912_143959_mapleadjud)",
+     "note": "1,923 b, packet-fed.  F4's grade wrong; D1 overturned in part; no survivor provable from the packet."
+    },
+    {
+     "seat": "minimax",
+     "phase": "review",
+     "d": "F5-OUTSIDE-BOUND",
+     "date": "2026-09-12",
+     "grade": "MANUAL",
+     "ev": "panel dir _scratchpad/panel_20260912_143959_mapleadjud, ollama_minimax.txt (copy: regress/artifacts/mapledmaaddr/panel_20260912_143959_mapleadjud)",
+     "note": "5,413 b, packet-fed.  F5 wrong -- the counter is not a body-read operand, so (e) does not apply: outside the BOUND."
+    },
+    {
+     "seat": "agy",
+     "phase": "review",
+     "d": "NOT-FIRED",
+     "date": "2026-09-12",
+     "grade": "MANUAL",
+     "ev": "panel dir _scratchpad/panel_20260912_143959_mapleadjud, SEATS.txt (copy: regress/artifacts/mapledmaaddr/panel_20260912_143959_mapleadjud)",
+     "note": "DELIBERATELY NOT FIRED (measurement reservation)."
+    },
+    {
+     "seat": "codex",
+     "phase": "review",
+     "d": "SEAT-FAILURE-CONTENT-FILTER",
+     "date": "2026-09-12",
+     "grade": "MANUAL",
+     "ev": "panel dir _scratchpad/panel_20260912_190504, codex.txt (copy: regress/artifacts/mapledmaaddr/panel_20260912_190504)",
+     "note": "129,638 b -- NOT AN ANSWER: the seat read the probe and killtable5's SCORES, then its output ends twice in 'This content was flagged for possible cybersecurity risk'.  A SEAT FAILURE, never agreement; to be re-fired on a reworded brief (the xscale round's first codex wording was refused the same way and a rephrase answered)."
+    },
+    {
+     "seat": "grok",
+     "phase": "review",
+     "d": "CLOSES-DEFERRED-OUTSIDE-CONTRACT",
+     "date": "2026-09-12",
+     "grade": "MANUAL",
+     "ev": "panel dir _scratchpad/panel_20260912_190504, grok.txt (copy: regress/artifacts/mapledmaaddr/panel_20260912_190504)",
+     "note": "8,985 b (seat check CHECK: no verdict token -- the answer carries **CLOSES** and was read in full).  Premises checked against the tree; atexit / non-pty FILE graded OUTSIDE the contract as written.  Overruled on the time axis: the contract as written was the defect (Opus MEASURED the survivor; table 4's whole-buffer oracle had covered it)."
+    },
+    {
+     "seat": "kimi",
+     "phase": "review",
+     "d": "SURVIVOR-ATEXIT",
+     "date": "2026-09-12",
+     "grade": "MANUAL",
+     "ev": "panel dir _scratchpad/panel_20260912_190504, kimi.txt (copy: regress/artifacts/mapledmaaddr/panel_20260912_190504)",
+     "note": "150,983 b (CLI).  SURVIVOR: a diagnostic registered with atexit on the first read prints after the pre-quit snapshot; closure: compare the FULL buffer through EOF with the quit echo modelled.  Adopted (kill table 6)."
+    },
+    {
+     "seat": "kimi",
+     "phase": "review",
+     "d": "SURVIVOR-ATEXIT",
+     "date": "2026-09-12",
+     "grade": "MANUAL",
+     "ev": "panel dir _scratchpad/panel_20260912_190504, ollama_kimi.txt (copy: regress/artifacts/mapledmaaddr/panel_20260912_190504)",
+     "note": "6,189 b, kimi-k3:cloud substitute (PACKET-FED).  The same survivor from the packet alone: 'the attack moved from shape to time, because the oracle's window ends at SNAP'."
+    },
+    {
+     "seat": "glm",
+     "phase": "review",
+     "d": "SURVIVOR-ATEXIT-TIGHTENING-FALSE",
+     "date": "2026-09-12",
+     "grade": "MANUAL",
+     "ev": "panel dir _scratchpad/panel_20260912_190504, ollama_glm.txt (copy: regress/artifacts/mapledmaaddr/panel_20260912_190504)",
+     "note": "256,557 b -- a THINKING BURN recovered by panel_ollama.py (think=False retry, 126,074 chars), packet-fed.  SURVIVOR atexit, with the flip condition stated; and the PRETABLE's 'strict tightening' claim is false on the time axis (table 4 scanned the whole buffer).  Both adopted."
+    },
+    {
+     "seat": "deepseek",
+     "phase": "review",
+     "d": "SURVIVOR-ATEXIT",
+     "date": "2026-09-12",
+     "grade": "MANUAL",
+     "ev": "panel dir _scratchpad/panel_20260912_190504, ollama_deepseek.txt (copy: regress/artifacts/mapledmaaddr/panel_20260912_190504)",
+     "note": "2,857 b, packet-fed (seat check CHECK: no verdict token -- opens `SURVIVOR:`, read in full).  atexit(diag) after the copy; stderr named as not checkable from the packet (Opus: the pty carries stderr, unbuffered -- live, caught)."
+    },
+    {
+     "seat": "minimax",
+     "phase": "review",
+     "d": "CLOSES-DEFERRED-OUTSIDE-CONTRACT",
+     "date": "2026-09-12",
+     "grade": "MANUAL",
+     "ev": "panel dir _scratchpad/panel_20260912_190504, ollama_minimax.txt (copy: regress/artifacts/mapledmaaddr/panel_20260912_190504)",
+     "note": "8,908 b, packet-fed.  CLOSES for in-window output; atexit / late flush / off-pty channels named and graded outside the contract.  Overruled on atexit as for grok; the off-pty channel disclosed in the header."
+    },
+    {
+     "seat": "agy",
+     "phase": "review",
+     "d": "NOT-FIRED",
+     "date": "2026-09-12",
+     "grade": "MANUAL",
+     "ev": "panel dir _scratchpad/panel_20260912_190504, SEATS.txt (copy: regress/artifacts/mapledmaaddr/panel_20260912_190504)",
+     "note": "DELIBERATELY NOT FIRED (measurement reservation)."
+    },
+    {
+     "seat": "opus5",
+     "phase": "review",
+     "d": "SURVIVOR-ATEXIT-MEASURED",
+     "date": "2026-09-12",
+     "grade": "CONFIRMED",
+     "ev": "regress/artifacts/mapledmaaddr/opus_close_20260912/OPUS_REPORT.md",
+     "note": "Measuring seat, scratch clone /tmp/gxopus528 (restored cmp-CLEAN, SEC never written).  BASE 37/37; M_LIVE (the same diagnostic during the read) 36/37, read silent 12/12; M_ATEXIT (deferred to exit) 37/37 -- and non-equivalent, MEASURED: the line prints after `GXemul> quit`.  Graded a breach of the floor, not outside it; prescribed modelling the quit echo and reading to EOF.  Adopted verbatim as kill table 6's M_ATEXIT."
+    },
+    {
+     "seat": "codex",
+     "phase": "review",
+     "d": "GAP-DISASM-EOF-EXITSTATUS",
+     "date": "2026-09-12",
+     "grade": "MANUAL",
+     "ev": "panel dir _scratchpad/panel_20260912_201452, codex.txt (copy: regress/artifacts/mapledmaaddr/panel_20260912_201452)",
+     "note": "200,021 b -- ANSWERED on the reworded (plain test-engineering) brief after the previous pass's content-filter refusal.  GAP: disassembly lines compared on address + opcode only (a disassembler swap prints anything after them -- M_DISASMHOOK); rd(10.0)'s timeout ignored, so 'to EOF' was false; exit status read in one session (`if (d->dmaaddr == 4) atexit(abort);' -- M_ABORTAT4).  Ran the matcher in isolation.  All three repaired (table 7)."
+    },
+    {
+     "seat": "grok",
+     "phase": "review",
+     "d": "CLOSES",
+     "date": "2026-09-12",
+     "grade": "MANUAL",
+     "ev": "panel dir _scratchpad/panel_20260912_201452, grok.txt (copy: regress/artifacts/mapledmaaddr/panel_20260912_201452)",
+     "note": "6,690 b (seat check CHECK: no verdict token -- carries **CLOSES**, read in full).  Checked the probe, the read arm, fatal()/va_debug and the quit path against the tree.  Overruled by the measured exit-status survivor."
+    },
+    {
+     "seat": "kimi",
+     "phase": "review",
+     "d": "GAP-EXIT-AT-QUIT-FLOOR",
+     "date": "2026-09-12",
+     "grade": "MANUAL",
+     "ev": "panel dir _scratchpad/panel_20260912_201452, kimi.txt (copy: regress/artifacts/mapledmaaddr/panel_20260912_201452)",
+     "note": "131,943 b (CLI).  GAP: `_exit(1)' at exit keyed on a nonzero field -- every such session exits 1 with a byte-clean transcript; 'the exact dual of M_ATEXIT ... floor-shaped, not L1'; and the 10 s cap is the seam.  Both repaired."
+    },
+    {
+     "seat": "kimi",
+     "phase": "review",
+     "d": "GAP-BOUNDED-DRAIN",
+     "date": "2026-09-12",
+     "grade": "MANUAL",
+     "ev": "panel dir _scratchpad/panel_20260912_201452, ollama_kimi.txt (copy: regress/artifacts/mapledmaaddr/panel_20260912_201452)",
+     "note": "5,797 b, kimi-k3:cloud substitute (PACKET-FED).  GAP: the drain is rd(10.0), not EOF, and nothing asserts how the child ended -- assert EOF and exit 0 for the twelve read sessions.  Adopted as written (unclean())."
+    },
+    {
+     "seat": "glm",
+     "phase": "review",
+     "d": "CLOSES-WITH-CORNER",
+     "date": "2026-09-12",
+     "grade": "MANUAL",
+     "ev": "panel dir _scratchpad/panel_20260912_201452, ollama_glm.txt (copy: regress/artifacts/mapledmaaddr/panel_20260912_201452)",
+     "note": "302,896 b, packet-fed (a long reasoning answer; verdict at the tail).  CLOSES on the measured scope, naming the >10 s delayed exit handler as the corner and 'loop to EOF, or disclose the bound' as the edit.  Repaired (EOF)."
+    },
+    {
+     "seat": "deepseek",
+     "phase": "review",
+     "d": "GAP-BOUNDED-READ",
+     "date": "2026-09-12",
+     "grade": "MANUAL",
+     "ev": "panel dir _scratchpad/panel_20260912_201452, ollama_deepseek.txt (copy: regress/artifacts/mapledmaaddr/panel_20260912_201452)",
+     "note": "1,609 b, packet-fed (seat check CHECK: opens `GAP:`, read in full).  rd(10.0) is bounded; an exit handler sleeping past it would evade -- M_SLOWATEXIT4, repaired by the EOF check."
+    },
+    {
+     "seat": "minimax",
+     "phase": "review",
+     "d": "CLOSES",
+     "date": "2026-09-12",
+     "grade": "MANUAL",
+     "ev": "panel dir _scratchpad/panel_20260912_201452, ollama_minimax.txt (copy: regress/artifacts/mapledmaaddr/panel_20260912_201452)",
+     "note": "5,033 b, packet-fed.  CLOSES; listed what the packet could not settle.  Overruled by the measured survivors."
+    },
+    {
+     "seat": "agy",
+     "phase": "review",
+     "d": "NOT-FIRED",
+     "date": "2026-09-12",
+     "grade": "MANUAL",
+     "ev": "panel dir _scratchpad/panel_20260912_201452, SEATS.txt (copy: regress/artifacts/mapledmaaddr/panel_20260912_201452)",
+     "note": "DELIBERATELY NOT FIRED (measurement reservation)."
+    },
+    {
+     "seat": "opus5",
+     "phase": "review",
+     "d": "GAP-MEASURED-EXIT-AND-TICK-WINDOW",
+     "date": "2026-09-12",
+     "grade": "CONFIRMED",
+     "ev": "regress/artifacts/mapledmaaddr/opus_final_20260912/OPUS_REPORT.md",
+     "note": "Measuring seat, three runs in /tmp/gxopus528f (restored cmp-CLEAN).  11 mutants + 3 BASE over channel x timing x exit.  MEASURED survivors: M_EXITATQUIT / M_ABORTATQUIT 37/37 (exit status read in one session) -- repaired, REPAIR_HOW measured 36/37; M_TICKPERIODIC4 37/37 (a session spans ~3 device ticks: the first-step tick + two cpu_run_deinit() ticks) -- no finite test closes it: DISCLOSED as a window.  Caught: stderr, no-newline stdout, buffered printf at exit, tick deferrals of 1-3.  Named the shutdown-tick coupling; refuted the 'what is left' sentence a second time; withdrew its own earlier load-sensitivity claim for this version."
+    },
+    {
+     "seat": "fable5",
+     "phase": "review",
+     "d": "HOLD-CLASS-CLOSURE-GRADES-RULED",
+     "date": "2026-09-12",
+     "grade": "CONFIRMED",
+     "ev": "regress/artifacts/mapledmaaddr/fable_pass2_20260912.md (verbatim; brief _scratchpad/brief_maple_fable_p2_20260912.md)",
+     "note": "Fable 5.1, fired LAST as a subagent pinned to model fable, READ-ONLY (gate 10 running); opened by naming itself claude-fable-5-1 (verified) and quoting CHECKPOINT.md's first line.  Evidence basis: 7/7 scriptable seats on both passes + Opus + four kill tables.  HOLD: the fix stands; the silence oracle does not close -- predicted `fatal(\"GXemul> \")` (glued onto the next prompt line) and `fatal(\"GXemul> quit\\n\")` (the count's exemption) to sweep the 35-row instrument; the THIRD pass of one class, so the repair owes the CLASS CLOSURE (pre-quit snapshot, exact owed transcript, zero exemptions) -> kill table 5.  Grades: selector reads FLOOR on the eight-cell single-bit generating set (case 0x00 FLOOR); the alignment decline an in-bound value cell (e), enable/counter/len outside the enumeration (e) -- the header's single sentence was an L4; clause (e) is the contract, not a category.  Targeted table 4 VALID on its superset warrant."
+    },
+    {
+     "seat": "fable5",
+     "phase": "review",
+     "d": "CLOSES-TABLE7-OWN-PRESCRIPTION-WRONG",
+     "date": "2026-09-12",
+     "grade": "CONFIRMED",
+     "ev": "regress/artifacts/mapledmaaddr/fable_close_20260912.md (verbatim; brief _scratchpad/brief_maple_fable_close_20260912.md)",
+     "note": "Fable 5.1, fired LAST, READ-ONLY (gate 10 concurrent); opened by naming itself claude-fable-5-1 (verified).  CLOSES on table 7 (21/21 on prediction): no survivor inside the stated contract; the channel x timing x exit enumeration complete and each disposition right; the emulated-time window DISCLOSED (forced: no terminal event in emulated time) with its bound verified in cpu.c / MAPLE_TICK_SHIFT.  Grades: exit-at-exit, atexit announce, disassembly text -- FLOOR, L1; bounded read -- completeness, L1; tick window -- (e).  Proportion: ~two avoidable tables (4, 5).  Its own pass-2 snapshot prescription recorded as the round's one wrong disposition of substance.  Filed: a no-DMAADDR silence-control session for the shutdown-tick coupling."
+    }
+   ],
+   "witness": "probe:regress/artifacts/mapledmaaddr/agy_maple_witness_20260912.py -- rung 3, cold debugger, UNMODIFIED -E dreamcast, guest mov.l through decode.  RED on the committed build (4/12, 12:43:56: the host dies on the first MAPLE_DMAADDR read with the TODO text) and GREEN on the fix (12/12, 12:45:03), same script, committed leg FIRST; liveness and device-signature (MAPLE_SPEED mask) controls green in both."
   },
   {
    "id": "xscaleinten",
@@ -36127,6 +36553,26 @@
    "opened": "2026-09-11",
    "title": "a probe row that tests a SLOW-PATH fix with a MULTI-ACCESS instruction is vacuous from the second access onward -- the first cold access WARMS the page and every later access takes the FAST path, so the row cannot observe a slow-path mutant at all",
    "note": "*** MEASURED 2026-09-11 by the kimi seat on `#524` pass D, and INDEPENDENTLY SUSPECTED by glm from\nthe same table without knowing the cause. ***  Cited: `_scratchpad/panel_20260911_193940/kimi.txt`\nand `ollama_glm.txt`.\n\n`#524` fixes the SLOW path of `arm_pop`/`arm_push` (the fast path already masked the address).  A\nclosure row was built as `LDMIA r0!,{r1,r2}` from a cold page at residue 2, asserting BOTH loaded\nregisters -- one leg, three assertions, deliberately cheap.\n\n**THE SECOND ASSERTION CANNOT FAIL.**  The first access misses and goes through the slow path,\nwhich is what the row is for -- *and in doing so it WARMS THE PAGE*.  The second register's access\nthen takes the FAST path, which the fix does not touch and a slow-path mutant does not alter.\nkimi demonstrated it with a mutant that deviates at the second access and still left that row\nGREEN; glm reached the same place from the other end, calling the published kill table\n*\"internally impossible as stated\"* because a row it expected to red did not.\n\n**IT IS THE CHANNEL CHECK'S OWN SHAPE -- *a row whose named channel cannot vary under its named\nmutant is vacuous BY CONSTRUCTION* -- and it is knowable at WRITING time**, which is the point of\nthat check.  I missed it because I reasoned about the ARITHMETIC of the second access (which is\ngenuinely different) and not about WHICH PATH SERVICES IT.\n\n*** WHY IT IS A CLASS AND NOT A ONE-OFF: the cheap way to get more assertions per session is to\nload or store MORE REGISTERS, and that is exactly the edit that silently moves every assertion\nafter the first onto the fast path. ***  Any round fixing a slow path -- and this tree has several\n-- will find the same bargain attractive and inherit the same vacuity.\n\n**THE RULE THAT FOLLOWS: a row testing a SLOW-PATH repair must drive ONE access per cold page.**\nMore assertions mean more sessions, not more registers.  Where a multi-register transfer is wanted\nfor its own sake (register-list-length coverage), its later assertions are FAST-path observations\nand must be labelled as such rather than counted as slow-path coverage.\n\nCENSUS OWED, and it must key on what DEFINES the class rather than a correlate: not *\"does the\nprobe use a multi-register instruction\"* but *\"does an assertion after the first in one session\nclaim to observe a SLOW-PATH property\"*.  See [[armbdt]], [[probereadalign]]."
+  },
+  {
+   "id": "silencewhitelist",
+   "state": "open",
+   "sev": "LOW",
+   "opened": "2026-09-12",
+   "title": "silence rows keyed on a literal or a quiet grammar are whitelists with a shape to hide in",
+   "note": "Filed from #528 (mapledmaaddr), whose floor-graded silence row went through seven oracles, each of the first six swept by a diagnostic in a legal shape or a later interval.  The closure is an exact owed transcript computed from the commands (regress/maple_dmaaddr_probe.py owed()/disasm_line()/noise()/unclean(): the whole session through EOF, every line in full, EOF and exit 0 required).  Census other regress/*_probe.py silence rows and their grades.  Owed by no shipped round.",
+   "witness": "none",
+   "entries": [
+    {
+     "seat": "fable5",
+     "phase": "design",
+     "d": "FILED-FROM-528",
+     "date": "2026-09-12",
+     "grade": "CONFIRMED",
+     "ev": "regress/artifacts/mapledmaaddr/fable_pass2_20260912.md (verbatim; brief _scratchpad/brief_maple_fable_p2_20260912.md)",
+     "note": "The class named by the flagship adjudication of #528: 'a silence oracle built as a whitelist has, by construction, a shape to hide in'.  Census not yet run."
+    }
+   ]
   }
  ],
  "state_semantics": {

@@ -1,0 +1,49 @@
+SURVIVOR: in `src/devices/dev_dreamcast_maple.c`, case `0x04` read arm, replace  
+`odata = d->dmaaddr;`  
+with  
+`odata = d->dmaaddr; atexit(diag);`  
+where `diag` prints `"[ maple: DMAADDR read ]\n"` at process exit.  
+`CLOSE528_20260912`
+
+---
+
+**1. Is there a diagnostic or edit the exact-transcript oracle cannot see?**  
+Yes.  
+**Exact C text:**  
+```c
+case 0x04:
+    odata = d->dmaaddr;
+    atexit(diag);
+    break;
+```
+with `void diag(void) { printf("[ maple: DMAADDR read ]\n"); }`
+
+**Transcript produced:** the pre-`quit` snapshot is exactly the owed quiet transcript. The diagnostic appears only after `quit` is typed, i.e. after `SNAP` is taken. `noise()` never sees it.  
+**Reachable from a C edit to this arm?** Yes — `atexit` is a standard C call, and the edit is local to the read arm.  
+**Could a row observe it?** No current row checks post-`quit` output. `exit status` checks only the exit code, not stdout/stderr after snapshot.  
+**REASONED** — from the packet’s own description of `SNAP` being taken before `quit`.
+
+A second variant: `fprintf(stderr, "[ maple: DMAADDR read ]\n");` if the pty capture does not include stderr. The packet does not state whether stderr is captured, so this is **not checkable from the packet**; the single fact that would settle it is whether the pty fd receives stderr.
+
+---
+
+**2. Is the oracle itself sound?**  
+Not fully.  
+**False red under load:** the snapshot is taken after a tail window (`rd(spin if i == len(cmds) - 1 else 0.20)`). If the last command’s output has not fully arrived — e.g. a disassembly line or prompt is split or delayed — `noise()` will report a missing line. The brief itself names “the 1.2 s tail window, a split read, the first prompt” as possible false-red sources.  
+**Dead session pass:** the deferred diagnostic above passes because it is outside the snapshot.  
+**REASONED** — from the packet’s description of the snapshot timing and the `noise()` line-matching logic.
+
+---
+
+**3. Does the repair chain close?**  
+No.  
+Denominator swept: **37 rows** (from the packet: “35 → 37 rows”, “BASE 37/37 three times”).  
+The survivor is a diagnostic emitted by the read arm but after the snapshot. It is **outside the contract as stated** if the contract only covers output “during a DMAADDR read”, but it is a breach of the evident intent to catch any diagnostic from the arm. The chain does not close.
+
+---
+
+**4. Which claim is wrong?**  
+The claim:  
+> “The only disguise left is a diagnostic that emits no byte (`fatal("")`: EQUIVALENT).”  
+is **false**. A diagnostic that emits bytes after the snapshot — e.g. via `atexit` or buffered stderr — is not seen by the oracle.  
+**REASONED** — from the packet’s own definition of `SNAP` and the absence of any post-`quit` output check.

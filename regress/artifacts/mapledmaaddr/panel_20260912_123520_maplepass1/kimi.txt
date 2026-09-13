@@ -1,0 +1,440 @@
+kimi version 0.36.0
+• Let me understand this task. The user wants a design review (PASS 1) of a proposed fix for a defect in `dev_dreamcast_maple.c` in the GXEMUL-SEC tree. The verdict line first, then the liveness token `PASS1_MAPLE_20260912`.
+
+  The question: is the proposed fix right (ACCEPT — delete `fatal(...)` and `exit(1)`, keep `odata = d->dmaaddr;`), and what must its detector pin so that a wrong fix cannot pass it?
+
+  I need to check premises, not just ratify. Let me examine the actual source code to verify:
+
+  1. The defect description — `dev_dreamcast_maple.c` in `GXEMUL-SEC/src/devices/`, registered at physical `0x5f6c00` length `0x100`, attached unconditionally by `machine_dreamcast.c:149` before the `prom_emulation` early return.
+  2. The function `DEVICE_ACCESS(dreamcast_maple)` — check all exit paths.
+  3. `maple_do_dma_xfer()` — the other writer of `d->dmaaddr`.
+  4. Premise 2: is there any caller for which writeflag is neither MEM_WRITE nor MEM_READ? Check `memory_rw.c` / `memory_rw` internals — in gxemul, device access functions are called with writeflag MEM_READ or MEM_WRITE only... Actually, let me check. In gxemul 0.6.x, `memory_rw` calls the device handler with `writeflag` which is MEM_READ or MEM_WRITE. There might be other flags? Let me check the include file.
+  5. Premise 3: the DMA cursor question — separate row or this round?
+  6. FAULT availability on SH4: `memory_rw.c` delivers failed device access as exception for MIPS and M88K — check SH4.
+
+  Let me look at the actual code. The tree is `C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\src\`.
+
+  Let me read:
+  - `src/devices/dev_dreamcast_maple.c`
+  - `src/machines/machine_dreamcast.c` around line 149
+  - `src/core/memory_rw.c` (or wherever memory_rw is) for writeflag handling and SH4 exception delivery
+  - `src/include/memory.h` for MEM_READ/MEM_WRITE definitions
+
+  Also check the detector artifacts: `regress/artifacts/mapledmaaddr/codex_detector_*.txt`.
+
+  Let me start reading files. I should do this efficiently with parallel reads.
+
+  Key review questions to answer:
+
+  1. Is ACCEPT right? Consider DELETE, DECLINE, DECLINE+LATCHED, ACCEPT, FAULT, BACKED ACCEPT, IMPLEMENT.
+  2. Which wrong fix passes the detector? Name the exact edit. Is the DMA leg necessary for the floor? What does clause (d) enumerate for a pure deletion whose guarded body is `odata = d->dmaaddr;`?
+  3. Which premise is false?
+
+  Let me think about what's likely false among the premises:
+
+  Premise 1: What real hardware returns from MAPLE_DMAADDR read — the brief says no local docs. Real hardware: the Maple DMA address register (0x5F6C04) on Dreamcast... I recall from Dreamcast dev docs (e.g., the Hitachi/SEGA docs, KOS source) that reading MAPLE_DMAADDR returns the last written DMA address. In KOS (KallistiOS), maple DMA address register is write-only in practice; reads... Actually the register at 0x5F6C04 is the DMA start address register. Hardware typically latches the written value and reading returns it (many Holly registers are read/write). I can't settle it definitively without docs; the review should say ACCEPT dominates because returning the field is the least-wrong behavior, and the alternatives (kill process) are certainly wrong.
+
+  Premise 2: Is there any caller for which writeflag is neither MEM_WRITE nor MEM_READ? In gxemul, `DEVICE_ACCESS` handlers are called from `memory_rw()` with writeflag being MEM_READ (0) or MEM_WRITE (1). Let me check the actual gxemul-0.6.x source: in `memory_rw.c`, `if (writeflag == MEM_WRITE) ... else ...` — the device call passes writeflag through. There is also the `no_exceptions` flag separately. I believe writeflag is only MEM_READ or MEM_WRITE. But the brief's point 2 says "The `else` covers it: before, it terminated; after, it assigns `odata` and returns 1 WITHOUT the common-tail write." Wait — actually if writeflag is neither, then after the fix, `odata` is assigned but the common tail `if (writeflag == MEM_READ) memory_writemax64(...)` doesn't run. That's fine behavior-wise. But is there such a caller? In gxemul, some device access functions are called internally with other writeflags? Let me check — I recall in gxemul, `dev_footbridge` or some devices call each other. Also `memory_device_update`? Actually there's a thing: some device access functions are invoked with `writeflag` values beyond MEM_READ/MEM_WRITE? I don't think so. MEM_READ=0, MEM_WRITE=1. All calls pass one of these. So premise 2's implied concern is real but benign: the answer is "no such caller exists; and even hypothetically, behavior is sane (no side effect)."
+
+  Premise 3: The DMA-cursor question is a separate row — an earlier review ruled that. The proposed fix doesn't change the cursor computation, only observability. So this round doesn't need to decide the cursor semantics. That seems right.
+
+  Now the trap: "an earlier brief on THIS row gave a 'settled premise' that was true of a different device." So I need to check the actual code rather than trust the inline function listing. Possible discrepancies:
+
+  - Maybe the read arm isn't exactly as shown (maybe there's an `exit(1)` after fatal — fatal itself may or may not exit).
+  - Maybe the registration address/length differ.
+  - Maybe machine_dreamcast.c:149 is after the prom_emulation return, not before.
+  - Maybe maple_do_dma_xfer doesn't do `d->dmaaddr = addr;`.
+
+  Also the detector: "Which wrong fix passes the detector above?" — Name the exact edit. The detector requires:
+  (a) several distinct values written and read back EXACTLY (nonzero high bits, nonzero low five bits) — catches constant/zero/alignment masking;
+  (b) second write replaces what read reports — catches snapshot;
+  (c) process survives past read, marker runs, TODO text absent — catches "keep fatal(), delete only exit(1)";
+  (d) after independently demonstrated transfer, read equals the field.
+
+  What wrong fix passes? Hmm. If the fix were "return the value but mask it" — caught by (a). If the fix returns a constant — caught by (a). If the fix keeps fatal but removes exit — caught by (c). What about "return d->dmaaddr but ALSO update the read to return something else"? What wrong fix passes all four?
+
+  Consider: the read arm returns `d->dmaaddr`, correct. But the detector writes via the store path... The store arm sets `d->dmaaddr = idata`. A wrong fix that stores `idata` correctly and reads back correctly passes (a)-(c). Clause (d) checks post-DMA read equals the field. A fix could pass (a)-(c) but be wrong on (d)? E.g., a fix that resets `d->dmaaddr = 0` after DMA (a wrong cursor) — after transfer, read would equal 0, not the field — caught by (d) IF (d) expects read equals field... wait, "the read equals the field" — the field after DMA is the cursor `addr` (past last descriptor). Hmm, actually (d) says: after an independently demonstrated transfer, the read equals the field. The field after transfer = whatever maple_do_dma_xfer left (the cursor addr). So (d) pins the post-DMA cursor value: read must return the updated cursor. A wrong fix that, e.g., caches the read value at write time (a snapshot separate variable `dmaaddr_read_shadow` updated only on writes) would pass (a), (b), (c) but fail (d) because after DMA the shadow wouldn't track. That's the exact wrong edit: "store the programmed value in a shadow on write and return the shadow on read" — i.e., implement the read from a different storage than the field maple_do_dma_xfer updates.
+
+  Wait but (b) "second write REPLACES what the read reports" — a shadow updated on every write passes (b). And (a) passes. (c) passes. Only (d) catches it. So the DMA leg IS necessary for the floor: without (d), the shadow-register wrong fix passes. So the DMA leg is not merely coverage of the separate cursor row — it pins that the read reports THE FIELD, the same storage the DMA engine writes. That's the key insight for question 2's second part.
+
+  Hmm, but is the shadow fix a plausible "wrong fix"? The detector is supposed to be mutation-tested: the mutants are generated from the fix region. Clause (d) enumerates mutants for a pure deletion: for a deletion of `fatal(...)` and `exit(1)` whose guarded body is `odata = d->dmaaddr;`, the dominating predicates are `relative_addr == 0x04` and `writeflag != MEM_WRITE`. Hmm — "what does clause (d) enumerate for a PURE DELETION whose guarded body is `odata = d->dmaaddr;`" — I think the question asks: given the fix is a pure deletion, clause (d)'s mutant space is bounded by the two predicates. The mutants that survive (a)-(c) are those that keep the read path returning a stored value and surviving — and (d) then must distinguish... Actually I need to parse the question better.
+
+  "Is the DMA leg necessary for the floor, or is it coverage of the separate cursor row?" — The DMA leg is necessary for the floor, because it pins observability of the field after a DMA update; without it a read-shadow or read-latch fix passes. Also it pins the recorded consequence: the read is now observable post-DMA; the detector must confirm the read tracks the DMA engine's writes (the cursor), since that's the new observable behavior the fix introduces. But careful: premise 3 says the cursor question is a separate row. The DMA leg doesn't decide cursor CORRECTNESS (whether the value should be the cursor or the programmed address); it pins only that the read returns the same storage the DMA tail writes — i.e., the model's field. So (d) is needed for the floor but does NOT decide the cursor row: it accepts whatever the field holds (the current implementation's cursor), pinning only "read == field," not "field == hardware-true value." Good — that's consistent: the detector pins the model's behavior, not hardware truth.
+
+  "What does clause (d) enumerate for a PURE DELETION whose guarded body is `odata = d->dmaaddr;` — the dominating predicates are `relative_addr == 0x04` and `writeflag != MEM_WRITE`?" — I think the question is: for the mutant enumeration under clause (d)... a pure deletion fix means the only changed lines are the two deletions; the guarded body is the surviving statement. The predicates dominating it: the case label (relative_addr == 0x04) and the else-branch (writeflag != MEM_WRITE). Mutants under (d): flip the predicate (make the read arm unreachable or make writeflag condition wrong), replace the body (return constant, return masked, return different field), etc. Clause (d) kills mutants that alter which storage backs the read — e.g., returning a write-time shadow, or returning d->enable (a sibling field) — wait, would returning d->enable pass (a)? If the guest writes value V to DMAADDR, the write arm stores to d->dmaaddr; d->enable holds whatever was written to MAPLE_ENABLE (the guest would have written enable too during setup...). Hmm, if the test writes distinct values to DMAADDR and reads back, returning d->enable gives wrong values unless enable happens to equal them — the test could first write ENABLE=0, then DMAADDR values; read returns 0 → caught by (a). So sibling-field mutants are caught by (a) if the test controls other fields. But a shadow field updated by the same write arm isn't distinguishable by (a)-(c); only (d).
+
+  Also mutants of the write arm: store to a shadow instead of d->dmaaddr (then DMA uses d->dmaaddr = stale). Hmm — that's a write-arm mutant: `d->dmaaddr_shadow = idata` and read returns shadow; DMA would use wrong address → transfer would fail to land in the receive buffer → the "independently demonstrated transfer" in (d) fails (response doesn't land). So (d) catches write-arm mutants too, via the transfer's independent demonstration. That's important: (d) requires the DMA transfer itself to work, which pins the write arm to the real field, and pins the read to observe the DMA-updated field.
+
+  Now question 3: "Which premise above is false?" The panel was warned that premises may be false. Let me check each against the code:
+
+  Premise 1 — hardware behavior unknown, no local docs; question is whether ACCEPT dominates anyway. This is more "unsettled" than false. Check `ls _scratchpad/*.pdf` — I can check for PDFs. Maybe there IS a local doc (e.g., a Holly or Dreamcast PDF in _scratchpad). If there is, the premise "No local Dreamcast/Holly documentation exists" is false. I should check.
+
+  Premise 2 — writeflag neither MEM_READ nor MEM_WRITE: check memory_rw.c and headers. In gxemul, I believe writeflag is only MEM_READ/MEM_WRITE for device access callbacks. So the implied risk is void; but the premise is phrased as a question, and the brief's own answer ("The else covers it...") describes behavior accurately. Not obviously false.
+
+  Premise 3 — cursor is a separate row: that's a ruling, plausible.
+
+  The structural premises in THE DEFECT section are the more likely false ones: registration address/length, line 149, before/after prom_emulation early return, the exit paths of the function, maple_do_dma_xfer being the only other writer. Also the statement "attached unconditionally by machine_dreamcast.c:149 (before the prom_emulation early return)". In gxemul's machine_dreamcast.c, the maple device registration: `device__...`? Actually gxemul 0.6.x uses `memory_device_register` inside dev_dreamcast_maple_init? Let me recall: in gxemul 0.6.0, devices are attached in machine setup via `dev_..._init(machine, mem, addr)` functions. For dreamcast: `dev_dreamcast_maple_init(machine->memory, 0x5f6c00);`? Hmm wait, maple base on Dreamcast is 0xA05F6C00 physical 0x005F6C00. Length 0x100? The maple registers span 0x5F6C00–0x5F6C8C plus 0xE8. So length 0x100 covers it.
+
+  Also: "A guest READ of MAPLE_DMAADDR (+0x04) computes the stored value and then ends the emulator process." In the shown code, read → fatal(...) then odata = d->dmaaddr; then exit(1). Note: in gxemul, `fatal()` does NOT exit; it just prints (and waits for debugger? no—fatal prints the message; `exit(1)` is separate). Right: in gxemul, `fatal()` prints "FATAL:" message but does not terminate; the explicit `exit(1)` terminates. So the read prints the TODO message, sets odata, then exits. The brief says "computes the stored value and then ends the emulator process" — accurate.
+
+  Also check: is there a `break` after exit(1)? exit never returns, so the break is unreachable; fine.
+
+  Potential false premise candidates:
+
+  - Maybe the device is registered at 0x5f6c00 length 0x100 — check machine_dreamcast.c.
+  - Maybe the attach is AFTER the prom_emulation early return, i.e., with prom emulation ON the device isn't attached. The brief says attached BEFORE the early return (i.e., unconditionally). Need to verify: in machine_dreamcast.c, `machine_setup` for dreamcast: typically devices are attached, then `if (!machine->prom_emulation) return;` then PROM setup. If maple attach is after that return, then with prom_emulation enabled (default), maple isn't attached — that would change the analysis (guest boot typically runs with prom_emulation enabled? Actually for dreamcast, gxemul emulates the boot PROM? Hmm). The brief says attached at line 149 BEFORE the early return. Verify.
+
+  - Maybe there IS an early-return inside the access function not shown, e.g., `if (!d->enable && writeflag == MEM_WRITE ...)`? The brief says THE WHOLE ENCLOSING FUNCTION every exit path is shown. Verify by reading the file.
+
+  - Maybe maple_do_dma_xfer is NOT the only other writer — check for other writers of dmaaddr (grep). E.g., maybe there's a reset somewhere setting d->dmaaddr.
+
+  - Maybe the read arm in the actual code differs from what's shown (e.g., the shown code is the ALREADY-FIXED version, or differs).
+
+  Also "FAULT (is it even available on an SH4 machine? memory_rw.c delivers a failed device access as an exception for MIPS and M88K)" — check memory_rw.c: when a device access returns 0 (failure), gxemul raises... In gxemul 0.6.0: if no device is found or device returns failure, for some CPUs it does `mips_cpu_exception` / for others it just warns and returns. For SH4, likely no exception delivery — check `src/core/memory_rw.c` or `src/cpus/cpu_sh.c` memory_rw. Actually memory_rw is generic in 0.6.x (`src/memory_rw.c`). Let me look: in gxemul 0.6.0.2, memory_rw.c handles device lookup; if device access returns 0 or no device: `if (cpu->machine->throw_exception_on_unimplemented...)`. Hmm, I recall code like:
+
+  ```c
+  if (res == 0) {
+      /*  Failed device access  */
+      ...
+  }
+  ```
+
+  And there is `cpu->invalidate_translation_caches`... Let me just read the file.
+
+  Also the DM_DEFAULT mention: "registered DM_DEFAULT" — probably `DEVICE_ACCESS` macro uses DM_DEFAULT flag (little/big endian handling). In gxemul 0.6.x, `memory_device_register(mem, "dreamcast_maple", base, len, dev_dreamcast_maple_access, (void *)d, DM_DEFAULT, NULL);`.
+
+  The user wants a verdict-first review with the token PASS1_MAPLE_20260912. They explicitly say building/running a single detector or mutant in my own temp dir is fine and encouraged, but don't run the harness gates.
+
+  Plan:
+  1. Read `GXEMUL-SEC/src/devices/dev_dreamcast_maple.c` fully.
+  2. Read `GXEMUL-SEC/src/machines/machine_dreamcast.c` (at least around registration).
+  3. Grep for `dmaaddr` writers.
+  4. Read `memory_rw.c` for writeflag values and SH4 exception delivery (also check `MEM_READ`/`MEM_WRITE` definitions in include).
+  5. Check `_scratchpad/*.pdf` for Dreamcast docs.
+  6. Check `regress/artifacts/mapledmaaddr/` for the detector spec files (`codex_detector_*.txt`) to review clause (d) precisely.
+  7. Compose the review.
+
+  Given the context management strategy, I could delegate some of this to subagents, but the file reads are small and targeted; I'll do them directly with parallel tool calls. Let me start.
+
+  Let me find the files first.
+
+• Verdict first, then evidence — I'll verify the premises against the actual GXEMUL-SEC tree before ruling.
+
+• The source matches the brief's transcription almost exactly. Verified:
+
+  - `dev_dreamcast_maple.c:557-566`: case 0x04, write stores `d->dmaaddr = idata;`, read does `fatal(...); odata = d->dmaaddr; exit(1);`. Matches.
+  - Registration: `memory_device_register(..., 0x5f6c00, 0x100, dev_dreamcast_maple_access, d, DM_DEFAULT, NULL)` at line 651-652. Matches.
+  - `machine_dreamcast.c:149`: `device_add(machine, "dreamcast_maple");` — line 149 exactly. And the `if (!machine->prom_emulation) return;` is at lines 155-156, AFTER the device_add. So "attached unconditionally before the prom_emulation early return" — TRUE.
+  - `maple_do_dma_xfer`: `d->dmaaddr = addr;` at line 540 with the `// TODO: Should the DMA address be updated?` comment at 539. Matches. And grep confirms the only writers of `d->dmaaddr` are: struct decl (76), the DMA tail (540), the write arm (559). Plus zero-init via memset at 649. TRUE.
+
+  Now check remaining premises:
+
+  1. `_scratchpad/*.pdf` for Dreamcast/Holly docs.
+  2. writeflag values: check `MEM_READ`/`MEM_WRITE` definitions and whether any caller passes other values to device access functions.
+  3. FAULT on SH4: check memory_rw.c for how failed device access is delivered — for which CPUs exceptions are raised.
+  4. The detector spec at `regress/artifacts/mapledmaaddr/codex_detector_*.txt`.
+
+  Let me run these checks in parallel.Important finding: `_scratchpad/*.pdf` DOES contain `sh7750_hardware.pdf` and `sh4_programming.pdf`. The SH7750 is the Dreamcast's SH4 CPU — but the Maple bus controller is part of the Holly system controller, not the SH7750. The brief's premise says "No local Dreamcast/Holly documentation exists in `_scratchpad/`". The sh7750 hardware manual is the SH4 CPU manual, not Holly/Maple documentation. The Maple DMAADDR register is in the Holly chip (0x5F6C00 range) — the SH7750 hardware manual would not document Maple registers (those are Sega ASIC registers, not Hitachi SH4 peripheral registers). So strictly, "no Dreamcast/Holly documentation" might still be true — but the existence of sh7750_hardware.pdf is close enough that I should check whether it mentions Maple. Let me grep the PDF? Can't grep PDFs easily. The SH7750 manual covers the SH4's on-chip peripherals (SCIF, DMAC, TMU, etc.), not the Maple bus. The Maple registers at 0x5F6Cxx are Holly system-controller registers, documented in Sega's (unreleased) docs or Comstedt's reverse-engineered page (referenced in the source at line 36: http://mc.pp.se/dc/maplebus.html). Marcus Comstedt's maplebus.html — I could fetch it! It's referenced in the source itself. That would help settle premise 1 as far as available documentation goes.
+
+  Also there's memory_rw.c location issue — the core dir may have different files. Let me find memory_rw.c in GXEMUL-SEC/src.
+
+  Also read the detector spec files: codex_detector_20260911.txt and codex_detector_RETRY_20260911.txt, and codex_readarm_20260910.txt.
+
+  Let me do these in parallel.Now I have the earlier review artifacts. Let me also:
+
+  1. Check `memory_rw.c` at `src/cpus/memory_rw.c` — verify writeflag values and exception delivery (FAULT availability on SH4).
+  2. Read the RETRY detector file (the most recent, likely the refined version referenced in the brief).
+  3. Maybe fetch Marcus Comstedt's maplebus.html to check premise 1 (what hardware returns on DMAADDR read). The source references http://mc.pp.se/dc/maplebus.html. Let me try FetchURL.
+
+  Let me do the memory_rw.c reading first. It's probably large; grep for the device-access call site and exception handling.Now I have both earlier detector designs. Let me now check the memory_rw.c device-access failure path in detail, especially around lines 584-630 (the `res <= 0 && !no_exceptions` branch and which CPU families get exceptions — MIPS and M88K mentioned; check if SH4 is handled). Let me read that region.
+
+• Now the exact exception-delivery block in `memory_rw.c` — reading lines 560–700.
+
+• Confirmed: at `src/cpus/memory_rw.c:603-625`, when a device access returns `res <= 0` and exceptions are allowed, the exception delivery is `#ifdef MEM_MIPS` (mips_cpu_exception) and `#ifdef MEM_M88K` (m88k_exception). There is NO `MEM_SH` branch — on an SH4 build, a failed device access just returns `MEMORY_ACCESS_FAILED` with no architected exception delivered to the guest. So FAULT (return 0 from the device handler to raise a guest-visible bus error) is NOT architecturally available on SH4 — the brief's parenthetical is TRUE.
+
+  Also confirmed: writeflag is documented as "set to MEM_READ or MEM_WRITE" (memory_rw.c:51), MEM_READ=0, MEM_WRITE=1. Callers pass only those two values. So premise 2's hypothetical caller doesn't exist — the `else` covering a third value is a syntactic nicety, not a real path. The earlier review (codex_readarm §5) already noted this as "outside the ordinary two-direction interface, but belongs in the syntactic partition."
+
+  Now, premise 1: what does real hardware return from a MAPLE_DMAADDR read? The source references Marcus Comstedt's maplebus page. Let me check if I can fetch it. Also, is there any Dreamcast documentation in _scratchpad? The PDF list shows sh4_programming.pdf and sh7750_hardware.pdf — SH4 CPU docs, not Holly/Maple. So the premise "No local Dreamcast/Holly documentation exists" is TRUE as stated (the SH7750 manual documents the CPU's on-chip peripherals — DMAC, SCIF, TMU, BSC — not the Sega Maple ASIC at 0x5F6Cxx; the SH7750 hardware manual does cover the SH4's own DMAC channels, which on Dreamcast... hmm, actually wait. The SH7750 is literally the Dreamcast's CPU (SH-4, HD6417091 / SH7091). The Maple interface is NOT part of the SH7750 — it's in the Holly ASIC. The SH7750 hardware manual would not document 0x5F6Cxx. So the premise holds: no local Holly/Maple doc.)
+
+  But hold on — the premise says "check ls _scratchpad/*.pdf" and claims no Dreamcast/Holly doc. There IS sh7750_hardware.pdf and sh4_programming.pdf. Is that "Dreamcast documentation"? The SH7750 IS the Dreamcast processor. One could argue the premise is literally false because Dreamcast-related documentation (the SH7750 hardware manual) exists. But the spirit — Holly/Maple register documentation — is not there. The SH7750 manual might mention the Maple interface in passing (block diagrams of the Dreamcast?) — no, the SH7750 manual documents the chip; Maple is off-chip (Holly). Actually wait — I should double check: is the Maple bus controller part of the SH7750's on-chip peripherals? No. The SH7750's on-chip modules: BSC, DMAC (4 channels), CPG, WDT, TMU, RTC, SCI, SCIF, INTC, UDI, TLB, caches. Maple is in Holly (the system ASIC by NEC/VideoLogic... actually Holly is the Sega ASIC). The Maple DMA uses... hmm, actually Maple DMA on Dreamcast is done via the Maple interface in Holly; the SH4's DMAC isn't used for Maple. So the SH7750 doc is irrelevant to MAPLE_DMAADDR. Premise 1's documentation claim is TRUE in substance.
+
+  Let me try fetching Comstedt's maplebus page to see if it says anything about reading DMAADDR. It's referenced in the source. Quick fetch — worth one call. Also KOS (KallistiOS) maple driver: maple_init_dma etc. In KOS, MAPLE_DMAADDR (0xA05F6C04)... KOS's maple.c uses `*((vuint32*)0xa05f6c04) = ...` writes only. Hardware docs on Maple registers: Marcus Comstedt's page lists registers: 0xA05F6C00 MAPLE_DMAADDR? Let me recall the register map from Comstedt:
+
+  From mc.pp.se/dc/maplebus.html (as I remember):
+  - 0xA05F6C00: MAPLE_DMAADDR? Hmm, actually I think the register list is:
+    - 0x5F6C00: ??? 
+    - 0x5F6C04: DMA start address
+    - 0x5F6C10: RESET2
+    - 0x5F6C14: enable
+    - 0x5F6C18: start/state
+    - 0x5F6C80: speed/timeout
+    - 0x5F6C8C: reset
+
+  The DMA address register is typically documented as write-only ("write: sets DMA address"). Whether reading returns it is usually undocumented. KOS never reads it. Real games presumably don't read it either (NetBSD/dreamcast's maple.c — does it read MAPLE_DMAADDR? In NetBSD's sys/arch/dreamcast/dev/maple.c, `maple_dma_addr`... I don't remember it reading. NetBSD writes bus_space_write_4(..., 0x04? Actually it uses offsets MAPLE_DMAADDR=0x04... I believe NetBSD never reads it.)
+
+  So premise 1 cannot be settled from available docs; the earlier review already concluded: "These files cannot establish whether real hardware exposes this cursor, a programmed-address latch, or another value. That architectural question remains open." And the design review accepted the read correction on the bounded basis of "return the model's field."
+
+  So: ACCEPT dominates the alternatives:
+  - DELETE (delete the whole read arm → falls to default → fatal "UNIMPLEMENTED read" — still noisy, returns garbage odata=0... wait, if we delete the read arm entirely, a read of 0x04 hits default: fatal(...) and returns odata=0. That's worse than ACCEPT.)
+  - DECLINE (keep fatal+exit — guest OSes that read the register kill the emulator; the whole defect is that this kills guests).
+  - DECLINE+LATCHED ANNOUNCE (announce once, keep behavior — still kills on read; only quieter).
+  - ACCEPT (return the field; quiet) — matches MAPLE_ENABLE sibling, implements read.
+  - FAULT — not available on SH4 (verified above: no MEM_SH branch in memory_rw.c:603-625; returning 0 would just propagate MEMORY_ACCESS_FAILED without an architected exception; and it would require the handler to return 0 instead of 1, changing semantics... Actually wait: what does MEMORY_ACCESS_FAILED do for SH4? The guest CPU's memory_rw returns failure; for SH4 dyntrans, a failed access... In sh_cpu_dyntrans or sh4 memory access, MEMORY_ACCESS_FAILED likely triggers... let me think. For MIPS, memory_rw returning failure after exception set means the instruction is re-executed. For SH, there might be no exception mechanism wired, so the read returns garbage/zeros or aborts. The brief only asks "is it even available" — answer: no, the exception-delivery block has only MEM_MIPS and MEM_M88K branches; on SH4 the device returning failure produces no guest-visible architected fault. So FAULT is unavailable/undefined on this machine.)
+  - BACKED ACCEPT (return field + announce) — violates "quiet" contract; the detector's `read quiet`/`rd quiet` row would fail it; announce-on-read is exactly what the defect review wants gone (the sibling ENABLE is quiet). Actually "BACKED ACCEPT" in this panel's option vocabulary usually means "accept the behavior but keep a diagnostic announcing unimplemented-ness". Since the read IS implemented by this fix (return the real field), a diagnostic would be wrong.
+  - IMPLEMENT (full hardware-true implementation of DMAADDR read semantics — e.g., latch semantics, or hardware-correct cursor policy) — can't be implemented because hardware truth is unsettled (premise 1); and the cursor policy is a separate row (premise 3). IMPLEMENT of what is known = exactly ACCEPT. Anything beyond is speculation.
+
+  So ACCEPT is right.
+
+  Now the trap to check: "an earlier brief on THIS row gave a 'settled premise' that was true of a different device." The detector_RETRY artifact line 4-5 says: "The supplied probe describes a preloaded GD-ROM DMA shadow at lines 655 onward; that description does not apply to Maple." — THAT's the premise true of a different device (GD-ROM): a preloaded DMA shadow register. So in THIS brief, the premises seem structurally accurate — I verified each one:
+
+  - Registration 0x5f6c00/0x100, DM_DEFAULT: TRUE (line 651-652).
+  - machine_dreamcast.c:149 before prom_emulation early return: TRUE (149 vs 155).
+  - Whole function exit paths as shown: TRUE (read the file; the transcription matches exactly, including the default arm's fatal without exit, the 0xe8 arm, the 0x8c arm).
+  - maple_do_dma_xfer only other writer, tail `d->dmaaddr = addr`, TODO comment: TRUE (539-540; grep confirms only writers: memset init, 559 write arm, 540 DMA tail).
+  - No local Dreamcast/Holly PDF in _scratchpad: TRUE in substance (sh7750/sh4 PDFs are CPU manuals, not Holly/Maple register docs — Maple is a Holly ASIC block, off-SoC-peripheral; the SH7750 manual does not document 0x5F6Cxx). I should double-check the SH7750 manual doesn't cover the Maple... The Hitachi SH7750 hardware manual covers the SH-4 core and on-chip peripherals (BSC, DMAC, TMU, RTC, SCI, SCIF, INTC, CPG, WDT, UDI, H-UDI, cache, MMU). Maple is NOT an SH7750 peripheral. Confident.
+  - memory_rw.c delivers failed device access as exception for MIPS and M88K: TRUE (608-623, only MEM_MIPS and MEM_M88K branches; no SH). 
+
+  Premise 2 (writeflag neither MEM_READ nor MEM_WRITE): writeflag is documented "set to MEM_READ or MEM_WRITE" (memory_rw.c:51), MEM_READ=0, MEM_WRITE=1 (memory.h:117-118). No caller passes anything else. So the answer to premise-question 2: no such caller exists; the `else` covering it is syntactic only; before→terminate vs after→assign-and-return-1-without-tail-write is a difference on a dead path. Not false as stated (it's phrased as a question with the correct description of the syntactic partition).
+
+  Premise 3: cursor row separate — the earlier review ruled it separable: "The read correction implements a separately testable rule: return the stored register field. The cursor item determines what the transfer routine should store there." TRUE; this round need not decide cursor correctness. BUT with the qualification the readarm review made: observability changes, so the detector must characterize the cursor writer (as a fixture property), which the detector does via the alignment-refusal reference. So premise 3 is TRUE as ruled.
+
+  Premise 1: unverifiable hardware truth; ACCEPT still dominates. TRUE as stated (it's honestly phrased as unsettleable).
+
+  Hmm — so which premise is false? The brief asks "Which premise above is false?" Maybe none of the numbered premises is false — and that's the trick: the panel was warned about false premises in earlier briefs, but THIS brief's premises check out. I must be careful: the question presupposes one is false. A good reviewer shouldn't invent a false premise. But let me re-examine each claim really carefully for subtle falsehood:
+
+  1. "registered DM_DEFAULT at physical 0x5f6c00, length 0x100" — TRUE.
+  2. "attached unconditionally by machine_dreamcast.c:149 (before the prom_emulation early return)" — TRUE.
+  3. "A guest READ of MAPLE_DMAADDR (+0x04) computes the stored value and then ends the emulator process" — TRUE (fatal prints, odata set, exit(1)).
+  4. "maple_do_dma_xfer() (the ONLY other writer of d->dmaaddr besides the write arm and zero-initialisation)" — TRUE per grep.
+  5. "at its tail, d->dmaaddr = addr; — the address past the last descriptor — then raises SYSASIC_EVENT_MAPLE_DMADONE" — TRUE (540, 543).
+  6. "The sibling MAPLE_ENABLE read arm is quiet (odata = d->enable;)" — TRUE (578-579).
+  7. Premise Q1: no local Dreamcast/Holly documentation in _scratchpad — mostly true; sh7750_hardware.pdf and sh4_programming.pdf ARE Dreamcast-CPU docs. Strictly, "Dreamcast/Holly documentation" — the SH7750 is the Dreamcast's CPU. Hmm. Is sh7750_hardware.pdf "Dreamcast documentation"? It's the hardware manual for the exact SoC... but NOT for the Holly ASIC/Maple registers. The premise's purpose is "can we settle what hardware returns from DMAADDR read" — the SH7750 manual cannot settle that. The premise as phrased ("No local Dreamcast/Holly documentation exists") is at worst imprecise, since Dreamcast-CPU documentation exists but is irrelevant to Maple. I'll flag this as the closest-to-false: the *claim as literally worded* is arguably false (there IS SH-4/SH7750 Dreamcast documentation locally), though it doesn't cover Holly/Maple and can't settle premise 1 either way. That's the honest answer: the only checkable premise that comes out wrong is the "no local documentation" phrasing, and even then it doesn't change the verdict — the present docs don't cover Maple. Actually wait — I should verify the sh7750 manual truly lacks Maple coverage before claiming that. The SH7750 manual is ~1000 pages; grepping a PDF isn't directly possible. I could use pdftotext if available... Let me not over-engineer; I can note the caveat honestly: I cannot extract the PDF text here, but the SH7750 hardware manual documents the SH-4 SoC's on-chip peripherals; the Maple bus controller at 0x5F6Cxx is part of the Sega Holly ASIC, not the SH7750, so the manual does not cover these registers. That's standard knowledge and matches the register map (0x5F6xxx are Holly registers: PVR2 DMA 0x5f6800, ASIC 0x5f6900, Maple 0x5f6c00, GDROM 0x5f7000 — all Holly). Confident.
+
+  Actually, hold on. Let me reconsider premise 1 more carefully. Is there possibly an answer from NetBSD/dreamcast or Linux shuttle maple drivers about READING DMAADDR? In NetBSD's maple.c: after DMA completion... I recall NetBSD's maple driver polls MAPLE_STATE (0x18) for bit... Actually the model here returns 0 always for STATE. Real hardware: MAPLE_STATE bit 0 = DMA in progress. The DMAADDR read — I genuinely don't know any driver that reads it. Comstedt's page documents the register map. Let me try fetching it quickly to see whether it documents read semantics of the DMAADDR register. One FetchURL call is cheap and the source itself cites the page. Let me do it.
+
+  Also I should verify `fatal()` semantics in this tree — does fatal() return? In gxemul, `fatal()` prints and (depending on build) may enter debugger or just return. In GXEMUL 0.6.x: `fatal()` in misc.cc — it prints "FATAL ERROR:" and if `verbose`... it does NOT exit; it can drop into the debugger if configured? Let me check src/core/misc.c or misc.cc. The readarm review said "neither permitted file defines fatal()". For the review's completeness, the claim "fatal does not terminate; exit(1) does" matters for candidate (c) analysis ("keep fatal, delete exit" → process survives but diagnostic remains). Let me check misc.c quickly. In gxemul 0.6.0, `fatal()` is in src/misc.cc:
+
+  ```c
+  void fatal(const char *fmt, ...)
+  {
+      ...
+      va_start(argp, fmt);
+      vfprintf(stderr, fmt, argp);
+      va_end(argp);
+      ...
+      if (single_step...) ...
+      debug_indentation...
+      // does not exit
+  }
+  ```
+
+  Right, in 0.6.x fatal() does not exit (that's why the code has explicit exit(1) calls after fatal). I can verify by grepping misc.c/cc in this tree.
+
+  Also verify the SYSASIC_TRIGGER_EVENT macro — not needed for the verdict.
+
+  Now for the detector analysis (question 2):
+
+  The brief's inlined detector summary (rung-3 guest loads/stores):
+  (a) several distinct values written/read back EXACTLY — nonzero HIGH bits and nonzero LOW FIVE bits → kills constant, zero, alignment-masking mutants.
+  (b) second write REPLACES read → kills never-updating snapshot... wait, careful: a write-time shadow DOES update on second write. (b) kills a "snapshot taken once at init" or "always returns first written value" (sticky) mutant. A write-shadow passes (a) and (b).
+  (c) process survives past read + TODO text absent → kills "keep fatal(), delete only exit(1)" (if fatal prints, text present → fail; and survival checked by marker) and kills "keep exit(1), delete only fatal()" (process dies → marker absent). Note: "delete only exit(1), keep fatal" — the value returned is correct, so (a),(b) pass; (c) catches via TODO text. "Delete only fatal, keep exit" — caught by (c) via missing marker/process death.
+  (d) after independently demonstrated transfer (DEVINFO response in pre-filled receive buffer), read equals the field → kills the write-time shadow / last-programmed-address snapshot: after DMA, the field has advanced to cursor C, but the shadow still holds P. Read returns P ≠ C → fail. THIS is the wrong fix that passes (a)+(b)+(c): "store the programmed value into a shadow variable on register write (or read back a latched programmed-address variable) instead of the field the DMA tail updates." Exact edit: add `uint32_t dmaaddr_shadow;` set in the write arm (or simply have the read arm return a copy updated only by the write arm), i.e.:
+
+  ```c
+  case 0x04:
+      if (writeflag == MEM_WRITE) { d->dmaaddr = idata; d->dmaaddr_shadow = idata; }
+      else odata = d->dmaaddr_shadow;
+  ```
+
+  or equivalently, revert maple's DMA-tail assignment... no wait, deleting the tail assignment would break DMA chaining/retrigger behavior — a different mutant. The cleanest "wrong fix passing (a)(b)(c)": the read returns a write-only shadow. Also: a fix that returns `d->dmaaddr` but ALSO prevents the DMA tail from updating... no, that changes DMA behavior (would be caught by retrigger rows but not by the simple (a)-(d) summary unless (d) re-triggers).
+
+  Hmm, actually there's a subtlety: the brief's inlined (d) says "after an INDEPENDENTLY demonstrated transfer... the read equals the field." "Equals the field" — how does the witness know the field's value? The detector_RETRY design solved this: use the existing alignment-refusal diagnostic as an independent field observer (the refusal message prints the field value copied at DMA entry: `dmaaddr 0x%08x is NOT 32-byte aligned; aborting` prints `addr`, which was copied from `d->dmaaddr` at line 382). That's the clever mechanism: E1/E2 parsed from the refusal message = independent observation of the field; read must equal it. So (d) with the E-reference kills the shadow fix, AND kills "read equals field but field frozen at first cursor" (dma2 live with E2 != E1), AND fabricated P+4/P+12.
+
+  Is the DMA leg necessary for the floor? YES — without (d), the shadow/snapshot fix (a plausibly "reasonable" wrong implementation: a latched programmed-address register, which some real hardware actually does!) passes (a)-(c). And note the delicious twist: if real hardware actually latches the programmed address (premise 1 unsettled), the shadow fix might be the HARDWARE-CORRECT one — but the panel's recorded contract is "return the model's field," and the cursor row is separate. The floor for THIS fix = read must report the field as the model maintains it, including the DMA tail's update. So (d) is floor, not merely cursor-row coverage — but (d) must be constructed so it does NOT certify cursor correctness (compare against an independent field observation — the alignment-refusal E values — not against a precomputed "correct" cursor... well, the detector_20260911 precomputed C1=0x0c001a0c from the "settled formula", while detector_RETRY improved this by parsing E from the refusal message. The brief's inlined (d) says "the read equals the field" — consistent with the RETRY design).
+
+  Also clause (d) must pin: the read does not CHANGE the field (dma2 hold row re-triggers and observes E2 again), no read diagnostic (read quiet), and the transfer evidence is a fresh DEVINFO signature in a verified prefilled buffer (not MAPLE_STATE==0, which is vacuous since the read arm always returns 0 — verified at line 592-593).
+
+  "What does clause (d) enumerate for a PURE DELETION whose guarded body is odata = d->dmaaddr; — the dominating predicates are relative_addr == 0x04 and writeflag != MEM_WRITE?" 
+
+  I parse this as: for the proposed fix (pure deletion of fatal+exit), the mutant space around the guarded body is dominated by the two predicates. Clause (d) enumerates mutants that alter the read arm while keeping (a)-(c) green:
+  - Predicate mutants: swap which storage backs the read (shadow) → killed by dma-live rows (E comparison).
+  - Body mutants: transform the value (mask, zero, constant, P+fabricated) → mostly killed by (a)/(b), but post-DMA-only transforms (e.g., `if (after DMA) return 0`)... a transform applied only after DMA — e.g., `odata = d->dmaaddr & ~0x1f` — IS killed by (a) already since unaligned values are read pre-DMA. But a transform that only fires post-DMA (conditional on DMA completion) — far-fetched. The realistic (d)-killed mutants: shadow snapshot (P instead of C), stale first-cursor (C1 instead of C2 → killed by dma2 live requiring E2 != E1), fabricated constant cursor deltas (P+4 — killed by exact E match since E = P+12 for these fixtures... the one-descriptor fixture gives C=P+12; a fabricated P+4 fails exact match; the two-descriptor fixture C2=P2+24 defeats "fixed P+12"), and frozen-field mutants.
+  - Also (d) enumerates the deletion-order mutants of the DMA tail itself? No — the DMA tail is outside this fix's boundary. But (d)'s rows do cover the tail: if a mutant deletes `d->dmaaddr = addr;` (the cursor update), then post-DMA read returns P1; the refusal-trigger rows would... the retrigger without reprogramming would re-run the SAME transfer successfully (aligned P1) instead of hitting the alignment refusal → E-parse fails (no refusal message) → row fails. Nice: the RETRY design's reference mechanism also catches the tail-deletion mutant, meaning (d) has coverage bleeding into the cursor row — that's fine, it's the read contract pinned against the CURRENT writer.
+
+  So: (d) is necessary for the floor. Without it, the shadow fix passes. The exact wrong edit to name: "return a value updated only by the register write arm (a programmed-address shadow/latch) instead of the field the DMA completion tail also writes" — concretely, keep `d->dmaaddr` for DMA but read back a separate latched copy, OR equivalently implement the read from `d->dmaaddr` while deleting/neutralizing line 540's `d->dmaaddr = addr;` (then post-DMA read returns P; the retrigger reference rows fail because the expected alignment refusal never appears — under the RETRY design it's caught; under the FIRST design's numeric C1/C2 expectations it's also caught). Hmm wait — careful: deleting line 540 changes DMA behavior (the cursor row!), which premise 3 says is separate. But (d) still kills it — as collateral coverage, not as a decision of the cursor row. Fine.
+
+  Also the brief asks specifically: "What does clause (d) enumerate for a PURE DELETION whose guarded body is odata = d->dmaaddr; — the dominating predicates are relative_addr == 0x04 and writeflag != MEM_WRITE?" 
+
+  Alternative parse: the question may ask what the mutant enumeration under clause (d) looks like GIVEN the fix is a pure deletion: since the surviving behavior is dominated by the two predicates (case 0x04, else-branch), any mutant that keeps the read reachable and value-exact pre-DMA must be distinguished post-DMA. Clause (d) enumerates exactly: (i) read-source mutants (field vs any other storage), (ii) read-side-effect mutants (read modifies field — caught by re-observation: dma2 hold / second read equals first), (iii) value-transform mutants visible only in cursor state (e.g., mask applied — no, caught earlier; stale C1 — caught by E2 != E1; fabricated delta — caught by exact E and two-descriptor fixture), (iv) diagnostic-retention mutants (fatal kept — caught by read quiet within read intervals... note: the alignment-refusal diagnostic appears in TRIGGER intervals, so intervals must be delimited or silence is vacuously broken — the designs handle this by bounding intervals), and (v) execution-absence mutants (marker/poison slots). 
+
+  The brief's inlined detector says "the process survives past the read (a marker instruction runs) and the TODO text is ABSENT (catches 'keep fatal(), delete only exit(1)')" — good, matches.
+
+  One more check on the detector's clause (c): "catches 'keep fatal(), delete only exit(1)'" — requires that fatal() actually PRINTS. Verify fatal() in this tree prints unconditionally and returns. Let me grep src/core/misc.c (or misc.cc) for "void fatal".
+
+  Also verify `memory_writemax64` exists and the tail serializes — fine.
+
+  Also, the brief's THE DEFECT section says "registered DM_DEFAULT at physical 0x5f6c00, length 0x100" — verified. "attached unconditionally by machine_dreamcast.c:149" — verified.
+
+  One more possible false premise: "A guest READ of MAPLE_DMAADDR (+0x04) computes the stored value and then ends the emulator process." — With the current code, the read arm runs `fatal(...)` (prints TODO text), sets odata, exit(1). TRUE.
+
+  But wait — there's a subtlety about whether a guest read ever REACHES this arm: the dyntrans fast path. Look at memory_rw.c:561-574: there's code (#155) about not installing dyntrans fast-path access to a device page not fully backed; device with DM_DEFAULT flag — devices without dyntrans_data get host_addr NULL → slow path → the access function is called each time. Fine, not a premise issue.
+
+  Also premise: "the edit does NOT change the cursor computation, but it DOES change its OBSERVABILITY" — TRUE and correctly qualified (matches readarm review §3).
+
+  Now question 1 full option set:
+  - DELETE (remove whole read arm): read falls to default arm → fatal "UNIMPLEMENTED read from addr 0x4" every read, odata=0 returned. Worse than ACCEPT on every axis: wrong value, noisy. Reject.
+  - DECLINE (do nothing): guest reading DMAADDR kills the emulator; the defect is a process-kill reachable by guest software. On a row whose defect is exactly this kill, DECLINE keeps it. Reject.
+  - DECLINE+LATCHED ANNOUNCE: still exits. Reject (same reason; the latch only quiets repeat announcements that never happen because the process dies on first read).
+  - ACCEPT: return the field quietly. Matches sibling arms (ENABLE quiet; STATE returns 0; SPEED returns timeout<<16). The value returned is the model's true state, consistent with the write arm and the DMA tail. This is the minimal correct fix. Accept.
+  - FAULT: unavailable on SH4 — memory_rw.c:603-625 delivers exceptions only under MEM_MIPS/MEM_M88K; an SH4 build has no delivery path, so "return 0" yields MEMORY_ACCESS_FAILED with no architected guest fault (undefined/harness-level failure, not a guest-bus-error semantic). Also conceptually wrong: the register IS implemented (there's a stored value), faulting an implemented register is worse than returning it. Reject.
+  - BACKED ACCEPT (return field + one-shot diagnostic): violates the quiet-read contract the fix's own rationale states (ENABLE sibling is quiet); the detector's read-quiet row would fail it; an announcement claims "unimplemented" about an implemented read. Reject.
+  - IMPLEMENT (hardware-true read semantics): blocked on premise 1 (hardware truth unsettled locally — Comstedt page may or may not say; drivers don't read it). "Implement" of everything currently known = ACCEPT. Any richer implementation is speculation and belongs to the cursor row if it touches line 540. Reject as this row's action; keep as the separate cursor row.
+
+  So ACCEPT (option-set member 4) is RIGHT.
+
+  Which premise is false? After checking everything, my answer: none of the load-bearing premises is false in this checkout — I verified them line by line. The one that fails as literally worded is premise 1's parenthetical, "No local Dreamcast/Holly documentation exists in _scratchpad/": the directory DOES hold `sh7750_hardware.pdf` and `sh4_programming.pdf` — Dreamcast-CPU documentation. But neither covers the Holly ASIC's Maple registers at 0x5F6Cxx (Maple is not an SH7750 on-chip peripheral), so the substantive claim — hardware readback semantics cannot be settled locally — survives. If the panel demands one named false premise: the "no local documentation" phrasing is the false-as-stated one; it is not load-bearing for the verdict. I should also try fetching Comstedt's page to see if premise 1 can be partially settled externally. Let me try.
+
+  Also verify fatal() doesn't exit. Quick grep in src/core/misc.c or src/misc.cc. In gxemul 0.6.2 layout, it's src/misc.cc? The tree has src/core/ — let me glob for misc.
+
+  Also — one more thing to verify: the claim in question 2's setup: "the process survives past the read (a marker instruction runs) and the TODO: read from dmaaddr text is ABSENT (catches 'keep fatal(), delete only exit(1)')". For this to work, fatal() must print to a captured stream AND return. Verify fatal() implementation.
+
+  Let me also double check `MAPLE_STATE` read arm returns 0 always — yes lines 591-593.
+
+  And check whether anything else reads MAPLE_DMAADDR register offset... not needed.
+
+  Quick fetch of Comstedt's maplebus page + grep fatal. Then write the review.The Comstedt page describes the DMA address register as "Set this register to point to your DMA buffer before starting DMA" — it documents the register as a write-only-ish "set" register and says nothing about readback semantics. So premise 1 remains unsettled by the canonical reverse-engineered reference too: the page documents write semantics only. That supports: ACCEPT dominates because hardware readback truth is unavailable, and returning the model's own field is the least-speculative implemented behavior.
+
+  Also interesting: the Comstedt page says the DMA descriptors have LAST bit at bit 31 of word 0, PORT at bits 23-16, GUN at bit 25? The model decodes buf[3]&0x80 as last (byte 3 bit 7 = bit 31 of a little-endian word → LAST), buf[2] = port (bits 16-23), buf[1]&2 = GUN bit... the page says GUN at bit 25 which is byte 1 bit 1 → buf[1]&2. Consistent. Not needed for the verdict though.
+
+  Now, fatal() implementation — the grep found only the declaration in misc.h. Let me find the definition. In gxemul 0.6.x it's in src/misc.cc. This tree layout has src/core/ — let me glob for misc.* in src. Quick check to confirm fatal prints and returns (doesn't exit). Actually the fact that the codebase pattern `fatal(...); exit(1);` is used everywhere (including in this very file: lines 563-565, 426-427, 459-460, 520-521, 529) strongly implies fatal() returns — if fatal exited, the exit(1) calls would be dead code, and the default arm's fatal (without exit) implies the function continues after fatal prints. That's solid internal evidence. But let me verify the definition quickly to be rigorous.Confirmed: `fatal()` at `src/core/debugmsg.c:384-391` prints and RETURNS — it never exits. So the kill in the defect comes solely from `exit(1)`, and candidate (c) ("keep fatal, delete exit") survives with correct values but a persistent diagnostic — exactly what the detector's quiet-read clause must catch.
+
+  All premises now verified. Summary of verification:
+
+  1. Defect transcription — exact match (dev_dreamcast_maple.c:547-641; read arm 562-566: fatal → odata=d->dmaaddr → exit(1)).
+  2. Registration 0x5f6c00/0x100, DM_DEFAULT (line 651-652).
+  3. machine_dreamcast.c:149 device_add, prom_emulation early return at 155 — attached before → unconditional. TRUE.
+  4. Writers of d->dmaaddr: memset zero-init (649), write arm (559), DMA tail (540 with TODO at 539). TRUE — grep exhaustive across GXEMUL-SEC/src.
+  5. MAPLE_ENABLE sibling read arm quiet (578-579). TRUE.
+  6. MAPLE_STATE read arm always returns 0 (591-593) — confirms the brief's warning that STATE==0 is vacuous DMA evidence.
+  7. fatal() returns; exit(1) kills. TRUE (debugmsg.c:384-391).
+  8. writeflag: MEM_READ=0, MEM_WRITE=1 (memory.h:117-118); documented "set to MEM_READ or MEM_WRITE" (memory_rw.c:51). No third value exists at any call site — the else-covering-third-value concern is syntactic only, dead path. Premise 2's checkable answer: no such caller; benign.
+  9. FAULT: memory_rw.c:603-625 delivers exceptions only under #ifdef MEM_MIPS / MEM_M88K. No MEM_SH branch — on SH4, res<=0 just returns MEMORY_ACCESS_FAILED with no architected guest exception. So FAULT as a guest-visible bus error is not delivered on this machine. Brief's parenthetical TRUE.
+  10. _scratchpad PDFs: sh7750_hardware.pdf + sh4_programming.pdf EXIST — these are Dreamcast-CPU docs. The premise "No local Dreamcast/Holly documentation exists" is FALSE as literally worded if "Dreamcast documentation" includes the CPU manual; TRUE in substance for Holly/Maple registers (Maple is a Holly ASIC block, not an SH7750 on-chip peripheral; the SH7750 manual covers BSC/DMAC/TMU/SCIF/INTC etc., not 0x5F6Cxx). And the canonical external reverse-engineering reference (Comstedt, cited in the source itself) documents the register as a "set" register with no readback semantics — so premise 1's substantive question remains unsettled even with external help, and ACCEPT dominates.
+  11. The "settled premise true of a different device" from the earlier brief: the GD-ROM DMA shadow in gdrom_default_probe.py:655 — flagged in detector_RETRY line 4. This brief doesn't repeat it; nothing in THIS brief depends on a preloaded shadow.
+
+  Now compose the review. Format: VERDICT line first, then token PASS1_MAPLE_20260912. Answer the three questions:
+
+  Q1: Is ACCEPT right? Yes — with the option-set walk:
+  - DELETE: read falls to default arm → fatal "UNIMPLEMENTED read" + odata stays 0 → wrong value AND noisy. Worse.
+  - DECLINE / DECLINE+LATCHED: keep the process kill; the latch never even helps (death on first read). The defect IS the kill.
+  - ACCEPT: minimal, matches the sibling arms (ENABLE quiet read of the field, SPEED read returns timeout<<16, STATE constant 0), returns model-true state. No latch needed since read is implemented.
+  - FAULT: not delivered on SH4 — memory_rw.c:603-625 has only MEM_MIPS/MEM_M88K branches; a return-0 from the handler yields MEMORY_ACCESS_FAILED with no architected exception. Also semantically wrong (register is implemented).
+  - BACKED ACCEPT: announce-on-read violates the quiet contract; the read IS implemented; detector's read-quiet row would (rightly) fail it.
+  - IMPLEMENT: everything implementable from available evidence = ACCEPT. Hardware-true readback semantics unsettled (premise 1): no local Holly doc; Comstedt's page (the source's own reference) documents write-only "set" semantics; known drivers don't read it. Any "richer" implementation is speculation — and anything touching the cursor is the separate row.
+  So ACCEPT dominates: it's the only option that (a) removes the kill, (b) returns model-true data, (c) adds no unverifiable speculation, (d) matches the switch's own conventions.
+
+  Q2: Which wrong fix passes the detector? 
+  - The write-shadow / programmed-address latch: read returns a variable updated ONLY by the write arm. Exact edit: in the write arm keep d->dmaaddr = idata but read back a separate shadow — or equivalently implement the read as returning a latched copy of the last programmed value. Passes (a) (values exact), (b) (second write replaces shadow), (c) (no fatal, survives). Fails (d) because after DMA the field holds cursor C while the shadow still holds P. THE DMA LEG IS NECESSARY FOR THE FLOOR — without it this plausible wrong fix (arguably hardware-plausible!) passes.
+  - Also note: mutating the read to return the field while deleting line 540's tail assignment — a cursor-row mutant — is ALSO caught by the RETRY-form (d) (the alignment-refusal reference E never appears on retrigger, or numeric C1 mismatch in the 20260911 form). That's collateral coverage of the cursor row, not a decision of it.
+  - Clause (d) enumeration for the pure deletion (dominating predicates relative_addr==0x04, writeflag != MEM_WRITE): since the fix is a pure deletion, the surviving body's semantics are fixed; mutants live in (i) the predicate (read arm's reachability/guard — covered by value rows + other-read row for the hoist), (ii) the body's source (field vs shadow vs stale C1 vs fabricated delta — only post-DMA rows distinguish), (iii) the body's side effects (read modifying field — killed by double-read + retrigger re-observation), (iv) the deleted lines' partial retention (fatal kept → quiet row; exit kept → marker row). Clause (d) is the ONLY clause whose channel changes under (ii). For a pure deletion, (d)'s enumeration is exactly the set of read-source/read-side-effect mutants that agree with the field on all pre-DMA states and differ only in states the DMA tail created — i.e., states reachable only through line 540. That is why (d) is floor, not cursor-row coverage.
+  - Must also pin: independent DMA evidence = fresh DEVINFO response in verified prefilled buffer (MAPLE_STATE==0 is vacuous — its read arm is constant 0, verified at lines 591-593); expected post-DMA value from an INDEPENDENT field observation (alignment-refusal E in RETRY design) not from an earlier read through the arm under test and not from "settled formula" literals unless disclosed as fixture properties of this revision; read intervals delimited so the intentional refusal diagnostic doesn't break silence; poison/marker/exit-status so unexecuted guest can't pass silently.
+
+  Q3: Which premise is false? 
+  - Premise 1's parenthetical as literally worded: _scratchpad holds sh7750_hardware.pdf and sh4_programming.pdf — Dreamcast (CPU) documentation DOES exist locally. But it does not cover Holly/Maple registers (Maple is the Sega ASIC, not an SH7750 on-chip peripheral), so the load-bearing claim — hardware readback semantics unsettleable locally — stands; and the source's own cited reference (Comstedt) documents the register as set-only, leaving it unsettled externally too. Verdict-wise: premise 1's documentation claim is the false-as-stated premise, and it is not load-bearing.
+  - All other premises verified TRUE in this checkout: transcription exact; registration/attach/line-149/before-prom-guard exact; only three writers; sibling quiet; fatal returns; exit kills; STATE read constant 0; writeflag only MEM_READ/MEM_WRITE (no third-value caller — the syntactic-else observation is correct but describes a dead path; harmless either way: post-fix it assigns odata and returns 1 without serializing, no side effect); MIPS/M88K-only exception delivery (FAULT unavailable on SH4).
+  - Premise 3: separable — correct as ruled, with the readarm review's qualification: the edit doesn't touch cursor computation but DOES newly expose it, so the detector must characterize the current writer without certifying it (exactly what the RETRY design's E-reference does).
+
+  Also answer: is the DMA leg coverage of the separate cursor row? — It's floor for THIS row, constructed so as NOT to decide the cursor row: expected values come from an independent observation of the field (refusal message), disclosed as characterizing this revision's writer. If the cursor row later changes line 540, the fixture expectations must be re-derived (the detector contract says this explicitly). Good.
+
+  One more consideration for Q1's "BACKED ACCEPT": in this panel's vocabulary "BACKED ACCEPT" likely means accept + keep a backed/latched announce. I addressed it.
+
+  Also the question "Is the DMA leg necessary for the floor, or is it coverage of the separate cursor row?" — answered: necessary for the floor, because the distinguishing state (post-DMA cursor vs programmed address) is created by the DMA tail; without a DMA leg the read-source mutant space is indistinguishable. It simultaneously gives collateral coverage of the cursor row (tail deletion caught), but its assertions are about the READ reporting the field, so it doesn't adjudicate cursor correctness.
+
+  Also name the exact wrong fix edit per Q2: e.g.
+
+  ```c
+  case 0x04:
+      if (writeflag == MEM_WRITE) {
+          d->dmaaddr = idata;
+          d->last_written_dmaaddr = idata;   /* shadow */
+      } else
+          odata = d->last_written_dmaaddr;
+  ```
+
+  or, more deviously, `odata = d->dmaaddr;` while neutralizing line 540 (`d->dmaaddr = addr;` removed) — the read then reports the programmed address forever; (d) catches via missing refusal reference / wrong value. Also a third: read returns field but the fix ALSO latches the field on read (read-clear or read-freeze) — caught by double-read/retrigger rows.
+
+  Also worth one small note: the brief's inlined clause (c) says "catches 'keep fatal(), delete only exit(1)'" — verified workable because fatal() provably returns (debugmsg.c:384-391) and prints; the text-absence check must still validate the parser with the retained-fatal mutant (positive control), as the earlier design noted.
+
+  And a small caveat I should include honestly: I did not build or run the detector/mutant table (no witness run from me); the review is source-verified. The operational rule says naming a measurement is worth more than a timeout. Everything needed was inline or readable. I could optionally offer: none needed.
+
+  Also the "an earlier brief on THIS row gave a settled premise true of a different device" — that was the GD-ROM DMA shadow in the probe (gdrom_default_probe.py:655), flagged in detector_RETRY. Worth naming in the review to show the panel this brief's premises were re-derived from source and don't lean on the probe's GD-ROM description.
+
+  Structure of the reply:
+
+  VERDICT line. Token. Then:
+  - Premise audit (table-ish, compact): each premise → verified at file:line → true/false.
+  - Q1 answer with option walk (compact).
+  - Q2 answer: the wrong fix named exactly; DMA leg = floor, why; clause (d) enumeration for pure deletion.
+  - Q3 answer: the false-as-worded premise (local docs) + why it's not load-bearing; note the GD-ROM-shadow trap from the earlier brief is not repeated here.
+  - What the detector must pin (short list) — the essentials: exact E-reference independence, prefilled verified buffer + DEVINFO signature, no MAPLE_STATE, delimited read intervals, poison/markers/exit status, double reads (read has no side effect), E2 != E1 distinct-cursor requirement, disclosure contract (fixture expectations characterize this revision's writer; cursor-policy change invalidates).
+
+  Keep it tight but complete. Use path:line citations. Write in English (user's language).
+
+• **VERDICT: ACCEPT is the right disposition, and every load-bearing premise in this brief survives source-checking in this checkout — the one false-as-worded premise is the "no local documentation" footnote, and it does not change the outcome. The detector's DMA leg is floor, not luxury: without it a write-latched shadow fix passes (a)–(c) cleanly.**
+
+  PASS1_MAPLE_20260912
+
+  ## Premise audit (checked against the tree, not the transcription)
+
+  | Premise | Result | Anchor |
+  |---|---|---|
+  | Read arm is `fatal → odata = d->dmaaddr → exit(1)`; every other exit path as transcribed | TRUE, verbatim | `GXEMUL-SEC/src/devices/dev_dreamcast_maple.c:557-641` |
+  | Registered `DM_DEFAULT`, phys `0x5f6c00`, len `0x100` | TRUE | `dev_dreamcast_maple.c:651-652` |
+  | Attached unconditionally at `machine_dreamcast.c:149`, before the `prom_emulation` return | TRUE — return is at line 155 | `machine_dreamcast.c:149,155` |
+  | Only writers of `d->dmaaddr`: memset, write arm, DMA tail with the TODO above it | TRUE — grep over the whole tree finds exactly lines 649, 559, 539-540 | `dev_dreamcast_maple.c` |
+  | Sibling `MAPLE_ENABLE` read arm is quiet | TRUE | `dev_dreamcast_maple.c:576-579` |
+  | `MAPLE_STATE` read returns 0 always (so STATE==0 is vacuous DMA evidence) | TRUE | `dev_dreamcast_maple.c:591-593` |
+  | `fatal()` returns; the kill is solely `exit(1)` | TRUE — `fatal()` is a 3-line `va_debug` wrapper | `src/core/debugmsg.c:384-391` |
+  | `writeflag` third value? | No such caller exists: `MEM_READ=0`, `MEM_WRITE=1` (`src/include/memory.h:117-118`), documented "set to MEM_READ or MEM_WRITE" (`src/cpus/memory_rw.c:51`). The syntactic `else`-covers-third-value observation is correct but describes a dead path; post-fix behavior on it (assign `odata`, return 1, no tail write, no side effect) is benign. |
+  | FAULT on SH4? | Not available. The failed-device-access exception block has only `#ifdef MEM_MIPS` and `#ifdef MEM_M88K` branches — no MEM_SH delivery; a return-0 yields `MEMORY_ACCESS_FAILED` with no architected guest exception | `src/cpus/memory_rw.c:603-625` |
+  | No local Dreamcast/Holly docs | **FALSE as worded**: `_scratchpad/` holds `sh7750_hardware.pdf` and `sh4_programming.pdf`. Not load-bearing: Maple at `0x5F6Cxx` is Holly-ASIC, not an SH7750 on-chip peripheral, so neither covers it. The source's own cited reference ([Comstedt's maplebus page](http://mc.pp.se/dc/maplebus.html)) documents the register as "set … before starting DMA" — write semantics only, nothing on readback. Premise 1's *substantive* question stays unsettled locally and externally; ACCEPT dominates regardless. |
+
+  The earlier "settled premise true of a different device" was the probe's preloaded **GD-ROM** DMA shadow (`regress/gdrom_default_probe.py:655`), already flagged in `codex_detector_RETRY_20260911.txt:4`. This brief's premises do not lean on it.
+
+  ## Q1 — Is ACCEPT right? Yes, and the option walk is not close
+
+  - **DELETE** (drop the whole read arm): read falls to `default:` → `fatal("UNIMPLEMENTED read…")` plus `odata` stays 0. Wrong value *and* noisy — strictly worse than ACCEPT on both axes.
+  - **DECLINE / DECLINE+LATCHED**: keeps the process kill, which *is* the defect. The latch never fires twice anyway — the guest dies on the first read.
+  - **FAULT**: undeliverable on SH4 (above) and semantically wrong — the register is implemented; there is a stored value to return.
+  - **BACKED ACCEPT** (return the field but announce): the read is implemented by the fix, so an "unimplemented" diagnostic is a lie; it violates the switch's own convention (ENABLE/SPEED/STATE read arms are all quiet); the detector's read-quiet row would correctly fail it.
+  - **IMPLEMENT**: everything implementable from available evidence *is* ACCEPT. Hardware-true readback semantics are unsettled (premise 1); anything richer is speculation, and anything touching the cursor is the separate row.
+  - **ACCEPT**: removes the kill, returns model-true state, matches the sibling arms, adds zero unverifiable claims. Minimal and correct.
+
+  ## Q2 — Which wrong fix passes (a)–(c), and what (d) must pin
+
+  The passing wrong fix, exactly:
+
+  ```c
+  case 0x04:
+      if (writeflag == MEM_WRITE) {
+          d->dmaaddr = idata;
+          d->dmaaddr_shadow = idata;   /* programmed-address latch */
+      } else
+          odata = d->dmaaddr_shadow;   /* never tracks the DMA tail */
+  ```
+
+  It passes exact readback with high bits and low-five-bits set (a), passes write-replaces-read (b), and is silent and surviving (c). It is only distinguishable in a state created by `dev_dreamcast_maple.c:540` — post-DMA, field holds cursor `C`, shadow still holds `P`. **That is why the DMA leg is floor, not cursor-row coverage:** for a fix whose guarded body is `odata = d->dmaaddr;` dominated by the predicates `relative_addr == 0x04` and `writeflag != MEM_WRITE`, clause (d) is the only clause whose observable channel changes under the entire read-source mutant class. Its enumeration: (i) shadow/latch sources (returns `P`, killed by exact `E`-comparison); (ii) stale-first-cursor (returns `C1` after transfer B — killed by requiring `E2 != E1`); (iii) fabricated deltas (`P+4`, fixed `P+12` — killed by exact equality and the two-descriptor fixture, `C2 = P2 + 24`); (iv) read-with-side-effect (read clears/freezes the field — killed by double reads and by re-observing the same refusal on retrigger); (v) the cursor-row mutant of deleting line 540 itself — caught *collaterally* because the expected alignment refusal never appears on retrigger, without adjudicating whether line 540 is architecturally right.
+
+  So (d) must pin, concretely:
+
+  - **Independent DMA evidence**: a fresh DEVINFO signature in a receive buffer pre-filled and *verified* with a distinguishable pattern — never `MAPLE_STATE == 0` (constant-0 arm, verified).
+  - **Independent field observation**: the expected post-DMA read value must come from outside the arm under test — the RETRY design's parse of the existing `dmaaddr 0x%08x is NOT 32-byte aligned; aborting` refusal (which prints the field copied at `dev_dreamcast_maple.c:382`) is the right oracle; a missing/malformed reference must fail, never default. Precomputed cursor literals must be disclosed as this-revision fixture properties, not hardware truth.
+  - **Delimited read intervals**: the intentional refusal diagnostic lives in trigger intervals; read silence is asserted only over read intervals, or the `bad cursor` row self-falsifies.
+  - **Execution evidence**: poisoned load destinations, per-block completion markers, exit status 0 — silence alone also describes a guest that never ran.
+  - **Positive control**: run the retained-`fatal()` mutant once to prove the parser actually turns the quiet row red (works because `fatal()` provably prints and returns).
+
+  ## Q3 — The false premise
+
+  The "no local Dreamcast/Holly documentation" claim, literally: SH-4/SH7750 manuals *are* local Dreamcast documentation. It is false only in wording and immaterial in substance — those manuals don't cover Holly's Maple registers, so premise 1's real question (programmed latch vs. cursor vs. other on hardware) remains unsettled, and the recorded basis for ACCEPT — "return the model's field, quiet, matching the switch's conventions" — stands on the source alone. Every other premise in the brief, including the FAULT-unavailability parenthetical and the writeflag partition, checked out true at the cited lines. No gate was run; no measurement beyond the inlined ones was needed.
+
+To resume this session: kimi -r session_d65a744c-ece5-468c-b293-2de4703da26f

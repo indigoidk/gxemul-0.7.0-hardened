@@ -1,0 +1,41 @@
+VERDICT: ACCEPT is right — the read is implementable from state the model already holds, the exit(1) is the outlier by the function's own conventions, and no previously-surviving guest path can regress — but the detector as specified is one clause short (nothing forbids a read that mutates the field after publishing it), and the DMA leg (d) is floor, not mere cursor-row coverage, because it is the only leg that kills the "return last programmed value" mirror fix.
+
+PASS1_MAPLE_20260912
+
+## Q1 — Is ACCEPT right? (full option set)
+
+- **ACCEPT — yes.** The edit is a pure deletion of two statements around a retained assignment; control flow is otherwise unchanged (READ of the inlined arm; REASONED). Dominance argument the brief understates: the `exit(1)` is unconditional in the else arm (READ), so *every* guest path reaching this read previously terminated the process — therefore no previously-surviving session can observe a behavioral regression (REASONED). Blast radius is confined to paths that were terminal, minus the log line the detector pins.
+- **DECLINE / DECLINE+LATCHED ANNOUNCE — no.** Leaves a process-kill on a DM_DEFAULT-registered, unconditionally attached device (READ), and "cannot implement" is false: the field exists and is exactly what the sibling 0x14 read arm returns for `d->enable` (READ).
+- **DELETE — ambiguous, and that matters.** The minimal deletion *is* ACCEPT's edit. Delete-beyond-minimum (the arm, the case, the odata assignment) routes to `default:` → fatal-without-exit, `odata` stays 0, guest reads 0 plus noise (READ of the default-case annotation; REASONED). Wrong.
+- **FAULT — no, on the merits, before availability even matters.** A plain register read on real hardware doesn't bus-error, and the model has an answer; faulting fabricates behavior *more* hostile to guests than the defect. SH4 availability is not checkable from the packet — settling fact: the failed-device-access branch of `memory_rw.c` under the SH4 path (the packet itself only asserts exception delivery for MIPS/M88K — READ).
+- **BACKED ACCEPT — dominated.** The edit makes no hardware claim: it returns the model's field, whatever the model holds. The programmed-vs-cursor question lives in the *writer* (the xfer tail), not the read arm (READ of the code shape; REASONED). If hardware backing later contradicts the post-transfer field value, the correction lands in the cursor row and this read needs no further edit.
+- **IMPLEMENT — collapses into ACCEPT + deciding premise 3's row**, i.e., scope creep beyond available ground truth (premise 1 unsettleable from the packet).
+
+## Q2 — Wrong fixes and the detector
+
+**The wrong fix that passes all four legs** (exact edit):
+
+```c
+} else {
+        odata = d->dmaaddr;
+        d->dmaaddr = 0;      /* or = last programmed value */
+}
+```
+
+Why it passes: (a) each read returns the just-written value exactly (mutation lands after `odata` is taken); (b) each new write overwrites the mutation; (c) survives, text absent; (d) the post-transfer read returns the cursor before mutating it. Why it's wrong: a second consecutive read returns 0 — the detector never re-reads without an intervening write or transfer, so it pins round-trip, liveness, and survival but not **read quiescence**. Single missing clause: *two consecutive reads with no intervening write or transfer report identical values.* (Note clause (c)'s two prongs are exactly right at deletion granularity: text-absence kills the keep-`fatal`-delete-`exit` mutant, the survival/marker prong kills the keep-`exit`-delete-`fatal` mutant — one prong per deleted statement — REASONED.)
+
+**Is the DMA leg floor or cursor-row coverage? Floor, with a recorded coupling.** Consider the mirror fix: add `d->last_programmed = idata;` in the write arm, return `d->last_programmed` on read. It passes (a) exactly, passes (b) (updates on every write), passes (c). It is a materially different contract — latched programmed value instead of live field — and **only leg (d) kills it.** So (d) is necessary for the floor. It simultaneously fences the other direction of scope creep (deleting `d->dmaaddr = addr;` in the xfer fails (d) as specified, since the expected value is the post-transfer cursor derived from the witness's descriptor chain). The coupling to record: (d)'s expected value is *model-derived* from the cursor row's current writer; if that row is later decided the other way, (d)'s expected value must be re-derived in lockstep.
+
+**Clause (d)'s enumeration for the pure deletion:** the remaining body's only observable is the published `odata`, and publication requires the common tail's `writeflag == MEM_READ` (READ). The named dominating predicates (`relative_addr == 0x04`, `writeflag != MEM_WRITE`) govern body *entry*, not *publication* — a hypothetical third flag would enter the body invisibly to any guest-level detector (REASONED). The packet names three writers of the field: zero-init, write arm, xfer tail (READ). Legs (a)/(b) enumerate write-arm-written values; (d) enumerates the xfer-written value. The unenumerated point: a read **before any write** (zero-init value) is pinned by no leg — cheap to add.
+
+## Q3 — Which premise is false?
+
+None of the three is refutable from the packet, and I won't manufacture a refutation:
+
+- **Premise 2's mechanics check out** (READ): "before, it terminated" — `exit(1)` is unconditional in the else arm; "after, returns 1 without the common-tail write" — the tail publishes only on `MEM_READ`. The open half — whether a third writeflag value ever reaches `DEVICE_ACCESS` — is **not checkable from the packet**; settling fact: the `MEM_*` definitions and the writeflag values at the device-dispatch call sites in `memory_rw.c`. Mitigation visible in the packet alone: every sibling case *already* treats a hypothetical third flag as silent success, so the fix removes an inconsistency; and since every third-flag access previously killed the process, nothing surviving can regress (REASONED).
+- **Premise 1 is honestly open, and ACCEPT does not depend on its answer** (REASONED) — that structural independence is the strongest argument for ACCEPT over BACKED ACCEPT. The embedded claim "no docs in `_scratchpad/`" is not checkable from this seat; settling fact: an authoritative Holly/MAPLE register description, or a hardware read of the register pre/post transfer.
+- **Premise 3's separation is sound** — the edit does not touch the xfer, and the recorded consequence honestly notes the observability change — provided leg (d) is labeled cursor-row-coupled, as above.
+
+The one load-bearing prose assertion with **no inlined support** is "`maple_do_dma_xfer()` is the ONLY other writer of `d->dmaaddr`." If a fourth writer hides in the elided bodies, leg (d)'s expected value is wrong. Not provable from the packet; settle with the complete assignment list for `d->dmaaddr` in the file. Likewise "zero-initialisation" is asserted, not shown. Neither changes the disposition; both change only how (d)'s expected value is computed.
+
+**Named un-inlined measurement (severity only, not disposition):** a guest-side trace showing whether stock DC guests actually read DMAADDR would establish real-world reach of the kill; the packet asserts none.

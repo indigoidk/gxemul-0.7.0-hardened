@@ -1,0 +1,127 @@
+I'll start from the real uncommitted diff, the 16-row probe, and the kill table — not the summary — then look for a clause-(d) mutant that stays green.Git from this seat was blocked, so I’ll read the source, probe, and kill-table artifacts directly.The probe and handler are in hand; next I’ll read the pre-table, pass-1 ruling, and the actual mutants so the (d) sweep isn’t just the table’s labels.**SURVIVOR: `if (relative_addr & 4) relative_addr = 0x04;` before the `switch` — `other read` (RESET2 `+0x10`) is the row that was supposed to catch a weakened `relative_addr == 0x04`, and it does not move.**
+
+`PASS2_MAPLE_20260912`
+
+Tree read: `GXEMUL-SEC/src/devices/dev_dreamcast_maple.c` (the uncommitted ACCEPT arm), `regress/maple_dmaaddr_probe.py`, `killtable_20260912/{PRETABLE,POSTTABLE,SCORES,mut_maple.py,probe_M_HOIST.raw,probe_M_REWORD.raw}`, Fable/Opus pass-1. No gate, no new binary (this seat’s shell is blocked). The three greens below are from the probe’s access set, which is closed and small.
+
+---
+
+## 1. Three greens inside the enumeration (the next three)
+
+Pass 1’s three (total hoist, TODO-literal announce, `return 0`) are rows. The 14-leg table is clean **against the mutants it built**. It is not a sweep of the (d) set the brief just named.
+
+Dominating predicates of the edited lines: `case 0x04` (`relative_addr == 0x04`) and the `else` (`writeflag != MEM_WRITE`). Body: `odata = d->dmaaddr;` — reads that field, tests nothing. Guest maple offsets this instrument actually issues: **`0x04`, `0x10`, `0x80`**. Nothing else.
+
+### S1 — weaken `== 0x04` without touching `0x10` or `0x80`  (the leftover hoist cell)
+
+Exact edit, one insert above `switch (relative_addr)`:
+
+```c
+	if (relative_addr & 4)
+		relative_addr = 0x04;
+```
+
+That is `& 3` → `& 1` on an equality: `relative_addr == 0x04` becomes `(relative_addr & 4) == 4`, then forced into the existing arm. Preimage includes `0x0c`, **`0x14` (ENABLE)**, `0x1c`, **`0x8c` (RESET)**, `0xe4`, … and does **not** include RESET2 (`0x10 & 4 == 0`) or SPEED (`0x80 & 4 == 0`).
+
+| row that might have caught it | why it stays green |
+|---|---|
+| `other read` | reads `+0x10`, still RESET2, still 0. Measured under M_HOIST as the *total* hoist only (`probe_M_HOIST.raw`: `other read 0x8c012345` / want `0x0`) |
+| `ctrl devsig maple` | reads `+0x80`, still SPEED’s shift/mask `0x12340000` |
+| every DMAADDR value row | `0x04 & 4` is set, arm unchanged |
+| `read silent` | ENABLE/RESET are never issued, so no extra `fatal` |
+
+Same cell, two other spellings, also 16/16: `if (relative_addr == 0x14) relative_addr = 0x04;` (ENABLE only); `case 0x04: case 0x14:` with ENABLE’s own `case` removed (C refuses a duplicate label).
+
+**Row owed:** ENABLE at `0xa05f6c14` with `dmaaddr` already `VAL_A`, destination poisoned, want `d->enable` (0). Pass 1 already asked for that control (`devsig ENABLE write/read at +0x14`); the shipped probe used SPEED instead. SPEED is a better *device signature* and a worse *hoist complement*.
+
+This is the `#499` shape on a binary partition that was treated as one cell: M_HOIST weakened the predicate to `true` and RESET2 caught that instance. A weakening whose extra preimage is disjoint from `{0x10, 0x80}` is the same class, still open.
+
+### S2 — qualify the `else` with `len == 4`  (width, asked)
+
+```c
+		} else if (len == 4) {
+			odata = d->dmaaddr;
+		} else {
+			fatal("[ dreamcast_maple: TODO: read from dmaaddr ]\n");
+			exit(1);
+		}
+```
+
+Textbook (d): `if (X)` → `if (X && Y)` on a dominating predicate, then the deleted kill restored under the complement. Every subject load is `mov.l` (`0x6n12`); `len` is 4 in every row, so the new `else` is dead on this table.
+
+**Row owed:** a `mov.w`/`mov.b` at `0xa05f6c04` with a poisoned destination — accept-side for the width conjunct, survival for the re-introduced `exit`.
+
+Polarity that is *not* a survivor: `memory_writemax64(cpu, data, 2, odata)` in the common tail. That *is* observed (low 16 bits of `VAL_A` / high zeros on a little-endian SH4) and `read val_a` would red. Delivery width is pinned; **guard width is not**.
+
+`len != 4` is the common tail’s parameter, not a body test. Pass 1 disclosed it as (e). It is still a qualified dominating predicate, and it is still green. That is why it is here rather than in the swept-equivalent list.
+
+### S3 — re-introduce the diagnostic without the substring `dreamcast_maple`
+
+```c
+			fatal("[ maple: TODO: read from dmaaddr ]\n");
+			odata = d->dmaaddr;
+```
+
+M_REWORD was killed 15/16 *because the authors kept the device name in the format string* (`mut_maple.py`: `fatal("[ dreamcast_maple: read from dmaaddr ]\n")`; `probe_M_REWORD.raw`: `read silent 8/9`). The row they named for that class is:
+
+```python
+noisy = sum(1 for t, _ in READS if "dreamcast_maple" in t)
+```
+
+Drop the substring and `read silent` stays `0/9`. Values, survival, RESET2, SPEED: unchanged. **16/16.**
+
+`fatal()` does not wrap a device prefix; the name is only in the format string (the original TODO line is the proof). This is the pass-1 “literal TODO” hole moved one token, not a new species.
+
+---
+
+### Swept (so this is not a hunt past the bound)
+
+| edit | why not a 16/16 (d) survivor |
+|---|---|
+| HEAD / M_EXITONLY / M_KEEPFATAL / M_LATCHED | table: 5, 6, 15, 15 |
+| M_HOIST (odata at declaration, arm emptied) | table: `other read` alone |
+| `else if (writeflag == MEM_READ)` | EQUIVALENT (279 callers; settled) |
+| M_RET0 / M_DECLINE / M_READCLEAR / M_MASKLOW | table |
+| M_EQ4 / M_BIT30 / M_ZEROEXIT | table; body tests no partition — (e), L1 as settled |
+| `if (d->dmaaddr == 0x12345678) exit(1)` | green, but (e) and already disclosed (“another exact value”) |
+| `odata = idata` / `idata = d->dmaaddr` | decline-shaped; value rows red |
+| `odata = d->enable` / `d->timeout` | both sit at 0; value rows red (and not body-read fields) |
+| early `return 1` after the assignment | skips the tail; poison remains |
+| `return 0` | table 7/16, including `read silent` under `step` |
+| uncommented write-arm `debug("[ dreamcast_maple: dmaaddr set to …")` | 7/9 read sessions write first; `read silent` reds |
+
+No green operand-swap on `odata` except identities (`+ 0`, `(uint64_t)`, sign-extend then `len==4` tail).
+
+---
+
+## 2. Channel vs the mutant the row is named for
+
+Against the **built** legs, the discriminating rows do vary: M_HOIST/`other read`, M_READCLEAR/`double read 2`, M_EQ4/`read four`, M_BIT30/`read all ones`, M_ZEROEXIT/`initial zero`+survive, announce trio/`read silent` 8/9.
+
+Two CHANNEL *sentences* are false, and one of them is a named-mutant miss:
+
+1. **`read silent`.** PRETABLE: “varies under any announce.” Probe header: “ANY `dreamcast_maple` output … never one literal string.” The observable is one literal. Under S3 the channel does not vary. The row note `"maple output in read sessions (any text)"` is a wrong record about the same test. This is the pass-1 TODO-literal defect, not discharged.
+
+2. **`other read`.** PRETABLE: “varies only under a hoist.” True of M_HOIST as built (`odata = d->dmaaddr` at the declaration). False of the hoist *class*. Under S1 the observable stays 0. A row at RESET2 pins “DMAADDR did not swallow `+0x10`.” It does not pin “DMAADDR did not swallow `+0x14` / every `(addr & 4)`.”
+
+Value rows are not vacuous: destinations are `POISON 0xa5a55a5a`, distinct from every want, so `return 0` and decline actually red. That part of pass 1 landed.
+
+---
+
+## 3. Contract statements that are false or overclaim
+
+From the probe header, in order of load:
+
+1. **“never one literal string” / “any maple text.”** False. The test is `"dreamcast_maple" in t`. The row note repeats the overclaim (`any text`).
+
+2. **“the diagnostic alone, verbatim, reworded or latched” each MEASURED.** Only rewords that keep `dreamcast_maple` were measured. The class claim is false (S3).
+
+3. **“the read hoisted out of its `relative_addr == 0x04` guard (`other read`).”** Measured for the total hoist. Overclaims the class (S1). `ctrl devsig maple` does not close it: SPEED is `+0x80`.
+
+4. **“masking of high or low-five bits” each MEASURED in the kill table.** Only `M_MASKLOW` is a leg. High-bit masking is *accidentally* held by `read val_a` (`0x8c012345`); it was not a table leg. “MEASURED in the kill table” is the overclaim, not “val_a would fail a high mask.”
+
+Honest, and should stay: 32-bit reads only as a *disclosure of what was not rowed* (S2 still green); `dmaaddr == k` by class; no post-DMA row (`mapledmaadvance`); third `writeflag` EQUIVALENT.
+
+---
+
+The ACCEPT diff is the sibling ENABLE read and is not the problem. The 16-row instrument still has a (d) hole in the predicate they already graded floor (`relative_addr == 0x04`), a width-qualified `else` they asked about, and a silence row that tests a token rather than a channel. I did not rebuild S1–S3; the access list is `0x04` / `0x10` / `0x80` and the silence test is one `in` on a substring — both are in the probe as committed to this packet.

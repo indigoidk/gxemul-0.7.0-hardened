@@ -1,0 +1,74 @@
+I'll verify the `read silent` comparison against the probe, kill-table artifacts, and the session/EOF path rather than taking the brief's account of it.Kill table 6 is on disk; next I’ll check the scores, the Maple read path, and whether `noise()` still drops any output.Scores match the brief. Next I’ll inspect the Maple read arm, quit/EOF behavior, and whether any output still sits outside `noise()`.**CLOSES**
+
+FINAL528_20260912
+
+Checked against `GXEMUL-SEC/regress/maple_dmaaddr_probe.py`, the Maple read arm, `fatal()`/`va_debug()`, the debugger `quit` path, and `regress/artifacts/mapledmaaddr/killtable6_20260912/{SCORES.txt,POSTTABLE.out,PRETABLE.out,probe_M_ATEXIT.raw,probe5_M_ATEXIT.raw}`. Did not run `run.sh`, any `gate_*.sh`, or the battery.
+
+---
+
+### 1. Is any emulator output from the register read still not compared?
+
+**No pty-visible output from the read is still uncompared**, except the two classes the header already names.
+
+`noise()` now runs on each of the twelve `rsession` transcripts (`t`, not a pre-`quit` snapshot), from the first `GXemul> ` through whatever `rd(10.0)` collected after typing `quit`. `owed(cmds + ["quit"])` requires the `quit` echo and then no further body lines; `tail` must be `""`; a CR that is not part of CRLF fails. Kill table 6 measured that on the same binary: FROZEN6 `M_ATEXIT` is **36/37** (`read silent` 12/12, surplus line after the `quit` echo); FROZEN5 on that binary is **37/37** (the miss, reproduced).
+
+What still cannot fail `read silent`:
+
+| Channel | Why | Disposition |
+|---|---|---|
+| `fatal("")` (or any format that emits no byte) | `va_debug()` does `vsnprintf` then `while (*s) printf("%c")`; an empty buffer prints nothing | disclosed EQUIVALENT |
+| A `FILE*` the arm `fopen`s, `syslog`, a slave xterm via `console_putchar` | maple already opens a slave (`console_start_slave_inputonly`); with `-x` that path writes `w_descriptor`, not the debugger stdout the pty records | disclosed: off the operator’s console, outside what a transcript can observe |
+
+**I agree with the file/syslog disclosure.** A slave-console write is the same class, not a new hole. I do not treat it as a gap that needs an edit.
+
+A handler that `sleep`s past the 10 s `rd` cap and then prints is not a remaining comparison hole of the atexit class; it is the backstop every EOF wait has. The measured `atexit` prints and exits immediately. Stretching the timeout is unbounded. That is outside the contract as stated, not a floor breach.
+
+---
+
+### 2. Can a correct build fail this comparison? Can a crashed session pass it?
+
+**Correct build: not on this apparatus.** BASE / BASE2 / BASE3 are 37/37 `CONTROL=OK` in `SCORES.txt`. `quit` does not print a second prompt (`debugger_cmd_quit` sets `emul_shutdown` / `exit_debugger` and the debugger loop exits without another `printf("GXemul> ")`). Shutdown then runs two maple ticks and `fflush(stdout)`; those ticks only `fatal()` on a keyboard/controller queue overrun, which these sessions do not hit.
+
+Theoretical false-reds, not observed:
+
+- First prompt slower than `rd(settle=2.5)`.
+- An inter-command reply slower than 0.20 s (last command already uses 1.2 s; the post-`quit` drain is 10 s).
+- `quit` echo not arriving within 10 s.
+
+Those windows predate this repair except that a *late* last-command line arriving *after* the `quit` echo would now fail, where table 5 would have ignored it. Three clean BASE runs say that does not happen here. I did not load-test it.
+
+**Crashed session: cannot pass `read silent`.** `noise()` always owes the full command list plus `quit`. Dying in the command loop truncates `buf` and either drops the `quit` echo or inserts the diagnostic; both fail. `M_EXITONLY` / HEAD are 11/37 with `read silent` among the failures. A crash *after* a complete quiet transcript including the `quit` echo is a quiet exit as far as this row is concerned; the marker session’s `exit status` row is what pins `exit0`.
+
+---
+
+### 3. Does the review chain close here?
+
+**Yes.** Checked:
+
+- Diff vs the live probe: post-`quit` `rd(10.0)`, `owed`’s `quit` arm, `noise(t, cmds + ["quit"])`, `tail != ""`, `rsession` storing `t`, SNAP removed.
+- Clause (e) now names late output (atexit / exit flush) as covered and off-pty output as not.
+- Kill table 6: 15 FROZEN6 legs + 2 FROZEN5 runs = 17, every score matching PRETABLE; restore `cmp`-CLEAN, binary FRESH, `KILLTABLE_DONE`.
+- `fatal()` → `va_debug()` → `printf` on stdout, which `pty.fork()` connects to the slave. That is the channel the transcript holds.
+- The Maple read arm is still ACCEPT: `odata = d->dmaaddr;` only.
+
+A future miss of a **pty-visible** diagnostic of any wording, shape, or timing (in-session or at exit, inside the 10 s drain) is a **breach of the stated contract**. A future miss of empty-format or off-pty output is **outside the contract, as stated**.
+
+---
+
+### 4. Which statement above is wrong?
+
+**“The session now reads until the pseudo-terminal reaches end-of-file after `quit`.”**
+
+`rd(10.0)` returns on EOF *or* after 10 seconds with the slave still open. The comment “returns at once when the pty closes” is true of the EOF arm, not of the call. On every measured leg the process does close in time, so the scores do not change. The sentence as written is still false of the code.
+
+A smaller overclaim in the same block: **“any … altered line … fails it.”** `print rN` is owed as `("value", None)` — any single hex line matches. An altered value is the value rows’ job, not `read silent`’s. Extra, missing, glued, reordered, late, or non-CRLF CR still fail.
+
+The table-4 “whole buffer” line is the right *contrast* (table 4 scanned `t`; table 5 scanned a pre-`quit` SNAP) but is not an EOF wait either (`rd(0.4)`). Table 6 measured FROZEN5 vs FROZEN6, not FROZEN4, on `M_ATEXIT`. The SNAP regression is measured; “table 4 would have caught this exact atexit” is reasoned.
+
+---
+
+### Premises: what I checked, what I could not
+
+**Checked from the tree (not only from this packet):** live probe vs the inlined diff; Maple `case 0x04` read arm; `va_debug`/`fatal`; `debugger_cmd_quit`; emul shutdown / `cpu_run_deinit` (two maple ticks + optional cycle print); table 6 `SCORES.txt` / `POSTTABLE.out` / both `M_ATEXIT` raw logs; table 4’s `noise()` using full `t`.
+
+**Not checked / not from this text:** I did not re-run the probe or a mutant (scores already on disk; no gates). I did not re-run table 4’s instrument on `M_ATEXIT`. I did not load-test the 0.20 s / 2.5 s / 10 s windows. I did not `cmp` FROZEN6 against `regress/maple_dmaaddr_probe.py` as a byte identity (the session/`noise`/`owed`/`rsession` bodies I read are the same change).

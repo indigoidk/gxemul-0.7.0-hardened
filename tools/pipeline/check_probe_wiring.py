@@ -231,6 +231,75 @@ MANIFEST = {
         (CLASS_TOOL, "#526 kill-table 1 mutator"),
     "artifacts/xscaleinten/killtable2_20260912/mut_xscale_t2.py":
         (CLASS_TOOL, "#526 kill-table 2 mutator: M1, M5, M_OPCODE2, M_RD15, M_NREAD and the three pass-2 cells (M_OP1, M_ISTEER_WR, M_CRM)"),
+    #  #528 mapledmaaddr, landed with the round: the detector and its untracked instruments.
+    "maple_dmaaddr_probe.py":
+        (CLASS_DETECTOR, "#528 mapledmaaddr: a guest read of MAPLE_DMAADDR computed the field and then ended the emulator -- 37 rows on unmodified -E dreamcast, silence checked as an EXACT owed transcript; seven kill tables under artifacts/mapledmaaddr/ (the last, killtable7_20260912/).  Wired in gate_sh_rounding.sh, pin 37"),
+    "artifacts/mapledmaaddr/agy_maple_witness_20260912.py":
+        (CLASS_RESEARCH, "#528 the rung-3 witness as agy built it (committed 4/12, fix 12/12) -- the as-run record"),
+    "artifacts/mapledmaaddr/killtable_20260912/mut_maple.py":
+        (CLASS_TOOL, "#528 kill-table 1 mutator"),
+    "artifacts/mapledmaaddr/killtable_20260912/maple_dmaaddr_probe.FROZEN.py":
+        (CLASS_RESEARCH, "#528 the frozen 16-row instrument kill table 1 ran"),
+    "artifacts/mapledmaaddr/killtable2_20260912/mut_maple2.py":
+        (CLASS_TOOL, "#528 kill-table 2 mutator: table 1's legs, the pass-2 panel's survivors and the Opus seat's, as the edits it measured"),
+    "artifacts/mapledmaaddr/killtable2_20260912/maple_dmaaddr_probe.FROZEN2.py":
+        (CLASS_RESEARCH, "#528 the frozen 29-row instrument kill table 2 ran"),
+    "artifacts/mapledmaaddr/killtable3_20260912/mut_maple3.py":
+        (CLASS_TOOL, "#528 kill-table 3 mutator: table 2's legs plus the seven F2-adjudication survivors (sub-word aliases, case 0x00, bare-hex diagnostic, joint decline, sibling write, len == 1)"),
+    "artifacts/mapledmaaddr/killtable3_20260912/maple_dmaaddr_probe.FROZEN3.py":
+        (CLASS_RESEARCH, "#528 the frozen 35-row instrument kill table 3 ran"),
+    "artifacts/mapledmaaddr/killtable4_20260912/mut_maple4.py":
+        (CLASS_TOOL, "#528 kill-table 4 mutator: table 3's plus the blank / bare-CR / prompt-shaped diagnostics"),
+    "artifacts/mapledmaaddr/killtable4_20260912/maple_dmaaddr_probe.FROZEN4.py":
+        (CLASS_RESEARCH, "#528 the frozen 35-row count-based instrument kill table 4 ran"),
+    "artifacts/mapledmaaddr/killtable5_20260912/mut_maple5.py":
+        (CLASS_TOOL, "#528 kill-table 5 mutator: table 4's plus the two survivors of table 4's count oracle, the unmeasured selector bits and the single-bit read side effects"),
+    "artifacts/mapledmaaddr/killtable5_20260912/maple_dmaaddr_probe.FROZEN5.py":
+        (CLASS_RESEARCH, "#528 the frozen 37-row pre-quit-snapshot instrument kill table 5 ran"),
+    "artifacts/mapledmaaddr/killtable6_20260912/mut_maple6.py":
+        (CLASS_TOOL, "#528 kill-table 6 mutator: table 5's plus the Opus seat's measured atexit survivor, verbatim"),
+    "artifacts/mapledmaaddr/killtable6_20260912/maple_dmaaddr_probe.FROZEN6.py":
+        (CLASS_RESEARCH, "#528 the frozen 37-row whole-transcript instrument kill table 6 ran"),
+    "artifacts/mapledmaaddr/killtable7_20260912/mut_maple7.py":
+        (CLASS_TOOL, "#528 kill-table 7 mutator: table 6's plus the final pass's exit-time, delayed-exit and disassembler-swap forms, and the disclosed tick window"),
+    "artifacts/mapledmaaddr/killtable7_20260912/maple_dmaaddr_probe.FROZEN7.py":
+        (CLASS_RESEARCH, "#528 the frozen 37-row instrument kill table 7 ran (the shipped probe)"),
+    "artifacts/mapledmaaddr/killtable7_20260912/maple_dmaaddr_probe.FROZEN6.py":
+        (CLASS_RESEARCH, "#528 table 6's instrument, re-run in table 7 to measure the final pass's survivors"),
+    "artifacts/mapledmaaddr/killtable7_20260912/unit_owed7.py":
+        (CLASS_RESEARCH, "#528 offline check of the full-line disassembly model and the EOF/exit-status conditions before table 7"),
+    "artifacts/mapledmaaddr/killtable6_20260912/maple_dmaaddr_probe.FROZEN5.py":
+        (CLASS_RESEARCH, "#528 table 5's instrument, re-run in table 6 to reproduce the atexit escape"),
+    "artifacts/mapledmaaddr/killtable5_20260912/maple_dmaaddr_probe.FROZEN4.py":
+        (CLASS_RESEARCH, "#528 table 4's instrument, re-run in table 5 to MEASURE its two predicted survivors"),
+    "artifacts/mapledmaaddr/killtable4_20260912/blank_measure.py":
+        (CLASS_RESEARCH, "#528 measured the clean build's blank lines and CRs per read session before the silence accounting was extended"),
+    "artifacts/mapledmaaddr/opus_pass2_20260912/mut_opus2.py":
+        (CLASS_TOOL, "#528 the Opus pass-2 seat's mutator, preserved as run"),
+    "artifacts/mapledmaaddr/opus_pass2_20260912/discrim_opus2.py":
+        (CLASS_RESEARCH, "#528 the Opus pass-2 seat's discriminator: proved each 16/16 survivor non-equivalent to the fix"),
+    "artifacts/mapledmaaddr/opus_pass2_20260912/discrim_opus2.FROZEN.py":
+        (CLASS_RESEARCH, "#528 the discriminator frozen as the Opus seat ran it"),
+    "artifacts/mapledmaaddr/opus_pass2_20260912/maple_dmaaddr_probe.FROZEN.py":
+        (CLASS_RESEARCH, "#528 the 16-row instrument frozen as the Opus seat ran it"),
+    "artifacts/mapledmaaddr/opus_final_20260912/mut_final2.py":
+        (CLASS_TOOL, "#528 the Opus final-pass seat's run-2 mutator, preserved as run"),
+    "artifacts/mapledmaaddr/opus_final_20260912/mut_final3.py":
+        (CLASS_TOOL, "#528 the Opus final-pass seat's run-3 mutator (exit-at-quit, tick-deferral ladder), preserved as run"),
+    "artifacts/mapledmaaddr/opus_final_20260912/run1_mut_final_BROKEN_BACKSLASH.py":
+        (CLASS_TOOL, "#528 the Opus seat's run-1 mutator, KEPT BROKEN on purpose: a heredoc ate a backslash, so its builds failed and are not kills"),
+    "artifacts/mapledmaaddr/opus_final_20260912/noneq_tick.py":
+        (CLASS_RESEARCH, "#528 the Opus seat's non-equivalence capture for the tick-deferred mutants (free-running after one read)"),
+    "artifacts/mapledmaaddr/opus_final_20260912/maple_dmaaddr_probe.FROZEN_run1.py":
+        (CLASS_RESEARCH, "#528 the instrument frozen for the Opus final seat's run 1"),
+    "artifacts/mapledmaaddr/opus_final_20260912/maple_dmaaddr_probe.FROZEN_run2.py":
+        (CLASS_RESEARCH, "#528 the instrument frozen for the Opus final seat's run 2"),
+    "artifacts/mapledmaaddr/opus_final_20260912/maple_dmaaddr_probe.FROZEN3.py":
+        (CLASS_RESEARCH, "#528 the instrument frozen for the Opus final seat's run 3"),
+    "artifacts/mapledmaaddr/opus_final_20260912/maple_dmaaddr_probe.REPAIR_HOW.py":
+        (CLASS_RESEARCH, "#528 the Opus seat's candidate per-session exit-status repair (adopted in table 7 as unclean())"),
+    "artifacts/mapledmaaddr/opus_final_20260912/maple_dmaaddr_probe.REPAIR_HOW.FROZEN3.py":
+        (CLASS_RESEARCH, "#528 that repair candidate, frozen as measured"),
     "arm_bfx_width_probe.py":     (CLASS_WITNESS,  "armbfxwidth32: ubfx/sbfx build their mask with `1 << width' where width reaches 32 -- HEAD 9/11"),
     "arm_endian_probe.py":         (CLASS_DETECTOR, "ARM LDR rotation / endianness"),
     "arm_flags_probe.py":          (CLASS_DETECTOR, "ARM flag semantics"),

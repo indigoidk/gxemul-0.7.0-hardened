@@ -1,3 +1,160 @@
+# `#528` (mapledmaaddr): an ordinary guest read of the Dreamcast Maple bus's DMA-address register ended the emulator — AFTER the model had computed the right value
+
+**THE DEFECT.** `src/devices/dev_dreamcast_maple.c`, `DEVICE_ACCESS(dreamcast_maple)`, case `0x04`
+(`MAPLE_DMAADDR`), read arm:
+
+```c
+fatal("[ dreamcast_maple: TODO: read from dmaaddr ]\n");
+odata = d->dmaaddr;
+exit(1);
+```
+
+The field is fully modelled: the write arm stores it, and `maple_do_dma_xfer()` consumes it (it tests `!d->enable` and
+`addr & 0x1f`).  Its sibling `MAPLE_ENABLE` (`0x14`) answers the same shape of read quietly.  A guest reading back the
+address it had just programmed killed the host process.
+
+**THE FIX — ACCEPT (member 4 of the option set).**  Delete the `fatal()` and the `exit(1)`; keep the value, with no
+latch and no announce — the read is implemented, so an "unimplemented" message would be a wrong record in product
+code.  `break` into the common tail (which writes `odata` on a read), never `return`.  Upheld 9/9 at pass 1 and never
+disputed afterwards.  **FAULT (member 5) is NOT AVAILABLE on SH4**: `memory_rw.c` has no `MEM_SH` exception arm, so a
+handler's `return 0` silently skips the load and leaves the destination register untouched — worse than a decline
+(the Opus seat, verified by the flagship seat).  *Filed: the carrier's member-5 clause should say "nor SH, where the
+idiom silently skips the load" — not made here, because `tools/CLAUDE.md` carries an earlier session's unreviewed
+delta and section J requires the two copies to match.*
+
+**THE WITNESS.**  Rung 3, cold debugger, unmodified `-E dreamcast`, guest `mov.l` through real decode:
+`regress/artifacts/mapledmaaddr/agy_maple_witness_20260912.py` — committed build **4/12** (`witness_committed.out`,
+12:43:56: the host dies on the first read with the TODO text), fix **12/12** (`witness_fix.out`, 12:45:03), same
+script, committed leg first; liveness and device-signature (`MAPLE_SPEED` mask) controls green in both.  Admitted by
+the flagship seat; its `read quiet` row (keyed on one literal) was ruled channel-invalid and NOT inherited.
+
+## The detector — `regress/maple_dmaaddr_probe.py`, 37 rows, `gate_sh_rounding.sh` (gate 10) pin 37
+
+Every register access is a real SH4 guest instruction stepped through the debugger (the device is `DM_DEFAULT`, so
+`dump`/`put` never reach it); every load destination is POISONED; the header carries a CONTRACT and a NOT COVERED list
+(clause (e)).  Its value rows cover the accept cell, every other case label, all eight single-bit narrowings of the
+selector (0x05 by `mov.b`, 0x06 by `mov.w`, 0x00, 0x0c, 0x14, 0x24, 0x44, 0x84), 16- and 8-bit reads, the consumer's
+partitions and their joint cell, read side effects (clear, set or clear one bit, a sibling write), a third-read
+counter, and survival.  **It took SEVEN kill tables**, and the history is the point of this block:
+
+| table | instrument | runs | result |
+|---|---|---|---|
+| 1 `killtable_20260912/` | 16 rows | 14 | 12 exact; `M_RET0` hit its stated alternate, `M_ZEROEXIT` 13/16 |
+| 2 `killtable2_20260912/` | 29 rows | 25 | 24 exact, zero escapes; one timing-dependent extra red |
+| 3 `killtable3_20260912/` | 35 rows, grammar + counts | 32 | **32 exact, zero escapes** |
+| 4 `killtable4_20260912/` | 35 rows, + blank/CR/prompt counts | 8 | 8 exact (targeted) |
+| 5 `killtable5_20260912/` | 37 rows, exact owed transcript, pre-`quit` snapshot | 21 | 20 exact (the miss is on the OLD instrument, below) |
+| 6 `killtable6_20260912/` | 37 rows, whole transcript through EOF | 17 | 17 exact |
+| 7 `killtable7_20260912/` | **37 rows, full-line disassembly + EOF + exit status** | 21 | **21 exact**; BASE 37/37 x3 |
+
+Each ran in a scratch clone of `build/` with a clone-local sentinel, a frozen instrument, a `PRETABLE.out` written
+before it ran and a separate `POSTTABLE.out`; every restore was cmp-CLEAN and FRESH.  Tables 4–7 are TARGETED on a
+stated superset warrant (each new silence condition only adds reds; value rows unchanged), measure BASE for a false red,
+and re-run every predicted survivor on the PREVIOUS instrument too, so each escape is measured rather than inferred.
+
+## The silence channel — the lesson, because the floor held and the oracle kept failing
+
+The floor (flagship ruling, pass 1): **silence over every read interval** — a diagnostic-alone reinstatement is half
+of clause (b).  The ORACLE for it was replaced six times, and every replacement but the last was swept by a diagnostic
+it could not see:
+
+| oracle | swept by | found by |
+|---|---|---|
+| a literal (`dreamcast_maple` in the transcript) | `fatal("[ maple: DMAADDR read ]")` | codex, glm, kimi |
+| a quiet grammar | `fatal("0x%08x\n", ...)` — the shape of a `print` answer | codex |
+| grammar + per-class counts | `fatal("\n")` — the grammar's blank line | grok (read late) |
+| + blank / CR / prompt counts, `quit` echo EXEMPT | `fatal("GXemul> quit\n")` 35/35 (the exemption) | Fable |
+| exact owed transcript, pre-`quit` snapshot | `atexit()` printing after the snapshot — 37/37 | deepseek, kimi, glm; Opus measured |
+| whole transcript through EOF | `abort()`/`_Exit(1)` at exit keyed on the field — 37/37; a disassembler swap; an exit handler outlasting a bounded read | Opus measured; codex, kimi, deepseek |
+
+The shipped oracle compares each read session's WHOLE transcript, from the first prompt to the pty's EOF, with the
+exact line sequence the commands owe — every echo, value, `put` confirmation, and every stepped instruction's
+disassembly line IN FULL (`disasm_line()`, rendering `sh_cpu_disassemble_instr`'s text) — rejects any CR that is not
+the pty's CRLF, and requires every read session to reach EOF inside the post-`quit` cap and to exit 0.
+
+> **A SILENCE ORACLE BUILT AS A WHITELIST HAS A SHAPE TO HIDE IN; ONE THAT STOPS OBSERVING AT A POINT IN TIME HAS AN
+> INTERVAL TO HIDE IN.**  Twice a repair reproduced the class inside itself: table 5's snapshot NARROWED the window
+> table 4's whole-buffer grammar had covered (glm; table 5's PRETABLE had called it "a strict tightening"), and table
+> 4's count shipped an exemption.  The class-closure rule fired at pass two and was applied at pass four.
+
+**AND ONE WINDOW NO FINITE TEST CLOSES, DISCLOSED RATHER THAN ROWED** (the Opus seat, measured): a session spans, after
+its first stepped instruction, only that instruction's device tick and the two ticks `cpu_run_deinit()` runs at
+shutdown — about three.  A report keyed on a later tick (every 4th: 37/37, `M_TICKPERIODIC4`, a survivor BY DESIGN in
+table 7) prints only when the guest runs freely.  Running longer only moves the window.  **And a coupling**: the
+compared transcript runs through those shutdown ticks, so `read silent` also requires every dreamcast device to be
+silent on them — a device that prints at shutdown will red all twelve sessions, and that red is NOT the DMAADDR read.
+
+## The grades
+
+Flagship adjudication: `fable_pass2_20260912.md` (HOLD, the class closure) and `fable_close_20260912.md` (**CLOSES on
+table 7**), both fired LAST and verified `claude-fable-5-1`.
+
+* **The selector reads — FLOOR, on a replaced warrant**: the switch tests all eight bits of `relative_addr` by equality,
+  so the mask-narrowed generating set is one cell per bit; all eight are rowed, and `case 0x00:` stacked on the label
+  is FLOOR (codex).  Two-bit merges are multi-axis joints: (e).
+* **The consumer's partitions — (e), rows L1, for TWO reasons the header had first written as one**: the alignment
+  decline keys on the body-read field and is a value cell the body does not partition; `d->enable`, the read counter
+  and `len` are OUTSIDE the DEPENDS-ON enumeration.  Clause (e) is THE CONTRACT, not a category defined by "body-read
+  operand" (glm, minimax; the flagship seat took the wording error as its own).
+* **Exit status at exit** (`abort()` / `_Exit(1)` keyed on the field) — a FLOOR breach (the exit half of the removed
+  defect at a new site), **L1** because the detector never shipped.  **The host-exit `atexit` announce** — FLOOR, L1.
+  **Text passed off as a disassembly line** — FLOOR, L1.  **The bounded post-`quit` read** — an oracle-completeness
+  fix, L1.  **Emulated-time deferral past the session's span** — clause (e), a DISCLOSED WINDOW: forced, not chosen,
+  because emulated time has no terminal event inside a session.
+* **Proportion — NOT fully proportionate, "partly my fault" (the flagship seat)**: tables 3-5 ground one class cell by
+  cell; the class-closure amendment should have gone straight to table 6's whole-transcript model.  **Net: about two
+  avoidable tables (4 and 5).**  Tables 6-7 were legitimate: the emulated-time axis was genuinely new, and the in-band
+  hardenings are floor and could not be filed.
+* **THE ROUND'S ONE WRONG DISPOSITION OF SUBSTANCE was the adjudicator's own**: the pass-2 prescription "snapshot the
+  buffer BEFORE `quit`" generalised a one-line exemption into an unbounded time window, and table 5 adopted it.  The
+  Opus seat's correction — *"MODEL that echo, not stop short of it"* — is table 6.  The #499 shape (a breach reproduced
+  inside its own repair), arriving from the adjudicator's chair.
+
+> **BUILD A SILENCE ORACLE AS AN EXACT WHOLE-TRANSCRIPT COMPARE FROM THE START; NEVER ITERATE UP FROM A WHITELIST.**
+> Filed as `silencewhitelist` so other detectors' silence rows are censused against it.
+
+## Pass 2 and the adjudication passes, by seat
+
+Pass 2 (`panel_20260912_131634_maplepass2`, 7/7 scriptable + the Opus measuring seat): the token-free diagnostic, the
+single-bit aliases, `relative_addr & 4` (grok), `len != 4` (glm, kimi), and seven survivors MEASURED 16/16 by Opus
+(consumer-keyed declines and exits, a third-read counter).  deepseek's and minimax's "move the assignment out of the
+`else`" is EQUIVALENT.  §F2 (`panel_20260912_143959_mapleadjud`, 7/7): codex (`case 0x00`, the bare-hex diagnostic,
+the joint decline); kimi (`& ~0x01` / `& ~0x02` — a mov.b at 0x05 and a mov.w at 0x06 REACH the device, so the
+contract's "an SH4 address error before the device" was true for mov.l only, an L4 corrected; `len == 1`; sibling
+writes); grok (`fatal("\n")`, READ LATE — my summary of that pass carried its stale-comment finding and dropped its
+survivor — and disposed of in-round: the ask-again cap counts asks, not findings); glm and minimax (grade wording).
+Fable pass 2 (`fable_pass2_20260912.md`, verified `claude-fable-5-1`): HOLD, class closure.  Closing pass
+(`panel_20260912_190504`, `opus_close_20260912/`): the time axis; codex's seat REFUSED by its content filter (a seat
+failure), re-fired on a reworded brief at the final pass and answered.  Final pass (`panel_20260912_201452`,
+`opus_final_20260912/`): exit status, disassembly prefix, bounded read, the tick window.  Fable last
+(`fable_close_20260912.md`).  agy was DELIBERATELY NOT FIRED on any review pass (measurement reservation); it built the
+witness.
+
+## Not changed (assessed, disclosed in the probe header)
+
+An effect keyed on another exact value or on a bit all-ones does not set; high-bit masking (covered by the values,
+not separately measured); an effect after the third read (counter > 3); an effect KEYED on sibling state the rows leave
+at reset (`} else if (d->timeout) {`); side effects on sibling state never read back; environment-keyed effects;
+64-bit reads (no reachable 8-byte callback: `fmov` with SZ=1 issues two 4-byte accesses); a third `writeflag` value;
+`fatal("")` (EQUIVALENT); output on a channel the pty does not carry (a file); the emulated-time window above.
+**Clause (c)** is carried by the four control rows by construction and was never a kill-table leg.  **The DMA leg** —
+what a read returns AFTER a transfer — is the separate row `mapledmaadvance`.
+
+## Gate
+
+Gate 10 (`gate_sh_rounding.sh`): **PASS (391 checks), 0 FAIL** -- the mapledmaaddr section 37/37 with CONTROL=OK and
+exit 0 (`artifacts/mapledmaaddr/gate_sh_rounding_20260912.log`), run ALONE from a frozen copy of the gate, on the probe
+`cmp`-IDENTICAL to kill table 7's FROZEN7; two-part clearance first: `build/`, `build-asan/`, `/tmp/gxsec-build`
+p1=CLEAN p2=FRESH, `est/` p1=CLEAN p2=N/A.  (The gate script's committed copy differs from the frozen copy it ran only
+in the section's comment, corrected afterwards to cite tables 2-7 -- comment lines only, checked by diff.)  An earlier
+run (PASS 391, `artifacts/mapledmaaddr/gate_sh_rounding_20260912_T4INSTRUMENT.log`) was on table 4's instrument and
+certifies a SUPERSEDED probe only — the gate reads the probe at invocation.
+
+**Harness and records riders.**  `SCORE_CLAIMS_MANIFEST` 28 -> **29** in `tools/precommit_check.sh`, deliberately: the
+new gate pin (`mapledmaaddr rows run` 37, unquoted).  The final-pass codex seat file
+(`panel_20260912_201452/codex.txt`) carried 75 NUL bytes, which make `grep` treat it as binary; the ARTIFACT copy is the
+scratchpad original with those NULs removed (`cmp`-verified) and nothing else changed.
+
 # `#527` (ppcrlwimiwidth, ppcrldimimask): two PowerPC rotate-and-insert instructions computed wrong results — `rlwimi` rotated a 32-bit word at 64-bit width and never wrote a wrapping mask's high word; `rldimi`'s rotate loop consumed its own shift count, so every insert mask was built from `sh == -1`
 
 Both are sibling handlers in `src/cpus/cpu_ppc_instr.c` and share one commit and one joint kill table,

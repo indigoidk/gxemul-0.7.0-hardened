@@ -1,0 +1,63 @@
+mapledmaaddr (#528) -- KILL TABLE 2, PRETABLE, written 2026-09-12 BEFORE the table runs (this block was revised once
+before launch, when the Opus measuring seat's survivors arrived; nothing has run against it).  Post-table notes go in
+a SEPARATE file (POSTTABLE.out).
+
+WHY A TABLE 2.  Pass 2 found survivors of the 16-row instrument:
+  from the scriptable panel (_scratchpad/panel_20260912_131634_maplepass2), predicted by reading:
+    M_TOKENFREE      a diagnostic without the device name -- `read silent' keyed on the text `dreamcast_maple'
+    M_ALIAS08/20/40  `switch (relative_addr & ~bit)' folds 0x0c/0x24/0x44 onto DMAADDR; `other read' pinned RESET2 alone
+    M_AND4           `if (relative_addr & 4) relative_addr = 0x04;' (grok)
+    M_LEN            the exit re-introduced under `len != 4' (glm, kimi)
+  from the Opus measuring seat, MEASURED 16/16 each (../opus_pass2_20260912/SCORES.txt, DISCRIM.txt):
+    M_ALIGNDECLINE / M_ENDECLINE   the read declined only for a 32-byte-aligned value / only once enabled -- the
+                     consumer maple_do_dma_xfer() tests exactly `addr & 0x1f' and `!d->enable', and no row reached
+                     either reachable side
+    M_ALIGNEXIT / M_ENEXIT         the exit re-introduced under those partitions
+    M_THIRDREAD      an exit on the third read in one process (every session read at most twice)
+The detector is UNSHIPPED, so every repair is L1 construction.  CHANGES -- 29 rows, measured 29/29 on the fixed build/
+binary before this block: `read silent' counts any line outside the debugger's quiet grammar (no device name); a read at
+EVERY other case label (0x10 0x14 0x18 0x80 0x8c 0xe8, one quiet session); `alias' rows at the default-arm single-bit
+aliases 0x0c 0x24 0x44 0x84 (a separate session, NOT silence-counted -- the default arm prints by design); `read
+width16'; `read aligned' (0x0c0f0000); `read enabled' (after MAPLE_ENABLE = 1); `reread 3'.  Twelve read sessions:
+val_a, val_b, others, width16, survive, initial, four, all ones, aligned, enabled, triple, replace.
+
+INSTRUMENT: maple_dmaaddr_probe.FROZEN2.py, copied from regress/ at launch.  BASELINE: SEC (the fix).  HEAD:
+dev_dreamcast_maple.HEAD.c.  MUTATOR: mut_maple2.py -- table 1's legs verbatim, the six panel legs, and the Opus legs
+as the SAME edits Opus measured (checked line for line against ../opus_pass2_20260912/diff_*.txt).
+
+PREDICTIONS (score / 29; failing rows):
+  BASE            29/29 CONTROL=OK
+  HEAD            14/29  every session that reads DMAADDR dies: val_a, val_b, width16, marker survive, exit status,
+                         initial zero, read four, read all ones, read aligned, read enabled, double 1, double 2,
+                         reread 3, write replace (14) + read silent (11/12: all but `others') = 15 failing
+  M_KEEPFATAL     28/29  read silent alone (11/12)
+  M_REWORD        28/29  read silent alone
+  M_LATCHED       28/29  read silent alone
+  M_TOKENFREE     28/29  read silent alone -- THE LEG THAT TESTS THE GRAMMAR CHANNEL
+  M_EXITONLY      15/29  as HEAD without read silent: 14 failing
+  M_RET0          16/29  twelve value rows (val_a, val_b, width16, initial, four, all ones, aligned, enabled, d1, d2,
+                         reread 3, replace) + read silent (memory_rw's failed-access debug() under stepping) = 13
+  M_DECLINE       18/29  val_a, val_b, width16, four, all ones, aligned, enabled, d1, d2, reread 3, replace (11);
+                         initial zero passes
+  M_HOIST         22/29  other 0x10, other 0x8c, other 0xe8, alias 0x0c/0x24/0x44/0x84 (7)
+  M_READCLEAR     27/29  double read 2 and reread 3
+  M_EQ4           28/29  read four alone
+  M_BIT30         28/29  read all ones alone (0x0c0f0000 does not set bit 30)
+  M_ZEROEXIT      26/29  initial zero + marker survive + exit status
+  M_MASKLOW       19/29  val_a, val_b, width16, four, all ones, enabled, d1, d2, reread 3, replace (10); aligned and
+                         initial pass (their low five bits are already zero)
+  M_ALIAS08       27/29  alias 0x0c + read silent (0x8c->0x84 and 0xe8->0xe0 fall to the default arm in `others')
+  M_ALIAS20       27/29  alias 0x24 + read silent (0xe8->0xc8)
+  M_ALIAS40       27/29  alias 0x44 + read silent (0xe8->0xa8)
+  M_AND4          23/29  other 0x14, other 0x8c, alias 0x0c/0x24/0x44/0x84 (6); redirected reads are quiet
+  M_LEN           27/29  read width16 + read silent
+  M_ALIGNDECLINE  28/29  read aligned alone (0 & 0x1f == 0 also declines, and initial zero still reads 0)
+  M_ENDECLINE     28/29  read enabled alone
+  M_ALIGNEXIT     27/29  read aligned + read silent
+  M_ENEXIT        27/29  read enabled + read silent
+  M_THIRDREAD     27/29  reread 3 + read silent
+
+CHECKS.  CLAIM -> ROW -- each new CONTRACT sentence names its row (read silent, other 0x.., alias 0x.., read width16,
+read aligned, read enabled, reread 3).  GUARD vs BODY FIELD -- the arm's body reads d->dmaaddr; its CONSUMER reads
+d->dmaaddr and d->enable and tests `& 0x1f' and `!enable': both partitions now have a reachable-side row.  CHANNEL --
+alias rows read a VALUE (their session is noisy by design); the silence channel is tested by M_TOKENFREE.

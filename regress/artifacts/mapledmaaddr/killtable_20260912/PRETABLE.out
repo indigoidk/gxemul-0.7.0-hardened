@@ -1,0 +1,49 @@
+mapledmaaddr (#528) -- KILL TABLE 1, PRETABLE, written 2026-09-12 BEFORE the table runs.  Post-table notes go in a
+SEPARATE file (POSTTABLE.out) -- an append rewrites this file's mtime, which is the order evidence.
+
+INSTRUMENT: regress/maple_dmaaddr_probe.py, frozen at launch as maple_dmaaddr_probe.FROZEN.py (16 rows; measured 16/16
+on the fixed build/ binary before this block was written).  BASELINE: SEC dev_dreamcast_maple.c (the fix).  HEAD:
+dev_dreamcast_maple.HEAD.c (`git show HEAD:').  MUTATOR: mut_maple.py (each find-text must occur exactly once).
+
+ROW LIST, by Fable's pass-1 ruling (fable_pass1_20260912.md):
+  FLOOR   read val_a, read val_b (the accept cell: POISONED destination, high + low-five bits); other read (RESET2 == 0,
+          the dominating-predicate complement); marker survive + exit status (the exit(1) half); read silent (ANY maple
+          text in the nine read sessions -- the channel, never one literal string)
+  L1 (e)  initial zero, read four, read all ones, double read 1/2, write replace -- value cells disclosed by class
+  CONTROL ctrl live, ctrl devsig sh4, ctrl devsig maple, ctrl zlive
+The nine READ sessions: val_a, val_b, other read, survive, initial, four, all ones, double, replace.
+
+PREDICTIONS (score / 16; the failing rows):
+  BASE         16/16  CONTROL=OK
+  HEAD          5/16  every read session dies on its first DMAADDR read: val_a, val_b, marker survive, exit status
+                      (exit1), initial zero, read four, read all ones, double read 1, double read 2, write replace FAIL;
+                      read silent 8/9 (every read session but `other read' prints the TODO) FAIL.  `other read' PASSES
+                      (it reads RESET2, never DMAADDR).  Controls OK.  11 failing.
+  M_KEEPFATAL  15/16  read silent ALONE (8/9)
+  M_REWORD     15/16  read silent ALONE (8/9) -- the reworded text still names `dreamcast_maple'
+  M_LATCHED    15/16  read silent ALONE (8/9) -- one print per process, and each session is a process
+  M_EXITONLY    6/16  as HEAD but read silent PASSES (0/9: nothing printed) -- 10 failing
+  M_RET0        8/16  the load is skipped and every destination keeps POISON: val_a, val_b, initial zero, read four,
+                      read all ones, double read 1, double read 2, write replace FAIL (8); other read, marker, exit
+                      status and read silent pass (the failed-access message is debug(), invisible here -- a
+                      PREDICTION on verbosity, and if it is wrong read silent reds too: 7/16)
+  M_DECLINE     9/16  odata stays 0: val_a, val_b, read four, read all ones, double 1, double 2, write replace FAIL (7);
+                      initial zero PASSES (0 == 0)
+  M_HOIST      15/16  other read ALONE (RESET2 answers 0x8c012345)
+  M_READCLEAR  15/16  double read 2 ALONE (0)
+  M_EQ4        15/16  read four ALONE (that session dies: absent)
+  M_BIT30      15/16  read all ones ALONE -- 0x40000000 is set by no other value (0x8c012345, 0x0c00001f, 4, 0x13579bdf)
+  M_ZEROEXIT   15/16  initial zero ALONE
+  M_MASKLOW     9/16  val_a, val_b, read four, read all ones, double 1, double 2, write replace FAIL (7); initial zero
+                      passes (0 & ~0x1f == 0)
+
+DISCRIMINATING CLAIMS: each of M_HOIST, M_READCLEAR, M_EQ4, M_BIT30, M_ZEROEXIT has exactly ONE killer, and it is the
+row the ruling assigned; the three announce legs die on `read silent' alone.
+
+CHECKS.  SIBLING PARITY -- MAPLE_ENABLE's read (odata = d->enable, quiet) is the model the fix follows; no other arm
+edited.  CLAIM -> ROW -- the #528 comment claims "no diagnostic and no exit" -> read silent, marker survive, exit
+status; "answered like MAPLE_ENABLE's read" -> the value rows; the CONTRACT's NO-ROW sentence covers the post-DMA
+value.  GUARD FIELD vs BODY FIELD -- the body reads d->dmaaddr only, written by the write arm and maple_do_dma_xfer's
+tail; no state where they disagree is reachable without DMA (deferred, by name, to mapledmaadvance).  CHANNEL -- each
+value row reads a poisoned register, so a skipped or zeroed load reds it; read silent reads the transcript, which
+varies under any announce; other read reads RESET2, which varies only under a hoist.

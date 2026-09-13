@@ -1,0 +1,36 @@
+**SURVIVOR — three clause-(d) edits are green on all 16 rows:**
+**(1)** re-insert `if (len != 4) { fatal("[ dreamcast_maple: read from dmaaddr ]\n"); exit(1); }` after `odata = d->dmaaddr;` — every row reads 32 bits, so the predicate never fires; catch row = one sub-32-bit DMAADDR read.
+**(2)** re-insert the diagnostic with the device string altered: `debug("[ maple: dmaaddr read ]\n");` — `read silent` greps the single literal `dreamcast_maple`; catch row = the floor's "any maple text".
+**(3)** weaken the address dominator into a lane no row reads: `case 0x04: case 0x08:` (or give the +0x14 arm the 0x04 read body) — rows only ever touch +0x04/+0x10/+0x80; catch row = `other read` at a second arm.
+
+`PASS2_MAPLE_20260912`
+
+---
+
+## The three survivors
+
+**S1 — width axis (a re-introduced exit under a different predicate).** READ: the packet states "every row reads 32 bits", and the controls read other devices (RAM, IPRD, SPEED@+0x80 — a different arm). REASONED: `len == 4` in every rowed access to this arm, so the re-inserted exit+fatal is BASE-equivalent on all 16 rows. This is squarely "a re-introduced exit or diagnostic under a different predicate". Note the inversion in the brief: "every row reads 32 bits" is evidence the width axis is *unvaried*, not that it is covered. The same axis hides the dominator weakening `if (writeflag == MEM_WRITE || len != 4)` and the tail hardcode `memory_writemax64(cpu, data, 4, odata)`. Catch row: one session with a 16-bit (`mov.w`) DMAADDR read after writing 0x8c012345, wanting the corresponding bits (0x2345 if `memory_writemax64` right-aligns — see missing facts).
+
+**S2 — silence-channel axis (a re-introduced diagnostic).** READ: the settled floor demands "silence over the whole read interval (**any maple text, not one literal**)"; the detector "counts read sessions whose transcript contains the text `dreamcast_maple`". REASONED: a diagnostic avoiding that one substring prints in every read session yet leaves `read silent` at 0/9; no exit means all value/survive rows behave as BASE. 16/16. The kill table's own M_REWORD leg (15/16) only proves the *particular* rewording measured kept the literal — it cannot speak for the class. Catch row: implement the floor verbatim (flag any maple-ish text, or allowlist-diff the transcript) — one corrected `read silent` kills this, KEEPFATAL, REWORD in all wordings, and LATCHED.
+
+**S3 — address axis (a weakened dominating predicate).** READ: the probe reads this device only at +0x04 (value rows), +0x10 (`other read`), +0x80 (SPEED control); the arms listed are 0x04/0x10/0x14/0x18/0x80/0x8c/0xe8/default. REASONED: any edit that lets the 0x04 read body fire for an address outside {0x04, 0x10, 0x80} — a `case 0x08:` label merge, or copying `odata = d->dmaaddr;` into the +0x14/+0x18 read branch — changes behavior only where no row looks. 16/16. Catch row: parameterize `other read` — write 0x8c012345, read ENABLE@+0x14 (want `d->enable`, i.e. 0), one row per readable arm. For a default-lane row at +0x08, keep it out of the sessions `read silent` counts, since BASE's default arm is itself a `fatal`.
+
+## Q2 — channel variance
+
+Exactly one defect: **`read silent` does not vary under the mutant class it is named for.** Its channel is one literal; the class "re-introduced diagnostic" includes wordings that dodge it (S2 is the witness). Every other named pairing checks out — I reconstructed each leg's pass/fail set from the row semantics and the table's arithmetic is internally consistent (all REASONED from READ data): HEAD 5/16 = other read + 4 controls (fatal+exit kills 8 value rows + marker + exit status + read silent); M_EXITONLY 6/16 = adds read silent back; M_RET0 7/16 = other read + survive pair + controls (seed 0xa5a55a5a differs from every expected value, so value channels genuinely vary — a collision the probe correctly avoided); M_DECLINE and M_MASKLOW 9/16 = the 7 nonzero-expecting rows, initial zero correctly passing; M_HOIST/READCLEAR 15/16 each caught by their named row; M_BIT30 verified by hex (bit 30 is clear in 0x8c012345, 0x0c00001f, 0x13579bdf — only all-ones trips); M_ZEROEXIT 13/16 = initial zero + marker + exit status. Bonus consistency proof (REASONED): M_KEEPFATAL at 15/16 shows gxemul's `fatal()` does not exit — otherwise that leg would score like HEAD.
+
+## Q3 — the false contract statement
+
+**The silence contract.** The floor (quoted, READ): "any maple text, not one literal". The implementation (quoted, READ): one literal, `dreamcast_maple`. Any header statement that `read silent` enforces the settled floor is false as implemented — provable from the packet's own two sentences, with S2 as the witness. Secondary overclaims if present in the header: "every row reads 32 bits" presented as width coverage (invariance is the opposite; S1 witnesses), and any claim that 16 rows are (d)-complete (S1–S3 witness).
+
+## Boundary notes (short, load-bearing)
+
+- **Equivalent (d) members exist and no row can ever kill them**: `if (writeflag == MEM_WRITE) exit(1);` inside the else, `if (relative_addr != 0x04)` inside case 0x04, `if (idata)` (idata is a per-invocation local, 0 on every read — READ from the preamble). These survive 16/16 by unreachability; the enumeration needs an explicit equivalence exclusion or "no surviving (d) mutant" is unattainable in principle.
+- **Clause (e) is not pinned by the three (e) legs in the table**: `if (d->dmaaddr == 0x7e57a5a) exit(1);` fires on no rowed value and is green on all 16; no finite value set pins `== v`. (e) must remain a review clause, not rows.
+- **Settled premises accepted as READ**: only MEM_READ/MEM_WRITE reach the handler (279-site scan, pass 1) — it underwrites the `writeflag != MEM_WRITE` dominator and is beyond the rows' power, which is fine since it was settled by the right instrument. The `mapledmaadvance` deferral is coherent: the fix's read branch writes no device state (READ diff), so only mutants like READCLEAR could perturb DMA, and double read 2 kills that.
+
+## Named missing facts
+
+1. **`memory_writemax64`'s sub-32-bit byte convention (memory_rw.c)** — settles the S1 catch row's expected constant (right-aligned low bytes vs. otherwise); without it the width row cannot be frozen.
+2. **The probe header's verbatim contract sentences** — would let Q3 be answered by quotation rather than inference from the two quoted floor/detector lines.
+3. **The default arm's fatal format string** — settles whether an S3 catch row at a default-lane address would itself trip the silence channel under BASE (scoping detail only).

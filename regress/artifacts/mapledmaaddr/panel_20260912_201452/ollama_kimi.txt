@@ -1,0 +1,40 @@
+**VERDICT: GAP — the post-`quit` drain is `rd(10.0)`, not a guaranteed read-to-EOF, and no shown code asserts EOF was reached or how the child died; the exact edit is: after typing `quit`, treat "rd returned without pty EOF" (timeout, slow-or-hung exit) as a `read silent` failure and `waitpid` the child asserting exit status 0 for the twelve read sessions — or, if the cap stays, amend the CONTRACT clause to "a line printed late, but before the process begins exiting", because the current text promises EOF and the code delivers 10 seconds.**
+
+FINAL528_20260912
+
+## 1. Read-caused output still not compared? — Yes, one construction.
+
+REASONED: The comparison covers bytes written to the pty **before the master stops reading**. There are two ways read-caused output escapes:
+
+* (a) **Print delayed past the drain.** Exact C change: in the `MAPLE_DMAADDR` read arm, `atexit(announce);` where
+  ```c
+  static void announce(void) { sleep(11); fprintf(stdout, "TODO: maple dmaaddr\n"); }
+  ```
+  What the test sees: the process stays alive, so no EOF; `rd(10.0)` times out; the transcript is exactly the owed lines; `os.close(fd)` closes the master; the later `fprintf` lands on a masterless slave (EIO, discarded). `read silent` = 0/12 noisy. Passes. Note: if the drain were truly unbounded-to-EOF, this same mutant *would* be caught (print at t=11s precedes EOF). The evasion exists only because 10 s is a cap, not EOF.
+* (b) Print after closing fd 1 in the atexit handler — never reaches the pty at all; equivalent to the disclosed "channel the pty never carries".
+
+READ: The disclosed file/syslog exclusion is correct; I do not disagree — no transcript oracle can observe off-tty channels.
+REASONED: Output *before* the first prompt is skipped (`t.find("GXemul> ")`), but read-caused output cannot precede the read, so the skip hides nothing relevant here. Any byte added to any compared line (glued, escaped, reordered, bare CR) is caught by the line-wise comparison — that part of the claim holds.
+
+## 2. Can a correct build fail? Can a crashed session pass?
+
+REASONED: Yes to the first, conditionally. Pty echo is emitted by the line discipline **at write time**; the emulator's pending output/next prompt is emitted **when scheduled**. If the host is slow enough that the prompt for the final read hasn't printed within the last read window, the `quit` echo lands *before* `GXemul> `, giving tail `"GXemul> "`, which the new strict check (`tail != ""`) flags — a false failure on a correct build. Same race exists at every command boundary with the fixed 0.20 s windows (pre-existing), but the new code made the quit boundary stricter than the old tail exemption (`""` or `"GXemul> "`). Author's 3× 37/37 (READ) does not refute a load-dependent flake.
+REASONED: Slow exit > 10 s does **not** fail the comparison (transcript unchanged, tail still `""`) — it just silently stops witnessing; teardown behaviour then is not shown.
+REASONED: Crashed session: a crash mid-session drops owed lines → flagged (READ: `missing` in `noise()`). A crash *after* the `quit` echo that prints nothing yields a transcript byte-identical to clean exit (pty EOF looks the same whether the process called `exit(0)` or died on a signal) → passes `noise()`; caught only if something `waitpid`s and checks status — **not checkable from the packet**.
+
+## 3. Does the chain close?
+
+Checked, from the packet: the diff implements what it claims (READ: `rd(10.0)` post-quit; `owed(cmds + ["quit"])`; quit → echo-only; `tail != ""`; bare-CR check retained); the old miss is explained and reproduced (READ: stated kill-table numbers); no premise in the diff is self-contradictory. The chain closes **for all bytes that reach the pty before the drain ends**. The drain's end is not guaranteed to be EOF. So:
+* A future miss on a console message in any shape *before EOF* = **breach of contract** (would mean the test is broken, not the contract).
+* A miss after the 10 s cutoff / off-channel / the slow-host flake = **outside the stated contract** — except the contract currently *includes* "a line printed late (an atexit handler...)" without bound, which is the one overclaim (Q4).
+
+## 4. Which statement is wrong
+
+REASONED: The CONTRACT clause "a diagnostic alone, in ANY wording or shape — … or a line printed late … — because the silence row compares each session's WHOLE transcript, from its first prompt to the pty's EOF" overclaims: the implementation bounds the post-quit read at 10 s and (per the shown code) does not require that rd ended at EOF rather than timeout, so "to the pty's EOF" is the happy path, not a checked condition. Runner-up, same class: the `noise()` comment "after `quit` the emulator exits: the transcript ends on the echo's newline" — timing-dependent, per Q2's race.
+
+## Premises not checkable from this packet, and the single fact that settles each
+
+1. **rd's semantics** — does it drain buffered data before reporting EOF, and does its return distinguish EOF from timeout? Settles the crash/timeout questions. Fact needed: rd's source.
+2. **Whether any of the 37 rows (via `how` or teardown) asserts EOF-after-quit and exit status 0 for read sessions.** Fact needed: the parts of `maple_dmaaddr_probe.py` outside the shown hunks. If yes, my GAP shrinks to the 10 s cap alone.
+3. **Kill-table-6 numbers** — quoted as results, but the brief says the artifacts exist "once it finishes", i.e. they were cited before completion. Fact needed: `killtable6_20260912/SCORES.txt`.
+4. **That a correct build's quit transcript always ends on the echo newline** — stated via 3 runs; the counter-scenario is load, which runs don't rule out. Fact needed: a pass under artificial load (e.g. `nice -19` CPU saturation).
