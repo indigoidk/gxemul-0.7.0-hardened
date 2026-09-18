@@ -1,0 +1,62 @@
+VERDICT: **HOLD: floor gap — replacing `& 3` with `& 1` in `ofs = (relative_addr & 1) % len` passes 37/37; the contract's claim that the detector catches "a lane decode that drops bit 1" is wrong.** LCA530_P2_20260914.
+
+---
+
+## Q1. Is the fix right?
+
+Walking every cell `(len ∈ {1,2,4,8}, lane ∈ {0,1,2,3}, dir)`:
+
+* **len=0** — refused before `%`. No division by zero. ✓
+* **len=1** — `ofs = lane % 1 = 0` for all four lanes. `data[0]` accessed. ✓
+* **len=2** — `(0,1,2,3) → (0,1,0,1)`. All `< len`. ✓
+* **len=4** — `(0,1,2,3) → (0,1,2,3)`. All `< len`. ✓
+* **len=8** — `(0,1,2,3) → (0,1,2,3)`. All `< len`. ✓
+
+No `exit(1)`, no `fatal()`, no `data[ofs]` with `ofs ≥ len`. The `len==0` guard sits before the `%`. The only host-terminating calls (`fatal`/`exit`) are deleted. **The fix is correct.** [REASONED from the diff and the post-fix handler]
+
+One premise I cannot settle from the packet: whether `(P & 3) % len` is the *semantically correct* lane mapping for the 21064/21066 sparse window (i.e., whether a guest LDWU at lane 1 should see the port byte in `data[1]`, not `data[0]`). The disposition B ruling asserts it; I take that as given since it was adjudicated 8/9 and the detector confirms `base = 37/37`. The fact that would settle it: a hardware manual or an ISA-conformance test against a real 21066 board. Not in the packet. [NOT CHECKABLE]
+
+---
+
+## Q2. Floor gap
+
+**The exact edit that scores 37/37:**
+
+```diff
+-	ofs = (relative_addr & 3) % len;
++	ofs = (relative_addr & 1) % len;
+```
+
+**Why it is not caught:**
+
+The detector's `(len, lane)` coverage is:
+- `(1, *)` on both arms — but `L % 1 = 0` for all L, so `& 1` and `& 3` agree.
+- `(2, *)` on both arms — `(2,2)` gives `(2&1)%2 = 0` and `(2&3)%2 = 0` (the `% 2` masks the difference); `(2,3)` gives `(3&1)%2 = 1` and `(3&3)%2 = 1`; `(2,1)` gives 1 either way. All agree.
+- `(8,1)` on read (r81) — `(1&1)=1`, `(1&3)=1`. Agree.
+- **No `(4, *)` tests on either arm. No `(8, 0|2|3)` tests on either arm.**
+
+`& 1` differs from `& 3` only when the original bit 1 (lane 2 or 3) is set AND `len ≥ 4`. The probe never exercises `len=4` at all, and exercises `len=8` only at lane 1. So the edit is silent on every probed cell.
+
+**The row I expected to catch it:** an `r43 byte` / `r83 byte` (LDL or LDQ at lane 3) — or equivalently a `w43`/`w83` (STL/STQ at lane 3). It would observe a full-register value of `byte << (lane*8)` for the fix, and `byte << (1*8)` for the `& 1` mutant. **That row does not exist.** [REASONED]
+
+This is outside the DISCLOSED list (split heads / len-0 / a<4:3> / lcaisaqword / lcaisaphys). The `& 1` edit is reachable — any guest LDL/STL/LDQ/STQ at a sparse port with even byte address but lane 2 or 3 hits it. It is a real defect.
+
+---
+
+## Q3. Wrong statement
+
+**The probe-header contract** (also repeated in the brief):
+
+> *"a lane decode that drops bit 1 or the `& 3'"*
+
+**This is wrong.** The detector catches dropping the `& 3` entirely (`m_nomask`, sole carrier `r81 lane`) but does **not** catch dropping bit 1 while keeping bit 0 (`& 1`). As shown in Q2, the `& 1` mutant scores 37/37. The kill table has no `m_dropbit1` and no row that would expose it.
+
+The POSTTABLE is consistent with its own predictions (all 14 legs EXACT). The fix comment is accurate for the position rule. The brief's restatement of the ruling is accurate. The defect is specifically the contract's coverage claim for "drops bit 1". [REASONED]
+
+---
+
+## What I could not check
+
+- Whether the 37-row `base = 37/37` measurement is reproducible (cannot run the gate; it is inlined as EXACT in POSTTABLE).
+- Whether the `r81` lane test's port-5-mod-8 arithmetic (LSR 0x3fd, displacement encoding) actually places the byte at buffer position 1 as claimed — depends on the sparse-window address decoding in the dispatch, which the packet does not include. If the dispatch encodes differently, the lane semantics in the fix comment could be right but the test's port choice could be testing the wrong cell. Not checkable from the packet.
+- The `lcaisaqword` / `lcaisaphys` / `a<4:3>` semantics — disclosed as not implemented; cannot verify they are truly irrelevant.

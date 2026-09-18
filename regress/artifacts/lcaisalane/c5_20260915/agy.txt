@@ -1,0 +1,165 @@
+CLOSES LCA530_C5_20260915
+
+***
+
+# Adversarial Review: Closing Pass 5 on #530 Repair 5 (`lcaisalane`)
+
+This review verifies the whole-class enumeration of the forward-count defect class (`x_wfallthru` phantom reads and `RD2` duplicated forwards) across arms $\times$ width kinds $\times$ lanes in the 185-row probe ([`regress/lca_isalane_probe.py`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/lca_isalane_probe.py)), the fixed handler in [`src/devices/dev_lca.c`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c), and associated audit records.
+
+---
+
+## 1. Verification of Cited Claims Against Source (`GXEMUL-SEC`)
+
+Every cited architectural, device, and emulator premise was cross-examined against tree source:
+
+1. **The Fixed Handler (`dev_lca.c`)**:
+   * [`src/devices/dev_lca.c:275-312`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c#L275-L312):
+     * Sparse port shift: `relative_addr >>= 5;` ([line 280](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c#L280)).
+     * Zero-length refusal: `if (len == 0) return 0;` ([lines 295-296](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c#L295-L296)).
+     * Folded lane calculation: `ofs = (relative_addr & 3) % len;` ([line 297](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c#L297)).
+     * Single-byte forward on write: `byte = data[ofs]; return cpu->memory_rw(cpu, cpu->mem, LCA_ISA_BASE + relative_addr, &byte, 1, writeflag, CACHE_NONE);` ([lines 299-303](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c#L299-L303)).
+     * Single-byte read forward and fill: `cpu->memory_rw(..., &byte, 1, MEM_READ, ...); for (i=0; i<len; i++) data[i] = i == ofs? byte : 0x00; return 1;` ([lines 305-311](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c#L305-L311)).
+
+2. **Bus Configuration and Machine Scope (`alphabook1`)**:
+   * [`src/machines/machine_alpha.c:57-62`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/machines/machine_alpha.c#L57-L62): Machine subtype `ST_ALPHABOOK1` adds device `lca` only.
+   * [`src/devices/dev_lca.c:568-570`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c#L568-L570): Calls `bus_isa_init(..., BUS_ISA_IDE0 | BUS_ISA_IDE1, LCA_ISA_BASE, LCA_ISA_MEMBASE);`.
+   * [`src/devices/bus_isa.c:270-288`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/bus_isa.c#L270-L288): `wdc0` (ports `0x1f0-0x1f7`) and `wdc1` (ports `0x170-0x177`) are instantiated **only** `if (diskimage_exist(machine, n, DISKIMAGE_IDE))`. The probe command line ([`regress/lca_isalane_probe.py:309-310`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/lca_isalane_probe.py#L309-L310)) loads `alpha_dummy.bin` without IDE disks. Thus, **`0x1f0-0x1f7` and `0x170-0x177` are unmapped**.
+   * [`src/devices/bus_isa.c:298-304`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/bus_isa.c#L298-L304): VGA (`0x3c0`) is instantiated only if `machine->x11_md.in_use || (bus_isa_flags & BUS_ISA_VGA_FORCE)`. Probe runs with `-x` (no X11) and flag is absent.
+   * [`src/devices/bus_isa.c:290-296`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/bus_isa.c#L290-L296): `BUS_ISA_FDC` is not passed; no FDC (`0x3f0`).
+   * [`src/devices/dev_lpt.c:79-88`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lpt.c#L79-L88): Read arm at `0x378-0x37a` returns `d->data` or constants with no side effect.
+
+3. **1 KB Boundary Split and Head/Tail Geometry**:
+   * [`src/cpus/memory_rw.c:104, 186-224`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c#L104): `#define MRW_SPLIT_MASK 0x3ff` (1024-byte granule). For non-PHYSICAL translated accesses, memory accesses straddling a 1 KB boundary are split into a head chunk ending at `1024*k - 1` and a tail chunk starting at `1024*k`.
+   * In LCA sparse I/O address space, relative byte address $A$ maps to port $P = A \gg 5$.
+   * A 1 KB boundary corresponds to $1024 \gg 5 = 32 = 0\text{x}20$ ports.
+   * Any head of length $h \in [1, 7]$ bytes ends at address $1024\cdot k - 1$. Its starting address is $1024\cdot k - h$. Because $h < 32$, $(1024\cdot k - h) \gg 5 = 32\cdot k - 1 \equiv 0\text{x}1\text{f} \pmod{0\text{x}20}$.
+   * Since $31 \ \& \ 3 = 3$, **all heads land at lane 3**.
+   * Any tail chunk starts at $1024\cdot k$. $(1024\cdot k) \gg 5 = 32\cdot k \equiv 0 \pmod{0\text{x}20}$.
+   * Since $0 \ \& \ 3 = 0$, **all tails land at lane 0**.
+
+4. **Pre-Zeroing Invariance (`#95`)**:
+   * [`src/cpus/memory_rw.c:485-492`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c#L485-L492): `if (writeflag == MEM_READ) memset(data, 0, len);` runs before dispatching to device access functions.
+   * Consequently, omitting the zero-fill loop for $i \ne \text{ofs}$ (`p_nozero`) leaves the read buffer identical (all zeroes except at `ofs`), proving `p_nozero` is strictly **EQUIVALENT**.
+
+---
+
+## 2. Answers to Panel Questions
+
+### Question 1: Is the enumeration complete and correctly classified?
+
+**YES. The enumeration is exhaustive and every cell is accurately classified.**
+
+The space is defined over:
+$$\text{Arms} \in \{\text{write phantom read } (x\_wfallthru), \text{read duplicated forward } (RD2)\} \times \text{Width Kinds} \times \text{Lanes } 0..3$$
+
+* **Direct widths $\{1, 2, 4, 8\}$ across all 4 lanes (32 cells)**:
+  * **Lane 0 (Writes)**: Rowed by `kbcq` (4k, [`regress/lca_isalane_probe.py:843-855`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/lca_isalane_probe.py#L843-L855)) at port `0x60` (data port) with zero stores, and strengthened by `stub0` (4o, [lines 938-961](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/lca_isalane_probe.py#L938-L961)) at port `0x68` with nonzero stores (`0x5a`).
+  * **Lane 0 (Loads)**: Rowed by `rdq` (4l, [lines 866-885](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/lca_isalane_probe.py#L866-L885)) at port `0x60` with two queued replies, and strengthened by `stub0` loads.
+  * **Lane 1 (Both arms)**: Rowed by `cmos` (4m, [lines 887-914](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/lca_isalane_probe.py#L887-L914)) via CMOS `REG C` through ports `0x70`/`0x71`, and strengthened by `stub1` at port `0x61`.
+  * **Lane 2 (Writes)**: Rowed by `iir` (4h, [lines 801-815](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/lca_isalane_probe.py#L801-L815)) and `iirw` (4i, [lines 817-827](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/lca_isalane_probe.py#L817-L827)) at `UART_IIR` (`0x3fa`), and strengthened by `stub2` at port `0x62`.
+  * **Lane 2 (Loads)**: Rowed at len 1 by `iirr` (4j, [lines 829-838](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/lca_isalane_probe.py#L829-L838)), at len 2/4/8 by `iirr2` (4n, [lines 916-926](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/lca_isalane_probe.py#L916-L926)), and strengthened by `stub2` loads.
+  * **Lane 3 (Both arms)**: Rowed by `stub3` (4o, [lines 938-961](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/lca_isalane_probe.py#L938-L961)) at port `0x63` with mandatory liveness verification.
+
+* **Split Tail cells (widths 1..7 at Lane 0, 14 cells)**:
+  * Tail lengths 1, 2, 4 are identical to direct lane 0 accesses (width kinds $\{1, 2, 4\}$ at port `0x60`).
+  * Non-direct tail lengths $\{3, 5, 6, 7\}$ are rowed on write by `tailq_w` (4p, [lines 963-979](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/lca_isalane_probe.py#L963-L979)) and on read by `tailq_r` (4q, [lines 979-989](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/lca_isalane_probe.py#L979-L989)).
+
+* **Split Head cells (widths 1..7 at Lane 3, 14 cells)**:
+  * All heads land on ports $P \equiv 0\text{x}1\text{f} \pmod{0\text{x}20}$.
+  * Auditing every mapped ISA port on `alphabook1` shows that mapped ports are strictly: `0x20-0x21` (8259), `0x40-0x43` (8253), `0x60-0x6f` (8042), `0x70-0x71` (CMOS), `0x2f8-0x2ff` (ns16550 tty1), `0x378-0x37a` (lpt), `0x3f8-0x3ff` (ns16550 tty0).
+  * The **only** mapped ports congruent to $0\text{x}1\text{f} \pmod{0\text{x}20}$ are **`0x2ff` and `0x3ff`**.
+  * Both ports map to `ns16550 SCR` (offset 7), which executes [`src/devices/dev_ns16550.c:298-311`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_ns16550.c#L298-L311) (`default:` arm). Read returns `d->reg[relative_addr]` with zero side effects.
+  * No 8042 stub port is congruent to $0\text{x}1\text{f} \pmod{0\text{x}20}$ (`0x5f` and `0x7f` are unmapped).
+  * Therefore, **no head port on this machine has an access side effect**. All head cells are mathematically and empirically **EQUIVALENT**.
+
+* **Scope Sentences**:
+  Every scope sentence in the contract header ([`regress/lca_isalane_probe.py:114-121`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/lca_isalane_probe.py#L114-L121)) is accurate:
+  1. `alphabook1` has no IDE disk image attached (so no `wdc` at `0x1f0`/`0x170`) and no X11 (no VGA); `lpt` read arm has no side effect.
+  2. Width set is $\{1, 2, 4, 8\}$ plus 1 KB split heads (lane 3) and tails (lane 0).
+  3. `len == 0` has no hardware or memory_rw producer and is refused up front.
+  4. Direction swaps are caught by value rows.
+  5. Lane 3 stub counter is an emulator model oracle protected by mandatory liveness testing.
+
+---
+
+### Question 2: Can each new row's channel vary under the mutant it names?
+
+**YES. Every discriminator channel was verified in source to respond to its designated mutant and remain stable on base:**
+
+1. **8042 PC-Style Stub (`stub0`-`stub3`)**:
+   * [`src/devices/dev_pckbc.c:941-955`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_pckbc.c#L941-L955): For `relative_addr != 0 && relative_addr != 4`, `static int x = 0; x++; if (x & 1) odata ^= 0x10;` executes on **both** reads and writes.
+   * Two consecutive flat reads bump $x$ twice, toggling bit 4 and then toggling it back, leaving the difference between successive parity checks zero.
+   * Under a single access, bit 4 changes state once. Bracketing an LCA access between flat reads produces 2 total accesses on base (unchanged parity, $\Delta \ \& \ 0\text{x}10 == 0$).
+   * Under a phantom read or duplicated read, 3 total accesses occur (parity flips, $\Delta \ \& \ 0\text{x}10 == 0\text{x}10 \ne 0$), turning the row RED.
+   * Liveness rows (`stub%d live`) perform two plain flat reads without an intervening LCA access; they expect a flip of $0\text{x}10$. If the stub is ever implemented or removed, the liveness row fails immediately.
+
+2. **CMOS Register C (`cmos`)**:
+   * [`src/devices/dev_mc146818.c:468-472`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_mc146818.c#L468-L472): Writing to `MC_REGC * 4` sets `d->reg[MC_REGC * 4] = data[0];`.
+   * [`src/devices/dev_mc146818.c:554-566`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_mc146818.c#L554-L566): Reading from `MC_REGC * 4` returns `d->reg[MC_REGC * 4]` and then zeroes `d->reg[MC_REGC * 4] = 0x00;`.
+   * The store rows write `0x0f`. A phantom read clears `REG C`, causing subsequent readback to return `0x00` instead of `0x0f` (turning `cmos w%d` RED).
+   * The load rows write `0x0f` flat. An `RD2` duplicated read fetches `0x0f` on the first read (clearing the register) and delivers `0x00` on the second read (turning `cmos r%d` RED).
+   * High-nibble host-clock interrupt bits (`UF/AF/PF/IRQF` = `0xf0`, [`include/thirdparty/mc146818reg.h:106-109`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/thirdparty/mc146818reg.h#L106-L109)) are masked off with `& 0x0f` ([`regress/lca_isalane_probe.py:904`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/lca_isalane_probe.py#L904)), preventing nondeterminism.
+
+3. **8042 Reply Queue (`rdq`, `tailq_w`, `tailq_r`)**:
+   * [`src/devices/dev_pckbc.c:1059-1061`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_pckbc.c#L1059-L1061): `0xaa` (`KBC_SELFTEST`) queues `0x55` in the output FIFO.
+   * [`src/devices/dev_pckbc.c:1016-1024`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_pckbc.c#L1016-L1024): Status read sets `KBS_DIB` (bit 0) if `head != tail`.
+   * [`src/devices/dev_pckbc.c:981-987`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_pckbc.c#L981-L987): Reading data port `0x60` pops one code from the queue.
+   * For `rdq` and `tailq_r`, two replies are queued. A single LCA read leaves one reply (`DIB == 1`). An `RD2` duplicated read pops both (`DIB == 0`), turning the row RED.
+   * For `tailq_w`, one reply is queued, command `0xd1` (`KBC_WROUTPORT`, [line 1075](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_pckbc.c#L1075)) redirects the next data write to `output_byte` ([lines 1006-1008](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_pckbc.c#L1006-L1008)) without touching the queue. A store leaves `DIB == 1`. A phantom read pops the reply, dropping `DIB` to `0`, turning `tailq_w` RED.
+
+4. **UART IIR (`iirr2`)**:
+   * [`src/devices/dev_ns16550.c:195-197`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_ns16550.c#L195-L197): Writing `IER_ETXRDY` to `IER` arms `IIR_TXRDY` (`0x02`) in `com_iir`.
+   * [`src/devices/dev_ns16550.c:212-214`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_ns16550.c#L212-L214): Reading `com_iir` clears `IIR_TXRDY`.
+   * `P4n` executes `iir_arm()` before each load. A single read returns `0x02`. A duplicated read (`RD2`) clears the bit on the first read and returns `0x01` (`IIR_NOPEND`) or `0x00` on the second read, turning `iirr2` RED.
+
+---
+
+### Question 3: Is there a GAP?
+
+**NO GAP EXISTS within the enumerated class or the fixed handler.**
+
+Any candidate edit to the fixed handler:
+1. **Omission/Bypass of Write Arm Return**:
+   * Direct widths 1/2/4/8 across lanes 0, 1, 2, 3: Detected by `kbcq`, `cmos`, `iir`/`iirw`, and `stub3` (plus strengthening on `stub0..2`).
+   * Tail widths 3, 5, 6, 7 at lane 0: Detected by `tailq_w`.
+   * Head widths 1..7 at lane 3: Fallthrough lands on ns16550 SCR or unmapped space; neither has a read side effect. No guest-visible change can occur.
+   * Gated on zero vs nonzero data: Zero stores caught by `kbcq` and `iir`/`iirw`; nonzero stores caught by `stub0..3` (`0x5a`) and `cmos` (`0x0f`).
+2. **Duplication of Read Arm Forward (`RD2`)**:
+   * Direct widths across all 4 lanes: Detected by `rdq` (lane 0), `cmos` (lane 1), `iirr`/`iirr2` (lane 2), `stub3` (lane 3).
+   * Tail widths at lane 0: Detected by `tailq_r`.
+   * Head widths at lane 3: Duplicated read of SCR returns the identical byte without state mutation. No guest-visible change can occur.
+3. **Mis-decodes of Position / Offset**:
+   * Corruptions of `ofs = (relative_addr & 3) % len` (e.g. dropping `% len`, dropping `& 3`, clamp to 0) are detected by the direct value rows and anchor rows across sessions 4b, 4c, 4e, 4f, 5-10.
+4. **Failure Injection (`return 0`)**:
+   * Handled by alive and value check rows across all sessions.
+
+All non-rowed behaviors (e.g. `p_port10`, exact-data predicates, discarded sparse address bits $a\langle 4:0\rangle$) are rigorously disclosed by class in accordance with the contract.
+
+---
+
+### Question 4: Which statement in the header, the fix comment, PREDICT_r6 or POSTTABLE 6 is wrong?
+
+**NONE. Every audited statement across all four documents is factually, mathematically, and empirically correct.**
+
+* **Fix Comment ([`src/devices/dev_lca.c:283-294`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c#L283-L294))**:
+  Accurately specifies:
+  * Buffer position rule `(P & 3) % len` on both arms.
+  * The old guard `ofs > len` exited on byte accesses to ports 2 or 3 mod 4 ($ofs \in \{2, 3\} > 1$), word accesses to port 3 mod 4 ($ofs = 3 > 2$), and 1- or 2-byte unaligned split heads ($ofs = 3 > len \in \{1, 2\}$).
+  * Discard of read bytes when $ofs == len$ ($i == ofs$ never matched in loop $[0, len-1]$).
+  * Refusal of $len == 0$ before division.
+* **Header Contract Text ([`regress/lca_isalane_probe.py:62-159`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/lca_isalane_probe.py#L62-L159))**:
+  All prior defects cited in historical rounds (unscoped `RD2`, false lane-3 warrant, unclassified tail cells, "'the correct byte is 0' is unrowed", and notation bug $a\langle 4:2\rangle = 0\text{x}1\text{c}$) have been completely replaced with verified derivations and accurate historical notes.
+* **`PREDICT_r6.out` ([`regress/artifacts/lcaisalane/fix530_20260914/PREDICT_r6.out`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/lcaisalane/fix530_20260914/PREDICT_r6.out))**:
+  Correctly predicted FIX_r6 at 185/185 and HEAD_r6 at 112/185 (43 table 5 reds + 30 new reds: `cmos r1` [1], `iir lca rd2` [1], `stub2 *` [9], `stub3 *` [9], `tailq w *` [5], `tailq r *` [5]).
+* **`POSTTABLE 6` ([`regress/artifacts/lcaisalane/fix530_20260914/table6/POSTTABLE.out`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/lcaisalane/fix530_20260914/table6/POSTTABLE.out))**:
+  Exact match on all 14 execution legs and score derivations verified against `check_pred.out` ([`regress/artifacts/lcaisalane/fix530_20260914/table6/check_pred.out`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/lcaisalane/fix530_20260914/table6/check_pred.out)):
+  $$\text{base 185, Wpure 153, dataA 165, dataB 173, L1gate 177, L3gate 181, WT6 184, WTsplit 181,}$$
+  $$\text{R2w 160, R2w2 178, RD2L0 173, RD2L1 177, RD2L3 181, RD2 153.}$$
+
+---
+
+## Verdict
+
+The 185-row detector in [`regress/lca_isalane_probe.py`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/lca_isalane_probe.py) fully and correctly implements the forward-count class closure on the established machine scope, leaving zero unclassified or unprotected cells.
+
+**GO**

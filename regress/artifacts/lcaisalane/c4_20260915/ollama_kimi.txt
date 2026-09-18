@@ -1,0 +1,42 @@
+VERDICT: `GAP` — read arm of `lca_isa`, insert after the existing forward line:
+
+```c
+	if (len != 1)
+		cpu->memory_rw(cpu, cpu->mem, LCA_ISA_BASE + relative_addr,
+		    &byte, 1, MEM_READ, CACHE_NONE);
+```
+
+(a width-gated RD2). Scores 111/111 and is guest-visible; it is the pass-3 W4 defect one arm over, and the contract's RD2 entry repeats the exact record-error the flagship just ruled against. Token: `LCA530_C4_20260914`.
+
+**1. The headline GAP (RD2 gated on width) — why 111/111, why guest-visible**
+
+* REASONED/READ: In the 111-row instrument, the lca handler READs a port with an armable read side effect at exactly two kinds of cells: 0x60 (tailr/live rows) and IIR 0x3fa (4j `iirr`). Packet basis: the Opus C3 answer states "the only read-side-effect port the probe reads through the handler is 0x60" for the 93 rows (READ), and repair 4's added lca reads are P4j's single `(1,2)` LDBU only (READ from the diff).
+* READ: RD2's invisibility at 0x60 is measured by the Opus seat — the second, empty-queue read returns `last_scancode` = the same 0x55.
+* REASONED: The gate `len != 1` spares the only armed IIR row (`iir lca rd`, len 1). Every other lca read of IIR that exists (the (2,2)/(4,2)/(8,2) cell-space reads) runs unarmed, and an unarmed double read returns the identical byte — green. So 111/111.
+* Guest-visible: arm TXRDY, then LDWU/LDL/LDQ of SP(0x3fa): the first forward clears TXRDY and the delivered byte is the *post-clear* IIR (0x1 & 3 instead of 0x2) — the exact channel the Opus seat measured at len 1, now at any width ≥ 2. A row that would catch it — an `iirr` at (2,2), (4,2) or (8,2) — does not exist.
+* READ/REASONED: The contract entry says only "the read arm's forward DUPLICATED (RD2 ... rowed since repair 4 at IIR, 4j `iirr')" — an unscoped DESIGNED-to-catch claim pinned at one (len, lane) cell, while the pass-3 scoping sentence covers x_wfallthru only. That is precisely the condition the flagship's option-(c) ruling called a wrong record for the write arm.
+
+**2. SECOND, independent GAP — x_wfallthru gated on tail widths (Q2 and Q1's misclassified cell)**
+
+* Exact edit: write arm — make the forward a bare call, then `if (len != 3) return 1;` (equally `5`, `6`, `7`). Len-3 writes fall into the read arm.
+* REASONED 111/111: the fallthrough is visible only where a queued reply can be popped. The `kbcq` rows arm 0x60 only at direct widths 1/2/4/8 (READ). The `tailw` t3 tail does land at 0x60, but finds an empty queue — "each phase's `kbc_rdcmd` re-arms 0x20 AFTER the store" (READ). No other len 3/5/6/7 write row touches an armable port.
+* Guest-visible: self-test reply queued (0x55), then an unaligned STx whose 3-byte tail lands at SP(0x60): the phantom read pops the reply, flat status DIB drops 1→0. Split tails of len 3/5/6/7 at 0x60 are produced by guest instructions in the probe itself (READ: session 4f).
+* READ: the scoped contract classifies direct widths (caught), split heads (EQUIVALENT), lane 1 (DISCLOSED), lane-3 direct (DISCLOSED) — and never names the lane-0 TAIL cells of len 3/5/6/7. POSTTABLE 5's FLOOR sentence copies the same enumeration. These cells are neither caught nor disclosed: misclassified by omission. The Opus seat's own cost table listed them "not built"; repair 4 did not build them. Minimum in-round fix: scope them DISCLOSED, or add an armed-tail session (new session, so the targeting rule permits it).
+
+**3. Q1 — the rest of the enumeration**
+
+* Heads EQUIVALENT: cannot be settled from the packet. The premise is that on alphabook1 every port 0x1f mod 0x20 is SCR (inert) or unmapped. Settling fact: the alphabook1 ISA map at 0x1f/0x3f/0x5f and the ns16550 SCR wiring. Not checkable here; stated only by the Opus seat (READ as claim).
+* Lane 1 DISCLOSED: warrant unverified — READ: "I did not check 8253 0x41 or CMOS 0x71." Not checkable from the packet. Settling fact: whether any dev_pit8253 / dev_mc146818 read mutates guest-visible state (e.g., latch-on-read). The disclosure label is fine; its ground is not established.
+* `kbcq` premise "exactly one reply queued per width": READ from the diff that the intent is one self-test reply per process, FIFO-separated; whether the 0xd1 path or any intermediate flat access can consume or add a queue entry mid-sequence is not checkable from the packet. Settling fact: dev_pckbc.c's 0xd1/output_byte queue semantics.
+
+**4. Q3 — wrong or unsupported statements in the packet (READ = quoted, REASONED = derived)**
+
+1. REASONED/READ: The scoped x_wfallthru sentence and POSTTABLE's FLOOR sentence enumerate direct/head/lane-1/lane-3-direct and omit the lane-0 tail cells len 3/5/6/7 — the enumeration is incomplete (see GAP 2).
+2. REASONED: The RD2 entry is the unscoped-claim defect repeated, one repair after the flagship ruled that record shape invalid for x_wfallthru (READ: P4j has exactly one process).
+3. REASONED: The disclosed "mis-decode keyed on the DATA" class is worded for position substitution. A data-keyed *fallthrough* — write arm falls through iff the stored byte is nonzero — also escapes: READ, every store to an armed side-effect port in the instrument stores zero (4h/4i zero words, kbcq `stop(ZERO,...)`). Arguably the same keying axis, but not the named shape; the warrant sentence covers "zero correct byte beside a nonzero neighbour", not access-count edits. Disclosed wrongly only if the class is meant to cover all data-keyed edits.
+4. READ: POSTTABLE's arithmetic checks out (111−43=68; W1 109, W3/W4 107, RD2 110, 41+2=43). REASONED: the HEAD_r5 red-set attribution is consistent — iirw/kbcq rows inspect only flat status, and the old write arm computed the same byte wherever its guard ran, so the new sessions die on HEAD only via the (1,2) read exit, exactly the two extra reds named.
+5. READ: POSTTABLE names a W5 leg whose edit is never stated in the packet. Not checkable. Settling fact: the W5 diff.
+
+**What I could not check at all:** the alphabook1 port maps behind the EQUIVALENT/DISCLOSED labels; dev_pckbc/dev_ns16550 side-effect details beyond what the Opus answer quotes; tables 1–4 stands (accepted, per the targeting rule, on the packet's say-so).
+
+**Verdict for the chain:** not clean. Either gap alone defeats `CLOSES`; both are packet-derivable, and gap 1 is the adjudicated defect's own shape. Next repair owes: RD2 scoped or rowed at widths 2/4/8, and the lane-0 tail fallthrough cells scoped DISCLOSED or rowed armed.

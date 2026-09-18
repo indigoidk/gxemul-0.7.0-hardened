@@ -1,0 +1,56 @@
+I'll start by reading the full offloaded brief, then verify the enumeration against the tree rather than the packet.HEAD is still on later rounds; I'll pull the checkpoint and the live `#530` artifacts next so the enumeration is checked against the tree, not the packet.The checkpoint still has table 6 as running; I'll read the live probe, handler, and table-6 artifacts next so the cell list is derived from source.I'll read the new sessions, `dsession` phasing, and the device handlers next — the stub chain and CMOS/8042 channels are the load-bearing claims.CLOSES  
+LCA530_C5_20260915
+
+The 185-row detector covers the enumerated forward-count class. Every cell of {store phantom-read, load duplicated-forward} × {direct 1/2/4/8, split head 1–7, split tail 1–7} × lanes 0–3 is either rowed, classified EQUIVALENT with a mapped-port derivation, or out of scope (no such cell). I did not find a floor-class edit of the fixed `lca_isa` handler that would score 185/185 and change a guest-visible outcome.
+
+## Q1 — enumeration
+
+Re-derived from `DEVICE_ACCESS(lca_isa)` plus `bus_isa_init` (`BUS_ISA_IDE0 | BUS_ISA_IDE1` only) and the device lengths.
+
+| arm | width-kind | lane | disposition | carrier |
+|---|---|---|---|---|
+| both | direct 1/2/4/8 | 0 | **rowed** | `kbcq` (W), `rdq` (R) |
+| both | direct | 1 | **rowed** | `cmos` REG C |
+| both | direct | 2 | **rowed** | `iir`/`iirw` (W), `iirr`+`iirr2` (R) |
+| both | direct | 3 | **rowed** | `stub3` at 0x63 + `stub3 live` |
+| both | head 1–7 | 3 | **EQUIVALENT** | only mapped 0x1f-mod-0x20 ports are 0x3ff and 0x2ff, both ns16550 SCR `default:` (`d->reg[]`, no side effect). 0x60–0x6f has no such port |
+| both | tail 1/2/4 | 0 | **rowed** (same cells as direct lane 0) | `kbcq`/`rdq` |
+| both | tail 3/5/6/7 | 0 | **rowed** | `tailq_w` / `tailq_r` at 0x60 |
+| — | any | 1–3 for tails, 0–2 for heads | **no cell** | 1 KB split (`MRW_SPLIT_MASK` 0x3ff) plus `port<<5` makes heads always lane 3 and tails always lane 0 |
+| — | `len==0` | — | **disclosed** | refused, no producer |
+
+`stub0`/`stub1`/`stub2` are strengthening only; every lane 0–2 cell has an architectural sole carrier.
+
+No mapped head port has an access side effect. Device windows checked: 8259 2 B, 8253 4 B, pckbc 0x10, pccmos 2 B, ns16550 8 B × 2, lpt 3 B (`0x378–0x37a`, so 0x37f is unmapped). VGA is not in the LCA flags at all (stronger than “no VGA without X11”). wdc is gated on `diskimage_exist`; the probe’s `0x20000000:alpha_dummy.bin` is not an IDE image.
+
+Scope sentences that hold: alphabook1 as probed; width set {1,2,4,8} plus split heads/tails; `len==0` disclosed; direction-swap is a different class. The lpt read arm has no side effect (`dev_lpt.c` DATA returns `d->data`, STATUS constants; CONTROL’s `console_putchar` is write-only).
+
+## Q2 — channels vary
+
+All four new families vary under the mutant they name. Table 6 `check_pred.out` is `exact=14 differs=0`; the red sets match the PRETABLE, which is the variation proof.
+
+- **stub:** `x++` runs before the `writeflag` test and both arms `return 1` (`dev_pckbc.c`). One extra access flips bit 0x10; chained rows compare consecutive trailing flats, so one extra reds exactly that row. All four `stubN live` rows are 0x10 on HEAD_r6 (liveness is live). A future 0x61 implementation greens the access rows and reds `live`.
+- **cmos:** PC_CMOS remaps data to `last_addr*4`; REG C write stores the byte, REG C read returns it then zeros (`dev_mc146818.c`). Compares mask `0x0f` (UF/AF/PF/IRQF are 0xf0). HEAD_r6: `cmos set=0xf`, `clr=0x0`, `w*=0xf`, `r1` red (packing), `r2/r4/r8` green. RD2L1 reds `cmos r*` as predicted.
+- **rdq / tailq:** two `0xAA` commands queue two `0x55`s; a data read pops; `0xd1` puts the next data **write** in `STATE_LDOUTPUT` (sets `output_byte`, does not pop). `rdq ctl1=1`, `ctl0=0` on HEAD_r6. `tailw` (empty queue) cannot see a phantom read; `tailq_w` with one queued reply can. WT6 reds only `tailq w t6`.
+- **iirr2:** `iir_arm()` is in every phase. IIR read clears `IIR_TXRDY` and `dev_ns16550_tick` does not restore it. Shifts match `(0x3fa & 3) % len`: 0 at len 2, 16 at len 4/8.
+
+## Q3 — no GAP
+
+A mutant inside a rowed cell that still scores 185/185 is the GAP shape. The table-6 mutants that escaped the 111-row instrument are all red on 185: R2w 160, WT6 184, WTsplit 181, RD2L0 173, L1gate 177, L3gate 181, dataA 165, RD2L1 177, RD2L3 181, RD2 153.
+
+Lane 3’s oracle is a parity bit, so two extra forwards (three total) return the same byte as one; that is equivalent on the stub, not a silent miss of a one-extra duplicate. A read duplicate gated on `byte==0` does not fire on any load row (first bytes are 0x55 / 0x0f / 0x02 / 0x21) — that is the exact-value class the contract already discloses for data, not a missing (len, lane, arm) cell.
+
+Not built this pass: a new mutant in a scratch tree. The claim rests on the source derivation plus table 6’s 14/14 match.
+
+## Q4 — records
+
+No load-bearing false statement in the header contract, the fix comment, `PREDICT_r6.out`, or POSTTABLE 6. HEAD_r6 is 112/185 with exactly the 30 named new reds; FIX_r6 is 185/185; PREDICT was written before those runs.
+
+Two nits, neither a wrong enumeration:
+
+- “no VGA without X11” is true but weak: LCA never sets `BUS_ISA_VGA`, so there is no VGA with X11 either.
+- `mut530c4_opus.py` still says L1gate “No lane-1 row exists / Expect ESCAPE” — stale pass-4 commentary in the mutant file, not in the four documents Q4 names. Table 6’s L1gate is 177/185 on `cmos w*` + `stub1 w*`.
+
+## Not checked
+
+Did not rebuild or re-run table 6 (already `KILL530F_DONE`, 14/14). Did not re-measure table 1–5 kills (repair 5 adds sessions only). Did not boot a guest OS. CMOS REG C **writes** are emulator-permissive (hardware REG C is read-only); the flagship named that channel and `cmos set`/`clr` pin it.

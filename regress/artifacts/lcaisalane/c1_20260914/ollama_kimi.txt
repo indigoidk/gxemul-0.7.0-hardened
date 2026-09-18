@@ -1,0 +1,38 @@
+VERDICT: `GAP: in dev_lca.c DEVICE_ACCESS(lca_isa) write arm, delete the keyword `return`, leaving `cpu->memory_rw(cpu, cpu->mem, LCA_ISA_BASE + relative_addr, &byte, 1, writeflag, CACHE_NONE);` as a non-returning statement so control falls through into the read arm` — scores 51/51 per the reasoning below, changes a guest-visible outcome · LCA530_C1_20260914
+(The gap verdict rests on one premise not decidable from the packet; it is named with its settling fact at the end. If that premise fails, the verdict degrades to CLOSES-with-defects, and the m_clamp item under Q3 stands regardless.)
+
+## Q1 — the floor gap (REASONED, with one unsettled premise)
+
+The edit: write arm forwards correctly first (`byte = data[ofs];`, nested write still happens), then falls through to the read arm, which issues a **second, phantom device read** at the same ISA port, clobbers `data[0..len-1]` with that read, and returns 1.
+
+Why no row can see it:
+- Every store row verifies the *forwarded* byte, and the forward still happens before the fall-through. So `w11/w22/w23`, `st4 lane0`, `st4 lane3`, `st8 lane3`, `h3 stq` all keep their expected values. (Reasoned)
+- All probe writes target UART registers whose *reads* are side-effect-free in probe state: SCR, MCR ("stores and returns its low bits"), MSR, LCR, IER, and LSR with no error flags ever set. (Read from packet: port set inferable from UART_MCR=0x3fc plus lane labels → SCR=0x3ff.)
+- The print path's THR (0x3f8) writes trigger the phantom RBR read, but sessions consume all typed input during boot, so the RX FIFO is empty during phases. (Reasoned from session()/dsession structure.)
+- The data clobber is harmless: it happens after the forward, and for split writes the head clobbers only its own sub-range before the tail (bytes 3..7) is used. Return-value forced to 1 differs from the fix only when the nested write fails (unmapped 0x400 tails), where nothing is mapped either way. (Reasoned)
+
+But the guest-visible outcome changes in general: with this edit, **any guest write to THR while serial input is queued consumes a pending input byte** (RBR read pops it), and a write to FCR reads IIR, acknowledging a pending THRE interrupt. Real input loss / interrupt loss on writes that should not read at all.
+
+Row expected to catch it and why it cannot: the store round-trip class (w2x/st4/st8). It cannot, because the stored value is unchanged; no row writes to a port whose read mutates state that a later row observes (none writes FCR with IER.THRE armed, none leaves RX pending).
+
+**The unsettled premise:** that this tree's UART model (dev_ns16550 or equivalent) consumes queued input on RBR reads / acknowledges interrupts on IIR reads. That is near-structurally forced for any functional console UART, but it is **not checkable from the packet**. Settling fact: the read-path of the UART device source for registers 0x3f8/0x3fa.
+**Scope note (Read from packet):** p_port10 was excluded as "not an edit of the fix." The `return` is a context line, not an edited line. If the same scope rule is applied here, then this edit — currently *neither caught nor disclosed* — must be added to the clause-(e) DISCLOSED list. Either way the contract needs an edit.
+
+## Q2 — catch-list vs rows
+
+- **The clamp item does not reconcile (Read + Reasoned — my strongest finding).** Clause (e) describes the clamp as "the byte placed at position 0 instead of (P & 3) % len" under the preamble "at len 1, 2, 3, 4 and 8." A true position-0 fold must go red on at least: read arm `r81 lane` (8,1), `ld4 full` (4,1), `ld8 lane3` (8,3), `split al` (8,3), `h5 ldq` (5,3), `r23` (2,3); write arm `w23`, `st4 lane3`, `st8 lane3` — 9 rows → ≤ 42/51. Even the classic defensive `min(ofs, len-1)` must score 46/51 (`r22, r23, w23, h3 ldq, h3 ldl`). The POSTTABLE logs **m_clamp 49/51** — exactly 2 reds — which is consistent *only* with a mutant whose deviation is confined to the (2,3) cell on both arms, i.e. **not** any position-0 semantics. Either the description or the score is wrong; the other claimed kills I re-derived do reconcile (m_andmask 47 = the four split rows exactly; p_lane0decl 47 with the LDL tail len-1 staying green; the len ≥ 4 `% len` identity confirmed by measurement).
+- Every other claimed killer's channel provably varies: p_wbit1 (st4/st8 lane3 → data[1]=0x00), p_q8lane (st8/ld8), p_rep4 (ld4 full), m_nomask (r81 len-8 LSR; SCR=0x3ff ⇒ split al varies too).
+- Minor unexplained tally (Reasoned): p_wbit1 48/51 ⇒ 3 reds; the write-arm form accounts for 2 (st4 lane3, st8 lane3). Settling fact: table-2's p_wbit1 diff and red-row list.
+- Minor uncheckable (Reasoned): head 31/51. I account 12 exit-session rows + r22 + h3 ldq + h3 ldl = 15; the remaining 5 are consistent iff sessions 1–3 carry five discard-on-HEAD cells ((1,1)/(2,2)-class reads, which return zeros on HEAD since `ofs == len` discards). Settling fact: HEAD_det.out's row list.
+
+## Q3 — wrong statements
+
+1. **(Certain) m_clamp: score vs clause-(e) description are mutually exclusive** — arithmetic above. Settling fact: the exact m_clamp edit line plus `logs/probe_m_clamp.raw`'s red rows.
+2. **(Certain wording; impact uncheckable) Header DISCLOSED rationale for p_port10:** "every probed port is below 0x400" is now **false** — the session-4c split tails access port 0x400 (the POSTTABLE itself says the tail "goes through the same handler" there). p_port10 is the one disclosed mutant **not re-measured** on the 51-row instrument, and its stated premise disappeared exactly with the rows this repair added. Its equivalence now hinges on `0x400 & 0x3ff == 0` being unmapped. Settling fact: what device, if any, is mapped at LCA ISA port 0 in this machine config.
+3. **(Precision nit) Fix comment:** among split heads, only the len-1 head at port 0x3ff (misaligned LD×/ST× at offset ≡ 0x3ff) actually reinstates the exit; the len-3 heads the detector rows (`3 > 3` false) never exited — HEAD discarded them. The parenthetical "the head of an unaligned LDL/LDQ" invites the old misreading.
+
+## Could not check from the packet (each costs one named fact)
+- UART read side effects (decisive for my GAP) → dev_ns16550.c read path.
+- LCA ISA port 0's occupant (decisive for item Q3.2) → the machine config's ISA device map.
+- m_clamp's exact edit (decisive for Q3.1) → kill530b's mutant diff.
+- Sessions 5–10 cell→port map (whether any exit write targets 0x3fa/0x3f8, which would partially see my gap edit) → the full EXITS initializer, not inlined.

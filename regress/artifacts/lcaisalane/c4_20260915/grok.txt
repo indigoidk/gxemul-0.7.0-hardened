@@ -1,0 +1,75 @@
+I'll start from the full offloaded brief and the repo truth (HEAD, checkpoint, outstanding bugs), then check the 111-row contract against source rather than the packet's claims.The packet is in; next I’ll verify the handler, the 111-row probe, and the forwarded devices against `GXEMUL-SEC` rather than the brief’s restatement.The handler matches the packet; I’ll now walk sessions 4h–4k and the ISA devices that supply their side-effect channels.The kbcq construction looks plausible; I’ll confirm 8042 queue/0xd1 behavior and census every ISA read that has a side effect.**GAP: after the read-arm `cpu->memory_rw(..., MEM_READ)` insert `if (len != 1) cpu->memory_rw(cpu, cpu->mem, LCA_ISA_BASE + relative_addr, &byte, 1, MEM_READ, CACHE_NONE);`**  
+**LCA530_C4_20260914**
+
+Checkpoint line 1, as loaded: `# CHECKPOINT -- 2026-09-14 ~05:0x   HEAD 9c91999 (records)   #529 TABLE 8 PROBES RUNNING; #530 CLOSING PASS 2 FIRED`
+
+Seat: Grok 4.6, file-reading. Tree `GXEMUL-SEC/` only. No gate, no `run.sh`, no project-tree mutation. I did not rebuild this mutant; the 111/111 claim is derived from table 5’s measured RD2 (below). agy was not used.
+
+---
+
+### 1. x_wfallthru / forward-count enumeration
+
+**Write fallthrough at lanes 0 and 2, every direct width: right, and the new rows’ channels do vary.**
+
+Table 5 measured it: `x_wfallthru` 103/111 (four `iir st*` + four `kbcq * dib`); W1 109; W2 109; W3 107; W4 107; W5 110 (`check_pred.out` exact=9). FIX_r5 is 111/111. The `kbcq` construction matches `dev_pckbc.c`: `0xaa` queues 0x55, `0xd1` sets `STATE_LDOUTPUT` without popping, a store of 0 lands in `output_byte`, a phantom data read takes the `default` arm and pops. `FIX_r5.out` shows `pre=0x11` (`KBS_DIB|KBS_NOSEC`) on every `kbcq_*`. The `iir` rows arm TXRDY (`IER 0` then `0x02`); `iir ctl` / `iirw ctl` read 0x2, and W1 turns `iir stq` to 0x1 (`probe_W1.raw`).
+
+**Heads EQUIVALENT: right on alphabook1.** Head ports are 0x1f mod 0x20. This probe’s are 0x3ff (ns16550 scratch — read has no side effect) and 0x1f/0x3f/0x5f (unmapped). None of 8253 (0x40–0x43), pckbc (0x60–0x6f), CMOS (0x70–0x71), or UART IIR/RBR sits at 0x1f mod 0x20.
+
+**Three cells are misclassified or omitted:**
+
+| cell | contract | fact |
+|---|---|---|
+| **RD2 at lane 2, widths 2/4/8** | named as caught, rowed only at 4j (`iir lca rd`, LDBU → len 1) | the W1 analog of RD2 (below) is unrowed. Same port, same arming, same observable as the measured RD2 discriminator |
+| **Lane 1 fallthrough** | DISCLOSED, warrant “no port with an armable read side effect is rowed” | a port **exists**. `dev_pckbc_init` registers 0x10 bytes at 0x60 (`DEV_PCKBC_LENGTH`); alphabook1 is pc-style; `relative_addr==1` is the port-0x61 arm, which does `x++; if (x&1) odata ^= 0x10` on every access. No arming. 8253 0x41 (`rd_msb` after a 16-bit control word) and CMOS 0x71 after selecting REG C (read-to-clear) are further lane-1 ports. DISCLOSED-as-not-rowed is still the bucket; the “no such port” reading is false |
+| **Split-tail fallthrough (len 3/5/6/7 at 0x60)** | in none of caught / EQUIVALENT / DISCLOSED | `tailw` has no reply queued, so DIB is inert, but an empty-queue data read does `last_scancode \|= 0x80` (`dev_pckbc.c`). Guest-visible on a later NORMAL data read; no row watches it |
+
+**Lane-3-direct DISCLOSED via wdc 0x1f7: warrant false on this probe.** LCA passes `BUS_ISA_IDE0`, but `bus_isa_init` only `device_add`s wdc when `diskimage_exist(..., DISKIMAGE_IDE)`. This probe loads `0x20000000:alpha_dummy.bin`, not an IDE image, so 0x1f7 is not mapped. 8253 0x43’s read path only returns `mode_byte`. On this machine lane-3-direct fallthrough is EQUIVALENT, not “wdc would carry it”.
+
+kbcq/iir rows are not vacuous: table 5 reddens them under the mutants they name.
+
+---
+
+### 2. Floor gap
+
+The 111-row instrument catches unconditioned RD2 (`probe_RD2.raw`: `iir lca rd` 0x1 vs 0x2, 110/111) and **only** that row. 4j is the only lca **read** of IIR. Every other lca read of a side-effect port is 8042 0x60 (`live`, `tailr *`), where a second forward of an emptied queue returns `last_scancode` — the same 0x55 — which Opus measured as 93/93 on the sessions repair 4 did not change.
+
+So this edit to the **fixed** handler:
+
+```c
+	cpu->memory_rw(cpu, cpu->mem, LCA_ISA_BASE + relative_addr,
+	    &byte, 1, MEM_READ, CACHE_NONE);
+	if (len != 1)
+		cpu->memory_rw(cpu, cpu->mem, LCA_ISA_BASE + relative_addr,
+		    &byte, 1, MEM_READ, CACHE_NONE);
+```
+
+in place of the single read-arm forward.
+
+* **Why `iir lca rd` cannot catch it:** that row is LDBU, `len == 1`; the extra forward is skipped.
+* **Guest-visible:** an LDL/LDQ of SP(0x3fa) after the same `iir_arm()` (Opus c3’s discriminator, different width). First forward acknowledges TXRDY; the delivered byte is IIR `& 3 == 0x1` instead of 0x2. SP(0x3fa) does not cross the 1 KB split (`0x7f40 & 0x3ff == 0x340`).
+
+This is closing pass 3’s W1, on the read arm: the contract names “the read arm’s forward DUPLICATED” and rows it at one width. The write-arm sentence now says “that edit, **and the same edit gated on the width or the lane**”; the RD2 sentence does not. It is not on the disclosed list.
+
+It is not a (d) DEPENDS-ON of the ofs-fold (the fix never touched the read forward). It **is** a contract-named forward-count cell left open after a class-closure repair of that class — the `#499` shape the last two passes already paid for. Cost to close: LDWU/LDL/LDQ of IIR in 4j (three phases). Scoping RD2 to `(1,2)` only would be option (a) for this arm, which pass 3 rejected for the write arm.
+
+Not offered as the GAP (disclosed or out of contract as written): data-class (`data[ofs] ? data[ofs] : data[0]`), a<4:0>, exact-port, lane-1-only write fallthrough, lane-3-direct, forward-return equivalents, len-0.
+
+---
+
+### 3. Wrong statements
+
+1. **Header CONTRACT, RD2.** Names the duplicated forward without a width scope while 4j pins only len 1. Same L4 shape as the unscoped `x_wfallthru` this repair was meant to finish. POSTTABLE 5 is narrower and accurate on this point (“RD2 at lane 2”).
+2. **Header CONTRACT, x_wfallthru three-way split.** Split-tail lens 3/5/6/7 are in no bucket. PRETABLE W3 notes them as “no reply queued” and stops; `last_scancode \|= 0x80` is still a side effect.
+3. **Header, lane 1.** “No port with an armable read side effect is rowed” is true as a rowing fact and false as “none exists”: 0x61 is in the same pckbc window the `kbcq` rows use.
+4. **Header, lane-3-direct wdc 0x1f7.** Not present on this probe (no IDE image).
+5. **Fix comment, `a<4:3>`.** Still true of the size field; the handler shifts away **a<4:0>**. The header disclosure was widened; the comment was not. Not a product-code defect.
+6. **POSTTABLE 5 scores and targeting.** Match `check_pred.out` / `FIX_r5.out` / `HEAD_r5.out` (68/111 = table 4’s 41 + `iirr alive` + `iir lca rd`; 4j is a (1,2) host death on HEAD). No error found in the 9-leg scores. Targeting rule holds: repair 4 only adds sessions.
+
+---
+
+### Not checked
+
+* This `len != 1` RD2 mutant was **not** rebuilt or run (derivation from `probe_RD2.raw` 110/111 with the single red at len 1, plus Opus c3 on 8042 `last_scancode`). A one-leg table in a scratch clone would settle it.
+* 0x61 toggle, 8253 `rd_msb`, and CMOS REG C were read in source, not probed.
+* Tables 1–4 not re-run (targeting rule).
+* COM2 IIR at 0x2fa (`in_use=0`) is another lane-2 TXRDY port; not needed for the GAP.

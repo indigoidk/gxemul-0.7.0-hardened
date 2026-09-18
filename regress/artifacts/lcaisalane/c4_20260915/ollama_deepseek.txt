@@ -1,0 +1,18 @@
+GAP: in `dev_lca.c` write arm, after `byte = data[ofs];` replace the unconditional `return cpu->memory_rw(...)` with
+
+```c
+if (byte != 0)
+        cpu->memory_rw(cpu, cpu->mem, LCA_ISA_BASE + relative_addr,
+            &byte, 1, writeflag, CACHE_NONE);
+else
+        return cpu->memory_rw(cpu, cpu->mem, LCA_ISA_BASE + relative_addr,
+            &byte, 1, writeflag, CACHE_NONE);
+```
+
+so nonzero stores fall through into the read arm; zero stores return. This should score 111/111 and is guest-visible: a nonzero store to IIR after TXRDY is armed clears TXRDY instead of leaving it pending. Token `LCA530_C4_20260914`.
+
+**Q1 — x_wfallthru/forward-count enumeration:** REASONED, not right as scoped. The new `iir` and `kbcq` rows arm read side effects only for stores of **zero**. The contract says caught at lane 2 and lane 0 at every direct width, but it omits the data-value axis. A fallthrough gated on `byte != 0` escapes those rows because they store zero.
+
+**Q2 — floor gap:** REASONED, the above edit is the gap. It is the same x_wfallthru class, value-gated instead of width- or lane-gated. The row expected to catch it would be a store with a **nonzero** correct byte to IIR or 8042 data with the read side effect armed; no such row exists. All other store rows hit no armed read side effect, so the mutant stays green.
+
+**Q3 — wrong statement:** READ/REASONED. The scoped statement “caught at lane 2 and lane 0 at every direct width” is false without a value qualification. The rows catch zero-value fallthrough at those lanes, not nonzero-value fallthrough.

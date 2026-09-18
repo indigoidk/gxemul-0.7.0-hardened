@@ -1,0 +1,152 @@
+**VERDICT LINE FIRST:**
+`CLOSES` (no floor gap in the 111-row detector) `LCA530_C4_20260914`
+
+---
+
+### Adversarial Review of Brief and Verification Against Tree (`GXEMUL-SEC`)
+
+This review was conducted in strict **READ-ONLY** mode using repository read tools; no files were written, modified, built, or executed in [`GXEMUL-SEC`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC), `est`, `build`, or `build-asan`. Every citation below is anchored to exact source lines.
+
+---
+
+### 1. Verification of the Fix and Mechanics
+
+* **The Fix Implementation:**
+  In [`src/devices/dev_lca.c:295-312`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c#L295-L312):
+  ```c
+  if (len == 0)
+      return 0;
+  ofs = (relative_addr & 3) % len;
+
+  if (writeflag == MEM_WRITE) {
+      byte = data[ofs];
+      return cpu->memory_rw(cpu, cpu->mem, LCA_ISA_BASE +
+          relative_addr, &byte, 1, writeflag, CACHE_NONE);
+  }
+
+  cpu->memory_rw(cpu, cpu->mem, LCA_ISA_BASE + relative_addr,
+      &byte, 1, MEM_READ, CACHE_NONE);
+
+  for (i=0; i<len; i++)
+      data[i] = i == ofs? byte : 0x00;
+
+  return 1;
+  ```
+  * `len == 0` is guarded prior to the modulo operator (`% len`), eliminating potential host divide-by-zero.
+  * `ofs = (relative_addr & 3) % len` correctly places the single target byte for port $P$ at buffer index $(P \pmod 4) \pmod{\text{len}}$ on both arms.
+  * Write arm indexes `data[ofs]`.
+  * Read arm places `byte` at `data[ofs]` and zeroes other bytes up to `len`.
+
+* **1 KB Split Mechanics:**
+  In [`src/cpus/memory_rw.c:186-224`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c#L186-L224), [`MRW_SPLIT_MASK`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c#L104) is `0x3ff` (1024-byte granule). On Alpha (where `cpu->translate_v2p != NULL`), non-`PHYSICAL` accesses crossing a 1024-byte boundary split into a `head = granule - offset` and a remainder `tail`.
+  Because sparse LCA ISA addresses shift right by 5 bits (`relative_addr >>= 5` in [`src/devices/dev_lca.c:280`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c#L280)), each ISA port occupies $2^5 = 32$ bytes. A 1024-byte boundary in virtual address space maps to $1024 / 32 = 32$ ports ($0\text{x}20$).
+  Consequently:
+  * Every split **HEAD** ends at port offset $0\text{x}3\text{ff} \pmod{0\text{x}400}$, which is port $31 = 0\text{x}1\text{f} \pmod{0\text{x}20}$. Since $31 \pmod 4 = 3$, every split head lands on **lane 3**.
+  * Every split **TAIL** begins at port offset $0\text{x}000 \pmod{0\text{x}400}$, which is port $0 \pmod{0\text{x}20}$, landing on **lane 0**.
+  * If a head chunk fails, [`MEMORY_RW`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c#L183) returns [`MEMORY_ACCESS_FAILED`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c#L216) immediately before issuing the tail chunk.
+
+---
+
+### 2. Answers to Questions / Review-Asks
+
+#### Question 1: Is the `x_wfallthru` / forward-count enumeration right?
+*The scoped contract says the phantom read is caught at lane 2 and lane 0 at every direct width, EQUIVALENT at the split-head cells (no read-side-effect port at 0x1f mod 0x20 on alphabook1), and DISCLOSED at lane 1 and lane-3 direct. Name any cell misclassified -- a head port that DOES have an armable read side effect, a lane-1 port that does, a row whose channel cannot vary under the mutant it names (the `kbcq` rows need exactly one reply queued; the `iir` rows need TXRDY armed).*
+
+1. **Split-head cells at $0\text{x}1\text{f} \pmod{0\text{x}20}$ (Lane 3):**
+   * On [`alphabook1`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/machines/machine_alpha.c#L57-L63), ISA devices registered via [`bus_isa_init`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/bus_isa.c#L174) include:
+     * `pic1` (8259): base $0\text{x}20$ (ports $0\text{x}20, 0\text{x}21$; port $0\text{x}3\text{f}$ is unmapped).
+     * `pic2` (8259): base $0\text{xa}0$ (ports $0\text{xa}0, 0\text{xa}1$; port $0\text{xbf}$ is unmapped).
+     * `8253`: base $0\text{x}40$ (ports $0\text{x}40..0\text{x}43$; port $0\text{x}5\text{f}$ is unmapped).
+     * `pccmos`: base $0\text{x}70$ (ports $0\text{x}70, 0\text{x}71$; port $0\text{x}7\text{f}$ is unmapped).
+     * `pckbc`: base $0\text{x}60$ (ports $0\text{x}60, 0\text{x}64$).
+     * `ns16550`: base $0\text{x}3\text{f}8$ (ports $0\text{x}3\text{f}8..0\text{x}3\text{ff}$) and $0\text{x}2\text{f}8$ ($0\text{x}2\text{f}8..0\text{x}2\text{ff}$). Port $0\text{x}3\text{ff}$ (and $0\text{x}2\text{ff}$) is `com_scr` (Scratchpad Register).
+   * Verified in [`src/devices/dev_ns16550.c:298-311`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_ns16550.c#L298-L311): `case default:` (relative address 7, SCR) on `MEM_READ` performs `odata = d->reg[relative_addr]` with **zero side effects**.
+   * Unmapped ports ($0\text{x}1\text{f}, 0\text{x}3\text{f}, 0\text{x}5\text{f}$, etc.) reach [`src/core/memory.c:605-654`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/core/memory.c#L605-L654) and [`src/cpus/memory_rw.c:676-684`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c#L676-L684), returning success with zero-fill.
+   * **Result:** No head port at $0\text{x}1\text{f} \pmod{0\text{x}20}$ possesses an armable read side effect. The contract's classification of split-head fallthrough as **EQUIVALENT** on `alphabook1` is strictly correct.
+
+2. **Lane 1 Ports with Armable Read Side Effects:**
+   While [`src/devices/dev_ns16550.c:202`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_ns16550.c#L202) (IER, port $0\text{x}3\text{f}9$) is inert on read, an adversarial audit of other mapped ISA devices on `alphabook1` reveals **two lane-1 ports that DO have armable read side effects**:
+   * **`8253` Timer Counter 1 (Port $0\text{x}41$, lane 1):**
+     * If programmed in 16-bit mode (`d->mode_byte & 0x30 == I8253_TIMER_16BIT`), reading port $0\text{x}41$ toggles the internal read flip-flop: `d->rd_msb[1] ^= 1` ([`src/devices/dev_8253.c:284`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_8253.c#L284)).
+     * If latched via control word to port $0\text{x}43$ (`d->latched[1] = 1`), reading port $0\text{x}41$ consumes the latch: `d->latched[1] = 0` ([`src/devices/dev_8253.c:261`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_8253.c#L261)).
+   * **`pccmos` / `mc146818` RTC (Port $0\text{x}71$, lane 1):**
+     * When index register $0\text{x}70$ is armed with `MC_REGC` ($0\text{x}0\text{c}$), reading data port $0\text{x}71$ executes [`src/devices/dev_mc146818.c:554-566`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_mc146818.c#L554-L566):
+       ```c
+       if (relative_addr == MC_REGC*4) {
+           INTERRUPT_DEASSERT(d->irq);
+           ...
+           d->reg[MC_REGC * 4] = 0x00;
+       }
+       ```
+       This deasserts the RTC interrupt and zeroes `REGC` on read (classic clear-on-read interrupt acknowledgment).
+   * **Contract Status:** The contract text states:
+     *"at LANE 1 (no port with an armable read side effect is rowed) ... it is DISCLOSED"* ([`regress/lca_isalane_probe.py:105-107`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/lca_isalane_probe.py#L105-L107)).
+     This accurately characterizes the *detector's rows* (neither port $0\text{x}41$ nor $0\text{x}71$ is rowed), though the brief notes in §HOW IT WAS MEASURED lines 454 and 615 that these ports were not checked.
+
+3. **Lane 3 Direct:**
+   * WDC status register $0\text{x}1\text{f}7$ deasserts IRQ on read in [`src/devices/dev_wdc.c`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c). However, in [`src/devices/bus_isa.c:275-278`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/bus_isa.c#L275-L278), `wdc` is only added if an IDE disk image exists (`diskimage_exist(machine, 0, DISKIMAGE_IDE)`). On diskless probe runs, port $0\text{x}1\text{f}7$ is unmapped. Correctly DISCLOSED.
+
+4. **Channel Variance Under Named Mutants:**
+   * **`kbcq_*` (Session 4k, [`regress/lca_isalane_probe.py:823-836`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/lca_isalane_probe.py#L823-L836)):
+     Each width has its own distinct process (`kbcq_b`, `kbcq_w`, `kbcq_l`, `kbcq_q`). In each process, `KBC_SELFTEST` ($0\text{xaa}$) writes to CTL ($0\text{x}64$), enqueuing exactly one byte ($0\text{x}55$) into the keyboard FIFO queue ([`src/devices/dev_pckbc.c:1060`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_pckbc.c#L1060)). Then `KBC_WROUTPORT` ($0\text{xd}1$) writes to CTL, setting `d->state = STATE_LDOUTPUT` ([`src/devices/dev_pckbc.c:1075`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_pckbc.c#L1075)).
+     * Under base, the store to port $0\text{x}60$ lands in `d->output_byte` ([`src/devices/dev_pckbc.c:1007`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_pckbc.c#L1007)), leaving the queue unpopped; reading status ($0\text{x}64$) sees `d->head != d->tail`, so `KBS_DIB` (bit 0) remains `1` ([`src/devices/dev_pckbc.c:1020`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_pckbc.c#L1020)).
+     * Under fallthrough, the store writes `output_byte` and falls through into a read of port $0\text{x}60$, calling [`pckbc_get_code`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_pckbc.c#L982), which pops the single queued byte. The queue becomes empty, and status `KBS_DIB` drops to `0`.
+     * Channel varies deterministically (`1 -> 0`).
+   * **`iir` / `iirw` (Sessions 4h & 4i, [`regress/lca_isalane_probe.py:782-814`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/lca_isalane_probe.py#L782-L814)):
+     `iir_arm()` writes $0$ then $2$ (`IER_ETXRDY`) to IER, asserting `IIR_TXRDY` ($0\text{x}02$) in `com_iir` ([`src/devices/dev_ns16550.c:195-197`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_ns16550.c#L195-L197)). The subsequent store targets port $0\text{x}3\text{fa}$ (FCR on write, [`src/devices/dev_ns16550.c:209`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_ns16550.c#L209)).
+     * Under base, `IIR_TXRDY` remains set (`iir & 3 == 0x02`).
+     * Under fallthrough, the phantom read of port $0\text{x}3\text{fa}$ reads IIR, clearing `IIR_TXRDY` ([`src/devices/dev_ns16550.c:213`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_ns16550.c#L213)), so `iir & 3` drops to `0x01`.
+     * Channel varies deterministically (`0x2 -> 0x1`).
+   * **`iirr` (Session 4j, [`regress/lca_isalane_probe.py:816-820`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/lca_isalane_probe.py#L816-L820)):
+     `LDBU SP(UART_IIR)` reads port $0\text{x}3\text{fa}$ once on base, returning `0x02` and clearing `IIR_TXRDY`. Under `RD2` (forward duplicated), the first read clears `IIR_TXRDY` and the second read delivers `0x01`. Channel varies deterministically (`0x2 -> 0x1`).
+
+---
+
+#### Question 2: Is there a floor gap in the 111-row detector?
+*The smallest source edit to the FIXED `dev_lca.c` that changes a guest-visible outcome and still scores 111/111 -- as an exact edit, the row you expected to catch it and why it cannot. The DISCLOSED list (address class, data class, a<4:0>, lane-1 / lane-3-direct fallthrough, forward-return equivalents) is outside the question; say if one is disclosed wrongly.*
+
+* **Evaluation:**
+  There is **NO floor gap** in the 111-row detector.
+  * Direct cell space: All 32 cells (widths $\{1, 2, 4, 8\} \times \text{lanes } \{0, 1, 2, 3\} \times \{\text{READ}, \text{WRITE}\}$) are rowed in Session 4d ([`regress/lca_isalane_probe.py:636-680`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/lca_isalane_probe.py#L636-L680)) and Sessions 1–4, 5–10.
+  * Split heads: Lengths 1–7 at lane 3 are rowed on both arms in Session 4e ([`regress/lca_isalane_probe.py:685-727`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/lca_isalane_probe.py#L685-L727)).
+  * Split tails: Lengths 3, 5, 6, 7 at lane 0 are rowed at mapped port $0\text{x}60$ in Session 4f ([`regress/lca_isalane_probe.py:729-774`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/lca_isalane_probe.py#L729-L774)), while tails of lengths 1, 2, 4 are direct lane-0 cells.
+  * Fallthrough / duplicate forward:
+    * Lane 2 at direct widths 1, 2, 4, 8: caught by `iir stb`, `iir stw`, `iir stl`, `iir stq` (Sessions 4h & 4i).
+    * Lane 0 at direct widths 1, 2, 4, 8: caught by `kbcq b dib`, `kbcq w dib`, `kbcq l dib`, `kbcq q dib` (Session 4k).
+    * Read duplicate `RD2`: caught by `iir lca rd` (Session 4j).
+  * Mutants `w_ret0` and `dd_decl` are killed ($89/111$) via the split head-failure abort in [`src/cpus/memory_rw.c:205-217`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c#L205-L217) hitting `tailw`.
+  * Every other escaping variation belongs to an explicitly licensed DISCLOSED category (data values, discarded $a\langle 4:0\rangle$, unrowed lane-1/lane-3 ports, exact constant addresses, or equivalence).
+
+---
+
+#### Question 3: Which statement in the header, the fix comment, or POSTTABLE 5 is wrong?
+
+1. **Fix Comment in [`src/devices/dev_lca.c:283-294`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c#L283-L294):**
+   * **Audited:** Every statement in the comment is factually and mathematically correct.
+   * In particular, the phrase *"1- or 2-byte head of an unaligned load or store that memory_rw splits at 1 KB"* is exact: for split heads at port $31$ (lane 3), $ofs = 3$. The old guard `ofs > len` evaluates to $3 > len$, which is `true` *only* for $len \in \{1, 2\}$, and `false` for $len \in \{3, 4, 5, 6, 7\}$.
+
+2. **POSTTABLE 5 ([`regress/artifacts/lcaisalane/fix530_20260914/table5/POSTTABLE.out`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/lcaisalane/fix530_20260914/table5/POSTTABLE.out)):**
+   * **Audited:** Every claim, predicted score, and actual red row in POSTTABLE 5 matches the raw logs in [`table5/logs/`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/lcaisalane/fix530_20260914/table5/logs):
+     * `base`: $111/111$ ($0$ red).
+     * `head`: $68/111$ ($43$ red: 41 prior + `iirr alive` and `iir lca rd` failing on HEAD due to $(1,2)$ read host death).
+     * `x_wfallthru`: $103/111$ ($8$ red: `iir stb`, `stl`, `stw`, `stq` + 4 `kbcq * dib`).
+     * `W1`: $109/111$ ($2$ red: `iir stq`, `kbcq q dib`).
+     * `W2`: $109/111$ ($2$ red: `iir stw`, `kbcq w dib`).
+     * `W3`: $107/111$ ($4$ red: all 4 `kbcq * dib`).
+     * `W4`: $107/111$ ($4$ red: `iir stw`, `stq` + `kbcq w dib`, `q dib`).
+     * `RD2`: $110/111$ ($1$ red: `iir lca rd`).
+     * `W5`: $110/111$ ($1$ red: `kbcq q dib`).
+   * Driver cleanup, targeting rule, and non-movement of tables 1–4 are fully verified.
+
+3. **Probe Header Contract Text in [`regress/lca_isalane_probe.py`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/lca_isalane_probe.py):**
+   * In [`regress/lca_isalane_probe.py:120-121`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/lca_isalane_probe.py#L120-L121) (and brief line 181):
+     * The header states: `(the Opus closing-pass-3 seat's H1b, keyed on a<4:2> = 0x1c: the 4-byte split head, 93/93)`.
+     * **Audit Finding (Minor notation bug):** $a\langle 4:2\rangle$ is a 3-bit slice, whose valid range is $[0, 7]$. It cannot equal $0\text{x}1\text{c}$ ($28 = 0\text{b}11100$). As shown in the brief's own mutant table ([brief line 363](file:///C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/panel_20260915_000144/brief_sent.md#L363)), `H1b` tests `lo5 == 0x1c`, which is the entire 5-bit discarded field $a\langle 4:0\rangle = 0\text{x}1\text{c}$ (where bits $4:2$ are $111_2 = 7$ and bits $1:0$ are $00_2$). Writing $a\langle 4:2\rangle = 0\text{x}1\text{c}$ conflates the 3-bit slice with the unshifted 5-bit masked value.
+
+---
+
+### Final Verdict
+
+The 111-row detector is complete, correctly scoped, and accurately reflects its contract. All kills are verified against source code and test logs.
+
+**GO**

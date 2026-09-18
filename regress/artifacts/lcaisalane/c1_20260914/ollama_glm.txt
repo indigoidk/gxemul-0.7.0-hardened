@@ -1,0 +1,37 @@
+`GAP: in dev_lca.c, immediately after `ofs = (relative_addr & 3) % len;` insert `if (ofs == 2) ofs = 0;` — scores 51/51 and changes a guest-visible outcome (every len>=3 access at a port 2 mod 4, e.g. an `stl`/`ldl` at port 0x3fa, moves the byte from position 2 to position 0 on both arms). LCA530_C1_20260914`
+
+## 1. The gap (Q1)
+
+**Why the edit is invisible to all 51 rows.**
+
+- READ: table 1's rows are len 1/2 plus the len-8 read `r81` — pass 2 measured "no row stored at len 4 or 8; none made a wide access at a 0-mod-4 port; none read a whole len-4 value", and p_andmask's 37/37 escape proves no split-head row existed (at (3,3)/(5,3), `& (len-1)` differs from the fix, so such a row would have caught it).
+- REASONED: at len 1 and 2 the fold can never yield 2 (`x % 1 = 0`; `x % 2 ∈ {0,1}`), so no table-1 row can see the edit.
+- READ: the two repair sessions (diffs complete in the packet) touch ports 0x3ff (lane 3), 0x3fc (0), 0x3fd (1), 0x400 (0), plus flat accesses. No lane-2 wide cell anywhere.
+- REASONED (inferred premise — the packet never states it, and it should): the FLAT mapping must bypass `lca_isa`. The devsig phase does a flat byte store to SCR (0x3ff), which is the (1,3) cell that HEAD's guard `exit(1)`s on. head 31/51 = 18 table-1 reds + exactly the two rows marked RED ON HEAD (h3 ldq, h3 ldl); if FLAT routed through the handler, session 4c would die on HEAD and head would be ~26/51. Settling fact: the probe's `FLAT()` definition.
+
+So no rowed access ever has reduced ofs == 2: the edit is a no-op on every row, 51/51, while a guest `stl` to port 0x3fa forwards `data[0]` instead of `data[2]`, and an `ldl` there returns the byte at position 0 instead of 2 — guest-visible.
+
+**The row I expected to catch it:** a wide access at a port 2 mod 4 — e.g. "(4,2) STL -> IIR/FCR, flat readback", or a (3,2)/(8,2) head. It cannot exist because the repair rowed lanes 0, 1 and 3 only. Same family: (8,0), (4,1)W, (8,1)W, len-6/7 heads are also unrowed.
+
+**Disclosed list:** none of the disclosures covers lane 2 at len ≥ 3, and none is provably disclosed wrongly. REASONED sound: len-0 (READ: no producer, pass-2 Q1); zero-fill (READ: #95 given SETTLED — I did not check it independently); the 0xffff clamp (the byte read there is 0 wherever placed, so a lane edit is not guest-visible); dead `% len` and exit-after-fold (post-fold `ofs < len` always, so both are unsatisfiable). NOT CHECKABLE from the packet: lcaisaqword (a<6:5>/a<4:3> hardware encoding) and lcaisaphys — hardware/producer premises; name the 21066 manual chapter or the producer trace to settle them.
+
+## 2. What I verified as internally consistent (Q2 groundwork)
+
+READ the POSTTABLE's leg scores; REASONED re-derivation from the visible rows, which required two mechanisms the packet itself supplies: **cascades** (a dropped/misrouted store poisons later read rows — p_wbit1's third red is `ld8 lane3` reading the SCR that the mutant's st8 wrote 0x00 into, giving 48 exactly) and **tails** (split tails re-enter the handler at port 0x400). All eight re-measured p_* legs (48/45/45/45/47/51/49/47) plus m_andmask 47, m_nomask 47, m_replicate 40, m_decleq 35, head 31, base 51 re-derive exactly. The p_lane0decl off-prediction story is sound: the LDQ tails are len 5 at lane 0 (declined → whole load fails → sentinel), the LDL tail is len 1 (not declined → green) — the packet's own numbers force this reading.
+
+**Q2 answer:** every named catch item has a row whose channel can vary under it; no dead channels found — every visible kill-note checks out (st4 lane3 → p_wbit1/p_wnarrow/p_wdrop4/p_waddr4; st8 → p_q8lane/p_wbit1; h3/h5/h3-stq → m_andmask; ld4 full+lane0 → p_rep4; st4+ld4 lane0 → p_lane0decl; r81+st8+ld8+split-al → m_nomask). The catch-list is matched. But the preamble "at len 1, 2, 3 (split head), 4 and 8" overstates the lane grid: at wide lens only lanes 0, 1, 3 are rowed. Each *named* mutant is still caught (bit-drops also hit lanes 1/3), which is why this hole survived two passes: pass 2's own mutants were all general lane decodes.
+
+## 3. Wrong statements (Q3)
+
+1. READ — the WHY-THIS-PASS section says the seat "BUILT ten mutants and **nine scored 37/37**". Contradicted three ways inside the packet: the pass-2 table lists ten p_* legs all at 37/37; the transcription note says "every p_* leg reads LCAISALANE_RESULT=37/37"; the header's clause e says "ten mutants that scored 37/37". "Nine scored" would mean one mutant was caught — no such leg exists anywhere.
+2. READ — the pass-2 VERDICT line: "Nine of **eleven** mutants scored 37/37; **eight** change a guest outcome." Its own table shows ten mutants, all 37/37, nine changing a guest outcome (all but p_nozero). Either a leg is missing from the table or the counts are mis-transcribed; the header's ten/nine is the version consistent with everything else. Not settleable from the packet — the settling fact is the pass-2 leg list.
+3. READ, minor — POSTTABLE: "every one of the ten pass-2 escapes (p_* and g_len4w, bar the two equivalents)". g_len4w is not a pass-2 escape (it first appears in table 2), and of the pass-2 legs only p_nozero is an equivalent; p_port10 is "not an edit of the fix" per the same POSTTABLE. The arithmetic survives (eight red legs, each red on the repair's own rows — verified), but the set description is wrong.
+
+The fix comment and the rewritten clause e check out: "byte at 2 or 3 mod 4, word at 3 mod 4" matches the guard arithmetic (2 > 2 is false); "wherever the old guard let it run" is now correct (at ofs ≤ len, `data[ofs % len]` equals the fix); the r22 row's "C/HEAD" → "HEAD" edit is correct — the clamp and the fix agree at (2,2) (2 % 2 = 0), so that row never killed the clamp.
+
+## 4. Cannot check from the packet (with settling facts)
+
+- **The m_* legs' source edits** (m_exit, m_declbeyond, m_decleq, m_writeonlyfold, m_readonlyfold, m_clamp, m_lane1, m_replicate, m_retzero, m_lenzero, m_andmask, g_len4w, e_deadmod, e_exitafter): only names and scores are inlined; I could re-derive only the four whose semantics the rows pin down. Settling fact: each leg's .MUTANT diff. (m_declbeyond 44 and m_lane1 41 I could not reconcile against any reading of the fragments — likely invisible exit-session rows, but that is a guess, not a finding.)
+- **The full 51-row inventory** (the 22 witness rows, sessions 5-10's per-cell row structure): needed to verify head 31/51's exact composition and the m_* scores. Settling fact: the row() list in the instrument.
+- **Whether (2,0), (1,0) and the wide write lanes 1 are rowed** — if any is not, smaller keyed edits exist in the same family as the lane-2 gap.
+- **FLAT's route** (the bypass premise above), **#95**, and the hardware premises (21066 lane rule, quadword encoding, 0xffff producer).

@@ -1,0 +1,43 @@
+PREDICT -- #530 closing pass 5, Opus measuring seat.  Written BEFORE the clone exists, before any build and any probe
+run (this file's mtime is the order proof).  Instrument: regress/lca_isalane_probe.py (185 rows, md5 fb47c89c), frozen by
+the driver.  Mutants: instrument/mut530c5.py.  Baseline: GXEMUL-SEC working-tree dev_lca.c (8084ff07) + dev_pckbc.c
+(ba7df2cb) in a cp -a clone of build/.
+
+LEG      EDIT                                                              PREDICTED  RED ROWS (exact set)
+base     none                                                              185/185    none
+RD2z     read arm: `if (byte == 0)' + a second READ forward                185/185    none -- every rowed lca READ at a
+         (the contract-named RD2, gated on the DATA -- the fetched byte)               port with a read side effect fetches
+                                                                                        a NONZERO byte (0x55, 0x0f, 0x02,
+                                                                                        0x21/0x31); zero fetches are only
+                                                                                        at unmapped 0x300 / 0x400 / 0x5f
+WWtail   write arm: a second STORE forward when len is 3/5/6/7              185/185    none -- tailq_w's store of 0 after
+         (the write forward DUPLICATED, at the split-tail widths)                      0xd1 lands in output_byte, the
+                                                                                        duplicate queues an ACK, DIB stays
+                                                                                        1; tailw's cmdbyte readback is
+                                                                                        taken in STATE_RDCMDBYTE and is
+                                                                                        unaffected by the queued RESEND
+WWall    write arm: a second STORE forward, unconditioned                   169/185    stub0-3 w1/w2/w4/w8 (16) ONLY -- the
+                                                                                        stub counter is direction-blind;
+                                                                                        kbcq (ACK queued, DIB stays 1), iir
+                                                                                        (FCR twice), cmos w (REG C set
+                                                                                        twice) cannot see a doubled store
+dNZtail  x_wfallthru gated on (tail width AND byte != 0)                    185/185    none -- tailq_w stores 0; tailw's
+                                                                                        nonzero tail stores find an EMPTY
+                                                                                        queue (phantom read inert)
+W23      x_wfallthru at the single cell (len 2, lane 3)                     184/185    stub3 w2
+RWtail   read arm + a phantom WRITE of the fetched byte at len 3/5/6/7      183/185    tailr t6, tailr t3 -- the write-back
+                                                                                        of 0x55 queues a RESEND (0xfe) that
+                                                                                        the NEXT tail phase pops; t7 and t5
+                                                                                        green (t7 is first; t5 pops a 0x55
+                                                                                        by alternation); tailq_r (DIB only)
+                                                                                        green throughout
+nox      dev_pckbc.c: `x++;' deleted from the PC-style stub (dev_lca.c      181/185    stub0 live, stub1 live, stub2 live,
+         untouched) -- "port 0x61 implemented"                                         stub3 live; every stub r/w row GREEN
+
+DISCRIMINATOR (instrument/disc530c5.py, guest instructions on unmodified alphabook1), predicted:
+  Z  [0x00 (0xab reply), 0x55 (0xaa reply)] queued, one lca load of SP(0x60) at LDBU/LDL/LDQ:
+       base: delivered 0x0, DIB 1, next pop 0x55, DIB 0.     RD2z: delivered 0x55, DIB 0.
+  W  0xf4 (KBC_ENABLE) stored to port 0x60 in the NORMAL state -- direct STB and as a tail 7/6/5/3:
+       base: DIB 1, pop 0xfa, DIB 0 (one ACK) at every access.
+       WWtail: tails 1/0xfa/1 (two ACKs), direct STB as base.   WWall: every access 1/0xfa/1.
+       dNZtail: tails DIB 0 (the ACK popped by the model before the guest reads it), direct STB as base.

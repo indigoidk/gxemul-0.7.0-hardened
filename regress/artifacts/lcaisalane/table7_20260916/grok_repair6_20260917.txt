@@ -1,0 +1,158 @@
+I'll treat this as an adversarial review of the uncommitted `#530` hunk: first the live tree and surrounding LCA access path, then the four questions against source rather than the packet.Checkpoint is current; next I’ll read the live `lca_isa` handler, Alpha `memory_rw` return path, and the `#530` detector rather than the packet’s hunk.The live hunk matches the packet. Next I’ll read Alpha’s `memory_rw` return-0 path and the `#530` probe/PRETABLE so the four questions rest on those, not on the comment.`return 0` on Alpha is the interesting path: it becomes `MEMORY_ACCESS_FAILED` with no exception. Next I’ll trace that caller and how `len` actually reaches `lca_isa`.The `%` vs `& (len-1)` split is the likely hole; I’ll confirm it against the probe’s head rows and the kill-table mutants rather than guessing.Closing pass 6 already named a `len <= 8` qualifier; I’ll verify `store_buf` and Alpha GETENV in source instead of taking that mutant as given.**VERDICT: THE HUNK IS THE RIGHT ACCEPT. THE DETECTOR DOES NOT CLOSE.** Grow the added guard `len == 0` to `len == 0 || len > 8` and every current row stays green. `return 0` on Alpha is not a fault and not a silent success: it is `MEMORY_ACCESS_FAILED` with the destination register left untouched.
+
+Tree checked: `GXEMUL-SEC/src/devices/dev_lca.c` (`DEVICE_ACCESS(lca_isa)` at 275; `#530` comment at 282). Line numbers match the fork, not the 2021 copies.
+
+S1 holds as stated. `fatal()` is a print (`debugmsg.c` 384–390, no `exit`/`abort` in that file). The fail path in `memory_rw.c` 608–623 raises an exception only under `MEM_MIPS` / `MEM_M88K`. The three HRM citations are at the named lines. S6.2.6 is sparse **memory**, not ISA I/O, but the shift-of-5 encoding is the one this handler uses. Q4 is the part S1 does not finish.
+
+---
+
+### 1. Smallest edit that breaks the repair and still passes
+
+**Mutant (one extra disjunct on the line this hunk added):**
+
+```c
+if (len == 0)
+    return 0;
+```
+→
+```c
+if (len == 0 || len > 8)
+    return 0;
+```
+
+**Rows expected green: all of them.** The 352-row instrument is instruction-driven (LDBU/LDWU/LDL/LDQ and stores, max `sizeof` 8) plus 1 KB-split fragments (heads 1–7, tails 3/5/6/7). Nothing in it calls the handler with `len > 8`. That is a **prediction from reading the probe**, not a table score — I did not build this mutant.
+
+Why it is inside clause (d): `len == 0` is the predicate the hunk **added**. Widening it to `len > 8` is the canonical “keep the guard, null its repair” form: the `%` still runs for every rowed width, the early return still “looks like” the safety check, and the one-byte forward is refused on every width the rows never drive.
+
+The same unrowed cell from the other dominating predicate:
+
+```c
+if (writeflag == MEM_WRITE)
+```
+→
+```c
+if (writeflag == MEM_WRITE && len <= 8)
+```
+
+That one is worse for the guest: a `len > 8` store **falls through into the read arm** (phantom read + clobber of the caller’s buffer) instead of declining. Also predicted 352/352. The probe’s own contract already names “a store arm narrowed to `len <= 2`” as in-scope; `<= 8` is that shape with the bound parked **above** every instruction-driven row.
+
+`m_andmask` (`% len` → `& (len - 1)`) is **not** this answer any more. Table 1 predicted it equivalent because heads did not exist. Sessions `split` / `split67` now pin the cells where they differ (`h3 ldq` wants `3%3=0`; `& 2` puts the byte at position 2; `h5 ldq` wants `3%5=3`; `& 4` puts it at 0). I did not re-run `m_andmask` on the 352-row binary.
+
+`m_lenzero` (delete the `len == 0` guard) is the **measured** equivalent, 37/37 and 51/51, disclosed in the probe header. It does not break any guest-visible cell the instrument has. It is a (d) null of the added predicate with no producer, not a clean-sweep of a reachable cell.
+
+**On `len > 8` reachability (the in-flight measurement — not assumed either way):**
+
+Verified in source, not from the packet:
+
+- `store_buf` (`src/core/memory.c` 837–853) issues `memory_rw` at `psize ∈ {1024, 256, 64, 16, 4, 1}` with `CACHE_DATA` (translated, so the 1 KB split applies). A 16-aligned `len >= 16` access that does not straddle a 1 KB boundary is handed to the device **whole**.
+- Sparse ports sit at `port << 5` (32-byte stride) → always 16-aligned. UART `0x3f8 << 5 = 0x7f00` is also 64- and 256-aligned, not 1024-aligned.
+- Device length is `0x10000 << 5` (`dev_lca.c` 547–548) — no clamp below 1024.
+- Alpha `PROM_R_GETENV` (`cpu_alpha_palcode.c` 121–144), dispatched from PAL `0x3fffffe` (496–498), calls `store_buf(cpu, a2, s, len)` with **guest-supplied** `a2`.
+
+What is **not** established here: that a GETENV `a2` has been observed to decode into `lca_isa` on alphabook1. The producer of `len ∈ {16,64,256,1024}` exists; the hit on this handler is the measurement in flight. If that measurement is negative, this mutant is clause-(e) debt and must be disclosed by width (the probe header’s “1/2/4/8 plus the 1 KB split” currently **omits** those sizes). If it is positive, it is L2: a floor cell with no row.
+
+`store_buf` **ignores** `memory_rw`’s return. Under the `return 0` form the 16-byte chunk is dropped and the pointer still advances — the bytes are not retried at size 4 or 1.
+
+---
+
+### 2. Clause-(d) DEPENDS-ON enumeration
+
+Enclosing function only: `DEVICE_ACCESS(lca_isa)` / `dev_lca_isa_access`. No `extra` / `struct lca_data`. No callees walked.
+
+**Predicates dominating the edited lines**
+
+| predicate | kind | dominates |
+|---|---|---|
+| `len == 0` | **added** | the `return 0`, and by fall-through the `%` and both arms |
+| `writeflag == MEM_WRITE` | existing | `byte = data[ofs]` (the write-arm index change) |
+
+The deleted `ofs > len` / `exit(1)` is a pure deletion / de-fatalisation: it introduced no surviving predicate. `relative_addr >>= 5` is not a predicate.
+
+**Body-read lvalues** (the forwarding after the position rule)
+
+- Write arm: `data[ofs]`, `cpu` / `cpu->mem` / `cpu->memory_rw`, `relative_addr`, `writeflag` (passed through), `byte`.
+- Read arm: those, plus `len` (loop bound), `i`, `data[i]`, `ofs`. Inner forward is hardcoded `MEM_READ` — the read arm does not re-test `writeflag`.
+
+**Body-tested partitions** (joint cells only where the body’s own `if`s distinguish)
+
+- `len == 0` vs `len > 0`
+- `writeflag == MEM_WRITE` vs not
+- `i == ofs` vs not (packing — this **is** the repair)
+- `i < len` (loop bound, not a case label)
+
+No device-state lvalue, so the joint-cell floor is not a product over `d->…`. Lane (`relative_addr & 3`) and width (`len`) **flow into** `ofs`, which the body reads and tests (`data[ofs]`, `i == ofs`). That is the `sgimtedepth4dead` “selector flows into a body-read lvalue” shape without a `switch`. The round has been treating `{0,1,2,3} × {1,2,4,8} × {R,W}` plus split heads (lane 3, len 1–7) and tails (lane 0, len 3/5/6/7) as that product. That matches what the `%` can actually change (below).
+
+**Joint cell that is in-rule and unrowed:** `{WRITE} × {len ∈ {16,64,256,1024}}` (and the matching read if a wide load producer appears). Same cell as Q1.
+
+(d) mutants already built: `m_lenzero` (null the added guard — equivalent), `m_declbeyond` / `m_decleq` (decline on the old `ofs`/`len` relation), `m_writeonlyfold` / `m_readonlyfold`, `m_clamp`, `m_lane1`, `m_nomask`, `m_andmask`. The last of those is now a **rowed** cell, not an escape.
+
+---
+
+### 3. Is `(relative_addr & 3) % len` right? Is `len == 0` the only early return?
+
+**As an emulator buffer rule, yes. As 21066 architecture, it is an ACCEPT of the write arm’s old wrap, not a decode of `a<4:3>`.**
+
+GXemul hands this function a `len`-byte buffer whose size is the **instruction** (or the split fragment, or `store_buf`’s `psize`), not the sparse size field. For that convention:
+
+- `len == 1` (LDBU/STB): `(P & 3) % 1 == 0` always. The only legal index in a 1-byte buffer. This is the actual fix of the ofs-1 zero-answer and the ofs-2/3 host deaths.
+- `len == 2`: wraps 2→0, 3→1. Same wrap the write arm already did with `data[ofs % len]` when the old `ofs > len` guard let it run.
+- `len == 4` or `8`: `P & 3` is already in range. `%` is a no-op. LE lane in the word/quad.
+- `len == 0`: `% 0` is C99 UB. The early return is for that, not for the packing loop (which would simply not iterate).
+
+**`len == 0` is the only `%` UB and the only case with no byte in the buffer.** `len` is `size_t` (`memory.h` `DEVICE_ACCESS`). Device-end truncation (`memory_rw.c` 495–523) cannot produce 0: a match requires `paddr < endaddr`, so `length - paddr >= 1`. I did not find a `memory_rw(..., 0, ...)` caller. That is why `m_lenzero` was equivalent. It is still the right refuse-before-`%`.
+
+**What 3, 5, 6, 7 actually do to the formula** (`ofs_raw = P & 3 ∈ {0,1,2,3}`):
+
+| `len` | `% len` | wraps? | vs `& (len-1)` |
+|---|---|---|---|
+| 3 | 0,1,2, **0** | **lane 3 only** | lane 3: 0 vs 2 |
+| 5 | 0,1,2,3 (identity) | no | lane 3: 3 vs 0; lanes 1–2 also collapse under `& 4` |
+| 6 | identity | no | lane 2: 2 vs 0; lane 3: 3 vs 1 |
+| 7 | identity | no | lane 3: 3 vs 2 |
+
+So among 3/5/6/7, **`%` only wraps at (len=3, lane=3)**. At 5/6/7 it is identity against dropping the `%`, and load-bearing only against `& (len-1)`, which the head rows now hold.
+
+**Guest-reachable on this machine:**
+
+- 1, 2, 4, 8: yes. Native Alpha load/store. `cpu_alpha_instr_loadstore.c` has **no alignment check** (grep for `align` is empty). `sizeof(data)` is 1/2/4/8.
+- 3, 5, 6, 7: **yes on this emulator, no on a 21066.** They are 1 KB-split **heads** (always lane 3, port `0x1f` mod `0x20`) and **tails** (always lane 0) of unaligned LDL/LDQ/STL/STQ. Real hardware alignment-faults those instructions. This emulator does not, and the probe has already executed them (`SP(SCR)+0x1d` → len-3 head at SCR). `store_buf`’s ladder is `{1024,256,64,16,4,1}` — it never produces 3/5/6/7.
+- `len > 8`: producer exists (`store_buf`); hit on this handler is the in-flight question. Not an instruction.
+
+The size field `a<4:3>` still does not change `len` here. HRM 6.2.6 says it specifies transfer size and `a<2:0>` must be zero. The handler still shifts those bits away (`lcaisasize`). That is not this hunk, and a mutant keyed on `a<4:0>` is disclosed.
+
+---
+
+### 4. `return 0` on Alpha
+
+A handler return of 0 does **not** mean “handled” and does **not** mean “unmapped → guest fault.”
+
+Trace, all in `GXEMUL-SEC`:
+
+1. `memory_rw.c` 595–596: `if (res == 0) res = -1;`
+2. 603–624: `if (res <= 0 && !no_exceptions)` prints `debug("[ writing to/reading from device 'lca_isa' addr … failed ]")` — that is `debug()`, **silenceable** by `-q` / free-running `verbose`, unlike `fatal()`. Then MIPS/M88K exceptions only. **Then `return MEMORY_ACCESS_FAILED` (0) on Alpha anyway.** No `#ifdef MEM_ALPHA` arm.
+3. `cpu_alpha_instr_loadstore.c` 68–74 (load) and 112–117 (store): `if (!cpu->memory_rw(…)) return;` **before** the destination register is written. Comment `#215` says “the translator already signalled a fault.” **False on this path.** Nothing delivered an Alpha exception. PC advances. The load is a nop on its destination.
+
+So on Alpha, `return 0` is:
+
+| member | what happens |
+|---|---|
+| 5 FAULT | **no** — S1 is right; no exception |
+| 2 silent decline (`return 1`, `#95` zeros, dest := 0) | **no** |
+| what you actually get | **silent incomplete access**: load leaves dest **unchanged**; store dropped; a `debug()` line |
+
+That dest-preserved channel is **measured**: table 1’s `m_retzero` (read arm `return 1` → `return 0`) was predicted to keep the sentinel and scored 22/37 with those rows red. The `len == 0` `return 0` is the same contract, on a path with no producer.
+
+Under `NO_EXCEPTIONS` (debugger `dump`): `res <= 0 && !no_exceptions` is false → `goto do_return_ok`. `return 0` becomes **success**. Opposite of the guest-instruction path.
+
+`return 1` after a no-op would be the other refuse: load dest := 0 (`#95` already cleared the buffer), store dropped, instruction “succeeds.” For an unreachable `len == 0` either form avoids `% 0`. They are not interchangeable if a producer ever appears, and they are not FAULT.
+
+Pre-existing asymmetry, not this hunk: the write arm already `return`s the inner `memory_rw` status, so a failed 1-byte forward already takes this Alpha path. The read arm ignores the inner return and `return 1`. The probe discloses that as equivalent on alphabook1 (no ISA device there fails).
+
+---
+
+### Something else, found while checking
+
+1. **S1’s `fatal()` premise is true and not load-bearing for this hunk.** The diff deletes `fatal()` and `exit(1)` together. Whichever used to kill, both are gone. The old `fatal(); exit(1);` pair is the tree’s own witness that `fatal()` returns.
+2. **HRM 6.2.6 also says `a<4:3>` is size and `a<2:0>` must be 0.** Still ignored. Filed as `lcaisasize`; an edit that starts decoding them is outside this detector by the current contract — and that contract is wrong about the `store_buf` widths whether or not GETENV hits this window.
+3. **`%` is a no-op at len 5/6/7 for every lane 0–3.** Comments that talk as if the fold were load-bearing at those widths are talking about `& (len-1)`, not about dropping the `%`.
+4. The write-arm `byte = data[ofs]` (dropping the redundant `% len`) is equivalent once `ofs` is already reduced. Reinstating `data[ofs % len]` is a presence-pin mutant, not a guest-visible break.

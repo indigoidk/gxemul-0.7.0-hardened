@@ -1,0 +1,406 @@
+# CLOSING PASS 1 on the #530 pass-2 REPAIR -- `lcaisalane`: is the 51-row detector now complete for its contract?  Liveness token `LCA530_C1_20260914`.
+
+VERDICT LINE FIRST: `CLOSES` (no floor gap in the 51-row detector) or `GAP: <exact source edit to dev_lca.c that scores 51/51
+and changes a guest-visible outcome>`, then the token.
+
+A routine mutation-testing review of an open-source hardware emulator (GXemul, a hardened fork).  Check premises, not only
+reasoning; say what you could not check.  Tree: `C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\` ONLY.  Packet-fed seats: all
+facts are below; do not plan to read files.
+
+## WHY THIS PASS EXISTS
+Pass 2 on #530 found the FIX right and the 37-row DETECTOR short: the measuring seat BUILT ten mutants and nine scored
+37/37 (no row stored at len 4 or 8; none made a wide access at a 0-mod-4 port; none read a whole len-4 value; and the
+split heads the contract disclosed as needing a translated access DO split on the untranslated K0SEG segment).  The repair
+adds two sessions (14 rows) and rewrites the contract.  A repair made in answer to a pass 2 owes its own pass: this one.
+The chain closes on the first valid pass with zero floor breaches.
+
+## SETTLED (re-stated because the questions depend on it)
+* Disposition B (adjudicated 8 of 9, flagship last): the byte for ISA port P sits at buffer position `(P & 3) % len` on
+  BOTH arms; `len == 0` refused first; no latch, no announce.  Every pass-2 seat that walked the handler found the fix
+  right in every (len 1..8, ofs 0..3, direction) cell: no exit, no out-of-range index, no divide by zero.
+* On Alpha a handler `return 0` leaves a load's register unchanged and makes a store invisible except through the device.
+* memory_rw pre-zeroes a device read buffer (#95), so the read arm's zero-fill of the other positions is EQUIVALENT.
+* The 1 KB split (MRW_SPLIT_MASK 0x3ff) fires for any non-PHYSICAL access on a CPU with translate_v2p -- Alpha always --
+  so an unaligned LDQ/LDL on K0SEG at SP(port) + 0x1d hands the handler a len-3 head at ofs 3 (measured).
+
+## THE FIX (`git diff`, verbatim -- the code is unchanged since pass 2; only its comment was corrected)
+
+```diff
+diff --git a/src/devices/dev_lca.c b/src/devices/dev_lca.c
+index 6873466..dcb7589 100644
+--- a/src/devices/dev_lca.c
++++ b/src/devices/dev_lca.c
+@@ -279,15 +279,24 @@ DEVICE_ACCESS(lca_isa)
+ 
+ 	relative_addr >>= 5;
+ 
+-	ofs = relative_addr & 3;
+-	if (ofs > len) {
+-		fatal("[ ofs=%i len=%i in lca_isa access function. "
+-		    "aborting ]\n", ofs, len);
+-		exit(1);
+-	}
++	/*
++	 *  #530: the byte for ISA port P sits at buffer position (P & 3) % len
++	 *  on BOTH arms -- the lane for the 21066's own len 4/8 accesses, and
++	 *  the rule the write arm already applied wherever the old guard let
++	 *  it run.  That guard's `ofs > len' exit(1) ended the host on a guest
++	 *  byte access to a port 2 or 3 mod 4 or a word access to a port 3 mod
++	 *  4 (ungated BWX; the head of an unaligned LDL/LDQ that memory_rw
++	 *  splits at 1 KB), and the read arm discarded the fetched byte at
++	 *  ofs == len.
++	 *  One byte is forwarded whatever len is (the size field a<4:3> is
++	 *  not decoded here).  len 0 has no producer; refuse it before the %.
++	 */
++	if (len == 0)
++		return 0;
++	ofs = (relative_addr & 3) % len;
+ 
+ 	if (writeflag == MEM_WRITE) {
+-		byte = data[ofs % len];
++		byte = data[ofs];
+ 		return cpu->memory_rw(cpu, cpu->mem, LCA_ISA_BASE +
+ 		    relative_addr, &byte, 1, writeflag, CACHE_NONE);
+ 	}
+```
+
+## THE WHOLE HANDLER
+
+```c
+DEVICE_ACCESS(lca_isa)
+{
+	unsigned int ofs, i;
+	uint8_t byte;
+
+	relative_addr >>= 5;
+
+	/*
+	 *  #530: the byte for ISA port P sits at buffer position (P & 3) % len
+	 *  on BOTH arms -- the lane for the 21066's own len 4/8 accesses, and
+	 *  the rule the write arm already applied wherever the old guard let
+	 *  it run.  That guard's `ofs > len' exit(1) ended the host on a guest
+	 *  byte access to a port 2 or 3 mod 4 or a word access to a port 3 mod
+	 *  4 (ungated BWX; the head of an unaligned LDL/LDQ that memory_rw
+	 *  splits at 1 KB), and the read arm discarded the fetched byte at
+	 *  ofs == len.
+	 *  One byte is forwarded whatever len is (the size field a<4:3> is
+	 *  not decoded here).  len 0 has no producer; refuse it before the %.
+	 */
+	if (len == 0)
+		return 0;
+	ofs = (relative_addr & 3) % len;
+
+	if (writeflag == MEM_WRITE) {
+		byte = data[ofs];
+		return cpu->memory_rw(cpu, cpu->mem, LCA_ISA_BASE +
+		    relative_addr, &byte, 1, writeflag, CACHE_NONE);
+	}
+
+	cpu->memory_rw(cpu, cpu->mem, LCA_ISA_BASE + relative_addr,
+	    &byte, 1, MEM_READ, CACHE_NONE);
+
+	for (i=0; i<len; i++)
+		data[i] = i == ofs? byte : 0x00;
+
+	return 1;
+}
+```
+
+## THE PROBE HEADER'S CONTRACT (clause e), verbatim
+
+```
+#530: IT IS NOW THE WITNESS AND THE DETECTOR.  Sessions 1-3 are the witness below, unchanged but
+#  for the sentinel; the #530 sessions at the end are the detector for the fix. ***
+#
+#  THE FIX (disposition B, regress/artifacts/lcaisalane/FABLE_F2_RULING_20260914.md): the byte for port
+#  P sits at buffer position (P & 3) % len on BOTH arms; `len == 0' is refused first; no latch, no
+#  announce (there is no event -- member 4, ACCEPT).  Table 1 (37 rows): HEAD 19/37, fix 37/37
+#  (regress/artifacts/lcaisalane/fix530_20260914/HEAD_det.out, FIX_det.out); after the pass-2 repair
+#  (51 rows) see that dir's table 2.
+#
+#  CONTRACT (clause e) -- the detector is DESIGNED to catch, on EITHER arm and at len 1, 2, 3 (split
+#  head), 4 and 8: the removed exit reinstated at any of the six cells that ended the host (reads AND
+#  writes at (1,2) (1,3) (2,3)); a decline beyond the width or at-and-beyond it, or of any lane-0 wide
+#  access (a store dropped, a load's register kept); a store arm narrowed to len <= 2 or its stores
+#  dropped or forwarded to another port; one arm folding and the other not; the byte placed at position 0
+#  instead of (P & 3) % len (the clamp, anchored on (2,1) == (2,3)); a lane decode that drops bit 1 or
+#  the `& 3', on the read arm or the write arm; `& (len - 1)' for `% len' (the len-3/5 split heads); a
+#  byte replicated into every position, at len 2, 4 or 8; the read arm's success return turned into a
+#  failure.  *** TABLE 1'S CONTRACT CLAIMED MOST OF THIS AT 37 ROWS AND WAS MEASURED FALSE: the Opus
+#  pass-2 seat built ten mutants that scored 37/37, nine changing a guest outcome -- no row stored at len
+#  4/8 -- and measured that the split heads it DISCLOSED as needing a translated access split on K0SEG. ***
+#  DISCLOSED, not caught: the len-0 refusal (no producer); the zero-fill of the positions other than
+#  `ofs' (p_nozero -- EQUIVALENT: memory_rw's #95 pre-zero already clears the buffer); an address-decode
+#  edit above port 0x3ff (p_port10 -- every probed port is below 0x400, and it is not an edit of the
+#  fix); the size field a<4:3> (lcaisasize); the hardware QUADWORD ENCODING's route (lcaisaqword: on the
+#  21066 a<6:5> = 11 with a<4:3> = 11 is a quadword at port P, which the model forwards to P|3 -- NOT the
+#  len-8 lane this probe rows, which follows the same (P & 3) % len rule as every other width); the
+#  missing PHYSICAL (lcaisaphys); the end-of-window clamp at port 0xffff (nothing is mapped there).
+#  EQUIVALENT by construction, named so no table is spent on them (kimi-k3, pass 2): restoring the dead
+#  `% len' on the write arm's index (`ofs' is already reduced), and reinstating `if (ofs > len) exit(1)'
+#  AFTER the fold (unsatisfiable once ofs < len) -- the reinstated exit that matters is on the UNFOLDED
+#  lane, which the table's m_exit builds.
+#
+#  *** ```
+
+## THE REPAIR DIFF -- the 37-row instrument -> the 51-row instrument (`git diff --no-index`, verbatim; 7 hunks)
+
+```diff
+diff --git "a/C:\\DocumentNoSnc\\CC\\GXEMUL\\GXEMUL-SEC\\regress\\artifacts\\lcaisalane\\fix530_20260914\\lca_isalane_probe.table1.py" "b/C:\\DocumentNoSnc\\CC\\GXEMUL\\GXEMUL-SEC\\regress\\lca_isalane_probe.py"
+index 1ff39db..3ba8404 100644
+--- "a/C:\\DocumentNoSnc\\CC\\GXEMUL\\GXEMUL-SEC\\regress\\artifacts\\lcaisalane\\fix530_20260914\\lca_isalane_probe.table1.py"
++++ "b/C:\\DocumentNoSnc\\CC\\GXEMUL\\GXEMUL-SEC\\regress\\lca_isalane_probe.py"
+@@ -61,3 +61,35 @@
+ #  ---------------------------------------------------------------------------------------------
+-#  *** WHAT THIS IS AND IS NOT.  IT IS A WITNESS, NOT A DETECTOR. ***
++#  *** #530: IT IS NOW THE WITNESS AND THE DETECTOR.  Sessions 1-3 are the witness below, unchanged but
++#  for the sentinel; the #530 sessions at the end are the detector for the fix. ***
++#
++#  THE FIX (disposition B, regress/artifacts/lcaisalane/FABLE_F2_RULING_20260914.md): the byte for port
++#  P sits at buffer position (P & 3) % len on BOTH arms; `len == 0' is refused first; no latch, no
++#  announce (there is no event -- member 4, ACCEPT).  Table 1 (37 rows): HEAD 19/37, fix 37/37
++#  (regress/artifacts/lcaisalane/fix530_20260914/HEAD_det.out, FIX_det.out); after the pass-2 repair
++#  (51 rows) see that dir's table 2.
++#
++#  CONTRACT (clause e) -- the detector is DESIGNED to catch, on EITHER arm and at len 1, 2, 3 (split
++#  head), 4 and 8: the removed exit reinstated at any of the six cells that ended the host (reads AND
++#  writes at (1,2) (1,3) (2,3)); a decline beyond the width or at-and-beyond it, or of any lane-0 wide
++#  access (a store dropped, a load's register kept); a store arm narrowed to len <= 2 or its stores
++#  dropped or forwarded to another port; one arm folding and the other not; the byte placed at position 0
++#  instead of (P & 3) % len (the clamp, anchored on (2,1) == (2,3)); a lane decode that drops bit 1 or
++#  the `& 3', on the read arm or the write arm; `& (len - 1)' for `% len' (the len-3/5 split heads); a
++#  byte replicated into every position, at len 2, 4 or 8; the read arm's success return turned into a
++#  failure.  *** TABLE 1'S CONTRACT CLAIMED MOST OF THIS AT 37 ROWS AND WAS MEASURED FALSE: the Opus
++#  pass-2 seat built ten mutants that scored 37/37, nine changing a guest outcome -- no row stored at len
++#  4/8 -- and measured that the split heads it DISCLOSED as needing a translated access split on K0SEG. ***
++#  DISCLOSED, not caught: the len-0 refusal (no producer); the zero-fill of the positions other than
++#  `ofs' (p_nozero -- EQUIVALENT: memory_rw's #95 pre-zero already clears the buffer); an address-decode
++#  edit above port 0x3ff (p_port10 -- every probed port is below 0x400, and it is not an edit of the
++#  fix); the size field a<4:3> (lcaisasize); the hardware QUADWORD ENCODING's route (lcaisaqword: on the
++#  21066 a<6:5> = 11 with a<4:3> = 11 is a quadword at port P, which the model forwards to P|3 -- NOT the
++#  len-8 lane this probe rows, which follows the same (P & 3) % len rule as every other width); the
++#  missing PHYSICAL (lcaisaphys); the end-of-window clamp at port 0xffff (nothing is mapped there).
++#  EQUIVALENT by construction, named so no table is spent on them (kimi-k3, pass 2): restoring the dead
++#  `% len' on the write arm's index (`ofs' is already reduced), and reinstating `if (ofs > len) exit(1)'
++#  AFTER the fold (unsatisfiable once ofs < len) -- the reinstated exit that matters is on the UNFOLDED
++#  lane, which the table's m_exit builds.
++#
++#  *** WHAT THE WITNESS (sessions 1-3) IS AND IS NOT.  IT IS A WITNESS, NOT A DETECTOR. ***
+ #
+@@ -143,2 +175,4 @@ def LDWU(ra, disp, rb):      return mem(0x0c, ra, rb, disp)   # BWX word load  -
+ def STW (ra, disp, rb):      return mem(0x0d, ra, rb, disp)   # BWX word store -> memory_rw len 2  (#530)
++def STL (ra, disp, rb):      return mem(0x2c, ra, rb, disp)   # longword store -> memory_rw len 4  (#530 pass 2)
++def STQ (ra, disp, rb):      return mem(0x2d, ra, rb, disp)   # quadword store -> memory_rw len 8  (#530 pass 2)
+ #  LDBU/STB are opcodes 0x0a/0x0e and are decoded with `loadstore_type = 0' in
+@@ -421,2 +455,4 @@ print("")
+ UART_IER = 0x3f9
++UART_MCR = 0x3fc              # 0 mod 4: modem control, stores and returns its low bits (pass 2)
++DRETRIED = []
+ 
+@@ -434,3 +470,4 @@ def dsession(tag, consts, phases, names, settle=3.0, spin=4.0):
+     if len(prints_in_order(txt)) < need and alive:
+-        txt, alive = session(cmds, settle * 3, spin * 3)
++        DRETRIED.append(tag)       # pass 2 (Opus): the retry was SILENT, so LCAISALANE_RETRIED covered
++        txt, alive = session(cmds, settle * 3, spin * 3)   # only the three witness sessions
+     if RAW:
+@@ -471,3 +508,3 @@ row("r81 lane", hx(g4["r81"]), hx(None if lsr is None else lsr << 8),
+ row("r22 byte", hx(g4["r22"]), hx(g4["msr"]),
+-    "(2,2) LDWU MSR == flat MSR at position 0: kills the A decline and C/HEAD's discarded byte")
++    "(2,2) LDWU MSR == flat MSR at position 0: kills the A decline and HEAD's discarded byte")
+ row("w11 lands", hx(g4["w11"]), hx(0x3a),
+@@ -480,6 +517,76 @@ print("")
+ 
++#  ---- SESSION 4b (#530 pass 2): len 4 and 8 STORES, a wide access at a 0-mod-4 port, full-width reads ----
++#  The Opus pass-2 seat BUILT ten mutants that scored 37/37 on the rows above, nine of them changing a guest
++#  outcome (regress/artifacts/lcaisalane/opus_p2_20260914/): no row ever STORED at len 4 or 8 -- the canonical
++#  real-OS `stl' outb -- no row made a wide access at a 0-mod-4 port, and no row read a whole len-4 value.  Every
++#  cell here is served on HEAD and on the fix alike (none ends the host), so they share one process.
++#  slots: 0 FLAT(SCR) 1 SP(SCR) 2 FLAT(MCR) 3 SP(MCR) 4 SP(LSR) 5 FLAT(LSR)
++C4b = [k0(FLAT(UART_SCR)), k0(SP(UART_SCR)), k0(FLAT(UART_MCR)), k0(SP(UART_MCR)),
++       k0(SP(UART_LSR)), k0(FLAT(UART_LSR))]
++P4b = [(load_const(T3, 0x11) + [LDQ(T1, 0, T0), STB(T3, 0, T1)] + load_const(T3, 0x7e000000)
++        + [LDQ(T1, 8, T0), STL(T3, 0, T1), LDQ(T1, 0, T0)] + sent(T2) + [LDBU(T2, 0, T1)], "t2"),   # (4,3) W
++       (load_const(T3, 0x6d000000) + [LDQ(T1, 8, T0), STQ(T3, 0, T1), LDQ(T1, 0, T0)]
++        + sent(T4) + [LDBU(T4, 0, T1)], "t4"),                                                      # (8,3) W
++       (load_const(T3, 0x01) + [LDQ(T1, 16, T0), STB(T3, 0, T1)] + load_const(T3, 0x03)
++        + [LDQ(T1, 24, T0), STL(T3, 0, T1), LDQ(T1, 16, T0)] + sent(T5) + [LDBU(T5, 0, T1)], "t5"),  # (4,0) W
++       ([LDQ(T1, 24, T0)] + sent(T6) + [LDL(T6, 0, T1)], "t6"),                                     # (4,0) R
++       ([LDQ(T1, 32, T0)] + sent(T2) + [LDL(T2, 0, T1)], "t2"),                                     # (4,1) R full
++       ([LDQ(T1, 8, T0)]  + sent(T3) + [LDQ(T3, 0, T1)], "t3"),                                     # (8,3) R
++       ([LDQ(T1, 40, T0)] + sent(T4) + [LDBU(T4, 0, T1)], "t4")]                                    # lsr (flat)
++a4b, g4b = dsession("wide", C4b, P4b, ["st4", "st8", "mcr4", "mcrrd", "ld4", "ld8", "lsr"])
++lsrb = g4b["lsr"]
++row("wide alive", "alive" if a4b else "dead", "alive",
++    "CONTROL: every access in this session is served on HEAD and on the fix")
++row("st4 lane3", hx(g4b["st4"]), hx(0x7e),
++    "(4,3) STL 0x7e000000 -> SCR, flat readback: kills p_wbit1, p_wnarrow, p_wdrop4, p_waddr4 (opus p2)")
++row("st8 lane3", hx(g4b["st8"]), hx(0x6d),
++    "(8,3) STQ 0x6d000000 -> SCR, flat readback: kills p_q8lane and p_wbit1")
++row("st4 lane0", hx(g4b["mcr4"]), hx(0x03),
++    "(4,0) STL 3 -> MCR (0 mod 4), flat readback: kills p_lane0decl (the store dropped)")
++row("ld4 lane0", hx(g4b["mcrrd"]), hx(0x03),
++    "(4,0) LDL MCR, FULL register: kills p_lane0decl (the load declined, sentinel kept)")
++row("ld4 full", hx(g4b["ld4"]), hx(None if lsrb is None else lsrb << 8),
++    "(4,1) LDL LSR, FULL register == lsr << 8: kills p_rep4 (byte replicated at len 4)")
++row("ld8 lane3", hx(g4b["ld8"]), hx(0x6d000000),
++    "(8,3) LDQ SCR, FULL register: kills p_q8lane's read side")
++print("")
++
++#  ---- SESSION 4c (#530 pass 2): the 1 KB SPLIT heads -- MEASURABLE on K0SEG after all --------------
++#  The table-1 contract disclosed the split heads as needing a TRANSLATED access.  FALSE (Opus pass 2, measured):
++#  MEMORY_RW's split is keyed on `!(misc_flags & PHYSICAL) && cpu->translate_v2p != NULL', Alpha always sets
++#  alpha_translate_v2p, and the load/store path passes only CACHE_DATA without an alignment check -- so an
++#  unaligned LDQ/LDL on K0SEG splits at port 0x3ff/0x400.  SP(SCR) + 0x1d is 3 bytes below the 1 KB line: an LDQ
++#  there hands the handler a len-3 head at ofs 3 -- the (3,3) cell the fix CHANGED (HEAD discarded the byte).
++#  The tail goes to flat port 0x400, where nothing is mapped (one `non-existant' line per access, expected).
++#  slots: 0 FLAT(SCR) 1 0x5a 2 SP(SCR)+0x1d 3 SP(SCR)+0x1b 4 SP(SCR)
++C4c = [k0(FLAT(UART_SCR)), SCR_VALUE, k0(SP(UART_SCR) + 0x1d), k0(SP(UART_SCR) + 0x1b), k0(SP(UART_SCR))]
++P4c = [([LDQ(T1, 0, T0), LDQ(T2, 8, T0), STB(T2, 0, T1)] + sent(T3) + [LDBU(T3, 0, T1)], "t3"),   # scr (flat)
++       ([LDQ(T1, 16, T0)] + sent(T4) + [LDQ(T4, 0, T1)], "t4"),                                  # LDQ head len 3
++       ([LDQ(T1, 16, T0)] + sent(T5) + [LDL(T5, 0, T1)], "t5"),                                  # LDL head len 3
++       ([LDQ(T1, 24, T0)] + sent(T6) + [LDQ(T6, 0, T1)], "t6"),                                  # LDQ head len 5
++       ([LDQ(T1, 32, T0)] + sent(T2) + [LDQ(T2, 0, T1)], "t2"),                                  # aligned control
++       (load_const(T3, 0x00c3007e) + [LDQ(T1, 16, T0), STQ(T3, 0, T1), LDQ(T1, 0, T0)]
++        + sent(T4) + [LDBU(T4, 0, T1)], "t4")]                                                   # STQ head len 3
++a4c, g4c = dsession("split", C4c, P4c, ["scr", "q3", "l3", "q5", "qal", "w3"])
++row("split alive", "alive" if a4c else "dead", "alive",
++    "CONTROL: no split head here ends the host on HEAD or on the fix")
++row("split devsig", hx(g4c["scr"]), hx(SCR_VALUE),
++    "DEVSIG: the scratchpad holds 0x5a through the flat mapping")
++row("h3 ldq", hx(g4c["q3"]), hx(SCR_VALUE),
++    "(3,3) LDQ head: position 3 % 3 = 0 -- RED ON HEAD (discarded byte); kills & (len-1) (0x5a0000)")
++row("h3 ldl", hx(g4c["l3"]), hx(SCR_VALUE),
++    "(3,3) LDL head: the no-BWX route to the fix-changed cell -- RED ON HEAD; kills & (len-1)")
++row("h5 ldq", hx(g4c["q5"]), hx(SCR_VALUE << 24),
++    "(5,3) LDQ head: position 3 % 5 = 3; kills & (len-1) (position 3 & 4 = 0)")
++row("split al", hx(g4c["qal"]), hx(SCR_VALUE << 24),
++    "CONTROL: the aligned LDQ at the same port packs lane 3")
++row("h3 stq", hx(g4c["w3"]), hx(0x7e),
++    "(3,3) STQ 0x00c3007e head: position 0 forwards 0x7e; kills & (len-1) (position 2 = 0xc3)")
++print("")
++
+ #  ---- SESSIONS 5-10: the six cells that ENDED THE HOST on HEAD, one process each -------------
+-#  A mutant that reinstates the exit ends exactly one of these, so each gets its own process and
+-#  its own `alive' row -- and a value row, because `alive' greens equally for a decline (the C and A
+-#  mutants), so the value is what separates the fix from them.
++#  Each cell gets its own process and its own `alive' row, so a reinstated exit is attributed to its
++#  cell -- with ONE overlap (codex, pass 2): w13's round trip ALSO reads (1,3), so an exit keyed on the
++#  (1,3) read alone ends both r13 and w13.  And a value row, because `alive' greens equally for a
++#  decline (the C and A mutants), so the value is what separates the fix from them.
+ EXITS = [
+@@ -540,3 +647,3 @@ for tag, consts, phases, names, rws in EXITS:
+ ok = sum(1 for _, o in rows if o)
+-retr = ",".join(t for t, r in (("base", r1), ("ofs2", r2), ("ofs3", r3)) if r)
++retr = ",".join([t for t, r in (("base", r1), ("ofs2", r2), ("ofs3", r3)) if r] + DRETRIED)
+ print("")
+```
+
+## THE MEASURING SEAT'S PASS-2 ANSWER (what the repair answers)
+
+# #530 PASS 2 -- the Opus 5 seat (Agent tool, measuring)
+
+*** TRANSCRIBED BY THE MAIN LOOP (the Agent seats leave no file).  Verdict and tables VERBATIM in substance from the
+returned answer; the seat's first turn ended mid-wait and it was RESUMED to finish (no re-launch).  The main loop
+re-read the table logs before recording: table_p2.out ends KILLP2_DONE, table_p2b.out ends KILLP2B_DONE, and every
+p_* leg reads `LCAISALANE_RESULT=37/37' on the 37-row instrument; disc_base.out / split_base.out quoted below. ***
+
+Liveness `OPUS_SEAT_ALIVE_20260914_LCA530_P2`; CHECKPOINT line 1 quoted verbatim.
+
+## VERDICT: HOLD -- the FIX is right; the 37-row DETECTOR is not
+
+`byte = data[ofs];` -> `byte = data[ofs & 1];` scores 37/37 (logs/probe_p_wbit1.raw) while a guest `stl 0x7e000000` to
+sparse SCR lands 0x00 instead of 0x7e (logs/disc_p_wbit1.out) -- a contract breach (the contract claimed "a lane decode
+that drops bit 1"), clause (e), L2.  Nine of eleven mutants scored 37/37; eight change a guest-visible outcome, one is
+a true equivalent.
+
+## Q1 -- the fix: YES
+Producers: the Alpha load/store path emits len 1, 2, 4, 8; memory_rw's 1 KB split emits heads/tails 1..7 (MEASURED);
+the device's end-of-window clamp gives 1..7 at port 0xffff only (read, not measured); nothing emits len 0.  For every
+len >= 1, `ofs = (P & 3) % len < len` -- no OOB, no divide, no exit left.  Split heads measured: a 3-byte head at port
+0x3ff returns 0x5a at position 0, 5/6/7-byte heads at position 3 (logs/split_base.out).  The ignored nested-read
+return is harmless (the one non-zeroing path halts the CPU first).  Out of round: memory_alpha.c's `exit(1)` at
+vaddr 0xfffffffd80000000 with ptbr 0 -- ALREADY FILED as `alphavmkill`.
+
+## Q2 -- the floor gap, MEASURED
+| mutant | 37-row | guest outcome changes? | disposition |
+|---|---|---|---|
+| p_wbit1 `byte = data[ofs & 1];` | 37/37 | stl -> SCR 0x00 (want 0x7e); stq -> 0x00 (want 0x6d) | contract breach, L2 |
+| p_rep4 `data[i] = (i == ofs \|\| len == 4)? byte : 0x00;` | 37/37 | ldl LSR 0x60606060 (want 0x6000) | contract breach, L2 |
+| p_wnarrow `if (writeflag == MEM_WRITE && len <= 2) {` | 37/37 | len-4/8 stores become reads | clause-(d) conjunct on the edited line's guard |
+| p_wdrop4 `if (len == 0 \|\| (len > 2 && writeflag == MEM_WRITE)) return 0;` | 37/37 | stores dropped | same class |
+| p_waddr4 forward to `relative_addr ^ (len > 2)` | 37/37 | stl SCR lands on MSR; stl MCR lands on LSR | forwarded-address gap |
+| p_lane0decl `if (len == 0 \|\| (len > 1 && (relative_addr & 3) == 0)) return 0;` | 37/37 | ldl MCR keeps the sentinel; stl MCR dropped | (2,0)(4,0)(8,0) both arms |
+| p_andmask `& (len - 1)` | 37/37 | at split heads: q_h3 0x5a0000, q_h5 0x5a, w_h3 0xc3 | disclosed on a FALSE premise |
+| p_q8lane `(relative_addr & (len > 4? 1 : 3)) % len` | 37/37 | stq/ldq lane 3 give 0x0 | arguably under lcaisaqword |
+| p_port10 `relative_addr &= 0x3ff;` | 37/37 | port 0x7ff reads SCR | outside the fix |
+| p_nozero `if (i == ofs) data[i] = byte;` | 37/37 | NO (memory_rw's #95 pre-zero) | truly equivalent |
+
+Repair, measured on base (no new process needed): `stl 0x7e000000` -> SCR; `stl 3` -> MCR then full-register `ldl`;
+full-register `ldl` of LSR; `ldq`/`stq` at SP(SCR) + 0x1d (the (3,3) split head, red on HEAD); a lane-3 `stq`/`ldq`.
+Clone /tmp/gxopus530 restored: no sentinel, cmp-clean, fresh, restored == base.
+
+## Q3 -- wrong statements (8)
+1. The split-head disclosure's premise ("needs a TRANSLATED access"): FALSE -- MEMORY_RW splits whenever
+   `translate_v2p != NULL` and the access is not PHYSICAL; Alpha always sets it; measured on K0SEG.
+2. Fix comment "byte/word access to a port 2 or 3 mod 4": a word at 2 mod 4 never exited (`2 > 2' is false).
+3. Fix comment "the rule the write arm already applied to every narrower one": the exit fired first at 3 of 8 cells.
+4. PRETABLE item 1 lists w11/w22 as changed cells: HEAD already served both; the changed (3,3) read had no row.
+5. PRETABLE item 3 "the fix's only guard reads len": the edited line is also guarded by `writeflag == MEM_WRITE'.
+6. POSTTABLE FLOOR "(d) ... all red": incomplete (p_wnarrow).
+7. POSTTABLE "RETRIED=none on all 14 legs": that line covered only the three witness sessions; dsession retried silently.
+8. The contract's "drops bit 1" and "replicated into every position": measured false for the write arm and len 4.
+
+## Could not check
+A translated (page-table) guest access; a real OS boot; hardware's len-8 lane; the port-0xffff clamp producer.
+
+
+## KILL TABLE 2 on the 51-row instrument -- POSTTABLE
+
+```
+POSTTABLE -- #530 (lcaisalane) kill table 2, the PASS-2 REPAIR (51 rows).  Written after the table (table2.out ends
+KILL530B_DONE); PRETABLE.out 01:58:50 predates the launch (kill530b.run-015908.sh) and every log.
+
+DRIVER   kill530b.run-015908.sh (frozen), clone /tmp/gxlca530 (BASELINE_CMP CLEAN), own .MUTANT; 25 legs built;
+         clone RESTORED (re-checked by hand: no .MUTANT, dev_lca.c cmp-clean vs GXEMUL-SEC, gxemul -nt source);
+         `restored == base (byte-identical)'.  `NOTE e_deadmod BINARY IDENTICAL TO base' -- the compiler folds the dead
+         `% len' away, so that leg is equivalent BY BUILD, not merely by measurement.
+INSTRUMENT  lca_isalane_probe.table2.py is BYTE-IDENTICAL to the shipped regress/lca_isalane_probe.py (cmp).
+LOGS     25 logs/probe_*.raw + 1 re-run, every one ends LCAISALANE_DONE; LCAISALANE_RETRIED=none on every leg -- and it now
+         covers ALL sessions (the pass-2 repair records the detector sessions' retries, which table 1's line did not).
+LOAD     two probe lanes; #529's closing-pass-4 Opus seat built and ran in its own clone concurrently.
+
+check_pred.out:  CHECKPRED exact=24 differs=1 of 25 measured (25 predicted)
+
+   base 51/51 · head 31/51 · m_exit 36 · m_declbeyond 44 · m_decleq 35 · m_writeonlyfold 42 · m_readonlyfold 44 ·
+   m_clamp 49 · m_lane1 41 · m_nomask 47 · m_replicate 40 · m_retzero 29 · m_lenzero 51 (EQUIVALENT) · m_andmask 47 ·
+   p_wbit1 48 · p_wnarrow 45 · p_wdrop4 45 · p_waddr4 45 · p_lane0decl 47 (see below) · p_nozero 51 (EQUIVALENT) ·
+   p_rep4 49 · p_q8lane 47 · g_len4w 48 · e_deadmod 51 (EQUIVALENT, binary identical) · e_exitafter 51 (EQUIVALENT)
+   Every non-equivalent leg DETECTED; every one of the ten pass-2 escapes (p_* and g_len4w, bar the two equivalents)
+   red on the rows the repair added.
+
+THE ONE LEG OFF ITS PREDICTION -- p_lane0decl: predicted {st4 lane0, ld4 lane0} (49/51); measured those PLUS {h3 ldq,
+h5 ldq} (47/51).  RE-RUN ALONE (logs/probe_p_lane0decl_ALONE.raw): identical, 47/51, the same four rows.
+   WHY, and it is MY TRACE'S MISS, not the instrument's: the split's TAIL goes through the same handler.  An LDQ at
+   SP(SCR) + 0x1d is a 3-byte head at port 0x3ff AND a 5-byte tail at port 0x400 -- lane 0, len 5 > 1 -- which the mutant
+   declines, so memory_rw fails the whole load and the register keeps the sentinel (RAW[split]: q3=0xbad1d8a,
+   q5=0xbad1d8a).  The LDL's tail is 1 byte (len 1, not declined) -- so `h3 ldl' stays green (l3=0x5a), exactly as the
+   mechanism predicts.  PRETABLE 2 modelled only the head.  The mutant was already killed by its two predicted rows; the
+   extra reds are additional kills, and they show the split rows ALSO see the tail's handling -- an unplanned second
+   channel, recorded here rather than claimed as designed.
+
+FLOOR    (a) head 31/51; (b) m_exit 36/51; (c) the pre-fix file as the stale medium (as table 1); (d) every DEPENDS-ON
+         mutant of the position rule -- including the write-arm guard conjunct `&& len <= 2' (p_wnarrow) that pass 2 found
+         table 1 had not enumerated -- red; (e) the contract rewritten, four equivalents named and measured.
+SOLE CARRIERS  st4 lane0 + ld4 lane0 for p_lane0decl's predicted kill (the split rows now also see it); ld4 full for
+         p_rep4 (with ld4 lane0); r81 lane for m_nomask's len-8 LSR cell (with st8/ld8/split al).
+NOT RE-MEASURED  p_port10 (an address-decode edit, not an edit of the fix; disclosed).
+```
+
+## QUESTIONS
+
+1. **Is there a floor gap in the 51-row detector?**  The smallest source edit to the FIXED `dev_lca.c` that changes a
+   guest-visible outcome (any cell) and still scores 51/51 -- as an exact edit, with the row you expected to catch it and why
+   it cannot.  Items on the contract's DISCLOSED list are outside the question; say if you think one is disclosed wrongly.
+2. **Does the contract's catch-list now match the rows?**  Name any claimed item no row can see, and any row whose channel
+   cannot vary under the mutant it claims to kill.
+3. **Which statement in the header, the fix comment, or the POSTTABLE is wrong?**

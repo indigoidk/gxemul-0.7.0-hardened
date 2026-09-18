@@ -1,0 +1,68 @@
+PRETABLE -- #530 (lcaisalane) kill table 2, the PASS-2 REPAIR.  Written BEFORE the table runs (mtime is the order proof).
+Instrument: regress/lca_isalane_probe.py, 51 rows = table 1's 37 + session 4b `wide' (7) + session 4c `split' (7),
+frozen by the driver.  Baseline: the #530 working set (dev_lca.c: code unchanged since table 1; its comment corrected
+after pass 2).  Measured before this file (table 1's binaries): FIX_r2.out 51/51, HEAD_r2.out 31/51 (the table-1 18 +
+`h3 ldq', `h3 ldl').
+
+WHY: the Opus pass-2 seat BUILT ten mutants that scored 37/37 on table 1's instrument, nine changing a guest outcome
+(../../opus_p2_20260914/table_p2*.out, disc_*.out, split_*.out): no row stored at len 4/8, none made a wide access at a
+0-mod-4 port, none read a whole len-4 value -- and the split heads the contract DISCLOSED as needing a translated access
+split on K0SEG.  codex (pass 2) independently named `data[ofs & 1]' (= p_wbit1); grok `data[len >= 4 ? 0 : ofs]'.
+
+CHECKS.  SIBLING PARITY: the store arm is now rowed at len 1, 2, 3 (split head), 4, 8 and the read arm at 1, 2, 3, 4, 5
+(split), 8 -- the table-1 asymmetry (reads only above len 2) is the finding this repair answers.  CLAIM -> ROW: the
+contract's catch-list (rewritten) maps each item to a row named in the channel lines below; p_nozero, the dead `% len'
+and the exit-after-fold are named EQUIVALENT in the header.  GUARD FIELD vs BODY FIELD: the edited `byte = data[ofs]'
+is guarded by `writeflag == MEM_WRITE' as well as `len' (Opus Q3.5); p_wnarrow conjoins `len <= 2' onto it -- rowed.
+CHANNEL (new rows): st4 lane3 (flat readback of an STL to SCR) -- p_wbit1, p_wnarrow, p_wdrop4, p_waddr4, g_len4w,
+m_lane1; st8 lane3 -- the same + p_q8lane, m_nomask; st4 lane0 / ld4 lane0 -- p_lane0decl, p_wnarrow/p_wdrop4/p_waddr4
+(store) and m_replicate/p_rep4 (full-register read); ld4 full -- p_rep4, m_replicate; ld8 lane3 -- follows st8 + read
+decode; h3 ldq / h3 ldl -- HEAD (the fix-changed (3,3) read), m_andmask, m_decleq, m_writeonlyfold, m_lane1,
+m_replicate, m_retzero; h5 ldq -- m_andmask, m_lane1, p_q8lane, m_replicate, m_retzero; split al -- m_nomask, m_lane1,
+p_q8lane, m_replicate, m_retzero; h3 stq -- m_andmask, m_decleq, m_readonlyfold, m_lane1, p_wnarrow/p_wdrop4/p_waddr4.
+OUT OF TABLE: p_port10 (an address-decode edit, not an edit of the fix; its split-tail outcome depends on what ISA port
+0 answers, so no exact prediction can be written -- DISCLOSED in the header).
+
+PREDICTED RED ROWS (exact sets; check_pred.py compares mechanically).  51 rows.  T1 = table 1's measured set.
+   base             (none)                                                                          51/51
+   head             ofs1 zero, ofs2 exit, ofs3 exit, r11 byte, r22 byte, r12 alive, r12 byte, r13 alive, r13 byte,
+                    r23 alive, r23 lane, w12 alive, w12 lands, w13 alive, w13 lands, w13 roundtrip, w23 alive,
+                    w23 lane, h3 ldq, h3 ldl                                                          31/51
+   m_exit           ofs2 exit, ofs3 exit, r12 alive, r12 byte, r13 alive, r13 byte, r23 alive, r23 lane, w12 alive,
+                    w12 lands, w13 alive, w13 lands, w13 roundtrip, w23 alive, w23 lane               36/51
+   m_declbeyond     r12 byte, r13 byte, r23 lane, w12 lands, w13 lands, w13 roundtrip, w23 lane      44/51
+   m_decleq         ofs1 zero, ofs1 answer, r11 byte, r22 byte, w11 lands, w22 lands, r12 byte, r13 byte, r23 lane,
+                    w12 lands, w13 lands, w13 roundtrip, w23 lane, h3 ldq, h3 ldl, h3 stq            35/51
+   m_writeonlyfold  ofs1 zero, r11 byte, r22 byte, r12 byte, r13 byte, r23 lane, w13 roundtrip, h3 ldq, h3 ldl
+                                                                                                      42/51
+   m_readonlyfold   w11 lands, w22 lands, w12 lands, w13 lands, w13 roundtrip, w23 lane, h3 stq     44/51
+                    (the forwarded byte read past the caller's len-byte buffer: predicted != want, as in table 1)
+   m_clamp          r23 lane, w23 lane                                                                49/51
+   m_lane1          ofs2 wide, ofs3 wide, st4 lane3, st8 lane3, ld8 lane3, h3 ldq, h3 ldl, h5 ldq, split al,
+                    h3 stq                                                                            41/51
+   m_nomask         r81 lane, st8 lane3, ld8 lane3, split al                                          47/51
+   m_replicate      r21 anchor, r81 lane, r22 byte, r23 lane, ld4 lane0, ld4 full, ld8 lane3, h3 ldq, h3 ldl,
+                    h5 ldq, split al                                                                  40/51
+   m_retzero        live, ofs1 zero, ofs1 answer, ofs1 wide, ctl zero, ofs2 wide, ofs3 wide, r11 byte, r21 anchor,
+                    r81 lane, r22 byte, r12 byte, r13 byte, r23 lane, w13 roundtrip, ld4 lane0, ld4 full,
+                    ld8 lane3, h3 ldq, h3 ldl, h5 ldq, split al                                      29/51
+   m_lenzero        (none) -- PREDICTED EQUIVALENT: no len-0 producer                                51/51
+   m_andmask        h3 ldq, h3 ldl, h5 ldq, h3 stq                                                    47/51
+   p_wbit1          st4 lane3, st8 lane3, ld8 lane3                                                   48/51
+   p_wnarrow        st4 lane3, st8 lane3, st4 lane0, ld4 lane0, ld8 lane3, h3 stq                    45/51
+   p_wdrop4         st4 lane3, st8 lane3, st4 lane0, ld4 lane0, ld8 lane3, h3 stq                    45/51
+   p_waddr4         st4 lane3, st8 lane3, st4 lane0, ld4 lane0, ld8 lane3, h3 stq                    45/51
+   p_lane0decl      st4 lane0, ld4 lane0                                                              49/51
+   p_nozero         (none) -- PREDICTED EQUIVALENT: memory_rw's #95 pre-zero (Opus measured no difference) 51/51
+   p_rep4           ld4 lane0, ld4 full                                                               49/51
+   p_q8lane         st8 lane3, ld8 lane3, h5 ldq, split al                                            47/51
+   g_len4w          st4 lane3, st8 lane3, ld8 lane3                                                   48/51
+   e_deadmod        (none) -- PREDICTED EQUIVALENT: ofs is already reduced                            51/51
+   e_exitafter      (none) -- PREDICTED EQUIVALENT: ofs > len is unsatisfiable after the fold          51/51
+
+NOTES ON THE HARDER PREDICTIONS.  p_waddr4 forwards an STL to MCR onto LSR (Opus: `lsr reads 0x62'): `ld4 full' is
+predicted GREEN because its want is computed from the flat LSR read taken LATER in the same session.  m_lane1 at
+SCR: (0x3ff & 1) % len = 1 for every width >= 2, so every SCR store at len >= 4 forwards position 1 (0x00) and every
+SCR read packs at position 1 -- hence the whole split set.  m_nomask at SCR: 0x3ff % 3 = 0 and 0x3ff % 5 = 3 match
+the fix, so only the len-8 SCR cells differ.  A red row outside its prediction is re-run ALONE before it is believed.
+Load: two probe lanes; #529's closing-pass-4 panel may still be answering (reading seats only).

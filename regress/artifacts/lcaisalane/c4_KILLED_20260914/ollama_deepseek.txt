@@ -1,0 +1,14 @@
+GAP: in `dev_lca.c` read arm, after the first `cpu->memory_rw(...)`, insert  
+`if (len != 1) { cpu->memory_rw(cpu, cpu->mem, LCA_ISA_BASE + relative_addr, &byte, 1, MEM_READ, CACHE_NONE); }`  
+This scores 111/111 and changes a guest-visible outcome: a len‑2/4/8 read of IIR (0x3fa) with TXRDY armed delivers the post‑acknowledge value instead of the armed value.  
+LCA530_C4_20260914
+
+**Reasoning**
+
+- **READ** from the packet: the only row added for RD2 is session 4j `iirr`, which uses `LDBU` (len = 1) at lane 2. The row expects TXRDY to be read once and remain 0x2.
+- **REASONED**: the gated duplicate above is skipped for len == 1, so the `iirr` row passes.  
+  Other lane‑2 read rows in the 111‑row instrument do not arm TXRDY before reading IIR; without an armed side effect, two forwards return the same byte, so those rows also pass.
+- **REASONED**: for a guest load of width 2, 4, or 8 from IIR after TXRDY is armed, the first forward clears TXRDY, the second forward reads the cleared value, and the register receives a different byte. This is guest‑visible.
+- Therefore the contract’s statement that RD2 is caught “at lane 2” is **overstated**: it is caught only at len = 1. The gated form above is a floor breach.
+
+**Also answer to Q1/Q3**: the enumeration misclassifies RD2 as covered at lane 2 for all widths; in fact only the len‑1 cell is rowed. The POSTTABLE/contract sentence “read‑arm mirror RD2 at lane 2” is wrong unless scoped to len 1.

@@ -1,0 +1,49 @@
+VERDICT: B (accept all five by folding) — LCAISALANE_F2_20260913
+
+## Q1 — D1 adjudication: B
+
+Warrant I rely on (REASONED): not fable5's "upstream intent," but **self-coherence plus the already-completed fetch**.
+
+(a) READ (from the inlined code): the read arm *already fetches the real port byte* at equality cells and then discards it, fabricating `0x00` with success. B does not invent a contract here; it deletes an invented zero. A and C both preserve (C) or replace with equally silent behavior (A) a fabrication the port never returned.
+
+(b) READ: today's guard is `ofs > len` (strict), and `ofs % len` is identity whenever `ofs < len`. Under the natural reject guard (`>=`) the modulo would be dead code. Two independent choices that are each only meaningful if `ofs == len` is meant to pass: REASONED, that is the strongest textual evidence the fold is design, not accident. But B does not need it: for len 1, `data[0]` is the *only* byte the guest supplied — forwarding it is correct under any idiom, no intent required.
+
+(c) REASONED: the `%` fold is the *unique single-index completion* that makes narrow writes and narrow reads round-trip through the same buffer slot (at (2,3) the stored word's high byte goes to the port and the port's byte comes back into the high half). Any other placement is incoherent by construction. The first ruling's "(2,3) lands the port byte in the high half" is true (READ from the fold arithmetic) but is the price of coherence in a cell S4 says no guest can observer-against-hardware.
+
+**Hardest hit on my own side (Q1 requirement):** fable5's "no principled line between (1,1) and (1,2)" is *false as stated* — there is a principled line ("deliver what the port returned" vs "fabricate zero"); B merely happens to sit on the coherent side. And "upstream wrote it precisely to accept equality" is an intent claim that cannot be settled from the packet; B must stand without it, and it does via (b) and (c).
+
+**Why not A:** A's own premise fails on S2 (settled): on Alpha, `return 0` is *not* a guest-visible fault — loads get silent register-staleness, stores get silent drops. So A (1) regresses today's landing equality writes (F3, admitted) with a failure mode the guest cannot detect at issue, and (2) replaces the false-zero with false-stale — a guest polling LSR can pass on leftover `0x60` bits. A's "addition licence" licenses *not adding*; it cannot license *removing working stores silently*.
+
+**Why not C:** it ships an accepted defect (F2) and enforces a lane-dependent wall between identical transactions: `stb` to IER 0x3f9 lands, `stb` to MSR 0x3fe is refused — same access class, one port apart, no hardware basis (S4).
+
+## Q2 — F1..F8 (given verdict B)
+
+- **F1 — UPHOLD.** `exit(1)` reachable at the three strict cells; READ from inlined code. Guest-drivability rests on the ungated-BWX premise — see CANNOT SETTLE list.
+- **F2 — UPHOLD** as defect; **disposed by B** (equality reads now deliver the fetched byte; the false-zero is gone).
+- **F3 — UPHOLD.** READ: at equality, `ofs % len == 0` → `data[0]`; the write lands today. Decline (A) is a real regression.
+- **F4 — UPHOLD** arithmetically (READ: `ofs==len==3` passes a strict-`>` guard); the len-3/5/6/7 *arrival* premise is tree-dependent — CANNOT SETTLE from packet (settling fact: memory_rw's split granularity and whether heads/tails are delivered as separate DEVICE_ACCESS calls).
+- **F5 — CANNOT SETTLE (lean UPHOLD the refine).** The downgrade rests on tree facts not inlined (device-dispatch `memset`-first; the one non-zeroing return ordered after `cpu->running = 0`). Settling fact: the enumerated list of memory_rw failure paths reachable from alphabook1's registered devices.
+- **F6 — UPHOLD** the filing. READ: neither nested call in the inlined text carries a PHYSICAL token. Whether omission is a defect is not decidable here; separate row is right.
+- **F7 — UPHOLD** the filing.
+- **F8 — REFINE: merge into F7's row (`lcaisasize`).** (2,1)'s `data[1]` is *undefined by hardware* (S4), *consistent with the in-function lane idiom* (`data[ofs]` for `ofs<len`, same rule as the legal len-4 row), and *incoherent* only under the rival "addressed byte = low byte" idiom. Under B it stays served (as `data[1]` — it is not one of the five cells). It and F7 are the same question — what a sub-longword access to sparse space means — and should be owned together. Keep serving; no observable regression (S4).
+
+## Q3 — Which disposition is wrong
+
+REASONED: none of F1–F4's acceptances is contradicted by the packet. The one I re-open is **F5's "refined down"** — it reduces a potential uninitialised-memory read to "robustness" on one seat's path walk, none of whose premises are inlined; one counter-path flips it back to a leak. Downgrade it to CANNOT SETTLE pending the path list above.
+
+Separately, an internal contradiction to fix (READ vs settled premise): **S3's projection "under a decline, `ofs1 answer` stays red" contradicts S2.** S2 says a load-side `return 0` leaves the register unchanged and execution *continuing* — so `completed` still prints under decline. Worse, with sentinel `0x0bad1dea` (bits 5–6 set), the `ofs1 zero` row masked to `0x60` can go *green* under A. As stated, the witness cannot see option A at all. Settling fact: what rung 3's assertion actually compares.
+
+## Q4 — What all nine missed
+
+**A discriminating observable exists and needs no boot and no hardware oracle: write–read-back self-coherence.** Use readable-writable byte registers reachable at the contested lanes — PIC IMR 0x21/0xa1, UART IER 0x3f9 (all byte regs, all r/w): guest does `stb X; ldbu same address; compare`.
+- HEAD / C: write lands, read returns fabricated `0x00` → X ≠ read-back → **incoherent**. (This is F2 expressed as a self-contradiction, not a preference.)
+- A: write silently dropped, read declined → stale register → incoherent (and per the S3/S2 collision, *invisible to the current witness*).
+- B: fold is coherent through the same buffer index → round-trips.
+
+At len 1 the fold, the lane idiom, and the low-byte idiom *all coincide* (`ofs % 1 == 0`), so this test is immune to the F8 ambiguity — it adjudicates A vs B vs C on an oracle-free invariant ("the emulator must agree with itself") instead of on hardware truth that does not exist (S4). Same construction at len 2 (`stw`/`ldwu`) discriminates the (2,3) high-half placement the first ruling objected to. So: measurement *can* discriminate once the criterion is self-coherence; it can never discriminate on faithfulness, because this machine has no ground truth.
+
+Two more misses, both needing one fact each:
+1. **`len == 0` divides by zero** in `ofs % len` — and B's proposed `ofs = (relative_addr & 3) % len` executes the modulo *unconditionally*. Settling fact: can DEVICE_ACCESS ever be invoked with len 0 (the memory_rw call contract)? If not guaranteed, B's one-line fix needs `len ? … : …`.
+2. **No finding owns the root cause**: the brief states `ALPHA_FEATURE_BWX` is never read, so a 21066 — whose hardware truth for `ldbu`/`stb` is an illegal-instruction trap or PALcode sequence — silently *extends* the ISA. A/B/C all adjudicate the handler for accesses the CPU should never deliver. File the decode-gate row (out of this row's scope, but currently unowned). Settling fact for the enabling premise itself: any read site of `ALPHA_FEATURE_BWX` in decode (I cannot check "never read" from the packet).
+
+Premises I took as settled per the packet but cannot verify from inlined text: S1 (fatal's non-exit), S2 (return-0 semantics), S3 (witness numbers), S4 (nothing boots). Each is used as stated above.

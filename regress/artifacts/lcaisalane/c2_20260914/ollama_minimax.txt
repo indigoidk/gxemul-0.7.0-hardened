@@ -1,0 +1,42 @@
+VERDICT LINE FIRST: `CLOSES` — no source edit to the FIXED `dev_lca.c` scores 77/77 and changes a guest-visible outcome. Liveness token `LCA530_C2_20260914`.
+
+---
+
+**Q1 — Does THE CELL SPACE section enumerate the space correctly?** [REASONED]
+
+The cell arithmetic checks out: direct = 4 widths × 4 lanes × 2 dirs = 32; split heads = 7 lengths × 2 dirs = 14. Total 46 cells.
+
+Each direct cell is rowed somewhere (12 freshly by 4d, the other 20 by the 51-row instrument — the "nine no earlier session reached, plus FULL-register len-4 reads at lanes 2 and 3" plus the fifth and sixth cells I couldn't reconcile cleanly; the wording says 9 but 4d emits 10 non-FULL rows, which is a near miss but not load-bearing). Each split-head cell is rowed (3 by 4c, 6 by 4e, 4 by the four one-head processes), with (1,3)R doubly exercised via the unscored "scr" anchor and the h1 ldq split — that's redundant but harmless.
+
+One REASONED warning: the cell naming uses "lane 3" for split heads to mean "the byte lands at SCR," not the lane the handler sees. For head lengths 1/2/4 the handler is called with lanes 3/2/0 respectively, so (split 4,3) and (direct 4,0) collapse to the same handler invocation; (split 1,3)/(split 2,3) collapse into (direct 1,3)/(direct 2,2). The 14-cell count is therefore an over-enumeration of distinct handler invocations by 6, but every handler invocation IS covered by some row.
+
+P_lane0decl (table 2's single row) is claimed to cover all 14 tail cells by assertion of "the load's register unchanged" across a split at the 1 KB boundary. I accept that — split-tail mutants are uniform across lengths at the handler level, so one row suffices for handler-level bugs.
+
+**Q2 — Is there a floor gap?** [READ from POSTTABLE]
+
+POSTTABLE lists 10 mutants scored against the 77-row instrument. Highest score < 77 from any non-disclosed mutant is x_wfallthru at 77, but that is on the DISCLOSED list (EQUIVALENT — its "write-arm falls through to read-arm" overwrites `data[ofs]` with the device's read-back; every port the probe writes to (MCR, IER, MSR) reflects the written byte on the subsequent read, so `data[ofs]` is byte-for-byte identical, and the probe's flat readbacks confirm it). Every other mutant scores below 77, and the contract's named catch-list mutants (c1_w2, c1_w1w, c1_r4, x_lane2clamp, x_len6, x_len8lane0, x_w1drop) all move from 51/51 (or unscored-on-table-2 in x_wfallthru's case) to a non-trivial count.
+
+No mutant in the POSTTABLE scores 77/77 with a guest outcome change. From the 10 measured, there is no floor gap.
+
+**Q3 — Which statement in the header, the fix comment, or the POSTTABLE is wrong?** [REASONED]
+
+The fix comment in `dev_lca.c`:
+
+> "That guard's `ofs > len' exit(1) ended the host on a guest byte access to a port 2 or 3 mod 4 or a word access to a port 3 mod 4 (ungated BWX; or **the 1- or 2-byte head of an unaligned LDL/LDQ** that memory_rw splits at 1 KB)"
+
+is technically wrong about the 2-byte head. The literal guard is `ofs > len`, not `>= len`. A 2-byte split head ending at port 0x3ff starts at port 0x3fe, so the handler is called with `ofs = 2, len = 2`; `2 > 2` is false and the guard does NOT exit. The 2-byte head h2 ldq/h2 stq are red on HEAD because the OLD write-arm wrote `data[ofs % len] = data[0]` instead of `data[1]` (= the SCR byte at position 1) and the test framework flagged the wrong value as "ended the host" — that is a wrong-byte failure mode of the read arm's discard + the write arm's `ofs % len` collapse, not the guard's exit(1). The 1-byte head (ofs=3, len=1) does exit; the 2-byte head does not.
+
+The header and POSTTABLE statements I cannot fault on the inlined text. The "table 2's 20 + the eight head rows" arithmetic reconciles (20 from the 51-row plus the 4 data rows + 4 alive rows of the four one-head processes = 28 red on HEAD, 49 green on FIX, 77 green on base — totals work for both axes). The "nine no earlier session reached" wording is off by one (4d emits 10 non-FULL rows) but the cell-coverage claim itself holds.
+
+The x_wfallthru disclosure reads correctly: the probe's writes go only to MCR, IER, and MSR, all of which reflect their stored value on a subsequent read, so the fall-through read returns the same byte that was written, leaving `data[ofs]` byte-identical.
+
+---
+
+**Could not check from the packet alone**
+
+1. Whether `k0(FLAT(...))` accesses bypass the LCA_ISA dispatch in GXemul. The 4d `cross alive` row's "CONTROL: none of these cells ever ended the host" claim is consistent with the FAST exits on (1,2)/(2,3) being K0SEG-only and FLAT going around the handler; I cannot verify without the source. [NOT CHECKABLE]
+2. The exact 51-row instrument's per-cell layout — which 20 of the 32 direct cells it covers, and which of the 14 split-head cells beyond the (3,3)R/W and (5,3)R added by 4c. [NOT CHECKABLE]
+3. The mapping from the test's `T0+40`, `T0+32`, `T0+16` offsets to the specific ISA ports those addresses correspond to in this build's address layout. The byte-arrangement expectations look right (e.g., w82 expects position 2 from port lane 2), but the port-by-port cross-check is internal to the probe and not transcribed. [NOT CHECKABLE]
+4. Whether p_port10 (the disclosed `relative_addr &= 0x3ff` edit) is genuinely EQUIVALENT on the probe — the disclosure claims it is, and the table-2 measurement confirms 51/51. The reasoning ("tried port = below 0x400" is wrong, but the escape mechanism is correct because port 0x400+ is also unmapped) is sound. [REASONED from packet]
+
+Token `LCA530_C2_20260914` filed.

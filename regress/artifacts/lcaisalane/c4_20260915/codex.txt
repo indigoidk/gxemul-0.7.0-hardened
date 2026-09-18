@@ -1,0 +1,1524 @@
+Reading additional input from stdin...
+OpenAI Codex v0.153.4
+--------
+workdir: C:\DocumentNoSnc\CC\GXEMUL
+model: gpt-6-astra
+provider: openai
+approval: never
+sandbox: read-only
+reasoning effort: max
+reasoning summaries: none
+session id: 01a0a371-4bd0-7e90-9fbd-23d894536cc6
+--------
+user
+Read /c/DocumentNoSnc/CC/GXEMUL/_scratchpad/panel_20260915_000144/brief_sent.md in full and review it adversarially exactly as its own Questions/Review-asks section directs.  Do not summarise it back to me.  End with GO / NO-GO / GO-WITH-CHANGES.
+codex
+I’ll read the full brief, then follow its review asks and check the supporting evidence for gaps.
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "Get-Content -LiteralPath 'C:\\DocumentNoSnc\\CC\\GXEMUL\\_scratchpad\\panel_20260915_000144\\brief_sent.md' -Raw" in C:\DocumentNoSnc\CC\GXEMUL
+ succeeded in 91ms:
+# CLOSING PASS 4 on the #530 REPAIR 4 -- `lcaisalane`: is the 111-row detector now complete for its contract?  Liveness token `LCA530_C4_20260914`.
+
+VERDICT LINE FIRST: `CLOSES` (no floor gap in the 111-row detector) or `GAP: <exact source edit to dev_lca.c that scores 111/111
+and changes a guest-visible outcome>`, then the token.
+
+A routine mutation-testing review of an open-source hardware emulator (GXemul, a hardened fork).  Check premises, not only
+reasoning; say what you could not check.  Tree: `C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\` ONLY.  Packet-fed seats: all
+facts are below; do not plan to read files.
+
+## WHY THIS PASS EXISTS
+Closing pass 3 (on the 93-row repair) was NOT clean.  Its measuring seat BUILT the x_wfallthru channel escaping GATED --
+the write arm's `return' removed only for len 8 (W1) or len 2 (W2), for all widths but the two the `iir' rows used (W4),
+or only off lane 2 (W3) -- and its read-arm mirror RD2 (the forward duplicated), each 93/93 and guest-visible.  The
+flagship seat, adjudicating last (regress/artifacts/lcaisalane/FABLE_C3_RULING_20260914.md, part B), ruled the contract's
+unscoped x_wfallthru entry a wrong record to fix in-round by rowing every OBSERVABLE cell of the class (option (c)):
+repair 4 adds session 4i `iirw' (STW/STQ at IIR 0x3fa, TXRDY armed), 4j `iirr' (an lca READ of IIR -- RD2), and four 4k
+`kbcq' processes (lane 0 at 0x60 with an 8042 reply queued, one per width); SCOPES the contract (caught at lanes 0 and 2
+at every direct width; EQUIVALENT at the head cells; DISCLOSED at lane 1 and lane-3 direct); and widens the discarded-bit
+disclosure to a<4:0>.  This closing pass VERIFIES THAT ENUMERATION; the chain closes on the first valid pass with zero
+floor breaches surviving adjudication.
+
+## SETTLED (re-stated because the questions depend on it)
+* Disposition B (adjudicated 8 of 9, flagship last): the byte for ISA port P sits at buffer position `(P & 3) % len` on
+  BOTH arms; `len == 0` refused first; no latch, no announce.  Every seat that walked the handler found the fix right in
+  every (len 1..8, ofs 0..3, direction) cell: no exit, no out-of-range index, no divide by zero.
+* On Alpha a handler `return 0` leaves a load's register unchanged and makes a store invisible except through the device.
+* memory_rw pre-zeroes a device read buffer (#95), so the read arm's zero-fill of the other positions is EQUIVALENT.
+* The 1 KB split (MRW_SPLIT_MASK 0x3ff) fires for any non-PHYSICAL access on a CPU with translate_v2p -- Alpha always --
+  so every split has a HEAD of 1..7 bytes at a port 0x1f mod 0x20 (lane 3) and a TAIL of 8-h (LDQ/STQ) or 4-h
+  (LDL/STL) bytes at the next port, 0 mod 0x20 (lane 0) -- measured; a declined tail fails a whole load, while a store
+  forwards its head before its tail fails (tables 2 and 3).
+* Kill-table targeting rule: repair 4 ADDS sessions and changes no existing session's commands, so no earlier kill moves;
+  tables 1-4 stand, table 5 measures the new rows.
+
+## THE FIX (`git diff`, verbatim -- the code is unchanged since pass 2; only its comment was corrected)
+
+```diff
+diff --git a/src/devices/dev_lca.c b/src/devices/dev_lca.c
+index 6873466..a7923f4 100644
+--- a/src/devices/dev_lca.c
++++ b/src/devices/dev_lca.c
+@@ -279,15 +279,25 @@ DEVICE_ACCESS(lca_isa)
+ 
+ 	relative_addr >>= 5;
+ 
+-	ofs = relative_addr & 3;
+-	if (ofs > len) {
+-		fatal("[ ofs=%i len=%i in lca_isa access function. "
+-		    "aborting ]\n", ofs, len);
+-		exit(1);
+-	}
++	/*
++	 *  #530: the byte for ISA port P sits at buffer position (P & 3) % len
++	 *  on BOTH arms -- the lane for the 21066's own len 4/8 accesses, and
++	 *  the rule the write arm already applied wherever the old guard let
++	 *  it run.  That guard's `ofs > len' exit(1) ended the host on a guest
++	 *  byte access to a port 2 or 3 mod 4 or a word access to a port 3 mod
++	 *  4 (ungated BWX; and at a port 3 mod 4 also the 1- or 2-byte head
++	 *  of an unaligned load or store that memory_rw splits at 1 KB),
++	 *  and the read arm discarded the
++	 *  fetched byte at ofs == len.
++	 *  One byte is forwarded whatever len is (the size field a<4:3> is
++	 *  not decoded here).  len 0 has no producer; refuse it before the %.
++	 */
++	if (len == 0)
++		return 0;
++	ofs = (relative_addr & 3) % len;
+ 
+ 	if (writeflag == MEM_WRITE) {
+-		byte = data[ofs % len];
++		byte = data[ofs];
+ 		return cpu->memory_rw(cpu, cpu->mem, LCA_ISA_BASE +
+ 		    relative_addr, &byte, 1, writeflag, CACHE_NONE);
+ 	}
+```
+
+## THE WHOLE HANDLER
+
+```c
+DEVICE_ACCESS(lca_isa)
+{
+	unsigned int ofs, i;
+	uint8_t byte;
+
+	relative_addr >>= 5;
+
+	/*
+	 *  #530: the byte for ISA port P sits at buffer position (P & 3) % len
+	 *  on BOTH arms -- the lane for the 21066's own len 4/8 accesses, and
+	 *  the rule the write arm already applied wherever the old guard let
+	 *  it run.  That guard's `ofs > len' exit(1) ended the host on a guest
+	 *  byte access to a port 2 or 3 mod 4 or a word access to a port 3 mod
+	 *  4 (ungated BWX; and at a port 3 mod 4 also the 1- or 2-byte head
+	 *  of an unaligned load or store that memory_rw splits at 1 KB),
+	 *  and the read arm discarded the
+	 *  fetched byte at ofs == len.
+	 *  One byte is forwarded whatever len is (the size field a<4:3> is
+	 *  not decoded here).  len 0 has no producer; refuse it before the %.
+	 */
+	if (len == 0)
+		return 0;
+	ofs = (relative_addr & 3) % len;
+
+	if (writeflag == MEM_WRITE) {
+		byte = data[ofs];
+		return cpu->memory_rw(cpu, cpu->mem, LCA_ISA_BASE +
+		    relative_addr, &byte, 1, writeflag, CACHE_NONE);
+	}
+
+	cpu->memory_rw(cpu, cpu->mem, LCA_ISA_BASE + relative_addr,
+	    &byte, 1, MEM_READ, CACHE_NONE);
+
+	for (i=0; i<len; i++)
+		data[i] = i == ofs? byte : 0x00;
+
+	return 1;
+}
+```
+
+## THE PROBE HEADER'S CONTRACT (clause e), verbatim
+
+```
+*** #530: IT IS NOW THE WITNESS AND THE DETECTOR.  Sessions 1-3 are the witness below, unchanged but
+#  for the sentinel; the #530 sessions at the end are the detector for the fix. ***
+#
+#  THE FIX (disposition B, regress/artifacts/lcaisalane/FABLE_F2_RULING_20260914.md): the byte for port
+#  P sits at buffer position (P & 3) % len on BOTH arms; `len == 0' is refused first; no latch, no
+#  announce (there is no event -- member 4, ACCEPT).  Table 1 (37 rows): HEAD 19/37, fix 37/37
+#  (regress/artifacts/lcaisalane/fix530_20260914/HEAD_det.out, FIX_det.out); after the pass-2 repair
+#  (51 rows) see that dir's table 2; after closing pass 1's class closure (77 rows) its table 3; after
+#  closing pass 2's tail cells and phantom-read rows (93 rows) its table 4; after closing pass 3's
+#  fallthrough class closure (111 rows) its table 5.
+#
+#  THE CELL SPACE, rowed WHOLE since closing pass 2 (the direct and head cells since closing pass 1, the
+#  tail cells since closing pass 2; pass 2 and closing pass 1 found the same class --
+#  a (len, lane, direction) cell of the position rule with no row -- one cell over each time, so the
+#  repair rows the cross rather than the next cell): direct widths len 1, 2, 4, 8 x lane 0-3 x R/W,
+#  every cell rowed (the read side of len 4 at lanes 2/3 FULL-register, not only a single-lane mask);
+#  split HEADS len 1-7 at lane 3 x R/W (a head ends at a port 0x1f mod 0x20; this probe's is 0x3ff);
+#  split TAILS len 1-7 at lane 0 x R/W (a tail starts at the next port, 0 mod 0x20) -- tails of len 1,
+#  2 and 4 are the direct lane-0 cells, and tails of len 3, 5, 6 and 7 are rowed at the 8042 DATA port
+#  0x60 (sessions 4f `tailr' / `tailw', since closing pass 2).  *** THIS SAID "split TAILS start at port
+#  0x400, where nothing is mapped, so a tail cell shows only as a whole-access failure ... not rowed per
+#  length" UNTIL CLOSING PASS 2, AND IT WAS MEASURED FALSE: tails start at EVERY port 0 mod 0x20 (the
+#  8259 at 0x20/0xa0, the 8253 at 0x40, the 8042 at 0x60), and the Opus seat's tail mis-placement
+#  mutant scored 77/77 because the split rows' tails at the unmapped 0x400 can show a decline but never
+#  a position. ***
+#
+#  CONTRACT (clause e) -- the detector is DESIGNED to catch, on EITHER arm, at every cell of that space:
+#  a byte placed at any position other than (P & 3) % len (a single-cell mis-decode included -- the
+#  Opus closing seat's c1_w2, c1_w1w, c1_r4 each scored 51/51 before this repair); and, by name: the
+#  removed exit reinstated at any of the six cells that ended the host (reads AND
+#  writes at (1,2) (1,3) (2,3)); a decline beyond the width or at-and-beyond it, or of any lane-0 wide
+#  access (a store dropped, a load's register kept); a store arm narrowed to len <= 2 or its stores
+#  dropped or forwarded to another port; one arm folding and the other not; the byte placed at position 0
+#  instead of (P & 3) % len (the clamp, anchored on (2,1) == (2,3)); a lane decode that drops bit 1 or
+#  the `& 3', on the read arm or the write arm; `& (len - 1)' for `% len' (the len-3/5 split heads); a
+#  byte replicated into every position, at len 2, 4 or 8; the read arm's success return turned into a
+#  failure; the write arm's `return' removed, so a store falls into the read arm and makes a phantom
+#  read of the stored port (x_wfallthru -- the `iir' rows, since closing pass 2: every port stored to
+#  before then read back without a side effect, so it scored 77/77 and was called disclosed by table 3's
+#  PRETABLE/POSTTABLE only, never here) -- SCOPED since closing pass 3 (flagship ruling, option (c)): that
+#  edit, and the same edit gated on the width or the lane, is caught at LANE 2 at every direct width (4h
+#  `iir', 4i `iirw': IIR 0x3fa with TXRDY armed) and at LANE 0 at every direct width (4k `kbcq': the 8042
+#  data port with a reply queued); at the split-HEAD cells it is EQUIVALENT on alphabook1 (heads land on
+#  ports 0x1f mod 0x20 -- 0x3ff SCR, or unmapped -- none with a read side effect); at LANE 1 (no port
+#  with an armable read side effect is rowed) and at LANE-3 DIRECT (the wdc status port 0x1f7 would carry
+#  it with an IRQ pending; not rowed) it is DISCLOSED.  *** "The write arm's `return' removed" stood here
+#  UNSCOPED while its rows sat at (1,2) and (4,2) only, and the Opus closing-pass-3 seat MEASURED four
+#  gated forms at 93/93 -- W4 exempts exactly those two widths. ***  And the read arm's forward DUPLICATED
+#  (RD2 -- a second phantom read; outside the contract as first written, rowed since repair 4 at IIR,
+#  4j `iirr').  *** TABLE 1'S CONTRACT CLAIMED MOST OF THIS AT 37 ROWS AND WAS MEASURED FALSE: the Opus
+#  pass-2 seat built ten mutants that scored 37/37, nine changing a guest outcome -- no row stored at len
+#  4/8 -- and measured that the split heads it DISCLOSED as needing a translated access split on K0SEG. ***
+#  DISCLOSED, not caught: the len-0 refusal (no producer); the zero-fill of the positions other than
+#  `ofs' (p_nozero -- EQUIVALENT: memory_rw's #95 pre-zero already clears the buffer); an address-decode
+#  edit above port 0x3ff (p_port10 -- not an edit of the fix; measured 51/51 by the Opus closing seat.
+#  This said "every probed port is below 0x400", and the split TAILS reach port 0x400 -- grok and the
+#  Opus seat, closing pass 1 -- so the premise was wrong and the scoping reason is the one that stands);
+#  the DISCARDED sparse byte offset a<4:0> -- the size field a<4:3> included (lcaisasize) -- which the
+#  handler shifts away, so an edit keyed on it (the Opus closing-pass-3 seat's H1b, keyed on a<4:2> =
+#  0x1c: the 4-byte split head, 93/93) is not seen [widened from "the size field a<4:3>" by the flagship
+#  ruling, closing pass 3]; the hardware QUADWORD ENCODING's route (lcaisaqword: on the
+#  21066 a<6:5> = 11 with a<4:3> = 11 is a quadword at port P, which the model forwards to P|3 -- NOT the
+#  len-8 lane this probe rows, which follows the same (P & 3) % len rule as every other width); the
+#  missing PHYSICAL (lcaisaphys); the end-of-window clamp at port 0xffff (nothing is mapped there).
+#  Disclosed BY CLASS (closing pass 2; each measured 77/77 by the Opus seat, regress/artifacts/lcaisalane/
+#  opus_c2_20260914/): a decline or mis-decode keyed on an EXACT PORT VALUE (kimi-k3's `relative_addr ==
+#  0x400 && len == 4' -- the p_port10 class: the body never tests the port against a constant); a
+#  mis-decode keyed on the DATA (codex's `ofs == 2 && !data[2]', generally `data[ofs] ? data[ofs] :
+#  data[0]' -- every VALUE store row carries a NONZERO correct byte and the `iir' rows store all-zero
+#  words, so at no store cell does a row hold a zero correct byte beside a nonzero neighbour; "the correct
+#  byte is 0" is unrowed).  [Corrected 2026-09-14 from closing pass 3 (codex, grok, kimi-k3): this said
+#  "every store row carries a NONZERO correct byte", false since session 4h stores zero.]  EQUIVALENT on alphabook1, named: the inner forward's return value honoured on the
+#  read arm, or forced to success on the write arm -- no ISA device there fails an access, and an
+#  unmapped forward returns success with a zero fill.
+#  EQUIVALENT by construction, named so no table is spent on them (kimi-k3, pass 2): restoring the dead
+#  `% len' on the write arm's index (`ofs' is already reduced), and reinstating `if (ofs > len) exit(1)'
+#  AFTER the fold (unsatisfiable once ofs < len) -- the reinstated exit that matters is on the UNFOLDED
+#  lane, which the table's m_exit builds.
+#
+#  *** ```
+
+## THE REPAIR DIFF -- the 93-row instrument -> the 111-row instrument (`git diff --no-index`, verbatim; 6 hunks)
+
+```diff
+diff --git "a/C:\\DocumentNoSnc\\CC\\GXEMUL\\GXEMUL-SEC\\regress\\artifacts\\lcaisalane\\fix530_20260914\\table4\\lca_isalane_probe.table4.py" "b/C:\\DocumentNoSnc\\CC\\GXEMUL\\GXEMUL-SEC\\regress\\lca_isalane_probe.py"
+index d68a417..0be08a1 100644
+--- "a/C:\\DocumentNoSnc\\CC\\GXEMUL\\GXEMUL-SEC\\regress\\artifacts\\lcaisalane\\fix530_20260914\\table4\\lca_isalane_probe.table4.py"
++++ "b/C:\\DocumentNoSnc\\CC\\GXEMUL\\GXEMUL-SEC\\regress\\lca_isalane_probe.py"
+@@ -69,5 +69,7 @@
+ #  (51 rows) see that dir's table 2; after closing pass 1's class closure (77 rows) its table 3; after
+-#  closing pass 2's tail cells and phantom-read rows (93 rows) its table 4.
++#  closing pass 2's tail cells and phantom-read rows (93 rows) its table 4; after closing pass 3's
++#  fallthrough class closure (111 rows) its table 5.
+ #
+-#  THE CELL SPACE, rowed WHOLE since closing pass 1 (pass 2 and closing pass 1 found the same class --
++#  THE CELL SPACE, rowed WHOLE since closing pass 2 (the direct and head cells since closing pass 1, the
++#  tail cells since closing pass 2; pass 2 and closing pass 1 found the same class --
+ #  a (len, lane, direction) cell of the position rule with no row -- one cell over each time, so the
+@@ -98,3 +100,13 @@
+ #  before then read back without a side effect, so it scored 77/77 and was called disclosed by table 3's
+-#  PRETABLE/POSTTABLE only, never here).  *** TABLE 1'S CONTRACT CLAIMED MOST OF THIS AT 37 ROWS AND WAS MEASURED FALSE: the Opus
++#  PRETABLE/POSTTABLE only, never here) -- SCOPED since closing pass 3 (flagship ruling, option (c)): that
++#  edit, and the same edit gated on the width or the lane, is caught at LANE 2 at every direct width (4h
++#  `iir', 4i `iirw': IIR 0x3fa with TXRDY armed) and at LANE 0 at every direct width (4k `kbcq': the 8042
++#  data port with a reply queued); at the split-HEAD cells it is EQUIVALENT on alphabook1 (heads land on
++#  ports 0x1f mod 0x20 -- 0x3ff SCR, or unmapped -- none with a read side effect); at LANE 1 (no port
++#  with an armable read side effect is rowed) and at LANE-3 DIRECT (the wdc status port 0x1f7 would carry
++#  it with an IRQ pending; not rowed) it is DISCLOSED.  *** "The write arm's `return' removed" stood here
++#  UNSCOPED while its rows sat at (1,2) and (4,2) only, and the Opus closing-pass-3 seat MEASURED four
++#  gated forms at 93/93 -- W4 exempts exactly those two widths. ***  And the read arm's forward DUPLICATED
++#  (RD2 -- a second phantom read; outside the contract as first written, rowed since repair 4 at IIR,
++#  4j `iirr').  *** TABLE 1'S CONTRACT CLAIMED MOST OF THIS AT 37 ROWS AND WAS MEASURED FALSE: the Opus
+ #  pass-2 seat built ten mutants that scored 37/37, nine changing a guest outcome -- no row stored at len
+@@ -106,3 +118,6 @@
+ #  Opus seat, closing pass 1 -- so the premise was wrong and the scoping reason is the one that stands);
+-#  the size field a<4:3> (lcaisasize); the hardware QUADWORD ENCODING's route (lcaisaqword: on the
++#  the DISCARDED sparse byte offset a<4:0> -- the size field a<4:3> included (lcaisasize) -- which the
++#  handler shifts away, so an edit keyed on it (the Opus closing-pass-3 seat's H1b, keyed on a<4:2> =
++#  0x1c: the 4-byte split head, 93/93) is not seen [widened from "the size field a<4:3>" by the flagship
++#  ruling, closing pass 3]; the hardware QUADWORD ENCODING's route (lcaisaqword: on the
+ #  21066 a<6:5> = 11 with a<4:3> = 11 is a quadword at port P, which the model forwards to P|3 -- NOT the
+@@ -114,4 +129,6 @@
+ #  mis-decode keyed on the DATA (codex's `ofs == 2 && !data[2]', generally `data[ofs] ? data[ofs] :
+-#  data[0]' -- every store row carries a NONZERO correct byte, so "the correct byte is 0" is unrowed at
+-#  every store cell).  EQUIVALENT on alphabook1, named: the inner forward's return value honoured on the
++#  data[0]' -- every VALUE store row carries a NONZERO correct byte and the `iir' rows store all-zero
++#  words, so at no store cell does a row hold a zero correct byte beside a nonzero neighbour; "the correct
++#  byte is 0" is unrowed).  [Corrected 2026-09-14 from closing pass 3 (codex, grok, kimi-k3): this said
++#  "every store row carries a NONZERO correct byte", false since session 4h stores zero.]  EQUIVALENT on alphabook1, named: the inner forward's return value honoured on the
+ #  read arm, or forced to success on the write arm -- no ISA device there fails an access, and an
+@@ -759,3 +776,3 @@ print("")
+ #  ---- SESSION 4h (#530 closing pass 2): a store to a port whose READ has a side effect ---------------------------
+-#  Every port the rows above store to reads back without a side effect, so deleting the write arm's `return' -- the
++#  Every port the 77-row instrument stored to read back without a side effect, so deleting the write arm's `return' -- the
+ #  store then FALLS INTO the read arm, a phantom 1-byte read of the same port -- scored 77/77 (x_wfallthru, table 3 and
+@@ -778,2 +795,44 @@ print("")
+ 
++#  ---- SESSIONS 4i-4k (#530 closing pass 3, REPAIR 4 -- the flagship ruling, option (c)) -------------------------
++#  Closing pass 3 measured the same channel escaping GATED: `return' removed only for len 8 (W1) or len 2 (W2), for
++#  every width but the two 4h stores at (W4), or only off lane 2 (W3) -- all 93/93 and guest-visible (the Opus seat,
++#  regress/artifacts/lcaisalane/opus_c3_20260914/) -- and its read-arm mirror RD2 (the forward DUPLICATED) likewise.
++#  The flagship ruled the contract's unscoped x_wfallthru entry a wrong record to be fixed in-round by rowing every
++#  OBSERVABLE cell of the class (regress/artifacts/lcaisalane/FABLE_C3_RULING_20260914.md).  A phantom read shows only
++#  where the forwarded-to port's READ has a side effect that is ARMED: lane 2 -> IIR 0x3fa (TXRDY armed, as 4h); lane 0
++#  -> the 8042 data port 0x60 with a reply QUEUED (a self-test's 0x55, then 0xd1 so the store lands in output_byte, not
++#  in the keyboard; a phantom read pops the 0x55 and the flat status's DIB bit drops).  The 8042 queue is a FIFO, so
++#  each lane-0 width gets its own process (one queued reply each).  New sessions only: no earlier session changes.
++P4i = [(iir_arm() + [LDQ(T1, 8, T0)] + sent(T2) + [LDBU(T2, 0, T1)], "t2"),                     # control, no lca store
++       (iir_arm() + [LDQ(T1, 16, T0), STW(ZERO, 0, T1), LDQ(T1, 8, T0)] + sent(T4) + [LDBU(T4, 0, T1)], "t4"),  # (2,2)
++       (iir_arm() + [LDQ(T1, 16, T0), STQ(ZERO, 0, T1), LDQ(T1, 8, T0)] + sent(T5) + [LDBU(T5, 0, T1)], "t5")]  # (8,2)
++a4i, g4i = dsession("iirw", C4h, P4i, ["ctl", "stw", "stq"])
++row("iirw alive", "alive" if a4i else "dead", "alive", "CONTROL")
++row("iirw ctl", hx(iir3(g4i["ctl"])), hx(0x02), "CONTROL: IER 0 -> ETXRDY sets IIR_TXRDY")
++row("iir stw", hx(iir3(g4i["stw"])), hx(0x02), "(2,2) STW 0 -> SP(0x3fa): TXRDY survives (W1/W2/W4: gated fallthrough)")
++row("iir stq", hx(iir3(g4i["stq"])), hx(0x02), "(8,2) STQ 0 -> SP(0x3fa): TXRDY survives (W1/W4)")
++print("")
++
++C4j = [k0(FLAT(UART_IER)), k0(SP(UART_IIR))]
++P4j = [(iir_arm() + [LDQ(T1, 8, T0)] + sent(T4) + [LDBU(T4, 0, T1)], "t4")]                     # (1,2) READ via lca
++a4j, g4j = dsession("iirr", C4j, P4j, ["rd"])
++row("iirr alive", "alive" if a4j else "dead", "alive", "CONTROL ((1,2) read -- a host death on HEAD)")
++row("iir lca rd", hx(iir3(g4j["rd"])), hx(0x02), "(1,2) LDBU SP(0x3fa) after arming: TXRDY read ONCE (RD2: forwarded twice)")
++print("")
++
++KBC_WROUTPORT = 0xd1                # the next data-port write goes to output_byte, not to the keyboard
++for w, stop in (("b", STB), ("w", STW), ("l", STL), ("q", STQ)):
++    C = [k0(FLAT(KBC_CMD)), KBC_SELFTEST, KBC_WROUTPORT, k0(SP(KBC_DAT))]
++    P = [([LDQ(T1, 0, T0), LDQ(T2, 8, T0), STB(T2, 0, T1), LDQ(T2, 16, T0), STB(T2, 0, T1)]
++          + sent(T3) + [LDBU(T3, 0, T1)], "t3"),                                                # flat status, reply queued
++         ([LDQ(T1, 24, T0), stop(ZERO, 0, T1), LDQ(T1, 0, T0)] + sent(T4) + [LDBU(T4, 0, T1)], "t4")]  # lca store, status
++    ak, gk = dsession("kbcq_" + w, C, P, ["pre", "post"])
++    dib = lambda v: None if v is None else v & 0x01
++    lenw = {"b": 1, "w": 2, "l": 4, "q": 8}[w]
++    row("kbcq %s alive" % w, "alive" if ak else "dead", "alive", "CONTROL")
++    row("kbcq %s pre" % w, hx(dib(gk["pre"])), hx(0x01), "CONTROL: the self-test reply is queued (status DIB)")
++    row("kbcq %s dib" % w, hx(dib(gk["post"])), hx(0x01),
++        "(%d,0) ST 0 -> SP(0x60): the queued reply survives the store (W3: lane-gated fallthrough)" % lenw)
++print("")
++
+ #  ---- SESSIONS 5-10: the six cells that ENDED THE HOST on HEAD, one process each -------------
+```
+
+## THE MEASURING SEAT'S CLOSING-PASS-3 ANSWER (what repair 4 answers)
+
+# VERDICT: GAP -- write arm: `return cpu->memory_rw(...)` -> the bare call followed by `if (len != 8) return 1;` (W1). Scores 93/93 (`logs/probe_W1.raw`) and changes a guest-visible outcome: an STQ of 0 to SP(0x3fa) leaves flat IIR & 3 at 0x1 instead of 0x2, so the pending TXRDY is lost (`logs/disc_W1.out` vs `logs/disc_base.out`). MEASURED.
+
+The same channel escapes three more ways, all 93/93 and all guest-visible, all measured: W2 (`len != 2`), W3 (a LANE gate, `(relative_addr & 3) != 0`), and W4 (`len == 1 || len == 4`, which exempts exactly the two widths the `iir` rows use). A fifth escape, RD2, is the read-arm mirror: the read arm forwards twice. The x_wfallthru channel is pinned at 2 of the write cells and at no read cell.
+
+Liveness `LCA530_C3_OPUS_20260914`.  `_scratchpad/CHECKPOINT.md` line 1, verbatim:
+
+    # CHECKPOINT -- 2026-09-14 ~05:0x   HEAD 9c91999 (records)   #529 TABLE 8 PROBES RUNNING; #530 CLOSING PASS 2 FIRED
+
+Seat: Opus 5, Agent tool, MEASURING.  Tree: `GXEMUL-SEC/` only.  The only project directory I wrote into is this one
+(`opus_c3_20260914/`: this file, `PREDICT.out`, `logs/`, `instrument/`), following the c2 seat's layout, so every number
+below cites a durable path.
+
+---
+
+## HOW IT WAS MEASURED
+
+* **Clone.** `/tmp/gxopus530c3` = `cp -a build/`, plus GXEMUL-SEC's working-tree `src/devices/dev_lca.c` (md5 `8084ff07`,
+  the same as table 4's baseline).
+  * `BASELINE_CMP CLEAN`.
+  * Every build did `rm src/cpus/*.o src/devices/dev_lca.o`, then checked `[ gxemul -nt dev_lca.c ] && [ dev_lca.o -nt dev_lca.c ]`.
+  * A clone-local `.MUTANT` sentinel was held while mutants were applied.
+  * Both drivers restored the clone and reported `restored == base (byte-identical)`.
+  * No mutant binary was identical to base.
+* **Instrument.** The shipped `regress/lca_isalane_probe.py`, frozen as a scratch copy, md5 `72e8b25b`.
+  * It is byte-identical to the shipped file.
+  * It is AST-identical to `fix530_20260914/table4/lca_isalane_probe.table4.py` (checked with `ast.dump`).
+  * Its md5s are in `logs/INSTRUMENT.md5` and `logs/INSTRUMENT2.md5`.
+* **Discriminator.** `instrument/disc530c3.frozen.py`.  This is NOT a detector.
+  * Its encoders, session and build helpers are copied verbatim from the probe.
+  * It runs on unmodified `alphabook1`, and every access in it is a guest instruction.
+  * It ran on base and on all seven escaping mutants.  Each mutant differs from base ONLY on its own channel, which
+    doubles as a cross-control.
+* **Predictions before measurement.** `PREDICT.out` (mtime 09:58:42) predates the first completed log
+  (`probe_base.raw`, 10:00:06).  **Every one of the 13 mutants scored exactly as predicted, with exactly the red rows
+  predicted.**
+* **Load.** Two probe lanes, and discriminators only after both lanes had finished.
+  * `LCAISALANE_RETRIED=none` on all 13 probe legs.
+  * Every probe log ends `LCAISALANE_DONE`, and every discriminator log ends `DISC530C3_DONE`.  Both were checked by
+    `tail -1` before copying.
+* **Drivers.** Frozen copies: `instrument/drive530c3.run-094641.sh` (table 1) and `drive530c3b.run-095747.sh`
+  (table 2 + discriminators).  Their stdout is in `logs/driver1.out` and `logs/driver2.out`.
+
+---
+
+## THE DENOMINATOR -- 13 mutants of the FIXED handler plus base, both tables
+
+| id | edit | 93-row | red rows | discriminator, base -> mutant | disposition |
+|---|---|---|---|---|---|
+| base | -- | **93/93** | -- | (all channels at their base value) | |
+| **W1** | write: bare forward, then `if (len != 8) return 1;` | **93/93** | none | STQ 0 -> SP(0x3fa), flat IIR&3: **0x2 -> 0x1** | **the GAP** |
+| **W2** | write: bare forward, then `if (len != 2) return 1;` | **93/93** | none | STW 0 -> SP(0x3fa): **0x2 -> 0x1**; STW -> SP(0x60): 8042 DIB **1 -> 0** | same class |
+| **W3** (own) | write: bare forward, then `if ((relative_addr & 3) != 0) return 1;` | **93/93** | none | STB and STW 0 -> SP(0x60) with a queued reply: 8042 DIB **1 -> 0** | same class, lane axis |
+| **W4** (own) | write: bare forward, then `if (len == 1 \|\| len == 4) return 1;` | **93/93** | none | STQ and STW at 0x3fa **0x2 -> 0x1**; STW at 0x60 DIB **1 -> 0** | same class; it exempts exactly the `iir` widths |
+| **RD2** (own) | read arm: the forward line duplicated | **93/93** | none | LDBU SP(0x3fa) after arming TXRDY, &3: **0x2 -> 0x1** | read-arm mirror (below) |
+| D1 (deepseek) | write `byte = data[ofs] ? data[ofs] : data[0];` | **93/93** | none | STL 0x01 -> SP(IER 0x3f9), flat IER: **0x0 -> 0x1** | disclosed data class; its warrant is false (Q3) |
+| H1a (kimi-k3, as written) | after `ofs = ...`: `if ((relative_addr & 0x1f) == 0x1c) ofs = 0;` | **93/93** | none | -- | **EQUIVALENT by construction** (below) |
+| H1b (pre-shift) | save `lo5 = relative_addr & 0x1f` before `>>= 5`; `if (lo5 == 0x1c) ofs = 0;` | **93/93** | none | LDQ SP(0x3ff)+0x1c: **0x5a000000 -> 0x5a**; STQ 0x7e000000 there, SCR: **0x7e -> 0x0**; direct LDL (4,3) unchanged 0x5a000000 | discarded-address-bit class; disclosure wording too narrow (Q3) |
+| r_fwdret (kimi-k3 R1) | read: `if (!cpu->memory_rw(...)) return 0;` | **93/93** | none | -- | **still EQUIVALENT** (below) |
+| w_ret0 (kimi CLI Q3.3) | write: bare forward, then `return 0;` | **89/93** | `tailw t7/t6/t5/t3` = 0x4 vs 0x44 | -- | **killed**, so the "escapes 93/93" claim is false on this instrument |
+| dd_decl (kimi CLI Q3.1) | write: `if (!data[ofs]) return 0;` before `byte = data[ofs];` | **89/93** | `tailw t7/t6/t5/t3` = 0x4 vs 0x44 | -- | **killed**, so the "escapes 93/93" claim is false on this instrument |
+
+Each mutant's exact source diff is in `logs/<id>.diff`, and its probe log is in `logs/probe_<id>.raw`.
+
+**Why w_ret0 and dd_decl die, checked against the code rather than argued from the scores:**
+
+* `MEMORY_RW`'s split loop (`cpus/memory_rw.c`, `while (len > granule - offset)`) returns `MEMORY_ACCESS_FAILED` as
+  soon as a HEAD chunk fails, before the tail is issued.
+* The `tailw` heads land at the unmapped port 0x5f:
+  * under w_ret0 every head returns 0;
+  * under dd_decl every head carries only zero bytes of `tailv(h)`, so it is declined.
+* Either way the tail never reaches 0x60, and the 8042 command byte keeps the per-phase reset value 0x04.
+* So the per-phase reset that table 4's `d_w6tail` justified is also what kills these two.
+
+**The STx_C route kimi raised for w_ret0 is real but moot here.**  The detector already kills w_ret0.
+
+---
+
+## W1 / W2 -- MEASURED, AND MY READING OF THE FLOOR QUESTION
+
+**Measurement.**  W1 and W2 both score 93/93 with zero red rows.  In the discriminator, W1 flips only the STQ phase
+(0x2 -> 0x1) and W2 flips only the STW phase (0x2 -> 0x1).  The control phase, which makes no lca store, stays 0x2 on
+all 8 binaries.
+
+**Why no row can catch them.**
+
+* In `dev_ns16550.c`, the only READ arms with side effects are:
+  * `com_data` (0x3f8, lane 0), which calls `console_readchar`;
+  * `com_iir` (0x3fa, lane 2), which does `&= ~IIR_TXRDY`.
+* Every other ns16550 read is inert.
+* In `dev_pckbc.c`, a data-port read pops the output queue.  **On an empty queue it returns `last_scancode`**, so the
+  pop is unobservable unless a reply is pending.
+* The 93 rows store to a read-side-effect port only in session 4h, at 0x3fa, at len 1 and len 4.
+* The `tailw` stores to 0x60 find an empty queue: each phase's `kbc_rdcmd` re-arms 0x20 AFTER the store.
+* The four len-8 store rows (`st8 lane3`, `w80`, `w81`, `w82`) and the four len-2 store rows all hit inert registers:
+  SCR, MCR, IER and MSR.
+
+**Is it a floor cell?  Both readings, with the facts each rests on.**
+
+**AGAINST floor (grok's reading).**
+
+* The write body tests neither `len` nor the lane.
+* More decisively, **whether a phantom read is visible is a property of the FORWARDED DEVICE** (does this port have a
+  read side effect?).  The handler never reads that property.
+* Under the pass-11 floor ("the guard's dominating predicates x the device-state lvalues the repair path reads"),
+  nothing obliges a (len, lane) row on this channel.
+
+**The precedent the other seats cite does not say what they cite it for.**
+
+* `c1_w1w` was graded **clause-(e) COVERAGE DEBT, not a floor breach**, by the measuring seat that built it:
+  `opus_c1_20260914/OPUS_ANSWER.md`, line 11, "the write body never tests `ofs' against a constant".
+* It was rowed anyway, as part of the position-cell class closure.
+* So the precedent is *"graded debt, rowed because it sat in the position cell space"*.  It is not *"ruled floor"*.
+* The position cell space is not where W1 lives.
+
+**FOR a contract breach (codex, kimi CLI, glm), and this is my reading.**
+
+* The CONTRACT names the edit.  It lists "the write arm's `return' removed, so a store falls into the read arm and
+  makes a phantom read of the stored port (x_wfallthru -- the `iir' rows ...)".
+* That entry sits in the "DESIGNED to catch" list with **no width or lane scope**.
+* W1 is that named edit, with one conjunct.  A detector that catches a named edit only at the widths its rows happen
+  to use has not caught the edit.
+* **The shape is `#499`'s, measured here directly.**
+  * Closing pass 2's mutant was rowed at exactly the widths it was measured at (STB, STL).
+  * W4, which exempts exactly those two widths, sweeps the 93-row table clean.
+  * Two consecutive passes have now breached the fallthrough channel.  The repair-chain amendment says the next repair
+    owes the CLASS closure, not the next cell.
+
+**My disposition.**
+
+* It is not a DEPENDS-ON (d) breach of the fix: the fix did not touch the `return`.
+* It IS a breach of the contract as written.
+* So, at minimum, L4: the x_wfallthru entry claims more than the rows deliver.
+* It is L2 if the round keeps the claim unscoped.
+* Either the rows or the claim must change in-round.
+* The adjudication between "row the class" and "scope the claim and file" belongs to the flagship.  Both options are
+  priced below.
+
+### What rowing the class costs, versus len 2 and 8 at 0x3fa
+
+The observable exists only where a port with a read side effect sits at that lane.  Per lane, on alphabook1:
+
+| lane | read-side-effect port | cells | cost | status |
+|---|---|---|---|---|
+| 2 | IIR 0x3fa | direct len 1, 2, 4, 8 (1 and 4 rowed) | **+2 phases in session 4h** (STW, STQ): the discriminator's own phases.  They kill W1, W2 and W4 (measured) | measured channel |
+| 0 | 8042 data 0x60, with a reply queued (flat self-test, then 0xd1 so that the store lands in `output_byte` and a phantom read pops the 0x55; flat status & DIB) | direct len 1, 2, 4, 8 | **1 new session, 4 phases.**  STB and STW measured; they kill W3 (and W2 and W4 at STW) | measured channel |
+| 0 | same, before each split store | tails 3, 5, 6, 7 | 4 phases.  Arming a reply before each `tailw` store would change an existing session's commands and break the table-targeting rule, so it would need a new session | not built |
+| 0 | RBR 0x3f8 (`console_readchar`) | -- | needs console input, e.g. MCR loopback | not built; the 8042 is simpler |
+| 1 | none established.  ns16550 IER/LSR reads are inert; I did not check 8253 0x41 or CMOS 0x71 | direct | -- | disclose "no side-effect port rowed" |
+| 3 direct | wdc0 status 0x1f7.  A read deasserts its IRQ (`dev_wdc.c`, the `wd_command` arm).  BUS_ISA_IDE0 is on for LCA | direct | needs a pending wdc IRQ plus an IRR readback | channel exists in principle; not built |
+| 3 heads | none.  Head ports are 0x1f mod 0x20 (0x3ff SCR; 0x1f, 0x3f and 0x5f unmapped) | heads 3, 5, 6, 7 | -- | **EQUIVALENT on alphabook1**, so disclose |
+
+**Recommendation, as a floor on what must happen rather than a ceiling.**
+
+* Add the two 0x3fa phases, plus the lane-0 direct session.
+  * That is 6 phases and one new session, and no existing session's commands change.
+  * It kills every escape in this table except RD2.
+* Add one sentence to the contract.  It should say the fallthrough is caught at lanes 0 and 2 at every direct width,
+  EQUIVALENT at the head cells (no such port), and disclosed at lane 1 (no port rowed) and at lane-3 direct (wdc, not
+  rowed).
+* Adding only the 0x3fa pair leaves W3 escaping.  **The lane axis is the same class one axis over.**
+
+---
+
+## RD2 -- THE READ-ARM MIRROR (own hunt)
+
+**Edit.**  Duplicate the read arm's forward line.  **Score:** 93/93.
+
+**Guest-visible difference.**  An LDBU of IIR through the sparse window, after TXRDY is armed, reads IIR & 3 =
+**0x1 instead of 0x2**: the first forward acknowledges TXRDY and the second forward's byte is the one delivered.  This
+is the most realistic escape in the table.  An interrupt handler reads IIR and RBR through this window; it does not
+STQ to FCR.
+
+**Why it escapes.**
+
+* The only read-side-effect port the probe READS through the handler is 0x60.
+* There the 8042 answers a second, empty-queue read with `last_scancode`, which is the same 0x55.
+* So `live`, `tailr ctl` and `tailr t*` stay green.  Measured.
+
+**Grading.**  It is an ADDED forward, not a (d) shape of the fix, and the contract does not name it.  So it is
+clause-(e) debt outside the contract as written.
+
+**Cost to row.**  One phase: LDBU SP(0x3fa) after `iir_arm()`, want & 3 == 0x2.  That is the cheapest row in this answer.
+
+---
+
+## H1 -- BOTH KEYINGS
+
+**H1a, as kimi-k3 wrote it (post-shift): EQUIVALENT by construction.  Measured 93/93, no reds.**
+
+* After the shift, `relative_addr` is the port.
+* `port & 0x1f == 0x1c` implies `port & 3 == 0`, so the port is at lane 0.
+* At lane 0, `ofs = 0 % len` is already 0, so forcing it to 0 changes nothing at any port.
+* **The premise "should red MCR rows" is false.**  MCR (0x3fc) is exactly such a port, and it is lane 0.
+
+**H1b, keyed on the pre-shift discarded low 5 bits: 93/93, guest-visible.**
+
+* LDQ at SP(0x3ff)+0x1c is a 4-byte head at port 0x3ff.
+* Base returns 0x5a000000; H1b returns 0x5a.
+* STQ 0x7e000000 at the same address: base leaves SCR = 0x7e, H1b leaves SCR = 0x00.
+* The direct LDL at SP(0x3ff), which is the SAME (4,3) cell, is unchanged at 0x5a000000.
+
+**What this shows.**
+
+* The h=4 head cell IS rowed: it is handler-identical to the direct (4,3) cell.
+* A mutant can see the difference only through bits the handler discards.
+* That is the discarded-address-bit class, as the brief reads it.
+* But see Q3.4: the disclosure as worded names only a<4:3>, and 0x1c is a<4:2> = 111.
+
+---
+
+## D1 -- 93/93, DISCLOSED CLASS, DISCRIMINATOR MEASURED
+
+**Discriminator.**  STL 0x00000001 to SP(IER 0x3f9) is lane 1, len 4, ofs 1, with `data[1] = 0` and `data[0] = 1`.
+Flat IER reads 0x0 on base and 0x1 under D1.
+
+**Why it escapes.**  Every store row's correct byte is either nonzero, or the whole stored value is zero (`iir stb`,
+`iir stl`, the `tailw` heads at 0x5f).  Either way, any substitute position supplies the same byte.
+
+**Why it is not a floor gap, contra deepseek.**  The body never tests the data value.  So the header's by-class
+disclosure is the right disposition, and its guest-visibility is already conceded by the disclosure.  The WARRANT
+sentence is what is wrong: see Q3.1.
+
+---
+
+## R1 -- r_fwdret IS STILL EQUIVALENT (93/93), AND THE WARRANT IS NOW READ RATHER THAN INFERRED
+
+The new `tailr` heads forward to the unmapped flat port 0x5f (paddr 0x1d000005f).  That is far above `physical_max`, so
+the forward reaches `memory_warn_about_unimplemented_addr` (`core/memory.c`).
+
+* That function prints the `non-existant` line when verbosity allows.  The table-4 base log shows those lines for 0x300
+  and 0x400.
+* It then returns `true` only when `halt_on_nonexistant_memaccess` is set.
+* Otherwise it returns `false`, and `memory_rw` zero-fills and takes `do_return_ok`.
+* So an unmapped forward returns OK.  r_fwdret's early return never fires, at 0x5f as at 0x400 and 0x300.
+
+**The disclosure stands as written.**
+
+---
+
+## Q1 -- THE CELL SPACE
+
+**The position enumeration is right, and none of my 13 shapes escapes through a position cell.**
+
+* The seven escapes fall into three groups:
+  * the fallthrough / forward-count channel (W1-W4, RD2);
+  * the disclosed data and discarded-bit classes (D1, H1b);
+  * equivalents (H1a, r_fwdret).
+* I did not re-run x_rot.  The c2 seat measured it at 38/77, and repair 3 changed no existing session, so its channel
+  check stands.  Table 4's `t_tails` (85/93) covers the eight new tail rows.
+
+**What THE CELL SPACE does not enumerate.**  The CONTRACT claims a property on a second axis: the number and direction
+of device accesses per guest access.  Its observable is a property of the forwarded PORT, not of (len, lane).  That axis
+is where every live escape in this answer sits.
+
+**The DISCLOSED items:**
+
+| item | status |
+|---|---|
+| address class (exact port value) | right |
+| forward-return equivalents | right: R1 re-measured, warrant read |
+| data class | right as a class; its warrant sentence is false (Q3.1) |
+| lcaisasize | too narrow as worded (Q3.4) |
+
+---
+
+## Q3 -- WRONG STATEMENTS
+
+1. **Header, disclosed-by-class, data.**
+   * The header says "every store row carries a NONZERO correct byte, so 'the correct byte is 0' is unrowed at every
+     store cell".
+   * This is false on the 93-row instrument.
+     * `iir stb` and `iir stl` store an all-zero value at (1,2) and (4,2).
+     * The `tailw` heads at 0x5f store zero bytes.
+     * codex, grok and kimi all found this.
+   * The true warrant: *"every store row's correct byte is nonzero OR its whole value is zero, so no row distinguishes a
+     substitute position when the correct byte is 0"*.
+   * Measured: D1 93/93.
+2. **Header CONTRACT, the x_wfallthru entry.**
+   * It claims the edit with no width or lane scope.
+   * The rows pin it at (1,2) and (4,2) at one port.
+   * W1-W4 are measured escapes of the named edit.
+   * This is the GAP above.  Its minimum repair is to scope the sentence, and I recommend adding the rows.
+3. **kimi-k3's H1 premise.**  It says the post-shift edit "keys PORT bits ... should red MCR rows".  It cannot red any
+   row: it is equivalent by construction (lane 0).  Measured 93/93.
+4. **Header, lcaisasize disclosure.**
+   * The disclosure reads "the size field a<4:3>".
+   * H1b keys on a<4:2> (0x1c).
+   * The class the handler actually discards is the whole pre-shift low five bits, a<4:0>.
+     * The size field a<4:3>.
+     * The split head's byte offset a<2:0>.
+   * Name the class by a<4:0>, or a bit-2-keyed mutant is outside both the contract and the disclosure.
+5. **The panel's "c1_w1w was ruled in-scope" premise** (glm, kimi CLI, codex).  Its measuring seat graded it
+   clause-(e) debt (`opus_c1_20260914/OPUS_ANSWER.md`, line 11).  It was rowed as part of the position class closure.
+   The precedent is weaker than cited, which is why my Q2 reading rests on the contract text and the repair-chain
+   amendment instead.
+6. **kimi CLI Q3.1 and Q3.3.**
+   * The claim: a data-keyed decline, and a forced-failure return on the write arm, each "escapes 93/93".
+   * Both measured **89/93**, killed by the four `tailw` rows through the split's head-failure abort (above).
+   * The mechanism kimi named (STx_C) is real, but the detector already sees these edits.
+
+**Verified, no error found:**
+
+* the fix comment (it now says "load or store", pass 2's omission corrected);
+* POSTTABLE 4's per-leg scores, as re-read from `table4/logs/lane*.out`;
+* the table-targeting rule, since repair 3 only added sessions.
+
+**Not checked:**
+
+* lane-1 read-side-effect ports (8253 0x41, CMOS 0x71);
+* the wdc 0x1f7 channel (not built);
+* RBR 0x3f8 (not built);
+* tables 1-3 (not re-run).
+
+---
+
+## CLONE
+
+Both drivers restored `/tmp/gxopus530c3`.  I then checked it by hand:
+
+* no `.MUTANT`;
+* `dev_lca.c` cmp-clean against GXEMUL-SEC;
+* `gxemul -nt dev_lca.c`.
+
+**The clone is DELETED**, together with `/tmp/gxopus530c3_bins`.
+
+* GXEMUL-SEC's `src/devices/dev_lca.c` is unchanged: md5 `8084ff07` before and after.
+* No process of mine is running.
+* No project path outside `regress/artifacts/lcaisalane/opus_c3_20260914/` was written.
+
+
+## KILL TABLE 5 on the 111-row instrument -- POSTTABLE
+
+```
+POSTTABLE -- #530 (lcaisalane) kill table 5, CLOSING PASS 3's REPAIR 4 (111 rows).  Written after the table (table5.out
+ends KILL530E_DONE); PRETABLE.out 11:37:50 predates FIX_r5/HEAD_r5, the launch (kill530e.run-115419.sh) and every log.
+
+DRIVER   kill530e.run-115419.sh (frozen), clone /tmp/gxlca530 (BASELINE_CMP CLEAN), own .MUTANT; 9 legs built; clone
+         RESTORED (re-checked by hand: no .MUTANT, dev_lca.c cmp-clean vs GXEMUL-SEC, gxemul -nt source); `restored ==
+         base (byte-identical)'; no mutant binary identical to base.
+INSTRUMENT  lca_isalane_probe.table5.py BYTE-IDENTICAL to the shipped regress/lca_isalane_probe.py (cmp) and to the frozen
+         copy FIX_r5 / HEAD_r5 ran (../lca_isalane_probe.r5.frozen.py): FIX_r5 111/111, HEAD_r5 68/111 (the 43 predicted).
+LOGS     9 logs/probe_*.raw, every one ends LCAISALANE_DONE; LCAISALANE_RETRIED=none on every leg.
+LOAD     two probe lanes beside #529's kill table 9 (four lanes) -- no retries.
+
+check_pred.out:  CHECKPRED exact=9 differs=0 of 9 measured (9 predicted)
+   base 111/111 A� head 68/111 (43 red: table 4's 41 + `iirr alive', `iir lca rd' -- the new session's (1,2) read is a
+   host death on HEAD) A� x_wfallthru 103 (iir stb/stl/stw/stq and the four kbcq dib rows) A� W1 109 (iir stq, kbcq q dib)
+   A� W2 109 (iir stw, kbcq w dib) A� W3 107 (the four kbcq dib rows -- every other lane-0 store lands on a port with no
+   reply queued) A� W4 107 (iir stw/stq, kbcq w/q dib) A� RD2 110 (iir lca rd) A� W5 110 (kbcq q dib -- that row's own
+   kill).  Every non-base leg DETECTED, every red set exactly as predicted: the Opus closing-pass-3 seat's five 93/93
+   escapes (W1-W4, RD2) are each red on the rows repair 4 added.
+
+FLOOR    (a) head 68/111; (d)/(e) the contract's x_wfallthru entry is now SCOPED to what the rows catch -- lane 2 and lane
+         0 at every direct width, the read-arm mirror RD2 at lane 2 -- with the head cells EQUIVALENT and lane 1 and
+         lane-3 direct DISCLOSED (the flagship ruling, part B, option (c)); the discarded-bit disclosure widened to a<4:0>.
+NOT RE-MEASURED  every table 1-4 kill: repair 4 ADDS sessions and changes no existing session's commands (the targeting
+         rule), so none can move.
+```
+
+## QUESTIONS
+
+1. **Is the x_wfallthru / forward-count enumeration right?**  The scoped contract says the phantom read is caught at lane 2
+   and lane 0 at every direct width, EQUIVALENT at the split-head cells (no read-side-effect port at 0x1f mod 0x20 on
+   alphabook1), and DISCLOSED at lane 1 and lane-3 direct.  Name any cell misclassified -- a head port that DOES have an
+   armable read side effect, a lane-1 port that does, a row whose channel cannot vary under the mutant it names (the
+   `kbcq' rows need exactly one reply queued; the `iir' rows need TXRDY armed).
+2. **Is there a floor gap in the 111-row detector?**  The smallest source edit to the FIXED `dev_lca.c` that changes a
+   guest-visible outcome and still scores 111/111 -- as an exact edit, the row you expected to catch it and why it cannot.
+   The DISCLOSED list (address class, data class, a<4:0>, lane-1 / lane-3-direct fallthrough, forward-return equivalents)
+   is outside the question; say if one is disclosed wrongly.
+3. **Which statement in the header, the fix comment, or POSTTABLE 5 is wrong?**
+
+
+## OPERATIONAL RULE FOR EVERY SEAT (appended by panel.sh, not by the author)
+
+**Do not run `run.sh`, any `gate_*.sh`, or the battery.** Every measurement you need is
+inlined above. A gate takes minutes -- longer than your response budget -- and a second
+concurrent invocation corrupts the operator run in progress, because the gates share one
+log directory. A seat that runs a gate produces no review AND may invalidate someone
+else s. Building and running a single detector or mutant in your own temp directory is
+fine and encouraged; driving the harness is not.
+
+If you want a measurement that is not inlined, NAME IT and say why. Naming it is worth
+far more to this panel than a timeout.
+
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg --files -g AGENTS.md -g '"'!node_modules'"' -g '"'!.git'"'" in C:\DocumentNoSnc\CC\GXEMUL
+ exited 1 in 229ms:
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "Get-Content -LiteralPath 'C:\\DocumentNoSnc\\CC\\GXEMUL\\_scratchpad\\panel_20260915_000144\\brief_sent.md' -Raw" in C:\DocumentNoSnc\CC\GXEMUL
+ succeeded in 92ms:
+# CLOSING PASS 4 on the #530 REPAIR 4 -- `lcaisalane`: is the 111-row detector now complete for its contract?  Liveness token `LCA530_C4_20260914`.
+
+VERDICT LINE FIRST: `CLOSES` (no floor gap in the 111-row detector) or `GAP: <exact source edit to dev_lca.c that scores 111/111
+and changes a guest-visible outcome>`, then the token.
+
+A routine mutation-testing review of an open-source hardware emulator (GXemul, a hardened fork).  Check premises, not only
+reasoning; say what you could not check.  Tree: `C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC\` ONLY.  Packet-fed seats: all
+facts are below; do not plan to read files.
+
+## WHY THIS PASS EXISTS
+Closing pass 3 (on the 93-row repair) was NOT clean.  Its measuring seat BUILT the x_wfallthru channel escaping GATED --
+the write arm's `return' removed only for len 8 (W1) or len 2 (W2), for all widths but the two the `iir' rows used (W4),
+or only off lane 2 (W3) -- and its read-arm mirror RD2 (the forward duplicated), each 93/93 and guest-visible.  The
+flagship seat, adjudicating last (regress/artifacts/lcaisalane/FABLE_C3_RULING_20260914.md, part B), ruled the contract's
+unscoped x_wfallthru entry a wrong record to fix in-round by rowing every OBSERVABLE cell of the class (option (c)):
+repair 4 adds session 4i `iirw' (STW/STQ at IIR 0x3fa, TXRDY armed), 4j `iirr' (an lca READ of IIR -- RD2), and four 4k
+`kbcq' processes (lane 0 at 0x60 with an 8042 reply queued, one per width); SCOPES the contract (caught at lanes 0 and 2
+at every direct width; EQUIVALENT at the head cells; DISCLOSED at lane 1 and lane-3 direct); and widens the discarded-bit
+disclosure to a<4:0>.  This closing pass VERIFIES THAT ENUMERATION; the chain closes on the first valid pass with zero
+floor breaches surviving adjudication.
+
+## SETTLED (re-stated because the questions depend on it)
+* Disposition B (adjudicated 8 of 9, flagship last): the byte for ISA port P sits at buffer position `(P & 3) % len` on
+  BOTH arms; `len == 0` refused first; no latch, no announce.  Every seat that walked the handler found the fix right in
+  every (len 1..8, ofs 0..3, direction) cell: no exit, no out-of-range index, no divide by zero.
+* On Alpha a handler `return 0` leaves a load's register unchanged and makes a store invisible except through the device.
+* memory_rw pre-zeroes a device read buffer (#95), so the read arm's zero-fill of the other positions is EQUIVALENT.
+* The 1 KB split (MRW_SPLIT_MASK 0x3ff) fires for any non-PHYSICAL access on a CPU with translate_v2p -- Alpha always --
+  so every split has a HEAD of 1..7 bytes at a port 0x1f mod 0x20 (lane 3) and a TAIL of 8-h (LDQ/STQ) or 4-h
+  (LDL/STL) bytes at the next port, 0 mod 0x20 (lane 0) -- measured; a declined tail fails a whole load, while a store
+  forwards its head before its tail fails (tables 2 and 3).
+* Kill-table targeting rule: repair 4 ADDS sessions and changes no existing session's commands, so no earlier kill moves;
+  tables 1-4 stand, table 5 measures the new rows.
+
+## THE FIX (`git diff`, verbatim -- the code is unchanged since pass 2; only its comment was corrected)
+
+```diff
+diff --git a/src/devices/dev_lca.c b/src/devices/dev_lca.c
+index 6873466..a7923f4 100644
+--- a/src/devices/dev_lca.c
++++ b/src/devices/dev_lca.c
+@@ -279,15 +279,25 @@ DEVICE_ACCESS(lca_isa)
+ 
+ 	relative_addr >>= 5;
+ 
+-	ofs = relative_addr & 3;
+-	if (ofs > len) {
+-		fatal("[ ofs=%i len=%i in lca_isa access function. "
+-		    "aborting ]\n", ofs, len);
+-		exit(1);
+-	}
++	/*
++	 *  #530: the byte for ISA port P sits at buffer position (P & 3) % len
++	 *  on BOTH arms -- the lane for the 21066's own len 4/8 accesses, and
++	 *  the rule the write arm already applied wherever the old guard let
++	 *  it run.  That guard's `ofs > len' exit(1) ended the host on a guest
++	 *  byte access to a port 2 or 3 mod 4 or a word access to a port 3 mod
++	 *  4 (ungated BWX; and at a port 3 mod 4 also the 1- or 2-byte head
++	 *  of an unaligned load or store that memory_rw splits at 1 KB),
++	 *  and the read arm discarded the
++	 *  fetched byte at ofs == len.
++	 *  One byte is forwarded whatever len is (the size field a<4:3> is
++	 *  not decoded here).  len 0 has no producer; refuse it before the %.
++	 */
++	if (len == 0)
++		return 0;
++	ofs = (relative_addr & 3) % len;
+ 
+ 	if (writeflag == MEM_WRITE) {
+-		byte = data[ofs % len];
++		byte = data[ofs];
+ 		return cpu->memory_rw(cpu, cpu->mem, LCA_ISA_BASE +
+ 		    relative_addr, &byte, 1, writeflag, CACHE_NONE);
+ 	}
+```
+
+## THE WHOLE HANDLER
+
+```c
+DEVICE_ACCESS(lca_isa)
+{
+	unsigned int ofs, i;
+	uint8_t byte;
+
+	relative_addr >>= 5;
+
+	/*
+	 *  #530: the byte for ISA port P sits at buffer position (P & 3) % len
+	 *  on BOTH arms -- the lane for the 21066's own len 4/8 accesses, and
+	 *  the rule the write arm already applied wherever the old guard let
+	 *  it run.  That guard's `ofs > len' exit(1) ended the host on a guest
+	 *  byte access to a port 2 or 3 mod 4 or a word access to a port 3 mod
+	 *  4 (ungated BWX; and at a port 3 mod 4 also the 1- or 2-byte head
+	 *  of an unaligned load or store that memory_rw splits at 1 KB),
+	 *  and the read arm discarded the
+	 *  fetched byte at ofs == len.
+	 *  One byte is forwarded whatever len is (the size field a<4:3> is
+	 *  not decoded here).  len 0 has no producer; refuse it before the %.
+	 */
+	if (len == 0)
+		return 0;
+	ofs = (relative_addr & 3) % len;
+
+	if (writeflag == MEM_WRITE) {
+		byte = data[ofs];
+		return cpu->memory_rw(cpu, cpu->mem, LCA_ISA_BASE +
+		    relative_addr, &byte, 1, writeflag, CACHE_NONE);
+	}
+
+	cpu->memory_rw(cpu, cpu->mem, LCA_ISA_BASE + relative_addr,
+	    &byte, 1, MEM_READ, CACHE_NONE);
+
+	for (i=0; i<len; i++)
+		data[i] = i == ofs? byte : 0x00;
+
+	return 1;
+}
+```
+
+## THE PROBE HEADER'S CONTRACT (clause e), verbatim
+
+```
+*** #530: IT IS NOW THE WITNESS AND THE DETECTOR.  Sessions 1-3 are the witness below, unchanged but
+#  for the sentinel; the #530 sessions at the end are the detector for the fix. ***
+#
+#  THE FIX (disposition B, regress/artifacts/lcaisalane/FABLE_F2_RULING_20260914.md): the byte for port
+#  P sits at buffer position (P & 3) % len on BOTH arms; `len == 0' is refused first; no latch, no
+#  announce (there is no event -- member 4, ACCEPT).  Table 1 (37 rows): HEAD 19/37, fix 37/37
+#  (regress/artifacts/lcaisalane/fix530_20260914/HEAD_det.out, FIX_det.out); after the pass-2 repair
+#  (51 rows) see that dir's table 2; after closing pass 1's class closure (77 rows) its table 3; after
+#  closing pass 2's tail cells and phantom-read rows (93 rows) its table 4; after closing pass 3's
+#  fallthrough class closure (111 rows) its table 5.
+#
+#  THE CELL SPACE, rowed WHOLE since closing pass 2 (the direct and head cells since closing pass 1, the
+#  tail cells since closing pass 2; pass 2 and closing pass 1 found the same class --
+#  a (len, lane, direction) cell of the position rule with no row -- one cell over each time, so the
+#  repair rows the cross rather than the next cell): direct widths len 1, 2, 4, 8 x lane 0-3 x R/W,
+#  every cell rowed (the read side of len 4 at lanes 2/3 FULL-register, not only a single-lane mask);
+#  split HEADS len 1-7 at lane 3 x R/W (a head ends at a port 0x1f mod 0x20; this probe's is 0x3ff);
+#  split TAILS len 1-7 at lane 0 x R/W (a tail starts at the next port, 0 mod 0x20) -- tails of len 1,
+#  2 and 4 are the direct lane-0 cells, and tails of len 3, 5, 6 and 7 are rowed at the 8042 DATA port
+#  0x60 (sessions 4f `tailr' / `tailw', since closing pass 2).  *** THIS SAID "split TAILS start at port
+#  0x400, where nothing is mapped, so a tail cell shows only as a whole-access failure ... not rowed per
+#  length" UNTIL CLOSING PASS 2, AND IT WAS MEASURED FALSE: tails start at EVERY port 0 mod 0x20 (the
+#  8259 at 0x20/0xa0, the 8253 at 0x40, the 8042 at 0x60), and the Opus seat's tail mis-placement
+#  mutant scored 77/77 because the split rows' tails at the unmapped 0x400 can show a decline but never
+#  a position. ***
+#
+#  CONTRACT (clause e) -- the detector is DESIGNED to catch, on EITHER arm, at every cell of that space:
+#  a byte placed at any position other than (P & 3) % len (a single-cell mis-decode included -- the
+#  Opus closing seat's c1_w2, c1_w1w, c1_r4 each scored 51/51 before this repair); and, by name: the
+#  removed exit reinstated at any of the six cells that ended the host (reads AND
+#  writes at (1,2) (1,3) (2,3)); a decline beyond the width or at-and-beyond it, or of any lane-0 wide
+#  access (a store dropped, a load's register kept); a store arm narrowed to len <= 2 or its stores
+#  dropped or forwarded to another port; one arm folding and the other not; the byte placed at position 0
+#  instead of (P & 3) % len (the clamp, anchored on (2,1) == (2,3)); a lane decode that drops bit 1 or
+#  the `& 3', on the read arm or the write arm; `& (len - 1)' for `% len' (the len-3/5 split heads); a
+#  byte replicated into every position, at len 2, 4 or 8; the read arm's success return turned into a
+#  failure; the write arm's `return' removed, so a store falls into the read arm and makes a phantom
+#  read of the stored port (x_wfallthru -- the `iir' rows, since closing pass 2: every port stored to
+#  before then read back without a side effect, so it scored 77/77 and was called disclosed by table 3's
+#  PRETABLE/POSTTABLE only, never here) -- SCOPED since closing pass 3 (flagship ruling, option (c)): that
+#  edit, and the same edit gated on the width or the lane, is caught at LANE 2 at every direct width (4h
+#  `iir', 4i `iirw': IIR 0x3fa with TXRDY armed) and at LANE 0 at every direct width (4k `kbcq': the 8042
+#  data port with a reply queued); at the split-HEAD cells it is EQUIVALENT on alphabook1 (heads land on
+#  ports 0x1f mod 0x20 -- 0x3ff SCR, or unmapped -- none with a read side effect); at LANE 1 (no port
+#  with an armable read side effect is rowed) and at LANE-3 DIRECT (the wdc status port 0x1f7 would carry
+#  it with an IRQ pending; not rowed) it is DISCLOSED.  *** "The write arm's `return' removed" stood here
+#  UNSCOPED while its rows sat at (1,2) and (4,2) only, and the Opus closing-pass-3 seat MEASURED four
+#  gated forms at 93/93 -- W4 exempts exactly those two widths. ***  And the read arm's forward DUPLICATED
+#  (RD2 -- a second phantom read; outside the contract as first written, rowed since repair 4 at IIR,
+#  4j `iirr').  *** TABLE 1'S CONTRACT CLAIMED MOST OF THIS AT 37 ROWS AND WAS MEASURED FALSE: the Opus
+#  pass-2 seat built ten mutants that scored 37/37, nine changing a guest outcome -- no row stored at len
+#  4/8 -- and measured that the split heads it DISCLOSED as needing a translated access split on K0SEG. ***
+#  DISCLOSED, not caught: the len-0 refusal (no producer); the zero-fill of the positions other than
+#  `ofs' (p_nozero -- EQUIVALENT: memory_rw's #95 pre-zero already clears the buffer); an address-decode
+#  edit above port 0x3ff (p_port10 -- not an edit of the fix; measured 51/51 by the Opus closing seat.
+#  This said "every probed port is below 0x400", and the split TAILS reach port 0x400 -- grok and the
+#  Opus seat, closing pass 1 -- so the premise was wrong and the scoping reason is the one that stands);
+#  the DISCARDED sparse byte offset a<4:0> -- the size field a<4:3> included (lcaisasize) -- which the
+#  handler shifts away, so an edit keyed on it (the Opus closing-pass-3 seat's H1b, keyed on a<4:2> =
+#  0x1c: the 4-byte split head, 93/93) is not seen [widened from "the size field a<4:3>" by the flagship
+#  ruling, closing pass 3]; the hardware QUADWORD ENCODING's route (lcaisaqword: on the
+#  21066 a<6:5> = 11 with a<4:3> = 11 is a quadword at port P, which the model forwards to P|3 -- NOT the
+#  len-8 lane this probe rows, which follows the same (P & 3) % len rule as every other width); the
+#  missing PHYSICAL (lcaisaphys); the end-of-window clamp at port 0xffff (nothing is mapped there).
+#  Disclosed BY CLASS (closing pass 2; each measured 77/77 by the Opus seat, regress/artifacts/lcaisalane/
+#  opus_c2_20260914/): a decline or mis-decode keyed on an EXACT PORT VALUE (kimi-k3's `relative_addr ==
+#  0x400 && len == 4' -- the p_port10 class: the body never tests the port against a constant); a
+#  mis-decode keyed on the DATA (codex's `ofs == 2 && !data[2]', generally `data[ofs] ? data[ofs] :
+#  data[0]' -- every VALUE store row carries a NONZERO correct byte and the `iir' rows store all-zero
+#  words, so at no store cell does a row hold a zero correct byte beside a nonzero neighbour; "the correct
+#  byte is 0" is unrowed).  [Corrected 2026-09-14 from closing pass 3 (codex, grok, kimi-k3): this said
+#  "every store row carries a NONZERO correct byte", false since session 4h stores zero.]  EQUIVALENT on alphabook1, named: the inner forward's return value honoured on the
+#  read arm, or forced to success on the write arm -- no ISA device there fails an access, and an
+#  unmapped forward returns success with a zero fill.
+#  EQUIVALENT by construction, named so no table is spent on them (kimi-k3, pass 2): restoring the dead
+#  `% len' on the write arm's index (`ofs' is already reduced), and reinstating `if (ofs > len) exit(1)'
+#  AFTER the fold (unsatisfiable once ofs < len) -- the reinstated exit that matters is on the UNFOLDED
+#  lane, which the table's m_exit builds.
+#
+#  *** ```
+
+## THE REPAIR DIFF -- the 93-row instrument -> the 111-row instrument (`git diff --no-index`, verbatim; 6 hunks)
+
+```diff
+diff --git "a/C:\\DocumentNoSnc\\CC\\GXEMUL\\GXEMUL-SEC\\regress\\artifacts\\lcaisalane\\fix530_20260914\\table4\\lca_isalane_probe.table4.py" "b/C:\\DocumentNoSnc\\CC\\GXEMUL\\GXEMUL-SEC\\regress\\lca_isalane_probe.py"
+index d68a417..0be08a1 100644
+--- "a/C:\\DocumentNoSnc\\CC\\GXEMUL\\GXEMUL-SEC\\regress\\artifacts\\lcaisalane\\fix530_20260914\\table4\\lca_isalane_probe.table4.py"
++++ "b/C:\\DocumentNoSnc\\CC\\GXEMUL\\GXEMUL-SEC\\regress\\lca_isalane_probe.py"
+@@ -69,5 +69,7 @@
+ #  (51 rows) see that dir's table 2; after closing pass 1's class closure (77 rows) its table 3; after
+-#  closing pass 2's tail cells and phantom-read rows (93 rows) its table 4.
++#  closing pass 2's tail cells and phantom-read rows (93 rows) its table 4; after closing pass 3's
++#  fallthrough class closure (111 rows) its table 5.
+ #
+-#  THE CELL SPACE, rowed WHOLE since closing pass 1 (pass 2 and closing pass 1 found the same class --
++#  THE CELL SPACE, rowed WHOLE since closing pass 2 (the direct and head cells since closing pass 1, the
++#  tail cells since closing pass 2; pass 2 and closing pass 1 found the same class --
+ #  a (len, lane, direction) cell of the position rule with no row -- one cell over each time, so the
+@@ -98,3 +100,13 @@
+ #  before then read back without a side effect, so it scored 77/77 and was called disclosed by table 3's
+-#  PRETABLE/POSTTABLE only, never here).  *** TABLE 1'S CONTRACT CLAIMED MOST OF THIS AT 37 ROWS AND WAS MEASURED FALSE: the Opus
++#  PRETABLE/POSTTABLE only, never here) -- SCOPED since closing pass 3 (flagship ruling, option (c)): that
++#  edit, and the same edit gated on the width or the lane, is caught at LANE 2 at every direct width (4h
++#  `iir', 4i `iirw': IIR 0x3fa with TXRDY armed) and at LANE 0 at every direct width (4k `kbcq': the 8042
++#  data port with a reply queued); at the split-HEAD cells it is EQUIVALENT on alphabook1 (heads land on
++#  ports 0x1f mod 0x20 -- 0x3ff SCR, or unmapped -- none with a read side effect); at LANE 1 (no port
++#  with an armable read side effect is rowed) and at LANE-3 DIRECT (the wdc status port 0x1f7 would carry
++#  it with an IRQ pending; not rowed) it is DISCLOSED.  *** "The write arm's `return' removed" stood here
++#  UNSCOPED while its rows sat at (1,2) and (4,2) only, and the Opus closing-pass-3 seat MEASURED four
++#  gated forms at 93/93 -- W4 exempts exactly those two widths. ***  And the read arm's forward DUPLICATED
++#  (RD2 -- a second phantom read; outside the contract as first written, rowed since repair 4 at IIR,
++#  4j `iirr').  *** TABLE 1'S CONTRACT CLAIMED MOST OF THIS AT 37 ROWS AND WAS MEASURED FALSE: the Opus
+ #  pass-2 seat built ten mutants that scored 37/37, nine changing a guest outcome -- no row stored at len
+@@ -106,hen FALLS INTO the read arm, a phantom 1-byte read of the same port -- scored 77/77 (x_wfallthru, table 3 and
+@@ -778,2 +795,44 @@ print("")
+ 
++#  ---- SESSIONS 4i-4k (#530 closing pass 3, REPAIR 4 -- the flagship ruling, option (c)) -------------------------
++#  Closing pass 3 measured the same channel escaping GATED: `return' removed only for len 8 (W1) or len 2 (W2), for
++#  every width but the two 4h stores at (W4), or only off lane 2 (W3) -- all 93/93 and guest-visible (the Opus seat,
++#  regress/artifacts/lcaisalane/opus_c3_20260914/) -- and its read-arm mirror RD2 (the forward DUPLICATED) likewise.
++#  The flagship ruled the contract's unscoped x_wfallthru entry a wrong record to be fixed in-round by rowing every
++#  OBSERVABLE cell of the class (regress/artifacts/lcaisalane/FABLE_C3_RULING_20260914.md).  A phantom read shows only
++#  where the forwarded-to port's READ has a side effect that is ARMED: lane 2 -> IIR 0x3fa (TXRDY armed, as 4h); lane 0
++#  -> the 8042 data port 0x60 with a reply QUEUED (a self-test's 0x55, then 0xd1 so the store lands in output_byte, not
++#  in the keyboard; a phantom read pops the 0x55 and the flat status's DIB bit drops).  The 8042 queue is a FIFO, so
++#  each lane-0 width gets its own process (one queued reply each).  New sessions only: no earlier session changes.
++P4i = [(iir_arm() + [LDQ(T1, 8, T0)] + sent(T2) + [LDBU(T2, 0, T1)], "t2"),                     # control, no lca store
++       (iir_arm() + [LDQ(T1, 16, T0), STW(ZERO, 0, T1), LDQ(T1, 8, T0)] + sent(T4) + [LDBU(T4, 0, T1)], "t4"),  # (2,2)
++       (iir_arm() + [LDQ(T1, 16, T0), STQ(ZERO, 0, T1), LDQ(T1, 8, T0)] + sent(T5) + [LDBU(T5, 0, T1)], "t5")]  # (8,2)
++a4i, g4i = dsession("iirw", C4h, P4i, ["ctl", "stw", "stq"])
++row("iirw alive", "alive" if a4i else "dead", "alive", "CONTROL")
++row("iirw ctl", hx(iir3(g4i["ctl"])), hx(0x02), "CONTROL: IER 0 -> ETXRDY sets IIR_TXRDY")
++row("iir stw", hx(iir3(g4i["stw"])), hx(0x02), "(2,2) STW 0 -> SP(0x3fa): TXRDY survives (W1/W2/W4: gated fallthrough)")
++row("iir stq", hx(iir3(g4i["stq"])), hx(0x02), "(8,2) STQ 0 -> SP(0x3fa): TXRDY survives (W1/W4)")
++print("")
++
++C4j = [k0(FLAT(UART_IER)), k0(SP(UART_IIR))]
++P4j = [(iir_arm() + [LDQ(T1, 8, T0)] + sent(T4) + [LDBU(T4, 0, T1)], "t4")]                     # (1,2) READ via lca
++a4j, g4j = dsession("iirr", C4j, P4j, ["rd"])
++row("iirr alive", "alive" if a4j else "dead", "alive", "CONTROL ((1,2) read -- a host death on HEAD)")
++row("iir lca rd", hx(iir3(g4j["rd"])), hx(0x02), "(1,2) LDBU SP(0x3fa) after arming: TXRDY read ONCE (RD2: forwarded twice)")
++print("")
++
++KBC_WROUTPORT = 0xd1                # the next data-port write goes to output_byte, not to the keyboard
++for w, stop in (("b", STB), ("w", STW), ("l", STL), ("q", STQ)):
++    C = [k0(FLAT(KBC_CMD)), KBC_SELFTEST, KBC_WROUTPORT, k0(SP(KBC_DAT))]
++    P = [([LDQ(T1, 0, T0), LDQ(T2, 8, T0), STB(T2, 0, T1), LDQ(T2, 16, T0), STB(T2, 0, T1)]
++          + sent(T3) + [LDBU(T3, 0, T1)], "t3"),                                                # flat status, reply queued
++         ([LDQ(T1, 24, T0), stop(ZERO, 0, T1), LDQ(T1, 0, T0)] + sent(T4) + [LDBU(T4, 0, T1)], "t4")]  # lca store, status
++    ak, gk = dsession("kbcq_" + w, C, P, ["pre", "post"])
++    dib = lambda v: None if v is None else v & 0x01
++    lenw = {"b": 1, "w": 2, "l": 4, "q": 8}[w]
++    row("kbcq %s alive" % w, "alive" if ak else "dead", "alive", "CONTROL")
++    row("kbcq %s pre" % w, hx(dib(gk["pre"])), hx(0x01), "CONTROL: the self-test reply is queued (status DIB)")
++    row("kbcq %s dib" % w, hx(dib(gk["post"])), hx(0x01),
++        "(%d,0) ST 0 -> SP(0x60): the queued reply survives the store (W3: lane-gated fallthrough)" % lenw)
++print("")
++
+ #  ---- SESSIONS 5-10: the six cells that ENDED THE HOST on HEAD, one process each -------------
+```
+
+## THE MEASURING SEAT'S CLOSING-PASS-3 ANSWER (what repair 4 answers)
+
+# VERDICT: GAP -- write arm: `return cpu->memory_rw(...)` -> the bare call followed by `if (len != 8) return 1;` (W1). Scores 93/93 (`logs/probe_W1.raw`) and changes a guest-visible outcome: an STQ of 0 to SP(0x3fa) leaves flat IIR & 3 at 0x1 instead of 0x2, so the pending TXRDY is lost (`logs/disc_W1.out` vs `logs/disc_base.out`). MEASURED.
+
+The same channel escapes three more ways, all 93/93 and all guest-visible, all measured: W2 (`len != 2`), W3 (a LANE gate, `(relative_addr & 3) != 0`), and W4 (`len == 1 || len == 4`, which exempts exactly the two widths the `iir` rows use). A fifth escape, RD2, is the read-arm mirror: the read arm forwards twice. The x_wfallthru channel is pinned at 2 of the write cells and at no read cell.
+
+Liveness `LCA530_C3_OPUS_20260914`.  `_scratchpad/CHECKPOINT.md` line 1, verbatim:
+
+    # CHECKPOINT -- 2026-09-14 ~05:0x   HEAD 9c91999 (records)   #529 TABLE 8 PROBES RUNNING; #530 CLOSING PASS 2 FIRED
+
+Seat: Opus 5, Agent tool, MEASURING.  Tree: `GXEMUL-SEC/` only.  The only project directory I wrote into is this one
+(`opus_c3_20260914/`: this file, `PREDICT.out`, `logs/`, `instrument/`), following the c2 seat's layout, so every number
+below cites a durable path.
+
+---
+
+## HOW IT WAS MEASURED
+
+* **Clone.** `/tmp/gxopus530c3` = `cp -a build/`, plus GXEMUL-SEC's working-tree `src/devices/dev_lca.c` (md5 `8084ff07`,
+  the same as table 4's baseline).
+  * `BASELINE_CMP CLEAN`.
+  * Every build did `rm src/cpus/*.o src/devices/dev_lca.o`, then checked `[ gxemul -nt dev_lca.c ] && [ dev_lca.o -nt dev_lca.c ]`.
+  * A clone-local `.MUTANT` sentinel was held while mutants were applied.
+  * Both drivers restored the clone and reported `restored == base (byte-identical)`.
+  * No mutant binary was identical to base.
+* **Instrument.** The shipped `regress/lca_isalane_probe.py`, frozen as a scratch copy, md5 `72e8b25b`.
+  * It is byte-identical to the shipped file.
+  * It is AST-identical to `fix530_20260914/table4/lca_isalane_probe.table4.py` (checked with `ast.dump`).
+  * Its md5s are in `logs/INSTRUMENT.md5` and `logs/INSTRUMENT2.md5`.
+* **Discriminator.** `instrument/disc530c3.frozen.py`.  This is NOT a detector.
+  * Its encoders, session and build helpers are copied verbatim from the probe.
+  * It runs on unmodified `alphabook1`, and every access in it is a guest instruction.
+  * It ran on base and on all seven escaping mutants.  Each mutant differs from base ONLY on its own channel, which
+    doubles as a cross-control.
+* **Predictions before measurement.** `PREDICT.out` (mtime 09:58:42) predates the first completed log
+  (`probe_base.raw`, 10:00:06).  **Every one of the 13 mutants scored exactly as predicted, with exactly the red rows
+  predicted.**
+* **Load.** Two probe lanes, and discriminators only after both lanes had finished.
+  * `LCAISALANE_RETRIED=none` on all 13 probe legs.
+  * Every probe log ends `LCAISALANE_DONE`, and every discriminator log ends `DISC530C3_DONE`.  Both were checked by
+    `tail -1` before copying.
+* **Drivers.** Frozen copies: `instrument/drive530c3.run-094641.sh` (table 1) and `drive530c3b.run-095747.sh`
+  (table 2 + discriminators).  Their stdout is in `logs/driver1.out` and `logs/driver2.out`.
+
+---
+
+## THE DENOMINATOR -- 13 mutants of the FIXED handler plus base, both tables
+
+| id | edit | 93-row | red rows | discriminator, base -> mutant | disposition |
+|---|---|---|---|---|---|
+| base | -- | **93/93** | -- | (all channels at their base value) | |
+| **W1** | write: bare forward, then `if (len != 8) return 1;` | **93/93** | none | STQ 0 -> SP(0x3fa), flat IIR&3: **0x2 -> 0x1** | **the GAP** |
+| **W2** | write: bare forward, then `if (len != 2) return 1;` | **93/93** | none | STW 0 -> SP(0x3fa): **0x2 -> 0x1**; STW -> SP(0x60): 8042 DIB **1 -> 0** | same class |
+| **W3** (own) | write: bare forward, then `if ((relative_addr & 3) != 0) return 1;` | **93/93** | none | STB and STW 0 -> SP(0x60) with a queued reply: 8042 DIB **1 -> 0** | same class, lane axis |
+| **W4** (own) | write: bare forward, then `if (len == 1 \|\| len == 4) return 1;` | **93/93** | none | STQ and STW at 0x3fa **0x2 -> 0x1**; STW at 0x60 DIB **1 -> 0** | same class; it exempts exactly the `iir` widths |
+| **RD2** (own) | read arm: the forward line duplicated | **93/93** | none | LDBU SP(0x3fa) after arming TXRDY, &3: **0x2 -> 0x1** | read-arm mirror (below) |
+| D1 (deepseek) | write `byte = data[ofs] ? data[ofs] : data[0];` | **93/93** | none | STL 0x01 -> SP(IER 0x3f9), flat IER: **0x0 -> 0x1** | disclosed data class; its warrant is false (Q3) |
+| H1a (kimi-k3, as written) | after `ofs = ...`: `if ((relative_addr & 0x1f) == 0x1c) ofs = 0;` | **93/93** | none | -- | **EQUIVALENT by construction** (below) |
+| H1b (pre-shift) | save `lo5 = relative_addr & 0x1f` before `>>= 5`; `if (lo5 == 0x1c) ofs = 0;` | **93/93** | none | LDQ SP(0x3ff)+0x1c: **0x5a000000 -> 0x5a**; STQ 0x7e000000 there, SCR: **0x7e -> 0x0**; direct LDL (4,3) unchanged 0x5a000000 | discarded-address-bit class; disclosure wording too narrow (Q3) |
+| r_fwdret (kimi-k3 R1) | read: `if (!cpu->memory_rw(...)) return 0;` | **93/93** | none | -- | **still EQUIVALENT** (below) |
+| w_ret0 (kimi CLI Q3.3) | write: bare forward, then `return 0;` | **89/93** | `tailw t7/t6/t5/t3` = 0x4 vs 0x44 | -- | **killed**, so the "escapes 93/93" claim is false on this instrument |
+| dd_decl (kimi CLI Q3.1) | write: `if (!data[ofs]) return 0;` before `byte = data[ofs];` | **89/93** | `tailw t7/t6/t5/t3` = 0x4 vs 0x44 | -- | **killed**, so the "escapes 93/93" claim is false on this instrument |
+
+Each mutant's exact source diff is in `logs/<id>.diff`, and its probe log is in `logs/probe_<id>.raw`.
+
+**Why w_ret0 and dd_decl die, checked against the code rather than argued from the scores:**
+
+* `MEMORY_RW`'s split loop (`cpus/memory_rw.c`, `while (len > granule - offset)`) returns `MEMORY_ACCESS_FAILED` as
+  soon as a HEAD chunk fails, before the tail is issued.
+* The `tailw` heads land at the unmapped port 0x5f:
+  * under w_ret0 every head returns 0;
+  * under dd_decl every head carries only zero bytes of `tailv(h)`, so it is declined.
+* Either way the tail never reaches 0x60, and the 8042 command byte keeps the per-phase reset value 0x04.
+* So the per-phase reset that table 4's `d_w6tail` justified is also what kills these two.
+
+**The STx_C route kimi raised for w_ret0 is real but moot here.**  The detector already kills w_ret0.
+
+---
+
+## W1 / W2 -- MEASURED, AND MY READING OF THE FLOOR QUESTION
+
+**Measurement.**  W1 and W2 both score 93/93 with zero red rows.  In the discriminator, W1 flips only the STQ phase
+(0x2 -> 0x1) and W2 flips only the STW phase (0x2 -> 0x1).  The control phase, which makes no lca store, stays 0x2 on
+all 8 binaries.
+
+**Why no row can catch them.**
+
+* In `dev_ns16550.c`, the only READ arms with side effects are:
+  * `com_data` (0x3f8, lane 0), which calls `console_readchar`;
+  * `com_iir` (0x3fa, lane 2), which does `&= ~IIR_TXRDY`.
+* Every other ns16550 read is inert.
+* In `dev_pckbc.c`, a data-port read pops the output queue.  **On an empty queue it returns `last_scancode`**, so the
+  pop is unobservable unless a reply is pending.
+* The 93 rows store to a read-side-effect port only in session 4h, at 0x3fa, at len 1 and len 4.
+* The `tailw` stores to 0x60 find an empty queue: each phase's `kbc_rdcmd` re-arms 0x20 AFTER the store.
+* The four len-8 store rows (`st8 lane3`, `w80`, `w81`, `w82`) and the four len-2 store rows all hit inert registers:
+  SCR, MCR, IER and MSR.
+
+**Is it a floor cell?  Both readings, with the facts each rests on.**
+
+**AGAINST floor (grok's reading).**
+
+* The write body tests neither `len` nor the lane.
+* More decisively, **whether a phantom read is visible is a property of the FORWARDED DEVICE** (does this port have a
+  read side effect?).  The handler never reads that property.
+* Under the pass-11 floor ("the guard's dominating predicates x the device-state lvalues the repair path reads"),
+  nothing obliges a (len, lane) row on this channel.
+
+**The precedent the other seats cite does not say what they cite it for.**
+
+* `c1_w1w` was graded **clause-(e) COVERAGE DEBT, not a floor breach**, by the measuring seat that built it:
+  `opus_c1_20260914/OPUS_ANSWER.md`, line 11, "the write body never tests `ofs' against a constant".
+* It was rowed anyway, as part of the position-cell class closure.
+* So the precedent is *"graded debt, rowed because it sat in the position cell space"*.  It is not *"ruled floor"*.
+* The position cell space is not where W1 lives.
+
+**FOR a contract breach (codex, kimi CLI, glm), and this is my reading.**
+
+* The CONTRACT names the edit.  It lists "the write arm's `return' removed, so a store falls into the read arm and
+  makes a phantom read of the stored port (x_wfallthru -- the `iir' rows ...)".
+* That entry sits in the "DESIGNED to catch" list with **no width or lane scope**.
+* W1 is that named edit, with one conjunct.  A detector that catches a named edit only at the widths its rows happen
+  to use has not caught the edit.
+* **The shape is `#499`'s, measured here directly.**
+  * Closing pass 2's mutant was rowed at exactly the widths it was measured at (STB, STL).
+  * W4, which exempts exactly those two widths, sweeps the 93-row table clean.
+  * Two consecutive passes have now breached the fallthrough channel.  The repair-chain amendment says the next repair
+    owes the CLASS closure, not the next cell.
+
+**My disposition.**
+
+* It is not a DEPENDS-ON (d) breach of the fix: the fix did not touch the `return`.
+* It IS a breach of the contract as written.
+* So, at minimum, L4: the x_wfallthru entry claims more than the rows deliver.
+* It is L2 if the round keeps the claim unscoped.
+* Either the rows or the claim must change in-round.
+* The adjudication between "row the class" and "scope the claim and file" belongs to the flagship.  Both options are
+  priced below.
+
+### What rowing the class costs, versus len 2 and 8 at 0x3fa
+
+The observable exists only where a port with a read side effect sits at that lane.  Per lane, on alphabook1:
+
+| lane | read-side-effect port | cells | cost | status |
+|---|---|---|---|---|
+| 2 | IIR 0x3fa | direct len 1, 2, 4, 8 (1 and 4 rowed) | **+2 phases in session 4h** (STW, STQ): the discriminator's own phases.  They kill W1, W2 and W4 (measured) | measured channel |
+| 0 | 8042 data 0x60, with a reply queued (flat self-test, then 0xd1 so that the store lands in `output_byte` and a phantom read pops the 0x55; flat status & DIB) | direct len 1, 2, 4, 8 | **1 new session, 4 phases.**  STB and STW measured; they kill W3 (and W2 and W4 at STW) | measured channel |
+| 0 | same, before each split store | tails 3, 5, 6, 7 | 4 phases.  Arming a reply before each `tailw` store would change an existing session's commands and break the table-targeting rule, so it would need a new session | not built |
+| 0 | RBR 0x3f8 (`console_readchar`) | -- | needs console input, e.g. MCR loopback | not built; the 8042 is simpler |
+| 1 | none established.  ns16550 IER/LSR reads are inert; I did not check 8253 0x41 or CMOS 0x71 | direct | -- | disclose "no side-effect port rowed" |
+| 3 direct | wdc0 status 0x1f7.  A read deasserts its IRQ (`dev_wdc.c`, the `wd_command` arm).  BUS_ISA_IDE0 is on for LCA | direct | needs a pending wdc IRQ plus an IRR readback | channel exists in principle; not built |
+| 3 heads | none.  Head ports are 0x1f mod 0x20 (0x3ff SCR; 0x1f, 0x3f and 0x5f unmapped) | heads 3, 5, 6, 7 | -- | **EQUIVALENT on alphabook1**, so disclose |
+
+**Recommendation, as a floor on what must happen rather than a ceiling.**
+
+* Add the two 0x3fa phases, plus the lane-0 direct session.
+  * That is 6 phases and one new session, and no existing session's commands change.
+  * It kills every escape in this table except RD2.
+* Add one sentence to the contract.  It should say the fallthrough is caught at lanes 0 and 2 at every direct width,
+  EQUIVALENT at the head cells (no such port), and disclosed at lane 1 (no port rowed) and at lane-3 direct (wdc, not
+  rowed).
+* Adding only the 0x3fa pair leaves W3 escaping.  **The lane axis is the same class one axis over.**
+
+---
+
+## RD2 -- THE READ-ARM MIRROR (own hunt)
+
+**Edit.**  Duplicate the read arm's forward line.  **Score:** 93/93.
+
+**Guest-visible difference.**  An LDBU of IIR through the sparse window, after TXRDY is armed, reads IIR & 3 =
+**0x1 instead of 0x2**: the first forward acknowledges TXRDY and the second forward's byte is the one delivered.  This
+is the most realistic escape in the table.  An interrupt handler reads IIR and RBR through this window; it does not
+STQ to FCR.
+
+**Why it escapes.**
+
+* The only read-side-effect port the probe READS through the handler is 0x60.
+* There the 8042 answers a second, empty-queue read with `last_scancode`, which is the same 0x55.
+* So `live`, `tailr ctl` and `tailr t*` stay green.  Measured.
+
+**Grading.**  It is an ADDED forward, not a (d) shape of the fix, and the contract does not name it.  So it is
+clause-(e) debt outside the contract as written.
+
+**Cost to row.**  One phase: LDBU SP(0x3fa) after `iir_arm()`, want & 3 == 0x2.  That is the cheapest row in this answer.
+
+---
+
+## H1 -- BOTH KEYINGS
+
+**H1a, as kimi-k3 wrote it (post-shift): EQUIVALENT by construction.  Measured 93/93, no reds.**
+
+* After the shift, `relative_addr` is the port.
+* `port & 0x1f == 0x1c` implies `port & 3 == 0`, so the port is at lane 0.
+* At lane 0, `ofs = 0 % len` is already 0, so forcing it to 0 changes nothing at any port.
+* **The premise "should red MCR rows" is false.**  MCR (0x3fc) is exactly such a port, and it is lane 0.
+
+**H1b, keyed on the pre-shift discarded low 5 bits: 93/93, guest-visible.**
+
+* LDQ at SP(0x3ff)+0x1c is a 4-byte head at port 0x3ff.
+* Base returns 0x5a000000; H1b returns 0x5a.
+* STQ 0x7e000000 at the same address: base leaves SCR = 0x7e, H1b leaves SCR = 0x00.
+* The direct LDL at SP(0x3ff), which is the SAME (4,3) cell, is unchanged at 0x5a000000.
+
+**What this shows.**
+
+* The h=4 head cell IS rowed: it is handler-identical to the direct (4,3) cell.
+* A mutant can see the difference only through bits the handler discards.
+* That is the discarded-address-bit class, as the brief reads it.
+* But see Q3.4: the disclosure as worded names only a<4:3>, and 0x1c is a<4:2> = 111.
+
+---
+
+## D1 -- 93/93, DISCLOSED CLASS, DISCRIMINATOR MEASURED
+
+**Discriminator.**  STL 0x00000001 to SP(IER 0x3f9) is lane 1, len 4, ofs 1, with `data[1] = 0` and `data[0] = 1`.
+Flat IER reads 0x0 on base and 0x1 under D1.
+
+**Why it escapes.**  Every store row's correct byte is either nonzero, or the whole stored value is zero (`iir stb`,
+`iir stl`, the `tailw` heads at 0x5f).  Either way, any substitute position supplies the same byte.
+
+**Why it is not a floor gap, contra deepseek.**  The body never tests the data value.  So the header's by-class
+disclosure is the right disposition, and its guest-visibility is already conceded by the disclosure.  The WARRANT
+sentence is what is wrong: see Q3.1.
+
+---
+
+## R1 -- r_fwdret IS STILL EQUIVALENT (93/93), AND THE WARRANT IS NOW READ RATHER THAN INFERRED
+
+The new `tailr` heads forward to the unmapped flat port 0x5f (paddr 0x1d000005f).  That is far above `physical_max`, so
+the forward reaches `memory_warn_about_unimplemented_addr` (`core/memory.c`).
+
+* That function prints the `non-existant` line when verbosity allows.  The table-4 base log shows those lines for 0x300
+  and 0x400.
+* It then returns `true` only when `halt_on_nonexistant_memaccess` is set.
+* Otherwise it returns `false`, and `memory_rw` zero-fills and takes `do_return_ok`.
+* So an unmapped forward returns OK.  r_fwdret's early return never fires, at 0x5f as at 0x400 and 0x300.
+
+**The disclosure stands as written.**
+
+---
+
+## Q1 -- THE CELL SPACE
+
+**The position enumeration is right, and none of my 13 shapes escapes through a position cell.**
+
+* The seven escapes fall into three groups:
+  * the fallthrough / forward-count channel (W1-W4, RD2);
+  * the disclosed data and discarded-bit classes (D1, H1b);
+  * equivalents (H1a, r_fwdret).
+* I did not re-run x_rot.  The c2 seat measured it at 38/77, and repair 3 changed no existing session, so its channel
+  check stands.  Table 4's `t_tails` (85/93) covers the eight new tail rows.
+
+**What THE CELL SPACE does not enumerate.**  The CONTRACT claims a property on a second axis: the number and direction
+of device accesses per guest access.  Its observable is a property of the forwarded PORT, not of (len, lane).  That axis
+is where every live escape in this answer sits.
+
+**The DISCLOSED items:**
+
+| item | status |
+|---|---|
+| address class (exact port value) | right |
+| forward-return equivalents | right: R1 re-measured, warrant read |
+| data class | right as a class; its warrant sentence is false (Q3.1) |
+| lcaisasize | too narrow as worded (Q3.4) |
+
+---
+
+## Q3 -- WRONG STATEMENTS
+
+1. **Header, disclosed-by-class, data.**
+   * The header says "every store row carries a NONZERO correct byte, so 'the correct byte is 0' is unrowed at every
+     store cell".
+   * This is false on the 93-row instrument.
+     * `iir stb` and `iir stl` store an all-zero value at (1,2) and (4,2).
+     * The `tailw` heads at 0x5f store zero bytes.
+     * codex, grok and kimi all found this.
+   * The true warrant: *"every store row's correct byte is nonzero OR its whole value is zero, so no row distinguishes a
+     substitute position when the correct byte is 0"*.
+   * Measured: D1 93/93.
+2. **Header CONTRACT, the x_wfallthru entry.**
+   * It claims the edit with no width or lane scope.
+   * The rows pin it at (1,2) and (4,2) at one port.
+   * W1-W4 are measured escapes of the named edit.
+   * This is the GAP above.  Its minimum repair is to scope the sentence, and I recommend adding the rows.
+3. **kimi-k3's H1 premise.**  It says the post-shift edit "keys PORT bits ... should red MCR rows".  It cannot red any
+   row: it is equivalent by construction (lane 0).  Measured 93/93.
+4. **Header, lcaisasize disclosure.**
+   * The disclosure reads "the size field a<4:3>".
+   * H1b keys on a<4:2> (0x1c).
+   * The class the handler actually discards is the whole pre-shift low five bits, a<4:0>.
+     * The size field a<4:3>.
+     * The split head's byte offset a<2:0>.
+   * Name the class by a<4:0>, or a bit-2-keyed mutant is outside both the contract and the disclosure.
+5. **The panel's "c1_w1w was ruled in-scope" premise** (glm, kimi CLI, codex).  Its measuring seat graded it
+   clause-(e) debt (`opus_c1_20260914/OPUS_ANSWER.md`, line 11).  It was rowed as part of the position class closure.
+   The precedent is weaker than cited, which is why my Q2 reading rests on the contract text and the repair-chain
+   amendment instead.
+6. **kimi CLI Q3.1 and Q3.3.**
+   * The claim: a data-keyed decline, and a forced-failure return on the write arm, each "escapes 93/93".
+   * Both measured **89/93**, killed by the four `tailw` rows through the split's head-failure abort (above).
+   * The mechanism kimi named (STx_C) is real, but the detector already sees these edits.
+
+**Verified, no error found:**
+
+* the fix comment (it now says "load or store", pass 2's omission corrected);
+* POSTTABLE 4's per-leg scores, as re-read from `table4/logs/lane*.out`;
+* the table-targeting rule, since repair 3 only added sessions.
+
+**Not checked:**
+
+* lane-1 read-side-effect ports (8253 0x41, CMOS 0x71);
+* the wdc 0x1f7 channel (not built);
+* RBR 0x3f8 (not built);
+* tables 1-3 (not re-run).
+
+---
+
+## CLONE
+
+Both drivers restored `/tmp/gxopus530c3`.  I then checked it by hand:
+
+* no `.MUTANT`;
+* `dev_lca.c` cmp-clean against GXEMUL-SEC;
+* `gxemul -nt dev_lca.c`.
+
+**The clone is DELETED**, together with `/tmp/gxopus530c3_bins`.
+
+* GXEMUL-SEC's `src/devices/dev_lca.c` is unchanged: md5 `8084ff07` before and after.
+* No process of mine is running.
+* No project path outside `regress/artifacts/lcaisalane/opus_c3_20260914/` was written.
+
+
+## KILL TABLE 5 on the 111-row instrument -- POSTTABLE
+
+```
+POSTTABLE -- #530 (lcaisalane) kill table 5, CLOSING PASS 3's REPAIR 4 (111 rows).  Written after the table (table5.out
+ends KILL530E_DONE); PRETABLE.out 11:37:50 predates FIX_r5/HEAD_r5, the launch (kill530e.run-115419.sh) and every log.
+
+DRIVER   kill530e.run-115419.sh (frozen), clone /tmp/gxlca530 (BASELINE_CMP CLEAN), own .MUTANT; 9 legs built; clone
+         RESTORED (re-checked by hand: no .MUTANT, dev_lca.c cmp-clean vs GXEMUL-SEC, gxemul -nt source); `restored ==
+         base (byte-identical)'; no mutant binary identical to base.
+INSTRUMENT  lca_isalane_probe.table5.py BYTE-IDENTICAL to the shipped regress/lca_isalane_probe.py (cmp) and to the frozen
+         copy FIX_r5 / HEAD_r5 ran (../lca_isalane_probe.r5.frozen.py): FIX_r5 111/111, HEAD_r5 68/111 (the 43 predicted).
+LOGS     9 logs/probe_*.raw, every one ends LCAISALANE_DONE; LCAISALANE_RETRIED=none on every leg.
+LOAD     two probe lanes beside #529's kill table 9 (four lanes) -- no retries.
+
+check_pred.out:  CHECKPRED exact=9 differs=0 of 9 measured (9 predicted)
+   base 111/111 A� head 68/111 (43 red: table 4's 41 + `iirr alive', `iir lca rd' -- the new session's (1,2) read is a
+   host death on HEAD) A� x_wfallthru 103 (iir stb/stl/stw/stq and the four kbcq dib rows) A� W1 109 (iir stq, kbcq q dib)
+   A� W2 109 (iir stw, kbcq w dib) A� W3 107 (the four kbcq dib rows -- every other lane-0 store lands on a port with no
+   reply queued) A� W4 107 (iir stw/stq, kbcq w/q dib) A� RD2 110 (iir lca rd) A� W5 110 (kbcq q dib -- that row's own
+   kill).  Every non-base leg DETECTED, every red set exactly as predicted: the Opus closing-pass-3 seat's five 93/93
+   escapes (W1-W4, RD2) are each red on the rows repair 4 added.
+
+FLOOR    (a) head 68/111; (d)/(e) the contract's x_wfallthru entry is now SCOPED to what the rows catch -- lane 2 and lane
+         0 at every direct width, the read-arm mirror RD2 at lane 2 -- with the head cells EQUIVALENT and lane 1 and
+         lane-3 direct DISCLOSED (the flagship ruling, part B, option (c)); the discarded-bit disclosure widened to a<4:0>.
+NOT RE-MEASURED  every table 1-4 kill: repair 4 ADDS sessions and changes no existing session's commands (the targeting
+         rule), so none can move.
+```
+
+## QUESTIONS
+
+1. **Is the x_wfallthru / forward-count enumeration right?**  The scoped contract says the phantom read is caught at lane 2
+   and lane 0 at every direct width, EQUIVALENT at the split-head cells (no read-side-effect port at 0x1f mod 0x20 on
+   alphabook1), and DISCLOSED at lane 1 and lane-3 direct.  Name any cell misclassified -- a head port that DOES have an
+   armable read side effect, a lane-1 port that does, a row whose channel cannot vary under the mutant it names (the
+   `kbcq' rows need exactly one reply queued; the `iir' rows need TXRDY armed).
+2. **Is there a floor gap in the 111-row detector?**  The smallest source edit to the FIXED `dev_lca.c` that changes a
+   guest-visible outcome and still scores 111/111 -- as an exact edit, the row you expected to catch it and why it cannot.
+   The DISCLOSED list (address class, data class, a<4:0>, lane-1 / lane-3-direct fallthrough, forward-return equivalents)
+   is outside the question; say if one is disclosed wrongly.
+3. **Which statement in the header, the fix comment, or POSTTABLE 5 is wrong?**
+
+
+## OPERATIONAL RULE FOR EVERY SEAT (appended by panel.sh, not by the author)
+
+**Do not run `run.sh`, any `gate_*.sh`, or the battery.** Every measurement you need is
+inlined above. A gate takes minutes -- longer than your response budget -- and a second
+concurrent invocation corrupts the operator run in progress, because the gates share one
+log directory. A seat that runs a gate produces no review AND may invalidate someone
+else s. Building and running a single detector or mutant in your own temp directory is
+fine and encouraged; driving the harness is not.
+
+If you want a measurement that is not inlined, NAME IT and say why. Naming it is worth
+far more to this panel than a timeout.
+
+
+codex
+Two gaps need scrutiny: the fallthrough scope omits split tails of lengths 3, 5, 6 and 7, and the new RD2 row tests only a byte read. I’m checking whether these are contract breaches or limits the revised wording already permits.
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n 'CONTRACT \\(clause e\\)|read arm.s forward DUPLICATED|split TAILS len|tails 3, 5, 6, 7|THE REPAIR DIFF|P4j =|KBC_WROUTPORT|correct.*byte is 0|FLOOR    |## QUESTIONS|## KILL TABLE 5|no ISA device there fails' 'C:\\DocumentNoSnc\\CC\\GXEMUL\\_scratchpad\\panel_20260915_000144\\brief_sent.md'" in C:\DocumentNoSnc\CC\GXEMUL
+ succeeded in 74ms:
+120:## THE PROBE HEADER'S CONTRACT (clause e), verbatim
+140:#  split TAILS len 1-7 at lane 0 x R/W (a tail starts at the next port, 0 mod 0x20) -- tails of len 1,
+149:#  CONTRACT (clause e) -- the detector is DESIGNED to catch, on EITHER arm, at every cell of that space:
+170:#  gated forms at 93/93 -- W4 exempts exactly those two widths. ***  And the read arm's forward DUPLICATED
+195:#  read arm, or forced to success on the write arm -- no ISA device there fails an access, and an
+204:## THE REPAIR DIFF -- the 93-row instrument -> the 111-row instrument (`git diff --no-index`, verbatim; 6 hunks)
+232:+#  gated forms at 93/93 -- W4 exempts exactly those two widths. ***  And the read arm's forward DUPLICATED
+246:-#  data[0]' -- every store row carries a NONZERO correct byte, so "the correct byte is 0" is unrowed at
+252: #  read arm, or forced to success on the write arm -- no ISA device there fails an access, and an
+281:+P4j = [(iir_arm() + [LDQ(T1, 8, T0)] + sent(T4) + [LDBU(T4, 0, T1)], "t4")]                     # (1,2) READ via lca
+287:+KBC_WROUTPORT = 0xd1                # the next data-port write goes to output_byte, not to the keyboard
+289:+    C = [k0(FLAT(KBC_CMD)), KBC_SELFTEST, KBC_WROUTPORT, k0(SP(KBC_DAT))]
+452:| 0 | same, before each split store | tails 3, 5, 6, 7 | 4 phases.  Arming a reply before each `tailw` store would change an existing session's commands and break the table-targeting rule, so it would need a new session | not built |
+575:   * The header says "every store row carries a NONZERO correct byte, so 'the correct byte is 0' is unrowed at every
+582:     substitute position when the correct byte is 0"*.
+637:## KILL TABLE 5 on the 111-row instrument -- POSTTABLE
+659:FLOOR    (a) head 68/111; (d)/(e) the contract's x_wfallthru entry is now SCOPED to what the rows catch -- lane 2 and lane
+666:## QUESTIONS
+
+codex
+A one-line loop can make only 2-byte sparse reads forward twice, bypassing the sole RD2 row, which uses a 1-byte read. The supplied results predict 111/111 for that variant; this is an unmeasured prediction. I also found that the header still calls a zero correct byte “unrowed,” despite the all-zero stores shown in the diff.
+
+codex
+GAP: insert `for (i = 0; i <= (len == 2); i++)` before the read-arm forward; predicted 111/111 while changing an armed 2-byte IIR read’s `& 3` result from `0x2` to `0x1`. `LCA530_C4_20260914`
+
+**That score is a prediction from the packet, not a measurement.**
+
+### 1. RD2 still has an uncovered width axis
+
+The exact edited read forward is:
+
+```c
+for (i = 0; i <= (len == 2); i++)
+    cpu->memory_rw(cpu, cpu->mem, LCA_ISA_BASE + relative_addr,
+        &byte, 1, MEM_READ, CACHE_NONE);
+```
+
+`i` already exists, and the subsequent buffer-fill loop resets it. This forwards twice only when `len == 2`.
+
+Why it should survive:
+
+- The supplied measurements say unconditional RD2 passes all previous 93 rows.
+- The sole new RD2 killer, `iir lca rd`, uses **LDBU: len 1**, so this mutation leaves it unchanged.
+- `iir stw` and `kbcq w dib` exercise writes, which return before this code. Their flat readbacks bypass it.
+
+The guest-visible discriminator is a **2-byte sparse IIR read after TXRDY is armed**. At lane 2, `(2 % 2) == 0`. The first forward acknowledges TXRDY; the second supplies the changed byte.
+
+This uses only a width condition, outside none of the listed exclusions. Under the packet’s treatment of width-gated named edits, it is a **clause-(e) contract gap**. If RD2 means only the unconditional mutant, explicitly state that limitation; “RD2 at lane 2” does not identify the actual coverage, **`(1,2,R)`**.
+
+### 2. Split-tail fallthrough is missing from the classification
+
+Lengths **3, 5, 6 and 7 at lane 0** are neither covered by the direct-width guarantee nor explicitly disclosed for fallthrough. The previous measuring seat’s inlined table already identifies this observable channel.
+
+An exact candidate edit is:
+
+1. Remove `return` from the write-arm forward.
+2. Immediately after that call, insert `if (len != 6) return 1;`.
+
+**Prediction: 111/111.** The new `kbcq` stores use lengths 1, 2, 4 and 8. Existing `tailw t6` encounters an empty queue and reads back the command byte after rearming, so it cannot observe the phantom pop.
+
+For a discriminator, use the queued-reply/output-port setup with an STQ split into a 2-byte head at `0x5f` and a 6-byte tail at `0x60`. The extra tail read should change subsequent DIB from **1 to 0**.
+
+This does **not** contradict the narrowly worded *direct-width* guarantee. It does contradict “every OBSERVABLE cell” as a completed enumeration. At minimum, these tails require an explicit disposition.
+
+### 3. Statements requiring correction
+
+- **Header:** `"the correct byte is 0" is unrowed` remains false. The added stores explicitly use `ZERO`. The accurate limitation is: **no row distinguishes a zero correct byte from a nonzero alternative byte**.
+- **POSTTABLE 5:** qualify RD2 coverage by **width and direction**, and include the missing split-tail disposition before claiming class closure.
+- **Fix comment:** I found no contradiction in the supplied evidence.
+
+The reported kills support the direct-write IIR and KBC channels. However, `kbcq pre` checking DIB establishes **nonempty**, not independently **exactly one queued reply**. I cannot independently verify queue initialization, the universal split-head equivalence claim, or lane-1 device behavior from the device code provided here.
+
+**Measurements needed:** `RD2_w2` and `WF_tail6` against the 111-row detector, plus their armed-IIR and queued-tail discriminators above. No gates or battery were run; underlying logs and the complete earlier probe were not independently checked.
+
+NO-GO
+tokens used
+62,204
+GAP: insert `for (i = 0; i <= (len == 2); i++)` before the read-arm forward; predicted 111/111 while changing an armed 2-byte IIR read’s `& 3` result from `0x2` to `0x1`. `LCA530_C4_20260914`
+
+**That score is a prediction from the packet, not a measurement.**
+
+### 1. RD2 still has an uncovered width axis
+
+The exact edited read forward is:
+
+```c
+for (i = 0; i <= (len == 2); i++)
+    cpu->memory_rw(cpu, cpu->mem, LCA_ISA_BASE + relative_addr,
+        &byte, 1, MEM_READ, CACHE_NONE);
+```
+
+`i` already exists, and the subsequent buffer-fill loop resets it. This forwards twice only when `len == 2`.
+
+Why it should survive:
+
+- The supplied measurements say unconditional RD2 passes all previous 93 rows.
+- The sole new RD2 killer, `iir lca rd`, uses **LDBU: len 1**, so this mutation leaves it unchanged.
+- `iir stw` and `kbcq w dib` exercise writes, which return before this code. Their flat readbacks bypass it.
+
+The guest-visible discriminator is a **2-byte sparse IIR read after TXRDY is armed**. At lane 2, `(2 % 2) == 0`. The first forward acknowledges TXRDY; the second supplies the changed byte.
+
+This uses only a width condition, outside none of the listed exclusions. Under the packet’s treatment of width-gated named edits, it is a **clause-(e) contract gap**. If RD2 means only the unconditional mutant, explicitly state that limitation; “RD2 at lane 2” does not identify the actual coverage, **`(1,2,R)`**.
+
+### 2. Split-tail fallthrough is missing from the classification
+
+Lengths **3, 5, 6 and 7 at lane 0** are neither covered by the direct-width guarantee nor explicitly disclosed for fallthrough. The previous measuring seat’s inlined table already identifies this observable channel.
+
+An exact candidate edit is:
+
+1. Remove `return` from the write-arm forward.
+2. Immediately after that call, insert `if (len != 6) return 1;`.
+
+**Prediction: 111/111.** The new `kbcq` stores use lengths 1, 2, 4 and 8. Existing `tailw t6` encounters an empty queue and reads back the command byte after rearming, so it cannot observe the phantom pop.
+
+For a discriminator, use the queued-reply/output-port setup with an STQ split into a 2-byte head at `0x5f` and a 6-byte tail at `0x60`. The extra tail read should change subsequent DIB from **1 to 0**.
+
+This does **not** contradict the narrowly worded *direct-width* guarantee. It does contradict “every OBSERVABLE cell” as a completed enumeration. At minimum, these tails require an explicit disposition.
+
+### 3. Statements requiring correction
+
+- **Header:** `"the correct byte is 0" is unrowed` remains false. The added stores explicitly use `ZERO`. The accurate limitation is: **no row distinguishes a zero correct byte from a nonzero alternative byte**.
+- **POSTTABLE 5:** qualify RD2 coverage by **width and direction**, and include the missing split-tail disposition before claiming class closure.
+- **Fix comment:** I found no contradiction in the supplied evidence.
+
+The reported kills support the direct-write IIR and KBC channels. However, `kbcq pre` checking DIB establishes **nonempty**, not independently **exactly one queued reply**. I cannot independently verify queue initialization, the universal split-head equivalence claim, or lane-1 device behavior from the device code provided here.
+
+**Measurements needed:** `RD2_w2` and `WF_tail6` against the 111-row detector, plus their armed-IIR and queued-tail discriminators above. No gates or battery were run; underlying logs and the complete earlier probe were not independently checked.
+
+NO-GO

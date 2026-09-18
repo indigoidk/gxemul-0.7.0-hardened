@@ -1,0 +1,49 @@
+VERDICT: SHIP — LCA530_P2_20260914
+(one provably-equivalent revert of the fix's own text is missing from the DISCLOSED equivalents list — named as an exact edit under Q2; it is a papering gap, not a correctness or detection gap. If the panel's rule requires every true equivalent to be disclosed before ship, flip to HOLD on that alone; the fix and the detector's discriminating power are otherwise clean from the packet.)
+
+## Q1 — the fix, cell walk (all READ from the post-fix handler; arithmetic REASONED)
+
+With `x = P & 3 ∈ {0,1,2,3}` and `ofs = x % len`:
+
+| len | ofs range | max index | note |
+|---|---|---|---|
+| 0 | — early `return 0` | none | no `%`, no index; "no producer" is settled-outside-packet (see uncheckables) |
+| 1 | 0 | 0 | (1,1) (1,2) (1,3) all served, position 0 |
+| 2 | x%2 ∈ {0,1} | 1 | (2,3)→1 = (2,1), the adjudicated fold |
+| 3 | x%3 ∈ {0,1,2} | 2 | (3,3)→0; only reachable via split — disclosed unprobed |
+| 4–8 | x (since x≤3<len) | 3 | identity fold; r81's P=0x3fd gives lane 1, not 5 |
+
+Read arm fills `data[0..len-1]`, write arm indexes `data[ofs]`; `ofs < len` holds for every len ≥ 1, so: no host-ending path remains (no `fatal`/`exit` in the listed handler), no out-of-bounds index, no divide-by-zero (guard precedes `%`). No cell's outcome deviates from the adjudicated `(P & 3) % len`-on-both-arms rule. (REASONED)
+
+Caveat, not a #530 defect: the read arm ignores `memory_rw`'s return, so a declined flat read forwards an uninitialized `byte`. READ: the verbatim diff touches only the shared ofs computation and the write-arm index line, so this property is inherited from HEAD, not introduced by the fix; it is outside the contract. Settling fact: whether any guest-reachable sparse port on `alphabook1` resolves to a declining flat-bus access (machine map + flat-bus decline semantics).
+
+## Q2 — floor gap, exact edit (REASONED)
+
+Yes. The smallest undo of the fix that still scores 37/37 is the revert of the fix's own second hunk line:
+
+```diff
+-		byte = data[ofs];
++		byte = data[ofs % len];
+```
+
+Row I expected to catch it: any flat-readback write row — `w11 lands`, `w12/w13 lands`, `w22 lands`, `w23 lane`, plus `w13 roundtrip`. Why it cannot: the `len == 0` guard plus the fold establish `0 ≤ ofs < len` on every execution, so `ofs % len` is the identity for all len ≥ 1 — on probed cells *and* on the disclosed unreachable split heads. It is a true equivalent mutant of the fix's own text, and unlike `m_andmask` (`& (len-1)` for `% len`) and `m_lenzero`, it is **not** on the contract's DISCLOSED-by-name list. `m_readonlyfold` does not cover it: that mutant is `data[ofs]` with an *unfolded* ofs (reads past the buffer); this edit keeps the fold and re-appends the now-dead `% len`.
+
+A second, same-class omission: reinstating the removed `if (ofs > len) { fatal(...); exit(1); }` verbatim *after* `ofs = (relative_addr & 3) % len;` is dead code (`ofs < len` makes `ofs > len` unsatisfiable); the six `alive` rows expected to catch an exit cannot fire it.
+
+Both should be appended to the DISCLOSED equivalents. Neither hides a behavioral regression — by construction they have none.
+
+## Q3 — statements checked (READ, arithmetic REASONED)
+
+Every quantitative claim in the packet cross-checks; I found no provably-false statement I can demonstrate from the packet alone:
+
+* Row arithmetic: 37 = 16 witness + 21 detector; detector = 8 session-4 rows + 13 EXITS rows (6 alive + 7 value). Every predicted red-set's size matches its printed score (head 18→19/37, m_exit 15→22/37, m_decleq 13→24/37, m_retzero 15→22/37, etc.), and each mutant's set matches what the source alone predicts — e.g. `m_nomask`'s sole carrier must be a len-8 cell (only there does `P % len` differ from `(P&3) % len` for P=0x3fd): r81 lane, exactly as measured; `m_clamp` (OOR→position 0) reds exactly r23/w23 while greening r21/w21, exactly as measured; the re-pinned sentinel (0x8a & 0x60 = 0) makes `ofs1 zero` red under m_decleq where 0xea would have greened (0xea & 0x60 = 0x60 = LSR_FIXED).
+* The one statement that is not right *as written*: the POSTTABLE's head-line decomposition, "18 red — the six host-death cells + the two discarded-byte reads + the witness's three reds". Counted as rows that is 6+2+3 = 11 ≠ 18; it is only true if "the six host-death cells" denotes the 13 rows those six sessions emit. Imprecise, outcome-neutral.
+
+## Premises I cannot settle from the packet — and the one fact that would settle each
+
+* `fatal()` does not exit (SETTLED). Settles: the body of `fatal()`.
+* BWX ungated (`ALPHA_FEATURE_BWX` defined, never read). Settles: a grep of the tree for that macro's uses.
+* "len 0 has no producer" and the 1 KB split producing len 3/5-7 heads. Settles: the dispatch/`memory_rw` length-and-split arithmetic.
+* UART model values (LSR forced 0x60, MSR = reg|0xb0, IER/SCR store-return). Settles: the 16550 device source and the `alphabook1` machine init.
+* The witness DSL: `build`/`k0`/`SP`/`FLAT`/`session`/`row`/`hx` are not inlined. REASONED mitigation: the const-pool reading (each `k0(X)` stores slot *i*; `LDQ(T1, 8*i, T0)` reloads it) decodes all 13 detector phases consistently, including session 4's 6 consts against 9 phases, and predicted-then-measured EXACT on 14/14 legs would be hard to land on a broken mapping. Settles: the full probe source.
+* The reported runs themselves (HEAD_det 19/37, FIX 37/37, 14 legs EXACT, `ast.dump` identity of shipped vs frozen instrument). READ as reported; I cannot and did not re-run. Settles: the cited `*.out` logs, `INSTRUMENT.md5`, and a diff/`ast.dump` of the two probe copies. No measurement beyond these is needed for this review; none requested.

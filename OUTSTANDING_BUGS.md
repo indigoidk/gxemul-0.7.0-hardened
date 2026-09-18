@@ -21837,3 +21837,23 @@ Plus a stale "does NOT catch" probe comment contradicted by the 9 L2 rows below 
 Two rows close the {MIEN} x {latch} product for the announce (presence, then count, each a measured L2).  Filed from its
 pass 2: `pcc2c040debugchan` (fatal->debug invisible under step), `pcc2c040latchswap` (latch bit swap).
 Also from a peer session's #533 late review: `landiskauxorder`, `wdcaddr2`.
+
+## 2026-09-18 (evening) — `#530` SHIPS WITH ITS OWED WIDTH ROW; `lcawidefold` REOPENS
+
+### `lcalenzerodrop` / `lcaisalane` — THE WIDTH ROW IS BUILT AND #530 SHIPS; closure follows with the sha
+
+`regress/lca_widewrite_probe.py` drives a 16-byte `store_buf` write into `lca_isa` through PROM GETENV
+(`CALL_PAL 0x3fffffe`) — the non-instruction path, since no Alpha instruction can express len > 8.
+**base 3/3; `&& len <= 8` and `len == 0 || len > 8` 2/3 each** — both of which swept
+`lca_isalane_probe.py`'s 352 rows clean.  Every value predicted before any run; the shipped file re-run
+as shipped.  This is the one pass `#530`'s `CLOSE6_VERDICT` said was owed, so `#530` commits with it and
+`dev_lca.c` then carries no live host kill.  Both rows close in the follow-up records commit.
+
+### `lcawidefold` (LOW) — its reopen trigger has FIRED
+
+Its recorded condition was *"a guest found issuing PROM GETENV into the LCA ISA window"*.
+`lca_widewrite_probe.py` is that guest, and it measures the behaviour this row names: a 16-byte store
+reaches the port as ONE byte and fifteen are dropped.  The question is now live: forward one byte of N,
+forward each to successive ports, or decline wide stores into ISA space?  The 21066 cannot issue a
+16-byte ISA cycle, which argues for documented-only — but "no producer" is no longer the warrant.
+

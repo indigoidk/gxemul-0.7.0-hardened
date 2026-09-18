@@ -1,0 +1,122 @@
+I'll settle Fable's len-16 lane derivation from the local Alpha HRM and the actual LCA/store_buf path, not from plausibility. First stop is the repo log, checkpoint, and the `#530` record.HEAD is `9c91999`; `#530` is still in-flight. Next I’ll open the LCA ISA-lane handler, `store_buf`, and the local 21066 HRM.`#530` is uncommitted and already has a `LEN8_DETERMINATION`. I'll read that, the HRM sparse-I/O tables, and how Alpha stores actually produce `len`.Fable’s claim is about sparse I/O, not sparse memory. I’ll read the I/O-region encoding, Alpha store widths, and `memory_rw` so the len-16 case is grounded in those, not in Table 6-3’s memory-space rows.**VERDICT: Fable’s len-16 derivation is wrong. The owed thing is still a row, not a product change. Pin (a) as the BYTE-encoding contract applied to a wider buffer — not as a 16-byte PCI cycle. (b) and (c) are not defensible.**
+
+The L2 (mutant `len == 0 || len > 8` scores 352/352) stands. What fails is the inference from that escape to “one-byte-of-16 is a lost byte, so the fix is wrong.”
+
+---
+
+## Q1 — Is Fable’s derivation right?
+
+**No.** Three independent facts, all from the local HRM and the code, and none of them needs a probe run.
+
+### 1. The IOC does not size a cycle from `memory_rw`’s `len`
+
+`_scratchpad/21066_66a_hrm.txt` S6.2.6.1 (`:8844–8852`) and Table 6-3 (`:8857–8884`):
+
+- CPU `a<4:3>` **is** the transfer size (Byte / Word / Tribyte / Longword / Quadword).
+- CPU `a<6:3>` generate PCI `c_be_l<3:0>`.
+- `a<2:0>` must be zero.
+- I/O space (S6.2.8 `:9178–9199`) uses the same encodings; `ad<1:0>` come from `a<6:5>`.
+
+The widest CPU-initiated sparse/I/O transfer in that table is **Quadword** = a PCI burst of **two longwords** = **8 bytes** (`:8916–8922`). There is no 16-byte row.
+
+So `len` is the emulator buffer width (instruction size, or `store_buf`’s packing). The PCI transfer size is `a<4:3>` of the **issue address**. The comment *“the size field `a<4:3>` is not decoded here”* is the reason the model is **lossy for WORD/LONG/QUAD** — that is the already-filed `lcaisasize` residual — not a warrant that one byte is right for every `len`.
+
+### 2. Every `store_buf` granule that can actually be issued starts as BYTE
+
+`store_buf` only emits `psize ∈ {1024, 256, 64, 16, 4, 1}` and only when `addr & (psize-1) == 0`. There is **no 8** in that set. `memory_rw`’s split is `MRW_SPLIT_MASK = 0x3ff` (1024), so a 16-aligned 16-byte write arrives **whole**. That parenthetical of Fable’s is true.
+
+Alignment then forces the start address’s `a<4:3>`:
+
+| `store_buf` psize | required alignment | start `a<4:3>` | Table 6-3 size |
+|---|---|---|---|
+| 16, 32-aligned (`addr & 31 == 0`) | bits 4:0 = 0 | `00` | **Byte** |
+| 16, 16-mod-32 (`addr & 31 == 16`) | bit 4 = 1, bits 3:0 = 0 | `10` | **Tribyte** |
+| 64 / 256 / 1024 | still more zeros | `00` | **Byte** |
+
+For the 32-aligned len-16 cell (the one GETENV actually produces when `a2` is 32-aligned), the address encoding **asks for one byte**. Taking `data[(P & 3)]` and ignoring the other fifteen is the same contract as STL (`len=4`, 3 unused) or STQ (`len=8`, 7 unused) to a BYTE-encoded address — which the model already does, and which the HRM requires (*“An STL instruction must be used”* for masked writes, `:8906–8907`).
+
+**One byte is not a lost second PCI cycle. There is no second cycle, because the issue address still says Byte.**
+
+### 3. The “two 8-byte transactions, each with its own lane byte” counterfactual is not hardware
+
+Fable’s picture: split the 16-byte write at architectural max (8), each half forwards `data[(P&3)]`.
+
+Run the addresses through **this** handler’s own map (`relative_addr >>= 5`, then `ofs = (relative_addr & 3) % len`):
+
+- Sparse slot size is 32 CPU-address bytes per I/O port (the `<< 5`).
+- A 16-aligned 16-byte write **never crosses a slot** (16 < 32; 16-aligned start is at offset 0 or 16 in the slot).
+- STQ at `A` and STQ at `A+8` therefore hit **the same port**.
+- Both compute `ofs = P & 3`. Destinations are identical. The second write **overwrites** the first. That is not two architectural bytes delivered to two places.
+
+Worse, on the **IOC** those two STQs are not even the same cycle type:
+
+- `A` 16-aligned: `a<4:3> = 00` → Byte.
+- `A+8`: `a<4:3> = 01` → **Word**.
+
+Hardware would issue a byte I/O cycle, then a word I/O cycle (2 byte-enables, `ad<1:0>` from `a<6:5>`). The model, size-blind, would still forward one byte each time. Fable’s “two lane-byte forwards of the same kind” is true of **this handler’s** size-blind rule under a split the emulator does not perform. It is not Table 6-3.
+
+---
+
+## Q2 — Is a wide `memory_rw` at this window architecturally meaningful?
+
+**As a 16-byte IOC transaction: no. As a BYTE-encoded store whose emulator buffer happens to be wide: yes.**
+
+Alpha load/store in this tree is `LS_B/W/L/Q` only (`cpu_alpha_instr_loadstore.c`: `sizeof(data)` is 1/2/4/8). STQ is the ceiling. GETENV’s `store_buf(cpu, a2, s, len)` with guest `a2` is a real producer of `len ∈ {16,64,256,1024}` — that reachability is not in dispute — but it is an **emulator memcpy**, not an instruction and not a Table 6-3 encoding.
+
+A 16-byte write into this window is therefore:
+
+- **Meaningful** as “a store issued at this CPU address,” and that address’s `a<4:3>` names the cycle.
+- **Not meaningful** as “one 16-byte PCI I/O transaction.” The IOC cannot say that.
+
+“Correct behaviour is undefined, therefore decline” does not follow. The start address **does** name a cycle. For the 32-aligned cell it names Byte. Servicing that cycle and ignoring extra buffer bytes is defined. Declining it because the emulator packed unused bytes is the same shape as refusing STQ to a BYTE-encoded address because `len=8 > 1`, which the model correctly accepts.
+
+---
+
+## Q3 — What should the row pin?
+
+**(a), with a precise oracle — not Fable’s (b), not the mutant (c).**
+
+| Candidate | Defensible? |
+|---|---|
+| **(a)** one byte forwarded, extra buffer bytes unused | **Yes**, as the BYTE-encoding contract on a wider buffer. Same oracle as STL/STQ to a BYTE-encoded port: serviced, lane `(P & 3)`, one dense 1-byte forward. |
+| **(b)** multiple lane bytes / product change | **No.** That is the two-STQ counterfactual, and it is not the IOC. Multi-byte forwarding is `lcaisasize` (decode `a<4:3>`, honour the enables). Different class, already filed, new oracles. Do not smuggle it into `#530`. |
+| **(c)** decline `len > 8` (mutant is the fix) | **No.** It refuses a BYTE-encoded cycle because the emulator’s buffer is wider than STQ. FAULT is not available on Alpha (`memory_rw.c` delivers an exception only under `MEM_MIPS` / `MEM_M88K`; a `return 0` here is `MEMORY_ACCESS_FAILED` and no exception). `store_buf` **ignores** that return, so (c) is a silent drop of the chunk. That is not “restore architecture.” |
+
+`LEN8_DETERMINATION.md` got the **disposition** right (row, not product) and the **warrant** too weak. “`ofs` is in `[0,3]` so it is bounds-safe” is true and is not why the one-byte forward is correct. The warrant is Table 6-3 at a 32-aligned issue address: size = Byte.
+
+**Row design that must not be skipped:**
+
+- Drive the non-instruction path (GETENV / `store_buf`). No instruction-driven row can express `len > 8`. That part of the determination is right.
+- Put `a2` **32-aligned** in the sparse window (`addr & 31 == 0`), so `a<4:3> = 00`. A merely 16-aligned `a2` (`addr & 31 == 16`) is TRIBYTE (`a<4:3> = 10`). Pinning one-byte **there** would certify `lcaisasize` as architecture — the failure mode this question exists to prevent.
+- Oracle: access **serviced** (the mutant’s `return 0` reds it), and the forwarded byte is `s[P & 3]` at the dense ISA port. Do not write “16-byte PCI cycle transfers one byte.” Write “BYTE-encoded issue; extra `store_buf` payload unused.”
+
+The L2 is: the mutant **declines a BYTE cycle that should land**. An accept row for that cycle is what the floor asked for.
+
+---
+
+## Q4 — If the manual were not enough, what measurement would settle it?
+
+The manual **is** enough for the architectural question. A probe cannot tell you what Table 6-3 names.
+
+The measurement that is still owed is the **row**, not a tie-break:
+
+1. GETENV with `a2` 32-aligned inside `lca_isa`, filename length ≥ 15 so `store_buf` emits one `len=16` write.
+2. Count nested 1-byte forwards to `LCA_ISA_BASE + port` (port, value).
+3. Same setup under `len == 0 || len > 8`: zero forwards, access failed.
+4. Control: STL (`len=4`) to the same BYTE-encoded address with the same lane byte — one forward, same port, same value.
+
+If (2) and (4) match, the wide buffer is unused payload. That is the pin. If they ever differ, **that** would be news; nothing in the handler’s arithmetic predicts a difference at 32-align.
+
+Comparing (2) to two guest STQs at `a2` and `a2+8` measures **`store_buf` packing vs an instruction loop**. Those will differ (second STQ is WORD-encoded, same slot). That difference is `lcaisasize` plus packing. It does not license (b) or (c) under `#530`.
+
+---
+
+## Standing license — two things this pass also found
+
+**1. `len ∈ {64, 256, 1024}` spans multiple sparse slots, and the handler only services the first.** Slot = 32 CPU bytes. A 64-aligned 64-byte `store_buf` covers ports `P` and `P+1`; the handler uses only the start address and forwards one byte to `P`. That is a real under-copy relative to “issue one encoded cycle per slot,” and it is **not** Fable’s len-16 lane-byte story (len-16 never leaves the slot). Disclose those cells in the contract. Do not turn them into a `#530` product change; they belong next to `lcaisasize` if they are taken at all.
+
+**2. The 16-mod-32 GETENV cell is TRIBYTE, not Byte.** Guest `a2` is unconstrained, so both alignments are reachable. The row that discharges the L2 must not sit on the TRIBYTE cell.
+
+---
+
+**Bottom line:** the main loop’s “row, not product” call survives, on a stronger warrant than the one it wrote. Fable was right to refuse to treat that call as settled from bounds-safety alone, and wrong that a 16-byte `store_buf` is two 8-byte lane forwards with a lost byte. One byte is what a 32-aligned issue address asks for. Pin that. Do not pin a 16-byte architecture the IOC does not have.

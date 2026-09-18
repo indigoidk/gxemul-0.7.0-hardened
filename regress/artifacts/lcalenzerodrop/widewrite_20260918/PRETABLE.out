@@ -1,0 +1,71 @@
+PRETABLE -- lcalenzerodrop wide-write row (the L2 row #530 owed and never built)
+Written BEFORE any run.  THIS FILE'S MTIME IS THE ORDER PROOF: every prediction below precedes the
+table that tests it.  Author: GXEMUL (2) [e8a2bc], which owns this row by agreement.
+
+INSTRUMENT: _scratchpad/e8a2bc_lca_widewrite.py (standalone, 3 rows), to be FROZEN into this dir
+before the first leg.  Standalone on purpose: the real regress/lca_isalane_probe.py carries 352
+measured rows that must not move until this row is proven.
+
+======================================================================= ROWS AND CHANNELS
+row           want        CHANNEL -- the mutant it kills and the observable that differs
+-----------   ---------   --------------------------------------------------------------------------
+wide alive    alive       kills NOTHING by design.  A liveness control: the guest survives an inline
+                          CALL_PAL 0x3fffffe.  If it reds on BASE the row is broken (L1), not the fix.
+wide live     0x5a        kills NOTHING by design.  LIVENESS + DEVICE SIGNATURE: a 1-byte STB of the
+                          PRESET round-trips through the ns16550 SCR at port 0x2ff, proving the channel
+                          the next row reads is a real register and not RAM or an unmapped window.
+wide getenv   0x44 ('D')  KILLS M2 and KILLLEN8 via the SCR VALUE.  On base, the 16-byte store_buf
+                          write forwards s[3] = 'D'.  Under either mutant the SCR is never written and
+                          the load returns the PRESET 0x5a.  0x44 != 0x5a, so the channel CAN vary
+                          under both named mutants -- this is not a survival-only row.
+
+======================================================================= PREDICTIONS
+binary     edit                                         wide alive  wide live  wide getenv  score
+--------   ------------------------------------------   ----------  ---------  -----------  -----
+base       #530 as it stands in the working tree        alive       0x5a       0x44         3/3
+M2         write arm: `&& len <= 8'                     alive       0x5a       0x5a  RED    2/3
+KILLLEN8   guard: `len == 0' -> `len == 0 || len > 8'   alive       0x5a       0x5a  RED    2/3
+
+WHY each mutant reds, read from source, not reasoned from the table:
+  M2       len 16 fails the conjunct and falls into the READ arm, which reads port 0x2ff into
+           `byte' and never writes it.  SCR keeps the PRESET.  The read arm then returns 1, so
+           memory_rw reports SUCCESS -- no debug line, no exception.
+  KILLLEN8 `return 0' -> memory_rw.c:595-596 sets res = -1 -> :603 enters the failure branch ->
+           the ONLY exception calls are under #ifdef MEM_MIPS (:608) and #ifdef MEM_M88K (:614);
+           THERE IS NO ALPHA BRANCH, so it returns MEMORY_ACCESS_FAILED (:624), and store_buf
+           (memory.c:844) ignores the return.  The write is dropped silently.  A debug() line
+           "[ writing to device 'lca_isa' addr ... failed ]" MAY appear -- it is not a row channel.
+
+======================================================================= CHECKS
+SIBLING PARITY   The read arm has no wide-width row either: store_buf only WRITES, and PROM
+                 PUTS (palcode.c:110-117) reads one byte at a time.  NO wide READ producer was
+                 found, so a read-side twin of this row would drive a path no guest reaches.
+                 Recorded as N/A WITH THAT REASON, not left blank.
+CLAIM -> ROW     The probe's own :148-151 claims "a row for this cell must drive the
+                 NON-INSTRUCTION path".  This row IS that path.  :159-162 claims the product code
+                 is correct at len 16 -- this row's base leg is the measurement of that claim.
+GUARD vs BODY    Guard fields: len, writeflag.  Body reads: data[ofs], relative_addr, len (the
+                 zero-fill loop).  Where they differ: none new -- M2 conditions the WRITE-arm
+                 predicate on len, which the body also reads.
+CHANNEL          Per row, above.  `wide getenv' is the only row that can vary under the named
+                 mutants, and it varies by value (0x44 vs 0x5a), not by survival.
+
+======================================================================= NOT PREDICTED, AND SAID SO
+* Whether execution resumes at pc+4 after an INLINE CALL_PAL 0x3fffffe.  The real PROM entry is
+  reached by jsr and returns by ret.  If it does not resume, `t4' is never printed, `wide getenv'
+  reads None on BASE, and the row is BROKEN -- an L1 construction defect, fixed before any mutant
+  score is read.
+* Whether `-o' is accepted on `-E alpha -e alphabook1' without complaint (main.c:434-436 marks it
+  machine_specific_options_used).
+* M2 SIDE EFFECT, found while tracing M2 for this file and NOT a row: the read arm's zero-fill,
+  `for (i=0; i<len; i++) data[i] = i == ofs ? byte : 0x00', writes into `data' -- which here is
+  store_buf's SOURCE, i.e. the emulator's own `boot_string_argument' heap buffer (a strdup of 16
+  chars + NUL, so a 16-byte write is in bounds).  Under M2 a guest GETENV silently OVERWRITES THE
+  EMULATOR'S BOOT STRING.  Recorded as an observation about the mutant, not a finding against
+  shipped code: the shipped write arm returns before the loop.
+
+======================================================================= CITED, NOT RE-FILED
+Only s[3] reaches the port; the other 15 bytes are dropped.  That is `lcawidefold' (LOW,
+documented-only), whose reopen condition is "a guest found issuing GETENV into the ISA window".
+This row IS such a guest.  If base goes green, lcawidefold's reopen condition is MET -- say so on
+that row rather than filing a duplicate.

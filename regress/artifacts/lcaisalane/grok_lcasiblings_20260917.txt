@@ -1,0 +1,144 @@
+I'll verify each of the three LCA ISA claims against the shipped handler and the HRM, rather than treating the ledger wording as settled. First stop is git, the checkpoint, and the actual `lca_isa` path.HEAD matches `9c91999`. Next I’ll open the shipped `lca_isa` handler, the PHYSICAL path, and the three ledger rows.The `#530` lane repair is already in the working-tree handler. Next I’ll check Alpha `translate_v2p`, the ISA base, and whether omitting `PHYSICAL` actually hits `fatal()`.**VERDICT: THREE REAL DEFECTS, NOT ONE. `lcaisaphys` is the first round and is under-ranked at MED — the window-death claim holds for this address. `lcaisasize` and `lcaisaqword` are independent as the qword row asserts, but they share one decode word and should land in one decoder round. Only a size fix that keys on CPU `len` (wrong against the HRM) would force a re-table of `#530`'s 352; a correct encoding-keyed fix would not.**
+
+Tree read: `GXEMUL-SEC/src/devices/dev_lca.c` (working-tree handler, including the `#530` lane repair). HRM: `_scratchpad/21066_66a_hrm.txt` S6.2.6.1 / Table 6-3 / S6.2.8. Translator: `GXEMUL-SEC/src/cpus/memory_alpha.c`, `memory_rw.c`. No boot, no paging probe; every reachability claim below is derived from those files plus the Linux LCA I/O sequence already visible in-tree as a citation.
+
+---
+
+## Q1 — is each one real, and guest-reachable?
+
+### `lcaisaphys` — REAL. The “entire window dies” claim is true of *this* nested address. MED is under-ranked.
+
+Both nested calls still pass bare `CACHE_NONE` (2), not `PHYSICAL` (32):
+
+```299:306:GXEMUL-SEC/src/devices/dev_lca.c
+	if (writeflag == MEM_WRITE) {
+		byte = data[ofs];
+		return cpu->memory_rw(cpu, cpu->mem, LCA_ISA_BASE +
+		    relative_addr, &byte, 1, writeflag, CACHE_NONE);
+	}
+
+	cpu->memory_rw(cpu, cpu->mem, LCA_ISA_BASE + relative_addr,
+	    &byte, 1, MEM_READ, CACHE_NONE);
+```
+
+`LCA_ISA_BASE` is `0x1d0000000` — a physical port base, not a K0SEG VA. `memory_rw.c` at the worker is:
+
+```
+if (misc_flags & PHYSICAL || cpu->translate_v2p == NULL)
+    paddr = vaddr;
+else
+    ok = cpu->translate_v2p(...);
+```
+
+Alpha always installs `alpha_translate_v2p`. That function identity-maps in **two** places only:
+
+1. kernel mode **and** `vaddr` in K0SEG (`0xfffffc0000000000`–`0xfffffdffffffffff`);
+2. kernel mode **and** `apcb_ptbr == 0` (the “UGLY hack”).
+
+`0x1d0000000` is **not** in K0SEG. The guest’s *outer* sparse access (`IDENT_ADDR`/`K0SEG` + `LCA_PCI_SIO` + `(port<<5)`) is. That is why PROM and every in-tree probe still work: they never set PTBR, so the inner call rides the hack.
+
+The 2026-09-11 MED downgrade’s premise (b) — “valid PTEs can give an identity mapping” — is true of **K0SEG VAs** and was restated as a property of **this** inner address. After PTBR ≠ 0 the inner call page-walks VA `0x1d0000000+port`. No real OS maps that low VA onto the ISA physical window; they talk to I/O through K0SEG. Expected outcome is `not_found`, not a harmless identity map.
+
+On `not_found`:
+
+- `fatal("[ alpha_translate_v2p: 0x… wasn't found ]\n")` then `return 0` (`memory_alpha.c`, the `#194` path).
+- Invalid L2/L3 PTEs print an extra `TODO: pteN not valid` first — also unlatched.
+- **Reads:** the inner fail is **ignored**; the handler still `return 1` with a zeroed byte. The guest load succeeds and writes zeros into the register. False success.
+- **Writes:** the handler returns the inner 0; outer `memory_rw` turns that into `MEMORY_ACCESS_FAILED`. Alpha has **no** bus-exception arm in that function (only `MEM_MIPS` / `MEM_M88K`). The store instruction abandons the write (`cpu_alpha_instr_loadstore.c`, the `#215` early-out). Silent drop, no guest fault.
+
+That is the whole sparse I/O window, every access, once paging is on. alphabook1 is the only in-tree LCA machine (`machine_alpha.c`, 21066). No in-tree guest is shown to set PTBR — that is a **witness** gap, not a severity gap. A rung-3 is cheap: the PTBR construction in `regress/alpha_pfnoffset_probe.py` plus one sparse UART access through `lca_isalane_probe.py`’s existing machine.
+
+I would put this back at **HIGH**. The MED correction kept the defect and withdrew a consequence that actually follows once you stop treating K0SEG’s identity map as a property of a non-K0SEG address.
+
+### `lcaisasize` — REAL. Silent under-copy on the encodings a real 21066 guest actually uses.
+
+`relative_addr >>= 5` discards `a<4:0>` before anything else. Table 6-3 (`:8857–8884`) has 11 legal `(a<6:5>, a<4:3>)` rows. The model always forwards **one** byte. BYTE (`a<4:3>=00`, four rows) matches `#530`’s settled contract. The other **seven** are under-copied: 3 WORD (2 B), 2 TRIBYTE (3 B), 1 LONGWORD (4 B), 1 QUADWORD (8 B).
+
+alphabook1 is a 21066 (`cpu_alpha.h`: `features = 0`, no BWX). A genuine guest **cannot** emit `ldbu`/`stb`. Linux LCA byte I/O is `LDL` at `(port<<5)+0x00` plus `extbl`; 32-bit I/O is `LDL` at `(port<<5)+0x18` (`lca_ioread32` / `lca_iowrite32`). `+0x18` is `a<4:3>=11` — LONGWORD. The model still forwards one byte. The old `ofs > len` kill never fired on `len==4` (`ofs` is `port&3` ∈ {0,1,2,3}). Silent, on the path a real guest uses for `inl`.
+
+`#530`’s 352 rows do **not** witness this: they use `SP(port) = port<<5`, which is BYTE encoding. The detector’s own contract discloses it.
+
+Reachable today without paging: any `LDL`/`STL` at `+0x08` or `+0x18`. Not yet rowed.
+
+### `lcaisaqword` — REAL as an addressing defect. Weakly travelled.
+
+S6.2.8 prose (`:9192–9193`) says I/O `ad<1:0>` come from `a<6:5>`. Table 6-3’s QUADWORD row (`:8884`) is `a<6:5>=11`, `a<4:3>=11`, I/O `ad<1:0>=00`. The table wins: it is the more specific row, and the footnote at `:8888` (`ad2` 0 then 1 for the two longwords) keeps `ad<1:0>=00`.
+
+Arithmetic: `((P << 5) | 0x78) >> 5 = P | 3`. Hardware I/O address is `(a<31:7><<2)|00 = P` for an aligned P. Model forwards to `P+3`.
+
+This handler is registered only at `LCA_PCI_SIO` (I/O). Sparse **memory** (`LCA_PCI_SPARSE`) is not modelled at all. 64-bit ISA I/O is unusual; Linux marks LCA I/O quadword as non-trivial. Real as a Table 6-3 miss; last of the three on likely guest traffic.
+
+---
+
+## Q2 — three defects or one? Does a width fix imply the addressing fix?
+
+**Three defects, two rounds.**
+
+| | What is wrong | Independent of the others? |
+|---|---|---|
+| `lcaisaphys` | inner `memory_rw` missing `PHYSICAL` | Yes. One flag. Does not touch encode or port. |
+| `lcaisasize` | transfer width ignores `a<6:3>` | Width is independent of the QW **address** rule. |
+| `lcaisaqword` | QW `ad<1:0>` is 00, not `a<6:5>` | Address is independent of “copy N bytes to `>>5`”. |
+
+The qword row’s claim is true: a width-only patch that still does `port = relative_addr >> 5` and then copies N bytes still delivers those bytes to `P+3`.
+
+They are **not** independent at the **decode word**. LONGWORD is `a<6:5>=00, a<4:3>=11`; QUADWORD is `a<6:5>=11, a<4:3>=11`. Size is a function of **`a<6:3>`**, not of `a<4:3>` alone. The ledger’s member-7 sketch — “capture `(relative_addr >> 3) & 3`, transfer that many bytes” — cannot tell those two rows apart, gets TRIBYTE wrong (`10` is 3 bytes, not `1<<2`), and leaves the QW misroute in place.
+
+A size-only round that ships that sketch leaves `lcaisaqword` wrong on **both** axes. Implement Table 6-3 once.
+
+---
+
+## Q3 — collision with `#530`?
+
+`#530` (working-tree handler; HEAD is still `#528`) is:
+
+```
+relative_addr >>= 5;
+ofs = (relative_addr & 3) % len;
+/* one byte, whatever len; a<4:3> not decoded */
+```
+
+Its 352 rows are BYTE-encoded (`port<<5`). Its contract already discloses all three of these rows by name.
+
+- **`lcaisaphys`:** does not change `relative_addr` or the one-byte packing. PTBR=0 identity and `PHYSICAL` produce the same `paddr` for `0x1d0000000`. **No re-table.**
+- **`lcaisasize`, done correctly (key on the encoding, not on CPU `len`):** BYTE encodings stay one-byte. The 352 stay green. **No re-table of `#530`.** What is owed is a **new** detector at `+0x08` / `+0x18` / `+0x10`, reading the data moved, not call-count (a BYTE access and a correct WORD access can both be one nested call).
+- **`lcaisasize`, done wrongly as “forward `len` bytes”:** that **would** red `#530`’s zero-lane rows on every `LDL` at `port<<5`, and it is also wrong against the HRM (`LDL`+BYTE encoding is a 1-byte PCI cycle). Do not do that.
+- **`lcaisaqword`:** a surgical `if (a<6:3>==0xF) port &= ~3` only moves `relative_addr` on the `0x78` encoding, which `#530` does not row (“NOT the len-8 lane this probe rows”). **No re-table of the 352.**
+
+The brief’s fear — “a fix that changes what `relative_addr` means before the `% len`” — applies to a decoder that **stops shifting by 5 for every access**, not to capturing the size field first and still shifting. None of the three, done as Table 6-3 plus one `PHYSICAL` flag, is forced to re-table `#530`. `lcaisasize` **is** forced to **extend** the detector.
+
+---
+
+## Q4 — severity and order (one round on this handler)
+
+**Take `lcaisaphys` first.**
+
+Severity, not witness: total window death + `floodclass` vs silent truncation of 16/32-bit I/O vs a misroute on an encoding real I/O drivers almost certainly never emit. Gate blind-spot: every existing LCA probe and `#530` itself run with PTBR=0, so this is invisible to the 352. Fix size: one flag on two calls, house idiom `CACHE_NONE | PHYSICAL` (already how `dev_sh4.c`, `dev_pccmos.c`, Maple, etc. forward a known physical address). It does not disturb `#530`’s packing, and it is what makes a post-paging test of the decoder possible.
+
+Then **`lcaisasize` + `lcaisaqword` as one Table 6-3 decoder.** Do not split them. Do not take qword first.
+
+`lcaisasize` is the more travelled of those two (Linux `inl` is `+0x18` on a CPU with no BWX) and is live without paging. It is still partial; phys is total.
+
+---
+
+## Q5 — is that `fatal()` unlatched and guest-drivable?
+
+**Unlatched print, not a host kill. The row title’s “dies” is the window, not the process.**
+
+`fatal()` in `debugmsg.c` has no `-q` early-out, no `exit`/`abort`. `#194` already removed process death from this translator miss. Every inner miss prints; `pte2`/`pte3` invalid print twice. Guest-drivable in the `floodclass` sense: the guest does not pick the inner VA, but **any** sparse I/O after PTBR is set produces the message, on every access, with no latch.
+
+The host stays up. Reads answer 0 with success. Writes vanish. That is worse than a kill for debugging and is still not `exit(1)`.
+
+---
+
+## Fourth things (found while checking, not in the three rows)
+
+1. **The `lcaisasize` repair sketch is not a Table 6-3 decoder.** `a<4:3>` does not uniquely determine size; TRIBYTE is 3 bytes; QW vs LW is `a<6:5>`. Treat that sketch as a hypothesis, not a spec.
+2. **`IOC_HAE` does not collide with this handler.** S6.2.8: I/O space does not use HAE (`ad<31:27>=00000`). The collision note on `lcaisaphys` / `lcaisaqword` is a wrong transfer from sparse **memory**, which this file does not implement (`LCA_PCI_SPARSE` is unregistered).
+3. **Read vs write after a miss is asymmetric** (false-success zero read, dropped write, no Alpha bus fault). That is a sharpening of `lcaisaphys`, not a fourth row — unless someone “fixes” only the flag and leaves the read arm ignoring the inner return, in which case a *future* translator miss still lies. Honour the inner return on the read arm in the same diff, or disclose it.
+4. **A coincidental valid PTE at VA `0x1d0000000` would alias ISA onto RAM**, not identity-map the window. Worse than `not_found`, still a reason for `PHYSICAL`, not a reason to wait.
+5. **Sparse PCI memory is a missing window, not a fourth bug in this handler.** QW matters more there. Out of scope here.
+
+---
+
+**Seat:** grok-4.6, file-reading. **Not fired / not claimed:** no compile, no paging probe, no kill table. The HIGH re-grade of `lcaisaphys` is a reading of `alpha_translate_v2p` against this specific VA; a one-session PTBR+sparse probe would convert it to a measurement.

@@ -1,0 +1,585 @@
+lca_isalane_probe -- binary=/tmp/gxopus530c5_bins/t7_WWtail label=WWtail machine=alphabook1
+  sparse LCA_PCI_SIO=0x1c0000000  flat LCA_ISA_BASE=0x1d0000000  ofs = (r>>5) & 3 = port & 3
+row            got                      want                     note                                                     
+  RAW[base]: live=0x55 flatLSR=0x60 sparseLSR=0x60 wideLSR=0x6000 nodev=0x0 alive=True retried=False
+base alive     alive                    alive                    CONTROL: nothing in this session may end the host        ok
+live           0x55                     0x55                     LIVENESS+DEVSIG: 8042 self-test reply, THROUGH lca_isa at ofs 0 ok
+ofs1 devsig    0x60                     0x60                     DEVSIG: TXRDY|TSRE are set by the ns16550 handler on every access ok
+ofs1 zero      0x60                     0x60                     *** DEFECT: byte read of ISA 0x3fd (LSR) -- port 1 mod 4 -> ofs 1 *** ok
+ofs1 answer    completed                completed                the handler returned 1: the guest was ANSWERED zero, not refused ok
+ofs1 wide      0x60                     0x60                     SAME ADDRESS at len 4: the device byte lands in lane 1 -- so it arrived ok
+ctl            alive                    alive                    CONTROL: byte access to an ISA port with NO device, ofs 0, survives ok
+ctl zero       0x0                      0x0                      CONTROL: and it answers zero -- so zero alone proves nothing (see ofs1 devsig) ok
+  EVIDENCE[base]: [ pckbc: write to CTL: aa ]
+  EVIDENCE[base]: [ lca: ISA interrupt assert not implemented (Alpha has no interrupt delivery); ignored  (once) ]
+  EVIDENCE[base]: [ lca: ISA interrupt deassert not implemented (Alpha has no interrupt delivery); ignored  (once) ]
+  EVIDENCE[base]: memory READ: from non-existant paddr=0x00000001d0000300 len=1 pc=0xfffffc000104005c
+
+  RAW[ofs2]: flatMSR=0xb0 wideMSR=0xb00000 alive=True retried=False
+ofs2 devsig    0xb0                     0xb0                     DEVSIG: DCD|DSR|CTS are set by the ns16550 handler on every access ok
+ofs2 wide      0xb0                     0xb0                     CONTROL: the SAME sparse address at len 4 survives and packs lane 2 ok
+ofs2 exit      alive                    alive                    *** DEFECT: byte read of ISA 0x3fe (MSR) -- port 2 mod 4 -> ofs 2 *** ok
+ofs2 attrib    yes                      yes                      ATTRIBUTION: a death here must carry the arm's own diagnostic ok
+
+  RAW[ofs3]: flatSCR=0x5a wideSCR=0x5a000000 alive=True retried=False
+ofs3 devsig    0x5a                     0x5a                     DEVSIG: the ns16550 scratchpad returns the byte just written to it ok
+ofs3 wide      0x5a                     0x5a                     CONTROL: the SAME sparse address at len 4 survives and packs lane 3 ok
+ofs3 exit      alive                    alive                    *** DEFECT: byte read of ISA 0x3ff (scratch) -- port 3 mod 4 -> ofs 3 *** ok
+ofs3 attrib    yes                      yes                      ATTRIBUTION: a death here must carry the arm's own diagnostic ok
+
+  RAW[fold]: alive=True lsr=0x60 r11=0x60 r21=0x6000 r81=0x6000 msr=0xb0 r22=0xb0 w11=0x3a w21=0x5a w22=0xf0
+fold alive     alive                    alive                    CONTROL: none of these cells ever ended the host         ok
+r11 byte       0x60                     0x60                     (1,1) LDBU LSR, FULL register == the flat LSR: kills the A decline (sentinel) + C/HEAD (0) ok
+r21 anchor     0x6000                   0x6000                   (2,1) LDWU LSR: position 1 on HEAD and after -- the P mod len ANCHOR; kills replicate/lane edits ok
+r81 lane       0x6000                   0x6000                   (8,1) LDQ LSR, port 5 mod 8: lane 1, not 5 -- kills dropping the `& 3' (m_nomask) ok
+r22 byte       0xb0                     0xb0                     (2,2) LDWU MSR == flat MSR at position 0: kills the A decline and HEAD's discarded byte ok
+w11 lands      0x3a                     0x3a                     (1,1) STB 0x3a -> IER, flat readback: lands on HEAD -- kills the A decline (F3) ok
+w21 lane       0x5a                     0x5a                     (2,1) STW 0x5a00 -> IER forwards position 1 on HEAD and after ok
+w22 lands      0xf0                     0xf0                     (2,2) STW 0x0040 -> MSR, flat readback reg|0xb0: lands on HEAD -- kills the A decline ok
+
+  RAW[wide]: alive=True st4=0x7e st8=0x6d mcr4=0x3 mcrrd=0x3 ld4=0x6000 ld8=0x6d000000 lsr=0x60
+wide alive     alive                    alive                    CONTROL: every access in this session is served on HEAD and on the fix ok
+st4 lane3      0x7e                     0x7e                     (4,3) STL 0x7e000000 -> SCR, flat readback: kills p_wbit1, p_wnarrow, p_wdrop4, p_waddr4 (opus p2) ok
+st8 lane3      0x6d                     0x6d                     (8,3) STQ 0x6d000000 -> SCR, flat readback: kills p_q8lane and p_wbit1 ok
+st4 lane0      0x3                      0x3                      (4,0) STL 3 -> MCR (0 mod 4), flat readback: kills p_lane0decl (the store dropped) ok
+ld4 lane0      0x3                      0x3                      (4,0) LDL MCR, FULL register: kills p_lane0decl (the load declined, sentinel kept) ok
+ld4 full       0x6000                   0x6000                   (4,1) LDL LSR, FULL register == lsr << 8: kills p_rep4 (byte replicated at len 4) ok
+ld8 lane3      0x6d000000               0x6d000000               (8,3) LDQ SCR, FULL register: kills p_q8lane's read side ok
+
+  RAW[split]: alive=True scr=0x5a q3=0x5a l3=0x5a q5=0x5a000000 qal=0x5a000000 w3=0x7e
+  EVIDENCE[split]: memory READ: from non-existant paddr=0x00000001d0000400 len=1 pc=0xfffffc0001040028
+  EVIDENCE[split]: memory READ: from non-existant paddr=0x00000001d0000400 len=1 pc=0xfffffc0001040038
+  EVIDENCE[split]: memory READ: from non-existant paddr=0x00000001d0000400 len=1 pc=0xfffffc0001040048
+  EVIDENCE[split]: memory WRITE: to non-existant paddr=0x00000001d0000400 len=1 pc=0xfffffc0001040068
+  EVIDENCE[split]: memory WRITE: to non-existant paddr=0x00000001d0000400 len=1 pc=0xfffffc0001040068
+split alive    alive                    alive                    CONTROL: no split head here ends the host on HEAD or on the fix ok
+split devsig   0x5a                     0x5a                     DEVSIG: the scratchpad holds 0x5a through the flat mapping ok
+h3 ldq         0x5a                     0x5a                     (3,3) LDQ head: position 3 % 3 = 0 -- RED ON HEAD (discarded byte); kills & (len-1) (0x5a0000) ok
+h3 ldl         0x5a                     0x5a                     (3,3) LDL head: the no-BWX route to the fix-changed cell -- RED ON HEAD; kills & (len-1) ok
+h5 ldq         0x5a000000               0x5a000000               (5,3) LDQ head: position 3 % 5 = 3; kills & (len-1) (position 3 & 4 = 0) ok
+split al       0x5a000000               0x5a000000               CONTROL: the aligned LDQ at the same port packs lane 3   ok
+h3 stq         0x7e                     0x7e                     (3,3) STQ 0x00c3007e head: position 0 forwards 0x7e; kills & (len-1) (position 2 = 0xc3) ok
+
+  RAW[cross]: alive=True r20=0x3 r80=0x3 r82=0xb00000 msr=0xb0 r42=0xb00000 r43=0x5a000000 w20=0x2 w80=0x1 w41=0x4d w81=0x5c w82=0xf0 w42=0xb4
+cross alive    alive                    alive                    CONTROL: none of these cells ever ended the host         ok
+r20 byte       0x3                      0x3                      (2,0) LDWU MCR: position 0                               ok
+r80 byte       0x3                      0x3                      (8,0) LDQ MCR: position 0 -- codex's `return len != 8 || ofs' ok
+r82 lane       0xb00000                 0xb00000                 (8,2) LDQ MSR: position 2                                ok
+r42 full       0xb00000                 0xb00000                 (4,2) LDL MSR, FULL register: position 2 and the other positions 0 (Opus c1_r4) ok
+r43 full       0x5a000000               0x5a000000               (4,3) LDL SCR, FULL register: position 3, the rest 0     ok
+w20 lands      0x2                      0x2                      (2,0) STW 0x0002 -> MCR, flat readback                   ok
+w80 lands      0x1                      0x1                      (8,0) STQ 0x01 -> MCR, flat readback                     ok
+w41 lane       0x4d                     0x4d                     (4,1) STL 0x4d00 -> IER: position 1 (minimax)            ok
+w81 lane       0x5c                     0x5c                     (8,1) STQ 0x5c00 -> IER: position 1                      ok
+w82 lane       0xf0                     0xf0                     (8,2) STQ 0x400000 -> MSR: position 2 (glm's store side) ok
+w42 lane       0xb4                     0xb4                     (4,2) STL 0x40000 -> MSR: position 2                     ok
+
+  RAW[split67]: alive=True scr=0x5a q6=0x5a000000 q7=0x5a000000 w5=0xc3 w6=0xc3 w7=0xc3
+  EVIDENCE[split67]: memory READ: from non-existant paddr=0x00000001d0000400 len=1 pc=0xfffffc0001040028
+  EVIDENCE[split67]: memory READ: from non-existant paddr=0x00000001d0000400 len=1 pc=0xfffffc0001040038
+  EVIDENCE[split67]: memory WRITE: to non-existant paddr=0x00000001d0000400 len=1 pc=0xfffffc0001040048
+  EVIDENCE[split67]: memory WRITE: to non-existant paddr=0x00000001d0000400 len=1 pc=0xfffffc0001040048
+  EVIDENCE[split67]: memory WRITE: to non-existant paddr=0x00000001d0000400 len=1 pc=0xfffffc0001040070
+  EVIDENCE[split67]: memory WRITE: to non-existant paddr=0x00000001d0000400 len=1 pc=0xfffffc0001040098
+split67 alive  alive                    alive                    CONTROL: heads of len 5-7 never ended the host           ok
+h6 ldq         0x5a000000               0x5a000000               (6,3) LDQ head: position 3 -- deepseek's `len == 6'      ok
+h7 ldq         0x5a000000               0x5a000000               (7,3) LDQ head: position 3                               ok
+h5 stq         0xc3                     0xc3                     (5,3) STQ head: position 3 forwards 0xc3                 ok
+h6 stq         0xc3                     0xc3                     (6,3) STQ head: position 3                               ok
+h7 stq         0xc3                     0xc3                     (7,3) STQ head: position 3                               ok
+
+  RAW[h1_ldq]: alive=True v=0x5a
+  EVIDENCE[h1_ldq]: memory READ: from non-existant paddr=0x00000001d0000400 len=1 pc=0xfffffc000104001c
+h1 ldq alive   alive                    alive                    (1,3) LDQ head: was a host death on HEAD (no BWX)        ok
+h1 ldq         0x5a                     0x5a                     (1,3) LDQ head value                                     ok
+  RAW[h2_ldq]: alive=True v=0x5a00
+  EVIDENCE[h2_ldq]: memory READ: from non-existant paddr=0x00000001d0000400 len=1 pc=0xfffffc000104001c
+h2 ldq alive   alive                    alive                    (2,3) LDQ head: position 1; was a host death on HEAD     ok
+h2 ldq         0x5a00                   0x5a00                   (2,3) LDQ head value                                     ok
+  RAW[h1_stq]: alive=True v=0x7e
+  EVIDENCE[h1_stq]: memory WRITE: to non-existant paddr=0x00000001d0000400 len=1 pc=0xfffffc0001040010
+  EVIDENCE[h1_stq]: memory WRITE: to non-existant paddr=0x00000001d0000400 len=1 pc=0xfffffc0001040010
+h1 stq alive   alive                    alive                    (1,3) STQ head: position 0; was a host death on HEAD     ok
+h1 stq         0x7e                     0x7e                     (1,3) STQ head value                                     ok
+  RAW[h2_stq]: alive=True v=0x96
+  EVIDENCE[h2_stq]: memory WRITE: to non-existant paddr=0x00000001d0000400 len=1 pc=0xfffffc0001040010
+  EVIDENCE[h2_stq]: memory WRITE: to non-existant paddr=0x00000001d0000400 len=1 pc=0xfffffc0001040010
+h2 stq alive   alive                    alive                    (2,3) STQ head: position 1; was a host death on HEAD     ok
+h2 stq         0x96                     0x96                     (2,3) STQ head value                                     ok
+
+  RAW[tailr]: alive=True ctl=0x55 t7=0x5500 t6=0x550000 t5=0x55000000 t3=0x550000000000
+  EVIDENCE[tailr]: [ pckbc: write to CTL: aa ]
+  EVIDENCE[tailr]: [ lca: ISA interrupt assert not implemented (Alpha has no interrupt delivery); ignored  (once) ]
+  EVIDENCE[tailr]: [ lca: ISA interrupt deassert not implemented (Alpha has no interrupt delivery); ignored  (once) ]
+  EVIDENCE[tailr]: [ pckbc: write to CTL: aa ]
+  EVIDENCE[tailr]: memory READ: from non-existant paddr=0x00000001d000005f len=1 pc=0xfffffc0001040038
+  EVIDENCE[tailr]: [ pckbc: write to CTL: aa ]
+  EVIDENCE[tailr]: memory READ: from non-existant paddr=0x00000001d000005f len=1 pc=0xfffffc0001040054
+  EVIDENCE[tailr]: [ pckbc: write to CTL: aa ]
+  EVIDENCE[tailr]: memory READ: from non-existant paddr=0x00000001d000005f len=1 pc=0xfffffc0001040070
+  EVIDENCE[tailr]: [ pckbc: write to CTL: aa ]
+  EVIDENCE[tailr]: memory READ: from non-existant paddr=0x00000001d000005f len=1 pc=0xfffffc000104008c
+tailr alive    alive                    alive                    CONTROL (1/2-byte heads at 0x5f were host deaths on HEAD) ok
+tailr ctl      0x55                     0x55                     CONTROL: aligned LDQ at SP(0x60), the (8,0) cell, reads 0x55 ok
+tailr t7       0x5500                   0x5500                   (7,0) LDQ TAIL at port 0x60: position 0 -> register byte 1 ok
+tailr t6       0x550000                 0x550000                 (6,0) LDQ TAIL at port 0x60: position 0 -> register byte 2 ok
+tailr t5       0x55000000               0x55000000               (5,0) LDQ TAIL at port 0x60: position 0 -> register byte 3 ok
+tailr t3       0x550000000000           0x550000000000           (3,0) LDQ TAIL at port 0x60: position 0 -> register byte 5 ok
+
+  RAW[tailw]: alive=True ctl=0x4 t7=0x44 t6=0x44 t5=0x44 t3=0x44
+  EVIDENCE[tailw]: [ pckbc: write to CTL: 60 ]
+  EVIDENCE[tailw]: [ pckbc: write to CTL: 20 ]
+  EVIDENCE[tailw]: [ pckbc: write to CTL: 60 ]
+  EVIDENCE[tailw]: [ pckbc: write to CTL: 60 ]
+  EVIDENCE[tailw]: memory WRITE: to non-existant paddr=0x00000001d000005f len=1 pc=0xfffffc000104006c
+  EVIDENCE[tailw]: device pckbc: UNIMPLEMENTED command 0x44 (port 0)
+  EVIDENCE[tailw]: [ pckbc: write to CTL: 20 ]
+  EVIDENCE[tailw]: [ pckbc: write to CTL: 60 ]
+  EVIDENCE[tailw]: [ pckbc: write to CTL: 60 ]
+  EVIDENCE[tailw]: memory WRITE: to non-existant paddr=0x00000001d000005f len=1 pc=0xfffffc00010400bc
+  EVIDENCE[tailw]: device pckbc: UNIMPLEMENTED command 0x44 (port 0)
+  EVIDENCE[tailw]: [ pckbc: write to CTL: 20 ]
+  EVIDENCE[tailw]: [ pckbc: write to CTL: 60 ]
+  EVIDENCE[tailw]: [ pckbc: write to CTL: 60 ]
+  EVIDENCE[tailw]: memory WRITE: to non-existant paddr=0x00000001d000005f len=1 pc=0xfffffc000104010c
+  EVIDENCE[tailw]: memory WRITE: to non-existant paddr=0x00000001d000005f len=1 pc=0xfffffc000104010c
+  EVIDENCE[tailw]: device pckbc: UNIMPLEMENTED command 0x44 (port 0)
+  EVIDENCE[tailw]: [ pckbc: write to CTL: 20 ]
+  EVIDENCE[tailw]: [ pckbc: write to CTL: 60 ]
+  EVIDENCE[tailw]: [ pckbc: write to CTL: 60 ]
+  EVIDENCE[tailw]: memory WRITE: to non-existant paddr=0x00000001d000005f len=1 pc=0xfffffc000104015c
+  EVIDENCE[tailw]: memory WRITE: to non-existant paddr=0x00000001d000005f len=1 pc=0xfffffc000104015c
+  EVIDENCE[tailw]: device pckbc: UNIMPLEMENTED command 0x44 (port 0)
+  EVIDENCE[tailw]: [ pckbc: write to CTL: 20 ]
+tailw alive    alive                    alive                    CONTROL (1/2-byte heads at 0x5f were host deaths on HEAD) ok
+tailw ctl      0x4                      0x4                      CONTROL: flat command-byte round trip                    ok
+tailw t7       0x44                     0x44                     (7,0) STQ TAIL at port 0x60 forwards position 0 (0x44), not 1 (0x21) ok
+tailw t6       0x44                     0x44                     (6,0) STQ TAIL at port 0x60 forwards position 0 (0x44), not 1 (0x21) ok
+tailw t5       0x44                     0x44                     (5,0) STQ TAIL at port 0x60 forwards position 0 (0x44), not 1 (0x21) ok
+tailw t3       0x44                     0x44                     (3,0) STQ TAIL at port 0x60 forwards position 0 (0x44), not 1 (0x21) ok
+
+  RAW[iir]: alive=True ctl=0x2 stb=0x2 stl=0x2
+iir alive      alive                    alive                    CONTROL                                                  ok
+iir ctl        0x2                      0x2                      CONTROL: IER 0 -> ETXRDY sets IIR_TXRDY; flat IIR & 3 = TXRDY ok
+iir stb        0x2                      0x2                      (1,2) STB 0 -> SP(0x3fa): TXRDY survives the store (x_wfallthru) ok
+iir stl        0x2                      0x2                      (4,2) STL 0 -> SP(0x3fa): TXRDY survives the store (x_wfallthru) ok
+
+  RAW[iirw]: alive=True ctl=0x2 stw=0x2 stq=0x2
+iirw alive     alive                    alive                    CONTROL                                                  ok
+iirw ctl       0x2                      0x2                      CONTROL: IER 0 -> ETXRDY sets IIR_TXRDY                  ok
+iir stw        0x2                      0x2                      (2,2) STW 0 -> SP(0x3fa): TXRDY survives (W1/W2/W4: gated fallthrough) ok
+iir stq        0x2                      0x2                      (8,2) STQ 0 -> SP(0x3fa): TXRDY survives (W1/W4)         ok
+
+  RAW[iirr]: alive=True rd=0x2
+iirr alive     alive                    alive                    CONTROL ((1,2) read -- a host death on HEAD)             ok
+iir lca rd     0x2                      0x2                      (1,2) LDBU SP(0x3fa) after arming: TXRDY read ONCE (RD2: forwarded twice) ok
+
+  RAW[kbcq_b]: alive=True pre=0x11 post=0x11
+  EVIDENCE[kbcq_b]: [ pckbc: write to CTL: aa ]
+  EVIDENCE[kbcq_b]: [ lca: ISA interrupt assert not implemented (Alpha has no interrupt delivery); ignored  (once) ]
+  EVIDENCE[kbcq_b]: [ pckbc: write to CTL: d1 ]
+kbcq b alive   alive                    alive                    CONTROL                                                  ok
+kbcq b pre     0x1                      0x1                      CONTROL: the self-test reply is queued (status DIB)      ok
+kbcq b dib     0x1                      0x1                      (1,0) ST 0 -> SP(0x60): the queued reply survives the store (W3: lane-gated fallthrough) ok
+  RAW[kbcq_w]: alive=True pre=0x11 post=0x11
+  EVIDENCE[kbcq_w]: [ pckbc: write to CTL: aa ]
+  EVIDENCE[kbcq_w]: [ lca: ISA interrupt assert not implemented (Alpha has no interrupt delivery); ignored  (once) ]
+  EVIDENCE[kbcq_w]: [ pckbc: write to CTL: d1 ]
+kbcq w alive   alive                    alive                    CONTROL                                                  ok
+kbcq w pre     0x1                      0x1                      CONTROL: the self-test reply is queued (status DIB)      ok
+kbcq w dib     0x1                      0x1                      (2,0) ST 0 -> SP(0x60): the queued reply survives the store (W3: lane-gated fallthrough) ok
+  RAW[kbcq_l]: alive=True pre=0x11 post=0x11
+  EVIDENCE[kbcq_l]: [ pckbc: write to CTL: aa ]
+  EVIDENCE[kbcq_l]: [ lca: ISA interrupt assert not implemented (Alpha has no interrupt delivery); ignored  (once) ]
+  EVIDENCE[kbcq_l]: [ pckbc: write to CTL: d1 ]
+kbcq l alive   alive                    alive                    CONTROL                                                  ok
+kbcq l pre     0x1                      0x1                      CONTROL: the self-test reply is queued (status DIB)      ok
+kbcq l dib     0x1                      0x1                      (4,0) ST 0 -> SP(0x60): the queued reply survives the store (W3: lane-gated fallthrough) ok
+  RAW[kbcq_q]: alive=True pre=0x11 post=0x11
+  EVIDENCE[kbcq_q]: [ pckbc: write to CTL: aa ]
+  EVIDENCE[kbcq_q]: [ lca: ISA interrupt assert not implemented (Alpha has no interrupt delivery); ignored  (once) ]
+  EVIDENCE[kbcq_q]: [ pckbc: write to CTL: d1 ]
+kbcq q alive   alive                    alive                    CONTROL                                                  ok
+kbcq q pre     0x1                      0x1                      CONTROL: the self-test reply is queued (status DIB)      ok
+kbcq q dib     0x1                      0x1                      (8,0) ST 0 -> SP(0x60): the queued reply survives the store (W3: lane-gated fallthrough) ok
+
+  RAW[kbcmd_b]: alive=True pre=0x11 pop=0x55 post=0x10
+  EVIDENCE[kbcmd_b]: [ pckbc: write to CTL: aa ]
+  EVIDENCE[kbcmd_b]: [ lca: ISA interrupt assert not implemented (Alpha has no interrupt delivery); ignored  (once) ]
+  EVIDENCE[kbcmd_b]: [ lca: ISA interrupt deassert not implemented (Alpha has no interrupt delivery); ignored  (once) ]
+kbcmd b alive  alive                    alive                    CONTROL                                                  ok
+kbcmd b pre    0x1                      0x1                      (1,0) ST 0xAA -> SP(0x64) THROUGH lca: the command reached the 8042 and queued a reply ok
+kbcmd b pop    0x55                     0x55                     (1,0) ...and the reply is the self-test 0x55 -- DEVICE SIGNATURE, not just a set bit ok
+kbcmd b post   0x0                      0x0                      (1,0) *** THE COUNT ORACLE: after ONE pop the queue is EMPTY, so the command was delivered EXACTLY ONCE.  A DUPLICATED store queues two replies and leaves DIB=1 here; a PHANTOM read pops early and drops `pre' to 0.  `kbcq b dib' cannot see either -- its oracle is survival, which is a latch question. *** ok
+  RAW[kbcmd_w]: alive=True pre=0x11 pop=0x55 post=0x10
+  EVIDENCE[kbcmd_w]: [ pckbc: write to CTL: aa ]
+  EVIDENCE[kbcmd_w]: [ lca: ISA interrupt assert not implemented (Alpha has no interrupt delivery); ignored  (once) ]
+  EVIDENCE[kbcmd_w]: [ lca: ISA interrupt deassert not implemented (Alpha has no interrupt delivery); ignored  (once) ]
+kbcmd w alive  alive                    alive                    CONTROL                                                  ok
+kbcmd w pre    0x1                      0x1                      (2,0) ST 0xAA -> SP(0x64) THROUGH lca: the command reached the 8042 and queued a reply ok
+kbcmd w pop    0x55                     0x55                     (2,0) ...and the reply is the self-test 0x55 -- DEVICE SIGNATURE, not just a set bit ok
+kbcmd w post   0x0                      0x0                      (2,0) *** THE COUNT ORACLE: after ONE pop the queue is EMPTY, so the command was delivered EXACTLY ONCE.  A DUPLICATED store queues two replies and leaves DIB=1 here; a PHANTOM read pops early and drops `pre' to 0.  `kbcq w dib' cannot see either -- its oracle is survival, which is a latch question. *** ok
+  RAW[kbcmd_l]: alive=True pre=0x11 pop=0x55 post=0x10
+  EVIDENCE[kbcmd_l]: [ pckbc: write to CTL: aa ]
+  EVIDENCE[kbcmd_l]: [ lca: ISA interrupt assert not implemented (Alpha has no interrupt delivery); ignored  (once) ]
+  EVIDENCE[kbcmd_l]: [ lca: ISA interrupt deassert not implemented (Alpha has no interrupt delivery); ignored  (once) ]
+kbcmd l alive  alive                    alive                    CONTROL                                                  ok
+kbcmd l pre    0x1                      0x1                      (4,0) ST 0xAA -> SP(0x64) THROUGH lca: the command reached the 8042 and queued a reply ok
+kbcmd l pop    0x55                     0x55                     (4,0) ...and the reply is the self-test 0x55 -- DEVICE SIGNATURE, not just a set bit ok
+kbcmd l post   0x0                      0x0                      (4,0) *** THE COUNT ORACLE: after ONE pop the queue is EMPTY, so the command was delivered EXACTLY ONCE.  A DUPLICATED store queues two replies and leaves DIB=1 here; a PHANTOM read pops early and drops `pre' to 0.  `kbcq l dib' cannot see either -- its oracle is survival, which is a latch question. *** ok
+  RAW[kbcmd_q]: alive=True pre=0x11 pop=0x55 post=0x10
+  EVIDENCE[kbcmd_q]: [ pckbc: write to CTL: aa ]
+  EVIDENCE[kbcmd_q]: [ lca: ISA interrupt assert not implemented (Alpha has no interrupt delivery); ignored  (once) ]
+  EVIDENCE[kbcmd_q]: [ lca: ISA interrupt deassert not implemented (Alpha has no interrupt delivery); ignored  (once) ]
+kbcmd q alive  alive                    alive                    CONTROL                                                  ok
+kbcmd q pre    0x1                      0x1                      (8,0) ST 0xAA -> SP(0x64) THROUGH lca: the command reached the 8042 and queued a reply ok
+kbcmd q pop    0x55                     0x55                     (8,0) ...and the reply is the self-test 0x55 -- DEVICE SIGNATURE, not just a set bit ok
+kbcmd q post   0x0                      0x0                      (8,0) *** THE COUNT ORACLE: after ONE pop the queue is EMPTY, so the command was delivered EXACTLY ONCE.  A DUPLICATED store queues two replies and leaves DIB=1 here; a PHANTOM read pops early and drops `pre' to 0.  `kbcq q dib' cannot see either -- its oracle is survival, which is a latch question. *** ok
+
+  RAW[rdq]: alive=True ctl1=0x11 ctl0=0x10 r1=0x11 r2=0x11 r4=0x11 r8=0x11
+  EVIDENCE[rdq]: [ pckbc: write to CTL: aa ]
+  EVIDENCE[rdq]: [ lca: ISA interrupt assert not implemented (Alpha has no interrupt delivery); ignored  (once) ]
+  EVIDENCE[rdq]: [ pckbc: write to CTL: aa ]
+  EVIDENCE[rdq]: [ lca: ISA interrupt deassert not implemented (Alpha has no interrupt delivery); ignored  (once) ]
+  EVIDENCE[rdq]: [ pckbc: write to CTL: aa ]
+  EVIDENCE[rdq]: [ pckbc: write to CTL: aa ]
+  EVIDENCE[rdq]: [ pckbc: write to CTL: aa ]
+  EVIDENCE[rdq]: [ pckbc: write to CTL: aa ]
+  EVIDENCE[rdq]: [ pckbc: write to CTL: aa ]
+  EVIDENCE[rdq]: [ pckbc: write to CTL: aa ]
+  EVIDENCE[rdq]: [ pckbc: write to CTL: aa ]
+  EVIDENCE[rdq]: [ pckbc: write to CTL: aa ]
+rdq alive      alive                    alive                    CONTROL                                                  ok
+rdq ctl1       0x1                      0x1                      CONTROL: two replies queued, one flat pop -> one left (DIB 1) ok
+rdq ctl0       0x0                      0x0                      CONTROL: a second flat pop empties it (DIB 0): the channel counts pops ok
+rdq r1         0x1                      0x1                      (1,0) LOAD SP(0x60) pops ONE of two replies (RD2: the read forward duplicated) ok
+rdq r2         0x1                      0x1                      (2,0) LOAD SP(0x60) pops ONE of two replies (RD2: the read forward duplicated) ok
+rdq r4         0x1                      0x1                      (4,0) LOAD SP(0x60) pops ONE of two replies (RD2: the read forward duplicated) ok
+rdq r8         0x1                      0x1                      (8,0) LOAD SP(0x60) pops ONE of two replies (RD2: the read forward duplicated) ok
+
+  RAW[cmos]: alive=True set=0xf clr=0x0 w1=0xf w2=0xf w4=0xf w8=0xf r1=0xf r2=0xf00 r4=0xf00 r8=0xf00
+cmos alive     alive                    alive                    CONTROL                                                  ok
+cmos set       0xf                      0xf                      CONTROL: a flat store of 0x0f to REG C reads back 0x0f   ok
+cmos clr       0x0                      0x0                      CONTROL: that read cleared it -- the channel sees ONE extra read ok
+cmos w1        0xf                      0xf                      (1,1) STORE 0x0f.. -> SP(0x71): REG C keeps it (x_wfallthru: a phantom read clears it) ok
+cmos w2        0xf                      0xf                      (2,1) STORE 0x0f.. -> SP(0x71): REG C keeps it (x_wfallthru: a phantom read clears it) ok
+cmos w4        0xf                      0xf                      (4,1) STORE 0x0f.. -> SP(0x71): REG C keeps it (x_wfallthru: a phantom read clears it) ok
+cmos w8        0xf                      0xf                      (8,1) STORE 0x0f.. -> SP(0x71): REG C keeps it (x_wfallthru: a phantom read clears it) ok
+cmos r1        0xf                      0xf                      (1,1) LOAD SP(0x71) delivers REG C = 0x0f at position 0 (RD2: the second read is cleared) ok
+cmos r2        0xf                      0xf                      (2,1) LOAD SP(0x71) delivers REG C = 0x0f at position 1 (RD2: the second read is cleared) ok
+cmos r4        0xf                      0xf                      (4,1) LOAD SP(0x71) delivers REG C = 0x0f at position 1 (RD2: the second read is cleared) ok
+cmos r8        0xf                      0xf                      (8,1) LOAD SP(0x71) delivers REG C = 0x0f at position 1 (RD2: the second read is cleared) ok
+
+  RAW[iirr2]: alive=True r2=0x2 r4=0x20000 r8=0x20000
+iirr2 alive    alive                    alive                    CONTROL                                                  ok
+iir lca rd2    0x2                      0x2                      (2,2) LOAD SP(0x3fa) after arming: TXRDY at position 0, read ONCE (R2w: RD2 gated on len) ok
+iir lca rd4    0x2                      0x2                      (4,2) LOAD SP(0x3fa) after arming: TXRDY at position 2, read ONCE (R2w: RD2 gated on len) ok
+iir lca rd8    0x2                      0x2                      (8,2) LOAD SP(0x3fa) after arming: TXRDY at position 2, read ONCE (R2w: RD2 gated on len) ok
+
+  RAW[stub3]: alive=True f0=0x31 f1=0x21 r1=0x21 w1=0x21 r2=0x21 w2=0x21 r4=0x21 w4=0x21 r8=0x21 w8=0x21 z1=0x21
+stub3 alive    alive                    alive                    CONTROL                                                  ok
+stub3 live     0x10                     0x10                     LIVENESS: two flat reads of 0x63 flip bit 4 -- the stub's access counter is present ok
+stub3 r1       0x0                      0x0                      (1,3) LOAD SP(0x63): ONE access reaches the port (RD2)   ok
+stub3 w1       0x0                      0x0                      (1,3) STORE 0x5a.. SP(0x63): ONE access reaches the port (x_wfallthru, nonzero byte) ok
+stub3 r2       0x0                      0x0                      (2,3) LOAD SP(0x63): ONE access reaches the port (RD2)   ok
+stub3 w2       0x0                      0x0                      (2,3) STORE 0x5a.. SP(0x63): ONE access reaches the port (x_wfallthru, nonzero byte) ok
+stub3 r4       0x0                      0x0                      (4,3) LOAD SP(0x63): ONE access reaches the port (RD2)   ok
+stub3 w4       0x0                      0x0                      (4,3) STORE 0x5a.. SP(0x63): ONE access reaches the port (x_wfallthru, nonzero byte) ok
+stub3 r8       0x0                      0x0                      (8,3) LOAD SP(0x63): ONE access reaches the port (RD2)   ok
+stub3 w8       0x0                      0x0                      (8,3) STORE 0x5a.. SP(0x63): ONE access reaches the port (x_wfallthru, nonzero byte) ok
+stub3 z1       0x0                      0x0                      (1,3) STORE ZERO at SP(0x63): ONE access reaches the port (cdxZL3 -- the fallthrough gated on lane 3 AND a zero byte; every other store row here carries 0x5a and cannot see it) ok
+
+  RAW[stub0]: alive=True f0=0x31 f1=0x21 r1=0x21 w1=0x21 r2=0x21 w2=0x21 r4=0x21 w4=0x21 r8=0x21 w8=0x21
+stub0 alive    alive                    alive                    CONTROL                                                  ok
+stub0 live     0x10                     0x10                     LIVENESS: two flat reads of 0x68 flip bit 4 -- the stub's access counter is present ok
+stub0 r1       0x0                      0x0                      (1,0) LOAD SP(0x68): ONE access reaches the port (RD2)   ok
+stub0 w1       0x0                      0x0                      (1,0) STORE 0x5a.. SP(0x68): ONE access reaches the port (x_wfallthru, nonzero byte) ok
+stub0 r2       0x0                      0x0                      (2,0) LOAD SP(0x68): ONE access reaches the port (RD2)   ok
+stub0 w2       0x0                      0x0                      (2,0) STORE 0x5a.. SP(0x68): ONE access reaches the port (x_wfallthru, nonzero byte) ok
+stub0 r4       0x0                      0x0                      (4,0) LOAD SP(0x68): ONE access reaches the port (RD2)   ok
+stub0 w4       0x0                      0x0                      (4,0) STORE 0x5a.. SP(0x68): ONE access reaches the port (x_wfallthru, nonzero byte) ok
+stub0 r8       0x0                      0x0                      (8,0) LOAD SP(0x68): ONE access reaches the port (RD2)   ok
+stub0 w8       0x0                      0x0                      (8,0) STORE 0x5a.. SP(0x68): ONE access reaches the port (x_wfallthru, nonzero byte) ok
+
+  RAW[stub1]: alive=True f0=0x31 f1=0x21 r1=0x21 w1=0x21 r2=0x21 w2=0x21 r4=0x21 w4=0x21 r8=0x21 w8=0x21
+stub1 alive    alive                    alive                    CONTROL                                                  ok
+stub1 live     0x10                     0x10                     LIVENESS: two flat reads of 0x61 flip bit 4 -- the stub's access counter is present ok
+stub1 r1       0x0                      0x0                      (1,1) LOAD SP(0x61): ONE access reaches the port (RD2)   ok
+stub1 w1       0x0                      0x0                      (1,1) STORE 0x5a.. SP(0x61): ONE access reaches the port (x_wfallthru, nonzero byte) ok
+stub1 r2       0x0                      0x0                      (2,1) LOAD SP(0x61): ONE access reaches the port (RD2)   ok
+stub1 w2       0x0                      0x0                      (2,1) STORE 0x5a.. SP(0x61): ONE access reaches the port (x_wfallthru, nonzero byte) ok
+stub1 r4       0x0                      0x0                      (4,1) LOAD SP(0x61): ONE access reaches the port (RD2)   ok
+stub1 w4       0x0                      0x0                      (4,1) STORE 0x5a.. SP(0x61): ONE access reaches the port (x_wfallthru, nonzero byte) ok
+stub1 r8       0x0                      0x0                      (8,1) LOAD SP(0x61): ONE access reaches the port (RD2)   ok
+stub1 w8       0x0                      0x0                      (8,1) STORE 0x5a.. SP(0x61): ONE access reaches the port (x_wfallthru, nonzero byte) ok
+
+  RAW[stub2]: alive=True f0=0x31 f1=0x21 r1=0x21 w1=0x21 r2=0x21 w2=0x21 r4=0x21 w4=0x21 r8=0x21 w8=0x21
+stub2 alive    alive                    alive                    CONTROL                                                  ok
+stub2 live     0x10                     0x10                     LIVENESS: two flat reads of 0x62 flip bit 4 -- the stub's access counter is present ok
+stub2 r1       0x0                      0x0                      (1,2) LOAD SP(0x62): ONE access reaches the port (RD2)   ok
+stub2 w1       0x0                      0x0                      (1,2) STORE 0x5a.. SP(0x62): ONE access reaches the port (x_wfallthru, nonzero byte) ok
+stub2 r2       0x0                      0x0                      (2,2) LOAD SP(0x62): ONE access reaches the port (RD2)   ok
+stub2 w2       0x0                      0x0                      (2,2) STORE 0x5a.. SP(0x62): ONE access reaches the port (x_wfallthru, nonzero byte) ok
+stub2 r4       0x0                      0x0                      (4,2) LOAD SP(0x62): ONE access reaches the port (RD2)   ok
+stub2 w4       0x0                      0x0                      (4,2) STORE 0x5a.. SP(0x62): ONE access reaches the port (x_wfallthru, nonzero byte) ok
+stub2 r8       0x0                      0x0                      (8,2) LOAD SP(0x62): ONE access reaches the port (RD2)   ok
+stub2 w8       0x0                      0x0                      (8,2) STORE 0x5a.. SP(0x62): ONE access reaches the port (x_wfallthru, nonzero byte) ok
+
+  RAW[tailq_w]: alive=True ctl=0x11 t7=0x11 t6=0x11 t5=0x11 t3=0x11
+  EVIDENCE[tailq_w]: [ pckbc: write to CTL: aa ]
+  EVIDENCE[tailq_w]: [ lca: ISA interrupt assert not implemented (Alpha has no interrupt delivery); ignored  (once) ]
+  EVIDENCE[tailq_w]: [ lca: ISA interrupt deassert not implemented (Alpha has no interrupt delivery); ignored  (once) ]
+  EVIDENCE[tailq_w]: [ pckbc: write to CTL: aa ]
+  EVIDENCE[tailq_w]: [ pckbc: write to CTL: d1 ]
+  EVIDENCE[tailq_w]: memory WRITE: to non-existant paddr=0x00000001d000005f len=1 pc=0xfffffc0001040044
+  EVIDENCE[tailq_w]: [ pckbc: write to CTL: aa ]
+  EVIDENCE[tailq_w]: [ pckbc: write to CTL: d1 ]
+  EVIDENCE[tailq_w]: memory WRITE: to non-existant paddr=0x00000001d000005f len=1 pc=0xfffffc000104007c
+  EVIDENCE[tailq_w]: [ pckbc: write to CTL: aa ]
+  EVIDENCE[tailq_w]: [ pckbc: write to CTL: d1 ]
+  EVIDENCE[tailq_w]: memory WRITE: to non-existant paddr=0x00000001d000005f len=1 pc=0xfffffc00010400b4
+  EVIDENCE[tailq_w]: memory WRITE: to non-existant paddr=0x00000001d000005f len=1 pc=0xfffffc00010400b4
+  EVIDENCE[tailq_w]: [ pckbc: write to CTL: aa ]
+  EVIDENCE[tailq_w]: [ pckbc: write to CTL: d1 ]
+  EVIDENCE[tailq_w]: memory WRITE: to non-existant paddr=0x00000001d000005f len=1 pc=0xfffffc00010400ec
+  EVIDENCE[tailq_w]: memory WRITE: to non-existant paddr=0x00000001d000005f len=1 pc=0xfffffc00010400ec
+tailq w alive  alive                    alive                    CONTROL                                                  ok
+tailq w ctl    0x1                      0x1                      CONTROL: a queued reply sets DIB                         ok
+tailq w t7     0x1                      0x1                      (7,0) STQ TAIL at 0x60: the queued reply survives the store (x_wfallthru at a tail width) ok
+tailq w t6     0x1                      0x1                      (6,0) STQ TAIL at 0x60: the queued reply survives the store (x_wfallthru at a tail width) ok
+tailq w t5     0x1                      0x1                      (5,0) STQ TAIL at 0x60: the queued reply survives the store (x_wfallthru at a tail width) ok
+tailq w t3     0x1                      0x1                      (3,0) STQ TAIL at 0x60: the queued reply survives the store (x_wfallthru at a tail width) ok
+  RAW[tailq_r]: alive=True ctl=0x11 t7=0x11 t6=0x11 t5=0x11 t3=0x11
+  EVIDENCE[tailq_r]: [ pckbc: write to CTL: aa ]
+  EVIDENCE[tailq_r]: [ lca: ISA interrupt assert not implemented (Alpha has no interrupt delivery); ignored  (once) ]
+  EVIDENCE[tailq_r]: [ pckbc: write to CTL: aa ]
+  EVIDENCE[tailq_r]: [ lca: ISA interrupt deassert not implemented (Alpha has no interrupt delivery); ignored  (once) ]
+  EVIDENCE[tailq_r]: [ pckbc: write to CTL: aa ]
+  EVIDENCE[tailq_r]: [ pckbc: write to CTL: aa ]
+  EVIDENCE[tailq_r]: memory READ: from non-existant paddr=0x00000001d000005f len=1 pc=0xfffffc0001040060
+  EVIDENCE[tailq_r]: [ pckbc: write to CTL: aa ]
+  EVIDENCE[tailq_r]: [ pckbc: write to CTL: aa ]
+  EVIDENCE[tailq_r]: memory READ: from non-existant paddr=0x00000001d000005f len=1 pc=0xfffffc00010400a0
+  EVIDENCE[tailq_r]: [ pckbc: write to CTL: aa ]
+  EVIDENCE[tailq_r]: [ pckbc: write to CTL: aa ]
+  EVIDENCE[tailq_r]: memory READ: from non-existant paddr=0x00000001d000005f len=1 pc=0xfffffc00010400e0
+  EVIDENCE[tailq_r]: [ pckbc: write to CTL: aa ]
+  EVIDENCE[tailq_r]: [ pckbc: write to CTL: aa ]
+  EVIDENCE[tailq_r]: memory READ: from non-existant paddr=0x00000001d000005f len=1 pc=0xfffffc0001040120
+tailq r alive  alive                    alive                    CONTROL                                                  ok
+tailq r ctl    0x1                      0x1                      CONTROL: two replies queued, one flat pop -> one left    ok
+tailq r t7     0x1                      0x1                      (7,0) LDQ TAIL at 0x60 pops ONE of two replies (RD2 at a tail width pops both) ok
+tailq r t6     0x1                      0x1                      (6,0) LDQ TAIL at 0x60 pops ONE of two replies (RD2 at a tail width pops both) ok
+tailq r t5     0x1                      0x1                      (5,0) LDQ TAIL at 0x60 pops ONE of two replies (RD2 at a tail width pops both) ok
+tailq r t3     0x1                      0x1                      (3,0) LDQ TAIL at 0x60 pops ONE of two replies (RD2 at a tail width pops both) ok
+
+  RAW[r12]: alive=True msr=0xb0 r12=0xb0
+r12 alive      alive                    alive                    was a host death on HEAD (`ofs > len'); kills the reinstated exit ok
+r12 byte       0xb0                     0xb0                     (1,2) LDBU MSR == flat MSR: was host death; kills C/A (sentinel) ok
+
+  RAW[r13]: alive=True r13=0x5a
+r13 alive      alive                    alive                    was a host death on HEAD (`ofs > len'); kills the reinstated exit ok
+r13 byte       0x5a                     0x5a                     (1,3) LDBU SCR after a flat store of 0x5a: was host death; kills C/A ok
+
+  RAW[r23]: alive=True r23=0x5a00
+r23 alive      alive                    alive                    was a host death on HEAD (`ofs > len'); kills the reinstated exit ok
+r23 lane       0x5a00                   0x5a00                   (2,3) LDWU SCR -> position 1, paired with `r21 anchor': kills the clamp (position 0) ok
+
+  RAW[w12]: alive=True w12=0xf0
+w12 alive      alive                    alive                    was a host death on HEAD (`ofs > len'); kills the reinstated exit ok
+w12 lands      0xf0                     0xf0                     (1,2) STB 0x40 -> MSR, flat readback: was host death; kills C/A (store dropped) ok
+
+  RAW[w13]: alive=True w13=0x3c w13rt=0x3c
+w13 alive      alive                    alive                    was a host death on HEAD (`ofs > len'); kills the reinstated exit ok
+w13 lands      0x3c                     0x3c                     (1,3) STB 0x3c -> SCR, flat readback: was host death; kills C/A and the unfolded write ok
+w13 roundtrip  0x3c                     0x3c                     SELF-COHERENCE: stb then ldbu at ONE sparse address returns what was stored ok
+
+  RAW[w23]: alive=True w23=0x7e
+w23 alive      alive                    alive                    was a host death on HEAD (`ofs > len'); kills the reinstated exit ok
+w23 lane       0x7e                     0x7e                     (2,3) STW 0x7e00 -> SCR forwards position 1 (as `w21 lane'): kills the clamp ok
+
+  RAW[pit40]: alive=True live=0x34/0x12 retried=False
+pit0 alive     alive                    alive                    CONTROL: nothing in this session may end the host        ok
+pit0 live1     0x34                     0x34                     LIVENESS+DEVSIG: after a CW, flat LSB 0x34 / MSB 0x12 read back LSB FIRST ok
+pit0 live2     0x12                     0x12                     LIVENESS+DEVSIG: ...then the MSB.  Two DIFFERENT bytes in a FIXED order from ONE address: RAM repeats, the ns16550 scratch returns what was written -- only a 16-bit flip-flop alternates ok
+pit0 ps5a w1   0x5a                     0x5a                     (1,0) STORE 0x5a: ONE lca write leaves it in the LSB (an EXTRA access -> 0x12) ok
+pit0 ps5a w1B  0x12                     0x12                     (1,0) ...and the MSB holds the flat 0x12 (an EXTRA access -> 0x5a) ok
+pit0 ps5a w2   0x5a                     0x5a                     (2,0) STORE 0x5a: ONE lca write leaves it in the LSB (an EXTRA access -> 0x12) ok
+pit0 ps5a w2B  0x12                     0x12                     (2,0) ...and the MSB holds the flat 0x12 (an EXTRA access -> 0x5a) ok
+pit0 ps5a w4   0x5a                     0x5a                     (4,0) STORE 0x5a: ONE lca write leaves it in the LSB (an EXTRA access -> 0x12) ok
+pit0 ps5a w4B  0x12                     0x12                     (4,0) ...and the MSB holds the flat 0x12 (an EXTRA access -> 0x5a) ok
+pit0 ps5a w8   0x5a                     0x5a                     (8,0) STORE 0x5a: ONE lca write leaves it in the LSB (an EXTRA access -> 0x12) ok
+pit0 ps5a w8B  0x12                     0x12                     (8,0) ...and the MSB holds the flat 0x12 (an EXTRA access -> 0x5a) ok
+pit0 ps00 w1   0x0                      0x0                      (1,0) STORE 0x00: ONE lca write leaves it in the LSB (an EXTRA access -> 0x12) ok
+pit0 ps00 w1B  0x12                     0x12                     (1,0) ...and the MSB holds the flat 0x12 (an EXTRA access -> 0x00) ok
+pit0 ps00 w2   0x0                      0x0                      (2,0) STORE 0x00: ONE lca write leaves it in the LSB (an EXTRA access -> 0x12) ok
+pit0 ps00 w2B  0x12                     0x12                     (2,0) ...and the MSB holds the flat 0x12 (an EXTRA access -> 0x00) ok
+pit0 ps00 w4   0x0                      0x0                      (4,0) STORE 0x00: ONE lca write leaves it in the LSB (an EXTRA access -> 0x12) ok
+pit0 ps00 w4B  0x12                     0x12                     (4,0) ...and the MSB holds the flat 0x12 (an EXTRA access -> 0x00) ok
+pit0 ps00 w8   0x0                      0x0                      (8,0) STORE 0x00: ONE lca write leaves it in the LSB (an EXTRA access -> 0x12) ok
+pit0 ps00 w8B  0x12                     0x12                     (8,0) ...and the MSB holds the flat 0x12 (an EXTRA access -> 0x00) ok
+pit0 pl5a r1   0x5a                     0x5a                     (1,0) LOAD delivers the counter LSB 0x5a at position 0   ok
+pit0 pl5a r1B  0x12                     0x12                     (1,0) ...and the NEXT flat read gets the MSB (a DUPLICATED read -> 0x5a) ok
+pit0 pl5a r2   0x5a                     0x5a                     (2,0) LOAD delivers the counter LSB 0x5a at position 0   ok
+pit0 pl5a r2B  0x12                     0x12                     (2,0) ...and the NEXT flat read gets the MSB (a DUPLICATED read -> 0x5a) ok
+pit0 pl5a r4   0x5a                     0x5a                     (4,0) LOAD delivers the counter LSB 0x5a at position 0   ok
+pit0 pl5a r4B  0x12                     0x12                     (4,0) ...and the NEXT flat read gets the MSB (a DUPLICATED read -> 0x5a) ok
+pit0 pl5a r8   0x5a                     0x5a                     (8,0) LOAD delivers the counter LSB 0x5a at position 0   ok
+pit0 pl5a r8B  0x12                     0x12                     (8,0) ...and the NEXT flat read gets the MSB (a DUPLICATED read -> 0x5a) ok
+pit0 pl00 r1   0x0                      0x0                      (1,0) LOAD delivers the counter LSB 0x00 at position 0   ok
+pit0 pl00 r1B  0x12                     0x12                     (1,0) ...and the NEXT flat read gets the MSB (a DUPLICATED read -> 0x00) ok
+pit0 pl00 r2   0x0                      0x0                      (2,0) LOAD delivers the counter LSB 0x00 at position 0   ok
+pit0 pl00 r2B  0x12                     0x12                     (2,0) ...and the NEXT flat read gets the MSB (a DUPLICATED read -> 0x00) ok
+pit0 pl00 r4   0x0                      0x0                      (4,0) LOAD delivers the counter LSB 0x00 at position 0   ok
+pit0 pl00 r4B  0x12                     0x12                     (4,0) ...and the NEXT flat read gets the MSB (a DUPLICATED read -> 0x00) ok
+pit0 pl00 r8   0x0                      0x0                      (8,0) LOAD delivers the counter LSB 0x00 at position 0   ok
+pit0 pl00 r8B  0x12                     0x12                     (8,0) ...and the NEXT flat read gets the MSB (a DUPLICATED read -> 0x00) ok
+pit0 pw r1     0x12                     0x12                     (8,0) LOAD then a flat store 0x77: read parity unmoved -> MSB 0x12 ok
+pit0 pw r2     0x77                     0x77                     (8,0) ...and 0x77 went to the LSB.  An added WRITE on the read arm sends it to the MSB -- this is the ONLY shape that sees one, because wr_msb and rd_msb are SEPARATE ok
+
+  RAW[pit41]: alive=True live=0x34/0x12 retried=False
+pit1 alive     alive                    alive                    CONTROL: nothing in this session may end the host        ok
+pit1 live1     0x34                     0x34                     LIVENESS+DEVSIG: after a CW, flat LSB 0x34 / MSB 0x12 read back LSB FIRST ok
+pit1 live2     0x12                     0x12                     LIVENESS+DEVSIG: ...then the MSB.  Two DIFFERENT bytes in a FIXED order from ONE address: RAM repeats, the ns16550 scratch returns what was written -- only a 16-bit flip-flop alternates ok
+pit1 ps5a w1   0x5a                     0x5a                     (1,1) STORE 0x5a: ONE lca write leaves it in the LSB (an EXTRA access -> 0x12) ok
+pit1 ps5a w1B  0x12                     0x12                     (1,1) ...and the MSB holds the flat 0x12 (an EXTRA access -> 0x5a) ok
+pit1 ps5a w2   0x5a                     0x5a                     (2,1) STORE 0x5a: ONE lca write leaves it in the LSB (an EXTRA access -> 0x12) ok
+pit1 ps5a w2B  0x12                     0x12                     (2,1) ...and the MSB holds the flat 0x12 (an EXTRA access -> 0x5a) ok
+pit1 ps5a w4   0x5a                     0x5a                     (4,1) STORE 0x5a: ONE lca write leaves it in the LSB (an EXTRA access -> 0x12) ok
+pit1 ps5a w4B  0x12                     0x12                     (4,1) ...and the MSB holds the flat 0x12 (an EXTRA access -> 0x5a) ok
+pit1 ps5a w8   0x5a                     0x5a                     (8,1) STORE 0x5a: ONE lca write leaves it in the LSB (an EXTRA access -> 0x12) ok
+pit1 ps5a w8B  0x12                     0x12                     (8,1) ...and the MSB holds the flat 0x12 (an EXTRA access -> 0x5a) ok
+pit1 ps00 w1   0x0                      0x0                      (1,1) STORE 0x00: ONE lca write leaves it in the LSB (an EXTRA access -> 0x12) ok
+pit1 ps00 w1B  0x12                     0x12                     (1,1) ...and the MSB holds the flat 0x12 (an EXTRA access -> 0x00) ok
+pit1 ps00 w2   0x0                      0x0                      (2,1) STORE 0x00: ONE lca write leaves it in the LSB (an EXTRA access -> 0x12) ok
+pit1 ps00 w2B  0x12                     0x12                     (2,1) ...and the MSB holds the flat 0x12 (an EXTRA access -> 0x00) ok
+pit1 ps00 w4   0x0                      0x0                      (4,1) STORE 0x00: ONE lca write leaves it in the LSB (an EXTRA access -> 0x12) ok
+pit1 ps00 w4B  0x12                     0x12                     (4,1) ...and the MSB holds the flat 0x12 (an EXTRA access -> 0x00) ok
+pit1 ps00 w8   0x0                      0x0                      (8,1) STORE 0x00: ONE lca write leaves it in the LSB (an EXTRA access -> 0x12) ok
+pit1 ps00 w8B  0x12                     0x12                     (8,1) ...and the MSB holds the flat 0x12 (an EXTRA access -> 0x00) ok
+pit1 pl5a r1   0x5a                     0x5a                     (1,1) LOAD delivers the counter LSB 0x5a at position 0   ok
+pit1 pl5a r1B  0x12                     0x12                     (1,1) ...and the NEXT flat read gets the MSB (a DUPLICATED read -> 0x5a) ok
+pit1 pl5a r2   0x5a                     0x5a                     (2,1) LOAD delivers the counter LSB 0x5a at position 1   ok
+pit1 pl5a r2B  0x12                     0x12                     (2,1) ...and the NEXT flat read gets the MSB (a DUPLICATED read -> 0x5a) ok
+pit1 pl5a r4   0x5a                     0x5a                     (4,1) LOAD delivers the counter LSB 0x5a at position 1   ok
+pit1 pl5a r4B  0x12                     0x12                     (4,1) ...and the NEXT flat read gets the MSB (a DUPLICATED read -> 0x5a) ok
+pit1 pl5a r8   0x5a                     0x5a                     (8,1) LOAD delivers the counter LSB 0x5a at position 1   ok
+pit1 pl5a r8B  0x12                     0x12                     (8,1) ...and the NEXT flat read gets the MSB (a DUPLICATED read -> 0x5a) ok
+pit1 pl00 r1   0x0                      0x0                      (1,1) LOAD delivers the counter LSB 0x00 at position 0   ok
+pit1 pl00 r1B  0x12                     0x12                     (1,1) ...and the NEXT flat read gets the MSB (a DUPLICATED read -> 0x00) ok
+pit1 pl00 r2   0x0                      0x0                      (2,1) LOAD delivers the counter LSB 0x00 at position 1   ok
+pit1 pl00 r2B  0x12                     0x12                     (2,1) ...and the NEXT flat read gets the MSB (a DUPLICATED read -> 0x00) ok
+pit1 pl00 r4   0x0                      0x0                      (4,1) LOAD delivers the counter LSB 0x00 at position 1   ok
+pit1 pl00 r4B  0x12                     0x12                     (4,1) ...and the NEXT flat read gets the MSB (a DUPLICATED read -> 0x00) ok
+pit1 pl00 r8   0x0                      0x0                      (8,1) LOAD delivers the counter LSB 0x00 at position 1   ok
+pit1 pl00 r8B  0x12                     0x12                     (8,1) ...and the NEXT flat read gets the MSB (a DUPLICATED read -> 0x00) ok
+pit1 pw r1     0x12                     0x12                     (8,1) LOAD then a flat store 0x77: read parity unmoved -> MSB 0x12 ok
+pit1 pw r2     0x77                     0x77                     (8,1) ...and 0x77 went to the LSB.  An added WRITE on the read arm sends it to the MSB -- this is the ONLY shape that sees one, because wr_msb and rd_msb are SEPARATE ok
+
+  RAW[pit42]: alive=True live=0x34/0x12 retried=False
+pit2 alive     alive                    alive                    CONTROL: nothing in this session may end the host        ok
+pit2 live1     0x34                     0x34                     LIVENESS+DEVSIG: after a CW, flat LSB 0x34 / MSB 0x12 read back LSB FIRST ok
+pit2 live2     0x12                     0x12                     LIVENESS+DEVSIG: ...then the MSB.  Two DIFFERENT bytes in a FIXED order from ONE address: RAM repeats, the ns16550 scratch returns what was written -- only a 16-bit flip-flop alternates ok
+pit2 ps5a w1   0x5a                     0x5a                     (1,2) STORE 0x5a: ONE lca write leaves it in the LSB (an EXTRA access -> 0x12) ok
+pit2 ps5a w1B  0x12                     0x12                     (1,2) ...and the MSB holds the flat 0x12 (an EXTRA access -> 0x5a) ok
+pit2 ps5a w2   0x5a                     0x5a                     (2,2) STORE 0x5a: ONE lca write leaves it in the LSB (an EXTRA access -> 0x12) ok
+pit2 ps5a w2B  0x12                     0x12                     (2,2) ...and the MSB holds the flat 0x12 (an EXTRA access -> 0x5a) ok
+pit2 ps5a w4   0x5a                     0x5a                     (4,2) STORE 0x5a: ONE lca write leaves it in the LSB (an EXTRA access -> 0x12) ok
+pit2 ps5a w4B  0x12                     0x12                     (4,2) ...and the MSB holds the flat 0x12 (an EXTRA access -> 0x5a) ok
+pit2 ps5a w8   0x5a                     0x5a                     (8,2) STORE 0x5a: ONE lca write leaves it in the LSB (an EXTRA access -> 0x12) ok
+pit2 ps5a w8B  0x12                     0x12                     (8,2) ...and the MSB holds the flat 0x12 (an EXTRA access -> 0x5a) ok
+pit2 ps00 w1   0x0                      0x0                      (1,2) STORE 0x00: ONE lca write leaves it in the LSB (an EXTRA access -> 0x12) ok
+pit2 ps00 w1B  0x12                     0x12                     (1,2) ...and the MSB holds the flat 0x12 (an EXTRA access -> 0x00) ok
+pit2 ps00 w2   0x0                      0x0                      (2,2) STORE 0x00: ONE lca write leaves it in the LSB (an EXTRA access -> 0x12) ok
+pit2 ps00 w2B  0x12                     0x12                     (2,2) ...and the MSB holds the flat 0x12 (an EXTRA access -> 0x00) ok
+pit2 ps00 w4   0x0                      0x0                      (4,2) STORE 0x00: ONE lca write leaves it in the LSB (an EXTRA access -> 0x12) ok
+pit2 ps00 w4B  0x12                     0x12                     (4,2) ...and the MSB holds the flat 0x12 (an EXTRA access -> 0x00) ok
+pit2 ps00 w8   0x0                      0x0                      (8,2) STORE 0x00: ONE lca write leaves it in the LSB (an EXTRA access -> 0x12) ok
+pit2 ps00 w8B  0x12                     0x12                     (8,2) ...and the MSB holds the flat 0x12 (an EXTRA access -> 0x00) ok
+pit2 pl5a r1   0x5a                     0x5a                     (1,2) LOAD delivers the counter LSB 0x5a at position 0   ok
+pit2 pl5a r1B  0x12                     0x12                     (1,2) ...and the NEXT flat read gets the MSB (a DUPLICATED read -> 0x5a) ok
+pit2 pl5a r2   0x5a                     0x5a                     (2,2) LOAD delivers the counter LSB 0x5a at position 0   ok
+pit2 pl5a r2B  0x12                     0x12                     (2,2) ...and the NEXT flat read gets the MSB (a DUPLICATED read -> 0x5a) ok
+pit2 pl5a r4   0x5a                     0x5a                     (4,2) LOAD delivers the counter LSB 0x5a at position 2   ok
+pit2 pl5a r4B  0x12                     0x12                     (4,2) ...and the NEXT flat read gets the MSB (a DUPLICATED read -> 0x5a) ok
+pit2 pl5a r8   0x5a                     0x5a                     (8,2) LOAD delivers the counter LSB 0x5a at position 2   ok
+pit2 pl5a r8B  0x12                     0x12                     (8,2) ...and the NEXT flat read gets the MSB (a DUPLICATED read -> 0x5a) ok
+pit2 pl00 r1   0x0                      0x0                      (1,2) LOAD delivers the counter LSB 0x00 at position 0   ok
+pit2 pl00 r1B  0x12                     0x12                     (1,2) ...and the NEXT flat read gets the MSB (a DUPLICATED read -> 0x00) ok
+pit2 pl00 r2   0x0                      0x0                      (2,2) LOAD delivers the counter LSB 0x00 at position 0   ok
+pit2 pl00 r2B  0x12                     0x12                     (2,2) ...and the NEXT flat read gets the MSB (a DUPLICATED read -> 0x00) ok
+pit2 pl00 r4   0x0                      0x0                      (4,2) LOAD delivers the counter LSB 0x00 at position 2   ok
+pit2 pl00 r4B  0x12                     0x12                     (4,2) ...and the NEXT flat read gets the MSB (a DUPLICATED read -> 0x00) ok
+pit2 pl00 r8   0x0                      0x0                      (8,2) LOAD delivers the counter LSB 0x00 at position 2   ok
+pit2 pl00 r8B  0x12                     0x12                     (8,2) ...and the NEXT flat read gets the MSB (a DUPLICATED read -> 0x00) ok
+pit2 pw r1     0x12                     0x12                     (8,2) LOAD then a flat store 0x77: read parity unmoved -> MSB 0x12 ok
+pit2 pw r2     0x77                     0x77                     (8,2) ...and 0x77 went to the LSB.  An added WRITE on the read arm sends it to the MSB -- this is the ONLY shape that sees one, because wr_msb and rd_msb are SEPARATE ok
+
+  EVIDENCE[pitT]: memory WRITE: to non-existant paddr=0x00000001d000003f len=1 pc=0xfffffc000104005c
+  EVIDENCE[pitT]: memory WRITE: to non-existant paddr=0x00000001d000003f len=1 pc=0xfffffc000104009c
+  EVIDENCE[pitT]: memory WRITE: to non-existant paddr=0x00000001d000003f len=1 pc=0xfffffc00010400e0
+  EVIDENCE[pitT]: memory WRITE: to non-existant paddr=0x00000001d000003f len=1 pc=0xfffffc0001040120
+  EVIDENCE[pitT]: memory WRITE: to non-existant paddr=0x00000001d000003f len=1 pc=0xfffffc0001040164
+  EVIDENCE[pitT]: memory WRITE: to non-existant paddr=0x00000001d000003f len=1 pc=0xfffffc0001040164
+  EVIDENCE[pitT]: memory WRITE: to non-existant paddr=0x00000001d000003f len=1 pc=0xfffffc00010401a4
+  EVIDENCE[pitT]: memory WRITE: to non-existant paddr=0x00000001d000003f len=1 pc=0xfffffc00010401a4
+  EVIDENCE[pitT]: memory WRITE: to non-existant paddr=0x00000001d000003f len=1 pc=0xfffffc00010401e8
+  EVIDENCE[pitT]: memory WRITE: to non-existant paddr=0x00000001d000003f len=1 pc=0xfffffc00010401e8
+  EVIDENCE[pitT]: memory WRITE: to non-existant paddr=0x00000001d000003f len=1 pc=0xfffffc0001040228
+  EVIDENCE[pitT]: memory WRITE: to non-existant paddr=0x00000001d000003f len=1 pc=0xfffffc0001040228
+  EVIDENCE[pitT]: memory READ: from non-existant paddr=0x00000001d000003f len=1 pc=0xfffffc0001040288
+  EVIDENCE[pitT]: memory READ: from non-existant paddr=0x00000001d000003f len=1 pc=0xfffffc00010402c8
+  EVIDENCE[pitT]: memory READ: from non-existant paddr=0x00000001d000003f len=1 pc=0xfffffc000104030c
+  EVIDENCE[pitT]: memory READ: from non-existant paddr=0x00000001d000003f len=1 pc=0xfffffc000104034c
+  EVIDENCE[pitT]: memory READ: from non-existant paddr=0x00000001d000003f len=1 pc=0xfffffc0001040390
+  EVIDENCE[pitT]: memory READ: from non-existant paddr=0x00000001d000003f len=1 pc=0xfffffc00010403d0
+  EVIDENCE[pitT]: memory READ: from non-existant paddr=0x00000001d000003f len=1 pc=0xfffffc0001040414
+  EVIDENCE[pitT]: memory READ: from non-existant paddr=0x00000001d000003f len=1 pc=0xfffffc0001040454
+  EVIDENCE[pitT]: memory READ: from non-existant paddr=0x00000001d000003f len=1 pc=0xfffffc0001040498
+  EVIDENCE[pitT]: memory READ: from non-existant paddr=0x00000001d000003f len=1 pc=0xfffffc00010404f8
+  RAW[tails]: alive=True live=0x34/0x12 retried=False
+pitT alive     alive                    alive                    CONTROL: nothing in this session may end the host        ok
+pitT live1     0x34                     0x34                     LIVENESS+DEVSIG: flat LSB then MSB at port 0x40          ok
+pitT live2     0x12                     0x12                     LIVENESS+DEVSIG: ...the second read gets the OTHER half  ok
+pitT ps5a t7   0x12                     0x5a                     (7,0) STQ TAIL at 0x40 stores 0x5a: ONE write -> LSB (an EXTRA access -> 0x12) FAIL
+pitT ps5a t7B  0x5a                     0x12                     (7,0) ...the MSB holds the flat 0x12 (an EXTRA access -> 0x5a) FAIL
+pitT ps00 t7   0x12                     0x0                      (7,0) STQ TAIL at 0x40 stores 0x00: ONE write -> LSB (an EXTRA access -> 0x12) FAIL
+pitT ps00 t7B  0x0                      0x12                     (7,0) ...the MSB holds the flat 0x12 (an EXTRA access -> 0x00) FAIL
+pitT ps5a t6   0x12                     0x5a                     (6,0) STQ TAIL at 0x40 stores 0x5a: ONE write -> LSB (an EXTRA access -> 0x12) FAIL
+pitT ps5a t6B  0x5a                     0x12                     (6,0) ...the MSB holds the flat 0x12 (an EXTRA access -> 0x5a) FAIL
+pitT ps00 t6   0x12                     0x0                      (6,0) STQ TAIL at 0x40 stores 0x00: ONE write -> LSB (an EXTRA access -> 0x12) FAIL
+pitT ps00 t6B  0x0                      0x12                     (6,0) ...the MSB holds the flat 0x12 (an EXTRA access -> 0x00) FAIL
+pitT ps5a t5   0x12                     0x5a                     (5,0) STQ TAIL at 0x40 stores 0x5a: ONE write -> LSB (an EXTRA access -> 0x12) FAIL
+pitT ps5a t5B  0x5a                     0x12                     (5,0) ...the MSB holds the flat 0x12 (an EXTRA access -> 0x5a) FAIL
+pitT ps00 t5   0x12                     0x0                      (5,0) STQ TAIL at 0x40 stores 0x00: ONE write -> LSB (an EXTRA access -> 0x12) FAIL
+pitT ps00 t5B  0x0                      0x12                     (5,0) ...the MSB holds the flat 0x12 (an EXTRA access -> 0x00) FAIL
+pitT ps5a t3   0x12                     0x5a                     (3,0) STQ TAIL at 0x40 stores 0x5a: ONE write -> LSB (an EXTRA access -> 0x12) FAIL
+pitT ps5a t3B  0x5a                     0x12                     (3,0) ...the MSB holds the flat 0x12 (an EXTRA access -> 0x5a) FAIL
+pitT ps00 t3   0x12                     0x0                      (3,0) STQ TAIL at 0x40 stores 0x00: ONE write -> LSB (an EXTRA access -> 0x12) FAIL
+pitT ps00 t3B  0x0                      0x12                     (3,0) ...the MSB holds the flat 0x12 (an EXTRA access -> 0x00) FAIL
+pitT pl5a t7   0x5a                     0x5a                     (7,0) LDQ TAIL delivers the LSB 0x5a at register byte 1  ok
+pitT pl5a t7B  0x12                     0x12                     (7,0) ...and the next flat read gets the MSB (a DUPLICATED read -> 0x5a) ok
+pitT pl00 t7   0x0                      0x0                      (7,0) LDQ TAIL delivers the LSB 0x00 at register byte 1  ok
+pitT pl00 t7B  0x12                     0x12                     (7,0) ...and the next flat read gets the MSB (a DUPLICATED read -> 0x00) ok
+pitT pl5a t6   0x5a                     0x5a                     (6,0) LDQ TAIL delivers the LSB 0x5a at register byte 2  ok
+pitT pl5a t6B  0x12                     0x12                     (6,0) ...and the next flat read gets the MSB (a DUPLICATED read -> 0x5a) ok
+pitT pl00 t6   0x0                      0x0                      (6,0) LDQ TAIL delivers the LSB 0x00 at register byte 2  ok
+pitT pl00 t6B  0x12                     0x12                     (6,0) ...and the next flat read gets the MSB (a DUPLICATED read -> 0x00) ok
+pitT pl5a t5   0x5a                     0x5a                     (5,0) LDQ TAIL delivers the LSB 0x5a at register byte 3  ok
+pitT pl5a t5B  0x12                     0x12                     (5,0) ...and the next flat read gets the MSB (a DUPLICATED read -> 0x5a) ok
+pitT pl00 t5   0x0                      0x0                      (5,0) LDQ TAIL delivers the LSB 0x00 at register byte 3  ok
+pitT pl00 t5B  0x12                     0x12                     (5,0) ...and the next flat read gets the MSB (a DUPLICATED read -> 0x00) ok
+pitT pl5a t3   0x5a                     0x5a                     (3,0) LDQ TAIL delivers the LSB 0x5a at register byte 5  ok
+pitT pl5a t3B  0x12                     0x12                     (3,0) ...and the next flat read gets the MSB (a DUPLICATED read -> 0x5a) ok
+pitT pl00 t3   0x0                      0x0                      (3,0) LDQ TAIL delivers the LSB 0x00 at register byte 5  ok
+pitT pl00 t3B  0x12                     0x12                     (3,0) ...and the next flat read gets the MSB (a DUPLICATED read -> 0x00) ok
+pitT pw t6     0x12                     0x12                     (6,0) LDQ TAIL then a flat store 0x77: read parity unmoved -> MSB 0x12 ok
+pitT pw t6B    0x77                     0x77                     (6,0) ...and 0x77 went to the LSB (an added WRITE on the read arm sends it to the MSB) ok
+pitT pw t3     0x12                     0x12                     (3,0) LDQ TAIL then a flat store 0x77: read parity unmoved -> MSB 0x12 ok
+pitT pw t3B    0x77                     0x77                     (3,0) ...and 0x77 went to the LSB (an added WRITE on the read arm sends it to the MSB) ok
+
+
+LCAISALANE_RETRIED=none
+LCAISALANE_RESULT=336/352
+LCAISALANE_WITNESS=FAIL
+LCAISALANE_DONE

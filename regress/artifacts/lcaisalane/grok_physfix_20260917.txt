@@ -1,0 +1,132 @@
+I'll attack the proposed `PHYSICAL` flag on both `lca_isa` nested `memory_rw` calls before any edit. First I need the live repo state and the exact `dev_lca.c` path, then I'll check what `PHYSICAL` actually changes versus `NO_EXCEPTIONS`.The row is still listed MEDIUM in the bug file while the brief says HIGH. Next I’ll read the live `lca_isa` path, `memory_rw` flags, and the earlier sibling brief so the attack is against the code, not the packet.The previous sibling review is on disk; now I’ll read `memory_rw` and the Alpha translator so Q1 is a path trace, not a flag comparison.**VERDICT: SHIP THE TWO `PHYSICAL` TOKENS. DO NOT ADD `NO_EXCEPTIONS` — it is not a harmless extra flag, it is a second window-death. DO NOT TREAT `#530`'s 352 AS COVERAGE.** The 352 cannot move, and that is exactly why they cannot see this defect or the two mutants that re-open it.
+
+Tree read: `GXEMUL-SEC/src/devices/dev_lca.c` (working-tree handler, `#530` lane repair already in it), `GXEMUL-SEC/src/cpus/memory_rw.c`, `memory_alpha.c`, `cpu_alpha_instr_loadstore.c`, `tmp_alpha_tail.c` (`MEM_ALPHA`, no `MEM_MIPS`), ISA device registrations, `regress/lca_isalane_probe.py`, `regress/alpha_pfnoffset_probe.py`. No compile, no paging session. The HIGH re-grade is still a reading; the witness below is what converts it.
+
+The bug file still says **MEDIUM** (`OUTSTANDING_BUGS.md`, the `lcaisaphys` block). If the raise to HIGH landed, it is not in that file.
+
+---
+
+## Q1 — `PHYSICAL` alone. `NO_EXCEPTIONS` is refused.
+
+After `PHYSICAL`, the translator is not entered (`memory_rw.c`: `if (misc_flags & PHYSICAL || cpu->translate_v2p == NULL) paddr = vaddr`). On this CPU that is the entire architectural exception path for this nested call.
+
+What is left that can still “raise”:
+
+| leftover | gated on `NO_EXCEPTIONS`? | fires on this inner 1-byte ISA forward? |
+|---|---|---|
+| `alpha_translate_v2p` `not_found` `fatal()` | **No.** `flags` is unused in that function (its own TODO). | **This is the defect.** `PHYSICAL` removes it. `NO_EXCEPTIONS` would not. |
+| MIPS DBE / M88K data-access | Yes | **No.** `tmp_alpha_tail.c` compiles this copy as `MEM_ALPHA`. Those arms do not exist. |
+| Watchpoint `fatal()` | **No** (the check does not read the flag) | Only if a watchpoint is set. |
+| `memory_warn_about_unimplemented_addr` | Yes | Unmapped ports only. UART/PIT/8042 are mapped. And this path **already runs today at PTBR=0**. |
+| The device handler itself | Yes, and this is the landmine | **We want it to run.** |
+
+The landmine, from the worker, not from a plausibility argument:
+
+```c
+res = 0;
+if (!no_exceptions || (mem->devices[i].flags & DM_READS_HAVE_NO_SIDE_EFFECTS))
+    res = mem->devices[i].f(...);
+```
+
+`NO_EXCEPTIONS` plus `DM_DEFAULT` (0) means the handler is **not called**. `res` stays 0, becomes -1, and because `no_exceptions` the function still `goto do_return_ok`. Reads return the `#95` zeros. Writes are dropped with **success**.
+
+Every ISA target this window forwards to is `DM_DEFAULT`: ns16550, 8253, 8259, pckbc, pccmos. None of them carries `DM_READS_HAVE_NO_SIDE_EFFECTS`. Adding `NO_EXCEPTIONS` would skip the UART, the PIT, the PIC, the 8042 and CMOS, and hand the guest a live-looking window that does not talk to any of them.
+
+That is the current defect by another door, and on the **write** arm it is worse than today: today a translator miss returns 0 and the store is abandoned (`cpu_alpha_instr_loadstore.c`, the `#215` early-out). With `NO_EXCEPTIONS` the inner call returns 1 and the guest believes the store landed.
+
+**Maple is the wrong warrant.** Maple is DMA into RAM; `NO_EXCEPTIONS` there is so a DMA does not take a CPU fault. The house idiom for *this* shape — a device handler forwarding a known physical address to another device — is `PHYSICAL` only: `dev_pccmos.c`, `dev_sh4.c` SCI, `dev_ps2_spd.c`. Keep the `CACHE_NONE` that is already there (`CACHE_NONE | PHYSICAL`). Do not import Maple's extra flag.
+
+`CACHE_NONE` vs bare `PHYSICAL` is equivalent on this compilation unit (no R3000 cache arm under `MEM_ALPHA`; `FLAG_INSTR` is only for `CACHE_INSTRUCTION`). Keep `CACHE_NONE` because it is already there, not because it does work.
+
+---
+
+## Q2 — the flood stops. The window-death stops. `#516` is not this flood.
+
+The row's `fatal()` is `alpha_translate_v2p`'s `not_found` print (`[ alpha_translate_v2p: 0x… wasn't found ]`). It is unlatched, it is a print, it is every inner miss. `PHYSICAL` never enters that function. **That flood stops.**
+
+Read vs write after the miss, for the record:
+
+- **Read:** the inner 0 is ignored; the handler still `return 1` with a zeroed byte. Guest load succeeds. False success, not a fault. The pfnoffset “sentinel in the destination register” trick **does not fire here** — do not copy it.
+- **Write:** the handler returns that 0; outer `memory_rw` fails; Alpha has no bus-exception arm; `#215` abandons the store. Silent drop.
+
+Both go away for mapped ports once the inner call is physical.
+
+What survives the flag, and must not be mistaken for the same flood:
+
+- **`lca_interrupt_assert` / `_deassert` (`#516`).** Latched, once per instance. A THR write that tries to raise IRQ 4 can still print that once. An LSR *read* does not. Use LSR for the flood row.
+- **Unmapped-port `memory_warn`.** `debugmsg`, not `fatal()`. Same as PTBR=0 today. Not new.
+- **Honouring the read arm's inner return** is a residual, not this fix. On mapped UART the inner already returns 1. On unmapped ports the unimplemented-addr path also returns 1 (`goto do_return_ok`). Bundling a `return 0` on the read arm would be a new guest-visible change with no measured delta on this machine, and it would poke `#530`'s “read arm success return turned into a failure” cell. Disclose it. Do not ship it in this diff.
+
+There is no second *unlatched translator* `fatal()` on this path. Recursion is not a concern: `lca_isa` is at `LCA_PCI_SIO` (`0x1c0000000`, length `0x10000<<5`). The inner address is `0x1d0000000+port`. They do not overlap `lca_ioc` (`0x180000000`) or `lca_pci_conf` (`0x1e0000000`) either.
+
+---
+
+## Q3 — the 352 cannot move. That is not a compliment.
+
+Named reason, checkable:
+
+1. **Packing is upstream of the nested call.** `#530` is `relative_addr >>= 5; ofs = (relative_addr & 3) % len;` then one byte. The flag does not touch `relative_addr`, `ofs`, `len`, or the packing loop.
+2. **At PTBR=0 the inner `paddr` is already the same value.** Identity hack: `paddr = vaddr & 0x000003ffffffffff`. `PHYSICAL`: `paddr = vaddr`. `LCA_ISA_BASE+port` is `0x1d0000000+port`, 33 bits, inside that 42-bit mask. Equal for every port the 352 uses.
+3. **Forward count is still one 1-byte inner `memory_rw`.** The DROP/SWAP/DUPLICATE/ADD-OTHER cells count calls, not flags.
+4. **No new print.** PTBR=0 never hits `not_found`. `PHYSICAL` never enters the translator. The log channel the 352 does not read anyway stays quiet.
+
+So: a re-table of the 352 is not owed, and **grafting paging rows onto that probe is refused**. Those sessions assume PTBR=0. Arming a walk under them would re-interpret every FLAT `put`/`ldq` that is not K0SEG, and would turn a packing detector into an accidental MMU test.
+
+The expensive outcome is not “the 352 move”. It is “someone treats the 352 as this round’s detector.” They are structurally blind to the defect and to the (d) mutants in Q5. Coverage for this flag is a **new**, small, paging probe. Zero of the 352.
+
+---
+
+## Q4 — cheapest rung-3: yes, and it is already on this machine. Do not ship documented-only.
+
+Both halves already exist, both on unmodified `alphabook1`:
+
+- Paging construction: `regress/alpha_pfnoffset_probe.py` (PCB plant via K0SEG `put d`, `CALL_PAL(0x30)` `swpctx`, code in K0SEG so fetch survives PTBR ≠ 0).
+- ISA window + FLAT control: `regress/lca_isalane_probe.py` (`k0(SP(port))` vs `k0(FLAT(port))`, UART LSR/scratch).
+
+K0SEG is checked **before** PTBR in `alpha_translate_v2p`. Outer sparse access is `IDENT_ADDR|LCA_PCI_SIO|(port<<5)` — still identity-mapped after paging. The inner `0x1d0000000+port` is not K0SEG, so it is the thing that starts walking.
+
+**Do not reuse pfnoffset’s populated L1.** `0x1d0000000` has `i1 = 0` (it sits in the first 8 GB of VA). A valid `L1[0]` continues the walk into L2[928]. A zero page as PTBR gives an immediate `pte1` miss, one `wasn't found`, no `TODO: pte2/pte3`. That is the cheaper, cleaner miss.
+
+A sufficient first session, all planted before `swpctx`:
+
+| row | how | pre-fix | post-fix |
+|---|---|---|---|
+| `ptbr armed` | K0SEG load of a known RAM word after `swpctx` | succeeds (liveness: paging did not kill K0SEG) | same |
+| `flat lsr` | `ldl` `k0(FLAT(UART_LSR))` | idle LSR (`THRE|TEMT`, the existing `LSR_FIXED`) — device signature | same |
+| `sp lsr` | `ldl` `k0(SP(UART_LSR))` | **0**, load completes (read arm ignores inner 0) | matches `flat lsr` |
+| `sp scr` | `stb`/`stl` via SP, readback via FLAT | scratch unchanged | byte landed |
+| `flood` | `'wasn't found' in log` after the SP access | present, every SP access | absent |
+
+Controls the ladder actually requires: liveness = K0SEG RAM or FLAT LSR still works; device-signature = FLAT vs SP of the **same** UART register (RAM would not return `LSR_FIXED`). Guest instructions, not `dump` — `lca_isa` is `DM_DEFAULT`, and a debugger `NO_EXCEPTIONS` dump skips it.
+
+Do not expect the destination-register sentinel from pfnoffset. The outer load does not fail.
+
+If that session cannot be built in one sitting, record the attempt. Pretending the 352 witnessed this is the thing that is not allowed.
+
+---
+
+## Q5 — smallest edit that breaks the fix and still passes
+
+The product edit is two copies of one flag. Clause (d) is “keep the flag, null the repair.” Two forms, both one-token-class:
+
+**1. `PHYSICAL` on only one of the two calls.**
+A read-only paging probe greens a write-arm-only flag; a write-only probe greens a read-arm-only flag. The 352 green both, because PTBR=0 identity already supplies the other arm. **The new probe owes both directions.**
+
+**2. Gate the flag on the identity hack still being on** — `CACHE_NONE | PHYSICAL` → `CACHE_NONE | (apcb_ptbr==0 ? PHYSICAL : 0)`, or `translate_v2p==NULL`. At PTBR=0 the 352 still see the same `paddr`. The moment paging is on, the defect returns. This is the mutant `#530` cannot see **by construction**, and it is why “the 352 cannot move” is not coverage.
+
+Wrong-flag substitution `CACHE_NONE | NO_EXCEPTIONS` (drop `PHYSICAL`) is clause (b) in different clothes: translator still runs, window still dies, and it additionally skips the ISA devices. A paging row kills it; a `PHYSICAL`-on-both grep also kills it. Row the behavior anyway.
+
+**Disclosed, not a kill:** dropping `CACHE_NONE` and leaving bare `PHYSICAL`. Equivalent on `MEM_ALPHA`. Do not spend a row on it.
+
+A grep for the word `PHYSICAL` in the function is not a detector. Floor (a) on this defect is a paging row. Without that row the round has not shipped a detector, whatever the 352 still say.
+
+---
+
+## Found while checking (not the five questions)
+
+1. **`NO_EXCEPTIONS` does not silence the translator `fatal()` on Alpha even without `PHYSICAL`.** `flags` is ignored; `not_found` always prints. Anyone adding that flag “to quiet the flood” gets neither silence nor a working window.
+2. **The 09-11 MED downgrade is still in the bug file**, including premise (b) (“valid PTEs can identity-map”). That premise is about K0SEG VAs, not about `0x1d0000000`. A coincidental valid PTE at that VA aliases ISA onto RAM, which is worse than `not_found`, and is still a reason for `PHYSICAL`.
+3. **Do not add paging sessions to `lca_isalane_probe.py`.** New file, ~5 rows, FLAT control, both arms, flood channel.
+4. **`IOC_HAE` does not collide with this handler.** I/O space does not use HAE (HRM S6.2.8). The collision note on the row is a wrong transfer from sparse *memory*, which this file does not implement.
+
+**Seat:** grok-4.6, file-reading. **Not fired / not claimed:** no compile, no `swpctx` session, no kill table. The two-token product edit survives. The Maple/`NO_EXCEPTIONS` extra, and any plan that lets the 352 stand in for a paging row, do not.

@@ -1,0 +1,60 @@
+PREDICT3 -- #530 closing pass 5, Opus measuring seat (SECOND instance, finishing the walled seat's work).
+Written BEFORE `noff' and `RWall' are built and BEFORE pitrows530c5.py has run on ANY binary.  This file's mtime is
+the order proof.  Instrument: instrument2/pitrows530c5.py (150 rows, a PROTOTYPE session, NOT the shipped probe).
+Clone /tmp/gxopus530c5 (verified cmp-clean on dev_lca.c, dev_pckbc.c AND dev_8253.c, no .MUTANT, binary -nt all three).
+
+DERIVATION (dev_8253.c, read here, not taken from the brief):
+  :143-147  ports 0x40/0x41/0x42 = relative_addr 0/1/2 = LANES 0/1/2 (0x40&3=0 ...).  0x43 = I8253_TIMER_MODE = LANE 3.
+  :280-285  the flip-flop advance is INSIDE the counter case and fires on EVERY counter access, read and write, but
+            ONLY while (mode_byte & 0x30) == I8253_TIMER_16BIT (0x30).  wr_msb toggles on writes, rd_msb on reads --
+            SEPARATE per direction.
+  :289-348  MODE (lane 3): a READ returns mode_byte with NO side effect and NO flip-flop advance; a repeated identical
+            control-word WRITE is idempotent (mode_byte, counter_select, rd_msb=wr_msb=0).  => THE 8253 CANNOT CARRY
+            LANE 3 IN EITHER DIRECTION.
+  :320-321  a control word REWINDS that counter's two flip-flops -- which is what makes every phase self-starting.
+
+PHASES (each ends with FLAT reads; only ONE access per phase goes through lca_isa, the SPARSE one):
+  live  cw; flat ST 0x34; flat ST 0x12; flat RD r1; flat RD r2                 want r1=0x34 r2=0x12
+  PS X  cw; lca ST X (width w); flat ST 0x12; flat RD r1; flat RD r2           want r1=X    r2=0x12
+  PL L  cw; flat ST L; flat ST 0x12; lca LD (width w); flat RD r1              want dlv=L   r1=0x12
+  PW    cw; flat ST 0x5a; flat ST 0x12; lca LD (LDQ); flat ST 0x77; RD r1; r2  want r1=0x12 r2=0x77
+  X and L each run at 0x00 and 0x5a (the zero/nonzero DATA partition, per cell, not as a marginal).
+  Counters 0/1/2 at widths 1/2/4/8; tails 7/6/5/3 at port 0x40 via SP(0x3f)+0x1f/0x1e/0x1d/0x1b.
+
+LEG      EDIT                                                        PREDICTED  RED ROWS (exact families)
+base     none                                                         150/150   none
+nox      dev_pckbc.c stub `x++' deleted (ALREADY BUILT)               150/150   none -- the PIT channel is INDEPENDENT
+                                                                                 of the 8042 stub oracle
+cdxZL3   post-store read iff lane 3 && data[ofs]==0 (BUILT)           150/150   none -- NO lca access in this session
+                                                                                 reaches lane 3, and lane 3 (port 0x43)
+                                                                                 has no counter.  THE LIMIT, MEASURED.
+W23      x_wfallthru at (len 2, lane 3) (BUILT)                       150/150   none -- same reason
+noff     NEW: dev_8253.c :282/:284 `^= 1' -> `^= 0' (the flip-flop     77/150   live1 x4; ps_*_r1 x32; pl_*_dlv x32;
+         frozen) -- the MANDATORY-CONTROL negative control                       pw_*_r1 x5.  NOTE the direction: the
+                                                                                 control REDS, it does not go vacuous
+WWall    store forward DUPLICATED, unconditioned (BUILT)               86/150   every PS row (r1 AND r2), all 3 counters
+                                                                                 x 4 widths x 2 data + all 4 tails x 2
+Wpure    write arm's `return' removed = x_wfallthru (BUILT)            86/150   IDENTICAL set to WWall -- the store-side
+                                                                                 channel is DIRECTION-BLIND by design
+WWtail   store dup at len 3/5/6/7 (BUILT)                             134/150   all 16 TAIL PS rows; direct green
+WW6      store dup at len 6 only (BUILT)                              146/150   tail6 PS x 2 data x 2 rows = 4
+dNZtail  x_wfallthru gated (tail width AND byte != 0) (BUILT)         142/150   tail PS at X=0x5a only, 4 tails x 2 = 8;
+                                                                                 X=0x00 GREEN -- the DATA cell, rowed
+RD2post  read forward duplicated AFTER the packing loop (BUILT)       108/150   pl_*_r1 x32 (dlv stays GREEN: the guest
+                                                                                 keeps the first byte) + pw x10
+RD2z     read dup gated on the fetched byte == 0 (BUILT)              118/150   pl at L=0x00 only: dlv AND r1, 32 rows;
+                                                                                 L=0x5a GREEN.  dlv reds because the
+                                                                                 SECOND read's MSB is delivered
+RWall    NEW: read arm + an unconditioned added MEM_WRITE of the      140/150   pw x10 ONLY.  PL is BLIND to an added
+         fetched byte (the 4th cell of the class's 2x2, ungated)                 WRITE: rd_msb and wr_msb are separate
+                                                                                 and the write-back rewrites the same
+                                                                                 half with the same value
+RWtail   the same gated to len 3/5/6/7 (BUILT)                        146/150   pw at the two TAIL cells only = 4
+
+WHAT THE PREDICTIONS ASSERT, so a miss is informative:
+ 1. The store-side row (PS) detects ONE EXTRA ACCESS OF EITHER DIRECTION and cannot tell a doubled store from a
+    phantom read -- WWall and Wpure must score IDENTICALLY, row for row.
+ 2. The read-side row (PL) detects an extra READ and is BLIND to an added WRITE -- RWall must leave every PL row green.
+ 3. Only PW sees the added write, and it sees it because it forces a LATER STORE whose half the write-back moved.
+ 4. Lane 3 is unreachable on this channel in BOTH directions -- cdxZL3 and W23 must be 150/150.
+ 5. The data partition is rowed PER CELL: dNZtail must red at X=0x5a and stay green at X=0x00 in the SAME tail cell.

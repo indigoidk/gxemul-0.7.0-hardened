@@ -1,0 +1,49 @@
+VERDICT: B LCAISALANE_F2_20260913
+
+**Q1 — D1**. I pick B. Warrant, in order of strength:
+1. **Witness score, REASONED from S3**: B gives 16/16 (ofs1 zero now passes — `data[0]=byte=0x60`; ofs1 answer still `completed`; ofs2/3 exit now alive). A gives 13/16 (ofs1 answer flips to fail on `return 0`; ofs1 zero still fails). C gives 14/16 (ofs2/3 exit now alive; ofs1 zero still fails). This is the only measurement in the packet and it ranks the three. S4's "no guest-driver discrimination" is about booted-guest observables, not the handler-level witness.
+2. **No working-behavior regression**: the equality writes — `stb` to PIC IMR 0x21/0xa1, UART IER 0x3f9, RTC 0x71 — still land via `data[ofs % len]`. A kills them; B preserves them.
+3. **Internal coherence**: the fold applies to both arms. F2 (false-success reads) is fixed as part of the same change rather than deferred.
+4. **F1 closed**: guard deleted, no `exit(1)`.
+
+**Weakest claim on my side (B)** — being harder than I'd be on A or C: fable5's "transferred warrant" is the weak link. The read arm as written uses `i == ofs`, NOT `% len`. So within the function on HEAD, the two arms are NOT consistent — only the write arm folds. B is not "accepting an existing idiom"; B is *editing the read arm to match the write arm*. fable5's "no principled line between (1,1) and (1,2)" is a real argument for consistency, but it argues for *changing* the read arm, not for *discovering* a fold there. The (2,3) objection is also real: the byte that lands is `data[1]` (HIGH half of a 16-bit), not `data[0]`. B accepts this as the cost of the lane idiom.
+
+**A's warrant does NOT survive** its own regression: A removes a behavior that works today (the fold in (1,1), (2,2), (3,3) writes), and "newly chosen emulation contract" does not justify retroactively refusing guest requests the current code already services. The addition licence lets you choose a contract for cases the hardware never reaches; it does not let you decline cases the code already accepts.
+
+**C's case is real but loses on principle + witness**: (1,1) served while (1,2) declined is fable5's unprincipled line, made explicit; and C knowingly ships F2, dropping the witness from 16/16 to 14/16 to gain nothing B doesn't also give.
+
+---
+
+**Q2 — F1..F8** (one line each):
+
+- **F1**: UPHOLD. `exit(1)` on a guest-driven lane is a DoS.
+- **F2**: UPHOLD. Right port fetched, byte discarded, success returned — false success.
+- **F3**: UPHOLD. Decline regresses the fold-writes that land today.
+- **F4**: UPHOLD. `memory_rw`'s 1 KB split delivers `len ∈ {3,5,6,7}`; (3,3) is a third equality cell (`3 > 3` is false, so it serves, with `3 % 3 == 0` folding the write).
+- **F5**: UPHOLD the refinement. The uninitialised-byte concern does not reach a guest on any walked path; this is robustness, not a leak.
+- **F6**: CANNOT SETTLE from packet — filed (`lcaisaphys`), not inlined.
+- **F7**: CANNOT SETTLE from packet — filed (`lcaisasize`/`lcaisaqword`), not inlined.
+- **F8**: Under B, (2,1) is **defined by the lane idiom** the function already uses: `byte = data[ofs]` for `ofs < len`. For (2,1), `data[1]` is the lane-1 byte. This matches the function's `len=4 ofs=1` behaviour and today's (2,1) behaviour. It disagrees with a "narrow access = low byte" reading, but the function never implemented that reading. I'd dispose F8 as: lane-rule-defined, not undefined.
+
+---
+
+**Q3 — Which acceptance would I overturn?** None. F1, F2, F3, F4 are correct acceptances; F5's refinement is correct; F6/F7 are correctly parked; F8 left open is defensible given no side addressed it. The six acceptances survive.
+
+---
+
+**Q4 — What did all nine miss?** The witness score in S3 already discriminates A/B/C and was sitting in the packet. The dispute was framed as a contract argument (A vs B vs C on principle), but the witness's three exit rows flip from fail to pass under any non-A option, the ofs1-zero row flips only under B, and the ofs1-answer row flips against A specifically. The numbers are: 13/16 today, 13/16 under A, 14/16 under C, 16/16 under B. That is a measurement the panel could have rested on. I have not run the witness (operational rule); the scores above are REASONED from the inlined output and the code, not MEASURED.
+
+No booted-guest observable can discriminate on this machine (S4) — but a handler-level witness can, and did.
+
+---
+
+**Premises I could not settle from the packet** (each named, with the one fact that would settle it):
+
+- **S1** (`fatal()` does not exit): taken on the packet's authority. Settled by reading `src/core/debugmsg.c` `fatal()`.
+- **S2** (Alpha handler `return 0` leaves LOAD dst unchanged, STORE unobservable): taken on the packet's authority. Settled by reading `cpu_alpha_instr_loadstore.c` `LS_GENERIC_N` and confirming no exception is raised on the `!cpu->memory_rw(...)` path.
+- **S3** witness output: taken as inlined; I have not run it.
+- **The witness's `ofs1 answer` row really checks `return == 1`**: REASONED from the "wants `completed`" label. Settled by reading the witness's assertion.
+- **The LSR is deterministically 0x60 at the witness's `ofs1 zero` step**: REASONED — the sentinel 0x0bad1dea masked to 0x60 collides with the LSR's THRE bit, so the row's PASS under B depends on the LSR actually being 0x60 at that point. Settled by reading the witness's setup.
+- **The exact (3,3) READ semantics under B**: REASONED — `data[3 % 3] = byte`, others zero, so `data[0]=byte`, `data[1]=data[2]=0`. Settled by re-reading the proposed patch.
+
+Nothing labelled MEASURED. All scores and dispositions are REASONED from the inlined code and witness output.

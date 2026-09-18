@@ -1,0 +1,36 @@
+`GAP: in dev_lca.c's write arm, replace 'return cpu->memory_rw(cpu, cpu->mem, LCA_ISA_BASE + relative_addr, &byte, 1, writeflag, CACHE_NONE);' with the bare call followed by 'if (len != 3) return 1;' -- the measured W2 shape with the constant 2 -> 3. Scores 111/111 and changes a guest-visible outcome: with the 8042 self-test 0x55 queued and 0xd1 armed (the kbcq arming), an STL of 0 at window address SP(0x60)-1 = 0xbff -- a 1-byte head at unmapped 0x5f, a 3-byte tail at 0x60 -- leaves flat 8042 status & 1 (DIB) at 0x0 instead of 0x1: the len-3 tail store falls into the read arm and the phantom read pops the queued reply. LCA530_C4_20260914`
+
+## THE GAP -- why 111/111, why guest-visible
+
+**Why no row can catch it (REASONED from READ facts):**
+
+* The only rows that arm a read side effect before a rowed store are 4h (`iir stb/stl`, 0x3fa, len 1/4), 4i (`iir stw/stq`, 0x3fa, len 2/8), and 4k (`kbcq b/w/l/q`, 0x60, len 1/2/4/8 with 0x55 queued) -- READ (the closing-pass-3 answer: "The 93 rows store to a read-side-effect port only in session 4h"; the repair diff adds 4i/4k). Every one is at a DIRECT width, and the gate exempts every direct width.
+* The only rowed len-3 stores are the `tailw` t3 tail at 0x60 and the len-3 head store at 0x3ff. The tailw queue is EMPTY at store time (READ: "The `tailw` stores to 0x60 find an empty queue: each phase's `kbc_rdcmd` re-arms 0x20 AFTER the store"), so the phantom pop returns `last_scancode` and no rowed value moves. The head at 0x3ff is SCR (inert read) and the tailw heads sit at the unmapped 0x5f (success, zero-fill) -- READ. The mutant's store forward is intact, and returning 1 instead of the inner forward's return is the already-named EQUIVALENT (READ). Zero reds.
+* The general form -- gate on `len != 3 && len != 5 && len != 6 && len != 7` -- escapes identically and states the missed class exactly: the lane-0 TAIL cells.
+
+**Why guest-visible (REASONED from READ facts):** the 0x60 phantom-pop channel is measured guest-visible at direct widths (READ: W2/W3/W4 discriminators, DIB 1->0 at 0x60); the tailw rows prove a guest split store with a 3-byte tail at 0x60 is a reachable access (READ); the kbcq C-phase proves the arming (flat self-test + 0xd1, READ). Composing the three needs one discriminator phase. Measurement I would name: run the `len != 3` mutant against the 111-row probe plus a kbcq-armed STL-at-0xbff discriminator.
+
+## Q1 -- THE ENUMERATION IS WRONG BY OMISSION
+
+The scoped sentence disposes every cell class -- lane-2 direct (caught), lane-0 direct (caught), heads (EQUIVALENT), lane-1 direct (DISCLOSED), lane-3 direct (DISCLOSED) -- and says nothing about the **lane-0 TAIL cells, len 3/5/6/7**. Those cells are in the rowed space (sessions 4f row the position rule there, at 0x60 -- READ), and they are OBSERVABLE for this channel: same port, same pop, proven by kbcq one width over. The flagship's own option (c) demanded "rowing every OBSERVABLE cell of the class," and the closing-pass-3 seat's cost table listed exactly these cells as "tails 3, 5, 6, 7 ... not built" (READ). Repair 4 built 4i/4j/4k and did not build them, and the scope sentence dropped them without a DISCLOSED. That omission IS the gap above.
+
+**Not checkable from the packet, with the settling fact:**
+
+* **Head EQUIVALENT** is established only for 0x3ff (SCR) and unmapped 0x1f/0x3f/0x5f (READ); heads can land at any port = 0x1f mod 0x20 (0x7f..0x3df). Settling fact: the alphabook1 device map -- is any other port in that residue class mapped, and does any of its read arms have a side effect?
+* **Lane-1 DISCLOSED** rests on the panel's own "Not checked: lane-1 read-side-effect ports (8253 0x41, CMOS 0x71)" (READ). Settling fact: whether dev_i8253's 0x41 read or dev_rtc's 0x71 read has a state side effect in this tree. As worded ("no port ... is rowed") the disclosure is true of the probe; the unverified premise is that no armable lane-1 port exists.
+
+The kbcq rows (one queued reply) and iir rows (TXRDY armed) do vary under the mutants that name them -- their red sets in POSTTABLE are consistent with the mutant definitions (REASONED; checked item-by-item below).
+
+## Q3 -- WRONG STATEMENTS
+
+1. **The scoped contract sentence and POSTTABLE's FLOOR line** ("SCOPED to what the rows catch -- lane 2 and lane 0 at every direct width"): wrong by omission -- the lane-0 tail cells are caught nowhere, EQUIVALENT nowhere, and DISCLOSED nowhere. A scope that enumerates dispositions for every other cell class is not "what the rows catch" minus disclosed; it silently drops an observable class.
+2. **The `iir stw` row comment lists W1** ("(W1/W2/W4: gated fallthrough)") -- internally contradicted by the packet: W1 is `if (len != 8) return 1;` (READ), so at len 2 it returns and the row stays green; POSTTABLE's own W1 red set is {iir stq, kbcq q dib} (READ), excluding this row. The parenthetical should read (W2/W4). The `iir stq` comment "(W1/W4)" is correct by the same test.
+3. **The corrected data-class warrant under-lists again**: it names only "the `iir' rows" as all-zero stores, but repair 4's own kbcq rows store the ZERO register too (READ: `stop(ZERO, 0, T1)`). The conclusion ("no store cell holds a zero correct byte beside a nonzero neighbour") still holds -- all-zero stores -- but the sentence was re-corrected in the same round it was written and is already incomplete.
+4. **RD2 remains an unscoped named edit in the DESIGNED list, rowed at ONE cell** (lane 2, len 1). A width-gated RD2 -- duplicate the read arm's forward only when `len != 1` -- scores 111/111 (the only armed read-side-effect cell read through the handler is 4j's LDBU at len 1; the tailr reads at 0x60 find an empty queue where a second read returns the same last_scancode -- READ) and is guest-visible: an LDL of armed IIR through the window delivers 0x1 at ofs 2 instead of 0x2 -- the iirr row's own measured channel, one width over (REASONED). This is the same wrong-record shape the flagship condemned for x_wfallthru; the entry needs a width/lane scope or more rows.
+5. **W5 is scored (110, kbcq q dib) but its edit is nowhere defined in the packet** -- not checkable; settling fact: W5's diff in the kill-5 logs.
+
+**Checked and consistent (REASONED over READ facts):** POSTTABLE's red-set arithmetic reconciles everywhere -- x_wfallthru 8 red (4 iir + 4 kbcq dib) = 103; W1/W2 two red = 109; W3/W4 four red = 107; RD2 one red = 110; head 41+2 = 43 = 68/111 -- against the mutant definitions and the armed-cell list. The a<4:0> widening is right per the inlined code (`relative_addr >>= 5` discards exactly a<4:0>). The fix comment's exit-lane arithmetic (len 1 at lanes 2/3; len 2 at lane 3; the 1-/2-byte heads at lane 3) is consistent with the guard `ofs > len`.
+
+## CLOSE
+
+The repair closes the direct-width axis of the class and the record scopes the claim to exactly that axis -- but the class's tail cells at lane 0 (len 3/5/6/7 at 0x60) are observable, unrowed, and undisposed, and the W-series channel escapes through them for the third consecutive pass. The in-round repair is the one the closing-pass-3 seat already priced: one new kbcq-shaped session, four processes (one queued reply each, split stores with tails 3/5/6/7 at 0x60), plus one clause in the scope sentence naming the lane-0 tail cells; and either a scope or rows for RD2's width axis.

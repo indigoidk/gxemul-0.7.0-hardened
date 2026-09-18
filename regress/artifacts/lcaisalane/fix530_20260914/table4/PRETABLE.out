@@ -1,0 +1,52 @@
+PRETABLE -- #530 (lcaisalane) kill table 4, CLOSING PASS 2's REPAIR 3 (93 rows).  Written BEFORE the table runs, and
+before HEAD_r4 / FIX_r4 (the 93-row instrument on table 1's head/base binaries) have finished -- so the head and base
+predictions below are also unmeasured when written.
+Instrument: regress/lca_isalane_probe.py, 93 rows = table 3's 77 + session 4f `tailr' (6) + `tailw' (6) + 4h `iir' (4),
+frozen by the driver.
+
+WHY: closing pass 2's measuring seat BUILT two 77/77 escapes (regress/artifacts/lcaisalane/opus_c2_20260914/):
+t_tails -- the split TAIL cells (len 3/5/6/7 at lane 0) were unrowed because the header said tails start only at the
+unmapped port 0x400; they start at every port 0 mod 0x20 (the 8042 at 0x60) -- and x_wfallthru, the write arm's `return'
+deleted, which loses IIR_TXRDY on a store to 0x3fa and was never in the header's contract.  Repair 3 ports the seat's
+discriminator into the probe, with ONE CHANGE OF MINE (L1, found writing this table's mutants): each `tailw' phase resets
+the 8042 command byte to 0x04 before its tail store -- the phases run t7, t6, t5, t3, and without the reset a DECLINED
+tail store reads back the previous phase's 0x44 and passes.  d_w6tail below is that change's own kill.
+
+TARGETING: repair 3 ADDS sessions and changes no existing session's commands, so no earlier kill moves; tables 1-3 stand.
+
+CHECKS.  SIBLING PARITY: the tail cells now carry R and W at every tail-only length (3, 5, 6, 7), as the head cells do;
+tails of len 1, 2, 4 are the direct lane-0 cells.  CLAIM -> ROW: the header's "at every cell of that space" now includes
+the tail cells (4f); the CONTRACT's new x_wfallthru item maps to `iir stb' / `iir stl'.  GUARD vs BODY: the write arm's
+`return' routes the forward's result; deleting it keeps `if (writeflag == MEM_WRITE)' and nulls its routing (clause
+(d)'s shape) -- the iir rows store to a port whose READ has a side effect.  CHANNEL (new rows): tailr -- the full
+register, a sentinel before each load (a decline keeps it, a mis-placement moves 0x55 one byte); tailw -- the command
+byte read back flat after a reset to 0x04 (a decline reads 0x04, a mis-placement 0x21); iir -- IIR & 3 after arming
+TXRDY (a phantom read of IIR clears it).
+
+PREDICTED RED ROWS (exact sets).  93 rows.
+   base           (none)                                                                            93/93
+   head           ofs1 zero, ofs2 exit, ofs3 exit, r11 byte, r22 byte, h3 ldq, h3 ldl, h1 ldq alive, h1 ldq,
+                  h2 ldq alive, h2 ldq, h1 stq alive, h1 stq, h2 stq alive, h2 stq, r12 alive, r12 byte, r13 alive,
+                  r13 byte, r23 alive, r23 lane, w12 alive, w12 lands, w13 alive, w13 lands, w13 roundtrip, w23 alive,
+                  w23 lane, tailr alive, tailr t7, tailr t6, tailr t5, tailr t3, tailw alive, tailw t7, tailw t6,
+                  tailw t5, tailw t3, iir alive, iir stb, iir stl
+                  (each 4f session's first split has a 1-byte head at port 0x5f -- a (1,3) cell -- and 4h's first
+                  lca store is a (1,2) STB: all three processes end the host after their control phase)    52/93
+   t_tails        tailr t7, tailr t6, tailr t5, tailr t3, tailw t7, tailw t6, tailw t5, tailw t3            85/93
+   x_wfallthru    iir stb, iir stl                                                                  91/93
+   swapmod        h7 ldq, h7 stq, tailr t7, tailr t5, tailw t7, tailw t5
+                  (0x3ff = 1023 is 0 mod 3, 3 mod 5, 3 mod 6 -- only h7 differs at that head; 0x60 = 96 is 1 mod 5,
+                  5 mod 7, 0 mod 6, 0 mod 3 -- t7 and t5 differ at that tail; heads at 0x5f are unmapped)  87/93
+   d_len3lane0    h5 ldq, tailr t3, tailw t3
+                  (h5 ldq's tail is 3 bytes at 0x400: its decline fails the whole load; h5 stq forwards its head
+                  before the tail fails and stays green)                                            90/93
+   t_w7           tailw t7                                                                          92/93
+                  (h1 stq's 7-byte tail at 0x400 goes nowhere -- invisible)
+   t_r6           tailr t6                                                                          92/93
+                  (h2 ldq's 6-byte tail at 0x400 is a zero fill -- invisible)
+   d_w6tail       tailw t6                                                                          92/93
+                  (h2 stq's head lands before its 6-byte tail is declined -- green; WITHOUT the reset tailw t6
+                  would read t7's 0x44 and pass)
+
+A red row outside its prediction is re-run ALONE before it is believed.  Load: two probe lanes beside #529's kill
+table 8 (four lanes); LCAISALANE_RETRIED names every session that retried.

@@ -1,0 +1,69 @@
+lca_isalane_probe -- binary=/tmp/gxopus530_bins/p_port10 label=p_port10 machine=alphabook1
+  sparse LCA_PCI_SIO=0x1c0000000  flat LCA_ISA_BASE=0x1d0000000  ofs = (r>>5) & 3 = port & 3
+row            got                      want                     note                                                     
+  RAW[base]: live=0x55 flatLSR=0x60 sparseLSR=0x60 wideLSR=0x6000 nodev=0x0 alive=True retried=False
+base alive     alive                    alive                    CONTROL: nothing in this session may end the host        ok
+live           0x55                     0x55                     LIVENESS+DEVSIG: 8042 self-test reply, THROUGH lca_isa at ofs 0 ok
+ofs1 devsig    0x60                     0x60                     DEVSIG: TXRDY|TSRE are set by the ns16550 handler on every access ok
+ofs1 zero      0x60                     0x60                     *** DEFECT: byte read of ISA 0x3fd (LSR) -- port 1 mod 4 -> ofs 1 *** ok
+ofs1 answer    completed                completed                the handler returned 1: the guest was ANSWERED zero, not refused ok
+ofs1 wide      0x60                     0x60                     SAME ADDRESS at len 4: the device byte lands in lane 1 -- so it arrived ok
+ctl            alive                    alive                    CONTROL: byte access to an ISA port with NO device, ofs 0, survives ok
+ctl zero       0x0                      0x0                      CONTROL: and it answers zero -- so zero alone proves nothing (see ofs1 devsig) ok
+  EVIDENCE[base]: [ pckbc: write to CTL: aa ]
+  EVIDENCE[base]: [ lca: ISA interrupt assert not implemented (Alpha has no interrupt delivery); ignored  (once) ]
+  EVIDENCE[base]: [ lca: ISA interrupt deassert not implemented (Alpha has no interrupt delivery); ignored  (once) ]
+  EVIDENCE[base]: memory READ: from non-existant paddr=0x00000001d0000300 len=1 pc=0xfffffc000104005c
+
+  RAW[ofs2]: flatMSR=0xb0 wideMSR=0xb00000 alive=True retried=False
+ofs2 devsig    0xb0                     0xb0                     DEVSIG: DCD|DSR|CTS are set by the ns16550 handler on every access ok
+ofs2 wide      0xb0                     0xb0                     CONTROL: the SAME sparse address at len 4 survives and packs lane 2 ok
+ofs2 exit      alive                    alive                    *** DEFECT: byte read of ISA 0x3fe (MSR) -- port 2 mod 4 -> ofs 2 *** ok
+ofs2 attrib    yes                      yes                      ATTRIBUTION: a death here must carry the arm's own diagnostic ok
+
+  RAW[ofs3]: flatSCR=0x5a wideSCR=0x5a000000 alive=True retried=False
+ofs3 devsig    0x5a                     0x5a                     DEVSIG: the ns16550 scratchpad returns the byte just written to it ok
+ofs3 wide      0x5a                     0x5a                     CONTROL: the SAME sparse address at len 4 survives and packs lane 3 ok
+ofs3 exit      alive                    alive                    *** DEFECT: byte read of ISA 0x3ff (scratch) -- port 3 mod 4 -> ofs 3 *** ok
+ofs3 attrib    yes                      yes                      ATTRIBUTION: a death here must carry the arm's own diagnostic ok
+
+  RAW[fold]: alive=True lsr=0x60 r11=0x60 r21=0x6000 r81=0x6000 msr=0xb0 r22=0xb0 w11=0x3a w21=0x5a w22=0xf0
+fold alive     alive                    alive                    CONTROL: none of these cells ever ended the host         ok
+r11 byte       0x60                     0x60                     (1,1) LDBU LSR, FULL register == the flat LSR: kills the A decline (sentinel) + C/HEAD (0) ok
+r21 anchor     0x6000                   0x6000                   (2,1) LDWU LSR: position 1 on HEAD and after -- the P mod len ANCHOR; kills replicate/lane edits ok
+r81 lane       0x6000                   0x6000                   (8,1) LDQ LSR, port 5 mod 8: lane 1, not 5 -- kills dropping the `& 3' (m_nomask) ok
+r22 byte       0xb0                     0xb0                     (2,2) LDWU MSR == flat MSR at position 0: kills the A decline and C/HEAD's discarded byte ok
+w11 lands      0x3a                     0x3a                     (1,1) STB 0x3a -> IER, flat readback: lands on HEAD -- kills the A decline (F3) ok
+w21 lane       0x5a                     0x5a                     (2,1) STW 0x5a00 -> IER forwards position 1 on HEAD and after ok
+w22 lands      0xf0                     0xf0                     (2,2) STW 0x0040 -> MSR, flat readback reg|0xb0: lands on HEAD -- kills the A decline ok
+
+  RAW[r12]: alive=True msr=0xb0 r12=0xb0
+r12 alive      alive                    alive                    was a host death on HEAD (`ofs > len'); kills the reinstated exit ok
+r12 byte       0xb0                     0xb0                     (1,2) LDBU MSR == flat MSR: was host death; kills C/A (sentinel) ok
+
+  RAW[r13]: alive=True r13=0x5a
+r13 alive      alive                    alive                    was a host death on HEAD (`ofs > len'); kills the reinstated exit ok
+r13 byte       0x5a                     0x5a                     (1,3) LDBU SCR after a flat store of 0x5a: was host death; kills C/A ok
+
+  RAW[r23]: alive=True r23=0x5a00
+r23 alive      alive                    alive                    was a host death on HEAD (`ofs > len'); kills the reinstated exit ok
+r23 lane       0x5a00                   0x5a00                   (2,3) LDWU SCR -> position 1, paired with `r21 anchor': kills the clamp (position 0) ok
+
+  RAW[w12]: alive=True w12=0xf0
+w12 alive      alive                    alive                    was a host death on HEAD (`ofs > len'); kills the reinstated exit ok
+w12 lands      0xf0                     0xf0                     (1,2) STB 0x40 -> MSR, flat readback: was host death; kills C/A (store dropped) ok
+
+  RAW[w13]: alive=True w13=0x3c w13rt=0x3c
+w13 alive      alive                    alive                    was a host death on HEAD (`ofs > len'); kills the reinstated exit ok
+w13 lands      0x3c                     0x3c                     (1,3) STB 0x3c -> SCR, flat readback: was host death; kills C/A and the unfolded write ok
+w13 roundtrip  0x3c                     0x3c                     SELF-COHERENCE: stb then ldbu at ONE sparse address returns what was stored ok
+
+  RAW[w23]: alive=True w23=0x7e
+w23 alive      alive                    alive                    was a host death on HEAD (`ofs > len'); kills the reinstated exit ok
+w23 lane       0x7e                     0x7e                     (2,3) STW 0x7e00 -> SCR forwards position 1 (as `w21 lane'): kills the clamp ok
+
+
+LCAISALANE_RETRIED=none
+LCAISALANE_RESULT=37/37
+LCAISALANE_WITNESS=PASS
+LCAISALANE_DONE

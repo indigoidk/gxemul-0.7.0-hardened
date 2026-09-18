@@ -1,0 +1,35 @@
+`GAP: insert after "relative_addr >>= 5;" in the fixed dev_lca.c:  if (relative_addr == 0x400 && len == 4) return 0;  -- scores 77/77 and changes a guest-visible outcome (an unaligned LDQ at SP(UART_SCR)+0x1c keeps its destination register instead of returning SCR_VALUE<<24 with a zeroed tail).` Token: `LCA530_C2_20260914`.
+
+## The gap
+
+READ: the inlined session inventory produces split chunks at offsets 0x19, 0x1a, 0x1b, 0x1d, 0x1e, 0x1f (4c: heads 3 R/W and 5 R; 4e: heads 6,7 R and 5,6,7 W; one-heads: 1,2 R/W). No row anywhere uses offset 0x1c. Split head lengths rowed = {1,2,3,5,6,7}; **len 4 is absent**. Tail lengths therefore present in rows = {1,2,3,5,6,7}; **tail len 4 is absent**.
+
+READ: the fixed handler's read arm contains no decline path (`len==0` aside); it always `return 1`. The write arm returns the inner `memory_rw` result.
+
+REASONED: a split head of len 4 at lane 3 arises exactly from an unaligned LDQ at SP(0x3ff)+0x1c (head 4 bytes to the boundary, tail 4 bytes at port 0x400). No such access exists in any row, so no row ever hands the handler a chunk with `(relative_addr == 0x400, len == 4)`. The inserted edit therefore fires on zero of the 77 rows: rows with len-4 chunks are all direct at ports 0x3f9/0x3fc/0x3fe/0x3ff (< 0x400); rows at port 0x400 are all tails of len != 4. Base vs mutant: base read arm at (0x400, 4) returns 1 (inner ISA decline swallowed -- established by the packet's own rows, e.g. `h2 ldq` expecting `SCR_VALUE<<8` across an unmapped len-6 tail); mutant returns 0, so the whole load fails and the register keeps the sentinel. That is a guest-visible difference.
+
+Why the cheaper variants die and this one lives: `relative_addr >= 0x400 -> return 0` fires on rowed tails (lens 1,2,3,5,6,7) and is killed by the h/q value rows; `len == 4 -> return 0` fires on the direct (4,*) rows and is killed. Only the conjunction lands on the one len-4-at-lane-0 chunk no row produces. This is clause (e)'s by-name item "a decline ... of any lane-0 wide access (a store dropped, a load's register kept)" -- uncaught at exactly the (4, lane 0) cell reached only as a split tail.
+
+Row that would catch it: `h4 ldq` (one-head process, off 0x1c; expect `SCR_VALUE<<24`; mutant leaves the sentinel). Note **h4 stq cannot catch it**: base and mutant both return 0 on the tail-4 store (write arm propagates the inner decline in base), so the store side is invisible; the closing row must be the read. Cheapest closure: add `h4 ldq` (+ alive row), which also makes "split HEADS len 1-7 x R/W" true.
+
+## Q1 -- the enumeration
+
+READ/REASONED: CELL SPACE claims "split HEADS len 1-7 at lane 3 x R/W" rowed whole. False for len 4: the (4,3) handler cell is rowed only DIRECTLY (r43 full, w-side tables); the split route at len 4 -- and with it the tail-4 chunk at (lane 0, port 0x400) -- has no row. The header's own rule ("a tail cell shows only as a whole-access failure ... not rowed per length") makes per-length tail coverage load-bearing for decline-class mutants, and the per-length set has a hole at 4. Same class as the three previous passes, one cell over: this time the enumerator folded the split cell into the direct cell and lost the tail half.
+
+REASONED: the header sentence "split TAILS ... seen by the split rows (table 2's p_lane0decl)" is true only for tail lengths present in rows; it is wrong for len 4.
+
+## Q2 -- disclosures
+
+- x_wfallthru: equivalence conclusion is REASONED correct given the SETTLED premise (store return values are guest-invisible; MCR/IER/MSR/SCR reads are side-effect-free on the 16550). But the stated reason, READ "no port it stores to has a read side effect", is incomplete: it omits the return-value leg (a declined store tail at 0x400 now returns 1 through the read arm). That leg is invisible only because of the SETTLED store-invisibility premise; the disclosure stands, the justification is under-argued.
+- p_port10: REASONED it is a true guest-visible change, not an equivalence -- port 0x7ff masked to 0x3ff hits SCR. It escapes 77/77 because no row probes ports >= 0x7f8. The corrected disclosure ("not an edit of the fix; escapes") is honest scoping, so it is disclosed rightly, but only as scoping.
+
+## Q3 -- wrong statements
+
+1. READ/REASONED: CELL SPACE "split HEADS len 1-7 ... x R/W" -- wrong at len 4 (no 0x1c row exists in the packet's inventory; the repair's own arithmetic treats {1,2,3,5,6,7} as the split set).
+2. REASONED: contract clause (e)'s claim that "a decline ... of any lane-0 wide access" is caught -- wrong at (len 4, lane 0, port 0x400), per the gap above.
+3. READ/REASONED: the x_wfallthru disclosure reason is incomplete (return-value leg omitted); conclusion still right.
+
+## Not checkable from the packet
+
+- Whether tables 1/2 truly row the 23 direct cells and len-3/5 split cells the repair builds on (rows not inlined). My verdict does not depend on this.
+- Premise that would FALSIFY the gap: existence, anywhere in the uninlined sessions 1-4c, of a row whose access hands the handler a len-4 chunk at port 0x400 (LDQ at SP(x)+0x1c, or any direct len-4 access at ports >= 0x400). The inlined enumeration plus the repair's head-length arithmetic ({1,2,3,5,6,7}) says none exists; one row name would settle it.

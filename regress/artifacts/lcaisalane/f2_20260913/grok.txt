@@ -1,0 +1,85 @@
+I'll verify the inlined premises against `GXEMUL-SEC` source and the probe before picking A/B/C, then adjudicate D1 with the token first.HEAD matches the checkpoint. Next I’ll open the handler, Alpha load/store path, and the probe so the cell table is re-derived rather than taken from the packet.The handler matches the packet. Next I’ll check BWX gating, the 1 KB split, the HRM sparse-I/O rules, and how this function evolved.**VERDICT: B** (accept all five by folding)  
+**LCAISALANE_F2_20260913**
+
+I supported A on pass 1. That was wrong. The addition-licence argument I used does not survive contact with the write arm that has been in the tree since the 0.7.0 import.
+
+---
+
+## Premises (re-derived, not ratified)
+
+| claim | result |
+|---|---|
+| Handler text | Holds. `GXEMUL-SEC/src/devices/dev_lca.c`, `DEVICE_ACCESS(lca_isa)`: `>>= 5`, `ofs = relative_addr & 3`, `ofs > len` → `fatal`+`exit(1)`, write `data[ofs % len]`, read packs `i == ofs`. |
+| S1 `fatal()` | Holds. `debugmsg.c`: `fatal` is `va_debug` with no early-out; `debug` is the one with the quiet/`v < 0` return. Only `exit(1)` kills. |
+| S2 `return 0` on Alpha | Holds. `LS_GENERIC_N` returns before the register write; `memory_rw.c` raises only under `MEM_MIPS` / `MEM_M88K`. Member 5 is unavailable. A store `return 0` is unobservable in the register; the store-decline channel is downstream ISA state. |
+| BWX ungated | Holds, stronger than the packet. `cpu_alpha_instr.c` installs `0x0a/0x0c/0x0d/0x0e` with no feature test. `ALPHA_FEATURE_BWX` is defined in `cpu_alpha.h` and **never read** (one hit in the tree). 21066’s type row carries `features = 0` anyway. |
+| S3 witness polarity | Holds against the probe source. `ofs1 answer` wants `completed`; `ofs1 zero` wants the LSR byte. I did not re-run it (measurement is inlined; no gates). |
+| S4 “no discriminating observable” | **Overstated.** Nothing boots, so no *driver* measurement. The probe already has guest-instruction channels that separate A, B, and C. See Q4. |
+| HRM sparse I/O | Holds, and it cuts against A. `_scratchpad/21066_66a_hrm.txt` S6.2.6 / S6.2.8: hardware byte I/O is **LDL/STL** with size in a\<4:3\> and lane in a\<6:5\>, not `ldbu`/`stb`. `(port << 5)` is the BYTE row of Table 6-3. `len ∈ {4,8}` never hits the guard. |
+| `% len` vintage | Holds. Same `data[ofs % len]` + `ofs > len` in `git show 39748e3:src/devices/dev_lca.c`. Upstream, not a fork accident of last month. |
+
+Could not independently re-walk every nested-`memory_rw` failure for F5; I checked `#95` zeroes on a device match and the Alpha exception arms, not the full “no uninit reaches a guest” census.
+
+---
+
+## 1. D1: B, and A’s warrant is the weak one
+
+**Warrant for B.** The write arm already implements fold: `byte = data[ofs % len]`. For every hardware-legal LDL/STL (`len` 4 or 8, `ofs` 0–3) that modulo is a no-op. Its only live effect is the equality cells, where it forwards `data[0]` to the named port. That is member 4 **in place since upstream**, not a newly chosen contract. Mirroring it on the read pack (`data[ofs % len] = byte`) and deleting the guard is applying one formula to both arms. The nested call still names `LCA_ISA_BASE + relative_addr` (the right ISA port). Nothing is fabricated. That is not member 6.
+
+**A, attacked from A’s side (pass 1 was mine).**
+
+- The addition licence constrains *additions*. A **adds a refusal** of stores that land today: `stb` to every port 1 mod 4 (PIC IMR `0x21`/`0xa1`, UART IER `0x3f9`, RTC `0x71`) and `stw` to every port 2 mod 4. “The HRM is silent on BWX” is an absence. Absence licenses A, B, and C equally. It does not license *removing* a behaviour the function already implements.
+- Member 3 on the equality cells is not de-fatalisation. Those cells do not call `exit(1)`. Writes work; reads false-zero. Dressing a behaviour change in the house idiom does not make it de-fatalisation.
+- `ofs >= len` as “lane must be in the buffer” mis-models `ldbu`/`stb`. For a byte instruction the payload **is** `data[0]`; `ofs` is the port’s sparse lane, not the guest’s buffer index. `1 % 1 == 0` is the unique byte-access contract, and it is exactly what the write arm does at (1,1) today. A refuses a well-formed byte because a longword-lane index does not fit in a 1-byte buffer.
+
+**B’s weakest claim (the one to keep eyes on).** Transferring “the write arm accepts equality” onto the three EXIT cells, where that arm **never runs**, is the step that is a principle rather than a measurement. The principle is fable5’s: if the lane folds onto the buffer at equality, it folds beyond it too. That is modulo arithmetic, not the 21066. The (2,3) cost is real: `stw`/`ldwu` of a port 3 mod 4 picks `data[1]`, the high half of the word. Disclose it. Do not use it to go back to A. The handler already forwards **one** byte to **one** port (F7 / `lcaisasize`); it is not doing ISA-word semantics at (2,3) or anywhere else. For `len==1` — the cells that matter, including UART LCR `0x3fb` and IIR `0x3fa` — fold is `data[0]` and is the right byte.
+
+**C, attacked as requested.** C is A on one side of `>` and B on the other. The line *is* the off-by-one that is the bug. (1,1) `stb` to IER lands; (1,2) `stb` to IIR is refused. Both are byte stores to the same UART. Round-scope (“smallest edit, no regression”) is not a hardware contract and not the function’s contract: the function already folds writes and drops reads at equality. C preserves that asymmetry and **ships F2**. The probe’s own comment forbids that: *“What a fix may NOT do is keep answering a false zero.”* After C, IER writes work, LSR `ldbu` returns 0, LCR `stb` is declined. That is a worse debugging trap than HEAD, which at least dies on the neighbouring cells. F1 and F2 are two faces of one predicate in one function; one design covers both. Deferring F2 is not round-scope, it is leaving the witnessed false success in place.
+
+Sketch obligation if B is taken: `len == 0` makes `% len` undefined. No producer; still write `if (len == 0) return 0;` before the modulo. Do not swallow F6 (`PHYSICAL`) or F7 (`a<4:3>`) into this round.
+
+---
+
+## 2. F1–F8
+
+| id | disposition |
+|---|---|
+| **F1** | **UPHOLD.** Guest-drivable `exit(1)` at (1,2), (1,3), (2,3). Every option removes it. |
+| **F2** | **UPHOLD as a defect; B repairs it in-round.** Right port fetched, 0 returned at (1,1)/(2,2)/(3,3). Not deferrable: it is the LSR `ldbu` every 8250 driver issues. |
+| **F3** | **UPHOLD.** This is the fact that kills A. Equality writes land today via `data[ofs % len]`. |
+| **F4** | **UPHOLD, with a bound.** `translate_v2p` is always set (`cpu_alpha.c`); unaligned LDL (`addr & 3`) falls to `LS_GENERIC_N` with no Alpha unaligned fault; the 1 KiB split can hand `len` 3/5/6/7. Producer is emulator-unaligned, not 21066-legal (`a<2:0>` must be 0). (3,3) is a third equality cell; under B it folds too. Remaining split cells: clause (e). |
+| **F5** | **UPHOLD the refinement.** Robustness, not a guest-visible leak, on the walk I could check (`#95` zeroes on a device hit). I did not re-walk every failing nested path. |
+| **F6** | **UPHOLD, keep filed** (`lcaisaphys`). Not this round. |
+| **F7** | **UPHOLD, keep filed** (`lcaisasize`, `lcaisaqword`). Not this round. |
+| **F8** | **(2,1)’s `data[1]` is right**, not wrong, not undefined. Lane idiom: the byte for lane `ofs` is `data[ofs]` when `ofs < len`. That is what `len==4` does and what (2,1) already does. The “low byte of a narrow access” reading is the wrong reading of this function; it has never used `data[0]` except via `%` when `ofs >= len`. Under B, (2,1) is unchanged; (2,3) is the wrap of the same idiom, not a second instance of “wrong byte.” |
+
+---
+
+## 3. Which main-loop disposition is wrong?
+
+None of F1–F4 is factually false. **The wrong call is leaving F8 open, and with it treating C as a live option.** (2,1) is already decided by the lane idiom that the hardware-legal path uses. Once that is named, C’s “no principle between (1,1) and (1,2)” is the whole of C, and F2 cannot be parked as its own row while this function is open. I would not overturn F6/F7 being filed separately.
+
+---
+
+## 4. What we missed
+
+**S4 is the load-bearing overclaim.** Lack of a booting OS is not lack of a discriminating observable. The existing rung-3 probe already separates the three:
+
+| observable | A | B | C |
+|---|---|---|---|
+| `ofs2`/`ofs3` process | alive | alive | alive |
+| `ofs1 answer` (sentinel vs completed) | faulted (sentinel kept) | completed | completed |
+| `ofs1 zero` (LSR byte) | see below | **0x60** | **0** (false success) |
+| equality write to IER, read back flat | **does not land** | lands | lands |
+| `stb` to LCR `0x3fb` (1,3) | declined | **lands `data[0]`** | declined |
+| (2,3) `stw` byte | declined | **`data[1]`** (the high-half cost) | declined |
+
+That is a measurement, not an argument. Run it on three mutants of one function.
+
+**Second miss, and it is a vacuity.** `SENT = 0x0bad1dea`; `SENT & 0x60 == 0x60 == LSR_FIXED`. Under A, `ofs1 zero` **false-greens**: the decline leaves the sentinel, the mask cannot tell sentinel from LSR. Only `ofs1 answer` sees A. The first ruling’s re-pin was trying to paper over a row that cannot observe the decline it wanted. B is the only option that greens `ofs1 zero` for the right reason (the device byte in `data[0]`).
+
+**Third.** Fable5 named IER/IMR/RTC as the equality-write regression. The EXIT **byte** cells are IIR `0x3fa`, LCR `0x3fb`, MSR `0x3fe`, scratch `0x3ff`. If “don’t break UART programming via `stb`” is the reason A is rejected, it is also the reason C is rejected. C still refuses the store that sets baud.
+
+**Fourth.** `amask` is disassembly-only (`cpu_alpha.c` mnemonic, no handler). A guest cannot probe for BWX the architected way. The only producer is a binary that *assumes* BWX on a 21066. That is emulator policy, and B is the policy that makes those instructions do the one-byte-to-the-named-port thing the write arm already does.
+
+I did not run the probe or any gate. The 13/16 figure is taken as inlined; the oracles above are from the probe source.

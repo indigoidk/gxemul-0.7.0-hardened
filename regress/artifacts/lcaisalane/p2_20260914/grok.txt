@@ -1,0 +1,63 @@
+I'll start from the full pass-2 packet and the live `GXEMUL-SEC` tree, then walk the handler cells and the 37-row detector against the real diff.The inlined packet is truncated in places; next I’ll open the live handler, probe, and kill-table artifacts and check them against the brief’s premises.The handler matches the packet. Next I’ll read the probe, mutants, and `memory_rw` so the cell walk and floor check are against the real code.SHIP  
+LCA530_P2_20260914
+
+Checked the live `GXEMUL-SEC` handler, probe, mutants, `memory_rw` / Alpha load-store, and the on-disk `HEAD_det.out` / `FIX_det.out` / `check_pred.out`. Did not re-run the table.
+
+---
+
+### 1. The fix is right
+
+`len` is `size_t`. After `if (len == 0) return 0`, `ofs = (relative_addr & 3) % len` is in `0 .. len-1`. No `% 0`, no `data[ofs]` past the caller buffer, no `exit(1)` left in this function. Nested forward is `LCA_ISA_BASE + port` (`0x1d0000000`), outside the sparse map (`0x1c0000000` .. `+0x200000`), so it cannot re-enter `lca_isa`. Handler `return 0` is `MEMORY_ACCESS_FAILED` with no Alpha exception; a load keeps the destination (`cpu_alpha_instr_loadstore.c`). `fatal()` only prints.
+
+Let `P = port & 3` after `>>= 5`. Position is `P % len` on **both** arms, which is disposition B.
+
+| len \ P | 0 | 1 | 2 | 3 | guest producers |
+|---|---|---|---|---|---|
+| 1 | 0 | **0** | **0** | **0** | `ldbu`/`stb` (measured) |
+| 2 | 0 | 1 | **0** | **1** | `ldwu`/`stw` (measured) |
+| 3 | 0 | 1 | 2 | **0** | 1 KB split head (not this probe) |
+| 4 | 0 | 1 | 2 | 3 | `ldl`/`stl` (reads as `ofs* wide`) |
+| 5–7 | 0 | 1 | 2 | 3 | split heads (not this probe) |
+| 8 | 0 | 1 | 2 | 3 | `ldq` (measured `r81`); `stq` unrowed |
+
+Bold cells are the ones HEAD got wrong: `(1,1)` and `(2,2)` reads discarded the fetched byte (`ofs == len`); `(1,2)`, `(1,3)`, `(2,3)` reads and writes hit `ofs > len` and `exit(1)`. Writes of `(1,1)` and `(2,2)` already used `data[ofs % len]` on HEAD; the new `data[ofs]` is the same index once `ofs` is folded.
+
+For len 4 and 8, `P % len == P`, which is the lane HEAD already used on the hardware-legal widths. For len 2, `(2,3) → position 1` is the same rule as the served `(2,1)` cell (`r21` = `0x6000` on HEAD and after). `ALPHA_FEATURE_BWX` is a `#define` and is never read under `src/`.
+
+No cell I can produce still ends the host, indexes OOB, or divides by zero.
+
+---
+
+### 2. No floor gap inside the contract
+
+`check_pred.out`: `exact=14 differs=0 of 14`. Scores match the PRETABLE sets (`head` 19/37, `m_exit` 22/37, `m_clamp` 35/37 with only `r23`/`w23`, `m_nomask` 36/37 with only `r81`).
+
+I looked for a one-line undo that stays 37/37 and is **not** on the disclosed list (`%` vs `& (len-1)`, len 0, a<4:3>, qword-as-hardware, PHYSICAL):
+
+- Reinstating `if (ofs > len) exit(1)` **after** the fold: `ofs < len` always, equivalent, not the removed defect. `m_exit` puts the check on **unfolded** `P` and is red.
+- `ofs = relative_addr & 3` with `data[ofs]` on write: that is `m_readonlyfold` (6 red, including OOB on the len-1 stores).
+- Unfolded read pack: `m_writeonlyfold` (7 red).
+- Position 0 when `P >= len`: `m_clamp`, pinned by the `(2,1)` vs `(2,3)` pair.
+- Drop `& 3`: `m_nomask`, `r81` (`0x3fd % 8 == 5` vs lane 1). Confirmed in `probe_m_nomask.raw`.
+
+A write-only `byte = data[len >= 4 ? 0 : ofs]` would also be 37/37 — there is no `stl`/`stq`. The body never tests `len >= 4` as a case, so that is clause-(e) debt, not a (d) cell. Same for a K0SEG unaligned LDL that actually would split (see Q3): those lens are on the disclosed list, so they are outside this question.
+
+---
+
+### 3. Wrong statements
+
+**The #530 comment (and the probe header’s “K0SEG, untranslated” reason) are the ones that do not survive a re-read.**
+
+1. **Fix comment:** *“the old `ofs > len' exit(1) ended the host on a guest byte/word access to a port 2 or 3 mod 4”*. Word + port 2 is `(2,2)`: `2 > 2` is false. HEAD does **not** die there; the read discards the byte (`r22` = 0 in `HEAD_det.out`) and the write already lands (`w22` = `0xf0`). Death is `(1,2)`, `(1,3)`, `(2,3)` only. The next sentence about `ofs == len` is the correct one; the first sentence contradicts it.
+
+2. **Probe contract / PRETABLE:** *“this probe runs on K0SEG, untranslated”* as the reason split heads are unreachable. K0SEG still calls `alpha_translate_v2p` (identity, return 2). `MEMORY_RW` splits whenever `translate_v2p != NULL` and the flag is not `PHYSICAL`. Guest loads use `CACHE_DATA`, so an unaligned `ldl`/`ldq` that straddles a 1 KB boundary **would** split on this probe’s machine. What actually keeps len 3/5–7 off the instrument is the instruction stream: every sparse access is `disp=0` on a 32-byte slot, `LCA_PCI_SIO` is 1 KB-aligned, and the last slot in a granule is at `0x3e0` so even an 8-byte access stays inside the granule. Unrowed by construction, not because K0SEG skips the split.
+
+Lesser nits, not load-bearing: POSTTABLE’s gloss *“six host-death cells + two discarded-byte reads + the witness’s three reds”* is 11 names, not the 18 in the PRETABLE list (it drops the death-cell value rows and `w13 roundtrip`). `r22`’s row note says it kills “C/HEAD’s discarded byte”; `m_declbeyond` still folds after a `P > len` miss, so `(2,2)` is green under that mutant (PRETABLE’s channel line is the one that is right).
+
+---
+
+### Premises / not checked
+
+Holds from the tree: BWX ungated; `return 0` leaves an Alpha load untouched; `fatal()` does not exit; HEAD 13/16 then 19/37 and fix 37/37 as cited; sentinel `0x8a & 0x60 == 0` so `ofs1 zero` can see a decline.
+
+Not measured here (source only): a straddling K0SEG `ldl` producing a len-3 head; hardware a<4:3> / true quadword ISA cycle. Did not drive `run.sh` or any gate.

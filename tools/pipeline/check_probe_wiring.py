@@ -152,6 +152,65 @@ CLASSES = (CLASS_DETECTOR, CLASS_WITNESS, CLASS_TOOL, CLASS_RESEARCH)
 #  cannot arrive unnoticed, which is exactly how all four debts below arrived.
 MANIFEST = {
 
+    # -- #530 lcaisalane + its owed width row (lcalenzerodrop) ---------------------------------
+    #  ONE new DETECTOR, one WITNESS, twenty TOOLS.  The tools are kill-table drivers, prediction
+    #  checkers and FROZEN instrument copies -- the instrument each table actually ran, per the
+    #  frozen-copy rule -- committed because #530's record cites them.
+    "lca_widewrite_probe.py":
+        (CLASS_DETECTOR, "#530 width row: a 16-byte store_buf write via PROM GETENV (CALL_PAL 0x3fffffe) "
+                         "into the ns16550 SCR.  base 3/3; `&& len <= 8' and `len == 0 || len > 8' 2/3 each -- "
+                         "both swept the 352-row lca_isalane_probe.py clean.  *** RUNS IN NO GATE: see EXEMPT. ***"),
+    #  CLASSED WITNESS, and not to dodge a gate: it is a one-off REACHABILITY measurement by an Opus
+    #  seat (08:16, before the width row was built) that the GETENV producer reaches lca_isa at
+    #  len > 8 -- an independent replication of the row via a DIFFERENT variable (BOOTED_FILE), port
+    #  (0x3ff) and length (a3=64).  *** FROZEN, NOT RUNNABLE: it exec()s the first 459 lines of
+    #  lca_isalane_probe.py, and that header grew 12 comment lines on 2026-09-18, so a re-run would
+    #  slice the parent in the wrong place. ***  Preserved as evidence; the shipped row is the detector.
+    "artifacts/lcalenzerodrop/opus_getenv_20260918/opus_lcalen8_getenv_probe.py":
+        (CLASS_WITNESS, "lcalenzerodrop: the PROM GETENV producer reaches lca_isa at len > 8 -- base puts s[3] on the "
+                        "SCR at port 0x3ff, `&& len <= 8' leaves the preset (opus_lcalen8_getenv_20260918.out)"),
+    "artifacts/lcaisalane/opus_c5_20260915/instrument/check_pred.py":
+        (CLASS_TOOL, "closing pass 5: checks each mutant's score against its written prediction"),
+    "artifacts/lcaisalane/opus_c5_20260915/instrument/disc530c5.py":
+        (CLASS_TOOL, "closing pass 5: discriminator mutant applier"),
+    "artifacts/lcaisalane/opus_c5_20260915/instrument/disc530c5.frozen.py":
+        (CLASS_TOOL, "closing pass 5: frozen copy of the discriminator applier the table ran"),
+    "artifacts/lcaisalane/opus_c5_20260915/instrument/disc530c5b.py":
+        (CLASS_TOOL, "closing pass 5: second discriminator applier"),
+    "artifacts/lcaisalane/opus_c5_20260915/instrument/disc530c5b.frozen.py":
+        (CLASS_TOOL, "closing pass 5: frozen copy of the second discriminator applier"),
+    "artifacts/lcaisalane/opus_c5_20260915/instrument/lca_isalane_probe.c5.frozen.py":
+        (CLASS_TOOL, "closing pass 5: FROZEN instrument the table ran against"),
+    "artifacts/lcaisalane/opus_c5_20260915/instrument/mut530c5.py":
+        (CLASS_TOOL, "closing pass 5: mutant applier"),
+    "artifacts/lcaisalane/opus_c5_20260915/instrument/mut530c5.frozen.py":
+        (CLASS_TOOL, "closing pass 5: frozen mutant applier"),
+    "artifacts/lcaisalane/opus_c5_20260915/instrument/mut530c5b.py":
+        (CLASS_TOOL, "closing pass 5: second mutant applier"),
+    "artifacts/lcaisalane/opus_c5_20260915/instrument/mut530c5b.frozen.py":
+        (CLASS_TOOL, "closing pass 5: frozen second mutant applier"),
+    "artifacts/lcaisalane/table7_20260916/check_pred.py":
+        (CLASS_TOOL, "table 7: checks each leg against its written prediction"),
+    "artifacts/lcaisalane/table7_20260916/lca_isalane_probe.table7.py":
+        (CLASS_TOOL, "table 7: FROZEN 352-row instrument"),
+    "artifacts/lcaisalane/table7_20260916/mut530c5.frozen.py":
+        (CLASS_TOOL, "table 7: frozen mutant applier"),
+    "artifacts/lcaisalane/table7_20260916/mut530c5b.frozen.py":
+        (CLASS_TOOL, "table 7: frozen mutant applier"),
+    "artifacts/lcaisalane/table7_20260916/mut530c5c.frozen.py":
+        (CLASS_TOOL, "table 7: frozen mutant applier"),
+    "artifacts/lcaisalane/table7_20260916/mut530c5d.frozen.py":
+        (CLASS_TOOL, "table 7: frozen mutant applier"),
+    "artifacts/lcaisalane/table7_20260916/mutlen8.py":
+        (CLASS_TOOL, "KILLLEN8: applies `len == 0' -> `len == 0 || len > 8', the width mutant that swept 352/352"),
+    "artifacts/lcalenzerodrop/killtable_20260918/lca_isalane_probe.frozen.py":
+        (CLASS_TOOL, "lcalenzerodrop M1/M2 table: FROZEN 352-row instrument"),
+    "artifacts/lcalenzerodrop/widewrite_20260918/lca_widewrite.frozen.py":
+        (CLASS_TOOL, "the width row's MEASURED instrument (run 2); regress/lca_widewrite_probe.py is it, with only DUMMY's path made relative"),
+    "artifacts/lcalenzerodrop/widewrite_20260918/logs/run1_L1_no_return_address/lca_widewrite.frozen.run1.py":
+        (CLASS_TOOL, "RUN 1 -- the L1 construction failure (no ra before the inline CALL_PAL), preserved"),
+
+
     # -- #532 stagetokens pass 2 (2026-09-18): the Opus seat's scratch variants of two checkers.  TOOLS: nothing
     #    runs them; they are the evidence behind the pass-2 findings.
     "artifacts/stagetokens/pass2_20260918/opus532/entryscope/check_fable_queue.py":
@@ -460,6 +519,142 @@ MANIFEST = {
     #  regress/ newly red, which is a flood this check was never scoped for.  The files remain
     #  TRACKED (staged 2026-09-18) and their descriptions are preserved here, so nothing is lost
     #  -- only an entry that could never be discharged.
+    "artifacts/lcaisalane/opus_c5_20260915/instrument2/pitrows530c5.py":
+        (CLASS_RESEARCH, "#530 the c5 seat's 150-row 8253 PROTOTYPE -- four phase shapes (live, PS store-parity, PL load-parity, PW load-then-store) over counters 0/1/2 and the 0x40 tails.  It is the measurement that answers repair 6's channel question: reds on five of six named escapes, green on base, and 150/150 on cdxZL3, which is the MEASURED proof that lane 3 is unreachable on this channel"),
+    "artifacts/lcaisalane/opus_c5_20260915/instrument2/pitrows530c5.frozen.py":
+        (CLASS_RESEARCH, "#530 the FROZEN copy (md5 7919c9e5) that every one of the 16 prototype legs actually ran -- one instrument across the whole comparison, re-checked three hours after the freeze by INSTRUMENT_E.md5"),
+    "artifacts/lcaisalane/opus_c5_20260915/instrument2/mut530c5c.py":
+        (CLASS_TOOL, "#530 the c5 seat's batch-C mutator (the 8253-channel subjects), preserved as run"),
+    "artifacts/lcaisalane/opus_c5_20260915/instrument2/mut530c5c.frozen.py":
+        (CLASS_TOOL, "#530 its frozen run-copy"),
+    "artifacts/lcaisalane/opus_c5_20260915/instrument2/mut530c5d.py":
+        (CLASS_TOOL, "#530 the c5 seat's batch-D mutator: the four cells the main loop relayed -- WXR, RXW, Wdrop, Rdrop, the write- and read-arm SWAP and DROP cells that no pass had ever built"),
+    "artifacts/lcaisalane/opus_c5_20260915/instrument2/mut530c5d.frozen.py":
+        (CLASS_TOOL, "#530 its frozen run-copy"),
+    "artifacts/lcaisalane/fix530_20260914/mutants530.py":
+        (CLASS_TOOL, "#530 kill-table 1 mutator (dev_lca.c lca_isa position rule)"),
+    "artifacts/lcaisalane/fix530_20260914/check_pred.py":
+        (CLASS_TOOL, "#530 kill-table 1's prediction checker: PRETABLE 1's red-row sets transcribed, compared with the logs"),
+    "artifacts/lcaisalane/fix530_20260914/lca_isalane_probe.table1.py":
+        (CLASS_RESEARCH, "#530 the frozen 37-row instrument kill table 1 ran"),
+    "artifacts/lcaisalane/fix530_20260914/lca_isalane_probe.HEAD_repin.asrun.py":
+        (CLASS_RESEARCH, "#530 the instrument as run for the oracle re-pin on the committed build (test-first order)"),
+    "artifacts/lcaisalane/fix530_20260914/lca_isalane_probe.HEAD_det.asrun.py":
+        (CLASS_RESEARCH, "#530 the 37-row instrument as run on the committed build (pre-fix red)"),
+    "artifacts/lcaisalane/fix530_20260914/lca_isalane_probe.FIX_det.asrun.py":
+        (CLASS_RESEARCH, "#530 the 37-row instrument as run on the fixed build"),
+    "artifacts/lcaisalane/fix530_20260914/lca_isalane_probe.HEAD_r2.asrun.py":
+        (CLASS_RESEARCH, "#530 the 51-row (repair 1) instrument as run on the committed build"),
+    "artifacts/lcaisalane/fix530_20260914/lca_isalane_probe.FIX_r2.asrun.py":
+        (CLASS_RESEARCH, "#530 the 51-row (repair 1) instrument as run on the fixed build"),
+    "artifacts/lcaisalane/fix530_20260914/lca_isalane_probe.HEAD_r3.asrun.py":
+        (CLASS_RESEARCH, "#530 the 77-row (repair 2) instrument as run on the committed build -- measures lcaisaunaligned"),
+    "artifacts/lcaisalane/fix530_20260914/lca_isalane_probe.FIX_r3.asrun.py":
+        (CLASS_RESEARCH, "#530 the 77-row (repair 2) instrument as run on the fixed build"),
+    "artifacts/lcaisalane/fix530_20260914/table2/mutants530b.py":
+        (CLASS_TOOL, "#530 kill-table 2 mutator: table 1's plus the pass-2 escapes"),
+    "artifacts/lcaisalane/fix530_20260914/table2/mutants530.table1.py":
+        (CLASS_TOOL, "#530 table 1's mutator, copied as run and exec'd by mutants530b.py"),
+    "artifacts/lcaisalane/fix530_20260914/table2/mutants_p2.opus.py":
+        (CLASS_TOOL, "#530 the Opus pass-2 seat's mutator, copied as run and exec'd by mutants530b.py"),
+    "artifacts/lcaisalane/fix530_20260914/table2/check_pred.py":
+        (CLASS_TOOL, "#530 kill-table 2's prediction checker"),
+    "artifacts/lcaisalane/fix530_20260914/table2/lca_isalane_probe.table2.py":
+        (CLASS_RESEARCH, "#530 the frozen 51-row (repair 1) instrument kill table 2 ran"),
+    "artifacts/lcaisalane/fix530_20260914/table3/mutants530c.py":
+        (CLASS_TOOL, "#530 kill-table 3 mutator: the closing-pass-1 escapes and one per reading-seat shape"),
+    "artifacts/lcaisalane/fix530_20260914/table3/check_pred.py":
+        (CLASS_TOOL, "#530 kill-table 3's prediction checker"),
+    "artifacts/lcaisalane/fix530_20260914/table3/lca_isalane_probe.table3.py":
+        (CLASS_RESEARCH, "#530 the frozen 77-row (repair 2) instrument kill table 3 ran (the shipped probe)"),
+    "artifacts/lcaisalane/fix530_20260914/lca_isalane_probe.r4.frozen.py":
+        (CLASS_RESEARCH, "#530 the 93-row (repair 3) instrument frozen once for HEAD_r4 and FIX_r4"),
+    "artifacts/lcaisalane/fix530_20260914/lca_isalane_probe.HEAD_r4.asrun.py":
+        (CLASS_RESEARCH, "#530 the 93-row instrument as run on the committed build"),
+    "artifacts/lcaisalane/fix530_20260914/lca_isalane_probe.FIX_r4.asrun.py":
+        (CLASS_RESEARCH, "#530 the 93-row instrument as run on the fixed build"),
+    "artifacts/lcaisalane/fix530_20260914/table4/mutants530d.py":
+        (CLASS_TOOL, "#530 kill-table 4 mutator: the closing-pass-2 escapes, swapmod, and one mutant per new row's channel"),
+    "artifacts/lcaisalane/fix530_20260914/table4/check_pred.py":
+        (CLASS_TOOL, "#530 kill-table 4's prediction checker (nested-parenthetical parse corrected after the run)"),
+    "artifacts/lcaisalane/fix530_20260914/table4/check_pred.asrun.py":
+        (CLASS_TOOL, "#530 kill-table 4's prediction checker as run, before the nested-parenthetical parse fix"),
+    "artifacts/lcaisalane/fix530_20260914/table4/lca_isalane_probe.table4.py":
+        (CLASS_RESEARCH, "#530 the frozen 93-row (repair 3) instrument kill table 4 ran"),
+    "artifacts/lcaisalane/fix530_20260914/lca_isalane_probe.r5.frozen.py":
+        (CLASS_RESEARCH, "#530 the 111-row (repair 4) instrument frozen once for FIX_r5 and HEAD_r5"),
+    "artifacts/lcaisalane/fix530_20260914/lca_isalane_probe.FIX_r5.asrun.py":
+        (CLASS_RESEARCH, "#530 the 111-row instrument as run on the fixed build"),
+    "artifacts/lcaisalane/fix530_20260914/lca_isalane_probe.HEAD_r5.asrun.py":
+        (CLASS_RESEARCH, "#530 the 111-row instrument as run on the committed build"),
+    "artifacts/lcaisalane/fix530_20260914/table5/mutants530e.py":
+        (CLASS_TOOL, "#530 kill-table 5 mutator: the fallthrough class (W1-W5, RD2, x_wfallthru)"),
+    "artifacts/lcaisalane/fix530_20260914/table5/check_pred.py":
+        (CLASS_TOOL, "#530 kill-table 5's prediction checker"),
+    "artifacts/lcaisalane/fix530_20260914/table5/lca_isalane_probe.table5.py":
+        (CLASS_RESEARCH, "#530 the frozen 111-row (repair 4) instrument kill table 5 ran"),
+    "artifacts/lcaisalane/fix530_20260914/lca_isalane_probe.r6.frozen.py":
+        (CLASS_RESEARCH, "#530 the 185-row (repair 5) instrument frozen once for FIX_r6 and HEAD_r6"),
+    "artifacts/lcaisalane/fix530_20260914/lca_isalane_probe.FIX_r6.asrun.py":
+        (CLASS_RESEARCH, "#530 the 185-row instrument as run on the fixed build"),
+    "artifacts/lcaisalane/fix530_20260914/lca_isalane_probe.HEAD_r6.asrun.py":
+        (CLASS_RESEARCH, "#530 the 185-row instrument as run on the committed build"),
+    "artifacts/lcaisalane/fix530_20260914/table6/mutants530f.py":
+        (CLASS_TOOL, "#530 kill-table 6 mutator: the Opus closing-pass-4 seat's ten, RD2 at lanes 1 and 3, unconditional RD2"),
+    "artifacts/lcaisalane/fix530_20260914/table6/mut530c4_opus.py":
+        (CLASS_TOOL, "#530 the Opus closing-pass-4 seat's mutator, copied as run and exec'd by mutants530f.py"),
+    "artifacts/lcaisalane/fix530_20260914/table6/check_pred.py":
+        (CLASS_TOOL, "#530 kill-table 6's prediction checker (the PRETABLE's red-row sets as Python sets)"),
+    "artifacts/lcaisalane/fix530_20260914/table6/lca_isalane_probe.table6.py":
+        (CLASS_RESEARCH, "#530 the frozen 185-row (repair 5) instrument kill table 6 ran"),
+    "artifacts/lcaisalane/opus_c2_20260914/instrument/mutants_c2.py":
+        (CLASS_TOOL, "#530 the Opus closing-pass-2 seat's mutator, preserved as run"),
+    "artifacts/lcaisalane/opus_c2_20260914/instrument/mutants_c2b.py":
+        (CLASS_TOOL, "#530 the Opus closing-pass-2 seat's mutator for the relayed panel mutants, preserved as run"),
+    "artifacts/lcaisalane/opus_c2_20260914/instrument/opus_c2_demo.py":
+        (CLASS_RESEARCH, "#530 the Opus closing-pass-2 seat's discriminator (iir, tailr, tailw), ported into the probe as sessions 4f/4h"),
+    "artifacts/lcaisalane/opus_c2_20260914/instrument/opus_c2_demo2.py":
+        (CLASS_RESEARCH, "#530 the Opus closing-pass-2 seat's discriminator for the panel mutants K1 and C1"),
+    "artifacts/lcaisalane/opus_c3_20260914/instrument/mut530c3.py":
+        (CLASS_TOOL, "#530 the Opus closing-pass-3 seat's mutator, preserved as run"),
+    "artifacts/lcaisalane/opus_c3_20260914/instrument/mut530c3.frozen2.py":
+        (CLASS_TOOL, "#530 the Opus closing-pass-3 seat's mutator, frozen for its second driver"),
+    "artifacts/lcaisalane/opus_c3_20260914/instrument/disc530c3.frozen.py":
+        (CLASS_RESEARCH, "#530 the Opus closing-pass-3 seat's discriminator (iir widths, 0x60 pending reply, read-IIR twice), preserved as evidence"),
+    "artifacts/lcaisalane/opus_c4_20260914/instrument/mut530c4.py":
+        (CLASS_TOOL, "#530 the Opus closing-pass-4 seat's mutator, preserved as run"),
+    "artifacts/lcaisalane/opus_c4_20260914/instrument/mut530c4.frozen.py":
+        (CLASS_TOOL, "#530 the Opus closing-pass-4 seat's mutator, frozen for its first driver"),
+    "artifacts/lcaisalane/opus_c4_20260914/instrument/mut530c4b.frozen.py":
+        (CLASS_TOOL, "#530 the Opus closing-pass-4 seat's mutator for the panel cells, frozen for its second driver"),
+    "artifacts/lcaisalane/opus_c4_20260914/instrument/disc530c4.py":
+        (CLASS_RESEARCH, "#530 the Opus closing-pass-4 seat's 17-channel discriminator (0x61-0x6f stub counter, 8042 queue, 8253, CMOS REG C), preserved as evidence"),
+    "artifacts/lcaisalane/opus_c4_20260914/instrument/disc530c4.frozen.py":
+        (CLASS_RESEARCH, "#530 the Opus closing-pass-4 seat's discriminator, frozen as run"),
+    "artifacts/lcaisalane/opus_f2_20260913/lca_f2_probe.py":
+        (CLASS_RESEARCH, "#530 the Opus F2 seat's options A/B/C discriminator probe, preserved as evidence"),
+    "artifacts/lcaisalane/opus_f2_20260913/lca_f2_probe.frozen.py":
+        (CLASS_RESEARCH, "#530 the Opus F2 seat's discriminator probe, frozen as run"),
+    "artifacts/lcaisalane/opus_f2_20260913/lca_isalane_probe.frozen.py":
+        (CLASS_RESEARCH, "#530 the witness probe as the Opus F2 seat ran it"),
+    "artifacts/lcaisalane/opus_f2_20260913/mk_variants.py":
+        (CLASS_TOOL, "#530 the Opus F2 seat's A/B/C variant builder, preserved as run"),
+    "artifacts/lcaisalane/opus_p2_20260914/mutants_p2.py":
+        (CLASS_TOOL, "#530 the Opus pass-2 seat's mutator, preserved as run"),
+    "artifacts/lcaisalane/opus_p2_20260914/disc_probe.py":
+        (CLASS_RESEARCH, "#530 the Opus pass-2 seat's discriminator probe, preserved as evidence"),
+    "artifacts/lcaisalane/opus_p2_20260914/disc_probe.frozen.py":
+        (CLASS_RESEARCH, "#530 the Opus pass-2 seat's discriminator probe, frozen as run"),
+    "artifacts/lcaisalane/opus_p2_20260914/split_probe.py":
+        (CLASS_RESEARCH, "#530 the Opus pass-2 seat's K0SEG split measurement, preserved as evidence"),
+    "artifacts/lcaisalane/opus_p2_20260914/split_probe.frozen.py":
+        (CLASS_RESEARCH, "#530 the Opus pass-2 seat's split measurement, frozen as run"),
+    "artifacts/lcaisalane/opus_p2_20260914/lca_isalane_probe.opusp2.py":
+        (CLASS_RESEARCH, "#530 the 37-row instrument as the Opus pass-2 seat ran it"),
+    "artifacts/lcaisalane/opus_c1_20260914/mutants_c1.py":
+        (CLASS_TOOL, "#530 the Opus closing-pass-1 seat's mutator, preserved as run"),
+    "artifacts/lcaisalane/opus_c1_20260914/disc_c1.py":
+        (CLASS_RESEARCH, "#530 the Opus closing-pass-1 seat's discriminator, preserved as evidence"),
     "artifacts/mapledmaaddr/opus_final_20260912/maple_dmaaddr_probe.REPAIR_HOW.py":
         (CLASS_RESEARCH, "#528 the Opus seat's candidate per-session exit-status repair (adopted in table 7 as unclean())"),
     "artifacts/mapledmaaddr/opus_final_20260912/maple_dmaaddr_probe.REPAIR_HOW.FROZEN3.py":
@@ -663,6 +858,8 @@ MANIFEST = {
     #  lcaisalane's is a WITNESS as-run copy, red on HEAD by design and not a green row anyone may wire.
     #  #518 lcabadval, landed with the round: the live detector (DETECTOR + dated EXEMPT below -- no
     #  gate runs an Alpha machine, the #520 precedent) and its table-5 mutator.
+    "lca_isalane_probe.py":
+        (CLASS_DETECTOR, "lcaisalane (#530): 37 rows on unmodified -E alphabook1 -- the 16-row rung-3 witness (sentinel re-pinned to 0x0bad1d8a) plus 21 detector rows for disposition B (byte for port P at (P & 3) % len on both arms; the six host-death cells, reads AND writes, rowed alive + value).  HEAD 19/37, fix 37/37 (artifacts/lcaisalane/fix530_20260914/); kill table 1 in that dir"),
     "lca_badval_probe.py":
         (CLASS_DETECTOR, "lcabadval (#518): 75 rows on unmodified -E alphabook1 -- six IOC write arms that killed the host on manual-legal values, now stored by field (MASK validated) with latched announces.  Kill table 5 (artifacts/lcabadval/killtable5_20260912/): BASE 75/75, HEAD 15/75, seven mutants 74/75 each on one named row, every leg on prediction"),
     "artifacts/lcabadval/killtable5_20260912/mut518t5.py":
@@ -1995,6 +2192,15 @@ EXEMPT = {
                                     "is the named home, filed to wiringcliff with #520"),
     #  #530's detector.  Same footing and the same date as #518's: single-leg, green on the
     #  fix, and no gate in this tree runs an Alpha machine.
+    #  #530's width row.  SAME footing and SAME date as lca_isalane_probe.py below: no gate in this
+    #  tree runs an Alpha machine, and a later date would hide the debt behind the cliff instead of
+    #  joining it.  Adding it here is stated in #530's record, not done silently.
+    "lca_widewrite_probe.py":      ("2026-09-20",
+                                    "no gate runs an Alpha machine; gate_crossfamily.sh "
+                                    "is the named home, filed to wiringcliff with #518/#520/#530"),
+    "lca_isalane_probe.py":        ("2026-09-20",
+                                    "no gate runs an Alpha machine; gate_crossfamily.sh "
+                                    "is the named home, filed to wiringcliff with #518/#520"),
     #  #531's detector, and it takes the SAME footing and the SAME date as #518/#520/#530
     #  rather than a longer one -- a later date would hide this debt behind the cliff instead
     #  of joining it, and the cliff is already a filed row.  Measured before writing this:

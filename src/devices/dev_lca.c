@@ -279,15 +279,25 @@ DEVICE_ACCESS(lca_isa)
 
 	relative_addr >>= 5;
 
-	ofs = relative_addr & 3;
-	if (ofs > len) {
-		fatal("[ ofs=%i len=%i in lca_isa access function. "
-		    "aborting ]\n", ofs, len);
-		exit(1);
-	}
+	/*
+	 *  #530: the byte for ISA port P sits at buffer position (P & 3) % len
+	 *  on BOTH arms -- the lane for the 21066's own len 4/8 accesses, and
+	 *  the rule the write arm already applied wherever the old guard let
+	 *  it run.  That guard's `ofs > len' exit(1) ended the host on a guest
+	 *  byte access to a port 2 or 3 mod 4 or a word access to a port 3 mod
+	 *  4 (ungated BWX; and at a port 3 mod 4 also the 1- or 2-byte head
+	 *  of an unaligned load or store that memory_rw splits at 1 KB),
+	 *  and the read arm discarded the
+	 *  fetched byte at ofs == len.
+	 *  One byte is forwarded whatever len is (the size field a<4:3> is
+	 *  not decoded here).  len 0 has no producer; refuse it before the %.
+	 */
+	if (len == 0)
+		return 0;
+	ofs = (relative_addr & 3) % len;
 
 	if (writeflag == MEM_WRITE) {
-		byte = data[ofs % len];
+		byte = data[ofs];
 		return cpu->memory_rw(cpu, cpu->mem, LCA_ISA_BASE +
 		    relative_addr, &byte, 1, writeflag, CACHE_NONE);
 	}

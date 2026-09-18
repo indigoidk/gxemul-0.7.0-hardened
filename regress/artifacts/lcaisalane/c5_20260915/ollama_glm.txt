@@ -1,0 +1,42 @@
+`GAP: to the FIXED dev_lca.c, in the write arm, insert immediately before the existing return — if (len == 6) cpu->memory_rw(cpu, cpu->mem, LCA_ISA_BASE + relative_addr, &byte, 1, writeflag, CACHE_NONE); (the original return stays, so the arm's return value is unchanged). The store forward DUPLICATED, gated on a width that exists only as a split tail. Scores 185/185; changes a guest-visible outcome at every mapped tail port (8253 counter 0 at 0x40, 8259 at 0x20/0xa0, 8042 data at 0x60), whose write paths are sequenced, not idempotent.` LCA530_C5_20260915
+
+## 1. The finding (Q3) — the enumeration's arm axis has only two forms; the forward-COUNT class has a third
+
+READ: the class as ruled is exactly two forms — "a store's phantom read after its forward; a load's forward duplicated" — and the enumeration is that pair × width-kind × lane (FABLE_C4 part B; the header). READ: the tail cells are rowed on the 8042 queue at 0x60 (4p `tailq_w`, 4q `tailq_r`).
+
+REASONED: the class's own name is forward-**count**. The write arm's count has a second simple mutant the two-form enumeration never disposes of — the store forward itself **duplicated** (the write-arm sibling of RD2). Its disposition by cell:
+
+* DIRECT cells: caught — but by the **stub counter alone** (it bumps on every access, writes included; the stub sessions row w1/w2/w4/w8 at all four lanes). The architectural carriers are read-count or value channels (kbcq pops; cmos/iir observe read side effects), so for this form the stub is the sole carrier even at lanes 0–2, contrary to the ruling's "never the sole carrier" intent.
+* HEAD cells: genuinely EQUIVALENT (SCR/unmapped; writing the same byte twice is idempotent).
+* TAIL cells: caught by **nothing**.
+
+Why 185/185 (REASONED from the inlined sessions):
+
+* The only len-6 handler calls the instrument ever makes are split tails at port 0x60: `tailq_w` t6 (store), `tailq_r` t6 (load — the edit is on the write arm), and 4f's t6. No stub, cmos, iirr2, rdq, witness, host-ender, or head row sees a len-6 call (all are widths 1/2/4/8, or SCR-value head rows, idempotent under doubling).
+* `tailq_w` t6's channel is DIB — the queue counts **pops**. A store, single or doubled, never pops; with 0xd1 pending both writes go toward output_byte, and even if the second queued a device reply, DIB is a full flag: still 1. Pass.
+* READ + REASONED: the header's own sentence — "`tailw' (4f) stores into an EMPTY queue, so a phantom read there changes nothing" — plus WT6/WTsplit's measured 111/111 on an instrument that already contained 4f at 0x60, pin 4f tailw's store as queue-inert and its observable as value-based; a doubled identical write is idempotent to any value observable. Pass.
+
+Guest-visible (REASONED; **the load-bearing premise, named**): the mapped tail ports are 0x20/0xa0 (8259), 0x40 (8253 counter 0), 0x60 (8042) — READ from the Q1 table. The packet itself attests the 8253's LSB/MSB access-mode machinery ("counter 1 at 0x41 after a LSB+MSB control word, F, MEASURED"); any faithful model mirrors it on the write side, so a doubled LSB write to counter 0 changes the 16-bit count. The realization is exactly the probe's own tail geometry one block down: head 2 at 0x3f (unmapped), tail 6 at 0x40. The 8259's ICW sequencing and a doubled data byte to a live 8042-attached model (the selftest reply proves a live model) behave likewise. **The one fact that settles it: dev_i8253's counter write path — does a second write advance the LSB/MSB flip-flop? (or dev_pckbc's data-write forwarding).** Not in the packet. If every mapped tail write path were idempotent, the finding downgrades to: the tail-write cells have no write-count channel and the contract owes a disposition sentence it does not have — still an incomplete enumeration.
+
+Note the stub can never carry a tail: tails land at ports 0 mod 0x20, and within 0x60–0x6f that is 0x60 itself, which the stub branch explicitly excludes (`relative_addr != 0 && relative_addr != 4`).
+
+## 2. What checks out (Q1, Q2) — so the rest is verified, not re-litigated
+
+* Coverage arithmetic (READ session list, REASONED mapping): direct 4 lanes × {1,2,4,8} × 2 arms = 32, each rowed (lane 0: 4k/4l; lane 1: 4m; lane 2: 4h/4i/4j+4n; lane 3: stub3). TAILHEADS' offsets 0x1f/0x1e/0x1d/0x1b give heads 1/2/3/5 → tails 7/6/5/3 = exactly {3,5,6,7} rowed; 1/2/4 correctly folded into the direct lane-0 cells. Head port arithmetic correct: only 0x3ff/0x2ff ≡ 0x1f mod 0x20 are mapped, both SCR, inert read; 0x60–0x6f holds none. Split geometry re-derives (a 0x400 boundary is a slot boundary; a crossing access starts in the last ≤7 bytes of slot 0x20k−1), and 2/4-byte splits give head/tail subsets already inside 1–7.
+* The 30 named HEAD_r6 reds are exactly right (REASONED, a strong check): cmos r1 (the ofs==len discard), iir lca rd2 (ofs=2 fills nothing at len 2), stub2/stub3 nine each (the r1 phase's exit(1), the alive row, and seven never-run phases; the live row survives because the two flats precede the death — and flats bypass the handler, which the RD2 arithmetic below independently confirms), tailq five each (the t7 head exit at (1,3), the alive row, three later phases; ctl survives). rdq, stub0/stub1, cmos w*, iirr2 r4/r8, all controls pass on HEAD, as the list says.
+* Kill-table arithmetic (REASONED; every count derivable exactly): Wpure 32 = 24 new store rows (cmos 4 + stubs 16 + tailq_w 4) + 8 old zero-store rows; dataA 20 = 16 stub + 4 cmos nonzero stores; dataB 12 = those 8 + tailq_w's 4 zero tails — two independent equations pin the old zero-store rows at 8; R2w 25 = every new read row at len 2/4/8 (3+3+3+12+4) and **not one old row** — the escape made visible in one number; R2w2 7 = one width's read rows; RD2L0 12 / RD2L1 8 / RD2L3 4; L1gate 8 / L3gate 4; WT6 1 / WTsplit 4; RD2 32 = 31 new read rows + old iirr. The chained-stub localization claim (one red per extra access) is correct — each row compares consecutive phases, so parity re-syncs.
+* Q2: each channel varies under its named mutant — stub parity discriminates exactly-one against both zero and ≥2; the queue counts pops; REG C read-clears/store-sets with the set/clr controls verifying it live; TXRDY re-armed per phase (iir_arm() inside each P4n phase); the 0x0f nib mask correctly bounds the host-clock 0xf0 bits; the shifts 8·(1%n) and (2,0)/(2,16)/(2,16) are the right positions. One caveat, not a defect: rdq/tailq_r cannot see a **dropped** read forward (zero pops also leaves DIB 1) — that is the decline class, with its own rows. No vacuous row found.
+
+## 3. Q4 — wrong statements
+
+* WRONG: POSTTABLE 6's FLOOR line "the forward-count class CLOSED BY ENUMERATION", and the header's "together THE FORWARD-COUNT CLASS … in either form" — the enumeration closes the two *observed* forms; the write arm's duplicated forward is a third form of the same count defect, unenumerated, and at the tail cells unrowed and not equivalent.
+* Nit: the HEAD line labels widths 1–7 EQUIVALENT without noting (as the TAIL line does for 1/2/4) that heads 1/2/4 are simultaneously the rowed direct lane-3 cells.
+* Nit: the direction-swap prediction "every 4-byte read row answers 0" — a swapped read arm fills the ofs lane with stale uninitialized `byte`, not necessarily 0; the rows still red, so "caught by the value rows" stands, but the predicted mechanism is imprecise (it is marked "predicted").
+* Everything else checkable — the red lists, all fourteen counts, the port arithmetic, the t-row labels, the fix comment's guard-cell claim — is accurate.
+
+## 4. Not checkable from the packet
+
+* The bus list, the stub snippet, mc146818's REG C behavior, the 8253 machinery: READ as the measuring seats' source quotes; settling fact is the quotes themselves.
+* **The 8253/8259/8042 write paths** — the load-bearing premise of the GAP; settled by one source read of dev_i8253's counter write path (or dev_pckbc's data-write forwarding).
+* The old sessions' internals (1–3, 4f–4j, 5–10) are not inlined; the properties my derivations need of them (8 zero-store rows; iirr the only old read-count row; 4f tailw's queue-inert store) are pinned by the kill-table numbers and WT6's 111/111 — inference, not sight, though every number lands.
+* HEAD_r6's 43 old reds: consistent with a table-5 HEAD of 68/111; not independently checkable.

@@ -1,3 +1,151 @@
+# `#530` (lcaisalane): a guest BYTE access to an ISA port 2 or 3 mod 4 ended the host, and the one pass that could not close was the detector's width coverage, not the fix
+
+*`#530` lands AFTER `#531`-`#535` although its number is older: it was held open for exactly one
+owed pass -- the width row below -- and a round is not committed while its own closing verdict says
+DO NOT CLOSE.*
+
+**`dev_lca.c`'s `DEVICE_ACCESS(lca_isa)` held the last guest-triggerable host kill in the file.**
+Measured with a comment-stripping parser on 2026-09-18: HEAD carries exactly ONE live `exit(1)` in
+`dev_lca.c`, at `lca_isa`; with this fix applied the file carries NONE.  Every other `exit(1)` the file
+once held was removed by `#516` and `#518`, and survives only in the comments that record them.
+
+## THE DEFECT
+
+The access function computed `ofs = relative_addr & 3` and then `if (ofs > len) { fatal(...); exit(1); }`.
+So a guest ended the emulator with a **byte** access to an ISA port 2 or 3 mod 4, or a **word** access to
+a port 3 mod 4 -- ordinary BWX loads and stores, ungated -- and at a port 3 mod 4 also with the 1- or
+2-byte HEAD of an unaligned access that `memory_rw` splits at 1 KB.  Separately, the READ arm discarded
+the fetched byte at `ofs == len`, so a lane-1 byte read answered zero with a false success.
+
+## THE FIX (+17 / -7)
+
+The byte for ISA port P sits at buffer position `(P & 3) % len` on **both** arms -- the lane for the
+21066's own len 4/8 accesses, and the rule the write arm already applied wherever the old guard let it
+run.  `len == 0` is refused before the `%` (no producer reaches it).  One byte is forwarded whatever
+`len` is; the size field `a<4:3>` is not decoded here (filed: `lcaisasize`).
+
+## WITNESS -- rung 3
+
+`regress/lca_isalane_probe.py`, on unmodified `-E alpha -e alphabook1`: **13/16 on the committed build**
+-- a byte read at lane 1 answers zero with a false success, and lanes 2 and 3 end the process -- and
+green post-fix with the same script.
+
+## THE DETECTOR, AND WHY THE CHAIN TOOK SEVEN PASSES
+
+352 rows across the `{write, read} x {DROP, SWAP, DUPLICATE, ADD-OTHER}` forward-count product, with
+`m_lenzero` measured separately as the sixteenth mutant (37/37, EQUIVALENT: no producer delivers
+`len == 0` -- warranted by the CALLERS, since `store_buf` bottoms out at `store_byte` and a CPU access
+is 1..8 bytes; *not* by `memory_rw`'s truncation, which only clips `len` down and proves nothing about
+an entry length of 0).
+
+**Closing pass 6 did not close, and it was right not to.**  `table7_20260916/CLOSE6_VERDICT.md`: a
+file-reading seat named a clause-(d)-shaped width mutant, `&& len <= 8`, predicted to sweep 352/352,
+and the verdict set the stop condition before any leg ran -- *escapes AND len > 8 is guest-reachable ->
+L2, add a len > 8 row in-round.*  Both halves are now established:
+
+* **It escapes.**  `#530`'s own `KILLLEN8_RUN.out` (the guard form `len == 0 || len > 8`) and the
+  2026-09-18 `M2_len8` leg both score **352/352**.
+* **len > 8 IS guest-reachable.**  `store_buf()` (`memory.c:837-857`) issues `memory_rw` at `psize` in
+  {1024, 256, 64, 16, 4, 1}, and the PROM GETENV callback (`cpu_alpha_palcode.c:141-144`) hands it a
+  guest-controlled destination `a2` AND length `a3`.
+
+**Why no existing row could ever see it** -- the distinction Fable drew and which makes a ROW mandatory
+rather than a contract line: `&byte, len` diverges INSIDE the probed width set, so a contract line
+discharges it; `len <= 8` diverges only OUTSIDE it.  The probe is instruction-driven and the widest
+Alpha store, STQ, is 8 bytes -- *no instruction-driven row can ever express len > 8.*
+
+## THE OWED ROW -- `regress/lca_widewrite_probe.py`, the NON-INSTRUCTION path
+
+Shipped as its OWN file rather than folded into `lca_isalane_probe.py`: folding it in would move 352
+measured rows and owe a full re-measure to show nothing shifted.  The parent's header now says where the
+cell is covered, so an edit that deletes the new file re-opens it visibly.
+
+`wide getenv`: boot with `-o ABCDEFGHIJKLMNOP`, preset the ns16550 SCR (port 0x2ff) with a 1-byte STB,
+then `CALL_PAL 0x3fffffe` (the word `machine_alpha.c:189` stores at the PROM entry) with `a0 = 0x22`
+(GETENV), `a1 = 0x8` (BOOTED_OSFLAGS), `a2 = k0(SP(0x2ff))`, `a3 = 16`.  `0x5fe0` fails the 1024/256/64
+alignment tests and passes 16, so `store_buf` issues exactly ONE 16-byte `memory_rw`; `lca_isa` forwards
+`s[(0x2ff & 3) % 16] = s[3] = 'D'`.  Predictions written first (`PRETABLE.out`, 14:59:49).
+
+    base        WIDEWRITE_RESULT=3/3   predicted 3/3   wide getenv = 0x44 ('D')
+    M2_len8     WIDEWRITE_RESULT=2/3   predicted 2/3   wide getenv = 0x5a (the PRESET)
+    KILLLEN8    WIDEWRITE_RESULT=2/3   predicted 2/3   wide getenv = 0x5a (the PRESET)
+
+**Every value matched the prediction written before any run.**  Source: `logs/TABLE.out`, all three legs
+postdating the 16:12:41 instrument, no retries, a `WIDEWRITE_DONE` sentinel on each.
+
+**Both "only a run settles" items are now settled.**  `-o` delivers the boot string on alphabook1 (`s[3]`
+arrived).  And execution does NOT resume at `pc + 4` after an inline `CALL_PAL 0x3fffffe`:
+`alpha_prom_call` ends with `cpu->pc = cpu->cd.alpha.r[ALPHA_RA]` (`cpu_alpha_palcode.c:153`), because
+the real PROM entry is reached by `jsr`.
+
+> **RUN 1 WAS AN L1 CONSTRUCTION FAILURE, and it is preserved rather than hidden**
+> (`logs/run1_L1_no_return_address/`, with a `WHY.txt`).  The row executed the `CALL_PAL` inline without
+> loading `ra`, so the PROM call returned to address 0, phase 4 never ran, and base, M2 and KILLLEN8 all
+> read 0 alike.  **The PRETABLE had pre-committed that a base leg short of 3/3 means the ROW is broken and
+> no mutant score means anything** -- so it was read as a construction defect, fixed (the return address
+> is now COMPUTED from the instruction layout, not typed in), and re-run.  *Deciding before the run what a
+> failing base leg would mean is what stopped run 1's identical zeros from being read as a result.*
+
+**The product code is not touched by the row.**  At len 16, `(relative_addr & 3) % 16` reduces to
+`relative_addr & 3`, in [0,3], safe (probe header `:159-162`).
+
+## AN INDEPENDENT REPLICATION -- AND IT SAT UNREAD IN THIS ROW'S OWN DIRECTORY
+
+`regress/artifacts/lcalenzerodrop/opus_getenv_20260918/` holds an Opus seat's measurement from **08:16 --
+hours before the width row was built** -- reaching the same verdict by a different road: `a1 = 6`
+(`PROM_E_BOOTED_FILE`), port `0x3ff`, `a3 = 64`.  Base put `s[3] = 'h'` (0x68, from `alpha_dummy.bin`) on
+the SCR; `&& len <= 8` left the preset.  **Two instruments, two variables, two ports, one answer.**
+
+**And it already loaded `ra`** -- `RA = 26`, the return address computed from the instruction layout as
+`idx + 1`, exactly the fix run 1 then needed.  *The answer to run 1's L1 failure was sitting in this row's
+own artifacts directory, unread.*  It is the fifth unread-review instance of the session; the discipline it
+argues for is the one already written down: **open the row's own directory before building in it.**
+
+It is preserved as a WITNESS and marked FROZEN: it `exec()`s the first 459 lines of
+`lca_isalane_probe.py`, whose header grew 12 comment lines in this commit, so a re-run would slice the parent
+in the wrong place.  The shipped detector is `lca_widewrite_probe.py`.
+
+## THE SHIPPED FILE IS ITSELF MEASURED
+
+`regress/lca_widewrite_probe.py` differs from the measured instrument in exactly ONE code line -- `DUMMY`'s
+path made relative, as the parent's is -- checked by a parser that compared 152 code lines per side and
+found exactly 2 differing.  It was then **re-run as shipped** against the same three binaries
+(`logs/certify_shipped/`, instrument md5 `72f489f8`): **base 3/3, M2 2/3, KILLLEN8 2/3**, no retries.
+*"Equivalent rewrite" is an argument; this is a measurement.*
+
+## FILED OR REOPENED, NOT FIXED HERE
+
+* **`lcawidefold` REOPENS.**  Only `s[3]` reaches the port; the other fifteen bytes of a 16-byte store
+  are dropped.  Its recorded reopen condition was *"a guest found issuing GETENV into the ISA window"* --
+  and `wide getenv` is exactly that guest.  Reopened, not re-filed.
+* **An M2 side effect, recorded as an observation about the MUTANT:** under `&& len <= 8` a wide store
+  falls into the READ arm, whose zero-fill writes `data[]` -- which here is `store_buf`'s SOURCE, the
+  emulator's own `boot_string_argument`.  Shipped code returns before that loop.
+
+## RECORDS CORRECTED ON THE WAY -- because a wrong reason gets reused
+
+* The `lcalenzerodrop` row was filed HIGH, downgraded to MED on the claim that `#530` had disclosed the
+  mutant, and restored to HIGH.  **The downgrade was half right:** `#530` did predict, measure and
+  disclose `len == 0`, and did NOT disclose the width cell -- it measured it as an ESCAPE and graded it
+  L2.  The HIGH was restored by the owner-driven session; this session had called M2 a *dead conjunct*,
+  and it is a live escape.
+* The morning's `len == 0` derivation argued from `memory_rw`'s truncation.  Three seats (glm, minimax,
+  kimi) showed the truncation only clips `len` DOWN.  Conclusion survives on the caller-based warrant.
+
+## WIRING -- BOTH DETECTORS SHIP DATED-EXEMPT, IN THE OPEN, AND ONTO A KNOWN CLIFF
+
+**No gate in this tree runs an Alpha machine**, so neither `regress/lca_isalane_probe.py` nor the new
+`regress/lca_widewrite_probe.py` can be wired without ADDING a gate section -- a harness addition, which is
+outside a fix round.  Both carry a dated `EXEMPT` entry with the SAME date and reason as `#518`, `#520`
+and `#530`'s earlier entry: **2026-09-20, `gate_crossfamily.sh` the named home, filed to `wiringcliff`.**
+
+**The same date on purpose.**  A later one would hide this debt behind the cliff instead of joining it,
+and the cliff is already a filed row -- the precedent `#531` set for its own detector.  **Stated plainly,
+because it will bite in two days:** `check_probe_wiring.py` carries a cluster of exemptions expiring
+2026-09-20, and this commit adds one more to it.  When they expire the checker reds on all of them at
+once.  That is `wiringcliff`'s to resolve, and this block says so rather than committing onto it
+silently.
+
 # `#535` (pcc2c040mienannounce): #512's detector had one uncovered cell -- and it ran in no gate at all
 
 **Late-dissent disposition 2: a MEASURED false pass against a shipped detector's floor, repaired in a follow-up

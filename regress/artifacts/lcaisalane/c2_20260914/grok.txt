@@ -1,0 +1,85 @@
+I'll start from the full offloaded brief and the in-tree handler/probe, then check the 77-row enumeration against the actual rows rather than the header's claims.The brief is in hand. Next I’ll read HEAD, the live handler, and the 77-row probe so the cell-space check is against the tree, not the packet.The handler matches the brief. Next I’ll inventory every row in the 77-row probe and the table-3 artifacts so the cell-space claim can be checked cell by cell.Row inventory is in place. Next I’ll read table 3’s pretable/mutants and the handler-adjacent split path to see whether any claimed cell is unrowed or still has a 77/77 mutant.The const list for session 4e is the load-bearing check: `h5 stq` is aimed at `SP(SCR)` with no offset, so it is an aligned len-8 store, not a 5-byte head. That is the hole in the claimed cross.**GAP:** `byte = data[ofs];` → `byte = data[(len == 5 && ofs == 3) ? 0 : ofs];` (write arm) **LCA530_C2_20260914**
+
+That edit is a single-cell mis-decode of **(5,3)W**. It changes a guest-visible store (a 5-byte STQ head ending at port 0x3ff forwards `data[0]` instead of `data[3]`) and scores 77/77, because the row that claims that cell is not a len-5 access.
+
+I did not build the mutant (this seat is read-only). The gap is derived from the shipped probe’s const slots, the 1 KB split arithmetic, and table 3’s own scores.
+
+---
+
+### Q1 — the cell-space enumeration
+
+Handler inputs are `len`, `relative_addr & 3` after the `>> 5`, and `writeflag`. Direct producers are guest widths 1/2/4/8 at any lane. Split heads are always lane 3: `SP(port)=(port<<5)` so a 1 KB boundary sits at CPU offset `0x3e0` of a port with `port & 3 == 3` (every `32n-1`). Tails start at port `0x400` (lane 0). Unique extra success cells, with no direct-width twin, are therefore **(3,5,6,7)×lane 3×R/W**.
+
+**Direct 1/2/4/8 × lane 0–3 × R/W is rowed**, including full-register len-4 reads at lanes 2/3 (`r42 full`, `r43 full`). W(1,0) has no named value row; it is the STB of 0xAA to sparse 0x64 that `live` depends on. Dropping or corrupting that store loses 0x55. That is a real channel, not an omitted cell.
+
+**Listed as a split head, not a split access (handler cell still rowed):** there is no `SP(SCR)+0x1c` access. Split-head len 4 R/W is exercised only as aligned `(4,3)` (`r43 full` / `st4 lane3`). Same `(len, ofs, dir)` the handler sees, so a `(4,3)` mutant still reds. Not a floor hole.
+
+**Listed as rowed, channel cannot vary: (5,3)W, claimed by `h5 stq`.**
+
+```
+C4e = [FLAT(SCR), 0x5a, SP(SCR)+0x1a, SP(SCR)+0x19, SP(SCR)]
+# slots:                 0         1              2               3           4
+P4e h5 stq: LDQ(T1, 32, T0); STQ   → slot 4 = SP(SCR), no offset
+```
+
+`SP(0x3ff)` is CPU offset `0x7fe0`; `0x7fe0 & 0x3ff = 0x3e0`; an 8-byte STQ there ends at `0x3e8` and **does not split**. The access is aligned **(8,3)W**, already rowed by `st8 lane3`. `3 % 5 == 3` and `3 % 8 == 3`, and SPLITV’s byte 3 is 0xc3 either way, so the want cannot tell the two lengths apart. A mutant that only touches `len == 5` on the write arm never reaches this row.
+
+The other split-head writes are aimed correctly: `h3 stq` at `+0x1d`, `h6 stq` at `+0x1a`, `h7 stq` at `+0x19`, `h1 stq`/`h2 stq` at `+0x1f`/`+0x1e`. **(5,3)R is real** (`h5 ldq` in 4c uses `+0x1b`). The hole is write-only, which is why sibling parity on names (not addresses) passed.
+
+**Tails stay disclosed.** A tail at 0x400 reads/writes unmapped ISA; the forwarded byte is 0 and the rest of the fragment is 0, so a position error is zeros among zeros. A tail *decline* is already visible: table 2’s `p_lane0decl` extra-red `h3 ldq`/`h5 ldq`, and table 3’s `x_len6` reds `h2 ldq` via the 6-byte tail. Do not row tails per length.
+
+---
+
+### Q2 — floor gap
+
+**Exact edit** (write arm of the fixed `dev_lca.c`):
+
+```c
+byte = data[ofs];
+```
+→
+```c
+byte = data[(len == 5 && ofs == 3) ? 0 : ofs];
+```
+
+After the fold, `ofs == 3 && len == 5` is only (5,3). Direct widths never produce len 5; the only success cell is a split STQ head.
+
+**Row expected to catch it: `h5 stq`.** It cannot: `len == 5` is false of an aligned STQ. Every other write row is some other length (the len-5 *tail* of `h3 stq` has `ofs == 0`, so the conjunct is false; and a declined/wrong tail store to unmapped 0x400 is invisible — the same “head lands before the tail fails” fact table 3 measured on `x_len6` / `h2 stq`).
+
+Same hole, decline form (also 77/77):
+
+```c
+if (len == 0)
+    return 0;
+```
+→
+```c
+if (len == 0 || (len == 5 && writeflag == MEM_WRITE))
+    return 0;
+```
+
+Guest-visible either way: STQ at `SP(0x3ff)+0x1b` (5-byte head at lane 3) either drops the scratchpad store or writes 0x7e instead of 0xc3.
+
+This is the class two passes already found — a `(len, lane, dir)` cell of the position rule with no row — one cell over, on the split-write half of the cross the repair claimed to close. It is in-contract (“a byte placed at any position other than `(P & 3) % len`, a single-cell mis-decode included”). Not on the disclosed list.
+
+**`x_wfallthru` disclosure is right**, as scoped. The mutant is `return memory_rw(WRITE)` → `memory_rw(WRITE)` with fall-through into the read arm. This probe’s store ports are SCR, MCR, IER, MSR, and 8042 command (0x64); none of those reads consume device state. IIR *does* (`dev_ns16550.c`: a read of `com_iir` clears `IIR_TXRDY`). They named IIR/RBR/LSR as the ports that would make it non-equivalent. Equivalent on this probe, not equivalent in the device; disclosing it is correct and it is outside the position-rule floor.
+
+---
+
+### Q3 — wrong statements
+
+1. **Probe header, CELL SPACE:** “split HEADS len 1-7 at lane 3 × R/W” as part of the space “rowed WHOLE”. (5,3)W is not rowed. `h5 stq` is a second (8,3)W.
+
+2. **Fix comment:** “the 1- or 2-byte head of an unaligned LDL/LDQ” as the no-BWX route to the death cells. The probe’s own `h1 stq`/`h2 stq` are STQ heads, not loads; and a 1-byte head is always lane 3, so it is **not** a no-BWX path to (1,2). (1,2) still needs BWX (or some other 1-byte producer at a port 2 mod 4).
+
+3. **POSTTABLE scores match `table3.out` / `check_pred.out`** (exact=10). The 28 HEAD reds = table 2’s 20 (HEAD 31/51) + the eight `h1`/`h2` rows is arithmetic-true. POSTTABLE does not repeat the “every head 1–7 × R/W” claim, so it is not false about the hole — it just never looked at a `len==5` write mutant, which is why table 3 could be exact and still miss it.
+
+PRETABLE’s sibling-parity line (“every head length 1-7, as the read arm does”) is the same overclaim; it is not one of the three artifacts Q3 names.
+
+---
+
+### Premises checked / not checked
+
+Checked against `GXEMUL-SEC` only: the shipped handler; `C4e`/`P4e` slot arithmetic; `SP(0x3ff) & 0x3ff == 0x3e0`; `MRW_SPLIT_MASK == 0x3ff`; table 3 scores; ns16550 IER stores the full byte; IIR read clears TXRDY.
+
+Not checked: executing the mutant (read-only seat). The measurement that would close it is one STQ at `SP(UART_SCR)+0x1b` on base vs that write-arm edit, flat LDBU of SCR.

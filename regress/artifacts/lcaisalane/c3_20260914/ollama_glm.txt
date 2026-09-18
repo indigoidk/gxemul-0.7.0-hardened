@@ -1,0 +1,31 @@
+`GAP: dev_lca.c, write arm of DEVICE_ACCESS(lca_isa) -- replace \`return cpu->memory_rw(cpu, cpu->mem, LCA_ISA_BASE + relative_addr, &byte, 1, writeflag, CACHE_NONE);\` with the bare call followed by \`if (len != 8) return 1;\` -- x_wfallthru's phantom read of the stored port, gated on len == 8. Scores 93/93 and loses the ns16550's IIR_TXRDY on a guest 8-byte sparse store to port 0x3fa. LCA530_C3_20260914`
+
+## The gap (Q2)
+
+The edit is the contract's own named mutant, x_wfallthru, with one conjunct on `len` — an input the handler itself branches on. By the panel's own joint-cell rule that is in scope: `c1_w1w` (`ofs == 1 && len > 2`) and `t_tails` (`len > 2 && (len & 3)`) were both ruled in-scope and rowed. Its floor shape is the adjudicated clause-(d) shape at the (8,lane) W cells: the guard kept, its routing nulled into the read arm.
+
+Why no row can catch it — this is a per-row lookup in the packet's own measurements, not a fresh prediction (READ):
+
+- The only rows in the 93 whose store port has an observable read side effect are `iir stb` (1,2) and `iir stl` (4,2), both at 0x3fa. They store at len 1 and len 4, so `len != 8` returns normally and no phantom read occurs. These are exactly the two rows that reddened under unconditional x_wfallthru (91/93, POSTTABLE 4); the gate removes precisely those two reds.
+- The only len-8 stores in the instrument are the four `st8 lane0-3` rows. Under unconditional x_wfallthru those rows were measured green — the 77/77 escape exists *because* every pre-repair-3 store port (SCR, MCR, IER, MSR, the 8042 command port, 0x5f, 0x400) reads back without a side effect (READ, closing pass 2's own measured list). `st8 lane3` is at the SCR (K2b's readback channel). So the len-8 phantom read lands on ports already measured invisible.
+- The new rows never reach len 8: the tailw STQs split into pieces of 7/6/5/3 and heads of 1/2/3/5 (I re-derived the 4f arithmetic: SP(0x5f)+0x1f/0x1e/0x1d/0x1b gives heads 1/2/3/5 at 0x5f, tails 7/6/5/3 at 0x60 — REASONED, checks). The 0x60 pop is unobserved by the command-byte readback anyway, which re-arms 0x20 and reads afterward.
+- The `len != 8` path is exactly w_ret1's semantics, measured 77/77 and 16/16 and disclosed EQUIVALENT (READ).
+
+So the mutant's per-row behavior is the union of two measured-green behaviors minus the two measured-red rows: 93/93. Guest-visible on the grounds the panel already adjudicated for GAP 2 (READ): a guest STQ at the sparse 0x3fa writes FCR, then the phantom com_iir read clears IIR_TXRDY — a pending transmit interrupt lost; the same edit at 0x3f8 eats a pending input character, at 0x60 pops the 8042 output buffer.
+
+The class is broad — any (len, lane) gate outside {(1,2), (4,2)}-at-0x3fa escapes (len 2, lane 0/1/3, the tail lens) — this is "one cell over" again, on the fall-through channel instead of the position channel. Cheapest closure, in the probe's own idiom: one row, the `iir stl` shape with STQ at SP(0x3fa) — cell (8,2) W, arm TXRDY, store byte 2 to FCR, flat IIR & 3: base 0x02, gated mutant 0x01.
+
+## Q1 — the enumeration
+
+It closes. 48 cells: 32 direct + 8 head-only (len 3/5/6/7 at lane 3) + 8 tail-only (len 3/5/6/7 at lane 0); lens 3/5/6/7 cannot reach lanes 1/2 because split boundaries fall at ports 0x1f/0 mod 0x20 (REASONED from the settled split facts). All rowed; the channels are verified by the packet's own numbers: x_rot 38/77 (every len≥2 direct and head cell), t_tails 85 (all eight tail rows), t_w7/t_r6 92 (single-cell kills), d_w6tail 92 (the per-phase reset is load-bearing — without it a declined t6 store reads t7's 0x44), d_len3lane0 90 including the h5-ldq 0x400 tail (a decline kills a whole load; a store's head lands first — both settled, READ). The disclosed classes' warrants extend to the new rows: tailw's correct byte is 0x44, nonzero (data class holds); no row's body tests a port constant (address class holds); the 0x5f/0x400 unmapped forwards are the disclosed success-with-zero-fill (forward-return equivalence holds). The one channel not rowed per cell is the fall-through — the gap.
+
+## Q3 — wrong or unsettled statements
+
+1. **The contract's x_wfallthru entry is closed at exactly two cells.** The header's own warrant — every port stored to before repair 3 reads back without a side effect — remains true of every store cell except iir's, which is why a gate steps around the kill. The clause names the edit, rows it at one port and two lens, and leaves the rest of the 24+-cell W space unobserved for that channel.
+2. **POSTTABLE 4's `t_r6 92` is not derivable as a read decline.** If t_r6 is the (6,0) R *mis-placement*, 92 stands (h2 ldq's 0x400 tail reads zero wherever the byte is placed). If it is the (6,0) R *decline*, the score must be 91: h2 ldq's tail is (6,0) at 0x400, "a declined tail fails a whole load" is settled, and table 3's own x_len6 was caught "via h2 ldq" — just as d_len3lane0 correctly counts the analogous h5 ldq. The edit text is not inlined; the entry is consistent only under the mis-placement reading. Settling fact: t_r6's red-row list (is h2 ldq red?).
+3. Verified correct, for the record: head 52/93 re-derived exactly (28 + 13 — tailr/tailw die at the (1,3) head after a passing ctl, 5 red each; iir at the (1,2) store, 3 red); t_tails 85, swapmod 87 (0x3ff ≡ 1 mod 7, 3 mod 5/6; 0x60 ≡ 1 mod 5, 5 mod 7 — six red), x_wfallthru 91, d_len3lane0 90, d_w6tail 92 all re-derived; the fix comment now includes STL/STQ (pass 2's omission fixed); the targeting rule holds — the repair diff's first five hunks are comment edits and the sixth is pure insertion, so no existing session's commands move (READ).
+
+## Not checkable from the packet
+
+- The exact ports of `st8 lane0/1/2` (not inlined; `st8 lane3` = SCR is, via K2b). Settling fact: those rows' port constants. The gap survives every candidate: the pass-2 measured store-port list is entirely side-effect-free, and even a 0x60 candidate leaves the pop unobserved by the command-byte readback.
+- t_r6's edit text (item 2 above).

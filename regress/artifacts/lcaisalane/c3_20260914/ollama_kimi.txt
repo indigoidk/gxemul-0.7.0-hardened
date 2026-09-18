@@ -1,0 +1,31 @@
+GAP: insert after `ofs = (relative_addr & 3) % len;` in dev_lca.c the line `if ((relative_addr & 0x1f) == 0x1c) ofs = 0;` — scores 93/93 (no rowed access carries slot offset 0x1c) and moves the byte at the one enumerated split-head length that has no row: the h=4 head of an unaligned LDQ/STQ. LCA530_C3_20260914
+
+## THE GAP (Q2)
+
+REASONED (the geometry from the packet's own 4f construction): consecutive virtual bytes within one 0x20-byte slot map to one port. A split head of length h therefore arrives at the handler with `relative_addr & 0x1f == 0x20 - h`. The rowed split heads are h = 1, 2, 3, 5, 6, 7 → slot offsets 0x1f, 0x1e, 0x1d, 0x1b, 0x1a, 0x19 (READ: session-4f `TAILHEADS = ((1, 0x1f), (2, 0x1e), (3, 0x1d), (5, 0x1b))`; READ: pass-2 seat's tail-length table for h1/h2/h3/h5/h6/h7). Every direct row, every tail row, every iir row is issued at slot offset 0. **No row anywhere carries offset 0x1c** — the h=4 head, which the header folds away with "head len 4 is the direct (4,3) cell" (READ).
+
+Why 93/93 (REASONED from the inlined session code): the edit fires only on offset 0x1c; the offset inventory above shows zero rowed accesses match. The direct (4,3) rows (offset 0) cannot vary under it.
+
+Guest-visible (REASONED on settled premises): guest `STQ` at `SP(0x3ff) + 0x1c` splits 4/4; the head reaches the handler as len 4, port 0x3ff (COM1 SCR), lane 3, offset 0x1c. Base forwards `data[(0x3ff & 3) % 4] = data[3]`; the mutant forwards `data[0]` — flat SCR readback differs. The store forwards its head before its tail fails (settled); the LDQ direction fills register byte 3 vs byte 0 (the len-4 tail at unmapped 0x400 zero-fills, settled). The row that should catch it: an `LDQ/STQ` at `SP(port)+0x1c` — it does not exist.
+
+Adjudication note (REASONED): this is not the named p_port10 class — that disclosure covers keying on an **exact port value** (`relative_addr == 0x400 && len == 4`); this keys on the slot offset, an alignment property that fires at every boundary at every port, produced by the same ordinary unaligned-access shape as the accepted h1–h7 head rows. The fold premise "h4 head ≡ direct (4,3)" is true of the fixed handler's input partition and false of the detector — the same defect family this pass accepted for the tails. If the adjudicator instead generalizes the address-keyed class to cover offset bits, the header still does not name that class today; either way the current text is incomplete. Cheapest true closure: one session rowing the h4 straddle; its len-4 tail at 0x400 needs nothing new.
+
+## Q1
+
+* The (len, lane, direction) enumeration is complete and, post-repair, rowed **for accesses at slot offset 0 and at the six rowed head offsets** (REASONED; consistent with the x_rot account, which by construction can only validate rowed rows).
+* Cell listed as rowed whose channel cannot vary under the mutant above: **the h=4 split head**, folded into the direct (4,3) cell. The h4 head is also the only source of the len-4 tail, but that tail sits at offset 0 and is genuinely indistinguishable from the rowed direct (4,0) cell — the tail-side fold is sound (REASONED).
+* DISCLOSED audit:
+  * Data class — the warrant "every store row carries a NONZERO correct byte" is now **false** (READ: session 4h stores `STB(ZERO,...)`/`STL(ZERO,...)`). The iir stores are all-zero, so `data[ofs] ? data[ofs] : data[0]` forwards an identical 0 there — the disclosure's conclusion survives, its premise does not. Wrongly stated, harmlessly.
+  * Forward-return equivalents — `r_fwdret` is **not re-measured on the 93-row instrument** (READ: POSTTABLE 4's "NOT RE-MEASURED" covers tables 1–3 kills; equivalents are not kills). The new tailr rows put split-read heads at unmapped 0x5f; the base read arm ignores the forward's return, so base 93/93 does not exercise the warrant "an unmapped forward returns success with a zero fill". Not checkable from the packet. Settling fact: one `r_fwdret` leg on the 93-row probe, or the return value of the lca_isa→bus_isa forward at unmapped ISA port 0x5f. If the claim is false, `r_fwdret` becomes a kill — no floor breach, but the record changes.
+  * lcaisasize / lcaisaqword / lcaisaphys / len-0: not checkable from the packet; no internal contradiction visible.
+* Internal consistency supports POSTTABLE 4's arithmetic (REASONED from inlined rows): new rows 16 (tailr 6 + tailw 6 + iir 4), 77+16 = 93; HEAD red = 28 + 5 + 5 + 3 = 41 → 52/93; t_tails 93−8 = 85; x_wfallthru 93−2 = 91; swapmod kills = h7 ldq/stq + tailr/w t7,t5 = 6 → 87, and 0x60 mod 5 = 1, mod 6 = 0, mod 7 = 5 (5&3 = 1), mod 3 = 0 — exactly the named rows; d_len3lane0 93−3 = 90 with h5 stq correctly staying green.
+
+## Q3 — WRONG STATEMENTS
+
+1. READ/REASONED — THE CELL SPACE: "split HEADS len 1-7 at lane 3 x R/W" as a rowed claim is false for h=4; no row carries offset 0x1c. Consequently the CONTRACT's "at every cell of that space" fails for the offset-0x1c inhabitant of (4,3), and POSTTABLE 4's FLOOR (e) closure claim inherits the error. Cheapest repair: row the h4 straddle.
+2. READ — THE CELL SPACE / DISCLOSED: "every store row carries a NONZERO correct byte" — false since session 4h stores zero. Conclusion stands; the sentence needs the caveat that those rows are all-zero and non-discriminating.
+3. READ — pass-2 seat text (not the three artifacts): "0x60 mod 7 = 1" is wrong (96 mod 7 = 5). The kill reasoning is unaffected (5 & 3 = 1 ≠ 0), and POSTTABLE 4's restatement ("5 mod 7") is correct.
+4. READ — POSTTABLE 4 "none can move": true for tables 1–3 **kills**; it does not cover the equivalent/disclosed mutants, which were not re-run on 93 rows and can only move toward being killed. Imprecise, not fatal.
+5. The 4f/reset rationale, tailv values, iir channel, and the head/tail port geometry all check out against the settled premises (REASONED); the fix comment now names load and store heads and is accurate on the ofs > len cells.
+
+The single premise a measuring seat should settle before accepting the closure after rowing h4: the unmapped-read-forward return value behind lca_isa (item Q1, `r_fwdret`).

@@ -1,0 +1,61 @@
+I'll start by reading the full offloaded brief, then verify the detector against the actual handler, probe header, and table-4 artifacts rather than the packet's summaries.Checkpoint is behind the brief, so I’m reading the handler, the 93-row probe, and table 4’s PRETABLE/POSTTABLE next to re-derive the cell space from source.I have the header and handler. Next I’ll map every (len, lane, direction) cell onto a named row and read table 4’s PRETABLE against that census.CLOSES
+
+`LCA530_C3_20260914`
+
+The 93-row detector matches the reachable (len, lane, direction) space the handler actually has. Closing pass 2’s two measured 77/77 escapes are now red on table 4. I did not find a floor-class edit of the fixed `DEVICE_ACCESS(lca_isa)` that stays 93/93.
+
+---
+
+### Q1 — cell space
+
+Handler inputs after `relative_addr >>= 5` are `P`, `P & 3`, `len` (`== 0`, `% len`, fill bound), `writeflag`, and `data[ofs]`. Direct producers are Alpha 1/2/4/8. Splits (`MRW_SPLIT_MASK` 0x3ff on the virtual address, Alpha always translates) only emit a head of 1..7 at a port `0x1f mod 0x20` (lane 3) and a tail of `8-h` or `4-h` at the next port `0 mod 0x20` (lane 0). Lens 3/5/6/7 exist only as those split pieces. (3,1)/(3,2)/(5|6|7, 1|2) are unreachable; omitting them is right.
+
+Every reachable cell has a row:
+
+| | lane 0 | 1 | 2 | 3 |
+|---|---|---|---|---|
+| 1 R/W | `live` (STB 0xAA → SP(0x64) + LDBU SP(0x60)) | `r11`/`w11` | `r12`/`w12` | `r13`/`w13` (+ `h1 ldq`/`h1 stq`) |
+| 2 R/W | `r20`/`w20` | `r21`/`w21` | `r22`/`w22` | `r23`/`w23` (+ `h2`) |
+| 4 R/W | `ld4 lane0`/`st4 lane0` | `ld4 full`/`w41` | `r42 full`/`w42` | `r43 full`/`st4 lane3` |
+| 8 R/W | `r80`/`w80` | `r81`/`w81` | `r82`/`w82` | `ld8 lane3`/`st8 lane3` |
+| 3,5,6,7 @ lane 3 | — | — | — | `h3`/`h5`/`h6`/`h7` both arms |
+| 3,5,6,7 @ lane 0 | `tailr t*` / `tailw t*` | — | — | — |
+
+`% len` is not the identity only at len 1 (all lanes → 0), len 2 (2→0, 3→1), and len 3 (3→0). Those are rowed. `& (len-1)` vs `% len` at len 5/6/7 differs at lane 3 (`h5`/`h6`/`h7`) and is a no-op at lane 0 (ofs is already 0).
+
+Channels that were supposed to move do move: table 4 `t_tails` 85/93 (exactly the eight tail value rows), `x_wfallthru` 91/93 (`iir stb`, `iir stl` — IIR & 3 goes 0x2 → 0x1), `d_w6tail` 92/93 (the per-phase 0x04 reset; without it `tailw t6` would still hold t7’s 0x44). HEAD_r4 is 52/93 with 41 FAIL lines, matching PRETABLE’s set (table 3’s 28 plus the three new processes dying at the first (1,3) or (1,2) after their control phase; `tailr ctl` / `tailw ctl` / `iir ctl` stay green).
+
+**Disclosures:**
+
+- Address class (exact port constant): still right. The body never tests `relative_addr` against a constant. `relative_addr == 0x60` would now red the tail/`live` rows; `relative_addr == 0x400 && len == 4` (K1) still has no len-4 tail and no row at that port. p_port10 (`relative_addr &= 0x3ff` after the shift) is identity on every mapped port this probe uses (0x60 & 0x3ff = 0x60; UART ports < 0x400).
+- Data class: the **class** is still unrowed (correct byte is 0 at a store cell). The **warrant** is not — see Q3. `iir stl` is ofs=2 with `data[2]==0`, so `data[ofs] ? data[ofs] : data[0]` is still equivalent there (all-zero STL).
+- Forward-return equivalents: still right on alphabook1. `return 0` in the ISA devices this machine hits is ns16550’s `relative_addr >= DEV_NS16550_LENGTH` (unreachable via lca_isa’s 1-byte forward) and comments in 8253; pckbc and 8259 have none. Unmapped forwards warn and zero-fill; the split logs show `non-existant paddr=...` and the load still completes.
+
+---
+
+### Q2 — floor gap
+
+No. The two DEPENDS-ON escapes from closing pass 2 are in-contract and red.
+
+A width-conditioned fallthrough, e.g. keep the write `return` unless `len == 8` (or `len == 2`), would likely score 93/93: `iir` only stores at len 1 and 4, and every other store port the probe uses has a side-effect-free read (MSR/SCR/MCR/IER/8042 command-byte path). That is an extra conjunct on a value the write body never tests as a case (`byte = data[ofs]; return memory_rw(...)`). Joint-cell / generating-set: clause (e) coverage debt, not a floor cell. Same shape as “decline except at the two iir widths.” File it if you want it named; it does not keep this chain open.
+
+I did **not** build that mutant. The 77-row measurement of unconditioned fallthrough plus the 93-row iir red set is the evidence; the width restriction is reasoning from which store ports have a read side effect.
+
+---
+
+### Q3 — wrong statements
+
+1. **Header, disclosed-by-class (data).** “every store row carries a NONZERO correct byte” is false on the 93-row instrument. `iir stb` / `iir stl` store 0. The class is still unrowed; only that sentence is wrong.
+2. **Header, THE CELL SPACE opener.** “rowed WHOLE since closing pass 1” is false of the tail cells this repair just added. The rest of the paragraph corrects it; the lead clause did not get the same edit.
+3. **Fix comment and POSTTABLE 4.** I did not find a false score or a false HEAD/FIX number. HEAD_r4’s FAIL set is the 41 PRETABLE names; table4.out is 93/93, 52/93, 85, 91, 87, 90, 92, 92, 92; check_pred exact=9. The as-run checker parse miss is a records note, not a wrong prediction.
+
+---
+
+### Not checked
+
+- Tables 1–3 were not re-run (targeting rule: repair 3 only adds sessions).
+- Width-conditioned fallthrough not built (above).
+- Full alphabook1 `bus_isa_init` inventory not walked; forward-return restates Opus’s scan plus the three files I grepped.
+- No `run.sh` / gate / battery.
+
+Seat: Grok 4.6, file-reading. agy deliberately not fired (measurement reservation).

@@ -1,0 +1,76 @@
+VERDICT LINE FIRST: **CLOSES** (no floor gap I can name from the packet), token `LCA530_C4_20260914`. Three caveats follow that the panel should weigh.
+
+---
+
+## 1. Head EQUIVALENCE reasoning is incomplete for RD2 — REASONED, not checkable from packet
+
+The header says: *"at the split-HEAD cells it is EQUIVALENT on alphabook1 (heads land on ports 0x1f mod 0x20 -- 0x3ff SCR, or unmapped -- none with a read side effect)."*
+
+The parenthetical addresses the END of the head (the lane-3 byte at 0x3ff / 0x1f). It does NOT address the middle of the head range. For a 6- or 7-byte head ending at 0x3ff, the byte at port 0x3fa is IIR, which is at lane 2, NOT at 0x1f mod 0x20. IIR has a read side effect when TXRDY is armed (`&= ~IIR_TXRDY`).
+
+Per-channel breakdown (REASONED from the fix text and the settle section):
+
+| channel | head mechanism | EQUIVALENT? |
+|---|---|---|
+| W1 (`len != 8`) | len-1 head bytes short-circuit | yes — len check, not port side-effect |
+| W2 (`len != 2`) | len-1 head bytes short-circuit | yes — len check |
+| W3 (`lane != 0`) | only lane-0 head bytes fall through; lane-0 port in 0x3f9–0x3ff is 0x3fc (MCR) | yes — MCR has no read side effect |
+| W4 (`len == 1 \|\| 4`) | len-1 head bytes short-circuit | yes — len check |
+| RD2 (forward duplicated) | EVERY head byte is read TWICE; 0x3fa's second read sees TXRDY consumed IF TXRDY was armed | **CONDITIONAL** — EQUIVALENT only if no head cell arms TXRDY |
+
+The brief's stated reasoning ("heads land on ports 0x1f mod 0x20 — none with a read side effect") is wrong for RD2. The correct reasoning is: no probe session arms TXRDY before a head-cell read, so IIR returns 0x01 for both reads. I cannot verify from the packet that no earlier head-cell session (1–3) arms TXRDY. **One fact would settle it:** the full text of the head-cell sessions in the 77-row instrument, specifically whether any `k0(SP(UART_IER))` / `k0(SP(UART_IIR))` pair precedes a head read.
+
+This is a defect in the *reasoning*, not necessarily in the *outcome*. POSTTABLE 5 RD2=110 (one red, `iir lca rd`) is consistent with no head row arming TXRDY — if any did, RD2 would red at that row too. So the measurement supports the EQUIVALENCE. But the brief should say so explicitly, and the "0x1f mod 0x20 — none with a read side effect" sentence should be replaced.
+
+## 2. POSTTABLE 5 has an undefined leg — READ
+
+POSTTABLE 5 lists **W5 110 (kbcq q dib -- that row's own kill)**. The brief's 13-mutant table defines W1, W2, W3, W4, RD2, D1, H1a, H1b, r_fwdret, w_ret0, dd_decl — eleven mutants plus base. W5 is not defined anywhere in the packet. POSTTABLE 5 reports "9 legs built" which includes W5 and omits D1, H1a, H1b, r_fwdret, w_ret0, dd_decl — also unexplained.
+
+The omissions are partially defensible (w_ret0 and dd_decl were killed 89/93 on the 93-row instrument and need no re-run; D1/H1a/H1b/r_fwdret are disclosed/equivalent classes not in the 111-row kill scope). But the inclusion of an undefined W5 is a documentation gap. **W5 is not a 111/111 escape** (it scores 110, with kbcq q dib as its own kill), so it does not affect the verdict — but the panel should know what mutant W5 is.
+
+## 3. Disclosed items I cannot verify from the packet — REASONED
+
+| item | disclosure | checkable from packet? | single fact that would settle it |
+|---|---|---|---|
+| lane-3 direct (wdc 0x1f7) | "would carry it with an IRQ pending; not rowed" | no | the `wd_command` arm of `dev_wdc.c`'s read of status (whether reading 0x1f7 deasserts IRQ) |
+| lane 1 | "no port with an armable read side effect is rowed" | no | the read side-effect inventory for ports 0x21, 0x41, 0x61, 0xa1, 0x3f9, 0x3fd (PIC, PIT, KBC status, PIC2, IER, LSR) on alphabook1 |
+| heads | "EQUIVALENT on alphabook1" | no (see §1) | whether any head-cell session arms TXRDY before reading |
+
+If any of these three is wrong, there is an undisclosed floor gap. The flagship ruling option (c) accepts the lane-3-direct and lane-1 disclosures as priced; the head EQUIVALENCE is the one that worries me because the stated reasoning is wrong even if the outcome is right.
+
+## 4. What I checked and found right — READ
+
+- **Fix comment.** Every clause checks out: byte access at port 2 or 3 mod 4 fires `ofs > len`; word access at port 3 mod 4 fires it; head bytes at port 3 mod 4 fire it; the read arm's `i == ofs` loop discards the byte when `ofs == len`; size field a<4:3> is not decoded; len 0 refused before `%`.
+- **Handler code.** Matches the fix text and the settle section. The `if (len == 0) return 0;` is placed before the `% len`. The write arm reads `data[ofs]` not `data[ofs % len]` (the dead `% len` was correctly removed — see kimi-k3's pass-2 EQUIVALENT note).
+- **POSTTABLE 5 score arithmetic.** 111−8=103 (x_wfallthru: 4 iir + 4 kbcq), 111−2=109 (W1: iir stq + kbcq q dib; W2: iir stw + kbcq w dib), 111−4=107 (W3: 4 kbcq dib; W4: iir stw + iir stq + kbcq w dib + kbcq q dib), 111−1=110 (RD2: iir lca rd; W5: kbcq q dib), 111−43=68 (head: 41 from table 4 + `iirr alive` + `iir lca rd`, the latter two because the (1,2) read triggers `ofs > len` exit on HEAD). All reconcile.
+- **Repair diff's three corrections.** (a) "every VALUE store row carries a NONZERO correct byte and the `iir' rows store all-zero words, so at no store cell does a row hold a zero correct byte beside a nonzero neighbour" — correct. (b) x_wfallthru scoped to lanes 0 and 2 at every direct width, EQUIVALENT at heads, DISCLOSED at lane 1 and lane-3 direct — correct as scoping, wrong as head reasoning (see §1). (c) discarded-bit widened to a<4:0> — correct (covers a<4:3> size field AND a<2:0> head byte offset, which is what the handler shifts away).
+
+## 5. A contrived edit I considered and reject as a floor gap — REASONED
+
+"RD2 gated to `len > 1`": duplicate the read forward only when `len > 1`. On the (1,2) direct read at IIR (len 1), no duplication — the `iir lca rd` row does not catch it. On multi-byte reads at lane 2, duplication happens — but POSTTABLE RD2=110 (one red) implies the multi-byte read cells at lane 2 do NOT arm TXRDY, so both reads return 0x01 and the duplication is invisible.
+
+This edit would score 111/111 on the current instrument. But:
+- The contract names "the read arm's forward DUPLICATED" — unconditional. A `len > 1` gate is a different edit.
+- The contract's named edit (unconditional RD2) is caught at 110/111.
+- "RD2 gated to len > 1" is not a named contract entry and is not the kind of edit the disposition-B class closure is designed to catch.
+
+I do not call this a floor gap. The contract is for the named edits; contrived gates of named edits are a different class. The panel may disagree.
+
+## 6. Things I could not check
+
+- The full text of head-cell sessions in the 77-row / 93-row instrument (relevant to §1).
+- `dev_wdc.c` read side effect at 0x1f7 (relevant to §3 row 1).
+- Read side effects at lane-1 ports 0x21/0x41/0x61/0xa1/0x3f9/0x3fd on alphabook1 (relevant to §3 row 2).
+- The definition of W5 in POSTTABLE 5 (relevant to §2).
+- Whether the probe has multi-byte read cells at lane 2 that arm TXRDY (relevant to §5; POSTTABLE suggests no, since RD2=110 not 108-or-worse).
+
+## VERDICT
+
+**CLOSES** for the named contract: x_wfallthru at lanes 0 and 2 (every direct width) caught by 4h/4i/4k; RD2 at (1,2) caught by 4j; position, len, and lane mis-decodes caught by the 77-row / direct / head / tail cells; disclosed gaps (lane-3 direct wdc, lane 1, heads as EQUIVALENT) priced by the flagship ruling option (c).
+
+**Three items the panel should record:**
+1. The head EQUIVALENCE reasoning in the header is wrong on its face for RD2 (it names lane-3 ports only; the lane-2 port 0x3fa in the head range has a read side effect when TXRDY is armed). The outcome is supported by POSTTABLE RD2=110, but the reasoning sentence should be rewritten.
+3. W5 is undefined in the packet. It is not a 111/111 escape, so it does not change the verdict.
+4. Lane-3-direct (wdc 0x1f7) and lane-1 disclosures are not verifiable from the packet; they are accepted by the ruling but not audited here.
+
+Token: `LCA530_C4_20260914`.
