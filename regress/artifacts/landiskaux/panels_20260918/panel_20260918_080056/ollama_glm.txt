@@ -1,0 +1,41 @@
+**VERDICT: The address arithmetic survives re-enumeration and a one-case addition is the right member — but as written the fix should use the literal `+ 0x2c`, not `0x16 * addr_mult`. No inlined evidence gives 0x16 independent provenance (it is only the census quotient 0x2c/2), while every existing arm of the switch, including the default, is a raw byte offset. Two premises are not settleable from this packet: (1) "no collision" was checked only against the main wdc span, not against whatever else landisk maps; (2) the write path of `dev_wdc_altstatus_access`, which determines what "green post-fix" means. The rung-3 witness is nameable with no new instrument: re-run the existing census hook post-fix and assert `wdc_altstatus` claims exactly the 12 stores. I also find, from the packet's own numbers, that the HPCMIPS arm is dead code — see F1.**
+
+I cannot read any tree; everything below audits the packet as stated. Census figures are READ (packet-asserted), not independently verified by me.
+
+## Arithmetic, re-enumerated (READ premises re-derived)
+
+- 8 × 2 = 16 = 0x10 → main span 0x14000000–0x1400000f, matching the quoted `machine_landisk.c` comment. ✓
+- 0x14000000 + 0x206 = 0x14000206 (today's altstatus). ✓
+- 0x16 = 22; 22 × 2 = 44 = 0x2c; 0x14000000 + 0x2c = 0x1400002c = measured write address. ✓
+- Non-overlap vs main span: alt window [0x1400002c, 0x1400002d], main ends 0x0f; 44 ≥ 16. ✓
+- Census internal consistency: 6(0x08) + 5(0x02) + 1(0x0c) = 12; 0x0c = 0x04|0x08 = WDCTL_RST|WDCTL_4BIT per OpenBSD `wdcreg` values — the multiset matches a wdc attach sequence (reset, set 4-bit, nIEN during polling). [REASONED corroboration] ✓
+- The default offset is itself PC-AT arithmetic: 0x3f6 − 0x1f0 = 0x206. [REASONED] The switch thinks in **byte offsets from the command base** — this bears directly on Q1.
+- Queue-row correction confirmed: no `default:` arm [READ, block inlined]; an unhandled machine keeps :2095's value [REASONED, C semantics]. Wrong word, right substance.
+
+## Findings the brief did not state
+
+**F1 — the HPCMIPS arm is a no-op.** [READ numbers, REASONED arithmetic] 0x14000180 + 0x206 = 0x14000386 — the guarded absolute is *exactly what the :2095 default already computes for that address*, and the arm does nothing for any other hpcmips address. It changes no behavior whatsoever; `/* TODO: Fix */` is presumably the confession. Two consequences: (a) this switch already contains a machine case that is silently vacuous — the exact failure mode this fix must not repeat, and one a boot-green detector cannot catch (Q5); (b) "HPCMIPS-style absolute" is a weaker Q4 candidate than the brief allows.
+
+**F2 — the collision check is bounded against the main wdc span only.** The inlined census facts prove (i) 12 stores occurred and (ii) the `wdc_altstatus` handler got zero calls. They do **not** prove "unmapped": some other landisk registration could own [0x1400002c, 0x1400002d] and absorb the stores, in which case the fix overlays an existing mapping and GXemul's overlap behavior (reject/warn/shadow) is not inlined. **Not settleable from the packet.** Settling fact: the census instrument's per-store claim record, or a boot-time dump of registered regions covering 0x1400002c. Severity low (an unrelated device that absorbs-and-ignores leaves the defect intact; only the wording "unmapped" would be wrong).
+
+**F3 — the auxiliary handler's write path is not inlined.** Codex characterized only its address test. If it acts on SRST/nIEN/4-bit, the post-fix boot is *not* byte-identical to pre-fix — the controller now sees the soft reset, and the 12,718-access command-block pattern may legitimately shift. "Green" must mean "wd0 attaches AND the 12 stores are claimed," not "census identical." Settling fact: the handler's write path.
+
+**F4 — 0x16 has no independent provenance in the packet.** Its only derivation is 0x2c/addr_mult. Note 0x2c is also divisible by 4 (= 11): only landisk's declared mult=2 [READ] selects 22, so even the "register units" reading is stride-dependent. A register-unit steelman exists — control block at byte 0x20 (slot 16) + Device Control at register 6 × stride = 0x20 + 0xc = 0x2c [REASONED] — but that is reconstruction, not evidence. Settling fact: OpenBSD's landisk wdc/obio attachment, or the SH7751R/USL-5P hardware doc, stating the control-block offset in bytes or register units.
+
+## The questions
+
+**Q1 — literal `+ 0x2c`.** All three arms and the default are byte offsets/absolutes; none multiplies by `addr_mult` [READ]. If a future variant changed `addr_mult`, the literal is wrong for sure — and the multiplier is wrong *too*, unless register-index 22 is hardware-invariant, a claim nothing in the packet supports. Behaviorally identical today; decide by idiom and minimality, both of which say literal.
+
+**Q2 — the census fixes the address, nothing fixes the form.** Twelve real stores (real pc, `no_exceptions=0`), first one a soft reset, to 0x1400002c, with the liveness control showing the base is right — the address is well-evidenced [READ]. 0x16 is decoration until F4's settling fact exists.
+
+**Q3 — yes, a rung-3 probe reaches this, and it needs no new instrument.** The census hook demonstrably measures per-handler access counts — the packet's own "wdc_altstatus at 0x14000206 receives ZERO accesses" proves that capability [READ]. Probe: apply the case, re-run the census_20260827 script unchanged on the same image. The pre-fix half already exists. Green post-fix: exactly 12 accesses to `wdc_altstatus`, all len=1 writes, relative_addr 0, same pc; zero accesses at 0x14000206; wd0 still attaches. The read path cannot be witnessed from this image (census: zero reads [READ]); the "mirror" store to 0x14000206 would need a synthetic store, a different epistemic class — the 12-store claim witness is sufficient and guest-path. Respect F3's caveat when defining green.
+
+**Q4 — delta real; right member is the case with the literal.** The delta (12 genuine stores, including a discarded ATA soft reset, to an address where the wdc provides no listener) is real on packet evidence. Members: (1) the one case, literal offset — smallest, idiom-consistent, licensed. (2) Declare the aux address in `machine_landisk.c` — needs a new devinit field plus string parsing plus a branch; a larger addition than a landisk-only delta licenses, and it fights the idiom that all per-machine quirks live in this switch. (3) HPCMIPS-style absolute — per F1 that pattern is demonstrated dead code here, and it breaks if a second instance ever appears. Reject. (4) Change the default — touches every machine not in the switch; unlicensed by this delta. Reject. (5) Do nothing — discards a soft reset; unlicensed.
+
+**Q5 — smallest breaking edits, and the detector they force.** Against a boot-green detector: `0x16` → `0x17` (one character) lands altstatus at 0x140002e, the stores are still swallowed, boot unchanged, no diagnostic. So does *deleting the case*, and so does copying the default into the case (F1's failure mode) — therefore boot-green cannot be this fix's detector; the Q3 claim-count assertion is the minimum. Against even the claim-count detector: change the auxiliary registration length `2` → `1` — all twelve len=1 stores at relative 0 are still claimed [READ, codex's own point], so the detector passes while the two-byte registration property is broken (`wdcaltwidth`). The shipped detector must assert **both** the claim and the width. Hazards to the existing three: none reachable — the switch selects on a single `machine_type`, and duplicate case values are a compile error, so no machine reaches two arms regardless of address guards; the HPCMIPS addr guard cannot see a landisk devinit because landisk never enters that case. The only live hazard is a missing `break` (the snippet has one), which would fall into the next arm.
+
+## Measurements wanted (named, not run)
+
+1. OpenBSD landisk wdc/obio attachment source (or SH7751R/USL-5P doc) — settles Q1/Q2 form.
+2. Census per-store claim record, or a registration dump covering 0x1400002c — settles "unmapped" (F2).
+3. `dev_wdc_altstatus_access` write path — settles what post-fix green must tolerate (F3).

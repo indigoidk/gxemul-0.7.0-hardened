@@ -1,3 +1,121 @@
+# `#533` (landiskaux): landisk's wdc aux register sat at the PC-layout `+0x206`, so the kernel's soft reset landed on unmapped memory
+
+**One `case`, and the address is a primary-source constant rather than a derivation.** `dev_wdc.c`'s
+"Special hacks for individual machines" switch had no `MACHINE_LANDISK` arm, so landisk kept the pre-switch
+`alt_status_addr = devinit->addr + 0x206` and registered `wdc_altstatus` at `0x14000206`. The OpenBSD 7.6
+landisk kernel writes Device Control at `0x1400002c`.
+
+    case MACHINE_LANDISK:
+            alt_status_addr = devinit->addr + 0x2c;
+            break;
+
+Appended AFTER the IQ80321 case, so a later missing `break;` in the new arm cannot fall into an older one.
+
+## THE WARRANT -- three independent routes to 44
+
+* NetBSD `sys/arch/landisk/dev/wdc_obio.c` v1.11 and OpenBSD v1.5 both `#define WDC_OBIO_AUXREG_OFFSET 0x2c` and
+  map the aux register at `or_addr + WDC_OBIO_AUXREG_OFFSET`, UNSCALED, while the command registers use `i * 2`.
+  Copies preserved in `regress/artifacts/landiskaux/rung3_opus_20260918/{netbsd,openbsd}_wdc_obio.c`.
+* The codex seat disassembled the 7.6 ramdisk: `add #44,r5` before the mapping call, and `mov.b r7,@r6` at
+  `0x8c15f6e8`, the census's store PC.
+* The 2026-08-27 boot census (`regress/artifacts/landiskaux/census_20260827/`): exactly TWELVE byte writes to
+  `0x1400002c`, ZERO reads, four runs, two instruments.
+
+**`0x16 * addr_mult` IS NOT THE ADDRESS, AND THIS ROUND NEARLY SHIPPED IT.** `0x16` is `0x2c / 2`, a factorisation
+of the measured answer -- the landisk-shaped echo of macppc's `WDC_AUXREG_OFFSET 0x16 << 4 = 0x160`. The
+2026-08-28 pass 1 (`brief_p1_20260828.md`) had already said *SHIP `+ 0x2c`* and called the multiplier route
+superseded; a 09-18 prep entry reintroduced it and the 09-18 pass-1 brief inherited it. The panel caught it.
+*Prior work on disk, not folded in -- the census was read and the verdict beside it was not.*
+
+## WHAT IT FIXES, AND WHAT IT DOES NOT
+
+The first of the twelve writes is `0x0c` = `WDCTL_RST | WDCTL_4BIT`, a real ATA **soft reset**, silently lost
+before this change. Six carry `WDCTL_4BIT` and five `WDCTL_IDS`. **The fix DELIVERS the `WDCTL_IDS` (nIEN)
+writes; it does NOT implement nIEN** -- the aux handler acts on `WDCTL_RST` only.
+
+The pre-switch `+0x206` is untouched and still serves every machine without a case. Only landisk moves.
+Unmapping `0x14000206` on landisk is measured safe: the census records zero accesses there, and nothing else is
+registered between the end of `wdc` (`0x1400000f`) and RAM at `0x1e000000`.
+
+## WITNESS AND DETECTOR
+
+**Witness (rung 3), MEASURED by the Opus seat on unmodified `-E landisk`** --
+`regress/artifacts/landiskaux/rung3_opus_20260918/`: the same guest program pre-fix (a Device Control
+store to `0x2c` is swallowed, status stays `0x09`) and post-fix (the reset lands, status `0x01`), with a RAM
+liveness control and a device signature (`0x2c` reads back the status byte). The census is the rung-4 pre-fix
+half.
+
+**Detector: `regress/landisk_aux_probe.py`, 6 rows, wired into `gate_sh_rounding.sh` IN THIS COMMIT.** Every row
+reads a guest-visible register; none rests on the `[ wdc: ... ]` debug line, which goes quiet under `-q`.
+
+    pre-fix                    1/6   prefix_HEAD.out  (build/ = the working tree MINUS the landisk case;
+                                    build's dev_sh4.c carries other rounds' uncommitted lines -- no effect on these rows)
+    fix                        6/6
+
+**Kill table**, scratch clone, baseline `cmp` CLEAN, clone restored before the legs
+(`regress/artifacts/landiskaux/detector_20260918/logs/TABLE.out`). `PRETABLE.out` was written BEFORE the table
+and predicted every score; all six matched:
+
+    base     6/6  1,1,1,1,1,1
+    M_head   1/6  1,0,0,0,0,0   no landisk case
+    M_0x16   3/6  1,0,1,0,0,1   `+ 0x16'
+    M_0x2d   3/6  1,0,1,0,0,1   `+ 0x2d'
+    M_both   4/6  1,1,0,1,1,0   keep the 0x206 registration AND add 0x2c
+    M_above  3/6  1,0,1,0,0,1   case above IQ80321 without break
+
+*Writing PRETABLE caught a copied prediction: `M_0x16` was first written 1/6, as if it were the pre-fix state.
+It is not -- `0x206` is unmapped under it too -- so the two `0x206` rows are green and the score is 3/6, which
+is what it measured. Predictions are derived per mutant, never copied.*
+
+`M_both` is killed ONLY by the two `0x206` rows. A detector that rowed `0x2c` alone would pass a fix that
+registered both addresses.
+
+## THE FIX CHANGES BOOT BEHAVIOUR, SO A BOOT WAS MEASURED -- and the first attempt failed for a reason not under test
+
+The soft reset that used to vanish now reaches `wdc_new_command_reset()`. The Opus seat asked whether a real
+landisk boot still completes; nothing had shown it. `drive_guest.py landisk` (the gate_crossfamily rig, WITH a
+64 MB disk attached) on both binaries, `regress/artifacts/landiskaux/boot_20260918/`:
+
+    fixed    VERDICT=PASS  7.4 s  1,879,401,505 instrs  SH7751R,42   unmapped 0x1400002c in emulator log:  0
+    pre-fix  VERDICT=PASS  7.3 s  1,879,418,819 instrs  SH7751R,42   unmapped 0x1400002c in emulator log: 12
+
+`wd0` attaches in both. **The pre-fix log's twelve unmapped accesses reproduce the census on the gate's own rig,
+and the fixed log's zero is the same script going green -- a rung-4 witness by clause (i).**
+
+*The FIRST boot attempt read `REASON=EXITED NINSTRS=0 VERDICT=FAIL`. It was the apparatus: `drive_guest.py`
+changes directory before `execvp`, so the RELATIVE binary path did not exist and the emulator never started.
+Caught by asking whether it failed for the reason under test -- zero instructions is a launch that did not
+happen, not a boot that broke -- and by running the pre-fix binary as a control.*
+
+## PASS 2 -- nine seats, and the ask-again found nothing that reaches the floor
+
+`panel_20260918_083716` plus the Opus seat, fable5 adjudicating last. The fix passed every seat. The one
+permitted ask-again produced:
+
+* **`case MACHINE_LANDISK:` -> `default:`** (codex, kimi, and MEASURED by Opus): 6/6 here, but it moves every
+  caseless machine off `+0x206`, and `wdc_altdigin_probe.py` in the same gate kills it at **17/22**
+  (`regress/artifacts/landiskaux/opus_askagain_20260918/`). Carried elsewhere; now named in the contract.
+* **A registration widened to cover `0x206`** (Opus, measured 6/6): guest-equivalent on landisk, because the aux
+  handler declines every nonzero offset. The `aux 206 gone` note claimed "UNMAPPED" -- corrected to "unmapped
+  OR declined, cannot tell" (L4).
+* **Equivalent spellings** of the address (grok): `0x16 * addr_mult`, `| 0x2c`, `+ 44`, the absolute -- all ARE
+  `0x1400002c` on landisk. Not escapes.
+* **A detector-side weakening** (grok): moving the probe's old-address oracle `0x206 -> 0x207` keeps 6/6 and lets
+  `M_both` pass. Those two rows are `M_both`'s only killers; the contract now says their constant is load-bearing.
+* **The reset-bit test** (glm): not this probe's property -- every store here is `0x0c`, RST set -- and **carried by
+  NOTHING WIRED.** A first draft said `wdc_altoffset_4bit_probe.py` in `gate_hygiene.sh`; fable5 measured that false
+  three ways (the probe is unwired, `gate_hygiene.sh` names it only in a comment listing it OUTSIDE its
+  denominator, and it writes only RST-set values). `if (idata & WDCTL_RST)` -> `if (idata)` escapes every wired
+  row. Outside this round's (d) closure (a different function), so coverage debt, not a floor breach: FILED as
+  `wdcrstbitonly`, and deliberately NOT rowed here -- a seventh row would re-table six mutants and turn a
+  records-only repair into a floor-bound diff that owes its own pass.
+* deepseek's objection that "unmapped memory" contradicts the collision check is REFUTED on reading: pre-fix,
+  `0x2c` WAS unmapped, which is what the collision check shows.
+
+**DISCLOSED, not rowed:** the initialiser `+0x206` changing (landisk overwrites it, so no landisk row can see
+it); IQ80321 losing its own `break` (no IQ80321 rig); the registration width 2 -> 1 (every access here is one
+byte at offset 0 -- `wdcaltwidth`); keying on `machine_type` alone.
+
 # `#532` (stagetokens): reading 23 unread seat answers took two hard gates from GREEN to RED — and the honest fix was a token that did not exist
 
 **HEAD had ZERO stage violations. The working tree had NINETEEN, and every one was created by

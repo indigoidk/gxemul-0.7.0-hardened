@@ -1,0 +1,67 @@
+VERDICT: **PASS** — diff structurally correct, comment accurate, kill table internally consistent; two structural notes (Q2: nIEN handling slips past; Q3: row 1 is vacuous for the listed mutants).
+
+---
+
+## Q1 — Is the diff correct? **YES** *(READ + REASONED)*
+
+**Diff structure (READ).** The diff inserts `case MACHINE_LANDISK: ... alt_status_addr = devinit->addr + 0x2c; break;` immediately before the closing `}` of the existing switch. The pre-switch `alt_status_addr = devinit->addr + 0x206;` is **not** touched, and each existing case still owns its own assignment. Therefore:
+- LANDISK gets `+0x2c` (overwriting the pre-switch default for that one machine type).
+- HPCMIPS / MACPPC / IQ80321 keep their per-case values.
+- Machines with no case still get `+0x206` — the brief's claim that "every machine without a case" still serves is structurally guaranteed.
+
+**Comment accuracy (REASONED from packet).**
+- *"literal byte offset of 0x2c"* — corroborated by Codex's disassembly `add #44,r5` (44 = 0x2c). If the offset were scaled, the disassembly would show 0x160 (= 0x16 << 4), which is what macppc would produce. The disassembly is the kind of single fact that would settle the offset claim, and it does.
+- *"the kernel's twelve Device Control writes … landed on unmapped memory"* — consistent with the boot census (12 writes to 0x1400002c, 0 reads; 0 accesses at 0x14000206). If the pre-fix landisk had `+0x206` registered, at least some access would land; the zero count at 0x206 confirms the pre-fix altstatus registration was absent on landisk (the original pre-switch default had been bypassed/never registered for landisk in a way the panel's census measures).
+- *"Delivering WDCTL_IDS writes does not implement nIEN"* — I cannot re-measure the aux handler from the packet; this is a settled premise.
+
+**Cannot verify from packet:** the exact NetBSD/OpenBSD `wdc_obio.c` source for `WDC_OBIO_AUXREG_OFFSET 0x2c` and `AUXREG_SIZE 2`, and the aux handler's RST-only dispatch. These are pass-1 premises; the disassembly is the corroborating evidence.
+
+---
+
+## Q2 — Ask-again: smallest edit that breaks a claimed property and still scores 6/6
+
+**Primary answer: add nIEN (WDCTL_IDS) handling to the shared aux handler** *(REASONED)*.
+
+The property claimed is *"the aux handler acts on WDCTL_RST only, so nIEN is NOT implemented"* (settled premise, also restated in the diff's own comment). Adding nIEN handling breaks that property. The detector's six rows do not probe nIEN:
+- The only writes in the detector are `mov.b #0x0c` (= SRST | 4BIT). Bit 7 (0x80 = nIEN) is never set, so a new nIEN branch is never taken.
+- The reads are of status (0x09 / 0x01), not of nIEN state.
+- The six expected outcomes therefore all hold; the detector scores 6/6 on the modified fix.
+
+This is a real verification gap: a future "improvement" that silently starts honouring nIEN would not be caught.
+
+**Smaller alternative (one word): change the comment `0x2c` → `0x16`.** Code unchanged, detector scores 6/6, property *"the comment itself is true"* (Q1) broken. This is the truly minimum edit but only falsifies a documentation claim.
+
+---
+
+## Q3 — Is any detector row VACUOUS? **YES — row 1 ("live")** *(REASONED)*
+
+Reading the kill table, row 1 is `1,1,1,1,1,1` across all six entries (base + five mutants). The named channel is *"RAM-ctrl session: status == 0x09"*. Because the CTRL address in that session is RAM (per the detector description), the write cannot land on any aux register under any of the listed mutants; device state is untouched. The channel therefore does not vary between base and any mutant in the table — row 1 contributes zero discriminating power for this set.
+
+Rows 2–6 each flip at least one mutant (M_0x16/M_0x2d/M_above/pre-fix/M_head for rows 2,4,5; M_both/pre-fix/M_head for rows 3,6), so they are not vacuous. Row 1 is best read as a smoke test for device liveness, not a discriminator.
+
+---
+
+## Q4 — Does removing landisk's answer at 0x206 break anything a guest could legitimately do? **NO** *(REASONED from settled premises)*
+
+Per the pass-1 premises, real landisk hardware maps the aux/alt-status register at `or_addr + 0x2c` (NetBSD/OpenBSD `wdc_obio.c`, corroborated by Codex's `add #44,r5`). A legitimate landisk guest — the only thing that runs in an `-E landisk` configuration — uses +0x2c, not +0x206. The pre-switch `+0x206` registration was therefore never legitimate landisk behaviour; it was an emulator artefact of treating landisk as a PC-layout machine. Removing it cannot break a guest whose own driver targets the correct offset.
+
+The diff is also narrowly scoped to landisk only: pre-switch `+0x206` is still assigned and (for machines without their own case) still in effect.
+
+---
+
+## Premises I cannot settle from the packet (named for the record)
+
+- The literal `WDC_OBIO_AUXREG_OFFSET 0x2c` in NetBSD/OpenBSD `wdc_obio.c` — single fact that would settle it: the source line `or_addr + WDC_OBIO_AUXREG_OFFSET` in those files (settled from pass 1; disassembly is independent corroboration).
+- `AUXREG_SIZE = 2` — same source files. Note the disclosed `wdcaltwidth` discrepancy suggests the actual emulator registration is width 1, not 2; this is a known detector limitation, not a defect in the diff.
+- Aux handler dispatch on WDCTL_RST vs WDCTL_IDS — the aux handler source. Single fact: handler switch/if on the write value.
+- The four `machine_type` numeric constants (1004/2004/5005/6004) — settled from pass 1.
+- The collision check "nothing between wdc and RAM except the old altstatus at 0x14000206" — pass-1 device-tree walk; would be re-settled by a `devinit` listing on `-E landisk`.
+
+---
+
+## Summary of structural findings (no truncation-critical content)
+
+- **Diff:** correct. Comment: accurate to the extent verifiable from the packet.
+- **Q2 ask-again:** add nIEN handling to the aux handler (real verification gap); or, trivially, edit one word in the comment.
+- **Q3:** row 1 is a smoke test, vacuous for the listed mutants; rows 2–6 carry the discriminating load.
+- **Q4:** no legitimate-guest breakage from unmapping landisk's `+0x206`.

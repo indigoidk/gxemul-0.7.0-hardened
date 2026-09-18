@@ -1,0 +1,52 @@
+**VERDICT: The address arithmetic reconciles exactly and the one-`case` diff is the right member and cannot hazard the existing three arms, but three load-bearing premises are NOT in this packet: (1) the "NO COLLISION" check was run only against the main wdc span; (2) the write path of `dev_wdc_altstatus_access` is never inlined, so "the writes are delivered" is not yet a behavioral delta; (3) nothing in the packet fixes 0x16 as register units rather than 0x2c as a literal — the census fixes the ADDRESS, not the decomposition. Approve the address; withhold the form and the delta claim pending the four named facts at the end.**
+
+## Arithmetic, enumerated
+
+* READ: `DEV_WDC_LENGTH=8`; landisk `addr_mult=2`, `addr=0x14000000`.
+* REASONED: 8×2=16=0x10 → main span 0x14000000..0x1400000f — matches the READ machine_landisk.c:86 comment byte-for-byte (good cross-check between two packet sources).
+* READ: default `+0x206`. REASONED: 0x206=518 → 0x14000206; consistent with the READ census fact that wdc_altstatus there receives zero accesses.
+* READ: twelve writes at 0x1400002c; 6×0x08 + 5×0x02 + 1×0x0c = 12. ✓
+* REASONED: 0x16=22; 22×2=44=0x2c; 0x14000000+0x2c=0x1400002c ✓ equals the measured address.
+* REASONED: aux spans bytes 44–45 vs main 0–15 → disjoint **vs the main device** (scope caveat below).
+* REASONED coherence bonus: HPCMIPS's "absolute" 0x14000386 = 0x14000180 + 0x206 — the hack literal is just the default formula written out, which is presumably why it carries `/* TODO: Fix */` (READ).
+
+## Premise defects
+
+**D1 — "NO COLLISION" is overclaimed.** READ: the check compares 0x2c against the main wdc span only. Whether any *other* landisk registration covers 0x1400002c..0x140002d is not inlined. The census fields shown (len, pc, value, `no_exceptions=0`) contain no mapped/unmapped disposition; `no_exceptions=0` is consistent both with "unmapped, ignored" and with "delivered to some unrelated device" — and in the second case the fix would *create* an overlap rather than fill a hole. One fact settles it: a per-access dispatch record from the census-hook build for a single 0x1400002c write (or the machine's device-registration dump at boot). That same record settles D1 and D2 together.
+
+**D2 — the delta's second half is missing.** READ (codex run): the only inlined property of `dev_wdc_altstatus_access` is its address dispatch (`relative_addr != 0`, no mult division). Its **write** arm is never shown. If it merely stores a devcon nothing reads, the fix is a routing change with no observable delta; if it implements SRST (controller reset), the first 0x0c write becomes a live soft reset. The brief calls the discarded reset a defect, but the packet never shows what delivering it would do.
+
+**D3 — the packet proves the defect is invisible to this guest.** READ: command block works, wd0 attaches with correct geometry, and **zero reads** of 0x1400002c all boot. REASONED: so no post-fix guest-visible change is possible unless the write arm acts (D2), and **no boot-level witness can exist** — the liveness control that proves `addr` is right simultaneously proves the boot is already green with the defect present. The symptom must be defined at the instrument level. The brief's "silently discarded soft reset" framing is correct as fidelity rhetoric but must not be sold as a boot defect; its own census refutes that.
+
+## Q1/Q2 — the form
+
+The packet contains exactly one line of evidence for the number: the measured byte address 0x1400002c (READ). 0x2c/2=0x16 is arithmetic, not provenance. The register-units reading is REASONED-plausible — if the control block sits at byte 0x20 (slot 16) and aux keeps the PC's +6 register offset, slot 22 = byte 0x2c — but no inlined source states the offset in units; the brief's own Q2 concedes this. What settles it: OpenBSD's landisk wdc attachment, or an SH7751R I/O-box datasheet quote. Until then: both forms compile identically (READ: landisk's string hardcodes `addr_mult=2`; no variant distinguishes them). Note the multiplier has in-function precedent — `DEV_WDC_LENGTH * addr_mult` at :2122 (READ) — while the switch has none, so "the only case of its kind" is true of the switch, not the function. For Q1's idiom half, the missing fact is the addr_mult of the macppc/hpcmips/iq80321 wdc strings: if any is ≠1 with a bare literal, the literal is the house idiom even for strided machines; if all are 1, their literals carry no information about strided layouts. A mult-aware *default* is not a member: 0x206×2=0x40c ≠ 0x2c — landisk's control block is at a genuinely different place than the PC layout, which is why the switch exists.
+
+## Q3 — yes, a rung-3 probe reaches it; name it
+
+Re-run the census-hook build (READ: one of the two instruments) with the one-case diff, same script, asserting per-access disposition: (i) each of the twelve 0x1400002c writes resolves to wdc_altstatus at relative_addr 0; (ii) the command-block census is unchanged (12,718 accesses, wd0 geometry — READ baseline); (iii) 0x14000206 stays zero. That is pre-fix symptom plus post-fix green under one script, satisfying clause (i). The mirror store at 0x14000206 needs an injected bus write; whether the hook or the debugger can synthesize one is not in the packet — named below. Per D3, the witness must assert delivery, not improvement; a witness defined as a boot-level symptom cannot exist.
+
+## Q4 — the members
+
+* **Proposed case (relative, either form):** smallest, machine-scoped. REASONED: it cannot touch the existing three while its `break` is present — machine_type is a single scalar, exactly one arm matches, and HPCMIPS's addr-guard lives inside HPCMIPS's arm, unreachable from MACHINE_LANDISK.
+* **Literal `+0x2c`:** same today; idiom open (Q1/Q2).
+* **HPCMIPS-style absolute:** works, but the one in-tree absolute is literally the case the house marked `/* TODO: Fix */` (READ). Reject.
+* **machine_landisk.c-side declaration:** REASONED — no aux-address parameter exists in the inlined devinit facts, so this needs new devinit plumbing plus string-grammar changes: a larger product-code addition than one case. Not the minimal member.
+* **Mult-aware default:** rejected by enumeration above.
+
+Delta realness: the twelve writes are READ-solid; "unmapped" (D1) and "delivered ⇒ observable" (D2) are the open halves. If both settle, the addition is licensed by the measured delta; if the write arm is inert, the honest warrant is fidelity-only and the panel should say so rather than claim a fixed symptom.
+
+## Q5 — smallest breaking edits; hazards
+
+* `0x16`→`0x17` (one char): aux at 0x1400002e, writes stay unresolved, boot/geometry/liveness all pass. Hence the shipped detector must assert the aux **address/delivery** — the pre-fix boot already passes everything else.
+* Empty case (`case MACHINE_LANDISK: break;`): READ — a case that assigns nothing keeps :2095's 0x206; a textual "case exists" detector passes; behaviorally identical to no fix.
+* Delete the `break` with the case placed before IQ80321: aux → 0x14000402, writes unresolved, liveness passes. The diff must pin placement.
+
+Hazard to the existing three: none as written (REASONED above; fall-through is the only two-arm mechanism). One named trap: if the landisk case lost its `break` and sat before HPCMIPS, HPCMIPS's own `addr == 0x14000180` guard (landisk addr 0x14000000, READ) would silently neutralize the fall-through — a mutant that executes two arms, breaks the "no machine reaches two arms" property, and passes every behavioral detector. Enumerate it. Enum aliasing (MACHINE_LANDISK=6004, READ) would fail to compile as a duplicate case, so no runtime hazard there (REASONED).
+
+## Facts to inline (named, per the rule)
+
+1. **One per-access disposition record for a 0x1400002c write** from the census-hook build — settles "unmapped" and the collision premise in one stroke.
+2. **The write arm of `dev_wdc_altstatus_access`** — settles whether the delta is behavioral or routing-only.
+3. **addr_mult for the macppc/hpcmips/iq80321 wdc attachments** — settles the house-idiom half of Q1.
+4. **The OpenBSD landisk wdc attachment's aux-register offset definition (or datasheet quote)** — settles units-vs-literal for Q2.

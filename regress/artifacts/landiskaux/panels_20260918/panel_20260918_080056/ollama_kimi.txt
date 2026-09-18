@@ -1,0 +1,53 @@
+**VERDICT: Pass with two named gaps — the arithmetic enumerates clean (every address recomputed below), the one-`case` placement is right, and Q5's real mutant is the deletion of ` * addr_mult`. But (a) the packet contains NO fact that separates `0x16 * addr_mult` from `+ 0x2c` — 0x16 is a derived, not measured, constant (0x2c ÷ 2), so Q1/Q2 are genuinely unsettleable from this packet and I name the two facts that settle them; and (b) the packet never shows the altstatus handler honors Device Control, so the license covers "writes delivered," not "soft reset now works."**
+
+---
+
+## Premise audit — every address enumerated, none taken on trust
+
+* READ: `DEV_WDC_LENGTH=8`, `addr_mult=2` → 8×2 = 16 bytes → `0x14000000..0x1400000f`. REASONED: 0x10 − 1 = 0x0f. Consistent.
+* READ: pre-switch init `+0x206`, no `default:`, no `MACHINE_LANDISK` case → pre-fix altstatus = `0x14000206`. REASONED: this matches the census's zero hits at 0x14000206. The corrected queue-row wording is load-bearing and internally consistent.
+* READ: fix computes `0x14000000 + 0x16*2`. REASONED: 0x16 = 22, 22×2 = 44 = 0x2c → `0x1400002c` = the measured write address. Closed loop.
+* REASONED: collision check — two-byte registration at 0x2c..0x2d vs main span 0x00..0x0f: disjoint, since 0x2c = 44 > 15. True arithmetic, and it is the load-bearing check.
+* READ: census (12 len-1 writes from `obio_iomem_write_1+0x8`, first `0x0c`, 12,718-hit command block). I mark this READ-from-packet: I cannot re-derive or re-measure it; nothing in the packet contradicts it.
+* **CONTRADICTION-ADJACENT FLAG, REASONED:** the brief's liveness control proves pre-fix OpenBSD *does not need* this register to attach `wd0`. So the defect is real but cosmetic-to-the-guest: any claim stronger than "twelve guest stores stop being discarded by dispatch" is oversell. This matters for Q4 scoping.
+
+## Q1 — multiplier form vs literal
+
+REASONED: The two forms are numerically identical under every measurement cited; no fact in the packet separates them. The decisive observation the packet *withholds*: **the `addr_mult` values of the three existing machines**. If — example — IQ80321 runs at `addr_mult=2` and its case is a bare `+0x402`, that proves the house idiom folds stride into a byte literal, and `+ 0x2c` is the correct-shaped fix. If all three run `addr_mult=1`, their bare offsets teach nothing and the multiplied form is free to be better. Not settleable from the packet. **Settling fact: the wdc device strings in the macppc/hpcmips/iq80321 machine files.**
+
+Symmetric risk, REASONED: multiplied form is robust if a future landisk variant's aux register scales with the declared stride; the literal is robust if 0x2c is fixed byte wiring. One measured data point (addr_mult=2) supports neither wager. One lean, REASONED: the device's own model for the *command* block is stride-based (`relative_addr /= addr_mult`, length `8 * addr_mult`), so `0x16 * addr_mult` speaks the device's native language — but the altstatus handler is stride-blind (READ: tests only `relative_addr != 0`, fixed 2-byte registration), so the multiplied form imports a register-unit semantics into a byte-addressed registration. Either form must carry a comment citing the measurement; without it, a future reader "house-styles" this into `+ 0x16` and ships exactly the silent mis-map in Q5.
+
+## Q2 — where 0x16 comes from
+
+REASONED: 0x16 is **derived** — the measured invariant is the *byte address* 0x1400002c; dividing by the declared stride 2 yields 0x16. The census cannot distinguish "register 0x16 at stride 2" from "byte 0x2c" because the driver version is fixed. READ: no SH4/landisk or OpenBSD source for the aux register is inlined anywhere in the packet; codex's refusal stands unanswered. Not settleable from the packet. **Settling fact: the OpenBSD landisk obio/wdc attachment source — whether the aux register is addressed as a bus-space subregion in command-block stride units or as a literal byte offset (the hardware manual equivalent is equally decisive).**
+
+## Q3 — the witness
+
+REASONED: a rung-3 probe exists and requires **no new instrument** — the census hook that produced the 2026-08-27 run *is* the probe. Same kernel, same rootfs, same config script, hook build twice: pristine and pristine-plus-one-case. Asserts, all in one script: (1) twelve stores to 0x1400002c attributed `wdc_altstatus` post-fix vs unmapped pre-fix; (2) zero accesses at 0x14000206 in *both* runs (the mirror-image half, since the shipping driver never touches it); (3) `wd0` attaches in both (negative control on the 12,718-hit block). REASONED: a *guest-visible* (dmesg-level) witness does **not** exist — the census shows zero reads of alt status and `wd0` already attaches — so any seat claiming a dmesg diff witness is overclaiming; the witness lives at the device-attribution layer only.
+
+## Q4 — the option set
+
+The measured delta is real (READ from packet) but must be scoped honestly: it licenses "twelve stores stop being discarded," not "disk behavior changes." Members I'd consider:
+
+1. The proposed case, multiplied form — the right-sized member; the switch is already headed `/* Special hacks for individual machines */`.
+2. Same case, literal `+ 0x2c` — equal today, differs only under Q1's unsettled counterfactual.
+3. HPCMIPS-style guarded absolute — REASONED: reject; that guard exists because one machine_type carries multiple wdc bases there; landisk's case is selected by machine_type, so a guard copies HPCMIPS's TODO-shaped smell for nothing.
+4. Machine-side fix (new `alt_offset=` devinit token parsed by dev_wdc, set in `machine_landisk.c`) — REASONED: architecturally the cleanest *home* for machine knowledge, but a new parser token to replace a one-line case is a refactor dressed as a fix; reject for this defect.
+5. Dispatch register 0x16 inside `dev_wdc_access` — reject: touches the hot path for all three working machines.
+6. Do nothing — reject only because the delta is measured; if it weren't, nothing here forces the addition.
+
+**REASONED, the sharpest finding of this pass: the license buys less than the brief implies.** The brief's emotional core is "a real ATA SOFT RESET, silently discarded today." Post-fix, that 0x0c write reaches `dev_wdc_altstatus_access` — but READ: the packet states only that this handler tests `relative_addr != 0` and never states it stores or acts on the control byte. So "delivered to a handler" is licensed; "soft reset is now honored" is not established by anything in this packet. **Settling fact: the body of `dev_wdc_altstatus_access`.** If it swallows RST too, the fix's true claim narrows to dispatch fidelity, and that is still enough — but the brief should say so.
+
+## Q5 — smallest breaking edit, and cross-case hazard
+
+* REASONED: The minimal silently-breaking edit is **deleting ` * devinit->addr_mult`** — leaving `alt_status_addr = devinit->addr + 0x16;` → 0x14000016. Enumerated: 0x16 = 22 ≥ 16, so **no collision**; compiles; registers a device; reads exactly like the other three cases (bare offset, the apparent house idiom); delivers **zero** writes. It passes any build/registration/no-overlap detector and fails only a delivery-attribution witness. This is the mutant the panel exists to catch by reading, because no boot will.
+* REASONED: If the shipping detector *does* assert delivery, the minimal passing-breaker becomes the literal `+ 0x2c` — which breaks only the stride-tracking property. Note the trap this exposes: if Q1 resolves to "literal is the correct form," then the stride-tracking property was never a real property of the fix, and Q5(a)'s mutant is undetectable by definition. Pin it with a comment at minimum.
+* REASONED: hazard to the existing three cases: **none.** `machine_type` is single-valued; every arm ends in `break`; there is no `default:` to disturb; `MACHINE_LANDISK=6004` (READ) must differ from the other three enum values or the switch wouldn't compile. The HPCMIPS address guard cannot leak: landisk never enters that arm regardless of how close 0x14000000 sits to 0x14000180, because dispatch is on the enum, not the address. No machine reaches two arms.
+
+## Not checkable from this packet (recorded, not guessed)
+
+1. **The census itself** (12 writes, 12,718 hits, pc attribution) — packet-asserted; settling fact: re-run the census hook.
+2. **`dev_wdc_altstatus_access`'s write semantics** — settling fact: the function body; decides whether "soft reset honored" or only "delivered" is licensed.
+3. **`addr_mult` of MACPPC/HPCMIPS/IQ80321** — settling fact: their machine-file device strings; decides whether the switch idiom is byte-literal or register-unit, which is the whole of Q1.
+4. **OpenBSD landisk's aux-register addressing** — settling fact: the obio/wdc attachment source or landisk hardware doc; decides Q2.
+5. **Whether an unmodified gxemul logs unmapped writes** — settling fact: memory.c's unmapped-access path; decides whether the Q3 probe can drop the census hook.

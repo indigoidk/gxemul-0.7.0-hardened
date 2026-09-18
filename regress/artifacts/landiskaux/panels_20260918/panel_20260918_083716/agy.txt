@@ -1,0 +1,83 @@
+**VERDICT: GO**
+
+---
+
+### Adversarial Premise Verification Against Source
+
+Every cited claim in Section 1 was verified against [`GXEMUL-SEC/src/`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/):
+
+1. **Address is `devinit->addr + 0x2c` literal byte offset (`AUXREG_SIZE = 2`)**:
+   - [openbsd_wdc_obio.c:64-65, 119-121](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/landiskaux/rung3_opus_20260918/openbsd_wdc_obio.c#L64-L65):
+     `#define WDC_OBIO_AUXREG_SIZE (WDC_OBIO_AUXREG_NPORTS * 2)` (evaluates to 2) and `#define WDC_OBIO_AUXREG_OFFSET 0x2c`, mapped unscaled via `bus_space_map(..., oa->oa_io[0].or_addr + WDC_OBIO_AUXREG_OFFSET, WDC_OBIO_AUXREG_SIZE, 0, ...)`.
+   - [netbsd_wdc_obio.c:64-66, 100-103](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/landiskaux/rung3_opus_20260918/netbsd_wdc_obio.c#L64-L66): identical definitions and unscaled mapping.
+   - [dev_wdc.c:2099-2101](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c#L2099-L2101): `MACHINE_MACPPC` uses `+ 0x160` (`0x16 << 4`), confirming `0x16` was MacPPC's factorisation, not Landisk's.
+   - Disassembly of OpenBSD 7.6 ramdisk kernel at `0x8c16017c`: `752c add #44,r5` (`44 == 0x2c`), confirmed in [CHANGELOG.md:19-20](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/CHANGELOG.md#L19-L20).
+   - **Verdict**: **VERIFIED**.
+
+2. **Boot census: 12 writes to `0x1400002c`, 0 reads, first is `0x0c`, 0 accesses to `0x14000206`**:
+   - [RESULTS.txt:18-27, 34-67](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/landiskaux/census_20260827/RESULTS.txt#L18-L67): 4 runs (3 unmodified, 1 hook), exactly 12 writes (len 1, from `0x8c15f6e8`), 0 reads. Values: one `0x0c` (`WDCTL_RST | WDCTL_4BIT`), six `0x08` (`WDCTL_4BIT`), five `0x02` (`WDCTL_IDS`). The window at `0x14000206` received 0 accesses.
+   - **Verdict**: **VERIFIED**.
+
+3. **Collision check: no devices between `0x1400000f` and RAM at `0x1e000000`**:
+   - [machine_landisk.c:84-91](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/machines/machine_landisk.c#L84-L91): Main RAM registered at `0x0c000000` (64 MB, ends at `0x10000000`). `wdc` registered at `0x14000000` (`DEV_WDC_LENGTH * addr_mult = 8 * 2 = 16` bytes, spanning `0x14000000..0x1400000f`).
+   - [dev_sh4.c:2989](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_sh4.c#L2989): On-chip RAM/cache registered at `0x1e000000` (32 KB).
+   - No other device registers between `0x14000000` and `0x1e000000`. `0x1400002c..0x1400002d` is completely free.
+   - **Verdict**: **VERIFIED**.
+
+4. **Pre-switch default `devinit->addr + 0x206` untouched**:
+   - [dev_wdc.c:2095](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c#L2095): `alt_status_addr = devinit->addr + 0x206;` remains right before the switch and serves all unhandled machine types.
+   - **Verdict**: **VERIFIED**.
+
+5. **Switch machine type keys without cross-arm reach**:
+   - [machine.h:231, 244, 258, 268](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/machine.h#L231): `MACHINE_HPCMIPS` (1004), `MACHINE_MACPPC` (2004), `MACHINE_IQ80321` (5005), `MACHINE_LANDISK` (6004) are distinct non-overlapping integer constants.
+   - [dev_wdc.c:2098-2122](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c#L2098-L2122): Each arm terminates with `break;`.
+   - **Verdict**: **VERIFIED**.
+
+6. **Fix delivers `WDCTL_IDS` (nIEN) writes without implementing nIEN**:
+   - [dev_wdc.c:832-835](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c#L832-L835): In [`dev_wdc_altstatus_access`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c#L609-L842), the write handler checks only `if (idata & WDCTL_RST)`. `WDCTL_IDS` (0x02) is unhandled and has no effect on interrupt state.
+   - **Verdict**: **VERIFIED**.
+
+---
+
+### Section 5: Review Questions
+
+#### Q1. Is the diff correct — does it do exactly what the comment claims, and is the comment itself true?
+**Yes.** 
+- The diff adds `case MACHINE_LANDISK:` to [`DEVINIT(wdc)`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c#L2080-L2144) in [dev_wdc.c:2110-2122](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c#L2110-L2122), setting `alt_status_addr = devinit->addr + 0x2c;` followed by `break;`.
+- Placed after `MACHINE_IQ80321`, preserving earlier arms and default fallbacks.
+- Every assertion in the comment matches the hardware facts, the NetBSD/OpenBSD driver sources, and the census measurements verbatim.
+
+#### Q2. THE ASK-AGAIN: Name the smallest edit to the diff OR to the detector that breaks a property this round claims and still scores 6/6.
+**Smallest edit to the diff**:
+Delete `break;` from `case MACHINE_LANDISK:` ([dev_wdc.c:2121](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c#L2121)):
+```diff
+ 	case MACHINE_LANDISK:
+ 		alt_status_addr = devinit->addr + 0x2c;
+-		break;
+ 	}
+```
+- **Why it scores 6/6**: Because `case MACHINE_LANDISK:` is the final case before the closing brace of `switch (devinit->machine->machine_type)` ([dev_wdc.c:2122](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c#L2122)), execution naturally exits the switch. All 6 probe rows pass with identical register values `(1,1,1,1,1,1)`.
+- **Property broken**: It violates switch isolation—the exact invariant tested on the upstream arm by `M_above`. If any subsequent machine type is ever appended to the switch, Landisk will silently fall through into it.
+
+*(Alternatively, in the detector [`landisk_aux_probe.py:160`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/landisk_aux_probe.py#L160), changing `prog(0xb4000206)` in Session 3 to `prog(RAM_CTRL)` breaks the test requirement that SRST is sent to the old `0x206` address to prove it dead, yet `r2` still prints `0x9` and scores 6/6).*
+
+#### Q3. Is any detector row VACUOUS — i.e. can its named channel fail to vary under the mutant it claims to kill?
+**No.** All 6 rows vary on distinct, live channels:
+1. `live`: Validated control row on main status [dev_wdc.c:585-600](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c#L585-L600); verifies ring fill sets DRQ (0x09) before any reset.
+2. `aux 2c rest`: Varies between `0x00` (unmapped pre-fix / `M_0x16` / `M_0x2d` / `M_above`) and `0x09` (mapped post-fix / `M_both`).
+3. `aux 206 gone`: Varies between `0x09` (mapped pre-fix / `M_both`) and `0x00` (unmapped post-fix).
+4. `aux 2c reset`: Varies between `0x09` (unmapped store dropped, ring retained) and `0x01` (SRST received, ring purged via [`wdc_new_command_reset`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c#L847-L930)).
+5. `aux 2c read`: Varies between `0x00` (unmapped read) and `0x01` (post-reset status byte).
+6. `206 ctl dead`: Varies between `0x01` (pre-fix / `M_both` where store to 0x206 purged ring) and `0x09` (post-fix where store to 0x206 lands nowhere).
+
+#### Q4. Does removing landisk's answer at 0x206 break anything a guest could legitimately do?
+**No.**
+- `0x14000206` was an artifact of GXemul's default PC/AT ISA offset assumption (`0x1f0 + 0x206 = 0x3f6`).
+- Real Landisk hardware wires IDE to OBIO with Device Control at `0x1400002c`.
+- Both NetBSD and OpenBSD drivers target `0x1400002c`; the boot census confirmed zero accesses to `0x14000206` across the entire run.
+- Nothing else in the machine model claims `0x14000206`. Removing it aligns emulator behavior with real hardware.
+
+---
+
+### Final Verdict
+**GO**

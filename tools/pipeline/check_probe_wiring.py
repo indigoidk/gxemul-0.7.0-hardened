@@ -152,6 +152,33 @@ CLASSES = (CLASS_DETECTOR, CLASS_WITNESS, CLASS_TOOL, CLASS_RESEARCH)
 #  cannot arrive unnoticed, which is exactly how all four debts below arrived.
 MANIFEST = {
 
+    # -- #532 stagetokens pass 2 (2026-09-18): the Opus seat's scratch variants of two checkers.  TOOLS: nothing
+    #    runs them; they are the evidence behind the pass-2 findings.
+    "artifacts/stagetokens/pass2_20260918/opus532/entryscope/check_fable_queue.py":
+        (CLASS_TOOL, "#532 pass 2: entry-scoped NOPANEL variant measured by Opus"),
+    "artifacts/stagetokens/pass2_20260918/opus532/entryscope/check_stage_panels.py":
+        (CLASS_TOOL, "#532 pass 2: entry-scoped NOPANEL variant measured by Opus"),
+    "artifacts/stagetokens/pass2_20260918/opus532/guard/check_fable_queue.py":
+        (CLASS_TOOL, "#532 pass 2: guarded checker variant (tokguard wired in)"),
+    "artifacts/stagetokens/pass2_20260918/opus532/guard/check_stage_panels.py":
+        (CLASS_TOOL, "#532 pass 2: guarded checker variant (tokguard wired in)"),
+    "artifacts/stagetokens/pass2_20260918/opus532/guard/tokguard.py":
+        (CLASS_TOOL, "#532 pass 2: Opus's proposed stage-token guard, measured on fixtures A-G"),
+
+    # -- #533 landiskaux -------------------------------------------------------------------
+    "landisk_aux_probe.py":
+        (CLASS_DETECTOR, "#533 landiskaux: landisk wdc aux register mapped at +0x2c (NetBSD/OpenBSD "
+                         "WDC_OBIO_AUXREG_OFFSET), not the PC-layout +0x206.  6 rows, pre-fix 1/6.  "
+                         "Wired in gate_sh_rounding.sh in the same commit."),
+    "artifacts/landiskaux/rung3_opus_20260918/opus_landiskaux_rung3_probe.py":
+        (CLASS_WITNESS, "#533 rung-3 WITNESS: the same guest program pre-fix (reset swallowed, 0x2c unmapped) "
+                        "and post-fix (reset lands, 0x2c reads status); ungated by design -- the detector is "
+                        "landisk_aux_probe.py."),
+    "artifacts/landiskaux/detector_20260918/mutants533.py":
+        (CLASS_TOOL, "#533 kill-table mutant applicator (M_head/M_0x16/M_0x2d/M_both/M_above)"),
+    "artifacts/landiskaux/detector_20260918/landisk_aux_probe.frozen.py":
+        (CLASS_TOOL, "#533 frozen instrument the kill table ran against"),
+
     # -- #531 ip30abortkill ------------------------------------------------------------
     #  ONE detector and twenty-two tools.  The tools are kill-table drivers, FROZEN probe
     #  copies (the instrument a given table actually ran, per the frozen-copy rule) and

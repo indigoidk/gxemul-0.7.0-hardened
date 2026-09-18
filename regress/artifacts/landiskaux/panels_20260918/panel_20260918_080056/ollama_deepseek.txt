@@ -1,0 +1,25 @@
+VERDICT: NOT RATIFIED — the inlined arithmetic is internally consistent and the proposed line maps to 0x1400002c, but Q2’s 0x16 is not independently established; the packet cannot decide Q1’s multiplier-vs-literal, and the existing switch idiom favors a literal `+0x2c`. Q3 probe is concrete; Q4 delta is real but the addition member is not uniquely justified; Q5 mutant is a one-character deletion.
+
+**Q1 — Multiplier form vs literal**  
+READ: The existing three cases use bare offsets (`+0x160`, `+0x402`) or an absolute (`0x14000386`), none multiply by `addr_mult`.  
+REASONED: The packet gives no evidence that the alt-status offset scales with `addr_mult`. `addr_mult=2` for landisk today, so both forms produce `0x1400002c`, but the multiplier form over-generalizes from one data point. The house idiom is a bare byte offset. **Prefer `alt_status_addr = devinit->addr + 0x2c;`**, not `0x16 * devinit->addr_mult`.
+
+**Q2 — Where does 0x16 come from?**  
+READ: The brief states measured guest writes at `0x1400002c` and `addr_mult=2`; arithmetic gives `0x2c / 2 = 0x16`.  
+REASONED: That is not independent evidence — it is the same fact expressed in different units. The packet contains no SH4/landisk source that states the Device Control / Alt Status offset in register units. **Single fact that would settle it:** a hardware or driver specification giving the offset as a register index (e.g., “alt status is at register 0x16”) or explicitly as a byte offset (e.g., “offset 0x2c from base”).
+
+**Q3 — Rung-3 probe**  
+READ: Pre-fix census shows twelve writes to `0x1400002c` landing on unmapped memory, and zero accesses to `0x14000206`.  
+REASONED: A concrete rung-3 probe is reachable: boot the same OpenBSD 7.6 image under unmodified `-E landisk` with a memory-access hook or watchpoint on `0x1400002c`. Pre-fix, the hook fires on an unmapped store. Apply the fix and repeat; the hook should now fire inside `dev_wdc_altstatus_access`. Mirror test: watch `0x14000206` — pre-fix it is the registered altstatus but receives no writes; post-fix it becomes unmapped and should receive none.
+
+**Q4 — Option set**  
+READ: Twelve real byte writes, first a soft reset (`0x0c`), command block succeeds, `wd0` attaches.  
+REASONED: The delta is real. Candidate members:  
+- `dev_wdc.c` switch case (proposed) — consistent with existing machine-specific hacks.  
+- `machine_landisk.c` change to pass/declare the altstatus address at the machine level — cleaner separation, avoids more machine checks in device code.  
+- HPCMIPS-style absolute `0x1400002c` — brittle if base address ever changes.  
+The brief does not show the proposed `dev_wdc.c` case is uniquely correct; the machine-level fix is at least as plausible.
+
+**Q5 — Smallest mutant and hazard**  
+REASONED: Smallest edit that breaks the claimed property but may pass a naive detector: delete `* devinit->addr_mult` from the proposed case. Result: `alt_status_addr = devinit->addr + 0x16` → `0x14000016`. This is still beyond the main span (ends `0x1400000f`), so a detector that only checks “no collision” passes, but guest writes at `0x1400002c` remain unhandled. If the detector checks the exact address, it fails.  
+READ/REASONED: Adding a fourth `case` creates no hazard for the existing three. The cases are mutually exclusive by `machine_type`, each ends with `break`, and `MACHINE_LANDISK` (6004) is distinct from MACPPC, HPCMIPS, IQ80321. The HPCMIPS guard on `devinit->addr == 0x14000180` is separate and unaffected by landisk’s `0x14000000`.

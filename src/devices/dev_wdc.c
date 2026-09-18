@@ -2107,6 +2107,18 @@ DEVINIT(wdc)
 	case MACHINE_IQ80321:
 		alt_status_addr = devinit->addr + 0x402;
 		break;
+	case MACHINE_LANDISK:
+		/*
+		 *  #533 (landiskaux): NetBSD/OpenBSD landisk wdc_obio.c map
+		 *  the aux (alt-status / Device Control) register at
+		 *  or_addr + WDC_OBIO_AUXREG_OFFSET, a literal byte offset
+		 *  of 0x2c.  Without this case landisk kept the PC-layout
+		 *  +0x206 and OpenBSD 7.6's twelve Device Control writes --
+		 *  the first a soft reset -- landed on unmapped memory.
+		 *  Delivering WDCTL_IDS writes does not implement nIEN.
+		 */
+		alt_status_addr = devinit->addr + 0x2c;
+		break;
 	}
 
 	/*  Get disk geometries:  */

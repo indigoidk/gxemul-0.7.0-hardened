@@ -1,0 +1,3373 @@
+Reading additional input from stdin...
+OpenAI Codex v0.153.4
+--------
+workdir: C:\DocumentNoSnc\CC\GXEMUL
+model: gpt-6-astra
+provider: openai
+approval: never
+sandbox: read-only
+reasoning effort: max
+reasoning summaries: none
+session id: 01a0b4bc-58ff-7591-b3f4-57e2025eb147
+--------
+user
+# `landiskaux` (#533) — PASS 2 on the real diff, plus the ONE permitted ask-again
+
+## READ THIS FIRST — PLEASE DO NOT SIMPLY RATIFY
+A recent panel had seven of nine seats confirm a premise stated wrongly. **Check the premises, not just the
+derivations.** THE TREE UNDER REVIEW IS `GXEMUL-SEC/src/`; ignore the three pristine-2021 upstream copies under the
+project root. If you cannot read files that is expected — everything is inlined. **VERDICT LINE FIRST.**
+
+## 1. SETTLED PREMISES (from pass 1, panels 20260918_080238 and _080056, adjudicated by fable5)
+* The address is `devinit->addr + 0x2c`, a LITERAL byte offset: NetBSD and OpenBSD landisk `wdc_obio.c` define
+  `WDC_OBIO_AUXREG_OFFSET 0x2c` and map `or_addr + WDC_OBIO_AUXREG_OFFSET` unscaled; `AUXREG_SIZE` = 2. `0x16` is
+  macppc's factorisation (`0x16 << 4 = 0x160`), not landisk's. Codex's disassembly of the 7.6 ramdisk: `add #44,r5`.
+* Boot census (four runs, two instruments): OpenBSD 7.6 makes exactly 12 byte writes to 0x1400002c, 0 reads; the
+  first is 0x0c = SRST|4BIT. `wdc_altstatus` at 0x14000206 receives ZERO accesses.
+* Whole-machine collision check: landisk registers nothing between `wdc` (0x14000000..0x1400000f) and RAM at
+  0x1e000000 except the old altstatus at 0x14000206. 0x1400002c..2d is free.
+* The pre-switch `alt_status_addr = devinit->addr + 0x206;` is UNTOUCHED and still serves every machine without a case.
+* The switch keys on machine_type: HPCMIPS 1004, MACPPC 2004, IQ80321 5005, LANDISK 6004 — no cross-arm reach.
+* The fix DELIVERS the five WDCTL_IDS (nIEN) writes; the aux handler acts on WDCTL_RST only, so nIEN is NOT implemented.
+
+## 2. THE DIFF (the whole product change)
+```diff
+diff --git a/src/devices/dev_wdc.c b/src/devices/dev_wdc.c
+index 7b746bc..2567bc6 100644
+--- a/src/devices/dev_wdc.c
++++ b/src/devices/dev_wdc.c
+@@ -2107,6 +2107,18 @@ DEVINIT(wdc)
+ 	case MACHINE_IQ80321:
+ 		alt_status_addr = devinit->addr + 0x402;
+ 		break;
++	case MACHINE_LANDISK:
++		/*
++		 *  #533 (landiskaux): NetBSD/OpenBSD landisk wdc_obio.c map
++		 *  the aux (alt-status / Device Control) register at
++		 *  or_addr + WDC_OBIO_AUXREG_OFFSET, a literal byte offset
++		 *  of 0x2c.  Without this case landisk kept the PC-layout
++		 *  +0x206 and the kernel's twelve Device Control writes --
++		 *  the first a soft reset -- landed on unmapped memory.
++		 *  Delivering WDCTL_IDS writes does not implement nIEN.
++		 */
++		alt_status_addr = devinit->addr + 0x2c;
++		break;
+ 	}
+ 
+ 	/*  Get disk geometries:  */
+```
+
+## 3. THE DETECTOR, `regress/landisk_aux_probe.py`, 6 rows, three sessions on unmodified `-E landisk`
+Each session: 8 x `mov.w` to DATA 0xb4000000 (fills the ring, DRQ, status 0x09), one `mov.b 0x0c` to a CTRL
+address (or RAM), then `mov.b` loads of status 0xb400000e, 0xb400002c, 0xb4000206.
+  live          RAM-ctrl session: status == 0x09     (control)
+  aux 2c rest   RAM-ctrl session: read 0x2c == 0x09  (device signature: 0x2c answers STATUS)
+  aux 206 gone  RAM-ctrl session: read 0x206 == 0x00 (unmapped on landisk)
+  aux 2c reset  CTRL->0x2c session: status == 0x01  (soft reset purged the ring)
+  aux 2c read   CTRL->0x2c session: read 0x2c == 0x01
+  206 ctl dead  CTRL->0x206 session: status == 0x09 (the old address lands nowhere)
+Wired into `regress/gate_sh_rounding.sh` in the same diff: rows-run pinned to the literal 6, each row pinned by name.
+
+## 4. KILL TABLE — MEASURED 2026-09-18 (scratch clone, baseline cmp CLEAN, clone restored before the legs).
+PRETABLE.out was written BEFORE the table and predicted every row below; all six matched.
+    base (fix)  6/6  1,1,1,1,1,1
+    pre-fix     1/6  1,0,0,0,0,0   (committed build, prefix_HEAD.out)
+    M_head      1/6  1,0,0,0,0,0   no landisk case
+    M_0x16      3/6  1,0,1,0,0,1   `+ 0x16'
+    M_0x2d      3/6  1,0,1,0,0,1   `+ 0x2d'
+    M_both      4/6  1,1,0,1,1,0   keep the 0x206 registration AND add 0x2c
+    M_above     3/6  1,0,1,0,0,1   case above IQ80321 without break (falls to +0x402)
+DISCLOSED, not rowed: initialiser `+0x206' changes (landisk overwrites it); IQ80321 losing its own break (no rig);
+registration width 2->1 (all accesses are 1 byte at offset 0 -- filed as `wdcaltwidth'); machine_type-only keying.
+
+## 5. QUESTIONS
+Q1. Is the diff correct — does it do exactly what the comment claims, and is the comment itself true?
+Q2. THE ASK-AGAIN (capped at one, per project rule): **name the smallest edit to the diff OR to the detector that
+    breaks a property this round claims and still scores 6/6.**  The five above are already killed; find a sixth.
+Q3. Is any detector row VACUOUS — i.e. can its named channel fail to vary under the mutant it claims to kill?
+Q4. Does removing landisk's answer at 0x206 break anything a guest could legitimately do?
+
+
+## OPERATIONAL RULE FOR EVERY SEAT (appended by panel.sh, not by the author)
+
+**Do not run `run.sh`, any `gate_*.sh`, or the battery.** Every measurement you need is
+inlined above. A gate takes minutes -- longer than your response budget -- and a second
+concurrent invocation corrupts the operator run in progress, because the gates share one
+log directory. A seat that runs a gate produces no review AND may invalidate someone
+else s. Building and running a single detector or mutant in your own temp directory is
+fine and encouraged; driving the harness is not.
+
+If you want a measurement that is not inlined, NAME IT and say why. Naming it is worth
+far more to this panel than a timeout.
+codex
+I’ll check the `GXEMUL-SEC/src` handler and detector against the inlined claims, without running the gates or battery.
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "Get-Location
+rg --files -g AGENTS.md -g dev_wdc.c -g landisk_aux_probe.py -g gate_sh_rounding.sh -g '*landisk*' -g '*wdc_obio*'" in C:\DocumentNoSnc\CC\GXEMUL
+ succeeded in 405ms:
+
+est\test\test_openbsd_landisk_install.sh
+est\test\test_openbsd_landisk_install.expect
+build-asan\test\test_openbsd_landisk_install.sh
+build-asan\test\test_openbsd_landisk_install.expect
+build\test\test_openbsd_landisk_install.sh
+build\test\test_openbsd_landisk_install.expect
+build-asan\src\machines\machine_landisk.o
+build-asan\src\machines\machine_landisk.c
+est\src\machines\machine_landisk.c
+test\test_openbsd_landisk_install.sh
+test\test_openbsd_landisk_install.expect
+build\src\machines\machine_landisk.o
+build\src\machines\machine_landisk.c
+est\src\devices\dev_wdc.c
+build-asan\src\devices\dev_wdc.c
+doc\machine_landisk.html
+doc\20131109-openbsd_landisk.png
+doc\20131109-openbsd_landisk-small.jpg
+doc\20081103-openbsd-landisk.png
+doc\20081103-openbsd-landisk-small.png
+doc\20070224-netbsd-landisk_small.png
+doc\20070224-netbsd-landisk.png
+build-asan\doc\machine_landisk.html
+build-asan\doc\20131109-openbsd_landisk.png
+build-asan\doc\20131109-openbsd_landisk-small.jpg
+build-asan\doc\20081103-openbsd-landisk.png
+build-asan\doc\20081103-openbsd-landisk-small.png
+build-asan\doc\20070224-netbsd-landisk_small.png
+build-asan\doc\20070224-netbsd-landisk.png
+build\src\devices\dev_wdc.c
+GXEMUL-SEC\doc\machine_landisk.html
+GXEMUL-SEC\doc\20131109-openbsd_landisk.png
+GXEMUL-SEC\doc\20131109-openbsd_landisk-small.jpg
+GXEMUL-SEC\doc\20081103-openbsd-landisk.png
+GXEMUL-SEC\doc\20081103-openbsd-landisk-small.png
+GXEMUL-SEC\doc\20070224-netbsd-landisk_small.png
+GXEMUL-SEC\doc\20070224-netbsd-landisk.png
+build\doc\machine_landisk.html
+build\doc\20131109-openbsd_landisk.png
+build\doc\20131109-openbsd_landisk-small.jpg
+build\doc\20081103-openbsd-landisk.png
+build\doc\20081103-openbsd-landisk-small.png
+build\doc\20070224-netbsd-landisk_small.png
+build\doc\20070224-netbsd-landisk.png
+GXEMUL-SEC\src\devices\dev_wdc.c
+GXEMUL-SEC\src\machines\machine_landisk.o
+GXEMUL-SEC\src\machines\machine_landisk.c
+GXEMUL-SEC\battery\shell_landisk.sh
+harness\obs_landisk_menu.sh
+harness\obs2_landisk.sh
+harness\landisk_shell.sh
+harness\landisk_reboot_ab.sh
+GXEMUL-SEC\regress\landisk_aux_probe.py
+GXEMUL-SEC\regress\gate_sh_rounding.sh
+_scratchpad\cap_landisk.sh
+_scratchpad\brief_landiskaux_p2_20260918.md
+_scratchpad\brief_landiskaux_20260918.md
+est\doc\machine_landisk.html
+est\doc\20131109-openbsd_landisk.png
+est\doc\20131109-openbsd_landisk-small.jpg
+est\doc\20081103-openbsd-landisk.png
+est\doc\20081103-openbsd-landisk-small.png
+est\doc\20070224-netbsd-landisk_small.png
+est\doc\20070224-netbsd-landisk.png
+_images\openbsd76-landisk-bsd.rd
+_scratchpad\kimi_wdccmdstart_20260830\m_txswap\src\devices\dev_wdc.c
+_scratchpad\landisk_verbose.py
+_scratchpad\_opusseat_441_be_landisk.conf
+_scratchpad\kimi_wdccmdstart_20260830\m_endflush\src\devices\dev_wdc.c
+_scratchpad\opus_landiskaux_rung3_probe.py
+_scratchpad\opus_landiskaux_rung3_20260918.out
+_scratchpad\doc\machine_landisk.html
+_scratchpad\doc\20131109-openbsd_landisk.png
+_scratchpad\doc\20131109-openbsd_landisk-small.jpg
+_scratchpad\doc\20081103-openbsd-landisk.png
+_scratchpad\doc\20081103-openbsd-landisk-small.png
+_scratchpad\doc\20070224-netbsd-landisk_small.png
+_scratchpad\doc\20070224-netbsd-landisk.png
+_scratchpad\diag_landisk.sh
+_scratchpad\test_landisk_rig.sh
+_scratchpad\openbsd_wdc_obio.c
+_scratchpad\kimi_wdccmdstart_20260830\base\src\devices\dev_wdc.c
+_scratchpad\test\test_openbsd_landisk_install.sh
+_scratchpad\test\test_openbsd_landisk_install.expect
+_scratchpad\netbsd_wdc_obio.c
+_scratchpad\srst\src\devices\dev_wdc.c
+_scratchpad\src\machines\machine_landisk.o
+_scratchpad\src\machines\machine_landisk.c
+_scratchpad\src\devices\dev_wdc.c
+_scratchpad\seat500_p9\tree\test\test_openbsd_landisk_install.sh
+_scratchpad\seat500_p9\tree\test\test_openbsd_landisk_install.expect
+_scratchpad\seat500_p9\tree\src\machines\machine_landisk.o
+_scratchpad\seat500_p9\tree\src\machines\machine_landisk.c
+_scratchpad\seat500_p9\tree\src\devices\dev_wdc.c
+_scratchpad\panel_20260830_214609\kimi_q1\build_mutant\test\test_openbsd_landisk_install.sh
+_scratchpad\panel_20260830_214609\kimi_q1\build_mutant\test\test_openbsd_landisk_install.expect
+_scratchpad\panel_20260830_214609\kimi_q1\build_mutant\src\machines\machine_landisk.o
+_scratchpad\panel_20260830_214609\kimi_q1\build_mutant\src\machines\machine_landisk.c
+_scratchpad\panel_20260830_214609\kimi_q1\build_mutant\src\devices\dev_wdc.c
+_scratchpad\panel_20260830_214609\kimi_q1\build_mutant\doc\20070224-netbsd-landisk.png
+_scratchpad\panel_20260830_214609\kimi_q1\build_mutant\doc\20070224-netbsd-landisk_small.png
+_scratchpad\panel_20260830_214609\kimi_q1\build_mutant\doc\20081103-openbsd-landisk-small.png
+_scratchpad\panel_20260830_214609\kimi_q1\build_mutant\doc\machine_landisk.html
+_scratchpad\panel_20260830_214609\kimi_q1\build_mutant\doc\20131109-openbsd_landisk.png
+_scratchpad\panel_20260830_214609\kimi_q1\build_mutant\doc\20131109-openbsd_landisk-small.jpg
+_scratchpad\panel_20260830_214609\kimi_q1\build_mutant\doc\20081103-openbsd-landisk.png
+_scratchpad\seat500_p9\tree\doc\machine_landisk.html
+_scratchpad\seat500_p9\tree\doc\20131109-openbsd_landisk.png
+_scratchpad\seat500_p9\tree\doc\20131109-openbsd_landisk-small.jpg
+_scratchpad\seat500_p9\tree\doc\20081103-openbsd-landisk.png
+_scratchpad\seat500_p9\tree\doc\20081103-openbsd-landisk-small.png
+_scratchpad\seat500_p9\tree\doc\20070224-netbsd-landisk_small.png
+_scratchpad\seat500_p9\tree\doc\20070224-netbsd-landisk.png
+_scratchpad\probe_landisk_shell.py
+_scratchpad\pon\src\devices\dev_wdc.c
+_scratchpad\run_landisk_pre.sh
+GXEMUL-SEC\regress\artifacts\landiskaux\rung3_opus_20260918\opus_landiskaux_rung3_probe.py
+GXEMUL-SEC\regress\artifacts\landiskaux\rung3_opus_20260918\opus_landiskaux_rung3_20260918.out
+GXEMUL-SEC\regress\artifacts\landiskaux\rung3_opus_20260918\openbsd_wdc_obio.c
+GXEMUL-SEC\regress\artifacts\landiskaux\rung3_opus_20260918\netbsd_wdc_obio.c
+GXEMUL-SEC\regress\artifacts\landiskaux\detector_20260918\landisk_aux_probe.frozen.py
+_archive\audit-results-20260626_092425-est-patchcheck\os\boot-smokes\est-native\openbsd_landisk.log
+_archive\audit-results-20260626_092425-est-patchcheck\os\boot-smokes\est-native\openbsd_landisk.json
+_archive\audit-results-20260626_003135\os\media\sh\openbsd_landisk_4.5.iso
+_archive\audit-results-20260626_003135\os\media\openbsd-staging\landisk\4.5\landisk\INSTALL.landisk
+_archive\audit-results-20260626_003135\os\boot-smokes\root-native\openbsd_landisk.log
+_archive\audit-results-20260626_003135\os\boot-smokes\root-native\openbsd_landisk.json
+_archive\audit-results-20260626_003135\os\boot-smokes\est-native\openbsd_landisk.log
+_archive\audit-results-20260626_003135\os\boot-smokes\est-native\openbsd_landisk.json
+_archive\audit-results-20260625_223818\analysis\clang-tidy\root\src__machines__machine_landisk.c.log
+_archive\audit-results-20260625_223818\analysis\clang-tidy\est\src__machines__machine_landisk.c.log
+Path                      
+----                      
+C:\DocumentNoSnc\CC\GXEMUL
+
+
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n -C 30 'DEVICE_ACCESS\\(wdc|DEVINIT\\(wdc\\)|alt_status_addr|WDCTL_RST|WDCTL_IDS|memory_device_register' src/devices/dev_wdc.c
+Get-Content -LiteralPath src/machines/machine_landisk.c" in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "Get-Content -LiteralPath regress/landisk_aux_probe.py
+rg -n -C 24 'landisk_aux|landiskaux|aux 2c|206 ctl|rows.run' regress/gate_sh_rounding.sh" in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'git --no-optional-locks status --short
+git --no-optional-locks diff -- src/devices/dev_wdc.c regress/landisk_aux_probe.py regress/gate_sh_rounding.sh' in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$paths = @('"'C:\\AGENTS.md','C:\\DocumentNoSnc\\AGENTS.md','C:\\DocumentNoSnc\\CC\\AGENTS.md','C:\\DocumentNoSnc\\CC\\GXEMUL\\AGENTS.md')
+foreach ("'$p in $paths) { if (Test-Path -LiteralPath $p) { Get-Content -LiteralPath $p } }
+rg --files --hidden -g AGENTS.md GXEMUL-SEC' in C:\DocumentNoSnc\CC\GXEMUL
+ succeeded in 277ms:
+ M CHANGELOG.md
+ M OUTSTANDING_BUGS.md
+ M regress/gate_arm.sh
+ M regress/gate_sh_rounding.sh
+ M regress/gdrom_default_probe.py
+ M regress/ppc_rldicl_probe.py
+ M regress/sh4_chcr_probe.py
+ M src/cpus/cpu_alpha_palcode.c
+ M src/devices/dev_lca.c
+ M src/devices/dev_pcc2.c
+ M src/devices/dev_sgi_ip32.c
+ M src/devices/dev_sh4.c
+ M src/devices/dev_wdc.c
+ M src/include/thirdparty/mvme_pcctworeg.h
+ M tools/BRIEF_TEMPLATE.md
+ M tools/CLAUDE.md
+ M tools/PIPELINE.md
+ M tools/adjudicate.sh
+ M tools/panel.sh
+ M tools/pipeline/check_boilerplate.py
+ M tools/pipeline/check_probe_wiring.py
+ M tools/pipeline/check_score_claims.py
+ M tools/pipeline/fable_queue.md
+ M tools/pipeline/ledger.json
+ M tools/pipeline/matrix.html
+ M tools/precommit_check.sh
+?? _scratchpad/
+?? regress/alpha_dummy.bin
+?? regress/arm_bfx_stub.bin
+?? regress/arm_msrmode_probe.py
+?? regress/artifacts/allocsize_20260917/
+?? regress/artifacts/armmsrmodekill/
+?? regress/artifacts/armthumbabortkill/
+?? regress/artifacts/b115/
+?? regress/artifacts/b120/
+?? regress/artifacts/codex_research_20260913/
+?? regress/artifacts/cpusexitsweep/
+?? regress/artifacts/cpusweep_20260917/
+?? regress/artifacts/crimewidthkill/CORRECTIONS.md
+?? regress/artifacts/crimewidthkill/crime_width_probe.first13.py
+?? regress/artifacts/crimewidthkill/crime_width_witness_20260913.py
+?? regress/artifacts/crimewidthkill/ctl0c_discharge_20260917/
+?? regress/artifacts/crimewidthkill/fable_pass1_20260913.md
+?? regress/artifacts/crimewidthkill/killtable10_20260915/
+?? regress/artifacts/crimewidthkill/killtable11_20260916/
+?? regress/artifacts/crimewidthkill/killtable2_20260913/
+?? regress/artifacts/crimewidthkill/killtable3_20260913/
+?? regress/artifacts/crimewidthkill/killtable4_20260913/
+?? regress/artifacts/crimewidthkill/killtable5_20260913/
+?? regress/artifacts/crimewidthkill/killtable6_20260913/
+?? regress/artifacts/crimewidthkill/killtable7_20260913/
+?? regress/artifacts/crimewidthkill/killtable8_20260914/
+?? regress/artifacts/crimewidthkill/killtable9_20260914/
+?? regress/artifacts/crimewidthkill/killtable_20260913/
+?? regress/artifacts/crimewidthkill/opus_close2_20260913/
+?? regress/artifacts/crimewidthkill/opus_close3_20260913/
+?? regress/artifacts/crimewidthkill/opus_close4_20260914/
+?? regress/artifacts/crimewidthkill/opus_close5_20260914/
+?? regress/artifacts/crimewidthkill/opus_close6_20260915/
+?? regress/artifacts/crimewidthkill/opus_close7_20260915/
+?? regress/artifacts/crimewidthkill/opus_close8_20260916/
+?? regress/artifacts/crimewidthkill/opus_close_20260913/
+?? regress/artifacts/crimewidthkill/opus_f2_20260913/
+?? regress/artifacts/crimewidthkill/opus_pass1_20260913/
+?? regress/artifacts/crimewidthkill/opus_pass2_20260913/
+?? regress/artifacts/crimewidthkill/panel_20260913_000135/
+?? regress/artifacts/crimewidthkill/panel_20260913_022247/
+?? regress/artifacts/crimewidthkill/panel_20260913_061857/
+?? regress/artifacts/crimewidthkill/panel_20260913_110853/
+?? regress/artifacts/crimewidthkill/panel_20260913_164716/
+?? regress/artifacts/crimewidthkill/panel_20260913_203439/
+?? regress/artifacts/crimewidthkill/panel_20260914_012622/
+?? regress/artifacts/crimewidthkill/panel_20260914_064016/
+?? regress/artifacts/crimewidthkill/panel_20260915_011138/
+?? regress/artifacts/crimewidthkill/panel_20260915_073005/
+?? regress/artifacts/crimewidthkill/panel_20260916_194735/
+?? regress/artifacts/crimewidthkill/probe_first10_fix.out
+?? regress/artifacts/crimewidthkill/probe_first11_fix.out
+?? regress/artifacts/crimewidthkill/probe_first12_fix.out
+?? regress/artifacts/crimewidthkill/probe_first13_fix.meta
+?? regress/artifacts/crimewidthkill/probe_first13_fix.out
+?? regress/artifacts/crimewidthkill/probe_first2_fix.out
+?? regress/artifacts/crimewidthkill/probe_first3_fix.out
+?? regress/artifacts/crimewidthkill/probe_first4_fix.out
+?? regress/artifacts/crimewidthkill/probe_first5_fix.out
+?? regress/artifacts/crimewidthkill/probe_first6_fix.out
+?? regress/artifacts/crimewidthkill/probe_first7_fix.out
+?? regress/artifacts/crimewidthkill/probe_first8_fix.out
+?? regress/artifacts/crimewidthkill/probe_first9_fix.out
+?? regress/artifacts/crimewidthkill/probe_first_fix.out
+?? regress/artifacts/crimewidthkill/probe_first_head.out
+?? regress/artifacts/crimewidthkill/repair14_20260916/
+?? regress/artifacts/crimewidthkill/witness_committed.out
+?? regress/artifacts/crimewidthkill/witness_fix.out
+?? regress/artifacts/fbclearread/rung3_20260913/
+?? regress/artifacts/fbdisabled/
+?? regress/artifacts/gdromdefault_461/
+?? regress/artifacts/gdromdmadefault/
+?? regress/artifacts/haltclass/
+?? regress/artifacts/heldqueue/
+?? regress/artifacts/hlen/
+?? regress/artifacts/landiskaux/codex_fixdesign_20260911.err
+?? regress/artifacts/landiskaux/codex_fixdesign_20260911.txt
+?? regress/artifacts/landiskaux/detector_20260918/
+?? regress/artifacts/landiskaux/rung3_opus_20260918/
+?? regress/artifacts/lcaconfwidth/head_20260917/
+?? regress/artifacts/lcaisalane/BRIEF_lcasiblings_20260917.md
+?? regress/artifacts/lcaisalane/BRIEF_physfix_20260917.md
+?? regress/artifacts/lcaisalane/CORRECTIONS.md
+?? regress/artifacts/lcaisalane/FABLE_C3_RULING_20260914.md
+?? regress/artifacts/lcaisalane/FABLE_C4_RULING_20260915.md
+?? regress/artifacts/lcaisalane/FABLE_C5_RULING_20260915.md
+?? regress/artifacts/lcaisalane/FABLE_F2_RULING_20260914.md
+?? regress/artifacts/lcaisalane/c1_20260914/
+?? regress/artifacts/lcaisalane/c2_20260914/
+?? regress/artifacts/lcaisalane/c3_20260914/
+?? regress/artifacts/lcaisalane/c4_20260915/
+?? regress/artifacts/lcaisalane/c4_KILLED_20260914/
+?? regress/artifacts/lcaisalane/c5_20260915/
+?? regress/artifacts/lcaisalane/f2_20260913/
+?? regress/artifacts/lcaisalane/fix530_20260914/
+?? regress/artifacts/lcaisalane/grok_lca6_20260917.txt
+?? regress/artifacts/lcaisalane/grok_lcasiblings_20260917.txt
+?? regress/artifacts/lcaisalane/grok_physfix_20260917.txt
+?? regress/artifacts/lcaisalane/opus_c1_20260914/
+?? regress/artifacts/lcaisalane/opus_c2_20260914/
+?? regress/artifacts/lcaisalane/opus_c3_20260914/
+?? regress/artifacts/lcaisalane/opus_c4_20260914/
+?? regress/artifacts/lcaisalane/opus_c5_20260915/
+?? regress/artifacts/lcaisalane/opus_f2_20260913/
+?? regress/artifacts/lcaisalane/opus_p2_20260914/
+?? regress/artifacts/lcaisalane/p2_20260914/
+?? regress/artifacts/lcaisalane/repair6_20260916/
+?? regress/artifacts/lcaisalane/table7_20260916/
+?? regress/artifacts/lcaisaphys/
+?? regress/artifacts/lcaisasize/
+?? regress/artifacts/lcalenzerodrop/
+?? regress/artifacts/lunadefaultstop_20260917/
+?? regress/artifacts/makercfalse/codex_design_20260911.err
+?? regress/artifacts/makercfalse/codex_design_20260911.txt
+?? regress/artifacts/multiaccesswarms/
+?? regress/artifacts/n6/
+?? regress/artifacts/neverqueued_20260917/
+?? regress/artifacts/panelseatlabel/
+?? regress/artifacts/ppcrlwhighhalf/codex_redesign_20260911.err
+?? regress/artifacts/ppcrlwhighhalf/codex_redesign_20260911.txt
+?? regress/artifacts/ppcrlwhighhalf/codex_redesign_RETRY_20260911.err
+?? regress/artifacts/ppcrlwhighhalf/codex_redesign_RETRY_20260911.txt
+?? regress/artifacts/ppcrlwhighhalf/codex_witness_20260911.err
+?? regress/artifacts/ppcrlwhighhalf/codex_witness_20260911.txt
+?? regress/artifacts/ppcwitnessmaskoracle/
+?? regress/artifacts/probedeathoracle_20260917/
+?? regress/artifacts/probewiring/
+?? regress/artifacts/recordsaudit_20260917/
+?? regress/artifacts/seataudit_20260917/
+?? regress/artifacts/sgirandomcolour/opus_impl_20260910.md
+?? regress/artifacts/sh4dmacie/
+?? regress/artifacts/sh4rtcflags/
+?? regress/artifacts/sh4sqwrite/
+?? regress/artifacts/shprotld/
+?? regress/artifacts/sighunt_20260917/
+?? regress/artifacts/vmedefaultkill/
+?? regress/artifacts/wdcaltdigin/killtable_20260911_drdy/run_BASE/disk.img
+?? regress/artifacts/wdcaltdigin/killtable_20260911_drdy/run_M_DRDY/disk.img
+?? regress/artifacts/wdcaltdigin/killtable_20260912_closure/run_BASE/disk.img
+?? regress/artifacts/wdcaltdigin/killtable_20260912_closure/run_E_EQUIV49/disk.img
+?? regress/artifacts/wdcaltdigin/killtable_20260912_closure/run_HEAD/disk.img
+?? regress/artifacts/wdcaltdigin/killtable_20260912_closure/run_M_DRDY/disk.img
+?? regress/artifacts/wdcaltdigin/killtable_20260912_closure/run_M_DRDYDRQ/disk.img
+?? regress/artifacts/wdcaltdigin/killtable_20260912_closure/run_M_DRQERR/disk.img
+?? regress/artifacts/wdcerrfamily/
+?? regress/artifacts/wdcnullxfer/
+?? regress/artifacts/wdcrearmzero/
+?? regress/artifacts/wiringcliff/codex_ppcgate_20260910.err
+?? regress/artifacts/wiringcliff/codex_ppcgate_20260910.txt
+?? regress/artifacts/witnessspecset/
+?? regress/crime_width_probe.py
+?? regress/landisk_aux_probe.py
+?? regress/lca_isalane_probe.py
+?? regress/sgi_mte_dummy.bin
+?? tools/pipeline/check_fix_seats.py
+diff --git a/regress/gate_sh_rounding.sh b/regress/gate_sh_rounding.sh
+index 19b2b6a..1068c1b 100644
+--- a/regress/gate_sh_rounding.sh
++++ b/regress/gate_sh_rounding.sh
+@@ -521,7 +521,17 @@ else
+     gddctrl=$(grep -o "GDROM_DEF_CONTROL=[A-Z]*" "$GDDLOG" | tail -1 | cut -d= -f2)
+     check "gdrom_default control proves it measures" "${gddctrl:-missing}" "OK"
+     gddres=$(grep -o "GDROM_DEF_RESULT=[0-9]*/[0-9]*" "$GDDLOG" | tail -1 | cut -d= -f2)
+-    check "gdrom_default rows run"     "${gddres#*/}" 60
++    #  *** 60 -> 61 -> 62 on 2026-09-17.  THE PIN MOVED TWICE THAT DAY and this comment said 61
++    #  while the check said 62 until the pass-2 seat caught it.  61 came with `nodata byte' (the
++    #  #462 L2 repair); 62 came with `accept byte', the CLASS CLOSURE that shuts the second cell
++    #  of {arm} x {width}.  MEASURED 62/62 on the base leg of
++    #  regress/artifacts/gdromdmadefault/repairB_20260917/logs/probe_base.raw before this pin was
++    #  touched -- the pin follows the measurement, never the other way round.
++    #  *** CITE probe_base.raw, NOT RUN.out: the second run overwrote the probe logs and left
++    #  RUN.out/VERDICT.md holding the FIRST run's 61/61 and its 13:59:15 sentinel. ***  It is a `check` and not a `check_min`
++    #  deliberately: EQUALITY is the fail-closed ratchet, so a row that silently vanishes reds
++    #  here instead of passing a floor. ***
++    check "gdrom_default rows run"     "${gddres#*/}" 62
+     check "gdrom_default rows correct" "${gddres%/*}" "${gddres#*/}"
+     #  `scan uniq` IS AN IDENTITY ROW: 64 word keys minus 8 implemented offsets is
+     #  exactly 56.  A ninth implemented register moves it to 55 in the same commit --
+@@ -581,7 +591,7 @@ else
+     #  ONE LINE, deliberately: assembling this with a backslash continuation through
+     #  a heredoc mangled TWICE in one session and shipped a red gate with a bogus
+     #  word `n` in it.
+-    for v in "live" "devsig" "impl ok" "rd lo" "rdlo x1" "wr lo" "wrlo x1" "rd hi" "rdhi x1" "rd w16" "rdw16 x1" "same twice" "two offs" "rd then wr" "granularity" "accept cnt" "accept cond" "scan" "scan uniq" "accept8" "data 0xffff" "dma rd" "dma rd x1" "dma two" "dma shadow" "dma seed" "dma alias" "dma alias x1" "dma align16" "dma rdleak" "both windows" "dma accept" "arm survive" "arm says" "arm idle" "arm once" "nodata live" "nodata says" "accept dma" "accept idle" "accept quiet" "nodata quiet" "accept event" "nodata idle" "arm halfarm" "nodata notx" "arm quiet" "arm twice" "nodata len" "arm bytetrig" "accept data" "both decl" "arm count2" "arm enable2" "nodata stale" "stale says" "stale idle" "nodata twice" "stale quiet" "stale how"; do
++    for v in "live" "devsig" "impl ok" "rd lo" "rdlo x1" "wr lo" "wrlo x1" "rd hi" "rdhi x1" "rd w16" "rdw16 x1" "same twice" "two offs" "rd then wr" "granularity" "accept cnt" "accept cond" "scan" "scan uniq" "accept8" "data 0xffff" "dma rd" "dma rd x1" "dma two" "dma shadow" "dma seed" "dma alias" "dma alias x1" "dma align16" "dma rdleak" "both windows" "dma accept" "arm survive" "arm says" "arm idle" "arm once" "nodata live" "nodata says" "accept dma" "accept idle" "accept quiet" "nodata quiet" "accept event" "nodata idle" "arm halfarm" "nodata notx" "arm quiet" "arm twice" "nodata len" "arm bytetrig" "accept data" "both decl" "arm count2" "arm enable2" "nodata stale" "stale says" "stale idle" "nodata twice" "stale quiet" "stale how" "nodata byte" "accept byte"; do
+         n=$(count "$GDDLOG" "^$v  .*ok$")
+         check "  $v" "$n" 1
+     done
+@@ -810,7 +820,7 @@ else
+     #  that the latch DISTINGUISHES channels, so L3 was added.  And R1 had R2's exact
+     #  defect, fixed at R2/R3 in the same session and not carried across -- with a comment
+     #  left behind claiming it was covered.  A pass-2 seat found that one.
+-    check_min "sh4_chcr: rows actually run"           "$(grep -cE '^  (ok|FAIL) ' "$CHCRLOG")" 27
++    check_min "sh4_chcr: rows actually run"           "$(grep -cE '^  (ok|FAIL) ' "$CHCRLOG")" 29
+ fi
+ 
+ # ------------------------------------------------------------------ #449 RTCSR refresh
+@@ -1669,4 +1679,44 @@ else
+     check "mapledmaaddr rows failed"  "$(grep -c ' FAIL$' "$MAPLELOG")" 0
+ fi
+ 
++# ------------------------------------------------------------------ #533 landiskaux
++#  landisk's wdc aux (alt-status / Device Control) register.  Before #533 it was registered at the
++#  PC-layout +0x206 and the kernel's twelve Device Control writes -- the first a soft reset --
++#  landed at +0x2c on unmapped memory.  WIRED IN THE SAME COMMIT AS THE PROBE, so it cannot ship
++#  unwired and let its pin drift red between commits (the #441 failure).
++#
++#  Every row reads a GUEST-VISIBLE register value, never the `[ wdc: ... ]' debug line, which goes
++#  quiet under -q.  `live' is the probe's own control and is checked BY NAME: a control that goes
++#  red while the total stays acceptable is an apparatus failure read as a product result.
++LANDPROBE=landisk_aux_probe.py
++if [ ! -f "$LANDPROBE" ]; then
++    gate_skip "landiskaux: $LANDPROBE absent"
++else
++    LANDLOG=$LOGDIR/gate_landisk_aux.log
++    python3 -u "$LANDPROBE" "$PMAX" "$KERNEL" > "$LANDLOG" 2>&1 || true
++
++    if ! grep -q "LANDISK_AUX_DONE" "$LANDLOG"; then
++        note "landiskaux probe did not reach its completion sentinel; last lines follow"
++        tail -5 "$LANDLOG" | sed 's/^/       /'
++        check "landiskaux probe completed" "no" "yes"
++    else
++        grep -E ' (ok|FAIL)$' "$LANDLOG" | sed 's/^/       /'
++        #  PARSE BEFORE SCORE: an empty variable compares "" with "" and goes green on nothing.
++        lres=$(grep -o "LANDISK_AUX_RESULT=[0-9]*/[0-9]*" "$LANDLOG" | tail -1 | cut -d= -f2)
++        if [ -z "$lres" ]; then
++            check "landiskaux result parses" "no" "yes"
++        else
++            check "landiskaux result parses" "yes" "yes"
++            check "landiskaux rows run"     "${lres#*/}" 6
++            check "landiskaux rows correct" "${lres%/*}" 6
++        fi
++        check "landiskaux control: live" "$(grep -cE '^live +0x.* ok$' "$LANDLOG")" "1"
++        #  Per-row presence, anchored on the FULL name then spaces then the value, so
++        #  `aux 2c read' cannot match `aux 2c reset' and no row can silently stop being tested.
++        for v in "aux 2c rest" "aux 206 gone" "aux 2c reset" "aux 2c read" "206 ctl dead"; do
++            check "landiskaux row: $v" "$(grep -cE "^$v +0x.* ok\$" "$LANDLOG")" "1"
++        done
++    fi
++fi
++
+ gate_end
+diff --git a/src/devices/dev_wdc.c b/src/devices/dev_wdc.c
+index 7b746bc..2567bc6 100644
+--- a/src/devices/dev_wdc.c
++++ b/src/devices/dev_wdc.c
+@@ -2107,6 +2107,18 @@ DEVINIT(wdc)
+ 	case MACHINE_IQ80321:
+ 		alt_status_addr = devinit->addr + 0x402;
+ 		break;
++	case MACHINE_LANDISK:
++		/*
++		 *  #533 (landiskaux): NetBSD/OpenBSD landisk wdc_obio.c map
++		 *  the aux (alt-status / Device Control) register at
++		 *  or_addr + WDC_OBIO_AUXREG_OFFSET, a literal byte offset
++		 *  of 0x2c.  Without this case landisk kept the PC-layout
++		 *  +0x206 and the kernel's twelve Device Control writes --
++		 *  the first a soft reset -- landed on unmapped memory.
++		 *  Delivering WDCTL_IDS writes does not implement nIEN.
++		 */
++		alt_status_addr = devinit->addr + 0x2c;
++		break;
+ 	}
+ 
+ 	/*  Get disk geometries:  */
+
+ succeeded in 287ms:
+579- *  status_byte():
+580- *
+581- *  Return a reasonable status byte corresponding to the controller's current
+582- *  state.
+583- */
+584-static int status_byte(struct wdc_data *d, struct cpu *cpu)
+585-{
+586-	int odata = 0;
+587-	if (diskimage_exist(cpu->machine, d->drive + d->base_drive,
+588-	    DISKIMAGE_IDE))
+589-		odata |= WDCS_DRDY | WDCS_DSC;
+590-	if (d->inbuf_head != d->inbuf_tail)
+591-		odata |= WDCS_DRQ;
+592-	if (d->write_in_progress)
+593-		odata |= WDCS_DRQ;
+594-	if (d->error)
+595-		odata |= WDCS_ERR;
+596-	if (d->atapi_cmd_in_progress && (d->atapi_phase & WDCS_DRQ)) {
+597-		odata |= WDCS_DRQ;
+598-	}
+599-	return odata;
+600-}
+601-
+602-
+603-/*  #481: forward-declared so the ALT-CTRL arm below can call it.  A panel seat's
+604-    control mutant failed to compile for want of exactly this line and the failure
+605-    was briefly read as a design constraint against calling the shared helper; it
+606-    is one line and it builds clean.  */
+607-static void wdc_new_command_reset(struct wdc_data *d);
+608-
+609:DEVICE_ACCESS(wdc_altstatus)
+610-{
+611-	struct wdc_data *d = (struct wdc_data *) extra;
+612-	uint64_t idata = 0, odata = 0;
+613-
+614-	idata = data[0];
+615-
+616-	/*  Same as the normal status byte:  */
+617-	odata = status_byte(d, cpu);
+618-
+619-	if (writeflag==MEM_READ) {
+620-		if (relative_addr != 0) {
+621-			/*  #525 (wdcaltdigin): THE READ PATH NEVER DECODED ITS
+622-			    OFFSET EITHER.  `relative_addr' was tested in exactly
+623-			    one place in this function -- inside the `else' of
+624-			    this `if' -- so a READ of offset 1, the Drive Address
+625-			    register (0x3f7 on the PC layout), returned the
+626-			    ALT-STATUS byte -- the value of a DIFFERENT register,
+627-			    from an offset this handler never decoded.
+628-
+629-			    THIS IS THE SYMMETRIC CELL OF #494, WHICH CLOSED THE
+630-			    WRITE HALF OF THE SAME `if' AND LEFT THIS ONE OPEN.
+631-			    The function's own inputs give a two-by-two --
+632-			    {READ, WRITE} x {offset 0, offset 1} -- and three
+633-			    cells were closed.  Measured at rung 3 on the
+634-			    committed build: 14/16 pre-fix with both offset-1
+635-			    read rows returning the status byte (0x51 at power-on,
+636-			    0x58 armed), 16/16 after.
+637-
+638-			    *** AND ATA-2 SETTLES MORE OF THIS THAN THE ROUND
+639-			    FIRST CLAIMED -- X3T10 0948D, Note 1 to the command
+--
+662-			    SILENT -- it fixes WHICH non-DD7 value is returned,
+663-			    which ATA-2 does not specify -- BUT IT IS NOT AN
+664-			    ARBITRARY ONE.
+665-			    DC21285-era PC parts leave 0x3f7 to the floppy
+666-			    controller -- wdcreg.h compiles wd_digin out under an
+667-			    `#if 0' reading "NOT MAPPED; fd uses this register on
+668-			    PCs", and dev_fdc.c's DEV_FDC_LENGTH carries "TODO 8,
+669-			    but collision with wdc".  Whose register it really is
+670-			    stays open (row wdcaltownership).  What is settled is
+671-			    that it is not ours to answer with our status byte, so
+672-			    the declined read returns the deterministic 0 that #95
+673-			    already pre-zeroes the caller's buffer with, rather
+674-			    than inventing a value.
+675-
+676-			    SILENT, like #494's write decline and for a NARROWER
+677-			    version of the same reason.  What the tree actually
+678-			    establishes is that on the PC layout this byte is
+679-			    CONTESTED and documented from both sides; it does NOT
+680-			    establish that every guest on every registered layout
+681-			    expects a floppy effect here, and an earlier draft of
+682-			    this comment claimed that.  A diagnostic would
+683-			    therefore be announcing a decode we are not certain is
+684-			    anomalous -- which is reason enough to stay quiet,
+685-			    without the stronger claim.
+686-
+687-			    (NOTE the collision is PROSPECTIVE, not live:
+688-			    DEV_FDC_LENGTH is 6, so dev_fdc.c does not register
+689-			    0x3f7 today.  The "TODO 8" is what would collide.)
+690-
+691-			    THE REGISTRATION IS DELIBERATELY NOT NARROWED.  A
+692:			    2 -> 1 at the memory_device_register() below would
+693-			    close both offset-1 cells structurally, but it moves
+694-			    0x3f7 from HANDLED-AND-DECLINED to UNMAPPED -- a
+695-			    different path whose behaviour here is unmeasured --
+696-			    and it would leave #494's arm as dead code carrying a
+697-			    measured comment.  Owner ruling: decode the read.  */
+698-			odata = 0;
+699-		} else
+700-			debug("[ wdc: read from ALTSTATUS: 0x%02x ]\n",
+701-			    (int)odata);
+702-	} else if (relative_addr != 0) {
+703-		/*  #494: THE HANDLER NEVER DECODED ITS OWN OFFSET.  The region is
+704-		    registered TWO BYTES wide, so offset 1 -- the Drive Address
+705-		    register, 0x3f7 on the PC layout -- arrived here and was treated
+706-		    as a Device Control write.  Since #481 corrected the reset bit,
+707-		    that meant a guest store to a READ-ONLY register aborted a live
+708-		    ATA write and purged the queued ring.  Measured at rung 3 on an
+709-		    unmodified evbmips -e malta; the witness is preserved under
+710-		    regress/artifacts/wdcaltoffset/witness_20260829/.
+711-
+712-		    THE WHOLE ACTION IS DECLINED, NOT JUST THE HELPER CALL, AND THAT
+713-		    IS THE POINT.  The reset has two effects with two owners: the
+714-		    cur_command assignment below, and the ring/DRQ clearing inside
+715-		    wdc_new_command_reset().  A fix that guards only the helper leaves
+716-		    the ATAPI signature latched.  That was MEASURED, not reasoned: it
+717-		    escapes the witness AND the detector that replaced it with a clean
+718-		    sweep, because every row in both observes DRQ or the ring and
+719-		    neither varies under it.  The kill table and its scores are under
+720-		    regress/artifacts/wdcaltoffset/killtable_20260830/ -- read TABLE.txt
+721-		    for the counts rather than trusting a number written here, which is
+722-		    how this sentence was wrong once already.
+--
+738-		    this byte is CONTESTED and documented from both sides; it does
+739-		    NOT establish what every guest on every registered layout
+740-		    expects.  The silence is still right, on the narrower ground
+741-		    that a diagnostic would announce a decode we are not certain is
+742-		    anomalous.  (And the collision is PROSPECTIVE: DEV_FDC_LENGTH
+743-		    is 6, so dev_fdc.c does not register this byte today.)  Found
+744-		    by the flagship adjudication, which grepped for the sibling of
+745-		    a correction I had already called finished. ***
+746-
+747-		    THE ACCESS STAYS HANDLED (return 1), AND THE REASON IS NOT THE ONE
+748-		    THIS COMMENT FIRST GAVE.  It said a 0 would fall through to
+749-		    unassigned-address handling and warn per access.  That is false: this
+750-		    device is REGISTERED, so a 0 never reaches that path.  memory_rw sets
+751-		    res = -1, takes its res <= 0 branch, and raises EXCEPTION_DBE --
+752-		    measured, 19793 `device 'wdc_altstatus' ... failed` lines and ZERO
+753-		    `non-existant` ones under -v.  The guest then loops forever
+754-		    re-executing the faulting store, and at DEFAULT verbosity it does so
+755-		    in SILENCE.  That is worse than a warning flood, not better, which is
+756-		    why the wrong reason was worth correcting rather than dropping: a
+757-		    maintainer who reads `only noisy warnings` may decide a 0 is fine.
+758-
+759-		    The arm falls through to the common tail, which is a no-op for it --
+760-		    the tail only assigns on the READ path.  (An earlier draft justified
+761-		    that by the untouched-buffer hazard; #95 already zeroes the caller's
+762-		    buffer, so that hazard cannot arise here either.)  */
+763-		debug("[ wdc: write to DRIVE ADDRESS (read-only): 0x%02x,"
+764-		    " ignored ]\n", (int)idata);
+765-	} else {
+766-		debug("[ wdc: write to ALT. CTRL: 0x%02x ]\n",
+767-		    (int)idata);
+768:		/*  #481: THE RESET BIT IS WDCTL_RST (0x04), NOT WDCTL_4BIT (0x08).
+769-		
+770-		    WDCTL_4BIT is "use four head bits (wd1003)", a head-addressing
+771-		    mode selector that Linux libata holds as its STEADY-STATE ap->ctl.
+772-		    Testing it here meant three measured defects at once:
+773-		
+774-		      * a real soft reset was MISSED.  Older OpenBSD asserts with 0x06,
+775-		        which has bit 3 CLEAR -- measured `cur_command 0x0`.
+776-		      * a ROUTINE control write DESTROYED THE RECORD OF WHICH COMMAND IS
+777-		        EXECUTING -- measured `0xec -> 0x100`.  cur_command is also the
+778-		        value assigned into write_in_progress, so this is only harmless
+779-		        because wdc__write() has exactly ONE caller, immediately after
+780-		        the assignment.  An accident, not an invariant.
+781-		      * an nIEN write latched a reset.  0x0a is libata's polled-mode
+782-		        staple -- measured `0x0a->0x100`.
+783-		
+784-		    COMMAND_RESET IS NOT A RESET ACTION.  It is read at exactly two
+785-		    sites, both making the cylinder registers return the ATAPI signature
+786-		    0xEB14 for a CD-ROM.  It is the SIGNATURE LATCH -- which is why the
+787-		    wrong bit went unnoticed: triggering on libata's steady state kept
+788-		    the signature on almost always.
+789-		
+790-		    LEVEL-TRIGGERED, DELIBERATELY, AND THE MEASURED DIFFERENCE
+791-		    FAVOURS THIS FORM.  A channel held in reset must not carry bytes
+792-		    out the far side, and an edge-triggered abort lets it:
+793-		
+794-		        assert 0x0e, 8 guest stores to DATA, rewrite 0x0e, release
+795-		          LEVEL (this form):  occ 0, DRQ 0   -- the ring is purged
+796-		          EDGE:               occ 8, DRQ 1   -- the bytes survive the
+797-		                                                 whole reset, and the
+798-		                                                 status byte still
+--
+802-		    same traffic without a reset leaves occ 8, so the 0 is the reset
+803-		    working and not a dead path).
+804-		
+805-		    *** AN EARLIER VERSION OF THIS COMMENT SAID edge and level were
+806-		    "indistinguishable here, because the abort is idempotent and no
+807-		    protocol-following driver issues commands while holding SRST".
+808-		    THAT WAS MEASURED FALSE.  Three things were wrong with it:
+809-		
+810-		      * the differential behind it only ever asserted SRST ONCE, and
+811-		        the forms differ only when a driver HOLDS it across two
+812-		        control writes with something accruing in between;
+813-		      * IDEMPOTENCE OF THE HELPER DOES NOT LICENCE THE INFERENCE.
+814-		        It means repeating the abort is harmless.  It says nothing
+815-		        about SKIPPING the repeat, which is what an edge does, and
+816-		        state accrues between the writes;
+817-		      * the scenario above ISSUES NO COMMAND.  Plain data-register
+818-		        stores suffice -- and in a hardening fork the guest need not
+819-		        be protocol-following at all.
+820-		
+821-		    The decision is unchanged and now rests on evidence that does not
+822-		    collapse when someone builds the discriminating case. ***
+823-		
+824-		    Note also that a prev_ctl update mis-scoped by one brace makes
+825-		    every LATER reset be ignored -- a failure this form cannot have --
+826-		    but that is a secondary argument, not the reason.
+827-		
+828-		    THE ABORT IS #479's HELPER, not a second one: a channel reset and a
+829-		    new command must not disagree about what gets cleared, and #479
+830-		    already reasoned out which latches must SURVIVE (see its comment --
+831-		    clearing warned_* would undo #337 and #464).  */
+832:		if (idata & WDCTL_RST) {
+833-			d->cur_command = COMMAND_RESET;
+834-			wdc_new_command_reset(d);
+835-		}
+836-	}
+837-
+838-	if (writeflag == MEM_READ)
+839-		data[0] = odata;
+840-
+841-	return 1;
+842-}
+843-
+844-
+845-
+846-/*
+847- *  wdc_new_command_reset():
+848- *
+849- *  #479: A COMMAND ENTERING wdc_command() STARTS WITHOUT THE PREVIOUS COMMAND'S
+850- *  WRITER, BUFFERED BYTES, OR PHASE.
+851- *
+852- *  #480 L4: THE SCOPE IS THIS FUNCTION, NOT THE WORD "COMMAND".  An earlier
+853- *  headline read "A NEW COMMAND STARTS WITHOUT..." with no qualifier, and the
+854- *  device falsified that in its own code: the ALT-CTRL arm assigned
+855- *  cur_command = COMMAND_RESET WITHOUT CALLING THIS HELPER, so the most
+856- *  reset-like operation the device had was not a caller at all.  The SCOPE
+857- *  paragraph forty lines below said so; a universal headline with its qualifier
+858- *  that far down is read as universal.  Named by the fable seat on #479 pass 2.
+859- *
+860- *  wdc_command() cleared the ATAPI flag and the error and nothing else, so three
+861- *  pieces of the previous command's state survived into the next one.  All three
+862- *  were reproduced with liveness controls before this was written:
+--
+874- *
+875- *  WHY THE TOP, AND NOT THE END.  IDENTIFY loads its 512-byte response INTO the ring
+876- *  as part of the command, and wdc__read() does the same for every ordinary READ.  A
+877- *  seat measured the end-of-function form destroying both -- 256 of 256 IDENTIFY
+878- *  words wrong, and a freshly-read sector gone -- while every row this round pins
+879- *  stayed GREEN.  Clean-up-on-exit reads as the more principled placement and is the
+880- *  more dangerous one.
+881- *
+882- *  WHAT THIS DELIBERATELY DOES NOT TOUCH:
+883- *
+884- *    cur_command     wdc__write() reads it, and the caller sets it immediately
+885- *                    above.  Clearing it here would break the write it is about to
+886- *                    set up.
+887- *    the warned_*    latches.  Zeroing them alongside everything else reads as
+888- *                    COMPLETING this helper and is the mutant to press: it undoes
+889- *                    #337 and #464, and it is STRICTLY WORSE than the equivalent
+890- *                    mistake in dev_asc.c, because wdc_command() runs far more often
+891- *                    than a chip reset.  dev_asc.c says so at its own latch
+892- *                    declarations: "Deliberately NOT cleared by dev_asc_reset() or
+893- *                    dev_asc_fifo_flush(): a guest could otherwise re-arm the flood."
+894- *
+895- *  SCOPE.  TWO CALLERS: wdc_command(), and the ALT-CTRL arm on a real soft reset.
+896- *
+897- *  *** THIS PARAGRAPH SAID "Called from wdc_command() only" AND PRESCRIBED WHAT WOULD
+898- *  HAVE TO HAPPEN FIRST BEFORE THE OTHER CALLER COULD EXIST.  #481 DID EXACTLY THAT,
+899- *  so the prescription is DISCHARGED rather than merely stale. ***
+900- *
+901- *  It read: extending the helper to that arm AS IT STOOD was MEASURED to cancel a
+902- *  legal transfer on an ordinary 0x08 Device Control write, which real drivers hold
+903- *  as their steady state; so the extension "needs the arm's bit test fixed first
+904: *  (WDCTL_RST, not WDCTL_4BIT) and is a separate round."
+905- *
+906- *  #481 is that round.  It corrected the bit AND made the call in one change, which
+907- *  is why the accept rows this paragraph pointed at are GREEN on the shipped tree and
+908- *  still RED under `Md_bitswap` -- the same extension WITHOUT the prerequisite.
+909- *  Those four rows therefore MEASURED the ordering argument rather than asserting it.
+910- *
+911- *  The invariant is still not established on every path into the device: the ALT-CTRL
+912: *  arm calls this only for WDCTL_RST, and other decode paths into that register are
+913- *  filed rather than covered.  Said out loud rather than implied, as before.
+914- */
+915-static void wdc_new_command_reset(struct wdc_data *d)
+916-{
+917-	d->atapi_cmd_in_progress = 0;
+918-	d->atapi_phase = 0;
+919-	d->write_in_progress = 0;
+920-
+921-	/*  pointer reset rather than a drain loop, matching dev_asc_fifo_flush()'s
+922-	    count-zeroing: there is no consumer to notify and nothing to hand back.  */
+923-	d->inbuf_head = d->inbuf_tail = 0;
+924-}
+925-/*
+926- *  wdc_command():
+927- */
+928-void wdc_command(struct cpu *cpu, struct wdc_data *d, int idata)
+929-{
+930-	size_t i;
+931-
+932-	d->cur_command = idata;
+933-	d->error = 0;
+934-
+935-	/*  #479: this replaced a bare `d->atapi_cmd_in_progress = 0;`.  The flag
+936-	    was one of three pieces of the previous command's state, and clearing
+937-	    only the one that had been noticed is what left the other two.  */
+938-	wdc_new_command_reset(d);
+939-
+940-	/*
+941-	 *  Disk images that do not exist return an ABORT error.  This also
+942-	 *  happens with CDROM images with the WDCC_IDENTIFY command; CDROM
+--
+1056-
+1057-	/*  Unsupported commands, without warning:  */
+1058-	case WDCC_SEC_SET_PASSWORD:
+1059-	case WDCC_SEC_UNLOCK:
+1060-	case WDCC_SEC_ERASE_PREPARE:
+1061-	case WDCC_SEC_ERASE_UNIT:
+1062-	case WDCC_SEC_FREEZE_LOCK:
+1063-	case WDCC_SEC_DISABLE_PASSWORD:
+1064-		/*  #485: A TERMINAL ARM RAISES ITS COMPLETION INTERRUPT.
+1065-
+1066-		    THE INVARIANT, derived over all 256 opcodes rather than from a
+1067-		    few neighbours: every command wdc_command() FINISHES raises the
+1068-		    completion interrupt.  The only opcodes that stay silent are the
+1069-		    THREE that hand control back for a data phase -- WDCC_WRITE,
+1070-		    WDCC_WRITEMULTI and ATAPI_PKT_CMD -- and each of those asserts
+1071-		    when its data phase drains.  This arm and the `default:` arm
+1072-		    below were the only violations.
+1073-
+1074-		    *** THEY WERE ALSO THE ONLY TERMINAL ARMS IN THE FUNCTION WITH NO
+1075-		    INTERRUPT DECISION RECORDED AT ALL -- no assert, and no comment.
+1076-		    ***  Six arms carry a `TODO ... interrupt` hedge; in five the
+1077-		    author asserted, and in the sixth (ATAPI_PKT_CMD) he left the
+1078-		    assert COMMENTED OUT, so that decision is visible in the source.
+1079-		    A question never reached, not a decision to stay silent.
+1080-
+1081-		    NO SPECIFICATION IS CITED AND NONE IS AVAILABLE -- there is no ATA
+1082-		    document in this tree.  The warrant is the invariant above plus a
+1083-		    sibling model: dev_mb89352.c asserts on ANY non-zero interrupt
+1084-		    status, without regard to whether the command succeeded.
+1085-
+1086:		    nIEN CANNOT CONTRADICT THIS: WDCTL_IDS (0x02) is defined in
+1087-		    wdcreg.h and read NOWHERE in this file, so the model has no
+1088-		    interrupt-disable state.  This arm is exactly as nIEN-blind as
+1089-		    the ten arms that already assert.
+1090-
+1091-		    HARM, STATED HONESTLY: none measured.  WDCS_BSY is never set
+1092-		    anywhere in this file, so a polling driver's wait returns at once
+1093-		    with DRDY|DSC|ERR.  The WDCS_BSY fact is FILE-SCOPED and this
+1094-		    comment owns it: grep the file.
+1095-		
+1096-		    *** THE REST OF THIS PARAGRAPH ONCE ASSERTED A BOOT CENSUS -- that
+1097-		    OpenBSD 7.6 completes boot and shutdown against the old behaviour,
+1098-		    that 0xF5 lands here on every attach and 0xE0 on every halt.  A
+1099-		    PANEL SEAT MEASURED ALL OF THAT AND ITS ARTIFACT WAS NOT PRESERVED,
+1100-		    so the claim rested on evidence that no longer exists.  Named by a
+1101-		    packet-fed seat on pass 2. ***
+1102-		
+1103-		    It is kept as an ATTRIBUTED REPORT rather than deleted, because the
+1104-		    reachability it describes is why this arm was worth fixing at all --
+1105-		    but it is a seat's measurement, not this comment's, and a reader
+1106-		    who wants it must re-run a boot rather than cite this line.
+1107-		
+1108-		    The licence is protocol correctness at trivial cost, NOT a hang.
+1109-		    That much stands on the WDCS_BSY reading alone.  */
+1110-		d->error |= WDCE_ABRT;
+1111-		d->int_assert = 1;
+1112-		break;
+1113-
+1114-	default:/*  TODO  */
+1115-		/*  #464: `d->error |= WDCE_ABRT` STAYS OUTSIDE THE GUARD.
+1116-		    Inside it, the second unimplemented command silently
+--
+1138-		    maintainer writes -- group the response with the warning -- and a
+1139-		    sweep using one fresh device per opcode CANNOT SEE IT, because
+1140-		    the latch is 0 on every leg.  Row `irq 2nd` exists for exactly
+1141-		    that mutant.
+1142-		
+1143-		    *** THAT SENTENCE NAMED A ROW `irq 2nd` THAT DOES NOT EXIST.
+1144-		    Repo-wide it occurred in this comment and nowhere else. ***  The
+1145-		    real artifact is an unnamed SUB-LEG of row_completion_irq(),
+1146-		    printing a `2nd` field inside a row named "a terminated command
+1147-		    raises its irq".  What makes the error dangerous rather than
+1148-		    untidy is the company it kept: the SAME sentence cites `abrt 2nd`,
+1149-		    which IS a real row -- so a true citation stood next to a
+1150-		    fabricated one and lent it credibility.
+1151-		
+1152-		    #464 already found the ABORT BIT wrongly inside
+1153-		    this same guard and shipped `abrt 2nd` for it; the interrupt
+1154-		    needed the same row.  */
+1155-		d->error |= WDCE_ABRT;
+1156-		d->int_assert = 1;
+1157-		if (!d->warned_unimpl_cmd) {
+1158-			d->warned_unimpl_cmd = 1;
+1159-			fatal("[ wdc: WARNING! Unimplemented command 0x%02x "
+1160-			    "(drive %i, head %i, cyl %i, sector %i, nsecs %i)"
+1161-			    " ]\n", d->cur_command, d->drive, d->head,
+1162-			    d->cyl_hi*256+d->cyl_lo, d->sector, d->seccnt);
+1163-		}
+1164-	}
+1165-}
+1166-
+1167-
+1168:DEVICE_ACCESS(wdc)
+1169-{
+1170-	struct wdc_data *d = (struct wdc_data *) extra;
+1171-	uint64_t idata = 0, odata = 0;
+1172-	int i;
+1173-
+1174-	relative_addr /= d->addr_mult;
+1175-
+1176-	if (!d->io_enabled)
+1177-		goto ret;
+1178-
+1179-	if (writeflag == MEM_WRITE) {
+1180-		if (relative_addr == wd_data)
+1181-			idata = memory_readmax64(cpu, data, len);
+1182-		else {
+1183-			/*  #464: latch the announcement; `idata = data[0]`
+1184-			    is the repair and stays outside the guard.  */
+1185-			if (len != 1 && !d->warned_nonbyte_write) {
+1186-				d->warned_nonbyte_write = 1;
+1187-				fatal("[ wdc: WARNING! non-8-bit access on "
+1188-				    "WRITE! ]\n");
+1189-			}
+1190-			idata = data[0];
+1191-		}
+1192-	}
+1193-
+1194-	switch (relative_addr) {
+1195-
+1196-	case wd_data:	/*  0: data  */
+1197-		if (writeflag == MEM_READ) {
+1198-			odata = wdc_get_inbuf(d);
+--
+2043-			debug("[ wdc: write to  0x%02x: 0x%02x ]\n",
+2044-			    (int)relative_addr, (int)idata);
+2045-	}
+2046-
+2047-	/*  Assert interrupt, if necessary:  */
+2048-	dev_wdc_tick(cpu, extra);
+2049-
+2050-ret:
+2051-	if (writeflag == MEM_READ) {
+2052-		if (relative_addr == wd_data)
+2053-			memory_writemax64(cpu, data, len, odata);
+2054-		else {
+2055-			/*  #464: latch the announcement only.  This sits
+2056-			    INSIDE the function's common `ret:` tail, so
+2057-			    `data[0] = odata` and the `return 1` below must run
+2058-			    regardless -- an early return here would hand the
+2059-			    guest an untouched read buffer.  */
+2060-			if (len != 1 && !d->warned_nonbyte_read) {
+2061-				d->warned_nonbyte_read = 1;
+2062-				fatal("[ wdc: WARNING! non-8-bit access on "
+2063-				    "READ! ]\n");
+2064-			}
+2065-			data[0] = odata;
+2066-		}
+2067-	}
+2068-
+2069-	return 1;
+2070-}
+2071-
+2072-
+2073:DEVINIT(wdc)
+2074-{
+2075-	struct wdc_data *d;
+2076:	uint64_t alt_status_addr;
+2077-	int i, tick_shift = WDC_TICK_SHIFT;
+2078-
+2079-	CHECK_ALLOCATION(d = (struct wdc_data *) malloc(sizeof(struct wdc_data)));
+2080-	memset(d, 0, sizeof(struct wdc_data));
+2081-
+2082-	INTERRUPT_CONNECT(devinit->interrupt_path, d->irq);
+2083-	d->addr_mult  = devinit->addr_mult;
+2084-	d->data_debug = 1;
+2085-	d->io_enabled = 1;
+2086-	d->error      = 1;
+2087-
+2088-	d->inbuf = (unsigned char *) zeroed_alloc(WDC_INBUF_SIZE);
+2089-
+2090-	/*  base_drive = 0 for the primary controller, 2 for the secondary.  */
+2091-	d->base_drive = 0;
+2092-	if ((devinit->addr & 0xfff) == 0x170)
+2093-		d->base_drive = 2;
+2094-
+2095:	alt_status_addr = devinit->addr + 0x206;
+2096-
+2097-	/*  Special hacks for individual machines:  */
+2098-	switch (devinit->machine->machine_type) {
+2099-	case MACHINE_MACPPC:
+2100:		alt_status_addr = devinit->addr + 0x160;
+2101-		break;
+2102-	case MACHINE_HPCMIPS:
+2103-		/*  TODO: Fix  */
+2104-		if (devinit->addr == 0x14000180)
+2105:			alt_status_addr = 0x14000386;
+2106-		break;
+2107-	case MACHINE_IQ80321:
+2108:		alt_status_addr = devinit->addr + 0x402;
+2109-		break;
+2110-	case MACHINE_LANDISK:
+2111-		/*
+2112-		 *  #533 (landiskaux): NetBSD/OpenBSD landisk wdc_obio.c map
+2113-		 *  the aux (alt-status / Device Control) register at
+2114-		 *  or_addr + WDC_OBIO_AUXREG_OFFSET, a literal byte offset
+2115-		 *  of 0x2c.  Without this case landisk kept the PC-layout
+2116-		 *  +0x206 and the kernel's twelve Device Control writes --
+2117-		 *  the first a soft reset -- landed on unmapped memory.
+2118:		 *  Delivering WDCTL_IDS writes does not implement nIEN.
+2119-		 */
+2120:		alt_status_addr = devinit->addr + 0x2c;
+2121-		break;
+2122-	}
+2123-
+2124-	/*  Get disk geometries:  */
+2125-	for (i=0; i<2; i++)
+2126-		if (diskimage_exist(devinit->machine, d->base_drive +i,
+2127-		    DISKIMAGE_IDE))
+2128-			diskimage_getchs(devinit->machine, d->base_drive + i,
+2129-			    DISKIMAGE_IDE, &d->cyls[i], &d->heads[i],
+2130-			    &d->sectors_per_track[i]);
+2131-
+2132:	memory_device_register(devinit->machine->memory, "wdc_altstatus",
+2133:	    alt_status_addr, 2, dev_wdc_altstatus_access, d, DM_DEFAULT, NULL);
+2134:	memory_device_register(devinit->machine->memory, devinit->name,
+2135-	    devinit->addr, DEV_WDC_LENGTH * devinit->addr_mult, dev_wdc_access,
+2136-	    d, DM_DEFAULT, NULL);
+2137-
+2138-	machine_add_tickfunction(devinit->machine, dev_wdc_tick,
+2139-	    d, tick_shift);
+2140-
+2141-	devinit->return_ptr = d;
+2142-
+2143-	return 1;
+2144-}
+2145-
+/*
+ *  Copyright (C) 2006-2021  Anders Gavare.  All rights reserved.
+ *
+ *  Redistribution and use in source and binary forms, with or without
+ *  modification, are permitted provided that the following conditions are met:
+ *
+ *  1. Redistributions of source code must retain the above copyright
+ *     notice, this list of conditions and the following disclaimer.
+ *  2. Redistributions in binary form must reproduce the above copyright  
+ *     notice, this list of conditions and the following disclaimer in the 
+ *     documentation and/or other materials provided with the distribution.
+ *  3. The name of the author may not be used to endorse or promote products
+ *     derived from this software without specific prior written permission.
+ *
+ *  THIS SOFTWARE IS PROVIDED BY THE AUTHOR AND CONTRIBUTORS ``AS IS'' AND
+ *  ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+ *  IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ *  ARE DISCLAIMED.  IN NO EVENT SHALL THE AUTHOR OR CONTRIBUTORS BE LIABLE   
+ *  FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+ *  DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+ *  OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+ *  HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+ *  LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+ *  OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+ *  SUCH DAMAGE.
+ *   
+ *
+ *  COMMENT: I-O DATA LanDisk USL-5P
+ *
+ *  This machine consists of:
+ *
+ *	o)  An SH4 processor, which includes serial console etc,
+ *	o)  64 MB RAM (at 0x0c000000),
+ *	o)  an IDE controller at address 0x14000000 (irq 10),
+ *	o)  a RS5C313 real time clock, connected to the SH4 SCI port,
+ *	o)  a PCI controller (PCIC),
+ *	o)  and a minimal SH-IPL+G PROM emulation layer (required to make
+ *	    OpenBSD/landisk boot).
+ *
+ *  TODO:
+ *	Realtek NIC (irq 5), PCIIDE (irq 6), USB controllers, etc.
+ *
+ *  TODO 2:
+ *	Make it possible to select different landisk models.
+ */
+
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "cpu.h"
+#include "device.h"
+#include "devices.h"
+#include "machine.h"
+#include "memory.h"
+#include "misc.h"
+
+#include "thirdparty/sh4_exception.h"
+#include "thirdparty/sh4_scireg.h"
+
+
+/*  This is not really implemented yet: (experimental)  */
+/*  #define INCLUDE_LANDISK_NIC  */
+
+
+MACHINE_SETUP(landisk)
+{
+#ifdef INCLUDE_LANDISK_NIC
+	struct pci_data *pcibus =
+	    machine->cpus[machine->bootstrap_cpu]->cd.sh.pcic_pcibus;
+#endif
+	char tmpstr[300];
+
+	machine->machine_name = strdup("Landisk USL-5P");
+
+	/*  266.67 MHz SH4 CPU clock:  */
+	if (machine->emulated_hz == 0)
+		machine->emulated_hz = 266666666;
+
+	/*  33.33 MHz SH4 PCLOCK:  */
+	machine->cpus[machine->bootstrap_cpu]->cd.sh.pclock = 33333333;
+
+	/*  Note: 64 MB RAM at 0x0c000000, not at 0x00000000.  */
+	dev_ram_init(machine, 0x0c000000, 64 * 1048576, DEV_RAM_RAM, 0x0, NULL);
+
+	/*  wdc0 at obio0 port 0x14000000-0x1400000f irq 10  */
+	snprintf(tmpstr, sizeof(tmpstr), "wdc irq=%s.cpu[%i].irq[0x%x]"
+	    " addr_mult=2 addr=0x14000000",
+	    machine->path, machine->bootstrap_cpu, SH4_INTEVT_IRQ10);
+	device_add(machine, tmpstr);
+
+	/*  rsclock0 at shb0: RS5C313 real time clock  */
+	snprintf(tmpstr, sizeof(tmpstr), "rs5c313 addr=0x%" PRIx64,
+	    (uint64_t) SCI_DEVICE_BASE);
+	device_add(machine, tmpstr);
+
+#ifdef INCLUDE_LANDISK_NIC
+	/*  Realtek PCI NIC:  */
+	bus_pci_add(machine, pcibus, machine->memory, 0, 0, 0, "rtl8139c");
+#endif
+
+	if (!machine->prom_emulation)
+		return;
+
+	/*
+	 *  Ugly hardcoded register contents at bootup:
+	 *
+	 *  r4 (arg 0) = boot howto flags
+	 *  r5 (arg 1) = bootinfo pointer for NetBSD (?) and
+	 *               symbol end pointer for OpenBSD (?)
+	 *
+	 *  TODO: Make nicer.
+	 */
+	cpu->cd.sh.r[4] = 0;
+	cpu->cd.sh.r[5] = 0x8c000000 + 10 * 1048576;	/*  Note/TODO:
+				Assuming hardcoded 10 MB kernel size!  */
+
+	sh_ipl_g_emul_init(machine);
+}
+
+
+MACHINE_DEFAULT_CPU(landisk)
+{
+	/*  Hitachi SH4 7751R, 266.67 MHz  */
+	machine->cpu_name = strdup("SH7751R");
+}
+
+
+MACHINE_DEFAULT_RAM(landisk)
+{
+	/*  Note: This is the size of the boot ROM area, since the
+	    Landisk's RAM isn't located at physical address zero.  */
+	machine->physical_ram_in_mb = 2;
+}
+
+
+MACHINE_REGISTER(landisk)
+{
+	MR_DEFAULT(landisk, "Landisk", MACHINE_LANDISK);
+	me->set_default_ram = machine_default_ram_landisk;
+
+	machine_entry_add_alias(me, "landisk");
+	machine_entry_add_alias(me, "usl-5p");
+}
+
+
+ succeeded in 288ms:
+#!/usr/bin/env python3
+"""DETECTOR for landiskaux: landisk's wdc AUXILIARY (alt-status / Device Control) register.
+
+THE DEFECT.  dev_wdc.c's `Special hacks for individual machines' switch had no MACHINE_LANDISK
+case, so landisk kept the pre-switch PC-layout default `devinit->addr + 0x206' and registered
+`wdc_altstatus' at 0x14000206.  The OpenBSD 7.6 landisk kernel writes Device Control at
+0x1400002c -- twelve byte stores per boot, the first 0x0c = SRST|4BIT, a real ATA soft reset
+(regress/artifacts/landiskaux/census_20260827/) -- so every one landed on memory no device
+claimed and the reset was silently lost.
+
+THE ADDRESS IS A PRIMARY-SOURCE CONSTANT, NOT A DERIVATION.  NetBSD and OpenBSD
+sys/arch/landisk/dev/wdc_obio.c both define WDC_OBIO_AUXREG_OFFSET 0x2c and map the aux
+register at `or_addr + WDC_OBIO_AUXREG_OFFSET', unscaled (copies preserved in
+regress/artifacts/landiskaux/rung3_opus_20260918/).
+
+Rows assert the POST-FIX state, so this is green after the fix and safe to gate.  The WITNESS is
+the recorded fact that the same guest program scored the pre-fix symptom on the committed build
+(regress/artifacts/landiskaux/rung3_opus_20260918/opus_landiskaux_rung3_20260918.out).
+
+Rung 3: a real guest program on UNMODIFIED `-E landisk'.  Nothing is added to reach the site.
+Each session fills the ATA data ring with eight `mov.w' to 0xb4000000 (sets DRQ, status 0x09),
+optionally makes ONE Device Control byte store of 0x0c, then reads back main status (0xb400000e)
+and the two candidate aux addresses (0xb400002c, 0xb4000206).  A soft reset that reaches the
+device purges the ring and status drops to 0x01; a store that lands nowhere leaves 0x09.
+
+CONTRACT (clause e).  Designed to catch, and each row names what it kills:
+  * the landisk case missing or mis-keyed (the pre-fix state)       -- `aux 2c reset', `aux 2c read'
+  * a wrong offset: `+ 0x16' unscaled, `+ 0x2d', any value != 0x2c   -- `aux 2c reset', `aux 2c read'
+  * the case placed above IQ80321 without `break' (falls to +0x402)  -- `aux 2c reset', `aux 2c read'
+  * REGISTERING BOTH addresses (old kept, new added)                 -- `aux 206 gone', `206 ctl dead'
+DISCLOSED, not caught: the pre-switch initialiser `+ 0x206' changing (landisk overwrites it, so no
+landisk row can see it); IQ80321 losing its own `break' after this case is appended (no IQ80321
+rig); the registration width 2 -> 1 (every access here is 1 byte at offset 0 -- that is
+`wdcaltwidth'); keying on machine_type alone (a second wdc on a future landisk model would
+inherit +0x2c).  And the fix DELIVERS the five WDCTL_IDS (nIEN) writes; it does not IMPLEMENT
+nIEN -- the aux handler acts on WDCTL_RST only.
+
+NO ROW RESTS ON A DEBUG LINE.  `[ wdc: write to ALT. CTRL ]' goes quiet under -q and when
+free-running; every row reads a guest-visible register value instead.
+"""
+import os
+import pty
+import re
+import select
+import sys
+import time
+
+BIN = sys.argv[1] if len(sys.argv) > 1 else "../../build/gxemul"
+KERNEL = sys.argv[2] if len(sys.argv) > 2 else "../../_images/openbsd76-landisk-bsd.rd"
+
+AT = 0x8c001000          # landisk RAM, as sh_pclock_probe.py's LANDISK_CODE
+RAM_CTRL = 0x8c002000    # a RAM address for the no-control liveness session
+BRA_SELF = 0xaffe
+NOP = 0x0009
+#  Encodings as MEASURED in the rung-3 witness run, not re-derived:
+MOV_W_R8_AT_R7 = 0x2781  # mov.w r8,@r7    -- fill the data ring
+MOV_B_R9_AT_R10 = 0x2a90 # mov.b r9,@r10   -- the ONE Device Control store
+MOV_B_AT_R1_R2 = 0x6210  # mov.b @r1,r2    -- main status
+MOV_B_AT_R3_R4 = 0x6430  # mov.b @r3,r4    -- aux at 0x2c
+MOV_B_AT_R5_R6 = 0x6650  # mov.b @r5,r6    -- aux at 0x206
+
+rows = []
+
+
+def row(name, got, want, note=""):
+    ok = (got == want)
+    rows.append((name, ok))
+    print("%-14s %-8s %-8s %-52s %s" % (name, got, want, note, "ok" if ok else "FAIL"))
+    return ok
+
+
+def session(cmds, settle=6.0, spin=2.0):
+    """One cold-debugger session on unmodified -E landisk.  (transcript, survived)."""
+    pid, fd = pty.fork()
+    if pid == 0:
+        os.execv(BIN, [BIN, "-V", "-E", "landisk", "-M", "64", KERNEL])
+        os._exit(127)
+    buf = ""
+
+    def rd(t):
+        nonlocal buf
+        end = time.time() + t
+        while time.time() < end:
+            r, _, _ = select.select([fd], [], [], 0.25)
+            if not r:
+                continue
+            try:
+                d = os.read(fd, 65536)
+            except OSError:
+                return False
+            if not d:
+                return False
+            buf += d.decode("latin-1", "replace")
+        return True
+
+    alive = rd(settle)
+    for i, c in enumerate(cmds):
+        try:
+            os.write(fd, (c + "\n").encode("latin-1"))
+        except OSError:
+            alive = False
+            break
+        if not rd(spin if i == len(cmds) - 1 else 0.35):
+            alive = False
+            break
+    try:
+        os.write(fd, b"quit\n")
+        rd(0.6)
+    except OSError:
+        pass
+    try:
+        os.close(fd)
+    except OSError:
+        pass
+    try:
+        os.waitpid(pid, 0)
+    except OSError:
+        pass
+    return buf, alive
+
+
+def printed(t, reg):
+    m = re.search(r"print\s+%s\s*\r?\n\s*(0x[0-9a-f]+)" % reg, t)
+    return m.group(1) if m else "absent"
+
+
+def prog(ctrl, ctrlval=0x0c, ndata=8):
+    """Fill the ring, one byte store of ctrlval to ctrl, then read status and both aux addresses."""
+    ops = ([MOV_W_R8_AT_R7] * ndata
+           + [MOV_B_R9_AT_R10, MOV_B_AT_R1_R2, MOV_B_AT_R3_R4, MOV_B_AT_R5_R6, BRA_SELF, NOP])
+    cmds = ["r7=0xb4000000", "r8=0x1234", "r10=0x%x" % ctrl, "r9=0x%x" % ctrlval,
+            "r1=0xb400000e", "r3=0xb400002c", "r5=0xb4000206",
+            "r2=0xaa", "r4=0xaa", "r6=0xaa"]
+    cmds += ["put h 0x%x, 0x%04x" % (AT + 2 * i, op) for i, op in enumerate(ops)]
+    cmds += ["pc=0x%x" % AT, "step %d" % (ndata + 4), "print r2", "print r4", "print r6"]
+    return cmds
+
+
+print("landisk_aux_probe -- binary=%s" % BIN)
+
+#  Session 1: NO control store (it goes to RAM).  Liveness, and the at-rest aux reads.
+t, alive = session(prog(RAM_CTRL))
+st, a2c, a206 = printed(t, "r2"), printed(t, "r4"), printed(t, "r6")
+row("live", st, "0x9",
+    "ring fill sets DRQ: status 0x09 -- the ring is live, so 0x01 elsewhere is the reset")
+row("aux 2c rest", a2c, "0x9",
+    "0x2c answers with STATUS (0x09) -- device signature; pre-fix unmapped reads 0x0")
+row("aux 206 gone", a206, "0x0",
+    "0x206 is UNMAPPED on landisk: pre-fix 0x09; kills a register-BOTH mutant")
+
+#  Session 2: the soft reset goes to 0x2c, where the kernel sends it.
+t, alive = session(prog(0xb400002c))
+st, a2c = printed(t, "r2"), printed(t, "r4")
+row("aux 2c reset", st, "0x1",
+    "SRST at 0x2c PURGES the ring: status 0x01; pre-fix the store is lost, stays 0x09")
+row("aux 2c read", a2c, "0x1",
+    "0x2c then reads the post-reset status 0x01 -- same device, same value")
+
+#  Session 3: the soft reset goes to the OLD address.
+t, alive = session(prog(0xb4000206))
+st = printed(t, "r2")
+row("206 ctl dead", st, "0x9",
+    "SRST at 0x206 must land NOWHERE: status stays 0x09; pre-fix it purged (0x01)")
+
+n = sum(1 for _, ok in rows if ok)
+print("LANDISK_AUX_RESULT=%d/%d" % (n, len(rows)))
+print("LANDISK_AUX_VECTOR=" + ",".join(("1" if ok else "0") for _, ok in rows))
+print("LANDISK_AUX_DONE")
+94-# The probe classifies the outcome from the dyntrans halt MESSAGE, not from a
+95-# memory marker: after the fix the exception is raised and any store placed
+96-# after the test instruction is legitimately never reached, so a marker-only
+97-# check called every repaired row a failure (and called SLEEP, which is
+98-# implemented and simply sleeps, a halt). See the probe's header.
+99-HLOG=$LOGDIR/gate_sh_halt.log
+100-python3 sh_halt_probe.py "$PMAX" "$KERNEL" > "$HLOG" 2>&1 || true
+101-
+102-if ! grep -q "SH_HALT_RESULT=" "$HLOG"; then
+103-    note "halt probe produced no result line; last lines follow"
+104-    tail -5 "$HLOG" | sed 's/^/       /'
+105-    #  a CHECK, not a gate_skip: the rounding section above has already
+106-    #  recorded results and a skip here would discard them.
+107-    check "halt probe completed" "no" "yes"
+108-    gate_end; exit $?
+109-fi
+110-
+111-grep -E " ok$| FAIL$" "$HLOG" | sed 's/^/       /'
+112-
+113-hctrl=$(grep -o "SH_HALT_CONTROL=[A-Z]*" "$HLOG" | tail -1 | cut -d= -f2)
+114-check "halt-probe control proves it measures" "${hctrl:-missing}" "OK"
+115-
+116-hres=$(grep -o "SH_HALT_RESULT=[0-9]*/[0-9]*" "$HLOG" | tail -1 | cut -d= -f2)
+117-hgot=${hres%/*}; hwant=${hres#*/}
+118:check "halt rows run"     "$hwant" 34
+119-check "halt rows correct" "$hgot"  "$hwant"
+120-
+121-# Named, so one encoding regressing cannot hide behind a total. Two spaces after
+122-# the name: the probe pads to a fixed column and a name that is a PREFIX of
+123-# another would otherwise match both rows (the trap that made two of gate 14's
+124-# checks unsatisfiable and two of gate 13's count the wrong rows).
+125-for v in "MAC.L" "MAC.W" "TST.B" "STC SGR" "STC.L DBR" "MOVLI.L" "SYNCO" "PREFI"; do
+126-    n=$(count "$HLOG" "^$v  .*ok$")
+127-    check "  survives: $v" "$n" 1
+128-done
+129-
+130-# ---- #315/#316/#317: execute-time halts, and one dropped store ---------------
+131-# These need a state prologue (FPSCR.SZ/PR, SR.FD, a branch), so the bare
+132-# encoding sweep above is structurally blind to them -- which is why they
+133-# outlived #314. Three of them killed the gxemul PROCESS rather than setting
+134-# cpu->running = 0, so the probe distinguishes a host exit from an emulator
+135-# halt from a live run; a check that only looked for the halt message would
+136-# have scored those as passes.
+137-#
+138-# The two XD rows are load-bearing. The register-pair handlers redirect an ODD
+139-# register field to the XF bank, and an earlier draft computed that redirect
+140-# then still transferred through the original pointer -- which every DR test
+141-# passes. Only a row that seeds fr and xf differently can tell them apart.
+142-#
+--
+227-#      only row that sees a `n_hits >= 1` mutant, and it doubles as the liveness
+228-#      control -- it proves the three stores execute and the session survives them.
+229-#
+230-#  landisk and not testsh, deliberately: landisk's PROM leaves vbr = 0x8c000000, so
+231-#  `vbr == 0` is a real transition.  On testsh vbr is already 0 and that row would be
+232-#  vacuous.
+233-TMLOG=$LOGDIR/gate_sh_tlbmulti.log
+234-#  *** -u ON ALL SIX PROBES IN THIS GATE. ***  `probeslow` recorded the streaming
+235-#  mitigation as APPLIED and called it "the general fix" -- and it had been applied to
+236-#  NONE of them: the -u lived only in ad-hoc measurement scripts.  These six are exactly
+237-#  the six probes `probetimebased` names as having no prompt detection, so they are also
+238-#  the six whose runs are longest and most worth not losing.  Redirected to a file,
+239-#  stdout is block buffered and a killed run loses everything it had already measured.
+240-python3 -u sh_tlbmulti_probe.py "$PMAX" "$KERNEL" > "$TMLOG" 2>&1 || true
+241-
+242-if ! grep -q "SH_TLBMULTI_RESULT=" "$TMLOG"; then
+243-    note "sh_tlbmulti probe produced no result line; last lines follow"
+244-    tail -5 "$TMLOG" | sed 's/^/       /'
+245-    check "sh_tlbmulti probe completed" "no" "yes"
+246-else
+247-    grep -E " ok$| FAIL$" "$TMLOG" | sed 's/^/       /'
+248-    tmctrl=$(grep -o "SH_TLBMULTI_CONTROL=[A-Z]*" "$TMLOG" | tail -1 | cut -d= -f2)
+249-    check "sh_tlbmulti control proves it measures" "${tmctrl:-missing}" "OK"
+250-    tmres=$(grep -o "SH_TLBMULTI_RESULT=[0-9]*/[0-9]*" "$TMLOG" | tail -1 | cut -d= -f2)
+251:    check "sh_tlbmulti rows run"     "${tmres#*/}" 6
+252-    check "sh_tlbmulti rows correct" "${tmres%/*}" "${tmres#*/}"
+253-    for v in "tlbm alive" "tlbm expevt" "tlbm pc" "tlbm vbr" "tlbm sr" "tlbm single"; do
+254-        n=$(count "$TMLOG" "^$v  .*ok$")
+255-        check "  $v" "$n" 1
+256-    done
+257-fi
+258-
+259-# ---- #455: an interrupt at priority 0 ended the host process -----------------
+260-#  Wired in the SAME commit as the fix.  Gate 6's structural note says a probe that
+261-#  ships with its wiring cannot skip its census pin, because the wiring forces a
+262-#  gate run -- #441's did not, and its pin then went latently red between two
+263-#  commits.
+264-#
+265-#  This probe drives BOTH SH rigs, and which row uses which is forced rather than
+266-#  stylistic.
+267-#
+268-#  The PRIMARY witness is `-E testsh`, where the kill is reached SYNCHRONOUSLY --
+269-#  one guest store to the mp device's IPI register -- because the test machine wires
+270-#  its whole interrupt tree to a line the priority loop never assigns.  Being
+271-#  synchronous is what lets a cheap `step` see it.
+272-#
+273-#  The SECONDARY rows (`prio0 tmu`, `prio0 tmuq`) drive the landisk TMU route and
+274-#  must FREE-RUN, because a TMU underflow is produced by a HOST timer and
+275-#  debugger.c stops those for the duration of a `step`.  They exist because a
+276-#  MEASURED mutant that repaired only the testsh route scored full marks without
+277-#  them.  See the probe header.
+278-IPLOG=$LOGDIR/gate_sh_intprio.log
+279-python3 -u sh_intprio_probe.py "$PMAX" "$KERNEL" > "$IPLOG" 2>&1 || true
+280-
+281-if ! grep -q "SH_INTPRIO_RESULT=" "$IPLOG"; then
+282-    note "sh_intprio probe produced no result line; last lines follow"
+283-    tail -5 "$IPLOG" | sed 's/^/       /'
+284-    check "sh_intprio probe completed" "no" "yes"
+285-else
+286-    grep -E " ok$| FAIL$" "$IPLOG" | sed 's/^/       /'
+287-    ipctrl=$(grep -o "SH_INTPRIO_CONTROL=[A-Z]*" "$IPLOG" | tail -1 | cut -d= -f2)
+288-    check "sh_intprio control proves it measures" "${ipctrl:-missing}" "OK"
+289-    ipres=$(grep -o "SH_INTPRIO_RESULT=[0-9]*/[0-9]*" "$IPLOG" | tail -1 | cut -d= -f2)
+290:    check "sh_intprio rows run"     "${ipres#*/}" 7
+291-    check "sh_intprio rows correct" "${ipres%/*}" "${ipres#*/}"
+292-    #  Named individually, and every one earns its place against a MEASURED mutant.
+293-    #  `tmu`/`tmuq` (#455) kill a PARTIAL FIX that repairs only the route the witness
+294-    #  drives -- measured passing 4/4 before they existed -- and they carry #455's
+295-    #  priority-0 coverage now that #456 moved the testsh line off priority 0.
+296-    #  `accept` (#455) is the de-escalation clause's cost: it pins that a LEGAL
+297-    #  priority-1 interrupt is still delivered, and is the only row that reddens
+298-    #  under `if (prio <= 1) return;` (measured 6/7).
+299-    #
+300-    #  `irq14 deliv` / `irq14 imask` (#456) REPLACED #455's `prio0 kill`/`prio0 quiet`,
+301-    #  which #456 made vacuous -- silently, since they stayed green.  They kill
+302-    #  DIFFERENT families and neither covers the other's: reverting to IRQ15 is caught
+303-    #  by `deliv` alone (6/7), while IRQ13 and IRQ0 both still DELIVER and are caught
+304-    #  by `imask` alone (6/7 each), because only bracketing IMASK pins the level to
+305-    #  exactly 1.
+306-    for v in "irq14 deliv" "irq14 imask" "prio0 live" "prio0 devsig" "prio0 tmu" "prio0 tmuq" "prio0 accept"; do
+307-        n=$(count "$IPLOG" "^$v  .*ok$")
+308-        check "  $v" "$n" 1
+309-    done
+310-fi
+311-
+312-# ------------------------------------------------------------------ #458 sh4_iprbcd
+313-#  sh_update_interrupt_priorities() read two of the four IPR registers, and took SCIF
+314-#  from INTPRI00 -- an SH7750R/SH7760 register this machine never even MAPS, so SCIF's
+315-#  priority was a guest-immutable 3 while the boot witness shows OpenBSD asking for 12.
+316-#
+317-#  Two of these rows read the priority TABLE rather than a delivery, and that is not
+318-#  decoration: WDT, REF, SCI, GPIO, DMAC, H-UDI and RTC have NO `INTERRUPT_ASSERT`
+319-#  anywhere in this tree, so a mutant dropping their mapping scores a clean 10/10
+320-#  against every behavioural row that can be written.  Nothing a guest can DO depends
+321-#  on those priorities -- only what the table SAYS.
+322-IBLOG=$LOGDIR/gate_sh_iprbcd.log
+323-python3 -u sh_iprbcd_probe.py "$PMAX" "$KERNEL" > "$IBLOG" 2>&1 || true
+324-
+325-if ! grep -q "IPRBCD_RESULT=" "$IBLOG"; then
+326-    note "sh_iprbcd probe produced no result line; last lines follow"
+327-    tail -5 "$IBLOG" | sed 's/^/       /'
+328-    check "sh_iprbcd probe completed" "no" "yes"
+329-else
+330-    grep -E " ok$| FAIL$" "$IBLOG" | sed 's/^/       /'
+331-    ibctrl=$(grep -o "IPRBCD_CONTROL=[A-Z]*" "$IBLOG" | tail -1 | cut -d= -f2)
+332-    check "sh_iprbcd control proves it measures" "${ibctrl:-missing}" "OK"
+333-    ibres=$(grep -o "IPRBCD_RESULT=[0-9]*/[0-9]*" "$IBLOG" | tail -1 | cut -d= -f2)
+334:    check "sh_iprbcd rows run"     "${ibres#*/}" 18
+335-    check "sh_iprbcd rows correct" "${ibres%/*}" "${ibres#*/}"
+336-    #  `naive` is pinned deliberately as a LABELLED row: writing one IPR and expecting
+337-    #  delivery is GREEN on the unfixed build, so it fails vacuity floor clause (a).  It
+338-    #  ships so nobody re-invents it; `iprc_hi`/`iprc_lo`/`iprc_lo1` are what discriminate,
+339-    #  by BRACKETING IMASK -- delivery needs IMASK < int_level, so a pair of rows at two
+340-    #  IMASK values pins the level to a range instead of to "nonzero".
+341-    #
+342-    #  `iprb wdt` / `ipra rtc` are the two table-reading rows.  MEASURED: dropping the
+343-    #  IPRB+RTC mapping reddens THESE TWO AND NOTHING ELSE (10/12 -- a TWELVE-ROW-ERA
+344-    #  number, measured before the iprd pair was added), and dropping only the
+345-    #  three RTC lines reddens `ipra rtc` alone.  Without them the settings exposure
+346-    #  added by #458 would be an unused convenience.
+347-    #
+348-    #  `raise` isolates the rescan half: it is the only row red on an IPR-only build.
+349-    #
+350-    #  `iprd hold` / `iprd ctl` defend the round's central DECISION rather than its
+351-    #  code.  #458 declines to read IPRD, and a pass-2 seat observed that the decision
+352-    #  lived only in a comment: the obvious "read all four registers per Table 19.6"
+353-    #  completion scored a clean pass against every other row while masking four landisk
+354-    #  PCIC lines.  MEASURED, not predicted -- `m_iprdread` (apply IPRD's nibbles to
+355-    #  IRL0-3) scores 13/14, red on `iprd hold` ALONE.  A guest `IPRD := 0` must leave
+356-    #  IRQ2/IRL0 (0x240) at 0xd; IRQ10 (0x340) is outside IPRD and stays 0x5 under fix
+357-    #  and mutant alike, which is what makes the red attributable to IPRD rather than to
+358-    #  a broken session.
+--
+376-
+377-# ------------------------------------------------------------------ #459 sh4_pclock
+378-#  ONE ORDINARY GUEST STORE to 0xffd80010 ended the host process on every SH machine
+379-#  whose board never assigned a peripheral clock.  cpu_sh.c:233-234 adds the sh4 device
+380-#  from `arch == 4`, so the CPU brings the TMU and the BOARD brings the clock, and
+381-#  nothing checked that the two agree.  MEASURED dead on THREE machine types --
+382-#  -e jornada680, -E baresh and -E testsh -- while dreamcast and landisk, the only two
+383-#  that assign pclock, were fine.
+384-#
+385-#  This gate section is the de-escalation clause's cost, paid in full.  #459 removed a
+386-#  host-fatal guard, which DELETES the accidental tripwire that made the behaviour
+387-#  self-announcing, so the rows below rebuild it deliberately on both sides.
+388-PCLOG=$LOGDIR/gate_sh_pclock.log
+389-python3 -u sh_pclock_probe.py "$PMAX" "$KERNEL" > "$PCLOG" 2>&1 || true
+390-
+391-if ! grep -q "SH_PCLOCK_RESULT=" "$PCLOG"; then
+392-    note "sh_pclock probe produced no result line; last lines follow"
+393-    tail -5 "$PCLOG" | sed 's/^/       /'
+394-    check "sh_pclock probe completed" "no" "yes"
+395-else
+396-    grep -E " ok$| FAIL$" "$PCLOG" | sed 's/^/       /'
+397-    pcctrl=$(grep -o "SH_PCLOCK_CONTROL=[A-Z]*" "$PCLOG" | tail -1 | cut -d= -f2)
+398-    check "sh_pclock control proves it measures" "${pcctrl:-missing}" "OK"
+399-    pcres=$(grep -o "SH_PCLOCK_RESULT=[0-9]*/[0-9]*" "$PCLOG" | tail -1 | cut -d= -f2)
+400:    check "sh_pclock rows run"     "${pcres#*/}" 16
+401-    check "sh_pclock rows correct" "${pcres%/*}" "${pcres#*/}"
+402-    #  THREE machines, because the brief that opened the round said two.  Two pass-1
+403-    #  seats independently caught that machine_test.c:535 is MACHINE_DEFAULT_CPU(baresh),
+404-    #  not testsh -- so `baresh kill`/`baresh diag` pin a machine the round nearly missed.
+405-    #
+406-    #  `accept hz` / `accept dc hz` use TWO DIFFERENT CLOCK VALUES on purpose.  A single
+407-    #  row pinned at landisk's 33.33 MHz is passed by a mutant that HARDCODES 33333333
+408-    #  in place of cpu->cd.sh.pclock; dreamcast's 50 MHz is the discriminator, and no
+409-    #  hardcode satisfies both.  (dreamcast needs -x or it exits before the debugger
+410-    #  prompt -- two console inputs, console.c:994-1007.  Its first draft read "died",
+411-    #  the SAME STRING the trigger rows produce, which would have been scored as a
+412-    #  fourth reproduction.  The probe passes -x for that machine only.)
+413-    #
+414-    #  The last four are the rebuilt tripwire and none is decoration.  Without them a
+415-    #  mutant that declines SILENTLY passes every other row: `says` pins that the
+416-    #  refusal names itself, `once` that the same timer twice yields ONE line, `pertmr`
+417-    #  that TCR0 and TCR1 yield TWO (the latch instance is per-timer, not shared), and
+418-    #  `unlatch` that the refused write does NOT land -- #447's own comment cites that
+419-    #  read-back as how "the guest can see the rejection", so it is the guest's channel
+420-    #  where the diagnostic is the operator's.
+421-    for v in "live" "devsig" "hpcsh kill" "hpcsh diag" "baresh kill" "baresh diag" "testsh kill" "testsh diag" "accept hz" "accept tcr" "accept dc hz" "accept dc tcr" "hpcsh says" "hpcsh once" "hpcsh pertmr" "hpcsh unlatch"; do
+422-        n=$(count "$PCLOG" "^$v  .*ok$")
+423-        check "  $v" "$n" 1
+424-    done
+425-fi
+426-
+427-# ------------------------------------------------------------------ #460 gdrom_data
+428-#  FOUR guest-reachable exit(1) sites in ONE register's access arm.  `cond` and `busy`
+429-#  are both zero on a fresh device, so THERE WAS NO LEGAL FIRST TOUCH of GDROM_DATA:
+430-#  any non-16-bit access in either direction, the first 16-bit read, and the first
+431-#  16-bit write each ended the host process.  Measured 5/23 pre-fix, 23/23 post-fix,
+432-#  the pre-fix build rebuilt from `git show HEAD:` and not from build/.
+433-#
+434-#  Dreamcast needs -x or it exits before the debugger prompt (two console inputs,
+435-#  console.c:994-1007).  Without it a session dies for a CONFIGURATION reason and
+436-#  prints the same "died" the defect prints -- that cost #459 a false positive.
+437-GDLOG=$LOGDIR/gate_gdrom_data.log
+438-python3 -u gdrom_data_probe.py "$PMAX" "$KERNEL" > "$GDLOG" 2>&1 || true
+439-
+440-if ! grep -q "GDROM_RESULT=" "$GDLOG"; then
+441-    note "gdrom_data probe produced no result line; last lines follow"
+442-    tail -5 "$GDLOG" | sed 's/^/       /'
+443-    check "gdrom_data probe completed" "no" "yes"
+444-else
+445-    grep -E " ok$| FAIL$" "$GDLOG" | sed 's/^/       /'
+446-    gdctrl=$(grep -o "GDROM_CONTROL=[A-Z]*" "$GDLOG" | tail -1 | cut -d= -f2)
+447-    check "gdrom_data control proves it measures" "${gdctrl:-missing}" "OK"
+448-    gdres=$(grep -o "GDROM_RESULT=[0-9]*/[0-9]*" "$GDLOG" | tail -1 | cut -d= -f2)
+449:    check "gdrom_data rows run"     "${gdres#*/}" 23
+450-    check "gdrom_data rows correct" "${gdres%/*}" "${gdres#*/}"
+451-    #  THE `x1` COUNT ROWS ARE THE POINT, not the survival rows.  The first oracle
+452-    #  asserted the OLD fatal text must be ABSENT -- but the fix KEEPS the diagnostic
+453-    #  and drops only exit(1), so DELETING the whole register arm scored 13/13 while
+454-    #  the real fix scored 8/13.  Re-pinned to "the diagnostic appears EXACTLY ONCE":
+455-    #  pre-fix dies, the fix says it once, a deleted arm says it zero times.
+456-    #
+457-    #  THE LOAD VARIANTS ARE LOAD-BEARING.  A rebuild once wrapped the width rows
+458-    #  around stores only, and a seat named the mutant that walks that gap: restore
+459-    #  exit(1) on WRONG-WIDTH READ ONLY, which scored a clean 14/14 while one guest
+460-    #  MOV.B read from the register still ended the host.
+461-    #
+462-    #  `two sites x2` is the ONLY row separating a per-site latch from ONE SHARED
+463-    #  BIT; every other row drives one site per session and cannot see the axis.
+464-    #
+465-    #  `accept d0`/`accept d1` are the de-escalation accept for four removed
+466-    #  predicates -- a legal TOC PIO returning 0x0010 then 0xffff9600 (mov.w
+467-    #  sign-extends, and 0x9600 has bit 15 set).  Without them, a mutant that strips
+468-    #  the whole success path scores full marks.  `declined val` pins what a DECLINED
+469-    #  read returns; without it 0xffff -> 0 passes while the diagnostic claims 0xffff.
+470-    for v in "live" "devsig" "gdrom map" "w8 store" "w8store x1" "w32 store" "w32store x1" "w8 load" "w8load x1" "w32 load" "w32load x1" "w16 load" "w16load x1" "w16 store" "w16store x1" "two sites" "two sites x2" "accept d0" "accept d1" "declined val" "overread" "overread x1" "accept w8"; do
+471-        n=$(count "$GDLOG" "^$v  .*ok$")
+472-        check "  $v" "$n" 1
+473-    done
+--
+510-#  buffered and the probe (no flush anywhere, a few KB of output) loses EVERY
+511-#  row if the run is killed.  A killed run then looks like a run that produced
+512-#  nothing, which is the silence this row was filed about.
+513-python3 -u gdrom_default_probe.py "$PMAX" "$KERNEL" > "$GDDLOG" 2>&1 || true
+514-
+515-if ! grep -q "GDROM_DEF_RESULT=" "$GDDLOG"; then
+516-    note "gdrom_default probe produced no result line; last lines follow"
+517-    tail -5 "$GDDLOG" | sed 's/^/       /'
+518-    check "gdrom_default probe completed" "no" "yes"
+519-else
+520-    grep -E " ok$| FAIL$" "$GDDLOG" | sed 's/^/       /'
+521-    gddctrl=$(grep -o "GDROM_DEF_CONTROL=[A-Z]*" "$GDDLOG" | tail -1 | cut -d= -f2)
+522-    check "gdrom_default control proves it measures" "${gddctrl:-missing}" "OK"
+523-    gddres=$(grep -o "GDROM_DEF_RESULT=[0-9]*/[0-9]*" "$GDDLOG" | tail -1 | cut -d= -f2)
+524-    #  *** 60 -> 61 -> 62 on 2026-09-17.  THE PIN MOVED TWICE THAT DAY and this comment said 61
+525-    #  while the check said 62 until the pass-2 seat caught it.  61 came with `nodata byte' (the
+526-    #  #462 L2 repair); 62 came with `accept byte', the CLASS CLOSURE that shuts the second cell
+527-    #  of {arm} x {width}.  MEASURED 62/62 on the base leg of
+528-    #  regress/artifacts/gdromdmadefault/repairB_20260917/logs/probe_base.raw before this pin was
+529-    #  touched -- the pin follows the measurement, never the other way round.
+530-    #  *** CITE probe_base.raw, NOT RUN.out: the second run overwrote the probe logs and left
+531-    #  RUN.out/VERDICT.md holding the FIRST run's 61/61 and its 13:59:15 sentinel. ***  It is a `check` and not a `check_min`
+532-    #  deliberately: EQUALITY is the fail-closed ratchet, so a row that silently vanishes reds
+533-    #  here instead of passing a floor. ***
+534:    check "gdrom_default rows run"     "${gddres#*/}" 62
+535-    check "gdrom_default rows correct" "${gddres%/*}" "${gddres#*/}"
+536-    #  `scan uniq` IS AN IDENTITY ROW: 64 word keys minus 8 implemented offsets is
+537-    #  exactly 56.  A ninth implemented register moves it to 55 in the same commit --
+538-    #  the fail-closed ratchet, equality and not >=.  It kills a capped counter (4 !=
+539-    #  56), a masked key (32 != 56), AND the raw-address indexing mutant (measured
+540-    #  18/21 -- it reddens `scan uniq` too).
+541-    #
+542-    #  *** AN EARLIER DRAFT OF THIS COMMENT SAID THE SCAN CANNOT SEE THE
+543-    #  RAW-ADDRESS MUTANT, 56/56 IDENTICAL TO CORRECT. That was the pass-1
+544-    #  analysis of a design WITHOUT the bounds guard, and the round's own kill
+545-    #  table refutes it. ***  With the guard, raw indexing pushes k to 255
+546-    #  against 64 keys, the guard rejects, most offsets never report, and the
+547-    #  count drops.  A seat caught the comment still carrying the pre-guard
+548-    #  number beside a table that measured otherwise.
+549-    #
+550-    #  `granularity` is the one that does: at 4-byte stride byte- and word-indexing
+551-    #  give equally many distinct keys, so only a SUB-WORD access exposes it.  That
+552-    #  `granularity` pins the per-word keying directly, which is a DESIGN COMMITMENT
+553-    #  worth one access.
+554-    #
+555-    #  *** THREE CLAIMS STOOD HERE AND A SEAT REFUTED ALL THREE. ***
+556-    #
+557-    #  It said the raw-address mutant "lands five words past the array, directly on
+558-    #  dma_reg[], setting the two fields that authorise a DMA transfer".  A guardless
+--
+626-#  pair.  `alias` pins words 0 and 1; `& 1` and `/ 2` both collide words 0 and
+627-#  TWO, so it was blind to both until `alias2` was added.  Four seats found
+628-#  these four escapes against a table that was already green.
+629-#
+630-#  -u IS LOAD-BEARING, for the reason the gdrom section above records: with
+631-#  stdout redirected to a file it is block buffered, and a killed run then
+632-#  loses every row and looks like a run that produced nothing.
+633-ASLOG=$LOGDIR/gate_asic_badaddr.log
+634-python3 -u asic_badaddr_probe.py "$PMAX" "$KERNEL" > "$ASLOG" 2>&1 || true
+635-
+636-if ! grep -q "ASIC_BADADDR_RESULT=" "$ASLOG"; then
+637-    note "asic_badaddr probe produced no result line; last lines follow"
+638-    tail -5 "$ASLOG" | sed 's/^/       /'
+639-    check "asic_badaddr probe completed" "no" "yes"
+640-else
+641-    grep -E " ok$| FAIL$" "$ASLOG" | sed 's/^/       /'
+642-    asres=$(grep -o "ASIC_BADADDR_RESULT=[0-9]*/[0-9]*" "$ASLOG" | tail -1 | cut -d= -f2)
+643-
+644-    #  *** THE PARSE MUST BE CHECKED BEFORE THE SCORE IS READ. ***  Three panel
+645-    #  seats independently found the same false pass here: if the result line
+646-    #  exists but is MALFORMED (no slash, truncated digits), the outer grep -q
+647-    #  still succeeds, `asres` is EMPTY, and then `${asres%/*}` and
+648-    #  `${asres#*/}` BOTH expand to the empty string -- so
+649-    #  `check "rows correct" "" ""` PASSES while nothing was measured.  The
+650:    #  `rows run` sibling would still redden the gate, so this was never a
+651-    #  silent green overall; it was a false GREEN ROW, which is worse than
+652-    #  useless because a reader scanning check output is misled about which
+653-    #  part failed.  This is the project's own "a pattern that matched nothing
+654-    #  reports zero for everything" class, wearing shell-expansion clothes.
+655-    if [ -z "$asres" ]; then
+656-        note "asic_badaddr result line present but unparseable; last lines follow"
+657-        tail -3 "$ASLOG" | sed 's/^/       /'
+658-        check "asic_badaddr result parses" "no" "yes"
+659-    else
+660-        check "asic_badaddr result parses" "yes" "yes"
+661-        #  *** 13 -> 14 ON 2026-08-29.  ALL FOURTEEN ROWS PASS; ONLY THE PIN WAS STALE.
+662:        #  The battery reported `rows run got=14 want=13` while `rows correct` read 14
+663-        #  in the SAME run -- denominator stale, numerator sound. ***
+664-        #
+665-        #  Provenance: pinned at 13 by `f1fa6a0` (#463); `d894e35` (#474) added the
+666-        #  `asicoffsetkill` sweep row to the probe and did not move the pin.  #474 was a
+667-        #  footbridge round, so it edited a probe belonging to a gate it did not run --
+668-        #  which is why nothing surfaced until the weekly battery.
+669-        #
+670-        #  *** AN EARLIER DRAFT BUMPED THIS NUMBER WITH NO COMMENT AT ALL, while the
+671-        #  other three re-pins in this round carried paragraphs.  THREE PASS-2 SEATS
+672-        #  INDEPENDENTLY CALLED THAT A DEFECT (glm, deepseek, minimax) -- a bare number
+673-        #  bump is indistinguishable from fitting the pin to the output. ***
+674:        check "asic_badaddr rows run"     "${asres#*/}" 14
+675-        check "asic_badaddr rows correct" "${asres%/*}" "${asres#*/}"
+676-
+677-        #  Per-row presence.  A row that silently stops being tested is the
+678-        #  padded-column class; every name here is <= 10 chars against the
+679-        #  probe's %-14s column, so the two-space anchor cannot become
+680-        #  unsatisfiable.  The `count "$ASLOG"` on the NEXT line is what
+681-        #  identifies this section -- every section's list opens "live" "devsig".
+682-        #
+683-        #  `alias` IS A PREFIX OF `alias2`, which is the sibling of the
+684-        #  padded-column trap: one name's pattern matching two rows, or none.
+685-        #  CHECKED EMPIRICALLY against probe-formatted lines rather than reasoned
+686-        #  about -- each of alias / alias2 / crossarr matches EXACTLY ONE. The
+687-        #  two-space anchor cannot span the collision because the character after
+688-        #  `alias` is the digit 2, not a space. If a future row is named so that a
+689-        #  SPACE follows an existing name's prefix, re-run that check before
+690-        #  trusting this loop.
+691-        #
+692-        #  *** AND THERE IS A HARD LENGTH BOUND: ROW NAMES MUST BE <= 13 CHARS. ***
+693-        #  The probe's format is "%-14s " -- fourteen columns plus one literal
+694-        #  space -- so a name of length L is followed by (15 - L) spaces.  At L=13
+695-        #  that is two spaces and the anchor still matches; at L=14 it is ONE, the
+696-        #  `^$v  ` anchor can never match, and THE ROW SILENTLY STOPS BEING TESTED
+697-        #  while the gate stays green.  Longest name here is `kill store` (10), so
+698-        #  there are three characters of headroom.  Named by a panel seat, which
+--
+1039-        check "gdrompio probe completed" "no" "yes"
+1040-    else
+1041-        grep -E " ok$| FAIL$" "$GPNLOG" | sed 's/^/       /'
+1042-
+1043-        #  *** CONTROLS FIRST, AND SEPARATELY. ***  A run whose five controls all died
+1044-        #  scored 1/13 today and looked like a catastrophic regression; the real cause was
+1045-        #  a nonexistent image path passed by the operator.  A dead-control run must
+1046-        #  announce itself as an APPARATUS failure, not as twelve product failures.
+1047-        if grep -q "GDROMPIO_CONTROL=OK" "$GPNLOG"; then
+1048-            check "gdrompio controls live" "yes" "yes"
+1049-        else
+1050-            note "gdrompio CONTROLS DEAD -- the probe never reached the device."
+1051-            note "Do not read the row scores below as product failures."
+1052-            check "gdrompio controls live" "no" "yes"
+1053-        fi
+1054-
+1055-        #  PARSE BEFORE SCORE.  A malformed result line still satisfies the outer grep,
+1056-        #  leaving gdres empty so both halves expand to "" and the score row compares
+1057-        #  "" with "" -- green on nothing.  This is the wdc_flood idiom, same reason.
+1058-        gdres=$(grep -o "GDROMPIO_RESULT=[0-9]*/[0-9]*" "$GPNLOG" | tail -1 | cut -d= -f2)
+1059-        case "$gdres" in
+1060-            [0-9]*/[0-9]*)
+1061-                check "gdrompio result parses" "yes" "yes"
+1062-                #  the denominator against a LITERAL: a probe that loses rows cannot pass
+1063:                check "gdrompio rows run"     "${gdres#*/}" 13
+1064-                check "gdrompio rows correct" "${gdres%/*}" "${gdres#*/}"
+1065-                ;;
+1066-            *)
+1067-                check "gdrompio result parses" "no" "yes"
+1068-                ;;
+1069-        esac
+1070-
+1071-        #  Per-row presence.  A row that silently stops being tested is the padded-column
+1072-        #  class; these names are checked individually so a vanished row reds.
+1073-        for v in "live" "devsig sh4" "gdrom map" "cheap trig" "staged trig" \
+1074-                 "staged quiet" "cheap loud"; do
+1075-            n=$(grep -c "^$v  .*ok$" "$GPNLOG")
+1076-            check "gdrompio row present: $v" "$( [ "$n" -ge 1 ] && echo yes || echo no )" "yes"
+1077-        done
+1078-    fi
+1079-fi
+1080-
+1081-#  ------------------------------------------------------------------ #489 gdrom TOC length
+1082-#
+1083-#  The `case 0x14` TOC length guard used to end the host on a GUEST-SUPPLIED cnt.  The
+1084-#  WITNESS for it is deliberately NOT run here -- it pins the PRE-fix symptom, so gating it
+1085-#  would manufacture a regression the day the fix landed.  It lives ungated at
+1086-#  artifacts/gdromexitsix/gdrom_toclen_witness.py and is registered CLASS_WITNESS.
+1087-#
+--
+1105-        grep -E " ok$| FAIL$" "$TOCLOG" | sed 's/^/       /'
+1106-
+1107-        #  CONTROLS FIRST AND SEPARATELY.  A run whose controls all died is an APPARATUS
+1108-        #  failure -- a bad image path, a load spike eating the settle window -- and must
+1109-        #  not be read as product failures.  gdrompio scored 1/13 that way once.
+1110-        if grep -q "TOCLEN_CONTROL=OK" "$TOCLOG"; then
+1111-            check "gdromtoclen controls live" "yes" "yes"
+1112-        else
+1113-            note "gdromtoclen CONTROLS DEAD -- the probe never reached the device."
+1114-            note "Do not read the row scores below as product failures."
+1115-            check "gdromtoclen controls live" "no" "yes"
+1116-        fi
+1117-
+1118-        #  PARSE BEFORE SCORE.  A malformed result line still satisfies the outer grep,
+1119-        #  leaving tocres empty so both halves expand to "" and the score row compares
+1120-        #  "" with "" -- green on nothing.  Same reason as the wdc_flood idiom above.
+1121-        tocres=$(grep -o "TOCLEN_RESULT=[0-9]*/[0-9]*" "$TOCLOG" | tail -1 | cut -d= -f2)
+1122-        if [ -z "$tocres" ]; then
+1123-            note "gdromtoclen result line present but unparseable; last lines follow"
+1124-            tail -5 "$TOCLOG" | sed 's/^/       /'
+1125-            check "gdromtoclen result parses" "no" "yes"
+1126-        else
+1127-            check "gdromtoclen result parses" "yes" "yes"
+1128-            #  the denominator against a LITERAL: a probe that loses rows cannot pass
+1129:            check "gdromtoclen rows run"     "${tocres#*/}" 19
+1130-            check "gdromtoclen rows correct" "${tocres%/*}" "${tocres#*/}"
+1131-        fi
+1132-
+1133-        #  Per-row presence.  A row that silently stops being tested is the padded-column
+1134-        #  class; these names are checked individually so a vanished row reds.
+1135-        for v in "live" "devsig sh4" "gdrom map" "ok data0" "ok data1" "ok surv" \
+1136-                 "ok cond" "bad surv" "bad says" "zero surv" "bad cond" \
+1137-                 "bad cnt" "bad event" "zero cond" "over surv" "over cond" \
+1138-                 "latch once" "latch surv" "latch cond"; do
+1139-            n=$(grep -c "^$v  .*ok$" "$TOCLOG")
+1140-            check "gdromtoclen row present: $v" "$( [ "$n" -ge 1 ] && echo yes || echo no )" "yes"
+1141-        done
+1142-    fi
+1143-fi
+1144-
+1145-#  ---------------------------------------------------------------- #490 gdromdecline
+1146-#
+1147-#  The two de-fatalised sites in dev_dreamcast_gdrom.c's handle_command(): the case 0x30
+1148-#  data-format guard and the default: arm.  Both were fatal() + exit(1) reached by an
+1149-#  ordinary guest store.
+1150-#
+1151-#  ITS OWN SECTION AND ITS OWN DENOMINATOR, deliberately.  Bolting these rows onto the
+1152-#  58-row gdrom_default probe would edit two coupled places -- a literal and a 58-name list
+1153-#  that must agree -- for every row added.  #489 set that precedent and this follows it.
+--
+1175-    else
+1176-        grep -E " ok$| FAIL$" "$DECLLOG" | sed 's/^/       /'
+1177-
+1178-        #  CONTROLS FIRST AND SEPARATELY -- a run whose controls died is an APPARATUS
+1179-        #  failure and must not be read as product failures.
+1180-        if grep -q "GDROM_DECL_CONTROL=OK" "$DECLLOG"; then
+1181-            check "gdromdecline controls live" "yes" "yes"
+1182-        else
+1183-            note "gdromdecline CONTROLS DEAD -- the probe never reached the device."
+1184-            note "Do not read the row scores below as product failures."
+1185-            check "gdromdecline controls live" "no" "yes"
+1186-        fi
+1187-
+1188-        #  PARSE BEFORE SCORE.  A malformed result line still satisfies the outer grep,
+1189-        #  leaving declres empty so both halves expand to "" and the score row compares ""
+1190-        #  with "" -- green on nothing.
+1191-        declres=$(grep -o "GDROM_DECL_RESULT=[0-9]*/[0-9]*" "$DECLLOG" | tail -1 | cut -d= -f2)
+1192-        if [ -z "$declres" ]; then
+1193-            note "gdromdecline result line present but unparseable; last lines follow"
+1194-            tail -5 "$DECLLOG" | sed 's/^/       /'
+1195-            check "gdromdecline result parses" "no" "yes"
+1196-        else
+1197-            check "gdromdecline result parses" "yes" "yes"
+1198-            #  the denominator against a LITERAL: a probe that loses rows cannot pass
+1199:            check "gdromdecline rows run"     "${declres#*/}" 20
+1200-            check "gdromdecline rows correct" "${declres%/*}" "${declres#*/}"
+1201-        fi
+1202-
+1203-        #  Per-row presence.  A row that silently stops being tested is the padded-column
+1204-        #  class; these names are checked individually so a vanished row reds.
+1205-        for v in "live" "devsig sh4" "gdrom map" "fmt surv" "fmt says" "fmt x2" \
+1206-                 "latch cond" "fmt stage" "fmt cnt" "fmt event" "fmt 0x24" "unk surv" "unk says" \
+1207-                 "unk x2" "unk cnt" "unk event" "both sites" "crossbit" "acceptA" \
+1208-                 "accept sil"; do
+1209-            n=$(count "$DECLLOG" "^$v  .*ok$")
+1210-            check "gdromdecline row present: $v" "$( [ "$n" -ge 1 ] && echo yes || echo no )" "yes"
+1211-        done
+1212-    fi
+1213-fi
+1214-
+1215-#  ---------------------------------------------------------------------------------------
+1216-#  #496 gdromcondlies -- GDROM_UNKNOWN_0x88 and GDROM_COND bad-value declines.
+1217-#
+1218-#  Two guest-reachable host kills de-fatalised, plus -- at GDROM_COND only -- the
+1219-#  `d->cond = idata;` store MOVED from above the dispatch into the two accepted arms.
+1220-#  That relocation is the half of the fix that is not about exit(): COND_DATA_AVAIL
+1221-#  (0x08) is a bit of d->cond and the GDROM_DATA read path is gated on it, so leaving
+1222-#  the store where it was would let any declined value forge or revoke data-available.
+1223-#
+--
+1268-        #  *** AND THE TRAILING CONTROL, WHICH IS A DIFFERENT QUESTION. ***  The opening
+1269-        #  controls run FIRST, so they cannot see a rig that degrades partway.  MEASURED: a
+1270-        #  contended run scored 18/25 with CONTROL=OK -- seven late rows reading `absent` and
+1271-        #  one session dying -- and nothing in the log said the scores were uncitable.
+1272-        #  "Alive at the start" and "alive throughout" are different facts.
+1273-        if grep -q "GDROMCOND_CONTROL_END=OK" "$CONDLOG"; then
+1274-            check "gdromcond controls live at END" "yes" "yes"
+1275-        else
+1276-            note "gdromcond TRAILING CONTROL DEAD -- the rig degraded DURING the run."
+1277-            note "Everything after the failure point measured nothing.  Re-run alone."
+1278-            check "gdromcond controls live at END" "no" "yes"
+1279-        fi
+1280-
+1281-        #  PARSE BEFORE SCORE.  A malformed result line still satisfies the outer grep,
+1282-        #  leaving condres empty so both halves expand to "" and the score row compares
+1283-        #  "" with "" -- green on nothing.
+1284-        condres=$(grep -o "GDROMCOND_PROBE_RESULT=[0-9]*/[0-9]*" "$CONDLOG" | tail -1 | cut -d= -f2)
+1285-        if [ -z "$condres" ]; then
+1286-            note "gdromcond result line present but unparseable; last lines follow"
+1287-            tail -5 "$CONDLOG" | sed 's/^/       /'
+1288-            check "gdromcond result parses" "no" "yes"
+1289-        else
+1290-            check "gdromcond result parses" "yes" "yes"
+1291-            #  the denominator against a LITERAL: a probe that loses rows cannot pass
+1292:            check "gdromcond rows run"     "${condres#*/}" 31
+1293-            check "gdromcond rows correct" "${condres%/*}" "${condres#*/}"
+1294-        fi
+1295-
+1296-        #  Per-row presence.  A row that silently stops being tested is the padded-column
+1297-        #  class; these names are checked individually so a vanished row reds.  Every name
+1298-        #  is <= 12 chars against a %-14s column, so the two-space anchor below is always
+1299-        #  satisfiable -- a name AS LONG AS its column makes the check impossible instead.
+1300-        for v in "live" "devsig sh4" "devsig st" "devsig cnt" \
+1301-                 "R1 a88 says" "R1b a88 trk" "R3 a88 x3" \
+1302-                 "R10 a88 nop" "R10b a88 decl" "R10c a88 evt" \
+1303-                 "R2 cond says" "R2b cond trk" "R4 cond x3" \
+1304-                 "R5 cond keep" "R5b cond 00" "R5c cond a0" "R5d cond 09" \
+1305-                 "R6 a0 busy" "R8 a0 echo" "R9 ef event" \
+1306-                 "R7 no event" "R7b cond st" "R11 crossbit" \
+1307-                 "R12 no forge" "R12b cond ff" "R12c cond 108" \
+1308-                 "R12d hi byte" "R13 recount" "R13b mid pkt" \
+1309-                 "Zlive end" "Zdevsig end"; do
+1310-            n=$(count "$CONDLOG" "^$v  .*ok$")
+1311-            check "gdromcond row present: $v" "$( [ "$n" -ge 1 ] && echo yes || echo no )" "yes"
+1312-        done
+1313-    fi
+1314-fi
+1315-
+1316-#  ---------------------------------------------------------------------------------------
+--
+1337-if [ ! -f "$BSCPROBE" ]; then
+1338-    gate_skip "sh4bscwidth: $BSCPROBE absent"
+1339-else
+1340-    BSCLOG=$LOGDIR/gate_sh4_bsc_width.log
+1341-    python3 -u "$BSCPROBE" "$PMAX" "$KERNEL" > "$BSCLOG" 2>&1 || true
+1342-
+1343-    if ! grep -q "SH4_BSC_WIDTH_DONE" "$BSCLOG"; then
+1344-        note "sh4bscwidth probe did not reach its completion sentinel; last lines follow"
+1345-        tail -5 "$BSCLOG" | sed 's/^/       /'
+1346-        check "sh4bscwidth probe completed" "no" "yes"
+1347-    else
+1348-        grep -E "^  (ok|FAIL) " "$BSCLOG" | sed 's/^/       /'
+1349-
+1350-        #  PARSE BEFORE SCORE.  A malformed result line still satisfies an outer grep,
+1351-        #  leaving the variable empty so both halves expand to "" and the row compares ""
+1352-        #  with "" -- green on nothing.
+1353-        bscres=$(grep -o "SH4_BSC_WIDTH_RESULT=[0-9]*/[0-9]*" "$BSCLOG" | tail -1 | cut -d= -f2)
+1354-        if [ -z "$bscres" ]; then
+1355-            note "sh4bscwidth result line present but unparseable; last lines follow"
+1356-            tail -5 "$BSCLOG" | sed 's/^/       /'
+1357-            check "sh4bscwidth result parses" "no" "yes"
+1358-        else
+1359-            check "sh4bscwidth result parses" "yes" "yes"
+1360-            #  the denominator against a LITERAL: a probe that loses rows cannot pass
+1361:            check "sh4bscwidth rows run"     "${bscres#*/}" 13
+1362-            check "sh4bscwidth rows correct" "${bscres%/*}" "${bscres#*/}"
+1363-        fi
+1364-
+1365-        #  D0 and D7a are this probe's OWN controls and are checked BY NAME rather than
+1366-        #  folded into the score -- a control that goes red while the total stays acceptable
+1367-        #  is an apparatus failure being read as a product result.
+1368-        for c in "D0 every arm produced data" "D7a CONTROL: the CPU really is big-endian"; do
+1369-            check "sh4bscwidth control: $c" \
+1370-                  "$(grep -c "^  ok   $c" "$BSCLOG")" "1"
+1371-        done
+1372-
+1373-        #  Per-row presence.  A row that silently stops being tested is the padded-column
+1374-        #  class, so each is pinned individually rather than by a total.
+1375-        for v in "D1 4-byte write reaches BCR2 AND IS MASKED; host survives" \
+1376-                 "D2 4-byte read returns the register in its own lane" \
+1377-                 "D3 a 1-byte write is not promoted to 16 bits" \
+1378-                 "D4 BOTH sites latch SEPARATELY, in one process (count the suffix, NOT the name)" \
+1379-                 "D5 a second non-16-bit access in one process survives" \
+1380-                 "D6 the 4-byte access is diagnosed AND says it was serviced" \
+1381-                 "D6b a 4-byte READ is diagnosed too, not only a write" \
+1382-                 "D7b a 4-byte write takes the FIRST two bytes on big-endian" \
+1383-                 "D8 BCR3's write reaches its register UNMASKED" \
+1384-                 "D9 a 1-byte READ does not kill the host" \
+1385-                 "D10 a legal 16-bit access is NOT diagnosed"; do
+--
+1396-else
+1397-    WFLOG=$LOGDIR/gate_wdc_flood.log
+1398-    python3 -u wdc_flood_probe.py "$PMAX" "$KERNEL" "$WDCIMG" > "$WFLOG" 2>&1 || true
+1399-
+1400-    if ! grep -q "WDC_FLOOD_RESULT=" "$WFLOG"; then
+1401-        note "wdc_flood probe produced no result line; last lines follow"
+1402-        tail -5 "$WFLOG" | sed 's/^/       /'
+1403-        check "wdc_flood probe completed" "no" "yes"
+1404-    else
+1405-        grep -E " ok$| FAIL$" "$WFLOG" | sed 's/^/       /'
+1406-        wfres=$(grep -o "WDC_FLOOD_RESULT=[0-9]*/[0-9]*" "$WFLOG" | tail -1 | cut -d= -f2)
+1407-
+1408-        #  *** PARSE BEFORE SCORE. ***  If the result line exists but is MALFORMED, the
+1409-        #  outer grep still succeeds, `wfres` is EMPTY, and both `${wfres%/*}` and
+1410-        #  `${wfres#*/}` expand to the empty string -- so `check "rows correct" "" ""`
+1411-        #  PASSES while nothing was measured.  Three panel seats found that false pass
+1412-        #  in the asic section above; it is the project's own "a pattern that matched
+1413-        #  nothing reports zero for everything" class in shell-expansion clothes.
+1414-        if [ -z "$wfres" ]; then
+1415-            note "wdc_flood result line present but unparseable; last lines follow"
+1416-            tail -3 "$WFLOG" | sed 's/^/       /'
+1417-            check "wdc_flood result parses" "no" "yes"
+1418-        else
+1419-            check "wdc_flood result parses" "yes" "yes"
+1420:            check "wdc_flood rows run"     "${wfres#*/}" 26
+1421-            check "wdc_flood rows correct" "${wfres%/*}" "${wfres#*/}"
+1422-
+1423-            #  Per-row presence.  A row that silently stops being tested is the
+1424-            #  padded-column class.  The probe's format is "%-14s " -- fourteen columns
+1425-            #  plus one literal space -- so a name of length L is followed by (15 - L)
+1426-            #  spaces; at L=13 that is two and the `^$v  ` anchor still matches, at L=14
+1427-            #  it is ONE and THE ROW SILENTLY STOPS BEING TESTED while the gate stays
+1428-            #  green.  Longest name here is `overread x2` / `unimpl 2op` (11), so there
+1429-            #  are two characters of headroom.  Checked: no name is a prefix of another
+1430-            #  followed by a space, so no pattern can match two rows.
+1431-            #  The `count "$WFLOG"` on the next line is what identifies this section --
+1432-            #  every section's list opens "live" "devsig".
+1433-            for v in "live" "devsig" "unimpl x2" "unimpl 2op" "abrt 2nd" "overread x2" "overread -1" "w16 x2" "r16 x2" "datawr x2" "fire3" "interleave" "w16 reset" "wr indep" "w mixed" "r mixed" "r16 reset" "w32 x2" "r32 x2" "r16 value" "w16 value" "overrun x2" "accept ec" "accept w8" "accept r8" "disjoint"; do
+1434-                n=$(count "$WFLOG" "^$v  .*ok$")
+1435-                check "wdc_flood $v" "$n" 1
+1436-            done
+1437-        fi
+1438-    fi
+1439-fi
+1440-
+1441-# ---------------------------------------------------------------------------
+1442-# #525 (wdcaltdigin): the wdc alt-ctrl handler never decoded its offset ON THE
+1443-# READ SIDE.  `relative_addr' was tested in exactly ONE place -- inside the
+1444-# `else' of `writeflag == MEM_READ' -- so a READ of offset 1, the Drive Address
+--
+1499-    #  PASSES while nothing was measured. ***
+1500-    if [ -z "$adres" ]; then
+1501-        note "wdc_altdigin result line present but unparseable; last lines follow"
+1502-        tail -3 "$ADLOG" | sed 's/^/       /'
+1503-        check "wdc_altdigin result parses" "no" "yes"
+1504-    else
+1505-        check "wdc_altdigin result parses" "yes" "yes"
+1506-
+1507-        adctl=$(grep -o "WDC_ALTDIGIN_CONTROL=[A-Z]*" "$ADLOG" | tail -1 | cut -d= -f2)
+1508-        check "wdc_altdigin control: liveness and devsig" "${adctl:-missing}" "OK"
+1509-
+1510-        #  DENOMINATOR PINNED TO A LITERAL.  A gate that trusts the probe's own
+1511-        #  denominator cannot tell a probe that LOST rows from one that never had
+1512-        #  them -- which is this file's own padded-column lesson one level up.
+1513-        #  *** PIN MOVED 16 -> 19 ON 2026-09-11 (#525 pass 2), DELIBERATELY. ***  The
+1514-        #  probe gained a three-row phase that drives the offset-1 decline with DRDY
+1515-        #  CLEAR, by selecting the ABSENT SLAVE (0xb0 -> wd_sdh).  Without it the
+1516-        #  one-token mutant `if (odata & WDCS_DRDY) odata = 0;` swept all 16 rows:
+1517-        #  every earlier row drives DRDY SET (0x51 / 0x58), so the mutant zeroed
+1518-        #  anyway and was invisible BY CONSTRUCTION.  A pin that follows the probe
+1519-        #  cannot tell a probe that GAINED rows from one that LOST them, which is
+1520-        #  why the literal moves by hand and says why.
+1521-        #  PIN 19 -> 22 (2026-09-12, #525 pass 3): the 0x01 cell (absent slave at
+1522-        #  power-on) and the 0x50 cell (post-SRST), closing the status-bit class.
+1523:        check "wdc_altdigin rows run"     "${adres#*/}" 22
+1524-        check "wdc_altdigin rows correct" "${adres%/*}" "${adres#*/}"
+1525-    fi
+1526-fi
+1527-
+1528-#  *** A SOURCE GREP, BECAUSE A STEP-BASED PROBE CANNOT SEE CHANNEL SEMANTICS. ***
+1529-#  `fatal(` -> `debug(` at any of the six sites scores a CLEAN SWEEP against every row
+1530-#  above: they all single-step, and debug() always prints under stepping (its early-out
+1531-#  at core/debugmsg.c:375 fires on `v < 0`, which free-running at verbose 0 gives and
+1532-#  stepping does not).  A production guest would get SILENCE while the detector stayed
+1533-#  green -- quietly reversing this fork's own warrant for keeping fatal() (dev_asc.c:248-257:
+1534-#  under -q verbosity settles at VERBOSITY_ERROR, so a WARNING-level debugmsg is invisible
+1535-#  to the boot-log hygiene grep and an ERROR-level one trips #261's break-on-ERROR).
+1536-#  Named by a file-reading seat on the pass-2 panel.  Textual, cheap, and the only guard
+1537-#  that exists for this class.
+1538-#  *** PIN ON THE OPENING STRING LITERAL, AND THE REASON IS A NEAR MISS WORTH RECORDING. ***
+1539-#  A first draft pinned `grep -c 'fatal('` at 12.  That counts COMMENT lines mentioning
+1540-#  fatal() and gives 15 -- an UNSATISFIABLE check, red forever.  Narrowing to
+1541-#  `^[[:space:]]+fatal\(` gives 12 and looks correct -- but TWO of those matches are
+1542-#  comment CONTINUATION lines that happen to start with whitespace then "fatal()".  The
+1543-#  number would have been right BY COINCIDENCE, and any edit to that comment block would
+1544-#  have broken a check nobody would suspect.  `fatal("` cannot match a comment, and 10 is
+1545-#  the true census: 4 call sites latched by #337, 6 by this round.
+1546-#  *** THIS WAS AN EQUALITY PINNED AT 10 AND IT WAS RED FROM #476 UNTIL 2026-08-27,
+1547-#      WHICH IS TWO ROUNDS AND NOBODY SAW IT.  The grep returns 12: #476 added the
+--
+1652-#  (fatal + exit(1)).  Now ACCEPT, answered like MAPLE_ENABLE's read.  The detector drives real SH4 guest
+1653-#  loads/stores on unmodified -E dreamcast, every load destination POISONED, and in its twelve read sessions compares
+1654-#  the WHOLE transcript, through `quit' to the pty's EOF, with the exact line sequence the commands owe -- never a
+1655-#  device name, never a whitelist of line shapes -- and requires every read session to reach EOF and exit 0.  37 rows;
+1656-#  kill tables 2-7 under artifacts/mapledmaaddr/ (their SCORES.txt and POSTTABLE.out).
+1657-#  PARSE BEFORE SCORE: each protocol KEY exactly once and well formed; the pins are UNQUOTED literals so
+1658-#  check_score_claims.py sees them (a quoted count is invisible to its PIN regex -- #526).
+1659-MAPLELOG=$LOGDIR/gate_maple_dmaaddr.log
+1660-mrc=0
+1661-python3 -u maple_dmaaddr_probe.py "$PMAX" "$KERNEL" gate > "$MAPLELOG" 2>&1 || mrc=$?
+1662-if [ "$(grep -c '^MAPLE_DMAADDR_RESULT=' "$MAPLELOG")" != "1" ] ||
+1663-   ! grep -Eq '^MAPLE_DMAADDR_RESULT=(0|[1-9][0-9]*)/(0|[1-9][0-9]*)$' "$MAPLELOG" ||
+1664-   [ "$(grep -c '^MAPLE_DMAADDR_CONTROL=' "$MAPLELOG")" != "1" ] ||
+1665-   ! grep -Eq '^MAPLE_DMAADDR_CONTROL=(OK|FAIL)$' "$MAPLELOG" ||
+1666-   [ "$(grep -cx 'MAPLE_DMAADDR_PROBE_DONE' "$MAPLELOG")" != "1" ]; then
+1667-    note "mapledmaaddr probe produced no unique, valid completion record; last lines follow"
+1668-    tail -5 "$MAPLELOG" | sed 's/^/       /'
+1669-    check "mapledmaaddr probe output parses" "no" "yes"
+1670-else
+1671-    check "mapledmaaddr probe output parses" "yes" "yes"
+1672-    grep -E ' (ok|FAIL)$' "$MAPLELOG" | sed 's/^/       /'
+1673-    check "mapledmaaddr controls" "$(sed -n 's/^MAPLE_DMAADDR_CONTROL=//p' "$MAPLELOG")" "OK"
+1674-    check "mapledmaaddr probe exit status" "$mrc" "0"
+1675-    mres=$(sed -n 's/^MAPLE_DMAADDR_RESULT=//p' "$MAPLELOG")
+1676:    check "mapledmaaddr rows run"     "${mres#*/}" 37
+1677-    check "mapledmaaddr rows correct" "${mres%/*}" 37
+1678-    check "mapledmaaddr rows emitted" "$(grep -cE ' (ok|FAIL)$' "$MAPLELOG")" 37
+1679-    check "mapledmaaddr rows failed"  "$(grep -c ' FAIL$' "$MAPLELOG")" 0
+1680-fi
+1681-
+1682:# ------------------------------------------------------------------ #533 landiskaux
+1683-#  landisk's wdc aux (alt-status / Device Control) register.  Before #533 it was registered at the
+1684-#  PC-layout +0x206 and the kernel's twelve Device Control writes -- the first a soft reset --
+1685-#  landed at +0x2c on unmapped memory.  WIRED IN THE SAME COMMIT AS THE PROBE, so it cannot ship
+1686-#  unwired and let its pin drift red between commits (the #441 failure).
+1687-#
+1688-#  Every row reads a GUEST-VISIBLE register value, never the `[ wdc: ... ]' debug line, which goes
+1689-#  quiet under -q.  `live' is the probe's own control and is checked BY NAME: a control that goes
+1690-#  red while the total stays acceptable is an apparatus failure read as a product result.
+1691:LANDPROBE=landisk_aux_probe.py
+1692-if [ ! -f "$LANDPROBE" ]; then
+1693:    gate_skip "landiskaux: $LANDPROBE absent"
+1694-else
+1695:    LANDLOG=$LOGDIR/gate_landisk_aux.log
+1696-    python3 -u "$LANDPROBE" "$PMAX" "$KERNEL" > "$LANDLOG" 2>&1 || true
+1697-
+1698-    if ! grep -q "LANDISK_AUX_DONE" "$LANDLOG"; then
+1699:        note "landiskaux probe did not reach its completion sentinel; last lines follow"
+1700-        tail -5 "$LANDLOG" | sed 's/^/       /'
+1701:        check "landiskaux probe completed" "no" "yes"
+1702-    else
+1703-        grep -E ' (ok|FAIL)$' "$LANDLOG" | sed 's/^/       /'
+1704-        #  PARSE BEFORE SCORE: an empty variable compares "" with "" and goes green on nothing.
+1705-        lres=$(grep -o "LANDISK_AUX_RESULT=[0-9]*/[0-9]*" "$LANDLOG" | tail -1 | cut -d= -f2)
+1706-        if [ -z "$lres" ]; then
+1707:            check "landiskaux result parses" "no" "yes"
+1708-        else
+1709:            check "landiskaux result parses" "yes" "yes"
+1710:            check "landiskaux rows run"     "${lres#*/}" 6
+1711:            check "landiskaux rows correct" "${lres%/*}" 6
+1712-        fi
+1713:        check "landiskaux control: live" "$(grep -cE '^live +0x.* ok$' "$LANDLOG")" "1"
+1714-        #  Per-row presence, anchored on the FULL name then spaces then the value, so
+1715:        #  `aux 2c read' cannot match `aux 2c reset' and no row can silently stop being tested.
+1716:        for v in "aux 2c rest" "aux 206 gone" "aux 2c reset" "aux 2c read" "206 ctl dead"; do
+1717:            check "landiskaux row: $v" "$(grep -cE "^$v +0x.* ok\$" "$LANDLOG")" "1"
+1718-        done
+1719-    fi
+1720-fi
+1721-
+1722-gate_end
+
+ exited 1 in 289ms:
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$n = 0
+Get-Content -LiteralPath regress/landisk_aux_probe.py | ForEach-Object { $n++; '"'{0,4}: {1}' -f "'$n, $_ }' in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$src = Get-Content -LiteralPath src/devices/dev_wdc.c
+foreach ($i in 2055..2205) { if ($i -lt $src.Count) { '"'{0,4}: {1}' -f ("'$i + 1), $src[$i] } }
+rg -n -C 8 '"'device_add|0x140|0x1e0|wdc' src/machines/machine_landisk.c
+rg -n '"'^#define[ '"\\t]+(MACHINE_(LANDISK|IQ80321|MACPPC|HPCMIPS)|WDCTL_(RST|IDS|4BIT))' src/include" in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n -C 6 'AUXREG|bus_space_map|WDC_OBIO_REG|or_addr' regress/artifacts/landiskaux/rung3_opus_20260918/openbsd_wdc_obio.c regress/artifacts/landiskaux/rung3_opus_20260918/netbsd_wdc_obio.c
+rg --files regress/artifacts/landiskaux/detector_20260918" in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+ succeeded in 131ms:
+regress/artifacts/landiskaux/rung3_opus_20260918/netbsd_wdc_obio.c-56-static int	wdc_obio_probe(device_t, cfdata_t, void *);
+regress/artifacts/landiskaux/rung3_opus_20260918/netbsd_wdc_obio.c-57-static void	wdc_obio_attach(device_t, device_t, void *);
+regress/artifacts/landiskaux/rung3_opus_20260918/netbsd_wdc_obio.c-58-
+regress/artifacts/landiskaux/rung3_opus_20260918/netbsd_wdc_obio.c-59-CFATTACH_DECL_NEW(wdc_obio, sizeof(struct wdc_obio_softc),
+regress/artifacts/landiskaux/rung3_opus_20260918/netbsd_wdc_obio.c-60-    wdc_obio_probe, wdc_obio_attach, NULL, NULL);
+regress/artifacts/landiskaux/rung3_opus_20260918/netbsd_wdc_obio.c-61-
+regress/artifacts/landiskaux/rung3_opus_20260918/netbsd_wdc_obio.c:62:#define	WDC_OBIO_REG_NPORTS	WDC_NREG
+regress/artifacts/landiskaux/rung3_opus_20260918/netbsd_wdc_obio.c:63:#define	WDC_OBIO_REG_SIZE	(WDC_OBIO_REG_NPORTS * 2)
+regress/artifacts/landiskaux/rung3_opus_20260918/netbsd_wdc_obio.c:64:#define	WDC_OBIO_AUXREG_NPORTS	1
+regress/artifacts/landiskaux/rung3_opus_20260918/netbsd_wdc_obio.c:65:#define	WDC_OBIO_AUXREG_SIZE	(WDC_OBIO_AUXREG_NPORTS * 2)
+regress/artifacts/landiskaux/rung3_opus_20260918/netbsd_wdc_obio.c:66:#define	WDC_OBIO_AUXREG_OFFSET	0x2c
+regress/artifacts/landiskaux/rung3_opus_20260918/netbsd_wdc_obio.c-67-
+regress/artifacts/landiskaux/rung3_opus_20260918/netbsd_wdc_obio.c-68-static int
+regress/artifacts/landiskaux/rung3_opus_20260918/netbsd_wdc_obio.c-69-wdc_obio_probe(device_t parent, cfdata_t cfp, void *aux)
+regress/artifacts/landiskaux/rung3_opus_20260918/netbsd_wdc_obio.c-70-{
+regress/artifacts/landiskaux/rung3_opus_20260918/netbsd_wdc_obio.c-71-	struct obio_attach_args *oa = aux;
+regress/artifacts/landiskaux/rung3_opus_20260918/netbsd_wdc_obio.c-72-	struct wdc_regs wdr;
+--
+regress/artifacts/landiskaux/rung3_opus_20260918/netbsd_wdc_obio.c-75-
+regress/artifacts/landiskaux/rung3_opus_20260918/netbsd_wdc_obio.c-76-	if (oa->oa_nio < 1)
+regress/artifacts/landiskaux/rung3_opus_20260918/netbsd_wdc_obio.c-77-		return (0);
+regress/artifacts/landiskaux/rung3_opus_20260918/netbsd_wdc_obio.c-78-	if (oa->oa_nirq < 1)
+regress/artifacts/landiskaux/rung3_opus_20260918/netbsd_wdc_obio.c-79-		return (0);
+regress/artifacts/landiskaux/rung3_opus_20260918/netbsd_wdc_obio.c-80-
+regress/artifacts/landiskaux/rung3_opus_20260918/netbsd_wdc_obio.c:81:	if (oa->oa_io[0].or_addr == IOBASEUNK)
+regress/artifacts/landiskaux/rung3_opus_20260918/netbsd_wdc_obio.c-82-		return (0);
+regress/artifacts/landiskaux/rung3_opus_20260918/netbsd_wdc_obio.c-83-	if (oa->oa_irq[0].or_irq == IRQUNK)
+regress/artifacts/landiskaux/rung3_opus_20260918/netbsd_wdc_obio.c-84-		return (0);
+regress/artifacts/landiskaux/rung3_opus_20260918/netbsd_wdc_obio.c-85-
+regress/artifacts/landiskaux/rung3_opus_20260918/netbsd_wdc_obio.c-86-	wdr.cmd_iot = oa->oa_iot;
+regress/artifacts/landiskaux/rung3_opus_20260918/netbsd_wdc_obio.c:87:	if (bus_space_map(wdr.cmd_iot, oa->oa_io[0].or_addr,
+regress/artifacts/landiskaux/rung3_opus_20260918/netbsd_wdc_obio.c:88:	    WDC_OBIO_REG_SIZE, 0, &wdr.cmd_baseioh)) {
+regress/artifacts/landiskaux/rung3_opus_20260918/netbsd_wdc_obio.c-89-		goto out;
+regress/artifacts/landiskaux/rung3_opus_20260918/netbsd_wdc_obio.c-90-	}
+regress/artifacts/landiskaux/rung3_opus_20260918/netbsd_wdc_obio.c:91:	for (i = 0; i < WDC_OBIO_REG_NPORTS; i++) {
+regress/artifacts/landiskaux/rung3_opus_20260918/netbsd_wdc_obio.c-92-		if (bus_space_subregion(wdr.cmd_iot, wdr.cmd_baseioh,
+regress/artifacts/landiskaux/rung3_opus_20260918/netbsd_wdc_obio.c-93-		    i * 2, (i == 0) ? 2 : 1, &wdr.cmd_iohs[i])) {
+regress/artifacts/landiskaux/rung3_opus_20260918/netbsd_wdc_obio.c-94-			goto outunmap;
+regress/artifacts/landiskaux/rung3_opus_20260918/netbsd_wdc_obio.c-95-		}
+regress/artifacts/landiskaux/rung3_opus_20260918/netbsd_wdc_obio.c-96-	}
+regress/artifacts/landiskaux/rung3_opus_20260918/netbsd_wdc_obio.c-97-	wdc_init_shadow_regs(&wdr);
+regress/artifacts/landiskaux/rung3_opus_20260918/netbsd_wdc_obio.c-98-
+regress/artifacts/landiskaux/rung3_opus_20260918/netbsd_wdc_obio.c-99-	wdr.ctl_iot = oa->oa_iot;
+regress/artifacts/landiskaux/rung3_opus_20260918/netbsd_wdc_obio.c:100:	if (bus_space_map(wdr.ctl_iot,
+regress/artifacts/landiskaux/rung3_opus_20260918/netbsd_wdc_obio.c:101:	    oa->oa_io[0].or_addr + WDC_OBIO_AUXREG_OFFSET,
+regress/artifacts/landiskaux/rung3_opus_20260918/netbsd_wdc_obio.c:102:	    WDC_OBIO_AUXREG_SIZE, 0, &wdr.ctl_ioh)) {
+regress/artifacts/landiskaux/rung3_opus_20260918/netbsd_wdc_obio.c-103-		goto outunmap;
+regress/artifacts/landiskaux/rung3_opus_20260918/netbsd_wdc_obio.c-104-	}
+regress/artifacts/landiskaux/rung3_opus_20260918/netbsd_wdc_obio.c-105-
+regress/artifacts/landiskaux/rung3_opus_20260918/netbsd_wdc_obio.c-106-	result = wdcprobe(&wdr);
+regress/artifacts/landiskaux/rung3_opus_20260918/netbsd_wdc_obio.c-107-	if (result) {
+regress/artifacts/landiskaux/rung3_opus_20260918/netbsd_wdc_obio.c-108-		oa->oa_nio = 1;
+regress/artifacts/landiskaux/rung3_opus_20260918/netbsd_wdc_obio.c:109:		oa->oa_io[0].or_size = WDC_OBIO_REG_SIZE;
+regress/artifacts/landiskaux/rung3_opus_20260918/netbsd_wdc_obio.c-110-		oa->oa_nirq = 1;
+regress/artifacts/landiskaux/rung3_opus_20260918/netbsd_wdc_obio.c-111-		oa->oa_niomem = 0;
+regress/artifacts/landiskaux/rung3_opus_20260918/netbsd_wdc_obio.c-112-	}
+regress/artifacts/landiskaux/rung3_opus_20260918/netbsd_wdc_obio.c-113-
+regress/artifacts/landiskaux/rung3_opus_20260918/netbsd_wdc_obio.c:114:	bus_space_unmap(wdr.ctl_iot, wdr.ctl_ioh, WDC_OBIO_AUXREG_SIZE);
+regress/artifacts/landiskaux/rung3_opus_20260918/netbsd_wdc_obio.c-115-outunmap:
+regress/artifacts/landiskaux/rung3_opus_20260918/netbsd_wdc_obio.c:116:	bus_space_unmap(wdr.cmd_iot, wdr.cmd_baseioh, WDC_OBIO_REG_SIZE);
+regress/artifacts/landiskaux/rung3_opus_20260918/netbsd_wdc_obio.c-117-out:
+regress/artifacts/landiskaux/rung3_opus_20260918/netbsd_wdc_obio.c-118-	return (result);
+regress/artifacts/landiskaux/rung3_opus_20260918/netbsd_wdc_obio.c-119-}
+regress/artifacts/landiskaux/rung3_opus_20260918/netbsd_wdc_obio.c-120-
+regress/artifacts/landiskaux/rung3_opus_20260918/netbsd_wdc_obio.c-121-static void
+regress/artifacts/landiskaux/rung3_opus_20260918/netbsd_wdc_obio.c-122-wdc_obio_attach(device_t parent, device_t self, void *aux)
+--
+regress/artifacts/landiskaux/rung3_opus_20260918/netbsd_wdc_obio.c-131-
+regress/artifacts/landiskaux/rung3_opus_20260918/netbsd_wdc_obio.c-132-	sc->sc_wdcdev.sc_atac.atac_dev = self;
+regress/artifacts/landiskaux/rung3_opus_20260918/netbsd_wdc_obio.c-133-	sc->sc_wdcdev.regs = wdr = &sc->sc_wdc_regs;
+regress/artifacts/landiskaux/rung3_opus_20260918/netbsd_wdc_obio.c-134-
+regress/artifacts/landiskaux/rung3_opus_20260918/netbsd_wdc_obio.c-135-	wdr->cmd_iot = oa->oa_iot;
+regress/artifacts/landiskaux/rung3_opus_20260918/netbsd_wdc_obio.c-136-	wdr->ctl_iot = oa->oa_iot;
+regress/artifacts/landiskaux/rung3_opus_20260918/netbsd_wdc_obio.c:137:	if (bus_space_map(wdr->cmd_iot, oa->oa_io[0].or_addr,
+regress/artifacts/landiskaux/rung3_opus_20260918/netbsd_wdc_obio.c:138:	    WDC_OBIO_REG_SIZE, 0, &wdr->cmd_baseioh)
+regress/artifacts/landiskaux/rung3_opus_20260918/netbsd_wdc_obio.c:139:	 || bus_space_map(wdr->ctl_iot,
+regress/artifacts/landiskaux/rung3_opus_20260918/netbsd_wdc_obio.c:140:	    oa->oa_io[0].or_addr + WDC_OBIO_AUXREG_OFFSET,
+regress/artifacts/landiskaux/rung3_opus_20260918/netbsd_wdc_obio.c:141:	    WDC_OBIO_AUXREG_SIZE, 0, &wdr->ctl_ioh)) {
+regress/artifacts/landiskaux/rung3_opus_20260918/netbsd_wdc_obio.c-142-		aprint_error_dev(self, "couldn't map registers\n");
+regress/artifacts/landiskaux/rung3_opus_20260918/netbsd_wdc_obio.c-143-		return;
+regress/artifacts/landiskaux/rung3_opus_20260918/netbsd_wdc_obio.c-144-	}
+regress/artifacts/landiskaux/rung3_opus_20260918/netbsd_wdc_obio.c-145-
+regress/artifacts/landiskaux/rung3_opus_20260918/netbsd_wdc_obio.c:146:	for (i = 0; i < WDC_OBIO_REG_NPORTS; i++) {
+regress/artifacts/landiskaux/rung3_opus_20260918/netbsd_wdc_obio.c-147-		if (bus_space_subregion(wdr->cmd_iot,
+regress/artifacts/landiskaux/rung3_opus_20260918/netbsd_wdc_obio.c-148-		      wdr->cmd_baseioh, i * 2, (i == 0) ? 2 : 1,
+regress/artifacts/landiskaux/rung3_opus_20260918/netbsd_wdc_obio.c-149-		      &wdr->cmd_iohs[i]) != 0) {
+regress/artifacts/landiskaux/rung3_opus_20260918/netbsd_wdc_obio.c-150-			aprint_error_dev(self,
+regress/artifacts/landiskaux/rung3_opus_20260918/netbsd_wdc_obio.c-151-			    "couldn't subregion registers\n");
+regress/artifacts/landiskaux/rung3_opus_20260918/netbsd_wdc_obio.c-152-			return;
+--
+regress/artifacts/landiskaux/rung3_opus_20260918/openbsd_wdc_obio.c-55-void	wdc_obio_attach(struct device *, struct device *, void *);
+regress/artifacts/landiskaux/rung3_opus_20260918/openbsd_wdc_obio.c-56-
+regress/artifacts/landiskaux/rung3_opus_20260918/openbsd_wdc_obio.c-57-const struct cfattach wdc_obio_ca = {
+regress/artifacts/landiskaux/rung3_opus_20260918/openbsd_wdc_obio.c-58-	sizeof(struct wdc_obio_softc), wdc_obio_match, wdc_obio_attach
+regress/artifacts/landiskaux/rung3_opus_20260918/openbsd_wdc_obio.c-59-};
+regress/artifacts/landiskaux/rung3_opus_20260918/openbsd_wdc_obio.c-60-
+regress/artifacts/landiskaux/rung3_opus_20260918/openbsd_wdc_obio.c:61:#define	WDC_OBIO_REG_NPORTS	WDC_NREG
+regress/artifacts/landiskaux/rung3_opus_20260918/openbsd_wdc_obio.c:62:#define	WDC_OBIO_REG_SIZE	(WDC_OBIO_REG_NPORTS * 2)
+regress/artifacts/landiskaux/rung3_opus_20260918/openbsd_wdc_obio.c:63:#define	WDC_OBIO_AUXREG_NPORTS	1
+regress/artifacts/landiskaux/rung3_opus_20260918/openbsd_wdc_obio.c:64:#define	WDC_OBIO_AUXREG_SIZE	(WDC_OBIO_AUXREG_NPORTS * 2)
+regress/artifacts/landiskaux/rung3_opus_20260918/openbsd_wdc_obio.c:65:#define	WDC_OBIO_AUXREG_OFFSET	0x2c
+regress/artifacts/landiskaux/rung3_opus_20260918/openbsd_wdc_obio.c-66-
+regress/artifacts/landiskaux/rung3_opus_20260918/openbsd_wdc_obio.c-67-u_int8_t wdc_obio_read_reg(struct channel_softc *chp,  enum wdc_regs reg);
+regress/artifacts/landiskaux/rung3_opus_20260918/openbsd_wdc_obio.c-68-void wdc_obio_write_reg(struct channel_softc *chp,  enum wdc_regs reg,
+regress/artifacts/landiskaux/rung3_opus_20260918/openbsd_wdc_obio.c-69-    u_int8_t val);
+regress/artifacts/landiskaux/rung3_opus_20260918/openbsd_wdc_obio.c-70-
+regress/artifacts/landiskaux/rung3_opus_20260918/openbsd_wdc_obio.c-71-struct channel_softc_vtbl wdc_obio_vtbl = {
+--
+regress/artifacts/landiskaux/rung3_opus_20260918/openbsd_wdc_obio.c-87-		return (0);
+regress/artifacts/landiskaux/rung3_opus_20260918/openbsd_wdc_obio.c-88-	if (oa->oa_nirq != 1)
+regress/artifacts/landiskaux/rung3_opus_20260918/openbsd_wdc_obio.c-89-		return (0);
+regress/artifacts/landiskaux/rung3_opus_20260918/openbsd_wdc_obio.c-90-	if (oa->oa_niomem != 0)
+regress/artifacts/landiskaux/rung3_opus_20260918/openbsd_wdc_obio.c-91-		return (0);
+regress/artifacts/landiskaux/rung3_opus_20260918/openbsd_wdc_obio.c-92-
+regress/artifacts/landiskaux/rung3_opus_20260918/openbsd_wdc_obio.c:93:	if (oa->oa_io[0].or_addr == IOBASEUNK)
+regress/artifacts/landiskaux/rung3_opus_20260918/openbsd_wdc_obio.c-94-		return (0);
+regress/artifacts/landiskaux/rung3_opus_20260918/openbsd_wdc_obio.c-95-	if (oa->oa_irq[0].or_irq == IRQUNK)
+regress/artifacts/landiskaux/rung3_opus_20260918/openbsd_wdc_obio.c-96-		return (0);
+regress/artifacts/landiskaux/rung3_opus_20260918/openbsd_wdc_obio.c-97-
+regress/artifacts/landiskaux/rung3_opus_20260918/openbsd_wdc_obio.c-98-	/* XXX should probe for hardware */
+regress/artifacts/landiskaux/rung3_opus_20260918/openbsd_wdc_obio.c-99-
+regress/artifacts/landiskaux/rung3_opus_20260918/openbsd_wdc_obio.c:100:	oa->oa_io[0].or_size = WDC_OBIO_REG_SIZE;
+regress/artifacts/landiskaux/rung3_opus_20260918/openbsd_wdc_obio.c-101-
+regress/artifacts/landiskaux/rung3_opus_20260918/openbsd_wdc_obio.c-102-	return (1);
+regress/artifacts/landiskaux/rung3_opus_20260918/openbsd_wdc_obio.c-103-}
+regress/artifacts/landiskaux/rung3_opus_20260918/openbsd_wdc_obio.c-104-
+regress/artifacts/landiskaux/rung3_opus_20260918/openbsd_wdc_obio.c-105-void
+regress/artifacts/landiskaux/rung3_opus_20260918/openbsd_wdc_obio.c-106-wdc_obio_attach(struct device *parent, struct device *self, void *aux)
+--
+regress/artifacts/landiskaux/rung3_opus_20260918/openbsd_wdc_obio.c-111-
+regress/artifacts/landiskaux/rung3_opus_20260918/openbsd_wdc_obio.c-112-	printf("\n");
+regress/artifacts/landiskaux/rung3_opus_20260918/openbsd_wdc_obio.c-113-
+regress/artifacts/landiskaux/rung3_opus_20260918/openbsd_wdc_obio.c-114-	chp->cmd_iot = chp->ctl_iot = oa->oa_iot;
+regress/artifacts/landiskaux/rung3_opus_20260918/openbsd_wdc_obio.c-115-	chp->_vtbl = &wdc_obio_vtbl;
+regress/artifacts/landiskaux/rung3_opus_20260918/openbsd_wdc_obio.c-116-
+regress/artifacts/landiskaux/rung3_opus_20260918/openbsd_wdc_obio.c:117:	if (bus_space_map(chp->cmd_iot, oa->oa_io[0].or_addr,
+regress/artifacts/landiskaux/rung3_opus_20260918/openbsd_wdc_obio.c:118:	    WDC_OBIO_REG_SIZE, 0, &chp->cmd_ioh)
+regress/artifacts/landiskaux/rung3_opus_20260918/openbsd_wdc_obio.c:119:	 || bus_space_map(chp->ctl_iot,
+regress/artifacts/landiskaux/rung3_opus_20260918/openbsd_wdc_obio.c:120:	    oa->oa_io[0].or_addr + WDC_OBIO_AUXREG_OFFSET,
+regress/artifacts/landiskaux/rung3_opus_20260918/openbsd_wdc_obio.c:121:	    WDC_OBIO_AUXREG_SIZE, 0, &chp->ctl_ioh)) {
+regress/artifacts/landiskaux/rung3_opus_20260918/openbsd_wdc_obio.c-122-		printf(": couldn't map registers\n");
+regress/artifacts/landiskaux/rung3_opus_20260918/openbsd_wdc_obio.c-123-		return;
+regress/artifacts/landiskaux/rung3_opus_20260918/openbsd_wdc_obio.c-124-	}
+regress/artifacts/landiskaux/rung3_opus_20260918/openbsd_wdc_obio.c-125-
+regress/artifacts/landiskaux/rung3_opus_20260918/openbsd_wdc_obio.c-126-	sc->sc_ih = obio_intr_establish(oa->oa_irq[0].or_irq, IPL_BIO, wdcintr,
+regress/artifacts/landiskaux/rung3_opus_20260918/openbsd_wdc_obio.c-127-	    chp, self->dv_xname);
+regress/artifacts/landiskaux/detector_20260918\PRETABLE.out
+regress/artifacts/landiskaux/detector_20260918\prefix_HEAD.out
+regress/artifacts/landiskaux/detector_20260918\mutants533.py
+regress/artifacts/landiskaux/detector_20260918\logs\TABLE.out
+regress/artifacts/landiskaux/detector_20260918\logs\probe_M_head.raw
+regress/artifacts/landiskaux/detector_20260918\logs\probe_M_both.raw
+regress/artifacts/landiskaux/detector_20260918\logs\probe_M_above.raw
+regress/artifacts/landiskaux/detector_20260918\logs\probe_M_0x2d.raw
+regress/artifacts/landiskaux/detector_20260918\logs\probe_M_0x16.raw
+regress/artifacts/landiskaux/detector_20260918\logs\probe_base.raw
+regress/artifacts/landiskaux/detector_20260918\logs\M_head.diff
+regress/artifacts/landiskaux/detector_20260918\logs\M_both.diff
+regress/artifacts/landiskaux/detector_20260918\logs\M_above.diff
+regress/artifacts/landiskaux/detector_20260918\logs\M_0x2d.diff
+regress/artifacts/landiskaux/detector_20260918\logs\M_0x16.diff
+regress/artifacts/landiskaux/detector_20260918\logs\INSTRUMENT.md5
+regress/artifacts/landiskaux/detector_20260918\landisk_aux_probe.frozen.py
+regress/artifacts/landiskaux/detector_20260918\builds\build_restored.log
+regress/artifacts/landiskaux/detector_20260918\builds\build_M_head.log
+regress/artifacts/landiskaux/detector_20260918\builds\build_M_both.log
+regress/artifacts/landiskaux/detector_20260918\builds\build_M_above.log
+regress/artifacts/landiskaux/detector_20260918\builds\build_M_0x2d.log
+regress/artifacts/landiskaux/detector_20260918\builds\build_M_0x16.log
+regress/artifacts/landiskaux/detector_20260918\builds\build_base.log
+
+ succeeded in 148ms:
+   1: #!/usr/bin/env python3
+   2: """DETECTOR for landiskaux: landisk's wdc AUXILIARY (alt-status / Device Control) register.
+   3: 
+   4: THE DEFECT.  dev_wdc.c's `Special hacks for individual machines' switch had no MACHINE_LANDISK
+   5: case, so landisk kept the pre-switch PC-layout default `devinit->addr + 0x206' and registered
+   6: `wdc_altstatus' at 0x14000206.  The OpenBSD 7.6 landisk kernel writes Device Control at
+   7: 0x1400002c -- twelve byte stores per boot, the first 0x0c = SRST|4BIT, a real ATA soft reset
+   8: (regress/artifacts/landiskaux/census_20260827/) -- so every one landed on memory no device
+   9: claimed and the reset was silently lost.
+  10: 
+  11: THE ADDRESS IS A PRIMARY-SOURCE CONSTANT, NOT A DERIVATION.  NetBSD and OpenBSD
+  12: sys/arch/landisk/dev/wdc_obio.c both define WDC_OBIO_AUXREG_OFFSET 0x2c and map the aux
+  13: register at `or_addr + WDC_OBIO_AUXREG_OFFSET', unscaled (copies preserved in
+  14: regress/artifacts/landiskaux/rung3_opus_20260918/).
+  15: 
+  16: Rows assert the POST-FIX state, so this is green after the fix and safe to gate.  The WITNESS is
+  17: the recorded fact that the same guest program scored the pre-fix symptom on the committed build
+  18: (regress/artifacts/landiskaux/rung3_opus_20260918/opus_landiskaux_rung3_20260918.out).
+  19: 
+  20: Rung 3: a real guest program on UNMODIFIED `-E landisk'.  Nothing is added to reach the site.
+  21: Each session fills the ATA data ring with eight `mov.w' to 0xb4000000 (sets DRQ, status 0x09),
+  22: optionally makes ONE Device Control byte store of 0x0c, then reads back main status (0xb400000e)
+  23: and the two candidate aux addresses (0xb400002c, 0xb4000206).  A soft reset that reaches the
+  24: device purges the ring and status drops to 0x01; a store that lands nowhere leaves 0x09.
+  25: 
+  26: CONTRACT (clause e).  Designed to catch, and each row names what it kills:
+  27:   * the landisk case missing or mis-keyed (the pre-fix state)       -- `aux 2c reset', `aux 2c read'
+  28:   * a wrong offset: `+ 0x16' unscaled, `+ 0x2d', any value != 0x2c   -- `aux 2c reset', `aux 2c read'
+  29:   * the case placed above IQ80321 without `break' (falls to +0x402)  -- `aux 2c reset', `aux 2c read'
+  30:   * REGISTERING BOTH addresses (old kept, new added)                 -- `aux 206 gone', `206 ctl dead'
+  31: DISCLOSED, not caught: the pre-switch initialiser `+ 0x206' changing (landisk overwrites it, so no
+  32: landisk row can see it); IQ80321 losing its own `break' after this case is appended (no IQ80321
+  33: rig); the registration width 2 -> 1 (every access here is 1 byte at offset 0 -- that is
+  34: `wdcaltwidth'); keying on machine_type alone (a second wdc on a future landisk model would
+  35: inherit +0x2c).  And the fix DELIVERS the five WDCTL_IDS (nIEN) writes; it does not IMPLEMENT
+  36: nIEN -- the aux handler acts on WDCTL_RST only.
+  37: 
+  38: NO ROW RESTS ON A DEBUG LINE.  `[ wdc: write to ALT. CTRL ]' goes quiet under -q and when
+  39: free-running; every row reads a guest-visible register value instead.
+  40: """
+  41: import os
+  42: import pty
+  43: import re
+  44: import select
+  45: import sys
+  46: import time
+  47: 
+  48: BIN = sys.argv[1] if len(sys.argv) > 1 else "../../build/gxemul"
+  49: KERNEL = sys.argv[2] if len(sys.argv) > 2 else "../../_images/openbsd76-landisk-bsd.rd"
+  50: 
+  51: AT = 0x8c001000          # landisk RAM, as sh_pclock_probe.py's LANDISK_CODE
+  52: RAM_CTRL = 0x8c002000    # a RAM address for the no-control liveness session
+  53: BRA_SELF = 0xaffe
+  54: NOP = 0x0009
+  55: #  Encodings as MEASURED in the rung-3 witness run, not re-derived:
+  56: MOV_W_R8_AT_R7 = 0x2781  # mov.w r8,@r7    -- fill the data ring
+  57: MOV_B_R9_AT_R10 = 0x2a90 # mov.b r9,@r10   -- the ONE Device Control store
+  58: MOV_B_AT_R1_R2 = 0x6210  # mov.b @r1,r2    -- main status
+  59: MOV_B_AT_R3_R4 = 0x6430  # mov.b @r3,r4    -- aux at 0x2c
+  60: MOV_B_AT_R5_R6 = 0x6650  # mov.b @r5,r6    -- aux at 0x206
+  61: 
+  62: rows = []
+  63: 
+  64: 
+  65: def row(name, got, want, note=""):
+  66:     ok = (got == want)
+  67:     rows.append((name, ok))
+  68:     print("%-14s %-8s %-8s %-52s %s" % (name, got, want, note, "ok" if ok else "FAIL"))
+  69:     return ok
+  70: 
+  71: 
+  72: def session(cmds, settle=6.0, spin=2.0):
+  73:     """One cold-debugger session on unmodified -E landisk.  (transcript, survived)."""
+  74:     pid, fd = pty.fork()
+  75:     if pid == 0:
+  76:         os.execv(BIN, [BIN, "-V", "-E", "landisk", "-M", "64", KERNEL])
+  77:         os._exit(127)
+  78:     buf = ""
+  79: 
+  80:     def rd(t):
+  81:         nonlocal buf
+  82:         end = time.time() + t
+  83:         while time.time() < end:
+  84:             r, _, _ = select.select([fd], [], [], 0.25)
+  85:             if not r:
+  86:                 continue
+  87:             try:
+  88:                 d = os.read(fd, 65536)
+  89:             except OSError:
+  90:                 return False
+  91:             if not d:
+  92:                 return False
+  93:             buf += d.decode("latin-1", "replace")
+  94:         return True
+  95: 
+  96:     alive = rd(settle)
+  97:     for i, c in enumerate(cmds):
+  98:         try:
+  99:             os.write(fd, (c + "\n").encode("latin-1"))
+ 100:         except OSError:
+ 101:             alive = False
+ 102:             break
+ 103:         if not rd(spin if i == len(cmds) - 1 else 0.35):
+ 104:             alive = False
+ 105:             break
+ 106:     try:
+ 107:         os.write(fd, b"quit\n")
+ 108:         rd(0.6)
+ 109:     except OSError:
+ 110:         pass
+ 111:     try:
+ 112:         os.close(fd)
+ 113:     except OSError:
+ 114:         pass
+ 115:     try:
+ 116:         os.waitpid(pid, 0)
+ 117:     except OSError:
+ 118:         pass
+ 119:     return buf, alive
+ 120: 
+ 121: 
+ 122: def printed(t, reg):
+ 123:     m = re.search(r"print\s+%s\s*\r?\n\s*(0x[0-9a-f]+)" % reg, t)
+ 124:     return m.group(1) if m else "absent"
+ 125: 
+ 126: 
+ 127: def prog(ctrl, ctrlval=0x0c, ndata=8):
+ 128:     """Fill the ring, one byte store of ctrlval to ctrl, then read status and both aux addresses."""
+ 129:     ops = ([MOV_W_R8_AT_R7] * ndata
+ 130:            + [MOV_B_R9_AT_R10, MOV_B_AT_R1_R2, MOV_B_AT_R3_R4, MOV_B_AT_R5_R6, BRA_SELF, NOP])
+ 131:     cmds = ["r7=0xb4000000", "r8=0x1234", "r10=0x%x" % ctrl, "r9=0x%x" % ctrlval,
+ 132:             "r1=0xb400000e", "r3=0xb400002c", "r5=0xb4000206",
+ 133:             "r2=0xaa", "r4=0xaa", "r6=0xaa"]
+ 134:     cmds += ["put h 0x%x, 0x%04x" % (AT + 2 * i, op) for i, op in enumerate(ops)]
+ 135:     cmds += ["pc=0x%x" % AT, "step %d" % (ndata + 4), "print r2", "print r4", "print r6"]
+ 136:     return cmds
+ 137: 
+ 138: 
+ 139: print("landisk_aux_probe -- binary=%s" % BIN)
+ 140: 
+ 141: #  Session 1: NO control store (it goes to RAM).  Liveness, and the at-rest aux reads.
+ 142: t, alive = session(prog(RAM_CTRL))
+ 143: st, a2c, a206 = printed(t, "r2"), printed(t, "r4"), printed(t, "r6")
+ 144: row("live", st, "0x9",
+ 145:     "ring fill sets DRQ: status 0x09 -- the ring is live, so 0x01 elsewhere is the reset")
+ 146: row("aux 2c rest", a2c, "0x9",
+ 147:     "0x2c answers with STATUS (0x09) -- device signature; pre-fix unmapped reads 0x0")
+ 148: row("aux 206 gone", a206, "0x0",
+ 149:     "0x206 is UNMAPPED on landisk: pre-fix 0x09; kills a register-BOTH mutant")
+ 150: 
+ 151: #  Session 2: the soft reset goes to 0x2c, where the kernel sends it.
+ 152: t, alive = session(prog(0xb400002c))
+ 153: st, a2c = printed(t, "r2"), printed(t, "r4")
+ 154: row("aux 2c reset", st, "0x1",
+ 155:     "SRST at 0x2c PURGES the ring: status 0x01; pre-fix the store is lost, stays 0x09")
+ 156: row("aux 2c read", a2c, "0x1",
+ 157:     "0x2c then reads the post-reset status 0x01 -- same device, same value")
+ 158: 
+ 159: #  Session 3: the soft reset goes to the OLD address.
+ 160: t, alive = session(prog(0xb4000206))
+ 161: st = printed(t, "r2")
+ 162: row("206 ctl dead", st, "0x9",
+ 163:     "SRST at 0x206 must land NOWHERE: status stays 0x09; pre-fix it purged (0x01)")
+ 164: 
+ 165: n = sum(1 for _, ok in rows if ok)
+ 166: print("LANDISK_AUX_RESULT=%d/%d" % (n, len(rows)))
+ 167: print("LANDISK_AUX_VECTOR=" + ",".join(("1" if ok else "0") for _, ok in rows))
+ 168: print("LANDISK_AUX_DONE")
+
+ succeeded in 200ms:
+2056: 			    INSIDE the function's common `ret:` tail, so
+2057: 			    `data[0] = odata` and the `return 1` below must run
+2058: 			    regardless -- an early return here would hand the
+2059: 			    guest an untouched read buffer.  */
+2060: 			if (len != 1 && !d->warned_nonbyte_read) {
+2061: 				d->warned_nonbyte_read = 1;
+2062: 				fatal("[ wdc: WARNING! non-8-bit access on "
+2063: 				    "READ! ]\n");
+2064: 			}
+2065: 			data[0] = odata;
+2066: 		}
+2067: 	}
+2068: 
+2069: 	return 1;
+2070: }
+2071: 
+2072: 
+2073: DEVINIT(wdc)
+2074: {
+2075: 	struct wdc_data *d;
+2076: 	uint64_t alt_status_addr;
+2077: 	int i, tick_shift = WDC_TICK_SHIFT;
+2078: 
+2079: 	CHECK_ALLOCATION(d = (struct wdc_data *) malloc(sizeof(struct wdc_data)));
+2080: 	memset(d, 0, sizeof(struct wdc_data));
+2081: 
+2082: 	INTERRUPT_CONNECT(devinit->interrupt_path, d->irq);
+2083: 	d->addr_mult  = devinit->addr_mult;
+2084: 	d->data_debug = 1;
+2085: 	d->io_enabled = 1;
+2086: 	d->error      = 1;
+2087: 
+2088: 	d->inbuf = (unsigned char *) zeroed_alloc(WDC_INBUF_SIZE);
+2089: 
+2090: 	/*  base_drive = 0 for the primary controller, 2 for the secondary.  */
+2091: 	d->base_drive = 0;
+2092: 	if ((devinit->addr & 0xfff) == 0x170)
+2093: 		d->base_drive = 2;
+2094: 
+2095: 	alt_status_addr = devinit->addr + 0x206;
+2096: 
+2097: 	/*  Special hacks for individual machines:  */
+2098: 	switch (devinit->machine->machine_type) {
+2099: 	case MACHINE_MACPPC:
+2100: 		alt_status_addr = devinit->addr + 0x160;
+2101: 		break;
+2102: 	case MACHINE_HPCMIPS:
+2103: 		/*  TODO: Fix  */
+2104: 		if (devinit->addr == 0x14000180)
+2105: 			alt_status_addr = 0x14000386;
+2106: 		break;
+2107: 	case MACHINE_IQ80321:
+2108: 		alt_status_addr = devinit->addr + 0x402;
+2109: 		break;
+2110: 	case MACHINE_LANDISK:
+2111: 		/*
+2112: 		 *  #533 (landiskaux): NetBSD/OpenBSD landisk wdc_obio.c map
+2113: 		 *  the aux (alt-status / Device Control) register at
+2114: 		 *  or_addr + WDC_OBIO_AUXREG_OFFSET, a literal byte offset
+2115: 		 *  of 0x2c.  Without this case landisk kept the PC-layout
+2116: 		 *  +0x206 and the kernel's twelve Device Control writes --
+2117: 		 *  the first a soft reset -- landed on unmapped memory.
+2118: 		 *  Delivering WDCTL_IDS writes does not implement nIEN.
+2119: 		 */
+2120: 		alt_status_addr = devinit->addr + 0x2c;
+2121: 		break;
+2122: 	}
+2123: 
+2124: 	/*  Get disk geometries:  */
+2125: 	for (i=0; i<2; i++)
+2126: 		if (diskimage_exist(devinit->machine, d->base_drive +i,
+2127: 		    DISKIMAGE_IDE))
+2128: 			diskimage_getchs(devinit->machine, d->base_drive + i,
+2129: 			    DISKIMAGE_IDE, &d->cyls[i], &d->heads[i],
+2130: 			    &d->sectors_per_track[i]);
+2131: 
+2132: 	memory_device_register(devinit->machine->memory, "wdc_altstatus",
+2133: 	    alt_status_addr, 2, dev_wdc_altstatus_access, d, DM_DEFAULT, NULL);
+2134: 	memory_device_register(devinit->machine->memory, devinit->name,
+2135: 	    devinit->addr, DEV_WDC_LENGTH * devinit->addr_mult, dev_wdc_access,
+2136: 	    d, DM_DEFAULT, NULL);
+2137: 
+2138: 	machine_add_tickfunction(devinit->machine, dev_wdc_tick,
+2139: 	    d, tick_shift);
+2140: 
+2141: 	devinit->return_ptr = d;
+2142: 
+2143: 	return 1;
+2144: }
+2145: 
+26- *   
+27- *
+28- *  COMMENT: I-O DATA LanDisk USL-5P
+29- *
+30- *  This machine consists of:
+31- *
+32- *	o)  An SH4 processor, which includes serial console etc,
+33- *	o)  64 MB RAM (at 0x0c000000),
+34: *	o)  an IDE controller at address 0x14000000 (irq 10),
+35- *	o)  a RS5C313 real time clock, connected to the SH4 SCI port,
+36- *	o)  a PCI controller (PCIC),
+37- *	o)  and a minimal SH-IPL+G PROM emulation layer (required to make
+38- *	    OpenBSD/landisk boot).
+39- *
+40- *  TODO:
+41- *	Realtek NIC (irq 5), PCIIDE (irq 6), USB controllers, etc.
+42- *
+--
+78-		machine->emulated_hz = 266666666;
+79-
+80-	/*  33.33 MHz SH4 PCLOCK:  */
+81-	machine->cpus[machine->bootstrap_cpu]->cd.sh.pclock = 33333333;
+82-
+83-	/*  Note: 64 MB RAM at 0x0c000000, not at 0x00000000.  */
+84-	dev_ram_init(machine, 0x0c000000, 64 * 1048576, DEV_RAM_RAM, 0x0, NULL);
+85-
+86:	/*  wdc0 at obio0 port 0x14000000-0x1400000f irq 10  */
+87:	snprintf(tmpstr, sizeof(tmpstr), "wdc irq=%s.cpu[%i].irq[0x%x]"
+88:	    " addr_mult=2 addr=0x14000000",
+89-	    machine->path, machine->bootstrap_cpu, SH4_INTEVT_IRQ10);
+90:	device_add(machine, tmpstr);
+91-
+92-	/*  rsclock0 at shb0: RS5C313 real time clock  */
+93-	snprintf(tmpstr, sizeof(tmpstr), "rs5c313 addr=0x%" PRIx64,
+94-	    (uint64_t) SCI_DEVICE_BASE);
+95:	device_add(machine, tmpstr);
+96-
+97-#ifdef INCLUDE_LANDISK_NIC
+98-	/*  Realtek PCI NIC:  */
+99-	bus_pci_add(machine, pcibus, machine->memory, 0, 0, 0, "rtl8139c");
+100-#endif
+101-
+102-	if (!machine->prom_emulation)
+103-		return;
+src/include\machine.h:231:#define	MACHINE_HPCMIPS		1004
+src/include\machine.h:244:#define	MACHINE_MACPPC		2004
+src/include\machine.h:258:#define	MACHINE_IQ80321		5005
+src/include\machine.h:268:#define	MACHINE_LANDISK		6004
+src/include\machine.h:307:#define	MACHINE_HPCMIPS_CASIO_BE300		1
+src/include\machine.h:308:#define	MACHINE_HPCMIPS_CASIO_E105		2
+src/include\machine.h:309:#define	MACHINE_HPCMIPS_NEC_MOBILEPRO_770	3
+src/include\machine.h:310:#define	MACHINE_HPCMIPS_NEC_MOBILEPRO_780	4
+src/include\machine.h:311:#define	MACHINE_HPCMIPS_NEC_MOBILEPRO_800	5
+src/include\machine.h:312:#define	MACHINE_HPCMIPS_NEC_MOBILEPRO_880	6
+src/include\machine.h:313:#define	MACHINE_HPCMIPS_AGENDA_VR3		7
+src/include\machine.h:314:#define	MACHINE_HPCMIPS_IBM_WORKPAD_Z50		8
+src/include\machine.h:342:#define	MACHINE_MACPPC_G3		1
+src/include\machine.h:343:#define	MACHINE_MACPPC_G4		2
+src/include\machine.h:344:#define	MACHINE_MACPPC_G5		3
+src/include\machine.h:345:#define	MACHINE_MACPPC_G4PLUS		4	/*  OB-35: MPC7455, extended BATs (#116)  */
+src/include\thirdparty\wdcreg.h:68:#define  WDCTL_4BIT		 0x08	/* use four head bits (wd1003) */
+src/include\thirdparty\wdcreg.h:69:#define  WDCTL_RST		 0x04	/* reset the controller */
+src/include\thirdparty\wdcreg.h:70:#define  WDCTL_IDS		 0x02	/* disable controller interrupts */
+
+codex
+The source matches the proposed mapping and reset behavior. I found a one-line survivor: changing `case MACHINE_LANDISK:` to `default:` leaves all six landisk observations unchanged but moves the aux register for other machines. I’m checking a concrete affected machine and the rows’ stated kill claims.
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command 'Get-Content -LiteralPath regress/artifacts/landiskaux/detector_20260918/logs/TABLE.out
+Get-Content -LiteralPath regress/artifacts/landiskaux/detector_20260918/logs/probe_M_both.raw
+Get-Content -LiteralPath regress/artifacts/landiskaux/detector_20260918/logs/M_both.diff
+Get-Content -LiteralPath regress/artifacts/landiskaux/detector_20260918/logs/probe_M_0x2d.raw' in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "Get-Content -LiteralPath regress/gate_sh_rounding.sh -TotalCount 75
+rg -n -C 9 'case wd_status|case wd_status:|case wd_command|INTERRUPT_DEASSERT|relative_addr /=' src/devices/dev_wdc.c" in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n -C 4 'MACHINE_EVBMIPS|machine_type|MACHINE_REGISTER|MACHINE_SETUP|bus_pci|wdc|0x1f0|0x170' src/machines/machine_evbmips.c
+rg -n -C 4 'wdc|0x1f0|0x170' src/devices/dev_piix3_isa.c src/devices/dev_piix4.c src/devices/dev_isa.c src/devices/dev_pcide.c src/devices/dev_pci.c
+rg -n -C 3 'MACHINE_EVBMIPS' src/include/machine.h" in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+ succeeded in 122ms:
+32-#include <stdlib.h>
+33-#include <string.h>
+34-
+35-#include "bus_isa.h"
+36:#include "bus_pci.h"
+37-#include "cpu.h"
+38-#include "device.h"
+39-#include "devices.h"
+40-#include "machine.h"
+--
+43-
+44-#include "thirdparty/maltareg.h"
+45-
+46-
+47:MACHINE_SETUP(evbmips)
+48-{
+49-	char tmpstr[1000], tmpstr2[1000];
+50-	struct pci_data *pci_data;
+51-	int i;
+--
+53-	/*  See http://www.netbsd.org/ports/evbmips/ for more info.  */
+54-
+55-	switch (machine->machine_subtype) {
+56-
+57:	case MACHINE_EVBMIPS_MALTA:
+58:	case MACHINE_EVBMIPS_MALTA_BE:
+59-		if (machine->emulated_hz == 0)
+60-			machine->emulated_hz = 33000000;
+61-		cpu->byte_order = EMUL_LITTLE_ENDIAN;
+62-		machine->machine_name = strdup("MALTA (evbmips, little endian)");
+63-
+64:		if (machine->machine_subtype == MACHINE_EVBMIPS_MALTA_BE) {
+65-			machine->machine_name = strdup("MALTA (evbmips, big endian)");
+66-			cpu->byte_order = EMUL_BIG_ENDIAN;
+67-		}
+68-
+--
+89-				fatal("WARNING: remember to use  -o 'console="
+90-				    "tty0'  if you are emulating Linux. (Not"
+91-				    " needed for NetBSD.)\n");
+92-			}
+93:			bus_pci_add(machine, pci_data, machine->memory,
+94-			    0, 8, 0, "s3_virge");
+95-		}
+96-
+97:		bus_pci_add(machine, pci_data, machine->memory,
+98-		    0, 10, 0, "piix4_isa");
+99:		bus_pci_add(machine, pci_data, machine->memory,
+100-		    0, 10, 1, "piix4_ide");
+101-
+102-		/*  pcn: Not yet, since it is just a bogus device, so far.  */
+103:		/*  bus_pci_add(machine, pci_data, machine->memory,
+104-		    0, 11, 0, "pcn");  */
+105-
+106:		device_add(machine, "malta_lcd addr=0x1f000400");
+107-		break;
+108-
+109-	default:fatal("Unimplemented EVBMIPS model.\n");
+110-		exit(1);
+--
+158-MACHINE_DEFAULT_CPU(evbmips)
+159-{
+160-	switch (machine->machine_subtype) {
+161-
+162:	case MACHINE_EVBMIPS_MALTA:
+163:	case MACHINE_EVBMIPS_MALTA_BE:
+164-		/*  5Kc = MIPS64 rev 1, 5KE = MIPS64 rev 2  */
+165-		machine->cpu_name = strdup("5Kc");
+166-		break;
+167-
+--
+176-	machine->physical_ram_in_mb = 128;
+177-}
+178-
+179-
+180:MACHINE_REGISTER(evbmips)
+181-{
+182-	MR_DEFAULT(evbmips, "MIPS evaluation boards (evbmips)",
+183:	    MACHINE_EVBMIPS);
+184-
+185-	machine_entry_add_alias(me, "evbmips");
+186-
+187:	machine_entry_add_subtype(me, "Malta", MACHINE_EVBMIPS_MALTA,
+188-	    "malta", NULL);
+189-
+190-	machine_entry_add_subtype(me, "Malta (Big-Endian)",
+191:	    MACHINE_EVBMIPS_MALTA_BE, "maltabe", NULL);
+192-
+193-	me->set_default_ram = machine_default_ram_evbmips;
+194-}
+195-
+rg: src/devices/dev_piix3_isa.c: The system cannot find the file specified. (os error 2)
+rg: src/devices/dev_piix4.c: The system cannot find the file specified. (os error 2)
+rg: src/devices/dev_isa.c: The system cannot find the file specified. (os error 2)
+rg: src/devices/dev_pcide.c: The system cannot find the file specified. (os error 2)
+rg: src/devices/dev_pci.c: The system cannot find the file specified. (os error 2)
+232-#define	MACHINE_PS2		1005
+233-#define	MACHINE_SGI		1006
+234-#define	MACHINE_ARC		1007
+235:#define	MACHINE_EVBMIPS		1008
+236-#define	MACHINE_ALGOR		1009
+237-#define	MACHINE_VOCORE		1010
+238-
+--
+331-#define	MACHINE_ALGOR_P5064		2
+332-
+333-/*  EVBMIPS:  */
+334:#define	MACHINE_EVBMIPS_MALTA		1
+335:#define	MACHINE_EVBMIPS_MALTA_BE	2
+336-
+337-/*  PReP:  */
+338-#define	MACHINE_PREP_IBM6050		1
+
+ succeeded in 148ms:
+base LANDISK_AUX_RESULT=6/6 LANDISK_AUX_VECTOR=1,1,1,1,1,1 done=1
+M_head LANDISK_AUX_RESULT=1/6 LANDISK_AUX_VECTOR=1,0,0,0,0,0 done=1
+M_0x16 LANDISK_AUX_RESULT=3/6 LANDISK_AUX_VECTOR=1,0,1,0,0,1 done=1
+M_0x2d LANDISK_AUX_RESULT=3/6 LANDISK_AUX_VECTOR=1,0,1,0,0,1 done=1
+M_both LANDISK_AUX_RESULT=4/6 LANDISK_AUX_VECTOR=1,1,0,1,1,0 done=1
+M_above LANDISK_AUX_RESULT=3/6 LANDISK_AUX_VECTOR=1,0,1,0,0,1 done=1
+landisk_aux_probe -- binary=/tmp/gxland533_bins/M_both
+live           0x9      0x9      ring fill sets DRQ: status 0x09 -- the ring is live, so 0x01 elsewhere is the reset ok
+aux 2c rest    0x9      0x9      0x2c answers with STATUS (0x09) -- device signature; pre-fix unmapped reads 0x0 ok
+aux 206 gone   0x9      0x0      0x206 is UNMAPPED on landisk: pre-fix 0x09; kills a register-BOTH mutant FAIL
+aux 2c reset   0x1      0x1      SRST at 0x2c PURGES the ring: status 0x01; pre-fix the store is lost, stays 0x09 ok
+aux 2c read    0x1      0x1      0x2c then reads the post-reset status 0x01 -- same device, same value ok
+206 ctl dead   0x1      0x9      SRST at 0x206 must land NOWHERE: status stays 0x09; pre-fix it purged (0x01) FAIL
+LANDISK_AUX_RESULT=4/6
+LANDISK_AUX_VECTOR=1,1,0,1,1,0
+LANDISK_AUX_DONE
+--- /mnt/c/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c	2026-09-18 08:28:27.464199400 -0500
++++ src/devices/dev_wdc.c	2026-09-18 08:29:47.293078308 -0500
+@@ -2131,6 +2131,9 @@
+ 
+ 	memory_device_register(devinit->machine->memory, "wdc_altstatus",
+ 	    alt_status_addr, 2, dev_wdc_altstatus_access, d, DM_DEFAULT, NULL);
++	if (devinit->machine->machine_type == MACHINE_LANDISK)
++		memory_device_register(devinit->machine->memory, "wdc_altstatus_old",
++		    devinit->addr + 0x206, 2, dev_wdc_altstatus_access, d, DM_DEFAULT, NULL);
+ 	memory_device_register(devinit->machine->memory, devinit->name,
+ 	    devinit->addr, DEV_WDC_LENGTH * devinit->addr_mult, dev_wdc_access,
+ 	    d, DM_DEFAULT, NULL);
+landisk_aux_probe -- binary=/tmp/gxland533_bins/M_0x2d
+live           0x9      0x9      ring fill sets DRQ: status 0x09 -- the ring is live, so 0x01 elsewhere is the reset ok
+aux 2c rest    0x0      0x9      0x2c answers with STATUS (0x09) -- device signature; pre-fix unmapped reads 0x0 FAIL
+aux 206 gone   0x0      0x0      0x206 is UNMAPPED on landisk: pre-fix 0x09; kills a register-BOTH mutant ok
+aux 2c reset   0x9      0x1      SRST at 0x2c PURGES the ring: status 0x01; pre-fix the store is lost, stays 0x09 FAIL
+aux 2c read    0x0      0x1      0x2c then reads the post-reset status 0x01 -- same device, same value FAIL
+206 ctl dead   0x9      0x9      SRST at 0x206 must land NOWHERE: status stays 0x09; pre-fix it purged (0x01) ok
+LANDISK_AUX_RESULT=3/6
+LANDISK_AUX_VECTOR=1,0,1,0,0,1
+LANDISK_AUX_DONE
+
+ succeeded in 156ms:
+#!/bin/bash
+# GATE 10 -- SuperH floating-point rounding mode, measured on real guest instructions.
+#
+# What this protects
+# -----------------
+# #296 wired FPSCR.RM into thirteen of the sixteen single-precision store sites in
+# cpu_sh_instr.c. Before it, the field was guest-writable and decoded NOWHERE: every store
+# truncated. Truncation is round-toward-zero, which is the mode the SH-4 resets into, so
+# there was no visible defect until you look at a guest that CHANGES the mode -- and
+# OpenBSD/landisk installs round-to-nearest at every exec.
+#
+# Why the vectors look the way they do
+# -----------------------------------
+# Each one runs under BOTH modes and expects DIFFERENT answers, so reverting #296 turns the
+# gate red. Two vectors are deliberately mode-INDEPENDENT and named PIN: they record limits
+# that are real and are NOT fixed (double precision cannot be fixed at the store, and the
+# host-double double-rounding is shared by every CPU core). A pin failing means someone
+# changed a known limitation without updating the record -- which is worth knowing either
+# way, and is the opposite of a check that cannot fail.
+#
+# The gate asserts on the number of discriminating vectors as well as on the results,
+# because a table where every vector wants the same answer in both modes would pass
+# vacuously. That is the failure mode this harness has now been bitten by five times.
+set -u
+cd "$(dirname "$0")"
+. ./lib.sh
+
+gate_begin "gate 10: SuperH rounding mode (#296)"
+
+PMAX=${PMAX:-$ROOT/build/gxemul}
+KERNEL=$IMAGES/openbsd76-landisk-bsd.rd
+LOG=$LOGDIR/gate_sh_rounding.log
+
+need_exec "$PMAX"
+need_file "$KERNEL"
+command -v python3 >/dev/null || gate_skip "python3 not available"
+
+note "binary : $PMAX"
+note "kernel : $KERNEL (loaded so the machine constructs; never executed)"
+note "cold debugger, no media, no console -- the SCIF drops host->guest writes (#293)"
+
+python3 sh_rounding_probe.py "$PMAX" "$KERNEL" > "$LOG" 2>&1 || true
+
+if ! grep -q "SH_ROUND_RESULT=" "$LOG"; then
+    note "probe produced no result line; last lines follow"
+    tail -5 "$LOG" | sed 's/^/       /'
+    gate_skip "probe did not complete"
+fi
+
+sed -n '1,/SH_ROUND_DISCRIMINATING/p' "$LOG" | grep -E "ok$|FAIL" | sed 's/^/       /'
+
+res=$(grep -o "SH_ROUND_RESULT=[0-9]*/[0-9]*" "$LOG" | tail -1 | cut -d= -f2)
+got=${res%/*}; want=${res#*/}
+disc=$(grep -o "SH_ROUND_DISCRIMINATING=[0-9]*" "$LOG" | tail -1 | cut -d= -f2)
+
+# 36 vector-mode pairs: 17 vectors x 2 modes (9 from #296, 6 ftrc rows from #297, and
+# #299 turned the double-rounding PIN into a discriminating row and added the fmac
+# tie-band witness) + #303's two single-mode subnormal-operand rows (RN pinned; DN
+# STRIPPED by their NODN marker -- a DN=1 numeric expectation would bless a value
+# real silicon flushes; committed bytes 0x32000001 / 0x3f800001 measured live).
+check     "vector-mode pairs run"                  "$want" 36
+check     "vector-mode pairs correct"              "$got"  "$want"
+# EXACTLY 9 of the 17 vectors discriminate between the two modes: the 7 from #296 plus
+# the #299-fixed fsub band row and the #300-fixed D-division row (each a PIN until its
+# fix landed; each flip was that fix's acceptance test). If this number drops, someone weakened the table; if it RISES,
+# someone made a mode-independent row (an ftrc row, or the fmac tie whose two modes
+# genuinely agree) depend on FPSCR.RM, which is drift in the other direction.
+# (#303's two rows are single-mode by design and cannot enter this count.)
+check     "vectors that discriminate the two modes" "$disc" 9
+
+# Per-instruction closure: naming them individually means a single site silently reverting
+# cannot hide behind an aggregate count. The ftrc rows are #297's regression checks; the
+# "fsub band" and "fmactie" rows are #299's (the pre-#299 build fails the band's RZ arm
+# and the tie's RN arm).
+for v in "fdiv" "float" "fadd " "fmac " "fmactie" "fipr" "ftrv" "fmul" \
+1165-}
+1166-
+1167-
+1168-DEVICE_ACCESS(wdc)
+1169-{
+1170-	struct wdc_data *d = (struct wdc_data *) extra;
+1171-	uint64_t idata = 0, odata = 0;
+1172-	int i;
+1173-
+1174:	relative_addr /= d->addr_mult;
+1175-
+1176-	if (!d->io_enabled)
+1177-		goto ret;
+1178-
+1179-	if (writeflag == MEM_WRITE) {
+1180-		if (relative_addr == wd_data)
+1181-			idata = memory_readmax64(cpu, data, len);
+1182-		else {
+1183-			/*  #464: latch the announcement; `idata = data[0]`
+--
+2015-			d->lba   = (idata >> 5) & 1;
+2016-			d->drive = (idata >> 4) & 1;
+2017-			d->head  = idata & 0xf;
+2018-			debug("[ wdc: write to SDH: 0x%02x (sectorsize %i,"
+2019-			    " lba=%i, drive %i, head %i) ]\n", (int)idata,
+2020-			    d->sectorsize, d->lba, d->drive, d->head);
+2021-		}
+2022-		break;
+2023-
+2024:	case wd_command:	/*  7: command or status  */
+2025-		if (writeflag==MEM_READ) {
+2026-			odata = status_byte(d, cpu);
+2027-			if (!quiet_mode)
+2028-				debug("[ wdc: read from STATUS: 0x%02x ]\n",
+2029-				    (int)odata);
+2030:			INTERRUPT_DEASSERT(d->irq);
+2031-			d->int_assert = 0;
+2032-		} else {
+2033-			debug("[ wdc: write to COMMAND: 0x%02x ]\n",(int)idata);
+2034-			wdc_command(cpu, d, idata);
+2035-		}
+2036-		break;
+2037-
+2038-	default:
+2039-		if (writeflag==MEM_READ)
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "rg -n -C 5 'PCIINIT\\(piix4_ide\\)|piix4_ide|wdc.*irq|0x1f0' src/devices src/bus
+rg -n -C 3 '0x1e000000|dev_ram_init' src/devices/dev_sh4.c src/machines/machine_landisk.c" in C:\DocumentNoSnc\CC\GXEMUL\GXEMUL-SEC
+ succeeded in 88ms:
+rg: src/bus: The system cannot find the file specified. (os error 2)
+src/devices\dev_bebox.c-139-				d->cpu0_int_mask &= ~idata;
+src/devices\dev_bebox.c-140-			check_cpu_masks(cpu, d);
+src/devices\dev_bebox.c-141-		}
+src/devices\dev_bebox.c-142-		break;
+src/devices\dev_bebox.c-143-
+src/devices\dev_bebox.c:144:	case 0x1f0:
+src/devices\dev_bebox.c-145-		if (writeflag == MEM_READ)
+src/devices\dev_bebox.c-146-			odata = d->cpu1_int_mask;
+src/devices\dev_bebox.c-147-		else {
+src/devices\dev_bebox.c-148-			if (idata & 0x80000000)
+src/devices\dev_bebox.c-149-				d->cpu1_int_mask |= idata;
+--
+src/devices\autodev.c-130-void pciinit_i31244(struct machine *, struct memory *, struct pci_device *);
+src/devices\autodev.c-131-void pciinit_piix3_isa(struct machine *, struct memory *, struct pci_device *);
+src/devices\autodev.c-132-void pciinit_piix4_isa(struct machine *, struct memory *, struct pci_device *);
+src/devices\autodev.c-133-void pciinit_i82378zb(struct machine *, struct memory *, struct pci_device *);
+src/devices\autodev.c-134-void pciinit_piix3_ide(struct machine *, struct memory *, struct pci_device *);
+src/devices\autodev.c:135:void pciinit_piix4_ide(struct machine *, struct memory *, struct pci_device *);
+src/devices\autodev.c-136-void pciinit_ibm_isa(struct machine *, struct memory *, struct pci_device *);
+src/devices\autodev.c-137-void pciinit_heuricon_pmppc(struct machine *, struct memory *, struct pci_device *);
+src/devices\autodev.c-138-void pciinit_vt82c586_isa(struct machine *, struct memory *, struct pci_device *);
+src/devices\autodev.c-139-void pciinit_vt82c586_ide(struct machine *, struct memory *, struct pci_device *);
+src/devices\autodev.c-140-void pciinit_symphony_83c553(struct machine *, struct memory *, struct pci_device *);
+--
+src/devices\autodev.c-245-	pci_register("i31244", pciinit_i31244);
+src/devices\autodev.c-246-	pci_register("piix3_isa", pciinit_piix3_isa);
+src/devices\autodev.c-247-	pci_register("piix4_isa", pciinit_piix4_isa);
+src/devices\autodev.c-248-	pci_register("i82378zb", pciinit_i82378zb);
+src/devices\autodev.c-249-	pci_register("piix3_ide", pciinit_piix3_ide);
+src/devices\autodev.c:250:	pci_register("piix4_ide", pciinit_piix4_ide);
+src/devices\autodev.c-251-	pci_register("ibm_isa", pciinit_ibm_isa);
+src/devices\autodev.c-252-	pci_register("heuricon_pmppc", pciinit_heuricon_pmppc);
+src/devices\autodev.c-253-	pci_register("vt82c586_isa", pciinit_vt82c586_isa);
+src/devices\autodev.c-254-	pci_register("vt82c586_ide", pciinit_vt82c586_ide);
+src/devices\autodev.c-255-	pci_register("symphony_83c553", pciinit_symphony_83c553);
+--
+src/devices\dev_dec_ioasic.c-416-		}
+src/devices\dev_dec_ioasic.c-417-		break;
+src/devices\dev_dec_ioasic.c-418-
+src/devices\dev_dec_ioasic.c-419-	/*  The DECstation 5000/125's PROM uses these for cache testing. TODO.  */
+src/devices\dev_dec_ioasic.c-420-	case 0x0f004:
+src/devices\dev_dec_ioasic.c:421:	case 0x1f008:
+src/devices\dev_dec_ioasic.c-422-	case 0x2f00c:
+src/devices\dev_dec_ioasic.c-423-	case 0x3f010:
+src/devices\dev_dec_ioasic.c-424-	case 0x4f014:
+src/devices\dev_dec_ioasic.c-425-	case 0x5f018:
+src/devices\dev_dec_ioasic.c-426-	case 0x6f01c:
+--
+src/devices\bus_pci.c-502-		exit(1);
+src/devices\bus_pci.c-503-	}
+src/devices\bus_pci.c-504-
+src/devices\bus_pci.c-505-	if (diskimage_exist(machine, 0, DISKIMAGE_IDE) ||
+src/devices\bus_pci.c-506-	    diskimage_exist(machine, 1, DISKIMAGE_IDE)) {
+src/devices\bus_pci.c:507:		snprintf(tmpstr, sizeof(tmpstr), "wdc addr=0x%llx irq=%s.%i",
+src/devices\bus_pci.c:508:		    (long long)(pd->pcibus->isa_portbase + 0x1f0),
+src/devices\bus_pci.c-509-		    irqstr, 14);
+src/devices\bus_pci.c-510-		device_add(machine, tmpstr);
+src/devices\bus_pci.c-511-	}
+src/devices\bus_pci.c-512-
+src/devices\bus_pci.c-513-	/*  The secondary channel is disabled. TODO: fix this.  */
+--
+src/devices\bus_pci.c-699-
+src/devices\bus_pci.c-700-	/*  PCI IDE using dev_wdc:  */
+src/devices\bus_pci.c-701-	if (diskimage_exist(machine, 0, DISKIMAGE_IDE) ||
+src/devices\bus_pci.c-702-	    diskimage_exist(machine, 1, DISKIMAGE_IDE)) {
+src/devices\bus_pci.c-703-		char tmpstr[2000];
+src/devices\bus_pci.c:704:		snprintf(tmpstr, sizeof(tmpstr), "wdc addr=0x%llx irq=%s.%i",
+src/devices\bus_pci.c-705-		    (long long)(pd->pcibus->pci_actual_io_offset + 0),
+src/devices\bus_pci.c-706-		    pd->pcibus->irq_path_pci, irq & 255);
+src/devices\bus_pci.c-707-		device_add(machine, tmpstr);
+src/devices\bus_pci.c-708-	}
+src/devices\bus_pci.c-709-}
+--
+src/devices\bus_pci.c-822-
+src/devices\bus_pci.c-823-	if (diskimage_exist(machine, 0, DISKIMAGE_IDE) ||
+src/devices\bus_pci.c-824-	    diskimage_exist(machine, 1, DISKIMAGE_IDE)) {
+src/devices\bus_pci.c-825-		snprintf(tmpstr, sizeof(tmpstr), "wdc addr=0x%llx "
+src/devices\bus_pci.c-826-		    "irq=%s.isa.%i", (long long)(pd->pcibus->isa_portbase +
+src/devices\bus_pci.c:827:		    0x1f0), pd->pcibus->irq_path_isa, 14);
+src/devices\bus_pci.c-828-		((struct piix_ide_extra *)pd->extra)->wdc0 =
+src/devices\bus_pci.c-829-		    device_add(machine, tmpstr);
+src/devices\bus_pci.c-830-	}
+src/devices\bus_pci.c-831-
+src/devices\bus_pci.c-832-	if (diskimage_exist(machine, 2, DISKIMAGE_IDE) ||
+--
+src/devices\bus_pci.c-839-	}
+src/devices\bus_pci.c-840-
+src/devices\bus_pci.c-841-	pd->cfg_reg_write = piix_ide_cfg_reg_write;
+src/devices\bus_pci.c-842-}
+src/devices\bus_pci.c-843-
+src/devices\bus_pci.c:844:PCIINIT(piix4_ide)
+src/devices\bus_pci.c-845-{
+src/devices\bus_pci.c-846-	char tmpstr[2000];
+src/devices\bus_pci.c-847-
+src/devices\bus_pci.c-848-	PCI_SET_DATA(PCI_ID_REG, PCI_ID_CODE(PCI_VENDOR_INTEL,
+src/devices\bus_pci.c-849-	    PCI_PRODUCT_INTEL_82371AB_IDE));
+--
+src/devices\bus_pci.c-865-	((struct piix_ide_extra *)pd->extra)->wdc0 = NULL;
+src/devices\bus_pci.c-866-	((struct piix_ide_extra *)pd->extra)->wdc1 = NULL;
+src/devices\bus_pci.c-867-
+src/devices\bus_pci.c-868-	if (diskimage_exist(machine, 0, DISKIMAGE_IDE) ||
+src/devices\bus_pci.c-869-	    diskimage_exist(machine, 1, DISKIMAGE_IDE)) {
+src/devices\bus_pci.c:870:		snprintf(tmpstr, sizeof(tmpstr), "wdc addr=0x%llx irq=%s."
+src/devices\bus_pci.c:871:		    "isa.%i", (long long)(pd->pcibus->isa_portbase + 0x1f0),
+src/devices\bus_pci.c-872-		    pd->pcibus->irq_path_isa, 14);
+src/devices\bus_pci.c-873-		((struct piix_ide_extra *)pd->extra)->wdc0 =
+src/devices\bus_pci.c-874-		    device_add(machine, tmpstr);
+src/devices\bus_pci.c-875-	}
+src/devices\bus_pci.c-876-
+src/devices\bus_pci.c-877-	if (diskimage_exist(machine, 2, DISKIMAGE_IDE) ||
+src/devices\bus_pci.c-878-	    diskimage_exist(machine, 3, DISKIMAGE_IDE)) {
+src/devices\bus_pci.c:879:		snprintf(tmpstr, sizeof(tmpstr), "wdc addr=0x%llx irq=%s."
+src/devices\bus_pci.c-880-		    "isa.%i", (long long)(pd->pcibus->isa_portbase + 0x170),
+src/devices\bus_pci.c-881-		    pd->pcibus->irq_path_isa, 15);
+src/devices\bus_pci.c-882-		((struct piix_ide_extra *)pd->extra)->wdc1 =
+src/devices\bus_pci.c-883-		    device_add(machine, tmpstr);
+src/devices\bus_pci.c-884-	}
+--
+src/devices\bus_pci.c-1012-	((struct vt82c586_ide_extra *)pd->extra)->wdc0 = NULL;
+src/devices\bus_pci.c-1013-	((struct vt82c586_ide_extra *)pd->extra)->wdc1 = NULL;
+src/devices\bus_pci.c-1014-
+src/devices\bus_pci.c-1015-	if (diskimage_exist(machine, 0, DISKIMAGE_IDE) ||
+src/devices\bus_pci.c-1016-	    diskimage_exist(machine, 1, DISKIMAGE_IDE)) {
+src/devices\bus_pci.c:1017:		snprintf(tmpstr, sizeof(tmpstr), "wdc addr=0x%llx irq=%s."
+src/devices\bus_pci.c:1018:		    "isa.%i", (long long)(pd->pcibus->isa_portbase + 0x1f0),
+src/devices\bus_pci.c-1019-		    pd->pcibus->irq_path_isa, 14);
+src/devices\bus_pci.c-1020-		((struct vt82c586_ide_extra *)pd->extra)->wdc0 =
+src/devices\bus_pci.c-1021-		    device_add(machine, tmpstr);
+src/devices\bus_pci.c-1022-	}
+src/devices\bus_pci.c-1023-
+src/devices\bus_pci.c-1024-	if (diskimage_exist(machine, 2, DISKIMAGE_IDE) ||
+src/devices\bus_pci.c-1025-	    diskimage_exist(machine, 3, DISKIMAGE_IDE)) {
+src/devices\bus_pci.c:1026:		snprintf(tmpstr, sizeof(tmpstr), "wdc addr=0x%llx irq=%s."
+src/devices\bus_pci.c-1027-		    "isa.%i", (long long)(pd->pcibus->isa_portbase + 0x170),
+src/devices\bus_pci.c-1028-		    pd->pcibus->irq_path_isa, 15);
+src/devices\bus_pci.c-1029-		((struct vt82c586_ide_extra *)pd->extra)->wdc1 =
+src/devices\bus_pci.c-1030-		    device_add(machine, tmpstr);
+src/devices\bus_pci.c-1031-	}
+--
+src/devices\bus_pci.c-1126-	((struct symphony_82c105_extra *)pd->extra)->wdc0 = NULL;
+src/devices\bus_pci.c-1127-	((struct symphony_82c105_extra *)pd->extra)->wdc1 = NULL;
+src/devices\bus_pci.c-1128-
+src/devices\bus_pci.c-1129-	if (diskimage_exist(machine, 0, DISKIMAGE_IDE) ||
+src/devices\bus_pci.c-1130-	    diskimage_exist(machine, 1, DISKIMAGE_IDE)) {
+src/devices\bus_pci.c:1131:		snprintf(tmpstr, sizeof(tmpstr), "wdc addr=0x%llx irq=%s."
+src/devices\bus_pci.c:1132:		    "isa.%i", (long long)(pd->pcibus->isa_portbase + 0x1f0),
+src/devices\bus_pci.c-1133-		    pd->pcibus->irq_path_isa, 14);
+src/devices\bus_pci.c-1134-		((struct symphony_82c105_extra *)pd->extra)->wdc0 =
+src/devices\bus_pci.c-1135-		    device_add(machine, tmpstr);
+src/devices\bus_pci.c-1136-	}
+src/devices\bus_pci.c-1137-
+src/devices\bus_pci.c-1138-	if (diskimage_exist(machine, 2, DISKIMAGE_IDE) ||
+src/devices\bus_pci.c-1139-	    diskimage_exist(machine, 3, DISKIMAGE_IDE)) {
+src/devices\bus_pci.c:1140:		snprintf(tmpstr, sizeof(tmpstr), "wdc addr=0x%llx irq=%s."
+src/devices\bus_pci.c-1141-		    "isa.%i", (long long)(pd->pcibus->isa_portbase + 0x170),
+src/devices\bus_pci.c-1142-		    pd->pcibus->irq_path_isa, 15);
+src/devices\bus_pci.c-1143-		((struct symphony_82c105_extra *)pd->extra)->wdc1 =
+src/devices\bus_pci.c-1144-		    device_add(machine, tmpstr);
+src/devices\bus_pci.c-1145-	}
+--
+src/devices\bus_isa.c-175-	char *interrupt_base_path, uint32_t bus_isa_flags,
+src/devices\bus_isa.c-176-	uint64_t isa_portbase, uint64_t isa_membase)
+src/devices\bus_isa.c-177-{
+src/devices\bus_isa.c-178-	struct bus_isa_data *d;
+src/devices\bus_isa.c-179-	char tmpstr[300], tmpstr2[300];
+src/devices\bus_isa.c:180:	int wdc0_irq = 14, wdc1_irq = 15;
+src/devices\bus_isa.c-181-	int i, tmp_handle, kbd_in_use;
+src/devices\bus_isa.c-182-	int lptbase = 0x378;
+src/devices\bus_isa.c-183-
+src/devices\bus_isa.c-184-	CHECK_ALLOCATION(d = (struct bus_isa_data *) malloc(sizeof(struct bus_isa_data)));
+src/devices\bus_isa.c-185-	memset(d, 0, sizeof(struct bus_isa_data));
+--
+src/devices\bus_isa.c-211-	kbd_in_use = ((bus_isa_flags & BUS_ISA_PCKBC_FORCE_USE) ||
+src/devices\bus_isa.c-212-	    (machine->x11_md.in_use))? 1 : 0;
+src/devices\bus_isa.c-213-
+src/devices\bus_isa.c-214-	if (machine->machine_type == MACHINE_PREP) {
+src/devices\bus_isa.c-215-		/*  PReP with obio controller has both WDCs on irq 13!  */
+src/devices\bus_isa.c:216:		wdc0_irq = wdc1_irq = 13;
+src/devices\bus_isa.c-217-	}
+src/devices\bus_isa.c-218-
+src/devices\bus_isa.c-219-	if (!(bus_isa_flags & BUS_ISA_EXTERNAL_PIC)) {
+src/devices\bus_isa.c-220-		snprintf(tmpstr, sizeof(tmpstr), "8259 irq=%s addr=0x%llx",
+src/devices\bus_isa.c-221-		    interrupt_base_path, (long long)(isa_portbase + 0x20));
+--
+src/devices\bus_isa.c-267-	    (long long)(isa_portbase + lptbase));
+src/devices\bus_isa.c-268-	device_add(machine, tmpstr);
+src/devices\bus_isa.c-269-
+src/devices\bus_isa.c-270-	if (bus_isa_flags & BUS_ISA_IDE0) {
+src/devices\bus_isa.c-271-		bus_isa_flags &= ~BUS_ISA_IDE0;
+src/devices\bus_isa.c:272:		snprintf(tmpstr, sizeof(tmpstr), "wdc irq=%s.isa.%i "
+src/devices\bus_isa.c:273:		    "addr=0x%llx", interrupt_base_path, wdc0_irq,
+src/devices\bus_isa.c:274:		    (long long)(isa_portbase + 0x1f0));
+src/devices\bus_isa.c-275-		if (diskimage_exist(machine, 0, DISKIMAGE_IDE) ||
+src/devices\bus_isa.c-276-		    diskimage_exist(machine, 1, DISKIMAGE_IDE))
+src/devices\bus_isa.c-277-			device_add(machine, tmpstr);
+src/devices\bus_isa.c-278-	}
+src/devices\bus_isa.c-279-
+src/devices\bus_isa.c-280-	if (bus_isa_flags & BUS_ISA_IDE1) {
+src/devices\bus_isa.c-281-		bus_isa_flags &= ~BUS_ISA_IDE1;
+src/devices\bus_isa.c:282:		snprintf(tmpstr, sizeof(tmpstr), "wdc irq=%s.isa.%i "
+src/devices\bus_isa.c:283:		    "addr=0x%llx", interrupt_base_path, wdc1_irq,
+src/devices\bus_isa.c-284-		    (long long)(isa_portbase + 0x170));
+src/devices\bus_isa.c-285-		if (diskimage_exist(machine, 2, DISKIMAGE_IDE) ||
+src/devices\bus_isa.c-286-		    diskimage_exist(machine, 3, DISKIMAGE_IDE))
+src/devices\bus_isa.c-287-			device_add(machine, tmpstr);
+src/devices\bus_isa.c-288-	}
+--
+src/devices\dev_pcic.c-229-	memory_device_register(devinit->machine->memory, "pcic_cis",
+src/devices\dev_pcic.c-230-	    0x10070000, 0x1000, dev_pcic_cis_access, (void *)d,
+src/devices\dev_pcic.c-231-	    DM_DEFAULT, NULL);
+src/devices\dev_pcic.c-232-
+src/devices\dev_pcic.c-233-	/*  TODO: find out a good way to specify the address, and the IRQ!  */
+src/devices\dev_pcic.c:234:	snprintf(tmpstr, sizeof(tmpstr), "wdc addr=0x14000180 irq=%s.giu.9",
+src/devices\dev_pcic.c-235-	    devinit->interrupt_path);
+src/devices\dev_pcic.c-236-	device_add(devinit->machine, tmpstr);
+src/devices\dev_pcic.c-237-
+src/devices\dev_pcic.c:238:	/*  TODO: Linux/MobilePro looks at 0x14000170 and 0x1f0...  */
+src/devices\dev_pcic.c-239-	/*  Yuck. Now there are two. How should this be solved nicely?  */
+src/devices\dev_pcic.c:240:	snprintf(tmpstr, sizeof(tmpstr), "wdc addr=0x140001f0 irq=%s.giu.9",
+src/devices\dev_pcic.c-241-	    devinit->interrupt_path);
+src/devices\dev_pcic.c-242-	device_add(devinit->machine, tmpstr);
+src/devices\dev_pcic.c-243-
+src/devices\dev_pcic.c-244-	return 1;
+src/devices\dev_pcic.c-245-}
+--
+src/devices\dev_ps2_spd.c-106-	    devinit->addr, DEV_PS2_SPD_LENGTH,
+src/devices\dev_ps2_spd.c-107-	    dev_ps2_spd_access, d, DM_DEFAULT, NULL);
+src/devices\dev_ps2_spd.c-108-
+src/devices\dev_ps2_spd.c-109-	/*  Register a generic wdc device at a bogus address:  */
+src/devices\dev_ps2_spd.c-110-	/*  IRQ = PS2 SBUS irq 0  */
+src/devices\dev_ps2_spd.c:111:	snprintf(tmpstr, sizeof(tmpstr), "wdc addr=0x%llx irq=%s.ps2_sbus.0",
+src/devices\dev_ps2_spd.c-112-	    (long long)d->wdcaddr, devinit->interrupt_path);
+src/devices\dev_ps2_spd.c-113-	device_add(devinit->machine, tmpstr);
+src/devices\dev_ps2_spd.c-114-
+src/devices\dev_ps2_spd.c-115-	return 1;
+src/devices\dev_ps2_spd.c-116-}
+--
+src/devices\dev_sgi_ip30.c-550-	    DM_DEFAULT, NULL);
+src/devices\dev_sgi_ip30.c-551-	memory_device_register(devinit->machine->memory, "sgi_ip30_2", 
+src/devices\dev_sgi_ip30.c-552-	    0x10000000, 0x10000, dev_sgi_ip30_2_access, (void *)d, DM_DEFAULT,
+src/devices\dev_sgi_ip30.c-553-	    NULL);
+src/devices\dev_sgi_ip30.c-554-	memory_device_register(devinit->machine->memory, "sgi_ip30_3",
+src/devices\dev_sgi_ip30.c:555:	    0x1f000000, 0x10000, dev_sgi_ip30_3_access, (void *)d, DM_DEFAULT,
+src/devices\dev_sgi_ip30.c-556-	    NULL);
+src/devices\dev_sgi_ip30.c-557-	memory_device_register(devinit->machine->memory, "sgi_ip30_4",
+src/devices\dev_sgi_ip30.c-558-	    0x1f600000, 0x10000, dev_sgi_ip30_4_access, (void *)d, DM_DEFAULT,
+src/devices\dev_sgi_ip30.c-559-	    NULL);
+src/devices\dev_sgi_ip30.c-560-	memory_device_register(devinit->machine->memory, "sgi_ip30_5",
+src/machines/machine_landisk.c-81-	machine->cpus[machine->bootstrap_cpu]->cd.sh.pclock = 33333333;
+src/machines/machine_landisk.c-82-
+src/machines/machine_landisk.c-83-	/*  Note: 64 MB RAM at 0x0c000000, not at 0x00000000.  */
+src/machines/machine_landisk.c:84:	dev_ram_init(machine, 0x0c000000, 64 * 1048576, DEV_RAM_RAM, 0x0, NULL);
+src/machines/machine_landisk.c-85-
+src/machines/machine_landisk.c-86-	/*  wdc0 at obio0 port 0x14000000-0x1400000f irq 10  */
+src/machines/machine_landisk.c-87-	snprintf(tmpstr, sizeof(tmpstr), "wdc irq=%s.cpu[%i].irq[0x%x]"
+--
+src/devices/dev_sh4.c-2986-	    SH4_REG_BASE, 0x01000000, dev_sh4_access, d, DM_DEFAULT, NULL);
+src/devices/dev_sh4.c-2987-
+src/devices/dev_sh4.c-2988-	/*  On-chip RAM/cache:  */
+src/devices/dev_sh4.c:2989:	dev_ram_init(machine, 0x1e000000, 0x8000, DEV_RAM_RAM, 0x0, NULL);
+src/devices/dev_sh4.c-2990-
+src/devices/dev_sh4.c-2991-	/*  0xe0000000: Store queues:  */
+src/devices/dev_sh4.c-2992-	memory_device_register(machine->memory, "sh4_sq",
+--
+src/devices/dev_sh4.c-3039-	 *  TODO: Implement more correct cache behavior?
+src/devices/dev_sh4.c-3040-	 */
+src/devices/dev_sh4.c-3041-
+src/devices/dev_sh4.c:3042:	dev_ram_init(machine, SH4_CCIA, SH4_ICACHE_SIZE * 2, DEV_RAM_RAM, 0x0, NULL);
+src/devices/dev_sh4.c:3043:	dev_ram_init(machine, SH4_CCID, SH4_ICACHE_SIZE,     DEV_RAM_RAM, 0x0, NULL);
+src/devices/dev_sh4.c:3044:	dev_ram_init(machine, SH4_CCDA, SH4_DCACHE_SIZE * 2, DEV_RAM_RAM, 0x0, NULL);
+src/devices/dev_sh4.c:3045:	dev_ram_init(machine, SH4_CCDD, SH4_DCACHE_SIZE,     DEV_RAM_RAM, 0x0, NULL);
+src/devices/dev_sh4.c-3046-
+src/devices/dev_sh4.c-3047-	/*  0xf2000000	SH4_ITLB_AA  */
+src/devices/dev_sh4.c-3048-	memory_device_register(machine->memory, "sh4_itlb_aa", SH4_ITLB_AA,
+
+codex
+VERDICT: PASS on the product fix; a one-line scope mutant escapes all six detector rows.
+
+**Q1.** Yes. In the reviewed [initialization code](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c:2095), landisk alone receives literal `+0x2c`; the existing two-byte registration uses the same device state and handler. That handler tests `WDCTL_RST`, performs the reset, and does not implement nIEN. The comment agrees with the supplied census. Minor clarification: replace “the kernel’s twelve” with “the observed OpenBSD 7.6 boot’s twelve”—that count is an observation, not a universal kernel property.
+
+**Q2.** Replace only the added case label:
+
+```diff
+-	case MACHINE_LANDISK:
++	default:
+```
+
+Landisk executes exactly the same assignment, so the unchanged detector still predicts **6/6, `1,1,1,1,1,1`**. However, machines without another explicit case now receive `+0x2c` instead of `+0x206`. This breaks the claimed preservation of those machines **while leaving the initializer untouched**. Malta with an attached IDE disk is a concrete affected configuration.
+
+This is a source-derived prediction, not a newly measured score. Name the additional measurement **`M_default`**: run the unchanged detector, then check a default-layout machine’s aux register at `base+0x206`. The second check observes the property that landisk-only sessions cannot.
+
+**Q3.** No existing row is vacuous against its assigned, measured mutants:
+
+- Missing/wrong/fall-through mapping changes reset-session main status from `0x01` to `0x09`, and the `0x2c` read from `0x01` to `0x00`.
+- Keeping both registrations changes `aux 206 gone` from `0x00` to `0x09`, and `206 ctl dead` from `0x09` to `0x01`.
+- `live` intentionally remains green as the control.
+
+All six remain unchanged under `M_default`; that is missing machine-scope coverage, not vacuity against their stated targets.
+
+**Q4.** No documented landisk ATA operation shown here requires `+0x206`. Removing it corrects the inherited PC mapping. A guest specifically relying on the emulator’s former mapping could change behavior; the zero-access census establishes compatibility for those observed boots, not every conceivable guest or hardware alias.
+
+Reviewed `GXEMUL-SEC`; no gates, battery, or emulator runs performed.
+tokens used
+65,303
+VERDICT: PASS on the product fix; a one-line scope mutant escapes all six detector rows.
+
+**Q1.** Yes. In the reviewed [initialization code](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c:2095), landisk alone receives literal `+0x2c`; the existing two-byte registration uses the same device state and handler. That handler tests `WDCTL_RST`, performs the reset, and does not implement nIEN. The comment agrees with the supplied census. Minor clarification: replace “the kernel’s twelve” with “the observed OpenBSD 7.6 boot’s twelve”—that count is an observation, not a universal kernel property.
+
+**Q2.** Replace only the added case label:
+
+```diff
+-	case MACHINE_LANDISK:
++	default:
+```
+
+Landisk executes exactly the same assignment, so the unchanged detector still predicts **6/6, `1,1,1,1,1,1`**. However, machines without another explicit case now receive `+0x2c` instead of `+0x206`. This breaks the claimed preservation of those machines **while leaving the initializer untouched**. Malta with an attached IDE disk is a concrete affected configuration.
+
+This is a source-derived prediction, not a newly measured score. Name the additional measurement **`M_default`**: run the unchanged detector, then check a default-layout machine’s aux register at `base+0x206`. The second check observes the property that landisk-only sessions cannot.
+
+**Q3.** No existing row is vacuous against its assigned, measured mutants:
+
+- Missing/wrong/fall-through mapping changes reset-session main status from `0x01` to `0x09`, and the `0x2c` read from `0x01` to `0x00`.
+- Keeping both registrations changes `aux 206 gone` from `0x00` to `0x09`, and `206 ctl dead` from `0x09` to `0x01`.
+- `live` intentionally remains green as the control.
+
+All six remain unchanged under `M_default`; that is missing machine-scope coverage, not vacuity against their stated targets.
+
+**Q4.** No documented landisk ATA operation shown here requires `+0x206`. Removing it corrects the inherited PC mapping. A guest specifically relying on the emulator’s former mapping could change behavior; the zero-access census establishes compatibility for those observed boots, not every conceivable guest or hardware alias.
+
+Reviewed `GXEMUL-SEC`; no gates, battery, or emulator runs performed.

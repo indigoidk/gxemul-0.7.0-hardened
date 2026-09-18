@@ -1,0 +1,63 @@
+**VERDICT: BRIEF IS SOUND. ARITHMETIC ENUMERATED AND CORRECT. PREMISES EITHER SETTLED OR HONESTLY FLAGGED. ONE GENUINE GAP (Q2) NOT SETTLEABLE FROM PACKET — BRIEF ALREADY SAYS SO.**
+
+---
+
+## Arithmetic — enumerated, not reasoned
+
+| claim | check | result |
+|---|---|---|
+| main span `0x14000000 + 8*2 - 1 = 0x1400000f` | 16 bytes, base+15 | ✓ |
+| altstatus today `0x14000000 + 0x206 = 0x14000206` | 0x206=518, base+518 | ✓ |
+| fix gives `0x14000000 + 0x16*2 = 0x1400002c` | 0x16*2=0x2c=44, base+44 | ✓ |
+| `0x2c >= 16` → no collision | 44 ≥ 16 | ✓ |
+| `0x2c / 2 == 0x16` | 44/2=22=0x16 | ✓ |
+| `MACHINE_LANDISK` distinct from HPCMIPS addr guard | landisk addr=0x14000000, guard=0x14000180 | ✓ no two-arm reach |
+| twelve writes `len=1` to offset 0 cannot distinguish len-1 vs len-2 reg | write hits both | ✓ |
+
+Every multiplier in the brief holds. The `* devinit->addr_mult` is the only one in the switch that does this, and that is a **style** observation, not an arithmetic one. READ.
+
+---
+
+## Premises — what is and isn't settled from the packet
+
+**Settled and consistent with the inlined evidence (READ):**
+- Three-case switch, no `default:`, pre-switch init at `+0x206`. The brief's correction of the queue row's word "default" is right: no default arm, but `:2095`'s value persists — same substance, correct word.
+- `DEV_WDC_LENGTH=8`, `addr_mult=2` from the device string in `machine_landisk.c:87-88`.
+- `alt_status_addr` is a SEPARATE two-byte registration at `:2120`, not inside the main mapping. This is the structural fact that makes "one missing case" a complete diagnosis.
+- `dev_wdc_altstatus_access` does NOT divide by `addr_mult` — so the byte-vs-register distinction in the altstatus path is the guest's, not the handler's. The handler just checks `relative_addr != 0`.
+- Measured boot census: 12 writes to `0x1400002c`, zero to `0x14000206`, command block healthy. The defect is silent: `wd0` attaches, boot succeeds, soft reset is discarded.
+
+**Not settleable from the packet (REASONED, naming what would settle it):**
+
+1. **Q2 — the load-bearing one.** Is the SH4/landisk alt-status/Device-Control offset specified by the hardware manual in **register units** (0x16) or **bytes** (0x2c)? Both produce `0x1400002c` on landisk today. The brief is honest that codex refused to derive this from the permitted files. **Single fact that would settle it:** the landisk entry in the SH4 / SuperH hardware manual (or OpenBSD's `sh/dev/obio.c` / `pcic.c` for the landisk attachment) stating the offset either as a register index or as a byte offset. Absent that, the `* addr_mult` form is a *bet* about house semantics, not a *demonstration*. The literal `+ 0x2c` is equally correct today and matches the three existing cases' style.
+
+2. **Q1 — form of the fix.** The three existing cases use bare offsets (`+0x160`, `+0x402`) or an absolute (`0x14000386`). None multiply by `addr_mult`. So `0x16 * addr_mult` is the sole case of its kind in the switch. **This is a style observation, not a correctness one** — both forms resolve to the same address on the only landisk configuration that exists. The brief is right to flag it; it is not a defect.
+
+3. **Q3 — rung-3 probe.** The brief specifies the discriminating experiment cleanly: pre-fix write to `0x1400002c` should be swallowed (no device covers it); post-fix write should reach `dev_wdc_altstatus_access`; the mirror at `0x14000206` inverts. Whether a concrete probe (e.g. instrumenting `dev_wdc_altstatus_access` for invocation count, or driving a guest ATA soft-reset and observing controller state) exists in the available detectors is **not stated in the packet**. The brief correctly declines to claim one exists.
+
+4. **Q4 — option set.** The brief names the principal alternative (fix in `machine_landisk.c` instead) and the HPCMIPS-style absolute. Both are real options; the proposed case is the smallest. **Not checkable from the packet:** whether the machine-side fix is feasible without restructuring how the device discovers its alt-status address (the device currently drives this from `machine_type` alone).
+
+5. **Q5 — hazard.** Adding a fourth case does not endanger the existing three (mutually exclusive `machine_type`; HPCMIPS's `addr` guard cannot fire for landisk's hardcoded `0x14000000`). **Not checkable from the packet:** whether any future landisk variant could be initialized with `addr=0x14000180`, which would let HPCMIPS's arm fire *before* the new LANDISK arm overwrites it. Today this is hypothetical.
+
+---
+
+## What the brief gets right that the previous panel missed
+
+- The **collision check** (`0x2c >= 16`) is the one arithmetic step that, if skipped, would let a fix register a device inside the main span. The brief runs it. ✓
+- The correction that there is **no `default:` arm** — the queue row said "falls through to default"; substance right, word wrong, and the word matters because a `case` that assigns nothing (today) genuinely does keep `:2095`'s value. ✓
+- The **measured delta** (12 writes landing on unmapped memory, soft reset discarded) is the kind of warrant the addition license requires. The brief produces it. ✓
+- The **honest refusal to guess on Q2** — codex's "Verified A" is the address `0x1400002c`, not the form `0x16 * addr_mult`. The brief inherits this question rather than papering over it. ✓
+
+---
+
+## What I would name, not measure
+
+A single measurement would close Q2 cheaply: **grep the permitted files for any landisk/sh/SH4 attachment that names the Device Control / alt-status register with an explicit offset**, and report whether it is given as a register index or a byte offset. If register index, the `* addr_mult` form is the natural expression and Q1 dissolves. If byte offset, the literal `+ 0x2c` is the natural expression and the multiplier is an over-generalisation. The brief already notes codex declined this; the ask now is to retry with the specific question "register or byte?", not "what is the address?".
+
+For Q3, the discriminating probe is one GXemul detector that counts `dev_wdc_altstatus_access` invocations under a scripted guest store to `0x1400002c`. Pre-fix: 0. Post-fix: 1 per store. The brief describes exactly this; I name it because it is the smallest witness that would advance the ladder.
+
+---
+
+## Bottom line
+
+The brief is not the kind that survives by being agreeable. It survives by enumerating the arithmetic, settling what can be settled, and naming what cannot. The one defect-shaped risk — Q2's register-vs-byte question — is **flagged by the brief itself**, not hidden. The fix is one case, the collision check passes, the delta is measured, and the style question (Q1) is honestly framed as a style question rather than dressed as correctness. **No defect found that the brief does not already name.**

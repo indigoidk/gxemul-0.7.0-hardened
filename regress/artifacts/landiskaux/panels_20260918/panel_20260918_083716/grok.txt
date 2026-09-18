@@ -1,0 +1,92 @@
+I'll verify the landiskaux pass-2 claims against `GXEMUL-SEC/src/` rather than ratify the packet, starting with HEAD, the checkpoint, and the actual diff.HEAD matches the checkpoint. Next I’ll read the real `dev_wdc.c` change, the probe, and the kill-table artifacts instead of taking the inlined packet as given.The inlined kill table matches the artifacts. I’ll now check the switch, the aux handler, landisk decode, and look for a sixth mutant that still scores 6/6.Landisk WDC uses `addr_mult=2`. I’ll check window size, whether the gate invokes the right binary, and whether 0x206 had any legitimate guest traffic.The brief’s RAM address looks wrong for landisk. I’ll check the real device map and whether `0x16 * addr_mult` is an untested 6/6 escape.**VERDICT: RATIFY** the product diff. The landisk case does what the comment says. One sixth mutant exists; it is a spelling of `0x2c` on this board, not a second guest-visible address. No detector row is vacuous under the mutant it names. Unmapping `0x206` is safe for a landisk guest.
+
+Premises were checked in `GXEMUL-SEC/src/`, the BSD copies under `regress/artifacts/landiskaux/`, the census, the device list, and the kill-table logs. Arithmetic for the sixth mutant is derived, not re-built.
+
+---
+
+### Q1. Diff and comment
+
+Yes. The hunk is only:
+
+```c
+case MACHINE_LANDISK:
+    alt_status_addr = devinit->addr + 0x2c;
+    break;
+```
+
+appended after IQ80321, with the pre-switch `alt_status_addr = devinit->addr + 0x206` left intact. That is exactly “landisk’s aux at a literal byte offset `0x2c`; everyone else keeps the PC layout.”
+
+Comment claims that hold:
+
+| Claim | Check |
+|---|---|
+| NetBSD/OpenBSD `WDC_OBIO_AUXREG_OFFSET 0x2c`, unscaled | Both preserved copies `#define` it `0x2c` and `bus_space_map(..., or_addr + WDC_OBIO_AUXREG_OFFSET, AUXREG_SIZE=2, ...)`. Command regs use `i * 2`; aux does not. |
+| Without the case, landisk kept `+0x206` | `DEVINIT(wdc)` still initialises `+0x206`, then the switch. No `MACHINE_LANDISK` at HEAD before this hunk. |
+| Twelve Device Control writes, first a soft reset, hit unmapped memory | Census `RESULTS.txt`: 12 byte writes to `0x1400002c`, 0 reads; first value `0x0c` = `WDCTL_RST\|WDCTL_4BIT`. |
+| Delivering `WDCTL_IDS` does not implement nIEN | `dev_wdc_altstatus_access` acts on `idata & WDCTL_RST` only. `WDCTL_IDS` is not read as a predicate. |
+
+Switch keys are disjoint: HPCMIPS `1004`, MACPPC `2004`, IQ80321 `5005`, LANDISK `6004`. Landisk is last, so a missing `break` on the new arm cannot fall into an older one.
+
+`addr_mult=2` is real (`machine_landisk.c`, main window `DEV_WDC_LENGTH * 2` = 16 bytes = `0x14000000..0x0f`) and is **not** applied to this offset. That is correct: the BSD aux map is a byte offset, not a command-block index. `DEVICE_ACCESS(wdc)` divides `relative_addr` by `addr_mult`; the altstatus handler does not, so a 2-byte window at `+0x2c` is two physical bytes with Device Control at offset 0.
+
+---
+
+### Q2. Ask-again (the sixth)
+
+**Smallest product edit that still scores 6/6:**
+
+```c
+alt_status_addr = devinit->addr + 0x16 * devinit->addr_mult;
+```
+
+Landisk hardcodes `addr_mult=2`, so `0x16 * 2 = 0x2c`. The probe never sees the C expression; it sees physical `0x1400002c`. Predicted **6/6**. Not re-built — the equality is the machine’s own `addr_mult`.
+
+That is the form this round’s CHANGELOG already calls *not the address* and says it nearly shipped. `M_0x16` is the **unscaled** cousin (`+ 0x16` → `0x14000016`, measured 3/6). It does not cover the scaled spelling. The detector’s contract line “any value != 0x2c” is true of the **registered address** and false of the **source form**.
+
+Disposition: **coverage debt, not a floor breach.** Guest-visible landisk behaviour is unchanged. Clause (d) enumerates the offset as a value; this mutant does not change that value on this board. Disclose it next to `wdcaltwidth` / machine-type-only keying, or leave it. Do not replace the literal with this expression — the BSD source and `add #44,r5` are the warrant.
+
+Same class, even smaller, same 6/6: `+` → `|` (`0x14000000 | 0x2c` coincides because the base is 16-byte aligned); `0x2c` → `44`; hardcoded `0x1400002c`. All guest-identical here.
+
+**If the edit is allowed to touch the detector instead:** change the old-address oracle from `0xb4000206` to `0xb4000207` (one hex digit, in `r5=` and in session 3’s CTRL). On the fix, `0x207` is unmapped → read `0`, write nowhere → still 6/6. Under `M_both`, `0x207` is offset 1 of the 2-byte window; after `#494`/`#525` that read returns `0` and the write is ignored, so **`M_both` becomes 6/6**. That is the smallest detector edit that lets a mutant the table already killed escape. Do not make it.
+
+There is no one-token edit of **only** the landisk assignment that moves the guest-visible address and still greens: any address other than `0x2c` reddens the three `0x2c` rows, and keeping `0x206` mapped as a live aux is `M_both` (4/6).
+
+---
+
+### Q3. Vacuous rows
+
+No.
+
+| Row | Named killer | Channel under that mutant |
+|---|---|---|
+| `live` | none (control) | `0x09` on every leg, including pre-fix. PRETABLE says so. |
+| `aux 2c rest` | missing/wrong offset | unmapped read `0x0` vs want `0x9` (measured on `M_head`/`M_0x16`/`M_0x2d`/`M_above`) |
+| `aux 2c reset` | same | SRST lost, status stays `0x09` vs want `0x01` |
+| `aux 2c read` | same | unmapped `0x0` vs want `0x01`. Also the only row that would catch “`0x2c` is a constant `0x09`, writes still reset.” Not vacuous. Coupled with reset in the same session; never the unique kill in *this* table. |
+| `aux 206 gone` | `M_both` / pre-fix | mapped altstatus reads `0x09` vs want `0x0` |
+| `206 ctl dead` | `M_both` / pre-fix | SRST at `0x206` purges, status `0x01` vs want `0x09` |
+
+The two `0x206` rows are complementary, not duplicates: a read-only status mirror at `0x206` reddens `aux 206 gone` and greens `206 ctl dead`; a write-only reset there does the opposite.
+
+Limit, not vacuity: `aux 206 gone` tests “reads as `0`,” which cannot distinguish unmapped from a dummy that returns `0`. `M_both` uses the real altstatus handler, so the named mutant still varies.
+
+A 2026-08-28 claim that `+ 0x2b` with width 2 still contains `0x2c` is **true of the window and false of the handler** after `#494`: offset 1 is declined. That mutant is 3/6 today, same shape as `M_0x2d`.
+
+---
+
+### Q4. Removing landisk’s answer at `0x206`
+
+No legitimate landisk guest is using it.
+
+- OpenBSD 7.6 census: **zero** accesses to `wdc_altstatus` at `0x14000206` for the whole boot; all twelve control writes go to `0x2c`.
+- Both BSD `wdc_obio.c` files map aux at `or_addr + 0x2c`, not at `+0x206`.
+- Device list (`A5_device_list.log`): `wdc` `0x14000000` len `0x10`, old `wdc_altstatus` `0x14000206` len `2`, then a 32 KB `ram` at `0x1e000000`. The brief’s collision sentence is right: `0x1400002c..2d` is free. (Main RAM is `0x0c000000`, 64 MB; that is *before* wdc, not the `0x1e000000` region.)
+- `0x206` on landisk was the PC default, not this board. A guest written against GXemul’s old mapping would break; that is the bug.
+
+`AUXREG_NPORTS` is **1**; the 2-byte map is 16-bit spacing of one register, not the PC altstatus+drive-address pair. Offset 1 on landisk is padding the shared handler already declines. Existing, and already filed as `wdcaltwidth`. Not a reason to keep `0x206`.
+
+---
+
+### Seat ledger
+
+Grok 4.6, file-reading. Source, BSD copies, census, device list, PRETABLE, and `TABLE.out` / per-mutant `probe_*.raw` opened. No gate, no battery, no `build/` mutation. The sixth mutant is derived from `addr_mult=2`, not measured in a fresh binary.

@@ -1,0 +1,128 @@
+VERDICT: The arithmetic enumerates correctly, the defect is real, and the fix is the right SHAPE; but the proposed `+ 0x16 * addr_mult` form is non-idiomatic for this switch and lacks the independent evidence that would justify departing from the three existing cases' bare-offset style — recommend `alt_status_addr = devinit->addr + 0x2c;` instead. All other claims survive audit.
+
+---
+
+## Premise audit — what the packet actually settles
+
+**READ from the packet (verified against §2's inlined block):**
+
+- The switch has exactly three labelled arms (`MACHINE_MACPPC`, `MACHINE_HPCMIPS`, `MACHINE_IQ80321`) and **no `default:`** — the closing `}` follows the IQ80321 break directly. *The brief is right and the queue row was wrong about "falls through to the default"; a `case` that omits assignment keeps the pre-switch value.*
+- Pre-switch initialisation is `alt_status_addr = devinit->addr + 0x206;` — visible in §2 above the `/* Special hacks */` comment.
+- Two separate `memory_device_register` calls, one for `"wdc_altstatus"` at `alt_status_addr` length 2, one for `devinit->name` at `devinit->addr` length `DEV_WDC_LENGTH * devinit->addr_mult`. *The aux device is genuinely separate from the main mapping — this is the structural fact the whole brief turns on, and it is inlined.*
+- The three existing arms use **bare offsets** (`+0x160`, `+0x402`) or a **hardcoded absolute** (`0x14000386`). **None of them multiplies by `addr_mult`.** The proposed arm is unique in the switch.
+
+**REASONED from the packet (arithmetic, all verified):**
+
+- Main span: `0x14000000 + 8*2 - 1 = 0x1400000f` (16 bytes). ✓
+- Current altstatus: `0x14000000 + 0x206 = 0x14000206`. ✓
+- Proposed altstatus: `0x14000000 + 0x16*2 = 0x1400002c`. ✓
+- Collision: `0x2c = 44 ≥ 16`, so the two-byte aux lands `0x1d` bytes past the main span end. **NO COLLISION.** ✓
+- Mapped at `0x1400002c`, the aux registration is consistent with `machine_landisk.c:86`'s self-declared window `0x14000000-0x1400000f irq 10` *only in the sense that 0x1400002c is outside it* — i.e., the fix does not contradict the machine's own comment, it just lives past it.
+
+**NOT CHECKABLE from the packet (named, with what would settle each):**
+
+1. *Body of `dev_wdc_altstatus_access`.* The brief asserts "tests `relative_addr != 0` and nothing else; does NOT divide by `addr_mult`." If true, the registration must be at the byte address the guest writes — so the multiplier-vs-literal distinction collapses to a choice of how to write `0x2c`, not where to put it. If the body actually does divide by `addr_mult`, the multiplier form becomes load-bearing. **Settles by reading `dev_wdc.c` around the `dev_wdc_altstatus_access` definition.**
+2. `DEV_WDC_LENGTH == 8` and `addr_mult == 2` for landisk. Settles by reading `dev_wdc.c:45` and `machine_landisk.c:87-88`.
+3. `MACHINE_LANDISK == 6004`. Settles by reading `src/include/machine.h:268`.
+4. The census numbers (twelve writes, six `0x08`, five `0x02`, one `0x0c`, all `len=1` from `pc=0x8c15f6e8`). Settles by re-running `regress/artifacts/landiskaux/census_20260827/` — explicitly forbidden by the operational rule, so this stays as a stated measured fact.
+5. The four-run, two-instrument reproduction. Same as above.
+6. Whether the existing aux handler logs anything observable when invoked (needed to design a rung-3 probe in Q3).
+
+I did not invent or re-derive any of these. They are stated; the packet does not contain the evidence that would let a seat re-derive them, and the rule forbids producing it.
+
+---
+
+## Q1 — Multiplier form vs literal
+
+**Verdict: literal `+ 0x2c`.**
+
+The three existing arms are unanimous on style:
+
+| Arm | Form |
+|---|---|
+| MACPPC | `devinit->addr + 0x160` (bare byte offset) |
+| HPCMIPS | `0x14000386` (hardcoded absolute — explicitly flagged `/* TODO: Fix */`) |
+| IQ80321 | `devinit->addr + 0x402` (bare byte offset) |
+
+The proposed arm is the only one that multiplies. The brief itself flags this as a question. The case for the multiplied form is: it expresses the offset in "register units", which feels principled. The case against:
+
+1. **No house precedent.** A switch that has handled three machine-specific cases uniformly has not adopted register-unit notation. Departing from the convention without a stated reason is a code-review smell in a file that already carries a `/* TODO: Fix */` on its HPCMIPS arm — that TODO is a record that this switch has been touched before, and the toucher's choice was a bare constant.
+2. **The measurement is in byte units.** The census observes writes at byte address `0x1400002c`. The `0x16` is *derived* by dividing the measured byte offset by the measured `addr_mult=2`. There is no independent datum that fixes `0x16` as a register-unit offset.
+3. **The abstraction isn't pinned down.** If `addr_mult` ever changed for a hypothetical landisk variant, which answer would the hardware actually want? Real SH4 / SH-landisk silicon has the Device Control register at a fixed *byte* offset from the ATA command block base, independent of any register-width abstraction. The literal tracks that. The multiplied form tracks an abstraction whose semantics for this register are not established.
+4. **Robustness.** With `0x16 * devinit->addr_mult`, a future regression that left `addr_mult=0` would put the aux device at `devinit->addr` itself — inside the main mapping, length 2, colliding with the first two registers. With `+ 0x2c`, the address is independent of `addr_mult`.
+
+`alt_status_addr = devinit->addr + 0x2c;` is shorter, consistent with two of the three precedents, equivalent today, and defensible if `addr_mult` ever drifts. **Recommend changing the proposed arm to the literal before it ships.** This is a defect in the *form* of the fix, not in the *substance*.
+
+---
+
+## Q2 — Where 0x16 comes from, and whether it's load-bearing
+
+**Verdict: 0x16 has no independent support; it is purely an arithmetic transformation of the measured byte offset, and the multiplier that produces it is the very quantity the fix is meant to be robust against.**
+
+The brief asks whether any SH4 / landisk source states the alt-status/Device-Control offset in *register units*. The packet inlines none. The 0x16 derives as `0x2c / 2`, and the `2` is `addr_mult` for the current landisk configuration — i.e., the divisor is the same quantity the multiplied form would later multiply by. This is circular if the question is "what grounds the multiplied form".
+
+Concretely: a wrong multiplier here is **silent**. There is no crash, no exception, no diagnostic. The Device Control register drives ATA soft-reset and interrupt-acknowledge — discarding writes means the controller never resets and never acks, which the brief's own data shows the boot tolerates (`wd0` still attaches with correct geometry because the boot path doesn't depend on the ack). A defect of this shape is exactly the kind that lives forever.
+
+This is the load-bearing property the brief's own framing identifies. The fix should not adopt a form whose correctness cannot be checked from any datum in the packet. The literal `+ 0x2c` is checkable directly against the measured address and is independent of `addr_mult`. **The multiplied form is therefore strictly weaker, and there is nothing in the packet that would let a future reader audit it.**
+
+---
+
+## Q3 — The witness
+
+**Verdict: a rung-3 probe is reachable in principle; the brief's named probe is well-shaped; naming it concretely is the most useful thing this seat can do here since it cannot run one.**
+
+The probe the brief describes is correct in shape:
+
+- Pre-fix: instrument `memory_device_register` (or wrap `dev_wdc_altstatus_access`) to log every invocation. Boot `-E landisk` with OpenBSD 7.6. Observe: **zero** invocations from guest traffic, because the registration is at `0x14000206` and no guest writes there.
+- Pre-fix: write `0x1400002c` from the debugger. Observe: **no** invocation of the aux handler (the write is to unmapped memory; with `no_exceptions=0` already shown by the census for guest writes of the same shape, no exception fires; the write is silently dropped).
+- Post-fix: same instrument. Boot. Observe: **twelve** invocations matching the census's write pattern (one `0x0c`, six `0x08`, five `0x02`). The first invocation's argument is the soft-reset that the brief notes is silently discarded today.
+
+The "mirror image" the brief names (a synthetic write to `0x14000206` post-fix) is not a guest-path witness — it confirms the registration moved, which is already known from the diff. The pre-fix debugger write to `0x1400002c` is the half that matters, because it shows the symptom.
+
+A rung-3 instrument is therefore:
+1. Wrap `dev_wdc_altstatus_access` to log `(relative_addr, len, val, is_write)`.
+2. On unmodified `-E landisk`, write `0x0c` to `0x1400002c` from the GXemul debugger (`device write` or equivalent).
+3. Observe: no log entry. The byte is dropped.
+4. Apply the diff, rebuild, repeat. Observe: one log entry with `val=0x0c`.
+
+That is a same-script pre/post pair using one instrument, which is what the lifecycle ruling needs. It does not require OpenBSD to boot successfully; it requires only that the address is dispatched correctly. The 30-second cost is well inside a single seat's budget.
+
+I cannot run this. The packet does not contain evidence that anyone has. **Naming it is the contribution.**
+
+---
+
+## Q4 — The option set
+
+The members I would consider:
+
+1. **`+ 0x16 * addr_mult` in `dev_wdc.c`.** The brief's proposal. Right shape, wrong form (see Q1/Q2).
+3. **`+ 0x2c` literal in `dev_wdc.c`.** Same shape, idiomatic form. **Preferred.**
+4. **HPCMIPS-style absolute `0x1400002c`.** Bypasses `devinit->addr`. Wrong: a future landisk variant with a different base address would silently lose the registration. The HPCMIPS arm is flagged `/* TODO: Fix */` for exactly this reason.
+5. **Move the address declaration to `machine_landisk.c`.** Inverts the existing pattern. The three current arms all live in `dev_wdc.c`; moving one to the machine file would create a precedent without solving a problem the current pattern can't handle. The case for moving would be "the machine knows its peripheral map better than the device", which is true in general but is *already* expressed here by `devinit->addr` and `devinit->addr_mult`. The machine file already contributes the bus-width and the base address; adding the alt-status offset makes it contribute a third fact, with no other machine needing to. This is a worse trade than adding one case to a switch that already exists.
+6. **No-op.** Twelve measured writes including a real soft-reset go to unmapped memory; `wd0` attaches anyway because the boot path doesn't need the ack. **The delta is real but small.** This is the option the addition licence forbids — "it cannot hurt" — and indeed the brief has not argued it. The measured delta is sufficient licence.
+
+The addition is the right *member* of the option set. The form needs to change to a literal. **Recommend option 3.**
+
+---
+
+## Q5 — Smallest edit that breaks a claimed property; hazards to existing arms
+
+**Smallest edits that break each claimed property:**
+
+- *Property "writes to `0x1400002c` are answered by `wdc_altstatus`":* change `0x16` to any other constant, or to `0x16 * 0` (puts aux at `devinit->addr`, collides with main; or at `devinit->addr + 0x2c * 0 = devinit->addr`, same collision). One keystroke either way.
+- *Property "no collision with main mapping":* replace `+ 0x16 * devinit->addr_mult` with `+ 0x4` (puts aux inside the main span). One keystroke.
+- *Property "doesn't break existing three arms":* replace the label of any existing arm with `MACHINE_LANDISK`. One keystroke. None of the three's invariants depend on landisk, since `machine_type` is single-valued per machine, so the breakage is silent: MACPPC loses its `+0x160` and falls through to `devinit->addr + 0x206` (which for MACPPC is a different wrong address). The detector that ships with this project would have to compare aux-registration addresses across machines to catch this — it cannot catch it from the diff alone, since the diff still has the right shape, only the label moved.
+
+**Hazards to the existing three from adding a fourth arm:** none functional. `machine_type` is single-valued per machine instantiation; a fourth `case MACHINE_LANDISK:` is mutually exclusive with the other three by construction. The HPCMIPS guard `devinit->addr == 0x14000180` is on `devinit->addr`, not on `machine_type`, so it does not interact with the new landisk arm regardless. No machine can fall into two arms.
+
+**One non-obvious hazard to flag:** the brief notes that today's `alt_status_addr = devinit->addr + 0x206` is what landisk gets *by accident*. After the fix, that value is gone for landisk. If anyone has a side-effect, breakpoint, or test fixture that depends on the aux device being registered at `0x14000206` specifically — even though no guest writes there today — the fix silently changes it. The census says zero accesses at `0x14000206`, which strongly suggests nothing depends on it, but this is a "stated as zero, not observed as zero by this seat" claim and worth a sentence in the commit message if the project keeps one.
+
+---
+
+## Defects named, in priority order
+
+1. **(Q1, Q2) Form defect, not a functional one.** The multiplied form `+ 0x16 * addr_mult` is unsupported by any datum in the packet, departs from the unanimous house style of the switch, and is strictly weaker than the literal `+ 0x2c` it would replace. Recommend changing to literal. *Not load-bearing today; load-bearing if `addr_mult` ever drifts.*
+2. **(Q4) Option-set gap.** The brief asks "is fixing `machine_landisk.c` instead a case?" It is, and the answer is no — but the brief doesn't give the reason (the machine already contributes base and stride via `devinit->addr` / `devinit->addr_mult`; the offset is the third fact and adding it to the machine is a worse trade than a fourth switch arm). Naming this matters because if a future reviewer proposes the same inversion, they should hit a recorded rebuttal.
+3. **(Q3) Witness probe.** Reachable, named above. The packet contains no record of anyone having run it. This is the highest-value single measurement the panel could add, and it costs seconds, not minutes.
+
+No defects found in the arithmetic, the structural claims about the switch (no default arm; pre-switch initialisation; two registrations), the collision check, or the census facts as stated. The defect is real and isolated; the fix is the right shape; the form needs one edit.

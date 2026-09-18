@@ -7671,7 +7671,7 @@ future marker must survive that splitting.
   referenced; no OpenBSD 7.6 path issues it, and a `dd`-through-`/dev/rwd0c` attempt failed
   because the ramdisk has no node. Reachability stays where the earlier seat left it.
 
-### `landiskaux` — open, NEW, and adjacent to `wdcnoirq`
+### `landiskaux` — ✅ FIXED by `#533` 2026-09-18 (see the `#533` entry at the tail); was: open, NEW, and adjacent to `wdcnoirq`
 
 **The wdc device-control register is unmapped on landisk.** `dev_wdc.c:1056` places
 alt-status/device-control at `addr + 0x206` under a machine switch covering MACPPC, HPCMIPS
@@ -21716,7 +21716,7 @@ empty, and quietly skipped.*
 
 ## 2026-09-18 — TWO ROWS FROM ONE UNREAD-REVIEW SWEEP
 
-### `lcalenzerodrop` (HIGH) — `#530`'s closing pass was ratified by ONE seat while FOUR said DO NOT CLOSE
+### `lcalenzerodrop` (HIGH — downgraded to MED, then RESTORED the same day) — `#530`'s closing pass was ratified by ONE seat while FOUR said DO NOT CLOSE
 
 `#530`'s CLOSING PASS (`_scratchpad/panel_20260917_085545`) was recorded with three seats and the
 round closed. **The dir holds five, and four dissent**: codex *"DO NOT CLOSE YET"*, and glm,
@@ -21732,6 +21732,33 @@ also predicted 352/352) and flags an *expected, not measured* 352/352.
 LATE-DISSENT RULE with the dissent carried verbatim on the `lcaisalane` row — closure changes the
 LICENSE, never the truth-value, and nothing is amended under `#530`'s number.
 
+> #### *** CORRECTED THE SAME DAY, BEFORE ANY ROUND SPENT ITSELF ON IT: `#530` HAD ALREADY
+> #### PREDICTED, MEASURED AND DISCLOSED THIS EXACT MUTANT.  I filed HIGH without opening the
+> #### round's own artifacts. ***
+>
+> The dissenters' mutant is `m_lenzero`, and the round handled it exactly as clause (e) prescribes:
+> **PREDICTED** before the table ran (`fix530_20260914/PRETABLE.out:14` — *"m_lenzero predicted
+> EQUIVALENT, DISCLOSED"*, its mtime proving the order), **MEASURED** `37/37` with `check_pred.out`
+> scoring it `EXACT … 0 red`, and **DISCLOSED** in the shipped contract at
+> `regress/lca_isalane_probe.py:182` — *"DISCLOSED, not caught: the len-0 refusal (no producer)"*.
+>
+> **And the reachability premise the seats could not settle is settled by READING**, which is why
+> their disagreement was undecidable from the packet: `memory_rw.c:480-481` matches a device on
+> `paddr >= baseaddr && paddr < endaddr`; `:494` subtracts the base, so `paddr` is strictly inside;
+> the only truncation (`:495`/`:523`) sets `len = length - paddr`, hence **`len >= 1` always**. No
+> dispatch path delivers `len == 0`. The guard is dead code, DROP *is* equivalent — so the seats
+> were **right about the behaviour and wrong that it was undisclosed**.
+>
+> **WHAT IS ACTUALLY WRONG IS A BRIEF DEFECT.** The closing-pass brief inlined neither the
+> prediction nor the contract line, so four seats spent their whole answers re-deriving a cell the
+> round had already closed, and — believing it open — concluded the chain had not closed. That is
+> the documented cost of dropping the settled-premises block, landing on the one pass whose entire
+> job was to decide closure. **The seats behaved correctly on the packet they were given.**
+>
+> Residue, and a measurement is in flight: codex's WIDTH conjunct `len <= 8` may be a DEAD CONJUNCT
+> rather than an escape — the probe drives widths 1/2/4/8 and 3/5/6/7, all ≤ 8, and an Alpha
+> load/store is at most 8 bytes.
+
 ### `stagetokens` (MED) — the gates reddened because the record got more honest; PASS 2 owed
 
 Recording 23 unread seat answers took sections H and I from **0 violations at HEAD to 19**. Neither
@@ -21740,3 +21767,28 @@ pre-2026-08-16 vintage), so a new one was minted and negative-controlled on both
 tools were found blind to tokens they should share — `check_fable_queue.py` had never known
 `RE_READ`, and `gen_dashboard.py` knew none of them, so annotations rendered as **fabricated fable
 cells**. Shipped as `#532`; its pass-2 questions are the row's `hold_question`.
+
+> #### *** AND THE DOWNGRADE ABOVE WAS HALF WRONG.  2026-09-18, after `panel_20260918_080237`. ***
+>
+> The `len == 0` half stands: disclosed, measured, correct.  **The closure half does not.**  The round's own
+> `table7_20260916/CLOSE6_VERDICT.md` says *DO NOT CLOSE ON THIS PASS* over an unmeasured width mutant whose
+> producer was verified in source — and I had not read it.  That mutant is M2 (`&& len <= 8`), now **measured
+> 352/352**, and its escape is real: Alpha PROM `getenv` (`cpu_alpha_palcode.c:141-144`) copies to the
+> guest-controlled `a2` through `store_buf` (`memory.c:839-846`), which issues single 16/64/256/1024-byte
+> writes when aligned.  The probe drives only widths ≤ 8.  **`#530` is uncommitted, so a wide-write row is
+> owed before it commits (L1).**
+
+### `devwritedata` (LOW) — handlers that assign `data[]` on a WRITE corrupt `store_buf`'s const-cast source
+
+Audit filed from fable5's 2026-09-18 ruling: 11 of 151 `memory_writemax64(cpu, data` sites lack a direction test within two lines (a correlate; enumerate before calling any a defect).
+
+### `lcawidefold` (LOW, documented-only) — `#530` forwards one byte of an N-byte `store_buf` store
+
+Further 16-byte chunks fold onto the same port via `>>5`; a policy over an input the 21066 cannot express. Reopen if a guest is found issuing GETENV into the ISA window.
+
+### `landiskaux` -> `#533` (FIXED 2026-09-18, local commit)
+
+landisk's wdc aux register moved from the PC-layout `+0x206` to `+0x2c` (NetBSD/OpenBSD `WDC_OBIO_AUXREG_OFFSET`).
+Rung-4 witness: the gate_crossfamily rig's own boot logs 12 unmapped accesses at `0x1400002c` pre-fix and 0 after.
+Detector `regress/landisk_aux_probe.py` (1/6 -> 6/6), wired in `gate_sh_rounding.sh`. Delivers WDCTL_IDS, does NOT
+implement nIEN. Residuals filed: `wdcrstbitonly` (the handler's RST-bit test is pinned by nothing wired).

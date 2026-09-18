@@ -1,0 +1,73 @@
+**VERDICT: PASS WITH CAVEATS — the diff fixes the named problem, accepts three documented losses (Q1/Q2/Q3) in doing so, and is one token away from breaking its headline claim (Q4).**
+
+---
+
+## Premise audit (quick)
+
+| Premise | Status | Notes |
+|---|---|---|
+| P1 (19 violations from 23 recordings) | REASONED | Mechanism (recording promotes 1-seat→N-seat short panel) is coherent; the 19 and 23 are not checkable from the packet. |
+| P2 (brief-subject discriminator overturns count sort) | REASONED | The logic is sound; the four example rows (`diskimagesign`, `pcc2c040assertrow`, `pcc2genctlc040alias`, `asiceventaddr`) cannot be verified from the packet. Settling it requires reading `panel_20260917_100431/brief_sent.md` and `panel_20260826_222557/brief_sent.md`. |
+| P3 (RE_READ says SINGLE-SEAT; ANNOTATION says pre-2026-08-16) | READ | Both literals are present in the diff. The premise as stated is exact. |
+| P4 (negative-control behaviour) | REASONED | A synthetic test description is not the same as the test running. Cannot verify from packet. |
+| P5 (gen_dashboard matched on seat+phase; annotations written `seat: fable5`) | READ for the code; REASONED for the convention | Pre-fix `cell()` filter in the diff confirms the code claim. The `seat: fable5` ledger convention is not checkable here. |
+| P6 (post-commit landiskaux/opus5 misuse) | REASONED | Consistent with the narrative; cannot verify from packet. |
+
+---
+
+## Q1 — Right SHAPE for NOPANEL?
+
+**REASONED.** The general-claim-plus-reason-in-note shape is defensible and the diff argues it well, but it costs mechanical enforcement of the *reason*. The check stays `t in note for t in STAGE_TOKENS`; the note's prose is never read.
+
+- Two specific tokens would not have covered the `ip30abortkill' assess` case (rung-3 WITNESS BUILD + ship-order ADJUDICATION — work on the row, but not a panel seat answer). The diff is right that a 3rd specific literal wouldn't fit.
+- The cost: a stage that DID run short can be silenced by writing the literal, regardless of what the note actually says. The authors accept this; the comment is the only thing keeping it honest.
+
+This is a deliberate, documented tradeoff, not a defect. The shape is right *given* that humans will read the note.
+
+---
+
+## Q2 — What stops silencing a real short stage?
+
+**Nothing in the diff. Human review only.**
+
+The diff adds the literal but no discriminator. The brief's mechanical test ("read `ev` field, open `brief_sent.md`, ask WAS THIS PANEL CONVENED ON THIS ROW") is a human protocol described in prose — it is not implemented in code. A check could be added that walks every NOPANEL annotation, opens the cited panel dir's brief, and verifies the brief's subject is not this row; the diff doesn't add it.
+
+Concrete misuse: write `[NOT A PANEL STAGE: NO PANEL CONVENED]` on a real short stage (e.g. one of the three rows the brief says are genuine panels via `panel_20260917_100431`). Both `check_stage_panels.py` and `check_fable_queue.py` see the literal, skip the stage, gate green. The stage is silently mis-categorised.
+
+The `RE_READ` comment records exactly this failure mode having already happened with the older token — reached for the nearest literal, gate flipped green, backed out. The diff names that lesson but does not encode the guard. **The only existing catch is post-hoc review, which has already fired once (the landiskaux/opus5 case in P6).**
+
+---
+
+## Q3 — Blank cell: new conflation?
+
+**Yes. Four states collapsed into one glyph.**
+
+Pre-fix, annotated entries rendered as FABLE cells — fabricated agreement, which the brief correctly identifies as the inverted form of the failure this layer exists to prevent.
+
+Post-fix, the four token categories all render blank:
+- ANNOTATION (pre-2026-08-16 vintage) — no panel under current policy
+- RE_READ (single-seat re-read) — one seat answered, not a panel
+- NOPANEL (no panel convened) — by definition no panel
+- (and the pre-existing seat-failed-to-answer case the legend already names)
+
+The diff's own comment observes that blank is read as "seat failure, never agreement." Three of the four post-fix blank cases are not seat failure; they are *no panel was convened*. A distinct glyph (different unicode, class, or `title=` tooltip pointing at the cited token) is the right answer and is not in the diff.
+
+This is a known gap the diff accepts. PASS-on-purpose, not PASS-by-omission.
+
+---
+
+## Q4 — Smallest edit that breaks a claimed property and still passes negative controls
+
+**Remove ` and _is_answer(x)` from the `cell()` filter in `gen_dashboard.py`:**
+
+```python
+ ents = [x for x in row.get("entries", [])
+-        if x["seat"] == seat["id"] and x.get("phase") == phase and _is_answer(x)]
++        if x["seat"] == seat["id"] and x.get("phase") == phase]
+```
+
+This is the smallest single deletion in the diff. It directly violates the headline claim "AN ANNOTATION IS NOT AN ANSWER" — the entire reason the `gen_dashboard.py` half of this diff exists. After this edit, every one of the four token types renders as a cell again, exactly as pre-fix.
+
+Negative controls still pass because the negative control exercises `check_stage_panels.py` and `check_fable_queue.py`, not the dashboard. Gate logic is untouched. The 25,154-character pre/post delta inverts, and the dashboard is back to claiming the flagship seat answered stages on which no panel was convened.
+
+A token-list edit (e.g. dropping one element of `STAGE_TOKENS`) is a larger diff, only fixes the breakage for one of the four tokens, and is less faithful to "what's the most fragile single line in this diff." `_is_answer(x)` is the keystone.

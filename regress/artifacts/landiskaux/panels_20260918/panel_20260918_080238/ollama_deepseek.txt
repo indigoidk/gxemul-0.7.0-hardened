@@ -1,0 +1,18 @@
+VERDICT: NOT RATIFY as-is — the arithmetic in the brief is internally consistent (READ), but the `0x16 * devinit->addr_mult` form is underdetermined by the packet and the collision check is incomplete; a literal `+ 0x2c` is safer unless a register-unit source is supplied.
+
+---
+
+**Q1 — Multiplier vs literal**  
+REASONED. The existing three cases and the pre-switch default (`+ 0x206`) all use literal byte offsets. No case multiplies by `addr_mult`. The main device mapping uses `addr_mult` for its length, but that does not imply the alt-status offset is defined in register units. Therefore the house idiom is a literal byte offset: `+ 0x2c`. The multiplier form is an overgeneralisation from a single data point (`addr_mult = 2`) and risks silent mis-mapping if a future landisk variant declares a different `addr_mult`.
+
+**Q2 — Where does 0x16 come from?**  
+REASONED. `0x16` is derived as `0x2c / 2` from the measured byte address `0x1400002c` and the current `addr_mult = 2`. That is circular if used to justify the multiplier form: the measured fact is only the byte offset `0x2c`. The packet contains no SH4/landisk source stating the alt-status/Device-Control register offset in register units. Thus `0x16` is **not load-bearing** for a literal fix. Settling fact: a hardware spec or driver source showing the offset as either `0x16` register units or `0x2c` bytes.
+
+**Q3 — Rung-3 probe**  
+REASONED. Yes, a concrete rung-3 probe exists: boot OpenBSD under unmodified `-E landisk` with the existing memory-access tracer (census-hook) filtering addresses `0x1400002c` and `0x14000206`. Pre-fix, the same script already shows twelve writes to `0x1400002c` and zero to `0x14000206`. Post-fix, the identical script should show the mirror image: writes to `0x1400002c` now hit the registered `wdc_altstatus`, and `0x14000206` remains quiet. This is one instrument, same script; only the post-fix half is missing.
+
+**Q4 — Option set**  
+READ/REASONED. The delta (twelve writes to unmapped memory) is real if the census is accurate, but that measurement is only inlined, not independently checkable here. Adding a `case MACHINE_LANDISK` in `dev_wdc.c` is minimal and follows the existing machine-hack pattern. Fixing `machine_landisk.c` would require a new mechanism to pass the alt-status address into `dev_wdc_init`, which is not justified. An HPCMIPS-style absolute (`0x1400002c`) would work but is less general. **Missing fact:** the brief checks collision only against the main wdc span; it does not rule out other devices in `0x14000010..0x1400002b`. That range is uncheckable from the packet and must be verified before final ratification.
+
+**Q5 — Smallest edit & hazard**  
+REASONED. The smallest edit that breaks the claimed property but passes a detector that only checks non-collision with the main device is to change `0x16` to `0x15` (or `0x2c` to `0x2a`). The resulting address `0x1400002a` is still beyond the main span (`>= 0x10`) so a naive detector passes, but the guest writes to `0x1400002c` would still be swallowed. Any detector must assert the exact address, not just a range. Adding a fourth `case` creates **no hazard** for the existing three: the `switch` is on `machine_type`, the values are distinct, and each case ends with `break`. The HPCMIPS guard on `devinit->addr == 0x14000180` cannot overlap with the landisk case because the machine types are mutually exclusive.

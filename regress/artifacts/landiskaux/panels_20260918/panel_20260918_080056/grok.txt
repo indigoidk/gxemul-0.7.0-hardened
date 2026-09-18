@@ -1,0 +1,135 @@
+I'll verify the brief's premises against `GXEMUL-SEC/src/` first, then answer Q1–Q5 from what the files actually say rather than from the packet.HEAD matches the checkpoint. Next I’ll re-derive the switch, landisk mapping, and the 0x16 claim from the tree and artifacts.The 0x16 claim is the load-bearing one. I’ll pull OpenBSD/NetBSD landisk sources and how the other three machines register WDC.**VERDICT: RATIFY THE MAPPING, CHANGE THE FORM.** Ship a `MACHINE_LANDISK` case. Write `alt_status_addr = devinit->addr + 0x2c`, not `0x16 * addr_mult`. The missing case is real; `0x16` is a back-derivation from macppc, not a landisk constant.
+
+I read `GXEMUL-SEC/src/` (switch at `dev_wdc.c` 2095–2124, not a 2021 copy). Line numbers match the brief. I did not run a gate.
+
+---
+
+## Premises I re-derived (not taken from the packet)
+
+| Claim | Check | Result |
+|---|---|---|
+| Three cases, no `default:`, pre-switch `+ 0x206` | opened `DEVINIT(wdc)` | **True.** `MACHINE_MACPPC` `+0x160`, `MACHINE_HPCMIPS` absolute `0x14000386` iff `addr == 0x14000180`, `MACHINE_IQ80321` `+0x402`. A no-match case keeps `:2095`. |
+| Separate 2-byte `"wdc_altstatus"` plus main `8 * addr_mult` | `:2120–2124` | **True.** |
+| `DEV_WDC_LENGTH == 8`, landisk `addr_mult=2`, `addr=0x14000000` | `:45`, `machine_landisk.c:86–88` | **True.** Comment `0x14000000-0x1400000f` is `8*2`. |
+| `MACHINE_LANDISK == 6004` | `machine.h:268` | **True.** Distinct from HPCMIPS 1004 / MACPPC 2004 / IQ80321 5005. |
+| Aux handler does not divide by `addr_mult` | `DEVICE_ACCESS(wdc_altstatus)` tests `relative_addr != 0` only | **True.** |
+| Arithmetic | enumerated | **True.** Main `0x14000000..0x0f`; today `+0x206 = 0x14000206`; guest `0x1400002c`; `0x16*2 = 0x2c`; `0x2c=44 >= 16`, no collision; gap to today’s window is `0x1da`. |
+| Census twelve writes | `census_20260827/RESULTS.txt` | **Issuance is real.** Four runs, values `0x0c` then `0x08`/`0x02`. Command block live. Device list: nothing owns `0x1400002c`; `wdc_altstatus` sits at `0x14000206` with zero hits. |
+
+**Wrong or stale, found by looking:**
+
+1. **`0x16` is not a landisk register-unit offset.** OpenBSD 4.6 and NetBSD 5.0.2 `sys/arch/landisk/dev/wdc_obio.c` both spell `WDC_OBIO_AUXREG_OFFSET 0x2c` and map `oa_io[0].or_addr + 0x2c` as a **byte** offset. Command block is 8 registers; there is no register 0x16. Intra-region stride is `(reg << 1)` *inside* each mapped window. The 7.6 census writing physical `0x1400002c` is the same constant, not a new derivation. I could not fetch current cvsweb HEAD (404); the measurement plus two independent trees is enough.
+2. **`0x16` *is* macppc’s constant.** OpenBSD/NetBSD macppc `wdc_obio.c`: `WDC_AUXREG_OFFSET 0x16` then `<< 4` because mac spaces by `0x10`. This tree copies that as a **literal** `+0x160` (`of.c:938–940` `addr_mult=0x10`). The house already expanded the product and refused to write `0x16 * addr_mult`.
+3. Queue prose at `OUTSTANDING_BUGS.md` still cites `dev_wdc.c:1056`. That is a command-switch arm. The mapping switch is at `:2095`.
+4. The census’s own 2026-08-28 correction: the “2560/2560 DATA agreement” is **not** reconstructible from the preserved logs. The 12,718 mapped accesses and the `wd0` IDENTIFY attach still discharge the positive-case obligation.
+5. HPCMIPS’s `0x14000386` equals `0x14000180 + 0x206`. The arm is numerically a no-op at the only address it can see (`dev_pcic.c:234`). Not this round’s defect; it means a fall-through *into* HPCMIPS from landisk (`addr=0x14000000`) would not even overwrite.
+
+Premise I cannot settle from this tree: a board schematic that names CS1 independently of the OS. The OS + the measured stores are the warrant.
+
+---
+
+## Q1 — literal `+ 0x2c`, not `0x16 * addr_mult`
+
+Both produce `0x1400002c` **today**. They name different things.
+
+The switch’s house idiom is a **physical byte offset** (or an absolute), already multiplied:
+
+- MACPPC: `+0x160`, while the machine actually passes `addr_mult=0x10`. They did not write `0x16 * addr_mult`.
+- IQ80321: `+0x402`.
+- HPCMIPS: absolute.
+
+Landisk is the only `wdc` with `addr_mult=2`. Putting the only product in the only new arm looks like generalisation from one data point, and it is.
+
+Worse, the product is the **wrong coupling**. Command-block stride (`addr_mult`) and the CS1/aux gap are independent. If TODO 2 in `machine_landisk.c` ever selected a variant with a different stride, `0x16 * addr_mult` would move aux; OpenBSD would still store at base+`0x2c` unless the **board** moved. The multiplier form then silently mis-maps — the exact failure mode the brief named.
+
+Write what the guest and both BSD trees write: `devinit->addr + 0x2c`. Relative, not HPCMIPS-style absolute, so it still tracks the hardcoded `0x14000000` if the base ever moves.
+
+---
+
+## Q2 — `0x16` is not load-bearing; `0x2c` is
+
+Independent pins of **`0x2c` as bytes from the command base**:
+
+- OpenBSD landisk `WDC_OBIO_AUXREG_OFFSET 0x2c` (TUHS 4.6).
+- NetBSD landisk, same spelling and `bus_space_map(..., or_addr + 0x2c, ...)`.
+- OpenBSD 7.6 on this rig: twelve `len=1` stores at paddr `0x1400002c` from `obio_iomem_write_1` (`RESULTS.txt`, watchpoint log A4, hook log B1).
+
+`0x16` is `0x2c / 2`. That arithmetic is correct and **not** a source. `wdcreg.h` places `wd_aux_altsts` / `wd_aux_ctlr` at offset **0 of the aux region**, not at 0x16 from the command block.
+
+A wrong multiplier is silent: no crash, no diagnostic, control register nobody reads. That is why the form has to name `0x2c`, and why a detector that only asserts `case MACHINE_LANDISK` exists is vacuous.
+
+---
+
+## Q3 — a rung-3 probe can reach this; name it
+
+This is not “no guest-path witness.” The 2026-08-27 census is rung-4 for **issuance**. Clause (i) still needs the same script red on HEAD and green after the edit. That script does not exist yet; it is straightforward.
+
+**Shape** (already proven on this machine):
+
+- Unmodified `-E landisk`, same session style as `sh4_bsc_width_probe.py` (`CODE = 0x8c010000`, RAM at `0x0c000000`).
+- P2 alias **`0xb400002c`** — `watch_2c.py` already uses it so v2p yields paddr `0x1400002c`.
+- Store: `mov.b r0,@r1` = `0x2100` (same file). Load: `mov.b @r1,r2` = `0x6210` (`gdrom_data_probe.py`).
+- Attach `iR:` scratch disk so `status_byte()` is live (`0x51` power-on).
+
+| row | vaddr | pre-fix | post-fix |
+|---|---|---|---|
+| guest DC | `0xb400002c` `mov.b` 0x0c | unmapped (no `write to ALT. CTRL`; optional `-v` `non-existant`) | hits `dev_wdc_altstatus_access`, `relative_addr==0` |
+| today’s window (mirror) | `0xb4000206` | hits altstatus | unmapped |
+| liveness | `0xb4000008`/`0x0a` cyl_lo/hi, stride 2 | round-trip | round-trip |
+| device signature | `0xb400000e` status | computed `0x51`, not RAM | same |
+| SRST oracle (stronger) | arm `WDCC_WRITE` on the command block, poke `WDCTL_RST` at `0xb400002c` | DRQ stays (store discarded) | DRQ clears (`wdc_new_command_reset`) |
+
+Direct calls to `dev_wdc_altstatus_access` cannot test the missing case (codex was right). Construction-time `dev` listing the aux **base** is a cheap identity/anchor row (clause (f): if every address slid, the listed base moves). It does not replace the store.
+
+Twelve `len=1` writes still cannot pin length 1 vs 2 (`wdcaltwidth`). Keep the registration at 2: both BSD trees map `AUXREG_SIZE = 1*2`.
+
+Clause (i) post-fix half is owed **after** the edit, same script. I am not claiming that half.
+
+---
+
+## Q4 — the delta is real; the member is “reach the handler that already exists”
+
+Twelve measured Device Control writes land on unmapped memory. Command block is the right base. That is a measured delta. The addition licence is satisfied.
+
+This is not DELETE / DECLINE / FAULT / IMPLEMENT-from-zero. The aux handler already ACCEPTs Device Control at offset 0 (`WDCTL_RST` since #481). The defect is that landisk never **registers** that handler where the guest stores. The option is: put the existing device on the address the guest uses.
+
+**Where:**
+
+| option | verdict |
+|---|---|
+| `case MACHINE_LANDISK:` in the existing “Special hacks” switch | **Do this.** House place. One assignment + `break`. |
+| `machine_landisk.c` `addr2=0x1400002c` | Parser already has `addr2=` (`device.c:320`). `DEVINIT(wdc)` never reads it. New generic path, two files, no transferred wdc warrant. Heavier. |
+| HPCMIPS-style absolute `0x1400002c` | Same address today (base is hardcoded). Worse if the base moves. HPCMIPS uses absolute because of a `TODO: Fix` and an `if` on a second coincidence address. |
+| Silence / FAULT | Makes a working attach worse. Guest already survives the unmapped stores. |
+
+**Residual the round owes, not a reason to refuse:** census explicitly did **not** settle whether delivering the first `0x0c` (real SRST) changes the 7.6 boot. `#481` already moved the predicate to `WDCTL_RST`, so mapping no longer activates the old `WDCTL_4BIT` bug. Still measure the boot once with the case in.
+
+---
+
+## Q5 — smallest surviving edit, and the other three arms
+
+**Smallest edit that keeps a lazy detector green and still misses the guest:**
+
+- Drop `* addr_mult` → maps `0x14000016` (gap `0x10..0x2b`, still unmapped). Case present.
+- Copy macppc: `+ 0x160` → `0x14000160`.
+- Empty case / omit the assignment → keeps `+0x206`.
+- `0x2c * addr_mult` if someone “fixes” the literal → `0x14000058`.
+- Omit `break` **and** place the arm immediately above `MACHINE_MACPPC` → landisk is overwritten to `+0x160`. Omit `break` above HPCMIPS: the `if (addr == 0x14000180)` is false, so the landisk assignment **survives** — a check-that-cannot-fail on fall-through.
+
+A detector that only greps for `MACHINE_LANDISK` passes all of those. Pin **paddr `0x1400002c`** (device-list base and/or a store that reaches the handler). Then `+ 0x16`, `+ 0x206`, and `0x2c * addr_mult` all red. That is the (d) mutant for a literal `+ 0x2c`.
+
+**Existing three arms:** adding a fourth `case` with `break` cannot take MACPPC/HPCMIPS/IQ80321. `machine_type` values are disjoint. HPCMIPS’s extra `addr == 0x14000180` vs landisk `0x14000000` is the same SuperH Area-1 window on **different machines**; `dev_pcic.c` is the only producer of `0x14000180`, and only under HPCMIPS. No machine reaches two arms.
+
+Do not “unify” the switch as `0x16 * addr_mult`. It coincidentally hits macppc (`0x16*0x10=0x160`) and landisk (`0x16*2=0x2c`) and is wrong for IQ80321 (`+0x402`) and the ISA default (`+0x206`).
+
+---
+
+## Proposed line
+
+```c
+	case MACHINE_LANDISK:
+		alt_status_addr = devinit->addr + 0x2c;
+		break;
+```
+
+Keep registration length 2. Do not touch the other three cases. Ship a rung-3 probe that stores at `0xb400002c` / `0xb4000206` and reads the command block at stride 2; do not treat `diff_wdc_identify.c` direct calls as that probe.

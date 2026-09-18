@@ -1,0 +1,195 @@
+## VERDICT: GO-WITH-CHANGES
+
+The defect is real and the diagnosis is correct: `dev_wdc_init()` fails to match `MACHINE_LANDISK`, leaving the auxiliary device (`wdc_altstatus`) at the x86 default `devinit->addr + 0x206` (`0x14000206`) where it receives zero accesses, while the guest kernel issues 12 byte stores to unmapped `0x1400002c` (including an ATA soft-reset `WDCTL_RST | WDCTL_4BIT = 0x0c` that is silently discarded).
+
+However, the brief's proposed fix:
+```c
+case MACHINE_LANDISK:
+	alt_status_addr = devinit->addr + 0x16 * devinit->addr_mult;
+	break;
+```
+**must not be accepted as written.** As proven below against kernel driver sources and hardware architecture, `0x16` is a fictitious "register unit" resulting from dividing the observed byte offset `0x2c` by 2 (`44 / 2 = 22 = 0x16`). In ATA hardware, the control register is register 6 (not 22) and CS1# is board address line A5 (`0x20`). Scaling by `devinit->addr_mult` is an unprincipled over-generalization that conflicts with every existing case in `dev_wdc.c` (all of which use literal byte offsets: `+ 0x160`, `+ 0x402`, `+ 0x206`). 
+
+The fix must be changed to the literal byte offset:
+```c
+case MACHINE_LANDISK:
+	alt_status_addr = devinit->addr + 0x2c;
+	break;
+```
+
+---
+
+## 1. Premise Verification Against Source (`GXEMUL-SEC/src/`)
+
+Every claim asserted in §1 of [brief_sent.md](file:///C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/panel_20260918_080238/brief_sent.md) was audited directly against `GXEMUL-SEC`:
+
+| Brief Claim | Source File & Line | Verified Status | Notes / Source Evidence |
+| :--- | :--- | :--- | :--- |
+| **Three cases in `dev_wdc.c` switch, no `MACHINE_LANDISK`** | [dev_wdc.c:2098-2110](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c#L2098-L2110) | **CONFIRMED** | Cases are `MACHINE_MACPPC` (`+0x160`), `MACHINE_HPCMIPS` (conditional `0x14000386`), `MACHINE_IQ80321` (`+0x402`). No `MACHINE_LANDISK`. |
+| **No `default:` arm; fallback initialized pre-switch** | [dev_wdc.c:2095](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c#L2095), [dev_wdc.c:2110](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c#L2110) | **CONFIRMED** | Line 2095: `alt_status_addr = devinit->addr + 0x206;`. Line 2110: bare `}`. Unmatched machines retain `devinit->addr + 0x206`. |
+| **Separate 2-byte registration for `wdc_altstatus`** | [dev_wdc.c:2120-2124](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c#L2120-L2124) | **CONFIRMED** | `memory_device_register(..., "wdc_altstatus", alt_status_addr, 2, dev_wdc_altstatus_access, ...);` followed by main device at `devinit->addr` for `DEV_WDC_LENGTH * devinit->addr_mult`. |
+| **`DEV_WDC_LENGTH` is 8; Landisk passes `addr_mult=2`** | [dev_wdc.c:45](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c#L45), [machine_landisk.c:87-88](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/machines/machine_landisk.c#L87-L88) | **CONFIRMED** | `#define DEV_WDC_LENGTH 8`. String: `"wdc irq=%s.cpu[%i].irq[0x%x] addr_mult=2 addr=0x14000000"`. |
+| **`devinit->addr_mult` exists and is used in `dev_wdc.c`** | [device.h:53](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/device.h#L53), [dev_wdc.c:1174, 2083, 2123](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c#L1174) | **CONFIRMED** | `device.h:53` declares `int addr_mult;`. Used at `dev_wdc.c:1174` (`relative_addr /= d->addr_mult;`), `:2083`, `:2123`. |
+| **`MACHINE_LANDISK` is 6004** | [machine.h:268](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/machine.h#L268) | **CONFIRMED** | `#define MACHINE_LANDISK 6004`. |
+| **OpenBSD 7.6 12-write census (1x 0x0c, 6x 0x08, 5x 0x02)** | [RESULTS.txt:18-68](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/landiskaux/census_20260827/RESULTS.txt#L18-L68) | **CONFIRMED** | 4 runs, 2 instruments. All len=1, `pc=0x8c15f6e8 <obio_iomem_write_1+0x8>`. First write is `0x0c` (`WDCTL_RST \| WDCTL_4BIT`). Command block at `0x14000000..0x1400000f` succeeds (12,718 accesses). `0x14000206` receives 0 accesses. |
+| **`dev_wdc_altstatus_access` does NOT divide by `addr_mult`** | [dev_wdc.c:609-780](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c#L609-L780) | **CONFIRMED** | Lines 620 & 702 test `if (relative_addr != 0)`. No division by `addr_mult` occurs in the auxiliary handler. |
+| **Codex fix-design findings** | [codex_fixdesign_20260911.txt:1-100](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/landiskaux/codex_fixdesign_20260911.txt#L1-L100) | **CONFIRMED** | Codex confirmed the missing case, showed HPCMIPS is numerically redundant at `0x14000180`, and refused to invent an address without external source/census. |
+
+---
+
+## 2. Arithmetic Claims Enumerated
+
+*   **Main WDC Command Block Span**:
+    *   Base: `0x14000000`
+    *   Length: `DEV_WDC_LENGTH * devinit->addr_mult = 8 * 2 = 16 = 0x10` bytes.
+    *   Span: `0x14000000 .. 0x1400000f` inclusive.
+    *   Registers (stride of 2 bytes):
+        *   `+0x00`: Data
+        *   `+0x02`: Error / Features
+        *   `+0x04`: Sector Count
+        *   `+0x06`: Sector Number (LBA 0..7)
+        *   `+0x08`: Cylinder Low (LBA 8..15)
+        *   `+0x0a`: Cylinder High (LBA 16..23)
+        *   `+0x0c`: Device / Head (LBA 24..27)
+        *   `+0x0e`: Status / Command
+*   **Current Default Alt-Status (Pre-fix)**:
+    *   Base: `0x14000000 + 0x206 = 0x14000206`
+    *   Span: `0x14000206 .. 0x14000207` (2 bytes).
+    *   Offset from guest writes: `0x14000206 - 0x1400002c = 0x1da` (474 bytes displaced).
+*   **Target Guest Store Address**:
+    *   Target: `0x1400002c`
+    *   Offset from WDC base: `0x1400002c - 0x14000000 = 0x2c` (44 bytes).
+    *   Offset from end of primary span: `0x1400002c - 0x14000010 = 0x1c` (28 bytes).
+*   **Collision Verification**:
+    *   Primary device covers `0x14000000 .. 0x1400000f`.
+    *   Auxiliary device covers `0x1400002c .. 0x1400002d` (length 2).
+    *   `0x1400002c >= 0x14000010`, leaving a 28-byte unmapped gap (`0x14000010 .. 0x1400002b`). **Zero collision**.
+
+---
+
+## 3. Adversarial Answers to the Review Questions
+
+### Q1 — Is the Multiplier Form Right, or Should It Be a Literal?
+**The multiplier form is WRONG; it must be a literal `+ 0x2c`.**
+
+1.  **House Idiom Consistency**:
+    In [dev_wdc.c:2098-2110](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c#L2098-L2110), every case uses a literal byte displacement or absolute address:
+    *   `MACHINE_MACPPC`: `alt_status_addr = devinit->addr + 0x160;` (plain literal byte offset)
+    *   `MACHINE_IQ80321`: `alt_status_addr = devinit->addr + 0x402;` (plain literal byte offset)
+    *   Fallback: `alt_status_addr = devinit->addr + 0x206;` (plain literal byte offset)
+    *   `MACHINE_HPCMIPS`: `0x14000386` (literal absolute address)
+    Not a single case in `dev_wdc.c` multiplies by `addr_mult`.
+2.  **Architectural Violation**:
+    `alt_status_addr` is a *physical bus address* passed to `memory_device_register()`. The auxiliary callback `dev_wdc_altstatus_access()` does not decode or scale by `addr_mult`.
+    If `devinit->addr_mult` were 1, `0x16 * 1 = 0x16 = 0x14000016`. But on the Landisk hardware bus, the auxiliary register is hardwired to `0x1400002c`. Writing `0x16 * addr_mult` creates a fake relationship between the register address and the command block stride.
+
+### Q2 — Where Does 0x16 Come From, and Is It Load-Bearing?
+**`0x16` is completely fictitious and NOT load-bearing.**
+
+1.  **Deconstruction of 0x16**:
+    In standard ATA (ATA-1 through ATA-7; see also `src/include/thirdparty/wdcreg.h`), an ATA controller has:
+    *   Command Block: Chip Select 0 (CS0#), with DA0..DA2 addressing registers 0 to 7.
+    *   Control Block: Chip Select 1 (CS1#), with register 6 being Alternate Status / Device Control.
+    There is **no register 22 (`0x16`)** in ATA.
+2.  **Hardware & Kernel Evidence**:
+    On the I-O DATA Landisk (SH7751R, Area 5):
+    *   Address lines A1..A3 are wired to ATA DA0..DA2 (providing the 2-byte register stride `addr_mult = 2`).
+    *   Address line A5 is wired to ATA CS1# (`0x20`).
+    *   The Device Control register is ATA register 6 (`DA = 110_2`). At stride 2, register 6 is `6 << 1 = 12 = 0x0c`.
+    *   Adding CS1# at `0x20` yields `0x20 | 0x0c = 0x2c`.
+3.  **Kernel Source Verification**:
+    In NetBSD's official Landisk driver (`sys/arch/landisk/dev/wdc_obio.c`), the offset is explicitly declared as a byte literal:
+    ```c
+    #define WDC_OBIO_REG_NPORTS     WDC_NREG
+    #define WDC_OBIO_REG_SIZE       (WDC_OBIO_REG_NPORTS * 2)
+    #define WDC_OBIO_AUXREG_NPORTS  1
+    #define WDC_OBIO_AUXREG_SIZE    (WDC_OBIO_AUXREG_NPORTS * 2)
+    #define WDC_OBIO_AUXREG_OFFSET  0x2c
+    ```
+    And mapped directly as:
+    ```c
+    oa->oa_io[0].or_addr + WDC_OBIO_AUXREG_OFFSET
+    ```
+    The BSD driver itself never heard of `0x16`. `0x16` was back-calculated by dividing `0x2c` by 2 (`44 / 2 = 22 = 0x16`). It must be discarded.
+
+### Q3 — The Witness
+1.  **Clause (i) Status**:
+    The census at `regress/artifacts/landiskaux/census_20260827/` is a valid pre-fix measurement, but running a full OpenBSD 7.6 boot in CI takes several minutes and cannot serve as a rapid regression test.
+2.  **Feasibility of a Rung-3 Probe**:
+    **Yes, a Rung-3 guest probe is entirely feasible.**
+    Like `wdcaltoff_rung3_probe.py` on Malta (MIPS), a Landisk probe can launch `gxemul -E landisk` with a small raw SuperH (SH4) payload loaded into RAM at `0x8c001000`:
+    *   Guest instructions:
+        ```assembly
+        mov.l   wdc_ctl_p2, r1      ! 0xa400002c (P2 un-cached 0x1400002c)
+        mov.b   #0x0c, r0
+        mov.b   r0, @r1             ! store 0x0c
+        mov.l   wdc_alt_old, r2     ! 0xa4000206
+        mov.b   r0, @r2             ! store 0x0c
+        ```
+    *   Pre-fix: Store to `0x1400002c` prints `memory WRITE: to non-existant paddr=0x1400002c` under `-v`, while store to `0x14000206` hits `DEVICE_ACCESS(wdc_altstatus)`.
+    *   Post-fix: Store to `0x1400002c` hits `DEVICE_ACCESS(wdc_altstatus)` (logging `[ wdc: write to ALT. CTRL: 0x0c ]`), while store to `0x14000206` reports `to non-existant paddr=0x14000206`.
+    This executes in <100ms without an OS boot.
+
+### Q4 — The Option Set
+Evaluating candidate implementations:
+
+1.  **Option A (Literal offset in `dev_wdc.c` — RECOMMENDED)**:
+    ```c
+    case MACHINE_LANDISK:
+    	alt_status_addr = devinit->addr + 0x2c;
+    	break;
+    ```
+    Matches all other switch cases, matches hardware and BSD driver definitions, contained in 3 lines.
+2.  **Option B (Multiplier in `dev_wdc.c` — The Brief's Proposal)**:
+    ```c
+    case MACHINE_LANDISK:
+    	alt_status_addr = devinit->addr + 0x16 * devinit->addr_mult;
+    	break;
+    ```
+    Rejected due to fictitious `0x16` and misleading abstraction.
+3.  **Option C (Declare via `addr2` in `machine_landisk.c`)**:
+    [device.h:47](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/device.h#L47) already defines `uint64_t addr2; /* Secondary address (optional) */`, and [device.c:320-321](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/device.c#L320-L321) already parses `addr2=`.
+    If `dev_wdc.c` did `if (devinit->addr2) alt_status_addr = devinit->addr2;`, then `machine_landisk.c` could simply pass `addr2=0x1400002c`.
+    While architecturally cleaner (removes machine hacks from generic device drivers), it is a two-file cross-subsystem change that refactors device initialization conventions. It belongs in a general cleanup pass, not a single-defect bugfix.
+4.  **Option D (HPCMIPS-style absolute address `0x1400002c`)**:
+    Inferior to Option A because it needlessly hardcodes the base address rather than offsetting from `devinit->addr`.
+
+### Q5 — Mutation Analysis & Hazard Assessment
+1.  **Smallest Edits Breaking Properties While Escaping Detectors**:
+    *   **Width mutant (`wdcaltwidth`)**: Changing registration length from 2 to 1 (or retaining 2 if 1 is specified). Any detector that only checks writes to `0x1400002c` is blind to whether `0x1400002d` is mapped or unmapped.
+    *   **Bypass mutant**: Unit tests calling `dev_wdc_altstatus_access()` directly pass even if the switch arm is completely removed or points to `0x00000000`, because they bypass initialization and memory dispatch.
+    *   **Address mutant (`+ 0x16`)**: If written as `devinit->addr + 0x16` (literal `0x16`), tests merely asserting that `alt_status_addr != devinit->addr + 0x206` will pass while mapping the register 22 bytes away from the guest writes.
+2.  **Hazard Assessment for Existing Three Cases**:
+    *   `MACHINE_MACPPC` (3001), `MACHINE_HPCMIPS` (1007), `MACHINE_IQ80321` (5003), and `MACHINE_LANDISK` (6004) are distinct enumerated constants.
+    *   Each case in `dev_wdc.c` terminates with `break;`.
+    *   The `if (devinit->addr == 0x14000180)` inside `MACHINE_HPCMIPS` is strictly guarded by its own case label and is unreachable from `MACHINE_LANDISK`.
+    *   Adding `case MACHINE_LANDISK:` introduces **zero hazard** to the existing cases.
+
+---
+
+## 4. Prescribed Concrete Changes
+
+In [dev_wdc.c](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_wdc.c), line 2109, apply the literal offset:
+
+```c
+	switch (devinit->machine->machine_type) {
+	case MACHINE_MACPPC:
+		alt_status_addr = devinit->addr + 0x160;
+		break;
+	case MACHINE_HPCMIPS:
+		/*  TODO: Fix  */
+		if (devinit->addr == 0x14000180)
+			alt_status_addr = 0x14000386;
+		break;
+	case MACHINE_IQ80321:
+		alt_status_addr = devinit->addr + 0x402;
+		break;
++	case MACHINE_LANDISK:
++		alt_status_addr = devinit->addr + 0x2c;
++		break;
+	}
+```
+
+---
+
+## FINAL VERDICT: GO-WITH-CHANGES

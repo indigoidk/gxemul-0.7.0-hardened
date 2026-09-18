@@ -1669,4 +1669,44 @@ else
     check "mapledmaaddr rows failed"  "$(grep -c ' FAIL$' "$MAPLELOG")" 0
 fi
 
+# ------------------------------------------------------------------ #533 landiskaux
+#  landisk's wdc aux (alt-status / Device Control) register.  Before #533 it was registered at the
+#  PC-layout +0x206 and OpenBSD 7.6's twelve Device Control writes -- the first a soft reset --
+#  landed at +0x2c on unmapped memory.  WIRED IN THE SAME COMMIT AS THE PROBE, so it cannot ship
+#  unwired and let its pin drift red between commits (the #441 failure).
+#
+#  Every row reads a GUEST-VISIBLE register value, never the `[ wdc: ... ]' debug line, which goes
+#  quiet under -q.  `live' is the probe's own control and is checked BY NAME: a control that goes
+#  red while the total stays acceptable is an apparatus failure read as a product result.
+LANDPROBE=landisk_aux_probe.py
+if [ ! -f "$LANDPROBE" ]; then
+    gate_skip "landiskaux: $LANDPROBE absent"
+else
+    LANDLOG=$LOGDIR/gate_landisk_aux.log
+    python3 -u "$LANDPROBE" "$PMAX" "$KERNEL" > "$LANDLOG" 2>&1 || true
+
+    if ! grep -q "LANDISK_AUX_DONE" "$LANDLOG"; then
+        note "landiskaux probe did not reach its completion sentinel; last lines follow"
+        tail -5 "$LANDLOG" | sed 's/^/       /'
+        check "landiskaux probe completed" "no" "yes"
+    else
+        grep -E ' (ok|FAIL)$' "$LANDLOG" | sed 's/^/       /'
+        #  PARSE BEFORE SCORE: an empty variable compares "" with "" and goes green on nothing.
+        lres=$(grep -o "LANDISK_AUX_RESULT=[0-9]*/[0-9]*" "$LANDLOG" | tail -1 | cut -d= -f2)
+        if [ -z "$lres" ]; then
+            check "landiskaux result parses" "no" "yes"
+        else
+            check "landiskaux result parses" "yes" "yes"
+            check "landiskaux rows run"     "${lres#*/}" 6
+            check "landiskaux rows correct" "${lres%/*}" 6
+        fi
+        check "landiskaux control: live" "$(grep -cE '^live +0x.* ok$' "$LANDLOG")" "1"
+        #  Per-row presence, anchored on the FULL name then spaces then the value, so
+        #  `aux 2c read' cannot match `aux 2c reset' and no row can silently stop being tested.
+        for v in "aux 2c rest" "aux 206 gone" "aux 2c reset" "aux 2c read" "206 ctl dead"; do
+            check "landiskaux row: $v" "$(grep -cE "^$v +0x.* ok\$" "$LANDLOG")" "1"
+        done
+    fi
+fi
+
 gate_end

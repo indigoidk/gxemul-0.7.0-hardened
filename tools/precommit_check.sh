@@ -336,7 +336,9 @@ elif out=$(python "$SCORECHK" 2>&1); then
 	#  gate behaved identically either way (a string compare); the literal is unquoted in #527.
 	#  RAISED 28 -> 29 ON 2026-09-12, DELIBERATELY.  One newly gated probe: maple_dmaaddr_probe.py
 	#  (#528, pinned UNQUOTED in gate_sh_rounding.sh at 37 rows).
-	SCORE_CLAIMS_MANIFEST=29
+	#  RAISED 29 -> 30 ON 2026-09-18, DELIBERATELY.  One newly gated probe: landisk_aux_probe.py
+	#  (#533, pinned UNQUOTED in gate_sh_rounding.sh at 6 rows).
+	SCORE_CLAIMS_MANIFEST=30
 	_spinned=$(printf '%s\n' "$out" | sed -n 's/^SCORE_CLAIMS_PINNED=//p')
 	if [ -z "$_spinned" ]; then
 		bad "check_score_claims printed no SCORE_CLAIMS_PINNED line -- the count cannot be pinned"
