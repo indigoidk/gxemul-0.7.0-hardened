@@ -1,3 +1,44 @@
+# `#535` (pcc2c040mienannounce): #512's detector had one uncovered cell -- and it ran in no gate at all
+
+**Late-dissent disposition 2: a MEASURED false pass against a shipped detector's floor, repaired in a follow-up
+commit.**  No emulator code changes; the #512 fix itself was judged REAL-AND-RIGHTLY-FIXED by all nine assess seats.
+
+**THE HOLE.**  Every announce row of `regress/pcc2_c040_probe.py` (`c040 says`, `c040 once`, `c040 predirty`) writes
+`0x04` -- MIEN clear.  The sessions that write `0x06` (MIEN|C040, what an MVME187 driver actually programs) never
+looked for the announce.  agy's late seat PREDICTED an announce gated on `!MIEN` would pass every row; the Opus seat
+BUILT it in a scratch clone and MEASURED **16/16** on the shipped probe
+(`regress/artifacts/pcc2c040kill/opus_mien_20260918/M_announce_notmien.raw`).  MIEN is a body-tested operand of the
+repaired path, so this is a floor cell, not coverage debt: L2.
+
+**THE REPAIR -- one row, no new session.**  `c040 says mien` reads the announce from the existing `c040 noassert`
+transcript (a `0x06` write).  Measured by Opus on a clean clone: base **17/17**, `M_announce_notmien` **16/17**
+(`rep_BASE.raw`, `rep_M_announce_notmien.raw`); re-measured here on `build/gxemul` (source identical to HEAD but for
+a comment-only hunk; binary newer than source): **17/17**.  The code is byte-identical to Opus's measured copy once
+comments are stripped.
+
+**AND THE LARGER FINDING: THE PROBE RAN IN NO GATE.**  Its manifest entry said so (`wiringcliff`), so all sixteen shipped
+rows defended nothing.  It is now wired into `gate_arm.sh` beside the other PCC2 probes, by row name, with a completion
+sentinel and emitted/green/red counts pinned (17 at first, 18 after pass 2).  It needs only the binary (mvme88k/mvme187 constructs from the PROM).
+
+**PASS 2 FOUND THE SAME CLASS A SECOND TIME, AND IT WAS REPAIRED IN-ROUND (L1).**  `panel_20260918_153836`: seven
+RATIFY-WITH-FINDINGS; the Opus seat DO NOT RATIFY on measurement.  It built five new mutants and ALL FIVE escaped the
+17-row probe.  Two were the same class as the hole this round repaired: **presence x MIEN** was the first pass's cell,
+**COUNT x MIEN** is this one -- mutants A (latch skipped while MIEN is set) and F (latch bit set only while MIEN is
+clear) print the announce SEVEN times in the MIEN-set session and every row stayed green (codex and glm predicted the
+class independently).  Per the repair-chain rule the second instance owes the class closure, so the whole {MIEN} x
+{latch} product for the announce is now rowed: `c040 once mien` counts the announce in the same `td` transcript.
+**Measured: BASE 18/18, A 17/18, F 17/18**, each red on exactly that row (`r535_20260918/opus535/r2_*.raw`, all ending
+`PCC2C040_DONE`); the committed probe's code is identical to the measured copy with comments stripped.  The gate now
+lists and pins **18**.
+
+DISCLOSED in the probe's contract, and two filed: **C** (`fatal()` -> `debug()`, invisible because every C040 write runs
+under `step`, where `debug()` prints) -> `pcc2c040debugchan`; **D** (latch keyed on another warned bit) ->
+`pcc2c040latchswap`, with `c040 predirty`'s note narrowed to the one bit it actually pins (L4); **E** (a pending-count
+conjunct) is clause (e).
+
+**Records corrected in place:** the probe's own "does NOT catch a fix that announces correctly and fails to suppress"
+contract paragraph described only the first seven rows and is marked SUPERSEDED (the L2 rows kill that mutant, 14/16).
+
 # `#534` (stagetokens repair): four tools read one ledger field, and each had its own copy of what it meant
 
 **`#532` shipped without a pass 2.  The pass then ran and did not ratify it** (fable5, `claude-fable-5-1`,
@@ -134,7 +175,7 @@ Appended AFTER the IQ80321 case, so a later missing `break;` in the new arm cann
 * The 2026-08-27 boot census (`regress/artifacts/landiskaux/census_20260827/`): exactly TWELVE byte writes to
   `0x1400002c`, ZERO reads, four runs, two instruments.
 
-**`0x16 * addr_mult` IS NOT THE ADDRESS, AND THIS ROUND NEARLY SHIPPED IT.** `0x16` is `0x2c / 2`, a factorisation
+**`0x16 * addr_mult` IS NOT HOW THE SOURCE STATES THE ADDRESS, AND THIS ROUND NEARLY SHIPPED IT.**  *(L4, corrected 2026-09-18 from a peer session's late review: this heading said "IS NOT THE ADDRESS", which is false -- `0x16 * 2 == 0x2c`, and line 101 of this same block says those spellings "all ARE" the address.  It EVALUATES to the address; what is wrong with it is that it implies a stride-scaling nothing supports.)* `0x16` is `0x2c / 2`, a factorisation
 of the measured answer -- the landisk-shaped echo of macppc's `WDC_AUXREG_OFFSET 0x16 << 4 = 0x160`. The
 2026-08-28 pass 1 (`brief_p1_20260828.md`) had already said *SHIP `+ 0x2c`* and called the multiplier route
 superseded; a 09-18 prep entry reintroduced it and the 09-18 pass-1 brief inherited it. The panel caught it.
@@ -228,6 +269,22 @@ permitted ask-again produced:
 **DISCLOSED, not rowed:** the initialiser `+0x206` changing (landisk overwrites it, so no landisk row can see
 it); IQ80321 losing its own `break` (no IQ80321 rig); the registration width 2 -> 1 (every access here is one
 byte at offset 0 -- `wdcaltwidth`); keying on `machine_type` alone.
+
+## LATE REVIEW (a peer session's Opus seat, 2026-09-18) -- evidence in `regress/artifacts/landiskaux/latereview_20260918/`
+
+* **A rung-3 witness in ONE frozen script** (`lax_probe.py`, md5 `75b241ba05c2`): **8/17 pre-fix, 17/17 post-fix**
+  (`probe_t1_base.out`, `probe_t1_fix.out`).  Rung-4 boot compare: unmapped writes to `0x1400002c` go 12 -> 0, and under
+  `-v` the post-fix build logs ALT. CTRL x12 in the census's exact order.
+* **THE ROUND'S ONE GUEST-VISIBLE ATTACH CHANGE, which the census had left NOT SETTLED:** with a CD image attached, pre-fix
+  OpenBSD mis-attaches it as a phantom `wd0 ... <ST506> 68MB` disk; post-fix it recognises ATAPI.  Mechanism at rung 3
+  (`lax_cd_probe.py` 1/3 -> 3/3): COMMAND_RESET is set at exactly one site, the aux-register RST arm, so the ATAPI
+  signature was unreachable before the fix.  No gate uses a landisk CD.
+* **`0x2c` has an independent source**: the booted OpenBSD 7.6 kernel's `wdc_obio_attach` maps `iobase+0x2c` for 2 bytes
+  (`add #44,r5` at `0x8c16017c`).
+* **A premise corrected**: "a wrong multiplier maps the register SILENTLY" is false except for windows still covering
+  `0x2c`; the `winm1` mutant is warning-silent there but `landisk_aux_probe.py` kills it (3/6) -- a contract line now says so.
+* **Filed, not fixed (late-dissent disposition 3):** `landiskauxorder` -- the case landed LAST, making IQ80321's `break`
+  newly load-bearing with no IQ80321 row; and `wdcaddr2` -- `devinit->addr2` would declare the aux address per instance.
 
 # `#532` (stagetokens): reading 23 unread seat answers took two hard gates from GREEN to RED — and the honest fix was a token that did not exist
 

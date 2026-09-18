@@ -174,6 +174,34 @@ MANIFEST = {
     "artifacts/pcc2c040kill/opus_mien_20260918/probe.repaired.py":
         (CLASS_TOOL, "Opus: +1 row `c040 says mien' -- base 17/17, M_announce_notmien 16/17"),
 
+    # -- #533 late review by a peer session's Opus seat (2026-09-18).  TOOLS: evidence, not gated.
+    "artifacts/landiskaux/latereview_20260918/boot_cd.py":
+        (CLASS_TOOL, "rung-4 boot with a CD image attached: phantom wd0 ST506 pre-fix, ATAPI post-fix"),
+    "artifacts/landiskaux/latereview_20260918/boot_cmp.py":
+        (CLASS_TOOL, "rung-4 one-script boot compare: unmapped writes to 0x1400002c 12 -> 0"),
+    "artifacts/landiskaux/latereview_20260918/cmp_console.py":
+        (CLASS_TOOL, "console-transcript comparer for the boot runs"),
+    "artifacts/landiskaux/latereview_20260918/elfsyms.py":
+        (CLASS_TOOL, "ELF symbol reader used to locate wdc_obio_attach in the OpenBSD 7.6 kernel"),
+    "artifacts/landiskaux/latereview_20260918/iq_devlist.py":
+        (CLASS_TOOL, "IQ80321 device-list check behind the landiskauxorder latent-hazard finding"),
+    "artifacts/landiskaux/latereview_20260918/lax_cd_probe.py":
+        (CLASS_WITNESS, "rung-3 mechanism of the CD-ROM attach change: COMMAND_RESET reachable only via the aux RST arm (1/3 -> 3/3)"),
+    "artifacts/landiskaux/latereview_20260918/lax_probe.py":
+        (CLASS_WITNESS, "rung-3 witness of #533 in one frozen script: 8/17 pre-fix, 17/17 post-fix (probe_t1_*.out)"),
+    "artifacts/landiskaux/latereview_20260918/unasm.py":
+        (CLASS_TOOL, "SH disassembler snippet: `add #44,r5' at 0x8c16017c, the independent source of 0x2c"),
+
+    # -- #535 pass 2 (2026-09-18): the Opus seat's instruments.  TOOLS: evidence, not gated.
+    "artifacts/pcc2c040kill/r535_20260918/opus535/mutate.py":
+        (CLASS_TOOL, "#535 pass 2 (Opus): applies mutants A-F to a scratch dev_pcc2.c"),
+    "artifacts/pcc2c040kill/r535_20260918/opus535/probe.diag.py":
+        (CLASS_TOOL, "#535 pass 2 (Opus): diagnostic copy printing announce COUNTS per session (not the scored instrument)"),
+    "artifacts/pcc2c040kill/r535_20260918/opus535/probe.frozen.py":
+        (CLASS_TOOL, "#535 pass 2 (Opus): frozen 17-row probe -- A and F escape 17/17"),
+    "artifacts/pcc2c040kill/r535_20260918/opus535/probe.r2.py":
+        (CLASS_TOOL, "#535 pass 2 (Opus): frozen 18-row probe -- BASE 18/18, A and F 17/18 on `c040 once mien'"),
+
     # -- #534 stagetokens repair (2026-09-18): the control harness.  TOOLS: it runs the shipped readers
     #    from a temp copy against a fixture; its outputs are the evidence cited by #534's CHANGELOG block.
     "artifacts/stagetokens/controls_534/run_controls.py":
@@ -275,7 +303,7 @@ MANIFEST = {
     "lca_confwidth_probe.py":     (CLASS_WITNESS,  "lcaconfwidth: the IOC_CONF kill names a value the guard accepts -- HEAD 4/6, fix 6/6"),
     "lca_confbus_probe.py":       (CLASS_WITNESS,  "lcaconfbus1kill: an ACCEPTED stq 0x1 to IOC_CONF arms the bus!=0 kill in lca_pci_conf -- HEAD 3/4, the RED row is the defect; POST-FIX GREEN MEASURED 18/18 (artifacts/, LCACONFBUS_RESULT) -- *** but this probe RUNS IN NO GATE, so the coverage exists and is never executed: wiringcliff ***"),
     "lca_irqstub_probe.py":       (CLASS_WITNESS,  "lcairqstubkill: ONE guest store to the 8042 command port reaches lca_interrupt_assert and ends the host -- HEAD 3/6, the RED row is the defect; post-fix green MEASURED 11/11 (#516, killtable_20260909).  *** STILL CLASS_WITNESS, and that is now a JUDGMENT rather than a description: #516 grew it from 6 rows to 11, five of which exist only to defend the repair, so it is detector-shaped and NO GATE RUNS IT.  Kept as WITNESS because it is the witness of record in the ledger, and re-classing it would demand a gate home this round has not designed.  FILED to wiringcliff, which is the row for exactly that question -- not left as a silent third state."),
-    "pcc2_c040_probe.py":         (CLASS_WITNESS,  "pcc2c040kill: ONE legal guest st.b of 0x04 to PCC2 GENCTL runs reassert_interrupts() in the same access and ends the host -- HEAD 3/4, the RED row is the defect; POST-FIX GREEN MEASURED 16/16 on 2026-09-09 (artifacts/pcc2c040kill/ctlq_20260909/repaired_BASE.raw) -- *** but this probe RUNS IN NO GATE: wiringcliff ***"),
+    "pcc2_c040_probe.py":         (CLASS_DETECTOR,  "pcc2c040kill: ONE legal guest st.b of 0x04 to PCC2 GENCTL runs reassert_interrupts() in the same access and ends the host -- HEAD 3/4, the RED row is the defect; POST-FIX GREEN MEASURED 16/16 on 2026-09-09 (artifacts/pcc2c040kill/ctlq_20260909/repaired_BASE.raw); #535: reclassified WITNESS -> DETECTOR (its rows assert the POST-FIX state since #512), +2 rows (`c040 says mien', `c040 once mien'; 18/18) and NOW GATED in gate_arm.sh -- it ran in NO gate until then (wiringcliff)"),
     "alpha_pfnoffset_probe.py":   (CLASS_WITNESS,  "alphapfnoffset: the page-table walk drops the within-page offset -- HEAD 5/7, fix 7/7"),
     #  A SECOND, INDEPENDENT path to the same two stubs, through a DIFFERENT device.  The row's
     #  witness of record is `lca_irqstub_probe.py' above (8042, shipped 7c2f8e4); this one is a

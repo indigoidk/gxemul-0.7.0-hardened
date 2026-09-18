@@ -21832,3 +21832,8 @@ Plus a stale "does NOT catch" probe comment contradicted by the 9 L2 rows below 
 * `lcabadval` research 9/9: RIGHT-WITH-GAPS; my brief's P1 and P4 were stale at HEAD.  New: `lcaconfbit1`.
 
 ### `lcaconfbit1` (LOW) -- IOC_CONF bit 1 stored but ignored: encodings 10/11 still drive type-0/1 PCI config cycles (codex)
+
+### `pcc2c040mienannounce` -> `#535` (repaired 2026-09-18; the detector now runs in `gate_arm.sh`, 18 rows)
+Two rows close the {MIEN} x {latch} product for the announce (presence, then count, each a measured L2).  Filed from its
+pass 2: `pcc2c040debugchan` (fatal->debug invisible under step), `pcc2c040latchswap` (latch bit swap).
+Also from a peer session's #533 late review: `landiskauxorder`, `wdcaddr2`.

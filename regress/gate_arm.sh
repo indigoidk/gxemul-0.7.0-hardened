@@ -1567,6 +1567,25 @@ else
     check "pcc2 default rows red"     "$(count "$PCC2DLOG" " FAIL$")" "0"
 fi
 
+#  ------------------------------------------------------------ pcc2c040kill (#512) + #535
+#  One legal guest st.b of 0x04 to PCC2 GENCTL ran reassert_interrupts() and ended the host (#512,
+#  9fa07fe).  This detector shipped in NO GATE (wiringcliff) -- so its 16 rows defended nothing --
+#  and a late seat MEASURED an L2 in it: an announce gated on !MIEN scored 16/16 (#535 adds
+#  `c040 says mien' and, after its pass 2 measured count x MIEN, `c040 once mien': 18 rows).  Needs only the binary: mvme88k/mvme187 constructs from the PROM.
+C040LOG=$LOGDIR/pcc2_c040.log
+python3 -u pcc2_c040_probe.py "$PMAX" gate > "$C040LOG" 2>&1 || true
+if ! grep -q "PCC2C040_DONE" "$C040LOG"; then
+    check "pcc2 c040 probe completed" "no" "yes"
+else
+    check "pcc2 c040 probe completed" "yes" "yes"
+    for v in "genctl ctl" "genctl ctlq" "c040 kill" "c040 attrib" "c040 says" "c040 once" "c040 predirty" "irq pending" "irq live" "c040 noassert" "c040 noassert2" "c040 recover" "c040 says mien" "c040 once mien" "c040 genctl" "c040 pending" "c040x2 pending" "c040rec pending"; do
+        check "pcc2 c040 row: $v" "$(count "$C040LOG" "^$v  .*ok$")" "1"
+    done
+    check "pcc2 c040 rows emitted" "$(( $(count "$C040LOG" " ok$") + $(count "$C040LOG" " FAIL$") ))" "18"
+    check "pcc2 c040 rows green"   "$(count "$C040LOG" " ok$")"   "18"
+    check "pcc2 c040 rows red"     "$(count "$C040LOG" " FAIL$")" "0"
+fi
+
 
 PITLOG=$LOGDIR/pit8253_latch.log
 python3 pit8253_latch_probe.py "$PMAX" "$STUB" > "$PITLOG" 2>&1 || true

@@ -55,6 +55,11 @@ PASS-2 ASK-AGAIN FINDINGS (panel_20260918_083716 + the Opus seat), all disclosur
     0x206 rows are the ONLY killers of M_both, so their address constant is load-bearing -- change it only with
     a re-run of M_both.
 
+LATE REVIEW (a peer session's Opus seat, 2026-09-18; regress/artifacts/landiskaux/latereview_20260918/):
+  * a wrong multiplier is NOT always silent: only a window that still COVERS 0x2c is.  The `winm1' mutant
+    (window one byte short) is warning-silent at 0x2c on a quiet boot, and THIS probe kills it 3/6 -- caught,
+    not an escape.  `len1' (registration width 1) escapes 6/6 and is the `wdcaltwidth' disclosure above.
+
 NO ROW RESTS ON A DEBUG LINE.  `[ wdc: write to ALT. CTRL ]' goes quiet under -q and when
 free-running; every row reads a guest-visible register value instead.
 """

@@ -327,7 +327,7 @@ row("c040 once", ("%d" % n_says) if alive3 else "died(%s)" % how3, "1",
 t4, alive4, how4 = session(setup(r5="0x%x" % C040)
                            + program([ST_H(5, GENCTL), ST_B(5, GENCTL)]))
 row("c040 predirty", ("yes" if SAYS in t4 else "no") if alive4 else "died(%s)" % how4, "yes",
-    "a DIFFERENT warned bit set first must not silence the C040 announce (bit-collision mutant)")
+    "PCC2_W_GENCTL_LEN set first must not silence the C040 announce (ONE other bit, not all)")
 
 #  ---- OWED, NOT SHIPPED -- and named so the gap does not read as coverage ------------------------
 #  minimax's NON-SUPPRESSING mutant (announce correctly, then forget `assert = 0') is NOT covered
@@ -380,6 +380,25 @@ row("c040 predirty", ("yes" if SAYS in t4 else "no") if alive4 else "died(%s)" %
 #  catch a fix that announces correctly and fails to suppress the assertion.  The repair for that is
 #  a free-running probe (breakpoint + `continue', so host-timer callbacks run and a timer interrupt
 #  can go pending), which is a different probe shape rather than another row here.
+#
+#  #535: *** THAT CONTRACT DESCRIBES THE SEVEN ROWS ABOVE ONLY, AND IS SUPERSEDED. ***  The L2 repair
+#  below caught the non-suppressing fix (M_d1_noassert and the `return' variant were killed by
+#  `c040 noassert' / `c040 noassert2' -- 14/16 on the 16-row probe,
+#  artifacts/pcc2c040kill/ctlq_20260909/repaired_M_d1_noassert.raw), so a reader must not take this
+#  paragraph as the probe's contract.  Found by agy's late seat and codex, 2026-09-18.
+#  (The `return' variant meant here replaces `assert = 0' in the C040 block; dev_pcc2.c's own comment
+#  about an `assert=0 -> return' passing every shipped row names a DIFFERENT site -- fable5, #535.)
+#
+#  #535 CONTRACT -- DISCLOSED, MEASURED ESCAPES of the 17-row probe that this probe still does NOT
+#  catch (the Opus seat, artifacts/pcc2c040kill/r535_20260918/opus535/):
+#    C  `fatal(' -> `debug(' on the announce: every C040 write here runs under `step', and debug()
+#       prints while single-stepping, so the downgrade is invisible.  It breaks the announce under
+#       free-running or -q; catching it needs a FREE-RUNNING C040 write.  Filed, not rowed.
+#    D  the latch bit PCC2_W_C040 swapped for PCC2_W_MASK_LEN (test and set): `c040 predirty' pins
+#       ONE other bit (PCC2_W_GENCTL_LEN), not all of them; the enum rules out duplicate IDs, not a
+#       swapped name.  Its effect: a halfword store to MASK would silence the C040 announce.
+#    E  a pending-count conjunct on the latch test: nothing in the C040 block tests the counts, so
+#       this is clause (e), outside the enumeration.
 
 #  ================================================================================================
 #  #512 L2 REPAIR -- the non-suppressing mutant, which the seven rows above CANNOT see.
@@ -531,6 +550,28 @@ row("c040 recover", ("0x%x" % pc3b) if pc3b is not None else "no-pc(%s)" % how3b
 #  *"replace `assert = 0' with `MIEN = 0' -- the rows check only that no interrupt is DELIVERED,
 #  they do not check that MIEN remains SET.  Suppression by masking passes every row."*
 #
+#  ---- #535: THE ANNOUNCE WAS NEVER CHECKED IN THE CELL A REAL DRIVER WRITES. ------------------------
+#  Every announce row (`c040 says', `c040 once', `c040 predirty') writes 0x04 -- MIEN CLEAR -- and the
+#  sessions that write 0x06 (MIEN|C040) never looked for the announce.  So an announce gated on
+#  `!(GENCTL & PCC2_MIEN)' passed every row: MEASURED 16/16 on the shipped probe by the Opus seat
+#  (regress/artifacts/pcc2c040kill/opus_mien_20260918/M_announce_notmien.raw), predicted first by
+#  agy's late seat.  This row reads the announce from the `c040 noassert' transcript (`td', a 0x06
+#  write): no new session.  Base 17/17, that mutant 16/17 (rep_*.raw beside it).
+row("c040 says mien", "yes" if SAYS in td else "no", "yes",
+    "MIEN|C040 (the driver-realistic cell): the decline must ANNOUNCE there too")
+
+#  ---- #535 pass 2: ...AND ANNOUNCE ONCE THERE.  COUNT x MIEN, the same class a second time. --------
+#  The Opus seat MEASURED two mutants escaping the 17-row probe: A (`(GENCTL & PCC2_MIEN) ||
+#  !(warned & C040bit)' -- the latch skipped while MIEN is set) and F (the latch bit set only when MIEN
+#  is clear) both score 17/17 and print the announce 7 times in the `td' session
+#  (artifacts/pcc2c040kill/r535_20260918/opus535/).  Presence x MIEN was the first pass's cell;
+#  COUNT x MIEN is this one, so per the repair-chain rule this closes the whole {MIEN} x {latch}
+#  product for the announce: presence (the row above) and count (this row) in the MIEN-set cell,
+#  beside `c040 says' / `c040 once' in the MIEN-clear cell.  Reads `td' -- NOT t2/t3, which are
+#  REBOUND below to assert_row's transcripts.
+row("c040 once mien", "%d" % td.count(SAYS), "1",
+    "MIEN|C040: the latched announce must print exactly ONCE there too (mutants A, F)")
+
 #  Costs NO extra session: the readback rides on the sessions already run.  GENCTL must still read
 #  back what the guest wrote -- MIEN set, C040 set -- after the suppression has happened.
 row("c040 genctl", ("0x%02x" % gd) if gd is not None else "no-readback", "0x06",
