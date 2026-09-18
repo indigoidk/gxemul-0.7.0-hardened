@@ -1,0 +1,301 @@
+r_subsystem():
+ 420:  *
+ 421:  *  Registers a new subsystem.
+ 422:  */
+ 423: int debugmsg_register_subsystem(const char* name)
+ 424: {
+ 425: 	// TODO: Another way would be to support multiple names with e.g.
+ 426: 	// a suffix. Such as "le0", "le1", "le2" for the name "le".
+ 427: 	// But for now, simply return the same subsystem for all of them.
+ 428: 	ssize_t subsys = -1;
+ 429: 	for (size_t i = 0; i < debugmsg_nr_of_subsystems; ++i)
+ 430: 		if (strcmp(name, debugmsg_subsystem_name[i]) == 0)
+ 431: 			subsys = i;
+ 432: 
+ 433: 	if (subsys >= 0)
+ 434: 		return subsys;
+ 435: 	
+ 436: 	subsys = debugmsg_nr_of_subsystems;
+ 437: 
+ 438: 	debugmsg_nr_of_subsystems ++;
+
+ succeeded in 300ms:
+51- */
+52-void isa_interrupt_common(struct bus_isa_data *d, int old_isa_assert)
+53-{
+54-	int new_isa_assert, x;
+55-
+56-	/*  Any interrupt assertions on PIC2 go to irq 2 on PIC1  */
+57-	/*  (TODO: don't hardcode this here)  */
+58:	if (d->pic2->irr & ~d->pic2->ier)
+59:		d->pic1->irr |= 0x04;
+60-	else
+61:		d->pic1->irr &= ~0x04;
+62-
+63-	/*  printf("ISA: irr=%02x%02x ier=%02x%02x\n",
+64:	    d->pic2->irr, d->pic1->irr, d->pic2->ier, d->pic1->ier);  */
+65-
+66:	new_isa_assert = d->pic1->irr & ~d->pic1->ier;
+67-
+68-	if (old_isa_assert == new_isa_assert)
+69-		return;
+70-
+71-	if (!new_isa_assert) {
+72-		INTERRUPT_DEASSERT(d->irq);
+73-		return;
+74-	}
+75-
+76-	for (x=0; x<16; x++) {
+77-		if (x == 2)
+78-			continue;
+79-
+80:		if (x < 8 && (d->pic1->irr & ~d->pic1->ier & (1 << x)))
+81-			break;
+82-
+83:		if (x >= 8 && (d->pic2->irr & ~d->pic2->ier & (1 << (x&7))))
+84-			break;
+85-	}
+86-
+87-	*d->ptr_to_last_int = x;
+88-
+89-	INTERRUPT_ASSERT(d->irq);
+90-}
+--
+97- */
+98-void isa_interrupt_assert(struct interrupt *interrupt)
+99-{
+100-	struct bus_isa_data *d = (struct bus_isa_data *) interrupt->extra;
+101-	int old_isa_assert, line = interrupt->line;
+102-	int mask = 1 << (line & 7);
+103-
+104:	old_isa_assert = d->pic1->irr & ~d->pic1->ier;
+105-
+106-	if (line < 8)
+107:		d->pic1->irr |= mask;
+108:	else if (d->pic2 != NULL)
+109:		d->pic2->irr |= mask;
+110-
+111-	isa_interrupt_common(d, old_isa_assert);
+112-}
+113-
+114-
+115-/*
+116- *  isa_interrupt_deassert():
+117- *
+118- *  Called whenever an ISA device deasserts an interrupt (0..15).
+119- */
+120-void isa_interrupt_deassert(struct interrupt *interrupt)
+121-{
+122-	struct bus_isa_data *d = (struct bus_isa_data *) interrupt->extra;
+123-	int line = interrupt->line, mask = 1 << (line & 7);
+124:	int old_irr1 = d->pic1->irr, old_isa_assert;
+125-
+126:	old_isa_assert = old_irr1 & ~d->pic1->ier;
+127-
+128-	if (line < 8)
+129:		d->pic1->irr &= ~mask;
+130:	else if (d->pic2 != NULL)
+131:		d->pic2->irr &= ~mask;
+132-
+133-	/*  If IRQ 0 has been cleared, then this is a timer interrupt.
+134-	    Let's ack it here:  */
+135:	if (old_irr1 & 1 && !(d->pic1->irr & 1) &&
+136-	    d->ptr_to_pending_timer_interrupts != NULL &&
+137-            (*d->ptr_to_pending_timer_interrupts) > 0)
+138-                (*d->ptr_to_pending_timer_interrupts) --;
+139-
+140-	isa_interrupt_common(d, old_isa_assert);
+141-}
+142-
+--
+165- *       in VGA console mode should have it set.
+166- *
+167- *  (*3) Similar to *2 above; machines that always boot up with VGA console
+168- *       should have this flag set, so that the keyboard is always used.
+169- *
+170- *  The interrupt_base_path is the name of the bus, CPU, or controller onto
+171- *  which this ISA bus will be attached, e.g. "machine[0].lca" or
+172: *  "machine[0].cpu[0].pic1".
+173- */
+174-struct bus_isa_data *bus_isa_init(struct machine *machine,
+175-	char *interrupt_base_path, uint32_t bus_isa_flags,
+176-	uint64_t isa_portbase, uint64_t isa_membase)
+177-{
+178-	struct bus_isa_data *d;
+179-	char tmpstr[300], tmpstr2[300];
+--
+213-
+214-	if (machine->machine_type == MACHINE_PREP) {
+215-		/*  PReP with obio controller has both WDCs on irq 13!  */
+216-		wdc0_irq = wdc1_irq = 13;
+217-	}
+218-
+219-	if (!(bus_isa_flags & BUS_ISA_EXTERNAL_PIC)) {
+220:		snprintf(tmpstr, sizeof(tmpstr), "8259 irq=%s addr=0x%llx",
+221-		    interrupt_base_path, (long long)(isa_portbase + 0x20));
+222:		d->pic1 = machine->isa_pic_data.pic1 = (struct pic8259_data *)
+223-		    device_add(machine, tmpstr);
+224-		d->ptr_to_pending_timer_interrupts =
+225-		    machine->isa_pic_data.pending_timer_interrupts;
+226-		d->ptr_to_last_int = &machine->isa_pic_data.last_int;
+227-
+228-		if (bus_isa_flags & BUS_ISA_NO_SECOND_PIC)
+229-			bus_isa_flags &= ~BUS_ISA_NO_SECOND_PIC;
+230-		else {
+231-			snprintf(tmpstr, sizeof(tmpstr),
+232:			    "8259 irq=%s.isa.2 addr=0x%llx",
+233-			    interrupt_base_path,(long long)(isa_portbase+0xa0));
+234:			d->pic2 = machine->isa_pic_data.pic2 = (struct pic8259_data *)
+235-			    device_add(machine, tmpstr);
+236-		}
+237-	} else {
+238-		bus_isa_flags &= ~BUS_ISA_EXTERNAL_PIC;
+239-	}
+240-
+241-	snprintf(tmpstr, sizeof(tmpstr), "8253 irq=%s.isa.%i addr=0x%llx "
+
+ succeeded in 300ms:
+ 9152:             The IOC sequences through successive longwords by using a linearly
+ 9153:             incrementing burst order on the PCI.
+ 9154:             The IOC always transfers the low longword of a quadword first, followed by the
+ 9155:             high longword.
+ 9156:             Address Phase + 1: In the cycle following the address phase, the IOC does
+ 9157:             the following:
+ 9158:             � Continues to assert the frame_l signal
+ 9159:             � Asserts the PCI initiator ready signal irdy_l
+ 9160:             � Drives the first longword of write data on the ad<31:0> pins
+ 9161:             � Begins to sample the target ready signal trdy_l
+ 9162:             First Target Ready + 1: In the cycle after the IOC samples the trdy_l signal
+ 9163:             asserted, the IOC does the following:
+ 9164:             � Drives the next longword of write data on the ad<31:0> pins
+ 9165:             � Deasserts its frame_l signal
+ 9166:             � Continues to assert its irdy_l signal
+ 9167:             This process continues until the last longword of the transaction.
+ 9168: 
+ 9169: 6-14 I/O Controller
+ 9170:             Second Target Ready + 1: In the cycle after the IOC again samples the
+ 9171:             trdy_l signal asserted, it deasserts its irdy_l signal, completing the burst.
+ 9172: 
+ 9173:             If the target of the write transaction detects a parity error on a longword,
+ 9174:             it asserts the perr_l signal two cycles after it asserts the trdy_l signal
+ 9175:             corresponding to the data transfer that caused the parity error. If the IOC
+ 9176:             samples the perr_l signal asserted two cycles after a data transfer, it uses an
+ 9177:             internal interrupt to report a parity error to the CPU (Section 6.2.13.2).
+ 9178: 
+ 9179: 6.2.8 I/O Space Cycles
+ 9180: 
+ 9181:             The IOC generates addresses in this region for transactions to the I/O region
+ 9182:             specified by the PCI architecture. This region supports the same access types
+ 9183:             and masked-address generation as sparse space (Section 6.2.6), with the
+ 9184:             following exceptions:
+ 9185: 
+ 9186:             � I/O space is accessed with CPU address bits a<33:32> = 01 and
+ 9187:                   a<31:29> = 110.
+ 9188: 
+ 9189:             � PCI address bits ad<31:27> = 00000 and the IOC_HAE register is not
+ 9190:                   used.
+ 9191: 
+ 9192:             � PCI address bits ad<1:0> come directly from physical address bits a<6:5>
+ 9193:                   during CPU-initiated PCI transfers to I/O space.
+ 9194: 
+ 9195:             � An I/O read or write command (Table 6-2) is issued on the c_be_l<3:0>
+ 9196:                   pins coincident with a read or write operation to this region.
+ 9197: 
+ 9198:             The I/O region supports all masked and unmasked transfers that are supported
+ 9199:             in sparse space.
+ 9200: 
+ 9201: 6.2.9 Configuration Cycles
+ 9202: 
+ 9203:             The PCI architecture specifies a configuration address space for defining
+ 9204:             configuration registers that are used to initialize and configure devices.
+ 9205:             The IOC supports transfers to the configuration address space to access
+ 9206:             the configuration registers. This region supports the same access types and
+ 9207:             masked address generation as sparse space (Section 6.2.6), with the following
+ 9208:             exceptions:
+ 9209: 
+ 9618:                                                     Note
+ 9619: 
+ 9620:      The window base address must be on a naturally aligned address
+ 9621:      boundary equal to the window size (Table 6-6). Additionally, to ensure
+ 9622:      that only one PCI target window can match an incoming PCI address,
+ 9623:      the PCI target windows must be programmed so that they do not
+ 9624:      respond to overlapping PCI address ranges.
+ 9625: 
+ 9626: 6-24 I/O Controller
+ 9627:             Each target window is independently enabled when the window enable bit
+ 9628:             (WEN) is set in the corresponding IOC_W_BASE register. The IOC responds
+ 9629:             only to PCI-initiated transfers that hit in an enabled window. If the WEN bit
+ 9630:             is cleared, the IOC ignores PCI-initiated transfers that hit in that window.
+
+codex
+The mask predicate accepts exactly the manual’s 13 encodings. Two gaps remain beyond that fix: `IOC_CONF<1>` is stored, but PCI configuration accesses consult only bit 0; and the window registers do not drive DMA translation. The manual also requires aligned, nonoverlapping windows, which HEAD does not validate.
+
+codex
+RIGHT-WITH-GAPS
+
+At committed HEAD `3c36526`, #518 is justified, but **P1 and P4 describe repaired history**, and the shipped disposition combines acceptance with decline. References below use committed source, not the working copy.
+
+- **P1 — Refuted at HEAD; historically real.** Both interrupt callbacks now announce once per instance and return (#516, `74daefd`). The ISA PIC wiring remains. Historically, an interrupt reaching either callback could confound an exit-status oracle; “ANY interrupt” overstates this because PIC masking affects delivery. Arm-specific text identifies the path, but text alone cannot establish termination: `fatal()` prints and returns (`src/core/debugmsg.c:384`). Current checks need continuation/state evidence, and warning suppression must be accounted for.
+- **P2 — Confirmed: six historical value-guarded arms.** CONF, TB_ENA, W_BASE0, W_BASE1, W_MASK0, W_MASK1. The translated-base registers and IOC default arm are separate cases.
+- **P3 — Confirmed for the existing failed-device-access mechanism.** `src/cpus/memory_rw.c:603` invokes guest exceptions only under `MEM_MIPS` and `MEM_M88K`, then returns `MEMORY_ACCESS_FAILED`. Returning failure from this device does **not** deliver an Alpha bus error. ACCEPT/DECLINE are available local dispositions; IMPLEMENT remains possible with additional architecture support. This is an emulator limitation, not an Alpha hardware limitation.
+- **P4 — Historically true, already fixed.** #506 (`7a41b3f`) replaced the narrowing `%x`/`(int)idata` diagnostic before #518. HEAD’s announcement helper uses `PRIx64` (`dev_lca.c:322`). The old defect undermined numeric-value matching, while the arm-specific message still identified the arm.
+
+Widening was correct, but **unconditional acceptance is not the rule for all six arms**. The manual supports thirteen mask encodings, requires initialization of both window bases to zero, and specifies that type-X fields ignore writes. [DEC hardware reference manual, conventions and §§6.3.2, 6.4.14](https://openwatcom.org/ftp/devel/docs/21066_66a_hrm.pdf).
+
+| Arm | What HEAD actually does |
+|---|---|
+| CONF | Stores `idata & 3`; announces once when bit 1 is set. |
+| TB_ENA | Stores only TEN, bit 7. |
+| W_BASE0 | Stores base bits 31:20, SG and WEN; announces unmodelled translation when enabled. |
+| W_BASE1 | Same, including acceptance of zero. Both bases share the WEN warning reason. |
+| W_MASK0 | Stores a valid masked field; otherwise preserves the previous register and announces once. |
+| W_MASK1 | Same, with its own warning latch. |
+
+For both masks, `f = (idata & 0xfff00000) >> 20`, and acceptance requires `(f & (f + 1)) == 0`. That admits exactly `2ⁿ−1` for `n = 0…12`. I checked all 4,096 field encodings arithmetically: exactly thirteen pass.
+
+Thus an **unsupported mask encoding is already declined today**: the previous register survives, the first occurrence is announced, and the device callback returns success (`dev_lca.c:503`). Subsequent occurrences remain declined silently. Reserved-bit writes are masked away. The manual calls the other mask encodings *unsupported*; preserving the previous value is the emulator’s chosen disposition, not a specified hardware fault response.
+
+What remains owed:
+
+- **CONF bit-1 handling needs a downstream disposition.** The register stores both bits, but `lca_pci_conf` uses only `d->ioc_conf & 1` (`dev_lca.c:195`). Consequently, encodings `10/11` follow the ordinary type-0/type-1 decoding paths. The announcement does not prevent PCI backend access. This needs explicit unsupported-cycle handling before claiming those configurations are declined.
+- **Interrupt delivery remains an IMPLEMENT task.** Alpha’s pending flag has setters but no delivery consumer; dyntrans lacks the Alpha dispatch path. Forwarding the callbacks alone would accomplish nothing. Pending-state handling, IPL checks and PAL entry remain subsystem work. Removing these callbacks’ host exits is already complete.
+- **DMA/window and TLB behavior remains unimplemented.** Stored register values do not establish working translation; TBIA and translated-base behavior also remain placeholders. Additionally, HEAD does not enforce the manual’s window-alignment and nonoverlap requirements. Those are configuration relationships, requiring a policy that accommodates register-programming sequences. [HRM §§6.3.2 and 6.4.9](https://openwatcom.org/ftp/devel/docs/21066_66a_hrm.pdf).
+- **The IOC default-arm exit is already gone.** HEAD declines writes, returns zero on reads, and announces once per direction. Implementation remains owed for documented registers caught there, including STAT0, STAT1, SFT_RST and PAR_DIS. HAE is another omission: its explicit base-address arm simply ignores it (`dev_lca.c:336`).
+- **A separate host exit remains in committed `lca_isa`** (`dev_lca.c:286`). It is outside the six IOC value guards and should retain its separate accounting.
+
+Validation was committed-source and manual review plus the mask arithmetic check. No gates, battery, probes or guest executions were run.
+tokens used
+87,125
+RIGHT-WITH-GAPS
+
+At committed HEAD `3c36526`, #518 is justified, but **P1 and P4 describe repaired history**, and the shipped disposition combines acceptance with decline. References below use committed source, not the working copy.
+
+- **P1 — Refuted at HEAD; historically real.** Both interrupt callbacks now announce once per instance and return (#516, `74daefd`). The ISA PIC wiring remains. Historically, an interrupt reaching either callback could confound an exit-status oracle; “ANY interrupt” overstates this because PIC masking affects delivery. Arm-specific text identifies the path, but text alone cannot establish termination: `fatal()` prints and returns (`src/core/debugmsg.c:384`). Current checks need continuation/state evidence, and warning suppression must be accounted for.
+- **P2 — Confirmed: six historical value-guarded arms.** CONF, TB_ENA, W_BASE0, W_BASE1, W_MASK0, W_MASK1. The translated-base registers and IOC default arm are separate cases.
+- **P3 — Confirmed for the existing failed-device-access mechanism.** `src/cpus/memory_rw.c:603` invokes guest exceptions only under `MEM_MIPS` and `MEM_M88K`, then returns `MEMORY_ACCESS_FAILED`. Returning failure from this device does **not** deliver an Alpha bus error. ACCEPT/DECLINE are available local dispositions; IMPLEMENT remains possible with additional architecture support. This is an emulator limitation, not an Alpha hardware limitation.
+- **P4 — Historically true, already fixed.** #506 (`7a41b3f`) replaced the narrowing `%x`/`(int)idata` diagnostic before #518. HEAD’s announcement helper uses `PRIx64` (`dev_lca.c:322`). The old defect undermined numeric-value matching, while the arm-specific message still identified the arm.
+
+Widening was correct, but **unconditional acceptance is not the rule for all six arms**. The manual supports thirteen mask encodings, requires initialization of both window bases to zero, and specifies that type-X fields ignore writes. [DEC hardware reference manual, conventions and §§6.3.2, 6.4.14](https://openwatcom.org/ftp/devel/docs/21066_66a_hrm.pdf).
+
+| Arm | What HEAD actually does |
+|---|---|
+| CONF | Stores `idata & 3`; announces once when bit 1 is set. |
+| TB_ENA | Stores only TEN, bit 7. |
+| W_BASE0 | Stores base bits 31:20, SG and WEN; announces unmodelled translation when enabled. |
+| W_BASE1 | Same, including acceptance of zero. Both bases share the WEN warning reason. |
+| W_MASK0 | Stores a valid masked field; otherwise preserves the previous register and announces once. |
+| W_MASK1 | Same, with its own warning latch. |
+
+For both masks, `f = (idata & 0xfff00000) >> 20`, and acceptance requires `(f & (f + 1)) == 0`. That admits exactly `2ⁿ−1` for `n = 0…12`. I checked all 4,096 field encodings arithmetically: exactly thirteen pass.
+
+Thus an **unsupported mask encoding is already declined today**: the previous register survives, the first occurrence is announced, and the device callback returns success (`dev_lca.c:503`). Subsequent occurrences remain declined silently. Reserved-bit writes are masked away. The manual calls the other mask encodings *unsupported*; preserving the previous value is the emulator’s chosen disposition, not a specified hardware fault response.
+
+What remains owed:
+
+- **CONF bit-1 handling needs a downstream disposition.** The register stores both bits, but `lca_pci_conf` uses only `d->ioc_conf & 1` (`dev_lca.c:195`). Consequently, encodings `10/11` follow the ordinary type-0/type-1 decoding paths. The announcement does not prevent PCI backend access. This needs explicit unsupported-cycle handling before claiming those configurations are declined.
+- **Interrupt delivery remains an IMPLEMENT task.** Alpha’s pending flag has setters but no delivery consumer; dyntrans lacks the Alpha dispatch path. Forwarding the callbacks alone would accomplish nothing. Pending-state handling, IPL checks and PAL entry remain subsystem work. Removing these callbacks’ host exits is already complete.
+- **DMA/window and TLB behavior remains unimplemented.** Stored register values do not establish working translation; TBIA and translated-base behavior also remain placeholders. Additionally, HEAD does not enforce the manual’s window-alignment and nonoverlap requirements. Those are configuration relationships, requiring a policy that accommodates register-programming sequences. [HRM §§6.3.2 and 6.4.9](https://openwatcom.org/ftp/devel/docs/21066_66a_hrm.pdf).
+- **The IOC default-arm exit is already gone.** HEAD declines writes, returns zero on reads, and announces once per direction. Implementation remains owed for documented registers caught there, including STAT0, STAT1, SFT_RST and PAR_DIS. HAE is another omission: its explicit base-address arm simply ignores it (`dev_lca.c:336`).
+- **A separate host exit remains in committed `lca_isa`** (`dev_lca.c:286`). It is outside the six IOC value guards and should retain its separate accounting.
+
+Validation was committed-source and manual review plus the mask arithmetic check. No gates, battery, probes or guest executions were run.

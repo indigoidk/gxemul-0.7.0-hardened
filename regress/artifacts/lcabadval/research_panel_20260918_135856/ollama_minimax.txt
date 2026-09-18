@@ -1,0 +1,65 @@
+VERDICT: **RIGHT-WITH-GAPS** — the shipped fix is sound on its own terms, but P1 and P4 are mis-stated against HEAD a616d20, and P3 cannot be checked from the packet. Q2's "widen whitelists" framing understates what the fix actually does (accept-or-decline, by field, not by number).
+
+---
+
+## P1 — REFUTED AT HEAD (the premise describes the pre-#516 state)
+
+P1 as written: *"The interrupt stubs are bare `fatal()+exit(1)' with the ISA PIC chain wired to them, so ANY interrupt ends the host with the same status as a value guard."*
+
+The inlined `lca_interrupt_assert` / `lca_interrupt_deassert` at HEAD a616d20 are **not** bare `fatal(); exit(1)`. The block comment opens with *"#516: this was `fatal(); exit(1)' with NO GUARD"* — past tense. The current bodies call `fatal()` and return, guarded by `d->warned & (1u << LCA_W_IRQ_ASSERT/DEASSERT)`, with no `exit(1)`. Same is true of the IOC arms: `lca_ioc_announce()` calls `fatal()` and returns; the new `default:` arm calls `fatal()` and `break`s. **Nothing at HEAD a616d20 ends the host** on an interrupt or on a refused IOC value.
+
+So the "ANY interrupt ends the host with the same status as a value guard" half of the confound is gone — a probe checking exit status will now see the host survive in both classes, and need not match fatal() text to disambiguate survival. Text matching is still sound *for diagnostic verification* (every arm prints a distinctive fatal() string), but that is a narrower claim and is no longer doing the work the premise assumed it was doing. **P1 was a real confound for the round that produced #516; it is not a confound for the round that shipped #518.** READ.
+
+## P2 — CONFIRMED
+
+Six value-handling arms in `DEVICE_ACCESS(lca_ioc)`: IOC_CONF, IOC_TB_ENA, IOC_W_BASE0, IOC_W_MASK0, IOC_W_BASE1, IOC_W_MASK1. The shipped diff touches all six and introduces six corresponding `LCA_W_IOC_*` latch bits. The premise's count is right. READ.
+
+## P3 — REASONED, NOT CHECKABLE FROM PACKET
+
+The premise asserts `memory_rw.c` delivers exceptions on a failed device access **for MIPS and M88K only**. `memory_rw.c` is not inlined. The brief's own footnote ("memory_rw.c delivers exceptions on a failed device access for MIPS and M88K only") is the same claim restated; it does not constitute evidence.
+
+What can be checked from the packet: the fix in fact does not deliver a bus error on any refused value — illegal W_MASK writes keep the previous value silently, illegal W_BASE / IOC_CONF / TB_ENA writes mask-and-store. So whatever the truth about Alpha's bus-error wiring in `memory_rw.c`, the fix's choice is **internally consistent** with "FAULT is unavailable on Alpha." But the premise itself is unverified. **Single fact that would settle it:** whether `memory_rw.c` (or whatever dispatches device-access faults on Alpha) contains a path that turns a device-access failure into an Alpha exception, the way it does for MIPS/M88K.
+
+## P4 — REFUTED AT HEAD FOR THE IOC_CONF ARM
+
+The premise: *"The IOC_CONF arm's diagnostic could PRINT THE WRONG VALUE (row `lcaconfwidth`), which would corrupt a text oracle there."*
+
+The IOC_CONF diagnostic at HEAD a616d20 is `lca_ioc_announce(d, LCA_W_IOC_CONF_CFG1, "IOC_CONF<1> set ...", idata)`, which formats `idata` (a `uint64_t` passed through `%\" PRIx64 \"`) at full width. The narrowing `(int)idata` / `0x%x` form is in the block comment as the pre-#506 state ("#506: was `0x%x', (int)idata — a 64-bit guarded value narrowed to 32 in the KILL diagnostic"), not in the live code. The text-oracle-corrupting bug existed pre-#506 and was fixed there; #518 then replaced the diagnostic entirely. **P4 is a stale premise against HEAD.** READ.
+
+(The comment's parenthetical "(Not the file's only narrowing site -- the default arm below has the same cast, and this round fixes it too)" refers to the pre-#506 default arm — also past. The current default arm prints `(int)relative_addr` for the *offset*, which is a narrowing but harmless for an IOC register offset. The value still prints full-width: `0x%" PRIx64 "`, `(uint64_t)idata`.)
+
+---
+
+## Q2 — "Widen the whitelists" is not the disposition; the disposition is per-arm accept-or-decline by field
+
+The fix is **not** a uniform whitelist widening. By arm at HEAD a616d20, on an **illegal** value:
+
+| Arm | Disposition for legal values | Disposition for illegal values |
+|---|---|---|
+| IOC_CONF | store `idata & 0x3` | bits ≥2 silently masked (type X) — **no diagnostic** |
+| TB_ENA | store `idata & IOC_TB_ENA_TEN` | bits above TEN silently masked (type X) — **no diagnostic** |
+| W_BASE0 | store the field triple (W_BASE / SG / WEN) | reserved bits masked; if WEN set, **announce once** that translation isn't modelled |
+| W_MASK0 | if `f & (f+1) == 0` (the 13 contiguous-low-ones field values from Table 6-6), store; else **announce once and keep previous value** |
+| W_BASE1 | same as W_BASE0 |
+| W_MASK1 | same as W_MASK0 |
+
+Two consequences worth naming:
+
+1. **W_BASE0 / W_BASE1 have no value-based decline.** The HRM defines W_BASE by fields, so every field-value is legal; the old one- or two-number whitelist was wrong because it conflated "what SROM happens to write" with "what is architected." The shipped code accepts any field value and reserves the diagnostic for the WEN case. That is the right disposition.
+2. **IOC_CONF and TB_ENA silently swallow out-of-field bits.** This is consistent with type-X (ignore-on-write), but it means a guest that writes garbage bits above bit 1 / TEN will get no diagnostic at all — which is fine for type-X bits and is not fine if any of those bits are actually architected. The premise audit cannot settle that without the manual text, but the comments claim type-X for both. REASONED, not READ.
+
+What the fix does for an illegal value **today**: for W_MASK0/1, declines with the previous value kept and one bounded announce naming the register and the offending input; for the others, either silently masks (type-X) or accepts the field and announces a separate non-modelling concern (WEN).
+
+## Q3 — Still owed (member 7 IMPLEMENT, plus four filed register holes, plus two more)
+
+- **ISA interrupt delivery on Alpha (member 7).** Explicitly deferred by the inlined comment: "Implementing delivery is a SUBSYSTEM -- the dyntrans dispatch, the PALcode entry and the IPL check -- and is its own round, not this one." The shipped disposition is decline-with-announce, and the comment is candid that *interrupts do not start working; they were never delivered on this architecture and still are not*. OWED.
+- **STAT0 (+0x040), STAT1 (+0x060), SFT_RST (+0x0c0), PAR_DIS (+0x0e0).** Filed as declines. The comment names only `lcaiocstat0` as a filed ticket but groups all four under it; if `lcaiocstat0` is a single ticket that covers four register implementations, fine; if it is literally a ticket for STAT0 only, then STAT1 / SFT_RST / PAR_DIS are unfiled. **Not checkable from the packet.** REASONED.
+- **DMA window translation when WEN is set.** Announced once, not modelled. OWED, but not filed by name in the inlined comments.
+- **TB_ENA actual TLB behaviour.** The pre-#518 comment said "TODO: Actually implement this." #518 removed the TODO and the fatal() but did not implement the TLB. The TLB still does not honour TB_ENA. OWED; the old TODO comment is gone, so this may have lost its tracker.
+- **IOC_CONF bit 1 (CFG AD<1:0] = 10/11).** Stored and announced once, not modelled. Filed implicitly under the IOC_CONF announce path; not given its own ticket name in the inlined text.
+
+One small in-pass-2 note the comment itself flags: "this comment first called bit 1 the type-1 select; grok read `lca_pci_conf`." That is a self-acknowledged doc-only correction in the new comment and is not a code defect.
+
+---
+
+**Summary of the verdict line:** RIGHT-WITH-GAPS. P2 confirmed. P1 and P4 are stated against pre-#516 / pre-#506 states, not against HEAD a616d20, and should be re-stated before they are quoted further. P3 cannot be checked from the packet and needs one fact from `memory_rw.c`. Q2's "widen whitelists" framing is too coarse — W_MASK0/1 declines illegal field encodings, the other four do not decline on value. Q3 names five outstanding items: interrupt delivery, four documented IOC register holes, window translation, TB_ENA semantics, IOC_CONF bit 1.

@@ -1,0 +1,134 @@
+**VERDICT: REAL-AND-RIGHTLY-FIXED**
+
+---
+
+### Adversarial Review of `pcc2c040kill` (Commit `9fa07fe`, Issue #512)
+
+#### 1. Verification of The Row & Premises (P1–P3)
+
+##### **The Row Statement**
+> *"dev_pcc2.c: a LEGAL byte write to GENCTL with the C040 bit set ends the host in reassert_interrupts() -- the sibling kill the width fix exposed rather than removed."*
+
+* **Status:** **CONFIRMED**.
+* **Evidence:**
+  * In [`src/devices/dev_pcc2.c`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_pcc2.c#L527-L536), [`dev_pcc2_access`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_pcc2.c#L517-L536) handles `PCCTWO_GENCTL` (offset `0x02`):
+    ```c
+    case PCCTWO_GENCTL:
+        if (len != 1 && writeflag == MEM_WRITE) {
+            pcc2_width_decline(d, PCC2_W_GENCTL_LEN, "PCCTWO_GENCTL", len);
+            break;
+        }
+        if (writeflag == MEM_WRITE) {
+            d->pcctwo_reg[relative_addr] = idata;
+            reassert_interrupts(d);
+        }
+        break;
+    ```
+  * Commit `b78bb0f` (#500, `pcc2widthkills`) guarded wide writes (`len != 1`), leaving byte writes (`len == 1`) to store `idata` and immediately invoke [`reassert_interrupts`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_pcc2.c#L289-L423) synchronously within the exact same access.
+  * Prior to commit `9fa07fe`, the top of [`reassert_interrupts`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_pcc2.c#L289-L423) executed:
+    ```c
+    if (d->pcctwo_reg[PCCTWO_GENCTL] & PCC2_C040) {
+        fatal("pcc2: C040 interrupt assertions... TODO\n");
+        exit(1);
+    }
+    ```
+  * A single legal guest store instruction (`st.b 0x04, 0xfff42002`) wrote bit `0x04` (`PCC2_C040`) and terminated the emulator process via `exit(1)`. No device driver activity, timer tick, or pending interrupt was required.
+
+---
+
+##### **P1. Legal Guest Behavior vs. Guard**
+> *"Is a byte store to the PCC2 General Control register with the C040 bit set LEGAL guest behaviour (an MVME187 driver may program it), so that ending the host was a defect and not a guard?"*
+
+* **Status:** **CONFIRMED**.
+* **Evidence:**
+  * **Primary Hardware Specification:** Motorola MVME187 / PCCchip2 Programmer's Reference Guide (`VMESBCA2/PG1`, preserved in [`_scratchpad/vmesbcp2.txt:4859-4916`](file:///C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/vmesbcp2.txt#L4859-L4916)):
+    * Address/Size: `$FFF42002 (8 bits)`.
+    * Bit 10 (bit 2 of byte `$FFF42002`, mask `0x04`): Name `C040`, Operation: **`R/W`** (Read/Write).
+    * Hardware specification text ([`_scratchpad/vmesbcp2.txt:4908-4915`](file:///C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/vmesbcp2.txt#L4908-L4915)):
+      > *"C040: CPU040. This bit should be set when the MPU is from the M68000 family. It should be cleared when the MPU is an MC88100. When the bit is set, EIPL<2..0>* are driven as outputs which carry the priority encoded interrupt request from the PCCchip2 interrupt sources. When the bit is cleared, EIPL<2..0>* are not driven as outputs, but are inputs only."*
+  * The PCCchip2 ASIC was shared across Motorola 68040 boards (MVME167) and 88100 boards (MVME187). A guest OS driver, boot firmware probe, or porting test performing an 8-bit store with bit 2 set is executing architecturally valid, documented hardware I/O.
+  * Terminating the host process with `exit(1)` upon an ordinary peripheral write is an unhandled emulator DoS crash, not an access guard.
+
+---
+
+##### **P2. Shipped Fix Disposition**
+> *"Did the shipped fix keep the guest's C040 write, suppress interrupt ASSERTION while C040 is set (because the model has no 68040 EIPL path), and announce it once via a per-device latch bit -- and is that the right disposition, versus implementing EIPL delivery or declining the write?"*
+
+* **Status:** **CONFIRMED**.
+* **Evidence:**
+  * **Retains Write:** In [`src/devices/dev_pcc2.c#L532-L535`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_pcc2.c#L532-L535), `d->pcctwo_reg[relative_addr] = idata;` stores `idata` unmasked. The written byte (including bit `0x04`) is preserved and reads back accurately.
+  * **Suppresses Assertion:** In [`src/devices/dev_pcc2.c#L410-L422`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_pcc2.c#L410-L422):
+    ```c
+    if (d->pcctwo_reg[PCCTWO_GENCTL] & PCC2_C040) {
+        if (!(d->warned & (1u << PCC2_W_C040))) {
+            d->warned |= (1u << PCC2_W_C040);
+            fatal("[ pcc2: C040 (MC68040 EIPL) interrupt delivery not "
+                "implemented; assertion suppressed  (once) ]\n");
+        }
+        assert = 0;
+    }
+
+    if (assert)
+        INTERRUPT_ASSERT(d->cpu_irq);
+    else
+        INTERRUPT_DEASSERT(d->cpu_irq);
+    ```
+    `assert = 0;` forces the CPU interrupt line to [`INTERRUPT_DEASSERT`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_pcc2.c#L422).
+  * **Per-Device Latch:** `PCC2_W_C040` is defined in the enum at [`src/devices/dev_pcc2.c#L153`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_pcc2.c#L153). The field `uint32_t warned` is declared per-instance in [`struct pcc2_data`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_pcc2.c#L164) and zeroed on initialization in [`DEVINIT(pcc2)`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_pcc2.c#L813). The diagnostic message is emitted via [`fatal()`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/core/debugmsg.c#L384-L391) (which formats to `va_debug()` and does not exit) exactly once per device instance.
+  * **Disposition Adjudication:**
+    * *Declining the write* (dropping C040 or returning bus error) would violate hardware register semantics: C040 is R/W, and guests expect readback to match written state.
+    * *Implementing 68040 EIPL delivery* is impossible for the MVME187 machine model because the simulated CPU is an MC88100, which has an `INT` pin (`d->cpu_irq`) rather than 3-pin `EIPL<2..0>*` lines. Routing EIPL requests to the 88100 INT pin would deliver interrupts intended for 68040 pins into an 88100 CPU.
+    * *Suppressing assertion on `d->cpu_irq`* correctly models the hardware state: setting C040 disconnects PCC2 from the 88100 `INT` line and switches output to the EIPL pins.
+
+---
+
+##### **P3. Enclosing Function Host Kill Census**
+> *"Is anything in the enclosing function still able to end the host on a guest-controlled value?"*
+
+* **Status:** **CONFIRMED (No remaining host kill in `reassert_interrupts`)**.
+* **Evidence:**
+  * An audit of [`reassert_interrupts`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_pcc2.c#L289-L423) shows no calls to `exit()`, `abort()`, or terminating error functions.
+  * Array indexing into `cur_int_vec` ([`src/devices/dev_pcc2.c#L313, L321, L330, L338, L346`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_pcc2.c#L313-L346)) is bounded by `PCC2_TTIRQ_IL` (`0x07`, [`mvme_pcctworeg.h:128`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/thirdparty/mvme_pcctworeg.h#L128)) and `PCC2_IRQ_IPL` (`0x07`, [`mvme_pcctworeg.h:119`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/thirdparty/mvme_pcctworeg.h#L119)), ensuring index range `0..7` within `uint8_t cur_int_vec[8]` ([`src/devices/dev_pcc2.c#L170`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_pcc2.c#L170)).
+  * Across the entire file [`src/devices/dev_pcc2.c`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_pcc2.c), the sole remaining `exit(1)` call is located outside [`reassert_interrupts`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_pcc2.c#L289-L423), at line 455 in the `default:` arm of [`pcctwo_interrupt_common`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_pcc2.c#L426-L459) for unsupported interrupt line IDs.
+
+---
+
+#### 2. Answers to Questions (Q1–Q3)
+
+##### **Q1. P1–P3 Confirmation**
+* **P1 (Defect, not guard):** **CONFIRMED**. Verified against board manual [`_scratchpad/vmesbcp2.txt:4864-4916`](file:///C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/vmesbcp2.txt#L4864-L4916) and [`dev_pcc2_access`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_pcc2.c#L532-L535).
+* **P2 (Disposition):** **CONFIRMED**. Verified against [`src/devices/dev_pcc2.c#L410-L422, L533`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_pcc2.c#L410-L422). Write is accepted, INT assertion is suppressed, and warning is latched per instance.
+* **P3 (Enclosing function safety):** **CONFIRMED**. [`reassert_interrupts`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_pcc2.c#L289-L423) contains zero termination paths and all array accesses are strictly masked within bounds.
+
+##### **Q2. Severity and Option Set Adjudication**
+* **Severity Ranking:** **HIGH (Host Denial of Service / Crash on unprivileged guest store)**.
+  * A single guest memory write to an emulated peripheral device terminating the hypervisor/emulator host process is a high-severity security vulnerability in any isolation/virtualization boundary.
+* **Option Set Evaluation:**
+  1. `ACCEPT (silent)`: Hardware-inaccurate. Storing the byte while allowing normal INT assertion routes 68040 EIPL interrupts into the 88100 INT pin.
+  2. `DECLINE (write rejection / bus fault)`: Hardware-inaccurate. Violates register R/W architecture and breaks guest readback.
+  3. `IMPLEMENT`: Out of scope / unavailable. The modeled CPU is an MC88100 without an MC68040 EIPL pin bus.
+  4. `DECLINE ASSERTION + LATCHED ANNOUNCE (shipped)`: **Optimal and correct**. Preserves register readback, prevents spurious INT assertion on the 88100, and warns once without log flooding.
+
+##### **Q3. Adversarial Scrutiny: What the Shipped Fix / Repository Records Got Wrong**
+1. **The In-Code False Claim Regarding `M_return`:**
+   * In commit `9fa07fe`, lines 377–379 of [`src/devices/dev_pcc2.c`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_pcc2.c#L377-L379) asserted:
+     > *"`assert = 0' -> `return' at THIS line is a one-token mutant every shipped row passes."*
+   * This statement was **false as of the commit that introduced it**.
+   * Evidence:
+     * In [`regress/artifacts/pcc2c040kill/killtable_20260908/M_return.raw#L13-L16`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/pcc2c040kill/killtable_20260908/M_return.raw#L13-L16), `M_return` scored `9/10` and was killed by `c040 noassert FAIL`.
+     * In [`regress/artifacts/pcc2c040kill/ctlq_20260909/repaired_M_return.raw#L13-L22`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/pcc2c040kill/ctlq_20260909/repaired_M_return.raw#L13-L22), `repaired_M_return` scored `14/16` and was killed by both `c040 noassert` and `c040 noassert2`.
+     * The commit message of `9fa07fe` itself documented: `M_return 9/10 'assert = 0' -> 'return;' KILLED`.
+   * While the working tree at HEAD carries the explicit refutation comment ([`src/devices/dev_pcc2.c#L380-L399`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_pcc2.c#L380-L399)), the false sentence was shipped in the commit and misled subsequent review seats.
+2. **Unmasked Reserved Bits in `PCCTWO_GENCTL`:**
+   * Per [`_scratchpad/vmesbcp2.txt:4866-4874`](file:///C:/DocumentNoSnc/CC/GXEMUL/_scratchpad/vmesbcp2.txt#L4866-L4874), bits 6..3 (word bits 14..11) are hardware read-only and reset to 0. Writable bits are only `DR0 (0x80)`, `C040 (0x04)`, `MIEN (0x02)`, and `FAST (0x01)` (mask `0x87`).
+   * [`dev_pcc2_access`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_pcc2.c#L533) stores `idata` completely unmasked. Masking was deferred because existing regression tests ([`regress/pcc2_width_probe.py`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/pcc2_width_probe.py)) wrote `0x11` to GENCTL and expected `0x11` back. This remains architectural debt.
+3. **Vendored Header Trap `PCC2_GENCTL_C040`:**
+   * [`src/include/thirdparty/mvme_pcctworeg.h#L165`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/thirdparty/mvme_pcctworeg.h#L165) defines `PCC2_GENCTL_C040` as `0x03` (`FAST | MIEN`). While commit `9fa07fe` used `PCC2_C040` (`0x04`) and commit `54a2eb4` (#517) annotated the discrepancy, the dead misleading macro remains defined.
+
+---
+
+### Final Recommendation
+
+**GO**
+
+*Rationale:* The product code change in [`src/devices/dev_pcc2.c`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_pcc2.c#L410-L422) is completely sound: it eliminates the host termination defect, preserves valid guest writes, correctly models 88100 interrupt deassertion under C040 pin diversion, and is covered by a 16-row regression detector that kills all relevant mutants (`M_widen`, `M_return`, `M_latchinside`, `M_d1_noassert`, `M_sticky`, `M_mienclobber`). The documentation refutation at [`src/devices/dev_pcc2.c#L380-L399`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_pcc2.c#L380-L399) resolves the records defect.

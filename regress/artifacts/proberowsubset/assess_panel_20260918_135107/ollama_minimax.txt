@@ -1,0 +1,41 @@
+VERDICT: **BUILD-IT-NARROWER.** Require case selection for new probes; offer record/replay as the cheap evidence-reuse path for existing probes; do not retrofit existing probes with a hidden execution framework. The 5 guards are insufficient as stated; I can name filters that pass them all and still make a measurement lie.
+
+---
+
+**Q1. Build it, build it narrower, or not at all?  Costs.**
+
+- **Full build (retrofit existing probes).** Cost: a hidden execution framework — dependency inference, source rewriting, or per-site edits. Codex's table is correct: every shortcut that avoids per-site edits either lies (lazy transcript proxies force the session anyway because conditions parse before `row()`), is brittle (session-ordinal selectors break on insertion), or shifts the maintenance burden onto reviewers of a second execution model. The "few edits to the original files does not mean a cheap feature" framing is right. Avoid.
+- **Narrower: new probes only.** Cost: discipline, not infrastructure. The user-facing rule is "name your cases, own their sessions, declare their controls." The `m88k_idle_probe.py` table-driven selector already demonstrates the shape. Cost is paid per probe at writing time, not by every future reviewer. Do this.
+- **Don't build.** Cost: the 4-hour add-a-row latency persists. Acceptable only if no cheaper lever exists — but **record/replay is that lever** (see below), so "don't build" is strictly worse than the narrower build + replay track.
+- **Record/replay (add to the narrower build, not instead).** Cost: per-probe capture is small; the hard part is provenance (executable identity + inputs + capture conditions, not pathname). This is genuinely cheap evidence-reuse for "added an assertion that needs no new debugger commands" and is orthogonal to the selection machinery. Reject transparent-by-pathname caching on the kill table; the binary is the variant. Worth a separate spec.
+
+**Q2. Are the five guards sufficient?  No — here are five filters that pass all five and still lie.** (All REASONED from the packet's own facts.)
+
+1. **Multi-session row, partial execution.** Select `accept8`. The implementation runs 1 of its 8 sessions. `accept8`'s check is lenient (e.g., "did at least one sub-check pass"); it reports PASS. Guards 1 (nonzero), 2 (named row exists), 3 (1 of 39), 4 (UNSET unchanged), 5 (controls exempt, controls still all pass) all hold. **The measurement lied about `accept8`.** Codex's static finding (`accept8` spans 8 emulator runs) is the reason. The guards don't require *all* of a row's required sessions to run.
+2. **Stale transcript on a mutant.** Select row R. Replay serves R's transcript captured against binary B0; the current binary is B1 (mutant). R passes based on B0 evidence. Guards see a pass. **Lied.** The guards are content-blind — they don't bind the result to the executable that produced it. This is exactly the cache-by-pathname trap codex names.
+3. **Required controls excluded but exempted.** Filter selects {R1}. Required controls = {C1, C2, C3}. Controls are exempt from the filter, so the implementation's exempt-list iteration is what counts them. If the exempt path silently drops C2 (typo, control renamed, control moved out of the exempt set), C1 alone passes `all([C1])` and the control line reports OK. Guard 5 only checks "nonempty OR hard-fail on empty." **Lied.** "Nonempty" is not "complete with required identities."
+4. **Crash/hang silently skipped.** Select {R1, R2}. R2's session hangs and is killed. R2 either prints nothing or prints FAIL. `passed == 1`, denominator prints "1 of 39" (or "2 of 39" if R2 is counted as measured). Guard 3's literal check passes. **Lied** — the run measured 1 row and claimed 2. Codex's stronger rule ("expected row identities exactly once, not `passed == len(rows)`") closes this; Guard 3 doesn't.
+5. **Substring token collision.** Filtered run emits `OPUS497T_DONE_FILTERED`. Gate substring-searches `OPUS497T_DONE` and accepts as a full run. All five guards pass. **The harness interface itself is a guard surface** and none of 1–5 covers it. Codex's "distinct token, no legacy substring" rule is mandatory, not optional.
+
+Additional guards the packet's five lack: declared inventory validation pre-execution (reject mixed valid/invalid names); pre-run intent print (requested names, expanded execution set, planned sessions); per-row session-set membership check (every required session for a selected row is included); required-control identity list (not just nonempty); distinct completion token; provenance binding between result and the executable that produced it.
+
+**Q3. Session-gating vs row-gating, and how a retrofitted probe would prove independence.**
+
+Session-gating is necessary. The packet's own claim — "TEST this claim, do not accept it: 36 of 39 sessions are module-level, so a row()-level filter passes all five guards and saves nothing" — is **supported by the packet itself** (codex's static inspection: 36 direct `session()` assignments plus three call sites in module-level loops; `accept8` aggregates 8 emulator runs). READ: that claim holds as stated. Therefore row-gating alone cannot be the answer.
+
+But session-gating requires a row→session mapping that the current source does not carry. A retrofitted probe would prove independence by one of three ugly mechanisms, each of which is the hidden execution framework codex rejects:
+- (a) **Static declaration** — every row declares its session set. Per-site edits; honest.
+- (b) **Instrumented runtime** that records session→row mappings during a calibration run, then replays the map. New execution model; reviewers must understand the recorder.
+- (c) **Source rewrite** that materializes per-case functions. Honest but invasive; only viable for greenfield probes.
+
+The honest answer: if you want session-gating on an existing probe, you do (a) by hand, not (b) or (c) automatically. For new probes, (c) is the default and `m88k_idle_probe.py` shows the shape.
+
+---
+
+**Other defects worth naming:**
+
+- **Cost claim has a hole.** "4 hours where 20 minutes would do" assumes one row ≈ 20 min. `accept8` is 8 sessions; per-row cost varies by row and is not bounded by the packet. The benefit calculation must be per-row, not amortized.
+- **The 911 s vs 39 × 18 min discrepancy is unexplained.** If sessions are serial, 39 × 18 min = ~12 hours, not 911 s. The "20 min" figure inherits whatever the actual per-session or per-row cost turns out to be once this is reconciled — neither figure is checkable from the packet as stated.
+- **The UNSET-path-untouched guard (Guard 4) is necessary but its scope is ambiguous.** Does it forbid the unset path from seeing a filtered denominator in any output stream (logs, telemetry), or only in the printed control line? Worth pinning.
+
+**Net:** narrow build + record/replay + the six additional guards above.

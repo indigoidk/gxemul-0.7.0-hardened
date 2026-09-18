@@ -1,0 +1,216 @@
+ERDICT.md holding the FIRST run's 61/61 and its 13:59:15 sentinel. ***  It is a `check` and not a `check_min`
+ 532:     #  deliberately: EQUALITY is the fail-closed ratchet, so a row that silently vanishes reds
+ 533:     #  here instead of passing a floor. ***
+ 534:     check "gdrom_default rows run"     "${gddres#*/}" 62
+ 535:     check "gdrom_default rows correct" "${gddres%/*}" "${gddres#*/}"
+ 536:     #  `scan uniq` IS AN IDENTITY ROW: 64 word keys minus 8 implemented offsets is
+ 537:     #  exactly 56.  A ninth implemented register moves it to 55 in the same commit --
+ 538:     #  the fail-closed ratchet, equality and not >=.  It kills a capped counter (4 !=
+ 539:     #  56), a masked key (32 != 56), AND the raw-address indexing mutant (measured
+ 540:     #  18/21 -- it reddens `scan uniq` too).
+ 541:     #
+ 542:     #  *** AN EARLIER DRAFT OF THIS COMMENT SAID THE SCAN CANNOT SEE THE
+ 543:     #  RAW-ADDRESS MUTANT, 56/56 IDENTICAL TO CORRECT. That was the pass-1
+ 544:     #  analysis of a design WITHOUT the bounds guard, and the round's own kill
+ 545:     #  table refutes it. ***  With the guard, raw indexing pushes k to 255
+ 546:     #  against 64 keys, the guard rejects, most offsets never report, and the
+ 547:     #  count drops.  A seat caught the comment still carrying the pre-guard
+
+ exited 1 in 194ms:
+Traceback (most recent call last):
+  File "<stdin>", line 35, in <module>
+  File "<stdin>", line 32, in trace
+  File "<memory-only-probe-flow>", line 1104, in <module>
+ValueError: invalid literal for int() with base 16: 'absent'
+
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command "@'
+import ast
+import re
+from pathlib import Path
+from types import SimpleNamespace
+
+path = Path('GXEMUL-SEC/regress/gdrom_default_probe.py')
+tree = ast.parse(path.read_text(encoding='utf-8'))
+# Memory-only experiment: strip imports and the two I/O functions.
+tree.body = [n for n in tree.body
+             if not isinstance(n, (ast.Import, ast.ImportFrom))
+             and not (isinstance(n, ast.FunctionDef) and n.name in ('session', 'row'))]
+assert not any(isinstance(n, ast.Attribute) and isinstance(n.value, ast.Name)
+               and n.value.id in ('os', 'pty', 'select', 'time') for n in ast.walk(tree))
+code = compile(ast.fix_missing_locations(tree), '<memory-only-probe-flow>', 'exec')
+controls = {'live', 'devsig', 'impl ok'}
+# Synthetic values keep parsing expressions evaluable; no verdict is evidence.
+synthetic = ''.join('print r%d\\n0x0\\n' % i for i in range(32))
+
+def trace(only):
+    calls = []
+    scored = []
+    env = {'re': re, 'sys': SimpleNamespace(argv=['probe']), 'print': lambda *a, **k: None}
+    def session(cmds, settle=8.0, spin=2.0):
+        calls.append((tuple(cmds), settle, spin))
+        return synthetic, True, 'exit0'
+    def row(name, got, want, note=''):
+        if only is None or name in only or name in controls:
+            env['rows'].append((name, got == want))
+            scored.append(name)
+        return got == want
+    env.update(session=session, row=row)
+    exec(code, env)
+    return calls, scored
+
+full_calls, full_rows = trace(None)
+subset_calls, subset_rows = trace({'accept8'})
+print('Stubbed flow, unfiltered:', len(full_calls), 'session invocations;', len(full_rows), 'rows recorded')
+print('Stubbed flow, row-only accept8 filter plus controls:', len(subset_calls), 'session invocations;', len(subset_rows), 'rows recorded')
+print('Selected row identities:', subset_rows)
+print('Session command/settle/spin sequences identical:', full_calls == subset_calls)
+print('Real emulator processes launched: 0')
+print('This checks execution structure only; stubbed row verdicts are not emulator measurements.')
+'@ | python -B -" in C:\DocumentNoSnc\CC\GXEMUL
+ succeeded in 160ms:
+Stubbed flow, unfiltered: 55 session invocations; 62 rows recorded
+Stubbed flow, row-only accept8 filter plus controls: 55 session invocations; 4 rows recorded
+Selected row identities: ['live', 'devsig', 'impl ok', 'accept8']
+Session command/settle/spin sequences identical: True
+Real emulator processes launched: 0
+This checks execution structure only; stubbed row verdicts are not emulator measurements.
+
+codex
+The in-memory check confirms the performance problem: replacing `session()` with a counting stub produced 55 calls both unfiltered and with only `accept8` plus controls recorded. The session arguments were identical. No emulator was launched.
+
+The five guards also miss producer completeness: `accept8` could report green after running only one of its eight required sessions, while retaining all controls and reporting the expected row count. That supports an explicit case conversion for a measured expensive probe, but not a transparent general retrofit.
+
+codex
+BUILD-IT-NARROWER
+
+Build explicit case selection for new probes **and convert one measured expensive existing probe** in the owner’s separate harness round. The measurements justify that targeted conversion. They do not establish that a general retrofit is cheap or maintainable. “New probes only” leaves the reported expense untouched.
+
+Several premises need correction:
+
+- The current `gdrom_default_probe.py` has **41 session call sites: 38 direct and three inside loops**, expanding to **55 session invocations and 62 rows**. Call sites, emulator runs and rows are different denominators.
+- I tested row filtering in memory, replacing session execution with a counting stub. Unfiltered execution recorded 62 rows; selecting `accept8` plus controls recorded four. **Both invoked the session stub 55 times with identical command, settle and spin arguments.** This verifies the scheduling problem without measuring emulator behavior.
+- The current [control expression already contains `rows and`](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gdrom_default_probe.py:570). The empty-control defect is historical; incomplete controls remain a problem.
+- The supplied timing establishes that rebuilding is a negligible target. It does **not** establish a universal four-hours-to-twenty-minutes improvement: selected cases have different session counts and durations.
+
+No gates, battery, or emulator processes were run.
+
+**Q1. Scope and cost.**
+
+| Choice | Implementation and validation cost | Benefit |
+|---|---|---|
+| General retrofit | Audit execution boundaries and dependencies in every converted probe; validate each conversion. Automatic inference adds another execution model to maintain. | Broad savings, with the largest upfront and continuing cost. |
+| New probes only | Establish a case contract and selector checks; structure future probes around it. | No immediate saving on the expensive existing detector. |
+| **New probes plus one targeted conversion** | Shared validation/reporting plus one explicit case inventory, boundary audit, equivalence assessment and negative-control panel. | Immediate, bounded opportunity to validate the claimed saving. |
+| Do not build | No implementation cost. | Retains the supplied full-rerun expense for each relevant iteration. |
+
+For the targeted conversion, a case owns its setup, sessions, computations and assertions. Requesting a row selects its complete case, including sibling assertions, plus required controls. Session ordinals, dummy results, lazy transcript proxies and source inference should not constitute the production selector.
+
+The cost includes a full validation of the conversion; subsetting cannot supply its own initial equivalence evidence. There is no supplied basis for a credible development-hour estimate.
+
+Also, a filtered measurement establishes results for its declared subset. Combining it with earlier results into a full table requires compatible provenance: executable and kernel identity, case commands, oracle/parser and capture settings. A changed executable cannot inherit unmeasured rows merely because their names stayed unchanged.
+
+**Q2. The five guards are insufficient.**
+
+A concrete counterexample is an **`accept8` filter with an incomplete producer mapping**:
+
+1. It recognizes the existing name `accept8`.
+2. It executes all three required controls.
+3. It executes only the first of `accept8`’s eight sessions, substituting empty text and `alive=True` for the other seven.
+4. It reports four rows out of 62.
+5. Its unset path is unchanged.
+
+All five proposed guards hold. Nevertheless, a failure detectable only in an omitted session disappears. The [actual aggregate](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gdrom_default_probe.py:767) checks accumulated diagnostics and survival; neutral substitutions can make it green. This is a constructed counterexample, not a measured mutant result.
+
+Guard 5 also permits a separate lie: retaining **one** passing control and dropping two required controls satisfies its “hard-fail on empty” alternative.
+
+The contract needs these additional obligations:
+
+- **Validate before execution against a declared inventory.** Reject empty requests and every unknown name, including unknown names mixed with valid ones. Automatically included controls must not rescue an empty match.
+- **Declare the complete execution plan.** Record requested rows, expanded cases and sibling rows, required control identities, and all producer instances. `accept8` requires eight producers.
+- **Reconcile execution with that plan.** Require each planned row exactly once and every planned producer accounted for. Missing rows, duplicate rows and skipped producers cannot shrink the denominator or become successful defaults.
+- **Separate passing from coverage.** Report passed/planned rows separately from planned/full inventory coverage. Required controls must all complete and pass; an invalid apparatus must not be scored as a product kill.
+- **Separate partial and full records.** Filtered results and completion tokens must not match legacy full-run tokens. Preserve the unset output and semantics, not merely its denominator. Keep existing full-run pins.
+
+The current GDROM consumer [ignores process status and pins the denominator to 62](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gate_sh_rounding.sh:513). Preserve that protection. The dissent’s substring-token warning also remains valid: appending `_FILTERED` to a legacy token does not make it distinct to a substring search.
+
+**Q3. Gate complete cases before their sessions execute.**
+
+Row-level filtering alone demonstrably saves no emulator invocations here. A bare label on `session()` is also insufficient: multiple assertions share sessions, while `accept8` and `dma accept` aggregate multiple sessions.
+
+Independence needs both an auditable structure and supporting measurements:
+
+- **Audit each case’s boundaries.** It must own its transcript variables, accumulators and setup. Shared configuration should be immutable. Audit writable files and other external state as well: a fresh emulator process does not reset host files or Python globals. Preserve intentional command sequences within a session.
+- **Trace actual execution.** Associate every launch and outcome with its case and producer identity. Check expected arguments, settings and session multiplicity. The existing [fork-and-exec boundary](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gdrom_default_probe.py:435) provides process isolation, but does not prove the surrounding case is self-contained.
+- **Compare equivalent executions.** For unchanged inputs, compare full-run row observations with the same cases run individually and in changed orders. Include known failing witnesses, not just an all-green baseline. Verify that the union of individually executed cases reproduces the full result by row identity.
+
+The separate panel should deliberately drop a required control, omit one aggregate producer, duplicate or omit a selected row, interrupt execution, and attempt to make a partial record satisfy the full-result parser. Each should produce an explicit invalid or incomplete assessment.
+
+The remaining performance measurement is **real launch count and elapsed time for a selected case plus controls across the relevant table**. For this probe, a single-session case should require four launches; `accept8` should require eleven, versus 55 unfiltered. Their elapsed times must be measured separately. That establishes whether twenty minutes is attainable and whether the conversion earns its maintenance cost.
+tokens used
+63,548
+BUILD-IT-NARROWER
+
+Build explicit case selection for new probes **and convert one measured expensive existing probe** in the owner’s separate harness round. The measurements justify that targeted conversion. They do not establish that a general retrofit is cheap or maintainable. “New probes only” leaves the reported expense untouched.
+
+Several premises need correction:
+
+- The current `gdrom_default_probe.py` has **41 session call sites: 38 direct and three inside loops**, expanding to **55 session invocations and 62 rows**. Call sites, emulator runs and rows are different denominators.
+- I tested row filtering in memory, replacing session execution with a counting stub. Unfiltered execution recorded 62 rows; selecting `accept8` plus controls recorded four. **Both invoked the session stub 55 times with identical command, settle and spin arguments.** This verifies the scheduling problem without measuring emulator behavior.
+- The current [control expression already contains `rows and`](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gdrom_default_probe.py:570). The empty-control defect is historical; incomplete controls remain a problem.
+- The supplied timing establishes that rebuilding is a negligible target. It does **not** establish a universal four-hours-to-twenty-minutes improvement: selected cases have different session counts and durations.
+
+No gates, battery, or emulator processes were run.
+
+**Q1. Scope and cost.**
+
+| Choice | Implementation and validation cost | Benefit |
+|---|---|---|
+| General retrofit | Audit execution boundaries and dependencies in every converted probe; validate each conversion. Automatic inference adds another execution model to maintain. | Broad savings, with the largest upfront and continuing cost. |
+| New probes only | Establish a case contract and selector checks; structure future probes around it. | No immediate saving on the expensive existing detector. |
+| **New probes plus one targeted conversion** | Shared validation/reporting plus one explicit case inventory, boundary audit, equivalence assessment and negative-control panel. | Immediate, bounded opportunity to validate the claimed saving. |
+| Do not build | No implementation cost. | Retains the supplied full-rerun expense for each relevant iteration. |
+
+For the targeted conversion, a case owns its setup, sessions, computations and assertions. Requesting a row selects its complete case, including sibling assertions, plus required controls. Session ordinals, dummy results, lazy transcript proxies and source inference should not constitute the production selector.
+
+The cost includes a full validation of the conversion; subsetting cannot supply its own initial equivalence evidence. There is no supplied basis for a credible development-hour estimate.
+
+Also, a filtered measurement establishes results for its declared subset. Combining it with earlier results into a full table requires compatible provenance: executable and kernel identity, case commands, oracle/parser and capture settings. A changed executable cannot inherit unmeasured rows merely because their names stayed unchanged.
+
+**Q2. The five guards are insufficient.**
+
+A concrete counterexample is an **`accept8` filter with an incomplete producer mapping**:
+
+1. It recognizes the existing name `accept8`.
+2. It executes all three required controls.
+3. It executes only the first of `accept8`’s eight sessions, substituting empty text and `alive=True` for the other seven.
+4. It reports four rows out of 62.
+5. Its unset path is unchanged.
+
+All five proposed guards hold. Nevertheless, a failure detectable only in an omitted session disappears. The [actual aggregate](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gdrom_default_probe.py:767) checks accumulated diagnostics and survival; neutral substitutions can make it green. This is a constructed counterexample, not a measured mutant result.
+
+Guard 5 also permits a separate lie: retaining **one** passing control and dropping two required controls satisfies its “hard-fail on empty” alternative.
+
+The contract needs these additional obligations:
+
+- **Validate before execution against a declared inventory.** Reject empty requests and every unknown name, including unknown names mixed with valid ones. Automatically included controls must not rescue an empty match.
+- **Declare the complete execution plan.** Record requested rows, expanded cases and sibling rows, required control identities, and all producer instances. `accept8` requires eight producers.
+- **Reconcile execution with that plan.** Require each planned row exactly once and every planned producer accounted for. Missing rows, duplicate rows and skipped producers cannot shrink the denominator or become successful defaults.
+- **Separate passing from coverage.** Report passed/planned rows separately from planned/full inventory coverage. Required controls must all complete and pass; an invalid apparatus must not be scored as a product kill.
+- **Separate partial and full records.** Filtered results and completion tokens must not match legacy full-run tokens. Preserve the unset output and semantics, not merely its denominator. Keep existing full-run pins.
+
+The current GDROM consumer [ignores process status and pins the denominator to 62](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gate_sh_rounding.sh:513). Preserve that protection. The dissent’s substring-token warning also remains valid: appending `_FILTERED` to a legacy token does not make it distinct to a substring search.
+
+**Q3. Gate complete cases before their sessions execute.**
+
+Row-level filtering alone demonstrably saves no emulator invocations here. A bare label on `session()` is also insufficient: multiple assertions share sessions, while `accept8` and `dma accept` aggregate multiple sessions.
+
+Independence needs both an auditable structure and supporting measurements:
+
+- **Audit each case’s boundaries.** It must own its transcript variables, accumulators and setup. Shared configuration should be immutable. Audit writable files and other external state as well: a fresh emulator process does not reset host files or Python globals. Preserve intentional command sequences within a session.
+- **Trace actual execution.** Associate every launch and outcome with its case and producer identity. Check expected arguments, settings and session multiplicity. The existing [fork-and-exec boundary](/C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gdrom_default_probe.py:435) provides process isolation, but does not prove the surrounding case is self-contained.
+- **Compare equivalent executions.** For unchanged inputs, compare full-run row observations with the same cases run individually and in changed orders. Include known failing witnesses, not just an all-green baseline. Verify that the union of individually executed cases reproduces the full result by row identity.
+
+The separate panel should deliberately drop a required control, omit one aggregate producer, duplicate or omit a selected row, interrupt execution, and attempt to make a partial record satisfy the full-result parser. Each should produce an explicit invalid or incomplete assessment.
+
+The remaining performance measurement is **real launch count and elapsed time for a selected case plus controls across the relevant table**. For this probe, a single-session case should require four launches; `accept8` should require eleven, versus 55 unfiltered. Their elapsed times must be measured separately. That establishes whether twenty minutes is attainable and whether the conversion earns its maintenance cost.

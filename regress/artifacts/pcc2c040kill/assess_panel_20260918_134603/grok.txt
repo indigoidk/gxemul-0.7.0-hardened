@@ -1,0 +1,68 @@
+I'll assess the shipped `pcc2c040kill` fix against the actual `GXEMUL-SEC` sources rather than ratifying the brief. First I'll read the session checkpoint and the live `dev_pcc2.c` path.HEAD is `3c36526`; next I’ll verify the C040/GENCTL path, the shipped `#512` hunk, and whether any host-kill remains.The C040 test is at the foot of `reassert_interrupts`; next I’ll read the GENCTL write arm, the header, and the VMESBCP2 C040 wording.C040 is documented as a real GENCTL bit; I’ll check VMESBCP2 and whether an MVME187 (88100) driver would actually set it.**VERDICT: REAL-AND-RIGHTLY-FIXED**
+
+Checked against `GXEMUL-SEC/src/devices/dev_pcc2.c`, `mvme_pcctworeg.h`, `_scratchpad/vmesbcp2.txt` (GENCTL page and the Interrupt Prioritizer / IPL pages), the GENCTL write arm, and the one remaining `exit(1)` in this file. Packet-fed ratification of P1’s “an MVME187 driver may program it” clause would have been too strong; the defect is still real.
+
+---
+
+## Q1 — P1–P3
+
+**P1. CONFIRMED as a defect, with one narrowed premise.**
+
+A byte store of `0x04` to GENCTL (`$FFF42002`) is a documented 8-bit R/W cycle. VMESBCP2’s GENCTL name row is `DR0 / C040 / MIEN / FAST` on word bits `15 / 10 / 9 / 8`, which maps to this fork’s `0x80 / 0x04 / 0x02 / 0x01`. OPER is R/W; the GENCTL arm stores `idata` unmasked and calls `reassert_interrupts()` in the same access. `st.b` at offset `0x02` is aligned. That is a legal guest access, not a decode fault.
+
+It is **not** “a guard against illegal programming.” The pre-fix block was a TODO stub (`fatal` + `exit(1)` because EIPL was “Not implemented yet”). `fatal()` here does not exit; `exit(1)` did.
+
+The clause that does **not** hold as written: *“an MVME187 driver may program it.”* The same GENCTL page says C040 **“should be set when the MPU is from the M68000 family. It should be cleared when the MPU is an MC88100.”** This machine is `-E mvme88k -e mvme187` (88100). A correct MVME187 driver leaves C040 clear. OpenBSD 2.2’s `mvme68k` driver writes `pcc2_genctl |= PCC2_GENCTL_IEN` (MIEN only); the `mvme88k` tree defines the bits and I found no `.c` store of C040. The in-tree guest never writes GENCTL. That lowers **boot rank**, not **defect class**: one documented `st.b` still ended the host, with no driver and no interrupt.
+
+The “width fix exposed rather than removed” line is observational, not causal. Byte stores to GENCTL already took this path; the width round’s audit is what found the remaining kill (and had to keep bit `0x04` clear in its own GENCTL values so those rows would not die here).
+
+**P2. CONFIRMED: that is what shipped, and it is the right split of the option set.**
+
+HEAD does all three:
+
+1. **Write kept** — `case PCCTWO_GENCTL` still does `pcctwo_reg[relative_addr] = idata` then `reassert_interrupts(d)`.
+2. **INT assertion suppressed while C040 is set** — after the MIEN test, `assert = 0`, then the existing `INTERRUPT_ASSERT` / `INTERRUPT_DEASSERT` tail.
+3. **One per-instance announce** — `PCC2_W_C040` on `d->warned`, house `(once)` + `fatal()`.
+
+Placement next to MIEN is the file’s own GENCTL-bit idiom, not a nest. VMESBCP2: C040 selects the **delivery pin** (EIPL vs INT); IPL2–IPL0 “always reflect the encoded request level”; MIEN disables **both** pins. Recalculation must stay; only the INT output is gated. An early `return` at the **old** (top-of-function) site would skip IPL / `cur_int_vec[]` / the tail. At the **new** site, `assert = 0` → `return` skips only the deassert — and that mutant is **14/16 killed**, not a clean sweep (`repaired_M_return.raw`). The comment now says so.
+
+**P3. CONFIRMED: `reassert_interrupts()` cannot end the host on a guest-controlled value.**
+
+Derived, not trusted: `grep -n 'exit(' GXEMUL-SEC/src/devices/dev_pcc2.c` leaves **one live** `exit(1)`, in `pcctwo_interrupt_common`’s `default:` (unsupported line id). That is a **sibling**, reachability not established, already cited in this file’s header. Inside `reassert_interrupts`: no `exit`/`abort`; the C040 `fatal()` is latched and does not terminate; `debug()` does not; `INTERRUPT_ASSERT`/`DEASSERT` are function-pointer calls on `cpu_irq`; `cur_int_vec[intlevel]` is `reg & 0x07` into `[8]`.
+
+---
+
+## Q2 — Severity and option-set member
+
+**HIGH.** Guest-reachable **process death** on one legal `st.b` of a documented register, no second access, no pending IRQ. Same class as the width kills and `#501` (`pcc2defaultkill`). Above flood / incomplete-model TODOs in this file. Rung-3 witness (`regress/pcc2_c040_probe.py`: committed 3/4, the red row the defect; post-fix 4/4). No boot witness; the in-tree guest never writes GENCTL. Witness makes it eligible; **host death** is what ranks it.
+
+**The site is two decisions, not one member:**
+
+| Decision | Member | Why |
+|---|---|---|
+| GENCTL byte store | **4 ACCEPT** | Model already computes and stores the byte. Declining the write would lie on readback and is not what hardware does (R/W). |
+| INT pin while C040 is set | **3 DECLINE + latched announce** | C040=1 means INT is **not** the delivery pin (VMESBCP2 Interrupt Prioritizer, MVME187). Suppressing INT is correct for this 88100 wiring, not a stub that pretends the pin exists. |
+
+Rejected:
+
+- **2 silent decline** — hardware-accurate for INT on this MPU, but the pre-fix was an unimplemented-path TODO; the house idiom is N=1 + `(once)`. The announce is the fork overlay, not a second refusal of the register.
+- **4 ACCEPT of assertion via INT** — would deliver on the wrong pin. A C040=1 guest would “work” by accident.
+- **5 FAULT** — documented valid bit, not unmapped space. No Alpha-style hole here anyway; this is m88k.
+- **6 BACKED ACCEPT** — storage already exists.
+- **7 IMPLEMENT EIPL** — 68040 pinout on an 88100 machine this emulator does not run as the PCC2 consumer. Addition licence: no measured demand (in-tree guest never sets the bit). The tell for member 7 is a path with **no predicate**; this one has `PCC2_C040`.
+
+---
+
+## Q3 — What the shipped fix still gets wrong
+
+**Product behaviour of this repair: nothing that reopens the round.** The kill is gone; the write is kept; IPL still updates; INT is suppressed; the announce is latched per instance on a new enum bit appended at the end (no renumber).
+
+Residuals, none of them “the fix is the wrong member”:
+
+1. **Sibling kill, not this function.** `pcctwo_interrupt_common` `default:` still `fatal`+`exit(1)` on an unsupported line id. Cited; not witnessed; not `#512`’s site.
+2. **Announce reason is slightly the unimplemented-EIPL story**, which is true, while the INT suppression is also what 88100-wired hardware does when C040 is set. Right action, one of two good reasons. Not a mis-fix.
+3. **Header trap, already annotated (`#517`).** `PCC2_GENCTL_C040 0x03` is `FAST|MIEN`, zero consumers. A future edit that reaches for the `GENCTL_` spelling tests the wrong bits. Not this diff.
+4. **Detector residuals, already filed, not product.** `pcc2c040mienannounce` (agy: announce gated on `!MIEN` predicted to pass the 16 rows — a GENCTL write of `0x04` has MIEN clear, so `c040 says` would still fire). `pcc2c040ctlq` was a vacuous accept row keyed on retired text; repaired. `pcc2c040returnmutant` was a **comment L4**, not an escape: the mutant is 14/16 killed.
+5. **Pre-existing model gaps this round did not take:** external EIPL inputs when C040 is clear; `TODO: Other interrupt sources`. Disclosed, not introduced.
+
+**I did not run `run.sh`, any `gate_*.sh`, or the battery.** Scores cited above are from the inlined / preserved artifacts named in the round record.

@@ -1,0 +1,40 @@
+**VERDICT: REAL-AND-RIGHTLY-FIXED** — the defect (host termination on one legal guest byte store) is real as described, and the shipped disposition (keep the write, suppress assertion, latched announce) is the correct member of the option set given the stated constraint. One residual defect in the shipped artifact: the commit still ships, verbatim, a sentence its own comment declares false. Two load-bearing premises cannot be settled from the packet and are named below.
+
+---
+
+## Q1 — premises
+
+**P1 — CONFIRM (as a defect, not a guard).**
+- READ: the old code was `fatal(...); exit(1);` gated only on `GENCTL & C040`, at the top of a function the GENCTL write path reaches; the GENCTL register is guest-writable (the fix's own comment and the MIEN sibling test presuppose the stored value).
+- READ (from the comment's manual citation): VMESBCP2 documents C040 as a programmable bit of the General Control Register ($FFF42002), i.e. it is a defined control bit, not reserved. Ending the host on a documented guest-programmable bit is a defect, not a guard.
+- NOT CHECKABLE FROM THE PACKET: the mechanism claim "the GENCTL write arm calls `reassert_interrupts()` in the SAME access" and "called from ten sites." The write arm is not inlined. **Single fact that settles it:** the GENCTL case of the dev_pcc2 access function showing `reassert_interrupts(d);` after the store. (The claim would be bizarre if false — the function's MIEN test reads GENCTL — but it is asserted, not shown.)
+- NOT CHECKABLE: that a real MVME187 driver *actually* programs C040. Not needed for P1: legality rests on the bit being defined, which the citation supports.
+
+**P2 — CONFIRM, with one flagged dependency.**
+- READ: the guest's C040 write is kept (nothing masks it; the new test reads the stored register).
+- READ: assertion is suppressed while C040 is set (`assert = 0`, placed after the MIEN test, both gating the same single `INTERRUPT_ASSERT/DEASSERT` tail — siblings, as the comment argues).
+- READ: announce is once per device via `d->warned` bit `PCC2_W_C040`, latch set before the `fatal()` call.
+- FLAGGED DEPENDENCY (REASONED): the announce works only if `fatal()` returns. If `fatal()` terminates, the fix silently re-ships the kill behind a latch. Intra-packet evidence is strong: the old code wrote `fatal(...); exit(1);` — the explicit `exit(1)` would be dead code if `fatal()` exited — and the "(once)" message text presupposes continuation. **Single fact that settles it:** the definition of `fatal()` (does it call `exit`/`Abort`?). I rank this the single most important thing the panel should verify outside the packet, because the entire fix inverts if it is false.
+- REASONED (disposition correct): accept-write + decline-assert + latched announce is the right member. Accept-and-assert would mis-model the hardware: the cited manual text says C040 routes the request to the EIPL pins *instead of* the INT pin, so suppressing the INT-path assertion when C040 is set is not merely expedient — it matches the pin semantics (READ from the quoted text). Declining the write would falsify GENCTL read-back for a documented R/W bit. Implement-EIPL dominates *if* an EIPL sink exists; the packet states twice (old and new comments) that no 68040 EIPL path is modeled, so the chosen member is correct under that premise.
+
+**P3 — CONFIRM for the shown function.**
+- READ: at HEAD the enclosing function contains no `exit()` and no termination path; the only `fatal()` is the latched announce (non-exiting, per the flagged dependency).
+- REASONED: the remaining guest-controlled-value risk in the function is `d->cur_int_vec[intlevel]`, indexed by register bits (`PCC2_TTIRQ_IL` / `PCC2_IRQ_IPL`). That is an out-of-bounds-write question, not host-termination, and **is not checkable from the packet. Single fact that settles it:** the width of those masks versus the declared size of `cur_int_vec[]`.
+
+## Q2 — severity and option set
+
+- REASONED: a deterministic host termination reachable by one legal guest byte store — no race, no driver, no interrupt pending required — ranks in the top severity class for an emulator (guest→host DoS on legal input), above any crash-on-malformed-input class and above all non-terminating misbehavior.
+- Right member: **decline + latched announce** (with the write accepted). Justification under P2; the only member that would beat it (implement EIPL) is excluded by a premise stated twice in the packet.
+
+## Q3 — what the shipped fix still gets wrong
+
+1. **REAL, shipped, documentation-level: the false sentence is retained.** The HEAD comment contains "`assert = 0' -> `return' at THIS line is a one-token mutant every shipped row passes" and, three paragraphs later, "***THAT LAST SENTENCE IS FALSE, AND IT WAS FALSE AS OF THE COMMIT THAT WROTE IT.***". A correction appended to a falsehood is not a deletion; the comment itself documents that three packet-fed seats already re-derived and reused the false sentence. The fix's own thesis — *a wrong reason gets reused* — is violated by its own text. Correct form was to replace the sentence. (REASONED from READ text; I cannot verify the 14/16 artifact, only that the comment's two halves contradict each other, which is itself the defect.)
+2. **NOT CHECKABLE:** whether `d->warned`'s width covers the new `PCC2_W_C040` index (`1u << PCC2_W_C040`). **Single fact that settles it:** the declared type of `warned` in `pcc2_data` and the value of `PCC2_W_NBITS`.
+3. **CONSEQUENCE, not defect (REASONED):** per the pin semantics the comment cites, while C040 is set the model delivers *no* interrupts to the guest — so an OS that legitimately runs with C040 set sees silent timers/UART/SCSI, not a crash. Correct per hardware, announced once, but the panel should treat "guest gets no interrupts in C040 mode" as the standing functional gap that only the "implement" member closes.
+
+## Measurements I want but cannot run (named, per rule)
+
+1. The GENCTL write arm of the access function (settles P1's mechanism).
+2. The body of `fatal()` (settles whether the fix works at all — highest value).
+3. Mask widths of `PCC2_TTIRQ_IL`/`PCC2_IRQ_IPL` vs. `sizeof(cur_int_vec)` (settles the only remaining guest-indexed write).
+4. The row list of the 16-row detector — specifically whether any row pins GENCTL read-back retaining C040 (the decline-the-write mutant). Given this packet's own demonstrated history of a comment-asserted mutant claim being false for nine days, any detector property asserted only in a comment deserves the artifact, not the prose.

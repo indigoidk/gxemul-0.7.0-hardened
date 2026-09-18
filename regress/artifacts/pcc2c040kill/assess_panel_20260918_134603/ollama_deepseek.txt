@@ -1,0 +1,29 @@
+VERDICT LINE FIRST: REAL-AND-RIGHTLY-FIXED, with two unresolved caveats: `fatal` semantics not verifiable from the packet, and the manual bit citation “bit 10 = 0x04” is internally inconsistent.
+
+**Q1 — P1–P3**
+
+- **P1** — *Not fully confirmable from packet.*  
+  READ: old code had `if (d->pcctwo_reg[PCCTWO_GENCTL] & PCC2_C040) { fatal(...); exit(1); }`, so any value with that bit set ended the host.  
+  READ: the packet quotes VMESBCP2 as saying C040 selects EIPL delivery, which would make setting it legal.  
+  REASONED: however, the same comment says “bit 10 of the word view — 0x04”, but bit 10 of a 16-bit word is `0x0400`, not `0x04`. If `PCC2_C040` is actually `0x04`, then the code’s bit does not match the quoted manual. The single fact that would settle this is the definition of `PCC2_C040` and the byte-write mapping for `PCCTWO_GENCTL`. That fact is not in the packet.
+
+- **P2** — *Confirmed from packet, with design judgement.*  
+  READ: the shipped fix removes the early `exit(1)` and moves the C040 test to the foot of `reassert_interrupts()`, where it sets `assert = 0` and announces once via `d->warned` latch.  
+  READ: the guest’s C040 write is not declined; only the output assertion is suppressed.  
+  REASONED: suppressing assertion while C040 is set is a reasonable interim disposition because the model lacks the 68040 EIPL path. Implementing EIPL delivery would be the complete fix, but decline+latched announce prevents host termination and preserves internal recalculation.
+
+- **P3** — *Likely no, but not fully verifiable.*  
+  READ: in the shown function there is no remaining `exit(1)`; the only `fatal` is the once-only announcement.  
+  REASONED: if `fatal` does not terminate the process, then no guest-controlled value in this function can end the host. However, the packet does not define `fatal`; if `fatal` itself exits, the first C040 write would still terminate the host. The single fact that would settle this is the implementation of `fatal`.
+
+**Q2 — Severity and fix choice**
+
+Host termination on a legal guest byte store is a high-severity denial-of-service. The correct immediate fix is to remove the fatal exit and suppress the unsupported delivery, with a latched announcement. That is exactly what the shipped fix does. Full EIPL implementation would be a better long-term fix but is not required to close the defect.
+
+**Q3 — Remaining issues**
+
+1. **Self-contradictory manual citation.** The comment claims C040 is “bit 10 of the word view — 0x04”. Bit 10 is `0x0400`. If `PCC2_C040` is really `0x04`, the code and the cited manual disagree; the fix may be suppressing on a different bit than the documented C040. This cannot be settled from the packet.
+
+2. **Known false sentence still present in the comment.** The comment contains the sentence “`assert = 0` -> `return` at THIS line is a one-token mutant every shipped row passes”, followed by a correction stating that sentence was false and the mutant was killed 14/16. Leaving the false statement in place is a documentation defect that can mislead later readers, exactly as the correction itself warns.
+
+3. **`fatal` semantics unverified.** If `fatal` in this codebase terminates the process, the fix does not actually prevent host termination on the first C040 write. The packet does not provide the definition, so this remains an open risk.

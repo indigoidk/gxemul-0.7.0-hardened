@@ -1,0 +1,17 @@
+**Verdict: BUILD-IT-NARROWER — require explicit case selection for new probes; do not retrofit existing probes.**
+
+**Q1 — Build full vs narrower vs not at all**
+- **Full retrofit for existing probes:** high cost. Requires dependency inference, source transformation, or simulated execution; reviewers must understand a new execution model; risk of dummy/lazy results producing false passes. Savings only for existing probes, but maintenance burden is large.  
+- **Narrower (new probes only, as codex proposes):** low cost. New probes can have named case bodies that own their sessions and assertions; validation is simple and explicit. No immediate savings for existing probes, but prevents future full-rerun cost for new rows.  
+- **Not at all:** zero cost, but every added row in a new probe still costs a full rerun.  
+
+*Premise note:* The claim that “row subsetting is the entire win” is READ for the one measured table (nine runs, ~911 s each, rebuild 2–4 s). Generalizing to all probes is REASONED, not measured from this packet. A second table’s timing would settle whether probe cost dominates similarly.
+
+**Q2 — Are the five guards sufficient?**  
+No. Example filter that passes all five and still lies:  
+Select a row that requires eight sessions (e.g. `accept8`), but run only one real session and return dummy/empty results for the other seven. Denominator still prints `1 of 39`, controls are included, and control line is nonempty. The row reports OK even though only 1/8 required sessions actually ran.  
+
+Alternatively: exclude two of three required control rows, leaving one. Guard 5’s second alternative only hard-fails on an *empty* control set, so one surviving control makes `all(rows)` true and reports OK with incomplete controls.
+
+**Q3 — Session-gating vs row-gating, and proof of independence**  
+Session-gating is required. Row-level filtering after sessions have already run saves nothing because 36/39 sessions are module-level (READ from codex’s static inspection). A retrofitted probe would prove row groups are independent by declaring an explicit mapping from each row group to the complete set of sessions it requires, validating that selected row groups’ session sets are disjoint and that every session in a selected set runs in its own freshly forked emulator. After execution, the probe must verify that exactly those planned sessions ran, with no dummy/lazy returns. This is REASONED; the five guards do not currently enforce such a contract.

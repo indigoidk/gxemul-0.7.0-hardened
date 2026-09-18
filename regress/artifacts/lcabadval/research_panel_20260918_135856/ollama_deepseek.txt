@@ -1,0 +1,20 @@
+RIGHT-WITH-GAPS
+
+**Q1 — premises P1–P4**
+- **P1 refuted** (READ from inlined `lca_interrupt_assert`/`deassert` at HEAD): the stubs no longer do `fatal()+exit(1)`. They now use a per-instance latch and call `fatal()` only, which the diff comment says prints and returns. Exit-status confound is gone. Text matching remains sound because each arm’s `fatal` text is distinct and `fatal` cannot be silenced by `-q` (READ).
+- **P2 confirmed** (READ from diff): six value-guarded arms exist — IOC_CONF, TB_ENA, W_BASE0, W_BASE1, W_MASK0, W_MASK1 — plus the default offset arm. The six count is correct.
+- **P3 uncheckable from packet** (REASONED): no `memory_rw.c` or Alpha exception-path code is inlined. Settling fact: does a failed device access on Alpha deliver a bus-error/exception, or is that path MIPS/M88K only? Not derivable from the provided diff.
+- **P4 refuted** (READ from diff): the old IOC_CONF arm already prints `(uint64_t)idata` with `PRIx64`; no narrowing of the guarded value remains at the base of this change. The `lcaconfwidth` row appears already fixed by #506.
+
+**Q2 — disposition per arm**
+- **IOC_CONF, TB_ENA, W_BASE0, W_BASE1**: widening to accept is correct. The manual defines only the architected fields; reserved bits are ignored, so no manual-forbidden value exists. The shipped fix drops reserved bits and stores the fields.
+- **W_MASK0, W_MASK1**: these still need a decline for illegal encodings. The shipped fix validates the low-ones field and, on an illegal value, announces once and keeps the previous value. This is the correct decline for the one class of manual-forbidden values among the six arms.
+- **Default arm**: not one of the six value arms; it now declines unimplemented offsets with a once-per-direction announce and no exit.
+
+**Q3 — still owed**
+- **Interrupt delivery** (member 7, IMPLEMENT): stubs now decline and announce, but actual Alpha interrupt delivery remains unimplemented.
+- **Documented IOC registers in the default arm**: STAT0, STAT1, SFT_RST, PAR_DIS are still only declined/read-as-zero, not implemented.
+- **DMA window translation**: W_BASE/W_MASK are stored but translation is not modelled; only announced once when a window is enabled.
+- **IOC_CONF<1> CFG AD<1:0> types 10/11**: stored and announced, not modelled.
+- **TB_ENA functionality**: stored but no actual TLB enable behaviour is implemented.
+- The default arm’s `exit` is **no longer owed** — the shipped change removed it; the arm now returns after the announce.

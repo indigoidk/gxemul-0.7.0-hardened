@@ -1,0 +1,277 @@
+
+4913:                   PCCchip2 interrupt sources. When the bit is cleared,
+4914:                   EIPL<2..0>* are not driven as outputs, but are inputs
+4915:                   only.
+4916:
+4917:6            DR0   Download ROM at 0 (MVME166 only). When this
+4918:
+4919:                   bit is cleared, DROM appears only in its normal
+4920:
+4921:                   address range. When DR0 is set, DROM also
+4922:
+4923:                   appears at $00000000 through $0001FFFF. DR0 is
+4924:
+4925:                   cleared by power-up or local reset, but if no other
+4926:
+4927:                   device responds (within a certain amount of time) to
+4928:
+6401:                       PD7-PD0 can be accessed as an 8-bit register at
+6402:                       location $FFF4203B, or PD15-PD0 can be accessed as
+6403:                       a 16-bit register at location $FFF4203A.
+6404:
+6405:                       In auto mode, writing these bits also generates the
+6406:                       strobe for the printer. Reading these bits causes the
+6407:                       PCCchip2 to read the data from the printer data
+6408:                       signal lines (no strobe is generated).
+6409:
+6410:                       When the DOEN bit is set, the printer data signal
+6411:                       lines are driven by the external printer data buffer.
+6412:                       When the DOEN bit is cleared, they must be
+6413:                       terminated to high or to low and/or an external
+6414:                       device must drive them.
+6415:
+6416:                                                                         6-49
+6417:   PCCchip2
+6418:
+6419:   Interrupt Priority Level Register
+6420:
+6421:         ADR/SIZ                          $FFF4203E (8 bits)
+6422:
+6423:         BIT      15  14              13    12        11      10    9          8
+6424:
+6425:         NAME                                                 IPL2 IPL1 IPL0
+6426:
+6427:         OPER     R   R               R     R         R          R  R          R
+6428:
+6429:         RESET    0   0               0     0         0          X  X          X
+6430:
+6431:                  IPL2-IPL0 Interrupt Priority Level - These bits reflect the
+6432:
+6433:                          priority-encoded interrupt request level. This level
+6434:
+6435:6                         is a combination of the PCCchip2 interrupt requests
+6436:
+6437:                          and the interrupt requests driven onto the EIPL2-
+6438:
+6439:                          EIPL0 pins.
+6440:
+6441:                          Note that when the C040 bit is cleared, external
+6442:                          devices can drive EIPL2-EIPL0 with their interrupt
+6443:                          requests.
+6444:
+6445:                          When C040 is set, the PCCchip2 drives EIPL2-EIPL0
+6446:                          with its interrupt requests. In this case (C040 set),
+6447:                          IPL2-IPL0 only reflect PCCchip2 interrupt requests.
+6448:                          The IPL bits are encoded as shown below:
+6449:
+6450:                      IPL2            IPL1      IPL0     Priority Level Comments
+6451:                        0               0         0
+6452:                        0               0         1           0     No Interrupt
+6-/*
+7- * Memory map for PCC2 chip found in MVME1x7 boards.
+8- *
+9: * PCCchip2 control and status register can be accessed as bytes (8 bits),
+10- * two-bytes (16 bits), or four-bytes (32 bits).
+11- */
+12-
+
+web search: VMESBCA2 PG1 "C040" "MC88100"
+web search: 
+exec
+"C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe" -Command '$file = '"'GXEMUL-SEC/src/core/debugmsg.c'; "'$lines = Get-Content -LiteralPath $file; for ($i = 108; $i -lt 162 -and $i -lt $lines.Count; $i++) { '"'{0}:{1}' -f ("'$i + 1), $lines[$i] }; rg -n -C 3 '"'PCC2_IRQ_IPL|PCC2_TTIRQ_IL|cur_int_vec\\[|uint32_t\\s+warned|memset\\(d' GXEMUL-SEC/src/devices/dev_pcc2.c GXEMUL-SEC/src/include/thirdparty/mvme_pcctworeg.h" in C:\DocumentNoSnc\CC\GXEMUL
+ succeeded in 152ms:
+109:#define	DEBUG_BUFSIZE		2048
+110:#define	DEBUG_INDENTATION	4
+111:
+112:
+113:/*
+114: *  va_debug():
+115: *
+116: *  Used internally by the old debug() and fatal() functions.
+117: */
+118:static void va_debug(va_list argp, const char *fmt)
+119:{
+120:	char buf[DEBUG_BUFSIZE + 1];
+121:	buf[0] = buf[DEBUG_BUFSIZE] = 0;
+122:	vsnprintf(buf, DEBUG_BUFSIZE, fmt, argp);
+123:
+124:	char* s = buf;
+125:	while (*s) {
+126:		if (debug_old_currently_at_start_of_line) {
+127:			for (size_t i = 0; i < debug_indent * DEBUG_INDENTATION; i++)
+128:				printf(" ");
+129:		}
+130:
+131:		printf("%c", *s);
+132:
+133:		debug_old_currently_at_start_of_line = false;
+134:		if (*s == '\n' || *s == '\r')
+135:			debug_old_currently_at_start_of_line = true;
+136:		s++;
+137:	}
+138:}
+139:
+140:
+141:/*
+142: *  debugmsg_va():
+143: *
+144: *  Used internally by debugmsg().
+145: */
+146:static void debugmsg_va(struct cpu* cpu, int subsystem,
+147:	const char *name, int verbosity, va_list argp, const char *fmt)
+148:{
+149:	bool subsystem_breakpoint = false;
+150:
+151:	/*
+152:	 *  #261: opt-in global break on any ERROR-level message (covers every
+153:	 *  subsystem, incl. ones registered after a per-subsystem breakpoint
+154:	 *  was set). Default off = single false test = no-op.
+155:	 */
+156:	bool do_bp = (debugmsg_n_breakpoints > 0 &&
+157:	    debugmsg_breakpoint_level[subsystem] >= 0 &&
+158:	    verbosity <= debugmsg_breakpoint_level[subsystem]);
+159:	if (debugmsg_break_on_error && verbosity <= VERBOSITY_ERROR)
+160:		do_bp = true;
+161:
+162:	if (do_bp) {
+GXEMUL-SEC/src/include/thirdparty/mvme_pcctworeg.h-116-
+GXEMUL-SEC/src/include/thirdparty/mvme_pcctworeg.h-117-#define pcc2_timer_us2lim(us)	(us)		/* timer increments in "us" */
+GXEMUL-SEC/src/include/thirdparty/mvme_pcctworeg.h-118-
+GXEMUL-SEC/src/include/thirdparty/mvme_pcctworeg.h:119:#define PCC2_IRQ_IPL		0x07
+GXEMUL-SEC/src/include/thirdparty/mvme_pcctworeg.h-120-#define PCC2_IRQ_ICLR		0x08
+GXEMUL-SEC/src/include/thirdparty/mvme_pcctworeg.h-121-#define PCC2_IRQ_IEN		0x10
+GXEMUL-SEC/src/include/thirdparty/mvme_pcctworeg.h-122-#define PCC2_IRQ_INT		0x20
+--
+GXEMUL-SEC/src/include/thirdparty/mvme_pcctworeg.h-125-#define PCC2_TTIRQ_INT		0x20
+GXEMUL-SEC/src/include/thirdparty/mvme_pcctworeg.h-126-#define PCC2_TTIRQ_IEN		0x10
+GXEMUL-SEC/src/include/thirdparty/mvme_pcctworeg.h-127-#define PCC2_TTIRQ_ICLR		0x08
+GXEMUL-SEC/src/include/thirdparty/mvme_pcctworeg.h:128:#define PCC2_TTIRQ_IL		0x07		/* mask for IL2-IL0 */
+GXEMUL-SEC/src/include/thirdparty/mvme_pcctworeg.h-129-
+GXEMUL-SEC/src/include/thirdparty/mvme_pcctworeg.h-130-#define PCC2_IEERR_SCLR		0x01
+GXEMUL-SEC/src/include/thirdparty/mvme_pcctworeg.h-131-
+--
+GXEMUL-SEC/src/devices/dev_pcc2.c-161-
+GXEMUL-SEC/src/devices/dev_pcc2.c-162-	/*  pcc2widthkills: one bit per width-guard block, see the enum.  Zeroed by
+GXEMUL-SEC/src/devices/dev_pcc2.c-163-	    the init memset, so every instance starts with every announce armed.  */
+GXEMUL-SEC/src/devices/dev_pcc2.c:164:	uint32_t		warned;
+GXEMUL-SEC/src/devices/dev_pcc2.c-165-	/*  #501: one bit per BYTE OFFSET (0..0x3f) for the default: arm's announce;
+GXEMUL-SEC/src/devices/dev_pcc2.c-166-	    relative_addr is folded to PCC2_SIZE above the switch, so the shift is
+GXEMUL-SEC/src/devices/dev_pcc2.c-167-	    always defined.  Zeroed by the same memset.  */
+GXEMUL-SEC/src/devices/dev_pcc2.c-168-	uint64_t		warned_unimpl;
+GXEMUL-SEC/src/devices/dev_pcc2.c-169-
+GXEMUL-SEC/src/devices/dev_pcc2.c:170:	uint8_t			cur_int_vec[8];
+GXEMUL-SEC/src/devices/dev_pcc2.c-171-
+GXEMUL-SEC/src/devices/dev_pcc2.c-172-	/*  Timers:  */
+GXEMUL-SEC/src/devices/dev_pcc2.c-173-	struct timer		*timer;
+--
+GXEMUL-SEC/src/devices/dev_pcc2.c-309-		d->pcctwo_reg[PCCTWO_T2ICR] |= PCC2_TTIRQ_INT;
+GXEMUL-SEC/src/devices/dev_pcc2.c-310-
+GXEMUL-SEC/src/devices/dev_pcc2.c-311-	if (d->pcctwo_reg[PCCTWO_T1ICR] & PCC2_TTIRQ_INT) {
+GXEMUL-SEC/src/devices/dev_pcc2.c:312:		int intlevel = d->pcctwo_reg[PCCTWO_T1ICR] & PCC2_TTIRQ_IL;
+GXEMUL-SEC/src/devices/dev_pcc2.c:313:		d->cur_int_vec[intlevel] = PCC2V_TIMER1;
+GXEMUL-SEC/src/devices/dev_pcc2.c-314-		if (d->pcctwo_reg[PCCTWO_IPL] < intlevel)
+GXEMUL-SEC/src/devices/dev_pcc2.c-315-			d->pcctwo_reg[PCCTWO_IPL] = intlevel;
+GXEMUL-SEC/src/devices/dev_pcc2.c-316-	}
+GXEMUL-SEC/src/devices/dev_pcc2.c-317-	if (d->pcctwo_reg[PCCTWO_T2ICR] & PCC2_TTIRQ_INT) {
+GXEMUL-SEC/src/devices/dev_pcc2.c:318:		int intlevel = d->pcctwo_reg[PCCTWO_T2ICR] & PCC2_TTIRQ_IL;
+GXEMUL-SEC/src/devices/dev_pcc2.c:319:		d->cur_int_vec[intlevel] = PCC2V_TIMER2;
+GXEMUL-SEC/src/devices/dev_pcc2.c-320-		if (d->pcctwo_reg[PCCTWO_IPL] < intlevel)
+GXEMUL-SEC/src/devices/dev_pcc2.c-321-			d->pcctwo_reg[PCCTWO_IPL] = intlevel;
+GXEMUL-SEC/src/devices/dev_pcc2.c-322-	}
+GXEMUL-SEC/src/devices/dev_pcc2.c-323-
+GXEMUL-SEC/src/devices/dev_pcc2.c-324-	if (d->pcctwo_reg[PCCTWO_SCCTX] & PCC2_IRQ_IEN &&
+GXEMUL-SEC/src/devices/dev_pcc2.c-325-	    d->pcctwo_reg[PCCTWO_SCCTX] & PCC2_IRQ_INT) {
+GXEMUL-SEC/src/devices/dev_pcc2.c:326:		int intlevel = d->pcctwo_reg[PCCTWO_SCCTX] & PCC2_IRQ_IPL;
+GXEMUL-SEC/src/devices/dev_pcc2.c:327:		d->cur_int_vec[intlevel] = PCC2V_SCC_TX;
+GXEMUL-SEC/src/devices/dev_pcc2.c-328-		if (d->pcctwo_reg[PCCTWO_IPL] < intlevel)
+GXEMUL-SEC/src/devices/dev_pcc2.c-329-			d->pcctwo_reg[PCCTWO_IPL] = intlevel;
+GXEMUL-SEC/src/devices/dev_pcc2.c-330-	}
+GXEMUL-SEC/src/devices/dev_pcc2.c-331-
+GXEMUL-SEC/src/devices/dev_pcc2.c-332-	if (d->pcctwo_reg[PCCTWO_SCCRX] & PCC2_IRQ_IEN &&
+GXEMUL-SEC/src/devices/dev_pcc2.c-333-	    d->pcctwo_reg[PCCTWO_SCCRX] & PCC2_IRQ_INT) {
+GXEMUL-SEC/src/devices/dev_pcc2.c:334:		int intlevel = d->pcctwo_reg[PCCTWO_SCCRX] & PCC2_IRQ_IPL;
+GXEMUL-SEC/src/devices/dev_pcc2.c:335:		d->cur_int_vec[intlevel] = PCC2V_SCC_RX;
+GXEMUL-SEC/src/devices/dev_pcc2.c-336-		if (d->pcctwo_reg[PCCTWO_IPL] < intlevel)
+GXEMUL-SEC/src/devices/dev_pcc2.c-337-			d->pcctwo_reg[PCCTWO_IPL] = intlevel;
+GXEMUL-SEC/src/devices/dev_pcc2.c-338-	}
+GXEMUL-SEC/src/devices/dev_pcc2.c-339-
+GXEMUL-SEC/src/devices/dev_pcc2.c-340-	if (d->pcctwo_reg[PCCTWO_SCSIICR] & PCC2_IRQ_IEN &&
+GXEMUL-SEC/src/devices/dev_pcc2.c-341-	    d->pcctwo_reg[PCCTWO_SCSIICR] & PCC2_IRQ_INT) {
+GXEMUL-SEC/src/devices/dev_pcc2.c:342:		int intlevel = d->pcctwo_reg[PCCTWO_SCSIICR] & PCC2_IRQ_IPL;
+GXEMUL-SEC/src/devices/dev_pcc2.c:343:		d->cur_int_vec[intlevel] = PCC2V_SCSI;
+GXEMUL-SEC/src/devices/dev_pcc2.c-344-		if (d->pcctwo_reg[PCCTWO_IPL] < intlevel)
+GXEMUL-SEC/src/devices/dev_pcc2.c-345-			d->pcctwo_reg[PCCTWO_IPL] = intlevel;
+GXEMUL-SEC/src/devices/dev_pcc2.c-346-	}
+--
+GXEMUL-SEC/src/devices/dev_pcc2.c-370-	    DECLINING TO ASSERT, rather than returning, is what the MIEN test above
+GXEMUL-SEC/src/devices/dev_pcc2.c-371-	    already does for the other GENCTL interrupt-control bit.  A `return' AT
+GXEMUL-SEC/src/devices/dev_pcc2.c-372-	    THIS SITE would skip only the INTERRUPT_DEASSERT below -- the IPL
+GXEMUL-SEC/src/devices/dev_pcc2.c:373:	    recalculation and the cur_int_vec[] updates have already run by here.
+GXEMUL-SEC/src/devices/dev_pcc2.c-374-	    (It is a return at the OLD site, above the recalculation, that would skip
+GXEMUL-SEC/src/devices/dev_pcc2.c-375-	    all three; an earlier draft of this comment attached that reason to this
+GXEMUL-SEC/src/devices/dev_pcc2.c-376-	    placement, which is a wrong reason for a right position, and a wrong
+--
+GXEMUL-SEC/src/devices/dev_pcc2.c-510-				    (int)PCC2_SIZE);
+GXEMUL-SEC/src/devices/dev_pcc2.c-511-				warned = 1;
+GXEMUL-SEC/src/devices/dev_pcc2.c-512-			}
+GXEMUL-SEC/src/devices/dev_pcc2.c:513:			memset(data, 0, len);	/* OB-11b: don't leak uninit host memory */
+GXEMUL-SEC/src/devices/dev_pcc2.c-514-		}
+GXEMUL-SEC/src/devices/dev_pcc2.c-515-	}
+GXEMUL-SEC/src/devices/dev_pcc2.c-516-
+--
+GXEMUL-SEC/src/devices/dev_pcc2.c-792-	if (writeflag == MEM_WRITE) {
+GXEMUL-SEC/src/devices/dev_pcc2.c-793-		fatal("[ pcc2: write to mvme187_iack? ]\n");
+GXEMUL-SEC/src/devices/dev_pcc2.c-794-	} else {
+GXEMUL-SEC/src/devices/dev_pcc2.c:795:		odata = d->pcctwo_reg[PCCTWO_VECBASE] + d->cur_int_vec[
+GXEMUL-SEC/src/devices/dev_pcc2.c-796-		    (relative_addr >> 2) & INTERRUPT_LEVEL_MASK];
+GXEMUL-SEC/src/devices/dev_pcc2.c-797-		debug("[ pcc2: mvme187_iack level %i => vector 0x%02x ]\n",
+GXEMUL-SEC/src/devices/dev_pcc2.c-798-		    (int)(relative_addr >> 2), (int)odata);
+--
+GXEMUL-SEC/src/devices/dev_pcc2.c-810-	int i;
+GXEMUL-SEC/src/devices/dev_pcc2.c-811-
+GXEMUL-SEC/src/devices/dev_pcc2.c-812-	CHECK_ALLOCATION(d = (struct pcc2_data *) malloc(sizeof(struct pcc2_data)));
+GXEMUL-SEC/src/devices/dev_pcc2.c:813:	memset(d, 0, sizeof(struct pcc2_data));
+GXEMUL-SEC/src/devices/dev_pcc2.c-814-
+GXEMUL-SEC/src/devices/dev_pcc2.c-815-	/*
+GXEMUL-SEC/src/devices/dev_pcc2.c-816-	 *  Initial values, according to the manual:
+
+web search: https://m88k.com/Docs/172/vmesbcp2.pdf
+codex
+REAL-AND-RIGHTLY-FIXED
+
+- **P1: Confirmed as a permitted register write, with a qualification.** GENCTL is byte-accessible and C040 is writable. The [access handler](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_pcc2.c:527) stores the byte and immediately calls `reassert_interrupts()`. The removed branch terminated the emulator solely because C040 was set, regardless of MIEN or pending interrupts. That was a defect. However, a correctly configured MVME187 normally **clears** C040: Motorola specifies that setting it selects M68000-family operation, while MC88100 operation uses it cleared. “An ordinary MVME187 driver needs this setting” is therefore unsubstantiated. [Motorola manual, pp. 6-17–6-18](https://m88k.com/Docs/172/vmesbcp2.pdf#page=103).
+
+- **P2: Confirmed; the disposition is appropriate.** The fix accepts the register value, preserves interrupt-state recalculation, declines unsupported delivery, and announces that limitation once per device instance. Crucially, `assert = 0` reaches `INTERRUPT_DEASSERT`, withdrawing an already asserted output. Both gates remain effective independently: MIEN must be set and C040 must be clear for ordinary assertion. The latch suppresses subsequent warnings, not subsequent gating. Clearing C040 permits normal delivery again, subject to MIEN and the mask. Rejecting the write would retain the wrong guest-visible configuration; implementing EIPL would be a larger emulation feature.
+
+- **P3: No remaining guest-value-dependent host termination found in this function.** There is no `exit()` or `abort()`. Despite its name, [`fatal()` only logs](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/core/debugmsg.c:384). The interrupt-level masks constrain `cur_int_vec[8]` indexing to 0–7, and the warning shift is within its field’s width. The MVME187 CPU callbacks simply update interrupt state. Separately, [`pcctwo_interrupt_common()` retains an unsupported-line exit](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_pcc2.c:453); that is outside the enclosing function, and its guest reachability is not established here.
+
+**Severity:** A high-priority availability defect when running untrusted guests: guest software with access to this MMIO can terminate the entire emulator process. The demonstrated impact is process termination; a critical rating or numerical CVSS score would require additional deployment and privilege assumptions.
+
+**What remains wrong or incomplete:**
+
+- The shipped comment’s detector claim is false. The supplied result is **14/16: the `return` mutant is killed by `c040 noassert` and `c040 noassert2`**. Its escape applied to the seven earlier rows. HEAD’s correction acknowledges this; it supplies no basis for alleging that same gap in the shipped detector.
+- EIPL delivery remains unimplemented. Software requiring it may stall. That is the explicitly announced limitation of this fix, rather than evidence that removing host termination was mishandled.
+- The existing debug message precedes both output gates and can report `ASSERT` when the final action is deassertion. Relabeling it as the priority comparison, or logging the final decision, would improve diagnostics.
+- The hardware comment misattributes the SCSI-specific quotation to the GENCTL page; it appears in the SCSI interface discussion on page 6-7. The delivery-selection rationale remains supported.
+
+This was a read-only review. No gates, battery, or mutants were run; the detector score above is the supplied measurement.
+tokens used
+58,481
+REAL-AND-RIGHTLY-FIXED
+
+- **P1: Confirmed as a permitted register write, with a qualification.** GENCTL is byte-accessible and C040 is writable. The [access handler](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_pcc2.c:527) stores the byte and immediately calls `reassert_interrupts()`. The removed branch terminated the emulator solely because C040 was set, regardless of MIEN or pending interrupts. That was a defect. However, a correctly configured MVME187 normally **clears** C040: Motorola specifies that setting it selects M68000-family operation, while MC88100 operation uses it cleared. “An ordinary MVME187 driver needs this setting” is therefore unsubstantiated. [Motorola manual, pp. 6-17–6-18](https://m88k.com/Docs/172/vmesbcp2.pdf#page=103).
+
+- **P2: Confirmed; the disposition is appropriate.** The fix accepts the register value, preserves interrupt-state recalculation, declines unsupported delivery, and announces that limitation once per device instance. Crucially, `assert = 0` reaches `INTERRUPT_DEASSERT`, withdrawing an already asserted output. Both gates remain effective independently: MIEN must be set and C040 must be clear for ordinary assertion. The latch suppresses subsequent warnings, not subsequent gating. Clearing C040 permits normal delivery again, subject to MIEN and the mask. Rejecting the write would retain the wrong guest-visible configuration; implementing EIPL would be a larger emulation feature.
+
+- **P3: No remaining guest-value-dependent host termination found in this function.** There is no `exit()` or `abort()`. Despite its name, [`fatal()` only logs](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/core/debugmsg.c:384). The interrupt-level masks constrain `cur_int_vec[8]` indexing to 0–7, and the warning shift is within its field’s width. The MVME187 CPU callbacks simply update interrupt state. Separately, [`pcctwo_interrupt_common()` retains an unsupported-line exit](C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_pcc2.c:453); that is outside the enclosing function, and its guest reachability is not established here.
+
+**Severity:** A high-priority availability defect when running untrusted guests: guest software with access to this MMIO can terminate the entire emulator process. The demonstrated impact is process termination; a critical rating or numerical CVSS score would require additional deployment and privilege assumptions.
+
+**What remains wrong or incomplete:**
+
+- The shipped comment’s detector claim is false. The supplied result is **14/16: the `return` mutant is killed by `c040 noassert` and `c040 noassert2`**. Its escape applied to the seven earlier rows. HEAD’s correction acknowledges this; it supplies no basis for alleging that same gap in the shipped detector.
+- EIPL delivery remains unimplemented. Software requiring it may stall. That is the explicitly announced limitation of this fix, rather than evidence that removing host termination was mishandled.
+- The existing debug message precedes both output gates and can report `ASSERT` when the final action is deassertion. Relabeling it as the priority comparison, or logging the final decision, would improve diagnostics.
+- The hardware comment misattributes the SCSI-specific quotation to the GENCTL page; it appears in the SCSI interface discussion on page 6-7. The delivery-selection rationale remains supported.
+
+This was a read-only review. No gates, battery, or mutants were run; the detector score above is the supplied measurement.

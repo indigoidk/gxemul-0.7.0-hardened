@@ -21823,3 +21823,12 @@ depend on that kill and all must move in the same commit (codex).  deepseek's sp
 
 ### `pcc2c040mienannounce` (LOW) -- predicted: an announce gated on !MIEN passes all 16 rows (agy, late seat on `pcc2c040kill`)
 Plus a stale "does NOT catch" probe comment contradicted by the 9 L2 rows below it (wrong record) and t2/t3 rebinding.
+
+### Owner-ordered missing seats -- ALL FIRED 2026-09-18
+* `pcc2c040kill` assess 9/9 (`regress/artifacts/pcc2c040kill/assess_panel_20260918_134603/` + Opus): REAL-AND-RIGHTLY-FIXED.
+  **Opus MEASURED agy's prediction: `pcc2c040mienannounce` is an L2 against the shipped detector** (16/16; +1 row 16/17) --
+  repair owed in its own follow-up round.
+* `proberowsubset` assess 9/9: unanimous BUILD-IT-NARROWER; my brief's guard-5 premise was STALE (HEAD already `rows and all`).
+* `lcabadval` research 9/9: RIGHT-WITH-GAPS; my brief's P1 and P4 were stale at HEAD.  New: `lcaconfbit1`.
+
+### `lcaconfbit1` (LOW) -- IOC_CONF bit 1 stored but ignored: encodings 10/11 still drive type-0/1 PCI config cycles (codex)

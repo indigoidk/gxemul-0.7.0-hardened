@@ -1,0 +1,98 @@
+**VERDICT: BUILD-IT-NARROWER**
+
+---
+
+### Executive Summary & Review Findings
+
+The proposal to retrofit general row subsetting across existing probes using the "Five Guards" is structurally flawed and rests on several stale or factually inaccurate premises. 
+
+1. **The premise for Guard 5 is false in current source**: [`regress/gdrom_default_probe.py:570-571`](file:///c:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gdrom_default_probe.py#L570-L571) already contains `rows and all(...)` (repaired under #490). It does not evaluate to OK on an empty list; it prints `DEAD`. However, the five guards remain **wholly insufficient** to prevent measurement lies.
+2. **The brief conflates source call sites with executed sessions**: `gdrom_default_probe.py` contains 41 `session()` call sites (38 module-level + 3 loop sites), which execute **55 emulator sessions** per run—not 39.
+3. **Row-level filtering saves 0.0% runtime**: Because 38 of 41 session calls occur at the top-level module scope, statements execute before [`row()`](file:///c:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gdrom_default_probe.py#L427-L432) receives control.
+4. **Every cited file:line reference in Codex's prior dissent has drifted**: Lines `:621`, `:1206`, `:1155`, and `:424` are all stale or mispointed due to subsequent insertions and denominator increases (e.g. `gate_arm.sh` denominator raised from 35 to 44, then to 46).
+5. **A general retrofit across existing probes is a maintenance trap**: Probes must not be retrofitted with dynamic proxying or implicit dependency engines. Instead, case selection should be **required only for new probes** (and opt-in for heavily reused existing probes rewritten into explicit case functions).
+
+---
+
+### Verification of Cited Claims Against Source
+
+Every claim and citation in [`_scratchpad/panel_20260918_135107/brief_sent.md`](file:///c:/DocumentNoSnc/CC/GXEMUL/_scratchpad/panel_20260918_135107/brief_sent.md) was checked against the source under `GXEMUL-SEC/`:
+
+| Claim / Citation in Brief | Location in Brief | Source File & Verified Lines | Audit Finding & Evidence |
+| :--- | :--- | :--- | :--- |
+| **Probe runtime & session count**<br>`gdrom_default_probe.py` runs ~39 independent `session()` calls at settle=8.0 (~18 min/run) | Brief L9, L25 | [`regress/gdrom_default_probe.py:435`](file:///c:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gdrom_default_probe.py#L435), [`:534-1626`](file:///c:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gdrom_default_probe.py#L534-L1626) | **PARTIALLY ACCURATE / MISCONSTRUED**. AST inspection finds **41 `session()` call sites** (38 module-level, 3 inside loops). Because loop 1 iterates 4 times (L582), loop 2 iterates 8 times (L769), and loop 3 iterates 5 times (L928), **55 emulator sessions execute** per run ($38 + 4 + 8 + 5 = 55$). The brief confused 2026-09-08 source call sites (~39) with actual executed sessions. Settle=8.0s is confirmed at line 435 ($55 \times 8\text{s} = 440\text{s}$ settling alone, ~911s total). |
+| **Guard 5 justification**<br>`GDROM_DEF_CONTROL` prints OK on `all(rows)` and `all([])` is True | Brief L23–24 | [`regress/gdrom_default_probe.py:570-571`](file:///c:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gdrom_default_probe.py#L570-L571) | **FACTUALLY REFUTED / STALE**. Source reads:<br>`"OK" if rows and all(ok for _, ok in rows) else "DEAD"`.<br>The comment at lines 562–569 explicitly states `#490: rows and IS LOAD-BEARING`. If `rows` is empty, it prints `DEAD`. The brief copied an obsolete defect description. |
+| **Session granularity**<br>36 of 39 sessions are module-level; `row()` filter saves nothing | Brief L25–26 | [`regress/gdrom_default_probe.py:534-1626`](file:///c:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gdrom_default_probe.py#L534-L1626) | **CONFIRMED**. Currently 38 of 41 call sites are direct module-level statements. In Python, module body executes sequentially upon loading. Filtering inside [`row()`](file:///c:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gdrom_default_probe.py#L427) occurs after [`session()`](file:///c:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gdrom_default_probe.py#L435) has already spawned and waited 8.0s. |
+| **Codex artifact verbatim match** | Brief L28–64 | [`regress/artifacts/proberowsubset/codex_rowsel_20260908.txt:1-37`](file:///c:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/artifacts/proberowsubset/codex_rowsel_20260908.txt#L1-L37) | **CONFIRMED**. Text matches the archived artifact verbatim. |
+| **`accept8` multi-session aggregation**<br>`gdrom_default_probe.py:621` combines 8 runs | Brief L33 | [`regress/gdrom_default_probe.py:769-774`](file:///c:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gdrom_default_probe.py#L769-L774), [`:353`](file:///c:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gdrom_default_probe.py#L353) | **LINE CITATION STALE; CLAIM CONFIRMED**. Line `:621` is inside a historical comment for `two offs`. The loop actually resides at lines 769–774, iterating over `IMPLEMENTED_WORDS` (8 words defined at line 353), accumulating `t += tt` and issuing a single `row("accept8", ...)`. |
+| **Gate 35-row checks**<br>`gate_arm.sh:1206` rejects short runs | Brief L49 | [`regress/gate_arm.sh:1271-1289`](file:///c:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gate_arm.sh#L1271-L1289), [`:1306-1309`](file:///c:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gate_arm.sh#L1306-L1309) | **LINE CITATION STALE; SUBSTANTIVE CLAIM CONFIRMED**. Line `:1206` is now in the `sgi_de` block. The `sgi_re` denominator was raised from 35 to 44 (#513, L1281) and then to 46 (L1273, L1307). The gate checks exact arithmetic totals: `check "sgi_re rows emitted" "$(( $(count ... ok) + $(count ... FAIL) ))" "46"`. |
+| **Gate ignores exit status and greps substring**<br>`gate_arm.sh:1155` runs with `\|\| true` and greps `OPUS497T_DONE` | Brief L58 | [`regress/gate_arm.sh:1242`](file:///c:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gate_arm.sh#L1242), [`:1246`](file:///c:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gate_arm.sh#L1246) | **LINE CITATION STALE; TRAP 100% CONFIRMED**. Line `:1155` is in comment prose. Line 1242 runs `python3 sgi_re_width_probe.py "$PMAX" gate > "$SGILOG" 2>&1 \|\| true` and line 1246 tests `if ! grep -q "OPUS497T_DONE" "$SGILOG"; then`. This is an unanchored substring grep that swallows non-zero exits. |
+| **`GDROM_DEF_CONTROL` citation**<br>`gdrom_default_probe.py:424` guards with `rows and` | Brief L60 | [`regress/gdrom_default_probe.py:570-571`](file:///c:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gdrom_default_probe.py#L570-L571), [`:424`](file:///c:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gdrom_default_probe.py#L424) | **LINE CITATION WRONG; SUBSTANTIVE CLAIM CONFIRMED**. Line `:424` is in comment text for [`row()`](file:///c:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gdrom_default_probe.py#L427). The actual code is at lines 570–571. The claim that `rows and` is present is true. |
+| **Table-driven selector in `m88k_idle_probe.py:177`** | Brief L62 | [`regress/m88k_idle_probe.py:63`](file:///c:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/m88k_idle_probe.py#L63), [`:178-204`](file:///c:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/m88k_idle_probe.py#L178-L204) | **CONFIRMED**. `ROWS = [...]` starts at line 178; loop iterates and skips unselected rows (`if ONLY != "all" and ONLY != name: continue`) before calling [`run()`](file:///c:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/m88k_idle_probe.py#L71). |
+
+---
+
+### Adversarial Answers to Review Questions
+
+#### Q1: Build it, build it narrower, or not at all? What does each cost?
+
+1. **BUILD-IT (General Retrofit Across Existing Probes) — REJECT**:
+   - **Cost**: Unacceptably high engineering and soundness cost. In `gdrom_default_probe.py` alone, 38 module-level session calls must be refactored. Shifting them into functions or behind lazy proxy objects risks subtle variable scoping regressions (e.g. cross-session accumulation in `t += tt` for `accept8` and `dma accept`, or status sharing via `alive = alive and aa`).
+   - Gate contracts (e.g. [`gate_arm.sh:1307`](file:///c:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gate_arm.sh#L1307)) hardcode literal emitted row counts (`46`), so running subsets inside CI breaks existing gates unless separate gate modes are introduced.
+2. **DO-NOT-BUILD — REJECT**:
+   - **Cost**: Perpetuates the 4-hour mutation table bottleneck and leaves authoring patterns unstructured, encouraging future probes to duplicate the un-subsettable module-level anti-pattern.
+3. **BUILD-IT-NARROWER (Adopt Codex's Proposed Strategy) — ACCEPT**:
+   - **Cost**: Near zero for legacy probes (they remain untouched, stable, and preserve their historical kill-table logs).
+   - **Contract for New Probes**: Require **explicit case functions or table-driven cases** where each case owns its session(s), assertions, and declared dependencies (exemplified by [`m88k_idle_probe.py:178`](file:///c:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/m88k_idle_probe.py#L178)).
+   - **Targeted Exceptions**: An existing probe may only be converted when an individual, repeatedly expensive round explicitly justifies it, ships its own dedicated refactoring panel, and proves permutation invariance.
+
+---
+
+#### Q2: Are the five guards sufficient? Name a filter that passes all five and still makes a measurement lie.
+
+**THE FIVE GUARDS ARE NOT SUFFICIENT.** They define an incomplete execution and validation contract. Here are four concrete filters that pass all five guards while generating measurement lies:
+
+1. **The Incomplete Control Set Lie (Surviving Sub-Control)**:
+   - In [`gdrom_default_probe.py:534-560`](file:///c:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gdrom_default_probe.py#L534-L560), controls require three distinct operations: `live` (RAM), `devsig` (IPRD reset), and `impl ok` (CNTHI +0x94 readback).
+   - Filter request: `--rows=live,rd_lo`.
+   - *Guard check*: Matches 2 rows (Guard 1 pass); named rows exist (Guard 2 pass); prints `2 of 62` (Guard 3 pass); unset path untouched (Guard 4 pass); `live` is a control row so control set is non-empty (Guard 5 pass).
+   - *The Lie*: `rows and all(...)` at line 571 evaluates to True on `[('live', True)]` and prints `GDROM_DEF_CONTROL=OK`. But `devsig` and `impl ok` never ran! A mutant that completely breaks register window decoding reports `GDROM_DEF_CONTROL=OK`, certifying the run on an apparatus whose device dispatch was never tested. Non-empty control set $\neq$ Complete control set.
+2. **The Multi-Session Partial Execution Lie (`accept8` / `dma accept`)**:
+   - [`accept8`](file:///c:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gdrom_default_probe.py#L769-L774) expects a message count of `0` across 8 implemented offsets.
+   - Filter request: Selection includes `accept8`, but session gating filters out 7 of the 8 sessions.
+   - *The Lie*: The 1 executed offset produces no default-arm message (`len(SAYS.findall(t)) == 0`). `accept8` reports `ok` (PASS). All five guards pass, but the probe completely misses a mutant that broke any of the other 7 offsets.
+3. **The Companion Assertion Omission Lie (Liveness vs. Value)**:
+   - In [`gdrom_default_probe.py:582-595`](file:///c:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gdrom_default_probe.py#L582-L595), one session produces transcript `t` used by both `rd lo` (wants `survived`) and `rdlox1` (wants count `1`).
+   - Filter request: `--rows=rd_lo` (omitting `rdlox1`).
+   - *The Lie*: On a hung emulator, `alive` remains True (as documented under `probetimebased` in [`tools/pipeline/matrix.html:2902`](file:///c:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/tools/pipeline/matrix.html#L2902)). `rd lo` reports `ok` (PASS). The companion value assertion `rdlox1` that would have failed with count `0` was omitted. The run passes all guards on a wedged emulator.
+4. **The Legacy Gate Token False Completion Lie**:
+   - At [`regress/gate_arm.sh:1242,1246`](file:///c:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/regress/gate_arm.sh#L1242-L1246), the gate runs the probe with `|| true` and tests `grep -q "OPUS497T_DONE"`.
+   - *The Lie*: If a filtered run emits `OPUS497T_DONE_FILTERED`, the unanchored substring grep in `gate_arm.sh` matches and returns success. A partial run passes CI with 90% of rows unexecuted.
+
+---
+
+#### Q3: Session-gating vs row-gating, and proving row group independence
+
+- **Which Granularity?**
+  - **Neither raw session-gating nor raw row-gating is sound.** 
+  - Gating must operate at the **Case level** (a named execution unit that binds one or more sessions to one or more rows, declaring its companion assertions and required controls).
+  - Row-gating is inert in module-level scripts. Session-gating in isolation fails because 1 row can require $N$ sessions (`accept8`), and $M$ rows can share 1 session (`rd lo` + `rdlox1`).
+- **How Must a Retrofitted Probe Prove Row Groups Are Independent?**
+  A retrofitted probe cannot declare independence by assertion or code reading. It must provide **three empirical proofs**:
+  1. **Permutation Invariance**: Running all cases in reverse and randomized orders yields byte-identical row output and vector hashes.
+  2. **Isolation Invariance**: Executing each case individually in an isolated process produces the exact same `got` value and status as when executed within the full batch.
+  3. **Lexical Isolation**: No case reads from or writes to mutable module-scoped variables (`t`, `alive`, `how`, `rows`) populated by other cases.
+
+---
+
+### Final Verdict
+
+**GO-WITH-CHANGES**
+
+*(Note: If evaluated strictly as a mandate to implement the 5-guard specification across legacy probes, the verdict is **NO-GO**. It is **GO-WITH-CHANGES** solely under Codex’s narrower architecture with the following mandatory changes applied):*
+
+1. **Do not retrofit existing probes wholesale**: Keep legacy probes intact. Apply row/case selection strictly to new probes, and permit conversion of legacy probes only on an individual, opt-in basis backed by an explicit refactoring panel.
+2. **Replace Guard 5**: Discard the false premise that `rows and` evaluates to OK on `[]`. Replace Guard 5 with a requirement for **exact control identity execution**: a filtered run must execute 100% of defined mandatory controls (`live`, `devsig`, `impl ok`), or hard-fail.
+3. **Enforce Pre-Execution Inventory Validation**: Unknown row names, empty selections, or requests where controls auto-rescue a zero-match filter must fail immediately with a non-zero exit before any emulator session spawns.
+4. **Mandate Distinct Completion Tokens**: Filtered runs must emit a completion sentinel that cannot substring-match legacy tokens (e.g. `OPUS497T_FILTERED_RUN_COMPLETE`, ensuring `grep -q "OPUS497T_DONE"` fails loudly).
+5. **Enforce Case-Level Boundaries**: The scheduling unit must be an explicit Case function owning its session(s), sibling assertions, and dependencies.

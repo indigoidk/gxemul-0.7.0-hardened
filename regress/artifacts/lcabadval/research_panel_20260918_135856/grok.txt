@@ -1,0 +1,129 @@
+I'll start from the repo truth (HEAD, checkpoint, and the live queue), then check P1–P4 against committed `dev_lca.c` rather than the working copy.HEAD is `3c36526`; next I’ll pull the committed LCA sources and the inlined premises, then check each research claim against those rather than the working tree.HEAD already de-fatalises the IRQ stubs, so P1 as written may be stale. Next I’ll check remaining `exit(1)` sites, Alpha exception delivery, and the HRM field rules against the shipped arms.The working-copy grep is not the authority here: I’ll re-read HEAD for remaining `exit(1)`, Alpha exception delivery, and the HRM field rules the six arms claim to follow.**VERDICT: RIGHT-WITH-GAPS**
+
+The shipped `#518` disposition is the right one: the old value guards were wrong, not merely harsh. P2 and P3 hold. P1 and P4 are **false of HEAD** (the brief even inlines the post-fix stubs, then P1 describes the pre-`#516` bodies). Widening is **not** what every arm does with an illegal value today.
+
+Checked against `git show HEAD:src/devices/dev_lca.c` (file last touched in `a616d20`; working copy has other-round dirt and was not used).
+
+---
+
+## Q1 — P1–P4
+
+### P1 — **REFUTED at HEAD.** Text matching is still the right oracle.
+
+The inlined stubs are already the `#516` form: latched `fatal()`, **no `exit(1)`**. `DEVINIT(lca)` still registers them and `bus_isa_init(..., BUS_ISA_IDE0 | BUS_ISA_IDE1)` still wires that ISA PIC chain. That wiring is real; the host-kill is not.
+
+Live `exit(1)` in this file at HEAD is the `lca_isa` `ofs > len` arm (`lcaisalane`), not the IRQ stubs and not the six IOC value arms. IRQ assert/deassert print and return.
+
+So the original confound (ISA interrupt death looking like a value-guard death by **exit status**) is **not live at HEAD**. It *was* live before `74daefd`. CHANGELOG `#518` already recorded that “any interrupt” overstated it even then: only callbacks that actually propagate reach the stubs (measured: 8042 command port, ns16550 IRQ 4). A cold alphabook1 prompt with the 8253 `in_use=0` and UART IER clear does not tick into them.
+
+**Text matching remains sound**, for a reason that survived the kills going away:
+
+- `fatal()` prints and returns (`debugmsg.c`; no `-q` early-out). Survival is now the shared outcome of accept, decline, IRQ-stub, and default.
+- Exit status cannot name **which** arm ran. It never could: stubs, value guards, `default:`, and `lca_isa` all used `exit(1)`.
+- The six historical kill strings were unique. After `#518` the announce strings are still unique (`IOC_CONF<1> set`, `W_MASK0` / `W_MASK1` declined, `a DMA window was enabled`, `unimplemented write` / `read`, IRQ assert vs deassert).
+- Silent accepts (TB_ENA; W_BASE with WEN clear) have **no** `fatal()` — attribution there is readback, not text.
+
+The probe header already says this (`regress/lca_badval_probe.py`: attribution by the arm’s own text, never by exit status; `#516` stubs “no longer confounders”).
+
+`cd.alpha.irq_asserted` is written in `alpha_irq_interrupt_assert/deassert` and read nowhere. `cpu_dyntrans.c`’s `if (!single_step)` block delivers for ARM, M88K, MIPS, PPC, SH — no Alpha arm. Forwarding the LCA stub to `cpu_interrupt()` would still be a no-op. That part of the `#516` comment is true.
+
+### P2 — **CONFIRMED.** Six value-guarded arms, not four.
+
+HEAD `DEVICE_ACCESS(lca_ioc)` write arms that used to whitelist-and-die:
+
+| arm | offset | old predicate |
+|---|---|---|
+| `IOC_CONF` | `+0x020` | `idata & ~1` |
+| `IOC_TB_ENA` | `+0x0a0` | `idata & ~IOC_TB_ENA_TEN` |
+| `W_BASE0` | `+0x100` | `!= 0 && != 0x300800000` |
+| `W_MASK0` | `+0x140` | `!= 0x700000` |
+| `W_BASE1` | `+0x120` | `!= 0x240000000` |
+| `W_MASK1` | `+0x160` | `!= 0x3ff00000` |
+
+De-escalation accept rows are owed **per predicate** → six, not four. Dropping `W_BASE1`/`W_MASK1` was the ledger’s census bug. Three of the six were single-value (`W_MASK0`, `W_BASE1`, `W_MASK1`); the original “exactly one value” title was closer than the first correction.
+
+`default:` is a seventh **offset** kill, not a seventh value-guard. `W_T_BASE0/1` were never value-guarded (the probe’s sibling control).
+
+### P3 — **CONFIRMED.** Member 5 (FAULT) is unavailable on Alpha.
+
+`memory_rw.c` on `res <= 0 && !no_exceptions`:
+
+- `#ifdef MEM_MIPS` → `mips_cpu_exception` (IBE/DBE)
+- `#ifdef MEM_M88K` → `m88k_exception`
+- then `return MEMORY_ACCESS_FAILED` with **no** `MEM_ALPHA` exception arm
+
+`MEM_ALPHA` in that file is only the 8 KB `MRW_OFFSET_MASK`. There is no `alpha_exception` in `src/`. A device `return 0` on Alpha fails the access without delivering a machine check. That is not FAULT.
+
+Honest members for these arms were ACCEPT (documented fields) or DECLINE (what the model cannot honour). `#518` used both.
+
+### P4 — **REFUTED at HEAD.** The `#506` narrowing is gone.
+
+`#506` (`7a41b3f`) already switched the CONF kill diagnostic to `0x%" PRIx64`. `#518` then **removed** that diagnostic. HEAD CONF write is:
+
+```c
+d->ioc_conf = idata & 0x3ULL;
+if (idata & 0x2ULL)
+    lca_ioc_announce(..., idata);  /* PRIx64, full width */
+```
+
+A write of `0x100000000` now stores `0`, ignores bits 63:2 (type X), and prints nothing. The old “prints `0x0` while dying on a value the guard accepts” path cannot run.
+
+`lcaconfwidth` was a real sibling **of the pre-fix kill text**. It did not need to land before `#518` as a prerequisite of HEAD; it had already landed. Matching a unique substring (`IOC_CONF`) was always sound; matching the **datum** was not, until `#506`.
+
+---
+
+## Q2 — Not widening on every arm. Illegal values are not one policy.
+
+The 2026-09-09 ruling (“guards are WRONG, not harsh”) is right. What shipped is **field modelling**, not “widen six whitelists.”
+
+HRM warrants, read locally:
+
+- Type X (`21066_66a_hrm.txt:985-988`): UNPREDICTABLE on read, **ignored on write**.
+- Table 6-10: `IOC_CONF<1:0>` is CFG AD; bits 63:2 reserved X.
+- Table 6-13: `TEN` is bit 7; the rest X.
+- Table 6-16 / Fig 6-9: `W_BASE<31:20>`, `SG<32>`, `WEN<33>`; rest X. S6.4.14 item 3 **requires** SROM to write **zero** to both window bases.
+- Table 6-6: **thirteen** `W_MASK<31:20>` encodings (`0,1,3,7,…,0xfff`); “other values are unsupported.”
+- S6.2.9: CFG AD comes from `IOC_CONF<1:0>`. PCI type 0/1 are `00`/`01`; `10`/`11` are not configuration-cycle types. Bit 0 is what `lca_pci_conf` consumes (`type1 = d->ioc_conf & 1`).
+
+**Per arm at HEAD:**
+
+| arm | legal documented write | illegal / extra bits |
+|---|---|---|
+| **CONF** | ACCEPT the 2-bit field (all four encodings). | Bits 63:2 dropped. Bit 1 **stored** and announced once as unmodelled. Not a decline. |
+| **TB_ENA** | ACCEPT `TEN`. | Rest dropped. **No announce, no decline.** |
+| **W_BASE0/1** | ACCEPT the three architected fields, including the SROM-required **0**. | Reserved dropped. If `WEN` set: store + one shared announce (`LCA_W_IOC_WEN`) that translation is not modelled. Alignment / non-overlap are software “should”s (`:10538-10541`), not a refuse. |
+| **W_MASK0/1** | ACCEPT a Table 6-6 encoding: `v = idata & 0xfff00000`, `f = v>>20`, `(f & (f+1)) == 0` (exactly the 13 low-ones values). | **DECLINE**: previous value kept, once-announce per register. Reserved 63:32 and 19:0 never stored (type X). |
+
+So: four arms are accept-and-mask. **W_MASK is the arm that still declines** values the manual does not list. That is the right split. “Unsupported” is not a documented bus error; decline-and-keep is the model’s policy for a field it cannot honour (translation is still unimplemented). Storing an unsupported mask would be a different honest policy; it is not what shipped.
+
+`lca_ioc` still `return 1` on every path, including `default:`.
+
+---
+
+## Q3 — What is still owed
+
+**Not owed in this round (already shipped):**
+
+- IRQ stubs: `#516` decline + latched announce. Member 7 (IMPLEMENT delivery) is **`alphaintdeliver`**, a subsystem (dyntrans + PALcode + IPL), not a one-line forward.
+- `default:` `exit(1)`: already gone. Write declined, read answers 0, one announce per direction. Ledger title still saying “this round does NOT close” the seventh exit is a **stale record**.
+
+**Still owed, already filed or disclosed:**
+
+1. **`lcaiocstat0` (med)** — IMPLEMENT `STAT0`/`STAT1`/`SFT_RST`/`PAR_DIS`. S6.4.14 items 1–2 require SROM to write `SFT_RST` and `STAT0`. `#518` only stopped those writes killing the process.
+2. **`lcaisalane`** — HEAD `lca_isa` still `exit(1)` on `ofs > len`. Only live host kill left in this file.
+3. **`alphaintdeliver` (med)** — Alpha interrupt delivery. `#516` bought “the host stops dying,” not working IRQs.
+4. **Clause (e) from the `#518` block** — DMA/SG translation; `W_T_BASE` still stores the whole operand with no `IOC_W_T_BASE` mask; WO readback is UNPREDICTABLE and the model echoes; non-quadword IOC accesses; per-instance latch untested; `-q` does not hide `fatal()` (source-true, unmeasured).
+5. **`IOC_HAE`** (`case LCA_IOC_BASE: break;`) — S6.4.14 item 4 requires SROM to initialize HAE. Writes vanish with **no** announce (not even the default latch). Not in `lcaiocstat0`. Residual, not a `#518` reopen.
+
+WEN’s shared latch bit is a design choice (“a DMA window”), not an unfinished kill. Detector rows already pin per-label WEN.
+
+---
+
+## Premises that were load-bearing and wrong *as stated about HEAD*
+
+- P1’s “bare `fatal()+exit(1)`” and “any interrupt ends the host” — false at HEAD; the brief’s own stub listing already shows why.
+- P4 as a live CONF-oracle corruption — false at HEAD.
+- “Widen the whitelist on all six arms” — false of W_MASK, and of type-X reserved bits (ignored, not added to a list).
+- “FAULT or decline were the only members” — FAULT is unavailable; **ACCEPT of documented fields** was the missing member the 2026-09-09 ruling named, and it is what four of the six arms needed.
+
+I did not run `run.sh`, any `gate_*.sh`, or the battery. No new measurement was required; the premises were checkable from HEAD, `memory_rw.c`, `cpu_dyntrans.c`, and `_scratchpad/21066_66a_hrm.txt`.

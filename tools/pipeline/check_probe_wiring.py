@@ -165,6 +165,15 @@ MANIFEST = {
     "artifacts/stagetokens/pass2_20260918/opus532/guard/tokguard.py":
         (CLASS_TOOL, "#532 pass 2: Opus's proposed stage-token guard, measured on fixtures A-G"),
 
+    # -- pcc2c040mienannounce (2026-09-18): the Opus seat's measurement of agy's prediction.  TOOLS: the
+    #    frozen shipped probe, the one-row repair, and the mutant applier; evidence, not gated.
+    "artifacts/pcc2c040kill/opus_mien_20260918/mutate.py":
+        (CLASS_TOOL, "Opus: applies M_announce_notmien / M_announce_onlyifsuppressing to a scratch dev_pcc2.c"),
+    "artifacts/pcc2c040kill/opus_mien_20260918/probe.frozen.py":
+        (CLASS_TOOL, "Opus: frozen copy of the shipped 16-row pcc2_c040_probe.py (M_announce_notmien 16/16)"),
+    "artifacts/pcc2c040kill/opus_mien_20260918/probe.repaired.py":
+        (CLASS_TOOL, "Opus: +1 row `c040 says mien' -- base 17/17, M_announce_notmien 16/17"),
+
     # -- #534 stagetokens repair (2026-09-18): the control harness.  TOOLS: it runs the shipped readers
     #    from a temp copy against a fixture; its outputs are the evidence cited by #534's CHANGELOG block.
     "artifacts/stagetokens/controls_534/run_controls.py":

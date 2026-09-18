@@ -1,0 +1,154 @@
+**RIGHT-WITH-GAPS**
+
+---
+
+### Executive Review Summary
+
+This adversarial review evaluates `_scratchpad/panel_20260918_135856/brief_sent.md` against the committed codebase at **`HEAD`** (`3c36526` / `a616d20`) under `GXEMUL-SEC/`. 
+
+The brief’s central hardware analysis and historical reconstruction of the value guards are accurate, but the research brief suffers from two significant gaps:
+1. **Premise P1 is empirically false at HEAD**: The interrupt stubs `lca_interrupt_assert` / `lca_interrupt_deassert` are **not** `fatal() + exit(1)` at HEAD. That exit behavior was already eliminated in predecessor commit [`74daefd`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c#L83-L145) (#516). The claim that this confound exists at HEAD is refuted by the code.
+2. **Question Q3 carries a false premise**: Q3 asks whether "the default: arm's exit" is still owed. It is **not** owed; commit [`a616d20`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c#L469-L498) (#518) already removed `exit(1)` from `lca_ioc`'s `default:` arm, replacing it with a once-per-direction decline.
+
+---
+
+### Section 1: Verification of Premises (P1–P4)
+
+#### Premise P1: Interrupt Stubs Confound & Text Matching
+> *P1: "The interrupt stubs `lca_interrupt_assert` / `lca_interrupt_deassert` are bare `fatal()+exit(1)` with the ISA PIC chain wired to them, so ANY interrupt ends the host with the same status as a value guard -- a CONFOUND: a probe must match each arm's fatal() TEXT, not the exit status. Is that confound real at HEAD, and is text matching sound?"*
+
+* **Status**: **REFUTED AT HEAD** (Confound does not exist at HEAD); **TEXT MATCHING IS UNSOUND**.
+* **Code Evidence**:
+  * In [`src/devices/dev_lca.c:83-145`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c#L83-L145), `lca_interrupt_assert()` and `lca_interrupt_deassert()` do **not** invoke `exit(1)`:
+    ```c
+    // src/devices/dev_lca.c:119-123
+    if (d != NULL && !(d->warned & (1u << LCA_W_IRQ_ASSERT))) {
+        d->warned |= 1u << LCA_W_IRQ_ASSERT;
+        fatal("[ lca: ISA interrupt assert not implemented (Alpha has no "
+            "interrupt delivery); ignored  (once) ]\n");
+    }
+    ```
+  * Predecessor commit `74daefd` (#516) removed `fatal() + exit(1)` and replaced it with a per-instance warning latch (`LCA_W_IRQ_ASSERT` / `LCA_W_IRQ_DEASSERT`). At HEAD, an ISA interrupt does not terminate the host emulator; it logs once and returns cleanly.
+* **Soundness of Text Matching**:
+  * Matching `fatal()` text is **unsound** as an oracle at HEAD for three distinct reasons:
+    1. Accepted writes in `#518` execute silently without emitting any text.
+    2. Declined operations utilize latch bits (`d->warned |= 1u << bit`), emitting output **only once** ([`src/devices/dev_lca.c:319-322`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c#L319-L322)). Any subsequent probe rows expecting diagnostic text will see none.
+    3. `fatal()` in GXemul ([`src/core/debugmsg.c:384-391`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/core/debugmsg.c#L384-L391)) does not alter return status or flush stderr in a distinct stream; relying on text parsing is vulnerable to truncation or formatting quirks (as demonstrated by `#506`).
+
+#### Premise P2: Value-Guarded Arm Census (Six Arms vs Four)
+> *P2: "The accept-row set is SIX (one per value-guarded arm: CONF, TB_ENA, W_BASE0, W_BASE1, W_MASK0, W_MASK1), not four."*
+
+* **Status**: **CONFIRMED**.
+* **Code Evidence**:
+  * In [`src/devices/dev_lca.c:340-467`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c#L340-L467), `DEVICE_ACCESS(lca_ioc)` contains exactly six arms that previously guarded on written register value and executed `exit(1)`:
+    1. [`LCA_IOC_CONF`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c#L340-L360) (offset +0x020): tested `idata & ~1`
+    2. [`LCA_IOC_TB_ENA`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c#L367-L376) (offset +0x0a0): tested `idata & ~IOC_TB_ENA_TEN`
+    3. [`LCA_IOC_W_BASE0`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c#L378-L393) (offset +0x100): tested `idata != 0ULL && idata != 0x300800000ULL`
+    4. [`LCA_IOC_W_MASK0`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c#L395-L414) (offset +0x140): tested `idata != 0x700000ULL`
+    5. [`LCA_IOC_W_BASE1`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c#L425-L437) (offset +0x120): tested `idata != 0x240000000ULL`
+    6. [`LCA_IOC_W_MASK1`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c#L439-L458) (offset +0x160): tested `idata != 0x3ff00000ULL`
+  * The other cases in the switch are `LCA_IOC_BASE` (no guard), `LCA_IOC_TBIA` (ignored, line 364), `LCA_IOC_W_T_BASE0` (raw assign, line 420), `LCA_IOC_W_T_BASE1` (raw assign, line 464), and `default:` (address-based offset guard, not a value guard).
+  * Conflating window 0 and window 1 into single register types produced the erroneous count of 4; physically and in the switch dispatch, there are **6 distinct value-guarded register arms**.
+
+#### Premise P3: Bus Error Fault Availability on Alpha
+> *P3: "Member 5 of the option set (FAULT: deliver a bus error) is UNAVAILABLE on Alpha -- memory_rw.c delivers exceptions on a failed device access for MIPS and M88K only -- so widening (accept) or decline were the only honest members."*
+
+* **Status**: **CONFIRMED**.
+* **Code Evidence**:
+  * In [`src/cpus/memory_rw.c:603-625`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c#L603-L625):
+    ```c
+    if (res <= 0 && !no_exceptions) {
+        debug("[ %s device '%s' addr %08lx failed ]\n", ...);
+    #ifdef MEM_MIPS
+        mips_cpu_exception(cpu, cache == CACHE_INSTRUCTION ? EXCEPTION_IBE : EXCEPTION_DBE, 0, vaddr, 0, 0, 0, 0);
+    #endif
+    #ifdef MEM_M88K
+        m88k_exception(cpu, cache == CACHE_INSTRUCTION ? M88K_EXCEPTION_INSTRUCTION_ACCESS : M88K_EXCEPTION_DATA_ACCESS, 0);
+    #endif
+        return MEMORY_ACCESS_FAILED;
+    }
+    ```
+  * Alpha (`MEM_ALPHA`) has **no exception generation logic** on device access failure.
+  * When `memory_rw` returns `MEMORY_ACCESS_FAILED` (0), the Alpha memory access helpers in [`src/cpus/cpu_alpha_instr_loadstore.c:70-74, 114-118`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_alpha_instr_loadstore.c#L70-L74) simply execute `return;` ("abandon the access instead of exit()ing the host"). No trap, PALcode dispatch, or bus fault is delivered to the guest Alpha CPU.
+  * Therefore, FAULT was unavailable; widening (accepting legal patterns) and decline (silent/warned drop) were the only viable options.
+
+#### Premise P4: `IOC_CONF` Diagnostic Width Narrowing Corruption
+> *P4: "The IOC_CONF arm's diagnostic could PRINT THE WRONG VALUE (row `lcaconfwidth`), which would corrupt a text oracle there."*
+
+* **Status**: **CONFIRMED**.
+* **Code Evidence**:
+  * In commit `7a41b3f` (#506), `src/devices/dev_lca.c:209` was corrected from:
+    ```c
+    fatal("TODO: Write to unimplemented bit of IOC_CONF: 0x%x\n", (int)idata);
+    ```
+    to:
+    ```c
+    fatal("TODO: Write to unimplemented bit of IOC_CONF: 0x%" PRIx64 "\n", (uint64_t)idata);
+    ```
+  * Writing `0x100000000` tripped `idata & ~1`, but casting to `(int)idata` caused the diagnostic to report `0x0`, a value that the guard itself accepted. Any text oracle matching the written value would fail on upper-32-bit values prior to `#506`.
+
+---
+
+### Section 2: Review Questions (Q1–Q3)
+
+#### Q1: Confirmation/Refutation Summary
+* **P1**: **Refuted at HEAD**. Interrupt stubs do not call `exit(1)` at HEAD (fixed in #516). Text matching is unsound.
+* **P2**: **Confirmed**. Six value-guarded register arms in `lca_ioc`.
+* **P3**: **Confirmed**. `memory_rw.c` only generates device exceptions for MIPS and M88K.
+* **P4**: **Confirmed**. #506 fixed narrowing of `(int)idata` to `(uint64_t)idata`.
+
+#### Q2: Whitelist Widening vs. Decline on Illegal Values
+> *Is widening the whitelists (ACCEPT per the manual) the right disposition for every one of the six arms, or does any arm still need a decline for values the manual forbids? What does the shipped fix do for an ILLEGAL value today?*
+
+* **Disposition Analysis**:
+  * Widening is **not** an unqualified "accept all values" disposition across all six arms.
+  * The six arms are partitioned into three distinct semantic behaviors:
+    1. **Reserved-bit stripping (Type X fields)**:
+       * `LCA_IOC_TB_ENA` ([`src/devices/dev_lca.c:374`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c#L374)): Stores `idata & IOC_TB_ENA_TEN`. All non-TEN bits are type X reserved and silently ignored per HRM Table 6-13.
+       * `LCA_IOC_CONF` ([`src/devices/dev_lca.c:354-358`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c#L354-L358)): Stores `idata & 0x3ULL`. Bits 63:2 are dropped.
+    2. **Architected Field Storage with Feature Decline**:
+       * `LCA_IOC_W_BASE0` / `W_BASE1` ([`src/devices/dev_lca.c:388-392, 432-436`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c#L388-L392)): Masked to `(W_BASE | SG | WEN)`. When `WEN` (DMA window enable) is set, translation is declined with a single warning: `"a DMA window was enabled; window translation is not modelled"`.
+    3. **Strict Validation with Decline & State Retention**:
+       * `LCA_IOC_W_MASK0` / `W_MASK1` ([`src/devices/dev_lca.c:405-412, 449-456`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c#L405-L412)): The 21066 HRM (Table 6-6) only permits 13 power-of-2-minus-1 encodings in bits <31:20> (`IOC_W_MASK_1M` through `IOC_W_MASK_4G`, [`src/include/thirdparty/alpha_lcareg.h:85-97`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/thirdparty/alpha_lcareg.h#L85-L97)).
+       * The code validates this via `uint64_t v = idata & 0xfff00000ULL, f = v >> 20; if ((f & (f + 1)) == 0)`.
+* **Behavior on an ILLEGAL Value Today**:
+  * On an illegal W_MASK write (`(f & (f + 1)) != 0`): The write is **DECLINED**. The previous register value is preserved (`previous value kept`), and `lca_ioc_announce()` emits a bounded, single warning.
+  * On an unsupported cycle type write to CONF (`idata & 0x2ULL`): Stored in `d->ioc_conf`, but announced once as `"stored, not modelled"`.
+
+#### Q3: What Is Still Owed?
+> *What is still owed -- the interrupt stubs (member 7, IMPLEMENT), the default: arm's exit, anything else?*
+
+1. **Default Arm's Exit**: **NOT OWED (ALREADY SHIPPED)**.
+   * `brief_sent.md` erroneously lists "the default: arm's exit" as pending. In commit `a616d20` (#518), lines 469–498 of `dev_lca.c` **already eliminated `exit(1)`**. Writes to unlisted offsets are declined, and reads return 0 with a single direction announcement (`LCA_W_IOC_DEF_W` / `LCA_W_IOC_DEF_R`).
+2. **Interrupt Delivery Implementation (Member 7)**: **STILL OWED**.
+   * In `HEAD:src/devices/dev_lca.c:113`, the ISA interrupt stubs merely decline.
+   * Alpha interrupt delivery in the CPU core is completely absent:
+     * `cpu->cd.alpha.irq_asserted` is written only in [`src/cpus/cpu_alpha.c:218, 223`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_alpha.c#L218) and **read nowhere**.
+     * [`src/cpus/cpu_dyntrans.c:207-251`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c#L207-L251) dispatches interrupts for ARM, M88K, MIPS, PPC, and SH, but has **no Alpha handling**. Full PALcode interrupt entry, IPL checking, and dyntrans dispatch remain unimplemented.
+3. **Documented Missing LCA IOC Registers (`lcaiocstat0`)**: **STILL OWED**.
+   * Documented registers `STAT0` (+0x040), `STAT1` (+0x060), `SFT_RST` (+0x0c0), and `PAR_DIS` (+0x0e0) currently fall through to the declined `default:` arm. SROM initialization (§6.4.14 items 1–2) specifically requires writes to `SFT_RST` and `STAT0`.
+4. **DMA Window Translation & TLB Model**: **STILL OWED**.
+   * DMA address translation via window base/mask registers is not implemented; `TBIA` (+0x080) is ignored ([`src/devices/dev_lca.c:364`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c#L364)), and translated base registers `W_T_BASE0`/`1` are unhandled stubs ([`src/devices/dev_lca.c:421, 465`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c#L421)).
+
+---
+
+### Section 3: Evidence Matrix
+
+| Claim / Subject | Brief Assertion | Code Reality at HEAD | File & Line Evidence |
+| :--- | :--- | :--- | :--- |
+| **P1: Interrupt stubs confound** | Stubs are bare `fatal()+exit(1)` causing exit confound at HEAD | **Refuted**. #516 removed `exit(1)`; stubs warn once and return | [`src/devices/dev_lca.c:119-123, 140-144`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c#L119-L123) |
+| **P2: Value-guarded arms** | 6 arms (CONF, TB_ENA, W_BASE0/1, W_MASK0/1), not 4 | **Confirmed**. Exactly 6 value-guarded arms in `lca_ioc` | [`src/devices/dev_lca.c:340-458`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c#L340-L458) |
+| **P3: FAULT option availability** | Bus error unavailable on Alpha; MIPS/M88K only | **Confirmed**. `memory_rw.c` lacks Alpha exception delivery | [`src/cpus/memory_rw.c:608-624`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/memory_rw.c#L608-L624) |
+| **P4: Narrowing diagnostic bug** | `IOC_CONF` diagnostic printed wrong value | **Confirmed**. #506 fixed `(int)idata` narrowing | [`src/devices/dev_lca.c:344-346`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c#L344-L346), commit `7a41b3f` |
+| **Q2: W_MASK legal encodings** | 13 legal encodings per Table 6-6 | **Confirmed**. Table 6-6 matches contiguous low-ones `(f & (f+1)) == 0` | [`src/include/thirdparty/alpha_lcareg.h:85-97`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/include/thirdparty/alpha_lcareg.h#L85-L97) |
+| **Q2: W_BASE SROM requirement** | SROM §6.4.14 requires 0 to `W_BASE1` | **Confirmed**. Fork killed on 0; fix accepts 0 | [`src/devices/dev_lca.c:429-432`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c#L429-L432) |
+| **Q3: Default arm exit** | Implies default arm `exit(1)` is still owed | **Refuted**. Already eliminated in commit `a616d20` (#518) | [`src/devices/dev_lca.c:469-498`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/devices/dev_lca.c#L469-L498) |
+| **Q3: Interrupt subsystem** | Alpha interrupt delivery is unhandled | **Confirmed**. `cd.alpha.irq_asserted` unread; absent in dyntrans | [`src/cpus/cpu_alpha.c:218`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_alpha.c#L218), [`src/cpus/cpu_dyntrans.c:207-251`](file:///C:/DocumentNoSnc/CC/GXEMUL/GXEMUL-SEC/src/cpus/cpu_dyntrans.c#L207-L251) |
+
+---
+
+### Final Determination
+
+**GO-WITH-CHANGES**
+
+*(Changes required: (1) Correct the research record in `brief_sent.md` and the panel ledger to state that P1's host exit confound was already eliminated by #516 before #518; (2) Strike "the default: arm's exit" from the owed list in Q3, as it shipped in #518; (3) Explicitly record that W_MASK0/1 enforce strict rejection/retention on illegal values rather than unconditional acceptance.)*

@@ -1,0 +1,54 @@
+**VERDICT: REAL-AND-RIGHTLY-FIXED**, with one load-bearing assumption that the inlined packet does not let me settle.
+
+---
+
+**Q1. P1–P3**
+
+P1. *Is a C040 byte write to GENCTL legal guest behaviour?* — **READ: yes.**
+VMESBCP2 (MVME187 manual), cited in the shipped comment, documents C040 as a programmed mode-select bit at word-bit 10 = byte value 0x04, with the model header matching at `PCC2_C040 = 0x04`. The fix's *design* — accept the write, suppress its effect — is only sensible if the write is legal, and the brief explicitly states a regression (`pcc2_c040_probe.py`) drives a single `st.b 0x04` with no driver and no interrupt. Nothing in the inlined body contradicts this. The "sibling kill the width fix exposed rather than removed" framing in the row text is consistent with a prior write-mask widening that let this bit reach the register for the first time.
+
+P2. *Did the shipped fix keep the write, suppress assertion under C040, and announce once via a per-device latch — and is that the right disposition?* — **READ + REASONED.**
+- Keeps the write: yes — `reassert_interrupts()` does not touch `pcctwo_reg[PCCTWO_GENCTL]`; the byte is already latched by the store before this function is called from the write arm in the same access.
+- Suppresses assertion: yes — `assert = 0;` at the foot of the function, with `INTERRUPT_ASSERT`/`DEASSERT` driven by `assert` at the tail.
+- Latched once-announce: yes — `d->warned & (1u << PCC2_W_C040)` gates the message and `d->warned |= ...` latches it; per-device via the `d->` prefix.
+- Disposition: REASONED, right. Implementing EIPL delivery is out of scope (no 68040 EIPL path in this model, per the brief). Silently masking the bit would diverge from hardware-visible state. Silent suppression drops the "your model is incomplete" signal. Decline + latched announce preserves both hardware state *and* developer signal.
+- **Load-bearing caveat (NOT CHECKABLE FROM PACKET):** the new code calls `fatal("[ ... ]")` with **no** `exit(1)` afterwards. The original was `fatal(...) + exit(1)` — two terminators. The new one relies on `fatal()` being print-and-continue for this call site. If `fatal()` in this codebase actually terminates (which is what its name and the original `exit(1)` belt-and-braces both *suggest*), then the fix terminates the host on the very first C040 write and the latch never gets a chance to matter — same defect, different line. The single fact that settles this is the definition of `fatal()` in `src/include/...` (or wherever it lives in this tree), which is not inlined.
+
+P3. *Anything else in `reassert_interrupts()` still able to end the host on a guest-controlled value?* — **READ: nothing visible.**
+The function body between the moved comment and the foot contains: writes to `d->pcctwo_reg[PCCTWO_IPL]` and `d->cur_int_vec[intlevel]`, plus `INTERRUPT_ASSERT/DEASSERT(d->cpu_irq)`. No `fatal`, no `exit`, no `abort`, no longjmp. `intlevel` is masked by `PCC2_TTIRQ_IL` / `PCC2_IRQ_IPL`, which the IPL-field naming and the 3-line "IPL2-IPL0" wording in the cited manual both imply is 3 bits (0–7). Whether `cur_int_vec[]` is at least 8 entries is not checkable from the packet, but that would be a pre-existing latent risk, not something this fix introduces or worsens. The C040 path's termination risk reduces to the `fatal()` caveat above.
+
+---
+
+**Q2. Severity and option-set fit**
+
+Severity (REASONED): high. A legal guest byte store with no driver loaded and no interrupt in flight kills the host. That is the class of defect users rightly treat as a release blocker on an MVME187 emulator — any boot ROM, firmware probe, or driver that touches GENCTL bit 2 of the byte view can trip it. Short of memory unsafety or guest escape, simulator-defect severity does not go much higher than "guest can crash host on a legal access."
+
+Option ranking, best→worst for this case:
+1. Implement EIPL delivery (correct, out of scope).
+2. **Decline + latched announce (chosen).** Hardware-visible state preserved, developer warned once, host kept up.
+3. Silent suppression. Cheaper but loses the "your model is incomplete" signal.
+4. Decline the write (mask the bit). Diverges from real hardware state — a future test that reads GENCTL back and reasons about C040 would silently see the wrong value.
+5. `fatal()` + `exit(1)`. Original. Unacceptable on a legal write.
+
+Choice (#2) is the right member of the realistic option set.
+
+---
+
+**Q3. What the shipped fix still gets wrong**
+
+1. **The `fatal()` assumption** (named above). This is the one defect I can name from the packet that is *consequential* rather than cosmetic. If `fatal()` exits, the latch is theatre and the host still dies on first C040 write. The fix should either use a clearly-non-fatal printer (e.g. `debug(...)` or a dedicated `warn_once(...)` helper), or the comment should explicitly document that `fatal()` in this tree is print-only. The packet does not let me decide which is intended.
+2. **Comment hygiene** (REASONED, partly REDRESSED IN-SOURCE). The brief itself flags that the shipped comment went through a "*** THAT LAST SENTENCE IS FALSE ***" correction in-tree after an Opus 5 seat built the `return` mutant and scored it 14/16 KILLED. I can see the corrected text in the inlined code. So the *shipped* comment is corrected — but the lesson the brief draws ("a comment that states a MEASURED-sounding negative owes its artifact path, exactly as a score claim does") is the one worth carrying forward. The adjacent sentences still make claims about `INTERRUPT_DEASSERT` skipping and about which assert-rows kill which mutant; those claims now have an artifact path inside the repo (`regress/artifacts/pcc2c040kill/ctlq_20260909/repaired_M_return.raw`), which the brief credits — but I cannot verify the artifact, only that the brief asserts it.
+3. **Naming nit** (REASONED, cosmetic). `PCC2_W_C040` — the in-source comment itself notes "not a _LEN". It sits in an enum whose other members end `_LEN` for sizing of registers. The warning-bit semantics here is asymmetric with the enum's other uses. Not a defect; just an awkward name.
+4. **Latch lifetime** (NOT CHECKABLE FROM PACKET). Whether `d->warned` is cleared on device reset is not visible. If it is not cleared, that is presumably intentional ("once per process"); if it is cleared, a guest that probes C040, resets the device, then probes C040 again will see two warnings — which is also probably fine, but worth a one-line note.
+
+Nothing else in the body of the fix looks wrong to me from the packet.
+
+---
+
+**Things I cannot settle from the packet, named so they can be settled cheaply:**
+- Definition of `fatal()` — does it exit, or print-only?
+- Size of `cur_int_vec[]` — is the `intlevel` indexing safe?
+- Whether `d->warned` is preserved across device reset.
+- The contents of `regress/pcc2_c040_probe.py` (the witness for the original crash) and the 16-row detector added in `9fa07fe` (covered by the separate late agy review the brief mentions, not by me).
+
+The first of these is the only one that could downgrade the verdict.
